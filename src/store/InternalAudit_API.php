@@ -977,6 +977,40 @@ case 'check_get': {
             $it['dept_name'] = $codes[$code] ?? '';   // 開不符合通知單時的受稽核單位預設值
         }
         unset($it);
+
+        /* 受稽人（2026-09-18 使用者要求）：預設＝**這份文件所屬部門的陪檢員**，
+           而且要能改成別的部門的陪檢員，清單上一律顯示「部門　職稱　姓名（兼任）」。
+           候選一律取自這張通知單的受稽單位列（陪檢員本來就是那邊指定的），
+           另外把每個受稽單位的「預定完成改善」帶出來，開 IA 單時直接當要求完成期限。 */
+        $escorts = []; $dueByDept = []; $deptIdByName = [];
+        if ((int)($k['case_id'] ?? 0)) {
+            $q = $db->prepare("SELECT * FROM ia_case_dept WHERE case_id=? ORDER BY sort_order");
+            $q->execute([(int)$k['case_id']]);
+            $cdRows = $q->fetchAll(PDO::FETCH_ASSOC);
+            $pmap = ia_cd_people_map($db, array_map(function ($r) { return (int)$r['cd_id']; }, $cdRows), $cdRows);
+            foreach ($cdRows as $r) {
+                $dn = (string)($r['dept_name'] ?? '');
+                if ($dn !== '') {
+                    $deptIdByName[$dn] = (int)($r['dept_id'] ?? 0);
+                    if (!empty($r['improve_due'])) $dueByDept[$dn] = (string)$r['improve_due'];
+                }
+                foreach (($pmap[(int)$r['cd_id']]['escort'] ?? []) as $p) {
+                    $escorts[] = [
+                        'user_id'       => (int)$p['user_id'],
+                        'user_name'     => (string)$p['user_name'],
+                        'dept_id'       => (int)($p['dept_id'] ?? 0),
+                        'dept_name'     => (string)($p['dept_name'] ?? ''),
+                        'position_id'   => (int)($p['position_id'] ?? 0),
+                        'position_name' => (string)($p['position_name'] ?? ''),
+                        'is_main'       => (int)($p['is_main'] ?? 1),
+                        'unit_name'     => $dn,          // 他是哪一個受稽單位的陪檢員
+                    ];
+                }
+            }
+        }
+        $k['escorts']      = $escorts;
+        $k['due_by_dept']  = $dueByDept;
+        $k['dept_id_by_name'] = $deptIdByName;
     }
     // 績效查檢表：已經轉成異常矯正處理單的列要顯示單號（備註欄就是印這個）
     if ($k['kind'] === 'kpi') {
@@ -995,6 +1029,17 @@ case 'check_get': {
         }
         unset($it);
         $k['audit_year'] = ia_kpi_audit_year((string)$k['check_date']);
+    }
+    // 標題自動化（2026-09-18 使用者要求：系統稽核紀錄表不另外取標題，用對應通知單的日期與次別）
+    if ((int)($k['case_id'] ?? 0)) {
+        try {
+            $q = $db->prepare("SELECT seq_no, notify_date, audit_from FROM ia_case WHERE case_id=?");
+            $q->execute([(int)$k['case_id']]);
+            $cc = $q->fetch(PDO::FETCH_ASSOC) ?: [];
+            $k['case_seq_no']     = (int)($cc['seq_no'] ?? 0);
+            $k['case_notify_date']= (string)($cc['notify_date'] ?? '');
+            $k['case_audit_from'] = (string)($cc['audit_from'] ?? '');
+        } catch (Throwable $e) {}
     }
     $k['kind_label'] = IA_CHECK_KINDS[$k['kind']]['label'] ?? $k['kind'];
     $k['can_edit'] = ($perms['canAudit'] && $k['status'] !== 'done') || $perms['canAdmin'];
@@ -1040,18 +1085,32 @@ case 'check_save_items': {
 
     $db->beginTransaction();
     try {
-        $upd = $db->prepare("UPDATE ia_check_item SET result=?, evidence=?, remark=?, col_c=?, col_d=?
+        /* col_c／col_d 用 COALESCE：**沒送這個欄位就沿用原值**（傳 null＝保留），
+           送了空字串才是真的清空——否則「只改判定」的呼叫端會把受稽人姓名安靜洗掉。 */
+        $upd = $db->prepare("UPDATE ia_check_item SET result=?, evidence=?, remark=?,
+                                 col_c=COALESCE(?, col_c), col_d=COALESCE(?, col_d)
                               WHERE item_id=? AND check_id=?");
+        /* 受稽人存「是誰」而不只是姓名（2026-09-18 使用者要求）：開 IA 單時直接帶人，
+           不必再用姓名去猜（同名同姓、離職重號都會猜錯）。 */
+        $updWho = $db->prepare("UPDATE ia_check_item SET auditee_id=?, auditee_dept_id=?, auditee_position_id=?
+                                 WHERE item_id=? AND check_id=?");
         foreach ($items as $it) {
             $iid = (int)($it['item_id'] ?? 0);
             if (!$iid) continue;
+            if (array_key_exists('auditee_key', $it)) {
+                $ak = trim((string)$it['auditee_key']);
+                if ($ak === '') $updWho->execute([null, null, null, $iid, $kid]);
+                else { list($u, $d2, $p2) = ia_post_parse($ak); $updWho->execute([$u ?: null, $d2 ?: null, $p2 ?: null, $iid, $kid]); }
+            }
             $res = (string)($it['result'] ?? '');
             if (!in_array($res, ['', 'ok', 'ng'], true)) $res = '';
+            /* col_c／col_d 沒送就沿用原值（舊呼叫端與只改判定的情況都不該把姓名洗掉）。
+               COALESCE 在 SQL 端做，避免「沒送＝清空」這種安靜的資料流失。 */
             $upd->execute([$res ?: null,
                            trim((string)($it['evidence'] ?? '')) ?: null,
                            mb_substr(trim((string)($it['remark'] ?? '')), 0, 255) ?: null,
-                           mb_substr(trim((string)($it['col_c'] ?? '')), 0, 255) ?: null,
-                           mb_substr(trim((string)($it['col_d'] ?? '')), 0, 255) ?: null,
+                           array_key_exists('col_c', $it) ? mb_substr(trim((string)$it['col_c']), 0, 255) : null,
+                           array_key_exists('col_d', $it) ? mb_substr(trim((string)$it['col_d']), 0, 255) : null,
                            $iid, $kid]);
         }
         $db->prepare("UPDATE ia_check SET title=?, check_date=COALESCE(?, check_date), updated_at=NOW() WHERE check_id=?")
@@ -1379,11 +1438,21 @@ case 'nc_create': {
                       $c['leader_id'] ?? null, $c['leader_name'] ?? null,
                       $uid, $uname]);
         $ncId = (int)$db->lastInsertId();
+        /* 表單名稱快照（2026-09-18 使用者要求）：日後改編號／改名／廢止，這張已開的單仍印得出當時的名稱。
+           前端沒送就即時由編號回查一次，補歷史單據也有名字。 */
+        $fname = trim((string)($_POST['ref_form_name'] ?? ''));
+        if ($fname === '') $fname = ia_asdoc_name_by_no($db, (string)($_POST['ref_form_no'] ?? ''));
+        if ($fname !== '') {
+            $db->prepare("UPDATE ia_nc SET ref_form_name=? WHERE nc_id=?")
+               ->execute([mb_substr($fname, 0, 150), $ncId]);
+        }
         if ($srcItem) {
             $db->prepare("UPDATE ia_check_item SET nc_id=?, remark=COALESCE(NULLIF(remark,''), ?) WHERE item_id=?")
                ->execute([$ncId, $ncNo, $srcItem]);
         }
         ia_nc_log_add($db, $ncId, 'issued', 'create', $uid, $uname, '開立不符合通知單 ' . $ncNo);
+        // 開了不符合通知單就順手把該年度的稽核報告表建起來（2026-09-18 使用者要求）
+        ia_report_ensure($db, (int)substr($ad, 0, 4), $uid, $uname);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('建立失敗：' . $e->getMessage(), 500); }
 

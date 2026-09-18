@@ -457,6 +457,15 @@ function ia_ensure_schema(PDO $db): void
             ['ia_case',      'completed_by',        "INT NULL COMMENT '按下完成的人 user.id'"],
             ['ia_case',      'completed_by_name',   "VARCHAR(60) NULL COMMENT '按下完成的人姓名（顯示用快取）'"],
             ['ia_case',      'reviewer_at',         "DATETIME NULL COMMENT '審查簽核的精確時間（業務日期在 reviewer_date）'"],
+            /* 系統稽核紀錄表（2026-09-18 使用者要求）：
+               受稽人要存「是誰」而不只是姓名（開 IA 單時要直接帶人，不可以用姓名去猜）；
+               表單編號與名稱一律**存快照**，日後改編號／改名／廢止都不影響已建立的紀錄。 */
+            ['ia_check_item', 'auditee_id',         "INT NULL COMMENT '受稽人 user.id（姓名仍存在 col_c，這裡是可靠的身分）'"],
+            ['ia_check_item', 'auditee_dept_id',    "INT NULL COMMENT '受稽人當時的部門'"],
+            ['ia_check_item', 'auditee_position_id',"INT NULL COMMENT '受稽人當時的職稱'"],
+            ['ia_check_item', 'doc_no_snap',        "VARCHAR(60) NULL COMMENT 'AS 文件編號快照（建立當下）'"],
+            ['ia_check_item', 'doc_name_snap',      "VARCHAR(150) NULL COMMENT 'AS 文件名稱快照（建立當下）'"],
+            ['ia_nc',         'ref_form_name',      "VARCHAR(150) NULL COMMENT '相關表單名稱快照（編號存在 ref_form_no）'"],
             ['ia_case',      'approver_at',         "DATETIME NULL COMMENT '核准簽核的精確時間（業務日期在 approver_date）'"],
             // 稽核報告表改成「送出通知」流程（2026-09-17 使用者要求：不要核准、不要製表人）
             ['ia_report',    'submit_date',         "DATE NULL COMMENT '送出的業務日期'"],
@@ -2138,6 +2147,9 @@ function ia_report_data(PDO $db, int $year): array
  */
 function ia_nc_form_name(PDO $db, array $nc): string
 {
+    // ①建立當下存的快照最可靠（日後改編號／改名／廢止都不影響這張已開的單）
+    $snap = trim((string)($nc['ref_form_name'] ?? ''));
+    if ($snap !== '') return $snap;
     $byNo = ia_asdoc_name_by_no($db, (string)($nc['ref_form_no'] ?? ''));
     if ($byNo !== '') return $byNo;
     $iid = (int)($nc['src_item_id'] ?? 0);
@@ -2706,6 +2718,26 @@ function ia_resolve_post(PDO $db, string $key, ?string $kind = null, string $aso
                 'position_id' => $p['position_id'], 'position_name' => (string)$p['position_name']];
     }
     return null;
+}
+
+/**
+ * 確保某年度有稽核報告表（2026-09-18 使用者要求：開不符合通知單時順手把報告表建起來）。
+ * 報告表的內容本來就是由該年度的 IA 單即時彙總的，所以這裡只要有一列殼就夠；
+ * 已經有了就什麼都不做（不可以覆蓋使用者填的補充文字或送出紀錄）。
+ * @return int report_id
+ */
+function ia_report_ensure(PDO $db, int $year, int $uid, string $uname): int
+{
+    if ($year < 2000 || $year > 2200) return 0;
+    try {
+        $st = $db->prepare("SELECT report_id FROM ia_report WHERE year=? AND COALESCE(is_deleted,0)=0");
+        $st->execute([$year]);
+        $rid = (int)($st->fetchColumn() ?: 0);
+        if ($rid) return $rid;
+        $db->prepare("INSERT INTO ia_report (year, status, created_by, created_at, updated_at)
+                      VALUES (?, 'draft', ?, NOW(), NOW())")->execute([$year, $uid ?: null]);
+        return (int)$db->lastInsertId();
+    } catch (Throwable $e) { return 0; }
 }
 
 /* ============================ 稽核報告表：送出與通知（2026-09-17 使用者要求） ============================

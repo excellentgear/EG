@@ -495,6 +495,14 @@ $roleLabel = ia_role_label($perms);
             <li><b>③查檢表</b>：<b>先選種類</b>，畫面才會長出該種類要填的欄位與挑題方式；建立時填「建立（稽核）日期」，再勾這次要查的項目。
                 <b>建立查檢表預設一題都不勾</b>（2026-09-14 起），請先從左欄點選，或直接在右側逐題勾選。三種的差別：
                 <ul>
+                    <li><b>系統稽核紀錄表的受稽人＝這張通知單上的陪檢員</b>：預設帶<b>該份文件所屬部門</b>的陪檢員，
+                        可以改成別的部門的陪檢員；清單一律顯示「部門　職稱　姓名」，<b>兼任也看得出來</b>，並標出他是哪一個受稽單位的陪檢員。
+                        <b>標題不用自己取</b>——自動顯示為對應稽核通知單的「第 N 次　日期」。</li>
+                    <li><b>開不符合通知單時會自動帶好</b>：受稽核單位、受稽核人（都還可以手動改）、相關表單編號<b>與名稱</b>、
+                        稽核日期、所屬件號，以及<b>要求完成期限＝該受稽單位在通知單上填的「預定完成改善」</b>；
+                        <b>違反條文</b>會把「綁定這份 AS 文件的條文」列出來讓您勾（也可以自己打字改）。
+                        開完之後查檢表該列的備註會自動填上 IA 編號，並<b>順手把該年度的稽核報告表建起來</b>。
+                        表單的<b>編號與名稱都會存快照</b>，日後改編號、改名甚至廢止，已開的單仍印得出當時的內容。</li>
                     <li><b>系統稽核紀錄表（2-GM-06-06）</b>：稽核對象是「AS 表單」，建立跳窗的清單上<b>直接列表單編號與名稱</b>（品質管理系統要求改成滑鼠移上去才顯示，開不符合通知單時「違反條文」照樣自動帶入）。
                         <b>左欄挑部門</b>（依 AS 文件編號的部門代碼分類）只是把中間清單<b>聚焦</b>到該部門的表單，<b>不會自動勾選</b>；要整批勾請按<b>「全選」</b>（只動目前顯示的），或勾上<b>「點標籤時自動勾選底下的表單」</b>。
                         勾好的表單會列在<b>最右側「已選擇」欄</b>（編號／名稱／對應部門，可按 × 單筆取消）——<b>取消左欄的部門不會把已選的表單清掉</b>，所以可以一個部門一個部門挑完再一次建立。逐列選受稽人、判定合格／不合格。</li>
@@ -941,7 +949,9 @@ $roleLabel = ia_role_label($perms);
     <div class="ia-mhead"><h4 id="ckTitle">查檢表</h4><span class="x" data-close>&times;</span></div>
     <div class="ia-mbody">
         <div class="ia-form" style="margin-bottom:10px;">
-            <label>標題</label><div><input type="text" id="ckTitleInput"></div>
+            <label>標題</label>
+            <div><input type="text" id="ckTitleInput">
+                 <span id="ckTitleAuto" style="display:none;font-size:11px;color:#8a6d45;">（自動：對應稽核通知單的次別與日期）</span></div>
             <label>稽核日期</label><div><input type="date" id="ckDate"></div>
             <label>稽核人</label><div><select id="ckAuditor" data-eg-filter="輸入人員姓名篩選…"></select></div>
             <label>狀態</label><div><input type="text" id="ckStatus" readonly></div>
@@ -1113,7 +1123,14 @@ $roleLabel = ia_role_label($perms);
             <label>不合格類型<span style="color:#DD5138;">*</span></label>
             <div><select id="nnType"></select><div class="err-msg" id="errNnType"></div></div>
             <label>相關表單編號</label><div><input type="text" id="nnFormNo"></div>
-            <label>違反條文</label><div class="full"><input type="text" id="nnClause"></div>
+            <label>違反條文</label>
+            <div class="full">
+                <!-- 綁定這份 AS 文件的條文直接列出來勾（2026-09-18 使用者要求）：
+                     條文題庫的 doc_ref 本來就寫著「這一條建立了哪些文件表單」，反過來查就是這張表對應哪幾條。 -->
+                <div id="nnClausePick" style="display:none;border:1px solid #E8D5B5;border-radius:5px;background:#FDF6EA;
+                     padding:5px 8px;margin-bottom:4px;max-height:110px;overflow:auto;font-size:12px;"></div>
+                <textarea id="nnClause" style="min-height:48px;"></textarea>
+            </div>
             <label>要求完成期限</label><div><input type="date" id="nnDue"><div class="err-msg" id="errNnDue"></div></div>
         </div>
     </div>
@@ -3389,7 +3406,14 @@ function openCheck(id){
         $('#ckTitle').text(CHK.kind_label
             + (CHK.kind==='kpi' && CHK.audit_year ? '（稽核 '+CHK.audit_year+' 年度）' : '')
             + (CHK.half ? '（'+(CHK.half==='H1'?'上':'下')+'半年度）' : ''));
-        $('#ckTitleInput').val(CHK.title||'');
+        /* 系統稽核紀錄表不另外取標題（2026-09-18 使用者要求）：
+           自動顯示為對應稽核通知單的「第 N 次　日期」，欄位改成唯讀。 */
+        var autoTitle = (CHK.kind === 'system' && CHK.case_seq_no)
+            ? ('第' + CHK.case_seq_no + '次　' + dispDate(CHK.case_notify_date || CHK.check_date)) : '';
+        $('#ckTitleInput').val(autoTitle || CHK.title || '')
+                          .prop('readonly', !!autoTitle)
+                          .css('background', autoTitle ? '#f5efe4' : '');
+        $('#ckTitleAuto').toggle(!!autoTitle);
         $('#ckDate').val(inputDate(CHK.check_date));
         $('#ckStatus').val(CHK.status==='done' ? '已結案' : '填寫中');
         var ro = !CHK.can_edit;
@@ -3467,9 +3491,9 @@ function renderCheckItems(){
               + '<td>'+remark+ncBtn+'</td>';
         } else if (k==='system') {
             h += '<td>'+n+'</td><td>'+esc(it.col_a)+'</td><td class="l">'+esc(it.col_b||'')+'</td>'
-              + '<td><select class="ckF" data-id="'+it.item_id+'" data-f="col_c"'+(ro?' disabled':'')
-              + ' data-eg-filter="輸入姓名篩選…" style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'
-              + nameOptions(it.col_c)+'</select></td>'
+              + '<td><select class="ckF ckWho" data-id="'+it.item_id+'" data-f="auditee_key"'+(ro?' disabled':'')
+              + ' data-eg-filter="輸入姓名或部門篩選…" style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'
+              + escortOptions(it)+'</select></td>'
               + '<td>'+okChk+'</td><td>'+ngChk+'</td><td>'+remark+ncBtn+'</td>';
         } else {
             h += '<td>'+n+'</td><td>'+esc(it.col_a||'')+'</td><td class="l">'+esc(it.col_b||'')+'</td>'
@@ -3567,9 +3591,10 @@ $('#btnCkBulkGo').on('click', function(){
         $btn.text('開立中… '+(i+1)+'／'+items.length);
         var pre = ncPrefillFromItem(items[i]);
         $.post(API, {action:'nc_create', audit_date:pre.audit_date, case_id:pre.case_id,
-            dept_id:guessDeptId(pre), auditee_id:guessUserId(pre.auditee_name),
+            dept_id:(pre.dept_id || guessDeptId(pre)), auditee_id:(pre.auditee_id || guessUserId(pre.auditee_name)),
             fact:pre.fact || ((items[i].col_a||'')+' '+(items[i].col_b||'')+' 稽核不合格'),
             nc_type:type, clause_ref:pre.clause_ref, ref_form_no:pre.ref_form_no,
+            ref_form_name:pre.ref_form_name || '', due_date:pre.due_date || '',
             src_kind:pre.src_kind, src_item_id:pre.src_item_id}, function(res){
             if (res.ok) okN2++; else errs2.push((items[i].col_a||'')+'：'+(res.error||'失敗'));
             next(i+1);
@@ -3588,12 +3613,59 @@ function nameOptions(cur){
     if (cur && !found) h += '<option value="'+esc(cur)+'" selected>'+esc(cur)+'（已不在名單）</option>';
     return h;
 }
+/* 系統稽核紀錄表的「受稽人」＝**這張通知單上的陪檢員**（2026-09-18 使用者要求）。
+   ①預設帶該份文件所屬部門的陪檢員（文件編號第二段的部門代碼 → 受稽單位）
+   ②可以改成別的部門的陪檢員
+   ③清單一律顯示「部門　職稱　姓名」，**兼任也要看得出來**（ai-rules/08 第五節的欄位順序）
+   值是職務鍵 uid:deptId:posId，存檔時一併存 user_id，開 IA 單就不必再用姓名去猜人。 */
+function escortOptions(it){
+    var list = (CHK.escorts || []), cur = String(it.auditee_id || '') ;
+    var curKey = it.auditee_id ? postKeyOf(it.auditee_id, it.auditee_dept_id, it.auditee_position_id) : '';
+    var h = '<option value="">（未指定）</option>';
+    if (!list.length) return h + (it.col_c ? '<option value="" selected>'+esc(it.col_c)+'（這張通知單沒有陪檢員名單）</option>' : '');
+    var pickedKey = curKey;
+    if (!pickedKey) {
+        // 預設：這份文件所屬部門的陪檢員（對不到就不預設，讓使用者自己挑）
+        for (var i = 0; i < list.length && !pickedKey; i++) {
+            if (it.dept_name && String(list[i].unit_name) === String(it.dept_name)) {
+                pickedKey = postKeyOf(list[i].user_id, list[i].dept_id, list[i].position_id);
+            }
+        }
+        // 舊資料只有姓名時，用姓名對回去
+        for (var j = 0; j < list.length && !pickedKey; j++) {
+            if (it.col_c && String(list[j].user_name) === String(it.col_c)) {
+                pickedKey = postKeyOf(list[j].user_id, list[j].dept_id, list[j].position_id);
+            }
+        }
+    }
+    var seen = {};
+    list.forEach(function(p){
+        var k = postKeyOf(p.user_id, p.dept_id, p.position_id);
+        if (seen[k]) return; seen[k] = 1;
+        var label = (p.dept_name ? p.dept_name + '　' : '') + (p.position_name ? p.position_name + '　' : '')
+                  + p.user_name + (+p.is_main === 0 ? '（兼任）' : '')
+                  + (p.unit_name ? ('　〔' + p.unit_name + '〕') : '');
+        h += '<option value="'+esc(k)+'"'+(k === pickedKey ? ' selected' : '')+'>'+esc(label)+'</option>';
+    });
+    if (it.col_c && !pickedKey) h += '<option value="" selected>'+esc(it.col_c)+'（不在陪檢員名單內）</option>';
+    return h;
+}
 function collectCheckItems(){
     var map = {};
     $('#ckBody .ckF').each(function(){
         var id = $(this).data('id');
         map[id] = map[id] || {item_id:id};
         map[id][$(this).data('f')] = $(this).val();
+    });
+    /* 受稽人下拉的值是職務鍵，但**姓名也要一起存**（col_c）——列印與報告表都是印姓名，
+       只存 id 的話那些地方會變空白。 */
+    $('#ckBody .ckWho').each(function(){
+        var id = $(this).data('id'), key = String($(this).val()||''), nm = '';
+        (CHK.escorts||[]).forEach(function(p){
+            if (postKeyOf(p.user_id, p.dept_id, p.position_id) === key) nm = p.user_name;
+        });
+        map[id] = map[id] || {item_id:id};
+        map[id].col_c = nm;
     });
     $('#ckBody .ckR:checked').each(function(){
         var id = $(this).data('id');
@@ -3659,18 +3731,27 @@ function newNcFromItem(itemId){
 /* 一列不合格 → 不符合通知單要帶的欄位。
    系統稽核紀錄表的「違反條文」＝該表單對應到的品質管理系統要求（由條文題庫的「建立的文件、表單」
    反查，後端 check_get 已經算好帶在 it.clause_ref；2026-09-15 使用者交辦）。 */
+/* 開不符合通知單時要自動帶的東西（2026-09-18 使用者要求）：
+   受稽核單位、受稽核人、相關表單編號**與名稱快照**、稽核日期、所屬件號、要求完成期限。
+   單位與人都還是可以在開單畫面手動改；期限取該受稽單位的「預定完成改善」。 */
 function ncPrefillFromItem(it){
     var sysNo = CHK.kind==='system' ? (it.col_a||'') : '';
+    var dept  = CHK.kind==='kpi' ? (it.col_a||'') : (it.dept_name||'');
     return {
         case_id: CHK.case_id || '',
         audit_date: inputDate(CHK.check_date),
         src_kind: CHK.kind,
         src_item_id: it.item_id,
         ref_form_no: sysNo,
+        ref_form_name: CHK.kind==='system' ? (it.col_b||'') : '',
         clause_ref: CHK.kind==='as' ? (it.col_a||'') : (it.clause_ref||''),
+        clauses: it.clauses || [],                 // 綁定這份文件的條文，開單畫面列出來勾
         fact: sysNo ? (sysNo+' '+(it.col_b||'')+' 稽核不合格' + (it.evidence ? ('：'+it.evidence) : '')) : (it.evidence||''),
         auditee_name: CHK.kind==='system' ? (it.col_c||'') : (CHK.kind==='kpi' ? (it.col_d||'') : ''),
-        dept_hint: CHK.kind==='kpi' ? (it.col_a||'') : (it.dept_name||'')
+        auditee_id: (CHK.kind==='system' ? (it.auditee_id||'') : ''),
+        dept_hint: dept,
+        dept_id: ((CHK.dept_id_by_name||{})[dept] || ''),
+        due_date: ((CHK.due_by_dept||{})[dept] || '')
     };
 }
 </script>
@@ -3722,14 +3803,39 @@ function openNcNew(pre){
     $('#nnType').html(typeH); $('#nnCase').html(caseOptions(pre.case_id||''));
     $('#nnDate').val(pre.audit_date || META.today);
     $('#nnFact').val(pre.fact||''); $('#nnClause').val(pre.clause_ref||'');
-    $('#nnFormNo').val(pre.ref_form_no||''); $('#nnDue').val('');
-    // 受稽核單位：由所屬件號的受稽單位或績效查檢表的部門欄推一個預設值
-    $('#nnDept').html(deptOptions(guessDeptId(pre), '（請選擇）'));
-    $('#nnAuditee').html(peopleOptions('', guessUserId(pre.auditee_name), '（未指定）'));
-    $('#btnNcCreate').data('src', JSON.stringify({src_kind:pre.src_kind||'', src_item_id:pre.src_item_id||''}));
+    $('#nnFormNo').val(pre.ref_form_no||'');
+    // 要求完成期限＝該受稽單位在稽核通知單上填的「預定完成改善」（2026-09-18 使用者要求）
+    $('#nnDue').val(inputDate(pre.due_date||''));
+    // 受稽核單位：優先用查檢表帶來的部門 id，沒有才用名稱去猜
+    $('#nnDept').html(deptOptions(pre.dept_id || guessDeptId(pre), '（請選擇）'));
+    // 受稽核人：優先用查檢表上存的 user_id（姓名去猜會遇到同名同姓）
+    $('#nnAuditee').html(peopleOptions('', pre.auditee_id || guessUserId(pre.auditee_name), '（未指定）'));
+    ncClausePick(pre.clauses || []);
+    $('#btnNcCreate').data('src', JSON.stringify({src_kind:pre.src_kind||'', src_item_id:pre.src_item_id||'',
+                                                 ref_form_name:pre.ref_form_name||''}));
     clearErrs($('#ncNewMask'));
     openMask('ncNewMask');
 }
+/* 違反條文：把「綁定這份 AS 文件的條文」列出來勾，勾了就加進文字框（也可以自己打字改）。
+   清單為空時整區不顯示（不是每張表單都在題庫裡對得到條文）。 */
+function ncClausePick(list){
+    var $box = $('#nnClausePick');
+    if (!list || !list.length) { $box.hide().empty(); return; }
+    $box.show().html('<div style="color:#8a6d45;margin-bottom:3px;">這份表單對應到的品質管理系統要求（勾選就會加進下方欄位）：</div>'
+        + list.map(function(c, i){
+              return '<label style="display:block;font-weight:normal;margin:1px 0;cursor:pointer;">'
+                   + '<input type="checkbox" class="nnCl" data-t="'+esc(c.clause_text||'')+'" data-eg-skip'
+                   + (i === 0 ? ' checked' : '') + ' style="vertical-align:-1px;"> ' + esc(c.clause_text||'') + '</label>';
+          }).join(''));
+    ncClauseSync();
+}
+function ncClauseSync(){
+    var t = [];
+    $('#nnClausePick .nnCl:checked').each(function(){ var x = String($(this).data('t')||''); if (x && t.indexOf(x)<0) t.push(x); });
+    if (t.length) $('#nnClause').val(t.join('\n'));
+}
+$(document).on('change', '#nnClausePick .nnCl', ncClauseSync);
+
 function guessDeptId(pre){
     // 部門代碼同名時 ia_as_dept_code_names() 會在後面標代碼（例「生管組（PD）」），比對前要去掉
     var name = String(pre.dept_hint||'').trim().replace(/（[A-Za-z]{2,3}）$/, '');
