@@ -209,7 +209,7 @@ case 'save_setting': {
     if (in_array($k, ['ia_sign_approve', 'ia_sign_review'], true) && !array_key_exists($v, IA_SIGN_SOURCES)) {
         jerr('不支援的簽章來源');
     }
-    if ($k === 'ia_auto_sign' && !in_array($v, ['', '0', '1'], true)) jerr('自動簽核設定值不正確');
+    if (in_array($k, ['ia_auto_sign', 'ia_auto_sign_case'], true) && !in_array($v, ['', '0', '1'], true)) jerr('自動簽核設定值不正確');
     if ($k === 'ia_stamp_tpl_id' && $v !== '') {
         $st = $db->prepare("SELECT 1 FROM stamp_template WHERE id=? AND is_active=1");
         $st->execute([(int)$v]);
@@ -221,7 +221,15 @@ case 'save_setting': {
     // 立刻讀回來確認真的寫進去了（寫入成功但值被資料庫改寫的情況也擋得住）
     $back = ia_settings($db);
     if (($back[$k] ?? null) !== $v) jerr('設定寫入後讀回的值不一致，請回報系統管理者', 500);
-    jout(['saved' => true, 'value' => $back[$k]]);
+    /* 開啟「稽核通知單自動簽核」時，把**已經完成但還沒有章**的單一次補簽（2026-09-18 使用者要求）：
+       「完成的時候還沒開，事後才開」的那些單不必一張張重開重按。
+       已經有人簽過的一律不動（不可以覆蓋真人簽的章）。 */
+    $extra = [];
+    if ($k === 'ia_auto_sign_case' && $v === '1') {
+        try { $extra['backfill'] = ia_case_autosign_backfill($db, $uid, $uname); }
+        catch (Throwable $e) { $extra['backfill'] = ['filled' => 0, 'cases' => [], 'error' => $e->getMessage()]; }
+    }
+    jout(array_merge(['saved' => true, 'value' => $back[$k]], $extra));
 }
 
 case 'save_asdoc': {

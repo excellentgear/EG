@@ -1713,6 +1713,51 @@ function ia_case_complete(PDO $db, int $caseId, int $uid, string $uname): array
 }
 
 /**
+ * 已經完成、但核准／審查還空著的通知單，依目前設定補上簽章（2026-09-18 使用者要求）：
+ * 「完成的時候還沒開自動簽核，事後才開」的那些單不必一張張重開重按。
+ *
+ * 只補「**兩格都空**」的單——已經有人簽過的一律不動（不可以覆蓋真人簽的章）。
+ * 日期一律用該單自己的業務日期（製表日期，沒有才用通知日期），時間戳依 ai-rules/21 錯開且不跨日。
+ *
+ * @return array ['filled'=>補了幾張, 'cases'=>[單號…]]
+ */
+function ia_case_autosign_backfill(PDO $db, int $uid, string $uname): array
+{
+    if (!ia_auto_sign_on($db, 'case')) return ['filled' => 0, 'cases' => []];
+    $rows = [];
+    try {
+        $rows = $db->query("SELECT * FROM ia_case
+                             WHERE COALESCE(is_deleted,0)=0
+                               AND status IN ('issued','executing','closed')
+                               AND (approver_id IS NULL OR approver_id=0)
+                               AND (reviewer_id IS NULL OR reviewer_id=0)
+                             ORDER BY case_id")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return ['filled' => 0, 'cases' => []]; }
+    if (!$rows) return ['filled' => 0, 'cases' => []];
+
+    $done = [];
+    $upd = $db->prepare("UPDATE ia_case SET reviewer_id=?, reviewer_name=?, reviewer_date=?, reviewer_at=?,
+                             approver_id=?, approver_name=?, approver_date=?, approver_at=?, updated_at=NOW()
+                          WHERE case_id=?");
+    foreach ($rows as $c) {
+        $biz = (string)($c['maker_date'] ?: ($c['notify_date'] ?: ia_today($db)));
+        $ctx = ['leader_id' => (int)($c['leader_id'] ?? 0), 'leader_name' => (string)($c['leader_name'] ?? ''),
+                'maker_id' => (int)($c['maker_id'] ?? 0), 'maker_name' => (string)($c['maker_name'] ?? ''),
+                'biz_date' => $biz];
+        $ap = ia_sign_slot_person($db, 'approve', $ctx, ['id' => $uid, 'name' => $uname]);
+        $rv = ia_sign_slot_person($db, 'review',  $ctx, ['id' => $uid, 'name' => $uname]);
+        // 兩格都解析不到人就跳過這一張（設定留白＝紙本手蓋，不要硬塞操作者）
+        if (empty($ap['id']) && empty($rv['id'])) continue;
+        $atR = ia_auto_sign_at($biz . ' 09:00:00', $biz);
+        $atA = ia_auto_sign_at($atR, $biz);
+        $upd->execute([($rv['id'] ?? 0) ?: null, $rv['name'] ?? null, $biz, $atR,
+                       ($ap['id'] ?? 0) ?: null, $ap['name'] ?? null, $biz, $atA, (int)$c['case_id']]);
+        $done[] = (string)($c['case_no'] ?: ('#' . $c['case_id']));
+    }
+    return ['filled' => count($done), 'cases' => $done];
+}
+
+/**
  * 取消完成（改回草稿）。呼叫端必須先驗過管理員身分與操作確認密碼。
  * **自動簽核寫進去的核准／審查一併清掉**——單據要回去修改，那兩個章就不成立了；
  * 留著的話會變成「內容改過、章卻還是舊的」，比沒有章更危險。

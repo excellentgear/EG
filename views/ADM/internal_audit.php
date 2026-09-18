@@ -548,12 +548,15 @@ $roleLabel = ia_role_label($perms);
                 分頁上方會寫出「還差什麼」。年度一打開<b>自動停在進行中的那一年</b>（沒有進行中的才停在今年）。</li>
             <li><b>稽核通知單要按「完成」</b>：填好內容按下方的<b>完成</b>——
                 <b>完成之後整張單就鎖定不可修改</b>，而且<b>完成之後才會送審核</b>（管理員若已開啟自動簽核，核准與審查會在這一刻直接簽完）。
-                （自動簽核要不要開，在<b>設定 → 自動簽核</b>，<b>年度計畫表與稽核通知單各有一個開關</b>）。
+                （自動簽核要不要開，在<b>設定 → 自動簽核</b>，<b>年度計畫表與稽核通知單各有一個開關</b>；
+                <b>勾選通知單那一個並儲存時，已經完成但還沒有章的通知單會一次補上核准與審查</b>，並告訴您補了哪幾張——
+                已經有人簽過的一律不動）。
                 <b>還沒按完成的通知單，列印時核准／審查兩格一律留白</b>——沒完成就印出簽好的章是不實的簽章。
                 要再修改只有<b>內稽管理員</b>按「取消完成」並輸入<b>操作確認密碼</b>；取消完成會把自動簽核蓋上的核准／審查一併清掉
                 （內容要改，那兩個章就不成立了）。已結案的單不給取消完成，請先把狀態改回執行中。</li>
-            <li><b>建立查檢表選了「所屬件號」之後</b>：建立日期會<b>自動帶成該件號的受稽日期</b>（跨好幾天的通知單會多一個日期下拉讓您挑，挑哪一天就只列那一天的內容），
-                下方同時列出<b>那一天要稽核哪些單位、起始主過程是什麼</b>，不必另外開通知單查。</li>
+            <li><b>建立查檢表選了「所屬件號」之後</b>：建立日期會<b>自動帶成該件號的受稽日期</b>（跨好幾天的通知單會多一個日期下拉讓您挑，挑哪一天就只列那一天的內容）；
+                下方直接列出<b>那一天要稽核哪些單位、起始主過程是什麼</b>，不必另外開通知單查；
+                <b>稽核人也會自動帶成該件號上的稽核員</b>，下拉裡仍然是「<b>該稽核日期當時有稽核員資格</b>」的人，可以自己改成別人。</li>
             <li><b>受稽時間可以自動排</b>：「時間」欄的表頭填<b>開始時間</b>（結束時間可留空）後按<b>「自動排」</b>，就依<b>間隔</b>（預設 30 分，可改）往下排每一列，
                 而且<b>會自動跳過午休 12:00~13:00</b>（算出來落在午休內的一律改成 13:00 再往後排）。
                 之後<b>手動改中間任何一列的時間，後面幾列會自動順延</b>（前面的不動）；想逐列自己填就把表頭的「改一列就自動順延後面」取消勾選。
@@ -2047,6 +2050,8 @@ $('#btnCaseComplete').on('click', function(){
 });
 $('#btnCaseReopen').on('click', function(){
     $('#caseReopenPw').val(''); clearErrs($('#caseReopenMask')); openMask('caseReopenMask');
+    // 跳窗一開就把游標放進密碼欄（使用者回報過「無法輸入密碼」，先排除焦點沒進到欄位的可能）
+    setTimeout(function(){ $('#caseReopenPw').trigger('focus'); }, 60);
 });
 $('#btnCaseReopenGo').on('click', function(){
     var pw = $('#caseReopenPw').val();
@@ -2620,7 +2625,6 @@ function nkCaseDays(c){
     days.sort();
     return days;
 }
-var NK_CASE_OPEN = false;
 function nkRenderCaseInfo(){
     var c = NK_CASE;
     if (!c) { $('#nkCaseDayWrap').hide(); $('#nkCaseInfo').hide().empty(); return; }
@@ -2644,27 +2648,19 @@ function nkRenderCaseInfo(){
     var rows = ((c.depts) || []).filter(function(d){
         return !pick || String(d.audited_date || '').substr(0, 10) === pick;
     });
-    /* 版面（2026-09-18 使用者回報「太佔空間」）：預設只留**一行摘要**，
-       後面接一顆「明細」讓使用者自己展開；展開的內容也不用表格，
-       一列一個單位、小字，並限制高度可捲動——這個跳窗下半部還有挑題區要用空間。 */
-    var brief = rows.slice(0, 3).map(function(d){ return (d.dept_name || ''); }).join('、')
-              + (rows.length > 3 ? ' 等' : '');
-    var h = '<span style="white-space:nowrap;"><b>' + esc(c.case_no || '（未編號）') + '</b>　'
-          + (pick ? dispDate(pick) : '（未填受稽日期）')
-          + '　受稽 ' + rows.length + ' 單位</span>'
-          + (rows.length ? ('<span style="color:#8a6d45;">：' + esc(brief) + '</span>'
-              + ' <a href="javascript:void(0)" id="nkCaseToggle" style="font-size:12px;">'
-              + (NK_CASE_OPEN ? '收合' : '明細') + '</a>') : '');
-    if (rows.length && NK_CASE_OPEN) {
-        h += '<div style="margin-top:3px;max-height:110px;overflow:auto;font-size:12px;line-height:1.7;">'
-           + rows.map(function(d){
-                 return '<div>' + esc(d.audited_time || '　　') + '　<b>' + esc(d.dept_name || '') + '</b>　'
-                      + '<span style="color:#8a6d45;">' + esc(d.start_process || '—') + '</span></div>';
-             }).join('') + '</div>';
+    /* 版面（2026-09-18 使用者定調）：**不要摘要那一行、直接展開明細**。
+       一列一個單位、小字，限制高度可捲動（這個跳窗下半部還有挑題區要用空間）。 */
+    if (!rows.length) {
+        $('#nkCaseInfo').show().html('<span style="color:#a08356;">這一天沒有受稽單位（請確認通知單上的受稽日期）</span>');
+        return;
     }
-    $('#nkCaseInfo').show().html(h);
+    $('#nkCaseInfo').show().html(
+        '<div style="max-height:110px;overflow:auto;font-size:12px;line-height:1.7;">'
+        + rows.map(function(d){
+              return '<div>' + esc(d.audited_time || '　　') + '　<b>' + esc(d.dept_name || '') + '</b>　'
+                   + '<span style="color:#8a6d45;">' + esc(d.start_process || '—') + '</span></div>';
+          }).join('') + '</div>');
 }
-$(document).on('click', '#nkCaseToggle', function(){ NK_CASE_OPEN = !NK_CASE_OPEN; nkRenderCaseInfo(); });
 $(document).on('change', '#nkCase', function(){
     var id = +$(this).val();
     $('#nkCaseDay').removeData('case').empty();
@@ -2673,9 +2669,41 @@ $(document).on('change', '#nkCase', function(){
         NK_CASE = (res && res.ok) ? res.row || res.case || res : null;
         if (NK_CASE && !NK_CASE.depts && res.depts) NK_CASE.depts = res.depts;
         nkRenderCaseInfo();
+        nkPickAuditorFromCase();
     });
 });
-$(document).on('change', '#nkCaseDay', nkRenderCaseInfo);
+$(document).on('change', '#nkCaseDay', function(){ nkRenderCaseInfo(); nkPickAuditorFromCase(); });
+
+/* 稽核人自動帶成「這張通知單上的稽核員」（2026-09-18 使用者要求）。
+   一張通知單每個受稽單位都可以有好幾位稽核員，這裡取**當天第一位**當預設值；
+   下拉本身仍然是「該稽核日期當時有稽核員資格的人」，使用者可以自己改成別人。
+   候選清單裡找不到那個職務時（例如他當時還沒取得資格）就不動預設值，也不會報錯。 */
+function nkPickAuditorFromCase(){
+    var c = NK_CASE;
+    if (!c) return;
+    var pick = $('#nkCaseDay').val() || (nkCaseDays(c)[0] || '');
+    var rows = ((c.depts) || []).filter(function(d){
+        return !pick || String(d.audited_date || '').substr(0, 10) === pick;
+    });
+    var key = '';
+    for (var i = 0; i < rows.length && !key; i++) {
+        var ppl = rows[i].auditors || [];
+        for (var j = 0; j < ppl.length && !key; j++) {
+            var p = ppl[j];
+            var k = p.post_key3 || postKeyOf(p.user_id, p.dept_id, p.position_id);
+            if (k && String(k).split(':')[0] !== '0') key = k;
+        }
+        // 舊資料只有 auditor_id 沒有人員清單時，用 id 當後備
+        if (!key && rows[i].auditor_id) key = postKeyOf(rows[i].auditor_id, rows[i].auditor_dept_id, rows[i].auditor_position_id);
+    }
+    if (!key) return;
+    // 稽核日期換了，候選清單也要換（資格與職稱都依當天判定）
+    peopleAsof($('#nkDate').val(), function(){
+        var cur = $('#nkAuditor').val();
+        $('#nkAuditor').html(postOptions(META.auditors, key, String(key).split(':')[0], '（未指定）'));
+        if (!$('#nkAuditor').val() && cur) $('#nkAuditor').val(cur);
+    });
+}
 
 /** AS 查檢表的「自動判定來源」下拉：已建立的系統稽核紀錄表 */
 function loadSrcChecks(){
@@ -3869,14 +3897,21 @@ $('#btnSettingSave').on('click', function(){
         ['ia_meeting_end_subject',$('#setMeetEnd').val()],
         ['ia_case_remark_tpl',    $('#setCaseRemark').val().replace(/\r\n/g,'\n')]
     ];
-    var done = 0, failed = '';
+    var done = 0, failed = '', backfill = null;
     jobs.forEach(function(j){
         $.post(API, {action:'save_setting', key:j[0], value:j[1]}, function(res){
             if (!res.ok) failed = res.error||'儲存失敗';
+            // 開啟通知單自動簽核時，後端會把「已完成但還沒有章」的單一次補簽，這裡要講出來
+            if (res && res.backfill) backfill = res.backfill;
         }, 'json').always(function(){
             if (++done === jobs.length) {
                 if (failed) { alert(failed); return; }
-                alert('設定已儲存'); closeMask('settingMask'); loadMeta();
+                var msg = '設定已儲存';
+                if (backfill && +backfill.filled > 0) {
+                    msg += '\n\n已完成但還沒有簽章的稽核通知單共 ' + backfill.filled + ' 張，已一併補上核准與審查：\n'
+                         + (backfill.cases||[]).join('、');
+                }
+                alert(msg); closeMask('settingMask'); loadMeta();
             }
         });
     });
