@@ -536,6 +536,8 @@ $roleLabel = ia_role_label($perms);
                 日期一改，下拉會立刻重抓那一天的人；職稱印的也是<b>當時</b>的職稱，不會被現在新兼的職務蓋掉。資格的任期同樣用這個日期判定。</li>
             <li><b>稽核小組</b>（工具列，限內稽管理員）：這一年度的內稽是誰在做。<b>建稽核通知單前先組好</b>——之後「自動建立會議紀錄」的與會人員就是小組成員、<b>主席固定為稽核組長</b>；還沒建小組時會退回用該通知單上各受稽單位的稽核員與陪檢員。
                 常態小組每年差不多，可用「<b>從其他年度複製</b>」整批帶過來再增減（原職務已異動或離職的成員會自動略過並列出來）。<b>稽核組長只能有一位</b>。</li>
+            <li><b>受稽日期只能選稽核期間內的日子</b>：日曆本身就會把稽核起～迄以外的日期鎖起來（不得早於稽核起日期），
+                改了上方的稽核期間，下面每一列的可選範圍會即時跟著換；既有資料若超出範圍會紅字標出是第幾列，存檔前必須先改好。</li>
             <li><b>受稽日期／預定完成改善要全部同一天</b>：這兩欄的表頭各有一個日期欄＋「全部」鈕，按下去就套用到每一列；表頭沒填時會自動沿用<b>第一列已經填好的那個值</b>。</li>
             <li><b>年度選單會顯示這一年做到哪了</b>：<b>✔ 已完成</b>＝這一年有內稽資料<b>而且報告完整產出</b>
                 （每一張稽核報告表都已送出，且沒有未結案的不符合通知單）；<b>⏳ 進行中</b>＝<b>已經有年度計畫表</b>但還沒有（或還沒送出）稽核報告表，
@@ -782,6 +784,20 @@ $roleLabel = ia_role_label($perms);
         </h5>
             <div class="err-msg" id="cDupWarn" style="margin-bottom:4px;"></div>
             <div class="err-msg" id="errCAudited" style="margin-bottom:4px;"></div>
+            <!-- 受稽時間的設定與試算結果（放這裡不會影響表格欄寬） -->
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:#6b5535;margin-bottom:4px;">
+                <b style="color:#8A5A2B;">受稽時間</b>
+                <span>每單位 <input type="text" id="cTimeStep" value="60" data-eg-skip
+                      style="width:34px;border:1px solid #D8BE93;border-radius:3px;padding:1px 4px;font-size:12px;"> 分</span>
+                <span>結束 <input type="text" id="cTimeTo" readonly data-ro-always
+                      title="依開始時間與每單位分鐘自動算出來的結束時間"
+                      style="width:52px;background:#f5efe4;cursor:not-allowed;border:1px solid #D8BE93;border-radius:3px;padding:1px 4px;font-size:12px;">
+                      <span style="color:#a08356;">（自動算）</span></span>
+                <label style="font-weight:normal;margin:0;cursor:pointer;">
+                    <input type="checkbox" id="cTimeCascade" checked data-eg-skip style="vertical-align:-1px;">
+                    改一列就自動順延後面</label>
+                <span id="cTimeCalc" style="color:#a08356;">填開始時間就會自動算出結束時間（跳過午休 12:00~13:00，最後一個單位要在結束會議前 30 分鐘做完）</span>
+            </div>
             <div class="err-msg" id="cEscWarn" style="margin-bottom:4px;"></div>
             <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
                 <th style="width:170px;">帶入範本</th>
@@ -794,22 +810,13 @@ $roleLabel = ia_role_label($perms);
                 </th>
                 <!-- 受稽時間自動排（2026-09-17 使用者要求）：一天跑好幾個單位時一列一列打時間很花時間，
                      這裡填開始時間就依間隔往後排，並自動跳過午休。 -->
-                <th style="width:158px;">時間
-                    <div class="ia-allday">
-                        <input type="text" id="cTimeFrom" data-eg-hint="開始時間，例 09:00" style="width:50px;">～
-                        <!-- 結束時間是**算出來的**（2026-09-18 使用者要求：不要讓人一直填一直被退） -->
-                        <input type="text" id="cTimeTo" readonly data-ro-always title="依開始時間與每單位分鐘自動算出來的結束時間"
-                               style="width:50px;background:#f5efe4;cursor:not-allowed;">
+                <!-- 表頭只留控制項：說明與試算結果一律放到表格上方那一整列，
+                     擠在這裡會把「時間」欄撐寬（2026-09-18 使用者回報）。 -->
+                <th style="width:96px;">時間
+                    <div class="ia-allday" style="white-space:nowrap;">
+                        <input type="text" id="cTimeFrom" data-eg-hint="開始時間，例 09:00" style="width:46px;"
+                               title="填開始時間，結束時間會自動算出來">
                         <button type="button" id="btnAllTime" title="從開始時間起，依每個單位需要的分鐘往下排">自動排</button>
-                    </div>
-                    <div style="font-weight:normal;font-size:10px;color:#8a6d45;margin-top:2px;line-height:1.5;">
-                        每單位 <input type="text" id="cTimeStep" value="60" data-eg-skip
-                             style="width:30px;border:1px solid #D8BE93;border-radius:3px;padding:0 3px;font-size:10px;"> 分，
-                        跳過午休 12:00~13:00<br>
-                        <span id="cTimeCalc" style="color:#a08356;">最後一個單位會排在結束會議開始前 30 分鐘做完</span><br>
-                        <label style="font-weight:normal;margin:0;cursor:pointer;">
-                            <input type="checkbox" id="cTimeCascade" checked data-eg-skip style="vertical-align:-1px;">
-                            改一列就自動順延後面</label>
                     </div>
                 </th>
                 <th style="width:150px;">預定完成改善
@@ -2414,7 +2421,7 @@ function postByKey(key, cands, fallback){
     return {name:'#'+uid, label:'#'+uid};
 }
 function renderCaseRows(){
-    setTimeout(iaTimeRecalc, 0);      // 列數一變，結束時間跟著重算
+    setTimeout(function(){ iaTimeRecalc(); caseSyncDateRange(); }, 0);   // 列數一變，結束時間與日期範圍跟著重算
     var ro = !<?= $perms['canAdmin'] ? 'true' : 'false' ?>;
     var h = '';
     CASE_ROWS.forEach(function(r, i){
@@ -2427,7 +2434,8 @@ function renderCaseRows(){
           + '<td><select class="cr" data-f="dept_id" '+(ro?'disabled':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+deptOptions(r.dept_id,'（請選）')+'</select></td>'
           + '<td>'+peopleCell(i, r, 'auditor', aList, ro)+'</td>'
           + '<td>'+peopleCell(i, r, 'escort',  eList, ro)+'</td>'
-          + '<td><input type="date" class="cr" data-f="audited_date" value="'+esc(r.audited_date||'')+'" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px;font-size:12px;"></td>'
+          + '<td><input type="date" class="cr" data-f="audited_date" value="'+esc(r.audited_date||'')+'"'
+          + caseDateRangeAttr() + ' '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px;font-size:12px;"></td>'
           + '<td><input type="text" class="cr" data-f="audited_time" value="'+esc(r.audited_time||'')+'" data-eg-hint="直接輸入，例 13:15；或用表頭的「自動排」" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 4px;font-size:12px;"></td>'
           + '<td><input type="date" class="cr" data-f="improve_due" value="'+esc(r.improve_due||'')+'" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px;font-size:12px;"></td>'
           + '<td>'+(ro?'':'<span class="ia-op danger" onclick="caseRowDel('+i+')"><i class="fa fa-times"></i></span>')+'</td>'
@@ -2536,6 +2544,24 @@ function validateCase(){
 }
 /* 受稽日期必須落在稽核期間內（2026-09-18 使用者指正：要在存檔當下就擋住）。
    後端 case_save 同規則再擋一次（鐵律8）；這裡負責即時標紅並講明白是哪一列。 */
+/* 受稽日期只能落在稽核期間內（2026-09-18 使用者要求：不得早於稽核起日期）。
+   日曆本身就限制起迄（min／max），比「選了才報錯」好用；
+   存檔時前端仍會再檢查一次、後端也擋一次（既有資料可能超出範圍）。 */
+function caseDateRangeAttr(){
+    var f = $('#cFrom').val(), t = $('#cTo').val() || f;
+    return (f ? (' min="' + f + '"') : '') + (t ? (' max="' + t + '"') : '');
+}
+function caseSyncDateRange(){
+    var f = $('#cFrom').val() || '', t = $('#cTo').val() || f;
+    $('#cDeptBody input[data-f=audited_date], #cAllAudited').each(function(){
+        if (f) $(this).attr('min', f); else $(this).removeAttr('min');
+        if (t) $(this).attr('max', t); else $(this).removeAttr('max');
+    });
+}
+$(document).on('change', '#cFrom, #cTo', function(){
+    if ($('#caseMask').is(':visible')) { caseSyncDateRange(); checkAuditedDates(); }
+});
+
 function checkAuditedDates(){
     var f = $('#cFrom').val(), t = $('#cTo').val() || f;
     $('#cDeptBody input[data-f=audited_date]').removeClass('err');
