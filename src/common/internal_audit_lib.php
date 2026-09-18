@@ -1671,6 +1671,41 @@ function ia_case_is_done(array $c): bool
  *
  * @return array ['status','auto_signed','approver','reviewer']
  */
+/**
+ * 稽核通知單「送出（完成）」前的必填檢查（2026-09-18 使用者要求）。
+ *
+ * 每一個受稽單位列都要填齊：**稽核起始主過程／受稽單位／稽核員／陪檢員／受稽日期／時間／預定完成改善**。
+ * 草稿存檔刻意不檢查（現場本來就是邊查邊填），只有按「完成」＝這張單要發出去了才擋。
+ * 前端 `caseRequiredCheck()` 用同一組規則即時把缺的格子標紅，這裡是後端同規則再擋一次（鐵律8）。
+ *
+ * @return string[] 缺漏說明，空陣列＝可以送出
+ */
+function ia_case_required_missing(PDO $db, int $caseId): array
+{
+    $rows = [];
+    try {
+        $st = $db->prepare("SELECT * FROM ia_case_dept WHERE case_id=? ORDER BY sort_order, cd_id");
+        $st->execute([$caseId]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    if (!$rows) return ['這張通知單還沒有任何受稽單位'];
+
+    $pmap = ia_cd_people_map($db, array_map(function ($r) { return (int)$r['cd_id']; }, $rows), $rows);
+    $out = [];
+    foreach ($rows as $n => $r) {
+        $miss = [];
+        if (trim((string)($r['start_process'] ?? '')) === '')            $miss[] = '稽核起始主過程';
+        if (!(int)($r['dept_id'] ?? 0) && trim((string)($r['dept_name'] ?? '')) === '') $miss[] = '受稽單位';
+        if (!($pmap[(int)$r['cd_id']]['auditor'] ?? []))                  $miss[] = '稽核員';
+        if (!($pmap[(int)$r['cd_id']]['escort'] ?? []))                   $miss[] = '陪檢員';
+        if (empty($r['audited_date']))                                    $miss[] = '受稽日期';
+        if (trim((string)($r['audited_time'] ?? '')) === '')               $miss[] = '時間';
+        if (empty($r['improve_due']))                                      $miss[] = '預定完成改善';
+        if ($miss) $out[] = '第 ' . ($n + 1) . ' 列（' . (trim((string)($r['dept_name'] ?? '')) ?: '未填單位') . '）：' . implode('、', $miss);
+    }
+    return $out;
+}
+
 function ia_case_complete(PDO $db, int $caseId, int $uid, string $uname, string $signDate = ''): array
 {
     $st = $db->prepare("SELECT * FROM ia_case WHERE case_id=? AND COALESCE(is_deleted,0)=0");
@@ -1683,6 +1718,15 @@ function ia_case_complete(PDO $db, int $caseId, int $uid, string $uname, string 
     $q = $db->prepare("SELECT COUNT(*) FROM ia_case_dept WHERE case_id=?");
     $q->execute([$caseId]);
     if ((int)$q->fetchColumn() === 0) throw new RuntimeException('這張通知單還沒有任何受稽單位，不能完成');
+
+    /* 必填欄位要填齊才能送出（2026-09-18 使用者要求）：稽核起始主過程／受稽單位／稽核員／
+       陪檢員／受稽日期／時間／預定完成改善。缺一格這張單發出去現場就不知道幾點要被稽核。 */
+    $missing = ia_case_required_missing($db, $caseId);
+    if ($missing) {
+        throw new RuntimeException("受稽單位還有必填欄位沒填，不能完成：
+" . implode("
+", $missing));
+    }
 
     /* 簽章日期（2026-09-18 使用者要求）：**一律是通知日期或更早**。
        通知單是「先簽好才發出去」的，簽章或製表日期比通知日期還晚，紙本上根本不成立
@@ -3300,6 +3344,8 @@ function ia_team_get(PDO $db, int $year, string $asofOverride = ''): array
             'position_id'   => (int)$r['position_id'] ?: null,
             'position_name' => $hit ? (string)$hit['position_name'] : ($posN[(int)$r['position_id']] ?? ''),
             'post_key3'     => $key,
+            // 主職／兼任要看得出來（名單上同一個人可能在兩個部門各一列）
+            'is_main'       => $hit ? (int)($hit['is_main'] ?? 1) : 1,
             'note'          => (string)($r['note'] ?? ''),
             // 當年度已經不在職／職務已異動的成員要標出來，否則使用者看不出為什麼會議帶不到人
             'missing'       => $hit ? 0 : 1,

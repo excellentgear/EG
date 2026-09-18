@@ -201,6 +201,8 @@ $roleLabel = ia_role_label($perms);
         .err-msg { color:#C4442D; font-size:12px; display:none; margin-top:2px; }
         .err-msg.on { display:block; }
         input.err, textarea.err, select.err { border-color:#DD5138 !important; background:#FDF1EE !important; }
+        /* 稽核員／陪檢員是標籤不是輸入框，缺人時整格標紅 */
+        #cDeptBody td.err-cell { background:#FDF1EE; box-shadow:inset 0 0 0 1px #DD5138; }
         .ia-hint { font-size:12px; color:#8a6d45; line-height:1.7; background:#FBF5EA; border:1px solid #EADFC8;
             border-left:4px solid #F0A24B; border-radius:5px; padding:7px 10px; margin-bottom:10px; }
         .ia-hint b { color:#8A5A2B; }
@@ -495,10 +497,10 @@ $roleLabel = ia_role_label($perms);
             <li><b>③查檢表</b>：<b>先選種類</b>，畫面才會長出該種類要填的欄位與挑題方式；建立時填「建立（稽核）日期」，再勾這次要查的項目。
                 <b>建立查檢表預設一題都不勾</b>（2026-09-14 起），請先從左欄點選，或直接在右側逐題勾選。三種的差別：
                 <ul>
-                    <li><b>系統稽核紀錄表的受稽人</b>：預設帶<b>該份文件所屬部門</b>的陪檢員，下拉分成三組可改選——
-                        <b>本單陪檢員</b>（這張通知單上的陪檢員，標出他是哪一個受稽單位的）、
-                        <b>稽核員</b>（稽核日期當天具稽核員資格的人）、<b>稽核組長</b>（這張通知單的組長）；
-                        清單一律顯示「部門　職稱　姓名」，<b>兼任也看得出來</b>。
+                    <li><b>系統稽核紀錄表的受稽人</b>：預設帶<b>該份文件所屬部門</b>的陪檢員，可改選的名單<b>來自該年度的「稽核小組」</b>
+                        （工具列的「稽核小組」設定），下拉分成<b>本單陪檢員／稽核組長／稽核員／陪檢員</b>四組。
+                        清單一律顯示「部門　職稱　姓名」，部門職稱<b>依稽核日期回推當時的</b>，
+                        <b>兼任會標「（兼任）」</b>；同一個人在不同部門各有一個職務時會各列一筆，請挑對他這次是以哪個身分受稽。
                         <b>標題不用自己取</b>——自動顯示為對應稽核通知單的「第 N 次　日期」。</li>
                     <li><b>開不符合通知單時會自動帶好</b>：受稽核單位、受稽核人（都還可以手動改）、相關表單編號<b>與名稱</b>、
                         稽核日期、所屬件號，以及<b>要求完成期限＝該受稽單位在通知單上填的「預定完成改善」</b>；
@@ -559,6 +561,8 @@ $roleLabel = ia_role_label($perms);
                 建了計畫表才出現<b>稽核通知單</b>，建了通知單才出現<b>查檢表／不符合通知單／稽核報告表</b>。
                 分頁上方會寫出「還差什麼」。年度一打開<b>自動停在進行中的那一年</b>（沒有進行中的才停在今年）。</li>
             <li><b>稽核通知單要按「完成」</b>：填好內容按下方的<b>完成</b>——
+                <b>送出前每一列受稽單位都要填齊</b>：稽核起始主過程、受稽單位、稽核員、陪檢員、受稽日期、時間、預定完成改善，
+                缺一格就會擋下來並把那一格標紅（<b>儲存草稿不檢查</b>，可以邊排邊填）。
                 <b>完成之後整張單就鎖定不可修改</b>，而且<b>完成之後才會送審核</b>（管理員若已開啟自動簽核，核准與審查會在這一刻直接簽完）。
                 （自動簽核要不要開，在<b>設定 → 自動簽核</b>，<b>年度計畫表與稽核通知單各有一個開關</b>；
                 <b>勾選通知單那一個並儲存時，已經完成但還沒有章的通知單會一次補上核准與審查</b>，並告訴您補了哪幾張——
@@ -796,6 +800,8 @@ $roleLabel = ia_role_label($perms);
         </h5>
             <div class="err-msg" id="cDupWarn" style="margin-bottom:4px;"></div>
             <div class="err-msg" id="errCAudited" style="margin-bottom:4px;"></div>
+            <!-- 送出（完成）前的必填檢查結果（2026-09-18 使用者要求） -->
+            <div class="err-msg" id="errCRequired" style="margin-bottom:4px;"></div>
             <!-- 受稽時間的設定與試算結果（放這裡不會影響表格欄寬） -->
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:#6b5535;margin-bottom:4px;">
                 <b style="color:#8A5A2B;">受稽時間</b>
@@ -2103,6 +2109,12 @@ function applyCaseLock(c){
 $('#btnCaseComplete').on('click', function(){
     if (!CASE_ID) { alert('請先儲存這張通知單'); return; }
     if (!validateCase()) { alert('有欄位需要修正，請看紅字說明（完成前會先自動存檔）'); return; }
+    // 必填欄位要填齊才可以送出（草稿存檔不檢查）
+    if (!caseRequiredCheck()) {
+        alert('受稽單位還有必填欄位沒填完，不能送出。\n\n請看表格上方的紅字說明（缺的格子已標紅）。');
+        $('#errCRequired')[0].scrollIntoView({block:'center'});
+        return;
+    }
     if (!confirm('確定把這張稽核通知單標記為「完成」嗎？\n\n'
                + '・完成之後內容就鎖定不可修改（要改得由內稽管理員輸入操作確認密碼取消完成）\n'
                + (String((META.settings||{}).ia_auto_sign_case||'') === '1'
@@ -2617,6 +2629,31 @@ function checkAuditedDates(){
 $(document).on('change', '#cFrom, #cTo, #cDeptBody input[data-f=audited_date]', function(){
     if ($('#caseMask').is(':visible')) checkAuditedDates();
 });
+/* 送出（完成）前的必填檢查（2026-09-18 使用者要求）：稽核起始主過程／受稽單位／稽核員／
+   陪檢員／受稽日期／時間／預定完成改善，每一列都要填齊。
+   **草稿存檔刻意不檢查**（現場本來就是邊排邊填），只有按「完成」＝這張單要發出去時才擋；
+   後端 ia_case_required_missing() 用同一組規則再擋一次（鐵律8）。 */
+function caseRequiredCheck(){
+    $('#cDeptBody .cr').removeClass('err');
+    $('#cDeptBody td').removeClass('err-cell');
+    $('#errCRequired').removeClass('on').empty();
+    var bad = [];
+    $('#cDeptBody tr').each(function(n){
+        var $tr = $(this), i = +$tr.data('i'), src = CASE_ROWS[i] || {}, miss = [];
+        [['start_process','稽核起始主過程'], ['dept_id','受稽單位'], ['audited_date','受稽日期'],
+         ['audited_time','時間'], ['improve_due','預定完成改善']].forEach(function(f){
+            var $el = $tr.find('.cr[data-f=' + f[0] + ']');
+            if (String($el.val() || '').trim() === '') { $el.addClass('err'); miss.push(f[1]); }
+        });
+        if (!(src.auditor_keys || []).length) { $tr.find('td').eq(3).addClass('err-cell'); miss.push('稽核員'); }
+        if (!(src.escort_keys  || []).length) { $tr.find('td').eq(4).addClass('err-cell'); miss.push('陪檢員'); }
+        if (miss.length) bad.push('第 ' + (n + 1) + ' 列：' + miss.join('、'));
+    });
+    if (!bad.length) return true;
+    $('#errCRequired').addClass('on').html('這張通知單要發出去之前，下列必填欄位還沒填（已用紅色標出來）：<br>'
+        + bad.join('<br>'));
+    return false;
+}
 /* 時間欄位一律直接輸入、離開欄位正規化（0900/900/9 → 09:00），禁用下拉選時間 */
 function normTime(v){
     v = String(v||'').trim(); if (v==='') return '';
@@ -3652,7 +3689,7 @@ function escortOptions(it){
         var g = p.group || '本單陪檢員';
         (groups[g] || (groups[g] = [])).push({k: k, p: p});
     });
-    ['本單陪檢員', '稽核員', '稽核組長'].concat(Object.keys(groups)).forEach(function(g){
+    ['本單陪檢員', '稽核組長', '稽核員', '陪檢員'].concat(Object.keys(groups)).forEach(function(g){
         if (!groups[g]) return;
         var rows = groups[g]; delete groups[g];
         h += '<optgroup label="'+esc(g)+'">';
