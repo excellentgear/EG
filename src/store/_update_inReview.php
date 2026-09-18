@@ -4,6 +4,8 @@ session_start();
 include_once dirname(__DIR__) . '/common/DBConnection.php'; // Adjusted path for robustness
 include_once dirname(__DIR__) . '/common/_config.php';    // Adjusted path for robustness
 require_once dirname(__DIR__) . '/common/order_track_perm_lib.php';
+// 「轉生管日／BOM開立」那一格的狀態一律由共用庫算（含 BOSS 審圖），前端用同一支 otPmCellHtml 畫
+require_once dirname(__DIR__) . '/common/order_boss_review_lib.php';
 
 header('Content-Type: application/json');
 
@@ -44,14 +46,14 @@ if ($action === 'set_in_review') {
             $stmt_fetch = $pdo->prepare("SELECT DATE_FORMAT(in_review, '%c/%e') AS in_review_date FROM order_track WHERE Order_id = ?");
             $stmt_fetch->execute([$orderId]);
             $result = $stmt_fetch->fetch(PDO::FETCH_ASSOC);
-            echo json_encode(['success' => true, 'message' => '審圖中狀態已設定。', 'in_review_date' => $result['in_review_date']]);
+            echo json_encode(['success' => true, 'message' => '審圖中狀態已設定。', 'in_review_date' => $result['in_review_date'], 'state' => ot_boss_cell_state($pdo, (int)$orderId)]);
         } else {
             // If no rows affected, it might be already set to today. Fetch current date to be sure.
             $stmt_fetch = $pdo->prepare("SELECT DATE_FORMAT(in_review, '%c/%e') AS in_review_date FROM order_track WHERE Order_id = ? AND in_review = CURDATE()");
             $stmt_fetch->execute([$orderId]);
             $result = $stmt_fetch->fetch(PDO::FETCH_ASSOC);
             if ($result) {
-                 echo json_encode(['success' => true, 'message' => '審圖中狀態已是今日。', 'in_review_date' => $result['in_review_date']]);
+                 echo json_encode(['success' => true, 'message' => '審圖中狀態已是今日。', 'in_review_date' => $result['in_review_date'], 'state' => ot_boss_cell_state($pdo, (int)$orderId)]);
             } else {
                 echo json_encode(['success' => false, 'message' => '設定審圖中狀態失敗或無變更。']);
             }
@@ -65,7 +67,7 @@ if ($action === 'set_in_review') {
         $stmt = $pdo->prepare("UPDATE order_track SET in_review = NULL WHERE Order_id = ?");
         $stmt->execute([$orderId]);
         if ($stmt->rowCount() > 0) {
-            echo json_encode(['success' => true, 'message' => '審圖中狀態已取消。']);
+            echo json_encode(['success' => true, 'message' => '審圖中狀態已取消。', 'state' => ot_boss_cell_state($pdo, (int)$orderId)]);
         } else {
             echo json_encode(['success' => false, 'message' => '取消審圖中狀態失敗或無變更。']);
         }

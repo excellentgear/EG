@@ -224,6 +224,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // 「需給 BOSS 審圖」的客戶名單（2026-09-18 使用者要求）
+    //   ・讀取：只要看得到本頁的人都可以讀（清單頁本來就要用它判斷該不該顯示 BOSS 狀態）
+    //   ・寫入：一律要有功能碼 ot_boss_review_setting（前端擋一次，這裡同規則再擋一次＝鐵律8）
+    //   ・每次儲存都要填原因；畫面送「完整名單」上來，後端自己 diff 出新增／修改／刪除，
+    //     同一次儲存共用一個原因（使用者指定：一次設定多組只要填一次）。
+    // ══════════════════════════════════════════════════════════════════════════
+    if ($_POST['action'] === 'boss_client_get' || $_POST['action'] === 'boss_client_save') {
+        header('Content-Type: application/json');
+        require_once __DIR__ . '/../../src/common/order_boss_review_lib.php';
+        $_bz_uid = (int)($_SESSION['id'] ?? 0);
+        if ($_bz_uid <= 0) {
+            http_response_code(401);
+            echo json_encode(['success' => false, 'message' => '請重新登入後再試。']);
+            exit;
+        }
+        try {
+            ot_boss_ensure_schema($pdo);
+            if ($_POST['action'] === 'boss_client_save') {
+                if (!ot_boss_can_setting($pdo, $_bz_uid)) {
+                    http_response_code(403);
+                    echo json_encode(['success' => false, 'message' => '您沒有設定「需給 BOSS 審圖」客戶名單的權限（需角色勾選該功能）。']);
+                    exit;
+                }
+                $_bz_items = json_decode($_POST['items'] ?? '[]', true);
+                if (!is_array($_bz_items)) $_bz_items = [];
+                $_bz_name  = $_SESSION['user_cname'] ?? ($_SESSION['userName'] ?? (string)$_bz_uid);
+                $_bz_res   = ot_boss_save($pdo, $_bz_items, (string)($_POST['reason'] ?? ''), $_bz_uid, $_bz_name);
+                echo json_encode(['success' => $_bz_res['ok'], 'message' => $_bz_res['msg'],
+                                  'added' => $_bz_res['added'] ?? 0, 'updated' => $_bz_res['updated'] ?? 0,
+                                  'deleted' => $_bz_res['deleted'] ?? 0,
+                                  'rows' => array_values(ot_boss_client_map($pdo, true)),
+                                  'logs' => ot_boss_logs($pdo, 50)], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            echo json_encode(['success' => true,
+                              'can_edit' => ot_boss_can_setting($pdo, $_bz_uid),
+                              'rows' => array_values(ot_boss_client_map($pdo, true)),
+                              'logs' => ot_boss_logs($pdo, 50)], JSON_UNESCAPED_UNICODE);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
+    }
+
     if ($_POST['action'] === 'get_dept_data') {
         header('Content-Type: application/json');
         try {
@@ -1548,6 +1593,8 @@ $can_order_change          = $can_update;                               // 訂�
 $can_order_change_setting  = ($permission_code === 'A');                // 訂單變更設定
 // 更改已綁定訂單的客戶：全新功能，舊制沒有對應權限碼，一律預設關閉（不改變任何現有使用者的既有操作）
 $can_order_change_client   = false;
+// 設定「BOSS 審圖客戶名單」：全新功能，舊制沒有對應權限碼，一律預設關閉（同上）
+$can_boss_review_setting   = false;
 $can_op_convert            = $can_create;                               // OP轉訂單（舊制沿用一般新增權限）
 $can_view_amount           = true;                                      // 金額顯示（舊制從未限制過，一律可見）
 $can_keyway_calc           = true;                                      // 鍵槽計算（舊制從未限制過，一律可見）
@@ -1646,6 +1693,10 @@ $OT_PAGE_FEATURES = [
     // 勾選本項的角色才能點客戶欄的鎖頭、輸入「本人登入密碼」解鎖後重新指定客戶與料號。
     // 後端同規則再擋一次（src/store/_NewOrder_Track.php 的 or_update ＋本頁 save_order_ids）。
     ['group'=>'訂單變更',     'code'=>'ot_order_change_client',  'label'=>'更改已建立訂單的客戶（需輸入本人密碼解鎖）'],
+    // 2026-09-18 使用者要求：勾選本項的角色才能在「設定」跳窗裡維護「哪些客戶的訂單要先給 BOSS 審圖」
+    // 的名單（名單本身的異動一律要填原因並留下是誰、什麼時候改的）。
+    // 注意這只是「能不能改名單」；審圖流程本身沿用 ot_to_pm（誰能按轉生管就誰能按 BOSS審核OK）。
+    ['group'=>'訂單流程',     'code'=>'ot_boss_review_setting',  'label'=>'設定「需給 BOSS 審圖」的客戶名單'],
     ['group'=>'設計與批圖',   'code'=>'ot_design_note',          'label'=>'設計備註（編輯）'],
     ['group'=>'設計與批圖',   'code'=>'ot_img_editor',           'label'=>'批圖編輯器'],
     ['group'=>'設計與批圖',   'code'=>'ot_master_edit',          'label'=>'前往料號主檔編輯按鈕'],
@@ -1668,6 +1719,7 @@ if ($OT_USE_RBAC) {
     $can_order_change           = ot_hasF('ot_order_change');
     $can_order_change_setting  = ot_hasF('ot_order_change_setting');
     $can_order_change_client   = ot_hasF('ot_order_change_client');
+    $can_boss_review_setting   = ot_hasF('ot_boss_review_setting');
     $can_op_convert             = ot_hasF('ot_op_convert');
     $can_view_amount            = ot_hasF('ot_view_amount');
     $can_keyway_calc            = ot_hasF('ot_keyway_calc');
@@ -1689,6 +1741,11 @@ if ($OT_USE_RBAC) {
 // 審圖/轉生管按鈕（原本只顯示文字狀態）。後端同規則在 src/common/order_track_perm_lib.php 的
 // ot_can_operate_design()，兩邊要一起改。
 $OT_IS_ADMIN_ANY = ($id === 1);
+
+// ── 指定客戶的訂單「轉生管前要先給 BOSS 審圖」（2026-09-18 使用者要求）────────
+// 唯一實作在 src/common/order_boss_review_lib.php；名單沒設定＝這整套等於不存在，
+// 所有判定一律回 false，畫面與行為與改動前完全相同。
+require_once __DIR__ . '/../../src/common/order_boss_review_lib.php';
 
 if (!($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']))) {
     $ate_list = $conn->getAll("SELECT `user_cname`,`user_uname`,`id` FROM `user` WHERE `user_status`=63");
@@ -1943,6 +2000,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     $unbound = !empty($_POST['unbound']) ? (int)$_POST['unbound'] : 0;
     $unbound_op = !empty($_POST['unbound_op']) ? (int)$_POST['unbound_op'] : 0;
     $qty_over = !empty($_POST['qty_over']) ? (int)$_POST['qty_over'] : 0; // 轉單數量超出階梯區間篩選
+    // 相容舊表：BOSS 審圖四個欄位（下方 dataSql 會 DATE_FORMAT 它們；部署後第一個請求可能就是 AJAX）
+    // 一次便宜的 SELECT 探針，有欄位就什麼都不做，不要每次翻頁都跑 SHOW COLUMNS
+    try { $pdo->query("SELECT boss_ok_at FROM order_track LIMIT 1"); }
+    catch (Exception $_eBossCol) { try { ot_boss_ensure_schema($pdo); } catch (Exception $_eBossCol2) {} }
     // 相容舊表：qty_over_range 首次執行自動補欄（統計/篩選 SQL 會引用；部署後第一個請求可能是 AJAX 而非整頁載入）
     try { $pdo->query("SELECT qty_over_range FROM order_track LIMIT 1"); }
     catch (Exception $_eQov) {
@@ -2103,7 +2164,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         DATE_FORMAT(ot.ateGet, '%c/%e') AS ateGet_formatted, 
         DATE_FORMAT(ot.pmGet, '%c/%e') AS pmGet_formatted, 
         DATE_FORMAT(ot.Created_At, '%c/%e') AS Created_At_formatted, 
-        DATE_FORMAT(ot.in_review, '%c/%e') AS in_review_formatted, 
+        DATE_FORMAT(ot.in_review, '%c/%e') AS in_review_formatted,
+        DATE_FORMAT(ot.boss_review_at, '%c/%e') AS boss_review_formatted,
+        DATE_FORMAT(ot.boss_ok_at, '%c/%e') AS boss_ok_formatted,
         u.user_cname, creator.user_cname AS creator_name,
         CASE WHEN (ot.Client_name_ID IS NOT NULL AND ot.Client_name_ID != '') THEN 1 ELSE 0 END AS has_client_id,
         CASE WHEN (ot.d_id_ID IS NOT NULL AND ot.d_id_ID != 0) THEN 1 ELSE 0 END AS has_part_id,
@@ -3010,8 +3073,34 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                                     echo '<span style="font-size: 12px; color: #999;">批圖中</span>';
                                 }
                             }
-                            if ($_row_can_to_pm) {
-                                echo '<button type="button" class="btn btn-warning btn-xs" style="padding: 2px 6px; font-size: 11px;" onclick="updatePmGet(\'' . $order['Order_id'] . '\')">轉生管</button>';
+                            // ── BOSS 審圖（2026-09-18）：只有「客戶在名單內、且不是自動轉生管」的訂單才走這條 ──
+                            //    名單沒設定時 ot_boss_required() 一律回 false，以下整段等同不存在，行為與改動前相同。
+                            //    徽章一定要自己寫 line-height：Gentelella 全站 `td span{line-height:28px}`，
+                            //    不寫的話一個 11px 的字會佔掉 28px 高、把整列撐高（見 CLAUDE.md 2026-09-03 急件徽章那次）。
+                            $_boss_need = ot_boss_required($pdo, $order['Client_name_ID'] ?? '', $order['ate'] ?? 0);
+                            $_boss_rev  = $order['boss_review_formatted'] ?? '';
+                            $_boss_ok   = $order['boss_ok_formatted'] ?? '';
+                            $_boss_css  = 'display:inline-block;font-size:11px;line-height:16.5px;padding:2px 5px;border:1px solid;border-radius:3px;margin-right:3px;vertical-align:middle;';
+                            if ($_boss_need && $_boss_ok === '' && $_boss_rev !== '') {
+                                // 已送 BOSS 審圖、還沒回覆 → 顯示「BOSS審圖中」並長出【BOSS審核OK】
+                                echo '<span style="' . $_boss_css . 'color:#8a5a2b;background:#FFF3E2;border-color:#E4D3BC;" title="本客戶的訂單需先給 BOSS 審圖；' . safe_html($_boss_rev) . ' 已送審，等待 BOSS 審核"><i class="fa fa-eye"></i> BOSS審圖中 ' . safe_html($_boss_rev) . '</span>';
+                                if ($_row_can_to_pm) {
+                                    echo '<button type="button" class="btn btn-xs" style="padding: 2px 6px; font-size: 11px; background:#F0A24B; border:1px solid #d9893a; color:#fff;" onclick="bossReviewOk(\'' . $order['Order_id'] . '\')" title="BOSS 已審核完成，系統認定為今天完成審核">BOSS審核OK</button>';
+                                    echo ' <button type="button" class="btn btn-xs btn-danger" style="padding: 1px 5px; font-size: 11px;" onclick="bossReviewCancel(\'' . $order['Order_id'] . '\')" title="按錯了？取消這次送 BOSS 審圖的紀錄，回到可按轉生管的狀態">X</button>';
+                                }
+                            } else {
+                                if ($_boss_ok !== '') {
+                                    echo '<span style="' . $_boss_css . 'color:#1e7e34;background:#EAF7EE;border-color:#BFE3C9;" title="BOSS 於 ' . safe_html($_boss_ok) . ' 審核完成，可以轉生管了"><i class="fa fa-check"></i> BOSS OK ' . safe_html($_boss_ok) . '</span>';
+                                    if ($_row_can_to_pm) {
+                                        echo '<button type="button" class="btn btn-xs btn-danger" style="padding: 1px 5px; font-size: 11px; margin-right:3px;" onclick="bossReviewCancel(\'' . $order['Order_id'] . '\')" title="清除本訂單的 BOSS 審圖紀錄（送審日與審核完成日一起），回到還沒送 BOSS 審圖的狀態">X</button>';
+                                    }
+                                }
+                                if ($_row_can_to_pm) {
+                                    $_pm_title = ($_boss_need && $_boss_ok === '')
+                                        ? ' title="本客戶的訂單需先給 BOSS 審圖：按下後會記錄今天送 BOSS 審圖，等 BOSS 審核 OK 後才能轉生管"' : '';
+                                    $_pm_mark  = ($_boss_need && $_boss_ok === '') ? '<i class="fa fa-eye" style="margin-right:3px;"></i>' : '';
+                                    echo '<button type="button" class="btn btn-warning btn-xs" style="padding: 2px 6px; font-size: 11px;" onclick="updatePmGet(\'' . $order['Order_id'] . '\')"' . $_pm_title . '>' . $_pm_mark . '轉生管</button>';
+                                }
                             }
                         } else {
                             if ($_row_can_to_pm) {
@@ -3128,6 +3217,9 @@ try { $conn->getPDO()->query("SELECT is_urgent FROM order_track LIMIT 1"); }
 catch (Exception $_eUrg) {
     try { $conn->getPDO()->exec("ALTER TABLE order_track ADD COLUMN is_urgent TINYINT(1) NOT NULL DEFAULT 0 COMMENT '急件=1；篩選批圖中時排最上方(多筆依接單日新到舊)，清單以淺暖粉紅底色標示'"); } catch (Exception $_eUrg2) {}
 }
+// 相容舊表：BOSS 審圖（客戶名單表＋order_track 的 boss_review_at/boss_ok_at 等四欄）首次載入自動補建
+// 只在「真的開頁面」時跑一次（AJAX 清單不跑，避免每次翻頁都 SHOW COLUMNS）
+try { ot_boss_ensure_schema($conn->getPDO()); } catch (Exception $_eBoss) {}
 $initStatsSql = "SELECT
     COUNT(*) as total_records,
     SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op,
@@ -3663,10 +3755,10 @@ foreach($dCounts as $c) {
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#5d4037,#a1887f);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
                             <i class="fa fa-history" style="font-size:13px;"></i><span class="fb-txt"> 變更</span>
                         </button>
-                        <?php if ($can_order_change_setting): ?>
+                        <?php if ($can_order_change_setting || $can_boss_review_setting): ?>
                         <button type="button" id="btn-order-change-settings"
                             onclick="openChangeSettings()"
-                            title="訂單變更設定（通知對象、附件路徑、列印表頭表尾）"
+                            title="設定（訂單變更通知對象、附件路徑、列印表頭表尾、需給 BOSS 審圖的客戶名單）"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#37474f,#607d8b);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
                             <i class="fa fa-cog" style="font-size:13px;"></i><span class="fb-txt"> 設定</span>
                         </button>
@@ -4767,6 +4859,8 @@ foreach($dCounts as $c) {
         window.canDelete = <?= json_encode($can_delete) ?>;
         window.canUpdatePmget = <?= json_encode($can_to_pm) ?>; // 轉生管操作權限（ot_to_pm）
         window.canChangeClient = <?= json_encode((bool)$can_order_change_client) ?>; // 更改已建立訂單的客戶（ot_order_change_client）
+        window.OT_CAN_CHANGE_SETTING = <?= json_encode((bool)$can_order_change_setting) ?>; // 訂單變更設定（ot_order_change_setting）
+        window.OT_CAN_BOSS_SETTING   = <?= json_encode((bool)$can_boss_review_setting) ?>;  // 設定「需給 BOSS 審圖」客戶名單（ot_boss_review_setting）
         window.designerList = <?= json_encode($ate_list) ?>; // 傳遞設計師列表給 JS
         
         function escapeHtml(text) {
@@ -7073,21 +7167,68 @@ foreach($dCounts as $c) {
         }
 
 
+        // ── 「轉生管日／BOM開立」那一格的唯一畫法（2026-09-18 收斂）──────────
+        //    審圖／取消審圖／轉生管／取消轉生管／BOSS審核OK／清除BOSS審圖 六個動作做完之後
+        //    都用這一支重畫，狀態一律吃後端回傳的 state（src/common/order_boss_review_lib.php
+        //    的 ot_boss_cell_state()），**前後端不各寫一套**，否則遲早走鐘。
+        //    ※ 沒有設定 BOSS 審圖客戶名單時（boss_need=false、兩個 boss 日期都是空的），
+        //      這支產出的 HTML 與改動前的四段程式碼完全相同。
+        function otPmCellHtml(orderId, st) {
+            st = st || {};
+            var can = !!window.canUpdatePmget;
+            var h = '';
+            if (st.pmGet_date) {
+                if (can) h += `<button type="button" class="btn btn-xs btn-danger" style="padding: 1px 5px; font-size: 11px;" onclick="cancelPmGet('${orderId}')">X</button> `;
+                h += `<span style="font-size: 12px;">${escapeHtml(st.pmGet_date)}</span>`;
+                return h;
+            }
+            if (st.in_review_date) {
+                h += `<span style="color: green; font-size: 11px; margin-right: 3px;">${escapeHtml(st.in_review_date)}審圖</span>`;
+                if (can) h += `<button type="button" class="btn btn-xs btn-danger" style="padding: 1px 5px; font-size: 11px;" onclick="cancelInReview('${orderId}')">X</button> `;
+            } else if (can) {
+                h += `<button type="button" class="btn btn-xs btn-success" style="padding: 2px 6px; font-size: 11px;" onclick="updateInReview('${orderId}')">審圖</button> `;
+            } else {
+                h += '<span style="font-size: 12px; color: #999;">批圖中</span>';
+            }
+            // BOSS 審圖：只有「客戶在名單內、且不是自動轉生管」的訂單才會有 boss_need
+            // 徽章一定要自己寫 line-height（Gentelella 全站 td span{line-height:28px}），否則整列會被撐高
+            var bcss = 'display:inline-block;font-size:11px;line-height:16.5px;padding:2px 5px;border:1px solid;border-radius:3px;margin-right:3px;vertical-align:middle;';
+            if (st.boss_need && !st.boss_ok_date && st.boss_review_date) {
+                h += `<span style="${bcss}color:#8a5a2b;background:#FFF3E2;border-color:#E4D3BC;" title="本客戶的訂單需先給 BOSS 審圖；${escapeHtml(st.boss_review_date)} 已送審，等待 BOSS 審核"><i class="fa fa-eye"></i> BOSS審圖中 ${escapeHtml(st.boss_review_date)}</span>`;
+                if (can) {
+                    h += `<button type="button" class="btn btn-xs" style="padding: 2px 6px; font-size: 11px; background:#F0A24B; border:1px solid #d9893a; color:#fff;" onclick="bossReviewOk('${orderId}')" title="BOSS 已審核完成，系統認定為今天完成審核">BOSS審核OK</button>`;
+                    h += ` <button type="button" class="btn btn-xs btn-danger" style="padding: 1px 5px; font-size: 11px;" onclick="bossReviewCancel('${orderId}')" title="清除本訂單的 BOSS 審圖紀錄，回到還沒送 BOSS 審圖的狀態">X</button>`;
+                }
+            } else {
+                if (st.boss_ok_date) {
+                    h += `<span style="${bcss}color:#1e7e34;background:#EAF7EE;border-color:#BFE3C9;" title="BOSS 於 ${escapeHtml(st.boss_ok_date)} 審核完成，可以轉生管了"><i class="fa fa-check"></i> BOSS OK ${escapeHtml(st.boss_ok_date)}</span>`;
+                    if (can) h += `<button type="button" class="btn btn-xs btn-danger" style="padding: 1px 5px; font-size: 11px; margin-right:3px;" onclick="bossReviewCancel('${orderId}')" title="清除本訂單的 BOSS 審圖紀錄（送審日與審核完成日一起），回到還沒送 BOSS 審圖的狀態">X</button>`;
+                }
+                if (can) {
+                    var needMark = !!(st.boss_need && !st.boss_ok_date);
+                    var pmTitle = needMark ? ' title="本客戶的訂單需先給 BOSS 審圖：按下後會記錄今天送 BOSS 審圖，等 BOSS 審核 OK 後才能轉生管"' : '';
+                    var pmMark  = needMark ? '<i class="fa fa-eye" style="margin-right:3px;"></i>' : '';
+                    h += `<button type="button" class="btn btn-warning btn-xs" style="padding: 2px 6px; font-size: 11px;" onclick="updatePmGet('${orderId}')"${pmTitle}>${pmMark}轉生管</button>`;
+                }
+            }
+            return h;
+        }
+        // 重畫某一列的狀態欄（BOM 開立圖示照舊由 <tr data-bom-icon> 補回）
+        function otPmCellApply(orderId, st) {
+            var cell = $(`tr[data-orderid='${orderId}'] td[name='pmGetCell']`);
+            cell.html(otPmCellHtml(orderId, st) + (cell.closest('tr').attr('data-bom-icon') || ''));
+        }
+
         // --- Status Update Functions ---
 
         function updateInReview(orderId) {
             var cell = $(`tr[data-orderid='${orderId}'] td[name='pmGetCell']`);
             cell.html('<span class="loading-spinner">處理中...</span>');
-            
+
             $.post("../../src/store/_update_inReview.php", { Order_id: orderId, action: 'set_in_review' }, function(res) {
                 var data = (typeof res === 'object') ? res : JSON.parse(res);
                 if (data.success) {
-                    var html = `<span style="color: green; font-size: 11px; margin-right: 3px;">${data.in_review_date}審圖</span>`;
-                    if (window.canUpdatePmget) {
-                        html += `<button type="button" class="btn btn-xs btn-danger" style="padding: 1px 5px; font-size: 11px;" onclick="cancelInReview('${orderId}')">X</button>
-                                 <button type="button" class="btn btn-warning btn-xs" style="padding: 2px 6px; font-size: 11px;" onclick="updatePmGet('${orderId}')">轉生管</button>`;
-                    }
-                    cell.html(html + (cell.closest('tr').attr('data-bom-icon') || ''));
+                    otPmCellApply(orderId, data.state || { in_review_date: data.in_review_date });
                 } else {
                     alert('Error: ' + data.message);
                     location.reload();
@@ -7101,18 +7242,11 @@ foreach($dCounts as $c) {
         function cancelInReview(orderId) {
             var cell = $(`tr[data-orderid='${orderId}'] td[name='pmGetCell']`);
             cell.html('<span class="loading-spinner">處理中...</span>');
-            
+
             $.post("../../src/store/_update_inReview.php", { Order_id: orderId, action: 'cancel_in_review' }, function(res) {
                 var data = (typeof res === 'object') ? res : JSON.parse(res);
                 if (data.success) {
-                    var html = '';
-                    if (window.canUpdatePmget) {
-                        html = `<button type="button" class="btn btn-xs btn-success" style="padding: 2px 6px; font-size: 11px;" onclick="updateInReview('${orderId}')">審圖</button>
-                                <button type="button" class="btn btn-warning btn-xs" style="padding: 2px 6px; font-size: 11px;" onclick="updatePmGet('${orderId}')">轉生管</button>`;
-                    } else {
-                        html = '<span style="font-size: 12px; color: #999;">批圖中</span>';
-                    }
-                    cell.html(html + (cell.closest('tr').attr('data-bom-icon') || ''));
+                    otPmCellApply(orderId, data.state || {});
                 } else {
                     alert('Error: ' + data.message);
                     location.reload();
@@ -7126,16 +7260,16 @@ foreach($dCounts as $c) {
         function updatePmGet(orderId) {
             var cell = $(`tr[data-orderid='${orderId}'] td[name='pmGetCell']`);
             cell.html('<span class="loading-spinner">處理中...</span>');
-            
+
             $.post("../../src/store/simple_update_pmGet.php", { Order_id: orderId }, function(res) {
                 var data = (typeof res === 'object') ? res : JSON.parse(res);
                 if (data.success) {
-                    var html = '';
-                    if (window.canUpdatePmget) {
-                        html += `<button type="button" class="btn btn-xs btn-danger" style="padding: 1px 5px; font-size: 11px;" onclick="cancelPmGet('${orderId}')">X</button> `;
+                    otPmCellApply(orderId, data.state || { pmGet_date: data.pmGet_date });
+                    // 客戶在「需給 BOSS 審圖」名單內時，這一按是「送 BOSS 審圖」不是轉生管，要講清楚
+                    if (data.boss_review) {
+                        if (typeof showToast === 'function') showToast(data.message);
+                        else alert(data.message);
                     }
-                    html += `<span style="font-size: 12px;">${data.pmGet_date}</span>`;
-                    cell.html(html + (cell.closest('tr').attr('data-bom-icon') || ''));
                 } else {
                     alert('Error: ' + data.message);
                     location.reload();
@@ -7149,18 +7283,51 @@ foreach($dCounts as $c) {
         function cancelPmGet(orderId) {
             var cell = $(`tr[data-orderid='${orderId}'] td[name='pmGetCell']`);
             cell.html('<span class="loading-spinner">處理中...</span>');
-            
+
             $.post("../../src/store/simple_update_pmGet.php", { Order_id: orderId, action: 'cancel' }, function(res) {
                 var data = (typeof res === 'object') ? res : JSON.parse(res);
                 if (data.success) {
-                    var html = '';
-                    if (window.canUpdatePmget) {
-                        html = `<button type="button" class="btn btn-xs btn-success" style="padding: 2px 6px; font-size: 11px;" onclick="updateInReview('${orderId}')">審圖</button>
-                                <button type="button" class="btn btn-warning btn-xs" style="padding: 2px 6px; font-size: 11px;" onclick="updatePmGet('${orderId}')">轉生管</button>`;
-                    } else {
-                        html = '<span style="font-size: 12px; color: #999;">批圖中</span>';
-                    }
-                    cell.html(html + (cell.closest('tr').attr('data-bom-icon') || ''));
+                    otPmCellApply(orderId, data.state || { in_review_date: data.in_review_date });
+                } else {
+                    alert('Error: ' + data.message);
+                    location.reload();
+                }
+            }).fail(function() {
+                alert('連線失敗，請重試');
+                location.reload();
+            });
+        }
+
+        // ── BOSS 審圖（客戶名單在「設定」跳窗裡維護）────────────────────────
+        // 權限與轉生管相同（ot_to_pm ＋ 只能操作自己被指定的訂單），後端再擋一次。
+        function bossReviewOk(orderId) {
+            if (!confirm('確認 BOSS 已審核完成？\n\n系統會把「今天」記為 BOSS 審核完成日，之後這張訂單就可以按轉生管了。')) return;
+            var cell = $(`tr[data-orderid='${orderId}'] td[name='pmGetCell']`);
+            cell.html('<span class="loading-spinner">處理中...</span>');
+
+            $.post("../../src/store/simple_update_pmGet.php", { Order_id: orderId, action: 'boss_ok' }, function(res) {
+                var data = (typeof res === 'object') ? res : JSON.parse(res);
+                if (data.success) {
+                    otPmCellApply(orderId, data.state || {});
+                } else {
+                    alert('Error: ' + data.message);
+                    location.reload();
+                }
+            }).fail(function() {
+                alert('連線失敗，請重試');
+                location.reload();
+            });
+        }
+
+        function bossReviewCancel(orderId) {
+            if (!confirm('要清除這張訂單的 BOSS 審圖紀錄嗎？\n\n送 BOSS 審圖日與 BOSS 審核完成日會一起清掉，回到「還沒送 BOSS 審圖」的狀態。')) return;
+            var cell = $(`tr[data-orderid='${orderId}'] td[name='pmGetCell']`);
+            cell.html('<span class="loading-spinner">處理中...</span>');
+
+            $.post("../../src/store/simple_update_pmGet.php", { Order_id: orderId, action: 'boss_cancel' }, function(res) {
+                var data = (typeof res === 'object') ? res : JSON.parse(res);
+                if (data.success) {
+                    otPmCellApply(orderId, data.state || {});
                 } else {
                     alert('Error: ' + data.message);
                     location.reload();
@@ -9854,6 +10021,7 @@ foreach($dCounts as $c) {
             <h4 class="modal-title"><i class="fa fa-cog"></i> 訂單變更設定</h4>
           </div>
           <div class="modal-body" style="padding:14px;max-height:74vh;overflow-y:auto;">
+            <?php if ($can_order_change_setting): /* 訂單變更相關設定：維持原本的權限（ot_order_change_setting） */ ?>
             <div class="main-card" style="margin-bottom:10px;">
               <div style="font-weight:700;color:#444;margin-bottom:6px;"><i class="fa fa-folder-open-o"></i> 附件儲存路徑（Z槽）</div>
               <input type="text" id="ocs-path" class="form-control input-sm" placeholder="例：Z:\Orders\Changes 或 \\\\server\\share\\Orders\\Changes">
@@ -9941,11 +10109,67 @@ foreach($dCounts as $c) {
                 <div id="ocs-users" style="border:1px solid #ddd;border-radius:4px;padding:8px;background:#fafafa;max-height:260px;overflow-y:auto;"></div>
               </div>
             </div>
+            <?php endif; /* $can_order_change_setting */ ?>
+
+            <?php if ($can_boss_review_setting): /* 2026-09-18 新增，獨立功能碼 ot_boss_review_setting */ ?>
+            <!-- ═══ 需給 BOSS 審圖的客戶名單 ═══════════════════════════════ -->
+            <div class="main-card" style="margin-top:10px;border:1px solid #E4D3BC;">
+              <div style="font-weight:700;color:#8a5a2b;margin-bottom:6px;"><i class="fa fa-eye"></i> 需給 BOSS 審圖的客戶</div>
+              <div style="font-size:11px;color:#8a5a2b;background:#FFF9F0;border:1px solid #F0E2CC;border-radius:4px;padding:6px 8px;margin-bottom:8px;line-height:1.7;">
+                這裡綁定的客戶，他們的訂單按下【轉生管】時<b>不會直接轉生管</b>，而是先記下「今天送 BOSS 審圖」，
+                清單上顯示 <b>BOSS審圖中</b> 並長出【BOSS審核OK】鈕；按下【BOSS審核OK】＝系統認定<b>當天</b>
+                BOSS 完成審核，【轉生管】鈕才會回來，之後所有動作都與原本相同。<br>
+                ・<b>原本設定為「存檔自動轉生管」的設計對象完全不受影響</b>（那種訂單一存檔就已經是已轉生管，本設定不會介入）。<br>
+                ・誰能按【BOSS審核OK】＝誰能按【轉生管】（角色功能碼 <code>ot_to_pm</code>，且只能操作自己被指定的訂單）。<br>
+                ・<b>每次儲存（新增／修改／刪除）都必須填寫修改原因</b>；一次改好幾家只要填一次。系統會記錄是誰、什麼時候改的。
+              </div>
+
+              <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;">
+                <input type="text" id="brc-search" class="form-control input-sm" style="flex:1;"
+                       placeholder="輸入客戶名稱或客戶ID搜尋（模糊比對），再從下方清單點選加入" autocomplete="off">
+                <button type="button" class="btn btn-default btn-sm" onclick="brcSearch()"><i class="fa fa-search"></i> 搜尋</button>
+              </div>
+              <div id="brc-suggest" style="display:none;border:1px solid #ddd;border-radius:4px;background:#fff;max-height:180px;overflow-y:auto;margin-bottom:8px;"></div>
+
+              <div style="font-size:12px;color:#666;margin-bottom:4px;">已綁定的客戶（<span id="brc-count">0</span> 家）</div>
+              <div style="border:1px solid #ddd;border-radius:4px;max-height:240px;overflow-y:auto;">
+                <table class="table table-condensed" style="margin:0;font-size:12px;">
+                  <thead><tr style="background:#f5f5f5;">
+                    <th style="width:110px;">客戶ID</th><th style="width:150px;">客戶名稱</th>
+                    <th>備註</th><th style="width:150px;">設定人／時間</th><th style="width:50px;"></th>
+                  </tr></thead>
+                  <tbody id="brc-tbody"><tr><td colspan="5" class="text-center" style="color:#aaa;padding:14px;">載入中…</td></tr></tbody>
+                </table>
+              </div>
+
+              <div style="margin-top:8px;">
+                <div style="font-size:12px;color:#666;margin-bottom:3px;">
+                  本次修改的原因 <span style="color:#c0392b;">*必填</span>
+                  <span style="color:#aaa;">（一次調整多家客戶只要填一次）</span>
+                </div>
+                <!-- 本頁沒有載入 eg_input_rules.js（在 input_rules_baseline.txt 基準線內），
+                     所以不用 data-eg-hint；提示一律寫成欄位外的說明文字，不放 placeholder（會被誤看成已填好的值） -->
+                <div style="font-size:11px;color:#aaa;margin-bottom:3px;">例：業務會議決議，此客戶新開案圖面一律先由 BOSS 過目</div>
+                <textarea id="brc-reason" class="form-control input-sm" rows="2" maxlength="500"></textarea>
+                <div id="brc-reason-err" style="display:none;color:#c0392b;font-size:11px;margin-top:3px;"></div>
+              </div>
+
+              <div style="margin-top:8px;display:flex;align-items:center;gap:8px;">
+                <button type="button" class="btn btn-primary btn-sm" onclick="brcSave()"><i class="fa fa-save"></i> 儲存名單</button>
+                <a href="javascript:;" style="font-size:12px;" onclick="brcToggleLogs()"><i class="fa fa-history"></i> 異動歷程</a>
+                <span id="brc-msg" style="font-size:12px;"></span>
+              </div>
+              <div id="brc-logs" style="display:none;margin-top:8px;border-top:1px dashed #E4D3BC;padding-top:8px;max-height:220px;overflow-y:auto;"></div>
+            </div>
+            <?php endif; /* $can_boss_review_setting */ ?>
           </div>
           <div class="modal-footer">
             <span id="ocs-msg" style="float:left;font-size:12px;line-height:32px;"></span>
             <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+            <?php if ($can_order_change_setting): /* 只有 BOSS 審圖名單權限的人看不到這顆（那一區有自己的儲存鈕），
+                 否則按下去會把訂單變更設定用空值整批覆蓋掉 */ ?>
             <button type="button" class="btn btn-primary" onclick="saveChangeSettings()"><i class="fa fa-save"></i> 儲存設定</button>
+            <?php endif; ?>
           </div>
         </div>
       </div>
@@ -10410,7 +10634,11 @@ foreach($dCounts as $c) {
         var ocsUserRows=[], ocsUserSel=new Set(), ocsWired=false;
         window.openChangeSettings = function(){
             $('#changeSettingsModal').modal('show');
-            document.getElementById('ocs-msg').textContent='';
+            var msgEl=document.getElementById('ocs-msg'); if(msgEl) msgEl.textContent='';
+            // 「需給 BOSS 審圖的客戶」是獨立功能碼（ot_boss_review_setting），跟訂單變更設定各自載入
+            if (typeof brcOpen === 'function') brcOpen();
+            // 只有 BOSS 審圖名單權限的人看不到下面那些區塊，也就不要去打它們的 API（會 403）
+            if (!window.OT_CAN_CHANGE_SETTING) return;
             orderAttachLoadPathSetting();
             orderAttachLoadCatsSetting();
             ocApi('get_settings', {}).then(function(res){
@@ -10459,6 +10687,154 @@ foreach($dCounts as $c) {
                 setTimeout(function(){ $('#changeSettingsModal').modal('hide'); }, 700);
             });
         };
+
+        // ══ 需給 BOSS 審圖的客戶名單（2026-09-18）══════════════════════════
+        // 畫面保留「完整名單」，儲存時整份送給後端自己 diff 出新增／修改／刪除，
+        // 同一次儲存共用一個修改原因（使用者指定：一次設定多組只要填一次）。
+        var brcRows = [], brcLogs = [], brcSearchTimer = null;
+        function brcFmtWhen(v){
+            if(!v) return '';
+            return (typeof egFmtDate === 'function') ? egFmtDate(v, true) : String(v);
+        }
+        window.brcOpen = function(){
+            if(!document.getElementById('brc-tbody')) return;   // 沒有這個權限就沒有這一區
+            document.getElementById('brc-msg').textContent = '';
+            document.getElementById('brc-reason').value = '';
+            document.getElementById('brc-reason-err').style.display = 'none';
+            document.getElementById('brc-suggest').style.display = 'none';
+            document.getElementById('brc-search').value = '';
+            document.getElementById('brc-logs').style.display = 'none';
+            $.post('', { action: 'boss_client_get' }, function(res){
+                if(!res || !res.success){ document.getElementById('brc-tbody').innerHTML =
+                    '<tr><td colspan="5" class="text-center" style="color:#c0392b;padding:14px;">'
+                    + escapeHtml((res && res.message) || '讀取失敗') + '</td></tr>'; return; }
+                brcRows = (res.rows || []).slice();
+                brcLogs = res.logs || [];
+                brcRender();
+            }, 'json').fail(function(){
+                document.getElementById('brc-tbody').innerHTML =
+                    '<tr><td colspan="5" class="text-center" style="color:#c0392b;padding:14px;">連線失敗，請重試</td></tr>';
+            });
+        };
+        function brcRender(){
+            var tb = document.getElementById('brc-tbody');
+            document.getElementById('brc-count').textContent = brcRows.length;
+            if(!brcRows.length){
+                tb.innerHTML = '<tr><td colspan="5" class="text-center" style="color:#aaa;padding:14px;">'
+                             + '尚未綁定任何客戶（＝這項功能目前完全沒有作用，所有訂單維持原本的轉生管流程）</td></tr>';
+                return;
+            }
+            tb.innerHTML = brcRows.map(function(r, i){
+                var who = r.created_by_name ? (escapeHtml(r.created_by_name) + '<br><span style="color:#aaa;">'
+                          + escapeHtml(brcFmtWhen(r.created_at)) + '</span>')
+                        : '<span style="color:#F0A24B;">尚未儲存</span>';
+                if(r.updated_by_name && r.updated_at && r.updated_at !== r.created_at){
+                    who += '<br><span style="color:#aaa;font-size:11px;">最後修改 ' + escapeHtml(r.updated_by_name)
+                         + ' ' + escapeHtml(brcFmtWhen(r.updated_at)) + '</span>';
+                }
+                return '<tr>'
+                     + '<td style="vertical-align:middle;">' + escapeHtml(r.client_id) + '</td>'
+                     + '<td style="vertical-align:middle;">' + escapeHtml(r.client_name || '') + '</td>'
+                     + '<td><input type="text" class="form-control input-sm" maxlength="255" value="'
+                       + escapeHtml(r.note || '') + '" placeholder="選填"'
+                       + ' oninput="brcNote(' + i + ', this.value)"></td>'
+                     + '<td style="vertical-align:middle;font-size:11px;">' + who + '</td>'
+                     + '<td style="vertical-align:middle;text-align:center;">'
+                       + '<button type="button" class="btn btn-xs btn-danger" title="從名單移除（要按下方「儲存名單」才會生效）"'
+                       + ' onclick="brcRemove(' + i + ')"><i class="fa fa-times"></i></button></td>'
+                     + '</tr>';
+            }).join('');
+        }
+        window.brcNote = function(i, v){ if(brcRows[i]) brcRows[i].note = v; };
+        window.brcRemove = function(i){ brcRows.splice(i, 1); brcRender(); };
+        window.brcSearch = function(){
+            var kw = (document.getElementById('brc-search').value || '').trim();
+            var box = document.getElementById('brc-suggest');
+            if(kw === ''){ box.style.display = 'none'; box.innerHTML = ''; return; }
+            box.style.display = 'block';
+            box.innerHTML = '<div style="padding:8px;color:#aaa;font-size:12px;">搜尋中…</div>';
+            $.post('', { action: 'search_data', type: 'customer', term: kw }, function(res){
+                if(!res || !res.success){ box.innerHTML = '<div style="padding:8px;color:#c0392b;font-size:12px;">搜尋失敗</div>'; return; }
+                var have = {}; brcRows.forEach(function(r){ have[String(r.client_id)] = 1; });
+                var list = (res.data || []);
+                if(!list.length){ box.innerHTML = '<div style="padding:8px;color:#aaa;font-size:12px;">查無符合的客戶</div>'; return; }
+                box.innerHTML = list.map(function(c){
+                    var added = have[String(c.customer_id)];
+                    return '<div style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;display:flex;align-items:center;gap:8px;'
+                         + (added ? 'background:#FAFAFA;color:#aaa;' : 'cursor:pointer;') + '"'
+                         + (added ? '' : ' onclick="brcAdd(\'' + escapeHtml(c.customer_id) + '\')"')
+                         + '><span style="width:100px;color:#8a5a2b;">' + escapeHtml(c.customer_id) + '</span>'
+                         + '<span style="flex:1;">' + escapeHtml(c.customer || '') + '</span>'
+                         + (added ? '<span style="font-size:11px;">已在名單內</span>'
+                                  : '<span style="font-size:11px;color:#1e7e34;">點此加入</span>') + '</div>';
+                }).join('');
+                window.brcLast = list;
+            }, 'json').fail(function(){
+                box.innerHTML = '<div style="padding:8px;color:#c0392b;font-size:12px;">連線失敗，請重試</div>';
+            });
+        };
+        window.brcAdd = function(cid){
+            cid = String(cid);
+            if(brcRows.some(function(r){ return String(r.client_id) === cid; })) return;
+            var hit = (window.brcLast || []).filter(function(c){ return String(c.customer_id) === cid; })[0];
+            brcRows.push({ client_id: cid, client_name: hit ? (hit.customer || '') : '', note: '' });
+            brcRender();
+            brcSearch();   // 重畫建議清單（把剛加入的標成「已在名單內」）
+        };
+        window.brcToggleLogs = function(){
+            var box = document.getElementById('brc-logs');
+            if(box.style.display !== 'none'){ box.style.display = 'none'; return; }
+            box.style.display = 'block';
+            if(!brcLogs.length){ box.innerHTML = '<div style="color:#aaa;font-size:12px;">目前沒有任何異動紀錄</div>'; return; }
+            var actTxt = { add: '新增', update: '修改', 'delete': '刪除' };
+            var actCol = { add: '#1e7e34', update: '#8a5a2b', 'delete': '#c0392b' };
+            box.innerHTML = '<table class="table table-condensed" style="margin:0;font-size:11px;">'
+                + '<thead><tr style="background:#f5f5f5;"><th style="width:60px;">動作</th><th style="width:100px;">客戶ID</th>'
+                + '<th style="width:130px;">客戶</th><th>原因</th><th style="width:150px;">異動人／時間</th></tr></thead><tbody>'
+                + brcLogs.map(function(g){
+                    return '<tr><td style="color:' + (actCol[g.action] || '#666') + ';font-weight:600;">'
+                         + escapeHtml(actTxt[g.action] || g.action) + '</td>'
+                         + '<td>' + escapeHtml(g.client_id) + '</td>'
+                         + '<td>' + escapeHtml(g.client_name || '') + '</td>'
+                         + '<td style="white-space:pre-wrap;">' + escapeHtml(g.reason || '') + '</td>'
+                         + '<td>' + escapeHtml(g.created_by_name || '') + '<br><span style="color:#aaa;">'
+                         + escapeHtml(brcFmtWhen(g.created_at)) + '</span></td></tr>';
+                  }).join('') + '</tbody></table>';
+        };
+        window.brcSave = function(){
+            var reason = (document.getElementById('brc-reason').value || '').trim();
+            var err = document.getElementById('brc-reason-err');
+            var msg = document.getElementById('brc-msg');
+            // 前端即時擋一次，後端 ot_boss_save() 同規則再擋一次（鐵律8）
+            if(reason === ''){
+                err.textContent = '請填寫本次修改的原因（新增／修改／刪除都要填，一次改多家只要填一次）';
+                err.style.display = 'block';
+                document.getElementById('brc-reason').focus();
+                return;
+            }
+            err.style.display = 'none';
+            msg.style.color = '#888'; msg.textContent = '儲存中…';
+            var items = brcRows.map(function(r){ return { client_id: r.client_id, note: r.note || '' }; });
+            $.post('', { action: 'boss_client_save', items: JSON.stringify(items), reason: reason }, function(res){
+                if(!res || !res.success){ msg.style.color = '#c0392b'; msg.textContent = (res && res.message) || '儲存失敗'; return; }
+                brcRows = (res.rows || []).slice();
+                brcLogs = res.logs || [];
+                brcRender();
+                document.getElementById('brc-reason').value = '';
+                if(document.getElementById('brc-logs').style.display !== 'none') { brcToggleLogs(); brcToggleLogs(); }
+                msg.style.color = '#1e7e34';
+                msg.textContent = res.message + '（新增 ' + (res.added || 0) + '、修改 ' + (res.updated || 0)
+                                + '、刪除 ' + (res.deleted || 0) + '）';
+            }, 'json').fail(function(){
+                msg.style.color = '#c0392b'; msg.textContent = '連線失敗，請重試';
+            });
+        };
+        $(document).on('input', '#brc-search', function(){
+            clearTimeout(brcSearchTimer);
+            brcSearchTimer = setTimeout(brcSearch, 300);
+        }).on('keydown', '#brc-search', function(e){
+            if(e.key === 'Enter'){ e.preventDefault(); clearTimeout(brcSearchTimer); brcSearch(); }
+        });
 
         // ── 全部變更歷史 ───────────────────────────────────────────────────
         window.och_state = {page:1, size:10, kw:'', total:0, rows:[]};
@@ -10943,6 +11319,20 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
     <li>【<b>齒輪計算</b>】：模數、齒數、壓力角、螺旋角、變位量與花鍵／栓槽相關計算，含預留量表。</li>
     <li>【<b>鍵槽計算</b>】：軸件／片狀鍵槽的公差與極限值。</li>
     <li>兩者都是<b>全站共用</b>的同一份工具（批圖編輯器裡也是這一份），改了規則兩邊一起生效。看不看得到依角色的「計算工具」權限。</li>
+</ul>
+
+<h4>六之二、需給 BOSS 審圖的客戶</h4>
+<ul>
+    <li>在【<b>設定</b>】跳窗最下方的「<b>需給 BOSS 審圖的客戶</b>」綁定客戶（打<b>客戶名稱或客戶ID</b>模糊搜尋後點選，可綁多家）。</li>
+    <li>綁定之後，這些客戶的訂單按下【<b>轉生管</b>】時<b>不會直接轉生管</b>，而是記下「<b>今天</b>送 BOSS 審圖」，
+        該列顯示 <b>BOSS審圖中</b> 並長出【<b>BOSS審核OK</b>】鈕。</li>
+    <li>按【<b>BOSS審核OK</b>】＝系統認定<b>當天</b> BOSS 完成審核，該列顯示 <b>BOSS OK</b>，
+        【<b>轉生管</b>】鈕回來，之後所有動作都與原本完全相同。按錯了可用旁邊的 <b>X</b> 把 BOSS 審圖紀錄整個清掉重來。</li>
+    <li><b>原本設定為「存檔自動轉生管」的設計對象不受影響</b>——那種訂單一存檔就已經是已轉生管，本設定不會介入。</li>
+    <li>誰能按【BOSS審核OK】＝誰能按【轉生管】（同一個角色功能碼，且一樣只能操作自己被指定的訂單）。</li>
+    <li>要維護這份名單需要角色勾選「<b>設定「需給 BOSS 審圖」的客戶名單</b>」。
+        <b>每次儲存（新增／修改／刪除）都必須填寫修改原因</b>，一次調整多家只要填一次；
+        誰、什麼時候、為什麼改，都留在該區的「<b>異動歷程</b>」裡。</li>
 </ul>
 
 <h4>七、其他常用動作</h4>

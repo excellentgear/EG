@@ -10,6 +10,8 @@ session_start();
 include '../common/DBConnection.php';
 include '../common/_config.php';
 require_once '../common/order_track_perm_lib.php';
+// 指定客戶的訂單「轉生管前要先給 BOSS 審圖」（2026-09-18 使用者要求）唯一實作
+require_once '../common/order_boss_review_lib.php';
 
 // 輸出結果
 header('Content-Type: application/json');
@@ -50,7 +52,52 @@ try {
 
     // 檢查是否為取消操作
     $action = isset($_POST['action']) ? $_POST['action'] : 'update';
-    
+
+    // ══════════════════════════════════════════════════════════════════════
+    // BOSS 審圖（2026-09-18 使用者要求）
+    //  ・客戶在「需給 BOSS 審圖」名單內、而且這張訂單不是「存檔自動轉生管」的對象時，
+    //    按【轉生管】不直接蓋轉生管日，改成記下「今天送 BOSS 審圖」。
+    //  ・BOSS 審核 OK 之後（boss_ok_at 有值）就完全回到原本的流程，【轉生管】照常。
+    //  ・名單沒設定＝ot_boss_required() 一律 false，這段整個不會進來，行為與改動前相同。
+    //  權限沿用轉生管（ot_to_pm ＋ 只能操作自己被指定的訂單），上方已守過門。
+    // ══════════════════════════════════════════════════════════════════════
+    $bossRow = null;
+    try {
+        $stB = $pdo->prepare("SELECT Client_name_ID, ate, boss_ok_at FROM order_track WHERE Order_id = ?");
+        $stB->execute([$order_id]);
+        $bossRow = $stB->fetch(PDO::FETCH_ASSOC) ?: null;
+    } catch (Exception $eB) { $bossRow = null; }
+    $bossNeed = $bossRow ? ot_boss_required($pdo, $bossRow['Client_name_ID'] ?? '', $bossRow['ate'] ?? 0) : false;
+
+    if ($action === 'boss_ok') {
+        // BOSS 審核完成：系統認定為今天
+        $pdo->prepare("UPDATE order_track SET boss_ok_at = CURDATE(), boss_ok_by = ? WHERE Order_id = ?")
+            ->execute([$uid, $order_id]);
+        echo json_encode(['success' => true, 'message' => 'BOSS 審核完成已記錄',
+                          'state' => ot_boss_cell_state($pdo, $order_id)]);
+        exit;
+    }
+    if ($action === 'boss_cancel') {
+        // 按錯了：把這張訂單的 BOSS 審圖狀態整個清掉（送審日與審核完成日一起），
+        // 回到「還沒送 BOSS 審圖」的狀態。刻意兩個欄位一起清＝這顆 X 才是真正可回復的，
+        // 否則 BOSS審核OK 一旦按錯就沒有任何辦法退回（比照審圖／轉生管的 X 一律可還原）。
+        $pdo->prepare("UPDATE order_track SET boss_review_at = NULL, boss_review_by = NULL,
+                              boss_ok_at = NULL, boss_ok_by = NULL WHERE Order_id = ?")
+            ->execute([$order_id]);
+        echo json_encode(['success' => true, 'message' => '已清除本訂單的 BOSS 審圖紀錄',
+                          'state' => ot_boss_cell_state($pdo, $order_id)]);
+        exit;
+    }
+    if ($action !== 'cancel' && $bossNeed && empty($bossRow['boss_ok_at'])) {
+        // 還沒經過 BOSS 審核 → 這次按下轉生管＝送 BOSS 審圖（認定當天），不蓋轉生管日
+        $pdo->prepare("UPDATE order_track SET boss_review_at = CURDATE(), boss_review_by = ? WHERE Order_id = ?")
+            ->execute([$uid, $order_id]);
+        echo json_encode(['success' => true, 'boss_review' => true,
+                          'message' => '本客戶的訂單需給 BOSS 審圖，已記錄今日送 BOSS 審圖；等 BOSS 審核 OK 後才能轉生管。',
+                          'state' => ot_boss_cell_state($pdo, $order_id)]);
+        exit;
+    }
+
     if ($action === 'cancel') {
         // 清除轉生管日期
         // pmGet_auto 一併歸零：人工取消後，這筆就不再算「系統自動蓋的」（見 order_auto_pmget_lib.php）
@@ -66,7 +113,8 @@ try {
             echo json_encode([
                 'success' => true,
                 'message' => '轉生管標記已成功取消',
-                'in_review_date' => $ir_date_result ? $ir_date_result['in_review_date'] : null
+                'in_review_date' => $ir_date_result ? $ir_date_result['in_review_date'] : null,
+                'state' => ot_boss_cell_state($pdo, $order_id)
             ]);
         } else {
             echo json_encode(['success' => false, 'message' => '取消轉生管失敗或無變更。']);
@@ -88,11 +136,13 @@ try {
                 echo json_encode([
                     'success' => true, 
                     'message' => '轉生管日期已成功更新', 
-                    'pmGet_date' => $date_result['pmGet_date']
+                    'pmGet_date' => $date_result['pmGet_date'],
+                    'state' => ot_boss_cell_state($pdo, $order_id)
                 ]);
             } else {
                 // Should not happen if update was successful, but as a fallback
-                echo json_encode(['success' => true, 'message' => '轉生管日期已成功更新，但無法獲取日期。']);
+                echo json_encode(['success' => true, 'message' => '轉生管日期已成功更新，但無法獲取日期。',
+                                  'state' => ot_boss_cell_state($pdo, $order_id)]);
             }
         } else {
             echo json_encode(['success' => false, 'message' => '更新失敗']);
