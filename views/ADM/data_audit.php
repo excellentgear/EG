@@ -77,6 +77,11 @@ try {
         .dq-card.c-critical b { color:var(--coral); }
         .dq-card.c-warn b { color:var(--amber-d); }
         .dq-card.c-ok b { color:var(--ok); }
+        .dq-card.pick { cursor:pointer; transition:background .12s, border-color .12s; }
+        .dq-card.pick:hover { background:var(--sand); border-color:var(--amber-d); }
+        .dq-card.sel { border:2px solid var(--amber-d); background:#FFF6E8;
+                       box-shadow:0 0 0 2px rgba(199,124,26,.14); padding:7px 13px; }
+        .dq-card small { display:block; font-size:10px; color:#b0a08c; margin-top:2px; }
         .dq-chips { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
         .dq-chip { font-size:12px; border:1px solid var(--line); border-radius:12px; padding:2px 10px;
                    background:#fff; cursor:pointer; color:#6B4423; }
@@ -329,6 +334,7 @@ try {
                 規則可在「設定」調整。</li>
             <li>欄位完整性依三級列出缺少什麼。傳真、EMAIL 這種「不是每間都有」的預設不檢查；
                 結帳方式、結帳日、付款方式這類帳務資訊一律列為重要缺失。</li>
+            <li>上方的「重要缺失／一般缺失／建議補齊／資料完善」卡片一樣可以點來篩選。</li>
             <li>已停用者不納入稽核。確定無統編（現金交易）、或編號沿用舊制不打算改的，
                 按該列的「標為例外」，之後就不再列為缺失，並會記下是誰、什麼時候、為什麼核可的。</li>
         </ul>
@@ -428,7 +434,21 @@ var CSRF = <?= json_encode($CSRF) ?>;
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
 var OWN_COMPANY = <?= json_encode($ownCompany) ?>;
 var ST = { tab:'trace', trace:null, master:null, filter:'', mFilter:'', settings:null, ex:null,
-           tPage:1, tPer:50, mPage:1, mPer:50 };
+           tPage:1, tPer:50, mPage:1, mPer:50, tLevel:'', mLevel:'' };
+
+/* 卡片（判定等級）與項目籤可以同時使用，而且兩邊的數字互相反映對方的篩選：
+   卡片數字＝套用「項目籤」之後各等級各有幾筆；項目籤數字＝套用「卡片」之後各項目各有幾筆。
+   不這樣做的話，點了「嚴重」以後下面的項目籤還印著全部筆數，看起來像沒篩到。 */
+function byCodeOf(rows){
+    var m = {};
+    rows.forEach(function(r){ r.issues.forEach(function(i){ m[i.code] = (m[i.code]||0) + 1; }); });
+    return m;
+}
+function byLevelOf(rows){
+    var m = {};
+    rows.forEach(function(r){ m[r.level] = (m[r.level]||0) + 1; });
+    return m;
+}
 
 /* 分頁列（鈕在列表右上；CSV／列印一律用全部符合條件的資料，不是只有這一頁） */
 function renderPager(boxId, total, page, per, onGo){
@@ -557,7 +577,7 @@ $('#btnTraceRun').on('click', function(){
         only_bad: $('#tOnlyBad').is(':checked') ? 1 : 0
     }, function(r){
         if(!r || !r.ok) return;
-        ST.trace = r; ST.filter = ''; ST.tPage = 1;
+        ST.trace = r; ST.filter = ''; ST.tLevel = ''; ST.tPage = 1;
         renderTraceStat(); renderTrace();
         $('#tTiming').text('耗時 ' + ((Date.now()-t0)/1000).toFixed(1) + ' 秒');
     });
@@ -566,18 +586,27 @@ $('#btnTraceRun').on('click', function(){
 function renderTraceStat(){
     var r = ST.trace; if(!r) return;
     var s = r.stat, items = r.items || {};
+    var lv = byLevelOf(traceFiltered(false, true));     // 卡片：只套用項目籤
+    var bc = byCodeOf(traceFiltered(true, false));      // 項目籤：只套用卡片
+    var card = function(key, cls, label){
+        var n = lv[key] || 0;
+        return '<div class="dq-card pick ' + cls + (ST.tLevel===key?' sel':'') + '" data-lv="' + key + '">'
+             + '<b>' + n + '</b><span>' + label + '</span>'
+             + '<small>' + (ST.tLevel===key ? '篩選中，再點取消' : '點一下只看這些') + '</small></div>';
+    };
     var h = '<div class="dq-stat">';
-    h += '<div class="dq-card"><b>' + (r.scanned||0) + '</b><span>掃描訂單</span></div>';
-    h += '<div class="dq-card c-critical"><b>' + (s.critical||0) + '</b><span>嚴重</span></div>';
-    h += '<div class="dq-card c-warn"><b>' + (s.warn||0) + '</b><span>提醒</span></div>';
-    h += '<div class="dq-card c-ok"><b>' + (s.ok||0) + '</b><span>正常</span></div>';
+    h += '<div class="dq-card"><b>' + (r.scanned||0) + '</b><span>掃描訂單</span>'
+       + '<small>符合條件 ' + (r.order_total||r.scanned||0) + ' 張</small></div>';
+    h += card('critical', 'c-critical', '嚴重');
+    h += card('warn', 'c-warn', '提醒');
+    h += card('ok', 'c-ok', '正常');
     h += '</div><div class="dq-chips">';
-    h += '<span class="dq-chip' + (ST.filter===''?' on':'') + '" data-f="">全部（' + s.total + '）</span>';
-    var codes = Object.keys(s.by_code||{}).sort(function(a,b){ return s.by_code[b]-s.by_code[a]; });
+    h += '<span class="dq-chip' + (ST.filter===''?' on':'') + '" data-f="">全部（' + traceFiltered(true,false).length + '）</span>';
+    var codes = Object.keys(bc).sort(function(a,b){ return bc[b]-bc[a]; });
     codes.forEach(function(c){
         var it = items[c] || [c,'warn'];
         h += '<span class="dq-chip lv-' + esc(it[1]) + (ST.filter===c?' on':'') + '" data-f="' + esc(c) + '">'
-           + esc(it[0]) + '（' + s.by_code[c] + '）</span>';
+           + esc(it[0]) + '（' + bc[c] + '）</span>';
     });
     h += '</div>';
     if (r.truncated) h += '<div class="muted-help" style="margin-top:6px;color:#B23A2A">'
@@ -589,14 +618,21 @@ function renderTraceStat(){
 $(document).on('click', '#tStatBox .dq-chip', function(){
     ST.filter = String($(this).data('f')||''); ST.tPage = 1; renderTraceStat(); renderTrace();
 });
+$(document).on('click', '#tStatBox .dq-card.pick', function(){
+    var k = String($(this).data('lv')||'');
+    ST.tLevel = (ST.tLevel === k) ? '' : k;      // 再點一次＝取消
+    ST.tPage = 1; renderTraceStat(); renderTrace();
+});
 
-function traceRows(){
+function traceFiltered(useLevel, useCode){
     var rows = (ST.trace && ST.trace.rows) || [];
-    if (!ST.filter) return rows;
     return rows.filter(function(r){
-        return r.issues.some(function(i){ return i.code === ST.filter; });
+        if (useLevel && ST.tLevel && r.level !== ST.tLevel) return false;
+        if (useCode && ST.filter && !r.issues.some(function(i){ return i.code === ST.filter; })) return false;
+        return true;
     });
 }
+function traceRows(){ return traceFiltered(true, true); }
 function nodeHtml(txt, sub, bad, src, docs){
     var h = '<span class="node' + (bad?' bad':'') + '">' + esc(txt);
     if (src) h += '<span class="src-tag' + (src==='guess'?' guess':'') + '">'
@@ -721,7 +757,7 @@ $('#btnMasterRun').on('click', function(){
         include_inactive: $('#mInact').is(':checked') ? 1 : 0
     }, function(r){
         if(!r || !r.ok) return;
-        ST.master = r; ST.mFilter = ''; ST.mPage = 1;
+        ST.master = r; ST.mFilter = ''; ST.mLevel = ''; ST.mPage = 1;
         renderMasterStat(); renderMaster();
         $('#mTiming').text('耗時 ' + ((Date.now()-t0)/1000).toFixed(1) + ' 秒');
     });
@@ -731,20 +767,28 @@ $('#mType').on('change', function(){ if(ST.master) $('#btnMasterRun').click(); }
 function renderMasterStat(){
     var r = ST.master; if(!r) return;
     var s = r.stat, f = r.fields || {};
+    var lv = byLevelOf(masterFiltered(false, true));
+    var bc = byCodeOf(masterFiltered(true, false));
+    var card = function(key, cls, label){
+        return '<div class="dq-card pick ' + cls + (ST.mLevel===key?' sel':'') + '" data-lv="' + key + '">'
+             + '<b>' + (lv[key]||0) + '</b><span>' + label + '</span>'
+             + '<small>' + (ST.mLevel===key ? '篩選中，再點取消' : '點一下只看這些') + '</small></div>';
+    };
     var h = '<div class="dq-stat">';
     h += '<div class="dq-card"><b>' + s.total + '</b><span>納入稽核</span></div>';
-    h += '<div class="dq-card c-critical"><b>' + (s.critical||0) + '</b><span>重要缺失</span></div>';
-    h += '<div class="dq-card c-warn"><b>' + (s.major||0) + '</b><span>一般缺失</span></div>';
-    h += '<div class="dq-card"><b>' + (s.minor||0) + '</b><span>建議補齊</span></div>';
-    h += '<div class="dq-card c-ok"><b>' + (s.ok||0) + '</b><span>資料完善</span></div>';
+    h += card('critical', 'c-critical', '重要缺失');
+    h += card('major', 'c-warn', '一般缺失');
+    h += card('minor', '', '建議補齊');
+    h += card('ok', 'c-ok', '資料完善');
     h += '</div><div class="dq-chips">';
-    h += '<span class="dq-chip' + (ST.mFilter===''?' on':'') + '" data-mf="">全部</span>';
-    var codes = Object.keys(s.by_code||{}).sort(function(a,b){ return s.by_code[b]-s.by_code[a]; });
+    h += '<span class="dq-chip' + (ST.mFilter===''?' on':'') + '" data-mf="">全部（'
+       + masterFiltered(true,false).length + '）</span>';
+    var codes = Object.keys(bc).sort(function(a,b){ return bc[b]-bc[a]; });
     codes.forEach(function(c){
         var nm = c==='dup_name' ? '名稱疑似重複建檔' : ((f[c]||[c])[0]);
-        var lv = (r.levels||{})[c] || 'major';
-        h += '<span class="dq-chip lv-' + esc(lv) + (ST.mFilter===c?' on':'') + '" data-mf="' + esc(c) + '">'
-           + esc(nm) + '（' + s.by_code[c] + '）</span>';
+        var lvc = (r.levels||{})[c] || 'major';
+        h += '<span class="dq-chip lv-' + esc(lvc) + (ST.mFilter===c?' on':'') + '" data-mf="' + esc(c) + '">'
+           + esc(nm) + '（' + bc[c] + '）</span>';
     });
     h += '</div><div class="muted-help" style="margin-top:6px">編碼原則：' + esc(r.rule_text) + '</div>';
     $('#mStatBox').show().html(h);
@@ -752,12 +796,21 @@ function renderMasterStat(){
 $(document).on('click', '#mStatBox .dq-chip', function(){
     ST.mFilter = String($(this).data('mf')||''); ST.mPage = 1; renderMasterStat(); renderMaster();
 });
+$(document).on('click', '#mStatBox .dq-card.pick', function(){
+    var k = String($(this).data('lv')||'');
+    ST.mLevel = (ST.mLevel === k) ? '' : k;
+    ST.mPage = 1; renderMasterStat(); renderMaster();
+});
 
-function masterRows(){
+function masterFiltered(useLevel, useCode){
     var rows = (ST.master && ST.master.rows) || [];
-    if (!ST.mFilter) return rows;
-    return rows.filter(function(r){ return r.issues.some(function(i){ return i.code === ST.mFilter; }); });
+    return rows.filter(function(r){
+        if (useLevel && ST.mLevel && r.level !== ST.mLevel) return false;
+        if (useCode && ST.mFilter && !r.issues.some(function(i){ return i.code === ST.mFilter; })) return false;
+        return true;
+    });
 }
+function masterRows(){ return masterFiltered(true, true); }
 function renderMaster(){
     var all = masterRows();
     var type = (ST.master && ST.master.type) || 'customer';
