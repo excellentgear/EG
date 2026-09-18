@@ -102,7 +102,8 @@ $thisYear = (int)date('Y');
         .help-doc li { margin-bottom:4px; line-height:1.7; }
     </style>
 </head>
-<body class="nav-md">
+<!-- 側欄載入時維持收合（全站慣例：117 支頁面都是 nav-sm，只有這頁寫成 nav-md 才會一載入就展開） -->
+<body class="nav-sm">
 <div class="container body"><div class="main_container">
 <?php include '../partPage/sideAndTopBarMenu.html'; ?>
 <div class="right_col" role="main">
