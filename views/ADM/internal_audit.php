@@ -59,6 +59,17 @@ $roleLabel = ia_role_label($perms);
         .ia-toolbar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; clear:both;
             border:1.5px solid #E8D5B5; border-radius:8px; padding:8px 10px; margin-bottom:10px; background:#FDF8EF; }
         .ia-toolbar label { margin:0; font-size:13px; color:#5b3a1e; }
+        /* 年度狀態（2026-09-21 使用者回報：這段字太長，把工具列的按鈕擠到下一列）。
+           ①工具列上只放**短標**，細節移到工具列下方自己的一列（#yearStatMore），怎麼長都不會動到按鈕
+           ②短標仍設成「可以被壓縮」＝不會把 flex 撐開：min-width:0＋overflow hidden＋ellipsis，
+             萬一哪天文字又變長，它只會被截斷，不會把按鈕推下去 */
+        #yearStatBar { clear:both; margin:-4px 0 10px; font-size:12.5px; }
+        #yearStatBar #yearStat { display:inline-block; padding:0 2px; }
+        #yearStatMore { display:none; margin-top:5px; padding:7px 12px;
+            border:1px solid #E8D5B5; border-left:4px solid #d98a33; border-radius:6px;
+            background:#FDF6EA; color:#6b4a20; line-height:1.9; }
+        #yearStatMore b { color:#5b3a1e; }
+        #yearStat .ys-more { margin-left:6px; cursor:pointer; text-decoration:underline; color:#a0703a; }
         .ia-toolbar select, .ia-toolbar input, .ia-toolbar button {
             height:30px; font-size:13px; line-height:1; padding:0 10px; border:1px solid #D8BE93;
             border-radius:4px; background:#fff; color:#5b3a1e; }
@@ -342,9 +353,6 @@ $roleLabel = ia_role_label($perms);
         <div class="ia-toolbar">
             <label>年度</label>
             <select id="yearSel" style="width:132px;"></select>
-            <!-- 這一年做到哪了（2026-09-17 使用者要求）：✔＝有內稽資料且報告完整產出、
-                 沙漏＝有建立但還沒完成、完全沒建立＝不顯示任何圖示 -->
-            <span id="yearStat" style="font-size:12px;margin-left:2px;white-space:nowrap;"></span>
 <?php if ($perms['canAdmin']): ?>
             <!-- 年度選單只列「有資料的年度＋今年明年」，要補更舊的資料得先把年度加進來（2026-09-17 使用者要求） -->
             <span class="ia-op" id="btnYearAdd" title="補一個舊年度進選單（只有內稽管理員可以）"><i class="fa fa-plus"></i> 補舊年度</span>
@@ -360,6 +368,14 @@ $roleLabel = ia_role_label($perms);
             <?php endif; ?>
             <span class="ia-role-badge">目前身分：<?= htmlspecialchars($roleLabel) ?>
                 <i class="fa fa-question-circle" id="btnRoleHelp" style="cursor:pointer;"></i></span>
+        </div>
+        <!-- 這一年做到哪了（2026-09-17 使用者要求）：✔＝有內稽資料且報告完整產出、沙漏＝有建立但還沒完成。
+             **刻意自己佔一列、不放進工具列**（2026-09-21 使用者回報）：放在工具列裡的話，
+             字一長就會把「AS條文題庫」那幾顆按鈕擠到下一列；實測 1366／1280 寬度下，
+             光是這個短標（163px）就足以讓工具列折行，拿掉就穩定維持一列。 -->
+        <div id="yearStatBar">
+            <span id="yearStat"></span>
+            <div id="yearStatMore"></div>
         </div>
 
         <div class="ia-tabs">
@@ -611,7 +627,8 @@ $roleLabel = ia_role_label($perms);
             <li><b>受稽日期／預定完成改善要全部同一天</b>：這兩欄的表頭各有一個日期欄＋「全部」鈕，按下去就套用到每一列；表頭沒填時會自動沿用<b>第一列已經填好的那個值</b>。</li>
             <li><b>年度選單會顯示這一年做到哪了</b>：<b>✔ 已完成</b>＝這一年有內稽資料<b>而且報告完整產出</b>
                 （每一張稽核報告表都已送出，且沒有未結案的不符合通知單）；<b>⏳ 進行中</b>＝<b>已經有年度計畫表</b>但還沒有（或還沒送出）稽核報告表，
-                旁邊會直接寫出還差什麼（例「還沒有稽核報告表」「還有 2 張不符合通知單未結案」）；
+                後面會寫「還差 N 項」——<b>滑鼠移上去</b>看得到完整內容，按<b>「看明細」</b>會在下方一項一行列出來（例「還沒有稽核報告表」「還有 2 張不符合通知單未結案」），
+                展開或收合會記住，下次進來維持同樣的狀態；
                 <b>沒有年度計畫表的年度一律不顯示圖示</b>（一年的內稽是從年度計畫表開始的；若該年已有零星資料，旁邊會寫「還沒有年度計畫表」）。
                 年度選單<b>只列「已經有資料的年度」與今年、明年</b>（不再一路往前補十年的空年度）；要補更舊的資料，
                 請<b>內稽管理員</b>按年度旁的「<b>補舊年度</b>」把那一年加進來（該年度一旦有資料就不能再從選單移除）。</li>
@@ -1782,27 +1799,54 @@ function yearMark(y){
     var st = (yearStatOf(y)||{}).state || 'none';
     return st === 'done' ? '　✔' : (st === 'doing' ? '　⏳' : '');
 }
+/* 年度狀態（2026-09-21 使用者回報：原本把「還差什麼」整串印在工具列上，
+   字一長就把「AS條文題庫」那幾顆按鈕擠到下一列）。
+   改成兩段：工具列上只留**短標**（進行中／已完成＋還差幾項），
+   細節放到工具列下方自己的一列，點「看明細」才展開——按鈕永遠不會被推下去。
+   滑鼠移到短標上仍然看得到完整內容（title），不必非得點開。 */
 function renderYearStat(){
     var s = yearStatOf(YEAR);
+    var $more = $('#yearStatMore');
     if (!s || s.state === 'none') {
         // 沒有年度計畫表時也是「不顯示圖示」，但要把原因講出來（可能已經有零星資料）
-        var w0 = (s && s.why && s.why.length) ? s.why.join('；') : '尚未建立任何內稽資料';
-        $('#yearStat').html('<span style="color:#a08356;">' + esc(w0) + '</span>');
+        var w0 = (s && s.why && s.why.length) ? s.why : ['尚未建立任何內稽資料'];
+        yearStatSet('<span style="color:#a08356;">尚未開始</span>', w0, w0.join('；'));
         return;
     }
     if (s.state === 'done') {
-        $('#yearStat').html('<span style="color:#7a5217;" title="'
-            + esc('報告已完整產出：稽核報告表 '+s.reports_approved+'／'+s.reports+' 張已送出，沒有未結案的不符合通知單')
-            + '"><i class="fa fa-check-circle"></i> 已完成</span>');
+        var doneTip = '報告已完整產出：稽核報告表 '+s.reports_approved+'／'+s.reports
+                    + ' 張已送出，沒有未結案的不符合通知單';
+        yearStatSet('<span style="color:#7a5217;"><i class="fa fa-check-circle"></i> 已完成</span>',
+                    [doneTip], doneTip);
         return;
     }
-    // 進行中：把「還差什麼」直接講出來，不然只看到一個沒打勾的圖示也不知道要做什麼
-    var why = (s.why||[]).join('；');
-    $('#yearStat').html('<span style="color:#d98a33;" title="'
-        + esc('進行中' + (why ? '：' + why : '') + '（年度計畫 '+s.plan+'　通知單 '+s.cases_done+'／'+s.cases+' 已執行　查檢表 '+s.checks+'）')
-        + '"><i class="fa fa-hourglass-half"></i> 進行中'
-        + (why ? '<span style="color:#a08356;">（' + esc(why) + '）</span>' : '') + '</span>');
+    // 進行中：短標只寫「還差幾項」，實際內容進明細列
+    var why = (s.why || []);
+    var tip = '進行中' + (why.length ? '：' + why.join('；') : '')
+            + '（年度計畫 '+s.plan+'　通知單 '+s.cases_done+'／'+s.cases+' 已執行　查檢表 '+s.checks+'）';
+    yearStatSet('<span style="color:#d98a33;"><i class="fa fa-hourglass-half"></i> 進行中</span>'
+              + (why.length ? '<span style="color:#a08356;">（還差 '+why.length+' 項）</span>' : ''),
+                why, tip);
 }
+/* 短標＋明細列一起設定（唯一實作，三種狀態共用）。
+   明細列的展開／收合狀態記在 localStorage，換年度、重新整理之後維持使用者的選擇。 */
+function yearStatSet(shortHtml, lines, tip){
+    var open = false;
+    try { open = localStorage.getItem('ia_year_stat_open') === '1'; } catch (e) {}
+    $('#yearStat').attr('title', tip || '').html(shortHtml
+        + (lines && lines.length
+            ? '<span class="ys-more" id="btnYearStatMore">' + (open ? '收合' : '看明細') + '</span>' : ''));
+    var h = (lines || []).map(function(t, i){
+        return '<div>' + ((lines.length > 1) ? ('<b>' + (i+1) + '.</b> ') : '') + esc(t) + '</div>';
+    }).join('');
+    $('#yearStatMore').html(h).toggle(!!(open && h));
+}
+$(document).on('click', '#btnYearStatMore', function(){
+    var open = !$('#yearStatMore').is(':visible');
+    try { localStorage.setItem('ia_year_stat_open', open ? '1' : '0'); } catch (e) {}
+    $('#yearStatMore').toggle(open);
+    $(this).text(open ? '收合' : '看明細');
+});
 
 /* ============================ meta ============================ */
 function loadMeta(cb){
