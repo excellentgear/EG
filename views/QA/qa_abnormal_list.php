@@ -273,14 +273,13 @@ $backfillDays = qab_backfill_days($db);
             </div>
 
             <div class="tabp" id="tab-dec" style="display:none;">
-                <div class="note-box"><b>決策主管</b>＝填表人可以選來做處置判定的範圍（業務主管／品管主管…）；<b>最高決策者</b>＝勾「轉總經理裁示」之後要通知與裁示的人。
-                    設定的是「部門＋職稱」，人員異動不必回來改。最高決策者若留空，系統會用組織角色設定的「最高核准人員」。</div>
+                <div class="note-box"><b>決策主管</b>＝填表人可以選來做處置判定的範圍（業務主管／品管主管…）。設定的是「部門＋職稱」，人員異動不必回來改。</div>
+                <div class="note-box" id="cfgGmBox" style="border-color:var(--amber-d);background:#FFF6E8;"></div>
                 <table class="cfg"><thead><tr><th style="width:13%">類別</th><th style="width:17%">顯示名稱</th><th style="width:20%">部門</th>
                     <th style="width:16%">職稱</th><th style="width:9%">含下轄</th><th style="width:8%">排序</th><th style="width:7%">啟用</th><th style="width:10%">操作</th></tr></thead>
                     <tbody id="cfgDec"></tbody></table>
                 <div style="margin-top:8px;">
                     <button class="btn btn-warm-o btn-sm" data-decadd="decider"><i class="fa fa-plus"></i> 新增決策主管範圍</button>
-                    <button class="btn btn-warm-o btn-sm" data-decadd="top"><i class="fa fa-plus"></i> 新增最高決策者範圍</button>
                 </div>
                 <div id="decPeople" class="muted-help" style="margin-top:6px;"></div>
             </div>
@@ -338,7 +337,9 @@ $backfillDays = qab_backfill_days($db);
             <ul>
                 <li><b>異常原因分類</b>：最多三層，可停用；已被單子選過的不可刪除。</li>
                 <li><b>異常處置方式／總經理裁示</b>：選項可增修；「是報廢」旗標決定結案時要不要配發報廢單號，「轉總經理」旗標決定要不要通知最終決策者。</li>
-                <li><b>決策者</b>：設定可以做處置判定的「部門＋職稱」範圍，以及最高決策者的範圍。</li>
+                <li><b>決策者</b>：設定可以做處置判定的「部門＋職稱」範圍。
+                    <b>最高決策者（總經理裁示）不在這裡設定</b>——自動套用全站「組織角色綁定 → 最高核准人員」，
+                    要換人請到<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>改一次，全站表單一起跟著換。</li>
                 <li><b>其他設定</b>：扣款加成預設值、<b>補資料天數</b>、AS 文件綁定。</li>
             </ul>
             <h4>權限角色</h4>
@@ -568,8 +569,7 @@ function decRow(c){
     var popt = '<option value="">不限職稱</option>' + POSITIONS.map(function(p){
         return '<option value="' + p.id + '"' + (Number(p.id) === Number(c.position_id) ? ' selected' : '') + '>' + esc(p.position_name) + '</option>'; }).join('');
     return '<tr data-cfg="' + c.cfg_id + '">'
-        + '<td class="c"><select class="d-kind"><option value="decider"' + (c.kind === 'decider' ? ' selected' : '') + '>決策主管</option>'
-            + '<option value="top"' + (c.kind === 'top' ? ' selected' : '') + '>最高決策者</option></select></td>'
+        + '<td class="c"><select class="d-kind" data-eg-skip><option value="decider" selected>決策主管</option></select></td>'
         + '<td><input type="text" class="d-label" value="' + esc(c.label || '') + '" placeholder="例：業務主管"></td>'
         + '<td><select class="d-dept" data-eg-skip><option value="">請選擇…</option>' + dopt + '</select></td>'
         + '<td><select class="d-pos" data-eg-skip>' + popt + '</select></td>'
@@ -581,8 +581,16 @@ function decRow(c){
 }
 function renderDec(){
     if (!CFG) return;
-    var all = (CFG.deciders || []).concat(CFG.tops || []);
-    $('#cfgDec').html(all.length ? all.map(decRow).join('') : '<tr><td colspan="8" class="c">尚未設定（決策與裁示會退回角色判定）</td></tr>');
+    var all = (CFG.deciders || []);
+    $('#cfgDec').html(all.length ? all.map(decRow).join('') : '<tr><td colspan="8" class="c">尚未設定（沒設定時由 qab_decide 角色判定）</td></tr>');
+    var g = CFG.gm_person || {};
+    $('#cfgGmBox').html('<b>最高決策者（總經理裁示）</b>：'
+        + (g.bound ? ('<b>' + esc(g.name || '') + '</b>'
+              + (g.is_delegated ? '（' + esc(g.base_name || '') + ' 目前不在，由代理人簽）' : ''))
+            : '<span style="color:var(--coral);">尚未設定</span>')
+        + '　—　<b>自動套用全站統一設定</b>，本模組不另外設定。要換人請到 '
+        + '<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>'
+        + ' 改「最高核准人員」，全站表單會一起跟著換。');
 }
 $(document).on('click', '[data-decadd]', function(){
     var kind = $(this).data('decadd');
@@ -606,13 +614,13 @@ $(document).on('click', '.d-save', function(){
         dept_id:$tr.find('.d-dept').val(), position_id:$tr.find('.d-pos').val(),
         include_sub:$tr.find('.d-sub').prop('checked') ? 1 : '', sort_order:$tr.find('.d-sort').val(),
         is_active:$tr.find('.d-act').prop('checked') ? 1 : '' },
-        function(res){ CFG.deciders = res.deciders; CFG.tops = res.tops; renderDec(); });
+        function(res){ CFG.deciders = res.deciders; renderDec(); });
 });
 $(document).on('click', '.d-del', function(){
     var $tr = $(this).closest('tr');
     if (!$tr.data('cfg')) { $tr.remove(); return; }
     if (!confirm('刪除這一列設定？')) return;
-    post('decider_del', { cfg_id:$tr.data('cfg') }, function(res){ CFG.deciders = res.deciders; CFG.tops = res.tops; renderDec(); });
+    post('decider_del', { cfg_id:$tr.data('cfg') }, function(res){ CFG.deciders = res.deciders; renderDec(); });
 });
 $(document).on('click', '.d-who', function(){
     var id = $(this).closest('tr').data('cfg');

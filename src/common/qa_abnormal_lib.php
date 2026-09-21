@@ -176,6 +176,7 @@ function qab_ensure_schema(PDO $db): void
         'owner_sign_at'    => "ADD COLUMN owner_sign_at DATETIME NULL",
         'closed_by'        => "ADD COLUMN closed_by INT NULL",
         'client_id'        => "ADD COLUMN client_id CHAR(11) NULL COMMENT '客戶主檔 customer_list.customer_id；綁了製令或客退單就由來源自動帶，不給手打'",
+        'gm_by_deputy'     => "ADD COLUMN gm_by_deputy TINYINT(1) NOT NULL DEFAULT 0 COMMENT '總經理裁示是由代理人簽的（列印時圖章右下角加「代」字）'",
     ];
     foreach ($need as $c => $sql) if (!in_array($c, $cols, true)) $add[] = rtrim($sql, ',');
     if ($add) $db->exec("ALTER TABLE qa_abnormal_order " . implode(', ', $add));
@@ -337,6 +338,42 @@ function qab_resolve_client(PDO $db, ?string $bomNo, ?int $irId): array
         }
     }
     return $none;
+}
+
+/**
+ * 最終決策者（總經理裁示）＝**全站統一的組織角色綁定「最高核准人員」**（`org_role_lib` 的 top_approver，
+ * 設定入口 views/admin/org_role_setting.php）。使用者定調：這一格不在本模組另外設定，
+ * 改人只在那一頁改一次，全站表單一起跟著變——本模組刻意不留第二份設定，否則兩邊遲早對不起來。
+ * 再過一次 delegate_lib 的代理解析（ai-rules/11）：本人請假時由代理人簽，並標記成代簽。
+ *
+ * @param array $ctx 傳 ['log'=>true] 才寫代理事件紀錄；純顯示用一律不要寫（每次開畫面都寫會洗版）
+ * @return array ['id','name','base_id','base_name','is_delegated','bound'] bound=false 表示那一頁還沒設定
+ */
+function qab_gm_person(PDO $db, array $ctx = []): array
+{
+    require_once __DIR__ . '/org_role_lib.php';
+    $out = ['id' => 0, 'name' => '', 'base_id' => 0, 'base_name' => '', 'is_delegated' => false, 'bound' => false];
+    $u = eg_org_user($db, 'top_approver');
+    if (!$u) return $out;
+    $out['bound'] = true;
+    $out['base_id'] = (int)$u['id'];
+    $out['base_name'] = (string)($u['user_cname'] ?: $u['user_uname']);
+    $out['id'] = $out['base_id'];
+    $out['name'] = $out['base_name'];
+    try {
+        require_once __DIR__ . '/delegate_lib.php';
+        $r = eg_resolve_signer($db, $out['base_id'], array_merge(['flow_key' => 'qa_abnormal_gm', 'log' => false], $ctx));
+        $sid = (int)($r['signer_id'] ?? 0);
+        if ($sid > 0 && $sid !== $out['base_id']) {
+            $st = $db->prepare("SELECT user_cname, user_uname FROM `user` WHERE id=?");
+            $st->execute([$sid]);
+            $p = $st->fetch(PDO::FETCH_ASSOC);
+            $out['id'] = $sid;
+            $out['name'] = $p ? (string)($p['user_cname'] ?: $p['user_uname']) : '';
+            $out['is_delegated'] = !empty($r['is_delegated']);
+        }
+    } catch (Throwable $e) { /* 代理模組不在就用本人 */ }
+    return $out;
 }
 
 /**
@@ -604,9 +641,14 @@ function qab_perms(PDO $db, int $uid): array
                  || qab_in_org_dept($db, $uid, 'qc_dept') || qab_in_org_dept($db, $uid, 'sales_dept');
     $canDecide = $canAdmin || $has(['qab_decide', 'qa_disposition_reply']) || qab_user_in_decider($db, $uid, 'decider');
     // 最高決策者：組織角色的最高核准人員，或管理員在設定裡登記的部門職稱
-    require_once __DIR__ . '/org_role_lib.php';
-    $top = eg_org_user($db, 'top_approver');
-    $canGm = $canAdmin || $has(['qab_gm']) || ($top && (int)$top['id'] === $uid) || qab_user_in_decider($db, $uid, 'top');
+    // 最終決策者一律吃全站統一綁定（org_role_setting.php 的「最高核准人員」）＋其代理人；
+    // qab_gm 角色只是給特殊情況補授權用，本模組**不再**自己設定一份最高決策者名單
+    // 刻意**不含** canAdmin：異常單管理員不等於總經理，讓模組管理員也能蓋最終裁示，
+    // 等於把「最高決策者由全站統一綁定」這件事整個架空。管理員要補的是歷史單，那條路走 canBackfill。
+    $gm = qab_gm_person($db);
+    $canGm = $isAdmin || $has(['qab_gm'])
+             || ($gm['base_id'] > 0 && $gm['base_id'] === $uid)
+             || ($gm['id'] > 0 && $gm['id'] === $uid);
     $canDeductFill = $canAdmin || $has(['qab_deduct_fill'])
                      || qab_in_org_dept($db, $uid, 'pm_dept') || qab_in_org_dept($db, $uid, 'sales_dept');
     $canDeductApprove = $canAdmin || $has(['qab_deduct_approve']) || qab_in_org_dept($db, $uid, 'acc_dept');
@@ -620,6 +662,41 @@ function qab_perms(PDO $db, int $uid): array
             'canDeductFill' => $canDeductFill, 'canDeductApprove' => $canDeductApprove, 'canQcSign' => $canQcSign,
             // 補資料（指定補章人員與印章日期）刻意只給「異常單管理員」——使用者定調：這個功能只有異常單有
             'canBackfill' => $canAdmin];
+}
+
+/**
+ * 這個人看不看得到「這一張」單。
+ * canView 是模組層的一般檢視權，但**被徵詢意見的人多半是完全沒有本模組角色的一般同仁**——
+ * 只看 canView 的話，通知點進來會被擋在門外、整個徵詢流程就斷了。
+ * 所以再放行「跟這張單有關的人」：開單人／共同編輯者／被徵詢的本人或該部門的人／追蹤人。
+ */
+function qab_can_view_order(PDO $db, array $perms, int $orderId): bool
+{
+    if (!empty($perms['canView'])) return true;
+    $uid = (int)($perms['uid'] ?? 0);
+    if ($uid <= 0 || $orderId <= 0) return false;
+
+    $st = $db->prepare("SELECT created_by FROM qa_abnormal_order WHERE id=?");
+    $st->execute([$orderId]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return false;
+    if ((int)$row['created_by'] === $uid) return true;
+
+    if (function_exists('eg_qa_user_is_order_editor') && eg_qa_user_is_order_editor($db, $orderId, $uid)) return true;
+
+    $myDepts = qab_user_dept_ids($db, $uid);
+    $st = $db->prepare("SELECT dept_id, user_id FROM qa_abnormal_order_flow WHERE abnormal_order_id=?");
+    $st->execute([$orderId]);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $f) {
+        if ((int)$f['user_id'] === $uid) return true;
+        if ((int)$f['user_id'] === 0 && in_array((int)$f['dept_id'], $myDepts, true)) return true;
+    }
+    try {
+        $st = $db->prepare("SELECT 1 FROM qa_abnormal_follower WHERE abnormal_order_id=? AND user_id=? LIMIT 1");
+        $st->execute([$orderId, $uid]);
+        if ($st->fetchColumn()) return true;
+    } catch (Throwable $e) {}
+    return false;
 }
 
 /** 這個人能不能改這張單的「填寫區」（表頭、現象、原因分類、量測值…） */
@@ -843,6 +920,8 @@ function qab_order(PDO $db, int $id): ?array
     $o['need_gm'] = qab_need_gm($db, $o, $optMap);
     $o['status']  = qab_status($o);
 
+    // 最終決策者（畫面與通知都讀這一份；來源是全站統一綁定）
+    $o['gm_person'] = qab_gm_person($db);
     // 客戶是不是由來源（製令／客退單）綁出來的——畫面要據此把欄位鎖起來
     $o['client_bound'] = (trim((string)$o['bom_no']) !== '' || (int)$o['ir_id'] > 0) ? 1 : 0;
     // 補資料模式（今日往前 N 天以前的業務日期）

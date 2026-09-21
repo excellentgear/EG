@@ -32,9 +32,11 @@ $db = (new DBConnection())->getPDO();
 qab_ensure_schema($db);
 $uid   = (int)$_SESSION['id'];
 $perms = qab_perms($db, $uid);
-if (!$perms['canView']) { http_response_code(403); exit('沒有品質異常單的檢視權限'); }
-
 $id = (int)($_GET['id'] ?? 0);
+if (!$perms['canView'] && !qab_can_view_order($db, $perms, $id)) {
+    http_response_code(403);
+    exit('沒有這張品質異常單的檢視權限');
+}
 $o  = qab_order($db, $id);
 if (!$o) exit('找不到這張異常單');
 
@@ -288,7 +290,8 @@ svg.eg-stamp-tpl { height:auto !important; }
         ?></td>
         <td class="sig" rowspan="3">
             <div class="cap">簽章：</div>
-            <div class="sigbox" data-stamp="<?= h($o['gm_name']) ?>" data-date="<?= h(d($o['gm_decided_at'])) ?>"></div>
+            <div class="sigbox" data-stamp="<?= h($o['gm_name']) ?>" data-date="<?= h(d($o['gm_decided_at'])) ?>"
+                 data-deputy="<?= !empty($o['gm_by_deputy']) ? 1 : '' ?>"></div>
         </td>
     </tr>
     <tr><td class="t" style="height:12mm;"><?= nl2br(h($o['gm_note'])) ?></td></tr>
@@ -369,7 +372,9 @@ svg.eg-stamp-tpl { height:auto !important; }
             var b = boxes[i], nm = (b.getAttribute('data-stamp') || '').trim();
             if (!nm) continue;                       // 沒有人簽的格子留白給現場手簽
             var dt = (b.getAttribute('data-date') || '').trim();
-            try { b.innerHTML = EGStamp.stamp(nm, dt, false); } catch (e) {}
+            // 代理人代簽的章右下角要加「代」字（ai-rules/18）
+            var dep = (b.getAttribute('data-deputy') || '') === '1';
+            try { b.innerHTML = EGStamp.stamp(nm, dt, dep); } catch (e) {}
         }
         // 多頁才印頁碼（ai-rules/16：左下 counter(pages)）
         var onePage = (297 - 22) * 96 / 25.4;

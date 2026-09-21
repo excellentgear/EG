@@ -28,6 +28,11 @@ $perms = qab_perms($db, $uid);
 if (empty($_SESSION['qab_csrf'])) $_SESSION['qab_csrf'] = bin2hex(random_bytes(16));
 $CSRF = $_SESSION['qab_csrf'];
 $oid  = (int)($_GET['id'] ?? 0);
+// 沒有模組檢視權時，只要「跟這張單有關」（被徵詢的人、開單人、共編、追蹤人）就看得到
+if (!$perms['canView'] && !qab_can_view_order($db, $perms, $oid)) {
+    http_response_code(403);
+    exit('沒有這張品質異常單的檢視權限');
+}
 $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異常單管理員'
             : ($perms['canGm'] ? '最終決策者' : ($perms['canDecide'] ? '決策主管'
             : ($perms['canCreate'] ? '開單／填寫' : ($perms['canView'] ? '檢閱' : '無權限')))));
@@ -319,6 +324,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     <button class="btn btn-warm btn-xs" id="btnSaveGm"><i class="fa fa-save"></i> 儲存裁示</button>
                 </h4>
                 <div class="sec-body">
+                    <div id="gmWho2" class="note-box"></div>
                     <div id="gmNoPerm" class="note-box" style="display:none;color:var(--coral);"></div>
                     <div class="opts" id="gmOpts"></div>
                     <div class="fgrid" style="margin-top:8px;grid-template-columns:1fr 240px;">
@@ -660,7 +666,13 @@ function render(){
     var canGm = p.canGm && !o.is_closed;
     $('#gmOpts input,#f_gm_note,#f_capa').prop('disabled', !canGm);
     $('#btnSaveGm').toggle(canGm);
-    $('#gmNoPerm').toggle(!p.canGm).text('您不是最終決策者（由管理員在清單頁「設定 → 最高決策者」指定，或設定組織角色的最高核准人員）。');
+    var gp = o.gm_person || D.gm_person || {};
+    $('#gmWho2').html(!gp.bound
+        ? '<span style="color:var(--coral);">全站的「組織角色綁定 → 最高核准人員」還沒設定，所以現在沒有人可以做最終裁示。</span>'
+        : ('最終決策者：<b>' + esc(gp.name || '') + '</b>'
+           + (gp.is_delegated ? '（' + esc(gp.base_name || '') + ' 目前不在，由代理人簽，圖章會加「代」字）' : '')
+           + '　<span class="muted-help">取自全站統一的「組織角色綁定 → 最高核准人員」，要換人請到那一頁改，本模組不另外設定。</span>'));
+    $('#gmNoPerm').toggle(!p.canGm).text('您不是最終決策者（最終決策者＝全站「組織角色綁定」的最高核准人員，或其代理人）。');
     $('#gmWho').text(o.gm_name ? ('裁示：' + o.gm_name + '　' + dispDate(o.gm_decided_at)) : '');
 
     // ⑥ 扣款

@@ -31,9 +31,19 @@ $db = (new DBConnection())->getPDO();
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 qab_ensure_schema($db);
 $perms = qab_perms($db, $uid);
-if (!$perms['canView']) { http_response_code(403); jerr('沒有品質異常單的檢視權限'); }
 
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
+/* 針對「某一張單」的動作，沒有模組檢視權時再看「跟這張單有沒有關係」——
+   被徵詢意見的人通常沒有任何本模組角色，只擋 canView 會讓他們連通知都點不進來。
+   各動作自己的寫入權限（決策／裁示／扣款／補登）仍在下面逐一再擋一次。 */
+$ORDER_SCOPED = ['get', 'save_head', 'save_cause', 'round_add', 'round_reply', 'round_cancel',
+                 'save_disposition', 'save_gm', 'deduct_preview', 'deduct_autofill', 'deduct_save',
+                 'deduct_sign', 'deduct_approve', 'owner_sign', 'close', 'reopen', 'sign_set'];
+if (!$perms['canView']) {
+    $oidGuard = (int)($_POST['id'] ?? $_GET['id'] ?? 0);
+    $ok = in_array($action, $ORDER_SCOPED, true) && $oidGuard > 0 && qab_can_view_order($db, $perms, $oidGuard);
+    if (!$ok) { http_response_code(403); jerr('沒有品質異常單的檢視權限'); }
+}
 $isWrite = isset($_POST['action']);
 if ($isWrite) {
     $tok = $_POST['csrf'] ?? '';
@@ -154,7 +164,7 @@ case 'get': {
         'disp_opts' => qab_options($db, 'disp'),
         'gm_opts'   => qab_options($db, 'gm'),
         'deciders'  => qab_decider_cfgs($db, 'decider'),
-        'tops'      => qab_decider_cfgs($db, 'top'),
+        'gm_person' => qab_gm_person($db),          // 最終決策者＝全站統一綁定（org_role_setting.php）
         'rate_default' => qab_default_rate($db),
         // 「這一輪是不是我可以回覆」前端要用：本人掛在哪些部門
         'my_dept_ids'  => qab_user_dept_ids($db, $uid),
@@ -441,10 +451,11 @@ case 'save_disposition': {
     foreach ($ids as $i) if ($optMap[$i]['is_escalate']) $escalate = true;
     if ($escalate) {
         try {
+            // 收件人＝全站統一綁定的最高核准人員；本人請假時 qab_gm_person() 會解析成代理人
+            $gm = qab_gm_person($db, ['log' => true]);
             $targets = [];
-            $top = eg_org_user($db, 'top_approver');
-            if ($top) $targets[] = ['type' => 'user', 'id' => (int)$top['id'], 'mode' => 'read'];
-            foreach (qab_decider_cfgs($db, 'top') as $cfg) foreach (qab_decider_people($db, $cfg) as $p) $targets[] = ['type' => 'user', 'id' => (int)$p['id'], 'mode' => 'read'];
+            if ($gm['id'] > 0)      $targets[] = ['type' => 'user', 'id' => (int)$gm['id'], 'mode' => 'read'];
+            if ($gm['is_delegated'] && $gm['base_id'] > 0) $targets[] = ['type' => 'user', 'id' => (int)$gm['base_id'], 'mode' => 'read'];
             if ($targets) {
                 eg_qa_insert_event($db, $id, '【品質異常單 ' . $o['abnormal_order_no'] . '】待總經理裁示',
                     "異常單號：{$o['abnormal_order_no']}\n主管處置：" . implode('、', array_map(function ($i) use ($optMap) { return $optMap[$i]['name']; }, $ids)) . "\n請進入異常單做最終裁示。",
@@ -470,8 +481,11 @@ case 'save_gm': {
         $db->prepare("DELETE FROM qa_abnormal_opt WHERE order_id=? AND kind='gm'")->execute([$id]);
         $ins = $db->prepare("INSERT IGNORE INTO qa_abnormal_opt (order_id,kind,opt_id) VALUES (?, 'gm', ?)");
         foreach ($ids as $i) $ins->execute([$id, $i]);
-        $db->prepare("UPDATE qa_abnormal_order SET gm_note=?, gm_deduct=?, capa_order_no=?, gm_decided_by=?, gm_decided_at=NOW(), updated_by=?, updated_at=NOW() WHERE id=?")
-           ->execute([$strOrNull($_POST['gm_note'] ?? '', 2000), $deduct, $strOrNull($_POST['capa_order_no'] ?? '', 20), $uid, $uid, $id]);
+        // 代理人代簽時要留下來：列印的圖章右下角要加「代」字（ai-rules/18）
+        $gmP = qab_gm_person($db);
+        $byDeputy = ($gmP['base_id'] > 0 && $gmP['base_id'] !== $uid && $gmP['id'] === $uid) ? 1 : 0;
+        $db->prepare("UPDATE qa_abnormal_order SET gm_note=?, gm_deduct=?, capa_order_no=?, gm_decided_by=?, gm_decided_at=NOW(), gm_by_deputy=?, updated_by=?, updated_at=NOW() WHERE id=?")
+           ->execute([$strOrNull($_POST['gm_note'] ?? '', 2000), $deduct, $strOrNull($_POST['capa_order_no'] ?? '', 20), $uid, $byDeputy, $uid, $id]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
     $log($id, 'gm', implode('、', $o['gm_names']), implode('、', array_map(function ($i) use ($optMap) { return $optMap[$i]['name']; }, $ids)) . ($deduct ? '（扣款）' : ''));
@@ -702,7 +716,7 @@ case 'settings_get': {
         'disp_opts' => qab_options($db, 'disp', false),
         'gm_opts'   => qab_options($db, 'gm', false),
         'deciders'  => qab_decider_cfgs($db, 'decider', false),
-        'tops'      => qab_decider_cfgs($db, 'top', false),
+        'gm_person' => qab_gm_person($db),
         'rate'          => qab_default_rate($db),
         'backfill_days' => qab_backfill_days($db),
         'can_admin'     => $perms['canAdmin'],
@@ -792,7 +806,9 @@ case 'opt_del': {
 
 case 'decider_save': {
     if (!$perms['canAdmin']) jerr('只有管理員可以設定決策者範圍');
-    $kind = ($_POST['kind'] ?? '') === 'top' ? 'top' : 'decider';
+    // 最高決策者不在本模組設定：一律吃全站統一的組織角色綁定（org_role_setting.php 的「最高核准人員」）
+    if (($_POST['kind'] ?? '') === 'top') jerr('最高決策者請到「組織角色綁定設定」改「最高核准人員」，本模組不另外設定');
+    $kind = 'decider';
     $cfgId = (int)($_POST['cfg_id'] ?? 0);
     $deptId = (int)($_POST['dept_id'] ?? 0);
     if ($deptId <= 0) jerr('請選擇部門');
