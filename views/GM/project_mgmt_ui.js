@@ -892,17 +892,27 @@ function faiBoxHtml(res) {
           + '<span class="pj-hint" style="font-weight:normal;margin-left:8px;">'
           + 'PFMEA／SOP／SIP 要在送首件<b>之前</b>備妥；型態識別文件管制表在首件通過<b>之後</b>建立。</span></h5>';
 
-    /* 首件前應備文件的檢查：缺就在這裡直接講，不用等使用者自己去翻文件檢核 */
-    var lackBefore = 0, lackParts = [];
+    /* 首件前應備文件的檢查：缺就在這裡直接講，不用等使用者自己去翻文件檢核。
+       一定要逐料號印出「實際缺的是哪幾份」——原本固定寫死「沒有 PFMEA／SOP／SIP」，
+       實際只缺 SOP／SIP 時會被讀成連 PFMEA 都沒建立（使用者 2026-09-21 回報）。 */
+    var lackBefore = 0, lackParts = [],
+        cdefs = META.doc_checks || {}, cphase = (CUR && CUR.doc_phase) || META.doc_phase || {};
     $.each(res.doc_check || [], function (i, r) {
-        if (num(r.missing_before)) { lackBefore += num(r.missing_before); lackParts.push(r.part_no); }
+        if (!num(r.missing_before)) return;
+        var names = [];
+        $.each(cdefs, function (k, d) {
+            if ((cphase[k] || 'any') === 'before' && !num(r[k])) names.push(d[0]);
+        });
+        lackBefore += num(r.missing_before);
+        lackParts.push('<b>' + esc(r.part_no) + '</b>'
+                     + (names.length ? '（缺 ' + esc(names.join('、')) + '）' : ''));
     });
     if (lackBefore) {
         h += '<div style="border:2px solid #DD5138;background:#FCE4E4;color:#A32E1A;border-radius:6px;'
           + 'padding:8px 12px;margin-bottom:10px;font-size:13px;">'
-          + '<b>送首件之前，這些料號還缺 ' + lackBefore + ' 份應備文件：</b>' + esc(lackParts.join('、'))
+          + '<b>送首件之前，這些料號還缺 ' + lackBefore + ' 份應備文件：</b>' + lackParts.join('　')
           + '<br><span style="font-weight:normal;">首件檢驗驗證的就是「這套製程＋這份文件」，'
-          + '沒有 PFMEA／SOP／SIP 就沒有判定依據（AS9102／AS9145）。請到「文件檢核」分頁補齊。</span></div>';
+          + '缺了上面這幾份就沒有判定依據（AS9102／AS9145）。請到「文件檢核」分頁補齊。</span></div>';
     }
 
     var showNew = res.can_edit && (!last || (String(last.result || '') === 'fail'));
