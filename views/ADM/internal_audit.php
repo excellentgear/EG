@@ -4935,15 +4935,17 @@ $('#btnReportSave').on('click', function(){
    沒設定通知對象也送得出去，只是回報通知 0 人——不要因為沒設定就把流程擋住。 */
 $('#btnReportSubmit').on('click', function(){
     if (!REPORT || !REPORT.report) { alert(YEAR+' 年度還沒有建立稽核報告表，請先按「儲存」'); return; }
-    askDate('送出稽核報告表', '這個日期是報告表上的日期（業務日期），送出後會通知設定好的人員。', function(d){
-        $.post(API, {action:'report_submit', year:YEAR, biz_date:d}, function(res){
-            if (!res.ok) { alert(res.error||'送出失敗'); return; }
-            alert('已送出（報告日期 '+dispDate(res.submit_date)+'）\n'
-                + (res.notified ? ('已通知 '+res.notified+' 人：'+(res.users||[]).join('、'))
-                                : '目前沒有設定通知對象，所以沒有發出通知。\n可按工具列的「通知對象設定」設定要通知哪些部門的哪些職位。'));
-            loadMeta(function(){ loadReport(); });      // 年度完成狀態要跟著更新
-        }, 'json');
-    });
+    /* 2026-09-21 使用者要求：送出不要再問日期——**報告表上根本沒有印送出日期**
+       （列印版的表頭日期用的是核准／製表日期，不是這個），問了也沒有地方會顯示，
+       只是多一個跳窗。送出時間仍照常記在 submit_date（畫面狀態列與年度完成狀態要用）。 */
+    if (!confirm('要送出 '+YEAR+' 年度的稽核報告表嗎？\n送出後會通知「通知對象設定」裡登記的人員。')) return;
+    $.post(API, {action:'report_submit', year:YEAR}, function(res){
+        if (!res.ok) { alert(res.error||'送出失敗'); return; }
+        alert('已送出\n'
+            + (res.notified ? ('已通知 '+res.notified+' 人：'+(res.users||[]).join('、'))
+                            : '目前沒有設定通知對象，所以沒有發出通知。\n可按工具列的「通知對象設定」設定要通知哪些部門的哪些職位。'));
+        loadMeta(function(){ loadReport(); });      // 年度完成狀態要跟著更新
+    }, 'json');
 });
 
 /* ---------- 通知對象設定（部門 × 職位） ---------- */
@@ -5476,12 +5478,19 @@ $(function(){
 function iaPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
     var asCss = String(docNo||'').replace(/['\\]/g,'');
     // 版面留白（2026-09-17 使用者回報「上方與左右都沒留空，很難看」）：上 18mm／左右 15mm／下 16mm
-    /* 左右留白 2026-09-21 由 15mm 加大到 20mm：使用者回報實際列印時左右兩側會被裁掉
-       （雷射印表機本來就有一圈印不到的邊，15mm 對某些機型還是不夠）。 */
-    var css = '@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:18mm 20mm 16mm;'
+    /* 版面留白（2026-09-21 使用者回報：左右被裁掉／上方完全沒有留白）。
+       **兩段式**：@page 給 14mm（適度、不過度），body 再補 5mm 當保險。
+       為什麼要補 body padding——瀏覽器列印視窗裡的「邊界」若被選成「無」或「最小」，
+       Chrome 會**直接蓋掉 @page 的 margin**，那時只剩 body padding 撐著，
+       至少還有 5mm 不會貼邊被裁；選「預設」時兩者相加約 19mm，看起來剛好。
+       上下用同一個數字，單頁高度判定才算得準（下方 onePage 就是用 MG*2 推的）。 */
+    var MG = 14;                       // @page 四邊留白（mm）
+    var PAD = 5;                       // body 保險留白（mm）
+    var css = '@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:'+MG+'mm;'
             + (asCss ? " @bottom-right{ content:'"+asCss+"'; font-size:9pt; color:#333; }" : '')
             + '}'
             + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;'
+            + 'margin:0;padding:'+PAD+'mm;'
             + '-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.pt-head{text-align:center;margin-bottom:8px;}'
             + '.pt-head .co{font-size:20px;font-weight:bold;letter-spacing:2px;}'
@@ -5519,7 +5528,8 @@ function iaPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗才能列印'); return; }
     // 只有真的超過一頁才注入頁碼（單頁表單印「第1頁／共1頁」很醜，紙本也沒有）
-    var onePage = ((landscape?210:297) - 28) * 96 / 25.4;
+    // 可印高度＝紙張高 − 上下 @page 留白 − 上下 body padding（換算成 px @96dpi）
+    var onePage = ((landscape?210:297) - MG*2 - PAD*2) * 96 / 25.4;
     var js = 'if(document.body.scrollHeight>'+Math.round(onePage*0.92)+'){'
            + 'var st=document.createElement("style");'
            + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
