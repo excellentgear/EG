@@ -180,6 +180,9 @@ case 'get': {
         'rate_default' => qab_default_rate($db),
         // 「這一輪是不是我可以回覆」前端要用：本人掛在哪些部門
         'my_dept_ids'  => qab_user_dept_ids($db, $uid),
+        // 相關單位意見：各部門的預設回覆職稱（勾部門時自動帶入）＋部門清單
+        'ask_cfg'      => qab_ask_cfg($db),
+        'depts'        => $db->query("SELECT id, name AS department_name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC),
     ]);
 }
 

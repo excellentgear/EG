@@ -120,7 +120,15 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
         /* 類別名稱刻意不叫 .tag：Gentelella 的 custom.css 有一個全域 .tag 元件，
            它的 .tag:after 會在右側畫一個 11px 的三角形（left:100% 絕對定位），
            實測讓整頁多出 11px 橫向捲動，而且 color:#fff !important 會蓋掉暖色系配色。 */
-        .rtg { font-size:11px; border-radius:9px; padding:1px 8px; line-height:17px; display:inline-block; }
+        .saved{font-size:11px;color:#7a8f5a;font-weight:normal;margin-right:8px;}
+.ask-pos{display:flex;flex-wrap:wrap;gap:2px 8px;}
+.ask-pos label{font-weight:normal;margin:0;font-size:11.5px;}
+.sg-res label{font-weight:normal;margin:0 8px 0 0;font-size:12px;white-space:nowrap;}
+.sg-res{display:flex;flex-wrap:wrap;align-items:center;gap:2px;}
+.bom-chip{display:inline-flex;align-items:center;gap:4px;background:var(--cream);border:1px solid var(--line);
+    border-radius:10px;padding:1px 8px;font-size:12px;margin:2px 4px 2px 0;}
+.bom-chip .x{cursor:pointer;color:var(--coral);}
+.rtg { font-size:11px; border-radius:9px; padding:1px 8px; line-height:17px; display:inline-block; }
         .rtg-wait { background:var(--amber); color:#3b2a18; }
         .rtg-done { background:#DDEBD6; color:#2c5c2c; }
         /* 扣款表 */
@@ -192,14 +200,19 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
             <!-- 補登簽章（只有補資料的單、且只有異常單管理員看得到） -->
             <div class="sec" id="secSign" style="display:none;">
                 <h4><i class="fa fa-pencil-square-o"></i> 補登簽章
-                    <span class="sub">補舊資料時指定「當時是誰簽的、蓋的是哪一天」</span>
+                    <span class="sub">補舊資料時指定「當時是誰簽的、蓋的是哪一天」，結果與內容也在這裡補</span>
+                    <span class="spacer"></span><span class="saved" id="savedSign"></span>
                 </h4>
                 <div class="sec-body">
-                    <div class="note-box">人員清單會依你填的<b>印章日期</b>回推當時在職者（當時在職、現在已離職的人也選得到）；
-                        印章日期不可以是未來。同一天有多格時，系統會把時間依序錯開，不會出現「核准早於承辦」這種順序。</div>
+                    <div class="note-box">補舊資料時，<b>結果與簽章都在這一張表填完</b>（不必再到下面的決策區）。
+                        人員清單依你填的<b>印章日期</b>只列<b>該格該簽的部門、當天在職、而且當天沒有請整天假或整天外出</b>的人；
+                        找不到人時可以勾「顯示全部人員」放寬。印章日期不可以是未來；同一天有多格時系統會把時間依序錯開，
+                        不會出現「核准早於承辦」這種順序。<b>改完就自動存檔，不必按存檔鈕。</b></div>
+                    <label style="font-weight:normal;font-size:12px;"><input type="checkbox" id="sgAll"> 顯示全部人員（不限該格的部門）</label>
                     <table class="dtb" id="signTb">
-                        <thead><tr><th style="width:190px;">簽章格</th><th style="width:210px;">目前</th>
-                            <th style="width:150px;">印章日期</th><th>補章人員</th><th style="width:130px;">動作</th></tr></thead>
+                        <thead><tr><th style="width:150px;">簽章格</th><th style="width:150px;">目前</th>
+                            <th style="width:135px;">印章日期</th><th style="width:210px;">補章人員</th>
+                            <th>結果與內容</th><th style="width:84px;">動作</th></tr></thead>
                         <tbody></tbody>
                     </table>
                 </div>
@@ -210,7 +223,8 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                 <h4><i class="fa fa-file-text-o"></i> 基本資料
                     <span class="sub">表頭與責任單位</span>
                     <span class="spacer"></span>
-                    <button class="btn btn-warm btn-xs" id="btnSaveHead"><i class="fa fa-save"></i> 儲存填寫內容</button>
+                    <span class="saved" id="savedHead"></span>
+                    <button class="btn btn-warm-o btn-xs" id="btnSaveHead" title="欄位改完就會自動存，這顆只是要立刻存的時候用"><i class="fa fa-save"></i> 立即儲存</button>
                 </h4>
                 <div class="sec-body">
                     <div class="fgrid">
@@ -219,7 +233,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                         <div class="fld"><label>客戶 <span class="muted-help" id="clientSrc"></span></label>
                             <input type="text" id="f_client"></div>
                         <div class="fld"><label>料號 <span class="muted-help" id="partSrc"></span></label><input type="text" id="f_part"></div>
-                        <div class="fld"><label>製令編號 <span class="muted-help">（綁了才能自動帶客戶、料號與扣款金額）</span></label>
+                        <div class="fld"><label>製令編號 <span class="muted-help">（主製令；綁了才能自動帶客戶、料號與扣款金額）</span></label>
                             <div class="ac-wrap"><input type="text" id="f_bom" autocomplete="off" placeholder="輸入製令／料號／客戶後從清單選"></div>
                             <div class="err" id="bomErr" style="display:none;"></div></div>
                         <div class="fld"><label>客退單號 (IR)</label>
@@ -231,13 +245,27 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                         <div class="fld"><label>不良數</label><input type="number" id="f_ng"><div class="ro-note" id="ngRate"></div></div>
                     </div>
 
+                    <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px;" id="bomMoreBox">
+                        <div class="muted-help" style="margin-bottom:4px;"><b>相關製令</b>（選填）：
+                            退貨的如果是<b>組合件</b>，底下會有好幾張製令，這裡可以一起綁起來——
+                            扣款的製程金額會把這幾張<b>一起加總</b>，責任製程也可以從這幾張的製程裡挑。
+                            清單依這張單的料號自動列出（含組合件的子件），也可以打字搜尋。</div>
+                        <div class="chips" id="bomChips"></div>
+                        <div style="display:flex;gap:6px;align-items:center;margin-top:4px;">
+                            <input type="text" id="bomKw" placeholder="輸入製令／料號／客戶搜尋…" style="flex:1;max-width:320px;">
+                            <button class="btn btn-warm-o btn-xs" id="btnBomPick"><i class="fa fa-list"></i> 列出可綁的製令</button>
+                        </div>
+                        <div id="bomCandBox" style="display:none;margin-top:6px;max-height:190px;overflow:auto;border:1px solid var(--line);padding:6px;border-radius:4px;"></div>
+                    </div>
+
                     <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px;">
                         <div class="muted-help" style="margin-bottom:4px;"><b>責任單位</b>：先選製程，再選廠商；選到的廠商若是<b>廠內加工廠商</b>（主檔管理→廠商編輯的「廠內加工廠商」）才會出現部門與人員（可複選、非必填）。</div>
                         <div class="fgrid">
-                            <div class="fld"><label>製程</label>
+                            <div class="fld"><label>製程 <span class="muted-help" id="procSrc"></span></label>
+                                <select id="f_proc_pick" data-eg-skip style="margin-bottom:4px;display:none;"></select>
                                 <div class="ac-wrap"><input type="text" id="f_proc" placeholder="輸入製程編號或名稱" autocomplete="off"></div>
                                 <input type="hidden" id="f_proc_no"></div>
-                            <div class="fld"><label>廠商</label>
+                            <div class="fld"><label>廠商 <span class="muted-help" id="vendorSrc"></span></label>
                                 <div class="ac-wrap"><input type="text" id="f_vendor" placeholder="輸入廠商編號或名稱" autocomplete="off"></div>
                                 <input type="hidden" id="f_vendor_id"><div class="ro-note" id="vendorNote"></div></div>
                         </div>
@@ -286,7 +314,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                 <h4><i class="fa fa-sitemap"></i> 異常原因分類
                     <span class="sub">可複選、結案前都可以改（後面的異常分析與報告會用這一欄）</span>
                     <span class="spacer"></span>
-                    <button class="btn btn-warm btn-xs" id="btnSaveCause"><i class="fa fa-save"></i> 儲存分類</button>
+                    <span class="saved" id="savedCause"></span>
                 </h4>
                 <div class="sec-body">
                     <div class="ctree" id="causeTree"></div>
@@ -294,14 +322,27 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                 </div>
             </div>
 
-            <!-- ③ 相關單位意見 -->
+            <!-- ③ 相關單位意見（勾部門即可，一次可勾好幾個） -->
             <div class="sec" id="secRound">
-                <h4><i class="fa fa-comments-o"></i> 相關單位意見
-                    <span class="sub">一次送一個單位；收到回覆後再決定下一個要問誰，或直接進入決策</span>
+                <h4><i class="fa fa-comments-o"></i> <span id="roundTitle">相關單位意見</span>
+                    <span class="sub" id="roundSub">左側勾部門就會通知該部門的預設回覆職稱，多人只要一人回覆並簽章即可</span>
                     <span class="spacer"></span>
-                    <button class="btn btn-warm btn-xs" id="btnAskOpen"><i class="fa fa-paper-plane-o"></i> 送出徵詢</button>
+                    <span class="saved" id="savedRound"></span>
+                    <button class="btn btn-warm btn-xs" id="btnAskSendAll"><i class="fa fa-paper-plane"></i> 送出勾選的徵詢</button>
                 </h4>
-                <div class="sec-body"><div id="roundList"></div></div>
+                <div class="sec-body">
+                    <div class="note-box" id="roundNote"></div>
+                    <table class="dtb" id="askTb">
+                        <thead><tr><th style="width:52px;">徵詢</th><th style="width:130px;">部門</th>
+                            <th style="width:230px;">回覆職稱／指定人員</th><th style="width:96px;">狀態</th>
+                            <th>回覆內容</th><th style="width:96px;">動作</th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                    <div style="margin-top:6px;display:flex;gap:6px;align-items:center;">
+                        <select id="askAddDept" data-eg-filter="輸入部門名稱篩選…" style="max-width:260px;"><option value="">加入其他部門…</option></select>
+                        <span class="muted-help">沒有設定預設職稱的部門＝通知整個部門。</span>
+                    </div>
+                </div>
             </div>
 
             <!-- ④ 決策 -->
@@ -309,7 +350,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                 <h4><i class="fa fa-gavel"></i> 異常處置方式
                     <span class="sub">(業務/品管) 主管決策</span>
                     <span class="spacer"></span>
-                    <button class="btn btn-warm btn-xs" id="btnSaveDisp"><i class="fa fa-save"></i> 儲存決策</button>
+                    <span class="saved" id="savedDisp"></span>
                 </h4>
                 <div class="sec-body">
                     <div id="dispNoPerm" class="note-box" style="display:none;color:var(--coral);"></div>
@@ -324,7 +365,8 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                 <h4><i class="fa fa-university"></i> 總經理裁示
                     <span class="sub">有裁示時以裁示為最終決策</span>
                     <span class="spacer"></span>
-                    <button class="btn btn-warm btn-xs" id="btnSaveGm"><i class="fa fa-save"></i> 儲存裁示</button>
+                    <span class="saved" id="savedGm"></span>
+                    <button class="btn btn-warm-o btn-xs" id="btnSaveGm" style="display:none;"></button>
                 </h4>
                 <div class="sec-body">
                     <div id="gmWho2" class="note-box"></div>
@@ -345,7 +387,8 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     <span class="spacer"></span>
                     <button class="btn btn-warm-o btn-xs" id="btnAutoPreview"><i class="fa fa-search"></i> 看自動帶入哪些金額</button>
                     <button class="btn btn-warm-o btn-xs" id="btnAutoFill"><i class="fa fa-download"></i> 自動帶入製程金額</button>
-                    <button class="btn btn-warm btn-xs" id="btnSaveDeduct"><i class="fa fa-save"></i> 儲存扣款</button>
+                    <span class="saved" id="savedDeduct"></span>
+                    <button class="btn btn-warm-o btn-xs" id="btnSaveDeduct" title="欄位改完就會自動存，這顆只是要立刻存的時候用"><i class="fa fa-save"></i> 立即儲存</button>
                 </h4>
                 <div class="sec-body">
                     <div id="deductHint" class="note-box"></div>
@@ -382,41 +425,6 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
     </div>
     <?php include '../partPage/footer.html'; ?>
 </div></div>
-
-<!-- 送出徵詢 -->
-<div class="m-mask" id="askMask">
-    <div class="m-box" style="width:560px;">
-        <div class="m-hd"><i class="fa fa-paper-plane-o"></i> 送出徵詢（相關單位意見）<span class="x" data-close="askMask">&times;</span></div>
-        <div class="m-bd">
-            <div class="note-box" id="askNote">一次只送一個單位：可以指定「部門＋職稱」由該職稱的人回覆，也可以直接指定某一位。收到回覆之後再決定下一個要問誰，或直接進入決策。</div>
-            <div id="askBfBox" style="display:none;">
-                <div class="note-box" style="border-color:var(--amber-d);background:#FFF6E8;">
-                    <b>補資料</b>：直接把「當時哪個單位回了什麼、誰回的、哪一天回的」補進去，<b>不會發通知</b>
-                    （幾年前的事件再發一次通知只會吵到人，對方也無從回覆）。</div>
-                <div class="fgrid" style="grid-template-columns:1fr 1fr;">
-                    <div class="fld"><label>回覆日期 <span style="color:var(--coral)">*</span></label><input type="date" id="a_rdate"></div>
-                    <div class="fld"><label>回覆人 <span style="color:var(--coral)">*</span></label>
-                        <select id="a_rby" data-eg-filter="輸入姓名篩選…"><option value="">請先選回覆日期</option></select></div>
-                </div>
-                <div class="fld"><label>回覆內容 <span style="color:var(--coral)">*</span></label><textarea id="a_rcontent" rows="4"></textarea></div>
-            </div>
-            <div class="fgrid" style="grid-template-columns:1fr;">
-                <div class="fld"><label>部門 <span style="color:var(--coral)">*</span></label>
-                    <select id="a_dept" data-eg-filter="輸入部門名稱篩選…"><option value="">請選擇…</option></select></div>
-                <div class="fld"><label>指定職稱（選填）</label><select id="a_pos"><option value="">不限職稱</option></select></div>
-                <div class="fld"><label>指定人員（選填；選了人就只通知這一位）</label>
-                    <select id="a_user" data-eg-filter="輸入姓名篩選…"><option value="">不指定</option></select></div>
-                <div class="fld"><label>徵詢說明（選填，會寫在通知內文）</label><textarea id="a_note" rows="2"></textarea></div>
-                <div class="fld"><label>回覆期限（選填）</label><input type="date" id="a_deadline"></div>
-            </div>
-            <div class="err" id="askErr"></div>
-        </div>
-        <div class="m-ft">
-            <button class="btn btn-default btn-sm" data-close="askMask">取消</button>
-            <button class="btn btn-warm btn-sm" id="btnAskSend"><i class="fa fa-paper-plane"></i> 送出並通知</button>
-        </div>
-    </div>
-</div>
 
 <!-- 回覆 -->
 <div class="m-mask" id="rplMask">
@@ -517,12 +525,14 @@ function openMask(id){ $('#' + id).show(); }
 function closeMask(id){ $('#' + id).hide(); }
 $(document).on('click', '[data-close]', function(){ closeMask($(this).data('close')); });
 
-function post(action, data, cb){
+/* quiet=true：自動存檔用——存好只更新資料、**不重畫畫面**。
+   重畫會把使用者正在打字的欄位連同游標一起洗掉（自動存檔一定要避開這件事）。 */
+function post(action, data, cb, quiet){
     data = data || {};
     data.action = action; data.csrf = CSRF;
     $.post(API, data, function(res){
         if (!res || !res.success) { alert((res && res.message) || '操作失敗'); return; }
-        if (res.order) { D.order = res.order; render(); }
+        if (res.order) { D.order = res.order; if (!quiet) render(); }
         if (cb) cb(res);
     }, 'json').fail(function(){ alert('連線失敗，請稍後再試'); });
 }
@@ -573,10 +583,8 @@ function buildStaticOpts(){
         if (!res || !res.success) return;
         var hh = '<option value="">請選擇…</option>';
         res.rows.forEach(function(d){ hh += '<option value="' + d.id + '">' + esc(d.department_name) + '</option>'; });
-        $('#a_dept,#f_resp_dept').each(function(){
-            var keep = $(this).val();
-            $(this).html(this.id === 'f_resp_dept' ? hh.replace('請選擇…', '選擇部門…') : hh).val(keep);
-        });
+        var keep = $('#f_resp_dept').val();
+        $('#f_resp_dept').html(hh.replace('請選擇…', '選擇部門…')).val(keep);
     }, 'json');
 }
 
@@ -646,6 +654,9 @@ function render(){
     $('#secSign').toggle(bf && !!p.canBackfill && !o.is_closed);
     if (bf && p.canBackfill) renderSignTable();
 
+    renderBoms();
+    renderProcPick();
+
     $('#secHead').toggleClass('locked', !canEdit);
     $('#secHead input,#secHead textarea,#secHead select').prop('disabled', !canEdit);
     if (bound) $('#f_client').prop('readonly', true);
@@ -701,7 +712,97 @@ function render(){
     renderDeduct();
 }
 
-/* ───────── 補登簽章 ───────── */
+/* ───────── 自動存檔（使用者要求：輸入完就存，不要存檔鈕，免得忘記按） ─────────
+   同一個區塊連續改很多欄時只送最後一次；存好在該區塊標題右邊標「已自動儲存 hh:mm:ss」。 */
+var AS_TIMER = {};
+function autoSave(key, fn, ms){
+    clearTimeout(AS_TIMER[key]);
+    AS_TIMER[key] = setTimeout(fn, ms === undefined ? 700 : ms);
+}
+function savedAt(sel){
+    var t = new Date();
+    $(sel).text('已自動儲存 ' + ('0' + t.getHours()).slice(-2) + ':' + ('0' + t.getMinutes()).slice(-2) + ':' + ('0' + t.getSeconds()).slice(-2));
+}
+
+/* ───────── 製令：可綁多張（退貨的是組合件時底下好幾張） ───────── */
+function renderBoms(){
+    var o = D.order, canEdit = D.can_edit && !o.is_closed;
+    var main = (o.bom_no || '').trim();
+    var extra = (o.bom_list || []).filter(function(b){ return b !== main; });
+    var h = '';
+    if (main) h += '<span class="bom-chip"><b>主</b> ' + esc(main) + '</span>';
+    extra.forEach(function(b){
+        h += '<span class="bom-chip">' + esc(b)
+           + (canEdit ? ('<span class="x" data-bomdel="' + esc(b) + '" title="解除綁定">&times;</span>') : '') + '</span>';
+    });
+    if (!h) h = '<span class="muted-help">尚未綁定任何製令</span>';
+    $('#bomChips').html(h);
+    $('#bomMoreBox').toggle(!!main || extra.length > 0 || canEdit);
+    $('#btnBomPick,#bomKw').prop('disabled', !canEdit);
+}
+function bindBoms(list){
+    post('bom_bind', { id:OID, boms:JSON.stringify(list) }, function(){ toast('製令綁定已更新'); savedAt('#savedHead'); });
+}
+$('#btnBomPick').on('click', function(){
+    var $box = $('#bomCandBox');
+    $box.show().html('<span class="muted-help">查詢中…</span>');
+    $.get(API, { action:'bom_candidates', id:OID, kw:$('#bomKw').val() }, function(res){
+        var rows = (res && res.rows) || [];
+        if (!rows.length) { $box.html('<span class="muted-help">查不到相關製令（可以改用上面的關鍵字搜尋）</span>'); return; }
+        var cur = D.order.bom_list || [];
+        $box.html(rows.map(function(r){
+            return '<label style="display:block;font-weight:normal;font-size:12px;margin:1px 0;">'
+                 + '<input type="checkbox" class="bom-cand" value="' + esc(r.bom) + '"'
+                 + (cur.indexOf(r.bom) >= 0 ? ' checked' : '') + '> '
+                 + '<b>' + esc(r.bom) + '</b>　' + esc(r.d_id || '') + '　' + esc(r.Client_Name || '')
+                 + '　<span class="muted-help">' + esc(r.rel_note) + (r.sqty ? ('／' + r.sqty + ' 支') : '') + '</span></label>';
+        }).join('') + '<div style="margin-top:6px;"><button class="btn btn-warm btn-xs" id="btnBomApply">套用勾選的製令</button> '
+          + '<span class="muted-help">主製令（表頭那一張）一律保留。</span></div>');
+    }, 'json');
+});
+$('#bomKw').on('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); $('#btnBomPick').click(); } });
+$(document).on('click', '#btnBomApply', function(){
+    var list = $('.bom-cand:checked').map(function(){ return this.value; }).get();
+    var main = (D.order.bom_no || '').trim();
+    if (main && list.indexOf(main) < 0) list.unshift(main);
+    bindBoms(list);
+    $('#bomCandBox').hide();
+});
+$(document).on('click', '[data-bomdel]', function(){
+    var b = $(this).data('bomdel');
+    bindBoms((D.order.bom_list || []).filter(function(x){ return x !== b; }));
+});
+
+/* ───────── 責任單位：有綁製令時，製程直接從製令的製程挑，廠商跟著自動帶 ───────── */
+function renderProcPick(){
+    var o = D.order, rows = o.bom_processes || [];
+    var $sel = $('#f_proc_pick');
+    if (!rows.length) { $sel.hide(); $('#procSrc').text(''); return; }
+    var multi = (o.bom_list || []).length > 1;
+    var h = '<option value="">從製令的製程挑…（' + rows.length + ' 站）</option>';
+    rows.forEach(function(r, i){
+        h += '<option value="' + i + '"' + (Number(r.process_no) === Number(o.resp_process_no) ? ' selected' : '') + '>'
+           + esc((multi ? (r.bom + '　') : '') + '第' + r.bom_sn + '站　' + (r.process_name || '(未命名製程)')
+                 + (r.vendor_name ? ('　' + r.vendor_name) : '')) + '</option>';
+    });
+    $sel.html(h).show();
+    $('#procSrc').text(Number(o.resp_process_manual) ? '（人工指定，不在製令的製程裡）' : '');
+    $('#vendorSrc').html(Number(o.resp_vendor_manual)
+        ? '<span style="color:var(--coral);">（人工修改，非製令自動帶入）</span>'
+        : (o.responsible_vendor_id ? '（由製令的該站自動帶）' : ''));
+}
+$(document).on('change', '#f_proc_pick', function(){
+    var i = $(this).val();
+    if (i === '') return;
+    var r = (D.order.bom_processes || [])[Number(i)];
+    if (!r) return;
+    $('#f_proc').val(r.process_name || '');
+    $('#f_proc_no').val(r.process_no || '');
+    if (r.vendor_id) { $('#f_vendor').val(r.vendor_name || ''); $('#f_vendor_id').val(r.vendor_id); }
+    autoSave('head', saveHead);
+});
+
+/* ───────── 補登簽章（結果與簽章一次補完） ───────── */
 var PEOPLE_CACHE = {};                 // 日期 -> 當時在職人員（一天只跟後端要一次）
 function peopleAsOf(date, cb){
     if (PEOPLE_CACHE[date]) { cb(PEOPLE_CACHE[date]); return; }
@@ -720,38 +821,101 @@ function fillPeopleSelect($sel, date, sel){
         $sel.html(h);
     });
 }
+/* 每個簽章格的候選人：後端依「這一格該簽的部門＋那天在職＋那天沒請整天假／整天外出」篩好 */
+function fillSlotPeople($sel, slot, date, sel, $note){
+    $sel.html('<option value="">載入中…</option>');
+    $.get(API, { action:'sign_candidates', id:OID, slot:slot, date:date, all:$('#sgAll').prop('checked') ? 1 : '' }, function(res){
+        var rows = (res && res.rows) || [];
+        var h = '<option value="">請選擇…</option>';
+        rows.forEach(function(u){
+            h += '<option value="' + u.id + '"' + (String(u.id) === String(sel || '') ? ' selected' : '') + '>'
+               + esc((u.dept_name || '') + '　' + (u.position_name || '') + '　' + u.name) + '</option>';
+        });
+        $sel.html(h);
+        if ($note) {
+            var scope = (res && res.scope) || [];
+            $note.text(!rows.length
+                ? (scope.length ? ('「' + scope.join('、') + '」當天沒有可簽的人，可勾上面「顯示全部人員」') : '當天沒有可簽的人')
+                : (scope.length ? ('範圍：' + scope.join('、')) : '不限部門'));
+        }
+    }, 'json');
+}
+/* 這一格要不要多出「結果與內容」（使用者要求：補登時不要再跑到下面的決策區填一次） */
+function slotResultHtml(k){
+    var o = D.order;
+    if (k === 'disp') {
+        return '<div class="sg-res">' + (D.disp_opts || []).map(function(op){
+                return '<label><input type="checkbox" class="sg-disp" value="' + op.opt_id + '"'
+                     + ((o.disp_ids || []).indexOf(Number(op.opt_id)) >= 0 ? ' checked' : '') + '> ' + esc(op.name) + '</label>'; }).join('')
+             + '</div><textarea class="sg-dispnote" rows="2" placeholder="處置說明">' + esc(o.disposition_note || '') + '</textarea>';
+    }
+    if (k === 'gm') {
+        return '<div class="sg-res">' + (D.gm_opts || []).map(function(op){
+                return '<label><input type="checkbox" class="sg-gm" value="' + op.opt_id + '"'
+                     + ((o.gm_ids || []).indexOf(Number(op.opt_id)) >= 0 ? ' checked' : '') + '> ' + esc(op.name) + '</label>'; }).join('')
+             + '<label style="margin-left:6px;"><input type="checkbox" class="sg-gmded"' + (Number(o.gm_deduct) ? ' checked' : '') + '> 需扣款</label>'
+             + '</div><textarea class="sg-gmnote" rows="2" placeholder="裁示說明">' + esc(o.gm_note || '') + '</textarea>';
+    }
+    return '<span class="muted-help">（這一格只有簽章）</span>';
+}
 function renderSignTable(){
     var o = D.order, biz = o.fill_date || '';
     var h = '';
     Object.keys(o.signs || {}).forEach(function(k){
-        var s = o.signs[k];
-        var d = s.at ? String(s.at).substring(0, 10) : biz;
+        var sg = o.signs[k];
+        var d = sg.at ? String(sg.at).substring(0, 10) : biz;
         h += '<tr data-slot="' + k + '">'
-           + '<td>' + esc(s.label) + '</td>'
-           + '<td>' + (s.name ? (esc(s.name) + '　<span class="muted-help">' + dispDate(s.at) + '</span>')
+           + '<td>' + esc(sg.label) + '</td>'
+           + '<td>' + (sg.name ? (esc(sg.name) + '<br><span class="muted-help">' + dispDate(sg.at) + '</span>')
                               : '<span class="muted-help">（未簽）</span>') + '</td>'
            + '<td><input type="date" class="sg-date" value="' + esc(d) + '"></td>'
-           + '<td><select class="sg-who" data-eg-skip><option value="">載入中…</option></select></td>'
-           + '<td class="c"><button class="btn btn-warm btn-xs sg-save">補章</button> '
-           + (s.user_id ? '<button class="btn btn-warm-o btn-xs sg-clear">清除</button>' : '') + '</td></tr>';
+           + '<td><select class="sg-who" data-eg-skip><option value="">載入中…</option></select>'
+           + '<div class="muted-help sg-scope" style="font-size:11px;"></div></td>'
+           + '<td>' + slotResultHtml(k) + '</td>'
+           + '<td class="c">' + (sg.user_id ? '<button class="btn btn-warm-o btn-xs sg-clear">清除</button>' : '<span class="muted-help">自動存</span>') + '</td></tr>';
     });
     $('#signTb tbody').html(h);
     $('#signTb tbody tr').each(function(){
         var $tr = $(this), k = $tr.data('slot');
-        fillPeopleSelect($tr.find('.sg-who'), $tr.find('.sg-date').val() || biz, (D.order.signs[k] || {}).user_id);
+        fillSlotPeople($tr.find('.sg-who'), k, $tr.find('.sg-date').val() || biz,
+                       (D.order.signs[k] || {}).user_id, $tr.find('.sg-scope'));
     });
 }
+$(document).on('change', '#sgAll', function(){ renderSignTable(); });
 $(document).on('change', '.sg-date', function(){
     var $tr = $(this).closest('tr');
     if (!this.value) return;
-    fillPeopleSelect($tr.find('.sg-who'), this.value, $tr.find('.sg-who').val());
+    fillSlotPeople($tr.find('.sg-who'), $tr.data('slot'), this.value, $tr.find('.sg-who').val(), $tr.find('.sg-scope'));
 });
-$(document).on('click', '.sg-save', function(){
+/* 日期、人員、結果任何一個改了就自動存（補登不必按鈕） */
+function saveSignRow($tr){
+    var slot = $tr.data('slot'), date = $tr.find('.sg-date').val(), who = $tr.find('.sg-who').val();
+    if (!date) return;
+    if (slot === 'disp') {
+        var ids = $tr.find('.sg-disp:checked').map(function(){ return Number(this.value); }).get();
+        post('save_disposition', { id:OID, opt_ids:JSON.stringify(ids), disposition_note:$tr.find('.sg-dispnote').val(),
+                                   sign_date:date, sign_by:who || '' },
+            function(){ savedAt('#savedSign'); }, true);
+        return;
+    }
+    if (slot === 'gm') {
+        var gids = $tr.find('.sg-gm:checked').map(function(){ return Number(this.value); }).get();
+        post('save_gm', { id:OID, opt_ids:JSON.stringify(gids), gm_note:$tr.find('.sg-gmnote').val(),
+                          gm_deduct:$tr.find('.sg-gmded').prop('checked') ? 1 : '',
+                          sign_date:date, sign_by:who || '' },
+            function(){ savedAt('#savedSign'); }, true);
+        return;
+    }
+    if (!who) return;                    // 其他格只有簽章，沒選人就先不存
+    post('sign_set', { id:OID, slot:slot, date:date, user_id:who }, function(){ savedAt('#savedSign'); }, true);
+}
+$(document).on('change', '#signTb .sg-date, #signTb .sg-who, #signTb .sg-disp, #signTb .sg-gm, #signTb .sg-gmded', function(){
     var $tr = $(this).closest('tr');
-    if (!$tr.find('.sg-date').val()) { alert('請選印章日期'); return; }
-    if (!$tr.find('.sg-who').val()) { alert('請選補章人員'); return; }
-    post('sign_set', { id:OID, slot:$tr.data('slot'), date:$tr.find('.sg-date').val(), user_id:$tr.find('.sg-who').val() },
-        function(){ toast('已補章'); });
+    autoSave('sign' + $tr.data('slot'), function(){ saveSignRow($tr); });
+});
+$(document).on('input', '#signTb .sg-dispnote, #signTb .sg-gmnote', function(){
+    var $tr = $(this).closest('tr');
+    autoSave('sign' + $tr.data('slot'), function(){ saveSignRow($tr); }, 1200);
 });
 $(document).on('click', '.sg-clear', function(){
     post('sign_set', { id:OID, slot:$(this).closest('tr').data('slot'), clear:1 }, function(){ toast('已清除'); });
@@ -817,9 +981,10 @@ function renderCauseChips(){
         ? CAUSE_SEL.map(function(id){ return '<span class="chip">' + esc(causePath(id)) + '</span>'; }).join('')
         : '<span class="muted-help">尚未勾選（結案前一定要勾）</span>');
 }
-$('#btnSaveCause').on('click', function(){
-    post('save_cause', { id:OID, cause_ids: JSON.stringify(CAUSE_SEL) }, function(){ toast('異常原因分類已儲存'); });
-});
+function saveCause(){
+    post('save_cause', { id:OID, cause_ids: JSON.stringify(CAUSE_SEL) }, function(){ savedAt('#savedCause'); }, true);
+}
+$(document).on('change', '.cchk', function(){ autoSave('cause', saveCause, 400); });
 
 /* 責任單位：部門／人員 */
 var RESP = [];
@@ -889,8 +1054,8 @@ $(document).on('input', '#f_bom', function(){ BOM_OK = false; $('#bomErr').hide(
 $(document).on('input', '#f_ir', function(){ $('#f_ir_id').val(''); $('#irErr').hide(); });
 $(document).on('blur', '#f_bom, #f_ir', function(){ checkBind(); });
 
-$('#btnSaveHead').on('click', function(){
-    if (!checkBind()) { alert('製令編號或客退單號要從清單中選擇綁定'); return; }
+function saveHead(silent){
+    if (!checkBind()) { if (!silent) alert('製令編號或客退單號要從清單中選擇綁定'); return; }
     var ms = [];
     for (var r = 0; r < 3; r++){
         var vals = [];
@@ -908,87 +1073,146 @@ $('#btnSaveHead').on('click', function(){
         resp_people: JSON.stringify(RESP),
         decider_cfg_id: $('#f_decider').val(), decider_user_id: $('#f_decider_user').val(),
         measures: JSON.stringify(ms)
-    }, function(){ toast('已儲存'); });
-});
-
-/* ③ 徵詢輪次 */
-function renderRounds(){
-    var o = D.order, rows = o.rounds || [], h = '';
-    if (!rows.length) h = '<div class="muted-help">尚未徵詢任何單位。需要別的單位表示意見時按右上「送出徵詢」。</div>';
-    rows.forEach(function(r){
-        var done = r.status === 'Returned';
-        var who = (r.department_name || '') + (r.position_name ? ('　' + r.position_name) : '') + (r.user_cname ? ('　' + r.user_cname) : '');
-        h += '<div class="rnd"><div class="hd">'
-           + '<b>第 ' + r.round_no + ' 輪</b> <span>' + esc(who) + '</span>'
-           + '<span class="rtg ' + (done ? 'rtg-done' : 'rtg-wait') + '">' + (done ? '已回覆' : '等待回覆') + '</span>'
-           + '<span class="spacer"></span>'
-           + '<span class="muted-help">送出 ' + dispDate(r.asked_at) + (done ? ('　回覆 ' + dispDate(r.return_date) + '　' + esc(r.replied_name || '')) : '') + '</span>';
-        if (!done && !o.is_closed) {
-            if (canReply(r)) h += ' <button class="btn btn-warm btn-xs" data-reply="' + r.flow_id + '"><i class="fa fa-reply"></i> 我要回覆</button>';
-            if (D.can_edit || D.perms.canDecide) h += ' <button class="btn btn-warm-o btn-xs" data-cancel="' + r.flow_id + '">取消這一輪</button>';
-        }
-        h += '</div>';
-        if (done) h += '<div class="bd">' + esc(r.reply_content || '') + '</div>';
-        h += '</div>';
-    });
-    $('#roundList').html(h);
-    var pending = rows.some(function(r){ return r.status !== 'Returned'; });
-    $('#btnAskOpen').toggle(!o.is_closed && (D.can_edit || D.perms.canDecide)).prop('disabled', pending)
-        .attr('title', pending ? '上一個單位還沒回覆' : '');
+    }, function(){ savedAt('#savedHead'); if (!silent) toast('已儲存'); }, !!silent);
 }
+$('#btnSaveHead').on('click', function(){ saveHead(false); });
+/* 欄位改完（離開欄位或改選）就自動存——使用者要求不要再有「忘記按存檔」這種事。
+   打字中的欄位用 input 事件延後久一點再存，免得每打一個字就送一次。 */
+$(document).on('change', '#secHead input, #secHead select', function(){
+    if ($(this).is('#f_bom, #f_ir')) return;          // 這兩個要先從清單選到才算數，由 acSetup 存
+    autoSave('head', function(){ saveHead(true); });
+});
+$(document).on('input', '#secHead textarea', function(){ autoSave('head', function(){ saveHead(true); }, 1500); });
+
+/* ③ 相關單位意見：左側勾部門就送出（可一次勾好幾個）。
+   **未勾選的部門一樣列出來**（使用者要求），這樣每張單的版面固定，也看得出問過誰、沒問誰。 */
+function askDeptName(id){
+    var d = (D.depts || []).filter(function(x){ return Number(x.id) === Number(id); })[0];
+    return d ? d.department_name : ('部門#' + id);
+}
+function renderRounds(){
+    var o = D.order, rows = o.rounds || [];
+    var bf = Number(o.is_backfill) === 1 && !!D.perms.canBackfill;
+    var canAsk = !o.is_closed && (D.can_edit || D.perms.canDecide);
+
+    /* 要列出來的部門＝管理員設定過的 ∪ 這張單已經問過的（設定後來被拿掉也不能讓舊資料消失） */
+    var cfg = D.ask_cfg || {};
+    var order = [], seen = {};
+    Object.keys(cfg).forEach(function(d){ if (!seen[d]) { seen[d] = 1; order.push(Number(d)); } });
+    rows.forEach(function(r){ if (!seen[r.dept_id]) { seen[r.dept_id] = 1; order.push(Number(r.dept_id)); } });
+    (ASK_EXTRA || []).forEach(function(d){ if (!seen[d]) { seen[d] = 1; order.push(Number(d)); } });
+
+    var h = '';
+    order.forEach(function(deptId){
+        var r = rows.filter(function(x){ return Number(x.dept_id) === deptId; }).slice(-1)[0];
+        var done = r && r.status === 'Returned';
+        var defs = cfg[deptId] || [];
+        var sel = r ? (r.position_id_list || []) : defs.map(function(x){ return x.position_id; });
+        var posHtml = defs.length
+            ? ('<div class="ask-pos">' + defs.map(function(x){
+                  return '<label><input type="checkbox" class="ak-pos" value="' + x.position_id + '"'
+                       + (sel.indexOf(Number(x.position_id)) >= 0 ? ' checked' : '')
+                       + (r ? ' disabled' : '') + '> ' + esc(x.position_name) + '</label>'; }).join('') + '</div>')
+            : '<span class="muted-help">（未設定預設職稱＝通知整個部門）</span>';
+        if (r && (r.position_names || []).length) posHtml = esc(r.position_names.join('／')) + (r.user_cname ? ('　' + esc(r.user_cname)) : '');
+
+        h += '<tr data-dept="' + deptId + '"' + (r ? (' data-flow="' + r.flow_id + '"') : '') + '>'
+           + '<td class="c"><input type="checkbox" class="ak-on"' + (r ? ' checked' : '') + (canAsk ? '' : ' disabled') + '></td>'
+           + '<td>' + esc(askDeptName(deptId)) + '</td>'
+           + '<td>' + posHtml + '</td>'
+           + '<td class="c">' + (r ? ('<span class="rtg ' + (done ? 'rtg-done' : 'rtg-wait') + '">' + (done ? '已回覆' : '等待回覆') + '</span>'
+                                      + '<div class="muted-help" style="font-size:11px;">' + dispDate(r.asked_at) + '</div>')
+                                   : '<span class="muted-help">未徵詢</span>') + '</td>'
+           + '<td>' + (done
+                ? ('<div>' + esc(r.reply_content || '') + '</div><div class="muted-help">' + dispDate(r.return_date) + '　' + esc(r.replied_name || '') + '</div>')
+                : (bf && !r
+                    ? ('<div style="display:flex;gap:4px;flex-wrap:wrap;">'
+                       + '<input type="date" class="ak-rdate" value="' + esc(o.fill_date || '') + '" style="width:130px;">'
+                       + '<select class="ak-rby" data-eg-skip style="width:190px;"><option value="">回覆人…</option></select>'
+                       + '</div><textarea class="ak-rtext" rows="2" placeholder="當時這個單位回了什麼"></textarea>')
+                    : '<span class="muted-help">—</span>')) + '</td>'
+           + '<td class="c">'
+           + (r && !done && !o.is_closed
+                ? ((canReply(r) ? '<button class="btn btn-warm btn-xs" data-reply="' + r.flow_id + '">回覆</button> ' : '')
+                   + (canAsk ? '<button class="btn btn-warm-o btn-xs" data-cancel="' + r.flow_id + '">取消</button>' : ''))
+                : '') + '</td></tr>';
+    });
+    $('#askTb tbody').html(h || '<tr><td colspan="6" class="c muted-help">還沒有可以徵詢的部門——請管理員到清單頁「設定 → 相關單位意見」加上部門，或用下方「加入其他部門」。</td></tr>');
+
+    /* 補登模式：回覆人依回覆日期回推當時在職者 */
+    if (bf) $('#askTb tbody tr').each(function(){
+        var $tr = $(this);
+        if ($tr.find('.ak-rby').length) fillPeopleSelect($tr.find('.ak-rby'), $tr.find('.ak-rdate').val() || o.fill_date, '');
+    });
+
+    $('#roundTitle').text(bf ? '相關單位意見（補登）' : '相關單位意見');
+    $('#roundSub').text(bf ? '直接把「當時哪個單位回了什麼、誰回的、哪一天回的」補進去，不會發通知'
+                           : '左側勾部門就會通知該部門的預設回覆職稱，多人只要一人回覆並簽章即可');
+    $('#roundNote').html(bf
+        ? '<b>補資料</b>：勾起要補的部門，填回覆日期、回覆人與內容，按「補登勾選的意見」。<b>不會發通知</b>——幾年前的事件再發一次通知只會吵到人，對方也無從回覆。'
+        : '勾起來的部門會收到通知；同一個部門<b>被通知的可能有好幾位，其中一位回覆並簽章即可</b>。已經送出、對方還沒回覆的可以「取消」。');
+    $('#btnAskSendAll').html(bf ? '<i class="fa fa-check"></i> 補登勾選的意見' : '<i class="fa fa-paper-plane"></i> 送出勾選的徵詢').toggle(canAsk);
+
+    /* 「加入其他部門」：設定以外的部門偶爾也要問 */
+    var opt = '<option value="">加入其他部門…</option>';
+    (D.depts || []).forEach(function(d){ if (!seen[d.id]) opt += '<option value="' + d.id + '">' + esc(d.department_name) + '</option>'; });
+    $('#askAddDept').html(opt).toggle(canAsk);
+}
+var ASK_EXTRA = [];
+$(document).on('change', '#askAddDept', function(){
+    var v = Number($(this).val());
+    if (v > 0 && ASK_EXTRA.indexOf(v) < 0) { ASK_EXTRA.push(v); renderRounds(); }
+});
+$(document).on('change', '#askTb .ak-rdate', function(){
+    var $tr = $(this).closest('tr');
+    if (this.value) fillPeopleSelect($tr.find('.ak-rby'), this.value, $tr.find('.ak-rby').val());
+});
 function canReply(r){
     var p = D.perms;
     if (p.canAdmin) return true;
     if (Number(r.user_id) > 0) return Number(r.user_id) === Number(p.uid);
     return (D.my_dept_ids || []).indexOf(Number(r.dept_id)) >= 0;
 }
-$('#btnAskOpen').on('click', function(){
-    $('#askErr').text('');
-    $('#a_note,#a_deadline,#a_rcontent').val('');
+$('#btnAskSendAll').on('click', function(){
     var bf = Number(D.order.is_backfill) === 1 && !!D.perms.canBackfill;
-    $('#askBfBox').toggle(bf);
-    $('#askNote').toggle(!bf);
-    $('#a_deadline').closest('.fld').toggle(!bf);
-    $('#btnAskSend').html(bf ? '<i class="fa fa-check"></i> 補登這一則意見' : '<i class="fa fa-paper-plane"></i> 送出並通知');
-    if (bf) {
-        var d = D.order.fill_date || '';
-        $('#a_rdate').val(d);
-        fillPeopleSelect($('#a_rby'), d, '');
-    }
-    openMask('askMask');
+    var items = [], bad = '';
+    $('#askTb tbody tr[data-dept]').each(function(){
+        var $tr = $(this);
+        if (!$tr.find('.ak-on').prop('checked')) return;
+        if ($tr.data('flow')) return;                       // 已經送出過的那幾列不重送
+        var it = { dept_id:Number($tr.data('dept')),
+                   position_ids:$tr.find('.ak-pos:checked').map(function(){ return Number(this.value); }).get() };
+        if (bf) {
+            it.replied_on = $tr.find('.ak-rdate').val();
+            it.replied_by = $tr.find('.ak-rby').val();
+            it.reply_content = $tr.find('.ak-rtext').val();
+            if (!it.reply_content || !it.reply_content.trim()) { bad = askDeptName(it.dept_id) + '：請填回覆內容'; return; }
+            if (!it.replied_on) { bad = askDeptName(it.dept_id) + '：請選回覆日期'; return; }
+            if (!it.replied_by) { bad = askDeptName(it.dept_id) + '：請選回覆人'; return; }
+        }
+        items.push(it);
+    });
+    if (bad) { alert(bad); return; }
+    if (!items.length) { alert('請先勾選要徵詢的部門（已經送出過的不會重送）'); return; }
+    post('round_add', { id:OID, items:JSON.stringify(items) }, function(res){
+        toast(bf ? ('已補登 ' + res.count + ' 則意見') : ('已送出 ' + res.count + ' 個單位的徵詢並通知'));
+        savedAt('#savedRound');
+    });
 });
-$('#a_rdate').on('change', function(){ if (this.value) fillPeopleSelect($('#a_rby'), this.value, $('#a_rby').val()); });
-$('#a_dept').on('change', function(){
-    var d = $(this).val();
-    $('#a_pos').html('<option value="">不限職稱</option>');
-    $('#a_user').html('<option value="">不指定</option>');
-    if (!d) return;
-    $.get(API, { action:'dept_positions', dept_id:d }, function(res){
-        var h = '<option value="">不限職稱</option>';
-        ((res && res.rows) || []).forEach(function(p){ h += '<option value="' + p.id + '">' + esc(p.position_name) + '</option>'; });
-        $('#a_pos').html(h);
-    }, 'json');
-    $.get(API, { action:'dept_people', dept_id:d }, function(res){
-        var h = '<option value="">不指定</option>';
-        ((res && res.rows) || []).forEach(function(u){ h += '<option value="' + u.id + '">' + esc(u.name + (u.position_name ? '（' + u.position_name + '）' : '')) + '</option>'; });
-        $('#a_user').html(h);
-    }, 'json');
+/* 取消勾選＝取消那一輪（還沒回覆的才可以） */
+$(document).on('change', '#askTb .ak-on', function(){
+    var $tr = $(this).closest('tr');
+    if (this.checked || !$tr.data('flow')) return;
+    var r = (D.order.rounds || []).filter(function(x){ return Number(x.flow_id) === Number($tr.data('flow')); })[0];
+    if (r && r.status === 'Returned') { alert('已經回覆的不可以取消（要改內容請由該單位重新回覆）'); $(this).prop('checked', true); return; }
+    if (!confirm('取消對「' + askDeptName($tr.data('dept')) + '」的徵詢？')) { $(this).prop('checked', true); return; }
+    post('round_cancel', { id:OID, flow_id:$tr.data('flow') }, function(){ toast('已取消'); });
 });
-$('#btnAskSend').on('click', function(){
-    if (!$('#a_dept').val()) { $('#askErr').text('請選擇要徵詢的部門'); return; }
-    var bf = Number(D.order.is_backfill) === 1 && !!D.perms.canBackfill;
-    if (bf) {
-        if (!$('#a_rdate').val()) { $('#askErr').text('請選擇回覆日期'); return; }
-        if (!$('#a_rby').val())   { $('#askErr').text('請選擇回覆人'); return; }
-        if (!$('#a_rcontent').val().trim()) { $('#askErr').text('請填寫回覆內容'); return; }
-    }
-    post('round_add', { id:OID, dept_id:$('#a_dept').val(), position_id:$('#a_pos').val(),
-                        user_id:$('#a_user').val(), ask_note:$('#a_note').val(), deadline:$('#a_deadline').val(),
-                        reply_content: bf ? $('#a_rcontent').val() : '',
-                        replied_by: bf ? $('#a_rby').val() : '',
-                        replied_on: bf ? $('#a_rdate').val() : '' },
-        function(){ closeMask('askMask'); toast(bf ? '已補登這一則意見' : '已送出徵詢並通知'); });
+$(document).on('click', '[data-cancel]', function(){
+    if (!confirm('確定取消這一輪徵詢？（尚未回覆的才可以取消）')) return;
+    post('round_cancel', { id:OID, flow_id:$(this).data('cancel') }, function(){ toast('已取消'); });
 });
+
 $(document).on('click', '[data-reply]', function(){ RPL_FLOW = $(this).data('reply'); $('#r_content').val(''); $('#rplErr').text(''); openMask('rplMask'); });
 $('#btnRplSend').on('click', function(){
     if (!$('#r_content').val().trim()) { $('#rplErr').text('請填寫回覆內容'); return; }
@@ -1001,17 +1225,23 @@ $(document).on('click', '[data-cancel]', function(){
 });
 
 /* ④⑤ 決策／裁示 */
-$('#btnSaveDisp').on('click', function(){
+function saveDisp(){
     var ids = $('.dchk:checked').map(function(){ return parseInt(this.value, 10); }).get();
     post('save_disposition', { id:OID, opt_ids: JSON.stringify(ids), disposition_note: $('#f_disp_note').val() },
-        function(){ toast('決策已儲存'); });
-});
-$('#btnSaveGm').on('click', function(){
+        function(){ savedAt('#savedDisp'); }, true);
+}
+function saveGm(){
     var ids = $('.gchk:checked').map(function(){ return parseInt(this.value, 10); }).get();
     post('save_gm', { id:OID, opt_ids: JSON.stringify(ids), gm_note: $('#f_gm_note').val(),
                       capa_order_no: $('#f_capa').val(), gm_deduct: $('#g_deduct').prop('checked') ? 1 : '' },
-        function(){ toast('裁示已儲存'); });
-});
+        function(){ savedAt('#savedGm'); renderDeduct(); }, true);
+}
+$('#btnSaveDisp').on('click', saveDisp);
+$('#btnSaveGm').on('click', saveGm);
+$(document).on('change', '.dchk', function(){ autoSave('disp', saveDisp, 400); });
+$(document).on('input', '#f_disp_note', function(){ autoSave('disp', saveDisp, 1500); });
+$(document).on('change', '.gchk, #g_deduct', function(){ autoSave('gm', saveGm, 400); });
+$(document).on('input', '#f_gm_note, #f_capa', function(){ autoSave('gm', saveGm, 1500); });
 
 /* ⑥ 扣款 */
 function renderDeduct(){
@@ -1077,17 +1307,16 @@ $('#btnAddOther').on('click', function(){
     renderDeduct();
 });
 $('#btnAutoPreview').on('click', function(){
-    var bom = $('#f_bom').val().trim();
-    if (!bom) { alert('這張單沒有綁製令'); return; }
+    if (!(D.order.bom_list || []).length) { alert('這張單沒有綁製令'); return; }
     $('#pvBody').html('載入中…'); openMask('pvMask');
-    $.get(API, { action:'deduct_preview', bom_no:bom }, function(res){
+    $.get(API, { action:'deduct_preview', id:OID }, function(res){
         if (!res || !res.success) { $('#pvBody').text('查詢失敗'); return; }
         if (!res.rows.length) { $('#pvBody').html('<div class="muted-help">這張製令目前沒有任何製程移轉憑單。</div>'); return; }
-        var t = '<table class="dtb"><thead><tr><th>站別</th><th>製程</th><th>廠商</th><th>移轉單號</th><th>數量</th><th>金額</th></tr></thead><tbody>';
+        var t = '<table class="dtb"><thead><tr><th>製令</th><th>站別</th><th>製程</th><th>廠商</th><th>移轉單號</th><th>數量</th><th>金額</th></tr></thead><tbody>';
         var sum = 0;
         res.rows.forEach(function(r){
             sum += Number(r.amount) || 0;
-            t += '<tr><td class="c">' + r.bom_sn + '</td><td>' + esc(r.process_name) + '</td><td>' + esc(r.vendor_name) + '</td>'
+            t += '<tr><td class="c">' + esc(r.bom_no || '') + '</td><td class="c">' + r.bom_sn + '</td><td>' + esc(r.process_name) + '</td><td>' + esc(r.vendor_name) + '</td>'
                + '<td class="c">' + esc(r.transfer_no) + '</td><td class="r">' + Number(r.qty).toLocaleString() + '</td>'
                + '<td class="r">' + Number(r.amount).toLocaleString() + '</td></tr>';
         });
@@ -1097,14 +1326,19 @@ $('#btnAutoPreview').on('click', function(){
 });
 $('#btnAutoFill').on('click', function(){
     if (!confirm('會用這張製令的製程移轉金額重建「製程」明細（手動加的「其他」列不受影響）。要繼續嗎？')) return;
-    post('deduct_autofill', { id:OID, bom_no:$('#f_bom').val() }, function(res){ toast('已帶入 ' + res.count + ' 站'); });
+    post('deduct_autofill', { id:OID }, function(res){ toast('已帶入 ' + res.count + ' 站'); });
 });
-$('#btnSaveDeduct').on('click', function(){
+function saveDeduct(silent){
     post('deduct_save', { id:OID, rows: JSON.stringify(DEDUCT_ROWS), surcharge_rate:$('#f_rate').val(),
                           deduct_qty:$('#f_dqty').val(), deduct_unit_amt:$('#f_dunit').val(),
                           deduct_exec:$('#f_dexec').val(), deduct_notify_no:$('#f_dnotify').val() },
-        function(){ toast('扣款明細已儲存'); });
+        function(){ savedAt('#savedDeduct'); if (!silent) toast('扣款明細已儲存'); }, !!silent);
+}
+$('#btnSaveDeduct').on('click', function(){ saveDeduct(false); });
+$(document).on('change', '#secDeduct input, #secDeduct select', function(){
+    autoSave('deduct', function(){ saveDeduct(true); });
 });
+$(document).on('input', '#secDeduct textarea', function(){ autoSave('deduct', function(){ saveDeduct(true); }, 1500); });
 $('#btnSignPm').on('click', function(){ post('deduct_sign', { id:OID, who:'pm', clear: D.order.deduct_pm_at ? 1 : '' }); });
 $('#btnSignQc').on('click', function(){ post('deduct_sign', { id:OID, who:'qc', clear: D.order.deduct_qc_at ? 1 : '' }); });
 $('#btnApprove').on('click', function(){
