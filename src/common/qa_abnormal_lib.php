@@ -175,6 +175,7 @@ function qab_ensure_schema(PDO $db): void
         'owner_sign_by'    => "ADD COLUMN owner_sign_by INT NULL COMMENT '(業務/品管)承辦',",
         'owner_sign_at'    => "ADD COLUMN owner_sign_at DATETIME NULL",
         'closed_by'        => "ADD COLUMN closed_by INT NULL",
+        'client_id'        => "ADD COLUMN client_id CHAR(11) NULL COMMENT '客戶主檔 customer_list.customer_id；綁了製令或客退單就由來源自動帶，不給手打'",
     ];
     foreach ($need as $c => $sql) if (!in_array($c, $cols, true)) $add[] = rtrim($sql, ',');
     if ($add) $db->exec("ALTER TABLE qa_abnormal_order " . implode(', ', $add));
@@ -258,6 +259,136 @@ function qab_default_rate(PDO $db): float
 {
     $v = (float)qab_setting_get($db, 'surcharge_rate', 1);
     return $v > 0 ? $v : 1.0;
+}
+
+/** 幾天以前的單算「補資料」（使用者定調：今日往前 10 天以前；做成可設定，預設 10） */
+function qab_backfill_days(PDO $db): int
+{
+    $v = (int)qab_setting_get($db, 'backfill_days', 10);
+    return ($v >= 0 && $v <= 3650) ? $v : 10;
+}
+
+/**
+ * 這張單是不是「補資料」。
+ * 判定用**表單自己的業務日期（填寫日期）**，不是建檔時間——補登的人本來就是今天才建檔。
+ */
+function qab_is_backfill(PDO $db, array $o): bool
+{
+    $biz = substr(trim((string)($o['fill_date'] ?: $o['occurrence_date'] ?: ($o['created_at'] ?? ''))), 0, 10);
+    if ($biz === '') return false;
+    $cut = date('Y-m-d', strtotime('-' . qab_backfill_days($db) . ' day'));   // 這一天（含）之後算「當期」
+    return $biz < $cut;
+}
+
+/**
+ * 客戶一律由來源決定（使用者要求：綁定製令或退貨單都應該自動綁定客戶）。
+ * 判定順序與 bom_client_lib 同一條：**先看料號主檔綁定的客戶**（同一個料號文字在 d_setting
+ * 常有好幾筆、分屬不同客戶，用文字去猜一定會撿錯家），主檔查不到才退回來源單上的客戶文字。
+ * @return array ['id'=>?string, 'name'=>?string, 'src'=>'ir'|'bom'|'']
+ */
+function qab_resolve_client(PDO $db, ?string $bomNo, ?int $irId): array
+{
+    $none = ['id' => null, 'name' => null, 'src' => ''];
+    /* 來源單只留客戶文字時的歸戶：走會計模組的 acc_customer_by_name()（**含別名**）。
+       ERP 寫「義高工業」「高鋒工業」而主檔是「義高」「高鋒」，只比對完全相同的字串會有一成多對不到，
+       而別名對照表是全站唯一一份，這裡不要再刻第二套比對規則。 */
+    $byText = function (?string $nm) use ($db) {
+        $nm = trim((string)$nm);
+        if ($nm === '') return [null, null];
+        try {
+            require_once __DIR__ . '/acc_lib.php';
+            $map = acc_customer_by_name($db);
+            if (isset($map[$nm])) return [(string)$map[$nm]['customer_id'], (string)$map[$nm]['customer']];
+        } catch (Throwable $e) { /* 會計模組不在時退回下面的字串比對 */ }
+        $st = $db->prepare("SELECT customer_id, customer FROM customer_list WHERE customer=? ORDER BY is_inactive, customer_id LIMIT 1");
+        $st->execute([$nm]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return $r ? [(string)$r['customer_id'], (string)$r['customer']] : [null, $nm];
+    };
+
+    if ($irId) {
+        $st = $db->prepare("SELECT i.Client_name, cl.customer_id, cl.customer
+                            FROM ir_track i
+                            LEFT JOIN d_setting ds ON ds.d_id = i.d_setting_id
+                            LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
+                            WHERE i.IR_id=?");
+        $st->execute([$irId]);
+        if ($r = $st->fetch(PDO::FETCH_ASSOC)) {
+            if (trim((string)$r['customer']) !== '') return ['id' => (string)$r['customer_id'], 'name' => (string)$r['customer'], 'src' => 'ir'];
+            [$id, $nm] = $byText($r['Client_name']);
+            return ['id' => $id, 'name' => $nm, 'src' => 'ir'];
+        }
+    }
+    if ($bomNo !== null && trim($bomNo) !== '') {
+        $st = $db->prepare("SELECT b.Client_Name, cl.customer_id, cl.customer
+                            FROM bom b
+                            LEFT JOIN d_setting ds ON ds.d_id = b.d_setting_id
+                            LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
+                            WHERE b.bom=? LIMIT 1");
+        $st->execute([trim($bomNo)]);
+        if ($r = $st->fetch(PDO::FETCH_ASSOC)) {
+            if (trim((string)$r['customer']) !== '') return ['id' => (string)$r['customer_id'], 'name' => (string)$r['customer'], 'src' => 'bom'];
+            // 製令沒綁料號主檔時走 bom_client_lib 的完整判定（訂單 → 料號文字唯一對應）
+            require_once __DIR__ . '/bom_client_lib.php';
+            $m = eg_bom_client_resolve($db, [trim($bomNo)]);
+            $nm = $m[trim($bomNo)] ?? $r['Client_Name'];
+            [$id, $nm2] = $byText($nm);
+            return ['id' => $id, 'name' => $nm2, 'src' => 'bom'];
+        }
+    }
+    return $none;
+}
+
+/**
+ * 簽章格登記表（唯一來源）：補登時要能逐格指定人員與日期，畫面、API、列印都讀這一份。
+ * perm＝平常誰能簽；補資料模式下一律由「異常單管理員」代為補登。
+ */
+function qab_sign_slots(): array
+{
+    return [
+        'owner' => ['label' => '(業務/品管) 承辦', 'by' => 'owner_sign_by',  'at' => 'owner_sign_at',  'perm' => 'canCreate',        'ord' => 1],
+        'disp'  => ['label' => '(業務/品管) 主管', 'by' => 'disp_decided_by', 'at' => 'disp_decided_at', 'perm' => 'canDecide',       'ord' => 2],
+        'gm'    => ['label' => '總經理 裁示',      'by' => 'gm_decided_by',   'at' => 'gm_decided_at',   'perm' => 'canGm',           'ord' => 3],
+        'pm'    => ['label' => '(生管) 簽章',      'by' => 'deduct_pm_by',    'at' => 'deduct_pm_at',    'perm' => 'canDeductFill',   'ord' => 4],
+        'qc'    => ['label' => '(品管) 簽章',      'by' => 'deduct_qc_by',    'at' => 'deduct_qc_at',    'perm' => 'canQcSign',       'ord' => 5],
+        'appr'  => ['label' => '核准 (管理課 會計/主管)', 'by' => 'deduct_appr_by', 'at' => 'deduct_appr_at', 'perm' => 'canDeductApprove', 'ord' => 6],
+    ];
+}
+
+/**
+ * 補登簽章要用的時間戳：日期由補登者指定，時間則接在「同一天已經有的簽章之後」隨機錯開，
+ * 不跨日（ai-rules/21 第3條：時間要串接、不可各自獨立亂數，也不可因偏移跨天）。
+ */
+function qab_backfill_time(PDO $db, array $order, string $date): string
+{
+    $base = strtotime($date . ' 09:00:00');
+    foreach (qab_sign_slots() as $s) {
+        $at = trim((string)($order[$s['at']] ?? ''));
+        if ($at === '' || substr($at, 0, 10) !== $date) continue;
+        $t = strtotime($at);
+        if ($t > $base) $base = $t;
+    }
+    $ts = $base + random_int(5, 180) * 60;
+    $end = strtotime($date . ' 23:59:00');
+    return date('Y-m-d H:i:s', min($ts, $end));
+}
+
+/**
+ * 這個人在「那一天」是不是在職（補登簽章的守門）。
+ * 走 eg_people_list_asof()：帶 asof 時**當時在職、現在已離職的人也會在名單裡**，
+ * 補歷史單據才挑得到當時的人（ai-rules/22 第5坑）；用現況清單會整批挑不到又不報錯。
+ */
+function qab_user_asof_ok(PDO $db, int $uid, string $date): bool
+{
+    if ($uid <= 0 || !preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $date)) return false;
+    require_once __DIR__ . '/people_lib.php';
+    static $cache = [];
+    if (!isset($cache[$date])) {
+        $ids = [];
+        foreach (eg_people_list_asof($db, [], $date) as $r) $ids[(int)$r['id']] = 1;
+        $cache[$date] = $ids;
+    }
+    return isset($cache[$date][$uid]);
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -354,7 +485,7 @@ function qab_option_map(PDO $db): array
    ───────────────────────────────────────────────────────────── */
 function qab_decider_cfgs(PDO $db, string $kind = '', bool $activeOnly = true): array
 {
-    $sql = "SELECT c.*, d.department_name AS dept_name, p.position_name
+    $sql = "SELECT c.*, d.name AS dept_name, p.name AS position_name
             FROM qa_decider_cfg c
             LEFT JOIN department d ON d.id = c.dept_id
             LEFT JOIN position p ON p.id = c.position_id
@@ -486,7 +617,9 @@ function qab_perms(PDO $db, int $uid): array
     return ['uid' => $uid, 'name' => (string)($u['user_cname'] ?: $u['user_uname']),
             'isAdmin' => $isAdmin, 'canAdmin' => $canAdmin, 'canView' => $canView, 'canCreate' => $canCreate,
             'canDecide' => $canDecide, 'canGm' => $canGm,
-            'canDeductFill' => $canDeductFill, 'canDeductApprove' => $canDeductApprove, 'canQcSign' => $canQcSign];
+            'canDeductFill' => $canDeductFill, 'canDeductApprove' => $canDeductApprove, 'canQcSign' => $canQcSign,
+            // 補資料（指定補章人員與印章日期）刻意只給「異常單管理員」——使用者定調：這個功能只有異常單有
+            'canBackfill' => $canAdmin];
 }
 
 /** 這個人能不能改這張單的「填寫區」（表頭、現象、原因分類、量測值…） */
@@ -662,7 +795,7 @@ function qab_order(PDO $db, int $id): ?array
     $o['disp_names'] = $nameOf($o['disp_ids']);
     $o['gm_names']   = $nameOf($o['gm_ids']);
 
-    $st = $db->prepare("SELECT r.dept_id, r.user_id, d.department_name, u.user_cname
+    $st = $db->prepare("SELECT r.dept_id, r.user_id, d.name AS department_name, u.user_cname
                         FROM qa_abnormal_resp r
                         LEFT JOIN department d ON d.id=r.dept_id
                         LEFT JOIN `user` u ON u.id=r.user_id
@@ -694,7 +827,7 @@ function qab_order(PDO $db, int $id): ?array
     $o['deduct_totals'] = qab_deduct_totals($o['deducts'], (float)($o['surcharge_rate'] ?: qab_default_rate($db)));
     $o['deduct_desc']   = qab_deduct_process_desc($o['deducts']);
 
-    $st = $db->prepare("SELECT f.*, d.department_name, u.user_cname, p.position_name, ru.user_cname AS replied_name,
+    $st = $db->prepare("SELECT f.*, d.name AS department_name, u.user_cname, p.name AS position_name, ru.user_cname AS replied_name,
                                ab.user_cname AS asked_name
                         FROM qa_abnormal_order_flow f
                         LEFT JOIN department d ON d.id=f.dept_id
@@ -709,6 +842,29 @@ function qab_order(PDO $db, int $id): ?array
     $o['final']   = qab_final($db, $o, $optMap);
     $o['need_gm'] = qab_need_gm($db, $o, $optMap);
     $o['status']  = qab_status($o);
+
+    // 客戶是不是由來源（製令／客退單）綁出來的——畫面要據此把欄位鎖起來
+    $o['client_bound'] = (trim((string)$o['bom_no']) !== '' || (int)$o['ir_id'] > 0) ? 1 : 0;
+    // 補資料模式（今日往前 N 天以前的業務日期）
+    $o['is_backfill']    = qab_is_backfill($db, $o) ? 1 : 0;
+    $o['backfill_days']  = qab_backfill_days($db);
+    // 各簽章格目前是誰、哪一天（補登介面與列印共用同一份登記表）
+    $o['signs'] = [];
+    foreach (qab_sign_slots() as $k => $sl) {
+        $o['signs'][$k] = ['label' => $sl['label'], 'perm' => $sl['perm'],
+                           'user_id' => $o[$sl['by']] === null ? null : (int)$o[$sl['by']],
+                           'at' => (string)($o[$sl['at']] ?? ''),
+                           'name' => ''];
+    }
+    $ids = array_values(array_filter(array_column($o['signs'], 'user_id')));
+    if ($ids) {
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $st = $db->prepare("SELECT id, user_cname FROM `user` WHERE id IN ($in)");
+        $st->execute($ids);
+        $nm = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $nm[(int)$r['id']] = (string)$r['user_cname'];
+        foreach ($o['signs'] as $k => $v) if ($v['user_id']) $o['signs'][$k]['name'] = $nm[$v['user_id']] ?? '';
+    }
     return $o;
 }
 

@@ -100,7 +100,6 @@ case 'create': {
         $ir = $st->fetch(PDO::FETCH_ASSOC);
         if (!$ir) jerr('找不到這張客退單');
         $irNo = (string)$ir['IR_no'];
-        if ($client === null) $client = $ir['Client_name'] !== '' ? mb_substr((string)$ir['Client_name'], 0, 60) : null;
         if ($partNo === null) $partNo = $ir['d_id'] !== '' ? mb_substr((string)$ir['d_id'], 0, 60) : null;
         if ($batch === null)  $batch  = $ir['Qty'] !== null ? (int)$ir['Qty'] : null;
     } else {
@@ -109,7 +108,6 @@ case 'create': {
         $st->execute([$bomNo]);
         $b = $st->fetch(PDO::FETCH_ASSOC);
         if (!$b) jerr('找不到這張製令');
-        if ($client === null) $client = $b['Client_Name'] !== '' ? mb_substr((string)$b['Client_Name'], 0, 60) : null;
         if ($partNo === null) $partNo = $b['d_id'] !== '' ? mb_substr((string)$b['d_id'], 0, 60) : null;
         if ($batch === null)  $batch  = $b['sqty'] !== null ? (int)$b['sqty'] : null;
     }
@@ -120,16 +118,20 @@ case 'create': {
         if (!$chk->fetchColumn()) jerr('要綁定的製令編號不存在');
     }
 
+    // 客戶一律由來源綁定（使用者要求）：綁了製令或客退單就以來源的客戶為準，不採信前端送來的文字
+    $cli = qab_resolve_client($db, $bomNo, $irId);
+    if ($cli['src'] !== '') $client = $cli['name'];
+
     $db->beginTransaction();
     try {
         $no = qab_next_order_no($db, $fillDate);
         $db->prepare("INSERT INTO qa_abnormal_order
             (abnormal_order_no, source_type, source_id, occurrence_date, fill_date, found_unit,
-             ir_id, ir_no, bom_no, client_name, part_no, batch_qty, insp_qty, ng_qty,
+             ir_id, ir_no, bom_no, client_id, client_name, part_no, batch_qty, insp_qty, ng_qty,
              abnormal_phenomenon, created_by, created_at, surcharge_rate)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?)")
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?)")
            ->execute([$no, ($kind === 'ir' ? 'IR' : 'BOM'), (int)($irId ?: 0), $fillDate, $fillDate,
-                      ($kind === 'ir' ? '客退' : '廠內'), $irId, $irNo, $bomNo, $client, $partNo, $batch,
+                      ($kind === 'ir' ? '客退' : '廠內'), $irId, $irNo, $bomNo, $cli['id'], $client, $partNo, $batch,
                       $intOrNull($_POST['insp_qty'] ?? ''), $intOrNull($_POST['ng_qty'] ?? ''),
                       $strOrNull($_POST['abnormal_phenomenon'] ?? '', 2000), $uid, qab_default_rate($db)]);
         $id = (int)$db->lastInsertId();
@@ -198,7 +200,17 @@ case 'save_head': {
     $put = function ($col, $val) use (&$set, &$par) { $set[] = "$col=?"; $par[] = $val; };
     if ($fill !== '') $put('fill_date', $fill);
     if ($occ !== '')  $put('occurrence_date', $occ);
-    if (array_key_exists('client_name', $_POST)) $put('client_name', $strOrNull($_POST['client_name'], 60));
+    // 客戶：綁了製令或客退單一律由來源重算（畫面那一格是唯讀的），兩者都沒綁才收前端填的文字
+    $bomAfter = array_key_exists('bom_no', $_POST) ? $strOrNull($_POST['bom_no'], 30) : ($o['bom_no'] ?: null);
+    $irAfter  = (int)($o['ir_id'] ?? 0);
+    $cli      = qab_resolve_client($db, $bomAfter, $irAfter ?: null);
+    if ($cli['src'] !== '') {
+        $put('client_id', $cli['id']);
+        $put('client_name', $cli['name']);
+    } elseif (array_key_exists('client_name', $_POST)) {
+        $put('client_id', null);
+        $put('client_name', $strOrNull($_POST['client_name'], 60));
+    }
     if (array_key_exists('part_no', $_POST))     $put('part_no', $strOrNull($_POST['part_no'], 60));
     if (array_key_exists('ir_no', $_POST))       $put('ir_no', $strOrNull($_POST['ir_no'], 30));
     if (array_key_exists('bom_no', $_POST))      $put('bom_no', $strOrNull($_POST['bom_no'], 30));
@@ -312,6 +324,19 @@ case 'round_add': {
         if ((int)$c->fetchColumn() === 0) jerr('這個部門目前沒有在職的「' . $posName . '」，請改指定人員');
     }
 
+    // 補資料：直接把「當時誰回了什麼、哪一天回的」補進去，不發通知
+    //（幾年前的事件再發一次通知只會吵到人，對方也無從回覆）
+    $bfReply = trim((string)($_POST['reply_content'] ?? ''));
+    $isBackfill = !empty($o['is_backfill']) && $perms['canBackfill'] && $bfReply !== '';
+    $bfBy = (int)($_POST['replied_by'] ?? 0);
+    $bfOn = trim((string)($_POST['replied_on'] ?? ''));
+    if ($isBackfill) {
+        if (!preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $bfOn)) jerr('補登回覆請選擇回覆日期');
+        if ($bfOn > date('Y-m-d')) jerr('回覆日期不可以是未來');
+        if ($bfBy <= 0) jerr('補登回覆請選擇回覆人');
+        if (!qab_user_asof_ok($db, $bfBy, $bfOn)) jerr('選擇的回覆人在該日期並不在職，請改選當時在職的人');
+    }
+
     $round = 1;
     foreach ($o['rounds'] as $r) $round = max($round, (int)$r['round_no'] + 1);
     $deadline = trim((string)($_POST['deadline'] ?? '')) ?: null;
@@ -319,6 +344,18 @@ case 'round_add': {
 
     $db->beginTransaction();
     try {
+        if ($isBackfill) {
+            $db->prepare("INSERT INTO qa_abnormal_order_flow
+                            (abnormal_order_id, dept_id, user_id, position_id, include_mode, status, round_no,
+                             asked_by, asked_at, replied_by, reply_content, receive_date, return_date, sort_order)
+                          VALUES (?,?,?,?,0,'Returned',?,?,?,?,?,?,?,?)")
+               ->execute([$id, $deptId, $userId ?: $bfBy, $posId ?: null, $round, $uid,
+                          $bfOn . ' 09:00:00', $bfBy, mb_substr($bfReply, 0, 2000),
+                          $bfOn . ' 09:00:00', qab_backfill_time($db, $o, $bfOn), $round]);
+            $db->commit();
+            $log($id, 'round_backfill', '', $deptName . '：' . mb_substr($bfReply, 0, 120));
+            jout(true, ['order' => qab_order($db, $id)]);
+        }
         $db->prepare("INSERT INTO qa_abnormal_order_flow
                         (abnormal_order_id, dept_id, user_id, position_id, include_mode, status, round_no, asked_by, asked_at, sort_order)
                       VALUES (?,?,?,?,0,'Pending',?,?,NOW(),?)")
@@ -666,8 +703,9 @@ case 'settings_get': {
         'gm_opts'   => qab_options($db, 'gm', false),
         'deciders'  => qab_decider_cfgs($db, 'decider', false),
         'tops'      => qab_decider_cfgs($db, 'top', false),
-        'rate'      => qab_default_rate($db),
-        'can_admin' => $perms['canAdmin'],
+        'rate'          => qab_default_rate($db),
+        'backfill_days' => qab_backfill_days($db),
+        'can_admin'     => $perms['canAdmin'],
     ]);
 }
 
@@ -798,6 +836,51 @@ case 'decider_people': {   // 設定畫面上即時顯示「這一列目前涵�
     jout(true, ['rows' => []]);
 }
 
+/* ═══════════ 補資料：逐格指定簽章人員與印章日期 ═══════════ */
+case 'sign_set': {
+    $o = $mustOrder((int)($_POST['id'] ?? 0));
+    if (!$perms['canBackfill']) jerr('只有「異常單管理員」可以補登簽章');
+    if (empty($o['is_backfill'])) {
+        jerr('這張單的日期在最近 ' . qab_backfill_days($db) . ' 天內，不算補資料；請由各關卡的人自己按簽章鈕');
+    }
+    $slots = qab_sign_slots();
+    $slot  = (string)($_POST['slot'] ?? '');
+    if (!isset($slots[$slot])) jerr('不支援的簽章格');
+    $col = $slots[$slot];
+
+    if (!empty($_POST['clear'])) {
+        $db->prepare("UPDATE qa_abnormal_order SET {$col['by']}=NULL, {$col['at']}=NULL WHERE id=?")->execute([(int)$o['id']]);
+        $log((int)$o['id'], 'sign_' . $slot, (string)($o['signs'][$slot]['name'] ?? ''), '（清除）');
+        jout(true, ['order' => qab_order($db, (int)$o['id'])]);
+    }
+
+    $who  = (int)($_POST['user_id'] ?? 0);
+    $date = trim((string)($_POST['date'] ?? ''));
+    if ($who <= 0) jerr('請選擇補章人員');
+    if (!preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $date)) jerr('請選擇印章日期');
+    if ($date > date('Y-m-d')) jerr('印章日期不可以是未來');
+    // ai-rules/22：補歷史單據一律以「單據當時」判定在職，當時在職、現已離職的人也要選得到
+    if (!qab_user_asof_ok($db, $who, $date)) jerr('選擇的人員在 ' . $date . ' 並不在職，請改選當時在職的人');
+
+    $ts = qab_backfill_time($db, $o, $date);
+    $db->prepare("UPDATE qa_abnormal_order SET {$col['by']}=?, {$col['at']}=?, updated_by=?, updated_at=NOW() WHERE id=?")
+       ->execute([$who, $ts, $uid, (int)$o['id']]);
+    $log((int)$o['id'], 'sign_' . $slot, '', $date . ' #' . $who);
+    jout(true, ['order' => qab_order($db, (int)$o['id'])]);
+}
+
+case 'people_asof': {   // 補登用的人員清單：以該日期回推當時在職者與當時的部門職稱（ai-rules/22 第5坑）
+    $date = trim((string)($_GET['date'] ?? ''));
+    if (!preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $date)) $date = date('Y-m-d');
+    $rows = eg_people_list_asof($db, ['all_posts' => true], $date);
+    $out = [];
+    foreach ($rows as $r) {
+        $out[] = ['id' => (int)$r['id'], 'name' => $r['user_cname'],
+                  'dept_name' => $r['dept_name'], 'position_name' => $r['position_name']];
+    }
+    jout(true, ['rows' => $out, 'date' => $date]);
+}
+
 case 'positions': {
     $rows = $db->query("SELECT id, name AS position_name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     jout(true, ['rows' => $rows]);
@@ -822,7 +905,12 @@ case 'setting_save': {
     $rate = $numOrNull($_POST['surcharge_rate'] ?? '');
     if ($rate === null || $rate <= 0 || $rate > 10) jerr('加成預設值請填大於 0 的倍數（例 1.1 表示 ×110%）');
     qab_setting_set($db, 'surcharge_rate', $rate);
-    jout(true, ['rate' => $rate]);
+    if (array_key_exists('backfill_days', $_POST)) {
+        $bd = (int)$_POST['backfill_days'];
+        if ($bd < 0 || $bd > 3650) jerr('補資料天數請填 0~3650');
+        qab_setting_set($db, 'backfill_days', $bd);
+    }
+    jout(true, ['rate' => $rate, 'backfill_days' => qab_backfill_days($db)]);
 }
 
 default:

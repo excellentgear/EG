@@ -29,6 +29,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
             : ($perms['canGm'] ? '最終決策者' : ($perms['canDecide'] ? '決策主管'
             : ($perms['canCreate'] ? '開單／填寫' : ($perms['canView'] ? '檢閱' : '無權限')))));
 $thisYear = (int)date('Y');
+$backfillDays = qab_backfill_days($db);
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -206,7 +207,8 @@ $thisYear = (int)date('Y');
                     <input type="hidden" id="n_ir_id"></div>
                 <div class="fld" id="nBomBox"><label>製令編號 <span style="color:var(--coral)" id="nBomReq">*</span></label>
                     <input type="text" id="n_bom" autocomplete="off" placeholder="輸入製令／料號／客戶搜尋"></div>
-                <div class="fld"><label>客戶</label><input type="text" id="n_client"></div>
+                <div class="fld"><label>客戶 <span class="muted-help">（由來源自動綁定）</span></label>
+                    <input type="text" id="n_client" readonly style="background:#F5F0E8;"></div>
                 <div class="fld"><label>料號</label><input type="text" id="n_part"></div>
                 <div class="fld"><label>批量</label><input type="number" id="n_batch"></div>
                 <div class="fld"><label>檢驗數</label><input type="number" id="n_insp"></div>
@@ -214,6 +216,7 @@ $thisYear = (int)date('Y');
             </div>
             <div class="fld" style="margin-top:8px;"><label>異常現象（可之後再補）</label>
                 <textarea id="n_phe" rows="3" style="width:100%;border:1px solid var(--line);border-radius:4px;padding:4px 6px;"></textarea></div>
+            <div id="newBf" class="note-box" style="display:none;border-color:var(--amber-d);background:#FFF6E8;"></div>
             <div class="err" id="newErr"></div>
         </div>
         <div class="m-ft">
@@ -285,8 +288,11 @@ $thisYear = (int)date('Y');
             <div class="tabp" id="tab-etc" style="display:none;">
                 <div class="fgrid">
                     <div class="fld"><label>扣款「加成」預設值（1.1＝總金額×110%）</label><input type="number" step="0.01" id="cfgRate"></div>
+                    <div class="fld"><label>補資料天數（今日往前幾天以前算補資料）</label><input type="number" id="cfgBfDays"></div>
                 </div>
-                <div class="muted-help" style="margin-top:4px;">新開的單會帶這個值，單張仍可自行修改。</div>
+                <div class="muted-help" style="margin-top:4px;">加成：新開的單會帶這個值，單張仍可自行修改。<br>
+                    補資料天數：填寫日期在「今天往前這麼多天」以前的單，會多出「補登簽章」區，
+                    由<b>異常單管理員</b>指定當時的簽章人員與印章日期（預設 10 天）。</div>
                 <div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:10px;">
                     <div class="fld"><label>AS 文件綁定（表頭表單名稱與頁尾編號由此推導）</label>
                         <div style="display:flex;gap:8px;align-items:center;">
@@ -316,6 +322,13 @@ $thisYear = (int)date('Y');
                 <li><b>進入處理</b>：點該列「處理」。填寫、徵詢相關單位意見、決策、總經理裁示、扣款確認、結案都在那一頁。</li>
                 <li><b>列印</b>：點「列印」開出照紙本版面的正式表單（公司全名、表單名稱、AS 編號與版次都自動帶）。</li>
             </ul>
+            <h4>補舊資料</h4>
+            <ul>
+                <li>填寫日期在<b>今天往前 N 天（預設 10 天，可在設定調整）以前</b>的單，系統自動視為「補資料」。</li>
+                <li>補資料的單在處理頁會多出<b>「補登簽章」</b>區：<b>只有「異常單管理員」</b>可以逐格指定
+                    <b>當時是誰簽的、印章蓋哪一天</b>；人員清單依印章日期回推當時在職者（當時在職、現已離職的人也選得到）。</li>
+                <li>補資料時的「相關單位意見」改成直接補登（填回覆人、回覆日期與內容），<b>不會發通知</b>。</li>
+            </ul>
             <h4>狀態怎麼判讀</h4>
             <ul>
                 <li><b>等待單位回覆</b>：已送出徵詢、對方還沒回。<b>待決策</b>：還沒勾處置方式也沒有裁示。</li>
@@ -326,7 +339,7 @@ $thisYear = (int)date('Y');
                 <li><b>異常原因分類</b>：最多三層，可停用；已被單子選過的不可刪除。</li>
                 <li><b>異常處置方式／總經理裁示</b>：選項可增修；「是報廢」旗標決定結案時要不要配發報廢單號，「轉總經理」旗標決定要不要通知最終決策者。</li>
                 <li><b>決策者</b>：設定可以做處置判定的「部門＋職稱」範圍，以及最高決策者的範圍。</li>
-                <li><b>其他設定</b>：扣款加成預設值、AS 文件綁定。</li>
+                <li><b>其他設定</b>：扣款加成預設值、<b>補資料天數</b>、AS 文件綁定。</li>
             </ul>
             <h4>權限角色</h4>
             <ul>
@@ -352,6 +365,7 @@ $thisYear = (int)date('Y');
 var API = '../../src/store/QaAbnormal_API.php';
 var CSRF = '<?= $CSRF ?>';
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
+var BF_DAYS = <?= (int)$backfillDays ?>;
 var CFG = null, DEPTS = [], POSITIONS = [];
 
 function esc(s){ return $('<div>').text(s == null ? '' : s).html(); }
@@ -403,9 +417,21 @@ $('#fYear,#fMonth,#fClosed,#fSource').on('change', load);
 $('#fKw').on('keydown', function(e){ if (e.key === 'Enter') load(); });
 
 /* ───────── 開新單 ───────── */
+function bfHint(){
+    var d = $('#n_date').val();
+    if (!d) { $('#newBf').hide(); return; }
+    var cut = new Date(); cut.setDate(cut.getDate() - BF_DAYS);
+    var isBf = d < cut.toISOString().slice(0, 10);
+    $('#newBf').toggle(isBf).html(!isBf ? '' :
+        ('<b><i class="fa fa-clock-o"></i> 這張會被視為補資料</b>（填寫日期在 ' + BF_DAYS
+         + ' 天以前）：建立後可以在處理頁的「補登簽章」逐格指定當時的簽章人員與印章日期，'
+         + '相關單位意見也會改成直接補登、不發通知。'));
+}
+$(document).on('change', '#n_date', bfHint);
 $('#btnNew').on('click', function(){
     $('#newErr').text('');
     $('#n_date').val(new Date().toISOString().slice(0, 10));
+    $('#newBf').hide();
     $('#n_ir,#n_ir_id,#n_bom,#n_client,#n_part,#n_batch,#n_insp,#n_ng,#n_phe').val('');
     openMask('newMask');
 });
@@ -457,6 +483,7 @@ function loadCfg(){
         if (!res || !res.success) { alert('載入設定失敗'); return; }
         CFG = res;
         $('#cfgRate').val(res.rate);
+        $('#cfgBfDays').val(res.backfill_days);
         renderCause(); renderOpts(); renderDec();
     }, 'json');
     if (!DEPTS.length) $.get(API, { action:'depts' }, function(res){ if (res && res.success) { DEPTS = res.rows; renderDec(); } }, 'json');
@@ -597,7 +624,10 @@ $(document).on('click', '.d-who', function(){
     }, 'json');
 });
 $('#btnSaveEtc').on('click', function(){
-    post('setting_save', { surcharge_rate:$('#cfgRate').val() }, function(){ alert('已儲存'); });
+    post('setting_save', { surcharge_rate:$('#cfgRate').val(), backfill_days:$('#cfgBfDays').val() }, function(res){
+        BF_DAYS = Number(res.backfill_days);
+        alert('已儲存');
+    });
 });
 $('#btnAsPick').on('click', function(){
     if (!window.EGAsDoc) { alert('AS 文件挑選器未載入'); return; }
