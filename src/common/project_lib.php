@@ -59,8 +59,9 @@ const PRJ_PHRASE_FIELDS = ['purpose' => '專案目的', 'goal_desc' => '專案�
 const PRJ_DOC_CHECKS = [
     'dev_eval' => ['產品開發評估表',     '/EGsystem/views/TD/td_dev_eval.php'],
     'pfmea'    => ['PFMEA',              '/EGsystem/views/TD/pfmea.php'],
-    'sop'      => ['SOP 作業標準書',     '/EGsystem/views/pages/master_data_management.php'],
-    'sip'      => ['SIP 檢驗標準書',     '/EGsystem/views/pages/master_data_management.php'],
+    // SOP／SIP 自 2026-09-21 起有專屬模組，連結直接帶 ?tab= 開在對應的分頁上（使用者交辦）
+    'sop'      => ['SOP 作業標準書',     '/EGsystem/views/QA/sop_sip.php?tab=sop'],
+    'sip'      => ['SIP 檢驗標準書',     '/EGsystem/views/QA/sop_sip.php?tab=sip'],
     'type_id'  => ['型態識別文件管制表', '/EGsystem/views/TD/type_id_ctrl_doc.php'],
     'ext_doc'  => ['外來文件清單',       '/EGsystem/views/Sales/external_doc_list.php'],
 ];
@@ -1744,6 +1745,8 @@ function prj_on_bom_created(PDO $db, string $bomNo, string $by = 'system'): void
  *   pfmea   ：pfmea_doc（同上）
  *   type_id ：type_id_ctrl_doc 的項目列有引用到該料號
  *   ext_doc ：外來文件清單有列（料號附件或報價附件，勾選 is_external_doc 的類別）
+ *   sop/sip ：SOP／SIP 模組（ss_doc）綁到該料號；SOP 另外接受「該料號的製程都有製程 SOP」，
+ *             模組裡查不到才退回舊路的料號附件標籤（詳見 prj_doc_sopsip_map）
  */
 function prj_doc_check(PDO $db, int $projectId): array
 {
@@ -1763,6 +1766,8 @@ function prj_doc_check(PDO $db, int $projectId): array
             $row[$k] = $ok ? 1 : 0;
             // 版次／編號：各表能給什麼就給什麼（使用者要的是版次管控，不分初版/定版）
             $row[$k . '_rev'] = is_array($v) ? (string)($v['rev'] ?? '') : '';
+            // 缺件也要講得出「差在哪裡」（製程 SOP 只涵蓋一部分時），否則畫面上只有一個 ✗
+            if (!$ok && !empty($have['_note'][$k][$dsPk])) $row[$k . '_rev'] = (string)$have['_note'][$k][$dsPk];
             if (!$ok) {
                 // 型態識別在首件通過前本來就還不該建立，這時不算缺件（免得一直亮紅字）
                 if ((PRJ_DOC_PHASE[$k] ?? 'any') === 'after' && !$passed) continue;
@@ -1776,7 +1781,103 @@ function prj_doc_check(PDO $db, int $projectId): array
 }
 
 /**
- * SOP／SIP 的判定來源＝料號附件的標籤（使用者拍板，比照外來文件清單的既有做法）：
+ * SOP／SIP 的判定來源①＝ SOP／SIP 模組（views/QA/sop_sip.php 的 ss_doc／ss_ver）。
+ * 2026-09-21 使用者交辦「文件檢核的 SOP／SIP 要連動到新的 sop_sip.php」，故改以模組為主、
+ * 原本的料號附件標籤為輔（舊資料是掃描檔掛標籤，不能因為改口徑就整批變成未建立＝鐵律4）。
+ *
+ * **SOP 與 SIP 的組織方式本來就不同，不可以套同一條規則**（實測現況）：
+ *   SIP ── 一個料號一份，18 份全部 scope='part' 綁在料號主檔 id 上 → 有綁到這個料號就算有。
+ *   SOP ── 製造製程說明書是**跟著製程走、跨料號共用**的（16 份全部 scope='general'），
+ *          所以除了「綁到這個料號的 SOP」之外，也接受「這個料號用到的製程都有製程 SOP」
+ *          ＝ project_process 的製程逐一比對 ss_doc.process_no；只涵蓋一部分仍算缺件，
+ *          但會把「n/m、缺哪幾個製程」帶回畫面（note），否則使用者只看到 ✗ 不知道差在哪裡。
+ * 料號比對一律**主鍵優先**（part_d_id），沒有主鍵的才退回料號文字——同一個料號文字在 d_setting
+ * 常常有好幾筆、分屬不同客戶（記憶 bom_client_name_cache 同一條）。
+ *
+ * 回傳 ['sop'=>[ds_pk=>['rev'=>…]], 'sip'=>[…], 'note'=>['sop'=>[ds_pk=>'說明文字']]]
+ */
+function prj_doc_sopsip_map(PDO $db, array $dsPks, array $noOf): array
+{
+    $out = ['sop' => [], 'sip' => [], 'note' => ['sop' => [], 'sip' => []]];
+    if (!$dsPks) return $out;
+    try {
+        // 模組尚未建表（還沒啟用）時直接回空，交給料號附件標籤那條舊路，絕不讓例外影響文件檢核
+        if (!$db->query("SHOW TABLES LIKE 'ss_doc'")->fetchColumn()) return $out;
+        require_once __DIR__ . '/sopsip_lib.php';
+        $stLab = function_exists('ss_statuses') ? ss_statuses() : [];
+
+        $in     = implode(',', array_fill(0, count($dsPks), '?'));
+        $nos    = array_values(array_unique(array_filter($noOf)));
+        $inNo   = $nos ? implode(',', array_fill(0, count($nos), '?')) : '';
+        $pkOfNo = [];
+        foreach ($noOf as $pk => $no) if ($no !== '') $pkOfNo[$no][] = (int)$pk;
+
+        /* ① 綁到料號的文件（SOP／SIP 都算）；同一個料號可能有好幾份（不同製程各一份） */
+        $sql = "SELECT d.kind, d.part_d_id, d.part_no_text, d.proc_name, v.ver_no, v.status
+                FROM ss_doc d
+                LEFT JOIN ss_ver v ON v.ver_id = d.cur_ver_id
+                WHERE d.is_deleted=0 AND d.scope='part'
+                  AND (d.part_d_id IN ($in)"
+                    . ($inNo ? " OR (d.part_d_id IS NULL AND d.part_no_text IN ($inNo))" : '') . ")";
+        $st = $db->prepare($sql);
+        $st->execute($inNo ? array_merge($dsPks, $nos) : $dsPks);
+        $bucket = ['sop' => [], 'sip' => []];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $k    = ((string)$r['kind'] === 'sip') ? 'sip' : 'sop';
+            $pks  = [];
+            if (!empty($r['part_d_id'])) $pks[] = (int)$r['part_d_id'];
+            else foreach ($pkOfNo[(string)($r['part_no_text'] ?? '')] ?? [] as $pk) $pks[] = $pk;
+            foreach ($pks as $pk) $bucket[$k][$pk][] = $r;
+        }
+        foreach ($bucket as $k => $byPk) {
+            foreach ($byPk as $pk => $docs) {
+                $first = $docs[0];
+                $ver   = trim((string)($first['ver_no'] ?? ''));
+                $stat  = (string)($first['status'] ?? '');
+                $rev   = count($docs) > 1
+                    ? (count($docs) . ' 份')
+                    : (($ver !== '' ? 'Ver.' . $ver : '')
+                       . ($stat !== '' && $stat !== 'approved' ? '（' . ($stLab[$stat] ?? $stat) . '）' : ''));
+                $out[$k][$pk] = ['rev' => $rev];
+            }
+        }
+
+        /* ② 製程 SOP：這個料號用到的製程，是不是每一個都有一份製程說明書 */
+        $covered = [];
+        foreach ($db->query("SELECT DISTINCT process_no FROM ss_doc
+                             WHERE is_deleted=0 AND kind='process'
+                               AND process_no IS NOT NULL AND process_no>0")->fetchAll(PDO::FETCH_COLUMN) as $p) {
+            $covered[(int)$p] = true;
+        }
+        $need = [];
+        $st = $db->prepare("SELECT DISTINCT ds_pk, process_no, process_name FROM project_process
+                            WHERE ds_pk IN ($in) AND process_no IS NOT NULL AND process_no>0");
+        $st->execute($dsPks);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $need[(int)$r['ds_pk']][(int)$r['process_no']] = trim((string)($r['process_name'] ?? ''));
+        }
+        foreach ($need as $pk => $procs) {
+            if (!empty($out['sop'][$pk])) continue;          // 已經有綁這個料號的 SOP，不必再看製程
+            $m = count($procs); $n = 0; $lack = [];
+            foreach ($procs as $no => $nm) {
+                if (!empty($covered[$no])) { $n++; continue; }
+                $lack[] = $nm !== '' ? $nm : ('製程' . $no);
+            }
+            if ($n >= $m && $m > 0) {
+                $out['sop'][$pk] = ['rev' => '製程 SOP ' . $n . '/' . $m];
+            } else {
+                $out['note']['sop'][$pk] = '製程 SOP ' . $n . '/' . $m . '，缺：'
+                    . implode('、', array_slice($lack, 0, 3)) . (count($lack) > 3 ? ' 等' : '');
+            }
+        }
+    } catch (Throwable $e) {
+        // 判定不出來時一律當「模組裡沒有」，由料號附件標籤那條舊路接手
+    }
+    return $out;
+}
+
+/**
+ * SOP／SIP 的判定來源②（輔）＝料號附件的標籤（比照外來文件清單的既有做法）：
  * 哪些標籤算 SOP／SIP 由 quotation_file_categories.is_sop / is_sip 逐標籤勾選，
  * **不在程式裡寫死標籤名稱**（鐵律4）。版次取該標籤下最新一份附件的版次欄位（沒有就給檔名日期）。
  */
@@ -1864,8 +1965,16 @@ function prj_doc_have_map(PDO $db, array $dsPks): array
     } catch (Throwable $e) {
     }
 
-    $have['sop'] = prj_doc_attach_flag_map($db, $dsPks, 'is_sop');
-    $have['sip'] = prj_doc_attach_flag_map($db, $dsPks, 'is_sip');
+    /* SOP／SIP：以 SOP／SIP 模組為主，模組裡查不到才退回料號附件標籤（舊資料是掃描檔掛標籤） */
+    $ss = prj_doc_sopsip_map($db, $dsPks, $noOf);
+    foreach (['sop' => 'is_sop', 'sip' => 'is_sip'] as $k => $flagCol) {
+        $have[$k] = $ss[$k];
+        foreach (prj_doc_attach_flag_map($db, $dsPks, $flagCol) as $pk => $v) {
+            if (empty($have[$k][$pk])) $have[$k][$pk] = $v;
+        }
+    }
+    // 缺件時的補充說明（例：製程 SOP 3/8，缺哪幾個製程）。key 以底線開頭＝不是檢核項目
+    $have['_note'] = $ss['note'];
 
     // 外來文件：類別來源與外來文件清單同一處（quotation_file_categories.is_external_doc=1），
     // 附件的類別存成 CSV 欄位 category_ids，故用 FIND_IN_SET 比對（比照 type_id_ctrl_lib 既有寫法，

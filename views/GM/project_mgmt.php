@@ -211,6 +211,7 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         .chk-before { color:#C4442D; font-size:11px; font-weight:bold; }
         .chk-after  { color:#8A5A2B; font-size:11px; font-weight:bold; }
         .chk-n { color:#DD5138; font-weight:bold; cursor:pointer; text-decoration:underline; }
+        .chk-go { cursor:pointer; text-decoration:underline; }
         .pj-alertbar { border:1.5px solid #F0A24B; background:#FDF3E4; border-radius:6px; padding:8px 12px;
             margin-bottom:10px; font-size:13px; color:#5b3a1e; }
         .pj-alertbar .it { display:block; padding:2px 0; border-bottom:1px dashed #EADFC8; }
@@ -660,9 +661,19 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
 
         <h4>七、文件檢核（自動提醒）</h4>
         <ul>
-            <li>「文件檢核」分頁列出專案內<b>每個料號 × 四份技術文件</b>的有無：
-                <b>產品開發評估表（2-TD-02-01）／型態識別文件管制表／PFMEA（3-TD-01-02）／外來文件清單</b>。
-                缺的顯示紅色 ✗，<b>點下去直接開對應頁面並帶入該料號</b>。</li>
+            <li>「文件檢核」分頁列出專案內<b>每個料號 × 六份技術文件</b>的有無：
+                <b>產品開發評估表（2-TD-02-01）／PFMEA（3-TD-01-02）／SOP 作業標準書／SIP 檢驗標準書／
+                型態識別文件管制表／外來文件清單</b>。
+                缺的顯示紅色 ✗，<b>點下去直接開對應頁面並帶入該料號</b>；<b>✓ 也可以點</b>，用來開啟該文件所在的頁面。</li>
+            <li><b>SOP／SIP 看的是「作業標準書 SOP／標準檢驗指導書 SIP」那一頁</b>（<code>views/QA/sop_sip.php</code>），
+                點下去會<b>自動開在對應的分頁</b>（SOP 欄開 SOP 分頁、SIP 欄開 SIP 分頁）並帶入料號查詢。判定方式：
+                <ul>
+                    <li><b>SIP</b>＝有<b>綁到這個料號</b>的檢驗指導書（同一個料號不同製程各一份時顯示份數）。</li>
+                    <li><b>SOP</b>＝有綁到這個料號的作業標準書，<b>或</b>這個料號用到的<b>製程全部都有製程 SOP</b>
+                        —— 製造製程說明書本來就是跟著製程走、跨料號共用的。只涵蓋一部分時仍算缺件，
+                        並會標出「製程 SOP n/m、缺哪幾個製程」。</li>
+                    <li>舊資料若是掃描檔掛在<b>料號附件</b>（附件標籤勾了 SOP／SIP）一樣算數。</li>
+                </ul></li>
             <li>反方向也會提醒：那四個頁面各自的<b>「建議建立清單／缺件偵測」</b>多了一個<b>「專案」來源</b>，
                 會列出「有專案、但這一頁還沒建立」的料號，可多選批次建立。</li>
             <li><b>結案時會強制檢核</b>：還有料號缺文件就擋下並列出缺什麼（管理員可強制略過；此行為可在模組設定關閉）。

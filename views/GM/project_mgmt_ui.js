@@ -1808,7 +1808,11 @@ function renderCheck(res) {
     var phase = (CUR && CUR.doc_phase) || META.doc_phase || {};
     var passed = !!(CUR && CUR.fai_pass_date);
     var h = '<p class="pj-hint">每個料號都應該有這些技術文件，<b>括號內是版次／編號</b>。'
-          + '<b>✗ 可以直接點下去開啟對應頁面、自動開建立跳窗並帶入已有資料</b>。<br>'
+          + '<b>✗ 可以直接點下去開啟對應頁面、自動開建立跳窗並帶入已有資料；✓ 點下去是開啟該文件所在的頁面</b>。<br>'
+          + 'SOP／SIP 看的是<b>作業標準書 SOP／標準檢驗指導書 SIP</b> 那一頁（點下去會自動開在對應的分頁上）：'
+          + 'SIP 是<b>綁到這個料號</b>的文件；SOP 因為製造製程說明書本來就跟著製程走、跨料號共用，'
+          + '所以「綁這個料號」或「這個料號用到的製程都有製程 SOP」都算；只涵蓋一部分時會標出 n/m 與缺哪幾個製程。'
+          + '舊資料若是掃描檔掛在料號附件（標籤勾了 SOP／SIP）一樣算數。<br>'
           + '欄名標 <b class="chk-before">［首件前］</b> 的（PFMEA／SOP／SIP）要在<b>送首件檢驗之前</b>備妥'
           + '——首件驗證的就是這套製程與這份文件，沒有它們就沒有判定依據（AS9102／AS9145）；'
           + '標 <b class="chk-after">［首件後］</b> 的（型態識別文件管制表）等首件<b>通過之後</b>再建立，'
@@ -1828,13 +1832,17 @@ function renderCheck(res) {
         $.each(defs, function (k, d) {
             var ph = phase[k] || 'any', rev = r[k + '_rev'] || '';
             if (num(r[k])) {
-                h += '<td><span class="chk-y">✓ 已建立</span>'
+                /* 已建立的也可以點——點下去開對應頁面並帶料號過去查（SOP／SIP 會自動開在該分頁上） */
+                h += '<td><span class="chk-y chk-go" data-go="' + esc(d[1]) + '" data-kw="' + esc(r.part_no) + '"'
+                  + ' title="開啟' + esc(d[0]) + '">✓ 已建立</span>'
                   + (rev ? '<br><span class="pj-hint">' + esc(rev) + '</span>' : '') + '</td>';
             } else if (ph === 'after' && !passed) {
                 h += '<td><span class="pj-hint" title="首件通過後才需要建立">－ 首件通過後</span></td>';
             } else {
                 h += '<td><span class="chk-n" data-go="' + esc(d[1]) + '" data-kw="' + esc(r.part_no) + '"'
                   + ' data-doc="' + esc(k) + '" data-ds="' + num(r.ds_pk) + '">✗ 未建立</span>'
+                  /* 缺件也要講得出差在哪裡：製程 SOP 只涵蓋一部分時後端會把 n/m 與缺的製程帶回來 */
+                  + (rev ? '<br><span class="pj-hint">' + esc(rev) + '</span>' : '')
                   + (ph === 'before' ? '<br><span class="chk-before">送首件前應備</span>' : '') + '</td>';
             }
         });
@@ -1843,11 +1851,20 @@ function renderCheck(res) {
     h += '</tbody></table></div>';
     $('#paneChk').html(h);
 }
+/** 目標頁的路徑本身可能已經帶參數（SOP／SIP 是 sop_sip.php?tab=sop），接參數前要先看有沒有 ? */
+function chkUrl(go, qs) {
+    go = String(go || '');
+    return go + (go.indexOf('?') >= 0 ? '&' : '?') + qs;
+}
+/** 已建立：只帶料號過去查，不開建立跳窗 */
+$(document).on('click', '.chk-go', function () {
+    window.open(chkUrl($(this).data('go'), 'kw=' + encodeURIComponent($(this).data('kw'))), '_blank');
+});
 $(document).on('click', '.chk-n', function () {
     /* 除了帶料號過去搜尋，另外帶 prj_new=1 與專案資訊：
        目標頁看到這組參數就自動開「建立」跳窗並把已知的資料預填進去（使用者要求）。 */
     var p = CUR ? CUR.project : {};
-    var q = '?kw=' + encodeURIComponent($(this).data('kw'))
+    var q = 'kw=' + encodeURIComponent($(this).data('kw'))
           + '&prj_new=1'
           + '&ds_pk=' + num($(this).data('ds'))
           + '&doc=' + encodeURIComponent($(this).data('doc') || '')
@@ -1856,7 +1873,7 @@ $(document).on('click', '.chk-n', function () {
           + '&project_name=' + encodeURIComponent(p.project_name || '')
           + '&customer_id=' + encodeURIComponent(p.customer_id || '')
           + '&fai_date=' + encodeURIComponent((CUR && CUR.fai_pass_date) || '');
-    window.open($(this).data('go') + q, '_blank');
+    window.open(chkUrl($(this).data('go'), q), '_blank');
 });
 
 /* ══════════════════════════ 會簽／核准 ══════════════════════════ */
