@@ -191,31 +191,43 @@ case 'save_head': {
         $vendorName,
     ])));
 
+    /* 只更新「有送過來」的欄位（array_key_exists，本專案既有慣例）：
+       沒送＝呼叫端不打算動它 → 保留原值；送空字串＝真的要清空。
+       不這樣分的話，只想改責任單位的呼叫會把製令編號、客戶、現象一起清掉，而且完全不報錯。 */
+    $set = []; $par = [];
+    $put = function ($col, $val) use (&$set, &$par) { $set[] = "$col=?"; $par[] = $val; };
+    if ($fill !== '') $put('fill_date', $fill);
+    if ($occ !== '')  $put('occurrence_date', $occ);
+    if (array_key_exists('client_name', $_POST)) $put('client_name', $strOrNull($_POST['client_name'], 60));
+    if (array_key_exists('part_no', $_POST))     $put('part_no', $strOrNull($_POST['part_no'], 60));
+    if (array_key_exists('ir_no', $_POST))       $put('ir_no', $strOrNull($_POST['ir_no'], 30));
+    if (array_key_exists('bom_no', $_POST))      $put('bom_no', $strOrNull($_POST['bom_no'], 30));
+    if (array_key_exists('batch_qty', $_POST))   $put('batch_qty', $intOrNull($_POST['batch_qty']));
+    if (array_key_exists('insp_qty', $_POST))    $put('insp_qty', $intOrNull($_POST['insp_qty']));
+    if (array_key_exists('ng_qty', $_POST)) { $put('ng_qty', $intOrNull($_POST['ng_qty'])); $put('sqty', $intOrNull($_POST['ng_qty'])); }
+    if (array_key_exists('abnormal_phenomenon', $_POST)) $put('abnormal_phenomenon', $strOrNull($_POST['abnormal_phenomenon'], 2000));
+    if (array_key_exists('defect_detail', $_POST))       $put('defect_detail', $strOrNull($_POST['defect_detail'], 2000));
+    if (array_key_exists('qa_ps', $_POST))               $put('qa_ps', $strOrNull($_POST['qa_ps'], 2000));
+    if (array_key_exists('decider_cfg_id', $_POST))      $put('decider_cfg_id', $intOrNull($_POST['decider_cfg_id']));
+    if (array_key_exists('decider_user_id', $_POST))     $put('decider_user_id', $intOrNull($_POST['decider_user_id']));
+    // 責任單位是一組（製程＋廠商＋顯示字串＋廠內旗標），只要其中一個有送就整組一起寫
+    $respTouched = array_key_exists('resp_process_no', $_POST) || array_key_exists('responsible_vendor_id', $_POST);
+    if ($respTouched) {
+        $put('resp_process_no', $procNo);
+        $put('responsible_vendor_id', $vendorId);
+        $put('resp_is_internal', $isInternal);
+        $put('responsible_unit', $respUnit !== '' ? $respUnit : null);
+    }
+    $put('updated_by', $uid);
+
     $db->beginTransaction();
     try {
-        $db->prepare("UPDATE qa_abnormal_order SET
-                        fill_date=?, occurrence_date=?, client_name=?, part_no=?, ir_no=?, bom_no=?,
-                        batch_qty=?, insp_qty=?, ng_qty=?, sqty=?, abnormal_phenomenon=?, defect_detail=?, qa_ps=?,
-                        resp_process_no=?, responsible_vendor_id=?, resp_is_internal=?, responsible_unit=?,
-                        decider_cfg_id=?, decider_user_id=?, updated_by=?, updated_at=NOW()
-                      WHERE id=?")
-           ->execute([
-               $fill ?: $o['fill_date'], $occ ?: $o['occurrence_date'],
-               $strOrNull($_POST['client_name'] ?? '', 60), $strOrNull($_POST['part_no'] ?? '', 60),
-               $strOrNull($_POST['ir_no'] ?? '', 30), $strOrNull($_POST['bom_no'] ?? '', 30),
-               $intOrNull($_POST['batch_qty'] ?? ''), $intOrNull($_POST['insp_qty'] ?? ''),
-               $intOrNull($_POST['ng_qty'] ?? ''), $intOrNull($_POST['ng_qty'] ?? ''),
-               $strOrNull($_POST['abnormal_phenomenon'] ?? '', 2000),
-               $strOrNull($_POST['defect_detail'] ?? '', 2000),
-               $strOrNull($_POST['qa_ps'] ?? '', 2000),
-               $procNo, $vendorId, $isInternal, ($respUnit !== '' ? $respUnit : null),
-               $intOrNull($_POST['decider_cfg_id'] ?? ''), $intOrNull($_POST['decider_user_id'] ?? ''),
-               $uid, $id,
-           ]);
+        $par[] = $id;
+        $db->prepare("UPDATE qa_abnormal_order SET " . implode(', ', $set) . ", updated_at=NOW() WHERE id=?")->execute($par);
 
         // 責任單位－廠內部門／人員（只有廠內加工廠商才留；換成外包廠商時一律清掉，免得留著對不上的人）
-        $db->prepare("DELETE FROM qa_abnormal_resp WHERE order_id=?")->execute([$id]);
-        if ($isInternal) {
+        if ($respTouched) $db->prepare("DELETE FROM qa_abnormal_resp WHERE order_id=?")->execute([$id]);
+        if ($respTouched && $isInternal) {
             $people = json_decode((string)($_POST['resp_people'] ?? '[]'), true) ?: [];
             $ins = $db->prepare("INSERT IGNORE INTO qa_abnormal_resp (order_id,dept_id,user_id) VALUES (?,?,?)");
             foreach ($people as $p) {
@@ -278,7 +290,7 @@ case 'round_add': {
     $userId = (int)($_POST['user_id'] ?? 0);
     $posId  = (int)($_POST['position_id'] ?? 0);
     if ($deptId <= 0) jerr('請選擇要徵詢的部門');
-    $c = $db->prepare("SELECT department_name FROM department WHERE id=?"); $c->execute([$deptId]);
+    $c = $db->prepare("SELECT name FROM department WHERE id=?"); $c->execute([$deptId]);
     $deptName = (string)$c->fetchColumn();
     if ($deptName === '') jerr('選擇的部門不存在');
 
@@ -291,7 +303,7 @@ case 'round_add': {
     // 指定職稱時：該部門裡有沒有這個職稱的人
     $posName = '';
     if ($userId <= 0 && $posId > 0) {
-        $c = $db->prepare("SELECT position_name FROM position WHERE id=?"); $c->execute([$posId]);
+        $c = $db->prepare("SELECT name FROM position WHERE id=?"); $c->execute([$posId]);
         $posName = (string)$c->fetchColumn();
         if ($posName === '') jerr('選擇的職稱不存在');
         $c = $db->prepare("SELECT COUNT(*) FROM user_department_position_map m JOIN `user` u ON u.id=m.user_id
@@ -617,7 +629,7 @@ case 'search_bom': {
 }
 
 case 'depts': {
-    $rows = $db->query("SELECT id, department_name, parent_id FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $db->query("SELECT id, name AS department_name, parent_id FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     jout(true, ['rows' => $rows]);
 }
 
@@ -637,7 +649,7 @@ case 'dept_people': {
 
 case 'dept_positions': {
     $deptId = (int)($_GET['dept_id'] ?? 0);
-    $st = $db->prepare("SELECT DISTINCT p.id, p.position_name, p.sort_order
+    $st = $db->prepare("SELECT DISTINCT p.id, p.name AS position_name, p.sort_order
                         FROM user_department_position_map m
                         JOIN position p ON p.id = m.position_id
                         JOIN `user` u ON u.id = m.user_id AND u.state=1
@@ -787,7 +799,7 @@ case 'decider_people': {   // 設定畫面上即時顯示「這一列目前涵�
 }
 
 case 'positions': {
-    $rows = $db->query("SELECT id, position_name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $db->query("SELECT id, name AS position_name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     jout(true, ['rows' => $rows]);
 }
 

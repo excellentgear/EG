@@ -112,9 +112,12 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                    display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
         .rnd .bd { padding:8px 10px; font-size:13px; white-space:pre-wrap; }
         .rnd .hd .spacer { margin-left:auto; }
-        .tag { font-size:11px; border-radius:9px; padding:1px 8px; line-height:17px; display:inline-block; }
-        .tag-wait { background:var(--amber); color:#3b2a18; }
-        .tag-done { background:#DDEBD6; color:#2c5c2c; }
+        /* 類別名稱刻意不叫 .tag：Gentelella 的 custom.css 有一個全域 .tag 元件，
+           它的 .tag:after 會在右側畫一個 11px 的三角形（left:100% 絕對定位），
+           實測讓整頁多出 11px 橫向捲動，而且 color:#fff !important 會蓋掉暖色系配色。 */
+        .rtg { font-size:11px; border-radius:9px; padding:1px 8px; line-height:17px; display:inline-block; }
+        .rtg-wait { background:var(--amber); color:#3b2a18; }
+        .rtg-done { background:#DDEBD6; color:#2c5c2c; }
         /* 扣款表 */
         table.dtb { width:100%; border-collapse:collapse; font-size:12.5px; }
         table.dtb th, table.dtb td { border:1px solid var(--line); padding:3px 6px; }
@@ -739,7 +742,7 @@ function renderRounds(){
         var who = (r.department_name || '') + (r.position_name ? ('　' + r.position_name) : '') + (r.user_cname ? ('　' + r.user_cname) : '');
         h += '<div class="rnd"><div class="hd">'
            + '<b>第 ' + r.round_no + ' 輪</b> <span>' + esc(who) + '</span>'
-           + '<span class="tag ' + (done ? 'tag-done' : 'tag-wait') + '">' + (done ? '已回覆' : '等待回覆') + '</span>'
+           + '<span class="rtg ' + (done ? 'rtg-done' : 'rtg-wait') + '">' + (done ? '已回覆' : '等待回覆') + '</span>'
            + '<span class="spacer"></span>'
            + '<span class="muted-help">送出 ' + dispDate(r.asked_at) + (done ? ('　回覆 ' + dispDate(r.return_date) + '　' + esc(r.replied_name || '')) : '') + '</span>';
         if (!done && !o.is_closed) {

@@ -86,7 +86,7 @@ $deepPaths = array_values(array_filter($paths, function ($p) { return strpos($p,
 // 相關單位意見：已回覆的逐格列出，不足 4 格補空白格（維持表單樣子）
 $rounds = [];
 foreach ($o['rounds'] as $r) if (($r['status'] ?? '') === 'Returned') $rounds[] = $r;
-$slot = max(4, (int)ceil(count($rounds) / 2) * 2);
+$slot = max(2, (int)ceil(count($rounds) / 2) * 2);   // 一列兩格，最少留 2 格
 
 // 扣款明細：製程列彙總成一列（紙本只有「製程／其他／合計」三列），其他列逐筆印
 $procRows = []; $otherRows = [];
@@ -113,7 +113,7 @@ body { font-family:"Microsoft JhengHei","微軟正黑體",sans-serif; color:#000
 .head .en { font-size:9px; letter-spacing:.5px; }
 .head .tt { font-size:16px; font-weight:bold; letter-spacing:6px; margin-top:2px; }
 table.f { width:100%; border-collapse:collapse; table-layout:fixed; }
-table.f th, table.f td { border:1px solid #000; padding:2px 4px; vertical-align:middle;
+table.f th, table.f td { border:1px solid #000; padding:1px 4px; vertical-align:middle;
                          word-wrap:break-word; overflow-wrap:break-word; line-height:1.45; }
 table.f td.lb { text-align:center; font-weight:bold; background:#F3F3F3; }
 table.f td.c { text-align:center; }
@@ -123,9 +123,9 @@ table.f td.t { vertical-align:top; }
 .cb i { display:inline-block; width:11px; height:11px; border:1px solid #000; margin-right:3px;
         font-style:normal; font-size:10px; line-height:10px; text-align:center; vertical-align:-1px; }
 .vert { writing-mode:vertical-rl; text-orientation:upright; letter-spacing:4px; }
-.sig { text-align:center; min-height:56px; }
+.sig { text-align:center; }
 .sig .cap { font-size:10px; text-align:left; }
-.sigbox { display:flex; align-items:center; justify-content:center; min-height:52px; }
+.sigbox { display:flex; align-items:center; justify-content:center; }
 .note { font-size:10px; margin-top:3px; }
 .small { font-size:10px; color:#333; }
 .mem td { height:15px; }
@@ -212,7 +212,7 @@ svg.eg-stamp-tpl { height:auto !important; }
     <colgroup><col style="width:16%"><col><col style="width:26%"></colgroup>
     <tr>
         <td class="lb">異 常 現 象</td>
-        <td class="t" style="height:26mm;"><?= nl2br(h($o['abnormal_phenomenon'])) ?>
+        <td class="t" style="height:18mm;"><?= nl2br(h($o['abnormal_phenomenon'])) ?>
             <?php if (trim((string)$o['defect_detail']) !== ''): ?>
             <div class="small" style="margin-top:4px;">原因分析：<?= nl2br(h($o['defect_detail'])) ?></div>
             <?php endif; ?>
@@ -240,7 +240,7 @@ svg.eg-stamp-tpl { height:auto !important; }
     </tr>
     <tr>
         <td class="lb">處 置 說 明</td>
-        <td class="t" style="height:20mm;"><?= nl2br(h($o['disposition_note'])) ?></td>
+        <td class="t" style="height:13mm;"><?= nl2br(h($o['disposition_note'])) ?></td>
     </tr>
 </table>
 
@@ -258,7 +258,7 @@ svg.eg-stamp-tpl { height:auto !important; }
             $who  = $r ? trim((string)($r['replied_name'] ?: $r['user_cname'] ?? '')) : '';
         ?>
         <td class="c"><?= h($unit) ?></td>
-        <td class="t" style="height:17mm; position:relative;">
+        <td class="t" style="height:14mm; position:relative;">
             <?= nl2br(h($r['reply_content'] ?? '')) ?>
             <?php if ($r): ?>
             <div style="display:flex;justify-content:flex-end;align-items:flex-end;">
@@ -285,7 +285,7 @@ svg.eg-stamp-tpl { height:auto !important; }
             <div class="sigbox" data-stamp="<?= h($o['gm_name']) ?>" data-date="<?= h(d($o['gm_decided_at'])) ?>"></div>
         </td>
     </tr>
-    <tr><td class="t" style="height:16mm;"><?= nl2br(h($o['gm_note'])) ?></td></tr>
+    <tr><td class="t" style="height:12mm;"><?= nl2br(h($o['gm_note'])) ?></td></tr>
     <tr><td>矯正單號：<?= h($o['capa_order_no']) ?></td></tr>
 </table>
 
@@ -323,36 +323,32 @@ svg.eg-stamp-tpl { height:auto !important; }
     </tr>
 </table>
 <table class="f">
-    <colgroup><col style="width:6%"><col style="width:12%"><col style="width:12%"><col style="width:22%"><col style="width:20%"><col style="width:28%"></colgroup>
+    <colgroup><col style="width:6%"><col style="width:18%"><col style="width:14%"><col style="width:16%"><col style="width:18%"><col style="width:28%"></colgroup>
     <tr>
         <td class="lb" rowspan="2"><div class="vert">核准</div></td>
-        <td class="lb">核准 扣款 金額</td>
-        <td class="c">元/PCS</td>
+        <td class="lb">核准 扣款 金額 (元/PCS)</td>
         <td class="c"><?= h($o['deduct_unit_amt'] === null ? '' : money($o['deduct_unit_amt'])) ?></td>
-        <td class="lb">核准 (管理課 會計/主管)</td>
-        <td class="sig">
-            <div class="sigbox" data-stamp="<?= h($o['deduct_appr_name']) ?>" data-date="<?= h(d($o['deduct_appr_at'])) ?>"></div>
-        </td>
-    </tr>
-    <tr>
         <td class="lb">報廢單號</td>
         <td class="c" colspan="2"><b><?= h($o['scrap_no']) ?></b>
             <span class="small"><?= $o['scrap_no'] ? '' : '（不需另外開立報廢單）' ?></span></td>
-        <td class="lb">(生管) 簽章</td>
-        <td class="sig">
-            <div class="sigbox" data-stamp="<?= h($o['deduct_pm_name']) ?>" data-date="<?= h(d($o['deduct_pm_at'])) ?>"></div>
-        </td>
+    </tr>
+    <tr>
+        <td class="small" colspan="5">★此單號需登記至不合格品管制記錄表　
+            ★扣款確認表金額由生管填寫　★核准扣款金額由管理課 會計/主管 填寫</td>
     </tr>
 </table>
+<!-- 三個簽章並排：各佔一列的話，三個 91px 圖章就吃掉三分之一頁、整張表會變兩頁 -->
 <table class="f">
-    <colgroup><col style="width:52%"><col style="width:20%"><col style="width:28%"></colgroup>
+    <colgroup><col style="width:33.4%"><col style="width:33.3%"><col style="width:33.3%"></colgroup>
     <tr>
-        <td class="small">★此單號需登記至不合格品管制記錄表<br>
-            ★扣款確認表金額由生管填寫　★核准扣款金額由管理課 會計/主管 填寫</td>
+        <td class="lb">核准 (管理課 會計/主管)</td>
+        <td class="lb">(生管) 簽章</td>
         <td class="lb">(品管) 簽章</td>
-        <td class="sig">
-            <div class="sigbox" data-stamp="<?= h($o['deduct_qc_name']) ?>" data-date="<?= h(d($o['deduct_qc_at'])) ?>"></div>
-        </td>
+    </tr>
+    <tr>
+        <td class="sig"><div class="sigbox" data-stamp="<?= h($o['deduct_appr_name']) ?>" data-date="<?= h(d($o['deduct_appr_at'])) ?>"></div></td>
+        <td class="sig"><div class="sigbox" data-stamp="<?= h($o['deduct_pm_name']) ?>" data-date="<?= h(d($o['deduct_pm_at'])) ?>"></div></td>
+        <td class="sig"><div class="sigbox" data-stamp="<?= h($o['deduct_qc_name']) ?>" data-date="<?= h(d($o['deduct_qc_at'])) ?>"></div></td>
     </tr>
 </table>
 <?php endif; ?>
