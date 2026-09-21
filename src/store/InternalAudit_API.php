@@ -989,6 +989,80 @@ case 'check_create': {
     } catch (Throwable $e) { $db->rollBack(); jerr('建立失敗：' . $e->getMessage(), 500); }
 }
 
+case 'check_item_del': {
+    /* 刪除查檢表的某一列（2026-09-21 使用者要求：建好之後才發現多了一列，原本完全刪不掉）。
+       三道限制：①只有稽核員／管理員 ②**已結案的不給刪**（那是已經完成的稽核紀錄）
+       ③**已經開過不符合通知單／矯正單的那一列不給刪**——刪了那張 IA 單就變成孤兒，
+       仍然留在清單與稽核報告表裡卻找不到來源。 */
+    iaReqAudit($perms);
+    $kid = (int)($_POST['check_id'] ?? 0);
+    $iid = (int)($_POST['item_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM ia_check WHERE check_id=? AND COALESCE(is_deleted,0)=0");
+    $st->execute([$kid]); $k = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$k) jerr('找不到這張查檢表', 404);
+    if ((string)$k['status'] === 'done') jerr('這張查檢表已結案，要先取消結案才能增刪項目');
+    $st = $db->prepare("SELECT * FROM ia_check_item WHERE item_id=? AND check_id=?");
+    $st->execute([$iid, $kid]); $it = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$it) jerr('找不到這個項目', 404);
+    if ((int)($it['nc_id'] ?? 0)) jerr('這一列已經開過不符合通知單，請先到「不符合通知單」分頁刪除那張單');
+    if ((int)($it['car_id'] ?? 0)) jerr('這一列已經開過異常矯正處理單，不可刪除');
+    $db->beginTransaction();
+    try {
+        $db->prepare("DELETE FROM ia_check_item WHERE item_id=? AND check_id=?")->execute([$iid, $kid]);
+        ia_check_items_resort($db, $kid);
+        $db->prepare("UPDATE ia_check SET updated_at=NOW() WHERE check_id=?")->execute([$kid]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('刪除失敗：' . $e->getMessage(), 500); }
+    jout(['deleted' => true]);
+}
+
+case 'check_item_add': {
+    /* 在已建立的查檢表補上漏掉的項目（2026-09-21 使用者要求）。
+       題庫與建立當下用的是**同一支** ia_check_build_items()，不另外刻一份挑題邏輯；
+       這張表已經有的（同 ref_kind+ref_id）自動略過，不會出現兩列一樣的。 */
+    iaReqAudit($perms);
+    $kid = (int)($_POST['check_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM ia_check WHERE check_id=? AND COALESCE(is_deleted,0)=0");
+    $st->execute([$kid]); $k = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$k) jerr('找不到這張查檢表', 404);
+    if ((string)$k['status'] === 'done') jerr('這張查檢表已結案，要先取消結案才能增刪項目');
+    $pick = json_decode((string)($_POST['pick'] ?? '[]'), true);
+    $pick = is_array($pick) ? array_values(array_filter(array_map('intval', $pick))) : [];
+    if (!$pick) jerr('請至少勾選一個要加入的項目');
+
+    $kind = (string)$k['kind'];
+    $bankYear = ($kind === 'kpi') ? ia_kpi_audit_year((string)$k['check_date']) : (int)$k['year'];
+    $items = ia_check_build_items($db, $kind, $bankYear, $pick);
+
+    // 這張表已經有的就不要再加一次
+    $have = [];
+    $q = $db->prepare("SELECT ref_kind, ref_id FROM ia_check_item WHERE check_id=?");
+    $q->execute([$kid]);
+    foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $have[$r['ref_kind'] . ':' . (int)$r['ref_id']] = 1;
+
+    $added = 0; $skipped = 0;
+    $db->beginTransaction();
+    try {
+        $ins = $db->prepare("INSERT INTO ia_check_item (check_id, sort_order, is_header, col_a, col_b, col_c, col_d,
+                                 ref_kind, ref_id, result, evidence) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
+        $base = (int)$db->query("SELECT COALESCE(MAX(sort_order),0) FROM ia_check_item
+                                  WHERE check_id=" . (int)$kid)->fetchColumn();
+        foreach ($items as $it) {
+            if (!empty($it['is_header'])) continue;                   // 章節標題列不另外補
+            $key = $it['ref_kind'] . ':' . (int)$it['ref_id'];
+            if (isset($have[$key])) { $skipped++; continue; }
+            $have[$key] = 1; $added++;
+            $ins->execute([$kid, ++$base, 0, $it['col_a'], $it['col_b'], $it['col_c'], $it['col_d'],
+                           $it['ref_kind'], $it['ref_id'],
+                           ($it['result'] ?? '') ?: null, ($it['evidence'] ?? '') ?: null]);
+        }
+        ia_check_items_resort($db, $kid);
+        $db->prepare("UPDATE ia_check SET updated_at=NOW() WHERE check_id=?")->execute([$kid]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('加入失敗：' . $e->getMessage(), 500); }
+    jout(['added' => $added, 'skipped' => $skipped]);
+}
+
 case 'check_get': {
     iaReqView($perms);
     $kid = (int)($_GET['check_id'] ?? 0);
@@ -1197,13 +1271,25 @@ case 'check_save_items': {
            不必再用姓名去猜（同名同姓、離職重號都會猜錯）。 */
         $updWho = $db->prepare("UPDATE ia_check_item SET auditee_id=?, auditee_dept_id=?, auditee_position_id=?
                                  WHERE item_id=? AND check_id=?");
+        /* 受稽人不可以就是稽核人（2026-09-21 使用者要求）：自己稽核自己等於沒有稽核。
+           比對的是**人**不是職務——同一個人用不同職務出現也一樣不行。
+           稽核人可能在這一次存檔同時被換掉，所以要用「存檔後的那一位」來比。 */
+        $auditorUid = ($auditorSet === null)
+                    ? (int)($k['auditor_id'] ?? 0)
+                    : (empty($auditorSet['clear']) ? (int)$auditorSet['user_id'] : 0);
         foreach ($items as $it) {
             $iid = (int)($it['item_id'] ?? 0);
             if (!$iid) continue;
             if (array_key_exists('auditee_key', $it)) {
                 $ak = trim((string)$it['auditee_key']);
                 if ($ak === '') $updWho->execute([null, null, null, $iid, $kid]);
-                else { list($u, $d2, $p2) = ia_post_parse($ak); $updWho->execute([$u ?: null, $d2 ?: null, $p2 ?: null, $iid, $kid]); }
+                else {
+                    list($u, $d2, $p2) = ia_post_parse($ak);
+                    if ($auditorUid && (int)$u === $auditorUid)
+                        jerr('受稽人不可以是稽核人本人（' . ($k['auditor_name'] ?: '稽核人')
+                             . '）——自己稽核自己等於沒有稽核，請改指派別人');
+                    $updWho->execute([$u ?: null, $d2 ?: null, $p2 ?: null, $iid, $kid]);
+                }
             }
             $res = (string)($it['result'] ?? '');
             if (!in_array($res, ['', 'ok', 'ng'], true)) $res = '';
@@ -1215,6 +1301,16 @@ case 'check_save_items': {
                            array_key_exists('col_c', $it) ? mb_substr(trim((string)$it['col_c']), 0, 255) : null,
                            array_key_exists('col_d', $it) ? mb_substr(trim((string)$it['col_d']), 0, 255) : null,
                            $iid, $kid]);
+        }
+        /* 反過來也要擋：把稽核人換成某個已經是受稽人的人。
+           不擋的話，換完稽核人這張表就出現「自己稽核自己」而且完全看不出來。 */
+        if ($auditorSet !== null && empty($auditorSet['clear'])) {
+            $q = $db->prepare("SELECT COUNT(*) FROM ia_check_item
+                                WHERE check_id=? AND auditee_id=? AND COALESCE(is_header,0)=0");
+            $q->execute([$kid, (int)$auditorSet['user_id']]);
+            if ((int)$q->fetchColumn() > 0)
+                jerr('這張表裡已經有「' . $auditorSet['user_name'] . '」被指派為受稽人，'
+                     . '不能再把他設成稽核人（自己稽核自己）');
         }
         $db->prepare("UPDATE ia_check SET title=?, check_date=COALESCE(?, check_date), updated_at=NOW() WHERE check_id=?")
            ->execute([mb_substr(trim((string)($_POST['title'] ?? '')), 0, 150) ?: null, $ad, $kid]);

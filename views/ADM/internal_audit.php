@@ -572,6 +572,10 @@ $roleLabel = ia_role_label($perms);
                     <li><b>績效執行稽核查檢表（2-GM-06-03）</b>：稽核<b>去年一整年</b>的 KPI（2026 年建立＝稽核 2025 年度），<b>不分上下半年</b>。部門、指標、目標、受稽人（KPI 頁面設定的<b>擔當者</b>，兼任者取該指標登記部門的職稱）與<b>達成／沒達成全部自動判定</b>——該年度只要有<b>任一次</b>未達標就算沒達成。您只要確認建立日期與要查哪幾項。</li>
                 </ul>
                 判「不合格」的列按「開不符合單」、績效「沒達成」的列按「開矯正單」；表格上方會統計還有幾件沒開單，下方「<b>一鍵開立</b>」可一次全部開完。
+                <b>建好之後還可以增刪項目</b>（限結案前）：下方「<b>新增項目</b>」從題庫補上漏掉的（已經有的不會重複列出），
+                每一列最後面的垃圾桶可以刪掉那一列——<b>已經開過不符合通知單／矯正單的那一列不給刪</b>（刪了那張單會變成孤兒）。
+                <b>受稽人不可以是稽核人本人</b>，選到當下就會退回（自己稽核自己等於沒有稽核）。
+                <b>列印版的大標題是「種類名稱」</b>（系統稽核紀錄表／AS稽核查檢表／績效執行稽核查檢表），次別與日期印在標題下那一列。
                 <b>點下「不合格」當下開單鈕就會出現</b>，不必先存檔也不必重開這張表；改回「合格」就自動收掉（切換判定不會影響您在別欄已經打好、還沒存的字）。
                 <b>表頭會固定在上方</b>，往下捲仍看得到每一欄是什麼。</li>
             <li><b>④不符合通知單（2-GM-06-07）</b>：分四段填，各段只有該角色能填（見下）。系統會通知受稽單位主管，期限前與逾期會自動再提醒。</li>
@@ -1092,12 +1096,32 @@ $roleLabel = ia_role_label($perms);
     </div>
     <div class="ia-mfoot">
         <button data-close>關閉</button>
+        <button id="btnCheckAddItem"><i class="fa fa-plus"></i> 新增項目</button>
         <button id="btnCheckPrint"><i class="fa fa-print"></i> 列印</button>
         <button id="btnCheckAuto" class="btn-warm"><i class="fa fa-magic"></i> 一鍵開立</button>
         <button id="btnCheckReopen">取消結案</button>
         <button id="btnCheckSave">儲存</button>
         <button id="btnCheckDone" class="btn-warm">結案</button>
     </div>
+</div></div>
+
+<!-- ============================ 查檢表：補加項目（2026-09-21 使用者要求） ============================ -->
+<div class="ia-mask" id="ckAddMask"><div class="ia-modal">
+    <div class="ia-mhead"><h4><i class="fa fa-plus"></i> 新增查檢項目</h4><span class="x" data-close>&times;</span></div>
+    <div class="ia-mbody">
+        <div class="ia-hint">只列出<b>這張表還沒有的項目</b>；勾選後按「加入」會接在表格最後面，
+            存檔時會再依受稽人部門與表單編號自動重排。<b>已結案的查檢表不能增刪項目</b>（要先取消結案）。</div>
+        <div style="margin-bottom:6px;">
+            <input type="text" id="ckAddKw" data-eg-skip placeholder="輸入編號或名稱篩選…" style="width:260px;">
+            <span style="margin-left:8px;font-size:12px;color:#8a6d45;" id="ckAddCnt"></span>
+            <a href="javascript:void(0)" id="ckAddAll" style="margin-left:10px;font-size:12px;">全選目前顯示</a>
+            <a href="javascript:void(0)" id="ckAddNone" style="margin-left:8px;font-size:12px;color:#C4442D;">全部取消</a>
+        </div>
+        <div id="ckAddList" style="max-height:52vh;overflow:auto;border:1px solid #E8D5B5;border-radius:6px;
+             background:#fff;padding:6px 10px;font-size:13px;"></div>
+    </div>
+    <div class="ia-mfoot"><button data-close>取消</button>
+        <button id="btnCkAddGo" class="btn-warm">加入</button></div>
 </div></div>
 
 <!-- ============================ 稽核報告表：通知對象設定 ============================ -->
@@ -3743,7 +3767,7 @@ function openCheck(id){
         $('#ckDate').prop('readonly', ro);
         $('#ckTitleInput').prop('readonly', ro || !!autoTitle);
         $('#ckAuditor').prop('disabled', ro);
-        $('#btnCheckSave,#btnCheckDone').toggle(!ro);
+        $('#btnCheckSave,#btnCheckDone,#btnCheckAddItem').toggle(!ro);
         $('#btnCheckReopen').toggle(CHK.status==='done' && <?= $perms['canAdmin'] ? 'true' : 'false' ?>);
         renderCheckItems();
         renderCheckAutoBar(ro);
@@ -3768,6 +3792,34 @@ function fillCkAuditor(dateStr){
     });
 }
 $('#ckDate').on('change', function(){ fillCkAuditor($(this).val()); });
+/* 受稽人不可以是稽核人本人（2026-09-21 使用者要求）：自己稽核自己等於沒有稽核。
+   選到的當下就退回並說明，不要等到按儲存才報錯（後端同規則再擋一次＝鐵律8）。 */
+function ckAuditorUid(){ return String($('#ckAuditor').val()||'').split(':')[0] || ''; }
+/* 每一列「上一個合法的受稽人」。**不可以靠 focus 事件去記**——focus 不會冒泡，
+   委派綁定在不同 jQuery 版本行為不一致（實測就是沒被觸發，被擋下之後值還留在錯的人身上）。
+   改成渲染當下先記一份，之後每次合法變更再更新。 */
+var CK_WHO_PREV = {};
+$('#ckBody').on('change', '.ckWho', function(){
+    var id = $(this).data('id'), au = ckAuditorUid(), v = String($(this).val()||'');
+    if (!au || v.split(':')[0] !== au) { CK_WHO_PREV[id] = v; return; }
+    alert('受稽人不可以是稽核人本人（' + ($('#ckAuditor option:selected').text() || '稽核人') + '）。\n'
+        + '自己稽核自己等於沒有稽核，請改指派別人。');
+    $(this).val(CK_WHO_PREV[id] === undefined ? '' : CK_WHO_PREV[id]);
+});
+/* 換稽核人時，若這張表已經有人被指派成他自己，一樣要擋下來 */
+$('#ckAuditor').on('change', function(){
+    var au = ckAuditorUid();
+    if (!au) return;
+    var hit = [];
+    $('#ckBody .ckWho').each(function(){
+        if (String($(this).val()||'').split(':')[0] === au) hit.push(1);
+    });
+    if (hit.length) {
+        alert('這張表裡已經有 ' + hit.length + ' 列把這個人指派為受稽人，不能再把他設成稽核人。\n'
+            + '請先改掉那幾列的受稽人。');
+        fillCkAuditor($('#ckDate').val());
+    }
+});
 var CK_HEADS = {
     as:     ['項次','品質管理系統要求','建立的文件、表單','合格','不合格','所見證據或建議','備註'],
     system: ['序號','表單編號','表單名稱','受稽人','合格','不合格','備註（內稽不符合通知單編號）'],
@@ -3815,9 +3867,18 @@ function renderCheckItems(){
               + nameOptions(it.col_d)+'</select></td>'
               + '<td>'+okChk+'</td><td>'+ngChk+'</td><td>'+remark+ncBtn+'</td>';
         }
+        // 結案前可以刪除某一列（已開過不符合通知單／矯正單的不給刪，那張單會變孤兒）
+        if (!ro && CAN_AUDIT && !it.nc_id && !it.car_id) {
+            h = h.replace(/<\/td>$/, '<span class="ia-op danger" title="從這張查檢表刪除這一列"'
+                + ' onclick="delCheckItem(' + it.item_id + ',\'' + esc(String(it.col_b || it.col_a || '')).replace(/'/g, '') + '\')">'
+                + '<i class="fa fa-trash"></i></span></td>');
+        }
         h += '</tr>';
     });
     $('#ckBody').html(h);
+    // 記下每一列目前的受稽人，當作「選到稽核人本人被擋下時要還原成什麼」的基準
+    CK_WHO_PREV = {};
+    $('#ckBody .ckWho').each(function(){ CK_WHO_PREV[$(this).data('id')] = String($(this).val()||''); });
 }
 /* 點「不合格」當下就要看到「開不符合單」（2026-09-21 使用者回報：原本要按儲存、重開這張表才會出現）。
    刻意不整張重畫——備註、所見證據、受稽人那幾欄很可能已經打了字還沒存，重畫就會全部被洗掉；
@@ -3849,6 +3910,15 @@ function ncBtnHtml(it, ro){
         return '<span class="ia-op" onclick="newNcFromItem('+it.item_id+')"><i class="fa fa-plus"></i> 開不符合單</span>';
     return '';
 }
+/* 刪除這一列（2026-09-21 使用者要求：建好之後才發現多了一列，原本完全刪不掉）。
+   已開過單的那一列不給刪（刪了那張 IA 單會變孤兒），已結案的整張表都不給改。 */
+function delCheckItem(itemId, label){
+    if (!confirm('要從這張查檢表刪除「'+(label||('項目 '+itemId))+'」這一列嗎？\n刪除後已填的判定與備註也會一起消失。')) return;
+    $.post(API, {action:'check_item_del', check_id:CHK.check_id, item_id:itemId}, function(res){
+        if (!res.ok) { alert(res.error||'刪除失敗'); return; }
+        openCheck(CHK.check_id); loadChecks();
+    }, 'json');
+}
 /* 「可以自動建立的就自動建立，人工才要填的再提醒管理員」（2026-09-14 使用者要求）。
    這條提示列統計這張表還有幾件可以一鍵做掉、又有哪幾件一定要人工填。 */
 function renderCheckAutoBar(ro){
@@ -3871,6 +3941,69 @@ function renderCheckAutoBar(ro){
     $('#btnCheckAuto').toggle(!ro && pending.length>0 && k!=='as')
         .html('<i class="fa fa-magic"></i> 一鍵開立'+(k==='kpi'?'矯正單':'不符合通知單')+'（'+pending.length+'）');
 }
+/* ============================ 查檢表：補加項目（2026-09-21 使用者要求） ============================
+   題庫與建立查檢表時用的是**同一支 check_bank**，不另外刻一份挑題邏輯；
+   這張表已經有的（ref_kind+ref_id）在前端先濾掉，後端再擋一次重複（鐵律8）。 */
+var CK_ADD_ROWS = [];
+$('#btnCheckAddItem').on('click', function(){
+    if (!CHK) return;
+    var year = (CHK.kind==='kpi') ? '' : CHK.year;
+    $('#ckAddList').html('<div style="color:#a08356;">載入題庫中…</div>');
+    $('#ckAddKw').val(''); openMask('ckAddMask');
+    $.getJSON(API, {action:'check_bank', kind:CHK.kind, year:year || String(CHK.check_date||'').slice(0,4)}, function(res){
+        if (!res.ok) { $('#ckAddList').html('<div style="color:#C4442D;">'+esc(res.error||'載入失敗')+'</div>'); return; }
+        // 這張表已經有的就不要再列出來
+        var have = {};
+        (CHK.items||[]).forEach(function(x){ have[(x.ref_kind||'')+':'+(+x.ref_id||0)] = 1; });
+        CK_ADD_ROWS = (res.rows||[]).filter(function(r){
+            if (+r.is_header === 1) return false;                       // 章節標題列不給單獨加
+            return !have[ckBankRefKind()+':'+(+ckBankId(r))];
+        });
+        renderCkAdd();
+    });
+});
+/* 題庫每一種的 id 欄位與 ref_kind 名稱不同，收斂在這兩支，不要散在各處 */
+function ckBankRefKind(){
+    // 必須與 ia_check_build_items() 寫進 ia_check_item.ref_kind 的值一字不差，
+    // 不然「這張表已經有的」會濾不掉，補加時就會出現兩列一模一樣的項目
+    return CHK.kind==='as' ? 'as_clause' : (CHK.kind==='system' ? 'as_document' : 'kpi_indicator');
+}
+function ckBankId(r){
+    return CHK.kind==='as' ? r.clause_id : (CHK.kind==='system' ? r.id : r.indicator_id);
+}
+function ckBankLabel(r){
+    if (CHK.kind==='as')     return (r.clause_text||'');
+    if (CHK.kind==='system') return (r.doc_no||'') + '　' + (r.doc_name||'');
+    return (r.dept_name||'') + '　' + (r.name||'');
+}
+function renderCkAdd(){
+    var kw = String($('#ckAddKw').val()||'').trim().toLowerCase();
+    var shown = 0;
+    var h = CK_ADD_ROWS.map(function(r){
+        var lab = ckBankLabel(r), id = +ckBankId(r);
+        if (kw && lab.toLowerCase().indexOf(kw) < 0) return '';
+        shown++;
+        return '<label style="display:block;font-weight:normal;margin:2px 0;cursor:pointer;">'
+             + '<input type="checkbox" class="ckAddChk" data-eg-skip value="'+id+'" style="vertical-align:-1px;"> '
+             + esc(lab) + '</label>';
+    }).join('');
+    $('#ckAddList').html(h || '<div style="color:#a08356;">沒有可以加入的項目（題庫裡的項目這張表都已經有了）</div>');
+    $('#ckAddCnt').text('可加入 '+CK_ADD_ROWS.length+' 項'+(kw ? ('，符合「'+kw+'」'+shown+' 項') : ''));
+}
+$('#ckAddKw').on('input', renderCkAdd);
+$('#ckAddAll').on('click', function(){ $('#ckAddList .ckAddChk').prop('checked', true); });
+$('#ckAddNone').on('click', function(){ $('#ckAddList .ckAddChk').prop('checked', false); });
+$('#btnCkAddGo').on('click', function(){
+    var pick = $('#ckAddList .ckAddChk:checked').map(function(){ return +this.value; }).get();
+    if (!pick.length) { alert('請至少勾選一個要加入的項目'); return; }
+    $.post(API, {action:'check_item_add', check_id:CHK.check_id, pick:JSON.stringify(pick)}, function(res){
+        if (!res.ok) { alert(res.error||'加入失敗'); return; }
+        closeMask('ckAddMask');
+        alert('已加入 '+res.added+' 項'+(+res.skipped ? ('（略過 '+res.skipped+' 項已存在）') : ''));
+        openCheck(CHK.check_id); loadChecks();
+    }, 'json');
+});
+
 /* 一鍵開立：不合格／沒達成的列一次全部開單。
    不符合通知單的「不合格類型」是人工判斷，所以先問一次要用哪一種，其餘欄位（受稽單位、受稽人、
    相關表單編號、違反條文、事實描述）全部自動帶好；開完直接回到查檢表可逐張再修。 */
@@ -5605,10 +5738,15 @@ function printCheck(id){
         var k = res.row;
         withPrintMeta(k.kind, k.check_date || META.today,
                       {maker_id:k.auditor_id||'', maker_name:k.auditor_name||''}, function(m){
-            var h = printHead(m, k.title || m.doc_name);
+            /* 大標題印**種類名稱**（系統稽核紀錄表／AS稽核查檢表／績效執行稽核查檢表），
+               也就是清單上「種類」那一欄（2026-09-21 使用者要求）。
+               原本印的是 k.title（「第2次　2025.11.03」），那是次別與日期、不是表單名稱。
+               次別與日期改印在標題下方那一列，與稽核人、日期同一行。 */
+            var h = printHead(m, k.kind_label || m.doc_name || k.title);
             var d = String(k.check_date||'').split('-');
             h += '<div style="font-size:12px;margin-bottom:5px;overflow:hidden;">'
                + '<span>稽核人: '+esc(k.auditor_name||'')+'</span>'
+               + (k.title ? '<span style="margin-left:18px;">'+esc(k.title)+'</span>' : '')
                + '<span style="float:right;">'+(d[0]||'')+' 年 '+(d[1]||'')+' 月 '+(d[2]||'')+' 日</span></div>';
             h += '<table class="ia-p"><thead><tr>';
             var heads = (k.kind==='as')
