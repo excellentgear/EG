@@ -82,6 +82,25 @@ try {
         table.qs-item-table td.qs-chk-cell, table.qs-item-table th.qs-chk-cell { text-align:center; }
         .qs-err { color:#DD5138; font-size:11px; margin-top:2px; }
         .qs-warn { color:#a2703a; font-size:11px; margin-top:2px; }
+        /* 改成階梯數量計價：從搜尋修改跳窗裡再開一層，同一層會被蓋在後面看不到 */
+        #qsTierMask { z-index:1095; }
+        table.qs-tier-table { width:100%; border-collapse:collapse; font-size:12px; }
+        table.qs-tier-table th { background:#F7F4EE; color:#5b3a1e; padding:5px 6px; border-bottom:2px solid #E4C293;
+            text-align:left; white-space:nowrap; }
+        table.qs-tier-table td { padding:4px 6px; border-bottom:1px solid #F0E6D6; vertical-align:middle; }
+        table.qs-tier-table input { height:26px; padding:2px 5px; font-size:12px; }
+        table.qs-tier-table input.bad { border-color:#DD5138; background:#FFF6F3; }
+        .qs-tier-qty { width:92px; text-align:right; }
+        .qs-tier-price { width:100px; text-align:right; }
+        .qs-tier-sub { color:#5b3a1e; white-space:nowrap; }
+        .qs-tier-src { font-size:11px; color:#8a7a63; }
+        .qs-tier-sum { background:#FBF6EC; border:1px solid #E4C293; border-radius:6px; padding:6px 10px;
+            margin-top:8px; font-size:12px; color:#5b3a1e; }
+        .qs-tier-drop { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px;
+            margin-top:8px; font-size:11px; color:#6B471A; }
+        .qs-tier-drop b { color:#8A5A2B; }
+        /* 表格裡的小籤一定要自己指定 line-height（Gentelella 全站 td span{line-height:28px}） */
+        .qs-tier-keep { font-size:11px; line-height:16px; display:inline-block; }
         /* 「套用到這裡為止」的指定模式：滑到哪一組/哪一列就標出來，點下去＝以那裡為界 */
         .pick-mode .kw-group-head, #qaRows.pick-mode tr { cursor:crosshair; }
         .pick-mode .kw-group-head:hover { background:#F7E0BD; box-shadow:inset 0 -3px 0 #DD5138; }
@@ -355,7 +374,17 @@ try {
             <li><b>改料號文字會自動解除料號ID綁定</b>：料號一改就代表這一列指到的東西變了，原本綁的那筆料號主檔（圖面、檢驗標準）一定是錯的，所以系統會一併解除綁定並提醒您重新綁定——避免留下「料號寫 A、實際綁到 B」這種畫面上完全看不出來的錯。<b>例外</b>：改成的文字剛好與目前綁定的主檔料號相同（只是把文字補正回一致，大小寫不同也算），綁定會保留。動手前會先跳出確認視窗告訴您綁定將被解除。</li>
             <li><b>綁定／解除</b>：「綁定／重新綁定」開的是跟清單上同一個快速綁定跳窗（可搜尋、找不到可新建料號）；已綁定的列另有紅色「解除」鈕。綁定時料號文字會自動同步成主檔的料號，兩者不會分岔。</li>
             <li><b>製程標籤</b>：跟清單上同一套標籤選擇器（先選大類再點子標籤，點一下即存檔）。已轉正式的單不提供「帶入備註」——那是轉入前用來補齊製程的手段。</li>
-            <li><b>數量／數量單位</b>：數量直接改，單位由下拉選（選項與報價單管理頁同一份庫存單位主檔；<b>目前這一筆的單位一定保留在選項裡</b>，所以舊資料的單位不會被自動改掉）。改完按「儲存數量」，<b>這一筆的金額（數量×單價）與整張單的總金額會一併重算</b>，跳窗上方的總金額當場更新。<b>階梯報價</b>的項目數量是由各階距決定的，數量欄反灰不可改（只能改單位），要調整請至報價單管理頁改階梯。</li>
+            <li><b>數量／數量單位</b>：數量直接改，單位由下拉選（選項與報價單管理頁同一份庫存單位主檔；<b>目前這一筆的單位一定保留在選項裡</b>，所以舊資料的單位不會被自動改掉）。改完按「儲存數量」，<b>這一筆的金額（數量×單價）與整張單的總金額會一併重算</b>，跳窗上方的總金額當場更新。<b>階梯報價</b>的項目數量是由各階距決定的，數量欄反灰不可改（只能改單位），要調整階距請勾選該列、按下面說的「改成階梯數量計價」。</li>
+            <li><b>改成階梯數量計價</b>：舊匯入常把「分量計價」拆成<b>好幾列各自獨立的項目</b>（同一個料號，規格分別寫著 1-49、50-299、300-499、500以上），那其實是同一筆報價的幾段階距——而正式的階梯報價在系統裡只有一種形狀：<b>一筆項目＋多段階距</b>。
+                <div class="tip"><b>怎麼用</b>：把<b>同一個料號</b>的那幾列勾起來 → 按<b>「改成階梯數量計價」</b>。跳窗會依數量由小到大先把階距填好（<b>數量＝該階下限</b>，上限取「下一階下限 −1」，若規格文字裡的區間與該列數量對得起來則以規格為準），您可以逐欄改、加一階或刪一階（<b>在最後一列按 ↓ 也會自動加一列</b>）。<b>最後一階的數量上限留空＝無上限</b>。</div>
+                <ul>
+                    <li><b>只會留一列</b>：勾多列時要選「保留哪一列當階梯項目」（預設第一列；已經是階梯的那一列會優先留下），<b>留下來那一列的規格、料號ID綁定與製程標籤會被沿用</b>，其餘列收成階距後就不再是獨立項目——不收的話整張單的總金額會把同一批貨<b>重複算好幾次</b>。被收掉的列（料號、規格、數量、單價）會完整寫進變更紀錄，事後查得到，但<b>畫面上不能復原</b>，所以套用前會把那幾列一列一列列出來給您確認。</li>
+                    <li><b>已經綁了訂單的列</b>會在跳窗裡先標出來是哪幾張訂單，套用後<b>自動改綁到留下來的那一列</b>（訂單讀到的單價會變成「依訂購數量套用的階距單價」），不會留下指向已刪項目的死綁定。</li>
+                    <li><b>勾一列</b>＝把那一列轉成階梯；勾的若<b>已經是階梯</b>，現有階距會整組帶出來直接改（容差設定原樣保留），不必再跑一趟報價單管理頁。</li>
+                    <li><b>料號不同的列不給合併</b>（前端後端都擋）：階梯是「同一個料號在不同數量區間的價格」，治具、刀具那種不同料號的列不可以被收成階距。<b>階距也不可以重疊</b>，否則同一個訂購量會對到兩個單價。</li>
+                    <li><b>階梯項目的金額</b>＝各階「下限 × 單價」的加總（與報價單管理頁同一套算法），數量與單價欄一律歸零、改由各階距決定。</li>
+                </ul>
+            </li>
             <li><b>批次修改數量／單位</b>：整張舊單常常是「單位整批打錯」或「數量整批是 0」，一列一列改沒有意義。勾選要改的列（表頭勾選框＝全選，<b>按住 Shift 點第二格可連續選取一整段</b>），在表格上方填<b>數量</b>或選<b>單位</b>（<b>兩個都可以留空＝那一項不變更</b>），按「套用到勾選的 N 筆」。規則與單筆完全一樣，<b>驗不過的那幾筆只會被略過並列出原因</b>（例如階梯報價的數量），不會整批卡住；金額與總金額一次算完，變更紀錄只留一筆。<b>套用之後條件與勾選會自動清空</b>，避免接著又按一次、用的卻是上一批的條件。</li>
             <li><b>每一次修改都會寫進該報價單的變更紀錄</b>（誰、什麼時候、把什麼改成什麼），正式報價單的改動都追得到。</li>
             <li>尚待確認的單也可以用這個入口找、一樣改得動，改的與清單上是同一份資料（兩邊同時開著會一起更新）。</li>
@@ -698,6 +727,20 @@ try {
         <div id="qsDetail"></div>
     </div>
     <div class="m-foot"><button class="btn btn-default" onclick="closeQsEdit()">關閉</button></div>
+</div></div>
+
+<!-- 改成階梯數量計價（從搜尋修改跳窗裡再開一層）
+     舊匯入把「分量計價」拆成好幾列獨立項目，這裡把它們收成一筆項目＋多段階距 -->
+<div class="va-mask" id="qsTierMask"><div class="va-modal wide" style="max-width:1080px;">
+    <div class="m-head"><span><i class="fa fa-sort-amount-asc"></i> 改成階梯數量計價</span><span class="m-close" onclick="closeMask('qsTierMask')">✕</span></div>
+    <div class="m-body">
+        <div id="qsTierBody"></div>
+    </div>
+    <div class="m-foot">
+        <span id="qsTierErr" class="qs-err" style="float:left;text-align:left;max-width:640px;"></span>
+        <button class="btn btn-default" onclick="closeMask('qsTierMask')">取消</button>
+        <button class="btn btn-primary" id="qsTierApply"><i class="fa fa-check"></i> 套用</button>
+    </div>
 </div></div>
 
 <script src="../../resource/js/jquery.min.js"></script>
@@ -3192,12 +3235,13 @@ function qsQtyCell(it) {
     const qty  = String(it.quantity == null ? '' : it.quantity);
     const unit = String(it.unit || 'PCS');
     if (!CAN_EDIT) return escapeQt(qty) + ' ' + escapeQt(unit);
-    // 階梯報價的數量是由各階距決定的（報價單管理頁的數量欄本來就是反灰），這裡同樣只開放單位
+    // 階梯報價的數量是由各階距決定的（報價單管理頁的數量欄本來就是反灰），這裡同樣只開放單位；
+    // 要改階距請勾選該列後按「改成階梯數量計價」（同一個跳窗，不必再跑一趟報價單管理頁）
     const tiered = Number(it.is_tiered) === 1;
     return '<div class="qs-qty-wrap">' +
             '<input type="number" min="0" step="1" class="form-control input-sm qs-qty-in" ' +
                    'data-item="' + it.item_id + '" data-orig="' + escapeQt(qty) + '" value="' + escapeQt(qty) + '"' +
-                   (tiered ? ' disabled title="階梯報價的數量由各階距決定，請至報價單管理頁調整階梯"' : '') + '>' +
+                   (tiered ? ' disabled title="階梯報價的數量由各階距決定，勾選本列後按「改成階梯數量計價」即可調整階距"' : '') + '>' +
             '<select class="form-control input-sm qs-unit-in" data-item="' + it.item_id + '" ' +
                     'data-orig="' + escapeQt(unit) + '">' + qsUnitOptions(unit) + '</select>' +
         '</div>' +
@@ -3205,7 +3249,7 @@ function qsQtyCell(it) {
             '<button type="button" class="btn btn-primary btn-xs qs-qty-save" data-item="' + it.item_id + '" disabled>' +
                 '<i class="fa fa-save"></i> 儲存數量</button>' +
         '</div>' +
-        (tiered ? '<div class="qs-warn">階梯報價，數量不可改</div>' : '') +
+        (tiered ? '<div class="qs-warn">階梯報價，數量由階距決定（勾選本列可改階距）</div>' : '') +
         '<div class="qs-err" data-qerr="' + it.item_id + '"></div>';
 }
 
@@ -3258,10 +3302,16 @@ function qsBatchBarHtml() {
         '<span>單位 <select id="qsBatchUnit" class="form-control input-sm">' + uopt + '</select></span>' +
         '<button type="button" class="btn btn-warning btn-sm" id="qsBatchApply" disabled>' +
             '<i class="fa fa-check"></i> 套用到勾選的 <b id="qsBatchCnt">0</b> 筆</button>' +
+        '<button type="button" class="btn btn-success btn-sm" id="qsTierBtn" disabled ' +
+                'title="把勾選的那幾列收成一筆項目＋多段階距（同一個料號在不同數量區間的價格）">' +
+            '<i class="fa fa-sort-amount-asc"></i> 改成階梯數量計價 <b id="qsTierCnt">0</b></button>' +
         '<span id="qsBatchMsg">' + qsBatchMsgHtml + '</span>' +
         '<div class="qs-batch-hint">數量與單位<b>留空＝不變更</b>；' +
             '<b>階梯報價</b>的項目會自動略過數量（單位照樣改得動），做完會列出哪幾筆略過了。' +
-            '勾選框可按住 <b>Shift</b> 點第二格連續選取一整段。</div>' +
+            '勾選框可按住 <b>Shift</b> 點第二格連續選取一整段。<br>' +
+            '舊匯入常把「分量計價」拆成好幾列（1-49／50-299／300-499…），那其實是同一筆報價的幾段階距：' +
+            '把那幾列<b>同一個料號</b>的勾起來，按<b>改成階梯數量計價</b>就會收成一筆項目＋多段階距；' +
+            '勾<b>一列</b>則是把那一列轉成階梯，或改它現有的階距。</div>' +
         '</div>';
 }
 
@@ -3282,6 +3332,9 @@ function qsBatchSync() {
     else if (qsBatchMsgHtml) { $('#qsBatchMsg').html(qsBatchMsgHtml); }
     else { $('#qsBatchMsg').empty(); }
     $bar.prop('disabled', !!msg || ids.length === 0 || (qty === '' && unit === ''));
+    // 改成階梯：只看勾了幾列，與上面的數量／單位條件無關
+    $('#qsTierCnt').text(ids.length ? '（' + ids.length + '）' : '');
+    $('#qsTierBtn').prop('disabled', ids.length === 0);
     // 全選框：全部勾起來才打勾
     const $rows = $('.qs-row-chk');
     $('#qsChkAll').prop('checked', $rows.length > 0 && ids.length === $rows.length);
@@ -3366,6 +3419,390 @@ function qsBatchApply() {
                     ((res.skipped || []).length ? '、略過 ' + res.skipped.length + ' 筆' : ''));
     });
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// 改成階梯數量計價（2026-09-21 使用者交辦）
+//   舊匯入把「分量計價」拆成好幾列各自獨立的項目（同一個料號，規格寫著 1-49／50-299／300-499／500以上），
+//   那其實是同一筆報價的幾段階距。正式的階梯報價只有一種形狀＝**一筆項目＋多段階距**
+//   （與報價單管理頁的階梯模式同一份資料結構），所以勾選的那幾列會被收成階距、其餘列的項目就不再存在。
+//   ・勾一列＝把那一列轉成階梯，或改它現有的階距（已經是階梯的項目會把階距整組帶出來給人改，
+//     不必再跑一趟報價單管理頁——那一頁改完會動到簽核狀態）。
+//   ・驗證（下限整數、上限不可小於下限、階距不可重疊、只有最後一階可以無上限）前端即時做一次，
+//     後端 qsedit_tier_normalize() 以同一組規則再做一次（鐵律8）。
+// ════════════════════════════════════════════════════════════════════════
+let qsTierData = null;   // 後端回來的 { quote_id, quote_no, items[], orders{} }
+let qsTierRows = [];     // 畫面上的階距列
+let qsTierKeep = 0;      // 保留哪一列當階梯項目（其餘列會被收掉）
+
+$(document).on('click', '#qsTierBtn', function() { qsOpenTier(); });
+
+function qsOpenTier() {
+    const ids = qsBatchCheckedIds();
+    if (!ids.length) return;
+    qsTierData = null; qsTierRows = []; qsTierKeep = 0;
+    $('#qsTierErr').empty();
+    $('#qsTierApply').prop('disabled', true);
+    $('#qsTierBody').html('<div style="padding:14px;color:#999;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>');
+    openMask('qsTierMask');
+    $.post(API_URL, { action: 'qsedit_tier_info', item_ids: JSON.stringify(ids) }, function(res) {
+        if (!res.success) {
+            $('#qsTierBody').html('<div class="qs-err">' + escapeQt(res.message || '載入失敗') + '</div>');
+            return;
+        }
+        qsTierData = res.data;
+        qsTierInit();
+        qsTierRender();
+    });
+}
+
+// 數字顯示：去掉尾隨的 0（183.00 → 183），與本頁其他金額欄位一致
+function qsTierNum(v) {
+    const n = parseFloat(v);
+    return isNaN(n) ? '0' : String(n);
+}
+
+// 規格文字裡的數量區間（「分量計價1-49」「500以上」）。
+// **一定要與該列的數量交叉確認才採用**——料號與規格本來就常含數字與「-」（例 1P-5HP），
+// 不確認就會把料號的一段數字當成階距，而且畫面上完全看不出來是怎麼跑出來的。
+function qsTierParseSpec(spec, qty) {
+    const s = String(spec || ''), q = Number(qty);
+    let out = null, m;
+    const re = /(\d+)\s*[-~〜～－–]\s*(\d+)/g;
+    while ((m = re.exec(s)) !== null) {
+        if (Number(m[1]) === q && Number(m[2]) >= q) out = { max: Number(m[2]) };
+    }
+    const re2 = /(\d+)\s*(?:以上|↑)/g;
+    while ((m = re2.exec(s)) !== null) {
+        if (Number(m[1]) === q) out = { max: null };
+    }
+    return out;
+}
+
+// 合併之後規格上那段「分量計價1-49」就不對了（階距已經自己一欄一欄列出來），
+// 預設幫忙去掉，原文仍列在旁邊可以改回去
+function qsTierCleanSpec(s) {
+    return String(s || '')
+        .replace(/\s*[^\s]*計價\s*\d+\s*(?:[-~〜～－–]\s*\d+|以上|↑)?\s*$/, '')
+        .replace(/\s*\d+\s*(?:[-~〜～－–]\s*\d+|以上)\s*$/, '')
+        .trim();
+}
+
+function qsTierInit() {
+    const items = (qsTierData.items || []).slice();
+    const tiered = items.filter(function(x){ return Number(x.is_tiered) === 1; });
+    // 已經是階梯的那一列優先留下來（它身上已經掛著階距與訂單綁定）
+    qsTierKeep = Number(tiered.length ? tiered[0].item_id : items[0].item_id);
+
+    let rows = [];
+    items.forEach(function(it) {
+        if (Number(it.is_tiered) === 1 && (it.tiers || []).length) {
+            // 既有階距整組帶出來（容差欄位本畫面沒有，原樣帶著走，不可以靜靜洗掉）
+            (it.tiers || []).forEach(function(t) {
+                rows.push({
+                    qty_min: String(parseInt(t.qty_min, 10) || 0),
+                    qty_max: (t.qty_max === null || t.qty_max === '') ? '' : String(parseInt(t.qty_max, 10)),
+                    unit_price: qsTierNum(t.unit_price),
+                    src: '原有階距',
+                    tolerance_value: (t.tolerance_value === null || t.tolerance_value === '') ? '' : String(parseFloat(t.tolerance_value)),
+                    tolerance_unit: t.tolerance_unit || '',
+                    tolerance_note: t.tolerance_note || ''
+                });
+            });
+        } else {
+            rows.push({
+                qty_min: String(Number(it.quantity) || 0),
+                qty_max: '',
+                unit_price: qsTierNum(it.unit_price),
+                src: '第 ' + (it.sort_order || '?') + ' 列',
+                _spec: it.specification, _qty: Number(it.quantity) || 0,
+                tolerance_value: '', tolerance_unit: '', tolerance_note: ''
+            });
+        }
+    });
+    rows.sort(function(a, b){ return Number(a.qty_min) - Number(b.qty_min); });
+    // 上限：規格文字對得起來就用它，否則用「下一階的下限 −1」；最後一階留空＝無上限
+    rows.forEach(function(r, i) {
+        if (r.qty_max !== '') return;
+        if (r._spec !== undefined) {
+            const p = qsTierParseSpec(r._spec, r._qty);
+            if (p && p.max !== null) { r.qty_max = String(p.max); r.src += '（規格）'; return; }
+            if (p && p.max === null) { r.src += '（規格：以上）'; return; }
+        }
+        if (i < rows.length - 1) {
+            const nx = Number(rows[i + 1].qty_min);
+            if (nx > Number(r.qty_min)) r.qty_max = String(nx - 1);
+        }
+    });
+    qsTierRows = rows;
+}
+
+function qsTierRender() {
+    const d = qsTierData || {}, items = d.items || [];
+    const keep = items.filter(function(x){ return Number(x.item_id) === qsTierKeep; })[0] || items[0] || {};
+    const multi = items.length > 1;
+    const orders = d.orders || {};
+
+    let html = '<div class="qs-head">' +
+        '<span class="qno">' + escapeQt(d.quote_no || '') + '</span>' +
+        '<span>料號：<b>' + escapeQt(keep.product_id || '') + '</b></span>' +
+        '<span>勾選 ' + items.length + ' 列</span>' +
+        (Number(d.pending_review) === 1 ? '<span class="qt-badge warn">尚待確認</span>' : '<span class="qt-badge ok">已轉正式</span>') +
+        '</div>';
+
+    html += '<div class="qs-tip">階梯報價＝<b>同一個料號在不同數量區間的價格</b>，在系統裡是「一筆項目＋多段階距」。' +
+        (multi ? '勾選的 <b>' + items.length + '</b> 列會收成下面這幾段階距，<b>只留一列</b>當階梯項目、其餘列不再是獨立項目'
+               + '——不收的話整張單的總金額會把同一批貨重複算好幾次。'
+               : '這一列會轉成階梯項目，數量與單價改由各階距決定。') +
+        '　階梯項目的金額＝<b>各階「下限 × 單價」的加總</b>（與報價單管理頁同一套算法）。</div>';
+
+    // 保留哪一列（多列時才要選）
+    if (multi) {
+        html += '<div style="margin:8px 0;"><b style="color:#5b3a1e;font-size:12px;">保留哪一列當階梯項目？</b>' +
+                '<span class="qs-tier-src">（留下來的那一列的規格、料號ID綁定與製程標籤會被沿用；其餘列會被收掉）</span>';
+        html += '<table class="qs-item-table" style="margin-top:4px;"><thead><tr>' +
+                '<th style="width:30px;"></th><th style="width:44px;">列</th><th>規格</th>' +
+                '<th style="width:90px;">數量</th><th style="width:80px;">單價</th>' +
+                '<th style="width:110px;">料號ID</th><th style="width:90px;">訂單</th>' +
+                '</tr></thead><tbody>';
+        items.forEach(function(it) {
+            const iid = Number(it.item_id);
+            const od  = orders[iid] || [];
+            html += '<tr>' +
+                '<td style="text-align:center;"><input type="radio" name="qsTierKeep" class="qs-tier-keep-rd" value="' + iid + '"' +
+                    (iid === qsTierKeep ? ' checked' : '') + '></td>' +
+                '<td>' + escapeQt(it.sort_order) + '</td>' +
+                '<td style="font-size:11px;">' + escapeQt(it.specification || '') +
+                    (Number(it.is_tiered) === 1 ? ' <span class="qt-badge ok qs-tier-keep">已是階梯</span>' : '') + '</td>' +
+                '<td style="text-align:right;">' + escapeQt(it.quantity) + ' ' + escapeQt(it.unit || '') + '</td>' +
+                '<td style="text-align:right;">' + escapeQt(qsTierNum(it.unit_price)) + '</td>' +
+                '<td>' + (it.d_setting_d_id ? ('#' + it.d_setting_d_id) : '<span style="color:#999;">未綁定</span>') + '</td>' +
+                '<td>' + (od.length ? ('<span class="qt-badge warn qs-tier-keep">' + od.length + ' 張</span>') : '<span style="color:#999;">—</span>') + '</td>' +
+                '</tr>';
+        });
+        html += '</tbody></table></div>';
+    }
+
+    // 規格與單位
+    const cleaned = qsTierCleanSpec(keep.specification);
+    html += '<div style="margin:8px 0;display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;font-size:12px;color:#5b3a1e;">' +
+        '<span>品名規格 <input type="text" id="qsTierSpec" class="form-control input-sm" style="width:380px;display:inline-block;" ' +
+              'maxlength="100" value="' + escapeQt(cleaned) + '"></span>' +
+        '<span>單位 <select id="qsTierUnit" class="form-control input-sm" style="width:110px;display:inline-block;">' +
+              qsUnitOptions(keep.unit || 'PCS') + '</select></span>' +
+        '</div>';
+    if (cleaned !== String(keep.specification || '')) {
+        html += '<div class="qs-tier-src" style="margin:-4px 0 8px;">規格原文「' + escapeQt(keep.specification || '') +
+                '」的數量區間已經一階一階列在下面，預設去掉；' +
+                '<a href="javascript:void(0)" id="qsTierSpecOrig">改回原文</a></div>';
+    }
+
+    // 階距表（增刪列走共用 eg_input_rules.js 的 data-eg-row-add／del，不自刻鍵盤處理）
+    html += '<table class="qs-tier-table"><thead><tr>' +
+        '<th style="width:40px;">階</th><th style="width:110px;">數量下限</th><th style="width:130px;">數量上限</th>' +
+        '<th style="width:120px;">單價</th><th style="width:120px;">小計</th><th>來源</th><th style="width:40px;"></th>' +
+        '</tr></thead><tbody id="qsTierRows" data-eg-row-add="qsTierAddRow" data-eg-row-del="qsTierDelRow">';
+    qsTierRows.forEach(function(r, i) {
+        html += '<tr>' +
+            '<td>' + (i + 1) + '</td>' +
+            '<td><input type="text" inputmode="numeric" class="form-control input-sm qs-tier-qty qt-min" data-i="' + i + '" value="' + escapeQt(r.qty_min) + '"></td>' +
+            '<td><input type="text" inputmode="numeric" class="form-control input-sm qs-tier-qty qt-max" data-i="' + i + '" value="' + escapeQt(r.qty_max) + '" data-eg-hint="留空＝無上限"></td>' +
+            '<td><input type="text" inputmode="decimal" class="form-control input-sm qs-tier-price qt-price" data-i="' + i + '" value="' + escapeQt(r.unit_price) + '"></td>' +
+            '<td class="qs-tier-sub" data-sub="' + i + '"></td>' +
+            '<td class="qs-tier-src">' + escapeQt(r.src || '') +
+                ((r.tolerance_value !== '' && r.tolerance_value !== undefined) ? '　<b>保留容差 ' + escapeQt(r.tolerance_value) + escapeQt(r.tolerance_unit || '') + '</b>' : '') +
+                '</td>' +
+            '<td><button type="button" class="btn btn-default btn-xs qs-tier-del" data-i="' + i + '" title="刪除這一階">✕</button></td>' +
+            '</tr>';
+    });
+    html += '</tbody></table>' +
+        '<div style="margin-top:5px;"><button type="button" class="btn btn-default btn-xs" id="qsTierAdd">' +
+        '<i class="fa fa-plus"></i> 新增一階</button> ' +
+        '<span class="qs-tier-src">最後一階的<b>數量上限留空＝無上限</b>；階距不可以重疊。' +
+        '在最後一列按 <b>↓</b> 也會自動加一列。</span></div>';
+
+    html += '<div class="qs-tier-sum" id="qsTierSum"></div>';
+
+    // 會被收掉的列 & 訂單綁定：按下去之前就要讓人看到
+    const drops = items.filter(function(x){ return Number(x.item_id) !== qsTierKeep; });
+    let odCnt = 0;
+    drops.forEach(function(x){ odCnt += (orders[Number(x.item_id)] || []).length; });
+    if (drops.length) {
+        html += '<div class="qs-tier-drop"><b>套用後這 ' + drops.length + ' 列就不再是獨立項目</b>（內容會完整寫進這張報價單的變更紀錄，' +
+                '但畫面上不能復原）：<br>' +
+                drops.map(function(x){
+                    return '　第 ' + escapeQt(x.sort_order) + ' 列　' + escapeQt(x.specification || '') +
+                           '　數量 ' + escapeQt(x.quantity) + '　單價 ' + escapeQt(qsTierNum(x.unit_price));
+                }).join('<br>') + '</div>';
+        if (odCnt) {
+            html += '<div class="qs-tier-drop"><b>其中 ' + odCnt + ' 張訂單綁在這幾列上</b>，' +
+                    '套用後會自動改綁到留下來的那一列（訂單讀到的單價會變成「依訂購數量套用的階距單價」）：<br>' +
+                    drops.map(function(x){
+                        const od = orders[Number(x.item_id)] || [];
+                        if (!od.length) return '';
+                        return '　第 ' + escapeQt(x.sort_order) + ' 列 → ' +
+                               od.map(function(o){ return escapeQt(o.Order_oo || ('#' + o.Order_id)); }).join('、');
+                    }).filter(function(s){ return s; }).join('<br>') + '</div>';
+        }
+    }
+
+    $('#qsTierBody').html(html);
+    qsTierSync();
+}
+
+// 畫面 → qsTierRows（重繪前一定要先收，不然使用者剛打的字會被洗掉）
+function qsTierCollect() {
+    $('#qsTierRows tr').each(function(i) {
+        if (!qsTierRows[i]) qsTierRows[i] = { src: '新增', tolerance_value: '', tolerance_unit: '', tolerance_note: '' };
+        qsTierRows[i].qty_min    = String($(this).find('.qt-min').val() || '').trim();
+        qsTierRows[i].qty_max    = String($(this).find('.qt-max').val() || '').trim();
+        qsTierRows[i].unit_price = String($(this).find('.qt-price').val() || '').trim();
+    });
+    qsTierRows = qsTierRows.slice(0, $('#qsTierRows tr').length);
+}
+
+// 即時驗證＋小計＋合計（規則與後端 qsedit_tier_normalize() 相同）
+// **重疊這種跨列的錯也一定要把欄位標紅**：只在下面寫一行原因，使用者還是得自己一列一列找是哪兩階撞到
+function qsTierSync() {
+    qsTierCollect();
+    let err = '', sum = 0;
+    const n = qsTierRows.length;
+    const badMin = [], badMax = [], badP = [];
+
+    // 第一輪：每一欄自己合不合法＋小計
+    qsTierRows.forEach(function(r, i) {
+        badMin[i] = !(/^\d+$/.test(r.qty_min) && Number(r.qty_min) <= 999999999);
+        badMax[i] = !(r.qty_max === '' || (/^\d+$/.test(r.qty_max) && Number(r.qty_max) <= 999999999 && Number(r.qty_max) >= Number(r.qty_min)));
+        badP[i]   = !/^\d+(\.\d{1,6})?$/.test(r.unit_price);
+        const good = !badMin[i] && !badP[i];
+        if (good) sum += Number(r.qty_min) * Number(r.unit_price);
+        $('[data-sub="' + i + '"]').text(good ? qtFmtMoney(Number(r.qty_min) * Number(r.unit_price)) : '—');
+        if (!err) {
+            if (badMin[i]) err = '第 ' + (i + 1) + ' 階的「數量下限」請填 0 以上的整數';
+            else if (badMax[i]) err = '第 ' + (i + 1) + ' 階的「數量上限」請填不小於下限的整數，或留空＝無上限';
+            else if (badP[i]) err = '第 ' + (i + 1) + ' 階的「單價」請填 0 以上的數字（最多 6 位小數）';
+        }
+    });
+
+    // 第二輪：跨列的錯（沒填上限／重疊／沒有由小到大），兩邊的欄位都標紅
+    qsTierRows.forEach(function(r, i) {
+        if (badMin[i] || badMax[i]) return;
+        if (i < n - 1) {
+            const nx = qsTierRows[i + 1];
+            if (r.qty_max === '') {
+                badMax[i] = true;
+                if (!err) err = '第 ' + (i + 1) + ' 階沒有填數量上限，只有最後一階可以無上限';
+            } else if (!badMin[i + 1] && Number(r.qty_max) >= Number(nx.qty_min)) {
+                badMax[i] = true; badMin[i + 1] = true;
+                if (!err) err = '第 ' + (i + 1) + ' 階（～' + r.qty_max + '）與第 ' + (i + 2) + ' 階（' + nx.qty_min +
+                                ' 起）重疊了，同一個訂購量不可以對到兩個單價';
+            } else if (!badMin[i + 1] && Number(nx.qty_min) <= Number(r.qty_min)) {
+                badMin[i + 1] = true;
+                if (!err) err = '第 ' + (i + 2) + ' 階的數量下限要大於第 ' + (i + 1) + ' 階（請由小到大填）';
+            }
+        }
+    });
+
+    $('#qsTierRows tr').each(function(i) {
+        $(this).find('.qt-min').toggleClass('bad', !!badMin[i]);
+        $(this).find('.qt-max').toggleClass('bad', !!badMax[i]);
+        $(this).find('.qt-price').toggleClass('bad', !!badP[i]);
+    });
+    if (!n) err = '至少要有一段階距';
+    $('#qsTierSum').html('階梯項目金額＝各階「下限 × 單價」加總＝<b>' + qtFmtMoney(sum) + '</b>' +
+        '　（' + n + ' 段階距）' +
+        (qsTierData && qsTierData.items.length > 1
+            ? '　整張單的總金額會在套用後一併重算' : ''));
+    $('#qsTierErr').text(err);
+    $('#qsTierApply').prop('disabled', !!err);
+    return !err;
+}
+
+$(document).on('input', '#qsTierRows input', function(){ qsTierSync(); });
+$(document).on('change', '.qs-tier-keep-rd', function(){
+    qsTierCollect();
+    qsTierKeep = Number($(this).val());
+    qsTierRender();
+});
+$(document).on('click', '#qsTierSpecOrig', function(){
+    const items = (qsTierData || {}).items || [];
+    const keep = items.filter(function(x){ return Number(x.item_id) === qsTierKeep; })[0] || items[0] || {};
+    $('#qsTierSpec').val(String(keep.specification || ''));
+});
+$(document).on('click', '#qsTierAdd', function(){ qsTierAddRow(); });
+$(document).on('click', '.qs-tier-del', function(){
+    qsTierCollect();
+    if (qsTierRows.length <= 1) return;
+    qsTierRows.splice(Number($(this).data('i')), 1);
+    qsTierRender();
+});
+
+// 共用 eg_input_rules.js 規則6 的介面：不帶參數、加/刪最後一列後自己重繪
+function qsTierAddRow() {
+    qsTierCollect();
+    const last = qsTierRows[qsTierRows.length - 1];
+    let nextMin = '';
+    if (last && /^\d+$/.test(last.qty_max)) nextMin = String(Number(last.qty_max) + 1);
+    qsTierRows.push({ qty_min: nextMin, qty_max: '', unit_price: last ? last.unit_price : '',
+                      src: '新增', tolerance_value: '', tolerance_unit: '', tolerance_note: '' });
+    qsTierRender();
+}
+function qsTierDelRow() {
+    qsTierCollect();
+    if (qsTierRows.length <= 1) return;
+    qsTierRows.pop();
+    qsTierRender();
+}
+
+$(document).on('click', '#qsTierApply', function() {
+    if (!qsTierSync()) return;
+    const items = (qsTierData || {}).items || [];
+    const drops = items.filter(function(x){ return Number(x.item_id) !== qsTierKeep; });
+    const keep  = items.filter(function(x){ return Number(x.item_id) === qsTierKeep; })[0] || {};
+    let msg = '要把料號 ' + (keep.product_id || '') + ' 改成 ' + qsTierRows.length + ' 段階梯數量計價嗎？';
+    if (drops.length) {
+        msg += '\n\n※ 勾選的另外 ' + drops.length + ' 列（第 ' +
+               drops.map(function(x){ return x.sort_order; }).join('、') + ' 列）會被收成階距，' +
+               '之後不再是獨立項目，畫面上無法復原（內容會完整寫進變更紀錄）。';
+        let od = 0; drops.forEach(function(x){ od += ((qsTierData.orders || {})[Number(x.item_id)] || []).length; });
+        if (od) msg += '\n※ 綁在那幾列上的 ' + od + ' 張訂單會自動改綁到留下來的那一列。';
+    }
+    msg += '\n\n這張單的總金額會一併重算，動作會記進報價單的變更紀錄。';
+    if (!confirm(msg)) return;
+
+    const $btn = $(this).prop('disabled', true);
+    $.post(API_URL, {
+        action: 'qsedit_set_tiers',
+        item_ids: JSON.stringify(items.map(function(x){ return Number(x.item_id); })),
+        keep_item_id: qsTierKeep,
+        specification: String($('#qsTierSpec').val() || '').trim(),
+        unit: String($('#qsTierUnit').val() || ''),
+        tiers: JSON.stringify(qsTierRows.map(function(r){
+            return { qty_min: r.qty_min, qty_max: r.qty_max, unit_price: r.unit_price,
+                     tolerance_value: r.tolerance_value || '', tolerance_unit: r.tolerance_unit || '',
+                     tolerance_note: r.tolerance_note || '' };
+        }))
+    }, function(res) {
+        $btn.prop('disabled', false);
+        if (!res.success) { $('#qsTierErr').text(res.message || '套用失敗'); return; }
+        closeMask('qsTierMask');
+        // 項目結構變了（列會變少），一律跟後端重抓一次，不要自己在前端拼湊
+        qsBatchSel = {}; qsLastChkIdx = null;
+        qsBatchMsgHtml = '<span class="qs-batch-res">已改成階梯數量計價：<b>' + res.tiers + '</b> 段階距' +
+            (res.dropped ? ('、收掉 ' + res.dropped + ' 列') : '') +
+            '，項目金額 ' + qtFmtMoney(res.amount) +
+            (res.total_changed ? ('，總金額重算為 ' + qtFmtMoney(res.total_amount)) : '') +
+            ((res.orders_repointed || []).length ? ('，' + res.orders_repointed.length + ' 張訂單已改綁') : '') +
+            '</span>';
+        const qid = qsQuoteId;
+        // 尚待確認的單要連外面的清單一起重抓（項目數與缺漏徽章都變了）；
+        // loadPendingList() 會同步把 qtItemsCache 清空，所以一定要在 qsOpenQuote 之前呼叫，
+        // 否則剛抓回來的明細會被它清掉、跳窗變成空白
+        if (qid && !qsFormalQuotes[qid]) loadPendingList();
+        if (qid) { delete qtItemsCache[qid]; qsOpenQuote(qid); }
+        showQtToast('已改成階梯數量計價：' + res.tiers + ' 段階距' +
+                    (res.dropped ? ('、收掉 ' + res.dropped + ' 列') : ''));
+    });
+});
 
 function qtFmtMoney(n) {
     const v = parseFloat(n);

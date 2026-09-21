@@ -556,6 +556,257 @@ function qsedit_write_process(PDO $pdo, int $itemId, string $processNos, string 
     return $procNotes;
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// 改成階梯數量計價（2026-09-21 使用者交辦）
+//
+//   舊匯入的報價單把「分量計價」拆成好幾列各自獨立的項目——同一個料號，規格分別寫著
+//   「分量計價1-49」「50-299」「300-499」「500以上」，數量 1／50／300／500、單價 183／170／157／144。
+//   那其實是同一筆報價的四段階距，不是四筆生意。
+//
+//   正式的階梯報價在本系統只有一種形狀：**一筆 quotation_item（is_tiered=1）＋ 四列
+//   quotation_item_tier**（與報價單管理頁的階梯模式完全同一份資料結構，不另外發明一種）。
+//   所以勾選的那幾列會被收成階距、其餘列的「項目」就不再存在——
+//   不收的話整張單的總金額會把同一批貨重複算好幾次（此例四列相加＝127,783）。
+//   被收掉的列一律連同料號、規格、數量、單價完整寫進 quotation_change_log，事後查得到原本是什麼。
+//
+//   三條刻意的規則：
+//     ⑴ **料號不同一律擋下**——階梯是「同一個料號在不同數量區間的價格」，料號不同就是不同的生意
+//        （現場常見治具／刀具與本體同列在一張單上，那幾列絕對不可以被收成階距）。
+//     ⑵ **階距不可重疊、且只有最後一階可以無上限**——重疊的話同一個訂購量會有兩個單價，
+//        下游（對帳、訂單毛利）取到哪一個要看查詢順序，那是查不出原因的錯帳。
+//     ⑶ **既有階距的容差（tolerance_*）原樣保留**——本畫面沒有容差欄位，
+//        改個階距就把它洗掉是使用者完全看不到的資料遺失。
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * 取這幾列項目（含既有階距），並擋掉「根本不可能是同一筆報價」的組合。
+ * 回傳 ['quote_id'=>int,'quote_no'=>string,'items'=>[...]]，items 依 sort_order 排序。
+ */
+function qsedit_tier_items(PDO $pdo, array $ids): array
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids), fn($v) => $v > 0)));
+    if (!$ids) throw new Exception('請先勾選要改成階梯數量計價的項目');
+    if (count($ids) > 20) throw new Exception('一筆階梯報價最多 20 段階距，請勾選 20 列以內');
+
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $st = $pdo->prepare("SELECT qi.item_id, qi.quote_id, qi.sort_order, qi.product_id, qi.d_setting_d_id,
+                                qi.specification, qi.quantity, qi.unit, qi.unit_price, qi.amount,
+                                qi.is_tiered, qi.note_only, qi.process_notes, qi.process_group_type,
+                                ql.quote_no, ql.pending_review
+                           FROM quotation_item qi
+                           JOIN quotation_list ql ON ql.quote_id = qi.quote_id
+                          WHERE qi.item_id IN ($ph)
+                          ORDER BY qi.sort_order ASC, qi.item_id ASC");
+    $st->execute($ids);
+    $items = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$items) throw new Exception('找不到報價項目');
+    if (count($items) !== count($ids)) throw new Exception('有項目已經被刪除，請重新整理後再試一次');
+
+    // 一次只處理同一張報價單（畫面上本來就是在同一張單裡勾選）
+    $quoteIds = array_values(array_unique(array_map(fn($r) => (int)$r['quote_id'], $items)));
+    if (count($quoteIds) > 1) throw new Exception('一次只能處理同一張報價單裡的項目');
+
+    // 料號不同＝不是同一筆報價的階距（見上方規則⑴）
+    $parts = array_values(array_unique(array_map(fn($r) => strtolower(trim((string)$r['product_id'])), $items)));
+    if (count($parts) > 1) {
+        throw new Exception('勾選的項目料號不同（' .
+            implode('、', array_map(fn($r) => (string)$r['product_id'], $items)) .
+            '），階梯是「同一個料號在不同數量區間的價格」，請只勾同一個料號的那幾列');
+    }
+
+    // 既有階距（編輯已經是階梯的項目時要帶出來給人改，而不是從頭填一次）
+    $tierMap = [];
+    $tq = $pdo->prepare("SELECT * FROM quotation_item_tier WHERE item_id IN ($ph) ORDER BY item_id, sort_order, qty_min");
+    $tq->execute($ids);
+    foreach ($tq->fetchAll(PDO::FETCH_ASSOC) as $t) $tierMap[(int)$t['item_id']][] = $t;
+    foreach ($items as &$it) $it['tiers'] = $tierMap[(int)$it['item_id']] ?? [];
+    unset($it);
+
+    return ['quote_id' => $quoteIds[0], 'quote_no' => (string)$items[0]['quote_no'],
+            'pending_review' => (int)$items[0]['pending_review'], 'items' => $items];
+}
+
+/**
+ * 這幾列項目上綁著哪些訂單（order_track.quote_item_id 的「主要報價」快取，與 order_quote_map 分配表）。
+ * 合併時被收掉的那幾列上的綁定要改指到留下來的那一列，否則訂單會指到一個已經不存在的報價項目
+ * （畫面上看起來是「這張訂單沒有報價」，而且完全不報錯）。
+ */
+function qsedit_tier_orders(PDO $pdo, array $ids): array
+{
+    if (!$ids) return [];
+    $ph  = implode(',', array_fill(0, count($ids), '?'));
+    $out = [];
+    $q1  = $pdo->prepare("SELECT quote_item_id item_id, Order_id, Order_oo, Qty FROM order_track WHERE quote_item_id IN ($ph)");
+    $q1->execute($ids);
+    foreach ($q1->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[(int)$r['item_id']][(int)$r['Order_id']] = ['Order_id' => (int)$r['Order_id'],
+            'Order_oo' => (string)$r['Order_oo'], 'qty' => (int)$r['Qty'], 'src' => 'main'];
+    }
+    try {
+        $q2 = $pdo->prepare("SELECT m.item_id, m.Order_id, ot.Order_oo, ot.Qty
+                               FROM order_quote_map m
+                               LEFT JOIN order_track ot ON ot.Order_id = m.Order_id
+                              WHERE m.item_id IN ($ph)");
+        $q2->execute($ids);
+        foreach ($q2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $iid = (int)$r['item_id']; $oid = (int)$r['Order_id'];
+            if (!isset($out[$iid][$oid])) {
+                $out[$iid][$oid] = ['Order_id' => $oid, 'Order_oo' => (string)$r['Order_oo'],
+                                    'qty' => (int)$r['Qty'], 'src' => 'map'];
+            } else {
+                $out[$iid][$oid]['src'] = 'both';
+            }
+        }
+    } catch (Exception $e) {}   // 分配表還沒建出來（舊環境）＝只看快取欄位
+    foreach ($out as $iid => $m) $out[$iid] = array_values($m);
+    return $out;
+}
+
+/**
+ * 階距驗證與正規化（唯一實作）：前端即時驗一次，這裡同規則再驗一次（鐵律8）。
+ * 收 [['qty_min'=>,'qty_max'=>,'unit_price'=>, 容差三欄(選填,原樣保留)], ...]，
+ * 回傳已依 qty_min 排序、qty_max 補好的陣列；驗不過一律丟例外並講清楚是第幾階、為什麼。
+ */
+function qsedit_tier_normalize(array $tiers): array
+{
+    $out = [];
+    foreach ($tiers as $i => $t) {
+        $no   = $i + 1;
+        $qmin = trim((string)($t['qty_min'] ?? ''));
+        if ($qmin === '' || !preg_match('/^\d+$/', $qmin)) throw new Exception("第 {$no} 階的「數量下限」請填 0 以上的整數");
+        $qmin = (int)$qmin;
+        if ($qmin > 999999999) throw new Exception("第 {$no} 階的數量下限超過上限（999,999,999）");
+
+        $qmaxRaw = trim((string)($t['qty_max'] ?? ''));
+        $qmax    = null;
+        if ($qmaxRaw !== '') {
+            if (!preg_match('/^\d+$/', $qmaxRaw)) throw new Exception("第 {$no} 階的「數量上限」請填整數，或留空＝無上限");
+            $qmax = (int)$qmaxRaw;
+            if ($qmax > 999999999) throw new Exception("第 {$no} 階的數量上限超過上限（999,999,999）");
+            if ($qmax < $qmin) throw new Exception("第 {$no} 階的數量上限（{$qmax}）小於下限（{$qmin}）");
+        }
+
+        $priceRaw = trim((string)($t['unit_price'] ?? ''));
+        if ($priceRaw === '' || !preg_match('/^\d+(\.\d{1,6})?$/', $priceRaw)) {
+            throw new Exception("第 {$no} 階的「單價」請填 0 以上的數字（最多 6 位小數）");
+        }
+        $price = (float)$priceRaw;
+        if ($price > 99999999.999999) throw new Exception("第 {$no} 階的單價超過欄位上限");
+
+        $tv = trim((string)($t['tolerance_value'] ?? ''));
+        $out[] = [
+            'qty_min'    => $qmin,
+            'qty_max'    => $qmax,
+            'unit_price' => $price,
+            'amount'     => round($qmin * $price, 6),
+            'tolerance_value' => ($tv !== '' && is_numeric($tv)) ? (float)$tv : null,
+            'tolerance_unit'  => in_array(($t['tolerance_unit'] ?? ''), ['%', 'PCS'], true) ? $t['tolerance_unit'] : null,
+            'tolerance_note'  => (trim((string)($t['tolerance_note'] ?? '')) !== '')
+                                    ? mb_substr(trim((string)$t['tolerance_note']), 0, 200) : null,
+        ];
+    }
+    if (!$out) throw new Exception('至少要有一段階距');
+    if (count($out) > 20) throw new Exception('一筆階梯報價最多 20 段階距');
+
+    // 依下限排序後檢查重疊（見上方規則⑵）。排序在驗證之前做，使用者填的順序不必自己排。
+    usort($out, fn($a, $b) => $a['qty_min'] <=> $b['qty_min']);
+    $n = count($out);
+    foreach ($out as $i => $t) {
+        $no = $i + 1;
+        if ($i < $n - 1) {
+            if ($t['qty_max'] === null) {
+                throw new Exception("第 {$no} 階（{$t['qty_min']} 起）沒有填數量上限，只有最後一階可以無上限");
+            }
+            $next = $out[$i + 1];
+            if ($t['qty_max'] >= $next['qty_min']) {
+                throw new Exception("第 {$no} 階（{$t['qty_min']}～{$t['qty_max']}）與第 " . ($no + 1) .
+                                    " 階（{$next['qty_min']} 起）重疊了，同一個訂購量不可以對到兩個單價");
+            }
+        }
+        if ($i > 0 && $t['qty_min'] === $out[$i - 1]['qty_min']) {
+            throw new Exception("第 " . ($no - 1) . " 階與第 {$no} 階的數量下限相同（{$t['qty_min']}）");
+        }
+    }
+    return $out;
+}
+
+/**
+ * 寫入階梯（唯一實作）：把 $keepId 這一列改成階梯項目、$dropIds 那幾列收掉。
+ * $dropIds 為空＝只是把單一列轉成階梯／改既有階距，不動任何其他列。
+ * 一律在呼叫端的 transaction 內執行。
+ */
+function qsedit_tier_write(PDO $pdo, int $keepId, array $dropIds, array $tiers,
+                           ?string $spec, ?string $unit, ?int $dsid, $userId): array
+{
+    // 1) 階距：先全刪再整批寫（與報價單管理頁 save 的做法一致）
+    $pdo->prepare("DELETE FROM quotation_item_tier WHERE item_id=?")->execute([$keepId]);
+    $ins = $pdo->prepare("INSERT INTO quotation_item_tier
+        (item_id,qty_min,qty_max,unit_price,amount,tolerance_value,tolerance_unit,tolerance_note,sort_order)
+        VALUES (?,?,?,?,?,?,?,?,?)");
+    $sum = 0.0;
+    foreach ($tiers as $i => $t) {
+        $ins->execute([$keepId, $t['qty_min'], $t['qty_max'], $t['unit_price'], $t['amount'],
+                       $t['tolerance_value'], $t['tolerance_unit'], $t['tolerance_note'], $i]);
+        $sum += (float)$t['amount'];
+    }
+    // 金額＝各階小計加總（＝報價單管理頁 calculateTotal() 對階梯列的同一套算法）
+    $sum = round($sum, 2);
+    if ($sum > 9999999999.99) throw new Exception('各階小計加總超過金額欄位上限，請確認數量或單價是否填錯');
+
+    // 2) 主項目：階梯列的數量與單價一律歸零（由各階距決定），金額＝各階小計加總
+    $set = "is_tiered=1, quantity=0, unit_price=0, amount=?, updated_at=NOW()";
+    $par = [$sum];
+    if ($spec !== null) { $set .= ", specification=?"; $par[] = mb_substr($spec, 0, 100); }
+    if ($unit !== null) { $set .= ", unit=?";          $par[] = $unit; }
+    if ($dsid !== null) { $set .= ", d_setting_d_id=?"; $par[] = $dsid; }
+    $par[] = $keepId;
+    $pdo->prepare("UPDATE quotation_item SET $set WHERE item_id=?")->execute($par);
+
+    // 3) 被收掉那幾列上的訂單綁定改指到留下來的那一列。
+    //    報價→訂單是多對多，**分配表 order_quote_map 才是真相、order_track.quote_item_id 只是
+    //    「主要報價」快取**，所以一律走 trace_chain_lib（唯一寫入點），不自己 UPDATE 那兩個欄位。
+    //    acc_lib 很大，只有真的要動綁定時才載入。
+    $moved = [];
+    if ($dropIds) {
+        require_once __DIR__ . '/../common/trace_chain_lib.php';
+        $dph = implode(',', array_fill(0, count($dropIds), '?'));
+
+        // (a) 受影響的訂單：兩個來源都要看（只有舊欄位、還沒有分配列的那種最容易漏）
+        $oq = $pdo->prepare("SELECT Order_id FROM order_track WHERE quote_item_id IN ($dph)");
+        $oq->execute($dropIds);
+        foreach ($oq->fetchAll(PDO::FETCH_COLUMN) as $oid) $moved[(int)$oid] = true;
+        $mq = $pdo->prepare("SELECT Order_id, allocated_qty FROM order_quote_map WHERE item_id IN ($dph)");
+        $mq->execute($dropIds);
+        $mapRows = $mq->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($mapRows as $m) $moved[(int)$m['Order_id']] = true;
+
+        // (b) 只有舊欄位的先補成一列——**一定要在刪項目之前**，tc_seed_order_quote() 會確認
+        //     報價項目還存在，晚一步就補不出來，那張訂單的報價綁定會安靜地不見
+        foreach (array_keys($moved) as $oid) tc_seed_order_quote($pdo, (int)$oid);
+
+        // (c) 分配表改指到留下來的那一列。UNIQUE(Order_id,item_id)＝同一張訂單本來就同時綁著
+        //     本體與某一階時會撞鍵，故先 upsert 目標列（分配量取兩者較大者）再刪來源列
+        $mq->execute($dropIds);
+        foreach ($mq->fetchAll(PDO::FETCH_ASSOC) as $m) {
+            $pdo->prepare("INSERT INTO order_quote_map (Order_id,item_id,allocated_qty,created_by)
+                           VALUES (?,?,?,?)
+                           ON DUPLICATE KEY UPDATE allocated_qty=GREATEST(allocated_qty, VALUES(allocated_qty))")
+                ->execute([(int)$m['Order_id'], $keepId, (int)$m['allocated_qty'], (string)$userId]);
+        }
+        $pdo->prepare("DELETE FROM order_quote_map WHERE item_id IN ($dph)")->execute($dropIds);
+
+        // (d) 收掉的列：階距（沒有外鍵，要自己刪）→ 項目（製程 map 由外鍵 CASCADE 自動清）
+        $pdo->prepare("DELETE FROM quotation_item_tier WHERE item_id IN ($dph)")->execute($dropIds);
+        $pdo->prepare("DELETE FROM quotation_item WHERE item_id IN ($dph)")->execute($dropIds);
+
+        // (e) 快取欄位由分配表重算（唯一同步點；主要報價取料號與訂單相同者優先）
+        foreach (array_keys($moved) as $oid) {
+            tc_sync_order_quote($pdo, (int)$oid, ['user_id' => (string)$userId]);
+        }
+    }
+    return ['amount' => $sum, 'orders' => array_keys($moved)];
+}
+
 // ──────────────────────────────────────────────────────────────
 // 製程標籤：整組移轉（把一批舊子標籤上的報價單項目全部改成同一個目標子標籤）
 // 唯一實作 —— 預覽（merge_process_tags_preview）與實際執行（merge_process_tags_apply）共用同一份規則，
@@ -2659,6 +2910,96 @@ try {
 
             $response = ['success' => true, 'applied' => count($applied), 'unchanged' => $unchanged,
                          'skipped' => $skipped, 'items' => $applied, 'total_amount' => $totalNew,
+                         'total_changed' => (abs($totalNew - $totalOld) > 0.005)];
+            break;
+        }
+
+        // ── 改成階梯數量計價：跳窗要用的資料（規則與設計理由見上方 qsedit_tier_* 函式群）──
+        //   勾選的那幾列＋各自的既有階距＋「這幾列上面綁著哪些訂單」。
+        //   訂單綁定一定要在按下去之前就讓人看到，按完才說「順便改了三張訂單的報價綁定」是不行的。
+        case 'qsedit_tier_info': {
+            qsedit_require_perm($pdo, (int)$user_id);
+            $ids  = json_decode((string)($_POST['item_ids'] ?? $_GET['item_ids'] ?? '[]'), true);
+            $info = qsedit_tier_items($pdo, is_array($ids) ? $ids : []);
+            $info['orders'] = qsedit_tier_orders($pdo, array_map(fn($r) => (int)$r['item_id'], $info['items']));
+            $response = ['success' => true, 'data' => $info];
+            break;
+        }
+
+        // ── 改成階梯數量計價：寫入 ──
+        //   keep_item_id＝留下來當階梯項目的那一列，其餘勾選的列會被收成階距後刪除。
+        //   只勾一列時 dropIds 為空＝單純把那一列轉成階梯，或改它既有的階距。
+        case 'qsedit_set_tiers': {
+            qsedit_require_perm($pdo, (int)$user_id);
+            $ids  = json_decode((string)($_POST['item_ids'] ?? '[]'), true);
+            $info = qsedit_tier_items($pdo, is_array($ids) ? $ids : []);
+            $items   = $info['items'];
+            $quoteId = (int)$info['quote_id'];
+
+            $keepId = intval($_POST['keep_item_id'] ?? 0);
+            $byId   = [];
+            foreach ($items as $r) $byId[(int)$r['item_id']] = $r;
+            if (!isset($byId[$keepId])) throw new Exception('請指定要保留哪一列當作階梯項目');
+            $dropIds = array_values(array_diff(array_keys($byId), [$keepId]));
+
+            $tiersIn = json_decode((string)($_POST['tiers'] ?? '[]'), true);
+            $tiers   = qsedit_tier_normalize(is_array($tiersIn) ? $tiersIn : []);
+
+            // 規格：留空＝不動；單位只收單位主檔裡有的（與 qsedit_apply_qty 同一份來源）
+            $spec = array_key_exists('specification', $_POST) ? trim((string)$_POST['specification']) : null;
+            if ($spec !== null && mb_strlen($spec) > 100) throw new Exception('品名規格最多 100 個字');
+            $unit = null;
+            if (array_key_exists('unit', $_POST) && trim((string)$_POST['unit']) !== '') {
+                $unit  = trim((string)$_POST['unit']);
+                $units = qsedit_unit_options($pdo);
+                if ($unit !== (string)$byId[$keepId]['unit'] && !in_array($unit, $units, true)) {
+                    throw new Exception('數量單位「' . $unit . '」不在單位主檔內，請先到庫存單位設定新增');
+                }
+            }
+            // 料號ID：保留的那一列沒綁、而被收掉的列剛好綁著同一個，就一起帶過來
+            //（不帶的話合併完反而比原本少了一個綁定，而那個綁定本來就是對的）
+            $dsid = null;
+            if (empty($byId[$keepId]['d_setting_d_id']) && $dropIds) {
+                $cand = array_values(array_unique(array_filter(array_map(
+                    fn($i) => (int)($byId[$i]['d_setting_d_id'] ?? 0), $dropIds))));
+                if (count($cand) === 1) $dsid = $cand[0];
+            }
+
+            // 分配表要在交易外先確認存在（CREATE TABLE 在交易中會造成隱式 commit）
+            if ($dropIds) {
+                require_once __DIR__ . '/../common/trace_chain_lib.php';
+                tc_order_quote_ensure($pdo);
+            }
+
+            $before = ['keep' => $byId[$keepId], 'drop' => array_map(fn($i) => $byId[$i], $dropIds)];
+            $pdo->beginTransaction();
+            try {
+                $w = qsedit_tier_write($pdo, $keepId, $dropIds, $tiers, $spec, $unit, $dsid, $user_id);
+                [$totalOld, $totalNew] = qsedit_sync_total($pdo, $quoteId);
+                $pdo->prepare("UPDATE quotation_list SET updated_by=?, updated_at=NOW() WHERE quote_id=?")
+                    ->execute([$user_id, $quoteId]);
+                $pdo->commit();
+            } catch (Exception $e) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                throw $e;
+            }
+
+            // 被收掉的那幾列一律完整留在變更紀錄裡（料號、規格、數量、單價），事後查得到原本是什麼
+            $tierTxt = implode('、', array_map(
+                fn($t) => $t['qty_min'] . '～' . ($t['qty_max'] === null ? '以上' : $t['qty_max']) . ' @' . rtrim(rtrim(number_format($t['unit_price'], 6, '.', ''), '0'), '.'),
+                $tiers));
+            qsedit_log($pdo, $quoteId, (int)$user_id,
+                       '快速轉移頁改成階梯數量計價：' . (string)$byId[$keepId]['product_id'] .
+                       '（' . count($tiers) . ' 段階距' . ($dropIds ? ('，收掉 ' . count($dropIds) . ' 列') : '') . '）',
+                       ['field' => 'tiered', 'keep_item_id' => $keepId, 'dropped_item_ids' => $dropIds,
+                        'before' => $before, 'tiers' => $tiers, 'tiers_text' => $tierTxt,
+                        'specification' => $spec, 'unit' => $unit, 'd_setting_d_id' => $dsid,
+                        'orders_repointed' => $w['orders'],
+                        'amount' => $w['amount'], 'total_amount_old' => $totalOld, 'total_amount_new' => $totalNew]);
+
+            $response = ['success' => true, 'keep_item_id' => $keepId, 'dropped' => count($dropIds),
+                         'tiers' => count($tiers), 'amount' => $w['amount'],
+                         'orders_repointed' => $w['orders'], 'total_amount' => $totalNew,
                          'total_changed' => (abs($totalNew - $totalOld) > 0.005)];
             break;
         }
