@@ -194,6 +194,209 @@ function dqa_exempt_del(PDO $db, string $scope, string $key, string $item): void
 }
 
 /* ============================================================
+ * 排除設定（2026-09-21 使用者交辦）
+ *
+ * 【為什麼要有】使用者回報：某個客戶都會先下未來單，所以**製令先開立、訂單事後才來綁**，
+ * 流程順序稽核就會一直報「製令早於訂單」——那是這家客戶的正常作業方式，不是缺失。
+ *
+ * 【一條規則長什麼樣】維度（客戶／廠商／料號）＋值 ＋ 套用到哪幾個分頁 ＋（選填）只排除哪幾個檢核項目。
+ *   ①維度決定它「能」套到哪些分頁（使用者要求「每個分頁適用的排除不同」）：
+ *       客戶 → 流程順序稽核、基本資料稽核（客戶）
+ *       廠商 → 基本資料稽核（廠商）        ※流程順序稽核不看廠商，所以不給選
+ *       料號 → 流程順序稽核                ※基本資料稽核查的是客戶廠商主檔，沒有料號
+ *     `dqa_excl_dims()` 是這張對照表的唯一登記處，畫面與後端驗證都讀它。
+ *   ②項目留空＝整筆不納入稽核；有指定就只把那幾個檢核項目拿掉，其餘照驗
+ *     （上面那個案例只要排掉「製令早於訂單」就好，不必整個客戶都不稽核）。
+ *
+ * 【與 dqa_exempt 的分工】dqa_exempt 是「這一筆的這一項已核可」的逐筆例外；
+ * 這裡是「往後凡是這個客戶／廠商／料號都不要再報」的常設規則，兩者互補、不互相取代。
+ * ============================================================ */
+function dqa_excl_dims(): array
+{
+    return [
+        'client' => ['label' => '客戶', 'tabs' => ['trace', 'customer'], 'master' => 'customer'],
+        'maker'  => ['label' => '廠商', 'tabs' => ['maker'],             'master' => 'maker'],
+        'part'   => ['label' => '料號', 'tabs' => ['trace'],             'master' => ''],
+    ];
+}
+/** 分頁代碼 → 顯示名稱（trace＝分頁一；customer／maker＝分頁二的兩種對象） */
+function dqa_excl_tabs(): array
+{
+    return ['trace' => '流程順序稽核', 'customer' => '基本資料稽核（客戶）', 'maker' => '基本資料稽核（廠商）'];
+}
+
+function dqa_excl_ensure(PDO $db): void
+{
+    $db->exec("CREATE TABLE IF NOT EXISTS dqa_exclude (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        dim VARCHAR(10) NOT NULL COMMENT 'client/maker/part，見 dqa_excl_dims()',
+        val VARCHAR(120) NOT NULL COMMENT '客戶簡稱／廠商簡稱／料號',
+        tabs VARCHAR(80) NOT NULL DEFAULT '' COMMENT '套用分頁，逗號分隔（trace/customer/maker）',
+        items TEXT NULL COMMENT '只排除哪幾個檢核項目（JSON 陣列）；空＝整筆不稽核',
+        reason VARCHAR(300) NULL,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        UNIQUE KEY uk_dqa_excl (dim, val)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='資料稽核：排除設定（整個客戶／廠商／料號不列為缺失）'");
+}
+
+/** 全部排除規則（畫面用；含停用的） */
+function dqa_excl_list(PDO $db): array
+{
+    dqa_excl_ensure($db);
+    $rows = $db->query("SELECT id, dim, val, tabs, items, reason, is_active, created_by_name,
+                               DATE_FORMAT(created_at,'%Y-%m-%d') d
+                          FROM dqa_exclude ORDER BY dim, val")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        $r['tab_list']  = array_values(array_filter(explode(',', (string)$r['tabs'])));
+        $r['item_list'] = json_decode((string)$r['items'], true) ?: [];
+        $r['is_active'] = (int)$r['is_active'];
+    }
+    return $rows;
+}
+
+/**
+ * 某個分頁要套用的排除規則，整理成好查的形式：
+ *   [ 維度 => [ 正規化後的值 => ['all'=>bool, 'items'=>[代碼=>1], 'reason'=>, 'id'=>] ] ]
+ * 值一律用 dqa_excl_norm() 正規化後比對（去空白、轉小寫），避免「和大 」比不中「和大」。
+ */
+function dqa_excl_map(PDO $db, string $tab): array
+{
+    // 同一個 request 內改過規則就要重讀：存檔後若還吃舊快取，會出現
+    // 「規則存進去了、當下重算卻完全沒作用」這種看不出原因的情形（實測抓到）。
+    if (dqa_excl_cache(null) === null) dqa_excl_cache([]);
+    $cache = dqa_excl_cache(null);
+    if (isset($cache[$tab])) return $cache[$tab];
+    $out = [];
+    foreach (dqa_excl_list($db) as $r) {
+        if (!$r['is_active']) continue;
+        if (!in_array($tab, $r['tab_list'], true)) continue;
+        $items = [];
+        foreach ($r['item_list'] as $c) $items[(string)$c] = 1;
+        $out[(string)$r['dim']][dqa_excl_norm((string)$r['val'])] = [
+            'all' => !$items, 'items' => $items,
+            'reason' => (string)$r['reason'], 'id' => (int)$r['id'], 'val' => (string)$r['val'],
+        ];
+    }
+    $cache[$tab] = $out;
+    dqa_excl_cache($cache);
+    return $out;
+}
+/** 排除規則的請求內快取；傳 null 取值、傳陣列設值、呼叫 dqa_excl_cache_clear() 清掉 */
+function dqa_excl_cache($set = null)
+{
+    static $cache = null;
+    if ($set !== null) $cache = $set;
+    return $cache;
+}
+function dqa_excl_cache_clear(): void { dqa_excl_cache([]); }
+function dqa_excl_norm(string $v): string
+{
+    return mb_strtolower(trim(preg_replace('/\s+/u', '', $v)));
+}
+
+/** 這一列命中了哪些排除規則（$vals: dim => 值） */
+function dqa_excl_hit(array $map, array $vals): array
+{
+    $hit = [];
+    foreach ($vals as $dim => $v) {
+        $k = dqa_excl_norm((string)$v);
+        if ($k !== '' && isset($map[$dim][$k])) $hit[] = $map[$dim][$k] + ['dim' => $dim];
+    }
+    return $hit;
+}
+
+function dqa_excl_save(PDO $db, array $d, int $uid, string $uname): array
+{
+    dqa_excl_ensure($db);
+    $dims = dqa_excl_dims();
+    $dim  = (string)($d['dim'] ?? '');
+    if (!isset($dims[$dim])) throw new RuntimeException('不支援的排除維度');
+    $val = trim((string)($d['val'] ?? ''));
+    if ($val === '') throw new RuntimeException('請指定要排除的客戶／廠商／料號');
+    if (mb_strlen($val) > 120) throw new RuntimeException('排除的值太長');
+
+    // 分頁只能是這個維度本來就適用的那幾個（鐵律8：前端擋一次、後端同規則再擋一次）
+    $tabs = [];
+    foreach ((array)($d['tabs'] ?? []) as $t) {
+        $t = (string)$t;
+        if (in_array($t, $dims[$dim]['tabs'], true) && !in_array($t, $tabs, true)) $tabs[] = $t;
+    }
+    if (!$tabs) throw new RuntimeException('請至少勾選一個要套用的分頁');
+
+    // 檢核項目：流程順序稽核才有項目可挑；基本資料稽核的欄位缺失不分項（整筆排除）
+    $allowItems = array_keys(dqa_trace_items());
+    $items = [];
+    foreach ((array)($d['items'] ?? []) as $c) {
+        $c = (string)$c;
+        if (in_array($c, $allowItems, true) && !in_array($c, $items, true)) $items[] = $c;
+    }
+    if ($items && !in_array('trace', $tabs, true)) $items = [];   // 沒套到分頁一就沒有項目可言
+
+    $st = $db->prepare("INSERT INTO dqa_exclude (dim,val,tabs,items,reason,is_active,created_by,created_by_name)
+                        VALUES (?,?,?,?,?,1,?,?)
+                        ON DUPLICATE KEY UPDATE tabs=VALUES(tabs), items=VALUES(items),
+                                                reason=VALUES(reason), is_active=1,
+                                                created_by=VALUES(created_by),
+                                                created_by_name=VALUES(created_by_name), created_at=NOW()");
+    $st->execute([$dim, $val, implode(',', $tabs), $items ? json_encode($items) : null,
+                  mb_substr((string)($d['reason'] ?? ''), 0, 300), $uid, $uname]);
+    dqa_excl_cache_clear();
+    return ['dim' => $dim, 'val' => $val, 'tabs' => $tabs, 'items' => $items];
+}
+
+function dqa_excl_set_active(PDO $db, int $id, bool $on): void
+{
+    dqa_excl_ensure($db);
+    $db->prepare("UPDATE dqa_exclude SET is_active=? WHERE id=?")->execute([$on ? 1 : 0, $id]);
+    dqa_excl_cache_clear();
+}
+function dqa_excl_del(PDO $db, int $id): void
+{
+    dqa_excl_ensure($db);
+    $db->prepare("DELETE FROM dqa_exclude WHERE id=?")->execute([$id]);
+    dqa_excl_cache_clear();
+}
+
+/**
+ * 排除設定的值要讓人用挑的，不能只讓人打字（打錯一個字這條規則就永遠不會命中，
+ * 而且完全不報錯）。客戶／廠商查主檔，料號查 d_setting。
+ */
+function dqa_excl_search(PDO $db, string $dim, string $kw, int $limit = 30): array
+{
+    $kw = trim($kw);
+    if ($kw === '') return [];
+    $like = '%' . $kw . '%';
+    $out = [];
+    try {
+        if ($dim === 'client') {
+            $st = $db->prepare("SELECT customer AS val, customer_id AS code FROM customer_list
+                                 WHERE COALESCE(is_inactive,0)=0 AND (customer LIKE ? OR customer_id LIKE ?)
+                                 ORDER BY customer LIMIT $limit");
+            $st->execute([$like, $like]);
+        } elseif ($dim === 'maker') {
+            $st = $db->prepare("SELECT maker_id AS val, maker_id_no AS code FROM maker_list
+                                 WHERE COALESCE(status,'')<>'X' AND (maker_id LIKE ? OR maker_id_no LIKE ?)
+                                 ORDER BY maker_id LIMIT $limit");
+            $st->execute([$like, $like]);
+        } elseif ($dim === 'part') {
+            $st = $db->prepare("SELECT DISTINCT D_Setting_Id AS val, '' AS code FROM d_setting
+                                 WHERE D_Setting_Id LIKE ? ORDER BY D_Setting_Id LIMIT $limit");
+            $st->execute([$like]);
+        } else {
+            return [];
+        }
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $v = trim((string)$r['val']);
+            if ($v === '') continue;
+            $out[] = ['val' => $v, 'code' => trim((string)$r['code'])];
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/* ============================================================
  * 稽核對象：綁定的 AS 表單編號（多選）
  * ============================================================ */
 function dqa_scope_tabs(): array
@@ -382,6 +585,8 @@ function dqa_trace_rows(PDO $db, array $f): array
     $tol    = dqa_tolerance($db);
     $validDays = (int)$tol['quote_valid_days'];
     $itemLv = dqa_trace_levels($db);
+    $exclMap = dqa_excl_map($db, 'trace');      // 排除設定（客戶／料號）
+    $exclStat = [];                             // 被排除掉的統計，畫面要講出來
     $exempt = dqa_exempt_map($db, 'trace');
 
     /* ── ① 訂單（稽核主軸：一張訂單一列）───────────────── */
@@ -476,23 +681,31 @@ function dqa_trace_rows(PDO $db, array $f): array
     /* ── ④ 製令：綁定（分配表）→ legacy（bom.o_order_id）→ 推測 ── */
     $bomByOrder = [];   // order_id → [bom 列]
     $bomSeen    = [];   // bom 編號 → 1（製程要用）
+    /* 一定要帶「這張製令自己的」客戶、料號與完工狀態：畫面上的連結是用節點自己的值去別頁篩選，
+       拿訂單的值去篩會篩出 0 筆；完工狀態則決定要連到哪一頁——
+       實測 BOM 總表只列未完工的製令，已完工的在那裡一列都查不到。 */
     $mkBom = function (array $r, string $src) use (&$bomSeen) {
         $no = (string)$r['bom'];
         $bomSeen[$no] = 1;
-        return ['bom' => $no, 'qty' => dqa_num($r['sqty']), 'src' => $src,
-                'date' => dqa_bom_open_date($no, $r['created'] ?? null),
+        $d = dqa_bom_open_date($no, $r['created'] ?? null);
+        return ['bom' => $no, 'qty' => dqa_num($r['sqty']), 'src' => $src, 'date' => $d,
                 'alloc' => isset($r['alloc']) ? dqa_num($r['alloc']) : null,
-                '_id' => 'b' . $no, '_sort' => dqa_bom_open_date($no, $r['created'] ?? null)];
+                'client' => trim((string)($r['Client_Name'] ?? '')),
+                'part'   => trim((string)($r['d_id'] ?? '')),
+                'done'   => ((string)($r['processing_state'] ?? '') === '1'),
+                '_id' => 'b' . $no, '_sort' => $d];
     };
     foreach (dqa_chunks($oids) as $ck) {
         $in = implode(',', array_fill(0, count($ck), '?'));
-        $s = $db->prepare("SELECT m.order_id, m.allocated_qty alloc, b.bom, b.sqty,
+        $s = $db->prepare("SELECT m.order_id, m.allocated_qty alloc, b.bom, b.sqty, b.d_id,
+                                  b.Client_Name, b.processing_state,
                                   DATE_FORMAT(b.Created_At,'%Y-%m-%d') created
                              FROM bom_order_process_map m JOIN bom b ON b.bom=m.bom
                             WHERE m.order_id IN ($in)");
         $s->execute($ck);
         foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) $bomByOrder[(int)$r['order_id']][(string)$r['bom']] = $mkBom($r, 'map');
-        $s = $db->prepare("SELECT b.o_order_id, b.bom, b.sqty, DATE_FORMAT(b.Created_At,'%Y-%m-%d') created
+        $s = $db->prepare("SELECT b.o_order_id, b.bom, b.sqty, b.d_id, b.Client_Name, b.processing_state,
+                                  DATE_FORMAT(b.Created_At,'%Y-%m-%d') created
                              FROM bom b WHERE b.o_order_id IN ($in)");
         $s->execute($ck);
         foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -510,7 +723,7 @@ function dqa_trace_rows(PDO $db, array $f): array
         if ($parts) { $u = array_values(array_unique($parts));
             $w[] = "b.d_id IN (" . implode(',', array_fill(0, count($u), '?')) . ")";
             $bind = array_merge($bind, $u); }
-        $s = $db->prepare("SELECT b.bom, b.sqty, b.d_id, b.d_setting_id, b.Client_Name,
+        $s = $db->prepare("SELECT b.bom, b.sqty, b.d_id, b.d_setting_id, b.Client_Name, b.processing_state,
                                   DATE_FORMAT(b.Created_At,'%Y-%m-%d') created
                              FROM bom b WHERE (" . implode(' OR ', $w) . ")
                               AND b.Created_At >= ? ORDER BY b.bom");
@@ -531,18 +744,21 @@ function dqa_trace_rows(PDO $db, array $f): array
                 'qty' => dqa_num($r['Qty']), 'price' => dqa_num($r['Unit_price']),
                 'spec' => (string)($r['Specification'] ?? ''), 'src' => $src,
                 'alloc' => isset($r['alloc']) ? dqa_num($r['alloc']) : null,
+                'client' => trim((string)($r['Client_name'] ?? '')),
+                'part'   => trim((string)($r['Product_id'] ?? '')),
                 '_id' => 's' . (int)$r['IS_id'], '_sort' => $d];
     };
     foreach (dqa_chunks($oids) as $ck) {
         $in = implode(',', array_fill(0, count($ck), '?'));
         $s = $db->prepare("SELECT m.Order_id, m.allocated_qty alloc, il.IS_id, il.IS_number, il.Qty,
-                                  il.Unit_price, il.Specification, DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate
+                                  il.Unit_price, il.Specification, il.Client_name, il.Product_id,
+                                  DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate
                              FROM is_order_map m JOIN is_list il ON il.IS_id=m.IS_id
                             WHERE m.Order_id IN ($in)");
         $s->execute($ck);
         foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) $shipByOrder[(int)$r['Order_id']][(int)$r['IS_id']] = $mkShip($r, 'map');
         $s = $db->prepare("SELECT il.Order_id, il.IS_id, il.IS_number, il.Qty, il.Unit_price, il.Specification,
-                                  DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate
+                                  il.Client_name, il.Product_id, DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate
                              FROM is_list il WHERE il.Order_id IN ($in)");
         $s->execute($ck);
         foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -643,7 +859,10 @@ function dqa_trace_rows(PDO $db, array $f): array
                 if ($bMin === '' || $b['date'] < $bMin) $bMin = $b['date'];
                 if ($bMax === '' || $b['date'] > $bMax) $bMax = $b['date'];
             }
-            if (count($bList) < 12) $bList[] = ['no' => $b['bom'], 'date' => $b['date'], 'qty' => $q1];
+            if (count($bList) < 12) $bList[] = ['no' => $b['bom'], 'date' => $b['date'], 'qty' => $q1,
+                                                'client' => (string)($b['client'] ?? ''),
+                                                'part' => (string)($b['part'] ?? ''),
+                                                'done' => !empty($b['done'])];
         }
 
         /* 出貨 */
@@ -676,7 +895,9 @@ function dqa_trace_rows(PDO $db, array $f): array
             // 畫面上要給人點的是「單號」，所以依單號合併、數量加總，不然會印出三個一樣的單號
             $k = (string)$s2['no'];
             if ($k === '') continue;
-            if (!isset($sDocs[$k])) $sDocs[$k] = ['no' => $k, 'date' => $s2['date'], 'qty' => 0.0];
+            if (!isset($sDocs[$k])) $sDocs[$k] = ['no' => $k, 'date' => $s2['date'], 'qty' => 0.0,
+                                                  'client' => (string)($s2['client'] ?? ''),
+                                                  'part' => (string)($s2['part'] ?? '')];
             $sDocs[$k]['qty'] += $q1;
             if ($s2['date'] !== '' && ($sDocs[$k]['date'] === '' || $s2['date'] < $sDocs[$k]['date']))
                 $sDocs[$k]['date'] = $s2['date'];
@@ -785,6 +1006,21 @@ function dqa_trace_rows(PDO $db, array $f): array
             if ($c2 === 'diff') $add('proc_b', 'warn', '訂單製程「' . implode('、', $pOrder) . '」與製令製程「' . implode('、', $pBom) . '」完全不同');
         }
 
+        /* 排除設定：整個客戶／料號不稽核，或只拿掉指定的檢核項目
+           （使用者案例：某客戶都下未來單，製令必定早於訂單，那不是缺失） */
+        $exclHit = dqa_excl_hit($exclMap, ['client' => (string)$o['Client_name'],
+                                           'part'   => (string)$o['d_id']]);
+        $skipRow = false; $exclNote = [];
+        foreach ($exclHit as $h) {
+            $exclStat[$h['id']] = ($exclStat[$h['id']] ?? 0) + 1;
+            if ($h['all']) { $skipRow = true; $exclNote[] = $h; continue; }
+            $keep = [];
+            foreach ($iss as $it) { if (isset($h['items'][$it['code']])) continue; $keep[] = $it; }
+            if (count($keep) !== count($iss)) $exclNote[] = $h;
+            $iss = $keep;
+        }
+        if ($skipRow) continue;                 // 整筆排除：這張訂單完全不進稽核結果
+
         /* 已核可的例外一律扣掉（整筆 * 或逐項） */
         $ex = $exempt[(string)$oid] ?? [];
         $exHit = [];
@@ -809,7 +1045,9 @@ function dqa_trace_rows(PDO $db, array $f): array
             'oqty' => $oqty, 'oprice' => $oprice, 'closed' => $closed, 'auto_pm' => $autoPm,
             'oproc' => (string)$o['Processing_items'],
             'quote' => $q ? ['no' => (string)$q['quote_no'], 'date' => $qdate,
-                             'qty' => dqa_num($q['quantity']), 'price' => $qprice, 'src' => $qSrc] : null,
+                             'qty' => dqa_num($q['quantity']), 'price' => $qprice, 'src' => $qSrc,
+                             'client' => trim((string)($q['client_name'] ?? '')),
+                             'part'   => trim((string)($q['product_id'] ?? ''))] : null,
             'bom'   => ['cnt' => count($boms), 'qty' => $bQty, 'date' => $bMin, 'date_max' => $bMax,
                         'src' => $bomSrc, 'list' => $bList],
             'ship'  => ['cnt' => count($ships), 'doc_cnt' => count($sList), 'qty' => $sQty,
@@ -817,12 +1055,29 @@ function dqa_trace_rows(PDO $db, array $f): array
                         'price' => $sPrice, 'src' => $shipSrc, 'list' => $sList],
             'proc'  => ['quote' => $pQuote, 'order' => $pOrder, 'bom' => $pBom, 'ship' => $pShip, 'cmp' => $pCmp],
             'issues' => $iss, 'level' => $level, 'exempt' => $exHit,
+            'excl' => array_map(function ($h) {
+                return ['dim' => $h['dim'], 'val' => $h['val'], 'reason' => $h['reason']];
+            }, $exclNote),
         ];
     }
 
     return ['rows' => $rows, 'total' => count($rows), 'stat' => dqa_trace_stat($rows),
             'truncated' => ($orderTotal > count($orders)), 'scanned' => count($orders),
-            'order_total' => $orderTotal, 'limit' => $lim, 'tol' => $tol];
+            'order_total' => $orderTotal, 'limit' => $lim, 'tol' => $tol,
+            'excl_rules' => dqa_excl_applied($db, 'trace', $exclStat)];
+}
+
+/** 這次稽核實際套用到的排除規則＋各排掉幾筆（畫面一定要講出來，不然看不出有排除在作用） */
+function dqa_excl_applied(PDO $db, string $tab, array $stat): array
+{
+    $out = [];
+    foreach (dqa_excl_list($db) as $r) {
+        if (!$r['is_active'] || !in_array($tab, $r['tab_list'], true)) continue;
+        $out[] = ['id' => (int)$r['id'], 'dim' => (string)$r['dim'], 'val' => (string)$r['val'],
+                  'items' => $r['item_list'], 'reason' => (string)$r['reason'],
+                  'hit' => (int)($stat[(int)$r['id']] ?? 0)];
+    }
+    return $out;
 }
 
 /** 數字顯示：小數尾 0 省略（UI 規則） */
@@ -962,6 +1217,9 @@ function dqa_master_rows(PDO $db, string $type, array $opt = []): array
     $rule     = dqa_code_rule($db);
     $re       = dqa_code_regex($rule);
     $exempt   = dqa_exempt_map($db, $type);
+    $exclMap  = dqa_excl_map($db, $type === 'maker' ? 'maker' : 'customer');
+    $exclDim  = $type === 'maker' ? 'maker' : 'client';
+    $exclStat = [];
 
     /* ⚠ 欄位不要取別名：檢核是拿 dqa_master_fields() 裡登記的**真實欄位名**去讀這一列，
        取了別名（customer AS nm）就會變成「每一筆都說客戶簡稱未填」而且完全不報錯。 */
@@ -1001,6 +1259,12 @@ function dqa_master_rows(PDO $db, string $type, array $opt = []): array
         $nm  = trim((string)$r[$nameCol]);
         if ($q !== '' && mb_stripos($key . ' ' . $nm, $q) === false) continue;
 
+        // 排除設定：整個客戶／廠商不納入基本資料稽核
+        $exclHit = dqa_excl_hit($exclMap, [$exclDim => $nm]);
+        if ($exclHit) {
+            foreach ($exclHit as $h) $exclStat[$h['id']] = ($exclStat[$h['id']] ?? 0) + 1;
+            continue;
+        }
         $ex = $exempt[$key] ?? [];
         $iss = [];
         foreach ($fields as $code => $d) {
@@ -1050,7 +1314,8 @@ function dqa_master_rows(PDO $db, string $type, array $opt = []): array
         foreach ($r['issues'] as $it) $stat['by_code'][$it['code']] = ($stat['by_code'][$it['code']] ?? 0) + 1;
     }
     return ['rows' => $rows, 'total' => count($rows), 'stat' => $stat,
-            'rule_text' => dqa_code_rule_text($rule), 'levels' => $levels];
+            'rule_text' => dqa_code_rule_text($rule), 'levels' => $levels,
+            'excl_rules' => dqa_excl_applied($db, $type === 'maker' ? 'maker' : 'customer', $exclStat)];
 }
 
 /* ============================================================

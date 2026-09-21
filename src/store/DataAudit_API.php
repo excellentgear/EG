@@ -42,7 +42,8 @@ if (!$uid)          jerr('未登入或帳號非在職狀態', 401);
 if (!$P['canView']) jerr('您沒有資料稽核的檢閱權限，請洽管理員於「使用者權限設定」開通', 403);
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
-$WRITE = ['settings_save', 'exempt_set', 'exempt_del', 'scope_save', 'run_save', 'print_log'];
+$WRITE = ['settings_save', 'exempt_set', 'exempt_del', 'scope_save', 'run_save', 'print_log',
+          'excl_save', 'excl_toggle', 'excl_del'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['dqa_csrf'], $tok))
@@ -167,6 +168,45 @@ case 'scope_save': {
     $saved = dqa_scope_save($db, $tab, $ids, $uname);
     jout(['ids' => $saved, 'docs' => dqa_scope_docs_info($db, $tab),
           'msg' => '已儲存，共 ' . count($saved) . ' 份表單']);
+}
+
+/* ── 排除設定（整個客戶／廠商／料號不列為缺失）────────── */
+case 'excl_list': {
+    jout(['rows' => dqa_excl_list($db), 'dims' => dqa_excl_dims(),
+          'tabs' => dqa_excl_tabs(), 'items' => dqa_trace_items()]);
+}
+
+case 'excl_search': {
+    $dim = dqaIn('dim');
+    if (!isset(dqa_excl_dims()[$dim])) jerr('不支援的排除維度');
+    jout(['rows' => dqa_excl_search($db, $dim, dqaIn('kw'))]);
+}
+
+case 'excl_save': {
+    $tabs  = json_decode((string)($_POST['tabs'] ?? '[]'), true);
+    $items = json_decode((string)($_POST['items'] ?? '[]'), true);
+    try {
+        $r = dqa_excl_save($db, [
+            'dim' => dqaIn('dim'), 'val' => dqaIn('val'),
+            'tabs' => is_array($tabs) ? $tabs : [], 'items' => is_array($items) ? $items : [],
+            'reason' => dqaIn('reason'),
+        ], $uid, $uname);
+    } catch (Throwable $e) { jerr($e->getMessage()); }
+    jout(['saved' => $r, 'rows' => dqa_excl_list($db), 'msg' => '排除設定已儲存']);
+}
+
+case 'excl_toggle': {
+    $id = (int)dqaIn('id');
+    if ($id <= 0) jerr('缺少規則編號');
+    dqa_excl_set_active($db, $id, dqaIn('on') === '1');
+    jout(['rows' => dqa_excl_list($db), 'msg' => dqaIn('on') === '1' ? '已啟用' : '已停用（不再排除）']);
+}
+
+case 'excl_del': {
+    $id = (int)dqaIn('id');
+    if ($id <= 0) jerr('缺少規則編號');
+    dqa_excl_del($db, $id);
+    jout(['rows' => dqa_excl_list($db), 'msg' => '已刪除這條排除設定']);
 }
 
 /* ── 例外（已核可不列為缺失）────────────────────────── */

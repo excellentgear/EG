@@ -736,6 +736,18 @@ function openFromUrl(){
   if(/^\d{4}-\d{2}-\d{2}$/.test(f)) $('#rcFrom').val(f);
   if(/^\d{4}-\d{2}-\d{2}$/.test(t)) $('#rcTo').val(t);
   $('#rcKw').val(no);
+  /* 近期出貨單是依單號 GROUP BY（一張單一列），所以帶單號就只會有那一張；
+     但按「明細」會列出整張單的所有明細，裡面可能有別的料號。
+     所以把來源要核對的客戶與料號標出來，免得改到同一張單上無關的那幾列。 */
+  var part = (p.get('part')||'').trim(), client = (p.get('client')||'').trim();
+  $('#rcFromAudit').remove();
+  if (part || client) {
+    $('#rcList').before('<div id="rcFromAudit" style="background:#F7E0BD;border:1px solid #F0A24B;'
+      + 'border-radius:6px;padding:6px 10px;margin-bottom:6px;font-size:12px;color:#6b4a1f;">'
+      + '<i class="fa fa-info-circle"></i> 由資料稽核帶入：要核對的是'
+      + (client ? ' <b>' + esc(client) + '</b>' : '') + (part ? ' 的料號 <b>' + esc(part) + '</b>' : '')
+      + '；按「明細」時同一張單上的其他料號不在這次稽核範圍內。</div>');
+  }
   openMask('mkRecent');
   loadRecent();
 }

@@ -5131,12 +5131,21 @@ foreach($dCounts as $c) {
 
             // 【初始載入】第一次進頁面用 AJAX 載入（非資料塊模式）
             isStatCardFilter = false;
-            /* 從別的頁面帶關鍵字進來（例：資料稽核點訂單編號）→ ?kw=OO1141231010
-               填進全表搜尋框就好：fetchTableData() 本來就會讀 #filter-global，
-               而且它一有值就會自動切成「全部年份」，所以不必再帶年度 */
+            /* 從別的頁面帶篩選進來（例：資料稽核點訂單編號）
+               → ?kw=OO1141231010&part=<料號>&client=<客戶>
+               三個欄位都填：**只帶訂單編號不夠**——同一個訂單編號會有好幾列
+               （拆批、同編號多料號），只篩單號會連無關料號一起列出來，
+               稽核時很容易改到不該改的那一列（2026-09-18 使用者回報）。
+               fetchTableData() 本來就會讀這三個欄位，而且 #filter-global 一有值
+               就會自動切成「全部年份」，所以不必再帶年度。 */
             (function(){
-                var kw = new URLSearchParams(location.search).get('kw');
-                if (kw) $('#filter-global').val(kw.trim());
+                var p = new URLSearchParams(location.search);
+                var kw = (p.get('kw') || '').trim();
+                var part = (p.get('part') || '').trim();
+                var client = (p.get('client') || '').trim();
+                if (kw)     $('#filter-global').val(kw);
+                if (part)   $('#filter-part').val(part);
+                if (client) $('#filter-client').val(client);
             })();
             fetchTableData(1);
 

@@ -98,6 +98,22 @@ try {
         .dq-tbl tr.r-warn td { background:#FFF9EF; }
         .dq-tbl tr.r-major td { background:#FFF9EF; }
         .dq-tbl tbody tr:hover td { background:#F7EFE2; }
+        .excl-bar { background:#FFF4E2; border:1px solid var(--sand); border-radius:6px;
+                    padding:6px 10px; margin-top:8px; font-size:12px; color:#6B4423; }
+        .excl-tag { display:inline-block; background:#fff; border:1px solid var(--line); border-radius:10px;
+                    padding:1px 8px; margin:2px 4px 2px 0; font-size:12px; }
+        .excl-tag b { color:var(--amber-d); }
+        .ex-tbl { width:100%; border-collapse:collapse; font-size:13px; }
+        .ex-tbl th, .ex-tbl td { border:1px solid var(--line); padding:5px 8px; vertical-align:top; }
+        .ex-tbl th { background:var(--sand); color:#6B4423; text-align:left; }
+        .ex-tbl tr.off td { background:#F4F1EC; color:#9a8b78; }
+        .ex-pick { position:relative; }
+        .ex-sug { position:absolute; left:0; right:0; top:32px; z-index:20; background:#fff;
+                  border:1px solid var(--amber-d); border-radius:6px; max-height:220px; overflow:auto;
+                  box-shadow:0 4px 12px rgba(0,0,0,.12); display:none; }
+        .ex-sug div { padding:5px 10px; cursor:pointer; font-size:13px; }
+        .ex-sug div:hover { background:var(--sand); }
+        .ex-chk { display:inline-flex; align-items:center; gap:4px; margin-right:12px; font-weight:normal; }
         .dq-periods { display:inline-flex; gap:4px; flex-wrap:wrap; }
         .dq-periods button { border:1px solid var(--line); background:#fff; color:#6B4423;
                              border-radius:4px; height:28px; padding:0 12px; font-size:13px; }
@@ -173,6 +189,7 @@ try {
         <div class="dq-tab on" data-tab="trace">① 流程順序稽核（報價→訂單→製令→出貨）</div>
         <div class="dq-tab" data-tab="master">② 基本資料稽核（客戶／廠商）</div>
         <div style="margin-left:auto; display:flex; align-items:center; gap:6px;">
+            <button class="btn btn-sm btn-warm-o" id="btnExcl"><i class="fa fa-ban"></i> 排除設定</button>
             <button class="btn btn-sm btn-warm-o" id="btnScope"><i class="fa fa-link"></i> 稽核對象</button>
             <?php if ($perms['canAdmin']): ?>
             <button class="btn btn-sm btn-warm-o" id="btnSetting"><i class="fa fa-cog"></i> 設定</button>
@@ -318,11 +335,15 @@ try {
             <li><b>製程比對</b>預設關閉。訂單的製程是人工手打（「齒研+雷刻」「代料完成」），
                 出貨的製程由 ERP 轉出時與規格混在同一欄，所以差異很大；需要查的時候再勾「比對製程」。</li>
             <li><b>四種單號都可以點，開新分頁並自動帶好篩選</b>：
-                報價單號 → 報價單管理（帶該報價年度並自動搜尋單號）；
-                訂單編號 → 訂單追蹤（填進全表搜尋，該頁一有全表搜尋值就會自動切成「全部年份」）。</li>
+                報價單號 → 報價單管理（帶報價年度、客戶與單號）；
+                訂單編號 → 訂單追蹤（<b>客戶、料號、全表搜尋三個欄位都會一起帶</b>）。
+                <b>每個連結都會把客戶與料號一起帶過去</b>——只帶單號的話，同一個訂單編號會有好幾列
+                （拆批、同編號多料號），無關的料號也會一起列出來，稽核時很容易改到不該改的那一列。</li>
             <li><b>製令與出貨的數量下方會列出單號，點下去直接開相關頁面並帶好篩選</b>：
-                製令 → BOM 總表（自動填入該製令編號搜尋）；出貨 → 快速出貨的「近期出貨單」
-                （自動以該單號查詢，日期區間帶該單前後 7 天）。都是開新分頁，不影響這一頁的稽核結果。
+                製令 → BOM 總表（填入客戶欄與 BOM 欄）；出貨 → 快速出貨的「近期出貨單」
+                （以該單號查詢，日期區間帶該單前後 7 天，並在跳窗上標出要核對的客戶與料號——
+                 一張出貨單的明細可能含別的料號，那些不在這次稽核範圍）。
+                都是開新分頁，不影響這一頁的稽核結果。
                 一張出貨單在系統裡是好幾個明細列，這裡已依單號合併，所以看到的是張數不是列數。</li>
             <li>同一支料號的多張訂單對到同一張報價單是正常的，不會被判成異常。
                 製令與訂單、出貨也不是一對一，所以數量一律用<b>合計</b>比對。</li>
@@ -337,6 +358,21 @@ try {
             <li>上方的「重要缺失／一般缺失／建議補齊／資料完善」卡片一樣可以點來篩選。</li>
             <li>已停用者不納入稽核。確定無統編（現金交易）、或編號沿用舊制不打算改的，
                 按該列的「標為例外」，之後就不再列為缺失，並會記下是誰、什麼時候、為什麼核可的。</li>
+        </ul>
+
+        <h4>排除設定（右上角「排除設定」）</h4>
+        <p>有些情況本來就不是缺失，卻每次稽核都被報出來。例如<b>某些客戶固定先下未來單</b>，
+           製令會先開立、訂單事後才來綁，流程順序稽核就會一直報「製令早於訂單」。
+           這時候建一條排除規則即可。</p>
+        <ul>
+            <li>一條規則＝<b>排除什麼</b>（客戶／廠商／料號＋對象）＋<b>套用到哪個分頁</b>＋
+                （選填）<b>只排除哪幾個檢核項目</b>。項目不勾＝這個對象整筆不納入稽核。</li>
+            <li><b>每個分頁適用的排除不同</b>：客戶可套流程順序稽核與基本資料稽核（客戶）；
+                廠商只有基本資料稽核（廠商）；料號只有流程順序稽核（基本資料稽核查的是客戶廠商主檔，沒有料號）。</li>
+            <li>對象要<b>打字從主檔挑</b>，不要自己硬打——打錯一個字這條規則就永遠不會命中，而且不會報錯。</li>
+            <li>規則可以<b>停用</b>（先留著不生效）或<b>刪除</b>；稽核結果上方會列出
+                「這次套用了哪些排除、各排掉幾筆」，所以隨時看得出有排除在作用。</li>
+            <li>這和逐筆的「標為例外」互補：例外是「這一筆的這一項已核可」，排除是「往後凡是這個對象都不要再報」。</li>
         </ul>
 
         <h4>稽核對象與留存</h4>
@@ -382,6 +418,57 @@ try {
         <button class="btn btn-sm btn-warm" id="btnScopeSave">儲存</button>
         <?php endif; ?>
     </div>
+</div></div>
+
+<!-- 排除設定 -->
+<div class="m-mask" id="exclMask"><div class="m-box" style="width:860px">
+    <div class="m-head">排除設定：整個客戶／廠商／料號不列為缺失 <span class="x" data-close>&times;</span></div>
+    <div class="m-body">
+        <p class="muted-help">
+            有些情況本來就不是缺失，卻每次稽核都被報出來。例如
+            <b>某些客戶固定先下未來單</b>，製令會先開立、訂單事後才來綁，流程順序稽核就會一直報
+            「製令早於訂單」——那是這家客戶的作業方式，不是資料有問題。<br>
+            一條規則＝<b>排除什麼</b>（客戶／廠商／料號＋值）＋<b>套用到哪個分頁</b>＋
+            （選填）<b>只排除哪幾個檢核項目</b>。項目留空＝這個對象整筆不納入稽核。<br>
+            <b>維度決定它能套到哪些分頁</b>：客戶可套流程順序稽核與基本資料稽核（客戶）；
+            廠商只有基本資料稽核（廠商）；料號只有流程順序稽核。
+        </p>
+        <div class="warm-panel" style="background:#FFFBF4"<?= $perms['canAdmin'] ? '' : ' hidden' ?>>
+            <div class="dq-bar" style="align-items:flex-start">
+                <div>
+                    <label style="display:block">排除什麼</label>
+                    <select id="exDim" style="width:88px"></select>
+                </div>
+                <div class="ex-pick" style="flex:1; min-width:220px">
+                    <label style="display:block">對象（打字搜尋主檔後點選）</label>
+                    <input type="text" id="exVal" style="width:100%" autocomplete="off"
+                           data-eg-hint="打客戶簡稱或編號，例如 和大 或 C2005">
+                    <div class="ex-sug" id="exSug"></div>
+                </div>
+                <div style="flex:1; min-width:200px">
+                    <label style="display:block">原因（選填，建議填寫）</label>
+                    <input type="text" id="exReasonNew" style="width:100%" maxlength="300">
+                </div>
+            </div>
+            <div style="margin-top:8px">
+                <label style="display:block">套用分頁</label>
+                <span id="exTabs"></span>
+            </div>
+            <div style="margin-top:8px" id="exItemsBox">
+                <label style="display:block">只排除哪幾個檢核項目（不勾＝這個對象整筆不稽核）</label>
+                <span id="exItems"></span>
+            </div>
+            <div style="margin-top:10px; text-align:right">
+                <span class="muted-help" id="exMsg" style="margin-right:auto"></span>
+                <button class="btn btn-sm btn-warm" id="btnExclAdd">新增排除規則</button>
+            </div>
+        </div>
+<?php if (!$perms['canAdmin']): ?>
+        <p class="muted-help" style="color:#B23A2A">您只有檢閱權限，看得到目前的排除設定但不能新增或修改；要調整請洽「資料稽核管理員」。</p>
+<?php endif; ?>
+        <div id="exclList"></div>
+    </div>
+    <div class="m-foot"><button class="btn btn-sm btn-default" data-close>完成，關閉</button></div>
 </div></div>
 
 <!-- 設定 -->
@@ -609,6 +696,7 @@ function renderTraceStat(){
            + esc(it[0]) + '（' + bc[c] + '）</span>';
     });
     h += '</div>';
+    h += exclBarHtml(r.excl_rules);
     if (r.truncated) h += '<div class="muted-help" style="margin-top:6px;color:#B23A2A">'
         + '⚠ 這個期間共有 ' + (r.order_total||0) + ' 張訂單，超過單次上限 ' + (r.limit||0)
         + ' 張，只稽核了最近的 ' + (r.scanned||0) + ' 張。'
@@ -642,10 +730,14 @@ function nodeHtml(txt, sub, bad, src, docs){
     if (docs && docs.length) h += docLinks(docs);
     return h;
 }
-/* 單號連結：點了直接開相關頁面並自動帶入這個單號當篩選條件
- *   製令 → BOM 總表（本來就支援 ?global_search=，不必改那一頁）
- *   出貨 → 快速出貨（新版）的「近期出貨單」，同時把日期區間設成該單前後 7 天，
- *          不然那個跳窗預設只載入最近一段期間、舊單會查不到 */
+/* 單號連結：點了直接開相關頁面，並把**客戶與料號一起帶過去**當篩選條件。
+ * ⚠ 只帶單號不夠（2026-09-18 使用者回報）：同一個訂單編號會有好幾列
+ *   （拆批、同編號多料號），只篩單號會連無關料號一起列出來，很容易改到不該改的那一列。
+ *   各目標頁能篩什麼就帶什麼：
+ *     訂單 → 訂單追蹤：客戶、料號、全表搜尋三個欄位都帶
+ *     製令 → BOM 總表：客戶欄 ＋ BOM 欄（那個欄位同時比對 BOM 編號與料號）
+ *     報價 → 報價單管理：客戶下拉 ＋ 單號關鍵字（該頁一張單一列，沒有料號欄位）
+ *     出貨 → 快速出貨：近期出貨單依單號 GROUP BY 只有一列，另把客戶料號顯示成提示條 */
 function docLinks(docs){
     var out = '', max = 4;
     docs.slice(0, max).forEach(function(d){
@@ -663,25 +755,54 @@ function shiftDate(d, n){
     var x = new Date(t + n*86400000);
     return x.getFullYear() + '-' + ('0'+(x.getMonth()+1)).slice(-2) + '-' + ('0'+x.getDate()).slice(-2);
 }
-function bomDocs(list){
+/* 製令：**已完工的要連到別一頁**——BOM 總表只列未完工的製令，
+   已完工的製令在那一頁一列都查不到（實測只帶 BOM 編號也是 0 列，不是篩選寫錯）。
+   客戶一律用「這張製令自己的」Client_Name，拿訂單的客戶去篩別張表可能篩出 0 筆。 */
+function bomDocs(list, r){
     return (list||[]).map(function(b){
-        return {no:b.no, url:'../pm/OreadyReply_ForPm_BaseOfTime.php?global_search=' + encodeURIComponent(b.no),
-                tip:'在 BOM 總表搜尋 ' + b.no + '（' + (b.date||'') + '，' + b.qty + ' 支）'};
+        var cl = b.client || '', u, where;
+        if (b.done){
+            u = '../pm/OreadyReply_completed_query.php?kw=' + encodeURIComponent(b.no);
+            where = '在「已完工BOM查詢列印」搜尋 ';
+        } else {
+            u = '../pm/OreadyReply_ForPm_BaseOfTime.php?bom_filter=' + encodeURIComponent(b.no);
+            if (cl) u += '&customer_filter=' + encodeURIComponent(cl);
+            where = '在 BOM 總表篩選 ';
+        }
+        return {no:b.no, url:u, done:!!b.done,
+                tip:where + b.no + (cl?('（客戶 ' + cl + '）'):'')
+                    + '（' + (b.date||'') + '，' + b.qty + ' 支'
+                    + (b.done?'，已完工':'') + '）'};
     });
 }
-function quoteUrl(no, date){
+/* 報價：客戶要用**這張報價單自己的** client_name——報價單管理的客戶下拉是由該年度的報價單建出來的，
+   拿訂單的客戶名稱過去可能在下拉裡根本沒有那一個選項（選項不存在就等於沒篩到）。 */
+function quoteUrl(no, date, r, q){
     var y = String(date||'').slice(0,4);
-    return '../Sales/quotation_list_NEW.php' + (y ? ('?year=' + y + '&kw=') : '?kw=') + encodeURIComponent(no);
+    var u = '../Sales/quotation_list_NEW.php' + (y ? ('?year=' + y + '&kw=') : '?kw=') + encodeURIComponent(no);
+    var cl = (q && q.client) || (r && r.client) || '';
+    if (cl) u += '&client=' + encodeURIComponent(cl);
+    return u;
 }
-/* 訂單追蹤的全表搜尋一有值就會自動切成「全部年份」，所以不必帶年度 */
-function orderUrl(no){
-    return '../Sales/NewOrder_Track.php?kw=' + encodeURIComponent(no);
+/* 訂單追蹤：客戶、料號、全表搜尋三個欄位都帶（只帶單號會列出同編號的其他料號）。
+   全表搜尋一有值該頁就自動切成「全部年份」，所以不必帶年度。 */
+function orderUrl(r){
+    var u = '../Sales/NewOrder_Track.php?kw=' + encodeURIComponent(r.order_no);
+    if (r.part)   u += '&part=' + encodeURIComponent(r.part);
+    if (r.client) u += '&client=' + encodeURIComponent(r.client);
+    return u;
 }
-function shipDocs(list){
+function shipDocs(list, r){
     return (list||[]).map(function(x){
-        var f = shiftDate(x.date, -7), t = shiftDate(x.date, 7), u = '../Sales/Shipping_Quick.php?is_no=' + encodeURIComponent(x.no);
+        var f = shiftDate(x.date, -7), t = shiftDate(x.date, 7);
+        var cl = x.client || (r && r.client) || '', pt = x.part || (r && r.part) || '';
+        var u = '../Sales/Shipping_Quick.php?is_no=' + encodeURIComponent(x.no);
         if (f && t) u += '&from=' + f + '&to=' + t;
-        return {no:x.no, url:u, tip:'在快速出貨的近期出貨單查 ' + x.no + '（' + (x.date||'') + '，' + x.qty + ' 支）'};
+        if (pt) u += '&part=' + encodeURIComponent(pt);
+        if (cl) u += '&client=' + encodeURIComponent(cl);
+        return {no:x.no, url:u,
+                tip:'在快速出貨的近期出貨單查 ' + x.no + '（' + (x.date||'') + '，' + x.qty + ' 支）'
+                    + (pt?('；要核對的料號 ' + pt):'')};
     });
 }
 function renderTrace(){
@@ -706,15 +827,16 @@ function renderTrace(){
         var sBad = badCodes.s_early_bom || badCodes.s_early_order || badCodes.s_none;
         var q = r.quote
             ? nodeHtml(dispDate(r.quote.date), '＠' + r.quote.price, qBad, r.quote.src,
-                       [{no:r.quote.no, url:quoteUrl(r.quote.no, r.quote.date),
-                         tip:'在報價單管理搜尋 ' + r.quote.no}])
+                       [{no:r.quote.no, url:quoteUrl(r.quote.no, r.quote.date, r, r.quote),
+                         tip:'在報價單管理搜尋 ' + r.quote.no
+                             + '（客戶 ' + ((r.quote.client || r.client) || '') + '）'}])
             : '<span class="node bad">無報價</span>';
         var b = r.bom.cnt
-            ? nodeHtml(dispDate(r.bom.date), r.bom.cnt + ' 張／' + r.bom.qty + ' 支', bBad, r.bom.src, bomDocs(r.bom.list))
+            ? nodeHtml(dispDate(r.bom.date), r.bom.cnt + ' 張／' + r.bom.qty + ' 支', bBad, r.bom.src, bomDocs(r.bom.list, r))
             : (r.auto_pm ? '<span class="node"><em>自動轉生管<br>不需製令</em></span>' : '<span class="node bad">無製令</span>');
         var sh = r.ship.cnt
             ? nodeHtml(dispDate(r.ship.date), (r.ship.doc_cnt||r.ship.cnt) + ' 張／' + r.ship.qty + ' 支',
-                       sBad, r.ship.src, shipDocs(r.ship.list))
+                       sBad, r.ship.src, shipDocs(r.ship.list, r))
             : '<span class="node' + (r.closed?' bad':'') + '">未出貨</span>';
         var iss = r.issues.map(function(i){
             return '<div class="issue-line"><span class="lv-badge ' + i.level + '">'
@@ -734,7 +856,8 @@ function renderTrace(){
             + '<td><span class="lv-badge ' + r.level + '">'
                 + (r.level==='critical'?'嚴重':(r.level==='warn'?'提醒':'正常')) + '</span></td>'
             + '<td><a class="doc-no" style="font-size:13px" target="_blank" rel="noopener" href="'
-                + esc(orderUrl(r.order_no)) + '" title="在訂單追蹤全表搜尋 ' + esc(r.order_no) + '">'
+                + esc(orderUrl(r)) + '" title="在訂單追蹤篩選 ' + esc(r.order_no)
+                + '（客戶 ' + esc(r.client) + '、料號 ' + esc(r.part) + '）">'
                 + esc(r.order_no) + '</a><em class="muted-help">' + dispDate(r.odate) + '</em>'
                 + (r.closed?'<br><em class="muted-help">已結案</em>':'') + '</td>'
             + '<td>' + esc(r.client) + '</td>'
@@ -791,6 +914,7 @@ function renderMasterStat(){
            + esc(nm) + '（' + bc[c] + '）</span>';
     });
     h += '</div><div class="muted-help" style="margin-top:6px">編碼原則：' + esc(r.rule_text) + '</div>';
+    h += exclBarHtml(r.excl_rules);
     $('#mStatBox').show().html(h);
 }
 $(document).on('click', '#mStatBox .dq-chip', function(){
@@ -942,6 +1066,156 @@ $('#btnScopeSave').on('click', function(){
         });
     });
 });
+
+/* ══ 排除設定 ══ */
+var EXCL = {dims:{}, tabs:{}, items:{}, rows:[], sugTimer:null, sugSeq:0};
+
+$('#btnExcl').on('click', function(){ loadExcl(true); });
+
+function loadExcl(open){
+    $.get(API, {action:'excl_list'}, function(r){
+        if(!r || !r.ok) return;
+        EXCL.dims = r.dims || {}; EXCL.tabs = r.tabs || {};
+        EXCL.items = r.items || {}; EXCL.rows = r.rows || [];
+        if (open){
+            if (!$('#exDim option').length){
+                $('#exDim').html(Object.keys(EXCL.dims).map(function(k){
+                    return '<option value="' + esc(k) + '">' + esc(EXCL.dims[k].label) + '</option>';
+                }).join(''));
+            }
+            renderExclForm();
+            openMask('exclMask');
+        }
+        renderExclList();
+    });
+}
+
+/* 維度換了，能套用的分頁跟著換（客戶／廠商／料號各自適用的分頁不同） */
+function renderExclForm(){
+    var dim = $('#exDim').val(), d = EXCL.dims[dim] || {tabs:[]};
+    $('#exTabs').html((d.tabs||[]).map(function(t){
+        return '<label class="ex-chk"><input type="checkbox" class="ex-tab" value="' + esc(t) + '" checked> '
+             + esc(EXCL.tabs[t] || t) + '</label>';
+    }).join('') || '<span class="muted-help">這個維度沒有可套用的分頁</span>');
+    var hasTrace = (d.tabs||[]).indexOf('trace') >= 0;
+    $('#exItemsBox').toggle(hasTrace);
+    if (hasTrace){
+        $('#exItems').html(Object.keys(EXCL.items).map(function(c){
+            return '<label class="ex-chk"><input type="checkbox" class="ex-item" value="' + esc(c) + '"> '
+                 + esc(EXCL.items[c][0]) + '</label>';
+        }).join(''));
+    }
+    $('#exVal').val('').attr('data-eg-hint',
+        dim==='client' ? '打客戶簡稱或編號，例如 和大 或 C2005'
+      : dim==='maker'  ? '打廠商簡稱或編號'
+                       : '打料號，例如 RC105-N03-A');
+    $('#exSug').hide();
+    $('#exMsg').text('');
+}
+$('#exDim').on('change', renderExclForm);
+
+/* 對象一定要能用挑的：打錯一個字這條規則就永遠不會命中，而且完全不報錯 */
+$('#exVal').on('input', function(){
+    var kw = $(this).val().trim();
+    clearTimeout(EXCL.sugTimer);
+    if (kw.length < 1){ $('#exSug').hide(); return; }
+    var seq = ++EXCL.sugSeq;
+    EXCL.sugTimer = setTimeout(function(){
+        $.get(API, {action:'excl_search', dim:$('#exDim').val(), kw:kw}, function(r){
+            if(!r || !r.ok || seq !== EXCL.sugSeq) return;
+            var rows = r.rows || [];
+            if(!rows.length){ $('#exSug').html('<div class="muted-help">主檔查不到，確認名稱後可直接使用輸入的值</div>').show(); return; }
+            $('#exSug').html(rows.map(function(x){
+                return '<div data-v="' + esc(x.val) + '">' + esc(x.val)
+                     + (x.code ? ' <span class="muted-help">' + esc(x.code) + '</span>' : '') + '</div>';
+            }).join('')).show();
+        });
+    }, 220);
+});
+$(document).on('click', '#exSug div[data-v]', function(){
+    $('#exVal').val(String($(this).data('v'))); $('#exSug').hide();
+});
+$(document).on('click', function(e){
+    if (!$(e.target).closest('.ex-pick').length) $('#exSug').hide();
+});
+
+$('#btnExclAdd').on('click', function(){
+    var val = $('#exVal').val().trim();
+    if (!val){ $('#exMsg').css('color','#DD5138').text('請先指定要排除的對象'); $('#exVal').focus(); return; }
+    var tabs = $('.ex-tab:checked').map(function(){ return this.value; }).get();
+    if (!tabs.length){ $('#exMsg').css('color','#DD5138').text('請至少勾選一個要套用的分頁'); return; }
+    var items = $('.ex-item:checked').map(function(){ return this.value; }).get();
+    $.post(API, {action:'excl_save', csrf:CSRF, dim:$('#exDim').val(), val:val,
+                 tabs:JSON.stringify(tabs), items:JSON.stringify(items),
+                 reason:$('#exReasonNew').val()}, function(r){
+        if(!r || !r.ok) return;
+        EXCL.rows = r.rows || []; renderExclList();
+        $('#exVal').val(''); $('#exReasonNew').val('');
+        $('#exMsg').css('color','#5C8A4A').text(r.msg || '已儲存');
+        refreshAfterExcl();
+    });
+});
+
+function renderExclList(){
+    var rows = EXCL.rows || [];
+    if (!rows.length){
+        $('#exclList').html('<p class="muted-help">目前沒有任何排除設定，稽核會列出全部的缺失。</p>');
+        return;
+    }
+    var h = '<table class="ex-tbl"><tr><th style="width:70px">排除什麼</th><th style="width:150px">對象</th>'
+          + '<th style="width:180px">套用分頁</th><th>只排除的項目／原因</th>'
+          + '<th style="width:110px">建立</th><th style="width:120px">動作</th></tr>';
+    rows.forEach(function(r){
+        var d = EXCL.dims[r.dim] || {label:r.dim};
+        var tabTxt = (r.tab_list||[]).map(function(t){ return EXCL.tabs[t] || t; }).join('、');
+        var itemTxt = (r.item_list||[]).length
+            ? (r.item_list||[]).map(function(c){ return (EXCL.items[c]||[c])[0]; }).join('、')
+            : '<b>整筆不納入稽核</b>';
+        h += '<tr' + (r.is_active ? '' : ' class="off"') + '>'
+           + '<td>' + esc(d.label) + '</td><td>' + esc(r.val) + '</td>'
+           + '<td>' + esc(tabTxt) + '</td>'
+           + '<td>' + itemTxt + (r.reason ? '<br><span class="muted-help">' + esc(r.reason) + '</span>' : '') + '</td>'
+           + '<td class="muted-help">' + esc(r.created_by_name||'') + '<br>' + dispDate(r.d) + '</td>'
+           + '<td>' + (CAN_ADMIN
+               ? ('<span class="lnk" data-ex-tog="' + r.id + '" data-on="' + (r.is_active?0:1) + '">'
+                  + (r.is_active ? '停用' : '啟用') + '</span>　'
+                  + '<span class="lnk" data-ex-rm="' + r.id + '">刪除</span>')
+               : '<span class="muted-help">—</span>') + '</td></tr>';
+    });
+    $('#exclList').html(h + '</table>');
+}
+$(document).on('click','[data-ex-tog]', function(){
+    $.post(API, {action:'excl_toggle', csrf:CSRF, id:$(this).data('ex-tog'), on:$(this).data('on')},
+        function(r){ if(r && r.ok){ EXCL.rows = r.rows||[]; renderExclList(); refreshAfterExcl(); } });
+});
+$(document).on('click','[data-ex-rm]', function(){
+    if(!confirm('刪除這條排除設定之後，這個對象會重新納入稽核。確定嗎？')) return;
+    $.post(API, {action:'excl_del', csrf:CSRF, id:$(this).data('ex-rm')},
+        function(r){ if(r && r.ok){ EXCL.rows = r.rows||[]; renderExclList(); refreshAfterExcl(); } });
+});
+/* 改了排除設定就把已跑出來的結果重算，否則畫面還是舊的、看起來像沒生效 */
+function refreshAfterExcl(){
+    if (ST.trace)  $('#btnTraceRun').click();
+    if (ST.master) $('#btnMasterRun').click();
+}
+
+/* 稽核結果上要講出「這次套用了哪些排除、各排掉幾筆」——不講的話看不出有排除在作用 */
+function exclBarHtml(rules){
+    rules = (rules||[]).filter(function(x){ return true; });
+    if (!rules.length) return '';
+    var h = '<div class="excl-bar"><i class="fa fa-ban"></i> 已套用排除設定：';
+    h += rules.map(function(x){
+        var d = EXCL.dims[x.dim] || {label:x.dim};
+        var it = (x.items||[]).length
+            ? (x.items||[]).map(function(c){ return (EXCL.items[c]||[c])[0]; }).join('、')
+            : '整筆';
+        return '<span class="excl-tag">' + esc(d.label) + ' <b>' + esc(x.val) + '</b>（' + esc(it) + '）'
+             + (x.hit ? '　排除 ' + x.hit + ' 筆' : '　本期間沒有命中') + '</span>';
+    }).join('');
+    h += ' <span class="lnk" id="lnkExcl">調整排除設定</span></div>';
+    return h;
+}
+$(document).on('click','#lnkExcl', function(){ loadExcl(true); });
 
 /* ══ 設定 ══ */
 $('#btnSetting').on('click', function(){ loadSettings(function(r){ renderSetting(r); openMask('setMask'); }); });
@@ -1170,6 +1444,7 @@ $('#btnMasterPrint').on('click', function(){
 <?php if ($perms['canView']): ?>
 loadYears();
 loadSettings();
+loadExcl(false);
 <?php endif; ?>
 </script>
 </body>

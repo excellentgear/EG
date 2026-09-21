@@ -3596,6 +3596,15 @@ echo "</script>\n";
             const globalSearchEl = document.getElementById("global-search");
             if (globalSearchEl) globalSearchEl.value = urlParams.get("global_search");
         }
+        // --- 客戶／BOM(料號) 篩選（由資料稽核等頁面帶入，兩個一起帶才不會列出無關料號）---
+        if (urlParams.has("customer_filter")) {
+            const custFilterEl = document.getElementById("customer-filter");
+            if (custFilterEl) custFilterEl.value = urlParams.get("customer_filter");
+        }
+        if (urlParams.has("bom_filter")) {
+            const bomFilterEl = document.getElementById("bom-filter");
+            if (bomFilterEl) bomFilterEl.value = urlParams.get("bom_filter");
+        }
         // 移除頁面載入時的 scrollToTop 檢查，因為新的編輯表單將在頁面下方顯示
 
 

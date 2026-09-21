@@ -2078,11 +2078,20 @@ $(document).ready(function () {
     initNoteTemplates();     // ★ 自動建立備註模板資料表並載入快選按鈕
     loadProcesses();
     loadUnits();
-    /* 從別的頁面帶關鍵字進來（例：資料稽核點報價單號）→ ?kw=OP1150105009
-       填進搜尋框就好，loadQuoteList() 載完本來就會套用 #listSearch 的值 */
+    /* 從別的頁面帶篩選進來（例：資料稽核點報價單號）→ ?kw=OP1150105009&client=<客戶>
+       單號填進 #listSearch（loadQuoteList() 載完本來就會套用它）；
+       客戶要等 buildClientFilter() 把選項建出來才設得進去，所以先記在 PENDING_URL_CLIENT，
+       由 loadQuoteList() 的回呼套用一次就清掉——不清的話使用者之後自己換客戶會被洗回來。
+       （本頁清單是一張報價單一列、單號唯一，所以沒有「一個編號對到多列」的問題，不需要料號欄位） */
+    /* ⚠ 一定要掛在 window：loadQuoteList() 是全域函式，
+       宣告成這個 ready 區塊內的 var 它看不到（實測 typeof 就是 undefined，
+       所以客戶下拉一直沒被設定、也不會報錯）。 */
     (function(){
-        var kw = new URLSearchParams(location.search).get('kw');
-        if (kw) $('#listSearch').val(kw.trim());
+        var p = new URLSearchParams(location.search);
+        var kw = (p.get('kw') || '').trim();
+        var cl = (p.get('client') || '').trim();
+        if (kw) $('#listSearch').val(kw);
+        window.PENDING_URL_CLIENT = cl || null;
     })();
     loadQuoteList(<?= $selectedYear ?>);
     loadSupplementAlerts(true);   // 進站提醒：補件被駁回/待審（清單預設仍顯示全部）
@@ -4602,6 +4611,15 @@ function loadQuoteList(year) {
             isAllYearsMode = false;
             $('#allYearsIndicator').hide();
             buildClientFilter(allQuotes);
+            // 由網址帶進來的客戶篩選：選項建好之後才設得進去，且只套用一次
+            if (window.PENDING_URL_CLIENT) {
+                var _pc = String(window.PENDING_URL_CLIENT);
+                // 用逐一比對而不是屬性選擇器：客戶名稱可能含引號等選擇器特殊字元
+                if ([].some.call(document.getElementById('clientFilterSel').options,
+                                 function (o) { return o.value === _pc; }))
+                    $('#clientFilterSel').val(_pc);
+                window.PENDING_URL_CLIENT = null;
+            }
             renderQuoteList(allQuotes, $('#listSearch').val().trim());
             adjustLayout();  // 資料載入後重算高度
         }
