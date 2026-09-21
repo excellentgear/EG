@@ -643,7 +643,7 @@ function ocq_ob_classify($pdo, array $rows, $withCand = false, $candLimit = 8) {
             }
         }
         $out[$bom] = ['level' => 'manual',
-            'reason' => '這個料號底下有 ' . $n . ' 張訂單，系統無從得知這批貨是做哪一張，請挑一張',
+            'reason' => '這個料號底下有 ' . $n . ' 張訂單，系統無從得知這批貨是做哪一張，請自行挑選（量分屬好幾張時可複選）',
             'candidates' => [], 'pick' => null, 'cand_total' => $n];
     }
     if (!$withCand) return $out;
@@ -1329,18 +1329,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => true, 'total' => $total, 'page' => $page, 'per' => $per, 'rows' => $out]);
 
         } elseif ($action === 'autobind_order_apply') {
-            // 前端分批送 [{bom, order_id, qty}]；每一筆都在交易裡重新驗一次（點開即刷新）
+            // 前端分批送 [{bom, orders:[{order_id,qty},…]}]；每一筆都在交易裡重新驗一次（點開即刷新）
+            // **同一筆 BOM 的多張訂單一定要一次送進 ocq_bind_orders_to_bom()**：那支的既有綁定保護是
+            // 「已經有 bom_order_process_map 就整個擋下」，拆成好幾次呼叫的話第一張寫成功、第二張起
+            // 一律被自己剛寫的那一列擋成 CONFLICT，畫面上看起來就是「只綁得進去一張」。
             $list = json_decode($_POST['rows_json'] ?? '[]', true);
             if (!is_array($list) || !$list) { echo json_encode(['success' => false, 'message' => '沒有要處理的資料']); exit; }
             if (count($list) > 200) { echo json_encode(['success' => false, 'message' => '一批最多 200 筆']); exit; }
             $done = 0; $skipped = [];
             foreach ($list as $it) {
                 $bom = trim((string)($it['bom'] ?? ''));
-                $oid = intval($it['order_id'] ?? 0);
-                $qty = max(0, intval($it['qty'] ?? 0));
-                if ($bom === '' || $oid <= 0) { $skipped[] = ['bom' => $bom, 'why' => '缺少訂單']; continue; }
+                $orders = [];
+                if (isset($it['orders']) && is_array($it['orders'])) {
+                    foreach ($it['orders'] as $o) {
+                        $oid = intval($o['order_id'] ?? 0);
+                        if ($oid > 0) $orders[] = ['order_id' => $oid, 'qty' => max(0, intval($o['qty'] ?? 0))];
+                    }
+                } elseif (intval($it['order_id'] ?? 0) > 0) {
+                    // 舊型態（自動綁定那批送的是單張）：維持原樣收下，不必改那一段
+                    $orders[] = ['order_id' => intval($it['order_id']), 'qty' => max(0, intval($it['qty'] ?? 0))];
+                }
+                if ($bom === '' || !$orders) { $skipped[] = ['bom' => $bom, 'why' => '缺少訂單']; continue; }
                 try {
-                    $r = ocq_bind_orders_to_bom($pdo, $bom, [['order_id' => $oid, 'qty' => $qty]], $id, '自動綁定訂單（已完工BOM查詢）');
+                    $r = ocq_bind_orders_to_bom($pdo, $bom, $orders, $id, '自動綁定訂單（已完工BOM查詢）');
                 } catch (Exception $e) { $r = ['success' => false, 'message' => '寫入失敗：' . $e->getMessage()]; }
                 if (!empty($r['success'])) $done++;
                 else $skipped[] = ['bom' => $bom, 'why' => $r['message'] ?? '綁定失敗'];
@@ -1961,7 +1972,7 @@ try {
         <h4>自動綁定（需權限）</h4>
         <div class="tip">工具列的<b>「自動綁定」</b>是一條鏈，跳窗上方分成三個階段：<b>①綁料號 →②綁訂單 →③綁報價單</b>（料號綁好才挑得到訂單、訂單綁好才挑得到報價單）。<b>每個階段各自掃描、範圍也各自不同</b>，所以綁完一階切到下一階會重新比對一次；三個階段都吃<b>目前的篩選條件</b>（含日期區間），要處理全部歷史資料請先按年份列的「全部年份」。</div>
         <ul>
-            <li><b>②綁訂單</b>：候選＝<b>同一筆料號主檔底下、未作廢的訂單</b>。這個料號底下<b>只有一張訂單時才自動綁</b>；有好幾張時列出來讓你挑（依「訂單日與這筆 BOM 的日期最接近」排序），<b>分配量可以逐張改</b>，預設帶入「BOM 發單量」與「該訂單未被分配量」中較小者。</li>
+            <li><b>②綁訂單</b>：候選＝<b>同一筆料號主檔底下、未作廢的訂單</b>。這個料號底下<b>只有一張訂單時才自動綁</b>；有好幾張時列出來讓你挑（依「訂單日與這筆 BOM 的日期最接近」排序），<b>分配量可以逐張改</b>，預設帶入「BOM 發單量」與「該訂單未被分配量」中較小者。<b>同一筆 BOM 的量分屬好幾張訂單時可以一次挑好幾張</b>（一次最多 20 張，各自寫入分配量；挑兩張以上會顯示「分配量合計／發單量」，超過會標紅提醒但不擋你，因為確實有一張 BOM 補足好幾張訂單缺量的情形）。</li>
             <li><b>③綁報價單</b>：報價單是綁在<b>訂單</b>上的（不是 BOM），所以這一階處理的是「範圍內的 BOM 綁到的訂單裡還沒綁報價單的」。候選＝<b>報價明細的料號與訂單料號完全相同</b>的報價單（草稿與待審核的不列入）；只有一筆時自動綁，多筆時依「<b>報價日不晚於訂單日、且日期最接近</b>」排序，第一筆會標「建議：下單當時的報價」。</li>
             <li>兩個階段都可以<b>逐筆按「套用」，也可以勾選起來一次全部套用</b>；挑好候選會自動幫你勾起該列。已經被別人綁走的一律擋下、不覆蓋。</li>
         </ul>
@@ -2731,7 +2742,7 @@ function ocqBindOpenOrder(st, orders){
         + '<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">'
         + '<input type="text" id="ocqOrderQ" placeholder="訂單編號／規格／備註關鍵字…" style="flex:1;height:30px;padding:0 8px;border:1px solid #D8BE93;border-radius:4px;">'
         + '<button type="button" id="ocqOrderSearch" style="height:30px;padding:0 14px;border:1px solid #D8BE93;background:#fff;color:#5b3a1e;border-radius:4px;cursor:pointer;"><i class="fa fa-search"></i> 篩選</button>'
-        + '<span style="font-size:12px;color:#8a6d45;">已勾選 <b id="ocqOrderCnt">0</b> 張</span></div>'
+        + '<span style="font-size:12px;color:#8a6d45;">已勾選 <b id="ocqOrderCnt">0</b> 張<span id="ocqOrderSum"></span></span></div>'
         + '<div class="ocq-pick-wrap" id="ocqOrderList"></div>'
         + '<div style="font-size:12px;color:#8a6d45;margin-top:6px;line-height:1.7;">'
         + '只會列出<b>這個料號底下</b>的訂單（後端送出時會再驗一次，不屬於本料號的一律擋下）。'
@@ -2781,13 +2792,25 @@ function ocqBindRenderOrders(){
 }
 
 function ocqBindCountOrders(){
-    var n = $('#ocqOrderList .ocq-ock:checked').length;
+    var n = 0, sum = 0;
+    $('#ocqOrderList .ocq-ock:checked').each(function(){
+        n++;
+        var oid = $(this).data('oid');
+        sum += parseInt($('#ocqOrderList .ocq-oqty[data-oid="' + oid + '"]').val(), 10) || 0;
+    });
     $('#ocqOrderCnt').text(n);
+    // 挑了不只一張才寫合計：分配量預設各自帶「發單量與該訂單未分配量中較小者」，多挑幾張會重複計到
+    var bq = parseInt(ocqBind.state && ocqBind.state.sqty, 10) || 0;
+    var over = (n > 1 && bq > 0 && sum > bq);
+    $('#ocqOrderSum').text(n > 1 ? '，分配量合計 ' + sum + (bq > 0 ? '／發單量 ' + bq : '')
+                                   + (over ? '（超過發單量，請確認分配量）' : '') : '')
+                     .css('color', over ? '#DD5138' : '');
     $('#ocqOrderList tbody tr').each(function(){
         $(this).toggleClass('hit', $(this).find('.ocq-ock').prop('checked'));
     });
 }
 $('#ocqBindMask').on('change', '.ocq-ock', ocqBindCountOrders);
+$('#ocqBindMask').on('input change', '.ocq-oqty', ocqBindCountOrders);
 
 $('#ocqBindApply').on('click', function(){
     if (ocqBind.mode !== 'order') return;
@@ -3147,11 +3170,36 @@ $('#ocqAbMask').on('change', '.ocq-ab-all', function(){
 // 挑好候選＝多半就是要套用它，順手幫忙勾起來（少按一次；不想套用的再取消勾選即可）。
 // **選擇器要用候選列的 class 不是 name 前綴**——三個階段的 radio name 各自不同
 // （abp_／abo_／abq_），用前綴綁只會有料號那一階生效，而且完全不報錯。
-$('#ocqAbMask').on('change', '.ocq-ab-cand input[type=radio]', function(){
+// **綁訂單那一階的候選是 checkbox（一筆 BOM 的量可以分屬好幾張訂單），料號與報價單仍是 radio**，
+// 所以這裡兩種都要收；候選全部取消勾選時，該列的勾選也要跟著取消（不然會送出一筆沒挑訂單的）。
+$('#ocqAbMask').on('change', '.ocq-ab-cand input[type=radio], .ocq-ab-cand input[type=checkbox]', function(){
     var $tr = $(this).closest('tr');
-    if (!$tr.hasClass('done')) $tr.find('.ocq-ab-ck').not(':disabled').prop('checked', true);
+    if (!$tr.hasClass('done')) {
+        var any = $tr.find('.ocq-ab-cand input[type=radio]:checked, .ocq-ab-cand input[type=checkbox]:checked').length > 0;
+        $tr.find('.ocq-ab-ck').not(':disabled').prop('checked', any);
+    }
+    ocqAbOrderSum($tr);
     ocqAbCkSync($tr.closest('.ocq-ab-pane'));
 });
+// 綁訂單那一階：把這一列已挑訂單的分配量合計寫出來，超過發單量標紅（只提醒不擋，
+// 現場確實有「一張 BOM 補足好幾張訂單的缺量」這種情形，數字對不對由挑的人判斷）
+function ocqAbOrderSum($tr){
+    var $box = $tr.find('.ocq-ab-osum');
+    if (!$box.length) return;
+    var n = 0, sum = 0;
+    $tr.find('.abo-ck:checked').each(function(){
+        var oid = parseInt($(this).val(), 10) || 0;
+        n++;
+        sum += parseInt($tr.find('.oqty[data-oid="' + oid + '"]').val(), 10) || 0;
+    });
+    if (n < 2) { $box.text('').css('color', ''); return; }
+    var bq = parseInt($tr.data('bomqty'), 10) || 0;
+    var over = (bq > 0 && sum > bq);
+    $box.text('已挑 ' + n + ' 張，分配量合計 ' + sum + (bq > 0 ? '／發單量 ' + bq : '')
+              + (over ? '（超過發單量，請確認分配量）' : ''))
+        .css('color', over ? '#DD5138' : '');
+}
+$('#ocqAbMask').on('input change', '.oqty', function(){ ocqAbOrderSum($(this).closest('tr')); });
 
 // 批次跑：一筆一筆送（每一筆都走跟逐筆按鈕完全相同的後端動作，規則不可能走鐘），
 // 邊跑邊把結果寫回該列；中途失敗的只記在那一列，不中斷其餘的。
@@ -3532,7 +3580,7 @@ if (OCQ_BIND.order) {
         card: { auto: '#ocqObNAuto', manual: '#ocqObNManual', nomatch: '#ocqObNNomatch' },
         pane: { auto: '#ocqObPaneAuto', manual: '#ocqObPaneManual', nomatch: '#ocqObPaneNomatch' },
         scanAction: 'autobind_order_scan', listAction: 'autobind_order_list', applyAction: 'autobind_order_apply',
-        pickHint: '請先挑一張候選訂單再套用',
+        pickHint: '請先挑候選訂單再套用（可以挑好幾張）',
         scanMsg: function(S){ return '範圍內已綁料號、還沒綁訂單的共 <b>' + S.total + '</b> 筆'; },
         confirmAuto: function(n){ return '即將自動綁定 ' + n + ' 筆 BOM 的訂單。\n\n'
             + '系統只會綁「這個料號底下只有一張訂單」的；已經有人綁過的會自動略過。\n'
@@ -3540,16 +3588,26 @@ if (OCQ_BIND.order) {
         confirmBulk: function(n, noPick){ return '即將綁定 ' + n + ' 筆'
             + (noPick ? '（另有 ' + noPick + ' 筆還沒挑訂單，會略過）' : '') + '。\n\n'
             + '已經有人綁過的會自動擋下、不會覆蓋。\n確定要執行嗎？'; },
+        // 一筆 BOM 的量可能分屬好幾張訂單，所以候選是**可複選**的（送出的是整組，見後端註解）
         rowJob: function($tr){
-            var $r = $tr.find('input[type=radio]:checked');
-            if (!$r.length) return null;
-            var oid = parseInt($r.val(), 10) || 0;
-            if (!oid) return null;
-            var qty = parseInt($tr.find('.oqty[data-oid="' + oid + '"]').val(), 10);
-            if (isNaN(qty) || qty < 0) qty = 0;
-            return { bom: String($tr.data('bom') || ''), order_id: oid, qty: qty };
+            var orders = [];
+            $tr.find('.abo-ck:checked').each(function(){
+                var oid = parseInt($(this).val(), 10) || 0;
+                if (!oid) return;
+                var qty = parseInt($tr.find('.oqty[data-oid="' + oid + '"]').val(), 10);
+                if (isNaN(qty) || qty < 0) qty = 0;
+                orders.push({ order_id: oid, qty: qty });
+            });
+            if (!orders.length) return null;
+            return { bom: String($tr.data('bom') || ''), orders: orders };
         },
-        doneLabel: function($tr, job){ return $tr.find('input[type=radio]:checked').data('oo') + '×' + job.qty; },
+        doneLabel: function($tr, job){
+            var t = [];
+            $tr.find('.abo-ck:checked').each(function(i){
+                t.push($(this).data('oo') + '×' + ((job.orders[i] || {}).qty || 0));
+            });
+            return t.join('、');
+        },
         renderAuto: function(S){
             if (!S.auto.length) return '<div style="padding:14px;color:#a08a6a;">這個範圍內沒有可以自動綁定的 BOM（'
                 + '要嘛這個料號底下有好幾張訂單、要嘛一張都沒有，請看另外兩個分頁）。</div>';
@@ -3584,21 +3642,23 @@ if (OCQ_BIND.order) {
                 return hn + '</tbody></table>';
             }
             var h = '<div style="font-size:12.5px;color:#5b3a1e;margin-bottom:6px;">'
-                  + '以下這幾筆的料號底下<b>有好幾張訂單</b>，系統無從得知這批貨是做哪一張，請挑一張再套用；'
+                  + '以下這幾筆的料號底下<b>有好幾張訂單</b>，系統無從得知這批貨是做哪一張，請挑選後再套用；'
                   + '挑好可以<b>逐筆按「套用」，也可以勾選起來一次全部套用</b>。'
-                  + '候選訂單依「訂單日與這筆 BOM 的日期最接近」排序，<b>分配量可以逐張改</b>。</div>'
+                  + '候選訂單依「訂單日與這筆 BOM 的日期最接近」排序，<b>分配量可以逐張改</b>。'
+                  + '<br><b>同一筆 BOM 的量分屬好幾張訂單時，可以一次挑好幾張</b>（一次最多 20 張，會各自寫入分配量）。</div>'
                   + ocqAbBulkBar('manual', true, 'order', '套用勾選的（綁定已挑的訂單）', '（挑好訂單會自動幫你勾起來）')
                   + '<table class="ocq-ab-tb"><thead><tr><th class="ck"><input type="checkbox" class="ocq-ab-all" title="全選／全不選"></th>'
                   + '<th style="width:130px;">BOM</th><th style="width:140px;">料號／客戶</th>'
-                  + '<th>候選訂單（請挑一張）</th><th style="width:60px;"></th></tr></thead><tbody>';
+                  + '<th>候選訂單（可複選）</th><th style="width:60px;"></th></tr></thead><tbody>';
             (res.rows || []).forEach(function(r){
-                h += '<tr data-bom="' + esc(r.bom) + '"><td class="ck"><input type="checkbox" class="ocq-ab-ck"></td>'
+                h += '<tr data-bom="' + esc(r.bom) + '" data-bomqty="' + (parseInt(r.bom_qty, 10) || 0) + '">'
+                   + '<td class="ck"><input type="checkbox" class="ocq-ab-ck"></td>'
                    + '<td>' + esc(r.bom) + '<div class="ocq-ab-sub">' + esc(egFmtDate(r.eff_date))
                    + '　發單 ' + esc(r.bom_qty) + '</div></td>'
                    + '<td>' + esc(r.part_no) + '<div class="ocq-ab-sub">' + (r.bom_client ? esc(r.bom_client) : '（沒有客戶）') + '</div></td>'
                    + '<td class="cnd">';
                 (r.candidates || []).forEach(function(o){
-                    h += '<label class="ocq-ab-cand"><input type="radio" name="abo_' + esc(r.bom) + '" value="' + o.order_id + '" data-oo="' + esc(o.order_oo) + '">'
+                    h += '<label class="ocq-ab-cand"><input type="checkbox" class="abo-ck" value="' + o.order_id + '" data-oo="' + esc(o.order_oo) + '">'
                        + '<b>' + esc(o.order_oo) + '</b>'
                        + '<span class="ocq-ab-sub">　訂單日 ' + esc(o.order_date ? egFmtDate(o.order_date) : '—')
                        + '　交期 ' + esc(o.delivery_date ? egFmtDate(o.delivery_date) : '—')
@@ -3611,7 +3671,10 @@ if (OCQ_BIND.order) {
                     h += '<div class="ocq-ab-sub">另有 ' + (r.cand_total - r.candidates.length) + ' 張較早／較晚的訂單沒列出來，'
                        + '要綁那幾張請用清單上的「綁訂單」逐筆處理。</div>';
                 }
-                h += '<div class="ocq-ab-why">' + esc(r.reason) + '</div></td>'
+                // 挑了不只一張時把「分配量合計 vs 發單量」寫出來——分配量預設各自帶「發單量與該訂單
+                // 未分配量中較小者」，多挑幾張就會重複計到，不寫出來看不出已經超量
+                h += '<div class="ocq-ab-osum ocq-ab-sub"></div>'
+                   + '<div class="ocq-ab-why">' + esc(r.reason) + '</div></td>'
                    + '<td><button type="button" class="ocq-bind-btn ocq-sx-pick">套用</button></td></tr>';
             });
             return h + '</tbody></table>';
