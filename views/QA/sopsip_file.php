@@ -29,7 +29,8 @@ if (!$f) { http_response_code(404); exit('找不到檔案'); }
 $doc = ss_doc_get($db, (int)$f['doc_id']);
 if (!$doc || !ss_perm_for_kind($P, (string)$doc['kind'], 'view')) { http_response_code(403); exit('沒有檢視權限'); }
 
-$path = ss_file_path($db, $f);
+// 旋轉只影響這份文件（使用者拍板）：這裡拿到的可能是一份「轉好的快取檔」，原檔一律不動
+$path = ss_file_view_path($db, $f);
 if (!$path || !is_file($path)) { http_response_code(404); exit('檔案不存在（可能已被移動或 NAS 未連線）'); }
 
 $name = (string)($f['orig_name'] ?: basename($path));

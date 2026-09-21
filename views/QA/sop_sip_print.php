@@ -60,6 +60,23 @@ function lines($s): array {
 $SLOTS = ss_slots();
 $stampTpl = [];
 foreach (array_keys($SLOTS) as $k) $stampTpl[$k] = ss_stamp_tpl($db, $k);
+
+/* 機台：一份文件綁一個型號、底下涵蓋好幾台機器編號（使用者 2026-09-21 二次拍板） */
+$mMeta   = $F['machine_meta'] ?? [];
+$assetTx = (string)($mMeta['asset_text'] ?? ($machine['asset_no'] ?? ''));
+
+/* 段落附件：使用者拍板「接在該段文字下方」，而且**縮圖不可以太小**，所以一排只放 3 張、每張 82mm */
+$secFiles = $F['section_files'] ?? [];
+function secImgs(array $secFiles, string $key): string {
+    $list = $secFiles[$key] ?? [];
+    if (!$list) return '';
+    $h = '<div class="secimgs">';
+    foreach ($list as $f) {
+        $h .= '<div class="si"><img src="' . pf((int)$f['file_id']) . '">'
+            . '<div class="cap">' . h((string)($f['orig_name'] ?? '')) . '</div></div>';
+    }
+    return $h . '</div>';
+}
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -103,6 +120,11 @@ foreach (array_keys($SLOTS) as $k) $stampTpl[$k] = ss_stamp_tpl($db, $k);
     .sg .eg-stamp, .sg svg { display:inline-block; }
     .sg .eg-stamp-tpl { height:auto !important; }
     .sgname { font-size:9pt; color:#444; }
+    /* 段落附件圖：使用者交代「縮圖不可過小」，所以一排 3 張、每張 82mm 寬、最高 62mm */
+    .secimgs { display:flex; flex-wrap:wrap; gap:3mm; margin-top:2mm; }
+    .secimgs .si { width:82mm; text-align:center; page-break-inside:avoid; }
+    .secimgs .si img { max-width:82mm; max-height:62mm; border:1px solid #bbb; }
+    .secimgs .cap { font-size:8pt; color:#555; word-break:break-all; line-height:1.3; }
 </style>
 </head>
 <body>
@@ -115,27 +137,30 @@ foreach (array_keys($SLOTS) as $k) $stampTpl[$k] = ss_stamp_tpl($db, $k);
 <?php if ($kind === 'equip'): ?>
     <table>
         <tr>
-            <td class="lab">機器編號</td><td><?= h($machine['asset_no'] ?? '') ?></td>
+            <td class="lab">機器編號</td><td><?= h($assetTx) ?></td>
             <td class="lab">機器製造商</td><td><?= h($ver['m_maker']) ?></td>
         </tr>
         <tr>
             <td class="lab">機器名稱</td><td><?= h($ver['m_name'] ?: $doc['title']) ?></td>
-            <td class="lab">型式規格</td><td><?= h($ver['m_spec']) ?></td>
+            <td class="lab">型式規格</td><td><?= h($ver['m_spec'] ?: ($doc['machine_model'] ?? '')) ?></td>
         </tr>
         <tr>
             <td class="lab">加工適用範圍</td><td colspan="3"><?= h($ver['m_range']) ?></td>
         </tr>
         <tr>
             <td class="lab">操作方法</td>
-            <td colspan="3"><ol><?php foreach (lines($ver['op_method']) as $l): ?><li><?= h($l) ?></li><?php endforeach; ?></ol></td>
+            <td colspan="3"><ol><?php foreach (lines($ver['op_method']) as $l): ?><li><?= h($l) ?></li><?php endforeach; ?></ol>
+                <?= secImgs($secFiles, 'op_method') ?></td>
         </tr>
         <tr>
             <td class="lab">使用注意事項</td>
-            <td colspan="3"><ol><?php foreach (lines($ver['cautions']) as $l): ?><li><?= h($l) ?></li><?php endforeach; ?></ol></td>
+            <td colspan="3"><ol><?php foreach (lines($ver['cautions']) as $l): ?><li><?= h($l) ?></li><?php endforeach; ?></ol>
+                <?= secImgs($secFiles, 'cautions') ?></td>
         </tr>
         <tr>
             <td class="lab">保養維修要點</td>
-            <td colspan="3"><ol><?php foreach (lines($ver['maintain']) as $l): ?><li><?= h($l) ?></li><?php endforeach; ?></ol></td>
+            <td colspan="3"><ol><?php foreach (lines($ver['maintain']) as $l): ?><li><?= h($l) ?></li><?php endforeach; ?></ol>
+                <?= secImgs($secFiles, 'maintain') ?></td>
         </tr>
     </table>
 
@@ -150,9 +175,13 @@ foreach (array_keys($SLOTS) as $k) $stampTpl[$k] = ss_stamp_tpl($db, $k);
         <tr>
             <td class="lab">適用料號</td><td><?= h($doc['part_no_text'] ?: '通用') ?></td>
             <td class="lab">制定日期</td><td class="mid"><?= h(eg_fmt_date($formDate)) ?></td>
-            <td class="lab">製程／主題</td><td colspan="3"><?= h($doc['proc_name']) ?></td>
+            <td class="lab">製程</td><td><?= h($doc['proc_name']) ?></td>
+            <td class="lab">客戶</td><td><?= h($doc['customer_name'] ?? '') ?></td>
         </tr>
     </table>
+    <?php if ($x = secImgs($secFiles, 'use_equip')): ?>
+    <table class="blk"><tr><td class="lab" style="width:30mm;">使用設備說明</td><td><?= $x ?></td></tr></table>
+    <?php endif; ?>
     <table class="blk">
         <thead><tr>
             <th style="width:14mm;">項次</th><th style="width:34mm;">名稱</th><th style="width:70mm;">參考圖示</th>
@@ -175,11 +204,10 @@ foreach (array_keys($SLOTS) as $k) $stampTpl[$k] = ss_stamp_tpl($db, $k);
 <?php else: ?>
     <table>
         <tr>
-            <td class="lab">客戶名稱</td><td><?= h($ver['customer_name']) ?></td>
-            <td class="lab">製令單號</td><td><?= h($ver['order_no']) ?></td>
+            <!-- 使用者 2026-09-21 指定：不需要製令單號與數量；「工程名稱」就是製程，只留一欄 -->
+            <td class="lab">客戶名稱</td><td><?= h($doc['customer_name'] ?: ($ver['customer_name'] ?? '')) ?></td>
             <td class="lab">產品料號</td><td><?= h($doc['part_no_text'] ?: '通用') ?></td>
             <td class="lab">工程名稱</td><td><?= h($doc['proc_name']) ?></td>
-            <td class="lab">數量</td><td class="mid"><?= h($ver['qty']) ?></td>
             <td class="lab">版次</td><td class="mid"><?= h($ver['ver_no']) ?></td>
             <td class="lab">製表日期</td><td class="mid"><?= h(eg_fmt_date($formDate)) ?></td>
         </tr>
@@ -205,7 +233,7 @@ foreach (array_keys($SLOTS) as $k) $stampTpl[$k] = ss_stamp_tpl($db, $k);
                 <td><?= h($it['q_char']) ?></td>
                 <td class="mid"><?= h($it['up_limit']) ?></td>
                 <td class="mid"><?= h($it['lo_limit']) ?></td>
-                <td class="mid"><?= h($it['owner']) ?></td>
+                <td class="mid"><?= h($it['owner_label'] ?? $it['owner']) ?></td>
                 <td><?= h($it['method']) ?></td>
                 <td class="mid"><?= h($it['tool_no']) ?></td>
                 <td><?= h($it['freq']) ?></td>
@@ -214,10 +242,10 @@ foreach (array_keys($SLOTS) as $k) $stampTpl[$k] = ss_stamp_tpl($db, $k);
         <?php endforeach; ?>
         </tbody>
     </table>
-    <?php $nt = lines($ver['notice']); if ($nt): ?>
+    <?php $nt = lines($ver['notice']); $ni = secImgs($secFiles, 'notice'); if ($nt || $ni): ?>
     <table class="blk"><tr>
-        <td class="lab">注意事項</td>
-        <td><?php foreach ($nt as $l): ?><div><?= h($l) ?></div><?php endforeach; ?></td>
+        <td class="lab" style="width:30mm;">注意事項</td>
+        <td><?php foreach ($nt as $l): ?><div><?= h($l) ?></div><?php endforeach; ?><?= $ni ?></td>
     </tr></table>
     <?php endif; ?>
 <?php endif; ?>

@@ -136,6 +136,30 @@ $STATUSES = ss_statuses();
         .ac-list .it { padding:5px 9px; font-size:12.5px; cursor:pointer; border-bottom:1px solid #F3E9D6; }
         .ac-list .it:hover { background:var(--sand); }
         .ac-list .hit { font-weight:bold; color:var(--amber-d); }
+
+        /* ── 2026-09-21（二次）新增那一批 ── */
+        /* 機器編號勾選盒：同型號好幾台，一台一個勾選框 */
+        .pickbox { border:1px solid var(--line); border-radius:5px; padding:6px 8px; background:#FFFDF9;
+                   max-height:140px; overflow:auto; }
+        .pickbox label { display:inline-block; font-weight:normal; text-align:left; margin:0 12px 3px 0;
+                         font-size:12.5px; color:var(--ink2); cursor:pointer; }
+        .pickbox .mno { font-weight:bold; color:var(--amber-d); }
+        /* 撞到既有文件時的提示（重複一律擋下，只能去更新既有那一份） */
+        .dup-box { border:1px solid #E2A15A; background:#FDF3E3; border-radius:5px; padding:8px 10px; font-size:12.5px; }
+        .dup-box .t { font-weight:bold; color:#A4541A; margin-bottom:4px; }
+        .dup-box .row { padding:3px 0; border-top:1px dashed #E8D5B4; }
+        .dup-box .row:first-of-type { border-top:0; }
+        /* 段落附件的縮圖（列印時也要看得清楚，所以畫面上就不做太小） */
+        .secfiles { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px; }
+        .secfile { border:1px solid var(--line); border-radius:5px; padding:4px; background:#fff; text-align:center; width:150px; }
+        .secfile img { max-width:100%; max-height:100px; display:block; margin:0 auto 3px; cursor:pointer; }
+        .secfile .nm { font-size:11px; color:#8a7560; word-break:break-all; line-height:1.35; }
+        .secfile .ops { margin-top:3px; }
+        .secfile .ops button { font-size:11px; line-height:1.4; padding:1px 5px; }
+        /* 量具兩段式挑選（先類型再編號），與線上檢驗同一種操作方式 */
+        .tpick { display:flex; flex-wrap:wrap; gap:6px; }
+        .tpick button { font-size:12.5px; }
+        .tpick .on { background:var(--amber-d); color:#fff; border-color:var(--amber-d); }
         .help-doc { font-size:13px; color:#5b3a1e; line-height:1.75; }
         .help-doc h4 { color:#8A5A2B; border-bottom:2px solid var(--sand); padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
     </style>
@@ -194,15 +218,15 @@ $STATUSES = ss_statuses();
             <table class="lst" id="tblList">
                 <thead><tr>
                     <th style="width:150px;">版面／適用</th>
-                    <th style="width:170px;">料號／機器編號</th>
-                    <th>名稱／主題</th>
-                    <th style="width:90px;">製程</th>
+                    <th style="width:180px;">料號／機器編號</th>
+                    <th>文件名稱</th>
+                    <th style="width:100px;">製程</th>
                     <th style="width:100px;">客戶</th>
                     <th style="width:70px;">版次</th>
                     <th style="width:100px;">表單日期</th>
                     <th style="width:100px;">狀態</th>
-                    <th style="width:90px;">簽核</th>
-                    <th style="width:120px;">操作</th>
+                    <th style="width:70px;">簽核</th>
+                    <th style="width:150px;">操作</th>
                 </tr></thead>
                 <tbody></tbody>
             </table>
@@ -223,35 +247,71 @@ $STATUSES = ss_statuses();
 </div></div>
 
 <!-- ══════════ 新增跳窗 ══════════ -->
-<div class="ss-mask" id="maskNew"><div class="ss-modal" style="width:680px;">
-    <div class="m-head">新增文件<button class="x" data-close="maskNew">&times;</button></div>
+<div class="ss-mask" id="maskNew"><div class="ss-modal" style="width:760px;">
+    <div class="m-head">新增文件<span class="as-tag" id="nTabTag"></span><button class="x" data-close="maskNew">&times;</button></div>
     <div class="m-body">
         <div class="frm">
             <label>表單版面 *</label><div class="wide"><select id="nKind"></select></div>
             <label>適用範圍 *</label><div class="wide"><select id="nScope"></select></div>
-            <label id="nBindLab">綁定對象 *</label>
-            <div class="wide ac-wrap">
-                <input type="text" id="nBind" placeholder="">
-                <input type="hidden" id="nBindId">
-                <div class="muted-help" id="nBindHint"></div>
+
+            <!-- 機台：綁的是型號（同型號好幾台共用一份 SOP），底下勾要涵蓋哪幾台 -->
+            <label id="nModelLab" class="mrow">機台型號 *</label>
+            <div class="wide ac-wrap mrow">
+                <input type="text" id="nModel" data-eg-hint="打型號（HGH250）、機台名稱（滾齒機）或機器編號（EG-016）">
+                <input type="hidden" id="nModelVal">
+                <div class="muted-help" id="nModelHint">同一個型號常常有好幾台，選了型號會自動把在用的機台全部帶進來，再勾掉不適用的。</div>
             </div>
-            <label>文件名稱 *</label><div class="wide"><input type="text" id="nTitle"></div>
-            <label>製程／主題</label><div class="wide"><input type="text" id="nProc"></div>
+            <label class="mrow">機器編號</label>
+            <div class="wide mrow"><div id="nMachines" class="pickbox muted-help">先選機台型號。</div></div>
+
+            <!-- 料號 -->
+            <label id="nPartLab" class="prow">料號 *</label>
+            <div class="wide ac-wrap prow">
+                <input type="text" id="nPart" data-eg-hint="打料號從清單挑">
+                <input type="hidden" id="nPartId">
+                <div class="muted-help">同一個料號文字可能有好幾筆、分屬不同客戶，一定要從清單挑對那一筆。</div>
+            </div>
+
+            <!-- 製程＝紙本上的「工程名稱」，同一件事所以只留一欄 -->
+            <label id="nProcLab">製程</label>
+            <div class="wide ac-wrap">
+                <input type="text" id="nProc" data-eg-hint="打製程名稱或編號（齒研、12）">
+                <input type="hidden" id="nProcNo">
+                <div class="muted-help" id="nProcHint">紙本上的「工程名稱」就是製程，一律從製程主檔挑。同一個對象的不同製程可以各有一份文件。</div>
+            </div>
+
+            <label>客戶</label>
+            <div class="wide ac-wrap">
+                <input type="text" id="nCus" data-eg-hint="打客戶編號或簡稱">
+                <input type="hidden" id="nCusId">
+                <div class="muted-help" id="nCusHint">綁了料號就由料號主檔自動帶入，不用也不可以自己打。</div>
+            </div>
+
+            <label>文件名稱 *</label>
+            <div class="wide"><input type="text" id="nTitle">
+                <div class="muted-help">系統會依綁定對象與製程自動命名，要改直接改掉即可（改過就不再自動蓋掉）。</div></div>
             <label>版次</label><div><input type="text" id="nVer" value="01"></div>
             <label>表單日期 *</label><div><input type="date" id="nDate" value="<?= date('Y-m-d') ?>"></div>
             <label>制/修訂事項</label><div class="wide"><input type="text" id="nNote" value="初訂"></div>
+            <label class="srow">檢驗項目</label>
+            <div class="wide srow"><label style="font-weight:normal;text-align:left;">
+                <input type="checkbox" id="nApplyTpl" checked> 建立時代入預設的檢驗項目
+                </label><div class="muted-help" id="nTplHint"></div></div>
         </div>
         <div class="err" id="nErr" style="margin-top:6px;"></div>
-        <div class="note-box" style="margin-top:8px;">
-            <b>適用範圍</b>決定這份文件綁什麼：<b>機台</b>＝設備操作說明書綁機器編號；
-            <b>特定料號</b>＝綁料號主檔（同一個料號文字常常有好幾筆、分屬不同客戶，所以一定要從清單挑）；
-            <b>通用</b>＝不綁特定對象的作業。
-        </div>
+        <div id="nDup" style="margin-top:8px;"></div>
     </div>
     <div class="m-foot"><span class="muted-help">建立後會是草稿，填完內容再送簽。</span>
         <span class="sp"></span>
         <button class="btn btn-sm" data-close="maskNew">取消</button>
         <button id="nSave" class="btn btn-sm btn-warm">建立</button></div>
+</div></div>
+
+<!-- ══════════ 共用挑選跳窗（圖面／量具編號；刻意排在最後，才蓋得過其他跳窗） ══════════ -->
+<div class="ss-mask" id="maskPick"><div class="ss-modal" style="width:820px;">
+    <div class="m-head"><span id="pickTitle">挑選</span><button class="x" data-close="maskPick">&times;</button></div>
+    <div class="m-body" id="pickBody"></div>
+    <div class="m-foot"><span class="sp"></span><button class="btn btn-sm" data-close="maskPick">關閉</button></div>
 </div></div>
 
 <!-- ══════════ 送簽跳窗 ══════════ -->
@@ -292,12 +352,48 @@ $STATUSES = ss_statuses();
         </ul>
         <h4>操作步驟</h4>
         <ol>
-            <li>按「新增」選版面與適用範圍，綁好機台或料號（<b>一定要從清單挑</b>，打字不選存不進去）。</li>
+            <li>按「新增」選版面與適用範圍，綁好機台型號或料號（<b>一定要從清單挑</b>，打字不選存不進去）。
+                <b>文件名稱會自動產生</b>，要改直接改掉即可。</li>
             <li>在文件跳窗填內容；明細表格<b>在最後一列按 ↓ 會自動長出新的一列</b>，沒填東西的末列按 ↑ 會自動移除。</li>
             <li>要帶圖面時按「挑圖面」，清單就是<b>這個料號的料號附件</b>，挑一個帶入（只建立關聯，不複製檔案）。</li>
             <li>填完按「送出簽核」，依序完成 製表 → 審核 → 核准，三格都蓋完這一版就變成已核准。</li>
             <li>要改版按「建立新版次」，內容會整份帶過來，舊版仍查得到印得出來，修訂履歷自動由各版次組出。</li>
         </ol>
+        <h4>綁定、製程與重複</h4>
+        <ul>
+            <li><b>「工程名稱」就是製程</b>（日式用語，工程＝工序），所以只有一欄「製程」，一律從製程主檔挑。</li>
+            <li><b>同一個對象＋同一個製程只能有一份文件</b>：建立時如果撞到既有的，會直接擋下並附上
+                「開啟並更新這一份」的按鈕。同一個料號的「粗滾」與「齒研」可以各有一份。</li>
+            <li><b>設備操作說明書綁的是機台型號，不是單一台機器</b>——同型號（例 HGH250 有三台）共用一份 SOP。
+                選了型號會自動把在用的機台全部帶進來，不適用的逐台勾掉；同型號日後新增的機台
+                <b>不會自動加入</b>，清單與表頭會標出「還有幾台未納入」。機器製造商／名稱／型式規格／
+                加工適用範圍建立時由機台主檔自動帶入，仍然可以改成紙本上的寫法。</li>
+            <li><b>客戶綁了料號就由料號主檔自動帶入</b>，不可手打（同一個料號文字常常分屬好幾家客戶）；
+                只有通用型文件可以自己挑客戶。</li>
+            <li>製令單號與數量已取消，紙本上那兩格不再印。</li>
+        </ul>
+        <h4>檢驗項目的預設值</h4>
+        <ul>
+            <li>設定分兩層：<b>標準項目</b>（每份都有的那幾列，如精度等級／外觀／包裝）與
+                <b>製程專屬項目</b>（某個製程才有的，如齒研的跨齒厚）。</li>
+            <li>建立文件時會依該製程的設定自動代入（先專屬、後標準），<b>代入之後仍然可以逐列刪掉不要的</b>；
+                也可以在文件裡按「代入預設項目」隨時再帶一次。逐製程可以各自設定
+                「要不要自動代入」與「代入時要不要一併帶標準項目」。</li>
+            <li><b>擔當者只能挑部門</b>，但顯示文字可以由管理員逐部門改寫——現場講「包裝」，
+                組織上並沒有包裝這個部門，就把負責的那個部門顯示成「包裝」。</li>
+            <li><b>檢驗方法</b>的選項由管理員挑幾個量具類型混合，再加上自己打的項目（例「依包裝指導書要求」）；
+                <b>檢具編號先選量具類型再選編號</b>，方法本身就是一種量具時會直接跳到該類型底下。</li>
+        </ul>
+        <h4>附件圖與旋轉</h4>
+        <ul>
+            <li>操作方法／使用注意事項／保養維修要點／注意事項這些段落都可以加附件圖，
+                上傳後畫面立刻出現縮圖，<b>列印時接在該段文字下方</b>。</li>
+            <li>圖面與附件圖都可以左轉／右轉。<b>旋轉只影響這份文件的畫面與列印，不會動到原始檔案</b>
+                ——帶進來的圖面多半是料號附件，那張圖在料號主檔與圖面查閱仍然是原來的方向。</li>
+        </ul>
+        <h4>刪除</h4>
+        <p>管理員可以刪除任何一份文件；一般使用者<b>只能刪除自己建立、而且一個版次都還沒核准過的</b>。
+            已經核准過的不可刪除，要停用請把該版次「作廢」。</p>
         <h4>簽核人員的限制</h4>
         <p>可以簽的人一律是<b>表單日期當時在職</b>的人，部門職稱也印當時的（所以補舊文件時，
             當時在職、現在已離職的人仍然挑得到）；而且<b>簽章日期當天不能請整天假</b>——

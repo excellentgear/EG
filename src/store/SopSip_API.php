@@ -82,7 +82,68 @@ case 'meta':
         'statuses' => ss_statuses(),
         'perms'    => $P,
         'today'    => date('Y-m-d'),
+        'owner_depts' => array_values(array_filter(ss_owner_depts($db), fn($d) => !empty($d['on']))),
+        'methods'     => ss_method_options($db)['list'],
+        'tool_types'  => ss_tool_types($db),
     ]);
+
+/* ── 綁定對象的搜尋（一律從主檔挑，打錯一個字就永遠比不中而且不報錯） ── */
+
+case 'search_process':
+    jout(true, ['rows' => ss_search_process($db, (string)($_GET['kw'] ?? ''))]);
+
+case 'search_customer':
+    jout(true, ['rows' => ss_search_customer($db, (string)($_GET['kw'] ?? ''))]);
+
+case 'machine_models':
+    jout(true, ['rows' => ss_machine_models($db, (string)($_GET['kw'] ?? ''))]);
+
+case 'machines_by_model':
+    jout(true, ['rows' => ss_machines_by_model($db, (string)($_GET['model'] ?? ''))]);
+
+/** 量具編號：先選類型再選編號（使用者要求的兩段式） */
+case 'tools_by_type':
+    jout(true, ['rows' => ss_tools_by_type($db, (int)($_GET['type_id'] ?? 0))]);
+
+/** 綁了料號就由料號主檔決定客戶，前端只負責顯示 */
+case 'customer_of_part':
+    jout(true, ss_customer_of_part($db, (int)($_GET['part_d_id'] ?? 0)));
+
+/**
+ * 建立前的重複檢查＋文件名稱自動產生。
+ * 兩件事放同一支是刻意的：前端在「挑完綁定對象」的那一刻就要同時知道
+ * 「會不會撞到既有文件」與「自動名稱長什麼樣」，分兩支會送兩次一樣的參數。
+ */
+case 'bind_probe': {
+    $kind  = (string)($_GET['kind'] ?? '');
+    $scope = (string)($_GET['scope'] ?? '');
+    if (!isset(ss_kinds()[$kind])) jerr('表單版面代碼不正確');
+    $in = [
+        'machine_model' => (string)($_GET['machine_model'] ?? ''),
+        'machine_id'    => (int)($_GET['machine_id'] ?? 0),
+        'part_d_id'     => (int)($_GET['part_d_id'] ?? 0),
+        'process_no'    => (int)($_GET['process_no'] ?? 0),
+    ];
+    $out = [
+        'dups'  => ss_dup_find($db, $kind, $scope, $in, (int)($_GET['doc_id'] ?? 0)),
+        'title' => ss_auto_title($db, $kind, $scope, $in),
+    ];
+    if ($scope === 'part')      $out['customer'] = ss_customer_of_part($db, $in['part_d_id']);
+    if ($scope === 'machine')   $out['machines'] = ss_machines_by_model($db, $in['machine_model']);
+    if ($kind === 'sip') {
+        $cfg = ss_proc_cfg($db, $in['process_no']);
+        $out['proc_cfg']      = $cfg;
+        $out['default_items'] = ss_default_items($db, $in['process_no'], null);
+    }
+    jout(true, $out);
+}
+
+/** 檢驗項目「代入預設值」（製程專屬＋標準項目），代入後使用者仍可逐列刪 */
+case 'default_items': {
+    $pno = (int)($_GET['process_no'] ?? 0);
+    $std = array_key_exists('with_std', $_GET) ? ((int)$_GET['with_std'] === 1) : null;
+    jout(true, ['rows' => ss_default_items($db, $pno, $std), 'cfg' => ss_proc_cfg($db, $pno)]);
+}
 
 case 'list': {
     $tab = ($_GET['tab'] ?? 'sop') === 'sip' ? 'sip' : 'sop';
@@ -118,6 +179,17 @@ case 'detail': {
     $full['can_sign'] = ss_perm_for_kind($P, $kind, 'sign');
     $full['next_slot'] = ss_next_slot($db, $verId);
     $full['draw_candidates'] = ss_part_draw_candidates($db, (int)($full['doc']['part_d_id'] ?? 0));
+    [$delOk, $delWhy] = ss_can_delete_doc($db, $full['doc'], $uid, $P);
+    $full['can_delete'] = $delOk ? 1 : 0;
+    $full['del_why']    = $delWhy;
+    $full['owner_depts'] = array_values(array_filter(ss_owner_depts($db), fn($d) => !empty($d['on'])));
+    $full['methods']     = ss_method_options($db)['list'];
+    $full['tool_types']  = ss_tool_types($db);
+    if ($kind === 'sip') {
+        $pno = (int)($full['doc']['process_no'] ?? 0);
+        $full['proc_cfg']  = ss_proc_cfg($db, $pno);
+        $full['tpl_count'] = count(ss_tpl_rows($db, 'proc', $pno)) + count(ss_tpl_rows($db, 'std'));
+    }
     jout(true, $full);
 }
 
@@ -148,10 +220,16 @@ case 'doc_save': {
         if (!$old) jerr('找不到這份文件');
         if ((string)$old['kind'] !== $kind) jerr('不可以更換表單版面，請另建一份文件');
     }
+    // 重複一律擋下（使用者要求「不可建立有兩份一樣料號／機台的資料」）。
+    // 只有管理員能硬蓋過去，而且要明確送 dup_ok=1——這是給「紙本本來就有兩份要補進來」用的，
+    // 畫面上不提供這個選項。
+    $in = $_POST;
+    $in['_dup_ok'] = (!empty($P['canAdmin']) && !empty($_POST['dup_ok'])) ? 1 : 0;
+
     $db->beginTransaction();
     try {
         $newDoc = $docId <= 0;
-        $docId  = ss_doc_save($db, $_POST, $uid, (string)$P['name']);
+        $docId  = ss_doc_save($db, $in, $uid, (string)$P['name']);
         $verId  = (int)($_POST['ver_id'] ?? 0);
         if ($newDoc) $verId = ss_ver_create($db, $docId, $_POST, $uid);
         $db->commit();
@@ -256,7 +334,9 @@ case 'doc_delete': {
     $docId = (int)($_POST['doc_id'] ?? 0);
     $d = ss_doc_get($db, $docId);
     if (!$d) jerr('找不到這份文件');
-    $needAdmin();
+    // 管理員一律可刪；一般使用者只能刪「自己建立、而且一個版次都還沒核准」的（使用者要求）
+    [$ok, $why] = ss_can_delete_doc($db, $d, $uid, $P);
+    if (!$ok) { http_response_code(403); jerr($why ?: '沒有刪除這份文件的權限'); }
     $db->prepare("UPDATE ss_doc SET is_deleted=1, modified_at=NOW(), modified_by=? WHERE doc_id=?")->execute([$uid, $docId]);
     jout(true, []);
 }
@@ -269,7 +349,12 @@ case 'file_upload': {
     if (!$d) jerr('找不到這份文件');
     $needEdit((string)$d['kind']);
     $usage = (string)($_POST['usage'] ?? 'other');
-    if (!in_array($usage, ['draw', 'step', 'scan', 'other'], true)) jerr('檔案用途代碼不正確');
+    if (!in_array($usage, ['draw', 'step', 'scan', 'other', 'sec'], true)) jerr('檔案用途代碼不正確');
+    // sec＝掛在某一個段落（操作方法／使用注意事項…）底下的說明圖，段落代碼要在登記表上
+    $secKey = (string)($_POST['sec_key'] ?? '');
+    if ($usage === 'sec') {
+        if (!isset(ss_sections((string)$d['kind'])[$secKey])) jerr('段落代碼不正確');
+    } else $secKey = '';
     if (empty($_FILES['file']['tmp_name']) || !is_uploaded_file($_FILES['file']['tmp_name'])) jerr('沒有收到檔案');
     if ((int)$_FILES['file']['size'] > 20 * 1024 * 1024) jerr('單一檔案上限 20MB');
 
@@ -288,9 +373,9 @@ case 'file_upload': {
         jerr('檔案寫入失敗，請確認附件資料夾設定與 NAS 連線');
     }
     try {
-        $st = $db->prepare("INSERT INTO ss_file (doc_id, ver_id, usage_kind, src, file_name, orig_name, mime, file_size, uploaded_at, uploaded_by)
-                            VALUES (?,?,?,'upload',?,?,?,?,NOW(),?)");
-        $st->execute([$docId, (int)($_POST['ver_id'] ?? 0) ?: null, $usage, $name, $orig,
+        $st = $db->prepare("INSERT INTO ss_file (doc_id, ver_id, usage_kind, sec_key, src, file_name, orig_name, mime, file_size, uploaded_at, uploaded_by)
+                            VALUES (?,?,?,?,'upload',?,?,?,?,NOW(),?)");
+        $st->execute([$docId, (int)($_POST['ver_id'] ?? 0) ?: null, $usage, $secKey ?: null, $name, $orig,
                       (string)($_FILES['file']['type'] ?? ''), (int)$_FILES['file']['size'], $uid]);
         $fileId = (int)$db->lastInsertId();
     } catch (Throwable $e) {
@@ -337,13 +422,76 @@ case 'file_delete': {
     $needEdit((string)$d['kind']);
     // 帶入的料號附件只解除關聯，**絕不可刪到料號主檔那個檔案**
     if ((string)$f['src'] === 'upload') {
-        $p = ss_file_path($db, $f);
-        if ($p && is_file($p)) @unlink($p);
+        // 改版會把段落圖與圖面複製一列指到同一個實體檔，所以還有別列指著它就只刪資料列，
+        // 不然刪掉新版的圖會讓舊版印出破圖（而且完全看不出原因）
+        $st = $db->prepare("SELECT COUNT(*) FROM ss_file WHERE file_name=? AND file_id<>?");
+        $st->execute([(string)$f['file_name'], $fid]);
+        if ((int)$st->fetchColumn() === 0) {
+            $p = ss_file_path($db, $f);
+            if ($p && is_file($p)) @unlink($p);
+        }
     }
     $db->prepare("DELETE FROM ss_file WHERE file_id=?")->execute([$fid]);
     $db->prepare("UPDATE ss_ver SET draw_file_id=NULL WHERE draw_file_id=?")->execute([$fid]);
     $db->prepare("UPDATE ss_step SET img_file_id=NULL WHERE img_file_id=?")->execute([$fid]);
     jout(true, []);
+}
+
+/**
+ * 圖面旋轉。使用者拍板：**只轉這份文件，不動原檔**——SIP 的圖多半是從料號附件帶入的，
+ * 轉原檔等於把料號主檔、圖面查閱那邊的圖一起轉掉。這裡只存角度，實際的旋轉結果由
+ * ss_file_view_path() 產生一份快取檔。
+ */
+case 'file_rotate': {
+    $fid = (int)($_POST['file_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM ss_file WHERE file_id=?");
+    $st->execute([$fid]);
+    $f = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$f) jerr('找不到這個檔案');
+    $d = ss_doc_get($db, (int)$f['doc_id']);
+    if (!$d) jerr('找不到這份文件');
+    $needEdit((string)$d['kind']);
+    $step = (int)($_POST['deg'] ?? 90);                       // 相對旋轉：每按一次 ±90
+    if (!in_array((($step % 360) + 360) % 360, [0, 90, 180, 270], true)) jerr('旋轉角度只能是 90 的倍數');
+    $rot = ss_rot_norm((int)($f['rot'] ?? 0) + $step);
+    $db->prepare("UPDATE ss_file SET rot=? WHERE file_id=?")->execute([$rot, $fid]);
+    jout(true, ['rot' => $rot]);
+}
+
+/* ─────────────── 檢驗項目預設值（管理員） ─────────────── */
+
+case 'tpl_get': {
+    $k   = (string)($_GET['tpl_kind'] ?? 'std');
+    $pno = (int)($_GET['process_no'] ?? 0);
+    jout(true, [
+        'rows'      => ss_tpl_rows($db, $k, $pno),
+        'processes' => ss_tpl_processes($db),
+        'cfg'       => ss_proc_cfg($db, $pno),
+        'owner_depts' => array_values(array_filter(ss_owner_depts($db), fn($d) => !empty($d['on']))),
+        'methods'     => ss_method_options($db)['list'],
+        'tool_types'  => ss_tool_types($db),
+    ]);
+}
+
+/** 從既有文件統計出「建議的預設項目」——只回建議，要不要存還是按儲存才算 */
+case 'tpl_suggest': {
+    $needAdmin();
+    jout(true, ['rows' => ss_tpl_suggest($db, (string)($_GET['tpl_kind'] ?? 'std'), (int)($_GET['process_no'] ?? 0))]);
+}
+
+case 'tpl_save': {
+    $needAdmin();
+    $k   = (string)($_POST['tpl_kind'] ?? 'std');
+    $pno = (int)($_POST['process_no'] ?? 0);
+    $db->beginTransaction();
+    try {
+        ss_tpl_replace($db, $k, $pno, $rows('rows'), $uid);
+        if ($k === 'proc') {
+            ss_proc_cfg_set($db, $pno, (int)($_POST['auto_apply'] ?? 1), (int)($_POST['with_std'] ?? 1), $uid);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
+    jout(true, ['rows' => ss_tpl_rows($db, $k, $pno), 'processes' => ss_tpl_processes($db)]);
 }
 
 /* ─────────────── 設定（管理員） ─────────────── */
@@ -367,6 +515,14 @@ case 'settings_get': {
                                      ->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) { $out['stamp_templates'] = []; }
     $out['people'] = ss_signer_candidates($db, date('Y-m-d'));
+    // 擔當者部門（顯示文字可改）與檢驗方法選項（由量具類型混合＋自建項目）
+    $out['owner_depts'] = ss_owner_depts($db);
+    try {
+        $out['departments'] = $db->query("SELECT id, name, level FROM department ORDER BY level, sort_order, id")
+                                 ->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { $out['departments'] = []; }
+    $out['methods']    = ss_method_options($db);
+    $out['tool_types'] = ss_tool_types($db);
     jout(true, $out);
 }
 
@@ -402,6 +558,46 @@ case 'settings_save': {
             if (!$st->fetchColumn()) jerr('指定的圖章模板不存在或已停用');
         }
         ss_setting_set($db, 'stamp_' . $slot, $tid);
+    }
+
+    // 擔當者部門：只存 dept_id 與顯示文字；部門名稱一律即時查，不在這裡存第二份（鐵律4）
+    if (array_key_exists('owner_depts', $_POST)) {
+        $out = [];
+        foreach ($rows('owner_depts') as $r) {
+            $id = (int)($r['dept_id'] ?? 0);
+            if ($id <= 0) continue;
+            $st = $db->prepare("SELECT 1 FROM department WHERE id=?");
+            $st->execute([$id]);
+            if (!$st->fetchColumn()) jerr('指定的部門不存在（id ' . $id . '）');
+            $lab = trim((string)($r['label'] ?? ''));
+            if (mb_strlen($lab) > 20) jerr('擔當者顯示文字最多 20 個字');
+            $out[] = ['dept_id' => $id, 'label' => $lab, 'on' => empty($r['on']) ? 0 : 1];
+        }
+        ss_setting_set($db, 'owner_depts', $out);
+    }
+
+    // 檢驗方法：挑哪幾個量具類型 ＋ 自建的文字項目
+    if (array_key_exists('method_tool_types', $_POST)) {
+        $valid = [];
+        foreach (ss_tool_types($db) as $t) $valid[(int)$t['id']] = 1;
+        $ids = [];
+        foreach ($rows('method_tool_types') as $id) {
+            $id = (int)$id;
+            if ($id <= 0) continue;
+            if (empty($valid[$id])) jerr('量具類型不存在（id ' . $id . '）');
+            $ids[] = $id;
+        }
+        ss_setting_set($db, 'method_tool_types', array_values(array_unique($ids)));
+    }
+    if (array_key_exists('method_extra', $_POST)) {
+        $ex = [];
+        foreach ($rows('method_extra') as $s) {
+            $s = trim((string)$s);
+            if ($s === '') continue;
+            if (mb_strlen($s) > 60) jerr('自建的檢驗方法最多 60 個字');
+            $ex[] = $s;
+        }
+        ss_setting_set($db, 'method_extra', array_values(array_unique($ex)));
     }
     jout(true, []);
 }
