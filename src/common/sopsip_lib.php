@@ -273,7 +273,10 @@ function ss_user_dept_ids(PDO $db, int $uid): array
     if (isset($cache[$uid])) return $cache[$uid];
     $ids = [];
     try {
-        $st = $db->prepare("SELECT DISTINCT department_id FROM user_position WHERE user_id=? AND department_id IS NOT NULL");
+        // 人與部門的對照表是 user_department_position_map（**不是** user_position，那張表不存在；
+        // 查錯表名會被 try/catch 吞掉，變成「部門判定永遠 false」而且完全不報錯）
+        $st = $db->prepare("SELECT DISTINCT department_id FROM user_department_position_map
+                            WHERE user_id=? AND department_id IS NOT NULL");
         $st->execute([$uid]);
         $ids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN) ?: []);
     } catch (Throwable $e) {}

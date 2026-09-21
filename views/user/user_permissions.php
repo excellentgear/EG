@@ -374,6 +374,7 @@ $EG_ROLE_MODULES = [
     'cust_satis'          => ['prefix'=>'cs',      'label'=>'客戶滿意度',          'page'=>'customer_satisfaction.php'],
     'qa_ncr'              => ['prefix'=>'ncr',     'label'=>'不合格品管制記錄表',  'page'=>'ncr_control_log.php'],
     'qa_abnormal'         => ['prefix'=>'qab',     'label'=>'品質異常處理單',      'page'=>'qa_abnormal_list.php'],
+    'sop_sip'             => ['prefix'=>'sopsip',  'label'=>'作業標準書SOP／檢驗指導書SIP', 'page'=>'sop_sip.php'],
     'data_audit'          => ['prefix'=>'dqa',     'label'=>'資料稽核',            'page'=>'data_audit.php'],
     'leave'               => ['prefix'=>'leave',   'label'=>'請假系統',            'page'=>'leave_request.php'],
     'shipping'            => ['prefix'=>'ship',    'label'=>'快速出貨',            'page'=>'Shipping_Quick.php'],
@@ -1641,6 +1642,19 @@ $_quotDepts = array_keys($_deptSet);
                          決策主管也可以改用「清單頁 → 設定 → 決策者」以<strong>部門＋職稱</strong>指定（人員異動不必回來改）。
                          這裡的角色是給「不在那些部門、但需要這個權限」的人補授權用的。管理者固定擁有全部權限。',
                         rs_of('qa_abnormal'), rsu_of('qa_abnormal'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('sopsip', 'sop_sip', '作業標準書SOP／標準檢驗指導書SIP', 'fa-book', '#C77C1A',
+                        '為每位使用者指派「<a href="../QA/sop_sip.php" target="_blank" style="color:#b5762a;">作業標準書SOP／標準檢驗指導書SIP</a>」的角色。
+                         同一頁兩個分頁：<strong>SOP</strong>＝設備操作說明書（3-TD-02-01，綁機器編號）與
+                         製造製程說明書（3-TD-02-02，通用或綁料號）；<strong>SIP</strong>＝標準檢驗指導書（2-QA-02-01，通用或綁料號）。<br>
+                         <span style="color:#c0492f;">SOP 與 SIP 是分開授權的</span>——這兩個分頁是不同課室在用：
+                         有 SOP 權限的人改不動 SIP，反之亦然，但兩邊互相看得到。
+                         <strong>SOP／SIP 管理員</strong>＝兩邊都能改，另外可以設定自動簽核、各關預設簽核人、
+                         圖章模板、AS 文件編號綁定與上班時段，並可指定他人簽章或清除已蓋的章。<br>
+                         <span style="color:#c0492f;">很多人不必在這裡指派</span>：生產部門與技術部門成員本來就能編輯與簽核 SOP、
+                         品管部門成員本來就能編輯與簽核 SIP（品管的「管理檢驗設定」也視同）。
+                         這裡的角色是給「不在那些部門、但需要這個權限」的人補授權用的。管理者固定擁有全部權限。',
+                        rs_of('sop_sip'), rsu_of('sop_sip'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('dqa', 'data_audit', '資料稽核', 'fa-check-square-o', '#C77C1A',
                         '為每位使用者指派「<a href="../ADM/data_audit.php" target="_blank" style="color:#b5762a;">資料稽核</a>」頁的角色。

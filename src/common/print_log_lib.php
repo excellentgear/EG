@@ -220,6 +220,7 @@ if (!function_exists('eg_print_sources')) {
             'qa_ncr_log'     => ['label' => '不合格品管制記錄表',           'page' => 'views/QA/ncr_control_log.php',            'kind' => 'form'],
             'data_audit'     => ['label' => '資料稽核－流程順序／基本資料',  'page' => 'views/ADM/data_audit.php',                'kind' => 'form'],
             'qa_abnormal'    => ['label' => '品質異常處理單',               'page' => 'views/QA/qa_abnormal_list.php',           'kind' => 'form'],
+            'sop_sip'        => ['label' => '作業標準書SOP／標準檢驗指導書SIP', 'page' => 'views/QA/sop_sip.php',              'kind' => 'form'],
         ];
     }
 }
