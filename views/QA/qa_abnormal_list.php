@@ -505,7 +505,7 @@ function load(){
                     ? ('<span class="muted-help">' + esc(dispDate(r.deleted_at)) + ' 由 ' + esc(r.deleted_name || '') + ' 刪除</span>'
                        + (CAN_ADMIN ? ' <button class="btn btn-warm btn-xs act-restore" data-id="' + r.id + '" data-no="' + esc(r.abnormal_order_no) + '">還原</button>' : ''))
                     : ('<a href="qa_abnormal_form.php?id=' + r.id + '" class="btn btn-warm-o btn-xs">處理</a> '
-                       + '<a href="qa_abnormal_print.php?id=' + r.id + '" target="_blank" class="btn btn-warm-o btn-xs"><i class="fa fa-print"></i></a>'
+                       + '<a href="qa_abnormal_print.php?id=' + r.id + '&auto=1" target="_blank" class="btn btn-warm-o btn-xs" title="開啟列印預覽"><i class="fa fa-print"></i></a>'
                        + (CAN_ADMIN ? ' <button class="btn btn-warm-o btn-xs act-del" data-id="' + r.id + '" data-no="' + esc(r.abnormal_order_no) + '"><i class="fa fa-trash-o"></i></button>' : '')))
                 + '</td></tr>';
         }).join(''));

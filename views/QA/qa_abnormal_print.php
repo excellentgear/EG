@@ -159,6 +159,8 @@ table.f th, table.f td { border:1px solid #000; padding:1px 4px; vertical-align:
                          word-wrap:break-word; overflow-wrap:break-word; line-height:1.45; }
 table.f td.lb { text-align:center; font-weight:bold; background:#F3F3F3; }
 table.f td.c { text-align:center; }
+/* 勾選框那幾列（異常原因分類／異常處置方式）高度要一致，紙本上這兩列本來就一樣高 */
+table.f td.optrow { height:8mm; }
 table.f td.t { vertical-align:top; }
 .f + .f { border-top:0; }
 .cb { display:inline-flex; align-items:center; gap:3px; margin:0 10px 0 0; white-space:nowrap; vertical-align:middle; }
@@ -176,6 +178,8 @@ table.f td.t { vertical-align:top; }
 .mem td { height:15px; }
 table.ask td { height:13mm; }
 table.ask .askbd { font-size:10px; line-height:1.35; }
+/* 簽章格與它左邊的內容格之間不畫線——有線的話章會看起來像獨立的一欄，分不出是哪個單位簽的 */
+table.ask td.sig { border-left:0; }
 /* 圖章尺寸一律抄 ai-rules/18 鐵則6 這一行，不要自己另外發明數字 */
 .stamp-wrap svg, svg.car-stamp { width:91px; height:91px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
 svg.eg-stamp-tpl { height:auto !important; }
@@ -185,7 +189,7 @@ svg.eg-stamp-tpl { height:auto !important; }
 </head>
 <body>
 <div class="noprint">
-    <button onclick="window.print()">列印</button>
+    <button onclick="window.print()">再列印一次</button>
     <button onclick="window.close()">關閉</button>
 </div>
 
@@ -247,7 +251,7 @@ svg.eg-stamp-tpl { height:auto !important; }
     <colgroup><col style="width:16%"><col></colgroup>
     <tr>
         <td class="lb">異常原因分類</td>
-        <td>
+        <td class="optrow">
             <?php foreach ($lv1 as $c) echo cb($c['name'], isset($selRoots[$c['cat_id']])); ?>
             <?php if ($deepPaths): ?><div class="small" style="margin-top:2px;">選定：<?= h(implode('；', $deepPaths)) ?></div><?php endif; ?>
         </td>
@@ -279,7 +283,7 @@ svg.eg-stamp-tpl { height:auto !important; }
     <colgroup><col style="width:16%"><col><col style="width:26%"></colgroup>
     <tr>
         <td class="lb">異常處置方式</td>
-        <td><?php foreach ($dispOpts as $op) echo cb($op['name'], in_array($op['opt_id'], $o['disp_ids'], true)); ?></td>
+        <td class="optrow"><?php foreach ($dispOpts as $op) echo cb($op['name'], in_array($op['opt_id'], $o['disp_ids'], true)); ?></td>
         <td class="sig" rowspan="2">
             <div class="cap">(業務/品管) 主管：</div>
             <div class="sigbox" data-stamp="<?= h($o['decided_name']) ?>" data-dept="<?= h($o['signs']['disp']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['disp']['position'] ?? '') ?>" data-date="<?= h(d($o['disp_decided_at'])) ?>"></div>
@@ -287,7 +291,7 @@ svg.eg-stamp-tpl { height:auto !important; }
     </tr>
     <tr>
         <td class="lb">處 置 說 明</td>
-        <td class="t" style="height:13mm;"><?= nl2br(h($o['disposition_note'])) ?></td>
+        <td class="t" style="height:21mm;"><?= nl2br(h($o['disposition_note'])) ?></td>
     </tr>
 </table>
 
@@ -433,7 +437,12 @@ var STAMP_TPL = <?= json_encode($stampTpl['schema'] ?? null, JSON_UNESCAPED_UNIC
             st.textContent = "@page{ @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:8.5pt; color:#333; } }";
             document.head.appendChild(st);
         }
-        if (location.search.indexOf('auto=1') >= 0) setTimeout(function () { window.print(); }, 350);
+        /* 從清單或處理頁按「列印」進來的，直接跳出列印預覽，不要再按一次（使用者要求）。
+           等頁面資源載完再叫 print()，否則圖章或字型還沒就位就先排版，印出來會跑掉。 */
+        if (location.search.indexOf('auto=1') >= 0) {
+            var go = function () { setTimeout(function () { window.print(); }, 250); };
+            if (document.readyState === 'complete') go(); else window.addEventListener('load', go);
+        }
     }
     // 掃描實體章對照表是非同步載入的，沒等它就會印成預設章、跟畫面上看到的不一樣
     if (window.EGStamp && EGStamp.whenReady) EGStamp.whenReady(draw); else window.onload = draw;
