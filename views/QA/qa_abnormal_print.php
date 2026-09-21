@@ -98,12 +98,16 @@ foreach ($o['rounds'] as $r) {
     if (($r['status'] ?? '') !== 'Returned') continue;
     $k = $slotMap[(int)$r['dept_id']] ?? '';
     if ($k === '' || !isset(qab_ask_slots()[$k])) { $unmapped[] = (string)$r['department_name']; continue; }
-    if (!isset($slotData[$k])) $slotData[$k] = ['content' => [], 'who' => '', 'date' => '', 'on' => true];
+    if (!isset($slotData[$k])) $slotData[$k] = ['content' => [], 'who' => '', 'date' => '', 'dept' => '', 'pos' => '', 'on' => true];
     $txt = trim((string)$r['reply_content']);
     if ($txt !== '') $slotData[$k]['content'][] = $txt;
     if ($slotData[$k]['who'] === '') {
         $slotData[$k]['who']  = trim((string)($r['replied_name'] ?: $r['user_cname'] ?? ''));
         $slotData[$k]['date'] = (string)$r['return_date'];
+        // 圖章模板若有 {部門}{職稱} token，要用「回覆當天」的職務（ai-rules/22）
+        $pi = qab_person_asof($db, (int)($r['replied_by'] ?: $r['user_id']), substr((string)$r['return_date'], 0, 10));
+        $slotData[$k]['dept'] = $pi['dept'];
+        $slotData[$k]['pos']  = $pi['position'];
     }
 }
 /** 一格的內容（勾選框＋回覆文字＋簽章） */
@@ -114,13 +118,16 @@ function askCell(array $slotData, array $keys, $h, $d) {
         $on = !empty($slotData[$k]['on']);
         $box .= '<span class="cb"><i>' . ($on ? '✔' : '') . '</i>' . $h($labels[$k]['label']) . '</span>';
     }
-    $txt = []; $who = ''; $date = '';
+    $txt = []; $who = ''; $date = ''; $dept = ''; $pos = '';
     foreach ($keys as $k) {
         if (empty($slotData[$k])) continue;
         foreach ($slotData[$k]['content'] as $c) $txt[] = $c;
-        if ($who === '') { $who = $slotData[$k]['who']; $date = $slotData[$k]['date']; }
+        if ($who === '') {
+            $who  = $slotData[$k]['who'];  $date = $slotData[$k]['date'];
+            $dept = $slotData[$k]['dept'] ?? ''; $pos = $slotData[$k]['pos'] ?? '';
+        }
     }
-    return [$box, nl2br($h(implode("\n", $txt))), $who, $date];
+    return [$box, nl2br($h(implode("\n", $txt))), $who, $date, $dept, $pos];
 }
 
 // 扣款明細：製程列彙總成一列（紙本只有「製程／其他／合計」三列），其他列逐筆印
@@ -185,6 +192,7 @@ table.f td.t { vertical-align:top; }
 table.f td.nobr { border-right:0; }
 table.f td.nobt { border-top:0; }        /* 裁示說明與矯正單號之間不畫線（紙本是連著的一格） */
 table.f tr.signrow td { height:15mm; }   /* 蓋章框：沒有人簽時也要看得到框、留得下章 */
+table.f td.sig { vertical-align:top; }   /* 簽章標題靠左上（使用者要求），不跟著儲存格垂直置中 */
 table.f td.sig.nobl { border-left:0; }
 .note { font-size:10px; margin-top:3px; }
 .small { font-size:10px; color:#333; }
@@ -325,18 +333,20 @@ svg.eg-stamp-tpl { height:auto !important; }
     foreach ($cells as $row): ?>
     <tr>
         <?php foreach ($row as $keys):
-            [$box, $txt, $who, $dt] = askCell($slotData, $keys, 'h', 'd'); ?>
+            [$box, $txt, $who, $dt, $sdept, $spos] = askCell($slotData, $keys, 'h', 'd'); ?>
         <td class="t askbody"><?= $box ?><div class="askbd"><?= $txt ?></div></td>
         <td class="sig t"><div class="cap"><b>簽章：</b></div>
-            <div class="sigbox" style="min-height:0;" data-tpl="ask" data-stamp="<?= h($who) ?>" data-date="<?= h(d($dt)) ?>"></div></td>
+            <div class="sigbox" style="min-height:0;" data-tpl="ask" data-stamp="<?= h($who) ?>"
+                 data-dept="<?= h($sdept) ?>" data-pos="<?= h($spos) ?>" data-date="<?= h(d($dt)) ?>"></div></td>
         <?php endforeach; ?>
     </tr>
     <?php endforeach; ?>
     <tr>
-        <?php [$box, $txt, $who, $dt] = askCell($slotData, ['sales'], 'h', 'd'); ?>
+        <?php [$box, $txt, $who, $dt, $sdept, $spos] = askCell($slotData, ['sales'], 'h', 'd'); ?>
         <td class="t askbody" colspan="3"><?= $box ?><div class="askbd"><?= $txt ?></div></td>
         <td class="sig t"><div class="cap"><b>簽章：</b></div>
-            <div class="sigbox" style="min-height:0;" data-tpl="ask" data-stamp="<?= h($who) ?>" data-date="<?= h(d($dt)) ?>"></div></td>
+            <div class="sigbox" style="min-height:0;" data-tpl="ask" data-stamp="<?= h($who) ?>"
+                 data-dept="<?= h($sdept) ?>" data-pos="<?= h($spos) ?>" data-date="<?= h(d($dt)) ?>"></div></td>
     </tr>
 </table>
 
@@ -400,8 +410,7 @@ svg.eg-stamp-tpl { height:auto !important; }
         <td class="lb">核准 扣款 金額 (元/PCS)</td>
         <td class="c"><?= h($o['deduct_unit_amt'] === null ? '' : money($o['deduct_unit_amt'])) ?></td>
         <td class="lb">報廢單號</td>
-        <td class="c" colspan="2"><b><?= h($o['scrap_no']) ?></b>
-            <span class="small"><?= $o['scrap_no'] ? '' : '（不需另外開立報廢單）' ?></span></td>
+        <td class="c" colspan="2"><b><?= h($o['scrap_no']) ?></b></td>
     </tr>
     <tr>
         <td class="small" colspan="5">★此單號需登記至不合格品管制記錄表　
