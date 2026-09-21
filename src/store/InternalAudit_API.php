@@ -1483,6 +1483,8 @@ case 'nc_get': {
     if (!$n) jerr('找不到這張不符合通知單', 404);
     $sp = ia_nc_stage_perm($db, $n, $perms, $uid);
     if (!$sp['view']) jerr('無權檢視這張不符合通知單', 403);
+    // 稽核組長／管理代表一律以設定為準：讀取當下就補正，畫面與列印版才不會停在舊值
+    ia_nc_sync_auto_signers($db, $n);
     $n['perm']        = $sp;
     $n['type_label']  = IA_NC_TYPES[(string)($n['nc_type'] ?? '')] ?? '';
     $n['stage_label'] = IA_NC_STAGES[(string)$n['stage']] ?? (string)$n['stage'];
@@ -1782,11 +1784,15 @@ case 'nc_save_sec3': {
     $ldName = $lead ? (string)$lead['name'] : ((string)($n['leader_name'] ?? '') ?: $uname);
     $db->beginTransaction();
     try {
+        /* 「結束」欄 2026-09-21 起已從畫面移除（使用者：稽核組長驗證不需要這一欄），
+           列印版也改印結案日期。欄位保留在 DB 不刪，**沒送這個參數就沿用原值**，
+           不可以因為畫面不再送就把舊單上已經填過的內容洗成空的。 */
+        $closeNote = array_key_exists('close_note', $_POST)
+                   ? (mb_substr(trim((string)$_POST['close_note']), 0, 300) ?: null)
+                   : ($n['close_note'] ?? null);
         $db->prepare("UPDATE ia_nc SET verify_desc=?, verify_result=?, close_note=?,
                           leader_id=?, leader_name=?, leader_date=?, updated_at=NOW() WHERE nc_id=?")
-           ->execute([$desc ?: null, $res ?: null,
-                      mb_substr(trim((string)($_POST['close_note'] ?? '')), 0, 300) ?: null,
-                      $ldId, $ldName, $ld, $id]);
+           ->execute([$desc ?: null, $res ?: null, $closeNote, $ldId, $ldName, $ld, $id]);
         if ($submit) {
             if ($res === 'fail') {
                 // 驗證不通過＝退回受稽單位重填

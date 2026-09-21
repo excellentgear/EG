@@ -589,9 +589,11 @@ $roleLabel = ia_role_label($perms);
                 填完按「送出回覆」才會進到下一段。<b>稽核員／內稽管理員可以代填</b>（對方不方便用電腦、或補歷史紙本時），代填會在下方歷程留下紅字紀錄。
                 <b>送出之後這一段就鎖起來了</b>（避免之後不小心改到）；真的要修正時，<b>內稽管理員</b>可以按段落標題旁的「解鎖修改」，
                 解鎖只對這一次開啟有效，關掉重開又是鎖住的。</li>
-            <li><b>段三 稽核組長填</b>：糾正和預防措施執行狀況驗證描述、驗證通過或不通過。<b>不通過會退回段二</b>並重新通知受稽單位。
+            <li><b>段三 稽核組長填</b>：只有<b>驗證描述</b>與<b>驗證通過／不通過</b>兩項（紙本的「結束」欄已取消，
+                列印版改印<b>結案日期</b>）。<b>不通過會退回段二</b>並重新通知受稽單位。
                 <b>稽核組長不是「按下驗證的人」</b>，而是<b>該年度稽核小組設定的組長</b>（工具列「稽核小組」設定），
-                所以管理員代填也不會把自己變成組長；小組沒設組長時才沿用這張稽核通知單上登記的人。</li>
+                所以管理員代填也不會把自己變成組長；小組沒設組長時才沿用這張稽核通知單上登記的人。
+                <b>設定改過之後，舊單一打開就會自動更正</b>（不必重新存檔），畫面與列印版拿到的一定是同一個人。</li>
             <li><b>段四 管理代表填</b>：管理代表意見，按「結案」本單結束、通知受稽單位。
                 <b>管理代表同樣是自動帶的</b>——取自全站的<b>組織角色綁定</b>（管理代表），不是按下結案按鈕的人。</li>
             <li><b>結案之後還是可以改</b>：內稽管理員在跳窗下方會多一顆<b>「取消結案」</b>，
@@ -604,6 +606,8 @@ $roleLabel = ia_role_label($perms);
         <ul>
             <li><b>固定印成 A4 一頁</b>。四個圖章一律在各自格子的<b>右下角</b>：稽核員／責任主管／
                 （驗證段）<b>管理代表＋稽核組長並排</b>，結案日期印在驗證段的左下角。</li>
+            <li><b>還沒簽的格子印成空白橫線</b>，不會先蓋一個沒有日期的章——那等於在還沒驗證、還沒結案的單上
+                印出「已經簽好」的假簽章。等該段真的簽核（有簽核日期）之後才會出現圖章。</li>
             <li><b>印出來左右被裁掉的話</b>：本表的左右留白已經留 20mm（上 18mm、下 16mm）。
                 如果還是被裁，多半是<b>瀏覽器列印視窗裡的「邊界」被設成「無」或「最小」</b>——
                 請改回「預設」；那個設定會蓋掉網頁自己指定的留白。</li>
@@ -1232,7 +1236,6 @@ $roleLabel = ia_role_label($perms);
                         <option value="pass">通過，可結束</option>
                         <option value="fail">不通過，退回重提措施</option>
                      </select><div class="err-msg" id="errNVerifyRes"></div></div>
-                <label>結束</label><div><input type="text" id="nCloseNote" placeholder="紙本「結束」欄"></div>
                 <label>稽核組長</label>
                 <div><input type="text" id="nLeader" readonly>
                      <span id="nLeaderNote" style="font-size:12px;color:#8a6d45;"></span></div>
@@ -4308,15 +4311,14 @@ function openNc(id){
             : '　（查不到該單位在稽核日期當時的主管，請手動指定）');
         // 段三
         $('#nVerify').val(NC.verify_desc||''); $('#nVerifyRes').val(NC.verify_result||'');
-        $('#nCloseNote').val(NC.close_note||'');
-        /* 稽核組長／管理代表都是**自動帶的**（2026-09-21 使用者要求），畫面上寫清楚是從哪裡來的，
-           免得使用者以為是「誰按的就算誰」。 */
-        $('#nLeader').val(NC.leader_name || ((NC.suggest_leader||{}).name || '')
-                          + (NC.leader_name ? '' : (NC.suggest_leader ? '（將自動帶入）' : '')));
+        /* 稽核組長／管理代表都是**自動帶的**（2026-09-21 使用者要求）。
+           後端 nc_get 讀取當下就已經依設定補正過，所以這裡直接顯示 NC.leader_name 就是正確的那一位
+           （上一版只顯示 DB 舊值、要重新存檔才會變，使用者回報「還是代入錯誤」就是這個原因）。 */
+        $('#nLeader').val(NC.leader_name || '');
         $('#nLeaderNote').text(NC.suggest_leader
             ? ('　自動帶入：' + NC.suggest_leader.name
                + (NC.suggest_leader.src === 'team' ? '（本年度稽核小組組長）' : '（本次稽核通知單登記的組長）'))
-            : '　（本年度稽核小組還沒設定組長，將沿用本單原本登記的人）');
+            : '　（本年度稽核小組還沒設定組長，沿用本單原本登記的人；要改請到工具列「稽核小組」設定）');
         $('#nLeaderDate').val(inputDate(NC.leader_date) || ncSignDefault());
         // 段四
         $('#nMgrNote').val(NC.mgr_note||'');
@@ -4646,7 +4648,7 @@ function saveSec3(submit, silent, cb){
         if ($('#nVerifyRes').val()==='fail' && !confirm('驗證不通過會退回受稽單位重新提出措施，並重新發通知。確定？')) return;
     }
     $.post(API, {action:'nc_save_sec3', nc_id:NC.nc_id, submit:submit?1:'', verify_desc:$('#nVerify').val(),
-        verify_result:$('#nVerifyRes').val(), close_note:$('#nCloseNote').val(),
+        verify_result:$('#nVerifyRes').val(),
         leader_date:$('#nLeaderDate').val()}, function(res){
         if (!res.ok) { if (!silent) alert(res.error||'儲存失敗'); if (cb) cb(false); return; }
         if (!silent) { alert(submit ? '已送出驗證' : '已暫存'); openNc(NC.nc_id); }
@@ -5350,6 +5352,9 @@ function iaPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
             + 'table.ia-p td.sig-cell2{padding-right:335px;}'
             + 'table.ia-p .sig-br{position:absolute;right:6px;bottom:4px;white-space:nowrap;text-align:right;}'
             + 'table.ia-p .sig-br .sig-one{display:inline-block;margin-left:12px;vertical-align:bottom;}'
+            /* 還沒簽的格子：留一塊與圖章同寬的空白讓人手簽，版面不會因為少一個章而位移 */
+            + 'table.ia-p .sig-blank{display:inline-block;width:94px;height:94px;'
+            + 'border-bottom:1px solid #666;vertical-align:bottom;}'
             + '.ia-sign{display:flex;margin-top:14px;font-size:12px;}'
             + '.ia-sign .cell{flex:1;border:1px solid #333;min-height:76px;padding:4px 6px;text-align:center;}'
             + '.ia-sign .cell .lb{font-weight:bold;margin-bottom:3px;}'
@@ -5673,7 +5678,13 @@ function printNc(id){
             var stampBR = function (list) {
                 return '<div class="sig-br">'
                      + list.map(function (x) {
-                           return '<span class="sig-one">' + signOne(x[0], x[1], x[2], x[3]) + '</span>';
+                           /* **沒有簽核日期＝這一格還沒簽**，只印標籤留白給人簽，絕不可以蓋出一個章。
+                              稽核組長／管理代表的姓名現在是依設定自動補正的，若不看日期就蓋章，
+                              一張還沒驗證、還沒結案的單會印出「已經簽好」的假簽章。 */
+                           return '<span class="sig-one">'
+                                + (x[3] ? signOne(x[0], x[1], x[2], x[3])
+                                        : (esc(x[0]) + ': <span class="sig-blank"></span>'))
+                                + '</span>';
                        }).join('')
                      + '</div>';
             };

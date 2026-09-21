@@ -2127,6 +2127,41 @@ function ia_nc_sign_default(array $nc, string $today): string
     return ia_nc_is_backfill($nc, $today) ? (string)$nc['audit_date'] : $today;
 }
 
+/**
+ * 把「自動解析」的兩個簽章人補正到這張單上（2026-09-21 使用者回報）。
+ * 症狀：稽核組長明明設定了年度稽核小組，畫面與列印版仍然印出舊的那個人。
+ * 根因：`leader_id`／`mgr_id` 是**存下來的快取**，上一版只有在「重新存檔那一段」時才更新，
+ * 所以已經填好（甚至已結案）的單永遠停在舊值——而使用者要的是「一律以設定為準」。
+ * 修法：**讀取當下就解析並補正**，畫面、列印、通知拿到的都是同一份正確的值；
+ * 順手把 DB 的快取一起同步（不動 updated_at——這不是有人編輯，只是快取對齊）。
+ * 設定不存在（該年度沒建小組／沒綁管理代表）時完全不動，維持單上原本的人。
+ */
+function ia_nc_sync_auto_signers(PDO $db, array &$n): void
+{
+    $id = (int)($n['nc_id'] ?? 0);
+    if (!$id) return;
+    $set = []; $arg = [];
+
+    $lead = ia_year_leader($db, (int)($n['year'] ?? 0), (int)($n['case_id'] ?? 0));
+    if ($lead && (int)$lead['id'] > 0 && (int)$lead['id'] !== (int)($n['leader_id'] ?? 0)) {
+        $n['leader_id'] = (int)$lead['id']; $n['leader_name'] = (string)$lead['name'];
+        $set[] = 'leader_id=?'; $arg[] = $n['leader_id'];
+        $set[] = 'leader_name=?'; $arg[] = $n['leader_name'];
+    }
+    $rep = ia_mgmt_rep($db);
+    if ($rep && (int)$rep['id'] > 0 && (int)$rep['id'] !== (int)($n['mgr_id'] ?? 0)) {
+        // 管理代表的章只有在「已經簽過」（有日期）時才印，所以沒日期的單只更正姓名不補日期
+        $n['mgr_id'] = (int)$rep['id']; $n['mgr_name'] = (string)$rep['name'];
+        $set[] = 'mgr_id=?'; $arg[] = $n['mgr_id'];
+        $set[] = 'mgr_name=?'; $arg[] = $n['mgr_name'];
+    }
+    if (!$set) return;
+    try {
+        $arg[] = $id;
+        $db->prepare("UPDATE ia_nc SET " . implode(',', $set) . " WHERE nc_id=?")->execute($arg);
+    } catch (Throwable $e) {}
+}
+
 /* ============================ 不符合通知單：分段權限 ============================ */
 
 /**
