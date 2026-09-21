@@ -514,6 +514,55 @@ function ocq_ab_where($p) {
     return [$whereSql . " AND (b.d_setting_id IS NULL OR b.d_setting_id = 0)", $params];
 }
 
+/**
+ * 把一筆料號主檔綁到 BOM 上（**唯一實作**：逐筆挑選、人工判定批次套用、快速建立料號三條路都走這支，
+ * 三邊各寫一次 UPDATE 遲早走鐘）。回傳的陣列直接就是要回給前端的 JSON 內容。
+ */
+function ocq_bind_part_to_bom($pdo, $bom, $dsid, $uid, $label, $extraAudit = []) {
+    $bom  = trim((string)$bom);
+    $dsid = (int)$dsid;
+    if ($bom === '' || $dsid <= 0) return ['success' => false, 'message' => '缺少必要參數'];
+    $pdo->beginTransaction();
+    try {
+        $st = $pdo->prepare("SELECT bom, d_id, d_setting_id, Client_Name FROM bom WHERE bom = ? FOR UPDATE");
+        $st->execute([$bom]);
+        $cur = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$cur) { $pdo->rollBack(); return ['success' => false, 'message' => '找不到這筆 BOM，請重新整理清單']; }
+        if (!empty($cur['d_setting_id'])) {
+            // 已經有人綁過了：一律不覆蓋，請使用者重新整理再看（點開即刷新鐵則）。
+            $pdo->rollBack();
+            return ['success' => false, 'code' => 'CONFLICT',
+                'message' => '這筆 BOM 已經綁定料號「' . ($cur['d_id'] ?: $cur['d_setting_id']) . '」（可能是其他人剛綁的），為避免蓋掉別人的資料已停止本次操作，請重新整理清單確認。'];
+        }
+        $sd = $pdo->prepare("SELECT ds.d_id, COALESCE(ds.D_Setting_Id, CAST(ds.d_id AS CHAR),'') AS display_id,
+                COALESCE(cl.customer,'') AS customer_name
+            FROM d_setting ds LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id WHERE ds.d_id = ? LIMIT 1");
+        $sd->execute([$dsid]);
+        $ds = $sd->fetch(PDO::FETCH_ASSOC);
+        if (!$ds) { $pdo->rollBack(); return ['success' => false, 'message' => '找不到這個料號主檔（d_id=' . $dsid . '）']; }
+
+        // 客戶名稱：主檔有綁客戶才一起換掉（之後各頁讀哪一邊都一致）；**主檔沒綁客戶時要保留原值**，
+        // 不可以寫空字串把 ERP 匯入的原本名稱洗掉（與 BOM總表 apply_dsetting_to_bom 同一條規則）。
+        if (trim((string)$ds['customer_name']) !== '') {
+            $pdo->prepare("UPDATE bom SET d_setting_id=?, d_id=?, Client_Name=?, Modified_By=?, Modified_At=NOW() WHERE bom=?")
+                ->execute([$dsid, $ds['display_id'], $ds['customer_name'], $uid, $bom]);
+        } else {
+            $pdo->prepare("UPDATE bom SET d_setting_id=?, d_id=?, Modified_By=?, Modified_At=NOW() WHERE bom=?")
+                ->execute([$dsid, $ds['display_id'], $uid, $bom]);
+        }
+        $pdo->commit();
+        ocq_bind_audit($pdo, $uid, $bom, $label, array_merge([
+            'before' => ['d_setting_id' => $cur['d_setting_id'], 'd_id' => $cur['d_id'], 'Client_Name' => $cur['Client_Name']],
+            'after'  => ['d_setting_id' => $dsid, 'd_id' => $ds['display_id'], 'Client_Name' => $ds['customer_name'] ?: $cur['Client_Name']],
+        ], $extraAudit));
+        return ['success' => true, 'd_setting_id' => $dsid, 'd_id' => $ds['display_id'],
+            'client_name' => $ds['customer_name'] ?: $cur['Client_Name'], 'message' => '已綁定料號 ' . $ds['display_id']];
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+}
+
 /** 寫一筆稽核紀錄（綁定是會影響下游對帳/毛利分析的異動，一定要留得下來是誰在什麼時候綁的）。 */
 function ocq_bind_audit($pdo, $uid, $bom, $what, $changes) {
     try {
@@ -587,8 +636,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // 兩個真正寫入的動作另外驗 CSRF；兩個唯讀的（搜料號、查狀態）只驗權限，才不會因為 token
     // 過期就連查都查不了。
     $ocq_bind_actions = ['bind_search_part', 'bind_get_state', 'bind_apply_part', 'bind_apply_order',
-        'autobind_scan', 'autobind_list', 'autobind_apply'];
-    $ocq_part_actions = ['bind_search_part', 'bind_apply_part', 'autobind_scan', 'autobind_list', 'autobind_apply'];
+        'autobind_scan', 'autobind_list', 'autobind_apply', 'bind_customers', 'bind_create_part'];
+    $ocq_part_actions = ['bind_search_part', 'bind_apply_part', 'autobind_scan', 'autobind_list', 'autobind_apply',
+        'bind_customers', 'bind_create_part'];
     if (in_array($action, $ocq_bind_actions, true)) {
         $ok = in_array($action, $ocq_part_actions, true) ? $ocq_can_bind_part
             : (($action === 'bind_apply_order') ? $ocq_can_bind_order : ($ocq_can_bind_part || $ocq_can_bind_order));
@@ -596,7 +646,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => false, 'message' => '無綁定權限：此功能需要「BOM 總表」的修改權限，請聯絡管理員設定']);
             exit;
         }
-        if ($action === 'bind_apply_part' || $action === 'bind_apply_order' || $action === 'autobind_apply') {
+        if ($action === 'bind_apply_part' || $action === 'bind_apply_order' || $action === 'autobind_apply'
+            || $action === 'bind_create_part') {
             if (!hash_equals((string)($_SESSION['ocq_csrf'] ?? ''), (string)($_POST['csrf'] ?? ''))) {
                 echo json_encode(['success' => false, 'code' => 'CSRF', 'message' => '連線憑證失效，請重新整理頁面後再試 (CSRF)']);
                 exit;
@@ -679,49 +730,80 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => true, 'results' => $results]);
 
         } elseif ($action === 'bind_apply_part') {
-            $bom = trim($_POST['bom'] ?? '');
-            $dsid = intval($_POST['d_setting_id'] ?? 0);
-            if ($bom === '' || $dsid <= 0) { echo json_encode(['success' => false, 'message' => '缺少必要參數']); exit; }
-            $pdo->beginTransaction();
-            try {
-                $st = $pdo->prepare("SELECT bom, d_id, d_setting_id, Client_Name FROM bom WHERE bom = ? FOR UPDATE");
-                $st->execute([$bom]);
-                $cur = $st->fetch(PDO::FETCH_ASSOC);
-                if (!$cur) { $pdo->rollBack(); echo json_encode(['success' => false, 'message' => '找不到這筆 BOM，請重新整理清單']); exit; }
-                if (!empty($cur['d_setting_id'])) {
-                    // 已經有人綁過了：一律不覆蓋，請使用者重新整理再看（點開即刷新鐵則）。
-                    $pdo->rollBack();
-                    echo json_encode(['success' => false, 'code' => 'CONFLICT',
-                        'message' => '這筆 BOM 已經綁定料號「' . ($cur['d_id'] ?: $cur['d_setting_id']) . '」（可能是其他人剛綁的），為避免蓋掉別人的資料已停止本次操作，請重新整理清單確認。']);
-                    exit;
-                }
-                $sd = $pdo->prepare("SELECT ds.d_id, COALESCE(ds.D_Setting_Id, CAST(ds.d_id AS CHAR),'') AS display_id,
-                        COALESCE(cl.customer,'') AS customer_name
-                    FROM d_setting ds LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id WHERE ds.d_id = ? LIMIT 1");
-                $sd->execute([$dsid]);
-                $ds = $sd->fetch(PDO::FETCH_ASSOC);
-                if (!$ds) { $pdo->rollBack(); echo json_encode(['success' => false, 'message' => '找不到這個料號主檔（d_id=' . $dsid . '）']); exit; }
+            echo json_encode(ocq_bind_part_to_bom($pdo, $_POST['bom'] ?? '', $_POST['d_setting_id'] ?? 0,
+                $id, '快速綁定料號（已完工BOM查詢）'));
 
-                // 客戶名稱：主檔有綁客戶才一起換掉（之後各頁讀哪一邊都一致）；**主檔沒綁客戶時要保留原值**，
-                // 不可以寫空字串把 ERP 匯入的原本名稱洗掉（與 BOM總表 apply_dsetting_to_bom 同一條規則）。
-                if (trim((string)$ds['customer_name']) !== '') {
-                    $pdo->prepare("UPDATE bom SET d_setting_id=?, d_id=?, Client_Name=?, Modified_By=?, Modified_At=NOW() WHERE bom=?")
-                        ->execute([$dsid, $ds['display_id'], $ds['customer_name'], $id, $bom]);
-                } else {
-                    $pdo->prepare("UPDATE bom SET d_setting_id=?, d_id=?, Modified_By=?, Modified_At=NOW() WHERE bom=?")
-                        ->execute([$dsid, $ds['display_id'], $id, $bom]);
-                }
-                $pdo->commit();
-                ocq_bind_audit($pdo, $id, $bom, '快速綁定料號（已完工BOM查詢）', [
-                    'before' => ['d_setting_id' => $cur['d_setting_id'], 'd_id' => $cur['d_id'], 'Client_Name' => $cur['Client_Name']],
-                    'after'  => ['d_setting_id' => $dsid, 'd_id' => $ds['display_id'], 'Client_Name' => $ds['customer_name'] ?: $cur['Client_Name']],
-                ]);
-                echo json_encode(['success' => true, 'd_setting_id' => $dsid, 'd_id' => $ds['display_id'],
-                    'client_name' => $ds['customer_name'] ?: $cur['Client_Name'], 'message' => '已綁定料號 ' . $ds['display_id']]);
-            } catch (Exception $e) {
-                if ($pdo->inTransaction()) $pdo->rollBack();
-                throw $e;
+        } elseif ($action === 'bind_customers') {
+            // 快速建立料號時要挑客戶：一律從客戶主檔挑，**不給打字自由輸入**——打錯一個字就會建出
+            // 一筆綁到不存在客戶的料號，而且完全不報錯（比照 ai-rules/08 的「對象一律從主檔挑」）。
+            // 已停用的客戶不列（customer_list.is_inactive=1）。
+            $cs = $pdo->query("SELECT customer_id, COALESCE(customer,'') AS customer, COALESCE(customer_full,'') AS customer_full
+                FROM customer_list WHERE COALESCE(is_inactive,0) <> 1 ORDER BY customer");
+            echo json_encode(['success' => true, 'customers' => $cs->fetchAll(PDO::FETCH_ASSOC)]);
+
+        } elseif ($action === 'bind_create_part') {
+            // 主檔查無、或同名主檔的客戶跟 BOM 對不上時，直接用 BOM 上的料號文字建一筆料號主檔再綁定。
+            // 建立與綁定是同一個動作：建了卻沒綁等於留一筆沒人知道要做什麼的主檔。
+            $bom     = trim($_POST['bom'] ?? '');
+            $partNo  = trim($_POST['part_no'] ?? '');
+            $custId  = trim($_POST['customer_id'] ?? '');
+            $specNo  = trim($_POST['spec_no'] ?? '');
+            $remark  = trim($_POST['remark'] ?? '');
+            if ($bom === '' || $partNo === '') { echo json_encode(['success' => false, 'message' => '請填寫料號']); exit; }
+            if (mb_strlen($partNo) > 100) { echo json_encode(['success' => false, 'message' => '料號最多 100 個字']); exit; }
+
+            // 先確認這筆 BOM 還沒被綁（真正的把關在 ocq_bind_part_to_bom 的 FOR UPDATE，這裡先擋掉
+            // 明顯不必做的情況，免得白建一筆主檔）
+            $sb = $pdo->prepare("SELECT d_setting_id, d_id, Client_Name FROM bom WHERE bom = ? LIMIT 1");
+            $sb->execute([$bom]);
+            $bomRow = $sb->fetch(PDO::FETCH_ASSOC);
+            if (!$bomRow) { echo json_encode(['success' => false, 'message' => '找不到這筆 BOM，請重新整理清單']); exit; }
+            if (!empty($bomRow['d_setting_id'])) {
+                echo json_encode(['success' => false, 'code' => 'CONFLICT',
+                    'message' => '這筆 BOM 已經綁定料號「' . ($bomRow['d_id'] ?: $bomRow['d_setting_id']) . '」，請重新整理清單確認。']); exit;
             }
+            // 客戶一律驗證存在（前端擋一次、後端同規則再擋一次＝鐵律8）
+            $custName = '';
+            if ($custId !== '') {
+                $sc = $pdo->prepare("SELECT COALESCE(customer,'') FROM customer_list WHERE customer_id = ? LIMIT 1");
+                $sc->execute([$custId]);
+                $custName = $sc->fetchColumn();
+                if ($custName === false) { echo json_encode(['success' => false, 'message' => '找不到這個客戶（' . $custId . '），請從清單重新挑一個']); exit; }
+            }
+
+            // 同料號＋同客戶已經有主檔了就直接用那一筆，不要再建第二筆（重複主檔正是這頁在收拾的問題）
+            $dup = $pdo->prepare("SELECT d_id FROM d_setting WHERE TRIM(D_Setting_Id) = ? AND COALESCE(Customer_Id,'') = ? ORDER BY d_id LIMIT 1");
+            $dup->execute([$partNo, $custId]);
+            $dsid = (int)$dup->fetchColumn();
+            $created = false;
+            if ($dsid <= 0) {
+                $pdo->prepare("INSERT INTO d_setting (D_Setting_Id, Spec_No, Remark, Type, Customer_Id, Created_By, Created_At)
+                               VALUES (?, ?, ?, 'N', ?, ?, NOW())")
+                    ->execute([$partNo, ($specNo !== '' ? $specNo : null), ($remark !== '' ? $remark : null),
+                               ($custId !== '' ? $custId : null), $id]);
+                $dsid = (int)$pdo->lastInsertId();
+                $created = true;
+                ocq_bind_audit($pdo, $id, $bom, '快速建立料號主檔（已完工BOM查詢）', [
+                    'after' => ['d_id' => $dsid, 'D_Setting_Id' => $partNo, 'Customer_Id' => $custId,
+                                'customer' => $custName, 'Spec_No' => $specNo, 'Remark' => $remark],
+                ]);
+            }
+
+            $res = ocq_bind_part_to_bom($pdo, $bom, $dsid, $id,
+                $created ? '快速建立料號並綁定（已完工BOM查詢）' : '快速綁定料號（已完工BOM查詢）',
+                ['rule' => $created ? '主檔查無／客戶對不上，由本頁新建料號主檔後綁定' : '同料號同客戶的主檔已存在，直接沿用']);
+            if (!$res['success'] && $created) {
+                // 綁不上去就把剛建的那筆收回來（別人同時綁走的極小機會），不要留下一筆沒人用的主檔
+                try { $pdo->prepare("DELETE FROM d_setting WHERE d_id = ?")->execute([$dsid]); } catch (Exception $e) {}
+            }
+            $res['created']   = $created;
+            $res['part_no']   = $partNo;
+            $res['cust_name'] = $custName;
+            if ($res['success']) {
+                $res['message'] = ($created ? '已建立料號主檔 ' : '已沿用既有料號主檔 ') . $partNo
+                    . ($custName !== '' ? '（' . $custName . '）' : '（未綁客戶）') . ' 並完成綁定';
+            }
+            echo json_encode($res);
 
         } elseif ($action === 'bind_apply_order') {
             $bom = trim($_POST['bom'] ?? '');
@@ -1274,6 +1356,27 @@ try {
         .ocq-ab-pg button:disabled { opacity: .4; cursor: default; }
         .ocq-ab-bar { height: 16px; border-radius: 8px; background: #F2E6CE; overflow: hidden; margin: 8px 0; }
         .ocq-ab-bar > i { display: block; height: 100%; background: #F0A24B; width: 0; transition: width .2s; }
+        /* 勾選後一次套用：工具列釘在清單上方，捲到下面一樣按得到 */
+        .ocq-ab-bulk { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px;
+            background: #FFF7E8; border: 1px solid #E0B378; border-radius: 6px; padding: 6px 10px; margin-bottom: 6px; }
+        .ocq-ab-bulk .sp { flex: 1; }
+        .ocq-ab-bulk button { height: 26px; padding: 0 12px; font-size: 12.5px; border-radius: 4px;
+            border: 1px solid #d98a33; background: #F0A24B; color: #fff; cursor: pointer; }
+        .ocq-ab-bulk button.sec { border-color: #D8BE93; background: #fff; color: #5b3a1e; }
+        .ocq-ab-bulk button:disabled { opacity: .45; cursor: default; }
+        .ocq-ab-tb td.ck, .ocq-ab-tb th.ck { text-align: center; width: 34px; }
+        .ocq-ab-tb tr.picked td { background: #FBF3E3 !important; }
+        .ocq-ab-tb tr.done td { background: #F4FAF4 !important; }
+        .ocq-ab-rowmsg { font-size: 11px; line-height: 16px; color: #DD5138; margin-top: 2px; }
+        /* 快速建立料號跳窗：疊在自動綁定跳窗之上（固定像素寬，不可用 vw，見 [[modal_width_convention]]） */
+        .ocq-np-box { background: #fff; border-radius: 8px; width: 880px; max-width: 94vw; margin: 40px auto;
+            box-shadow: 0 5px 25px rgba(0,0,0,.3); display: flex; flex-direction: column; max-height: 86vh; }
+        .ocq-np-tb input.pn { width: 100%; height: 24px; font-size: 12.5px; padding: 0 5px;
+            border: 1px solid #D8BE93; border-radius: 3px; color: #5b3a1e; }
+        .ocq-np-tb select.cs { width: 100%; height: 24px; font-size: 12.5px; border: 1px solid #D8BE93;
+            border-radius: 3px; color: #5b3a1e; background: #fff; }
+        .ocq-np-tb select.cs.auto-hit { border-color: #9BC79B; background: #F4FAF4; }
+        .ocq-np-tb td.st { font-size: 11px; line-height: 1.6; }
     </style>
 </head>
 <body class="nav-sm">
@@ -1483,6 +1586,40 @@ try {
             <span id="ocqAbMsg" style="float:left;font-size:12.5px;color:#a0521f;line-height:30px;"></span>
             <button type="button" id="ocqAbCancel" style="height:30px;padding:0 14px;border-radius:4px;font-size:13px;border:1px solid #D8BE93;background:#fff;color:#5b3a1e;cursor:pointer;">關閉</button>
             <button type="button" id="ocqAbRun" style="height:30px;padding:0 16px;margin-left:6px;border-radius:4px;font-size:13px;border:1px solid #d98a33;background:#F0A24B;color:#fff;cursor:pointer;">開始自動綁定</button>
+        </div>
+    </div>
+</div>
+
+<!-- 快速建立料號主檔並綁定：主檔查無、或同名主檔客戶對不上時用；可一次處理勾選的多筆 -->
+<div class="ocq-mask" id="ocqNpMask" style="display:none;position:fixed;inset:0;background:rgba(60,40,20,.5);z-index:1070;">
+    <div class="ocq-np-box">
+        <div class="ocq-bind-hd"><span><i class="fa fa-plus-square-o"></i> 建立料號主檔並綁定</span>
+            <span style="cursor:pointer;color:#b5762a;" id="ocqNpClose">✕</span></div>
+        <div class="ocq-bind-bd" id="ocqNpBody" style="max-height:66vh;">
+            <div class="ocq-bind-meta">
+                以 BOM 上的<b>料號文字</b>在料號主檔建立一筆新料號並<b>立刻綁定</b>這張 BOM。
+                <div style="margin-top:4px;"><b>客戶一定要從主檔挑</b>（不給自由輸入）；系統會先用 BOM 的客戶名稱自動對應，
+                    對到的會標成綠色，請確認過再建立。<b>同料號＋同客戶的主檔已經存在時不會重複建立</b>，會直接沿用那一筆。</div>
+            </div>
+            <table class="ocq-ab-tb ocq-np-tb" id="ocqNpTb">
+                <thead><tr><th style="width:130px;">BOM</th><th style="width:230px;">料號（可修改）</th>
+                    <th style="width:110px;">BOM 客戶</th><th>建立到客戶</th><th style="width:150px;">狀態</th></tr></thead>
+                <tbody></tbody>
+            </table>
+            <div id="ocqNpOne" style="margin-top:8px;display:none;">
+                <div style="display:flex;gap:10px;align-items:center;">
+                    <label style="font-size:12.5px;color:#5b3a1e;white-space:nowrap;margin:0;">規格說明</label>
+                    <input type="text" id="ocqNpSpec" maxlength="50" style="flex:1;height:26px;font-size:12.5px;padding:0 6px;border:1px solid #D8BE93;border-radius:3px;">
+                    <label style="font-size:12.5px;color:#5b3a1e;white-space:nowrap;margin:0;">備註</label>
+                    <input type="text" id="ocqNpRemark" maxlength="200" style="flex:1;height:26px;font-size:12.5px;padding:0 6px;border:1px solid #D8BE93;border-radius:3px;">
+                </div>
+                <div class="ocq-ab-sub" style="margin-top:3px;">其餘欄位（圖號、版次、齒輪規格、重量…）請建立後到「主檔管理」補齊。</div>
+            </div>
+        </div>
+        <div class="ocq-bind-ft">
+            <span id="ocqNpMsg" style="float:left;font-size:12.5px;color:#a0521f;line-height:30px;"></span>
+            <button type="button" id="ocqNpCancel" style="height:30px;padding:0 14px;border-radius:4px;font-size:13px;border:1px solid #D8BE93;background:#fff;color:#5b3a1e;cursor:pointer;">取消</button>
+            <button type="button" id="ocqNpRun" style="height:30px;padding:0 16px;margin-left:6px;border-radius:4px;font-size:13px;border:1px solid #d98a33;background:#F0A24B;color:#fff;cursor:pointer;">建立並綁定</button>
         </div>
     </div>
 </div>
@@ -2295,16 +2432,22 @@ function ocqAbCustTag(cmp, name){
 function ocqAbManualHtml(res){
     if (!res.total) return '<div style="padding:14px;color:#a08a6a;">沒有需要人工判定的 BOM。</div>';
     var h = '<div style="font-size:12.5px;color:#5b3a1e;margin-bottom:6px;">'
-          + '以下這幾筆系統<b>指不出唯一的料號主檔</b>，請逐筆挑一筆再按「套用」。'
+          + '以下這幾筆系統<b>指不出唯一的料號主檔</b>，挑好候選之後可以<b>逐筆按「套用」，也可以勾選起來一次全部套用</b>。'
           + '候選後方的客戶標示：<span class="cm-same">✓ 完全相同／≈ 名稱相近</span>、'
-          + '<span class="cm-diff">✕ 對不上</span>、<span class="cm-unknown">灰字＝其中一邊沒填</span>。</div>'
-          + '<table class="ocq-ab-tb"><thead><tr><th style="width:130px;">BOM</th><th style="width:150px;">料號／客戶</th>'
-          + '<th>候選料號主檔（請挑一筆）</th><th style="width:60px;"></th></tr></thead><tbody>';
+          + '<span class="cm-diff">✕ 對不上</span>、<span class="cm-unknown">灰字＝其中一邊沒填</span>。'
+          + '<br>候選的客戶都對不上（例如主檔只有一筆、但客戶是別家）時，請改用'
+          + '<b>「建立新料號」</b>——以這張 BOM 的料號文字與客戶建一筆新的料號主檔再綁定。</div>'
+          + ocqAbBulkBar('manual', true)
+          + '<table class="ocq-ab-tb"><thead><tr><th class="ck"><input type="checkbox" class="ocq-ab-all" data-kind="manual" title="全選／全不選"></th>'
+          + '<th style="width:130px;">BOM</th><th style="width:150px;">料號／客戶</th>'
+          + '<th>候選料號主檔（請挑一筆）</th><th style="width:92px;"></th></tr></thead><tbody>';
     (res.rows || []).forEach(function(r){
-        h += '<tr data-bom="' + esc(r.bom) + '"><td>' + esc(r.bom)
+        h += '<tr data-bom="' + esc(r.bom) + '" data-part="' + esc(r.part_no) + '" data-client="' + esc(r.bom_client || '') + '">'
+           + '<td class="ck"><input type="checkbox" class="ocq-ab-ck"></td>'
+           + '<td>' + esc(r.bom)
            + '<div class="ocq-ab-sub">' + esc(egFmtDate(r.eff_date)) + '</div></td>'
            + '<td>' + esc(r.part_no)
-           + '<div class="ocq-ab-sub">' + (r.bom_client ? esc(r.bom_client) : '（沒有客戶）') + '</div></td><td>';
+           + '<div class="ocq-ab-sub">' + (r.bom_client ? esc(r.bom_client) : '（沒有客戶）') + '</div></td><td class="cnd">';
         if (!r.candidates.length) {
             h += '<span class="ocq-ab-sub">主檔查無同名料號</span>';
         } else {
@@ -2319,26 +2462,47 @@ function ocqAbManualHtml(res){
             });
         }
         h += '<div class="ocq-ab-why">' + esc(r.reason) + '</div></td>'
-           + '<td><button type="button" class="ocq-bind-btn ocq-ab-pick" data-bom="' + esc(r.bom) + '">套用</button></td></tr>';
+           + '<td style="white-space:nowrap;"><button type="button" class="ocq-bind-btn ocq-ab-pick" data-bom="' + esc(r.bom) + '">套用</button>'
+           + '<br><button type="button" class="ocq-bind-btn ocq-ab-new" title="以這張 BOM 的料號文字與客戶，在料號主檔建立一筆新料號並立刻綁定">建立新料號</button></td></tr>';
     });
     h += '</tbody></table>' + ocqAbPagerHtml('manual', res);
     return h;
 }
 
+/** 勾選工具列（需人工判定／主檔查無兩張清單共用同一條）。$withApply＝有候選可套用的那張才長出「套用勾選的」。 */
+function ocqAbBulkBar(kind, withApply){
+    return '<div class="ocq-ab-bulk" data-kind="' + kind + '">'
+         + '<span>已勾選 <b class="ocq-ab-ckn">0</b> 筆</span>'
+         + '<span class="ocq-ab-sub ocq-ab-ckhint">（挑好候選料號會自動幫你勾起來）</span>'
+         + '<span class="sp"></span>'
+         + (withApply ? '<button type="button" class="ocq-ab-bulk-apply" disabled>套用勾選的（綁定已挑的主檔）</button>' : '')
+         + '<button type="button" class="sec ocq-ab-bulk-new" disabled>建立新料號並綁定</button>'
+         + '</div>';
+}
+
 function ocqAbNomatchHtml(res){
     if (!res.total) return '<div style="padding:14px;color:#a08a6a;">沒有這一類的 BOM。</div>';
     var h = '<div style="font-size:12.5px;color:#5b3a1e;margin-bottom:6px;">'
-          + '以下這幾筆的料號在<b>料號主檔裡根本不存在</b>（或這筆 BOM 連料號文字都沒有），'
-          + '系統無法綁定。請先到「主檔管理」建立料號，再回來用這一頁的「綁料號」逐筆綁，'
-          + '或重新執行一次自動綁定。</div>'
-          + '<table class="ocq-ab-tb"><thead><tr><th style="width:130px;">BOM</th><th>料號文字</th>'
-          + '<th style="width:140px;">BOM 客戶</th><th style="width:80px;">數量</th><th>說明</th></tr></thead><tbody>';
+          + '以下這幾筆的料號在<b>料號主檔裡根本不存在</b>（或這筆 BOM 連料號文字都沒有）。'
+          + '可以直接在這裡<b>建立料號主檔並綁定</b>——逐筆按「建立料號」，或勾選起來一次建立；'
+          + '客戶會先用 BOM 的客戶名稱自動對應到客戶主檔，建立前可以逐筆確認或改掉。'
+          + '<br><b>連料號文字都沒有的那幾筆建不了</b>（沒有料號可建），要到「BOM 總表」補上料號文字，'
+          + '其餘欄位（圖號、版次、齒輪規格…）請建立後到「主檔管理」補齊。</div>'
+          + ocqAbBulkBar('nomatch', false)
+          + '<table class="ocq-ab-tb"><thead><tr><th class="ck"><input type="checkbox" class="ocq-ab-all" data-kind="nomatch" title="全選／全不選（沒有料號文字的建不了，不會被勾起來）"></th>'
+          + '<th style="width:130px;">BOM</th><th>料號文字</th>'
+          + '<th style="width:120px;">BOM 客戶</th><th style="width:60px;">數量</th><th>說明</th><th style="width:78px;"></th></tr></thead><tbody>';
     (res.rows || []).forEach(function(r){
-        h += '<tr><td>' + esc(r.bom) + '<div class="ocq-ab-sub">' + esc(egFmtDate(r.eff_date)) + '</div></td>'
+        var canNew = !!(r.part_no && $.trim(r.part_no) !== '');
+        h += '<tr data-bom="' + esc(r.bom) + '" data-part="' + esc(r.part_no || '') + '" data-client="' + esc(r.bom_client || '') + '">'
+           + '<td class="ck"><input type="checkbox" class="ocq-ab-ck"' + (canNew ? '' : ' disabled title="這筆 BOM 沒有料號文字，建不了料號"') + '></td>'
+           + '<td>' + esc(r.bom) + '<div class="ocq-ab-sub">' + esc(egFmtDate(r.eff_date)) + '</div></td>'
            + '<td>' + (r.part_no ? esc(r.part_no) : '<span class="ocq-ab-sub">（空白）</span>') + '</td>'
            + '<td>' + (r.bom_client ? esc(r.bom_client) : '<span class="ocq-ab-sub">（空白）</span>') + '</td>'
            + '<td>' + esc(r.qty) + '</td>'
-           + '<td class="ocq-ab-why">' + esc(r.reason) + '</td></tr>';
+           + '<td class="ocq-ab-why cnd">' + esc(r.reason) + '</td>'
+           + '<td>' + (canNew ? '<button type="button" class="ocq-bind-btn ocq-ab-new">建立料號</button>'
+                              : '<span class="ocq-ab-sub">—</span>') + '</td></tr>';
     });
     h += '</tbody></table>' + ocqAbPagerHtml('nomatch', res);
     return h;
@@ -2357,10 +2521,82 @@ $('#ocqAbMask').on('click', '.ocq-ab-pgbtn', function(){
     ocqAbLoadList($(this).data('kind'), parseInt($(this).data('page'), 10) || 1);
 });
 
-// 人工判定的套用：走既有的 bind_apply_part（與手動綁定完全同一條路徑，含 CONFLICT 檢查）
+// 綁好的那一列就地標示完成，不整頁重載（使用者通常會一次判定好幾筆；重畫會把清單捲回最上面打斷操作）。
+// 逐筆套用、勾選批次套用、快速建立料號三條路都走這一支，三邊各寫一次遲早長得不一樣。
+function ocqAbMarkDone($tr, res){
+    if (!$tr || !$tr.length) return;
+    $tr.addClass('done').removeClass('picked');
+    $tr.find('.ocq-ab-rowmsg').remove();
+    $tr.find('td.cnd').html('<span class="ocq-bind-ok" style="display:inline-block;"><i class="fa fa-check"></i> 已綁定 '
+        + esc(res.d_id || '') + (res.client_name ? '／' + esc(res.client_name) : '') + '</span>');
+    $tr.find('.ocq-ab-pick, .ocq-ab-new').remove();
+    $tr.find('.ocq-ab-ck').prop('checked', false).prop('disabled', true);
+    if (!$tr.find('.ocq-ab-donetag').length) {
+        $tr.find('td').last().append('<span class="ocq-ab-sub ocq-ab-donetag">已完成</span>');
+    }
+    // 卡片數字減 1（後端剛回報成功，這個扣是準的）
+    var isManual = ($tr.closest('.ocq-ab-pane').attr('id') === 'ocqAbPaneManual');
+    var $n = isManual ? $('#ocqAbNManual') : $('#ocqAbNNomatch');
+    $n.text(Math.max(0, (parseInt($n.text(), 10) || 0) - 1));
+    ocqAbCkSync($tr.closest('.ocq-ab-pane'));
+}
+function ocqAbRowErr($tr, msg){
+    if (!$tr || !$tr.length) return;
+    $tr.find('.ocq-ab-rowmsg').remove();
+    $tr.find('.ocq-ab-ck').prop('checked', false);
+    $tr.removeClass('picked').find('td.cnd').append('<div class="ocq-ab-rowmsg">' + esc(msg) + '</div>');
+}
+
+// ── 勾選狀態（需人工判定／主檔查無兩張清單共用）──────────────────────────────
+function ocqAbCkSync($pane){
+    if (!$pane || !$pane.length) return;
+    var $ck = $pane.find('.ocq-ab-ck').not(':disabled');
+    var n   = $ck.filter(':checked').length;
+    $pane.find('.ocq-ab-ckn').text(n);
+    $pane.find('.ocq-ab-bulk-apply, .ocq-ab-bulk-new').prop('disabled', n === 0);
+    $pane.find('.ocq-ab-all').prop('checked', n > 0 && n === $ck.length);
+    $ck.each(function(){ $(this).closest('tr').toggleClass('picked', this.checked); });
+}
+$('#ocqAbMask').on('change', '.ocq-ab-ck', function(){ ocqAbCkSync($(this).closest('.ocq-ab-pane')); });
+$('#ocqAbMask').on('change', '.ocq-ab-all', function(){
+    var on = this.checked, $pane = $(this).closest('.ocq-ab-pane');
+    $pane.find('.ocq-ab-ck').not(':disabled').prop('checked', on);
+    ocqAbCkSync($pane);
+});
+// 挑好候選料號＝多半就是要套用它，順手幫忙勾起來（少按一次；不想套用的再取消勾選即可）
+$('#ocqAbMask').on('change', 'input[type=radio][name^="abp_"]', function(){
+    var $tr = $(this).closest('tr');
+    if (!$tr.hasClass('done')) $tr.find('.ocq-ab-ck').not(':disabled').prop('checked', true);
+    ocqAbCkSync($tr.closest('.ocq-ab-pane'));
+});
+
+// 批次跑：一筆一筆送（每一筆都走跟逐筆按鈕完全相同的後端動作，規則不可能走鐘），
+// 邊跑邊把結果寫回該列；中途失敗的只記在那一列，不中斷其餘的。
+function ocqAbBulkRun($pane, jobs, doOne, doneMsg){
+    var i = 0, ok = 0, fail = 0;
+    $pane.find('.ocq-ab-bulk button').prop('disabled', true);
+    (function next(){
+        if (i >= jobs.length) {
+            $pane.find('.ocq-ab-bulk button').prop('disabled', false);
+            ocqAbCkSync($pane);
+            ocqAbMsg(doneMsg(ok, fail), fail > 0);
+            loadList(curPage);          // 後方清單同步換成綁好的狀態
+            return;
+        }
+        var job = jobs[i++];
+        ocqAbMsg('處理中… <b>' + i + '</b> / ' + jobs.length + ' 筆');
+        doOne(job, function(res){
+            if (res && res.success) { ok++; ocqAbMarkDone(job.$tr, res); }
+            else { fail++; ocqAbRowErr(job.$tr, (res && res.message) || '處理失敗'); }
+            next();
+        });
+    })();
+}
+
+// 逐筆套用：走既有的 bind_apply_part（與手動綁定完全同一條路徑，含 CONFLICT 檢查）
 $('#ocqAbMask').on('click', '.ocq-ab-pick', function(){
-    var $btn = $(this), bom = $btn.data('bom');
-    var did = $('#ocqAbMask').find('input[name="abp_' + bom.replace(/"/g, '\\"') + '"]:checked').val();
+    var $btn = $(this), $tr = $btn.closest('tr'), bom = $btn.data('bom');
+    var did = $tr.find('input[type=radio]:checked').val();
     if (!did) { ocqAbMsg('請先挑一筆候選料號再按套用', true); return; }
     $btn.prop('disabled', true).text('處理中');
     $.post('', { action: 'bind_apply_part', bom: bom, d_setting_id: did, csrf: OCQ_BIND.csrf }, function(res){
@@ -2369,21 +2605,180 @@ $('#ocqAbMask').on('click', '.ocq-ab-pick', function(){
             ocqAbMsg((res && res.message) || '綁定失敗', true);
             return;
         }
-        // 綁好的那一列就地標示完成，不整頁重載（使用者通常會一次判定好幾筆）
-        var $tr = $btn.closest('tr');
-        $tr.find('td').eq(2).html('<span class="ocq-bind-ok" style="display:inline-block;"><i class="fa fa-check"></i> 已綁定 '
-            + esc(res.d_id) + (res.client_name ? '／' + esc(res.client_name) : '') + '</span>');
-        $btn.replaceWith('<span class="ocq-ab-sub">已完成</span>');
-        // 這一筆確定從「需人工判定」變成已綁定，卡片數字減 1（後端剛回報成功，這個扣是準的）。
-        // 這裡刻意**不**整份重掃——人工判定通常是連續做好幾筆，重畫會把清單捲回最上面打斷操作。
-        var $nm = $('#ocqAbNManual');
-        $nm.text(Math.max(0, (parseInt($nm.text(), 10) || 0) - 1));
+        ocqAbMarkDone($tr, res);
         ocqAbMsg('已綁定 ' + esc(bom) + ' → ' + esc(res.d_id));
         loadList(curPage);
     }, 'json').fail(function(){
         $btn.prop('disabled', false).text('套用');
         ocqAbMsg('綁定失敗，請重新整理後再試', true);
     });
+});
+
+// 勾選後一次全部套用
+$('#ocqAbMask').on('click', '.ocq-ab-bulk-apply', function(){
+    var $pane = $(this).closest('.ocq-ab-pane'), jobs = [], noPick = 0;
+    $pane.find('tbody tr').each(function(){
+        var $tr = $(this);
+        if (!$tr.find('.ocq-ab-ck').prop('checked')) return;
+        var did = $tr.find('input[type=radio]:checked').val();
+        // 勾了卻沒挑候選的不猜，就地寫明原因略過（猜錯家比不綁更難查回來）
+        if (!did) { noPick++; ocqAbRowErr($tr, '還沒挑候選料號，這一筆略過'); return; }
+        jobs.push({ $tr: $tr, bom: String($tr.data('bom') || ''), did: did });
+    });
+    if (!jobs.length) { ocqAbMsg('勾選的列都還沒挑候選料號，請先挑一筆再套用', true); return; }
+    if (!confirm('即將套用 ' + jobs.length + ' 筆綁定'
+        + (noPick ? '（另有 ' + noPick + ' 筆還沒挑候選料號，會略過）' : '') + '。\n\n'
+        + '綁定會同時把 BOM 上的料號文字與客戶名稱更新成料號主檔的值，每一筆都會留下稽核紀錄。\n'
+        + '已經被別人綁走的會自動擋下、不會覆蓋。\n確定要執行嗎？')) return;
+    ocqAbBulkRun($pane, jobs, function(job, cb){
+        $.post('', { action: 'bind_apply_part', bom: job.bom, d_setting_id: job.did, csrf: OCQ_BIND.csrf },
+            function(res){ cb(res); }, 'json').fail(function(){ cb({ success: false, message: '連線失敗' }); });
+    }, function(ok, fail){
+        return '完成：已綁定 <b>' + ok + '</b> 筆' + (fail ? '，失敗 ' + fail + ' 筆（原因寫在該列）' : '');
+    });
+});
+
+// ── 快速建立料號主檔並綁定（主檔查無／候選客戶都對不上時用）────────────────────
+var ocqCust = null;   // 客戶主檔清單，一個 session 只跟後端要一次
+function ocqCustLoad(cb){
+    if (ocqCust) { cb(); return; }
+    $.post('', { action: 'bind_customers' }, function(res){
+        ocqCust = (res && res.success) ? (res.customers || []) : [];
+        cb();
+    }, 'json').fail(function(){ ocqCust = []; cb(); });
+}
+// BOM 的客戶名稱是 ERP 匯入的簡稱，跟主檔寫法常常不同（「高鋒工業」vs「高鋒」），
+// 所以完全相同找不到時再用互相包含找一次，取名字最長的那筆（最具體）；再找不到就留白讓人自己挑。
+function ocqCustGuess(name){
+    var n = $.trim(name || '');
+    if (!n || !ocqCust) return null;
+    var i, c, hit = null;
+    for (i = 0; i < ocqCust.length; i++) { if ($.trim(ocqCust[i].customer) === n) return ocqCust[i]; }
+    for (i = 0; i < ocqCust.length; i++) {
+        c = $.trim(ocqCust[i].customer);
+        if (!c) continue;
+        if (n.indexOf(c) >= 0 || c.indexOf(n) >= 0) {
+            if (!hit || c.length > $.trim(hit.customer).length) hit = ocqCust[i];
+        }
+    }
+    return hit;
+}
+function ocqCustOptions(sel){
+    var h = '<option value="">（不綁客戶）</option>';
+    for (var i = 0; i < ocqCust.length; i++) {
+        var c = ocqCust[i];
+        h += '<option value="' + esc(c.customer_id) + '"' + (c.customer_id === sel ? ' selected' : '') + '>'
+           + esc(c.customer) + '（' + esc(c.customer_id) + '）</option>';
+    }
+    return h;
+}
+var ocqNp = { rows: [], running: false };
+function ocqNpOpen(rows){
+    if (!rows.length) return;
+    ocqCustLoad(function(){
+        ocqNp.rows = rows;
+        var one = (rows.length === 1), h = '';
+        rows.forEach(function(r, i){
+            var g = ocqCustGuess(r.client);
+            r.done = false;
+            h += '<tr data-i="' + i + '"><td>' + esc(r.bom) + '</td>'
+               + '<td><input type="text" class="pn" maxlength="100" value="' + esc(r.part) + '"></td>'
+               + '<td>' + (r.client ? esc(r.client) : '<span class="ocq-ab-sub">（空白）</span>') + '</td>'
+               + '<td><select class="cs' + (g ? ' auto-hit' : '') + '" data-eg-filter="輸入客戶名稱或代號篩選…">'
+               + ocqCustOptions(g ? g.customer_id : '') + '</select></td>'
+               + '<td class="st">' + (g ? '<span style="color:#2f7a3f;">已自動對應主檔客戶</span>'
+                                        : '<span style="color:#B4543B;">對不到客戶主檔，請自己挑</span>') + '</td></tr>';
+        });
+        $('#ocqNpTb tbody').html(h);
+        $('#ocqNpOne').toggle(one);
+        $('#ocqNpSpec, #ocqNpRemark').val('');
+        $('#ocqNpMsg').html('');
+        $('#ocqNpRun').prop('disabled', false).text(one ? '建立並綁定' : '建立並綁定（' + rows.length + ' 筆）');
+        $('#ocqNpMask').show();
+    });
+}
+function ocqNpClose(){
+    if (ocqNp.running) { if (!confirm('還在建立中，確定要關閉嗎？（已經建好的不會退回）')) return; }
+    $('#ocqNpMask').hide();
+}
+$('#ocqNpClose, #ocqNpCancel').on('click', ocqNpClose);
+$('#ocqNpMask').on('click', function(e){ if (e.target === this && !ocqNp.running) ocqNpClose(); });
+// 改了客戶就把「已自動對應」的綠底拿掉，免得看起來像系統挑的
+$('#ocqNpMask').on('change', 'select.cs', function(){ $(this).removeClass('auto-hit').closest('tr').find('td.st').html(''); });
+
+$('#ocqAbMask').on('click', '.ocq-ab-new', function(){
+    var $tr = $(this).closest('tr');
+    ocqNpOpen([{ bom: String($tr.data('bom') || ''), part: String($tr.data('part') || ''), client: String($tr.data('client') || ''), $tr: $tr }]);
+});
+$('#ocqAbMask').on('click', '.ocq-ab-bulk-new', function(){
+    var rows = [];
+    $(this).closest('.ocq-ab-pane').find('tbody tr').each(function(){
+        var $tr = $(this);
+        if (!$tr.find('.ocq-ab-ck').prop('checked')) return;
+        var part = $.trim(String($tr.data('part') || ''));
+        if (!part) { ocqAbRowErr($tr, '這筆 BOM 沒有料號文字，建不了料號'); return; }
+        rows.push({ bom: String($tr.data('bom') || ''), part: part, client: String($tr.data('client') || ''), $tr: $tr });
+    });
+    if (!rows.length) { ocqAbMsg('勾選的列都沒有料號文字，無法建立料號', true); return; }
+    ocqNpOpen(rows);
+});
+
+$('#ocqNpRun').on('click', function(){
+    if (ocqNp.running) return;
+    var jobs = [], blank = 0;
+    $('#ocqNpTb tbody tr').each(function(){
+        var $r = $(this), r = ocqNp.rows[parseInt($r.data('i'), 10)];
+        if (!r || r.done) return;
+        var pn = $.trim($r.find('input.pn').val() || '');
+        if (!pn) { blank++; $r.find('td.st').html('<span style="color:#DD5138;">料號不可空白</span>'); return; }
+        jobs.push({ row: r, $row: $r, $tr: r.$tr, bom: r.bom, part: pn, cust: $r.find('select.cs').val() || '' });
+    });
+    if (blank) { $('#ocqNpMsg').html('<span class="ocq-bind-err">有 ' + blank + ' 筆的料號是空白的，請補上</span>'); return; }
+    if (!jobs.length) { $('#ocqNpMsg').html('<span class="ocq-bind-err">沒有要建立的資料</span>'); return; }
+    var noCust = 0;
+    jobs.forEach(function(j){ if (!j.cust) noCust++; });
+    if (!confirm('即將建立 ' + jobs.length + ' 筆料號主檔，並立刻綁定對應的 BOM。\n\n'
+        + (noCust ? '其中 ' + noCust + ' 筆沒有指定客戶，會建成「沒有綁客戶」的料號。\n' : '')
+        + '同料號＋同客戶的主檔已經存在時不會重複建立，會直接沿用那一筆。\n確定要執行嗎？')) return;
+
+    ocqNp.running = true;
+    $('#ocqNpRun').prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 建立中…');
+    var i = 0, ok = 0, fail = 0, spec = $.trim($('#ocqNpSpec').val() || ''), remark = $.trim($('#ocqNpRemark').val() || '');
+    (function next(){
+        if (i >= jobs.length) {
+            ocqNp.running = false;
+            $('#ocqNpRun').prop('disabled', fail === 0).text('建立並綁定');
+            $('#ocqNpMsg').html(fail ? '<span class="ocq-bind-err">完成：成功 ' + ok + ' 筆、失敗 ' + fail + ' 筆（原因寫在各列狀態欄）</span>'
+                                     : '已完成 ' + ok + ' 筆');
+            ocqAbMsg('已建立並綁定 <b>' + ok + '</b> 筆料號' + (fail ? '，失敗 ' + fail + ' 筆' : ''), fail > 0);
+            loadList(curPage);
+            if (!fail) setTimeout(function(){ $('#ocqNpMask').hide(); }, 700);
+            return;
+        }
+        var job = jobs[i++];
+        job.$row.find('td.st').html('<span class="ocq-ab-sub">處理中…</span>');
+        $('#ocqNpMsg').html('處理中… <b>' + i + '</b> / ' + jobs.length + ' 筆');
+        $.post('', { action: 'bind_create_part', bom: job.bom, part_no: job.part, customer_id: job.cust,
+                     spec_no: spec, remark: remark, csrf: OCQ_BIND.csrf }, function(res){
+            if (res && res.success) {
+                ok++;
+                job.row.done = true;
+                job.$row.find('td.st').html('<span style="color:#2f7a3f;">' + (res.created ? '已建立並綁定' : '沿用既有主檔並綁定')
+                    + '（#' + esc(res.d_setting_id) + '）</span>');
+                job.$row.find('input.pn, select.cs').prop('disabled', true);
+                ocqAbMarkDone(job.$tr, res);
+            } else {
+                fail++;
+                job.$row.find('td.st').html('<span style="color:#DD5138;">' + esc((res && res.message) || '建立失敗') + '</span>');
+                ocqAbRowErr(job.$tr, (res && res.message) || '建立失敗');
+            }
+            next();
+        }, 'json').fail(function(){
+            fail++;
+            job.$row.find('td.st').html('<span style="color:#DD5138;">連線失敗</span>');
+            next();
+        });
+    })();
 });
 }
 // 綁定欄裡的雙擊不要連帶觸發「帶入篩選」
