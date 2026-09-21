@@ -433,6 +433,106 @@ function tc_order_quote_ensure(PDO $db): void
     $done = true;
 }
 
+/* ============================================================
+ * 超量綁定與庫存出貨（2026-09-21 使用者交辦）
+ *
+ * 現場的實情：訂單 63 支不代表製令就做 63 支——多備幾支、整批備庫做、
+ * 補料重做、客戶臨時追加都會讓製令大於訂單（實測 2026 年 1,771 張有綁訂單的製令裡
+ * 有 145 張超量，其中 +4~20% 的 52 張像是多備、+100% 以上的 42 張是整批備庫）。
+ * 原本 tc_link() 一律擋下「分配量超過訂單數量」，所以這些根本綁不進來。
+ *
+ * 使用者拍板：**不擋，但一定要選一個原因**，這樣往後查得出來那 145 張各是哪一種，
+ * 不會變成一筆看不出原因的超量。原因代碼一處登記，畫面與後端共用（鐵律4）。
+ * ============================================================ */
+function tc_alloc_kinds(string $type = ''): array
+{
+    $bom = [
+        'over_make'  => '多做備品',
+        'stock_make' => '備庫整批做',
+        'remake'     => '補料重做',
+        'add_order'  => '客戶追加',
+    ];
+    $ship = [
+        'over_ship'  => '多出（客戶同意）',
+        'stock_ship' => '庫存併出',
+        'remake'     => '補出（前次不良）',
+        'add_order'  => '客戶追加',
+    ];
+    if ($type === 'order_bom'  || $type === 'bom')  return $bom;
+    if ($type === 'order_ship' || $type === 'ship') return $ship;
+    return $bom + $ship;
+}
+function tc_alloc_kind_label(string $code, string $type = ''): string
+{
+    $m = tc_alloc_kinds($type);
+    return $m[$code] ?? ($code === '' ? '' : $code);
+}
+
+/** 庫存出貨量：這張訂單有幾支是直接從庫存出的（本來就不會有製令，稽核不該報「缺製令」） */
+function tc_stock_out_ensure(PDO $db): void
+{
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try {
+        if ($db->query("SHOW TABLES LIKE 'order_stock_out'")->fetchColumn()) return;
+        if ($db->inTransaction()) return;   // DDL 會造成隱式 commit，交易中一律不建表
+    } catch (Throwable $e) { return; }
+    $db->exec("CREATE TABLE IF NOT EXISTS `order_stock_out` (
+        `Order_id` int NOT NULL,
+        `qty` decimal(14,2) NOT NULL DEFAULT 0,
+        `note` varchar(255) DEFAULT NULL,
+        `created_by` varchar(20) DEFAULT NULL,
+        `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+        `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (`Order_id`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci");
+}
+/** 一批訂單的庫存出貨量 [Order_id => ['qty'=>, 'note'=>, 'by'=>, 'at'=>]] */
+function tc_stock_out_map(PDO $db, array $orderIds): array
+{
+    $ids = array_values(array_unique(array_map('intval', $orderIds)));
+    $ids = array_values(array_filter($ids, function ($v) { return $v > 0; }));
+    if (!$ids) return [];
+    tc_stock_out_ensure($db);
+    $out = [];
+    foreach (array_chunk($ids, 800) as $ck) {
+        $in = implode(',', array_fill(0, count($ck), '?'));
+        $s = $db->prepare("SELECT o.Order_id, o.qty, o.note, o.created_by,
+                                  DATE_FORMAT(o.updated_at,'%Y-%m-%d') at_, u.user_cname
+                             FROM order_stock_out o
+                             LEFT JOIN user u ON u.id = o.created_by
+                            WHERE o.Order_id IN ($in)");
+        $s->execute($ck);
+        foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r)
+            $out[(int)$r['Order_id']] = ['qty' => (float)$r['qty'], 'note' => (string)($r['note'] ?? ''),
+                'by' => (string)($r['user_cname'] ?: $r['created_by']), 'at' => (string)$r['at_']];
+    }
+    return $out;
+}
+/** 設定／清除庫存出貨量（qty<=0＝清除）。唯一寫入點。 */
+function tc_stock_out_set(PDO $db, int $orderId, float $qty, string $note = '', ?array $user = null): array
+{
+    if ($orderId <= 0) return ['success' => false, 'message' => '缺少訂單'];
+    tc_stock_out_ensure($db);
+    $o = $db->prepare("SELECT Qty FROM order_track WHERE Order_id=?");
+    $o->execute([$orderId]);
+    $oq = $o->fetchColumn();
+    if ($oq === false) return ['success' => false, 'message' => '找不到這張訂單'];
+    if ($qty <= 0) {
+        $db->prepare("DELETE FROM order_stock_out WHERE Order_id=?")->execute([$orderId]);
+        return ['success' => true, 'message' => '已取消庫存出貨標記'];
+    }
+    // 庫存出貨量不可以超過訂單數量——超過就不是「這張訂單從庫存出」而是數字打錯了
+    if ((float)$oq > 0 && $qty > (float)$oq)
+        return ['success' => false, 'message' => '庫存出貨量 ' . $qty . ' 不可以超過訂單數量 ' . $oq];
+    $uid = $user ? (string)($user['id'] ?? '') : null;
+    $db->prepare("INSERT INTO order_stock_out (Order_id, qty, note, created_by) VALUES (?,?,?,?)
+                  ON DUPLICATE KEY UPDATE qty=VALUES(qty), note=VALUES(note), created_by=VALUES(created_by)")
+       ->execute([$orderId, $qty, ($note !== '' ? $note : null), $uid]);
+    return ['success' => true, 'message' => '已標記 ' . $qty . ' 支為庫存出貨'];
+}
+
 /** 舊的 order_track.quote_item_id 先補成一列，否則第一次寫分配表就會把它洗掉（同 tc_seed_is_order） */
 function tc_seed_order_quote(PDO $db, int $orderId): void
 {
@@ -624,6 +724,9 @@ function tc_link(PDO $db, string $type, $fromId, $toId, int $qty, ?array $user =
        料號不同也只警示不擋——治具／刀具那一列的料號本來就與訂單料號不同，
        那正是使用者要能綁進來的東西（2026-09-21）。 */
     $tierId = 0;
+    $allocKind = trim((string)($opt['alloc_kind'] ?? ''));
+    if ($allocKind !== '' && !array_key_exists($allocKind, tc_alloc_kinds($type)))
+        return ['success' => false, 'message' => '不支援的超量原因：' . $allocKind];
     if ($type === 'quote_order') {
         if ($qty < 0) return ['success' => false, 'message' => '分配數量不可以是負數'];
         /* 階梯報價一列有好幾個價格（例 1~49 ＠183、50~299 ＠170、300以上 ＠157），
@@ -663,8 +766,19 @@ function tc_link(PDO $db, string $type, $fromId, $toId, int $qty, ?array $user =
         $old  = tc_link_qty($db, $type, $srcKind, $fromId, $toId);
         $freeA = (int)$a['qty'] - ($curA - $old);
         $freeB = (int)$b['qty'] - ($curB - $old);
-        if ($qty > $freeA) return ['success' => false,
-            'message' => "{$a['no']} 只剩 {$freeA} 可分配（本身 {$a['qty']}，已分配 " . ($curA - $old) . "）"];
+        /* 訂單那一側可以超量，但一定要說明是哪一種（2026-09-21 使用者拍板：
+           「要選原因才放行，並在畫面標示」）——多備、備庫整批做、補料重做、客戶追加
+           都會讓製令／出貨大於訂單，原本一律擋下等於這些現場實情綁不進系統。
+           ⚠ 只放寬訂單那一側：製令／出貨單**自己做了多少就是多少**，
+           不可以把一張 100 支的製令分出 120 支去，那是憑空生出貨。 */
+        $kindOk = array_key_exists($allocKind, tc_alloc_kinds($type));
+        if ($qty > $freeA) {
+            if (!$kindOk) return ['success' => false,
+                'message' => "{$a['no']} 只剩 {$freeA} 可分配（本身 {$a['qty']}，已分配 " . ($curA - $old) . "）。"
+                           . "如果這是多做／備庫／補料重做，請在「超量原因」選一個再綁。"];
+            $over = $qty - max(0, $freeA);
+            $warn[] = "超出訂單可分配量 {$over}（原因：" . tc_alloc_kind_label($allocKind, $type) . "）";
+        }
         if ($qty > $freeB) return ['success' => false,
             'message' => "{$b['no']} 只剩 {$freeB} 可分配（本身 {$b['qty']}，已分配 " . ($curB - $old) . "）"];
 
@@ -686,11 +800,12 @@ function tc_link(PDO $db, string $type, $fromId, $toId, int $qty, ?array $user =
                 break;
             case 'order_bom':
                 tc_upsert($db, 'bom_order_process_map', ['bom' => (string)$toId, 'order_id' => (int)$fromId],
-                          ['allocated_qty' => $qty]);
+                          ['allocated_qty' => $qty, 'alloc_kind' => ($allocKind !== '' ? $allocKind : null)]);
                 break;
             case 'order_ship':
                 tc_upsert($db, 'is_order_map', ['IS_id' => (int)$toId, 'Order_id' => (int)$fromId],
-                          ['allocated_qty' => $qty, 'created_by' => $uid]);
+                          ['allocated_qty' => $qty, 'created_by' => $uid,
+                           'alloc_kind' => ($allocKind !== '' ? $allocKind : null)]);
                 tc_sync_is_order($db, (int)$toId);
                 break;
             case 'bom_ship':

@@ -52,7 +52,7 @@ if (!$P['canView']) jerr('您沒有資料稽核的檢閱權限，請洽管理員
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 $WRITE = ['settings_save', 'exempt_set', 'exempt_del', 'scope_save', 'run_save', 'print_log',
-          'excl_save', 'excl_toggle', 'excl_del', 'bind', 'unbind'];
+          'excl_save', 'excl_toggle', 'excl_del', 'bind', 'unbind', 'stock_out'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['dqa_csrf'], $tok))
@@ -157,13 +157,26 @@ case 'unbind': {
        tier 是不是真的屬於這一列報價由 tc_link() 再驗一次，不在這裡寫第二份規則。 */
     $r = ($action === 'bind')
         ? tc_link($db, $type, $fromId, $toId, $qty, $u, '',
-                  ['tier_id' => (int)dqaIn('tier_id', '0')])
+                  ['tier_id' => (int)dqaIn('tier_id', '0'), 'alloc_kind' => dqaIn('alloc_kind')])
         : tc_unlink($db, $type, $fromId, $toId, $u);
     if (empty($r['success'])) jerr($r['message'] ?? '操作失敗');
 
     // 綁完直接把重算過的那一列回傳，畫面不必再打一支
     $re = dqa_trace_rows($db, ['order_ids' => [$orderId], 'only_bad' => false]);
     jout(['msg' => $r['message'], 'warn' => $r['warn'] ?? [], 'rows' => $re['rows']]);
+}
+
+/* ── 庫存出貨（2026-09-21 使用者交辦）─────────────────
+ * 訂單剩下沒有製令的那幾支可能本來就是從庫存直接出的，那不是「漏開製令」。
+ * 寫入唯一走 tc_stock_out_set()，它會擋下「超過訂單數量」這種明顯打錯的數字。 */
+case 'stock_out': {
+    if (!$P['canAdmin']) jerr('沒有權限', 403);
+    $orderId = (int)dqaIn('order_id');
+    $r = tc_stock_out_set($db, $orderId, (float)dqaIn('qty', '0'), dqaIn('note'),
+                          ['id' => $uid, 'user_id' => $uid, 'user_cname' => $uname]);
+    if (empty($r['success'])) jerr($r['message'] ?? '操作失敗');
+    $re = dqa_trace_rows($db, ['order_ids' => [$orderId], 'only_bad' => false]);
+    jout(['msg' => $r['message'], 'rows' => $re['rows']]);
 }
 
 /* ── 基本資料稽核 ───────────────────────────────────── */
@@ -238,6 +251,8 @@ case 'settings_save': {
         foreach (['quote_valid_days', 'no_order_days'] as $k)
             if (isset($tol[$k]) && (!is_numeric($tol[$k]) || $tol[$k] < 0 || $tol[$k] > 3650))
                 jerr('天數請填 0~3650');
+        if (isset($tol['over_pct']) && (!is_numeric($tol['over_pct']) || $tol['over_pct'] < 0 || $tol['over_pct'] > 1000))
+            jerr('容許超量請填 0~1000 的數字');
         dqa_param_save($db, 'tolerance', $tol, $uname);
     }
     foreach ([['trace_items', null], ['quote_items', 'q'],

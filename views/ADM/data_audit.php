@@ -179,6 +179,12 @@ try {
         .bd-tbl tr.bound td { background:#EEF6EA; }
         .bd-tbl tr.risky td { background:#FFF4E2; }
         .bd-wrap { max-height:46vh; overflow:auto; border:1px solid var(--line); border-radius:6px; background:#fff; }
+        /* 超量原因與庫存出貨（2026-09-21） */
+        .kin { width:118px; height:24px; border:1px solid var(--line); border-radius:4px;
+               padding:0 3px; font-size:11px; margin-top:3px; display:block; }
+        .bd-so { margin-top:6px; padding-top:6px; border-top:1px dashed var(--line);
+                 display:flex; align-items:center; gap:8px; flex-wrap:wrap; line-height:18px; }
+        .bd-so .muted-help { flex:1; min-width:220px; }
         .qin { width:68px; height:24px; border:1px solid var(--line); border-radius:4px; padding:1px 5px; font-size:12px; }
         .pill { display:inline-block; font-size:10px; line-height:15px; padding:0 6px; border-radius:8px;
                 margin:1px 3px 1px 0; white-space:nowrap; }
@@ -1156,7 +1162,7 @@ function loadBind(){
                 kw:$('#bdKw').val(), same_part:$('#bdSamePart').is(':checked')?1:0,
                 all_client:$('#bdAllClient').is(':checked')?1:0}, function(r){
         if(!r || !r.ok) return;
-        BD.order = r.order; BD.rows = r.rows || [];
+        BD.order = r.order; BD.rows = r.rows || []; BD.kinds = r.alloc_kinds || {};
         renderBindSum(); renderBindRows();
     });
 }
@@ -1180,6 +1186,22 @@ function renderBindSum(){
                  + '（' + (row.quote.tiered?'階梯':(row.quote.qty+' 支')) + ' ＠' + row.quote.price + '）') : '', row.quote && row.quote.src) + '</span>'
            + '<span class="n">製令：' + nodeSum(row.bom.cnt ? (row.bom.cnt + ' 張／' + row.bom.qty + ' 支') : '', row.bom.src) + '</span>'
            + '<span class="n">出貨：' + nodeSum(row.ship.cnt ? ((row.ship.doc_cnt||row.ship.cnt) + ' 張／' + row.ship.qty + ' 支') : '', row.ship.src) + '</span>'
+           + '</div>';
+    }
+    /* 庫存出貨（2026-09-21 使用者交辦）：訂單剩下沒有製令的那幾支可能本來就是從庫存出的，
+       那不是「漏開製令」。剩餘量要扣掉已綁的製令，不然按一次就永遠算不完。 */
+    if (BD.kind === 'bom' && CAN_BIND){
+        var used = 0;
+        (BD.rows||[]).forEach(function(y){ if (y.bound) used += (+y.mine||0); });
+        var so = o.stock_out, rest = Math.max(0, (+o.qty||0) - used - (so ? +so.qty : 0));
+        h += '<div class="bd-so">'
+           + (so ? ('<span class="pill ok">庫存出貨 ' + so.qty + ' 支</span>'
+                    + '<span class="muted-help">' + esc(so.by||'') + ' ' + dispDate(so.at||'') + '</span>'
+                    + '<span class="lnk" id="bdSoClr">取消標記</span>')
+                 : '<span class="muted-help">這張訂單還有 <b>' + rest + '</b> 支沒有製令。'
+                   + '如果那幾支是直接從庫存出的，標起來就不會一直被報「查不到製令」。</span>')
+           + (rest > 0 ? ('<button class="btn btn-xs btn-warm" id="bdSoBtn" data-q="' + rest + '">'
+                          + '剩餘 ' + rest + ' 支＝庫存出貨</button>') : '')
            + '</div>';
     }
     $('#bdSum').html(h);
@@ -1283,7 +1305,7 @@ function bdQtyRow(x){
                   + (BD.kind==='ship' ? ('<div class="muted-help">單價 ' + x.price + '</div>') : '') + '</td>'
          + '<td>' + (st.join('') || '<span class="muted-help">可綁定</span>') + '</td>'
          + '<td><input type="number" class="qin" data-q="' + esc(String(x.id)) + '" min="1" value="' + def + '"> '
-                  + bdActionBtn(x) + '</td></tr>';
+                  + bdActionBtn(x) + bdKindSel(x) + '</td></tr>';
 }
 /* 預設分配量＝兩邊剩餘量取小者（這張單還剩多少可分配 vs 這張訂單還差多少沒分配）。
    使用者可以直接改；後端 tc_link() 會再擋一次超量。 */
@@ -1300,6 +1322,21 @@ function bdActionBtn(x){
     // 階梯報價的整列綁定要講明白是「不指定階梯」，不然會以為這顆跟階梯那幾顆是一樣的
     return '<button class="btn btn-xs btn-warm" data-dobind="' + esc(String(x.id)) + '">'
          + ((x.tiered && (x.tiers||[]).length) ? '整列綁定' : '綁定') + '</button>';
+}
+
+/* 超量原因（2026-09-21 使用者拍板：超過訂單數量不擋，但一定要選一個原因）。
+   選項一律由後端給（tc_alloc_kinds()），不要在這裡再寫一份對照表——
+   改了名稱會變成畫面一套、寫進 DB 的又是另一套。 */
+function bdKindSel(x){
+    var ks = BD.kinds || {}, keys = Object.keys(ks);
+    if (!keys.length) return '';
+    var cur = x.kind || '';
+    var h = '<select class="kin" data-k="' + esc(String(x.id)) + '" data-eg-skip title="超量綁定時一定要選一個原因">'
+          + '<option value="">超量原因…</option>';
+    keys.forEach(function(k){
+        h += '<option value="' + esc(k) + '"' + (cur===k?' selected':'') + '>' + esc(ks[k]) + '</option>';
+    });
+    return h + '</select>';
 }
 
 /* 會動到既有綁定時一定要先問一次（使用者明確要求）——
@@ -1329,9 +1366,17 @@ $(document).on('click','[data-dobind]', function(){
     var x = bdFind(id); if (!x) return;
     var msg = bdConfirmText(x, BD.kind);
     if (msg && !confirm(msg)) return;
-    var qty = BD.kind==='quote' ? 0 : (parseInt($('.qin[data-q="'+id.replace(/"/g,'\\"')+'"]').val(),10) || 0);
+    var sel = id.replace(/"/g,'\\"');
+    var qty = BD.kind==='quote' ? 0 : (parseInt($('.qin[data-q="'+sel+'"]').val(),10) || 0);
     if (BD.kind!=='quote' && qty <= 0){ alert('請填分配量（要大於 0）'); return; }
-    bdPost('bind', id, qty, $(this));
+    var kind = String($('.kin[data-k="'+sel+'"]').val() || '');
+    // 超量（超過訂單還沒分配掉的量）一定要選原因；後端 tc_link() 會用同一條規則再擋一次
+    if (BD.kind!=='quote' && qty > bdOrderFree(x) && !kind){
+        alert('這一筆會超過訂單還沒分配的數量（剩 ' + bdOrderFree(x) + ' 支）。\n\n'
+            + '如果是多做／備庫／補料重做／客戶追加，請先在右邊的「超量原因」選一個再綁。');
+        return;
+    }
+    bdPost('bind', id, qty, $(this), 0, kind);
 });
 $(document).on('click','.tier-go', function(){
     var iid = String($(this).data('item')), tid = parseInt($(this).data('tier'), 10) || 0;
@@ -1354,6 +1399,28 @@ $(document).on('click','.tier-go', function(){
         + ' 這一階嗎？\n\n・' + w.join('\n・') + '\n\n確定要繼續嗎？')) return;
     bdPost('bind', iid, 0, $(this), tid);
 });
+/* 庫存出貨：剩餘量直接標起來。刻意不做輸入框——按鈕上就寫著會標幾支，
+   要標別的數字就先把製令綁好，剩下的才是真正從庫存出的量。 */
+$(document).on('click','#bdSoBtn', function(){
+    var q = +$(this).data('q') || 0;
+    if (q <= 0) return;
+    if (!confirm('要把這張訂單剩下的 ' + q + ' 支標成「庫存出貨」嗎？\n\n'
+        + '標了之後這幾支就不會再被報「查不到製令」。這只是稽核上的註記，不會動到庫存模組的帳。')) return;
+    bdSoPost(q, $(this));
+});
+$(document).on('click','#bdSoClr', function(){
+    if (!confirm('要取消庫存出貨標記嗎？取消之後沒有製令的那幾支會重新被列為缺失。')) return;
+    bdSoPost(0, $(this));
+});
+function bdSoPost(q, $el){
+    $el.prop('disabled', true);
+    $.post(API, {action:'stock_out', csrf:CSRF, order_id:BD.orderId, qty:q}, function(r){
+        $el.prop('disabled', false);
+        if (!r || !r.ok) return;
+        $('#bdFoot').html('<span style="color:#5C8A4A">' + esc(r.msg || '已更新') + '</span>');
+        applyRecheck(r.rows); loadBind();
+    }).fail(function(){ $el.prop('disabled', false); });
+}
 $(document).on('click','[data-unbind]', function(){
     var id = String($(this).data('unbind'));
     var x = bdFind(id); if (!x) return;
@@ -1364,10 +1431,17 @@ function bdFind(id){
     for (var i=0;i<BD.rows.length;i++) if (String(BD.rows[i].id) === id) return BD.rows[i];
     return null;
 }
-function bdPost(act, id, qty, $btn, tierId){
+/* 這張訂單還有幾支沒有分配出去（已綁的＋標成庫存出貨的都要扣掉） */
+function bdOrderFree(x){
+    var used = 0;
+    BD.rows.forEach(function(y){ if (y.bound && String(y.id) !== String(x.id)) used += (+y.mine||0); });
+    var so = (BD.order && BD.order.stock_out) ? (+BD.order.stock_out.qty||0) : 0;
+    return Math.max(0, (BD.order ? +BD.order.qty : 0) - used - so);
+}
+function bdPost(act, id, qty, $btn, tierId, allocKind){
     $btn.prop('disabled', true);
     $.post(API, {action:act, csrf:CSRF, order_id:BD.orderId, kind:BD.kind, target:id, qty:qty,
-                 tier_id:(tierId||0)}, function(r){
+                 tier_id:(tierId||0), alloc_kind:(allocKind||'')}, function(r){
         $btn.prop('disabled', false);
         if(!r || !r.ok) return;
         var w = (r.warn && r.warn.length) ? ('\n\n提醒：\n・' + r.warn.join('\n・')) : '';
@@ -1484,10 +1558,19 @@ function renderTrace(){
         var bp = [], bpSeen = {};
         (r.bom.list||[]).forEach(function(x){ (x.procs||[]).forEach(function(n){
             if (n && !bpSeen[n]) { bpSeen[n] = 1; bp.push(n); } }); });
+        // 超量原因與庫存出貨都要看得見，否則畫面上只是「數量對不起來」看不出是刻意的
+        var bKind = (r.bom.kinds||[]).length
+            ? '<span class="pill ok" title="綁定時登記的超量原因">' + esc(r.bom.kinds.join('、')) + '</span>' : '';
+        var soTag = r.stock_out
+            ? '<span class="pill grey" title="這幾支是從庫存直接出的，本來就不會有製令（'
+              + esc((r.stock_out.by||'') + ' ' + (r.stock_out.at||'')) + '）">庫存出貨 '
+              + r.stock_out.qty + ' 支</span>' : '';
         var b = r.bom.cnt
             ? (nodeHtml(dispDate(r.bom.date), r.bom.cnt + ' 張／' + r.bom.qty + ' 支', bBad, r.bom.src, bomDocs(r.bom.list, r))
-               + procLine(bp, null))
-            : (r.auto_pm ? '<span class="node"><em>自動轉生管<br>不需製令</em></span>' : '<span class="node bad">無製令</span>');
+               + bKind + soTag + procLine(bp, null))
+            : ((r.auto_pm ? '<span class="node"><em>自動轉生管<br>不需製令</em></span>'
+                          : '<span class="node' + (r.stock_out ? '' : ' bad') + '">'
+                            + (r.stock_out ? '庫存出貨' : '無製令') + '</span>') + soTag);
         var sp = shipPrices(r.ship.list);
         var sh;
         if (r.ship.cnt){
@@ -1497,6 +1580,8 @@ function renderTrace(){
                     sBad, r.ship.src, shipDocs(r.ship.list, r));
             if (sp.none) sh += '<span class="pill bad">'
                 + (sp.list.length ? (sp.none + ' 張未開價') : '未開價') + '</span>';
+            if ((r.ship.kinds||[]).length)
+                sh += '<span class="pill ok" title="綁定時登記的超量原因">' + esc(r.ship.kinds.join('、')) + '</span>';
             sh += procLine(null, (r.ship.list||[]).map(function(x){ return x.content; })
                                  .concat((r.ship.list||[]).map(function(x){ return x.note; })));
         } else {
@@ -2091,6 +2176,12 @@ function renderSetting(r){
        + '　報價超過 <input type="text" id="setValidDays" style="width:60px" value="' + (tol.quote_valid_days||365) + '"> 天未重報視為過期'
        + '　報價出去超過 <input type="text" id="setNoOrderDays" style="width:60px" value="'
        + (tol.no_order_days===undefined?30:tol.no_order_days) + '"> 天還沒有訂單才列出來</div>';
+    /* 超量綁定（2026-09-21 使用者拍板）：綁定時選過原因就算說明過，
+       但說明過不等於不報——超過這個 % 仍然列為缺失。 */
+    h += '<div class="dq-bar">製令／出貨超出訂單數量時，已在綁定時選過原因（多做／備庫／補料重做／客戶追加）者，'
+       + '超出比例仍大於 <input type="text" id="setOverPct" style="width:60px" value="'
+       + (tol.over_pct===undefined?10:tol.over_pct) + '"> % 才列為缺失'
+       + '<div class="muted-help">沒有選過原因的超量一律列為缺失，不受這個數字影響；填 0＝只要說明過就不報。</div></div>';
 
     h += '<h4 style="color:#C77C1A;margin-top:16px">流程稽核：檢核項目</h4>';
     h += '<table class="set-tbl"><tr><th style="width:55%">項目</th><th>等級</th></tr>';
@@ -2144,7 +2235,8 @@ $('#btnSetSave').on('click', function(){
             qty_pct: parseFloat($('#setQtyPct').val()) || 0,
             price_pct: parseFloat($('#setPricePct').val()) || 0,
             quote_valid_days: parseInt($('#setValidDays').val(),10) || 0,
-            no_order_days: parseInt($('#setNoOrderDays').val(),10) || 0
+            no_order_days: parseInt($('#setNoOrderDays').val(),10) || 0,
+            over_pct: parseFloat($('#setOverPct').val()) || 0
         }),
         trace_items: JSON.stringify(groups.trace_items),
         quote_items: JSON.stringify(groups.quote_items),

@@ -167,8 +167,12 @@ function dqa_tolerance(PDO $db): array
        這一定要有寬限期——上禮拜才報的價還沒下單完全正常，報出來只是雜訊。 */
     $nod   = isset($v['no_order_days']) && is_numeric($v['no_order_days']) ? (int)$v['no_order_days'] : 30;
     if ($nod < 0 || $nod > 3650) $nod = 30;
+    /* 已經說明過原因的超量（多做／備庫／補料重做／客戶追加），超過這個 % 仍然列為缺失
+       （2026-09-21 使用者拍板：標記過也不是就不報）。0＝只要說明過就不報。 */
+    $ov    = isset($v['over_pct']) && is_numeric($v['over_pct']) ? (float)$v['over_pct'] : 10.0;
+    if ($ov < 0 || $ov > 1000) $ov = 10.0;
     return ['qty_pct' => $qty, 'price_pct' => $price, 'quote_valid_days' => $days,
-            'no_order_days' => $nod];
+            'no_order_days' => $nod, 'over_pct' => $ov];
 }
 
 /* ============================================================
@@ -670,6 +674,8 @@ function dqa_trace_rows(PDO $db, array $f): array
      * 2026-09-21 起一張訂單可以綁多個報價項目（本體一列、治具／刀具一列），
      * 所以這裡要整批讀分配表；order_track.quote_item_id 只是「主要報價」快取，
      * tc_order_quote_map() 已經處理「還沒搬進分配表的舊資料」的回退。 */
+    /* 庫存出貨：這張訂單有幾支是從庫存直接出的（本來就不會有製令，不該報「缺製令」） */
+    $stockOut = tc_stock_out_map($db, $oids);
     $qLinks = tc_order_quote_map($db, $oids);          // order_id => [ [item_id, tier_id, alloc, src], ... ]
     /* 綁到哪一階（階梯報價一列有好幾個價格，整列綁下去核對不出是依哪一階下的） */
     $tierIds = [];
@@ -751,6 +757,7 @@ function dqa_trace_rows(PDO $db, array $f): array
         $d = dqa_bom_open_date($no, $r['created'] ?? null);
         return ['bom' => $no, 'qty' => dqa_num($r['sqty']), 'src' => $src, 'date' => $d,
                 'alloc' => isset($r['alloc']) ? dqa_num($r['alloc']) : null,
+                'kind' => trim((string)($r['alloc_kind'] ?? '')),
                 'client' => trim((string)($r['Client_Name'] ?? '')),
                 'part'   => trim((string)($r['d_id'] ?? '')),
                 'done'   => ((string)($r['processing_state'] ?? '') === '1'),
@@ -758,7 +765,7 @@ function dqa_trace_rows(PDO $db, array $f): array
     };
     foreach (dqa_chunks($oids) as $ck) {
         $in = implode(',', array_fill(0, count($ck), '?'));
-        $s = $db->prepare("SELECT m.order_id, m.allocated_qty alloc, b.bom, b.sqty, b.d_id,
+        $s = $db->prepare("SELECT m.order_id, m.allocated_qty alloc, m.alloc_kind, b.bom, b.sqty, b.d_id,
                                   b.Client_Name, b.processing_state,
                                   DATE_FORMAT(b.Created_At,'%Y-%m-%d') created
                              FROM bom_order_process_map m JOIN bom b ON b.bom=m.bom
@@ -807,13 +814,14 @@ function dqa_trace_rows(PDO $db, array $f): array
                 'spec' => (string)($r['Specification'] ?? ''), 'src' => $src,
                 'content' => (string)($r['Content'] ?? ''), 'note' => (string)($r['Note'] ?? ''),
                 'alloc' => isset($r['alloc']) ? dqa_num($r['alloc']) : null,
+                'kind' => trim((string)($r['alloc_kind'] ?? '')),
                 'client' => trim((string)($r['Client_name'] ?? '')),
                 'part'   => trim((string)($r['Product_id'] ?? '')),
                 '_id' => 's' . (int)$r['IS_id'], '_sort' => $d];
     };
     foreach (dqa_chunks($oids) as $ck) {
         $in = implode(',', array_fill(0, count($ck), '?'));
-        $s = $db->prepare("SELECT m.Order_id, m.allocated_qty alloc, il.IS_id, il.IS_number, il.Qty,
+        $s = $db->prepare("SELECT m.Order_id, m.allocated_qty alloc, m.alloc_kind, il.IS_id, il.IS_number, il.Qty,
                                   il.Unit_price, il.Specification, il.Content, il.Note,
                                   il.anomaly_confirmed, il.Client_name, il.Product_id,
                                   DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate
@@ -982,6 +990,7 @@ function dqa_trace_rows(PDO $db, array $f): array
                                                 'client' => (string)($b['client'] ?? ''),
                                                 'part' => (string)($b['part'] ?? ''),
                                                 'procs' => array_keys($bomProc[(string)$b['bom']] ?? []),
+                                                'kind' => (string)($b['kind'] ?? ''),
                                                 'done' => !empty($b['done'])];
         }
 
@@ -1023,6 +1032,7 @@ function dqa_trace_rows(PDO $db, array $f): array
                                                   'spec' => (string)($s2['spec'] ?? ''),
                                                   'content' => (string)($s2['content'] ?? ''),
                                                   'note' => (string)($s2['note'] ?? ''),
+                                                  'kind' => (string)($s2['kind'] ?? ''),
                                                   'price' => $s2['price'], 'ids' => [], 'src' => $s2['src']];
             $sDocs[$k]['qty'] += $q1;
             // 一張出貨單在 is_list 是好幾列，解除綁定時要逐列解，所以 id 全都留著
@@ -1071,7 +1081,11 @@ function dqa_trace_rows(PDO $db, array $f): array
                      ' 早於訂單日 ' . $odate . $sfx($bomSrc));
                 break;
             }
-        if (!$boms && !$autoPm) $add('b_none', 'warn', '查不到製令，且這張訂單沒有設定自動轉生管');
+        // 整張訂單都標成庫存出貨時本來就不會有製令，不是缺失（2026-09-21 使用者交辦）
+        $soQty0 = (float)($stockOut[$oid]['qty'] ?? 0);
+        if (!$boms && !$autoPm && !($soQty0 > 0 && $oqty > 0 && $soQty0 >= $oqty))
+            $add('b_none', 'warn', '查不到製令，且這張訂單沒有設定自動轉生管'
+                 . ($soQty0 > 0 ? ('（已標記 ' . dqa_n($soQty0) . ' 支庫存出貨，其餘仍應有製令）') : ''));
 
         // ③ 出貨日 >= 製令開立日；自動轉生管（不必開製令）時只比訂單日
         if ($ships) {
@@ -1114,13 +1128,55 @@ function dqa_trace_rows(PDO $db, array $f): array
             $add('qty_quote', 'critical', '報價數量 ' . dqa_n($qqty) . ' 與訂單數量 '
                  . dqa_n($oqty) . ' 不符' . $sfx($qSrcKey));
 
-        if ($boms && in_array($bomSrc, ['map', 'legacy'], true) && $bQty > 0
-            && dqa_diff_over($oqty, $bQty, $tol['qty_pct']))
-            $add('qty_bom', 'warn', '製令數量合計 ' . dqa_n($bQty) . ' 與訂單數量 ' . dqa_n($oqty) . ' 不符');
+        /* 數量比對（2026-09-21 使用者交辦：多做／備庫／多出／庫存出貨都是現場實情）
+         *   ⑴ 少於訂單那一側，先加回「庫存出貨」——那幾支本來就不會有製令。
+         *   ⑵ 多於訂單那一側，綁定時若已經選了原因（多做／備庫／補料重做／客戶追加）就算說明過，
+         *      但**說明過不等於不報**：使用者拍板「一樣有超過設定的 % 數要列為缺失」，
+         *      所以只有在容許超量（tol.over_pct）以內才收掉，超過照報並把原因寫進訊息裡。 */
+        $soQty   = (float)($stockOut[$oid]['qty'] ?? 0);
+        $overPct = (float)$tol['over_pct'];
+        $overTxt = function (float $base, float $act) { return $base > 0 ? round(($act - $base) / $base * 100, 1) : 0.0; };
+        $kindsOf = function (array $rows) {
+            $k = [];
+            foreach ($rows as $x) if (($x['kind'] ?? '') !== '') $k[$x['kind']] = 1;
+            return array_keys($k);
+        };
+        $kindTxt = function (array $codes, string $type) {
+            $out = [];
+            foreach ($codes as $c) $out[] = tc_alloc_kind_label($c, $type);
+            return implode('、', $out);
+        };
+        $bKinds = $kindsOf($boms);
+        $sKinds = $kindsOf($ships);
+
+        if ($boms && in_array($bomSrc, ['map', 'legacy'], true) && $bQty > 0) {
+            // 超量那一側也要吃既有的「數量容許誤差」，不然原本 5% 以內不報的會突然冒出來
+            if ($bQty > $oqty && dqa_diff_over($oqty, $bQty, $tol['qty_pct'])) {
+                $pct = $overTxt($oqty, $bQty);
+                if (!$bKinds)
+                    $add('qty_bom', 'warn', '製令數量合計 ' . dqa_n($bQty) . ' 超出訂單數量 ' . dqa_n($oqty)
+                         . '（多 ' . dqa_n($bQty - $oqty) . ' 支）。若是多做／備庫／補料重做，請在綁定時選一個超量原因');
+                elseif ($pct > $overPct)
+                    $add('qty_bom', 'warn', '製令數量合計 ' . dqa_n($bQty) . ' 超出訂單數量 ' . dqa_n($oqty)
+                         . ' 共 ' . $pct . '%（原因：' . $kindTxt($bKinds, 'order_bom')
+                         . '），已超過容許超量 ' . dqa_n($overPct) . '%');
+            } elseif ($bQty <= $oqty && dqa_diff_over($oqty, $bQty + $soQty, $tol['qty_pct'])) {
+                $add('qty_bom', 'warn', '製令數量合計 ' . dqa_n($bQty)
+                     . ($soQty > 0 ? ('＋庫存出貨 ' . dqa_n($soQty)) : '')
+                     . ' 與訂單數量 ' . dqa_n($oqty) . ' 不符');
+            }
+        }
         if ($ships && in_array($shipSrc, ['map', 'legacy'], true) && $sQty > 0) {
-            if ($sQty > $oqty && dqa_diff_over($oqty, $sQty, $tol['qty_pct']))
-                $add('qty_over', 'critical', '出貨數量合計 ' . dqa_n($sQty) . ' 超出訂單數量 ' . dqa_n($oqty));
-            elseif ($closed && dqa_diff_over($oqty, $sQty, $tol['qty_pct']))
+            if ($sQty > $oqty && dqa_diff_over($oqty, $sQty, $tol['qty_pct'])) {
+                $pct = $overTxt($oqty, $sQty);
+                if (!$sKinds)
+                    $add('qty_over', 'critical', '出貨數量合計 ' . dqa_n($sQty) . ' 超出訂單數量 ' . dqa_n($oqty)
+                         . '。若是多出／庫存併出／補出，請在綁定時選一個超量原因');
+                elseif ($pct > $overPct)
+                    $add('qty_over', 'critical', '出貨數量合計 ' . dqa_n($sQty) . ' 超出訂單數量 ' . dqa_n($oqty)
+                         . ' 共 ' . $pct . '%（原因：' . $kindTxt($sKinds, 'order_ship')
+                         . '），已超過容許超量 ' . dqa_n($overPct) . '%');
+            } elseif ($closed && $sQty <= $oqty && dqa_diff_over($oqty, $sQty, $tol['qty_pct']))
                 $add('qty_ship', 'warn', '訂單已結案，出貨數量合計 ' . dqa_n($sQty) . ' 與訂單數量 ' . dqa_n($oqty) . ' 不符');
         }
 
@@ -1253,11 +1309,14 @@ function dqa_trace_rows(PDO $db, array $f): array
                         'alloc' => dqa_num($x['_alloc'] ?? 0),
                         'src' => (string)($x['_link_src'] ?? '')];
             }, $qAll),
+            'stock_out' => ($stockOut[$oid] ?? null),
             'bom'   => ['cnt' => count($boms), 'qty' => $bQty, 'date' => $bMin, 'date_max' => $bMax,
-                        'src' => $bomSrc, 'list' => $bList],
+                        'src' => $bomSrc, 'list' => $bList,
+                        'kinds' => array_map(function ($c) { return tc_alloc_kind_label($c, 'order_bom'); }, $bKinds)],
             'ship'  => ['cnt' => count($ships), 'doc_cnt' => count($sList), 'qty' => $sQty,
                         'date' => $sMin, 'date_max' => $sMax,
-                        'price' => $sPrice, 'src' => $shipSrc, 'list' => $sList],
+                        'price' => $sPrice, 'src' => $shipSrc, 'list' => $sList,
+                        'kinds' => array_map(function ($c) { return tc_alloc_kind_label($c, 'order_ship'); }, $sKinds)],
             'proc'  => ['quote' => $pQuote, 'order' => $pOrder, 'bom' => $pBom, 'ship' => $pShip, 'cmp' => $pCmp],
             'issues' => $iss, 'level' => $level, 'exempt' => $exHit,
             'excl' => array_map(function ($h) {
@@ -1649,9 +1708,13 @@ function dqa_node_candidates(PDO $db, int $orderId, string $kind, array $opt = [
         }
     } elseif ($kind === 'bom') {
         $boundIds = [];
-        $st = $db->prepare("SELECT bom, allocated_qty FROM bom_order_process_map WHERE order_id=?");
+        $boundKind = [];
+        $st = $db->prepare("SELECT bom, allocated_qty, alloc_kind FROM bom_order_process_map WHERE order_id=?");
         $st->execute([$orderId]);
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $boundIds[(string)$r['bom']] = (int)$r['allocated_qty'];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $boundIds[(string)$r['bom']] = (int)$r['allocated_qty'];
+            $boundKind[(string)$r['bom']] = trim((string)($r['alloc_kind'] ?? ''));
+        }
         $st = $db->prepare("SELECT bom, sqty FROM bom WHERE o_order_id=?");
         $st->execute([$orderId]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r)
@@ -1694,6 +1757,7 @@ function dqa_node_candidates(PDO $db, int $orderId, string $kind, array $opt = [
                 'free' => max(0, $self - dqa_num($r['alloc'])),
                 'done' => ((string)$r['processing_state'] === '1'),
                 'bound' => isset($boundIds[$no]), 'mine' => $boundIds[$no] ?? 0,
+                'kind' => $boundKind[$no] ?? '',
                 'used_by' => (int)$r['ocnt'],
                 'early' => (dqa_bom_open_date($no, $r['created'] ?? null) !== '' && $odate !== ''
                             && dqa_bom_open_date($no, $r['created'] ?? null) < $odate),
@@ -1701,9 +1765,13 @@ function dqa_node_candidates(PDO $db, int $orderId, string $kind, array $opt = [
         }
     } else {   // ship
         $boundIds = [];
-        $st = $db->prepare("SELECT IS_id, allocated_qty FROM is_order_map WHERE Order_id=?");
+        $boundKind = [];
+        $st = $db->prepare("SELECT IS_id, allocated_qty, alloc_kind FROM is_order_map WHERE Order_id=?");
         $st->execute([$orderId]);
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $boundIds[(int)$r['IS_id']] = (int)$r['allocated_qty'];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $boundIds[(int)$r['IS_id']] = (int)$r['allocated_qty'];
+            $boundKind[(int)$r['IS_id']] = trim((string)($r['alloc_kind'] ?? ''));
+        }
         $st = $db->prepare("SELECT IS_id, Qty FROM is_list WHERE Order_id=?");
         $st->execute([$orderId]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r)
@@ -1749,6 +1817,7 @@ function dqa_node_candidates(PDO $db, int $orderId, string $kind, array $opt = [
                 'qty' => $self, 'price' => dqa_num($r['Unit_price']),
                 'alloc' => dqa_num($r['alloc']), 'free' => max(0, $self - dqa_num($r['alloc'])),
                 'bound' => isset($boundIds[$id]), 'mine' => $boundIds[$id] ?? 0,
+                'kind' => $boundKind[$id] ?? '',
                 'used_by' => (int)$r['ocnt'],
                 'other_order' => ((int)$r['legacy_order'] > 0 && (int)$r['legacy_order'] !== $orderId
                                   && !isset($boundIds[$id])) ? (int)$r['legacy_order'] : 0,
@@ -1766,8 +1835,13 @@ function dqa_node_candidates(PDO $db, int $orderId, string $kind, array $opt = [
                 'proc' => (string)($o['Processing_items'] ?? ''),
                 'closed' => ((string)$o['Order_status'] === '9'),
                 'auto_pm' => ((int)$o['pmGet_auto'] === 1),
+                // 庫存出貨：剩餘量要扣掉這一段，不然「還差幾支沒綁」會一直算不完
+                'stock_out' => (tc_stock_out_map($db, [$orderId])[$orderId] ?? null),
             ],
-            'kind' => $kind, 'rows' => $rows];
+            'kind' => $kind,
+            // 超量原因由後端給（鐵律4：不要在前端再寫一份對照表，改了會兩邊不一樣）
+            'alloc_kinds' => ($kind === 'quote' ? [] : tc_alloc_kinds($kind === 'bom' ? 'order_bom' : 'order_ship')),
+            'rows' => $rows];
 }
 
 /* ============================================================
