@@ -174,20 +174,29 @@ table.f td.t { vertical-align:top; }
 .sig { text-align:center; }
 /* 標題貼著圖章放在左邊（原本自己佔一整列，圖章被擠到下面去、整張表就變高）：
    「(業務/品管) 主管：」會自動折成兩行，字級縮小，跟圖章維持在同一個高度。 */
-.sig .cap { float:left; width:40px; font-size:8px; line-height:1.12; text-align:left; color:#000; }
-.sigbox { display:flex; align-items:center; justify-content:center; overflow:hidden; }
+.sig .cap { float:left; width:46px; font-size:7.5px; line-height:1.15; text-align:left; color:#000; }
+.sig .cap b { font-weight:normal; display:block; white-space:nowrap; }   /* 「(業務/品管)」整串不折行 */
+.sigbox { display:flex; align-items:center; justify-content:center; }
+/* 長方章比格子寬時要整個縮進來，不可以被裁掉（使用者回報章顯示不完整） */
+.sigbox svg { max-width:100%; }
 /* 簽章格與它左邊的內容格之間不畫線——有線的話章看起來像獨立的一欄，分不出是誰簽的。
    border-collapse 之下相鄰的兩條邊會合併，所以兩邊都要拿掉（只拿掉一邊仍然看得到線）。 */
 /* 特異度要壓得過上面的 `table.f th, table.f td{border:1px}`，不然寫了沒有作用 */
 table.f td.nobr { border-right:0; }
+table.f td.nobt { border-top:0; }        /* 裁示說明與矯正單號之間不畫線（紙本是連著的一格） */
 table.f td.sig.nobl { border-left:0; }
 .note { font-size:10px; margin-top:3px; }
 .small { font-size:10px; color:#333; }
 .mem td { height:15px; }
 table.ask td { height:12mm; }
 table.ask .askbd { font-size:10px; line-height:1.35; }
-table.ask td.sig { border-left:0; }
-table.ask td.t   { border-right:0; }
+/* 只拿掉「內容格 → 它的簽章格」之間那一條；最右邊那一格是表格邊界，一定要留著（使用者回報右側線不見了）。
+   注意 `table.ask` 本身就是 `table.f.ask`，寫成 `table.f table.ask` 永遠match不到（踩過一次）。 */
+table.f.ask td.sig { border-left:0; }
+table.ask td.askbody { border-right:0; }
+/* 這一區的章用長方章（格子矮），不要被裁切 */
+table.ask .sigbox { max-height:100%; }
+table.ask .sigbox svg { max-height:11mm; width:auto; }
 /* 圖章尺寸一律抄 ai-rules/18 鐵則6 這一行，不要自己另外發明數字 */
 .stamp-wrap svg, svg.car-stamp { width:91px; height:91px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
 svg.eg-stamp-tpl { height:auto !important; }
@@ -254,25 +263,20 @@ svg.eg-stamp-tpl { height:auto !important; }
     <?php endfor; ?>
 </table>
 
-<!-- 異常原因分類 ＋ 承辦簽章（紙本的承辦章放這一列，異常現象才不會被章撐高） -->
+<!-- 異常原因分類＋異常現象，右邊一個合併的承辦簽章欄（比照紙本 M17:O21） -->
 <table class="f">
-    <colgroup><col style="width:16%"><col><col style="width:26%"></colgroup>
+    <colgroup><col style="width:16%"><col><col style="width:22%"></colgroup>
     <tr>
         <td class="lb">異常原因分類</td>
-        <td class="optrow nobr">
+        <td class="optrow">
             <?php foreach ($lv1 as $c) echo cb($c['name'], isset($selRoots[$c['cat_id']])); ?>
             <?php if ($deepPaths): ?><div class="small" style="margin-top:2px;">選定：<?= h(implode('；', $deepPaths)) ?></div><?php endif; ?>
         </td>
-        <td class="sig nobl">
-            <div class="cap">(業務/品管)<br>承辦：</div>
+        <td class="sig" rowspan="2">
+            <div class="cap"><b>(業務/品管)</b><b>承辦：</b></div>
             <div class="sigbox" data-stamp="<?= h($o['owner_sign_name']) ?>" data-dept="<?= h($o['signs']['owner']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['owner']['position'] ?? '') ?>" data-date="<?= h(d($o['owner_sign_at'] ?: $o['fill_date'])) ?>"></div>
         </td>
     </tr>
-</table>
-
-<!-- 異常現象 -->
-<table class="f">
-    <colgroup><col style="width:16%"><col></colgroup>
     <tr>
         <td class="lb">異 常 現 象</td>
         <td class="t" style="height:16mm;"><?= nl2br(h($o['abnormal_phenomenon'])) ?>
@@ -286,20 +290,20 @@ svg.eg-stamp-tpl { height:auto !important; }
     </tr>
 </table>
 
-<!-- 異常處置方式 ＋ 主管簽章 -->
+<!-- 異常處置方式＋處置說明，右邊一個合併的主管簽章欄（比照紙本 M22:O26） -->
 <table class="f">
-    <colgroup><col style="width:16%"><col><col style="width:26%"></colgroup>
+    <colgroup><col style="width:16%"><col><col style="width:22%"></colgroup>
     <tr>
         <td class="lb">異常處置方式</td>
-        <td class="optrow nobr"><?php foreach ($dispOpts as $op) echo cb($op['name'], in_array($op['opt_id'], $o['disp_ids'], true)); ?></td>
-        <td class="sig nobl" rowspan="2">
-            <div class="cap">(業務/品管)<br>主管：</div>
+        <td class="optrow"><?php foreach ($dispOpts as $op) echo cb($op['name'], in_array($op['opt_id'], $o['disp_ids'], true)); ?></td>
+        <td class="sig" rowspan="2">
+            <div class="cap"><b>(業務/品管)</b><b>主管：</b></div>
             <div class="sigbox" data-stamp="<?= h($o['decided_name']) ?>" data-dept="<?= h($o['signs']['disp']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['disp']['position'] ?? '') ?>" data-date="<?= h(d($o['disp_decided_at'])) ?>"></div>
         </td>
     </tr>
     <tr>
         <td class="lb">處 置 說 明</td>
-        <td class="t nobr" style="height:21mm;"><?= nl2br(h($o['disposition_note'])) ?></td>
+        <td class="t" style="height:16mm;"><?= nl2br(h($o['disposition_note'])) ?></td>
     </tr>
 </table>
 
@@ -318,16 +322,16 @@ svg.eg-stamp-tpl { height:auto !important; }
     <tr>
         <?php foreach ($row as $keys):
             [$box, $txt, $who, $dt] = askCell($slotData, $keys, 'h', 'd'); ?>
-        <td class="t"><?= $box ?><div class="askbd"><?= $txt ?></div></td>
-        <td class="sig t"><div class="cap">簽章：</div>
+        <td class="t askbody"><?= $box ?><div class="askbd"><?= $txt ?></div></td>
+        <td class="sig t"><div class="cap"><b>簽章：</b></div>
             <div class="sigbox" style="min-height:0;" data-tpl="ask" data-stamp="<?= h($who) ?>" data-date="<?= h(d($dt)) ?>"></div></td>
         <?php endforeach; ?>
     </tr>
     <?php endforeach; ?>
     <tr>
         <?php [$box, $txt, $who, $dt] = askCell($slotData, ['sales'], 'h', 'd'); ?>
-        <td class="t" colspan="3"><?= $box ?><div class="askbd"><?= $txt ?></div></td>
-        <td class="sig t"><div class="cap">簽章：</div>
+        <td class="t askbody" colspan="3"><?= $box ?><div class="askbd"><?= $txt ?></div></td>
+        <td class="sig t"><div class="cap"><b>簽章：</b></div>
             <div class="sigbox" style="min-height:0;" data-tpl="ask" data-stamp="<?= h($who) ?>" data-date="<?= h(d($dt)) ?>"></div></td>
     </tr>
 </table>
@@ -337,18 +341,18 @@ svg.eg-stamp-tpl { height:auto !important; }
     <colgroup><col style="width:16%"><col><col style="width:26%"></colgroup>
     <tr>
         <td class="lb" rowspan="3">總經理 裁示</td>
-        <td class="nobr"><?php
+        <td><?php
             foreach ($gmOpts as $op) echo cb($op['name'], in_array($op['opt_id'], $o['gm_ids'], true));
             echo cb('扣款', !empty($o['gm_deduct']));
         ?></td>
-        <td class="sig nobl" rowspan="3">
-            <div class="cap">總經理<br>簽章：</div>
+        <td class="sig" rowspan="3">
+            <div class="cap"><b>總經理</b><b>簽章：</b></div>
             <div class="sigbox" data-stamp="<?= h($o['gm_name']) ?>" data-dept="<?= h($o['signs']['gm']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['gm']['position'] ?? '') ?>" data-date="<?= h(d($o['gm_decided_at'])) ?>"
                  data-deputy="<?= !empty($o['gm_by_deputy']) ? 1 : '' ?>"></div>
         </td>
     </tr>
-    <tr><td class="t nobr" style="height:11mm;"><?= nl2br(h($o['gm_note'])) ?></td></tr>
-    <tr><td class="nobr">矯正單號：<?= h($o['capa_order_no']) ?></td></tr>
+    <tr><td class="t nobt" style="height:11mm;"><?= nl2br(h($o['gm_note'])) ?></td></tr>
+    <tr><td class="nobt">矯正單號：<?= h($o['capa_order_no']) ?></td></tr>
 </table>
 
 <?php if ($showDeduct): ?>
@@ -356,7 +360,7 @@ svg.eg-stamp-tpl { height:auto !important; }
 <table class="f">
     <colgroup><col style="width:6%"><col style="width:12%"><col style="width:12%"><col style="width:30%"><col style="width:12%"><col style="width:28%"></colgroup>
     <tr>
-        <td class="lb" rowspan="<?= 4 + count($otherRows) ?>"><div class="vert">扣款確認</div></td>
+        <td class="lb" rowspan="<?= 3 + max(1, count($otherRows)) ?>"><div class="vert">扣款確認</div></td>
         <td class="lb">扣款項目</td><td class="lb">金額 (未稅)</td><td class="lb">說明</td>
         <td class="lb">執 行</td>
         <td class="lb">通知扣款<div class="small" style="font-weight:normal;">(填移轉單號 Exp:J-1130101001)</div></td>
@@ -365,8 +369,9 @@ svg.eg-stamp-tpl { height:auto !important; }
         <td class="c">製程</td>
         <td class="c"><?= h(money($tot['process_rated'])) ?></td>
         <td class="t small" style="<?= $descStyle ?>"><?= h($procDesc) ?></td>
-        <td class="c" rowspan="<?= 2 + count($otherRows) ?>"><?= h($o['deduct_exec']) ?></td>
-        <td class="t" rowspan="<?= 2 + count($otherRows) ?>"><?= nl2br(h($o['deduct_notify_no'])) ?></td>
+        <?php $dRows = 2 + max(1, count($otherRows)); /* 製程 + 其他(至少一列) + 合計 */ ?>
+        <td class="c" rowspan="<?= $dRows ?>"><?= h($o['deduct_exec']) ?></td>
+        <td class="t" rowspan="<?= $dRows ?>"><?= nl2br(h($o['deduct_notify_no'])) ?></td>
     </tr>
     <?php foreach ($otherRows as $orow): ?>
     <tr>
@@ -444,19 +449,26 @@ var STAMP_TPL_ASK = <?= json_encode($stampTplAsk['schema'] ?? ($stampTpl['schema
            **刻意不做整頁自動縮放**——ai-rules/18 第8條：整頁縮放與「圖章維持固定尺寸」天生互斥，
            試過三輪都不如預期，正確解法是把圖章改成長方章。 */
         var onePage = (297 - 22) * 96 / 25.4;
-        if (document.body.scrollHeight > onePage + 2) {
+        /* 只量「會印出來的」區塊——畫面上的工具列與這個提示本身是 .noprint，
+           把它們算進去會變成每張單都說會印兩頁（自己踩過） */
+        var printH = 0;
+        [].forEach.call(document.body.children, function (t) {
+            if (t.classList.contains('noprint') || t.tagName === 'SCRIPT') return;
+            printH += t.getBoundingClientRect().height;
+        });
+        if (printH > onePage + 2) {
             var w = document.createElement('div');
             w.className = 'noprint';
             w.style.cssText = 'margin:6px auto;max-width:760px;border:1px solid #DD5138;background:#FFF3EC;'
                 + 'color:#8a3b1e;padding:8px 12px;border-radius:4px;font-size:13px;line-height:1.6;text-align:left;';
-            w.innerHTML = '<b>這張單目前會印成兩頁</b>（內容 ' + Math.round(document.body.scrollHeight)
+            w.innerHTML = '<b>這張單目前會印成兩頁</b>（內容 ' + Math.round(printH)
                 + 'px，一頁可印 ' + Math.round(onePage) + 'px）。<br>'
                 + '紙本一頁上有 9 個簽章格，<b>圓章依規定固定 91px（約 2.4cm）不縮小</b>，蓋滿就會超過一頁。<br>'
                 + '請到清單頁「設定 → 其他設定 → 列印用圖章模板」改選<b>長方章</b>（例：人員簽章(長方)），'
                 + '或單獨指定「相關單位意見的圖章模板」。';
             document.body.insertBefore(w, document.body.firstChild);
         }
-        if (document.body.scrollHeight > onePage * 0.95) {
+        if (printH > onePage * 0.95) {
             var st = document.createElement('style');
             st.textContent = "@page{ @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:8.5pt; color:#333; } }";
             document.head.appendChild(st);
