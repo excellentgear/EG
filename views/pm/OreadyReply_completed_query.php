@@ -655,18 +655,29 @@ function ocq_ob_classify($pdo, array $rows, $withCand = false, $candLimit = 8) {
 
     // 清單頁：逐列撈候選（只取「訂單日與這筆 BOM 的日期最接近」的前幾張——同料號常有上千張訂單，
     // 照日期新到舊取會把真正該綁的那幾張整批切掉，這個坑 2026-09-03 快速出貨那次踩過）
+    // **已經被其他 BOM 分配滿的一律不列出來**（使用者要求）：同一個料號的好幾筆 BOM 排在一起判定時，
+    // 那些訂單早就沒有量可以分了，列出來只會把真正可以挑的那幾張淹掉。
+    // 因此**多撈一些再濾**——只撈 $candLimit 張的話，最近的那幾張剛好都滿了就會一張都不剩，
+    // 但其實再過去一點還有可以綁的。
+    $fetchLimit = max((int)$candLimit * 4, 24);
     $st = $pdo->prepare("SELECT " . ocq_ob_order_cols() . " FROM order_track ot
         WHERE ot.d_id_ID = ? AND (ot.Order_status IS NULL OR ot.Order_status <> 9)
         ORDER BY ABS(DATEDIFF(COALESCE(ot.Order_date, ot.Delivery_date), ?)) ASC, ot.Order_id DESC
-        LIMIT " . (int)$candLimit);
+        LIMIT " . $fetchLimit);
     foreach ($rows as $r) {
         $bom = $r['bom'];
         if (($out[$bom]['level'] ?? '') !== 'manual') continue;
         $st->execute([(int)$r['d_setting_id'], $r['eff_date'] ?? date('Y-m-d')]);
-        $cands = $st->fetchAll(PDO::FETCH_ASSOC);
-        foreach ($cands as &$o) { $o['qty_default'] = ocq_ob_qty_default($r['sqty'] ?? 0, $o); }
-        unset($o);
-        $out[$bom]['candidates'] = $cands;
+        $got = $st->fetchAll(PDO::FETCH_ASSOC);
+        $avail = []; $full = 0;
+        foreach ($got as $o) {
+            if ((int)$o['Qty'] - (int)$o['already_allocated'] <= 0) { $full++; continue; }
+            $o['qty_default'] = ocq_ob_qty_default($r['sqty'] ?? 0, $o);
+            $avail[] = $o;
+        }
+        $out[$bom]['candidates'] = array_slice($avail, 0, (int)$candLimit);
+        $out[$bom]['cand_full']  = $full;          // 這個範圍內被濾掉幾張（畫面只寫一行小字交代）
+        $out[$bom]['cand_avail'] = count($avail);
     }
     return $out;
 }
@@ -1324,6 +1335,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $out[] = ['bom' => $r['bom'], 'part_no' => (string)$r['d_id'], 'bom_qty' => $r['sqty'],
                     'bom_client' => trim((string)$r['Client_Name']), 'eff_date' => $r['eff_date'],
                     'reason' => $c['reason'] ?? '', 'cand_total' => $c['cand_total'] ?? count($c['candidates'] ?? []),
+                    'cand_full' => (int)($c['cand_full'] ?? 0), 'cand_avail' => (int)($c['cand_avail'] ?? 0),
                     'candidates' => array_map(function ($o) {
                         return ['order_id' => (int)$o['Order_id'], 'order_oo' => $o['Order_oo'],
                             'order_date' => $o['Order_date'], 'delivery_date' => $o['Delivery_date'],
@@ -2027,7 +2039,8 @@ try {
             <li><b>②綁訂單</b>：候選＝<b>同一筆料號主檔底下、未作廢的訂單</b>。這個料號底下<b>只有一張訂單時才自動綁</b>；有好幾張時列出來讓你挑（依「訂單日與這筆 BOM 的日期最接近」排序），<b>分配量可以逐張改</b>，預設帶入「BOM 發單量」與「該訂單未被分配量」中較小者。<b>同一筆 BOM 的量分屬好幾張訂單時可以一次挑好幾張</b>（一次最多 20 張，各自寫入分配量；挑兩張以上會顯示「分配量合計／發單量」，超過會標紅提醒但不擋你，因為確實有一張 BOM 補足好幾張訂單缺量的情形）。</li>
             <li><b>③綁報價單</b>：報價單是綁在<b>訂單</b>上的（不是 BOM），所以這一階處理的是「範圍內的 BOM 綁到的訂單裡還沒綁報價單的」。候選＝<b>報價明細的料號與訂單料號完全相同</b>的報價單（草稿與待審核的不列入）；只有一筆時自動綁，多筆時依「<b>報價日不晚於訂單日、且日期最接近</b>」排序，第一筆會標「建議：下單當時的報價」。</li>
             <li>兩個階段都可以<b>逐筆按「套用」，也可以勾選起來一次全部套用</b>；挑好候選會自動幫你勾起該列。已經被別人綁走的一律擋下、不覆蓋。</li>
-            <li><b>綁完訂單後，畫面上其他還沒判定的列會自動更新</b>：同一個料號的好幾筆 BOM 會排在一起、而且共用同一批候選訂單，綁完第一筆之後其餘各列的「已分配／未分配」會立刻重查更新，<b>已經被分配滿的那張訂單會標紅寫明是被哪一筆 BOM 綁走、分配量預設帶 0</b>，避免照著舊數字把同一張訂單再分配一次。已經判定完成的列與捲動位置不會被洗掉（不是整份重載）。</li>
+            <li><b>候選只列「還有量可以分」的訂單</b>：已經被其他 BOM 分配滿的一律不列出來（列出來只會把真正可以挑的那幾張淹掉）；被排除幾張會寫在候選下方一行小字。真的要綁一張已經分配滿的訂單，請用清單上的<b>「綁訂單」</b>逐筆處理，那邊會全部列出來並標示哪幾張已滿。</li>
+            <li><b>綁完訂單後，畫面上其他還沒判定的列會自動更新</b>：同一個料號的好幾筆 BOM 會排在一起、而且共用同一批候選訂單，綁完第一筆之後其餘各列的「已分配／未分配」會立刻重查更新，<b>剛被分配滿的那張訂單會直接從其他列的候選中移除</b>，避免照著舊數字把同一張訂單再分配一次。只有「你已經勾起來」的候選不會被抽掉（會改標紅提醒），免得按下套用才發現自己挑的東西不見了。已經判定完成的列與捲動位置不會被洗掉（不是整份重載）。</li>
         </ul>
         <?php endif; ?>
         <?php if ($ocq_can_bind_part): ?>
@@ -3307,12 +3320,25 @@ function ocqObRefreshRun(){
                 if ((parseInt($tr.data('bomqty'), 10) || 0) !== rw.bom_qty) return;
                 var $lab = $tr.find('.ocq-ab-cand[data-oid="' + rw.order_id + '"]');
                 if (!$lab.length) return;
+                var picked = $lab.find('.abo-ck').prop('checked');
+                if (rw.left <= 0 && !picked) {
+                    // 已經被別的 BOM 分配滿了＝這一列再也不該挑它，直接移除（使用者要求不要顯示）
+                    $lab.remove();
+                    if (!$tr.find('.ocq-ab-cand').length && !$tr.find('.ocq-cand-none').length) {
+                        $tr.find('td.cnd').prepend('<div class="ocq-ab-why ocq-cand-none">這個料號底下的訂單都已經被其他 BOM 分配滿了，'
+                            + '沒有可以挑的候選。確定這批貨就是做其中一張的話，請用清單上的「綁訂單」逐筆處理。</div>');
+                    }
+                    if (touched.indexOf(this) < 0) touched.push(this);
+                    return;
+                }
                 $lab.find('.oalloc').html(ocqObAllocHtml(rw.qty, rw.used));
+                // 已經勾起來的即使剛被別人綁滿也**留著並標紅**——那是使用者正在判定的內容，
+                // 直接抽掉會讓他按下套用才發現自己挑的東西不見了
                 $lab.find('.ofull').html(ocqObFullHtml(rw.left, rw.boms));
                 $lab.toggleClass('cand-full', rw.left <= 0);
-                // 已經勾起來或自己改過數字的不動（那是使用者正在判定的內容）
+                // 自己改過數字的不動（那是他刻意填的）
                 var $q = $lab.find('.oqty');
-                if ($q.length && $q.data('touched') !== 1 && !$lab.find('.abo-ck').prop('checked')) $q.val(rw.qty_default);
+                if ($q.length && $q.data('touched') !== 1 && !picked) $q.val(rw.qty_default);
                 if (touched.indexOf(this) < 0) touched.push(this);
             });
         });
@@ -3783,21 +3809,28 @@ if (OCQ_BIND.order) {
                    + '　發單 ' + esc(r.bom_qty) + '</div></td>'
                    + '<td>' + esc(r.part_no) + '<div class="ocq-ab-sub">' + (r.bom_client ? esc(r.bom_client) : '（沒有客戶）') + '</div></td>'
                    + '<td class="cnd">';
+                // 候選一律是「還有量可以分」的（已被其他 BOM 分配滿的後端就不送了）；
+                // .ofull 先留空，綁定後的即時刷新才會用到它
                 (r.candidates || []).forEach(function(o){
-                    var left = Math.max(0, (parseInt(o.qty, 10) || 0) - (parseInt(o.used, 10) || 0));
                     h += '<label class="ocq-ab-cand" data-oid="' + o.order_id + '"><input type="checkbox" class="abo-ck" value="' + o.order_id + '" data-oo="' + esc(o.order_oo) + '">'
                        + '<b>' + esc(o.order_oo) + '</b>'
                        + '<span class="ocq-ab-sub">　訂單日 ' + esc(o.order_date ? egFmtDate(o.order_date) : '—')
                        + '　交期 ' + esc(o.delivery_date ? egFmtDate(o.delivery_date) : '—')
                        + '<span class="oalloc">' + ocqObAllocHtml(o.qty, o.used) + '</span>'
                        + (o.spec ? '　' + esc(o.spec) : '') + '</span>'
-                       + '<span class="ofull">' + ocqObFullHtml(left, []) + '</span>'
+                       + '<span class="ofull"></span>'
                        + '　分配量 <input type="number" class="ocq-pick-qty oqty" data-oid="' + o.order_id + '" min="0" value="' + o.qty_default + '" onclick="event.preventDefault();event.stopPropagation();">'
                        + '</label>';
                 });
-                if ((r.cand_total || 0) > (r.candidates || []).length) {
-                    h += '<div class="ocq-ab-sub">另有 ' + (r.cand_total - r.candidates.length) + ' 張較早／較晚的訂單沒列出來，'
-                       + '要綁那幾張請用清單上的「綁訂單」逐筆處理。</div>';
+                if (!(r.candidates || []).length) {
+                    h += '<div class="ocq-ab-why ocq-cand-none">這個料號底下的訂單，附近這幾張都已經被其他 BOM 分配滿了，沒有可以挑的候選。'
+                       + '確定這批貨就是做其中一張的話，請用清單上的「綁訂單」逐筆處理（那邊會把已分配滿的也列出來）。</div>';
+                }
+                var hid = Math.max(0, (r.cand_total || 0) - (r.candidates || []).length);
+                if (hid > 0) {
+                    h += '<div class="ocq-ab-sub">另有 ' + hid + ' 張沒有列出來'
+                       + ((r.cand_full || 0) > 0 ? '（其中 ' + r.cand_full + ' 張已被其他 BOM 分配滿）' : '（訂單日較早／較晚）')
+                       + '，要綁那幾張請用清單上的「綁訂單」逐筆處理。</div>';
                 }
                 // 挑了不只一張時把「分配量合計 vs 發單量」寫出來——分配量預設各自帶「發單量與該訂單
                 // 未分配量中較小者」，多挑幾張就會重複計到，不寫出來看不出已經超量
