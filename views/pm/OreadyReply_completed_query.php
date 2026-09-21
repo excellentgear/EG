@@ -143,6 +143,50 @@ $OCQ_COLS = "b.bom, b.d_id, b.sqty AS Qty, b.priority_type, b.d_setting_id, b.o_
     $OCQ_EFFDATE AS effective_date, (b.closed_at IS NULL) AS date_is_derived";
 
 // $exclude：計算某個篩選欄位自己的可選清單(facet)時，要排除該欄位自己的條件
+/**
+ * 綁定狀態的 SQL 條件（唯一實作：清單篩選、自動綁定跳窗的掃描範圍共用同一份，
+ * 兩邊各寫一次的話，篩選說有 N 筆、跳窗卻處理另一批，怎麼看都對不起來）。
+ * 判定用的三個事實：
+ *   料號＝bom.d_setting_id 有值
+ *   訂單＝bom_order_process_map 有列，或 bom.o_order_id 是數字（舊資料只填這一欄）；
+ *        o_order_id='B' 是備庫，本來就沒有訂單，一律不算「未綁訂單」
+ *   報價單＝該 BOM 綁到的訂單上的 order_track.quote_no／quote_item_id 有值
+ */
+function ocq_has_order_sql($alias = 'b') {
+    return "(EXISTS (SELECT 1 FROM bom_order_process_map m_b WHERE m_b.bom = $alias.bom)
+             OR COALESCE($alias.o_order_id,'') <> '')";
+}
+/**
+ * 「這筆 BOM 綁到的訂單裡，有沒有還沒綁報價單的」。
+ * **刻意拆成兩個 EXISTS 而不是 `Order_id IN (…UNION…)`**：後者對每一列都要現做一張衍生表，
+ * 清單頁（還要 JOIN 一堆表＋排序）實測直接跑到 60 秒逾時；拆開之後兩邊都走得到索引
+ * （bom_order_process_map 的 bom、order_track 的主鍵）。兩種來源都要看，
+ * 舊資料常常只在 bom.o_order_id 留一個訂單、bom_order_process_map 一列都沒有。
+ */
+function ocq_order_missing_quote_sql($alias = 'b') {
+    return "(EXISTS (SELECT 1 FROM bom_order_process_map m_q JOIN order_track o_q ON o_q.Order_id = m_q.order_id
+                     WHERE m_q.bom = $alias.bom AND COALESCE(o_q.quote_no,'') = '' AND o_q.quote_item_id IS NULL)
+             OR ($alias.o_order_id REGEXP '^[0-9]+$'
+                 AND EXISTS (SELECT 1 FROM order_track o_q2 WHERE o_q2.Order_id = CAST($alias.o_order_id AS UNSIGNED)
+                             AND COALESCE(o_q2.quote_no,'') = '' AND o_q2.quote_item_id IS NULL)))";
+}
+function ocq_bind_state_sql($kind) {
+    switch ($kind) {
+        case 'no_part':
+            return "(b.d_setting_id IS NULL OR b.d_setting_id = 0)";
+        case 'no_order':
+            return "(b.d_setting_id IS NOT NULL AND b.d_setting_id <> 0 AND COALESCE(b.o_order_id,'') = ''
+                     AND NOT EXISTS (SELECT 1 FROM bom_order_process_map m_b WHERE m_b.bom = b.bom))";
+        case 'no_quote':
+            return "(" . ocq_has_order_sql('b') . " AND COALESCE(b.o_order_id,'') <> 'B'
+                     AND " . ocq_order_missing_quote_sql('b') . ")";
+        case 'all_done':
+            return "(b.d_setting_id IS NOT NULL AND b.d_setting_id <> 0 AND " . ocq_has_order_sql('b') . "
+                     AND (COALESCE(b.o_order_id,'') = 'B' OR NOT " . ocq_order_missing_quote_sql('b') . "))";
+    }
+    return '';
+}
+
 function ocq_build_filter($p, $exclude = []) {
     global $OCQ_CLIENT_DISP, $OCQ_CLIENT_ID, $OCQ_EFFDATE;
     $where = ["b.processing_state = '1'"];
@@ -186,6 +230,12 @@ function ocq_build_filter($p, $exclude = []) {
         if (preg_match('#^\d{1,2}/\d{1,2}$#', $val)) { $val = date('Y') . '/' . $val; }
         $ts = $val !== '' ? strtotime($val) : false;
         if ($ts !== false) { $where[] = "b.Delivery_date $op ?"; $params[] = date('Y-m-d', $ts); }
+    }
+    // 綁定狀態篩選（使用者要求：要能把「還沒綁的」直接篩出來）。
+    // 唯一實作 ocq_bind_state_sql()，清單／列印／匯出／統整報表與自動綁定跳窗全部吃同一份條件。
+    if (!in_array('bind', $exclude, true) && !empty($p['bind'])) {
+        $bs = ocq_bind_state_sql($p['bind']);
+        if ($bs !== '') $where[] = $bs;
     }
     if (!in_array('process_type', $exclude, true) && !empty($p['process_type'])) {
         $where[] = "EXISTS (SELECT 1 FROM bom_ing bi_p LEFT JOIN process_no pn_p ON pn_p.ProcessNo = bi_p.process_no
@@ -510,9 +560,221 @@ function ocq_ab_classify($pdo, array $rows) {
 
 /** 自動綁定的掃描範圍：本頁篩選條件 ＋「還沒綁料號」。 */
 function ocq_ab_where($p) {
-    list($whereSql, $params) = ocq_build_filter($p);
-    return [$whereSql . " AND (b.d_setting_id IS NULL OR b.d_setting_id = 0)", $params];
+    // 畫面上的「綁定狀態」篩選一律排除：每個階段的範圍由階段自己決定（否則使用者選了
+    // 「未綁料號」再切到綁訂單分頁，會看到 0 筆而以為壞掉）
+    list($whereSql, $params) = ocq_build_filter($p, ['bind']);
+    return [$whereSql . " AND " . ocq_bind_state_sql('no_part'), $params];
 }
+
+// ── 自動綁定訂單：判定規則（唯一實作，掃描與寫入共用同一支）─────────────────────────
+// 與料號同一套精神：**候選訂單指得出唯一一筆才自動綁**，多筆一律列出來讓人挑。
+// 候選＝同一個料號主檔（order_track.d_id_ID = bom.d_setting_id）且未作廢的訂單。
+
+/** 綁訂單的掃描範圍：本頁篩選 ＋ 已綁料號 ＋ 還沒綁訂單（備庫不算，它本來就沒有訂單）。 */
+function ocq_ob_where($p) {
+    list($whereSql, $params) = ocq_build_filter($p, ['bind']);
+    return [$whereSql . " AND " . ocq_bind_state_sql('no_order'), $params];
+}
+
+/** 候選訂單要撈的欄位（分配量預設值要用到訂單量與已分配量，與逐筆跳窗完全同一份）。 */
+function ocq_ob_order_cols() {
+    return "ot.Order_id, COALESCE(ot.Order_oo,'') AS Order_oo, COALESCE(ot.Client_name,'') AS Client_name, ot.d_id_ID,
+        (CASE WHEN ot.split_seq = 1 THEN ot.Qty - COALESCE((SELECT SUM(c.Qty) FROM order_track c
+              WHERE c.parent_order_id = ot.Order_id AND c.split_seq > 1), 0) ELSE ot.Qty END) AS Qty,
+        DATE_FORMAT(ot.Order_date,'%Y-%m-%d') AS Order_date, DATE_FORMAT(ot.Delivery_date,'%Y-%m-%d') AS Delivery_date,
+        COALESCE(ot.Specification,'') AS Specification, COALESCE(ot.Order_ps,'') AS Order_ps,
+        COALESCE((SELECT SUM(m2.allocated_qty) FROM bom_order_process_map m2 WHERE m2.order_id = ot.Order_id), 0) AS already_allocated";
+}
+
+/** 分配量的預設值（與逐筆綁定跳窗的 pre 完全相同的算法，不可以在兩邊各算一次）。 */
+function ocq_ob_qty_default($bomQty, $o) {
+    $bomQty = (int)$bomQty;
+    $left   = max(0, (int)($o['Qty'] ?? 0) - (int)($o['already_allocated'] ?? 0));
+    if ($bomQty > 0 && $left > 0) return min($bomQty, $left);
+    return $bomQty ?: $left;
+}
+
+/**
+ * 判定一批 BOM 的訂單該怎麼綁。$rows 每列要有 bom / d_setting_id / sqty。
+ * level：auto＝同料號底下只有一張訂單／manual＝好幾張要人工挑／nomatch＝這個料號底下沒有訂單。
+ * $withCand=true 時才把候選訂單整批撈回來（清單頁用；掃描時只需要筆數，同料號動輒上千張訂單，
+ * 全撈會把記憶體吃光）。
+ */
+function ocq_ob_classify($pdo, array $rows, $withCand = false, $candLimit = 8) {
+    $dsids = [];
+    foreach ($rows as $r) { $d = (int)($r['d_setting_id'] ?? 0); if ($d > 0) $dsids[$d] = 1; }
+    $cnt = []; $one = [];
+    foreach (array_chunk(array_keys($dsids), 500) as $chunk) {
+        $ph = implode(',', array_fill(0, count($chunk), '?'));
+        $st = $pdo->prepare("SELECT ot.d_id_ID, COUNT(*) n, MIN(ot.Order_id) oid FROM order_track ot
+            WHERE ot.d_id_ID IN ($ph) AND (ot.Order_status IS NULL OR ot.Order_status <> 9) GROUP BY ot.d_id_ID");
+        $st->execute($chunk);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $g) {
+            $cnt[(int)$g['d_id_ID']] = (int)$g['n'];
+            if ((int)$g['n'] === 1) $one[(int)$g['d_id_ID']] = (int)$g['oid'];
+        }
+    }
+    // 唯一那一張的明細（自動綁定要用它算分配量）
+    $oneRow = [];
+    if ($one) {
+        foreach (array_chunk(array_values($one), 500) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st = $pdo->prepare("SELECT " . ocq_ob_order_cols() . " FROM order_track ot WHERE ot.Order_id IN ($ph)");
+            $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $o) $oneRow[(int)$o['Order_id']] = $o;
+        }
+    }
+    $out = [];
+    foreach ($rows as $r) {
+        $bom = $r['bom'];
+        $d   = (int)($r['d_setting_id'] ?? 0);
+        $n   = $cnt[$d] ?? 0;
+        if ($n === 0) {
+            $out[$bom] = ['level' => 'nomatch', 'reason' => '這個料號主檔底下沒有任何未作廢的訂單', 'candidates' => [], 'pick' => null];
+            continue;
+        }
+        if ($n === 1) {
+            $o = $oneRow[$one[$d] ?? 0] ?? null;
+            if ($o) {
+                $o['qty_default'] = ocq_ob_qty_default($r['sqty'] ?? 0, $o);
+                $out[$bom] = ['level' => 'auto', 'reason' => '這個料號底下只有一張訂單（' . $o['Order_oo'] . '）',
+                    'candidates' => [$o], 'pick' => $o];
+                continue;
+            }
+        }
+        $out[$bom] = ['level' => 'manual',
+            'reason' => '這個料號底下有 ' . $n . ' 張訂單，系統無從得知這批貨是做哪一張，請挑一張',
+            'candidates' => [], 'pick' => null, 'cand_total' => $n];
+    }
+    if (!$withCand) return $out;
+
+    // 清單頁：逐列撈候選（只取「訂單日與這筆 BOM 的日期最接近」的前幾張——同料號常有上千張訂單，
+    // 照日期新到舊取會把真正該綁的那幾張整批切掉，這個坑 2026-09-03 快速出貨那次踩過）
+    $st = $pdo->prepare("SELECT " . ocq_ob_order_cols() . " FROM order_track ot
+        WHERE ot.d_id_ID = ? AND (ot.Order_status IS NULL OR ot.Order_status <> 9)
+        ORDER BY ABS(DATEDIFF(COALESCE(ot.Order_date, ot.Delivery_date), ?)) ASC, ot.Order_id DESC
+        LIMIT " . (int)$candLimit);
+    foreach ($rows as $r) {
+        $bom = $r['bom'];
+        if (($out[$bom]['level'] ?? '') !== 'manual') continue;
+        $st->execute([(int)$r['d_setting_id'], $r['eff_date'] ?? date('Y-m-d')]);
+        $cands = $st->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($cands as &$o) { $o['qty_default'] = ocq_ob_qty_default($r['sqty'] ?? 0, $o); }
+        unset($o);
+        $out[$bom]['candidates'] = $cands;
+    }
+    return $out;
+}
+
+// ── 自動綁定報價單：單位是「訂單」不是 BOM ────────────────────────────────────────
+// 報價單是綁在訂單上的（order_track.quote_no / quote_item_id），所以這個階段處理的是
+// 「本頁範圍內的 BOM 綁到的那些訂單裡，還沒綁報價單的」。寫入一律轉呼叫會計模組既有的
+// acc_recon_bind_quote()，不在這裡另寫一份（鐵律4）。
+
+/** 本頁篩選範圍內的 BOM 綁到了哪些訂單 id。 */
+function ocq_qb_order_ids($pdo, $p) {
+    global $OCQ_FROM;
+    list($whereSql, $params) = ocq_build_filter($p, ['bind']);
+    $st = $pdo->prepare("SELECT b.bom, COALESCE(b.o_order_id,'') AS o_order_id $OCQ_FROM $whereSql");
+    $st->execute($params);
+    $boms = $st->fetchAll(PDO::FETCH_ASSOC);
+    $ids = []; $bomOf = [];
+    foreach ($boms as $r) {
+        $oo = trim((string)$r['o_order_id']);
+        if ($oo !== '' && $oo !== 'B' && ctype_digit($oo)) { $ids[(int)$oo] = 1; $bomOf[(int)$oo][] = $r['bom']; }
+    }
+    if ($boms) {
+        foreach (array_chunk(array_column($boms, 'bom'), 500) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st2 = $pdo->prepare("SELECT bom, order_id FROM bom_order_process_map WHERE bom IN ($ph)");
+            $st2->execute($chunk);
+            foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $m) { $ids[(int)$m['order_id']] = 1; $bomOf[(int)$m['order_id']][] = $m['bom']; }
+        }
+    }
+    return [array_keys($ids), $bomOf];
+}
+
+/** 還沒綁報價單的那幾張訂單（從上面那份 id 清單篩）。 */
+function ocq_qb_orders($pdo, array $ids) {
+    if (!$ids) return [];
+    $out = [];
+    foreach (array_chunk($ids, 500) as $chunk) {
+        $ph = implode(',', array_fill(0, count($chunk), '?'));
+        $st = $pdo->prepare("SELECT ot.Order_id, COALESCE(ot.Order_oo,'') AS Order_oo, COALESCE(ot.Client_name,'') AS Client_name,
+                COALESCE(ot.d_id,'') AS part_no, ot.d_id_ID, ot.Qty,
+                DATE_FORMAT(ot.Order_date,'%Y-%m-%d') AS Order_date
+            FROM order_track ot
+            WHERE ot.Order_id IN ($ph) AND COALESCE(ot.quote_no,'') = '' AND ot.quote_item_id IS NULL
+              AND (ot.Order_status IS NULL OR ot.Order_status <> 9)
+            ORDER BY ot.Order_date DESC, ot.Order_id DESC");
+        $st->execute($chunk);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[] = $r;
+    }
+    return $out;
+}
+
+/**
+ * 判定這批訂單的報價單該怎麼綁。
+ * **候選一定要是「報價料號文字與訂單料號文字完全相同」的**——acc_recon_bind_quote() 就是這樣擋的，
+ * 只用料號主檔 id 找候選的話會挑得到、按下去卻被擋掉，而且看不出原因。
+ */
+function ocq_qb_classify($pdo, array $orders, $candLimit = 8) {
+    $texts = []; $dsids = [];
+    foreach ($orders as $o) {
+        $t = trim((string)$o['part_no']); if ($t !== '') $texts[mb_strtolower($t)] = $t;
+        $d = (int)$o['d_id_ID']; if ($d > 0) $dsids[$d] = 1;
+    }
+    $byText = [];
+    if ($texts) {
+        foreach (array_chunk(array_values($texts), 300) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st = $pdo->prepare("SELECT qi.item_id, qi.quote_id, TRIM(qi.product_id) AS product_id, qi.d_setting_d_id,
+                    qi.unit_price, qi.quantity, COALESCE(qi.specification,'') AS specification,
+                    ql.quote_no, DATE_FORMAT(ql.quote_date,'%Y-%m-%d') AS quote_date, COALESCE(ql.client_name,'') AS client_name
+                FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id = qi.quote_id
+                WHERE TRIM(qi.product_id) IN ($ph)
+                  AND COALESCE(ql.pending_review,0) = 0 AND COALESCE(ql.is_draft,0) = 0
+                ORDER BY ql.quote_date DESC, qi.item_id DESC");
+            $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $q) $byText[mb_strtolower($q['product_id'])][] = $q;
+        }
+    }
+    $out = [];
+    foreach ($orders as $o) {
+        $oid  = (int)$o['Order_id'];
+        $text = trim((string)$o['part_no']);
+        $list = $text === '' ? [] : ($byText[mb_strtolower($text)] ?? []);
+        if (!$list) {
+            $out[$oid] = ['level' => 'nomatch', 'candidates' => [], 'pick' => null,
+                'reason' => $text === '' ? '這張訂單沒有料號文字，找不到可比對的報價單'
+                                         : '報價單裡找不到料號「' . $text . '」（草稿與待審的報價單不列入）'];
+            continue;
+        }
+        if (count($list) === 1) {
+            $out[$oid] = ['level' => 'auto', 'candidates' => $list, 'pick' => $list[0],
+                'reason' => '這個料號只有一筆報價明細（' . $list[0]['quote_no'] . '）'];
+            continue;
+        }
+        // 多筆：照「報價日與訂單日最接近、且報價日不晚於訂單日者優先」排序後列出來讓人挑
+        $od = strtotime($o['Order_date'] ?: 'now');
+        usort($list, function ($a, $b) use ($od) {
+            $fa = ocq_qb_rank($a, $od); $fb = ocq_qb_rank($b, $od);
+            return $fa[0] <=> $fb[0] ?: $fa[1] <=> $fb[1];
+        });
+        $out[$oid] = ['level' => 'manual', 'candidates' => array_slice($list, 0, $candLimit), 'pick' => null,
+            'cand_total' => count($list),
+            'reason' => '這個料號有 ' . count($list) . ' 筆報價明細（不同報價單或不同版次），請挑一筆'];
+    }
+    return $out;
+}
+/** 排序鍵：先分「報價日不晚於訂單日」再比日期差，讓下單當時那份報價排最前面。 */
+function ocq_qb_rank($q, $orderTs) {
+    $qd = $q['quote_date'] ? strtotime($q['quote_date']) : 0;
+    if (!$qd || !$orderTs) return [2, PHP_INT_MAX];
+    return [$qd <= $orderTs ? 0 : 1, abs($orderTs - $qd)];
+}
+
+/** 寫一筆稽核紀錄（綁定是會影響下游對帳/毛利分析的異動，一定要留得下來是誰在什麼時候綁的）。 */
 
 /**
  * 把一筆料號主檔綁到 BOM 上（**唯一實作**：逐筆挑選、人工判定批次套用、快速建立料號三條路都走這支，
@@ -557,6 +819,73 @@ function ocq_bind_part_to_bom($pdo, $bom, $dsid, $uid, $label, $extraAudit = [])
         ], $extraAudit));
         return ['success' => true, 'd_setting_id' => $dsid, 'd_id' => $ds['display_id'],
             'client_name' => $ds['customer_name'] ?: $cur['Client_Name'], 'message' => '已綁定料號 ' . $ds['display_id']];
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+}
+
+/**
+ * 把訂單綁到 BOM 上（**唯一實作**：逐筆挑選跳窗、自動綁訂單、勾選批次套用共用同一支）。
+ * $list＝[['order_id'=>int,'qty'=>int], …]，回傳的陣列就是要回給前端的 JSON 內容。
+ */
+function ocq_bind_orders_to_bom($pdo, $bom, $list, $uid, $label) {
+    $bom = trim((string)$bom);
+    if ($bom === '' || !is_array($list) || !$list) return ['success' => false, 'message' => '請至少勾選一張訂單'];
+    if (count($list) > 20) return ['success' => false, 'message' => '一次最多綁定 20 張訂單'];
+    $pdo->beginTransaction();
+    try {
+        $st = $pdo->prepare("SELECT bom, d_id, d_setting_id, o_order_id, sqty FROM bom WHERE bom = ? FOR UPDATE");
+        $st->execute([$bom]);
+        $cur = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$cur) { $pdo->rollBack(); return ['success' => false, 'message' => '找不到這筆 BOM，請重新整理清單']; }
+        if (empty($cur['d_setting_id'])) {
+            $pdo->rollBack();
+            return ['success' => false, 'message' => '這筆 BOM 還沒有綁定料號，請先綁定料號才能挑訂單（候選訂單是依料號找出來的）'];
+        }
+        // 已綁定就不再覆蓋——**這點很重要**：舊資料常常只在 bom.o_order_id 留一個訂單、
+        // bom_order_process_map 一列都沒有，若直接寫 map 再同步，那張舊訂單會安靜地消失。
+        $mc = $pdo->prepare("SELECT COUNT(*) FROM bom_order_process_map WHERE bom = ?");
+        $mc->execute([$bom]);
+        $oldOid = trim((string)$cur['o_order_id']);
+        if ((int)$mc->fetchColumn() > 0 || ($oldOid !== '' && $oldOid !== 'B')) {
+            $pdo->rollBack();
+            return ['success' => false, 'code' => 'CONFLICT',
+                'message' => '這筆 BOM 已經綁定訂單（可能是其他人剛綁的），為避免蓋掉既有綁定已停止本次操作，請重新整理清單確認；要改綁請到 BOM 總表的更新表單處理。'];
+        }
+
+        // 逐張驗證：訂單要存在、沒作廢、而且**必須屬於這筆 BOM 綁定的料號**。
+        // 前端的候選清單本來就只列同料號的，這裡是防止直接打 API 把 BOM 綁到別的料號／別家客戶
+        // 的訂單上（鐵律8）。
+        $ins = $pdo->prepare("INSERT INTO bom_order_process_map (bom, order_id, allocated_qty, created_at) VALUES (?,?,?,NOW())");
+        $chk = $pdo->prepare("SELECT Order_id, Order_oo, d_id_ID, Order_status FROM order_track WHERE Order_id = ? LIMIT 1");
+        $applied = []; $seen = [];
+        foreach ($list as $o) {
+            $oid = intval($o['order_id'] ?? 0);
+            $qty = max(0, intval($o['qty'] ?? 0));
+            if ($oid <= 0 || isset($seen[$oid])) continue;
+            $seen[$oid] = 1;
+            $chk->execute([$oid]);
+            $ot = $chk->fetch(PDO::FETCH_ASSOC);
+            if (!$ot) { $pdo->rollBack(); return ['success' => false, 'message' => '找不到訂單（id=' . $oid . '）']; }
+            if ((string)$ot['Order_status'] === '9') { $pdo->rollBack(); return ['success' => false, 'message' => '訂單 ' . $ot['Order_oo'] . ' 已作廢，不可綁定']; }
+            if ((int)$ot['d_id_ID'] !== (int)$cur['d_setting_id']) {
+                $pdo->rollBack();
+                return ['success' => false, 'message' => '訂單 ' . $ot['Order_oo'] . ' 不屬於這筆 BOM 的料號，已擋下'];
+            }
+            $ins->execute([$bom, $oid, $qty]);
+            $applied[] = ['order_id' => $oid, 'order_oo' => $ot['Order_oo'], 'qty' => $qty];
+        }
+        if (!$applied) { $pdo->rollBack(); return ['success' => false, 'message' => '沒有有效的訂單可綁定']; }
+        // bom.o_order_id 只是「主要訂單」的相容欄位，取第一張（與 BOM總表 update_bom_info 同義）
+        $pdo->prepare("UPDATE bom SET o_order_id=?, Modified_By=?, Modified_At=NOW() WHERE bom=?")
+            ->execute([(string)$applied[0]['order_id'], $uid, $bom]);
+        $pdo->commit();
+        ocq_bind_audit($pdo, $uid, $bom, $label, [
+            'before' => ['o_order_id' => $cur['o_order_id'], 'map' => []],
+            'after'  => ['o_order_id' => $applied[0]['order_id'], 'map' => $applied],
+        ]);
+        return ['success' => true, 'orders' => $applied, 'message' => '已綁定 ' . count($applied) . ' 張訂單'];
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         throw $e;
@@ -636,18 +965,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // 兩個真正寫入的動作另外驗 CSRF；兩個唯讀的（搜料號、查狀態）只驗權限，才不會因為 token
     // 過期就連查都查不了。
     $ocq_bind_actions = ['bind_search_part', 'bind_get_state', 'bind_apply_part', 'bind_apply_order',
-        'autobind_scan', 'autobind_list', 'autobind_apply', 'bind_customers', 'bind_create_part'];
+        'autobind_scan', 'autobind_list', 'autobind_apply', 'bind_customers', 'bind_create_part',
+        'autobind_order_scan', 'autobind_order_list', 'autobind_order_apply',
+        'autobind_quote_scan', 'autobind_quote_list', 'autobind_quote_apply'];
     $ocq_part_actions = ['bind_search_part', 'bind_apply_part', 'autobind_scan', 'autobind_list', 'autobind_apply',
         'bind_customers', 'bind_create_part'];
     if (in_array($action, $ocq_bind_actions, true)) {
         $ok = in_array($action, $ocq_part_actions, true) ? $ocq_can_bind_part
-            : (($action === 'bind_apply_order') ? $ocq_can_bind_order : ($ocq_can_bind_part || $ocq_can_bind_order));
+            : (in_array($action, ['bind_apply_order', 'autobind_order_scan', 'autobind_order_list', 'autobind_order_apply',
+                                  'autobind_quote_scan', 'autobind_quote_list', 'autobind_quote_apply'], true)
+                ? $ocq_can_bind_order : ($ocq_can_bind_part || $ocq_can_bind_order));
         if (!$ok) {
             echo json_encode(['success' => false, 'message' => '無綁定權限：此功能需要「BOM 總表」的修改權限，請聯絡管理員設定']);
             exit;
         }
-        if ($action === 'bind_apply_part' || $action === 'bind_apply_order' || $action === 'autobind_apply'
-            || $action === 'bind_create_part') {
+        if (in_array($action, ['bind_apply_part', 'bind_apply_order', 'autobind_apply', 'bind_create_part',
+                               'autobind_order_apply', 'autobind_quote_apply'], true)) {
             if (!hash_equals((string)($_SESSION['ocq_csrf'] ?? ''), (string)($_POST['csrf'] ?? ''))) {
                 echo json_encode(['success' => false, 'code' => 'CSRF', 'message' => '連線憑證失效，請重新整理頁面後再試 (CSRF)']);
                 exit;
@@ -806,71 +1139,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode($res);
 
         } elseif ($action === 'bind_apply_order') {
-            $bom = trim($_POST['bom'] ?? '');
-            $list = json_decode($_POST['orders_json'] ?? '[]', true);
-            if ($bom === '' || !is_array($list) || !$list) { echo json_encode(['success' => false, 'message' => '請至少勾選一張訂單']); exit; }
-            if (count($list) > 20) { echo json_encode(['success' => false, 'message' => '一次最多綁定 20 張訂單']); exit; }
-            $pdo->beginTransaction();
-            try {
-                $st = $pdo->prepare("SELECT bom, d_id, d_setting_id, o_order_id, sqty FROM bom WHERE bom = ? FOR UPDATE");
-                $st->execute([$bom]);
-                $cur = $st->fetch(PDO::FETCH_ASSOC);
-                if (!$cur) { $pdo->rollBack(); echo json_encode(['success' => false, 'message' => '找不到這筆 BOM，請重新整理清單']); exit; }
-                if (empty($cur['d_setting_id'])) {
-                    $pdo->rollBack();
-                    echo json_encode(['success' => false, 'message' => '這筆 BOM 還沒有綁定料號，請先綁定料號才能挑訂單（候選訂單是依料號找出來的）']);
-                    exit;
-                }
-                // 已綁定就不再覆蓋——**這點很重要**：舊資料常常只在 bom.o_order_id 留一個訂單、
-                // bom_order_process_map 一列都沒有，若直接寫 map 再同步，那張舊訂單會安靜地消失。
-                $mc = $pdo->prepare("SELECT COUNT(*) FROM bom_order_process_map WHERE bom = ?");
-                $mc->execute([$bom]);
-                $oldOid = trim((string)$cur['o_order_id']);
-                if ((int)$mc->fetchColumn() > 0 || ($oldOid !== '' && $oldOid !== 'B')) {
-                    $pdo->rollBack();
-                    echo json_encode(['success' => false, 'code' => 'CONFLICT',
-                        'message' => '這筆 BOM 已經綁定訂單（可能是其他人剛綁的），為避免蓋掉既有綁定已停止本次操作，請重新整理清單確認；要改綁請到 BOM 總表的更新表單處理。']);
-                    exit;
-                }
-
-                // 逐張驗證：訂單要存在、沒作廢、而且**必須屬於這筆 BOM 綁定的料號**。
-                // 前端的候選清單本來就只列同料號的，這裡是防止直接打 API 把 BOM 綁到別的料號／別家客戶
-                // 的訂單上（鐵律8）。
-                $ins = $pdo->prepare("INSERT INTO bom_order_process_map (bom, order_id, allocated_qty, created_at) VALUES (?,?,?,NOW())");
-                $chk = $pdo->prepare("SELECT Order_id, Order_oo, d_id_ID, Order_status FROM order_track WHERE Order_id = ? LIMIT 1");
-                $applied = []; $seen = [];
-                foreach ($list as $o) {
-                    $oid = intval($o['order_id'] ?? 0);
-                    $qty = max(0, intval($o['qty'] ?? 0));
-                    if ($oid <= 0 || isset($seen[$oid])) continue;
-                    $seen[$oid] = 1;
-                    $chk->execute([$oid]);
-                    $ot = $chk->fetch(PDO::FETCH_ASSOC);
-                    if (!$ot) { $pdo->rollBack(); echo json_encode(['success' => false, 'message' => '找不到訂單（id=' . $oid . '）']); exit; }
-                    if ((string)$ot['Order_status'] === '9') { $pdo->rollBack(); echo json_encode(['success' => false, 'message' => '訂單 ' . $ot['Order_oo'] . ' 已作廢，不可綁定']); exit; }
-                    if ((int)$ot['d_id_ID'] !== (int)$cur['d_setting_id']) {
-                        $pdo->rollBack();
-                        echo json_encode(['success' => false, 'message' => '訂單 ' . $ot['Order_oo'] . ' 不屬於這筆 BOM 的料號，已擋下']);
-                        exit;
-                    }
-                    $ins->execute([$bom, $oid, $qty]);
-                    $applied[] = ['order_id' => $oid, 'order_oo' => $ot['Order_oo'], 'qty' => $qty];
-                }
-                if (!$applied) { $pdo->rollBack(); echo json_encode(['success' => false, 'message' => '沒有有效的訂單可綁定']); exit; }
-                // bom.o_order_id 只是「主要訂單」的相容欄位，取第一張（與 BOM總表 update_bom_info 同義）
-                $pdo->prepare("UPDATE bom SET o_order_id=?, Modified_By=?, Modified_At=NOW() WHERE bom=?")
-                    ->execute([(string)$applied[0]['order_id'], $id, $bom]);
-                $pdo->commit();
-                ocq_bind_audit($pdo, $id, $bom, '快速綁定訂單（已完工BOM查詢）', [
-                    'before' => ['o_order_id' => $cur['o_order_id'], 'map' => []],
-                    'after'  => ['o_order_id' => $applied[0]['order_id'], 'map' => $applied],
-                ]);
-                echo json_encode(['success' => true, 'orders' => $applied,
-                    'message' => '已綁定 ' . count($applied) . ' 張訂單']);
-            } catch (Exception $e) {
-                if ($pdo->inTransaction()) $pdo->rollBack();
-                throw $e;
-            }
+            echo json_encode(ocq_bind_orders_to_bom($pdo, $_POST['bom'] ?? '',
+                json_decode($_POST['orders_json'] ?? '[]', true), $id, '快速綁定訂單（已完工BOM查詢）'));
 
         } elseif ($action === 'autobind_scan') {
             // 試算：只看不寫。把目前篩選範圍內「還沒綁料號」的 BOM 全部判定一次，回統計與樣本。
@@ -992,6 +1262,161 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     if ($pdo->inTransaction()) $pdo->rollBack();
                     $skipped[] = ['bom' => $bom, 'why' => '寫入失敗：' . $e->getMessage()];
                 }
+            }
+            echo json_encode(['success' => true, 'done' => $done, 'skipped' => $skipped]);
+
+        } elseif ($action === 'autobind_order_scan') {
+            // 試算：只看不寫。範圍＝篩選條件內「已綁料號、還沒綁訂單」的 BOM。
+            list($whereSql, $params) = ocq_ob_where($_POST);
+            $st = $pdo->prepare("SELECT b.bom, b.d_id, b.d_setting_id, b.sqty, b.Client_Name,
+                    DATE_FORMAT($OCQ_EFFDATE,'%Y-%m-%d') AS eff_date $OCQ_FROM $whereSql
+                ORDER BY $OCQ_EFFDATE DESC, b.bom DESC");
+            $st->execute($params);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            $cls  = ocq_ob_classify($pdo, $rows);
+            $cnt = ['auto' => 0, 'manual' => 0, 'nomatch' => 0];
+            $auto = []; $sample = [];
+            foreach ($rows as $r) {
+                $c = $cls[$r['bom']] ?? null;
+                if (!$c) continue;
+                $cnt[$c['level']]++;
+                if ($c['level'] === 'auto') {
+                    $auto[] = ['bom' => $r['bom'], 'order_id' => (int)$c['pick']['Order_id'], 'qty' => (int)$c['pick']['qty_default']];
+                    if (count($sample) < 20) {
+                        $sample[] = ['bom' => $r['bom'], 'part_no' => $r['d_id'], 'bom_qty' => $r['sqty'],
+                            'order_oo' => $c['pick']['Order_oo'], 'order_date' => $c['pick']['Order_date'],
+                            'order_qty' => $c['pick']['Qty'], 'used' => $c['pick']['already_allocated'],
+                            'qty' => $c['pick']['qty_default'], 'reason' => $c['reason']];
+                    }
+                }
+            }
+            echo json_encode(['success' => true, 'total' => count($rows), 'count' => $cnt,
+                'auto_rows' => $auto, 'sample' => $sample]);
+
+        } elseif ($action === 'autobind_order_list') {
+            list($whereSql, $params) = ocq_ob_where($_POST);
+            $kind = in_array($_POST['kind'] ?? '', ['manual', 'nomatch'], true) ? $_POST['kind'] : 'manual';
+            $page = max(1, intval($_POST['page'] ?? 1));
+            $per  = 20;
+            $st = $pdo->prepare("SELECT b.bom, b.d_id, b.d_setting_id, b.sqty, b.Client_Name,
+                    DATE_FORMAT($OCQ_EFFDATE,'%Y-%m-%d') AS eff_date $OCQ_FROM $whereSql
+                ORDER BY $OCQ_EFFDATE DESC, b.bom DESC");
+            $st->execute($params);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            $cls  = ocq_ob_classify($pdo, $rows);          // 先只判等級（不撈候選）
+            $hit  = [];
+            foreach ($rows as $r) {
+                $lv = $cls[$r['bom']]['level'] ?? '';
+                if ($lv === $kind) $hit[] = $r;
+            }
+            $total = count($hit);
+            $pageRows = array_slice($hit, ($page - 1) * $per, $per);
+            $cls2 = ocq_ob_classify($pdo, $pageRows, true);  // 這一頁的才撈候選訂單
+            $out = [];
+            foreach ($pageRows as $r) {
+                $c = $cls2[$r['bom']] ?? [];
+                $out[] = ['bom' => $r['bom'], 'part_no' => (string)$r['d_id'], 'bom_qty' => $r['sqty'],
+                    'bom_client' => trim((string)$r['Client_Name']), 'eff_date' => $r['eff_date'],
+                    'reason' => $c['reason'] ?? '', 'cand_total' => $c['cand_total'] ?? count($c['candidates'] ?? []),
+                    'candidates' => array_map(function ($o) {
+                        return ['order_id' => (int)$o['Order_id'], 'order_oo' => $o['Order_oo'],
+                            'order_date' => $o['Order_date'], 'delivery_date' => $o['Delivery_date'],
+                            'qty' => (int)$o['Qty'], 'used' => (int)$o['already_allocated'],
+                            'qty_default' => (int)$o['qty_default'],
+                            'spec' => trim($o['Specification'] . ($o['Order_ps'] !== '' ? '／' . $o['Order_ps'] : ''))];
+                    }, $c['candidates'] ?? [])];
+            }
+            echo json_encode(['success' => true, 'total' => $total, 'page' => $page, 'per' => $per, 'rows' => $out]);
+
+        } elseif ($action === 'autobind_order_apply') {
+            // 前端分批送 [{bom, order_id, qty}]；每一筆都在交易裡重新驗一次（點開即刷新）
+            $list = json_decode($_POST['rows_json'] ?? '[]', true);
+            if (!is_array($list) || !$list) { echo json_encode(['success' => false, 'message' => '沒有要處理的資料']); exit; }
+            if (count($list) > 200) { echo json_encode(['success' => false, 'message' => '一批最多 200 筆']); exit; }
+            $done = 0; $skipped = [];
+            foreach ($list as $it) {
+                $bom = trim((string)($it['bom'] ?? ''));
+                $oid = intval($it['order_id'] ?? 0);
+                $qty = max(0, intval($it['qty'] ?? 0));
+                if ($bom === '' || $oid <= 0) { $skipped[] = ['bom' => $bom, 'why' => '缺少訂單']; continue; }
+                try {
+                    $r = ocq_bind_orders_to_bom($pdo, $bom, [['order_id' => $oid, 'qty' => $qty]], $id, '自動綁定訂單（已完工BOM查詢）');
+                } catch (Exception $e) { $r = ['success' => false, 'message' => '寫入失敗：' . $e->getMessage()]; }
+                if (!empty($r['success'])) $done++;
+                else $skipped[] = ['bom' => $bom, 'why' => $r['message'] ?? '綁定失敗'];
+            }
+            echo json_encode(['success' => true, 'done' => $done, 'skipped' => $skipped]);
+
+        } elseif ($action === 'autobind_quote_scan') {
+            list($ids, ) = ocq_qb_order_ids($pdo, $_POST);
+            $orders = ocq_qb_orders($pdo, $ids);
+            $cls = ocq_qb_classify($pdo, $orders);
+            $cnt = ['auto' => 0, 'manual' => 0, 'nomatch' => 0];
+            $auto = []; $sample = [];
+            foreach ($orders as $o) {
+                $c = $cls[(int)$o['Order_id']] ?? null;
+                if (!$c) continue;
+                $cnt[$c['level']]++;
+                if ($c['level'] === 'auto') {
+                    $auto[] = ['order_id' => (int)$o['Order_id'], 'item_id' => (int)$c['pick']['item_id']];
+                    if (count($sample) < 20) {
+                        $sample[] = ['order_oo' => $o['Order_oo'], 'client' => $o['Client_name'], 'part_no' => $o['part_no'],
+                            'order_date' => $o['Order_date'], 'quote_no' => $c['pick']['quote_no'],
+                            'quote_date' => $c['pick']['quote_date'], 'price' => $c['pick']['unit_price'], 'reason' => $c['reason']];
+                    }
+                }
+            }
+            echo json_encode(['success' => true, 'total' => count($orders), 'count' => $cnt,
+                'auto_rows' => $auto, 'sample' => $sample]);
+
+        } elseif ($action === 'autobind_quote_list') {
+            $kind = in_array($_POST['kind'] ?? '', ['manual', 'nomatch'], true) ? $_POST['kind'] : 'manual';
+            $page = max(1, intval($_POST['page'] ?? 1));
+            $per  = 20;
+            list($ids, ) = ocq_qb_order_ids($pdo, $_POST);
+            $orders = ocq_qb_orders($pdo, $ids);
+            $cls = ocq_qb_classify($pdo, $orders);
+            $hit = [];
+            foreach ($orders as $o) {
+                $c = $cls[(int)$o['Order_id']] ?? null;
+                if (!$c || $c['level'] !== $kind) continue;
+                $hit[] = ['order_id' => (int)$o['Order_id'], 'order_oo' => $o['Order_oo'], 'client' => $o['Client_name'],
+                    'part_no' => $o['part_no'], 'order_date' => $o['Order_date'], 'order_qty' => (int)$o['Qty'],
+                    'reason' => $c['reason'], 'cand_total' => $c['cand_total'] ?? count($c['candidates']),
+                    'candidates' => array_map(function ($q) {
+                        return ['item_id' => (int)$q['item_id'], 'quote_no' => $q['quote_no'], 'quote_date' => $q['quote_date'],
+                            'price' => $q['unit_price'], 'qty' => $q['quantity'], 'client' => $q['client_name'],
+                            'spec' => mb_substr((string)$q['specification'], 0, 40)];
+                    }, $c['candidates'])];
+            }
+            echo json_encode(['success' => true, 'total' => count($hit), 'page' => $page, 'per' => $per,
+                'rows' => array_slice($hit, ($page - 1) * $per, $per)]);
+
+        } elseif ($action === 'autobind_quote_apply') {
+            // 寫入一律走會計模組既有的 acc_recon_bind_quote()（唯一實作，含料號文字比對與稽核）
+            require_once __DIR__ . '/../../src/common/acc_lib.php';
+            $list = json_decode($_POST['rows_json'] ?? '[]', true);
+            if (!is_array($list) || !$list) { echo json_encode(['success' => false, 'message' => '沒有要處理的資料']); exit; }
+            if (count($list) > 200) { echo json_encode(['success' => false, 'message' => '一批最多 200 筆']); exit; }
+            $me = ['user_id' => $id, 'id' => $id];
+            $done = 0; $skipped = [];
+            foreach ($list as $it) {
+                $oid = intval($it['order_id'] ?? 0);
+                $iid = intval($it['item_id'] ?? 0);
+                if ($oid <= 0 || $iid <= 0) { $skipped[] = ['order_id' => $oid, 'why' => '缺少報價明細']; continue; }
+                // 已經有人綁走的一律不覆蓋（點開即刷新鐵則；acc_recon_bind_quote 本身不檢查這件事）
+                $chk = $pdo->prepare("SELECT COALESCE(quote_no,'') qn, quote_item_id FROM order_track WHERE Order_id = ? LIMIT 1");
+                $chk->execute([$oid]);
+                $cur = $chk->fetch(PDO::FETCH_ASSOC);
+                if (!$cur) { $skipped[] = ['order_id' => $oid, 'why' => '找不到這張訂單']; continue; }
+                if ($cur['qn'] !== '' || $cur['quote_item_id'] !== null) {
+                    $skipped[] = ['order_id' => $oid, 'why' => '已經綁了報價單 ' . $cur['qn'] . '（可能是其他人剛綁的）'];
+                    continue;
+                }
+                try { $r = acc_recon_bind_quote($pdo, $oid, $iid, $me); }
+                catch (Throwable $e) { $r = ['success' => false, 'message' => '寫入失敗：' . $e->getMessage()]; }
+                if (!empty($r['success'])) $done++;
+                else $skipped[] = ['order_id' => $oid, 'why' => $r['message'] ?? '綁定失敗'];
             }
             echo json_encode(['success' => true, 'done' => $done, 'skipped' => $skipped]);
 
@@ -1289,7 +1714,9 @@ try {
         /* ── 快速綁定（料號／訂單）──────────────────────────────────────────────
            徽章／小按鈕一律自己寫死 line-height：表格列的 line-height 是繼承來的 28px，
            字級再小也會佔掉整列的行高，一個 11px 的字就能把整列撐高（2026-09-03 急件徽章的教訓）。 */
-        .ocq-bind-td { white-space: nowrap; }
+        /* 綁定欄一律靠左（使用者回報：置中時「料號／訂單」兩行各自置中，看起來像散開的兩段） */
+        .ocq-bind-td { white-space: nowrap; text-align: left !important; }
+        .ocq-bind-td > div { text-align: left; }
         .ocq-bind-btn { font-size: 11px; line-height: 16px; padding: 1px 6px; margin: 1px 0; cursor: pointer;
             border: 1px solid #D8BE93; border-radius: 3px; background: #fff; color: #8A5A2B; }
         .ocq-bind-btn:hover { background: #F7E0BD; }
@@ -1331,6 +1758,11 @@ try {
         .ocq-ab-card.is-manual .n { color: #C77A22; }
         .ocq-ab-card.is-none { border-color: #E3C4BC; background: #FDF5F3; }
         .ocq-ab-card.is-none .n { color: #B4543B; }
+        /* 三個階段（料號→訂單→報價單）的切換列 */
+        .ocq-ab-stages { display: flex; gap: 6px; margin-bottom: 10px; }
+        .ocq-ab-stage { height: 30px; padding: 0 16px; font-size: 13px; font-weight: bold; border-radius: 5px;
+            border: 1px solid #D8BE93; background: #fff; color: #8A5A2B; cursor: pointer; }
+        .ocq-ab-stage.active { background: #8A5A2B; border-color: #6d4520; color: #fff; }
         .ocq-ab-tabs { display: flex; gap: 4px; border-bottom: 1px solid #EADFC8; margin-bottom: 8px; }
         .ocq-ab-tab { height: 28px; padding: 0 14px; font-size: 12.5px; border: 1px solid #D8BE93;
             border-bottom: none; border-radius: 5px 5px 0 0; background: #fff; color: #5b3a1e; cursor: pointer; }
@@ -1427,10 +1859,20 @@ try {
                     <option value="U">急件U</option>
                     <option value="E">特急件E</option>
                 </select>
+                <?php if ($ocq_can_bind_part || $ocq_can_bind_order): ?>
+                <label style="white-space:nowrap;">綁定狀態</label>
+                <select id="fBind" title="把「還沒綁好的」直接篩出來；篩完可直接按右邊的「自動綁定」整批處理">
+                    <option value="">（全部）</option>
+                    <option value="no_part">未綁料號</option>
+                    <option value="no_order">未綁訂單（已綁料號）</option>
+                    <option value="no_quote">未綁報價單（已綁訂單）</option>
+                    <option value="all_done">料號·訂單·報價單都綁好</option>
+                </select>
+                <?php endif; ?>
                 <button class="btn-warm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
                 <button id="btnClear" title="清掉所有篩選條件，日期回到預設的近1年（要查全部歷史請按上方年份列的「全部年份」）"><i class="fa fa-eraser"></i> 清除篩選</button>
-                <?php if ($ocq_can_bind_part): ?>
-                <button id="btnAutoBind" style="margin-left:auto;" title="把目前篩選範圍內「還沒綁料號主檔」的 BOM 拿去跟料號主檔比對，指得出唯一一筆的可以整批自動綁，指不出來的列出來讓你逐筆判定"><i class="fa fa-magic"></i> 自動綁定料號</button>
+                <?php if ($ocq_can_bind_part || $ocq_can_bind_order): ?>
+                <button id="btnAutoBind" style="margin-left:auto;" title="把目前篩選範圍內還沒綁好的 BOM 一次處理：①綁料號 ②綁訂單 ③綁報價單，指得出唯一一筆的可以整批自動綁，指不出來的列出來讓你逐筆判定"><i class="fa fa-magic"></i> 自動綁定</button>
                 <button id="btnPrint"><i class="fa fa-print"></i> 列印</button>
                 <?php else: ?>
                 <button id="btnPrint" style="margin-left:auto;"><i class="fa fa-print"></i> 列印</button>
@@ -1513,10 +1955,21 @@ try {
         <div class="tip"><b>已經綁過的一律不覆蓋</b>：按下按鈕的當下會先跟後端要一次最新狀態，若這筆已經被別人綁走，會直接擋下、把該列更新成最新狀態並提示你，不會蓋掉別人剛做好的資料。<b>要改綁或解除綁定請到「BOM 總表」的更新表單處理</b>，本頁只做「從未綁定 → 綁定」這一步。</div>
         <div class="tip"><b>備庫（bom.o_order_id = B）不算未綁定</b>：那種 BOM 本來就沒有對應訂單，畫面顯示「備庫」並且不提供綁訂單按鈕，與 BOM 總表的處理一致。</div>
         <?php endif; ?>
-        <?php if ($ocq_can_bind_part): ?>
-        <h4>自動綁定料號（需權限）</h4>
+        <?php if ($ocq_can_bind_part || $ocq_can_bind_order): ?>
+        <h4>綁定狀態篩選</h4>
+        <div class="tip">篩選列的<b>「綁定狀態」</b>可以把還沒綁好的直接篩出來：<b>未綁料號</b>／<b>未綁訂單</b>（已綁料號的才算）／<b>未綁報價單</b>（已綁訂單、但那張訂單上沒有報價單號）／<b>都綁好了</b>。篩完可以直接按右邊的「自動綁定」整批處理，<b>列印／匯出CSV／統整報表也吃同一個條件</b>。備庫（o_order_id=B）不會被算成「未綁訂單」。</div>
+        <h4>自動綁定（需權限）</h4>
+        <div class="tip">工具列的<b>「自動綁定」</b>是一條鏈，跳窗上方分成三個階段：<b>①綁料號 →②綁訂單 →③綁報價單</b>（料號綁好才挑得到訂單、訂單綁好才挑得到報價單）。<b>每個階段各自掃描、範圍也各自不同</b>，所以綁完一階切到下一階會重新比對一次；三個階段都吃<b>目前的篩選條件</b>（含日期區間），要處理全部歷史資料請先按年份列的「全部年份」。</div>
         <ul>
-            <li>工具列的<b>「自動綁定料號」</b>會把<b>目前篩選範圍</b>（含日期區間）內「還沒綁料號主檔」的已完工 BOM，拿料號文字去跟料號主檔比對，分成三張分頁：<b>可自動綁定</b>（指得出唯一一筆）／<b>需人工判定</b>（同名主檔多筆、或客戶對不上）／<b>主檔查無</b>。要處理全部歷史資料，請先按年份列的「全部年份」再開這個視窗。</li>
+            <li><b>②綁訂單</b>：候選＝<b>同一筆料號主檔底下、未作廢的訂單</b>。這個料號底下<b>只有一張訂單時才自動綁</b>；有好幾張時列出來讓你挑（依「訂單日與這筆 BOM 的日期最接近」排序），<b>分配量可以逐張改</b>，預設帶入「BOM 發單量」與「該訂單未被分配量」中較小者。</li>
+            <li><b>③綁報價單</b>：報價單是綁在<b>訂單</b>上的（不是 BOM），所以這一階處理的是「範圍內的 BOM 綁到的訂單裡還沒綁報價單的」。候選＝<b>報價明細的料號與訂單料號完全相同</b>的報價單（草稿與待審核的不列入）；只有一筆時自動綁，多筆時依「<b>報價日不晚於訂單日、且日期最接近</b>」排序，第一筆會標「建議：下單當時的報價」。</li>
+            <li>兩個階段都可以<b>逐筆按「套用」，也可以勾選起來一次全部套用</b>；挑好候選會自動幫你勾起該列。已經被別人綁走的一律擋下、不覆蓋。</li>
+        </ul>
+        <?php endif; ?>
+        <?php if ($ocq_can_bind_part): ?>
+        <h4>①綁料號的三張分頁</h4>
+        <ul>
+            <li>拿 BOM 上的料號文字去跟料號主檔比對，分成：<b>可自動綁定</b>（指得出唯一一筆）／<b>需人工判定</b>（同名主檔多筆、或客戶對不上）／<b>主檔查無</b>。</li>
             <li><b>可自動綁定</b>：按「開始自動綁定」整批寫入，分批送、有進度條；每一筆在寫入的當下會重新判定一次，已經被別人綁走的自動略過。</li>
             <li><b>需人工判定</b>：逐筆挑一個候選料號後，可以<b>直接按該列的「套用」，也可以勾選起來一次全部套用</b>——挑好候選會自動幫你勾起該列，上方工具列按「套用勾選的」即整批綁定。<b>勾了卻沒挑候選的不會替你猜</b>，會在該列寫明原因略過。</li>
             <li><b>候選的客戶都對不上</b>（例如主檔只有一筆、但那筆綁的是別家客戶）時，請改按該列的<b>「建立新料號」</b>：以這張 BOM 的料號文字建一筆新的料號主檔並立刻綁定。</li>
@@ -1561,13 +2014,25 @@ try {
 </div>
 <?php endif; ?>
 
-<?php if ($ocq_can_bind_part): ?>
+<?php if ($ocq_can_bind_part || $ocq_can_bind_order): ?>
 <!-- 自動綁定料號：先試算（不寫入）→ 可自動綁的整批執行；指不出唯一料號的逐筆人工判定 -->
 <div class="ocq-mask" id="ocqAbMask" style="display:none;position:fixed;inset:0;background:rgba(60,40,20,.45);z-index:1060;">
     <div class="ocq-ab-box">
-        <div class="ocq-bind-hd"><span><i class="fa fa-magic"></i> 自動綁定料號</span>
+        <div class="ocq-bind-hd"><span><i class="fa fa-magic"></i> 自動綁定</span>
             <span style="cursor:pointer;color:#b5762a;" id="ocqAbClose">✕</span></div>
         <div class="ocq-bind-bd" id="ocqAbBody" style="max-height:70vh;">
+            <!-- 三個階段是一條鏈：料號綁好才挑得到訂單，訂單綁好才挑得到報價單 -->
+            <div class="ocq-ab-stages">
+                <?php if ($ocq_can_bind_part): ?>
+                <button type="button" class="ocq-ab-stage active" data-stage="part">① 綁料號</button>
+                <?php endif; ?>
+                <?php if ($ocq_can_bind_order): ?>
+                <button type="button" class="ocq-ab-stage<?= $ocq_can_bind_part ? '' : ' active' ?>" data-stage="order">② 綁訂單</button>
+                <button type="button" class="ocq-ab-stage" data-stage="quote">③ 綁報價單</button>
+                <?php endif; ?>
+            </div>
+            <?php if ($ocq_can_bind_part): ?>
+            <div id="ocqStagePart">
             <div class="ocq-bind-meta">
                 判定方式：拿 BOM 上的<b>料號文字</b>去料號主檔比對，<b>指得出唯一一筆才會自動綁</b>；
                 同一個料號文字在主檔常有好幾筆、分屬不同客戶，這種一律留給你逐筆判定，系統不會替你猜。
@@ -1591,14 +2056,83 @@ try {
                     <button type="button" class="ocq-ab-tab" data-tab="nomatch">主檔查無</button>
                 </div>
                 <div class="ocq-ab-pane" id="ocqAbPaneAuto"></div>
-                <div class="ocq-ab-pane" id="ocqAbPaneManual" style="display:none;"></div>
-                <div class="ocq-ab-pane" id="ocqAbPaneNomatch" style="display:none;"></div>
+                <div class="ocq-ab-pane" id="ocqAbPaneManual" data-card="#ocqAbNManual" style="display:none;"></div>
+                <div class="ocq-ab-pane" id="ocqAbPaneNomatch" data-card="#ocqAbNNomatch" style="display:none;"></div>
             </div>
+            </div><!-- /#ocqStagePart -->
+            <?php endif; ?>
+
+            <?php if ($ocq_can_bind_order): ?>
+            <div id="ocqStageOrder"<?= $ocq_can_bind_part ? ' style="display:none;"' : '' ?>>
+                <div class="ocq-bind-meta">
+                    範圍＝目前篩選條件內<b>已經綁好料號、但還沒綁訂單</b>的已完工 BOM（備庫不算，它本來就沒有訂單）。
+                    候選訂單＝<b>同一筆料號主檔底下、未作廢的訂單</b>；<b>只有一張時才自動綁</b>，好幾張一律列出來讓你挑。
+                    <div style="margin-top:4px;">「分配量」＝這筆 BOM 算在該訂單頭上的數量，預設帶入「BOM 發單量」與「該訂單未被分配量」中較小者，挑的時候可以改。</div>
+                </div>
+                <div class="ocq-sx-scan" style="text-align:center;padding:18px 0;color:#a0521f;">
+                    <i class="fa fa-spinner fa-spin"></i> 正在比對訂單…
+                </div>
+                <div class="ocq-sx-result" style="display:none;">
+                    <div class="ocq-ab-cards">
+                        <div class="ocq-ab-card is-auto"><div class="n" id="ocqObNAuto">0</div><div class="t">可自動綁定</div>
+                            <div class="d">這個料號底下只有一張訂單</div></div>
+                        <div class="ocq-ab-card is-manual"><div class="n" id="ocqObNManual">0</div><div class="t">需人工判定</div>
+                            <div class="d">同料號有好幾張訂單</div></div>
+                        <div class="ocq-ab-card is-none"><div class="n" id="ocqObNNomatch">0</div><div class="t">查無訂單</div>
+                            <div class="d">這個料號底下沒有訂單</div></div>
+                    </div>
+                    <div class="ocq-ab-tabs">
+                        <button type="button" class="ocq-ab-tab active" data-stage="order" data-tab="auto">可自動綁定</button>
+                        <button type="button" class="ocq-ab-tab" data-stage="order" data-tab="manual">需人工判定</button>
+                        <button type="button" class="ocq-ab-tab" data-stage="order" data-tab="nomatch">查無訂單</button>
+                    </div>
+                    <div class="ocq-ab-pane" id="ocqObPaneAuto"></div>
+                    <div class="ocq-ab-pane" id="ocqObPaneManual" data-card="#ocqObNManual" style="display:none;"></div>
+                    <div class="ocq-ab-pane" id="ocqObPaneNomatch" data-card="#ocqObNNomatch" style="display:none;"></div>
+                </div>
+            </div>
+
+            <div id="ocqStageQuote" style="display:none;">
+                <div class="ocq-bind-meta">
+                    報價單是綁在<b>訂單</b>上的（不是綁在 BOM 上），所以這一頁處理的是
+                    「目前篩選範圍內的 BOM 所綁到的訂單裡，<b>還沒綁報價單</b>的那幾張」。
+                    <div style="margin-top:4px;">候選＝<b>報價明細的料號與訂單料號完全相同</b>的報價單（草稿與待審核的報價單不列入）；
+                        只有一筆時才自動綁，好幾筆時依「報價日不晚於訂單日、且日期最接近」排序讓你挑。</div>
+                </div>
+                <div class="ocq-sx-scan" style="text-align:center;padding:18px 0;color:#a0521f;">
+                    <i class="fa fa-spinner fa-spin"></i> 正在比對報價單…
+                </div>
+                <div class="ocq-sx-result" style="display:none;">
+                    <div class="ocq-ab-cards">
+                        <div class="ocq-ab-card is-auto"><div class="n" id="ocqQbNAuto">0</div><div class="t">可自動綁定</div>
+                            <div class="d">這個料號只有一筆報價明細</div></div>
+                        <div class="ocq-ab-card is-manual"><div class="n" id="ocqQbNManual">0</div><div class="t">需人工判定</div>
+                            <div class="d">同料號有好幾筆報價</div></div>
+                        <div class="ocq-ab-card is-none"><div class="n" id="ocqQbNNomatch">0</div><div class="t">查無報價</div>
+                            <div class="d">報價單裡沒有這個料號</div></div>
+                    </div>
+                    <div class="ocq-ab-tabs">
+                        <button type="button" class="ocq-ab-tab active" data-stage="quote" data-tab="auto">可自動綁定</button>
+                        <button type="button" class="ocq-ab-tab" data-stage="quote" data-tab="manual">需人工判定</button>
+                        <button type="button" class="ocq-ab-tab" data-stage="quote" data-tab="nomatch">查無報價</button>
+                    </div>
+                    <div class="ocq-ab-pane" id="ocqQbPaneAuto"></div>
+                    <div class="ocq-ab-pane" id="ocqQbPaneManual" data-card="#ocqQbNManual" style="display:none;"></div>
+                    <div class="ocq-ab-pane" id="ocqQbPaneNomatch" data-card="#ocqQbNNomatch" style="display:none;"></div>
+                </div>
+            </div>
+            <?php endif; ?>
         </div>
         <div class="ocq-bind-ft">
             <span id="ocqAbMsg" style="float:left;font-size:12.5px;color:#a0521f;line-height:30px;"></span>
             <button type="button" id="ocqAbCancel" style="height:30px;padding:0 14px;border-radius:4px;font-size:13px;border:1px solid #D8BE93;background:#fff;color:#5b3a1e;cursor:pointer;">關閉</button>
-            <button type="button" id="ocqAbRun" style="height:30px;padding:0 16px;margin-left:6px;border-radius:4px;font-size:13px;border:1px solid #d98a33;background:#F0A24B;color:#fff;cursor:pointer;">開始自動綁定</button>
+            <?php if ($ocq_can_bind_part): ?>
+            <button type="button" id="ocqAbRun" style="height:30px;padding:0 16px;margin-left:6px;border-radius:4px;font-size:13px;border:1px solid #d98a33;background:#F0A24B;color:#fff;cursor:pointer;">開始自動綁定料號</button>
+            <?php endif; ?>
+            <?php if ($ocq_can_bind_order): ?>
+            <button type="button" id="ocqObRun" style="display:none;height:30px;padding:0 16px;margin-left:6px;border-radius:4px;font-size:13px;border:1px solid #d98a33;background:#F0A24B;color:#fff;cursor:pointer;">開始自動綁定訂單</button>
+            <button type="button" id="ocqQbRun" style="display:none;height:30px;padding:0 16px;margin-left:6px;border-radius:4px;font-size:13px;border:1px solid #d98a33;background:#F0A24B;color:#fff;cursor:pointer;">開始自動綁定報價單</button>
+            <?php endif; ?>
         </div>
     </div>
 </div>
@@ -1733,6 +2267,7 @@ function curFilters(){
         customer: $.trim($('#fCustomer').val()),
         sales: $.trim($('#fSales').val()),
         priority: $('#fPriority').val(),
+        bind: $('#fBind').val() || '',
         bom: $.trim($('#fBom').val()),
         vendor: $.trim($('#fVendor').val()),
         qty: $.trim($('#fQty').val()),
@@ -1999,7 +2534,7 @@ function applyFilters(){ loadList(1); refreshFacets(); }
 $('#btnSearch').on('click', applyFilters);
 // 手打／用月曆改結案日期時，年份鈕要跟著重算該反白哪一顆（改成不是整年就顯示「（自訂區間）」）
 ['#fDateFrom','#fDateTo'].forEach(function(sel){ $(sel).on('change', renderYearBar); });
-['#fDateFrom','#fDateTo','#fPriority'].forEach(function(sel){ $(sel).on('change', applyFilters); });
+['#fDateFrom','#fDateTo','#fPriority','#fBind'].forEach(function(sel){ $(sel).on('change', applyFilters); });
 // 即時篩選（防抖200ms，跟主頁全域搜尋同款）；eg_input_rules.js的「有值雙擊清空」也會觸發input事件，
 // 因此雙擊清空篩選框內容時會自動連帶重新查詢，不需要另外處理。
 var _ocqDebounce = null;
@@ -2284,9 +2819,10 @@ $('#ocqTbody').on('click', '.ocq-bind-order', function(e){ e.stopPropagation(); 
 // ══ 自動綁定料號 ══════════════════════════════════════════════════════════════════
 // 流程：開窗＝先試算（只看不寫）→ 三張統計卡 →「開始自動綁定」分批寫入 →
 // 指不出唯一料號的在「需人工判定」分頁逐筆挑選（走既有的 bind_apply_part，規則與手動綁定同一套）。
-if (OCQ_BIND.part) {
+if (OCQ_BIND.part || OCQ_BIND.order) {
 var ocqAb = { scanned: false, autoBoms: [], sample: [], running: false, tab: 'auto',
               page: { manual: 1, nomatch: 1 } };
+var ocqStage = OCQ_BIND.part ? 'part' : 'order';   // 目前在哪一個階段（料號／訂單／報價單）
 
 function ocqAbMsg(html, isErr){
     $('#ocqAbMsg').html(isErr ? '<span class="ocq-bind-err">' + html + '</span>' : html);
@@ -2329,11 +2865,34 @@ function ocqAbScan(keepMsg){
 
 $('#btnAutoBind').on('click', function(){
     ocqAb = { scanned: false, autoBoms: [], sample: [], running: false, tab: 'auto', page: { manual: 1, nomatch: 1 } };
+    if (window.ocqOb) ocqOb.reset();
+    if (window.ocqQb) ocqQb.reset();
     $('#ocqAbMask').show();
     ocqAbMsg('');
-    ocqAbSwitchTab('auto');
-    ocqAbScan(false);
+    ocqStageGo(OCQ_BIND.part ? 'part' : 'order');
 });
+
+// 階段切換（①綁料號 ②綁訂單 ③綁報價單）。**每個階段各自掃描、各自的範圍**——
+// 料號階段看的是「還沒綁料號」的，訂單階段看的是「已綁料號、還沒綁訂單」的，
+// 所以綁完料號切到訂單階段一定要重新掃一次，不可以沿用上一次的結果。
+function ocqStageGo(stage){
+    ocqStage = stage;
+    $('.ocq-ab-stage').removeClass('active').filter('[data-stage="' + stage + '"]').addClass('active');
+    $('#ocqStagePart').toggle(stage === 'part');
+    $('#ocqStageOrder').toggle(stage === 'order');
+    $('#ocqStageQuote').toggle(stage === 'quote');
+    ocqAbMsg('');
+    $('#ocqAbRun, #ocqObRun, #ocqQbRun').hide();
+    if (stage === 'part') {
+        if (!ocqAb.scanned) { ocqAbSwitchTab('auto'); ocqAbScan(false); }
+        else { ocqAbSwitchTab(ocqAb.tab); }
+        return;
+    }
+    var S = (stage === 'order') ? window.ocqOb : window.ocqQb;
+    if (!S) return;
+    if (!S.scanned) S.scan(false); else S.switchTab(S.tab);
+}
+$('.ocq-ab-stage').on('click', function(){ ocqStageGo($(this).data('stage')); });
 
 function ocqAbSwitchTab(tab){
     ocqAb.tab = tab;
@@ -2345,6 +2904,7 @@ function ocqAbSwitchTab(tab){
     $('#ocqAbRun').toggle(tab === 'auto');
 }
 $('.ocq-ab-tab').on('click', function(){
+    if (($(this).data('stage') || 'part') !== 'part') return;   // 訂單／報價單階段的分頁各自有處理
     var tab = $(this).data('tab');
     ocqAbSwitchTab(tab);
     if (tab === 'manual' || tab === 'nomatch') ocqAbLoadList(tab, ocqAb.page[tab] || 1);
@@ -2482,14 +3042,18 @@ function ocqAbManualHtml(res){
     return h;
 }
 
-/** 勾選工具列（需人工判定／主檔查無兩張清單共用同一條）。$withApply＝有候選可套用的那張才長出「套用勾選的」。 */
-function ocqAbBulkBar(kind, withApply){
-    return '<div class="ocq-ab-bulk" data-kind="' + kind + '">'
+/**
+ * 勾選工具列（三個階段的清單共用同一條）。
+ * $withApply＝有候選可套用的那張才長出「套用勾選的」；$withNew＝只有料號階段才有「建立新料號」。
+ */
+function ocqAbBulkBar(kind, withApply, stage, applyLabel, hint){
+    stage = stage || 'part';
+    return '<div class="ocq-ab-bulk" data-kind="' + kind + '" data-stage="' + stage + '">'
          + '<span>已勾選 <b class="ocq-ab-ckn">0</b> 筆</span>'
-         + '<span class="ocq-ab-sub ocq-ab-ckhint">（挑好候選料號會自動幫你勾起來）</span>'
+         + '<span class="ocq-ab-sub ocq-ab-ckhint">' + (hint || '（挑好候選料號會自動幫你勾起來）') + '</span>'
          + '<span class="sp"></span>'
-         + (withApply ? '<button type="button" class="ocq-ab-bulk-apply" disabled>套用勾選的（綁定已挑的主檔）</button>' : '')
-         + '<button type="button" class="sec ocq-ab-bulk-new" disabled>建立新料號並綁定</button>'
+         + (withApply ? '<button type="button" class="ocq-ab-bulk-apply" disabled>' + (applyLabel || '套用勾選的（綁定已挑的主檔）') + '</button>' : '')
+         + (stage === 'part' ? '<button type="button" class="sec ocq-ab-bulk-new" disabled>建立新料號並綁定</button>' : '')
          + '</div>';
 }
 
@@ -2531,7 +3095,10 @@ function ocqAbPagerHtml(kind, res){
          + (res.page >= pages ? ' disabled' : '') + '>下一頁</button></div>';
 }
 $('#ocqAbMask').on('click', '.ocq-ab-pgbtn', function(){
-    ocqAbLoadList($(this).data('kind'), parseInt($(this).data('page'), 10) || 1);
+    var stage = $(this).data('stage') || 'part', kind = $(this).data('kind'), page = parseInt($(this).data('page'), 10) || 1;
+    if (stage === 'part') { ocqAbLoadList(kind, page); return; }
+    var S = (stage === 'order') ? window.ocqOb : window.ocqQb;
+    if (S) S.loadList(kind, page);
 });
 
 // 綁好的那一列就地標示完成，不整頁重載（使用者通常會一次判定好幾筆；重畫會把清單捲回最上面打斷操作）。
@@ -2542,15 +3109,16 @@ function ocqAbMarkDone($tr, res){
     $tr.find('.ocq-ab-rowmsg').remove();
     $tr.find('td.cnd').html('<span class="ocq-bind-ok" style="display:inline-block;"><i class="fa fa-check"></i> 已綁定 '
         + esc(res.d_id || '') + (res.client_name ? '／' + esc(res.client_name) : '') + '</span>');
-    $tr.find('.ocq-ab-pick, .ocq-ab-new').remove();
+    $tr.find('.ocq-ab-pick, .ocq-ab-new, .ocq-sx-pick').remove();   // 三個階段的按鈕都要收掉
     $tr.find('.ocq-ab-ck').prop('checked', false).prop('disabled', true);
     if (!$tr.find('.ocq-ab-donetag').length) {
         $tr.find('td').last().append('<span class="ocq-ab-sub ocq-ab-donetag">已完成</span>');
     }
     // 卡片數字減 1（後端剛回報成功，這個扣是準的）
-    var isManual = ($tr.closest('.ocq-ab-pane').attr('id') === 'ocqAbPaneManual');
-    var $n = isManual ? $('#ocqAbNManual') : $('#ocqAbNNomatch');
-    $n.text(Math.max(0, (parseInt($n.text(), 10) || 0) - 1));
+    // 哪一張卡片寫在 pane 的 data-card 上，三個階段（料號／訂單／報價單）共用這一支，
+    // 不要在這裡用 id 一個一個比對——新階段的 pane 就是因此扣不到數字（實測抓到）。
+    var card = $tr.closest('.ocq-ab-pane').data('card');
+    if (card) { var $n = $(card); $n.text(Math.max(0, (parseInt($n.text(), 10) || 0) - 1)); }
     ocqAbCkSync($tr.closest('.ocq-ab-pane'));
 }
 function ocqAbRowErr($tr, msg){
@@ -2576,8 +3144,10 @@ $('#ocqAbMask').on('change', '.ocq-ab-all', function(){
     $pane.find('.ocq-ab-ck').not(':disabled').prop('checked', on);
     ocqAbCkSync($pane);
 });
-// 挑好候選料號＝多半就是要套用它，順手幫忙勾起來（少按一次；不想套用的再取消勾選即可）
-$('#ocqAbMask').on('change', 'input[type=radio][name^="abp_"]', function(){
+// 挑好候選＝多半就是要套用它，順手幫忙勾起來（少按一次；不想套用的再取消勾選即可）。
+// **選擇器要用候選列的 class 不是 name 前綴**——三個階段的 radio name 各自不同
+// （abp_／abo_／abq_），用前綴綁只會有料號那一階生效，而且完全不報錯。
+$('#ocqAbMask').on('change', '.ocq-ab-cand input[type=radio]', function(){
     var $tr = $(this).closest('tr');
     if (!$tr.hasClass('done')) $tr.find('.ocq-ab-ck').not(':disabled').prop('checked', true);
     ocqAbCkSync($tr.closest('.ocq-ab-pane'));
@@ -2629,7 +3199,14 @@ $('#ocqAbMask').on('click', '.ocq-ab-pick', function(){
 
 // 勾選後一次全部套用
 $('#ocqAbMask').on('click', '.ocq-ab-bulk-apply', function(){
-    var $pane = $(this).closest('.ocq-ab-pane'), jobs = [], noPick = 0;
+    var $pane = $(this).closest('.ocq-ab-pane');
+    var stage = $(this).closest('.ocq-ab-bulk').data('stage') || 'part';
+    if (stage !== 'part') {                       // 訂單／報價單階段走各自的引擎
+        var S = (stage === 'order') ? window.ocqOb : window.ocqQb;
+        if (S) S.bulkApply($pane);
+        return;
+    }
+    var jobs = [], noPick = 0;
     $pane.find('tbody tr').each(function(){
         var $tr = $(this);
         if (!$tr.find('.ocq-ab-ck').prop('checked')) return;
@@ -2793,6 +3370,341 @@ $('#ocqNpRun').on('click', function(){
         });
     })();
 });
+
+// ══ 第二、三階段：綁訂單／綁報價單 ═══════════════════════════════════════════════
+// 兩個階段的流程與畫面結構完全一樣（掃描 → 三張統計卡 → 三個分頁 → 可自動綁的整批執行、
+// 指不出唯一一筆的逐筆挑＋勾選後一次套用），只有「一列長什麼樣子」與「送出去的欄位」不同，
+// 所以做成同一支引擎餵兩份設定，不要複製兩份（複製出去的那份遲早跟這份長得不一樣）。
+function ocqSxPagerHtml(stage, kind, res){
+    var pages = Math.max(1, Math.ceil(res.total / res.per));
+    if (pages <= 1) return '<div class="ocq-ab-pg">共 ' + res.total + ' 筆</div>';
+    return '<div class="ocq-ab-pg">共 ' + res.total + ' 筆，第 ' + res.page + ' / ' + pages + ' 頁'
+         + '<button type="button" class="ocq-ab-pgbtn" data-stage="' + stage + '" data-kind="' + kind + '" data-page="' + (res.page - 1) + '"'
+         + (res.page <= 1 ? ' disabled' : '') + '>上一頁</button>'
+         + '<button type="button" class="ocq-ab-pgbtn" data-stage="' + stage + '" data-kind="' + kind + '" data-page="' + (res.page + 1) + '"'
+         + (res.page >= pages ? ' disabled' : '') + '>下一頁</button></div>';
+}
+
+function ocqMakeStage(cfg){
+    var S = { scanned: false, auto: [], sample: [], total: 0, tab: 'auto', running: false,
+              page: { manual: 1, nomatch: 1 } };
+    function $pane(t){ return $(cfg.pane[t]); }
+
+    S.reset = function(){
+        S.scanned = false; S.auto = []; S.sample = []; S.total = 0; S.tab = 'auto';
+        S.page = { manual: 1, nomatch: 1 };
+        $(cfg.root).find('.ocq-sx-result').hide();
+    };
+    // 掃描（試算，只看不寫）。**綁完一定要再掃一次**——數字的真相在後端，不要在前端自己扣。
+    S.scan = function(keepMsg){
+        var $root = $(cfg.root);
+        $root.find('.ocq-sx-scan').show();
+        $root.find('.ocq-sx-result').hide();
+        $(cfg.runBtn).prop('disabled', true).hide();
+        var f = curFilters(); f.action = cfg.scanAction;
+        $.post('', f, function(res){
+            $root.find('.ocq-sx-scan').hide();
+            if (!res || !res.success) { ocqAbMsg((res && res.message) || '掃描失敗', true); return; }
+            S.scanned = true; S.auto = res.auto_rows || []; S.sample = res.sample || []; S.total = res.total || 0;
+            var c = res.count || {};
+            $(cfg.card.auto).text(c.auto || 0);
+            $(cfg.card.manual).text(c.manual || 0);
+            $(cfg.card.nomatch).text(c.nomatch || 0);
+            $root.find('.ocq-sx-result').show();
+            $pane('auto').html(cfg.renderAuto(S));
+            $(cfg.runBtn).prop('disabled', !(c.auto > 0));
+            if (S.tab === 'manual' || S.tab === 'nomatch') S.loadList(S.tab, S.page[S.tab] || 1);
+            else S.switchTab('auto');
+            if (!keepMsg) ocqAbMsg(cfg.scanMsg(S));
+        }, 'json').fail(function(){ $root.find('.ocq-sx-scan').hide(); ocqAbMsg('掃描失敗，請重新整理後再試', true); });
+    };
+    S.switchTab = function(tab){
+        S.tab = tab;
+        $(cfg.root).find('.ocq-ab-tab').removeClass('active').filter('[data-tab="' + tab + '"]').addClass('active');
+        $pane('auto').toggle(tab === 'auto');
+        $pane('manual').toggle(tab === 'manual');
+        $pane('nomatch').toggle(tab === 'nomatch');
+        // 「整批執行」只對可自動綁的那批有意義，切到別的分頁就收起來免得誤按
+        $(cfg.runBtn).toggle(tab === 'auto' && ocqStage === cfg.stage && S.auto.length > 0);
+    };
+    S.loadList = function(kind, page){
+        S.page[kind] = page;
+        var $p = $pane(kind);
+        $p.html('<div style="padding:14px;color:#a0521f;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>');
+        var f = curFilters(); f.action = cfg.listAction; f.kind = kind; f.page = page;
+        $.post('', f, function(res){
+            if (!res || !res.success) { $p.html('<div style="padding:14px;" class="ocq-bind-err">載入失敗</div>'); return; }
+            $p.html(cfg.renderList(res, kind) + ocqSxPagerHtml(cfg.stage, kind, res));
+            ocqAbCkSync($p);
+        }, 'json').fail(function(){ $p.html('<div style="padding:14px;" class="ocq-bind-err">載入失敗</div>'); });
+    };
+    // 可自動綁的那批：分批送（一次 100 筆），邊跑邊更新進度條
+    S.runAuto = function(){
+        if (S.running || !S.auto.length) return;
+        if (!confirm(cfg.confirmAuto(S.auto.length))) return;
+        S.running = true;
+        $(cfg.runBtn).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 綁定中…');
+        $(cfg.root).find('.ocq-ab-bar').show();
+        var todo = S.auto.slice(), all = todo.length, done = 0, skipped = [];
+        (function step(){
+            if (!todo.length) {
+                S.running = false;
+                $(cfg.runBtn).html(cfg.runLabel);
+                var m = '完成：已綁定 <b>' + done + '</b> 筆';
+                if (skipped.length) m += '，略過 ' + skipped.length + ' 筆（多半是其他人已經先綁好了）';
+                ocqAbMsg(m);
+                $(cfg.root).find('.ocq-ab-bar').hide().find('> i').css('width', '0');
+                loadList(curPage);
+                S.scan(true);
+                return;
+            }
+            var batch = todo.splice(0, 100);
+            $.post('', { action: cfg.applyAction, rows_json: JSON.stringify(batch), csrf: OCQ_BIND.csrf }, function(res){
+                if (!res || !res.success) {
+                    S.running = false;
+                    $(cfg.runBtn).prop('disabled', false).html(cfg.runLabel);
+                    ocqAbMsg((res && res.message) || '綁定失敗', true);
+                    return;
+                }
+                done += (res.done || 0);
+                skipped = skipped.concat(res.skipped || []);
+                $(cfg.root).find('.ocq-ab-bar > i').css('width', Math.round((all - todo.length) / all * 100) + '%');
+                ocqAbMsg('進行中… 已綁定 <b>' + done + '</b> / ' + all + ' 筆');
+                step();
+            }, 'json').fail(function(){
+                S.running = false;
+                $(cfg.runBtn).prop('disabled', false).html(cfg.runLabel);
+                ocqAbMsg('這一批送出失敗，已綁定 ' + done + ' 筆；請重新整理後再執行一次剩下的', true);
+            });
+        })();
+    };
+    // 逐筆套用（跟勾選批次套用送的是同一支動作、同一組欄位）
+    S.applyOne = function($tr, cb){
+        var job = cfg.rowJob($tr);
+        if (!job) { cb({ success: false, message: cfg.pickHint }); return; }
+        $.post('', { action: cfg.applyAction, rows_json: JSON.stringify([job]), csrf: OCQ_BIND.csrf }, function(res){
+            if (!res || !res.success) { cb({ success: false, message: (res && res.message) || '綁定失敗' }); return; }
+            if ((res.done || 0) > 0) cb({ success: true, d_id: cfg.doneLabel($tr, job) });
+            else cb({ success: false, message: ((res.skipped || [])[0] || {}).why || '綁定失敗' });
+        }, 'json').fail(function(){ cb({ success: false, message: '連線失敗' }); });
+    };
+    S.bulkApply = function($p){
+        var jobs = [], noPick = 0;
+        $p.find('tbody tr').each(function(){
+            var $tr = $(this);
+            if (!$tr.find('.ocq-ab-ck').prop('checked')) return;
+            var job = cfg.rowJob($tr);
+            if (!job) { noPick++; ocqAbRowErr($tr, cfg.pickHint); return; }
+            jobs.push({ $tr: $tr, job: job });
+        });
+        if (!jobs.length) { ocqAbMsg(cfg.pickHint, true); return; }
+        if (!confirm(cfg.confirmBulk(jobs.length, noPick))) return;
+        ocqAbBulkRun($p, jobs, function(j, cb){ S.applyOne(j.$tr, cb); }, function(ok, fail){
+            if (ok > 0) S.scanCountsSoon();
+            return '完成：已綁定 <b>' + ok + '</b> 筆' + (fail ? '，失敗 ' + fail + ' 筆（原因寫在該列）' : '');
+        });
+    };
+    // 綁完之後卡片數字已經就地扣過了；真正的數字仍以後端為準，等使用者切分頁時會重掃
+    S.scanCountsSoon = function(){ S.scanned = S.scanned; };
+    $(cfg.root).on('click', '.ocq-ab-tab', function(){
+        var tab = $(this).data('tab');
+        S.switchTab(tab);
+        if (tab === 'manual' || tab === 'nomatch') S.loadList(tab, S.page[tab] || 1);
+    });
+    $(cfg.root).on('click', '.ocq-sx-pick', function(){
+        var $btn = $(this), $tr = $btn.closest('tr');
+        $btn.prop('disabled', true).text('處理中');
+        S.applyOne($tr, function(res){
+            if (!res.success) { $btn.prop('disabled', false).text('套用'); ocqAbMsg(res.message || '綁定失敗', true); return; }
+            ocqAbMarkDone($tr, res);
+            ocqAbMsg('已綁定 ' + esc(res.d_id || ''));
+            loadList(curPage);
+        });
+    });
+    $(cfg.runBtn).on('click', function(){ S.runAuto(); });
+    return S;
+}
+
+if (OCQ_BIND.order) {
+    // ── ② 綁訂單 ────────────────────────────────────────────────────────────────
+    window.ocqOb = ocqMakeStage({
+        stage: 'order', root: '#ocqStageOrder', runBtn: '#ocqObRun', runLabel: '<i class="fa fa-magic"></i> 開始自動綁定訂單',
+        card: { auto: '#ocqObNAuto', manual: '#ocqObNManual', nomatch: '#ocqObNNomatch' },
+        pane: { auto: '#ocqObPaneAuto', manual: '#ocqObPaneManual', nomatch: '#ocqObPaneNomatch' },
+        scanAction: 'autobind_order_scan', listAction: 'autobind_order_list', applyAction: 'autobind_order_apply',
+        pickHint: '請先挑一張候選訂單再套用',
+        scanMsg: function(S){ return '範圍內已綁料號、還沒綁訂單的共 <b>' + S.total + '</b> 筆'; },
+        confirmAuto: function(n){ return '即將自動綁定 ' + n + ' 筆 BOM 的訂單。\n\n'
+            + '系統只會綁「這個料號底下只有一張訂單」的；已經有人綁過的會自動略過。\n'
+            + '分配量帶入「BOM 發單量」與「該訂單未被分配量」中較小者。\n確定要執行嗎？'; },
+        confirmBulk: function(n, noPick){ return '即將綁定 ' + n + ' 筆'
+            + (noPick ? '（另有 ' + noPick + ' 筆還沒挑訂單，會略過）' : '') + '。\n\n'
+            + '已經有人綁過的會自動擋下、不會覆蓋。\n確定要執行嗎？'; },
+        rowJob: function($tr){
+            var $r = $tr.find('input[type=radio]:checked');
+            if (!$r.length) return null;
+            var oid = parseInt($r.val(), 10) || 0;
+            if (!oid) return null;
+            var qty = parseInt($tr.find('.oqty[data-oid="' + oid + '"]').val(), 10);
+            if (isNaN(qty) || qty < 0) qty = 0;
+            return { bom: String($tr.data('bom') || ''), order_id: oid, qty: qty };
+        },
+        doneLabel: function($tr, job){ return $tr.find('input[type=radio]:checked').data('oo') + '×' + job.qty; },
+        renderAuto: function(S){
+            if (!S.auto.length) return '<div style="padding:14px;color:#a08a6a;">這個範圍內沒有可以自動綁定的 BOM（'
+                + '要嘛這個料號底下有好幾張訂單、要嘛一張都沒有，請看另外兩個分頁）。</div>';
+            var h = '<div style="font-size:12.5px;color:#5b3a1e;margin-bottom:6px;">'
+                  + '以下列出前 ' + S.sample.length + ' 筆做為抽樣確認，按「開始自動綁定訂單」會處理全部 <b>'
+                  + S.auto.length + '</b> 筆。每一筆都會留下稽核紀錄。</div>'
+                  + '<div class="ocq-ab-bar" style="display:none;"><i></i></div>'
+                  + '<table class="ocq-ab-tb"><thead><tr><th>BOM</th><th>料號</th><th>發單量</th>'
+                  + '<th>將綁定的訂單</th><th>訂單量／已分配</th><th>分配量</th><th>判定依據</th></tr></thead><tbody>';
+            S.sample.forEach(function(r){
+                h += '<tr><td>' + esc(r.bom) + '</td><td>' + esc(r.part_no) + '</td><td>' + esc(r.bom_qty) + '</td>'
+                   + '<td><b>' + esc(r.order_oo) + '</b><div class="ocq-ab-sub">' + esc(egFmtDate(r.order_date)) + '</div></td>'
+                   + '<td>' + esc(r.order_qty) + ' ／ ' + esc(r.used || 0) + '</td>'
+                   + '<td><b>' + esc(r.qty) + '</b></td>'
+                   + '<td class="ocq-ab-why">' + esc(r.reason) + '</td></tr>';
+            });
+            return h + '</tbody></table>';
+        },
+        renderList: function(res, kind){
+            if (!res.total) return '<div style="padding:14px;color:#a08a6a;">沒有這一類的 BOM。</div>';
+            if (kind === 'nomatch') {
+                var hn = '<div style="font-size:12.5px;color:#5b3a1e;margin-bottom:6px;">'
+                       + '以下這幾筆 BOM 的<b>料號主檔底下一張訂單都沒有</b>（可能是備料、樣品，或訂單根本沒建進系統），'
+                       + '系統無法綁訂單。</div>'
+                       + '<table class="ocq-ab-tb"><thead><tr><th style="width:130px;">BOM</th><th>料號</th>'
+                       + '<th style="width:120px;">客戶</th><th style="width:70px;">發單量</th><th>說明</th></tr></thead><tbody>';
+                (res.rows || []).forEach(function(r){
+                    hn += '<tr><td>' + esc(r.bom) + '<div class="ocq-ab-sub">' + esc(egFmtDate(r.eff_date)) + '</div></td>'
+                        + '<td>' + esc(r.part_no) + '</td><td>' + (r.bom_client ? esc(r.bom_client) : '<span class="ocq-ab-sub">（空白）</span>') + '</td>'
+                        + '<td>' + esc(r.bom_qty) + '</td><td class="ocq-ab-why">' + esc(r.reason) + '</td></tr>';
+                });
+                return hn + '</tbody></table>';
+            }
+            var h = '<div style="font-size:12.5px;color:#5b3a1e;margin-bottom:6px;">'
+                  + '以下這幾筆的料號底下<b>有好幾張訂單</b>，系統無從得知這批貨是做哪一張，請挑一張再套用；'
+                  + '挑好可以<b>逐筆按「套用」，也可以勾選起來一次全部套用</b>。'
+                  + '候選訂單依「訂單日與這筆 BOM 的日期最接近」排序，<b>分配量可以逐張改</b>。</div>'
+                  + ocqAbBulkBar('manual', true, 'order', '套用勾選的（綁定已挑的訂單）', '（挑好訂單會自動幫你勾起來）')
+                  + '<table class="ocq-ab-tb"><thead><tr><th class="ck"><input type="checkbox" class="ocq-ab-all" title="全選／全不選"></th>'
+                  + '<th style="width:130px;">BOM</th><th style="width:140px;">料號／客戶</th>'
+                  + '<th>候選訂單（請挑一張）</th><th style="width:60px;"></th></tr></thead><tbody>';
+            (res.rows || []).forEach(function(r){
+                h += '<tr data-bom="' + esc(r.bom) + '"><td class="ck"><input type="checkbox" class="ocq-ab-ck"></td>'
+                   + '<td>' + esc(r.bom) + '<div class="ocq-ab-sub">' + esc(egFmtDate(r.eff_date))
+                   + '　發單 ' + esc(r.bom_qty) + '</div></td>'
+                   + '<td>' + esc(r.part_no) + '<div class="ocq-ab-sub">' + (r.bom_client ? esc(r.bom_client) : '（沒有客戶）') + '</div></td>'
+                   + '<td class="cnd">';
+                (r.candidates || []).forEach(function(o){
+                    h += '<label class="ocq-ab-cand"><input type="radio" name="abo_' + esc(r.bom) + '" value="' + o.order_id + '" data-oo="' + esc(o.order_oo) + '">'
+                       + '<b>' + esc(o.order_oo) + '</b>'
+                       + '<span class="ocq-ab-sub">　訂單日 ' + esc(o.order_date ? egFmtDate(o.order_date) : '—')
+                       + '　交期 ' + esc(o.delivery_date ? egFmtDate(o.delivery_date) : '—')
+                       + '　訂單量 ' + esc(o.qty) + (o.used > 0 ? '（已分配 ' + esc(o.used) + '）' : '')
+                       + (o.spec ? '　' + esc(o.spec) : '') + '</span>'
+                       + '　分配量 <input type="number" class="ocq-pick-qty oqty" data-oid="' + o.order_id + '" min="0" value="' + o.qty_default + '" onclick="event.preventDefault();event.stopPropagation();">'
+                       + '</label>';
+                });
+                if ((r.cand_total || 0) > (r.candidates || []).length) {
+                    h += '<div class="ocq-ab-sub">另有 ' + (r.cand_total - r.candidates.length) + ' 張較早／較晚的訂單沒列出來，'
+                       + '要綁那幾張請用清單上的「綁訂單」逐筆處理。</div>';
+                }
+                h += '<div class="ocq-ab-why">' + esc(r.reason) + '</div></td>'
+                   + '<td><button type="button" class="ocq-bind-btn ocq-sx-pick">套用</button></td></tr>';
+            });
+            return h + '</tbody></table>';
+        }
+    });
+
+    // ── ③ 綁報價單（單位是訂單，不是 BOM）──────────────────────────────────────
+    window.ocqQb = ocqMakeStage({
+        stage: 'quote', root: '#ocqStageQuote', runBtn: '#ocqQbRun', runLabel: '<i class="fa fa-magic"></i> 開始自動綁定報價單',
+        card: { auto: '#ocqQbNAuto', manual: '#ocqQbNManual', nomatch: '#ocqQbNNomatch' },
+        pane: { auto: '#ocqQbPaneAuto', manual: '#ocqQbPaneManual', nomatch: '#ocqQbPaneNomatch' },
+        scanAction: 'autobind_quote_scan', listAction: 'autobind_quote_list', applyAction: 'autobind_quote_apply',
+        pickHint: '請先挑一筆報價明細再套用',
+        scanMsg: function(S){ return '範圍內的 BOM 綁到的訂單中，還沒綁報價單的共 <b>' + S.total + '</b> 張'; },
+        confirmAuto: function(n){ return '即將自動綁定 ' + n + ' 張訂單的報價單。\n\n'
+            + '系統只會綁「這個料號只有一筆報價明細」的；已經有人綁過的會自動略過。\n確定要執行嗎？'; },
+        confirmBulk: function(n, noPick){ return '即將綁定 ' + n + ' 張訂單的報價單'
+            + (noPick ? '（另有 ' + noPick + ' 張還沒挑報價，會略過）' : '') + '。\n\n'
+            + '已經有人綁過的會自動擋下、不會覆蓋。\n確定要執行嗎？'; },
+        rowJob: function($tr){
+            var $r = $tr.find('input[type=radio]:checked');
+            if (!$r.length) return null;
+            return { order_id: parseInt($tr.data('oid'), 10) || 0, item_id: parseInt($r.val(), 10) || 0 };
+        },
+        doneLabel: function($tr){ return $tr.find('input[type=radio]:checked').data('qn') || ''; },
+        renderAuto: function(S){
+            if (!S.auto.length) return '<div style="padding:14px;color:#a08a6a;">這個範圍內沒有可以自動綁定的訂單'
+                + '（要嘛同料號有好幾筆報價、要嘛報價單裡沒有這個料號，請看另外兩個分頁）。</div>';
+            var h = '<div style="font-size:12.5px;color:#5b3a1e;margin-bottom:6px;">'
+                  + '以下列出前 ' + S.sample.length + ' 筆做為抽樣確認，按「開始自動綁定報價單」會處理全部 <b>'
+                  + S.auto.length + '</b> 張訂單。綁定寫的是訂單上的報價單號與報價明細，每一筆都會留下稽核紀錄。</div>'
+                  + '<div class="ocq-ab-bar" style="display:none;"><i></i></div>'
+                  + '<table class="ocq-ab-tb"><thead><tr><th>訂單</th><th>客戶</th><th>料號</th>'
+                  + '<th>將綁定的報價單</th><th>報價日</th><th>單價</th><th>判定依據</th></tr></thead><tbody>';
+            S.sample.forEach(function(r){
+                h += '<tr><td>' + esc(r.order_oo) + '<div class="ocq-ab-sub">' + esc(r.order_date ? egFmtDate(r.order_date) : '') + '</div></td>'
+                   + '<td>' + esc(r.client) + '</td><td>' + esc(r.part_no) + '</td>'
+                   + '<td><b>' + esc(r.quote_no) + '</b></td>'
+                   + '<td>' + esc(r.quote_date ? egFmtDate(r.quote_date) : '—') + '</td>'
+                   + '<td>' + esc(r.price) + '</td>'
+                   + '<td class="ocq-ab-why">' + esc(r.reason) + '</td></tr>';
+            });
+            return h + '</tbody></table>';
+        },
+        renderList: function(res, kind){
+            if (!res.total) return '<div style="padding:14px;color:#a08a6a;">沒有這一類的訂單。</div>';
+            if (kind === 'nomatch') {
+                var hn = '<div style="font-size:12.5px;color:#5b3a1e;margin-bottom:6px;">'
+                       + '以下這幾張訂單的料號<b>在報價單裡找不到</b>（報價單上的料號文字要與訂單料號完全相同才綁得起來；'
+                       + '草稿與待審核的報價單不列入）。請到報價單管理確認，或先在報價單上把料號綁好。</div>'
+                       + '<table class="ocq-ab-tb"><thead><tr><th style="width:130px;">訂單</th><th style="width:110px;">客戶</th>'
+                       + '<th>料號</th><th style="width:70px;">數量</th><th>說明</th></tr></thead><tbody>';
+                (res.rows || []).forEach(function(r){
+                    hn += '<tr><td>' + esc(r.order_oo) + '<div class="ocq-ab-sub">' + esc(r.order_date ? egFmtDate(r.order_date) : '') + '</div></td>'
+                        + '<td>' + esc(r.client) + '</td><td>' + esc(r.part_no) + '</td><td>' + esc(r.order_qty) + '</td>'
+                        + '<td class="ocq-ab-why">' + esc(r.reason) + '</td></tr>';
+                });
+                return hn + '</tbody></table>';
+            }
+            var h = '<div style="font-size:12.5px;color:#5b3a1e;margin-bottom:6px;">'
+                  + '以下這幾張訂單的料號<b>有好幾筆報價明細</b>（不同報價單或調過價），請挑一筆再套用；'
+                  + '挑好可以<b>逐筆按「套用」，也可以勾選起來一次全部套用</b>。'
+                  + '候選依「<b>報價日不晚於訂單日、且日期最接近</b>」排序，第一筆通常就是下單當時的那份報價。</div>'
+                  + ocqAbBulkBar('manual', true, 'quote', '套用勾選的（綁定已挑的報價）', '（挑好報價會自動幫你勾起來）')
+                  + '<table class="ocq-ab-tb"><thead><tr><th class="ck"><input type="checkbox" class="ocq-ab-all" title="全選／全不選"></th>'
+                  + '<th style="width:130px;">訂單</th><th style="width:140px;">料號／客戶</th>'
+                  + '<th>候選報價明細（請挑一筆）</th><th style="width:60px;"></th></tr></thead><tbody>';
+            (res.rows || []).forEach(function(r){
+                h += '<tr data-oid="' + r.order_id + '"><td class="ck"><input type="checkbox" class="ocq-ab-ck"></td>'
+                   + '<td>' + esc(r.order_oo) + '<div class="ocq-ab-sub">' + esc(r.order_date ? egFmtDate(r.order_date) : '')
+                   + '　' + esc(r.order_qty) + ' 支</div></td>'
+                   + '<td>' + esc(r.part_no) + '<div class="ocq-ab-sub">' + esc(r.client) + '</div></td>'
+                   + '<td class="cnd">';
+                (r.candidates || []).forEach(function(q, i){
+                    h += '<label class="ocq-ab-cand"><input type="radio" name="abq_' + r.order_id + '" value="' + q.item_id + '" data-qn="' + esc(q.quote_no) + '">'
+                       + '<b>' + esc(q.quote_no) + '</b>'
+                       + (i === 0 ? ' <span style="color:#2f7a3f;">（建議：下單當時的報價）</span>' : '')
+                       + '<span class="ocq-ab-sub">　報價日 ' + esc(q.quote_date ? egFmtDate(q.quote_date) : '—')
+                       + '　單價 ' + esc(q.price) + '　數量 ' + esc(q.qty)
+                       + (q.client ? '　' + esc(q.client) : '') + (q.spec ? '　' + esc(q.spec) : '') + '</span></label>';
+                });
+                if ((r.cand_total || 0) > (r.candidates || []).length) {
+                    h += '<div class="ocq-ab-sub">另有 ' + (r.cand_total - r.candidates.length) + ' 筆報價沒列出來，'
+                       + '要綁那幾筆請到對帳作業的「報價／訂單對照」處理。</div>';
+                }
+                h += '<div class="ocq-ab-why">' + esc(r.reason) + '</div></td>'
+                   + '<td><button type="button" class="ocq-bind-btn ocq-sx-pick">套用</button></td></tr>';
+            });
+            return h + '</tbody></table>';
+        }
+    });
+}
+
 }
 // 綁定欄裡的雙擊不要連帶觸發「帶入篩選」
 $('#ocqTbody').on('dblclick', '.ocq-bind-td', function(e){ e.stopPropagation(); });
@@ -2803,6 +3715,7 @@ $('#btnClear').on('click', function(){
     $('#fCustomer, #fSales, #fBom, #fVendor, #fQty, #fDelivery, #fKeyword').val('');
     var r = yRange1y(); $('#fDateFrom').val(r[0]); $('#fDateTo').val(r[1]);
     $('#fPriority').val('');
+    $('#fBind').val('');
     curProcess = '';
     renderYearBar();
     applyFilters();
@@ -2918,6 +3831,7 @@ $('#btnSummary').on('click', function(){
         if (f.customer) critParts.push('客戶：'+f.customer);
         if (f.sales) critParts.push('業務：'+f.sales);
         if (f.priority) critParts.push('優先權：'+$('#fPriority option:selected').text());
+        if (f.bind) critParts.push('綁定狀態：'+$('#fBind option:selected').text());
         if (f.bom) critParts.push('BOM/料號：'+f.bom);
         if (f.vendor) critParts.push('廠商：'+f.vendor);
         if (f.qty) critParts.push('發單數量：'+f.qty);
