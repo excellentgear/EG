@@ -4,6 +4,7 @@ require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離
 header('Content-Type: application/json');
 
 require_once __DIR__ . '/../common/DBConnection.php';   // 2026-08-24 改 require_once＋__DIR__：api_guard 已先載入過，用 include 會二次宣告 class 直接 500
+require_once __DIR__ . '/../common/ir_track_lib.php';   // 管理員判定／年度／異常單綁定備援：與頁面共用同一份
 include '_setting.php';
 include '../common/_config.php';
 
@@ -362,20 +363,17 @@ try {
             break;
 
         case 'get_ir_list':
-            // Ensure ir_return_type table and column exist
-            $pdo->exec("CREATE TABLE IF NOT EXISTS `ir_return_type` (
-                `type_id` tinyint NOT NULL AUTO_INCREMENT PRIMARY KEY,
-                `type_name` varchar(30) NOT NULL,
-                `is_note` tinyint(1) NOT NULL DEFAULT 0 COMMENT '備註模式',
-                `allow_ncr` tinyint(1) NOT NULL DEFAULT 1 COMMENT '允許開立異常單',
-                `sort_order` int NOT NULL DEFAULT 0,
-                `is_active` tinyint(1) NOT NULL DEFAULT 1,
-                `description` varchar(100) NULL
-            ) DEFAULT CHARSET=utf8mb4 COMMENT='退貨性質設定表'");
-            try { $pdo->query("SELECT return_type_id FROM ir_track LIMIT 1"); }
-            catch (Exception $_e) { $pdo->exec("ALTER TABLE ir_track ADD COLUMN `return_type_id` tinyint NULL COMMENT '退貨性質 FK→ir_return_type.type_id'"); }
-            try { $pdo->query("SELECT sale_assignee FROM ir_track LIMIT 1"); }
-            catch (Exception $_e) { $pdo->exec("ALTER TABLE ir_track ADD COLUMN `sale_assignee` int NULL COMMENT '負責業務 FK→user.id'"); }
+            irEnsureListSchema($pdo);
+
+            /* 分批載入（使用者要求）：第一批先回前幾百筆讓畫面馬上出得來，其餘由前端在背景續載。
+               limit=0＝整份回傳（舊呼叫端的行為，一個字都沒變）。 */
+            $year   = trim((string)($_POST['year'] ?? ''));
+            $year   = preg_match('/^\d{4}$/', $year) ? $year : '';
+            $limit  = max(0, (int)($_POST['limit'] ?? 0));
+            $offset = max(0, (int)($_POST['offset'] ?? 0));
+            $withMeta = !empty($_POST['with_meta']);
+
+            $where = $year !== '' ? "WHERE YEAR(t.IR_date) = " . (int)$year : "";
 
             // Fetch IR list with aggregated flow status from ir_flow
             $sql = "SELECT
@@ -385,6 +383,8 @@ try {
 
     COALESCE(ds.D_Setting_Id, t.d_id) AS d_id,
     COALESCE(cl.customer, t.Client_name) AS Client_Name,
+    t.d_id AS raw_d_id,
+    t.d_setting_id AS raw_d_setting_id,
 
     t.Qty,
     t.IR_ps,
@@ -432,11 +432,11 @@ LEFT JOIN (
     GROUP BY ir_key
 ) qao ON qao.ir_key = t.IR_id
 LEFT JOIN (
-    SELECT 
+    SELECT
         f.IR_id,
         GROUP_CONCAT(
             CONCAT(
-                COALESCE(d.name, 'Unknown'), ':', 
+                COALESCE(d.name, 'Unknown'), ':',
                 COALESCE(du.user_cname, '-'), ':',
                 COALESCE(DATE_FORMAT(f.receive_date, '%m/%d'), '-'), ':',
                 COALESCE(DATE_FORMAT(f.finish_date, '%m/%d'), '-'), ':',
@@ -453,11 +453,11 @@ LEFT JOIN (
     GROUP BY f.IR_id
 ) flow ON flow.IR_id = t.IR_id
 LEFT JOIN (
-    SELECT 
+    SELECT
         n.IR_id,
         GROUP_CONCAT(
             CONCAT(
-                COALESCE(d.name, 'Unknown'), ':', 
+                COALESCE(d.name, 'Unknown'), ':',
                 COALESCE(du.user_cname, '-'), ':',
                 COALESCE(DATE_FORMAT(nf.receive_date, '%m/%d'), '-'), ':',
                 COALESCE(DATE_FORMAT(nf.return_date, '%m/%d'), '-'), ':',
@@ -474,13 +474,18 @@ LEFT JOIN (
     LEFT JOIN user du ON nf.user_id = du.id
     GROUP BY n.IR_id
 ) ncr_flow ON ncr_flow.IR_id = t.IR_id
+$where
+ORDER BY t.IR_date DESC, t.IR_id DESC";
+            if ($limit > 0) $sql .= "\nLIMIT $limit OFFSET $offset";
 
-ORDER BY t.IR_date DESC, t.IR_id DESC;
-";
-            
             $stmt = $pdo->query($sql);
             $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            
+
+            /* 異常單綁定的備援：ERP 重新匯入客退單會換一組 IR_id，原本綁好的異常單就對不回任何一列，
+               退貨追蹤這邊看起來像「從來沒開過單」（使用者回報）。以單號回頭對得到的就顯示出來，
+               並標明是用單號對的——同一個 IR 單號常常有好幾筆明細，料號也對得上才算得準。 */
+            $orphan = irOrphanQaByIrNo($pdo);
+
             // Process dept_status_raw for frontend
             foreach ($data as &$row) {
                 $statuses = [];
@@ -522,9 +527,111 @@ ORDER BY t.IR_date DESC, t.IR_id DESC;
                 }
                 $row['ncr_dept_status'] = $ncr_statuses;
                 unset($row['ncr_dept_status_raw']);
+
+                $row['qa_bind_by'] = $row['qa_order_id'] ? 'id' : '';
+                if (!$row['qa_order_id'] && isset($orphan[$row['IR_no']])) {
+                    $pick = irPickOrphanQa($orphan[$row['IR_no']], $row);
+                    if ($pick) {
+                        $row['qa_order_id']          = $pick['id'];
+                        $row['qa_abnormal_order_no'] = $pick['abnormal_order_no'];
+                        $row['qa_bind_by']           = !empty($pick['_exact']) ? 'no_part' : 'no';
+                    }
+                }
+                unset($row['raw_d_id'], $row['raw_d_setting_id']);
             }
-            
-            echo json_encode(['success' => true, 'data' => $data]);
+            unset($row);
+
+            $out = ['success' => true, 'data' => $data, 'offset' => $offset, 'limit' => $limit];
+            if ($withMeta || $limit > 0) {
+                $c = $pdo->query("SELECT COUNT(*) total, SUM(CASE WHEN IR_status = 9 THEN 1 ELSE 0 END) done
+                                  FROM ir_track t $where")->fetch(PDO::FETCH_ASSOC);
+                $out['total'] = (int)$c['total'];
+                $out['stats'] = ['all' => (int)$c['total'], 'done' => (int)$c['done'],
+                                 'processing' => (int)$c['total'] - (int)$c['done']];
+            }
+            if ($withMeta) $out['years'] = irYears($pdo);
+            echo json_encode($out);
+            break;
+
+        case 'get_ir_years':
+            irEnsureListSchema($pdo);
+            echo json_encode(['success' => true, 'years' => irYears($pdo)]);
+            break;
+
+        /* ── 管理員：期間內自動結案 ───────────────────────────────────────
+           舊資料沒有人會一筆一筆去按結案，清單上就永遠掛著幾千筆「處理中」（使用者回報）。
+           一律「先試算、看清楚是哪幾筆、再套用」，而且只動 IR_status，不碰任何其他欄位。 */
+        case 'auto_close_preview':
+        case 'auto_close_apply':
+            irEnsureListSchema($pdo);
+            if (!irIsAdmin($pdo, (int)$user_id)) {
+                echo json_encode(['success' => false, 'message' => '只有系統管理者可以使用期間自動結案']);
+                break;
+            }
+            $from = trim((string)($_POST['date_from'] ?? ''));
+            $to   = trim((string)($_POST['date_to'] ?? ''));
+            $dRe  = '/^\d{4}-\d{2}-\d{2}$/';
+            if (!preg_match($dRe, $to)) { echo json_encode(['success' => false, 'message' => '請填寫「退貨日期 到」（YYYY-MM-DD）']); break; }
+            if ($from !== '' && !preg_match($dRe, $from)) { echo json_encode(['success' => false, 'message' => '「退貨日期 從」格式不正確']); break; }
+            if ($from !== '' && $from > $to) { echo json_encode(['success' => false, 'message' => '「退貨日期 從」不可以晚於「到」']); break; }
+            if ($to >= date('Y-m-d')) { echo json_encode(['success' => false, 'message' => '自動結案只能用在今天以前的舊資料，請把「到」改成昨天或更早']); break; }
+
+            $skipQa   = empty($_POST['include_open_qa']);     // 預設跳過「異常單還沒結案」的
+            $skipFlow = empty($_POST['include_open_flow']);   // 預設跳過「部門流程還沒跑完」的
+
+            $w = ["t.IR_status <> 9", "t.IR_date <= " . $pdo->quote($to)];
+            if ($from !== '') $w[] = "t.IR_date >= " . $pdo->quote($from);
+            if ($skipQa) {
+                $w[] = "NOT EXISTS (SELECT 1 FROM qa_abnormal_order o
+                                    WHERE o.deleted_at IS NULL AND o.is_closed = 0
+                                      AND (o.ir_id = t.IR_id OR (o.source_type = 'IR' AND o.source_id = t.IR_id)
+                                           OR (o.ir_no IS NOT NULL AND o.ir_no <> '' AND o.ir_no = t.IR_no)))";
+                $w[] = "NOT EXISTS (SELECT 1 FROM qa_ir_ncr n2
+                                    WHERE n2.IR_id = t.IR_id AND COALESCE(n2.status,'') NOT IN ('Closed','Done','Completed'))";
+            }
+            if ($skipFlow) {
+                $w[] = "NOT EXISTS (SELECT 1 FROM ir_flow f2
+                                    WHERE f2.IR_id = t.IR_id AND COALESCE(f2.status,'Pending') <> 'Returned')";
+            }
+            $wSql  = 'WHERE ' . implode(' AND ', $w);
+            $wBase = "WHERE t.IR_status <> 9 AND t.IR_date <= " . $pdo->quote($to)
+                     . ($from !== '' ? " AND t.IR_date >= " . $pdo->quote($from) : '');
+
+            if ($action === 'auto_close_preview') {
+                $cnt  = (int)$pdo->query("SELECT COUNT(*) FROM ir_track t $wSql")->fetchColumn();
+                $base = (int)$pdo->query("SELECT COUNT(*) FROM ir_track t $wBase")->fetchColumn();
+                $rows = $pdo->query("SELECT t.IR_no, DATE_FORMAT(t.IR_date,'%Y/%m/%d') IR_date,
+                                            COALESCE(cl.customer, t.Client_name) Client_Name,
+                                            COALESCE(ds.D_Setting_Id, t.d_id) d_id, t.Qty
+                                     FROM ir_track t
+                                     LEFT JOIN d_setting ds ON ds.d_id = COALESCE(t.d_setting_id, IF(t.d_id REGEXP '^[0-9]+$', CAST(t.d_id AS UNSIGNED), NULL))
+                                     LEFT JOIN customer_list cl ON ds.Customer_Id = cl.customer_id
+                                     $wSql ORDER BY t.IR_date DESC, t.IR_id DESC LIMIT 30")->fetchAll(PDO::FETCH_ASSOC);
+                echo json_encode(['success' => true, 'count' => $cnt, 'skipped' => max(0, $base - $cnt), 'rows' => $rows]);
+                break;
+            }
+
+            $ids = $pdo->query("SELECT t.IR_id FROM ir_track t $wSql")->fetchAll(PDO::FETCH_COLUMN);
+            if (!$ids) { echo json_encode(['success' => true, 'count' => 0]); break; }
+            $pdo->beginTransaction();
+            try {
+                foreach (array_chunk($ids, 500) as $chunk) {
+                    $in = implode(',', array_map('intval', $chunk));
+                    $pdo->exec("UPDATE ir_track SET IR_status = 9 WHERE IR_id IN ($in)");
+                }
+                $pdo->commit();
+            } catch (Exception $e) { $pdo->rollBack(); throw $e; }
+            try {
+                $opName = (string)$pdo->query("SELECT user_cname FROM user WHERE id = " . (int)$user_id)->fetchColumn();
+                $pdo->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                               VALUES ('update','ir_auto_close',?,?,?,?,?,NOW())")
+                    ->execute([count($ids) . '筆', '退貨追蹤 期間自動結案',
+                               json_encode(['date_from' => $from, 'date_to' => $to,
+                                            'include_open_qa' => !$skipQa, 'include_open_flow' => !$skipFlow,
+                                            'ir_ids' => array_map('intval', $ids)], JSON_UNESCAPED_UNICODE),
+                               (int)$user_id, $opName]);
+            } catch (Exception $e) { /* 稽核寫不進去不影響結案本身 */ }
+            echo json_encode(['success' => true, 'count' => count($ids)]);
             break;
 
         case 'update_progress':

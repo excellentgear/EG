@@ -7,6 +7,23 @@ if (!isset($_SESSION['userName'])) {
 include '../../src/common/DBConnection.php';
 include '../../src/store/_setting.php';
 include '../../src/common/_config.php';
+include_once '../../src/common/ir_track_lib.php';     // 管理員判定／年度（與 API 共用同一份）
+include_once '../../src/common/qa_abnormal_lib.php';  // 品質異常處理單（2-QA-01-01）：開單權限
+
+$IR_UID      = (int)($_SESSION['id'] ?? 0);
+$IR_IS_ADMIN = irIsAdmin($db, $IR_UID);        // 期間自動結案限系統管理者
+$IR_YEARS    = irYears($db);                   // 年度下拉：只列真的有資料的年度
+
+/* 開立異常單一律走新版模組（qa_abnormal_list.php 同一支 API、同一套權限與編號規則），
+   所以這一頁要先備好那支 API 認的 CSRF 權杖與開單權限。 */
+$QAB_CAN_CREATE = false;
+$QAB_BF_DAYS    = 10;   // 「補資料」的天數門檻一律取異常單模組的設定，不在這裡寫死一份
+try {
+    $QAB_CAN_CREATE = (bool)(qab_perms($db, $IR_UID)['canCreate'] ?? false);
+    $QAB_BF_DAYS    = (int)qab_backfill_days($db);
+} catch (Throwable $e) {}
+if (empty($_SESSION['qab_csrf'])) $_SESSION['qab_csrf'] = bin2hex(random_bytes(16));
+$QAB_CSRF = $_SESSION['qab_csrf'];
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -99,6 +116,23 @@ include '../../src/common/_config.php';
         .qa-attach-item .del-btn:hover { color:#B91C1C; }
         input[type=number]::-webkit-outer-spin-button,
         input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
+        /* 使用說明（鐵律7，位置與樣式全站統一） */
+        .page-help-btn { height:30px; font-size:13px; padding:0 12px; border:1px solid #2A3F54; border-radius:15px; background:#fff; color:#2A3F54; }
+        .page-help-btn:hover { background:#2A3F54; color:#fff; }
+        .help-doc h5 { margin:14px 0 6px; font-weight:700; color:#2A3F54; }
+        .help-doc ul { padding-left:20px; margin-bottom:8px; }
+        .help-doc li { margin-bottom:4px; font-size:13px; line-height:1.7; }
+        .note-box { background:#FCF8E3; border:1px solid #FAEBCC; color:#8a6d3b; border-radius:4px; padding:8px 12px; font-size:13px; line-height:1.7; }
+        .err-box { color:#DD5138; font-size:13px; min-height:18px; margin-top:6px; }
+        .fgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+        .fgrid .fld label { font-size:12px; color:#888; margin-bottom:2px; font-weight:600; }
+        .fgrid .fld input, .fgrid .fld select { width:100%; }
+        /* 品質異常單綁定徽章 */
+        .qa-bind-guess { display:block; font-size:10px; color:#92400E; background:#FEF3C7; border:1px solid #FCD34D;
+                         border-radius:8px; padding:0 5px; margin-top:2px; line-height:15px; }
+        /* 業務進度尚未儲存 */
+        .table-textarea.dirty { background:#FFFBEB !important; border-color:#FCD34D !important; }
+        @media print { .page-help-btn { display:none !important; } }
     </style>
 </head>
 <body class="nav-sm">
@@ -108,7 +142,12 @@ include '../../src/common/_config.php';
     <div class="right_col" role="main">
         <div class="">
             <div class="page-title">
-                <div class="title_left"><h3>退貨追蹤 <small>IR Tracking</small></h3></div>
+                <div class="title_left" style="width:100%;">
+                    <h3 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">退貨追蹤 <small>IR Tracking</small>
+                        <button type="button" class="btn btn-default btn-sm page-help-btn" id="btnPageHelp" style="margin-left:auto;">
+                            <i class="fa fa-question-circle"></i> 使用說明</button>
+                    </h3>
+                </div>
             </div>
             <div class="clearfix"></div>
 
@@ -133,6 +172,12 @@ include '../../src/common/_config.php';
                 <div class="col-md-12">
                     <div style="background:#fff;border-radius:6px;padding:8px 14px;box-shadow:0 1px 4px rgba(0,0,0,.06);display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
                         <span style="font-size:13px;color:#888;font-weight:600;"><i class="fa fa-filter"></i> 篩選：</span>
+                        <select id="filter-year" class="form-control input-sm" style="width:120px;" onchange="onYearChange()">
+                            <option value="">全部年分</option>
+                            <?php foreach ($IR_YEARS as $y): ?>
+                            <option value="<?= (int)$y ?>"><?= (int)$y ?> 年</option>
+                            <?php endforeach; ?>
+                        </select>
                         <select id="filter-assignee" class="form-control input-sm" style="width:150px;" onchange="applyFilters()">
                             <option value="">所有負責業務</option>
                         </select>
@@ -140,6 +185,8 @@ include '../../src/common/_config.php';
                             <option value="">所有退貨性質</option>
                         </select>
                         <button class="btn btn-default btn-sm" onclick="clearFilters()"><i class="fa fa-times"></i> 清除篩選</button>
+                        <span id="ir-load-progress" style="display:none;font-size:12px;color:#8a6d3b;background:#FCF8E3;border:1px solid #FAEBCC;border-radius:10px;padding:2px 10px;white-space:nowrap;">
+                            <i class="fa fa-spinner fa-spin"></i> <span id="ir-load-progress-txt"></span></span>
                         <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
                             <i class="fa fa-search" style="color:#bbb;font-size:13px;"></i>
                             <input type="search" id="ir-global-search" class="form-control input-sm" placeholder="全域搜尋..." style="width:200px;" oninput="irTableSearch(this.value)">
@@ -219,6 +266,9 @@ include '../../src/common/_config.php';
             <ul class="nav nav-tabs" style="margin-bottom:15px;">
                 <li class="active"><a href="#tab-return-type" data-toggle="tab"><i class="fa fa-tags"></i> 退貨性質設定</a></li>
                 <li><a href="#tab-attach-path" data-toggle="tab" onclick="loadAttachRootPath()"><i class="fa fa-folder-open-o"></i> 附件儲存路徑設定</a></li>
+                <?php if ($IR_IS_ADMIN): ?>
+                <li><a href="#tab-auto-close" data-toggle="tab" onclick="resetAutoClose()"><i class="fa fa-check-square-o"></i> 期間自動結案</a></li>
+                <?php endif; ?>
             </ul>
             <div class="tab-content">
                 <!-- Tab 1: 退貨性質設定 -->
@@ -299,6 +349,43 @@ include '../../src/common/_config.php';
                     </button>
                     <span id="attach_path_save_msg" style="margin-left:10px;font-size:13px;display:none;"></span>
                 </div>
+                <?php if ($IR_IS_ADMIN): ?>
+                <!-- Tab 3: 期間自動結案（限系統管理者） -->
+                <div class="tab-pane" id="tab-auto-close">
+                    <div class="note-box">
+                        舊資料不會有人一筆一筆去按結案，清單上就永遠掛著幾千筆「處理中」。這裡可以把<b>某一段期間</b>的退貨單一次結案。<br>
+                        <b>一定要先按「試算」看清楚是哪幾筆再套用</b>；本動作只改結案狀態，不會動到退貨性質、負責業務、業務進度或任何附件，
+                        事後想打開個別單據仍然可以在清單上按「已結案」重新開啟。每次套用都會寫入稽核紀錄（誰、什麼時候、條件、哪幾筆）。
+                    </div>
+                    <div class="fgrid" style="margin-top:12px;grid-template-columns:1fr 1fr 1fr;">
+                        <div class="fld"><label>退貨日期 從（留空＝不限，從最早開始）</label>
+                            <input type="date" class="form-control input-sm" id="ac_from"></div>
+                        <div class="fld"><label>退貨日期 到 <span style="color:#DD5138;">*</span>（必填，只能填今天以前）</label>
+                            <input type="date" class="form-control input-sm" id="ac_to"></div>
+                        <div class="fld"><label>&nbsp;</label>
+                            <button class="btn btn-default btn-sm" style="width:100%;" onclick="autoClosePreview()">
+                                <i class="fa fa-calculator"></i> 試算符合筆數</button></div>
+                    </div>
+                    <div style="margin-top:10px;display:flex;gap:18px;flex-wrap:wrap;">
+                        <label style="font-weight:normal;font-size:13px;">
+                            <input type="checkbox" id="ac_inc_qa"> 連「品質異常單還沒結案」的也一起結案</label>
+                        <label style="font-weight:normal;font-size:13px;">
+                            <input type="checkbox" id="ac_inc_flow"> 連「部門處理流程還沒跑完」的也一起結案</label>
+                    </div>
+                    <div class="err-box" id="ac_err"></div>
+                    <div id="ac_result" style="display:none;margin-top:10px;">
+                        <div id="ac_summary" style="font-size:14px;font-weight:700;color:#2A3F54;margin-bottom:6px;"></div>
+                        <div style="max-height:240px;overflow:auto;border:1px solid #eee;border-radius:4px;">
+                            <table class="table table-condensed" style="font-size:12px;margin:0;">
+                                <thead><tr><th>退貨單號</th><th>退貨日期</th><th>客戶</th><th>料號</th><th style="text-align:right;">數量</th></tr></thead>
+                                <tbody id="ac_rows"></tbody>
+                            </table>
+                        </div>
+                        <button class="btn btn-danger btn-sm" style="margin-top:10px;" id="ac_apply_btn" onclick="autoCloseApply()">
+                            <i class="fa fa-check"></i> 確認結案</button>
+                    </div>
+                </div>
+                <?php endif; ?>
             </div>
         </div>
         <div class="modal-footer">
@@ -366,6 +453,93 @@ include '../../src/common/_config.php';
 <?php /* 「品質異常單—可用部門設定」Modal 已移至 品管合併檢驗頁（views/QC/inspection_combined_prototype.php 設定選單）2026-07-06 */ ?>
 
 <!-- ── 開立 / 編輯品質異常單 Modal ── -->
+<!-- ── 開立品質異常處理單（2-QA-01-01 新版；與 qa_abnormal_list.php 同一支 API、同一套規則） ── -->
+<div class="modal fade" id="qaNewModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header">
+            <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+            <h4 class="modal-title"><i class="fa fa-plus"></i> 開立品質異常處理單</h4>
+        </div>
+        <div class="modal-body">
+            <div class="note-box">
+                來源固定是<b>這一張客退單</b>，客戶與料號由來源自動帶入不給改。建立之後會直接進入單張處理頁
+                （異常原因分類、相關單位意見、處置與裁示、扣款確認都在那裡填），與從「品質異常處理單」清單開立的完全是同一張單。
+            </div>
+            <div style="margin:10px 0;padding:8px 12px;background:#F1F5F9;border:1px solid #CBD5E1;border-radius:4px;font-size:13px;">
+                <b id="qn_ir_no">-</b>　<span id="qn_ir_info" style="color:#666;"></span>
+                <input type="hidden" id="qn_ir_id">
+            </div>
+            <div class="fgrid">
+                <div class="fld"><label>填寫日期</label><input type="date" class="form-control input-sm" id="qn_date"></div>
+                <div class="fld"><label>批量</label><input type="number" class="form-control input-sm" id="qn_batch"></div>
+                <div class="fld"><label>檢驗數 <span class="text-muted" id="qn_sample_hint" style="font-size:11px;"></span></label>
+                    <input type="number" class="form-control input-sm" id="qn_insp"></div>
+                <div class="fld"><label>不良數</label><input type="number" class="form-control input-sm" id="qn_ng"></div>
+                <div class="fld" style="grid-column:span 2;"><label>不良率</label>
+                    <input type="text" class="form-control input-sm" id="qn_rate" readonly style="background:#F5F0E8;"></div>
+            </div>
+            <div style="margin-top:10px;">
+                <label style="font-size:12px;color:#888;font-weight:600;">異常現象（可之後再補）</label>
+                <textarea class="form-control" id="qn_phe" rows="3"></textarea>
+            </div>
+            <div class="note-box" id="qn_bf" style="display:none;margin-top:10px;border-color:#C77C1A;background:#FFF6E8;"></div>
+            <div class="err-box" id="qn_err"></div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-primary" id="qn_go"><i class="fa fa-check"></i> 建立並開始填寫</button>
+        </div>
+    </div></div>
+</div>
+
+<!-- ── 使用說明（鐵律7） ── -->
+<div class="modal fade" id="helpUseMask" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-lg"><div class="modal-content">
+        <div class="modal-header">
+            <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+            <h4 class="modal-title"><i class="fa fa-question-circle"></i> 退貨追蹤 使用說明</h4>
+        </div>
+        <div class="modal-body help-doc">
+            <h5>這一頁在做什麼</h5>
+            <ul>
+                <li>ERP 匯入的客戶退貨單（IR）逐筆追蹤：標退貨性質、指派負責業務、記業務進度、開品質異常處理單、結案。</li>
+            </ul>
+            <h5>操作步驟</h5>
+            <ul>
+                <li><b>篩選</b>：上方依<b>年分</b>（預設全部年分）、負責業務、退貨性質篩選；右側「全域搜尋」會掃單號、客戶、料號、備註、業務進度等欄位。</li>
+                <li><b>業務進度</b>：直接在表格內打字，按 <b>Enter</b> 存檔（Shift+Enter 換行）。還沒存檔的那一格底色會變成淡黃色提醒你。
+                    要留完整往來記錄或傳附件請按該列的「回覆記錄」「附件」。</li>
+                <li><b>批次修改</b>：勾選左側方框後，畫面下方會出現操作條，可一次改退貨性質或負責業務。</li>
+                <li><b>開立異常單</b>：按最後一欄的「開立」，填好批量與不良數後建立，會直接進入
+                    <b>品質異常處理單（2-QA-01-01）</b>的處理頁；那張單與從「品質異常處理單」清單開立的是同一張。</li>
+                <li><b>結案</b>：按「結案」即可；已結案的那一列會變淡，再按一次可以重新開啟。</li>
+            </ul>
+            <h5>重要行為 / 常見疑問</h5>
+            <ul>
+                <li><b>為什麼一開始只出現幾百筆？</b>第一批先載入讓畫面馬上能用，其餘在背景續載，篩選列會顯示「背景載入中 …」，
+                    載完就自己補上。想只看某一年就用年分下拉，只會載那一年，最快。</li>
+                <li><b>異常單欄位出現黃色「以單號對應」</b>：那張異常單原本綁的客退單已經被 ERP 重新匯入換掉了（IR_id 變了），
+                    系統改以<b>退貨單號</b>把它找回來顯示。點進去仍是同一張異常單。</li>
+                <li><b>退貨性質可以設成「備註」</b>：設成備註的列會以黃色橫條顯示在同料號那一組的下方，不佔一般列。</li>
+                <li><b>「不開立」</b>：該退貨性質在設定裡被設為不允許開立異常單。</li>
+            </ul>
+            <h5>設定入口</h5>
+            <ul>
+                <li>上方「設定」鈕：<b>退貨性質設定</b>（名稱、備註模式、是否允許開立異常單、排序、停用）、<b>附件儲存路徑</b>。</li>
+                <li><b>期間自動結案</b>（只有系統管理者看得到）：把某一段期間的舊退貨單一次結案，避免舊資料一直掛著。
+                    一定要先「試算」確認筆數與內容再套用；預設會跳過「異常單還沒結案」與「部門流程還沒跑完」的，可自行勾選一起納入。</li>
+            </ul>
+            <h5>權限</h5>
+            <ul>
+                <li>看得到這一頁的人都可以填業務進度、改退貨性質與負責業務、結案。</li>
+                <li><b>開立異常單</b>依品質異常處理單模組的權限（品管／業務部門、或 <code>qab_fill</code>、<code>qab_admin</code> 等角色）。</li>
+                <li><b>期間自動結案</b>限系統管理者（或被授予 <code>ir_track_admin</code> 功能碼者）。</li>
+            </ul>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+    </div></div>
+</div>
+
 <input type="file" id="attach_file_input" style="display:none;" onchange="doUploadAttach(this)">
 <div class="modal fade" id="qaModal" tabindex="-1" role="dialog">
     <div class="modal-dialog modal-lg"><div class="modal-content">
@@ -633,6 +807,9 @@ include '../../src/common/_config.php';
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/jquery.dataTables.min.js"></script>
 <script src="../../resource/js/dataTables.bootstrap.min.js"></script>
+<!-- DataTables 繁中語系改吃本機檔：原本的 language.url 指向 cdn.datatables.net，
+     DataTables 會等那支 AJAX 回來才初始化，廠內網路實測要 6.4 秒才看得到表格 -->
+<script src="../../resource/js/eg_dt_zhtw.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_dt_zhtw.js') ?>"></script>
 <script src="../../resource/js/custom.min.js"></script>
 
 <script>
@@ -648,6 +825,16 @@ var qaTempKey = '';
 var qaAttachments = { qa_ps: [], phenomenon: [], defect_detail: [] };
 var qaCurrentAttachField = '';
 
+/* ── 分批載入（使用者要求：先出第一頁，其餘背景續載） ──
+   IR_FIRST 先讓畫面馬上能用，之後每次背景續載 IR_CHUNK 筆。
+   irLoadSeq：切換年分或重新整理時＋1，舊的那一輪背景載入回來時就自己作廢，
+   否則慢回來的舊資料會把新篩選的結果蓋掉。 */
+var IR_FIRST = 400, IR_CHUNK = 1500;
+var irLoadSeq = 0, irTotal = 0, irYearFilter = '', irServerStats = null, irLoadingMore = false;
+var QAB_CSRF = <?= json_encode($QAB_CSRF) ?>;
+var QAB_CAN_CREATE = <?= $QAB_CAN_CREATE ? 'true' : 'false' ?>;
+var IR_IS_ADMIN = <?= $IR_IS_ADMIN ? 'true' : 'false' ?>;
+
 $(document).ready(function() {
     loadIRList();
     loadAllDepts();
@@ -659,23 +846,72 @@ $(document).ready(function() {
         var t = $('#irTable').DataTable();
         if (this.value !== '') { this.value = ''; t.search('').draw(); }
     });
+    $('#btnPageHelp').on('click', function(){ $('#helpUseMask').modal('show'); });
+    $('#ir-global-search').on('dblclick', function(){ if (this.value !== '') { this.value = ''; irTableSearch(''); } });
+
+    /* 業務進度：還沒按 Enter 存檔的內容要留在資料裡。
+       DataTables 換頁時那一列的 DOM 會重新產生，不記下來就會整段不見。 */
+    $('#irTable tbody').on('input', '.table-textarea', function() {
+        var id = $(this).closest('tr').data('ir-id');
+        var row = allIRData.find(function(r){ return r.IR_id == id; });
+        if (!row) return;
+        row._draft = this.value;
+        $(this).toggleClass('dirty', (row._draft || '') !== (row.progress_note || ''));
+    });
 });
 
 // ── 退貨清單 ────────────────────────────────────────────────
+/**
+ * 分批載入：第一批 IR_FIRST 筆回來就先畫出來（畫面馬上能用），其餘在背景一批一批續載。
+ * 年分下拉只會去拿那一年（幾百筆，最快）。
+ * 統計數字一律用後端回的（那是整份的數字），不要拿「目前已載入的」去算，
+ * 否則背景還沒載完時卡片上的筆數會是錯的。
+ */
 function loadIRList() {
-    $.post(IR_API, { action: 'get_ir_list' }, function(res) {
-        if (res.success) {
-            allIRData = res.data;
-            updateStats();
-            renderTable();
-        }
+    var seq = ++irLoadSeq;
+    irLoadingMore = false;
+    $.post(IR_API, { action: 'get_ir_list', year: irYearFilter, limit: IR_FIRST, offset: 0, with_meta: 1 },
+    function(res) {
+        if (seq !== irLoadSeq || !res.success) return;
+        allIRData    = res.data;
+        irTotal      = res.total || res.data.length;
+        irServerStats = res.stats || null;
+        updateStats();
+        renderTable();
+        loadIRMore(seq);
     }, 'json');
 }
 
+function loadIRMore(seq) {
+    if (seq !== irLoadSeq) return;
+    if (allIRData.length >= irTotal) { showLoadProgress(0, 0); return; }
+    irLoadingMore = true;
+    showLoadProgress(allIRData.length, irTotal);
+    $.post(IR_API, { action: 'get_ir_list', year: irYearFilter, limit: IR_CHUNK, offset: allIRData.length },
+    function(res) {
+        if (seq !== irLoadSeq) return;
+        if (!res.success || !res.data || !res.data.length) { irLoadingMore = false; showLoadProgress(0, 0); return; }
+        allIRData = allIRData.concat(res.data);
+        renderTable();
+        loadIRMore(seq);
+    }, 'json').fail(function(){ irLoadingMore = false; showLoadProgress(0, 0); });
+}
+
+function showLoadProgress(done, total) {
+    if (!total || done >= total) { $('#ir-load-progress').hide(); return; }
+    $('#ir-load-progress-txt').text('背景載入中 ' + done + ' / ' + total + ' 筆');
+    $('#ir-load-progress').show();
+}
+
+function onYearChange() {
+    irYearFilter = $('#filter-year').val() || '';
+    loadIRList();
+}
+
 function updateStats() {
-    var countAll = allIRData.length;
-    var countDone = allIRData.filter(r => r.IR_status == 9).length;
-    var countProcessing = countAll - countDone;
+    var countAll        = irServerStats ? irServerStats.all        : allIRData.length;
+    var countDone       = irServerStats ? irServerStats.done       : allIRData.filter(r => r.IR_status == 9).length;
+    var countProcessing = irServerStats ? irServerStats.processing : countAll - countDone;
     var html = `
         <div class="stat-card card-all ${currentFilter==='all'?'active':''}" onclick="filterStatus('all')">
             <i class="fa fa-list-alt stat-icon"></i>
@@ -707,8 +943,20 @@ function filterStatus(status) {
 
 var currentNoteGroupMap = {}; // { d_id_key: {notes:[], anchorId:null} }
 
+/**
+ * 表格改成「把資料交給 DataTables，由它只畫出當頁那 10 列」。
+ * 原本是先把每一列的 <tr> 一列一列 append 進 DOM（3,522 次），DataTables 再回頭把它們讀一遍，
+ * 那是這一頁最主要的卡頓來源；改成資料驅動之後 DOM 裡永遠只有當頁的列。
+ * 每一欄的 render 都要處理 type：display＝畫面上的 HTML、filter/sort＝給搜尋用的純文字，
+ * 不分開的話搜尋會連 HTML 標籤一起比對。
+ */
 function renderTable() {
-    if ($.fn.DataTable.isDataTable('#irTable')) { $('#irTable').DataTable().destroy(); }
+    var keepPage = 0, keepLen = 10, keepSearch = $('#ir-global-search').val() || '';
+    if ($.fn.DataTable.isDataTable('#irTable')) {
+        var old = $('#irTable').DataTable();
+        keepPage = old.page(); keepLen = old.page.len();
+        old.destroy();
+    }
     $('#irTable tbody').empty();
     $('#selectAll').prop('checked', false);
     clearIRBatchSelection();
@@ -746,35 +994,62 @@ function renderTable() {
     });
 
     // 更新 anchorId（每組最後一筆一般行）
+    var ordered = [];
     groupOrder.forEach(function(key) {
         var rows = groupMap[key];
         if (currentNoteGroupMap[key]) {
             currentNoteGroupMap[key].anchorId = rows[rows.length - 1].IR_id;
         }
-    });
-
-    // 渲染一般行（依 d_id 群組順序）
-    groupOrder.forEach(function(key) {
-        groupMap[key].forEach(function(row) {
-            $('#irTable tbody').append(buildRegularRow(row));
-        });
+        rows.forEach(function(r){ ordered.push(r); });
     });
 
     // 初始化 DataTable：移除原生搜尋框，把分頁放到上方右側
     var dt = $('#irTable').DataTable({
-        pageLength: 10, ordering: false,
+        data: ordered, pageLength: keepLen, ordering: false, deferRender: true,
         dom: '<"dt-top-row"<"dt-length"l><"dt-pagination"p>>rt<"dt-info-row"i>',
-        columnDefs: [{ orderable: false, targets: 0 }],
-        language: {
-            url: '//cdn.datatables.net/plug-ins/1.10.20/i18n/Chinese-traditional.json',
-            lengthMenu: '每頁 _MENU_ 筆'
+        lengthMenu: [[5, 10, 20, 50], [5, 10, 20, 50]],
+        columns: [
+            { data: null, className: 'col-check', orderable: false, render: function(r, t) {
+                return t === 'display'
+                    ? '<input type="checkbox" class="ir-batch-check" value="' + r.IR_id + '" onclick="onBatchCheck()">' : ''; } },
+            { data: 'IR_no',  render: function(v, t){ return t === 'display' ? esc(v) : (v || ''); } },
+            { data: 'IR_date' },
+            { data: 'Client_Name', render: function(v, t){ return t === 'display' ? (esc(v) || '-') : (v || ''); } },
+            { data: 'd_id',        render: function(v, t){ return t === 'display' ? (esc(v) || '-') : (v || ''); } },
+            { data: 'Qty' },
+            { data: 'return_type_name', render: function(v, t){
+                if (t !== 'display') return v || '';
+                return v ? '<span class="ir-type-badge normal">' + esc(v) + '</span>'
+                         : '<span style="color:#ccc;font-size:11px;">-</span>'; } },
+            { data: null, render: function(r, t){
+                if (t !== 'display') return ((r.IR_ps || '') + ' ' + (r.ERP_note || '')).trim();
+                return '<div style="max-height:80px;overflow-y:auto;">'
+                    + (r.IR_ps ? '<span>' + esc(r.IR_ps) + '</span>' : '')
+                    + (r.ERP_note ? '<div style="color:#888;font-size:12px;margin-top:3px;border-top:1px dashed #ddd;padding-top:2px;">'
+                        + '<i class="fa fa-tag" style="margin-right:2px;"></i>' + esc(r.ERP_note) + '</div>' : '')
+                    + '</div>'; } },
+            { data: null, render: function(r, t){ return t === 'display' ? deptStatusHtml(r) : deptStatusText(r); } },
+            { data: 'assignee_name', render: function(v, t){
+                if (t !== 'display') return v || '';
+                return v ? '<span style="font-size:13px;"><i class="fa fa-user-o" style="color:#888;margin-right:3px;"></i>' + esc(v) + '</span>'
+                         : '<span style="color:#ccc;font-size:11px;">-</span>'; } },
+            { data: null, render: function(r, t){ return t === 'display' ? progressHtml(r) : (r._draft != null ? r._draft : (r.progress_note || '')); } },
+            { data: null, render: function(r, t){ return t === 'display' ? qaCellHtml(r) : qaCellText(r); } }
+        ],
+        createdRow: function(tr, row) {
+            $(tr).attr('data-ir-id', row.IR_id);
+            if (row.IR_status == 9) tr.style.opacity = '.6';
+            $(tr).find('td').eq(9).css('white-space', 'nowrap');
+            $(tr).find('td').eq(11).css('white-space', 'nowrap');
         },
+        language: $.extend({}, EG_DT_ZHTW, { lengthMenu: '每頁 _MENU_ 筆' }),
         drawCallback: function() { injectNoteBanners(); }
     });
 
-    // 恢復搜尋值並綁定輸入事件（用命名空間避免重複綁定）
-    var savedSearch = $('#ir-global-search').val();
-    if (savedSearch) dt.search(savedSearch).draw(false);
+    if (keepSearch) dt.search(keepSearch);
+    if (keepPage > 0) { try { dt.page(keepPage); } catch (e) {} }
+    dt.draw(false);
+
     $('#ir-global-search').off('input.irt').on('input.irt', function() {
         if ($.fn.DataTable.isDataTable('#irTable')) {
             $('#irTable').DataTable().search(this.value).draw();
@@ -782,85 +1057,84 @@ function renderTable() {
     });
 }
 
-function buildRegularRow(row) {
-    var deptHtml = '';
-    if (row.has_ncr == 1 && row.ncr_dept_status) {
-        row.ncr_dept_status.sort(function(a,b) {
-            var da = (a.recv&&a.recv!=='-') ? new Date(a.recv).getTime() : 8640000000000000;
-            var db_ = (b.recv&&b.recv!=='-') ? new Date(b.recv).getTime() : 8640000000000000;
-            return da - db_;
-        });
-        row.ncr_dept_status.forEach(function(ds) {
-            var cls = ds.status === 'Returned' ? 'done' : 'pending';
-            var dateHtml = ds.status === 'Returned'
-                ? `<br><small>${ds.recv}~${ds.done}</small>`
-                : (ds.recv && ds.recv !== '-' ? `<br><small>${ds.recv}~</small>` : '');
-            deptHtml += `<div class="dept-tag ${cls}"><strong>${ds.dept}</strong>: ${ds.user}${dateHtml}</div>`;
-        });
-    }
+function esc(s) { return s == null ? '' : $('<div>').text(s).html(); }
 
+// 部門處理狀態（品質異常單的舊流程 qa_ir_ncr_flow）
+function deptStatusHtml(row) {
+    if (row.has_ncr != 1 || !row.ncr_dept_status || !row.ncr_dept_status.length) return '';
+    var list = row.ncr_dept_status.slice().sort(function(a, b) {
+        var da = (a.recv && a.recv !== '-') ? new Date(a.recv).getTime() : 8640000000000000;
+        var db_ = (b.recv && b.recv !== '-') ? new Date(b.recv).getTime() : 8640000000000000;
+        return da - db_;
+    });
+    var html = '';
+    list.forEach(function(ds) {
+        var cls = ds.status === 'Returned' ? 'done' : 'pending';
+        var dateHtml = ds.status === 'Returned'
+            ? '<br><small>' + esc(ds.recv) + '~' + esc(ds.done) + '</small>'
+            : (ds.recv && ds.recv !== '-' ? '<br><small>' + esc(ds.recv) + '~</small>' : '');
+        html += '<div class="dept-tag ' + cls + '"><strong>' + esc(ds.dept) + '</strong>: ' + esc(ds.user) + dateHtml + '</div>';
+    });
+    return html;
+}
+function deptStatusText(row) {
+    if (row.has_ncr != 1 || !row.ncr_dept_status) return '';
+    return row.ncr_dept_status.map(function(d){ return d.dept + ' ' + d.user; }).join(' ');
+}
+
+// 業務進度（含還沒存檔的草稿）
+function progressHtml(row) {
+    var val   = row._draft != null ? row._draft : (row.progress_note || '');
+    var dirty = (row._draft != null && row._draft !== (row.progress_note || ''));
     var modifierInfo = '';
     if (row.modifier_name) {
         modifierInfo = row.modifier_name + ' ' + (row.Modified_At_Str || '');
         if (!row.progress_note) modifierInfo += ' (刪除)';
     }
+    return '<textarea class="table-textarea' + (dirty ? ' dirty' : '') + '" id="progress_' + row.IR_id + '"'
+        + ' onkeydown="checkEnter(event,' + row.IR_id + ',this)" placeholder="輸入業務進度...">' + esc(val) + '</textarea>'
+        + '<div id="progress_info_' + row.IR_id + '" style="font-size:10px;color:#999;margin-top:2px;">' + esc(modifierInfo) + '</div>'
+        + '<div style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap;">'
+        + '<button class="btn btn-xs btn-default" onclick="openIrProgressModal(' + row.IR_id + ',' + JSON.stringify(row.IR_no) + ')" title="業務進度回覆記錄"><i class="fa fa-comments"></i> 回覆記錄</button>'
+        + '<button class="btn btn-xs btn-default" onclick="openIrProgressModal(' + row.IR_id + ',' + JSON.stringify(row.IR_no) + ',\'attach\')" title="退貨單附件"><i class="fa fa-paperclip"></i> 附件</button>'
+        + '</div>';
+}
 
-    var typeBadge = row.return_type_name
-        ? `<span class="ir-type-badge normal">${row.return_type_name}</span>`
-        : '<span style="color:#ccc;font-size:11px;">-</span>';
+// 品質異常單 + 結案鈕
+function qaCellHtml(row) {
     var isDone   = row.IR_status == 9;
     var allowNcr = row.return_type_allow_ncr == null || row.return_type_allow_ncr != 0;
-    var qaHtml   = !allowNcr
-        ? '<span class="text-muted" style="font-size:11px;"><i class="fa fa-ban"></i> 不開立</span>'
-        : (row.qa_order_id
-            /* 新版品質異常處理單：點單號直接開那一張單的處理／檢視畫面（2-QA-01-01） */
-            ? `<a class="btn btn-xs btn-info" href="../QA/qa_abnormal_form.php?id=${row.qa_order_id}" target="_blank"
-                  rel="noopener" title="開啟品質異常處理單">${row.qa_abnormal_order_no || '查看'}</a>`
-            : (row.has_ncr == 1
-                ? `<button class="btn btn-xs btn-info" onclick="openQADetailModal(${row.IR_id})">${row.qa_abnormal_order_no || '查看'}</button>`
-                : `<button class="btn btn-xs btn-default" onclick="openCreateQAModal(${row.IR_id}, '${row.IR_no}')">開立</button>`));
+    var qaHtml;
+    if (!allowNcr) {
+        qaHtml = '<span class="text-muted" style="font-size:11px;"><i class="fa fa-ban"></i> 不開立</span>';
+    } else if (row.qa_order_id) {
+        /* 新版品質異常處理單：點單號直接開那一張單的處理／檢視畫面（2-QA-01-01） */
+        qaHtml = '<a class="btn btn-xs btn-info" href="../QA/qa_abnormal_form.php?id=' + row.qa_order_id + '" target="_blank"'
+               + ' rel="noopener" title="開啟品質異常處理單">' + esc(row.qa_abnormal_order_no || '查看') + '</a>';
+        /* ERP 重新匯入客退單會換一組 IR_id，原本綁好的異常單就對不回這一列了；
+           那種情況是用「退貨單號」把它找回來的，一定要講出來，不然看不出準不準。 */
+        if (row.qa_bind_by === 'no_part') {
+            qaHtml += '<span class="qa-bind-guess" title="這張異常單原本綁的客退單已被 ERP 重新匯入換掉，系統以退貨單號＋料號重新對回來">以單號對應</span>';
+        } else if (row.qa_bind_by === 'no') {
+            qaHtml += '<span class="qa-bind-guess" title="以退貨單號對回來的，料號沒有對上，請點進去確認是不是這一筆">以單號對應（推測）</span>';
+        }
+    } else if (row.has_ncr == 1) {
+        qaHtml = '<button class="btn btn-xs btn-info" onclick="openQADetailModal(' + row.IR_id + ')">' + esc(row.qa_abnormal_order_no || '查看') + '</button>';
+    } else if (QAB_CAN_CREATE) {
+        qaHtml = '<button class="btn btn-xs btn-default" onclick="openNewQaOrder(' + row.IR_id + ')">開立</button>';
+    } else {
+        qaHtml = '<span class="text-muted" style="font-size:11px;" title="開立品質異常處理單需要該模組的權限">—</span>';
+    }
 
     var statusBtn = isDone
-        ? `<button class="btn btn-xs btn-default" onclick="toggleIRStatus(${row.IR_id},0)" title="點擊重新開啟" style="margin-top:4px;color:#888;">
-               <i class="fa fa-check-circle" style="color:#1ABB9C;"></i> 已結案
-           </button>`
-        : `<button class="btn btn-xs btn-success" onclick="toggleIRStatus(${row.IR_id},9)" style="margin-top:4px;">
-               <i class="fa fa-check"></i> 結案
-           </button>`;
-
-    return `<tr data-ir-id="${row.IR_id}" ${isDone ? 'style="opacity:.6;"' : ''}>
-        <td class="col-check"><input type="checkbox" class="ir-batch-check" value="${row.IR_id}" onclick="onBatchCheck()"></td>
-        <td>${row.IR_no}</td>
-        <td>${row.IR_date}</td>
-        <td>${row.Client_Name || '-'}</td>
-        <td>${row.d_id || '-'}</td>
-        <td>${row.Qty}</td>
-        <td>${typeBadge}</td>
-        <td>
-            <div style="max-height:80px;overflow-y:auto;">
-                ${row.IR_ps ? `<span>${row.IR_ps}</span>` : ''}
-                ${row.ERP_note ? `<div style="color:#888;font-size:12px;margin-top:3px;border-top:1px dashed #ddd;padding-top:2px;"><i class="fa fa-tag" style="margin-right:2px;"></i>${row.ERP_note}</div>` : ''}
-            </div>
-        </td>
-        <td>${deptHtml}</td>
-        <td style="white-space:nowrap;">
-            ${row.assignee_name
-                ? `<span style="font-size:13px;"><i class="fa fa-user-o" style="color:#888;margin-right:3px;"></i>${row.assignee_name}</span>`
-                : '<span style="color:#ccc;font-size:11px;">-</span>'}
-        </td>
-        <td>
-            <textarea class="table-textarea" id="progress_${row.IR_id}" onkeydown="checkEnter(event,${row.IR_id},this)" placeholder="輸入業務進度...">${row.progress_note||''}</textarea>
-            <div id="progress_info_${row.IR_id}" style="font-size:10px;color:#999;margin-top:2px;">${modifierInfo}</div>
-            <div style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap;">
-                <button class="btn btn-xs btn-default" onclick="openIrProgressModal(${row.IR_id},'${row.IR_no}')" title="業務進度回覆記錄"><i class="fa fa-comments"></i> 回覆記錄</button>
-                <button class="btn btn-xs btn-default" onclick="openIrProgressModal(${row.IR_id},'${row.IR_no}','attach')" title="退貨單附件"><i class="fa fa-paperclip"></i> 附件</button>
-            </div>
-        </td>
-        <td style="white-space:nowrap;">
-            ${qaHtml}
-            <br>${statusBtn}
-        </td>
-    </tr>`;
+        ? '<button class="btn btn-xs btn-default" onclick="toggleIRStatus(' + row.IR_id + ',0)" title="點擊重新開啟" style="margin-top:4px;color:#888;">'
+          + '<i class="fa fa-check-circle" style="color:#1ABB9C;"></i> 已結案</button>'
+        : '<button class="btn btn-xs btn-success" onclick="toggleIRStatus(' + row.IR_id + ',9)" style="margin-top:4px;">'
+          + '<i class="fa fa-check"></i> 結案</button>';
+    return qaHtml + '<br>' + statusBtn;
+}
+function qaCellText(row) {
+    return (row.qa_abnormal_order_no || '') + ' ' + (row.IR_status == 9 ? '已結案' : '處理中');
 }
 
 function buildNoteBannerRow(row) {
@@ -918,7 +1192,8 @@ function saveProgress(id, el) {
             if (!el.value) info += ' (刪除)';
             $('#progress_info_' + id).text(info);
             var item = allIRData.find(i => i.IR_id == id);
-            if (item) { item.progress_note = el.value; item.modifier_name = res.modifier; item.Modified_At_Str = res.time; }
+            if (item) { item.progress_note = el.value; delete item._draft; item.modifier_name = res.modifier; item.Modified_At_Str = res.time; }
+            $(el).removeClass('dirty');
             setTimeout(function(){ el.style.backgroundColor = 'transparent'; }, 2000);
         }
     }, 'json');
@@ -1739,8 +2014,19 @@ function toggleIRStatus(irId, newStatus) {
     var msg = newStatus == 9 ? '確定將此退貨單設為結案？' : '確定重新開啟此退貨單？';
     if (!confirm(msg)) return;
     $.post(IR_API, { action: 'update_ir_status', ir_ids: JSON.stringify([irId]), status: newStatus }, function(res) {
-        if (res.success) { showToast(newStatus == 9 ? '已結案' : '已重新開啟', true); loadIRList(); }
-        else alert('操作失敗：' + (res.message || ''));
+        if (!res.success) { alert('操作失敗：' + (res.message || '')); return; }
+        showToast(newStatus == 9 ? '已結案' : '已重新開啟', true);
+        /* 只改這一列就好，不必為了一顆結案鈕把整份清單重新抓一次（幾千筆） */
+        var row = allIRData.find(function(r){ return r.IR_id == irId; });
+        if (row) {
+            var was = (row.IR_status == 9);
+            row.IR_status = newStatus;
+            if (irServerStats && was !== (newStatus == 9)) {
+                irServerStats.done       += (newStatus == 9 ? 1 : -1);
+                irServerStats.processing -= (newStatus == 9 ? 1 : -1);
+            }
+            updateStats(); renderTable();
+        } else { loadIRList(); }
     }, 'json');
 }
 
@@ -1761,6 +2047,8 @@ function clearFilters() {
     currentReturnTypeFilter = '';
     $('#filter-assignee, #filter-return-type').val('');
     $('#ir-global-search').val('');
+    // 年分是「去後端只拿那一年」的篩選，清掉要重新取整份資料
+    if (irYearFilter !== '') { $('#filter-year').val(''); irYearFilter = ''; loadIRList(); return; }
     renderTable();
 }
 
@@ -1796,6 +2084,133 @@ function showToast(msg, ok) {
     t.style.backgroundColor = ok ? '#26B99A' : '#d9534f';
     t.style.display = 'block';
     setTimeout(function(){ t.style.display = 'none'; }, 3000);
+}
+
+/* ── 開立品質異常處理單（2-QA-01-01）────────────────────────────────
+   刻意走 QaAbnormal_API 的 create，與 qa_abnormal_list.php 的「開立異常單」完全同一支：
+   編號、補資料判定、客戶與料號由來源綁定、抽樣建議數都是同一套規則，不在這裡再刻一份。
+   這裡的來源固定是按下按鈕的那一張客退單，所以只要填數量與現象。 */
+var QAB_API = '../../src/store/QaAbnormal_API.php';
+var QAB_BF_DAYS = <?= (int)$QAB_BF_DAYS ?>;
+
+function openNewQaOrder(irId) {
+    var row = allIRData.find(function(r){ return r.IR_id == irId; });
+    if (!row) return;
+    $('#qn_ir_id').val(irId);
+    $('#qn_ir_no').text(row.IR_no);
+    $('#qn_ir_info').text([row.IR_date, row.Client_Name || '', row.d_id || ''].filter(Boolean).join('　/　'));
+    $('#qn_date').val(new Date().toISOString().slice(0, 10));
+    $('#qn_batch').val(row.Qty != null ? row.Qty : '');
+    $('#qn_insp').val(''); $('#qn_ng').val(''); $('#qn_rate').val(''); $('#qn_phe').val('');
+    $('#qn_err').text(''); $('#qn_bf').hide();
+    $('#qn_sample_hint').text('');
+    qnBackfillHint();
+    qnSuggestSample();
+    $('#qaNewModal').modal('show');
+}
+
+// 檢驗數的建議值走線上檢驗同一套抽樣規則（人工改過就不再覆蓋）
+function qnSuggestSample() {
+    var q = parseInt($('#qn_batch').val(), 10);
+    if (!q || q <= 0) { $('#qn_sample_hint').text(''); return; }
+    $.get(QAB_API, { action: 'suggest_sample', qty: q }, function(res) {
+        if (!res || !res.success) return;
+        var sug = Number(res.sample) || 0;
+        $('#qn_sample_hint').text(sug ? ('（抽樣規則建議 ' + sug + ' 件）') : '');
+        if (sug && !$('#qn_insp').val()) $('#qn_insp').val(sug);   // 空的才自動帶，不蓋掉人填的
+        qnRate();
+    }, 'json');
+}
+function qnRate() {
+    var insp = parseFloat($('#qn_insp').val()), ng = parseFloat($('#qn_ng').val());
+    $('#qn_rate').val((insp > 0 && ng >= 0) ? (ng / insp * 100).toFixed(2) + '%　(' + ng + ' / ' + insp + ')' : '');
+}
+function qnBackfillHint() {
+    var d = $('#qn_date').val();
+    if (!d) { $('#qn_bf').hide(); return; }
+    var cut = new Date(); cut.setDate(cut.getDate() - QAB_BF_DAYS);
+    var isBf = d < cut.toISOString().slice(0, 10);
+    $('#qn_bf').toggle(isBf).html(!isBf ? '' :
+        '<b><i class="fa fa-clock-o"></i> 這張會被視為補資料</b>（填寫日期在 ' + QAB_BF_DAYS
+        + ' 天以前）：建立後可以在處理頁的「補登簽章」逐格指定當時的簽章人員與印章日期，相關單位意見也會改成直接補登、不發通知。');
+}
+$(document).on('change', '#qn_date', qnBackfillHint);
+$(document).on('change', '#qn_batch', qnSuggestSample);
+$(document).on('input', '#qn_insp,#qn_ng', qnRate);
+$(document).on('click', '#qn_go', function() {
+    var $b = $(this);
+    if ($b.prop('disabled')) return;
+    var d = $('#qn_date').val();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) { $('#qn_err').text('請填寫填寫日期'); return; }
+    $('#qn_err').text('');
+    $b.prop('disabled', true);
+    $.post(QAB_API, {
+        action: 'create', csrf: QAB_CSRF, kind: 'ir',
+        fill_date: d, ir_id: $('#qn_ir_id').val(),
+        batch_qty: $('#qn_batch').val(), insp_qty: $('#qn_insp').val(), ng_qty: $('#qn_ng').val(),
+        abnormal_phenomenon: $('#qn_phe').val()
+    }, function(res) {
+        $b.prop('disabled', false);
+        if (!res || !res.success) { $('#qn_err').text((res && res.message) || '建立失敗'); return; }
+        $('#qaNewModal').modal('hide');
+        showToast('已建立異常單 ' + res.no, true);
+        loadIRList();
+        window.open('../QA/qa_abnormal_form.php?id=' + res.id, '_blank', 'noopener');
+    }, 'json').fail(function(){ $b.prop('disabled', false); $('#qn_err').text('建立失敗，請重新整理頁面後再試'); });
+});
+
+/* ── 期間自動結案（限系統管理者）──────────────────────────────────
+   一律「先試算、看清楚是哪幾筆、再套用」；後端會用同一組條件再算一次，
+   所以就算有人繞過畫面直接打 API，條件與權限一樣擋得住（鐵律8）。 */
+function resetAutoClose() {
+    $('#ac_from').val(''); $('#ac_to').val('');
+    $('#ac_inc_qa,#ac_inc_flow').prop('checked', false);
+    $('#ac_err').text(''); $('#ac_result').hide();
+}
+function acParams() {
+    return { date_from: $('#ac_from').val(), date_to: $('#ac_to').val(),
+             include_open_qa: $('#ac_inc_qa').is(':checked') ? 1 : 0,
+             include_open_flow: $('#ac_inc_flow').is(':checked') ? 1 : 0 };
+}
+function acValidate() {
+    var p = acParams(), today = new Date().toISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(p.date_to)) return '請填寫「退貨日期 到」';
+    if (p.date_from && p.date_from > p.date_to) return '「退貨日期 從」不可以晚於「到」';
+    if (p.date_to >= today) return '自動結案只能用在今天以前的舊資料，請把「到」改成昨天或更早';
+    return '';
+}
+function autoClosePreview() {
+    var msg = acValidate();
+    $('#ac_result').hide();
+    if (msg) { $('#ac_err').text(msg); return; }
+    $('#ac_err').text('');
+    $.post(IR_API, $.extend({ action: 'auto_close_preview' }, acParams()), function(res) {
+        if (!res.success) { $('#ac_err').text(res.message || '試算失敗'); return; }
+        $('#ac_summary').html('符合條件 <span style="color:#DD5138;">' + res.count + '</span> 筆將被結案'
+            + (res.skipped ? '，另有 ' + res.skipped + ' 筆因為「異常單未結案／部門流程未完成」被跳過' : '')
+            + (res.count > 30 ? '（以下只列出最近 30 筆供確認）' : ''));
+        var tb = $('#ac_rows').empty();
+        (res.rows || []).forEach(function(r) {
+            tb.append('<tr><td>' + esc(r.IR_no) + '</td><td>' + esc(r.IR_date) + '</td><td>' + esc(r.Client_Name || '-')
+                + '</td><td>' + esc(r.d_id || '-') + '</td><td style="text-align:right;">' + esc(r.Qty) + '</td></tr>');
+        });
+        $('#ac_apply_btn').prop('disabled', res.count === 0);
+        $('#ac_result').show();
+    }, 'json');
+}
+function autoCloseApply() {
+    var msg = acValidate();
+    if (msg) { $('#ac_err').text(msg); return; }
+    var n = ($('#ac_summary').text().match(/符合條件 (\d+) 筆/) || [])[1];
+    if (!confirm('確定把符合條件的 ' + (n || '') + ' 筆退貨單一次結案？\n（只改結案狀態，其他欄位一個都不會動；個別單據事後仍可重新開啟）')) return;
+    var $b = $('#ac_apply_btn').prop('disabled', true);
+    $.post(IR_API, $.extend({ action: 'auto_close_apply' }, acParams()), function(res) {
+        $b.prop('disabled', false);
+        if (!res.success) { $('#ac_err').text(res.message || '結案失敗'); return; }
+        showToast('已結案 ' + res.count + ' 筆', true);
+        $('#ac_result').hide();
+        loadIRList();
+    }, 'json').fail(function(){ $b.prop('disabled', false); $('#ac_err').text('結案失敗，請重新整理頁面後再試'); });
 }
 
 // ── BOM綁定 ───────────────────────────────────────────────────
