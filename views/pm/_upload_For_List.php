@@ -3241,6 +3241,9 @@ if (!function_exists('parseQuotationErpRows')) {
                 'specification' => $colE !== '' ? mb_substr($colE, 0, 100) : null,
                 'quantity'      => (int)$qty,
                 'unit_price'    => is_numeric($priceRaw) ? (float)$priceRaw : 0,
+                // 數量的原始字串（"4,000.0"）。匯入本身用不到，是留給修復工具判斷
+                // 「這筆舊資料是不是被千分位逗號截斷造成的」——那要拿當初那個字串去重現。
+                'quantity_raw'  => $colF,
             ];
         }
         return $groups;

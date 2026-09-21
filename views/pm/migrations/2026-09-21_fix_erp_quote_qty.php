@@ -25,16 +25,33 @@
 if (PHP_SAPI !== 'cli') { exit("這支工具只能用指令列執行\n"); }
 
 $args = array_slice($argv, 1);
-$file = null; $doRun = false; $show = 20;
+$inputs = []; $doRun = false; $show = 20;
 foreach ($args as $a) {
     if ($a === '--run') { $doRun = true; }
     elseif (strpos($a, '--show=') === 0) { $show = max(0, (int)substr($a, 7)); }
-    elseif ($file === null) { $file = $a; }
+    else { $inputs[] = $a; }
 }
-if (!$file) {
-    exit("用法：php " . basename(__FILE__) . " <ERP報價單日報表.xlsx> [--run] [--show=N]\n");
+if (!$inputs) {
+    exit("用法：php " . basename(__FILE__) . " <檔案或資料夾> [更多檔案…] [--run] [--show=N]\n"
+       . "　　　給資料夾會自動抓底下所有 .xls／.xlsx（依檔名排序逐檔處理）\n");
 }
-if (!is_file($file)) { exit("找不到檔案：$file\n"); }
+
+// 檔案清單：可以給單檔、多檔，或一個資料夾（整個年度目錄一次跑完）
+$files = [];
+foreach ($inputs as $in) {
+    if (is_dir($in)) {
+        foreach (['xls', 'xlsx'] as $ext) {
+            foreach (glob(rtrim($in, "/\\") . '/*.' . $ext) as $f) $files[] = $f;
+        }
+    } elseif (is_file($in)) {
+        $files[] = $in;
+    } else {
+        exit("找不到檔案或資料夾：$in\n");
+    }
+}
+$files = array_values(array_unique($files));
+sort($files);
+if (!$files) { exit("指定的位置底下沒有 .xls／.xlsx 檔案\n"); }
 
 // _upload_For_List.php 內是相對路徑 require（vendor/autoload 等），一定要先切到它的目錄
 $pmDir = dirname(__DIR__);
@@ -68,27 +85,14 @@ function legacyParseQty_buggy($value) {
     return null;
 }
 
-echo "來源檔案：$file\n";
-echo "模式　　：" . ($doRun ? "★ 實際寫入（--run）" : "試算（不寫入任何資料）") . "\n";
+echo "來源：" . count($files) . " 個檔案\n";
+foreach ($files as $f) echo "　・" . basename($f) . "\n";
+echo "模式：" . ($doRun ? "★ 實際寫入（--run）" : "試算（不寫入任何資料）") . "\n";
 echo str_repeat('─', 78) . "\n";
 
 use PhpOffice\PhpSpreadsheet\IOFactory;
-$spreadsheet = IOFactory::load($file);
-$allRows = $spreadsheet->getActiveSheet()->toArray();
 
-$scan = '';
-foreach ($allRows as $i => $r) { if ($i >= 30) break; $scan .= implode(' ', array_map('strval', $r)); }
-if (mb_strpos($scan, '客戶報價單日報表') === false) {
-    echo "⚠ 前 30 行找不到「客戶報價單日報表」字樣，這可能不是 ERP 報價單日報表。\n";
-    echo "  仍要繼續請確認檔案正確後再執行。\n";
-    exit(1);
-}
-
-$stats = [];
-$groups = parseQuotationErpRows($allRows, $stats);
-echo "原始檔解析：報價單 " . count($groups) . " 張\n";
-
-// ── 逐張比對 ────────────────────────────────────────────────────────────
+// ── 逐檔比對 ────────────────────────────────────────────────────────────
 $selQuote = $db->prepare("SELECT quote_id FROM quotation_list WHERE quote_no = ? LIMIT 1");
 $selItems = $db->prepare("SELECT item_id, sort_order, product_id, quantity, unit_price, amount
                             FROM quotation_item WHERE quote_id = ? ORDER BY sort_order, item_id");
@@ -98,18 +102,49 @@ $manual = [];       // 現值與「當初會存成的值」對不起來＝可能
 $noQuote = [];      // 原始檔有、系統查無這張報價單
 $mismatch = [];     // 明細對不起來（筆數或料號不符）
 $okCount = 0;
+$quoteSeen = 0;
+$skipFiles = [];
 
-foreach ($groups as $qno => $grp) {
+foreach ($files as $fi => $file) {
+  $base = basename($file);
+  printf("[%d/%d] %-22s ", $fi + 1, count($files), $base);
+
+  try {
+      $spreadsheet = IOFactory::load($file);
+      $allRows = $spreadsheet->getActiveSheet()->toArray();
+  } catch (Exception $e) {
+      echo "讀取失敗：" . $e->getMessage() . "\n";
+      $skipFiles[] = "$base（讀取失敗）";
+      continue;
+  }
+
+  $scan = '';
+  foreach ($allRows as $i => $r) { if ($i >= 30) break; $scan .= implode(' ', array_map('strval', $r)); }
+  if (mb_strpos($scan, '客戶報價單日報表') === false) {
+      echo "略過：前 30 行找不到「客戶報價單日報表」字樣，可能不是報價單日報表\n";
+      $skipFiles[] = "$base（不是報價單日報表）";
+      continue;
+  }
+
+  $stats = [];
+  $groups = parseQuotationErpRows($allRows, $stats);
+  $quoteSeen += count($groups);
+  $fOk = 0; $fFix = 0; $fManual = 0; $fNo = 0; $fMis = 0;
+
+  foreach ($groups as $qno => $grp) {
     $selQuote->execute([$qno]);
     $quoteId = $selQuote->fetchColumn();
-    if (!$quoteId) { $noQuote[] = $qno; continue; }
+    if (!$quoteId) { $noQuote[] = $qno; $fNo++; continue; }
 
     $selItems->execute([$quoteId]);
     $dbItems = $selItems->fetchAll(PDO::FETCH_ASSOC);
     $srcRows = $grp['rows'];
 
     if (count($dbItems) !== count($srcRows)) {
-        $mismatch[] = "$qno（原始檔 " . count($srcRows) . " 筆、系統 " . count($dbItems) . " 筆）";
+        // 變數一律用大括號括起來：PHP 的變數名允許 \x80-\xff，"$qno（原始檔" 會把後面的中文
+        // 一起吃進變數名（變成未定義變數、單號整個不見），而且只有真的走到這一行才看得出來
+        $mismatch[] = "{$qno}（原始檔 " . count($srcRows) . " 筆、系統 " . count($dbItems) . " 筆）";
+        $fMis++;
         continue;
     }
 
@@ -117,32 +152,37 @@ foreach ($groups as $qno => $grp) {
         $dbi = $dbItems[$idx];
         // 料號必須對得上，否則代表順序已經被動過，不可以照位置更新
         if (trim((string)$dbi['product_id']) !== trim((string)$src['product_id'])) {
-            $mismatch[] = "$qno 第" . ($idx + 1) . "筆（原始檔料號 {$src['product_id']}、系統 {$dbi['product_id']}）";
+            $mismatch[] = "{$qno} 第" . ($idx + 1) . "筆（原始檔料號 {$src['product_id']}、系統 {$dbi['product_id']}）";
+            $fMis++;
             continue;
         }
 
         $correct = (int)$src['quantity'];          // 修正後的解析結果（正確值）
         $nowQty  = (int)$dbi['quantity'];
-        if ($nowQty === $correct) { $okCount++; continue; }
+        if ($nowQty === $correct) { $okCount++; $fOk++; continue; }
 
-        // 這一筆到底是不是「被逗號截斷」造成的？用舊邏輯重算一次當初會存成什麼
-        $rawQty = null;
-        foreach ($allRows as $ar) {            // 從原始列找回這一筆的數量原字串
-            $pad = array_pad(array_values($ar), 10, null);
-            if (trim((string)($pad[3] ?? '')) === $src['product_id']) { $rawQty = trim((string)($pad[5] ?? '')); }
-        }
-        $legacy = $rawQty !== null ? (int)legacyParseQty_buggy($rawQty) : null;
+        // 這一筆到底是不是「被逗號截斷」造成的？拿**這一列自己的數量原字串**用舊邏輯重算一次。
+        // 原始字串由 parseQuotationErpRows() 一起帶回來（quantity_raw）——**絕對不可以**回頭用
+        // 料號去整份檔案裡找：同一個料號一年內會出現在幾十張報價單上，抓到的是別張單的數量。
+        // （第一版就是這樣寫的，報告印出來同一張單三筆的「當初應存成」都是同一個數字，一看就知道錯了。）
+        $rawQty = array_key_exists('quantity_raw', $src) ? $src['quantity_raw'] : null;
+        $legacy = ($rawQty !== null && trim((string)$rawQty) !== '') ? (int)legacyParseQty_buggy($rawQty) : null;
 
-        $row = ['quote_no' => $qno, 'item_id' => (int)$dbi['item_id'], 'product_id' => $dbi['product_id'],
-                'now' => $nowQty, 'correct' => $correct, 'price' => (float)$dbi['unit_price'],
-                'legacy' => $legacy, 'quote_id' => (int)$quoteId];
-        if ($legacy !== null && $legacy === $nowQty) $toFix[] = $row;   // 確定是 bug
-        else $manual[] = $row;                                          // 對不起來＝可能被人改過
+        $row = ['file' => $base, 'quote_no' => $qno, 'item_id' => (int)$dbi['item_id'],
+                'product_id' => $dbi['product_id'], 'now' => $nowQty, 'correct' => $correct,
+                'price' => (float)$dbi['unit_price'], 'legacy' => $legacy,
+                'raw' => (string)$rawQty, 'quote_id' => (int)$quoteId];
+        if ($legacy !== null && $legacy === $nowQty) { $toFix[] = $row; $fFix++; }   // 確定是 bug
+        else { $manual[] = $row; $fManual++; }                                       // 可能被人改過
     }
+  }
+  printf("報價單%5d張｜已正確%6d｜可修正%5d｜待確認%4d｜查無%4d｜對不起來%3d\n",
+      count($groups), $fOk, $fFix, $fManual, $fNo, $fMis);
 }
 
 // ── 報告 ────────────────────────────────────────────────────────────────
 echo str_repeat('─', 78) . "\n";
+printf("掃描報價單總數　　：%6d 張\n", $quoteSeen);
 printf("數量已正確　　　　：%6d 筆\n", $okCount);
 printf("★ 確定被截斷可修正：%6d 筆\n", count($toFix));
 printf("需人工確認　　　　：%6d 筆（現值與「當初會被存成的值」對不起來，可能有人改過）\n", count($manual));
@@ -160,12 +200,18 @@ if ($show > 0 && $toFix) {
 }
 if ($show > 0 && $manual) {
     echo "\n【需人工確認（前 $show 筆）｜這些不會被自動修改】\n";
+    echo "  「原始檔」＝ERP 上的數量，「當初應存成」＝依當初的 bug 推算出來的值。\n";
+    echo "  現值不等於「當初應存成」，代表這一筆後來被人改過（或另有原因），所以不自動覆蓋。\n";
     foreach (array_slice($manual, 0, $show) as $r) {
-        printf("  %-16s %-22s 現值 %s、原始檔 %s、當初應存成 %s\n", $r['quote_no'],
-            mb_strimwidth($r['product_id'], 0, 22), $r['now'], $r['correct'],
-            $r['legacy'] === null ? '（找不到原始字串）' : $r['legacy']);
+        printf("  %-14s %-20s 現值 %-8s 原始檔 %-10s（ERP原字 %-10s）當初應存成 %s\n",
+            $r['quote_no'], mb_strimwidth($r['product_id'], 0, 20), $r['now'], $r['correct'],
+            mb_strimwidth((string)$r['raw'], 0, 10),
+            $r['legacy'] === null ? '（無原始字串）' : $r['legacy']);
     }
     if (count($manual) > $show) echo "  …其餘 " . (count($manual) - $show) . " 筆未列出\n";
+}
+if ($skipFiles) {
+    echo "\n【略過的檔案】\n  " . implode("\n  ", $skipFiles) . "\n";
 }
 if ($show > 0 && $noQuote) {
     echo "\n【系統查無的報價單（前 $show 張）】\n  " . implode('、', array_slice($noQuote, 0, $show)) . "\n";
