@@ -586,12 +586,17 @@ function ocq_ob_order_cols() {
         COALESCE((SELECT SUM(m2.allocated_qty) FROM bom_order_process_map m2 WHERE m2.order_id = ot.Order_id), 0) AS already_allocated";
 }
 
-/** 分配量的預設值（與逐筆綁定跳窗的 pre 完全相同的算法，不可以在兩邊各算一次）。 */
+/**
+ * 分配量的預設值（**唯一實作**：逐筆綁定跳窗、需人工判定清單、綁定後的即時刷新都走這一支）。
+ * 已經被別的 BOM 分配滿（未分配量＝0）時一律回 0——舊版在這種情況回的是 BOM 發單量，
+ * 等於「這張訂單早就滿了，系統還預先幫你再超配一次」，同一個料號好幾筆 BOM 排在一起判定時
+ * 特別容易就這樣按下去（使用者回報的就是這件事）。
+ */
 function ocq_ob_qty_default($bomQty, $o) {
     $bomQty = (int)$bomQty;
     $left   = max(0, (int)($o['Qty'] ?? 0) - (int)($o['already_allocated'] ?? 0));
-    if ($bomQty > 0 && $left > 0) return min($bomQty, $left);
-    return $bomQty ?: $left;
+    if ($left <= 0) return 0;
+    return ($bomQty > 0) ? min($bomQty, $left) : $left;
 }
 
 /**
@@ -966,13 +971,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // 過期就連查都查不了。
     $ocq_bind_actions = ['bind_search_part', 'bind_get_state', 'bind_apply_part', 'bind_apply_order',
         'autobind_scan', 'autobind_list', 'autobind_apply', 'bind_customers', 'bind_create_part',
-        'autobind_order_scan', 'autobind_order_list', 'autobind_order_apply',
+        'autobind_order_scan', 'autobind_order_list', 'autobind_order_apply', 'autobind_order_refresh',
         'autobind_quote_scan', 'autobind_quote_list', 'autobind_quote_apply'];
     $ocq_part_actions = ['bind_search_part', 'bind_apply_part', 'autobind_scan', 'autobind_list', 'autobind_apply',
         'bind_customers', 'bind_create_part'];
     if (in_array($action, $ocq_bind_actions, true)) {
         $ok = in_array($action, $ocq_part_actions, true) ? $ocq_can_bind_part
             : (in_array($action, ['bind_apply_order', 'autobind_order_scan', 'autobind_order_list', 'autobind_order_apply',
+                                  'autobind_order_refresh',
                                   'autobind_quote_scan', 'autobind_quote_list', 'autobind_quote_apply'], true)
                 ? $ocq_can_bind_order : ($ocq_can_bind_part || $ocq_can_bind_order));
         if (!$ok) {
@@ -1357,6 +1363,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 else $skipped[] = ['bom' => $bom, 'why' => $r['message'] ?? '綁定失敗'];
             }
             echo json_encode(['success' => true, 'done' => $done, 'skipped' => $skipped]);
+
+        } elseif ($action === 'autobind_order_refresh') {
+            // 綁完之後把「剛剛被分配到的那幾張訂單」的最新狀態撈回來，讓畫面上**其他還沒判定的列**
+            // 就地更新（同一個料號的好幾筆 BOM 共用同一批候選訂單，不更新就會照著舊的「已分配」
+            // 再分配一次）。**數字一律重查資料庫不在前端自己扣**——同一時間別人也在綁。
+            // 收 [{order_id, bom_qty}]：分配量預設值要看那一列 BOM 的發單量，所以連 bom_qty 一起送，
+            // 才能直接用 ocq_ob_qty_default()（唯一實作）算，不必在 JS 再寫一份同樣的規則。
+            $req = json_decode($_POST['orders_json'] ?? '[]', true);
+            if (!is_array($req) || !$req) { echo json_encode(['success' => true, 'rows' => []]); exit; }
+            $pairs = []; $ids = [];
+            foreach ($req as $p) {
+                $oid = intval($p['order_id'] ?? 0);
+                if ($oid <= 0) continue;
+                $bq = max(0, intval($p['bom_qty'] ?? 0));
+                $pairs[$oid . ':' . $bq] = ['order_id' => $oid, 'bom_qty' => $bq];
+                $ids[$oid] = 1;
+                if (count($pairs) >= 400) break;
+            }
+            if (!$pairs) { echo json_encode(['success' => true, 'rows' => []]); exit; }
+            $ids = array_keys($ids);
+            $ph  = implode(',', array_fill(0, count($ids), '?'));
+            $st  = $pdo->prepare("SELECT " . ocq_ob_order_cols() . " FROM order_track ot WHERE ot.Order_id IN ($ph)");
+            $st->execute($ids);
+            $om = [];
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $o) $om[(int)$o['Order_id']] = $o;
+            // 這張訂單目前掛在哪幾筆 BOM 上（畫面要寫「已被 B-xxx 綁走」，只講數字看不出是被誰拿走的）
+            $bm = [];
+            $sb = $pdo->prepare("SELECT order_id, bom FROM bom_order_process_map WHERE order_id IN ($ph) ORDER BY id");
+            $sb->execute($ids);
+            foreach ($sb->fetchAll(PDO::FETCH_ASSOC) as $b) $bm[(int)$b['order_id']][] = $b['bom'];
+            $out = [];
+            foreach ($pairs as $key => $p) {
+                $o = $om[$p['order_id']] ?? null;
+                if (!$o) continue;
+                $qty = (int)$o['Qty']; $used = (int)$o['already_allocated'];
+                $out[] = ['key' => $key, 'order_id' => $p['order_id'], 'bom_qty' => $p['bom_qty'],
+                    'qty' => $qty, 'used' => $used, 'left' => max(0, $qty - $used),
+                    'qty_default' => ocq_ob_qty_default($p['bom_qty'], $o),
+                    'boms' => $bm[$p['order_id']] ?? []];
+            }
+            echo json_encode(['success' => true, 'rows' => $out]);
 
         } elseif ($action === 'autobind_quote_scan') {
             list($ids, ) = ocq_qb_order_ids($pdo, $_POST);
@@ -1752,6 +1799,8 @@ try {
         table.ocq-pick td.tl { text-align: left; }
         table.ocq-pick tbody tr:hover { background: #FBF0DD; }
         table.ocq-pick tbody tr.hit { background: #EDF7EC; }
+        table.ocq-pick tbody tr.ord-full { background: #FBE7E1; }
+        table.ocq-pick tbody tr.ord-full.hit { background: #F3EDD9; }
         .ocq-pick-wrap { max-height: 46vh; overflow: auto; border: 1px solid #E8D5B5; border-radius: 4px; }
         .ocq-pick-qty { width: 72px; height: 24px; font-size: 12px; padding: 0 4px; border: 1px solid #D8BE93; border-radius: 3px; text-align: right; }
         .ocq-bind-err { color: #DD5138; font-size: 12.5px; margin-top: 6px; line-height: 1.7; }
@@ -1788,6 +1837,9 @@ try {
         .ocq-ab-cand { display: block; padding: 3px 5px; border: 1px solid #EADFC8; border-radius: 4px;
             margin-bottom: 3px; background: #fff; cursor: pointer; line-height: 1.6; }
         .ocq-ab-cand:hover { background: #FBF0DC; }
+        /* 已被別的 BOM 分配滿的候選訂單：不停用（現場偶爾真的要超配），但一定要一眼看得出來 */
+        .ocq-ab-cand.cand-full { background: #FBE7E1; border-color: #E0B9AC; }
+        .ocq-cand-full { color: #B4543B; }
         .ocq-ab-cand input { margin-right: 5px; }
         .ocq-ab-cand .cm-same { color: #2f7a3f; font-weight: bold; }
         .ocq-ab-cand .cm-diff { color: #B4543B; }
@@ -1975,6 +2027,7 @@ try {
             <li><b>②綁訂單</b>：候選＝<b>同一筆料號主檔底下、未作廢的訂單</b>。這個料號底下<b>只有一張訂單時才自動綁</b>；有好幾張時列出來讓你挑（依「訂單日與這筆 BOM 的日期最接近」排序），<b>分配量可以逐張改</b>，預設帶入「BOM 發單量」與「該訂單未被分配量」中較小者。<b>同一筆 BOM 的量分屬好幾張訂單時可以一次挑好幾張</b>（一次最多 20 張，各自寫入分配量；挑兩張以上會顯示「分配量合計／發單量」，超過會標紅提醒但不擋你，因為確實有一張 BOM 補足好幾張訂單缺量的情形）。</li>
             <li><b>③綁報價單</b>：報價單是綁在<b>訂單</b>上的（不是 BOM），所以這一階處理的是「範圍內的 BOM 綁到的訂單裡還沒綁報價單的」。候選＝<b>報價明細的料號與訂單料號完全相同</b>的報價單（草稿與待審核的不列入）；只有一筆時自動綁，多筆時依「<b>報價日不晚於訂單日、且日期最接近</b>」排序，第一筆會標「建議：下單當時的報價」。</li>
             <li>兩個階段都可以<b>逐筆按「套用」，也可以勾選起來一次全部套用</b>；挑好候選會自動幫你勾起該列。已經被別人綁走的一律擋下、不覆蓋。</li>
+            <li><b>綁完訂單後，畫面上其他還沒判定的列會自動更新</b>：同一個料號的好幾筆 BOM 會排在一起、而且共用同一批候選訂單，綁完第一筆之後其餘各列的「已分配／未分配」會立刻重查更新，<b>已經被分配滿的那張訂單會標紅寫明是被哪一筆 BOM 綁走、分配量預設帶 0</b>，避免照著舊數字把同一張訂單再分配一次。已經判定完成的列與捲動位置不會被洗掉（不是整份重載）。</li>
         </ul>
         <?php endif; ?>
         <?php if ($ocq_can_bind_part): ?>
@@ -2776,10 +2829,12 @@ function ocqBindRenderOrders(){
     list.forEach(function(o){
         var qty = parseInt(o.Qty, 10) || 0, used = parseInt(o.already_allocated, 10) || 0;
         var left = Math.max(0, qty - used);
-        var pre  = (bomQty > 0 && left > 0) ? Math.min(bomQty, left) : (bomQty || left);
-        h += '<tr data-oid="' + o.Order_id + '">'
+        // 規則與後端 ocq_ob_qty_default() 一致：已經被別的 BOM 分配滿就預設 0，不預先幫人再超配一次
+        var pre  = (left <= 0) ? 0 : (bomQty > 0 ? Math.min(bomQty, left) : left);
+        h += '<tr data-oid="' + o.Order_id + '"' + (left <= 0 ? ' class="ord-full"' : '') + '>'
            + '<td><input type="checkbox" class="ocq-ock" data-oid="' + o.Order_id + '"></td>'
-           + '<td class="tl"><b>' + esc(o.Order_oo || ('#'+o.Order_id)) + '</b></td>'
+           + '<td class="tl"><b>' + esc(o.Order_oo || ('#'+o.Order_id)) + '</b>'
+           + (left <= 0 ? ' <b class="ocq-cand-full">⚠ 已分配滿</b>' : '') + '</td>'
            + '<td>' + esc(o.Order_date ? egFmtDate(o.Order_date) : '') + '</td>'
            + '<td>' + esc(o.Delivery_date ? egFmtDate(o.Delivery_date) : '') + '</td>'
            + '<td>' + qty + '</td>'
@@ -3199,7 +3254,71 @@ function ocqAbOrderSum($tr){
               + (over ? '（超過發單量，請確認分配量）' : ''))
         .css('color', over ? '#DD5138' : '');
 }
-$('#ocqAbMask').on('input change', '.oqty', function(){ ocqAbOrderSum($(this).closest('tr')); });
+// 使用者自己改過的分配量不可以被「綁定後即時刷新」蓋掉（那是他刻意填的數字）
+$('#ocqAbMask').on('input change', '.oqty', function(){ $(this).data('touched', 1); ocqAbOrderSum($(this).closest('tr')); });
+
+// ── 綁定後即時更新「其他還沒判定的列」──────────────────────────────────────────
+// 同一個料號的好幾筆 BOM 會排在一起，而且**共用同一批候選訂單**；綁完第一筆之後，
+// 其他列若還印著舊的「已分配」數字，就會照著舊數字把同一張訂單再分配一次
+// （使用者回報的就是這件事）。所以綁定成功後把受影響的那幾張訂單重新查一次並就地更新。
+// **刻意不整份重載清單**：重載會把已經判定好的列與捲動位置一起洗掉，現場通常是一口氣判十幾筆。
+function ocqObAllocHtml(qty, used){
+    qty = parseInt(qty, 10) || 0; used = parseInt(used, 10) || 0;
+    var left = Math.max(0, qty - used);
+    return '　訂單量 ' + qty + (used > 0 ? '（已分配 ' + used + '、未分配 ' + left + '）' : '');
+}
+function ocqObFullHtml(left, boms){
+    if ((parseInt(left, 10) || 0) > 0) return '';
+    var who = '已分配滿';
+    if (boms && boms.length) {
+        who = '已被 ' + boms.slice(0, 3).map(esc).join('、') + (boms.length > 3 ? ' 等 ' + boms.length + ' 筆' : '') + ' 綁走';
+    }
+    return ' <b class="ocq-cand-full">⚠ ' + who + '，分配量預設 0</b>';
+}
+var ocqObRefPend = {}, ocqObRefTimer = null;
+function ocqObRefreshOrders(orderIds){
+    (orderIds || []).forEach(function(oid){ if (oid > 0) ocqObRefPend[oid] = 1; });
+    if (ocqObRefTimer) clearTimeout(ocqObRefTimer);
+    // 批次套用是一筆一筆送的，這裡等它跑完再一次問後端（不要每綁一筆就打一支）
+    ocqObRefTimer = setTimeout(ocqObRefreshRun, 250);
+}
+function ocqObRefreshRun(){
+    ocqObRefTimer = null;
+    var ids = Object.keys(ocqObRefPend).map(Number); ocqObRefPend = {};
+    if (!ids.length) return;
+    // 分配量預設值要依「那一列 BOM 的發單量」算，所以連發單量一起送，由後端用同一支
+    // ocq_ob_qty_default() 算好回來（規則只有一份，不在 JS 再寫一次）
+    var pairs = {}, $pane = $('#ocqObPaneManual');
+    $pane.find('tbody tr').not('.done').each(function(){
+        var bq = parseInt($(this).data('bomqty'), 10) || 0;
+        $(this).find('.ocq-ab-cand').each(function(){
+            var oid = parseInt($(this).data('oid'), 10) || 0;
+            if (oid > 0 && ids.indexOf(oid) >= 0) pairs[oid + ':' + bq] = { order_id: oid, bom_qty: bq };
+        });
+    });
+    var list = Object.keys(pairs).map(function(k){ return pairs[k]; });
+    if (!list.length) return;
+    $.post('', { action: 'autobind_order_refresh', orders_json: JSON.stringify(list) }, function(res){
+        if (!res || !res.success) return;
+        var touched = [];
+        (res.rows || []).forEach(function(rw){
+            $pane.find('tbody tr').not('.done').each(function(){
+                var $tr = $(this);
+                if ((parseInt($tr.data('bomqty'), 10) || 0) !== rw.bom_qty) return;
+                var $lab = $tr.find('.ocq-ab-cand[data-oid="' + rw.order_id + '"]');
+                if (!$lab.length) return;
+                $lab.find('.oalloc').html(ocqObAllocHtml(rw.qty, rw.used));
+                $lab.find('.ofull').html(ocqObFullHtml(rw.left, rw.boms));
+                $lab.toggleClass('cand-full', rw.left <= 0);
+                // 已經勾起來或自己改過數字的不動（那是使用者正在判定的內容）
+                var $q = $lab.find('.oqty');
+                if ($q.length && $q.data('touched') !== 1 && !$lab.find('.abo-ck').prop('checked')) $q.val(rw.qty_default);
+                if (touched.indexOf(this) < 0) touched.push(this);
+            });
+        });
+        touched.forEach(function(tr){ ocqAbOrderSum($(tr)); });
+    }, 'json');
+}
 
 // 批次跑：一筆一筆送（每一筆都走跟逐筆按鈕完全相同的後端動作，規則不可能走鐘），
 // 邊跑邊把結果寫回該列；中途失敗的只記在那一列，不中斷其餘的。
@@ -3532,7 +3651,12 @@ function ocqMakeStage(cfg){
         if (!job) { cb({ success: false, message: cfg.pickHint }); return; }
         $.post('', { action: cfg.applyAction, rows_json: JSON.stringify([job]), csrf: OCQ_BIND.csrf }, function(res){
             if (!res || !res.success) { cb({ success: false, message: (res && res.message) || '綁定失敗' }); return; }
-            if ((res.done || 0) > 0) cb({ success: true, d_id: cfg.doneLabel($tr, job) });
+            if ((res.done || 0) > 0) {
+                // 綁成功了：讓這一階自己決定要不要順手更新畫面上的其他列（綁訂單那一階要，
+                // 因為同一個料號的好幾筆 BOM 共用同一批候選訂單）
+                if (cfg.afterApply) { try { cfg.afterApply(job, $tr); } catch (e) {} }
+                cb({ success: true, d_id: cfg.doneLabel($tr, job) });
+            }
             else cb({ success: false, message: ((res.skipped || [])[0] || {}).why || '綁定失敗' });
         }, 'json').fail(function(){ cb({ success: false, message: '連線失敗' }); });
     };
@@ -3608,6 +3732,8 @@ if (OCQ_BIND.order) {
             });
             return t.join('、');
         },
+        // 綁完就把這幾張訂單的最新已分配量抓回來、更新畫面上其他還沒判定的列
+        afterApply: function(job){ ocqObRefreshOrders((job.orders || []).map(function(o){ return o.order_id; })); },
         renderAuto: function(S){
             if (!S.auto.length) return '<div style="padding:14px;color:#a08a6a;">這個範圍內沒有可以自動綁定的 BOM（'
                 + '要嘛這個料號底下有好幾張訂單、要嘛一張都沒有，請看另外兩個分頁）。</div>';
@@ -3658,12 +3784,14 @@ if (OCQ_BIND.order) {
                    + '<td>' + esc(r.part_no) + '<div class="ocq-ab-sub">' + (r.bom_client ? esc(r.bom_client) : '（沒有客戶）') + '</div></td>'
                    + '<td class="cnd">';
                 (r.candidates || []).forEach(function(o){
-                    h += '<label class="ocq-ab-cand"><input type="checkbox" class="abo-ck" value="' + o.order_id + '" data-oo="' + esc(o.order_oo) + '">'
+                    var left = Math.max(0, (parseInt(o.qty, 10) || 0) - (parseInt(o.used, 10) || 0));
+                    h += '<label class="ocq-ab-cand" data-oid="' + o.order_id + '"><input type="checkbox" class="abo-ck" value="' + o.order_id + '" data-oo="' + esc(o.order_oo) + '">'
                        + '<b>' + esc(o.order_oo) + '</b>'
                        + '<span class="ocq-ab-sub">　訂單日 ' + esc(o.order_date ? egFmtDate(o.order_date) : '—')
                        + '　交期 ' + esc(o.delivery_date ? egFmtDate(o.delivery_date) : '—')
-                       + '　訂單量 ' + esc(o.qty) + (o.used > 0 ? '（已分配 ' + esc(o.used) + '）' : '')
+                       + '<span class="oalloc">' + ocqObAllocHtml(o.qty, o.used) + '</span>'
                        + (o.spec ? '　' + esc(o.spec) : '') + '</span>'
+                       + '<span class="ofull">' + ocqObFullHtml(left, []) + '</span>'
                        + '　分配量 <input type="number" class="ocq-pick-qty oqty" data-oid="' + o.order_id + '" min="0" value="' + o.qty_default + '" onclick="event.preventDefault();event.stopPropagation();">'
                        + '</label>';
                 });
