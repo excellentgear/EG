@@ -628,6 +628,42 @@ function kpi_as_period_group(string $freq, int $m): array {
     }
 }
 
+/**
+ * Yes/No 型指標可以接受的寫法（唯一登記處）。
+ * 畫面上也是吃這一份（KPI.php 把它輸出成 JS 的 YESNO_TOKENS），不要在前端另外抄一份。
+ */
+function kpi_as_yesno_tokens(): array {
+    return ['yes' => ['1', 'Y', 'YES', 'O', 'V', 'T', 'TRUE', 'OK', '是', '有', '完成'],
+            'no'  => ['0', 'N', 'NO', 'X', 'F', 'FALSE', 'NG', '否', '無', '未完成']];
+}
+/**
+ * 把使用者填進來的字轉成要存的值（唯一實作，fill／override／bulk_override 共用）。
+ * Yes/No 型的指標本來就不是數字，現場習慣打 Y／N／是／否，一律收得進來；
+ * 原本三個寫入點都是直接 (float)$raw，打「Y」會安靜地變成 0＝No（比報錯更糟）。
+ * @return float|null  null＝這個值不合法，呼叫端要擋下並講清楚可以填什麼
+ */
+function kpi_as_parse_input(string $valueType, string $raw): ?float {
+    $s = trim($raw);
+    if ($s === '') return null;
+    if ($valueType === 'yesno') {
+        $t = mb_strtoupper($s, 'UTF-8');
+        $tk = kpi_as_yesno_tokens();
+        if (in_array($t, $tk['yes'], true)) return 1.0;
+        if (in_array($t, $tk['no'],  true)) return 0.0;
+        if (is_numeric($s)) return ((float)$s >= 1) ? 1.0 : 0.0;
+        return null;
+    }
+    if (!is_numeric($s)) return null;
+    return (float)$s;
+}
+/** 值不合法時要跟使用者說可以填什麼 */
+function kpi_as_input_hint(string $valueType): string {
+    if ($valueType !== 'yesno') return '請填數字';
+    $tk = kpi_as_yesno_tokens();
+    return '這是 Yes/No 指標，請填 ' . implode('／', array_slice($tk['yes'], 0, 4))
+         . ' 或 ' . implode('／', array_slice($tk['no'], 0, 4));
+}
+
 /* ============================================================
  * 工作日輔助（evenement 行事曆）
  * ============================================================ */

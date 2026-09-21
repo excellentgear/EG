@@ -344,7 +344,8 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         <div id="staleBar"></div>
         <div id="fillBar" style="display:none;">
             <b>補登模式</b>：直接在格子裡打字（<b>Enter 或 Tab＝往右一格</b>、<b>↑↓＝上下移動</b>），填完按「儲存全部」。
-            空白＝清除該格的覆寫。<span style="color:#8a6d45;">未到期或該指標不適用的月份不給填。</span>
+            空白＝清除該格的覆寫。<span style="color:#8a6d45;">未到期或該指標不適用的月份不給填；
+            <b>Yes/No 指標</b>那幾列是下拉（游標停在上面直接按 <b>Y</b>／<b>N</b> 也選得到）。</span>
             <input type="text" id="fillNote" maxlength="200" placeholder="整批說明（選填，例：依 2025 紙本補登）">
             <span class="fb-n">未儲存 <b id="fillCount">0</b> 格</span>
             <button class="warm" onclick="fillSave()"><i class="fa fa-save"></i> 儲存全部</button>
@@ -416,8 +417,14 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
     <div class="m-head"><span id="ovTitle">手動覆寫</span><span class="m-close" onclick="closeMask('ovMask')">✕</span></div>
     <div class="m-body">
         <div style="font-size:12px;color:#8a6d45;" id="ovOrigInfo"></div>
-        <label>覆寫值</label>
-        <input type="number" id="ovValue" step="any">
+        <div id="ovYesNoBox" style="display:none;">
+            <label>覆寫值</label>
+            <select id="ovYesNo"><option value="1">Yes（期限內完成）</option><option value="0">No（未完成）</option></select>
+        </div>
+        <div id="ovNumBox">
+            <label>覆寫值</label>
+            <input type="number" id="ovValue" step="any">
+        </div>
         <label>覆寫原因（必填，寫入變更歷史）</label>
         <input type="text" id="ovReason" maxlength="200">
     </div>
@@ -480,7 +487,8 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         <ul>
             <li>先在工具列選<b>年度</b>（預設今年）。</li>
             <li><b>點任何一格</b>都會跳出選單：數值明細／佐證附件／不符合標準的明細／前往來源頁面／填寫修改／重算／手動覆寫。</li>
-            <li>要補舊年度整張表時用<b>補登模式</b>（僅系統管理員），像 Excel 一樣直接打，不必逐格填原因。</li>
+            <li>要補舊年度整張表時用<b>補登模式</b>（僅系統管理員），像 Excel 一樣直接打，不必逐格填原因。
+                判定目標寫 <b>Yes/No</b> 的指標那幾列是下拉（直接按 Y／N 也選得到）；逐格填寫與手動覆寫的跳窗同樣是 Yes/No 選單。</li>
             <li>要看趨勢請勾下方<b>趨勢圖</b>的指標；要留存請用<b>匯出CSV</b>或列印（A4／A3 自動縮成一頁）。</li>
         </ul>
 
@@ -563,6 +571,21 @@ var API = '../../src/store/KpiAs_API.php';
 var META = null, MATRIX = null, YEAR = null;
 var STALE = {}, STALE_INFO = null;   // 快照過期：{indicator_id:{month:{old,new,...}}}
 var canView = <?= $kpiPerms['canView'] ? 'true' : 'false' ?>;
+/* Yes/No 指標可以接受的寫法：由後端的 kpi_as_yesno_tokens() 輸出，前端不另外抄一份，
+   所以「畫面收得進去、後端卻存不了」這種事不會發生（後端仍會用同一份再擋一次）。 */
+var YESNO = <?= json_encode(kpi_as_yesno_tokens(), JSON_UNESCAPED_UNICODE) ?>;
+/** 回傳 1／0／null（null＝這個值不合法） */
+function kpiParseInput(type, raw){
+    var s = $.trim(String(raw == null ? '' : raw));
+    if (s === '') return null;
+    if (type === 'yesno') {
+        var t = s.toUpperCase();
+        if (YESNO.yes.indexOf(t) >= 0) return 1;
+        if (YESNO.no.indexOf(t) >= 0) return 0;
+        return isNaN(Number(s)) ? null : (Number(s) >= 1 ? 1 : 0);
+    }
+    return isNaN(Number(s)) ? null : Number(s);
+}
 
 /* ---------- 共用 ---------- */
 function closeMask(id){ document.getElementById(id).style.display='none'; }
@@ -1593,10 +1616,19 @@ function fillCellHtml(r, ri, m){
     var k = fillKey(r.indicator_id, m);
     if (k in FILL_DIRTY) v = FILL_DIRTY[k];
     var cls = 'fillIn' + (c.src === 'override' ? ' ov' : '') + ((k in FILL_DIRTY) ? ' dirty' : '');
-    return '<input type="text" class="' + cls + '" data-i="' + r.indicator_id + '" data-m="' + m
-         + '" data-ri="' + ri + '" value="' + esc(String(v)) + '" autocomplete="off">';
+    var at = ' data-i="' + r.indicator_id + '" data-m="' + m + '" data-ri="' + ri + '"';
+    if (r.value_type === 'yesno') {
+        // Yes/No 指標的值本來就不是數字，給下拉最不會填錯；游標停在上面直接按 Y／N 也選得到
+        var sv = (v === '' || v === null) ? '' : (Number(v) >= 1 ? '1' : '0');
+        return '<select class="' + cls + '"' + at + '>'
+             + '<option value=""' + (sv === ''  ? ' selected' : '') + '>—</option>'
+             + '<option value="1"' + (sv === '1' ? ' selected' : '') + '>Yes</option>'
+             + '<option value="0"' + (sv === '0' ? ' selected' : '') + '>No</option></select>';
+    }
+    return '<input type="text" class="' + cls + '"' + at
+         + ' value="' + esc(String(v)) + '" autocomplete="off">';
 }
-$(document).on('input', '#kpiBody .fillIn', function(){
+$(document).on('input change', '#kpiBody .fillIn', function(){
     var $i = $(this);
     FILL_DIRTY[fillKey($i.attr('data-i'), $i.attr('data-m'))] = $i.val();
     $i.addClass('dirty');
@@ -1645,12 +1677,17 @@ function fillSave(){
     var keys = Object.keys(FILL_DIRTY);
     if (!keys.length) { alert('沒有變更'); return; }
     var bad = [];
+    var vtype = {};
+    MATRIX.rows.forEach(function(r){ vtype[r.indicator_id] = r.value_type; });
     var cells = keys.map(function(k){
         var p = k.split('_'), v = $.trim(String(FILL_DIRTY[k]));
-        if (v !== '' && isNaN(Number(v))) bad.push(v);
+        // Yes/No 指標收 Y／N／是／否（規則與後端同一份 YESNO），不是只收數字
+        if (v !== '' && kpiParseInput(vtype[+p[0]], v) === null) bad.push(v);
         return {i:+p[0], m:+p[1], v:v};
     });
-    if (bad.length) { alert('有 ' + bad.length + ' 格不是數字：' + bad.slice(0,5).join('、') + '\n請改成數字，或清空該格。'); return; }
+    if (bad.length) { alert('有 ' + bad.length + ' 格的值無法辨識：' + bad.slice(0,5).join('、')
+        + '\n數字型請填數字；Yes/No 型請填 ' + YESNO.yes.slice(0,3).join('／') + ' 或 '
+        + YESNO.no.slice(0,3).join('／') + '，也可以清空該格。'); return; }
     var note = $('#fillNote').val();
     if (!confirm('把 ' + cells.length + ' 格寫進 ' + YEAR + ' 年度？\n（寫入方式＝手動覆寫，不需要逐格填原因；空白的格子＝清除覆寫）')) return;
     NProgress.start();
@@ -1724,19 +1761,24 @@ function doClearFill(iid, m){
 var ovCtx = null;
 function openOverride(ri, m){
     var r = MATRIX.rows[ri], c = r.cells[m];
-    ovCtx = {iid: r.indicator_id, m: m};
+    ovCtx = {iid: r.indicator_id, m: m, type: r.value_type};
     $('#ovTitle').text('手動覆寫：'+r.item_no+'. '+r.name+'（'+YEAR+'年'+m+'月）');
     $('#ovOrigInfo').text('目前顯示值：' + (c.v===null?'?':fmtVal(c.v, r.value_type)) + '（覆寫後原值保留可追溯）');
-    $('#ovValue').val(c.src==='override' && c.v!==null ? c.v : '');
+    // Yes/No 指標的覆寫值原本是數字框＝根本填不進去（打 Y 被瀏覽器吃掉、送出只會說請輸入覆寫值）
+    var isYN = (r.value_type === 'yesno');
+    $('#ovYesNoBox').toggle(isYN); $('#ovNumBox').toggle(!isYN);
+    if (isYN) $('#ovYesNo').val(c.v !== null && c.v >= 1 ? '1' : '0');
+    else      $('#ovValue').val(c.src==='override' && c.v!==null ? c.v : '');
     $('#ovReason').val('');
     openMask('ovMask');
-    setTimeout(function(){ $('#ovValue').focus().select(); }, 100);
+    setTimeout(function(){ (isYN ? $('#ovYesNo') : $('#ovValue')).focus().select(); }, 100);
 }
 function submitOverride(){
-    if ($('#ovValue').val() === '') { alert('請輸入覆寫值'); return; }
+    var ovv = ovCtx.type === 'yesno' ? $('#ovYesNo').val() : $('#ovValue').val();
+    if (ovv === '') { alert('請輸入覆寫值'); return; }
     if ($.trim($('#ovReason').val()) === '') { alert('覆寫原因必填'); return; }
     $.post(API, {action:'override', indicator_id:ovCtx.iid, year:YEAR, month:ovCtx.m,
-                 value:$('#ovValue').val(), reason:$('#ovReason').val()},
+                 value:ovv, reason:$('#ovReason').val()},
         function(res){
             if (!res.ok) { alert(res.error||'覆寫失敗'); return; }
             closeMask('ovMask'); loadMatrix();

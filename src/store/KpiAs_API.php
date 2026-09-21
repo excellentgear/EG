@@ -744,9 +744,11 @@ case 'bulk_override': {
             if (!in_array($m, kpi_as_valid_months($iy), true)) { $skipped[] = $iy['name'] . " {$m}月 不適用"; continue; }
             if (!kpi_month_ended($year, $m)) { $skipped[] = $iy['name'] . " {$m}月 尚未結束"; continue; }
             if ($raw === '') { $clr->execute([$iid, $year, $m]); $cleared += $clr->rowCount() ? 1 : 0; continue; }
-            if (!is_numeric($raw)) { $skipped[] = $iy['name'] . " {$m}月「{$raw}」不是數字"; continue; }
-            $val = (float)$raw;
-            if ($iy['value_type'] === 'yesno') $val = $val >= 1 ? 1 : 0;
+            $val = kpi_as_parse_input((string)$iy['value_type'], $raw);
+            if ($val === null) {
+                $skipped[] = $iy['name'] . " {$m}月「{$raw}」無法辨識（" . kpi_as_input_hint((string)$iy['value_type']) . '）';
+                continue;
+            }
             $set->execute([$iid, $year, $m, $val, $uid, $u['user_cname'], $note]);
             $saved++;
         }
@@ -907,8 +909,8 @@ case 'fill': {
     }
     $raw = trim((string)($_POST['value'] ?? ''));
     if ($raw === '') jerr('請輸入數值');
-    $val = (float)$raw;
-    if ($iy['value_type'] === 'yesno') $val = $val >= 1 ? 1 : 0;
+    $val = kpi_as_parse_input((string)$iy['value_type'], $raw);
+    if ($val === null) jerr('「' . $raw . '」無法辨識，' . kpi_as_input_hint((string)$iy['value_type']));
     $note = mb_substr(trim((string)($_POST['note'] ?? '')), 0, 200);
     $st = $db->prepare("SELECT manual_value FROM kpi_as_monthly_value WHERE indicator_id=? AND year=? AND month=?");
     $st->execute([$iid, $year, $month]);
@@ -957,8 +959,8 @@ case 'override': {
     $reason = mb_substr(trim((string)($_POST['reason'] ?? '')), 0, 200);
     if ($raw === '') jerr('請輸入覆寫值');
     if ($reason === '') jerr('覆寫原因必填（AS9100 可追溯要求）');
-    $val = (float)$raw;
-    if ($iy['value_type'] === 'yesno') $val = $val >= 1 ? 1 : 0;
+    $val = kpi_as_parse_input((string)$iy['value_type'], $raw);
+    if ($val === null) jerr('「' . $raw . '」無法辨識，' . kpi_as_input_hint((string)$iy['value_type']));
     $st = $db->prepare("SELECT override_value, auto_value, manual_value FROM kpi_as_monthly_value WHERE indicator_id=? AND year=? AND month=?");
     $st->execute([$iid, $year, $month]);
     $old = $st->fetch(PDO::FETCH_ASSOC);
