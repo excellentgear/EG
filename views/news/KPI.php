@@ -249,9 +249,16 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
                     background:#FDF3E3; color:#5b3a1e; font-size:13px; border-radius:4px; }
         #staleBar b { color:#C2601C; }
         #staleBar .sb-link { color:#C2601C; text-decoration:underline; cursor:pointer; margin-left:8px; }
-        .kpi-stale-mark { display:inline-flex; align-items:center; font-size:10px; line-height:14px; height:14px;
-            color:#C2601C; background:#FBEBD6; border:1px solid #F0A24B; border-radius:7px;
-            padding:0 4px; margin-left:3px; vertical-align:middle; cursor:help; }
+        /* 過期標記畫在儲存格右上角的小三角，絕對定位＝完全不佔寬度（使用者 2026-09-21 回報）。
+           原本是 inline 的 ⟳ 小籤，一次標到十幾格時每個月份欄都被撐寬約 23px、整張表多出近 270px，
+           表格底下就冒出一條橫向捲軸，畫面還會跟著跳一下。說明文字改掛在 td 的 title 上，
+           滑鼠移到那格的任何位置都看得到，不必去點那個小三角。 */
+        td.kpi-cell.kpi-stale::after, .kpi-stale-mark::after {
+            content:''; position:absolute; top:0; right:0; width:0; height:0;
+            border-style:solid; border-width:0 7px 7px 0;
+            border-color:transparent #C2601C transparent transparent; }
+        .kpi-stale-mark { position:relative; display:inline-block; width:14px; height:14px;
+            border:1px solid #EADFC8; background:#fff; vertical-align:middle; }
         .kpi-src-links a { color:#C2601C; }
         .kpi-src-links .noperm { color:#999; }
         /* 兩份規則刻意重複：@media print 是保險（萬一使用者直接 Ctrl+P 未走 printKpi()）；
@@ -259,7 +266,7 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         @media print {
             .page-title, .kpi-toolbar, #chartBox, #cellMenu, .nav_menu, .left_col, .kpi-sim-bar, footer,
             .kpi-role-badge .fa-question-circle, .kpi-ov-mark, .kpi-legend,
-            #staleBar, .kpi-stale-mark, .kpi-modal-mask { display:none !important; }
+            #staleBar, .kpi-stale-mark, td.kpi-cell.kpi-stale::after, .kpi-modal-mask { display:none !important; }
             .right_col { margin:0 !important; padding:0 !important;
                 min-height:0 !important; height:auto !important; }
             html, body, .container, .container.body, .main_container {
@@ -280,6 +287,7 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         body.kpi-printing footer, body.kpi-printing .kpi-role-badge .fa-question-circle,
         body.kpi-printing .kpi-ov-mark, body.kpi-printing .kpi-legend,
         body.kpi-printing #staleBar, body.kpi-printing .kpi-stale-mark,
+        body.kpi-printing td.kpi-cell.kpi-stale::after,
         body.kpi-printing .kpi-modal-mask { display:none !important; }
         /* Gentelella 的 .right_col／container 有 min-height 撐著（實測內容只有幾百 px 卻量到 1296px），
            不歸零的話列印時會多出一整頁幾乎空白的第二頁——這就是使用者說的「列印超過邊界」。 */
@@ -364,7 +372,7 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         </div>
         <div class="kpi-legend" style="font-size:11px;color:#8a6d45;margin-top:4px;">
             說明：<span class="kpi-preview">橘色斜體</span>=當月即時試算(未定案)；<span class="kpi-below">紅字</span>=未達標；
-            <span class="kpi-ov-mark">✱</span>=手動覆寫；<span class="kpi-attach-badge"><i class="fa fa-paperclip"></i>n</span>=佐證附件；<span class="kpi-stale-mark">⟳</span>=快照過期已自動重算；?=無資料；NA=未到期；－=本期已填在其他月份。
+            <span class="kpi-ov-mark">✱</span>=手動覆寫；<span class="kpi-attach-badge"><i class="fa fa-paperclip"></i>n</span>=佐證附件；<span class="kpi-stale-mark"></span>=格子右上角小三角，快照過期已自動重算（滑鼠移上去看原值）；?=無資料；NA=未到期；－=本期已填在其他月份。
             點儲存格可操作（明細/附件/填寫/覆寫/重算）；每季/每半年/每年的手動指標一期只能擇一月份填寫，如需改填其他月份請先清除。
         </div>
 
@@ -618,7 +626,10 @@ function runStaleScan(){
         });
         STALE_INFO = {list:list, can_write:+res.can_write === 1, truncated:!!res.truncated};
         showStaleBar();
-        loadMatrix(true);        // 重新載入拿到重算後的新值，再套上 ⟳ 標記
+        // 已鎖定年度只標示、後端一個字都沒寫回 → 值不會變，不必再整張重載一次
+        // （白跑一趟只會讓畫面又閃一下）；只有真的重算過才重新拿新值。
+        if (STALE_INFO.can_write) loadMatrix(true);
+        else renderTable();
     }, 'json');
 }
 function staleCellTitle(x, canWrite){
@@ -707,8 +718,11 @@ function renderTable(){
             if (c.attach > 0) txt += '<span class="kpi-attach-badge" title="佐證附件 '+c.attach+' 件（點儲存格→附件）">'
                                     + '<i class="fa fa-paperclip"></i>'+c.attach+'</span>';
             var sx = STALE[r.indicator_id] && STALE[r.indicator_id][m];
-            if (sx) txt += '<span class="kpi-stale-mark" title="'+esc(staleCellTitle(sx, STALE_INFO && STALE_INFO.can_write))+'">⟳</span>';
-            html += '<td class="'+cls+'" data-ri="'+ri+'" data-m="'+m+'">'+txt+'</td>';
+            // 標記只加 class（右上角小三角，由 CSS 絕對定位畫，不佔寬度），說明掛在 td 的 title
+            var tdTitle = '';
+            if (sx) { cls += ' kpi-stale';
+                      tdTitle = ' title="'+esc(staleCellTitle(sx, STALE_INFO && STALE_INFO.can_write))+'"'; }
+            html += '<td class="'+cls+'"'+tdTitle+' data-ri="'+ri+'" data-m="'+m+'">'+txt+'</td>';
         }
         var avgTxt, pavgTxt;
         if (r.value_type === 'yesno') {
