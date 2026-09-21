@@ -302,9 +302,13 @@ $thisYear = (int)date('Y');
             建議分只是帶入，<b>填進去之後仍可手動改</b>；級距可在「設定」調整。</li>
       </ul>
       <h4>表上會列出哪些客戶</h4>
-      <p><b>只列本期間真的有出貨的客戶</b>（另加「有退貨算在本期間」的）。<b>只有訂單、沒有出貨的不列</b>——
-         客戶滿意度評的是交出去的貨，而訂單那一側常有代號沒建主檔的假客戶（例 <code>NA</code>），
-         列出來只會多一列沒人填得下去的空白。當然更不會把整份客戶主檔（900 多家）全部列出來。</p>
+      <p><b>要先挑好本年度的受調查客戶，逐客戶評分才會列出客戶</b>（2026-09-18 起）。
+         名單還沒挑之前那裡是空的，只會寫「尚未挑選本年度受調查客戶」並給一顆進問卷作業的按鈕——
+         <b>先列一整排客戶會讓人以為今年要調查的客戶已經選好了</b>。
+         （先前已經評過分的客戶仍會列出來，填過的分數不會因為名單沒建就看不到。）</p>
+      <p>「問卷作業 → ① 受調查名單」的候選只列<b>本期間真的有出貨的客戶</b>（另加「有退貨算在本期間」的）。
+         <b>只有訂單、沒有出貨的不列</b>——客戶滿意度評的是交出去的貨，而訂單那一側常有代號沒建主檔的假客戶
+         （例 <code>NA</code>），列出來只會多一列沒人填得下去的空白。當然更不會把整份客戶主檔（900 多家）全部列出來。</p>
       <h4>客戶ID與「未綁定客戶ID」</h4>
       <p>ERP 的出貨／訂單／退貨上寫的是<b>客戶簡稱</b>，而簡稱常常與客戶主檔不一樣
          （例 ERP 寫「高鋒工業」、主檔簡稱是「高鋒」）。系統會先查<b>客戶主檔＋別名對照</b>把它對回同一家客戶，
@@ -663,13 +667,15 @@ function loadStat(done){
     ajxGet({action:'stat_list', year:$('#fYear').val(), quarter:$('#fQuarter').val()}, function(r){
         if(!r.ok) return;
         ST.rows = r.rows||[]; ST.mode = r.undone_mode; ST.modeLabel = r.undone_label; ST.period = r.period;
+        ST.targetCount = parseInt(r.target_count||0)||0;
         $('#modeNote').html(
             '期間：<b>'+esc(r.period)+'</b>（'+dispDate(r.range[0])+' ~ '+dispDate(r.range[1])+'）　'
-          + '共 <b>'+ST.rows.length+'</b> 家客戶　'
-          + (parseInt(r.target_count||0)
-                ? '<span class="muted-help">（本年度受調查名單 '+r.target_count+' 家，只列名單內的客戶；要改名單請按「問卷作業」）</span>'
-                : '<span class="muted-help">（<b>尚未建立本年度受調查名單</b>，目前列出全部有出貨的客戶；'
-                  + '滿意度調查不是每家都做，請按「問卷作業」挑要調查的客戶）</span>')+'<br>'
+          + (ST.targetCount
+                ? '本年度受調查客戶 <b>'+ST.targetCount+'</b> 家　'
+                  + '<span class="muted-help">（只列名單內的客戶；要改名單請按「問卷作業」）</span>'
+                : '<b style="color:var(--coral);">尚未挑選本年度受調查客戶</b>　'
+                  + '<span class="muted-help">（滿意度調查不是每家都做，請按「問卷作業」挑要調查的客戶；'
+                  + '挑好之後這裡才會列出客戶）</span>')+'<br>'
           + '準交率判定方式：<b>'+esc(r.undone_label)+'</b>　'
           + '<span class="muted-help">（沿用 KPI「準時出貨率」該年度的設定，要改請到 KPI 設定頁，這裡刻意不另開開關）</span><br>'
           + '<span class="muted-help">退貨率＝<b>本期間出的貨被退回多少</b>（退貨依同客戶同料號往回沖銷到它原本的那批出貨，'
@@ -738,7 +744,20 @@ function retTip(r){
     return t;
 }
 function renderStat(){
-    if(!ST.rows.length){ $('#statBody').html('<tr><td colspan="13" style="padding:20px;color:#999;">此期間沒有任何出貨，也沒有算在這段期間的退貨</td></tr>'); $('#statCount').text(''); syncStatHead(); return; }
+    if(!ST.rows.length){
+        /* 還沒挑客戶時不列任何客戶，直接把下一步講清楚——
+           列一整排客戶會讓人以為今年的受調查客戶已經選好了（使用者指正） */
+        var msg = ST.targetCount
+            ? '本期間沒有任何出貨，也沒有算在這段期間的退貨'
+            : '<b style="font-size:14px;color:var(--ink);">尚未挑選本年度受調查客戶</b>'
+              + '<div style="margin-top:6px;line-height:1.9;">滿意度調查不是每家客戶都做（公司定在每年 11 月，由業務挑要調查的客戶寄問卷）。'
+              + '<br>請先按上方的<b>「問卷作業」</b>挑好客戶並儲存名單，這裡才會列出要評分的客戶。</div>'
+              + (CAN_ADMIN ? '<div style="margin-top:10px;"><button class="btn btn-sm btn-warm" id="btnSurveyEmpty">'
+                             + '<i class="fa fa-list-alt"></i> 開啟問卷作業，挑選客戶</button></div>'
+                           : '<div class="muted-help" style="margin-top:8px;">（挑選客戶需要「客戶滿意度管理員」權限，請洽管理員）</div>');
+        $('#statBody').html('<tr><td colspan="13" style="padding:26px 20px;color:#8a7560;text-align:center;">'+msg+'</td></tr>');
+        $('#statCount').text(''); $('#btnCleanDead').hide(); renderUnboundBar(); syncStatHead(); return;
+    }
     var h='';
     ST.rows.forEach(function(r,i){
         var over = parseInt(r.ontime_over||0)>0;
@@ -942,7 +961,14 @@ function curCustomer(){
 }
 function loadMonitor(){
     var c=curCustomer();
-    if(!c){ $('#monBody').html(''); $('#monMetrics').text('請先在上方選擇客戶。'); return; }
+    if(!c){
+        $('#monBody').html('');
+        // 名單還沒挑時客戶下拉本來就是空的，要講清楚下一步在哪裡，不要只寫「請選擇客戶」
+        $('#monMetrics').html(ST.rows.length ? '請先在上方選擇客戶。'
+            : '<b style="color:var(--coral);">尚未挑選本年度受調查客戶</b>　監控表是逐客戶填的，'
+              + '請先到「統計資料表」分頁按<b>「問卷作業」</b>挑好客戶並儲存名單。');
+        return;
+    }
     ajxGet({action:'monitor_get', year:$('#fYear').val(), quarter:$('#fQuarter').val(),
             customer_id:c.customer_id, customer_name:c.customer_name}, function(r){
         if(!r.ok) return;
@@ -1157,6 +1183,8 @@ function csvDump(name, head, rows){
 var SVY = { q:[], lv:[], cats:{}, targets:[], files:[], cand:[], pick:{}, cust:null };
 
 $('#btnSurvey').on('click', function(){ svyOpen(); });
+/* 空清單上的引導按鈕（那一顆是 renderStat 動態畫出來的，所以用事件委派） */
+$(document).on('click', '#btnSurveyEmpty', function(){ svyOpen('target'); });
 function svyOpen(pane){
     ajxGet({action:'survey_meta', year:$('#fYear').val(), quarter:$('#fQuarter').val()}, function(r){
         if(!r||!r.ok){ csToast('讀不到問卷資料：'+((r&&r.error)||'未知原因')); return; }

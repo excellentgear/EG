@@ -848,6 +848,12 @@ function cs_stat_rows(PDO $db, int $year, int $quarter): array {
     unset($r);
     if ($targets) {
         $out = array_values(array_filter($out, function ($r) { return !empty($r['in_target']); }));
+    } else {
+        /* **還沒挑客戶就不可以把全部客戶列出來**（2026-09-18 使用者指正）：
+           一整排客戶擺在「逐客戶評分」底下，看起來就像今年的受調查客戶已經選好了。
+           這裡只留「先前真的評過分」的那幾列（不可以讓已填的分數憑空不見），
+           一列都沒有就回空陣列，由畫面顯示「請先到問卷作業挑客戶」。 */
+        $out = array_values(array_filter($out, function ($r) { return !empty($r['saved']); }));
     }
     return $out;
 }
