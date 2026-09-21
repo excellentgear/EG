@@ -8,7 +8,7 @@
  *   要看得懂就不能只列文字，必須看得到「這張單的量分別分給了誰、各多少、還剩多少沒分配」。
  *
  * ⚠ 儲存位置（唯一真相，禁止另外再開一張對照表）：
- *   報價→訂單   order_track.quote_no / quote_item_id   （綁定一律走 acc_recon_bind_quote()，含料號比對與稽核）
+ *   報價→訂單   order_quote_map(Order_id, item_id, allocated_qty)      ← 2026-09-21 新增
  *   訂單→製令   bom_order_process_map(bom, order_id, allocated_qty)   ← 已有 2,297 筆實際資料
  *   訂單→出貨   is_order_map(IS_id, Order_id, allocated_qty)          ← 本次新增
  *   製令→出貨   is_bom_map(IS_id, bom, shipped_qty)
@@ -18,6 +18,13 @@
  * ⚠ is_list.Order_id 的地位變了：它降為「主要訂單」快取＝分配量最大的那一張，
  *   只由 tc_sync_is_order() 一處同步。沒有拆分時它與分配表完全一致，所以讀它的
  *   20 多支既有程式（對帳、毛利分析、報價…）一行都不必改；只有真的一張出貨分屬多張訂單時才會有差。
+ *
+ * ⚠ order_track.quote_no / quote_item_id 同理（2026-09-21 使用者交辦）：
+ *   一張訂單的內容可能來自同一張報價單的兩列（本體一列、治具一列），單一欄位存不下，
+ *   所以真相改放 order_quote_map，那兩個欄位降為「主要報價」快取＝
+ *   **料號與訂單相同者優先**，其次分配量最大者（tc_order_quote_main()）。
+ *   同步唯一入口 tc_sync_order_quote()，它仍然轉呼叫既有的 acc_recon_bind_quote() 寫入，
+ *   所以 order_track 上那兩欄仍然只有一個寫入者、稽核紀錄也照舊。
  */
 
 /** 每個泳道一次最多載入幾筆（和大單一料號就有 2,220 筆出貨，不能全撈） */
@@ -224,9 +231,11 @@ function tc_chain(PDO $db, array $f): array
     };
     $inSql = function (array $ids) { return implode(',', array_fill(0, count($ids), '?')); };
 
-    // 報價 → 訂單
-    foreach ($orders as $o) if ($o['quote_item_id'] > 0)
-        $add('quote_order', 'quote:' . $o['quote_item_id'], 'order:' . $o['id'], $o['qty'], 'order_track');
+    // 報價 → 訂單（分配表為主，order_track.quote_item_id 為沒有分配列時的回退）
+    foreach (tc_order_quote_map($db, $oid) as $oidKey => $qrows)
+        foreach ($qrows as $qr)
+            $add('quote_order', 'quote:' . $qr['item_id'], 'order:' . $oidKey,
+                 $qr['alloc'], $qr['src'] === 'map' ? 'map' : 'order_track');
 
     // 訂單 → 製令（分配表為主，bom.o_order_id 為沒有分配列時的回退）
     $bomLinked = [];
@@ -330,9 +339,26 @@ function tc_seed_is_order(PDO $db, int $isId): void
     $s->execute([$isId]);
     $r = $s->fetch(PDO::FETCH_ASSOC);
     if (!$r || (int)$r['Order_id'] <= 0) return;            // 本來就沒綁
+    if (!tc_order_exists($db, (int)$r['Order_id'])) return; // 舊欄位指向已被刪掉的訂單（見 tc_order_exists）
     $db->prepare("INSERT INTO is_order_map (IS_id, Order_id, allocated_qty, created_by)
                   VALUES (?,?,?,'legacy')")
        ->execute([$isId, (int)$r['Order_id'], (int)$r['Qty']]);
+}
+
+/**
+ * 舊欄位（is_list.Order_id／bom.o_order_id）指到的訂單還在不在。
+ *
+ * 2026-09-21 實測踩到：`bom.o_order_id` 指向一張**已經被刪掉**的訂單，
+ * 補分配列時外鍵 fk_bopm_order_track 擋下來丟 PDOException，而那一句在 tc_link()
+ * 的 try 之外 → **整支 API 變成 HTTP 500 空白回應**，畫面上按了完全沒有反應也沒有訊息。
+ * 這是既有問題（追溯對照那邊也會踩），根治法就是補列之前先確認那張訂單真的存在。
+ */
+function tc_order_exists(PDO $db, int $orderId): bool
+{
+    if ($orderId <= 0) return false;
+    $s = $db->prepare("SELECT 1 FROM order_track WHERE Order_id=? LIMIT 1");
+    $s->execute([$orderId]);
+    return (bool)$s->fetchColumn();
 }
 function tc_seed_bom_order(PDO $db, string $bom): void
 {
@@ -344,8 +370,136 @@ function tc_seed_bom_order(PDO $db, string $bom): void
     $s->execute([$bom]);
     $r = $s->fetch(PDO::FETCH_ASSOC);
     if (!$r || (int)$r['o_order_id'] <= 0) return;
+    if (!tc_order_exists($db, (int)$r['o_order_id'])) return;   // 指向已被刪掉的訂單（見 tc_order_exists）
     $db->prepare("INSERT INTO bom_order_process_map (bom, order_id, allocated_qty) VALUES (?,?,?)")
        ->execute([$bom, (int)$r['o_order_id'], (int)$r['sqty']]);
+}
+
+/* ============================================================
+ * 訂單 ↔ 報價項目（order_quote_map）
+ *
+ * 為什麼要有（2026-09-21 使用者拍板「一併做成多對多」）：
+ *   一張訂單的內容常常同時對應報價單上的兩列——本體一列、治具／刀具一列，
+ *   而 order_track 只有單一個 quote_item_id，第二列根本存不下。
+ *
+ * 與出貨那組完全同一套做法：分配表是真相、舊欄位降為「主要報價」快取。
+ * 差別只有兩點：
+ *   ⑴ **分配量可以是 0**＝「這一列適用，但不拆量」。報價與訂單本來就不是一對一
+ *      把量拆掉的關係（同一份報價會被很多張訂單引用），硬要填一個數字只是假精確。
+ *   ⑵ 主要報價**優先取料號與訂單相同的那一列**，不是單純取分配量最大者——
+ *      不然治具那一列會被選成主要報價，既有程式讀 quote_item_id 就拿到治具的單價。
+ * ============================================================ */
+/**
+ * ⚠ 建表一律「先確認不存在才下 DDL，而且絕不在交易中下」。
+ * MySQL 的 CREATE TABLE 會造成**隱式 commit**，在交易中間跑一次，外層的 commit()
+ * 就會丟 "There is no active transaction"——而資料其實已經寫進去了，
+ * 於是畫面上顯示「解除失敗」、實際上卻已經解除，是最容易誤判的那種症狀。
+ * （本專案 2026-08-03 在 eg_org_save() 踩過同一個坑，這裡是第二次。）
+ */
+function tc_order_quote_ensure(PDO $db): void
+{
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try {
+        if ($db->query("SHOW TABLES LIKE 'order_quote_map'")->fetchColumn()) return;  // 已經有了＝不下 DDL
+        if ($db->inTransaction()) return;                                             // 交易中一律不建表
+    } catch (Throwable $e) { return; }
+    $db->exec("CREATE TABLE IF NOT EXISTS `order_quote_map` (
+        `id` int NOT NULL AUTO_INCREMENT,
+        `Order_id` int NOT NULL,
+        `item_id` int NOT NULL,
+        `allocated_qty` int NOT NULL DEFAULT 0,
+        `created_by` varchar(20) DEFAULT NULL,
+        `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+        `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (`id`),
+        UNIQUE KEY `uq_oqm_order_item` (`Order_id`,`item_id`),
+        KEY `idx_oqm_item` (`item_id`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci");
+    $done = true;
+}
+
+/** 舊的 order_track.quote_item_id 先補成一列，否則第一次寫分配表就會把它洗掉（同 tc_seed_is_order） */
+function tc_seed_order_quote(PDO $db, int $orderId): void
+{
+    if ($orderId <= 0) return;
+    tc_order_quote_ensure($db);
+    $c = $db->prepare("SELECT COUNT(*) FROM order_quote_map WHERE Order_id=?");
+    $c->execute([$orderId]);
+    if ((int)$c->fetchColumn() > 0) return;
+    $s = $db->prepare("SELECT quote_item_id FROM order_track WHERE Order_id=?");
+    $s->execute([$orderId]);
+    $iid = (int)$s->fetchColumn();
+    if ($iid <= 0) return;
+    // 報價項目可能已被刪除（報價單改版），指不到就不要補一列孤兒
+    $e = $db->prepare("SELECT COUNT(*) FROM quotation_item WHERE item_id=?");
+    $e->execute([$iid]);
+    if ((int)$e->fetchColumn() === 0) return;
+    $db->prepare("INSERT IGNORE INTO order_quote_map (Order_id, item_id, allocated_qty, created_by)
+                  VALUES (?,?,0,'legacy')")->execute([$orderId, $iid]);
+}
+
+/** 這張訂單的「主要報價」是哪一個報價項目（料號相同者優先 → 分配量大者 → item_id 小者） */
+function tc_order_quote_main(PDO $db, int $orderId): int
+{
+    if ($orderId <= 0) return 0;
+    tc_order_quote_ensure($db);
+    $st = $db->prepare("SELECT m.item_id
+                          FROM order_quote_map m
+                          JOIN quotation_item qi ON qi.item_id = m.item_id
+                          JOIN order_track ot ON ot.Order_id = m.Order_id
+                         WHERE m.Order_id = ?
+                         ORDER BY (LOWER(TRIM(qi.product_id)) = LOWER(TRIM(ot.d_id))) DESC,
+                                  m.allocated_qty DESC, m.item_id ASC
+                         LIMIT 1");
+    $st->execute([$orderId]);
+    $v = $st->fetchColumn();
+    return $v === false ? 0 : (int)$v;
+}
+
+/**
+ * order_track.quote_no / quote_item_id 同步：唯一寫入點。
+ * 仍然轉呼叫 acc_recon_bind_quote()（它負責寫欄位＋留稽核），只是多帶 force_part——
+ * 分配表寫入時已經驗過一輪，且主要報價可能是治具那一列（料號本來就與訂單不同），
+ * 不放行的話會出現「分配表寫進去了、快取卻同步失敗」這種兩邊對不起來的狀態。
+ */
+function tc_sync_order_quote(PDO $db, int $orderId, ?array $user = null): void
+{
+    if ($orderId <= 0) return;
+    acc_recon_bind_quote($db, $orderId, tc_order_quote_main($db, $orderId), $user, ['force_part' => true]);
+}
+
+/**
+ * 一批訂單目前綁到哪些報價項目（畫面與稽核共用；含舊欄位的回退）。
+ * 回傳 [Order_id => [ ['item_id'=>,'alloc'=>,'src'=>'map'|'legacy'], ... ]]
+ */
+function tc_order_quote_map(PDO $db, array $orderIds): array
+{
+    $ids = array_values(array_unique(array_map('intval', $orderIds)));
+    $ids = array_values(array_filter($ids, function ($v) { return $v > 0; }));
+    if (!$ids) return [];
+    tc_order_quote_ensure($db);
+    $out = [];
+    foreach (array_chunk($ids, 800) as $ck) {
+        $in = implode(',', array_fill(0, count($ck), '?'));
+        $s = $db->prepare("SELECT Order_id, item_id, allocated_qty FROM order_quote_map
+                            WHERE Order_id IN ($in) ORDER BY item_id");
+        $s->execute($ck);
+        foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r)
+            $out[(int)$r['Order_id']][] = ['item_id' => (int)$r['item_id'],
+                                           'alloc' => (int)$r['allocated_qty'], 'src' => 'map'];
+        // 分配表還沒有列的訂單，回退看舊欄位（尚未搬過來的舊資料）
+        $s = $db->prepare("SELECT Order_id, quote_item_id FROM order_track
+                            WHERE Order_id IN ($in) AND quote_item_id > 0");
+        $s->execute($ck);
+        foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $oid = (int)$r['Order_id'];
+            if (!empty($out[$oid])) continue;
+            $out[$oid][] = ['item_id' => (int)$r['quote_item_id'], 'alloc' => 0, 'src' => 'legacy'];
+        }
+    }
+    return $out;
 }
 
 /* ============================================================
@@ -383,6 +537,11 @@ function tc_allocated(PDO $db, string $type, string $kind, $id, $exceptOther = n
 {
     $q = null; $par = [];
     switch ($type) {
+        case 'quote_order':
+            tc_order_quote_ensure($db);
+            if ($kind === 'quote') { $q = "SELECT COALESCE(SUM(allocated_qty),0) FROM order_quote_map WHERE item_id=?"; $par = [(int)$id]; }
+            else                   { $q = "SELECT COALESCE(SUM(allocated_qty),0) FROM order_quote_map WHERE Order_id=?"; $par = [(int)$id]; }
+            break;
         case 'order_bom':
             if ($kind === 'bom')   { $q = "SELECT COALESCE(SUM(allocated_qty),0) FROM bom_order_process_map WHERE bom=?"; $par = [(string)$id]; }
             else                   { $q = "SELECT COALESCE(SUM(allocated_qty),0) FROM bom_order_process_map WHERE order_id=?"; $par = [(int)$id]; }
@@ -432,15 +591,31 @@ function tc_link(PDO $db, string $type, $fromId, $toId, int $qty, ?array $user =
     if (!$a) return ['success' => false, 'message' => '找不到來源單據'];
     if (!$b) return ['success' => false, 'message' => '找不到目標單據'];
 
-    // 先把舊欄位上的既有綁定補成分配列，剩餘量才算得對，也才不會被後續同步洗掉
-    if ($type === 'order_ship') tc_seed_is_order($db, (int)$toId);
-    if ($type === 'order_bom')  tc_seed_bom_order($db, (string)$toId);
+    /* 先把舊欄位上的既有綁定補成分配列，剩餘量才算得對，也才不會被後續同步洗掉。
+       ⚠ 一律包 try：補列本身失敗（舊資料指到已刪除的單、外鍵擋下…）不可以讓整支請求變成
+       未捕捉例外的 HTTP 500 空白回應——那在畫面上就是「按了完全沒反應」，最難查。 */
+    try {
+        if ($type === 'order_ship')  tc_seed_is_order($db, (int)$toId);
+        if ($type === 'order_bom')   tc_seed_bom_order($db, (string)$toId);
+        if ($type === 'quote_order') tc_seed_order_quote($db, (int)$toId);
+    } catch (Throwable $e) {
+        return ['success' => false, 'message' => '這張單的既有綁定搬不進分配表：' . $e->getMessage()];
+    }
 
     $warn = [];
     /* 報價→訂單不套數量與客戶檢查：一份報價本來就會對應到非常多張訂單（不是把量拆掉），
        而報價單存的客戶欄位與出貨用的客戶簡稱格式不同，硬比會全部擋掉。
-       這條一律交給既有唯一實作 acc_recon_bind_quote()，它會比對料號並留稽核。 */
-    if ($type !== 'quote_order') {
+       料號不同也只警示不擋——治具／刀具那一列的料號本來就與訂單料號不同，
+       那正是使用者要能綁進來的東西（2026-09-21）。 */
+    if ($type === 'quote_order') {
+        if ($qty < 0) return ['success' => false, 'message' => '分配數量不可以是負數'];
+        $ca = trim((string)$a['client']); $cb = trim((string)$b['client']);
+        if ($ca !== '' && $cb !== '' && $ca !== $cb)
+            $warn[] = "報價客戶（{$ca}）與訂單客戶（{$cb}）寫法不同，請確認是同一家";
+        if (trim((string)$a['part']) !== '' && trim((string)$b['part']) !== ''
+            && strcasecmp(trim((string)$a['part']), trim((string)$b['part'])) !== 0)
+            $warn[] = "報價料號（{$a['part']}）與訂單料號（{$b['part']}）不同，若是治具／刀具或組合件拆件請確認無誤";
+    } else {
         if ($qty <= 0) return ['success' => false, 'message' => '分配數量必須大於 0'];
 
         $ca = trim((string)$a['client']); $cb = trim((string)$b['client']);
@@ -469,9 +644,9 @@ function tc_link(PDO $db, string $type, $fromId, $toId, int $qty, ?array $user =
         $db->beginTransaction();
         switch ($type) {
             case 'quote_order':
-                // 走既有唯一實作（含料號比對與稽核），它自己不開 transaction
-                $r = acc_recon_bind_quote($db, (int)$toId, (int)$fromId, $user);
-                if (empty($r['success'])) { $db->rollBack(); return $r; }
+                tc_upsert($db, 'order_quote_map', ['Order_id' => (int)$toId, 'item_id' => (int)$fromId],
+                          ['allocated_qty' => max(0, $qty), 'created_by' => $uid]);
+                tc_sync_order_quote($db, (int)$toId, $user);
                 break;
             case 'order_bom':
                 tc_upsert($db, 'bom_order_process_map', ['bom' => (string)$toId, 'order_id' => (int)$fromId],
@@ -509,7 +684,8 @@ function tc_link(PDO $db, string $type, $fromId, $toId, int $qty, ?array $user =
         if ($db->inTransaction()) $db->rollBack();
         return ['success' => false, 'message' => '寫入失敗：' . $e->getMessage()];
     }
-    return ['success' => true, 'message' => "已建立對應：{$a['no']} → {$b['no']}（{$qty}）",
+    $amt = ($type === 'quote_order' && $qty <= 0) ? '不拆量' : (string)$qty;
+    return ['success' => true, 'message' => "已建立對應：{$a['no']} → {$b['no']}（{$amt}）",
             'warn' => $warn];
 }
 
@@ -517,6 +693,10 @@ function tc_link(PDO $db, string $type, $fromId, $toId, int $qty, ?array $user =
 function tc_link_qty(PDO $db, string $type, string $srcKind, $fromId, $toId): int
 {
     switch ($type) {
+        case 'quote_order':
+            tc_order_quote_ensure($db);
+            $st = $db->prepare("SELECT COALESCE(allocated_qty,0) FROM order_quote_map WHERE Order_id=? AND item_id=?");
+            $st->execute([(int)$toId, (int)$fromId]); break;
         case 'order_bom':
             $st = $db->prepare("SELECT COALESCE(allocated_qty,0) FROM bom_order_process_map WHERE bom=? AND order_id=?");
             $st->execute([(string)$toId, (int)$fromId]); break;
@@ -581,8 +761,12 @@ function tc_unlink(PDO $db, string $type, $fromId, $toId, ?array $user = null, s
         $db->beginTransaction();
         switch ($type) {
             case 'quote_order':
-                $r = acc_recon_bind_quote($db, (int)$toId, 0, $user);
-                if (empty($r['success'])) { $db->rollBack(); return $r; }
+                // 解除前先把舊欄位補成分配列，否則「只有舊綁定、分配表是空的」時
+                // DELETE 刪不到東西，快取卻被同步成 0 ＝看起來像解除成功但其實沒有紀錄可追
+                tc_seed_order_quote($db, (int)$toId);
+                $db->prepare("DELETE FROM order_quote_map WHERE Order_id=? AND item_id=?")
+                   ->execute([(int)$toId, (int)$fromId]);
+                tc_sync_order_quote($db, (int)$toId, $user);
                 break;
             case 'order_bom':
                 $db->prepare("DELETE FROM bom_order_process_map WHERE bom=? AND order_id=?")

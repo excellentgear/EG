@@ -28,6 +28,15 @@ function jerr($msg, $code = 400, $extra = []) {
     exit;
 }
 
+/* 未捕捉的例外一律轉成 JSON。不裝這個的話 PHP 會回 HTTP 500 空白內容，
+   前端 ajaxError 只拿得到「操作失敗（HTTP 500）」，畫面上等於「按了沒反應」，最難查。
+   （2026-09-21 實際踩到：舊資料指向已刪除的訂單，外鍵擋下就是這個症狀。） */
+set_exception_handler(function (Throwable $e) {
+    if (!headers_sent()) { header('Content-Type: application/json; charset=utf-8'); http_response_code(500); }
+    error_log('DataAudit_API 未捕捉例外：' . $e->getMessage() . ' @ ' . $e->getFile() . ':' . $e->getLine());
+    echo json_encode(['ok' => false, 'error' => '伺服器發生錯誤：' . $e->getMessage()], JSON_UNESCAPED_UNICODE);
+});
+
 try {
     $db = (new DBConnection())->getPDO();
     $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -43,7 +52,7 @@ if (!$P['canView']) jerr('您沒有資料稽核的檢閱權限，請洽管理員
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 $WRITE = ['settings_save', 'exempt_set', 'exempt_del', 'scope_save', 'run_save', 'print_log',
-          'excl_save', 'excl_toggle', 'excl_del'];
+          'excl_save', 'excl_toggle', 'excl_del', 'bind', 'unbind'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['dqa_csrf'], $tok))
@@ -69,7 +78,89 @@ case 'trace_list': {
     $r['items']  = dqa_trace_items();
     $r['levels'] = dqa_trace_levels($db);
     $r['scope']  = dqa_scope_docs_info($db, 'trace');
+    $r['can_bind'] = $P['canAdmin'];
     jout($r);
+}
+
+/* ── 綁定之後只重算這幾列（不必整份重跑）──────────────── */
+case 'trace_recheck': {
+    $ids = json_decode((string)($_POST['order_ids'] ?? $_GET['order_ids'] ?? '[]'), true);
+    if (!is_array($ids) || !$ids) jerr('缺少要重算的訂單');
+    $r = dqa_trace_rows($db, [
+        'order_ids'   => $ids,
+        'cmp_process' => dqaIn('cmp_process') === '1',
+        'only_bad'    => false,          // 剛綁完可能已經沒有缺失了，仍然要把那一列回傳給畫面換掉
+    ]);
+    jout(['rows' => $r['rows']]);
+}
+
+/* ── 分頁三：報價項目追蹤（報價了有沒有下單／出貨／收款）── */
+case 'quote_list': {
+    $r = dqa_quote_rows($db, [
+        'from'     => dqaIn('from'),
+        'to'       => dqaIn('to'),
+        'client'   => dqaIn('client'),
+        'part'     => dqaIn('part'),
+        'only_bad' => dqaIn('only_bad') === '1',
+        'limit'    => (int)dqaIn('limit', '3000'),
+    ]);
+    $r['can_bind'] = $P['canAdmin'];
+    jout($r);
+}
+
+/* ── 整張報價單的內容（含治具／刀具那幾列有沒有訂單與出貨）── */
+case 'quote_detail': {
+    $r = dqa_quote_detail($db, (int)dqaIn('quote_id'), (int)dqaIn('item_id'));
+    if (!empty($r['error'])) jerr($r['error'], 404);
+    jout($r);
+}
+
+/* ── 綁定用的候選單據 ───────────────────────────────── */
+case 'node_candidates': {
+    $kind = dqaIn('kind');
+    if (!in_array($kind, ['quote', 'bom', 'ship'], true)) jerr('不支援的節點：' . $kind);
+    $r = dqa_node_candidates($db, (int)dqaIn('order_id'), $kind, [
+        'kw'         => dqaIn('kw'),
+        'all_client' => dqaIn('all_client') === '1',
+        'same_part'  => dqaIn('same_part') !== '0',
+    ]);
+    if (!empty($r['error'])) jerr($r['error'], 404);
+    $r['can_bind'] = $P['canAdmin'];
+    jout($r);
+}
+
+/* ── 建立／解除綁定（一律走全站唯一的綁定引擎 trace_chain_lib）──
+ * 前端擋一次、這裡同規則再擋一次（鐵律8）：節點代碼白名單、訂單必須存在、
+ * 數量與客戶的檢查則由 tc_link() 自己做，不在這裡再寫第二份規則。 */
+case 'bind':
+case 'unbind': {
+    $kind = dqaIn('kind');
+    $map  = ['quote' => 'quote_order', 'bom' => 'order_bom', 'ship' => 'order_ship'];
+    if (!isset($map[$kind])) jerr('不支援的節點：' . $kind);
+    $orderId = (int)dqaIn('order_id');
+    if ($orderId <= 0) jerr('缺少訂單');
+    $chk = $db->prepare("SELECT COUNT(*) FROM order_track WHERE Order_id=?");
+    $chk->execute([$orderId]);
+    if ((int)$chk->fetchColumn() === 0) jerr('找不到這張訂單', 404);
+
+    $type = $map[$kind];
+    $u = ['id' => $uid, 'user_id' => $uid, 'user_cname' => $uname];
+    /* 方向：報價→訂單是 (報價項目, 訂單)，訂單→製令／出貨是 (訂單, 目標) */
+    $target = (string)dqaIn('target');            // 製令是編號字串，不可一律轉 int
+    if ($target === '') jerr('缺少要綁定的單據');
+    $qty = (int)dqaIn('qty', '0');
+
+    if ($kind === 'quote') { $fromId = (int)$target; $toId = $orderId; }
+    else                   { $fromId = $orderId;     $toId = $target; }
+
+    $r = ($action === 'bind')
+        ? tc_link($db, $type, $fromId, $toId, $qty, $u)
+        : tc_unlink($db, $type, $fromId, $toId, $u);
+    if (empty($r['success'])) jerr($r['message'] ?? '操作失敗');
+
+    // 綁完直接把重算過的那一列回傳，畫面不必再打一支
+    $re = dqa_trace_rows($db, ['order_ids' => [$orderId], 'only_bad' => false]);
+    jout(['msg' => $r['message'], 'warn' => $r['warn'] ?? [], 'rows' => $re['rows']]);
 }
 
 /* ── 基本資料稽核 ───────────────────────────────────── */
@@ -113,6 +204,8 @@ case 'settings_get': {
         'tolerance'  => dqa_tolerance($db),
         'trace_items' => dqa_trace_items(),
         'trace_levels' => dqa_trace_levels($db),
+        'quote_items'  => dqa_quote_items(),
+        'quote_levels' => dqa_quote_levels($db),
         'fields_customer' => dqa_master_fields('customer'),
         'fields_maker'    => dqa_master_fields('maker'),
         'levels_customer' => dqa_master_levels($db, 'customer'),
@@ -139,15 +232,17 @@ case 'settings_save': {
         foreach (['qty_pct', 'price_pct'] as $k)
             if (isset($tol[$k]) && (!is_numeric($tol[$k]) || $tol[$k] < 0 || $tol[$k] > 100))
                 jerr('容許誤差請填 0~100 的數字');
-        if (isset($tol['quote_valid_days']) && (!is_numeric($tol['quote_valid_days'])
-            || $tol['quote_valid_days'] < 0 || $tol['quote_valid_days'] > 3650))
-            jerr('報價有效天數請填 0~3650');
+        foreach (['quote_valid_days', 'no_order_days'] as $k)
+            if (isset($tol[$k]) && (!is_numeric($tol[$k]) || $tol[$k] < 0 || $tol[$k] > 3650))
+                jerr('天數請填 0~3650');
         dqa_param_save($db, 'tolerance', $tol, $uname);
     }
-    foreach ([['trace_items', null], ['fields_customer', 'customer'], ['fields_maker', 'maker']] as [$key, $t]) {
+    foreach ([['trace_items', null], ['quote_items', 'q'],
+              ['fields_customer', 'customer'], ['fields_maker', 'maker']] as [$key, $t]) {
         $v = json_decode((string)($_POST[$key] ?? ''), true);
         if (!is_array($v)) continue;
-        $allow = $t === null ? array_keys(dqa_trace_items()) : array_keys(dqa_master_fields($t));
+        $allow = $t === null ? array_keys(dqa_trace_items())
+               : ($t === 'q' ? array_keys(dqa_quote_items()) : array_keys(dqa_master_fields($t)));
         $c = [];
         foreach ($v as $k => $lv) {
             if (!in_array((string)$k, $allow, true)) continue;
@@ -212,12 +307,13 @@ case 'excl_del': {
 /* ── 例外（已核可不列為缺失）────────────────────────── */
 case 'exempt_set': {
     $scope = dqaIn('scope');
-    if (!in_array($scope, ['customer', 'maker', 'trace'], true)) jerr('不支援的稽核對象');
+    if (!in_array($scope, ['customer', 'maker', 'trace', 'quote'], true)) jerr('不支援的稽核對象');
     $key  = dqaIn('key');
     $item = dqaIn('item');
     if ($key === '' || $item === '') jerr('缺少必要參數');
     // 後端再驗一次：項目代碼必須是這個分頁真的有的檢核項目（鐵律8）
-    $allow = $scope === 'trace' ? array_keys(dqa_trace_items()) : array_keys(dqa_master_fields($scope));
+    $allow = $scope === 'trace' ? array_keys(dqa_trace_items())
+           : ($scope === 'quote' ? array_keys(dqa_quote_items()) : array_keys(dqa_master_fields($scope)));
     $allow[] = '*';
     if ($scope !== 'trace') $allow[] = 'dup_name';
     if (!in_array($item, $allow, true)) jerr('不支援的檢核項目：' . $item);
@@ -229,7 +325,7 @@ case 'exempt_set': {
 
 case 'exempt_del': {
     $scope = dqaIn('scope');
-    if (!in_array($scope, ['customer', 'maker', 'trace'], true)) jerr('不支援的稽核對象');
+    if (!in_array($scope, ['customer', 'maker', 'trace', 'quote'], true)) jerr('不支援的稽核對象');
     $key = dqaIn('key'); $item = dqaIn('item');
     if ($key === '' || $item === '') jerr('缺少必要參數');
     dqa_exempt_del($db, $scope, $key, $item);

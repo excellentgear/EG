@@ -4985,7 +4985,34 @@ function acc_recon_bind_order(PDO $db, int $isId, int $orderId, ?array $user): a
 }
 
 /** 訂單綁定報價單項次（order_track.quote_no / quote_item_id）。$itemId=0 代表解除。 */
-function acc_recon_bind_quote(PDO $db, int $orderId, int $itemId, ?array $user): array
+/**
+ * 訂單綁定報價（order_track.quote_no / quote_item_id 的唯一寫入點）
+ *
+ * $opt['force_part']=true：料號不同時只警示不擋。
+ *   給 tc_sync_order_quote() 用——真相已經改成 order_quote_map，那邊寫入時已經驗過一輪，
+ *   而且「主要報價」有可能是治具那一列（料號本來就與訂單不同）。不放行的話會變成
+ *   分配表寫進去了、快取卻同步失敗，兩邊對不起來。對帳頁的呼叫端不帶這個參數，行為完全不變。
+ */
+/**
+ * 報價料號與訂單料號是不是同一支（唯一實作，兩個呼叫端共用：本檔的綁定與對帳頁的守門）。
+ * 回傳 ['ok'=>bool, 'message'=>?string]；查不到任一邊時一律回 ok=false 並說明。
+ */
+function acc_quote_part_match(PDO $db, int $orderId, int $itemId): array
+{
+    $so = $db->prepare("SELECT d_id FROM order_track WHERE Order_id=? LIMIT 1");
+    $so->execute([$orderId]);
+    $od = $so->fetchColumn();
+    if ($od === false) return ['ok' => false, 'message' => '找不到這張訂單'];
+    $sq = $db->prepare("SELECT product_id FROM quotation_item WHERE item_id=? LIMIT 1");
+    $sq->execute([$itemId]);
+    $qp = $sq->fetchColumn();
+    if ($qp === false) return ['ok' => false, 'message' => '找不到這筆報價明細'];
+    if (strcasecmp(trim((string)$qp), trim((string)$od)) !== 0)
+        return ['ok' => false, 'message' => '報價料號（' . $qp . '）與訂單料號（' . $od . '）不同，不可綁定'];
+    return ['ok' => true, 'message' => null];
+}
+
+function acc_recon_bind_quote(PDO $db, int $orderId, int $itemId, ?array $user, array $opt = []): array
 {
     if ($orderId <= 0) return ['success' => false, 'message' => '這張出貨單還沒有綁定訂單，請先綁訂單再綁報價'];
     $so = $db->prepare("SELECT Order_id, Order_oo, Client_name, d_id, quote_no, quote_item_id
@@ -5002,9 +5029,9 @@ function acc_recon_bind_quote(PDO $db, int $orderId, int $itemId, ?array $user):
         $sq->execute([$itemId]);
         $qi = $sq->fetch(PDO::FETCH_ASSOC);
         if (!$qi) return ['success' => false, 'message' => '找不到這筆報價明細'];
-        if (strcasecmp(trim((string)$qi['product_id']), trim((string)$ot['d_id'])) !== 0) {
-            return ['success' => false, 'message' => '報價料號（' . $qi['product_id'] . '）與訂單料號（'
-                   . $ot['d_id'] . '）不同，不可綁定'];
+        if (empty($opt['force_part'])) {
+            $pm = acc_quote_part_match($db, $orderId, $itemId);
+            if (!$pm['ok']) return ['success' => false, 'message' => $pm['message']];
         }
         $quoteNo = $qi['quote_no'];
     }

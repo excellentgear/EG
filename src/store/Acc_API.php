@@ -1633,7 +1633,25 @@ case 'recon_bind_quote': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
     if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
     acc_recon_guard($perms, 'IS');
-    $r = acc_recon_bind_quote($db, (int)($_POST['order_id'] ?? 0), (int)($_POST['item_id'] ?? 0), $u);
+    /* 2026-09-21：報價→訂單的真相改成 order_quote_map（一張訂單可對到本體＋治具兩列），
+       所以這裡不可以再直接寫 order_track，否則對帳頁綁的跟分配表會對不起來。
+       一律走綁定引擎，它會寫分配表再同步 order_track 上的「主要報價」快取。
+       對帳頁一次只綁一列，所以解除時要把這張訂單既有的都解掉才等於舊的「清空」語意。 */
+    include_once $document_root . '/EGsystem/src/common/trace_chain_lib.php';
+    $oid = (int)($_POST['order_id'] ?? 0);
+    $iid = (int)($_POST['item_id'] ?? 0);
+    if ($oid <= 0) acc_err('這張出貨單還沒有綁定訂單，請先綁訂單再綁報價');
+    if ($iid > 0) {
+        // 對帳頁維持原本的嚴格規則：料號不同一律擋下（那邊綁報價是為了比單價，
+        // 綁到別支料號的報價價格就是錯的）。資料稽核頁才放行治具／刀具那種料號不同的綁定。
+        $pm = acc_quote_part_match($db, $oid, $iid);
+        if (!$pm['ok']) acc_err($pm['message']);
+        $r = tc_link($db, 'quote_order', $iid, $oid, 0, $u);
+    } else {
+        foreach (tc_order_quote_map($db, [$oid])[$oid] ?? [] as $row)
+            tc_unlink($db, 'quote_order', $row['item_id'], $oid, $u);
+        $r = ['success' => true, 'message' => '已解除報價綁定'];
+    }
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
 }

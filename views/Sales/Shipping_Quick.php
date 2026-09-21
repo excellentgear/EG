@@ -2129,7 +2129,8 @@ function tcCurQty(){
 }
 $('#btnTqOk').on('click',function(){
   var c=TC.cur; if(!c) return;
-  var q=(c.type==='quote_order')?1:(parseInt($('#tqQty').val(),10)||0);
+  // 報價→訂單不拆量（一份報價本來就會被很多張訂單引用），送 0 ＝分配表存「不拆量」
+  var q=(c.type==='quote_order')?0:(parseInt($('#tqQty').val(),10)||0);
   if(c.type!=='quote_order'){
     $('#tqQty').trigger('input');
     if($('#tqErr').text()!==''){ toast($('#tqErr').text(), true); return; }

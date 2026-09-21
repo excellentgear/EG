@@ -37,6 +37,9 @@ if (!function_exists('dqa_ensure_schema')) {
 
 define('DQA_PARAM_GROUP', 'DATA_AUDIT');
 
+/* 綁定一律走既有的追溯鏈引擎（tc_link／tc_unlink／order_quote_map），這裡不另外刻一份寫入邏輯 */
+require_once __DIR__ . '/trace_chain_lib.php';
+
 /* ============================================================
  * Schema
  * ============================================================ */
@@ -160,7 +163,12 @@ function dqa_tolerance(PDO $db): array
     if ($price < 0 || $price > 100) $price = 1.0;
     $days  = isset($v['quote_valid_days']) && is_numeric($v['quote_valid_days']) ? (int)$v['quote_valid_days'] : 365;
     if ($days < 0 || $days > 3650) $days = 365;
-    return ['qty_pct' => $qty, 'price_pct' => $price, 'quote_valid_days' => $days];
+    /* 報價出去多久還沒有任何訂單才算「報價未成案」（分頁三用）。
+       這一定要有寬限期——上禮拜才報的價還沒下單完全正常，報出來只是雜訊。 */
+    $nod   = isset($v['no_order_days']) && is_numeric($v['no_order_days']) ? (int)$v['no_order_days'] : 30;
+    if ($nod < 0 || $nod > 3650) $nod = 30;
+    return ['qty_pct' => $qty, 'price_pct' => $price, 'quote_valid_days' => $days,
+            'no_order_days' => $nod];
 }
 
 /* ============================================================
@@ -589,11 +597,23 @@ function dqa_trace_rows(PDO $db, array $f): array
     $exclStat = [];                             // 被排除掉的統計，畫面要講出來
     $exempt = dqa_exempt_map($db, 'trace');
 
-    /* ── ① 訂單（稽核主軸：一張訂單一列）───────────────── */
+    /* ── ① 訂單（稽核主軸：一張訂單一列）─────────────────
+     * order_ids 是「綁定之後只重算這幾列」用的（見 dqa_trace_one()）：
+     * 指定之後日期與客戶料號篩選一律不套用，不然剛綁完的那張訂單可能因為
+     * 不在目前的篩選範圍內而整列消失，畫面上看起來像綁定把資料弄丟了。 */
+    $only = [];
+    foreach ((array)($f['order_ids'] ?? []) as $v) { $v = (int)$v; if ($v > 0) $only[] = $v; }
+    $only = array_slice(array_values(array_unique($only)), 0, 200);
+    if ($only) {
+        $ph = []; $p = [];
+        foreach ($only as $i => $v) { $ph[] = ':o' . $i; $p[':o' . $i] = $v; }
+        $w = ["ot.Order_id IN (" . implode(',', $ph) . ")"];
+    } else {
     $w = ["ot.Order_date >= :f", "ot.Order_date <= :t"];
     $p = [':f' => $from, ':t' => $to];
     if ($client !== '') { $w[] = "ot.Client_name = :c"; $p[':c'] = $client; }
     if ($part   !== '') { $w[] = "ot.d_id LIKE :pt";    $p[':pt'] = '%' . $part . '%'; }
+    }
     $sql = "SELECT ot.Order_id, ot.Order_oo, ot.Client_name, ot.d_id, ot.d_id_ID, ot.Qty, ot.unit_price,
                    ot.Processing_items, ot.pmGet_auto, ot.Order_status, ot.quote_no, ot.quote_item_id,
                    ot.parent_order_id, ot.assembly_parent_order_id,
@@ -629,13 +649,18 @@ function dqa_trace_rows(PDO $db, array $f): array
     $wideFrom = date('Y-m-d', strtotime($from . ' -180 day'));
     $wideTo   = date('Y-m-d', strtotime($to   . ' +180 day'));
 
-    /* ── ② 報價：綁定（quote_item_id）─────────────────── */
+    /* ── ② 報價：綁定（order_quote_map，多對多）──────────
+     * 2026-09-21 起一張訂單可以綁多個報價項目（本體一列、治具／刀具一列），
+     * 所以這裡要整批讀分配表；order_track.quote_item_id 只是「主要報價」快取，
+     * tc_order_quote_map() 已經處理「還沒搬進分配表的舊資料」的回退。 */
+    $qLinks = tc_order_quote_map($db, $oids);          // order_id => [ [item_id, alloc, src], ... ]
     $qBind = [];
     $qids = [];
-    foreach ($orders as $o) if ((int)$o['quote_item_id'] > 0) $qids[] = (int)$o['quote_item_id'];
+    foreach ($qLinks as $rowsQ) foreach ($rowsQ as $lk) $qids[] = (int)$lk['item_id'];
     foreach (dqa_chunks($qids) as $ck) {
         $in = implode(',', array_fill(0, count($ck), '?'));
         $s = $db->prepare("SELECT qi.item_id, qi.product_id, qi.d_setting_d_id, qi.quantity, qi.unit_price,
+                                  qi.amount, qi.specification, COALESCE(qi.note_only,0) AS note_only,
                                   qi.process_notes, COALESCE(qi.is_tiered,0) AS is_tiered,
                                   ql.quote_no, ql.client_name,
                                   DATE_FORMAT(ql.quote_date,'%Y-%m-%d') qdate
@@ -662,12 +687,14 @@ function dqa_trace_rows(PDO $db, array $f): array
             $w[] = "qi.product_id IN (" . implode(',', array_fill(0, count($u), '?')) . ")";
             $bind = array_merge($bind, $u); }
         $s = $db->prepare("SELECT qi.item_id, qi.product_id, qi.d_setting_d_id, qi.quantity, qi.unit_price,
+                                  qi.amount, qi.specification, COALESCE(qi.note_only,0) AS note_only,
                                   qi.process_notes, COALESCE(qi.is_tiered,0) AS is_tiered,
                                   ql.quote_no, ql.client_name,
                                   DATE_FORMAT(ql.quote_date,'%Y-%m-%d') qdate
                              FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id=qi.quote_id
                             WHERE (" . implode(' OR ', $w) . ")
                               AND COALESCE(ql.is_draft,0)=0
+                              AND COALESCE(qi.note_only,0)=0
                               AND ql.quote_date <= ?
                             ORDER BY ql.quote_date");
         $bind[] = $wideTo;
@@ -744,6 +771,7 @@ function dqa_trace_rows(PDO $db, array $f): array
         $d = dqa_d($r['sdate'] ?? null);
         return ['id' => (int)$r['IS_id'], 'no' => (string)$r['IS_number'], 'date' => $d,
                 'qty' => dqa_num($r['Qty']), 'price' => dqa_num($r['Unit_price']),
+                'ok_flag' => ((int)($r['anomaly_confirmed'] ?? 0) === 1),
                 'spec' => (string)($r['Specification'] ?? ''), 'src' => $src,
                 'alloc' => isset($r['alloc']) ? dqa_num($r['alloc']) : null,
                 'client' => trim((string)($r['Client_name'] ?? '')),
@@ -753,13 +781,13 @@ function dqa_trace_rows(PDO $db, array $f): array
     foreach (dqa_chunks($oids) as $ck) {
         $in = implode(',', array_fill(0, count($ck), '?'));
         $s = $db->prepare("SELECT m.Order_id, m.allocated_qty alloc, il.IS_id, il.IS_number, il.Qty,
-                                  il.Unit_price, il.Specification, il.Client_name, il.Product_id,
+                                  il.Unit_price, il.Specification, il.anomaly_confirmed, il.Client_name, il.Product_id,
                                   DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate
                              FROM is_order_map m JOIN is_list il ON il.IS_id=m.IS_id
                             WHERE m.Order_id IN ($in)");
         $s->execute($ck);
         foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) $shipByOrder[(int)$r['Order_id']][(int)$r['IS_id']] = $mkShip($r, 'map');
-        $s = $db->prepare("SELECT il.Order_id, il.IS_id, il.IS_number, il.Qty, il.Unit_price, il.Specification,
+        $s = $db->prepare("SELECT il.Order_id, il.IS_id, il.IS_number, il.Qty, il.Unit_price, il.Specification, il.anomaly_confirmed,
                                   il.Client_name, il.Product_id, DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate
                              FROM is_list il WHERE il.Order_id IN ($in)");
         $s->execute($ck);
@@ -778,7 +806,7 @@ function dqa_trace_rows(PDO $db, array $f): array
         if ($parts) { $u = array_values(array_unique($parts));
             $w[] = "il.Product_id IN (" . implode(',', array_fill(0, count($u), '?')) . ")";
             $bind = array_merge($bind, $u); }
-        $s = $db->prepare("SELECT il.IS_id, il.IS_number, il.Qty, il.Unit_price, il.Specification,
+        $s = $db->prepare("SELECT il.IS_id, il.IS_number, il.Qty, il.Unit_price, il.Specification, il.anomaly_confirmed,
                                   il.Client_name, il.Product_id, il.d_setting_id,
                                   DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate
                              FROM is_list il WHERE (" . implode(' OR ', $w) . ")
@@ -789,6 +817,25 @@ function dqa_trace_rows(PDO $db, array $f): array
             $row = $mkShip($r, 'guess');
             foreach (dqa_pair_keys((int)$r['d_setting_id'], (string)$r['Client_name'], (string)$r['Product_id']) as $k)
                 $shipGuess[$k][] = $row;
+        }
+    }
+
+    /* ── ⑤-2 出貨有沒有進對帳／開發票（2026-09-21 使用者交辦）──
+     * 這一項預設是關的：會計模組目前發票明細 0 筆、對帳底稿只有 84 筆，全開會整片報未收款。
+     * 所以只有管理員在「設定」把它打開時才真的去查，關著的時候一次查詢都不會發生。 */
+    $shipRecon = [];
+    if (($itemLv['ship_norecon'] ?? 'off') !== 'off') {
+        $allIs = [];
+        foreach ($shipByOrder as $m) foreach ($m as $s2) $allIs[] = (int)$s2['id'];
+        foreach (dqa_chunks($allIs) as $ck) {
+            $in = implode(',', array_fill(0, count($ck), '?'));
+            foreach (["SELECT src_id FROM acc_recon_line WHERE src_type='IS' AND src_id IN ($in)",
+                      "SELECT src_id FROM acc_invoice_item WHERE src_type IN ('IS','ship') AND src_id IN ($in)"] as $q2) {
+                try {
+                    $s = $db->prepare($q2); $s->execute($ck);
+                    foreach ($s->fetchAll(PDO::FETCH_COLUMN) as $v) $shipRecon[(int)$v] = 1;
+                } catch (Throwable $e) {}   // 會計模組的表還沒建起來時不要讓整份稽核掛掉
+            }
         }
     }
 
@@ -827,10 +874,31 @@ function dqa_trace_rows(PDO $db, array $f): array
         $autoPm = ((int)$o['pmGet_auto'] === 1);
         $closed = ((string)$o['Order_status'] === '9');
 
-        /* 報價 */
-        $q = null; $qSrc = '';
-        if (!empty($qBind[(int)$o['quote_item_id']])) { $q = $qBind[(int)$o['quote_item_id']]; $qSrc = 'bind'; }
-        else {
+        /* 報價
+         * $qAll ＝這張訂單綁到的全部報價項目（本體＋治具…），$q ＝其中的「主要報價」
+         * （料號相同者優先，與 tc_order_quote_main() 同一條規則；日期、單價、製程都以它為準）。
+         * 沒有任何綁定時才退回推測，推測一律只取一筆。 */
+        $q = null; $qSrc = ''; $qAll = []; $qAlloc = 0.0;
+        foreach ($qLinks[$oid] ?? [] as $lk) {
+            $it = $qBind[(int)$lk['item_id']] ?? null;
+            if (!$it) continue;                       // 報價項目已被刪除（報價單改版）
+            $it['_alloc'] = (float)$lk['alloc'];
+            $it['_link_src'] = $lk['src'];
+            $qAll[] = $it;
+            $qAlloc += (float)$lk['alloc'];
+        }
+        if ($qAll) {
+            $pt = strtolower(trim((string)$o['d_id']));
+            usort($qAll, function ($x, $y) use ($pt) {
+                $mx = (strtolower(trim((string)$x['product_id'])) === $pt) ? 0 : 1;
+                $my = (strtolower(trim((string)$y['product_id'])) === $pt) ? 0 : 1;
+                if ($mx !== $my) return $mx - $my;
+                if ($x['_alloc'] != $y['_alloc']) return ($y['_alloc'] <=> $x['_alloc']);
+                return ((int)$x['item_id'] <=> (int)$y['item_id']);
+            });
+            $q = $qAll[0]; $qSrc = 'bind';
+        }
+        if (!$q) {
             // 推測：取報價日不晚於訂單日之中最接近的一筆；全都晚於訂單日就取最早那筆（好讓「報價晚於訂單」被看見）
             $cands = dqa_pick_guess($qGuess, $pkeys);
             foreach ($cands as $cand) {
@@ -838,7 +906,11 @@ function dqa_trace_rows(PDO $db, array $f): array
                 if ($cd !== '' && $cd <= $odate) $q = $cand;
             }
             if (!$q && $cands) $q = $cands[0];
-            if ($q) $qSrc = 'guess';
+            if ($q) {
+                $qSrc = 'guess';
+                $q['_alloc'] = 0.0; $q['_link_src'] = 'guess';
+                $qAll = [$q];
+            }
         }
 
         /* 製令
@@ -899,8 +971,12 @@ function dqa_trace_rows(PDO $db, array $f): array
             if ($k === '') continue;
             if (!isset($sDocs[$k])) $sDocs[$k] = ['no' => $k, 'date' => $s2['date'], 'qty' => 0.0,
                                                   'client' => (string)($s2['client'] ?? ''),
-                                                  'part' => (string)($s2['part'] ?? '')];
+                                                  'part' => (string)($s2['part'] ?? ''),
+                                                  'price' => $s2['price'], 'ids' => [], 'src' => $s2['src']];
             $sDocs[$k]['qty'] += $q1;
+            // 一張出貨單在 is_list 是好幾列，解除綁定時要逐列解，所以 id 全都留著
+            $sDocs[$k]['ids'][] = (int)$s2['id'];
+            if ($sDocs[$k]['price'] <= 0 && $s2['price'] > 0) $sDocs[$k]['price'] = $s2['price'];
             if ($s2['date'] !== '' && ($sDocs[$k]['date'] === '' || $s2['date'] < $sDocs[$k]['date']))
                 $sDocs[$k]['date'] = $s2['date'];
         }
@@ -923,10 +999,16 @@ function dqa_trace_rows(PDO $db, array $f): array
         $lv  = function (string $src) use ($isBind) { return $isBind($src) ? 'critical' : 'warn'; };
         $sfx = function (string $src) use ($isBind) { return $isBind($src) ? '' : '（推測配對，僅供參考）'; };
 
-        // ① 報價日 <= 訂單日
-        if ($q && $qdate !== '' && $qdate > $odate)
-            $add('q_late', $lv($qSrc === 'bind' ? 'map' : 'guess'),
-                 '報價日 ' . $qdate . ' 晚於訂單日 ' . $odate . $sfx($qSrc === 'bind' ? 'map' : 'guess'));
+        // ① 報價日 <= 訂單日（綁了好幾列報價時逐列都要看，不是只看主要報價那一列）
+        $qSrcKey0 = ($qSrc === 'bind') ? 'map' : 'guess';
+        foreach ($qAll as $qi1) {
+            $d1 = dqa_d($qi1['qdate']);
+            if ($d1 !== '' && $d1 > $odate) {
+                $add('q_late', $lv($qSrcKey0),
+                     '報價單 ' . $qi1['quote_no'] . ' 的報價日 ' . $d1 . ' 晚於訂單日 ' . $odate . $sfx($qSrcKey0));
+                break;
+            }
+        }
         if (!$q) $add('q_none', 'warn', '查不到對應的報價單（先比料號主檔、再比同客戶同料號）');
 
         // ② 製令開立日 >= 訂單日
@@ -968,9 +1050,11 @@ function dqa_trace_rows(PDO $db, array $f): array
         // ⚠ ERP 報價匯入在 2026-09-21 之前把「4,000」讀成「4」（千分位逗號被截斷，已修
         //   _upload_For_List.php 的 parseERPQty_erp）。**在報價單重新匯入之前，舊資料會讓
         //   這一項冒出大量假的「數量不符」**；要暫時關掉請到本頁「設定」把它改成不檢查。
+        //   ⑶ 綁了兩列以上的報價（本體＋治具／刀具）也不判——本體的數量與治具的數量
+        //      本來就不是同一件事，加起來或挑一列去比都沒有意義。
         $qqty = $q ? dqa_num($q['quantity']) : 0.0;
         $qSrcKey = ($qSrc === 'bind') ? 'map' : 'guess';
-        if ($q && $qFresh && empty($q['is_tiered'])
+        if ($q && count($qAll) <= 1 && $qFresh && empty($q['is_tiered'])
             && $qqty > 0 && $oqty > 0 && dqa_diff_over($qqty, $oqty, $tol['qty_pct']))
             $add('qty_quote', 'critical', '報價數量 ' . dqa_n($qqty) . ' 與訂單數量 '
                  . dqa_n($oqty) . ' 不符' . $sfx($qSrcKey));
@@ -998,6 +1082,37 @@ function dqa_trace_rows(PDO $db, array $f): array
         if ($sPrice !== null && $sPrice > 0 && $oprice > 0 && $isBind($shipSrc)
             && dqa_diff_over($oprice, $sPrice, $tol['price_pct']))
             $add('price_s', 'warn', '訂單單價 ' . dqa_n($oprice) . ' 與出貨單價 ' . dqa_n($sPrice) . ' 不符');
+
+        /* ⑤-2 金額為 0（2026-09-21 使用者交辦：報價／訂單／出貨都要抓）
+         *   刻意排除「被設定為備註」的那種列——ERP 匯入的資料人工確認後會標成備註，
+         *   那種列本來就沒有金額，報出來只是雜訊：
+         *     報價 note_only=1／出貨 anomaly_confirmed=1（出貨分析頁既有的「確認非異常」旗標）。
+         *   訂單沒有這種旗標，確認是備註性質時請用這一列的「標為例外」。
+         *   階梯報價的 unit_price 本來就可能是 0（價格在階梯裡），所以也不判。 */
+        if ($q && empty($q['note_only']) && empty($q['is_tiered'])
+            && dqa_num($q['unit_price']) <= 0 && dqa_num($q['amount'] ?? 0) <= 0)
+            $add('amt_zero_quote', 'warn', '報價單 ' . $q['quote_no'] . ' 這一列的單價與金額都是 0'
+                 . $sfx($qSrcKey));
+        if ($oqty <= 0 || $oprice <= 0)
+            $add('amt_zero_order', 'warn', '訂單金額為 0（數量 ' . dqa_n($oqty) . '、單價 ' . dqa_n($oprice) . '）');
+        foreach ($ships as $s3) {
+            if (!$isBind($s3['src']) || !empty($s3['ok_flag'])) continue;
+            if ($s3['price'] <= 0) {
+                $add('amt_zero_ship', 'critical', '出貨單 ' . $s3['no'] . '（' . $s3['date']
+                     . '）沒有打單價，這批貨收不到款');
+                break;
+            }
+        }
+        if (($itemLv['ship_norecon'] ?? 'off') !== 'off') {
+            foreach ($ships as $s3) {
+                if (!$isBind($s3['src']) || !empty($s3['ok_flag'])) continue;
+                if (empty($shipRecon[(int)$s3['id']])) {
+                    $add('ship_norecon', 'warn', '出貨單 ' . $s3['no'] . '（' . $s3['date']
+                         . '）沒有進對帳底稿、也沒有開立發票');
+                    break;
+                }
+            }
+        }
 
         // ⑥ 製程（可關閉）：訂單是手打文字、出貨是與規格混打，所以抽關鍵詞比集合
         $pOrder = $pQuote = $pBom = $pShip = [];
@@ -1070,8 +1185,19 @@ function dqa_trace_rows(PDO $db, array $f): array
             'oproc' => (string)$o['Processing_items'],
             'quote' => $q ? ['no' => (string)$q['quote_no'], 'date' => $qdate,
                              'qty' => dqa_num($q['quantity']), 'price' => $qprice, 'src' => $qSrc,
+                             'item_id' => (int)$q['item_id'], 'tiered' => !empty($q['is_tiered']),
+                             'cnt' => count($qAll),
                              'client' => trim((string)($q['client_name'] ?? '')),
                              'part'   => trim((string)($q['product_id'] ?? ''))] : null,
+            // 綁到的全部報價項目（本體＋治具／刀具…）；畫面上主要報價印在最前面
+            'quote_list' => array_map(function ($x) {
+                return ['item_id' => (int)$x['item_id'], 'no' => (string)$x['quote_no'],
+                        'date' => dqa_d($x['qdate']), 'qty' => dqa_num($x['quantity']),
+                        'price' => dqa_num($x['unit_price']), 'part' => trim((string)$x['product_id']),
+                        'spec' => (string)($x['specification'] ?? ''),
+                        'tiered' => !empty($x['is_tiered']), 'alloc' => dqa_num($x['_alloc'] ?? 0),
+                        'src' => (string)($x['_link_src'] ?? '')];
+            }, $qAll),
             'bom'   => ['cnt' => count($boms), 'qty' => $bQty, 'date' => $bMin, 'date_max' => $bMax,
                         'src' => $bomSrc, 'list' => $bList],
             'ship'  => ['cnt' => count($ships), 'doc_cnt' => count($sList), 'qty' => $sQty,
@@ -1152,8 +1278,688 @@ function dqa_trace_items(): array
         'price_s'       => ['訂單與出貨單價不符', 'warn'],
         'proc_q'        => ['報價與訂單製程不同', 'warn'],
         'proc_b'        => ['訂單與製令製程不同', 'warn'],
+        /* 2026-09-21 使用者交辦：金額為 0 的單據也要抓出來。
+           「被設定為備註的那種列」不算缺失（ERP 匯入的資料人工確認後會標成備註）：
+             報價 → quotation_item.note_only=1
+             出貨 → is_list.anomaly_confirmed=1（「確認非異常」，出貨分析頁既有的旗標，不另外發明一個）
+             訂單 → 沒有這種旗標，請用這一列的「標為例外」處理 */
+        'amt_zero_quote' => ['報價金額為 0',     'warn'],
+        'amt_zero_order' => ['訂單金額為 0',     'warn'],
+        'amt_zero_ship'  => ['出貨未開價（收不到款）', 'critical'],
+        /* 會計模組（發票明細／對帳底稿）目前幾乎沒有資料，全開會整片報未收款，
+           所以預設關閉；等會計上線後到「設定」把它打開即可。 */
+        'ship_norecon'   => ['出貨未進對帳／未開發票', 'off'],
     ];
 }
+/* ============================================================
+ * 綁定（2026-09-21 使用者交辦）
+ *
+ * 【為什麼綁定要做在稽核頁】使用者原話：「因為確認無誤就可以直接綁定」。
+ * 缺失的成因十之八九就是「沒有做綁定」，查出來之後還要換到另外三個頁面各綁一次，
+ * 實務上就是不會有人去綁，缺失永遠掛在那裡。
+ *
+ * 【寫入一律走 trace_chain_lib】tc_link()／tc_unlink() 是全站唯一的綁定引擎，
+ * 它負責數量上限、客戶比對、舊欄位補列（seed）與主要單據快取同步。
+ * 這裡只負責「把候選單據找出來給人挑」，一行寫入邏輯都不自己刻。
+ *
+ * 【一對多／多對一／多對多】四種節點的關係各自不同，候選清單也因此不一樣：
+ *   報價→訂單  多張訂單對一個報價項目；一張訂單也可以對多個報價項目（本體＋治具）→ 不拆量
+ *   訂單→製令  多對多且拆量（bom_order_process_map）
+ *   訂單→出貨  多對多且拆量（is_order_map）
+ * 所以拆量的那兩種一律要顯示「本身數量／已分配／還剩多少」，不然使用者按下去才發現超量。
+ * ============================================================ */
+
+/** 報價項目的製程名稱（process_notes 存子標籤 id 清單；既有資料有純數字、有陣列、也有物件） */
+function dqa_quote_procs(PDO $db, array $itemIds): array
+{
+    $ids = array_values(array_unique(array_map('intval', $itemIds)));
+    $ids = array_values(array_filter($ids, function ($v) { return $v > 0; }));
+    if (!$ids) return [];
+    static $names = null;
+    if ($names === null) {
+        $names = [];
+        try {
+            foreach ($db->query("SELECT sub_tag_id, sub_tag_name FROM quotation_process_sub_tag")
+                        ->fetchAll(PDO::FETCH_ASSOC) as $r)
+                $names[(int)$r['sub_tag_id']] = trim((string)$r['sub_tag_name']);
+        } catch (Throwable $e) {}
+    }
+    $out = [];
+    foreach (dqa_chunks($ids) as $ck) {
+        $in = implode(',', array_fill(0, count($ck), '?'));
+        $s = $db->prepare("SELECT item_id, process_notes FROM quotation_item WHERE item_id IN ($in)");
+        $s->execute($ck);
+        foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $pn = json_decode((string)($r['process_notes'] ?? ''), true);
+            if (is_numeric($pn)) $pn = [$pn];
+            if (!is_array($pn))  $pn = [];
+            $ns = [];
+            foreach ($pn as $x) {
+                $id = is_array($x) ? (int)($x['sub_tag_id'] ?? 0) : (int)$x;
+                if ($id > 0 && isset($names[$id])) $ns[] = $names[$id];
+            }
+            $out[(int)$r['item_id']] = $ns;
+        }
+    }
+    return $out;
+}
+
+/** 報價項目的階梯區間（使用者要求「相關報價數量區間也要明確」） */
+function dqa_quote_tiers(PDO $db, array $itemIds): array
+{
+    $ids = array_values(array_unique(array_map('intval', $itemIds)));
+    $ids = array_values(array_filter($ids, function ($v) { return $v > 0; }));
+    if (!$ids) return [];
+    $out = [];
+    foreach (dqa_chunks($ids) as $ck) {
+        $in = implode(',', array_fill(0, count($ck), '?'));
+        $s = $db->prepare("SELECT item_id, qty_min, qty_max, unit_price, tolerance_value, tolerance_unit,
+                                  tolerance_note
+                             FROM quotation_item_tier WHERE item_id IN ($in)
+                            ORDER BY item_id, sort_order, qty_min");
+        $s->execute($ck);
+        foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $mn = dqa_num($r['qty_min']); $mx = $r['qty_max'] === null ? null : dqa_num($r['qty_max']);
+            $out[(int)$r['item_id']][] = [
+                'min' => $mn, 'max' => $mx, 'price' => dqa_num($r['unit_price']),
+                'range' => dqa_n($mn) . ' ~ ' . ($mx === null ? '以上' : dqa_n($mx)),
+                'tol' => ($r['tolerance_value'] !== null && dqa_num($r['tolerance_value']) > 0)
+                         ? (dqa_n(dqa_num($r['tolerance_value'])) . (string)$r['tolerance_unit']) : '',
+                'tol_note' => (string)($r['tolerance_note'] ?? ''),
+            ];
+        }
+    }
+    return $out;
+}
+
+/**
+ * 一整張報價單的全部項目，每一列附上「有沒有建立訂單／有沒有出貨／出貨有沒有開價」。
+ *
+ * 使用者原話：「報價內常有其他治具、刀具...報價，稽核也需要檢查是否有報價但訂單沒有建立，
+ * 還是出貨沒有打上去收款，所以報價單要可以顯示完整報價單內容方便確認」。
+ * 所以這裡一定要列**整張**報價單（含備註列），不是只列跟目前這張訂單有關的那一列。
+ */
+function dqa_quote_detail(PDO $db, int $quoteId = 0, int $itemId = 0): array
+{
+    if ($quoteId <= 0 && $itemId > 0) {
+        $s = $db->prepare("SELECT quote_id FROM quotation_item WHERE item_id=?");
+        $s->execute([$itemId]);
+        $quoteId = (int)$s->fetchColumn();
+    }
+    if ($quoteId <= 0) return ['error' => '找不到這張報價單'];
+
+    $s = $db->prepare("SELECT quote_id, quote_no, DATE_FORMAT(quote_date,'%Y-%m-%d') quote_date,
+                              DATE_FORMAT(valid_until,'%Y-%m-%d') valid_until, client_name, client_id,
+                              inquiry_no, currency, total_amount, note,
+                              COALESCE(is_draft,0) is_draft, approval_status
+                         FROM quotation_list WHERE quote_id=?");
+    $s->execute([$quoteId]);
+    $head = $s->fetch(PDO::FETCH_ASSOC);
+    if (!$head) return ['error' => '找不到這張報價單'];
+
+    $s = $db->prepare("SELECT item_id, sort_order, product_id, d_setting_d_id, specification, quantity,
+                              unit, unit_price, amount, COALESCE(is_tiered,0) is_tiered,
+                              COALESCE(note_only,0) note_only
+                         FROM quotation_item WHERE quote_id=? ORDER BY sort_order, item_id");
+    $s->execute([$quoteId]);
+    $items = $s->fetchAll(PDO::FETCH_ASSOC);
+    $ids = array_map(function ($r) { return (int)$r['item_id']; }, $items);
+    $procs = dqa_quote_procs($db, $ids);
+    $tiers = dqa_quote_tiers($db, $ids);
+
+    /* 這幾列各自被哪些訂單引用（綁定優先，沒綁定才用同客戶同料號推測） */
+    $bound = [];
+    if ($ids) {
+        tc_order_quote_ensure($db);
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $q = $db->prepare("SELECT m.item_id, ot.Order_id, ot.Order_oo, ot.Qty, ot.unit_price,
+                                  ot.Order_status, DATE_FORMAT(ot.Order_date,'%Y-%m-%d') odate
+                             FROM order_quote_map m JOIN order_track ot ON ot.Order_id=m.Order_id
+                            WHERE m.item_id IN ($in) ORDER BY ot.Order_date");
+        $q->execute($ids);
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $bound[(int)$r['item_id']][] = $r;
+        // 還沒搬進分配表的舊綁定
+        $q = $db->prepare("SELECT ot.quote_item_id item_id, ot.Order_id, ot.Order_oo, ot.Qty, ot.unit_price,
+                                  ot.Order_status, DATE_FORMAT(ot.Order_date,'%Y-%m-%d') odate
+                             FROM order_track ot WHERE ot.quote_item_id IN ($in) ORDER BY ot.Order_date");
+        $q->execute($ids);
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $k = (int)$r['item_id'];
+            foreach ($bound[$k] ?? [] as $x) if ((int)$x['Order_id'] === (int)$r['Order_id']) continue 2;
+            $bound[$k][] = $r;
+        }
+    }
+    $oids = [];
+    foreach ($bound as $rows) foreach ($rows as $r) $oids[] = (int)$r['Order_id'];
+
+    /* 這些訂單各自出了哪些貨（綁定為主，退回 is_list.Order_id） */
+    $shipOf = [];
+    foreach (dqa_chunks($oids) as $ck) {
+        $in = implode(',', array_fill(0, count($ck), '?'));
+        $q = $db->prepare("SELECT m.Order_id, il.IS_id, il.IS_number, il.Qty, il.Unit_price,
+                                  COALESCE(il.anomaly_confirmed,0) ok_flag,
+                                  DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate
+                             FROM is_order_map m JOIN is_list il ON il.IS_id=m.IS_id
+                            WHERE m.Order_id IN ($in)
+                            UNION
+                           SELECT il.Order_id, il.IS_id, il.IS_number, il.Qty, il.Unit_price,
+                                  COALESCE(il.anomaly_confirmed,0) ok_flag,
+                                  DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate
+                             FROM is_list il WHERE il.Order_id IN ($in)");
+        $q->execute(array_merge($ck, $ck));
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $shipOf[(int)$r['Order_id']][(int)$r['IS_id']] = $r;
+    }
+
+    $out = [];
+    foreach ($items as $it) {
+        $iid = (int)$it['item_id'];
+        $ords = []; $ships = []; $noPrice = false;
+        foreach ($bound[$iid] ?? [] as $r) {
+            $ords[] = ['order_id' => (int)$r['Order_id'], 'no' => (string)$r['Order_oo'],
+                       'date' => (string)$r['odate'], 'qty' => dqa_num($r['Qty']),
+                       'price' => dqa_num($r['unit_price']),
+                       'closed' => ((string)$r['Order_status'] === '9')];
+            foreach ($shipOf[(int)$r['Order_id']] ?? [] as $sr) {
+                $ships[(string)$sr['IS_number']] = [
+                    'no' => (string)$sr['IS_number'], 'date' => (string)$sr['sdate'],
+                    'qty' => dqa_num($sr['Qty']), 'price' => dqa_num($sr['Unit_price'])];
+                if (dqa_num($sr['Unit_price']) <= 0 && (int)$sr['ok_flag'] !== 1) $noPrice = true;
+            }
+        }
+        $out[] = [
+            'item_id' => $iid, 'part' => (string)$it['product_id'],
+            'd_id' => (int)($it['d_setting_d_id'] ?? 0),
+            'spec' => (string)($it['specification'] ?? ''),
+            'qty' => dqa_num($it['quantity']), 'unit' => (string)($it['unit'] ?? ''),
+            'price' => dqa_num($it['unit_price']), 'amount' => dqa_num($it['amount']),
+            'tiered' => !empty($it['is_tiered']), 'note_only' => !empty($it['note_only']),
+            'procs' => $procs[$iid] ?? [], 'tiers' => $tiers[$iid] ?? [],
+            'orders' => $ords, 'ships' => array_values($ships),
+            'ship_noprice' => $noPrice,
+        ];
+    }
+    return ['head' => $head, 'items' => $out];
+}
+
+/**
+ * 某張訂單在某個節點的候選單據（給人點選後綁定）。
+ * $kind: quote｜bom｜ship
+ * $opt : kw（關鍵字，打了就不限日期與客戶）、all_client（1＝不限客戶）、same_part（1＝只列同料號）
+ *
+ * 候選一律分成三種來源並在畫面上標出來：
+ *   bound 已經綁在這張訂單上（可解除）／other 綁在別張訂單上（要小心）／free 還沒被綁的
+ */
+function dqa_node_candidates(PDO $db, int $orderId, string $kind, array $opt = []): array
+{
+    $s = $db->prepare("SELECT Order_id, Order_oo, Client_name, d_id, d_id_ID, Qty, unit_price,
+                              Order_status, pmGet_auto, Processing_items,
+                              DATE_FORMAT(Order_date,'%Y-%m-%d') odate,
+                              DATE_FORMAT(Delivery_date,'%Y-%m-%d') ddate
+                         FROM order_track WHERE Order_id=?");
+    $s->execute([$orderId]);
+    $o = $s->fetch(PDO::FETCH_ASSOC);
+    if (!$o) return ['error' => '找不到這張訂單'];
+
+    $kw      = trim((string)($opt['kw'] ?? ''));
+    $allCli  = !empty($opt['all_client']) || $kw !== '';
+    $samePt  = !array_key_exists('same_part', $opt) || !empty($opt['same_part']);   // 預設開
+    $did     = (int)$o['d_id_ID'];
+    $part    = trim((string)$o['d_id']);
+    $client  = trim((string)$o['Client_name']);
+    $odate   = (string)$o['odate'];
+    $lim     = 120;
+
+    /* 料號條件（same_part 預設開）：主鍵或料號文字相同（與稽核配對同一條規則，見 dqa_pair_keys）。
+       關掉之後不比料號、只靠客戶與關鍵字篩——**治具／刀具那一列的料號本來就與訂單不同**，
+       不關掉的話永遠挑不到它（使用者 2026-09-21 指名要能綁那種列）。 */
+    $mkPart = function (string $didCol, string $ptCol) use ($did, $part, $samePt) {
+        if (!$samePt) return ['1=1', []];
+        $w = []; $b = [];
+        if ($did > 0)      { $w[] = "$didCol = ?"; $b[] = $did; }
+        if ($part !== '')  { $w[] = "$ptCol = ?";  $b[] = $part; }
+        if (!$w) return ['1=1', []];
+        return ['(' . implode(' OR ', $w) . ')', $b];
+    };
+
+    $rows = [];
+    if ($kind === 'quote') {
+        tc_order_quote_ensure($db);
+        $boundIds = [];
+        foreach (tc_order_quote_map($db, [$orderId])[$orderId] ?? [] as $lk) $boundIds[(int)$lk['item_id']] = $lk;
+        [$pw, $pb] = $mkPart('qi.d_setting_d_id', 'qi.product_id');
+        $w = []; $b = [];
+        if ($kw !== '') {
+            $w[] = "(ql.quote_no LIKE ? OR qi.product_id LIKE ? OR qi.specification LIKE ?)";
+            $b = array_merge($b, ['%' . $kw . '%', '%' . $kw . '%', '%' . $kw . '%']);
+        } else {
+            $w[] = $pw; $b = array_merge($b, $pb);
+            if (!$allCli && $client !== '') { $w[] = "ql.client_name LIKE ?"; $b[] = '%' . $client . '%'; }
+        }
+        $w[] = "COALESCE(ql.is_draft,0)=0";
+        $sql = "SELECT qi.item_id, qi.quote_id, qi.product_id, qi.specification, qi.quantity, qi.unit,
+                       qi.unit_price, qi.amount, COALESCE(qi.is_tiered,0) is_tiered,
+                       COALESCE(qi.note_only,0) note_only,
+                       ql.quote_no, ql.client_name, DATE_FORMAT(ql.quote_date,'%Y-%m-%d') qdate
+                  FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id=qi.quote_id
+                 WHERE " . implode(' AND ', $w) . "
+                 ORDER BY ABS(DATEDIFF(ql.quote_date, ?)), ql.quote_date DESC LIMIT $lim";
+        $b[] = $odate !== '' ? $odate : date('Y-m-d');
+        $st = $db->prepare($sql); $st->execute($b);
+        $list = $st->fetchAll(PDO::FETCH_ASSOC);
+        // 已綁在這張訂單上的一定要列出來（即使不符合目前的篩選條件），否則解除不了
+        $have = [];
+        foreach ($list as $r) $have[(int)$r['item_id']] = 1;
+        $missing = array_values(array_diff(array_keys($boundIds), array_keys($have)));
+        if ($missing) {
+            $in = implode(',', array_fill(0, count($missing), '?'));
+            $st = $db->prepare("SELECT qi.item_id, qi.quote_id, qi.product_id, qi.specification, qi.quantity,
+                                       qi.unit, qi.unit_price, qi.amount, COALESCE(qi.is_tiered,0) is_tiered,
+                                       COALESCE(qi.note_only,0) note_only,
+                                       ql.quote_no, ql.client_name, DATE_FORMAT(ql.quote_date,'%Y-%m-%d') qdate
+                                  FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id=qi.quote_id
+                                 WHERE qi.item_id IN ($in)");
+            $st->execute($missing);
+            $list = array_merge($st->fetchAll(PDO::FETCH_ASSOC), $list);
+        }
+        $ids = array_map(function ($r) { return (int)$r['item_id']; }, $list);
+        $procs = dqa_quote_procs($db, $ids);
+        $tiers = dqa_quote_tiers($db, $ids);
+        // 這些報價項目各自被幾張訂單引用（多對一是正常的，但要讓人看得到）
+        $used = [];
+        foreach (dqa_chunks($ids) as $ck) {
+            $in = implode(',', array_fill(0, count($ck), '?'));
+            $st = $db->prepare("SELECT item_id, COUNT(*) c FROM order_quote_map
+                                 WHERE item_id IN ($in) GROUP BY item_id");
+            $st->execute($ck);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $used[(int)$r['item_id']] = (int)$r['c'];
+        }
+        foreach ($list as $r) {
+            $iid = (int)$r['item_id'];
+            $rows[] = [
+                'id' => $iid, 'no' => (string)$r['quote_no'], 'date' => (string)$r['qdate'],
+                'part' => (string)$r['product_id'], 'spec' => (string)($r['specification'] ?? ''),
+                'client' => (string)$r['client_name'],
+                'qty' => dqa_num($r['quantity']), 'unit' => (string)($r['unit'] ?? ''),
+                'price' => dqa_num($r['unit_price']), 'amount' => dqa_num($r['amount']),
+                'tiered' => !empty($r['is_tiered']), 'note_only' => !empty($r['note_only']),
+                'procs' => $procs[$iid] ?? [], 'tiers' => $tiers[$iid] ?? [],
+                'quote_id' => (int)$r['quote_id'],
+                'bound' => isset($boundIds[$iid]), 'used_by' => $used[$iid] ?? 0,
+                'late' => ($r['qdate'] && $odate && $r['qdate'] > $odate),
+            ];
+        }
+    } elseif ($kind === 'bom') {
+        $boundIds = [];
+        $st = $db->prepare("SELECT bom, allocated_qty FROM bom_order_process_map WHERE order_id=?");
+        $st->execute([$orderId]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $boundIds[(string)$r['bom']] = (int)$r['allocated_qty'];
+        $st = $db->prepare("SELECT bom, sqty FROM bom WHERE o_order_id=?");
+        $st->execute([$orderId]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r)
+            if (!isset($boundIds[(string)$r['bom']])) $boundIds[(string)$r['bom']] = (int)$r['sqty'];
+        [$pw, $pb] = $mkPart('b.d_setting_id', 'b.d_id');
+        $w = []; $b = [];
+        if ($kw !== '') { $w[] = "(b.bom LIKE ? OR b.d_id LIKE ?)"; $b = ['%' . $kw . '%', '%' . $kw . '%']; }
+        else {
+            $w[] = $pw; $b = $pb;
+            if (!$allCli && $client !== '') { $w[] = "b.Client_Name = ?"; $b[] = $client; }
+        }
+        $sql = "SELECT b.bom, b.sqty, b.d_id, b.Client_Name, b.processing_state,
+                       DATE_FORMAT(b.Created_At,'%Y-%m-%d') created,
+                       (SELECT COALESCE(SUM(m2.allocated_qty),0) FROM bom_order_process_map m2 WHERE m2.bom=b.bom) alloc,
+                       (SELECT COUNT(*) FROM bom_order_process_map m3 WHERE m3.bom=b.bom) ocnt
+                  FROM bom b WHERE " . implode(' AND ', $w) . "
+                 ORDER BY b.bom DESC LIMIT $lim";
+        $st = $db->prepare($sql); $st->execute($b);
+        $list = $st->fetchAll(PDO::FETCH_ASSOC);
+        $have = [];
+        foreach ($list as $r) $have[(string)$r['bom']] = 1;
+        $missing = array_values(array_diff(array_keys($boundIds), array_keys($have)));
+        if ($missing) {
+            $in = implode(',', array_fill(0, count($missing), '?'));
+            $st = $db->prepare("SELECT b.bom, b.sqty, b.d_id, b.Client_Name, b.processing_state,
+                                       DATE_FORMAT(b.Created_At,'%Y-%m-%d') created,
+                                       (SELECT COALESCE(SUM(m2.allocated_qty),0) FROM bom_order_process_map m2 WHERE m2.bom=b.bom) alloc,
+                                       (SELECT COUNT(*) FROM bom_order_process_map m3 WHERE m3.bom=b.bom) ocnt
+                                  FROM bom b WHERE b.bom IN ($in)");
+            $st->execute($missing);
+            $list = array_merge($st->fetchAll(PDO::FETCH_ASSOC), $list);
+        }
+        foreach ($list as $r) {
+            $no = (string)$r['bom'];
+            $self = dqa_num($r['sqty']);
+            $rows[] = [
+                'id' => $no, 'no' => $no, 'date' => dqa_bom_open_date($no, $r['created'] ?? null),
+                'part' => (string)$r['d_id'], 'client' => (string)$r['Client_Name'],
+                'qty' => $self, 'alloc' => dqa_num($r['alloc']),
+                'free' => max(0, $self - dqa_num($r['alloc'])),
+                'done' => ((string)$r['processing_state'] === '1'),
+                'bound' => isset($boundIds[$no]), 'mine' => $boundIds[$no] ?? 0,
+                'used_by' => (int)$r['ocnt'],
+                'early' => (dqa_bom_open_date($no, $r['created'] ?? null) !== '' && $odate !== ''
+                            && dqa_bom_open_date($no, $r['created'] ?? null) < $odate),
+            ];
+        }
+    } else {   // ship
+        $boundIds = [];
+        $st = $db->prepare("SELECT IS_id, allocated_qty FROM is_order_map WHERE Order_id=?");
+        $st->execute([$orderId]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $boundIds[(int)$r['IS_id']] = (int)$r['allocated_qty'];
+        $st = $db->prepare("SELECT IS_id, Qty FROM is_list WHERE Order_id=?");
+        $st->execute([$orderId]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r)
+            if (!isset($boundIds[(int)$r['IS_id']])) $boundIds[(int)$r['IS_id']] = (int)$r['Qty'];
+        [$pw, $pb] = $mkPart('il.d_setting_id', 'il.Product_id');
+        $w = []; $b = [];
+        if ($kw !== '') { $w[] = "(il.IS_number LIKE ? OR il.Product_id LIKE ?)"; $b = ['%' . $kw . '%', '%' . $kw . '%']; }
+        else {
+            $w[] = $pw; $b = $pb;
+            if (!$allCli && $client !== '') { $w[] = "il.Client_name = ?"; $b[] = $client; }
+        }
+        $sql = "SELECT il.IS_id, il.IS_number, il.Qty, il.Unit_price, il.Specification, il.Product_id,
+                       il.Client_name, COALESCE(il.anomaly_confirmed,0) ok_flag,
+                       DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate,
+                       (SELECT COALESCE(SUM(m2.allocated_qty),0) FROM is_order_map m2 WHERE m2.IS_id=il.IS_id) alloc,
+                       (SELECT COUNT(*) FROM is_order_map m3 WHERE m3.IS_id=il.IS_id) ocnt,
+                       il.Order_id legacy_order
+                  FROM is_list il WHERE " . implode(' AND ', $w) . "
+                 ORDER BY il.Order_date DESC, il.IS_id DESC LIMIT $lim";
+        $st = $db->prepare($sql); $st->execute($b);
+        $list = $st->fetchAll(PDO::FETCH_ASSOC);
+        $have = [];
+        foreach ($list as $r) $have[(int)$r['IS_id']] = 1;
+        $missing = array_values(array_diff(array_keys($boundIds), array_keys($have)));
+        if ($missing) {
+            $in = implode(',', array_fill(0, count($missing), '?'));
+            $st = $db->prepare("SELECT il.IS_id, il.IS_number, il.Qty, il.Unit_price, il.Specification,
+                                       il.Product_id, il.Client_name, COALESCE(il.anomaly_confirmed,0) ok_flag,
+                                       DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate,
+                                       (SELECT COALESCE(SUM(m2.allocated_qty),0) FROM is_order_map m2 WHERE m2.IS_id=il.IS_id) alloc,
+                                       (SELECT COUNT(*) FROM is_order_map m3 WHERE m3.IS_id=il.IS_id) ocnt,
+                                       il.Order_id legacy_order
+                                  FROM is_list il WHERE il.IS_id IN ($in)");
+            $st->execute($missing);
+            $list = array_merge($st->fetchAll(PDO::FETCH_ASSOC), $list);
+        }
+        foreach ($list as $r) {
+            $id = (int)$r['IS_id']; $self = dqa_num($r['Qty']);
+            $rows[] = [
+                'id' => $id, 'no' => (string)$r['IS_number'], 'date' => (string)$r['sdate'],
+                'part' => (string)$r['Product_id'], 'spec' => (string)($r['Specification'] ?? ''),
+                'client' => (string)$r['Client_name'],
+                'qty' => $self, 'price' => dqa_num($r['Unit_price']),
+                'alloc' => dqa_num($r['alloc']), 'free' => max(0, $self - dqa_num($r['alloc'])),
+                'bound' => isset($boundIds[$id]), 'mine' => $boundIds[$id] ?? 0,
+                'used_by' => (int)$r['ocnt'],
+                'other_order' => ((int)$r['legacy_order'] > 0 && (int)$r['legacy_order'] !== $orderId
+                                  && !isset($boundIds[$id])) ? (int)$r['legacy_order'] : 0,
+                'noprice' => (dqa_num($r['Unit_price']) <= 0 && (int)$r['ok_flag'] !== 1),
+                'early' => ($r['sdate'] && $odate && $r['sdate'] < $odate),
+            ];
+        }
+    }
+
+    return ['order' => [
+                'order_id' => (int)$o['Order_id'], 'no' => (string)$o['Order_oo'],
+                'client' => $client, 'part' => $part, 'd_id' => $did,
+                'qty' => dqa_num($o['Qty']), 'price' => dqa_num($o['unit_price']),
+                'odate' => $odate, 'ddate' => (string)$o['ddate'],
+                'proc' => (string)($o['Processing_items'] ?? ''),
+                'closed' => ((string)$o['Order_status'] === '9'),
+                'auto_pm' => ((int)$o['pmGet_auto'] === 1),
+            ],
+            'kind' => $kind, 'rows' => $rows];
+}
+
+/* ============================================================
+ * 分頁三：報價項目追蹤（報價了有沒有下單／有沒有出貨／有沒有收款）
+ *
+ * 【為什麼要另外一個分頁】分頁一是**以訂單為主軸**（一張訂單一列），
+ * 而「報價了但訂單根本沒建立」的那一列訂單不存在，在分頁一永遠不會出現。
+ * 使用者原話：「報價內常有其他治具、刀具...報價，稽核也需要檢查是否有報價但訂單沒有建立，
+ * 還是出貨沒有打上去收款」——所以主軸必須換成報價項目。
+ *
+ * 【判定】
+ *   q_no_order   報價超過 no_order_days 天（預設 30）還沒有任何訂單
+ *   q_no_ship    有訂單、訂單也結案了，卻查不到出貨
+ *   ship_noprice 出貨了卻沒有打單價（收不到款）
+ *   amt_zero_quote 報價單價與金額都是 0
+ *   備註列（note_only=1）一律不判，只標示。
+ * ============================================================ */
+function dqa_quote_items(): array
+{
+    return [
+        /* 這一項才是使用者真正要抓的東西：整張報價單**已經成案**（別的列都有訂單了），
+           偏偏治具／刀具那一列沒有人去開訂單，於是做了卻收不到錢。 */
+        'q_line_no_order' => ['報價已成案，這一列卻沒有訂單', 'critical'],
+        /* 整張報價單都沒有訂單＝多半只是沒接到這個案子，不是缺失，所以預設關閉。
+           要拿來當「報價未成案清單」時再到「設定」打開。 */
+        'q_no_order'      => ['整張報價單都沒有訂單（未成案）', 'off'],
+        'q_no_ship'       => ['訂單已結案卻沒有出貨',   'warn'],
+        'ship_noprice'    => ['出貨未開價（收不到款）', 'critical'],
+        'amt_zero_quote'  => ['報價金額為 0',           'warn'],
+    ];
+}
+
+function dqa_quote_levels(PDO $db): array
+{
+    $def = [];
+    foreach (dqa_quote_items() as $k => $d) $def[$k] = $d[1];
+    $v = dqa_param_get($db, 'quote_items', []);
+    if (is_array($v)) foreach ($v as $k => $lv)
+        if (isset($def[$k]) && in_array($lv, ['critical', 'warn', 'off'], true)) $def[$k] = $lv;
+    return $def;
+}
+
+function dqa_quote_rows(PDO $db, array $f): array
+{
+    $from = dqa_d($f['from'] ?? '') ?: date('Y-01-01');
+    $to   = dqa_d($f['to']   ?? '') ?: date('Y-12-31');
+    $client = trim((string)($f['client'] ?? ''));
+    $part   = trim((string)($f['part'] ?? ''));
+    $onlyBad = !empty($f['only_bad']);
+    $lim = (int)($f['limit'] ?? 3000);
+    if ($lim < 1 || $lim > 20000) $lim = 3000;
+    $tol = dqa_tolerance($db);
+    $itemLv = dqa_quote_levels($db);
+    $exempt = dqa_exempt_map($db, 'quote');
+    $exclMap = dqa_excl_map($db, 'trace');      // 排除設定沿用流程稽核那一份（客戶／料號）
+    $exclStat = [];
+    $today = date('Y-m-d');
+
+    $w = ["ql.quote_date >= :f", "ql.quote_date <= :t", "COALESCE(ql.is_draft,0)=0"];
+    $p = [':f' => $from, ':t' => $to];
+    if ($client !== '') { $w[] = "ql.client_name LIKE :c"; $p[':c'] = '%' . $client . '%'; }
+    if ($part   !== '') { $w[] = "qi.product_id LIKE :pt"; $p[':pt'] = '%' . $part . '%'; }
+    $sql = "SELECT qi.item_id, qi.quote_id, qi.product_id, qi.d_setting_d_id, qi.specification,
+                   qi.quantity, qi.unit, qi.unit_price, qi.amount,
+                   COALESCE(qi.is_tiered,0) is_tiered, COALESCE(qi.note_only,0) note_only,
+                   ql.quote_no, ql.client_name, DATE_FORMAT(ql.quote_date,'%Y-%m-%d') qdate
+              FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id=qi.quote_id
+             WHERE " . implode(' AND ', $w) . "
+             ORDER BY ql.quote_date DESC, qi.quote_id DESC, qi.sort_order, qi.item_id
+             LIMIT :lim";
+    $cnt = $db->prepare("SELECT COUNT(*) FROM quotation_item qi
+                           JOIN quotation_list ql ON ql.quote_id=qi.quote_id
+                          WHERE " . implode(' AND ', $w));
+    foreach ($p as $k => $v) $cnt->bindValue($k, $v);
+    $cnt->execute();
+    $total = (int)$cnt->fetchColumn();
+
+    $st = $db->prepare($sql);
+    foreach ($p as $k => $v) $st->bindValue($k, $v);
+    $st->bindValue(':lim', $lim, PDO::PARAM_INT);
+    $st->execute();
+    $items = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$items) return ['rows' => [], 'total' => 0, 'stat' => dqa_trace_stat([]),
+                         'scanned' => 0, 'item_total' => 0, 'limit' => $lim, 'tol' => $tol,
+                         'items' => dqa_quote_items(), 'levels' => $itemLv, 'excl_rules' => []];
+
+    $ids = array_map(function ($r) { return (int)$r['item_id']; }, $items);
+    $procs = dqa_quote_procs($db, $ids);
+    $tiers = dqa_quote_tiers($db, $ids);
+
+    /* 這幾列被哪些訂單引用（分配表＋舊欄位） */
+    tc_order_quote_ensure($db);
+    $ordOf = [];
+    foreach (dqa_chunks($ids) as $ck) {
+        $in = implode(',', array_fill(0, count($ck), '?'));
+        $q = $db->prepare("SELECT m.item_id, ot.Order_id, ot.Order_oo, ot.Qty, ot.unit_price, ot.Order_status,
+                                  DATE_FORMAT(ot.Order_date,'%Y-%m-%d') odate
+                             FROM order_quote_map m JOIN order_track ot ON ot.Order_id=m.Order_id
+                            WHERE m.item_id IN ($in)
+                            UNION
+                           SELECT ot.quote_item_id, ot.Order_id, ot.Order_oo, ot.Qty, ot.unit_price, ot.Order_status,
+                                  DATE_FORMAT(ot.Order_date,'%Y-%m-%d')
+                             FROM order_track ot WHERE ot.quote_item_id IN ($in)");
+        $q->execute(array_merge($ck, $ck));
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r)
+            $ordOf[(int)$r['item_id']][(int)$r['Order_id']] = $r;
+    }
+    $oids = [];
+    foreach ($ordOf as $m) foreach ($m as $r) $oids[] = (int)$r['Order_id'];
+
+    /* 「整張報價單有沒有成案」要以**整張單**為準，不能只看撈回來這一頁的那幾列——
+       同一張報價單的項目可能被 LIMIT 切到下一頁去，只看本頁會誤判成沒成案。 */
+    $quoteHasOrder = [];
+    $qids2 = array_values(array_unique(array_map(function ($r) { return (int)$r['quote_id']; }, $items)));
+    foreach (dqa_chunks($qids2) as $ck) {
+        $in = implode(',', array_fill(0, count($ck), '?'));
+        /* 刻意用 JOIN 而不是兩個 EXISTS：EXISTS 那寫法在 order_track 上會逐列重算，
+           實測 3,000 列要 12 秒；改成 JOIN（配合 idx_ot_quote_item）之後是毫秒等級。 */
+        $q = $db->prepare("SELECT DISTINCT qi.quote_id FROM quotation_item qi
+                             JOIN order_quote_map m ON m.item_id = qi.item_id
+                            WHERE qi.quote_id IN ($in)
+                            UNION
+                           SELECT DISTINCT qi.quote_id FROM quotation_item qi
+                             JOIN order_track ot ON ot.quote_item_id = qi.item_id
+                            WHERE qi.quote_id IN ($in)");
+        $q->execute(array_merge($ck, $ck));
+        foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $v) $quoteHasOrder[(int)$v] = 1;
+    }
+
+    $shipOf = [];
+    foreach (dqa_chunks($oids) as $ck) {
+        $in = implode(',', array_fill(0, count($ck), '?'));
+        $q = $db->prepare("SELECT m.Order_id, il.IS_id, il.IS_number, il.Qty, il.Unit_price,
+                                  COALESCE(il.anomaly_confirmed,0) ok_flag,
+                                  DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate
+                             FROM is_order_map m JOIN is_list il ON il.IS_id=m.IS_id
+                            WHERE m.Order_id IN ($in)
+                            UNION
+                           SELECT il.Order_id, il.IS_id, il.IS_number, il.Qty, il.Unit_price,
+                                  COALESCE(il.anomaly_confirmed,0), DATE_FORMAT(il.Order_date,'%Y-%m-%d')
+                             FROM is_list il WHERE il.Order_id IN ($in)");
+        $q->execute(array_merge($ck, $ck));
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $shipOf[(int)$r['Order_id']][(int)$r['IS_id']] = $r;
+    }
+
+    $rows = [];
+    foreach ($items as $it) {
+        $iid = (int)$it['item_id'];
+        $qdate = (string)$it['qdate'];
+        $noteOnly = !empty($it['note_only']);
+        $ords = []; $ships = []; $sQty = 0.0; $noPrice = false; $anyClosed = false;
+        foreach ($ordOf[$iid] ?? [] as $r) {
+            $closed = ((string)$r['Order_status'] === '9');
+            if ($closed) $anyClosed = true;
+            $ords[] = ['order_id' => (int)$r['Order_id'], 'no' => (string)$r['Order_oo'],
+                       'date' => (string)$r['odate'], 'qty' => dqa_num($r['Qty']),
+                       'price' => dqa_num($r['unit_price']), 'closed' => $closed];
+            foreach ($shipOf[(int)$r['Order_id']] ?? [] as $sr) {
+                $k = (string)$sr['IS_number'];
+                if (!isset($ships[$k])) $ships[$k] = ['no' => $k, 'date' => (string)$sr['sdate'],
+                                                      'qty' => 0.0, 'price' => dqa_num($sr['Unit_price'])];
+                $ships[$k]['qty'] += dqa_num($sr['Qty']);
+                $sQty += dqa_num($sr['Qty']);
+                if (dqa_num($sr['Unit_price']) <= 0 && (int)$sr['ok_flag'] !== 1) $noPrice = true;
+            }
+        }
+        $ships = array_values($ships);
+
+        $iss = [];
+        $add = function (string $code, string $level, string $text) use (&$iss, $itemLv) {
+            $cap = $itemLv[$code] ?? $level;
+            if ($cap === 'off') return;
+            if ($cap === 'warn' && $level === 'critical') $level = 'warn';
+            $iss[] = ['code' => $code, 'level' => $level, 'text' => $text];
+        };
+        if (!$noteOnly) {
+            $age = ($qdate !== '') ? (int)round((strtotime($today) - strtotime($qdate)) / 86400) : 0;
+            $dealDone = !empty($quoteHasOrder[(int)$it['quote_id']]);
+            if (!$ords && $age >= (int)$tol['no_order_days']) {
+                if ($dealDone)
+                    $add('q_line_no_order', 'critical',
+                         '報價單 ' . $it['quote_no'] . ' 其他項目都已經開立訂單，'
+                         . '只有這一列（' . $it['product_id'] . '）沒有——治具、刀具這類項目最常漏開，'
+                         . '漏了就做了卻收不到錢');
+                else
+                    $add('q_no_order', 'warn', '報價 ' . $qdate . ' 已 ' . $age
+                         . ' 天，整張報價單都查不到訂單（超過 ' . (int)$tol['no_order_days']
+                         . ' 天才列出來，可在「設定」調整）');
+            }
+            if ($ords && !$ships && $anyClosed)
+                $add('q_no_ship', 'warn', '訂單已結案卻查不到出貨單');
+            if ($noPrice)
+                $add('ship_noprice', 'critical', '出貨單沒有打單價，這批貨收不到款');
+            if (empty($it['is_tiered']) && dqa_num($it['unit_price']) <= 0 && dqa_num($it['amount']) <= 0)
+                $add('amt_zero_quote', 'warn', '這一列的報價單價與金額都是 0');
+        }
+
+        /* 排除設定（客戶／料號）與逐筆例外，規則與分頁一完全相同 */
+        $hit = dqa_excl_hit($exclMap, ['client' => (string)$it['client_name'],
+                                       'part'   => (string)$it['product_id']]);
+        $skip = false; $exclNote = [];
+        foreach ($hit as $h) {
+            $exclStat[$h['id']] = ($exclStat[$h['id']] ?? 0) + 1;
+            if ($h['all']) { $skip = true; $exclNote[] = $h; continue; }
+            $keep = [];
+            foreach ($iss as $x) { if (isset($h['items'][$x['code']])) continue; $keep[] = $x; }
+            if (count($keep) !== count($iss)) $exclNote[] = $h;
+            $iss = $keep;
+        }
+        if ($skip) continue;
+
+        $ex = $exempt[(string)$iid] ?? [];
+        $exHit = [];
+        if (isset($ex['*'])) { $exHit = ['*' => $ex['*']]; $iss = []; }
+        else {
+            $keep = [];
+            foreach ($iss as $x) {
+                if (isset($ex[$x['code']])) { $exHit[$x['code']] = $ex[$x['code']]; continue; }
+                $keep[] = $x;
+            }
+            $iss = $keep;
+        }
+
+        $level = 'ok';
+        foreach ($iss as $x) { if ($x['level'] === 'critical') { $level = 'critical'; break; } $level = 'warn'; }
+        if ($onlyBad && $level === 'ok') continue;
+
+        $rows[] = [
+            'item_id' => $iid, 'quote_id' => (int)$it['quote_id'],
+            'quote_no' => (string)$it['quote_no'], 'qdate' => $qdate,
+            'client' => (string)$it['client_name'], 'part' => (string)$it['product_id'],
+            'spec' => (string)($it['specification'] ?? ''),
+            'qty' => dqa_num($it['quantity']), 'unit' => (string)($it['unit'] ?? ''),
+            'price' => dqa_num($it['unit_price']), 'amount' => dqa_num($it['amount']),
+            'tiered' => !empty($it['is_tiered']), 'note_only' => $noteOnly,
+            'procs' => $procs[$iid] ?? [], 'tiers' => $tiers[$iid] ?? [],
+            'orders' => $ords, 'ships' => $ships, 'ship_qty' => $sQty,
+            'issues' => $iss, 'level' => $level, 'exempt' => $exHit,
+            'excl' => array_map(function ($h) {
+                return ['dim' => $h['dim'], 'val' => $h['val'], 'reason' => $h['reason']];
+            }, $exclNote),
+        ];
+    }
+
+    return ['rows' => $rows, 'total' => count($rows), 'stat' => dqa_trace_stat($rows),
+            'truncated' => ($total > count($items)), 'scanned' => count($items),
+            'item_total' => $total, 'limit' => $lim, 'tol' => $tol,
+            'items' => dqa_quote_items(), 'levels' => $itemLv,
+            'excl_rules' => dqa_excl_applied($db, 'trace', $exclStat)];
+}
+
 /* ============================================================
  * 分頁二：基本資料稽核（客戶／廠商主檔）
  *
