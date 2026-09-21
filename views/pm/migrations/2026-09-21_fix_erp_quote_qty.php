@@ -1,0 +1,206 @@
+<?php
+/**
+ * 修正「ERP 報價單匯入把 4,000 讀成 4」留下的既有錯誤資料（2026-09-21）
+ * ──────────────────────────────────────────────────────────────────────
+ * 【根因】_upload_For_List.php 的 parseERPQty_erp() 原本用 ^([\d.]+) 取數字，字元類別不含
+ *         逗號，所以 ERP 匯出的文字格式「4,000.0」在第一個逗號就停住，被讀成 4。程式已修，
+ *         但既有資料救不回來——「4,000→4」與「本來就是 4」在資料庫裡長得一模一樣。
+ *
+ * 【做法】使用者拍板「比對更新，不動主鍵」：讀 ERP 原始 Excel，用**匯入程式自己那支解析函式**
+ *         重新算一次正確數量，只 UPDATE quantity／amount（並重算該張單的 total_amount）。
+ *         item_id 完全不動，所以訂單綁到報價項目的 quote_item_id 不會斷。
+ *
+ * 【安全設計｜這支工具最重要的一件事】
+ *         只修「**確定是這個 bug 造成的**」那幾筆：拿舊版的截斷邏輯重算一次「當初會被存成什麼」，
+ *         跟資料庫現值一模一樣才動它。現值若是別的數字，代表有人事後手動改過（或另有原因），
+ *         一律只列進報告、**不自動覆蓋**——這種修復工具寧可少修一筆，也不可以蓋掉人工修正過的資料。
+ *
+ * 【用法】cd 到本檔所在目錄後：
+ *   php 2026-09-21_fix_erp_quote_qty.php <ERP報價單日報表.xlsx>            ← 試算（預設，不寫入）
+ *   php 2026-09-21_fix_erp_quote_qty.php <ERP報價單日報表.xlsx> --run      ← 實際寫入
+ *   php 2026-09-21_fix_erp_quote_qty.php <檔案> --show=50                  ← 明細列出前 50 筆（預設 20）
+ *   可重複執行：已經修好的第二次跑就不會再出現在待修清單。
+ */
+
+if (PHP_SAPI !== 'cli') { exit("這支工具只能用指令列執行\n"); }
+
+$args = array_slice($argv, 1);
+$file = null; $doRun = false; $show = 20;
+foreach ($args as $a) {
+    if ($a === '--run') { $doRun = true; }
+    elseif (strpos($a, '--show=') === 0) { $show = max(0, (int)substr($a, 7)); }
+    elseif ($file === null) { $file = $a; }
+}
+if (!$file) {
+    exit("用法：php " . basename(__FILE__) . " <ERP報價單日報表.xlsx> [--run] [--show=N]\n");
+}
+if (!is_file($file)) { exit("找不到檔案：$file\n"); }
+
+// _upload_For_List.php 內是相對路徑 require（vendor/autoload 等），一定要先切到它的目錄
+$pmDir = dirname(__DIR__);
+chdir($pmDir);
+
+// 匯入程式本身：解析函式（parseQuotationErpRows／parseERPQty_erp）由它提供，
+// **刻意不在這裡另外寫一份解析**——兩份解析遲早走鐘，修出來的數字就不是匯入會得到的數字。
+// 沒有 but 參數時它不會執行任何匯入分支，只會定義函式。
+$_SERVER['REQUEST_METHOD'] = 'GET';
+ob_start();
+include $pmDir . '/_upload_For_List.php';
+ob_end_clean();
+
+if (!function_exists('parseQuotationErpRows') || !function_exists('parseERPQty_erp')) {
+    exit("載入 _upload_For_List.php 後仍取不到解析函式，請確認該檔未被改動\n");
+}
+if (!isset($db) || !($db instanceof PDO)) {
+    require_once $pmDir . '/../../src/common/DBConnection.php';
+    $db = (new DBConnection())->getPDO();
+}
+
+/**
+ * 舊版（有 bug 的）數量解析：就是把修正前那一行原樣搬過來，用來重現「當初會被存成什麼」。
+ * 判斷「這筆是不是被這個 bug 弄壞的」全靠它，所以這裡刻意保留錯誤寫法，不要順手修好。
+ */
+function legacyParseQty_buggy($value) {
+    if ($value === null) return null;
+    $v = trim((string)$value);
+    if ($v === '') return null;
+    if (preg_match('/^([\d.]+)/', $v, $m)) return (float)$m[1];   // ← 不去逗號＝當初的行為
+    return null;
+}
+
+echo "來源檔案：$file\n";
+echo "模式　　：" . ($doRun ? "★ 實際寫入（--run）" : "試算（不寫入任何資料）") . "\n";
+echo str_repeat('─', 78) . "\n";
+
+use PhpOffice\PhpSpreadsheet\IOFactory;
+$spreadsheet = IOFactory::load($file);
+$allRows = $spreadsheet->getActiveSheet()->toArray();
+
+$scan = '';
+foreach ($allRows as $i => $r) { if ($i >= 30) break; $scan .= implode(' ', array_map('strval', $r)); }
+if (mb_strpos($scan, '客戶報價單日報表') === false) {
+    echo "⚠ 前 30 行找不到「客戶報價單日報表」字樣，這可能不是 ERP 報價單日報表。\n";
+    echo "  仍要繼續請確認檔案正確後再執行。\n";
+    exit(1);
+}
+
+$stats = [];
+$groups = parseQuotationErpRows($allRows, $stats);
+echo "原始檔解析：報價單 " . count($groups) . " 張\n";
+
+// ── 逐張比對 ────────────────────────────────────────────────────────────
+$selQuote = $db->prepare("SELECT quote_id FROM quotation_list WHERE quote_no = ? LIMIT 1");
+$selItems = $db->prepare("SELECT item_id, sort_order, product_id, quantity, unit_price, amount
+                            FROM quotation_item WHERE quote_id = ? ORDER BY sort_order, item_id");
+
+$toFix = [];        // 確定是 bug 造成的，可自動修
+$manual = [];       // 現值與「當初會存成的值」對不起來＝可能被人改過，不自動動
+$noQuote = [];      // 原始檔有、系統查無這張報價單
+$mismatch = [];     // 明細對不起來（筆數或料號不符）
+$okCount = 0;
+
+foreach ($groups as $qno => $grp) {
+    $selQuote->execute([$qno]);
+    $quoteId = $selQuote->fetchColumn();
+    if (!$quoteId) { $noQuote[] = $qno; continue; }
+
+    $selItems->execute([$quoteId]);
+    $dbItems = $selItems->fetchAll(PDO::FETCH_ASSOC);
+    $srcRows = $grp['rows'];
+
+    if (count($dbItems) !== count($srcRows)) {
+        $mismatch[] = "$qno（原始檔 " . count($srcRows) . " 筆、系統 " . count($dbItems) . " 筆）";
+        continue;
+    }
+
+    foreach ($srcRows as $idx => $src) {
+        $dbi = $dbItems[$idx];
+        // 料號必須對得上，否則代表順序已經被動過，不可以照位置更新
+        if (trim((string)$dbi['product_id']) !== trim((string)$src['product_id'])) {
+            $mismatch[] = "$qno 第" . ($idx + 1) . "筆（原始檔料號 {$src['product_id']}、系統 {$dbi['product_id']}）";
+            continue;
+        }
+
+        $correct = (int)$src['quantity'];          // 修正後的解析結果（正確值）
+        $nowQty  = (int)$dbi['quantity'];
+        if ($nowQty === $correct) { $okCount++; continue; }
+
+        // 這一筆到底是不是「被逗號截斷」造成的？用舊邏輯重算一次當初會存成什麼
+        $rawQty = null;
+        foreach ($allRows as $ar) {            // 從原始列找回這一筆的數量原字串
+            $pad = array_pad(array_values($ar), 10, null);
+            if (trim((string)($pad[3] ?? '')) === $src['product_id']) { $rawQty = trim((string)($pad[5] ?? '')); }
+        }
+        $legacy = $rawQty !== null ? (int)legacyParseQty_buggy($rawQty) : null;
+
+        $row = ['quote_no' => $qno, 'item_id' => (int)$dbi['item_id'], 'product_id' => $dbi['product_id'],
+                'now' => $nowQty, 'correct' => $correct, 'price' => (float)$dbi['unit_price'],
+                'legacy' => $legacy, 'quote_id' => (int)$quoteId];
+        if ($legacy !== null && $legacy === $nowQty) $toFix[] = $row;   // 確定是 bug
+        else $manual[] = $row;                                          // 對不起來＝可能被人改過
+    }
+}
+
+// ── 報告 ────────────────────────────────────────────────────────────────
+echo str_repeat('─', 78) . "\n";
+printf("數量已正確　　　　：%6d 筆\n", $okCount);
+printf("★ 確定被截斷可修正：%6d 筆\n", count($toFix));
+printf("需人工確認　　　　：%6d 筆（現值與「當初會被存成的值」對不起來，可能有人改過）\n", count($manual));
+printf("系統查無這張報價單：%6d 張\n", count($noQuote));
+printf("明細對不起來　　　：%6d 處\n", count($mismatch));
+
+if ($show > 0 && $toFix) {
+    echo "\n【可修正明細（前 $show 筆）】\n";
+    printf("  %-16s %-22s %10s → %-10s %s\n", '報價單號', '料號', '現在', '應該是', '金額');
+    foreach (array_slice($toFix, 0, $show) as $r) {
+        printf("  %-16s %-22s %10s → %-10s %s\n", $r['quote_no'], mb_strimwidth($r['product_id'], 0, 22),
+            $r['now'], $r['correct'], number_format($r['correct'] * $r['price'], 2));
+    }
+    if (count($toFix) > $show) echo "  …其餘 " . (count($toFix) - $show) . " 筆未列出（--show=N 可調）\n";
+}
+if ($show > 0 && $manual) {
+    echo "\n【需人工確認（前 $show 筆）｜這些不會被自動修改】\n";
+    foreach (array_slice($manual, 0, $show) as $r) {
+        printf("  %-16s %-22s 現值 %s、原始檔 %s、當初應存成 %s\n", $r['quote_no'],
+            mb_strimwidth($r['product_id'], 0, 22), $r['now'], $r['correct'],
+            $r['legacy'] === null ? '（找不到原始字串）' : $r['legacy']);
+    }
+    if (count($manual) > $show) echo "  …其餘 " . (count($manual) - $show) . " 筆未列出\n";
+}
+if ($show > 0 && $noQuote) {
+    echo "\n【系統查無的報價單（前 $show 張）】\n  " . implode('、', array_slice($noQuote, 0, $show)) . "\n";
+}
+if ($show > 0 && $mismatch) {
+    echo "\n【明細對不起來（前 $show 處）｜整張單都不會被修改】\n  " . implode("\n  ", array_slice($mismatch, 0, $show)) . "\n";
+}
+
+if (!$doRun) {
+    echo "\n" . str_repeat('─', 78) . "\n";
+    echo "以上為試算，一個字都沒有寫入。確認無誤後加 --run 參數實際執行。\n";
+    exit(0);
+}
+if (!$toFix) { echo "\n沒有需要修正的資料。\n"; exit(0); }
+
+// ── 寫入 ────────────────────────────────────────────────────────────────
+echo "\n" . str_repeat('─', 78) . "\n開始寫入…\n";
+$upItem  = $db->prepare("UPDATE quotation_item SET quantity = ?, amount = ? WHERE item_id = ?");
+$upTotal = $db->prepare("UPDATE quotation_list SET total_amount =
+                            (SELECT ROUND(SUM(amount),2) FROM quotation_item WHERE quote_id = ?)
+                          WHERE quote_id = ?");
+$db->beginTransaction();
+try {
+    $n = 0; $quoteIds = [];
+    foreach ($toFix as $r) {
+        $upItem->execute([$r['correct'], round($r['correct'] * $r['price'], 2), $r['item_id']]);
+        $quoteIds[$r['quote_id']] = 1;
+        $n++;
+    }
+    foreach (array_keys($quoteIds) as $qid) $upTotal->execute([$qid, $qid]);   // 單頭合計一併重算
+    $db->commit();
+    echo "完成：更新明細 $n 筆、重算 " . count($quoteIds) . " 張報價單的合計金額。\n";
+    echo "（item_id 全程未變動，訂單綁到報價項目的 quote_item_id 不受影響）\n";
+} catch (Exception $e) {
+    $db->rollBack();
+    echo "寫入失敗，已全部回滾：" . $e->getMessage() . "\n";
+    exit(1);
+}

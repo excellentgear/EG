@@ -1098,7 +1098,10 @@ if (!function_exists('parseERPRowsFromSheet')) {
                 'specification' => $isSpecLeft !== null ? mb_substr($isSpecLeft, 0, 80) : null,
                 'content'       => $isContent  !== null ? mb_substr($isContent,  0, 100) : null,
                 'qty'           => (int)$qty,
-                'unit_price'    => is_numeric($n) ? (int)round((float)$n) : 0,
+                // 單價保留小數，**不要在這裡先 round 掉**：ERP 有 10.3 這種單價，先四捨五入成 10
+                // 就再也找不回來了。欄位型別若還是 INT，MySQL 收到小數會自己四捨五入（實測不報錯），
+                // 行為與改動前完全相同；欄位改成 DECIMAL 之後就會自動保留小數。
+                'unit_price'    => is_numeric($n) ? (float)$n : 0,
                 'note'          => $colK !== '' ? mb_substr($colK, 0, 100) : null,
             ];
         }
@@ -1496,7 +1499,10 @@ if (!function_exists('parseIRRowsFromSheet')) {
                 'specification' => $specLeft !== null ? mb_substr($specLeft, 0, 80) : null,
                 'ir_ps'         => $irPsVal  !== null ? mb_substr($irPsVal,  0, 300) : null,
                 'qty'           => (int)$qty,
-                'unit_price'    => is_numeric($n) ? (int)round((float)$n) : 0,
+                // 單價保留小數，**不要在這裡先 round 掉**：ERP 有 10.3 這種單價，先四捨五入成 10
+                // 就再也找不回來了。欄位型別若還是 INT，MySQL 收到小數會自己四捨五入（實測不報錯），
+                // 行為與改動前完全相同；欄位改成 DECIMAL 之後就會自動保留小數。
+                'unit_price'    => is_numeric($n) ? (float)$n : 0,
                 'erp_note'      => $colK !== '' ? mb_substr($colK, 0, 100) : null,
             ];
         }
