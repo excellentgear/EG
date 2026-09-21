@@ -670,7 +670,22 @@ function dqa_trace_rows(PDO $db, array $f): array
      * 2026-09-21 起一張訂單可以綁多個報價項目（本體一列、治具／刀具一列），
      * 所以這裡要整批讀分配表；order_track.quote_item_id 只是「主要報價」快取，
      * tc_order_quote_map() 已經處理「還沒搬進分配表的舊資料」的回退。 */
-    $qLinks = tc_order_quote_map($db, $oids);          // order_id => [ [item_id, alloc, src], ... ]
+    $qLinks = tc_order_quote_map($db, $oids);          // order_id => [ [item_id, tier_id, alloc, src], ... ]
+    /* 綁到哪一階（階梯報價一列有好幾個價格，整列綁下去核對不出是依哪一階下的） */
+    $tierIds = [];
+    foreach ($qLinks as $rowsQ) foreach ($rowsQ as $lk) if ((int)($lk['tier_id'] ?? 0) > 0) $tierIds[] = (int)$lk['tier_id'];
+    $tierInfo = [];
+    foreach (dqa_chunks(array_values(array_unique($tierIds))) as $ck) {
+        $in = implode(',', array_fill(0, count($ck), '?'));
+        $s = $db->prepare("SELECT tier_id, qty_min, qty_max, unit_price FROM quotation_item_tier
+                            WHERE tier_id IN ($in)");
+        $s->execute($ck);
+        foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $mn = dqa_num($r['qty_min']); $mx = $r['qty_max'] === null ? null : dqa_num($r['qty_max']);
+            $tierInfo[(int)$r['tier_id']] = ['min' => $mn, 'max' => $mx, 'price' => dqa_num($r['unit_price']),
+                'range' => dqa_n($mn) . ' ~ ' . ($mx === null ? '以上' : dqa_n($mx))];
+        }
+    }
     $qBind = [];
     $qids = [];
     foreach ($qLinks as $rowsQ) foreach ($rowsQ as $lk) $qids[] = (int)$lk['item_id'];
@@ -913,6 +928,7 @@ function dqa_trace_rows(PDO $db, array $f): array
             if (!$it) continue;                       // 報價項目已被刪除（報價單改版）
             $it['_alloc'] = (float)$lk['alloc'];
             $it['_link_src'] = $lk['src'];
+            $it['_tier'] = $tierInfo[(int)($lk['tier_id'] ?? 0)] ?? null;
             $qAll[] = $it;
             $qAlloc += (float)$lk['alloc'];
         }
@@ -1070,7 +1086,9 @@ function dqa_trace_rows(PDO $db, array $f): array
         }
 
         // 報價的單價／新鮮度先算好：④數量 與 ⑤單價 都要用到（$qFresh 判「這張報價還算不算數」）
-        $qprice   = $q ? dqa_num($q['unit_price']) : 0.0;
+        // 綁到某一階時一律以那一階的單價為準——整列的 unit_price 在階梯報價上常常是 0
+        $qTier    = $q ? ($q['_tier'] ?? null) : null;
+        $qprice   = $qTier ? dqa_num($qTier['price']) : ($q ? dqa_num($q['unit_price']) : 0.0);
         $qAgeDays = ($q && $qdate !== '') ? (int)round((strtotime($odate) - strtotime($qdate)) / 86400) : -1;
         $qFresh   = ($qSrc === 'bind') || ($qAgeDays >= 0 && $qAgeDays <= $validDays);
 
@@ -1114,8 +1132,12 @@ function dqa_trace_rows(PDO $db, array $f): array
         // （$qprice／$qAgeDays／$qFresh 已在 ④ 之前算好，④ 的數量比對也要用）
         if ($q && $qAgeDays > $validDays)
             $add('q_old', 'warn', '最近一次報價是 ' . $qdate . '（距下單 ' . $qAgeDays . ' 天），已逾 ' . $validDays . ' 天未重新報價');
-        if ($q && $qFresh && $qprice > 0 && $oprice > 0 && dqa_diff_over($qprice, $oprice, $tol['price_pct']))
-            $add('price_q', 'warn', '報價單價 ' . dqa_n($qprice) . ' 與訂單單價 ' . dqa_n($oprice) . ' 不符' . $sfx($qSrc === 'bind' ? 'map' : 'guess'));
+        if ($q && $qFresh && $qprice > 0 && $oprice > 0
+            && (empty($q['is_tiered']) || $qTier)          // 階梯報價要綁到其中一階才比得出單價
+            && dqa_diff_over($qprice, $oprice, $tol['price_pct']))
+            $add('price_q', 'warn', '報價單價 ' . dqa_n($qprice)
+                 . ($qTier ? ('（' . $qTier['range'] . ' 這一階）') : '')
+                 . ' 與訂單單價 ' . dqa_n($oprice) . ' 不符' . $sfx($qSrc === 'bind' ? 'map' : 'guess'));
         if ($sPrice !== null && $sPrice > 0 && $oprice > 0 && $isBind($shipSrc)
             && dqa_diff_over($oprice, $sPrice, $tol['price_pct']))
             $add('price_s', 'warn', '訂單單價 ' . dqa_n($oprice) . ' 與出貨單價 ' . dqa_n($sPrice) . ' 不符');
@@ -1214,6 +1236,7 @@ function dqa_trace_rows(PDO $db, array $f): array
             'quote' => $q ? ['no' => (string)$q['quote_no'], 'date' => $qdate,
                              'qty' => dqa_num($q['quantity']), 'price' => $qprice, 'src' => $qSrc,
                              'item_id' => (int)$q['item_id'], 'tiered' => !empty($q['is_tiered']),
+                             'tier' => $qTier,
                              'cnt' => count($qAll),
                              'client' => trim((string)($q['client_name'] ?? '')),
                              'spec'   => trim((string)($q['specification'] ?? '')),
@@ -1226,7 +1249,8 @@ function dqa_trace_rows(PDO $db, array $f): array
                         'price' => dqa_num($x['unit_price']), 'part' => trim((string)$x['product_id']),
                         'spec' => (string)($x['specification'] ?? ''),
                         'procs' => dqa_quote_proc_names($x['process_notes'] ?? '', $subTagName),
-                        'tiered' => !empty($x['is_tiered']), 'alloc' => dqa_num($x['_alloc'] ?? 0),
+                        'tiered' => !empty($x['is_tiered']), 'tier' => ($x['_tier'] ?? null),
+                        'alloc' => dqa_num($x['_alloc'] ?? 0),
                         'src' => (string)($x['_link_src'] ?? '')];
             }, $qAll),
             'bom'   => ['cnt' => count($boms), 'qty' => $bQty, 'date' => $bMin, 'date_max' => $bMax,
@@ -1384,7 +1408,7 @@ function dqa_quote_tiers(PDO $db, array $itemIds): array
     $out = [];
     foreach (dqa_chunks($ids) as $ck) {
         $in = implode(',', array_fill(0, count($ck), '?'));
-        $s = $db->prepare("SELECT item_id, qty_min, qty_max, unit_price, tolerance_value, tolerance_unit,
+        $s = $db->prepare("SELECT tier_id, item_id, qty_min, qty_max, unit_price, tolerance_value, tolerance_unit,
                                   tolerance_note
                              FROM quotation_item_tier WHERE item_id IN ($in)
                             ORDER BY item_id, sort_order, qty_min");
@@ -1392,6 +1416,7 @@ function dqa_quote_tiers(PDO $db, array $itemIds): array
         foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $mn = dqa_num($r['qty_min']); $mx = $r['qty_max'] === null ? null : dqa_num($r['qty_max']);
             $out[(int)$r['item_id']][] = [
+                'tier_id' => (int)$r['tier_id'],
                 'min' => $mn, 'max' => $mx, 'price' => dqa_num($r['unit_price']),
                 'range' => dqa_n($mn) . ' ~ ' . ($mx === null ? '以上' : dqa_n($mx)),
                 'tol' => ($r['tolerance_value'] !== null && dqa_num($r['tolerance_value']) > 0)
@@ -1557,6 +1582,8 @@ function dqa_node_candidates(PDO $db, int $orderId, string $kind, array $opt = [
         tc_order_quote_ensure($db);
         $boundIds = [];
         foreach (tc_order_quote_map($db, [$orderId])[$orderId] ?? [] as $lk) $boundIds[(int)$lk['item_id']] = $lk;
+        $boundTier = [];
+        foreach ($boundIds as $iid2 => $lk2) $boundTier[$iid2] = (int)($lk2['tier_id'] ?? 0);
         [$pw, $pb] = $mkPart('qi.d_setting_d_id', 'qi.product_id');
         $w = []; $b = [];
         if ($kw !== '') {
@@ -1615,7 +1642,8 @@ function dqa_node_candidates(PDO $db, int $orderId, string $kind, array $opt = [
                 'tiered' => !empty($r['is_tiered']), 'note_only' => !empty($r['note_only']),
                 'procs' => $procs[$iid] ?? [], 'tiers' => $tiers[$iid] ?? [],
                 'quote_id' => (int)$r['quote_id'],
-                'bound' => isset($boundIds[$iid]), 'used_by' => $used[$iid] ?? 0,
+                'bound' => isset($boundIds[$iid]), 'bound_tier' => $boundTier[$iid] ?? 0,
+                'used_by' => $used[$iid] ?? 0,
                 'late' => ($r['qdate'] && $odate && $r['qdate'] > $odate),
             ];
         }

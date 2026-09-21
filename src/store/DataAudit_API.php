@@ -153,8 +153,11 @@ case 'unbind': {
     if ($kind === 'quote') { $fromId = (int)$target; $toId = $orderId; }
     else                   { $fromId = $orderId;     $toId = $target; }
 
+    /* 階梯報價可以只綁其中一階（2026-09-21 使用者回報：整列綁下去等於一次綁了三種價格）。
+       tier 是不是真的屬於這一列報價由 tc_link() 再驗一次，不在這裡寫第二份規則。 */
     $r = ($action === 'bind')
-        ? tc_link($db, $type, $fromId, $toId, $qty, $u)
+        ? tc_link($db, $type, $fromId, $toId, $qty, $u, '',
+                  ['tier_id' => (int)dqaIn('tier_id', '0')])
         : tc_unlink($db, $type, $fromId, $toId, $u);
     if (empty($r['success'])) jerr($r['message'] ?? '操作失敗');
 

@@ -193,7 +193,13 @@ try {
         .proc-line .nt { font-size:11px; line-height:15px; color:#8a7560; word-break:break-all; }
         .proc-line .nt b { color:#7a6750; font-weight:normal; }
         .tierline { font-size:11px; color:#6B4423; background:#FFF6E8; border-left:3px solid var(--amber);
-                    padding:1px 6px; margin:1px 0; }
+                    padding:1px 6px; margin:1px 0; line-height:17px; }
+        /* 階梯報價要能只綁其中一階（2026-09-21 使用者回報：整列綁下去＝一次綁了三種價格） */
+        .tierline.on { background:#EEF6EA; border-left-color:#5C8A4A; }
+        .tier-go { display:inline-block; margin-left:6px; font-size:10px; line-height:15px; padding:0 6px;
+                   border:1px solid #E0C49A; border-radius:8px; background:#fff; color:#B2622A; cursor:pointer; }
+        .tier-go:hover { background:var(--amber-d); color:#fff; border-color:var(--amber-d); }
+        .tier-go.on { background:#E6F0E0; border-color:#9CBE8C; color:#3F6632; }
         .qd-tbl { width:100%; border-collapse:collapse; font-size:12px; }
         .qd-tbl th { background:var(--sand); color:#6B4423; padding:5px 7px; border:1px solid var(--line); text-align:left; }
         .qd-tbl td { padding:5px 7px; border:1px solid var(--line); vertical-align:top; }
@@ -1202,13 +1208,25 @@ function renderBindRows(){
            + '<th style="width:74px">單價</th><th style="width:150px">狀態</th><th style="width:120px"></th></tr>';
         body = BD.rows.map(function(x){
             var cls = x.bound ? 'bound' : (x.late ? 'risky' : '');
+            /* 階梯報價一列有好幾個價格，整列綁下去等於一次綁了三種單價（2026-09-21 使用者回報），
+               所以每一階各給一顆綁定鈕；已經綁住的那一階標出來、可單獨解除。 */
             var tiers = (x.tiers||[]).map(function(t){
-                return '<div class="tierline">' + esc(t.range) + ' 支 ＠' + t.price
+                var on = (x.bound && x.bound_tier && +x.bound_tier === +t.tier_id);
+                return '<div class="tierline' + (on?' on':'') + '">' + esc(t.range) + ' 支 ＠' + t.price
                      + (t.tol ? ('　容差 ' + esc(t.tol)) : '')
-                     + (t.tol_note ? ('　' + esc(t.tol_note)) : '') + '</div>';
+                     + (t.tol_note ? ('　' + esc(t.tol_note)) : '')
+                     + (CAN_BIND ? ('<span class="tier-go' + (on?' on':'') + '" data-tier="' + t.tier_id
+                                    + '" data-item="' + x.id + '">' + (on?'✓ 已綁這一階':'綁這一階') + '</span>') : '')
+                     + '</div>';
             }).join('');
             var st = [];
-            if (x.bound)     st.push('<span class="pill ok">已綁這張訂單</span>');
+            if (x.bound){
+                var bt = null;
+                (x.tiers||[]).forEach(function(t){ if (+t.tier_id === +(x.bound_tier||0)) bt = t; });
+                st.push('<span class="pill ok">已綁這張訂單'
+                    + (bt ? ('（' + bt.range + ' ＠' + bt.price + '）')
+                          : (x.tiered ? '（整列，未指定階梯）' : '')) + '</span>');
+            }
             if (x.used_by)   st.push('<span class="pill grey">' + x.used_by + ' 張訂單引用</span>');
             if (x.late)      st.push('<span class="pill bad">報價晚於訂單</span>');
             if (x.note_only) st.push('<span class="pill grey">備註列</span>');
@@ -1278,9 +1296,10 @@ function bdDefaultQty(x){
     return Math.max(1, Math.round(v || x.free || 1));
 }
 function bdActionBtn(x){
-    return x.bound
-        ? '<button class="btn btn-xs btn-default" data-unbind="' + esc(String(x.id)) + '">解除</button>'
-        : '<button class="btn btn-xs btn-warm" data-dobind="' + esc(String(x.id)) + '">綁定</button>';
+    if (x.bound) return '<button class="btn btn-xs btn-default" data-unbind="' + esc(String(x.id)) + '">解除</button>';
+    // 階梯報價的整列綁定要講明白是「不指定階梯」，不然會以為這顆跟階梯那幾顆是一樣的
+    return '<button class="btn btn-xs btn-warm" data-dobind="' + esc(String(x.id)) + '">'
+         + ((x.tiered && (x.tiers||[]).length) ? '整列綁定' : '綁定') + '</button>';
 }
 
 /* 會動到既有綁定時一定要先問一次（使用者明確要求）——
@@ -1314,6 +1333,27 @@ $(document).on('click','[data-dobind]', function(){
     if (BD.kind!=='quote' && qty <= 0){ alert('請填分配量（要大於 0）'); return; }
     bdPost('bind', id, qty, $(this));
 });
+$(document).on('click','.tier-go', function(){
+    var iid = String($(this).data('item')), tid = parseInt($(this).data('tier'), 10) || 0;
+    var x = bdFind(iid); if (!x || !tid) return;
+    var t = null; (x.tiers||[]).forEach(function(y){ if (+y.tier_id === tid) t = y; });
+    if (!t) return;
+    if (x.bound && +(x.bound_tier||0) === tid){
+        if (!confirm('要解除「' + x.no + '」' + t.range + ' 支 ＠' + t.price
+            + ' 這一階與這張訂單的對應嗎？\n\n解除只是拿掉對應關係，不會刪掉任何單據。')) return;
+        bdPost('unbind', iid, 0, $(this)); return;
+    }
+    var w = [];
+    if (x.bound) w.push('這一列報價目前綁的是'
+        + (+(x.bound_tier||0) ? '另一階' : '整列（未指定階梯）') + '，改綁之後會以這一階的單價為準。');
+    // 訂單數量落在哪一階本來就是判斷依據，不在區間內先講出來（後端也會再警示一次）
+    var oq = BD.order ? +BD.order.qty : 0;
+    if (oq > 0 && (oq < +t.min || (t.max !== null && oq > +t.max)))
+        w.push('訂單數量 ' + oq + ' 不在這一階的區間（' + t.range + '）內，請確認是不是要綁別一階。');
+    if (w.length && !confirm('要把這張訂單綁到「' + x.no + '」' + t.range + ' 支 ＠' + t.price
+        + ' 這一階嗎？\n\n・' + w.join('\n・') + '\n\n確定要繼續嗎？')) return;
+    bdPost('bind', iid, 0, $(this), tid);
+});
 $(document).on('click','[data-unbind]', function(){
     var id = String($(this).data('unbind'));
     var x = bdFind(id); if (!x) return;
@@ -1324,9 +1364,10 @@ function bdFind(id){
     for (var i=0;i<BD.rows.length;i++) if (String(BD.rows[i].id) === id) return BD.rows[i];
     return null;
 }
-function bdPost(act, id, qty, $btn){
+function bdPost(act, id, qty, $btn, tierId){
     $btn.prop('disabled', true);
-    $.post(API, {action:act, csrf:CSRF, order_id:BD.orderId, kind:BD.kind, target:id, qty:qty}, function(r){
+    $.post(API, {action:act, csrf:CSRF, order_id:BD.orderId, kind:BD.kind, target:id, qty:qty,
+                 tier_id:(tierId||0)}, function(r){
         $btn.prop('disabled', false);
         if(!r || !r.ok) return;
         var w = (r.warn && r.warn.length) ? ('\n\n提醒：\n・' + r.warn.join('\n・')) : '';
@@ -1420,14 +1461,21 @@ function renderTrace(){
         // 而「報價數量與訂單數量不符」正是最常出現的那一條缺失，看不到數量就核對不了）
         var q;
         if (r.quote){
-            var qsub = (r.quote.tiered ? '階梯報價' : (r.quote.qty + ' 支')) + ' ＠' + r.quote.price;
+            // 綁到某一階就印那一階（整列的 unit_price 在階梯報價上常常是 0，印出來看不出東西）
+            var qsub = r.quote.tier
+                ? (r.quote.tier.range + ' 支 ＠' + r.quote.tier.price)
+                : ((r.quote.tiered ? '階梯報價' : (r.quote.qty + ' 支')) + ' ＠' + r.quote.price);
             var qdocs = (r.quote_list && r.quote_list.length ? r.quote_list : [r.quote]).map(function(x){
                 return {no:x.no, url:quoteUrl(x.no, x.date, r, x),
                         tip:'在報價單管理搜尋 ' + x.no + '（' + (x.part||'') + '、'
-                            + (x.tiered?'階梯報價':(x.qty + ' 支 ＠' + x.price)) + '）'};
+                            + (x.tier ? (x.tier.range + ' 支 ＠' + x.tier.price + ' 這一階')
+                                      : (x.tiered ? '階梯報價（未指定階梯）' : (x.qty + ' 支 ＠' + x.price))) + '）'};
             });
             q = nodeHtml(dispDate(r.quote.date), qsub, qBad, r.quote.src, qdocs);
             if (r.quote.cnt > 1) q += '<span class="pill grey">共 ' + r.quote.cnt + ' 列</span>';
+            if (r.quote.tiered && !r.quote.tier && r.quote.src !== 'guess')
+                q += '<span class="pill warn" title="階梯報價一列有好幾個單價，沒有指定是哪一階就核對不出單價對不對。'
+                   + '按下方的綁定鈕，在階梯那幾行各自有一顆「綁這一階」。">未指定階梯</span>';
             q += '<span class="bind-go" data-qd="' + (r.quote.item_id||0) + '">看整張報價單</span>';
             q += procLine(r.quote.procs, [r.quote.spec]);
         } else {

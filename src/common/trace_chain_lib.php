@@ -402,13 +402,26 @@ function tc_order_quote_ensure(PDO $db): void
     if ($done) return;
     $done = true;
     try {
-        if ($db->query("SHOW TABLES LIKE 'order_quote_map'")->fetchColumn()) return;  // 已經有了＝不下 DDL
+        if ($db->query("SHOW TABLES LIKE 'order_quote_map'")->fetchColumn()) {
+            /* 2026-09-21：階梯報價要綁到「其中一階」，不是整列三種價格一起綁。
+               既有安裝補一次欄位即可（同樣只在不是交易中才下 DDL——
+               DDL 會造成 MySQL 隱式 commit，外層 commit() 就會爆 There is no active transaction，
+               而且資料其實已經寫進去了，是最容易誤判的那種症狀）。 */
+            if (!$db->inTransaction()
+                && !$db->query("SHOW COLUMNS FROM order_quote_map LIKE 'tier_id'")->fetchColumn()) {
+                $db->exec("ALTER TABLE order_quote_map
+                             ADD COLUMN tier_id int DEFAULT NULL AFTER item_id,
+                             ADD KEY idx_oqm_tier (tier_id)");
+            }
+            return;
+        }
         if ($db->inTransaction()) return;                                             // 交易中一律不建表
     } catch (Throwable $e) { return; }
     $db->exec("CREATE TABLE IF NOT EXISTS `order_quote_map` (
         `id` int NOT NULL AUTO_INCREMENT,
         `Order_id` int NOT NULL,
         `item_id` int NOT NULL,
+        `tier_id` int DEFAULT NULL,
         `allocated_qty` int NOT NULL DEFAULT 0,
         `created_by` varchar(20) DEFAULT NULL,
         `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
@@ -483,11 +496,12 @@ function tc_order_quote_map(PDO $db, array $orderIds): array
     $out = [];
     foreach (array_chunk($ids, 800) as $ck) {
         $in = implode(',', array_fill(0, count($ck), '?'));
-        $s = $db->prepare("SELECT Order_id, item_id, allocated_qty FROM order_quote_map
+        $s = $db->prepare("SELECT Order_id, item_id, tier_id, allocated_qty FROM order_quote_map
                             WHERE Order_id IN ($in) ORDER BY item_id");
         $s->execute($ck);
         foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r)
             $out[(int)$r['Order_id']][] = ['item_id' => (int)$r['item_id'],
+                                           'tier_id' => (int)($r['tier_id'] ?? 0),
                                            'alloc' => (int)$r['allocated_qty'], 'src' => 'map'];
         // 分配表還沒有列的訂單，回退看舊欄位（尚未搬過來的舊資料）
         $s = $db->prepare("SELECT Order_id, quote_item_id FROM order_track
@@ -496,7 +510,8 @@ function tc_order_quote_map(PDO $db, array $orderIds): array
         foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $oid = (int)$r['Order_id'];
             if (!empty($out[$oid])) continue;
-            $out[$oid][] = ['item_id' => (int)$r['quote_item_id'], 'alloc' => 0, 'src' => 'legacy'];
+            $out[$oid][] = ['item_id' => (int)$r['quote_item_id'], 'tier_id' => 0,
+                            'alloc' => 0, 'src' => 'legacy'];
         }
     }
     return $out;
@@ -577,7 +592,8 @@ function tc_allocated(PDO $db, string $type, string $kind, $id, $exceptOther = n
  *   - 客戶簡稱不同一律擋下（把和大的出貨算進旭陽的訂單一定是錯的）
  *   - 料號不同只警示不擋（訂單常下組合件名稱、製作時才拆成子件料號）
  * ============================================================ */
-function tc_link(PDO $db, string $type, $fromId, $toId, int $qty, ?array $user = null, string $srcKind = ''): array
+function tc_link(PDO $db, string $type, $fromId, $toId, int $qty, ?array $user = null, string $srcKind = '',
+                 array $opt = []): array
 {
     $types = tc_link_types();
     if (!isset($types[$type])) return ['success' => false, 'message' => '不支援的連結類型'];
@@ -607,8 +623,27 @@ function tc_link(PDO $db, string $type, $fromId, $toId, int $qty, ?array $user =
        而報價單存的客戶欄位與出貨用的客戶簡稱格式不同，硬比會全部擋掉。
        料號不同也只警示不擋——治具／刀具那一列的料號本來就與訂單料號不同，
        那正是使用者要能綁進來的東西（2026-09-21）。 */
+    $tierId = 0;
     if ($type === 'quote_order') {
         if ($qty < 0) return ['success' => false, 'message' => '分配數量不可以是負數'];
+        /* 階梯報價一列有好幾個價格（例 1~49 ＠183、50~299 ＠170、300以上 ＠157），
+           整列綁下去等於一次綁了三種單價，之後根本核對不出「這張訂單是依哪一階下的」。
+           所以可以指定綁到其中一階；tier 一定要真的屬於這一列報價（鐵律8：前端擋過，這裡再擋一次）。 */
+        $tierId = (int)($opt['tier_id'] ?? 0);
+        if ($tierId > 0) {
+            $tq = $db->prepare("SELECT qty_min, qty_max, unit_price FROM quotation_item_tier
+                                 WHERE tier_id=? AND item_id=?");
+            $tq->execute([$tierId, (int)$fromId]);
+            $tr = $tq->fetch(PDO::FETCH_ASSOC);
+            if (!$tr) return ['success' => false, 'message' => '找不到這一階報價，或它不屬於這一列報價項目'];
+            $mn = (float)$tr['qty_min']; $mx = $tr['qty_max'] === null ? null : (float)$tr['qty_max'];
+            $oq = (float)$b['qty'];
+            if ($oq > 0 && ($oq < $mn || ($mx !== null && $oq > $mx)))
+                $warn[] = '訂單數量 ' . rtrim(rtrim(number_format($oq, 2, '.', ''), '0'), '.')
+                        . ' 不在這一階的區間內（' . rtrim(rtrim(number_format($mn, 2, '.', ''), '0'), '.')
+                        . ' ~ ' . ($mx === null ? '以上' : rtrim(rtrim(number_format($mx, 2, '.', ''), '0'), '.'))
+                        . '），請確認是不是要綁別一階';
+        }
         $ca = trim((string)$a['client']); $cb = trim((string)$b['client']);
         if ($ca !== '' && $cb !== '' && $ca !== $cb)
             $warn[] = "報價客戶（{$ca}）與訂單客戶（{$cb}）寫法不同，請確認是同一家";
@@ -645,7 +680,8 @@ function tc_link(PDO $db, string $type, $fromId, $toId, int $qty, ?array $user =
         switch ($type) {
             case 'quote_order':
                 tc_upsert($db, 'order_quote_map', ['Order_id' => (int)$toId, 'item_id' => (int)$fromId],
-                          ['allocated_qty' => max(0, $qty), 'created_by' => $uid]);
+                          ['tier_id' => ($tierId > 0 ? $tierId : null),
+                           'allocated_qty' => max(0, $qty), 'created_by' => $uid]);
                 tc_sync_order_quote($db, (int)$toId, $user);
                 break;
             case 'order_bom':
