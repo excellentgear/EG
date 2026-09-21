@@ -1497,6 +1497,7 @@ case 'nc_get': {
     $n['cands'] = ia_nc_candidates($db, (int)($n['dept_id'] ?? 0),
                                    (string)($n['audit_date'] ?? ''), (int)($n['head_id'] ?? 0));
     /* 補資料的單：簽章日期預設成稽核日期而不是今天（2026-09-21 使用者要求） */
+    $n['resp_date_range'] = ia_nc_resp_date_range($n);   // 責任主管簽核日期限稽核日起一週內
     $n['is_backfill']  = ia_nc_is_backfill($n, $today) ? 1 : 0;
     $n['sign_default'] = ia_nc_sign_default($n, $today);
     $lead = ia_year_leader($db, (int)($n['year'] ?? 0), (int)($n['case_id'] ?? 0));
@@ -1573,7 +1574,7 @@ case 'nc_create': {
 
     $db->beginTransaction();
     try {
-        $head = ia_dept_head_asof($db, $deptId, $ad);
+        // 受審查單位主管欄位已取消：不再寫 head_id，要通知誰由 ia_nc_notify_targets() 即時解析
         $ncNo = ia_next_nc_no($db, $ad);
         $db->prepare("INSERT INTO ia_nc (nc_no, case_id, year, dept_id, dept_name, auditee_id, auditee_name,
                           audit_date, src_kind, src_item_id, src_code, ref_form_no, fact, nc_type, clause_ref, due_date,
@@ -1585,7 +1586,7 @@ case 'nc_create': {
                       mb_substr(trim((string)($_POST['ref_form_no'] ?? '')), 0, 60) ?: null,
                       $fact, $type, mb_substr(trim((string)($_POST['clause_ref'] ?? '')), 0, 300) ?: null, $due,
                       $uid, $uname, $ad,
-                      $head['id'] ?? null, $head['name'] ?? null,
+                      null, null,
                       $c['leader_id'] ?? null, $c['leader_name'] ?? null,
                       $uid, $uname]);
         $ncId = (int)$db->lastInsertId();
@@ -1700,44 +1701,37 @@ case 'nc_save_sec2': {
         if ($prev === '')  jerr('請填預防措施');
         if (!$prevDue)     jerr('請選擇預防措施的預計完成日期');
     }
-    $headId = iaInt($_POST['head_id'] ?? ''); $headName = null;
-    if ($headId) {
-        $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $q->execute([$headId]);
-        $headName = (string)($q->fetchColumn() ?: '');
-        if ($headName === '') jerr('受審查單位主管不存在');
-    }
-    $ncCd = ia_nc_candidates($db, (int)($n['dept_id'] ?? 0), (string)($n['audit_date'] ?? ''),
-                             $headId ?: (int)($n['head_id'] ?? 0));
-    if ($headId && $headId !== (int)($n['head_id'] ?? 0)
-        && $ncCd['head'] && !iaCandHas($ncCd['head'], $headId))
-        jerr('受審查單位主管只能從「' . ($n['dept_name'] ?: '受稽核單位') . '」的主管中選擇');
+    /* 「受審查單位主管」與其簽核日期 2026-09-21 起已從畫面取消（使用者要求）。
+       DB 欄位保留不刪（舊單還印得出來、`ia_nc_stage_perm` 也還在用它判「是不是受稽單位的人」），
+       但**不再接受前端送值、也不再更新**——沒送就原封不動。
+       開新單時也不再寫入：要通知誰由 `ia_nc_notify_targets()` 依受稽核單位即時解析，不靠這個欄位。 */
+    $ncCd = ia_nc_candidates($db, (int)($n['dept_id'] ?? 0), (string)($n['audit_date'] ?? ''));
     $respId = iaInt($_POST['resp_id'] ?? ''); $respName = null;
     if ($respId) {
         $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $q->execute([$respId]);
         $respName = (string)($q->fetchColumn() ?: '');
         if ($respName === '') jerr('責任主管不存在');
         if ($respId !== (int)($n['resp_id'] ?? 0) && $ncCd['resp'] && !iaCandHas($ncCd['resp'], $respId))
-            jerr('責任主管只能從受審查單位主管所屬部門（'
-                 . ($ncCd['resp_dept_name'] ?: '該單位') . '）的主管中選擇');
+            jerr('責任主管只能從「' . ($n['dept_name'] ?: '受稽核單位') . '」的主管中選擇');
     }
-    // 「單位主管核示」2026-08-27 起紙本與畫面都沒有這一格了（使用者：完全不需要這行）。
-    // 欄位保留在 DB 不刪，沒送這個參數時就沿用原值，不要把既有內容洗成空的。
-    $headNote = array_key_exists('head_note', $_POST)
-              ? (trim((string)$_POST['head_note']) ?: null)
-              : ($n['head_note'] ?? null);
     /* 補資料的單（稽核日期已是半年前）簽章日期一律預設成稽核日期，不可以是今天（使用者要求） */
     $signDef  = ia_nc_sign_default($n, $today);
-    $headDate = iaDate($_POST['head_date'] ?? '') ?: $signDef;
     $respDate = iaDate($_POST['resp_date'] ?? '') ?: $signDef;
+    /* 責任主管簽核日期限「稽核日期起一週內（日曆日，含假日）」。
+       **只在日期真的被改動時才驗**——舊單上的日期可能本來就在範圍外，
+       全部都驗的話，光是改一行文字存檔就會被自己擋下來而且看不出原因。 */
+    if ($respId && $respDate !== (string)($n['resp_date'] ?? '')) {
+        $rg = ia_nc_resp_date_range($n);
+        if ($rg && ($respDate < $rg['min'] || $respDate > $rg['max']))
+            jerr('責任主管簽核日期必須在稽核日期起一週內（' . $rg['min'] . ' ～ ' . $rg['max'] . '）');
+    }
 
     $db->beginTransaction();
     try {
         $db->prepare("UPDATE ia_nc SET cause=?, corrective=?, corrective_due=?, preventive=?, preventive_due=?,
-                          head_id=?, head_name=?,
-                          head_note=?, head_date=?, resp_id=?, resp_name=?, resp_date=?, updated_at=NOW()
+                          resp_id=?, resp_name=?, resp_date=?, updated_at=NOW()
                        WHERE nc_id=?")
-           ->execute([$cause ?: null, $corr ?: null, $corrDue, $prev ?: null, $prevDue, $headId, $headName,
-                      $headNote, $headId ? $headDate : null,
+           ->execute([$cause ?: null, $corr ?: null, $corrDue, $prev ?: null, $prevDue,
                       $respId, $respName, $respId ? $respDate : null, $id]);
         if ($submit && $n['stage'] === 'issued') {
             $db->prepare("UPDATE ia_nc SET stage='replied', updated_at=NOW() WHERE nc_id=?")->execute([$id]);
@@ -1745,7 +1739,7 @@ case 'nc_save_sec2': {
         ia_nc_log_add($db, $id, $submit ? 'replied' : (string)$n['stage'],
                       $submit ? 'reply' : 'edit', $uid, $uname,
                       $submit ? '受稽單位送出回覆' : '暫存受稽單位回覆',
-                      $sp['proxy'] ? 1 : 0, $sp['proxy'] ? (string)($headName ?: $n['dept_name']) : '');
+                      $sp['proxy'] ? 1 : 0, $sp['proxy'] ? (string)($n['dept_name'] ?: '受稽單位') : '');
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：' . $e->getMessage(), 500); }
 
@@ -1765,7 +1759,9 @@ case 'nc_save_sec3': {
     $st->execute([$id]); $n = $st->fetch(PDO::FETCH_ASSOC);
     if (!$n) jerr('找不到這張不符合通知單', 404);
     $sp = ia_nc_stage_perm($db, $n, $perms, $uid);
-    if (!$sp['sec3']) jerr('尚未收到受稽單位回覆，或您沒有驗證權限', 403);
+    if (!$sp['sec3'] && !$sp['sec3_admin'])
+        jerr($sp['sec3_locked_why'] ? ('稽核組長驗證區已鎖定：' . $sp['sec3_locked_why'] . '（如需修正請洽內稽管理員）')
+                                    : '您沒有驗證權限', 403);
 
     $desc = trim((string)($_POST['verify_desc'] ?? ''));
     $res  = (string)($_POST['verify_result'] ?? '');

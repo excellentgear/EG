@@ -591,6 +591,7 @@ $roleLabel = ia_role_label($perms);
                 解鎖只對這一次開啟有效，關掉重開又是鎖住的。</li>
             <li><b>段三 稽核組長填</b>：只有<b>驗證描述</b>與<b>驗證通過／不通過</b>兩項（紙本的「結束」欄已取消，
                 列印版改印<b>結案日期</b>）。<b>不通過會退回段二</b>並重新通知受稽單位。
+                <b>送出驗證之後這一段也會鎖起來</b>（與段二相同）；要修正一樣由<b>內稽管理員</b>按「解鎖修改」。
                 <b>稽核組長不是「按下驗證的人」</b>，而是<b>該年度稽核小組設定的組長</b>（工具列「稽核小組」設定），
                 所以管理員代填也不會把自己變成組長；小組沒設組長時才沿用這張稽核通知單上登記的人。
                 <b>設定改過之後，舊單一打開就會自動更正</b>（不必重新存檔），畫面與列印版拿到的一定是同一個人。</li>
@@ -705,12 +706,14 @@ $roleLabel = ia_role_label($perms);
             <li><b>稽核起始主過程要填什麼</b>：這次稽核從哪一段流程切入，稽核員由這裡開始循序把相關過程查完。紙本備註列了三類可填：<b>主過程</b>（客戶需求檢討→開發→訂單/合約審查→生產→倉儲出貨→客戶回饋）、<b>管理過程</b>（文件/記錄管理、人力資源訓練、不符合管理、資料分析、內部稽核、矯正/預防措施管理、持續改善、管理責任…）、<b>支援過程</b>（採購、供應商管理、IQC/FAI/IPQC/FQC、儀器/量具、機器/治具、生管、型態(鑑別追溯)、特殊特性…）。起點<b>不必等於該單位的日常業務</b>——紙本備註第 1 條要求「跳過自己的直接職務」，讓稽核員從別人的角度切入。<b>同一次稽核裡不可以有兩列填相同的起始主過程</b>，重複會即時標紅、也存不進去。</li>
             <li><b>稽核員與陪檢員怎麼帶</b>：選了範本之後，該列的稽核員／陪檢員下拉會縮到範本指定的部門範圍內、且只列有資格的職務；<b>候選只有一位就自動帶入</b>。系統<b>先決定稽核員</b>，陪檢員的候選會自動排除稽核員本人（同一人不可兩邊都當，即使是不同職務）。<b>陪檢員可以不填</b>。</li>
             <li><b>稽核員／陪檢員都可以有多位</b>（2026-08-27 起）：已選的人會變成一個個標籤，按標籤上的 <b>×</b> 移除、用下方的「＋加入稽核員／＋加入陪檢員」再加人，<b>每一種最多 <?= IA_CD_PERSON_MAX ?> 位</b>。已經被選走的人（不管在哪一邊）不會再出現在候選裡，所以不會不小心把同一個人排成兩種身分。列印版的稽核員／陪檢員欄會一位一行印出來；自動建會議紀錄時，<b>全部</b>稽核員與陪檢員都會被帶進與會人員。</li>
-            <li><b>受審查單位主管是誰，依稽核日期回推當時的職務</b>（不是現在的職務），所以補去年的舊單不會蓋到今年才上任的人。查不到當時的主管時寧可留白，不會亂帶人。</li>
+            <li><b>「受審查單位主管」欄位已取消</b>（2026-09-21）：表單與列印版都不再有這一格與它的簽核日期。
+                開單後要通知誰，改成<b>依受稽核單位即時解析當時的單位主管</b>（加上受審核人），不靠單上存的那個欄位。</li>
             <li><b>稽核員可以由內稽管理員更換</b>（段一最下面那一欄）：管理員代別人開單時，稽核員原本會被自動填成按下按鈕的人＝管理員自己，
                 但那張單實際上不是他去稽核的。候選只列<b>設定為稽核員／稽核組長</b>的人（依稽核日期回推當時的資格與職稱）；
                 一般稽核員看得到這一欄但改不動，原本掛著的人即使現在已無資格也會保留在選項裡。換人會留在下方的填寫歷程。</li>
-            <li><b>受稽核人／受審查單位主管／責任主管三個下拉只列「該單位的主管」</b>，不是全公司的人：
-                前兩個依<b>受稽核單位</b>決定，<b>責任主管</b>則依<b>受審查單位主管所在的部門</b>決定（換了主管，責任主管的名單就跟著換，欄位旁會寫目前是哪個部門）。
+            <li><b>受稽核人與責任主管兩個下拉只列「該單位的主管」</b>，不是全公司的人：兩個都依<b>受稽核單位</b>決定。
+                <b>責任主管的簽核日期限「稽核日期起一週內」</b>（日曆日，含假日）——月曆直接選不到範圍外的日期，
+                送出時前後端再各驗一次。<b>預防措施的預計完成時間刻意沒有這個限制</b>（改善本來就可能排到很久以後）。
                 名單一律<b>依稽核日期回推當時在職的人與當時的職稱</b>。
                 該單位的職稱在<b>職級設定</b>裡都沒有登記職級時（查不到任何主管），會改列該單位全部人員並標「非主管」，不會給您一個空的下拉；
                 要讓名單正確，請到部門職稱設定把該職稱的職級補上。舊單上原本掛著的人即使已調職或離職，仍會保留在選項裡不會被洗掉。</li>
@@ -1185,10 +1188,6 @@ $roleLabel = ia_role_label($perms);
             <span id="btnSec2Unlock" style="display:none;font-size:12px;font-weight:normal;margin-left:8px;
                   cursor:pointer;color:#C4442D;text-decoration:underline;">解鎖修改</span></h5>
             <div class="ia-form">
-                <label>受審查單位主管</label>
-                <div><select id="nHead" data-eg-filter="輸入人員姓名篩選…"></select>
-                     <span id="nHeadSuggest" style="font-size:12px;color:#8a6d45;"></span></div>
-                <label>簽核日期</label><div><input type="date" id="nHeadDate"></div>
                 <label>原因分析<span style="color:#DD5138;">*</span></label>
                 <div class="full"><textarea id="nCause"></textarea><div class="err-msg" id="errNCause"></div></div>
                 <label>糾正措施<span style="color:#DD5138;">*</span></label>
@@ -1206,7 +1205,10 @@ $roleLabel = ia_role_label($perms);
                 <label>責任主管</label>
                 <div><select id="nResp" data-eg-filter="輸入人員姓名篩選…"></select>
                      <span id="nRespNote" style="font-size:12px;color:#8a6d45;"></span></div>
-                <label>簽核日期</label><div><input type="date" id="nRespDate"></div>
+                <label>簽核日期</label>
+                <div><input type="date" id="nRespDate">
+                     <span id="nRespDateNote" style="font-size:12px;color:#8a6d45;"></span>
+                     <div class="err-msg" id="errNRespDate"></div></div>
             </div>
             <div class="ia-att" id="ncAttsec2" data-sec="sec2">
                 <div class="ia-att-h">改善佐證附件 <em>（可附照片、掃描檔、Excel／PDF，單檔 20MB 以內）</em></div>
@@ -1225,7 +1227,9 @@ $roleLabel = ia_role_label($perms);
         </div>
 
         <!-- 段三：驗證 -->
-        <div class="ia-sec" id="ncSec3"><h5>三、稽核組長驗證<span class="lock-note" id="ncSec3Lock"></span></h5>
+        <div class="ia-sec" id="ncSec3"><h5>三、稽核組長驗證<span class="lock-note" id="ncSec3Lock"></span>
+            <span id="btnSec3Unlock" style="display:none;font-size:12px;font-weight:normal;margin-left:8px;
+                  cursor:pointer;color:#C4442D;text-decoration:underline;">解鎖修改</span></h5>
             <div class="ia-form">
                 <label>驗證描述<span style="color:#DD5138;">*</span></label>
                 <div class="full"><textarea id="nVerify" placeholder="糾正和預防措施執行狀況驗證描述"></textarea>
@@ -1286,7 +1290,7 @@ $roleLabel = ia_role_label($perms);
     <div class="ia-mhead"><h4><i class="fa fa-plus"></i> 開立內稽不符合通知單</h4><span class="x" data-close>&times;</span></div>
     <div class="ia-mbody">
         <div class="ia-hint">開立後會<b>立即通知受稽核單位主管</b>填寫原因分析與改善措施，期限前與逾期也會自動提醒。
-        受審查單位主管由系統<b>依稽核日期回推當時職務</b>自動判定。</div>
+        要通知誰由系統<b>依受稽核單位與稽核日期回推當時的單位主管</b>自動判定。</div>
         <div class="ia-form">
             <label>稽核日期<span style="color:#DD5138;">*</span></label>
             <div><input type="date" id="nnDate"><div class="err-msg" id="errNnDate"></div></div>
@@ -4300,15 +4304,17 @@ function openNc(id){
         });
         $('#nType').html(typeH);
         // 段二
-        $('#nHead').html(candOptions((NC.cands||{}).head, NC.head_id, NC.head_name));
-        $('#nHeadDate').val(inputDate(NC.head_date) || ncSignDefault());
         $('#nCause').val(NC.cause||''); $('#nCorr').val(NC.corrective||''); $('#nPrev').val(NC.preventive||'');
         $('#nCorrDue').val(inputDate(NC.corrective_due)); $('#nPrevDue').val(inputDate(NC.preventive_due));
         fillRespCands(NC.cands||{}, NC.resp_id, NC.resp_name);
-        $('#nRespDate').val(inputDate(NC.resp_date) || ncSignDefault());
-        $('#nHeadSuggest').text(NC.suggest_head
-            ? ('　建議：'+NC.suggest_head.name+'（依稽核日期回推當時職務）')
-            : '　（查不到該單位在稽核日期當時的主管，請手動指定）');
+        /* 責任主管簽核日期限「稽核日期起一週內（日曆日，含假日）」——使用者指定。
+           先把 min/max 掛上去，月曆就直接選不到範圍外的日期；送出時前後端再各驗一次。
+           預設值若落在範圍外（例如補資料的單用稽核日期當預設，那一定在範圍內）就夾回範圍。 */
+        var rg = NC.resp_date_range || {};
+        $('#nRespDate').attr('min', rg.min || null).attr('max', rg.max || null)
+                       .val(inputDate(NC.resp_date) || ncSignDefault());
+        $('#nRespDateNote').text(rg.min
+            ? ('　限 ' + dispDate(rg.min) + ' ～ ' + dispDate(rg.max) + '（稽核日起一週內，含假日）') : '');
         // 段三
         $('#nVerify').val(NC.verify_desc||''); $('#nVerifyRes').val(NC.verify_result||'');
         /* 稽核組長／管理代表都是**自動帶的**（2026-09-21 使用者要求）。
@@ -4333,7 +4339,10 @@ function openNc(id){
         lockSec('#ncSec2', p.sec2, '#ncSec2Lock',
                 p.sec2_locked_why || '只有受稽單位／稽核員代填');
         $('#btnSec2Unlock').toggle(!!p.sec2_admin).text('解鎖修改');
-        lockSec('#ncSec3', p.sec3, '#ncSec3Lock', NC.stage==='issued' ? '要等受稽單位送出回覆' : '只有稽核組長／稽核員能填');
+        SEC3_UNLOCKED = false;
+        lockSec('#ncSec3', p.sec3, '#ncSec3Lock',
+                p.sec3_locked_why || '只有稽核組長／稽核員能填');
+        $('#btnSec3Unlock').toggle(!!p.sec3_admin).text('解鎖修改').css('color', '#C4442D');
         lockSec('#ncSec4', p.sec4, '#ncSec4Lock', '只有內稽管理員（管理代表）能填');
         /* 稽核員只有「內稽管理員」改得動（2026-09-21 使用者要求）。
            起因：管理員代別人開單時，稽核員會被自動填成按下按鈕的人＝管理員自己，
@@ -4369,7 +4378,7 @@ function openNc(id){
         openMask('ncMask');
     });
 }
-/* 受稽核人／受審查單位主管／責任主管的下拉（2026-09-21 使用者要求）：
+/* 受稽核人／責任主管的下拉（2026-09-21 使用者要求）：
    一律**只列受稽核單位的主管**，不再攤開全公司的人（原本連生產3廠的組員都列得出來，
    那份清單在畫面上根本挑不到人，也很容易挑到別單位的人）。
    **原本就掛在這張單上的那一位一定要留著**——他可能已經調職或離職，清單裡不會有他，
@@ -4391,7 +4400,7 @@ function candOptions(list, curId, curName){
     if (!list.length) h += '<option value="" disabled>（查不到這個單位在稽核日期當時的人員）</option>';
     return h;
 }
-/* 責任主管：候選範圍＝受審查單位主管**所在的部門**（使用者指定），換人就要跟著換 */
+/* 責任主管：候選範圍＝**受稽核單位**的主管（受審查單位主管欄位取消後就直接看受稽核單位） */
 function fillRespCands(cd, curId, curName){
     $('#nResp').html(candOptions(cd.resp, curId, curName));
     var el = document.getElementById('nResp');
@@ -4400,18 +4409,6 @@ function fillRespCands(cd, curId, curName){
         ? ('　候選：' + cd.resp_dept_name + ' 的主管' + (+cd.resp_fallback ? '（查不到主管，改列該單位全部人員）' : ''))
         : '');
 }
-$('#nHead').on('change', function(){
-    if (!NC) return;
-    $.getJSON(API, {action:'nc_cands', dept_id:NC.dept_id||'', date:NC.audit_date||'',
-                    head_id:($(this).val()||'')}, function(res){
-        if (!res || !res.ok) return;
-        NC.cands = $.extend(NC.cands||{}, res);
-        // 換了主管＝換了部門，原本選的責任主管若不在新部門就不要再留著（留著會存進別單位的人）
-        var keep = '', cur = String($('#nResp').val()||'');
-        (res.resp||[]).forEach(function(p){ if (String(p.id) === cur) keep = cur; });
-        fillRespCands(res, keep, keep ? NC.resp_name : '');
-    });
-});
 /* 稽核員下拉（2026-09-21 使用者要求：管理員代填時不要自動變成稽核員）。
    ①候選就是「設定為稽核員／稽核組長的人」——`META.auditors` 是 ia_qualified_posts(auditor)，
      稽核通知單上的稽核組長本來就是從同一份名單挑的，所以不必另外湊一份。
@@ -4440,7 +4437,20 @@ function ncSignDefault(){
     if (!NC) return META.today;
     return inputDate(NC.sign_default || '') || META.today;
 }
-var SEC2_UNLOCKED = false;
+var SEC2_UNLOCKED = false, SEC3_UNLOCKED = false;
+/* 管理員解鎖段三（已送出驗證的單，要修正驗證描述或簽核日期時）。與段二同一套：
+   預設鎖住、按了才動得了、關掉重開又是鎖住的，自動暫存在鎖住時一律不作用。 */
+$('#btnSec3Unlock').on('click', function(){
+    if (!NC || !(NC.perm||{}).sec3_admin) return;
+    SEC3_UNLOCKED = !SEC3_UNLOCKED;
+    if (SEC3_UNLOCKED && !confirm('這張單的驗證已經送出。\n解鎖後您的修改會直接覆蓋原本的驗證內容，確定要修改嗎？')) {
+        SEC3_UNLOCKED = false; return;
+    }
+    lockSec('#ncSec3', SEC3_UNLOCKED, '#ncSec3Lock',
+            (NC.perm||{}).sec3_locked_why || '已送出驗證，不可再更動');
+    $(this).show().text(SEC3_UNLOCKED ? '鎖回唯讀' : '解鎖修改')
+           .css('color', SEC3_UNLOCKED ? '#7a5217' : '#C4442D');
+});
 /* 管理員解鎖段二（已送出回覆的單，紙本補錯字時還是得改得了）。
    解鎖是「這一次開啟有效」，關掉重開又是鎖住的狀態。 */
 $('#btnSec2Unlock').on('click', function(){
@@ -4483,7 +4493,7 @@ function ncAutoSaveNow(){
     var jobs = [];
     if (p.sec1)                      jobs.push(['#ncSec1', function(cb){ saveSec1(true, cb); }]);
     if (p.sec2 || SEC2_UNLOCKED)     jobs.push(['#ncSec2', function(cb){ saveSec2(false, true, cb); }]);
-    if (p.sec3)                      jobs.push(['#ncSec3', function(cb){ saveSec3(false, true, cb); }]);
+    if (p.sec3 || SEC3_UNLOCKED)     jobs.push(['#ncSec3', function(cb){ saveSec3(false, true, cb); }]);
     if (p.sec4)                      jobs.push(['#ncSec4', function(cb){ saveSec4(false, true, cb); }]);
     jobs.forEach(function(j){
         var sec = j[0], snap = ncSecSnapshot(sec);
@@ -4618,6 +4628,13 @@ function saveSec2(submit, silent, cb){
         ok = fieldErr($('#nCorrDue'),'errNCorrDue',$('#nCorrDue').val()     ? '' : '請選擇糾正措施的完成日期') && ok;
         ok = fieldErr($('#nPrev'),  'errNPrev',  $('#nPrev').val().trim()  ? '' : '請填預防措施') && ok;
         ok = fieldErr($('#nPrevDue'),'errNPrevDue',$('#nPrevDue').val()     ? '' : '請選擇預防措施的預計完成日期') && ok;
+        // 預防措施的預計完成時間刻意沒有範圍限制（改善本來就可能排到很久以後）
+        var rg2 = NC.resp_date_range || {}, rd = $('#nRespDate').val();
+        if ($('#nResp').val() && rg2.min && rd && (rd < rg2.min || rd > rg2.max)) {
+            ok = fieldErr($('#nRespDate'), 'errNRespDate',
+                 '責任主管簽核日期限 ' + dispDate(rg2.min) + ' ～ ' + dispDate(rg2.max)
+                 + '（稽核日起一週內，含假日）') && ok;
+        }
         if (!ok) return;
         if (!confirm('送出後這一段會鎖定並通知稽核組長驗證，確定？')) return;
     }
@@ -4625,8 +4642,7 @@ function saveSec2(submit, silent, cb){
     if (silent && !((NC.perm||{}).sec2 || SEC2_UNLOCKED)) { if (cb) cb(false); return; }
     $.post(API, {action:'nc_save_sec2', nc_id:NC.nc_id, submit:submit?1:'', cause:$('#nCause').val(),
         corrective:$('#nCorr').val(), corrective_due:$('#nCorrDue').val(),
-        preventive:$('#nPrev').val(), preventive_due:$('#nPrevDue').val(), head_id:$('#nHead').val(),
-        head_date:$('#nHeadDate').val(),
+        preventive:$('#nPrev').val(), preventive_due:$('#nPrevDue').val(),
         resp_id:$('#nResp').val(), resp_date:$('#nRespDate').val()}, function(res){
         if (!res.ok) { if (!silent) alert(res.error||'儲存失敗'); if (cb) cb(false); return; }
         if (!silent) {
@@ -4640,6 +4656,8 @@ $('#btnNcSaveSec2').on('click', function(){ saveSec2(false, false); });
 $('#btnNcSubmitSec2').on('click', function(){ saveSec2(true, false); });
 function saveSec3(submit, silent, cb){
     clearErrs($('#ncSec3'));
+    // 段三鎖住時一律不自動暫存（鎖起來就是為了避免誤改）
+    if (silent && !((NC.perm||{}).sec3 || SEC3_UNLOCKED)) { if (cb) cb(false); return; }
     if (submit) {
         var ok = true;
         ok = fieldErr($('#nVerify'), 'errNVerify', $('#nVerify').val().trim() ? '' : '請填驗證描述') && ok;
@@ -4683,7 +4701,7 @@ $('#btnNcReopen').on('click', function(){
 $('#btnNcResend').on('click', function(){
     $.post(API, {action:'nc_resend', nc_id:NC.nc_id}, function(res){
         if (!res.ok) { alert(res.error||'失敗'); return; }
-        alert(res.sent ? '已重新發送通知' : '找不到可通知的對象（請先指定受審查單位主管或受審核人）');
+        alert(res.sent ? '已重新發送通知' : '找不到可通知的對象（受稽核單位查不到當時的主管，請先指定受審核人）');
     }, 'json');
 });
 $('#btnNcDelete').on('click', function(){

@@ -1608,14 +1608,15 @@ function ia_nc_candidates(PDO $db, ?int $deptId, ?string $date, ?int $headId = 0
     $out['head']    = $heads;
     $out['auditee'] = $heads;
 
-    $scope = ia_unit_dept_scope($db, (int)$deptId);
-    if (!$scope) $scope = eg_dept_subtree_ids($db, (int)$deptId) ?: [(int)$deptId];
-
-    // 責任主管：以「受審查單位主管所在部門」為範圍；還沒指定主管時先用建議的那一位
-    $hid = (int)$headId;
-    if (!$hid) { $sug = ia_dept_head_asof($db, (int)$deptId, $date); $hid = (int)($sug['id'] ?? 0); }
-    $rDept = ia_person_dept_asof($db, $hid, $date, $scope);
-    if (!$rDept) $rDept = (int)$deptId;
+    /* 責任主管：2026-09-21 起「受審查單位主管」欄位已取消，候選就直接看**受稽核單位**。
+       （原本是先看受審查單位主管掛在哪個部門，那個欄位沒了就沒有推導的起點了。）
+       $headId 保留在簽名上只為了相容舊呼叫端，有送就仍以那個人的部門為準。 */
+    $rDept = (int)$deptId;
+    if ((int)$headId > 0) {
+        $scope = ia_unit_dept_scope($db, (int)$deptId);
+        if (!$scope) $scope = eg_dept_subtree_ids($db, (int)$deptId) ?: [(int)$deptId];
+        $rDept = ia_person_dept_asof($db, (int)$headId, $date, $scope) ?: (int)$deptId;
+    }
     $out['resp_dept_id']   = $rDept;
     $out['resp_dept_name'] = ia_dept_name_now($db, $rDept, '');
     $resp = ia_dept_heads_asof($db, $rDept, $date, true);
@@ -2121,6 +2122,19 @@ function ia_nc_is_backfill(array $nc, string $today): bool
     return $ad < date('Y-m-d', strtotime($today . ' -6 month'));
 }
 
+/**
+ * 責任主管簽核日期的合法範圍（2026-09-21 使用者指定）：
+ * **稽核日期起算一週內，算日曆日（含假日）**，也就是 [稽核日期, 稽核日期+7]。
+ * 「預防措施預計完成時間」刻意**沒有**這個限制（改善本來就可能排到很久以後）。
+ * 回 ['min'=>..., 'max'=>...]，稽核日期不合法時回空陣列＝不限制。
+ */
+function ia_nc_resp_date_range(array $nc): array
+{
+    $ad = (string)($nc['audit_date'] ?? '');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $ad)) return [];
+    return ['min' => $ad, 'max' => date('Y-m-d', strtotime($ad . ' +7 day'))];
+}
+
 /** 簽章日期的預設值：補資料的單一律用稽核日期，其餘用今天 */
 function ia_nc_sign_default(array $nc, string $today): string
 {
@@ -2212,7 +2226,13 @@ function ia_nc_stage_perm(PDO $db, array $nc, array $perms, int $uid): array
         'sec2'  => !$closed && ($isAdmin || $isAuditee || $isAuditor) && $sec2Open,   // 稽核員代填
         'sec2_admin' => !$closed && $isAdmin && !$sec2Open,   // 已送出，但管理員解鎖後仍可修正
         'sec2_locked_why' => $closed ? '本單已結案' : (!$sec2Open ? '已送出回覆，不可再更動' : ''),
-        'sec3'  => !$closed && ($isAdmin || $isAuditor) && $stage !== 'issued',
+        /* 段三送出驗證後一樣鎖定（2026-09-21 使用者要求，比照段二）：
+           stage 走到 verified／closed 就不給改，內稽管理員可另外解鎖修正。 */
+        'sec3'  => !$closed && ($isAdmin || $isAuditor) && $stage === 'replied',
+        'sec3_admin' => !$closed && $isAdmin && $stage === 'verified',
+        'sec3_locked_why' => $closed ? '本單已結案'
+                           : ($stage === 'issued' ? '要等受稽單位送出回覆'
+                           : ($stage === 'verified' ? '已送出驗證，不可再更動' : '')),
         'sec4'  => !$closed && $isAdmin,
         'proxy' => ($isAdmin || $isAuditor) && !$isAuditee,   // 這個人填段二算代填
         'close' => $isAdmin && $stage === 'verified',
