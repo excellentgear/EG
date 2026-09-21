@@ -96,6 +96,7 @@ if (is_null($permission_code)) {
 // 拿回寫入權，等於繞過那筆刻意設定的限制。沒有權限者畫面上完全看不到這兩個功能（連欄位都不長出來），
 // 後端也一律擋下（鐵律8）。
 require_once __DIR__ . '/../../src/common/role_features_helper.php';
+require_once __DIR__ . '/../../src/common/date_fmt_lib.php';   // 日期顯示一律 YYYY.MM.DD（ai-rules/20）
 $ocq_bind_perm      = oready_resolve_can_bind($pdo, $id);
 $ocq_can_bind_part  = !empty($ocq_bind_perm['part']);
 $ocq_can_bind_order = !empty($ocq_bind_perm['order']);
@@ -241,8 +242,8 @@ function ocq_fetch_processes($pdo, $bom_list) {
     $ph = implode(',', array_fill(0, count($bom_list), '?'));
     $sp = $pdo->prepare("
         SELECT bi.bom, bi.bom_sn, bi.process_no, pn.ProcessName,
-               DATE_FORMAT(bi.outsource_date,'%Y/%m/%d') AS outsource_date,
-               DATE_FORMAT(bi.return_date,'%Y/%m/%d') AS return_date,
+               DATE_FORMAT(bi.outsource_date,'%Y-%m-%d') AS outsource_date,
+               DATE_FORMAT(bi.return_date,'%Y-%m-%d') AS return_date,
                ml.maker_id AS maker_id
         FROM bom_ing bi
         INNER JOIN (
@@ -287,18 +288,39 @@ function ocq_fetch_prices($pdo, $bom_list) {
 // 只看 map 會把舊資料判成未綁定，只看 o_order_id 會漏掉一對多的新資料。這支是唯一判定點，
 // 畫面清單、開跳窗前的即時檢查、送出時的守門一律呼叫它，避免三個地方各寫一套而走鐘。
 
-/** 批次撈這一頁 BOM 的訂單綁定狀態。回傳 [bom => ['orders'=>[...], 'stock'=>bool, 'legacy'=>訂單編號或null]] */
+/**
+ * 批次撈這一頁 BOM 的訂單綁定狀態。
+ * 回傳 [bom => ['orders'=>[...], 'stock'=>bool, 'legacy'=>訂單編號或null, 'legacy_deliv'=>交期或null]]
+ * 訂單的交期一併帶回來——**清單的「交期」欄要用它**：`bom.Delivery_date` 是「手動交期」，
+ * 已結案的 11,524 筆裡有 11,272 筆（97.8%）是空的，只看那一欄整欄都會是空白（使用者回報的症狀）；
+ * 比照 BOM 總表的規則＝手動交期優先，沒有就用綁定訂單的交期。
+ */
 function ocq_bind_map($pdo, $bom_list, $rows_by_bom = []) {
     if (!$bom_list) return [];
-    $ph  = implode(',', array_fill(0, count($bom_list), '?'));
     $out = [];
-    $st = $pdo->prepare("SELECT m.bom, m.order_id, m.allocated_qty, ot.Order_oo
-        FROM bom_order_process_map m LEFT JOIN order_track ot ON ot.Order_id = m.order_id
-        WHERE m.bom IN ($ph) ORDER BY m.id");
-    $st->execute($bom_list);
+    // 列印／匯出是「全部符合條件」的上萬列，用 IN 會塞上萬個參數；分配表全表才 2,297 筆，
+    // 量大時直接整張撈回來在 PHP 端取交集反而又快又簡單。
+    $big = (count($bom_list) > 800);
+    if ($big) {
+        $want = array_flip($bom_list);
+        $st = $pdo->query("SELECT m.bom, m.order_id, m.allocated_qty, ot.Order_oo,
+                DATE_FORMAT(ot.Delivery_date,'%Y-%m-%d') AS deliv
+            FROM bom_order_process_map m LEFT JOIN order_track ot ON ot.Order_id = m.order_id
+            ORDER BY m.id");
+    } else {
+        $ph = implode(',', array_fill(0, count($bom_list), '?'));
+        $st = $pdo->prepare("SELECT m.bom, m.order_id, m.allocated_qty, ot.Order_oo,
+                DATE_FORMAT(ot.Delivery_date,'%Y-%m-%d') AS deliv
+            FROM bom_order_process_map m LEFT JOIN order_track ot ON ot.Order_id = m.order_id
+            WHERE m.bom IN ($ph) ORDER BY m.id");
+        $st->execute($bom_list);
+        $want = null;
+    }
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $m) {
+        if ($want !== null && !isset($want[$m['bom']])) continue;
         $out[$m['bom']]['orders'][] = ['order_id' => (int)$m['order_id'],
-            'order_oo' => $m['Order_oo'] ?: ('#' . $m['order_id']), 'qty' => (int)$m['allocated_qty']];
+            'order_oo' => $m['Order_oo'] ?: ('#' . $m['order_id']), 'qty' => (int)$m['allocated_qty'],
+            'deliv' => $m['deliv'] ?: null];
     }
     // 舊資料：map 沒有列、但 bom.o_order_id 有值。'B'＝備庫（不是未綁定，比照 BOM總表不給綁定鈕）；
     // 其餘是訂單 PK，要反查訂單編號才看得懂（只查這一頁真的用得到的那幾個，不是整批 JOIN）。
@@ -311,15 +333,49 @@ function ocq_bind_map($pdo, $bom_list, $rows_by_bom = []) {
     }
     if ($legacy_ids) {
         $lp = implode(',', array_fill(0, count($legacy_ids), '?'));
-        $sl = $pdo->prepare("SELECT Order_id, Order_oo FROM order_track WHERE Order_id IN ($lp)");
+        $sl = $pdo->prepare("SELECT Order_id, Order_oo, DATE_FORMAT(Delivery_date,'%Y-%m-%d') AS deliv
+            FROM order_track WHERE Order_id IN ($lp)");
         $sl->execute(array_keys($legacy_ids));
         $oo = [];
-        foreach ($sl->fetchAll(PDO::FETCH_ASSOC) as $r) $oo[(string)$r['Order_id']] = $r['Order_oo'];
+        foreach ($sl->fetchAll(PDO::FETCH_ASSOC) as $r) $oo[(string)$r['Order_id']] = $r;
         foreach ($legacy_ids as $oid => $boms) {
-            foreach ($boms as $b) $out[$b]['legacy'] = $oo[(string)$oid] ?: ('#' . $oid);
+            $r = $oo[(string)$oid] ?? null;
+            foreach ($boms as $b) {
+                $out[$b]['legacy']       = ($r && $r['Order_oo']) ? $r['Order_oo'] : ('#' . $oid);
+                $out[$b]['legacy_deliv'] = ($r && $r['deliv']) ? $r['deliv'] : null;
+            }
         }
     }
     return $out;
+}
+
+/**
+ * 算出每一列真正要顯示的交期，並掛回 $rows（清單／列印／CSV 共用同一份判定，不要各算一次）。
+ * 規則比照 BOM 總表：`bom.Delivery_date`（手動交期）優先，沒有才用綁定訂單的交期；
+ * 一筆 BOM 綁到多張訂單時交期可能不只一個，全部列出（畫面上下分行，不要串成一行）。
+ */
+function ocq_attach_delivery(&$rows, $bind_map) {
+    foreach ($rows as &$r) {
+        $manual = trim((string)($r['Delivery_date'] ?? ''));
+        if ($manual !== '' && $manual !== '0000-00-00') {
+            $r['deliv_src']  = 'manual';
+            $r['deliv_list'] = [['date' => $manual, 'order_oo' => null]];
+            continue;
+        }
+        $r['deliv_src'] = ''; $r['deliv_list'] = [];
+        $bi = $bind_map[$r['bom']] ?? [];
+        $seen = [];
+        foreach (($bi['orders'] ?? []) as $o) {
+            if (!$o['deliv'] || isset($seen[$o['deliv']])) continue;
+            $seen[$o['deliv']] = 1;
+            $r['deliv_list'][] = ['date' => $o['deliv'], 'order_oo' => $o['order_oo']];
+        }
+        if (!$r['deliv_list'] && !empty($bi['legacy_deliv'])) {
+            $r['deliv_list'][] = ['date' => $bi['legacy_deliv'], 'order_oo' => $bi['legacy'] ?? null];
+        }
+        if ($r['deliv_list']) $r['deliv_src'] = 'order';
+    }
+    unset($r);
 }
 
 /** 單筆 BOM 的即時綁定狀態（開跳窗前與送出時都用它重新查一次＝點開即刷新鐵則）。 */
@@ -368,6 +424,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $bom_list = array_column($rows, 'bom');
             list($proc_map,) = ocq_fetch_processes($pdo, $bom_list);
             $price_map = ocq_fetch_prices($pdo, $bom_list);
+            $rows_by_bom = []; foreach ($rows as $r0) $rows_by_bom[$r0['bom']] = $r0;
+            ocq_attach_delivery($rows, ocq_bind_map($pdo, $bom_list, $rows_by_bom));
 
             header('Content-Type: text/csv; charset=utf-8');
             header('Content-Disposition: attachment; filename="completed_bom_' . date('YmdHis') . '.csv"');
@@ -376,7 +434,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             fputcsv($out, ['客戶', 'BOM', '料號', '數量', '交期', '業務', '優先權', '結案人', '結案時間', '加工總單價', '製程明細']);
             foreach ($rows as $r) {
                 $priLabel = $r['priority_type'] === 'E' ? '特急件' : ($r['priority_type'] === 'U' ? '急件' : '一般');
-                $closedTxt = $r['date_is_derived'] ? ($r['effective_date'] . '（依BOM編號推算，非實際結案時間）') : $r['closed_at'];
+                $closedTxt = $r['date_is_derived']
+                    ? (eg_fmt_date($r['effective_date']) . '（依BOM編號推算，非實際結案時間）')
+                    : eg_fmt_date($r['closed_at'], true);
                 $procs = $proc_map[$r['bom']] ?? [];
                 $bomPrices = $price_map[$r['bom']] ?? [];
                 $total = 0;
@@ -385,10 +445,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $pi = $bomPrices[$p['bom_sn']] ?? null;
                     $pv = $pi ? (floatval($pi['modified_unit_price']) ?: floatval($pi['price'])) : 0;
                     if ($pv > 0) $total += $pv;
-                    $procTxt[] = trim(($p['ProcessName'] ?: $p['process_no']) . '(' . ($p['maker_id'] ?: '') . ($p['return_date'] ? '/回廠:' . $p['return_date'] : '') . ')');
+                    $procTxt[] = trim(($p['ProcessName'] ?: $p['process_no']) . '(' . ($p['maker_id'] ?: '')
+                        . ($p['return_date'] ? '/' . eg_fmt_date($p['return_date']) . ' 回' : '') . ')');
                 }
+                $delivTxt = [];
+                foreach ($r['deliv_list'] as $d) $delivTxt[] = eg_fmt_date($d['date']);
                 fputcsv($out, [
-                    $r['client_name_display'], $r['bom'], $r['d_id'], $r['Qty'], $r['Delivery_date'],
+                    $r['client_name_display'], $r['bom'], $r['d_id'], $r['Qty'], implode(' / ', $delivTxt),
                     $r['sales_name'], $priLabel, $r['closed_by_name'], $closedTxt,
                     $total > 0 ? $total : '', implode('; ', $procTxt),
                 ]);
@@ -640,11 +703,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             list($proc_map, $max_count) = ocq_fetch_processes($pdo, $bom_list);
             $price_map = ocq_fetch_prices($pdo, $bom_list);
             list($file_map, $cache_stale) = ocq_bom_file_map($bom_list);
-            // 訂單綁定狀態只在「畫面清單」這條路上撈（最多 50 列）；列印／匯出刻意不帶，
-            // 那兩條路一次要處理上萬列，多一組查詢沒有意義也只會變慢。
+            // 訂單綁定狀態一律撈（不再只在有綁定權限時）——**交期欄要靠它**：手動交期九成七是空的，
+            // 真正的交期在綁定訂單上。有沒有綁定權限只影響「綁定」那一欄畫不畫得出來。
             $rows_by_bom = [];
             foreach ($rows as $r0) $rows_by_bom[$r0['bom']] = $r0;
-            $bind_map = ($ocq_can_bind_part || $ocq_can_bind_order) ? ocq_bind_map($pdo, $bom_list, $rows_by_bom) : [];
+            $bind_map = ocq_bind_map($pdo, $bom_list, $rows_by_bom);
+            ocq_attach_delivery($rows, $bind_map);
             foreach ($rows as &$row) {
                 $row['processes'] = $proc_map[$row['bom']] ?? [];
                 $row['has_file']  = $file_map[$row['bom']] ?? null;   // true/false；null＝快取還沒建好、無法判定
@@ -668,6 +732,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $bom_list = array_column($rows, 'bom');
             list($proc_map, $max_count) = ocq_fetch_processes($pdo, $bom_list);
             $price_map = ocq_fetch_prices($pdo, $bom_list);
+            $rows_by_bom = []; foreach ($rows as $r0) $rows_by_bom[$r0['bom']] = $r0;
+            ocq_attach_delivery($rows, ocq_bind_map($pdo, $bom_list, $rows_by_bom));
             foreach ($rows as &$row) { $row['processes'] = $proc_map[$row['bom']] ?? []; }
             unset($row);
 
@@ -908,6 +974,9 @@ try {
         .ocq-bind-btn.is-wait { opacity: .6; }
         .ocq-bind-ok { font-size: 11px; line-height: 16px; color: #2f7a3f; margin: 1px 0;
             max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+        /* 綁多張訂單時第二張起各自一行（line-height 一定要自己寫，見 [[td_span_line_height_trap]]） */
+        .ocq-bind-more { font-size: 11px; line-height: 16px; padding-left: 14px;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .ocq-bind-no { font-size: 11px; line-height: 16px; color: #b0a08a; margin: 1px 0; }
         .ocq-bind-box { background: #fff; border-radius: 8px; width: 760px; max-width: 94vw; margin: 50px auto;
             box-shadow: 0 5px 25px rgba(0,0,0,.3); max-height: 84vh; display: flex; flex-direction: column; }
@@ -1230,10 +1299,13 @@ function bindCellHtml(item){
     if (item.is_stock) {
         h += '<div class="ocq-bind-ok" title="備庫（bom.o_order_id = B），本來就沒有對應訂單"><i class="fa fa-archive"></i> 備庫</div>';
     } else if (hasOrder) {
-        var lbl = orders.length
-            ? orders.map(function(o){ return o.order_oo + (o.qty > 0 ? '×' + o.qty : ''); }).join('、')
-            : item.legacy_order;
-        h += '<div class="ocq-bind-ok" title="已綁定訂單：'+esc(lbl)+'"><i class="fa fa-chain"></i> '+esc(lbl)+'</div>';
+        // 多張訂單一律上下分行（使用者要求）——串成一行時訂單編號會連在一起，根本分不出是幾張單
+        var lines = orders.length
+            ? orders.map(function(o){ return o.order_oo + (o.qty > 0 ? '×' + o.qty : ''); })
+            : [item.legacy_order];
+        h += '<div class="ocq-bind-ok" title="已綁定訂單：'+esc(lines.join('、'))+'"><i class="fa fa-chain"></i> '
+           + lines.map(function(t, i){ return (i === 0 ? '' : '<div class="ocq-bind-more">') + esc(t) + (i === 0 ? '' : '</div>'); }).join('')
+           + '</div>';
     } else if (OCQ_BIND.order) {
         var needPart = !hasPart;
         h += '<div><button type="button" class="ocq-bind-btn ocq-bind-order'+(needPart?' is-wait':'')+'" data-bom="'+esc(item.bom)+'"'
@@ -1245,12 +1317,28 @@ function bindCellHtml(item){
     return h;
 }
 
+// 交期欄：`bom.Delivery_date`（手動交期）優先，沒有就用綁定訂單的交期（判定在後端 ocq_attach_delivery，
+// 這裡只負責畫）。已結案的 BOM 有 97.8% 沒有手動交期，所以只看那一欄整欄都會是空白。
+// 一筆 BOM 綁到多張交期不同的訂單時上下分行，不要串成一行。
+function delivCellHtml(item){
+    var list = item.deliv_list || [];
+    if (!list.length) return '';
+    return list.map(function(d){
+        var t = esc(egFmtDate(d.date));
+        if (item.deliv_src === 'order') {
+            t = '<span title="取自綁定訂單 ' + esc(d.order_oo || '') + ' 的交期（本筆 BOM 沒有填手動交期）" '
+              + 'style="border-bottom:1px dotted #D8BE93;">' + t + '</span>';
+        }
+        return '<div>' + t + '</div>';
+    }).join('');
+}
+
 function rowToTr(item, maxProc, priceMap){
     var cc = item.priority_type==='E' ? 'circle_red' : (item.priority_type==='U' ? 'circle_y' : 'circle_green');
     var closedInfo = '<div class="ocq-sub">' + (item.closed_by_name ? '結：'+esc(item.closed_by_name)+'　' : '')
         + (item.date_is_derived == 1 || item.date_is_derived === true
             ? '<span title="無結案時間紀錄，依BOM編號推算">'+esc(egFmtDate(item.effective_date))+'(推算)</span>'
-            : esc(item.closed_at))
+            : esc(egFmtDate(item.closed_at, true)))
         + '</div>';
     var bomPrices = (priceMap && priceMap[item.bom]) || {};
     var totalUnitPrice = 0, noPriceCount = 0;
@@ -1282,7 +1370,7 @@ function rowToTr(item, maxProc, priceMap){
     var bindTd = OCQ_CAN_BIND ? '<td class="ocq-bind-td" data-bom="'+esc(item.bom)+'">'+bindCellHtml(item)+'</td>' : '';
     var tds = custTd + bomTd + didTd + bindTd
         + '<td>'+esc(item.Qty||'')+'</td>'
-        + '<td>'+esc(item.Delivery_date ? egFmtDate(item.Delivery_date) : '')+'</td>'
+        + '<td class="ocq-nowrap">'+delivCellHtml(item)+'</td>'
         + '<td>'+esc(item.sales_name||'')+'</td>';
     var procs = item.processes || [];
     for (var i=0; i<maxProc; i++){
@@ -1291,8 +1379,9 @@ function rowToTr(item, maxProc, priceMap){
         var pi = bomPrices[String(p.bom_sn)] || null;
         var pv = pi ? (parseFloat(pi.modified_unit_price) || parseFloat(pi.price) || 0) : 0;
         var cell = '<div>'+esc((p.process_no||'')+(p.ProcessName?' '+p.ProcessName:''))+'</div>';
-        if (p.outsource_date || p.maker_id) cell += '<small style="color:#888;">'+esc((p.outsource_date||'')+(p.maker_id?' '+p.maker_id:''))+'</small>';
-        if (p.return_date) cell += '<div style="color:#2a7ae2;font-weight:bold;">回廠:'+esc(p.return_date)+'</div>';
+        if (p.outsource_date || p.maker_id) cell += '<small style="color:#888;">'+esc((p.outsource_date?egFmtDate(p.outsource_date):'')+(p.maker_id?' '+p.maker_id:''))+'</small>';
+        // 回廠日依使用者指定寫成「日期 回」（日期在前），不是「回廠:日期」
+        if (p.return_date) cell += '<div style="color:#2a7ae2;font-weight:bold;">'+esc(egFmtDate(p.return_date))+' 回</div>';
         if (pv > 0) cell += '<div style="color:#0a6;font-size:10px;">$'+fmtPrice(pv)+'</div>';
         tds += '<td class="t-left">'+cell+'</td>';
     }
@@ -1753,15 +1842,15 @@ $('#btnPrint').on('click', function(){
         body += '</tr></thead><tbody>';
         res.rows.forEach(function(r){
             var priLabel = r.priority_type==='E' ? '特急件' : (r.priority_type==='U' ? '急件' : '一般');
-            var closedTxt = (r.date_is_derived == 1) ? (esc(egFmtDate(r.effective_date))+'(推算)') : esc(r.closed_at||'');
+            var closedTxt = (r.date_is_derived == 1) ? (esc(egFmtDate(r.effective_date))+'(推算)') : esc(egFmtDate(r.closed_at, true));
             body += '<tr><td>'+esc(r.client_name_display||'')+'</td><td class="tl">'+esc(r.bom)+'（'+priLabel+'）</td>'
                   + '<td class="tl">'+esc(r.d_id||'')+'</td><td>'+esc(r.Qty||'')+'</td>'
-                  + '<td>'+esc(r.Delivery_date?egFmtDate(r.Delivery_date):'')+'</td><td>'+esc(r.sales_name||'')+'</td>'
+                  + '<td>'+(r.deliv_list||[]).map(function(d){return esc(egFmtDate(d.date));}).join('<br>')+'</td><td>'+esc(r.sales_name||'')+'</td>'
                   + '<td>'+closedTxt+'</td>';
             var procs = r.processes || [];
             for (var pi=0; pi<maxProc; pi++){
                 var p = procs[pi];
-                body += '<td class="tl">' + (p ? esc((p.process_no||'')+(p.ProcessName?' '+p.ProcessName:'')+(p.maker_id?'/'+p.maker_id:'')+(p.return_date?'/回廠:'+p.return_date:'')) : '') + '</td>';
+                body += '<td class="tl">' + (p ? esc((p.process_no||'')+(p.ProcessName?' '+p.ProcessName:'')+(p.maker_id?'/'+p.maker_id:'')+(p.return_date?'/'+egFmtDate(p.return_date)+' 回':'')) : '') + '</td>';
             }
             body += '</tr>';
         });
@@ -1862,7 +1951,7 @@ $('#btnSummary').on('click', function(){
             if (!r) return '<p style="color:#888;font-size:12px;">（無合格結案紀錄可統計——目前篩選結果中沒有具備真實結案時間的BOM）</p>';
             return '<table class="p-tb"><thead><tr><th>BOM</th><th>客戶</th><th>結案日期</th><th>結案耗時</th></tr></thead><tbody>'
                 + '<tr><td class="tl">'+esc(r.bom)+'</td><td class="tl">'+esc(r.client_name_display||'')+'</td>'
-                + '<td>'+esc(r.closed_at||'')+'</td><td>'+r.duration_days+' 天</td></tr></tbody></table>';
+                + '<td>'+esc(egFmtDate(r.closed_at, true))+'</td><td>'+r.duration_days+' 天</td></tr></tbody></table>';
         }
         var maxProcTxt = '';
         if (res.max_record && res.max_record.processes && res.max_record.processes.length){
