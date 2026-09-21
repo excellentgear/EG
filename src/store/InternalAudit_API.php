@@ -1494,6 +1494,12 @@ case 'nc_get': {
        一起在這裡回傳，開單時就不必再多打一支 API；換了主管才用 nc_cands 重算責任主管那一份。 */
     $n['cands'] = ia_nc_candidates($db, (int)($n['dept_id'] ?? 0),
                                    (string)($n['audit_date'] ?? ''), (int)($n['head_id'] ?? 0));
+    /* 補資料的單：簽章日期預設成稽核日期而不是今天（2026-09-21 使用者要求） */
+    $n['is_backfill']  = ia_nc_is_backfill($n, $today) ? 1 : 0;
+    $n['sign_default'] = ia_nc_sign_default($n, $today);
+    $lead = ia_year_leader($db, (int)($n['year'] ?? 0), (int)($n['case_id'] ?? 0));
+    $n['suggest_leader'] = $lead;                       // 該年度稽核小組的組長
+    $n['suggest_mgr']    = ia_mgmt_rep($db);            // 全站設定的管理代表
     $st = $db->prepare("SELECT * FROM ia_nc_log WHERE nc_id=? ORDER BY log_id");
     $st->execute([$id]);
     $n['logs'] = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -1670,7 +1676,9 @@ case 'nc_save_sec2': {
     $st->execute([$id]); $n = $st->fetch(PDO::FETCH_ASSOC);
     if (!$n) jerr('找不到這張不符合通知單', 404);
     $sp = ia_nc_stage_perm($db, $n, $perms, $uid);
-    if (!$sp['sec2']) jerr('您沒有填寫受稽單位回覆區的權限（或本單已結案）', 403);
+    if (!$sp['sec2'] && !$sp['sec2_admin'])
+        jerr($sp['sec2_locked_why'] ? ('受稽單位回覆區已鎖定：' . $sp['sec2_locked_why'] . '（如需修正請洽內稽管理員）')
+                                    : '您沒有填寫受稽單位回覆區的權限', 403);
 
     $submit = !empty($_POST['submit']);
     $cause  = trim((string)($_POST['cause'] ?? ''));
@@ -1715,8 +1723,10 @@ case 'nc_save_sec2': {
     $headNote = array_key_exists('head_note', $_POST)
               ? (trim((string)$_POST['head_note']) ?: null)
               : ($n['head_note'] ?? null);
-    $headDate = iaDate($_POST['head_date'] ?? '') ?: $today;
-    $respDate = iaDate($_POST['resp_date'] ?? '') ?: $today;
+    /* 補資料的單（稽核日期已是半年前）簽章日期一律預設成稽核日期，不可以是今天（使用者要求） */
+    $signDef  = ia_nc_sign_default($n, $today);
+    $headDate = iaDate($_POST['head_date'] ?? '') ?: $signDef;
+    $respDate = iaDate($_POST['resp_date'] ?? '') ?: $signDef;
 
     $db->beginTransaction();
     try {
@@ -1763,14 +1773,20 @@ case 'nc_save_sec3': {
         if ($desc === '') jerr('請填糾正和預防措施執行狀況驗證描述');
         if ($res === '')  jerr('請選擇驗證結果（通過／不通過）');
     }
-    $ld = iaDate($_POST['leader_date'] ?? '') ?: $today;
+    $ld = iaDate($_POST['leader_date'] ?? '') ?: ia_nc_sign_default($n, $today);
+    /* 稽核組長＝**該年度稽核小組設定的組長**，不是按下驗證按鈕的人（2026-09-21 使用者要求）。
+       原本直接寫 $uid，管理員或稽核員代填時紙本上的組長就變成代填的人。
+       小組沒設、通知單上也沒登記時才退回操作者（至少不會留空白）。 */
+    $lead   = ia_year_leader($db, (int)($n['year'] ?? 0), (int)($n['case_id'] ?? 0));
+    $ldId   = $lead ? (int)$lead['id']   : ((int)($n['leader_id'] ?? 0) ?: $uid);
+    $ldName = $lead ? (string)$lead['name'] : ((string)($n['leader_name'] ?? '') ?: $uname);
     $db->beginTransaction();
     try {
         $db->prepare("UPDATE ia_nc SET verify_desc=?, verify_result=?, close_note=?,
                           leader_id=?, leader_name=?, leader_date=?, updated_at=NOW() WHERE nc_id=?")
            ->execute([$desc ?: null, $res ?: null,
                       mb_substr(trim((string)($_POST['close_note'] ?? '')), 0, 300) ?: null,
-                      $uid, $uname, $ld, $id]);
+                      $ldId, $ldName, $ld, $id]);
         if ($submit) {
             if ($res === 'fail') {
                 // 驗證不通過＝退回受稽單位重填
@@ -1804,12 +1820,17 @@ case 'nc_save_sec4': {
     $close = !empty($_POST['close']);
     if ($close && $n['stage'] !== 'verified') jerr('要先由稽核組長完成驗證才能結案');
     $note = trim((string)($_POST['mgr_note'] ?? ''));
-    $md   = iaDate($_POST['mgr_date'] ?? '') ?: $today;
+    $md   = iaDate($_POST['mgr_date'] ?? '') ?: ia_nc_sign_default($n, $today);
+    /* 管理代表＝**全站組織角色綁定的那一位**（org_role_setting.php 的 mgmt_rep），
+       不是按下結案按鈕的人（2026-09-21 使用者要求）。沒綁定才退回操作者。 */
+    $rep     = ia_mgmt_rep($db);
+    $repId   = $rep ? (int)$rep['id']   : $uid;
+    $repName = $rep ? (string)$rep['name'] : $uname;
     $db->beginTransaction();
     try {
         $db->prepare("UPDATE ia_nc SET mgr_note=?, mgr_id=?, mgr_name=?, mgr_date=?,
                           stage=IF(?=1,'closed',stage), updated_at=NOW() WHERE nc_id=?")
-           ->execute([$note ?: null, $uid, $uname, $md, $close ? 1 : 0, $id]);
+           ->execute([$note ?: null, $repId, $repName, $md, $close ? 1 : 0, $id]);
         ia_nc_log_add($db, $id, $close ? 'closed' : (string)$n['stage'],
                       $close ? 'close' : 'edit', $uid, $uname, $close ? '管理代表結案' : '填寫管理代表意見');
         $db->commit();

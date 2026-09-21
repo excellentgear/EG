@@ -2059,6 +2059,74 @@ function ia_case_reopen(PDO $db, int $caseId, int $uid, string $uname): array
     return ['status' => 'draft'];
 }
 
+
+/* ============================ 不符合通知單：自動解析簽核人與日期 ============================ */
+
+/**
+ * 這一年的稽核組長（2026-09-21 使用者要求）。
+ * **不可以拿「按下驗證按鈕的人」當組長**——原本 nc_save_sec3 直接把 $uid 寫進 leader_id，
+ * 管理員或稽核員代填時，紙本上的稽核組長就變成代填的那個人。
+ * 取法：①該年度稽核小組（ia_team_member role=leader）②退回該張稽核通知單上登記的組長
+ * 兩個都查不到才回 null，由呼叫端決定要不要退回操作者。
+ */
+function ia_year_leader(PDO $db, int $year, int $caseId = 0): ?array
+{
+    if ($year > 0) {
+        try {
+            foreach (ia_team_get($db, $year) as $m) {
+                if ((string)($m['role'] ?? '') === 'leader' && (int)($m['user_id'] ?? 0) > 0) {
+                    return ['id' => (int)$m['user_id'], 'name' => (string)($m['user_name'] ?? ''),
+                            'src' => 'team'];
+                }
+            }
+        } catch (Throwable $e) {}
+    }
+    if ($caseId > 0) {
+        try {
+            $st = $db->prepare("SELECT leader_id, leader_name FROM ia_case WHERE case_id=?");
+            $st->execute([$caseId]);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+            if ($r && (int)$r['leader_id'] > 0) {
+                return ['id' => (int)$r['leader_id'], 'name' => (string)$r['leader_name'], 'src' => 'case'];
+            }
+        } catch (Throwable $e) {}
+    }
+    return null;
+}
+
+/**
+ * 管理代表（2026-09-21 使用者要求：抓全站設定的那一位，不是按下按鈕的人）。
+ * 唯一設定處＝組織角色綁定 org_role_setting.php 的 `mgmt_rep`，禁止在本模組另存一份。
+ */
+function ia_mgmt_rep(PDO $db): ?array
+{
+    try {
+        $u = eg_org_user($db, 'mgmt_rep');
+        if ($u && (int)($u['id'] ?? 0) > 0) {
+            return ['id' => (int)$u['id'], 'name' => (string)($u['user_cname'] ?? '')];
+        }
+    } catch (Throwable $e) {}
+    return null;
+}
+
+/**
+ * 這張單是不是「補資料」（稽核日期已經是半年以前）。
+ * 2026-09-21 使用者要求：補舊單時各欄簽章日期**不可以預設成今天**——
+ * 今天的日期看起來像真的那天簽的，補一整批舊單很容易就這樣簽下去，紙本與系統從此對不起來。
+ */
+function ia_nc_is_backfill(array $nc, string $today): bool
+{
+    $ad = (string)($nc['audit_date'] ?? '');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $ad)) return false;
+    return $ad < date('Y-m-d', strtotime($today . ' -6 month'));
+}
+
+/** 簽章日期的預設值：補資料的單一律用稽核日期，其餘用今天 */
+function ia_nc_sign_default(array $nc, string $today): string
+{
+    return ia_nc_is_backfill($nc, $today) ? (string)$nc['audit_date'] : $today;
+}
+
 /* ============================ 不符合通知單：分段權限 ============================ */
 
 /**
@@ -2098,10 +2166,17 @@ function ia_nc_stage_perm(PDO $db, array $nc, array $perms, int $uid): array
     $isAuditee = ($uid > 0 && ((int)($nc['auditee_id'] ?? 0) === $uid
                  || (int)($nc['head_id'] ?? 0) === $uid || (int)($nc['resp_id'] ?? 0) === $uid || $inDept));
 
+    /* 段二在「送出回覆」之後一律鎖起來（2026-09-21 使用者要求：送出後沒被鎖定，會意外改到）。
+       ——全頁改成自動暫存之後這件事更要緊：沒鎖的話，滑鼠不小心點進去打一個字就被存下去了。
+       退回重提（驗證不通過）時 stage 會被改回 issued，那時自然又打得開。
+       內稽管理員仍留一條路（sec2_admin）：紙本補錯字還是要有人改得了，
+       但**畫面預設是鎖住的**，要按「解鎖修改」才動得了，不會誤觸。 */
+    $sec2Open = in_array($stage, ['issued'], true);
     return [
         'sec1'  => !$closed && ($isAdmin || $isAuditor),
-        'sec2'  => !$closed && ($isAdmin || $isAuditee || $isAuditor)   // 稽核員代填
-                   && in_array($stage, ['issued', 'replied', 'verified'], true),
+        'sec2'  => !$closed && ($isAdmin || $isAuditee || $isAuditor) && $sec2Open,   // 稽核員代填
+        'sec2_admin' => !$closed && $isAdmin && !$sec2Open,   // 已送出，但管理員解鎖後仍可修正
+        'sec2_locked_why' => $closed ? '本單已結案' : (!$sec2Open ? '已送出回覆，不可再更動' : ''),
         'sec3'  => !$closed && ($isAdmin || $isAuditor) && $stage !== 'issued',
         'sec4'  => !$closed && $isAdmin,
         'proxy' => ($isAdmin || $isAuditor) && !$isAuditee,   // 這個人填段二算代填
