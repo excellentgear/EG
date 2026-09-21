@@ -39,7 +39,8 @@ $action = $_POST['action'] ?? $_GET['action'] ?? '';
    各動作自己的寫入權限（決策／裁示／扣款／補登）仍在下面逐一再擋一次。 */
 $ORDER_SCOPED = ['get', 'save_head', 'save_cause', 'round_add', 'round_reply', 'round_cancel',
                  'save_disposition', 'save_gm', 'deduct_preview', 'deduct_autofill', 'deduct_save',
-                 'deduct_sign', 'deduct_approve', 'owner_sign', 'close', 'reopen', 'sign_set'];
+                 'deduct_sign', 'deduct_approve', 'owner_sign', 'close', 'reopen', 'sign_set',
+                 'bom_bind', 'bom_processes', 'bom_candidates', 'sign_candidates'];
 if (!$perms['canView']) {
     $oidGuard = (int)($_POST['id'] ?? $_GET['id'] ?? 0);
     $ok = in_array($action, $ORDER_SCOPED, true) && $oidGuard > 0 && qab_can_view_order($db, $perms, $oidGuard);
@@ -87,8 +88,9 @@ case 'list': {
         'closed' => $_GET['closed'] ?? '',
         'source' => $_GET['source'] ?? '',
         'kw'     => trim((string)($_GET['kw'] ?? '')),
+        'deleted'=> (!empty($_GET['deleted']) && $perms['canAdmin']) ? 1 : 0,
     ]);
-    jout(true, ['rows' => $rows, 'perms' => $perms]);
+    jout(true, ['rows' => $rows, 'perms' => $perms, 'years' => qab_years($db)]);
 }
 
 /* ═══════════ 開單 ═══════════ */
@@ -280,6 +282,18 @@ case 'save_head': {
         $put('responsible_vendor_id', $vendorId);
         $put('resp_is_internal', $isInternal);
         $put('responsible_unit', $respUnit !== '' ? $respUnit : null);
+        /* 廠商本來是由「製令的那一站」自動帶出來的；人工改成別家時要留下標記，
+           畫面與列印才看得出這一格不是系統帶的（使用者要求：需在旁註記是否為手動修改）。 */
+        $autoVendor = null;
+        if ($procNo !== null) {
+            foreach (qab_bom_processes($db, $o['bom_list']) as $pr) {
+                if ((int)$pr['process_no'] === (int)$procNo && $pr['vendor_id']) { $autoVendor = (string)$pr['vendor_id']; break; }
+            }
+        }
+        $put('resp_vendor_manual', ($vendorId !== null && $autoVendor !== null && (string)$vendorId !== $autoVendor) ? 1 : 0);
+        $inBom = false;
+        foreach (qab_bom_processes($db, $o['bom_list']) as $pr) if ((int)$pr['process_no'] === (int)$procNo) { $inBom = true; break; }
+        $put('resp_process_manual', ($procNo !== null && !$inBom) ? 1 : 0);
     }
     $put('updated_by', $uid);
 
@@ -347,90 +361,122 @@ case 'round_add': {
     $o = $mustOrder((int)($_POST['id'] ?? 0));
     if (!qab_can_edit_form($db, $perms, $o) && !$perms['canDecide']) jerr('沒有送出徵詢的權限');
     $id = (int)$o['id'];
-    foreach ($o['rounds'] as $r) if (($r['status'] ?? '') !== 'Returned') jerr('上一個單位還沒回覆，收到回覆之後才決定下一個要送誰（可先取消未回覆的那一輪）');
 
-    $deptId = (int)($_POST['dept_id'] ?? 0);
-    $userId = (int)($_POST['user_id'] ?? 0);
-    $posId  = (int)($_POST['position_id'] ?? 0);
-    if ($deptId <= 0) jerr('請選擇要徵詢的部門');
-    $c = $db->prepare("SELECT name FROM department WHERE id=?"); $c->execute([$deptId]);
-    $deptName = (string)$c->fetchColumn();
-    if ($deptName === '') jerr('選擇的部門不存在');
-
-    // 指定人員時必須真的在這個部門（前端已擋，後端同規則再擋一次）
-    if ($userId > 0) {
-        $c = $db->prepare("SELECT 1 FROM user_department_position_map WHERE user_id=? AND department_id=? LIMIT 1");
-        $c->execute([$userId, $deptId]);
-        if (!$c->fetchColumn()) jerr('指定的人員不屬於這個部門');
+    /* 使用者定調：可以一次勾好幾個部門同時送出（原本是一次一個、回覆後才能送下一個）。
+       items = [{dept_id, position_ids:[], user_id}]；補登時每一列再帶 replied_by / replied_on / reply_content。 */
+    $items = json_decode((string)($_POST['items'] ?? '[]'), true);
+    if (!is_array($items) || !$items) {
+        // 相容舊呼叫端（單筆）
+        $items = [['dept_id' => (int)($_POST['dept_id'] ?? 0), 'user_id' => (int)($_POST['user_id'] ?? 0),
+                   'position_ids' => array_filter([(int)($_POST['position_id'] ?? 0)]),
+                   'replied_by' => (int)($_POST['replied_by'] ?? 0),
+                   'replied_on' => trim((string)($_POST['replied_on'] ?? '')),
+                   'reply_content' => trim((string)($_POST['reply_content'] ?? ''))]];
     }
-    // 指定職稱時：該部門裡有沒有這個職稱的人
-    $posName = '';
-    if ($userId <= 0 && $posId > 0) {
-        $c = $db->prepare("SELECT name FROM position WHERE id=?"); $c->execute([$posId]);
-        $posName = (string)$c->fetchColumn();
-        if ($posName === '') jerr('選擇的職稱不存在');
-        $c = $db->prepare("SELECT COUNT(*) FROM user_department_position_map m JOIN `user` u ON u.id=m.user_id
-                           WHERE m.department_id=? AND m.position_id=? AND u.state=1");
-        $c->execute([$deptId, $posId]);
-        if ((int)$c->fetchColumn() === 0) jerr('這個部門目前沒有在職的「' . $posName . '」，請改指定人員');
-    }
-
-    // 補資料：直接把「當時誰回了什麼、哪一天回的」補進去，不發通知
-    //（幾年前的事件再發一次通知只會吵到人，對方也無從回覆）
-    $bfReply = trim((string)($_POST['reply_content'] ?? ''));
-    $isBackfill = !empty($o['is_backfill']) && $perms['canBackfill'] && $bfReply !== '';
-    $bfBy = (int)($_POST['replied_by'] ?? 0);
-    $bfOn = trim((string)($_POST['replied_on'] ?? ''));
-    if ($isBackfill) {
-        if (!preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $bfOn)) jerr('補登回覆請選擇回覆日期');
-        if ($bfOn > date('Y-m-d')) jerr('回覆日期不可以是未來');
-        if ($bfBy <= 0) jerr('補登回覆請選擇回覆人');
-        if (!qab_user_asof_ok($db, $bfBy, $bfOn)) jerr('選擇的回覆人在該日期並不在職，請改選當時在職的人');
-    }
-
-    $round = 1;
-    foreach ($o['rounds'] as $r) $round = max($round, (int)$r['round_no'] + 1);
     $deadline = trim((string)($_POST['deadline'] ?? '')) ?: null;
     if ($deadline !== null && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $deadline)) $deadline = null;
 
+    $canBackfill = !empty($o['is_backfill']) && $perms['canBackfill'];
+    $pending = [];
+    foreach ($o['rounds'] as $r) if (($r['status'] ?? '') !== 'Returned') $pending[(int)$r['dept_id']] = true;
+
+    // 先全部驗完再寫，任何一列不合法就整批不寫（免得送出一半）
+    $prep = [];
+    foreach ($items as $i => $it) {
+        $deptId = (int)($it['dept_id'] ?? 0);
+        if ($deptId <= 0) continue;
+        $c = $db->prepare("SELECT name FROM department WHERE id=?"); $c->execute([$deptId]);
+        $deptName = (string)$c->fetchColumn();
+        if ($deptName === '') jerr('第 ' . ($i + 1) . ' 列：選擇的部門不存在');
+
+        $userId = (int)($it['user_id'] ?? 0);
+        if ($userId > 0) {
+            $c = $db->prepare("SELECT 1 FROM user_department_position_map WHERE user_id=? AND department_id=? LIMIT 1");
+            $c->execute([$userId, $deptId]);
+            if (!$c->fetchColumn()) jerr($deptName . '：指定的人員不屬於這個部門');
+        }
+        $posIds = array_values(array_unique(array_filter(array_map('intval', (array)($it['position_ids'] ?? [])))));
+        $posNames = [];
+        foreach ($posIds as $pid) {
+            $c = $db->prepare("SELECT name FROM position WHERE id=?"); $c->execute([$pid]);
+            $pn = (string)$c->fetchColumn();
+            if ($pn === '') jerr($deptName . '：選擇的職稱不存在（可能剛被刪除），請重新整理');
+            $posNames[] = $pn;
+        }
+
+        $bfReply = trim((string)($it['reply_content'] ?? ''));
+        $isBf = $canBackfill && $bfReply !== '';
+        $bfBy = (int)($it['replied_by'] ?? 0);
+        $bfOn = trim((string)($it['replied_on'] ?? ''));
+        if ($isBf) {
+            if (!preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $bfOn)) jerr($deptName . '：補登回覆請選擇回覆日期');
+            if ($bfOn > date('Y-m-d')) jerr($deptName . '：回覆日期不可以是未來');
+            if ($bfBy <= 0) jerr($deptName . '：補登回覆請選擇回覆人');
+            if (!qab_user_asof_ok($db, $bfBy, $bfOn)) jerr($deptName . '：選擇的回覆人在該日期並不在職，請改選當時在職的人');
+        } elseif (isset($pending[$deptId])) {
+            jerr($deptName . ' 還有一則沒有回覆的徵詢，請先等對方回覆或取消那一則');
+        }
+        $prep[] = compact('deptId', 'deptName', 'userId', 'posIds', 'posNames', 'isBf', 'bfBy', 'bfOn', 'bfReply');
+    }
+    if (!$prep) jerr('請至少勾選一個要徵詢的部門');
+
+    $round = 1;
+    foreach ($o['rounds'] as $r) $round = max($round, (int)$r['round_no'] + 1);
+
     $db->beginTransaction();
     try {
-        if ($isBackfill) {
+        foreach ($prep as $k => $q) {
+            $rn = $round + $k;
+            if ($q['isBf']) {
+                $db->prepare("INSERT INTO qa_abnormal_order_flow
+                                (abnormal_order_id, dept_id, user_id, position_id, position_ids, include_mode, status, round_no,
+                                 asked_by, asked_at, replied_by, reply_content, receive_date, return_date, sort_order)
+                              VALUES (?,?,?,?,?,0,'Returned',?,?,?,?,?,?,?,?)")
+                   ->execute([$id, $q['deptId'], $q['userId'] ?: $q['bfBy'], $q['posIds'][0] ?? null,
+                              $q['posIds'] ? implode(',', $q['posIds']) : null, $rn, $uid,
+                              $q['bfOn'] . ' 09:00:00', $q['bfBy'], mb_substr($q['bfReply'], 0, 2000),
+                              $q['bfOn'] . ' 09:00:00', qab_backfill_time($db, $o, $q['bfOn']), $rn]);
+                continue;
+            }
             $db->prepare("INSERT INTO qa_abnormal_order_flow
-                            (abnormal_order_id, dept_id, user_id, position_id, include_mode, status, round_no,
-                             asked_by, asked_at, replied_by, reply_content, receive_date, return_date, sort_order)
-                          VALUES (?,?,?,?,0,'Returned',?,?,?,?,?,?,?,?)")
-               ->execute([$id, $deptId, $userId ?: $bfBy, $posId ?: null, $round, $uid,
-                          $bfOn . ' 09:00:00', $bfBy, mb_substr($bfReply, 0, 2000),
-                          $bfOn . ' 09:00:00', qab_backfill_time($db, $o, $bfOn), $round]);
-            $db->commit();
-            $log($id, 'round_backfill', '', $deptName . '：' . mb_substr($bfReply, 0, 120));
-            jout(true, ['order' => qab_order($db, $id)]);
-        }
-        $db->prepare("INSERT INTO qa_abnormal_order_flow
-                        (abnormal_order_id, dept_id, user_id, position_id, include_mode, status, round_no, asked_by, asked_at, sort_order)
-                      VALUES (?,?,?,?,0,'Pending',?,?,NOW(),?)")
-           ->execute([$id, $deptId, $userId ?: null, $posId ?: null, $round, $uid, $round]);
-        $flowId = (int)$db->lastInsertId();
+                            (abnormal_order_id, dept_id, user_id, position_id, position_ids, include_mode, status, round_no, asked_by, asked_at, sort_order)
+                          VALUES (?,?,?,?,?,0,'Pending',?,?,NOW(),?)")
+               ->execute([$id, $q['deptId'], $q['userId'] ?: null, $q['posIds'][0] ?? null,
+                          $q['posIds'] ? implode(',', $q['posIds']) : null, $rn, $uid, $rn]);
+            $flowId = (int)$db->lastInsertId();
 
-        // 通知：指定人員就發給本人，否則發給整個部門（職稱只是說明給誰回，部門內都看得到）
-        $targets = $userId > 0 ? [['type' => 'user', 'id' => $userId, 'mode' => 'reply']]
-                               : [['type' => 'dept', 'id' => $deptId, 'mode' => 'reply']];
-        $who = $userId > 0 ? ('指定人員') : ($posName !== '' ? ($deptName . ' ' . $posName) : $deptName);
-        $title = '【品質異常單 ' . $o['abnormal_order_no'] . '】請回覆相關單位意見';
-        $body  = "異常單號：{$o['abnormal_order_no']}\n"
-               . "客戶／料號：" . (($o['client_name'] ?: '—') . ' / ' . ($o['part_no'] ?: '—')) . "\n"
-               . "製令／客退單：" . (($o['bom_no'] ?: '—') . ' / ' . ($o['ir_no'] ?: '—')) . "\n"
-               . "異常現象：" . mb_substr((string)$o['abnormal_phenomenon'], 0, 300) . "\n"
-               . "徵詢對象：{$who}\n"
-               . ($_POST['ask_note'] ?? '' ? ("徵詢說明：" . mb_substr(trim((string)$_POST['ask_note']), 0, 300) . "\n") : '');
-        $eventId = eg_qa_insert_event($db, $id, $title, $body, $targets, $deadline, $uid,
-            ['url' => '/EGsystem/views/QA/qa_abnormal_form.php?id=' . $id]);
-        if ($eventId) $db->prepare("UPDATE qa_abnormal_order_flow SET event_id=? WHERE flow_id=?")->execute([$eventId, $flowId]);
+            /* 通知：指定人員就發給本人；指定職稱就發給該部門內這些職稱的人（多人只要一人回覆）；
+               都沒指定才整個部門。 */
+            $targets = [];
+            if ($q['userId'] > 0) {
+                $targets[] = ['type' => 'user', 'id' => $q['userId'], 'mode' => 'reply'];
+            } elseif ($q['posIds']) {
+                $inP = implode(',', array_fill(0, count($q['posIds']), '?'));
+                $c = $db->prepare("SELECT DISTINCT m.user_id FROM user_department_position_map m
+                                   JOIN `user` u ON u.id=m.user_id AND u.state=1
+                                   WHERE m.department_id=? AND m.position_id IN ($inP)");
+                $c->execute(array_merge([$q['deptId']], $q['posIds']));
+                foreach ($c->fetchAll(PDO::FETCH_COLUMN) as $u2) $targets[] = ['type' => 'user', 'id' => (int)$u2, 'mode' => 'reply'];
+            }
+            if (!$targets) $targets[] = ['type' => 'dept', 'id' => $q['deptId'], 'mode' => 'reply'];
+
+            $who = $q['userId'] > 0 ? '指定人員'
+                 : ($q['posNames'] ? ($q['deptName'] . ' ' . implode('／', $q['posNames'])) : $q['deptName']);
+            $title = '【品質異常單 ' . $o['abnormal_order_no'] . '】請回覆相關單位意見';
+            $body  = "異常單號：{$o['abnormal_order_no']}\n"
+                   . "客戶／料號：" . (($o['client_name'] ?: '—') . ' / ' . ($o['part_no'] ?: '—')) . "\n"
+                   . "製令／客退單：" . (($o['bom_no'] ?: '—') . ' / ' . ($o['ir_no'] ?: '—')) . "\n"
+                   . "異常現象：" . mb_substr((string)$o['abnormal_phenomenon'], 0, 300) . "\n"
+                   . "徵詢對象：{$who}"
+                   . (count($targets) > 1 ? '（其中一位回覆即可）' : '') . "\n";
+            $eventId = eg_qa_insert_event($db, $id, $title, $body, $targets, $deadline, $uid,
+                ['url' => '/EGsystem/views/QA/qa_abnormal_form.php?id=' . $id]);
+            if ($eventId) $db->prepare("UPDATE qa_abnormal_order_flow SET event_id=? WHERE flow_id=?")->execute([$eventId, $flowId]);
+        }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
-    $log($id, 'round_add', '', $deptName . ($posName ? (' ' . $posName) : ''));
-    jout(true, ['order' => qab_order($db, $id)]);
+    $log($id, 'round_add', '', implode('、', array_column($prep, 'deptName')));
+    jout(true, ['order' => qab_order($db, $id), 'count' => count($prep)]);
 }
 
 case 'round_reply': {
@@ -471,8 +517,12 @@ case 'round_cancel': {
 /* ═══════════ 決策：異常處置方式（業務／品管主管） ═══════════ */
 case 'save_disposition': {
     $o = $mustOrder((int)($_POST['id'] ?? 0));
-    if (!$perms['canDecide']) jerr('您不在可決策的名單內（由管理員在「決策者設定」指定部門與職稱）');
+    /* 補資料的單（填寫日期在今日往前 N 天以前）由「異常單管理員」在補登簽章區一次補完結果與簽章，
+       不必再跑一次正常的決策流程——使用者要求「補登簽章內就可以直接補結果跟內容」。 */
+    $bfMode = !empty($o['is_backfill']) && $perms['canBackfill'] && trim((string)($_POST['sign_date'] ?? '')) !== '';
+    if (!$perms['canDecide'] && !$bfMode) jerr('您不在可決策的名單內（由管理員在「決策者設定」指定部門與職稱）');
     $id = (int)$o['id'];
+    [$signBy, $signAt] = qab_backfill_sign_args($db, $o, $perms, $_POST);
     $ids = array_values(array_unique(array_map('intval', json_decode((string)($_POST['opt_ids'] ?? '[]'), true) ?: [])));
     $optMap = qab_option_map($db);
     foreach ($ids as $i) {
@@ -483,12 +533,13 @@ case 'save_disposition': {
         $db->prepare("DELETE FROM qa_abnormal_opt WHERE order_id=? AND kind='disp'")->execute([$id]);
         $ins = $db->prepare("INSERT IGNORE INTO qa_abnormal_opt (order_id,kind,opt_id) VALUES (?, 'disp', ?)");
         foreach ($ids as $i) $ins->execute([$id, $i]);
-        $db->prepare("UPDATE qa_abnormal_order SET disposition_note=?, disp_decided_by=?, disp_decided_at=NOW(), updated_by=?, updated_at=NOW() WHERE id=?")
-           ->execute([$strOrNull($_POST['disposition_note'] ?? '', 2000), $uid, $uid, $id]);
+        $db->prepare("UPDATE qa_abnormal_order SET disposition_note=?, disp_decided_by=?, disp_decided_at=?, updated_by=?, updated_at=NOW() WHERE id=?")
+           ->execute([$strOrNull($_POST['disposition_note'] ?? '', 2000), $signBy ?: $uid, $signAt ?: date('Y-m-d H:i:s'), $uid, $id]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
-    // 勾了「轉總經理裁示」就通知最終決策者
+    // 勾了「轉總經理裁示」就通知最終決策者（補登舊資料不發通知，幾年前的事再通知一次只會吵到人）
     $escalate = false;
+    if ($bfMode) $escalate = false; else
     foreach ($ids as $i) if ($optMap[$i]['is_escalate']) $escalate = true;
     if ($escalate) {
         try {
@@ -511,8 +562,10 @@ case 'save_disposition': {
 /* ═══════════ 總經理裁示 ═══════════ */
 case 'save_gm': {
     $o = $mustOrder((int)($_POST['id'] ?? 0));
-    if (!$perms['canGm']) jerr('您不是最終決策者（由管理員在「決策者設定」指定，或設定組織角色的最高核准人員）');
+    $bfMode = !empty($o['is_backfill']) && $perms['canBackfill'] && trim((string)($_POST['sign_date'] ?? '')) !== '';
+    if (!$perms['canGm'] && !$bfMode) jerr('您不是最終決策者（由管理員在「決策者設定」指定，或設定組織角色的最高核准人員）');
     $id = (int)$o['id'];
+    [$signBy, $signAt] = qab_backfill_sign_args($db, $o, $perms, $_POST);
     $ids = array_values(array_unique(array_map('intval', json_decode((string)($_POST['opt_ids'] ?? '[]'), true) ?: [])));
     $optMap = qab_option_map($db);
     foreach ($ids as $i) if (!isset($optMap[$i]) || $optMap[$i]['kind'] !== 'gm') jerr('選到的裁示選項不存在，請重新整理頁面');
@@ -525,8 +578,10 @@ case 'save_gm': {
         // 代理人代簽時要留下來：列印的圖章右下角要加「代」字（ai-rules/18）
         $gmP = qab_gm_person($db);
         $byDeputy = ($gmP['base_id'] > 0 && $gmP['base_id'] !== $uid && $gmP['id'] === $uid) ? 1 : 0;
-        $db->prepare("UPDATE qa_abnormal_order SET gm_note=?, gm_deduct=?, capa_order_no=?, gm_decided_by=?, gm_decided_at=NOW(), gm_by_deputy=?, updated_by=?, updated_at=NOW() WHERE id=?")
-           ->execute([$strOrNull($_POST['gm_note'] ?? '', 2000), $deduct, $strOrNull($_POST['capa_order_no'] ?? '', 20), $uid, $byDeputy, $uid, $id]);
+        if ($signBy) $byDeputy = 0;   // 補登的是「當時那個人自己簽的」，不是代簽
+        $db->prepare("UPDATE qa_abnormal_order SET gm_note=?, gm_deduct=?, capa_order_no=?, gm_decided_by=?, gm_decided_at=?, gm_by_deputy=?, updated_by=?, updated_at=NOW() WHERE id=?")
+           ->execute([$strOrNull($_POST['gm_note'] ?? '', 2000), $deduct, $strOrNull($_POST['capa_order_no'] ?? '', 20),
+                      $signBy ?: $uid, $signAt ?: date('Y-m-d H:i:s'), $byDeputy, $uid, $id]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
     $log($id, 'gm', implode('、', $o['gm_names']), implode('、', array_map(function ($i) use ($optMap) { return $optMap[$i]['name']; }, $ids)) . ($deduct ? '（扣款）' : ''));
@@ -535,25 +590,28 @@ case 'save_gm': {
 
 /* ═══════════ 扣款確認 ═══════════ */
 case 'deduct_preview': {   // 點開看到「會自動帶入哪些金額」，不寫入
-    $bom = trim((string)($_GET['bom_no'] ?? ''));
-    jout(true, ['rows' => qab_deduct_autofill($db, $bom)]);
+    $oid = (int)($_GET['id'] ?? 0);
+    $boms = [];
+    if ($oid > 0) { $oo = qab_order($db, $oid); if ($oo) $boms = $oo['bom_list']; }
+    if (!$boms) $boms = array_filter([trim((string)($_GET['bom_no'] ?? ''))]);
+    jout(true, ['rows' => qab_deduct_autofill($db, $boms), 'boms' => array_values($boms)]);
 }
 
 case 'deduct_autofill': {  // 套用自動帶入（只重建 process 列，手動加的「其他」列不動）
     $o = $mustOrder((int)($_POST['id'] ?? 0));
     if (!$perms['canDeductFill']) jerr('沒有填寫扣款金額的權限（紙本：扣款確認表金額由生管填寫）');
     $id = (int)$o['id'];
-    $bom = trim((string)($_POST['bom_no'] ?? $o['bom_no'] ?? ''));
-    if ($bom === '') jerr('這張單沒有綁定製令，無法自動帶入製程金額');
-    $rows = qab_deduct_autofill($db, $bom);
+    $boms = $o['bom_list'];
+    if (!$boms) jerr('這張單沒有綁定製令，無法自動帶入製程金額');
+    $rows = qab_deduct_autofill($db, $boms);
     $db->beginTransaction();
     try {
         $db->prepare("DELETE FROM qa_abnormal_deduct WHERE order_id=? AND kind='process'")->execute([$id]);
         $ins = $db->prepare("INSERT INTO qa_abnormal_deduct
-            (order_id,kind,transfer_id,bom_sn,process_name,vendor_name,transfer_no,qty,amount_auto,amount,included,sort_order,created_by)
-            VALUES (?,'process',?,?,?,?,?,?,?,?,1,?,?)");
+            (order_id,kind,transfer_id,bom_no,bom_sn,process_name,vendor_name,transfer_no,qty,amount_auto,amount,included,sort_order,created_by)
+            VALUES (?,'process',?,?,?,?,?,?,?,?,?,1,?,?)");
         foreach ($rows as $i => $r) {
-            $ins->execute([$id, $r['transfer_id'], $r['bom_sn'], $r['process_name'], $r['vendor_name'],
+            $ins->execute([$id, $r['transfer_id'], $r['bom_no'], $r['bom_sn'], $r['process_name'], $r['vendor_name'],
                            $r['transfer_no'], $r['qty'], $r['amount'], $r['amount'], $i, $uid]);
         }
         $db->commit();
@@ -757,6 +815,7 @@ case 'settings_get': {
         'disp_opts' => qab_options($db, 'disp', false),
         'gm_opts'   => qab_options($db, 'gm', false),
         'deciders'  => qab_decider_cfgs($db, 'decider', false),
+        'ask_cfg'   => qab_ask_cfg($db),
         'gm_person' => qab_gm_person($db),
         'rate'          => qab_default_rate($db),
         'backfill_days' => qab_backfill_days($db),
@@ -918,6 +977,157 @@ case 'suggest_sample': {   // 依抽樣規則算「這個批量建議抽驗幾�
 case 'positions': {
     $rows = $db->query("SELECT id, name AS position_name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     jout(true, ['rows' => $rows]);
+}
+
+/* ═══════════ 刪除（軟刪除）與還原：只有異常單管理員 ═══════════ */
+case 'order_delete': {
+    if (!$perms['canAdmin']) jerr('只有異常單管理員可以刪除異常單');
+    $id = (int)($_POST['id'] ?? 0);
+    $o = qab_order($db, $id);
+    if (!$o) jerr('找不到這張異常單');
+    if ($o['deleted_at']) jerr('這張單已經是刪除狀態');
+    $reason = trim((string)($_POST['reason'] ?? ''));
+    if ($reason === '') jerr('請填寫刪除原因（刪除一定要留紀錄）');
+    $snap = json_encode([
+        'no' => $o['abnormal_order_no'], 'fill_date' => $o['fill_date'], 'client' => $o['client_name'],
+        'part_no' => $o['part_no'], 'bom_no' => $o['bom_no'], 'ir_no' => $o['ir_no'],
+        'phenomenon' => mb_substr((string)$o['abnormal_phenomenon'], 0, 500),
+        'is_closed' => (int)$o['is_closed'], 'scrap_no' => $o['scrap_no'],
+    ], JSON_UNESCAPED_UNICODE);
+    $db->beginTransaction();
+    try {
+        $db->prepare("UPDATE qa_abnormal_order SET deleted_at=NOW(), deleted_by=?, updated_by=?, updated_at=NOW() WHERE id=?")
+           ->execute([$uid, $uid, $id]);
+        $db->prepare("INSERT INTO qa_abnormal_del_log (order_id,abnormal_order_no,act,reason,snapshot,acted_by,acted_name)
+                      VALUES (?,?,'delete',?,?,?,?)")
+           ->execute([$id, $o['abnormal_order_no'], mb_substr($reason, 0, 255), $snap, $uid, $perms['name']]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    $log($id, 'delete', $o['abnormal_order_no'], '已刪除', $reason);
+    jout(true, ['deleted' => 1]);
+}
+
+case 'order_restore': {
+    if (!$perms['canAdmin']) jerr('只有異常單管理員可以還原異常單');
+    $id = (int)($_POST['id'] ?? 0);
+    $o = qab_order($db, $id);
+    if (!$o) jerr('找不到這張異常單');
+    if (!$o['deleted_at']) jerr('這張單不是刪除狀態');
+    $reason = trim((string)($_POST['reason'] ?? ''));
+    $db->beginTransaction();
+    try {
+        $db->prepare("UPDATE qa_abnormal_order SET deleted_at=NULL, deleted_by=NULL, updated_by=?, updated_at=NOW() WHERE id=?")
+           ->execute([$uid, $id]);
+        $db->prepare("INSERT INTO qa_abnormal_del_log (order_id,abnormal_order_no,act,reason,acted_by,acted_name)
+                      VALUES (?,?,'restore',?,?,?)")
+           ->execute([$id, $o['abnormal_order_no'], mb_substr($reason, 0, 255), $uid, $perms['name']]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    $log($id, 'restore', '', '已還原', $reason);
+    jout(true, ['restored' => 1]);
+}
+
+case 'del_log': {
+    if (!$perms['canAdmin']) jerr('只有異常單管理員可以查看刪除紀錄');
+    $st = $db->prepare("SELECT l.*, o.deleted_at FROM qa_abnormal_del_log l
+                        LEFT JOIN qa_abnormal_order o ON o.id=l.order_id
+                        ORDER BY l.id DESC LIMIT 200");
+    $st->execute();
+    jout(true, ['rows' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+/* ═══════════ 補登簽章的候選人：該格該簽的部門＋當天在職＋當天沒請整天假／整天外出 ═══════════ */
+case 'sign_candidates': {
+    $slot = trim((string)($_GET['slot'] ?? ''));
+    if (!array_key_exists($slot, qab_sign_slots())) jerr('簽章格不正確');
+    $date = trim((string)($_GET['date'] ?? '')) ?: date('Y-m-d');
+    $all  = !empty($_GET['all']);
+    $rows = qab_sign_candidates($db, $slot, $date, $all);
+    $deptLabels = [];
+    if (!$all) {
+        require_once __DIR__ . '/../common/org_role_lib.php';
+        foreach (qab_slot_dept_keys($slot) as $k) {
+            $d = eg_org_dept($db, $k);
+            if ($d) {
+                $c = $db->prepare("SELECT name FROM department WHERE id=?"); $c->execute([(int)$d]);
+                $n = (string)$c->fetchColumn();
+                if ($n !== '') $deptLabels[] = $n;
+            }
+        }
+    }
+    jout(true, ['rows' => $rows, 'date' => $date, 'scope' => $deptLabels, 'all' => $all ? 1 : 0]);
+}
+
+/* ═══════════ 製令：可綁多張（退貨的是組合件時底下好幾張） ═══════════ */
+case 'bom_candidates': {
+    $oid = (int)($_GET['id'] ?? 0);
+    $partDId = (int)($_GET['part_d_id'] ?? 0);
+    $partNo  = trim((string)($_GET['part_no'] ?? ''));
+    if ($oid > 0) {
+        $oo = qab_order($db, $oid);
+        if ($oo) { $partDId = (int)$oo['part_d_id']; $partNo = (string)$oo['part_no']; }
+    }
+    jout(true, ['rows' => qab_bom_candidates($db, $partDId ?: null, $partNo, trim((string)($_GET['kw'] ?? '')))]);
+}
+
+case 'bom_bind': {
+    $o = $mustOrder((int)($_POST['id'] ?? 0));
+    if (!qab_can_edit_form($db, $perms, $o)) jerr('沒有修改這張異常單的權限');
+    $id = (int)$o['id'];
+    $list = json_decode((string)($_POST['boms'] ?? '[]'), true) ?: [];
+    $list = array_values(array_unique(array_filter(array_map('trim', array_map('strval', $list)))));
+    if (count($list) > 30) jerr('一張異常單最多綁 30 張製令');
+    foreach ($list as $b) {
+        $c = $db->prepare("SELECT 1 FROM bom WHERE bom=?"); $c->execute([$b]);
+        if (!$c->fetchColumn()) jerr('製令「' . $b . '」不存在，請從清單中選擇', 'BOM_NOT_BOUND');
+    }
+    $main = trim((string)$o['bom_no']);
+    $db->beginTransaction();
+    try {
+        $db->prepare("DELETE FROM qa_abnormal_bom WHERE order_id=?")->execute([$id]);
+        $ins = $db->prepare("INSERT IGNORE INTO qa_abnormal_bom (order_id,bom_no,is_main,part_no,sort_order) VALUES (?,?,?,?,?)");
+        $i = 0;
+        foreach ($list as $b) {
+            $c = $db->prepare("SELECT d_id FROM bom WHERE bom=?"); $c->execute([$b]);
+            $ins->execute([$id, $b, ($main !== '' && $b === $main) ? 1 : 0, (string)$c->fetchColumn(), $i++]);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    $log($id, 'bom_bind', implode('、', array_column($o['boms'], 'bom_no')), implode('、', $list));
+    jout(true, ['order' => qab_order($db, $id)]);
+}
+
+case 'bom_processes': {
+    $oid = (int)($_GET['id'] ?? 0);
+    $boms = [];
+    if ($oid > 0) { $oo = qab_order($db, $oid); if ($oo) $boms = $oo['bom_list']; }
+    if (!$boms) $boms = array_filter(array_map('trim', explode(',', (string)($_GET['boms'] ?? ''))));
+    jout(true, ['rows' => qab_bom_processes($db, $boms), 'boms' => array_values($boms)]);
+}
+
+/* ═══════════ 相關單位意見：各部門的預設回覆職稱（管理員設定） ═══════════ */
+case 'ask_cfg_get': {
+    jout(true, ['cfg' => qab_ask_cfg($db)]);
+}
+
+case 'ask_cfg_save': {
+    if (!$perms['canAdmin']) jerr('只有異常單管理員可以設定預設回覆職稱');
+    $rows = json_decode((string)($_POST['rows'] ?? '[]'), true) ?: [];
+    $db->beginTransaction();
+    try {
+        $db->exec("DELETE FROM qa_ask_dept_cfg");
+        $ins = $db->prepare("INSERT IGNORE INTO qa_ask_dept_cfg (dept_id,position_id,sort_order) VALUES (?,?,?)");
+        foreach ($rows as $r) {
+            $d = (int)($r['dept_id'] ?? 0);
+            if ($d <= 0) continue;
+            $i = 0;
+            foreach (array_unique(array_map('intval', (array)($r['position_ids'] ?? []))) as $pid) {
+                if ($pid > 0) $ins->execute([$d, $pid, $i++]);
+            }
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    jout(true, ['cfg' => qab_ask_cfg($db)]);
 }
 
 case 'asdoc_list': {          // AS 文件綁定：清單與目前綁定（走共用 asdoc_lib，ai-rules/16 第一之三節）

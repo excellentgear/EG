@@ -29,6 +29,8 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
             : ($perms['canGm'] ? '最終決策者' : ($perms['canDecide'] ? '決策主管'
             : ($perms['canCreate'] ? '開單／填寫' : ($perms['canView'] ? '檢閱' : '無權限')))));
 $thisYear = (int)date('Y');
+$years = qab_years($db);               // 年度下拉只列真的有資料的年度
+if (!in_array($thisYear, $years, true)) array_unshift($years, $thisYear);
 $backfillDays = qab_backfill_days($db);
 ?>
 <!DOCTYPE html>
@@ -105,6 +107,13 @@ $backfillDays = qab_backfill_days($db);
                        border-radius:6px 6px 0 0; padding:5px 14px; font-size:13px; }
         .tabs button.on { background:#fff; color:var(--amber-d); font-weight:bold; }
         table.cfg { width:100%; border-collapse:collapse; font-size:12.5px; }
+.cfg td.drag{cursor:grab;color:#c8a882;text-align:center;font-size:14px;user-select:none;}
+.cfg tr.dragging{opacity:.45;}
+.cfg tr.drop-before td{box-shadow:inset 0 2px 0 var(--amber-d);}
+.cfg tr.drop-after td{box-shadow:inset 0 -2px 0 var(--amber-d);}
+#cfgSaved{color:#7a8f5a;font-size:12px;margin-right:auto;}
+.ask-pos{display:flex;flex-wrap:wrap;gap:4px 10px;}
+.ask-pos label{font-weight:normal;margin:0;font-size:12px;}
         table.cfg th, table.cfg td { border:1px solid var(--line); padding:3px 6px; }
         table.cfg th { background:var(--cream); color:var(--ink2); font-weight:normal; text-align:center; }
         table.cfg input[type=text], table.cfg input[type=number], table.cfg select { width:100%; border:1px solid var(--line);
@@ -142,9 +151,9 @@ $backfillDays = qab_backfill_days($db);
                 <div class="fg"><label>年度</label>
                     <select id="fYear">
                         <option value="">全部</option>
-                        <?php for ($y = $thisYear + 1; $y >= $thisYear - 4; $y--): ?>
+                        <?php foreach ($years as $y): ?>
                         <option value="<?= $y ?>" <?= $y === $thisYear ? 'selected' : '' ?>><?= $y ?></option>
-                        <?php endfor; ?>
+                        <?php endforeach; ?>
                     </select></div>
                 <div class="fg"><label>月份</label>
                     <select id="fMonth"><option value="">全部</option>
@@ -162,6 +171,8 @@ $backfillDays = qab_backfill_days($db);
                 <button class="btn btn-warm btn-sm" id="btnNew"><i class="fa fa-plus"></i> 開立異常單</button>
                 <?php endif; ?>
                 <?php if ($perms['canAdmin']): ?>
+                <label class="fg" style="flex-direction:row;align-items:center;gap:4px;margin-bottom:0;">
+                    <input type="checkbox" id="fDeleted"> 顯示已刪除</label>
                 <button class="btn btn-warm-o btn-sm" id="btnCfg"><i class="fa fa-cog"></i> 設定</button>
                 <?php endif; ?>
             </div>
@@ -239,23 +250,30 @@ $backfillDays = qab_backfill_days($db);
                 <button data-tab="disp">異常處置方式</button>
                 <button data-tab="gm">總經理裁示</button>
                 <button data-tab="dec">決策者</button>
+                <button data-tab="ask">相關單位意見</button>
                 <button data-tab="etc">其他設定</button>
             </div>
 
             <div class="tabp" id="tab-cause">
                 <div class="note-box">最多三層（例：<b>人 → 方法 → 程式</b>）。這一欄會延伸到之後的異常分析與報告，所以<b>沒有「其他」這個選項</b>；
                     已經被異常單選過的分類不可刪除，請改成「停用」（既有單仍看得到，新單不再出現）。</div>
+                <div style="margin:6px 0;display:flex;gap:6px;align-items:center;">
+                    <button class="btn btn-warm-o btn-xs" id="btnCauseExpand">全部展開</button>
+                    <button class="btn btn-warm-o btn-xs" id="btnCauseCollapse">全部收合</button>
+                    <span class="muted-help">點第一層的 ▸ 可以只看那一類；拖曳左側 ⠿ 調整順序（同一層之內）。</span>
+                </div>
                 <table class="cfg"><thead><tr>
-                    <th style="width:44%">分類名稱</th><th style="width:22%">上層</th><th style="width:10%">排序</th>
-                    <th style="width:10%">啟用</th><th style="width:14%">操作</th></tr></thead>
-                    <tbody id="cfgCause"></tbody></table>
+                    <th style="width:28px"></th>
+                    <th style="width:46%">分類名稱</th><th style="width:24%">上層</th>
+                    <th style="width:10%">啟用</th><th style="width:12%">操作</th></tr></thead>
+                    <tbody id="cfgCause" data-sortgrp="cause"></tbody></table>
                 <div style="margin-top:8px;text-align:right;">
                     <button class="btn btn-warm btn-sm" data-saveall="cause"><i class="fa fa-save"></i> 一鍵存檔（本頁全部）</button>
                 </div>
                 <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end;">
-                    <div class="fld" style="width:200px;"><label>新增分類名稱</label><input type="text" id="nc_name"></div>
-                    <div class="fld" style="width:240px;"><label>上層（留空＝第一層）</label><select id="nc_parent"></select></div>
-                    <div class="fld" style="width:90px;"><label>排序</label><input type="number" id="nc_sort" value="0"></div>
+                    <div class="fld" style="width:220px;"><label>新增分類名稱</label>
+                        <input type="text" id="nc_name" placeholder="打完按 Enter 就直接新增"></div>
+                    <div class="fld" style="width:260px;"><label>上層（留空＝第一層）</label><select id="nc_parent"></select></div>
                     <button class="btn btn-warm btn-sm" id="btnCauseAdd"><i class="fa fa-plus"></i> 新增</button>
                 </div>
             </div>
@@ -263,9 +281,9 @@ $backfillDays = qab_backfill_days($db);
             <div class="tabp" id="tab-disp" style="display:none;">
                 <div class="note-box">紙本的「異常處置方式」勾選框。<b>「是報廢」「轉總經理」不是比對名稱而是這兩個旗標</b>——改名不會讓判定失效，但旗標一定要勾對：
                     勾「是報廢」的選項會讓這張單在結案時配發報廢單號；勾「轉總經理」的選項會在存檔時通知最終決策者。</div>
-                <table class="cfg"><thead><tr><th style="width:34%">名稱</th><th>是報廢</th><th>轉總經理</th><th>需矯正</th>
-                    <th style="width:10%">排序</th><th style="width:9%">啟用</th><th style="width:13%">操作</th></tr></thead>
-                    <tbody id="cfgDisp"></tbody></table>
+                <table class="cfg"><thead><tr><th style="width:28px"></th><th style="width:36%">名稱</th><th>是報廢</th><th>轉總經理</th><th>需矯正</th>
+                    <th style="width:9%">啟用</th><th style="width:11%">操作</th></tr></thead>
+                    <tbody id="cfgDisp" data-sortgrp="disp"></tbody></table>
                 <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
                     <button class="btn btn-warm-o btn-sm" data-optadd="disp"><i class="fa fa-plus"></i> 新增一個選項</button>
                     <span style="margin-left:auto;"></span>
@@ -275,9 +293,9 @@ $backfillDays = qab_backfill_days($db);
 
             <div class="tabp" id="tab-gm" style="display:none;">
                 <div class="note-box">紙本的「總經理裁示」勾選框。<b>有裁示時以裁示為最終決策</b>（優先於主管的處置方式）。</div>
-                <table class="cfg"><thead><tr><th style="width:34%">名稱</th><th>是報廢</th><th>轉總經理</th><th>需矯正</th>
-                    <th style="width:10%">排序</th><th style="width:9%">啟用</th><th style="width:13%">操作</th></tr></thead>
-                    <tbody id="cfgGm"></tbody></table>
+                <table class="cfg"><thead><tr><th style="width:28px"></th><th style="width:36%">名稱</th><th>是報廢</th><th>轉總經理</th><th>需矯正</th>
+                    <th style="width:9%">啟用</th><th style="width:11%">操作</th></tr></thead>
+                    <tbody id="cfgGm" data-sortgrp="gm"></tbody></table>
                 <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
                     <button class="btn btn-warm-o btn-sm" data-optadd="gm"><i class="fa fa-plus"></i> 新增一個選項</button>
                     <span style="margin-left:auto;"></span>
@@ -288,15 +306,24 @@ $backfillDays = qab_backfill_days($db);
             <div class="tabp" id="tab-dec" style="display:none;">
                 <div class="note-box"><b>決策主管</b>＝填表人可以選來做處置判定的範圍（業務主管／品管主管…）。設定的是「部門＋職稱」，人員異動不必回來改。</div>
                 <div class="note-box" id="cfgGmBox" style="border-color:var(--amber-d);background:#FFF6E8;"></div>
-                <table class="cfg"><thead><tr><th style="width:13%">類別</th><th style="width:20%">顯示名稱<br><span class="muted-help" style="font-weight:normal;">（自動＝部門＋職稱）</span></th><th style="width:19%">部門</th>
-                    <th style="width:16%">職稱</th><th style="width:8%">含下轄</th><th style="width:7%">排序</th><th style="width:7%">啟用</th><th style="width:10%">操作</th></tr></thead>
-                    <tbody id="cfgDec"></tbody></table>
+                <table class="cfg"><thead><tr><th style="width:28px"></th><th style="width:12%">類別</th><th style="width:21%">顯示名稱<br><span class="muted-help" style="font-weight:normal;">（自動＝部門＋職稱）</span></th><th style="width:19%">部門</th>
+                    <th style="width:17%">職稱</th><th style="width:8%">含下轄</th><th style="width:7%">啟用</th><th style="width:10%">操作</th></tr></thead>
+                    <tbody id="cfgDec" data-sortgrp="decider"></tbody></table>
                 <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
                     <button class="btn btn-warm-o btn-sm" data-decadd="decider"><i class="fa fa-plus"></i> 新增決策主管範圍</button>
                     <span style="margin-left:auto;"></span>
                     <button class="btn btn-warm btn-sm" data-saveall="decider"><i class="fa fa-save"></i> 一鍵存檔（本頁全部）</button>
                 </div>
                 <div id="decPeople" class="muted-help" style="margin-top:6px;"></div>
+            </div>
+
+            <div class="tabp" id="tab-ask" style="display:none;">
+                <div class="note-box">處理頁的「相關單位意見」左側會列出這裡設定的部門，<b>勾起來就自動帶入該部門的預設回覆職稱</b>。
+                    同一個部門可以設好幾個職稱（例：課長＋組長），<b>系統會通知這些人，其中一位回覆並簽章即可</b>。
+                    沒有設定職稱的部門＝通知整個部門。</div>
+                <table class="cfg"><thead><tr><th style="width:30%">部門</th><th>預設回覆職稱（可多選）</th><th style="width:12%">操作</th></tr></thead>
+                    <tbody id="cfgAsk"></tbody></table>
+                <div style="margin-top:8px;"><button class="btn btn-warm-o btn-sm" id="btnAskAdd"><i class="fa fa-plus"></i> 新增一個部門</button></div>
             </div>
 
             <div class="tabp" id="tab-etc" style="display:none;">
@@ -318,10 +345,28 @@ $backfillDays = qab_backfill_days($db);
                 <div style="margin-top:10px;"><button class="btn btn-warm btn-sm" id="btnSaveEtc"><i class="fa fa-save"></i> 儲存其他設定</button></div>
             </div>
         </div>
-        <div class="m-ft"><button class="btn btn-default btn-sm" data-close="cfgMask">完成，關閉</button></div>
+        <div class="m-ft"><span id="cfgSaved"></span>
+            <button class="btn btn-default btn-sm" data-close="cfgMask">完成，關閉</button></div>
     </div>
 </div>
 <?php endif; ?>
+
+<!-- 刪除／還原（只有異常單管理員；軟刪除，資料留著可查可還原） -->
+<div class="m-mask" id="delMask">
+    <div class="m-box" style="width:520px;">
+        <div class="m-hd"><i class="fa fa-trash-o"></i> <span id="delTitle">刪除異常單</span><span class="x" data-close="delMask">&times;</span></div>
+        <div class="m-bd">
+            <div class="note-box" id="delNote"></div>
+            <div class="fld"><label>原因 <span style="color:var(--coral)" id="delReq">*</span></label>
+                <textarea id="delReason" rows="3" placeholder="例：重複開單／料號填錯，已重開一張"></textarea></div>
+            <div class="err" id="delErr"></div>
+        </div>
+        <div class="m-ft">
+            <button class="btn btn-default btn-sm" data-close="delMask">取消</button>
+            <button class="btn btn-warm btn-sm" id="btnDelGo"><i class="fa fa-check"></i> 確定</button>
+        </div>
+    </div>
+</div>
 
 <!-- 使用說明（鐵律7） -->
 <div class="m-mask" id="helpUseMask">
@@ -408,24 +453,33 @@ function openMask(id){ $('#' + id).show(); }
 function closeMask(id){ $('#' + id).hide(); }
 $(document).on('click', '[data-close]', function(){ closeMask($(this).data('close')); });
 
-function post(action, data, cb){
+function post(action, data, cb, errCb){
     data = data || {}; data.action = action; data.csrf = CSRF;
     $.post(API, data, function(res){
-        if (!res || !res.success) { alert((res && res.message) || '操作失敗'); return; }
+        if (!res || !res.success) {
+            var m = (res && res.message) || '操作失敗';
+            if (errCb) errCb(m); else alert(m);
+            return;
+        }
         if (cb) cb(res);
-    }, 'json').fail(function(){ alert('連線失敗'); });
+    }, 'json').fail(function(){ if (errCb) errCb('連線失敗'); else alert('連線失敗'); });
 }
 
 /* ───────── 清單 ───────── */
 function load(){
     $('#lstBody').html('<tr><td colspan="10" class="c">載入中…</td></tr>');
     $.get(API, { action:'list', year:$('#fYear').val(), month:$('#fMonth').val(),
-                 closed:$('#fClosed').val(), source:$('#fSource').val(), kw:$('#fKw').val() }, function(res){
+                 closed:$('#fClosed').val(), source:$('#fSource').val(), kw:$('#fKw').val(),
+                 deleted:$('#fDeleted').prop('checked') ? 1 : '' }, function(res){
         if (!res || !res.success) { $('#lstBody').html('<tr><td colspan="10" class="c">' + esc((res && res.message) || '載入失敗') + '</td></tr>'); return; }
         var rows = res.rows || [];
+        syncYears(res.years);
+        var del = $('#fDeleted').prop('checked');
         var open = rows.filter(function(r){ return !Number(r.is_closed); }).length;
         var scrap = rows.filter(function(r){ return r.scrap_no; }).length;
-        $('#sumBox').html('共 <b>' + rows.length + '</b> 張　未結案 <b>' + open + '</b> 張　已配發報廢單號 <b>' + scrap + '</b> 張');
+        $('#sumBox').html(del
+            ? ('已刪除 <b>' + rows.length + '</b> 張（資料仍留著，可還原）')
+            : ('共 <b>' + rows.length + '</b> 張　未結案 <b>' + open + '</b> 張　已配發報廢單號 <b>' + scrap + '</b> 張'));
         if (!rows.length) { $('#lstBody').html('<tr><td colspan="10" class="c">沒有符合條件的異常單</td></tr>'); return; }
         $('#lstBody').html(rows.map(function(r){
             var bomIr = (r.bom_no ? esc(r.bom_no) : '') + (r.ir_no ? ((r.bom_no ? '<br>' : '') + 'IR ' + esc(r.ir_no)) : '');
@@ -440,14 +494,53 @@ function load(){
                 + '<td>' + esc(r.responsible_unit) + '</td>'
                 + '<td>' + esc(r.final_label) + (r.scrap_no ? '<br><span class="st st-gm">報廢單 ' + esc(r.scrap_no) + '</span>' : '') + '</td>'
                 + '<td class="c"><span class="st st-' + r.status.code + '">' + esc(r.status.label) + '</span></td>'
-                + '<td class="c"><a href="qa_abnormal_form.php?id=' + r.id + '" class="btn btn-warm-o btn-xs">處理</a> '
-                + '<a href="qa_abnormal_print.php?id=' + r.id + '" target="_blank" class="btn btn-warm-o btn-xs"><i class="fa fa-print"></i></a></td>'
-                + '</tr>';
+                + '<td class="c">'
+                + (r.deleted_at
+                    ? ('<span class="muted-help">' + esc(dispDate(r.deleted_at)) + ' 由 ' + esc(r.deleted_name || '') + ' 刪除</span>'
+                       + (CAN_ADMIN ? ' <button class="btn btn-warm btn-xs act-restore" data-id="' + r.id + '" data-no="' + esc(r.abnormal_order_no) + '">還原</button>' : ''))
+                    : ('<a href="qa_abnormal_form.php?id=' + r.id + '" class="btn btn-warm-o btn-xs">處理</a> '
+                       + '<a href="qa_abnormal_print.php?id=' + r.id + '" target="_blank" class="btn btn-warm-o btn-xs"><i class="fa fa-print"></i></a>'
+                       + (CAN_ADMIN ? ' <button class="btn btn-warm-o btn-xs act-del" data-id="' + r.id + '" data-no="' + esc(r.abnormal_order_no) + '"><i class="fa fa-trash-o"></i></button>' : '')))
+                + '</td></tr>';
         }).join(''));
     }, 'json').fail(function(){ $('#lstBody').html('<tr><td colspan="10" class="c">連線失敗</td></tr>'); });
 }
+/* 年度下拉只列真的有資料的年度；後端每次都回最新的一份，這裡只在內容不同時重畫 */
+function syncYears(years){
+    if (!years || !years.length) return;
+    var cur = $('#fYear').val();
+    var have = $('#fYear option').map(function(){ return this.value; }).get().filter(function(v){ return v !== ''; }).join(',');
+    if (have === years.join(',')) return;
+    $('#fYear').html('<option value="">全部</option>' + years.map(function(y){
+        return '<option value="' + y + '"' + (String(y) === String(cur) ? ' selected' : '') + '>' + y + '</option>'; }).join(''));
+}
 $('#btnSearch').on('click', load);
-$('#fYear,#fMonth,#fClosed,#fSource').on('change', load);
+$('#fYear,#fMonth,#fClosed,#fSource,#fDeleted').on('change', load);
+
+/* ───────── 刪除／還原（軟刪除，一律留紀錄） ───────── */
+var DEL = { id:0, act:'delete' };
+$(document).on('click', '.act-del', function(){
+    DEL = { id:Number($(this).data('id')), act:'delete' };
+    $('#delTitle').text('刪除異常單 ' + $(this).data('no'));
+    $('#delNote').html('這張單會從清單上移除，<b>資料仍然留著</b>（勾「顯示已刪除」可以看到，必要時還原）。'
+        + '刪除一定會記下是誰、什麼時候、為什麼刪的。');
+    $('#delReq').show(); $('#delReason').val(''); $('#delErr').text('');
+    openMask('delMask');
+});
+$(document).on('click', '.act-restore', function(){
+    DEL = { id:Number($(this).data('id')), act:'restore' };
+    $('#delTitle').text('還原異常單 ' + $(this).data('no'));
+    $('#delNote').html('把這張單放回清單。原因可留空。');
+    $('#delReq').hide(); $('#delReason').val(''); $('#delErr').text('');
+    openMask('delMask');
+});
+$('#btnDelGo').on('click', function(){
+    var reason = $('#delReason').val().trim();
+    if (DEL.act === 'delete' && !reason) { $('#delErr').text('請填寫刪除原因'); return; }
+    post(DEL.act === 'delete' ? 'order_delete' : 'order_restore', { id:DEL.id, reason:reason }, function(){
+        closeMask('delMask'); load();
+    }, function(msg){ $('#delErr').text(msg); });
+});
 $('#fKw').on('keydown', function(e){ if (e.key === 'Enter') load(); });
 
 /* ───────── 開新單 ───────── */
@@ -515,15 +608,124 @@ $(document).on('click', '.tabs button', function(){
     $('.tabs button').removeClass('on'); $(this).addClass('on');
     $('.tabp').hide(); $('#tab-' + $(this).data('tab')).show();
 });
+function savedTick(){
+    var t = new Date();
+    $('#cfgSaved').text('已自動儲存 ' + ('0' + t.getHours()).slice(-2) + ':' + ('0' + t.getMinutes()).slice(-2) + ':' + ('0' + t.getSeconds()).slice(-2));
+}
+
+/* ───────── 拖曳排序：放開之後重新編號（10,20,30…）再整批存 ─────────
+   排序號畫面上不顯示，使用者只管順序；同一層之內才可以互換（分類是三層樹，
+   跨層互換等於改上層，那要另外挑「上層」欄位）。 */
+var DRAG_TR = null;
+$(document).on('dragstart', '.cfg td.drag', function(e){
+    DRAG_TR = $(this).closest('tr')[0];
+    $(DRAG_TR).addClass('dragging');
+    try { e.originalEvent.dataTransfer.effectAllowed = 'move'; e.originalEvent.dataTransfer.setData('text/plain', 'row'); } catch (err) {}
+});
+$(document).on('dragend', '.cfg td.drag', function(){ $('.cfg tr').removeClass('dragging drop-before drop-after'); DRAG_TR = null; });
+$(document).on('dragover', '.cfg tbody tr', function(e){
+    if (!DRAG_TR || this === DRAG_TR) return;
+    if ($(this).closest('tbody')[0] !== $(DRAG_TR).closest('tbody')[0]) return;
+    e.preventDefault();
+    var r = this.getBoundingClientRect();
+    var after = (e.originalEvent.clientY - r.top) > r.height / 2;
+    $('.cfg tr').removeClass('drop-before drop-after');
+    $(this).addClass(after ? 'drop-after' : 'drop-before');
+});
+$(document).on('drop', '.cfg tbody tr', function(e){
+    if (!DRAG_TR || this === DRAG_TR) return;
+    e.preventDefault();
+    var $tb = $(this).closest('tbody');
+    if ($tb[0] !== $(DRAG_TR).closest('tbody')[0]) return;
+    var grp = $tb.data('sortgrp');
+    if (grp === 'cause' && String($(this).data('parent')) !== String($(DRAG_TR).data('parent'))) {
+        alert('只能在同一層（同一個上層）之間調整順序；要換到別的上層請用「上層」欄位。');
+        $('.cfg tr').removeClass('drop-before drop-after');
+        return;
+    }
+    if ($(this).hasClass('drop-after')) $(this).after(DRAG_TR); else $(this).before(DRAG_TR);
+    $('.cfg tr').removeClass('drop-before drop-after');
+    renumberAndSave(grp, $tb);
+});
+function renumberAndSave(grp, $tb){
+    var sortCls = grp === 'cause' ? '.c-sort' : (grp === 'decider' ? '.d-sort' : '.o-sort');
+    var seen = {};
+    $tb.find('tr').each(function(){
+        var key = grp === 'cause' ? String($(this).data('parent') || 0) : 'x';
+        seen[key] = (seen[key] || 0) + 10;
+        $(this).find(sortCls).val(seen[key]);
+    });
+    post('cfg_save_all', { what:grp, rows:JSON.stringify(collectCfgRows(grp)) }, function(res){
+        if (res.causes) CFG.causes = res.causes;
+        if (res.disp_opts) { CFG.disp_opts = res.disp_opts; CFG.gm_opts = res.gm_opts; }
+        if (res.deciders) CFG.deciders = res.deciders;
+        if (grp === 'cause') renderCause(); else if (grp === 'decider') renderDec(); else renderOpts();
+        savedTick();
+    });
+}
+
+/* ───────── 相關單位意見：各部門的預設回覆職稱 ───────── */
+var ASK_POS = {};        // dept_id => [職稱清單]（逐部門向後端要一次就好）
+function askRow(deptId, posIds){
+    var dopt = DEPTS.map(function(d){ return '<option value="' + d.id + '"' + (Number(d.id) === Number(deptId) ? ' selected' : '') + '>' + esc(d.department_name) + '</option>'; }).join('');
+    return '<tr data-dept="' + (deptId || 0) + '">'
+        + '<td><select class="a-dept" data-eg-filter="輸入部門名稱篩選…"><option value="">請選擇…</option>' + dopt + '</select></td>'
+        + '<td class="a-pos-td" data-sel="' + (posIds || []).join(',') + '"><span class="muted-help">請先選部門</span></td>'
+        + '<td class="c"><button class="btn btn-warm-o btn-xs a-del">刪</button></td></tr>';
+}
+function renderAsk(){
+    var cfg = (CFG && CFG.ask_cfg) || {};
+    var keys = Object.keys(cfg);
+    $('#cfgAsk').html(keys.length ? keys.map(function(d){
+        return askRow(d, cfg[d].map(function(x){ return x.position_id; }));
+    }).join('') : '');
+    if (!keys.length) $('#cfgAsk').html('<tr><td colspan="3" class="c">尚未設定（沒設定的部門＝通知整個部門）</td></tr>');
+    $('#cfgAsk tr[data-dept]').each(function(){ loadAskPos($(this)); });
+}
+function loadAskPos($tr){
+    var d = $tr.find('.a-dept').val();
+    var sel = String($tr.find('.a-pos-td').data('sel') || '').split(',').filter(Boolean);
+    if (!d) { $tr.find('.a-pos-td').html('<span class="muted-help">請先選部門</span>'); return; }
+    $.get(API, { action:'dept_positions', dept_id:d }, function(res){
+        var rows = (res && res.rows) || [];
+        $tr.find('.a-pos-td').html(rows.length ? ('<div class="ask-pos">' + rows.map(function(p){
+            return '<label><input type="checkbox" class="a-pos" value="' + p.id + '"'
+                 + (sel.indexOf(String(p.id)) >= 0 ? ' checked' : '') + '> ' + esc(p.position_name) + '</label>';
+        }).join('') + '</div>') : '<span class="muted-help">這個部門目前沒有在職人員</span>');
+    }, 'json');
+}
+function saveAsk(){
+    var rows = [];
+    $('#cfgAsk tr[data-dept]').each(function(){
+        var d = $(this).find('.a-dept').val();
+        if (!d) return;
+        var ps = $(this).find('.a-pos:checked').map(function(){ return Number(this.value); }).get();
+        rows.push({ dept_id:Number(d), position_ids:ps });
+    });
+    post('ask_cfg_save', { rows:JSON.stringify(rows) }, function(res){ CFG.ask_cfg = res.cfg; savedTick(); });
+}
+$('#btnAskAdd').on('click', function(){
+    if ($('#cfgAsk').find('td[colspan]').length) $('#cfgAsk').empty();
+    $('#cfgAsk').append(askRow(0, []));
+});
+$(document).on('change', '#cfgAsk .a-dept', function(){
+    var $tr = $(this).closest('tr');
+    $tr.attr('data-dept', $(this).val() || 0).find('.a-pos-td').attr('data-sel', '').data('sel', '');
+    loadAskPos($tr);
+    saveAsk();
+});
+$(document).on('change', '#cfgAsk .a-pos', saveAsk);
+$(document).on('click', '#cfgAsk .a-del', function(){ $(this).closest('tr').remove(); saveAsk(); });
+
 function loadCfg(){
     $.get(API, { action:'settings_get' }, function(res){
         if (!res || !res.success) { alert('載入設定失敗'); return; }
         CFG = res;
         $('#cfgRate').val(res.rate);
         $('#cfgBfDays').val(res.backfill_days);
-        renderCause(); renderOpts(); renderDec();
+        renderCause(); renderOpts(); renderDec(); renderAsk();
     }, 'json');
-    if (!DEPTS.length) $.get(API, { action:'depts' }, function(res){ if (res && res.success) { DEPTS = res.rows; renderDec(); } }, 'json');
+    if (!DEPTS.length) $.get(API, { action:'depts' }, function(res){ if (res && res.success) { DEPTS = res.rows; renderDec(); renderAsk(); } }, 'json');
     // 職稱清單要先載好，否則已存的那幾列會顯示成「不限職稱」（看起來像設定不見了）
     if (!POSITIONS.length) $.get(API, { action:'positions' }, function(res){ if (res && res.success) { POSITIONS = res.rows; renderDec(); } }, 'json');
 }
@@ -532,47 +734,85 @@ function flatCause(){
     (function walk(ns, lv){ (ns || []).forEach(function(n){ n._lv = lv; out.push(n); walk(n.children, lv + 1); }); })(CFG.causes, 1);
     return out;
 }
+var CAUSE_OPEN = {};                 // cat_id => 是否展開（分類一多，全部攤開看不完）
 function renderCause(){
     var rows = flatCause();
+    rows.forEach(function(n){ n._kids = rows.some(function(x){ return Number(x.parent_id) === Number(n.cat_id); }); });
     $('#cfgCause').html(rows.map(function(n){
-        return '<tr data-cat="' + n.cat_id + '">'
-            + '<td><div class="lv-in' + (n._lv > 1 ? n._lv : '') + '"><input type="text" class="c-name" value="' + esc(n.name) + '"></div></td>'
+        return '<tr data-cat="' + n.cat_id + '" data-parent="' + (n.parent_id || 0) + '">'
+            + '<td class="drag" draggable="true" title="按住拖曳可以調整順序">&#x2822;</td>'
+            + '<td><div class="lv-in' + (n._lv > 1 ? n._lv : '') + '">'
+                + (n._kids ? ('<span class="c-tog" data-cat="' + n.cat_id + '">' + (CAUSE_OPEN[n.cat_id] ? '&#9662;' : '&#9656;') + '</span>') : '<span class="c-tog-x"></span>')
+                + '<input type="text" class="c-name" value="' + esc(n.name) + '"></div></td>'
             + '<td class="c">' + esc(n.parent_id ? (rows.filter(function(x){ return x.cat_id === n.parent_id; })[0] || {}).name || '' : '（第一層）') + '</td>'
-            + '<td><input type="number" class="c-sort" value="' + n.sort_order + '"></td>'
             + '<td class="c"><input type="checkbox" class="c-act" ' + (Number(n.is_active) ? 'checked' : '') + '></td>'
-            + '<td class="c"><button class="btn btn-warm btn-xs c-save">存</button> '
+            + '<td class="c"><input type="hidden" class="c-sort" value="' + n.sort_order + '">'
             + '<button class="btn btn-warm-o btn-xs c-del">刪</button></td></tr>';
     }).join('') || '<tr><td colspan="5" class="c">尚未建立</td></tr>');
     $('#nc_parent').html('<option value="">（第一層）</option>' + rows.filter(function(n){ return n._lv < 3; }).map(function(n){
         return '<option value="' + n.cat_id + '">' + esc('　'.repeat(n._lv - 1) + n.name) + '</option>';
     }).join(''));
+    applyCauseFold(rows);
 }
-$(document).on('click', '.c-save', function(){
-    var $tr = $(this).closest('tr');
+/* 收合：只要祖先有一個是收起來的，這一列就不顯示 */
+function applyCauseFold(rows){
+    var byId = {};
+    (rows || flatCause()).forEach(function(n){ byId[n.cat_id] = n; });
+    $('#cfgCause tr[data-cat]').each(function(){
+        var n = byId[Number($(this).data('cat'))];
+        var show = true, p = n && n.parent_id;
+        while (p) { if (!CAUSE_OPEN[p]) { show = false; break; } p = (byId[p] || {}).parent_id; }
+        $(this).toggle(show);
+    });
+}
+$(document).on('click', '.c-tog', function(){
+    var id = Number($(this).data('cat'));
+    CAUSE_OPEN[id] = !CAUSE_OPEN[id];
+    $(this).html(CAUSE_OPEN[id] ? '&#9662;' : '&#9656;');
+    applyCauseFold();
+});
+$('#btnCauseExpand').on('click', function(){ flatCause().forEach(function(n){ CAUSE_OPEN[n.cat_id] = true; }); renderCause(); });
+$('#btnCauseCollapse').on('click', function(){ CAUSE_OPEN = {}; renderCause(); });
+function saveCauseRow($tr, silent){
+    if (!$tr.data('cat')) return;
     post('cause_save', { cat_id:$tr.data('cat'), name:$tr.find('.c-name').val(),
         parent_id:(flatCause().filter(function(x){ return x.cat_id === Number($tr.data('cat')); })[0] || {}).parent_id || '',
         sort_order:$tr.find('.c-sort').val(), is_active:$tr.find('.c-act').prop('checked') ? 1 : '' },
-        function(res){ CFG.causes = res.causes; renderCause(); });
-});
+        function(res){ CFG.causes = res.causes; if (!silent) { renderCause(); } savedTick(); });
+}
+$(document).on('change', '#cfgCause .c-name, #cfgCause .c-act', function(){ saveCauseRow($(this).closest('tr'), true); });
 $(document).on('click', '.c-del', function(){
     if (!confirm('刪除這個分類？')) return;
     post('cause_del', { cat_id:$(this).closest('tr').data('cat') }, function(res){ CFG.causes = res.causes; renderCause(); });
 });
-$('#btnCauseAdd').on('click', function(){
-    if (!$('#nc_name').val().trim()) { alert('請填分類名稱'); return; }
-    post('cause_save', { name:$('#nc_name').val(), parent_id:$('#nc_parent').val(), sort_order:$('#nc_sort').val(), is_active:1 },
-        function(res){ CFG.causes = res.causes; $('#nc_name').val(''); renderCause(); });
-});
+function nextSort(list, parentId){
+    var mx = 0;
+    (list || []).forEach(function(n){
+        if (parentId !== undefined && Number(n.parent_id || 0) !== Number(parentId || 0)) return;
+        mx = Math.max(mx, Number(n.sort_order) || 0);
+    });
+    return mx + 10;                       // 排序號自動跳，畫面上不必顯示
+}
+function addCause(){
+    var nm = $('#nc_name').val().trim();
+    if (!nm) { alert('請填分類名稱'); return; }
+    var pid = $('#nc_parent').val();
+    post('cause_save', { name:nm, parent_id:pid, sort_order:nextSort(flatCause(), pid), is_active:1 },
+        function(res){ CFG.causes = res.causes; $('#nc_name').val('').focus(); renderCause(); savedTick(); });
+}
+$('#btnCauseAdd').on('click', addCause);
+$('#nc_name').on('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); addCause(); } });
 
 function optRow(o, kind){
     return '<tr data-opt="' + o.opt_id + '" data-kind="' + kind + '">'
+        + '<td class="drag" draggable="true" title="按住拖曳可以調整順序">&#x2822;</td>'
         + '<td><input type="text" class="o-name" value="' + esc(o.name) + '"></td>'
         + '<td class="c"><input type="checkbox" class="o-scrap" ' + (Number(o.is_scrap) ? 'checked' : '') + '></td>'
         + '<td class="c"><input type="checkbox" class="o-esc" ' + (Number(o.is_escalate) ? 'checked' : '') + '></td>'
         + '<td class="c"><input type="checkbox" class="o-capa" ' + (Number(o.need_capa) ? 'checked' : '') + '></td>'
-        + '<td><input type="number" class="o-sort" value="' + o.sort_order + '"></td>'
         + '<td class="c"><input type="checkbox" class="o-act" ' + (Number(o.is_active) ? 'checked' : '') + '></td>'
-        + '<td class="c"><button class="btn btn-warm btn-xs o-save">存</button> <button class="btn btn-warm-o btn-xs o-del">刪</button></td></tr>';
+        + '<td class="c"><input type="hidden" class="o-sort" value="' + o.sort_order + '">'
+        + '<button class="btn btn-warm-o btn-xs o-del">刪</button></td></tr>';
 }
 function renderOpts(){
     $('#cfgDisp').html((CFG.disp_opts || []).map(function(o){ return optRow(o, 'disp'); }).join('') || '<tr><td colspan="7" class="c">尚未建立</td></tr>');
@@ -582,17 +822,21 @@ $(document).on('click', '[data-optadd]', function(){
     var kind = $(this).data('optadd');
     var $tb = $(kind === 'gm' ? '#cfgGm' : '#cfgDisp');
     if ($tb.find('td[colspan]').length) $tb.empty();
-    $tb.append(optRow({ opt_id:0, name:'', is_scrap:0, is_escalate:0, need_capa:0, sort_order:99, is_active:1 }, kind));
+    $tb.append(optRow({ opt_id:0, name:'', is_scrap:0, is_escalate:0, need_capa:0,
+                        sort_order:nextSort(kind === 'gm' ? CFG.gm_opts : CFG.disp_opts), is_active:1 }, kind));
+    $tb.find('tr:last .o-name').focus();
 });
-$(document).on('click', '.o-save', function(){
-    var $tr = $(this).closest('tr');
-    if (!$tr.find('.o-name').val().trim()) { alert('請填名稱'); return; }
+/* 打完名稱（或改了任何一個勾選）就自動存檔，不必再按「存」 */
+function saveOptRow($tr, silent){
+    if (!$tr.find('.o-name').val().trim()) return;
     post('opt_save', { opt_id:$tr.data('opt'), kind:$tr.data('kind'), name:$tr.find('.o-name').val(),
         is_scrap:$tr.find('.o-scrap').prop('checked') ? 1 : '', is_escalate:$tr.find('.o-esc').prop('checked') ? 1 : '',
         need_capa:$tr.find('.o-capa').prop('checked') ? 1 : '', sort_order:$tr.find('.o-sort').val(),
         is_active:$tr.find('.o-act').prop('checked') ? 1 : '' },
-        function(res){ CFG.disp_opts = res.disp_opts; CFG.gm_opts = res.gm_opts; renderOpts(); });
-});
+        function(res){ CFG.disp_opts = res.disp_opts; CFG.gm_opts = res.gm_opts;
+                       if (!silent || !$tr.data('opt')) renderOpts(); savedTick(); });
+}
+$(document).on('change', '#cfgDisp input, #cfgGm input', function(){ saveOptRow($(this).closest('tr'), true); });
 $(document).on('click', '.o-del', function(){
     var $tr = $(this).closest('tr');
     if (!$tr.data('opt')) { $tr.remove(); return; }
@@ -605,14 +849,15 @@ function decRow(c){
     var popt = '<option value="">不限職稱</option>' + POSITIONS.map(function(p){
         return '<option value="' + p.id + '"' + (Number(p.id) === Number(c.position_id) ? ' selected' : '') + '>' + esc(p.position_name) + '</option>'; }).join('');
     return '<tr data-cfg="' + c.cfg_id + '">'
+        + '<td class="drag" draggable="true" title="按住拖曳可以調整順序">&#x2822;</td>'
         + '<td class="c"><select class="d-kind" data-eg-skip><option value="decider" selected>決策主管</option></select></td>'
         + '<td class="d-show muted-help">' + esc(c.show_name || '（選好部門與職稱後自動帶出）') + '</td>'
         + '<td><select class="d-dept" data-eg-skip><option value="">請選擇…</option>' + dopt + '</select></td>'
         + '<td><select class="d-pos" data-eg-skip>' + popt + '</select></td>'
         + '<td class="c"><input type="checkbox" class="d-sub" ' + (Number(c.include_sub) ? 'checked' : '') + '></td>'
-        + '<td><input type="number" class="d-sort" value="' + (c.sort_order || 0) + '"></td>'
         + '<td class="c"><input type="checkbox" class="d-act" ' + (Number(c.is_active) ? 'checked' : '') + '></td>'
-        + '<td class="c"><button class="btn btn-warm btn-xs d-save">存</button> <button class="btn btn-warm-o btn-xs d-del">刪</button>'
+        + '<td class="c"><input type="hidden" class="d-sort" value="' + (c.sort_order || 0) + '">'
+        + '<button class="btn btn-warm-o btn-xs d-del">刪</button>'
         + (c.cfg_id ? ' <button class="btn btn-warm-o btn-xs d-who" title="看這一列目前涵蓋誰"><i class="fa fa-users"></i></button>' : '') + '</td></tr>';
 }
 function renderDec(){
@@ -631,7 +876,8 @@ function renderDec(){
 $(document).on('click', '[data-decadd]', function(){
     var kind = $(this).data('decadd');
     if ($('#cfgDec').find('td[colspan]').length) $('#cfgDec').empty();
-    $('#cfgDec').append(decRow({ cfg_id:0, kind:kind, label:'', dept_id:0, position_id:0, include_sub:0, sort_order:0, is_active:1 }));
+    $('#cfgDec').append(decRow({ cfg_id:0, kind:kind, label:'', dept_id:0, position_id:0, include_sub:0,
+                                 sort_order:nextSort(CFG.deciders), is_active:1 }));
     refreshDecShow($('#cfgDec tr').last());
 });
 /* 顯示名稱＝部門＋職稱，選到什麼就即時顯示什麼（存檔時後端也是即時組，不存文字） */
@@ -653,15 +899,21 @@ $(document).on('change', '.d-dept', function(){
         refreshDecShow($tr);
     }, 'json');
 });
-$(document).on('click', '.d-save', function(){
-    var $tr = $(this).closest('tr');
-    if (!$tr.find('.d-dept').val()) { alert('請選部門'); return; }
+function saveDecRow($tr, silent){
+    if (!$tr.find('.d-dept').val()) return;
     post('decider_save', { cfg_id:$tr.data('cfg'), kind:$tr.find('.d-kind').val(),
         dept_id:$tr.find('.d-dept').val(), position_id:$tr.find('.d-pos').val(),
         include_sub:$tr.find('.d-sub').prop('checked') ? 1 : '', sort_order:$tr.find('.d-sort').val(),
         is_active:$tr.find('.d-act').prop('checked') ? 1 : '' },
-        function(res){ CFG.deciders = res.deciders; renderDec(); });
+        function(res){ CFG.deciders = res.deciders; if (!silent || !$tr.data('cfg')) renderDec(); savedTick(); });
+}
+/* 部門的 change 另有一支「重抓該部門職稱」的處理，所以這裡延後一點再存，
+   免得存到還沒換好的舊職稱 */
+$(document).on('change', '#cfgDec .d-dept', function(){
+    var $tr = $(this).closest('tr');
+    setTimeout(function(){ saveDecRow($tr, true); }, 350);
 });
+$(document).on('change', '#cfgDec .d-pos, #cfgDec .d-sub, #cfgDec .d-act', function(){ saveDecRow($(this).closest('tr'), true); });
 $(document).on('click', '.d-del', function(){
     var $tr = $(this).closest('tr');
     if (!$tr.data('cfg')) { $tr.remove(); return; }
