@@ -636,7 +636,8 @@ function dqa_trace_rows(PDO $db, array $f): array
     foreach (dqa_chunks($qids) as $ck) {
         $in = implode(',', array_fill(0, count($ck), '?'));
         $s = $db->prepare("SELECT qi.item_id, qi.product_id, qi.d_setting_d_id, qi.quantity, qi.unit_price,
-                                  qi.process_notes, ql.quote_no, ql.client_name,
+                                  qi.process_notes, COALESCE(qi.is_tiered,0) AS is_tiered,
+                                  ql.quote_no, ql.client_name,
                                   DATE_FORMAT(ql.quote_date,'%Y-%m-%d') qdate
                              FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id=qi.quote_id
                             WHERE qi.item_id IN ($in)");
@@ -661,7 +662,8 @@ function dqa_trace_rows(PDO $db, array $f): array
             $w[] = "qi.product_id IN (" . implode(',', array_fill(0, count($u), '?')) . ")";
             $bind = array_merge($bind, $u); }
         $s = $db->prepare("SELECT qi.item_id, qi.product_id, qi.d_setting_d_id, qi.quantity, qi.unit_price,
-                                  qi.process_notes, ql.quote_no, ql.client_name,
+                                  qi.process_notes, COALESCE(qi.is_tiered,0) AS is_tiered,
+                                  ql.quote_no, ql.client_name,
                                   DATE_FORMAT(ql.quote_date,'%Y-%m-%d') qdate
                              FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id=qi.quote_id
                             WHERE (" . implode(' OR ', $w) . ")
@@ -948,7 +950,31 @@ function dqa_trace_rows(PDO $db, array $f): array
             $add('s_none', 'warn', '訂單已結案卻查不到出貨單');
         }
 
+        // 報價的單價／新鮮度先算好：④數量 與 ⑤單價 都要用到（$qFresh 判「這張報價還算不算數」）
+        $qprice   = $q ? dqa_num($q['unit_price']) : 0.0;
+        $qAgeDays = ($q && $qdate !== '') ? (int)round((strtotime($odate) - strtotime($qdate)) / 86400) : -1;
+        $qFresh   = ($qSrc === 'bind') || ($qAgeDays >= 0 && $qAgeDays <= $validDays);
+
         // ④ 數量（只有「綁定」才判不符；推測配對本來就配不準，硬判會滿畫面假警報）
+        //
+        // 報價數量 vs 訂單數量（使用者指定要列嚴重，2026-09-21）。
+        // **這一項刻意不照 $lv() 依來源降級**（與日期先後那幾條不同）：日期先後在配錯對象時
+        // 很容易誤判，但「數量差了一個量級」不論配到哪一張報價都值得看一眼，所以推測配對也
+        // 一樣判嚴重，只在訊息後面標註是推測來的。覺得太吵可以在「設定」把這一項降級或關閉
+        //（$add() 會拿設定值當上限）。
+        // 兩種情況刻意完全不判：
+        //   ⑴ 階梯報價＝本來就是不同數量不同價，拿單一數量去比沒有意義
+        //   ⑵ 報價已過期（$qFresh 為假）＝那是 q_old 要講的事，同一件事不報兩次
+        // ⚠ ERP 報價匯入在 2026-09-21 之前把「4,000」讀成「4」（千分位逗號被截斷，已修
+        //   _upload_For_List.php 的 parseERPQty_erp）。**在報價單重新匯入之前，舊資料會讓
+        //   這一項冒出大量假的「數量不符」**；要暫時關掉請到本頁「設定」把它改成不檢查。
+        $qqty = $q ? dqa_num($q['quantity']) : 0.0;
+        $qSrcKey = ($qSrc === 'bind') ? 'map' : 'guess';
+        if ($q && $qFresh && empty($q['is_tiered'])
+            && $qqty > 0 && $oqty > 0 && dqa_diff_over($qqty, $oqty, $tol['qty_pct']))
+            $add('qty_quote', 'critical', '報價數量 ' . dqa_n($qqty) . ' 與訂單數量 '
+                 . dqa_n($oqty) . ' 不符' . $sfx($qSrcKey));
+
         if ($boms && in_array($bomSrc, ['map', 'legacy'], true) && $bQty > 0
             && dqa_diff_over($oqty, $bQty, $tol['qty_pct']))
             $add('qty_bom', 'warn', '製令數量合計 ' . dqa_n($bQty) . ' 與訂單數量 ' . dqa_n($oqty) . ' 不符');
@@ -964,9 +990,7 @@ function dqa_trace_rows(PDO $db, array $f): array
         //   實測抓到 2021 年的報價（883）拿來比 2026 的訂單（583），那是五年來調過價，
         //   報「單價不符」沒有意義，真正的缺失是「這支料號這麼久沒有重新報價」。
         //   出貨單價：只有綁定才判，推測配對可能配到同料號別張訂單的出貨。
-        $qprice = $q ? dqa_num($q['unit_price']) : 0.0;
-        $qAgeDays = ($q && $qdate !== '') ? (int)round((strtotime($odate) - strtotime($qdate)) / 86400) : -1;
-        $qFresh = ($qSrc === 'bind') || ($qAgeDays >= 0 && $qAgeDays <= $validDays);
+        // （$qprice／$qAgeDays／$qFresh 已在 ④ 之前算好，④ 的數量比對也要用）
         if ($q && $qAgeDays > $validDays)
             $add('q_old', 'warn', '最近一次報價是 ' . $qdate . '（距下單 ' . $qAgeDays . ' 天），已逾 ' . $validDays . ' 天未重新報價');
         if ($q && $qFresh && $qprice > 0 && $oprice > 0 && dqa_diff_over($qprice, $oprice, $tol['price_pct']))
@@ -1120,6 +1144,7 @@ function dqa_trace_items(): array
         's_early_bom'   => ['出貨早於製令',     'critical'],
         's_early_order' => ['出貨早於訂單',     'critical'],
         's_none'        => ['已結案未出貨',     'warn'],
+        'qty_quote'     => ['報價與訂單數量不符', 'critical'],
         'qty_bom'       => ['製令數量不符',     'warn'],
         'qty_over'      => ['出貨超出訂單量',   'critical'],
         'qty_ship'      => ['出貨數量不符',     'warn'],
