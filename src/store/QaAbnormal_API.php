@@ -831,6 +831,7 @@ case 'settings_get': {
         'can_admin'     => $perms['canAdmin'],
         // 列印圖章模板（ai-rules/18：沒指定就用系統預設回墨印）
         'stamp_tpl_id'  => (int)qab_setting_get($db, 'stamp_tpl_id', 0),
+        'stamp_tpl_ask_id' => (int)qab_setting_get($db, 'stamp_tpl_ask_id', 0),
         'stamp_tpls'    => $db->query("SELECT id, tpl_name FROM stamp_template WHERE is_active=1 ORDER BY id")->fetchAll(PDO::FETCH_ASSOC),
     ]);
 }
@@ -1176,17 +1177,19 @@ case 'setting_save': {
         if ($bd < 0 || $bd > 3650) jerr('補資料天數請填 0~3650');
         qab_setting_set($db, 'backfill_days', $bd);
     }
-    if (array_key_exists('stamp_tpl_id', $_POST)) {
-        $t = (int)$_POST['stamp_tpl_id'];
+    foreach (['stamp_tpl_id', 'stamp_tpl_ask_id'] as $k) {
+        if (!array_key_exists($k, $_POST)) continue;
+        $t = (int)$_POST[$k];
         if ($t > 0) {
             $c = $db->prepare("SELECT 1 FROM stamp_template WHERE id=? AND is_active=1");
             $c->execute([$t]);
             if (!$c->fetchColumn()) jerr('選擇的圖章模板不存在或已停用');
         }
-        qab_setting_set($db, 'stamp_tpl_id', $t);
+        qab_setting_set($db, $k, $t);
     }
     jout(true, ['rate' => $rate, 'backfill_days' => qab_backfill_days($db),
-                'stamp_tpl_id' => (int)qab_setting_get($db, 'stamp_tpl_id', 0)]);
+                'stamp_tpl_id' => (int)qab_setting_get($db, 'stamp_tpl_id', 0),
+                'stamp_tpl_ask_id' => (int)qab_setting_get($db, 'stamp_tpl_ask_id', 0)]);
 }
 
 default:

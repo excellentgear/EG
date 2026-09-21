@@ -614,9 +614,13 @@ function qab_backfill_sign_args(PDO $db, array $order, array $perms, array $post
  * 列印圖章要用的模板（管理員在清單頁「設定 → 其他設定」選；沒選就用系統預設回墨印）。
  * 注意 ai-rules/18 第11條：有模板時前端一定要連 eg_stamp_tpl.js 一起載，只載 eg_stamp.js 會靜默退回預設章。
  */
-function qab_stamp_tpl(PDO $db): ?array
+function qab_stamp_tpl(PDO $db, string $use = ''): ?array
 {
-    $id = (int)qab_setting_get($db, 'stamp_tpl_id', 0);
+    /* $use='ask' ＝相關單位意見那五格（紙本格子矮，通常會另外指定長方章）；
+       沒有另外指定時退回一般簽章的模板。 */
+    $key = $use === 'ask' ? 'stamp_tpl_ask_id' : 'stamp_tpl_id';
+    $id = (int)qab_setting_get($db, $key, 0);
+    if ($id <= 0 && $use !== '') $id = (int)qab_setting_get($db, 'stamp_tpl_id', 0);
     if ($id <= 0) return null;
     try {
         $st = $db->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");

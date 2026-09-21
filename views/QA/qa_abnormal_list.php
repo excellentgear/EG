@@ -334,10 +334,15 @@ $backfillDays = qab_backfill_days($db);
                 <div class="fgrid">
                     <div class="fld"><label>扣款「加成」預設值（1.1＝總金額×110%）</label><input type="number" step="0.01" id="cfgRate"></div>
                     <div class="fld"><label>補資料天數（今日往前幾天以前算補資料）</label><input type="number" id="cfgBfDays"></div>
-                    <div class="fld"><label>列印用圖章模板</label>
+                    <div class="fld"><label>列印用圖章模板（一般簽章）</label>
                         <select id="cfgStampTpl" data-eg-skip><option value="0">系統預設（回墨印）</option></select></div>
+                    <div class="fld"><label>相關單位意見的圖章模板</label>
+                        <select id="cfgStampTplAsk" data-eg-skip><option value="0">同「一般簽章」</option></select></div>
                 </div>
                 <div class="muted-help" style="margin-top:4px;">加成：新開的單會帶這個值，單張仍可自行修改。<br>
+                    <b>圖章模板</b>：這張表單一頁上有 <b>9 個簽章格</b>，圓章依規定是固定 91px（約 2.4cm）不縮小，
+                    九個疊起來會把下面的欄位擠掉——<b>建議選「人員簽章(長方)」這類長方章</b>；
+                    「相關單位意見」那五格格子最矮，可以再單獨指定一個更扁的模板。<br>
                     補資料天數：填寫日期在「今天往前這麼多天」以前的單，會多出「補登簽章」區，
                     由<b>異常單管理員</b>指定當時的簽章人員與印章日期（預設 10 天）。</div>
                 <div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:10px;">
@@ -737,6 +742,9 @@ function loadCfg(){
         $('#cfgStampTpl').html('<option value="0">系統預設（回墨印）</option>' + (res.stamp_tpls || []).map(function(t){
             return '<option value="' + t.id + '"' + (Number(t.id) === Number(res.stamp_tpl_id) ? ' selected' : '') + '>'
                  + esc(t.tpl_name) + '</option>'; }).join(''));
+        $('#cfgStampTplAsk').html('<option value="0">同「一般簽章」</option>' + (res.stamp_tpls || []).map(function(t){
+            return '<option value="' + t.id + '"' + (Number(t.id) === Number(res.stamp_tpl_ask_id) ? ' selected' : '') + '>'
+                 + esc(t.tpl_name) + '</option>'; }).join(''));
         renderCause(); renderOpts(); renderDec(); renderAsk();
     }, 'json');
     if (!DEPTS.length) $.get(API, { action:'depts' }, function(res){ if (res && res.success) { DEPTS = res.rows; renderDec(); renderAsk(); } }, 'json');
@@ -991,7 +999,8 @@ $(document).on('click', '[data-saveall]', function(){
 
 $('#btnSaveEtc').on('click', function(){
     post('setting_save', { surcharge_rate:$('#cfgRate').val(), backfill_days:$('#cfgBfDays').val(),
-                           stamp_tpl_id:$('#cfgStampTpl').val() }, function(res){
+                           stamp_tpl_id:$('#cfgStampTpl').val(),
+                           stamp_tpl_ask_id:$('#cfgStampTplAsk').val() }, function(res){
         BF_DAYS = Number(res.backfill_days);
         alert('已儲存');
     });

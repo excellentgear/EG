@@ -56,7 +56,8 @@ try {
     ]);
 } catch (Throwable $e) {}
 
-$stampTpl  = qab_stamp_tpl($db);          // 圖章模板（管理員在清單頁「設定 → 其他設定」選）
+$stampTpl    = qab_stamp_tpl($db);            // 一般簽章用的圖章模板（設定 → 其他設定）
+$stampTplAsk = qab_stamp_tpl($db, 'ask');     // 相關單位意見那五格可以另外指定（例：長方章）
 $causeMap  = qab_cause_map($db);
 $dispOpts  = qab_options($db, 'disp', false);
 $gmOpts    = qab_options($db, 'gm', false);
@@ -171,15 +172,22 @@ table.f td.t { vertical-align:top; }
         font-style:normal; font-size:9px; line-height:1; }
 .vert { writing-mode:vertical-rl; text-orientation:upright; letter-spacing:4px; }
 .sig { text-align:center; }
-.sig .cap { font-size:10px; text-align:left; }
-.sigbox { display:flex; align-items:center; justify-content:center; }
+/* 標題貼著圖章放在左邊（原本自己佔一整列，圖章被擠到下面去、整張表就變高）：
+   「(業務/品管) 主管：」會自動折成兩行，字級縮小，跟圖章維持在同一個高度。 */
+.sig .cap { float:left; width:40px; font-size:8px; line-height:1.12; text-align:left; color:#000; }
+.sigbox { display:flex; align-items:center; justify-content:center; overflow:hidden; }
+/* 簽章格與它左邊的內容格之間不畫線——有線的話章看起來像獨立的一欄，分不出是誰簽的。
+   border-collapse 之下相鄰的兩條邊會合併，所以兩邊都要拿掉（只拿掉一邊仍然看得到線）。 */
+/* 特異度要壓得過上面的 `table.f th, table.f td{border:1px}`，不然寫了沒有作用 */
+table.f td.nobr { border-right:0; }
+table.f td.sig.nobl { border-left:0; }
 .note { font-size:10px; margin-top:3px; }
 .small { font-size:10px; color:#333; }
 .mem td { height:15px; }
-table.ask td { height:13mm; }
+table.ask td { height:12mm; }
 table.ask .askbd { font-size:10px; line-height:1.35; }
-/* 簽章格與它左邊的內容格之間不畫線——有線的話章會看起來像獨立的一欄，分不出是哪個單位簽的 */
 table.ask td.sig { border-left:0; }
+table.ask td.t   { border-right:0; }
 /* 圖章尺寸一律抄 ai-rules/18 鐵則6 這一行，不要自己另外發明數字 */
 .stamp-wrap svg, svg.car-stamp { width:91px; height:91px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
 svg.eg-stamp-tpl { height:auto !important; }
@@ -246,34 +254,34 @@ svg.eg-stamp-tpl { height:auto !important; }
     <?php endfor; ?>
 </table>
 
-<!-- 異常原因分類 -->
+<!-- 異常原因分類 ＋ 承辦簽章（紙本的承辦章放這一列，異常現象才不會被章撐高） -->
 <table class="f">
-    <colgroup><col style="width:16%"><col></colgroup>
+    <colgroup><col style="width:16%"><col><col style="width:26%"></colgroup>
     <tr>
         <td class="lb">異常原因分類</td>
-        <td class="optrow">
+        <td class="optrow nobr">
             <?php foreach ($lv1 as $c) echo cb($c['name'], isset($selRoots[$c['cat_id']])); ?>
             <?php if ($deepPaths): ?><div class="small" style="margin-top:2px;">選定：<?= h(implode('；', $deepPaths)) ?></div><?php endif; ?>
+        </td>
+        <td class="sig nobl">
+            <div class="cap">(業務/品管)<br>承辦：</div>
+            <div class="sigbox" data-stamp="<?= h($o['owner_sign_name']) ?>" data-dept="<?= h($o['signs']['owner']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['owner']['position'] ?? '') ?>" data-date="<?= h(d($o['owner_sign_at'] ?: $o['fill_date'])) ?>"></div>
         </td>
     </tr>
 </table>
 
-<!-- 異常現象 ＋ 承辦簽章 -->
+<!-- 異常現象 -->
 <table class="f">
-    <colgroup><col style="width:16%"><col><col style="width:26%"></colgroup>
+    <colgroup><col style="width:16%"><col></colgroup>
     <tr>
         <td class="lb">異 常 現 象</td>
-        <td class="t" style="height:18mm;"><?= nl2br(h($o['abnormal_phenomenon'])) ?>
+        <td class="t" style="height:16mm;"><?= nl2br(h($o['abnormal_phenomenon'])) ?>
             <?php if (trim((string)$o['defect_detail']) !== ''): ?>
             <div class="small" style="margin-top:4px;">原因分析：<?= nl2br(h($o['defect_detail'])) ?></div>
             <?php endif; ?>
             <?php if (trim((string)$o['qa_ps']) !== ''): ?>
             <div class="small" style="margin-top:4px;">品管備註：<?= nl2br(h($o['qa_ps'])) ?></div>
             <?php endif; ?>
-        </td>
-        <td class="sig">
-            <div class="cap">(業務/品管) 承辦：</div>
-            <div class="sigbox" data-stamp="<?= h($o['owner_sign_name']) ?>" data-dept="<?= h($o['signs']['owner']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['owner']['position'] ?? '') ?>" data-date="<?= h(d($o['owner_sign_at'] ?: $o['fill_date'])) ?>"></div>
         </td>
     </tr>
 </table>
@@ -283,15 +291,15 @@ svg.eg-stamp-tpl { height:auto !important; }
     <colgroup><col style="width:16%"><col><col style="width:26%"></colgroup>
     <tr>
         <td class="lb">異常處置方式</td>
-        <td class="optrow"><?php foreach ($dispOpts as $op) echo cb($op['name'], in_array($op['opt_id'], $o['disp_ids'], true)); ?></td>
-        <td class="sig" rowspan="2">
-            <div class="cap">(業務/品管) 主管：</div>
+        <td class="optrow nobr"><?php foreach ($dispOpts as $op) echo cb($op['name'], in_array($op['opt_id'], $o['disp_ids'], true)); ?></td>
+        <td class="sig nobl" rowspan="2">
+            <div class="cap">(業務/品管)<br>主管：</div>
             <div class="sigbox" data-stamp="<?= h($o['decided_name']) ?>" data-dept="<?= h($o['signs']['disp']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['disp']['position'] ?? '') ?>" data-date="<?= h(d($o['disp_decided_at'])) ?>"></div>
         </td>
     </tr>
     <tr>
         <td class="lb">處 置 說 明</td>
-        <td class="t" style="height:21mm;"><?= nl2br(h($o['disposition_note'])) ?></td>
+        <td class="t nobr" style="height:21mm;"><?= nl2br(h($o['disposition_note'])) ?></td>
     </tr>
 </table>
 
@@ -312,7 +320,7 @@ svg.eg-stamp-tpl { height:auto !important; }
             [$box, $txt, $who, $dt] = askCell($slotData, $keys, 'h', 'd'); ?>
         <td class="t"><?= $box ?><div class="askbd"><?= $txt ?></div></td>
         <td class="sig t"><div class="cap">簽章：</div>
-            <div class="sigbox" style="min-height:0;" data-stamp="<?= h($who) ?>" data-date="<?= h(d($dt)) ?>"></div></td>
+            <div class="sigbox" style="min-height:0;" data-tpl="ask" data-stamp="<?= h($who) ?>" data-date="<?= h(d($dt)) ?>"></div></td>
         <?php endforeach; ?>
     </tr>
     <?php endforeach; ?>
@@ -320,7 +328,7 @@ svg.eg-stamp-tpl { height:auto !important; }
         <?php [$box, $txt, $who, $dt] = askCell($slotData, ['sales'], 'h', 'd'); ?>
         <td class="t" colspan="3"><?= $box ?><div class="askbd"><?= $txt ?></div></td>
         <td class="sig t"><div class="cap">簽章：</div>
-            <div class="sigbox" style="min-height:0;" data-stamp="<?= h($who) ?>" data-date="<?= h(d($dt)) ?>"></div></td>
+            <div class="sigbox" style="min-height:0;" data-tpl="ask" data-stamp="<?= h($who) ?>" data-date="<?= h(d($dt)) ?>"></div></td>
     </tr>
 </table>
 
@@ -329,18 +337,18 @@ svg.eg-stamp-tpl { height:auto !important; }
     <colgroup><col style="width:16%"><col><col style="width:26%"></colgroup>
     <tr>
         <td class="lb" rowspan="3">總經理 裁示</td>
-        <td><?php
+        <td class="nobr"><?php
             foreach ($gmOpts as $op) echo cb($op['name'], in_array($op['opt_id'], $o['gm_ids'], true));
             echo cb('扣款', !empty($o['gm_deduct']));
         ?></td>
-        <td class="sig" rowspan="3">
-            <div class="cap">簽章：</div>
+        <td class="sig nobl" rowspan="3">
+            <div class="cap">總經理<br>簽章：</div>
             <div class="sigbox" data-stamp="<?= h($o['gm_name']) ?>" data-dept="<?= h($o['signs']['gm']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['gm']['position'] ?? '') ?>" data-date="<?= h(d($o['gm_decided_at'])) ?>"
                  data-deputy="<?= !empty($o['gm_by_deputy']) ? 1 : '' ?>"></div>
         </td>
     </tr>
-    <tr><td class="t" style="height:12mm;"><?= nl2br(h($o['gm_note'])) ?></td></tr>
-    <tr><td>矯正單號：<?= h($o['capa_order_no']) ?></td></tr>
+    <tr><td class="t nobr" style="height:11mm;"><?= nl2br(h($o['gm_note'])) ?></td></tr>
+    <tr><td class="nobr">矯正單號：<?= h($o['capa_order_no']) ?></td></tr>
 </table>
 
 <?php if ($showDeduct): ?>
@@ -411,7 +419,8 @@ svg.eg-stamp-tpl { height:auto !important; }
 <script>
 // 圖章上緣的公司全名來自這個全域變數（ai-rules/18），沒設定就印不出公司名（使用者回報）
 window.__ownCompany = <?= json_encode($company, JSON_UNESCAPED_UNICODE) ?>;
-var STAMP_TPL = <?= json_encode($stampTpl['schema'] ?? null, JSON_UNESCAPED_UNICODE) ?>;
+var STAMP_TPL     = <?= json_encode($stampTpl['schema'] ?? null, JSON_UNESCAPED_UNICODE) ?>;
+var STAMP_TPL_ASK = <?= json_encode($stampTplAsk['schema'] ?? ($stampTpl['schema'] ?? null), JSON_UNESCAPED_UNICODE) ?>;
 </script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_stamp.js') ?>"></script>
 <!-- 有指定圖章模板時這一支一定要一起載，漏載會靜默退回預設章（ai-rules/18 第11條） -->
@@ -428,10 +437,25 @@ var STAMP_TPL = <?= json_encode($stampTpl['schema'] ?? null, JSON_UNESCAPED_UNIC
             var dep = (b.getAttribute('data-deputy') || '') === '1';
             // 模板若有 {部門}{職稱} token，要用「簽章當時」的部門職稱（ai-rules/22）
             var dpt = b.getAttribute('data-dept') || '', pos = b.getAttribute('data-pos') || '';
-            try { b.innerHTML = EGStamp.stamp(nm, dt, dep, STAMP_TPL, dpt, pos); } catch (e) {}
+            var tpl = b.getAttribute('data-tpl') === 'ask' ? STAMP_TPL_ASK : STAMP_TPL;
+            try { b.innerHTML = EGStamp.stamp(nm, dt, dep, tpl, dpt, pos); } catch (e) {}
         }
-        // 多頁才印頁碼（ai-rules/16：左下 counter(pages)）
+        /* 超過一頁時在畫面上（不印出來）講清楚原因與解法。
+           **刻意不做整頁自動縮放**——ai-rules/18 第8條：整頁縮放與「圖章維持固定尺寸」天生互斥，
+           試過三輪都不如預期，正確解法是把圖章改成長方章。 */
         var onePage = (297 - 22) * 96 / 25.4;
+        if (document.body.scrollHeight > onePage + 2) {
+            var w = document.createElement('div');
+            w.className = 'noprint';
+            w.style.cssText = 'margin:6px auto;max-width:760px;border:1px solid #DD5138;background:#FFF3EC;'
+                + 'color:#8a3b1e;padding:8px 12px;border-radius:4px;font-size:13px;line-height:1.6;text-align:left;';
+            w.innerHTML = '<b>這張單目前會印成兩頁</b>（內容 ' + Math.round(document.body.scrollHeight)
+                + 'px，一頁可印 ' + Math.round(onePage) + 'px）。<br>'
+                + '紙本一頁上有 9 個簽章格，<b>圓章依規定固定 91px（約 2.4cm）不縮小</b>，蓋滿就會超過一頁。<br>'
+                + '請到清單頁「設定 → 其他設定 → 列印用圖章模板」改選<b>長方章</b>（例：人員簽章(長方)），'
+                + '或單獨指定「相關單位意見的圖章模板」。';
+            document.body.insertBefore(w, document.body.firstChild);
+        }
         if (document.body.scrollHeight > onePage * 0.95) {
             var st = document.createElement('style');
             st.textContent = "@page{ @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:8.5pt; color:#333; } }";
