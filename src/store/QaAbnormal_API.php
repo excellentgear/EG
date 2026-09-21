@@ -183,6 +183,7 @@ case 'get': {
         'my_dept_ids'  => qab_user_dept_ids($db, $uid),
         // 相關單位意見：各部門的預設回覆職稱（勾部門時自動帶入）＋部門清單
         'ask_cfg'      => qab_ask_cfg($db),
+        'ask_slots'    => qab_ask_slots(),
         'depts'        => $db->query("SELECT id, name AS department_name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC),
     ]);
 }
@@ -823,6 +824,7 @@ case 'settings_get': {
         'gm_opts'   => qab_options($db, 'gm', false),
         'deciders'  => qab_decider_cfgs($db, 'decider', false),
         'ask_cfg'   => qab_ask_cfg($db),
+        'ask_slots' => qab_ask_slots(),
         'gm_person' => qab_gm_person($db),
         'rate'          => qab_default_rate($db),
         'backfill_days' => qab_backfill_days($db),
@@ -1124,7 +1126,7 @@ case 'bom_processes': {
 
 /* ═══════════ 相關單位意見：各部門的預設回覆職稱（管理員設定） ═══════════ */
 case 'ask_cfg_get': {
-    jout(true, ['cfg' => qab_ask_cfg($db)]);
+    jout(true, ['cfg' => qab_ask_cfg($db), 'slots' => qab_ask_slots()]);
 }
 
 case 'ask_cfg_save': {
@@ -1133,14 +1135,17 @@ case 'ask_cfg_save': {
     $db->beginTransaction();
     try {
         $db->exec("DELETE FROM qa_ask_dept_cfg");
-        $ins = $db->prepare("INSERT IGNORE INTO qa_ask_dept_cfg (dept_id,position_id,sort_order) VALUES (?,?,?)");
+        $ins = $db->prepare("INSERT IGNORE INTO qa_ask_dept_cfg (dept_id,position_id,paper_slot,sort_order) VALUES (?,?,?,?)");
+        $slots = qab_ask_slots();
         foreach ($rows as $r) {
             $d = (int)($r['dept_id'] ?? 0);
             if ($d <= 0) continue;
+            $ps = trim((string)($r['paper_slot'] ?? ''));
+            if ($ps !== '' && !isset($slots[$ps])) jerr('紙本欄位不正確，請重新整理頁面');
+            $pids = array_values(array_unique(array_map('intval', (array)($r['position_ids'] ?? []))));
+            if (!$pids) $pids = [0];       // 只設紙本欄位、不指定職稱也要留得住（0＝通知整個部門）
             $i = 0;
-            foreach (array_unique(array_map('intval', (array)($r['position_ids'] ?? []))) as $pid) {
-                if ($pid > 0) $ins->execute([$d, $pid, $i++]);
-            }
+            foreach ($pids as $pid) $ins->execute([$d, $pid, $ps !== '' ? $ps : null, $i++]);
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }

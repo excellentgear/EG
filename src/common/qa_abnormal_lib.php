@@ -140,10 +140,15 @@ function qab_ensure_schema(PDO $db): void
         id INT AUTO_INCREMENT PRIMARY KEY,
         dept_id INT NOT NULL,
         position_id INT NOT NULL,
+        paper_slot VARCHAR(12) NULL COMMENT '對應紙本「相關單位意見」的哪一格（qab_ask_slots()）；沒對到就不會印在紙本上',
         sort_order INT NOT NULL DEFAULT 0,
         UNIQUE KEY uk_dp (dept_id, position_id),
         KEY idx_d (dept_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='相關單位意見：各部門的預設回覆職稱（可多選，勾部門時自動帶入）'");
+    $acols = $db->query("SHOW COLUMNS FROM qa_ask_dept_cfg")->fetchAll(PDO::FETCH_COLUMN);
+    if (!in_array('paper_slot', $acols, true)) {
+        $db->exec("ALTER TABLE qa_ask_dept_cfg ADD COLUMN paper_slot VARCHAR(12) NULL COMMENT '對應紙本相關單位意見的哪一格' AFTER position_id");
+    }
 
     $db->exec("CREATE TABLE IF NOT EXISTS qa_abnormal_bom (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -782,10 +787,44 @@ function qab_bom_processes(PDO $db, array $bomNos): array
    相關單位意見：各部門的預設回覆職稱
    ───────────────────────────────────────────────────────────── */
 
+/**
+ * 紙本 2-QA-01-01 的「相關單位意見」是**固定五格**（發生單位／技術／生管·採購／品保／業務），
+ * 不是想印幾個部門就印幾個——所以線上勾的部門要對應到這幾格才印得出來（使用者回報：印出董事長室是錯的）。
+ * org＝沒有另外設定時，用全站組織角色綁定自動對應的部門。
+ */
+function qab_ask_slots(): array
+{
+    return [
+        'occur'    => ['label' => '發生單位(僅廠內需填)', 'org' => ''],
+        'tech'     => ['label' => '技術',   'org' => 'rd_dept'],
+        'pm'       => ['label' => '生管',   'org' => 'pm_dept'],
+        'purchase' => ['label' => '採購',   'org' => 'purchase_dept'],
+        'qa'       => ['label' => '品保',   'org' => 'qc_dept'],
+        'sales'    => ['label' => '業務',   'org' => 'sales_dept'],
+    ];
+}
+
+/** dept_id => 紙本欄位代碼；先看管理員設定，沒設定才用組織角色綁定（含下轄）自動對應 */
+function qab_dept_slot_map(PDO $db): array
+{
+    $map = [];
+    require_once __DIR__ . '/org_role_lib.php';
+    foreach (qab_ask_slots() as $k => $sl) {
+        if ($sl['org'] === '') continue;
+        foreach (eg_org_dept_ids($db, $sl['org']) as $d) if (!isset($map[(int)$d])) $map[(int)$d] = $k;
+    }
+    try {
+        $rows = $db->query("SELECT DISTINCT dept_id, paper_slot FROM qa_ask_dept_cfg WHERE paper_slot IS NOT NULL AND paper_slot<>''")
+                   ->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $r) $map[(int)$r['dept_id']] = (string)$r['paper_slot'];   // 管理員設定優先
+    } catch (Throwable $e) {}
+    return $map;
+}
+
 /** dept_id => [['position_id','position_name'], ...]（管理員設定，勾部門時自動帶入） */
 function qab_ask_cfg(PDO $db): array
 {
-    $rows = $db->query("SELECT c.dept_id, c.position_id, p.name AS position_name, d.name AS dept_name
+    $rows = $db->query("SELECT c.dept_id, c.position_id, c.paper_slot, p.name AS position_name, d.name AS dept_name
                         FROM qa_ask_dept_cfg c
                         LEFT JOIN position p ON p.id=c.position_id
                         LEFT JOIN department d ON d.id=c.dept_id
@@ -794,6 +833,7 @@ function qab_ask_cfg(PDO $db): array
     foreach ($rows as $r) {
         $out[(int)$r['dept_id']][] = ['position_id' => (int)$r['position_id'],
                                       'position_name' => (string)$r['position_name'],
+                                      'paper_slot' => (string)$r['paper_slot'],
                                       'dept_name' => (string)$r['dept_name']];
     }
     return $out;

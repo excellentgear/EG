@@ -303,7 +303,14 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     </div>
 
                     <div class="fgrid" style="margin-top:10px;grid-template-columns:1fr;">
-                        <div class="fld"><label>異常現象</label><textarea id="f_phe" rows="3"></textarea></div>
+                        <div class="fld"><label>異常現象</label><textarea id="f_phe" rows="3"></textarea>
+                            <div class="ro-note" style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                                <b>(業務/品管) 承辦 簽章</b>
+                                <span id="ownerWho" class="muted-help">（未簽）</span>
+                                <button class="btn btn-warm btn-xs" id="btnOwnerSign"><i class="fa fa-pencil"></i> 簽章</button>
+                                <button class="btn btn-warm-o btn-xs" id="btnOwnerClear" style="display:none;">取消簽章</button>
+                            </div>
+                        </div>
                     </div>
                     <div class="fgrid" style="grid-template-columns:1fr 1fr;">
                         <div class="fld"><label>原因分析</label><textarea id="f_detail" rows="2"></textarea></div>
@@ -664,6 +671,13 @@ function render(){
     renderBoms();
     renderProcPick();
 
+    /* 承辦簽章（紙本「異常現象」右邊那一格）——畫面上原本沒有入口，等於永遠簽不了 */
+    $('#ownerWho').text(o.owner_sign_name
+        ? (o.owner_sign_name + '　' + dispDate(o.owner_sign_at))
+        : '（未簽）');
+    $('#btnOwnerSign').toggle(canEdit && !o.owner_sign_at).prop('disabled', false);
+    $('#btnOwnerClear').toggle(canEdit && !!o.owner_sign_at);
+
     $('#secHead').toggleClass('locked', !canEdit);
     $('#secHead input,#secHead textarea,#secHead select').prop('disabled', !canEdit);
     if (bound) $('#f_client').prop('readonly', true);
@@ -893,7 +907,7 @@ function renderSignTable(){
         var done = r && r.status === 'Returned';
         var dt = done ? String(r.return_date || '').substring(0, 10) : biz;
         h += '<tr class="sg-ask" data-askdept="' + deptId + '"' + (r ? (' data-flow="' + r.flow_id + '"') : '') + '>'
-           + '<td>相關單位意見<br><b>' + esc(askDeptName(deptId)) + '</b></td>'
+           + '<td>相關單位意見<br><b>' + esc(askDeptName(deptId)) + '</b>' + askSlotNote(deptId) + '</td>'
            + '<td>' + (done ? (esc(r.replied_name || '') + '<br><span class="muted-help">' + dispDate(r.return_date) + '</span>')
                             : '<span class="muted-help">（未補登）</span>') + '</td>'
            + '<td><input type="date" class="sg-date" value="' + esc(dt) + '"' + (done ? ' disabled' : '') + '></td>'
@@ -1133,6 +1147,11 @@ function saveHead(silent){
     }, function(){ savedAt('#savedHead'); if (!silent) toast('已儲存'); }, !!silent);
 }
 $('#btnSaveHead').on('click', function(){ saveHead(false); });
+$('#btnOwnerSign').on('click', function(){ post('owner_sign', { id:OID }, function(){ toast('已簽章'); }); });
+$('#btnOwnerClear').on('click', function(){
+    if (!confirm('取消承辦簽章？')) return;
+    post('owner_sign', { id:OID, clear:1 }, function(){ toast('已取消簽章'); });
+});
 /* 欄位改完（離開欄位或改選）就自動存——使用者要求不要再有「忘記按存檔」這種事。
    打字中的欄位用 input 事件延後久一點再存，免得每打一個字就送一次。 */
 $(document).on('change', '#secHead input, #secHead select', function(){
@@ -1146,6 +1165,15 @@ $(document).on('input', '#secHead textarea', function(){ autoSave('head', functi
 function askDeptName(id){
     var d = (D.depts || []).filter(function(x){ return Number(x.id) === Number(id); })[0];
     return d ? d.department_name : ('部門#' + id);
+}
+/* 紙本「相關單位意見」是固定五格，對應不到就不會印在紙本上——畫面要講出來，
+   不然管理員會以為勾了就一定印得出來（使用者回報：印出董事長室是錯的）。 */
+function askSlotNote(deptId){
+    var cfg = (D.ask_cfg || {})[deptId] || [];
+    var k = (cfg[0] || {}).paper_slot || '';
+    var slots = D.ask_slots || {};
+    if (k && slots[k]) return '<div class="muted-help" style="font-size:11px;">紙本：' + esc(slots[k].label) + '</div>';
+    return '<div class="muted-help" style="font-size:11px;color:var(--coral);">紙本未對應（不會印出）</div>';
 }
 function renderRounds(){
     var o = D.order, rows = o.rounds || [];
@@ -1175,7 +1203,7 @@ function renderRounds(){
 
         h += '<tr data-dept="' + deptId + '"' + (r ? (' data-flow="' + r.flow_id + '"') : '') + '>'
            + '<td class="c"><input type="checkbox" class="ak-on"' + (r ? ' checked' : '') + (canAsk ? '' : ' disabled') + '></td>'
-           + '<td>' + esc(askDeptName(deptId)) + '</td>'
+           + '<td>' + esc(askDeptName(deptId)) + askSlotNote(deptId) + '</td>'
            + '<td>' + posHtml + '</td>'
            + '<td class="c">' + (r ? ('<span class="rtg ' + (done ? 'rtg-done' : 'rtg-wait') + '">' + (done ? '已回覆' : '等待回覆') + '</span>'
                                       + '<div class="muted-help" style="font-size:11px;">' + dispDate(r.asked_at) + '</div>')

@@ -319,9 +319,13 @@ $backfillDays = qab_backfill_days($db);
 
             <div class="tabp" id="tab-ask" style="display:none;">
                 <div class="note-box">處理頁的「相關單位意見」左側會列出這裡設定的部門，<b>勾起來就自動帶入該部門的預設回覆職稱</b>。
-                    同一個部門可以設好幾個職稱（例：課長＋組長），<b>系統會通知這些人，其中一位回覆並簽章即可</b>。
-                    沒有設定職稱的部門＝通知整個部門。</div>
-                <table class="cfg"><thead><tr><th style="width:30%">部門</th><th>預設回覆職稱（可多選）</th><th style="width:12%">操作</th></tr></thead>
+                    同一個部門可以設好幾個職稱（例：課長＋組長），<b>系統會通知這些人，其中一位回覆並簽章即可</b>；
+                    沒有設定職稱的部門＝通知整個部門。<br>
+                    <b>紙本欄位</b>：紙本 2-QA-01-01 的「相關單位意見」是<b>固定五格</b>（發生單位／技術／生管·採購／品保／業務），
+                    所以要指定這個部門的意見要印在哪一格。<b>沒有指定的部門不會印在紙本上</b>（畫面上仍看得到）。
+                    留空時系統會用「組織角色綁定」自動對應（技術→技術、生管→生管、採購→採購、品管→品保、業務→業務）。</div>
+                <table class="cfg"><thead><tr><th style="width:24%">部門</th><th style="width:20%">紙本欄位</th>
+                    <th>預設回覆職稱（可多選）</th><th style="width:10%">操作</th></tr></thead>
                     <tbody id="cfgAsk"></tbody></table>
                 <div style="margin-top:8px;"><button class="btn btn-warm-o btn-sm" id="btnAskAdd"><i class="fa fa-plus"></i> 新增一個部門</button></div>
             </div>
@@ -668,10 +672,14 @@ function renumberAndSave(grp, $tb){
 
 /* ───────── 相關單位意見：各部門的預設回覆職稱 ───────── */
 var ASK_POS = {};        // dept_id => [職稱清單]（逐部門向後端要一次就好）
-function askRow(deptId, posIds){
+function askRow(deptId, posIds, slot){
     var dopt = DEPTS.map(function(d){ return '<option value="' + d.id + '"' + (Number(d.id) === Number(deptId) ? ' selected' : '') + '>' + esc(d.department_name) + '</option>'; }).join('');
+    var slots = (CFG && CFG.ask_slots) || {};
+    var sopt = '<option value="">（自動對應／不印在紙本）</option>' + Object.keys(slots).map(function(k){
+        return '<option value="' + k + '"' + (k === (slot || '') ? ' selected' : '') + '>' + esc(slots[k].label) + '</option>'; }).join('');
     return '<tr data-dept="' + (deptId || 0) + '">'
         + '<td><select class="a-dept" data-eg-filter="輸入部門名稱篩選…"><option value="">請選擇…</option>' + dopt + '</select></td>'
+        + '<td><select class="a-slot" data-eg-skip>' + sopt + '</select></td>'
         + '<td class="a-pos-td" data-sel="' + (posIds || []).join(',') + '"><span class="muted-help">請先選部門</span></td>'
         + '<td class="c"><button class="btn btn-warm-o btn-xs a-del">刪</button></td></tr>';
 }
@@ -679,9 +687,10 @@ function renderAsk(){
     var cfg = (CFG && CFG.ask_cfg) || {};
     var keys = Object.keys(cfg);
     $('#cfgAsk').html(keys.length ? keys.map(function(d){
-        return askRow(d, cfg[d].map(function(x){ return x.position_id; }));
+        return askRow(d, cfg[d].map(function(x){ return x.position_id; }).filter(function(x){ return x > 0; }),
+                      (cfg[d][0] || {}).paper_slot || '');
     }).join('') : '');
-    if (!keys.length) $('#cfgAsk').html('<tr><td colspan="3" class="c">尚未設定（沒設定的部門＝通知整個部門）</td></tr>');
+    if (!keys.length) $('#cfgAsk').html('<tr><td colspan="4" class="c">尚未設定（沒設定的部門＝通知整個部門）</td></tr>');
     $('#cfgAsk tr[data-dept]').each(function(){ loadAskPos($(this)); });
 }
 function loadAskPos($tr){
@@ -702,13 +711,13 @@ function saveAsk(){
         var d = $(this).find('.a-dept').val();
         if (!d) return;
         var ps = $(this).find('.a-pos:checked').map(function(){ return Number(this.value); }).get();
-        rows.push({ dept_id:Number(d), position_ids:ps });
+        rows.push({ dept_id:Number(d), position_ids:ps, paper_slot:$(this).find('.a-slot').val() || '' });
     });
     post('ask_cfg_save', { rows:JSON.stringify(rows) }, function(res){ CFG.ask_cfg = res.cfg; savedTick(); });
 }
 $('#btnAskAdd').on('click', function(){
     if ($('#cfgAsk').find('td[colspan]').length) $('#cfgAsk').empty();
-    $('#cfgAsk').append(askRow(0, []));
+    $('#cfgAsk').append(askRow(0, [], ''));
 });
 $(document).on('change', '#cfgAsk .a-dept', function(){
     var $tr = $(this).closest('tr');
@@ -716,7 +725,7 @@ $(document).on('change', '#cfgAsk .a-dept', function(){
     loadAskPos($tr);
     saveAsk();
 });
-$(document).on('change', '#cfgAsk .a-pos', saveAsk);
+$(document).on('change', '#cfgAsk .a-pos, #cfgAsk .a-slot', saveAsk);
 $(document).on('click', '#cfgAsk .a-del', function(){ $(this).closest('tr').remove(); saveAsk(); });
 
 function loadCfg(){

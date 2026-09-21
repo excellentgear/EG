@@ -87,25 +87,40 @@ foreach ($o['cause_ids'] as $cid) {
 $deepPaths = array_values(array_filter($paths, function ($p) { return strpos($p, '→') !== false; }));
 
 // 相關單位意見：已回覆的逐格列出，不足 4 格補空白格（維持表單樣子）
-/* 相關單位意見：已回覆的排前面，**管理員設定過、這張單沒有徵詢的部門也列出來（空白）**——
-   使用者要求：每張單的版面固定，一眼看得出問過誰、沒問誰，不會每張印出來差很多。 */
-$rounds = [];
-$seenDept = [];
+/* 相關單位意見：紙本是**固定五格**（發生單位／技術／生管·採購／品保／業務），
+   不是線上勾幾個部門就印幾格——所以把已回覆的輪次依「部門→紙本欄位」對應歸位。
+   對應不到任何一格的部門（例：董事長室）不會印在紙本上，畫面上仍然看得到。 */
+$slotMap  = qab_dept_slot_map($db);
+$slotData = [];                       // slot => ['content'=>, 'who'=>, 'date'=>, 'on'=>bool]
+$unmapped = [];
 foreach ($o['rounds'] as $r) {
     if (($r['status'] ?? '') !== 'Returned') continue;
-    $rounds[] = $r;
-    $seenDept[(int)$r['dept_id']] = 1;
-}
-$askCfg = qab_ask_cfg($db);
-if ($askCfg) {
-    $dn = $db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_KEY_PAIR);
-    foreach (array_keys($askCfg) as $dId) {
-        if (isset($seenDept[(int)$dId])) continue;
-        $rounds[] = ['department_name' => (string)($dn[$dId] ?? ''), 'reply_content' => '',
-                     'replied_name' => '', 'user_cname' => '', 'return_date' => '', '_blank' => 1];
+    $k = $slotMap[(int)$r['dept_id']] ?? '';
+    if ($k === '' || !isset(qab_ask_slots()[$k])) { $unmapped[] = (string)$r['department_name']; continue; }
+    if (!isset($slotData[$k])) $slotData[$k] = ['content' => [], 'who' => '', 'date' => '', 'on' => true];
+    $txt = trim((string)$r['reply_content']);
+    if ($txt !== '') $slotData[$k]['content'][] = $txt;
+    if ($slotData[$k]['who'] === '') {
+        $slotData[$k]['who']  = trim((string)($r['replied_name'] ?: $r['user_cname'] ?? ''));
+        $slotData[$k]['date'] = (string)$r['return_date'];
     }
 }
-$slot = max(2, (int)ceil(count($rounds) / 2) * 2);   // 一列兩格，最少留 2 格
+/** 一格的內容（勾選框＋回覆文字＋簽章） */
+function askCell(array $slotData, array $keys, $h, $d) {
+    $labels = qab_ask_slots();
+    $box = '';
+    foreach ($keys as $k) {
+        $on = !empty($slotData[$k]['on']);
+        $box .= '<span class="cb"><i>' . ($on ? '✔' : '') . '</i>' . $h($labels[$k]['label']) . '</span>';
+    }
+    $txt = []; $who = ''; $date = '';
+    foreach ($keys as $k) {
+        if (empty($slotData[$k])) continue;
+        foreach ($slotData[$k]['content'] as $c) $txt[] = $c;
+        if ($who === '') { $who = $slotData[$k]['who']; $date = $slotData[$k]['date']; }
+    }
+    return [$box, nl2br($h(implode("\n", $txt))), $who, $date];
+}
 
 // 扣款明細：製程列彙總成一列（紙本只有「製程／其他／合計」三列），其他列逐筆印
 $procRows = []; $otherRows = [];
@@ -159,6 +174,8 @@ table.f td.t { vertical-align:top; }
 .note { font-size:10px; margin-top:3px; }
 .small { font-size:10px; color:#333; }
 .mem td { height:15px; }
+table.ask td { height:13mm; }
+table.ask .askbd { font-size:10px; line-height:1.35; }
 /* 圖章尺寸一律抄 ai-rules/18 鐵則6 這一行，不要自己另外發明數字 */
 .stamp-wrap svg, svg.car-stamp { width:91px; height:91px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
 svg.eg-stamp-tpl { height:auto !important; }
@@ -274,31 +291,33 @@ svg.eg-stamp-tpl { height:auto !important; }
     </tr>
 </table>
 
-<!-- 相關單位意見 -->
+<!-- 相關單位意見（紙本固定五格） -->
 <table class="f">
     <tr><td class="lb">相 關 單 位 意 見　<span class="small" style="font-weight:normal;">(僅勾選者 需回覆)</span></td></tr>
 </table>
-<table class="f">
-    <colgroup><col style="width:12%"><col style="width:38%"><col style="width:12%"><col style="width:38%"></colgroup>
-    <?php for ($i = 0; $i < $slot; $i += 2): ?>
+<table class="f ask">
+    <colgroup><col style="width:34%"><col style="width:16%"><col style="width:34%"><col style="width:16%"></colgroup>
+    <?php
+    $cells = [
+        [['occur'], ['tech']],
+        [['pm', 'purchase'], ['qa']],
+    ];
+    foreach ($cells as $row): ?>
     <tr>
-        <?php for ($k = 0; $k < 2; $k++):
-            $r = $rounds[$i + $k] ?? null;
-            $unit = $r ? trim((string)($r['department_name'] ?? '')) : '';
-            $who  = $r ? trim((string)($r['replied_name'] ?: $r['user_cname'] ?? '')) : '';
-        ?>
-        <td class="c"><?= h($unit) ?></td>
-        <td class="t" style="height:14mm; position:relative;">
-            <?= nl2br(h($r['reply_content'] ?? '')) ?>
-            <?php if ($r && empty($r['_blank'])): ?>
-            <div style="display:flex;justify-content:flex-end;align-items:flex-end;">
-                <div class="sigbox" style="min-height:0;" data-stamp="<?= h($who) ?>" data-date="<?= h(d($r['return_date'])) ?>" data-small="1"></div>
-            </div>
-            <?php endif; ?>
-        </td>
-        <?php endfor; ?>
+        <?php foreach ($row as $keys):
+            [$box, $txt, $who, $dt] = askCell($slotData, $keys, 'h', 'd'); ?>
+        <td class="t"><?= $box ?><div class="askbd"><?= $txt ?></div></td>
+        <td class="sig t"><div class="cap">簽章：</div>
+            <div class="sigbox" style="min-height:0;" data-stamp="<?= h($who) ?>" data-date="<?= h(d($dt)) ?>"></div></td>
+        <?php endforeach; ?>
     </tr>
-    <?php endfor; ?>
+    <?php endforeach; ?>
+    <tr>
+        <?php [$box, $txt, $who, $dt] = askCell($slotData, ['sales'], 'h', 'd'); ?>
+        <td class="t" colspan="3"><?= $box ?><div class="askbd"><?= $txt ?></div></td>
+        <td class="sig t"><div class="cap">簽章：</div>
+            <div class="sigbox" style="min-height:0;" data-stamp="<?= h($who) ?>" data-date="<?= h(d($dt)) ?>"></div></td>
+    </tr>
 </table>
 
 <!-- 總經理裁示 -->
