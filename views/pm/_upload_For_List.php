@@ -1018,6 +1018,12 @@ if (!function_exists('parseERPQty_erp')) {
         if ($value === null) return null;
         $v = trim((string)$value);
         if ($v === '') return null;
+        // **一定要先去掉千分位逗號**：ERP 匯出的數量欄是「文字格式」，值長成「4,000.0」，
+        // 而下面那個字元類別 [\d.] 不含逗號，會在第一個逗號就停住＝「4,000.0」被讀成 4。
+        // 實測後果：報價項目 44,079 筆與出貨 37,913 筆全庫沒有任何一筆數量 ≥1000
+        //（最大 999），凡是原值四位數以上的一律被截斷，而且完全不報錯。
+        // 順手把全形逗號與不斷行空格(NBSP)一起清掉——ERP 報表偶爾會夾帶。
+        $v = str_replace([',', '，', ' ', "\xC2\xA0"], '', $v);
         if (preg_match('/^([\d.]+)/', $v, $m)) return (float)$m[1];
         return null;
     }
