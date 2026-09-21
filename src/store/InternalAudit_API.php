@@ -79,6 +79,17 @@ function iaTime($v): ?string
 }
 function iaInt($v): ?int { $v = trim((string)$v); return ($v === '' || !ctype_digit(ltrim($v, '-'))) ? null : (int)$v; }
 
+/* 受稽核人／受審查單位主管／責任主管一律只能挑「受稽核單位的主管」（2026-09-21 使用者要求）。
+   前端已經只畫得出這些人，後端同規則再擋一次（鐵律8）。
+   **只在值真的被改動時才驗**——舊單上掛著的人可能早就調職或離職，
+   全部都驗的話，光是改一行文字存檔就會被自己擋下來而且看不出原因。 */
+function iaCandHas(array $list, int $uid): bool
+{
+    foreach ($list as $c) if ((int)($c['id'] ?? 0) === $uid) return true;
+    return false;
+}
+
+
 /**
  * 受稽單位那一列的稽核員／陪檢員職務鍵清單（2026-08-27 起可多位）。
  * 新前端送 auditor_keys / escort_keys（陣列或 JSON 字串），
@@ -1479,11 +1490,27 @@ case 'nc_get': {
     // 建議的單位主管（依業務日期回推當時職務，ai-rules/22）
     $sug = ia_dept_head_asof($db, (int)($n['dept_id'] ?? 0), (string)($n['audit_date'] ?? ''));
     $n['suggest_head'] = $sug;
+    /* 受稽核人／受審查單位主管／責任主管的候選清單（2026-09-21 使用者要求：只列受稽核單位的主管）。
+       一起在這裡回傳，開單時就不必再多打一支 API；換了主管才用 nc_cands 重算責任主管那一份。 */
+    $n['cands'] = ia_nc_candidates($db, (int)($n['dept_id'] ?? 0),
+                                   (string)($n['audit_date'] ?? ''), (int)($n['head_id'] ?? 0));
     $st = $db->prepare("SELECT * FROM ia_nc_log WHERE nc_id=? ORDER BY log_id");
     $st->execute([$id]);
     $n['logs'] = $st->fetchAll(PDO::FETCH_ASSOC);
     $n['attach'] = ia_attach_rows($db, 'nc', $id);          // 三段的佐證附件
     jout(['row' => $n, 'attach_sections' => IA_ATTACH_SECTIONS]);
+}
+
+case 'nc_cands': {
+    /* 候選清單即時重算（2026-09-21 使用者要求）：
+       ①開立跳窗換「受稽核單位」→ 受稽核人清單要跟著換
+       ②填寫跳窗換「受審查單位主管」→ 責任主管清單要換成他所在部門的主管
+       純讀取，只要有本模組檢視權即可。 */
+    iaReqView($perms);
+    $d   = iaDate($_GET['date'] ?? $_POST['date'] ?? '') ?: $today;
+    $dep = iaInt($_GET['dept_id'] ?? $_POST['dept_id'] ?? '');
+    $hid = iaInt($_GET['head_id'] ?? $_POST['head_id'] ?? '');
+    jout(ia_nc_candidates($db, $dep, $d, $hid));
 }
 
 case 'nc_create': {
@@ -1509,6 +1536,10 @@ case 'nc_create': {
         $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $q->execute([$auditeeId]);
         $auditeeName = (string)($q->fetchColumn() ?: '');
         if ($auditeeName === '') jerr('受審核人不存在');
+        // 受審核人只能是該受稽核單位的主管（2026-09-21 使用者要求；前端只畫得出這些人，這裡再擋一次）
+        $cd = ia_nc_candidates($db, $deptId, $ad);
+        if ($cd['auditee'] && !iaCandHas($cd['auditee'], $auditeeId))
+            jerr('受審核人只能從「' . ($deptName ?: '受稽核單位') . '」的主管中選擇');
     }
     $caseId = iaInt($_POST['case_id'] ?? '');
     $c = [];                                   // 沒綁案件時仍要有值，否則下方取 leader_id 會噴 undefined
@@ -1594,6 +1625,11 @@ case 'nc_save_sec1': {
         $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $q->execute([$auditeeId]);
         $auditeeName = (string)($q->fetchColumn() ?: '');
         if ($auditeeName === '') jerr('受審核人不存在');
+        if ($auditeeId !== (int)($n['auditee_id'] ?? 0)) {
+            $cd = ia_nc_candidates($db, (int)($n['dept_id'] ?? 0), (string)($n['audit_date'] ?? ''));
+            if ($cd['auditee'] && !iaCandHas($cd['auditee'], $auditeeId))
+                jerr('受審核人只能從「' . ($n['dept_name'] ?: '受稽核單位') . '」的主管中選擇');
+        }
     }
     $db->prepare("UPDATE ia_nc SET fact=?, nc_type=?, clause_ref=?, due_date=?, ref_form_no=?,
                       auditee_id=?, auditee_name=?, updated_at=NOW() WHERE nc_id=?")
@@ -1617,11 +1653,19 @@ case 'nc_save_sec2': {
     $cause  = trim((string)($_POST['cause'] ?? ''));
     $corr   = trim((string)($_POST['corrective'] ?? ''));
     $prev   = trim((string)($_POST['preventive'] ?? ''));
+    /* 完成日期改成獨立的日期欄（2026-09-21 使用者要求：原本跟文字混在同一個 textarea 裡打，
+       每個人寫的格式都不一樣，也沒辦法拿來排程或提醒）。沒送這個參數＝舊的呼叫端，沿用原值不要洗掉。 */
+    $corrDue = array_key_exists('corrective_due', $_POST)
+             ? (iaDate($_POST['corrective_due']) ?: null) : ($n['corrective_due'] ?? null);
+    $prevDue = array_key_exists('preventive_due', $_POST)
+             ? (iaDate($_POST['preventive_due']) ?: null) : ($n['preventive_due'] ?? null);
     if ($submit) {
         // 送出才驗必填；只是暫存不擋（讓人分次填）
         if ($cause === '') jerr('請填原因分析');
-        if ($corr === '')  jerr('請填糾正措施及完成時間');
-        if ($prev === '')  jerr('請填預防措施及完成時間');
+        if ($corr === '')  jerr('請填糾正措施');
+        if (!$corrDue)     jerr('請選擇糾正措施的完成日期');
+        if ($prev === '')  jerr('請填預防措施');
+        if (!$prevDue)     jerr('請選擇預防措施的預計完成日期');
     }
     $headId = iaInt($_POST['head_id'] ?? ''); $headName = null;
     if ($headId) {
@@ -1629,11 +1673,19 @@ case 'nc_save_sec2': {
         $headName = (string)($q->fetchColumn() ?: '');
         if ($headName === '') jerr('受審查單位主管不存在');
     }
+    $ncCd = ia_nc_candidates($db, (int)($n['dept_id'] ?? 0), (string)($n['audit_date'] ?? ''),
+                             $headId ?: (int)($n['head_id'] ?? 0));
+    if ($headId && $headId !== (int)($n['head_id'] ?? 0)
+        && $ncCd['head'] && !iaCandHas($ncCd['head'], $headId))
+        jerr('受審查單位主管只能從「' . ($n['dept_name'] ?: '受稽核單位') . '」的主管中選擇');
     $respId = iaInt($_POST['resp_id'] ?? ''); $respName = null;
     if ($respId) {
         $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $q->execute([$respId]);
         $respName = (string)($q->fetchColumn() ?: '');
         if ($respName === '') jerr('責任主管不存在');
+        if ($respId !== (int)($n['resp_id'] ?? 0) && $ncCd['resp'] && !iaCandHas($ncCd['resp'], $respId))
+            jerr('責任主管只能從受審查單位主管所屬部門（'
+                 . ($ncCd['resp_dept_name'] ?: '該單位') . '）的主管中選擇');
     }
     // 「單位主管核示」2026-08-27 起紙本與畫面都沒有這一格了（使用者：完全不需要這行）。
     // 欄位保留在 DB 不刪，沒送這個參數時就沿用原值，不要把既有內容洗成空的。
@@ -1645,10 +1697,11 @@ case 'nc_save_sec2': {
 
     $db->beginTransaction();
     try {
-        $db->prepare("UPDATE ia_nc SET cause=?, corrective=?, preventive=?, head_id=?, head_name=?,
+        $db->prepare("UPDATE ia_nc SET cause=?, corrective=?, corrective_due=?, preventive=?, preventive_due=?,
+                          head_id=?, head_name=?,
                           head_note=?, head_date=?, resp_id=?, resp_name=?, resp_date=?, updated_at=NOW()
                        WHERE nc_id=?")
-           ->execute([$cause ?: null, $corr ?: null, $prev ?: null, $headId, $headName,
+           ->execute([$cause ?: null, $corr ?: null, $corrDue, $prev ?: null, $prevDue, $headId, $headName,
                       $headNote, $headId ? $headDate : null,
                       $respId, $respName, $respId ? $respDate : null, $id]);
         if ($submit && $n['stage'] === 'issued') {

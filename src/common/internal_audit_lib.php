@@ -482,6 +482,11 @@ function ia_ensure_schema(PDO $db): void
             ['ia_nc',        'src_code',            "VARCHAR(30) NULL COMMENT '資料稽核的檢核項目代碼（配合 src_kind=dqa）'"],
             /* 附件的段別（2026-09-21 使用者要求：改善與稽核組長驗證都要能附佐證）。
                空值＝舊資料或非 IA 單的附件，一律視為段一。 */
+            /* 糾正／預防措施的完成日期（2026-09-21 使用者要求）：原本只有一個 textarea，
+               日期跟文字混在同一段裡打，格式五花八門、也沒辦法拿來做到期提醒。
+               文字欄位保留不動（措施內容還是要寫），日期另外存成 DATE。 */
+            ['ia_nc',        'corrective_due',      "DATE NULL COMMENT '糾正措施完成日期'"],
+            ['ia_nc',        'preventive_due',      "DATE NULL COMMENT '預防措施預計完成日期'"],
             ['ia_attach',    'section',             "VARCHAR(10) NULL COMMENT 'IA 單的段別 sec1/sec2/sec3'"],
         ] as $c) {
             try {
@@ -1453,64 +1458,166 @@ function ia_dept_head_asof(PDO $db, ?int $deptId, ?string $bizDate): ?array
     if (!$deptId) return null;
     $today = ia_today($db);
     $date  = ($bizDate && preg_match('/^\d{4}-\d{2}-\d{2}$/', $bizDate)) ? $bizDate : $today;
-    $isPast = ($date < $today);
 
-    // 受稽單位若是群組，主管要在整個群組（含各成員部門的子部門）裡找
-    $deptIds = ia_unit_dept_scope($db, $deptId);
-    if (!$deptIds) $deptIds = eg_dept_subtree_ids($db, $deptId) ?: [$deptId];
-
-    if (!$isPast) {
-        // 今日／未來：用現況解析（原鏈），回不到再往下試歷史
+    if ($date >= $today) {
+        // 今日／未來：優先用現況解析（原鏈），回不到再往下用歷史快照
+        $deptIds = ia_unit_dept_scope($db, $deptId);
+        if (!$deptIds) $deptIds = eg_dept_subtree_ids($db, $deptId) ?: [$deptId];
         $m = eg_org_dept_manager($db, $deptIds);
         if ($m) {
             return ['id'=>(int)$m['id'], 'name'=>(string)$m['user_cname'],
                     'position_name'=>(string)($m['position_name'] ?? ''), 'department_name'=>''];
         }
     }
+    $list = ia_dept_heads_asof($db, $deptId, $date, true);
+    if (!$list) return null;                 // 過去日期查不到就回 null，絕不退回現況
+    $best = $list[0];
+    unset($best['level'], $best['is_manager'], $best['department_id'], $best['position_id']);
+    return $best;
+}
 
-    // 依 user_position_history 回推當時所有人的職務，挑出當時掛在該部門且有職級的人
-    try {
-        $snapAll = eg_position_snapshot_at_bulk($db, $date);
-    } catch (Throwable $e) { $snapAll = []; }
-    if (!$snapAll) return null;
+/**
+ * 某部門（含受稽單位群組與子部門）在「該業務日期當時」的**全部**主管人選。
+ * 2026-09-21 使用者要求：受稽核人／受審查單位主管／責任主管的下拉**只能列這個單位的主管**，
+ * 不可以像原本那樣攤開全公司的人——那種清單在畫面上根本挑不到人，也很容易挑到別單位的人。
+ * 判定與 ia_dept_head_asof() 同一套（ai-rules/22 四坑），差別只在這支回整份清單、那支回第一位。
+ *
+ * @param bool $onlyManagers true＝只列有職級（position_level）的主管；false＝該單位全部人員
+ * @return array 職級高者在前
+ */
+function ia_dept_heads_asof(PDO $db, ?int $deptId, ?string $bizDate, bool $onlyManagers = true): array
+{
+    if (!$deptId) return [];
+    $today  = ia_today($db);
+    $date   = ($bizDate && preg_match('/^\d{4}-\d{2}-\d{2}$/', $bizDate)) ? $bizDate : $today;
+    $isPast = ($date < $today);
+
+    // 受稽單位若是群組，主管要在整個群組（含各成員部門的子部門）裡找
+    $deptIds = ia_unit_dept_scope($db, $deptId);
+    if (!$deptIds) $deptIds = eg_dept_subtree_ids($db, $deptId) ?: [$deptId];
+
+    try { $snapAll = eg_position_snapshot_at_bulk($db, $date); } catch (Throwable $e) { $snapAll = []; }
+    if (!$snapAll) return [];
 
     // position_id → level（職級），沒設 level 的職稱不算主管
     $lvl = [];
     try {
         foreach ($db->query("SELECT position_id, level FROM position_level WHERE level IS NOT NULL")
                     ->fetchAll(PDO::FETCH_ASSOC) as $r) $lvl[(int)$r['position_id']] = (int)$r['level'];
-    } catch (Throwable $e) { return null; }
-    if (!$lvl) return null;
+    } catch (Throwable $e) { $lvl = []; }
+    if ($onlyManagers && !$lvl) return [];
 
-    // 過去日期要放行已離職者（那天他本來就在職）；今日／未來才排除非在職
+    /* 在職判定一律用 `user.state`（不是 user_status），口徑與全站共用的 eg_people_list_asof() 相同：
+       90（共用／特殊帳號）與 99（超級管理員）永遠不列——原本只擋 user_status=90，
+       所以「超級管理員」會被當成管理課的主管人選列進下拉（原本只取第一名時看不出來，攤開成清單就現形了）。
+       過去日期放行「那天還沒離職」的人（離職日沒登錄的就不放行，與共用庫同一條規則）。 */
     $stateMap = [];
     try {
-        foreach ($db->query("SELECT id, user_cname, COALESCE(state,1) AS st, COALESCE(user_status,0) AS us FROM `user`")
+        foreach ($db->query("SELECT id, user_cname, COALESCE(state,1) AS st, COALESCE(user_status,0) AS us,
+                                    leave_date FROM `user`")
                     ->fetchAll(PDO::FETCH_ASSOC) as $r) $stateMap[(int)$r['id']] = $r;
     } catch (Throwable $e) {}
 
-    $best = null;
+    $out = [];
     foreach ($snapAll as $uid => $snap) {
         $uid = (int)$uid;
         $ur  = $stateMap[$uid] ?? null;
         if (!$ur) continue;
-        if ((int)$ur['us'] === 90) continue;                      // 特殊帳號永遠不算
-        if (!$isPast && (int)$ur['st'] === 0) continue;           // 今日／未來不列已離職
+        $st = (int)$ur['st'];
+        if ((int)$ur['us'] === 90 || $st === 90 || $st === 99) continue;   // 共用帳號／超級管理員永不列入
+        if ($st === 0) {                                                   // 已離職：只有「那天還在職」才放行
+            if (!$isPast) continue;
+            if (empty($ur['leave_date']) || (string)$ur['leave_date'] < $date) continue;
+        }
         foreach ((array)$snap as $s) {
             $pid = (int)($s['position_id'] ?? 0);
             $did = (int)($s['department_id'] ?? 0);
             if (!$pid || !in_array($did, $deptIds, true)) continue;
-            if (!isset($lvl[$pid])) continue;                     // 沒職級＝不是主管
+            $isMgr = isset($lvl[$pid]);
+            if ($onlyManagers && !$isMgr) continue;
             // 名稱一律用 id 回查現名（快照裡是當時凍結的舊名，部門改過名就會印出已經不用的名字）
             $cand = ['id'=>$uid, 'name'=>(string)$ur['user_cname'],
-                     'position_name'=>ia_position_name_now($db, $pid, (string)($s['position_name'] ?? '')),
-                     'department_name'=>ia_dept_name_now($db, $did, (string)($s['department_name'] ?? '')),
-                     'level'=>$lvl[$pid]];
-            if ($best === null || $cand['level'] < $best['level']) $best = $cand;   // 職級最高＝level 最小
+                     'position_name'   => ia_position_name_now($db, $pid, (string)($s['position_name'] ?? '')),
+                     'department_name' => ia_dept_name_now($db, $did, (string)($s['department_name'] ?? '')),
+                     'department_id'   => $did, 'position_id' => $pid,
+                     'level'           => $isMgr ? $lvl[$pid] : 9999,
+                     'is_manager'      => $isMgr ? 1 : 0];
+            // 同一個人在範圍內可能有好幾個職務（兼任）：只留職級最高的那一個，免得下拉出現重複的人
+            if (!isset($out[$uid]) || $cand['level'] < $out[$uid]['level']) $out[$uid] = $cand;
         }
     }
-    if ($best) { unset($best['level']); return $best; }
-    return null;   // 過去日期查不到就回 null，絕不退回現況
+    $rows = array_values($out);
+    usort($rows, function ($a, $b) {
+        if ($a['level'] !== $b['level']) return $a['level'] <=> $b['level'];   // 職級高者在上
+        return strcmp($a['department_name'] . $a['name'], $b['department_name'] . $b['name']);
+    });
+    return $rows;
+}
+
+/**
+ * 某人在該業務日期當時「掛在哪一個部門」（責任主管的候選範圍就是由它推出來的）。
+ * 一個人可能兼好幾個職務，所以要先在 $preferDeptIds（受稽核單位的範圍）裡找，
+ * 找不到才退回他職級最高的那個職務——否則會拿他在別單位的兼任職去列候選人。
+ */
+function ia_person_dept_asof(PDO $db, int $uid, ?string $bizDate, array $preferDeptIds = []): int
+{
+    if ($uid <= 0) return 0;
+    $date = ($bizDate && preg_match('/^\d{4}-\d{2}-\d{2}$/', $bizDate)) ? $bizDate : ia_today($db);
+    try { $snap = eg_position_snapshot_at($db, $uid, $date); } catch (Throwable $e) { $snap = []; }
+    if (!$snap) return 0;
+    $lvl = [];
+    try {
+        foreach ($db->query("SELECT position_id, level FROM position_level WHERE level IS NOT NULL")
+                    ->fetchAll(PDO::FETCH_ASSOC) as $r) $lvl[(int)$r['position_id']] = (int)$r['level'];
+    } catch (Throwable $e) {}
+    $pick = 0; $pickLvl = 99999; $pickIn = false;
+    foreach ($snap as $s) {
+        $did = (int)($s['department_id'] ?? 0);
+        $pid = (int)($s['position_id'] ?? 0);
+        if (!$did) continue;
+        $in  = ($preferDeptIds && in_array($did, $preferDeptIds, true));
+        $l   = $lvl[$pid] ?? 9999;
+        // 優先序：在受稽核單位範圍內 > 職級高 > 先遇到的
+        if (!$pick || ($in && !$pickIn) || ($in === $pickIn && $l < $pickLvl)) {
+            $pick = $did; $pickLvl = $l; $pickIn = $in;
+        }
+    }
+    return $pick;
+}
+
+/**
+ * 不符合通知單三個人員欄位的候選清單（2026-09-21 使用者要求）。
+ *   受稽核人／受審查單位主管 → 受稽核單位的主管
+ *   責任主管               → 受審查單位主管**所在部門**的主管
+ * 候選一律依這張單的稽核日期回推當時職務（ai-rules/22）。
+ * 查不到任何主管時**退回該單位的全部人員**並標記 fallback——回一份空清單的話，
+ * 那一格就再也填不了，而且畫面上完全看不出原因。
+ */
+function ia_nc_candidates(PDO $db, ?int $deptId, ?string $date, ?int $headId = 0): array
+{
+    $out = ['head'=>[], 'auditee'=>[], 'resp'=>[], 'resp_dept_id'=>0, 'resp_dept_name'=>'',
+            'head_fallback'=>0, 'resp_fallback'=>0];
+    if (!$deptId) return $out;
+
+    $heads = ia_dept_heads_asof($db, $deptId, $date, true);
+    if (!$heads) { $heads = ia_dept_heads_asof($db, $deptId, $date, false); $out['head_fallback'] = $heads ? 1 : 0; }
+    $out['head']    = $heads;
+    $out['auditee'] = $heads;
+
+    $scope = ia_unit_dept_scope($db, (int)$deptId);
+    if (!$scope) $scope = eg_dept_subtree_ids($db, (int)$deptId) ?: [(int)$deptId];
+
+    // 責任主管：以「受審查單位主管所在部門」為範圍；還沒指定主管時先用建議的那一位
+    $hid = (int)$headId;
+    if (!$hid) { $sug = ia_dept_head_asof($db, (int)$deptId, $date); $hid = (int)($sug['id'] ?? 0); }
+    $rDept = ia_person_dept_asof($db, $hid, $date, $scope);
+    if (!$rDept) $rDept = (int)$deptId;
+    $out['resp_dept_id']   = $rDept;
+    $out['resp_dept_name'] = ia_dept_name_now($db, $rDept, '');
+    $resp = ia_dept_heads_asof($db, $rDept, $date, true);
+    if (!$resp) { $resp = ia_dept_heads_asof($db, $rDept, $date, false); $out['resp_fallback'] = $resp ? 1 : 0; }
+    $out['resp'] = $resp;
+    return $out;
 }
 
 /** 某人在某業務日期當時的部門／職稱（圖章用） */

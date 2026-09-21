@@ -78,6 +78,14 @@ $roleLabel = ia_role_label($perms);
         table.ia-table tbody tr:nth-child(even) { background:#FBF6EC; }
         table.ia-table td.l { text-align:left; }
         table.ia-table tr.hdr-row td { background:#F3E4C9; font-weight:bold; text-align:left; color:#6b4a20; }
+        /* 查檢表跳窗：表頭凍結（2026-09-21 使用者要求；系統稽核紀錄表動輒幾十列，捲下去就看不出欄位是什麼）。
+           ①捲動容器一定要是「表格自己那一層」——直接讓 .ia-mbody 捲的話，sticky 只黏在它 padding box 的邊，
+             列會從上方那 14px 內距穿過表頭（QC 待驗清單踩過同一個坑）。
+           ②border-collapse 的框線不會跟著 sticky 走，捲動時上下框線會消失，改用 inset box-shadow 補回來。 */
+        #checkMask .ia-mbody { display:flex; flex-direction:column; }
+        #checkMask .ia-table-wrap { flex:1 1 auto; min-height:180px; overflow:auto; }
+        #checkMask table.ia-table thead th { position:sticky; top:0; z-index:3;
+            box-shadow:inset 0 1px 0 #EADFC8, inset 0 -1px 0 #EADFC8; }
         .ia-op { color:#b5762a; cursor:pointer; margin:0 4px; white-space:nowrap; }
         .ia-op:hover { color:#8A5A2B; text-decoration:underline; }
         .ia-op.danger { color:#C4442D; }
@@ -1110,11 +1118,17 @@ $roleLabel = ia_role_label($perms);
                 <label>簽核日期</label><div><input type="date" id="nHeadDate"></div>
                 <label>原因分析<span style="color:#DD5138;">*</span></label>
                 <div class="full"><textarea id="nCause"></textarea><div class="err-msg" id="errNCause"></div></div>
-                <label>糾正措施及<br>完成時間<span style="color:#DD5138;">*</span></label>
+                <label>糾正措施<span style="color:#DD5138;">*</span></label>
                 <div class="full"><textarea id="nCorr"></textarea><div class="err-msg" id="errNCorr"></div></div>
-                <label>預防措施及<br>完成時間<span style="color:#DD5138;">*</span></label>
+                <label>完成時間<span style="color:#DD5138;">*</span></label>
+                <div><input type="date" id="nCorrDue"><div class="err-msg" id="errNCorrDue"></div></div>
+                <label>預防措施<span style="color:#DD5138;">*</span></label>
                 <div class="full"><textarea id="nPrev"></textarea><div class="err-msg" id="errNPrev"></div></div>
-                <label>責任主管</label><div><select id="nResp" data-eg-filter="輸入人員姓名篩選…"></select></div>
+                <label>預計完成時間<span style="color:#DD5138;">*</span></label>
+                <div><input type="date" id="nPrevDue"><div class="err-msg" id="errNPrevDue"></div></div>
+                <label>責任主管</label>
+                <div><select id="nResp" data-eg-filter="輸入人員姓名篩選…"></select>
+                     <span id="nRespNote" style="font-size:12px;color:#8a6d45;"></span></div>
                 <label>簽核日期</label><div><input type="date" id="nRespDate"></div>
             </div>
             <div class="ia-att" id="ncAttsec2" data-sec="sec2">
@@ -1489,6 +1503,7 @@ var API  = '../../src/store/InternalAudit_API.php';
 var META = null, YEAR = 0, PLAN = null, CASES = [];
 /* 內稽管理員＝各分頁的刪除鈕都看得到（2026-09-14 使用者要求：稽核內建立完的單據都要能刪） */
 var IS_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
+var CAN_AUDIT = <?= $perms['canAudit'] ? 'true' : 'false' ?>;   // 能不能開不符合通知單／矯正單
 var PAGE = {case:1, check:1, nc:1}, PER = 20;
 var LIST = {case:[], check:[], nc:[]};
 
@@ -3663,19 +3678,8 @@ function renderCheckItems(){
                   + (it.result==='ng'?' checked':'')+(ro?' disabled':'')+'>';
         var remark = '<input type="text" class="ckF" data-id="'+it.item_id+'" data-f="remark" value="'+esc(it.remark||'')+'"'
                    + (ro?' readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 4px;font-size:12px;">';
-        var ncBtn = '';
-        if (k==='kpi') {
-            // 績效沒達成開的是「異常矯正處理單」（紙本備註欄本來就印 CAR 單號），不是 IA 單
-            if (it.car_id) {
-                ncBtn = '<span class="ia-op" onclick="openCar('+it.car_id+')">'+esc(it.car_no||'矯正單')+'</span>';
-            } else if (it.result==='ng' && !ro && <?= $perms['canAudit'] ? 'true' : 'false' ?>) {
-                ncBtn = '<span class="ia-op" onclick="carFromItem('+it.item_id+')"><i class="fa fa-plus"></i> 開矯正單</span>';
-            }
-        } else if (it.nc_id) {
-            ncBtn = '<span class="ia-op" onclick="openNc('+it.nc_id+')">'+esc(it.nc_no||'IA單')+'</span>';
-        } else if (it.result==='ng' && !ro && <?= $perms['canAudit'] ? 'true' : 'false' ?>) {
-            ncBtn = '<span class="ia-op" onclick="newNcFromItem('+it.item_id+')"><i class="fa fa-plus"></i> 開不符合單</span>';
-        }
+        // 績效沒達成開的是「異常矯正處理單」（紙本備註欄本來就印 CAR 單號），不是 IA 單
+        var ncBtn = ncBtnHtml(it, ro);
         h += '<tr>';
         if (k==='as') {
             // 作業項目：條文原文看不出實務上在查什麼，這裡用小徽章補上（列印版不帶，維持紙本版面）
@@ -3703,6 +3707,36 @@ function renderCheckItems(){
         h += '</tr>';
     });
     $('#ckBody').html(h);
+}
+/* 點「不合格」當下就要看到「開不符合單」（2026-09-21 使用者回報：原本要按儲存、重開這張表才會出現）。
+   刻意不整張重畫——備註、所見證據、受稽人那幾欄很可能已經打了字還沒存，重畫就會全部被洗掉；
+   這裡只把該列最後一格的開單鈕換掉，並同步上方那條統計列。 */
+$('#ckBody').on('change', '.ckR', function(){
+    var id = +$(this).data('id'), val = String($(this).val()||'');
+    var it = null;
+    (CHK.items||[]).forEach(function(x){ if (+x.item_id === id) it = x; });
+    if (!it) return;
+    it.result = val;
+    var $cell = $(this).closest('tr').find('td').last();
+    $cell.find('.ia-op').remove();
+    var btn = ncBtnHtml(it, !CHK.can_edit);
+    if (btn) $cell.append(btn);
+    renderCheckAutoBar(!CHK.can_edit);
+});
+/* 這一列的最後一格該放什麼（已開的單號／開單鈕／什麼都不放）。
+   renderCheckItems() 與上面的即時切換共用同一份規則，否則兩邊遲早長得不一樣。 */
+function ncBtnHtml(it, ro){
+    var k = CHK.kind;
+    if (k === 'kpi') {
+        if (it.car_id) return '<span class="ia-op" onclick="openCar('+it.car_id+')">'+esc(it.car_no||'矯正單')+'</span>';
+        if (it.result==='ng' && !ro && CAN_AUDIT)
+            return '<span class="ia-op" onclick="carFromItem('+it.item_id+')"><i class="fa fa-plus"></i> 開矯正單</span>';
+        return '';
+    }
+    if (it.nc_id) return '<span class="ia-op" onclick="openNc('+it.nc_id+')">'+esc(it.nc_no||'IA單')+'</span>';
+    if (it.result==='ng' && !ro && CAN_AUDIT)
+        return '<span class="ia-op" onclick="newNcFromItem('+it.item_id+')"><i class="fa fa-plus"></i> 開不符合單</span>';
+    return '';
 }
 /* 「可以自動建立的就自動建立，人工才要填的再提醒管理員」（2026-09-14 使用者要求）。
    這條提示列統計這張表還有幾件可以一鍵做掉、又有哪幾件一定要人工填。 */
@@ -4038,8 +4072,8 @@ function openNcNewFill(pre){
     $('#nnDue').val(inputDate(pre.due_date||''));
     // 受稽核單位：優先用查檢表帶來的部門 id，沒有才用名稱去猜
     $('#nnDept').html(deptOptions(pre.dept_id || guessDeptId(pre), '（請選擇）'));
-    // 受稽核人：優先用查檢表上存的 user_id（姓名去猜會遇到同名同姓）
-    $('#nnAuditee').html(peopleOptions('', pre.auditee_id || guessUserId(pre.auditee_name), '（未指定）'));
+    // 受稽核人：只列該受稽核單位的主管（2026-09-21 使用者要求），單位或日期一改就重抓
+    nnLoadAuditee(pre.auditee_id || guessUserId(pre.auditee_name), pre.auditee_name || '');
     ncClausePick(pre.clauses || []);
     $('#btnNcCreate').data('src', JSON.stringify({src_kind:pre.src_kind||'', src_item_id:pre.src_item_id||'',
                                                  ref_form_name:pre.ref_form_name||''}));
@@ -4050,6 +4084,34 @@ function openNcNewFill(pre){
         if (el && typeof el.egFilterResnap === 'function') el.egFilterResnap();
     });
 }
+/* 受稽核人候選＝這個受稽核單位在稽核日期當時的主管。
+   換單位或換日期都要重抓；抓的期間先停用下拉並寫「載入中…」，
+   不然會出現「看起來有選項、點下去卻是上一個單位的人」。 */
+function nnLoadAuditee(curId, curName){
+    var dept = $('#nnDept').val() || '', date = $('#nnDate').val() || META.today;
+    if (!dept) {
+        $('#nnAuditee').html('<option value="">（請先選擇受稽核單位）</option>').prop('disabled', true);
+        nnAuditeeResnap(); return;
+    }
+    $('#nnAuditee').html('<option value="">載入中…</option>').prop('disabled', true);
+    $.getJSON(API, {action:'nc_cands', dept_id:dept, date:date}, function(res){
+        var list = (res && res.ok) ? (res.auditee||[]) : [];
+        var keep = '', want = String(curId||'');
+        list.forEach(function(p){ if (String(p.id) === want) keep = want; });
+        $('#nnAuditee').html(candOptions(list, keep || (want && curName ? want : ''), curName))
+                       .prop('disabled', false);
+        nnAuditeeResnap();
+    }).fail(function(){
+        $('#nnAuditee').html('<option value="">（載入失敗，請重開這個跳窗）</option>').prop('disabled', false);
+        nnAuditeeResnap();
+    });
+}
+function nnAuditeeResnap(){
+    var el = document.getElementById('nnAuditee');
+    if (el && typeof el.egFilterResnap === 'function') el.egFilterResnap();
+}
+$('#nnDept').on('change', function(){ nnLoadAuditee('', ''); });
+$('#nnDate').on('change', function(){ nnLoadAuditee($('#nnAuditee').val()||'', ''); });
 /* 違反條文：把「綁定這份 AS 文件的條文」列出來勾，勾了就加進文字框（也可以自己打字改）。
    清單為空時整區不顯示（不是每張表單都在題庫裡對得到條文）。 */
 function ncClausePick(list){
@@ -4122,7 +4184,7 @@ function openNc(id){
         // 段一
         $('#nNo').val(NC.nc_no||''); $('#nAuditDate').val(dispDate(NC.audit_date));
         $('#nDept').val(NC.dept_name||''); $('#nAuditor').val((NC.auditor_name||'')+'　'+dispDate(NC.auditor_date));
-        $('#nAuditee').html(peopleOptions('', NC.auditee_id, '（未指定）'));
+        $('#nAuditee').html(candOptions((NC.cands||{}).auditee, NC.auditee_id, NC.auditee_name));
         $('#nFact').val(NC.fact||''); $('#nFormNo').val(NC.ref_form_no||'');
         $('#nClause').val(NC.clause_ref||''); $('#nDue').val(inputDate(NC.due_date));
         var typeH = '<option value="">（請選擇）</option>';
@@ -4131,10 +4193,11 @@ function openNc(id){
         });
         $('#nType').html(typeH);
         // 段二
-        $('#nHead').html(peopleOptions('', NC.head_id, '（未指定）'));
+        $('#nHead').html(candOptions((NC.cands||{}).head, NC.head_id, NC.head_name));
         $('#nHeadDate').val(inputDate(NC.head_date) || META.today);
         $('#nCause').val(NC.cause||''); $('#nCorr').val(NC.corrective||''); $('#nPrev').val(NC.preventive||'');
-        $('#nResp').html(peopleOptions('', NC.resp_id, '（未指定）'));
+        $('#nCorrDue').val(inputDate(NC.corrective_due)); $('#nPrevDue').val(inputDate(NC.preventive_due));
+        fillRespCands(NC.cands||{}, NC.resp_id, NC.resp_name);
         $('#nRespDate').val(inputDate(NC.resp_date) || META.today);
         $('#nHeadSuggest').text(NC.suggest_head
             ? ('　建議：'+NC.suggest_head.name+'（依稽核日期回推當時職務）')
@@ -4170,6 +4233,49 @@ function openNc(id){
         openMask('ncMask');
     });
 }
+/* 受稽核人／受審查單位主管／責任主管的下拉（2026-09-21 使用者要求）：
+   一律**只列受稽核單位的主管**，不再攤開全公司的人（原本連生產3廠的組員都列得出來，
+   那份清單在畫面上根本挑不到人，也很容易挑到別單位的人）。
+   **原本就掛在這張單上的那一位一定要留著**——他可能已經調職或離職，清單裡不會有他，
+   不留著的話光是改一行文字存檔就會把人洗掉（後端同樣放行「沒有更動」的情況）。 */
+function candOptions(list, curId, curName){
+    list = list || [];
+    var h = '<option value="">（未指定）</option>', has = false;
+    list.forEach(function(p){
+        if (String(curId||'') === String(p.id)) has = true;
+        var label = (p.department_name ? p.department_name+'　' : '')
+                  + (p.position_name ? p.position_name+'　' : '') + p.name
+                  + (+p.is_manager ? '' : '（非主管）');
+        h += '<option value="'+p.id+'"'+(String(curId||'')===String(p.id)?' selected':'')+'>'+esc(label)+'</option>';
+    });
+    if (curId && !has) {
+        h += '<option value="'+curId+'" selected>'
+           + esc((curName||('#'+curId)) + '（原指定人員，已不在本單位主管名單）') + '</option>';
+    }
+    if (!list.length) h += '<option value="" disabled>（查不到這個單位在稽核日期當時的人員）</option>';
+    return h;
+}
+/* 責任主管：候選範圍＝受審查單位主管**所在的部門**（使用者指定），換人就要跟著換 */
+function fillRespCands(cd, curId, curName){
+    $('#nResp').html(candOptions(cd.resp, curId, curName));
+    var el = document.getElementById('nResp');
+    if (el && typeof el.egFilterResnap === 'function') el.egFilterResnap();
+    $('#nRespNote').text(cd.resp_dept_name
+        ? ('　候選：' + cd.resp_dept_name + ' 的主管' + (+cd.resp_fallback ? '（查不到主管，改列該單位全部人員）' : ''))
+        : '');
+}
+$('#nHead').on('change', function(){
+    if (!NC) return;
+    $.getJSON(API, {action:'nc_cands', dept_id:NC.dept_id||'', date:NC.audit_date||'',
+                    head_id:($(this).val()||'')}, function(res){
+        if (!res || !res.ok) return;
+        NC.cands = $.extend(NC.cands||{}, res);
+        // 換了主管＝換了部門，原本選的責任主管若不在新部門就不要再留著（留著會存進別單位的人）
+        var keep = '', cur = String($('#nResp').val()||'');
+        (res.resp||[]).forEach(function(p){ if (String(p.id) === cur) keep = cur; });
+        fillRespCands(res, keep, keep ? NC.resp_name : '');
+    });
+});
 function lockSec(sel, allow, lockSel, why){
     var $s = $(sel);
     $s.toggleClass('locked', !allow);
@@ -4266,13 +4372,16 @@ function saveSec2(submit){
     if (submit) {
         var ok = true;
         ok = fieldErr($('#nCause'), 'errNCause', $('#nCause').val().trim() ? '' : '請填原因分析') && ok;
-        ok = fieldErr($('#nCorr'),  'errNCorr',  $('#nCorr').val().trim()  ? '' : '請填糾正措施及完成時間') && ok;
-        ok = fieldErr($('#nPrev'),  'errNPrev',  $('#nPrev').val().trim()  ? '' : '請填預防措施及完成時間') && ok;
+        ok = fieldErr($('#nCorr'),  'errNCorr',  $('#nCorr').val().trim()  ? '' : '請填糾正措施') && ok;
+        ok = fieldErr($('#nCorrDue'),'errNCorrDue',$('#nCorrDue').val()     ? '' : '請選擇糾正措施的完成日期') && ok;
+        ok = fieldErr($('#nPrev'),  'errNPrev',  $('#nPrev').val().trim()  ? '' : '請填預防措施') && ok;
+        ok = fieldErr($('#nPrevDue'),'errNPrevDue',$('#nPrevDue').val()     ? '' : '請選擇預防措施的預計完成日期') && ok;
         if (!ok) return;
         if (!confirm('送出後這一段會鎖定並通知稽核組長驗證，確定？')) return;
     }
     $.post(API, {action:'nc_save_sec2', nc_id:NC.nc_id, submit:submit?1:'', cause:$('#nCause').val(),
-        corrective:$('#nCorr').val(), preventive:$('#nPrev').val(), head_id:$('#nHead').val(),
+        corrective:$('#nCorr').val(), corrective_due:$('#nCorrDue').val(),
+        preventive:$('#nPrev').val(), preventive_due:$('#nPrevDue').val(), head_id:$('#nHead').val(),
         head_date:$('#nHeadDate').val(),
         resp_id:$('#nResp').val(), resp_date:$('#nRespDate').val()}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
@@ -5313,7 +5422,9 @@ function printNc(id){
               + '<tr><td colspan="6" class="l" style="height:250px;vertical-align:top;">'
               + '<div style="font-weight:bold;">原因分析:</div>' + pre(n.cause)
               + '<div style="font-weight:bold;margin-top:14px;">糾正措施及完成時間:</div>' + pre(n.corrective)
-              + '<div style="font-weight:bold;margin-top:14px;">預防措施及完成時間:</div>' + pre(n.preventive)
+              + (n.corrective_due ? '<div class="pre">完成時間：'+dispDate(n.corrective_due)+'</div>' : '')
+              + '<div style="font-weight:bold;margin-top:14px;">預防措施及預計完成時間:</div>' + pre(n.preventive)
+              + (n.preventive_due ? '<div class="pre">預計完成時間：'+dispDate(n.preventive_due)+'</div>' : '')
               + signRight('責任主管', n.resp_id, n.resp_name, n.resp_date)
               + '</td></tr>'
 
