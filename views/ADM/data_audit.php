@@ -186,6 +186,12 @@ try {
         .pill.warn { background:#FBE6D2; color:#A65A20; }
         .pill.bad  { background:#F8DED7; color:#9C3B27; }
         .pill.grey { background:#EFE3CF; color:#7a6750; }
+        /* 節點的製程／備註（2026-09-21 使用者回報：看不到製程，沒辦法確認是不是同一種製程）。
+           .node 是 nowrap，所以這一區塊一定要另外開一個 div 才換得了行；
+           line-height 一律自己指定（Gentelella 全站 td span{line-height:28px} 會把小字撐成 28px）。 */
+        .proc-line { margin-top:3px; white-space:normal; line-height:15px; }
+        .proc-line .nt { font-size:11px; line-height:15px; color:#8a7560; word-break:break-all; }
+        .proc-line .nt b { color:#7a6750; font-weight:normal; }
         .tierline { font-size:11px; color:#6B4423; background:#FFF6E8; border-left:3px solid var(--amber);
                     padding:1px 6px; margin:1px 0; }
         .qd-tbl { width:100%; border-collapse:collapse; font-size:12px; }
@@ -996,6 +1002,29 @@ function traceFiltered(useLevel, useCode){
     });
 }
 function traceRows(){ return traceFiltered(true, true); }
+/* 製程做成標籤、備註是自由文字所以截字並把完整內容掛在 title（滑過去看得到全文）。 */
+function procLine(procs, notes){
+    var h = '';
+    (procs||[]).forEach(function(p){ if (p) h += '<span class="pill grey">' + esc(p) + '</span>'; });
+    var seen = {};
+    (notes||[]).forEach(function(n){
+        var t = String(n==null?'':n).replace(/\s+/g, ' ').trim();
+        if (!t || seen[t]) return; seen[t] = 1;
+        h += '<div class="nt" title="' + esc(t) + '">' + esc(t.length > 30 ? t.slice(0,30) + '…' : t) + '</div>';
+    });
+    return h ? '<div class="proc-line">' + h + '</div>' : '';
+}
+/* 出貨單價（2026-09-21 使用者回報：出貨欄沒印單價，沒辦法快速核對）。
+   一張訂單常分好幾張出貨單、單價不一定一樣（實測「車+銑 ＠175」與「滾齒 ＠70」是同一張訂單），
+   所以有幾種單價就印幾種，不可以只印第一張的。 */
+function shipPrices(list){
+    var seen = {}, out = [], none = 0;
+    (list||[]).forEach(function(x){
+        var p = +x.price || 0;
+        if (p > 0) { if (!seen[p]) { seen[p] = 1; out.push(p); } } else none++;
+    });
+    return { list: out, none: none };
+}
 function nodeHtml(txt, sub, bad, src, docs){
     var h = '<span class="node' + (bad?' bad':'') + '">' + esc(txt);
     if (src) h += '<span class="src-tag' + (src==='guess'?' guess':'') + '">'
@@ -1047,7 +1076,8 @@ function bomDocs(list, r){
         return {no:b.no, url:u, done:!!b.done,
                 tip:where + b.no + (cl?('（客戶 ' + cl + '）'):'')
                     + '（' + (b.date||'') + '，' + b.qty + ' 支'
-                    + (b.done?'，已完工':'') + '）'};
+                    + (b.done?'，已完工':'') + '）'
+                    + ((b.procs&&b.procs.length)?('；製程 ' + b.procs.join('→')):'')};
     });
 }
 /* 報價：客戶要用**這張報價單自己的** client_name——報價單管理的客戶下拉是由該年度的報價單建出來的，
@@ -1076,7 +1106,9 @@ function shipDocs(list, r){
         if (pt) u += '&part=' + encodeURIComponent(pt);
         if (cl) u += '&client=' + encodeURIComponent(cl);
         return {no:x.no, url:u,
-                tip:'在快速出貨的近期出貨單查 ' + x.no + '（' + (x.date||'') + '，' + x.qty + ' 支）'
+                tip:'在快速出貨的近期出貨單查 ' + x.no + '（' + (x.date||'') + '，' + x.qty + ' 支，'
+                    + ((+x.price>0) ? ('＠' + x.price) : '未開價') + '）'
+                    + (x.content?('；內容 ' + x.content):'') + (x.note?('；備註 ' + x.note):'')
                     + (pt?('；要核對的料號 ' + pt):'')};
     });
 }
@@ -1397,16 +1429,31 @@ function renderTrace(){
             q = nodeHtml(dispDate(r.quote.date), qsub, qBad, r.quote.src, qdocs);
             if (r.quote.cnt > 1) q += '<span class="pill grey">共 ' + r.quote.cnt + ' 列</span>';
             q += '<span class="bind-go" data-qd="' + (r.quote.item_id||0) + '">看整張報價單</span>';
+            q += procLine(r.quote.procs, [r.quote.spec]);
         } else {
             q = '<span class="node bad">無報價</span>';
         }
+        var bp = [], bpSeen = {};
+        (r.bom.list||[]).forEach(function(x){ (x.procs||[]).forEach(function(n){
+            if (n && !bpSeen[n]) { bpSeen[n] = 1; bp.push(n); } }); });
         var b = r.bom.cnt
-            ? nodeHtml(dispDate(r.bom.date), r.bom.cnt + ' 張／' + r.bom.qty + ' 支', bBad, r.bom.src, bomDocs(r.bom.list, r))
+            ? (nodeHtml(dispDate(r.bom.date), r.bom.cnt + ' 張／' + r.bom.qty + ' 支', bBad, r.bom.src, bomDocs(r.bom.list, r))
+               + procLine(bp, null))
             : (r.auto_pm ? '<span class="node"><em>自動轉生管<br>不需製令</em></span>' : '<span class="node bad">無製令</span>');
-        var sh = r.ship.cnt
-            ? nodeHtml(dispDate(r.ship.date), (r.ship.doc_cnt||r.ship.cnt) + ' 張／' + r.ship.qty + ' 支',
-                       sBad, r.ship.src, shipDocs(r.ship.list, r))
-            : '<span class="node' + (r.closed?' bad':'') + '">未出貨</span>';
+        var sp = shipPrices(r.ship.list);
+        var sh;
+        if (r.ship.cnt){
+            sh = nodeHtml(dispDate(r.ship.date),
+                    (r.ship.doc_cnt||r.ship.cnt) + ' 張／' + r.ship.qty + ' 支'
+                    + (sp.list.length ? '　＠' + sp.list.slice(0,3).join('／') + (sp.list.length>3?'…':'') : ''),
+                    sBad, r.ship.src, shipDocs(r.ship.list, r));
+            if (sp.none) sh += '<span class="pill bad">'
+                + (sp.list.length ? (sp.none + ' 張未開價') : '未開價') + '</span>';
+            sh += procLine(null, (r.ship.list||[]).map(function(x){ return x.content; })
+                                 .concat((r.ship.list||[]).map(function(x){ return x.note; })));
+        } else {
+            sh = '<span class="node' + (r.closed?' bad':'') + '">未出貨</span>';
+        }
         if (CAN_BIND){
             q  += bindBtn(r, 'quote');
             b  += bindBtn(r, 'bom');
@@ -1439,7 +1486,7 @@ function renderTrace(){
                 + '<br><em class="muted-help">' + r.oqty + ' 支 ＠' + r.oprice + '</em>'
                 + (r.closed?'<br><em class="muted-help">已結案</em>':'') + '</td>'
             + '<td>' + esc(r.client) + '</td>'
-            + '<td>' + esc(r.part) + '</td>'
+            + '<td>' + esc(r.part) + procLine(r.oproc ? [r.oproc] : null, [r.ospec, r.ops]) + '</td>'
             + '<td>' + q + '</td><td>' + b + '</td><td>' + sh + '</td>'
             + '<td>' + iss + '</td></tr>';
     }).join('');
@@ -2116,15 +2163,27 @@ function csvDown(head, rows, name){
 $('#btnTraceCsv').on('click', function(){
     var rows = traceRows();
     if (!rows.length){ alert('目前沒有資料可以匯出'); return; }
-    csvDown(['判定','訂單編號','訂單日期','客戶','料號','訂單數量','訂單單價',
-             '報價單號','報價日','報價單價','報價來源','製令張數','製令開立日','製令數量','製令來源',
-             '出貨張數','出貨首日','出貨數量','出貨來源','製令編號','出貨單號','發現的問題'],
+    csvDown(['判定','訂單編號','訂單日期','客戶','料號','訂單數量','訂單單價','訂單製程','訂單備註',
+             '報價單號','報價日','報價單價','報價製程','報價備註','報價來源',
+             '製令張數','製令開立日','製令數量','製令製程','製令來源',
+             '出貨張數','出貨首日','出貨數量','出貨單價','出貨製程／內容','出貨備註','出貨來源',
+             '製令編號','出貨單號','發現的問題'],
         rows.map(function(r){
+            var sp = shipPrices(r.ship.list), bp = [];
+            (r.bom.list||[]).forEach(function(x){ (x.procs||[]).forEach(function(n){
+                if (n && bp.indexOf(n) < 0) bp.push(n); }); });
+            var uniq = function(a){ var o = []; (a||[]).forEach(function(v){
+                v = String(v==null?'':v).replace(/\s+/g, ' ').trim();
+                if (v && o.indexOf(v) < 0) o.push(v); }); return o.join('；'); };
             return [r.level==='critical'?'嚴重':(r.level==='warn'?'提醒':'正常'), r.order_no, r.odate, r.client, r.part,
-                r.oqty, r.oprice,
-                r.quote?r.quote.no:'', r.quote?r.quote.date:'', r.quote?r.quote.price:'', r.quote?r.quote.src:'',
-                r.bom.cnt, r.bom.date, r.bom.qty, r.bom.src,
-                (r.ship.doc_cnt||r.ship.cnt), r.ship.date, r.ship.qty, r.ship.src,
+                r.oqty, r.oprice, r.oproc||'', uniq([r.ospec, r.ops]),
+                r.quote?r.quote.no:'', r.quote?r.quote.date:'', r.quote?r.quote.price:'',
+                r.quote?(r.quote.procs||[]).join('、'):'', r.quote?(r.quote.spec||''):'', r.quote?r.quote.src:'',
+                r.bom.cnt, r.bom.date, r.bom.qty, bp.join('→'), r.bom.src,
+                (r.ship.doc_cnt||r.ship.cnt), r.ship.date, r.ship.qty,
+                (sp.list.join('／') + (sp.none ? (sp.list.length?'（'+sp.none+' 張未開價）':'未開價') : '')),
+                uniq((r.ship.list||[]).map(function(x){ return x.content; })),
+                uniq((r.ship.list||[]).map(function(x){ return x.note; })), r.ship.src,
                 (r.bom.list||[]).map(function(x){ return x.no; }).join('、'),
                 (r.ship.list||[]).map(function(x){ return x.no; }).join('、'),
                 r.issues.map(function(i){ return i.text; }).join('；')];
@@ -2193,9 +2252,15 @@ $('#btnTracePrint').on('click', function(){
         rows.map(function(r, i){
             return [i+1, (r.level==='critical'?'嚴重':(r.level==='warn'?'提醒':'正常')),
                 r.order_no + ' / ' + r.odate, r.client, r.part,
-                r.quote ? (r.quote.date + ' ' + r.quote.no) : '無',
-                r.bom.cnt ? (r.bom.date + ' ' + (r.bom.list||[]).map(function(x){ return x.no; }).join(' ')) : (r.auto_pm ? '自動轉生管' : '無'),
-                r.ship.cnt ? (r.ship.date + ' ' + (r.ship.list||[]).map(function(x){ return x.no; }).join(' ')) : '未出貨',
+                r.quote ? (r.quote.date + ' ' + r.quote.no
+                           + ((r.quote.procs||[]).length ? ('　' + r.quote.procs.join('、')) : '')) : '無',
+                r.bom.cnt ? (r.bom.date + ' ' + (r.bom.list||[]).map(function(x){
+                                 return x.no + ((x.procs||[]).length ? ('（' + x.procs.join('→') + '）') : ''); }).join(' '))
+                          : (r.auto_pm ? '自動轉生管' : '無'),
+                r.ship.cnt ? (r.ship.date + ' ' + (r.ship.list||[]).map(function(x){
+                                 return x.no + '＠' + ((+x.price>0) ? x.price : '未開價')
+                                      + (x.content ? ('（' + x.content + '）') : ''); }).join(' '))
+                           : '未出貨',
                 r.issues.map(function(x){ return x.text; }).join('；')];
         }));
 });

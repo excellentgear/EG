@@ -495,6 +495,22 @@ function dqa_proc_extract(?string $text, array $terms): array
     return array_keys($hit);
 }
 
+/** 報價項目的製程名稱（quotation_item.process_notes 存的是子標籤 id 清單，不是文字）
+ *  既有資料有純數字、有陣列、也有物件三種寫法，直接 foreach 解碼結果會在「單一數字」時炸掉
+ *  （json_decode 回 int），所以一律先正規化成陣列。唯一實作，顯示與比對共用。 */
+function dqa_quote_proc_names(?string $processNotes, array $subTagName): array
+{
+    $pn = json_decode((string)$processNotes, true);
+    if (is_numeric($pn)) $pn = [$pn];
+    if (!is_array($pn))  $pn = [];
+    $out = [];
+    foreach ($pn as $x) {
+        $id = is_array($x) ? (int)($x['sub_tag_id'] ?? 0) : (int)$x;
+        if ($id > 0 && isset($subTagName[$id]) && $subTagName[$id] !== '') $out[$subTagName[$id]] = 1;
+    }
+    return array_keys($out);
+}
+
 /** 製程集合比對：回傳 same / partial / diff / unknown（任一邊沒抽出詞＝unknown，不判不符） */
 function dqa_proc_compare(array $a, array $b): string
 {
@@ -615,7 +631,8 @@ function dqa_trace_rows(PDO $db, array $f): array
     if ($part   !== '') { $w[] = "ot.d_id LIKE :pt";    $p[':pt'] = '%' . $part . '%'; }
     }
     $sql = "SELECT ot.Order_id, ot.Order_oo, ot.Client_name, ot.d_id, ot.d_id_ID, ot.Qty, ot.unit_price,
-                   ot.Processing_items, ot.pmGet_auto, ot.Order_status, ot.quote_no, ot.quote_item_id,
+                   ot.Processing_items, ot.Order_ps, ot.Specification AS ospec,
+                   ot.pmGet_auto, ot.Order_status, ot.quote_no, ot.quote_item_id,
                    ot.parent_order_id, ot.assembly_parent_order_id,
                    DATE_FORMAT(ot.Order_date,'%Y-%m-%d') odate,
                    DATE_FORMAT(ot.Delivery_date,'%Y-%m-%d') ddate
@@ -773,6 +790,7 @@ function dqa_trace_rows(PDO $db, array $f): array
                 'qty' => dqa_num($r['Qty']), 'price' => dqa_num($r['Unit_price']),
                 'ok_flag' => ((int)($r['anomaly_confirmed'] ?? 0) === 1),
                 'spec' => (string)($r['Specification'] ?? ''), 'src' => $src,
+                'content' => (string)($r['Content'] ?? ''), 'note' => (string)($r['Note'] ?? ''),
                 'alloc' => isset($r['alloc']) ? dqa_num($r['alloc']) : null,
                 'client' => trim((string)($r['Client_name'] ?? '')),
                 'part'   => trim((string)($r['Product_id'] ?? '')),
@@ -781,13 +799,15 @@ function dqa_trace_rows(PDO $db, array $f): array
     foreach (dqa_chunks($oids) as $ck) {
         $in = implode(',', array_fill(0, count($ck), '?'));
         $s = $db->prepare("SELECT m.Order_id, m.allocated_qty alloc, il.IS_id, il.IS_number, il.Qty,
-                                  il.Unit_price, il.Specification, il.anomaly_confirmed, il.Client_name, il.Product_id,
+                                  il.Unit_price, il.Specification, il.Content, il.Note,
+                                  il.anomaly_confirmed, il.Client_name, il.Product_id,
                                   DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate
                              FROM is_order_map m JOIN is_list il ON il.IS_id=m.IS_id
                             WHERE m.Order_id IN ($in)");
         $s->execute($ck);
         foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) $shipByOrder[(int)$r['Order_id']][(int)$r['IS_id']] = $mkShip($r, 'map');
-        $s = $db->prepare("SELECT il.Order_id, il.IS_id, il.IS_number, il.Qty, il.Unit_price, il.Specification, il.anomaly_confirmed,
+        $s = $db->prepare("SELECT il.Order_id, il.IS_id, il.IS_number, il.Qty, il.Unit_price,
+                                  il.Specification, il.Content, il.Note, il.anomaly_confirmed,
                                   il.Client_name, il.Product_id, DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate
                              FROM is_list il WHERE il.Order_id IN ($in)");
         $s->execute($ck);
@@ -806,7 +826,8 @@ function dqa_trace_rows(PDO $db, array $f): array
         if ($parts) { $u = array_values(array_unique($parts));
             $w[] = "il.Product_id IN (" . implode(',', array_fill(0, count($u), '?')) . ")";
             $bind = array_merge($bind, $u); }
-        $s = $db->prepare("SELECT il.IS_id, il.IS_number, il.Qty, il.Unit_price, il.Specification, il.anomaly_confirmed,
+        $s = $db->prepare("SELECT il.IS_id, il.IS_number, il.Qty, il.Unit_price,
+                                  il.Specification, il.Content, il.Note, il.anomaly_confirmed,
                                   il.Client_name, il.Product_id, il.d_setting_id,
                                   DATE_FORMAT(il.Order_date,'%Y-%m-%d') sdate
                              FROM is_list il WHERE (" . implode(' OR ', $w) . ")
@@ -839,28 +860,36 @@ function dqa_trace_rows(PDO $db, array $f): array
         }
     }
 
-    /* ── ⑥ 製令的製程（bom_ing → process_no）───────────── */
+    /* ── ⑥ 製令的製程（bom_ing → process_no）─────────────
+     * 2026-09-21 使用者回報：四個節點都看不到製程，沒辦法確認「是不是同一種製程」。
+     * 所以製程一律載入**給畫面看**，不再只在「製程比對」打開時才查——
+     * 那個比對預設是關的（訂單手打、出貨與規格混打，自動比對 31% 對不起來會淹沒真正的缺失），
+     * 但「把四個節點的製程並排印出來讓人自己核對」本來就是這一頁的用途。
+     * 順序一律用 bom_sn（記憶 bom_process_order_is_bom_sn：processing_sequence 多數是 NULL，
+     * 拿它排序會把有值的那一站排到最前面）。 */
     $bomProc = [];
-    if ($cmpP && $bomSeen) {
+    if ($bomSeen) {
         foreach (dqa_chunks(array_keys($bomSeen)) as $ck) {
             $in = implode(',', array_fill(0, count($ck), '?'));
             $s = $db->prepare("SELECT bi.bom, pn.ProcessName FROM bom_ing bi
                                  LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
-                                WHERE bi.bom IN ($in) AND pn.ProcessName IS NOT NULL");
+                                WHERE bi.bom IN ($in) AND pn.ProcessName IS NOT NULL
+                                ORDER BY bi.bom, bi.bom_sn");
             $s->execute($ck);
-            foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r)
-                $bomProc[(string)$r['bom']][trim((string)$r['ProcessName'])] = 1;
+            foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $nm = trim((string)$r['ProcessName']);
+                if ($nm === '') continue;
+                $bomProc[(string)$r['bom']][$nm] = 1;   // 同一站重複發包只留一個
+            }
         }
     }
-    /* 報價的製程（process_notes 存子標籤 id 清單） */
+    /* 報價的製程（process_notes 存子標籤 id 清單，不是文字＝記憶 quotation_process_tags） */
     $subTagName = [];
-    if ($cmpP) {
-        try {
-            foreach ($db->query("SELECT sub_tag_id, sub_tag_name FROM quotation_process_sub_tag")
-                        ->fetchAll(PDO::FETCH_ASSOC) as $r)
-                $subTagName[(int)$r['sub_tag_id']] = trim((string)$r['sub_tag_name']);
-        } catch (Throwable $e) {}
-    }
+    try {
+        foreach ($db->query("SELECT sub_tag_id, sub_tag_name FROM quotation_process_sub_tag")
+                    ->fetchAll(PDO::FETCH_ASSOC) as $r)
+            $subTagName[(int)$r['sub_tag_id']] = trim((string)$r['sub_tag_name']);
+    } catch (Throwable $e) {}
     $terms = $cmpP ? dqa_process_terms($db) : [];
 
     /* ── ⑦ 逐張訂單判定 ───────────────────────────────── */
@@ -936,6 +965,7 @@ function dqa_trace_rows(PDO $db, array $f): array
             if (count($bList) < 12) $bList[] = ['no' => $b['bom'], 'date' => $b['date'], 'qty' => $q1,
                                                 'client' => (string)($b['client'] ?? ''),
                                                 'part' => (string)($b['part'] ?? ''),
+                                                'procs' => array_keys($bomProc[(string)$b['bom']] ?? []),
                                                 'done' => !empty($b['done'])];
         }
 
@@ -972,11 +1002,18 @@ function dqa_trace_rows(PDO $db, array $f): array
             if (!isset($sDocs[$k])) $sDocs[$k] = ['no' => $k, 'date' => $s2['date'], 'qty' => 0.0,
                                                   'client' => (string)($s2['client'] ?? ''),
                                                   'part' => (string)($s2['part'] ?? ''),
+                                                  // ERP 把「製程」打在 Content、規格在 Specification、備註在 Note，
+                                                  // 三欄都要印出來才核對得了（實測 Content 才是製程那一欄）
+                                                  'spec' => (string)($s2['spec'] ?? ''),
+                                                  'content' => (string)($s2['content'] ?? ''),
+                                                  'note' => (string)($s2['note'] ?? ''),
                                                   'price' => $s2['price'], 'ids' => [], 'src' => $s2['src']];
             $sDocs[$k]['qty'] += $q1;
             // 一張出貨單在 is_list 是好幾列，解除綁定時要逐列解，所以 id 全都留著
             $sDocs[$k]['ids'][] = (int)$s2['id'];
             if ($sDocs[$k]['price'] <= 0 && $s2['price'] > 0) $sDocs[$k]['price'] = $s2['price'];
+            foreach (['spec', 'content', 'note'] as $fk)
+                if ($sDocs[$k][$fk] === '' && ($s2[$fk] ?? '') !== '') $sDocs[$k][$fk] = (string)$s2[$fk];
             if ($s2['date'] !== '' && ($sDocs[$k]['date'] === '' || $s2['date'] < $sDocs[$k]['date']))
                 $sDocs[$k]['date'] = $s2['date'];
         }
@@ -1119,19 +1156,8 @@ function dqa_trace_rows(PDO $db, array $f): array
         $pCmp = '';
         if ($cmpP) {
             $pOrder = dqa_proc_extract((string)$o['Processing_items'], $terms);
-            if ($q) {
-                // process_notes 存的是子標籤 id 清單，但既有資料有純數字、有陣列、也有物件，
-                // 直接 foreach 解碼結果會在「單一數字」時炸掉（json_decode 回 int）。
-                $pn = json_decode((string)($q['process_notes'] ?? ''), true);
-                if (is_numeric($pn)) $pn = [$pn];
-                if (!is_array($pn))  $pn = [];
-                $names = [];
-                foreach ($pn as $x) {
-                    $id = is_array($x) ? (int)($x['sub_tag_id'] ?? 0) : (int)$x;
-                    if ($id > 0 && isset($subTagName[$id])) $names[] = $subTagName[$id];
-                }
-                $pQuote = dqa_proc_extract(implode(' ', $names), $terms);
-            }
+            if ($q) $pQuote = dqa_proc_extract(
+                implode(' ', dqa_quote_proc_names($q['process_notes'] ?? '', $subTagName)), $terms);
             foreach ($boms as $b) foreach (array_keys($bomProc[$b['bom']] ?? []) as $n) $pBom[$n] = 1;
             $pBom = array_keys($pBom);
             $pShip = dqa_proc_extract($sSpec, $terms);
@@ -1183,18 +1209,23 @@ function dqa_trace_rows(PDO $db, array $f): array
             'odate' => $odate, 'ddate' => (string)$o['ddate'],
             'oqty' => $oqty, 'oprice' => $oprice, 'closed' => $closed, 'auto_pm' => $autoPm,
             'oproc' => (string)$o['Processing_items'],
+            'ops'   => trim((string)($o['Order_ps'] ?? '')),
+            'ospec' => trim((string)($o['ospec'] ?? '')),
             'quote' => $q ? ['no' => (string)$q['quote_no'], 'date' => $qdate,
                              'qty' => dqa_num($q['quantity']), 'price' => $qprice, 'src' => $qSrc,
                              'item_id' => (int)$q['item_id'], 'tiered' => !empty($q['is_tiered']),
                              'cnt' => count($qAll),
                              'client' => trim((string)($q['client_name'] ?? '')),
+                             'spec'   => trim((string)($q['specification'] ?? '')),
+                             'procs'  => dqa_quote_proc_names($q['process_notes'] ?? '', $subTagName),
                              'part'   => trim((string)($q['product_id'] ?? ''))] : null,
             // 綁到的全部報價項目（本體＋治具／刀具…）；畫面上主要報價印在最前面
-            'quote_list' => array_map(function ($x) {
+            'quote_list' => array_map(function ($x) use ($subTagName) {
                 return ['item_id' => (int)$x['item_id'], 'no' => (string)$x['quote_no'],
                         'date' => dqa_d($x['qdate']), 'qty' => dqa_num($x['quantity']),
                         'price' => dqa_num($x['unit_price']), 'part' => trim((string)$x['product_id']),
                         'spec' => (string)($x['specification'] ?? ''),
+                        'procs' => dqa_quote_proc_names($x['process_notes'] ?? '', $subTagName),
                         'tiered' => !empty($x['is_tiered']), 'alloc' => dqa_num($x['_alloc'] ?? 0),
                         'src' => (string)($x['_link_src'] ?? '')];
             }, $qAll),
