@@ -446,13 +446,17 @@ function tc_order_quote_ensure(PDO $db): void
  * ============================================================ */
 function tc_alloc_kinds(string $type = ''): array
 {
+    /* 可超交＝這張訂單本來就允許超交（客戶同意的超交率），與「多做備品」是兩件事：
+       多做是我們自己決定多做幾支，可超交是訂單條件本來就准許多交。 */
     $bom = [
+        'over_allow' => '可超交',
         'over_make'  => '多做備品',
         'stock_make' => '備庫整批做',
         'remake'     => '補料重做',
         'add_order'  => '客戶追加',
     ];
     $ship = [
+        'over_allow' => '可超交',
         'over_ship'  => '多出（客戶同意）',
         'stock_ship' => '庫存併出',
         'remake'     => '補出（前次不良）',
