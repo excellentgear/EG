@@ -114,30 +114,48 @@ function ncr_rows(PDO $db, string $from, string $to, array $opt = []): array {
     // ① 品質異常處理單
     if (in_array('qa', $srcs, true)) {
         try {
-            $st = $db->prepare("SELECT a.id, a.abnormal_order_no, a.occurrence_date, a.sqty, a.abnormal_phenomenon,
-                                       a.defect_detail, a.responsible_unit, a.disposition, a.disposition_note,
-                                       a.is_closed, a.closed_at, a.bom_no, a.capa_order_no,
+            // 2026-09-18 改版後這張單的欄位都在 qa_abnormal_lib 那一套（原因分類存 id、最終處置要看總經理裁示、
+            // 報廢單號在結案時配發），所以狀態與處置一律由 qab_status_map() 解析，**不要在這裡再判一次**。
+            require_once __DIR__ . '/qa_abnormal_lib.php';
+            qab_ensure_schema($db);
+            $st = $db->prepare("SELECT a.id, a.abnormal_order_no, a.occurrence_date, a.fill_date, a.sqty, a.ng_qty,
+                                       a.abnormal_phenomenon, a.defect_detail, a.responsible_unit,
+                                       a.is_closed, a.closed_at, a.bom_no, a.ir_no, a.capa_order_no,
+                                       a.client_name, a.part_no,
                                        b.d_id, b.Client_Name, b.specification
                                 FROM qa_abnormal_order a
                                 LEFT JOIN bom b ON b.bom = a.bom_no
-                                WHERE DATE(a.occurrence_date) BETWEEN ? AND ?");
+                                WHERE DATE(COALESCE(a.fill_date, a.occurrence_date)) BETWEEN ? AND ?");
             $st->execute([$from, $to]);
-            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $qaRows = $st->fetchAll(PDO::FETCH_ASSOC);
+            $qaStat = qab_status_map($db, array_column($qaRows, 'id'));
+            foreach ($qaRows as $r) {
+                $s = $qaStat[(int)$r['id']] ?? [];
+                $extra = [];
+                if (!empty($s['status']))    $extra[] = '狀態：' . $s['status'];
+                if (!empty($r['capa_order_no'])) $extra[] = '矯正單 ' . $r['capa_order_no'];
+                if (!empty($s['scrap_no']))  $extra[] = '報廢單 ' . $s['scrap_no'];
+                if (!empty($s['gm_deduct'])) $extra[] = '需扣款';
                 $rows[] = [
                     'source' => 'qa', 'source_key' => (string)$r['id'],
-                    'src_date'   => substr((string)$r['occurrence_date'], 0, 10),
-                    'src_client' => (string)($r['Client_Name'] ?? ''),
-                    'src_part'   => (string)($r['d_id'] ?? ''),
+                    'src_date'   => substr((string)($r['fill_date'] ?: $r['occurrence_date']), 0, 10),
+                    'src_client' => (string)($r['client_name'] ?: ($r['Client_Name'] ?? '')),
+                    'src_part'   => (string)($r['part_no'] ?: ($r['d_id'] ?? '')),
                     'src_draw'   => (string)($r['specification'] ?? ''),
-                    'src_qty'    => $r['sqty'],
+                    'src_qty'    => ($r['ng_qty'] !== null && $r['ng_qty'] !== '') ? $r['ng_qty'] : $r['sqty'],
                     'src_no'     => (string)$r['abnormal_order_no'],
-                    'src_cause'  => trim((string)($r['abnormal_phenomenon'] ?: $r['defect_detail'])),
+                    // 原因：優先用勾選好的異常原因分類（那才是之後要做分析的欄位），沒勾才退回文字敘述
+                    'src_cause'  => trim((string)($s['cause_label'] ?? '')) !== ''
+                                    ? (string)$s['cause_label']
+                                    : trim((string)($r['abnormal_phenomenon'] ?: $r['defect_detail'])),
                     'src_resp'   => (string)($r['responsible_unit'] ?? ''),
-                    'src_disp'   => trim((string)($r['disposition'] ?? '')),
+                    'src_disp'   => (string)($s['final_label'] ?? ''),
                     'src_closed' => (int)($r['is_closed'] ?? 0),
                     'src_closed_date' => substr((string)($r['closed_at'] ?? ''), 0, 10),
-                    'src_link'   => '../QA/qa_abnormal_view.php',
-                    'src_extra'  => $r['capa_order_no'] ? ('矯正單 ' . $r['capa_order_no']) : '',
+                    'src_link'   => '../QA/qa_abnormal_form.php',
+                    'src_extra'  => implode('　', $extra),
+                    // 這張單自己就管好了原因分類／責任單位／處置／結案，登錄簿一律唯讀（使用者 2026-09-21 指定）
+                    'src_readonly' => 1,
                 ];
             }
         } catch (Throwable $e) { error_log('ncr qa: ' . $e->getMessage()); }
@@ -271,7 +289,7 @@ function ncr_rows(PDO $db, string $from, string $to, array $opt = []): array {
         $out[] = ncr_merge(['source'=>'manual', 'source_key'=>(string)$s['source_key'],
             'src_date'=>$d, 'src_client'=>'', 'src_part'=>'', 'src_draw'=>'', 'src_qty'=>null,
             'src_no'=>'', 'src_cause'=>'', 'src_resp'=>'', 'src_disp'=>'', 'src_closed'=>0,
-            'src_closed_date'=>'', 'src_link'=>'', 'src_extra'=>''], $s);
+            'src_closed_date'=>'', 'src_link'=>'', 'src_extra'=>'', 'src_readonly'=>0], $s);
     }
     // 檢驗日期新→舊；沒有日期的排最後（不是排最前，否則沒日期的會霸佔第一頁）
     usort($out, function ($a, $b) {
@@ -315,6 +333,7 @@ function ncr_merge(array $r, $s): array {
         'remark'      => (string)($s['remark'] ?? ''),
         'src_extra'   => (string)$r['src_extra'],
         'src_link'    => (string)$r['src_link'],
+        'src_readonly'=> (int)($r['src_readonly'] ?? 0),
         // 來源本身的值也回傳：畫面上要能看出「這一格是系統帶的還是人改過的」
         'src_cause'   => (string)$r['src_cause'],
         'src_resp'    => (string)$r['src_resp'],

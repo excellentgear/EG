@@ -219,6 +219,7 @@ if (!function_exists('eg_print_sources')) {
             'cust_satis'     => ['label' => '客戶滿意度－統計資料表／監控表', 'page' => 'views/Sales/customer_satisfaction.php', 'kind' => 'form'],
             'qa_ncr_log'     => ['label' => '不合格品管制記錄表',           'page' => 'views/QA/ncr_control_log.php',            'kind' => 'form'],
             'data_audit'     => ['label' => '資料稽核－流程順序／基本資料',  'page' => 'views/ADM/data_audit.php',                'kind' => 'form'],
+            'qa_abnormal'    => ['label' => '品質異常處理單',               'page' => 'views/QA/qa_abnormal_list.php',           'kind' => 'form'],
         ];
     }
 }

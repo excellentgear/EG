@@ -115,6 +115,8 @@ case 'row_save': {
     $key = trim((string)($_POST['source_key'] ?? ''));
     if ($src === '' || $key === '') jerr('缺少來源');
     if (!isset(ncr_sources()[$src]) && $src !== 'manual') jerr('不支援的來源：' . $src);   // 白名單（鐵律8）
+    // 品質異常處理單自己就管好原因分類／責任單位／處置／結案，這本登錄簿一律唯讀（前端已擋，後端同規則再擋一次）
+    if ($src === 'qa') jerr('品質異常處理單的內容請到該單修改，這一頁只顯示不修改', 403);
     $disp = trim((string)($_POST['disposition'] ?? ''));
     if ($disp !== '' && !in_array($disp, ncr_dispositions(), true)) jerr('不支援的處理方式：' . $disp);
 

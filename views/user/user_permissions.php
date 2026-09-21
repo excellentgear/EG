@@ -373,6 +373,7 @@ $EG_ROLE_MODULES = [
     'comm_mgmt'           => ['prefix'=>'cm',      'label'=>'溝通管理',            'page'=>'communication_mgmt.php'],
     'cust_satis'          => ['prefix'=>'cs',      'label'=>'客戶滿意度',          'page'=>'customer_satisfaction.php'],
     'qa_ncr'              => ['prefix'=>'ncr',     'label'=>'不合格品管制記錄表',  'page'=>'ncr_control_log.php'],
+    'qa_abnormal'         => ['prefix'=>'qab',     'label'=>'品質異常處理單',      'page'=>'qa_abnormal_list.php'],
     'data_audit'          => ['prefix'=>'dqa',     'label'=>'資料稽核',            'page'=>'data_audit.php'],
     'leave'               => ['prefix'=>'leave',   'label'=>'請假系統',            'page'=>'leave_request.php'],
     'shipping'            => ['prefix'=>'ship',    'label'=>'快速出貨',            'page'=>'Shipping_Quick.php'],
@@ -1627,6 +1628,19 @@ $_quotDepts = array_keys($_deptSet);
                          <span style="color:#c0492f;">來源事件不可以從這一頁刪掉</span>（只有「紙本補登」的列可以刪）——
                          從登錄簿刪掉一筆不合格品會讓紀錄憑空消失、失去可追溯性。管理者固定擁有全部權限。',
                         rs_of('qa_ncr'), rsu_of('qa_ncr'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('qab', 'qa_abnormal', '品質異常處理單', 'fa-exclamation-triangle', '#DD5138',
+                        '為每位使用者指派「<a href="../QA/qa_abnormal_list.php" target="_blank" style="color:#b5762a;">品質異常處理單</a>」
+                         （2-QA-01-01）的角色。一張單從開立、徵詢相關單位意見、主管決策、總經理裁示、扣款確認到結案都在同一頁完成。<br>
+                         <strong>異常單開立／填寫</strong>＝開單與填寫；<strong>決策主管</strong>＝勾選異常處置方式；
+                         <strong>最終決策者</strong>＝總經理裁示（含是否扣款）；
+                         <strong>扣款金額填寫／核准</strong>＝紙本左下角那一塊（金額由生管填、核准由管理課 會計／主管）；
+                         <strong>異常單管理員</strong>＝以上全部＋代碼表與設定，並可取消結案。<br>
+                         <span style="color:#c0492f;">很多身分不必在這裡指派</span>：品管或業務部門成員本來就能開單，
+                         生管或業務部門能填扣款金額、會計部門能核准，組織角色的「最高核准人員」本來就是最終決策者；
+                         決策主管也可以改用「清單頁 → 設定 → 決策者」以<strong>部門＋職稱</strong>指定（人員異動不必回來改）。
+                         這裡的角色是給「不在那些部門、但需要這個權限」的人補授權用的。管理者固定擁有全部權限。',
+                        rs_of('qa_abnormal'), rsu_of('qa_abnormal'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('dqa', 'data_audit', '資料稽核', 'fa-check-square-o', '#C77C1A',
                         '為每位使用者指派「<a href="../ADM/data_audit.php" target="_blank" style="color:#b5762a;">資料稽核</a>」頁的角色。

@@ -1,0 +1,874 @@
+<?php
+/**
+ * qa_abnormal_lib.php — 品質異常處理單（2-QA-01-01）唯一實作
+ * 建立：2026-09-18
+ *
+ * 【這一版在做什麼】
+ * 舊版異常單是「開單跳窗 + 通知回覆」，現場反映不好用：
+ *   ① 沒有一張跟紙本 2-QA-01-01 對得起來的表（列印出來不是那張表）
+ *   ② 回覆部門要在開單當下一次勾完，實際上是「先問甲、看甲怎麼回、再決定問乙還是直接決策」
+ *   ③ 異常原因分類寫死在 enum（人/機器/材料/方法/工具/環/其他），改一個字要改程式，
+ *      也沒辦法做「方法 → 程式」這種下一層，後面的異常分析根本分不出來
+ *   ④ 紙本左下角整塊「扣款確認」系統裡完全沒有
+ * 這一版把①~④做完，並且**所有選項一律存 id 不存文字**（鐵律4：改名不會斷掉連動）。
+ *
+ * 【三張代碼表都可由管理員維護】
+ *   qa_cause_cat   異常原因分類，自關聯最多三層（人 → 方法 → 程式）。刻意沒有「其他」，
+ *                  因為這一欄要延伸到異常分析與報告，一個「其他」會把分析吃掉一大塊。
+ *   qa_option      異常處置方式(kind=disp) 與 總經理裁示(kind=gm) 共用一張；
+ *                  「是不是報廢」「是不是轉總經理」用 is_scrap / is_escalate 旗標判定，
+ *                  **不可以比對名稱文字**——管理員把「報廢」改成「報廢(不可用)」就會全部失效。
+ *   qa_decider_cfg 決策者的可選範圍（部門＋職稱），kind=decider 是主管決策者
+ *                  （業務主管／品管主管），kind=top 是最高決策者（總經理）。
+ *
+ * 【最終處置怎麼認定】（2026-09-18 使用者定調）
+ *   總經理裁示優先於主管的處置方式；有總經理裁示就以總經理的為最終決策。
+ *   最終決策含「報廢」者，**結案當下**才配發報廢單號（F+民國年3碼+MMDD+流水3碼）並寫入 DB，
+ *   因為後續還有別的單據要靠這個號碼追蹤，不能只是畫面上算出來的字串。
+ *
+ * 關聯資料表：qa_abnormal_order（主表，本檔案再擴充欄位）／qa_abnormal_cause／qa_abnormal_opt／
+ *             qa_abnormal_resp／qa_abnormal_measure／qa_abnormal_deduct／qa_abnormal_order_flow（擴充）／
+ *             qa_cause_cat／qa_option／qa_decider_cfg／qa_scrap_seq
+ */
+if (!function_exists('qab_ensure_schema')) {
+
+define('QAB_PARAM_GROUP', 'QA_ABN');
+define('QAB_ASDOC_MODULE', 'qa_abnormal');   // AS 綁定（2-QA-01-01），版次依業務日期回推
+
+/* ─────────────────────────────────────────────────────────────
+   Schema
+   ───────────────────────────────────────────────────────────── */
+function qab_ensure_schema(PDO $db): void
+{
+    static $done = false;
+    if ($done) return;
+    $done = true;
+
+    $db->exec("CREATE TABLE IF NOT EXISTS qa_cause_cat (
+        cat_id INT AUTO_INCREMENT PRIMARY KEY,
+        parent_id INT NULL COMMENT '上層分類；NULL=第一層',
+        lv TINYINT NOT NULL DEFAULT 1 COMMENT '1/2/3，由 parent 推導後存起來方便查',
+        name VARCHAR(60) NOT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,
+        KEY idx_parent (parent_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='異常原因分類（最多三層，管理員可維護）'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS qa_option (
+        opt_id INT AUTO_INCREMENT PRIMARY KEY,
+        kind VARCHAR(10) NOT NULL COMMENT 'disp=異常處置方式 / gm=總經理裁示',
+        name VARCHAR(40) NOT NULL,
+        is_scrap TINYINT(1) NOT NULL DEFAULT 0 COMMENT '此選項代表報廢（報廢單號依旗標判定，不比對文字）',
+        is_escalate TINYINT(1) NOT NULL DEFAULT 0 COMMENT '此選項代表轉總經理裁示',
+        need_capa TINYINT(1) NOT NULL DEFAULT 0 COMMENT '此選項代表需開矯正單',
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        KEY idx_kind (kind, is_active)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='異常處置方式／總經理裁示 選項（管理員可維護）'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS qa_decider_cfg (
+        cfg_id INT AUTO_INCREMENT PRIMARY KEY,
+        kind VARCHAR(10) NOT NULL COMMENT 'decider=主管決策者 / top=最高決策者',
+        label VARCHAR(40) NULL COMMENT '顯示名稱（例：業務主管）；留空用「部門 職稱」',
+        dept_id INT NOT NULL,
+        position_id INT NULL COMMENT 'NULL=該部門不限職稱',
+        include_sub TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=含下轄部門',
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        KEY idx_kind (kind, is_active)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='異常單決策者可選範圍（管理員設定部門＋職稱）'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS qa_abnormal_cause (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        order_id INT NOT NULL,
+        cat_id INT NOT NULL COMMENT '選到的那一層（最深的節點），上層由 qa_cause_cat 推導',
+        UNIQUE KEY uk_oc (order_id, cat_id),
+        KEY idx_o (order_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='異常單↔異常原因分類（可複選，存 id）'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS qa_abnormal_opt (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        order_id INT NOT NULL,
+        kind VARCHAR(10) NOT NULL COMMENT 'disp / gm',
+        opt_id INT NOT NULL,
+        UNIQUE KEY uk_ook (order_id, kind, opt_id),
+        KEY idx_o (order_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='異常單↔處置方式／總經理裁示（存 id）'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS qa_abnormal_resp (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        order_id INT NOT NULL,
+        dept_id INT NOT NULL,
+        user_id INT NULL COMMENT 'NULL=只指到部門',
+        UNIQUE KEY uk_odu (order_id, dept_id, user_id),
+        KEY idx_o (order_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='責任單位為廠內時的部門／人員（可複選、非必填）'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS qa_abnormal_measure (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        order_id INT NOT NULL,
+        seq TINYINT NOT NULL DEFAULT 1 COMMENT '第幾列（紙本三列）',
+        dim_name VARCHAR(60) NULL COMMENT '量測尺寸',
+        vals TEXT NULL COMMENT 'JSON 陣列，最多 12 個實測值',
+        UNIQUE KEY uk_os (order_id, seq)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='異常單 量測尺寸與實測值（比照紙本 3 列 × 12 值）'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS qa_abnormal_deduct (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        order_id INT NOT NULL,
+        kind VARCHAR(10) NOT NULL DEFAULT 'process' COMMENT 'process=製程（自動帶入）/ other=其他（生管或業務自行填）',
+        transfer_id INT NULL COMMENT '來源 bom_ing_transfer_log.transfer_id',
+        bom_sn INT NULL,
+        process_name VARCHAR(60) NULL,
+        vendor_name VARCHAR(60) NULL,
+        transfer_no VARCHAR(30) NULL,
+        qty DECIMAL(14,3) NULL,
+        amount_auto DECIMAL(14,2) NULL COMMENT '自動帶入的金額（保留原值，手動改價後仍看得到原本帶入多少）',
+        amount DECIMAL(14,2) NULL COMMENT '實際採用金額（可手動修改）',
+        note VARCHAR(255) NULL,
+        included TINYINT(1) NOT NULL DEFAULT 1 COMMENT '0=不計入合計（仍列出，方便看到為什麼不算）',
+        sort_order INT NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_by INT NULL,
+        KEY idx_o (order_id, kind)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='異常單 扣款確認明細'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS qa_scrap_seq (
+        seq_date DATE NOT NULL PRIMARY KEY,
+        last_no INT NOT NULL DEFAULT 0
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='報廢單號流水（F+民國年3碼+MMDD+3碼）'");
+
+    // ── 主表擴充欄位 ────────────────────────────────────────
+    $cols = $db->query("SHOW COLUMNS FROM qa_abnormal_order")->fetchAll(PDO::FETCH_COLUMN);
+    $add = [];
+    $need = [
+        'fill_date'        => "ADD COLUMN fill_date DATE NULL COMMENT '填寫日期（紙本表頭；業務日期，版次依它回推）'",
+        'ir_no'            => "ADD COLUMN ir_no VARCHAR(30) NULL COMMENT '客退單號 ir_track.IR_no'",
+        'ir_id'            => "ADD COLUMN ir_id INT NULL COMMENT 'ir_track.IR_id'",
+        'client_name'      => "ADD COLUMN client_name VARCHAR(60) NULL COMMENT '客戶（開單時由來源帶入，可改）'",
+        'part_no'          => "ADD COLUMN part_no VARCHAR(60) NULL COMMENT '料號'",
+        'batch_qty'        => "ADD COLUMN batch_qty INT NULL COMMENT '批量'",
+        'insp_qty'         => "ADD COLUMN insp_qty INT NULL COMMENT '檢驗數'",
+        'ng_qty'           => "ADD COLUMN ng_qty INT NULL COMMENT '不良數'",
+        'resp_process_no'  => "ADD COLUMN resp_process_no INT NULL COMMENT '責任單位－製程 process_no.ProcessNo'",
+        'resp_is_internal' => "ADD COLUMN resp_is_internal TINYINT(1) NOT NULL DEFAULT 0 COMMENT '責任廠商是否為廠內加工廠商(maker_list.internal=1)'",
+        'decider_cfg_id'   => "ADD COLUMN decider_cfg_id INT NULL COMMENT '填表人選定的決策者設定列 qa_decider_cfg.cfg_id'",
+        'decider_user_id'  => "ADD COLUMN decider_user_id INT NULL COMMENT '指定的決策者本人（可留空＝該範圍任一人皆可）'",
+        'disp_decided_by'  => "ADD COLUMN disp_decided_by INT NULL COMMENT '實際做出處置判定的人'",
+        'disp_decided_at'  => "ADD COLUMN disp_decided_at DATETIME NULL",
+        'gm_deduct'        => "ADD COLUMN gm_deduct TINYINT(1) NOT NULL DEFAULT 0 COMMENT '總經理裁示：是否扣款（勾了就可填左下角扣款確認，與報廢與否無關）'",
+        'surcharge_rate'   => "ADD COLUMN surcharge_rate DECIMAL(6,3) NULL COMMENT '製程金額加成，1.1＝×110%',",
+        'deduct_qty'       => "ADD COLUMN deduct_qty DECIMAL(14,3) NULL COMMENT '扣款數量 PCS'",
+        'deduct_unit_amt'  => "ADD COLUMN deduct_unit_amt DECIMAL(14,2) NULL COMMENT '核准扣款金額 元/PCS'",
+        'deduct_exec'      => "ADD COLUMN deduct_exec VARCHAR(60) NULL COMMENT '執行'",
+        'deduct_notify_no' => "ADD COLUMN deduct_notify_no VARCHAR(120) NULL COMMENT '通知扣款（移轉單號，可加註備註）'",
+        'deduct_pm_by'     => "ADD COLUMN deduct_pm_by INT NULL COMMENT '(生管)簽章',",
+        'deduct_pm_at'     => "ADD COLUMN deduct_pm_at DATETIME NULL",
+        'deduct_qc_by'     => "ADD COLUMN deduct_qc_by INT NULL COMMENT '(品管)簽章'",
+        'deduct_qc_at'     => "ADD COLUMN deduct_qc_at DATETIME NULL",
+        'deduct_appr_by'   => "ADD COLUMN deduct_appr_by INT NULL COMMENT '核准（管理課 會計/主管）'",
+        'deduct_appr_at'   => "ADD COLUMN deduct_appr_at DATETIME NULL",
+        'scrap_no'         => "ADD COLUMN scrap_no VARCHAR(20) NULL COMMENT '報廢單號（結案當下配發，F+民國年3碼+MMDD+3碼）'",
+        'scrap_no_at'      => "ADD COLUMN scrap_no_at DATETIME NULL",
+        'owner_sign_by'    => "ADD COLUMN owner_sign_by INT NULL COMMENT '(業務/品管)承辦',",
+        'owner_sign_at'    => "ADD COLUMN owner_sign_at DATETIME NULL",
+        'closed_by'        => "ADD COLUMN closed_by INT NULL",
+    ];
+    foreach ($need as $c => $sql) if (!in_array($c, $cols, true)) $add[] = rtrim($sql, ',');
+    if ($add) $db->exec("ALTER TABLE qa_abnormal_order " . implode(', ', $add));
+    // 開單來源多一種：BOM＝製程中直接綁製令開立（不是從某一張檢驗單來的）。
+    // 原本只有 IR/QC，不放寬的話「製程中開立」只能假冒成 QC，之後分不出是誰開的。
+    try {
+        $t = $db->query("SHOW COLUMNS FROM qa_abnormal_order LIKE 'source_type'")->fetch(PDO::FETCH_ASSOC);
+        if ($t && stripos((string)$t['Type'], "'BOM'") === false) {
+            $db->exec("ALTER TABLE qa_abnormal_order MODIFY COLUMN source_type ENUM('IR','QC','BOM') NOT NULL
+                       COMMENT 'IR=客退來源 QC=檢驗單來源 BOM=製程中直接開立'");
+        }
+    } catch (Throwable $e) {}
+    if (!in_array('scrap_no', $cols, true)) {
+        try { $db->exec("ALTER TABLE qa_abnormal_order ADD UNIQUE KEY uk_scrap_no (scrap_no)"); } catch (Throwable $e) {}
+    }
+
+    // ── 相關單位意見（逐輪徵詢）：沿用既有 flow 表，補上輪次與指定職稱 ──
+    $fcols = $db->query("SHOW COLUMNS FROM qa_abnormal_order_flow")->fetchAll(PDO::FETCH_COLUMN);
+    $fadd = [];
+    $fneed = [
+        'round_no'    => "ADD COLUMN round_no INT NOT NULL DEFAULT 1 COMMENT '第幾輪徵詢（一次送一個，收到回覆才決定下一個）'",
+        'position_id' => "ADD COLUMN position_id INT NULL COMMENT '指定職稱（未指定特定人員時用）'",
+        'asked_by'    => "ADD COLUMN asked_by INT NULL COMMENT '誰送出這一輪'",
+        'asked_at'    => "ADD COLUMN asked_at DATETIME NULL",
+        'replied_by'  => "ADD COLUMN replied_by INT NULL COMMENT '實際回覆的人'",
+        'event_id'    => "ADD COLUMN event_id INT NULL COMMENT '這一輪的通知 live_event.id'",
+    ];
+    foreach ($fneed as $c => $sql) if (!in_array($c, $fcols, true)) $fadd[] = $sql;
+    if ($fadd) $db->exec("ALTER TABLE qa_abnormal_order_flow " . implode(', ', $fadd));
+
+    qab_seed_defaults($db);
+}
+
+/** 第一次建置時塞入預設代碼（只在表是空的時候做，之後管理員怎麼改都不會被蓋回去） */
+function qab_seed_defaults(PDO $db): void
+{
+    if ((int)$db->query("SELECT COUNT(*) FROM qa_cause_cat")->fetchColumn() === 0) {
+        // 第一層沿用現場既有的 4M1E 講法，刻意不放「其他」（見檔頭說明）
+        $ins = $db->prepare("INSERT INTO qa_cause_cat (parent_id, lv, name, sort_order) VALUES (NULL,1,?,?)");
+        foreach (['人', '機器', '材料', '方法', '工具', '環境'] as $i => $n) $ins->execute([$n, ($i + 1) * 10]);
+    }
+    if ((int)$db->query("SELECT COUNT(*) FROM qa_option")->fetchColumn() === 0) {
+        $ins = $db->prepare("INSERT INTO qa_option (kind,name,is_scrap,is_escalate,need_capa,sort_order) VALUES (?,?,?,?,?,?)");
+        // 紙本「異常處置方式」四個勾選框
+        $ins->execute(['disp', '特採', 0, 0, 0, 10]);
+        $ins->execute(['disp', '報廢', 1, 0, 0, 20]);
+        $ins->execute(['disp', '重工', 0, 0, 0, 30]);
+        $ins->execute(['disp', '轉總經理裁示', 0, 1, 0, 40]);
+        // 紙本「總經理裁示」四個勾選框
+        $ins->execute(['gm', '特採', 0, 0, 0, 10]);
+        $ins->execute(['gm', '報廢', 1, 0, 0, 20]);
+        $ins->execute(['gm', '重工', 0, 0, 0, 30]);
+        $ins->execute(['gm', '需矯正', 0, 0, 1, 40]);
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   設定值（system_parameters）
+   ───────────────────────────────────────────────────────────── */
+function qab_setting_get(PDO $db, string $key, $default = null)
+{
+    try {
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group=? AND param_key=? LIMIT 1");
+        $st->execute([QAB_PARAM_GROUP, $key]);
+        $v = $st->fetchColumn();
+        if ($v === false || $v === null || $v === '') return $default;
+        $d = json_decode((string)$v, true);
+        return $d === null ? $default : $d;
+    } catch (Throwable $e) { return $default; }
+}
+
+function qab_setting_set(PDO $db, string $key, $val): void
+{
+    $st = $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value)
+                        VALUES (?,?,?) ON DUPLICATE KEY UPDATE param_value=VALUES(param_value)");
+    $st->execute([QAB_PARAM_GROUP, $key, json_encode($val, JSON_UNESCAPED_UNICODE)]);
+}
+
+/** 製程金額加成的預設值（管理員設定；1＝不加成） */
+function qab_default_rate(PDO $db): float
+{
+    $v = (float)qab_setting_get($db, 'surcharge_rate', 1);
+    return $v > 0 ? $v : 1.0;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   代碼表
+   ───────────────────────────────────────────────────────────── */
+/** 全部分類（含停用）：cat_id => [cat_id,parent_id,lv,name,sort_order,is_active,path] */
+function qab_cause_map(PDO $db): array
+{
+    $rows = $db->query("SELECT cat_id,parent_id,lv,name,sort_order,is_active FROM qa_cause_cat")->fetchAll(PDO::FETCH_ASSOC);
+    $map = [];
+    foreach ($rows as $r) {
+        $r['cat_id'] = (int)$r['cat_id'];
+        $r['parent_id'] = $r['parent_id'] === null ? null : (int)$r['parent_id'];
+        $r['lv'] = (int)$r['lv'];
+        $r['is_active'] = (int)$r['is_active'];
+        $map[$r['cat_id']] = $r;
+    }
+    foreach ($map as $id => $r) $map[$id]['path'] = qab_cause_path($map, $id);
+    return $map;
+}
+
+/** 由 map 組出「人 → 方法 → 程式」的完整路徑字串 */
+function qab_cause_path(array $map, int $catId): string
+{
+    $names = [];
+    $cur = $catId;
+    $guard = 0;
+    while (isset($map[$cur]) && $guard++ < 10) {
+        array_unshift($names, $map[$cur]['name']);
+        $cur = $map[$cur]['parent_id'];
+        if ($cur === null) break;
+    }
+    return implode(' → ', $names);
+}
+
+/** 樹狀（給設定頁與勾選介面用） */
+function qab_cause_tree(PDO $db, bool $activeOnly = true): array
+{
+    $map = qab_cause_map($db);
+    $byParent = [];
+    foreach ($map as $r) {
+        if ($activeOnly && !$r['is_active']) continue;
+        $byParent[$r['parent_id'] === null ? 0 : $r['parent_id']][] = $r;
+    }
+    foreach ($byParent as &$list) {
+        usort($list, function ($a, $b) {
+            if ($a['sort_order'] === $b['sort_order']) return strcmp($a['name'], $b['name']);
+            return $a['sort_order'] <=> $b['sort_order'];
+        });
+    }
+    unset($list);
+    $build = function ($pid) use (&$build, $byParent) {
+        $out = [];
+        foreach ($byParent[$pid] ?? [] as $n) {
+            $n['children'] = $build($n['cat_id']);
+            $out[] = $n;
+        }
+        return $out;
+    };
+    return $build(0);
+}
+
+/** 處置方式／總經理裁示 選項 */
+function qab_options(PDO $db, string $kind, bool $activeOnly = true): array
+{
+    $sql = "SELECT opt_id,kind,name,is_scrap,is_escalate,need_capa,sort_order,is_active FROM qa_option WHERE kind=?";
+    if ($activeOnly) $sql .= " AND is_active=1";
+    $sql .= " ORDER BY sort_order, opt_id";
+    $st = $db->prepare($sql);
+    $st->execute([$kind]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        $r['opt_id'] = (int)$r['opt_id'];
+        foreach (['is_scrap', 'is_escalate', 'need_capa', 'sort_order', 'is_active'] as $k) $r[$k] = (int)$r[$k];
+    }
+    return $rows;
+}
+
+/** opt_id => 該列（兩種 kind 一起） */
+function qab_option_map(PDO $db): array
+{
+    $rows = $db->query("SELECT opt_id,kind,name,is_scrap,is_escalate,need_capa,is_active FROM qa_option")->fetchAll(PDO::FETCH_ASSOC);
+    $map = [];
+    foreach ($rows as $r) {
+        $r['opt_id'] = (int)$r['opt_id'];
+        foreach (['is_scrap', 'is_escalate', 'need_capa', 'is_active'] as $k) $r[$k] = (int)$r[$k];
+        $map[$r['opt_id']] = $r;
+    }
+    return $map;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   決策者設定
+   ───────────────────────────────────────────────────────────── */
+function qab_decider_cfgs(PDO $db, string $kind = '', bool $activeOnly = true): array
+{
+    $sql = "SELECT c.*, d.department_name AS dept_name, p.position_name
+            FROM qa_decider_cfg c
+            LEFT JOIN department d ON d.id = c.dept_id
+            LEFT JOIN position p ON p.id = c.position_id
+            WHERE 1=1";
+    $par = [];
+    if ($kind !== '') { $sql .= " AND c.kind=?"; $par[] = $kind; }
+    if ($activeOnly) $sql .= " AND c.is_active=1";
+    $sql .= " ORDER BY c.kind, c.sort_order, c.cfg_id";
+    $st = $db->prepare($sql);
+    $st->execute($par);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        $r['cfg_id'] = (int)$r['cfg_id'];
+        $r['dept_id'] = (int)$r['dept_id'];
+        $r['position_id'] = $r['position_id'] === null ? null : (int)$r['position_id'];
+        $r['include_sub'] = (int)$r['include_sub'];
+        $r['is_active'] = (int)$r['is_active'];
+        $r['show_name'] = trim((string)$r['label']) !== ''
+            ? (string)$r['label']
+            : trim(((string)$r['dept_name']) . ' ' . ((string)$r['position_name']));
+    }
+    return $rows;
+}
+
+/** 某一筆決策者設定實際涵蓋哪些在職人員（部門＋職稱；include_sub 時含下轄部門） */
+function qab_decider_people(PDO $db, array $cfg): array
+{
+    require_once __DIR__ . '/people_lib.php';
+    require_once __DIR__ . '/org_role_lib.php';
+    $deptIds = $cfg['include_sub'] ? eg_dept_subtree_ids($db, (int)$cfg['dept_id']) : [(int)$cfg['dept_id']];
+    $rows = eg_people_list($db, ['dept_ids' => $deptIds, 'all_posts' => true]);
+    $out = [];
+    foreach ($rows as $r) {
+        if (!in_array((int)$r['dept_id'], $deptIds, true)) continue;
+        if ($cfg['position_id'] !== null && (int)$r['position_id'] !== (int)$cfg['position_id']) continue;
+        $out[] = $r;
+    }
+    return $out;
+}
+
+/** 這個人是否落在某一類決策者範圍內（decider / top） */
+function qab_user_in_decider(PDO $db, int $uid, string $kind): bool
+{
+    if ($uid <= 0) return false;
+    foreach (qab_decider_cfgs($db, $kind) as $cfg) {
+        foreach (qab_decider_people($db, $cfg) as $p) if ((int)$p['id'] === $uid) return true;
+    }
+    return false;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   權限
+   使用者拍板（2026-09-18）：扣款的填寫與核准＝「部門綁定＋角色並用」。
+   部門綁定走 org_role_lib（生管部門／業務部門／會計部門），角色走本模組 role_code。
+   ───────────────────────────────────────────────────────────── */
+function qab_user_role_codes(PDO $db, int $uid): array
+{
+    static $cache = [];
+    if (isset($cache[$uid])) return $cache[$uid];
+    $codes = [];
+    try {
+        $st = $db->prepare("SELECT DISTINCT r.role_code FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id WHERE ur.user_id=?");
+        $st->execute([$uid]);
+        $codes = array_map('strval', $st->fetchAll(PDO::FETCH_COLUMN) ?: []);
+    } catch (Throwable $e) {}
+    try {
+        $st = $db->prepare("SELECT DISTINCT rf.feature_code FROM user_roles ur JOIN role_features rf ON rf.role_id=ur.role_id WHERE ur.user_id=?");
+        $st->execute([$uid]);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) ?: [] as $f) $codes[] = (string)$f;
+    } catch (Throwable $e) {}
+    return $cache[$uid] = array_values(array_unique($codes));
+}
+
+function qab_user_dept_ids(PDO $db, int $uid): array
+{
+    static $cache = [];
+    if (isset($cache[$uid])) return $cache[$uid];
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT department_id FROM user_department_position_map WHERE user_id=?");
+        $st->execute([$uid]);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $d) if ($d !== null) $out[] = (int)$d;
+    } catch (Throwable $e) {}
+    return $cache[$uid] = array_values(array_unique($out));
+}
+
+/** 這個人是不是屬於某個組織角色綁定的部門（含下轄） */
+function qab_in_org_dept(PDO $db, int $uid, string $key): bool
+{
+    require_once __DIR__ . '/org_role_lib.php';
+    $ids = eg_org_dept_ids($db, $key);
+    if (!$ids) return false;
+    foreach (qab_user_dept_ids($db, $uid) as $d) if (in_array($d, $ids, true)) return true;
+    return false;
+}
+
+function qab_perms(PDO $db, int $uid): array
+{
+    $none = ['uid' => 0, 'name' => '', 'isAdmin' => false, 'canView' => false, 'canCreate' => false,
+             'canAdmin' => false, 'canDecide' => false, 'canGm' => false,
+             'canDeductFill' => false, 'canDeductApprove' => false, 'canQcSign' => false];
+    if ($uid <= 0) return $none;
+    $st = $db->prepare("SELECT id, user_cname, user_uname, state, user_status FROM `user` WHERE id=?");
+    $st->execute([$uid]);
+    $u = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$u) return $none;
+    if ((int)$u['state'] === 0 || (int)$u['user_status'] === 90) return $none;   // 離職／特殊帳號 fail-closed
+
+    $codes = qab_user_role_codes($db, $uid);
+    $has = function (array $c) use ($codes) { return (bool)array_intersect($c, $codes); };
+    $isAdmin = $uid === 1 || $has(['admin', 'superadmin']);
+
+    $canAdmin = $isAdmin || $has(['qab_admin']);
+    // 品管的「管理檢驗設定」本來就是這張單的主辦，不必再多指派一個角色
+    $canCreate = $canAdmin || $has(['qab_fill', 'qc_manage_settings', 'qc_fill_inspection'])
+                 || qab_in_org_dept($db, $uid, 'qc_dept') || qab_in_org_dept($db, $uid, 'sales_dept');
+    $canDecide = $canAdmin || $has(['qab_decide', 'qa_disposition_reply']) || qab_user_in_decider($db, $uid, 'decider');
+    // 最高決策者：組織角色的最高核准人員，或管理員在設定裡登記的部門職稱
+    require_once __DIR__ . '/org_role_lib.php';
+    $top = eg_org_user($db, 'top_approver');
+    $canGm = $canAdmin || $has(['qab_gm']) || ($top && (int)$top['id'] === $uid) || qab_user_in_decider($db, $uid, 'top');
+    $canDeductFill = $canAdmin || $has(['qab_deduct_fill'])
+                     || qab_in_org_dept($db, $uid, 'pm_dept') || qab_in_org_dept($db, $uid, 'sales_dept');
+    $canDeductApprove = $canAdmin || $has(['qab_deduct_approve']) || qab_in_org_dept($db, $uid, 'acc_dept');
+    $canQcSign = $canAdmin || $has(['qab_fill', 'qc_manage_settings', 'qc_fill_inspection']) || qab_in_org_dept($db, $uid, 'qc_dept');
+    $canView = $canCreate || $canDecide || $canGm || $canDeductFill || $canDeductApprove
+               || $has(['qab_view', 'qc_view_readonly', 'ncr_view', 'ncr_admin']);
+
+    return ['uid' => $uid, 'name' => (string)($u['user_cname'] ?: $u['user_uname']),
+            'isAdmin' => $isAdmin, 'canAdmin' => $canAdmin, 'canView' => $canView, 'canCreate' => $canCreate,
+            'canDecide' => $canDecide, 'canGm' => $canGm,
+            'canDeductFill' => $canDeductFill, 'canDeductApprove' => $canDeductApprove, 'canQcSign' => $canQcSign];
+}
+
+/** 這個人能不能改這張單的「填寫區」（表頭、現象、原因分類、量測值…） */
+function qab_can_edit_form(PDO $db, array $perms, array $order): bool
+{
+    if (!empty($order['is_closed'])) return $perms['isAdmin'] || $perms['canAdmin'];
+    if ($perms['canAdmin']) return true;
+    if ((int)($order['created_by'] ?? 0) === (int)$perms['uid']) return true;
+    if (function_exists('eg_qa_user_is_order_editor') && eg_qa_user_is_order_editor($db, (int)$order['id'], (int)$perms['uid'])) return true;
+    return $perms['canCreate'] && $perms['canDecide'];   // 有決策權的主管也可以補正內容
+}
+
+/* ─────────────────────────────────────────────────────────────
+   編號
+   ───────────────────────────────────────────────────────────── */
+function qab_next_order_no(PDO $db, ?string $ymd = null): string
+{
+    $ts = $ymd ? strtotime($ymd) : time();
+    $roc = (int)date('Y', $ts) - 1911;
+    $prefix = 'Q' . str_pad((string)$roc, 3, '0', STR_PAD_LEFT) . date('md', $ts);
+    $st = $db->prepare("SELECT abnormal_order_no FROM qa_abnormal_order WHERE abnormal_order_no LIKE ? ORDER BY abnormal_order_no DESC LIMIT 1");
+    $st->execute([$prefix . '%']);
+    $last = $st->fetchColumn();
+    $seq = $last ? ((int)substr((string)$last, -3) + 1) : 1;
+    return $prefix . str_pad((string)$seq, 3, '0', STR_PAD_LEFT);
+}
+
+/**
+ * 配發報廢單號：F + 民國年3碼 + MMDD + 流水3碼（例 F1150918001）。
+ * 與 car_alloc_numbers 同一套做法：INSERT IGNORE 建當日列 + SELECT … FOR UPDATE 鎖住配號，杜絕並發撞號。
+ */
+function qab_scrap_alloc(PDO $db, ?string $ymd = null): string
+{
+    $ts = $ymd ? strtotime($ymd) : time();
+    $dateSql = date('Y-m-d', $ts);
+    $own = !$db->inTransaction();
+    if ($own) $db->beginTransaction();
+    try {
+        $db->prepare("INSERT IGNORE INTO qa_scrap_seq (seq_date,last_no) VALUES (?,0)")->execute([$dateSql]);
+        $sel = $db->prepare("SELECT last_no FROM qa_scrap_seq WHERE seq_date=? FOR UPDATE");
+        $sel->execute([$dateSql]);
+        $next = (int)$sel->fetchColumn() + 1;
+        $db->prepare("UPDATE qa_scrap_seq SET last_no=? WHERE seq_date=?")->execute([$next, $dateSql]);
+        if ($own) $db->commit();
+    } catch (Throwable $e) {
+        if ($own && $db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+    $roc = (int)date('Y', $ts) - 1911;
+    return 'F' . str_pad((string)$roc, 3, '0', STR_PAD_LEFT) . date('md', $ts) . str_pad((string)$next, 3, '0', STR_PAD_LEFT);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   扣款：製程金額自動帶入
+   來源＝製程移轉一覽表（views/pm/Transfer_Log_Analysis.php）讀的同一張 bom_ing_transfer_log。
+   金額優先取 process_amount，為 0 才用 數量×單價 回推（與那一頁的防呆同一條規則）。
+   ───────────────────────────────────────────────────────────── */
+function qab_deduct_autofill(PDO $db, string $bomNo): array
+{
+    $bomNo = trim($bomNo);
+    if ($bomNo === '') return [];
+    $sql = "SELECT t.transfer_id, t.transfer_no, t.bom_sn, t.transfer_qty, t.price, t.process_amount,
+                   t.maker_from, m.maker_id AS vendor_name, pn.ProcessName
+            FROM bom_ing_transfer_log t
+            LEFT JOIN maker_list m ON m.maker_id_no = t.maker_from
+            LEFT JOIN bom_ing bi ON bi.bom = t.bom AND bi.bom_sn = t.bom_sn
+            LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+            WHERE t.bom = ?
+            ORDER BY t.bom_sn, t.transfer_id";
+    $st = $db->prepare($sql);
+    $st->execute([$bomNo]);
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $qty = (float)$r['transfer_qty'];
+        $amt = (float)$r['process_amount'];
+        if ($amt == 0 && $qty > 0 && (float)$r['price'] > 0) $amt = $qty * (float)$r['price'];
+        $out[] = [
+            'transfer_id'  => (int)$r['transfer_id'],
+            'transfer_no'  => (string)$r['transfer_no'],
+            'bom_sn'       => (int)$r['bom_sn'],
+            'process_name' => (string)($r['ProcessName'] ?? ''),
+            'vendor_name'  => (string)($r['vendor_name'] ?? $r['maker_from']),
+            'qty'          => $qty,
+            'amount'       => round($amt, 2),
+        ];
+    }
+    return $out;
+}
+
+/** 扣款合計：製程小計×加成 ＋ 其他小計 */
+function qab_deduct_totals(array $rows, float $rate): array
+{
+    $proc = 0.0; $other = 0.0;
+    foreach ($rows as $r) {
+        if (!(int)($r['included'] ?? 1)) continue;
+        $a = (float)($r['amount'] ?? 0);
+        if (($r['kind'] ?? 'process') === 'other') $other += $a; else $proc += $a;
+    }
+    if ($rate <= 0) $rate = 1.0;
+    $procRated = round($proc * $rate, 2);
+    return ['process' => round($proc, 2), 'process_rated' => $procRated,
+            'other' => round($other, 2), 'total' => round($procRated + $other, 2), 'rate' => $rate];
+}
+
+/**
+ * 製程欄的說明文字：全部帶進來就寫「全部製程」，只挑了幾站就把站名列出來。
+ * （使用者要求：說明自動顯示所有製程或是包含哪些製程）
+ */
+function qab_deduct_process_desc(array $rows): string
+{
+    $all = []; $inc = [];
+    foreach ($rows as $r) {
+        if (($r['kind'] ?? 'process') !== 'process') continue;
+        $nm = trim((string)($r['process_name'] ?? '')) ?: ('第' . (int)($r['bom_sn'] ?? 0) . '站');
+        $all[] = $nm;
+        if ((int)($r['included'] ?? 1)) $inc[] = $nm;
+    }
+    if (!$all) return '';
+    if (!$inc) return '（未計入任何製程）';
+    if (count($inc) === count($all)) return '全部製程（' . implode('、', array_unique($inc)) . '）';
+    return '含：' . implode('、', array_unique($inc));
+}
+
+/* ─────────────────────────────────────────────────────────────
+   讀一張完整的單
+   ───────────────────────────────────────────────────────────── */
+function qab_order(PDO $db, int $id): ?array
+{
+    $st = $db->prepare("SELECT o.*, t.type_name,
+                               cu.user_cname AS created_name, du.user_cname AS decided_name,
+                               gu.user_cname AS gm_name, au.user_cname AS deduct_appr_name,
+                               pu.user_cname AS deduct_pm_name, qu.user_cname AS deduct_qc_name,
+                               ou.user_cname AS owner_sign_name,
+                               pn.ProcessName AS resp_process_name,
+                               ml.maker_id AS resp_vendor_name, ml.internal AS resp_vendor_internal
+                        FROM qa_abnormal_order o
+                        LEFT JOIN qa_abnormal_type t ON t.type_id = o.abnormal_type_id
+                        LEFT JOIN `user` cu ON cu.id = o.created_by
+                        LEFT JOIN `user` du ON du.id = o.disp_decided_by
+                        LEFT JOIN `user` gu ON gu.id = o.gm_decided_by
+                        LEFT JOIN `user` au ON au.id = o.deduct_appr_by
+                        LEFT JOIN `user` pu ON pu.id = o.deduct_pm_by
+                        LEFT JOIN `user` qu ON qu.id = o.deduct_qc_by
+                        LEFT JOIN `user` ou ON ou.id = o.owner_sign_by
+                        LEFT JOIN process_no pn ON pn.ProcessNo = o.resp_process_no
+                        LEFT JOIN maker_list ml ON ml.maker_id_no = o.responsible_vendor_id
+                        WHERE o.id=?");
+    $st->execute([$id]);
+    $o = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$o) return null;
+
+    $causeMap = qab_cause_map($db);
+    $optMap   = qab_option_map($db);
+
+    $st = $db->prepare("SELECT cat_id FROM qa_abnormal_cause WHERE order_id=?");
+    $st->execute([$id]);
+    $o['cause_ids'] = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    $o['cause_paths'] = [];
+    foreach ($o['cause_ids'] as $cid) $o['cause_paths'][] = ['cat_id' => $cid, 'path' => $causeMap[$cid]['path'] ?? '(已刪除)'];
+
+    $st = $db->prepare("SELECT kind,opt_id FROM qa_abnormal_opt WHERE order_id=?");
+    $st->execute([$id]);
+    $o['disp_ids'] = []; $o['gm_ids'] = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        if ($r['kind'] === 'gm') $o['gm_ids'][] = (int)$r['opt_id'];
+        else $o['disp_ids'][] = (int)$r['opt_id'];
+    }
+    $nameOf = function (array $ids) use ($optMap) {
+        $o = [];
+        foreach ($ids as $i) if (isset($optMap[$i])) $o[] = $optMap[$i]['name'];
+        return $o;
+    };
+    $o['disp_names'] = $nameOf($o['disp_ids']);
+    $o['gm_names']   = $nameOf($o['gm_ids']);
+
+    $st = $db->prepare("SELECT r.dept_id, r.user_id, d.department_name, u.user_cname
+                        FROM qa_abnormal_resp r
+                        LEFT JOIN department d ON d.id=r.dept_id
+                        LEFT JOIN `user` u ON u.id=r.user_id
+                        WHERE r.order_id=? ORDER BY r.id");
+    $st->execute([$id]);
+    $o['resp_people'] = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    $st = $db->prepare("SELECT seq, dim_name, vals FROM qa_abnormal_measure WHERE order_id=? ORDER BY seq");
+    $st->execute([$id]);
+    $o['measures'] = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $m) {
+        $o['measures'][] = ['seq' => (int)$m['seq'], 'dim_name' => (string)$m['dim_name'],
+                            'vals' => json_decode((string)$m['vals'], true) ?: []];
+    }
+
+    $st = $db->prepare("SELECT d.*, u.user_cname AS created_name FROM qa_abnormal_deduct d
+                        LEFT JOIN `user` u ON u.id=d.created_by
+                        WHERE d.order_id=? ORDER BY d.kind DESC, d.sort_order, d.id");
+    $st->execute([$id]);
+    $o['deducts'] = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($o['deducts'] as &$d) {
+        $d['id'] = (int)$d['id'];
+        $d['included'] = (int)$d['included'];
+        $d['amount'] = $d['amount'] === null ? null : (float)$d['amount'];
+        $d['amount_auto'] = $d['amount_auto'] === null ? null : (float)$d['amount_auto'];
+        $d['qty'] = $d['qty'] === null ? null : (float)$d['qty'];
+    }
+    unset($d);
+    $o['deduct_totals'] = qab_deduct_totals($o['deducts'], (float)($o['surcharge_rate'] ?: qab_default_rate($db)));
+    $o['deduct_desc']   = qab_deduct_process_desc($o['deducts']);
+
+    $st = $db->prepare("SELECT f.*, d.department_name, u.user_cname, p.position_name, ru.user_cname AS replied_name,
+                               ab.user_cname AS asked_name
+                        FROM qa_abnormal_order_flow f
+                        LEFT JOIN department d ON d.id=f.dept_id
+                        LEFT JOIN `user` u ON u.id=f.user_id
+                        LEFT JOIN `user` ru ON ru.id=f.replied_by
+                        LEFT JOIN `user` ab ON ab.id=f.asked_by
+                        LEFT JOIN position p ON p.id=f.position_id
+                        WHERE f.abnormal_order_id=? ORDER BY f.round_no, f.flow_id");
+    $st->execute([$id]);
+    $o['rounds'] = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    $o['final']   = qab_final($db, $o, $optMap);
+    $o['need_gm'] = qab_need_gm($db, $o, $optMap);
+    $o['status']  = qab_status($o);
+    return $o;
+}
+
+/**
+ * 最終處置：總經理裁示優先（使用者定調）；沒有裁示才看主管的處置方式。
+ * 回傳 ['from'=>'gm|disp|none','ids'=>[],'names'=>[],'is_scrap'=>bool,'need_capa'=>bool]
+ */
+function qab_final(PDO $db, array $o, ?array $optMap = null): array
+{
+    if ($optMap === null) $optMap = qab_option_map($db);
+    $ids = []; $from = 'none';
+    if (!empty($o['gm_ids'])) { $ids = $o['gm_ids']; $from = 'gm'; }
+    elseif (!empty($o['disp_ids'])) { $ids = $o['disp_ids']; $from = 'disp'; }
+    $names = []; $scrap = false; $capa = false;
+    foreach ($ids as $i) {
+        if (!isset($optMap[$i])) continue;
+        $names[] = $optMap[$i]['name'];
+        if ($optMap[$i]['is_scrap']) $scrap = true;
+        if ($optMap[$i]['need_capa']) $capa = true;
+    }
+    return ['from' => $from, 'ids' => $ids, 'names' => $names, 'is_scrap' => $scrap, 'need_capa' => $capa];
+}
+
+/** 這張單現在卡在哪一關（由資料推導，不另存狀態欄，避免兩份狀態對不起來） */
+function qab_status(array $o): array
+{
+    if (!empty($o['is_closed'])) return ['code' => 'closed', 'label' => '已結案'];
+    foreach ($o['rounds'] ?? [] as $r) {
+        if (($r['status'] ?? '') !== 'Returned') {
+            $who = trim((string)($r['user_cname'] ?: $r['department_name']));
+            return ['code' => 'reply', 'label' => '等待回覆' . ($who !== '' ? '（' . $who . '）' : '')];
+        }
+    }
+    if (empty($o['disp_ids']) && empty($o['gm_ids'])) return ['code' => 'decide', 'label' => '待決策'];
+    if (!empty($o['need_gm']) && empty($o['gm_ids'])) return ['code' => 'gm', 'label' => '待總經理裁示'];
+    if (!empty($o['gm_deduct']) || (!empty($o['final']['is_scrap']))) {
+        if (empty($o['deduct_appr_at'])) return ['code' => 'deduct', 'label' => '扣款確認中'];
+    }
+    return ['code' => 'ready', 'label' => '可結案'];
+}
+
+/** 這張單是不是還在等總經理裁示（處置方式勾了「轉總經理裁示」但還沒裁示） */
+function qab_need_gm(PDO $db, array $o, ?array $optMap = null): bool
+{
+    if ($optMap === null) $optMap = qab_option_map($db);
+    foreach ($o['disp_ids'] ?? [] as $i) if (!empty($optMap[$i]['is_escalate'])) return empty($o['gm_ids']);
+    return false;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   清單
+   ───────────────────────────────────────────────────────────── */
+function qab_list(PDO $db, array $f = []): array
+{
+    $w = ['1=1']; $p = [];
+    if (!empty($f['year']))   { $w[] = "YEAR(COALESCE(o.fill_date,o.occurrence_date,DATE(o.created_at)))=?"; $p[] = (int)$f['year']; }
+    if (!empty($f['month']))  { $w[] = "MONTH(COALESCE(o.fill_date,o.occurrence_date,DATE(o.created_at)))=?"; $p[] = (int)$f['month']; }
+    if (isset($f['closed']) && $f['closed'] !== '') { $w[] = "o.is_closed=?"; $p[] = (int)$f['closed']; }
+    if (!empty($f['source'])) { $w[] = "o.source_type=?"; $p[] = $f['source']; }
+    if (!empty($f['kw'])) {
+        $kw = '%' . $f['kw'] . '%';
+        $w[] = "(o.abnormal_order_no LIKE ? OR o.bom_no LIKE ? OR o.ir_no LIKE ? OR o.part_no LIKE ?
+                 OR o.client_name LIKE ? OR o.abnormal_phenomenon LIKE ? OR o.responsible_unit LIKE ? OR o.scrap_no LIKE ?)";
+        array_push($p, $kw, $kw, $kw, $kw, $kw, $kw, $kw, $kw);
+    }
+    $sql = "SELECT o.id, o.abnormal_order_no, o.source_type, o.fill_date, o.occurrence_date, o.client_name,
+                   o.part_no, o.bom_no, o.ir_no, o.responsible_unit, o.ng_qty, o.sqty, o.is_closed, o.closed_at,
+                   o.scrap_no, o.gm_deduct, o.abnormal_phenomenon, o.created_by, cu.user_cname AS created_name,
+                   pn.ProcessName AS resp_process_name, ml.maker_id AS resp_vendor_name
+            FROM qa_abnormal_order o
+            LEFT JOIN `user` cu ON cu.id=o.created_by
+            LEFT JOIN process_no pn ON pn.ProcessNo=o.resp_process_no
+            LEFT JOIN maker_list ml ON ml.maker_id_no=o.responsible_vendor_id
+            WHERE " . implode(' AND ', $w) . "
+            ORDER BY COALESCE(o.fill_date,o.occurrence_date,DATE(o.created_at)) DESC, o.id DESC";
+    $st = $db->prepare($sql);
+    $st->execute($p);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return [];
+
+    // 狀態要看「有沒有還沒回覆的輪次／有沒有處置／有沒有裁示」，一次撈完再組（避免逐筆查）
+    $ids = array_column($rows, 'id');
+    $in  = implode(',', array_fill(0, count($ids), '?'));
+    $pend = [];
+    $st = $db->prepare("SELECT abnormal_order_id, COUNT(*) c FROM qa_abnormal_order_flow
+                        WHERE abnormal_order_id IN ($in) AND status<>'Returned' GROUP BY abnormal_order_id");
+    $st->execute($ids);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $pend[(int)$r['abnormal_order_id']] = (int)$r['c'];
+    $opts = [];
+    $st = $db->prepare("SELECT order_id, kind, opt_id FROM qa_abnormal_opt WHERE order_id IN ($in)");
+    $st->execute($ids);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $opts[(int)$r['order_id']][$r['kind']][] = (int)$r['opt_id'];
+    $optMap = qab_option_map($db);
+
+    foreach ($rows as &$r) {
+        $id = (int)$r['id'];
+        $r['disp_ids'] = $opts[$id]['disp'] ?? [];
+        $r['gm_ids']   = $opts[$id]['gm'] ?? [];
+        $r['rounds']   = [];
+        $r['pending']  = $pend[$id] ?? 0;
+        $r['final']    = qab_final($db, $r, $optMap);
+        $r['need_gm']  = qab_need_gm($db, $r, $optMap);
+        if (!empty($r['is_closed']))      $r['status'] = ['code' => 'closed', 'label' => '已結案'];
+        elseif ($r['pending'] > 0)        $r['status'] = ['code' => 'reply', 'label' => '等待單位回覆'];
+        elseif (!$r['disp_ids'] && !$r['gm_ids']) $r['status'] = ['code' => 'decide', 'label' => '待決策'];
+        elseif ($r['need_gm'])            $r['status'] = ['code' => 'gm', 'label' => '待總經理裁示'];
+        elseif (($r['gm_deduct'] || $r['final']['is_scrap'])) $r['status'] = ['code' => 'deduct', 'label' => '扣款確認中'];
+        else                              $r['status'] = ['code' => 'ready', 'label' => '可結案'];
+        $r['final_label'] = implode('、', $r['final']['names']);
+    }
+    unset($r);
+    return $rows;
+}
+
+/** 給不合格品管制記錄表用：一次取回多張單的狀態與最終處置（唯讀顯示） */
+function qab_status_map(PDO $db, array $orderIds): array
+{
+    $orderIds = array_values(array_unique(array_map('intval', array_filter($orderIds))));
+    if (!$orderIds) return [];
+    $in = implode(',', array_fill(0, count($orderIds), '?'));
+    $out = [];
+    $st = $db->prepare("SELECT id, is_closed, gm_deduct, scrap_no, capa_order_no FROM qa_abnormal_order WHERE id IN ($in)");
+    $st->execute($orderIds);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[(int)$r['id']] = ['is_closed' => (int)$r['is_closed'], 'gm_deduct' => (int)$r['gm_deduct'],
+                               'scrap_no' => (string)($r['scrap_no'] ?? ''), 'capa_order_no' => (string)($r['capa_order_no'] ?? ''),
+                               'disp_ids' => [], 'gm_ids' => [], 'pending' => 0];
+    }
+    $st = $db->prepare("SELECT order_id, kind, opt_id FROM qa_abnormal_opt WHERE order_id IN ($in)");
+    $st->execute($orderIds);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $k = $r['kind'] === 'gm' ? 'gm_ids' : 'disp_ids';
+        if (isset($out[(int)$r['order_id']])) $out[(int)$r['order_id']][$k][] = (int)$r['opt_id'];
+    }
+    $st = $db->prepare("SELECT abnormal_order_id, COUNT(*) c FROM qa_abnormal_order_flow
+                        WHERE abnormal_order_id IN ($in) AND status<>'Returned' GROUP BY abnormal_order_id");
+    $st->execute($orderIds);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) if (isset($out[(int)$r['abnormal_order_id']])) $out[(int)$r['abnormal_order_id']]['pending'] = (int)$r['c'];
+
+    $optMap = qab_option_map($db);
+    $causeMap = qab_cause_map($db);
+    $st = $db->prepare("SELECT order_id, cat_id FROM qa_abnormal_cause WHERE order_id IN ($in)");
+    $st->execute($orderIds);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        if (isset($out[(int)$r['order_id']])) $out[(int)$r['order_id']]['causes'][] = $causeMap[(int)$r['cat_id']]['path'] ?? '';
+    }
+    foreach ($out as $id => &$v) {
+        $v['final'] = qab_final($db, $v, $optMap);
+        $v['need_gm'] = qab_need_gm($db, $v, $optMap);
+        if ($v['is_closed'])            $v['status'] = '已結案';
+        elseif ($v['pending'] > 0)      $v['status'] = '等待單位回覆';
+        elseif (!$v['disp_ids'] && !$v['gm_ids']) $v['status'] = '待決策';
+        elseif ($v['need_gm'])          $v['status'] = '待總經理裁示';
+        elseif ($v['gm_deduct'] || $v['final']['is_scrap']) $v['status'] = '扣款確認中';
+        else                            $v['status'] = '可結案';
+        $v['final_label'] = implode('、', $v['final']['names']);
+        $v['cause_label'] = implode('；', array_filter($v['causes'] ?? []));
+    }
+    unset($v);
+    return $out;
+}
+
+}

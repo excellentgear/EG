@@ -82,6 +82,8 @@ $thisYear = (int)date('Y');
         .src-manual { background:#D8C7AE; color:#4A3524; }
         .f-in { width:100%; border:1px solid var(--line); border-radius:3px; padding:1px 3px; font-size:11.5px; }
         .f-in.edited { background:#FFF9EC; }
+        .ro-src { font-size:11.5px; color:#5b4a36; background:#F7F3EC; border:1px dashed var(--line);
+                  border-radius:3px; padding:1px 4px; min-height:18px; }
         .closed-yes { color:#2c7a3f; font-weight:700; }
         .closed-no  { color:var(--coral); font-weight:700; }
         .aero-tag { font-size:10px; background:var(--coral); color:#fff; border-radius:8px; padding:0 5px; }
@@ -382,8 +384,11 @@ function renderStat(s){
      +'<div class="sc" style="border-left-color:#C77C1A;"><div class="v">'+(s.no_disp||0)+'</div><div class="l">尚未填處理方式</div></div>'
      +'<div class="sc" style="border-left-color:#DD5138;"><div class="v">'+(s.aero||0)+'</div><div class="l">航太類</div></div>');
 }
-function txtCell(i, k, val, srcVal){
+function txtCell(i, k, val, srcVal, ro){
     var edited = (String(val||'') !== String(srcVal||'')) && String(val||'')!=='';
+    /* 來源單自己就管好這幾欄時（品質異常處理單改版後：原因分類/責任單位/處置/結案都在那張單上），
+       這裡一律唯讀——在登錄簿改一個字等於從側門繞過那張單的決策與簽核（使用者 2026-09-21 指定）。 */
+    if (ro) return '<div class="ro-src" title="由來源單帶入，請到來源單修改">'+(esc(val)||'<span class="muted-help">－</span>')+'</div>';
     return '<input class="f-in'+(edited?' edited':'')+'" data-i="'+i+'" data-k="'+k+'" value="'+esc(val)+'" '
          + (CAN_ADMIN?'':'readonly')+' title="'+(srcVal?('系統帶入：'+esc(srcVal)):'系統沒有這個值，請補填')+'">';
 }
@@ -404,13 +409,18 @@ function renderRows(){
           +'<td class="tl">'+esc(r.drawing_no)+'</td>'
           +'<td>'+esc(r.qty)+'</td>'
           +'<td class="tl">'+esc(r.order_no)+'</td>'
-          +'<td class="tl">'+txtCell(i,'cause',r.cause,r.src_cause)+'</td>'
-          +'<td class="tl">'+txtCell(i,'resp_unit',r.resp_unit,r.src_resp)+'</td>'
-          +'<td class="tl"><select class="f-in" data-i="'+i+'" data-k="disposition" '+(CAN_ADMIN?'':'disabled')+'>'+dopt+'</select>'
-          + txtCell(i,'disposition_note',r.disposition_note,'')
-          + '<div class="muted-help" style="font-size:10px;">報廢請填報廢單號</div></td>'
+          +'<td class="tl">'+txtCell(i,'cause',r.cause,r.src_cause,r.src_readonly)+'</td>'
+          +'<td class="tl">'+txtCell(i,'resp_unit',r.resp_unit,r.src_resp,r.src_readonly)+'</td>'
+          +'<td class="tl">'
+          + (r.src_readonly
+              ? '<div class="ro-src">'+(esc(r.disposition)||'<span class="muted-help">－</span>')+'</div>'
+                +'<div class="muted-help" style="font-size:10px;">由來源單決定，請到來源單修改</div>'
+              : '<select class="f-in" data-i="'+i+'" data-k="disposition" '+(CAN_ADMIN?'':'disabled')+'>'+dopt+'</select>'
+                + txtCell(i,'disposition_note',r.disposition_note,'')
+                + '<div class="muted-help" style="font-size:10px;">報廢請填報廢單號</div>')
+          +'</td>'
           +'<td>'
-          + (CAN_ADMIN
+          + (CAN_ADMIN && !r.src_readonly
               ? '<label style="font-weight:normal;font-size:11px;margin:0;"><input type="checkbox" class="f-ck" data-i="'+i+'" data-k="is_closed"'+(r.is_closed?' checked':'')+(r.src_closed?' disabled title="來源單已結案"':'')+'> 結案</label>'
                 +'<label style="font-weight:normal;font-size:11px;margin:0;display:block;"><input type="checkbox" class="f-ck" data-i="'+i+'" data-k="is_aero"'+(r.is_aero?' checked':'')+'> 航太</label>'
                 +(r.source==='manual'?'<button class="btn btn-xs btn-default" style="margin-top:2px;" onclick="delRow('+i+')" title="刪除這一列紙本補登">×</button>':'')
