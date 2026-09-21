@@ -95,6 +95,12 @@ foreach ($o['deducts'] as $dd) {
 }
 $procDesc = $o['deduct_desc'];
 if ($rate != 1 && $tot['process'] > 0) $procDesc .= '（金額 ' . money($tot['process']) . ' × 加成 ' . rtrim(rtrim(number_format($rate, 3, '.', ''), '0'), '.') . '）';
+/* 製程說明會把每一站都列出來，站數一多就會撐高整列（紙本只有一列的高度）。
+   文字一長就自動降字級，配合儲存格本來就有的 word-wrap 自動換行。 */
+$descLen   = mb_strlen($procDesc, 'UTF-8');
+$descStyle = $descLen > 150 ? 'font-size:7.5px;line-height:1.25;'
+           : ($descLen > 90 ? 'font-size:8.5px;line-height:1.3;'
+           : ($descLen > 50 ? 'font-size:9.5px;line-height:1.35;' : ''));
 $showDeduct = !empty($o['gm_deduct']) || !empty($o['final']['is_scrap']) || $o['deducts'] || $o['scrap_no'];
 ?>
 <!DOCTYPE html>
@@ -302,7 +308,7 @@ svg.eg-stamp-tpl { height:auto !important; }
     <tr>
         <td class="c">製程</td>
         <td class="c"><?= h(money($tot['process_rated'])) ?></td>
-        <td class="t small"><?= h($procDesc) ?></td>
+        <td class="t small" style="<?= $descStyle ?>"><?= h($procDesc) ?></td>
         <td class="c" rowspan="<?= 2 + count($otherRows) ?>"><?= h($o['deduct_exec']) ?></td>
         <td class="t" rowspan="<?= 2 + count($otherRows) ?>"><?= nl2br(h($o['deduct_notify_no'])) ?></td>
     </tr>
