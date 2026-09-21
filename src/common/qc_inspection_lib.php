@@ -8,6 +8,31 @@
 // 抽成獨立檔以便單元測試與重用；以 function_exists 防重複定義。
 // =============================================================================
 
+if (!function_exists('qc_suggest_sample_qty')) {
+    /**
+     * 依抽樣規則（qc_sampling_rule，設定入口＝線上檢驗的「抽樣規則設定」）算出建議抽驗數。
+     * **全站唯一實作**：線上檢驗與品質異常處理單都呼叫這一支，不要各自再寫一次 SQL——
+     * 兩份規則遲早會走鐘，而且同一批量在兩張表上算出不同的抽驗數沒有人查得出來。
+     * 規則區間可重疊（現況同時有 1~15 與 1~52），沿用既有口徑：取 min_qty 最大的那一條。
+     */
+    function qc_suggest_sample_qty($pdo, $batchQty) {
+        $q = (int)$batchQty;
+        if ($q < 1) return 0;
+        $sample = 0;
+        try {
+            $sr = $pdo->prepare("SELECT sample_qty FROM qc_sampling_rule
+                                 WHERE ? BETWEEN min_qty AND max_qty AND (is_active IS NULL OR is_active=1)
+                                 ORDER BY min_qty DESC LIMIT 1");
+            $sr->execute([$q]);
+            $sample = (int)$sr->fetchColumn();
+        } catch (Exception $e) {}
+        if (!$sample) $sample = $q >= 500 ? 8 : ($q >= 100 ? 5 : 3);   // 沒有規則時的簡易推估（沿用既有）
+        if ($sample > $q) $sample = $q;
+        if ($sample < 1) $sample = 1;
+        return $sample;
+    }
+}
+
 if (!function_exists('qc_recompute_result')) {
     // 以「權威公差」重算單筆數值型判定。
     // $spec = ['type'=>'NUM'|'OKNG','std'=>基準,'up'=>上公差,'lo'=>下公差,'min'=>絕對下限,'max'=>絕對上限]

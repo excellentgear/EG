@@ -177,6 +177,7 @@ function qab_ensure_schema(PDO $db): void
         'closed_by'        => "ADD COLUMN closed_by INT NULL",
         'client_id'        => "ADD COLUMN client_id CHAR(11) NULL COMMENT '客戶主檔 customer_list.customer_id；綁了製令或客退單就由來源自動帶，不給手打'",
         'gm_by_deputy'     => "ADD COLUMN gm_by_deputy TINYINT(1) NOT NULL DEFAULT 0 COMMENT '總經理裁示是由代理人簽的（列印時圖章右下角加「代」字）'",
+        'part_d_id'        => "ADD COLUMN part_d_id INT NULL COMMENT '料號主檔 d_setting.d_id；綁了製令或客退單就由來源自動帶（同一個料號文字常分屬多家客戶，只存文字會歪）'",
     ];
     foreach ($need as $c => $sql) if (!in_array($c, $cols, true)) $add[] = rtrim($sql, ',');
     if ($add) $db->exec("ALTER TABLE qa_abnormal_order " . implode(', ', $add));
@@ -279,6 +280,38 @@ function qab_is_backfill(PDO $db, array $o): bool
     if ($biz === '') return false;
     $cut = date('Y-m-d', strtotime('-' . qab_backfill_days($db) . ' day'));   // 這一天（含）之後算「當期」
     return $biz < $cut;
+}
+
+/**
+ * 來源（製令／客退單）帶出來的內容＝客戶＋料號，唯一實作。
+ * 使用者要求：綁定製令或退貨單就要自動綁客戶，料號也要綁定後自動鎖定。
+ * @return array ['client'=>['id','name','src'], 'part_no'=>?string, 'part_d_id'=>?int, 'batch'=>?int, 'src'=>'ir'|'bom'|'']
+ */
+function qab_resolve_source(PDO $db, ?string $bomNo, ?int $irId): array
+{
+    $out = ['client' => ['id' => null, 'name' => null, 'src' => ''], 'part_no' => null, 'part_d_id' => null,
+            'batch' => null, 'src' => ''];
+    if ($irId) {
+        $st = $db->prepare("SELECT i.Client_name, i.d_id, i.d_setting_id, i.Qty FROM ir_track i WHERE i.IR_id=?");
+        $st->execute([$irId]);
+        if ($r = $st->fetch(PDO::FETCH_ASSOC)) {
+            $out['src'] = 'ir';
+            $out['part_no']   = trim((string)$r['d_id']) !== '' ? mb_substr((string)$r['d_id'], 0, 60) : null;
+            $out['part_d_id'] = $r['d_setting_id'] ? (int)$r['d_setting_id'] : null;
+            $out['batch']     = $r['Qty'] !== null ? (int)$r['Qty'] : null;
+        }
+    } elseif ($bomNo !== null && trim($bomNo) !== '') {
+        $st = $db->prepare("SELECT b.d_id, b.d_setting_id, b.sqty FROM bom b WHERE b.bom=? LIMIT 1");
+        $st->execute([trim($bomNo)]);
+        if ($r = $st->fetch(PDO::FETCH_ASSOC)) {
+            $out['src'] = 'bom';
+            $out['part_no']   = trim((string)$r['d_id']) !== '' ? mb_substr((string)$r['d_id'], 0, 60) : null;
+            $out['part_d_id'] = $r['d_setting_id'] ? (int)$r['d_setting_id'] : null;
+            $out['batch']     = $r['sqty'] !== null ? (int)$r['sqty'] : null;
+        }
+    }
+    $out['client'] = qab_resolve_client($db, $bomNo, $irId);
+    return $out;
 }
 
 /**
@@ -540,9 +573,9 @@ function qab_decider_cfgs(PDO $db, string $kind = '', bool $activeOnly = true): 
         $r['position_id'] = $r['position_id'] === null ? null : (int)$r['position_id'];
         $r['include_sub'] = (int)$r['include_sub'];
         $r['is_active'] = (int)$r['is_active'];
-        $r['show_name'] = trim((string)$r['label']) !== ''
-            ? (string)$r['label']
-            : trim(((string)$r['dept_name']) . ' ' . ((string)$r['position_name']));
+        /* 顯示名稱**一律即時由「部門＋職稱」組出來**，不存一份文字（鐵律4）：
+           存下來的那份會在部門或職稱改名之後繼續顯示舊名稱，而且完全不報錯。 */
+        $r['show_name'] = trim(((string)$r['dept_name']) . ' ' . ((string)($r['position_name'] ?: '不限職稱')));
     }
     return $rows;
 }
@@ -924,6 +957,7 @@ function qab_order(PDO $db, int $id): ?array
     $o['gm_person'] = qab_gm_person($db);
     // 客戶是不是由來源（製令／客退單）綁出來的——畫面要據此把欄位鎖起來
     $o['client_bound'] = (trim((string)$o['bom_no']) !== '' || (int)$o['ir_id'] > 0) ? 1 : 0;
+    $o['part_bound']   = $o['client_bound'];   // 料號與客戶一樣，綁了來源就由來源決定、畫面鎖起來
     // 補資料模式（今日往前 N 天以前的業務日期）
     $o['is_backfill']    = qab_is_backfill($db, $o) ? 1 : 0;
     $o['backfill_days']  = qab_backfill_days($db);

@@ -205,13 +205,15 @@ $backfillDays = qab_backfill_days($db);
                 <div class="fld" id="nIrBox" style="display:none;"><label>客退單號 (IR) <span style="color:var(--coral)">*</span></label>
                     <input type="text" id="n_ir" autocomplete="off" placeholder="輸入單號／客戶／料號搜尋">
                     <input type="hidden" id="n_ir_id"></div>
-                <div class="fld" id="nBomBox"><label>製令編號 <span style="color:var(--coral)" id="nBomReq">*</span></label>
-                    <input type="text" id="n_bom" autocomplete="off" placeholder="輸入製令／料號／客戶搜尋"></div>
+                <div class="fld" id="nBomBox"><label>製令編號 <span style="color:var(--coral)" id="nBomReq">*</span>
+                        <span class="muted-help">（要從清單選）</span></label>
+                    <input type="text" id="n_bom" autocomplete="off" placeholder="輸入製令／料號／客戶後從清單選"></div>
                 <div class="fld"><label>客戶 <span class="muted-help">（由來源自動綁定）</span></label>
                     <input type="text" id="n_client" readonly style="background:#F5F0E8;"></div>
-                <div class="fld"><label>料號</label><input type="text" id="n_part"></div>
+                <div class="fld"><label>料號 <span class="muted-help">（由來源自動綁定）</span></label>
+                    <input type="text" id="n_part" readonly style="background:#F5F0E8;"></div>
                 <div class="fld"><label>批量</label><input type="number" id="n_batch"></div>
-                <div class="fld"><label>檢驗數</label><input type="number" id="n_insp"></div>
+                <div class="fld"><label>檢驗數 <span class="muted-help" id="nSampleHint"></span></label><input type="number" id="n_insp"></div>
                 <div class="fld"><label>不良數</label><input type="number" id="n_ng"></div>
             </div>
             <div class="fld" style="margin-top:8px;"><label>異常現象（可之後再補）</label>
@@ -247,6 +249,9 @@ $backfillDays = qab_backfill_days($db);
                     <th style="width:44%">分類名稱</th><th style="width:22%">上層</th><th style="width:10%">排序</th>
                     <th style="width:10%">啟用</th><th style="width:14%">操作</th></tr></thead>
                     <tbody id="cfgCause"></tbody></table>
+                <div style="margin-top:8px;text-align:right;">
+                    <button class="btn btn-warm btn-sm" data-saveall="cause"><i class="fa fa-save"></i> 一鍵存檔（本頁全部）</button>
+                </div>
                 <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end;">
                     <div class="fld" style="width:200px;"><label>新增分類名稱</label><input type="text" id="nc_name"></div>
                     <div class="fld" style="width:240px;"><label>上層（留空＝第一層）</label><select id="nc_parent"></select></div>
@@ -261,7 +266,11 @@ $backfillDays = qab_backfill_days($db);
                 <table class="cfg"><thead><tr><th style="width:34%">名稱</th><th>是報廢</th><th>轉總經理</th><th>需矯正</th>
                     <th style="width:10%">排序</th><th style="width:9%">啟用</th><th style="width:13%">操作</th></tr></thead>
                     <tbody id="cfgDisp"></tbody></table>
-                <div style="margin-top:8px;"><button class="btn btn-warm-o btn-sm" data-optadd="disp"><i class="fa fa-plus"></i> 新增一個選項</button></div>
+                <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+                    <button class="btn btn-warm-o btn-sm" data-optadd="disp"><i class="fa fa-plus"></i> 新增一個選項</button>
+                    <span style="margin-left:auto;"></span>
+                    <button class="btn btn-warm btn-sm" data-saveall="disp"><i class="fa fa-save"></i> 一鍵存檔（本頁全部）</button>
+                </div>
             </div>
 
             <div class="tabp" id="tab-gm" style="display:none;">
@@ -269,17 +278,23 @@ $backfillDays = qab_backfill_days($db);
                 <table class="cfg"><thead><tr><th style="width:34%">名稱</th><th>是報廢</th><th>轉總經理</th><th>需矯正</th>
                     <th style="width:10%">排序</th><th style="width:9%">啟用</th><th style="width:13%">操作</th></tr></thead>
                     <tbody id="cfgGm"></tbody></table>
-                <div style="margin-top:8px;"><button class="btn btn-warm-o btn-sm" data-optadd="gm"><i class="fa fa-plus"></i> 新增一個選項</button></div>
+                <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+                    <button class="btn btn-warm-o btn-sm" data-optadd="gm"><i class="fa fa-plus"></i> 新增一個選項</button>
+                    <span style="margin-left:auto;"></span>
+                    <button class="btn btn-warm btn-sm" data-saveall="gm"><i class="fa fa-save"></i> 一鍵存檔（本頁全部）</button>
+                </div>
             </div>
 
             <div class="tabp" id="tab-dec" style="display:none;">
                 <div class="note-box"><b>決策主管</b>＝填表人可以選來做處置判定的範圍（業務主管／品管主管…）。設定的是「部門＋職稱」，人員異動不必回來改。</div>
                 <div class="note-box" id="cfgGmBox" style="border-color:var(--amber-d);background:#FFF6E8;"></div>
-                <table class="cfg"><thead><tr><th style="width:13%">類別</th><th style="width:17%">顯示名稱</th><th style="width:20%">部門</th>
-                    <th style="width:16%">職稱</th><th style="width:9%">含下轄</th><th style="width:8%">排序</th><th style="width:7%">啟用</th><th style="width:10%">操作</th></tr></thead>
+                <table class="cfg"><thead><tr><th style="width:13%">類別</th><th style="width:20%">顯示名稱<br><span class="muted-help" style="font-weight:normal;">（自動＝部門＋職稱）</span></th><th style="width:19%">部門</th>
+                    <th style="width:16%">職稱</th><th style="width:8%">含下轄</th><th style="width:7%">排序</th><th style="width:7%">啟用</th><th style="width:10%">操作</th></tr></thead>
                     <tbody id="cfgDec"></tbody></table>
-                <div style="margin-top:8px;">
+                <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
                     <button class="btn btn-warm-o btn-sm" data-decadd="decider"><i class="fa fa-plus"></i> 新增決策主管範圍</button>
+                    <span style="margin-left:auto;"></span>
+                    <button class="btn btn-warm btn-sm" data-saveall="decider"><i class="fa fa-save"></i> 一鍵存檔（本頁全部）</button>
                 </div>
                 <div id="decPeople" class="muted-help" style="margin-top:6px;"></div>
             </div>
@@ -317,7 +332,9 @@ $backfillDays = qab_backfill_days($db);
             <p>紙本 <b>2-QA-01-01 品質異常處理單</b> 的清單與入口。查詢舊單、開立新單、進入單張處理頁或直接列印。</p>
             <h4>操作步驟</h4>
             <ul>
-                <li><b>開立異常單</b>：選來源——<b>客退</b>（填 IR 單號，可另外綁製令、也可不綁）或<b>製程中</b>（直接綁製令）。建立後自動跳到處理頁填其餘內容。</li>
+                <li><b>開立異常單</b>：選來源——<b>客退</b>（選 IR 單）或<b>製程中</b>（選製令）。
+                    <b>兩者都一定要從清單選到既有的單據</b>，只打字不選會被擋下（客戶、料號與扣款金額都是靠這個綁定帶出來的）；
+                    客戶與料號會自動帶、不給手打，<b>檢驗數</b>則依線上檢驗的抽樣規則自動建議。建立後自動跳到處理頁填其餘內容。</li>
                 <li><b>進入處理</b>：點該列「處理」。填寫、徵詢相關單位意見、決策、總經理裁示、扣款確認、結案都在那一頁。</li>
                 <li><b>列印</b>：點「列印」開出照紙本版面的正式表單（公司全名、表單名稱、AS 編號與版次都自動帶）。</li>
             </ul>
@@ -341,6 +358,9 @@ $backfillDays = qab_backfill_days($db);
                     <b>最高決策者（總經理裁示）不在這裡設定</b>——自動套用全站「組織角色綁定 → 最高核准人員」，
                     要換人請到<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>改一次，全站表單一起跟著換。</li>
                 <li><b>其他設定</b>：扣款加成預設值、<b>補資料天數</b>、AS 文件綁定。</li>
+                <li>每個設定分頁右下角都有<b>「一鍵存檔（本頁全部）」</b>，不必一列一列按「存」；
+                    有任何一列填錯會整批不儲存並告訴你是第幾列（不會只存一半）。
+                    決策者的<b>顯示名稱是自動的</b>＝「部門＋職稱」，部門或職稱改名時跟著變，不會留舊名稱。</li>
             </ul>
             <h4>權限角色</h4>
             <ul>
@@ -367,6 +387,19 @@ var API = '../../src/store/QaAbnormal_API.php';
 var CSRF = '<?= $CSRF ?>';
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
 var BF_DAYS = <?= (int)$backfillDays ?>;
+var N_BOM_OK = false;           // 開新單的製令欄位現在的值是不是「從清單選到的」
+function nSuggestSample(){
+    var q = parseInt($('#n_batch').val(), 10);
+    if (!(q > 0)) { $('#nSampleHint').text(''); return; }
+    $.get(API, { action:'suggest_sample', qty:q }, function(res){
+        if (!res || !res.success) return;
+        var sug = Number(res.sample) || 0;
+        $('#nSampleHint').text(sug ? ('（抽樣規則建議 ' + sug + ' 件）') : '');
+        if (sug && !$('#n_insp').val()) $('#n_insp').val(sug);   // 空的才自動帶，不蓋掉人填的
+    }, 'json');
+}
+$(document).on('change', '#n_batch', nSuggestSample);
+$(document).on('input', '#n_bom', function(){ N_BOM_OK = false; });
 var CFG = null, DEPTS = [], POSITIONS = [];
 
 function esc(s){ return $('<div>').text(s == null ? '' : s).html(); }
@@ -434,6 +467,8 @@ $('#btnNew').on('click', function(){
     $('#n_date').val(new Date().toISOString().slice(0, 10));
     $('#newBf').hide();
     $('#n_ir,#n_ir_id,#n_bom,#n_client,#n_part,#n_batch,#n_insp,#n_ng,#n_phe').val('');
+    $('#nSampleHint').text('');
+    N_BOM_OK = false;
     openMask('newMask');
 });
 $(document).on('change', 'input[name=nkind]', function(){
@@ -443,8 +478,9 @@ $(document).on('change', 'input[name=nkind]', function(){
 });
 $('#btnNewGo').on('click', function(){
     var kind = $('input[name=nkind]:checked').val();
-    if (kind === 'ir' && !$('#n_ir_id').val()) { $('#newErr').text('請從清單中選擇客退單(IR)'); return; }
+    if (kind === 'ir' && !$('#n_ir_id').val()) { $('#newErr').text('請從清單中選擇客退單(IR)——同一個單號可能有好幾筆，一定要選到是哪一筆'); return; }
     if (kind === 'bom' && !$('#n_bom').val().trim()) { $('#newErr').text('請選擇製令編號'); return; }
+    if (kind === 'bom' && !N_BOM_OK) { $('#newErr').text('製令編號請從清單中選擇（只打字不選，客戶、料號與扣款金額都帶不出來）'); return; }
     post('create', { kind:kind, fill_date:$('#n_date').val(), ir_id:$('#n_ir_id').val(), bom_no:$('#n_bom').val(),
                      client_name:$('#n_client').val(), part_no:$('#n_part').val(), batch_qty:$('#n_batch').val(),
                      insp_qty:$('#n_insp').val(), ng_qty:$('#n_ng').val(), abnormal_phenomenon:$('#n_phe').val() },
@@ -570,7 +606,7 @@ function decRow(c){
         return '<option value="' + p.id + '"' + (Number(p.id) === Number(c.position_id) ? ' selected' : '') + '>' + esc(p.position_name) + '</option>'; }).join('');
     return '<tr data-cfg="' + c.cfg_id + '">'
         + '<td class="c"><select class="d-kind" data-eg-skip><option value="decider" selected>決策主管</option></select></td>'
-        + '<td><input type="text" class="d-label" value="' + esc(c.label || '') + '" placeholder="例：業務主管"></td>'
+        + '<td class="d-show muted-help">' + esc(c.show_name || '（選好部門與職稱後自動帶出）') + '</td>'
         + '<td><select class="d-dept" data-eg-skip><option value="">請選擇…</option>' + dopt + '</select></td>'
         + '<td><select class="d-pos" data-eg-skip>' + popt + '</select></td>'
         + '<td class="c"><input type="checkbox" class="d-sub" ' + (Number(c.include_sub) ? 'checked' : '') + '></td>'
@@ -596,7 +632,16 @@ $(document).on('click', '[data-decadd]', function(){
     var kind = $(this).data('decadd');
     if ($('#cfgDec').find('td[colspan]').length) $('#cfgDec').empty();
     $('#cfgDec').append(decRow({ cfg_id:0, kind:kind, label:'', dept_id:0, position_id:0, include_sub:0, sort_order:0, is_active:1 }));
+    refreshDecShow($('#cfgDec tr').last());
 });
+/* 顯示名稱＝部門＋職稱，選到什麼就即時顯示什麼（存檔時後端也是即時組，不存文字） */
+function refreshDecShow($tr){
+    var d = $tr.find('.d-dept option:selected').text().trim();
+    var p = $tr.find('.d-pos option:selected').text().trim();
+    if (!p || p === '不限職稱') p = '不限職稱';
+    $tr.find('.d-show').text(d ? (d + ' ' + p) : '（選好部門與職稱後自動帶出）');
+}
+$(document).on('change', '.d-dept, .d-pos', function(){ refreshDecShow($(this).closest('tr')); });
 $(document).on('change', '.d-dept', function(){
     var $tr = $(this).closest('tr'), d = $(this).val();
     if (!d) return;
@@ -605,12 +650,13 @@ $(document).on('change', '.d-dept', function(){
         var h = '<option value="">不限職稱</option>' + ((res && res.rows) || []).map(function(p){
             return '<option value="' + p.id + '"' + (String(p.id) === String(cur) ? ' selected' : '') + '>' + esc(p.position_name) + '</option>'; }).join('');
         $tr.find('.d-pos').html(h);
+        refreshDecShow($tr);
     }, 'json');
 });
 $(document).on('click', '.d-save', function(){
     var $tr = $(this).closest('tr');
     if (!$tr.find('.d-dept').val()) { alert('請選部門'); return; }
-    post('decider_save', { cfg_id:$tr.data('cfg'), kind:$tr.find('.d-kind').val(), label:$tr.find('.d-label').val(),
+    post('decider_save', { cfg_id:$tr.data('cfg'), kind:$tr.find('.d-kind').val(),
         dept_id:$tr.find('.d-dept').val(), position_id:$tr.find('.d-pos').val(),
         include_sub:$tr.find('.d-sub').prop('checked') ? 1 : '', sort_order:$tr.find('.d-sort').val(),
         is_active:$tr.find('.d-act').prop('checked') ? 1 : '' },
@@ -631,6 +677,52 @@ $(document).on('click', '.d-who', function(){
             : '這一列目前沒有涵蓋任何在職人員（部門或職稱可能沒有人）。');
     }, 'json');
 });
+/* 一鍵存檔：把該分頁每一列的值收成一包送出，後端逐列套用與單列存檔相同的規則。
+   任何一列不合法就整批不寫入並指出是第幾列——存一半會讓畫面與資料庫對不起來。 */
+function collectCfgRows(what){
+    var rows = [];
+    if (what === 'cause') {
+        var flat = flatCause();
+        $('#cfgCause tr[data-cat]').each(function(){
+            var $tr = $(this), id = Number($tr.data('cat'));
+            var cur = flat.filter(function(x){ return Number(x.cat_id) === id; })[0] || {};
+            rows.push({ cat_id:id, name:$tr.find('.c-name').val(), parent_id:cur.parent_id || '',
+                        sort_order:$tr.find('.c-sort').val(), is_active:$tr.find('.c-act').prop('checked') ? 1 : 0 });
+        });
+    } else if (what === 'decider') {
+        $('#cfgDec tr[data-cfg]').each(function(){
+            var $tr = $(this);
+            rows.push({ cfg_id:Number($tr.data('cfg')), kind:'decider',
+                        dept_id:$tr.find('.d-dept').val(), position_id:$tr.find('.d-pos').val(),
+                        include_sub:$tr.find('.d-sub').prop('checked') ? 1 : 0,
+                        sort_order:$tr.find('.d-sort').val(),
+                        is_active:$tr.find('.d-act').prop('checked') ? 1 : 0 });
+        });
+    } else {
+        $((what === 'gm' ? '#cfgGm' : '#cfgDisp') + ' tr[data-opt]').each(function(){
+            var $tr = $(this);
+            rows.push({ opt_id:Number($tr.data('opt')), name:$tr.find('.o-name').val(),
+                        is_scrap:$tr.find('.o-scrap').prop('checked') ? 1 : 0,
+                        is_escalate:$tr.find('.o-esc').prop('checked') ? 1 : 0,
+                        need_capa:$tr.find('.o-capa').prop('checked') ? 1 : 0,
+                        sort_order:$tr.find('.o-sort').val(),
+                        is_active:$tr.find('.o-act').prop('checked') ? 1 : 0 });
+        });
+    }
+    return rows;
+}
+$(document).on('click', '[data-saveall]', function(){
+    var what = $(this).data('saveall');
+    var rows = collectCfgRows(what);
+    if (!rows.length) { alert('這一頁沒有可以儲存的列'); return; }
+    post('cfg_save_all', { what:what, rows:JSON.stringify(rows) }, function(res){
+        CFG.causes = res.causes; CFG.disp_opts = res.disp_opts; CFG.gm_opts = res.gm_opts;
+        CFG.deciders = res.deciders; CFG.gm_person = res.gm_person;
+        renderCause(); renderOpts(); renderDec();
+        alert('已儲存 ' + res.saved + ' 列');
+    });
+});
+
 $('#btnSaveEtc').on('click', function(){
     post('setting_save', { surcharge_rate:$('#cfgRate').val(), backfill_days:$('#cfgBfDays').val() }, function(res){
         BF_DAYS = Number(res.backfill_days);
@@ -655,11 +747,13 @@ $(function(){
     acSetup('#n_ir', 'search_ir',
         function(r){ return '<span class="hit">' + esc(r.IR_no) + '</span>　' + esc(r.Client_name) + '　' + esc(r.d_id); },
         function(r){ $('#n_ir').val(r.IR_no); $('#n_ir_id').val(r.IR_id);
-            $('#n_client').val(r.Client_name || ''); $('#n_part').val(r.d_id || ''); $('#n_batch').val(r.Qty || ''); });
+            $('#n_client').val(r.Client_name || ''); $('#n_part').val(r.d_id || '');
+            $('#n_batch').val(r.Qty || ''); $('#newErr').text(''); nSuggestSample(); });
     acSetup('#n_bom', 'search_bom',
         function(r){ return '<span class="hit">' + esc(r.bom) + '</span>　' + esc(r.d_id) + '　' + esc(r.Client_Name); },
-        function(r){ $('#n_bom').val(r.bom);
-            $('#n_client').val(r.Client_Name || ''); $('#n_part').val(r.d_id || ''); $('#n_batch').val(r.sqty || ''); });
+        function(r){ $('#n_bom').val(r.bom); N_BOM_OK = true;
+            $('#n_client').val(r.Client_Name || ''); $('#n_part').val(r.d_id || '');
+            $('#n_batch').val(r.sqty || ''); $('#newErr').text(''); nSuggestSample(); });
     <?php if ($perms['canView']): ?>load();<?php endif; ?>
 });
 </script>

@@ -20,6 +20,7 @@ require_once __DIR__ . '/../common/qa_abnormal_lib.php';
 require_once __DIR__ . '/../common/qa_notify.php';
 require_once __DIR__ . '/../common/people_lib.php';
 require_once __DIR__ . '/../common/org_role_lib.php';
+require_once __DIR__ . '/../common/qc_inspection_lib.php';   // 抽樣規則（檢驗數的建議值）唯一實作
 
 function jout($ok, $data = []) { echo json_encode(array_merge(['success' => $ok], is_array($data) ? $data : ['message' => $data]), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code = '') { jout(false, ['message' => $msg, 'code' => $code]); }
@@ -128,21 +129,30 @@ case 'create': {
         if (!$chk->fetchColumn()) jerr('要綁定的製令編號不存在');
     }
 
-    // 客戶一律由來源綁定（使用者要求）：綁了製令或客退單就以來源的客戶為準，不採信前端送來的文字
-    $cli = qab_resolve_client($db, $bomNo, $irId);
-    if ($cli['src'] !== '') $client = $cli['name'];
+    /* 客戶與料號一律由來源綁定（使用者要求）：綁了製令或客退單就以來源為準，不採信前端送來的文字。
+       料號連主檔 id 一起存——同一個料號文字在 d_setting 常分屬多家客戶，只留文字之後一定對不回去。 */
+    $srcInfo = qab_resolve_source($db, $bomNo, $irId);
+    $cli = $srcInfo['client'];
+    $partDid = null;
+    if ($srcInfo['src'] !== '') {
+        $client  = $cli['name'];
+        $partNo  = $srcInfo['part_no'];
+        $partDid = $srcInfo['part_d_id'];
+        if ($batch === null) $batch = $srcInfo['batch'];
+    }
 
     $db->beginTransaction();
     try {
         $no = qab_next_order_no($db, $fillDate);
         $db->prepare("INSERT INTO qa_abnormal_order
             (abnormal_order_no, source_type, source_id, occurrence_date, fill_date, found_unit,
-             ir_id, ir_no, bom_no, client_id, client_name, part_no, batch_qty, insp_qty, ng_qty,
+             ir_id, ir_no, bom_no, client_id, client_name, part_no, part_d_id, batch_qty, insp_qty, ng_qty,
              abnormal_phenomenon, created_by, created_at, surcharge_rate)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?)")
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?)")
            ->execute([$no, ($kind === 'ir' ? 'IR' : 'BOM'), (int)($irId ?: 0), $fillDate, $fillDate,
-                      ($kind === 'ir' ? '客退' : '廠內'), $irId, $irNo, $bomNo, $cli['id'], $client, $partNo, $batch,
-                      $intOrNull($_POST['insp_qty'] ?? ''), $intOrNull($_POST['ng_qty'] ?? ''),
+                      ($kind === 'ir' ? '客退' : '廠內'), $irId, $irNo, $bomNo, $cli['id'], $client, $partNo, $partDid, $batch,
+                      ($intOrNull($_POST['insp_qty'] ?? '') ?? ($batch ? qc_suggest_sample_qty($db, (int)$batch) : null)),
+                      $intOrNull($_POST['ng_qty'] ?? ''),
                       $strOrNull($_POST['abnormal_phenomenon'] ?? '', 2000), $uid, qab_default_rate($db)]);
         $id = (int)$db->lastInsertId();
         $db->commit();
@@ -210,19 +220,50 @@ case 'save_head': {
     $put = function ($col, $val) use (&$set, &$par) { $set[] = "$col=?"; $par[] = $val; };
     if ($fill !== '') $put('fill_date', $fill);
     if ($occ !== '')  $put('occurrence_date', $occ);
-    // 客戶：綁了製令或客退單一律由來源重算（畫面那一格是唯讀的），兩者都沒綁才收前端填的文字
+    /* 製令編號／客退單號只要有填，就一定要是「從清單選到的那一張」（使用者要求）。
+       只打字不綁定的話，客戶、料號、扣款金額全部帶不出來，而且畫面上看不出哪裡不對。 */
     $bomAfter = array_key_exists('bom_no', $_POST) ? $strOrNull($_POST['bom_no'], 30) : ($o['bom_no'] ?: null);
-    $irAfter  = (int)($o['ir_id'] ?? 0);
-    $cli      = qab_resolve_client($db, $bomAfter, $irAfter ?: null);
-    if ($cli['src'] !== '') {
+    if (array_key_exists('bom_no', $_POST) && $bomAfter !== null) {
+        $c = $db->prepare("SELECT 1 FROM bom WHERE bom=?");
+        $c->execute([$bomAfter]);
+        if (!$c->fetchColumn()) jerr('製令編號「' . $bomAfter . '」不存在，請從清單中選擇既有的製令（或清空這一欄）', 'BOM_NOT_BOUND');
+    }
+    $irAfter = (int)($o['ir_id'] ?? 0);
+    if (array_key_exists('ir_id', $_POST)) {
+        $irAfter = (int)$_POST['ir_id'];
+        if ($irAfter > 0) {
+            $c = $db->prepare("SELECT IR_no FROM ir_track WHERE IR_id=?");
+            $c->execute([$irAfter]);
+            $irNoDb = $c->fetchColumn();
+            if ($irNoDb === false) jerr('找不到這張客退單，請重新從清單選擇', 'IR_NOT_BOUND');
+            $put('ir_id', $irAfter);
+            $put('ir_no', (string)$irNoDb);
+        } else {
+            $put('ir_id', null);
+            $put('ir_no', null);
+        }
+    } elseif (array_key_exists('ir_no', $_POST) && $strOrNull($_POST['ir_no'], 30) !== null && $irAfter <= 0) {
+        jerr('客退單號請從清單中選擇既有的客退單（或清空這一欄）', 'IR_NOT_BOUND');
+    }
+
+    // 客戶與料號：綁了來源一律由來源重算（畫面那兩格是唯讀的），都沒綁才收前端填的文字
+    $srcInfo = qab_resolve_source($db, $bomAfter, $irAfter ?: null);
+    $cli = $srcInfo['client'];
+    if ($srcInfo['src'] !== '') {
         $put('client_id', $cli['id']);
         $put('client_name', $cli['name']);
-    } elseif (array_key_exists('client_name', $_POST)) {
-        $put('client_id', null);
-        $put('client_name', $strOrNull($_POST['client_name'], 60));
+        $put('part_no', $srcInfo['part_no']);
+        $put('part_d_id', $srcInfo['part_d_id']);
+    } else {
+        if (array_key_exists('client_name', $_POST)) {
+            $put('client_id', null);
+            $put('client_name', $strOrNull($_POST['client_name'], 60));
+        }
+        if (array_key_exists('part_no', $_POST)) {
+            $put('part_no', $strOrNull($_POST['part_no'], 60));
+            $put('part_d_id', null);
+        }
     }
-    if (array_key_exists('part_no', $_POST))     $put('part_no', $strOrNull($_POST['part_no'], 60));
-    if (array_key_exists('ir_no', $_POST))       $put('ir_no', $strOrNull($_POST['ir_no'], 30));
     if (array_key_exists('bom_no', $_POST))      $put('bom_no', $strOrNull($_POST['bom_no'], 30));
     if (array_key_exists('batch_qty', $_POST))   $put('batch_qty', $intOrNull($_POST['batch_qty']));
     if (array_key_exists('insp_qty', $_POST))    $put('insp_qty', $intOrNull($_POST['insp_qty']));
@@ -725,40 +766,45 @@ case 'settings_get': {
 
 case 'cause_save': {
     if (!$perms['canAdmin']) jerr('只有管理員可以維護異常原因分類');
-    $catId  = (int)($_POST['cat_id'] ?? 0);
-    $name   = trim((string)($_POST['name'] ?? ''));
-    $parent = (int)($_POST['parent_id'] ?? 0);
-    $sort   = (int)($_POST['sort_order'] ?? 0);
-    $active = isset($_POST['is_active']) ? (int)!empty($_POST['is_active']) : 1;
-    if ($name === '') jerr('請填寫分類名稱');
-    $lv = 1;
-    if ($parent > 0) {
-        $st = $db->prepare("SELECT lv FROM qa_cause_cat WHERE cat_id=?"); $st->execute([$parent]);
-        $plv = $st->fetchColumn();
-        if ($plv === false) jerr('上層分類不存在');
-        $lv = (int)$plv + 1;
-        if ($lv > 3) jerr('最多三層（例：人 → 方法 → 程式）');
-    }
-    if ($catId > 0) {
-        // 不可把自己搬到自己底下（會做出一個永遠展不開的圈）
-        if ($parent === $catId) jerr('上層分類不可以是自己');
-        $db->prepare("UPDATE qa_cause_cat SET parent_id=?, lv=?, name=?, sort_order=?, is_active=?, updated_at=NOW() WHERE cat_id=?")
-           ->execute([$parent ?: null, $lv, mb_substr($name, 0, 60), $sort, $active, $catId]);
-        // 子孫的層級要跟著調整，否則會出現 lv=4
-        $fix = function ($pid, $plv) use (&$fix, $db) {
-            $st = $db->prepare("SELECT cat_id FROM qa_cause_cat WHERE parent_id=?"); $st->execute([$pid]);
-            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $cid) {
-                $db->prepare("UPDATE qa_cause_cat SET lv=? WHERE cat_id=?")->execute([$plv + 1, (int)$cid]);
-                $fix((int)$cid, $plv + 1);
-            }
-        };
-        $fix($catId, $lv);
-    } else {
-        $db->prepare("INSERT INTO qa_cause_cat (parent_id,lv,name,sort_order,is_active) VALUES (?,?,?,?,?)")
-           ->execute([$parent ?: null, $lv, mb_substr($name, 0, 60), $sort, $active]);
-        $catId = (int)$db->lastInsertId();
-    }
-    jout(true, ['cat_id' => $catId, 'causes' => qab_cause_tree($db, false)]);
+    $e = qabSaveCause($db, $_POST);
+    if ($e !== '') jerr($e);
+    jout(true, ['cat_id' => $GLOBALS['qab_last_cat_id'] ?? 0, 'causes' => qab_cause_tree($db, false)]);
+}
+
+/* ═══════════ 一鍵存檔：四張設定表共用一支，逐列套用「存一列」的同一份規則 ═══════════ */
+case 'cfg_save_all': {
+    if (!$perms['canAdmin']) jerr('只有管理員可以維護設定');
+    $what = (string)($_POST['what'] ?? '');
+    if (!in_array($what, ['cause', 'disp', 'gm', 'decider'], true)) jerr('不支援的設定種類');
+    $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
+    if (!is_array($rows)) jerr('資料格式不正確');
+
+    $done = 0; $errs = [];
+    $db->beginTransaction();
+    try {
+        foreach ($rows as $i => $row) {
+            if (!is_array($row)) continue;
+            if ($what === 'cause')       $e = qabSaveCause($db, $row);
+            elseif ($what === 'decider') $e = qabSaveDecider($db, $row);
+            else                         $e = qabSaveOpt($db, $row, $what);
+            if ($e !== '') $errs[] = '第 ' . ($i + 1) . ' 列：' . $e;
+            else $done++;
+        }
+        /* 有任何一列不合法就整批不寫入：存一半會讓畫面與資料庫對不起來，
+           而且使用者按一次「一鍵存檔」根本看不出是哪幾列沒存到。 */
+        if ($errs) {
+            $db->rollBack();
+            jerr('整批未儲存（有 ' . count($errs) . ' 列不合法）：' . "\n" . implode("\n", array_slice($errs, 0, 8)));
+        }
+        $db->commit();
+    } catch (Throwable $ex) { if ($db->inTransaction()) $db->rollBack(); throw $ex; }
+
+    jout(true, ['saved' => $done,
+                'causes'    => qab_cause_tree($db, false),
+                'disp_opts' => qab_options($db, 'disp', false),
+                'gm_opts'   => qab_options($db, 'gm', false),
+                'deciders'  => qab_decider_cfgs($db, 'decider', false),
+                'gm_person' => qab_gm_person($db)]);
 }
 
 case 'cause_del': {
@@ -777,21 +823,10 @@ case 'cause_del': {
 case 'opt_save': {
     if (!$perms['canAdmin']) jerr('只有管理員可以維護處置方式與裁示選項');
     $kind = ($_POST['kind'] ?? '') === 'gm' ? 'gm' : 'disp';
-    $optId = (int)($_POST['opt_id'] ?? 0);
-    $name = trim((string)($_POST['name'] ?? ''));
-    if ($name === '') jerr('請填寫選項名稱');
-    $p = [mb_substr($name, 0, 40), (int)!empty($_POST['is_scrap']), (int)!empty($_POST['is_escalate']),
-          (int)!empty($_POST['need_capa']), (int)($_POST['sort_order'] ?? 0),
-          isset($_POST['is_active']) ? (int)!empty($_POST['is_active']) : 1];
-    if ($optId > 0) {
-        $db->prepare("UPDATE qa_option SET name=?, is_scrap=?, is_escalate=?, need_capa=?, sort_order=?, is_active=? WHERE opt_id=? AND kind=?")
-           ->execute(array_merge($p, [$optId, $kind]));
-    } else {
-        $db->prepare("INSERT INTO qa_option (name,is_scrap,is_escalate,need_capa,sort_order,is_active,kind) VALUES (?,?,?,?,?,?,?)")
-           ->execute(array_merge($p, [$kind]));
-        $optId = (int)$db->lastInsertId();
-    }
-    jout(true, ['opt_id' => $optId, 'disp_opts' => qab_options($db, 'disp', false), 'gm_opts' => qab_options($db, 'gm', false)]);
+    $e = qabSaveOpt($db, $_POST, $kind);
+    if ($e !== '') jerr($e);
+    jout(true, ['opt_id' => $GLOBALS['qab_last_opt_id'] ?? 0,
+                'disp_opts' => qab_options($db, 'disp', false), 'gm_opts' => qab_options($db, 'gm', false)]);
 }
 
 case 'opt_del': {
@@ -806,37 +841,15 @@ case 'opt_del': {
 
 case 'decider_save': {
     if (!$perms['canAdmin']) jerr('只有管理員可以設定決策者範圍');
-    // 最高決策者不在本模組設定：一律吃全站統一的組織角色綁定（org_role_setting.php 的「最高核准人員」）
-    if (($_POST['kind'] ?? '') === 'top') jerr('最高決策者請到「組織角色綁定設定」改「最高核准人員」，本模組不另外設定');
-    $kind = 'decider';
-    $cfgId = (int)($_POST['cfg_id'] ?? 0);
-    $deptId = (int)($_POST['dept_id'] ?? 0);
-    if ($deptId <= 0) jerr('請選擇部門');
-    $c = $db->prepare("SELECT 1 FROM department WHERE id=?"); $c->execute([$deptId]);
-    if (!$c->fetchColumn()) jerr('部門不存在');
-    $posId = (int)($_POST['position_id'] ?? 0);
-    if ($posId > 0) {
-        $c = $db->prepare("SELECT 1 FROM position WHERE id=?"); $c->execute([$posId]);
-        if (!$c->fetchColumn()) jerr('職稱不存在');
-    }
-    $p = [$kind, ($strOrNull($_POST['label'] ?? '', 40)), $deptId, $posId ?: null,
-          (int)!empty($_POST['include_sub']), (int)($_POST['sort_order'] ?? 0),
-          isset($_POST['is_active']) ? (int)!empty($_POST['is_active']) : 1];
-    if ($cfgId > 0) {
-        $db->prepare("UPDATE qa_decider_cfg SET kind=?, label=?, dept_id=?, position_id=?, include_sub=?, sort_order=?, is_active=? WHERE cfg_id=?")
-           ->execute(array_merge($p, [$cfgId]));
-    } else {
-        $db->prepare("INSERT INTO qa_decider_cfg (kind,label,dept_id,position_id,include_sub,sort_order,is_active) VALUES (?,?,?,?,?,?,?)")
-           ->execute($p);
-        $cfgId = (int)$db->lastInsertId();
-    }
-    jout(true, ['cfg_id' => $cfgId, 'deciders' => qab_decider_cfgs($db, 'decider', false), 'tops' => qab_decider_cfgs($db, 'top', false)]);
+    $e = qabSaveDecider($db, $_POST);
+    if ($e !== '') jerr($e);
+    jout(true, ['cfg_id' => $GLOBALS['qab_last_cfg_id'] ?? 0, 'deciders' => qab_decider_cfgs($db, 'decider', false)]);
 }
 
 case 'decider_del': {
     if (!$perms['canAdmin']) jerr('只有管理員可以設定決策者範圍');
     $db->prepare("DELETE FROM qa_decider_cfg WHERE cfg_id=?")->execute([(int)($_POST['cfg_id'] ?? 0)]);
-    jout(true, ['deciders' => qab_decider_cfgs($db, 'decider', false), 'tops' => qab_decider_cfgs($db, 'top', false)]);
+    jout(true, ['deciders' => qab_decider_cfgs($db, 'decider', false)]);
 }
 
 case 'decider_people': {   // 設定畫面上即時顯示「這一列目前涵蓋誰」
@@ -897,6 +910,11 @@ case 'people_asof': {   // 補登用的人員清單：以該日期回推當時�
     jout(true, ['rows' => $out, 'date' => $date]);
 }
 
+case 'suggest_sample': {   // 依抽樣規則算「這個批量建議抽驗幾件」（與線上檢驗同一支函式）
+    $q = (int)($_GET['qty'] ?? 0);
+    jout(true, ['qty' => $q, 'sample' => $q > 0 ? qc_suggest_sample_qty($db, $q) : 0]);
+}
+
 case 'positions': {
     $rows = $db->query("SELECT id, name AS position_name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     jout(true, ['rows' => $rows]);
@@ -935,4 +953,102 @@ default:
 } catch (Throwable $e) {
     error_log('[QaAbnormal_API] ' . $e->getMessage());
     jerr('系統錯誤：' . $e->getMessage());
+}
+
+/* ─────────────────────────────────────────────────────────────
+   設定的「存一列」——單列存檔鈕與一鍵存檔共用同一份規則（鐵律4：兩份必定走鐘）。
+   回傳空字串＝成功；非空＝錯誤訊息（一鍵存檔要把訊息收集起來一次回報）。
+   ───────────────────────────────────────────────────────────── */
+function qabSaveCause(PDO $db, array $in): string
+{
+    $catId  = (int)($in['cat_id'] ?? 0);
+    $name   = trim((string)($in['name'] ?? ''));
+    $parent = (int)($in['parent_id'] ?? 0);
+    $sort   = (int)($in['sort_order'] ?? 0);
+    $active = array_key_exists('is_active', $in) ? (int)!empty($in['is_active']) : 1;
+    if ($name === '') return '請填寫分類名稱';
+    $lv = 1;
+    if ($parent > 0) {
+        $st = $db->prepare("SELECT lv FROM qa_cause_cat WHERE cat_id=?");
+        $st->execute([$parent]);
+        $plv = $st->fetchColumn();
+        if ($plv === false) return '上層分類不存在';
+        $lv = (int)$plv + 1;
+        if ($lv > 3) return '最多三層（例：人 → 方法 → 程式）';
+    }
+    if ($catId > 0) {
+        if ($parent === $catId) return '上層分類不可以是自己';
+        $db->prepare("UPDATE qa_cause_cat SET parent_id=?, lv=?, name=?, sort_order=?, is_active=?, updated_at=NOW() WHERE cat_id=?")
+           ->execute([$parent ?: null, $lv, mb_substr($name, 0, 60), $sort, $active, $catId]);
+        // 子孫的層級要跟著調整，否則會出現 lv=4
+        $fix = function ($pid, $plv) use (&$fix, $db) {
+            $st = $db->prepare("SELECT cat_id FROM qa_cause_cat WHERE parent_id=?");
+            $st->execute([$pid]);
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $cid) {
+                $db->prepare("UPDATE qa_cause_cat SET lv=? WHERE cat_id=?")->execute([$plv + 1, (int)$cid]);
+                $fix((int)$cid, $plv + 1);
+            }
+        };
+        $fix($catId, $lv);
+    } else {
+        $db->prepare("INSERT INTO qa_cause_cat (parent_id,lv,name,sort_order,is_active) VALUES (?,?,?,?,?)")
+           ->execute([$parent ?: null, $lv, mb_substr($name, 0, 60), $sort, $active]);
+        $catId = (int)$db->lastInsertId();
+    }
+    $GLOBALS['qab_last_cat_id'] = $catId;
+    return '';
+}
+
+function qabSaveOpt(PDO $db, array $in, string $kind): string
+{
+    $kind  = $kind === 'gm' ? 'gm' : 'disp';
+    $optId = (int)($in['opt_id'] ?? 0);
+    $name  = trim((string)($in['name'] ?? ''));
+    if ($name === '') return '請填寫選項名稱';
+    $p = [mb_substr($name, 0, 40), (int)!empty($in['is_scrap']), (int)!empty($in['is_escalate']),
+          (int)!empty($in['need_capa']), (int)($in['sort_order'] ?? 0),
+          array_key_exists('is_active', $in) ? (int)!empty($in['is_active']) : 1];
+    if ($optId > 0) {
+        $db->prepare("UPDATE qa_option SET name=?, is_scrap=?, is_escalate=?, need_capa=?, sort_order=?, is_active=? WHERE opt_id=? AND kind=?")
+           ->execute(array_merge($p, [$optId, $kind]));
+    } else {
+        $db->prepare("INSERT INTO qa_option (name,is_scrap,is_escalate,need_capa,sort_order,is_active,kind) VALUES (?,?,?,?,?,?,?)")
+           ->execute(array_merge($p, [$kind]));
+        $optId = (int)$db->lastInsertId();
+    }
+    $GLOBALS['qab_last_opt_id'] = $optId;
+    return '';
+}
+
+function qabSaveDecider(PDO $db, array $in): string
+{
+    // 最高決策者不在本模組設定：一律吃全站統一的組織角色綁定（org_role_setting.php 的「最高核准人員」）
+    if (($in['kind'] ?? '') === 'top') return '最高決策者請到「組織角色綁定設定」改「最高核准人員」，本模組不另外設定';
+    $cfgId  = (int)($in['cfg_id'] ?? 0);
+    $deptId = (int)($in['dept_id'] ?? 0);
+    if ($deptId <= 0) return '請選擇部門';
+    $c = $db->prepare("SELECT 1 FROM department WHERE id=?");
+    $c->execute([$deptId]);
+    if (!$c->fetchColumn()) return '部門不存在';
+    $posId = (int)($in['position_id'] ?? 0);
+    if ($posId > 0) {
+        $c = $db->prepare("SELECT 1 FROM position WHERE id=?");
+        $c->execute([$posId]);
+        if (!$c->fetchColumn()) return '職稱不存在';
+    }
+    /* label 一律存 NULL：顯示名稱由「部門＋職稱」即時組出（使用者 2026-09-21 要求）。
+       存一份文字下來，部門或職稱改名之後就會繼續顯示舊名稱，而且完全不報錯。 */
+    $p = ['decider', null, $deptId, $posId ?: null,
+          (int)!empty($in['include_sub']), (int)($in['sort_order'] ?? 0),
+          array_key_exists('is_active', $in) ? (int)!empty($in['is_active']) : 1];
+    if ($cfgId > 0) {
+        $db->prepare("UPDATE qa_decider_cfg SET kind=?, label=?, dept_id=?, position_id=?, include_sub=?, sort_order=?, is_active=? WHERE cfg_id=?")
+           ->execute(array_merge($p, [$cfgId]));
+    } else {
+        $db->prepare("INSERT INTO qa_decider_cfg (kind,label,dept_id,position_id,include_sub,sort_order,is_active) VALUES (?,?,?,?,?,?,?)")
+           ->execute($p);
+        $cfgId = (int)$db->lastInsertId();
+    }
+    $GLOBALS['qab_last_cfg_id'] = $cfgId;
+    return '';
 }

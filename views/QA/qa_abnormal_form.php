@@ -218,13 +218,16 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                         <div class="fld"><label>異常發生日期</label><input type="date" id="f_occ_date"></div>
                         <div class="fld"><label>客戶 <span class="muted-help" id="clientSrc"></span></label>
                             <input type="text" id="f_client"></div>
-                        <div class="fld"><label>料號</label><input type="text" id="f_part"></div>
-                        <div class="fld"><label>製令編號 <span class="muted-help">（綁了才能自動帶扣款金額）</span></label>
-                            <div class="ac-wrap"><input type="text" id="f_bom" autocomplete="off"></div></div>
+                        <div class="fld"><label>料號 <span class="muted-help" id="partSrc"></span></label><input type="text" id="f_part"></div>
+                        <div class="fld"><label>製令編號 <span class="muted-help">（綁了才能自動帶客戶、料號與扣款金額）</span></label>
+                            <div class="ac-wrap"><input type="text" id="f_bom" autocomplete="off" placeholder="輸入製令／料號／客戶後從清單選"></div>
+                            <div class="err" id="bomErr" style="display:none;"></div></div>
                         <div class="fld"><label>客退單號 (IR)</label>
-                            <div class="ac-wrap"><input type="text" id="f_ir" autocomplete="off"></div></div>
+                            <div class="ac-wrap"><input type="text" id="f_ir" autocomplete="off" placeholder="輸入單號／客戶／料號後從清單選"></div>
+                            <input type="hidden" id="f_ir_id">
+                            <div class="err" id="irErr" style="display:none;"></div></div>
                         <div class="fld"><label>批量</label><input type="number" id="f_batch"></div>
-                        <div class="fld"><label>檢驗數</label><input type="number" id="f_insp"></div>
+                        <div class="fld"><label>檢驗數 <span class="muted-help" id="sampleHint"></span></label><input type="number" id="f_insp"></div>
                         <div class="fld"><label>不良數</label><input type="number" id="f_ng"><div class="ro-note" id="ngRate"></div></div>
                     </div>
 
@@ -465,7 +468,11 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
             </ul>
             <h4>重要行為</h4>
             <ul>
-                <li><b>客戶不給手打</b>：綁了製令或客退單，客戶就由來源的<b>料號主檔</b>自動帶（同一個料號文字在主檔常分屬好幾家客戶，手打一定會歪）；兩者都沒綁才可以自行填。</li>
+                <li><b>製令編號與客退單號一定要從清單選</b>：只打字不選就存不進去（客戶、料號、扣款金額都是靠這個綁定帶出來的）。
+                    同一個客退單號可能有好幾筆明細，所以一定要選到是哪一筆。</li>
+                <li><b>檢驗數</b>依線上檢驗的<b>抽樣規則</b>自動帶建議值（與 QC 用同一份規則）；自己改過就不再自動蓋掉。
+                    填了不良數會即時算出<b>不良率</b>。</li>
+                <li><b>客戶與料號不給手打</b>：綁了製令或客退單，兩者都由來源的<b>料號主檔</b>自動帶（同一個料號文字在主檔常分屬好幾家客戶，手打一定會歪）；兩者都沒綁才可以自行填。</li>
                 <li>已結案的單一律不可修改，要改請管理員先「取消結案」；<b>取消結案不會收回已配發的報廢單號</b>（號碼可能已被其他單據引用）。</li>
                 <li>所有選項（原因分類／處置方式／總經理裁示）都<b>存 id 不存文字</b>，管理員改名不會讓舊單失去連動。</li>
                 <li>本單的狀態與內容會自動出現在<b>不合格品管制記錄表</b>（2-QA-01-03），那一頁只顯示、不可修改。</li>
@@ -502,6 +509,7 @@ var D = null;          // 後端回來的整包（order / perms / 代碼表）
 var CAUSE_SEL = [];    // 目前勾選的原因分類 id
 var DEDUCT_ROWS = [];  // 畫面上的扣款列
 var RPL_FLOW = 0;
+var BOM_OK = false;                    // 製令欄位現在的值是不是「從清單選到的」
 
 function esc(s){ return $('<div>').text(s == null ? '' : s).html(); }
 function dispDate(s){ try { return window.egFmtDate ? egFmtDate(s) : (s || ''); } catch(e){ return s || ''; } }
@@ -595,13 +603,21 @@ function render(){
     // 客戶由來源綁定：綁了製令或客退單就唯讀（同一個料號文字在料號主檔常分屬不同客戶，手打一定會歪）
     var bound = Number(o.client_bound) === 1;
     $('#f_client').prop('readonly', bound);
+    // 料號跟客戶一樣：綁了來源就由來源決定並鎖起來（使用者要求）
+    $('#f_part').prop('readonly', bound);
+    $('#partSrc').text(bound ? ('（由' + (o.ir_id ? '客退單' : '製令') + '自動綁定'
+        + (o.part_d_id ? '：主檔 #' + o.part_d_id : '') + '）') : '（未綁來源，可自行填寫）');
     $('#clientSrc').text(bound ? ('（由' + (o.ir_id ? '客退單' : '製令') + '自動綁定'
         + (o.client_id ? '：' + o.client_id : '') + '，要改請改上面的來源單號）') : '（未綁來源，可自行填寫）');
     $('#f_ir').val(o.ir_no || '');
+    $('#f_ir_id').val(o.ir_id || '');
+    BOM_OK = !!(o.bom_no || '');          // 存在資料庫裡的一定是綁定過的
+    $('#bomErr,#irErr').hide();
     $('#f_batch').val(o.batch_qty == null ? '' : o.batch_qty);
     $('#f_insp').val(o.insp_qty == null ? '' : o.insp_qty);
     $('#f_ng').val(o.ng_qty == null ? '' : o.ng_qty);
     calcRate();
+    refreshSampleHint(false);
     $('#f_proc_no').val(o.resp_process_no || '');
     $('#f_proc').val(o.resp_process_name || '');
     $('#f_vendor_id').val(o.responsible_vendor_id || '');
@@ -741,9 +757,34 @@ $(document).on('click', '.sg-clear', function(){
     post('sign_set', { id:OID, slot:$(this).closest('tr').data('slot'), clear:1 }, function(){ toast('已清除'); });
 });
 
+/* 檢驗數：依線上檢驗的「抽樣規則設定」自動帶建議值（同一支 qc_suggest_sample_qty）。
+   人工改過就不再自動蓋掉，只留建議值提示——那是他刻意填的數字。 */
+var SAMPLE_TOUCHED = false, SAMPLE_LAST = null;
+function refreshSampleHint(autoFill){
+    var q = parseInt($('#f_batch').val(), 10);
+    if (!(q > 0)) { $('#sampleHint').text(''); return; }
+    $.get(API, { action:'suggest_sample', qty:q }, function(res){
+        if (!res || !res.success) return;
+        var sug = Number(res.sample) || 0;
+        $('#sampleHint').text(sug ? ('（抽樣規則建議 ' + sug + ' 件）') : '');
+        var cur = $('#f_insp').val();
+        if (autoFill && sug && (!cur || !SAMPLE_TOUCHED || String(cur) === String(SAMPLE_LAST))) {
+            $('#f_insp').val(sug);
+            SAMPLE_LAST = sug;
+            calcRate();
+        }
+        if (SAMPLE_LAST === null) SAMPLE_LAST = sug;
+    }, 'json');
+}
+$(document).on('change', '#f_batch', function(){ refreshSampleHint(true); });
+$(document).on('input', '#f_insp', function(){ SAMPLE_TOUCHED = true; });
+
 function calcRate(){
     var iq = parseFloat($('#f_insp').val()), ng = parseFloat($('#f_ng').val());
-    $('#ngRate').text(iq > 0 && !isNaN(ng) ? ('不良率 ' + (ng / iq * 100).toFixed(2) + '%') : '');
+    if (!(iq > 0) || isNaN(ng)) { $('#ngRate').text(''); return; }
+    var pct = ng / iq * 100;
+    $('#ngRate').html('不良率 <b style="color:' + (pct > 0 ? 'var(--coral)' : 'var(--ink2)') + ';">'
+        + pct.toFixed(2) + '%</b>（' + ng + ' / ' + iq + '）');
 }
 $(document).on('input', '#f_insp,#f_ng', calcRate);
 
@@ -830,7 +871,26 @@ function loadDeciderUsers(sel){
 }
 
 /* 儲存填寫區 */
+function checkBind(){
+    var ok = true;
+    var bom = $('#f_bom').val().trim();
+    if (bom && !BOM_OK) {
+        $('#bomErr').show().text('請從清單中選擇既有的製令（只打字不選，客戶、料號與扣款金額都帶不出來）');
+        ok = false;
+    } else $('#bomErr').hide();
+    var ir = $('#f_ir').val().trim();
+    if (ir && !$('#f_ir_id').val()) {
+        $('#irErr').show().text('請從清單中選擇既有的客退單（同一個單號可能有好幾筆，一定要選到是哪一筆）');
+        ok = false;
+    } else $('#irErr').hide();
+    return ok;
+}
+$(document).on('input', '#f_bom', function(){ BOM_OK = false; $('#bomErr').hide(); });
+$(document).on('input', '#f_ir', function(){ $('#f_ir_id').val(''); $('#irErr').hide(); });
+$(document).on('blur', '#f_bom, #f_ir', function(){ checkBind(); });
+
 $('#btnSaveHead').on('click', function(){
+    if (!checkBind()) { alert('製令編號或客退單號要從清單中選擇綁定'); return; }
     var ms = [];
     for (var r = 0; r < 3; r++){
         var vals = [];
@@ -841,7 +901,7 @@ $('#btnSaveHead').on('click', function(){
         id:OID,
         fill_date: $('#f_fill_date').val(), occurrence_date: $('#f_occ_date').val(),
         client_name: $('#f_client').val(), part_no: $('#f_part').val(),
-        bom_no: $('#f_bom').val(), ir_no: $('#f_ir').val(),
+        bom_no: $('#f_bom').val(), ir_id: $('#f_ir_id').val(),
         batch_qty: $('#f_batch').val(), insp_qty: $('#f_insp').val(), ng_qty: $('#f_ng').val(),
         abnormal_phenomenon: $('#f_phe').val(), defect_detail: $('#f_detail').val(), qa_ps: $('#f_qaps').val(),
         resp_process_no: $('#f_proc_no').val(), responsible_vendor_id: $('#f_vendor_id').val(),
@@ -1111,18 +1171,26 @@ $(function(){
         function(r){ return '<span class="hit">' + esc(r.bom) + '</span>　' + esc(r.d_id) + '　' + esc(r.Client_Name); },
         function(r){
             $('#f_bom').val(r.bom);
-            if (!$('#f_part').val()) $('#f_part').val(r.d_id || '');
-            // 客戶一律由來源覆蓋（存檔時後端還會以料號主檔再解析一次，畫面只是先讓人看到）
+            BOM_OK = true; $('#bomErr').hide();
+            $('#f_ir').val(''); $('#f_ir_id').val('');
+            // 客戶與料號一律由來源覆蓋（存檔時後端會再以料號主檔解析一次，畫面只是先讓人看到）
             $('#f_client').val(r.Client_Name || '').prop('readonly', true);
             $('#clientSrc').text('（由製令自動綁定，存檔後以料號主檔的客戶為準）');
+            $('#f_part').val(r.d_id || '').prop('readonly', true);
+            $('#partSrc').text('（由製令自動綁定）');
+            if (r.sqty) { $('#f_batch').val(r.sqty); refreshSampleHint(true); }
         });
     acSetup('#f_ir', 'search_ir',
         function(r){ return '<span class="hit">' + esc(r.IR_no) + '</span>　' + esc(r.Client_name) + '　' + esc(r.d_id); },
         function(r){
             $('#f_ir').val(r.IR_no);
-            if (!$('#f_part').val()) $('#f_part').val(r.d_id || '');
+            $('#f_ir_id').val(r.IR_id);           // 同一個 IR 單號可能有好幾筆，一定要記住是哪一筆
+            $('#irErr').hide();
             $('#f_client').val(r.Client_name || '').prop('readonly', true);
             $('#clientSrc').text('（由客退單自動綁定，存檔後以料號主檔的客戶為準）');
+            $('#f_part').val(r.d_id || '').prop('readonly', true);
+            $('#partSrc').text('（由客退單自動綁定）');
+            if (r.Qty) { $('#f_batch').val(r.Qty); refreshSampleHint(true); }
         });
     load();
 });

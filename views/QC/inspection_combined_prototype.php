@@ -223,16 +223,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $tools = $pdo->query("SELECT QC_Tool FROM qc_tool_list ORDER BY sort_order ASC, QC_Tool ASC")
                          ->fetchAll(PDO::FETCH_COLUMN);
 
-            // 抽驗數（依規則；無規則則簡易推估）
-            $sample_qty = 0;
-            try {
-                $sr = $pdo->prepare("SELECT sample_qty FROM qc_sampling_rule WHERE ? BETWEEN min_qty AND max_qty ORDER BY min_qty DESC LIMIT 1");
-                $sr->execute([(int)$ctx['sqty']]);
-                $sample_qty = (int)$sr->fetchColumn();
-            } catch (Exception $e) {}
-            if (!$sample_qty) { $q=(int)$ctx['sqty']; $sample_qty = $q>=500?8:($q>=100?5:3); }
-            if ($sample_qty > (int)$ctx['sqty']) $sample_qty = (int)$ctx['sqty'];
-            if ($sample_qty < 1) $sample_qty = 1;
+            // 抽驗數（依規則；無規則則簡易推估）——唯一實作在 qc_inspection_lib.php，
+            // 品質異常處理單的「檢驗數」也呼叫同一支，兩邊不會算出不同的建議值
+            $sample_qty = qc_suggest_sample_qty($pdo, (int)$ctx['sqty']);
 
             // 既有檢驗歷程（批次/複驗，含異常單決定）
             $history = [];
