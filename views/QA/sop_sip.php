@@ -140,7 +140,7 @@ $STATUSES = ss_statuses();
         .help-doc h4 { color:#8A5A2B; border-bottom:2px solid var(--sand); padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
     </style>
 </head>
-<body class="nav-md">
+<body class="nav-sm">
 <div class="container body"><div class="main_container">
     <?php include '../partPage/sideAndTopBarMenu.html'; ?>
 
