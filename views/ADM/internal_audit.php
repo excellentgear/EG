@@ -1086,7 +1086,7 @@ $roleLabel = ia_role_label($perms);
         <div class="ia-form" style="margin-bottom:10px;">
             <label>標題</label>
             <div><input type="text" id="ckTitleInput">
-                 <span id="ckTitleAuto" style="display:none;font-size:11px;color:#8a6d45;">（自動：對應稽核通知單的次別與日期）</span></div>
+                 <span id="ckTitleAuto" style="display:none;font-size:11px;color:#8a6d45;">（自動：對應稽核通知單的次別）</span></div>
             <label>稽核日期</label><div><input type="date" id="ckDate"></div>
             <label>稽核人</label><div><select id="ckAuditor" data-eg-filter="輸入人員姓名篩選…"></select></div>
             <label>狀態</label><div><input type="text" id="ckStatus" readonly></div>
@@ -3752,9 +3752,11 @@ function openCheck(id){
             + (CHK.kind==='kpi' && CHK.audit_year ? '（稽核 '+CHK.audit_year+' 年度）' : '')
             + (CHK.half ? '（'+(CHK.half==='H1'?'上':'下')+'半年度）' : ''));
         /* 系統稽核紀錄表不另外取標題（2026-09-18 使用者要求）：
-           自動顯示為對應稽核通知單的「第 N 次　日期」，欄位改成唯讀。 */
+           自動顯示為對應稽核通知單的「第 N 次」，欄位改成唯讀。
+           2026-09-21 使用者要求**只留次別、不要再接通知日期**——清單上本來就有「稽核日期」欄，
+           標題再印一次日期只是把欄位撐寬，而且那個日期是通知日、跟旁邊的稽核日期還不一樣，看了更混亂。 */
         var autoTitle = (CHK.kind === 'system' && CHK.case_seq_no)
-            ? ('第' + CHK.case_seq_no + '次　' + dispDate(CHK.case_notify_date || CHK.check_date)) : '';
+            ? ('第' + CHK.case_seq_no + '次') : '';
         $('#ckTitleInput').val(autoTitle || CHK.title || '')
                           .prop('readonly', !!autoTitle)
                           .css('background', autoTitle ? '#f5efe4' : '');
