@@ -812,9 +812,13 @@ function buildRegularRow(row) {
     var allowNcr = row.return_type_allow_ncr == null || row.return_type_allow_ncr != 0;
     var qaHtml   = !allowNcr
         ? '<span class="text-muted" style="font-size:11px;"><i class="fa fa-ban"></i> 不開立</span>'
-        : (row.has_ncr == 1
-            ? `<button class="btn btn-xs btn-info" onclick="openQADetailModal(${row.IR_id})">${row.qa_abnormal_order_no || '查看'}</button>`
-            : `<button class="btn btn-xs btn-default" onclick="openCreateQAModal(${row.IR_id}, '${row.IR_no}')">開立</button>`);
+        : (row.qa_order_id
+            /* 新版品質異常處理單：點單號直接開那一張單的處理／檢視畫面（2-QA-01-01） */
+            ? `<a class="btn btn-xs btn-info" href="../QA/qa_abnormal_form.php?id=${row.qa_order_id}" target="_blank"
+                  rel="noopener" title="開啟品質異常處理單">${row.qa_abnormal_order_no || '查看'}</a>`
+            : (row.has_ncr == 1
+                ? `<button class="btn btn-xs btn-info" onclick="openQADetailModal(${row.IR_id})">${row.qa_abnormal_order_no || '查看'}</button>`
+                : `<button class="btn btn-xs btn-default" onclick="openCreateQAModal(${row.IR_id}, '${row.IR_no}')">開立</button>`));
 
     var statusBtn = isDone
         ? `<button class="btn btn-xs btn-default" onclick="toggleIRStatus(${row.IR_id},0)" title="點擊重新開啟" style="margin-top:4px;color:#888;">

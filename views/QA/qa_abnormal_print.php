@@ -56,6 +56,7 @@ try {
     ]);
 } catch (Throwable $e) {}
 
+$stampTpl  = qab_stamp_tpl($db);          // 圖章模板（管理員在清單頁「設定 → 其他設定」選）
 $causeMap  = qab_cause_map($db);
 $dispOpts  = qab_options($db, 'disp', false);
 $gmOpts    = qab_options($db, 'gm', false);
@@ -86,8 +87,24 @@ foreach ($o['cause_ids'] as $cid) {
 $deepPaths = array_values(array_filter($paths, function ($p) { return strpos($p, '→') !== false; }));
 
 // 相關單位意見：已回覆的逐格列出，不足 4 格補空白格（維持表單樣子）
+/* 相關單位意見：已回覆的排前面，**管理員設定過、這張單沒有徵詢的部門也列出來（空白）**——
+   使用者要求：每張單的版面固定，一眼看得出問過誰、沒問誰，不會每張印出來差很多。 */
 $rounds = [];
-foreach ($o['rounds'] as $r) if (($r['status'] ?? '') === 'Returned') $rounds[] = $r;
+$seenDept = [];
+foreach ($o['rounds'] as $r) {
+    if (($r['status'] ?? '') !== 'Returned') continue;
+    $rounds[] = $r;
+    $seenDept[(int)$r['dept_id']] = 1;
+}
+$askCfg = qab_ask_cfg($db);
+if ($askCfg) {
+    $dn = $db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_KEY_PAIR);
+    foreach (array_keys($askCfg) as $dId) {
+        if (isset($seenDept[(int)$dId])) continue;
+        $rounds[] = ['department_name' => (string)($dn[$dId] ?? ''), 'reply_content' => '',
+                     'replied_name' => '', 'user_cname' => '', 'return_date' => '', '_blank' => 1];
+    }
+}
 $slot = max(2, (int)ceil(count($rounds) / 2) * 2);   // 一列兩格，最少留 2 格
 
 // 扣款明細：製程列彙總成一列（紙本只有「製程／其他／合計」三列），其他列逐筆印
@@ -103,7 +120,9 @@ $descLen   = mb_strlen($procDesc, 'UTF-8');
 $descStyle = $descLen > 150 ? 'font-size:7.5px;line-height:1.25;'
            : ($descLen > 90 ? 'font-size:8.5px;line-height:1.3;'
            : ($descLen > 50 ? 'font-size:9.5px;line-height:1.35;' : ''));
-$showDeduct = !empty($o['gm_deduct']) || !empty($o['final']['is_scrap']) || $o['deducts'] || $o['scrap_no'];
+/* 紙本左下角本來就固定有「扣款確認」這一塊，沒勾扣款時是留白的表格。
+   依條件整塊不印會讓同一份表單每次印出來高度差很多（使用者回報），所以一律印。 */
+$showDeduct = true;
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -127,9 +146,12 @@ table.f td.lb { text-align:center; font-weight:bold; background:#F3F3F3; }
 table.f td.c { text-align:center; }
 table.f td.t { vertical-align:top; }
 .f + .f { border-top:0; }
-.cb { display:inline-block; margin:0 10px 0 0; white-space:nowrap; }
-.cb i { display:inline-block; width:11px; height:11px; border:1px solid #000; margin-right:3px;
-        font-style:normal; font-size:10px; line-height:10px; text-align:center; vertical-align:-1px; }
+.cb { display:inline-flex; align-items:center; gap:3px; margin:0 10px 0 0; white-space:nowrap; vertical-align:middle; }
+/* 方框用 inline-flex 置中，有打勾與沒打勾的框大小與基線完全一樣
+   （原本靠 vertical-align 微調，勾號一進去就把那一格的行高撐開、看起來沒對齊） */
+.cb i { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center;
+        width:11px; height:11px; box-sizing:border-box; border:1px solid #000;
+        font-style:normal; font-size:9px; line-height:1; }
 .vert { writing-mode:vertical-rl; text-orientation:upright; letter-spacing:4px; }
 .sig { text-align:center; }
 .sig .cap { font-size:10px; text-align:left; }
@@ -230,7 +252,7 @@ svg.eg-stamp-tpl { height:auto !important; }
         </td>
         <td class="sig">
             <div class="cap">(業務/品管) 承辦：</div>
-            <div class="sigbox" data-stamp="<?= h($o['owner_sign_name']) ?>" data-date="<?= h(d($o['owner_sign_at'] ?: $o['fill_date'])) ?>"></div>
+            <div class="sigbox" data-stamp="<?= h($o['owner_sign_name']) ?>" data-dept="<?= h($o['signs']['owner']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['owner']['position'] ?? '') ?>" data-date="<?= h(d($o['owner_sign_at'] ?: $o['fill_date'])) ?>"></div>
         </td>
     </tr>
 </table>
@@ -243,7 +265,7 @@ svg.eg-stamp-tpl { height:auto !important; }
         <td><?php foreach ($dispOpts as $op) echo cb($op['name'], in_array($op['opt_id'], $o['disp_ids'], true)); ?></td>
         <td class="sig" rowspan="2">
             <div class="cap">(業務/品管) 主管：</div>
-            <div class="sigbox" data-stamp="<?= h($o['decided_name']) ?>" data-date="<?= h(d($o['disp_decided_at'])) ?>"></div>
+            <div class="sigbox" data-stamp="<?= h($o['decided_name']) ?>" data-dept="<?= h($o['signs']['disp']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['disp']['position'] ?? '') ?>" data-date="<?= h(d($o['disp_decided_at'])) ?>"></div>
         </td>
     </tr>
     <tr>
@@ -268,7 +290,7 @@ svg.eg-stamp-tpl { height:auto !important; }
         <td class="c"><?= h($unit) ?></td>
         <td class="t" style="height:14mm; position:relative;">
             <?= nl2br(h($r['reply_content'] ?? '')) ?>
-            <?php if ($r): ?>
+            <?php if ($r && empty($r['_blank'])): ?>
             <div style="display:flex;justify-content:flex-end;align-items:flex-end;">
                 <div class="sigbox" style="min-height:0;" data-stamp="<?= h($who) ?>" data-date="<?= h(d($r['return_date'])) ?>" data-small="1"></div>
             </div>
@@ -290,7 +312,7 @@ svg.eg-stamp-tpl { height:auto !important; }
         ?></td>
         <td class="sig" rowspan="3">
             <div class="cap">簽章：</div>
-            <div class="sigbox" data-stamp="<?= h($o['gm_name']) ?>" data-date="<?= h(d($o['gm_decided_at'])) ?>"
+            <div class="sigbox" data-stamp="<?= h($o['gm_name']) ?>" data-dept="<?= h($o['signs']['gm']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['gm']['position'] ?? '') ?>" data-date="<?= h(d($o['gm_decided_at'])) ?>"
                  data-deputy="<?= !empty($o['gm_by_deputy']) ? 1 : '' ?>"></div>
         </td>
     </tr>
@@ -355,15 +377,22 @@ svg.eg-stamp-tpl { height:auto !important; }
         <td class="lb">(品管) 簽章</td>
     </tr>
     <tr>
-        <td class="sig"><div class="sigbox" data-stamp="<?= h($o['deduct_appr_name']) ?>" data-date="<?= h(d($o['deduct_appr_at'])) ?>"></div></td>
-        <td class="sig"><div class="sigbox" data-stamp="<?= h($o['deduct_pm_name']) ?>" data-date="<?= h(d($o['deduct_pm_at'])) ?>"></div></td>
-        <td class="sig"><div class="sigbox" data-stamp="<?= h($o['deduct_qc_name']) ?>" data-date="<?= h(d($o['deduct_qc_at'])) ?>"></div></td>
+        <td class="sig"><div class="sigbox" data-stamp="<?= h($o['deduct_appr_name']) ?>" data-dept="<?= h($o['signs']['appr']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['appr']['position'] ?? '') ?>" data-date="<?= h(d($o['deduct_appr_at'])) ?>"></div></td>
+        <td class="sig"><div class="sigbox" data-stamp="<?= h($o['deduct_pm_name']) ?>" data-dept="<?= h($o['signs']['pm']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['pm']['position'] ?? '') ?>" data-date="<?= h(d($o['deduct_pm_at'])) ?>"></div></td>
+        <td class="sig"><div class="sigbox" data-stamp="<?= h($o['deduct_qc_name']) ?>" data-dept="<?= h($o['signs']['qc']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['qc']['position'] ?? '') ?>" data-date="<?= h(d($o['deduct_qc_at'])) ?>"></div></td>
     </tr>
 </table>
 <?php endif; ?>
 
 <script src="../../resource/js/jquery.min.js"></script>
+<script>
+// 圖章上緣的公司全名來自這個全域變數（ai-rules/18），沒設定就印不出公司名（使用者回報）
+window.__ownCompany = <?= json_encode($company, JSON_UNESCAPED_UNICODE) ?>;
+var STAMP_TPL = <?= json_encode($stampTpl['schema'] ?? null, JSON_UNESCAPED_UNICODE) ?>;
+</script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_stamp.js') ?>"></script>
+<!-- 有指定圖章模板時這一支一定要一起載，漏載會靜默退回預設章（ai-rules/18 第11條） -->
+<script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <script>
 (function () {
     function draw() {
@@ -374,7 +403,9 @@ svg.eg-stamp-tpl { height:auto !important; }
             var dt = (b.getAttribute('data-date') || '').trim();
             // 代理人代簽的章右下角要加「代」字（ai-rules/18）
             var dep = (b.getAttribute('data-deputy') || '') === '1';
-            try { b.innerHTML = EGStamp.stamp(nm, dt, dep); } catch (e) {}
+            // 模板若有 {部門}{職稱} token，要用「簽章當時」的部門職稱（ai-rules/22）
+            var dpt = b.getAttribute('data-dept') || '', pos = b.getAttribute('data-pos') || '';
+            try { b.innerHTML = EGStamp.stamp(nm, dt, dep, STAMP_TPL, dpt, pos); } catch (e) {}
         }
         // 多頁才印頁碼（ai-rules/16：左下 counter(pages)）
         var onePage = (297 - 22) * 96 / 25.4;

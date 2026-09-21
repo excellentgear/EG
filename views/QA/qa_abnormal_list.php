@@ -330,6 +330,8 @@ $backfillDays = qab_backfill_days($db);
                 <div class="fgrid">
                     <div class="fld"><label>扣款「加成」預設值（1.1＝總金額×110%）</label><input type="number" step="0.01" id="cfgRate"></div>
                     <div class="fld"><label>補資料天數（今日往前幾天以前算補資料）</label><input type="number" id="cfgBfDays"></div>
+                    <div class="fld"><label>列印用圖章模板</label>
+                        <select id="cfgStampTpl" data-eg-skip><option value="0">系統預設（回墨印）</option></select></div>
                 </div>
                 <div class="muted-help" style="margin-top:4px;">加成：新開的單會帶這個值，單張仍可自行修改。<br>
                     補資料天數：填寫日期在「今天往前這麼多天」以前的單，會多出「補登簽章」區，
@@ -482,7 +484,7 @@ function load(){
             : ('共 <b>' + rows.length + '</b> 張　未結案 <b>' + open + '</b> 張　已配發報廢單號 <b>' + scrap + '</b> 張'));
         if (!rows.length) { $('#lstBody').html('<tr><td colspan="10" class="c">沒有符合條件的異常單</td></tr>'); return; }
         $('#lstBody').html(rows.map(function(r){
-            var bomIr = (r.bom_no ? esc(r.bom_no) : '') + (r.ir_no ? ((r.bom_no ? '<br>' : '') + 'IR ' + esc(r.ir_no)) : '');
+            var bomIr = (r.bom_no ? esc(r.bom_no) : '') + (r.ir_no ? ((r.bom_no ? '<br>' : '') + esc(r.ir_no)) : '');
             return '<tr>'
                 + '<td class="c"><b>' + esc(r.abnormal_order_no) + '</b><br><span class="src src-' + esc(r.source_type) + '">'
                     + (r.source_type === 'IR' ? '客退' : (r.source_type === 'BOM' ? '製程' : '檢驗')) + '</span></td>'
@@ -723,6 +725,9 @@ function loadCfg(){
         CFG = res;
         $('#cfgRate').val(res.rate);
         $('#cfgBfDays').val(res.backfill_days);
+        $('#cfgStampTpl').html('<option value="0">系統預設（回墨印）</option>' + (res.stamp_tpls || []).map(function(t){
+            return '<option value="' + t.id + '"' + (Number(t.id) === Number(res.stamp_tpl_id) ? ' selected' : '') + '>'
+                 + esc(t.tpl_name) + '</option>'; }).join(''));
         renderCause(); renderOpts(); renderDec(); renderAsk();
     }, 'json');
     if (!DEPTS.length) $.get(API, { action:'depts' }, function(res){ if (res && res.success) { DEPTS = res.rows; renderDec(); renderAsk(); } }, 'json');
@@ -976,7 +981,8 @@ $(document).on('click', '[data-saveall]', function(){
 });
 
 $('#btnSaveEtc').on('click', function(){
-    post('setting_save', { surcharge_rate:$('#cfgRate').val(), backfill_days:$('#cfgBfDays').val() }, function(res){
+    post('setting_save', { surcharge_rate:$('#cfgRate').val(), backfill_days:$('#cfgBfDays').val(),
+                           stamp_tpl_id:$('#cfgStampTpl').val() }, function(res){
         BF_DAYS = Number(res.backfill_days);
         alert('已儲存');
     });

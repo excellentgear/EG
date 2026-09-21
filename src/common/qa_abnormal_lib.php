@@ -536,13 +536,21 @@ function qab_slot_dept_keys(string $slot): array
  * @param bool $all true＝不做部門篩選（補舊單偶爾會有例外，畫面上要留一個「顯示全部」的退路）
  * @return array [['id','name','dept_id','dept_name','position_name'], ...] 一人一列
  */
-function qab_sign_candidates(PDO $db, string $slot, string $date, bool $all = false): array
+function qab_sign_candidates(PDO $db, string $slot, string $date, bool $all = false, ?int $deptId = null): array
 {
     if (!preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $date)) $date = date('Y-m-d');
     require_once __DIR__ . '/people_lib.php';
 
     $deptIds = [];
-    if (!$all) {
+    if ($deptId > 0) {
+        /* 指定部門（相關單位意見的補登：選了生管組，右邊就只能出現生管組的人）。
+           含下轄，因為組織是樹狀的，挑到課別時底下的組也要算。 */
+        require_once __DIR__ . '/org_role_lib.php';
+        $deptIds[(int)$deptId] = 1;
+        try {
+            foreach (eg_dept_subtree_ids($db, (int)$deptId) as $d) $deptIds[(int)$d] = 1;
+        } catch (Throwable $e) { /* 沒有這支共用庫時就只取本部門 */ }
+    } elseif (!$all) {
         require_once __DIR__ . '/org_role_lib.php';
         foreach (qab_slot_dept_keys($slot) as $k) {
             foreach (eg_org_dept_ids($db, $k) as $d) $deptIds[(int)$d] = 1;   // 含下轄（品管部→品管組）
@@ -595,6 +603,68 @@ function qab_backfill_sign_args(PDO $db, array $order, array $perms, array $post
     if ($by <= 0) return [0, ''];
     if (!qab_user_asof_ok($db, $by, $date)) throw new RuntimeException('選擇的人員在該日期並不在職，請改選當時在職的人');
     return [$by, qab_backfill_time($db, $order, $date)];
+}
+
+/**
+ * 列印圖章要用的模板（管理員在清單頁「設定 → 其他設定」選；沒選就用系統預設回墨印）。
+ * 注意 ai-rules/18 第11條：有模板時前端一定要連 eg_stamp_tpl.js 一起載，只載 eg_stamp.js 會靜默退回預設章。
+ */
+function qab_stamp_tpl(PDO $db): ?array
+{
+    $id = (int)qab_setting_get($db, 'stamp_tpl_id', 0);
+    if ($id <= 0) return null;
+    try {
+        $st = $db->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");
+        $st->execute([$id]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) return null;
+        return ['id' => (int)$r['id'], 'tpl_name' => (string)$r['tpl_name'],
+                'schema' => json_decode((string)$r['schema_json'], true)];
+    } catch (Throwable $e) { return null; }
+}
+
+/**
+ * 某個人在某一天的部門與職稱（圖章模板的 {部門}{職稱} token 要用「當時」的，ai-rules/22）。
+ * @return array ['dept'=>string,'position'=>string]
+ */
+function qab_person_asof(PDO $db, int $uid, string $date): array
+{
+    if ($uid <= 0) return ['dept' => '', 'position' => ''];
+    if (!preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $date)) $date = date('Y-m-d');
+    require_once __DIR__ . '/people_lib.php';
+    static $cache = [];
+    if (!isset($cache[$date])) {
+        $m = [];
+        foreach (eg_people_list_asof($db, [], $date) as $r) {
+            $m[(int)$r['id']] = ['dept' => (string)$r['dept_name'], 'position' => (string)$r['position_name']];
+        }
+        $cache[$date] = $m;
+    }
+    return $cache[$date][$uid] ?? ['dept' => '', 'position' => ''];
+}
+
+/**
+ * 客退單上的「已開立異常單」旗標（`ir_track.has_ncr`）。
+ * 退貨單追蹤頁是靠它決定要顯示「開立」還是單號，本模組開單後沒同步就會一直顯示「開立」（使用者回報）。
+ * **清成 0 之前要確認舊模組（qa_ir_ncr）也沒有紀錄**——那張表也會把同一個旗標設成 1，
+ * 直接歸零會把舊資料的狀態一起洗掉。
+ */
+function qab_sync_ir_flag(PDO $db, ?int $irId): void
+{
+    $irId = (int)$irId;
+    if ($irId <= 0) return;
+    try {
+        $st = $db->prepare("SELECT COUNT(*) FROM qa_abnormal_order
+                            WHERE deleted_at IS NULL AND (ir_id=? OR (source_type='IR' AND source_id=?))");
+        $st->execute([$irId, $irId]);
+        $n = (int)$st->fetchColumn();
+        if ($n === 0) {
+            $st = $db->prepare("SELECT COUNT(*) FROM qa_ir_ncr WHERE IR_id=?");
+            $st->execute([$irId]);
+            $n = (int)$st->fetchColumn();
+        }
+        $db->prepare("UPDATE ir_track SET has_ncr=? WHERE IR_id=?")->execute([$n > 0 ? 1 : 0, $irId]);
+    } catch (Throwable $e) { /* 舊模組的表不在時就只看本模組 */ }
 }
 
 /** 清單的年度下拉：只列「真的有資料」的年度（使用者要求，免得列出一堆空年度） */
@@ -1287,6 +1357,14 @@ function qab_order(PDO $db, int $id): ?array
     $o['client_bound'] = trim((string)($srcNow['client']['name'] ?? '')) !== '' ? 1 : 0;
     $o['part_bound']   = trim((string)($srcNow['part_no'] ?? '')) !== '' ? 1 : 0;
     $o['src_client_from'] = (string)($srcNow['client']['src'] ?? '');
+    /* 綁到的客退單已經不在了（ERP 重新匯入會換一組 IR_id）——畫面要講出來，
+       不然只會看到客戶與料號突然帶不出來，完全看不出原因。 */
+    $o['ir_missing'] = 0;
+    if ((int)$o['ir_id'] > 0) {
+        $c = $db->prepare("SELECT 1 FROM ir_track WHERE IR_id=?");
+        $c->execute([(int)$o['ir_id']]);
+        if (!$c->fetchColumn()) $o['ir_missing'] = 1;
+    }
     $o['src_part_from']   = (string)($srcNow['src'] ?? '');
     // 補資料模式（今日往前 N 天以前的業務日期）
     $o['is_backfill']    = qab_is_backfill($db, $o) ? 1 : 0;
@@ -1307,6 +1385,13 @@ function qab_order(PDO $db, int $id): ?array
         $nm = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $nm[(int)$r['id']] = (string)$r['user_cname'];
         foreach ($o['signs'] as $k => $v) if ($v['user_id']) $o['signs'][$k]['name'] = $nm[$v['user_id']] ?? '';
+    }
+    // 圖章模板可能有 {部門}{職稱}，要用「簽章當天」的職務（ai-rules/22）
+    foreach ($o['signs'] as $k => $v) {
+        $d = trim((string)$v['at']) !== '' ? substr((string)$v['at'], 0, 10) : (string)$o['fill_date'];
+        $pi = $v['user_id'] ? qab_person_asof($db, (int)$v['user_id'], (string)$d) : ['dept' => '', 'position' => ''];
+        $o['signs'][$k]['dept'] = $pi['dept'];
+        $o['signs'][$k]['position'] = $pi['position'];
     }
     return $o;
 }

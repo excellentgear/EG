@@ -400,6 +400,7 @@ try {
     t.has_ncr,
 
     COALESCE(qao.abnormal_order_no, n.ncr_no) AS qa_abnormal_order_no,
+    qao.qa_order_id,
     n.status AS ncr_status,
 
     u.user_cname AS creator,
@@ -418,10 +419,18 @@ LEFT JOIN ir_return_type irt ON t.return_type_id = irt.type_id
 LEFT JOIN user ua ON t.sale_assignee = ua.id
 LEFT JOIN qa_ir_ncr n ON n.IR_id = t.IR_id
 LEFT JOIN (
-    SELECT source_id, MIN(abnormal_order_no) AS abnormal_order_no
-    FROM qa_abnormal_order WHERE source_type = 'IR'
-    GROUP BY source_id
-) qao ON qao.source_id = t.IR_id
+    /* 品質異常處理單（2-QA-01-01 新版）：客退單可能綁在 ir_id（先開單後綁）或 source_id（客退來源開單），
+       兩個都要認；軟刪除的單不算數。 */
+    SELECT ir_key, MIN(abnormal_order_no) AS abnormal_order_no, MIN(id) AS qa_order_id
+    FROM (
+        SELECT COALESCE(NULLIF(ir_id,0), IF(source_type='IR', source_id, NULL)) AS ir_key,
+               abnormal_order_no, id
+        FROM qa_abnormal_order
+        WHERE deleted_at IS NULL
+    ) x
+    WHERE ir_key IS NOT NULL
+    GROUP BY ir_key
+) qao ON qao.ir_key = t.IR_id
 LEFT JOIN (
     SELECT 
         f.IR_id,

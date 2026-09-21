@@ -124,6 +124,9 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
 .ask-pos{display:flex;flex-wrap:wrap;gap:2px 8px;}
 .ask-pos label{font-weight:normal;margin:0;font-size:11.5px;}
 .sg-res label{font-weight:normal;margin:0 8px 0 0;font-size:12px;white-space:nowrap;}
+#signTb textarea{width:100%;min-height:62px;resize:vertical;}
+#signTb td{vertical-align:top;}
+#signTb tr.sg-ask td{background:#FFFDF8;}
 .sg-res{display:flex;flex-wrap:wrap;align-items:center;gap:2px;}
 .bom-chip{display:inline-flex;align-items:center;gap:4px;background:var(--cream);border:1px solid var(--line);
     border-radius:10px;padding:1px 8px;font-size:12px;margin:2px 4px 2px 0;}
@@ -618,6 +621,10 @@ function render(){
     $('#clientSrc').text(bound ? ('（由' + (o.ir_id ? '客退單' : '製令') + '自動綁定'
         + (o.client_id ? '：' + o.client_id : '') + '，要改請改上面的來源單號）') : '（未綁來源，可自行填寫）');
     $('#f_ir').val(o.ir_no || '');
+    if (Number(o.ir_missing)) {
+        $('#irErr').show().text('這張客退單（' + (o.ir_no || '') + '）在退貨單資料裡已經找不到了'
+            + '——ERP 重新匯入會換一組編號，請重新從清單選一次，客戶與料號才帶得回來。');
+    }
     $('#f_ir_id').val(o.ir_id || '');
     BOM_OK = !!(o.bom_no || '');          // 存在資料庫裡的一定是綁定過的
     $('#bomErr,#irErr').hide();
@@ -822,9 +829,10 @@ function fillPeopleSelect($sel, date, sel){
     });
 }
 /* 每個簽章格的候選人：後端依「這一格該簽的部門＋那天在職＋那天沒請整天假／整天外出」篩好 */
-function fillSlotPeople($sel, slot, date, sel, $note){
+function fillSlotPeople($sel, slot, date, sel, $note, deptId){
     $sel.html('<option value="">載入中…</option>');
-    $.get(API, { action:'sign_candidates', id:OID, slot:slot, date:date, all:$('#sgAll').prop('checked') ? 1 : '' }, function(res){
+    $.get(API, { action:'sign_candidates', id:OID, slot:slot || 'owner', dept_id:deptId || '',
+                 date:date, all:(deptId ? '' : ($('#sgAll').prop('checked') ? 1 : '')) }, function(res){
         var rows = (res && res.rows) || [];
         var h = '<option value="">請選擇…</option>';
         rows.forEach(function(u){
@@ -874,23 +882,66 @@ function renderSignTable(){
            + '<td>' + slotResultHtml(k) + '</td>'
            + '<td class="c">' + (sg.user_id ? '<button class="btn btn-warm-o btn-xs sg-clear">清除</button>' : '<span class="muted-help">自動存</span>') + '</td></tr>';
     });
+    /* 相關單位意見也併進這張表（使用者要求：補資料要填的東西全部在這裡，不要分兩邊）。
+       右邊的人員清單只會出現「那一天在職、沒請整天假、而且屬於這個部門」的人。 */
+    var cfg = D.ask_cfg || {}, seen = {}, order = [];
+    Object.keys(cfg).forEach(function(d){ if (!seen[d]) { seen[d] = 1; order.push(Number(d)); } });
+    (o.rounds || []).forEach(function(r){ if (!seen[r.dept_id]) { seen[r.dept_id] = 1; order.push(Number(r.dept_id)); } });
+    (ASK_EXTRA || []).forEach(function(d){ if (!seen[d]) { seen[d] = 1; order.push(Number(d)); } });
+    order.forEach(function(deptId){
+        var r = (o.rounds || []).filter(function(x){ return Number(x.dept_id) === deptId; }).slice(-1)[0];
+        var done = r && r.status === 'Returned';
+        var dt = done ? String(r.return_date || '').substring(0, 10) : biz;
+        h += '<tr class="sg-ask" data-askdept="' + deptId + '"' + (r ? (' data-flow="' + r.flow_id + '"') : '') + '>'
+           + '<td>相關單位意見<br><b>' + esc(askDeptName(deptId)) + '</b></td>'
+           + '<td>' + (done ? (esc(r.replied_name || '') + '<br><span class="muted-help">' + dispDate(r.return_date) + '</span>')
+                            : '<span class="muted-help">（未補登）</span>') + '</td>'
+           + '<td><input type="date" class="sg-date" value="' + esc(dt) + '"' + (done ? ' disabled' : '') + '></td>'
+           + '<td><select class="sg-who" data-eg-skip' + (done ? ' disabled' : '') + '><option value="">載入中…</option></select>'
+           + '<div class="muted-help sg-scope" style="font-size:11px;"></div></td>'
+           + '<td><textarea class="sg-asktext" rows="3" placeholder="當時這個單位回了什麼"' + (done ? ' disabled' : '') + '>'
+           + esc(done ? (r.reply_content || '') : '') + '</textarea></td>'
+           + '<td class="c">' + (done ? '<button class="btn btn-warm-o btn-xs sg-askdel">清除</button>' : '<span class="muted-help">自動存</span>') + '</td></tr>';
+    });
+
     $('#signTb tbody').html(h);
     $('#signTb tbody tr').each(function(){
-        var $tr = $(this), k = $tr.data('slot');
+        var $tr = $(this);
+        if ($tr.hasClass('sg-ask')) {
+            var dId = Number($tr.data('askdept'));
+            var cur = (o.rounds || []).filter(function(x){ return Number(x.dept_id) === dId; }).slice(-1)[0];
+            fillSlotPeople($tr.find('.sg-who'), '', $tr.find('.sg-date').val() || biz,
+                           cur ? cur.replied_by : '', $tr.find('.sg-scope'), dId);
+            return;
+        }
+        var k = $tr.data('slot');
         fillSlotPeople($tr.find('.sg-who'), k, $tr.find('.sg-date').val() || biz,
                        (D.order.signs[k] || {}).user_id, $tr.find('.sg-scope'));
     });
+    /* 這張表已經涵蓋相關單位意見，下面那一區在補資料模式就不再顯示（避免兩邊填同一件事） */
+    $('#secRound').toggle(!(Number(o.is_backfill) === 1 && !!D.perms.canBackfill));
 }
 $(document).on('change', '#sgAll', function(){ renderSignTable(); });
 $(document).on('change', '.sg-date', function(){
     var $tr = $(this).closest('tr');
     if (!this.value) return;
-    fillSlotPeople($tr.find('.sg-who'), $tr.data('slot'), this.value, $tr.find('.sg-who').val(), $tr.find('.sg-scope'));
+    fillSlotPeople($tr.find('.sg-who'), $tr.data('slot'), this.value, $tr.find('.sg-who').val(),
+                   $tr.find('.sg-scope'), $tr.hasClass('sg-ask') ? Number($tr.data('askdept')) : 0);
 });
 /* 日期、人員、結果任何一個改了就自動存（補登不必按鈕） */
 function saveSignRow($tr){
-    var slot = $tr.data('slot'), date = $tr.find('.sg-date').val(), who = $tr.find('.sg-who').val();
+    var date = $tr.find('.sg-date').val(), who = $tr.find('.sg-who').val();
     if (!date) return;
+    if ($tr.hasClass('sg-ask')) {                       // 相關單位意見（補登）
+        if ($tr.data('flow')) return;                   // 已經補過的不重覆寫
+        var txt = $tr.find('.sg-asktext').val();
+        if (!txt || !txt.trim() || !who) return;        // 三個都齊了才存
+        post('round_add', { id:OID, items:JSON.stringify([{ dept_id:Number($tr.data('askdept')), position_ids:[],
+                            replied_on:date, replied_by:who, reply_content:txt }]) },
+            function(){ savedAt('#savedSign'); }, true);
+        return;
+    }
+    var slot = $tr.data('slot');
     if (slot === 'disp') {
         var ids = $tr.find('.sg-disp:checked').map(function(){ return Number(this.value); }).get();
         post('save_disposition', { id:OID, opt_ids:JSON.stringify(ids), disposition_note:$tr.find('.sg-dispnote').val(),
@@ -909,13 +960,19 @@ function saveSignRow($tr){
     if (!who) return;                    // 其他格只有簽章，沒選人就先不存
     post('sign_set', { id:OID, slot:slot, date:date, user_id:who }, function(){ savedAt('#savedSign'); }, true);
 }
+function signKey($tr){ return 'sign' + ($tr.data('slot') || ('ask' + $tr.data('askdept'))); }
 $(document).on('change', '#signTb .sg-date, #signTb .sg-who, #signTb .sg-disp, #signTb .sg-gm, #signTb .sg-gmded', function(){
     var $tr = $(this).closest('tr');
-    autoSave('sign' + $tr.data('slot'), function(){ saveSignRow($tr); });
+    autoSave(signKey($tr), function(){ saveSignRow($tr); });
 });
-$(document).on('input', '#signTb .sg-dispnote, #signTb .sg-gmnote', function(){
+$(document).on('input', '#signTb .sg-dispnote, #signTb .sg-gmnote, #signTb .sg-asktext', function(){
     var $tr = $(this).closest('tr');
-    autoSave('sign' + $tr.data('slot'), function(){ saveSignRow($tr); }, 1200);
+    autoSave(signKey($tr), function(){ saveSignRow($tr); }, 1200);
+});
+$(document).on('click', '.sg-askdel', function(){
+    var $tr = $(this).closest('tr');
+    if (!confirm('清除「' + askDeptName($tr.data('askdept')) + '」這一則補登的意見？')) return;
+    post('round_cancel', { id:OID, flow_id:$tr.data('flow') }, function(){ toast('已清除'); });
 });
 $(document).on('click', '.sg-clear', function(){
     post('sign_set', { id:OID, slot:$(this).closest('tr').data('slot'), clear:1 }, function(){ toast('已清除'); });

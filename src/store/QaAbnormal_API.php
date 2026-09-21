@@ -159,6 +159,7 @@ case 'create': {
         $id = (int)$db->lastInsertId();
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    qab_sync_ir_flag($db, $irId);      // 退貨單追蹤頁的「已開立異常單」要跟著亮起來
     $log($id, 'create', '', $no);
     jout(true, ['id' => $id, 'no' => $no]);
 }
@@ -332,6 +333,9 @@ case 'save_head': {
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    // 客退單綁定換人或被解除時，兩邊的「已開立異常單」旗標都要更新
+    if ((int)($o['ir_id'] ?? 0) !== (int)$irAfter) qab_sync_ir_flag($db, (int)($o['ir_id'] ?? 0));
+    qab_sync_ir_flag($db, (int)$irAfter);
     $log($id, 'head', '', '已更新填寫內容', trim((string)($_POST['reason'] ?? '')));
     jout(true, ['order' => qab_order($db, $id)]);
 }
@@ -823,6 +827,9 @@ case 'settings_get': {
         'rate'          => qab_default_rate($db),
         'backfill_days' => qab_backfill_days($db),
         'can_admin'     => $perms['canAdmin'],
+        // 列印圖章模板（ai-rules/18：沒指定就用系統預設回墨印）
+        'stamp_tpl_id'  => (int)qab_setting_get($db, 'stamp_tpl_id', 0),
+        'stamp_tpls'    => $db->query("SELECT id, tpl_name FROM stamp_template WHERE is_active=1 ORDER BY id")->fetchAll(PDO::FETCH_ASSOC),
     ]);
 }
 
@@ -1006,6 +1013,7 @@ case 'order_delete': {
            ->execute([$id, $o['abnormal_order_no'], mb_substr($reason, 0, 255), $snap, $uid, $perms['name']]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    qab_sync_ir_flag($db, (int)($o['ir_id'] ?? 0));
     $log($id, 'delete', $o['abnormal_order_no'], '已刪除', $reason);
     jout(true, ['deleted' => 1]);
 }
@@ -1026,6 +1034,7 @@ case 'order_restore': {
            ->execute([$id, $o['abnormal_order_no'], mb_substr($reason, 0, 255), $uid, $perms['name']]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    qab_sync_ir_flag($db, (int)($o['ir_id'] ?? 0));
     $log($id, 'restore', '', '已還原', $reason);
     jout(true, ['restored' => 1]);
 }
@@ -1042,12 +1051,17 @@ case 'del_log': {
 /* ═══════════ 補登簽章的候選人：該格該簽的部門＋當天在職＋當天沒請整天假／整天外出 ═══════════ */
 case 'sign_candidates': {
     $slot = trim((string)($_GET['slot'] ?? ''));
-    if (!array_key_exists($slot, qab_sign_slots())) jerr('簽章格不正確');
+    $deptId = (int)($_GET['dept_id'] ?? 0);      // 相關單位意見補登：只列這個部門的人
+    if ($deptId <= 0 && !array_key_exists($slot, qab_sign_slots())) jerr('簽章格不正確');
     $date = trim((string)($_GET['date'] ?? '')) ?: date('Y-m-d');
     $all  = !empty($_GET['all']);
-    $rows = qab_sign_candidates($db, $slot, $date, $all);
+    $rows = qab_sign_candidates($db, $slot, $date, $all, $deptId ?: null);
     $deptLabels = [];
-    if (!$all) {
+    if ($deptId > 0) {
+        $c = $db->prepare("SELECT name FROM department WHERE id=?"); $c->execute([$deptId]);
+        $n = (string)$c->fetchColumn();
+        if ($n !== '') $deptLabels[] = $n;
+    } elseif (!$all) {
         require_once __DIR__ . '/../common/org_role_lib.php';
         foreach (qab_slot_dept_keys($slot) as $k) {
             $d = eg_org_dept($db, $k);
@@ -1157,7 +1171,17 @@ case 'setting_save': {
         if ($bd < 0 || $bd > 3650) jerr('補資料天數請填 0~3650');
         qab_setting_set($db, 'backfill_days', $bd);
     }
-    jout(true, ['rate' => $rate, 'backfill_days' => qab_backfill_days($db)]);
+    if (array_key_exists('stamp_tpl_id', $_POST)) {
+        $t = (int)$_POST['stamp_tpl_id'];
+        if ($t > 0) {
+            $c = $db->prepare("SELECT 1 FROM stamp_template WHERE id=? AND is_active=1");
+            $c->execute([$t]);
+            if (!$c->fetchColumn()) jerr('選擇的圖章模板不存在或已停用');
+        }
+        qab_setting_set($db, 'stamp_tpl_id', $t);
+    }
+    jout(true, ['rate' => $rate, 'backfill_days' => qab_backfill_days($db),
+                'stamp_tpl_id' => (int)qab_setting_get($db, 'stamp_tpl_id', 0)]);
 }
 
 default:
