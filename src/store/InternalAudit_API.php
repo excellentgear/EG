@@ -1809,6 +1809,26 @@ case 'nc_save_sec3': {
     jout(['saved' => true, 'submitted' => $submit]);
 }
 
+case 'nc_reopen': {
+    /* 取消結案（2026-09-21 使用者要求）：結案之後才發現稽核組長／管理代表被寫錯時，
+       原本完全沒有路可以改。退回 'verified'——四段重新可填，改完再按一次「結案」即可。
+       **刻意不退回 issued**：那會把受稽單位回覆整段重新打開、還會重新發通知給對方，
+       只是要修一個簽章名字沒必要驚動人。 */
+    iaReqAdmin($perms);
+    $id = (int)($_POST['nc_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM ia_nc WHERE nc_id=? AND COALESCE(is_deleted,0)=0");
+    $st->execute([$id]); $n = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$n) jerr('找不到這張不符合通知單', 404);
+    if ((string)$n['stage'] !== 'closed') jerr('這張單不是已結案狀態，不需要取消結案');
+    $db->beginTransaction();
+    try {
+        $db->prepare("UPDATE ia_nc SET stage='verified', updated_at=NOW() WHERE nc_id=?")->execute([$id]);
+        ia_nc_log_add($db, $id, 'verified', 'edit', $uid, $uname, '取消結案（退回驗證完成狀態，可再修改）');
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('取消結案失敗：' . $e->getMessage(), 500); }
+    jout(['reopened' => true]);
+}
+
 case 'nc_save_sec4': {
     // 管理代表意見＋結案
     iaReqAdmin($perms);

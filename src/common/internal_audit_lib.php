@@ -2181,6 +2181,9 @@ function ia_nc_stage_perm(PDO $db, array $nc, array $perms, int $uid): array
         'sec4'  => !$closed && $isAdmin,
         'proxy' => ($isAdmin || $isAuditor) && !$isAuditee,   // 這個人填段二算代填
         'close' => $isAdmin && $stage === 'verified',
+        /* 取消結案（2026-09-21 使用者回報：結案之後發現稽核組長被寫錯，卻完全沒有路可以改）。
+           只有內稽管理員做得到，退回 verified＝四段又可以修正，改完再按一次結案。 */
+        'reopen' => $isAdmin && $stage === 'closed',
         'del'   => $isAdmin,
         'view'  => $perms['canView'] || $isAuditee || $isAuditor,
     ];

@@ -594,6 +594,19 @@ $roleLabel = ia_role_label($perms);
                 所以管理員代填也不會把自己變成組長；小組沒設組長時才沿用這張稽核通知單上登記的人。</li>
             <li><b>段四 管理代表填</b>：管理代表意見，按「結案」本單結束、通知受稽單位。
                 <b>管理代表同樣是自動帶的</b>——取自全站的<b>組織角色綁定</b>（管理代表），不是按下結案按鈕的人。</li>
+            <li><b>結案之後還是可以改</b>：內稽管理員在跳窗下方會多一顆<b>「取消結案」</b>，
+                按下去退回「驗證完成」狀態，四段就可以再修正（例如稽核組長被寫成代填的人），改完再按一次「結案」即可。
+                <b>刻意只退到「驗證完成」不退到最前面</b>——退到最前面會把受稽單位回覆整段重新打開、還會再發一次通知給對方，
+                只是要修一個簽章名字沒必要驚動人。受稽單位那一段若要改，仍是按該段的「解鎖修改」。</li>
+        </ul>
+
+        <h4>列印版（2-GM-06-07）</h4>
+        <ul>
+            <li><b>固定印成 A4 一頁</b>。四個圖章一律在各自格子的<b>右下角</b>：稽核員／責任主管／
+                （驗證段）<b>管理代表＋稽核組長並排</b>，結案日期印在驗證段的左下角。</li>
+            <li><b>印出來左右被裁掉的話</b>：本表的左右留白已經留 20mm（上 18mm、下 16mm）。
+                如果還是被裁，多半是<b>瀏覽器列印視窗裡的「邊界」被設成「無」或「最小」</b>——
+                請改回「預設」；那個設定會蓋掉網頁自己指定的留白。</li>
         </ul>
 
         <h4>自動暫存與簽章日期（2026-09-21 新增）</h4>
@@ -1260,6 +1273,7 @@ $roleLabel = ia_role_label($perms);
         <button data-close>關閉</button>
         <button id="btnNcResend"><i class="fa fa-bell"></i> 重發通知</button>
         <button id="btnNcPrint"><i class="fa fa-print"></i> 列印</button>
+        <button id="btnNcReopen">取消結案</button>
         <button id="btnNcDelete" class="btn-danger">刪除</button>
     </div>
 </div></div>
@@ -4327,6 +4341,8 @@ function openNc(id){
         $('#nAuditorNote').text(!p.sec1 ? '' : (IS_ADMIN ? '　可改（限內稽管理員）' : '　只有內稽管理員能更換稽核員'));
         $('#ncProxyNote').toggle(!!(p.sec2 && p.proxy));
         $('#btnNcDelete').toggle(!!p.del);
+        // 已結案的單：內稽管理員可以取消結案回頭修正（例如稽核組長被寫成代填的人）
+        $('#btnNcReopen').toggle(!!p.reopen);
         $('#btnNcResend').toggle(NC.stage!=='closed' && <?= $perms['canAudit'] ? 'true' : 'false' ?>);
         $('#btnNcClose').prop('disabled', NC.stage!=='verified')
                         .css('opacity', NC.stage!=='verified' ? .5 : 1)
@@ -4653,6 +4669,15 @@ function saveSec4(close, silent, cb){
 }
 $('#btnNcSaveSec4').on('click', function(){ saveSec4(false, false); });
 $('#btnNcClose').on('click', function(){ if (!$(this).prop('disabled')) saveSec4(true, false); });
+$('#btnNcReopen').on('click', function(){
+    if (!confirm('取消結案後這張不符合通知單會退回「驗證完成」狀態，四個段落可以再修改。\n'
+               + '（受稽單位回覆那一段仍是鎖住的，要改請按該段的「解鎖修改」。）\n確定要取消結案嗎？')) return;
+    $.post(API, {action:'nc_reopen', nc_id:NC.nc_id}, function(res){
+        if (!res.ok) { alert(res.error||'取消結案失敗'); return; }
+        alert('已取消結案，現在可以修改；改完請再按一次「結案」。');
+        openNc(NC.nc_id); loadNcs();
+    }, 'json');
+});
 $('#btnNcResend').on('click', function(){
     $.post(API, {action:'nc_resend', nc_id:NC.nc_id}, function(res){
         if (!res.ok) { alert(res.error||'失敗'); return; }
@@ -5298,7 +5323,9 @@ $(function(){
 function iaPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
     var asCss = String(docNo||'').replace(/['\\]/g,'');
     // 版面留白（2026-09-17 使用者回報「上方與左右都沒留空，很難看」）：上 18mm／左右 15mm／下 16mm
-    var css = '@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:18mm 15mm 16mm;'
+    /* 左右留白 2026-09-21 由 15mm 加大到 20mm：使用者回報實際列印時左右兩側會被裁掉
+       （雷射印表機本來就有一圈印不到的邊，15mm 對某些機型還是不夠）。 */
+    var css = '@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:18mm 20mm 16mm;'
             + (asCss ? " @bottom-right{ content:'"+asCss+"'; font-size:9pt; color:#333; }" : '')
             + '}'
             + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;'
@@ -5315,6 +5342,14 @@ function iaPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
             /* 段落標題（原因分析／糾正措施…）放大加粗，一眼看得出哪裡是標題（2026-09-21 使用者要求） */
             + 'table.ia-p .sec-h{font-size:14px;font-weight:bold;letter-spacing:1px;margin:10px 0 2px;}'
             + 'table.ia-p .sec-h:first-child{margin-top:0;}'
+            /* 圖章靠右下（2026-09-21 使用者要求）。格子先用 padding-right 把章的寬度讓出來，
+               文字就不會壓到章上面；一個章讓 130px，兩個章（管理代表＋稽核組長）讓 265px。 */
+            /* 讓出來的寬度是**實測**的：一個章（含左邊的標籤）約 160px、兩個並排約 320px，
+               各多留一點餘裕，文字才不會壓到章上面。 */
+            + 'table.ia-p td.sig-cell{position:relative;padding-right:175px;}'
+            + 'table.ia-p td.sig-cell2{padding-right:335px;}'
+            + 'table.ia-p .sig-br{position:absolute;right:6px;bottom:4px;white-space:nowrap;text-align:right;}'
+            + 'table.ia-p .sig-br .sig-one{display:inline-block;margin-left:12px;vertical-align:bottom;}'
             + '.ia-sign{display:flex;margin-top:14px;font-size:12px;}'
             + '.ia-sign .cell{flex:1;border:1px solid #333;min-height:76px;padding:4px 6px;text-align:center;}'
             + '.ia-sign .cell .lb{font-weight:bold;margin-bottom:3px;}'
@@ -5630,13 +5665,17 @@ function printNc(id){
                ⑥責任主管的章不要被推到很下面——緊接在措施內容之後
                ⑦「原因分析」這類段落標題字放大，一眼看得出是標題 */
             var sh = function (t) { return '<div class="sec-h">' + esc(t) + '</div>'; };
-            /* 圖章一律**浮動靠右、放在整格最前面**，文字從它左邊流過去。
-               兩個理由：①使用者回報「責任主管簽章位置太下面」——原本章是接在內容後面自成一行，
-               內容一短就被推到很下面 ②這樣一格的高度是 max(文字, 章) 而不是 文字＋章，
-               三個章各省下近 94px，整張才壓得進 A4 一頁（原本會印成兩頁）。 */
-            var stampFloat = function (label, id, name, date) {
-                return '<div style="float:right;margin:0 0 4px 10px;text-align:right;">'
-                     + signOne(label, id, name, date) + '</div>';
+            /* 圖章一律**靠右下角**（2026-09-21 使用者要求）：用絕對定位釘在該格右下，
+               而不是接在內容後面自成一行——接在後面的話，內容一短章就被推到奇怪的位置，
+               內容一長又會把整格撐高、整張印不進一頁。
+               格子本身 padding-right 先把章的寬度讓出來，文字永遠不會壓到章上面。
+               一格可以放不只一個章（驗證段是「管理代表」＋「稽核組長」兩個並排）。 */
+            var stampBR = function (list) {
+                return '<div class="sig-br">'
+                     + list.map(function (x) {
+                           return '<span class="sig-one">' + signOne(x[0], x[1], x[2], x[3]) + '</span>';
+                       }).join('')
+                     + '</div>';
             };
             h += '<table class="ia-p">'
               + '<tr><th style="width:100px;">受稽核單位</th><td style="width:150px;">'+esc(n.dept_name||'')+'</td>'
@@ -5644,8 +5683,8 @@ function printNc(id){
               + '<th style="width:80px;">稽核日期</th><td>'+dispDate(n.audit_date)+'</td></tr>'
 
               /* ---- 稽核員段（只有稽核員一個章：受審查單位主管已依使用者要求取消） ---- */
-              + '<tr><td colspan="6" class="l" style="height:170px;vertical-align:top;">'
-              + stampFloat('稽核員', n.auditor_id, n.auditor_name, n.auditor_date)
+              + '<tr><td colspan="6" class="l sig-cell" style="height:170px;vertical-align:top;">'
+              + stampBR([['稽核員', n.auditor_id, n.auditor_name, n.auditor_date]])
               + '<div style="display:inline-block;border:1px solid #000;padding:2px 10px;margin-bottom:8px;">'
               + '不合格類型: '+esc(n.type_label||'')+'</div>'
               + sh('不合格事實描述:') + pre(n.fact)
@@ -5658,8 +5697,8 @@ function printNc(id){
               + (n.due_date?dispDate(n.due_date):'')+'</td></tr>'
 
               /* ---- 受稽單位段（原因分析／糾正／預防，紙本是同一大格） ---- */
-              + '<tr><td colspan="6" class="l" style="height:270px;vertical-align:top;">'
-              + stampFloat('責任主管', n.resp_id, n.resp_name, n.resp_date)
+              + '<tr><td colspan="6" class="l sig-cell" style="height:270px;vertical-align:top;">'
+              + stampBR([['責任主管', n.resp_id, n.resp_name, n.resp_date]])
               + sh('原因分析:') + pre(n.cause)
               + sh('糾正措施及完成時間:') + pre(n.corrective)
               + (n.corrective_due ? '<div class="pre">完成時間：'+dispDate(n.corrective_due)+'</div>' : '')
@@ -5669,19 +5708,21 @@ function printNc(id){
               + '</td></tr>'
 
               /* ---- 驗證段：驗證描述＋結案日期＋稽核組長章，全部在同一格 ---- */
-              + '<tr><td colspan="6" class="l" style="height:190px;vertical-align:top;">'
-              + stampFloat('稽核組長', n.leader_id, n.leader_name, n.leader_date)
+              + '<tr><td colspan="6" class="l sig-cell sig-cell2" style="height:190px;vertical-align:top;">'
+              /* 管理代表的章放在稽核組長**左側**（2026-09-21 使用者要求）；
+                 管理代表是全站組織角色綁定的那一位，不是按下結案的人。 */
+              + stampBR([['管理代表', n.mgr_id, n.mgr_name, n.mgr_date],
+                         ['稽核組長', n.leader_id, n.leader_name, n.leader_date]])
               + sh('糾正和預防措施執行狀況驗證描述:') + pre(n.verify_desc)
               // 結案日期＝稽核組長蓋章日期，依使用者指定放在這一格的左下角
-              + '<div style="clear:left;margin-top:8px;font-weight:bold;">結案日期: '
+              + '<div style="margin-top:8px;font-weight:bold;">結案日期: '
               + (n.leader_date ? dispDate(n.leader_date) : '') + '</div>'
-              + '<div style="clear:both;"></div>'
               + '</td></tr>'
               + '</table>';
             logPrint('內稽不符合通知單 '+(n.nc_no||('#'+id)), 'ia_nc', id);
             iaPrintWindow('內稽不符合通知單 '+(n.nc_no||''), h, '', m.doc_no, false);
-        }, [{id:n.auditor_id, date:n.auditor_date},
-            {id:n.resp_id, date:n.resp_date}, {id:n.leader_id, date:n.leader_date}]);
+        }, [{id:n.auditor_id, date:n.auditor_date}, {id:n.resp_id, date:n.resp_date},
+            {id:n.leader_id, date:n.leader_date}, {id:n.mgr_id, date:n.mgr_date}]);
     });
 }
 $('#btnNcPrint').on('click', function(){ if (NC) printNc(NC.nc_id); });
