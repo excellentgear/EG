@@ -8,9 +8,16 @@ session_start();
 if (!isset($_SESSION['userName'])) { header("Location:../../index.php"); exit; }
 
 include_once '../../src/common/DBConnection.php';
+// 製令→料號主檔的唯一判定：同一個料號文字在 d_setting 常有好幾筆（不同客戶），
+// 直接 ON ds.D_Setting_Id=b.d_id 會把同一筆報工複製成好幾列（明細重複、金額翻倍）。
+require_once '../../src/common/bom_part_setting_lib.php';
+// 機台顯示名稱（現場編號／機型／多欄位複合…）：與報工紀錄查詢列印頁共用同一份設定（鐵律4）
+require_once '../../src/common/machine_label_lib.php';
 $conn   = new DBConnection();
 $pdo    = $conn->getPDO();
 $userId = intval($_SESSION['id'] ?? 0);
+// 全頁共用的機台顯示設定（只讀一次；各 action 一律用 eg_machine_label_apply() 套用）
+$KPI_MLBL = eg_machine_label_cfg($pdo);
 
 $PAGE_PERM = 'A';
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -24,6 +31,25 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 $is_admin = (strpos($PAGE_PERM,'A') !== false);
 
 function safe($v) { return htmlspecialchars($v ?? '', ENT_QUOTES, 'UTF-8'); }
+
+/**
+ * 機台顯示名稱：一律套用全站共用設定（與「報工紀錄查詢列印」同一份，設定入口也在那一頁），
+ * 並把結果回寫到原本就在用的 machine／label 欄位——這兩個欄位在本頁各查詢裡純粹是顯示用，
+ * 回寫之後前端一行都不用改，也不會有「有的表格照設定、有的還是機台名稱」的不一致。
+ * 呼叫端的 SELECT 要改用 eg_machine_label_sql() 把各識別欄位一起撈出來。
+ */
+function kpiApplyMachineLabel(array $rows, array $cfg, bool $alsoLabel = false): array {
+    $rows = eg_machine_label_apply($rows, $cfg);
+    foreach ($rows as &$r) {
+        if (array_key_exists('machine', $r)) $r['machine'] = $r['machine_label'];
+        if ($alsoLabel) $r['label'] = $r['machine_label'];
+        // eg_machine_label_sql() 一律把所有可選識別欄位撈出來（設定改了不必改 SQL），
+        // 但本頁前端只用得到 machine／label／machine_type，其餘就不要再往瀏覽器送一份
+        unset($r['field_no'], $r['asset_no'], $r['machine_model'], $r['manufacturer'], $r['spec']);
+    }
+    unset($r);
+    return $rows;
+}
 
 // ── 安全算術運算式解析（支援 +−×÷ 括號 IF/OR/AND/MAX/MIN 及比較運算子）
 function _kpiParseFactor(array &$t, int &$p): float {
@@ -915,7 +941,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // ✅ 改用 LEFT JOIN 取代 8 個 correlated subquery，大幅提升查詢效能
             $sql = "SELECT
                 pdr.report_id, pdr.report_date, pdr.report_source,
-                pdr.machine_id, ml.machine,
+                pdr.machine_id, " . eg_machine_label_sql('ml', 'mpt') . ",
                 pdr.produced_qty,
                 pdr.setup_start_time, pdr.setup_end_time,
                 pdr.production_start_time, pdr.production_end_time,
@@ -940,6 +966,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 dsg.Module, dsg.Teeth, dsg.Face_Width, ds.Type AS part_type
                 FROM pm_process_daily_report pdr
                 LEFT JOIN machine_list ml ON ml.machine_id=pdr.machine_id
+                LEFT JOIN process_type mpt ON mpt.process_type_id=ml.machine_type_id
                 LEFT JOIN user u1 ON u1.id=pdr.production_user_id
                 LEFT JOIN user u2 ON u2.id=pdr.setup_user_id
                 LEFT JOIN (
@@ -951,8 +978,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 ) udpm1 ON udpm1.user_id=pdr.production_user_id
                 LEFT JOIN bom_ing bi ON bi.bom_ing_fid=pdr.bom_ing_fid
                 LEFT JOIN bom b ON b.bom=bi.bom
-                LEFT JOIN d_setting ds ON ds.D_Setting_Id=b.d_id
-                LEFT JOIN d_setting_gear dsg ON dsg.d_setting_id=ds.d_id
+                " . eg_bom_ds_join('b', 'ds', 'dsg') . "
                 LEFT JOIN process_no pn ON pn.ProcessNo=pdr.process_no
                 LEFT JOIN (
                     SELECT
@@ -989,7 +1015,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $st->bindValue(count($p)+1, intval($pp), PDO::PARAM_INT);
             $st->bindValue(count($p)+2, intval($off), PDO::PARAM_INT);
             $st->execute();
-            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            $rows = kpiApplyMachineLabel($st->fetchAll(PDO::FETCH_ASSOC), $KPI_MLBL);
 
             // 計算標準工時
             foreach ($rows as &$r) {
@@ -1084,7 +1110,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if($mid){$where.=" AND pdr.machine_id=?";$p[]=$mid;}
             if($mtid){$where.=" AND ml.machine_type_id=?";$p[]=$mtid;}
             if($partno){$where.=" $EXISTS_CLAUSE";$p[]="%$partno%";}
-            $sql="SELECT ml.machine_id, ml.machine AS label, ml.machine_type_id, pt.process_type AS machine_type,
+            $sql="SELECT ml.machine_id, " . eg_machine_label_sql('ml', 'pt') . ", ml.machine_type_id, pt.process_type AS machine_type,
                 COUNT(DISTINCT pdr.report_id) AS report_count,
                 SUM(pdr.produced_qty) AS total_ok,
                 COALESCE(SUM(ng.ng_sum),0) AS total_ng,
@@ -1098,10 +1124,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 LEFT JOIN bom b ON b.bom=bi.bom
                 LEFT JOIN (SELECT n.report_id,SUM(n.ng_qty) AS ng_sum FROM pm_process_daily_ng n GROUP BY n.report_id) ng ON ng.report_id=pdr.report_id
                 WHERE $where
-                GROUP BY ml.machine_id,ml.machine,ml.machine_type_id,pt.process_type
+                GROUP BY ml.machine_id,ml.machine_type_id," . eg_machine_label_group_sql('ml', 'pt') . "
                 ORDER BY ml.machine_type_id ASC,ml.machine ASC,ml.machine_id ASC LIMIT 200";
             $st=$pdo->prepare($sql);$st->execute($p);
-            $rows=$st->fetchAll(PDO::FETCH_ASSOC);
+            // label 欄位（畫面上那一格機台名稱）改由全站共用的機台顯示設定決定
+            $rows=kpiApplyMachineLabel($st->fetchAll(PDO::FETCH_ASSOC), $KPI_MLBL, true);
             // kps map
             $kpsRows=$pdo->query("SELECT pgm.process_no,pgm.group_id,COALESCE(kps.d_setting_id,0) AS ds_id,COALESCE(kps.coefficient,gd.default_coefficient,1.0) AS coeff,COALESCE(kps.base_time_sec,std.base_time_sec) AS base_t,COALESCE(kps.base_price,std.base_price) AS base_p,kps.multiplier,std.fixed_price_per_pcs AS fixed_price FROM kpi_process_group_map pgm LEFT JOIN kpi_part_standard kps ON kps.group_id=pgm.group_id LEFT JOIN kpi_difficulty_default gd ON gd.group_id=pgm.group_id LEFT JOIN kpi_std_time_default std ON std.group_id=pgm.group_id ORDER BY pgm.process_no,kps.d_setting_id DESC")->fetchAll(PDO::FETCH_ASSOC);
             $kpsMap=[];
@@ -1133,7 +1160,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $r['vs_target']=$r['utilization']!==null?round($r['utilization']-$tgt,1):null;
                 $r['target']=$tgt;
                 // amount
-                $amtP2=[$machId,$df,$dt]; $amtSQL2="SELECT pdr.process_no,pdr.produced_qty,ds.d_id AS d_setting_id,ds.Type AS part_type,dsg.Module,dsg.Teeth,dsg.Face_Width FROM pm_process_daily_report pdr LEFT JOIN bom_ing bi ON bi.bom_ing_fid=pdr.bom_ing_fid LEFT JOIN bom b ON b.bom=bi.bom LEFT JOIN d_setting ds ON ds.D_Setting_Id=b.d_id LEFT JOIN d_setting_gear dsg ON dsg.d_setting_id=ds.d_id WHERE pdr.machine_id=? AND pdr.report_date BETWEEN ? AND ? AND pdr.production_start_time IS NOT NULL";
+                $amtP2=[$machId,$df,$dt]; $amtSQL2="SELECT pdr.process_no,pdr.produced_qty,ds.d_id AS d_setting_id,ds.Type AS part_type,dsg.Module,dsg.Teeth,dsg.Face_Width FROM pm_process_daily_report pdr LEFT JOIN bom_ing bi ON bi.bom_ing_fid=pdr.bom_ing_fid LEFT JOIN bom b ON b.bom=bi.bom ".eg_bom_ds_join('b','ds','dsg')." WHERE pdr.machine_id=? AND pdr.report_date BETWEEN ? AND ? AND pdr.production_start_time IS NOT NULL";
                 if($partno){$amtSQL2.=" $EXISTS_CLAUSE";$amtP2[]="%$partno%";}
                 $amtS=$pdo->prepare($amtSQL2);$amtS->execute($amtP2);$amtTotal=0;
                 foreach($amtS->fetchAll(PDO::FETCH_ASSOC) as $ar){
@@ -1181,7 +1208,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 主查詢：加入報工人員班別工時（反推法）
             // 稼動率分母 = 報工當天，在此機台有報工的所有不重複人員的班別工時合計
             $sql = "SELECT pdr.report_id, pdr.report_date, pdr.process_no,
-                ml.machine_id, ml.machine, ml.machine_type_id,
+                ml.machine_id, " . eg_machine_label_sql('ml', 'pt') . ", ml.machine_type_id,
                 pt.process_type AS machine_type,
                 pdr.produced_qty,
                 (SELECT SUM(ng_qty) FROM pm_process_daily_ng WHERE report_id=pdr.report_id) AS ng_qty,
@@ -1212,8 +1239,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 ) udpm ON udpm.user_id=pdr.production_user_id
                 LEFT JOIN bom_ing bi ON bi.bom_ing_fid=pdr.bom_ing_fid
                 LEFT JOIN bom b ON b.bom=bi.bom
-                LEFT JOIN d_setting ds ON ds.D_Setting_Id=b.d_id
-                LEFT JOIN d_setting_gear dsg ON dsg.d_setting_id=ds.d_id
+                " . eg_bom_ds_join('b', 'ds', 'dsg') . "
                 LEFT JOIN process_no pn ON pn.ProcessNo=pdr.process_no
                 WHERE $where
                 ORDER BY pdr.report_date DESC, pdr.machine_id, pdr.report_id DESC
@@ -1224,7 +1250,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $st->bindValue(count($p)+1, intval($pp), PDO::PARAM_INT);
             $st->bindValue(count($p)+2, intval($off), PDO::PARAM_INT);
             $st->execute();
-            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            $rows = kpiApplyMachineLabel($st->fetchAll(PDO::FETCH_ASSOC), $KPI_MLBL);
 
             // 預先查詢區間內每台機台每天的班別工時合計（報工反推法）
             // 邏輯：找出每天在同一機台有報工的所有不重複人員，加總其班別工時
@@ -1448,7 +1474,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $where .= " AND pdr.production_start_time IS NOT NULL";
                 // 機台彙總：稼動率用報工反推法
                 // 分子=區間總生產秒數；分母=區間每日不重複人員班別工時合計（各日加總後再加總）
-                $sql = "SELECT ml.machine_id, ml.machine AS label,
+                $sql = "SELECT ml.machine_id, " . eg_machine_label_sql('ml', 'mpt') . ",
                     COUNT(DISTINCT pdr.report_id) AS report_count,
                     SUM(pdr.produced_qty) AS total_ok,
                     COALESCE(SUM(ng.ng_sum),0) AS total_ng,
@@ -1457,13 +1483,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     COUNT(DISTINCT pdr.report_date) AS work_days
                     FROM pm_process_daily_report pdr
                     JOIN machine_list ml ON ml.machine_id=pdr.machine_id
+                    LEFT JOIN process_type mpt ON mpt.process_type_id=ml.machine_type_id
                     LEFT JOIN bom_ing bi ON bi.bom_ing_fid=pdr.bom_ing_fid
                     LEFT JOIN bom b ON b.bom=bi.bom
                     LEFT JOIN (SELECT n.report_id,SUM(n.ng_qty) AS ng_sum FROM pm_process_daily_ng n GROUP BY n.report_id) ng ON ng.report_id=pdr.report_id
-                    WHERE $where GROUP BY ml.machine_id ORDER BY prod_hrs DESC LIMIT 50";
+                    WHERE $where GROUP BY ml.machine_id," . eg_machine_label_group_sql('ml', 'mpt') . " ORDER BY prod_hrs DESC LIMIT 50";
 
                 $st = $pdo->prepare($sql); $st->execute($p);
-                $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+                $rows = kpiApplyMachineLabel($st->fetchAll(PDO::FETCH_ASSOC), $KPI_MLBL, true);
 
                 // 對每台機台，計算區間內各有報工日的班別工時合計（報工反推法）
                 foreach ($rows as &$r) {
@@ -1841,8 +1868,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                      FROM pm_process_daily_report pdr
                      LEFT JOIN bom_ing bi ON bi.bom_ing_fid=pdr.bom_ing_fid
                      LEFT JOIN bom b ON b.bom=bi.bom
-                     LEFT JOIN d_setting ds ON ds.D_Setting_Id=b.d_id
-                     LEFT JOIN d_setting_gear dsg ON dsg.d_setting_id=ds.d_id
+                     " . eg_bom_ds_join('b', 'ds', 'dsg') . "
                      WHERE (pdr.production_user_id=? OR pdr.setup_user_id=?)
                        AND pdr.report_date BETWEEN ? AND ? AND pdr.production_start_time IS NOT NULL " . ($partno ? " AND EXISTS (SELECT 1 FROM bom_ing bi_pn2 JOIN bom b_pn2 ON b_pn2.bom=bi_pn2.bom WHERE bi_pn2.bom_ing_fid=pdr.bom_ing_fid AND b_pn2.d_id LIKE ?)" : "")
                 );
@@ -1934,7 +1960,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             // 主查詢：移除所有 correlated subquery，改為乾淨的 JOIN
             $sql="SELECT pdr.report_id, pdr.report_date, pdr.process_no, pdr.remark,
-                ml.machine, pdr.produced_qty,
+                " . eg_machine_label_sql('ml', 'mpt') . ", pdr.produced_qty,
                 COALESCE(u1.user_cname,'—') AS prod_user,
                 COALESCE(u2.user_cname,'—') AS setup_user,
                 ROUND(TIMESTAMPDIFF(SECOND,pdr.production_start_time,pdr.production_end_time)/3600,4) AS prod_hrs,
@@ -1947,12 +1973,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 dsg.Module, dsg.Teeth, dsg.Face_Width
                 FROM pm_process_daily_report pdr
                 LEFT JOIN machine_list ml ON ml.machine_id=pdr.machine_id
+                LEFT JOIN process_type mpt ON mpt.process_type_id=ml.machine_type_id
                 LEFT JOIN user u1 ON u1.id=pdr.production_user_id
                 LEFT JOIN user u2 ON u2.id=pdr.setup_user_id
                 LEFT JOIN bom_ing bi ON bi.bom_ing_fid=pdr.bom_ing_fid
                 LEFT JOIN bom b ON b.bom=bi.bom
-                LEFT JOIN d_setting ds ON ds.D_Setting_Id=b.d_id
-                LEFT JOIN d_setting_gear dsg ON dsg.d_setting_id=ds.d_id
+                " . eg_bom_ds_join('b', 'ds', 'dsg') . "
                 LEFT JOIN process_no pn ON pn.ProcessNo=pdr.process_no
                 WHERE 1=1 AND pdr.report_date BETWEEN ? AND ? AND (pdr.production_start_time IS NOT NULL OR pdr.setup_start_time IS NOT NULL)";
             $p_vals = [$df, $dt];
@@ -1970,7 +1996,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $st->bindValue(count($p_vals)+1, $pp, PDO::PARAM_INT);
             $st->bindValue(count($p_vals)+2, $off, PDO::PARAM_INT);
             $st->execute();
-            $rows=$st->fetchAll(PDO::FETCH_ASSOC);
+            $rows=kpiApplyMachineLabel($st->fetchAll(PDO::FETCH_ASSOC), $KPI_MLBL);
 
             // ── 批次查詢歷史平均工時快取（避免 N+1 查詢）──────────
             // 先收集所有需要的 (d_setting_id, process_type_id) 組合
@@ -2119,7 +2145,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $sql="SELECT pdr.report_id, pdr.report_date, pdr.produced_qty, pdr.process_no,
                 pdr.production_user_id, u.user_cname,
-                ml.machine_id, ml.machine, ml.machine_type_id, ml.position AS area_id,
+                ml.machine_id, " . eg_machine_label_sql('ml', 'pt') . ", ml.machine_type_id, ml.position AS area_id,
                 pt.process_type AS machine_type,
                 sa.area_name,
                 b.d_id AS part_no, b.bom AS bom_no, ds.d_id AS d_setting_id, ds.Type AS part_type,
@@ -2133,12 +2159,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 LEFT JOIN user_department_position_map udm2 ON udm2.user_id=pdr.production_user_id AND udm2.is_main=1
                 LEFT JOIN bom_ing bi ON bi.bom_ing_fid=pdr.bom_ing_fid
                 LEFT JOIN bom b ON b.bom=bi.bom
-                LEFT JOIN d_setting ds ON ds.D_Setting_Id=b.d_id
-                LEFT JOIN d_setting_gear dsg ON dsg.d_setting_id=ds.d_id
+                " . eg_bom_ds_join('b', 'ds', 'dsg') . "
                 LEFT JOIN process_no pn ON pn.ProcessNo=pdr.process_no
                 WHERE $where";
             $st=$pdo->prepare($sql);$st->execute($p);
-            $allRows=$st->fetchAll(PDO::FETCH_ASSOC);
+            // 機台維度的 label 取自 $r['machine']，故先套用全站共用的機台顯示設定再聚合
+            $allRows=kpiApplyMachineLabel($st->fetchAll(PDO::FETCH_ASSOC), $KPI_MLBL);
 
             // 批次查詢 KPI 標準（避免 N+1）
             $kpsMap=[];
@@ -2234,7 +2260,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 default:             $where.=" AND pdr.production_user_id=?"; $p[]=intval($key); break;
             }
             $sql="SELECT pdr.report_date, pdr.produced_qty, pdr.process_no,
-                u.user_cname, ml.machine, b.d_id AS part_no, b.bom AS bom_no,
+                u.user_cname, " . eg_machine_label_sql('ml', 'mpt') . ", b.d_id AS part_no, b.bom AS bom_no,
                 ds.d_id AS d_setting_id, ds.Type AS part_type,
                 dsg.Module, dsg.Teeth, dsg.Face_Width,
                 pn.ProcessName, pn.process_type_id,
@@ -2242,15 +2268,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 (SELECT pgm3.group_id FROM kpi_process_group_map pgm3 WHERE pgm3.process_no=pdr.process_no LIMIT 1) AS group_id
                 FROM pm_process_daily_report pdr
                 JOIN machine_list ml ON ml.machine_id=pdr.machine_id
+                LEFT JOIN process_type mpt ON mpt.process_type_id=ml.machine_type_id
                 LEFT JOIN user u ON u.id=pdr.production_user_id
                 LEFT JOIN bom_ing bi ON bi.bom_ing_fid=pdr.bom_ing_fid
                 LEFT JOIN bom b ON b.bom=bi.bom
-                LEFT JOIN d_setting ds ON ds.D_Setting_Id=b.d_id
-                LEFT JOIN d_setting_gear dsg ON dsg.d_setting_id=ds.d_id
+                " . eg_bom_ds_join('b', 'ds', 'dsg') . "
                 LEFT JOIN process_no pn ON pn.ProcessNo=pdr.process_no
                 WHERE $where ORDER BY pdr.report_date DESC LIMIT 50";
             $st=$pdo->prepare($sql);$st->execute($p);
-            $rows=$st->fetchAll(PDO::FETCH_ASSOC);
+            $rows=kpiApplyMachineLabel($st->fetchAll(PDO::FETCH_ASSOC), $KPI_MLBL);
 
             // 計算每筆金額
             $kpsRows=$pdo->query("SELECT pgm.process_no,pgm.group_id,COALESCE(kps.d_setting_id,0) AS ds_id,COALESCE(kps.coefficient,gd.default_coefficient,1.0) AS coeff,COALESCE(kps.base_time_sec,std.base_time_sec) AS base_t,COALESCE(kps.base_price,std.base_price) AS base_p,kps.multiplier FROM kpi_process_group_map pgm LEFT JOIN kpi_part_standard kps ON kps.group_id=pgm.group_id LEFT JOIN kpi_difficulty_default gd ON gd.group_id=pgm.group_id LEFT JOIN kpi_std_time_default std ON std.group_id=pgm.group_id ORDER BY pgm.process_no,kps.d_setting_id DESC")->fetchAll(PDO::FETCH_ASSOC);
@@ -2807,7 +2833,8 @@ $user_list = $pdo->query("
     WHERE u.state=1 ORDER BY d.name, u.user_cname
 ")->fetchAll(PDO::FETCH_ASSOC);
 
-$machine_list = $pdo->query("SELECT ml.machine_id, ml.machine, ml.machine_type_id, ml.position FROM machine_list ml WHERE (ml.state IS NULL OR ml.state!='1') ORDER BY ml.machine_type_id, ml.position, ml.machine_id")->fetchAll(PDO::FETCH_ASSOC);
+// 機台篩選下拉：顯示名稱同樣走全站共用的機台顯示設定，才不會出現「下拉寫 A、表格寫 B」
+$machine_list = kpiApplyMachineLabel($pdo->query("SELECT ml.machine_id, " . eg_machine_label_sql('ml', 'mpt') . ", ml.machine_type_id, ml.position FROM machine_list ml LEFT JOIN process_type mpt ON mpt.process_type_id=ml.machine_type_id WHERE (ml.state IS NULL OR ml.state!='1') ORDER BY ml.machine_type_id, ml.position, ml.machine_id")->fetchAll(PDO::FETCH_ASSOC), $KPI_MLBL);
 
 // 機台本月報工筆數
 $machine_report_count_map = [];
@@ -2826,6 +2853,9 @@ try {
     // 來源：pm_process_daily_report（有生產工時且有良品數）
     // JOIN 到 process_no.process_type_id 取得製程類別
     // JOIN 到 bom_ing > bom > d_setting 取得 d_setting_id
+    // 這一支刻意**不**改用 eg_bom_ds_join()：它本來就 GROUP BY ds.d_id，同一個料號文字的兩筆主檔
+    // 各自得到一份統計（不會重複加總），明細那邊挑中哪一筆都查得到對應的歷史均值；
+    // 改成只挑一筆反而會讓另一筆的既有歷史均值憑空消失。
     $pdo->exec("
         INSERT INTO kpi_avg_time_cache
             (d_setting_id, process_type_id, avg_min_per_pc, sample_count, total_prod_min, total_qty)
