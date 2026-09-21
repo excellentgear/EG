@@ -14,7 +14,7 @@
  */
 var TAB = 'sop';            // 目前分頁
 var ROWS = [];              // 目前清單（全部，分頁在前端做）
-var PAGE = 1, PER = 10;
+var PAGE = 1, PER = 8;   // 每頁預設 8 筆（使用者 2026-09-21 指定）
 var CUR = null;             // 目前打開的文件 detail
 var NEW = {};               // 新增跳窗目前的狀態（綁定對象、自動名稱有沒有被改過）
 
@@ -158,13 +158,13 @@ function renderList() {
         pg += '<button data-pg="' + pages + '">&raquo;</button>';
     }
     pg += '　<span class="muted-help">每頁</span> <select id="perSel" data-eg-skip>'
-        + [5, 10, 20, 50].map(function (n) { return '<option value="' + n + '"' + (n === PER ? ' selected' : '') + '>' + n + '</option>'; }).join('')
+        + [5, 8, 10, 20, 50].map(function (n) { return '<option value="' + n + '"' + (n === PER ? ' selected' : '') + '>' + n + '</option>'; }).join('')
         + '</select>';
-    $('#pagerTop,#pagerBottom').html(pg);
+    $('#pagerTop').html(pg);   // 下方那排已移除，右上角一排就夠
 }
 
 $(document).on('click', '.pager button[data-pg]', function () { PAGE = num($(this).data('pg')); renderList(); });
-$(document).on('change', '#perSel', function () { PER = num($(this).val()) || 10; PAGE = 1; renderList(); });
+$(document).on('change', '#perSel', function () { PER = num($(this).val()) || 8; PAGE = 1; renderList(); });
 $(document).on('click', '.ss-tab', function () {
     $('.ss-tab').removeClass('on'); $(this).addClass('on');
     TAB = $(this).data('tab');

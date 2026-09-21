@@ -86,7 +86,10 @@ $STATUSES = ss_statuses();
         table.lst thead th { background:var(--sand); color:var(--ink2); text-align:center; position:sticky; top:0; z-index:2; }
         table.lst td.c { text-align:center; }
         table.lst tbody tr:hover { background:#FFFDF8; cursor:pointer; }
-        .lst-wrap { max-height:60vh; overflow:auto; border:1px solid var(--line); border-radius:6px; }
+        /* 刻意不設 max-height：設了就會在表格裡自己長出一條上下捲軸，
+           每頁只有 8 筆時那條捲軸完全是多餘的（使用者 2026-09-21 指定）。
+           橫向留 auto 當保險，table-layout:fixed 正常情況下不會超出。 */
+        .lst-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:6px; }
         /* 表格裡的小籤一定要自己指定 line-height：Gentelella 全站 td span{line-height:28px}，
            10px 的字會佔掉 28px 把整列撐高（本專案已踩三次） */
         .st { border-radius:11px; padding:1px 9px; font-size:11.5px; display:inline-block; line-height:18px; white-space:nowrap; }
@@ -231,7 +234,6 @@ $STATUSES = ss_statuses();
                 <tbody></tbody>
             </table>
         </div>
-        <div class="pager" id="pagerBottom"></div>
         <?php endif; ?>
     </div>
 </div></div>

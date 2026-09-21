@@ -1153,7 +1153,11 @@ function ss_list(PDO $db, array $f): array
             JOIN ss_ver v ON v.ver_id = COALESCE(d.cur_ver_id, (SELECT MAX(ver_id) FROM ss_ver x WHERE x.doc_id=d.doc_id))
             LEFT JOIN machine_list m ON m.machine_id = d.machine_id
             WHERE " . implode(' AND ', $w) . "
-            ORDER BY d.kind, d.scope, COALESCE(d.part_no_text, m.asset_no, d.title), d.doc_id";
+            /* 表單日期由新到舊（使用者 2026-09-21 指定）。
+               MySQL 的 DESC 會把 NULL 排在最後，所以沒填日期的落在最底下，正合適。
+               後面一定要再接一個決定性的排序鍵（doc_id）——同一天好幾份時順序若不穩定，
+               翻頁會出現「同一筆在兩頁都看得到、或整筆被跳過」。 */
+            ORDER BY v.form_date DESC, d.doc_id DESC";
     $st = $db->prepare($sql);
     $st->execute($p);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];

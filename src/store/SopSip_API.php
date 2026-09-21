@@ -557,7 +557,10 @@ case 'settings_save': {
             $st->execute([$tid]);
             if (!$st->fetchColumn()) jerr('指定的圖章模板不存在或已停用');
         }
-        ss_setting_set($db, 'stamp_' . $slot, $tid);
+        // 設定鍵一定要跟 ss_stamp_tpl() 讀的那個一樣（stamp_tpl_<slot>）。
+        // 原本寫成 stamp_<slot>，於是「存得進去、卻永遠讀不回來」，畫面上就是
+        // 每次存完又變回「預設回墨印」，而且完全不報錯。
+        ss_setting_set($db, 'stamp_tpl_' . $slot, $tid);
     }
 
     // 擔當者部門：只存 dept_id 與顯示文字；部門名稱一律即時查，不在這裡存第二份（鐵律4）
