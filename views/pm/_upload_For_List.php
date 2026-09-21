@@ -820,6 +820,9 @@ if (isset($_GET['but']) && $_GET['but'] === 'IS_List') {
     if (!function_exists('safeInt')) {
         function safeInt($value)
         {
+            // 先去千分位逗號：ERP 匯出的數量欄若是文字格式（"4,000"），
+            // is_numeric() 會直接回 false ⇒ 整個數量變成 null，而且不會報錯
+            $value = erpNum_erp($value);
             if ($value === '' || $value === null || !is_numeric($value)) {
                 return null;
             }
@@ -915,7 +918,7 @@ if (isset($_GET['but']) && $_GET['but'] === 'IS_List') {
                 $product_id   = quoteValue($paddedRow[4]);
                 $specification = quoteValue($paddedRow[5]);
                 $qty          = safeInt(quoteValue($paddedRow[6]));
-                $unit_price = is_numeric($paddedRow[7]) ? (int)$paddedRow[7] : null;
+                $unit_price = is_numeric(erpNum_erp($paddedRow[7])) ? (int)erpNum_erp($paddedRow[7]) : null;
                 $note         = quoteValue($paddedRow[8]);
 
                 // 4) Excel 沒有這兩欄，我們直接設 NULL
@@ -1009,6 +1012,18 @@ if (!function_exists('parseERPDate_erp')) {
         }
         if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) return $v;
         return null;
+    }
+}
+
+/**
+ * ERP 數值欄位正規化（唯一實作，數量／單價／金額一律先過這裡再判 is_numeric 或轉型）。
+ * ERP 報表匯出時數值欄常是「文字格式」，值長成「4,000.0」；直接 is_numeric() 會回 false
+ * （欄位就變成 null 或 0），直接 (int)/(float) 會在第一個逗號截斷（4,000→4）。兩種都不報錯。
+ */
+if (!function_exists('erpNum_erp')) {
+    function erpNum_erp($value) {
+        if ($value === null) return '';
+        return str_replace([',', '，', ' ', "\xC2\xA0"], '', trim((string)$value));
     }
 }
 
@@ -2470,7 +2485,7 @@ if (!function_exists('parseBomErpRows')) {
             $groups[$bom]['rows'][] = [
                 'process_no'     => (int)$process_no,
                 'maker_id_no'    => $g('生產單位'),
-                'sqty'           => is_numeric($sqty) ? (int)$sqty : null,
+                'sqty'           => is_numeric(erpNum_erp($sqty)) ? (int)erpNum_erp($sqty) : null,
                 'bom_sn'         => (int)$bom_sn,
                 'ps'             => $g('備註'),
             ];
@@ -2655,7 +2670,7 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Commit') {
 
         foreach ($groups as $bom => $grp) {
             $clientName = $customerByBom[$bom] ?? ($customerByDId[$grp['d_id']] ?? null);
-            $sqty       = is_numeric($grp['sqty']) ? (int)$grp['sqty'] : null;
+            $sqty       = is_numeric(erpNum_erp($grp['sqty'])) ? (int)erpNum_erp($grp['sqty']) : null;
 
             $bomExistsStmt->execute([$bom]);
             $bomExistsRow = $bomExistsStmt->fetch(PDO::FETCH_ASSOC);
@@ -2903,13 +2918,13 @@ if (!function_exists('parseTransferErpRows')) {
                 'bom_sn'       => (int)$bom_sn,
                 'process_no'   => (int)$process_no,
                 'maker_id_no'  => $maker_id_no,
-                'sqty'         => is_numeric($g('生產數量')) ? (int)$g('生產數量') : null,
+                'sqty'         => is_numeric(erpNum_erp($g('生產數量'))) ? (int)erpNum_erp($g('生產數量')) : null,
                 'move_date'    => $inDate,               // 預移入日＝實際移入日（進 outsource_date/Created_At）
                 'ps'           => bomErpCleanPs($g('備註')),
                 'changer_name' => $g('異動人員'),
                 'changed_ts'   => transferErpRocDate($g('異動日期時間')) ?? '0000-00-00 00:00:00',
                 'transfer_no'  => $g('加工單號'),        // I-系列加工單號，判定重複匯入vs重工覆蓋用
-                'unit_price'   => is_numeric($g('加工單價')) ? (float)$g('加工單價') : 0, // Phase C 發包單價
+                'unit_price'   => is_numeric(erpNum_erp($g('加工單價'))) ? (float)erpNum_erp($g('加工單價')) : 0, // Phase C 發包單價
             ];
             $key = $bom . '|' . $item['bom_sn'];
             if (isset($byKey[$key])) {
@@ -3209,7 +3224,7 @@ if (!function_exists('parseQuotationErpRows')) {
                     'client_id'     => $curClientId,
                     'client_name'   => $curClientName,
                     'currency'      => ($colI === '' || $colI === '台幣') ? 'TWD' : mb_substr($colI, 0, 10),
-                    'exchange_rate' => is_numeric($colJ) ? (float)$colJ : 1.0,
+                    'exchange_rate' => is_numeric(erpNum_erp($colJ)) ? (float)erpNum_erp($colJ) : 1.0,
                     'rows'          => [],
                 ];
             }

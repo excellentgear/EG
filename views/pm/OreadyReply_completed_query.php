@@ -2148,15 +2148,13 @@ $('#ocqAbClose, #ocqAbCancel').on('click', function(){
 });
 $('#ocqAbMask').on('click', function(e){ if (e.target === this && !ocqAb.running) ocqAbClose(); });
 
-$('#btnAutoBind').on('click', function(){
-    ocqAb = { scanned: false, autoBoms: [], sample: [], running: false, tab: 'auto', page: { manual: 1, nomatch: 1 } };
-    $('#ocqAbMask').show();
+// 掃描（試算）。開窗要跑、**綁定完也要再跑一次**——數字的真相在後端，不要在前端自己扣：
+// 綁定過程中可能有人同時在別的地方綁、也可能有筆數被略過，自己扣會跟資料庫對不起來。
+// $keepMsg＝綁定完成後重掃時不要蓋掉「完成：已綁定 N 筆」那句話。
+function ocqAbScan(keepMsg){
     $('#ocqAbScan').show();
     $('#ocqAbResult').hide();
-    ocqAbMsg('');
     $('#ocqAbRun').prop('disabled', true);
-    ocqAbSwitchTab('auto');
-
     var f = curFilters();
     f.action = 'autobind_scan';
     $.post('', f, function(res){
@@ -2173,8 +2171,18 @@ $('#btnAutoBind').on('click', function(){
         $('#ocqAbResult').show();
         ocqAbRenderAuto();
         $('#ocqAbRun').prop('disabled', !(c.auto > 0));
-        ocqAbMsg('範圍內還沒綁料號的共 <b>' + (res.total || 0) + '</b> 筆');
+        // 目前在哪個分頁就重畫哪個分頁（綁完之後「需人工判定」那份清單也可能變了）
+        if (ocqAb.tab === 'manual' || ocqAb.tab === 'nomatch') ocqAbLoadList(ocqAb.tab, 1);
+        if (!keepMsg) ocqAbMsg('範圍內還沒綁料號的共 <b>' + (res.total || 0) + '</b> 筆');
     }, 'json').fail(function(){ $('#ocqAbScan').hide(); ocqAbMsg('掃描失敗，請重新整理後再試', true); });
+}
+
+$('#btnAutoBind').on('click', function(){
+    ocqAb = { scanned: false, autoBoms: [], sample: [], running: false, tab: 'auto', page: { manual: 1, nomatch: 1 } };
+    $('#ocqAbMask').show();
+    ocqAbMsg('');
+    ocqAbSwitchTab('auto');
+    ocqAbScan(false);
 });
 
 function ocqAbSwitchTab(tab){
@@ -2233,7 +2241,10 @@ $('#ocqAbRun').on('click', function(){
             var msg = '完成：已綁定 <b>' + done + '</b> 筆';
             if (skipped.length) msg += '，略過 ' + skipped.length + ' 筆（多半是其他人已經先綁好了）';
             ocqAbMsg(msg);
-            loadList(curPage);   // 清單同步換成綁好的狀態
+            $('#ocqAbBar').hide();
+            $('#ocqAbBar > i').css('width', '0');
+            loadList(curPage);   // 後方清單同步換成綁好的狀態
+            ocqAbScan(true);     // 三張統計卡與抽樣清單也要重新跟後端要一次（keepMsg＝保留上面那句完成訊息）
             return;
         }
         var batch = todo.splice(0, 200);
@@ -2363,6 +2374,10 @@ $('#ocqAbMask').on('click', '.ocq-ab-pick', function(){
         $tr.find('td').eq(2).html('<span class="ocq-bind-ok" style="display:inline-block;"><i class="fa fa-check"></i> 已綁定 '
             + esc(res.d_id) + (res.client_name ? '／' + esc(res.client_name) : '') + '</span>');
         $btn.replaceWith('<span class="ocq-ab-sub">已完成</span>');
+        // 這一筆確定從「需人工判定」變成已綁定，卡片數字減 1（後端剛回報成功，這個扣是準的）。
+        // 這裡刻意**不**整份重掃——人工判定通常是連續做好幾筆，重畫會把清單捲回最上面打斷操作。
+        var $nm = $('#ocqAbNManual');
+        $nm.text(Math.max(0, (parseInt($nm.text(), 10) || 0) - 1));
         ocqAbMsg('已綁定 ' + esc(bom) + ' → ' + esc(res.d_id));
         loadList(curPage);
     }, 'json').fail(function(){
