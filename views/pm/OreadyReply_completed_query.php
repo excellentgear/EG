@@ -599,6 +599,42 @@ function ocq_ob_qty_default($bomQty, $o) {
     return ($bomQty > 0) ? min($bomQty, $left) : $left;
 }
 
+// 候選訂單除了「日期最接近的那幾張」，另外保證納入「製令開立日＋N 天以後」最早的幾張
+// （使用者要求：事後才補建的訂單不可以因為排序被切掉，不然那幾張永遠綁不到）
+const OCQ_OB_LATE_DAYS = 20;
+const OCQ_OB_LATE_KEEP = 4;
+
+/**
+ * 「自動建議綁定對象」的唯一判定（使用者 2026-09-21 定調，需人工判定清單與快速綁定跳窗共用）。
+ * 三個條件同時成立才建議：
+ *   ①**數量完全相同**（訂單量＝製令發單量）
+ *   ②**該訂單完全還沒被任何 BOM 分配過**——訂單量雖然相同，已經被分走一部分就不是乾淨的一對一，
+ *     照建議綁下去會直接超配
+ *   ③**製令開立日不晚於訂單日**（使用者指定的方向＝先開製令、訂單事後才補。實測資料兩種方向
+ *     都大量存在：數量相同的配對裡製令早於訂單 3,092 組、製令晚於訂單 6,856 組，所以方向不可以亂猜）
+ * 多張都符合時取「訂單日離製令開立日最近」的那一張。**製令日一律用編號回推的開立日**，
+ * 不可以用 closed_at（那是結案日）或 Created_At（那是 ERP 匯入時間）。
+ * 回傳 [Order_id, 理由字串]，沒有建議時回 [0, '']。
+ */
+function ocq_ob_suggest($bomQty, $bomIssueDate, array $cands) {
+    $bomQty = (int)$bomQty;
+    if ($bomQty <= 0 || !$bomIssueDate) return [0, ''];
+    $bestId = 0; $bestGap = null; $bestOrder = null;
+    foreach ($cands as $o) {
+        if ((int)$o['Qty'] !== $bomQty) continue;
+        if ((int)($o['already_allocated'] ?? 0) > 0) continue;
+        $od = substr((string)($o['Order_date'] ?? ''), 0, 10);
+        if ($od === '' || $od < $bomIssueDate) continue;          // 製令開立日要不晚於訂單日
+        $gap = (strtotime($od) - strtotime($bomIssueDate)) / 86400;
+        if ($bestGap === null || $gap < $bestGap) { $bestGap = $gap; $bestId = (int)$o['Order_id']; $bestOrder = $o; }
+    }
+    if (!$bestId) return [0, ''];
+    $why = '數量完全相同（' . $bomQty . '）、這張訂單還沒有被任何製令分配過，且製令開立日 '
+         . eg_fmt_date($bomIssueDate) . ' 不晚於訂單日 ' . eg_fmt_date(substr((string)$bestOrder['Order_date'], 0, 10))
+         . '（相差 ' . (int)$bestGap . ' 天）';
+    return [$bestId, $why];
+}
+
 /**
  * 判定一批 BOM 的訂單該怎麼綁。$rows 每列要有 bom / d_setting_id / sqty。
  * level：auto＝同料號底下只有一張訂單／manual＝好幾張要人工挑／nomatch＝這個料號底下沒有訂單。
@@ -664,20 +700,67 @@ function ocq_ob_classify($pdo, array $rows, $withCand = false, $candLimit = 8) {
         WHERE ot.d_id_ID = ? AND (ot.Order_status IS NULL OR ot.Order_status <> 9)
         ORDER BY ABS(DATEDIFF(COALESCE(ot.Order_date, ot.Delivery_date), ?)) ASC, ot.Order_id DESC
         LIMIT " . $fetchLimit);
+    // **另外補撈「製令開立日＋20 天以後」的訂單**（使用者要求）：上面那支是取「日期最接近的」，
+    // 事後好一陣子才補建的訂單永遠排在後面、會被整批切掉，那正是這頁最需要補綁的一種
+    // （先開製令、訂單事後才來）。取超過那條線之後**最早的幾張**，才會落在製令完工後最近的那一段。
+    $lateDays = OCQ_OB_LATE_DAYS;
+    $stLate = $pdo->prepare("SELECT " . ocq_ob_order_cols() . " FROM order_track ot
+        WHERE ot.d_id_ID = ? AND (ot.Order_status IS NULL OR ot.Order_status <> 9)
+          AND ot.Order_date >= DATE_ADD(?, INTERVAL " . (int)$lateDays . " DAY)
+        ORDER BY ot.Order_date ASC, ot.Order_id ASC LIMIT " . (int)OCQ_OB_LATE_KEEP);
     foreach ($rows as $r) {
         $bom = $r['bom'];
         if (($out[$bom]['level'] ?? '') !== 'manual') continue;
+        $issue = substr((string)($r['bom_date'] ?? $r['eff_date'] ?? ''), 0, 10);   // 製令開立日（編號回推）
         $st->execute([(int)$r['d_setting_id'], $r['eff_date'] ?? date('Y-m-d')]);
         $got = $st->fetchAll(PDO::FETCH_ASSOC);
-        $avail = []; $full = 0;
-        foreach ($got as $o) {
+        $late = [];
+        if ($issue !== '') { $stLate->execute([(int)$r['d_setting_id'], $issue]); $late = $stLate->fetchAll(PDO::FETCH_ASSOC); }
+        // 濾掉已經被其他 BOM 分配滿的
+        // **「事後補建」一律用日期判定，不可以用「有沒有落在最近那批裡」**——那批本來就常常
+        // 涵蓋得到它們，只是顯示時又被更接近的擠掉，於是一張都標不出來（第一版就是這樣，
+        // 實測 20 列一張都沒有）。
+        $lateLine = ($issue !== '') ? date('Y-m-d', strtotime($issue . ' +' . (int)$lateDays . ' day')) : '';
+        $avail = []; $full = 0; $seen = [];
+        foreach (array_merge($got, $late) as $o) {
+            $oid = (int)$o['Order_id'];
+            if (isset($seen[$oid])) continue;
+            $seen[$oid] = 1;
             if ((int)$o['Qty'] - (int)$o['already_allocated'] <= 0) { $full++; continue; }
             $o['qty_default'] = ocq_ob_qty_default($r['sqty'] ?? 0, $o);
+            $od = substr((string)$o['Order_date'], 0, 10);
+            $o['is_late'] = ($lateLine !== '' && $od !== '' && $od >= $lateLine) ? 1 : 0;
             $avail[] = $o;
         }
-        $out[$bom]['candidates'] = array_slice($avail, 0, (int)$candLimit);
-        $out[$bom]['cand_full']  = $full;          // 這個範圍內被濾掉幾張（畫面只寫一行小字交代）
-        $out[$bom]['cand_avail'] = count($avail);
+        list($sugId, $sugWhy) = ocq_ob_suggest($r['sqty'] ?? 0, $issue, $avail);
+        // 組出要顯示的候選：①建議那張永遠排第一 ②日期最接近的幾張 ③事後補建的最早幾張
+        $nearList = []; $lateList = [];
+        foreach ($avail as $o) { if (empty($o['is_late'])) $nearList[] = $o; else $lateList[] = $o; }
+        usort($lateList, function ($a, $b) {   // 事後補建的取「過了那條線之後最早的」
+            return strcmp((string)$a['Order_date'], (string)$b['Order_date']) ?: ((int)$a['Order_id'] <=> (int)$b['Order_id']);
+        });
+        $pick = []; $taken = []; $nearN = 0; $lateN = 0;
+        foreach ($avail as $o) {
+            if ((int)$o['Order_id'] !== $sugId) continue;
+            $o['suggest'] = 1; $o['suggest_why'] = $sugWhy;
+            $pick[] = $o; $taken[(int)$o['Order_id']] = 1;
+            if (empty($o['is_late'])) $nearN++; else $lateN++;
+        }
+        foreach ($nearList as $o) {
+            $oid = (int)$o['Order_id'];
+            if (isset($taken[$oid]) || $nearN >= (int)$candLimit) continue;
+            $pick[] = $o; $taken[$oid] = 1; $nearN++;
+        }
+        foreach ($lateList as $o) {
+            $oid = (int)$o['Order_id'];
+            if (isset($taken[$oid]) || $lateN >= (int)OCQ_OB_LATE_KEEP) continue;
+            $pick[] = $o; $taken[$oid] = 1; $lateN++;
+        }
+        $out[$bom]['candidates']  = $pick;
+        $out[$bom]['cand_full']   = $full;         // 這個範圍內被濾掉幾張（畫面只寫一行小字交代）
+        $out[$bom]['cand_avail']  = count($avail);
+        $out[$bom]['suggest_id']  = $sugId;
+        $out[$bom]['bom_issue']   = $issue;
     }
     return $out;
 }
@@ -1051,6 +1134,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     return strcmp((string)$b['Order_date'], (string)$a['Order_date'])
                         ?: ((int)$b['Order_id'] <=> (int)$a['Order_id']);
                 });
+                // 系統建議的那一張（與需人工判定清單同一支判定，兩邊不會給出不同建議）。
+                // **建議要用製令「開立日」＝編號回推，不是上面那個 $refDate**（它 closed_at 優先＝結案日）。
+                $iss = $pdo->prepare("SELECT STR_TO_DATE(CONCAT(
+                        CAST(SUBSTRING(SUBSTRING_INDEX(b.bom,'-',-1),1,3) AS UNSIGNED) + 1911, '-',
+                        SUBSTRING(SUBSTRING_INDEX(b.bom,'-',-1),4,2), '-',
+                        SUBSTRING(SUBSTRING_INDEX(b.bom,'-',-1),6,2)), '%Y-%m-%d') FROM bom b WHERE b.bom = ?");
+                $iss->execute([$state['bom']]);
+                $issueDate = $iss->fetchColumn() ?: '';
+                list($sugId, $sugWhy) = ocq_ob_suggest($state['sqty'] ?? 0, $issueDate, $orders);
+                foreach ($orders as &$_o) {
+                    $_o['suggest']     = ((int)$_o['Order_id'] === $sugId) ? 1 : 0;
+                    $_o['suggest_why'] = $_o['suggest'] ? $sugWhy : '';
+                }
+                unset($_o);
             }
             echo json_encode(['success' => true, 'state' => $state, 'orders' => $orders,
                 'can_part' => $ocq_can_bind_part, 'can_order' => $ocq_can_bind_order]);
@@ -1286,7 +1383,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 試算：只看不寫。範圍＝篩選條件內「已綁料號、還沒綁訂單」的 BOM。
             list($whereSql, $params) = ocq_ob_where($_POST);
             $st = $pdo->prepare("SELECT b.bom, b.d_id, b.d_setting_id, b.sqty, b.Client_Name,
-                    DATE_FORMAT($OCQ_EFFDATE,'%Y-%m-%d') AS eff_date $OCQ_FROM $whereSql
+                    DATE_FORMAT($OCQ_EFFDATE,'%Y-%m-%d') AS eff_date,
+                    DATE_FORMAT($OCQ_BOMDATE,'%Y-%m-%d') AS bom_date $OCQ_FROM $whereSql
                 ORDER BY $OCQ_EFFDATE DESC, b.bom DESC");
             $st->execute($params);
             $rows = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -1316,7 +1414,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $page = max(1, intval($_POST['page'] ?? 1));
             $per  = 20;
             $st = $pdo->prepare("SELECT b.bom, b.d_id, b.d_setting_id, b.sqty, b.Client_Name,
-                    DATE_FORMAT($OCQ_EFFDATE,'%Y-%m-%d') AS eff_date $OCQ_FROM $whereSql
+                    DATE_FORMAT($OCQ_EFFDATE,'%Y-%m-%d') AS eff_date,
+                    DATE_FORMAT($OCQ_BOMDATE,'%Y-%m-%d') AS bom_date $OCQ_FROM $whereSql
                 ORDER BY $OCQ_EFFDATE DESC, b.bom DESC");
             $st->execute($params);
             $rows = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -1336,11 +1435,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'bom_client' => trim((string)$r['Client_Name']), 'eff_date' => $r['eff_date'],
                     'reason' => $c['reason'] ?? '', 'cand_total' => $c['cand_total'] ?? count($c['candidates'] ?? []),
                     'cand_full' => (int)($c['cand_full'] ?? 0), 'cand_avail' => (int)($c['cand_avail'] ?? 0),
+                    'bom_issue' => $c['bom_issue'] ?? '', 'late_days' => OCQ_OB_LATE_DAYS,
                     'candidates' => array_map(function ($o) {
                         return ['order_id' => (int)$o['Order_id'], 'order_oo' => $o['Order_oo'],
                             'order_date' => $o['Order_date'], 'delivery_date' => $o['Delivery_date'],
                             'qty' => (int)$o['Qty'], 'used' => (int)$o['already_allocated'],
                             'qty_default' => (int)$o['qty_default'],
+                            'suggest' => !empty($o['suggest']) ? 1 : 0, 'suggest_why' => (string)($o['suggest_why'] ?? ''),
+                            'is_late' => !empty($o['is_late']) ? 1 : 0,
                             'spec' => trim($o['Specification'] . ($o['Order_ps'] !== '' ? '／' . $o['Order_ps'] : ''))];
                     }, $c['candidates'] ?? [])];
             }
@@ -1813,6 +1915,7 @@ try {
         table.ocq-pick tbody tr.hit { background: #EDF7EC; }
         table.ocq-pick tbody tr.ord-full { background: #FBE7E1; }
         table.ocq-pick tbody tr.ord-full.hit { background: #F3EDD9; }
+        table.ocq-pick tbody tr.ord-sug { background: #FBF3E2; }
         .ocq-pick-wrap { max-height: 46vh; overflow: auto; border: 1px solid #E8D5B5; border-radius: 4px; }
         .ocq-pick-qty { width: 72px; height: 24px; font-size: 12px; padding: 0 4px; border: 1px solid #D8BE93; border-radius: 3px; text-align: right; }
         .ocq-bind-err { color: #DD5138; font-size: 12.5px; margin-top: 6px; line-height: 1.7; }
@@ -1852,6 +1955,12 @@ try {
         /* 已被別的 BOM 分配滿的候選訂單：不停用（現場偶爾真的要超配），但一定要一眼看得出來 */
         .ocq-ab-cand.cand-full { background: #FBE7E1; border-color: #E0B9AC; }
         .ocq-cand-full { color: #B4543B; }
+        /* 系統建議的那一張（數量完全相同＋製令開立日不晚於訂單日）——只是建議，仍要自己勾 */
+        .ocq-ab-cand.cand-sug { background: #FBF3E2; border-color: #E2B563; }
+        .ocq-cand-sug { color: #A0651F; }
+        .ocq-cand-late { display: inline-block; font-size: 10px; line-height: 16px; padding: 0 5px;
+            border: 1px solid #D8BE93; border-radius: 3px; background: #fff; color: #8a6d45; }
+        .ocq-sug-why { color: #A0651F; margin: 1px 0 0 18px; }
         .ocq-ab-cand input { margin-right: 5px; }
         .ocq-ab-cand .cm-same { color: #2f7a3f; font-weight: bold; }
         .ocq-ab-cand .cm-diff { color: #B4543B; }
@@ -2040,6 +2149,8 @@ try {
             <li><b>③綁報價單</b>：報價單是綁在<b>訂單</b>上的（不是 BOM），所以這一階處理的是「範圍內的 BOM 綁到的訂單裡還沒綁報價單的」。候選＝<b>報價明細的料號與訂單料號完全相同</b>的報價單（草稿與待審核的不列入）；只有一筆時自動綁，多筆時依「<b>報價日不晚於訂單日、且日期最接近</b>」排序，第一筆會標「建議：下單當時的報價」。</li>
             <li>兩個階段都可以<b>逐筆按「套用」，也可以勾選起來一次全部套用</b>；挑好候選會自動幫你勾起該列。已經被別人綁走的一律擋下、不覆蓋。</li>
             <li><b>候選只列「還有量可以分」的訂單</b>：已經被其他 BOM 分配滿的一律不列出來（列出來只會把真正可以挑的那幾張淹掉）；被排除幾張會寫在候選下方一行小字。真的要綁一張已經分配滿的訂單，請用清單上的<b>「綁訂單」</b>逐筆處理，那邊會全部列出來並標示哪幾張已滿。</li>
+            <li><b>「★ 建議」是系統挑出來的最可能對象，但不會替你勾、更不會自動綁</b>。三個條件要同時成立：①<b>數量完全相同</b>（訂單量＝製令發單量）②<b>這張訂單完全還沒被任何製令分配過</b>（被分走一部分就不是乾淨的一對一，照綁會超配）③<b>製令開立日不晚於訂單日</b>（先開製令、訂單事後才補的那種）。好幾張都符合時取訂單日離製令開立日最近的那一張，理由會寫在候選底下。<b>製令日一律用製令編號回推的開立日</b>，不是結案日、也不是 ERP 匯入時間。</li>
+            <li><b>「事後補建」標籤</b>：訂單日在製令開立日 20 天以後才建立的訂單。候選原本是照「日期最接近」取的，這種事後很久才補的訂單一定排在後面、會被整批切掉而永遠綁不到，所以另外保證列出最早的幾張。</li>
             <li><b>綁完訂單後，畫面上其他還沒判定的列會自動更新</b>：同一個料號的好幾筆 BOM 會排在一起、而且共用同一批候選訂單，綁完第一筆之後其餘各列的「已分配／未分配」會立刻重查更新，<b>剛被分配滿的那張訂單會直接從其他列的候選中移除</b>，避免照著舊數字把同一張訂單再分配一次。只有「你已經勾起來」的候選不會被抽掉（會改標紅提醒），免得按下套用才發現自己挑的東西不見了。已經判定完成的列與捲動位置不會被洗掉（不是整份重載）。</li>
         </ul>
         <?php endif; ?>
@@ -2844,9 +2955,10 @@ function ocqBindRenderOrders(){
         var left = Math.max(0, qty - used);
         // 規則與後端 ocq_ob_qty_default() 一致：已經被別的 BOM 分配滿就預設 0，不預先幫人再超配一次
         var pre  = (left <= 0) ? 0 : (bomQty > 0 ? Math.min(bomQty, left) : left);
-        h += '<tr data-oid="' + o.Order_id + '"' + (left <= 0 ? ' class="ord-full"' : '') + '>'
+        h += '<tr data-oid="' + o.Order_id + '" class="' + (left <= 0 ? 'ord-full' : '') + (o.suggest ? ' ord-sug' : '') + '">'
            + '<td><input type="checkbox" class="ocq-ock" data-oid="' + o.Order_id + '"></td>'
            + '<td class="tl"><b>' + esc(o.Order_oo || ('#'+o.Order_id)) + '</b>'
+           + (o.suggest ? ' <b class="ocq-cand-sug" title="' + esc(o.suggest_why || '') + '">★ 建議</b>' : '')
            + (left <= 0 ? ' <b class="ocq-cand-full">⚠ 已分配滿</b>' : '') + '</td>'
            + '<td>' + esc(o.Order_date ? egFmtDate(o.Order_date) : '') + '</td>'
            + '<td>' + esc(o.Delivery_date ? egFmtDate(o.Delivery_date) : '') + '</td>'
@@ -3812,12 +3924,17 @@ if (OCQ_BIND.order) {
                 // 候選一律是「還有量可以分」的（已被其他 BOM 分配滿的後端就不送了）；
                 // .ofull 先留空，綁定後的即時刷新才會用到它
                 (r.candidates || []).forEach(function(o){
-                    h += '<label class="ocq-ab-cand" data-oid="' + o.order_id + '"><input type="checkbox" class="abo-ck" value="' + o.order_id + '" data-oo="' + esc(o.order_oo) + '">'
+                    h += '<label class="ocq-ab-cand' + (o.suggest ? ' cand-sug' : '') + '" data-oid="' + o.order_id + '">'
+                       + '<input type="checkbox" class="abo-ck" value="' + o.order_id + '" data-oo="' + esc(o.order_oo) + '">'
                        + '<b>' + esc(o.order_oo) + '</b>'
+                       + (o.suggest ? ' <b class="ocq-cand-sug" title="' + esc(o.suggest_why || '') + '">★ 建議</b>' : '')
+                       + (o.is_late ? ' <span class="ocq-cand-late" title="訂單日在製令開立日 ' + esc(r.late_days || 20)
+                            + ' 天以後才建立；這種事後補的訂單照「日期最接近」排序會被切掉，所以另外列出來">事後補建</span>' : '')
                        + '<span class="ocq-ab-sub">　訂單日 ' + esc(o.order_date ? egFmtDate(o.order_date) : '—')
                        + '　交期 ' + esc(o.delivery_date ? egFmtDate(o.delivery_date) : '—')
                        + '<span class="oalloc">' + ocqObAllocHtml(o.qty, o.used) + '</span>'
                        + (o.spec ? '　' + esc(o.spec) : '') + '</span>'
+                       + (o.suggest ? '<div class="ocq-ab-sub ocq-sug-why">' + esc(o.suggest_why || '') + '</div>' : '')
                        + '<span class="ofull"></span>'
                        + '　分配量 <input type="number" class="ocq-pick-qty oqty" data-oid="' + o.order_id + '" min="0" value="' + o.qty_default + '" onclick="event.preventDefault();event.stopPropagation();">'
                        + '</label>';
