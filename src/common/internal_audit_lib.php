@@ -485,6 +485,10 @@ function ia_ensure_schema(PDO $db): void
             /* 糾正／預防措施的完成日期（2026-09-21 使用者要求）：原本只有一個 textarea，
                日期跟文字混在同一段裡打，格式五花八門、也沒辦法拿來做到期提醒。
                文字欄位保留不動（措施內容還是要寫），日期另外存成 DATE。 */
+            /* 稽核員的「是以哪個職務」（2026-09-21 使用者要求：稽核員可由管理員更換）。
+               只存 auditor_id 的話，兼任的人每次重開下拉會選到不同的職務，圖章職稱也跟著跳。 */
+            ['ia_nc',        'auditor_dept_id',     "INT NULL COMMENT '稽核員當時的部門（職務鍵）'"],
+            ['ia_nc',        'auditor_position_id', "INT NULL COMMENT '稽核員當時的職稱（職務鍵）'"],
             ['ia_nc',        'corrective_due',      "DATE NULL COMMENT '糾正措施完成日期'"],
             ['ia_nc',        'preventive_due',      "DATE NULL COMMENT '預防措施預計完成日期'"],
             ['ia_attach',    'section',             "VARCHAR(10) NULL COMMENT 'IA 單的段別 sec1/sec2/sec3'"],

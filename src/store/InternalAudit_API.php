@@ -1631,6 +1631,29 @@ case 'nc_save_sec1': {
                 jerr('受審核人只能從「' . ($n['dept_name'] ?: '受稽核單位') . '」的主管中選擇');
         }
     }
+    /* 稽核員可由內稽管理員更換（2026-09-21 使用者要求）：管理員代別人開單時，稽核員原本會被
+       自動填成按下按鈕的那個人＝管理員自己，但那張單實際上不是他去稽核的。
+       ①只有 canAdmin 動得了（前端也只讓管理員的下拉可用，這裡再擋一次＝鐵律8）
+       ②候選一律過 ia_resolve_post(...,'auditor')：必須是**該職務**真的有稽核員資格的人
+       ③依這張單的稽核日期回推當時的資格與職稱（ai-rules/22）
+       ④沒送這個參數（舊呼叫端）或送空字串＝不動原本的稽核員，不會被洗成空的 */
+    $audSet = [];
+    if (array_key_exists('auditor_key', $_POST)) {
+        $ak = trim((string)$_POST['auditor_key']);
+        $curKey = ia_post_key((int)($n['auditor_id'] ?? 0), $n['auditor_dept_id'] ?? 0, $n['auditor_position_id'] ?? 0);
+        if ($ak !== '' && $ak !== $curKey) {
+            if (!$perms['canAdmin']) jerr('只有內稽管理員可以更換稽核員', 403);
+            $ap = ia_resolve_post($db, $ak, 'auditor', (string)($n['audit_date'] ?? ''));
+            if (!$ap) jerr('稽核員只能從「設定為稽核員／稽核組長」的人員中選擇（且要有該職務的資格）');
+            $audSet = [$ap['user_id'], $ap['user_name'], $ap['dept_id'], $ap['position_id']];
+        }
+    }
+    if ($audSet) {
+        $db->prepare("UPDATE ia_nc SET auditor_id=?, auditor_name=?, auditor_dept_id=?, auditor_position_id=?
+                       WHERE nc_id=?")->execute([$audSet[0], $audSet[1], $audSet[2], $audSet[3], $id]);
+        ia_nc_log_add($db, $id, (string)$n['stage'], 'edit', $uid, $uname,
+                      '更換稽核員為 ' . $audSet[1] . '（原為 ' . ($n['auditor_name'] ?: '未指定') . '）');
+    }
     $db->prepare("UPDATE ia_nc SET fact=?, nc_type=?, clause_ref=?, due_date=?, ref_form_no=?,
                       auditee_id=?, auditee_name=?, updated_at=NOW() WHERE nc_id=?")
        ->execute([$fact, $type, mb_substr(trim((string)($_POST['clause_ref'] ?? '')), 0, 300) ?: null, $due,

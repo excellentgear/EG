@@ -178,6 +178,12 @@ $roleLabel = ia_role_label($perms);
         .ia-form { display:grid; grid-template-columns:110px 1fr 110px 1fr; gap:8px 10px; align-items:center; font-size:13px; color:#5b3a1e; }
         .ia-form .full { grid-column:2 / span 3; }
         .ia-form .fullrow { grid-column:1 / span 4; }
+        /* 措施內容 ＋ 它自己的完成日期並排一列（2026-09-21 使用者要求：日期要在措施右側，
+           標題不可以被擠到隔壁格去）。.with-due 掛在 .full 上，所以整列從第 2 欄一路用到底。 */
+        .ia-form .with-due { display:flex; gap:10px; align-items:flex-start; }
+        .ia-form .with-due > .wd-main { flex:1 1 auto; min-width:0; }   /* min-width:0 才不會被 textarea 撐開 */
+        .ia-form .with-due > .wd-due  { flex:0 0 200px; }
+        .ia-form .with-due .wd-lab { font-size:12px; color:#6b5535; margin-bottom:3px; white-space:nowrap; }
         .ia-form label { margin:0; text-align:right; color:#6b5535; }
         .ia-form input[type=text], .ia-form input[type=date], .ia-form select, .ia-form textarea {
             width:100%; border:1px solid #D8BE93; border-radius:4px; padding:4px 8px; font-size:13px; color:#5b3a1e; background:#fff; }
@@ -563,7 +569,7 @@ $roleLabel = ia_role_label($perms);
         <ul>
             <li><b>段一 稽核員填</b>：不合格事實描述、不合格類型（主要／次要／觀察）、違反條文、要求完成期限。</li>
             <li><b>段二 受稽單位填</b>：原因分析、糾正措施＋<b>完成時間</b>、預防措施＋<b>預計完成時間</b>、責任主管。
-                兩個日期都是<b>獨立的日期欄（點月曆選）</b>，不要再打在措施內容裡，送出時兩個都必填。
+                兩個日期都是<b>獨立的日期欄（點月曆選，就在各自措施內容的右側）</b>，不要再打在措施內容裡，送出時兩個都必填。
                 填完按「送出回覆」才會進到下一段。<b>稽核員／內稽管理員可以代填</b>（對方不方便用電腦、或補歷史紙本時），代填會在下方歷程留下紅字紀錄。</li>
             <li><b>段三 稽核組長填</b>：糾正和預防措施執行狀況驗證描述、驗證通過或不通過。<b>不通過會退回段二</b>並重新通知受稽單位。</li>
             <li><b>段四 管理代表填</b>：管理代表意見，按「結案」本單結束、通知受稽單位。</li>
@@ -649,6 +655,9 @@ $roleLabel = ia_role_label($perms);
             <li><b>稽核員與陪檢員怎麼帶</b>：選了範本之後，該列的稽核員／陪檢員下拉會縮到範本指定的部門範圍內、且只列有資格的職務；<b>候選只有一位就自動帶入</b>。系統<b>先決定稽核員</b>，陪檢員的候選會自動排除稽核員本人（同一人不可兩邊都當，即使是不同職務）。<b>陪檢員可以不填</b>。</li>
             <li><b>稽核員／陪檢員都可以有多位</b>（2026-08-27 起）：已選的人會變成一個個標籤，按標籤上的 <b>×</b> 移除、用下方的「＋加入稽核員／＋加入陪檢員」再加人，<b>每一種最多 <?= IA_CD_PERSON_MAX ?> 位</b>。已經被選走的人（不管在哪一邊）不會再出現在候選裡，所以不會不小心把同一個人排成兩種身分。列印版的稽核員／陪檢員欄會一位一行印出來；自動建會議紀錄時，<b>全部</b>稽核員與陪檢員都會被帶進與會人員。</li>
             <li><b>受審查單位主管是誰，依稽核日期回推當時的職務</b>（不是現在的職務），所以補去年的舊單不會蓋到今年才上任的人。查不到當時的主管時寧可留白，不會亂帶人。</li>
+            <li><b>稽核員可以由內稽管理員更換</b>（段一最下面那一欄）：管理員代別人開單時，稽核員原本會被自動填成按下按鈕的人＝管理員自己，
+                但那張單實際上不是他去稽核的。候選只列<b>設定為稽核員／稽核組長</b>的人（依稽核日期回推當時的資格與職稱）；
+                一般稽核員看得到這一欄但改不動，原本掛著的人即使現在已無資格也會保留在選項裡。換人會留在下方的填寫歷程。</li>
             <li><b>受稽核人／受審查單位主管／責任主管三個下拉只列「該單位的主管」</b>，不是全公司的人：
                 前兩個依<b>受稽核單位</b>決定，<b>責任主管</b>則依<b>受審查單位主管所在的部門</b>決定（換了主管，責任主管的名單就跟著換，欄位旁會寫目前是哪個部門）。
                 名單一律<b>依稽核日期回推當時在職的人與當時的職稱</b>。
@@ -1100,7 +1109,10 @@ $roleLabel = ia_role_label($perms);
                 <label>相關表單編號</label><div><input type="text" id="nFormNo" placeholder="例 2-SM-02-01"></div>
                 <label>違反條文</label><div class="full"><input type="text" id="nClause" placeholder="例 8.3.3設計與開發的輸入 d)組織承諾採用的標準及規範"></div>
                 <label>要求完成期限</label><div><input type="date" id="nDue"><div class="err-msg" id="errNDue"></div></div>
-                <label>稽核員</label><div><input type="text" id="nAuditor" readonly></div>
+                <label>稽核員</label>
+                <div><select id="nAuditor" data-eg-filter="輸入人員姓名篩選…"></select>
+                     <span id="nAuditorNote" style="font-size:12px;color:#8a6d45;"></span>
+                     <div class="err-msg" id="errNAuditor"></div></div>
             </div>
             <div class="ia-att" id="ncAttsec1" data-sec="sec1">
                 <div class="ia-att-h">佐證附件（不合格事實） <em>（可附照片、掃描檔、Excel／PDF，單檔 20MB 以內）</em></div>
@@ -1127,13 +1139,17 @@ $roleLabel = ia_role_label($perms);
                 <label>原因分析<span style="color:#DD5138;">*</span></label>
                 <div class="full"><textarea id="nCause"></textarea><div class="err-msg" id="errNCause"></div></div>
                 <label>糾正措施<span style="color:#DD5138;">*</span></label>
-                <div class="full"><textarea id="nCorr"></textarea><div class="err-msg" id="errNCorr"></div></div>
-                <label>完成時間<span style="color:#DD5138;">*</span></label>
-                <div><input type="date" id="nCorrDue"><div class="err-msg" id="errNCorrDue"></div></div>
+                <div class="full with-due">
+                    <div class="wd-main"><textarea id="nCorr"></textarea><div class="err-msg" id="errNCorr"></div></div>
+                    <div class="wd-due"><div class="wd-lab">完成時間<span style="color:#DD5138;">*</span></div>
+                         <input type="date" id="nCorrDue"><div class="err-msg" id="errNCorrDue"></div></div>
+                </div>
                 <label>預防措施<span style="color:#DD5138;">*</span></label>
-                <div class="full"><textarea id="nPrev"></textarea><div class="err-msg" id="errNPrev"></div></div>
-                <label>預計完成時間<span style="color:#DD5138;">*</span></label>
-                <div><input type="date" id="nPrevDue"><div class="err-msg" id="errNPrevDue"></div></div>
+                <div class="full with-due">
+                    <div class="wd-main"><textarea id="nPrev"></textarea><div class="err-msg" id="errNPrev"></div></div>
+                    <div class="wd-due"><div class="wd-lab">預計完成時間<span style="color:#DD5138;">*</span></div>
+                         <input type="date" id="nPrevDue"><div class="err-msg" id="errNPrevDue"></div></div>
+                </div>
                 <label>責任主管</label>
                 <div><select id="nResp" data-eg-filter="輸入人員姓名篩選…"></select>
                      <span id="nRespNote" style="font-size:12px;color:#8a6d45;"></span></div>
@@ -4191,7 +4207,7 @@ function openNc(id){
                            + (+NC.overdue ? '（已逾期）' : ''));
         // 段一
         $('#nNo').val(NC.nc_no||''); $('#nAuditDate').val(dispDate(NC.audit_date));
-        $('#nDept').val(NC.dept_name||''); $('#nAuditor').val((NC.auditor_name||'')+'　'+dispDate(NC.auditor_date));
+        $('#nDept').val(NC.dept_name||''); fillNcAuditor();
         $('#nAuditee').html(candOptions((NC.cands||{}).auditee, NC.auditee_id, NC.auditee_name));
         $('#nFact').val(NC.fact||''); $('#nFormNo').val(NC.ref_form_no||'');
         $('#nClause').val(NC.clause_ref||''); $('#nDue').val(inputDate(NC.due_date));
@@ -4222,6 +4238,12 @@ function openNc(id){
         lockSec('#ncSec2', p.sec2, '#ncSec2Lock', '只有受稽單位／稽核員代填');
         lockSec('#ncSec3', p.sec3, '#ncSec3Lock', NC.stage==='issued' ? '要等受稽單位送出回覆' : '只有稽核組長／稽核員能填');
         lockSec('#ncSec4', p.sec4, '#ncSec4Lock', '只有內稽管理員（管理代表）能填');
+        /* 稽核員只有「內稽管理員」改得動（2026-09-21 使用者要求）。
+           起因：管理員代別人開單時，稽核員會被自動填成按下按鈕的人＝管理員自己，
+           而那張單實際上不是他去稽核的。一般稽核員看得到欄位但不能改，並寫明原因。
+           ※ 一定要放在 lockSec() 之後——lockSec 會把整段的 select 一起停用，先設會被它蓋掉。 */
+        $('#nAuditor').prop('disabled', !(p.sec1 && IS_ADMIN));
+        $('#nAuditorNote').text(!p.sec1 ? '' : (IS_ADMIN ? '　可改（限內稽管理員）' : '　只有內稽管理員能更換稽核員'));
         $('#ncProxyNote').toggle(!!(p.sec2 && p.proxy));
         $('#btnNcDelete').toggle(!!p.del);
         $('#btnNcResend').toggle(NC.stage!=='closed' && <?= $perms['canAudit'] ? 'true' : 'false' ?>);
@@ -4284,6 +4306,26 @@ $('#nHead').on('change', function(){
         fillRespCands(res, keep, keep ? NC.resp_name : '');
     });
 });
+/* 稽核員下拉（2026-09-21 使用者要求：管理員代填時不要自動變成稽核員）。
+   ①候選就是「設定為稽核員／稽核組長的人」——`META.auditors` 是 ia_qualified_posts(auditor)，
+     稽核通知單上的稽核組長本來就是從同一份名單挑的，所以不必另外湊一份。
+   ②資格與職稱一律依**這張單的稽核日期**回推（ai-rules/22），否則補舊單時當時有資格的人挑不到。
+   ③原本掛在這張單上的那一位即使已不在候選清單也一定要留著，不然光是改一行字存檔就會把人洗掉。 */
+function fillNcAuditor(){
+    var curKey = postKeyOf(NC.auditor_id, NC.auditor_dept_id, NC.auditor_position_id);
+    peopleAsof(NC.audit_date, function(){
+        var h = postOptions(META.auditors, curKey, NC.auditor_id, '（未指定）');
+        if (NC.auditor_id && h.indexOf('value="' + esc(curKey) + '"') < 0
+            && h.indexOf('value="' + NC.auditor_id + ':') < 0) {
+            h = h.replace('</option>',
+                '</option><option value="' + esc(curKey) + '" selected>'
+                + esc((NC.auditor_name || '') + '（原稽核員，目前已不在稽核員名單）') + '</option>');
+        }
+        $('#nAuditor').html(h);
+        var el = document.getElementById('nAuditor');
+        if (el && typeof el.egFilterResnap === 'function') el.egFilterResnap();
+    });
+}
 function lockSec(sel, allow, lockSel, why){
     var $s = $(sel);
     $s.toggleClass('locked', !allow);
@@ -4370,7 +4412,8 @@ $('#btnNcSaveSec1').on('click', function(){
     if (!ok) return;
     $.post(API, {action:'nc_save_sec1', nc_id:NC.nc_id, fact:$('#nFact').val(), nc_type:$('#nType').val(),
         clause_ref:$('#nClause').val(), due_date:due, ref_form_no:$('#nFormNo').val(),
-        auditee_id:$('#nAuditee').val()}, function(res){
+        auditee_id:$('#nAuditee').val(),
+        auditor_key:($('#nAuditor').prop('disabled') ? '' : ($('#nAuditor').val()||''))}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         alert('已儲存'); openNc(NC.nc_id); loadNcs();
     }, 'json');
