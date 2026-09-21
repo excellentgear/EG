@@ -29,7 +29,10 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
             : ($perms['canGm'] ? '最終決策者' : ($perms['canDecide'] ? '決策主管'
             : ($perms['canCreate'] ? '開單／填寫' : ($perms['canView'] ? '檢閱' : '無權限')))));
 $thisYear = (int)date('Y');
-$years = qab_years($db);               // 年度下拉只列真的有資料的年度
+$years = qab_years($db);               // 年度下拉只列真的有資料的年度（由新到舊）
+/* 預設停在「最新有資料的那一年」（使用者要求）——今年還沒有任何單時，
+   預設今年會看到空白清單，那看起來像資料不見了。今年仍留在選單裡可以切過去。 */
+$defYear = $years ? (int)$years[0] : $thisYear;
 if (!in_array($thisYear, $years, true)) array_unshift($years, $thisYear);
 $backfillDays = qab_backfill_days($db);
 ?>
@@ -152,7 +155,7 @@ $backfillDays = qab_backfill_days($db);
                     <select id="fYear">
                         <option value="">全部</option>
                         <?php foreach ($years as $y): ?>
-                        <option value="<?= $y ?>" <?= $y === $thisYear ? 'selected' : '' ?>><?= $y ?></option>
+                        <option value="<?= $y ?>" <?= $y === $defYear ? 'selected' : '' ?>><?= $y ?></option>
                         <?php endforeach; ?>
                     </select></div>
                 <div class="fg"><label>月份</label>

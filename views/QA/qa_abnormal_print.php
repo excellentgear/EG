@@ -184,6 +184,7 @@ table.f td.t { vertical-align:top; }
 /* 特異度要壓得過上面的 `table.f th, table.f td{border:1px}`，不然寫了沒有作用 */
 table.f td.nobr { border-right:0; }
 table.f td.nobt { border-top:0; }        /* 裁示說明與矯正單號之間不畫線（紙本是連著的一格） */
+table.f tr.signrow td { height:15mm; }   /* 蓋章框：沒有人簽時也要看得到框、留得下章 */
 table.f td.sig.nobl { border-left:0; }
 .note { font-size:10px; margin-top:3px; }
 .small { font-size:10px; color:#333; }
@@ -194,9 +195,12 @@ table.ask .askbd { font-size:10px; line-height:1.35; }
    注意 `table.ask` 本身就是 `table.f.ask`，寫成 `table.f table.ask` 永遠match不到（踩過一次）。 */
 table.f.ask td.sig { border-left:0; }
 table.ask td.askbody { border-right:0; }
-/* 這一區的章用長方章（格子矮），不要被裁切 */
-table.ask .sigbox { max-height:100%; }
-table.ask .sigbox svg { max-height:11mm; width:auto; }
+/* 這一區的章用長方章（格子矮）。簽章欄要夠寬、標題不要浮在左邊佔掉章的位置，
+   章一律靠左放滿——不然 100px 的長方章塞在扣掉標題後剩下的幾十 px 裡一定顯示不完整。 */
+table.ask td.sig { padding:1px 3px; }
+table.ask td.sig .cap { float:none; width:auto; font-size:7.5px; line-height:1.2; margin-bottom:1px; }
+table.ask .sigbox { justify-content:flex-start; max-height:100%; }
+table.ask .sigbox svg { max-width:100%; max-height:12mm; width:auto; height:auto; }
 /* 圖章尺寸一律抄 ai-rules/18 鐵則6 這一行，不要自己另外發明數字 */
 .stamp-wrap svg, svg.car-stamp { width:91px; height:91px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
 svg.eg-stamp-tpl { height:auto !important; }
@@ -312,7 +316,7 @@ svg.eg-stamp-tpl { height:auto !important; }
     <tr><td class="lb">相 關 單 位 意 見　<span class="small" style="font-weight:normal;">(僅勾選者 需回覆)</span></td></tr>
 </table>
 <table class="f ask">
-    <colgroup><col style="width:34%"><col style="width:16%"><col style="width:34%"><col style="width:16%"></colgroup>
+    <colgroup><col style="width:29%"><col style="width:21%"><col style="width:29%"><col style="width:21%"></colgroup>
     <?php
     $cells = [
         [['occur'], ['tech']],
@@ -404,7 +408,8 @@ svg.eg-stamp-tpl { height:auto !important; }
             ★扣款確認表金額由生管填寫　★核准扣款金額由管理課 會計/主管 填寫</td>
     </tr>
 </table>
-<!-- 三個簽章並排：各佔一列的話，三個 91px 圖章就吃掉三分之一頁、整張表會變兩頁 -->
+<!-- 三個簽章並排：各佔一列的話，三個 91px 圖章就吃掉三分之一頁、整張表會變兩頁。
+     沒有人簽時也要留出框線與書寫高度（使用者要求：下方要有圖章框框） -->
 <table class="f">
     <colgroup><col style="width:33.4%"><col style="width:33.3%"><col style="width:33.3%"></colgroup>
     <tr>
@@ -412,7 +417,7 @@ svg.eg-stamp-tpl { height:auto !important; }
         <td class="lb">(生管) 簽章</td>
         <td class="lb">(品管) 簽章</td>
     </tr>
-    <tr>
+    <tr class="signrow">
         <td class="sig"><div class="sigbox" data-stamp="<?= h($o['deduct_appr_name']) ?>" data-dept="<?= h($o['signs']['appr']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['appr']['position'] ?? '') ?>" data-date="<?= h(d($o['deduct_appr_at'])) ?>"></div></td>
         <td class="sig"><div class="sigbox" data-stamp="<?= h($o['deduct_pm_name']) ?>" data-dept="<?= h($o['signs']['pm']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['pm']['position'] ?? '') ?>" data-date="<?= h(d($o['deduct_pm_at'])) ?>"></div></td>
         <td class="sig"><div class="sigbox" data-stamp="<?= h($o['deduct_qc_name']) ?>" data-dept="<?= h($o['signs']['qc']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['qc']['position'] ?? '') ?>" data-date="<?= h(d($o['deduct_qc_at'])) ?>"></div></td>
