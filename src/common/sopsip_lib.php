@@ -868,12 +868,17 @@ function ss_submit_check(PDO $db, int $verId): array
     if (trim((string)$d['title']) === '') $bad[] = '文件名稱';
     if (trim((string)$v['ver_no']) === '') $bad[] = '版次';
 
+    // 紙本掃描檔就是這份文件的全部內容（品保課那幾份量測儀器操作說明只有 PDF），
+    // 這種文件本來就沒有逐列資料，不放行的話它永遠送不出去、也就永遠簽不了核
+    $hasScan = false;
+    foreach ($full['files'] as $f) if ((string)$f['usage_kind'] === 'scan') { $hasScan = true; break; }
+
     if ($full['kind'] === 'equip') {
-        if (trim((string)$v['op_method']) === '') $bad[] = '操作方法';
+        if (!$hasScan && trim((string)$v['op_method']) === '') $bad[] = '操作方法（或上傳紙本掃描檔）';
     } elseif ($full['kind'] === 'process') {
-        if (!$full['steps']) $bad[] = '至少一列操作步驟';
+        if (!$hasScan && !$full['steps']) $bad[] = '至少一列操作步驟（或上傳紙本掃描檔）';
     } else {
-        if (!$full['items']) $bad[] = '至少一列檢驗項目';
+        if (!$hasScan && !$full['items']) $bad[] = '至少一列檢驗項目（或上傳紙本掃描檔）';
     }
     return $bad;
 }
