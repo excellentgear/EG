@@ -17,6 +17,8 @@ include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/internal_audit_lib.php';
 include_once $document_root . '/EGsystem/src/common/date_fmt_lib.php';
 include_once $document_root . '/EGsystem/src/common/print_log_lib.php';
+// 資料稽核 → IA 單的串接要用到檢核項目清單與「稽核對象」綁定（dqa_trace_items／dqa_scope_docs）
+include_once $document_root . '/EGsystem/src/common/data_audit_lib.php';
 
 function jout($a) { echo json_encode(array_merge(['ok' => true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code = 400) { http_response_code($code); echo json_encode(['ok' => false, 'error' => $msg], JSON_UNESCAPED_UNICODE); exit; }
@@ -38,6 +40,17 @@ $today  = ia_today($db);
 
 /** 到期提醒順路觸發：不另開排程，有人用這個模組就順便檢查一次（內部 static 擋重複、每單每天最多一則） */
 ia_nc_remind_tick($db);
+
+/**
+ * 資料稽核送來的訂單 id 清單（唯一實作，dqa_prefill／dqa_existing 共用）。
+ * 一律先看 POST 再退回 GET：一次稽核的結果動輒一兩千張訂單，接成查詢字串會超過
+ * Apache 的 LimitRequestLine（8190）而回 414，且錯誤發生在瀏覽器端、後端連 log 都沒有。
+ */
+function iaOrderIds(): array
+{
+    $raw = (string)($_POST['order_ids'] ?? $_GET['order_ids'] ?? '');
+    return array_filter(array_map('intval', explode(',', $raw)));
+}
 
 function iaReqAdmin(array $perms) { if (!$perms['canAdmin']) jerr('需要內稽管理員權限', 403); }
 function iaReqAudit(array $perms) { if (!$perms['canAudit']) jerr('需要稽核員權限', 403); }
@@ -1469,7 +1482,8 @@ case 'nc_get': {
     $st = $db->prepare("SELECT * FROM ia_nc_log WHERE nc_id=? ORDER BY log_id");
     $st->execute([$id]);
     $n['logs'] = $st->fetchAll(PDO::FETCH_ASSOC);
-    jout(['row' => $n]);
+    $n['attach'] = ia_attach_rows($db, 'nc', $id);          // 三段的佐證附件
+    jout(['row' => $n, 'attach_sections' => IA_ATTACH_SECTIONS]);
 }
 
 case 'nc_create': {
@@ -1505,18 +1519,30 @@ case 'nc_create': {
         if (!$c) jerr('稽核案件不存在');
     }
     $srcItem = iaInt($_POST['src_item_id'] ?? '');
+    $srcKind = (string)($_POST['src_kind'] ?? '');
+    $srcCode = mb_substr(trim((string)($_POST['src_code'] ?? '')), 0, 30);
+    /* 資料稽核開過來的單要防重複（鐵律8：前端擋一次、這裡同規則再擋一次）。
+       鍵是「訂單＋檢核項目」三件一組——同一張訂單的「無報價單」與「出貨早於訂單」是兩張單，
+       只比 src_item_id 會把第二張擋掉。 */
+    if ($srcKind === 'dqa' && $srcItem && $srcCode !== '') {
+        $q = $db->prepare("SELECT nc_no FROM ia_nc
+                            WHERE src_kind='dqa' AND src_item_id=? AND src_code=? AND COALESCE(is_deleted,0)=0
+                            LIMIT 1");
+        $q->execute([$srcItem, $srcCode]);
+        if ($dup = $q->fetchColumn()) jerr('這張訂單的這個檢核項目已經開過 ' . $dup . '，不重複開立', 409);
+    }
 
     $db->beginTransaction();
     try {
         $head = ia_dept_head_asof($db, $deptId, $ad);
         $ncNo = ia_next_nc_no($db, $ad);
         $db->prepare("INSERT INTO ia_nc (nc_no, case_id, year, dept_id, dept_name, auditee_id, auditee_name,
-                          audit_date, src_kind, src_item_id, ref_form_no, fact, nc_type, clause_ref, due_date,
+                          audit_date, src_kind, src_item_id, src_code, ref_form_no, fact, nc_type, clause_ref, due_date,
                           auditor_id, auditor_name, auditor_date, head_id, head_name,
                           leader_id, leader_name, stage, created_by, created_by_name, created_at, updated_at)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'issued', ?,?, NOW(), NOW())")
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'issued', ?,?, NOW(), NOW())")
            ->execute([$ncNo, $caseId, (int)substr($ad, 0, 4), $deptId, $deptName, $auditeeId, $auditeeName ?: null,
-                      $ad, (string)($_POST['src_kind'] ?? '') ?: null, $srcItem,
+                      $ad, $srcKind ?: null, $srcItem, $srcCode ?: null,
                       mb_substr(trim((string)($_POST['ref_form_no'] ?? '')), 0, 60) ?: null,
                       $fact, $type, mb_substr(trim((string)($_POST['clause_ref'] ?? '')), 0, 300) ?: null, $due,
                       $uid, $uname, $ad,
@@ -1532,7 +1558,7 @@ case 'nc_create': {
             $db->prepare("UPDATE ia_nc SET ref_form_name=? WHERE nc_id=?")
                ->execute([mb_substr($fname, 0, 150), $ncId]);
         }
-        if ($srcItem) {
+        if ($srcItem && $srcKind !== 'dqa') {
             $db->prepare("UPDATE ia_check_item SET nc_id=?, remark=COALESCE(NULLIF(remark,''), ?) WHERE item_id=?")
                ->execute([$ncId, $ncNo, $srcItem]);
         }
@@ -1742,6 +1768,137 @@ case 'nc_resend': {
     if ($n['stage'] === 'closed') jerr('已結案的單不需再通知');
     $eid = ia_notify_nc_issued($db, $n, $uid);
     jout(['sent' => (bool)$eid]);
+}
+
+/* ============================ IA 單佐證附件 ============================
+   2026-09-21 使用者要求：改善（段二）與稽核組長驗證（段三）都要能上傳佐證，
+   同批把段一（稽核員的不合格事實）也一起開放——最常要附照片的其實是那一段。
+   能不能傳一律用該段的既有權限（ia_nc_stage_perm）判定，不另外發明一套：
+   能填那一段的人才能在那一段附檔案，結案後三段都不能再動。
+   ---------------------------------------------------------------------- */
+case 'nc_attach_upload': {
+    $id  = (int)($_POST['nc_id'] ?? 0);
+    $sec = trim((string)($_POST['section'] ?? ''));
+    if (!ia_attach_section_ok($sec)) jerr('附件段別不正確');
+    $st = $db->prepare("SELECT * FROM ia_nc WHERE nc_id=? AND COALESCE(is_deleted,0)=0");
+    $st->execute([$id]); $n = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$n) jerr('找不到這張不符合通知單', 404);
+    $sp = ia_nc_stage_perm($db, $n, $perms, $uid);
+    if (empty($sp[$sec])) jerr('您沒有在「' . IA_ATTACH_SECTIONS[$sec] . '」上傳附件的權限（或本單已結案）', 403);
+    if (empty($_FILES['file'])) jerr('沒有收到檔案');
+    try {
+        $attId = ia_attach_add($db, 'nc', $id, $sec, $_FILES['file'], $uid, $uname,
+                               (string)($_POST['note'] ?? ''));
+    } catch (Throwable $e) { jerr($e->getMessage()); }
+    ia_nc_log_add($db, $id, (string)$n['stage'], 'attach', $uid, $uname,
+                  IA_ATTACH_SECTIONS[$sec] . ' 上傳附件：' . mb_substr((string)$_FILES['file']['name'], 0, 120));
+    jout(['att_id' => $attId, 'attach' => ia_attach_rows($db, 'nc', $id)]);
+}
+
+case 'nc_attach_del': {
+    $attId = (int)($_POST['att_id'] ?? 0);
+    $a = ia_attach_one($db, $attId);
+    if (!$a || (string)$a['ref_type'] !== 'nc') jerr('找不到這個附件', 404);
+    $id = (int)$a['ref_id'];
+    $st = $db->prepare("SELECT * FROM ia_nc WHERE nc_id=? AND COALESCE(is_deleted,0)=0");
+    $st->execute([$id]); $n = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$n) jerr('找不到這張不符合通知單', 404);
+    $sec = ia_attach_section_ok((string)$a['section']) ? (string)$a['section'] : 'sec1';
+    $sp  = ia_nc_stage_perm($db, $n, $perms, $uid);
+    if (empty($sp[$sec])) jerr('您沒有刪除這一段附件的權限（或本單已結案）', 403);
+    ia_attach_del($db, $attId);
+    ia_nc_log_add($db, $id, (string)$n['stage'], 'attach_del', $uid, $uname,
+                  IA_ATTACH_SECTIONS[$sec] . ' 刪除附件：' . mb_substr((string)$a['orig_name'], 0, 120));
+    jout(['attach' => ia_attach_rows($db, 'nc', $id)]);
+}
+
+/** 下載／預覽。看得到這張單的人就下載得到（附件是這張單的一部分） */
+case 'nc_attach_get': {
+    $a = ia_attach_one($db, (int)($_GET['att_id'] ?? 0));
+    if (!$a || (string)$a['ref_type'] !== 'nc') { http_response_code(404); exit('not found'); }
+    $st = $db->prepare("SELECT * FROM ia_nc WHERE nc_id=? AND COALESCE(is_deleted,0)=0");
+    $st->execute([(int)$a['ref_id']]); $n = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$n) { http_response_code(404); exit('not found'); }
+    $sp = ia_nc_stage_perm($db, $n, $perms, $uid);
+    if (!$sp['view']) { http_response_code(403); exit('forbidden'); }
+    if (!is_file($a['fs_path'])) { http_response_code(404); exit('檔案已不在附件資料夾'); }
+    require_once $document_root . '/EGsystem/src/common/attach_lib.php';
+    header_remove('Content-Type');
+    $ext = strtolower((string)pathinfo($a['fs_path'], PATHINFO_EXTENSION));
+    $mime = ['pdf'=>'application/pdf','png'=>'image/png','jpg'=>'image/jpeg','jpeg'=>'image/jpeg',
+             'gif'=>'image/gif','bmp'=>'image/bmp','webp'=>'image/webp','txt'=>'text/plain; charset=utf-8'];
+    header('Content-Type: ' . ($mime[$ext] ?? 'application/octet-stream'));
+    header('Content-Length: ' . (string)filesize($a['fs_path']));
+    eg_attach_send_disposition((string)($a['orig_name'] ?: $a['file_name']));
+    readfile($a['fs_path']);
+    exit;
+}
+
+/* ============================ 資料稽核 → 不符合通知單 ============================
+   使用者交辦（2026-09-21）：資料稽核查得出「無報價單／出貨後才開立訂單」這類缺失，
+   但那份結果沒辦法直接變成 IA 單，只能用眼睛看完再到內稽這邊從頭手打，所以一直開不出單。
+   這幾支就是把那條路接起來：資料稽核那一列按下去 → 欄位全部自動帶好 → 開單。
+   ------------------------------------------------------------------------------ */
+
+/** 開單前要的東西：檢核項目清單、每個項目推導出的表單/單位/條文、已經開過的單 */
+case 'dqa_prefill': {
+    iaReqAudit($perms);
+    $codes = array_keys(dqa_trace_items());
+    // order_ids 一律優先吃 POST：一次稽核有一兩千張訂單，走 GET 查詢字串會被 Apache 以 414 擋下
+    $oids  = iaOrderIds();
+    jout([
+        'items'    => dqa_trace_items(),
+        'bundles'  => ia_dqa_item_bundles($db, $codes),
+        'existing' => ia_dqa_existing($db, $oids),
+        'units'    => ia_audit_units($db),
+        'nc_types' => IA_NC_TYPES,
+        'today'    => $today,
+    ]);
+}
+
+/** 只問「這幾張訂單開過哪些單」（重畫清單時用，不必再算一次 bundles） */
+case 'dqa_existing': {
+    iaReqAudit($perms);
+    jout(['existing' => ia_dqa_existing($db, iaOrderIds())]);
+}
+
+/** 檢核項目 → AS 文件 對照（管理員維護；決定開單時帶哪個受稽單位與違反條文） */
+case 'dqa_map_get': {
+    iaReqAdmin($perms);
+    jout([
+        'items'   => dqa_trace_items(),
+        'map'     => ia_dqa_item_doc_map($db),
+        'bundles' => ia_dqa_item_bundles($db, array_keys(dqa_trace_items())),
+        'docs'    => eg_asdoc_list($db),
+        'scope'   => dqa_scope_docs_info($db, 'trace'),
+    ]);
+}
+
+case 'dqa_map_save': {
+    iaReqAdmin($perms);
+    $raw = json_decode((string)($_POST['map'] ?? '[]'), true);
+    if (!is_array($raw)) jerr('對照內容格式不正確');
+    $valid = dqa_trace_items();
+    $in = [];
+    foreach ($raw as $k => $v) {
+        $k = trim((string)$k);
+        if (!isset($valid[$k])) continue;          // 只收真的存在的檢核項目（鐵律8）
+        $in[$k] = (int)$v;
+    }
+    $saved = ia_dqa_item_doc_save($db, $in, $uname);
+    jout(['map' => $saved, 'bundles' => ia_dqa_item_bundles($db, array_keys($valid))]);
+}
+
+/** 由資料稽核的一筆缺失組出「不合格事實」的預設文字（訂單身分一律後端自己查） */
+case 'dqa_fact': {
+    iaReqAudit($perms);
+    $ord = ia_dqa_order_head($db, (int)($_GET['order_id'] ?? 0));
+    if (!$ord) jerr('找不到這張訂單', 404);
+    $code  = trim((string)($_GET['code'] ?? ''));
+    $items = dqa_trace_items();
+    jout(['fact' => ia_dqa_fact_text($ord, (string)($items[$code][0] ?? $code),
+                                     (string)($_GET['detail'] ?? '')),
+          'order' => $ord]);
 }
 
 /* ============================ 稽核報告表 2-GM-06-08 ============================ */

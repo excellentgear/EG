@@ -16,10 +16,17 @@ if (!isset($_SESSION['userName'])) {
 include_once '../../src/common/_config.php';
 include_once '../../src/common/DBConnection.php';
 include_once '../../src/common/data_audit_lib.php';
+/* 開立不符合通知單要用內稽的權限判定（2026-09-21 使用者交辦：查得出缺失卻開不出 IA 單）。
+   只讀權限、不動內稽的資料，實際開單一律走 InternalAudit_API 的 nc_create（唯一寫入點）。 */
+include_once '../../src/common/internal_audit_lib.php';
 
 $db = (new DBConnection())->getPDO();
 dqa_ensure_schema($db);
 $perms = dqa_perms($db, dqa_current_user($db));
+$iaPerms = ['canAudit' => false, 'canAdmin' => false];
+try { $iaPerms = ia_perms($db, ia_current_user($db)) + $iaPerms; } catch (Throwable $e) {}
+$canNc    = !empty($iaPerms['canAudit']);   // 稽核員以上才開得了 IA 單
+$canNcMap = !empty($iaPerms['canAdmin']);   // 內稽管理員才改得了「檢核項目→AS文件」對照
 if (empty($_SESSION['dqa_csrf'])) $_SESSION['dqa_csrf'] = bin2hex(random_bytes(16));
 $CSRF = $_SESSION['dqa_csrf'];
 $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '資料稽核管理員' : ($perms['canView'] ? '檢閱' : '無權限'));
@@ -146,6 +153,17 @@ try {
         .ex-line { font-size:11px; color:#8a7560; }
         .lnk { color:var(--amber-d); cursor:pointer; }
         .lnk:hover { text-decoration:underline; }
+        /* 開立不符合通知單（2026-09-21）。勾選框與「開IA單」掛在每一條缺失上——
+           一張訂單可能同時有好幾種缺失，那是好幾張 IA 單，不是一張。 */
+        .nc-pick { vertical-align:-1px; margin:0 3px 0 6px; cursor:pointer; }
+        .nc-go { color:#B2622A; cursor:pointer; font-weight:bold; }
+        .nc-go:hover { text-decoration:underline; }
+        .nc-done { color:#5C8A4A; }
+        .nc-done a { color:#5C8A4A; text-decoration:underline; }
+        .nc-map-row { display:flex; align-items:center; gap:8px; padding:4px 0; border-bottom:1px dashed var(--line); }
+        .nc-map-row > label { width:170px; margin:0; font-weight:normal; font-size:13px; }
+        .nc-map-row select { flex:1; min-width:220px; height:28px; font-size:12px; }
+        .nc-map-row .to { width:230px; font-size:12px; color:#8a7560; }
         /* 跳窗 */
         .m-mask { display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:10500; }
         .m-mask.on { display:flex; align-items:center; justify-content:center; }
@@ -195,6 +213,10 @@ try {
             <button class="btn btn-sm btn-warm-o" id="btnSetting"><i class="fa fa-cog"></i> 設定</button>
             <?php endif; ?>
             <button class="btn btn-sm btn-warm-o" id="btnRuns"><i class="fa fa-history"></i> 留存紀錄</button>
+            <?php if ($canNcMap): ?>
+            <button class="btn btn-sm btn-warm-o" id="btnNcMap" title="設定每一種缺失要開給哪一個受稽單位">
+                <i class="fa fa-random"></i> 不符合通知單對照</button>
+            <?php endif; ?>
         </div>
     </div>
 
@@ -255,6 +277,10 @@ try {
         <div class="dq-bar no-print" style="margin-top:8px">
             <span class="muted-help" id="tFoot"></span>
             <span style="margin-left:auto"></span>
+            <?php if ($canNc): ?>
+            <button class="btn btn-sm btn-warm" id="btnNcBulk" disabled>
+                <i class="fa fa-file-text-o"></i> 開立不符合通知單（<span id="ncPickN">0</span>）</button>
+            <?php endif; ?>
             <button class="btn btn-sm btn-warm-o" id="btnTraceCsv"><i class="fa fa-file-excel-o"></i> CSV</button>
             <button class="btn btn-sm btn-warm-o" id="btnTracePrint"><i class="fa fa-print"></i> 列印</button>
             <?php if ($perms['canAdmin']): ?>
@@ -510,6 +536,55 @@ try {
     <div class="m-foot"><button class="btn btn-sm btn-default" data-close>關閉</button></div>
 </div></div>
 
+<!-- ══════════ 開立不符合通知單（2026-09-21 使用者交辦） ══════════ -->
+<div class="m-mask" id="ncMask"><div class="m-box" style="width:1000px">
+    <div class="m-head">開立內稽不符合通知單 <span class="x" data-close>&times;</span></div>
+    <div class="m-body">
+        <p class="muted-help">
+            每一筆缺失各開一張不符合通知單（2-GM-06-07），開完會<b>立即通知受稽核單位主管</b>填寫原因分析與改善措施。<br>
+            <b>受稽核單位／相關表單／違反條文</b>是由「不符合通知單對照」設定的 AS 文件推導出來的，
+            這裡還可以逐筆改；同一張訂單的同一個檢核項目<b>只會開一次</b>，重複的會自動略過。
+        </p>
+        <div class="dq-bar" style="margin-bottom:8px">
+            <label>稽核日期</label><input type="date" id="ncDate" style="width:150px">
+            <label>不合格類型</label><select id="ncType" style="width:150px"></select>
+            <label>要求完成期限</label><input type="date" id="ncDue" style="width:150px">
+            <span class="muted-help">這三項套用到下面每一筆</span>
+        </div>
+        <div id="ncWarn" class="muted-help" style="color:#B23A2A"></div>
+        <div class="dq-wrap" style="max-height:44vh">
+            <table class="dq-tbl" id="ncTbl">
+                <colgroup><col style="width:112px"><col style="width:150px"><col style="width:170px"><col></colgroup>
+                <thead><tr><th>檢核項目</th><th>訂單</th><th>受稽核單位</th><th>不合格事實（可改）</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="btn btn-sm btn-default" data-close>取消</button>
+        <button class="btn btn-sm btn-warm" id="btnNcGo">開立並通知</button>
+    </div>
+</div></div>
+
+<!-- ══════════ 檢核項目 → AS 文件 對照 ══════════ -->
+<div class="m-mask" id="ncMapMask"><div class="m-box" style="width:940px">
+    <div class="m-head">不符合通知單對照（檢核項目 → AS 文件） <span class="x" data-close>&times;</span></div>
+    <div class="m-body">
+        <p class="muted-help">
+            不符合通知單一定要有<b>受稽核單位</b>，而資料稽核的一列是<b>一張訂單</b>不是一個部門。
+            所以這裡設定「每一種缺失對應到哪一份 AS 表單」，系統就能一次推導出三個欄位：<br>
+            <b>受稽核單位</b>（由文件編號第二段的部門代碼，例 <code>2-SM-01-02</code> → SM → 業務課）、
+            <b>相關表單編號與名稱</b>、<b>違反條文</b>（由條文題庫的「建立的文件、表單」反查）。<br>
+            沒有設定的項目會退回「稽核對象」綁定的第一份文件，單還是開得出來，只是受稽核單位要自己選。
+        </p>
+        <div id="ncMapBody"></div>
+    </div>
+    <div class="m-foot">
+        <button class="btn btn-sm btn-default" data-close>關閉</button>
+        <button class="btn btn-sm btn-warm" id="btnNcMapSave">儲存對照</button>
+    </div>
+</div></div>
+
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/fastclick.js"></script>
@@ -525,6 +600,13 @@ $(document).ready(function(){ $('#sidebar-menu').css('visibility','visible'); })
 var API  = '../../src/store/DataAudit_API.php';
 var CSRF = <?= json_encode($CSRF) ?>;
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
+/* 開立不符合通知單（2026-09-21 使用者交辦）：實際寫入一律走內稽自己的 API，
+   這裡不另外開一支寫入端點——IA 單的編號、通知、歷程全都在那邊，複製一份必定走鐘。 */
+var IA_API     = '../../src/store/InternalAudit_API.php';
+var CAN_NC     = <?= $canNc ? 'true' : 'false' ?>;
+var CAN_NC_MAP = <?= $canNcMap ? 'true' : 'false' ?>;
+var NCB = null;          // dqa_prefill 回來的：檢核項目、每項推導出的表單/單位/條文、已開過的單
+var NCSEL = {};          // 勾選中的缺失 'orderId|code' => {oid, code, label, detail, order_no, client, part}
 var OWN_COMPANY = <?= json_encode($ownCompany) ?>;
 var ST = { tab:'trace', trace:null, master:null, filter:'', mFilter:'', settings:null, ex:null,
            tPage:1, tPer:50, mPage:1, mPer:50, tLevel:'', mLevel:'' };
@@ -671,8 +753,10 @@ $('#btnTraceRun').on('click', function(){
     }, function(r){
         if(!r || !r.ok) return;
         ST.trace = r; ST.filter = ''; ST.tLevel = ''; ST.tPage = 1;
+        NCSEL = {}; ncSyncBar();
         renderTraceStat(); renderTrace();
         $('#tTiming').text('耗時 ' + ((Date.now()-t0)/1000).toFixed(1) + ' 秒');
+        loadNcMeta(function(){ renderTrace(); });      // 回來才知道哪幾筆已經開過單
     });
 });
 
@@ -848,6 +932,7 @@ function renderTrace(){
             return '<div class="issue-line"><span class="lv-badge ' + i.level + '">'
                  + (i.level==='critical'?'嚴重':'提醒') + '</span> ' + esc(i.text)
                  + (CAN_ADMIN ? ' <span class="lnk" data-ex-trace="' + r.order_id + '" data-code="' + esc(i.code) + '">標為例外</span>' : '')
+                 + ncCellHtml(r, i)
                  + '</div>';
         }).join('');
         if (!iss) iss = '<span style="color:#5C8A4A">四個節點的日期、數量與單價都對得起來。</span>';
@@ -1448,6 +1533,221 @@ $('#btnMasterPrint').on('click', function(){
             return [i+1, (r.level==='critical'?'重要缺失':(r.level==='major'?'一般缺失':(r.level==='minor'?'建議補齊':'完善'))),
                 r.key, r.name, r.issues.map(function(x){ return x.text; }).join('；')];
         }));
+});
+
+
+/* ════════════════════════════════════════════════════════════════════
+ * 資料稽核 → 不符合通知單（2026-09-21 使用者交辦）
+ *
+ * 使用者原話：「稽核要查詢訂單資料是否有缺失，無報價單、出貨後才開立訂單…這種，
+ * 已經有做 data_audit.php 來檢核，但還是很難查」＝查得出缺失卻沒辦法直接變成 IA 單，
+ * 只能把整份結果看完再到內稽那邊從頭手打，所以一直開不出不符合通知單。
+ *
+ * 【最小單位是「一條缺失」不是「一張訂單」】同一張訂單可能同時有「查不到報價單」與
+ * 「出貨早於訂單」，那是兩個不同的不合格事實、要開兩張 IA 單、甚至可能是兩個不同的
+ * 受稽單位，所以勾選框掛在每一條缺失上。防重複的鍵也是「訂單＋檢核項目」。
+ *
+ * 寫入一律走內稽自己的 nc_create（IA 編號、通知、歷程都在那邊），這裡不另開端點。
+ * ════════════════════════════════════════════════════════════════════ */
+
+function ncKey(oid, code){ return oid + '|' + code; }
+function ncExisting(oid, code){ return ((NCB && NCB.existing && NCB.existing[oid]) || {})[code] || null; }
+
+/** 每一條缺失右邊那一小段：已開單就顯示單號，還沒開就給勾選框與「開IA單」 */
+function ncCellHtml(r, i){
+    if (!CAN_NC || !NCB) return '';
+    var ex = ncExisting(r.order_id, i.code);
+    if (ex) {
+        return ' <span class="nc-done">已開單 <a href="internal_audit.php" target="_blank" rel="noopener"'
+             + ' title="到內部稽核的「不符合通知單」分頁查 ' + esc(ex.nc_no) + '">' + esc(ex.nc_no) + '</a>（'
+             + esc(ex.stage_label || '') + '）</span>';
+    }
+    var k = ncKey(r.order_id, i.code);
+    return ' <label style="font-weight:normal;margin:0" title="勾選後可一次開立多張">'
+         + '<input type="checkbox" class="nc-pick" data-eg-skip data-k="' + esc(k) + '"'
+         + (NCSEL[k] ? ' checked' : '') + '></label>'
+         + '<span class="nc-go" data-k="' + esc(k) + '">開IA單</span>';
+}
+
+/** 勾選狀態要能在換頁／換篩選之後留著，所以存的是「這一筆缺失的完整資料」不是 DOM 狀態 */
+function ncFindIssue(k){
+    var p = String(k).split('|'), oid = +p[0], code = p[1];
+    var rows = (ST.trace && ST.trace.rows) || [];
+    for (var a = 0; a < rows.length; a++) {
+        if (+rows[a].order_id !== oid) continue;
+        for (var b = 0; b < rows[a].issues.length; b++) {
+            if (rows[a].issues[b].code !== code) continue;
+            return {oid:oid, code:code, order_no:rows[a].order_no, client:rows[a].client,
+                    part:rows[a].part, odate:rows[a].odate, detail:rows[a].issues[b].text,
+                    level:rows[a].issues[b].level};
+        }
+    }
+    return null;
+}
+function ncSyncBar(){
+    var n = Object.keys(NCSEL).length;
+    $('#ncPickN').text(n);
+    $('#btnNcBulk').prop('disabled', n === 0);
+}
+$(document).on('change', '.nc-pick', function(){
+    var k = String($(this).data('k') || '');
+    if (this.checked) { var it = ncFindIssue(k); if (it) NCSEL[k] = it; }
+    else delete NCSEL[k];
+    ncSyncBar();
+});
+$(document).on('click', '.nc-go', function(){
+    var it = ncFindIssue(String($(this).data('k') || ''));
+    if (it) openNcModal([it]);               // 單筆：只開這一條，不動已經勾好的那些
+});
+$('#btnNcBulk').on('click', function(){
+    var list = Object.keys(NCSEL).map(function(k){ return NCSEL[k]; }).filter(Boolean);
+    if (!list.length) return;
+    if (list.length > 50) { alert('一次最多開 50 張，請分批處理（目前勾了 ' + list.length + ' 筆）。'); return; }
+    openNcModal(list);
+});
+
+function loadNcMeta(cb){
+    if (!CAN_NC) { if (cb) cb(); return; }
+    var oids = ((ST.trace && ST.trace.rows) || []).map(function(r){ return r.order_id; });
+    // 一定要用 POST：稽核結果動輒一兩千張訂單，訂單編號接成查詢字串就超過 8KB，
+    // Apache 會直接回 414（Request-URI Too Long），而且是整頁都還沒畫出來就先跳錯（2026-09-21 使用者回報）
+    $.post(IA_API, {action:'dqa_prefill', order_ids:oids.join(',')}, function(r){
+        if (r && r.ok) NCB = r;
+        if (cb) cb();
+    }, 'json').fail(function(){ if (cb) cb(); });    // 內稽 API 掛了不可以把資料稽核整頁拖下水
+}
+
+var NCLIST = [];
+function openNcModal(list){
+    if (!NCB) { alert('內部稽核資料還在載入，請稍候再試。'); return; }
+    NCLIST = list.filter(function(x){ return !ncExisting(x.oid, x.code); });   // 已開過的不再列
+    if (!NCLIST.length) { alert('選取的缺失都已經開過不符合通知單了。'); return; }
+
+    var th = '';
+    $.each(NCB.nc_types || {}, function(k, v){ th += '<option value="' + esc(k) + '">' + esc(v) + '</option>'; });
+    $('#ncType').html(th);
+    $('#ncDate').val(NCB.today || '');
+    $('#ncDue').val('');
+
+    var miss = 0;
+    var body = NCLIST.map(function(x, idx){
+        var b = (NCB.bundles || {})[x.code] || {};
+        var label = ((NCB.items || {})[x.code] || [x.code])[0];
+        if (!+b.dept_id) miss++;
+        var uh = '<option value="">（請選擇）</option>';
+        (NCB.units || []).forEach(function(u){
+            uh += '<option value="' + (+u.key) + '"' + ((+u.key === +b.dept_id) ? ' selected' : '') + '>'
+                + esc(u.name || u.unit_name || '') + '</option>';
+        });
+        return '<tr><td>' + esc(label) + '</td>'
+             + '<td>' + esc(x.order_no || '') + '<br><em class="muted-help">' + esc(x.client || '') + '<br>'
+                      + esc(x.part || '') + '</em></td>'
+             + '<td><select class="nc-unit" data-i="' + idx + '" data-eg-filter="輸入單位名稱篩選…" style="width:100%">'
+             + uh + '</select><div class="muted-help">' + (b.doc_no
+                   ? (esc(b.doc_no) + ' ' + esc(b.doc_name || '') + (b.mapped ? '' : '（未設定對照，暫用稽核對象）'))
+                   : '<span style="color:#B23A2A">沒有對應的 AS 文件，請自行選單位</span>') + '</div></td>'
+             + '<td><textarea class="nc-fact" data-i="' + idx + '" rows="2" style="width:100%;font-size:12px">'
+             + esc(ncFactText(x)) + '</textarea></td></tr>';
+    }).join('');
+    $('#ncTbl tbody').html(body);
+    $('#ncWarn').html(miss
+        ? ('有 <b>' + miss + '</b> 筆推導不出受稽核單位，請逐筆選擇；'
+           + (CAN_NC_MAP ? '或先到上方「不符合通知單對照」把檢核項目對應到 AS 文件，往後就會自動帶入。'
+                         : '或請內稽管理員設定「不符合通知單對照」。'))
+        : '');
+    openMask('ncMask');
+}
+/* 不合格事實的預設文字。前端先組一份讓使用者當場看得到並可修改。 */
+function ncFactText(x){
+    var label = ((NCB.items || {})[x.code] || [x.code])[0];
+    return '訂單 ' + (x.order_no || '') + '（客戶 ' + (x.client || '') + '、料號 ' + (x.part || '')
+         + '、訂單日 ' + dispDate(x.odate) + '）：' + (x.detail || label);
+}
+
+$('#btnNcGo').on('click', function(){
+    var d = $('#ncDate').val(), type = $('#ncType').val(), due = $('#ncDue').val();
+    if (!d)    { alert('請填稽核日期'); return; }
+    if (!type) { alert('請選擇不合格類型'); return; }
+    if (due && due < d) { alert('要求完成期限不可早於稽核日期'); return; }
+    var jobs = [], bad = 0;
+    NCLIST.forEach(function(x, i){
+        var dept = $('.nc-unit[data-i="' + i + '"]').val();
+        if (!dept) { bad++; return; }
+        var b = (NCB.bundles || {})[x.code] || {};
+        jobs.push({action:'nc_create', audit_date:d, nc_type:type, due_date:due,
+                   dept_id:dept, fact:$('.nc-fact[data-i="' + i + '"]').val(),
+                   ref_form_no:b.doc_no || '', ref_form_name:b.doc_name || '',
+                   clause_ref:(b.clauses || []).map(function(c){ return c.clause_text; }).join('\n'),
+                   src_kind:'dqa', src_item_id:x.oid, src_code:x.code});
+    });
+    if (bad) { alert('還有 ' + bad + ' 筆沒有選受稽核單位。'); return; }
+    if (!jobs.length) return;
+    if (!confirm('要開立 ' + jobs.length + ' 張不符合通知單嗎？開立後會立即通知各受稽核單位主管。')) return;
+
+    var $btn = $(this).prop('disabled', true).text('開立中…');
+    var okN = 0, errs = [];
+    (function next(){
+        if (!jobs.length) {
+            $btn.prop('disabled', false).text('開立並通知');
+            closeMask('ncMask');
+            alert('完成：已開立 ' + okN + ' 張不符合通知單'
+                  + (errs.length ? ('\n未開立 ' + errs.length + ' 張：\n' + errs.join('\n')) : ''));
+            NCSEL = {}; ncSyncBar();
+            loadNcMeta(function(){ renderTrace(); });
+            return;
+        }
+        var j = jobs.shift();
+        $.post(IA_API, j, function(r){
+            if (r && r.ok) okN++; else errs.push('・' + (r && r.error ? r.error : '失敗'));
+        }, 'json').fail(function(x){
+            errs.push('・' + (((x.responseJSON || {}).error) || ('HTTP ' + x.status)));
+        }).always(next);
+    })();
+});
+
+/* ── 檢核項目 → AS 文件 對照（內稽管理員） ───────────────────────── */
+$('#btnNcMap').on('click', function(){
+    $.getJSON(IA_API, {action:'dqa_map_get'}, function(r){
+        if (!r || !r.ok) return;
+        var h = '';
+        $.each(r.items || {}, function(code, it){
+            var cur = +((r.map || {})[code] || 0);
+            var docH = '<option value="">（未設定）</option>';
+            (r.docs || []).forEach(function(d){
+                docH += '<option value="' + (+d.id) + '"' + ((+d.id === cur) ? ' selected' : '') + '>'
+                      + esc(d.doc_no + ' ' + d.doc_name) + '</option>';
+            });
+            h += '<div class="nc-map-row"><label>' + esc(it[0]) + '</label>'
+               + '<select class="nc-map-sel" data-code="' + esc(code) + '" data-eg-filter="輸入編號或名稱篩選…">'
+               + docH + '</select>'
+               + '<span class="to" data-code="' + esc(code) + '">' + ncMapTo((r.bundles || {})[code]) + '</span></div>';
+        });
+        $('#ncMapBody').html(h
+            + '<p class="muted-help" style="margin-top:8px">「稽核對象」目前綁定：'
+            + ((r.scope || []).map(function(d){ return esc(d.doc_no + ' ' + d.doc_name); }).join('、') || '（尚未綁定）')
+            + '</p>');
+        openMask('ncMapMask');
+    });
+});
+function ncMapTo(b){
+    if (!b || !b.doc_no) return '<span style="color:#B23A2A">推導不出受稽核單位</span>';
+    return '→ ' + esc(b.dept_name || '（此文件編號對不到部門）')
+         + ((b.clauses || []).length ? ('、條文 ' + b.clauses.length + ' 條') : '、無對應條文');
+}
+$('#btnNcMapSave').on('click', function(){
+    var map = {};
+    $('.nc-map-sel').each(function(){
+        var v = +$(this).val(); if (v) map[String($(this).data('code'))] = v;
+    });
+    $.post(IA_API, {action:'dqa_map_save', map:JSON.stringify(map)}, function(r){
+        if (!r || !r.ok) return;
+        $('.nc-map-sel').each(function(){
+            var code = String($(this).data('code'));
+            $('.nc-map-row .to[data-code="' + code + '"]').html(ncMapTo((r.bundles || {})[code]));
+        });
+        alert('已儲存對照。');
+        loadNcMeta(function(){ renderTrace(); });
+    }, 'json');
 });
 
 <?php if ($perms['canView']): ?>
