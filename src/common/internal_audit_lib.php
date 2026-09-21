@@ -72,6 +72,9 @@ const IA_SETTING_KEYS  = [
     'ia_sign_review',
     'ia_meeting_pre_subject',
     'ia_meeting_end_subject',
+    // 新增通知單時自動帶入的會議地點（2026-09-21 使用者回報「第2次的會議地點沒有顯示」：
+    // 不是列印漏印，是那張單的 end_meet_place 本來就空的——每開一張都要重打，忘了就印不出來）
+    'ia_meeting_place',
     'ia_case_remark_tpl',
     'ia_auto_sign',
     'ia_report_notify',   // 稽核報告表送出後要通知誰：[{dept_id, position_id}] JSON（管理員設定）

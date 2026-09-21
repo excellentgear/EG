@@ -650,6 +650,9 @@ $roleLabel = ia_role_label($perms);
             <li><b>績效沒達成開的是「異常矯正處理單」不是 IA 單</b>：紙本備註欄本來就印矯正單編號。按「開矯正單」會自動帶出年度、哪幾個月沒達成、當時的數值與 KPI 目標，並附上「請說明原因及確認是否需要調整KPI目標?」，責任單位＝該指標的部門、回覆人＝擔當者；開完單號自動寫回備註欄。</li>
             <li><b>管理員可以刪除</b>：年度計畫表、稽核通知單、查檢表、不符合通知單、稽核報告表在各自的清單／工具列上都有刪除鈕（限內稽管理員）。已經開過不符合通知單的查檢表要先刪掉那幾張 IA 單才刪得掉。</li>
             <li><b>年度計畫表的 ◎ 不用手動點</b>：把稽核通知單的狀態改成「執行中」或「已結案」，該單位那個月就會自動變 ◎。沒排 ○ 卻做了也會出現 ◎。</li>
+            <li><b>結束會議的地點會自動帶</b>：新增稽核通知單時，地點取自<b>設定→會議主旨預設文字→預設地點</b>；
+                沒設就沿用<b>上一張通知單</b>的地點（多半就是同一間）。還是可以逐張改。
+                這一欄空著的話，列印出來的通知單就不會有地點，所以不要讓它空著。</li>
             <li><b>好幾個部門是同一個受稽單位</b>（例：生產部＋生產1廠＋生產2廠＋生產3廠）：到工具列「受稽單位」綁成一個群組。
                 綁定後計畫表上是<b>一欄</b>、報告表上是<b>一列</b>，稽核其中任何一個廠都算這個單位已執行；這個單位底下所有部門的人都看得到並可回覆該單位的不符合通知單。一個部門只能屬於一個受稽單位。</li>
             <li><b>誰可以當稽核員／陪檢員</b>：工具列「稽核員資格」可指定名單，有<b>三種來源、可並用</b>：
@@ -835,6 +838,9 @@ $roleLabel = ia_role_label($perms);
             <div class="ia-form">
                 <label>事前會議</label><div><input type="text" id="setMeetPre" placeholder="留空＝○○年度 內稽事前會議"></div>
                 <label>結束會議</label><div><input type="text" id="setMeetEnd" placeholder="留空＝○○年度 內稽結束會議"></div>
+                <label>預設地點</label>
+                <div><input type="text" id="setMeetPlace" placeholder="例：二樓會議室">
+                     <span style="font-size:12px;color:#8a6d45;">　新增通知單時自動帶入；留空就沿用上一張通知單的地點</span></div>
             </div>
         </div>
     </div>
@@ -2401,6 +2407,11 @@ function openCase(id){
         $('#caseTitle').text('新增稽核通知單');
         $('#cNo,#cSeq').val(''); $('#cNotify').val(META.today);
         $('#cFrom,#cTo,#cMeetDate,#cMeetStart,#cMeetEnd,#cMeetPlace,#cAllAudited,#cAllDue').val('');
+        /* 會議地點自動帶入（2026-09-21 使用者回報「第2次的會議地點沒有顯示」）。
+           查下來不是列印漏印，是那張通知單的 end_meet_place 本來就是空的——
+           每開一張新的都要重打一次，忘了打就印出一張沒有地點的通知單。
+           優先序：設定頁的「預設地點」→ 沒設就沿用**上一張通知單**的地點（多半就是同一間）。 */
+        $('#cMeetPlace').val(defaultMeetPlace());
         $('#cRemark').val(defaultCaseRemark());
         $('#cTimeStep').val(60); $('#cTimeFrom,#cTimeTo').val('');
         $('#cLeader').html(postOptions(META.auditors, '', '', '（未指定）'));
@@ -2746,6 +2757,15 @@ $(document).on('change', '#cFrom, #cNotify', function(){
 });
 /* 新增通知單時自動帶入的備註＝設定跳窗裡管理員設的那一段（只有一個版本，全站共用）。
    從來沒設定過時後端會回內建預設文字；管理員存成空白＝不自動帶入。 */
+/* 新增通知單時的預設會議地點：設定頁的值優先，沒設就抄上一張通知單的。
+   CASES 是清單目前載入的通知單（依件號新→舊），取第一張有填地點的。 */
+function defaultMeetPlace(){
+    var s = (META.settings && META.settings.ia_meeting_place) || '';
+    if (String(s).trim()) return s;
+    var hit = '';
+    (CASES || []).forEach(function(c){ if (!hit && String(c.end_meet_place||'').trim()) hit = c.end_meet_place; });
+    return hit;
+}
 function defaultCaseRemark(){
     return String(((META.settings||{}).ia_case_remark_tpl) || '');
 }
@@ -5056,6 +5076,7 @@ $('#btnSetting').on('click', function(){
     $('#setRemindDays').val(s.ia_remind_days||'7');
     $('#setMeetPre').val(s.ia_meeting_pre_subject||'');
     $('#setMeetEnd').val(s.ia_meeting_end_subject||'');
+    $('#setMeetPlace').val(s.ia_meeting_place||'');
     $('#setCaseRemark').val(s.ia_case_remark_tpl||'');
     clearErrs($('#settingMask'));
     caseRemarkCnt();                       // clearErrs 之後才算，否則紅字會被清掉
@@ -5117,6 +5138,7 @@ $('#btnSettingSave').on('click', function(){
         ['ia_remind_days',        v],
         ['ia_meeting_pre_subject',$('#setMeetPre').val()],
         ['ia_meeting_end_subject',$('#setMeetEnd').val()],
+        ['ia_meeting_place',      $('#setMeetPlace').val()],
         ['ia_case_remark_tpl',    $('#setCaseRemark').val().replace(/\r\n/g,'\n')]
     ];
     var done = 0, failed = '', backfill = null;
