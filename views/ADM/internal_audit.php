@@ -207,6 +207,28 @@ $roleLabel = ia_role_label($perms);
             border-left:4px solid #F0A24B; border-radius:5px; padding:7px 10px; margin-bottom:10px; }
         .ia-hint b { color:#8A5A2B; }
         .ia-proxy { background:#FBEAE4; border-left-color:#DD5138; }
+        /* IA 單佐證附件（2026-09-21）。檔名可能很長，一律限寬截字、完整檔名掛 title。 */
+        .ia-att { margin-top:8px; border-top:1px dashed #E0BE86; padding-top:6px; }
+        .ia-att-h { font-size:12px; font-weight:bold; color:#8A5A2B; margin-bottom:4px; }
+        .ia-att-h em { font-weight:normal; font-style:normal; color:#a08356; }
+        .ia-att-list { display:flex; flex-wrap:wrap; gap:4px 8px; margin-bottom:5px; }
+        .ia-att-item { display:inline-flex; align-items:center; gap:5px; max-width:330px;
+                       border:1px solid #E0C79A; border-radius:4px; background:#FDF6EA;
+                       padding:2px 7px; font-size:12px; line-height:19px; }
+        .ia-att-item a { color:#8A5A2B; text-decoration:none; max-width:210px; overflow:hidden;
+                         text-overflow:ellipsis; white-space:nowrap; }
+        .ia-att-item a:hover { text-decoration:underline; }
+        .ia-att-item .sz { color:#a08356; font-size:11px; }
+        .ia-att-item .del { color:#C4442D; cursor:pointer; font-size:11px; }
+        .ia-att-none { font-size:12px; color:#a08356; }
+        .ia-att-up { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:12px; }
+        .ia-att-up input[type=file] { font-size:12px; max-width:250px; }
+        .ia-att-up input[type=text] { height:26px; font-size:12px; width:190px; padding:0 6px;
+                                      border:1px solid #D8BE93; border-radius:4px; }
+        .ia-att-up button { height:26px; font-size:12px; padding:0 10px; border:1px solid #D8BE93;
+                            border-radius:4px; background:#fff; color:#5b3a1e; cursor:pointer; }
+        .ia-att-up button:hover { background:#F7E0BD; }
+        .ia-att-msg { font-size:12px; color:#C4442D; }
         .ia-log { font-size:12px; color:#7a6444; border-top:1px dashed #E0BE86; margin-top:8px; padding-top:6px; }
         .ia-log div { padding:1px 0; }
         .ia-log .proxy { color:#C4442D; }
@@ -508,6 +530,10 @@ $roleLabel = ia_role_label($perms);
                         <b>違反條文</b>會把「綁定這份 AS 文件的條文」列出來讓您勾（也可以自己打字改）。
                         開完之後查檢表該列的備註會自動填上 IA 編號，並<b>順手把該年度的稽核報告表建起來</b>。
                         表單的<b>編號與名稱都會存快照</b>，日後改編號、改名甚至廢止，已開的單仍印得出當時的內容。</li>
+                    <li><b>另一條開單路徑：資料稽核</b>（2026-09-21 新增）——
+                        「資料稽核」頁的<b>流程順序稽核</b>查出來的缺失（查不到報價單、出貨早於訂單、製令早於訂單…），
+                        可以在那一頁<b>直接開成不符合通知單</b>，受稽核單位、相關表單編號、違反條文、不合格事實都會自動帶好，
+                        也可以勾選多筆一次開完。詳見該頁的使用說明。</li>
                     <li><b>系統稽核紀錄表（2-GM-06-06）</b>：稽核對象是「AS 表單」，建立跳窗的清單上<b>直接列表單編號與名稱</b>（品質管理系統要求改成滑鼠移上去才顯示，開不符合通知單時「違反條文」照樣自動帶入）。
                         <b>左欄挑部門</b>（依 AS 文件編號的部門代碼分類）只是把中間清單<b>聚焦</b>到該部門的表單，<b>不會自動勾選</b>；要整批勾請按<b>「全選」</b>（只動目前顯示的），或勾上<b>「點標籤時自動勾選底下的表單」</b>。
                         勾好的表單會列在<b>最右側「已選擇」欄</b>（編號／名稱／對應部門，可按 × 單筆取消）——<b>取消左欄的部門不會把已選的表單清掉</b>，所以可以一個部門一個部門挑完再一次建立。逐列選受稽人、判定合格／不合格。</li>
@@ -530,6 +556,20 @@ $roleLabel = ia_role_label($perms);
                 填完按「送出回覆」才會進到下一段。<b>稽核員／內稽管理員可以代填</b>（對方不方便用電腦、或補歷史紙本時），代填會在下方歷程留下紅字紀錄。</li>
             <li><b>段三 稽核組長填</b>：糾正和預防措施執行狀況驗證描述、驗證通過或不通過。<b>不通過會退回段二</b>並重新通知受稽單位。</li>
             <li><b>段四 管理代表填</b>：管理代表意見，按「結案」本單結束、通知受稽單位。</li>
+        </ul>
+
+        <h4>佐證附件（2026-09-21 新增）</h4>
+        <ul>
+            <li><b>段一、段二、段三各有自己的附件區</b>：稽核員可以附「不合格事實」的照片或掃描檔，
+                受稽單位在<b>改善</b>那一段附改善後的佐證，<b>稽核組長驗證</b>那一段附驗證佐證。
+                選好檔案（可一次選好幾個）、要的話填一行說明，按「上傳」即可。</li>
+            <li><b>誰能傳＝誰能填那一段</b>：段別鎖住的時候上傳鈕就不會出現，
+                所以<b>段三要等受稽單位按了「送出回覆」之後</b>稽核組長才附得了檔（和填寫欄位同一個規則）；
+                <b>結案之後三段都不能再增刪附件</b>。已經上傳的檔案唯讀時仍然看得到、也點得開。</li>
+            <li><b>單檔 20MB 以內</b>，照片、PDF、Word／Excel、文字檔都可以；
+                可執行檔與腳本（.exe、.bat、.php…）一律不收。檔名點一下就開新分頁預覽或下載。</li>
+            <li>上傳與刪除都會記在下方的<b>填寫歷程</b>，看得到是誰在什麼時候動的。
+                <b>刪除會連同附件資料夾裡的檔案一起移除，無法復原</b>。</li>
         </ul>
 
         <h4>重要行為／常見疑問</h4>
@@ -1046,6 +1086,16 @@ $roleLabel = ia_role_label($perms);
                 <label>要求完成期限</label><div><input type="date" id="nDue"><div class="err-msg" id="errNDue"></div></div>
                 <label>稽核員</label><div><input type="text" id="nAuditor" readonly></div>
             </div>
+            <div class="ia-att" id="ncAttsec1" data-sec="sec1">
+                <div class="ia-att-h">佐證附件（不合格事實） <em>（可附照片、掃描檔、Excel／PDF，單檔 20MB 以內）</em></div>
+                <div class="ia-att-list"></div>
+                <div class="ia-att-up">
+                    <input type="file" class="ia-att-file" data-eg-skip multiple>
+                    <input type="text" class="ia-att-note" data-eg-skip data-eg-hint="這份附件是什麼，例：改善後的檢驗紀錄" placeholder="說明（選填）">
+                    <button type="button" class="ia-att-btn"><i class="fa fa-upload"></i> 上傳</button>
+                    <span class="ia-att-msg"></span>
+                </div>
+            </div>
             <div style="text-align:right;margin-top:8px;">
                 <button id="btnNcSaveSec1" style="height:30px;font-size:13px;padding:0 14px;border:1px solid #d98a33;border-radius:4px;background:#F0A24B;color:#fff;cursor:pointer;">儲存稽核員填寫區</button>
             </div>
@@ -1066,6 +1116,16 @@ $roleLabel = ia_role_label($perms);
                 <div class="full"><textarea id="nPrev"></textarea><div class="err-msg" id="errNPrev"></div></div>
                 <label>責任主管</label><div><select id="nResp" data-eg-filter="輸入人員姓名篩選…"></select></div>
                 <label>簽核日期</label><div><input type="date" id="nRespDate"></div>
+            </div>
+            <div class="ia-att" id="ncAttsec2" data-sec="sec2">
+                <div class="ia-att-h">改善佐證附件 <em>（可附照片、掃描檔、Excel／PDF，單檔 20MB 以內）</em></div>
+                <div class="ia-att-list"></div>
+                <div class="ia-att-up">
+                    <input type="file" class="ia-att-file" data-eg-skip multiple>
+                    <input type="text" class="ia-att-note" data-eg-skip data-eg-hint="這份附件是什麼，例：改善後的檢驗紀錄" placeholder="說明（選填）">
+                    <button type="button" class="ia-att-btn"><i class="fa fa-upload"></i> 上傳</button>
+                    <span class="ia-att-msg"></span>
+                </div>
             </div>
             <div style="text-align:right;margin-top:8px;">
                 <button id="btnNcSaveSec2" style="height:30px;font-size:13px;padding:0 14px;border:1px solid #D8BE93;border-radius:4px;background:#fff;color:#5b3a1e;cursor:pointer;">暫存</button>
@@ -1088,6 +1148,16 @@ $roleLabel = ia_role_label($perms);
                 <label>結束</label><div><input type="text" id="nCloseNote" placeholder="紙本「結束」欄"></div>
                 <label>稽核組長</label><div><input type="text" id="nLeader" readonly></div>
                 <label>簽核日期</label><div><input type="date" id="nLeaderDate"></div>
+            </div>
+            <div class="ia-att" id="ncAttsec3" data-sec="sec3">
+                <div class="ia-att-h">驗證佐證附件 <em>（可附照片、掃描檔、Excel／PDF，單檔 20MB 以內）</em></div>
+                <div class="ia-att-list"></div>
+                <div class="ia-att-up">
+                    <input type="file" class="ia-att-file" data-eg-skip multiple>
+                    <input type="text" class="ia-att-note" data-eg-skip data-eg-hint="這份附件是什麼，例：改善後的檢驗紀錄" placeholder="說明（選填）">
+                    <button type="button" class="ia-att-btn"><i class="fa fa-upload"></i> 上傳</button>
+                    <span class="ia-att-msg"></span>
+                </div>
             </div>
             <div style="text-align:right;margin-top:8px;">
                 <button id="btnNcSaveSec3" style="height:30px;font-size:13px;padding:0 14px;border:1px solid #D8BE93;border-radius:4px;background:#fff;color:#5b3a1e;cursor:pointer;">暫存</button>
@@ -4095,6 +4165,7 @@ function openNc(id){
                + (+l.is_proxy ? '（代'+esc(l.on_behalf_name||'受稽單位')+'填寫）' : '')+'</div>';
         });
         $('#ncLog').html(lg);
+        renderNcAtt();
         clearErrs($('#ncMask'));
         openMask('ncMask');
     });
@@ -4106,6 +4177,73 @@ function lockSec(sel, allow, lockSel, why){
     $s.find('button').toggle(!!allow);
     $(lockSel).text(allow ? '' : '（唯讀：'+why+'）');
 }
+
+/* ============================ IA 單佐證附件（2026-09-21 使用者要求） ============================
+   能不能傳一律沿用「這一段能不能填」（NC.perm.secN），不另外發明一套權限；
+   lockSec() 已經把整段的 input 停用、button 隱藏，所以唯讀時上傳列自然就不見了，
+   這裡只要多做一件事：唯讀時不要輸出「刪除」連結（那是 span，lockSec 管不到）。 */
+function renderNcAtt(){
+    ['sec1','sec2','sec3'].forEach(function(sec){
+        var $box = $('#ncAtt'+sec);
+        var rows = ((NC && NC.attach) || {})[sec] || [];
+        var canEdit = !!(NC && NC.perm && NC.perm[sec]);
+        var h = rows.map(function(a){
+            var nm = a.orig_name || a.file_name;
+            return '<span class="ia-att-item" title="'+esc(nm+'　'+(a.uploaded_by_name||'')+' '+(a.uploaded_at||'')
+                        +(a.note?('　'+a.note):''))+'">'
+                 + '<i class="fa fa-paperclip" style="color:#a08356"></i>'
+                 + '<a href="'+API+'?action=nc_attach_get&att_id='+(+a.att_id)+'" target="_blank" rel="noopener">'
+                 + esc(nm)+'</a>'
+                 + (a.size_text ? '<span class="sz">'+esc(a.size_text)+'</span>' : '')
+                 + (canEdit ? '<span class="del" data-att="'+(+a.att_id)+'" title="刪除這個附件">刪除</span>' : '')
+                 + '</span>';
+        }).join('');
+        if (!h) h = '<span class="ia-att-none">' + (canEdit ? '尚未上傳佐證附件。' : '沒有附件。') + '</span>';
+        $box.find('.ia-att-list').html(h);
+        $box.find('.ia-att-msg').text('');
+        $box.find('.ia-att-file').val('');
+        $box.find('.ia-att-note').val('');
+    });
+}
+/* 上傳：一次可選好幾個檔，逐一送出（後端一次收一個，錯誤才講得清楚是哪一個檔）。
+   依記憶 file_upload_change_event 的三鐵則：原生 file input 直接可見、上傳鈕常駐、
+   送出當下直讀 input.files（不依賴 change 事件——這台環境的 change 會被靜默吞掉）。 */
+$(document).on('click', '#ncMask .ia-att-btn', function(){
+    var $box = $(this).closest('.ia-att'), sec = $box.data('sec');
+    var el = $box.find('.ia-att-file')[0];
+    var files = (el && el.files) ? Array.prototype.slice.call(el.files) : [];
+    var $msg = $box.find('.ia-att-msg');
+    if (!files.length) { $msg.text('請先選擇檔案'); return; }
+    if (!NC || !NC.nc_id) return;
+    var note = $box.find('.ia-att-note').val() || '';
+    var $btn = $(this).prop('disabled', true);
+    var done = 0, errs = [];
+    (function next(){
+        if (!files.length) {
+            $btn.prop('disabled', false);
+            if (errs.length) { $msg.text('失敗 '+errs.length+' 個：'+errs.join('；')); }
+            if (done) openNc(NC.nc_id);          // 重新載入＝附件清單與歷程一起更新
+            return;
+        }
+        var f = files.shift();
+        var fd = new FormData();
+        fd.append('action', 'nc_attach_upload'); fd.append('nc_id', NC.nc_id);
+        fd.append('section', sec); fd.append('note', note); fd.append('file', f);
+        $msg.text('上傳中… '+f.name);
+        $.ajax({url:API, type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
+         .done(function(r){ if (r && r.ok) done++; else errs.push(f.name+'（'+((r&&r.error)||'失敗')+'）'); })
+         .fail(function(x){ errs.push(f.name+'（'+(((x.responseJSON||{}).error)||'連線失敗')+'）'); })
+         .always(next);
+    })();
+});
+$(document).on('click', '#ncMask .ia-att-item .del', function(){
+    var id = +$(this).data('att');
+    if (!id || !confirm('刪除這個附件？檔案會一併從附件資料夾移除，無法復原。')) return;
+    $.post(API, {action:'nc_attach_del', att_id:id}, function(r){
+        if (!r.ok) { alert(r.error||'刪除失敗'); return; }
+        openNc(NC.nc_id);
+    }, 'json');
+});
 $('#btnNcSaveSec1').on('click', function(){
     clearErrs($('#ncSec1'));
     var ok = true;

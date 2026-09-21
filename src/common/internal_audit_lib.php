@@ -77,6 +77,7 @@ const IA_SETTING_KEYS  = [
     'ia_report_notify',   // 稽核報告表送出後要通知誰：[{dept_id, position_id}] JSON（管理員設定）
     'ia_extra_years',     // 管理員登記「要補資料的舊年度」JSON 陣列（選單只列有資料的年度＋今年明年＋這裡登記的）
     'ia_auto_sign_case',  // 稽核通知單按下「完成」時要不要直接簽完（與年度計畫表的 ia_auto_sign 分開設定）
+    'ia_dqa_item_doc',    // 資料稽核的檢核項目 → AS 文件 id 對照（JSON 物件；決定開 IA 單時帶哪個受稽單位與違反條文）
 ];
 
 /**
@@ -474,6 +475,14 @@ function ia_ensure_schema(PDO $db): void
             ['ia_report',    'submitted_at',        "DATETIME NULL COMMENT '按下送出的精確時間（與業務日期分開存，ai-rules/21）'"],
             ['ia_report',    'submitted_by',        "INT NULL COMMENT '送出者 user.id'"],
             ['ia_report',    'submitted_by_name',   "VARCHAR(60) NULL COMMENT '送出者姓名（顯示用快取）'"],
+            /* 資料稽核（views/ADM/data_audit.php）開過來的 IA 單（2026-09-21 使用者交辦）：
+               src_kind='dqa'、src_item_id＝order_track.Order_id，再加一個「是哪一個檢核項目」，
+               三者合起來才是防重複開單的鍵——同一張訂單可能同時有「無報價單」與「出貨早於訂單」兩種缺失，
+               那是兩張 IA 單，只用 src_item_id 會把第二張擋掉。 */
+            ['ia_nc',        'src_code',            "VARCHAR(30) NULL COMMENT '資料稽核的檢核項目代碼（配合 src_kind=dqa）'"],
+            /* 附件的段別（2026-09-21 使用者要求：改善與稽核組長驗證都要能附佐證）。
+               空值＝舊資料或非 IA 單的附件，一律視為段一。 */
+            ['ia_attach',    'section',             "VARCHAR(10) NULL COMMENT 'IA 單的段別 sec1/sec2/sec3'"],
         ] as $c) {
             try {
                 $has = $db->query("SHOW COLUMNS FROM `{$c[0]}` LIKE '{$c[1]}'")->fetchAll();
@@ -3922,4 +3931,319 @@ function ia_as_dept_code_names(PDO $db): array
         if (($cnt[$name] ?? 0) > 1) $out[$code] = $name . '（' . $code . '）';
     }
     return $out;
+}
+
+/* ============================================================
+ * 資料稽核（views/ADM/data_audit.php）→ 不符合通知單 的串接
+ *   2026-09-21 使用者交辦：「稽核要查訂單資料有沒有缺失（無報價單、出貨後才開立訂單…），
+ *   已經有 data_audit.php 在檢核，但還是很難查」＝查得出缺失卻沒辦法直接變成 IA 單，
+ *   只能把整份結果用眼睛看完再到內稽這邊從頭手打，所以一直開不出不符合通知單。
+ *
+ * 【為什麼「檢核項目 → AS 文件」是對照表的正確形狀】
+ *   IA 單一定要有「受稽核單位」，而資料稽核的一列是**一張訂單**不是一個部門。
+ *   但每一種缺失本來就對應到一份 AS 表單（無報價單＝報價單那份、製令早於訂單＝製令那份），
+ *   而 AS 文件編號第二段就是部門代碼（ia_doc_dept_code）。所以只要管理員把
+ *   「檢核項目 → AS 文件」設定好，受稽單位／相關表單編號／違反條文**三個欄位一次全部推導得出來**，
+ *   不必另外再設一張「檢核項目→部門」對照（鐵律4：同一份資訊不要有第二個來源）。
+ *   沒有設定的項目就退回「稽核對象」裡綁的第一份文件，仍然開得出單、只是要自己選單位。
+ * ============================================================ */
+
+/** AS 文件編號的部門代碼 → 部門 id（ia_as_dept_code_names() 的 id 版） */
+function ia_as_dept_code_ids(PDO $db): array
+{
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $out = [];
+    try {
+        $rows = $db->query("SELECT code, department_id FROM as_dept_code ORDER BY sort_order, id")
+                   ->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $r) {
+            $code = strtoupper(trim((string)$r['code']));
+            $did  = (int)($r['department_id'] ?? 0);
+            if ($code === '' || $did <= 0 || isset($out[$code])) continue;   // 同代碼多列時取第一個
+            $out[$code] = $did;
+        }
+    } catch (Throwable $e) {}
+    return $cache = $out;
+}
+
+/** 檢核項目代碼 → AS 文件 id（管理員設定，沒設定的項目不會有鍵） */
+function ia_dqa_item_doc_map(PDO $db): array
+{
+    $raw = ia_settings($db)['ia_dqa_item_doc'] ?? '';
+    $m = json_decode((string)$raw, true);
+    $out = [];
+    foreach (is_array($m) ? $m : [] as $k => $v) {
+        $k = trim((string)$k); $v = (int)$v;
+        if ($k !== '' && $v > 0) $out[$k] = $v;
+    }
+    return $out;
+}
+
+/**
+ * 存對照表。**後端一律再驗一次文件真的存在**（鐵律8）——設到一個已刪除的文件，
+ * 開單時三個欄位會安靜地全部帶不出來，而畫面上完全看不出設錯了。
+ */
+function ia_dqa_item_doc_save(PDO $db, array $map, string $byName): array
+{
+    $clean = [];
+    foreach ($map as $k => $v) {
+        $k = trim((string)$k); $v = (int)$v;
+        if ($k === '' || $v <= 0) continue;                 // 清空＝不設定，不是錯誤
+        $clean[$k] = $v;
+    }
+    if ($clean) {
+        $ids = array_values(array_unique($clean));
+        $in  = implode(',', array_fill(0, count($ids), '?'));
+        $st  = $db->prepare("SELECT id FROM as_document WHERE id IN ($in) AND COALESCE(is_deleted,0)=0");
+        $st->execute($ids);
+        $okIds = array_flip(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN)));
+        foreach ($clean as $k => $v) if (!isset($okIds[$v])) unset($clean[$k]);
+    }
+    ia_setting_save($db, 'ia_dqa_item_doc', json_encode($clean, JSON_UNESCAPED_UNICODE), $byName);
+    return $clean;
+}
+
+/**
+ * 一份 AS 文件 → 開 IA 單要用的那一組欄位。
+ * 回傳 doc_no／doc_name／dept_id（已換成受稽單位的代表部門）／dept_name／clauses。
+ */
+function ia_dqa_doc_bundle(PDO $db, int $docId): array
+{
+    $out = ['doc_id' => $docId, 'doc_no' => '', 'doc_name' => '',
+            'dept_id' => 0, 'dept_name' => '', 'clauses' => []];
+    if ($docId <= 0) return $out;
+    try {
+        $st = $db->prepare("SELECT doc_no, doc_name FROM as_document WHERE id=? AND COALESCE(is_deleted,0)=0");
+        $st->execute([$docId]);
+        $d = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$d) return $out;
+        $out['doc_no']   = (string)$d['doc_no'];
+        $out['doc_name'] = (string)$d['doc_name'];
+    } catch (Throwable $e) { return $out; }
+
+    $code = ia_doc_dept_code($out['doc_no']);
+    $did  = $code !== '' ? (int)(ia_as_dept_code_ids($db)[$code] ?? 0) : 0;
+    if ($did > 0) {
+        // 受稽單位可能是群組（生產部＋生產1/2/3廠），IA 單一律存代表部門
+        $did = ia_unit_key_of_dept($db, $did);
+        $out['dept_id'] = $did;
+        try {
+            $q = $db->prepare("SELECT name FROM department WHERE id=?");
+            $q->execute([$did]);
+            $out['dept_name'] = (string)($q->fetchColumn() ?: '');
+        } catch (Throwable $e) {}
+    }
+    $out['clauses'] = ia_clause_map_by_doc_no($db)[$out['doc_no']] ?? [];
+    return $out;
+}
+
+/**
+ * 每一個檢核項目開單時要帶的東西。
+ * 沒設定對照的項目退回「稽核對象」綁的第一份文件（dqa_scope_docs('trace')），
+ * 連那個都沒綁就只回空的——單還是開得出來，只是受稽單位要自己選。
+ */
+function ia_dqa_item_bundles(PDO $db, array $codes): array
+{
+    $map  = ia_dqa_item_doc_map($db);
+    $fall = 0;
+    if (function_exists('dqa_scope_docs')) {
+        $sc = dqa_scope_docs($db, 'trace');
+        $fall = (int)($sc[0] ?? 0);
+    }
+    $out = [];
+    foreach ($codes as $c) {
+        $c = trim((string)$c);
+        if ($c === '' || isset($out[$c])) continue;
+        $docId = (int)($map[$c] ?? 0);
+        $b = ia_dqa_doc_bundle($db, $docId ?: $fall);
+        $b['mapped'] = ($docId > 0);          // 畫面要分得出是「設定好的」還是「退回稽核對象」
+        $out[$c] = $b;
+    }
+    return $out;
+}
+
+/**
+ * 這幾張訂單已經開過哪些資料稽核來源的 IA 單。
+ * 回傳 order_id => [ 檢核項目代碼 => ['nc_id'=>, 'nc_no'=>, 'stage'=>] ]
+ * 防重複開單用，也讓資料稽核那一列直接顯示「已開單 IA…」可以點開。
+ */
+function ia_dqa_existing(PDO $db, array $orderIds): array
+{
+    $ids = [];
+    foreach ($orderIds as $x) { $i = (int)$x; if ($i > 0) $ids[$i] = 1; }
+    if (!$ids) return [];
+    $ids = array_keys($ids);
+    $out = [];
+    foreach (array_chunk($ids, 800) as $ck) {
+        $in = implode(',', array_fill(0, count($ck), '?'));
+        try {
+            $st = $db->prepare("SELECT nc_id, nc_no, stage, src_item_id, src_code
+                                  FROM ia_nc
+                                 WHERE src_kind='dqa' AND COALESCE(is_deleted,0)=0
+                                   AND src_item_id IN ($in)");
+            $st->execute($ck);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $out[(int)$r['src_item_id']][(string)$r['src_code']] =
+                    ['nc_id' => (int)$r['nc_id'], 'nc_no' => (string)$r['nc_no'],
+                     'stage' => (string)$r['stage'],
+                     'stage_label' => IA_NC_STAGES[(string)$r['stage']] ?? (string)$r['stage']];
+            }
+        } catch (Throwable $e) {}
+    }
+    return $out;
+}
+
+/**
+ * 訂單的身分資料一律**由後端自己查**，不採信前端送過來的（前端只負責送 order_id 與檢核項目）。
+ * 不合格事實的敘述文字才吃前端的（那是稽核當下算出來的說明，而且開單畫面上還可以改）。
+ */
+function ia_dqa_order_head(PDO $db, int $orderId): ?array
+{
+    if ($orderId <= 0) return null;
+    try {
+        $st = $db->prepare("SELECT Order_id, Order_oo, Client_name, d_id,
+                                   DATE_FORMAT(Order_date,'%Y-%m-%d') odate, Qty, unit_price
+                              FROM order_track WHERE Order_id=?");
+        $st->execute([$orderId]);
+        return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+    } catch (Throwable $e) { return null; }
+}
+
+/** 不合格事實的預設敘述（開單畫面上仍可自行修改） */
+function ia_dqa_fact_text(array $ord, string $itemLabel, string $detail): string
+{
+    $head = '訂單 ' . trim((string)($ord['Order_oo'] ?? ''))
+          . '（客戶 ' . trim((string)($ord['Client_name'] ?? ''))
+          . '、料號 ' . trim((string)($ord['d_id'] ?? ''))
+          . '、訂單日 ' . eg_fmt_date((string)($ord['odate'] ?? '')) . '）';
+    $body = trim($detail) !== '' ? trim($detail) : $itemLabel;
+    return $head . '：' . $body;
+}
+
+/* ============================================================
+ * IA 單佐證附件（2026-09-21 使用者要求：改善與稽核組長驗證都要能上傳）
+ *   ia_attach 這張表 2026-08-25 就建好了，但整個模組從來沒有做上傳 UI，
+ *   所以四段到今天為止都只有文字欄位。
+ *   段別存在 ia_attach.section（sec1 稽核員／sec2 受稽單位改善／sec3 稽核組長驗證），
+ *   空值＝舊資料，一律當成段一。
+ *   鐵律5：DB 只存檔名，完整路徑一律讀取當下用 ia_attach_dir() 現場組。
+ * ============================================================ */
+
+const IA_ATTACH_SECTIONS = [
+    'sec1' => '稽核員佐證',
+    'sec2' => '改善佐證',
+    'sec3' => '驗證佐證',
+];
+const IA_ATTACH_MAX_BYTES = 20971520;          // 20MB／檔
+/** 一律擋下可執行與腳本副檔名（附件目錄在 NAS 上，別人點下去就執行了） */
+const IA_ATTACH_DENY_EXT = ['php','php3','php4','php5','phtml','phar','exe','com','bat','cmd','scr',
+                            'msi','vbs','vbe','js','jse','wsf','wsh','ps1','jar','hta','dll','cpl','lnk'];
+
+function ia_attach_section_ok(string $sec): bool { return isset(IA_ATTACH_SECTIONS[$sec]); }
+
+/** 這張單的附件（依段別分組；沒有 section 的舊資料歸到 sec1） */
+function ia_attach_rows(PDO $db, string $refType, int $refId): array
+{
+    $out = array_fill_keys(array_keys(IA_ATTACH_SECTIONS), []);
+    if ($refId <= 0) return $out;
+    try {
+        $st = $db->prepare("SELECT att_id, section, file_name, orig_name, file_size, note,
+                                   uploaded_by, uploaded_by_name,
+                                   DATE_FORMAT(uploaded_at,'%Y-%m-%d %H:%i') uploaded_at
+                              FROM ia_attach
+                             WHERE ref_type=? AND ref_id=? AND COALESCE(is_deleted,0)=0
+                             ORDER BY att_id");
+        $st->execute([$refType, $refId]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $sec = (string)($r['section'] ?? '');
+            if (!ia_attach_section_ok($sec)) $sec = 'sec1';
+            $r['section'] = $sec;
+            $r['size_text'] = ia_attach_size_text((int)$r['file_size']);
+            $out[$sec][] = $r;
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+function ia_attach_size_text(int $b): string
+{
+    if ($b <= 0) return '';
+    if ($b < 1024) return $b . ' B';
+    if ($b < 1048576) return round($b / 1024) . ' KB';
+    return round($b / 1048576, 1) . ' MB';
+}
+
+/** 上傳一個檔（回傳 att_id）。檔名衝突一律改名，不覆蓋別人的檔。 */
+function ia_attach_add(PDO $db, string $refType, int $refId, string $section, array $file,
+                       int $uid, string $uname, string $note = ''): int
+{
+    if (!ia_attach_section_ok($section)) throw new RuntimeException('附件段別不正確');
+    $err = (int)($file['error'] ?? UPLOAD_ERR_NO_FILE);
+    if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) throw new RuntimeException('檔案超過伺服器允許的大小');
+    if ($err !== UPLOAD_ERR_OK) throw new RuntimeException('檔案上傳失敗（代碼 ' . $err . '）');
+    $size = (int)($file['size'] ?? 0);
+    if ($size <= 0) throw new RuntimeException('檔案是空的');
+    if ($size > IA_ATTACH_MAX_BYTES) throw new RuntimeException('單一檔案不可超過 20MB');
+
+    $orig = trim((string)($file['name'] ?? ''));
+    if ($orig === '') throw new RuntimeException('取不到檔名');
+    $ext = strtolower((string)pathinfo($orig, PATHINFO_EXTENSION));
+    if ($ext === '' || in_array($ext, IA_ATTACH_DENY_EXT, true)) throw new RuntimeException('不接受這種檔案類型：.' . $ext);
+
+    $dir = ia_attach_dir($db);
+    if (!eg_attach_ensure_dir($dir)) throw new RuntimeException('附件資料夾無法建立或無法存取：' . $dir);
+
+    /* 存檔名一律自己生成（原始檔名可能有中文、空白、路徑字元），原始檔名另存 orig_name 供下載時還原。
+       時間戳取 DB 的時間不是 PHP 的 date()——本站 PHP 是 UTC、MySQL 是本地時間，
+       混用會讓「檔名上的時刻」跟「uploaded_at」差 8 小時，在 NAS 上對帳時完全對不起來。 */
+    $stamp = date('Ymd_His');
+    try { $stamp = (string)$db->query("SELECT DATE_FORMAT(NOW(),'%Y%m%d_%H%i%s')")->fetchColumn(); } catch (Throwable $e) {}
+    $base = $refType . $refId . '_' . $section . '_' . $stamp . '_' . bin2hex(random_bytes(3));
+    $name = $base . '.' . $ext;
+    $i = 1;
+    while (is_file($dir . $name)) { $name = $base . '_' . (++$i) . '.' . $ext; }
+
+    $tmp = (string)($file['tmp_name'] ?? '');
+    if (!is_uploaded_file($tmp)) throw new RuntimeException('來源檔案不正確');
+    if (!@move_uploaded_file($tmp, $dir . $name)) throw new RuntimeException('寫入附件資料夾失敗：' . $dir);
+
+    try {
+        $db->prepare("INSERT INTO ia_attach (ref_type, ref_id, section, file_name, orig_name, file_size, note,
+                                             uploaded_by, uploaded_by_name, uploaded_at)
+                      VALUES (?,?,?,?,?,?,?,?,?,NOW())")
+           ->execute([$refType, $refId, $section, $name, mb_substr($orig, 0, 255), $size,
+                      mb_substr(trim($note), 0, 255) ?: null, $uid ?: null, $uname]);
+        return (int)$db->lastInsertId();
+    } catch (Throwable $e) {
+        @unlink($dir . $name);                 // DB 寫不進去就不要在 NAS 上留一個沒人認得的孤兒檔
+        throw $e;
+    }
+}
+
+/** 取一筆附件（含實體路徑；查不到或檔案不在回 null） */
+function ia_attach_one(PDO $db, int $attId): ?array
+{
+    if ($attId <= 0) return null;
+    try {
+        $st = $db->prepare("SELECT * FROM ia_attach WHERE att_id=? AND COALESCE(is_deleted,0)=0");
+        $st->execute([$attId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) return null;
+        // 只准單純檔名：DB 若被塞進 ../ 之類的值，這裡是最後一道（鐵律5）
+        $fn = basename((string)$r['file_name']);
+        if ($fn === '' || $fn !== (string)$r['file_name']) return null;
+        $r['fs_path'] = ia_attach_dir($db) . $fn;
+        return $r;
+    } catch (Throwable $e) { return null; }
+}
+
+/** 軟刪除（實體檔一併刪掉：附件本來就是佐證，留著孤兒檔只會讓 NAS 越積越多） */
+function ia_attach_del(PDO $db, int $attId): bool
+{
+    $a = ia_attach_one($db, $attId);
+    if (!$a) return false;
+    $db->prepare("UPDATE ia_attach SET is_deleted=1 WHERE att_id=?")->execute([$attId]);
+    if (is_file($a['fs_path'])) @unlink($a['fs_path']);
+    return true;
 }
