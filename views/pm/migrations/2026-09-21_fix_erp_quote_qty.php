@@ -24,6 +24,11 @@
 
 if (PHP_SAPI !== 'cli') { exit("這支工具只能用指令列執行\n"); }
 
+// PhpSpreadsheet 吃記憶體很兇：一份年度報價單日報表（4,500 筆明細）就要幾百 MB，
+// 預設的 128M 在第二個檔案就會 fatal。逐檔處理完會釋放，但單檔峰值仍需要這個空間。
+ini_set('memory_limit', '2G');
+set_time_limit(0);
+
 $args = array_slice($argv, 1);
 $inputs = []; $doRun = false; $show = 20;
 foreach ($args as $a) {
@@ -114,7 +119,7 @@ foreach ($files as $fi => $file) {
       $allRows = $spreadsheet->getActiveSheet()->toArray();
   } catch (Exception $e) {
       echo "讀取失敗：" . $e->getMessage() . "\n";
-      $skipFiles[] = "$base（讀取失敗）";
+      $skipFiles[] = "{$base}（讀取失敗）";
       continue;
   }
 
@@ -122,7 +127,7 @@ foreach ($files as $fi => $file) {
   foreach ($allRows as $i => $r) { if ($i >= 30) break; $scan .= implode(' ', array_map('strval', $r)); }
   if (mb_strpos($scan, '客戶報價單日報表') === false) {
       echo "略過：前 30 行找不到「客戶報價單日報表」字樣，可能不是報價單日報表\n";
-      $skipFiles[] = "$base（不是報價單日報表）";
+      $skipFiles[] = "{$base}（不是報價單日報表）";
       continue;
   }
 
@@ -178,6 +183,13 @@ foreach ($files as $fi => $file) {
   }
   printf("報價單%5d張｜已正確%6d｜可修正%5d｜待確認%4d｜查無%4d｜對不起來%3d\n",
       count($groups), $fOk, $fFix, $fManual, $fNo, $fMis);
+
+  // 這一檔處理完就把 PhpSpreadsheet 的物件釋放掉，否則跑到第二、三個檔案就會 fatal。
+  // **一定要先 disconnectWorksheets()**：工作表與活頁簿彼此持有參照，只 unset 變數
+  // 回收不掉（PHP 的參照計數解不開循環）。
+  $spreadsheet->disconnectWorksheets();
+  unset($spreadsheet, $allRows, $groups, $scan);
+  gc_collect_cycles();
 }
 
 // ── 報告 ────────────────────────────────────────────────────────────────
@@ -228,7 +240,32 @@ if (!$doRun) {
 if (!$toFix) { echo "\n沒有需要修正的資料。\n"; exit(0); }
 
 // ── 寫入 ────────────────────────────────────────────────────────────────
-echo "\n" . str_repeat('─', 78) . "\n開始寫入…\n";
+echo "\n" . str_repeat('─', 78) . "\n";
+
+// 動正式資料之前先把原值存成備份檔（比照 2026-09-16_bom_client_name_fix.backup.json 的慣例）。
+// 檔案裡有每一筆的 item_id 與改動前後的值，真的要退回時照著 UPDATE 回去就行。
+$backup = ['at' => date('Y-m-d H:i:s'), 'tool' => basename(__FILE__), 'files' => array_map('basename', $files), 'items' => []];
+$selBk = $db->prepare("SELECT qi.item_id, qi.quote_id, qi.quantity, qi.amount, ql.quote_no, ql.total_amount
+                         FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id = qi.quote_id
+                        WHERE qi.item_id = ?");
+foreach ($toFix as $r) {
+    $selBk->execute([$r['item_id']]);
+    if ($b = $selBk->fetch(PDO::FETCH_ASSOC)) {
+        $backup['items'][] = ['item_id' => (int)$b['item_id'], 'quote_id' => (int)$b['quote_id'],
+            'quote_no' => $b['quote_no'], 'product_id' => $r['product_id'],
+            'old_quantity' => (int)$b['quantity'], 'old_amount' => $b['amount'],
+            'old_total_amount' => $b['total_amount'],
+            'new_quantity' => $r['correct'], 'new_amount' => round($r['correct'] * $r['price'], 2)];
+    }
+}
+$bkFile = __DIR__ . '/' . pathinfo(basename(__FILE__), PATHINFO_FILENAME) . '.backup.'
+        . date('Ymd_His') . '.json';
+if (file_put_contents($bkFile, json_encode($backup, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) === false) {
+    exit("備份檔寫不出來（$bkFile），為安全起見停止執行。\n");
+}
+echo "已寫出備份：" . basename($bkFile) . "（" . count($backup['items']) . " 筆原值）\n";
+
+echo "開始寫入…\n";
 $upItem  = $db->prepare("UPDATE quotation_item SET quantity = ?, amount = ? WHERE item_id = ?");
 $upTotal = $db->prepare("UPDATE quotation_list SET total_amount =
                             (SELECT ROUND(SUM(amount),2) FROM quotation_item WHERE quote_id = ?)
