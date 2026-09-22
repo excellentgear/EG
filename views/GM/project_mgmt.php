@@ -131,6 +131,8 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         .m-body textarea { resize:vertical; }
         .ro-auto { background:#F3EADB; color:#7a6446; }
         .pj-hint { font-size:12px; color:#8a6d45; line-height:1.7; }
+        .pj-warn { background:#FCE4E4; color:#A32E1A; border:1px solid #E7B4A8; border-radius:6px;
+                   padding:8px 10px; font-size:13px; line-height:1.7; }
         .pj-err { color:#DD5138; font-size:12px; margin-top:2px; display:none; }
 
         /* ── 錯誤提示條（使用者要求：改成粉紅底、不要用瀏覽器 alert，因為 alert 根本不會被看）──
@@ -520,6 +522,12 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
                 結案時若專案內料號還有文件未建立，<b>擋下並列出缺什麼</b>（管理員可強制略過）</label>
         </div>
         <div class="sec">
+            <h5>進度佐證：哪些附件標籤算「加工圖面」</h5>
+            <p class="pj-hint">步驟「製作加工圖面」的完成日，系統會去找專案料號底下掛了這些標籤的附件，
+                日期取<b>發行章日期</b>（沒有發行章日期才退回上傳日）。不勾＝這一項偵測不出來，要人工填。</p>
+            <div id="setDwgCats" class="pj-tagbar"></div>
+        </div>
+        <div class="sec">
             <h5>圖章模板</h5>
             <p class="pj-hint">留空＝使用系統預設圖章。模板於「圖章管理」頁維護。</p>
             <div class="grid2">
@@ -532,6 +540,13 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         <button onclick="closeMask('setMask')">取消</button>
         <button class="b-ok" id="btnSetSave"><i class="fa fa-save"></i> 儲存設定</button>
     </div>
+</div></div>
+
+<!-- ══════════ 進度回報（各步驟負責人自己回報；系統自動偵測佐證） ══════════ -->
+<div class="pj-mask" id="rptMask"><div class="pj-modal" style="max-width:920px;">
+    <div class="m-head"><span><i class="fa fa-check-square-o"></i> <span id="rptTitle">回報進度</span></span><span class="m-close" onclick="closeMask('rptMask')">✕</span></div>
+    <div class="m-body" id="rptBody"></div>
+    <div class="m-foot" id="rptFoot"></div>
 </div></div>
 
 <!-- ══════════ 跨專案總覽（內部用，非 AS 表單） ══════════ -->

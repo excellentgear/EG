@@ -209,6 +209,7 @@ case 'get':
         'parts'     => prj_parts($db, $pid),
         'processes' => prj_processes($db, $pid, $prj),
         'scope_candidates' => prj_scope_candidates($db, $pid),
+        'attach_counts'    => prj_task_attach_counts($db, $pid),
         'shipments' => prj_shipments($db, $pid),
         'work_reports' => prj_work_reports($db, $pid),
         'fai'          => prj_fai_list($db, $pid),
@@ -445,6 +446,131 @@ case 'order_unlink':
     $db->prepare("DELETE FROM project_order WHERE project_id=? AND order_id=?")->execute([$pid, $oid]);
     prj_sync_parts_from_orders($db, $pid, $uname);
     jout(['message' => '已移出專案']);
+
+/* ══════════════════════════ 進度回報（各步驟的負責人自己回報） ══════════════════════════ */
+
+/** 開啟回報跳窗要的資料：這個步驟＋系統自動偵測到的佐證＋已上傳的附件 */
+case 'report_get':
+    $pid  = (int)($_GET['project_id'] ?? 0);
+    $prj  = prj_need($db, $P, $pid);
+    $tid  = (int)($_GET['task_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM project_task WHERE task_id=? AND project_id=?");
+    $st->execute([$tid, $pid]);
+    $task = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$task) jerr('找不到這個步驟');
+    $kinds = prj_auto_kinds_of((string)$task['task_name'], (string)$task['task_kind']);
+    // 佐證是整個專案共用的（同一批 BOM／料號），一次算好再依 kind 取用
+    $ev = prj_task_evidence($db, $pid, $prj);
+    $pick = [];
+    foreach ($kinds as $k) $pick[$k] = ['label' => PRJ_AUTO_KINDS[$k] ?? $k] + $ev[$k];
+    jout(['task' => $task, 'kinds' => $pick, 'attaches' => prj_task_attaches($db, $tid),
+          'can_report' => prj_can_report_task($task, $prj, $P, $uid),
+          'act_open'   => prj_act_dates_open($prj),
+          'today'      => $NOW['date']]);
+
+/** 回報：實際起迄、進度、狀態、備註。權限＝該步驟負責人本人也可以（使用者指定） */
+case 'report_save':
+    $pid  = (int)($_POST['project_id'] ?? 0);
+    $prj  = prj_need($db, $P, $pid);
+    $tid  = (int)($_POST['task_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM project_task WHERE task_id=? AND project_id=?");
+    $st->execute([$tid, $pid]);
+    $task = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$task) jerr('找不到這個步驟');
+    if (!prj_can_report_task($task, $prj, $P, $uid)) jerr('只有這個步驟的負責人、專案負責人或有專案登錄權的人可以回報', 403);
+    if (!prj_act_dates_open($prj)) jerr('專案還沒核准立案，實際日期要等立案核准後才能填');
+
+    $as = trim((string)($_POST['act_start'] ?? '')) ?: null;
+    $ae = trim((string)($_POST['act_end'] ?? ''))   ?: null;
+    if ($as && $ae && $ae < $as) jerr('實際完成日不可早於實際開始日');
+    if ($ae && $ae > $NOW['date']) jerr('實際完成日不可以填未來日期');
+    $pg = (int)($_POST['progress'] ?? 0);
+    if ($pg < 0) $pg = 0; if ($pg > 100) $pg = 100;
+    // 有實際完成日就一律 100%（避免出現「已完成但進度 60%」這種自相矛盾的列）
+    if ($ae) $pg = 100;
+    $sc = (string)($_POST['status_code'] ?? '');
+    if ($sc !== '' && !isset(PRJ_TASK_STATUS[$sc])) $sc = '';
+
+    $db->prepare("UPDATE project_task SET act_start=?, act_end=?, progress=?, progress_auto=?, status_code=?,
+                         report_note=?, reported_by=?, reported_by_name=?, reported_at=?
+                  WHERE task_id=? AND project_id=?")
+       ->execute([$as, $ae, $pg, $ae ? 1 : 0, $sc,
+                  mb_substr(trim((string)($_POST['report_note'] ?? '')), 0, 500),
+                  $uid, $uname, $NOW['dt'], $tid, $pid]);
+    jout(['message' => '已回報', 'progress' => prj_progress($db, $pid)]);
+
+/** 佐證附件：上傳／刪除／下載（鐵律5：DB 只存檔名，路徑即時組） */
+case 'report_upload':
+    $pid  = (int)($_POST['project_id'] ?? 0);
+    $prj  = prj_need($db, $P, $pid);
+    $tid  = (int)($_POST['task_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM project_task WHERE task_id=? AND project_id=?");
+    $st->execute([$tid, $pid]);
+    $task = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$task) jerr('找不到這個步驟');
+    if (!prj_can_report_task($task, $prj, $P, $uid)) jerr('無權限上傳', 403);
+    if (empty($_FILES['file']) || ($_FILES['file']['error'] ?? 9) !== UPLOAD_ERR_OK) jerr('請選擇檔案');
+    $orig = (string)$_FILES['file']['name'];
+    $ext  = strtolower((string)pathinfo($orig, PATHINFO_EXTENSION));
+    // 可執行／腳本副檔名一律擋（附件放在 NAS 上，點下去就執行了）
+    if (in_array($ext, ['php','phtml','exe','bat','cmd','com','scr','js','vbs','ps1','jar','msi','hta'], true)) {
+        jerr('不接受這種檔案類型（可執行或腳本檔）');
+    }
+    if (($_FILES['file']['size'] ?? 0) > 20 * 1024 * 1024) jerr('單檔上限 20MB');
+    $dir  = prj_attach_dir($db);
+    // 檔名時間戳一律取 DB 時間（本站 PHP 是 UTC、MySQL 是本地，混用會差 8 小時對不起來）
+    $fn   = 'P' . $pid . '_T' . $tid . '_' . str_replace([' ', '-', ':'], '', $NOW['dt'])
+          . '_' . bin2hex(random_bytes(3)) . ($ext !== '' ? '.' . $ext : '');
+    if (!@move_uploaded_file($_FILES['file']['tmp_name'], rtrim($dir, '/\\') . DIRECTORY_SEPARATOR . $fn)) {
+        jerr('檔案寫入失敗，請確認附件資料夾設定與 NAS 連線');
+    }
+    try {
+        $db->prepare("INSERT INTO project_task_attach (project_id, task_id, filename, orig_name, file_size,
+                             note, uploaded_by, uploaded_by_name, uploaded_at)
+                      VALUES (?,?,?,?,?,?,?,?,?)")
+           ->execute([$pid, $tid, $fn, mb_substr($orig, 0, 255), (int)$_FILES['file']['size'],
+                      mb_substr(trim((string)($_POST['note'] ?? '')), 0, 200), $uid, $uname, $NOW['dt']]);
+    } catch (Throwable $e) {
+        // 寫不進 DB 就把剛落地的實體檔收掉，不然 NAS 上會留一個沒人認得的孤兒檔
+        @unlink(rtrim($dir, '/\\') . DIRECTORY_SEPARATOR . $fn);
+        jerr('附件資料寫入失敗');
+    }
+    jout(['message' => '已上傳', 'attaches' => prj_task_attaches($db, $tid)]);
+
+case 'report_attach_del':
+    $pid  = (int)($_POST['project_id'] ?? 0);
+    $prj  = prj_need($db, $P, $pid);
+    $aid  = (int)($_POST['attach_id'] ?? 0);
+    $st = $db->prepare("SELECT a.*, t.owner_id FROM project_task_attach a
+                        JOIN project_task t ON t.task_id=a.task_id
+                        WHERE a.id=? AND a.project_id=?");
+    $st->execute([$aid, $pid]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row) jerr('找不到附件');
+    if (!prj_can_report_task($row, $prj, $P, $uid)) jerr('無權限刪除', 403);
+    $db->prepare("UPDATE project_task_attach SET deleted_at=?, deleted_by=? WHERE id=?")
+       ->execute([$NOW['dt'], $uname, $aid]);
+    jout(['message' => '已刪除', 'attaches' => prj_task_attaches($db, (int)$row['task_id'])]);
+
+case 'report_attach_dl':
+    $pid = (int)($_GET['project_id'] ?? 0);
+    prj_need($db, $P, $pid);
+    $aid = (int)($_GET['attach_id'] ?? 0);
+    $st = $db->prepare("SELECT filename, orig_name FROM project_task_attach
+                        WHERE id=? AND project_id=? AND deleted_at IS NULL");
+    $st->execute([$aid, $pid]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row) { http_response_code(404); exit('not found'); }
+    // 只准單純檔名（DB 裡本來就只存檔名），擋掉 .. 與路徑分隔字元
+    $fn = basename((string)$row['filename']);
+    $fp = rtrim(prj_attach_dir($db), '/\\') . DIRECTORY_SEPARATOR . $fn;
+    if ($fn === '' || !is_file($fp)) { http_response_code(404); exit('file missing'); }
+    require_once $document_root . '/EGsystem/src/common/attach_lib.php';
+    header('Content-Type: application/octet-stream');
+    header('Content-Length: ' . filesize($fp));
+    eg_attach_send_disposition((string)$row['orig_name']);
+    readfile($fp);
+    exit;
 
 /** 清單頁「就地展開進度」要的資料：只有目標與任務。
  *  刻意不用 get——那支會順路同步 BOM、算文件檢核、撈報工與出貨，展開一列不需要那些。 */
@@ -1215,7 +1341,15 @@ case 'setting_get':
         'card_stamp_tpl_id'      => prj_setting_get($db, 'card_stamp_tpl_id', '0'),
         'owner_scope'            => prj_setting_get($db, 'owner_scope', ''),
         'task_owner_depts'       => implode(',', prj_task_owner_depts($db)),
+        // 哪些附件標籤算「加工圖面」（進度佐證用，不寫死標籤名稱＝鐵律4）
+        'drawing_attach_cats'    => prj_setting_get($db, 'drawing_attach_cats', ''),
     ], 'owner_scope_rows' => prj_owner_scope_labeled($db),
+     'attach_cats' => (function (PDO $db) {
+         try {
+             return $db->query("SELECT id, category_name FROM quotation_file_categories
+                                WHERE COALESCE(is_active,1)=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+         } catch (Throwable $e) { return []; }
+     })($db),
      // 標準流程範本：目前實際生效的那一份（沒自訂過就是內建預設），設定畫面直接編輯它
      'seed_template' => prj_seed_template($db),
      'seed_is_custom' => prj_seed_template_rows($db) ? 1 : 0]);
@@ -1224,7 +1358,8 @@ case 'setting_save':
     if (!$P['canAdmin']) jerr('無權限（需「專案管理員」角色）', 403);
     foreach (['approver_dept_id' => '立案核准綁定部門', 'approver_user_id' => '立案核准綁定人員',
               'default_cosign_depts' => '預設會簽單位', 'block_close_on_missing' => '結案前強制文件檢核',
-              'plan_stamp_tpl_id' => '執行規劃表圖章模板', 'card_stamp_tpl_id' => '管理卡圖章模板'] as $k => $desc) {
+              'plan_stamp_tpl_id' => '執行規劃表圖章模板', 'card_stamp_tpl_id' => '管理卡圖章模板',
+              'drawing_attach_cats' => '算「加工圖面」的附件標籤'] as $k => $desc) {
         if (!array_key_exists($k, $_POST)) continue;
         prj_setting_save($db, $k, trim((string)$_POST[$k]), $desc, $uname);
     }

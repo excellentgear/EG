@@ -435,6 +435,9 @@ function scopeHintText(sel, cands) {
         : '未指定＝<b>整張 BOM 的所有製程</b>都算本專案。';
 }
 /* 勾選只改畫面，跟其他欄位一起按「儲存」才寫入（避免點一下就送一次 API） */
+/* 設定頁的「加工圖面標籤」勾選（按「儲存設定」才寫入） */
+$(document).on('click', '#setDwgCats .pj-tag[data-dwgcat]', function () { $(this).toggleClass('on'); });
+
 $(document).on('click', '#eScopeBar .pj-tag[data-scope]', function () {
     if ($(this).hasClass('ro')) return;
     $(this).toggleClass('on');
@@ -697,8 +700,11 @@ function ganttHtml(res, opt) {
            + '<div class="gantt-own">' + esc(g.dept_name || '') + '</div>'
            + '<div class="gantt-track"><div class="gantt-grid">' + grid + '</div>' + todayMark + '</div></div>';
         $.each(g.tasks, function (ti, t) {
+            /* 標籤本身就是回報入口（清單檢視另有「回報」欄）；opt.compact＝清單頁就地展開，不給點 */
             h += '<div class="gantt-row"><div class="gantt-lbl" style="padding-left:22px;" title="' + esc(t.task_name) + '">'
-               + esc(t.task_name) + '</div>'
+               + (opt.compact || !num(t.task_id) ? esc(t.task_name)
+                    : '<span class="pj-op" data-report="' + t.task_id + '" style="padding:0;">' + esc(t.task_name) + '</span>')
+               + '</div>'
                + '<div class="gantt-own">' + esc(t.owner_name || '－') + '</div>'
                + '<div class="gantt-track"><div class="gantt-grid">' + grid + '</div>' + todayMark
                + barsFor(t, d0, span, today) + '</div></div>';
@@ -760,17 +766,26 @@ function barsFor(t, d0, span, today) {
 
 function drawGanttList(res) {
     var grouped = groupTasks(res.goals || [], res.tasks || []);
+    var tasksAll = res.tasks || [];
+    if (HIDE_DONE) {
+        grouped = groupTasks(res.goals || [],
+            $.grep(tasksAll, function (t) { return taskState(t, META.today) !== 'done'; }));
+    }
+    var cnt = (CUR && CUR.attach_counts) || {};
     var h = '<div class="pj-table-wrap"><table class="pj-table"><thead><tr>'
       + '<th style="width:34px;">項次</th><th>目標／主要任務</th><th style="width:84px;">負責人</th>'
       + '<th style="width:170px;">預計</th><th style="width:170px;">實際</th>'
-      + '<th style="width:96px;">進度</th><th style="width:82px;">狀態</th></tr></thead><tbody>';
-    if (!grouped.length) h += '<tr><td colspan="7" style="padding:14px;color:#8a6d45;">尚未建立目標與任務</td></tr>';
+      + '<th style="width:96px;">進度</th><th style="width:82px;">狀態</th>'
+      + '<th style="width:96px;">回報</th></tr></thead><tbody>';
+    if (!grouped.length) h += '<tr><td colspan="8" style="padding:14px;color:#8a6d45;">'
+        + (HIDE_DONE && tasksAll.length ? '目前的步驟都已完成（已勾選隱藏已完成）。' : '尚未建立目標與任務') + '</td></tr>';
     $.each(grouped, function (gi, g) {
         h += '<tr style="background:#FBF3E6;font-weight:bold;"><td>' + (gi + 1) + '</td>'
            + '<td class="l">' + esc(g.goal_name) + '</td><td>' + esc(g.dept_name || '') + '</td>'
-           + '<td colspan="4"></td></tr>';
+           + '<td colspan="5"></td></tr>';
         $.each(g.tasks, function (ti, t) {
             var stt = taskState(t, META.today);
+            var nAtt = num(cnt[t.task_id]);
             h += '<tr><td>' + (gi + 1) + '.' + (ti + 1) + '</td>'
                + '<td class="l" style="padding-left:22px;">' + esc(t.task_name)
                + (num(t.is_milestone) ? ' <span style="color:#8A5A2B;">◆里程碑</span>' : '') + '</td>'
@@ -778,12 +793,170 @@ function drawGanttList(res) {
                + '<td>' + dispDate(t.plan_start) + ' ~ ' + dispDate(t.plan_end) + '</td>'
                + '<td>' + dispDate(t.act_start) + ' ~ ' + dispDate(t.act_end) + '</td>'
                + '<td>' + barHtml(num(t.progress)) + '</td>'
-               + '<td>' + stateBadge(stt) + '</td></tr>';
+               + '<td>' + stateBadge(stt) + '</td>'
+               + '<td><span class="pj-op" data-report="' + t.task_id + '">回報</span>'
+               + (nAtt ? '<span class="pj-hint" title="佐證附件"><i class="fa fa-paperclip"></i>' + nAtt + '</span>' : '')
+               + '</td></tr>';
         });
     });
-    h += '</tbody></table></div>';
+    h += '</tbody></table></div>'
+       + '<p class="pj-hint">按「回報」可以看到系統自動偵測到的佐證（製令開立日、圖面發行日、SOP/SIP 版次日、'
+       + '客供料進料日、報工架機與完工日…），按一下就帶進實際完成日；沒有電子化的（首件檢驗、最終檢驗）'
+       + '請直接填日期並上傳附件佐證。<b>各步驟的負責人本人就可以回報，不必有專案登錄權限。</b></p>';
     $('#ganttBox').html(h);
 }
+
+/* ══════════════════════════ 進度回報 ══════════════════════════
+   使用者 2026-09-22：「建立完專案後該如何回報進度？正常來說應該是各負責人來回報各個進度」。
+   跳窗做三件事：①把系統自動偵測到的佐證列出來讓人按「採用」②填實際起迄與說明
+   ③上傳佐證附件（沒電子化的首件／最終檢驗就是靠這個）。
+   **自動偵測只建議不代填**——同一個專案常有好幾張製令、好幾份圖面附件，挑哪一筆是猜的。 */
+var RPT_TASK = null;
+
+function openReport(taskId) {
+    if (!CUR || !num(CUR.project.project_id)) return;
+    $('#rptBody').html('<div class="pj-hint" style="padding:14px;">載入中…</div>');
+    $('#rptFoot').html('');
+    openMask('rptMask');
+    api('report_get', { project_id: CUR.project.project_id, task_id: taskId }).done(function (r) {
+        RPT_TASK = r;
+        renderReport(r);
+    });
+}
+
+function renderReport(r) {
+    var t = r.task || {}, ro = r.can_report && r.act_open ? '' : ' disabled';
+    $('#rptTitle').text('回報進度：' + (t.task_name || ''));
+
+    var h = '<div class="sec"><h5>這個步驟</h5><div class="grid3">'
+      + '<div><label>步驟</label><input type="text" class="ro-auto" readonly value="' + esc(t.task_name || '') + '"></div>'
+      + '<div><label>負責人</label><input type="text" class="ro-auto" readonly value="' + esc(t.owner_name || '（未指派）') + '"></div>'
+      + '<div><label>預計</label><input type="text" class="ro-auto" readonly value="'
+      + esc(dispDate(t.plan_start) + ' ~ ' + dispDate(t.plan_end)) + '"></div>'
+      + '</div>'
+      + (t.reported_at ? '<div class="pj-hint">上次回報：' + esc(t.reported_by_name || '') + '　' + esc(String(t.reported_at)) + '</div>' : '')
+      + '</div>';
+
+    /* ① 自動佐證 */
+    var kinds = r.kinds || {}, hasKind = false;
+    var kh = '';
+    $.each(kinds, function (k, v) {
+        hasKind = true;
+        kh += '<div style="margin-bottom:10px;"><b>' + esc(v.label) + '</b>';
+        if ((v.options || []).length) {
+            kh += '<table class="sub-tbl" style="margin-top:4px;"><thead><tr><th style="width:92px;">日期</th><th>佐證</th>'
+                + '<th style="width:60px;"></th></tr></thead><tbody>';
+            $.each(v.options, function (i, o) {
+                kh += '<tr><td>' + dispDate(o.date) + '</td><td>' + o.label + '</td>'
+                    + '<td>' + (ro ? '<span class="pj-hint">－</span>'
+                        : '<span class="pj-op" data-useev="' + esc(o.date) + '">採用</span>') + '</td></tr>';
+            });
+            kh += '</tbody></table>';
+            if (!ro) kh += '<div class="pj-hint">按「採用」會把那個日期填進下面的<b>實際完成日</b>，還是要按「儲存回報」才寫入。</div>';
+        }
+        if (v.note) kh += '<div class="pj-hint">' + esc(v.note) + '</div>';
+        kh += '</div>';
+    });
+    h += '<div class="sec"><h5>系統自動偵測到的佐證</h5>'
+       + (hasKind ? kh : '<div class="pj-hint">這個步驟沒有可以自動偵測的來源（步驟名稱不屬於標準流程的那幾項），請直接填寫下面的日期並上傳佐證附件。</div>')
+       + '</div>';
+
+    /* ② 回報內容 */
+    h += '<div class="sec"><h5>回報內容</h5><div class="grid3">'
+      + '<div><label>實際開始</label><input type="date" id="rAs" value="' + esc(t.act_start || '') + '"' + ro + '></div>'
+      + '<div><label>實際完成</label><input type="date" id="rAe" value="' + esc(t.act_end || '') + '"' + ro + '></div>'
+      + '<div><label>進度％</label><input type="number" id="rPg" min="0" max="100" value="' + num(t.progress) + '"' + ro + '></div>'
+      + '</div>'
+      + '<label>狀態</label><select id="rSt"' + ro + '><option value="">（依日期自動判定）</option>';
+    $.each(META.task_status || {}, function (k, v) {
+        h += '<option value="' + esc(k) + '"' + (t.status_code === k ? ' selected' : '') + '>' + esc(v) + '</option>';
+    });
+    h += '</select>'
+      + '<label style="margin-top:6px;">回報說明</label>'
+      + '<textarea id="rNote" rows="3"' + ro + ' data-eg-hint="例：首件檢驗判定通過，附檢驗報告">' + esc(t.report_note || '') + '</textarea>'
+      + '<div class="pj-hint">填了<b>實際完成日</b>就代表這一步完成了，進度會自動變成 100%。</div></div>';
+
+    /* ③ 佐證附件 */
+    h += '<div class="sec"><h5>佐證附件</h5>';
+    var at = r.attaches || [];
+    if (at.length) {
+        h += '<table class="sub-tbl"><thead><tr><th>檔名</th><th style="width:80px;">大小</th>'
+          + '<th style="width:150px;">上傳</th><th style="width:100px;"></th></tr></thead><tbody>';
+        $.each(at, function (i, a) {
+            h += '<tr><td>' + esc(a.orig_name) + (a.note ? '<br><span class="pj-hint">' + esc(a.note) + '</span>' : '') + '</td>'
+              + '<td>' + Math.round(num(a.file_size) / 1024) + ' KB</td>'
+              + '<td>' + esc(a.uploaded_by_name || '') + '<br><span class="pj-hint">' + esc(String(a.uploaded_at || '').substring(0, 16)) + '</span></td>'
+              + '<td><span class="pj-op" data-dlatt="' + a.id + '">下載</span>'
+              + (ro ? '' : '<span class="pj-op" data-delatt="' + a.id + '" style="color:#DD5138;">刪除</span>') + '</td></tr>';
+        });
+        h += '</tbody></table>';
+    } else {
+        h += '<div class="pj-hint">還沒有附件。</div>';
+    }
+    if (!ro) {
+        /* 原生可見的 file input（記憶 file_upload_change_event：change 事件在這台環境會被吞掉，
+           一律用可見的 input＋常駐的送出鈕，送出時直接讀 input.files） */
+        h += '<div style="margin-top:8px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">'
+          + '<div><label>選擇檔案</label><input type="file" id="rFile" data-eg-skip="1"></div>'
+          + '<div style="flex:1;min-width:160px;"><label>附件說明（選填）</label><input type="text" id="rFileNote" data-eg-skip="1"></div>'
+          + '<button id="btnRptUp" style="height:30px;padding:0 12px;border:1px solid #d98a33;border-radius:4px;background:#F0A24B;color:#fff;cursor:pointer;">上傳</button>'
+          + '</div><div class="pj-hint">單檔 20MB 以內；可執行檔與腳本檔（.php/.exe/.bat…）不接受。</div>';
+    }
+    h += '</div>';
+
+    if (!r.act_open) {
+        h = '<div class="pj-warn" style="margin-bottom:8px;">專案還沒核准立案，實際日期要等立案核准後才能填。</div>' + h;
+    } else if (!r.can_report) {
+        h = '<div class="pj-warn" style="margin-bottom:8px;">你不是這個步驟的負責人，也沒有專案登錄權限，只能檢視。</div>' + h;
+    }
+    $('#rptBody').html(h);
+    $('#rptFoot').html('<button onclick="closeMask(\'rptMask\')">關閉</button>'
+        + (ro ? '' : '<button class="b-ok" id="btnRptSave"><i class="fa fa-save"></i> 儲存回報</button>'));
+}
+
+$(document).on('click', '[data-useev]', function () {
+    $('#rAe').val(String($(this).data('useev')));
+    if (!$('#rAs').val()) $('#rAs').val(String($(this).data('useev')));
+    $('#rPg').val(100);
+});
+$(document).on('click', '#btnRptSave', function () {
+    var d = { project_id: CUR.project.project_id, task_id: RPT_TASK.task.task_id,
+              act_start: $('#rAs').val(), act_end: $('#rAe').val(),
+              progress: $('#rPg').val(), status_code: $('#rSt').val(), report_note: $('#rNote').val() };
+    if (d.act_start && d.act_end && d.act_end < d.act_start) { alert('實際完成日不可早於實際開始日'); return; }
+    api('report_save', d, 'POST').done(function () {
+        closeMask('rptMask');
+        openProject(num(CUR.project.project_id));   /* 會自動回到原本看的分頁 */
+    });
+});
+$(document).on('click', '#btnRptUp', function () {
+    var el = document.getElementById('rFile');
+    if (!el || !el.files || !el.files.length) { alert('請先選擇檔案'); return; }
+    var fd = new FormData();
+    fd.append('action', 'report_upload');
+    fd.append('project_id', CUR.project.project_id);
+    fd.append('task_id', RPT_TASK.task.task_id);
+    fd.append('note', $('#rFileNote').val() || '');
+    fd.append('file', el.files[0]);   /* action 走 FormData：後端 $_GET['action'] ?? $_POST['action'] 兩種都收 */
+    $(this).prop('disabled', true).text('上傳中…');
+    $.ajax({ url: API, type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' })
+        .done(function (r) {
+            if (!r || !r.ok) { alert((r && r.error) || '上傳失敗'); }
+            else { RPT_TASK.attaches = r.attaches || []; renderReport(RPT_TASK); }
+        })
+        .fail(function (x) { alert((x.responseJSON && x.responseJSON.error) || '上傳失敗'); })
+        .always(function () { $('#btnRptUp').prop('disabled', false).text('上傳'); });
+});
+$(document).on('click', '[data-dlatt]', function () {
+    window.open(API + '?action=report_attach_dl&project_id=' + num(CUR.project.project_id)
+        + '&attach_id=' + num($(this).data('dlatt')), '_blank');
+});
+$(document).on('click', '[data-delatt]', function () {
+    if (!confirm('刪除這個佐證附件？')) return;
+    api('report_attach_del', { project_id: CUR.project.project_id, attach_id: num($(this).data('delatt')) }, 'POST')
+        .done(function (r) { RPT_TASK.attaches = r.attaches || []; renderReport(RPT_TASK); });
+});
+$(document).on('click', '[data-report]', function () { openReport(num($(this).data('report'))); });
 
 /* 與後端 prj_task_state() 同一套判定（有實際完成日時一律由日期決定，不看目前進度％） */
 function taskState(t, asof) {
@@ -2800,6 +2973,15 @@ function openSetting() {
         $('#setPlanTpl').html(tOpt).val(s.plan_stamp_tpl_id || '0');
         $('#setCardTpl').html(tOpt).val(s.card_stamp_tpl_id || '0');
 
+        /* 進度佐證：哪些附件標籤算「加工圖面」（標籤清單即時查主檔，不寫死名稱＝鐵律4） */
+        var on = String(s.drawing_attach_cats || '').split(',').map(num);
+        var ch = '';
+        $.each(res.attach_cats || [], function (i, c) {
+            ch += '<span class="pj-tag' + ($.inArray(num(c.id), on) >= 0 ? ' on' : '') + '" data-dwgcat="' + c.id + '">'
+                + esc(c.category_name) + '</span>';
+        });
+        $('#setDwgCats').html(ch || '<span class="pj-hint">目前沒有啟用中的附件標籤。</span>');
+
         /* 專案負責人資格（部門×職稱） */
         var odOpt = '<option value="">（請選擇部門）</option>';
         $.each(META.depts || [], function (i, x) { odOpt += '<option value="' + x.id + '">' + esc(x.name) + '</option>'; });
@@ -2968,6 +3150,7 @@ $(document).on('click', '#btnSetSave', function () {
         default_cosign_depts: cos.join(','),
         block_close_on_missing: $('#setBlockClose').is(':checked') ? '1' : '0',
         plan_stamp_tpl_id: $('#setPlanTpl').val() || '0', card_stamp_tpl_id: $('#setCardTpl').val() || '0',
+        drawing_attach_cats: $('#setDwgCats .pj-tag.on').map(function () { return num($(this).data('dwgcat')); }).get().join(','),
         task_owner_depts: pickedTaskDepts().join(','),
         seed_template: JSON.stringify(collectSeedTpl()),
         owner_scope: JSON.stringify($.map(OWN_SCOPE, function (r) { return { d: num(r.d), p: num(r.p) }; }))
