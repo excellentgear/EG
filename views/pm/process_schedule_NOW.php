@@ -1,6 +1,7 @@
 <?php
 include_once '../../src/common/_config.php';
 include "../../src/common/DBConnection.php";
+require_once __DIR__ . '/../../src/common/gear_spec_lib.php';   // 模數要印 M 還是 DP/CP＝eg_gear_module_text()，唯一實作
 
 // 檢查是否已登入 (處理 Session Timeout)
 // 確保 Session 已啟動且檢查 user_id 或 id (相容舊系統)
@@ -267,12 +268,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $gear_str = '';
                 if (!empty($task['gear_info'])) {
                     $g = $task['gear_info'][0];
-                    $m = (float)$g['Module'];
+                    // 模數走共用 eg_gear_module_text()：徑節(DP)/周節(CP) 才不會被印成 M。
+                    // 附帶修掉一個既有 bug——原本寫 (float)$g['Module']，而 Module 存的是 'M2.5' 這種
+                    // 帶前綴的字串，(float)'M2.5' 在 PHP 是 0，所以這裡一直印成「M0」。
+                    $mlabel = eg_gear_module_text($g, true);
                     $t = (float)$g['Teeth'];
                     $pa = (float)$g['Pressure_Angle'];
                     $w = (float)$g['Face_Width'];
                     $l = (float)$g['Workpiece_Length'];
-                    $gear_str = " M$m T$t PA$pa W$w L$l";
+                    $gear_str = " $mlabel T$t PA$pa W$w L$l";
                 }
                 $list[] = $task['bom'] . ' ' . $task['d_id'] . ' (' . $task['sqty'] . ')' . $gear_str;
             }
@@ -1301,7 +1305,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             // 基本資訊
             $sql_info = "SELECT bi.bom_ing_fid, bi.bom, bi.sqty, bi.process_no, bi.pti01_ps, bi.`1_side`, bi.PS2,
                                 b.d_id, b.Client_Name, pn.ProcessName, pn.process_type_id,
-                                dsg.Module, dsg.Teeth, dsg.Face_Width, dsg.Workpiece_Length
+                                dsg.Module, dsg.module_display, dsg.Teeth, dsg.Face_Width, dsg.Workpiece_Length
                          FROM bom_ing bi
                          JOIN bom b ON bi.bom = b.bom
                          LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
@@ -1384,8 +1388,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             // 格式化齒輪規格
             $gear_spec = '';
             if (!empty($info['Module'])) {
-                $modClean = preg_replace('/[^0-9.]/', '', $info['Module']);
-                $gear_spec = "M" . floatval($modClean);
+                $gear_spec = eg_gear_module_text($info, true);   // DP/CP 不可印成 M
                 if (!empty($info['Teeth'])) $gear_spec .= " T" . floatval($info['Teeth']);
                 if (!empty($info['Face_Width'])) $gear_spec .= " W" . floatval($info['Face_Width']);
                 if (!empty($info['Workpiece_Length'])) $gear_spec .= " L" . floatval($info['Workpiece_Length']);
@@ -2292,6 +2295,7 @@ $sql_basic = "
         b.bom_ps,
         COALESCE(b.Delivery_date, ol.Delivery_date) AS shipping_date,
         dsg.Module,
+        dsg.module_display,
         dsg.Teeth,
         dsg.Face_Width,
         dsg.Workpiece_Length
@@ -2347,6 +2351,7 @@ SELECT
     ds.Type as part_type,
     ds.d_id as ds_id,
     dsg.Module,
+    dsg.module_display,
     dsg.Teeth,
     dsg.Face_Width,
     dsg.Workpiece_Length
@@ -3639,8 +3644,7 @@ function get_state_badge($state)
                                                         // 準備齒輪資料字串 (供 Modal 使用)
                                                         $gear_info_str = '';
                                                         if (!empty($task['Module'])) {
-                                                            $modClean = preg_replace('/[^0-9.]/', '', $task['Module']);
-                                                            $gear_info_str = "M" . floatval($modClean) . " T" . floatval($task['Teeth']) . " W" . floatval($task['Face_Width']) . " L" . floatval($task['Workpiece_Length']);
+                                                            $gear_info_str = eg_gear_module_text($task, true) . " T" . floatval($task['Teeth']) . " W" . floatval($task['Face_Width']) . " L" . floatval($task['Workpiece_Length']);
                                                         }
                                                     ?>
                                                         <div class="<?= $card_classes ?>" title="拖曳可調整順序，雙擊可編輯" data-id="<?= $task['bom_ing_fid'] ?>" data-bom="<?= htmlspecialchars($task['bom']) ?>" data-processing-sequence="<?= htmlspecialchars($task['processing_sequence'] ?? '') ?>" data-process-no="<?= $task['process_no'] ?>" data-process-type-id="<?= $task['process_type_id'] ?>" data-state="<?= $task['processing_state'] ?>" data-ps="<?= htmlspecialchars($task['ps'] ?? '', ENT_QUOTES) ?>" data-single-bet-ps="<?= htmlspecialchars($task['single_bet_ps'] ?? '', ENT_QUOTES) ?>" data-pti01-ps="<?= htmlspecialchars($task['pti01_ps'] ?? '', ENT_QUOTES) ?>" data-1-side="<?= htmlspecialchars($task['1_side'] ?? '', ENT_QUOTES) ?>" data-ps2="<?= htmlspecialchars($task['PS2'] ?? '', ENT_QUOTES) ?>" data-client="<?= htmlspecialchars($task['Client_Name']) ?>" data-part-no="<?= htmlspecialchars($task['d_id']) ?>" data-sqty="<?= $task['sqty'] ?>" data-ok-qty="<?= $task['total_ok_qty'] ?? 0 ?>" data-ng-qty="<?= $task['total_ng_qty'] ?? 0 ?>" data-shipping-date="<?= htmlspecialchars($task['shipping_date'] ?? '') ?>" data-gear-info="<?= htmlspecialchars($gear_info_str) ?>" data-part-type="<?= $task['part_type'] ?>" data-ds-id="<?= $task['ds_id'] ?>" data-order-id="<?= $task['Order_id'] ?>">
@@ -3682,12 +3686,11 @@ function get_state_badge($state)
                                                             <?php
                                                             // 顯示齒輪資料 (未指派顯示詳細)
                                                             if (!empty($task['Module'])) {
-                                                                $modClean = preg_replace('/[^0-9.]/', '', $task['Module']);
-                                                                $mod = floatval($modClean);
+                                                                $mod = eg_gear_module_text($task, true);   // DP/CP 不可印成 M
                                                                 $teeth = floatval($task['Teeth']);
                                                                 $width = floatval($task['Face_Width']);
                                                                 $len = floatval($task['Workpiece_Length']);
-                                                                echo '<p class="card-text mb-1"><span class="badge bg-blue module-filter-btn" style="cursor:pointer; font-size: 12px; padding: 4px 8px;" data-module="M' . $mod . '" title="點擊篩選此模數">M' . $mod . ' T' . $teeth . ' W' . $width . ' L' . $len . '</span></p>';
+                                                                echo '<p class="card-text mb-1"><span class="badge bg-blue module-filter-btn" style="cursor:pointer; font-size: 12px; padding: 4px 8px;" data-module="' . htmlspecialchars($mod, ENT_QUOTES) . '" title="點擊篩選此模數">' . htmlspecialchars($mod) . ' T' . $teeth . ' W' . $width . ' L' . $len . '</span></p>';
                                                             }
                                                             ?>
                                                             <?php if (!$is_production): // 生產權限不顯示客戶 
@@ -3905,8 +3908,7 @@ function get_state_badge($state)
                                                                             // 準備齒輪資料字串 (供 Modal 使用)
                                                                             $gear_info_str = '';
                                                                             if (!empty($task['Module'])) {
-                                                                                $modClean = preg_replace('/[^0-9.]/', '', $task['Module']);
-                                                                                $gear_info_str = "M" . floatval($modClean) . " T" . floatval($task['Teeth']) . " W" . floatval($task['Face_Width']) . " L" . floatval($task['Workpiece_Length']);
+                                                                                $gear_info_str = eg_gear_module_text($task, true) . " T" . floatval($task['Teeth']) . " W" . floatval($task['Face_Width']) . " L" . floatval($task['Workpiece_Length']);
                                                                             }
                                                                         ?>
                                                                             <div class="<?= $card_classes ?>" title="拖曳可調整順序，雙擊可編輯" data-id="<?= $task['bom_ing_fid'] ?>" data-bom="<?= htmlspecialchars($task['bom']) ?>" data-processing-sequence="<?= htmlspecialchars($task['processing_sequence'] ?? '') ?>" data-process-no="<?= $task['process_no'] ?>" data-process-type-id="<?= $task['process_type_id'] ?>" data-state="<?= $task['processing_state'] ?>" data-ps="<?= htmlspecialchars($task['ps'] ?? '', ENT_QUOTES) ?>" data-single-bet-ps="<?= htmlspecialchars($task['single_bet_ps'] ?? '', ENT_QUOTES) ?>" data-pti01-ps="<?= htmlspecialchars($task['pti01_ps'] ?? '', ENT_QUOTES) ?>" data-1-side="<?= htmlspecialchars($task['1_side'] ?? '', ENT_QUOTES) ?>" data-ps2="<?= htmlspecialchars($task['PS2'] ?? '', ENT_QUOTES) ?>" data-client="<?= htmlspecialchars($task['Client_Name']) ?>" data-part-no="<?= htmlspecialchars($task['d_id']) ?>" data-sqty="<?= $task['sqty'] ?>" data-ok-qty="<?= $task['total_ok_qty'] ?? 0 ?>" data-ng-qty="<?= $task['total_ng_qty'] ?? 0 ?>" data-shipping-date="<?= htmlspecialchars($task['shipping_date'] ?? '') ?>" data-gear-info="<?= htmlspecialchars($gear_info_str) ?>" data-part-type="<?= $task['part_type'] ?>" data-ds-id="<?= $task['ds_id'] ?>" data-order-id="<?= $task['Order_id'] ?>">
@@ -3948,9 +3950,8 @@ function get_state_badge($state)
                                                                                 <?php
                                                                                 // 顯示齒輪資料 (已指派僅顯示模數，若設定開啟)
                                                                                 if (!empty($task['Module']) && in_array($task['process_type_id'], $gear_display_types)) {
-                                                                                    $modClean = preg_replace('/[^0-9.]/', '', $task['Module']);
-                                                                                    $mod = floatval($modClean);
-                                                                                    echo '<p class="card-text mb-1"><span class="badge bg-blue module-filter-btn" style="cursor:pointer; font-size: 12px; padding: 4px 8px;" data-module="M' . $mod . '" title="點擊篩選此模數">M' . $mod . '</span></p>';
+                                                                                    $mod = eg_gear_module_text($task, true);   // DP/CP 不可印成 M
+                                                                                    echo '<p class="card-text mb-1"><span class="badge bg-blue module-filter-btn" style="cursor:pointer; font-size: 12px; padding: 4px 8px;" data-module="' . htmlspecialchars($mod, ENT_QUOTES) . '" title="點擊篩選此模數">' . htmlspecialchars($mod) . '</span></p>';
                                                                                 }
                                                                                 ?>
                                                                                 <?php if (!$is_production): // 生產權限不顯示客戶 
@@ -8357,11 +8358,13 @@ function get_state_badge($state)
                                     // 檢查是否顯示齒輪規格 (Module)
                                     var gearInfoHtml = '';
                                     if (gearSettings && (gearSettings.includes(m.machine_type_id) || gearSettings.includes(String(m.machine_type_id))) && m.full_data && m.full_data.gear_info && m.full_data.gear_info.length > 0) {
-                                        var modVal = m.full_data.gear_info[0].Module;
-                                        var modClean = String(modVal).replace(/[^0-9.]/g, '');
-                                        var mod = (modClean && !isNaN(parseFloat(modClean))) ? parseFloat(modClean) : '';
+                                        // 模數要印 M 還是 DP/CP 由主檔的 module_display 決定（與後端 eg_gear_module_text() 同一條規則）
+                                        var g0 = m.full_data.gear_info[0];
+                                        var modDisp = String(g0.module_display || '').trim();
+                                        var modClean = String(g0.Module || '').replace(/[^0-9.]/g, '');
+                                        var mod = modDisp || ((modClean && !isNaN(parseFloat(modClean))) ? 'M' + parseFloat(modClean) : '');
                                         if (mod !== '') {
-                                            gearInfoHtml = `<div style="position: absolute; top: 2px; right: 2px; background: #337ab7; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;">M${mod}</div>`;
+                                            gearInfoHtml = `<div style="position: absolute; top: 2px; right: 2px; background: #337ab7; color: white; padding: 1px 4px; border-radius: 3px; font-size: 10px;">${mod}</div>`;
                                         }
                                     }
 
@@ -8424,7 +8427,7 @@ function get_state_badge($state)
                                 d.gear_info.forEach(function(g) {
                                     content += `
                             <table class="table table-bordered table-condensed" style="font-size:12px; margin-bottom:5px; background:#f9f9f9;">
-                                <tr><th width="30%">模數</th><td>${formatGearValue(g.Module)}</td></tr>
+                                <tr><th width="30%">模數</th><td>${formatGearValue(g.module_display || g.Module)}</td></tr>
                                 <tr><th>齒數</th><td>${formatGearValue(g.Teeth)}</td></tr>
                                 <tr><th>壓力角</th><td>${formatGearValue(g.Pressure_Angle)}</td></tr>
                                 <tr><th>螺旋角</th><td>${formatGearValue(g.Helix_Angle)}</td></tr>

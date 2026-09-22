@@ -9,6 +9,7 @@ require_once '../common/quotation_approval.php';
 require_once '../common/asdoc_lib.php';
 require_once __DIR__ . '/../common/quote_customer_lib.php';   // 整張報價單變更客戶（唯一實作）
 require_once __DIR__ . '/../common/quote_kw_rule_lib.php';    // 依規格關鍵字自動建議製程標籤（唯一實作）
+require_once __DIR__ . '/../common/gear_spec_lib.php';        // 齒輪規格顯示字串（唯一實作，與主檔/訂單追蹤/出貨單同一份）
 
 $db  = new DBConnection();
 $pdo = $db->getPDO();
@@ -1862,9 +1863,6 @@ try {
                 $gs_fallback_spec = $pdo->prepare(
                     "SELECT d_id, Spec_No FROM d_setting WHERE d_id=? LIMIT 1"
                 );
-                $gs_rows = $pdo->prepare(
-                    "SELECT * FROM d_setting_gear WHERE d_setting_id=? ORDER BY gear_id ASC"
-                );
                 foreach ($quote['items'] as &$item) {
                     $item['gear_spec'] = '';
                     $item['spec_no']   = '';
@@ -1900,23 +1898,14 @@ try {
                     // 將 Spec_No 獨立欄位帶出，不覆蓋 specification（料號備註）
                     $item['spec_no'] = $specNo;
                     if (!$did) continue;
-                    $gs_rows->execute([$did]);
-                    $gears = $gs_rows->fetchAll(PDO::FETCH_ASSOC);
-                    if (empty($gears)) continue;
-                    $texts = [];
-                    foreach ($gears as $g) {
-                        $p = [];
-                        $mod = trim($g['Module'] ?? '');
-                        if ($mod !== '') $p[] = preg_match('/^m/i', $mod) ? $mod : 'M'.$mod;
-                        if (!empty($g['Teeth']) && (int)$g['Teeth'] > 0) $p[] = 'T'.$g['Teeth'];
-                        if (!empty($g['Face_Width']) && (float)$g['Face_Width'] > 0)
-                            $p[] = 'W'.rtrim(rtrim(sprintf('%.4f',(float)$g['Face_Width']),'0'),'.');
-                        $hdir = trim($g['Helix_Direction'] ?? '');
-                        if ($hdir !== '' && $hdir !== 'N/A')
-                            $p[] = $hdir.trim($g['Helix_Angle_Str'] ?? '');
-                        if ($p) $texts[] = implode(' ', $p);
-                    }
-                    $item['gear_spec'] = implode(' / ', $texts);
+                    // 齒輪規格一律走共用 gear_spec_lib（2026-09-22 改）。
+                    // 原本這裡自己組一份「M模數 T齒數 W齒寬 螺旋」的字串，造成三個問題：
+                    //   ⑴ 徑節(DP)／周節(CP)的料號被印成公制模數 M——`Module` 欄位存的是歷史值（DP20 存成 'M20'），
+                    //      真正的顯示值在 `module_display`（實測 ST900-10 主檔是 DP20、報價單卻印 M20）；
+                    //   ⑵ 不吃 dict_gear_type.display_template，鏈輪／皮帶輪這種根本沒有模數的型別
+                    //      只印得出無意義的 'T78'（正解是 '8YU-78'）；
+                    //   ⑶ 同一支料號在報價單與出貨單上印出不同的規格（出貨單早就走這支共用庫）。
+                    $item['gear_spec'] = eg_gear_spec_for_part($pdo, $did) ?? '';
                 }
                 unset($item);
 
@@ -3268,12 +3257,16 @@ try {
                     $did = intval($s2->fetchColumn() ?: 0);
                 }
             }
-            if (!$did) { $response = ['success'=>true,'gears'=>[]]; break; }
+            if (!$did) { $response = ['success'=>true,'gears'=>[],'spec_text'=>'']; break; }
             $stmt = $pdo->prepare(
                 "SELECT * FROM d_setting_gear WHERE d_setting_id = ? ORDER BY gear_id ASC"
             );
             $stmt->execute([$did]);
-            $response = ['success'=>true, 'gears' => $stmt->fetchAll(PDO::FETCH_ASSOC)];
+            // spec_text＝要顯示在畫面上的那一行，**由後端用共用 gear_spec_lib 組好**（2026-09-22）。
+            // 前端不可以再拿 gears 自己拼一次：那份自刻版本會把 DP/CP 印成 M，也不吃齒型樣板。
+            $response = ['success'=>true,
+                         'gears'     => $stmt->fetchAll(PDO::FETCH_ASSOC),
+                         'spec_text' => eg_gear_spec_for_part($pdo, $did) ?? ''];
             break;
 
         // ── 歷史報價查詢：同客戶 + 同料號 ──

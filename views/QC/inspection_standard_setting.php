@@ -1783,7 +1783,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             let summaryHtml = '<div class="col-md-12" style="margin-top: 5px; padding-top: 5px; border-top: 1px dashed #ccc;">';
                             res.gears.forEach(function(g) {
                                 let parts = [];
-                                if (g.Module) parts.push(g.Module);
+                                // 模數：主檔存的 Module 欄位是歷史值（徑節 DP20 會存成 'M20'），
+                                // 真正要顯示的在 module_display，不看它就會把 DP/CP 印成公制模數 M。
+                                if (g.module_display || g.Module) parts.push(g.module_display || g.Module);
                                 if (g.Teeth) parts.push('T' + g.Teeth);
                                 if (g.Pressure_Angle) parts.push('PA' + g.Pressure_Angle);
                                 if (g.Face_Width) parts.push('W' + parseFloat(g.Face_Width));

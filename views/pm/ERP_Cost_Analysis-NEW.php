@@ -783,7 +783,7 @@ function build_gear_spec_sql(string $id_expr): string {
             CONCAT(IF(g.Teeth>0,CONCAT(g.Teeth,'鍵 '),''),COALESCE(CAST(g.spec_spline_minor_dia AS CHAR),'?'),' × ',COALESCE(CAST(g.spec_spline_major_dia AS CHAR),'?'),' × ',COALESCE(CAST(g.spec_spline_width AS CHAR),'?'))
           ELSE
             CONCAT(
-              IF(g.Module IS NOT NULL AND g.Module<>'',IF(LEFT(UPPER(g.Module),1)='M',g.Module,CONCAT('M',g.Module)),''),
+              COALESCE(NULLIF(g.module_display,''),IF(g.Module IS NOT NULL AND g.Module<>'',IF(LEFT(UPPER(g.Module),1)='M',g.Module,CONCAT('M',g.Module)),'')),
               IF(dt.spec_category='worm_gear' AND g.spec_starts IS NOT NULL AND g.spec_starts>0,CONCAT('×',g.spec_starts,'條'),IF(g.Teeth IS NOT NULL AND g.Teeth>0,CONCAT('×',g.Teeth,'T'),'')),
               IF(g.Face_Width IS NOT NULL AND g.Face_Width>0,CONCAT(' W',TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.Face_Width AS CHAR)))),''),
               IF(g.Pressure_Angle IS NOT NULL AND g.Pressure_Angle<>'',CONCAT(' PA',g.Pressure_Angle,'°'),''),

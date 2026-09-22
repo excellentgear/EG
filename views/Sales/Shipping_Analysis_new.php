@@ -1602,36 +1602,14 @@ try {
         function($v){ return !empty($v) && intval($v) > 0; }
     )));
     if (!empty($_dsids)) {
-        $_gph = implode(',', array_fill(0, count($_dsids), '?'));
-        $_gsql =
-            "SELECT g.d_setting_id,
-                GROUP_CONCAT(
-                    TRIM(CONCAT(
-                        IF(g.Module IS NOT NULL AND g.Module<>'',
-                           IF(LEFT(UPPER(g.Module),1)='M', g.Module, CONCAT('M',g.Module)), ''),
-                        IF(g.Teeth IS NOT NULL AND g.Teeth>0, CONCAT(' T',g.Teeth), ''),
-                        IF(g.Face_Width IS NOT NULL AND g.Face_Width>0,
-                           CONCAT(' W',TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.Face_Width AS CHAR)))), ''),
-                        IF(g.Helix_Direction IS NOT NULL AND g.Helix_Direction<>'',
-                           CONCAT(' ', g.Helix_Direction,
-                                  COALESCE(IF(g.Helix_Angle IS NOT NULL AND g.Helix_Angle>0,
-                                     COALESCE(NULLIF(g.Helix_Angle_Str,''),
-                                        TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.Helix_Angle AS CHAR)))),
-                                     NULL), '')),
-                           IF(g.Helix_Angle IS NOT NULL AND g.Helix_Angle>0,
-                              CONCAT(' ', COALESCE(NULLIF(g.Helix_Angle_Str,''),
-                                 TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.Helix_Angle AS CHAR))))), ''))
-                    ))
-                    ORDER BY g.gear_id SEPARATOR ' / '
-                ) AS gear_spec
-             FROM d_setting_gear g
-             WHERE g.d_setting_id IN ($_gph)
-             GROUP BY g.d_setting_id";
-        $_gst = $conn->getPDO()->prepare($_gsql);
-        $_gst->execute(array_map('intval', $_dsids));
-        foreach ($_gst->fetchAll(PDO::FETCH_ASSOC) as $_gr) {
-            $_gear_map[intval($_gr['d_setting_id'])] = $_gr['gear_spec'];
-        }
+        // 齒輪規格一律走共用 gear_spec_lib（2026-09-22 改；與出貨單列印、主檔管理、訂單追蹤同一份）。
+        // 原本這裡自己寫一份 SQL 組字串，造成兩個問題：
+        //   ⑴ 徑節(DP)／周節(CP)的料號被印成公制模數 M——`Module` 欄位存的是歷史值（DP20 存成 'M20'），
+        //      真正的顯示值在 `module_display`；
+        //   ⑵ 不吃 dict_gear_type.display_template，所以壓力角不顯示、鏈輪／皮帶輪印不出正確寫法，
+        //      同一支料號在這張報表與出貨單上長得不一樣。
+        require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
+        $_gear_map = eg_gear_spec_map($conn->getPDO(), $_dsids);
     }
     foreach ($rows as &$_r) {
         $_dsid = intval($_r['d_setting_id'] ?? 0);

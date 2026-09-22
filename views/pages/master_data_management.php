@@ -1977,7 +1977,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                 CONCAT(IF(g.Teeth>0, CONCAT(g.Teeth,'鍵 '),''), COALESCE(CAST(g.spec_spline_minor_dia AS CHAR),'?'), ' × ', COALESCE(CAST(g.spec_spline_major_dia AS CHAR),'?'), ' × ', COALESCE(CAST(g.spec_spline_width AS CHAR),'?'))
                               -- 其他無模板類型退用 hardcode
                               ELSE
-                                CONCAT(IF(g.Module IS NOT NULL AND g.Module<>'', IF(LEFT(UPPER(g.Module),1)='M', g.Module, CONCAT('M',g.Module)), ''),
+                                CONCAT(COALESCE(NULLIF(g.module_display,''), IF(g.Module IS NOT NULL AND g.Module<>'', IF(LEFT(UPPER(g.Module),1)='M', g.Module, CONCAT('M',g.Module)), '')),
                                    IF(dt.spec_category='worm_gear' AND g.spec_starts IS NOT NULL AND g.spec_starts>0,
                                       CONCAT('×',g.spec_starts,'條'), IF(g.Teeth IS NOT NULL AND g.Teeth>0, CONCAT('×',g.Teeth,'T'), '')),
                                    IF(g.Face_Width IS NOT NULL AND g.Face_Width>0, CONCAT(' W',TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.Face_Width AS CHAR)))), ''),
@@ -2261,7 +2261,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sql = "SELECT d.d_id, d.D_Setting_Id, d.Type, c.customer AS client_name, dst.sub_type_name,
                 (SELECT COUNT(*) FROM item_label_map WHERE d_id=d.d_id) AS label_count,
                 (SELECT GROUP_CONCAT(dl.label_name ORDER BY dl.sort_order SEPARATOR '、') FROM item_label_map ilm2 JOIN dict_label dl ON dl.label_id=ilm2.label_id AND dl.is_active=1 AND COALESCE(dl.is_hidden_frontend,0)=0 WHERE ilm2.d_id=d.d_id) AS label_names,
-                (SELECT GROUP_CONCAT(CONCAT(IF(g2.Module IS NOT NULL,CONCAT('M',g2.Module),''),IF(g2.Teeth IS NOT NULL,CONCAT('×Z',g2.Teeth),'')) ORDER BY g2.gear_id SEPARATOR ' / ') FROM d_setting_gear g2 WHERE g2.d_setting_id=d.d_id) AS gear_summary
+                -- 模數：module_display 優先（徑節 DP/周節 CP 不可印成 M）；
+                -- 原本無條件 CONCAT('M', Module)，而 Module 欄位本身就存著 'M2.5'，所以一直印成「MM2.5」
+                (SELECT GROUP_CONCAT(CONCAT(COALESCE(NULLIF(g2.module_display,''), IF(g2.Module IS NOT NULL AND g2.Module<>'', IF(LEFT(UPPER(g2.Module),1)='M', g2.Module, CONCAT('M',g2.Module)), '')),IF(g2.Teeth IS NOT NULL,CONCAT('×Z',g2.Teeth),'')) ORDER BY g2.gear_id SEPARATOR ' / ') FROM d_setting_gear g2 WHERE g2.d_setting_id=d.d_id) AS gear_summary
             FROM d_setting d LEFT JOIN customer_list c ON d.Customer_Id=c.customer_id LEFT JOIN dict_workpiece_sub_type dst ON d.workpiece_sub_type_id=dst.sub_type_id
             WHERE $whereSQL
             HAVING (label_count > 0 OR gear_summary IS NOT NULL)

@@ -2721,8 +2721,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                             CONCAT(IF(g.Teeth>0, CONCAT(g.Teeth,'鍵 '),''), COALESCE(CAST(g.spec_spline_minor_dia AS CHAR),'?'), ' × ', COALESCE(CAST(g.spec_spline_major_dia AS CHAR),'?'), ' × ', COALESCE(CAST(g.spec_spline_width AS CHAR),'?'))
                           ELSE
                             CONCAT(
-                                IF(g.Module IS NOT NULL AND g.Module != '',
-                                   IF(LEFT(UPPER(g.Module),1)='M', g.Module, CONCAT('M', g.Module)), ''),
+                                -- 模數：module_display 優先（徑節 DP/周節 CP 不可印成 M），與上方樣板分支同一條規則
+                                COALESCE(NULLIF(g.module_display,''),
+                                  IF(g.Module IS NOT NULL AND g.Module != '',
+                                     IF(LEFT(UPPER(g.Module),1)='M', g.Module, CONCAT('M', g.Module)), '')),
                                 IF(dt.spec_category='worm_gear' AND g.spec_starts IS NOT NULL AND g.spec_starts > 0,
                                    CONCAT('×', g.spec_starts, '條'),
                                    IF(g.Teeth IS NOT NULL AND g.Teeth > 0, CONCAT('×', g.Teeth, 'T'), '')),

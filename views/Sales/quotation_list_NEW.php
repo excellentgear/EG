@@ -7389,26 +7389,16 @@ function loadGearSpecs($tr, partId, dId) {
     else if (partId) params.part_id = partId;
     else return;
     $.get(API_URL, params, res => {
-        if (!res.success || !res.gears.length) {
-            $tr.find('.gear-spec-display').empty();
-            return;
-        }
-        // 格式：M模數 T齒數 W齒寬 螺旋方向角度，多列齒型用 / 分隔
-        const texts = res.gears.map(g => {
-            const p = [];
-            const mod = String(g.Module || '').trim();
-            if (mod) p.push(/^m/i.test(mod) ? mod : 'M' + mod);
-            if (Number(g.Teeth) > 0) p.push('T' + g.Teeth);
-            if (Number(g.Face_Width) > 0) {
-                const fw = parseFloat(g.Face_Width);
-                p.push('W' + fw.toString().replace(/\.?0+$/, ''));
-            }
-            const hd = String(g.Helix_Direction || '').trim();
-            if (hd && hd !== 'N/A') p.push(hd + (g.Helix_Angle_Str || ''));
-            return p.join(' ');
-        }).filter(Boolean);
+        // 顯示字串一律用後端 spec_text（共用 gear_spec_lib，與主檔管理／訂單追蹤／出貨單同一份）。
+        // 2026-09-22 之前這裡自己拿 res.gears 拼字串，造成兩個症狀：
+        //   ⑴ 徑節(DP)／周節(CP)料號被印成 M——d_setting_gear.Module 存的是歷史值（DP20 存成 'M20'），
+        //      真正的顯示值在 module_display，所以 ST900-10 的主檔寫 DP20、這裡卻顯示 M20；
+        //   ⑵ 不吃齒型樣板，壓力角不顯示、鏈輪／皮帶輪只印得出 'T78' 這種無意義的字串。
+        // **不要再在前端組一次**，否則同一支料號在不同頁面會出現兩種寫法（鐵律4）。
+        const txt = String((res && res.spec_text) || '').trim();
         $tr.find('.gear-spec-display').html(
-            texts.length ? `<span style="color:#888;font-size:10px;">${escapeHtml(texts.join(' / '))}</span>` : ''
+            (res && res.success && txt)
+                ? `<span style="color:#888;font-size:10px;">${escapeHtml(txt)}</span>` : ''
         );
     });
 }
