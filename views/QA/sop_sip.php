@@ -167,13 +167,28 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
         .pickbox label { display:inline-block; font-weight:normal; text-align:left; margin:0 12px 3px 0;
                          font-size:12.5px; color:var(--ink2); cursor:pointer; }
         .pickbox .mno { font-weight:bold; color:var(--amber-d); }
-        /* 挑使用設備：依製程／量具種類分組，一組一個標題、一列一台
-           （34 台平鋪成一大片時完全看不出哪一台是哪一關的，使用者 2026-09-22 回報） */
-        .eqbox .eqgrp { margin-bottom:7px; }
-        .eqbox .eqgh { background:var(--sand); color:var(--ink2); font-size:12px; font-weight:bold;
-                       padding:2px 8px; border-radius:4px; margin-bottom:3px; position:sticky; top:-6px; z-index:1; }
-        .eqbox label.eqit { display:block; margin:0 0 2px 0; padding:1px 4px 1px 10px; border-radius:3px; }
-        .eqbox label.eqit:hover { background:#FFF3E0; }
+        /* 挑使用設備：比照線上檢驗「選擇本單使用的量具」——① 先點分類 ② 再點設備，兩層都是大按鈕
+           （使用者 2026-09-22 指定要跟那一頁一樣清楚；34 台平鋪成一片完全看不出哪台是哪一關的） */
+        .eqgrid { display:flex; flex-wrap:wrap; gap:8px; }
+        .eqgrid button { min-width:130px; min-height:52px; border:1px solid var(--line); background:#fff; color:var(--ink);
+                         border-radius:8px; padding:8px 12px; font-size:15px; font-weight:bold; text-align:center; }
+        .eqgrid button:hover { background:var(--sand); border-color:var(--amber-d); }
+        .eqgrid button small { display:block; font-weight:normal; font-size:11px; color:#8a6a45; }
+        .eqgrid button.eq-cat.has-sel { border-color:var(--amber-d); background:#FFF3E2; }
+        .eqgrid button.eq-no.on { background:var(--amber); border-color:var(--amber-d); }
+        .eqgrid button.eq-no.on small { color:#6B4A22; }
+        /* 已選清單：兩個步驟都看得到，選到哪裡了一目瞭然；選很多支時自己捲，不把按鈕擠下去 */
+        #eqPicked { background:var(--cream); border:1px solid var(--line); border-radius:6px; padding:5px 8px;
+                    margin-bottom:10px; display:flex; flex-wrap:wrap; gap:4px; align-items:center;
+                    min-height:30px; max-height:96px; overflow:auto; }
+        #eqPicked > b { flex:0 0 auto; }
+        .eq-chip { display:inline-flex; align-items:center; gap:3px; background:#fff; border:1px solid var(--amber-d);
+                   border-radius:10px; padding:0 3px 0 8px; font-size:12px; color:var(--ink); line-height:1.7; }
+        .eq-chip .c { font-size:11px; font-weight:normal; color:#8a6a45; }
+        .eq-chip .x { border:0; background:transparent; color:#C0703A; font-size:13px; line-height:1; padding:0 2px; }
+        .eq-chip .x:hover { color:#DD5138; }
+        .eq-none { color:#C0703A; font-style:italic; font-size:13px; }
+        .eq-sub { font-size:12.5px; color:var(--ink2); margin:0 0 6px; }
         /* 撞到既有文件時的提示（重複一律擋下，只能去更新既有那一份） */
         .dup-box { border:1px solid #E2A15A; background:#FDF3E3; border-radius:5px; padding:8px 10px; font-size:12.5px; }
         .dup-box .t { font-weight:bold; color:#A4541A; margin-bottom:4px; }
@@ -416,9 +431,14 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
             <li><b>「工程名稱」就是製程</b>（日式用語，工程＝工序），所以只有一欄「製程」，一律從製程主檔挑。</li>
             <li><b>同一個對象＋同一個製程只能有一份文件</b>：建立時如果撞到既有的，會直接擋下並附上
                 「開啟並更新這一份」的按鈕。同一個料號的「粗滾」與「齒研」可以各有一份。</li>
-            <li><b>「挑使用設備」依製程分組，量具也挑得到</b>：機台依它在機台主檔綁的製程分組
-                （未分到製程的收在「未分類」，不會不見），量具依量具種類分組，一列一台；
-                勾好按「帶入」會把編號填進「使用設備」欄，之後仍然可以自己改文字。</li>
+            <li><b>「挑使用設備」是兩層大按鈕</b>（跟線上檢驗挑量具那一頁一樣）：
+                <b>① 先點分類</b>（機台依它在主檔綁的製程分類、量具依種類，卡片上標有幾項與已選幾項；
+                未分到製程的收在「未分類」不會不見）<b>② 再點設備</b>，同一類可以連續點好幾項、
+                再點一次取消，點「← 換一個分類」繼續加別類的。<b>也可以直接打字模糊搜尋</b>——
+                打字時跨分類直接列出符合的設備（多個關鍵字用空白分開，每個都要命中），清空就回到分類。
+                已選的一律列在上方，每一項都能按 × 單獨移除，左下角「清除全部」重選。
+                按「帶入」把編號填進「使用設備」欄，之後仍然可以自己改文字；
+                <b>重新開啟時會把欄位裡已經有的設備先勾起來</b>，不會把人填好的洗掉。</li>
             <li><b>設備操作說明書綁的是機台型號，不是單一台機器</b>——同型號（例 HGH250 有三台）共用一份 SOP。
                 選了型號會自動把在用的機台全部帶進來，不適用的逐台勾掉；同型號日後新增的機台
                 <b>不會自動加入</b>，清單與表頭會標出「還有幾台未納入」。機器製造商／名稱／型式規格／

@@ -1157,53 +1157,119 @@ $(document).on('click', '#btnRefillMachine', function () {
 });
 
 /** 製造製程說明書的「使用設備」：可複選機器編號（使用者要求） */
+/* ── 挑使用設備：① 先點分類 ② 再點設備（比照線上檢驗「選擇本單使用的量具」那一頁的兩層大按鈕）
+   分類＝機台依綁定的製程、量具依種類；打字則直接跨分類列出符合的設備。 */
+var EQ = { groups: [], sel: {}, order: [], cat: null };
+
 $(document).on('click', '#btnPickEquip', function () {
-    var h = '<div class="note-box">勾選這個製程會用到的<b>機台或量具</b>，按「帶入」會把編號填進「使用設備」欄，'
-          + '之後仍然可以自己改文字。機台依<b>綁定的製程</b>分組、量具依<b>種類</b>分組。</div>'
-          + '<div class="frm" style="margin-bottom:6px;"><label>搜尋</label><div class="wide">'
-          + '<input type="text" id="eqKw" data-eg-hint="打製程、型號、機台名稱、機器編號或量具編號"></div></div>'
-          + '<div class="pickbox eqbox" id="eqList" style="max-height:330px;">載入中…</div>'
-          + '<div style="margin-top:8px;"><span class="muted-help" id="eqSel">已勾 0 項</span>'
-          + '　<button class="btn btn-sm btn-warm" id="eqApply">帶入</button></div>';
+    EQ = { groups: [], sel: {}, order: [], cat: null };
+    // 欄位裡原本就有的字，逐項對回設備清單，已經在裡面的先勾起來（不會一開跳窗就把人填的清掉）
+    var had = String($('#f_use_equip').val() || '').split(/[、,，\s]+/).filter(function (x) { return x; });
     $('#pickTitle').text('挑使用設備');
-    $('#pickBody').html(h);
+    $('#pickBody').html('<div class="note-box">設備是綁在<b>這一份說明書</b>上（不逐列指定）：先點分類、再點設備。'
+        + '一個分類可以連續點好幾項，選完這一類點「← 換一個分類」繼續加。</div>'
+        + '<div id="eqPicked"></div>'
+        + '<div class="frm" style="margin-bottom:8px;"><label>搜尋</label><div class="wide">'
+        + '<input type="text" id="eqKw" data-eg-hint="打分類、型號、機台名稱、機器編號或量具編號"></div></div>'
+        + '<div id="eqPane"><span class="muted-help">載入中…</span></div>'
+        + '<div style="margin-top:10px;display:flex;gap:8px;align-items:center;">'
+        + '<button class="btn btn-sm" id="eqClear">清除全部</button><span style="margin-left:auto;"></span>'
+        + '<button class="btn btn-sm btn-warm" id="eqApply">帶入（已選 <b id="eqApplyN">0</b> 項）</button></div>');
     openMask('maskPick');
-    loadEqList('');
-});
-/** 依「製程／量具種類」分組列出，一組一個標題一列一台——平鋪 34 台看不出哪台是哪一關的 */
-function loadEqList(kw) {
-    api('equip_pick', { kw: kw }, function (res) {
-        var gs = res.groups || [], h = '', n = 0;
-        $.each(gs, function (i, g) {
-            if (!g.rows || !g.rows.length) return;
-            n += g.rows.length;
-            h += '<div class="eqgrp"><div class="eqgh">'
-               + (g.kind === 'tool' ? '量具／檢驗設備　' : '製程　') + esc(g.group)
-               + '<span class="muted-help">　' + g.rows.length + ' 項</span></div>';
-            $.each(g.rows, function (j, r) {
-                h += '<label class="eqit"><input type="checkbox" class="eqchk" value="' + esc(r.value) + '"> '
-                   + '<span class="mno">' + esc(r.no) + '</span> ' + esc(r.name || '')
-                   + (r.sub ? ' <span class="muted-help">' + esc(r.sub) + '</span>' : '')
-                   + '</label>';
+    api('equip_pick', { kw: '' }, function (res) {
+        EQ.groups = res.groups || [];
+        $.each(EQ.groups, function (i, g) {
+            $.each(g.rows || [], function (j, r) {
+                if (had.indexOf(r.value) >= 0 && !EQ.sel[r.value]) {
+                    EQ.sel[r.value] = { value: r.value, no: r.no, cat: g.group }; EQ.order.push(r.value);
+                }
             });
-            h += '</div>';
         });
-        $('#eqList').html(h || '<span class="muted-help">查無符合的機台或量具。</span>');
-        eqCount();
+        eqRender();
     });
-}
-function eqCount() { $('#eqSel').text('已勾 ' + $('.eqchk:checked').length + ' 項'); }
-$(document).on('change', '.eqchk', eqCount);
-$(document).on('input', '#eqKw', function () {
-    var kw = $(this).val();
-    clearTimeout(window._eqT);
-    window._eqT = setTimeout(function () { loadEqList(kw); }, 200);
 });
+
+/** 這一列符不符合關鍵字（多個關鍵字＝每一個都要命中，可以分散在不同欄位） */
+function eqHit(r, cat, words) {
+    if (!words.length) return true;
+    var hay = ((r.no || '') + ' ' + (r.name || '') + ' ' + (r.sub || '') + ' ' + cat).toLowerCase();
+    for (var i = 0; i < words.length; i++) if (hay.indexOf(words[i]) < 0) return false;
+    return true;
+}
+function eqRender() {
+    var kw = String($('#eqKw').val() || '').trim().toLowerCase();
+    var words = kw ? kw.split(/\s+/) : [];
+    var h = '';
+    if (words.length) {
+        // 打字＝跨分類直接列出符合的設備（不必先猜它在哪一類）
+        var rows = [];
+        $.each(EQ.groups, function (i, g) {
+            $.each(g.rows || [], function (j, r) { if (eqHit(r, g.group, words)) rows.push([g, r]); });
+        });
+        h = '<div class="eq-sub">符合「' + esc(kw) + '」的設備 <b>' + rows.length + '</b> 項'
+          + '（清空搜尋可回到分類）</div><div class="eqgrid">';
+        $.each(rows, function (i, x) { h += eqItemBtn(x[1], x[0].group); });
+        h += '</div>';
+        if (!rows.length) h = '<span class="muted-help">查無符合的機台或量具。</span>';
+    } else if (EQ.cat === null) {
+        h = '<div class="eq-sub">① 先點分類</div><div class="eqgrid">';
+        $.each(EQ.groups, function (i, g) {
+            if (!g.rows || !g.rows.length) return;
+            var n = 0;
+            $.each(g.rows, function (j, r) { if (EQ.sel[r.value]) n++; });
+            h += '<button class="eq-cat' + (n ? ' has-sel' : '') + '" data-i="' + i + '">'
+               + esc(g.group) + '<small>' + (g.kind === 'tool' ? '量具　' : '機台　') + g.rows.length + ' 項'
+               + (n ? '　已選 ' + n : '') + '</small></button>';
+        });
+        h += '</div>';
+    } else {
+        var g2 = EQ.groups[EQ.cat] || { rows: [] };
+        h = '<div class="eq-sub">② 點設備（可以連續點好幾項，再點一次取消）　'
+          + '<button class="btn btn-xs btn-warm-o" id="eqBack">← 換一個分類</button></div><div class="eqgrid">';
+        $.each(g2.rows || [], function (i, r) { h += eqItemBtn(r, g2.group); });
+        h += '</div>';
+    }
+    $('#eqPane').html(h);
+    eqChips();
+}
+function eqItemBtn(r, cat) {
+    var on = !!EQ.sel[r.value];
+    return '<button class="eq-no' + (on ? ' on' : '') + '" data-v="' + esc(r.value) + '" data-cat="' + esc(cat) + '"'
+         + ' data-no="' + esc(r.no) + '">' + esc(r.no)
+         + '<small>' + (on ? '✔ 已選（再點一次取消）' : esc(r.name || r.sub || cat)) + '</small></button>';
+}
+function eqChips() {
+    var h = '';
+    $.each(EQ.order, function (i, v) {
+        var s = EQ.sel[v]; if (!s) return;
+        h += '<span class="eq-chip"><span class="c">' + esc(s.cat) + '</span><span>' + esc(s.no) + '</span>'
+           + '<button class="x eq-rm" data-v="' + esc(v) + '" title="移除">×</button></span>';
+    });
+    $('#eqPicked').html('<b class="muted-help">已選：</b>' + (h || '<span class="eq-none">（尚未選擇）</span>'));
+    $('#eqApplyN').text(EQ.order.length);
+}
+$(document).on('click', '.eq-cat', function () { EQ.cat = num($(this).data('i')); eqRender(); });
+$(document).on('click', '#eqBack', function () { EQ.cat = null; eqRender(); });
+$(document).on('click', '.eq-no', function () {
+    var v = String($(this).data('v'));
+    if (EQ.sel[v]) { delete EQ.sel[v]; EQ.order = EQ.order.filter(function (x) { return x !== v; }); }
+    else { EQ.sel[v] = { value: v, no: String($(this).data('no')), cat: String($(this).data('cat')) }; EQ.order.push(v); }
+    eqRender();
+});
+$(document).on('click', '.eq-rm', function (e) {
+    e.stopPropagation();
+    var v = String($(this).data('v'));
+    delete EQ.sel[v]; EQ.order = EQ.order.filter(function (x) { return x !== v; });
+    eqRender();
+});
+$(document).on('input', '#eqKw', function () {
+    clearTimeout(window._eqT);
+    window._eqT = setTimeout(eqRender, 150);    // 全部資料都在前端，篩選不必再打後端
+});
+$(document).on('click', '#eqClear', function () { EQ.sel = {}; EQ.order = []; eqRender(); });
 $(document).on('click', '#eqApply', function () {
-    var v = [];
-    $('.eqchk:checked').each(function () { v.push($(this).val()); });
-    if (!v.length) { alert('至少要勾一台。'); return; }
-    $('#f_use_equip').val(v.join('、'));
+    if (!EQ.order.length) { alert('至少要選一項設備。'); return; }
+    $('#f_use_equip').val(EQ.order.join('、'));
     closeMask('maskPick');
 });
 
