@@ -37,8 +37,45 @@ require_once __DIR__ . '/car_lib.php';   // 工作日行事曆唯一來源：car
 const PRJ_ASDOC_PLAN = 'project_plan';   // 2-GM-02-02 專案執行規劃表
 const PRJ_ASDOC_CARD = 'project_card';   // 2-GM-02-03 專案管理卡
 
-/** 專案類型（程序書 §6.13：開發D／客製C／生產P／服務S；固定四種，是編碼的一部分不可自訂） */
-const PRJ_TYPES = ['D' => '開發', 'C' => '客製', 'P' => '生產', 'S' => '服務'];
+/**
+ * 專案性質的**建表預設值**（2026-09-22 使用者要求改成管理員可自行新增／修改／刪除，
+ * 並指定「取消開發」，所以這裡刻意不再列 D 開發）。
+ * 建表時只用這一份當種子，之後一律以 `project_type_opt` 資料表為準——
+ * 不可以再拿這個常數當顯示來源，否則管理員改了名稱、畫面還是印舊的（鐵律4）。
+ * 代號是**專案代號的第一碼**（例 C260501），所以只能一個英文字母且不可重複。
+ */
+const PRJ_TYPES = ['C' => '客製', 'P' => '生產', 'S' => '服務'];
+
+/**
+ * 目前的專案性質 code => name（唯一顯示來源，**不要再讀 PRJ_TYPES 常數**）。
+ * $activeOnly=true 時只回啟用中的（給「新專案要選哪一種」用）；
+ * 顯示既有專案的性質一律用 false，否則停用掉的那幾種會印成空白。
+ */
+function prj_types(PDO $db, bool $activeOnly = false): array
+{
+    static $cache = [];
+    $k = $activeOnly ? 'a' : 'x';
+    if (isset($cache[$k])) return $cache[$k];
+    $out = [];
+    try {
+        $sql = "SELECT type_code, type_name FROM project_type_opt"
+             . ($activeOnly ? " WHERE is_active=1" : '')
+             . " ORDER BY sort_order, type_code";
+        foreach ($db->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $out[(string)$r['type_code']] = (string)$r['type_name'];
+        }
+    } catch (Throwable $e) {}
+    if (!$out) $out = PRJ_TYPES;          // 表還沒建起來時的退路，不要讓整頁空白
+    return $cache[$k] = $out;
+}
+
+/** 這個性質目前有幾個專案在用（刪除前的守門；含已刪除的，否則還原出來會變孤兒） */
+function prj_type_usage(PDO $db, string $code): int
+{
+    $st = $db->prepare("SELECT COUNT(*) FROM project WHERE project_type=?");
+    $st->execute([$code]);
+    return (int)$st->fetchColumn();
+}
 
 /** 專案生命週期（程序書 §6.7.1 五個作業流程） */
 const PRJ_PHASES = [
@@ -150,6 +187,33 @@ function prj_ensure_schema(PDO $db): void
         UNIQUE KEY uq_no (project_no),
         KEY idx_status (status), KEY idx_phase (phase), KEY idx_cust (customer_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='專案主檔（2-GM-02 專案管理程序）'");
+
+    /* 專案性質（可由管理員維護）。代號是專案代號的第一碼，所以只能一個英文字母、不可重複。 */
+    $db->exec("CREATE TABLE IF NOT EXISTS project_type_opt (
+        type_code   CHAR(1) NOT NULL PRIMARY KEY COMMENT '專案代號的第一碼（A~Z）',
+        type_name   VARCHAR(40) NOT NULL,
+        sort_order  INT NOT NULL DEFAULT 0,
+        is_active   TINYINT NOT NULL DEFAULT 1 COMMENT '0=停用（既有專案照常顯示，只是新專案不給選）',
+        created_by  VARCHAR(60) NULL, created_at DATETIME NULL,
+        modified_by VARCHAR(60) NULL, modified_at DATETIME NULL
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='專案性質（管理員可維護；代號是專案編號的第一碼）'");
+    try {
+        // 第一次建表才種預設值；之後完全以資料表為準，不會把管理員刪掉的種回去
+        if (!(int)$db->query("SELECT COUNT(*) FROM project_type_opt")->fetchColumn()) {
+            $i = 0;
+            foreach (PRJ_TYPES as $c => $n) {
+                $db->prepare("INSERT IGNORE INTO project_type_opt (type_code, type_name, sort_order, created_by, created_at)
+                              VALUES (?,?,?, 'system', NOW())")->execute([$c, $n, ++$i * 10]);
+            }
+            /* 既有專案用到、但不在預設清單裡的代號（例如舊的 D 開發）一定要補進來並停用——
+               不補的話那些專案的性質欄會變空白，而且完全看不出原因。 */
+            foreach ($db->query("SELECT DISTINCT project_type FROM project WHERE project_type<>''")
+                        ->fetchAll(PDO::FETCH_COLUMN) as $c) {
+                $db->prepare("INSERT IGNORE INTO project_type_opt (type_code, type_name, sort_order, is_active, created_by, created_at)
+                              VALUES (?,?,?,0,'system', NOW())")->execute([$c, '（舊資料 ' . $c . '）', 900]);
+            }
+        }
+    } catch (Throwable $e) {}
 
     $db->exec("CREATE TABLE IF NOT EXISTS project_order (
         id          INT AUTO_INCREMENT PRIMARY KEY,
@@ -490,7 +554,8 @@ function prj_company_name(PDO $db): string
 function prj_next_no(PDO $db, string $type, ?string $bizDate = null): string
 {
     $type = strtoupper(substr(trim($type), 0, 1));
-    if (!isset(PRJ_TYPES[$type])) $type = 'C';
+    $types = prj_types($db, true);
+    if (!isset($types[$type])) $type = (string)(array_key_first($types) ?: 'C');
     $d  = $bizDate ?: prj_db_now($db)['date'];
     $ts = strtotime((string)$d);
     if ($ts === false) $ts = strtotime(prj_db_now($db)['date']);
@@ -1244,8 +1309,9 @@ function prj_list(PDO $db, array $q): array
     $st = $db->prepare($sql);
     $st->execute($p);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $tmap = prj_types($db);          // 顯示用一律不篩 is_active，否則停用掉的性質會印成空白
     foreach ($rows as &$r) {
-        $r['type_label']  = PRJ_TYPES[$r['project_type']] ?? '';
+        $r['type_label']  = $tmap[$r['project_type']] ?? '';
         $r['phase_label'] = PRJ_PHASES[$r['phase']] ?? '';
         $r['progress']    = prj_progress($db, (int)$r['project_id']);
     }
@@ -1260,18 +1326,20 @@ function prj_get(PDO $db, int $projectId): ?array
     $st->execute([$projectId]);
     $r = $st->fetch(PDO::FETCH_ASSOC);
     if (!$r) return null;
-    $r['type_label']  = PRJ_TYPES[$r['project_type']] ?? '';
+    $r['type_label']  = prj_types($db)[$r['project_type']] ?? '';
     $r['phase_label'] = PRJ_PHASES[$r['phase']] ?? '';
     $r['progress']    = prj_progress($db, $projectId);
     return $r;
 }
 
 /** 必填檢查（前端即時擋＋後端同規則再擋一次＝鐵律8，不做半套） */
-function prj_validate(array $d, array $tasks = []): array
+function prj_validate(array $d, array $tasks = [], ?PDO $db = null): array
 {
     $err = [];
     if (trim((string)($d['project_name'] ?? '')) === '') $err['project_name'] = '請填專案名稱';
-    if (!isset(PRJ_TYPES[(string)($d['project_type'] ?? '')])) $err['project_type'] = '請選擇專案類型';
+    // 專案性質改成管理員可維護之後，合法值要以資料表為準（$db 沒傳進來才退回種子常數）
+    $types = $db ? prj_types($db, true) : PRJ_TYPES;
+    if (!isset($types[(string)($d['project_type'] ?? '')])) $err['project_type'] = '請選擇專案性質';
     if ((int)($d['owner_id'] ?? 0) <= 0) $err['owner_id'] = '請選擇專案負責人';
     $s = trim((string)($d['start_date'] ?? ''));
     $e = trim((string)($d['end_date'] ?? ''));

@@ -79,8 +79,11 @@ function pjHandleUrlParams() {
 }
 
 function fillMeta() {
-    var t = $('#fType').empty().append('<option value="">全部類型</option>');
-    $.each(META.types || {}, function (k, v) { t.append('<option value="' + k + '">' + esc(v + '型（' + k + '）') + '</option>'); });
+    /* 篩選用 types_all＝連停用的也列（既有專案還掛在那些性質上，不列就篩不到） */
+    var t = $('#fType').empty().append('<option value="">全部性質</option>');
+    $.each(META.types_all || META.types || {}, function (k, v) {
+        t.append('<option value="' + k + '">' + esc(v + '（' + k + '）') + '</option>');
+    });
     var ph = $('#fPhase').empty().append('<option value="">全部階段</option>');
     $.each(META.phases || {}, function (k, v) { ph.append('<option value="' + k + '">' + esc(v) + '</option>'); });
     var ow = $('#fOwner').empty().append('<option value="">全部負責人</option>');
@@ -393,7 +396,7 @@ $(document).on('click', '#btnAckAll', function () {
 function renderBase(res) {
     var p = res.project, ro = res.can_edit ? '' : ' disabled';
     var typeOpt = '', phaseOpt = '', ownerOpt = '<option value="">（請選擇）</option>', custOpt = '<option value="">（無）</option>', deptOpt = '<option value="">（無）</option>';
-    $.each(META.types || {}, function (k, v) { typeOpt += '<option value="' + k + '"' + (p.project_type === k ? ' selected' : '') + '>' + esc(v + '型（' + k + '）') + '</option>'; });
+    $.each(META.types || {}, function (k, v) { typeOpt += '<option value="' + k + '"' + (p.project_type === k ? ' selected' : '') + '>' + esc(v + '（' + k + '）') + '</option>'; });
     $.each(META.phases || {}, function (k, v) { phaseOpt += '<option value="' + k + '"' + (p.phase === k ? ' selected' : '') + '>' + esc(v) + '</option>'; });
     /* 只列合格的人；本專案目前的負責人即使事後不合資格也一定保留，否則一打開就變空白、一存檔就被洗掉。
        新專案（還沒有 owner_id）預設帶「目前使用者」——非管理員本來就只能挑自己部門的人。 */
@@ -411,7 +414,7 @@ function renderBase(res) {
 
     var h = '<div class="sec"><h5>專案基本資料</h5><div class="grid3">'
       + '<div><label>專案代號</label><input type="text" class="ro-auto" readonly value="' + esc(p.project_no || '（存檔後自動產生）') + '"></div>'
-      + '<div id="fldType"><label>專案類型 <span style="color:#DD5138;">*</span></label><select id="eType"' + ro + '>' + typeOpt + '</select>'
+      + '<div id="fldType"><label>專案性質 <span style="color:#DD5138;">*</span></label><select id="eType"' + ro + '>' + typeOpt + '</select>'
       + '<div class="pj-err"></div></div>'
       + '<div><label>目前階段</label><select id="ePhase"' + ro + '>' + phaseOpt + '</select></div>'
       + '<div style="grid-column:1 / -1;" id="fldName"><label>專案名稱 <span style="color:#DD5138;">*</span></label>'
@@ -476,6 +479,87 @@ function scopeHintText(sel, cands) {
         : '未指定＝<b>整張 BOM 的所有製程</b>都算本專案。';
 }
 /* 勾選只改畫面，跟其他欄位一起按「儲存」才寫入（避免點一下就送一次 API） */
+/* ══════════════════════════ 專案性質（管理員維護） ══════════════════════════
+   每一列自己存檔（不跟著「儲存設定」走）——代號是專案編號的第一碼，
+   混在整頁存檔裡按一次就改掉好幾種，風險太高。 */
+function loadTypes() {
+    if (!$('#typeBody').length) return;
+    api('type_list').done(function (r) {
+        var rows = r.rows || [], h = '';
+        $.each(rows, function (i, x) {
+            var ro = PERM.canAdmin ? '' : ' readonly';
+            h += '<tr data-tc="' + esc(x.type_code) + '">'
+              + '<td class="c"><b>' + esc(x.type_code) + '</b></td>'
+              + '<td><input type="text" class="tn" maxlength="20" value="' + esc(x.type_name) + '"' + ro + '></td>'
+              + '<td><input type="number" class="ts" value="' + num(x.sort_order) + '"' + ro + '></td>'
+              + '<td class="c"><input type="checkbox" class="ta" data-eg-skip="1"' + (num(x.is_active) ? ' checked' : '')
+              + (PERM.canAdmin ? '' : ' disabled') + '></td>'
+              + '<td class="c">' + (num(x.used) ? '<b>' + num(x.used) + '</b>' : '－') + '</td>'
+              + '<td>' + (PERM.canAdmin
+                    ? '<span class="pj-op" data-tsave="' + esc(x.type_code) + '">儲存</span>'
+                      + '<span class="pj-op" data-tdel="' + esc(x.type_code) + '" style="color:#DD5138;">刪除</span>'
+                    : '<span class="pj-hint">－</span>') + '</td></tr>';
+        });
+        $('#typeBody').html(h || '<tr><td colspan="6" style="padding:10px;color:#8a6d45;">（沒有任何專案性質）</td></tr>');
+    });
+}
+$(document).on('click', '[data-tsave]', function () {
+    var $r = $(this).closest('tr');
+    api('type_save', { type_code: String($r.data('tc')), type_name: $r.find('.tn').val(),
+                       sort_order: $r.find('.ts').val(), is_active: $r.find('.ta').is(':checked') ? 1 : 0,
+                       is_new: 0 }, 'POST')
+        .done(function (r) { alert(r.message); loadTypes(); reloadTypeOptions(); });
+});
+$(document).on('click', '#btnTypeAdd', function () {
+    var code = $.trim($('#ntCode').val()).toUpperCase(), name = $.trim($('#ntName').val());
+    var $e = $('#ntErr');
+    if (!/^[A-Z]$/.test(code)) { $e.show().text('代號只能是一個英文字母（A~Z）'); return; }
+    if (!name) { $e.show().text('請填性質名稱'); return; }
+    $e.hide().text('');
+    api('type_save', { type_code: code, type_name: name, sort_order: $('#ntSort').val(), is_active: 1, is_new: 1 }, 'POST')
+        .done(function (r) {
+            alert(r.message);
+            $('#ntCode').val(''); $('#ntName').val('');
+            loadTypes(); reloadTypeOptions();
+        });
+});
+/* 刪除：有專案在用時後端會回 need_move，這裡跳出移轉選單讓人挑要移到哪一種（使用者指定的流程） */
+$(document).on('click', '[data-tdel]', function () {
+    var code = String($(this).data('tdel'));
+    var go = function (moveTo) {
+        api('type_delete', moveTo ? { type_code: code, move_to: moveTo } : { type_code: code }, 'POST')
+            .done(function (r) {
+                if (num(r.need_move)) {
+                    var opts = $.map(r.others || [], function (o) { return o.code + '＝' + o.name; }).join('\n');
+                    var pick = prompt(r.message + '\n\n要把這 ' + r.used + ' 個專案移轉到哪一種？請輸入代號：\n' + opts
+                        + '\n\n（移轉不會改動既有的專案代號——那是立案當下就發出去、也印在紙本上的編號）', '');
+                    if (pick === null) return;
+                    pick = $.trim(pick).toUpperCase();
+                    if (!pick) return;
+                    go(pick);
+                    return;
+                }
+                alert(r.message);
+                loadTypes(); reloadTypeOptions(); loadList();
+            });
+    };
+    if (!confirm('刪除專案性質「' + code + '」？\n\n如果還有專案在用，系統會先要你把它們移轉到其他性質。')) return;
+    go('');
+});
+/* 性質改過之後，畫面上其他地方的下拉也要跟著換，不必重新整理整頁 */
+function reloadTypeOptions() {
+    api('meta').done(function (res) {
+        META.types = res.types || META.types;
+        META.types_all = res.types_all || META.types_all;
+        renderTypeFilter();
+    });
+}
+function renderTypeFilter() {
+    var cur = $('#fType').val();
+    fillMeta();                 // 篩選列的下拉一律由 fillMeta() 產生，不要在這裡再寫一份（鐵律4）
+    $('#fType').val(cur);
+}
+
 /* 設定頁的「加工圖面標籤」勾選（按「儲存設定」才寫入） */
 $(document).on('click', '#setDwgCats .pj-tag[data-dwgcat], #setO2pCats .pj-tag[data-o2pcat]', function () {
     $(this).toggleClass('on');
@@ -571,7 +655,7 @@ function saveBase(after) {
     /* 前端先驗一次（同一套規則），錯的欄位當場標紅 */
     var err = {};
     if (!d.project_name) err.project_name = '請填專案名稱';
-    if (!d.project_type) err.project_type = '請選擇專案類型';
+    if (!d.project_type) err.project_type = '請選擇專案性質';
     if (!num(d.owner_id)) err.owner_id = '請選擇專案負責人';
     if (d.start_date && d.end_date && d.start_date > d.end_date) err.end_date = '專案迄日不可早於起日';
     if (Object.keys(err).length) { showFieldErrors(err); return; }
@@ -2682,8 +2766,9 @@ function showDialog(title, bodyHtml, onOk) {
 
 /* ══════════════════════════ 訂單轉專案 ══════════════════════════ */
 function openO2P(forceMode) {
-    var typeOpt = '';
-    $.each(META.types || {}, function (k, v) { typeOpt += '<option value="' + k + '"' + (k === 'C' ? ' selected' : '') + '>' + esc(v + '型（' + k + '）') + '</option>'; });
+    /* 預設選第一個啟用中的性質，**不要寫死 'C'**——專案性質已經可以由管理員改名或刪除 */
+    var typeOpt = '', i0 = 0;
+    $.each(META.types || {}, function (k, v) { typeOpt += '<option value="' + k + '"' + (i0++ === 0 ? ' selected' : '') + '>' + esc(v + '（' + k + '）') + '</option>'; });
     $('#o2pType').html(typeOpt);
     /* 專案負責人只列合格的人（模組設定 → 專案負責人資格）；沒設定時 owner_people＝全體 */
     var ownerOpt = '';
@@ -3197,6 +3282,7 @@ $(document).on('click', '#btnSeedReset', function () {
 });
 
 function openSetting() {
+    loadTypes();                 // 專案性質清單（每一列自己存檔，不跟著「儲存設定」走）
     api('setting_get').done(function (res) {
         var s = res.setting || {};
         var uOpt = '<option value="0">（不指定）</option>';

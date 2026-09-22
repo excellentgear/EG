@@ -286,7 +286,7 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
 <?php else: ?>
         <div class="pj-toolbar">
             <input type="text" id="fKw" placeholder="搜尋 專案代號/名稱/客戶/負責人/料號/訂單號…" style="width:280px;">
-            <select id="fType"><option value="">全部類型</option></select>
+            <select id="fType"><option value="">全部性質</option></select>
             <select id="fPhase"><option value="">全部階段</option></select>
             <select id="fStatus">
                 <option value="">全部狀態</option>
@@ -324,7 +324,7 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         <div class="pj-table-wrap">
             <table class="pj-table" id="listTable">
                 <thead><tr>
-                    <th style="width:80px;">專案代號</th><th style="width:46px;">類型</th>
+                    <th style="width:80px;">專案代號</th><th style="width:52px;">性質</th>
                     <th>專案名稱</th><th style="width:110px;">客戶</th><th style="width:78px;">負責人</th>
                     <th style="width:58px;">階段</th><th style="width:70px;">狀態</th>
                     <th style="width:150px;">期間</th><th style="width:92px;">進度</th>
@@ -407,7 +407,7 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
                 <label style="display:inline;"><input type="radio" name="o2pMode" value="append" data-eg-skip="1"> 加入既有專案</label>
             </div>
             <div id="o2pNewBox" class="grid3">
-                <div><label>專案類型 <span style="color:#DD5138;">*</span></label><select id="o2pType"></select></div>
+                <div><label>專案性質 <span style="color:#DD5138;">*</span></label><select id="o2pType"></select></div>
                 <div><label>專案名稱（留空自動以客戶＋料號命名）</label><input type="text" id="o2pName"></div>
                 <div><label>專案負責人</label><select id="o2pOwner" data-eg-filter="輸入姓名篩選…"></select></div>
                 <div style="grid-column:1 / -1;"><label>專案分類標籤</label><div class="pj-tagbar" id="o2pTagBar"></div></div>
@@ -566,6 +566,29 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
                 結案時若專案內料號還有文件未建立，<b>擋下並列出缺什麼</b>（管理員可強制略過）</label>
         </div>
         <div class="sec">
+            <h5>專案性質</h5>
+            <p class="pj-hint">代號是<b>專案代號的第一碼</b>（例 <b>C</b>260501），所以只能一個英文字母、不可重複。
+                停用＝既有專案照常顯示，只是開新專案時不給選。<br>
+                <b>要刪除時，如果還有專案在用，系統會要你先把那些專案全部移轉到別的性質</b>；
+                移轉<b>不會改動既有的專案代號</b>——代號在立案當下就發出去、也印在紙本上了。</p>
+            <div style="overflow-x:auto;">
+                <table class="sub-tbl" id="typeTbl"><thead><tr>
+                    <th style="width:64px;">代號</th><th>性質名稱</th>
+                    <th style="width:72px;">排序</th><th style="width:64px;">啟用</th>
+                    <th style="width:72px;">使用中</th><th style="width:110px;"></th>
+                </tr></thead><tbody id="typeBody"></tbody></table>
+            </div>
+            <div style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap;margin-top:8px;">
+                <div style="width:90px;"><label>新增代號</label>
+                    <input type="text" id="ntCode" maxlength="1" data-eg-hint="一個英文字母，例 D"></div>
+                <div style="width:180px;"><label>性質名稱</label>
+                    <input type="text" id="ntName" maxlength="20" data-eg-hint="例：開發"></div>
+                <div style="width:90px;"><label>排序</label><input type="number" id="ntSort" value="0"></div>
+                <button id="btnTypeAdd" style="height:30px;padding:0 12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">新增</button>
+                <span class="pj-err" id="ntErr" style="display:none;"></span>
+            </div>
+        </div>
+        <div class="sec">
             <h5>進度佐證：哪些附件標籤算「加工圖面」</h5>
             <p class="pj-hint">步驟「製作加工圖面」的完成日，系統會去找專案料號底下掛了這些標籤的附件，
                 日期取<b>發行章日期</b>（沒有發行章日期才退回上傳日）。不勾＝這一項偵測不出來，要人工填。</p>
@@ -696,9 +719,13 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         </ul>
 
         <h4>三、專案代號怎麼來的</h4>
-        <p>依程序書 §6.13 自動產生 <b>7 碼</b>＝類型 1 碼（開發 <b>D</b>／客製 <b>C</b>／生產 <b>P</b>／服務 <b>S</b>）
-            ＋西元年後 2 碼＋月 2 碼＋流水 2 碼。例：<code>C260801</code>＝2026 年 8 月第 1 個客製型專案。
-            流水碼依「同一類型＋同一年月」遞增。</p>
+        <p>依程序書 §6.13 自動產生 <b>7 碼</b>＝<b>專案性質 1 碼</b>＋西元年後 2 碼＋月 2 碼＋流水 2 碼。
+            例：<code>C260801</code>＝2026 年 8 月第 1 個「客製」專案。流水碼依「同一性質＋同一年月」遞增。</p>
+        <p class="pj-hint">專案性質由<b>管理員在「模組設定 → 專案性質」自行新增／修改／刪除</b>（預設：客製 C／生產 P／服務 S）。
+            代號就是上面那第 1 碼，所以只能一個英文字母、不可重複。<br>
+            <b>刪除時如果還有專案在用，系統會先要你把那些專案全部移轉到別的性質</b>，移轉完才刪得掉。
+            <b>移轉不會改動既有的專案代號</b>——代號在立案當下就發出去、也印在紙本表單上了，
+            事後改號會跟紙本對不起來，還可能跟別的專案撞號。</p>
 
         <h4>四、執行規劃表（2-GM-02-02）</h4>
         <ul>

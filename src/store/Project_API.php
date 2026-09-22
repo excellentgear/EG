@@ -55,7 +55,7 @@ function prj_is_cosigner(PDO $db, int $projectId, int $uid): bool
 function prj_notify_cosign(PDO $db, array $prj, array $n, int $fromUid): int
 {
     $title = '專案立案待會簽：' . $prj['project_no'] . '　' . $prj['project_name'];
-    $content = '專案代號：' . $prj['project_no'] . '（' . (PRJ_TYPES[$prj['project_type']] ?? '') . "型)\n"
+    $content = '專案代號：' . $prj['project_no'] . '（' . (prj_types($db)[$prj['project_type']] ?? '') . "型)\n"
              . '專案名稱：' . $prj['project_name'] . "\n"
              . '客戶：' . ($prj['customer_name'] ?: '－') . '　負責人：' . ($prj['owner_name'] ?: '－') . "\n"
              . '專案期間：' . eg_fmt_date($prj['start_date']) . ' ~ ' . eg_fmt_date($prj['end_date']) . "\n"
@@ -152,7 +152,8 @@ case 'meta':
     } catch (Throwable $e) {
     }
     jout([
-        'types'      => PRJ_TYPES,
+        'types'      => prj_types($db, true),
+        'types_all'  => prj_types($db),
         'phases'     => PRJ_PHASES,
         'tag_kinds'  => PRJ_TAG_KINDS,
         'phrase_fields' => PRJ_PHRASE_FIELDS,
@@ -256,7 +257,7 @@ case 'save':
         'scope_process_no' => prj_tag_csv(prj_tag_ids((string)($_POST['scope_process_no'] ?? ''))),
     ];
     if (!isset(PRJ_PHASES[$data['phase']])) $data['phase'] = 'initiating';
-    $err = prj_validate($data);
+    $err = prj_validate($data, [], $db);
     // 專案負責人資格（模組設定 → 專案負責人資格）：前端下拉已只列合格的人，後端同規則再擋一次（鐵律8）。
     // 既有專案的負責人維持原值時一律放行——設定改嚴不該讓舊專案變成存不了檔。
     if (!$err && $data['owner_id'] > 0 && !prj_owner_allowed($db, $data['owner_id'], $uid, (bool)$P['canAdmin'])) {
@@ -397,7 +398,8 @@ case 'order_to_project':
             if (!prj_can_edit_project($P, $prj)) throw new RuntimeException('無權編輯目標專案');
         } else {
             $type = strtoupper(trim((string)($_POST['project_type'] ?? 'C')));
-            if (!isset(PRJ_TYPES[$type])) $type = 'C';
+            $tps = prj_types($db, true);
+            if (!isset($tps[$type])) $type = (string)(array_key_first($tps) ?: 'C');
             $name = trim((string)($_POST['project_name'] ?? ''));
             if ($name === '') {
                 // 沒填名稱時用「客戶＋料號」自動命名（多料號取第一個並標示還有幾項）
@@ -462,6 +464,82 @@ case 'order_unlink':
     $db->prepare("DELETE FROM project_order WHERE project_id=? AND order_id=?")->execute([$pid, $oid]);
     prj_sync_parts_from_orders($db, $pid, $uname);
     jout(['message' => '已移出專案']);
+
+/* ══════════════════════════ 專案性質（管理員維護） ══════════════════════════
+   代號是**專案代號的第一碼**（例 C260501），所以只能一個英文字母、不可重複。 */
+case 'type_list':
+    if (!$P['canView']) jerr('無權限', 403);
+    $rows = $db->query("SELECT type_code, type_name, sort_order, is_active
+                        FROM project_type_opt ORDER BY sort_order, type_code")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) { $r['used'] = prj_type_usage($db, (string)$r['type_code']); }
+    unset($r);
+    jout(['rows' => $rows]);
+
+case 'type_save':
+    if (!$P['canAdmin']) jerr('無權限（需「專案管理員」角色）', 403);
+    $code = strtoupper(trim((string)($_POST['type_code'] ?? '')));
+    $name = trim((string)($_POST['type_name'] ?? ''));
+    $isNew = (int)($_POST['is_new'] ?? 0) === 1;
+    if (!preg_match('/^[A-Z]$/', $code)) jerr('代號只能是一個英文字母（A~Z）——它是專案代號的第一碼');
+    if ($name === '') jerr('請填性質名稱');
+    if (mb_strlen($name) > 20) jerr('性質名稱最多 20 個字');
+    $exists = (int)$db->query("SELECT COUNT(*) FROM project_type_opt WHERE type_code=" . $db->quote($code))->fetchColumn();
+    if ($isNew && $exists) jerr('代號 ' . $code . ' 已經存在');
+    if ($isNew) {
+        $db->prepare("INSERT INTO project_type_opt (type_code, type_name, sort_order, is_active, created_by, created_at)
+                      VALUES (?,?,?,?,?,?)")
+           ->execute([$code, $name, (int)($_POST['sort_order'] ?? 0),
+                      (int)($_POST['is_active'] ?? 1) ? 1 : 0, $uname, $NOW['dt']]);
+    } else {
+        if (!$exists) jerr('找不到這個性質');
+        $db->prepare("UPDATE project_type_opt SET type_name=?, sort_order=?, is_active=?, modified_by=?, modified_at=?
+                      WHERE type_code=?")
+           ->execute([$name, (int)($_POST['sort_order'] ?? 0), (int)($_POST['is_active'] ?? 1) ? 1 : 0,
+                      $uname, $NOW['dt'], $code]);
+    }
+    jout(['message' => '已儲存']);
+
+/**
+ * 刪除專案性質。使用者明確要求：**一定要先確認有沒有專案在用，
+ * 全數移轉到其他性質之後才可以刪**。所以沒帶 move_to 時一律先回報用量與可移轉的對象，
+ * 不會偷偷刪掉（把專案的性質洗成空值，畫面上那一欄就變空白而且查不出原因）。
+ */
+case 'type_delete':
+    if (!$P['canAdmin']) jerr('無權限（需「專案管理員」角色）', 403);
+    $code = strtoupper(trim((string)($_POST['type_code'] ?? '')));
+    if (!preg_match('/^[A-Z]$/', $code)) jerr('參數錯誤');
+    $used = prj_type_usage($db, $code);
+    $others = [];
+    foreach (prj_types($db) as $c => $n) if ($c !== $code) $others[] = ['code' => $c, 'name' => $n];
+    if ($used > 0) {
+        $moveTo = strtoupper(trim((string)($_POST['move_to'] ?? '')));
+        if ($moveTo === '') {
+            // 還沒指定要移到哪裡：回報現況讓前端跳出移轉選單，**不刪**
+            jout(['need_move' => 1, 'used' => $used, 'others' => $others,
+                  'message' => '有 ' . $used . ' 個專案正在用這個性質，要先全部移轉到其他性質才能刪除。']);
+        }
+        if ($moveTo === $code) jerr('不能移轉到自己');
+        if (!isset(prj_types($db)[$moveTo])) jerr('要移轉到的性質不存在');
+        $db->beginTransaction();
+        try {
+            /* 刻意**不改既有的專案代號**：代號在立案當下就發出去了、也印在紙本表單上，
+               事後改號會跟紙本對不起來，還可能跟別的專案撞號（uq_no）。
+               只改性質欄位，新專案才會用新的代號開頭。 */
+            $db->prepare("UPDATE project SET project_type=?, modified_by=?, modified_at=? WHERE project_type=?")
+               ->execute([$moveTo, $uid, $NOW['dt'], $code]);
+            $db->prepare("DELETE FROM project_type_opt WHERE type_code=?")->execute([$code]);
+            $db->commit();
+        } catch (Throwable $e) {
+            $db->rollBack();
+            jerr('移轉失敗：' . $e->getMessage());
+        }
+        jout(['message' => '已把 ' . $used . ' 個專案移轉到「' . prj_types($db)[$moveTo] . '」並刪除這個性質'
+                         . '（既有的專案代號不變，那是立案當下就發出去的編號）']);
+    }
+    // 沒有專案在用：直接刪，但至少要留一種
+    if (count($others) === 0) jerr('至少要保留一種專案性質');
+    $db->prepare("DELETE FROM project_type_opt WHERE type_code=?")->execute([$code]);
+    jout(['message' => '已刪除（沒有任何專案使用這個性質）']);
 
 /* ══════════════════════════ 進度回報（各步驟的負責人自己回報） ══════════════════════════ */
 
@@ -703,8 +781,11 @@ case 'plan_save':
     $goals = json_decode((string)($_POST['goals'] ?? '[]'), true) ?: [];
     $tasks = json_decode((string)($_POST['tasks'] ?? '[]'), true) ?: [];
     // 帶入專案自己的起日，任務的「預計開始不可早於專案起日」才驗得到（前端已即時擋，這裡同規則再擋一次＝鐵律8）
-    $err = prj_validate(['project_name' => 'x', 'project_type' => 'C', 'owner_id' => 1,
-                         'start_date' => (string)($prjPlan['start_date'] ?? ''), 'end_date' => ''], $tasks);
+    /* 這裡只是要驗任務日程，專案本身的欄位塞一組一定合法的值就好
+       （專案性質改成可維護之後，不可以再寫死 'C'——那一種被管理員刪掉就會誤報「請選擇專案性質」） */
+    $err = prj_validate(['project_name' => 'x', 'project_type' => (string)array_key_first(prj_types($db, true)),
+                         'owner_id' => 1,
+                         'start_date' => (string)($prjPlan['start_date'] ?? ''), 'end_date' => ''], $tasks, $db);
     if ($err) jerr('日程有誤', 400, ['fields' => $err]);
 
     $db->beginTransaction();
@@ -982,7 +1063,7 @@ case 'submit':
     if ((string)$prj['status'] !== 'draft' && (string)$prj['status'] !== 'rejected') {
         jerr('這筆專案目前狀態是「' . $prj['status'] . '」，不能再送簽（請重新整理）', 409);
     }
-    $err = prj_validate($prj, prj_tasks($db, $pid));
+    $err = prj_validate($prj, prj_tasks($db, $pid), $db);
     if ($err) jerr('資料未填齊，無法送簽', 400, ['fields' => $err]);
 
     $depts = $_POST['cosign_depts'] ?? [];
