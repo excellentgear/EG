@@ -1309,7 +1309,14 @@ function ia_car_create_from_kpi(PDO $db, array $check, array $item, int $uid, st
        受稽單位收到通知會看不出是誰稽核出來的。查檢表沒指定稽核人才退回操作者。 */
     $auId   = (int)($check['auditor_id'] ?? 0);
     $auName = trim((string)($check['auditor_name'] ?? ''));
-    if ($auId > 0) { $uid = $auId; $uname = ($auName !== '' ? $auName : $uname); }
+    if ($auId > 0) {
+        if ($auName === '') {   // 姓名沒存下來時回查，不可以留著操作者的姓名配稽核人的 id
+            $qn = $db->prepare("SELECT user_cname FROM user WHERE id=?");
+            $qn->execute([$auId]);
+            $auName = trim((string)($qn->fetchColumn() ?: ''));
+        }
+        $uid = $auId; $uname = ($auName !== '' ? $auName : $uname);
+    }
 
     $year    = ia_kpi_audit_year((string)($check['check_date'] ?? ''));
     $bizDate = substr((string)($check['check_date'] ?? ''), 0, 10);

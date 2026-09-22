@@ -1509,7 +1509,9 @@ case 'car_from_item': {
     // 並把單號寫回該列備註（紙本那一欄本來就叫「備註(異常矯正處理單編號)」）。
     iaReqAudit($perms);
     $iid = (int)($_POST['item_id'] ?? 0);
-    $st = $db->prepare("SELECT i.*, k.kind, k.check_date, k.year, k.status AS check_status
+    // auditor_* 一定要一起撈：矯正單的開立人＝這張查檢表的稽核人，不是按下按鈕的人
+    $st = $db->prepare("SELECT i.*, k.kind, k.check_date, k.year, k.status AS check_status,
+                               k.auditor_id, k.auditor_name
                           FROM ia_check_item i JOIN ia_check k ON k.check_id=i.check_id
                          WHERE i.item_id=? AND COALESCE(k.is_deleted,0)=0");
     $st->execute([$iid]);
@@ -1521,7 +1523,9 @@ case 'car_from_item': {
         $q = $db->prepare("SELECT car_no FROM car_order WHERE id=?"); $q->execute([(int)$it['car_id']]);
         jerr('這個項目已經開過矯正單 ' . (string)($q->fetchColumn() ?: ''));
     }
-    $ck = ['check_date' => $it['check_date']];
+    $ck = ['check_date'   => $it['check_date'],
+           'auditor_id'   => $it['auditor_id'],
+           'auditor_name' => $it['auditor_name']];
     try {
         $res = ia_car_create_from_kpi($db, $ck, $it, $uid, $uname);
     } catch (Throwable $e) { jerr('開立矯正單失敗：' . $e->getMessage(), 500); }
