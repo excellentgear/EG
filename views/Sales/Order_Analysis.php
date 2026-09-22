@@ -1139,10 +1139,16 @@ $('#setFallback').on('change', function(){ SET.fallback=$(this).val(); });
 function setBandAdd(){ var last=SET.bands[SET.bands.length-1];
   var min = last && last.max!=null ? (parseInt(last.max,10)+1) : null;
   SET.bands.push({label:'', min:min, max:null}); renderSetBand(); validateSet(); }
-function setBandDel(i){ if(SET.bands.length<=1) return; SET.bands.splice(i,1); renderSetBand(); validateSet(); }
+/* 注意：共用檔 eg_input_rules.js 的 data-eg-row-del 是**不帶參數**呼叫，語意是「移除最後一列」。
+   不補這個預設值的話 splice(undefined,1) 會刪掉第 0 列＝按 ↑ 收回空白列時刪錯人。 */
+function setBandDel(i){ if(SET.bands.length<=1) return;
+  if(typeof i!=='number') i=SET.bands.length-1;
+  SET.bands.splice(i,1); renderSetBand(); validateSet(); }
 function setBandReset(){ SET.bands = JSON.parse(JSON.stringify(SET.defaults.bands)); renderSetBand(); validateSet(); }
 function setRuleAdd(){ SET.rules.push({label:'', kw:'', cls:'full'}); renderSetRule(); validateSet(); }
-function setRuleDel(i){ if(SET.rules.length<=1) return; SET.rules.splice(i,1); renderSetRule(); validateSet(); }
+function setRuleDel(i){ if(SET.rules.length<=1) return;
+  if(typeof i!=='number') i=SET.rules.length-1;        /* 同上：不帶參數＝移除最後一列 */
+  SET.rules.splice(i,1); renderSetRule(); validateSet(); }
 function setRuleReset(){ SET.rules = JSON.parse(JSON.stringify(SET.defaults.rules)); renderSetRule(); validateSet(); }
 /* 前端即時驗證（後端 oa_qty_bands_norm／oa_proc_rules_norm 會用同一套規則再擋一次＝鐵律8） */
 function validateSet(){
