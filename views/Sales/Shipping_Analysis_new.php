@@ -1014,6 +1014,83 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'get_p
     exit;
 }
 
+/* ============================================================
+ * AJAX：客戶季度分析
+ *   cq_quarters — 逐客戶逐季的訂單／出貨／退貨（趨勢圖與明細用）
+ *   cq_growth   — 以季為單位自動判斷哪些客戶成長、哪些衰退
+ * 計算一律在 src/common/client_quarter_lib.php（唯一實作）：客戶歸戶與季歸屬
+ * 在這裡再寫一次遲早和那邊算出不一樣的數字。
+ * ============================================================ */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['action'] ?? ''), ['cq_quarters', 'cq_growth'], true)) {
+    header('Content-Type: application/json');
+    require_once '../../src/common/client_quarter_lib.php';
+    try {
+        $pdo = $conn->getPDO();
+        $ob  = $_POST['order_basis'] ?? 'delivery';
+        $qb  = $_POST['q_basis']     ?? 'billing';
+        $nowY = (int)date('Y');
+
+        if (($_POST['action'] ?? '') === 'cq_quarters') {
+            $yTo   = max(2000, min(2100, intval($_POST['year'] ?? $nowY)));
+            $back  = max(0, min(4, intval($_POST['years_back'] ?? 1)));   // 往前比較幾個年度
+            $yFrom = $yTo - $back;
+            $t0    = microtime(true);
+            $d     = cqa_quarter_rows($pdo, ['year_from' => $yFrom, 'year_to' => $yTo,
+                                             'order_basis' => $ob, 'q_basis' => $qb]);
+
+            // 精簡輸出：只帶畫面會用到的欄位，金額一律四捨五入到元
+            $clients = [];
+            foreach ($d['clients'] as $k => $c) {
+                $q = [];
+                foreach ($c['q'] as $qk => $v) {
+                    $q[$qk] = ['ship' => round($v['ship']), 'ret' => round($v['ret']), 'ord' => round($v['ord']),
+                               'net' => round($v['net']), 'ship_qty' => round($v['ship_qty'], 2),
+                               'ret_qty' => round($v['ret_qty'], 2), 'ship_cnt' => $v['ship_cnt'],
+                               'ret_cnt' => $v['ret_cnt'], 'ord_cnt' => $v['ord_cnt']];
+                }
+                $clients[] = ['key' => $k, 'name' => $c['name'], 'cid' => $c['cid'],
+                              'unmatched' => $c['unmatched'] ? 1 : 0,
+                              'total' => ['ship' => round($c['total']['ship']), 'ret' => round($c['total']['ret']),
+                                          'ord' => round($c['total']['ord']), 'net' => round($c['total']['net'])],
+                              'q' => $q];
+            }
+
+            // 每一季的進度（畫面要標出「這一季還沒過完」）
+            $prog = [];
+            foreach ($d['quarters'] as $qk) {
+                [$py, $pq] = cqa_qparse($qk);
+                $p = cqa_quarter_progress($pdo, $py, $pq, $qb, $d['meta']['cutoff']);
+                $prog[$qk] = ['start' => $p['start'], 'end' => $p['end'], 'days_total' => $p['days_total'],
+                              'days_done' => $p['days_done'], 'is_partial' => $p['is_partial'] ? 1 : 0,
+                              'is_future' => $p['is_future'] ? 1 : 0];
+            }
+
+            echo json_encode(['success' => true, 'clients' => $clients, 'quarters' => $d['quarters'],
+                              'progress' => $prog, 'order_quality' => $d['order_quality'],
+                              'meta' => $d['meta'], 'elapsed' => round(microtime(true) - $t0, 3)]);
+            exit;
+        }
+
+        // ── 成長／衰退 ──
+        $g = cqa_growth($pdo, [
+            'year'    => intval($_POST['year'] ?? $nowY),
+            'q'       => intval($_POST['q'] ?? 1),
+            'compare' => $_POST['compare'] ?? 'yoy',
+            'metric'  => $_POST['metric']  ?? 'net',
+            'min_amt' => floatval($_POST['min_amt'] ?? 50000),
+            'align'   => !isset($_POST['align']) || $_POST['align'] === '1',
+            'order_basis' => $ob, 'q_basis' => $qb,
+        ]);
+        // series 只有趨勢小圖會用到，整包送過去太肥（272 家 × 12 季），畫面上不需要就拿掉
+        foreach ($g['rows'] as &$_gr) { $_gr['unmatched'] = $_gr['unmatched'] ? 1 : 0; }
+        unset($_gr);
+        echo json_encode(['success' => true] + $g);
+    } catch (Throwable $_cqe) {
+        echo json_encode(['success' => false, 'message' => $_cqe->getMessage()]);
+    }
+    exit;
+}
+
 // 取得 GET 參數，若無則為空字串
 $start_date_param = isset($_GET['start_date']) ? $_GET['start_date'] : '';
 $end_date_param = isset($_GET['end_date']) ? $_GET['end_date'] : '';
@@ -2093,6 +2170,110 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
         .cbind-pick .cbind-dd .ac-cid { display:inline-block; min-width:72px; color:#b06a1e; font-weight:600; }
         .x_panel { border-radius:8px; box-shadow:0 1px 6px rgba(0,0,0,.07); }
         .x_title { border-bottom:1px solid #eee; background:#fafbfc; border-radius:8px 8px 0 0; }
+
+        /* ── 客戶季度分析面板（配色依 ai-rules/10 暖色系；
+              成長／衰退不用紅綠，一律「箭頭＋文字＋暖色」，黑白列印也讀得出來）── */
+        .cq-wrap .cq-subtabs { display:flex; gap:2px; margin-left:18px; }
+        .cq-wrap .cq-tab {
+            padding:5px 14px; font-size:12.5px; font-weight:600; border:none; border-radius:3px 3px 0 0;
+            background:rgba(255,255,255,.14); color:#f3e3cd; cursor:pointer; transition:all .15s;
+        }
+        .cq-wrap .cq-tab:hover { background:rgba(255,255,255,.26); color:#fff; }
+        .cq-wrap .cq-tab.active { background:#faf6f0; color:#6b471a; }
+        .cq-btn-print, .cq-btn-csv, .cq-btn-close {
+            background:rgba(255,255,255,.16); color:#fff; border:1px solid rgba(255,255,255,.3); font-size:11px;
+        }
+        .cq-btn-print:hover, .cq-btn-csv:hover, .cq-btn-close:hover { background:rgba(255,255,255,.3); color:#fff; }
+        .cq-filter {
+            display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+            background:#faf6f0; border:1px solid #efe7db; border-radius:4px; padding:6px 8px; margin-bottom:8px;
+        }
+        .cq-filter .cq-lbl { font-size:12px; font-weight:600; color:#6b471a; white-space:nowrap; }
+        .cq-filter .cq-div { width:1px; height:20px; background:#d8c7b0; margin:0 4px; }
+        .cq-filter .form-control { height:28px; font-size:12px; padding:2px 6px; display:inline-block; }
+        .cq-filter .cq-chk { font-size:12px; color:#6b471a; font-weight:500; margin:0; display:flex; align-items:center; gap:4px; cursor:pointer; }
+        .cq-btn-go { background:#8a5a2b; color:#fff; font-size:12px; padding:3px 12px; border:none; }
+        .cq-btn-go:hover, .cq-btn-go:focus { background:#734a22; color:#fff; }
+        .cq-note {
+            font-size:11.5px; color:#6b471a; background:#fdf6ea; border-left:3px solid #D6851F;
+            padding:5px 9px; border-radius:0 3px 3px 0; margin-bottom:8px; line-height:1.65;
+        }
+        .cq-note .cq-warn { color:#A34E2A; font-weight:600; }
+        .cq-note b { color:#8a5a2b; }
+        .cq-kpis { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+        .cq-kpi {
+            flex:1 1 150px; min-width:0; background:#fff; border:1px solid #efe7db;
+            border-left:4px solid #B06F27; border-radius:4px; padding:6px 10px;
+        }
+        .cq-kpi .k-l { font-size:11px; color:#a08a6f; }
+        .cq-kpi .k-v { font-size:18px; font-weight:700; color:#6b471a; line-height:1.25; }
+        .cq-kpi .k-s { font-size:11px; color:#a08a6f; }
+        .cq-chart-box { border:1px solid #efe7db; border-radius:4px; padding:6px; margin-bottom:8px; background:#fff; }
+        .cq-table-wrap { overflow-x:auto; }
+        .cq-table { font-size:12px; margin-bottom:8px; }
+        .cq-table th {
+            background:#8a5a2b; color:#fff; font-weight:600; padding:4px 7px !important;
+            white-space:nowrap; font-size:11.5px; border-color:#734a22 !important;
+        }
+        .cq-table td { padding:3px 7px !important; vertical-align:middle !important; }
+        .cq-table tbody tr:nth-child(even) td { background:#fdfaf5; }
+        .cq-table tfoot td { font-weight:700; background:#f3e8d8 !important; border-top:2px solid #8a5a2b !important; }
+        .cq-table .cq-partial { color:#A34E2A; font-size:10px; font-weight:600; line-height:1.2; }
+        .cq-rank-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px; }
+        @media (max-width:1100px) { .cq-rank-grid { grid-template-columns:minmax(0,1fr); } }
+        .cq-rank-col { border:1px solid #efe7db; border-radius:4px; overflow:hidden; background:#fff; }
+        .cq-rank-head { padding:5px 10px; font-size:13px; font-weight:700; color:#fff; }
+        .cq-rank-head.cq-up   { background:#D6851F; }
+        .cq-rank-head.cq-down { background:#DD5138; }
+        .cq-rank-row {
+            display:flex; align-items:center; gap:8px; padding:5px 10px;
+            border-bottom:1px solid #f4efe7; font-size:12px;
+        }
+        .cq-rank-row:last-child { border-bottom:none; }
+        .cq-rank-row .r-no { width:20px; color:#a08a6f; font-size:11px; text-align:right; flex:0 0 auto; }
+        .cq-rank-row .r-nm { flex:1 1 auto; min-width:0; font-weight:600; color:#4E2C0B; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .cq-rank-row .r-ba { flex:0 0 auto; color:#a08a6f; font-size:11px; white-space:nowrap; }
+        .cq-rank-row .r-df { flex:0 0 auto; font-weight:700; white-space:nowrap; min-width:88px; text-align:right; }
+        .cq-rank-row .r-pc { flex:0 0 auto; font-size:11px; white-space:nowrap; min-width:62px; text-align:right; }
+        .cq-up-tx   { color:#B06F27; }
+        .cq-down-tx { color:#C0392B; }
+        /* 小籤：表格裡的小字一定要自己指定 line-height，
+           Gentelella 全站 td span{line-height:28px} 會把整列撐高（本專案已踩三次） */
+        .cq-tag {
+            display:inline-block; font-size:10px; line-height:15px; padding:0 5px; border-radius:8px;
+            font-weight:600; vertical-align:middle;
+        }
+        .cq-tag-new   { background:#F0A24B; color:#4E2C0B; }
+        .cq-tag-lost  { background:#DD5138; color:#fff; }
+        .cq-tag-watch { background:#EBD3A8; color:#6B471A; }
+        .cq-tag-um    { background:#F8DCD5; color:#8C3A28; }
+        .cq-ac-dd {
+            position:absolute; z-index:1200; left:0; top:100%; width:260px; background:#fff;
+            border:1px solid #d8c7b0; border-top:0; border-radius:0 0 4px 4px;
+            box-shadow:0 4px 10px rgba(0,0,0,.12); max-height:240px; overflow-y:auto;
+        }
+        .cq-ac-dd .ac-i { padding:4px 8px; font-size:12px; cursor:pointer; border-bottom:1px solid #f4f2ef; }
+        .cq-ac-dd .ac-i:hover, .cq-ac-dd .ac-i.on { background:#fdf0dd; }
+        .cq-ac-dd .ac-c { display:inline-block; min-width:64px; color:#b06a1e; font-weight:600; font-size:11px; }
+        .cq-ac-dd .ac-a { float:right; color:#a08a6f; font-size:11px; }
+        .cq-empty { padding:14px; text-align:center; color:#a08a6f; font-size:12px; }
+        .cq-minor-box { margin-top:8px; border:1px dashed #d8c7b0; border-radius:4px; padding:6px 10px; background:#fdfaf5; }
+        .cq-minor-box .m-h { font-size:12px; font-weight:600; color:#8a5a2b; cursor:pointer; }
+        .cq-minor-box .m-b { display:none; margin-top:6px; }
+        @media print { .cq-wrap { display:none !important; } }
+
+        /* ── 使用說明（鐵律7；樣式比照 views/pm/vendor_audit.php 全站統一）── */
+        .page-help-btn { height:30px; font-size:13px; padding:0 12px; border:1px solid #d98a33; border-radius:15px;
+            background:#F0A24B; color:#fff; cursor:pointer; }
+        .page-help-btn:hover { background:#d98a33; color:#fff; }
+        @media print { .page-help-btn { display:none !important; } }
+        .help-doc { font-size:13px; color:#5b3a1e; line-height:1.75; }
+        .help-doc h4 { color:#8A5A2B; border-bottom:2px solid #F7E0BD; padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
+        .help-doc h4:first-child { margin-top:0; }
+        .help-doc b { color:#8A5A2B; }
+        .help-doc ul { margin:4px 0 8px; padding-left:20px; }
+        .help-doc li { margin:2px 0; }
+        .help-doc .tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin:6px 0; }
     </style>
 </head>
 
@@ -2141,6 +2322,13 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                             </button>
                             <button type="button" class="btn btn-default btn-sm" id="btn-kpi-toggle" onclick="toggleKpiPanel()">
                                 <i class="fa fa-table"></i> KPI週報
+                            </button>
+                            <button type="button" class="btn btn-default btn-sm" id="btn-cq-toggle" onclick="toggleCqPanel()"
+                                    title="逐季看某一家客戶的訂單／出貨／退貨，並自動列出成長與衰退的客戶">
+                                <i class="fa fa-line-chart"></i> 客戶季度分析
+                            </button>
+                            <button type="button" class="page-help-btn" id="btnPageHelp">
+                                <i class="fa fa-question-circle"></i> 使用說明
                             </button>
                         </div>
                     </div>
@@ -2427,6 +2615,152 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                         </div>
                     </div>
 
+                    <!-- ⑥.6 客戶季度分析面板（可折疊；資料自己向後端要，與上方日期區間無關） -->
+                    <div class="san-panel cq-wrap" id="cq-panel" style="margin-top:8px; display:none;">
+                        <div class="san-panel-head" style="background:linear-gradient(135deg,#6b471a,#8a5a2b);">
+                            <h4 style="color:#fff;"><i class="fa fa-line-chart" style="color:#F0A24B;"></i> 客戶季度分析</h4>
+                            <div class="cq-subtabs">
+                                <button type="button" class="cq-tab active" id="cq-tab-trend" onclick="cqSwitch('trend')">
+                                    <i class="fa fa-area-chart"></i> 客戶趨勢
+                                </button>
+                                <button type="button" class="cq-tab" id="cq-tab-rank" onclick="cqSwitch('rank')">
+                                    <i class="fa fa-sort-amount-desc"></i> 成長／衰退排行
+                                </button>
+                            </div>
+                            <div style="margin-left:auto; display:flex; gap:4px;">
+                                <button type="button" class="btn btn-xs cq-btn-print" onclick="cqPrint()" title="列印目前這一頁的分析">
+                                    <i class="fa fa-print"></i> 列印
+                                </button>
+                                <button type="button" class="btn btn-xs cq-btn-csv" onclick="cqExportCsv()" title="匯出 CSV">
+                                    <i class="fa fa-file-excel-o"></i> CSV
+                                </button>
+                                <button type="button" class="btn btn-xs cq-btn-close" onclick="toggleCqPanel()" title="收合">
+                                    <i class="fa fa-times"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="san-panel-body" style="padding:8px 10px;">
+
+                            <!-- 條件列（兩個子分頁共用前半段） -->
+                            <div class="cq-filter">
+                                <!-- 客戶：272 家用下拉根本挑不到，比照本頁既有的客戶自動完成
+                                     （本頁不在 eg_input_rules.js 覆蓋範圍內，不可用 data-eg-filter，那會是死屬性） -->
+                                <span class="cq-lbl"><i class="fa fa-user"></i> 客戶</span>
+                                <div class="cq-ac" style="position:relative;">
+                                    <input type="text" id="cq-client-kw" class="form-control input-sm" style="width:210px;"
+                                           autocomplete="off" value="（全部客戶合計）"
+                                           title="打字搜尋客戶名稱或編號；清空＝全部客戶合計">
+                                    <div id="cq-client-dd" class="cq-ac-dd" style="display:none;"></div>
+                                </div>
+                                <button type="button" class="btn btn-xs btn-default" onclick="cqPickClient('', '')"
+                                        title="回到全部客戶合計"><i class="fa fa-times"></i></button>
+
+                                <span class="cq-lbl">年度</span>
+                                <select id="cq-year" class="form-control input-sm" style="width:90px;"></select>
+
+                                <span class="cq-lbl">比較</span>
+                                <select id="cq-back" class="form-control input-sm" style="width:130px;">
+                                    <option value="0">只看本年度</option>
+                                    <option value="1" selected>含前一年度</option>
+                                    <option value="2">含前兩年度</option>
+                                    <option value="3">含前三年度</option>
+                                </select>
+
+                                <div class="cq-div"></div>
+
+                                <span class="cq-lbl" title="訂單要算在哪一季，是看交期還是看下單日">訂單依</span>
+                                <select id="cq-order-basis" class="form-control input-sm" style="width:100px;">
+                                    <option value="delivery" selected>交期</option>
+                                    <option value="order">下單日</option>
+                                </select>
+
+                                <span class="cq-lbl">季別</span>
+                                <select id="cq-qbasis" class="form-control input-sm" style="width:150px;">
+                                    <option value="billing" selected>帳款季（依截止日）</option>
+                                    <option value="calendar">日曆季</option>
+                                </select>
+
+                                <button type="button" class="btn btn-sm cq-btn-go" onclick="cqLoad(true)">
+                                    <i class="fa fa-refresh"></i> 查詢
+                                </button>
+                                <span id="cq-loading" style="display:none; color:#8a5a2b; font-size:12px;">
+                                    <i class="fa fa-spinner fa-spin"></i> 計算中…
+                                </span>
+                            </div>
+
+                            <!-- 排行專用條件列 -->
+                            <div class="cq-filter" id="cq-filter-rank" style="display:none;">
+                                <span class="cq-lbl">分析季</span>
+                                <select id="cq-rank-q" class="form-control input-sm" style="width:120px;"></select>
+
+                                <span class="cq-lbl">比較基準</span>
+                                <select id="cq-compare" class="form-control input-sm" style="width:120px;">
+                                    <option value="yoy" selected>去年同季</option>
+                                    <option value="qoq">上一季</option>
+                                </select>
+
+                                <span class="cq-lbl">指標</span>
+                                <select id="cq-metric" class="form-control input-sm" style="width:170px;">
+                                    <option value="net" selected>淨額（出貨－退貨）</option>
+                                    <option value="ship">出貨金額</option>
+                                    <option value="ord">訂單金額</option>
+                                </select>
+
+                                <span class="cq-lbl" title="兩期金額都低於這個數的客戶只是雜訊，收在下方「小額變動」不佔版面">門檻</span>
+                                <select id="cq-minamt" class="form-control input-sm" style="width:110px;">
+                                    <option value="0">不設門檻</option>
+                                    <option value="10000">1 萬以上</option>
+                                    <option value="50000" selected>5 萬以上</option>
+                                    <option value="100000">10 萬以上</option>
+                                    <option value="500000">50 萬以上</option>
+                                </select>
+
+                                <label class="cq-chk" title="當季還沒過完時，把比較的那一季也只算到同樣的天數，否則整批客戶都會看起來在衰退">
+                                    <input type="checkbox" id="cq-align" checked> 未過完的季只比到同一天
+                                </label>
+
+                                <button type="button" class="btn btn-sm cq-btn-go" onclick="cqLoadRank()">
+                                    <i class="fa fa-refresh"></i> 重新分析
+                                </button>
+                            </div>
+
+                            <!-- 口徑／資料品質說明（一定要講清楚數字是怎麼來的） -->
+                            <div id="cq-note" class="cq-note"></div>
+
+                            <!-- ── 子分頁一：客戶趨勢 ── -->
+                            <div id="cq-pane-trend">
+                                <div id="cq-kpis" class="cq-kpis"></div>
+                                <div class="cq-chart-box">
+                                    <div id="cq-chart" style="height:300px;"></div>
+                                </div>
+                                <div class="cq-table-wrap">
+                                    <table class="table table-condensed cq-table" id="cq-trend-table">
+                                        <thead></thead><tbody></tbody><tfoot></tfoot>
+                                    </table>
+                                </div>
+                                <div id="cq-top-clients"></div>
+                            </div>
+
+                            <!-- ── 子分頁二：成長／衰退排行 ── -->
+                            <div id="cq-pane-rank" style="display:none;">
+                                <div id="cq-rank-summary" class="cq-kpis"></div>
+                                <div class="cq-rank-grid">
+                                    <div class="cq-rank-col">
+                                        <div class="cq-rank-head cq-up"><i class="fa fa-arrow-up"></i> 成長客戶</div>
+                                        <div id="cq-rank-up"></div>
+                                    </div>
+                                    <div class="cq-rank-col">
+                                        <div class="cq-rank-head cq-down"><i class="fa fa-arrow-down"></i> 衰退客戶</div>
+                                        <div id="cq-rank-down"></div>
+                                    </div>
+                                </div>
+                                <div id="cq-rank-watch"></div>
+                                <div id="cq-rank-minor"></div>
+                            </div>
+
+                        </div>
+                    </div>
+
                     <!-- ⑦ 明細表格 -->
                     <div class="san-panel" style="margin-top:8px;">
                         <div id="detail-panel-head" class="san-panel-head" style="padding:0 10px 0 0; align-items:stretch; transition:background .25s;">
@@ -2645,6 +2979,93 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
         .anav-btn.anav-ok { border-left: 3px solid #27ae60; }
         .anav-btn .anav-count { display: block; font-size: 13px; font-weight: 700; margin-bottom: 2px; }
     </style>
+    <!-- 使用說明（鐵律7） -->
+    <div class="modal fade" id="helpUseMask" tabindex="-1" role="dialog">
+        <div class="modal-dialog" style="width:900px; max-width:96%;" role="document">
+            <div class="modal-content">
+                <div class="modal-header" style="background:#F7E0BD; color:#5b3a1e;">
+                    <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+                    <h4 class="modal-title"><i class="fa fa-question-circle"></i> 出貨紀錄分析 使用說明</h4>
+                </div>
+                <div class="modal-body help-doc" style="max-height:78vh; overflow-y:auto;">
+                    <p>本頁把<b>出貨（is_list）、退貨（ir_track）、訂單（order_track）</b>三份資料放在一起看。
+                       上方的日期區間只影響<b>統計磚、趨勢圖與下方四個明細分頁</b>；
+                       「客戶季度分析」面板是<b>跨年度</b>的，自己向後端查資料，不受上方日期區間影響。</p>
+
+                    <h4>一、日期與帳款月份</h4>
+                    <ul>
+                        <li>查詢區間比對的是<b>出貨日期</b>；退貨比對退貨日、訂單比對交期。</li>
+                        <li><b>帳款月份</b>：每月幾號截止由「月份截止日」設定（目前設定會顯示在該按鈕上）。
+                            例如設 25 日，則 <b>6/26～7/25 的單都算 7 月的帳</b>。逐筆可用「帳款月份」欄手動指定覆寫。</li>
+                        <li>快速鈕（上月／本月／去年／今年／上下半年／Q1~Q4）與左右箭頭都是依帳款月份推算。</li>
+                    </ul>
+
+                    <h4>二、出貨性質</h4>
+                    <ul>
+                        <li>出貨性質由管理員在「出貨性質設定」維護。標記為<b>不統計</b>的性質（樣品、補件等）
+                            <b>不會計入金額與統計</b>，但仍看得到明細。</li>
+                        <li>另可設定「排除十大熱銷產品統計」。</li>
+                    </ul>
+
+                    <h4>三、下方四個分頁</h4>
+                    <ul>
+                        <li><b>出貨明細／退貨單／訂單</b>：該區間的逐筆資料，可批次改帳款月份、綁定訂單與製令。</li>
+                        <li><b>客戶統計</b>：這個區間內逐客戶的出貨／退貨／訂單與淨額，最後一欄是<b>與前一個帳款月</b>的增減。</li>
+                    </ul>
+
+                    <h4>四、客戶季度分析（跨年度）</h4>
+                    <div class="tip">要看「某一家客戶這幾年每一季做多少」、或「這一季哪些客戶變好、哪些變差」就用這裡。
+                        按上方工具列的<b>「客戶季度分析」</b>開啟。</div>
+                    <ul>
+                        <li><b>客戶趨勢</b>：選一家客戶（在客戶欄打字即可搜尋名稱或客戶編號，清空＝全部客戶合計），
+                            看逐季的訂單／出貨／退貨／淨額柱狀圖與明細表，表格右側直接給<b>較上一季</b>與<b>較去年同季</b>的增減百分比。
+                            「比較」選含前一／兩／三年度，圖上就會把那幾年的每一季一起排出來。</li>
+                        <li><b>成長／衰退排行</b>：選一個季，系統自動把所有客戶跟<b>去年同季</b>（或<b>上一季</b>）比，
+                            左邊列成長、右邊列衰退，依<b>增減金額</b>由大到小排（不是依百分比——只看百分比的話，
+                            1 萬變 2 萬的小客戶會排在 500 萬掉到 400 萬的大客戶前面）。</li>
+                        <li><b>新客戶／本季掛零</b>：基期沒有、當期有＝新客戶；基期有、當期完全沒有＝本季掛零（要追的對象）。</li>
+                        <li><b>連續兩季以上下滑</b>會另外列在下方警示區——單看一季比較不出來，但這種客戶通常正在流失。</li>
+                        <li><b>門檻</b>：兩期金額都低於門檻的客戶只是雜訊，收在下方「小額變動」可點開看，不佔版面。</li>
+                    </ul>
+
+                    <h4>五、這些數字是怎麼算的（很重要）</h4>
+                    <ul>
+                        <li><b>季怎麼分</b>：預設<b>帳款季</b>＝沿用本頁的帳款月份截止日（例如截止日 25 時，
+                            Q1 是前一年 12/26～3/25），這樣季的數字才會跟本頁其他地方對得起來。
+                            要純日曆季（1~3 月＝Q1）可在「季別」切換。</li>
+                        <li><b>同一家客戶怎麼認</b>：依序用「該筆資料綁定的客戶主檔編號 → 料號主檔綁的客戶 → 客戶名稱（含<b>別名</b>）」。
+                            ERP 寫「高鋒工業」、主檔是「高鋒」這種靠別名對得起來。
+                            真的對不到的會標<b>「未建主檔」</b>，可到<b>對帳作業→對應到客戶主檔</b>建立別名，之後就會自動歸戶。</li>
+                        <li><b>訂單金額只算得出「有填單價」的訂單</b>：實測 2025 年以前的訂單幾乎都沒有填單價
+                            （2025 年 3,410 張只有 10 張有），所以那幾季的訂單金額會接近 0。
+                            <b>這是資料沒填，不是沒有接單</b>，畫面上方的說明列會逐季列出實際張數。</li>
+                        <li><b>還沒過完的季</b>：說明列會標示（例如「89/92 天」）。排行頁預設把<b>比較的那一季也只算到同樣的天數</b>，
+                            否則拿半季跟完整一季比，整批客戶都會看起來在衰退。要看完整季請取消該勾選。</li>
+                        <li><b>訂單歸在哪一季</b>：預設依<b>交期</b>（與本頁訂單分頁一致）。想看「什麼時候接到單」請改成<b>下單日</b>。</li>
+                        <li>出貨已排除「不統計」的出貨性質；訂單已排除取消單（Order_status=9）。淨額＝出貨－退貨。</li>
+                    </ul>
+
+                    <h4>六、列印與匯出</h4>
+                    <ul>
+                        <li>工具列<b>「列印PDF報表」</b>印的是目前篩選後的統計摘要（A4 橫式一頁）；<b>「含明細」</b>會再附上逐筆出貨明細，
+                            超過一頁時會自動在左下角印頁碼。</li>
+                        <li>客戶季度分析面板有自己的<b>列印</b>與<b>CSV</b>，印/匯出的是<b>目前看的那一個子分頁</b>。</li>
+                    </ul>
+
+                    <h4>七、權限</h4>
+                    <ul>
+                        <li>本頁權限依「使用者權限設定」給的頁面權限：<b>R</b>＝只能看，<b>U</b>＝可修改（改帳款月份、綁定、編輯），
+                            <b>D</b>＝可刪除出貨紀錄，<b>A</b>＝全部。目前身分會顯示在頁面標題右側。</li>
+                        <li>客戶季度分析是唯讀分析，看得到本頁就用得到，不會寫入任何資料。</li>
+                    </ul>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="modal fade" id="analysisResultModal" tabindex="-1" role="dialog">
         <div class="modal-dialog modal-lg" role="document">
             <div class="modal-content">
@@ -3213,7 +3634,10 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
     <script src="../../resource/js/jquery.min.js"></script>
     <script src="../../resource/js/bootstrap.min.js"></script>
     <script src="../../resource/js/custom.min.js"></script>
-    
+    <!-- 日期顯示格式（ai-rules/20：顯示一律 YYYY.MM.DD，唯一實作 egFmtDate，禁各頁自寫）。
+         只定義函式、沒有任何副作用，不影響本頁既有的 fmtDate（那支是給比對用的 Y-m-d 原始值）。 -->
+    <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+
     <!-- DataTables -->
     <script src="../../resource/js/jquery.dataTables.min.js"></script>
     <script src="../../resource/js/dataTables.bootstrap.min.js"></script>
@@ -7004,16 +7428,22 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                 '.rpt-header .sub{font-size:10px;opacity:.75;margin-top:3px;display:flex;gap:16px;}'+
                 '.rpt-body{padding:7px 12px;}'+
                 '.sec-title{font-size:13px;font-weight:700;color:#1a2634;border-left:3px solid #3498db;padding-left:7px;margin:8px 0 5px;}'+
-                '.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px;}'+
+                // 格線欄寬一律用 fr + minmax(0,…)：
+                // ① 百分比欄寬（25% 50% 25%）加上 gap 之後總寬會超過容器（實測 A4 橫式可印寬 1062px
+                //    時內容跑到 1066px），右邊那一欄的金額就被紙張邊界切掉＝使用者回報的「列印超出範圍」。
+                //    fr 會自己把 gap 先扣掉再分配，永遠不會溢出。
+                // ② minmax(0,…) 是必要的：1fr 的最小值預設是 auto，儲存格內容（長料號、大金額）
+                //    一寬就把整欄撐開，同樣會溢出。
+                '.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-bottom:8px;}'+
                 '.sc{background:#f5f7fa;border:1px solid #e2e8f0;border-radius:3px;padding:5px 8px;text-align:center;}'+
                 '.sc .lbl{font-size:10px;color:#8a9ab0;margin-bottom:1px;}'+
                 '.sc .val{font-size:17px;font-weight:700;color:#1a2634;line-height:1.2;}'+
                 '.sc .unt{font-size:10px;color:#aaa;}'+
-                '.charts-row{display:grid;grid-template-columns:72% 28%;gap:8px;margin-bottom:8px;}'+
+                '.charts-row{display:grid;grid-template-columns:minmax(0,72fr) minmax(0,28fr);gap:8px;margin-bottom:8px;}'+
                 '.chart-box{border:1px solid #e2e8f0;border-radius:3px;padding:5px 8px;overflow:hidden;}'+
                 '.chart-box h4{font-size:11px;color:#1a2634;font-weight:700;margin-bottom:4px;}'+
-                '.chart-box svg{display:block;width:100%;height:auto;}'+
-                '.rank-row{display:grid;grid-template-columns:25% 50% 25%;gap:8px;margin-bottom:8px;}'+
+                '.chart-box svg{display:block;width:100%;max-width:100%;height:auto;}'+
+                '.rank-row{display:grid;grid-template-columns:minmax(0,25fr) minmax(0,50fr) minmax(0,25fr);gap:8px;margin-bottom:8px;}'+
                 '.rh{font-size:12px;font-weight:700;color:#1a2634;margin-bottom:3px;}'+
                 'table{width:100%;border-collapse:collapse;table-layout:fixed;}'+
                 'th{background:#1a2634;color:#ecf0f1;padding:3px 5px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}'+
@@ -7023,8 +7453,10 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                 '.c1{color:#1a6daa;font-weight:600;}'+
                 'tr.tot td{font-weight:700;background:#e8f4fd!important;border-top:2px solid #3498db;}'+
                 '.footer{margin-top:6px;padding-top:5px;border-top:1px solid #e2e8f0;font-size:9px;color:#aaa;text-align:center;}'+
-                '@page{size:A4 landscape;margin:7mm 8mm;}'+
-                '@media print{*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}';
+                '@page{size:A4 landscape;margin:8mm 9mm 12mm;}'+
+                // 明細動輒數十頁：表頭要跟著每一頁重複，資料列不可被切成上下兩半
+                '@media print{*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}'+
+                'thead{display:table-header-group;}tr{page-break-inside:avoid;}}';
 
             var html = '<!DOCTYPE html><html lang="zh-TW"><head><meta charset="utf-8">'+
                 '<title>出貨紀錄分析報表 '+startDate+'～'+endDate+'</title>'+
@@ -7088,8 +7520,642 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             printWin.document.close();
             printWin.focus();
             // 等待圖片/SVG 渲染後再列印
-            setTimeout(function() { printWin.print(); }, 1400);
+            setTimeout(function() {
+                // 頁碼：左下角「第 X 頁／共 Y 頁」，由列印引擎自己算（ai-rules/16 第二節）。
+                // 只有真的超過一頁才插入——含明細版動輒數十頁，沒有頁碼根本沒辦法核對。
+                if (cqNeedPageCounter(printWin)) cqAddPageCounter(printWin);
+                printWin.print();
+            }, 1400);
         }
+
+        /* ============================================================
+         * 客戶季度分析（⑥.6 面板）
+         *
+         * 資料一律向後端要（cq_quarters / cq_growth），不從畫面上已載入的出貨明細算：
+         * 那份資料只有上方日期區間內的出貨，本面板要看的是跨年度的訂單／出貨／退貨。
+         * 客戶歸戶與季歸屬的規則全部在 src/common/client_quarter_lib.php，前端只負責畫。
+         * ============================================================ */
+        var CQ = {
+            data: null,        // cq_quarters 的回應
+            rank: null,        // cq_growth 的回應
+            tab: 'trend',
+            client: '',        // 目前選定的客戶 key（空＝全部客戶合計）
+            clientName: '',
+            chart: null,
+            loading: false,
+            acIdx: -1
+        };
+
+        /* 列印頁碼：多頁才印（ai-rules/16 第二節）。兩支列印函式共用這一份判斷，
+           不要各寫一次——本頁原本那一份用「列印視窗自己的寬度（1280px）」量高度，
+           但真正列印時的排版寬度是 A4 橫式扣掉邊界的 1062px，寬度不同高度就不同：
+           摘要版在 1280px 下量到 716px 判成多頁，實際輸出卻只有 1 頁，
+           於是單頁報表也印出「第 1 頁／共 1 頁」。改成先把 body 暫時縮到列印寬度再量，
+           量完立刻還原（只是量測，不影響列印結果）。 */
+        var CQ_PRINT_W_PX = (297 - 9 * 2) * 96 / 25.4;   // A4 橫式 297mm 扣左右各 9mm
+        var CQ_PRINT_H_PX = (210 - 8 - 12) * 96 / 25.4;  // A4 橫式 210mm 扣上 8mm、下 12mm
+        function cqNeedPageCounter(win) {
+            try {
+                var body = win.document.body, old = body.style.width;
+                body.style.width = Math.round(CQ_PRINT_W_PX) + 'px';
+                var h = body.scrollHeight;
+                body.style.width = old;
+                return h > CQ_PRINT_H_PX;
+            } catch (e) { return false; }
+        }
+        function cqAddPageCounter(win) {
+            try {
+                var st = win.document.createElement('style');
+                st.textContent = "@page{ @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:9pt; color:#555; } }";
+                win.document.head.appendChild(st);
+            } catch (e) {}
+        }
+
+        function cqFmtMoney(v) {
+            v = Math.round(v || 0);
+            return (v < 0 ? '-$' : '$') + numberFormat(Math.abs(v), 0);
+        }
+        function cqFmtWan(v) {
+            v = (v || 0) / 10000;
+            return (Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(1)) + ' 萬';
+        }
+        function cqQLabel(qk) {
+            return qk ? qk.substring(0, 4) + ' Q' + qk.substring(5) : '';
+        }
+        function cqEsc(s) { return $('<span>').text(s == null ? '' : s).html(); }
+
+        function toggleCqPanel() {
+            var $p = $('#cq-panel');
+            if ($p.is(':visible')) { $p.hide(); return; }
+            $p.show();
+            $('html, body').animate({ scrollTop: $p.offset().top - 70 }, 220);
+            if (!CQ.data) cqInit();
+        }
+
+        function cqInit() {
+            // 年度下拉：今年往前 5 年、往後 1 年（有未來交期的訂單）
+            var nowY = new Date().getFullYear(), $y = $('#cq-year').empty();
+            for (var y = nowY + 1; y >= nowY - 5; y--) {
+                $y.append('<option value="' + y + '"' + (y === nowY ? ' selected' : '') + '>' + y + '</option>');
+            }
+            cqLoad(true);
+        }
+
+        function cqSwitch(tab) {
+            CQ.tab = tab;
+            $('#cq-tab-trend').toggleClass('active', tab === 'trend');
+            $('#cq-tab-rank').toggleClass('active', tab === 'rank');
+            $('#cq-pane-trend').toggle(tab === 'trend');
+            $('#cq-pane-rank').toggle(tab === 'rank');
+            $('#cq-filter-rank').toggle(tab === 'rank');
+            if (tab === 'rank' && !CQ.rank) cqLoadRank();
+            if (tab === 'trend' && CQ.data) { cqRender(); }
+            cqRenderNote();
+        }
+
+        // ── 載入逐季資料 ──
+        function cqLoad(resetClient) {
+            if (CQ.loading) return;
+            CQ.loading = true;
+            $('#cq-loading').show();
+            $.post('', {
+                action: 'cq_quarters',
+                year: $('#cq-year').val(),
+                years_back: $('#cq-back').val(),
+                order_basis: $('#cq-order-basis').val(),
+                q_basis: $('#cq-qbasis').val()
+            }, function (res) {
+                CQ.loading = false;
+                $('#cq-loading').hide();
+                if (!res || !res.success) { showToast((res && res.message) || '季度分析載入失敗', 'error'); return; }
+                CQ.data = res;
+                // 換過年度/口徑之後原本選的客戶可能這段期間完全沒有資料，找不到就回到全部合計
+                if (resetClient && CQ.client) {
+                    var still = res.clients.some(function (c) { return c.key === CQ.client; });
+                    if (!still) { CQ.client = ''; CQ.clientName = ''; $('#cq-client-kw').val('（全部客戶合計）'); }
+                }
+                cqFillRankQuarters();
+                cqRender();
+                CQ.rank = null;
+                if (CQ.tab === 'rank') cqLoadRank();
+            }, 'json').fail(function () {
+                CQ.loading = false; $('#cq-loading').hide();
+                showToast('季度分析載入失敗（伺服器沒有回應）', 'error');
+            });
+        }
+
+        function cqFillRankQuarters() {
+            if (!CQ.data) return;
+            var $s = $('#cq-rank-q').empty(), prog = CQ.data.progress || {}, lastDone = '';
+            CQ.data.quarters.forEach(function (qk) {
+                var p = prog[qk] || {};
+                if (p.is_future) return;                       // 還沒開始的季不給選
+                var tag = p.is_partial ? '（進行中）' : '';
+                $s.append('<option value="' + qk + '">' + cqQLabel(qk) + tag + '</option>');
+                if (!p.is_partial) lastDone = qk;
+            });
+            // 預設停在「最近一個已結束的季」——拿還沒過完的當季當預設，
+            // 使用者第一眼看到的會是一整排假的衰退
+            var pick = lastDone || $s.find('option').last().val();
+            if (pick) $s.val(pick);
+        }
+
+        // ── 說明列：口徑與資料品質 ──
+        function cqRenderNote() {
+            if (!CQ.data) { $('#cq-note').html(''); return; }
+            var m = CQ.data.meta, parts = [];
+            parts.push('<b>口徑</b>：' +
+                (m.q_basis === 'billing'
+                    ? '帳款季（每月 ' + m.cutoff + ' 日截止，' + m.cutoff + ' 日之後的單歸下個月，與本頁帳款月份卡片同一套）'
+                    : '日曆季（1~3 月＝Q1，依實際日期）') +
+                '；訂單依<b>' + (m.order_basis === 'delivery' ? '交期' : '下單日') + '</b>歸季；' +
+                '出貨已排除「不統計」的出貨性質；訂單已排除取消單。');
+
+            // 進行中的季
+            var partials = [];
+            $.each(CQ.data.progress || {}, function (qk, p) {
+                if (p.is_partial) partials.push(cqQLabel(qk) + '（' + p.days_done + '/' + p.days_total + ' 天，至 ' + egFmtDate(p.end) + ' 才結束）');
+            });
+            if (partials.length) {
+                parts.push('<span class="cq-warn">⚠ ' + partials.join('、') + ' 尚未結束</span>，直接拿它跟完整的季比會看起來像衰退；' +
+                    '排行頁預設會把比較的那一季也只算到同樣的天數。');
+            }
+
+            // 訂單資料品質（2025 年以前幾乎沒填單價，不講會被當成程式壞掉）
+            var bad = [];
+            $.each(CQ.data.order_quality || {}, function (qk, q) {
+                if (q.total > 0 && q.priced / q.total < 0.5) {
+                    bad.push(cqQLabel(qk) + '（' + q.priced + '/' + q.total + ' 張）');
+                }
+            });
+            if (bad.length) {
+                parts.push('<span class="cq-warn">⚠ 訂單金額只算得出「有填單價」的訂單</span>，以下各季大多沒有單價，' +
+                    '訂單金額會偏低甚至是 0（<b>是資料沒填，不是沒有接單</b>）：' + bad.join('、') + '。');
+            }
+
+            var um = (CQ.data.clients || []).filter(function (c) { return c.unmatched; });
+            if (um.length) {
+                parts.push('有 <b>' + um.length + '</b> 家的名稱對不到客戶主檔（畫面上標「未建主檔」），' +
+                    '可在對帳作業→「對應到客戶主檔」建立別名後自動歸戶。');
+            }
+            $('#cq-note').html(parts.join('<br>'));
+        }
+
+        // 取某客戶（或全部合計）的逐季資料
+        function cqSeries() {
+            var qs = CQ.data.quarters, out = {};
+            qs.forEach(function (qk) { out[qk] = { ship: 0, ret: 0, ord: 0, net: 0, ship_qty: 0, ship_cnt: 0, ret_cnt: 0, ord_cnt: 0 }; });
+            CQ.data.clients.forEach(function (c) {
+                if (CQ.client && c.key !== CQ.client) return;
+                qs.forEach(function (qk) {
+                    var v = c.q[qk]; if (!v) return;
+                    out[qk].ship += v.ship; out[qk].ret += v.ret; out[qk].ord += v.ord; out[qk].net += v.net;
+                    out[qk].ship_qty += v.ship_qty; out[qk].ship_cnt += v.ship_cnt;
+                    out[qk].ret_cnt += v.ret_cnt; out[qk].ord_cnt += v.ord_cnt;
+                });
+            });
+            return out;
+        }
+
+        function cqRender() {
+            if (!CQ.data) return;
+            cqRenderNote();
+            var qs = CQ.data.quarters, s = cqSeries(), prog = CQ.data.progress || {};
+
+            // ── KPI 卡 ──
+            var tShip = 0, tRet = 0, tOrd = 0;
+            qs.forEach(function (qk) { tShip += s[qk].ship; tRet += s[qk].ret; tOrd += s[qk].ord; });
+            var title = CQ.client ? CQ.clientName : '全部客戶合計（' + CQ.data.clients.length + ' 家）';
+            var yrTxt = CQ.data.meta.year_from === CQ.data.meta.year_to
+                ? CQ.data.meta.year_to + ' 年'
+                : CQ.data.meta.year_from + '～' + CQ.data.meta.year_to + ' 年';
+            $('#cq-kpis').html(
+                '<div class="cq-kpi" style="flex:2 1 220px;border-left-color:#8a5a2b;"><div class="k-l">分析對象</div>' +
+                '<div class="k-v" style="font-size:15px;">' + cqEsc(title) + '</div><div class="k-s">' + yrTxt + '</div></div>' +
+                '<div class="cq-kpi" style="border-left-color:#B06F27;"><div class="k-l">出貨金額</div>' +
+                '<div class="k-v">' + cqFmtWan(tShip) + '</div><div class="k-s">' + cqFmtMoney(tShip) + '</div></div>' +
+                '<div class="cq-kpi" style="border-left-color:#DD5138;"><div class="k-l">退貨金額</div>' +
+                '<div class="k-v">' + cqFmtWan(tRet) + '</div><div class="k-s">' + cqFmtMoney(tRet) + '</div></div>' +
+                '<div class="cq-kpi" style="border-left-color:#C9A227;"><div class="k-l">訂單金額</div>' +
+                '<div class="k-v">' + cqFmtWan(tOrd) + '</div><div class="k-s">' + cqFmtMoney(tOrd) + '</div></div>' +
+                '<div class="cq-kpi" style="border-left-color:#6b471a;"><div class="k-l">淨額（出貨－退貨）</div>' +
+                '<div class="k-v">' + cqFmtWan(tShip - tRet) + '</div><div class="k-s">' + cqFmtMoney(tShip - tRet) + '</div></div>'
+            );
+
+            // ── 趨勢圖 ──
+            var cats = qs.map(function (qk) {
+                var p = prog[qk] || {};
+                return cqQLabel(qk) + (p.is_partial ? ' ※' : '');
+            });
+            var wan = function (k) { return qs.map(function (qk) { return Math.round(s[qk][k] / 100) / 100; }); };
+            if (CQ.chart) { try { CQ.chart.destroy(); } catch (e) {} CQ.chart = null; }
+            CQ.chart = Highcharts.chart('cq-chart', {
+                chart: { zoomType: 'xy', style: { fontFamily: 'Microsoft JhengHei, sans-serif' } },
+                title: { text: null }, credits: { enabled: false },
+                xAxis: { categories: cats, crosshair: true, labels: { style: { fontSize: '11px' } } },
+                yAxis: [{
+                    title: { text: '金額（萬元）', style: { fontSize: '11px', color: '#8a5a2b' } },
+                    labels: { style: { fontSize: '11px' } }
+                }],
+                tooltip: { shared: true, valueSuffix: ' 萬' },
+                legend: { itemStyle: { fontSize: '11px' } },
+                plotOptions: { column: { borderWidth: 0, groupPadding: 0.12 } },
+                series: [
+                    { name: '訂單金額', type: 'column', data: wan('ord'), color: '#E8C07A' },
+                    { name: '出貨金額', type: 'column', data: wan('ship'), color: '#B06F27' },
+                    { name: '退貨金額', type: 'column', data: wan('ret'), color: '#DD5138' },
+                    { name: '淨額', type: 'spline', data: wan('net'), color: '#6b471a',
+                      marker: { enabled: true, radius: 3 }, lineWidth: 2 }
+                ]
+            });
+
+            // ── 明細表 ──
+            var hasPrev = qs.length > 4;
+            var th = '<tr><th>季</th><th>期間</th><th class="text-right">訂單金額</th>' +
+                '<th class="text-right">出貨金額</th><th class="text-right">出貨數量</th><th class="text-right">出貨筆數</th>' +
+                '<th class="text-right">退貨金額</th><th class="text-right">淨額</th>' +
+                '<th class="text-right">較上一季</th>' + (hasPrev ? '<th class="text-right">較去年同季</th>' : '') + '</tr>';
+            var body = '', prevKey = null;
+            qs.forEach(function (qk, i) {
+                var p = prog[qk] || {}, v = s[qk];
+                if (p.is_future && !v.ship && !v.ord && !v.ret) return;      // 還沒開始且完全沒資料的季不列
+                var qoq = null, yoy = null;
+                if (i > 0) { var pv = s[qs[i - 1]]; if (pv && Math.abs(pv.net) > 0.5) qoq = (v.net - pv.net) / Math.abs(pv.net) * 100; }
+                var yk = (parseInt(qk.substring(0, 4), 10) - 1) + 'Q' + qk.substring(5);
+                if (s[yk] && Math.abs(s[yk].net) > 0.5) yoy = (v.net - s[yk].net) / Math.abs(s[yk].net) * 100;
+                var pctHtml = function (x) {
+                    if (x === null) return '<span style="color:#c9bda9;">—</span>';
+                    var up = x >= 0;
+                    return '<span class="' + (up ? 'cq-up-tx' : 'cq-down-tx') + '" style="font-weight:600;">' +
+                        (up ? '▲' : '▼') + ' ' + Math.abs(x).toFixed(1) + '%</span>';
+                };
+                body += '<tr' + (p.is_partial ? ' style="background:#fdf6ea;"' : '') + '>' +
+                    '<td style="font-weight:600;color:#6b471a;">' + cqQLabel(qk) +
+                        (p.is_partial ? '<div class="cq-partial">※ 尚未結束 ' + p.days_done + '/' + p.days_total + ' 天</div>' : '') + '</td>' +
+                    '<td style="color:#a08a6f;font-size:11px;">' + egFmtDate(p.start) + '～' + egFmtDate(p.end) + '</td>' +
+                    '<td class="text-right">' + (v.ord ? cqFmtMoney(v.ord) : '<span style="color:#c9bda9;">—</span>') + '</td>' +
+                    '<td class="text-right" style="color:#8a5a2b;font-weight:600;">' + (v.ship ? cqFmtMoney(v.ship) : '<span style="color:#c9bda9;">—</span>') + '</td>' +
+                    '<td class="text-right">' + (v.ship_qty ? numberFormat(v.ship_qty, 0) : '—') + '</td>' +
+                    '<td class="text-right">' + (v.ship_cnt || '—') + '</td>' +
+                    '<td class="text-right" style="color:#C0392B;">' + (v.ret ? cqFmtMoney(v.ret) : '<span style="color:#c9bda9;">—</span>') + '</td>' +
+                    '<td class="text-right" style="font-weight:700;color:#6b471a;">' + cqFmtMoney(v.net) + '</td>' +
+                    '<td class="text-right">' + pctHtml(qoq) + '</td>' +
+                    (hasPrev ? '<td class="text-right">' + pctHtml(yoy) + '</td>' : '') +
+                    '</tr>';
+            });
+            var tf = '<tr><td colspan="2">合計</td>' +
+                '<td class="text-right">' + cqFmtMoney(tOrd) + '</td>' +
+                '<td class="text-right">' + cqFmtMoney(tShip) + '</td><td colspan="2"></td>' +
+                '<td class="text-right">' + cqFmtMoney(tRet) + '</td>' +
+                '<td class="text-right">' + cqFmtMoney(tShip - tRet) + '</td>' +
+                '<td colspan="' + (hasPrev ? 2 : 1) + '"></td></tr>';
+            $('#cq-trend-table thead').html(th);
+            $('#cq-trend-table tbody').html(body || '<tr><td colspan="10" class="cq-empty">這個期間沒有資料</td></tr>');
+            $('#cq-trend-table tfoot').html(tf);
+
+            // ── 全部客戶模式時，附上該期間前十大客戶，點一下直接切過去看 ──
+            if (!CQ.client) {
+                var top = CQ.data.clients.slice(0, 10);
+                var h = '<div style="font-size:12px;font-weight:600;color:#6b471a;margin:6px 0 4px;">' +
+                        '<i class="fa fa-trophy" style="color:#D6851F;"></i> 前十大客戶（' + yrTxt + '淨額；點一下只看這一家）</div>' +
+                        '<div style="display:flex;flex-wrap:wrap;gap:5px;">';
+                top.forEach(function (c, i) {
+                    h += '<span onclick="cqPickClient(\'' + c.key + '\',\'' + cqEsc(c.name).replace(/'/g, "\\'") + '\')" ' +
+                         'style="cursor:pointer;background:#fdf0dd;border:1px solid #e4c293;border-radius:11px;padding:2px 9px;font-size:11.5px;color:#6B471A;">' +
+                         (i + 1) + '. ' + cqEsc(c.name) + ' <b>' + cqFmtWan(c.total.net) + '</b>' +
+                         (c.unmatched ? ' <span class="cq-tag cq-tag-um">未建主檔</span>' : '') + '</span>';
+                });
+                $('#cq-top-clients').html(h + '</div>');
+            } else {
+                $('#cq-top-clients').html(
+                    '<div style="font-size:12px;color:#a08a6f;margin-top:6px;">' +
+                    '目前只看「' + cqEsc(CQ.clientName) + '」一家。' +
+                    '<a href="javascript:void(0)" onclick="cqPickClient(\'\',\'\')" style="color:#8a5a2b;font-weight:600;">回到全部客戶合計</a></div>');
+            }
+        }
+
+        // ── 客戶自動完成 ──
+        function cqClientCandidates(kw) {
+            if (!CQ.data) return [];
+            kw = (kw || '').trim().toLowerCase();
+            var list = CQ.data.clients.filter(function (c) {
+                if (!kw) return true;
+                return (c.name || '').toLowerCase().indexOf(kw) >= 0 ||
+                       (c.cid || '').toLowerCase().indexOf(kw) >= 0;
+            });
+            return list.slice(0, 40);
+        }
+        function cqRenderClientDD(kw) {
+            var list = cqClientCandidates(kw), h = '';
+            if (!list.length) {
+                h = '<div class="ac-i" style="color:#a08a6f;cursor:default;">查無客戶（這個年度沒有任何訂單／出貨／退貨）</div>';
+            } else {
+                list.forEach(function (c, i) {
+                    h += '<div class="ac-i" data-k="' + c.key + '" data-n="' + cqEsc(c.name) + '">' +
+                         '<span class="ac-c">' + cqEsc(c.cid || '—') + '</span>' + cqEsc(c.name) +
+                         (c.unmatched ? ' <span class="cq-tag cq-tag-um">未建主檔</span>' : '') +
+                         '<span class="ac-a">' + cqFmtWan(c.total.net) + '</span></div>';
+                });
+            }
+            CQ.acIdx = -1;
+            $('#cq-client-dd').html(h).show();
+        }
+        function cqPickClient(key, name) {
+            CQ.client = key || '';
+            CQ.clientName = name || '';
+            $('#cq-client-kw').val(key ? name : '（全部客戶合計）');
+            $('#cq-client-dd').hide();
+            if (CQ.data) cqRender();
+        }
+
+        // ── 成長／衰退排行 ──
+        function cqLoadRank() {
+            if (!CQ.data) { cqLoad(true); return; }
+            var qk = $('#cq-rank-q').val();
+            if (!qk) return;
+            $('#cq-loading').show();
+            $.post('', {
+                action: 'cq_growth',
+                year: qk.substring(0, 4), q: qk.substring(5),
+                compare: $('#cq-compare').val(),
+                metric: $('#cq-metric').val(),
+                min_amt: $('#cq-minamt').val(),
+                align: $('#cq-align').is(':checked') ? '1' : '0',
+                order_basis: $('#cq-order-basis').val(),
+                q_basis: $('#cq-qbasis').val()
+            }, function (res) {
+                $('#cq-loading').hide();
+                if (!res || !res.success) { showToast((res && res.message) || '成長分析失敗', 'error'); return; }
+                CQ.rank = res;
+                cqRenderRank();
+            }, 'json').fail(function () {
+                $('#cq-loading').hide();
+                showToast('成長分析失敗（伺服器沒有回應）', 'error');
+            });
+        }
+
+        function cqRenderRank() {
+            var r = CQ.rank; if (!r) return;
+            var metricName = $('#cq-metric option:selected').text();
+
+            // 摘要
+            var t = r.totals, pct = (t.pct === null) ? '—' : ((t.pct >= 0 ? '▲ ' : '▼ ') + Math.abs(t.pct).toFixed(1) + '%');
+            var alignTxt = r.meta.cap_days
+                ? '<div class="k-s" style="color:#A34E2A;">兩期都只計前 ' + r.meta.cap_days + ' 天</div>'
+                : '<div class="k-s">完整一季</div>';
+            $('#cq-rank-summary').html(
+                '<div class="cq-kpi" style="flex:2 1 230px;border-left-color:#8a5a2b;"><div class="k-l">比較</div>' +
+                '<div class="k-v" style="font-size:15px;">' + r.base.label + ' → ' + r.curr.label + '</div>' +
+                '<div class="k-s">指標：' + cqEsc(metricName) + '</div></div>' +
+                '<div class="cq-kpi" style="border-left-color:#C9A227;"><div class="k-l">基期合計</div>' +
+                '<div class="k-v">' + cqFmtWan(t.base) + '</div>' + alignTxt + '</div>' +
+                '<div class="cq-kpi" style="border-left-color:#B06F27;"><div class="k-l">當期合計</div>' +
+                '<div class="k-v">' + cqFmtWan(t.curr) + '</div><div class="k-s">' + cqFmtMoney(t.curr) + '</div></div>' +
+                '<div class="cq-kpi" style="border-left-color:' + (t.diff >= 0 ? '#D6851F' : '#DD5138') + ';">' +
+                '<div class="k-l">增減</div><div class="k-v ' + (t.diff >= 0 ? 'cq-up-tx' : 'cq-down-tx') + '">' +
+                (t.diff >= 0 ? '+' : '') + cqFmtWan(t.diff) + '</div><div class="k-s">' + pct + '</div></div>'
+            );
+
+            var major = r.rows.filter(function (x) { return x.major; });
+            var minor = r.rows.filter(function (x) { return !x.major; });
+            var ups = major.filter(function (x) { return x.status === 'up' || x.status === 'new'; });
+            var dns = major.filter(function (x) { return x.status === 'down' || x.status === 'lost'; });
+
+            var row = function (x, i, isUp) {
+                var tag = x.status === 'new' ? '<span class="cq-tag cq-tag-new">新客戶</span>'
+                        : x.status === 'lost' ? '<span class="cq-tag cq-tag-lost">本季掛零</span>'
+                        : (x.streak_down >= 2 ? '<span class="cq-tag cq-tag-watch">連 ' + x.streak_down + ' 季下滑</span>' : '');
+                var pc = (x.pct === null) ? '—' : ((x.pct >= 0 ? '+' : '') + x.pct.toFixed(1) + '%');
+                return '<div class="cq-rank-row">' +
+                    '<span class="r-no">' + (i + 1) + '</span>' +
+                    '<span class="r-nm" title="' + cqEsc(x.name) + '">' + cqEsc(x.name) +
+                        (x.unmatched ? ' <span class="cq-tag cq-tag-um">未建主檔</span>' : '') + ' ' + tag + '</span>' +
+                    '<span class="r-ba">' + cqFmtWan(x.base) + ' → ' + cqFmtWan(x.curr) + '</span>' +
+                    '<span class="r-df ' + (isUp ? 'cq-up-tx' : 'cq-down-tx') + '">' +
+                        (isUp ? '▲ +' : '▼ ') + cqFmtWan(x.diff) + '</span>' +
+                    '<span class="r-pc ' + (isUp ? 'cq-up-tx' : 'cq-down-tx') + '">' + pc + '</span>' +
+                    '</div>';
+            };
+            $('#cq-rank-up').html(ups.length
+                ? ups.map(function (x, i) { return row(x, i, true); }).join('')
+                : '<div class="cq-empty">這一季沒有成長的客戶（或都在門檻以下）</div>');
+            $('#cq-rank-down').html(dns.length
+                ? dns.map(function (x, i) { return row(x, i, false); }).join('')
+                : '<div class="cq-empty">這一季沒有衰退的客戶（或都在門檻以下）</div>');
+
+            // 要留意的客戶：連續下滑（趨勢型警示，單季比較看不出來）
+            var watch = r.rows.filter(function (x) { return x.major && x.streak_down >= 2; })
+                              .sort(function (a, b) { return b.streak_down - a.streak_down || a.diff - b.diff; });
+            $('#cq-rank-watch').html(watch.length
+                ? '<div class="cq-minor-box" style="border-style:solid;border-color:#E9B8AC;background:#fdf3f0;">' +
+                  '<div class="m-h" style="color:#A34E2A;"><i class="fa fa-exclamation-triangle"></i> 要留意：連續兩季以上下滑（' + watch.length + ' 家）</div>' +
+                  '<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:5px;">' +
+                  watch.map(function (x) {
+                      return '<span style="background:#F8DCD5;border:1px solid #E9B8AC;border-radius:11px;padding:2px 9px;font-size:11.5px;color:#6B471A;">' +
+                             cqEsc(x.name) + ' <b>連 ' + x.streak_down + ' 季↓</b></span>';
+                  }).join('') + '</div></div>'
+                : '');
+
+            // 小額變動：收起來，不要淹掉真正重要的
+            $('#cq-rank-minor').html(minor.length
+                ? '<div class="cq-minor-box"><div class="m-h" onclick="$(this).next().slideToggle(120)">' +
+                  '<i class="fa fa-caret-right"></i> 小額變動（兩期金額都低於門檻）' + minor.length + ' 家，點開查看</div>' +
+                  '<div class="m-b"><div style="display:flex;flex-wrap:wrap;gap:5px;">' +
+                  minor.map(function (x) {
+                      var up = x.diff >= 0;
+                      return '<span style="background:#fff;border:1px solid #efe7db;border-radius:11px;padding:2px 9px;font-size:11px;color:#6B471A;">' +
+                             cqEsc(x.name) + ' <span class="' + (up ? 'cq-up-tx' : 'cq-down-tx') + '">' +
+                             (up ? '▲+' : '▼') + cqFmtWan(x.diff) + '</span></span>';
+                  }).join('') + '</div></div></div>'
+                : '');
+        }
+
+        // ── CSV 匯出（目前這一個子分頁的內容）──
+        function cqExportCsv() {
+            var rows = [], name, i;
+            if (CQ.tab === 'trend') {
+                if (!CQ.data) { showToast('請先查詢', 'error'); return; }
+                var s = cqSeries(), prog = CQ.data.progress || {};
+                rows.push(['季', '期間起', '期間迄', '訂單金額', '出貨金額', '出貨數量', '出貨筆數', '退貨金額', '淨額', '狀態']);
+                CQ.data.quarters.forEach(function (qk) {
+                    var v = s[qk], p = prog[qk] || {};
+                    if (p.is_future && !v.ship && !v.ord && !v.ret) return;
+                    rows.push([cqQLabel(qk), p.start || '', p.end || '', Math.round(v.ord), Math.round(v.ship),
+                               v.ship_qty, v.ship_cnt, Math.round(v.ret), Math.round(v.net),
+                               p.is_partial ? ('尚未結束 ' + p.days_done + '/' + p.days_total + ' 天') : '']);
+                });
+                name = '客戶季度趨勢_' + (CQ.client ? CQ.clientName : '全部客戶') + '_' +
+                       CQ.data.meta.year_from + '-' + CQ.data.meta.year_to;
+            } else {
+                if (!CQ.rank) { showToast('請先分析', 'error'); return; }
+                rows.push(['客戶', '客戶編號', '基期(' + CQ.rank.base.label + ')', '當期(' + CQ.rank.curr.label + ')',
+                           '增減金額', '增減%', '狀態', '連續下滑季數', '是否列入主榜']);
+                var stTxt = { up: '成長', down: '衰退', new: '新客戶', lost: '本季掛零', flat: '持平' };
+                CQ.rank.rows.forEach(function (x) {
+                    rows.push([x.name, x.cid || '', Math.round(x.base), Math.round(x.curr), Math.round(x.diff),
+                               (x.pct === null ? '' : x.pct), stTxt[x.status] || x.status,
+                               x.streak_down, x.major ? '是' : '否（小額）']);
+                });
+                name = '客戶成長衰退_' + CQ.rank.curr.label.replace(/ /g, '') + '_vs_' + CQ.rank.base.label.replace(/ /g, '');
+            }
+            var csv = rows.map(function (r) {
+                return r.map(function (c) {
+                    c = (c === null || c === undefined) ? '' : String(c);
+                    return /[",\n]/.test(c) ? '"' + c.replace(/"/g, '""') + '"' : c;
+                }).join(',');
+            }).join('\r\n');
+            var blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = name + '.csv';
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            showToast('已匯出 ' + (rows.length - 1) + ' 列', 'success');
+        }
+
+        // ── 列印（A4 橫式；格線欄寬一律 fr，用百分比加 gap 會超出紙張）──
+        function cqPrint() {
+            if (CQ.tab === 'trend' && !CQ.data) { showToast('請先查詢', 'error'); return; }
+            if (CQ.tab === 'rank' && !CQ.rank) { showToast('請先分析', 'error'); return; }
+            var esc = cqEsc;
+            var css =
+                '*{box-sizing:border-box;margin:0;padding:0;}' +
+                'body{font-family:"Microsoft JhengHei","PingFang TC",sans-serif;font-size:11px;color:#222;}' +
+                '.h{background:#6b471a;color:#fff;padding:7px 14px;}' +
+                '.h h1{font-size:20px;font-weight:700;}' +
+                '.h .sub{font-size:10px;opacity:.85;margin-top:3px;}' +
+                '.b{padding:8px 12px;}' +
+                '.note{font-size:9.5px;color:#6b471a;background:#fdf6ea;border-left:3px solid #D6851F;padding:5px 8px;margin-bottom:8px;line-height:1.6;}' +
+                '.st{font-size:12.5px;font-weight:700;color:#6b471a;border-left:3px solid #B06F27;padding-left:7px;margin:8px 0 5px;}' +
+                'table{width:100%;border-collapse:collapse;table-layout:fixed;}' +
+                'th{background:#8a5a2b;color:#fff;padding:3px 5px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+                'td{padding:2.5px 5px;border-bottom:1px solid #eee;font-size:11px;overflow:hidden;text-overflow:ellipsis;}' +
+                'tr:nth-child(even) td{background:#fdfaf5;}' +
+                'tr.tot td{font-weight:700;background:#f3e8d8!important;border-top:2px solid #8a5a2b;}' +
+                '.tr{text-align:right;}.tc{text-align:center;}' +
+                '.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;}' +
+                '.up{color:#8a5a2b;font-weight:600;}.dn{color:#C0392B;font-weight:600;}' +
+                '.ft{margin-top:8px;padding-top:5px;border-top:1px solid #e2e8f0;font-size:9px;color:#aaa;text-align:center;}' +
+                '@page{size:A4 landscape;margin:8mm 9mm 12mm;}' +
+                '@media print{*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}thead{display:table-header-group;}tr{page-break-inside:avoid;}}';
+
+            var printTime = new Date().toLocaleString('zh-TW');
+            var noteTxt = $('#cq-note').text();
+            var html, title;
+
+            if (CQ.tab === 'trend') {
+                var s = cqSeries(), prog = CQ.data.progress || {}, qs = CQ.data.quarters;
+                var who = CQ.client ? CQ.clientName : '全部客戶合計';
+                title = '客戶季度分析 ' + who;
+                var tS = 0, tR = 0, tO = 0, body = '';
+                qs.forEach(function (qk) {
+                    var v = s[qk], p = prog[qk] || {};
+                    if (p.is_future && !v.ship && !v.ord && !v.ret) return;
+                    tS += v.ship; tR += v.ret; tO += v.ord;
+                    body += '<tr><td>' + cqQLabel(qk) + (p.is_partial ? '（未結束）' : '') + '</td>' +
+                        '<td>' + egFmtDate(p.start) + '～' + egFmtDate(p.end) + '</td>' +
+                        '<td class="tr">' + cqFmtMoney(v.ord) + '</td>' +
+                        '<td class="tr">' + cqFmtMoney(v.ship) + '</td>' +
+                        '<td class="tr">' + numberFormat(v.ship_qty, 0) + '</td>' +
+                        '<td class="tr">' + cqFmtMoney(v.ret) + '</td>' +
+                        '<td class="tr">' + cqFmtMoney(v.net) + '</td></tr>';
+                });
+                html = '<div class="st">逐季金額</div><table>' +
+                    '<colgroup><col style="width:11%"><col style="width:19%"><col><col><col style="width:12%"><col><col></colgroup>' +
+                    '<thead><tr><th>季</th><th>期間</th><th class="tr">訂單金額</th><th class="tr">出貨金額</th>' +
+                    '<th class="tr">出貨數量</th><th class="tr">退貨金額</th><th class="tr">淨額</th></tr></thead><tbody>' + body +
+                    '<tr class="tot"><td colspan="2" class="tr">合計</td><td class="tr">' + cqFmtMoney(tO) + '</td>' +
+                    '<td class="tr">' + cqFmtMoney(tS) + '</td><td></td><td class="tr">' + cqFmtMoney(tR) + '</td>' +
+                    '<td class="tr">' + cqFmtMoney(tS - tR) + '</td></tr></tbody></table>';
+            } else {
+                var r = CQ.rank;
+                title = '客戶成長／衰退分析 ' + r.curr.label + '（比較 ' + r.base.label + '）';
+                var mj = r.rows.filter(function (x) { return x.major; });
+                var up = mj.filter(function (x) { return x.status === 'up' || x.status === 'new'; });
+                var dn = mj.filter(function (x) { return x.status === 'down' || x.status === 'lost'; });
+                var tbl = function (list, isUp) {
+                    var b = '';
+                    list.forEach(function (x, i) {
+                        b += '<tr><td class="tc">' + (i + 1) + '</td><td>' + esc(x.name) +
+                             (x.status === 'new' ? '（新客戶）' : x.status === 'lost' ? '（本季掛零）' : '') + '</td>' +
+                             '<td class="tr">' + cqFmtMoney(x.base) + '</td><td class="tr">' + cqFmtMoney(x.curr) + '</td>' +
+                             '<td class="tr ' + (isUp ? 'up' : 'dn') + '">' + (isUp ? '+' : '') + cqFmtMoney(x.diff) + '</td>' +
+                             '<td class="tr">' + (x.pct === null ? '—' : ((x.pct >= 0 ? '+' : '') + x.pct.toFixed(1) + '%')) + '</td></tr>';
+                    });
+                    if (!b) b = '<tr><td colspan="6" class="tc">無</td></tr>';
+                    return '<table><colgroup><col style="width:8%"><col><col style="width:19%"><col style="width:19%"><col style="width:19%"><col style="width:13%"></colgroup>' +
+                        '<thead><tr><th>#</th><th>客戶</th><th class="tr">' + r.base.label + '</th><th class="tr">' + r.curr.label + '</th>' +
+                        '<th class="tr">增減</th><th class="tr">%</th></tr></thead><tbody>' + b + '</tbody></table>';
+                };
+                html = '<div class="two"><div><div class="st">成長客戶（' + up.length + ' 家）</div>' + tbl(up, true) + '</div>' +
+                       '<div><div class="st">衰退客戶（' + dn.length + ' 家）</div>' + tbl(dn, false) + '</div></div>';
+            }
+
+            var doc = '<!DOCTYPE html><html lang="zh-TW"><head><meta charset="utf-8"><title>' + esc(title) + '</title>' +
+                '<style>' + css + '</style></head><body>' +
+                '<div class="h"><h1>' + esc(title) + '</h1>' +
+                '<div class="sub">列印時間：' + esc(printTime) + '</div></div>' +
+                '<div class="b">' + (noteTxt ? '<div class="note">' + esc(noteTxt) + '</div>' : '') + html +
+                '<div class="ft">本報表由 EGsystem 自動產生｜' + esc(printTime) + '</div></div></body></html>';
+
+            var w = window.open('', '_blank', 'width=1280,height=900,scrollbars=yes,resizable=yes');
+            if (!w) { alert('請允許瀏覽器彈出視窗以開啟列印畫面。'); return; }
+            w.document.write(doc); w.document.close(); w.focus();
+            setTimeout(function () {
+                if (cqNeedPageCounter(w)) cqAddPageCounter(w);
+                w.print();
+            }, 600);
+        }
+
+        // ── 事件綁定（自成一個 ready，不動本頁既有的 ready 區塊）──
+        $(function () {
+            var $kw = $('#cq-client-kw'), $dd = $('#cq-client-dd');
+
+            $kw.on('focus click', function () {
+                if (!CQ.data) return;
+                if (this.value === '（全部客戶合計）') this.value = '';
+                cqRenderClientDD(this.value);
+            }).on('input', function () {
+                if (!CQ.data) return;
+                cqRenderClientDD(this.value);
+            }).on('keydown', function (e) {
+                var $items = $dd.find('.ac-i[data-k]');
+                if (!$items.length) return;
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    CQ.acIdx += (e.key === 'ArrowDown' ? 1 : -1);
+                    if (CQ.acIdx < 0) CQ.acIdx = $items.length - 1;
+                    if (CQ.acIdx >= $items.length) CQ.acIdx = 0;
+                    $items.removeClass('on').eq(CQ.acIdx).addClass('on');
+                    var el = $items.get(CQ.acIdx);
+                    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    var $t = CQ.acIdx >= 0 ? $items.eq(CQ.acIdx) : $items.eq(0);
+                    if ($t.length) cqPickClient($t.attr('data-k'), $t.attr('data-n'));
+                } else if (e.key === 'Escape') {
+                    $dd.hide();
+                }
+            });
+
+            // 用 mousedown 不用 click：blur 會先把清單收起來，click 就永遠觸發不到
+            $dd.on('mousedown', '.ac-i[data-k]', function (e) {
+                e.preventDefault();
+                cqPickClient($(this).attr('data-k'), $(this).attr('data-n'));
+            });
+            $(document).on('mousedown', function (e) {
+                if (!$(e.target).closest('.cq-ac').length) {
+                    $dd.hide();
+                    if ($kw.val() === '' && !CQ.client) $kw.val('（全部客戶合計）');
+                }
+            });
+
+            // 條件一改就重查（使用者不必再按一次「查詢」）
+            $('#cq-year, #cq-back, #cq-order-basis, #cq-qbasis').on('change', function () { cqLoad(true); });
+            $('#cq-rank-q, #cq-compare, #cq-metric, #cq-minamt, #cq-align').on('change', function () { cqLoadRank(); });
+
+            // 使用說明（鐵律7）
+            $('#btnPageHelp').on('click', function () { $('#helpUseMask').modal('show'); });
+        });
 
         // ── Tab 切換邏輯 ──
         var _returnTableInited = false, _orderTableInited = false;
