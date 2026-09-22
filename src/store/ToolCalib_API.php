@@ -1215,7 +1215,13 @@ case 'history': {
                    'calib_cycle_months'=>$t['calib_cycle_months'], 'calib_method'=>$t['calib_method'],
                    'calib_managed'=>(int)$t['calib_managed'], 'calibration_due'=>$t['calibration_due'],
                    'spec'=>$spec],
-          'list'=>$list, 'can_delete'=>$perms['canAdmin']]);
+          'list'=>$list, 'can_delete'=>$perms['canAdmin'],
+          // 檢驗設備履歷表（3-QA-01-02）列印用的 AS 編號：履歷是「證明歷次校驗發生過什麼」的歷史紀錄，
+          // 版次要回推到這份履歷涵蓋範圍內最新一筆校驗日期當時生效的版次（使用者 2026-09-22 拍板，
+          // ai-rules/16 第三之四節；業務日期取法比照教育訓練簽到表的「合印範圍內最新一筆日期」）。
+          // 一筆校驗紀錄都沒有＝沒有歷史可證明，退回列印當下（傳 null）。
+          'dossier_as_no'=>eg_asdoc_no_asof($db, 'tool_calib_dossier',
+              (string)($list[0]['calib_date'] ?? '') ?: null)]);
 }
 
 /* ---------- 使用紀錄（此量具反查用於哪些檢驗單） ----------

@@ -739,6 +739,8 @@ $(function(){
     'use strict';
     var API = location.pathname;
     var CSRF = <?php echo json_encode($CSRF, JSON_UNESCAPED_SLASHES); ?>;
+    // 目前綁定的 AS 表單編號（即時查 linked_module='dwg_change'，與表頭那顆標籤同一個來源）
+    var AS_DOC_NO_NOW = <?php echo json_encode($AS_DOC_NO, JSON_UNESCAPED_SLASHES); ?>;
     $.ajaxPrefilter(function(o){
         if ((o.type||'GET').toUpperCase()!=='POST') return;
         if (o.data && typeof o.data==='object' && !(o.data instanceof FormData) && o.data.csrf===undefined) o.data.csrf=CSRF;
@@ -1173,7 +1175,9 @@ $(function(){
             var c=r.row, acks=r.acks||[], cfs=r.confirms||[]; ME=r.me; curDetail=r;
             var myAck=null; acks.forEach(function(a){ if(parseInt(a.user_id)===parseInt(ME)) myAck=a; });
             var h='<table class="table table-condensed table-bordered dc-table">'+
-                '<tr><th width="120">變更單號</th><td><b>'+esc(c.change_no)+'</b>　<span class="as-tag">AS '+esc(c.as_doc_no)+'</span></td></tr>'+
+                // AS 編號優先印「目前綁定的」而不是這一列存下來的舊值：使用者決定改編號後一律顯示新編號
+                // （2026-09-22；舊資料的 as_doc_no 存的是改號前的字串，只在完全沒有綁定時才拿它頂著）
+                '<tr><th width="120">變更單號</th><td><b>'+esc(c.change_no)+'</b>　<span class="as-tag">AS '+esc(AS_DOC_NO_NOW||c.as_doc_no||'')+'</span></td></tr>'+
                 (c.status==='DRAFT'?'<tr><th>狀態</th><td><span class="badge badge-draft">草稿</span> <span class="muted-help">尚未送出：還沒通知任何人，也還沒換檢驗標準版次。補完內容後按下方「送出」才正式成立。</span></td></tr>':'')+
                 '<tr><th>料號</th><td>'+dwgLink(c.part_no||'', c.d_id)+dwgBtn(c.part_no||'', c.d_id)+
                     (c.customer_name?('　<span class="muted-help">客戶：'+esc(c.customer_name)+'</span>'):'')+'</td></tr>'+

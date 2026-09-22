@@ -11283,7 +11283,9 @@ foreach($dCounts as $c) {
                 : '';
             var comp=(och_state.company||'').trim();
             var hdr=(och_state.print_header_one||'').trim() || '訂單變更單';
-            var asTxt=(och_state.print_footer_one||'').trim().replace(/['\\]/g,'');
+            // 版次依「這一筆變更的日期」回推（後端逐列算好放在 as_no_one，ai-rules/16 第三之四節）；
+            // 舊快取沒有這個欄位時才退回清單那個現況值
+            var asTxt=String(r.as_no_one || och_state.print_footer_one || '').trim().replace(/['\\]/g,'');
             var w=window.open('','_blank');
             w.document.write('<html><head><meta charset="utf-8"><title>訂單變更單 '+ocEsc(r.change_no||'')+'</title>'
                 +'<style>body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 10mm;color:#222;}'

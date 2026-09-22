@@ -15,8 +15,23 @@
 
 require_once __DIR__ . '/dwg_notify.php';
 require_once __DIR__ . '/date_fmt_lib.php';   // 日期顯示一律 YYYY.MM.DD（ai-rules/20）
+require_once __DIR__ . '/asdoc_page_lib.php'; // 綁定的 AS 表單編號一律即時查（禁寫死，ai-rules/16）
 
 if (!function_exists('dwg_ensure_schema')) {
+
+/**
+ * 圖面變更簽收單目前綁定的 AS 表單編號（唯一實作，2026-09-22）。
+ *
+ * 2026-09-22 之前這裡是寫死的 '2-PD-01-07'，直接被 INSERT 進 qc_drawing_change.as_doc_no，
+ * 而畫面上的「AS ○○」標籤就是印那一欄——AS 文件一改編號，**連之後新建的變更單都還是印舊編號**，
+ * 而且完全不報錯（違反 ai-rules/16「編號一律由綁定推導、禁寫死」）。
+ * 綁定入口＝AS 文件管理 → 電子化模組連結 `linked_module='dwg_change'`，與本頁表頭那顆標籤同一個來源。
+ * 查不到綁定回空字串（欄位允許 NULL，畫面該標籤本來就不顯示），不要退回寫死值。
+ */
+function dwg_as_doc_no(PDO $pdo): string {
+    $d = eg_asdoc_by_linked_module($pdo, 'dwg_change');
+    return $d ? (string)$d['doc_no'] : '';
+}
 
 /** 欄位補建（沿用本專案慣例：ALTER 包 try，重複執行無害）。sql.php 擋 DDL，故走程式面 migration。 */
 function dwg_ensure_schema(PDO $pdo): void {
@@ -820,7 +835,7 @@ function dwg_create_change(PDO $pdo, array $p): array {
              change_date, source, customer_doc_no, from_process_no, summary, detail,
              old_version_id, new_version_id, trigger_attachment_id, create_source, status, submitted_at, created_by, created_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
-            ->execute([$changeNo, '2-PD-01-07', $dId, $oldRev, $newRev, ($intOld ?: null), ($intNew ?: null), $scope,
+            ->execute([$changeNo, dwg_as_doc_no($pdo), $dId, $oldRev, $newRev, ($intOld ?: null), ($intNew ?: null), $scope,
                        (($p['change_date'] ?? '') ?: null), trim((string)($p['source'] ?? '')),
                        trim((string)($p['customer_doc_no'] ?? '')), $fromP,
                        $summary, trim((string)($p['detail'] ?? '')), $ver['old'], $ver['new'], $trigId, $csrc,

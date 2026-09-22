@@ -920,6 +920,17 @@ try {
             $row['tgt_cnt'] = count($recips);
         }
         unset($row);
+        // 單筆「訂單變更單」是一筆已發生的變更紀錄，頁尾編號的版次要回推到**該筆變更當時**生效的版次
+        // （ai-rules/16 第三之四節；使用者 2026-09-22 拍板）。逐列各自回推，不可共用清單那一個值——
+        // 同一頁裡不同日期的變更單本來就可能落在不同版次。歷史清單（print_footer）維持印現況最新版。
+        require_once __DIR__ . '/../common/asdoc_lib.php';
+        $ocDocId = eg_asdoc_id($pdo, 'order_change');
+        foreach ($data as &$row) {
+            $row['as_no_one'] = $ocDocId
+                ? eg_asdoc_no_asof_id($pdo, $ocDocId, substr((string)($row['created_at'] ?? ''), 0, 10) ?: null)
+                : '';
+        }
+        unset($row);
         // 列印三固定元素一律動態取（ai-rules/16）：大標題＝本公司全名、表頭＝綁定 AS 文件的表單名稱、頁尾右下＝doc_no
         require_once __DIR__ . '/../common/asdoc_lib.php';
         require_once __DIR__ . '/../common/org_role_lib.php';

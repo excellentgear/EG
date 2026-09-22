@@ -255,12 +255,19 @@ case 'publish': {
                                 WHERE t.id=?");
             $ti->execute([$tid]);
             $bound = $ti->fetch(PDO::FETCH_ASSOC);
-            if ($bound && $newVer > 1) {
-                // 綁 2-DC-01-01 的已發布模板可能有多份 → 挑「有標記特殊用途」的那份（否則取最新更新）
-                $rv = $db->prepare("SELECT t.id, t.current_schema FROM as_form_template t JOIN as_document d ON d.id=t.form_doc_id
-                                    WHERE d.doc_no='2-DC-01-01' AND t.status='published' AND t.is_deleted=0
+            // 「文件制修申請單」那一份文件的 id 一律由模組綁定推導（AS_DOC_BIND 的 doc_apply）。
+            // 2026-09-22 之前這裡是寫死 doc_no='2-DC-01-01' 去比字串，AS 文件一改編號就查不到、
+            // 而查不到只是「不提示」＝這條建議會安靜地永遠不出現，看不出壞掉（ai-rules/16：禁寫死編號）。
+            // （模組代碼 'doc_apply' ＝ doc_apply_lib.php 的 DA_ASDOC_MODULE，是 system_parameters 的 param_key、
+            //   不是文件編號，改編號不會動到它；這裡刻意只載 asdoc_lib，不為了一個常數把整包 doc_apply_lib 拉進來）
+            require_once __DIR__ . '/../common/asdoc_lib.php';
+            $daDocId = eg_asdoc_id($db, 'doc_apply');
+            if ($bound && $newVer > 1 && $daDocId > 0) {
+                // 綁「文件制修申請單」的已發布模板可能有多份 → 挑「有標記特殊用途」的那份（否則取最新更新）
+                $rv = $db->prepare("SELECT t.id, t.current_schema FROM as_form_template t
+                                    WHERE t.form_doc_id=? AND t.status='published' AND t.is_deleted=0
                                     ORDER BY t.updated_at DESC, t.id DESC");
-                $rv->execute();
+                $rv->execute([$daDocId]);
                 $rvRow = null;
                 foreach ($rv->fetchAll(PDO::FETCH_ASSOC) as $cand) {
                     if ($rvRow === null) $rvRow = $cand;   // 後備：最新更新的

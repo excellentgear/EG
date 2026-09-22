@@ -1657,7 +1657,9 @@ function printDossier(tid){
             });
             h += '</tbody></table>';
         }
-        var docNo = asdocNo(META && META.as_docs ? META.as_docs['tool_calib_dossier'] : null);
+        // 履歷表＝歷史紀錄，版次由後端依「最新一筆校驗日期」回推（ai-rules/16 第三之四節）；
+        // 舊快取或未綁定時才退回現況最新版
+        var docNo = res.dossier_as_no || asdocNo(META && META.as_docs ? META.as_docs['tool_calib_dossier'] : null);
         var title = '檢驗設備履歷表：'+t.Tool_No;   // 瀏覽器分頁標題保留量具編號方便辨識，內文標題不重複顯示（下方表格已有）
         var w = window.open('', '_blank');
         if (!w){ alert('瀏覽器阻擋了列印視窗，請允許彈出視窗'); return; }
