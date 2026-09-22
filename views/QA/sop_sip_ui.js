@@ -62,7 +62,8 @@ function acAttach(inputSel, opt) {
         if (!kw) { $AC.hide(); return; }
         var my = ++acSeq;
         acTimer = setTimeout(function () {
-            api(opt.action, opt.params ? opt.params(kw) : { kw: kw }, function (res) {
+            var act = (typeof opt.action === 'function') ? opt.action() : opt.action;
+            api(act, opt.params ? opt.params(kw) : { kw: kw }, function (res) {
                 if (my !== acSeq) return;          // 打字很快時只採用最後一次查詢的結果
                 var rows = res.rows || [], h = '';
                 $.each(rows, function (i, r) { h += '<div class="it" data-i="' + i + '">' + opt.row(r) + '</div>'; });
@@ -96,13 +97,15 @@ function kindOptions(sel, withAll) {
     $(sel).html(h);
 }
 
-function load() {
+/** keepPage=true 時留在目前這一頁（存完檔重新載入清單不該把人踢回第一頁） */
+function load(keepPage) {
+    var want = keepPage ? PAGE : 1;
     api('list', {
         tab: TAB, kind: $('#fKind').val() || '', scope: $('#fScope').val() || '',
         status: $('#fStatus').val() || '', year: $('#fYear').val() || '', kw: $('#fKw').val() || ''
     }, function (res) {
         ROWS = res.rows || [];
-        PAGE = 1;
+        PAGE = Math.max(1, want);
         renderList();
     });
 }
@@ -185,7 +188,7 @@ $(document).on('click', '#tblList tbody tr', function (e) {
 function delDoc(docId, title) {
     if (!docId) return;
     if (!confirm('確定刪除「' + title + '」這份文件？\n\n連同它的所有版次都會從清單上移除。')) return;
-    post('doc_delete', { doc_id: docId }, function () { load(); });
+    post('doc_delete', { doc_id: docId }, function () { load(true); });
 }
 
 /* ══════════════════════ 新增 ══════════════════════ */
@@ -195,6 +198,7 @@ $('#btnNew').on('click', function () {
     NEW = { titleTouched: false, machines: [], dups: [] };
     $('#nErr').text(''); $('#nDup').html('');
     $('#nModel').val(''); $('#nModelVal').val('');
+    $('#nTool').val(''); $('#nToolId').val('');
     $('#nPart').val(''); $('#nPartId').val('');
     $('#nProc').val(''); $('#nProcNo').val('');
     $('#nCus').val(''); $('#nCusId').val('');
@@ -209,7 +213,8 @@ $('#btnNew').on('click', function () {
 /** 版面換了就重算「這個版面可以用哪些適用範圍」，並把分頁（SOP／SIP）標出來 */
 function syncScope() {
     var kind = $('#nKind').val(), h = '';
-    var allow = (kind === 'equip') ? ['machine'] : ['general', 'part'];
+    var allow = (window.SS_KIND_SCOPES && SS_KIND_SCOPES[kind])
+             || ((kind === 'equip') ? ['machine', 'tool'] : ['general', 'part']);
     $.each(allow, function (i, s) { h += '<option value="' + s + '">' + esc(SS_SCOPES[s]) + '</option>'; });
     $('#nScope').html(h);
     var tab = (SS_KINDS[kind] ? SS_KINDS[kind].tab : 'sop');
@@ -221,6 +226,7 @@ function syncScope() {
 function syncScopeFields() {
     var kind = $('#nKind').val(), s = $('#nScope').val();
     $('.mrow').toggle(s === 'machine');
+    $('.trow').toggle(s === 'tool');
     $('.prow').toggle(s === 'part');
     $('.srow').toggle(kind === 'sip');
     // 客戶：綁料號時由料號主檔帶入，欄位唯讀；通用型才可以自己挑
@@ -237,6 +243,7 @@ function syncScopeFields() {
 $('#nKind').on('change', syncScope);
 $('#nScope').on('change', function () {
     $('#nPart').val(''); $('#nPartId').val('');
+    $('#nTool').val(''); $('#nToolId').val('');
     $('#nModel').val(''); $('#nModelVal').val('');
     $('#nMachines').html('先選機台型號。').addClass('muted-help');
     NEW.machines = [];
@@ -272,6 +279,16 @@ function loadModelMachines(model) {
         probe();
     });
 }
+
+/* 綁定對象：量具（檢驗設備一覽表） */
+acAttach('#nTool', {
+    action: 'search_tool', hidden: '#nToolId', onClear: probe,
+    row: function (r) {
+        return '<span class="hit">' + esc(r.tool_no) + '</span>　' + esc(r.tool_type || '')
+             + '　<span class="muted-help">' + esc(r.spec_desc || r.manufacturer || '') + '</span>';
+    },
+    pick: function (r) { $('#nTool').val(r.tool_no); $('#nToolId').val(r.tool_id); probe(); }
+});
 
 /* 綁定對象：料號 */
 acAttach('#nPart', {
@@ -323,9 +340,11 @@ function probe() {
             kind: kind, scope: s,
             machine_model: $('#nModelVal').val() || '',
             part_d_id: num($('#nPartId').val()),
+            tool_id: num($('#nToolId').val()),
             process_no: num($('#nProcNo').val())
         };
         if (s === 'machine' && !p.machine_model) { $('#nDup').html(''); return; }
+        if (s === 'tool' && !p.tool_id) { $('#nDup').html(''); return; }
         if (s === 'part' && !p.part_d_id) { $('#nDup').html(''); return; }
         api('bind_probe', p, function (res) {
             NEW.dups = res.dups || [];
@@ -372,6 +391,7 @@ $('#nSave').on('click', function () {
     if (!$('#nTitle').val().trim()) err.push('文件名稱');
     if (!$('#nDate').val()) err.push('表單日期');
     if (s === 'machine' && !$('#nModelVal').val()) err.push('機台型號（要從清單挑，打字不選不算）');
+    if (s === 'tool' && !num($('#nToolId').val())) err.push('量具（要從清單挑，打字不選不算）');
     if (s === 'part' && !num($('#nPartId').val())) err.push('料號（要從清單挑，打字不選不算）');
     if ($('#nProc').val().trim() && !num($('#nProcNo').val())) err.push('製程（打了字但沒有從清單挑）');
     if (err.length) { $('#nErr').text('還沒填：' + err.join('、')); return; }
@@ -389,6 +409,7 @@ $('#nSave').on('click', function () {
         kind: kind, scope: s,
         machine_model: s === 'machine' ? $('#nModelVal').val() : '',
         machine_ids: JSON.stringify(ids),
+        tool_id: s === 'tool' ? num($('#nToolId').val()) : 0,
         part_d_id: s === 'part' ? num($('#nPartId').val()) : 0,
         process_no: num($('#nProcNo').val()),
         customer_id: s === 'part' ? '' : ($('#nCusId').val() || ''),
@@ -421,7 +442,11 @@ function headHtml() {
     var h = '<div class="sec"><h5>表頭</h5><div class="frm">';
     h += '<label>文件名稱</label><div class="wide"><input id="fTitle" value="' + esc(d.title) + '"' + ro + '></div>';
 
-    if (d.scope === 'machine') {
+    if (d.scope === 'tool') {
+        var tm = CUR.machine_meta || {};
+        h += '<label>量具編號</label><div><input value="' + esc(tm.asset_text || '') + '" readonly></div>'
+           + '<label>量具種類</label><div><input value="' + esc(tm.m_name || '') + '" readonly></div>';
+    } else if (d.scope === 'machine') {
         var mm = CUR.machine_meta || {};
         h += '<label>機台型號</label><div><input value="' + esc(d.machine_model || '') + '" readonly></div>'
            + '<label>機器編號</label><div><input value="' + esc(mm.asset_text || '') + '" readonly></div>';
@@ -451,6 +476,24 @@ function headHtml() {
         h += '<label>製程</label><div class="ac-wrap"><input id="fProc" value="' + esc(d.proc_name || '') + '"' + ro
            + ' data-eg-hint="打製程名稱或編號"><input type="hidden" id="fProcNo" value="' + num(d.process_no) + '"></div>';
     }
+    // 自動建立的文件可能綁錯適用範圍，開放管理員改（使用者 2026-09-22 要求）
+    if (SS_PERMS.canAdmin && CUR.can_edit) {
+        h += '<label>適用範圍</label><div class="wide">'
+           + '<span class="muted-help">目前是「' + esc(SS_SCOPES[d.scope] || d.scope) + '」　</span>'
+           + '<button class="btn btn-xs btn-warm-o" id="btnReScope">改綁定對象／適用範圍</button></div>';
+    }
+    // 列印紙張（預設：綁機台或量具＝A4 直式、料號相關＝A3 橫式）
+    var pp = CUR.paper || {};
+    h += '<label>列印紙張</label><div class="wide">'
+       + '<select id="fPaper"' + (CUR.can_edit ? '' : ' disabled') + '>';
+    $.each(CUR.papers || { A4: 'A4', A3: 'A3' }, function (k, lab) {
+        h += '<option value="' + k + '"' + (k === pp.size ? ' selected' : '') + '>' + esc(lab) + '</option>';
+    });
+    h += '</select> <select id="fOrient"' + (CUR.can_edit ? '' : ' disabled') + '>';
+    $.each(CUR.orients || { portrait: '直式', landscape: '橫式' }, function (k, lab) {
+        h += '<option value="' + k + '"' + (k === pp.orient ? ' selected' : '') + '>' + esc(lab) + '</option>';
+    });
+    h += '</select><span class="muted-help">　沒特別改就用預設：綁機台或量具＝A4 直式，綁料號＝A3 橫式。</span></div>';
     h += '<label>版次</label><div><input id="fVer" value="' + esc(v.ver_no) + '"' + ro + '></div>'
        + '<label>表單日期</label><div><input type="date" id="fDate" value="' + esc(v.form_date || '') + '"' + ro + '></div>'
        + '<label>制/修訂事項</label><div class="wide"><input id="fRev" value="' + esc(v.rev_note || '') + '"' + ro + '></div>';
@@ -491,13 +534,20 @@ function secFilesHtml(key) {
     var list = (CUR.section_files || {})[key] || [];
     var h = '<div class="secfiles">';
     $.each(list, function (i, f) {
+        var nm = String(f.orig_name || f.file_name || '');
+        var isImg = /\.(jpe?g|png|gif|bmp|webp)$/i.test(nm);
         h += '<div class="secfile" data-file="' + num(f.file_id) + '">'
-           + '<img src="' + fileUrl(f.file_id) + '&t=' + (new Date()).getTime() + '" title="' + esc(f.orig_name || '') + '">'
-           + '<div class="nm">' + esc(f.orig_name || f.file_name) + '</div>';
+           + (isImg
+               ? '<img src="' + fileUrl(f.file_id) + '&t=' + (new Date()).getTime() + '" title="' + esc(nm) + '">'
+               : '<a class="nofile" href="' + fileUrl(f.file_id) + '" target="_blank">'
+                 + '<i class="fa fa-file-o fa-2x"></i><br>開啟檔案</a>')
+           + '<div class="nm">' + esc(nm) + '</div>';
         if (CUR.can_edit) {
             h += '<div class="ops">'
-               + '<button class="btn btn-xs btn-warm-o f-rot" data-file="' + num(f.file_id) + '" data-deg="-90" title="左轉">↺</button> '
-               + '<button class="btn btn-xs btn-warm-o f-rot" data-file="' + num(f.file_id) + '" data-deg="90" title="右轉">↻</button> '
+               + (isImg
+                   ? '<button class="btn btn-xs btn-warm-o f-rot" data-file="' + num(f.file_id) + '" data-deg="-90" title="左轉">↺</button> '
+                     + '<button class="btn btn-xs btn-warm-o f-rot" data-file="' + num(f.file_id) + '" data-deg="90" title="右轉">↻</button> '
+                   : '')
                + '<button class="btn btn-xs sf-del" data-file="' + num(f.file_id) + '">刪除</button></div>';
         }
         h += '</div>';
@@ -694,7 +744,7 @@ function sipExtraHtml() {
            + '<span class="muted-help">　旋轉只會影響這份文件的畫面與列印，不會動到料號附件那張原圖。</span></div>';
     }
     h += '</div>';
-    h += secBox('f_notice', 'notice', '注意事項', v.notice, '一行一條');
+    h += secBox('f_notice', 'notice', '注意事項', v.notice, '一行一條；留空就印設定裡那份固定的注意事項');
     return h;
 }
 
@@ -745,21 +795,25 @@ function versHtml() {
 /** 附件（掃描檔與其他檔案） */
 function filesHtml() {
     var list = (CUR.files || []).filter(function (f) { return f.usage_kind === 'scan' || f.usage_kind === 'other'; });
-    if (!list.length && !CUR.can_edit) return '';
+    var canAtt = num(CUR.can_attach) === 1;        // 核准之後只有管理員補得了附件
+    if (!list.length && !canAtt) return '';
     var h = '<div class="sec"><h5>附件<span class="muted-help">紙本掃描檔、已簽核的紙本</span></h5>';
     if (list.length) {
         h += '<ul style="margin:0 0 6px 18px;font-size:12.5px;">';
         $.each(list, function (i, f) {
             h += '<li><a href="' + fileUrl(f.file_id) + '" target="_blank">' + esc(f.orig_name || f.file_name) + '</a>'
                + ' <a class="muted-help" href="' + fileUrl(f.file_id) + '&dl=1">下載</a>'
-               + (CUR.can_edit ? ' <button class="btn btn-xs f-del" data-file="' + num(f.file_id) + '">刪除</button>' : '')
+               + (canAtt ? ' <button class="btn btn-xs f-del" data-file="' + num(f.file_id) + '">刪除</button>' : '')
                + '</li>';
         });
         h += '</ul>';
     } else h += '<div class="muted-help">沒有附件</div>';
-    if (CUR.can_edit) {
+    if (canAtt) {
         h += '<button class="btn btn-xs btn-warm-o" id="btnUpScan">上傳附件</button>'
-           + '<input type="file" id="fileScan" style="display:none;">';
+           + '<input type="file" id="fileScan" style="display:none;" '
+           + 'accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,image/*">'
+           + '<span class="muted-help">　可以放 PDF、Word、Excel、圖片…（不可執行檔）。</span>';
+        if (!CUR.can_edit) h += '<div class="muted-help">這一版已經送簽或核准了，這裡只能補附件，內容不可修改。</div>';
     }
     h += '</div>';
     return h;
@@ -787,6 +841,9 @@ function renderDoc() {
               + ' <button class="btn btn-sm btn-warm" id="btnSubmit">送出簽核</button>';
     }
     if (ssCanEditKind()) foot += ' <button class="btn btn-sm btn-warm-o" id="btnNewVer">建立新版次</button>';
+    if (num(CUR.can_unsubmit)) {
+        foot += ' <button class="btn btn-sm btn-warm-o" id="btnUnsubmit">取消自動核准（退回草稿）</button>';
+    }
     if (num(CUR.can_delete)) foot += ' <button class="btn btn-sm" id="btnDelDoc">刪除文件</button>';
     foot += ' <button class="btn btn-sm" data-close="maskDoc">關閉</button>';
     $('#docFoot').html(foot);
@@ -797,9 +854,108 @@ function ssCanEditKind() {
 }
 
 $(document).on('click', '.v-open', function (e) { e.stopPropagation(); openDoc(num($(this).data('ver'))); });
+/** 只有「整份都是自動核准」的才退得回來——人工蓋過的章退回等於抹掉別人的決定 */
+$(document).on('click', '#btnUnsubmit', function () {
+    if (!confirm('確定把這一版退回「尚未送審」？\n\n'
+        + '自動蓋上的三個簽章會被清掉，狀態回到草稿，可以重新編輯後再送一次。\n'
+        + '（人工一格一格蓋過的版次不會出現這顆按鈕。）')) return;
+    post('unsubmit', { ver_id: num(CUR.ver.ver_id) }, function () {
+        openDoc(num(CUR.ver.ver_id)); load(true);
+    });
+});
+
 $(document).on('click', '#btnDelDoc', function () {
     if (!confirm('確定刪除「' + (CUR.doc.title || '') + '」這份文件？\n\n連同它的所有版次都會從清單上移除。')) return;
-    post('doc_delete', { doc_id: num(CUR.doc.doc_id) }, function () { closeMask('maskDoc'); load(); });
+    post('doc_delete', { doc_id: num(CUR.doc.doc_id) }, function () { closeMask('maskDoc'); load(true); });
+});
+
+/**
+ * 改綁定對象／適用範圍（管理員限定）。
+ * 自動建立的文件可能綁錯，沒有這個就只能刪掉重建（使用者 2026-09-22 要求）。
+ * 存檔一樣走 doc_save，所以重複判定與「綁定對象要存在」在後端仍然會再擋一次。
+ */
+$(document).on('click', '#btnReScope', function () {
+    var d = CUR.doc;
+    var allow = (window.SS_KIND_SCOPES && SS_KIND_SCOPES[CUR.kind])
+             || ((CUR.kind === 'equip') ? ['machine', 'tool'] : ['general', 'part']);
+    var h = '<div class="note-box">改了之後這份文件會重新判定「有沒有跟別份撞到」（同一個對象＋同一個製程只能有一份）。'
+          + '版次、內容與簽核紀錄都不會動到。</div><div class="frm">'
+          + '<label>適用範圍</label><div class="wide"><select id="rsScope">';
+    $.each(allow, function (i, k) {
+        h += '<option value="' + k + '"' + (k === d.scope ? ' selected' : '') + '>' + esc(SS_SCOPES[k]) + '</option>';
+    });
+    h += '</select></div>'
+       + '<label id="rsLab">綁定對象</label><div class="wide ac-wrap">'
+       + '<input type="text" id="rsBind"><input type="hidden" id="rsBindId">'
+       + '<div class="muted-help" id="rsHint"></div></div>'
+       + '<label>機器編號</label><div class="wide"><div id="rsMachines" class="pickbox muted-help">先選機台型號。</div></div>'
+       + '</div><div class="err" id="rsErr" style="margin-top:6px;"></div>'
+       + '<div style="margin-top:8px;"><button class="btn btn-sm btn-warm" id="rsSave">套用</button></div>';
+    $('#pickTitle').text('改綁定對象／適用範圍');
+    $('#pickBody').html(h);
+    openMask('maskPick');
+    rsSync();
+});
+function rsSync() {
+    var k = $('#rsScope').val();
+    $('#rsBind').val(''); $('#rsBindId').val('');
+    $('#rsMachines').html('先選機台型號。').addClass('muted-help');
+    $('#rsMachines').closest('.wide').prev('label').toggle(k === 'machine');
+    $('#rsMachines').closest('.wide').toggle(k === 'machine');
+    var lab = { machine: '機台型號', tool: '量具', part: '料號', general: '綁定對象' }[k] || '綁定對象';
+    $('#rsLab').text(lab);
+    $('#rsBind').closest('.ac-wrap').toggle(k !== 'general');
+    $('#rsHint').text(k === 'machine' ? '打型號、機台名稱或機器編號，從清單挑。'
+        : (k === 'tool' ? '打量具編號或種類，從清單挑。'
+        : (k === 'part' ? '打料號從清單挑；同一個料號文字可能分屬好幾家客戶。' : '')));
+}
+$(document).on('change', '#rsScope', rsSync);
+/* 一個輸入框要查三種主檔，所以 action 給成函式，依目前選的適用範圍決定要打哪一支 */
+acAttach('#rsBind', {
+    hidden: '#rsBindId',
+    action: function () {
+        var k = $('#rsScope').val();
+        return k === 'machine' ? 'machine_models' : (k === 'tool' ? 'search_tool' : 'search_part');
+    },
+    row: function (r) { return rsRow(r); },
+    pick: function (r) { rsPick(r); }
+});
+function rsRow(r) {
+    var k = $('#rsScope').val();
+    if (k === 'machine') return '<span class="hit">' + esc(r.machine_model) + '</span>　' + esc(r.machine || '')
+        + '　<span class="muted-help">' + num(r.cnt) + ' 台：' + esc(r.asset_nos || '') + '</span>';
+    if (k === 'tool') return '<span class="hit">' + esc(r.tool_no) + '</span>　' + esc(r.tool_type || '');
+    return '<span class="hit">' + esc(r.D_Setting_Id) + '</span>　' + esc(r.customer || '')
+        + '　<span class="muted-help">#' + num(r.d_id) + '</span>';
+}
+function rsPick(r) {
+    var k = $('#rsScope').val();
+    if (k === 'machine') {
+        $('#rsBind').val(r.machine_model); $('#rsBindId').val(r.machine_model);
+        api('machines_by_model', { model: r.machine_model }, function (res) {
+            var h = '';
+            $.each(res.rows || [], function (i, m) {
+                h += '<label><input type="checkbox" class="rschk" value="' + num(m.machine_id) + '" checked> '
+                   + '<span class="mno">' + esc(m.asset_no || '(未編號)') + '</span> ' + esc(m.field_no || '') + '</label>';
+            });
+            $('#rsMachines').removeClass('muted-help').html(h || '<span class="muted-help">這個型號沒有在用的機台。</span>');
+        });
+    } else if (k === 'tool') { $('#rsBind').val(r.tool_no); $('#rsBindId').val(r.tool_id); }
+    else { $('#rsBind').val(r.D_Setting_Id); $('#rsBindId').val(r.d_id); }
+}
+$(document).on('click', '#rsSave', function () {
+    var k = $('#rsScope').val(), id = $('#rsBindId').val();
+    if (k !== 'general' && !id) { $('#rsErr').text('要從清單挑一個綁定對象（打字不選不算）。'); return; }
+    var ids = [];
+    $('.rschk:checked').each(function () { ids.push(num($(this).val())); });
+    post('doc_save', {
+        doc_id: num(CUR.doc.doc_id), kind: CUR.kind, scope: k,
+        machine_model: k === 'machine' ? id : '',
+        machine_ids: JSON.stringify(ids),
+        tool_id: k === 'tool' ? num(id) : 0,
+        part_d_id: k === 'part' ? num(id) : 0,
+        title: CUR.doc.title, process_no: num(CUR.doc.process_no)
+    }, function () { closeMask('maskPick'); openDoc(num(CUR.ver.ver_id)); load(true); });
 });
 
 /* 文件內的製程與客戶也可以改（改製程等於換了一份文件的定位，後端會再檢查會不會撞到既有文件） */
@@ -862,7 +1018,8 @@ function saveDoc(cb) {
         title: $('#fTitle').val()
     }, function () {
         var p = { ver_id: num(CUR.ver.ver_id), ver_no: $('#fVer').val(), form_date: $('#fDate').val(),
-                  rev_note: $('#fRev').val() };
+                  rev_note: $('#fRev').val(),
+                  paper: $('#fPaper').val() || '', orient: $('#fOrient').val() || '' };
         if (CUR.kind === 'equip') {
             $.each(['m_maker', 'm_name', 'm_spec', 'm_range', 'op_method', 'cautions', 'maintain'], function (i, k) {
                 p[k] = $('#f_' + k).val() || '';
@@ -876,7 +1033,7 @@ function saveDoc(cb) {
             p.items = JSON.stringify(collectItems());
         }
         post('ver_save', p, function () {
-            if (cb) cb(); else { openDoc(num(CUR.ver.ver_id)); load(); }
+            if (cb) cb(); else { openDoc(num(CUR.ver.ver_id)); load(true); }
         });
     });
 }
@@ -910,7 +1067,7 @@ $(document).on('click', '#emSave', function () {
         doc_id: num(CUR.doc.doc_id), kind: CUR.kind, scope: CUR.doc.scope,
         machine_model: CUR.doc.machine_model || '', machine_ids: JSON.stringify(ids),
         title: CUR.doc.title, process_no: num(CUR.doc.process_no)
-    }, function () { closeMask('maskPick'); openDoc(num(CUR.ver.ver_id)); load(); });
+    }, function () { closeMask('maskPick'); openDoc(num(CUR.ver.ver_id)); load(true); });
 });
 
 /** 機台四欄重新照主檔帶一次 */
@@ -1114,7 +1271,8 @@ $(document).on('click', '.f-del', function () {
 /* 段落附件：上傳後**只重畫那一段**的縮圖列（使用者要求 AJAX 更新，不要整頁跳掉） */
 $(document).on('click', '.sec-up', function () {
     var key = $(this).data('sec');
-    var $f = $('<input type="file" accept="image/*,.pdf" style="display:none;">').appendTo('body');
+    var $f = $('<input type="file" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv" '
+             + 'style="display:none;">').appendTo('body');
     $f.on('change', function () {
         var el = this;
         doUpload(el, 'sec', key, function () {
@@ -1188,7 +1346,7 @@ $('#sbGo').on('click', function () {
     post('submit', p, function (res) {
         closeMask('maskSubmit');
         openDoc(num(CUR.ver.ver_id));
-        load();
+        load(true);
     });
 });
 
@@ -1209,14 +1367,14 @@ $(document).on('click', '.sg-go', function () {
 $(document).on('click', '.sg-clr', function () {
     if (!confirm('確定清除這一格簽章？清掉之後這一版會退回「簽核中」。')) return;
     post('sign_clear', { ver_id: num(CUR.ver.ver_id), slot: $(this).data('slot') },
-         function () { openDoc(num(CUR.ver.ver_id)); load(); });
+         function () { openDoc(num(CUR.ver.ver_id)); load(true); });
 });
 
 $(document).on('click', '#btnNewVer', function () {
     var v = prompt('新版次的版次號（留空＝自動遞增）', '');
     if (v === null) return;
     post('ver_new', { from_ver_id: num(CUR.ver.ver_id), ver_no: v || '', form_date: SS_TODAY, rev_note: '' },
-         function (res) { openDoc(num(res.ver_id)); load(); });
+         function (res) { openDoc(num(res.ver_id)); load(true); });
 });
 
 /* ══════════════════════ 列印 ══════════════════════ */
@@ -1255,8 +1413,22 @@ function setPane(which) {
     return setPaneTpl(0);
 }
 
+/** 下拉的共用產生器（key=>label 的物件） */
+function selOpts(id, map, sel, blank) {
+    var h = '<select id="' + id + '" data-eg-skip>';
+    if (blank) h += '<option value="0">' + esc(blank) + '</option>';
+    $.each(map, function (k, lab) {
+        h += '<option value="' + esc(k) + '"' + (String(k) === String(sel) ? ' selected' : '') + '>' + esc(lab) + '</option>';
+    });
+    return h + '</select>';
+}
+
 function setPaneBase() {
     var res = SET;
+    // 部門與職稱做成 id=>名稱，簽核人設定的四個下拉共用
+    var deptMap = {}, posMap = {};
+    $.each(res.departments || [], function (i, d) { if (num(d.level) >= 3) deptMap[num(d.id)] = d.name; });
+    $.each(res.positions || [], function (i, p) { posMap[num(p.id)] = p.name; });
     var h = '<div class="note-box">這裡設定的是<b>全站共用</b>的：自動簽核、各關預設簽核人、圖章模板、'
           + 'AS 文件編號綁定與上班時段。上班時段只用來判定「請整天假」——請假涵蓋整個上班時段才算整天。</div>';
     h += '<div class="frm" style="margin-bottom:10px;">'
@@ -1281,10 +1453,26 @@ function setPaneBase() {
            + '<label>自動簽核</label><div class="wide"><label style="font-weight:normal;text-align:left;">'
            + '<input type="checkbox" class="st-auto" data-kind="' + k + '"' + (num(cfg.auto_sign) ? ' checked' : '')
            + '> 送出時自動完成審核與核准</label></div>';
+        // 列印紙張（逐版面的預設；綁機台／量具的一律 A4 直式，不吃這裡的設定）
+        var pp = cfg.paper || {};
+        h += '<label>列印紙張</label><div class="wide">'
+           + selOpts('stPaper_' + k, res.papers || {}, pp.size || 'A3')
+           + ' ' + selOpts('stOrient_' + k, res.orients || {}, pp.orient || 'landscape')
+           + '<span class="muted-help">　綁機台或量具的一律 A4 直式，綁料號的預設 A3 橫式。</span></div>';
+        // 簽核人改設「部門＋職稱」，不設人（補歷史單據時那個人可能還沒到職、之後也可能離職）
         $.each(SS_SLOTS, function (slot, sd) {
             if (slot === 'maker') return;
-            h += '<label>' + esc(sd.label) + '預設人</label><div class="wide">'
-               + peopleSel('stSg_' + k + '_' + slot, res.people || [], num((cfg.signers || {})[slot])) + '</div>';
+            var sc = (cfg.signer_cfg || {})[slot] || {};
+            h += '<label>' + esc(sd.label) + '</label><div class="wide sgcfg" data-kind="' + k + '" data-slot="' + slot + '">'
+               + selOpts('sgD_' + k + '_' + slot, deptMap, num(sc.dept_id), '（不限部門）')
+               + ' ' + selOpts('sgP_' + k + '_' + slot, posMap, num(sc.position_id), '（不限職稱）')
+               + '<br><span class="muted-help">代理：</span> '
+               + selOpts('sgDD_' + k + '_' + slot, deptMap, num(sc.dep_dept_id), '（不設代理）')
+               + ' ' + selOpts('sgPP_' + k + '_' + slot, posMap, num(sc.dep_position_id), '（不限職稱）')
+               + '<div class="muted-help">今天會解析到：<b>' + esc(sc.preview_name || '（找不到人）') + '</b>'
+               + '（' + esc(sc.preview_why || '') + '）'
+               + (num(sc.legacy_user_id) ? '　※ 這一關還是舊的「指定人員」設定，改成部門＋職稱後才會依日期解析' : '')
+               + '</div></div>';
         });
         h += '</div></div>';
     });
@@ -1328,6 +1516,13 @@ function setPaneOwner() {
     h += '<div class="frm" style="margin-top:8px;"><label>自建項目</label><div class="wide">'
        + '<textarea id="mtExtra" style="min-height:70px;">' + esc(((res.methods || {}).extra || []).join('\n')) + '</textarea>'
        + '<div class="muted-help">一行一個。</div></div></div>';
+    // 標準檢驗指導書左下角那塊固定的「注意事項」——每一份都一樣，所以設定一次就好
+    h += '<div class="note-box" style="margin-top:10px;">'
+       + '<b>標準檢驗指導書的「注意事項」</b>印在左下角圖面下方，每一份都一樣，所以在這裡設一次就好。'
+       + '個別文件如果自己填了注意事項，就以那一份自己填的為準。</div>'
+       + '<div class="frm"><label>注意事項</label><div class="wide">'
+       + '<textarea id="sipNotice" style="min-height:96px;">' + esc(res.sip_notice_default || '') + '</textarea>'
+       + '<div class="muted-help">一行一條，列印時自動編號。留空會用系統內建的那五條。</div></div></div>';
     $('#setPane').html(h);
 }
 
@@ -1472,9 +1667,15 @@ $('#setSave').on('click', function () {
         $.each(SS_SLOTS, function (k) { p['stamp_' + k] = num($('#stTpl_' + k).val()); });
         $.each(SS_KINDS, function (k) {
             p['auto_' + k] = $('.st-auto[data-kind="' + k + '"]').is(':checked') ? 1 : 0;
+            p['paper_' + k] = JSON.stringify({ size: $('#stPaper_' + k).val(), orient: $('#stOrient_' + k).val() });
             $.each(SS_SLOTS, function (slot) {
                 if (slot === 'maker') return;
-                p['signer_' + k + '_' + slot] = num($('#stSg_' + k + '_' + slot).val());
+                p['signercfg_' + k + '_' + slot] = JSON.stringify({
+                    dept_id: num($('#sgD_' + k + '_' + slot).val()),
+                    position_id: num($('#sgP_' + k + '_' + slot).val()),
+                    dep_dept_id: num($('#sgDD_' + k + '_' + slot).val()),
+                    dep_position_id: num($('#sgPP_' + k + '_' + slot).val())
+                });
             });
         });
     }
@@ -1490,6 +1691,7 @@ $('#setSave').on('click', function () {
         $('.mt-chk:checked').each(function () { tt.push(num($(this).val())); });
         p.method_tool_types = JSON.stringify(tt);
         p.method_extra = JSON.stringify(($('#mtExtra').val() || '').split('\n'));
+        p.sip_notice_default = $('#sipNotice').val() || '';
     }
     if (!Object.keys(p).length) { alert('「檢驗項目預設值」請用該分頁裡的「儲存這一組」。'); return; }
     post('settings_save', p, function () { alert('已儲存'); });

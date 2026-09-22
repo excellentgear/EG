@@ -40,6 +40,9 @@ $KINDS = ss_kinds();
 $SCOPES = ss_scopes();
 $SLOTS = ss_slots();
 $STATUSES = ss_statuses();
+// 每個版面允許哪些適用範圍，一律由 ss_kind_scopes() 決定；前端不要再寫死一份
+$KIND_SCOPES = [];
+foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -168,6 +171,11 @@ $STATUSES = ss_statuses();
         .tpick { display:flex; flex-wrap:wrap; gap:6px; }
         .tpick button { font-size:12.5px; }
         .tpick .on { background:var(--amber-d); color:#fff; border-color:var(--amber-d); }
+        /* 段落附件放的不是圖片時（Word／Excel／PDF）不要擺一個破圖 */
+        .secfile .nofile { display:block; padding:14px 0; color:#9A8A7A; text-decoration:none; font-size:11.5px; }
+        .secfile .nofile:hover { color:var(--amber-d); }
+        /* 簽核人設定：部門＋職稱兩個下拉並排 */
+        .sgcfg select { max-width:150px; display:inline-block; }
         .help-doc { font-size:13px; color:#5b3a1e; line-height:1.75; }
         .help-doc h4 { color:#8A5A2B; border-bottom:2px solid var(--sand); padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
     </style>
@@ -270,6 +278,14 @@ $STATUSES = ss_statuses();
             </div>
             <label class="mrow">機器編號</label>
             <div class="wide mrow"><div id="nMachines" class="pickbox muted-help">先選機台型號。</div></div>
+
+            <!-- 量具（檢驗設備一覽表）：設備操作說明書的第二種綁法 -->
+            <label class="trow">量具 *</label>
+            <div class="wide ac-wrap trow">
+                <input type="text" id="nTool" data-eg-hint="打量具編號（A-040-Q）或種類（盤式分厘卡）">
+                <input type="hidden" id="nToolId">
+                <div class="muted-help">清單就是「檢驗設備一覽表」裡還在用的量具。</div>
+            </div>
 
             <!-- 料號 -->
             <label id="nPartLab" class="prow">料號 *</label>
@@ -380,6 +396,9 @@ $STATUSES = ss_statuses();
             <li><b>客戶綁了料號就由料號主檔自動帶入</b>，不可手打（同一個料號文字常常分屬好幾家客戶）；
                 只有通用型文件可以自己挑客戶。</li>
             <li>製令單號與數量已取消，紙本上那兩格不再印。</li>
+            <li>設備操作說明書除了機台，也可以綁<b>「檢驗設備一覽表」裡的量具</b>
+                （機器製造商／名稱／規格會由量具主檔自動帶入）。</li>
+            <li><b>綁料號的文件一定要帶一張圖面才送得出去</b>；存檔時可以先不放，送簽前補上就好。</li>
         </ul>
         <h4>檢驗項目的預設值</h4>
         <ul>
@@ -399,6 +418,31 @@ $STATUSES = ss_statuses();
                 上傳後畫面立刻出現縮圖，<b>列印時接在該段文字下方</b>。</li>
             <li>圖面與附件圖都可以左轉／右轉。<b>旋轉只影響這份文件的畫面與列印，不會動到原始檔案</b>
                 ——帶進來的圖面多半是料號附件，那張圖在料號主檔與圖面查閱仍然是原來的方向。</li>
+        </ul>
+        <h4>列印</h4>
+        <ul>
+            <li>按「列印」會<b>直接跳出瀏覽器的列印預覽</b>，不必再按一次；印完（或取消）那個分頁會自己關掉。</li>
+            <li>紙張預設：<b>綁機台或量具＝A4 直式</b>，<b>綁料號＝A3 橫式</b>（左邊要放圖面，直式塞不下）。
+                逐份文件可以在表頭自己改，管理員也可以在「設定」裡改每個版面的預設。</li>
+            <li>頁尾右下角是綁定的 AS 編號（<b>版次依表單日期回推當時生效的版次</b>），每一頁都會印。</li>
+            <li>標準檢驗指導書照紙本排：左邊圖面、圖面下方是固定的「注意事項」（在設定裡維護，
+                這一份自己填了就以自己的為準）、右邊是檢驗項目，尺寸類的品質特性印成上限／下限兩列，
+                <b>填幾列就印幾列</b>。</li>
+        </ul>
+        <h4>簽核人怎麼決定</h4>
+        <ul>
+            <li>自動簽核的審核與核准<b>設的是「部門＋職稱」不是某一個人</b>——設人的話，補歷史單據時
+                那個人可能還沒到職，之後也可能已經離職。系統會依<b>簽章日期當時</b>的職務去找人。</li>
+            <li>每一關都可以再設<b>一組代理部門職稱</b>：正選那個部門職稱當天找不到人時才會用代理。
+                兩邊都找不到就停在那一關等人工簽，<b>不會亂猜人</b>。</li>
+            <li>設定頁會直接顯示「今天會解析到誰」，設完可以馬上確認有沒有設對。</li>
+        </ul>
+        <h4>核准之後還能做什麼</h4>
+        <ul>
+            <li>管理員可以<b>在核准後補附件</b>（內容仍然不可以改，要改請建立新版次）。</li>
+            <li><b>「取消自動核准（退回草稿）」只會出現在整份都是自動簽核的版次上</b>——
+                人工一格一格蓋過的章退回等於抹掉別人的決定，所以那種不給退。</li>
+            <li>管理員也可以改文件的<b>綁定對象與適用範圍</b>（自動建立的可能綁錯，不必刪掉重建）。</li>
         </ul>
         <h4>刪除</h4>
         <p>管理員可以刪除任何一份文件；一般使用者<b>只能刪除自己建立、而且一個版次都還沒核准過的</b>。
@@ -437,6 +481,7 @@ var SS_KINDS = <?= json_encode($KINDS, JSON_UNESCAPED_UNICODE) ?>;
 var SS_SCOPES = <?= json_encode($SCOPES, JSON_UNESCAPED_UNICODE) ?>;
 var SS_SLOTS = <?= json_encode($SLOTS, JSON_UNESCAPED_UNICODE) ?>;
 var SS_STATUSES = <?= json_encode($STATUSES, JSON_UNESCAPED_UNICODE) ?>;
+var SS_KIND_SCOPES = <?= json_encode($KIND_SCOPES, JSON_UNESCAPED_UNICODE) ?>;
 var SS_TODAY = '<?= date('Y-m-d') ?>';
 </script>
 <script src="sop_sip_ui.js?v=<?= @filemtime(__DIR__ . '/sop_sip_ui.js') ?>"></script>

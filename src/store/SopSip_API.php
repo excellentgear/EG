@@ -122,6 +122,7 @@ case 'bind_probe': {
         'machine_model' => (string)($_GET['machine_model'] ?? ''),
         'machine_id'    => (int)($_GET['machine_id'] ?? 0),
         'part_d_id'     => (int)($_GET['part_d_id'] ?? 0),
+        'tool_id'       => (int)($_GET['tool_id'] ?? 0),
         'process_no'    => (int)($_GET['process_no'] ?? 0),
     ];
     $out = [
@@ -179,6 +180,15 @@ case 'detail': {
     $full['can_sign'] = ss_perm_for_kind($P, $kind, 'sign');
     $full['next_slot'] = ss_next_slot($db, $verId);
     $full['draw_candidates'] = ss_part_draw_candidates($db, (int)($full['doc']['part_d_id'] ?? 0));
+    // 管理員可以在核准之後補附件（使用者 2026-09-22 要求），但仍然不可以改內容
+    $full['can_attach'] = (ss_perm_for_kind($P, $kind, 'edit')
+                           && ((string)$full['ver']['status'] === 'draft' || !empty($P['canAdmin']))) ? 1 : 0;
+    // 只有「整份都是自動簽核」的才給退回草稿——人工蓋過的章退回等於抹掉別人的決定
+    $full['can_unsubmit'] = (!empty($P['canAdmin']) && (string)$full['ver']['status'] !== 'draft'
+                             && ss_all_auto_signed($db, $verId)) ? 1 : 0;
+    $full['paper']   = ss_paper($db, $full['doc'], $full['ver']);
+    $full['papers']  = ss_papers();
+    $full['orients'] = ss_orients();
     [$delOk, $delWhy] = ss_can_delete_doc($db, $full['doc'], $uid, $P);
     $full['can_delete'] = $delOk ? 1 : 0;
     $full['del_why']    = $delWhy;
@@ -204,6 +214,10 @@ case 'search_part':
 
 case 'search_machine':
     jout(true, ['rows' => ss_search_machine($db, (string)($_GET['kw'] ?? ''))]);
+
+/** 量具（檢驗設備一覽表）——設備操作說明書除了機台也能綁它 */
+case 'search_tool':
+    jout(true, ['rows' => ss_search_tool($db, (string)($_GET['kw'] ?? ''))]);
 
 case 'draw_candidates':
     jout(true, ['rows' => ss_part_draw_candidates($db, (int)($_GET['part_d_id'] ?? 0))]);
@@ -322,6 +336,24 @@ case 'sign_clear': {
     jout(true, ['next_slot' => ss_next_slot($db, $verId)]);
 }
 
+/**
+ * 取消自動核准，退回「尚未送審」。使用者 2026-09-22 指定：**只針對自動核准的部分**——
+ * 人工一格一格蓋過的章退回等於把別人的決定抹掉，所以 ss_all_auto_signed() 不成立就擋下。
+ */
+case 'unsubmit': {
+    $verId = (int)($_POST['ver_id'] ?? 0);
+    [$kind, $v, $d] = $kindOfVer($verId);
+    $needAdmin();
+    if ((string)$v['status'] === 'draft') jerr('這個版次本來就是草稿');
+    if (!ss_all_auto_signed($db, $verId)) {
+        jerr('這一版有人工蓋過的簽章，不可以退回。只有「送出時自動完成審核與核准」的那種才退得回來。');
+    }
+    $db->beginTransaction();
+    try { ss_unsubmit($db, $verId, $uid); $db->commit(); }
+    catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
+    jout(true, []);
+}
+
 case 'ver_obsolete': {
     $verId = (int)($_POST['ver_id'] ?? 0);
     [$kind] = $kindOfVer($verId);
@@ -348,6 +380,13 @@ case 'file_upload': {
     $d = ss_doc_get($db, $docId);
     if (!$d) jerr('找不到這份文件');
     $needEdit((string)$d['kind']);
+    /* 核准之後只有管理員可以補附件（使用者 2026-09-22 要求）。
+       內容仍然不可以改——ss_ver_save() 對非草稿一律擋下，這裡放行的只有「加檔案」。 */
+    $vv = ss_ver_get($db, (int)($_POST['ver_id'] ?? 0));
+    if ($vv && (string)$vv['status'] !== 'draft' && empty($P['canAdmin'])) {
+        http_response_code(403);
+        jerr('這一版已經送簽或核准了，只有管理員可以補附件');
+    }
     $usage = (string)($_POST['usage'] ?? 'other');
     if (!in_array($usage, ['draw', 'step', 'scan', 'other', 'sec'], true)) jerr('檔案用途代碼不正確');
     // sec＝掛在某一個段落（操作方法／使用注意事項…）底下的說明圖，段落代碼要在登記表上
@@ -499,8 +538,23 @@ case 'tpl_save': {
 case 'settings_get': {
     $out = ['work_start' => ss_work_window($db)[0], 'work_end' => ss_work_window($db)[1], 'kinds' => []];
     foreach (ss_kinds() as $k => $def) {
-        $row = ['auto_sign' => ss_auto_sign_on($db, $k) ? 1 : 0, 'signers' => []];
-        foreach (array_keys(ss_slots()) as $slot) $row['signers'][$slot] = ss_default_signer($db, $k, $slot);
+        $row = ['auto_sign' => ss_auto_sign_on($db, $k) ? 1 : 0, 'signers' => [], 'signer_cfg' => []];
+        foreach (array_keys(ss_slots()) as $slot) {
+            $row['signers'][$slot] = ss_default_signer($db, $k, $slot);
+            // 簽核人改成設「部門＋職稱」＋一位代理（使用者 2026-09-22 指定，不再設固定人員）
+            $c = ss_signer_cfg($db, $k, $slot);
+            [$who, $why] = ss_resolve_signer($db, $k, $slot, date('Y-m-d'));
+            $c['preview_id']  = $who;
+            $c['preview_why'] = $why;
+            $c['preview_name'] = '';
+            if ($who > 0) {
+                $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?");
+                $q->execute([$who]);
+                $c['preview_name'] = (string)($q->fetchColumn() ?: '');
+            }
+            $row['signer_cfg'][$slot] = $c;
+        }
+        $row['paper'] = ss_setting_get($db, 'paper_' . $k, null) ?: ss_paper($db, ['kind' => $k, 'scope' => 'general']);
         $doc = eg_asdoc_get($db, $def['module']);
         $row['as_doc_id'] = $doc ? (int)$doc['id'] : 0;
         $row['as_no']     = $doc ? eg_asdoc_no($doc) : '';
@@ -523,6 +577,14 @@ case 'settings_get': {
     } catch (Throwable $e) { $out['departments'] = []; }
     $out['methods']    = ss_method_options($db);
     $out['tool_types'] = ss_tool_types($db);
+    try {
+        $out['positions'] = $db->query("SELECT id, name FROM position ORDER BY COALESCE(sort_order,999), id")
+                               ->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { $out['positions'] = []; }
+    $out['papers']  = ss_papers();
+    $out['orients'] = ss_orients();
+    // 標準檢驗指導書左下角那塊固定的「注意事項」（每一份都一樣，所以放設定不是逐份打）
+    $out['sip_notice_default'] = (string)ss_setting_get($db, 'sip_notice_default', '');
     jout(true, $out);
 }
 
@@ -546,6 +608,39 @@ case 'settings_save': {
                 if (!$st->fetchColumn()) jerr('指定的簽核人員不存在或已離職');
             }
             ss_setting_set($db, $f, $sid);
+        }
+    }
+    // 簽核人：部門＋職稱＋一位代理（不存 user_id）
+    foreach (ss_kinds() as $k => $def) {
+        foreach (array_keys(ss_slots()) as $slot) {
+            $f = 'signercfg_' . $k . '_' . $slot;
+            if (!array_key_exists($f, $_POST)) continue;
+            $c = json_decode((string)$_POST[$f], true);
+            if (!is_array($c)) jerr('簽核人設定格式不正確');
+            foreach (['dept_id' => '部門', 'dep_dept_id' => '代理部門'] as $key => $lab) {
+                $v = (int)($c[$key] ?? 0);
+                if ($v <= 0) continue;
+                $st = $db->prepare("SELECT 1 FROM department WHERE id=?");
+                $st->execute([$v]);
+                if (!$st->fetchColumn()) jerr($lab . '不存在（id ' . $v . '）');
+            }
+            foreach (['position_id' => '職稱', 'dep_position_id' => '代理職稱'] as $key => $lab) {
+                $v = (int)($c[$key] ?? 0);
+                if ($v <= 0) continue;
+                $st = $db->prepare("SELECT 1 FROM position WHERE id=?");
+                $st->execute([$v]);
+                if (!$st->fetchColumn()) jerr($lab . '不存在（id ' . $v . '）');
+            }
+            ss_signer_cfg_set($db, $k, $slot, $c);
+        }
+        // 列印紙張與方向（逐版面）
+        $f = 'paper_' . $k;
+        if (array_key_exists($f, $_POST)) {
+            $c = json_decode((string)$_POST[$f], true);
+            $size = strtoupper((string)($c['size'] ?? ''));
+            $ori  = strtolower((string)($c['orient'] ?? ''));
+            if (!isset(ss_papers()[$size]) || !isset(ss_orients()[$ori])) jerr('紙張大小或方向不正確');
+            ss_setting_set($db, $f, ['size' => $size, 'orient' => $ori]);
         }
     }
     foreach (array_keys(ss_slots()) as $slot) {
@@ -591,6 +686,11 @@ case 'settings_save': {
             $ids[] = $id;
         }
         ss_setting_set($db, 'method_tool_types', array_values(array_unique($ids)));
+    }
+    if (array_key_exists('sip_notice_default', $_POST)) {
+        $t = trim((string)$_POST['sip_notice_default']);
+        if (mb_strlen($t) > 2000) jerr('注意事項最多 2000 個字');
+        ss_setting_set($db, 'sip_notice_default', $t);
     }
     if (array_key_exists('method_extra', $_POST)) {
         $ex = [];

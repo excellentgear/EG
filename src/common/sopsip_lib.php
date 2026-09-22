@@ -45,13 +45,14 @@ function ss_kinds(): array
 /** 適用範圍 */
 function ss_scopes(): array
 {
-    return ['machine' => '機台', 'general' => '通用', 'part' => '特定料號'];
+    return ['machine' => '機台', 'tool' => '量具／檢驗設備', 'general' => '通用', 'part' => '特定料號'];
 }
 
 /** 每個版面允許哪些適用範圍：機台 SOP 只能綁機台，其餘可通用或綁料號 */
 function ss_kind_scopes(string $kind): array
 {
-    return $kind === 'equip' ? ['machine'] : ['general', 'part'];
+    // 設備操作說明書除了機台，也要能綁「檢驗設備一覽表」裡的量具（使用者 2026-09-22 要求）
+    return $kind === 'equip' ? ['machine', 'tool'] : ['general', 'part'];
 }
 
 /**
@@ -227,6 +228,9 @@ function ss_ensure_schema(PDO $db): void
             modified_at DATETIME NULL, modified_by INT NULL
         ) DEFAULT CHARSET=utf8mb4 COMMENT='製程的檢驗項目代入設定'");
 
+        ss_ensure_col($db, 'ss_doc', 'tool_id', "INT NULL COMMENT '綁 qc_tool.Tool_id（檢驗設備一覽表的量具）'");
+        ss_ensure_col($db, 'ss_ver', 'paper', "VARCHAR(4) NULL COMMENT '列印紙張 A4/A3，空＝用預設'");
+        ss_ensure_col($db, 'ss_ver', 'orient', "VARCHAR(10) NULL COMMENT '列印方向 portrait/landscape，空＝用預設'");
         ss_ensure_col($db, 'ss_doc', 'process_no', "INT NULL COMMENT '綁定製程 process_no.ProcessNo（工程名稱就是它）'");
         ss_ensure_col($db, 'ss_doc', 'machine_model', "VARCHAR(100) NULL COMMENT '設備SOP綁的機台型號'");
         ss_ensure_col($db, 'ss_doc', 'customer_id', "VARCHAR(20) NULL COMMENT '客戶（綁料號時由料號主檔帶入）'");
@@ -580,7 +584,7 @@ function ss_ver_full(PDO $db, int $verId): ?array
         $it['owner_label'] = ss_owner_label($db, (int)($it['owner_dept_id'] ?? 0), (string)($it['owner'] ?? ''));
     }
     unset($it);
-    $meta = $kind === 'equip' ? ss_machine_meta($db, $d) : null;
+    $meta = $kind === 'equip' ? ss_equip_meta($db, $d) : null;
     return [
         'doc'   => $d,
         'ver'   => $v,
@@ -742,7 +746,7 @@ function ss_ver_fields(): array
        客戶改由 ss_doc 決定（綁料號時自動帶、通用型才可自己挑），所以也不在這裡寫。
        機器那四欄**維持可寫**：實測匯入的紙本比 machine_list 完整（製造商 KAPP NILES／LUREN
        在主檔多半是空的），強制改成唯讀會把紙本上的資料洗掉；改成「建立時自動代入、之後仍可改」。 */
-    return ['ver_no', 'form_date', 'rev_note',
+    return ['ver_no', 'form_date', 'rev_note', 'paper', 'orient',
             'm_maker', 'm_name', 'm_spec', 'm_range', 'op_method', 'cautions', 'maintain',
             'use_equip', 'est_hours', 'notice', 'draw_file_id', 'as_doc_id'];
 }
@@ -762,9 +766,12 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
         throw new RuntimeException(ss_kinds()[$kind]['label'] . ' 不適用「' . (ss_scopes()[$scope] ?? $scope) . '」這個適用範圍');
     }
 
-    $machineId = 0; $partDId = 0; $partNo = null; $model = null;
+    $machineId = 0; $partDId = 0; $partNo = null; $model = null; $toolId = 0;
     $machineIds = [];
-    if ($scope === 'machine') {
+    if ($scope === 'tool') {
+        $toolId = (int)($in['tool_id'] ?? 0);
+        if (!ss_tool_row($db, $toolId)) throw new RuntimeException('請選擇量具（在檢驗設備一覽表裡找不到這一支）');
+    } elseif ($scope === 'machine') {
         // 綁的是**型號**（同型號好幾台共用一份 SOP），機器編號是底下的一對多明細
         $model = trim((string)($in['machine_model'] ?? ''));
         $machineIds = $in['machine_ids'] ?? [];
@@ -817,7 +824,8 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
     $title = trim((string)($in['title'] ?? ''));
     if ($title === '') {
         $title = ss_auto_title($db, $kind, $scope, [
-            'process_no' => $procNo, 'machine_model' => $model, 'machine_id' => $machineId, 'part_d_id' => $partDId,
+            'process_no' => $procNo, 'machine_model' => $model, 'machine_id' => $machineId,
+            'part_d_id' => $partDId, 'tool_id' => $toolId,
         ]);
     }
     if ($title === '') throw new RuntimeException('請填寫文件名稱');
@@ -831,10 +839,12 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
         $keyChanged = !$old || (string)($old['scope'] ?? '') !== $scope
             || trim((string)($old['machine_model'] ?? '')) !== (string)$model
             || (int)($old['part_d_id'] ?? 0) !== $partDId
+            || (int)($old['tool_id'] ?? 0) !== $toolId
             || (int)($old['process_no'] ?? 0) !== $procNo;
     }
     $dup = $keyChanged ? ss_dup_find($db, $kind, $scope, [
-        'machine_model' => $model, 'machine_id' => $machineId, 'part_d_id' => $partDId, 'process_no' => $procNo,
+        'machine_model' => $model, 'machine_id' => $machineId, 'part_d_id' => $partDId,
+        'tool_id' => $toolId, 'process_no' => $procNo,
     ], $docId) : [];
     if ($dup && empty($in['_dup_ok'])) {
         $d0 = $dup[0];
@@ -845,18 +855,18 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
 
     if ($docId > 0) {
         if (!ss_doc_get($db, $docId)) throw new RuntimeException('找不到這份文件');
-        $st = $db->prepare("UPDATE ss_doc SET scope=?, machine_id=?, machine_model=?, part_d_id=?, part_no_text=?,
+        $st = $db->prepare("UPDATE ss_doc SET scope=?, machine_id=?, machine_model=?, tool_id=?, part_d_id=?, part_no_text=?,
                                 title=?, process_no=?, proc_name=?, customer_id=?, customer_name=?,
                                 modified_at=NOW(), modified_by=? WHERE doc_id=?");
-        $st->execute([$scope, $machineId ?: null, $model ?: null, $partDId ?: null, $partNo, $title,
+        $st->execute([$scope, $machineId ?: null, $model ?: null, $toolId ?: null, $partDId ?: null, $partNo, $title,
                       $procNo ?: null, $procNm, $cusId, $cusNm, $uid, $docId]);
         if ($scope === 'machine' && array_key_exists('machine_ids', $in)) ss_doc_machines_set($db, $docId, $machineIds);
         return $docId;
     }
-    $st = $db->prepare("INSERT INTO ss_doc (kind, scope, machine_id, machine_model, part_d_id, part_no_text, title,
+    $st = $db->prepare("INSERT INTO ss_doc (kind, scope, machine_id, machine_model, tool_id, part_d_id, part_no_text, title,
                             process_no, proc_name, customer_id, customer_name, created_at, created_by, created_by_name)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?)");
-    $st->execute([$kind, $scope, $machineId ?: null, $model ?: null, $partDId ?: null, $partNo, $title,
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?)");
+    $st->execute([$kind, $scope, $machineId ?: null, $model ?: null, $toolId ?: null, $partDId ?: null, $partNo, $title,
                   $procNo ?: null, $procNm, $cusId, $cusNm, $uid, $uname]);
     $newId = (int)$db->lastInsertId();
     if ($scope === 'machine') ss_doc_machines_set($db, $newId, $machineIds);
@@ -911,7 +921,7 @@ function ss_ver_create(PDO $db, int $docId, array $in, int $uid): int
     $doc = ss_doc_get($db, $docId);
     // 設備操作說明書：機台那四欄建立當下就由機台主檔帶進來（使用者要求），之後仍可自己改
     if ($doc && (string)$doc['kind'] === 'equip') {
-        $meta = ss_machine_meta($db, $doc);
+        $meta = ss_equip_meta($db, $doc);
         foreach (['m_maker', 'm_name', 'm_spec', 'm_range'] as $k) {
             if (!array_key_exists($k, $in) && ($meta[$k] ?? '') !== '') $in[$k] = $meta[$k];
         }
@@ -1050,6 +1060,11 @@ function ss_submit_check(PDO $db, int $verId): array
     } else {
         if (!$hasScan && !$full['items']) $bad[] = '至少一列檢驗項目（或上傳紙本掃描檔）';
     }
+    /* 綁料號的一律要有圖面才送得出去（使用者 2026-09-22 指定：圖面是送簽前的必填欄位，
+       但**存檔時可以先不放**——所以只在這裡擋，不在 ss_ver_save 擋）。 */
+    if ((string)$d['scope'] === 'part' && !$hasScan && (int)($v['draw_file_id'] ?? 0) <= 0) {
+        $bad[] = '圖面（綁料號的文件一定要帶一張圖才送得出去）';
+    }
     return $bad;
 }
 
@@ -1074,14 +1089,26 @@ function ss_submit(PDO $db, int $verId, int $uid, array $opt = []): array
     $signDate = trim((string)($opt['sign_date'] ?? '')) ?: $formDate;
 
     $makerId = (int)($opt['maker_id'] ?? 0) ?: $uid;
-    ss_sign_set($db, $verId, 'maker', $makerId, $signDate, !empty($opt['auto']));
+    try {
+        ss_sign_set($db, $verId, 'maker', $makerId, $signDate, !empty($opt['auto']));
+    } catch (RuntimeException $e) {
+        /* 最常見的是「用超級管理員（特殊帳號）按送出」——它不是真的員工，不可以列為簽核人。
+           原本的訊息只說「當時不在職」，看不出該怎麼辦，所以在這裡講清楚要指定製表人。 */
+        if ($makerId === $uid) {
+            throw new RuntimeException('你的帳號不能列為製表人（' . $e->getMessage() . '）。'
+                . '請在送簽視窗的「製表（填表人）」挑一位當時在職的人員。');
+        }
+        throw $e;
+    }
     $db->prepare("UPDATE ss_ver SET status='submitted' WHERE ver_id=?")->execute([$verId]);
 
     $done = ['maker'];
     if (!empty($opt['auto']) || ss_auto_sign_on($db, $kind)) {
         foreach (['review', 'approve'] as $slot) {
-            $sid = (int)($opt[$slot . '_id'] ?? 0) ?: ss_default_signer($db, $kind, $slot);
-            if ($sid <= 0) break;                       // 沒設定預設簽核人就停在這一關，不亂猜人
+            $sid = (int)($opt[$slot . '_id'] ?? 0);
+            // 沒指定人就依「部門＋職稱」以**簽章日期當時**的職務解析（找不到再用代理）
+            if ($sid <= 0) [$sid, ] = ss_resolve_signer($db, $kind, $slot, $signDate);
+            if ($sid <= 0) break;                       // 兩邊都找不到就停在這一關，不亂猜人
             ss_sign_set($db, $verId, $slot, $sid, $signDate, true);
             $done[] = $slot;
         }
@@ -1137,9 +1164,10 @@ function ss_list(PDO $db, array $f): array
             $w[] = "(d.title LIKE ? OR d.part_no_text LIKE ? OR d.proc_name LIKE ? OR v.ver_no LIKE ?
                      OR d.customer_name LIKE ? OR v.customer_name LIKE ? OR v.m_name LIKE ? OR v.use_equip LIKE ?
                      OR d.machine_model LIKE ? OR m.asset_no LIKE ? OR m.field_no LIKE ? OR m.machine LIKE ?
+                     OR EXISTS (SELECT 1 FROM qc_tool qt WHERE qt.Tool_id=d.tool_id AND qt.Tool_No LIKE ?)
                      OR EXISTS (SELECT 1 FROM ss_doc_machine dm JOIN machine_list m2 ON m2.machine_id=dm.machine_id
                                 WHERE dm.doc_id=d.doc_id AND (m2.asset_no LIKE ? OR m2.field_no LIKE ?)))";
-            for ($i = 0; $i < 14; $i++) $p[] = '%' . $word . '%';
+            for ($i = 0; $i < 15; $i++) $p[] = '%' . $word . '%';
         }
     }
 
@@ -1175,7 +1203,12 @@ function ss_list(PDO $db, array $f): array
         }
         // 設備操作說明書：機器編號是一對多，清單上要看得到這份文件涵蓋哪幾台
         $r['asset_text'] = (string)($r['asset_no'] ?? '');
-        if ((string)$r['kind'] === 'equip') {
+        if ((string)$r['scope'] === 'tool') {
+            $t = ss_tool_row($db, (int)($r['tool_id'] ?? 0));
+            $r['asset_text'] = (string)($t['tool_no'] ?? '');
+            $r['tool_type']  = (string)($t['tool_type'] ?? '');
+        }
+        if ((string)$r['kind'] === 'equip' && (string)$r['scope'] === 'machine') {
             $ms = ss_doc_machines($db, (int)$r['doc_id']);
             if ($ms) {
                 $t = [];
@@ -1561,6 +1594,11 @@ function ss_auto_title(PDO $db, string $kind, string $scope, array $in): string
     $pno  = (int)($in['process_no'] ?? 0);
     if ($pno > 0) { $r = ss_proc_row($db, $pno); $proc = (string)($r['process_name'] ?? ''); }
 
+    if ($scope === 'tool') {
+        $t = ss_tool_row($db, (int)($in['tool_id'] ?? 0));
+        if (!$t) return '';
+        return trim(((string)$t['tool_type'] !== '' ? $t['tool_type'] . ' ' : '') . (string)$t['tool_no']);
+    }
     if ($kind === 'equip') {
         $model = trim((string)($in['machine_model'] ?? ''));
         $name  = '';
@@ -1602,7 +1640,11 @@ function ss_dup_find(PDO $db, string $kind, string $scope, array $in, int $excep
     $w = ["d.is_deleted=0", "d.kind=?"];
     $p = [$kind];
 
-    if ($scope === 'machine') {
+    if ($scope === 'tool') {
+        $tid = (int)($in['tool_id'] ?? 0);
+        if ($tid <= 0) return [];
+        $w[] = "d.tool_id=?"; $p[] = $tid;
+    } elseif ($scope === 'machine') {
         $model = trim((string)($in['machine_model'] ?? ''));
         if ($model !== '')                             { $w[] = "d.machine_model=?"; $p[] = $model; }
         elseif ((int)($in['machine_id'] ?? 0) > 0)     { $w[] = "d.machine_id=?";    $p[] = (int)$in['machine_id']; }
@@ -1984,4 +2026,224 @@ function ss_tpl_suggest(PDO $db, string $kind, int $processNo = 0): array
         }
         return $rows;
     } catch (Throwable $e) { return []; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ *  2026-09-22 使用者交辦那一批
+ *  ① 設備操作說明書除了機台，也要能綁「檢驗設備一覽表」裡的量具
+ *  ② 列印紙張大小與方向可預先設定（機台／量具＝A4 直式，料號相關＝A3 橫式）
+ *  ③ 自動簽核改成設「部門＋職稱」不是設人——設人的話補歷史單據時那個人可能還沒到職，
+ *     之後也可能離職；職稱才是穩定的。另可各設一位「代理部門職稱」。
+ *  ④ 管理員可以在核准後補附件，或把「自動核准」的那幾張退回草稿
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* ────────────────────── 量具（檢驗設備一覽表） ────────────────────── */
+
+/** 一支量具（機器編號欄印 Tool_No，規格印 spec_desc） */
+function ss_tool_row(PDO $db, int $toolId): ?array
+{
+    if ($toolId <= 0) return null;
+    try {
+        $st = $db->prepare("SELECT t.Tool_id AS tool_id, t.Tool_No AS tool_no, t.manufacturer, t.spec_desc,
+                                   t.machine, t.machine_model, t.note, t.state,
+                                   l.QC_Tool AS tool_type, l.QC_Tool_List_id AS tool_type_id
+                            FROM qc_tool t
+                            LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id = t.QC_Tool_List_id
+                            WHERE t.Tool_id=?");
+        $st->execute([$toolId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return $r ?: null;
+    } catch (Throwable $e) { return null; }
+}
+
+/** 量具搜尋（編號、種類、製造商、規格都搜得到；停用的不列） */
+function ss_search_tool(PDO $db, string $kw, int $limit = 40): array
+{
+    $kw = trim($kw);
+    $w = ["(t.state IS NULL OR t.state<>0)"];
+    $p = [];
+    if ($kw !== '') {
+        $w[] = "(t.Tool_No LIKE ? OR l.QC_Tool LIKE ? OR t.manufacturer LIKE ? OR t.spec_desc LIKE ?)";
+        for ($i = 0; $i < 4; $i++) $p[] = '%' . $kw . '%';
+    }
+    try {
+        $st = $db->prepare("SELECT t.Tool_id AS tool_id, t.Tool_No AS tool_no, t.manufacturer, t.spec_desc,
+                                   l.QC_Tool AS tool_type
+                            FROM qc_tool t
+                            LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id = t.QC_Tool_List_id
+                            WHERE " . implode(' AND ', $w) . "
+                            ORDER BY t.Tool_No LIMIT $limit");
+        $st->execute($p);
+        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 設備操作說明書表頭那四格的來源（機台或量具，唯一實作）。
+ * 綁量具時：機器名稱＝量具種類、型式規格＝規格說明、機器編號＝量具編號。
+ */
+function ss_equip_meta(PDO $db, array $doc): array
+{
+    if ((string)($doc['scope'] ?? '') === 'tool') {
+        $t = ss_tool_row($db, (int)($doc['tool_id'] ?? 0));
+        return [
+            'machines'   => [],
+            'asset_text' => (string)($t['tool_no'] ?? ''),
+            'm_maker'    => (string)($t['manufacturer'] ?? ''),
+            'm_name'     => (string)($t['tool_type'] ?? ''),
+            'm_spec'     => (string)($t['spec_desc'] ?? $t['machine_model'] ?? ''),
+            'm_range'    => (string)($t['note'] ?? ''),
+        ];
+    }
+    return ss_machine_meta($db, $doc);
+}
+
+/* ────────────────────────── 列印紙張 ────────────────────────── */
+
+/** 可選的紙張與方向（唯一登記處） */
+function ss_papers(): array   { return ['A4' => 'A4', 'A3' => 'A3']; }
+function ss_orients(): array  { return ['portrait' => '直式', 'landscape' => '橫式']; }
+
+/**
+ * 這份文件要印在什麼紙上。使用者定的預設（2026-09-22）：
+ *   綁機台或量具 → A4 直式；**料號相關 → A3 橫式**（左邊要放圖面，直式塞不下）。
+ * 管理員可以逐版面覆寫（設定頁），逐份文件也可以自己指定（ss_ver.paper／orient）。
+ */
+function ss_paper(PDO $db, array $doc, array $ver = []): array
+{
+    $size = strtoupper(trim((string)($ver['paper'] ?? '')));
+    $ori  = strtolower(trim((string)($ver['orient'] ?? '')));
+    if (isset(ss_papers()[$size]) && isset(ss_orients()[$ori])) return ['size' => $size, 'orient' => $ori];
+
+    $kind  = (string)($doc['kind'] ?? '');
+    $scope = (string)($doc['scope'] ?? '');
+    $cfg   = ss_setting_get($db, 'paper_' . $kind, null);
+    if (is_array($cfg) && isset(ss_papers()[strtoupper((string)($cfg['size'] ?? ''))])
+        && isset(ss_orients()[strtolower((string)($cfg['orient'] ?? ''))])) {
+        // 版面層級的設定只有在「沒有更明確的規則」時才用——綁機台／量具一律 A4 直式
+        if ($scope !== 'machine' && $scope !== 'tool') {
+            return ['size' => strtoupper((string)$cfg['size']), 'orient' => strtolower((string)$cfg['orient'])];
+        }
+    }
+    if ($scope === 'machine' || $scope === 'tool') return ['size' => 'A4', 'orient' => 'portrait'];
+    return ['size' => 'A3', 'orient' => 'landscape'];
+}
+
+/** 紙張的可印寬度（mm）；邊界由 .sheet 自己給，這裡回的是整張紙的尺寸 */
+function ss_paper_mm(array $paper): array
+{
+    $w = $paper['size'] === 'A3' ? 297 : 210;
+    $h = $paper['size'] === 'A3' ? 420 : 297;
+    return $paper['orient'] === 'landscape' ? [$h, $w] : [$w, $h];
+}
+
+/* ──────────────── 簽核人：設部門＋職稱，不設人 ──────────────── */
+
+/**
+ * 某一關的簽核人設定。存的是 部門＋職稱（可留白＝不限），外加一組「代理」。
+ * **刻意不存 user_id**（使用者 2026-09-22 指定）：補歷史單據時那個人可能還沒到職，
+ * 之後也可能離職；職稱才是穩定的，人是會換的。
+ */
+function ss_signer_cfg(PDO $db, string $kind, string $slot): array
+{
+    $c = ss_setting_get($db, 'signercfg_' . $kind . '_' . $slot, null);
+    $out = ['dept_id' => 0, 'position_id' => 0, 'dep_dept_id' => 0, 'dep_position_id' => 0];
+    if (is_array($c)) foreach ($out as $k => $_) $out[$k] = (int)($c[$k] ?? 0);
+    if ($out['dept_id'] <= 0 && $out['position_id'] <= 0) {
+        // 舊設定是直接存 user_id 的，沒轉成部門職稱之前仍然要能用（不然設定會憑空消失）
+        $out['legacy_user_id'] = ss_default_signer($db, $kind, $slot);
+    } else {
+        $out['legacy_user_id'] = 0;
+    }
+    return $out;
+}
+
+function ss_signer_cfg_set(PDO $db, string $kind, string $slot, array $c): void
+{
+    ss_setting_set($db, 'signercfg_' . $kind . '_' . $slot, [
+        'dept_id'         => (int)($c['dept_id'] ?? 0),
+        'position_id'     => (int)($c['position_id'] ?? 0),
+        'dep_dept_id'     => (int)($c['dep_dept_id'] ?? 0),
+        'dep_position_id' => (int)($c['dep_position_id'] ?? 0),
+    ]);
+}
+
+/**
+ * 依「部門＋職稱」在某個日期找出可以簽的人。
+ * 一律以**簽章日期當時**的職務回推（ai-rules/22）——用現況清單的話，補歷史單據時
+ * 當時在職、現已離職的人一個都挑不到，而且完全不報錯。
+ * 同時排除當天請整天假的人（與手動簽章同一條規則）。
+ *
+ * @return array 候選人（一個職務一列），照職級排序
+ */
+function ss_people_by_post(PDO $db, int $deptId, int $positionId, string $date): array
+{
+    if ($deptId <= 0 && $positionId <= 0) return [];
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) $date = date('Y-m-d');
+    require_once __DIR__ . '/people_lib.php';
+    // 以「那一天」的職務回推（ai-rules/22）：當時在職、現已離職的人也要找得到，
+    // 不然補歷史單據時自動簽核會一個人都解析不到，而且完全不報錯。
+    $rows = eg_people_list_asof($db, ['all_posts' => true], $date);
+    $out = [];
+    foreach ($rows as $r) {
+        if ($positionId > 0 && (int)($r['position_id'] ?? 0) !== $positionId) continue;
+        if ($deptId > 0) {
+            $ids = is_array($r['dept_ids'] ?? null) ? array_map('intval', $r['dept_ids']) : [];
+            if ((int)($r['dept_id'] ?? 0) !== $deptId && !in_array($deptId, $ids, true)) continue;
+        }
+        $out[] = $r;
+    }
+    if (!$out) return [];
+    $block = ss_leave_allday_map($db, array_map(fn($r) => (int)$r['id'], $out), $date);
+    $ok = [];
+    foreach ($out as $r) if (empty($block[(int)$r['id']])) $ok[] = $r;
+    return $ok ?: $out;      // 全部都請假時仍回原名單，讓呼叫端自己決定要不要擋
+}
+
+/**
+ * 自動簽核要蓋誰的章：先用正選（部門＋職稱），找不到人才用代理。
+ * 兩個都找不到就回 0——**不亂猜人**，那一關停著等人工簽，比蓋錯人好。
+ *
+ * @return array [user_id, why] why 講清楚是正選還是代理、或為什麼找不到
+ */
+function ss_resolve_signer(PDO $db, string $kind, string $slot, string $date): array
+{
+    $c = ss_signer_cfg($db, $kind, $slot);
+    $rows = ss_people_by_post($db, (int)$c['dept_id'], (int)$c['position_id'], $date);
+    if ($rows) return [(int)$rows[0]['id'], '正選'];
+
+    $rows = ss_people_by_post($db, (int)$c['dep_dept_id'], (int)$c['dep_position_id'], $date);
+    if ($rows) return [(int)$rows[0]['id'], '代理'];
+
+    // 還沒改成部門職稱的舊設定
+    if ((int)($c['legacy_user_id'] ?? 0) > 0) return [(int)$c['legacy_user_id'], '舊設定（指定人員）'];
+    return [0, '這個日期找不到符合「部門＋職稱」的在職人員'];
+}
+
+/* ─────────── 取消自動核准：只退自動簽的，人工簽的不動 ─────────── */
+
+/**
+ * 這個版次是不是「整份都是自動簽核」的。
+ * 只有這種才給管理員退回草稿——人工一格一格蓋過的章，退回等於把別人的決定抹掉。
+ */
+function ss_all_auto_signed(PDO $db, int $verId): bool
+{
+    try {
+        $st = $db->prepare("SELECT COUNT(*) total, SUM(is_auto=1) autos FROM ss_sign WHERE ver_id=? AND user_id IS NOT NULL");
+        $st->execute([$verId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return (int)($r['total'] ?? 0) > 0 && (int)($r['total'] ?? 0) === (int)($r['autos'] ?? 0);
+    } catch (Throwable $e) { return false; }
+}
+
+/** 退回草稿（清掉全部簽章）。呼叫端負責權限與 ss_all_auto_signed() 的判定 */
+function ss_unsubmit(PDO $db, int $verId, int $uid): void
+{
+    $v = ss_ver_get($db, $verId);
+    if (!$v) throw new RuntimeException('找不到這個版次');
+    if ((string)$v['status'] === 'obsolete') throw new RuntimeException('已作廢的版次不可退回');
+    $db->prepare("DELETE FROM ss_sign WHERE ver_id=?")->execute([$verId]);
+    $db->prepare("UPDATE ss_ver SET status='draft', modified_at=NOW(), modified_by=? WHERE ver_id=?")
+       ->execute([$uid, $verId]);
+    ss_refresh_cur_ver($db, (int)$v['doc_id']);
 }
