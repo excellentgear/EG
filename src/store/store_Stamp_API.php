@@ -12,6 +12,11 @@ include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/role_features_helper.php';
 include_once $document_root . '/EGsystem/src/common/stamp_lib.php';
+include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';     // AS 文件編號綁定（ai-rules/16 第一之三節，唯一實作）
+include_once $document_root . '/EGsystem/src/common/org_role_lib.php';  // eg_company_full_name()
+
+// 圖章清冊列印文件綁定的模組代碼（值存 system_parameters('AS_DOC_BIND','stamp_list')，只存 as_document.id）
+const STAMP_ASDOC_MODULE = 'stamp_list';
 
 $db = (new DBConnection())->getPDO();
 
@@ -107,9 +112,11 @@ case 'meta': {
                         WHERE p.is_active=1 ORDER BY t.sort_order, p.id")->fetchAll(PDO::FETCH_ASSOC);
     $base = '';
     if ($canManage) $base = eg_stamp_base($db);
+    $asDoc = eg_asdoc_get($db, STAMP_ASDOC_MODULE);
     jout(['ok'=>true, 'canView'=>true, 'canManage'=>$canManage, 'isAdmin'=>$isAdmin, 'canBatch'=>($isAdmin && $uid === 1), 'me'=>$cname,
           'users'=>$users, 'types'=>$types, 'depts'=>$depts, 'positions'=>$positions, 'dept_positions'=>$deptPositions, 'templates'=>$tpls,
-          'base'=>$base, 'base_ok'=>$canManage ? is_dir($base) : null]);
+          'base'=>$base, 'base_ok'=>$canManage ? is_dir($base) : null,
+          'as_doc'=>$asDoc, 'as_doc_no'=>eg_asdoc_no($asDoc), 'as_docs'=>$canManage ? eg_asdoc_list($db) : []]);
 }
 
 // ── 印章種類主檔維護 ──
@@ -165,6 +172,25 @@ case 'set_base': {
     jout(['ok'=>true, 'base'=>eg_stamp_base($db), 'base_ok'=>is_dir(eg_stamp_base($db))]);
 }
 
+// ── 列印文件綁定的 AS 文件編號（ai-rules/16：表頭取 doc_name、頁尾右下取 doc_no）──
+case 'save_asdoc': {
+    needManage($canManage);
+    eg_asdoc_save($db, STAMP_ASDOC_MODULE, (int)($_POST['doc_id'] ?? 0), $cname);
+    $doc = eg_asdoc_get($db, STAMP_ASDOC_MODULE);
+    jout(['ok'=>true, 'as_doc'=>$doc, 'as_doc_no'=>eg_asdoc_no($doc)]);
+}
+
+// ── 列印用抬頭資料（公司全名＋綁定文件）──
+// 圖章清冊是「現況一覽表」不是有業務日期的單據，版次一律取現行版（比照合格供應商清冊，ai-rules/16 第三之四節）。
+case 'print_meta': {
+    needView($canView);
+    $doc = eg_asdoc_get($db, STAMP_ASDOC_MODULE);
+    jout(['ok'=>true,
+          'company'  => eg_company_full_name($db),
+          'doc_name' => $doc['doc_name'] ?? '',
+          'doc_no'   => eg_asdoc_no($doc)]);
+}
+
 // ── 清冊列表（後端分頁＋彙總，匯出/列印用 all=1 回全部）──
 case 'list': {
     needView($canView);
@@ -204,7 +230,7 @@ case 'list': {
                                     WHEN r.dept_id IS NOT NULL THEN 'dept' ELSE 'user' END AS holder_kind,
                                r.type_id, t.type_name, r.template_id, tp.tpl_name,
                                r.issue_date, r.revoke_date, r.status, r.note,
-                               r.created_by, r.created_at,
+                               r.created_by, r.created_at, r.modified_at,
                                a.file_name IS NOT NULL AS has_asset, a.band_top, a.band_bottom,
                                (SELECT d2.name FROM user_department_position_map m2 JOIN department d2 ON d2.id = m2.department_id
                                 WHERE m2.user_id = r.user_id ORDER BY m2.is_main DESC, m2.id LIMIT 1) AS user_main_dept_name

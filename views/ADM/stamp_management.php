@@ -147,6 +147,7 @@ try {
   <div class="modal-body">
     <ul class="warm-tabs">
       <li class="active" data-stab="type"><i class="fa fa-tags"></i> 印章種類管理</li>
+      <li data-stab="asdoc"><i class="fa fa-bookmark-o"></i> 列印文件（AS 編號）</li>
       <li data-stab="base" id="stabBase" style="display:none;"><i class="fa fa-folder-open-o"></i> 掃描章儲存路徑</li>
     </ul>
     <div id="stab-type">
@@ -169,6 +170,15 @@ try {
       </div>
       <p id="baseState" style="font-size:11.5px;margin:6px 0 0;"></p>
       <p class="text-muted" style="font-size:11.5px;margin:4px 0 0;">DB 只存檔名，路徑讀取時即時組出（鐵律5）；更換路徑後請自行把既有 PNG 檔搬到新資料夾。僅管理者可見此分頁。</p>
+    </div>
+    <div id="stab-asdoc" style="display:none;">
+      <p class="text-muted" style="font-size:12px;">綁定之後，圖章清冊列印版的<strong>表頭</strong>會自動取該 AS 文件的表單名稱、<strong>頁尾右下角</strong>印文件編號（四階表單另附版次），依 ai-rules/16 的列印文件標準。未綁定時表頭退回「圖章清冊」、右下角不印編號。</p>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input type="text" id="asDocShow" class="form-control input-sm" style="flex:1;" readonly placeholder="尚未綁定" title="由 AS 文件主檔帶入，不可手填（ai-rules/16 第一之三節）">
+        <button class="btn btn-primary btn-sm" id="btnPickAsDoc" style="white-space:nowrap;"><i class="fa fa-search"></i> 選擇</button>
+        <button class="btn btn-default btn-sm" id="btnClearAsDoc" style="white-space:nowrap;"><i class="fa fa-times"></i> 取消綁定</button>
+      </div>
+      <p class="text-muted" style="font-size:11.5px;margin:6px 0 0;">表頭與編號一律由綁定的 AS 文件主檔推導，文件改名或改版時列印自動跟著換，不需要回來改這裡。</p>
     </div>
   </div>
 </div></div></div>
@@ -382,9 +392,13 @@ try {
 <script>window.__ownCompany = <?= json_encode($ownCompany, JSON_UNESCAPED_UNICODE) ?>;</script>
 <script src="../../resource/js/eg_stamp.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_stamp.js'); ?>"></script>
 <script src="../../resource/js/eg_stamp_tpl.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js'); ?>"></script>
+<script src="../../resource/js/eg_asdoc_picker.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js'); ?>"></script>
+<script src="../../resource/js/eg_print_log.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_print_log.js'); ?>"></script>
 <script>
 const API='../../src/store/store_Stamp_API.php';
 let canManage=false, isAdmin=false, USERS=[], page=1, per=10, total=0, curScanUid=0, curScanName='', curAsset=null, curEditId=0;
+let AS_DOCS=[], AS_DOC=null;                 // 列印文件綁定（ai-rules/16）
+const SYS_NOTE_BATCH='批次建立';             // 系統自動寫入的備註，列印版一律不印（清冊是要給外部稽核看的正式文件，不該出現內部作業痕跡）
 function esc(s){return $('<div>').text(s==null?'':s).html();}
 function dot(d){return (d||'').substring(0,10).replace(/-/g,'.');}
 function today(){const t=new Date();return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');}
@@ -495,6 +509,7 @@ function loadMeta(){
       renderTypeMng();
     }
     if(isAdmin){ $('#stabBase').show(); $('#baseDir').val(m.base||''); baseState(m.base,m.base_ok); }
+    AS_DOCS=m.as_docs||[]; AS_DOC=m.as_doc||null; renderAsDoc();
     if(canManage){ $('#btnSettings').show(); $('#btnTplNew').show(); }
     if(m.canBatch){ $('#btnBatchAdd').show(); }
     loadTpls(()=>loadList(1));   // 清冊印模預覽要用模板資料(TPLS)渲染，等模板載完再載清冊，避免競速下第一次顯示退回舊版簡易章
@@ -510,7 +525,7 @@ $('.warm-tabs [data-tab]').on('click',function(){
 $('#settingsModal .warm-tabs [data-stab]').on('click',function(){
   $(this).addClass('active').siblings().removeClass('active');
   const t=$(this).data('stab');
-  $('#stab-type').toggle(t==='type'); $('#stab-base').toggle(t==='base');
+  $('#stab-type').toggle(t==='type'); $('#stab-base').toggle(t==='base'); $('#stab-asdoc').toggle(t==='asdoc');
 });
 function baseState(base,ok){
   $('#baseState').html(base?('目前路徑：<code>'+esc(base)+'</code> '+(ok?'<span style="color:#26b99a;">✔ 可存取</span>':'<span style="color:#dd5138;">✘ 資料夾不存在（上傳時會嘗試自動建立）</span>')):'');
@@ -521,6 +536,22 @@ $('#btnBaseSave').on('click',function(){
     $('#baseDir').val(r.base); baseState(r.base,r.base_ok); alert('已儲存');
   },'json');
 });
+
+// ── 列印文件綁定的 AS 文件編號（挑選器一律走共用 eg_asdoc_picker.js，ai-rules/16 第一之三節，禁止自刻）──
+function renderAsDoc(){
+  $('#asDocShow').val(AS_DOC ? (window.EGAsDoc?EGAsDoc.label(AS_DOC):(AS_DOC.doc_no+'（'+AS_DOC.doc_name+'）')) : '');
+}
+function saveAsDoc(id){
+  $.post(API+'?action=save_asdoc',{doc_id:id||0},r=>{
+    if(!r.ok){alert(r.error||'儲存失敗');return;}
+    AS_DOC=r.as_doc||null; renderAsDoc();
+  },'json');
+}
+$('#btnPickAsDoc').on('click',function(){
+  EGAsDoc.open({docs:AS_DOCS, current:AS_DOC?AS_DOC.id:0, title:'圖章清冊 — AS 文件編號綁定',
+    onSave:function(id){ saveAsDoc(id); }});
+});
+$('#btnClearAsDoc').on('click',function(){ if(AS_DOC && confirm('取消綁定後，列印版表頭退回「圖章清冊」、右下角不印文件編號。確定要取消嗎？')) saveAsDoc(0); });
 
 // 找出這筆登記「實際該用哪顆模板」：優先用登記當時選的 template_id（後端已回傳，僅在該模板仍啟用時才有值）；
 // 若未指定或已停用/刪除，才退回「同種類任一啟用模板」當備援——同種類若有多顆模板，備援結果不保證是哪一顆，
@@ -718,30 +749,99 @@ $('#btnCsv').on('click',function(){
 });
 $('#btnPrint').on('click',function(){
   const q=$('#fltName').val().trim(), st=$('#fltStatus').val(), tid=$('#fltType').val()||'';
-  $.getJSON(API,{action:'list',q,status:st,type_id:tid,all:1},r=>{
-    if(!r.ok){alert(r.error||'載入失敗');return;}
-    const rows=r.rows.map(x=>`<tr>
-      <td style="text-align:center;">${renderRegStamp(x)}</td>
-      <td>${esc(x.holder_name)}${x.holder_kind==='position'?'（職稱章）':x.holder_kind==='user_dept'?'（部門人員章）':x.holder_kind==='dept'?'（部門章）':''}</td>
-      <td>${x.type_name?esc(x.type_name):'（未分類）'}${x.tpl_name?'／'+esc(x.tpl_name):''}</td>
-      <td>${esc(x.issue_date||'')}</td><td>${esc(x.revoke_date||'—')}</td>
-      <td>${x.status==='active'?'使用中':'已停用'}</td><td>${esc(x.note||'')}</td>
-      <td style="text-align:center;">${+x.has_asset?'已上傳':'—'}</td></tr>`).join('');
-    // 單一表格交給瀏覽器原生分頁（列印分頁鐵則，禁止 JS 量高度自算）
+  // 抬頭資料（公司全名＋綁定的 AS 文件）與清冊資料一起備齊才開視窗，避免標題先出來、編號後到
+  $.when(
+    $.getJSON(API,{action:'print_meta'}),
+    $.getJSON(API,{action:'list',q,status:st,type_id:tid,all:1})
+  ).done(function(mArr,rArr){
+    const m=mArr[0], r=rArr[0];
+    if(!m.ok||!r.ok){alert((m&&m.error)||(r&&r.error)||'載入失敗');return;}
+    // 表頭＝綁定 AS 文件的表單名稱（ai-rules/16 第一之二節：禁寫死；未綁定才退回預設）
+    const title  = m.doc_name || '圖章清冊';
+    const asTxt  = String(m.doc_no||'').replace(/['\\]/g,'');
+    // 「新增／修訂／作廢」三個打勾欄（紙本 2-DC-05-02 C/D/E 欄）一律由資料推導，不另存旗標欄位（鐵律4）：
+    //   作廢＝已停用（status=revoked）／修訂＝登記內容被編輯過（modified_at 晚於 created_at）／其餘＝新增。
+    //   停用動作本身也會寫 modified_at，所以一定要先判作廢，否則停用的章會同時打到「修訂」。
+    const tick=v=>v?'V':'';
+    const rows=r.rows.map((x,i)=>{
+      // 備註：系統自動寫入的「批次建立」屬內部作業痕跡，正式清冊（外部稽核用）一律不印；人工填寫的備註照印
+      const note=(String(x.note||'').trim()===SYS_NOTE_BATCH)?'':x.note;
+      const isVoid = x.status==='revoked';
+      const isEdit = !isVoid && !!x.modified_at && String(x.modified_at)>String(x.created_at||'');
+      // 保管部門：課室章／職稱章本身就掛在部門上；個人章取該人主要部門
+      const keepDept = x.dept_name || x.user_main_dept_name || '';
+      // 保管人：職稱章與課室章沒有特定個人，印職稱或「（部門保管）」，不可留白讓人以為漏填
+      const keepWho  = x.holder_kind==='position' ? (x.position_name||'')
+                     : x.holder_kind==='dept'     ? '（部門保管）'
+                     : (x.user_cname||'');
+      return `<tr>
+      <td>${i+1}</td>
+      <td>${esc(dot(x.issue_date))}</td>
+      <td>${esc(x.revoke_date?dot(x.revoke_date):'—')}</td>
+      <td class="tk">${tick(!isVoid&&!isEdit)}</td><td class="tk">${tick(isEdit)}</td><td class="tk">${tick(isVoid)}</td>
+      <td class="tl">${x.type_name?esc(x.type_name):'（未分類）'}</td>
+      <td class="tl">${x.tpl_name?esc(x.tpl_name):'—'}</td>
+      <td class="pst">${renderRegStamp(x)}</td>
+      <td class="tl">${esc(keepDept)}</td>
+      <td class="tl">${esc(keepWho)}</td>
+      <td class="tl">${esc(note)}</td></tr>`;
+    }).join('');
+    // 四邊留白＝@page 14mm ＋ body padding 5mm 兩段式（ai-rules/16 第四之二之二）：
+    // 列印視窗的「邊界」被選成「無／最小」時 Chrome 會蓋掉 @page 的 margin，那時只剩 body 這 5mm 撐著，才不會被印表機裁到。
+    const MG=14, PAD=5;
+    const css=`
+      *{box-sizing:border-box;}
+      @page{size:A4 landscape;margin:${MG}mm;${asTxt?` @bottom-right{content:'${asTxt}';font-size:9pt;color:#333;vertical-align:top;padding-top:1mm;}`:''}}
+      body{margin:0;padding:${PAD}mm;font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#3a2a17;font-size:12px;
+           -webkit-print-color-adjust:exact;print-color-adjust:exact;}
+      .p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:2px;}
+      .p-title{font-size:16px;font-weight:bold;text-align:center;letter-spacing:4px;margin-bottom:4px;}
+      .p-sub{font-size:11px;color:#6b5636;text-align:center;margin-bottom:8px;}
+      table{width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse;}
+      th,td{border:1px solid #666;padding:3px 5px;text-align:center;word-wrap:break-word;overflow-wrap:break-word;}
+      th{background:#f7e0bd;font-size:11.5px;}
+      td.tl{text-align:left;}
+      td.tk{font-weight:bold;font-size:13px;}
+      thead{display:table-header-group;} tr{page-break-inside:avoid;break-inside:avoid;}
+      /* 印模欄：章一律等比例，不可用 width/height 各給一個值把長方形模板章壓成正方形（ai-rules/18 第10條：
+         密集逐列表格不套 91px 固定尺寸，改以列高為準等比縮放，這樣圓章與長方章都不會變形） */
+      td.pst{height:62px;padding:2px;}
+      .stamp-wrap{display:inline-block;line-height:0;}
+      td.pst svg,td.pst img{width:auto;height:auto;max-height:56px;max-width:100%;vertical-align:middle;
+           -webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    `;
+    const body=`<div class="p-comp">${esc(window.__ownCompany||'')}</div>
+      <div class="p-title">${esc(title)}</div>
+      <div class="p-sub">使用中 ${r.summary.active} 顆／已停用 ${r.summary.revoked} 顆，共 ${r.total} 筆　列印日期：${dot(today())}</div>
+      <table><colgroup>
+        <col style="width:34px"><col style="width:74px"><col style="width:74px">
+        <col style="width:38px"><col style="width:38px"><col style="width:38px">
+        <col style="width:9%"><col style="width:12%"><col style="width:96px">
+        <col style="width:10%"><col style="width:9%"><col>
+      </colgroup>
+      <thead><tr><th>NO</th><th>核發日期</th><th>停用／繳回日</th><th>新增</th><th>修訂</th><th>作廢</th>
+      <th>類別</th><th>印章名稱</th><th>印章樣</th><th>保管部門</th><th>保管人</th><th>備註</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
     const w=window.open('','_blank');
-    w.document.write(`<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>圖章清冊</title><style>
-      body{font-family:"Microsoft JhengHei",sans-serif;color:#3a2a17;font-size:12px;}
-      h3{margin:0 0 4px;} .sub{color:#8a7455;font-size:11px;margin-bottom:8px;}
-      table{width:100%;border-collapse:collapse;} th,td{border:1px solid #b09468;padding:4px 6px;}
-      th{background:#f7e0bd;} thead{display:table-header-group;} tr{page-break-inside:avoid;}
-      svg{width:56px;height:56px;}
-    </style></head><body>
-      <h3>圖章清冊</h3><div class="sub">使用中 ${r.summary.active} 顆／已停用 ${r.summary.revoked} 顆，共 ${r.total} 筆　列印日期：${today()}</div>
-      <table><thead><tr><th style="width:70px;">印模</th><th>持有對象</th><th>種類</th><th>核發日期</th><th>停用/繳回日</th><th>狀態</th><th>備註</th><th>掃描章</th></tr></thead>
-      <tbody>${rows}</tbody></table></body></html>`);
+    if(!w){alert('列印視窗被瀏覽器封鎖，請允許此網站開啟彈出視窗');return;}
+    // <base>：新視窗是 about:blank，掃描實體章的 <image href="/EGsystem/..."> 沒有 base 就解析不出來＝整欄印不出章
+    w.document.write(`<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8">
+      <base href="${location.origin}/"><title>${esc(title)}</title><style>${css}</style></head><body>${body}
+      <scr`+`ipt>window.onload=function(){
+        // 內容超過一頁才加左下角頁碼（只決定顯示與否、不影響分頁）；高度要把 @page 與 body padding 兩段留白都扣掉
+        var onePage=(210-${MG}*2-${PAD}*2)*96/25.4;   // A4 橫式，可印高度是 210mm 那一邊
+        if(document.body.scrollHeight>onePage*0.92){
+          var stl=document.createElement('style');
+          stl.textContent="@page{ @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";
+          document.head.appendChild(stl);
+        }
+        setTimeout(function(){window.print();},600);   // 等掃描章圖載入
+      };</scr`+`ipt></body></html>`);
     w.document.close();
-    setTimeout(()=>{w.print();},400);   // 等掃描章圖載入
-  });
+    // 列印紀錄（ai-rules/23）：記的是「按下列印」這個動作，送出即忘、失敗不影響列印
+    if(window.EGPrintLog) EGPrintLog.record({source:'stamp_list', doc_name:title, doc_kind:'form',
+      ref_table:'stamp_register', note:'共 '+r.total+' 筆'});
+  }).fail(function(){ alert('載入失敗'); });
 });
 
 // ── 掃描章 Modal ──
