@@ -50,13 +50,16 @@ function ss_scopes(): array
 
 /**
  * 每個版面允許哪些適用範圍。
- * 設備操作說明書除了機台，也要能綁「檢驗設備一覽表」裡的量具（使用者 2026-09-22 要求）；
- * **三種版面一律都給「通用／特定料號」**（使用者 2026-09-22 回報新增時挑不到）——
- * 現場的 SOP 本來就常常是「這個料號在這幾台機器上怎麼做」，見 ss_scope_has_machines()。
+ * **三種版面一律四種都給**（使用者 2026-09-22 指定：改綁定對象的下拉要與新增文件完全一樣）——
+ * 現場的製造製程說明書與標準檢驗指導書本來就常常是「這一台機器（或這一支量具）怎麼做」，
+ * 例：KAPP 心軸備援確認就是綁在機台上的製程說明書；限制成只有設備操作說明書能綁機台，
+ * 那種文件就只能改成「通用」再把機台寫進內文，之後誰也查不回來是哪一台。
+ * 綁定對象的填寫與驗證一律由 $scope 決定（見 ss_doc_save／ss_dup_find／ss_auto_title），
+ * 與版面無關，所以放寬這裡不會讓任何一種版面少驗一道。
  */
 function ss_kind_scopes(string $kind): array
 {
-    return $kind === 'equip' ? ['machine', 'tool', 'general', 'part'] : ['general', 'part'];
+    return array_keys(ss_scopes());
 }
 
 /**
@@ -1343,7 +1346,8 @@ function ss_list(PDO $db, array $f): array
             $r['asset_text'] = (string)($t['tool_no'] ?? '');
             $r['tool_type']  = (string)($t['tool_type'] ?? '');
         }
-        if ((string)$r['kind'] === 'equip' && (string)$r['scope'] === 'machine') {
+        // 只看綁定對象、不看版面：三種版面都綁得了機台（ss_kind_scopes 四種全開）
+        if ((string)$r['scope'] === 'machine') {
             $ms = ss_doc_machines($db, (int)$r['doc_id']);
             if ($ms) {
                 $t = [];
@@ -1746,7 +1750,10 @@ function ss_auto_title(PDO $db, string $kind, string $scope, array $in): string
         if (!$t) return '';
         return trim(((string)$t['tool_type'] !== '' ? $t['tool_type'] . ' ' : '') . (string)$t['tool_no']);
     }
-    if ($kind === 'equip') {
+    /* 依 **綁定對象**判斷，不是依版面——製造製程說明書與標準檢驗指導書也綁得了機台
+       （ss_kind_scopes 四種全開）。原本寫成 $kind==='equip' 時，設備操作說明書改綁料號
+       會走進這裡然後回一個空字串，名稱就變成空白。 */
+    if ($scope === 'machine') {
         $model = trim((string)($in['machine_model'] ?? ''));
         $name  = '';
         foreach (ss_machines_by_model($db, $model) as $m) { $name = (string)$m['machine']; break; }
@@ -1755,7 +1762,9 @@ function ss_auto_title(PDO $db, string $kind, string $scope, array $in): string
             $name  = (string)($one['machine'] ?? '');
             $model = $model !== '' ? $model : (string)($one['machine_model'] ?? '');
         }
-        return trim($name . ($model !== '' ? ' ' . $model : '')) ?: $model;
+        $m = trim($name . ($model !== '' ? ' ' . $model : '')) ?: $model;
+        // 設備操作說明書不綁製程，名稱就是機台；另兩種版面以製程為主、機台接在後面
+        return ($kind === 'equip' || $proc === '') ? $m : trim($proc . ' ' . $m);
     }
 
     $part = '';

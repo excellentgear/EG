@@ -372,8 +372,8 @@ $('#btnNew').on('click', function () {
 /** 版面換了就重算「這個版面可以用哪些適用範圍」，並把分頁（SOP／SIP）標出來 */
 function syncScope() {
     var kind = $('#nKind').val(), h = '';
-    var allow = (window.SS_KIND_SCOPES && SS_KIND_SCOPES[kind])
-             || ((kind === 'equip') ? ['machine', 'tool'] : ['general', 'part']);
+    // 後備清單要跟後端 ss_kind_scopes() 一樣是四種全給，寫成別的內容就等於前端偷偷多了一套規則
+    var allow = (window.SS_KIND_SCOPES && SS_KIND_SCOPES[kind]) || ['machine', 'tool', 'general', 'part'];
     $.each(allow, function (i, s) { h += '<option value="' + s + '">' + esc(SS_SCOPES[s]) + '</option>'; });
     $('#nScope').html(h);
     var tab = (SS_KINDS[kind] ? SS_KINDS[kind].tab : 'sop');
@@ -1163,8 +1163,9 @@ $(document).on('click', '#btnReScope', function () {
 });
 function rsOpen() {
     var d = CUR.doc;
-    var allow = (window.SS_KIND_SCOPES && SS_KIND_SCOPES[CUR.kind])
-             || ((CUR.kind === 'equip') ? ['machine', 'tool'] : ['general', 'part']);
+    // 與新增文件的 syncScope() 同一份來源（SS_KIND_SCOPES）、同一份後備清單——
+    // 使用者 2026-09-22 指定這個下拉要跟「新增文件」的適用範圍完全一樣
+    var allow = (window.SS_KIND_SCOPES && SS_KIND_SCOPES[CUR.kind]) || ['machine', 'tool', 'general', 'part'];
     var h = '<div class="note-box">改了之後這份文件會重新判定「有沒有跟別份撞到」（同一個對象＋同一個製程只能有一份）。'
           + '版次、內容與簽核紀錄都不會動到。<br>'
           // 把「這個跳窗現在認定的是哪一份文件」直接寫在畫面上：內容萬一不對，一眼就看得出
@@ -1281,6 +1282,9 @@ $(document).on('click', '#rsSave', function () {
     var ids = [];
     if (k === 'part') { ids = (RSPM || []).slice(); }
     else $('.rschk:checked').each(function () { ids.push(num($(this).val())); });
+    // 與新增文件同一條規則：綁機台型號一定要留下至少一台機器編號，
+    // 全部勾掉就會變成「綁著型號、底下一台都沒有」，清單上只會顯示「還有 N 台未納入」
+    if (k === 'machine' && !ids.length) { $('#rsErr').text('至少要勾一台機器編號。'); return; }
     post('doc_save', {
         doc_id: num(CUR.doc.doc_id), kind: CUR.kind, scope: k,
         machine_model: k === 'machine' ? id : '',
