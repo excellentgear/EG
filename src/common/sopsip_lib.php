@@ -2221,16 +2221,23 @@ function ss_people_by_post(PDO $db, int $deptId, int $positionId, string $date):
     if ($deptId <= 0 && $positionId <= 0) return [];
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) $date = date('Y-m-d');
     require_once __DIR__ . '/people_lib.php';
-    // 以「那一天」的職務回推（ai-rules/22）：當時在職、現已離職的人也要找得到，
-    // 不然補歷史單據時自動簽核會一個人都解析不到，而且完全不報錯。
-    $rows = eg_people_list_asof($db, ['all_posts' => true], $date);
+    /* 以「那一天」的職務回推（ai-rules/22）：當時在職、現已離職的人也要找得到，
+       不然補歷史單據時自動簽核會一個人都解析不到，而且完全不報錯。
+
+       **一定要用 eg_people_posts_asof()（一個職務一列），不可以用 eg_people_list_asof()**
+       （2026-09-22 修；使用者把核准設成「總經理室＋總經理」卻解析不到人才發現）：
+       後者是「一個人一列」，dept_id／position_id 只放它挑出來的**單一代表職務**，
+       而 dept_ids 是那個人**全部部門的聯集**。於是
+         ⑴「總經理室＋總經理」比不中——陳俊宏那一列的代表職務是「董事長室／董事長」；
+         ⑵「總經理室＋不限職稱」反而撈出三列「董事長室／董事長」（他有三個職務，但每一列的
+            dept_id 都被覆寫成同一個代表職務，只是靠 dept_ids 命中）。
+       實測後果：核准那一關正選解析不到人→退到代理，紙上「審核」與「核准」蓋成同一個人。
+       逐職務比對 dept_id／position_id 才是「這個部門底下的這個職稱」的正確語意。 */
+    $rows = eg_people_posts_asof($db, [], $date);
     $out = [];
     foreach ($rows as $r) {
         if ($positionId > 0 && (int)($r['position_id'] ?? 0) !== $positionId) continue;
-        if ($deptId > 0) {
-            $ids = is_array($r['dept_ids'] ?? null) ? array_map('intval', $r['dept_ids']) : [];
-            if ((int)($r['dept_id'] ?? 0) !== $deptId && !in_array($deptId, $ids, true)) continue;
-        }
+        if ($deptId > 0 && (int)($r['dept_id'] ?? 0) !== $deptId) continue;
         $out[] = $r;
     }
     if (!$out) return [];

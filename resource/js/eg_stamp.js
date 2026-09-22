@@ -1,5 +1,6 @@
 // eg_stamp.js — 共用簽章印章產生器（抽自 views/QA/correction_order.php carStamp()/stampRow()）
-// 依賴：jQuery（用於 HTML escape）、全域變數 window.__ownCompany（本公司全名，各頁自行查 customer_list.is_own_company=1 設定）
+// 依賴：**沒有 jQuery 依賴**（2026-09-22 起；以前 esc() 用 $，害只載本檔的列印視窗一律蓋不出章）、
+//       全域變數 window.__ownCompany（本公司全名，各頁自行查 customer_list.is_own_company=1 設定）
 // 用法：EGStamp.stamp(name, date, isDeputy) 產生印章 HTML；EGStamp.row(stampHtml, leftHtml) 產生「簽章：」排版列
 // 選用第5/6參數 dept, position：EGStamp.stamp(name, date, isDeputy, tplSchema, dept, position)——只有第4參數帶「圖章模板設計」的
 // schema 且模板內有 {部門}/{職稱} token 才會顯示，掃描章／預設回墨印SVG本身沒有部門欄位、傳了也不影響。
@@ -7,7 +8,16 @@
 // 有掃描章的人 stamp() 自動改用去背 PNG 底圖＋動態日期帶（白遮罩蓋舊日期再壓日期字）；沒上傳的人維持純 SVG 章。
 // 對照表是非同步載入——已渲染在畫面上的章（span 帶 data-sname）會在載到後自動升級替換，各呼叫端不需改程式。
 (function (global) {
-    function esc(s) { return $('<div>').text(s == null ? '' : s).html(); }
+    /* HTML escape。**不可以用 jQuery**（2026-09-22 修）：本檔會被「列印用的新視窗」載入，
+       那種頁面多半只載 eg_stamp.js 不載 jQuery，`$` 一旦沒定義，stamp() 第一行就丟
+       「$ is not defined」，呼叫端的 try/catch 就退回印純文字姓名——症狀是
+       **設定明明綁了圖章模板，列印出來卻只有姓名與日期**，而且畫面上一個錯誤都看不到。
+       `$('<div>').text(x).html()` 在 jQuery 內部做的就是下面這兩行，輸出完全相同。 */
+    function esc(s) {
+        var d = document.createElement('div');
+        d.textContent = (s == null ? '' : s);
+        return d.innerHTML;
+    }
 
     var API = '/EGsystem/src/store/store_Stamp_API.php';
     var ASSETS = null;   // 姓名 → {uid, top, bot, t}；null=尚未載入
