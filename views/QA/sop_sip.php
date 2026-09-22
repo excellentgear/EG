@@ -312,6 +312,16 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
             </div>
             <label class="mrow">機器編號</label>
             <div class="wide mrow"><div id="nMachines" class="pickbox muted-help">先選機台型號。</div></div>
+            <!-- 綁料號時也可以再指定用哪幾台機器（使用者 2026-09-22：SOP 必定是此料號在特定機台上的規範） -->
+            <label class="pmrow">使用機台<span class="muted-help">（可複選、選填）</span></label>
+            <div class="wide pmrow">
+                <div class="ac-wrap" style="margin-bottom:4px;">
+                    <input type="text" id="nPMModel" data-eg-hint="打機台型號或機台名稱，從清單挑">
+                    <input type="hidden" id="nPMModelVal">
+                </div>
+                <div id="nPartMachines" class="pickbox muted-help">選了型號就會把在用的機台列出來，逐台勾選；可以換型號再加別的。</div>
+                <div class="muted-help">這個料號實際在哪幾台機器上做；<b>不影響重複判定</b>（同一個料號＋同一個製程仍然只能有一份）。</div>
+            </div>
 
             <!-- 量具（檢驗設備一覽表）：設備操作說明書的第二種綁法 -->
             <label class="trow">量具 *</label>
@@ -429,6 +439,13 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
                 跟製程主檔的製程名稱對不起來，自動猜只會猜錯。沒綁製程不影響列印
                 （「製程名稱」那格會退回用文件名稱），只影響「工程名稱」欄與檢驗項目預設值的代入。</li>
             <li><b>「工程名稱」就是製程</b>（日式用語，工程＝工序），所以只有一欄「製程」，一律從製程主檔挑。</li>
+            <li><b>三種版面都可以選「通用」或「特定料號」</b>；設備操作說明書另外還有「機台」「量具」。</li>
+            <li><b>綁「特定料號」時還可以再指定用哪幾台機器</b>（選填、可複選、可以換型號再加別的）——
+                現場的 SOP 本來就是「這個料號在這幾台機器上怎麼做」。
+                <b>料號才是主鍵、機台只是附帶條件</b>：重複判定仍然只看料號＋製程，
+                不然同一個料號換一台機器就會被當成另一份文件，同一支料號會冒出好幾份 SOP。</li>
+            <li><b>「改綁定對象／適用範圍」只有草稿才有</b>（已送簽或已核准的版次不可改綁定，
+                要改請先「取消送簽（退回草稿）」）。</li>
             <li><b>同一個對象＋同一個製程只能有一份文件</b>：建立時如果撞到既有的，會直接擋下並附上
                 「開啟並更新這一份」的按鈕。同一個料號的「粗滾」與「齒研」可以各有一份。</li>
             <li><b>「挑使用設備」是兩層大按鈕</b>（跟線上檢驗挑量具那一頁一樣）：

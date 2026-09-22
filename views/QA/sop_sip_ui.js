@@ -28,7 +28,13 @@ function num(v) { return parseInt(v, 10) || 0; }
 /** 日期顯示一律 YYYY.MM.DD（ai-rules/20），走共用 egFmtDate，不自寫 */
 function dispDate(s) { return (window.egFmtDate ? egFmtDate(s) : (s || '')) || ''; }
 function openMask(id) { $('#' + id).addClass('on'); }
-function closeMask(id) { $('#' + id).removeClass('on'); }
+function closeMask(id) {
+    $('#' + id).removeClass('on');
+    /* #maskPick 是「改綁定／挑使用設備／挑檢具／挑圖面」共用的跳窗，內容由各自的按鈕當場組出來。
+       關掉時一定要把內容清掉：不清的話，只要有哪一次跳窗被打開卻沒重組內容（例如按到一個
+       其實不存在的按鈕），畫面上就會出現**上一次用剩的舊內容**，看起來像「下拉選單內容不一樣」。 */
+    if (id === 'maskPick') { $('#pickBody').empty(); $('#pickTitle').text('挑選'); }
+}
 $(document).on('click', '[data-close]', function () { closeMask($(this).data('close')); });
 /* 點跳窗外面（遮罩）才關閉，而且**一定要「按下」與「放開」都在遮罩上**。
    只看 click 的話有兩種情況會把跳窗莫名其妙關掉，使用者看起來就是「按了沒反應」：
@@ -208,7 +214,7 @@ function delDoc(docId, title) {
 
 $('#btnNew').on('click', function () {
     kindOptions('#nKind', false);
-    NEW = { titleTouched: false, machines: [], dups: [] };
+    NEW = { titleTouched: false, machines: [], partMachines: [], dups: [] };
     $('#nErr').text(''); $('#nDup').html('');
     $('#nModel').val(''); $('#nModelVal').val('');
     $('#nTool').val(''); $('#nToolId').val('');
@@ -219,6 +225,8 @@ $('#btnNew').on('click', function () {
     $('#nDate').val(SS_TODAY); $('#nNote').val('初訂');
     $('#nApplyTpl').prop('checked', true);
     $('#nMachines').html('先選機台型號。').addClass('muted-help');
+    $('#nPMModel').val(''); $('#nPMModelVal').val('');
+    $('#nPartMachines').html('選了型號就會把在用的機台列出來，逐台勾選；可以換型號再加別的。').addClass('muted-help');
     syncScope();
     openMask('maskNew');
 });
@@ -241,6 +249,7 @@ function syncScopeFields() {
     $('.mrow').toggle(s === 'machine');
     $('.trow').toggle(s === 'tool');
     $('.prow').toggle(s === 'part');
+    $('.pmrow').toggle(s === 'part');     // 綁料號時可以再挑「用哪幾台機器」（選填）
     $('.srow').toggle(kind === 'sip');
     // 客戶：綁料號時由料號主檔帶入，欄位唯讀；通用型才可以自己挑
     var byPart = (s === 'part');
@@ -259,6 +268,8 @@ $('#nScope').on('change', function () {
     $('#nTool').val(''); $('#nToolId').val('');
     $('#nModel').val(''); $('#nModelVal').val('');
     $('#nMachines').html('先選機台型號。').addClass('muted-help');
+    $('#nPMModel').val(''); $('#nPMModelVal').val('');
+    $('#nPartMachines').html('選了型號就會把在用的機台列出來，逐台勾選；可以換型號再加別的。').addClass('muted-help');
     NEW.machines = [];
     syncScopeFields();
 });
@@ -277,6 +288,46 @@ acAttach('#nModel', {
         loadModelMachines(r.machine_model);
     }
 });
+
+/* ── 綁料號時的「使用機台」：打型號 → 列出該型號在用的機台 → 逐台勾；可以換型號再加別的
+      （使用者 2026-09-22：SOP 必定是此料號在特定機台上的規範，所以要能複選） ── */
+acAttach('#nPMModel', {
+    action: 'machine_models', hidden: '#nPMModelVal',
+    row: function (r) {
+        return '<span class="hit">' + esc(r.machine_model) + '</span>　' + esc(r.machine || '')
+             + '　<span class="muted-help">' + num(r.cnt) + ' 台：' + esc(r.asset_nos || '') + '</span>';
+    },
+    pick: function (r) {
+        $('#nPMModel').val(r.machine_model); $('#nPMModelVal').val(r.machine_model);
+        api('machines_by_model', { model: r.machine_model }, function (res) {
+            var sel = NEW.partMachines || [], h = '';
+            $.each(res.rows || [], function (i, m) {
+                var on = sel.indexOf(num(m.machine_id)) >= 0;
+                h += '<label><input type="checkbox" class="pmchk" value="' + num(m.machine_id) + '"'
+                   + (on ? ' checked' : '') + '> <span class="mno">' + esc(m.asset_no || '(未編號)') + '</span> '
+                   + esc(m.field_no || '') + '</label>';
+            });
+            $('#nPartMachines').removeClass('muted-help')
+                .html(h || '<span class="muted-help">這個型號沒有在用的機台。</span>');
+            pmSync();
+        });
+    }
+});
+/** 勾選狀態一律收進 NEW.partMachines——換了型號之後畫面會重畫，只看畫面上的勾就會把前一個型號選的弄丟 */
+function pmSync() {
+    var keep = (NEW.partMachines || []).slice();
+    $('#nPartMachines .pmchk').each(function () {
+        var id = num($(this).value !== undefined ? this.value : $(this).val());
+        var i = keep.indexOf(id);
+        if (this.checked) { if (i < 0) keep.push(id); }
+        else if (i >= 0) keep.splice(i, 1);
+    });
+    NEW.partMachines = keep;
+    $('#nPartMachines').next('.muted-help').text(keep.length
+        ? ('已選 ' + keep.length + ' 台；這個料號實際在哪幾台機器上做（不影響重複判定）。')
+        : '這個料號實際在哪幾台機器上做；不影響重複判定（同一個料號＋同一個製程仍然只能有一份）。');
+}
+$(document).on('change', '.pmchk', pmSync);
 
 /** 選了型號就把該型號在用的機台全部帶進來（使用者拍板），再逐台勾掉不適用的 */
 function loadModelMachines(model) {
@@ -415,8 +466,13 @@ $('#nSave').on('click', function () {
     $('#nErr').text('');
 
     var ids = [];
-    $('.nmchk:checked').each(function () { ids.push(num($(this).val())); });
-    if (s === 'machine' && !ids.length) { $('#nErr').text('至少要勾一台機器編號。'); return; }
+    if (s === 'part') {
+        // 綁料號時的「使用機台」是選填，而且可以跨型號累加，所以另外記在 NEW.partMachines
+        ids = (NEW.partMachines || []).slice();
+    } else {
+        $('.nmchk:checked').each(function () { ids.push(num($(this).val())); });
+        if (s === 'machine' && !ids.length) { $('#nErr').text('至少要勾一台機器編號。'); return; }
+    }
 
     post('doc_save', {
         kind: kind, scope: s,
@@ -514,8 +570,13 @@ function headHtml() {
             h += '<div class="full"><button class="btn btn-xs btn-warm-o" id="btnEditMachines">調整機器編號</button></div>';
         }
     } else if (d.scope === 'part') {
+        var pm = CUR.machines || [];
         h += '<label>產品料號</label><div class="bindline"><input value="' + esc(d.part_no_text || '') + '" readonly>'
            + bindTag(num(d.part_d_id) > 0, '料號主檔 #' + num(d.part_d_id)) + '</div>'
+           + '<label>使用機台</label><div class="bindline"><input value="'
+           + esc(pm.length ? $.map(pm, function (m) { return (m.asset_no || m.field_no || m.machine || ''); }).join('、') : '')
+           + '" readonly title="這個料號實際在哪幾台機器上做；要改請按下方「改綁定對象／適用範圍」">'
+           + bindTag(pm.length > 0, '機台主檔　' + pm.length + ' 台', '選填，尚未指定') + '</div>'
            + '<label>客戶名稱</label><div class="bindline"><input class="ta-c" value="' + esc(d.customer_name || '') + '" readonly '
            + 'title="綁了料號就由料號主檔決定，不可手打">'
            + bindTag(!!(d.customer_id || ''), '客戶編號 ' + (d.customer_id || ''), '這個料號的主檔沒有綁客戶') + '</div>';
@@ -1026,20 +1087,35 @@ $(document).on('click', '#btnReScope', function () {
        + '<label id="rsLab">綁定對象</label><div class="wide ac-wrap">'
        + '<input type="text" id="rsBind"><input type="hidden" id="rsBindId">'
        + '<div class="muted-help" id="rsHint"></div></div>'
-       + '<label>機器編號</label><div class="wide"><div id="rsMachines" class="pickbox muted-help">先選機台型號。</div></div>'
+       + '<label id="rsPMLab">機器編號</label><div class="wide">'
+       + '<div class="ac-wrap" id="rsPMWrap" style="margin-bottom:4px;">'
+       + '<input type="text" id="rsPMModel" data-eg-hint="打機台型號或機台名稱，從清單挑"></div>'
+       + '<div id="rsMachines" class="pickbox muted-help">先選機台型號。</div>'
+       + '<div class="muted-help" id="rsPMHint"></div></div>'
        + '</div><div class="err" id="rsErr" style="margin-top:6px;"></div>'
        + '<div style="margin-top:8px;"><button class="btn btn-sm btn-warm" id="rsSave">套用</button></div>';
     $('#pickTitle').text('改綁定對象／適用範圍');
     $('#pickBody').html(h);
     openMask('maskPick');
     rsSync();
+    // 原本就綁好的機台要先帶進來，不然改個適用範圍就把已經綁好的機台清掉了
+    RSPM = $.map(CUR.machines || [], function (m) { return num(m.machine_id); });
+    if (d.scope === 'part' && RSPM.length) $('#rsPMHint').text('原本已綁 ' + RSPM.length + ' 台；可以換型號再加別的。');
 });
 function rsSync() {
     var k = $('#rsScope').val();
     $('#rsBind').val(''); $('#rsBindId').val('');
+    RSPM = [];
     $('#rsMachines').html('先選機台型號。').addClass('muted-help');
-    $('#rsMachines').closest('.wide').prev('label').toggle(k === 'machine');
-    $('#rsMachines').closest('.wide').toggle(k === 'machine');
+    $('#rsPMModel').val('');
+    // 機台：機器編號跟著型號；料號：可以再挑「用哪幾台機器」（選填、可跨型號累加）
+    var showM = (k === 'machine' || k === 'part');
+    $('#rsPMLab').toggle(showM).text(k === 'part' ? '使用機台' : '機器編號');
+    $('#rsMachines').closest('.wide').toggle(showM);
+    $('#rsPMWrap').toggle(k === 'part');
+    $('#rsPMHint').text(k === 'part'
+        ? '選填：這個料號實際在哪幾台機器上做。打型號挑一個就會列出該型號的機台，可以換型號再加別的；不影響重複判定。'
+        : '');
     var lab = { machine: '機台型號', tool: '量具', part: '料號', general: '綁定對象' }[k] || '綁定對象';
     $('#rsLab').text(lab);
     $('#rsBind').closest('.ac-wrap').toggle(k !== 'general');
@@ -1047,6 +1123,32 @@ function rsSync() {
         : (k === 'tool' ? '打量具編號或種類，從清單挑。'
         : (k === 'part' ? '打料號從清單挑；同一個料號文字可能分屬好幾家客戶。' : '')));
 }
+var RSPM = [];      // 改綁定跳窗裡「綁料號時要用的機台」（跨型號累加，不能只看畫面上的勾）
+acAttach('#rsPMModel', {
+    action: 'machine_models', hidden: null,
+    row: function (r) {
+        return '<span class="hit">' + esc(r.machine_model) + '</span>　' + esc(r.machine || '')
+             + '　<span class="muted-help">' + num(r.cnt) + ' 台</span>';
+    },
+    pick: function (r) {
+        $('#rsPMModel').val(r.machine_model);
+        api('machines_by_model', { model: r.machine_model }, function (res) {
+            var h = '';
+            $.each(res.rows || [], function (i, m) {
+                h += '<label><input type="checkbox" class="rspm" value="' + num(m.machine_id) + '"'
+                   + (RSPM.indexOf(num(m.machine_id)) >= 0 ? ' checked' : '') + '> '
+                   + '<span class="mno">' + esc(m.asset_no || '(未編號)') + '</span> ' + esc(m.field_no || '') + '</label>';
+            });
+            $('#rsMachines').removeClass('muted-help')
+                .html(h || '<span class="muted-help">這個型號沒有在用的機台。</span>');
+        });
+    }
+});
+$(document).on('change', '.rspm', function () {
+    var id = num($(this).val()), i = RSPM.indexOf(id);
+    if (this.checked) { if (i < 0) RSPM.push(id); } else if (i >= 0) RSPM.splice(i, 1);
+    $('#rsPMHint').text('已選 ' + RSPM.length + ' 台；可以換型號再加別的，不影響重複判定。');
+});
 $(document).on('change', '#rsScope', rsSync);
 /* 一個輸入框要查三種主檔，所以 action 給成函式，依目前選的適用範圍決定要打哪一支 */
 acAttach('#rsBind', {
@@ -1085,7 +1187,8 @@ $(document).on('click', '#rsSave', function () {
     var k = $('#rsScope').val(), id = $('#rsBindId').val();
     if (k !== 'general' && !id) { $('#rsErr').text('要從清單挑一個綁定對象（打字不選不算）。'); return; }
     var ids = [];
-    $('.rschk:checked').each(function () { ids.push(num($(this).val())); });
+    if (k === 'part') { ids = (RSPM || []).slice(); }
+    else $('.rschk:checked').each(function () { ids.push(num($(this).val())); });
     post('doc_save', {
         doc_id: num(CUR.doc.doc_id), kind: CUR.kind, scope: k,
         machine_model: k === 'machine' ? id : '',

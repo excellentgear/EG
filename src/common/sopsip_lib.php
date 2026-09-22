@@ -48,11 +48,26 @@ function ss_scopes(): array
     return ['machine' => '機台', 'tool' => '量具／檢驗設備', 'general' => '通用', 'part' => '特定料號'];
 }
 
-/** 每個版面允許哪些適用範圍：機台 SOP 只能綁機台，其餘可通用或綁料號 */
+/**
+ * 每個版面允許哪些適用範圍。
+ * 設備操作說明書除了機台，也要能綁「檢驗設備一覽表」裡的量具（使用者 2026-09-22 要求）；
+ * **三種版面一律都給「通用／特定料號」**（使用者 2026-09-22 回報新增時挑不到）——
+ * 現場的 SOP 本來就常常是「這個料號在這幾台機器上怎麼做」，見 ss_scope_has_machines()。
+ */
 function ss_kind_scopes(string $kind): array
 {
-    // 設備操作說明書除了機台，也要能綁「檢驗設備一覽表」裡的量具（使用者 2026-09-22 要求）
-    return $kind === 'equip' ? ['machine', 'tool'] : ['general', 'part'];
+    return $kind === 'equip' ? ['machine', 'tool', 'general', 'part'] : ['general', 'part'];
+}
+
+/**
+ * 這個適用範圍要不要挑機台（可複選）。
+ * machine＝綁的就是機台型號；**part＝綁料號時也可以再指定用哪幾台機器**
+ * （使用者 2026-09-22：「SOP 必定是此料號在特定機台上的規範」）——料號是主鍵，機台是附帶條件，
+ * 所以重複判定仍然只看料號＋製程，不會因為多綁了機台就變成另一份文件。
+ */
+function ss_scope_has_machines(string $scope): bool
+{
+    return $scope === 'machine' || $scope === 'part';
 }
 
 /**
@@ -630,8 +645,9 @@ function ss_ver_full(PDO $db, int $verId): ?array
         'signs' => ss_sign_map($db, $verId),
         'files' => ss_file_rows($db, $docId, $verId),
         'machine'  => ss_machine_row($db, (int)($d['machine_id'] ?? 0)),
-        'machines' => $kind === 'equip' ? ss_doc_machines($db, $docId) : [],
-        'machine_missing' => $kind === 'equip' ? ss_doc_machines_missing($db, $d) : [],
+        // 綁料號時也可能綁了機台（使用者 2026-09-22），所以依「適用範圍」判斷不是依版面
+        'machines' => ss_scope_has_machines((string)($d['scope'] ?? '')) ? ss_doc_machines($db, $docId) : [],
+        'machine_missing' => (string)($d['scope'] ?? '') === 'machine' ? ss_doc_machines_missing($db, $d) : [],
         'machine_meta'    => $meta,
         'sections'      => ss_sections($kind),
         'section_files' => ss_section_files($db, $docId, $verId),
@@ -828,6 +844,13 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
         $p = $st->fetch(PDO::FETCH_ASSOC);
         if (!$p) throw new RuntimeException('請選擇料號（找不到這筆料號主檔）');
         $partNo = (string)$p['D_Setting_Id'];
+        /* 綁料號時還可以再指定「用哪幾台機器」（可複選，使用者 2026-09-22）。
+           **料號才是主鍵、機台只是附帶條件**：重複判定仍然只看料號＋製程，
+           不然同一個料號換一台機器就會被當成另一份文件，同一支料號會冒出好幾份 SOP。
+           沒送 machine_ids＝舊呼叫端，既有綁定原樣不動（送空陣列才是真的清掉）。 */
+        $machineIds = $in['machine_ids'] ?? [];
+        if (is_string($machineIds)) { $mj = json_decode($machineIds, true); $machineIds = is_array($mj) ? $mj : []; }
+        $machineIds = array_values(array_unique(array_filter(array_map('intval', (array)$machineIds))));
     }
 
     // 製程＝紙本上的「工程名稱」（同一件事，只留一欄）。存編號，名稱只是顯示用快取
@@ -896,7 +919,7 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
                                 modified_at=NOW(), modified_by=? WHERE doc_id=?");
         $st->execute([$scope, $machineId ?: null, $model ?: null, $toolId ?: null, $partDId ?: null, $partNo, $title,
                       $procNo ?: null, $procNm, $cusId, $cusNm, $uid, $docId]);
-        if ($scope === 'machine' && array_key_exists('machine_ids', $in)) ss_doc_machines_set($db, $docId, $machineIds);
+        if (ss_scope_has_machines($scope) && array_key_exists('machine_ids', $in)) ss_doc_machines_set($db, $docId, $machineIds);
         return $docId;
     }
     $st = $db->prepare("INSERT INTO ss_doc (kind, scope, machine_id, machine_model, tool_id, part_d_id, part_no_text, title,
@@ -905,7 +928,7 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
     $st->execute([$kind, $scope, $machineId ?: null, $model ?: null, $toolId ?: null, $partDId ?: null, $partNo, $title,
                   $procNo ?: null, $procNm, $cusId, $cusNm, $uid, $uname]);
     $newId = (int)$db->lastInsertId();
-    if ($scope === 'machine') ss_doc_machines_set($db, $newId, $machineIds);
+    if (ss_scope_has_machines($scope)) ss_doc_machines_set($db, $newId, $machineIds);
     return $newId;
 }
 
