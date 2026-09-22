@@ -287,7 +287,14 @@
        + '<span class="egrt-sep"></span>';
     if (opt.onInsertImage) h += btn('egImage', 'picture-o', '插入圖片');
     if (opt.onInsertFlow)  h += btn('egFlow', 'sitemap', '插入流程圖');
-    h += btn('egHr', 'minus', '水平線') + btn('egPageBreak', 'scissors', '插入分頁（列印時從這裡換頁）');
+    h += btn('egHr', 'minus', '水平線');
+    h += '<span class="egrt-sep"></span>'
+       + btn('egPageBreak', 'scissors', '在游標處分頁（游標後面的內容移到新的一頁）')
+       + btn('egAddPage', 'file-o', '在最後面新增一頁')
+       + btn('egAutoPage', 'magic', '自動分頁：把超出每一頁的內容往後推，直到每頁都放得下')
+       + '<span class="egrt-sep"></span>'
+       + '<button type="button" class="egrt-btn on" data-view="single" title="一頁一頁顯示"><i class="fa fa-file-text-o"></i></button>'
+       + '<button type="button" class="egrt-btn" data-view="double" title="兩頁並排顯示"><i class="fa fa-columns"></i> 雙頁</button>';
     h += '</div>';
     return h;
   }
@@ -413,6 +420,24 @@
     return blocks.length > 0;
   }
 
+  /** 載入共用的內文排版 CSS（與列印版同一個檔，保證換頁位置一致） */
+  function injectDocCss() {
+    if (d.getElementById('eg-docpage-css')) return;
+    var src = '';
+    var all = d.getElementsByTagName('script');
+    for (var i = all.length - 1; i >= 0; i--) {
+      if ((all[i].src || '').indexOf('eg_richtext.js') >= 0) { src = all[i].src; break; }
+    }
+    var cut = src.indexOf('/resource/js/eg_richtext.js');
+    var href = (cut < 0) ? '../../resource/css/eg_doc_page.css'
+                         : src.substring(0, cut) + '/resource/css/eg_doc_page.css';
+    var lk = d.createElement('link');
+    lk.id = 'eg-docpage-css';
+    lk.rel = 'stylesheet';
+    lk.href = href;
+    d.head.appendChild(lk);
+  }
+
   function injectCss() {
     if (d.getElementById('egrt-css')) return;
     var s = d.createElement('style');
@@ -449,20 +474,43 @@
       '.egrt-pf{margin-bottom:5px;font-size:12px;color:#6B471A;}',
       '.egrt-pf label{display:inline-block;width:44px;margin:0;font-weight:normal;}',
       '.egrt-ti{width:62px;height:24px;border:1px solid #d8c7b0;border-radius:3px;padding:0 4px;font-size:12px;}',
-      // 文件本體：灰底捲動區內放一張白紙，所見即所得。
-      // 可編輯元素就是那張紙（.egrt-body.egrt-page），捲動容器不可編輯——
-      // 兩者分開，get()/set() 才不會把捲動容器的 div 一起存進內容裡。
-      '.egrt-doc-scroll{background:#efe9e0;overflow:auto;border-radius:0 0 4px 4px;}',
-      '.egrt-page{background:#fff;margin:14px auto;padding:18mm 15mm;box-shadow:0 1px 6px rgba(0,0,0,.18);',
-      'font-size:12pt;line-height:1.6;color:#333;min-height:0;max-height:none;overflow:visible;}',
-      '.egrt-page h1{font-size:18pt;margin:0 0 10px;}',
-      '.egrt-page h2{font-size:15pt;margin:14px 0 8px;}',
-      '.egrt-page h3{font-size:13pt;margin:12px 0 6px;}',
-      '.egrt-page h4{font-size:12pt;margin:10px 0 5px;font-weight:bold;}',
-      '.egrt-page table{border-collapse:collapse;margin:6px 0;}',
-      '.egrt-page td,.egrt-page th{border:1px solid #333;padding:4px;}',
-      '.egrt-page img{max-width:100%;}',
-      '.egrt-page hr{border:0;border-top:1px solid #bbb;margin:10px 0;}',
+      /* 文件本體：灰底捲動區內放一張或多張白紙，像 Word 一樣一頁一頁。
+         ⚠ 紙張寬度是「整張 A4」(210mm) 而不是內容寬——內距用列印版同一組邊界，
+           算出來的內容寬才會跟列印一致（180mm）。先前寫成 width:180mm 再加 15mm 內距，
+           編輯區的內容寬只剩 150mm，比列印窄，所以匯入的表格在畫面上會溢出、列印其實放得下
+           ＝根本沒有做到所見即所得（使用者 2026-09-22 回報）。
+         ⚠ overflow-x 一律 hidden，再配合 fitPages() 自動縮放到容器寬度內，
+           所以**結構上不可能出現左右拉桿**（使用者明確要求底下不要有左右移動的拉桿）。*/
+      '.egrt-doc-scroll{background:#efe9e0;overflow-y:auto;overflow-x:hidden;border-radius:0 0 4px 4px;}',
+      '.egrt-pages{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;',
+      'gap:16px;padding:16px 8px 22px;}',
+      /* 紙張高度是**固定**的（不是 min-height）：固定才量得出「內容有沒有超出這一頁」，
+         也才有辦法自動把超出的搬到下一頁。先前寫 min-height 的話紙會跟著內容長高
+         （實測長到 7553px），scrollHeight 永遠等於 clientHeight，偵測不到超出。
+         overflow:hidden＝超出的部分被裁掉，跟真的紙一樣；但不會有人看不到自己打的字——
+         超出的當下就會自動往後搬（見 reflowSoon()），搬不動時才框紅提示。 */
+      /* 頁碼籤／刪除此頁／超出提示一律放在**紙張外面**（.egrt-sheetwrap 底下的兄弟元素）。
+         放在紙張裡面會出兩個問題，兩個都是實測抓到的：
+           ⑴ 絕對定位的子元素會被算進 scrollHeight，於是每一頁都被判成「內容超出」；
+           ⑵ 更嚴重：joinPages() 取的是紙張的 innerHTML，那些提示文字會被一起存進內容
+              （往返一次之後「刪除此頁」變成文件內容，頁數也跟著暴增）。 */
+      '.egrt-sheetwrap{position:relative;flex:0 0 auto;}',
+      // 內文排版（字級、行高、段落與表格間距）一律由 resource/css/eg_doc_page.css 提供，
+      // 列印版 <link> 的是同一個檔——兩邊各寫一份的話換頁位置會對不起來（見該檔說明）
+      '.egrt-sheet{background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.18);padding:16mm 15mm 18mm;',
+      'max-height:none;overflow:hidden;box-sizing:border-box;}',
+      '.egrt-pageno{position:absolute;left:0;bottom:-19px;font-size:11px;line-height:16px;',
+      'color:#8A5A2B;background:#e6ddd0;border-radius:3px;padding:0 7px;white-space:nowrap;}',
+      // 內容超出這一頁：紙張加紅框，右上角掛提示（搬不動時才會留著，一般會自動回流）
+      '.egrt-sheet.egrt-over{outline:2px solid #DD5138;outline-offset:0;}',
+      // 被自動加長的頁：用漸層底色標出「超過 A4 的那一段」，看得出來列印會跨頁
+      '.egrt-sheet.egrt-grown{background:#fff;}',
+      '.egrt-ovbadge{position:absolute;right:0;top:-19px;font-size:11px;line-height:16px;color:#fff;',
+      'background:#DD5138;border-radius:3px;padding:0 7px;cursor:pointer;white-space:nowrap;}',
+      '.egrt-delpage{position:absolute;right:0;bottom:-19px;font-size:11px;line-height:16px;',
+      'color:#A34E2A;background:#e6ddd0;border-radius:3px;padding:0 7px;cursor:pointer;}',
+      '.egrt-delpage:hover{background:#DD5138;color:#fff;}',
+      // 內容裡若還殘留分頁標記（舊資料），在編輯器裡標示出來
       '.egrt-page hr[style*="page-break"]{border-top:2px dashed #D6851F;position:relative;margin:18px 0;}',
       '.egrt-page hr[style*="page-break"]:after{content:"分頁";position:absolute;right:0;top:-9px;',
       'background:#F7E0BD;color:#8A5A2B;font-size:10px;line-height:14px;padding:0 5px;border-radius:3px;}',
@@ -491,15 +539,14 @@
     var prof = (opt.profile === 'doc') ? 'doc' : 'basic';
     var cfg  = profileCfg(prof);
     var isDoc = prof === 'doc';
+    if (isDoc) injectDocCss();
 
     host.classList.add('egrt-wrap');
     if (isDoc) {
-      // 捲動容器與可編輯的「紙」分開（見 .egrt-doc-scroll / .egrt-page 的註解）
+      // 捲動容器（不可編輯）→ 頁面容器 → 一張或多張紙（每一張自己是 contenteditable）
       host.innerHTML = docToolbarHtml(opt)
         + '<div class="egrt-doc-scroll" style="max-height:' + (parseInt(opt.height, 10) || 560) + 'px">'
-        + '<div class="egrt-body egrt-page" contenteditable="true" data-eg-skip'
-        + ' style="width:' + escAttr(opt.pageWidth || '180mm') + '"'
-        + ' data-ph="' + escAttr(opt.placeholder || '') + '"></div></div>'
+        + '<div class="egrt-pages"></div></div>'
         + (opt.maxLen ? '<div class="egrt-count"></div>' : '');
       host.style.position = host.style.position || 'relative';   // 圖片浮動工具列以它為定位父層
     } else {
@@ -508,9 +555,27 @@
         + (opt.maxLen ? '<div class="egrt-count"></div>' : '');
     }
 
-    var body = host.querySelector('.egrt-body');
+    var pagesBox = host.querySelector('.egrt-pages');
     var count = host.querySelector('.egrt-count');
     var maxLen = opt.maxLen || 0;
+    var paper = { size: opt.pageSize || 'A4', orient: opt.orientation || 'portrait' };
+    var viewMode = (opt.viewMode === 'double') ? 'double' : 'single';
+
+    /* body ＝「目前作用中的那一頁」。
+       刻意保留這個變數名並在焦點移動時改指向：這樣底下所有既有邏輯
+       （exec／插入／表格加減列欄／縮排／圖片選取）都自動作用在使用者正在編輯的那一頁，
+       不必逐一改寫成「找出目前是哪一頁」。 */
+    var body = null;
+    function sheets() {
+      return pagesBox ? Array.prototype.slice.call(pagesBox.querySelectorAll('.egrt-sheet')) : [];
+    }
+    /** 紙張的外框（頁碼籤等輔助元素掛在這裡，不在紙張裡面） */
+    function wrapOf(s) {
+      return (s && s.parentNode && s.parentNode.classList
+        && s.parentNode.classList.contains('egrt-sheetwrap')) ? s.parentNode : null;
+    }
+    if (isDoc) { body = mkSheet(); }
+    else { body = host.querySelector('.egrt-body'); bindSheet(body); }
 
     // 換色指令要 styleWithCSS=true（產生 <span style="color:…"> 而不是已淘汰的 <font>）；
     // 粗體/斜體/底線/刪除線要 styleWithCSS=false，才會產生 <b>/<i>/<u>/<strike> 標籤。
@@ -520,7 +585,8 @@
 
     function refreshCount() {
       if (!count) return;
-      var n = toText(body.innerHTML).length;
+      // 多頁模式要算全部頁的字數
+      var n = toText(isDoc ? joinPages() : body.innerHTML).length;
       count.textContent = n + ' / ' + maxLen + ' 字';
       count.classList.toggle('over', n > maxLen);
     }
@@ -582,7 +648,7 @@
         return true;
       } catch (e) { return false; }
     }
-    ['keyup', 'mouseup', 'input'].forEach(function (ev) { body.addEventListener(ev, rememberRange); });
+    // 每一頁的監聽統一在 bindSheet() 綁（多頁模式會動態長出新的頁）
 
     function insertHtml(html) {
       body.focus();
@@ -604,8 +670,9 @@
      *  這是處理「任意跨節點選取」最可靠的做法，自己用 range.surroundContents() 會在
      *  選取只覆蓋部分節點時直接丟例外。 */
     function applyFontSize(val) {
-      body.focus();
       if (!val) return;
+      body.focus();
+      restoreRange();      // 下拉會搶走焦點，要把使用者原本選的那段字還原回來
       try { d.execCommand('styleWithCSS', false, false); } catch (e) {}
       try { d.execCommand('fontSize', false, '7'); } catch (e) {}
       Array.prototype.slice.call(body.querySelectorAll('font[size="7"]')).forEach(function (f) {
@@ -620,7 +687,8 @@
      *  src 刻意不存進內容（見 richtext_lib.php 的說明），所以每次帶入內容都要補一次。 */
     function hydrate() {
       if (!isDoc || !opt.assetUrl) return;
-      Array.prototype.slice.call(body.querySelectorAll('img[data-asset]')).forEach(function (im) {
+      // 多頁模式要掃所有頁，不能只掃目前那一頁
+      Array.prototype.slice.call(pagesBox.querySelectorAll('img[data-asset]')).forEach(function (im) {
         var id = im.getAttribute('data-asset');
         im.setAttribute('src', opt.assetUrl(id));
         im.setAttribute('draggable', 'false');
@@ -630,6 +698,7 @@
 
     function exec(cmd, val) {
       body.focus();
+      restoreRange();   // 從下拉（會搶焦點）過來時，要把使用者原本選的那段字還原回來
       // 縮排是自己實作的（見 indentBlocks），不走 execCommand
       if (cmd === 'egIndent' || cmd === 'egOutdent') {
         indentBlocks(body, cmd === 'egIndent' ? 1 : -1);
@@ -648,7 +717,10 @@
           return;
         }
         if (cmd === 'egHr')        { insertHtml('<hr>'); return; }
-        if (cmd === 'egPageBreak') { insertHtml('<hr style="page-break-after:always">'); return; }
+        // 分頁＝真的長出新的一頁（游標所在區塊之後的內容整批移過去），不是插一條線
+        if (cmd === 'egPageBreak') { splitAtCaret(); return; }
+        if (cmd === 'egAddPage')   { api.addPage(); return; }
+        if (cmd === 'egAutoPage')  { autoPaginate(); return; }
         // 開跳窗之前先把游標位置記下來（跳窗一開選取就沒了，回來要插在原處）
         if (cmd === 'egImage')     { rememberRange(); if (opt.onInsertImage) opt.onInsertImage(insertAsset); return; }
         if (cmd === 'egFlow')      { rememberRange(); if (opt.onInsertFlow)  opt.onInsertFlow(insertAsset);  return; }
@@ -756,7 +828,8 @@
     /** 換過內容（裁切完、流程圖改完）後強制重載該圖，否則瀏覽器會拿舊的快取圖 */
     function reloadAsset(id) {
       if (!opt.assetUrl) return;
-      Array.prototype.slice.call(body.querySelectorAll('img[data-asset="' + id + '"]')).forEach(function (im) {
+      var root = isDoc ? pagesBox : body;    // 同一張圖可能被放在別的頁
+      Array.prototype.slice.call(root.querySelectorAll('img[data-asset="' + id + '"]')).forEach(function (im) {
         im.setAttribute('src', opt.assetUrl(id) + (opt.assetUrl(id).indexOf('?') >= 0 ? '&' : '?') + '_t=' + Date.now());
       });
       placeImgUi();
@@ -803,19 +876,6 @@
     }
 
     if (isDoc) {
-      body.addEventListener('click', function (e) {
-        if (e.target && e.target.nodeName === 'IMG') { selectImg(e.target); e.stopPropagation(); }
-        else clearImgSel();
-      });
-      body.addEventListener('dblclick', function (e) {
-        // 雙擊流程圖＝直接開編輯器（跟 Word 雙擊圖表一樣）
-        if (e.target && e.target.nodeName === 'IMG' && opt.onEditFlow) {
-          var id = e.target.getAttribute('data-asset');
-          if (!opt.assetKind || opt.assetKind(id) === 'flow') {
-            opt.onEditFlow(id, function () { reloadAsset(id); });
-          }
-        }
-      });
       var sc = host.querySelector('.egrt-doc-scroll');
       if (sc) sc.addEventListener('scroll', placeImgUi);
       w.addEventListener('resize', placeImgUi);
@@ -844,8 +904,17 @@
     }
 
     host.addEventListener('mousedown', function (e) {
-      // 工具列一律不搶焦點，否則選取範圍會消失、格式就套不到剛選的字
-      if (e.target.closest && e.target.closest('.egrt-bar')) e.preventDefault();
+      if (!e.target.closest || !e.target.closest('.egrt-bar')) return;
+      /* 表單控制項（字型／字級／段落階層下拉、插入表格的數字欄）**絕對不可以 preventDefault**：
+         在 <select> 的 mousedown 上 preventDefault 會讓下拉整個打不開——
+         症狀就是「點了完全沒反應」（使用者 2026-09-22 回報）。
+         這些控制項本來就會搶走焦點，所以改成「點下去之前先把游標範圍記下來」，
+         套用格式時再還原（見 exec()／applyFontSize() 的 restoreRange）。
+         ⚠ 這個 bug 我的無頭測試原本抓不到，因為測試是直接設 select.value 再發 change 事件，
+           繞過了 mousedown。往後測下拉一定要用真滑鼠點擊。 */
+      if (/^(SELECT|INPUT|TEXTAREA|OPTION)$/.test(e.target.tagName)) { rememberRange(); return; }
+      // 其餘（按鈕、色票）一律不搶焦點，否則選取範圍會消失、格式就套不到剛選的字
+      e.preventDefault();
     });
     host.addEventListener('click', function (e) {
       var t = e.target;
@@ -866,6 +935,8 @@
         if (!wasOpen) pop.classList.add('open');
         return;
       }
+      var vb = t.closest('.egrt-btn[data-view]');
+      if (vb) { closePops(); api.setViewMode(vb.getAttribute('data-view')); return; }
       var btn = t.closest('.egrt-btn[data-cmd]');
       if (btn) { closePops(); exec(btn.getAttribute('data-cmd')); }
     });
@@ -873,48 +944,435 @@
       if (!host.contains(e.target)) closePops();
     });
 
-    // 貼上：一律先清洗再插入，避免把 Word/網頁的整片樣式、<script>、外部圖片帶進來
-    body.addEventListener('paste', function (e) {
-      e.preventDefault();
-      var dt = e.clipboardData || w.clipboardData;
-      if (!dt) return;
-      var html = dt.getData('text/html');
-      var ins = html ? clean(html, prof) : (dt.getData('text/plain') || '')
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\r?\n/g, '<br>');
-      try { d.execCommand('insertHTML', false, ins); } catch (err) {}
+    /* ── 每一頁的監聽（多頁模式會動態長出新的頁，所以一定要收斂成一支）────── */
+    function bindSheet(el2) {
+      if (!el2 || el2._egrtBound) return el2;
+      el2._egrtBound = 1;
+
+      // 貼上：一律先清洗再插入，避免把 Word/網頁的整片樣式、<script>、外部圖片帶進來
+      el2.addEventListener('paste', function (e) {
+        e.preventDefault();
+        var dt = e.clipboardData || w.clipboardData;
+        if (!dt) return;
+        var html = dt.getData('text/html');
+        var ins = html ? clean(html, prof) : (dt.getData('text/plain') || '')
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\r?\n/g, '<br>');
+        try { d.execCommand('insertHTML', false, ins); } catch (err) {}
+        afterEdit();
+      });
+      el2.addEventListener('input', afterEdit);
+      el2.addEventListener('keyup', function () { refreshState(); rememberRange(); });
+      el2.addEventListener('mouseup', function () { refreshState(); rememberRange(); });
+      // 焦點一進來就把 body 指向這一頁（所有工具列動作都作用在使用者正在編輯的那一頁）
+      el2.addEventListener('focusin', function () { body = el2; });
+      el2.addEventListener('mousedown', function () { body = el2; });
+
+      if (isDoc) {
+        el2.addEventListener('click', function (e) {
+          if (e.target && e.target.nodeName === 'IMG') { selectImg(e.target); e.stopPropagation(); }
+          else clearImgSel();
+        });
+        el2.addEventListener('dblclick', function (e) {
+          // 雙擊流程圖＝直接開編輯器（跟 Word 雙擊圖表一樣）
+          if (e.target && e.target.nodeName === 'IMG' && opt.onEditFlow) {
+            var id = e.target.getAttribute('data-asset');
+            if (!opt.assetKind || opt.assetKind(id) === 'flow') {
+              opt.onEditFlow(id, function () { reloadAsset(id); });
+            }
+          }
+        });
+      }
+      return el2;
+    }
+
+    function afterEdit() {
       refreshCount();
+      markOverflow();
+      reflowSoon();      // 打滿一頁就自動流到下一頁（刪字之後也會把下一頁的內容拉回來）
       if (opt.onChange) opt.onChange();
-    });
-    body.addEventListener('input', function () { refreshCount(); if (opt.onChange) opt.onChange(); });
-    body.addEventListener('keyup', refreshState);
-    body.addEventListener('mouseup', refreshState);
+    }
+
+    /* ── 分頁 ───────────────────────────────────────────────────────────────
+       一張紙＝一個 contenteditable。頁與頁的邊界在內容裡是
+       <hr style="page-break-after:always">（本來就在白名單裡、列印也認得），
+       所以資料格式沒有變：get() 把各頁接起來時再插回那個標記，列印版一個字都不必改。
+
+       為什麼不做「打字打滿自動流到下一頁」：那要在每次按鍵重新量測並切頁，
+       游標還要在重排之後回到原處，contenteditable 上非常不穩（Google Docs 那種
+       是自己寫排版引擎、根本不用 contenteditable）。這裡改成**分頁由人決定**
+       （按「插入分頁」），但內容超出一頁時會把那張紙框紅並提示，不會默默印出界。 */
+    var PAGE_MARK = '<hr style="page-break-after:always">';
+
+    function paperMM() {
+      var d2 = (String(paper.size).toUpperCase() === 'A3') ? [297, 420] : [210, 297];
+      return (paper.orient === 'landscape') ? [d2[1], d2[0]] : d2;
+    }
+    function applyPaper(el2) {
+      var mm = paperMM();
+      el2.style.width = mm[0] + 'mm';
+      el2.style.height = mm[1] + 'mm';     // 固定高度，見 .egrt-sheet 的說明
+    }
+
+    /** 建立一張紙（html＝內容；beforeSheet＝插在哪一張紙之前，省略＝加在最後） */
+    function mkSheet(html, beforeSheet) {
+      var wrap = d.createElement('div');
+      wrap.className = 'egrt-sheetwrap';
+      var s = d.createElement('div');
+      s.className = 'egrt-body egrt-page egrt-sheet eg-docbody';
+      s.setAttribute('contenteditable', 'true');
+      s.setAttribute('data-eg-skip', '');
+      s.setAttribute('data-ph', opt.placeholder || '');
+      applyPaper(s);
+      s.innerHTML = (html === undefined || html === null || html === '') ? '<p><br></p>' : html;
+      wrap.appendChild(s);
+      var no = d.createElement('span');
+      no.className = 'egrt-pageno';
+      wrap.appendChild(no);
+      var bw = beforeSheet ? wrapOf(beforeSheet) : null;
+      if (bw && bw.parentNode === pagesBox) pagesBox.insertBefore(wrap, bw);
+      else pagesBox.appendChild(wrap);
+      bindSheet(s);
+      return s;
+    }
+
+    /** 內容 HTML → 依分頁標記切成多張紙 */
+    function renderPages(html) {
+      pagesBox.innerHTML = '';
+      var parts = String(html || '').split(/<hr[^>]*page-break-after[^>]*>/i);
+      if (!parts.length) parts = [''];
+      parts.forEach(function (p) { mkSheet(p); });
+      body = sheets()[0] || null;
+      hydrate();
+      numberPages();
+      fitPages();
+      // 載入就先回流一次：匯入的 Word 多半沒有分頁符，這樣一打開就已經是一頁一頁
+      reflow(0);
+      markOverflow();
+      /* 再算一次——初次量測時**字體還沒載完、圖片還沒解碼**，行高與圖片高度都還會變，
+         只超出幾十 px 的邊界頁會被判成「放得下」（實測：一頁只超出 44px 就被漏掉，
+         手動 refit() 一次才出現）。所以字體就緒與圖片載完都要再回流一次。 */
+      var settle = function () { reflow(0); markOverflow(); };
+      if (d.fonts && d.fonts.ready && d.fonts.ready.then) {
+        d.fonts.ready.then(function () { setTimeout(settle, 60); });
+      } else {
+        setTimeout(settle, 300);
+      }
+      var imgs = Array.prototype.slice.call(pagesBox.querySelectorAll('img'));
+      var pending = imgs.filter(function (i) { return !i.complete; }).length;
+      if (pending) {
+        imgs.forEach(function (i) {
+          if (i.complete) return;
+          var done = function () { if (--pending <= 0) settle(); };
+          i.addEventListener('load', done);
+          i.addEventListener('error', done);
+        });
+      }
+    }
+
+    /** 各頁接回一份 HTML（頁與頁之間放回分頁標記） */
+    function joinPages() {
+      var ss = sheets();
+      if (!ss.length) return '';
+      return ss.map(function (s) { return s.innerHTML; }).join(PAGE_MARK);
+    }
+
+    function numberPages() {
+      var ss = sheets(), n = ss.length;
+      ss.forEach(function (s, i) {
+        var wrap = wrapOf(s);
+        if (!wrap) return;
+        var no = wrap.querySelector('.egrt-pageno');
+        if (no) no.textContent = '第 ' + (i + 1) + ' 頁 / 共 ' + n + ' 頁';
+        var del = wrap.querySelector('.egrt-delpage');
+        if (n > 1) {
+          if (!del) {
+            del = d.createElement('span');
+            del.className = 'egrt-delpage';
+            del.textContent = '刪除此頁';
+            del.addEventListener('mousedown', function (e) { e.preventDefault(); e.stopPropagation(); });
+            del.addEventListener('click', function (e) {
+              e.preventDefault(); e.stopPropagation();
+              if (!w.confirm('確定要刪除這一頁嗎？這一頁的內容會一起刪掉。')) return;
+              delPage(s);
+            });
+            wrap.appendChild(del);
+          }
+        } else if (del) { del.parentNode.removeChild(del); }
+      });
+    }
+
+    /**
+     * 回流之後還是超出的頁＝「單一區塊本身就比一頁高」（實測是幾張很長的表格）。
+     * 這種搬不動，但**絕對不能就這樣裁掉**——使用者會看不到也改不到那幾列。
+     * 所以讓那一頁自己長高（height:auto）並框紅說明「列印時會自動跨頁」，
+     * 列印版本來就會依 page-break 規則正確跨頁，所以印出來是對的。
+     */
+    /**
+     * 這一頁的內容有沒有超出「一張紙」的高度。
+     * ⚠ 一定要相對**固定頁高**量，不可以相對「目前的 clientHeight」——
+     *   已經被加長過的頁，clientHeight 就是內容高度，量起來永遠「沒有超出」，
+     *   於是第二次呼叫 markOverflow() 就把加長還原掉（而 renderPages 正好連呼叫兩次，
+     *   症狀是初次載入完全沒作用、手動 refit() 一次才出現）。
+     *   所以量測前先把高度還原成固定值，量完再依結果決定要不要加長——這樣才可重複執行。
+     */
+    function isOverPage(s) {
+      var wasGrown = s.classList.contains('egrt-grown');
+      if (wasGrown) { s.style.height = paperMM()[1] + 'mm'; s.style.minHeight = ''; }
+      var over = s.scrollHeight > s.clientHeight + 2;
+      if (wasGrown && over) { s.style.height = 'auto'; s.style.minHeight = paperMM()[1] + 'mm'; }
+      return over;
+    }
+
+    function markOverflow() {
+      sheets().forEach(function (s) {
+        var over = isOverPage(s);
+        if (over && blocksOf(s).length <= 1) {
+          s.style.height = 'auto';
+          s.style.minHeight = paperMM()[1] + 'mm';
+          s.classList.add('egrt-grown');
+        } else if (s.classList.contains('egrt-grown')) {
+          s.classList.remove('egrt-grown');
+          applyPaper(s);
+        }
+        s.classList.toggle('egrt-over', over);
+        var wrap = wrapOf(s);
+        if (!wrap) return;
+        var b = wrap.querySelector('.egrt-ovbadge');
+        if (over) {
+          if (!b) {
+            b = d.createElement('span');
+            b.className = 'egrt-ovbadge';
+            b.addEventListener('mousedown', function (e) { e.preventDefault(); e.stopPropagation(); });
+            b.addEventListener('click', function (e) {
+              e.preventDefault(); e.stopPropagation();
+              pushOverflow(s);
+            });
+            wrap.appendChild(b);
+          }
+          b.textContent = s.classList.contains('egrt-grown')
+            ? '這一頁只有一個區塊比 A4 還高，已自動加長（列印會自動跨頁，內容不會漏）'
+            : '內容超出這一頁，點這裡把超出的搬到下一頁';
+        } else if (b) { b.parentNode.removeChild(b); }
+      });
+    }
+
+    /** 點紅色提示：把超出這一頁的內容搬到下一頁（就是從這一頁開始回流一次） */
+    function pushOverflow(s) {
+      /* 只有一個區塊卻比一頁高（實測都是很長的表格）＝搬不動，那一頁已經自動加長。
+         這種情況不提供「自動拆表格」：試作過（把放不下的列搬到下一頁的續表），
+         在真實文件上**不收斂**——一張表拆完會讓後面每一頁連鎖重排，
+         實測連點 30 次頁數完全沒變。與其留一個半成品的按鈕，不如說清楚怎麼處理。
+         列印本來就會依 page-break 規則正確跨頁，所以不處理也印得對。 */
+      var ks = blocksOf(s);
+      if (ks.length === 1) {
+        w.alert('這一頁只有一個區塊（通常是一張很長的表格）比 A4 還高，沒辦法用搬移的方式分頁，'
+              + '所以這一頁已經自動加長。\n\n'
+              + '・列印沒問題：列印時會自動跨頁，內容不會遺漏。\n'
+              + '・想讓編輯畫面也剛好一頁：把這張表格自己拆成兩張（在要分頁的位置插入分頁，'
+              + '再把後半的列剪貼到新的表格），或把紙張改成 A3／橫式。');
+        return;
+      }
+      var idx = sheets().indexOf(s);
+      reflow(idx > 0 ? idx : 0);
+      changed();
+    }
+
+    /* ── 版面回流（真正的分頁）────────────────────────────────────────────
+       打字打滿就自動流到下一頁、刪掉字之後下一頁的內容自動拉回來，跟 Word 一樣。
+
+       為什麼這件事在 contenteditable 上做得到：因為回流是**搬移既有節點**
+       （insertBefore／appendChild）而不是重建 HTML——節點被搬走時，
+       選取範圍指向的還是同一個文字節點，所以**游標會跟著節點一起到下一頁**，
+       不需要自己記位置再還原（那才是不穩的做法）。
+       量測只有瀏覽器做得到（後端匯入時無法得知一頁放得下多少），所以一定在前端做。 */
+    /** 紙張裡的內容區塊（輔助元素已經移到紙張外面，所以這裡就是全部子元素） */
+    function blocksOf(s) { return Array.prototype.slice.call(s.children); }
+    function fitsPage(s) { return s.scrollHeight <= s.clientHeight + 2; }
+    function appendBlock(s, node) { s.appendChild(node); }
+    function prependBlock(s, node) {
+      var first = blocksOf(s)[0];
+      if (first) s.insertBefore(node, first); else appendBlock(s, node);
+    }
+    function nextSheet(s, create) {
+      var wrap = wrapOf(s);
+      var nw = wrap && wrap.nextElementSibling;
+      if (nw && nw.classList && nw.classList.contains('egrt-sheetwrap')) return nw.querySelector('.egrt-sheet');
+      if (!create) return null;
+      var ss = sheets(), i = ss.indexOf(s);
+      var ns = mkSheet('', (i >= 0 && i + 1 < ss.length) ? ss[i + 1] : null);
+      ns.innerHTML = '';     // 不預留空段落，等內容搬進來（否則每次分頁都多一行空白）
+      return ns;
+    }
+
+    var reflowing = false;
+    /** @param {number} [from] 從第幾頁開始（打字時只從目前那一頁往後算，整份文件才不會每次都重排） */
+    function reflow(from) {
+      if (!isDoc || reflowing) return;
+      reflowing = true;
+      // 先把「之前被加長過」的頁還原成固定高度，不然量不出有沒有超出
+      sheets().forEach(function (s) {
+        if (s.classList.contains('egrt-grown')) { s.classList.remove('egrt-grown'); applyPaper(s); }
+      });
+      var guard = 0, i = Math.max(0, from || 0);
+      // ① 往後推：超出的區塊搬到下一頁
+      for (; i < sheets().length && guard < 4000; i++) {
+        var s = sheets()[i];
+        while (!fitsPage(s) && guard++ < 4000) {
+          var ks = blocksOf(s);
+          if (ks.length <= 1) break;      // 單一區塊就超出（例如一張很長的表格）＝搬不動
+          prependBlock(nextSheet(s, true), ks[ks.length - 1]);
+        }
+      }
+      // ② 往前拉：下一頁的第一個區塊如果這一頁放得下就拉回來（刪字之後版面才會回流）
+      for (i = Math.max(0, from || 0); i < sheets().length - 1 && guard < 9000; i++) {
+        var a = sheets()[i], b = sheets()[i + 1];
+        while (guard++ < 9000) {
+          var bk = blocksOf(b);
+          if (!bk.length) break;
+          var node = bk[0];
+          appendBlock(a, node);
+          if (!fitsPage(a)) { prependBlock(b, node); break; }   // 放不下就還回去
+        }
+      }
+      // ③ 清掉搬空的頁（第一頁永遠留著）
+      sheets().forEach(function (s, idx) {
+        if (idx === 0) return;
+        if (!blocksOf(s).length) { var wp = wrapOf(s); if (wp) wp.parentNode.removeChild(wp); }
+      });
+      if (!sheets().length) { body = mkSheet(); }
+      else if (!body || !host.contains(body)) { body = sheets()[0]; }
+      numberPages(); fitPages(); markOverflow();
+      reflowing = false;
+    }
+
+    var reflowTimer = null;
+    /** 打字之後延遲回流：每個按鍵都重排會卡，350ms 沒動作才做 */
+    function reflowSoon() {
+      if (!isDoc) return;
+      if (reflowTimer) clearTimeout(reflowTimer);
+      reflowTimer = setTimeout(function () {
+        reflowTimer = null;
+        var idx = sheets().indexOf(body);
+        reflow(idx > 0 ? idx : 0);
+      }, 350);
+    }
+
+    /** 工具列的「自動分頁」：整份文件重排一次（匯入完的一整頁就是靠這個變成一頁一頁） */
+    function autoPaginate() { reflow(0); changed(); }
+
+    /** 在游標處分頁：游標所在區塊之後的內容整批移到新的一頁 */
+    function splitAtCaret() {
+      var s = body;
+      if (!s || !s.classList.contains('egrt-body')) s = sheets()[0];
+      if (!s) return;
+      var blk = blockOf(w.getSelection() && w.getSelection().anchorNode, s);
+      var kids = blocksOf(s);
+      var idx = blk ? kids.indexOf(blk) : -1;
+      var move = (idx >= 0) ? kids.slice(idx + 1) : [];
+      var ssAll = sheets(), si = ssAll.indexOf(s);
+      var ns = mkSheet('', (si >= 0 && si + 1 < ssAll.length) ? ssAll[si + 1] : null);
+      if (move.length) {
+        ns.innerHTML = '';
+        move.forEach(function (k) { ns.appendChild(k); });
+      }
+      numberPages(); fitPages(); markOverflow(); changed();
+      ns.focus();
+      body = ns;
+    }
+
+    function delPage(s) {
+      if (sheets().length <= 1) return;
+      var wp = wrapOf(s);
+      if (wp) wp.parentNode.removeChild(wp);
+      body = sheets()[0];
+      numberPages(); fitPages(); markOverflow(); changed();
+    }
+
+    /** 自動縮放到容器寬度內——這是「底下永遠不會有左右拉桿」的保證 */
+    function fitPages() {
+      if (!isDoc || !pagesBox) return;
+      var sc = host.querySelector('.egrt-doc-scroll');
+      if (!sc) return;
+      var per = (viewMode === 'double') ? 2 : 1;
+      var mm = paperMM();
+      var pw = mm[0] * 96 / 25.4;                       // 一張紙的 px 寬
+      var cs = getComputedStyle(pagesBox);
+      var gap = parseFloat(cs.columnGap || cs.gap) || 16;
+      var padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+      // 一列要放 per 張紙所需的寬度（含紙間空隙與容器內距）
+      var need = per * pw + (per - 1) * gap + padX;
+      var avail = sc.clientWidth || host.clientWidth || need;
+      var k = Math.min(1, avail / need);
+      if (!isFinite(k) || k <= 0) k = 1;
+      pagesBox.style.zoom = (k < 1) ? k : '';
+      /* 雙頁模式：容器寬度限制成剛好兩張，flex-wrap 才會每列放兩張。
+         ⚠ 這裡是 border-box（Bootstrap 的全域設定），maxWidth 含內距——
+           先前漏加內距，兩張紙就差幾 px 放不下而換行，看起來像「雙頁沒有作用」。 */
+      pagesBox.style.maxWidth = (per === 2) ? Math.ceil(need + 2) + 'px' : '';
+      pagesBox.style.margin = '0 auto';
+      placeImgUi();
+    }
+    if (isDoc) {
+      w.addEventListener('resize', fitPages);
+      // 側欄收放會改變容器寬度，但那不會觸發 window resize，所以也監看容器本身
+      if (w.ResizeObserver) {
+        try { new w.ResizeObserver(fitPages).observe(host.querySelector('.egrt-doc-scroll')); } catch (e) {}
+      }
+    }
+
+    /** 目前全部內容（多頁模式＝各頁以分頁標記接起來） */
+    function allHtml() { return isDoc ? joinPages() : body.innerHTML; }
 
     var api = {
-      host: host, body: body, profile: prof,
+      host: host, profile: prof,
+      get body() { return body; },     // 目前作用中的那一頁（會隨焦點改變）
       // get() 回傳的內容裡 <img> 已經沒有 src（清洗時剝掉），存進 DB 的永遠只有資產編號
-      get: function () { return clean(body.innerHTML, prof); },
+      get: function () { return clean(allHtml(), prof); },
       set: function (html) {
-        body.innerHTML = clean(html, prof);
-        hydrate();            // 把 <img> 的 src 依資產編號補回來才看得到圖
+        var c2 = clean(html, prof);
+        if (isDoc) { renderPages(c2); }
+        else { body.innerHTML = c2; hydrate(); }
         clearImgSel();
         refreshCount(); refreshState();
       },
-      text: function () { return toText(body.innerHTML); },
-      focus: function () { body.focus(); },
-      over: function () { return maxLen > 0 && toText(body.innerHTML).length > maxLen; },
+      text: function () { return toText(allHtml()); },
+      focus: function () { if (body) body.focus(); },
+      over: function () { return maxLen > 0 && toText(allHtml()).length > maxLen; },
       maxLen: maxLen,
+      /** 紙張大小與方向（編輯區要跟列印一致才叫所見即所得） */
+      setPaper: function (size, orient) {
+        paper.size = (String(size).toUpperCase() === 'A3') ? 'A3' : 'A4';
+        paper.orient = (orient === 'landscape') ? 'landscape' : 'portrait';
+        sheets().forEach(applyPaper);
+        fitPages(); markOverflow();
+      },
+      /** 檢視模式：single＝一頁一頁／double＝兩頁並排 */
+      setViewMode: function (m) {
+        viewMode = (m === 'double') ? 'double' : 'single';
+        Array.prototype.slice.call(host.querySelectorAll('.egrt-btn[data-view]')).forEach(function (b) {
+          b.classList.toggle('on', b.getAttribute('data-view') === viewMode);
+        });
+        fitPages();
+      },
+      viewMode: function () { return viewMode; },
+      pageCount: function () { return isDoc ? sheets().length : 1; },
+      addPage: function () { var s = mkSheet(); numberPages(); fitPages(); changed(); s.focus(); body = s; return s; },
+      refit: function () { fitPages(); markOverflow(); },
+      autoPaginate: function () { autoPaginate(); },
       /** 讓模組頁面在上傳/編輯完之後把圖插進來或重新載入 */
       insertAsset: function (id, o) { insertAsset(id, o); },
       reloadAsset: function (id) { reloadAsset(id); },
       hydrate: function () { hydrate(); },
-      /** 內容目前引用到哪些資產編號（存檔時要據此清掉沒在用的資產） */
+      /** 內容目前引用到哪些資產編號（存檔時要據此清掉沒在用的資產；多頁模式要掃所有頁） */
       assetIds: function () {
-        return Array.prototype.slice.call(body.querySelectorAll('img[data-asset]'))
+        var root = isDoc ? pagesBox : body;
+        return Array.prototype.slice.call(root.querySelectorAll('img[data-asset]'))
           .map(function (im) { return parseInt(im.getAttribute('data-asset'), 10); })
           .filter(function (n) { return n > 0; });
       }
     };
     host._egrt = api;
+    if (isDoc) { numberPages(); fitPages(); api.setViewMode(viewMode); }
     refreshCount();
     return api;
   }

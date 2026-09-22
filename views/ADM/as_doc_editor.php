@@ -357,6 +357,10 @@ function closeMask(id) { document.getElementById(id).classList.remove('open'); }
 $(document).on('click', '[data-close]', function(){ closeMask($(this).data('close')); });
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 $('#adReportX').on('click', function(){ $('#adReport').hide(); });
+// 單頁／雙頁並排的選擇記下來，下次開同一頁不必再切
+$(document).on('click', '#adEditorHost .egrt-btn[data-view]', function(){
+    try { localStorage.setItem('adc_view_mode', $(this).attr('data-view')); } catch(e) {}
+});
 
 /* 統一錯誤顯示：API 未捕捉的例外會回 500＋JSON，非 2xx 時 jQuery 不會進 success，
    沒有這一段的話畫面上就是「按了完全沒反應」（本專案踩過多次） */
@@ -390,18 +394,41 @@ function load() {
             if (c && c.updated_at) $('#adSaved').text('上次存檔 ' + fmt(c.updated_at));
         } else {
             // 沒有編輯權：唯讀顯示（清洗後才輸出，鐵律8 的第二道防線）
+            // 一樣依分頁標記切成一頁一頁，跟有編輯權看到的版面一致
             $('#adEditorHost').hide();
             var host = $('#adReadonly').show()[0];
             host.className = 'egrt-wrap';
-            host.innerHTML = '<div class="egrt-doc-scroll" style="max-height:640px">'
-                + '<div class="egrt-page egrt-body" style="width:180mm"></div></div>';
-            var page = host.querySelector('.egrt-page');
-            page.innerHTML = EGRichText.render(html, 'doc');
+            var mm = ((c && c.page_size) === 'A3') ? [297, 420] : [210, 297];
+            if ((c && c.orientation) === 'landscape') mm = [mm[1], mm[0]];
+            var clean = EGRichText.render(html, 'doc');
+            var parts = clean ? clean.split(/<hr[^>]*page-break-after[^>]*>/i) : [];
+            if (!parts.length) parts = ['<p style="color:#a08a6f">這個版次還沒有線上版內容。</p>'];
+            host.innerHTML = '<div class="egrt-doc-scroll" style="max-height:680px"><div class="egrt-pages">'
+                + parts.map(function(p, i){
+                    // 頁碼籤放紙張外面（與編輯模式同一套結構，見 eg_richtext.js 的說明）
+                    return '<div class="egrt-sheetwrap">'
+                         + '<div class="egrt-page egrt-sheet" style="width:' + mm[0] + 'mm;height:' + mm[1] + 'mm">'
+                         + p + '</div>'
+                         + '<span class="egrt-pageno">第 ' + (i+1) + ' 頁 / 共 ' + parts.length + ' 頁</span>'
+                         + '</div>';
+                  }).join('')
+                + '</div></div>';
             // src 不存在內容裡，唯讀顯示也要依資產編號補回來
-            Array.prototype.slice.call(page.querySelectorAll('img[data-asset]')).forEach(function(im){
+            Array.prototype.slice.call(host.querySelectorAll('img[data-asset]')).forEach(function(im){
                 im.setAttribute('src', assetUrl(im.getAttribute('data-asset')));
             });
-            if (!html) page.innerHTML = '<p style="color:#a08a6f">這個版次還沒有線上版內容。</p>';
+            // 唯讀也要縮放到容器寬度內，否則同樣會出現左右拉桿
+            (function fitRo(){
+                var sc = host.querySelector('.egrt-doc-scroll'), box = host.querySelector('.egrt-pages');
+                if (!sc || !box) return;
+                var pw = mm[0] * 96 / 25.4, need = pw + 32;
+                var k = Math.min(1, (sc.clientWidth || need) / need);
+                box.style.zoom = k < 1 ? k : '';
+                $(window).on('resize', function(){
+                    var k2 = Math.min(1, (sc.clientWidth || need) / need);
+                    box.style.zoom = k2 < 1 ? k2 : '';
+                });
+            })();
         }
     });
 }
@@ -451,8 +478,11 @@ function esc(s) { return $('<i>').text(s == null ? '' : s).html(); }
 function mkEditor() {
     return EGRichText.attach('#adEditorHost', {
         profile: 'doc',
-        pageWidth: '180mm',
-        height: 620,
+        // 紙張大小與方向交給共用元件，編輯區的內容寬才會跟列印完全一致
+        pageSize: $('#selPage').val() || 'A4',
+        orientation: $('#selOrient').val() || 'portrait',
+        viewMode: localStorage.getItem('adc_view_mode') === 'double' ? 'double' : 'single',
+        height: 680,
         placeholder: '在這裡編輯這份文件的內容…（可先按上方「從 Word 匯入」把舊內容帶進來）',
         assetUrl: assetUrl,
         assetKind: function(id){ return ASSET_KIND[String(id)] || 'image'; },
@@ -595,7 +625,12 @@ function save(cb) {
     }, 'json').fail(function(){ $b.prop('disabled', false); });
 }
 $('#btnSave').on('click', function(){ save(); });
-$('#chkPrimary,#selPage,#selOrient').on('change', function(){ setDirty(true); });
+$('#chkPrimary').on('change', function(){ setDirty(true); });
+// 改紙張／方向要立刻反映在編輯區（不然編出來的跟印出來的不一樣）
+$('#selPage,#selOrient').on('change', function(){
+    setDirty(true);
+    if (ED && ED.setPaper) ED.setPaper($('#selPage').val(), $('#selOrient').val());
+});
 $(document).on('keydown', function(e){
     if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 's') { e.preventDefault(); save(); }
 });

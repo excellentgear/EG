@@ -65,6 +65,9 @@ $body = $err === ''
 <head>
 <meta charset="utf-8">
 <title><?= htmlspecialchars(($docNo !== '' ? $docNo . ' ' : '') . $docName) ?></title>
+<!-- 內文排版與編輯器共用同一個檔：兩邊各寫一份的話換頁位置會對不起來
+     （實測過：列印頁少了 p{margin:0 0 4px}，編輯器 12 頁列印卻變 23 頁） -->
+<link rel="stylesheet" href="../../resource/css/eg_doc_page.css?v=<?= @filemtime(__DIR__.'/../../resource/css/eg_doc_page.css') ?>">
 <style>
 @page {
     size: <?= $pageSize ?> <?= $orient ?>;
@@ -79,15 +82,10 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
 .ph .co { font-size: 16pt; font-weight: bold; letter-spacing: 1px; }
 .ph .nm { font-size: 14pt; margin-top: 1.5mm; }
 .ph .mt { font-size: 9pt; color: #333; margin-top: 1.5mm; }
-.doc table { border-collapse: collapse; }
-.doc td, .doc th { border: 1px solid #333; padding: 4px; }
+/* 內文的字級、行高、段落與表格間距一律來自 eg_doc_page.css（.eg-docbody），
+   這裡只加「列印特有」的規則，不可以再寫一份排版 */
 .doc thead { display: table-header-group; }      /* 表頭跨頁重複 */
 .doc tr { page-break-inside: avoid; }            /* 資料列不可被切成上下兩半 */
-.doc img { max-width: 100%; }
-.doc h1 { font-size: 16pt; margin: 0 0 8px; }
-.doc h2 { font-size: 14pt; margin: 12px 0 6px; }
-.doc h3 { font-size: 13pt; margin: 10px 0 5px; }
-.doc h4 { font-size: 12pt; margin: 9px 0 4px; }
 .doc hr[style*="page-break"] { border: 0; height: 0; margin: 0; }  /* 分頁符不要印出線 */
 .err { padding: 40px; text-align: center; color: #A34E2A; font-size: 14pt; }
 .draftmark { text-align:center; color:#A34E2A; font-size:10pt; border:1px dashed #A34E2A;
@@ -123,7 +121,7 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
         <div class="mt">版次 <?= htmlspecialchars($ver !== '' ? $ver : '—') ?>
             <?= $revDate !== '' ? '　修訂日期 ' . htmlspecialchars($revDate) : '' ?></div>
     </div>
-    <div class="doc"><?= $body ?></div>
+    <div class="doc eg-docbody"><?= $body ?></div>
 </div>
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script>

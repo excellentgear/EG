@@ -31,6 +31,9 @@ require_once __DIR__ . '/attachment_lib.php';
 
 /** 認得的 Word 副檔名 */
 define('ADI_WORD_EXT', ['doc', 'docx', 'rtf', 'odt']);
+/** 一頁的內容寬（px）：A4 直式 210mm 扣掉左右各 15mm 邊界＝180mm ≒ 680px。
+ *  表格比這個寬就一定會溢出紙張，一律改成 100%。 */
+define('ADI_PAGE_CONTENT_PX', 680);
 
 /**
  * 匯入某版次自己掛的 Word 檔。
@@ -127,7 +130,7 @@ function adi_import_file(PDO $db, int $versionId, string $src, string $showName,
 function adi_transform(PDO $db, string $raw, string $workDir, int $contentId, int $uid): array
 {
     $stat = ['img_in' => 0, 'img_ok' => 0, 'draw' => 0, 'draw_px' => [], 'img_fail' => 0,
-             'tables' => 0, 'boxes' => 0, 'objects' => 0, 'pagebreaks' => 0];
+             'tables' => 0, 'boxes' => 0, 'objects' => 0, 'pagebreaks' => 0, 'tbl_shrunk' => 0];
 
     // 只取 <body> 內容；<style>/<head> 整段丟掉（清洗器也會擋，但先丟掉省得白做工）
     if (preg_match('#<body[^>]*>(.*)</body>#is', $raw, $m)) $raw = $m[1];
@@ -160,12 +163,29 @@ function adi_transform(PDO $db, string $raw, string $workDir, int $contentId, in
     }, $raw);
     $raw = (string)preg_replace('#</font>#i', '</span>', $raw);
 
+    // ②-0 Word 的分頁符：LibreOffice 匯出成 page-break-before:always。
+    //     線上版的頁界是 <hr style="page-break-after:always">（見 eg_richtext.js 的分頁說明），
+    //     所以在那個區塊「之前」補一個頁界，匯入進來就已經照 Word 的分頁切好。
+    $raw = (string)preg_replace(
+        '#<(p|div|table|h[1-6])\b([^>]*style="[^"]*page-break-before\s*:\s*always[^"]*")#i',
+        '<hr style="page-break-after:always"><\1\2', $raw);
+
     // ② 表格的 width="112" 屬性 → style width:112px（屬性不在白名單，欄寬會全丟）
-    $raw = (string)preg_replace_callback('#<(table|td|th|col)\b([^>]*)>#i', function ($mm) {
+    //    ⚠ 超過「一頁的內容寬」的一律改成 100%：Word 的絕對像素寬加上儲存格內距與框線之後
+    //      常常比紙張內容區還寬，直接照搬就會溢出紙張（A4 直式內容寬 180mm≒680px）。
+    $raw = (string)preg_replace_callback('#<(table|td|th|col)\b([^>]*)>#i', function ($mm) use (&$stat) {
         $tag = strtolower($mm[1]); $at = $mm[2];
         if (!preg_match('/\bwidth="(\d{1,4})"/i', $at, $w)) return $mm[0];
         $px = (int)$w[1];
         if ($px <= 0 || $px > 2000) return $mm[0];
+        if ($tag === 'table' && $px > ADI_PAGE_CONTENT_PX) {
+            $stat['tbl_shrunk']++;
+            $at = preg_replace('/\bwidth="\d{1,4}"/i', '', $at);
+            if (preg_match('/style="([^"]*)"/i', $at, $s2)) {
+                $at = str_replace($s2[0], 'style="' . rtrim($s2[1], '; ') . ';width:100%"', $at);
+            } else { $at .= ' style="width:100%"'; }
+            return '<' . $tag . $at . '>';
+        }
         $at = preg_replace('/\bwidth="\d{1,4}"/i', '', $at);
         if (preg_match('/style="([^"]*)"/i', $at, $s)) {
             $at = str_replace($s[0], 'style="' . rtrim($s[1], '; ') . ';width:' . $px . 'px"', $at);
@@ -224,7 +244,10 @@ function adi_build_report(array $res, string $showName, float $secs, string $cle
     if ($s['tables'])     $done[] = ['type' => 'table', 'n' => $s['tables'], 'note' => '表格 ' . $s['tables'] . ' 張已轉入（含框線與合併儲存格）'];
     if ($s['img_ok'])     $done[] = ['type' => 'image', 'n' => $s['img_ok'], 'note' => '圖片 ' . $s['img_ok'] . ' 張已轉入'];
     if ($s['boxes'])      $done[] = ['type' => 'box',   'n' => $s['boxes'],  'note' => '帶框線的文字方塊 ' . $s['boxes'] . ' 個已轉成框線區塊'];
-    if ($s['pagebreaks']) $done[] = ['type' => 'pagebreak', 'n' => $s['pagebreaks'], 'note' => '分頁位置 ' . $s['pagebreaks'] . ' 處已保留'];
+    if ($s['pagebreaks']) $done[] = ['type' => 'pagebreak', 'n' => $s['pagebreaks'],
+        'note' => 'Word 的分頁 ' . $s['pagebreaks'] . ' 處已轉成線上版的分頁（已經幫你切成一頁一頁）'];
+    if (!empty($s['tbl_shrunk'])) $done[] = ['type' => 'table', 'n' => $s['tbl_shrunk'],
+        'note' => '有 ' . $s['tbl_shrunk'] . ' 張表格原本的固定寬度比一頁還寬，已改成「滿版寬度」避免超出紙張'];
 
     if ($s['draw']) {
         $sizes = array_slice(array_unique($s['draw_px']), 0, 6);
@@ -245,6 +268,12 @@ function adi_build_report(array $res, string $showName, float $secs, string $cle
     $todo[] = ['type' => 'headfoot', 'n' => 0, 'level' => 'info',
         'note' => 'Word 的頁首頁尾沒有轉入——這是刻意的：線上版列印時的表頭（表單名稱）與'
                 . '頁尾（AS 文件編號＋版次、頁碼）由系統依這份文件的綁定自動產生，不需要也不應該寫在內容裡。'];
+    if (empty($s['pagebreaks'])) {
+        $todo[] = ['type' => 'pagebreak', 'n' => 0, 'level' => 'info',
+            'note' => '這份 Word 裡沒有「明確的分頁符號」（它是靠內容長度自然換頁的），'
+                    . '所以匯入進來會先是一整頁。請按工具列的「自動分頁」，'
+                    . '系統會量測之後把超出的內容往後推，變成一頁一頁。'];
+    }
     $todo[] = ['type' => 'check', 'n' => 0, 'level' => 'info',
         'note' => '匯入的內容一律先當草稿，請逐段核對（尤其表格欄寬與段落順序）並補完流程圖，'
                 . '確認無誤後再按「設為此版次的正本」，之後檢視與列印才會走線上版。'];

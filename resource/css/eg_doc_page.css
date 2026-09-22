@@ -1,0 +1,47 @@
+/**
+ * eg_doc_page.css — AS 文件線上版「內文排版」的唯一實作
+ *
+ * 為什麼要單獨一個檔：編輯器（resource/js/eg_richtext.js 注入的樣式）與
+ * 列印版（views/ADM/as_doc_print.php）如果各寫一份排版規則，換頁位置就會不一樣——
+ * 實測過一次：列印頁少了 p{margin:0 0 4px}，用瀏覽器預設的 1em，
+ * 343 個段落各多約 24px，**編輯器 12 頁、列印卻變成 23 頁**，
+ * 所見即所得整個破功。所以排版只能有一份，兩邊都 <link> 這個檔。
+ *
+ * 套用方式：容器加 class="eg-docbody"
+ *   編輯器：<div class="egrt-body egrt-page egrt-sheet eg-docbody">
+ *   列印版：<div class="doc eg-docbody">
+ *
+ * 這裡只放「內文長什麼樣」。紙張大小、邊界、陰影、頁碼籤那些屬於各自的呈現方式
+ * （編輯器用 padding 模擬紙張邊界、列印用 @page margin），不要放進來。
+ */
+
+.eg-docbody {
+    font-family: "微軟正黑體", "Microsoft JhengHei", sans-serif;
+    font-size: 12pt;
+    line-height: 1.6;
+    color: #333;
+}
+
+/* 段落：間距要小，AS 文件是條列式的正式文件，不是網頁文章。
+   這一條就是編輯器與列印版換頁位置對不對得上的關鍵。 */
+.eg-docbody p { margin: 0 0 4px; }
+
+.eg-docbody h1 { font-size: 18pt; margin: 0 0 10px; }
+.eg-docbody h2 { font-size: 15pt; margin: 14px 0 8px; }
+.eg-docbody h3 { font-size: 13pt; margin: 12px 0 6px; }
+.eg-docbody h4 { font-size: 12pt; margin: 10px 0 5px; font-weight: bold; }
+.eg-docbody h5,
+.eg-docbody h6 { font-size: 12pt; margin: 8px 0 4px; font-weight: bold; }
+
+.eg-docbody ul,
+.eg-docbody ol { margin: 0 0 4px; padding-left: 22px; }
+.eg-docbody li { margin: 0; }
+
+.eg-docbody table { border-collapse: collapse; margin: 6px 0; }
+.eg-docbody td,
+.eg-docbody th { border: 1px solid #333; padding: 4px; vertical-align: top; }
+.eg-docbody th { text-align: center; }
+
+.eg-docbody img { max-width: 100%; }
+
+.eg-docbody hr { border: 0; border-top: 1px solid #bbb; margin: 10px 0; }
