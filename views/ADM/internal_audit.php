@@ -3181,9 +3181,26 @@ function unlinkMeeting(kind){
 function loadChecks(){
     $.getJSON(API, {action:'check_list', year:YEAR, kind:$('#checkKind').val(), kw:$('#checkKw').val()}, function(res){
         if (!res.ok) return;
-        LIST.check = res.rows||[]; renderChecks();
+        LIST.check = res.rows||[]; CHECK_OTHER_YEARS = res.other_years || []; renderChecks();
     });
 }
+/* 這個年度一張都沒有時，別的年度各有幾張（後端只在真的空的時候才回這一份）。
+   2026-09-22 使用者回報「儲存甚至結案的系統稽核紀錄表都會自動消失」——查證後**一張都沒被刪掉**，
+   是頁面預設停在「進行中」的年度、而那個年度剛好是空的，資料其實在前一個年度。
+   空白清單不講這件事，看起來就跟資料被刪掉一樣，所以一定要主動指出來並讓他一鍵切過去。 */
+var CHECK_OTHER_YEARS = [];
+function checkOtherYearHtml(){
+    var ys = (CHECK_OTHER_YEARS||[]).filter(function(x){ return +x.year !== +YEAR && +x.n > 0; });
+    if (!ys.length) return '';
+    return '<div style="margin-top:6px;font-size:13px;color:#7a5217;">'
+         + '<i class="fa fa-info-circle"></i> <b>' + esc(String(YEAR)) + ' 年度</b>沒有查檢表，'
+         + '但 ' + ys.map(function(x){
+               return '<a href="javascript:void(0)" onclick="gotoCheckYear(' + (+x.year) + ')">'
+                    + '<b>' + (+x.year) + ' 年度</b>有 ' + (+x.n) + ' 張</a>';
+           }).join('、')
+         + '。<b>資料沒有不見</b>，點一下就切過去。</div>';
+}
+function gotoCheckYear(y){ $('#yearSel').val(String(y)).trigger('change'); }
 $('#btnCheckSearch').on('click', function(){ PAGE.check=1; loadChecks(); });
 $('#checkKind').on('change', function(){ PAGE.check=1; loadChecks(); });
 $('#checkKw').on('keydown', function(e){ if(e.which===13){ PAGE.check=1; loadChecks(); } });
@@ -3193,7 +3210,8 @@ function renderChecks(){
     $('#checkPager').html(renderPager('check', LIST.check.length));
     var rows = pageSlice('check');
     if (!rows.length) {
-        $('#checkBody').html('<tr><td colspan="10" class="ia-empty">沒有符合條件的查檢表</td></tr>');
+        $('#checkBody').html('<tr><td colspan="10" class="ia-empty">沒有符合條件的查檢表'
+            + checkOtherYearHtml() + '</td></tr>');
         renderCheckAutoHint();     // 一張都還沒建的時候最需要這條提示，不可以提早 return 就跳過
         return;
     }
@@ -3317,6 +3335,13 @@ function nkKindChanged(){
        下面的「自動判定來源」已經是逐張多選的系統稽核紀錄表，件號由它推導就好，
        再要人選一次是同一份資訊有兩個來源（鐵律4），選成不一致還完全不會報錯。 */
     $('#nkCaseLab').toggle(!isAs); $('#nkCaseWrap').toggle(!isAs);
+    /* 換離 AS 時，把「被 AS 來源自動帶過去的日期」還原成今天（2026-09-22 修，成因見
+       NK_DATE_FROM_SRC 的註解）——不還原的話，新建的系統稽核紀錄表／績效表會被歸到
+       AS 來源那一年，一離開跳窗就從清單上消失。人工填過的日期一律不動。 */
+    if (!isAs && NK_DATE_FROM_SRC) {
+        NK_DATE_FROM_SRC = false;
+        $('#nkDate').val(inputDate(META.today)).trigger('change');
+    }
     $('#nkYearShow').val(isKpi ? (kpiAuditYear($('#nkDate').val())+' 年度（去年整年）') : '');
     if (isAs) loadSrcChecks();
     loadBank();
@@ -3510,14 +3535,23 @@ function nkSrcCaseId(){
     return (cid && cid !== '0') ? cid : '';
 }
 /* 勾選來源之後，建立（稽核）日期自動跟著來源走（2026-09-21 使用者要求）。
-   勾了好幾張時取**最晚的那一張**——那是這一次稽核實際做完的日子。 */
+   勾了好幾張時取**最晚的那一張**——那是這一次稽核實際做完的日子。
+   **只有種類是 AS 時才可以動日期**（2026-09-22 修）：跳窗一打開種類預設就是 AS，
+   來源會自動全勾並把日期改成來源的稽核日期；使用者接著把種類換成「系統稽核紀錄表」時，
+   那個日期會留在欄位上不動，於是新建的系統稽核紀錄表被歸到**別的年度**，
+   一離開跳窗就從清單上消失（使用者回報「儲存甚至結案的都會自動消失」的其中一個成因）。
+   NK_DATE_FROM_SRC 記住「這個日期是自動帶的、不是人填的」，換種類時才知道可以安全還原。 */
+var NK_DATE_FROM_SRC = false;
 $(document).on('change', '.nkSrcChk', function(){
+    if ($('#nkKind').val() !== 'as') return;
     var d = '';
     $('#nkSrcList .nkSrcChk:checked').each(function(){
         var x = String($(this).data('date')||''); if (x && x > d) d = x;
     });
-    if (d) $('#nkDate').val(inputDate(d)).trigger('change');
+    if (d) { NK_DATE_FROM_SRC = true; $('#nkDate').val(inputDate(d)).trigger('change'); }
 });
+// 人工改過日期就不再視為「自動帶的」，換種類時不可以把他填的值蓋掉
+$('#nkDate').on('input', function(){ NK_DATE_FROM_SRC = false; });
 function loadBank(){
     var kind = $('#nkKind').val();
     NK_TASKS = []; NK_CHECKED = {}; NK_GRP_OPEN = {};   // 換種類＝重來一次，不要把上一種的勾選帶過去

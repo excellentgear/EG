@@ -952,7 +952,26 @@ case 'check_list': {
               FROM ia_check k LEFT JOIN ia_case c ON c.case_id=k.case_id
              WHERE " . implode(' AND ', $w) . " ORDER BY k.year DESC, k.check_date DESC, k.check_id DESC";
     $st = $db->prepare($sql); $st->execute($p);
-    jout(['rows' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    /* 一張都沒有的時候，順便回報「別的年度各有幾張」（2026-09-22 使用者回報
+       「儲存甚至結案的系統稽核紀錄表都會自動消失」）。
+       真相是**一張都沒有被刪掉**——頁面預設停在「進行中」的年度，而那個年度剛好是空的，
+       使用者的資料其實在前一個年度。空白清單不講這件事，看起來就跟資料被刪掉一樣。
+       只在「真的是空的」時才多跑這一句，平常不增加任何成本。 */
+    $others = [];
+    if (!$rows && $year) {
+        /* 去掉年度那一條。**用位置而不是用值去找**：年度是第一個被 push 的條件，
+           所以它固定是 $w[1]（$w[0] 是未刪除）與 $p[0]；
+           拿值去 array_search 會有「case_id 剛好等於年度數字」這種對不到或刪錯的風險。 */
+        $w2 = $w; unset($w2[1]); $w2 = array_values($w2);
+        $p2 = array_slice($p, 1);
+        $q2 = $db->prepare("SELECT k.year, COUNT(*) n FROM ia_check k
+                             WHERE " . implode(' AND ', $w2) . "
+                             GROUP BY k.year ORDER BY k.year DESC");
+        $q2->execute($p2);
+        $others = $q2->fetchAll(PDO::FETCH_ASSOC);
+    }
+    jout(['rows' => $rows, 'other_years' => $others]);
 }
 
 case 'check_create': {
