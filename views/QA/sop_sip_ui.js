@@ -611,15 +611,16 @@ function itemsHtml() {
            + '「代入預設項目」會把這個製程設定好的專屬項目與標準項目接在現有內容後面，'
            + '代入之後仍然可以逐列刪掉不要的。</div>';
     }
-    h += '<table class="grid" id="tblItems"><thead><tr>'
-          + '<th style="width:36px;">#</th><th style="width:140px;">管理重點</th><th>品質特性</th>'
+    // 品質特性給明確寬度：不給的話它是唯一的彈性欄，欄位一多就會被壓成一條（表頭變直書）
+    h += '<div class="gridwrap"><table class="grid" id="tblItems" style="min-width:1060px;"><thead><tr>'
+          + '<th style="width:36px;">#</th><th style="width:140px;">管理重點</th><th style="width:200px;">品質特性</th>'
           + '<th style="width:74px;">上限</th><th style="width:74px;">下限</th>'
           + '<th style="width:86px;">擔當者</th><th style="width:122px;">檢驗方法</th>'
-          + '<th style="width:130px;">檢具編號</th><th style="width:104px;">檢驗頻率</th><th style="width:120px;">備註</th>'
+          + '<th style="width:130px;">檢具編號</th><th style="width:104px;">檢驗頻率</th><th>備註</th>'
           + (CUR.can_edit ? '<th style="width:38px;"></th>' : '') + '</tr></thead><tbody data-eg-row-add="itemAdd" data-eg-row-del="itemDel">';
     var rows = CUR.items.length ? CUR.items : (CUR.can_edit ? [{}] : []);
     $.each(rows, function (i, r) { h += itemRow(i, r, ro); });
-    h += '</tbody></table></div>';
+    h += '</tbody></table></div></div>';
     return h;
 }
 function itemRow(i, r, ro) {
@@ -1363,17 +1364,18 @@ function setPaneTpl(pno) {
                + '<input type="checkbox" id="tplStd"' + (num(cfg.with_std) ? ' checked' : '') + '> 代入時一併帶標準項目</label>'
                + '</div></div>';
         }
-        h += '<table class="grid" id="tblTpl"><thead><tr>'
-           + '<th style="width:36px;">#</th><th style="width:140px;">管理重點</th><th>品質特性</th>'
+        // 欄位與文件裡的檢驗項目一樣多，品質特性一定要給寬度，否則會被擠成一條（表頭變直書）
+        h += '<div class="gridwrap"><table class="grid" id="tblTpl" style="min-width:1060px;"><thead><tr>'
+           + '<th style="width:36px;">#</th><th style="width:140px;">管理重點</th><th style="width:200px;">品質特性</th>'
            + '<th style="width:74px;">上限</th><th style="width:74px;">下限</th>'
            + '<th style="width:86px;">擔當者</th><th style="width:122px;">檢驗方法</th>'
-           + '<th style="width:96px;">檢具編號</th><th style="width:104px;">檢驗頻率</th><th style="width:110px;">備註</th>'
+           + '<th style="width:130px;">檢具編號</th><th style="width:104px;">檢驗頻率</th><th>備註</th>'
            + '<th style="width:38px;"></th></tr></thead><tbody data-eg-row-add="tplAdd" data-eg-row-del="tplDel">';
         var rows = (res.rows || []).length ? res.rows : [{}];
         // 樣板列用同一份 ownerSel/methodSel，所以先把選項塞進 CUR 的替身
         TPLCTX = { owner_depts: res.owner_depts || [], methods: res.methods || [], tool_types: res.tool_types || [] };
         $.each(rows, function (i, r) { h += tplRow(i, r); });
-        h += '</tbody></table>';
+        h += '</tbody></table></div>';
         h += '<div style="margin-top:8px;"><button class="btn btn-sm btn-warm" id="tplSave">儲存這一組</button> '
            + '<button class="btn btn-sm btn-warm-o" id="tplSuggest">從既有文件找出重複的項目</button>'
            + '<span class="muted-help">　儲存的是目前編輯的這一組（標準項目或某一個製程）。'

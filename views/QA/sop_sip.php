@@ -123,6 +123,11 @@ $STATUSES = ss_statuses();
         .sec h5 { margin:0 0 8px; font-size:13.5px; color:var(--ink2); display:flex; align-items:center; gap:8px; }
         table.grid { width:100%; border-collapse:collapse; font-size:12.5px; }
         table.grid th, table.grid td { border:1px solid var(--line); padding:3px 5px; vertical-align:top; }
+        /* 表頭一律不換行：欄位被擠到剩幾個像素時，症狀就是表頭變成直書一個字一行。
+           不給它換行，欄位被壓扁的時候會直接把表格撐出捲軸，看得出來而不是默默變形。 */
+        table.grid th { white-space:nowrap; }
+        /* 明細表格一律包一層可橫向捲動的容器：欄位多的時候寧可捲，也不要把某一欄壓成 0 */
+        .gridwrap { overflow-x:auto; }
         table.grid thead th { background:var(--sand); color:var(--ink2); text-align:center; font-size:12px; }
         table.grid input, table.grid textarea, table.grid select {
             width:100%; border:1px solid transparent; background:transparent; font-size:12.5px; padding:2px 3px; }
@@ -327,7 +332,9 @@ $STATUSES = ss_statuses();
 
 <!-- ══════════ 設定跳窗（管理員） ══════════ -->
 <?php if ($P['canAdmin']): ?>
-<div class="ss-mask" id="maskSet"><div class="ss-modal" style="width:900px;">
+<!-- 寬度比照編輯跳窗：檢驗項目預設值那張表欄位跟文件裡的檢驗項目一樣多，
+     900px 放不下會把「品質特性」擠成一條（使用者 2026-09-21 回報） -->
+<div class="ss-mask" id="maskSet"><div class="ss-modal" style="width:1180px;">
     <div class="m-head">SOP／SIP 設定<button class="x" data-close="maskSet">&times;</button></div>
     <div class="m-body" id="setBody"></div>
     <div class="m-foot"><span class="muted-help">自動簽核會在送出當下把審核與核准一起蓋好，時間依表單日期錯開且不跨日。</span>
