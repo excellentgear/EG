@@ -711,11 +711,16 @@ function headHtml() {
                + '要重新照主檔帶一次請按 <button class="btn btn-xs btn-warm-o" id="btnRefillMachine">重新帶入</button></div>';
         }
     } else if (CUR.kind === 'process') {
-        h += '<label>使用設備</label><div class="wide"><input id="f_use_equip" value="' + esc(v.use_equip || '') + '"' + ro + '>'
-           + (CUR.can_edit ? '<div class="muted-help" style="margin-top:3px;">'
-               + '<button class="btn btn-xs btn-warm-o" id="btnPickEquip">從機台挑（可複選機器編號）</button>'
-               + '　也可以直接打字。</div>' : '') + '</div>'
-           + '<label>預計工時</label><div><input id="f_est_hours" value="' + esc(v.est_hours || '') + '"' + ro + '></div>';
+        /* 綁機台的文件，上面的「機台型號／機器編號」就是使用設備，這裡不再重複開一個欄位
+           （使用者 2026-09-22：「上方已經顯示機器編號，下方就不要重複有使用設備」）。
+           列印時的「使用設備」那一格改由綁定的機器編號直接帶出，所以紙本不會因此變空白。 */
+        if (d.scope !== 'machine') {
+            h += '<label>使用設備</label><div class="wide"><input id="f_use_equip" value="' + esc(v.use_equip || '') + '"' + ro + '>'
+               + (CUR.can_edit ? '<div class="muted-help" style="margin-top:3px;">'
+                   + '<button class="btn btn-xs btn-warm-o" id="btnPickEquip">從機台挑（可複選機器編號）</button>'
+                   + '　也可以直接打字。</div>' : '') + '</div>';
+        }
+        h += '<label>預計工時</label><div><input id="f_est_hours" value="' + esc(v.est_hours || '') + '"' + ro + '></div>';
     }
     h += '</div></div>';
     return h;
@@ -1372,7 +1377,9 @@ function saveDoc(cb) {
                 p[k] = $('#f_' + k).val() || '';
             });
         } else if (CUR.kind === 'process') {
-            p.use_equip = $('#f_use_equip').val() || '';
+            // 綁機台時畫面上沒有這個欄位，**就不要送**——送空字串會把既有的使用設備洗成空的
+            // （ss_ver_save 是用 array_key_exists 判「有沒有送這個欄位」）
+            if ($('#f_use_equip').length) p.use_equip = $('#f_use_equip').val() || '';
             p.est_hours = $('#f_est_hours').val() || '';
             p.steps = JSON.stringify(collectSteps());
         } else {

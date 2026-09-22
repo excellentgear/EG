@@ -256,7 +256,9 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
     <table>
         <tr>
             <td class="lab" style="width:24mm;">製程名稱</td><td><?= h($doc['proc_name'] ?: $doc['title']) ?></td>
-            <td class="lab" style="width:24mm;">使用設備</td><td><?= h($ver['use_equip']) ?></td>
+<?php /* 綁機台的文件，使用設備就是綁定的機器編號（畫面上已經不再另外開一個欄位讓人重打一次） */ ?>
+            <td class="lab" style="width:24mm;">使用設備</td>
+            <td><?= h((string)$doc['scope'] === 'machine' ? ($assetTx ?: $doc['machine_model']) : $ver['use_equip']) ?></td>
             <td class="lab" style="width:24mm;">預計工時</td><td class="mid" style="width:24mm;"><?= h($ver['est_hours']) ?></td>
         </tr>
         <tr>

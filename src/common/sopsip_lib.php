@@ -638,7 +638,10 @@ function ss_ver_full(PDO $db, int $verId): ?array
         $it['owner_label'] = ss_owner_label($db, (int)($it['owner_dept_id'] ?? 0), (string)($it['owner'] ?? ''));
     }
     unset($it);
-    $meta = $kind === 'equip' ? ss_equip_meta($db, $d) : null;
+    /* 機台資料（機器編號 asset_text 就在裡面）：**綁機台的一律要算**，不能只算設備操作說明書——
+       製造製程說明書與標準檢驗指導書現在也綁得了機台（ss_kind_scopes 四種全開），
+       只看版面的話畫面上「機器編號」會是空白，看起來像綁定沒有成功（使用者 2026-09-22 回報）。 */
+    $meta = ($kind === 'equip' || (string)($d['scope'] ?? '') === 'machine') ? ss_equip_meta($db, $d) : null;
     return [
         'doc'   => $d,
         'ver'   => $v,
