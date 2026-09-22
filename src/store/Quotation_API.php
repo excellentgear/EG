@@ -10,6 +10,7 @@ require_once '../common/asdoc_lib.php';
 require_once __DIR__ . '/../common/quote_customer_lib.php';   // 整張報價單變更客戶（唯一實作）
 require_once __DIR__ . '/../common/quote_kw_rule_lib.php';    // 依規格關鍵字自動建議製程標籤（唯一實作）
 require_once __DIR__ . '/../common/gear_spec_lib.php';        // 齒輪規格顯示字串（唯一實作，與主檔/訂單追蹤/出貨單同一份）
+require_once __DIR__ . '/../common/gear_save_lib.php';        // 存齒輪時不要洗掉本表單沒管到的欄位（唯一實作）
 
 $db  = new DBConnection();
 $pdo = $db->getPDO();
@@ -3132,13 +3133,20 @@ try {
                     ->execute([$part_no,$type,$cust_id,$revision,$issue_date,$remark,$user_id]);
                 $d_id = (int)$pdo->lastInsertId();
             }
+            // 這張表單只管得到下面那 12 欄，但 DELETE 會把整列（34 欄）清掉——
+            // 徑節/周節標記、鏈輪規格、花鍵尺寸、齒輪等級會一起靜默消失（見 gear_save_lib）
+            $__gsnap = eg_gear_keep_snapshot($pdo, (int)$d_id);
             $pdo->prepare("DELETE FROM d_setting_gear WHERE d_setting_id=?")->execute([$d_id]);
             if ($type === 'G' && !empty($gears)) {
-                $ins_g = $pdo->prepare("INSERT INTO d_setting_gear (d_setting_id,Gear_Type,Module,Teeth,Pressure_Angle,Face_Width,Workpiece_Length,Profile_Shift_X,Helix_Angle,Helix_Angle_Str,Helix_Direction,Remark_Gear) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+                // Created_By 是 NOT NULL 且沒有預設值——原本這支 INSERT 漏了這一欄，
+                // 所以「齒輪類料號只要填了齒輪規格就一定存檔失敗」（1364，整個交易回滾，
+                // 連料號本身的修改也一起存不進去）。2026-09-22 實際打 API 才發現。
+                $ins_g = $pdo->prepare("INSERT INTO d_setting_gear (d_setting_id,Gear_Type,Module,Teeth,Pressure_Angle,Face_Width,Workpiece_Length,Profile_Shift_X,Helix_Angle,Helix_Angle_Str,Helix_Direction,Remark_Gear,Created_By) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
                 foreach ($gears as $g) {
-                    $ins_g->execute([$d_id,$g['Gear_Type']??null,$g['Module']??null,$g['Teeth']??null,$g['Pressure_Angle']??null,$g['Face_Width']??null,$g['Workpiece_Length']??null,(isset($g['Profile_Shift_X'])&&$g['Profile_Shift_X']!=='')?$g['Profile_Shift_X']:null,(isset($g['Helix_Angle'])&&$g['Helix_Angle']!=='')?$g['Helix_Angle']:null,$g['Helix_Angle_Str']??null,$g['Helix_Direction']??null,$g['Remark_Gear']??null]);
+                    $ins_g->execute([$d_id,$g['Gear_Type']??null,$g['Module']??null,$g['Teeth']??null,$g['Pressure_Angle']??null,$g['Face_Width']??null,$g['Workpiece_Length']??null,(isset($g['Profile_Shift_X'])&&$g['Profile_Shift_X']!=='')?$g['Profile_Shift_X']:null,(isset($g['Helix_Angle'])&&$g['Helix_Angle']!=='')?$g['Helix_Angle']:null,$g['Helix_Angle_Str']??null,$g['Helix_Direction']??null,$g['Remark_Gear']??null,$user_id]);
                 }
             }
+            eg_gear_keep_restore($pdo, (int)$d_id, $__gsnap, ['Gear_Type','Module','Teeth','Pressure_Angle','Face_Width','Workpiece_Length','Profile_Shift_X','Helix_Angle','Helix_Angle_Str','Helix_Direction','Remark_Gear']);
             $pdo->commit();
             $response = ['success' => true, 'message' => '料號資料儲存成功', 'd_id' => (int)$d_id];
             break;

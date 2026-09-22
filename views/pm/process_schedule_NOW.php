@@ -2,6 +2,7 @@
 include_once '../../src/common/_config.php';
 include "../../src/common/DBConnection.php";
 require_once __DIR__ . '/../../src/common/gear_spec_lib.php';   // 模數要印 M 還是 DP/CP＝eg_gear_module_text()，唯一實作
+require_once __DIR__ . '/../../src/common/gear_save_lib.php';   // 存齒輪時不要洗掉本表單沒管到的欄位（唯一實作）
 
 // 檢查是否已登入 (處理 Session Timeout)
 // 確保 Session 已啟動且檢查 user_id 或 id (相容舊系統)
@@ -2124,6 +2125,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $pdo->beginTransaction();
 
         // 先刪除舊資料
+        // 這張表單只管得到下面 12 欄，但 DELETE 會把整列（34 欄）清掉——
+        // 徑節/周節標記、鏈輪規格、花鍵尺寸、齒輪等級會一起靜默消失（見 gear_save_lib）
+        $__gsnap = eg_gear_keep_snapshot($pdo, (int)$d_id);
         $pdo->prepare("DELETE FROM d_setting_gear WHERE d_setting_id = ?")->execute([$d_id]);
 
         if (!empty($gears)) {
@@ -2154,6 +2158,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ]);
             }
         }
+        eg_gear_keep_restore($pdo, (int)$d_id, $__gsnap, ['Module','Teeth','Face_Width','Helix_Angle','Pressure_Angle','Workpiece_Length','Gear_Type','Spec_No','Remark_Gear','Helix_Direction','Profile_Shift_X','Helix_Angle_Str']);
 
         $pdo->commit();
         echo json_encode(['success' => true, 'message' => '齒輪規格已更新']);

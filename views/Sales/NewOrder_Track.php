@@ -61,6 +61,7 @@ include '../../src/common/_config.php';
 require_once '../../src/common/part_alias_lib.php';
 require_once '../../src/common/quote_customer_lib.php';   // 訂單 ↔ 來源OP單客戶連動（唯一實作）
 require_once '../../src/common/order_price_lib.php';      // 訂單顯示單價判定（清單與編輯跳窗共用，唯一實作）
+require_once '../../src/common/gear_save_lib.php';        // 存齒輪時不要洗掉本表單沒管到的欄位（唯一實作）
 
 $conn = new DBConnection();
 
@@ -494,8 +495,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             // 處理齒輪資料 (若 Type 為 G)
             // 先刪除舊資料
+            // 這張表單只管得到下面 12 欄，但 DELETE 會把整列（34 欄）清掉——
+            // 徑節/周節標記、鏈輪規格、花鍵尺寸、齒輪等級會一起靜默消失（見 gear_save_lib）
+            $__gsnap = eg_gear_keep_snapshot($pdo, (int)$d_id);
             $pdo->prepare("DELETE FROM d_setting_gear WHERE d_setting_id = ?")->execute([$d_id]);
-            
+
             if ($type === 'G' && !empty($gears)) {
                 $sql_gear = "INSERT INTO d_setting_gear (d_setting_id, Module, Teeth, Face_Width, Helix_Angle, Pressure_Angle, Workpiece_Length, Gear_Type, Spec_No, Remark_Gear, Created_By, Helix_Direction, Profile_Shift_X, Helix_Angle_Str) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
                 $stmt_gear = $pdo->prepare($sql_gear);
@@ -511,6 +515,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     ]);
                 }
             }
+            eg_gear_keep_restore($pdo, (int)$d_id, $__gsnap, ['Module','Teeth','Face_Width','Helix_Angle','Pressure_Angle','Workpiece_Length','Gear_Type','Spec_No','Remark_Gear','Helix_Direction','Profile_Shift_X','Helix_Angle_Str']);
 
             $pdo->commit();
             echo json_encode(['success' => true, 'message' => '料號資料儲存成功']);
@@ -1614,6 +1619,9 @@ $can_order_change_setting  = ($permission_code === 'A');                // 訂�
 $can_order_change_client   = false;
 // 設定「BOSS 審圖客戶名單」：全新功能，舊制沒有對應權限碼，一律預設關閉（同上）
 $can_boss_review_setting   = false;
+// 訂單分析（2026-09-22 新增的獨立頁面）：全新功能，舊制沒有對應權限碼，一律預設關閉
+// （不改變任何現有使用者看到的畫面；要用請由管理員在「角色設定」勾選 ot_analysis）
+$can_analysis              = false;
 $can_op_convert            = $can_create;                               // OP轉訂單（舊制沿用一般新增權限）
 $can_view_amount           = true;                                      // 金額顯示（舊制從未限制過，一律可見）
 $can_keyway_calc           = true;                                      // 鍵槽計算（舊制從未限制過，一律可見）
@@ -1721,6 +1729,10 @@ $OT_PAGE_FEATURES = [
     ['group'=>'設計與批圖',   'code'=>'ot_master_edit',          'label'=>'前往料號主檔編輯按鈕'],
     ['group'=>'計算工具',     'code'=>'ot_gear_calc',            'label'=>'齒輪計算'],
     ['group'=>'計算工具',     'code'=>'ot_keyway_calc',          'label'=>'鍵槽計算'],
+    // 2026-09-22 新增：訂單分析（views/Sales/Order_Analysis.php，獨立頁面）
+    // 本頁只多一顆開啟按鈕，其餘一行都不動（使用者明確要求「嚴禁影響現有使用者」）。
+    ['group'=>'訂單分析',     'code'=>'ot_analysis',             'label'=>'訂單分析（新訂單／趨勢／全製單製／數量區間／客戶與料號排名）'],
+    ['group'=>'訂單分析',     'code'=>'ot_analysis_setting',     'label'=>'訂單分析設定（數量區間、全製／單製關鍵字規則）'],
 ];
 
 // ── RBAC 權限檢查（$OT_USE_RBAC = true 時生效）───────────────────────────
@@ -1739,6 +1751,7 @@ if ($OT_USE_RBAC) {
     $can_order_change_setting  = ot_hasF('ot_order_change_setting');
     $can_order_change_client   = ot_hasF('ot_order_change_client');
     $can_boss_review_setting   = ot_hasF('ot_boss_review_setting');
+    $can_analysis              = ot_hasF('ot_analysis');
     $can_op_convert             = ot_hasF('ot_op_convert');
     $can_view_amount            = ot_hasF('ot_view_amount');
     $can_keyway_calc            = ot_hasF('ot_keyway_calc');
@@ -3790,6 +3803,15 @@ foreach($dCounts as $c) {
                             title="設定（訂單變更通知對象、附件路徑、列印表頭表尾、需給 BOSS 審圖的客戶名單）"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#37474f,#607d8b);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
                             <i class="fa fa-cog" style="font-size:13px;"></i><span class="fb-txt"> 設定</span>
+                        </button>
+                        <?php endif; ?>
+                        <?php if ($can_analysis): ?>
+                        <!-- 訂單分析（2026-09-22）：獨立頁面，本頁只負責開它，不做任何計算 -->
+                        <button type="button" id="btn-order-analysis"
+                            onclick="window.open('Order_Analysis.php','egOrderAnalysis')"
+                            title="訂單分析（本年度新訂單、訂單金額與筆數趨勢、全製/單製、數量區間佔比、客戶比較與增減排名、受訂料號排名）"
+                            style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#8a5a2b,#F0A24B);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
+                            <i class="fa fa-bar-chart" style="font-size:13px;"></i><span class="fb-txt"> 訂單分析</span>
                         </button>
                         <?php endif; ?>
                         <!-- 批圖編輯器：獨立跳窗（可拖到另一個螢幕），小畫家+Figma 混合式圖面編輯 -->

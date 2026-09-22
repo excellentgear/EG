@@ -14,6 +14,7 @@ include '../../src/common/DBConnection.php';
 include '../../src/store/_setting.php';
 include '../../src/common/_config.php';
 require_once __DIR__ . '/../../src/common/ship_order_bind_lib.php';  // 出貨單↔訂單綁定的唯一實作（兩種來源都要讀，禁各頁自寫）
+require_once __DIR__ . '/../../src/common/gear_save_lib.php';        // 存齒輪時不要洗掉本表單沒管到的欄位（唯一實作）
 
 // --- AJAX: 取得可用年份 ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_available_years') {
@@ -440,8 +441,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
         // --- Gear Details Logic ---
         // 先刪除舊的齒輪資料 (簡單起見，一對一或一對多都適用)
+        // 這張表單只管得到下面 9 欄，但 DELETE 會把整列（34 欄）清掉——徑節/周節標記、
+        // 螺旋方向、轉位係數、鏈輪規格、花鍵尺寸、齒輪等級會一起靜默消失（見 gear_save_lib）
+        $__gsnap = eg_gear_keep_snapshot($pdo, (int)$d_id);
         $pdo->prepare("DELETE FROM d_setting_gear WHERE d_setting_id = ?")->execute([$d_id]);
-        
+
         $gears_json = $_POST['gears'] ?? '[]';
         $gears = json_decode($gears_json, true);
 
@@ -456,6 +460,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ]);
             }
         }
+        eg_gear_keep_restore($pdo, (int)$d_id, $__gsnap, ['Gear_Type','Module','Teeth','Pressure_Angle','Helix_Angle','Face_Width','Workpiece_Length','Remark_Gear']);
 
         // --- Assembly Child Parts Logic ---
         $pdo->prepare("DELETE FROM d_setting_bom WHERE parent_d_id = ?")->execute([$d_id]);
