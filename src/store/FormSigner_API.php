@@ -733,7 +733,8 @@ case 'case_set_biz_date': {
     if (!$r['ok']) jerr($r['msg']);
     // 已送出的案件改日期＝動到已經簽核完成的正式文件，一律留稽核（誰、什麼時候、從哪一天改到哪一天）
     if (($case['status'] ?? '') !== 'draft' && empty($r['unchanged']))
-        fsd_post_edit_audit($db, $uid, $uname, $id, '更改業務日期',
+        fsd_post_edit_audit($db, $uid, $uname, $id,
+            empty($r['realigned']) ? '更改業務日期' : '把圖章日期對齊業務日期',
             [['field'=>'業務日期', 'old'=>(string)$r['old_date'], 'new'=>(string)$r['business_date']],
              ['field'=>'自動簽核蓋章時間重排', 'old'=>'', 'new'=>(string)$r['auto_shifted'] . ' 筆']]);
     jout($r);

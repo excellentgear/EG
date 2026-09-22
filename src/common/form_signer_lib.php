@@ -1805,12 +1805,25 @@ function fsd_post_edit_sync_response(PDO $db, array $case, string $slotKey, int 
 }
 
 /** 這件案子有幾個章的日期會跟著業務日期走（自動簽核）、幾個不會（真人當場簽的）。 */
-function fsd_case_biz_date_stats(PDO $db, int $caseId): array {
-    $st = $db->prepare("SELECT SUM(COALESCE(is_auto,0)=1) a, SUM(COALESCE(is_auto,0)=0) m
+function fsd_case_biz_date_stats(PDO $db, int $caseId, string $bizDate = ''): array {
+    if ($bizDate === '') {
+        $st = $db->prepare("SELECT business_date FROM fsd_case WHERE id=?");
+        $st->execute([$caseId]);
+        $bizDate = (string)($st->fetchColumn() ?: '');
+    }
+    $st = $db->prepare("SELECT SUM(COALESCE(is_auto,0)=1) a, SUM(COALESCE(is_auto,0)=0) m,
+                               SUM(COALESCE(is_auto,0)=1 AND DATE(responded_at)<>?) mis
                         FROM fsd_case_response WHERE case_id=? AND responded_at IS NOT NULL");
-    $st->execute([$caseId]);
+    $st->execute([$bizDate, $caseId]);
     $r = $st->fetch(PDO::FETCH_ASSOC) ?: [];
-    return ['auto' => (int)($r['a'] ?? 0), 'manual' => (int)($r['m'] ?? 0)];
+    // mismatch＝自動簽核的章印的日期跟業務日期對不起來（例：業務日期被改過、或送出時業務日期還是別的日期）
+    $st = $db->prepare("SELECT DISTINCT DATE(responded_at) d FROM fsd_case_response
+                        WHERE case_id=? AND COALESCE(is_auto,0)=1 AND responded_at IS NOT NULL AND DATE(responded_at)<>?
+                        ORDER BY d");
+    $st->execute([$caseId, $bizDate]);
+    return ['auto' => (int)($r['a'] ?? 0), 'manual' => (int)($r['m'] ?? 0),
+            'mismatch' => (int)($r['mis'] ?? 0),
+            'stamp_dates' => array_column($st->fetchAll(PDO::FETCH_ASSOC), 'd')];
 }
 
 /**
@@ -1846,8 +1859,10 @@ function fsd_case_set_business_date(PDO $db, int $caseId, int $byUid, string $ne
     }
 
     $old = (string)($case['business_date'] ?? '');
-    $stats = fsd_case_biz_date_stats($db, $caseId);
-    if ($old === $newDate)
+    $stats = fsd_case_biz_date_stats($db, $caseId, $newDate);
+    // 日期沒變也可能要做事：業務日期早先被改過（或送出時業務日期是別的日期），章還停在舊日期＝
+    // 「業務日期 09.01、章卻印 08.25」那種對不起來的文件。這時選同一天＝把章對齊回業務日期。
+    if ($old === $newDate && $stats['mismatch'] === 0)
         return ['ok'=>true, 'business_date'=>$newDate, 'old_date'=>$old, 'unchanged'=>true,
                 'auto_shifted'=>0, 'manual_kept'=>$stats['manual']];
 
@@ -1892,7 +1907,7 @@ function fsd_case_set_business_date(PDO $db, int $caseId, int $byUid, string $ne
     }
     if ($oldExport !== '' && $onExportInvalidated) { try { $onExportInvalidated($oldExport); } catch (Throwable $e) {} }
 
-    return ['ok'=>true, 'business_date'=>$newDate, 'old_date'=>$old,
+    return ['ok'=>true, 'business_date'=>$newDate, 'old_date'=>$old, 'realigned'=>($old === $newDate),
             'auto_shifted'=>$shifted, 'manual_kept'=>$stats['manual'], 'pdf_invalidated'=>($oldExport !== '')];
 }
 
