@@ -20,6 +20,7 @@
  *   - 表單簽核一般案件：樣板綁定（system_parameters AS_DOC_BIND / fsd_tpl_{樣板id}）→ 該樣板的所有案件
  *   - 表單簽核補案件  ：案件自己挑的 fsd_case.as_doc_id
  *   - 審核表單        ：模板綁定（review_form_tpl_{模板id}）→ 該模板的所有表單
+ *   - 聯絡單          ：AS_DOC_BIND / notice_contact → live_event 裡「已配發聯絡單號」的那幾則
  *   反查一律走 eg_asdoc_bound_ids()（asdoc_lib.php），不要自己 parse system_parameters。
  *
  * 注意：**綁定成不成立與「列印頁上要不要印那個編號」無關**——2026-09-10 新增的
@@ -109,6 +110,27 @@ function eg_asdoc_fill_rows(PDO $db, int $docId): array {
                            'title'=>(string)$r['abnormal_order_no'], 'rec_date'=>$r['occurrence_date'], 'person'=>'',
                            'note'=>(string)$r['abnormal_phenomenon'], 'status'=>'', 'can_preview'=>false,
                            'open_url'=>'../QA/qa_abnormal_view.php'];
+        }
+    } catch (Throwable $e) { /* 模組表不存在時略過此來源 */ }
+
+    // ── ⑤聯絡單 2-DC-02-01（公告／通知的紙本聯絡單；2026-09-22 使用者交辦）──
+    //   判定「這則公告算不算一張聯絡單」＝**有沒有 contact_no**（聯絡單號只有真的按過列印才配發），
+    //   不是「有沒有公告」——全站幾百則公告不是每一則都印成聯絡單，全列出來這份品質紀錄清單就沒意義了。
+    //   建立者是 user id，但早期資料有 274 則是空的，故比照 notice_contact_lib 退回文字欄 source。
+    try {
+        if ($docId === eg_asdoc_id($db, 'notice_contact')) {
+            $st = $db->query("SELECT e.id, e.contact_no, e.title, e.eventdate,
+                                     COALESCE(NULLIF(u.user_cname,''), NULLIF(e.source,''), '') AS person
+                              FROM live_event e
+                              LEFT JOIN `user` u ON u.id = e.created_by
+                              WHERE e.contact_no IS NOT NULL AND e.contact_no <> ''");
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $rows[] = ['src'=>'notice_contact', 'src_name'=>'聯絡單（公告／通知）', 'id'=>(int)$r['id'],
+                           'title'=>trim((string)$r['contact_no'] . '　' . (string)$r['title']),
+                           'rec_date'=>$r['eventdate'], 'person'=>(string)$r['person'],
+                           'note'=>'', 'status'=>'已列印', 'can_preview'=>false,
+                           'open_url'=>'../liveEvent/createEvent.php'];
+            }
         }
     } catch (Throwable $e) { /* 模組表不存在時略過此來源 */ }
 

@@ -51,10 +51,6 @@ function eg_asdoc_linked_modules(): array {
         'purchase_order'       => ['name' => '申請採購 · 廠商採購單', 'url' => 'pages/purchase_request.php'],
         'purchase_request'     => ['name' => '申請採購 · 請購單',     'url' => 'pages/purchase_request.php'],
         'purchase_inquiry'     => ['name' => '申請採購 · 詢價單',     'url' => 'pages/purchase_request.php'],
-        'stock_list'           => ['name' => '庫存管理 · 倉庫庫存表', 'url' => 'pages/stock.php'],
-        'stock_in'             => ['name' => '庫存管理 · 入庫單',     'url' => 'pages/stock.php'],
-        'qa_ncr_log'           => ['name' => '不合格品管制記錄表',    'url' => 'QA/ncr_control_log.php'],
-        'cs_satisfaction'      => ['name' => '客戶滿意度統計與監控',  'url' => 'Sales/customer_satisfaction.php'],
     ];
 }
 
@@ -183,6 +179,12 @@ function eg_asdoc_page_map(PDO $db, array $opt = []): array {
         'tool_calib_dossier'    => ['量測儀器校驗 · 檢驗設備履歷表', 'QC/tool_calibration.php'],
         'tool_calib_equip_list' => ['檢驗設備一覽表',                'QC/tool_calibration.php'],
         'stock_req'             => ['領料需求單',                    'pages/stock.php'],
+        'stock_list'            => ['庫存管理 · 倉庫庫存表',         'pages/stock.php'],
+        'stock_in'              => ['庫存管理 · 入庫單',             'pages/stock.php'],
+        'qa_ncr_log'            => ['不合格品管制記錄表',            'QA/ncr_control_log.php'],
+        'cs_stat'               => ['客戶滿意度統計資料表',          'Sales/customer_satisfaction.php'],
+        'cs_monitor'            => ['客戶滿意度監控表',              'Sales/customer_satisfaction.php'],
+        'notice_contact'        => ['公告 / 通知 · 聯絡單',        'liveEvent/createEvent.php'],
         'as_doc_quality_record_list' => ['AS 文件管理 · 品質紀錄清單', 'ADM/as_document_management.php'],
         // ↓ 2026-09-18 補登：以下模組早就綁好了，但因為這裡沒有名稱對照，$put() 會因 url==='' 直接略過，
         //   結果是「AS 結構總覽的網頁欄一片空白、看起來像沒做」。漏登記不影響綁定本身，只影響連結。
