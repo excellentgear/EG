@@ -436,6 +436,43 @@ function openDoc(verId) {
 
 function fileUrl(id) { return 'sopsip_file.php?id=' + num(id); }
 
+/**
+ * 綁定狀態小籤（唯一實作）。使用者 2026-09-22 要求：需要綁定的欄位，真的綁到主檔之後
+ * 要看得到打勾與被綁定的編號，才確認得了。**只打字沒從清單挑不算綁定**——那種情況
+ * 客戶會被後端安靜地不存、製程會被擋下，畫面上原本一點跡象都沒有。
+ * @param ok   有沒有真的綁到（一律看「存下來的 id」，不是看輸入框有沒有字）
+ * @param code 綁到什麼（客戶編號／製程編號／主檔 id），印出來給人核對
+ * @param why  沒綁到時的原因或下一步
+ */
+function bindTag(ok, code, why) {
+    return ok ? '<span class="bt bt-ok" title="已經綁到主檔">✓ 已綁定　' + esc(code) + '</span>'
+              : '<span class="bt bt-no">未綁定' + (why ? '　' + esc(why) : '') + '</span>';
+}
+
+/** 製程與客戶是打字挑的，隨時可能變，所以每次改動都重畫一次小籤 */
+function refreshBindTags() {
+    if ($('#btProc').length) {
+        var pno = num($('#fProcNo').val()), ptx = ($('#fProc').val() || '').trim();
+        $('#btProc').html(bindTag(pno > 0, '製程編號 ' + pno,
+            ptx ? '打了字沒從清單挑，存檔會被擋下' : '尚未選擇'));
+    }
+    if ($('#btCus').length) {
+        var cid = ($('#fCusId').val() || '').trim(), ctx = ($('#fCus').val() || '').trim();
+        $('#btCus').html(bindTag(cid !== '', '客戶編號 ' + cid,
+            ctx ? '打了字沒從清單挑，存檔不會存到客戶' : '尚未選擇'));
+    }
+}
+/* 挑完之後又自己改字＝綁定已經對不上了，一律把綁定解除（不解除就會「畫面寫 A、實際綁著 B」，
+   而且完全看不出來——溝通管理那個自動完成踩過同一個坑）。 */
+$(document).on('input', '#fProc', function () {
+    if (($(this).val() || '') !== ($(this).data('picked') || '')) $('#fProcNo').val('');
+    refreshBindTags();
+});
+$(document).on('input', '#fCus', function () {
+    if (($(this).val() || '') !== ($(this).data('picked') || '')) $('#fCusId').val('');
+    refreshBindTags();
+});
+
 /** 表頭：三種版面各自的欄位 */
 function headHtml() {
     var v = CUR.ver, d = CUR.doc, ro = CUR.can_edit ? '' : ' readonly';
@@ -444,11 +481,14 @@ function headHtml() {
 
     if (d.scope === 'tool') {
         var tm = CUR.machine_meta || {};
-        h += '<label>量具編號</label><div><input value="' + esc(tm.asset_text || '') + '" readonly></div>'
+        h += '<label>量具編號</label><div class="bindline"><input value="' + esc(tm.asset_text || '') + '" readonly>'
+           + bindTag(num(d.tool_id) > 0, '量具主檔 #' + num(d.tool_id)) + '</div>'
            + '<label>量具種類</label><div><input value="' + esc(tm.m_name || '') + '" readonly></div>';
     } else if (d.scope === 'machine') {
         var mm = CUR.machine_meta || {};
-        h += '<label>機台型號</label><div><input value="' + esc(d.machine_model || '') + '" readonly></div>'
+        var mcnt = (CUR.machines || []).length;
+        h += '<label>機台型號</label><div class="bindline"><input value="' + esc(d.machine_model || '') + '" readonly>'
+           + bindTag(!!(d.machine_model || ''), '機台主檔　' + mcnt + ' 台') + '</div>'
            + '<label>機器編號</label><div><input value="' + esc(mm.asset_text || '') + '" readonly></div>';
         if ((CUR.machine_missing || []).length) {
             var mis = [];
@@ -461,20 +501,25 @@ function headHtml() {
             h += '<div class="full"><button class="btn btn-xs btn-warm-o" id="btnEditMachines">調整機器編號</button></div>';
         }
     } else if (d.scope === 'part') {
-        h += '<label>產品料號</label><div><input value="' + esc(d.part_no_text || '') + '" readonly></div>'
-           + '<label>客戶名稱</label><div><input value="' + esc(d.customer_name || '') + '" readonly '
-           + 'title="綁了料號就由料號主檔決定，不可手打"></div>';
+        h += '<label>產品料號</label><div class="bindline"><input value="' + esc(d.part_no_text || '') + '" readonly>'
+           + bindTag(num(d.part_d_id) > 0, '料號主檔 #' + num(d.part_d_id)) + '</div>'
+           + '<label>客戶名稱</label><div class="bindline"><input class="ta-c" value="' + esc(d.customer_name || '') + '" readonly '
+           + 'title="綁了料號就由料號主檔決定，不可手打">'
+           + bindTag(!!(d.customer_id || ''), '客戶編號 ' + (d.customer_id || ''), '這個料號的主檔沒有綁客戶') + '</div>';
     } else {
         h += '<label>適用範圍</label><div><input value="通用（不綁特定機台或料號）" readonly></div>'
-           + '<label>客戶名稱</label><div class="ac-wrap"><input id="fCus" value="' + esc(d.customer_name || '') + '"'
-           + ro + ' data-eg-hint="打客戶編號或簡稱"><input type="hidden" id="fCusId" value="'
-           + esc(d.customer_id || '') + '"></div>';
+           + '<label>客戶名稱</label><div class="bindline"><span class="ac-wrap"><input id="fCus" class="ta-c" value="'
+           + esc(d.customer_name || '') + '"' + ro + ' data-eg-hint="打客戶編號或簡稱"></span>'
+           + '<input type="hidden" id="fCusId" value="' + esc(d.customer_id || '') + '">'
+           + '<span id="btCus"></span></div>';
     }
 
     // 製程＝紙本上的「工程名稱」。設備操作說明書不綁製程（機台主檔本來就有製程類別）
     if (CUR.kind !== 'equip') {
-        h += '<label>製程</label><div class="ac-wrap"><input id="fProc" value="' + esc(d.proc_name || '') + '"' + ro
-           + ' data-eg-hint="打製程名稱或編號"><input type="hidden" id="fProcNo" value="' + num(d.process_no) + '"></div>';
+        h += '<label>製程</label><div class="bindline"><span class="ac-wrap"><input id="fProc" value="'
+           + esc(d.proc_name || '') + '"' + ro + ' data-eg-hint="打製程名稱或編號"></span>'
+           + '<input type="hidden" id="fProcNo" value="' + num(d.process_no) + '">'
+           + '<span id="btProc"></span></div>';
     }
     // 自動建立的文件可能綁錯適用範圍，開放管理員改（使用者 2026-09-22 要求）
     if (SS_PERMS.canAdmin && CUR.can_edit) {
@@ -834,6 +879,10 @@ function renderDoc() {
     else body += sipExtraHtml() + itemsHtml();
     body += signHtml() + versHtml() + filesHtml();
     $('#docBody').html(body);
+    // 打字挑的那兩欄：先把「目前畫面上的字」記成已挑過的值，否則使用者一動就被判成改過而解除綁定
+    $('#fProc').data('picked', $('#fProc').val() || '');
+    $('#fCus').data('picked', $('#fCus').val() || '');
+    refreshBindTags();
 
     var foot = '<span class="muted-help">' + (CUR.can_edit ? '草稿可以直接改，改完記得存檔。'
              : (v.status === 'approved' ? '已核准的版次不可修改，要改請建立新版次。' : '目前沒有修改權限。')) + '</span><span class="sp"></span>';
@@ -969,14 +1018,20 @@ acAttach('#fProc', {
         return '<span class="hit">' + esc(r.process_name) + '</span>　<span class="muted-help">編號 '
              + num(r.process_no) + '　' + esc(r.process_type || '') + '</span>';
     },
-    pick: function (r) { $('#fProc').val(r.process_name); $('#fProcNo').val(r.process_no); }
+    pick: function (r) {
+        $('#fProc').val(r.process_name).data('picked', r.process_name);
+        $('#fProcNo').val(r.process_no); refreshBindTags();
+    }
 });
 acAttach('#fCus', {
     action: 'search_customer', hidden: '#fCusId',
     row: function (r) {
         return '<span class="hit">' + esc(r.customer_id) + '</span>　' + esc(r.customer || '');
     },
-    pick: function (r) { $('#fCus').val(r.customer); $('#fCusId').val(r.customer_id); }
+    pick: function (r) {
+        $('#fCus').val(r.customer).data('picked', r.customer);
+        $('#fCusId').val(r.customer_id); refreshBindTags();
+    }
 });
 
 /* ══════════════════════ 存檔 ══════════════════════ */
@@ -1009,6 +1064,10 @@ function saveDoc(cb) {
     var d = CUR.doc;
     if ($('#fProc').length && $('#fProc').val().trim() && !num($('#fProcNo').val())) {
         alert('製程打了字卻沒有從清單挑，請重新挑一次。'); return;
+    }
+    // 客戶同理：後端只認客戶編號，只打字不挑會被安靜地丟掉（存完客戶欄變空的還不報錯）
+    if ($('#fCus').length && $('#fCus').val().trim() && !($('#fCusId').val() || '').trim()) {
+        alert('客戶打了字卻沒有從清單挑，請重新挑一次（只打字不挑，存檔不會存到客戶）。'); return;
     }
     var ids = [];
     $.each(CUR.machines || [], function (i, m) { ids.push(num(m.machine_id)); });

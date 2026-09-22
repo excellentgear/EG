@@ -125,7 +125,15 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
     .toolbar { text-align:center; padding:10px; }
     .toolbar button { font-size:14px; padding:6px 20px; border:1px solid #C77C1A; background:#F0A24B;
                       color:#4A3524; border-radius:4px; cursor:pointer; font-weight:bold; }
-    @media print { .toolbar { display:none !important; } html, body { background:#fff; } }
+    @media print {
+        .toolbar { display:none !important; }
+        html, body { background:#fff; }
+        /* **列印時一定要把 min-height 歸零**（使用者回報「總是多印一頁空白」）：
+           min-height 給的是「整張紙的高度」，只要算出來比可印高度多零點幾個 px（不同印表機
+           驅動的邊界與 DPI 都會讓它多一點點），那零點幾就會被推到第二頁去，印出一張幾乎空白的紙。
+           螢幕上仍然保留 min-height，才看得出一張紙的樣子。本專案 KPI 列印版踩過同一個坑。 */
+        .sheet { min-height:0 !important; height:auto !important; }
+    }
 
     /* ── 頁尾：Chrome 不支援 @page 的 margin box，一律用 position:fixed（每一頁都會印） ── */
     .pfoot { position:fixed; left:12mm; right:12mm; bottom:6mm; font-size:9pt; color:#333;
@@ -269,12 +277,12 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
         <tr>
             <!-- 使用者指定：不需要製令單號與數量；「工程名稱」就是製程 -->
             <td class="lab" style="width:22mm;">客戶名稱</td>
-            <td style="width:34mm;"><?= h($doc['customer_name'] ?: ($ver['customer_name'] ?? '')) ?></td>
+            <td class="mid" style="width:34mm;"><?= h($doc['customer_name'] ?: ($ver['customer_name'] ?? '')) ?></td>
             <td class="lab" style="width:22mm;">產品料號</td>
             <td style="width:44mm;"><?= h($doc['part_no_text'] ?: '通用') ?></td>
             <td class="lab" style="width:22mm;">工程名稱</td>
             <td style="width:32mm;"><?= h($doc['proc_name']) ?></td>
-            <td class="lab" style="width:16mm;">版次</td>
+            <td class="lab" style="width:20mm;">圖面版次</td>
             <td class="mid" style="width:18mm;"><?= h($ver['ver_no']) ?></td>
             <td class="lab" style="width:22mm;">製表日期</td>
             <td class="mid" style="width:26mm;"><?= h(eg_fmt_date($formDate)) ?></td>
@@ -332,9 +340,26 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
     </tr></tbody></table>
 <?php endif; ?>
 
-    <!-- 修訂履歷／修改記錄：不另外手打，由各版次組出來 -->
+    <!-- 修訂履歷／修改記錄：不另外手打，由各版次組出來。
+         標準檢驗指導書照紙本只有三欄（修改版次／修改日期／說明），使用者 2026-09-22 指定；
+         SOP 那兩份維持原本的五欄（多印製表人與狀態，內部用得到）。 -->
+<?php if ($kind === 'sip'): ?>
     <table class="blk">
-        <thead><tr><th colspan="5"><?= $kind === 'sip' ? '修改記錄' : '修訂履歷' ?></th></tr>
+        <thead><tr><th colspan="3">修改記錄</th></tr>
+        <tr><th style="width:22mm;">修改版次</th><th style="width:32mm;">修改日期</th><th>說明</th></tr></thead>
+        <tbody>
+        <?php foreach (array_reverse($vers) as $v): ?>
+            <tr>
+                <td class="mid"><?= h($v['ver_no']) ?></td>
+                <td class="mid"><?= h(eg_fmt_date($v['form_date'])) ?></td>
+                <td><?= h($v['rev_note']) ?></td>
+            </tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+<?php else: ?>
+    <table class="blk">
+        <thead><tr><th colspan="5">修訂履歷</th></tr>
         <tr><th style="width:18mm;">版次</th><th style="width:30mm;">日期</th><th>制/修訂事項</th>
             <th style="width:34mm;">制/修訂</th><th style="width:26mm;">狀態</th></tr></thead>
         <tbody>
@@ -350,6 +375,7 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
         <?php endforeach; ?>
         </tbody>
     </table>
+<?php endif; ?>
 
     <!-- 簽章：製表 → 審核 → 核准（使用者拍板三關統一） -->
     <table class="blk">

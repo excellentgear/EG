@@ -122,6 +122,18 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
         .frm .wide { grid-column:2 / span 3; }
         .frm .full { grid-column:1 / span 4; }
         .frm textarea { min-height:70px; line-height:1.6; }
+        /* 客戶名稱置中（使用者 2026-09-22 指定，畫面與列印版一致） */
+        .frm input.ta-c { text-align:center; }
+        /* 綁定狀態小籤：真的綁到主檔才打勾並印出編號——打了字沒從清單挑不算綁定，
+           而那種情況後端會安靜地不存（客戶）或直接擋下（製程），畫面上看不出來最傷。
+           小籤在表格外，但一律自己指定 line-height（td span 的全站行高坑，記憶 td_span_line_height_trap）。 */
+        .bt { display:inline-block; line-height:16px; font-size:11.5px; padding:1px 6px; border-radius:9px;
+              white-space:nowrap; vertical-align:middle; }
+        .bt-ok { background:#F3E3C6; color:#6B4A18; border:1px solid #D8B579; }
+        .bt-no { background:#FBE0D6; color:#9C3312; border:1px solid #E8A88C; }
+        .bindline { display:flex; align-items:center; gap:6px; }
+        .bindline > input { flex:1; min-width:0; }
+        .bindline > .ac-wrap { flex:1; min-width:0; position:relative; }
         .sec { border:1px solid var(--line); border-radius:7px; padding:9px 11px; margin-bottom:10px; background:#FFFDF8; }
         .sec h5 { margin:0 0 8px; font-size:13.5px; color:var(--ink2); display:flex; align-items:center; gap:8px; }
         table.grid { width:100%; border-collapse:collapse; font-size:12.5px; }
@@ -386,6 +398,14 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
         </ol>
         <h4>綁定、製程與重複</h4>
         <ul>
+            <li><b>怎麼確認真的綁到了</b>：需要綁定的欄位（料號／客戶／機台型號／量具／製程）右邊都有一個小籤——
+                綠底打勾「<b>✓ 已綁定</b>」後面接的就是被綁定的編號（客戶編號、製程編號、主檔 #id），
+                可以直接拿去核對；紅底「<b>未綁定</b>」代表**只打了字、沒有從下拉清單挑**。
+                只打字不挑是最容易出事的一種：製程會在存檔時被擋下，客戶則會被安靜地丟掉（存完客戶欄變空的）。</li>
+            <li><b>製程不會自動幫既有文件綁</b>：綁製程是一份一份自己挑的，系統不會回頭替已經建好的文件補綁——
+                現有的製造製程說明書標題多半是機台操作類的名稱（例「KAPP 心軸上下工件」），
+                跟製程主檔的製程名稱對不起來，自動猜只會猜錯。沒綁製程不影響列印
+                （「製程名稱」那格會退回用文件名稱），只影響「工程名稱」欄與檢驗項目預設值的代入。</li>
             <li><b>「工程名稱」就是製程</b>（日式用語，工程＝工序），所以只有一欄「製程」，一律從製程主檔挑。</li>
             <li><b>同一個對象＋同一個製程只能有一份文件</b>：建立時如果撞到既有的，會直接擋下並附上
                 「開啟並更新這一份」的按鈕。同一個料號的「粗滾」與「齒研」可以各有一份。</li>
@@ -458,6 +478,9 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
         <p>按「列印」開出 A3 正式版：大標題是公司全名、表頭取綁定 AS 文件的表單名稱、
             右下角是 AS 編號（<b>版次依表單日期回推當時生效的版次</b>，不是一律印最新版）、
             多頁時左下角才會有頁碼。簽章一律是帶日期的圖章，日期＝該格的簽章日期。</p>
+        <p>標準檢驗指導書的表頭那一格是<b>圖面版次</b>；下方「修改記錄」照紙本只有三欄——
+            <b>修改版次／修改日期／說明</b>（說明就是各版次填的制/修訂事項）。
+            SOP 那兩份維持原本的「修訂履歷」五欄，多印製表人與狀態。</p>
         <h4>權限</h4>
         <p>SOP 與 SIP <b>分開授權</b>（兩個分頁是不同課室在用）：生產課／技術課可編輯與簽核 SOP，
             品管課可編輯與簽核 SIP，兩邊互相看得到但改不動。角色代碼：
