@@ -395,9 +395,10 @@ $(document).on('click', '#btnAckAll', function () {
 /* ── 基本資料 ── */
 function renderBase(res) {
     var p = res.project, ro = res.can_edit ? '' : ' disabled';
-    var typeOpt = '', phaseOpt = '', ownerOpt = '<option value="">（請選擇）</option>', custOpt = '<option value="">（無）</option>', deptOpt = '<option value="">（無）</option>';
+    /* 送簽之後性質鎖住（後端 save 同規則再擋一次） */
+    var typeLocked = num(p.project_id) > 0 && $.inArray(String(p.status), ['draft', 'rejected']) < 0;
+    var typeOpt = '', ownerOpt = '<option value="">（請選擇）</option>', custOpt = '<option value="">（無）</option>', deptOpt = '<option value="">（無）</option>';
     $.each(META.types || {}, function (k, v) { typeOpt += '<option value="' + k + '"' + (p.project_type === k ? ' selected' : '') + '>' + esc(v + '（' + k + '）') + '</option>'; });
-    $.each(META.phases || {}, function (k, v) { phaseOpt += '<option value="' + k + '"' + (p.phase === k ? ' selected' : '') + '>' + esc(v) + '</option>'; });
     /* 只列合格的人；本專案目前的負責人即使事後不合資格也一定保留，否則一打開就變空白、一存檔就被洗掉。
        新專案（還沒有 owner_id）預設帶「目前使用者」——非管理員本來就只能挑自己部門的人。 */
     if (!num(p.owner_id) && !num(p.project_id)) p.owner_id = META.owner_default || PERM.uid;
@@ -414,9 +415,15 @@ function renderBase(res) {
 
     var h = '<div class="sec"><h5>專案基本資料</h5><div class="grid3">'
       + '<div><label>專案代號</label><input type="text" class="ro-auto" readonly value="' + esc(p.project_no || '（存檔後自動產生）') + '"></div>'
-      + '<div id="fldType"><label>專案性質 <span style="color:#DD5138;">*</span></label><select id="eType"' + ro + '>' + typeOpt + '</select>'
+      /* 送簽之後不可以再改專案性質（使用者指定）——性質是專案代號的第一碼，號碼一送簽就跟著文件出去了。
+         後端 save 同規則再擋一次（鐵律8）。 */
+      + '<div id="fldType"><label>專案性質 <span style="color:#DD5138;">*</span>'
+      + (typeLocked ? '<span class="pj-hint" style="margin-left:6px;">（已送簽，不可更改）</span>' : '')
+      + '</label><select id="eType"' + (typeLocked ? ' disabled' : ro) + '>' + typeOpt + '</select>'
       + '<div class="pj-err"></div></div>'
-      + '<div><label>目前階段</label><select id="ePhase"' + ro + '>' + phaseOpt + '</select></div>'
+      /* 目前階段改成系統自動判斷（prj_phase_auto），不再讓人選（使用者指定，並已取消「籌備」） */
+      + '<div><label>目前階段 <span class="pj-hint">（系統自動判斷）</span></label>'
+      + '<input type="text" class="ro-auto" readonly value="' + esc(p.phase_label || '規劃') + '"></div>'
       + '<div style="grid-column:1 / -1;" id="fldName"><label>專案名稱 <span style="color:#DD5138;">*</span></label>'
       + '<input type="text" id="eName" value="' + esc(p.project_name || '') + '"' + ro + '><div class="pj-err"></div></div>'
       + '<div><label>客戶</label><select id="eCust" data-eg-filter="輸入客戶名稱篩選…"' + ro + '>' + custOpt + '</select></div>'
@@ -427,7 +434,6 @@ function renderBase(res) {
       + '<div><label>主辦部門</label><select id="eDept"' + ro + '>' + deptOpt + '</select></div>'
       + '<div><label>專案起日</label><input type="date" id="eStart" value="' + esc(p.start_date || '') + '"' + ro + '></div>'
       + '<div id="fldEnd"><label>專案迄日</label><input type="date" id="eEnd" value="' + esc(p.end_date || '') + '"' + ro + '><div class="pj-err"></div></div>'
-      + '<div><label>核定預算</label><input type="number" step="0.01" id="eBudget" value="' + esc(p.budget || '') + '"' + ro + '></div>'
       + '<div style="grid-column:1 / -1;"><label>專案分類標籤</label><div class="pj-tagbar" id="eTagBar"></div></div>'
       + '<div style="grid-column:1 / -1;">' + scopeProcHtml(res) + '</div>'
       + '</div></div>'
@@ -643,8 +649,8 @@ function collectBase() {
         project_id: num(CUR ? CUR.project.project_id : 0),
         project_type: $('#eType').val(), project_name: $.trim($('#eName').val()),
         customer_id: $('#eCust').val(), owner_id: $('#eOwner').val(), dept_id: $('#eDept').val(),
-        phase: $('#ePhase').val(), start_date: $('#eStart').val(), end_date: $('#eEnd').val(),
-        budget: $('#eBudget').val(), tag_ids: pickedTags('eTagBar'),
+        start_date: $('#eStart').val(), end_date: $('#eEnd').val(),
+        tag_ids: pickedTags('eTagBar'),
         scope_process_no: scopeProcValue(),
         goal_desc: $('#eGoalDesc').val(), purpose: $('#ePurpose').val()
     };
@@ -3688,7 +3694,10 @@ function egPrintWindow(html) {
 /* ── 2-GM-02-02 專案執行規劃表（A4 橫式；周期欄多時升 A3 橫式）── */
 function printPlan(res) {
     var p = res.project;
-    api('print_meta', { module: 'project_plan', biz_date: p.plan_date || p.start_date || META.today,
+    /* AS 編號的版次依業務日期回推（ai-rules/16 第三之四節）。
+       表頭的「日期」已改成專案建立日期，版次基準也跟著用它，兩者才不會各講各的。 */
+    api('print_meta', { module: 'project_plan',
+                        biz_date: String(p.created_at || '').substring(0, 10) || p.start_date || META.today,
                         signer_ids: num(p.owner_id) })
     .done(function (m) {
         /* 掃描實體章是非同步載入的，沒等它有實體章的人會印成預設 SVG 章（eg_stamp.js 記過的坑） */
@@ -3739,19 +3748,26 @@ function buildPlanHtml(res, m) {
         + '.gl { margin-top:2mm; font-size:9pt; }\n'
         + '.gl i { display:inline-block; width:14mm; vertical-align:middle; margin:0 2mm 0 6mm; }\n'
         + '.gl i.p { border-top:0.7mm solid #000; }\n'
-        + '.gl i.a { border-top:0.7mm dashed #000; }\n');
+        + '.gl i.a { border-top:0.7mm dashed #000; }\n'
+        + '.pdh { font-size:7.5pt; padding:0.5mm 0; }\n'
+        /* 階段之間的粗分隔線（使用者指定）：整張表都是細線時分不出階段在哪裡斷開 */
+        + 'tr.gsep > td { border-top:0.8mm solid #000; }\n');
 
     var h = '<div class="p-co">' + esc(m.meta.company || '') + '</div>'
       + '<div class="p-en">EXCELLENT GEAR TECHNOLOGY CO.,LTD</div>'
       + '<div class="p-tt">' + esc(m.meta.doc_name || '專案執行規劃表') + '</div>';
 
     /* 表頭：專案名稱／專案負責人／專案目標／日期（比照紙本 B4/U4/B6/U6） */
+    /* 專案料號（使用者要求「專案要顯示專案料號」）：取自專案料號清單，多個就全部列出來 */
+    var partNos = $.map(res.parts || [], function (x) { return x.part_no || ''; });
     h += '<table class="hdr"><colgroup><col style="width:16%"><col style="width:44%"><col style="width:16%"><col style="width:24%"></colgroup>'
       + '<tr><td>專案名稱</td><td>' + esc(p.project_name) + '　<span style="font-size:9pt;">（專案代號 '
       + esc(p.project_no) + '）</span></td>'
       + '<td>專案負責人</td><td class="c">' + ownerBlock(m, p.owner_id, p.owner_name) + '</td></tr>'
-      + '<tr><td>專案目標</td><td>' + esc(p.goal_desc || '').replace(/\n/g, '<br>') + '</td>'
-      + '<td>日期</td><td class="c">' + dispDate(p.plan_date || p.start_date) + '</td></tr>'
+      /* 日期＝**專案建立日期**（使用者 2026-09-22 指定），不是規劃表填寫日或專案起日 */
+      + '<tr><td>專案料號</td><td>' + esc(partNos.length ? partNos.join('、') : '－') + '</td>'
+      + '<td>日期</td><td class="c">' + dispDate(String(p.created_at || '').substring(0, 10)) + '</td></tr>'
+      + '<tr><td>專案目標</td><td colspan="3">' + esc(p.goal_desc || '').replace(/\n/g, '<br>') + '</td></tr>'
       + '</table><div style="height:2mm;"></div>';
 
     h += isList ? planListTable(grouped) : planGanttTable(grouped, periods);
@@ -3766,16 +3782,22 @@ function buildPlanHtml(res, m) {
    原本一個任務佔兩列（預計一列、實際一列），13 個任務就是 26 列，A3 也放不下；
    併成一列之後列數直接減半，而且同一格上下比對才看得出「實際有沒有落後預計」。 */
 function planGanttTable(grouped, periods) {
+    var groups = periodGroups(periods);
     /* table-layout:fixed 之後欄寬以 colgroup 為準，各欄加總要剛好 100%（超過會被整體壓縮） */
     var h = '<table><colgroup><col style="width:14%"><col style="width:20%"><col style="width:8%"><col style="width:8%">';
     $.each(periods, function () { h += '<col class="pd">'; });
-    h += '<col style="width:10%"></colgroup><thead><tr>'
-      + '<th rowspan="2">目標</th><th rowspan="2">主要任務</th>'
+    h += '<col style="width:10%"></colgroup><thead>'
+      /* 三層表頭：周期 → 月份 → 日。使用者指定「列印上要顯示月份內的日」，
+         只印日不印月的話，跨月時 1、2、3 會看不出是哪個月的 1、2、3。 */
+      + '<tr><th rowspan="3">目標</th><th rowspan="3">主要任務</th>'
       + '<th colspan="2">專案完成日期</th>'
       + '<th colspan="' + Math.max(1, periods.length) + '">周期</th>'
-      + '<th rowspan="2">負責人</th></tr><tr>'
-      + '<th>預計</th><th>實際</th>';
-    if (periods.length) { $.each(periods, function (i, pr) { h += '<th style="font-size:8pt;">' + esc(pr.label) + '</th>'; }); }
+      + '<th rowspan="3">負責人</th></tr>'
+      + '<tr><th rowspan="2">預計</th><th rowspan="2">實際</th>';
+    if (groups.length) { $.each(groups, function (i, g) { h += '<th colspan="' + g.span + '">' + esc(g.label) + '</th>'; }); }
+    else h += '<th></th>';
+    h += '</tr><tr>';
+    if (periods.length) { $.each(periods, function (i, pr) { h += '<th class="pdh">' + esc(pr.label) + '</th>'; }); }
     else h += '<th></th>';
     h += '</tr></thead><tbody>';
 
@@ -3785,7 +3807,8 @@ function planGanttTable(grouped, periods) {
     $.each(grouped, function (gi, g) {
         var list = g.tasks.length ? g.tasks : [{ task_name: '', owner_name: '' }];
         $.each(list, function (ti, t) {
-            h += '<tr>';
+            /* 階段（目標）之間用粗線分隔（使用者指定）——一整張表全是細線時分不出階段在哪裡斷開 */
+            h += '<tr' + (ti === 0 && gi > 0 ? ' class="gsep"' : '') + '>';
             if (ti === 0) h += '<td rowspan="' + list.length + '">' + esc(g.goal_name) + '</td>';
             h += '<td>' + esc(t.task_name) + (num(t.is_milestone) ? '<span class="ms"> ◆</span>' : '') + '</td>'
                + '<td class="c">' + dispDate(t.plan_end) + '</td>'
@@ -3851,31 +3874,56 @@ function taskStateLabel(t) {
     return '未開始';
 }
 
-/* 周期欄位：依專案期間切成月（超過 12 個月改成季，避免欄位窄到看不出來） */
+/* 周期欄位（列印用）：刻度**依專案實際長度自動決定**，並帶出上一層的月份分組。
+   使用者回報「前端看到的甘特圖跟列印不同」「列印上要顯示月份內的日，避免看不出是哪個日期」——
+   原本不管專案多短一律切成「月」，三週的專案就只剩一個「9月」欄、所有長條擠在同一格，
+   跟畫面上逐日的時間軸完全對不起來。
+   軸的範圍與畫面共用同一支 ganttRange()，兩邊才會是同一段期間。 */
 function planPeriods(res) {
     var r = ganttRange(res.project, res.tasks || []);
     if (!r) return [];
     var d0 = new Date(r.start + 'T00:00:00'), d1 = new Date(r.end + 'T00:00:00');
-    var months = (d1.getFullYear() - d0.getFullYear()) * 12 + (d1.getMonth() - d0.getMonth()) + 1;
-    var out = [], cur = new Date(d0.getFullYear(), d0.getMonth(), 1);
-    if (months <= 12) {
-        for (var i = 0; i < months; i++) {
-            var s = new Date(cur.getFullYear(), cur.getMonth(), 1);
-            var e = new Date(cur.getFullYear(), cur.getMonth() + 1, 0);
-            out.push({ start: fmtYmd(s), end: fmtYmd(e), label: (s.getMonth() + 1) + '月' });
-            cur.setMonth(cur.getMonth() + 1);
+    var days = Math.round((d1 - d0) / 86400000) + 1;
+    var out = [];
+    if (days <= 45) {                       // 短專案：逐日，這樣才看得出是哪一天
+        var c = new Date(d0);
+        while (c <= d1 && out.length < 60) {
+            out.push({ start: fmtYmd(c), end: fmtYmd(c),
+                       label: String(c.getDate()), group: (c.getMonth() + 1) + '月' });
+            c.setDate(c.getDate() + 1);
         }
-    } else {
-        var q = Math.ceil(months / 3);
-        for (var j = 0; j < Math.min(q, 12); j++) {
-            var qs = new Date(cur.getFullYear(), cur.getMonth(), 1);
-            var qe = new Date(cur.getFullYear(), cur.getMonth() + 3, 0);
-            out.push({ start: fmtYmd(qs), end: fmtYmd(qe),
-                       label: String(qs.getFullYear()).slice(2) + '/' + (qs.getMonth() + 1) + '~' + (qe.getMonth() + 1) });
-            cur.setMonth(cur.getMonth() + 3);
+    } else if (days <= 200) {               // 中等：逐週（標週一那天的月/日）
+        var w = new Date(d0);
+        var guardW = 0;
+        while (w.getDay() !== 1 && guardW++ < 7) w.setDate(w.getDate() - 1);
+        while (w <= d1 && out.length < 40) {
+            var we = new Date(w); we.setDate(we.getDate() + 6);
+            out.push({ start: fmtYmd(w), end: fmtYmd(we),
+                       label: (w.getMonth() + 1) + '/' + w.getDate(), group: (w.getMonth() + 1) + '月' });
+            w.setDate(w.getDate() + 7);
+        }
+    } else {                                // 長專案：逐月
+        var cur = new Date(d0.getFullYear(), d0.getMonth(), 1);
+        var months = (d1.getFullYear() - d0.getFullYear()) * 12 + (d1.getMonth() - d0.getMonth()) + 1;
+        for (var i = 0; i < Math.min(months, 36); i++) {
+            var ms = new Date(cur.getFullYear(), cur.getMonth(), 1);
+            var me = new Date(cur.getFullYear(), cur.getMonth() + 1, 0);
+            out.push({ start: fmtYmd(ms), end: fmtYmd(me),
+                       label: (ms.getMonth() + 1) + '月', group: ms.getFullYear() + '年' });
+            cur.setMonth(cur.getMonth() + 1);
         }
     }
     return out;
+}
+
+/** 把周期欄依 group 併成上一層表頭（月份／年份）——「日」要有月份罩著才知道是哪個月的日 */
+function periodGroups(periods) {
+    var g = [];
+    $.each(periods, function (i, p) {
+        if (g.length && g[g.length - 1].label === p.group) { g[g.length - 1].span++; return; }
+        g.push({ label: p.group, span: 1 });
+    });
+    return g;
 }
 function fmtYmd(d) {
     return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);

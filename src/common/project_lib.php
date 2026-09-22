@@ -69,6 +69,54 @@ function prj_types(PDO $db, bool $activeOnly = false): array
     return $cache[$k] = $out;
 }
 
+/**
+ * 專案性質改掉之後，把專案代號一起重編（2026-09-22 使用者回報「改了性質但代號沒跟著改」）。
+ *
+ * 代號的第一碼**就是**性質（C260501 的 C＝客製），改了性質不重編就會對不起來。
+ * 但**只重編「還沒發出去」的**——草稿／已退回才重編；已送簽、已核准、已結案、已終止的
+ * 一律維持原號，因為那個號碼已經印在執行規劃表、專案管理卡與會簽通知上了，
+ * 事後改號會跟紙本對不起來（比照內部稽核件號 ia_case_sync_no()、產品開發評估表 *_sync_doc_no()
+ * 的同一條規則）。
+ *
+ * 年月沿用**原本發號時的基準**（專案起日，沒有才用建檔日），不是今天——
+ * 用今天會把 5 月立案的專案重編成 9 月的號碼，看起來像是新立案的。
+ *
+ * @return array|null [old, new]；沒有重編時回 null（第三個元素是沒重編的原因）
+ */
+function prj_sync_no(PDO $db, int $projectId, string $newType, string $by): ?array
+{
+    $st = $db->prepare("SELECT project_id, project_no, project_type, status, start_date, created_at
+                        FROM project WHERE project_id=?");
+    $st->execute([$projectId]);
+    $p = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$p) return null;
+
+    $newType = strtoupper(substr(trim($newType), 0, 1));
+    $old     = (string)$p['project_no'];
+    if ($newType === '' || $newType === substr($old, 0, 1)) return null;   // 第一碼沒變就不用動
+    if (!in_array((string)$p['status'], ['draft', 'rejected'], true)) {
+        return ['old' => $old, 'new' => '', 'skip' => 'issued'];           // 已發出去的不重編
+    }
+
+    $base = (string)($p['start_date'] ?: substr((string)$p['created_at'], 0, 10));
+    $new  = prj_next_no($db, $newType, $base ?: null, $projectId);
+    if ($new === '' || $new === $old) return null;
+
+    $db->prepare("UPDATE project SET project_no=?, modified_by=NULL, modified_at=modified_at WHERE project_id=?")
+       ->execute([$new, $projectId]);
+    /* 管理卡的卡號是「專案代號-01」，代號換了就要跟著換，否則卡號會留著舊的性質字母 */
+    try {
+        foreach ($db->query("SELECT card_id, card_no FROM project_card WHERE project_id=" . (int)$projectId)
+                    ->fetchAll(PDO::FETCH_ASSOC) as $c) {
+            $tail = strstr((string)$c['card_no'], '-');
+            if ($tail === false) continue;
+            $db->prepare("UPDATE project_card SET card_no=? WHERE card_id=?")
+               ->execute([$new . $tail, (int)$c['card_id']]);
+        }
+    } catch (Throwable $e) {}
+    return ['old' => $old, 'new' => $new];
+}
+
 /** 這個性質目前有幾個專案在用（刪除前的守門；含已刪除的，否則還原出來會變孤兒） */
 function prj_type_usage(PDO $db, string $code): int
 {
@@ -78,13 +126,46 @@ function prj_type_usage(PDO $db, string $code): int
 }
 
 /** 專案生命週期（程序書 §6.7.1 五個作業流程） */
+/**
+ * 專案目前階段。**2026-09-22 起改成系統自動判斷，畫面不再讓人選**（使用者指定），
+ * 並依指示**取消「籌備」**——專案一建立就已經在規劃了，籌備那一格永遠停在那裡沒人會去改。
+ */
 const PRJ_PHASES = [
-    'initiating'  => '籌備',
     'planning'    => '規劃',
     'executing'   => '執行',
     'controlling' => '控制',
     'closing'     => '結案',
 ];
+
+/**
+ * 依專案目前的狀態與任務實績推導「目前階段」（唯一實作，畫面與存檔都走這裡）。
+ *
+ * 規則（刻意只看得到的事實，不另外開欄位讓人手動改）：
+ *   結案／終止              → 結案
+ *   還沒核准（草稿/退回/送簽）→ 規劃（還在排計畫，工作不可能已經在跑）
+ *   已核准但一件實績都沒有   → 規劃
+ *   已核准且有實績、還沒做完 → 執行
+ *   所有任務都完成、還沒結案 → 控制（收尾驗證，等結案）
+ */
+function prj_phase_auto(PDO $db, array $prj): string
+{
+    $st = (string)($prj['status'] ?? '');
+    if (in_array($st, ['closed', 'terminated'], true)) return 'closing';
+    if (!in_array($st, ['approved'], true)) return 'planning';
+    try {
+        $q = $db->prepare("SELECT COUNT(*) total,
+                                  SUM(CASE WHEN act_start IS NOT NULL OR act_end IS NOT NULL OR progress>0 THEN 1 ELSE 0 END) started,
+                                  SUM(CASE WHEN act_end IS NOT NULL OR progress>=100 THEN 1 ELSE 0 END) done
+                           FROM project_task WHERE project_id=?");
+        $q->execute([(int)$prj['project_id']]);
+        $r = $q->fetch(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return 'planning'; }
+    $total = (int)($r['total'] ?? 0);
+    if ($total === 0)                        return 'planning';
+    if ((int)($r['done'] ?? 0) >= $total)    return 'controlling';
+    if ((int)($r['started'] ?? 0) > 0)       return 'executing';
+    return 'planning';
+}
 
 /** 標籤種類（自訂標籤，可按標籤篩選；名稱/顏色全部由使用者維護，不在別處寫死對照表＝鐵律4） */
 const PRJ_TAG_KINDS = ['project' => '專案分類', 'goal' => '目標分類', 'task' => '任務分類'];
@@ -551,7 +632,7 @@ function prj_company_name(PDO $db): string
  * 專案代號：類型1碼＋西元年後2碼＋月2碼＋流水2碼（程序書 §6.13，例 S170945）
  * 流水碼依「同一類型＋同一年月」遞增 01~99；業務日期優先用傳入日期（補歷史專案時編號才對得起來）。
  */
-function prj_next_no(PDO $db, string $type, ?string $bizDate = null): string
+function prj_next_no(PDO $db, string $type, ?string $bizDate = null, int $excludeId = 0): string
 {
     $type = strtoupper(substr(trim($type), 0, 1));
     $types = prj_types($db, true);
@@ -560,7 +641,11 @@ function prj_next_no(PDO $db, string $type, ?string $bizDate = null): string
     $ts = strtotime((string)$d);
     if ($ts === false) $ts = strtotime(prj_db_now($db)['date']);
     $prefix = $type . date('ym', $ts);
-    $st = $db->prepare("SELECT project_no FROM project WHERE project_no LIKE ? ORDER BY project_no DESC LIMIT 1");
+    // 重編自己的號碼時要把自己排除掉，否則同一個月重算會一直往後跳號（內部稽核件號踩過同一個坑）
+    $sql = "SELECT project_no FROM project WHERE project_no LIKE ?"
+         . ($excludeId > 0 ? " AND project_id<>" . $excludeId : '')
+         . " ORDER BY project_no DESC LIMIT 1";
+    $st = $db->prepare($sql);
     $st->execute([$prefix . '%']);
     $last = (string)$st->fetchColumn();
     $seq  = $last !== '' ? ((int)substr($last, 5, 2) + 1) : 1;
@@ -1312,6 +1397,8 @@ function prj_list(PDO $db, array $q): array
     $tmap = prj_types($db);          // 顯示用一律不篩 is_active，否則停用掉的性質會印成空白
     foreach ($rows as &$r) {
         $r['type_label']  = $tmap[$r['project_type']] ?? '';
+        // 階段一律即時推導，不讀 project.phase（那一欄只是快取，舊資料還可能是已取消的「籌備」）
+        $r['phase']       = prj_phase_auto($db, $r);
         $r['phase_label'] = PRJ_PHASES[$r['phase']] ?? '';
         $r['progress']    = prj_progress($db, (int)$r['project_id']);
     }
@@ -1327,6 +1414,7 @@ function prj_get(PDO $db, int $projectId): ?array
     $r = $st->fetch(PDO::FETCH_ASSOC);
     if (!$r) return null;
     $r['type_label']  = prj_types($db)[$r['project_type']] ?? '';
+    $r['phase']       = prj_phase_auto($db, $r);
     $r['phase_label'] = PRJ_PHASES[$r['phase']] ?? '';
     $r['progress']    = prj_progress($db, $projectId);
     return $r;

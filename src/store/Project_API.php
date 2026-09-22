@@ -243,7 +243,6 @@ case 'save':
         'customer_id'  => trim((string)($_POST['customer_id'] ?? '')) ?: null,
         'owner_id'     => (int)($_POST['owner_id'] ?? 0),
         'dept_id'      => (int)($_POST['dept_id'] ?? 0) ?: null,
-        'phase'        => (string)($_POST['phase'] ?? 'initiating'),
         // 專案內容只留「專案目的／專案目標」兩項（使用者要求，2026-08-25）；
         // background／contribution／note 三欄保留在資料表但不再由畫面寫入，UPDATE 也刻意不碰，既有值不會被洗掉。
         'purpose'      => trim((string)($_POST['purpose'] ?? '')),
@@ -251,12 +250,10 @@ case 'save':
         'plan_date'    => trim((string)($_POST['plan_date'] ?? '')) ?: null,
         'start_date'   => trim((string)($_POST['start_date'] ?? '')) ?: null,
         'end_date'     => trim((string)($_POST['end_date'] ?? '')) ?: null,
-        'budget'       => trim((string)($_POST['budget'] ?? '')) === '' ? null : (float)$_POST['budget'],
         'tag_ids'      => prj_tag_csv(prj_tag_ids((string)($_POST['tag_ids'] ?? ''))),
         // 專案涵蓋的製程：空＝整張 BOM 所有製程（使用者指定的預設語意）
         'scope_process_no' => prj_tag_csv(prj_tag_ids((string)($_POST['scope_process_no'] ?? ''))),
     ];
-    if (!isset(PRJ_PHASES[$data['phase']])) $data['phase'] = 'initiating';
     $err = prj_validate($data, [], $db);
     // 專案負責人資格（模組設定 → 專案負責人資格）：前端下拉已只列合格的人，後端同規則再擋一次（鐵律8）。
     // 既有專案的負責人維持原值時一律放行——設定改嚴不該讓舊專案變成存不了檔。
@@ -303,37 +300,56 @@ case 'save':
             if (in_array((string)$prj['status'], ['submitted', 'approved'], true) && !$P['canAdmin']) {
                 throw new RuntimeException('已送簽／已核准的專案只有管理員可以改內容');
             }
+            /* **送簽之後不可以再改專案性質**（使用者指定）——性質是專案代號的第一碼，
+               號碼一送簽就跟著會簽通知、執行規劃表與管理卡出去了，改性質等於改號碼。
+               連管理員也擋（要改請退回成草稿），否則紙本與系統永遠對不起來。 */
+            if ($data['project_type'] !== (string)$prj['project_type']
+                && !in_array((string)$prj['status'], ['draft', 'rejected'], true)) {
+                throw new RuntimeException('已送簽的專案不可以更改專案性質（性質是專案代號的第一碼，改了代號就要跟著改）。要更改請先退回成草稿。');
+            }
             $st = $db->prepare("UPDATE project SET project_type=?, project_name=?, customer_id=?, customer_name=?,
-                                    owner_id=?, owner_name=?, dept_id=?, dept_name=?, phase=?, purpose=?,
-                                    goal_desc=?, plan_date=?, start_date=?, end_date=?, budget=?,
+                                    owner_id=?, owner_name=?, dept_id=?, dept_name=?, purpose=?,
+                                    goal_desc=?, plan_date=?, start_date=?, end_date=?,
                                     tag_ids=?, scope_process_no=?, modified_by=?, modified_at=?
                                 WHERE project_id=?");
             $st->execute([$data['project_type'], $data['project_name'], $data['customer_id'], $custName,
-                          $data['owner_id'], $ownerName, $data['dept_id'], $deptName, $data['phase'],
+                          $data['owner_id'], $ownerName, $data['dept_id'], $deptName,
                           $data['purpose'], $data['goal_desc'],
-                          $data['plan_date'], $data['start_date'], $data['end_date'], $data['budget'],
+                          $data['plan_date'], $data['start_date'], $data['end_date'],
                           $data['tag_ids'], $data['scope_process_no'], $uid, $NOW['dt'], $pid]);
         } else {
             if (!$P['canEdit']) throw new RuntimeException('無新增權限（需「專案登錄」角色）');
             $no = prj_next_no($db, $data['project_type'], $data['start_date'] ?: $NOW['date']);
+            /* phase 欄位保留在資料表（舊資料還在用），但一律不再由畫面寫入——
+               目前階段改成系統自動判斷（prj_phase_auto）。budget 同理，使用者已指示取消該欄位。 */
             $st = $db->prepare("INSERT INTO project (project_no, project_type, project_name, customer_id, customer_name,
                                     owner_id, owner_name, dept_id, dept_name, phase, purpose,
-                                    goal_desc, plan_date, start_date, end_date, budget, tag_ids,
+                                    goal_desc, plan_date, start_date, end_date, tag_ids,
                                     source, created_by, created_by_name, created_at)
-                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'manual',?,?,?)");
+                                VALUES (?,?,?,?,?,?,?,?,?,'planning',?,?,?,?,?,?,'manual',?,?,?)");
             $st->execute([$no, $data['project_type'], $data['project_name'], $data['customer_id'], $custName,
-                          $data['owner_id'], $ownerName, $data['dept_id'], $deptName, $data['phase'],
+                          $data['owner_id'], $ownerName, $data['dept_id'], $deptName,
                           $data['purpose'], $data['goal_desc'],
-                          $data['plan_date'], $data['start_date'], $data['end_date'], $data['budget'],
+                          $data['plan_date'], $data['start_date'], $data['end_date'],
                           $data['tag_ids'], $uid, $uname, $NOW['dt']]);
             $pid = (int)$db->lastInsertId();
         }
+        /* 性質改掉時把專案代號一起重編（只重編還沒發出去的；已送簽以上在上面就擋掉了） */
+        $renum = prj_sync_no($db, $pid, $data['project_type'], $uname);
         $db->commit();
     } catch (Throwable $e) {
         $db->rollBack();
         jerr($e->getMessage());
     }
-    jout(['project_id' => $pid, 'message' => '已儲存']);
+    $msg = '已儲存';
+    if (!empty($renum['new'])) {
+        // 改號一定要講出來——使用者手上可能正拿著舊號碼在找這個專案
+        $msg .= '；專案性質改變，<b>專案代號已由 ' . htmlspecialchars($renum['old'])
+              . ' 重編為 ' . htmlspecialchars($renum['new']) . '</b>';
+    } elseif (!empty($renum['skip'])) {
+        $msg .= '（專案已送簽，專案代號維持 ' . htmlspecialchars($renum['old']) . ' 不變）';
+    }
+    jout(['project_id' => $pid, 'message' => $msg, 'renum' => $renum]);
 
 case 'delete':
     if (!$P['canAdmin']) jerr('無刪除權限（需「專案管理員」角色）', 403);
