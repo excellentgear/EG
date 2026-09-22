@@ -206,10 +206,35 @@ case 'detail': {
     jout(true, $full);
 }
 
+/**
+ * 送簽視窗要的東西：①那一天可以簽的人（含請假標示）②勾了自動簽核時每一關會蓋到誰。
+ * **人員與解析一律以「表單日期／簽章日期」當時的職務為準**（ai-rules/22），
+ * 所以改日期要重打這一支，不可以沿用開視窗當下那一份名單。
+ */
 case 'signer_candidates': {
     $formDate = (string)($_GET['form_date'] ?? date('Y-m-d'));
     $signDate = (string)($_GET['sign_date'] ?? '');
-    jout(true, ['rows' => ss_signer_candidates($db, $formDate, $signDate)]);
+    $kind     = (string)($_GET['kind'] ?? '');
+    $out = ['rows' => ss_signer_candidates($db, $formDate, $signDate)];
+    if (isset(ss_kinds()[$kind])) {
+        $d = preg_match('/^\d{4}-\d{2}-\d{2}$/', $signDate) ? $signDate : $formDate;
+        $out['auto_on'] = ss_auto_sign_on($db, $kind) ? 1 : 0;
+        $out['resolve'] = [];
+        foreach (array_keys(ss_slots()) as $slot) {
+            if ($slot === 'maker') continue;            // 製表＝送出的人，不是設定解析出來的
+            [$who, $why] = ss_resolve_signer($db, $kind, $slot, $d);
+            // 名字一定要一起回：解析到的人在那一天還沒到職時，他不會出現在候選名單裡，
+            // 前端就印不出「是誰」，訊息會變成「找不到人」而看不出真正的原因。
+            $nm = '';
+            if ($who > 0) {
+                $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?");
+                $q->execute([$who]);
+                $nm = (string)($q->fetchColumn() ?: '');
+            }
+            $out['resolve'][$slot] = ['id' => $who, 'why' => $why, 'name' => $nm];
+        }
+    }
+    jout(true, $out);
 }
 
 case 'search_part':
@@ -569,10 +594,11 @@ case 'settings_get': {
     $out['people'] = ss_signer_candidates($db, date('Y-m-d'));
     // 擔當者部門（顯示文字可改）與檢驗方法選項（由量具類型混合＋自建項目）
     $out['owner_depts'] = ss_owner_depts($db);
-    try {
-        $out['departments'] = $db->query("SELECT id, name, level FROM department ORDER BY level, sort_order, id")
-                                 ->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Throwable $e) { $out['departments'] = []; }
+    /* 部門一律**整棵樹依組織順序**排（董事長室→總經理室→各課→各組），
+       而且**不可以再依 level 過濾掉上層**——總經理與董事長就掛在 level 1/2 的那兩個單位底下，
+       過濾掉之後「審核／核准」就選不到總經理室（使用者 2026-09-22 回報）。 */
+    $out['departments']    = ss_dept_tree_rows($db);
+    $out['dept_positions'] = ss_dept_position_map($db);
     $out['methods']    = ss_method_options($db);
     $out['tool_types'] = ss_tool_types($db);
     try {

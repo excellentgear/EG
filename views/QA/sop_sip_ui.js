@@ -1363,21 +1363,90 @@ $(document).on('click', '.sf-del', function () {
 
 /* ══════════════════════ 送簽與簽核 ══════════════════════ */
 
+/* 送簽視窗的人員名單與自動簽核的解析結果（一律跟著「簽章日期」重抓，見 ai-rules/22） */
+var SB = { people: [], resolve: {}, auto: 0 };
+
+/** 重畫三個人員下拉：勾了自動簽核就把解析到的人先填好，管理員仍可改成別人 */
+function sbRenderPeople(keepPick) {
+    if (!SS_PERMS.canAdmin) return;
+    var auto = $('#sbAuto').is(':checked');
+    $.each([['sbMaker', 'maker'], ['sbReview', 'review'], ['sbApprove', 'approve']], function (i, x) {
+        var id = x[0], slot = x[1], $s = $('#' + id);
+        var cur = keepPick ? num($s.val()) : 0;
+        // 這個人在新的日期還在不在名單裡？不在就不要留著（那一天他還沒到職或已離職）
+        var ok = false;
+        $.each(SB.people, function (j, p) { if (num(p.id) === cur && !num(p.blocked)) ok = true; });
+        var want = ok ? cur : 0;
+        if (!want) {
+            if (slot === 'maker') want = num(SS_PERMS.uid);      // 送出的人就是製表
+            else if (auto) want = num((SB.resolve[slot] || {}).id);
+        }
+        // 解析到的人剛好那天請整天假就不要硬填（畫面上他是不可選的）
+        var fine = false;
+        $.each(SB.people, function (j, p) { if (num(p.id) === want && !num(p.blocked)) fine = true; });
+        // 只換選項、不換 select 本身——換掉的話打字篩選框會留在原地指著一個已經不存在的下拉
+        $s.html(peopleOpts(SB.people, fine ? want : 0)).val(fine && want ? String(want) : '');
+        if (slot !== 'maker') {
+            // 說明一律講「設定解析到誰、能不能用」，跟現在下拉選了誰分開講，不然管理員改過人之後會看不懂
+            var r = SB.resolve[slot] || {}, inList = false, blocked = false;
+            $.each(SB.people, function (j, p) {
+                if (num(p.id) !== num(r.id)) return;
+                inList = true; if (num(p.blocked)) blocked = true;
+            });
+            var msg;
+            if (!auto) {
+                msg = '沒有勾自動簽核就留白，之後由本人一格一格蓋。';
+            } else if (!num(r.id)) {
+                msg = '<span style="color:#9C3312;">' + esc(r.why || '設定裡沒有解析到人') + '，請自己挑一位。</span>';
+            } else if (!inList) {
+                // 設定解析到的人在這個日期還沒到職（或已離職）＝不可以把他的章蓋在這一版上（ai-rules/22）
+                msg = '<span style="color:#9C3312;">設定解析到 <b>' + esc(r.name || ('#' + num(r.id)))
+                    + '</b>，但他在這個簽章日期<b>還不在職（或已離職）</b>，不能蓋在這一版上，請自己挑一位。</span>';
+            } else if (blocked) {
+                msg = '<span style="color:#9C3312;">設定解析到 <b>' + esc(r.name || '')
+                    + '</b>，但他那天請整天假不可簽，請自己挑一位。</span>';
+            } else {
+                msg = '依設定解析到：<b>' + esc(r.name || '') + '</b>（' + esc(r.why || '') + '）　可以直接改成別人。';
+            }
+            $('#sbWhy_' + slot).html(msg);
+        }
+    });
+}
+
+/** 向後端要「這個日期當時」的人員名單與解析結果，回來再重畫 */
+function sbLoad(signDate, keepPick, cb) {
+    api('signer_candidates', { form_date: $('#fDate').val() || CUR.ver.form_date,
+                               sign_date: signDate || '', kind: CUR.kind }, function (res) {
+        SB.people  = res.rows || [];
+        SB.resolve = res.resolve || {};
+        SB.auto    = num(res.auto_on);
+        sbRenderPeople(keepPick);
+        if (cb) cb();
+    });
+}
+
 $(document).on('click', '#btnSubmit', function () {
     saveDoc(function () {
-        api('signer_candidates', { form_date: $('#fDate').val() || CUR.ver.form_date }, function (res) {
-            var people = res.rows || [];
+        var d0 = $('#fDate').val() || CUR.ver.form_date || SS_TODAY;
+        api('signer_candidates', { form_date: d0, sign_date: d0, kind: CUR.kind }, function (res) {
+            SB.people = res.rows || []; SB.resolve = res.resolve || {}; SB.auto = num(res.auto_on);
             var h = '<div class="note-box">送出後「製表」那一格立刻成立，業務日期＝表單日期。'
-                  + '可以簽的人限<b>表單日期當時在職</b>，且<b>簽章當天沒有請整天假</b>——'
-                  + '不可選的人會直接標出原因。</div><div class="frm">';
+                  + '可以簽的人限<b>表單日期當時在職</b>（當時在職、現在已離職的人也挑得到），'
+                  + '且<b>簽章當天沒有請整天假</b>——請假的人仍然列出來，但會標明假別並不可選。'
+                  + '<b>改簽章日期會整份重抓</b>，因為那一天的部門職稱與請假都不一樣。</div><div class="frm">';
             h += '<label>簽章日期</label><div class="wide"><input type="date" id="sbDate" value="'
-               + esc(CUR.ver.form_date || SS_TODAY) + '"' + (SS_PERMS.canAdmin ? '' : ' readonly') + '></div>';
+               + esc(d0) + '"' + (SS_PERMS.canAdmin ? '' : ' readonly') + '></div>';
             if (SS_PERMS.canAdmin) {
-                h += '<label>製表（填表人）</label><div class="wide">' + peopleSel('sbMaker', people, 0) + '</div>'
-                   + '<label>審核</label><div class="wide">' + peopleSel('sbReview', people, 0) + '</div>'
-                   + '<label>核准</label><div class="wide">' + peopleSel('sbApprove', people, 0) + '</div>'
-                   + '<label>自動簽核</label><div class="wide"><label style="font-weight:normal;text-align:left;">'
-                   + '<input type="checkbox" id="sbAuto"> 送出當下把審核與核准一起蓋好（時間會錯開且不跨日）</label></div>';
+                h += '<label>自動簽核</label><div class="wide"><label style="font-weight:normal;text-align:left;">'
+                   + '<input type="checkbox" id="sbAuto"' + (SB.auto ? ' checked' : '')
+                   + '> 送出當下把審核與核准一起蓋好（時間會錯開且不跨日）</label>'
+                   + '<div class="muted-help">預設跟著「設定」裡這個版面的自動簽核開關；'
+                   + '勾起來會自動帶出依設定解析到的人，<b>要換人直接改下面的下拉就好</b>。</div></div>'
+                   + '<label>製表（填表人）</label><div class="wide">' + peopleSel('sbMaker', SB.people, 0) + '</div>'
+                   + '<label>審核</label><div class="wide">' + peopleSel('sbReview', SB.people, 0)
+                   + '<div class="muted-help" id="sbWhy_review"></div></div>'
+                   + '<label>核准</label><div class="wide">' + peopleSel('sbApprove', SB.people, 0)
+                   + '<div class="muted-help" id="sbWhy_approve"></div></div>';
             } else {
                 h += '<label>製表</label><div class="wide"><input value="' + esc(SS_PERMS.name) + '" readonly></div>';
             }
@@ -1386,19 +1455,28 @@ $(document).on('click', '#btnSubmit', function () {
             $('#maskSubmit .m-head').contents().first().replaceWith('送出簽核');
             $('#sbGo').show();
             openMask('maskSubmit');
+            sbRenderPeople(false);
         });
     });
 });
-function peopleSel(id, people, sel) {
-    var h = '<select id="' + id + '" data-eg-filter="輸入姓名或部門篩選…"><option value="">（不指定）</option>';
-    $.each(people, function (i, p) {
+/* 改日期＝那一天的在職者、職稱與請假全都不一樣，一定要整份重抓（ai-rules/22） */
+$(document).on('change', '#sbDate', function () { sbLoad($(this).val(), true); });
+/* 勾／取消自動簽核：勾起來就把解析到的人填進去，取消不動已經挑好的人 */
+$(document).on('change', '#sbAuto', function () { sbRenderPeople(true); });
+/** 人員下拉的選項（請假者仍然列出來，只是標明假別並不可選——不是安靜地消失） */
+function peopleOpts(people, sel) {
+    var h = '<option value="">（不指定）</option>';
+    $.each(people || [], function (i, p) {
         h += '<option value="' + num(p.id) + '"' + (num(p.id) === num(sel) ? ' selected' : '')
            + (num(p.blocked) ? ' disabled' : '') + '>'
            + esc(p.dept) + '　' + esc(p.position) + '　' + esc(p.name)
            + (num(p.blocked) ? '（' + esc(p.block_why) + '，不可簽）' : '')
            + (num(p.is_former) ? '（當時在職・現已離職）' : '') + '</option>';
     });
-    return h + '</select>';
+    return h;
+}
+function peopleSel(id, people, sel) {
+    return '<select id="' + id + '" data-eg-filter="輸入姓名或部門篩選…">' + peopleOpts(people, sel) + '</select>';
 }
 $('#sbGo').on('click', function () {
     var p = { ver_id: num(CUR.ver.ver_id), sign_date: $('#sbDate').val() || '' };
@@ -1482,12 +1560,42 @@ function selOpts(id, map, sel, blank) {
     return h + '</select>';
 }
 
+/**
+ * 依序輸出選項的下拉（**不要用 selOpts 的物件**）。
+ * 物件的鍵是數字時，JS 會依數字大小跑 $.each，後端排好的順序會被整個打亂——
+ * 部門下拉原本就是這樣變成「依 department.id 排序」的（技術課 1、品管課 2…），
+ * 而且完全不報錯，光看程式碼也看不出來（使用者 2026-09-22 回報）。
+ * @param rows [{v, label, indent}]
+ */
+function selList(id, rows, sel, blank, cls) {
+    var h = '<select id="' + id + '"' + (cls ? ' class="' + cls + '"' : '') + '>';
+    if (blank !== undefined) h += '<option value="0">' + esc(blank) + '</option>';
+    $.each(rows || [], function (i, r) {
+        h += '<option value="' + esc(r.v) + '"' + (String(r.v) === String(sel) ? ' selected' : '') + '>'
+           + (r.indent ? new Array(r.indent + 1).join('　') : '') + esc(r.label) + '</option>';
+    });
+    return h + '</select>';
+}
+/** 這個部門底下實際登記的職稱；沒登記過的部門就退回全部職稱（不然會一個都挑不到） */
+function posRowsOfDept(deptId) {
+    var res = SET, all = [];
+    $.each(res.positions || [], function (i, p) { all.push({ v: num(p.id), label: p.name }); });
+    var ids = (res.dept_positions || {})[String(num(deptId))] || (res.dept_positions || {})[num(deptId)];
+    if (!deptId || !ids || !ids.length) return all;
+    var set = {};
+    $.each(ids, function (i, x) { set[num(x)] = 1; });
+    var hit = [];
+    $.each(all, function (i, p) { if (set[num(p.v)]) hit.push(p); });
+    return hit.length ? hit : all;
+}
+
 function setPaneBase() {
     var res = SET;
-    // 部門與職稱做成 id=>名稱，簽核人設定的四個下拉共用
-    var deptMap = {}, posMap = {};
-    $.each(res.departments || [], function (i, d) { if (num(d.level) >= 3) deptMap[num(d.id)] = d.name; });
-    $.each(res.positions || [], function (i, p) { posMap[num(p.id)] = p.name; });
+    // 部門依組織樹順序（含董事長室／總經理室），職稱依 sort_order；兩個都要保序故用陣列
+    var deptRows = [];
+    $.each(res.departments || [], function (i, d) {
+        deptRows.push({ v: num(d.id), label: d.name, indent: num(d.depth) });
+    });
     var h = '<div class="note-box">這裡設定的是<b>全站共用</b>的：自動簽核、各關預設簽核人、圖章模板、'
           + 'AS 文件編號綁定與上班時段。上班時段只用來判定「請整天假」——請假涵蓋整個上班時段才算整天。</div>';
     h += '<div class="frm" style="margin-bottom:10px;">'
@@ -1523,11 +1631,11 @@ function setPaneBase() {
             if (slot === 'maker') return;
             var sc = (cfg.signer_cfg || {})[slot] || {};
             h += '<label>' + esc(sd.label) + '</label><div class="wide sgcfg" data-kind="' + k + '" data-slot="' + slot + '">'
-               + selOpts('sgD_' + k + '_' + slot, deptMap, num(sc.dept_id), '（不限部門）')
-               + ' ' + selOpts('sgP_' + k + '_' + slot, posMap, num(sc.position_id), '（不限職稱）')
+               + selList('sgD_' + k + '_' + slot, deptRows, num(sc.dept_id), '（不限部門）', 'sg-dept')
+               + ' ' + selList('sgP_' + k + '_' + slot, posRowsOfDept(num(sc.dept_id)), num(sc.position_id), '（不限職稱）')
                + '<br><span class="muted-help">代理：</span> '
-               + selOpts('sgDD_' + k + '_' + slot, deptMap, num(sc.dep_dept_id), '（不設代理）')
-               + ' ' + selOpts('sgPP_' + k + '_' + slot, posMap, num(sc.dep_position_id), '（不限職稱）')
+               + selList('sgDD_' + k + '_' + slot, deptRows, num(sc.dep_dept_id), '（不設代理）', 'sg-dept')
+               + ' ' + selList('sgPP_' + k + '_' + slot, posRowsOfDept(num(sc.dep_dept_id)), num(sc.dep_position_id), '（不限職稱）')
                + '<div class="muted-help">今天會解析到：<b>' + esc(sc.preview_name || '（找不到人）') + '</b>'
                + '（' + esc(sc.preview_why || '') + '）'
                + (num(sc.legacy_user_id) ? '　※ 這一關還是舊的「指定人員」設定，改成部門＋職稱後才會依日期解析' : '')
@@ -1537,6 +1645,24 @@ function setPaneBase() {
     });
     $('#setPane').html(h);
 }
+
+/* 換部門就把旁邊的「職稱」收斂成那個部門真的有的職稱（使用者 2026-09-22 要求）。
+   原本選的職稱在新部門也有就留著，沒有才退回「不限職稱」——留一個那個部門沒有的職稱
+   等於設了一條永遠解析不到人的規則，而且畫面上看起來完全正常。 */
+$(document).on('change', '#setPane .sg-dept', function () {
+    var $d = $(this), id = $d.attr('id');
+    var pid = id.indexOf('sgDD_') === 0 ? id.replace('sgDD_', 'sgPP_') : id.replace('sgD_', 'sgP_');
+    var $p = $('#' + pid);
+    if (!$p.length) return;
+    var keep = num($p.val());
+    var rows = posRowsOfDept(num($d.val())), hit = false;
+    var h = '<option value="0">（不限職稱）</option>';
+    $.each(rows, function (i, r) {
+        if (num(r.v) === keep) hit = true;
+        h += '<option value="' + num(r.v) + '"' + (num(r.v) === keep ? ' selected' : '') + '>' + esc(r.label) + '</option>';
+    });
+    $p.html(h).val(hit ? String(keep) : '0');
+});
 
 /** 擔當者部門的顯示文字＋檢驗方法的可選項目 */
 function setPaneOwner() {

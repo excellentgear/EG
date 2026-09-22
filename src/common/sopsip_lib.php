@@ -2239,6 +2239,60 @@ function ss_people_by_post(PDO $db, int $deptId, int $positionId, string $date):
 }
 
 /**
+ * 部門清單，**依組織樹的順序**（董事長室→總經理室→各課→各組），每一列帶 depth 供縮排顯示。
+ * 不做 level 過濾——總經理與董事長就掛在最上面那兩個單位，過濾掉就選不到（使用者 2026-09-22 回報）。
+ * **前端一定要照這個順序輸出**：把它轉成「id 當鍵」的物件會被 JS 依數字大小重排，
+ * 下拉就會變成依 department.id 排序（技術課 1、品管課 2…），完全看不出是哪裡排錯的。
+ */
+function ss_dept_tree_rows(PDO $db): array
+{
+    try {
+        $rows = $db->query("SELECT id, name, level, parent_id, sort_order FROM department
+                            ORDER BY COALESCE(sort_order, 9999), id")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    $byParent = [];
+    foreach ($rows as $r) $byParent[(int)($r['parent_id'] ?? 0)][] = $r;
+    $out = [];
+    $walk = function ($pid, $depth) use (&$walk, &$out, $byParent) {
+        foreach ($byParent[$pid] ?? [] as $r) {
+            $r['depth'] = $depth;
+            $out[] = $r;
+            $walk((int)$r['id'], $depth + 1);
+        }
+    };
+    $walk(0, 0);
+    // 掛在不存在的上層底下的孤兒也要列出來，不然那個部門會整個選不到
+    if (count($out) < count($rows)) {
+        $seen = [];
+        foreach ($out as $r) $seen[(int)$r['id']] = true;
+        foreach ($rows as $r) if (empty($seen[(int)$r['id']])) { $r['depth'] = 0; $out[] = $r; }
+    }
+    return $out;
+}
+
+/**
+ * 每個部門底下**實際登記了哪些職稱**（department_position），職稱依 position.sort_order 排。
+ * 用來把「職稱」下拉收斂成「這個部門裡真的存在的職稱」（使用者 2026-09-22 要求）——
+ * 一次列出全公司 18 個職稱，挑到部門裡根本沒有的那個，解析當然一個人都找不到。
+ */
+function ss_dept_position_map(PDO $db): array
+{
+    try {
+        $rows = $db->query("SELECT dp.department_id, dp.position_id
+                            FROM department_position dp
+                            JOIN position p ON p.id = dp.position_id
+                            ORDER BY COALESCE(p.sort_order, 999), p.id")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    $map = [];
+    foreach ($rows as $r) {
+        $d = (int)$r['department_id']; $p = (int)$r['position_id'];
+        if ($d <= 0 || $p <= 0) continue;
+        if (!in_array($p, $map[$d] ?? [], true)) $map[$d][] = $p;
+    }
+    return $map;
+}
+
+/**
  * 自動簽核要蓋誰的章：先用正選（部門＋職稱），找不到人才用代理。
  * 兩個都找不到就回 0——**不亂猜人**，那一關停著等人工簽，比蓋錯人好。
  *
