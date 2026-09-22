@@ -228,6 +228,10 @@ function ssPick(cfg) {
         + '<input type="text" class="sspk-kw" data-eg-hint="打分類、型號、名稱或編號直接搜尋" style="margin-bottom:6px;">'
         + '<div class="sspk-pane"><span class="muted-help">載入中…</span></div></div>');
     api('equip_pick', { mode: cfg.mode, kw: '' }, function (res) {
+        /* **回來的時候要先確認這個挑選器還是「現在這一個」**：切換適用範圍會重建挑選器，
+           前一次的請求晚回來就會把上一個模式的卡片畫進去，畫面上就變成「內容跟選的不一樣」
+           （使用者 2026-09-22 回報改綁定對象的內容不正確）。 */
+        if (SSPICK[cfg.box] !== st) return;
         st.groups = res.groups || [];
         $.each(cfg.sel || [], function (i, v) { ssPickAdd(st, String(v)); });
         ssPickRender(st);
@@ -1142,7 +1146,13 @@ $(document).on('click', '#btnDelDoc', function () {
  * 自動建立的文件可能綁錯，沒有這個就只能刪掉重建（使用者 2026-09-22 要求）。
  * 存檔一樣走 doc_save，所以重複判定與「綁定對象要存在」在後端仍然會再擋一次。
  */
+/* 點開即刷新（ai-rules/08 第六節）：按下當下先跟後端要這一版的最新狀態再組跳窗。
+   不刷新的話，只要 CUR 因為任何原因是舊的（別的分頁改過、前一份文件的快取…），
+   「適用範圍」的選項就會是上一份文件的版面算出來的，看起來就是「下拉內容不正確」。 */
 $(document).on('click', '#btnReScope', function () {
+    api('detail', { ver_id: num(CUR.ver.ver_id) }, function (res) { CUR = res; rsOpen(); });
+});
+function rsOpen() {
     var d = CUR.doc;
     var allow = (window.SS_KIND_SCOPES && SS_KIND_SCOPES[CUR.kind])
              || ((CUR.kind === 'equip') ? ['machine', 'tool'] : ['general', 'part']);
@@ -1167,17 +1177,17 @@ $(document).on('click', '#btnReScope', function () {
     $('#pickTitle').text('改綁定對象／適用範圍');
     $('#pickBody').html(h);
     openMask('maskPick');
-    rsSync();
-    // 原本就綁好的機台要先帶進來，不然改個適用範圍就把已經綁好的機台清掉了
+    // 原本就綁好的機台要先記下來再畫，不然改個適用範圍就把已經綁好的機台清掉了
     RSPM0 = $.map(CUR.machines || [], function (m) { return num(m.machine_id); });
     RSPM = RSPM0.slice();
-    if (d.scope === 'part') rsSync();          // 帶著已綁機台重畫一次挑選器
-    if (d.scope === 'part' && RSPM.length) $('#rsPMHint').text('原本已綁 ' + RSPM.length + ' 台；可以換型號再加別的。');
-});
+    rsSync();
+    if (d.scope === 'part' && RSPM0.length) $('#rsPMHint').text('原本已綁 ' + RSPM0.length + ' 台；可以換分類再加別的。');
+}
 function rsSync() {
     var k = $('#rsScope').val();
     $('#rsBind').val(''); $('#rsBindId').val('');
-    RSPM = [];
+    // 綁料號時把「原本已經綁好的機台」帶回來當起點；換成別的適用範圍才真的清空
+    RSPM = (k === 'part') ? (RSPM0 || []).slice() : [];
     $('#rsMachines').html('先選機台型號。').addClass('muted-help');
     // 機台型號與量具走兩層挑選器（先點製程／量具種類再點項目）；料號仍然是打字挑（幾千筆，卡片排不下）
     var isPick = (k === 'machine' || k === 'tool');
