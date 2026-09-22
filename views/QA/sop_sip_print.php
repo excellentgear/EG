@@ -39,7 +39,7 @@ if (!ss_perm_for_kind($P, $F['kind'], 'view')) { http_response_code(403); exit('
 $doc = $F['doc']; $ver = $F['ver']; $kind = $F['kind'];
 $formDate = (string)($ver['form_date'] ?? '');
 $company  = ss_company_name($db);
-$asNo     = ss_as_no($db, $kind, (int)($ver['as_doc_id'] ?? 0), $formDate, ss_is_current_ver($doc, $ver));
+$asNo     = ss_as_no($db, $kind, (int)($ver['as_doc_id'] ?? 0), $formDate);
 $formName = ss_as_title($db, $kind, (int)($ver['as_doc_id'] ?? 0));
 $vers     = ss_ver_rows($db, (int)$doc['doc_id']);
 $machine  = $F['machine'];

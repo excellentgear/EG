@@ -174,8 +174,7 @@ case 'detail': {
     $kind = $full['kind'];
     if (!ss_perm_for_kind($P, $kind, 'view')) { http_response_code(403); jerr('沒有檢視這份文件的權限'); }
     $full['vers']     = ss_ver_rows($db, (int)$full['doc']['doc_id']);
-    $full['as_no']    = ss_as_no($db, $kind, (int)($full['ver']['as_doc_id'] ?? 0), (string)($full['ver']['form_date'] ?? ''),
-                                 ss_is_current_ver($full['doc'], $full['ver']));
+    $full['as_no']    = ss_as_no($db, $kind, (int)($full['ver']['as_doc_id'] ?? 0), (string)($full['ver']['form_date'] ?? ''));
     $full['as_title'] = ss_as_title($db, $kind, (int)($full['ver']['as_doc_id'] ?? 0));
     $full['can_edit'] = ss_perm_for_kind($P, $kind, 'edit') && (string)$full['ver']['status'] === 'draft';
     $full['can_sign'] = ss_perm_for_kind($P, $kind, 'sign');

@@ -1262,30 +1262,20 @@ function ss_list(PDO $db, array $f): array
 /**
  * 這一版要印哪一個 AS 編號。逐版次可覆寫綁定（as_doc_id），沒覆寫就用該版面的模組綁定。
  *
- * 版次的基準分兩種（使用者 2026-09-22 拍板，ai-rules/16 第三之四節）：
- *   - **現行版（$isCurrentVer=true）＝印現在最新版**：SOP／SIP 的現行版印出來是要貼到現場當作業標準用的，
- *     它代表「現在該怎麼做」，所以表單版次也該是現在的最新版。若照表單日期回推，一份 2022 年定的現行 SOP
- *     會永遠印著 2022 年的舊表單版次，跟現場手上的空白表單對不起來。
- *   - **已被取代的歷史版＝依表單日期回推**：那是「當時是這樣做的」的歷史紀錄（追溯舊工單附的 SOP 時會用到），
- *     要印當時生效的版次。
+ * **版次一律依這一版的「表單日期」回推當時生效的版次**（ai-rules/16 第三之四節）——
+ * 不分現行版或歷史版，每一版 SOP／SIP 都是「某一天定案的那一份文件」，印出來的 AS 表單版次
+ * 就該是那一天在用的版次。（2026-09-22 曾短暫改成「現行版印最新版」，同日使用者指正：
+ * 一律依表單日期，已改回。不要再改成「現行版看今天」。）
  */
-function ss_as_no(PDO $db, string $kind, ?int $verAsDocId, ?string $formDate, bool $isCurrentVer = false): string
+function ss_as_no(PDO $db, string $kind, ?int $verAsDocId, ?string $formDate): string
 {
     $docId = (int)($verAsDocId ?: 0);
     if ($docId <= 0) $docId = eg_asdoc_id($db, ss_kinds()[$kind]['module'] ?? '');
     if ($docId > 0) {
-        // 現行版傳 null＝視為今天＝印現在最新版（eg_asdoc_no_asof_id 的既有語意）
-        $no = eg_asdoc_no_asof_id($db, $docId, $isCurrentVer ? null : $formDate);
+        $no = eg_asdoc_no_asof_id($db, $docId, $formDate);
         if ($no !== '') return $no;
     }
     return (string)(ss_kinds()[$kind]['as_no'] ?? '');
-}
-
-/** 這個版次是不是該文件目前的現行版（ss_doc.cur_ver_id 指向它）；兩個列印呼叫端共用同一個判定。 */
-function ss_is_current_ver(array $docRow, array $verRow): bool
-{
-    $cur = (int)($docRow['cur_ver_id'] ?? 0);
-    return $cur > 0 && $cur === (int)($verRow['ver_id'] ?? 0);
 }
 
 /** 表頭要印的表單名稱＝綁定 AS 文件的 doc_name（ai-rules/16：禁寫死） */
