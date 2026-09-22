@@ -43,8 +43,17 @@ $(document).on('click', '[data-close]', function () { closeMask($(this).data('cl
 var MASK_DOWN = null;
 $(document).on('mousedown', '.ss-mask', function (e) { MASK_DOWN = (e.target === this) ? this : null; });
 $(document).on('click', '.ss-mask', function (e) {
-    if (e.target === this && MASK_DOWN === this) $(this).removeClass('on');
+    /* **一定要走 closeMask()，不可以直接 removeClass**：closeMask 還負責把共用跳窗的內容清乾淨，
+       直接 removeClass 的話「點外面關掉」這條路就跳過清理，下一次開啟會看到上一次用剩的舊內容
+       （使用者 2026-09-22 連兩次回報「改綁定對象的下拉內容不正確」）。 */
+    if (e.target === this && MASK_DOWN === this) closeMask($(this).attr('id'));
     MASK_DOWN = null;
+});
+/* Esc 一樣要走 closeMask（同上理由）——關最上面那一個 */
+$(document).on('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    var $m = $('.ss-mask.on').last();
+    if ($m.length) closeMask($m.attr('id'));
 });
 
 function api(action, data, cb, method) {
@@ -1157,7 +1166,14 @@ function rsOpen() {
     var allow = (window.SS_KIND_SCOPES && SS_KIND_SCOPES[CUR.kind])
              || ((CUR.kind === 'equip') ? ['machine', 'tool'] : ['general', 'part']);
     var h = '<div class="note-box">改了之後這份文件會重新判定「有沒有跟別份撞到」（同一個對象＋同一個製程只能有一份）。'
-          + '版次、內容與簽核紀錄都不會動到。</div><div class="frm">'
+          + '版次、內容與簽核紀錄都不會動到。<br>'
+          // 把「這個跳窗現在認定的是哪一份文件」直接寫在畫面上：內容萬一不對，一眼就看得出
+          // 是認錯文件還是選項算錯，不必再回頭猜（使用者連兩次回報內容不正確）
+          + '目前這一份：<b>' + esc(d.title || '') + '</b>　版面 <b>'
+          + esc((SS_KINDS[CUR.kind] ? SS_KINDS[CUR.kind].label : CUR.kind) || '') + '</b>　'
+          + '目前適用範圍 <b>' + esc(SS_SCOPES[d.scope] || d.scope || '') + '</b>'
+          + '<span class="muted-help">（版次 ' + esc(CUR.ver.ver_no || '') + '）</span>'
+          + '</div><div class="frm">'
           + '<label>適用範圍</label><div class="wide"><select id="rsScope">';
     $.each(allow, function (i, k) {
         h += '<option value="' + k + '"' + (k === d.scope ? ' selected' : '') + '>' + esc(SS_SCOPES[k]) + '</option>';
