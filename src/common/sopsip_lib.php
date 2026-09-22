@@ -1032,13 +1032,89 @@ function ss_ver_clone(PDO $db, int $fromVerId, array $in, int $uid): int
     return $newId;
 }
 
+/**
+ * 操作步驟的項次編號一律由系統重編成同一種格式「1.內容」（使用者 2026-09-22 指定：
+ * 原本已經打好的也要一起統一，而且不要人工維護編號——手打最容易跳號或重號）。
+ * 認得出來的舊寫法一律先剝掉再重編：`1.` `1、` `1,` `1)` `(1)` `１.`（全形數字）、後面可有空白。
+ * **唯一實作**：前端（打字當下）與後端（存檔）都走同一套，兩邊才不會編出不同的號。
+ */
+function ss_renumber_lines(string $text): string
+{
+    $raw = preg_split("/\r\n|\r|\n/", $text);
+    $half = ['０'=>'0','１'=>'1','２'=>'2','３'=>'3','４'=>'4','５'=>'5','６'=>'6','７'=>'7','８'=>'8','９'=>'9'];
+    $pat  = '/^\(?\s*\d{1,3}\s*[\.、,．)）]\s*/u';
+
+    // 先看這一欄本來有沒有人打編號
+    $numbered = false;
+    foreach ($raw as $l) if (preg_match($pat, strtr(trim($l), $half))) { $numbered = true; break; }
+
+    $out = []; $n = 0;
+    foreach ($raw as $line) {
+        $t = trim($line);
+        if ($t === '') continue;                        // 空行不佔號，也不印
+        $t = strtr($t, $half);                          // 全形數字轉半形，不然「１.」剝不掉
+        if ($numbered && !preg_match($pat, $t)) {
+            /* **沒有編號的那一行是「上一項被折行的下半段」，不是新的一項**
+               （實測既有資料：「4.加工中注意火花是否過大，並依需要更改加工設」換行「定。」）。
+               一律原樣留著——硬編成新的一項會把一句話拆成兩項，比格式不統一還糟。 */
+            if ($out) { $out[] = $t; continue; }
+        }
+        $t = trim(preg_replace($pat, '', $t));
+        if ($t === '') continue;
+        $out[] = (++$n) . '.' . $t;
+    }
+    return implode("\n", $out);
+}
+
+/**
+ * 內容裡有沒有提到 AS 文件編號（例「3-TD-02-02」）。使用者 2026-09-22 指定：
+ * 只要內容寫到 AS 編號就要自動綁定那份文件、顯示文件名稱，**而且編號之後改了要跟著變**。
+ * 所以一律**存 as_document.id**，畫面與列印再即時把當初打的那串字換成現行編號＋名稱。
+ * @return array [['raw'=>當初打的字, 'doc_id'=>id, 'no'=>現行編號, 'name'=>文件名稱]]
+ */
+function ss_asdoc_scan(PDO $db, string $text): array
+{
+    if (trim($text) === '') return [];
+    // AS 編號長相：階(1~4)-部門2碼-2碼[-2碼]，四階後面可能再帶一個版次英文字母
+    if (!preg_match_all('/\b([1-4]-[A-Za-z]{2}-\d{2}(?:-\d{2})?)([A-Za-z]?)\b/u', $text, $m, PREG_SET_ORDER)) return [];
+    $out = []; $seen = [];
+    foreach ($m as $x) {
+        $raw = $x[0]; $no = strtoupper($x[1]);
+        if (isset($seen[$raw])) continue;
+        $seen[$raw] = 1;
+        try {
+            $st = $db->prepare("SELECT id, doc_no, doc_name, doc_level, current_version
+                                FROM as_document WHERE doc_no=? LIMIT 1");
+            $st->execute([$no]);
+            $d = $st->fetch(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) { $d = null; }
+        if (!$d) continue;                              // 對不到主檔就當它只是一串字，不亂綁
+        $out[] = ['raw' => $raw, 'doc_id' => (int)$d['id'], 'no' => eg_asdoc_no($d),
+                  'name' => (string)$d['doc_name']];
+    }
+    return $out;
+}
+
+/**
+ * 把內容裡的 AS 編號換成「現行編號　文件名稱」。
+ * 比對用的是**當初打進去的那串字**，所以編號改版之後舊資料照樣換得掉（這就是「自動連動」）。
+ */
+function ss_asdoc_expand(PDO $db, string $text): string
+{
+    foreach (ss_asdoc_scan($db, $text) as $r) {
+        $text = str_replace($r['raw'], $r['no'] . '　' . $r['name'], $text);
+    }
+    return $text;
+}
+
 /** 覆寫某一版的步驟明細（整批取代；呼叫端已在交易中） */
 function ss_steps_replace(PDO $db, int $verId, array $rows): void
 {
     $db->prepare("DELETE FROM ss_step WHERE ver_id=?")->execute([$verId]);
     $seq = 0;
     foreach ($rows as $r) {
-        $txt = trim((string)($r['step_text'] ?? ''));
+        // 項次編號一律由系統重編（鐵律8：前端編過了，這裡仍然用同一支再編一次）
+        $txt = ss_renumber_lines((string)($r['step_text'] ?? ''));
         $nm  = trim((string)($r['step_name'] ?? ''));
         if ($txt === '' && $nm === '') continue;           // 整列空白的不存（可增列表格的末列）
         $seq++;

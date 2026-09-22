@@ -808,6 +808,75 @@ function sipExtraHtml() {
     return h;
 }
 
+/* ── 操作步驟的項次編號一律由系統代入（使用者 2026-09-22：手打最容易跳號或重號） ──
+   規則與後端 ss_renumber_lines() 完全相同：認得出來的舊寫法（1. 1、 1) (1) 全形數字…）
+   先剝掉再重編成「1.內容」，空行不佔號。前端只是讓人邊打邊看得到，存檔時後端仍會再編一次。 */
+function ssRenumber(text) {
+    var PAT = /^\(?\s*\d{1,3}\s*[\.、,．)）]\s*/;
+    function half(s) { return s.replace(/[０-９]/g, function (c) { return String('０１２３４５６７８９'.indexOf(c)); }); }
+    var raw = String(text == null ? '' : text).split(/\r\n|\r|\n/);
+    // 這一欄本來有沒有人打編號：有的話，沒編號的那一行是「上一項被折行的下半段」不是新的一項
+    var numbered = raw.some(function (l) { return PAT.test(half(String(l).trim())); });
+    var out = [], n = 0;
+    raw.forEach(function (line) {
+        var t = half(String(line).trim());
+        if (!t) return;
+        if (numbered && !PAT.test(t) && out.length) { out.push(t); return; }
+        t = t.replace(PAT, '').trim();
+        if (!t) return;
+        out.push((++n) + '.' + t);
+    });
+    return out.join('\n');
+}
+/** 按 Enter 換行時直接把下一個項次編號打好，游標停在編號後面 */
+$(document).on('keydown', '.s-text', function (e) {
+    if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+    e.preventDefault();
+    e.stopPropagation();                 // 共用輸入規則的 Enter＝跳下一欄，這裡要留給換行
+    var el = this, v = el.value, p = el.selectionStart;
+    var before = v.slice(0, p), after = v.slice(el.selectionEnd);
+    // 游標之前有幾個非空行，下一個就是幾號＋1
+    var n = before.split(/\r\n|\r|\n/).filter(function (x) { return x.trim() !== ''; }).length;
+    var ins = '\n' + (n + 1) + '.';
+    el.value = before + ins + after;
+    var caret = before.length + ins.length;
+    el.selectionStart = el.selectionEnd = caret;
+    /* **這裡刻意不 trigger('input')**：全站共用的輸入規則掛了 input 監聽，它一重寫 value，
+       游標就被打回開頭（實測 selectionStart 變 0），接著打的字會跑到第一個字前面去。
+       這一欄沒有任何東西需要即時重算，不必發這個事件；仍用 setTimeout 再釘一次游標當保險。 */
+    setTimeout(function () { try { el.selectionStart = el.selectionEnd = caret; } catch (err) {} }, 0);
+});
+/* 離開欄位就整欄重編一次：中間插一行、刪一行之後號碼才不會亂
+   （這也把「原本已經打好、格式不一致」的內容一併統一，使用者 2026-09-22 要求） */
+$(document).on('blur', '.s-text', function () {
+    var v = ssRenumber(this.value);
+    if (v !== this.value) { this.value = v; $(this).trigger('input'); }
+});
+
+/**
+ * 內容裡寫到的 AS 文件編號＝自動綁定那份文件（使用者 2026-09-22 指定）。
+ * 這裡只負責「看得到綁到了什麼」；**存的是文件 id 不是那串編號**，所以編號日後改了，
+ * 畫面與列印都會自動換成新的編號，舊資料不必回頭改。
+ */
+function asRefHtml() {
+    var rs = CUR.as_refs || [];
+    var h = '<div class="sec"><h5>內容裡引用的 AS 文件'
+          + '<span class="muted-help">內容只要寫到 AS 編號就自動綁定，列印時會印出「現行編號　文件名稱」</span></h5>';
+    if (!rs.length) {
+        h += '<span class="muted-help">目前內容沒有寫到任何 AS 文件編號。'
+           + '（在操作步驟、說明、注意事項…任何一欄打上編號，例如 3-TD-02-02，存檔後就會出現在這裡）</span>';
+    } else {
+        h += '<div style="display:flex;flex-wrap:wrap;gap:5px;">';
+        $.each(rs, function (i, r) {
+            h += '<span class="bt bt-ok" style="font-size:12px;">✓ 已綁定　' + esc(r.no) + '　' + esc(r.name)
+               + (r.raw !== r.no ? '<span class="muted-help">（原本打的是 ' + esc(r.raw) + '）</span>' : '')
+               + '</span>';
+        });
+        h += '</div>';
+    }
+    return h + '</div>';
+}
+
 /** 簽章格：**簽的順序是製表→審核→核准，排出來由左到右是核准→審核→製表**（職位高的在左，比照紙本） */
 function signHtml() {
     var h = '<div class="sec"><h5>簽核'
@@ -893,7 +962,7 @@ function renderDoc() {
     if (CUR.kind === 'equip') body += equipHtml();
     else if (CUR.kind === 'process') body += stepsHtml();
     else body += sipExtraHtml() + itemsHtml();
-    body += signHtml() + versHtml() + filesHtml();
+    body += asRefHtml() + signHtml() + versHtml() + filesHtml();
     $('#docBody').html(body);
     // 打字挑的那兩欄：先把「目前畫面上的字」記成已挑過的值，否則使用者一動就被判成改過而解除綁定
     $('#fProc').data('picked', $('#fProc').val() || '');

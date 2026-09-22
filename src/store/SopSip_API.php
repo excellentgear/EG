@@ -180,6 +180,17 @@ case 'detail': {
     $full['can_sign'] = ss_perm_for_kind($P, $kind, 'sign');
     $full['next_slot'] = ss_next_slot($db, $verId);
     $full['draw_candidates'] = ss_part_draw_candidates($db, (int)($full['doc']['part_d_id'] ?? 0));
+    /* 內容裡寫到的 AS 文件編號＝自動綁定那份文件，畫面要看得到綁到了什麼（使用者 2026-09-22）。
+       掃的是「所有會印出來的文字欄位」，不是只有某一欄。 */
+    $asTxt = implode("\n", array_filter([
+        (string)($full['ver']['op_method'] ?? ''), (string)($full['ver']['cautions'] ?? ''),
+        (string)($full['ver']['maintain'] ?? ''),  (string)($full['ver']['notice'] ?? ''),
+        (string)($full['ver']['use_equip'] ?? ''),
+        implode("\n", array_map(fn($s) => (string)($s['step_text'] ?? '') . "\n" . (string)($s['step_name'] ?? '')
+                                        . "\n" . (string)($s['note'] ?? ''), $full['steps'] ?? [])),
+        implode("\n", array_map(fn($i) => (string)($i['note'] ?? ''), $full['items'] ?? [])),
+    ]));
+    $full['as_refs'] = ss_asdoc_scan($db, $asTxt);
     // 管理員可以在核准之後補附件（使用者 2026-09-22 要求），但仍然不可以改內容
     $full['can_attach'] = (ss_perm_for_kind($P, $kind, 'edit')
                            && ((string)$full['ver']['status'] === 'draft' || !empty($P['canAdmin']))) ? 1 : 0;

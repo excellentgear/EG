@@ -75,8 +75,13 @@ function pf(int $id): string { return 'sopsip_file.php?id=' . $id; }
 function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 /** 一行一條的文字欄位 → 陣列 */
 function lines($s): array {
+    /* 內容裡寫到的 AS 文件編號一律就地換成「現行編號　文件名稱」——編號改版之後舊資料
+       會跟著顯示新編號（使用者 2026-09-22 指定「要自動連動到當時的文件編號」）。 */
+    global $db;
     $out = [];
-    foreach (preg_split("/\r\n|\r|\n/", (string)$s) as $l) { $l = trim($l); if ($l !== '') $out[] = $l; }
+    foreach (preg_split("/\r\n|\r|\n/", ss_asdoc_expand($db, (string)$s)) as $l) {
+        $l = trim($l); if ($l !== '') $out[] = $l;
+    }
     return $out;
 }
 /** 這個檔案是不是圖片（不是的話印檔名就好，不要放一個破圖） */
