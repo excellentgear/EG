@@ -231,6 +231,19 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         .pj-freeze thead th { position:sticky; top:0; z-index:3; background:#F7EFE0;
                               box-shadow:inset 0 -1px 0 #D8BE93; }
 
+        /* 專案標頭上的料號連結（點開圖面檢視跳窗） */
+        .prj-parts { margin-left:10px; }
+        .prj-part { display:inline-block; margin-left:4px; padding:1px 8px; border-radius:10px; cursor:pointer;
+                    background:#F7E0BD; border:1px solid #E0C9A2; color:#5b3a1e; font-size:12px; line-height:18px; }
+        .prj-part:hover { background:#F0A24B; border-color:#d98a33; color:#fff; }
+
+        /* 甘特列上的自動偵測小籤（td span 行高老坑：一定要自己指定 line-height，否則整列被撐高） */
+        .g-auto { display:inline-block; margin-left:6px; padding:0 5px; border-radius:3px; cursor:pointer;
+                  background:#F7E0BD; border:1px solid #E0C9A2; color:#8A5A2B;
+                  font-size:10px; line-height:15px; white-space:nowrap; }
+        .g-auto:hover { background:#F0A24B; border-color:#d98a33; color:#fff; }
+        .g-auto .fa-magic { margin-right:3px; }
+
         /* 自動偵測提示條 */
         .pj-auto-bar { background:#FBF3E6; border:1px solid #E0C9A2; border-radius:6px;
                        padding:8px 10px; margin-bottom:8px; font-size:12.5px; line-height:1.8; color:#5b3a1e; }
@@ -579,6 +592,17 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
     </div>
 </div></div>
 
+<!-- ══════════ 圖面檢視（把「圖面查閱」那一頁嵌進跳窗，不另外刻一個看圖畫面） ══════════ -->
+<div class="pj-mask" id="pvMask"><div class="pj-modal" style="max-width:1200px;">
+    <div class="m-head"><span><i class="fa fa-picture-o"></i> <span id="pvTitle">圖面檢視</span></span><span class="m-close" onclick="closeMask('pvMask')">✕</span></div>
+    <div class="m-body" id="pvBody" style="padding:0;"></div>
+    <div class="m-foot">
+        <button onclick="closeMask('pvMask')">關閉</button>
+        <a id="pvOpen" href="#" target="_blank" rel="noopener" class="b-ok"
+           style="display:inline-block;text-decoration:none;line-height:30px;">在新分頁開啟完整頁面</a>
+    </div>
+</div></div>
+
 <!-- ══════════ 進度回報（各步驟負責人自己回報；系統自動偵測佐證） ══════════ -->
 <div class="pj-mask" id="rptMask"><div class="pj-modal" style="max-width:920px;">
     <div class="m-head"><span><i class="fa fa-check-square-o"></i> <span id="rptTitle">回報進度</span></span><span class="m-close" onclick="closeMask('rptMask')">✕</span></div>
@@ -683,7 +707,18 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <li><b>里程碑</b>＝這一步是專案的關鍵查核點（例如首件檢驗通過）。勾起來後時間軸上不畫長條、
                 改畫一個 <b>◆</b> 菱形，列印的執行規劃表也會標 ◆。
                 <b>純粹是標記，不影響進度計算與任何判定</b>，只是讓人一眼看出哪幾步是關鍵。</li>
-            <li><b>實際日期要等立案核准後才能填</b>（草稿／已退回的專案還沒正式成案）。</li>
+            <li><b>什麼階段才回報得了？</b>依專案狀態分三段：
+                <ul style="margin:4px 0 0 18px;">
+                    <li><b>草稿／已退回</b>：只排預計日程。「實際開始／實際完成」兩欄<b>還不會出現</b>，
+                        回報跳窗會告訴你要先核准——專案還沒正式成案，工作不可能已經在跑。</li>
+                    <li><b>已送簽</b>：任務「狀態」欄開始出現（未開始／進行中／待檢…），但實際日期仍要等核准。</li>
+                    <li><b>已核准／已結案</b>：<b>可以回報</b>——實際起迄、進度、狀態、佐證附件全部開放。</li>
+                </ul>
+                <b>佐證的自動偵測不受階段限制</b>，草稿階段就看得到系統抓到什麼，只是還不能採用寫入。</li>
+            <li><b>管理員可以「自動送簽核准」</b>：專案跳窗右下角（只有<b>專案管理員</b>看得到）。
+                輸入一個業務日期，就直接把專案標記成<b>已送簽＋已核准</b>，不跑會簽與核准流程，
+                並留下自動簽核紀錄（簽核時間會依規則錯開、不跨日）。
+                <b>用途</b>：補歷史專案，或這個專案本來就不需要跑簽核卻要開始回報進度。</li>
             <li>勾「<b>隱藏已完成的步驟</b>」只看還沒做完的；這個勾選和專案清單上的那一個是同一個。</li>
             <li>專案清單上點專案代號旁的 <b>▸</b> 可以<b>就地展開</b>看進度，不必開專案。</li>
             <li>末列按 <b>↓</b> 自動加一列、空白末列按 <b>↑</b> 自動移除（全站共用規則）。

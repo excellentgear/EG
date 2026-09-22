@@ -506,11 +506,29 @@ case 'report_save':
     $sc = (string)($_POST['status_code'] ?? '');
     if ($sc !== '' && !isset(PRJ_TASK_STATUS[$sc])) $sc = '';
 
+    /* 採用了哪幾筆自動佐證（可多選）。後端**重新查一次佐證**再比對，只留真的存在的那幾筆——
+       前端送什麼就存什麼的話，任何人都能塞一筆假佐證進去，而佐證正是「這個日期憑什麼填」的依據。 */
+    $evJson = null;
+    $pickRaw = json_decode((string)($_POST['evidence'] ?? '[]'), true);
+    if (is_array($pickRaw) && $pickRaw) {
+        $ev  = prj_task_evidence($db, $pid, $prj);
+        $okSet = [];
+        foreach ($ev as $k => $v) {
+            foreach ($v['options'] as $o) $okSet[$k . '|' . $o['date'] . '|' . (string)$o['ref']] = $o + ['kind' => $k];
+        }
+        $keep = [];
+        foreach ($pickRaw as $p) {
+            $sig = (string)($p['kind'] ?? '') . '|' . (string)($p['date'] ?? '') . '|' . (string)($p['ref'] ?? '');
+            if (isset($okSet[$sig])) $keep[] = $okSet[$sig];
+        }
+        if ($keep) $evJson = json_encode($keep, JSON_UNESCAPED_UNICODE);
+    }
+
     $db->prepare("UPDATE project_task SET act_start=?, act_end=?, progress=?, progress_auto=?, status_code=?,
-                         report_note=?, reported_by=?, reported_by_name=?, reported_at=?
+                         report_note=?, evidence_json=?, reported_by=?, reported_by_name=?, reported_at=?
                   WHERE task_id=? AND project_id=?")
        ->execute([$as, $ae, $pg, $ae ? 1 : 0, $sc,
-                  mb_substr(trim((string)($_POST['report_note'] ?? '')), 0, 500),
+                  mb_substr(trim((string)($_POST['report_note'] ?? '')), 0, 500), $evJson,
                   $uid, $uname, $NOW['dt'], $tid, $pid]);
     jout(['message' => '已回報', 'progress' => prj_progress($db, $pid)]);
 

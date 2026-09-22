@@ -368,6 +368,8 @@ function prj_ensure_schema(PDO $db): void
     prj_ensure_col($db, 'project_task', 'reported_by', "INT NULL COMMENT '最後一次回報的人' AFTER report_note");
     prj_ensure_col($db, 'project_task', 'reported_by_name', "VARCHAR(60) NULL AFTER reported_by");
     prj_ensure_col($db, 'project_task', 'reported_at', "DATETIME NULL AFTER reported_by_name");
+    // 回報時採用了哪幾筆自動佐證（使用者要求可多選）：存下來才看得出「這個日期是憑什麼填的」
+    prj_ensure_col($db, 'project_task', 'evidence_json', "TEXT NULL COMMENT '採用的自動佐證清單 [{kind,date,label,ref}]' AFTER reported_at");
     // 專案涵蓋的製程（2026-09-22 使用者要求）：空＝整張 BOM 的所有製程，有值＝只算這幾道
     prj_ensure_col($db, 'project', 'scope_process_no', "VARCHAR(255) NULL COMMENT '專案涵蓋的製程 process_no.ProcessNo 逗號串；空＝整張BOM所有製程' AFTER dept_name");
     // 執行規劃表的檢視方式（甘特／清單）：列印要跟著走，所以存在專案上不是只存在瀏覽器
@@ -1506,7 +1508,7 @@ function prj_task_evidence(PDO $db, int $projectId, ?array $prj = null): array
     if ($pks) {
         $in  = implode(',', $pks);
         $sql = "SELECT a.id, a.original_name, a.filename, a.issue_stamp_date, a.uploaded_at, a.uploaded_by,
-                       COALESCE(ds.D_Setting_Id,'') AS part_no
+                       a.category_ids, COALESCE(ds.D_Setting_Id,'') AS part_no
                 FROM part_attachments a
                 LEFT JOIN d_setting ds ON ds.d_id = a.d_id
                 WHERE a.d_id IN ($in) AND a.deleted_at IS NULL";
@@ -1516,13 +1518,33 @@ function prj_task_evidence(PDO $db, int $projectId, ?array $prj = null): array
             $sql .= ' AND (' . implode(' OR ', $or) . ')';
         }
         $sql .= " ORDER BY COALESCE(a.issue_stamp_date, DATE(a.uploaded_at)), a.id";
+        // 附件標籤名稱：使用者要求「偵測到圖面就要顯示出設定的附件標籤」
+        // ——光看檔名看不出那是哪一種圖（原圖／加工圖／BOSS圖），標籤才是判斷依據。
+        $catName = [];
+        try {
+            foreach ($db->query("SELECT id, category_name FROM quotation_file_categories")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+                $catName[(int)$c['id']] = (string)$c['category_name'];
+            }
+        } catch (Throwable $e) {}
         try {
             foreach ($db->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $r) {
                 $d = $r['issue_stamp_date'] ?: (substr((string)$r['uploaded_at'], 0, 10) ?: null);
                 if (!$d) continue;
+                $tags = [];
+                foreach (explode(',', (string)$r['category_ids']) as $cid) {
+                    $cid = (int)trim($cid);
+                    // 只列「被設定成加工圖面」的那幾個標籤；沒設定時整串都列（設定為空＝任何附件都算）
+                    if ($cid > 0 && isset($catName[$cid]) && (!$catIds || in_array($cid, $catIds, true))) {
+                        $tags[] = $catName[$cid];
+                    }
+                }
                 $out['part_drawing']['options'][] = [
                     'date'  => $d,
-                    'label' => ($r['part_no'] !== '' ? $r['part_no'] . '　' : '') . ($r['original_name'] ?: $r['filename'])
+                    'tags'  => $tags,
+                    'file'  => (string)($r['original_name'] ?: $r['filename']),
+                    'label' => ($r['part_no'] !== '' ? $r['part_no'] . '　' : '')
+                             . ($tags ? '［' . implode('、', $tags) . '］　' : '')
+                             . ($r['original_name'] ?: $r['filename'])
                              . ($r['issue_stamp_date'] ? '' : '（無發行章日期，取上傳日）'),
                     'ref'   => 'att:' . (int)$r['id'],
                 ];

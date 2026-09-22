@@ -306,6 +306,43 @@ function openProject(id, after) {
     });
 }
 
+/** 標頭上的料號連結（點開圖面檢視跳窗）。料號多時全部列出來，不要只挑一個。 */
+function partLinksHtml(res) {
+    var parts = res.parts || [];
+    if (!parts.length) return '';
+    var h = '<span class="prj-parts">';
+    $.each(parts, function (i, x) {
+        h += '<span class="prj-part" data-viewpart="' + num(x.ds_pk) + '" data-partno="' + esc(x.part_no || '')
+          + '" title="開啟圖面檢視"><i class="fa fa-picture-o"></i> ' + esc(x.part_no || '') + '</span>';
+    });
+    return h + '</span>';
+}
+
+/* 圖面檢視跳窗：直接把「圖面查閱」那一頁嵌進來（同一份實作，不在這裡另外刻一個看圖的畫面）。
+   同源所以載入後可以把它自己的側欄／頁首藏掉，看起來就像本頁的跳窗——**刻意不去改 bom_viewer.php**。 */
+$(document).on('click', '[data-viewpart]', function () {
+    var pk = num($(this).data('viewpart')), pn = String($(this).data('partno') || '');
+    var url = '/EGsystem/views/pm/bom_viewer.php?pk=' + pk + '&d_id=' + encodeURIComponent(pn);
+    $('#pvTitle').text('圖面檢視：' + pn);
+    $('#pvOpen').attr('href', url);
+    $('#pvBody').html('<div class="pj-hint" style="padding:14px;">載入中…</div>'
+        + '<iframe id="pvFrame" src="' + url + '" style="width:100%;height:72vh;border:0;display:none;"></iframe>');
+    openMask('pvMask');
+    $('#pvFrame').on('load', function () {
+        $(this).prev('.pj-hint').remove();
+        $(this).show();
+        try {
+            var d = this.contentDocument;
+            if (!d) return;                       // 跨來源就算了，照樣看得到內容
+            var s = d.createElement('style');
+            s.textContent = '.left_col,.top_nav,footer,.nav_menu{display:none!important;}'
+                          + '.right_col{margin-left:0!important;padding:8px!important;min-height:0!important;}'
+                          + 'body{background:#fff!important;}';
+            d.head.appendChild(s);
+        } catch (e) { /* 藏不掉就維持原樣，不影響檢視 */ }
+    });
+});
+
 function newProjectShell() {
     return {
         project: { project_id: 0, project_type: 'C', phase: 'initiating', status: 'draft', progress: 0 },
@@ -317,8 +354,12 @@ function newProjectShell() {
 function renderDetail(res) {
     pjMsgClear();
     var p = res.project;
-    $('#prjTitle').html('<i class="fa fa-folder-open-o"></i> ' +
-        (p.project_id ? esc(p.project_no + '　' + p.project_name) : '新增專案'));
+    /* 標頭的料號做成可點（使用者要求）：點下去開圖面檢視跳窗。
+       料號來自 project_part（訂單帶出的＋手動掛的），**不從專案名稱去猜**——
+       專案名稱是自由文字，猜錯就會開到別的料號而且看不出來。 */
+    $('#prjTitle').html('<i class="fa fa-folder-open-o"></i> '
+        + (p.project_id ? esc(p.project_no + '　' + p.project_name) : '新增專案')
+        + partLinksHtml(res));
     renderAlertBar(res);
     renderBase(res);
     renderPlan(res);
@@ -557,6 +598,12 @@ function renderFoot(res) {
         if (res.can_edit && (p.status === 'draft' || p.status === 'rejected')) {
             h += '<button id="btnSubmit"><i class="fa fa-paper-plane"></i> 送簽</button>';
         }
+        /* 自動送簽核准（後端 auto_sign 早就寫好了，但一直沒有任何入口，等於沒做）。
+           只有專案管理員看得到；補歷史專案或不需要跑簽核流程時用，簽核時間依 ai-rules/21 錯開且不跨日。 */
+        if (PERM.canAdmin && p.status !== 'approved' && p.status !== 'closed') {
+            h += '<button id="btnAutoSign" title="不跑簽核流程，直接標記為已送簽＋已核准（會留下自動簽核紀錄）">'
+               + '<i class="fa fa-bolt"></i> 自動送簽核准</button>';
+        }
         if (res.can_approve) {
             h += '<button id="btnApprove" class="b-ok"><i class="fa fa-check"></i> 核准</button>'
                + '<button id="btnReject" class="b-danger"><i class="fa fa-times"></i> 退回</button>';
@@ -724,10 +771,16 @@ function ganttHtml(res, opt) {
            + '<div class="gantt-own">' + esc(g.dept_name || '') + '</div>'
            + '<div class="gantt-track"><div class="gantt-grid">' + grid + '</div>' + todayMark + '</div></div>';
         $.each(g.tasks, function (ti, t) {
-            /* 標籤本身就是回報入口（清單檢視另有「回報」欄）；opt.compact＝清單頁就地展開，不給點 */
+            /* 標籤本身就是回報入口（清單檢視另有「回報」欄）；opt.compact＝清單頁就地展開，不給點。
+               甘特檢視也要看得到自動偵測（使用者要求）：偵測到就在名稱後面掛一顆 🪄 小籤，
+               點下去一樣開回報跳窗——不然切到清單檢視才看得到，等於逼人換檢視。 */
+            var a = (opt.compact || t.act_end) ? null : autoHintOf(t);
             h += '<div class="gantt-row"><div class="gantt-lbl" style="padding-left:22px;" title="' + esc(t.task_name) + '">'
                + (opt.compact || !num(t.task_id) ? esc(t.task_name)
                     : '<span class="pj-op" data-report="' + t.task_id + '" style="padding:0;">' + esc(t.task_name) + '</span>')
+               + (a ? '<span class="g-auto" data-report="' + t.task_id + '" title="' + esc(a.label)
+                      + '：偵測到 ' + a.n + ' 筆，點開可逐筆確認後採用"><i class="fa fa-magic"></i>'
+                      + dispDate(a.date) + (a.n > 1 ? '·' + a.n : '') + '</span>' : '')
                + '</div>'
                + '<div class="gantt-own">' + esc(t.owner_name || '－') + '</div>'
                + '<div class="gantt-track"><div class="gantt-grid">' + grid + '</div>' + todayMark
@@ -896,30 +949,54 @@ function renderReport(r) {
       + esc(dispDate(t.plan_start) + ' ~ ' + dispDate(t.plan_end)) + '"></div>'
       + '</div>'
       + (t.reported_at ? '<div class="pj-hint">上次回報：' + esc(t.reported_by_name || '') + '　' + esc(String(t.reported_at)) + '</div>' : '')
+      + (function () {
+            var used = parseEvidence(t.evidence_json);
+            if (!used.length) return '';
+            var s = [];
+            $.each(used, function (i, e) { s.push(dispDate(e.date) + '　' + (e.label || '')); });
+            return '<div class="pj-hint">已採用的佐證（' + used.length + ' 筆）：<br>' + esc(s.join('\n')).replace(/\n/g, '<br>') + '</div>';
+        })()
       + '</div>';
 
-    /* ① 自動佐證 */
+    /* ① 自動佐證：**可以多選**（使用者要求）——一個步驟常常靠好幾份文件才算完成
+       （例：加工圖面有本圖與 BOSS 圖兩份），只能挑一筆就記不清楚到底憑什麼判定完成。
+       已採用過的（evidence_json）重開跳窗時要自動勾回來。 */
+    var picked = {};
+    $.each(parseEvidence(t.evidence_json), function (i, e) { picked[e.kind + '|' + e.date + '|' + (e.ref || '')] = 1; });
     var kinds = r.kinds || {}, hasKind = false;
     var kh = '';
     $.each(kinds, function (k, v) {
         hasKind = true;
         kh += '<div style="margin-bottom:10px;"><b>' + esc(v.label) + '</b>';
         if ((v.options || []).length) {
-            kh += '<table class="sub-tbl" style="margin-top:4px;"><thead><tr><th style="width:92px;">日期</th><th>佐證</th>'
-                + '<th style="width:60px;"></th></tr></thead><tbody>';
+            kh += '<table class="sub-tbl" style="margin-top:4px;"><thead><tr>'
+                + '<th style="width:30px;">' + (ro ? '' : '<input type="checkbox" class="ev-all" data-eg-skip="1">') + '</th>'
+                + '<th style="width:92px;">日期</th><th>佐證</th></tr></thead><tbody>';
             $.each(v.options, function (i, o) {
-                kh += '<tr><td>' + dispDate(o.date) + '</td><td>' + o.label + '</td>'
-                    + '<td>' + (ro ? '<span class="pj-hint">－</span>'
-                        : '<span class="pj-op" data-useev="' + esc(o.date) + '">採用</span>') + '</td></tr>';
+                var sig = k + '|' + o.date + '|' + (o.ref || '');
+                kh += '<tr><td>' + (ro ? '－'
+                        : '<input type="checkbox" class="ev-ck" data-eg-skip="1"'
+                          + ' data-kind="' + esc(k) + '" data-date="' + esc(o.date) + '" data-ref="' + esc(o.ref || '') + '"'
+                          + ' data-label="' + esc(String(o.label).replace(/<[^>]*>/g, '')) + '"'
+                          + (picked[sig] ? ' checked' : '') + '></td>')
+                    + '<td>' + dispDate(o.date) + '</td><td>' + o.label + '</td></tr>';
             });
             kh += '</tbody></table>';
-            if (!ro) kh += '<div class="pj-hint">按「採用」會把那個日期填進下面的<b>實際完成日</b>，還是要按「儲存回報」才寫入。</div>';
         }
         if (v.note) kh += '<div class="pj-hint">' + esc(v.note) + '</div>';
         kh += '</div>';
     });
     h += '<div class="sec"><h5>系統自動偵測到的佐證</h5>'
        + (hasKind ? kh : '<div class="pj-hint">這個步驟沒有可以自動偵測的來源（步驟名稱不屬於標準流程的那幾項），請直接填寫下面的日期並上傳佐證附件。</div>')
+       + (hasKind && !ro
+            ? '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+              + '<button id="btnUseEv" style="height:28px;padding:0 12px;border:1px solid #d98a33;border-radius:4px;background:#F0A24B;color:#fff;cursor:pointer;">'
+              + '採用勾選的佐證</button>'
+              + '<span class="pj-hint" id="evPickHint"></span></div>'
+              + '<div class="pj-hint">可以<b>勾好幾筆</b>（一個步驟常常靠好幾份文件才算完成）。'
+              + '按下之後<b>實際完成日會取其中最晚的那一天</b>——最後一份佐證到齊才算做完；'
+              + '勾選的內容會一起存下來，之後看得出這個日期是憑什麼填的。還是要按「儲存回報」才寫入。</div>'
+            : '')
        + '</div>';
 
     /* ② 回報內容 */
@@ -971,19 +1048,54 @@ function renderReport(r) {
         h = '<div class="pj-warn" style="margin-bottom:8px;">你不是這個步驟的負責人，也沒有專案登錄權限，只能檢視。</div>' + h;
     }
     $('#rptBody').html(h);
+    evPickHint();                      // 重開跳窗時把「已勾選 N 筆」帶回來
     $('#rptFoot').html('<button onclick="closeMask(\'rptMask\')">關閉</button>'
         + (ro ? '' : '<button class="b-ok" id="btnRptSave"><i class="fa fa-save"></i> 儲存回報</button>'));
 }
 
-$(document).on('click', '[data-useev]', function () {
-    $('#rAe').val(String($(this).data('useev')));
-    if (!$('#rAs').val()) $('#rAs').val(String($(this).data('useev')));
-    $('#rPg').val(100);
+/** 已採用的佐證（存在 project_task.evidence_json） */
+function parseEvidence(raw) {
+    if (!raw) return [];
+    try { var a = JSON.parse(raw); return $.isArray(a) ? a : []; } catch (e) { return []; }
+}
+/** 目前勾選的佐證 */
+function pickedEvidence() {
+    return $('#rptBody .ev-ck:checked').map(function () {
+        return { kind: String($(this).data('kind')), date: String($(this).data('date')),
+                 ref: String($(this).data('ref') || ''), label: String($(this).data('label') || '') };
+    }).get();
+}
+function evPickHint() {
+    var n = pickedEvidence().length;
+    $('#evPickHint').text(n ? '已勾選 ' + n + ' 筆' : '尚未勾選');
+}
+$(document).on('change', '#rptBody .ev-ck', evPickHint);
+$(document).on('change', '#rptBody .ev-all', function () {
+    $(this).closest('table').find('.ev-ck').prop('checked', $(this).is(':checked'));
+    evPickHint();
 });
+$(document).on('click', '#btnUseEv', function () {
+    var p = pickedEvidence();
+    if (!p.length) { alert('請先勾選要採用的佐證'); return; }
+    /* 多筆時取**最晚**那一天：最後一份佐證到齊才算做完 */
+    var last = p[0].date;
+    $.each(p, function (i, x) { if (x.date > last) last = x.date; });
+    $('#rAe').val(last);
+    if (!$('#rAs').val()) $('#rAs').val(last);
+    $('#rPg').val(100);
+    pjMsgLite('已採用 ' + p.length + ' 筆佐證，實際完成日帶入 ' + dispDate(last) + '（記得按「儲存回報」）');
+});
+/* 跳窗內的小提示：用原生 alert 會卡住流程，改成就地顯示一行 */
+function pjMsgLite(msg) {
+    var $b = $('#evPickHint');
+    if (!$b.length) return;
+    $b.html('<b style="color:#8A5A2B;">' + esc(msg) + '</b>');
+}
 $(document).on('click', '#btnRptSave', function () {
     var d = { project_id: CUR.project.project_id, task_id: RPT_TASK.task.task_id,
               act_start: $('#rAs').val(), act_end: $('#rAe').val(),
-              progress: $('#rPg').val(), status_code: $('#rSt').val(), report_note: $('#rNote').val() };
+              progress: $('#rPg').val(), status_code: $('#rSt').val(), report_note: $('#rNote').val(),
+              evidence: JSON.stringify(pickedEvidence()) };
     if (d.act_start && d.act_end && d.act_end < d.act_start) { alert('實際完成日不可早於實際開始日'); return; }
     api('report_save', d, 'POST').done(function () {
         closeMask('rptMask');
@@ -2437,6 +2549,20 @@ $(document).on('click', '#btnSubmit', function () {
             try { showFieldErrors((JSON.parse(xhr.responseText) || {}).fields); } catch (e) { /* ajaxError 已提示 */ }
         });
 });
+/* 自動送簽核准：問一個業務日期就好。簽核時間由後端依 ai-rules/21 隨機錯開、不跨日。 */
+$(document).on('click', '#btnAutoSign', function () {
+    if (!planLeaveOk('自動送簽')) return;
+    var d = prompt('自動送簽核准：請輸入業務日期（YYYY-MM-DD）。\n\n'
+        + '這會把專案直接標記成「已送簽＋已核准」，不跑會簽與核准流程，\n'
+        + '並留下自動簽核紀錄。核准後「實際開始／實際完成」才能填，也才回報得了進度。',
+        META.today || '');
+    if (d === null) return;
+    d = $.trim(d);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) { alert('日期格式要像 2026-09-22'); return; }
+    api('auto_sign', { project_ids: String(CUR.project.project_id), biz_date: d }, 'POST')
+        .done(function (r) { alert(r.message); openProject(num(CUR.project.project_id)); loadList(); });
+});
+
 $(document).on('click', '[data-cosign]', function () {
     var id = num($(this).data('cosign'));
     var h = '<div class="sec"><h5>會簽</h5>'
