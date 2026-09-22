@@ -41,6 +41,11 @@ $formDate = (string)($ver['form_date'] ?? '');
 $company  = ss_company_name($db);
 $asNo     = ss_as_no($db, $kind, (int)($ver['as_doc_id'] ?? 0), $formDate);
 $formName = ss_as_title($db, $kind, (int)($ver['as_doc_id'] ?? 0));
+/* 表頭仍然取綁定 AS 文件的表單名稱（ai-rules/16 禁寫死），但後面補上 SOP／SIP
+   ——現場講的是「SOP」，只印「製造製程說明書」看不出是哪一種（使用者 2026-09-22 指定）。
+   名稱裡本來就有 SOP／SIP 字樣的就不重複加。 */
+$tabCode = strtoupper((string)(ss_kinds()[$kind]['tab'] ?? ''));
+if ($tabCode !== '' && stripos($formName, $tabCode) === false) $formName .= '　' . $tabCode;
 $vers     = ss_ver_rows($db, (int)$doc['doc_id']);
 $machine  = $F['machine'];
 $mMeta    = $F['machine_meta'] ?? [];
@@ -153,7 +158,12 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
     .blk ol, .blk ul { margin:0; padding-left:6mm; }
     .blk li { line-height:1.7; }
     .imgcell { text-align:center; }
-    .imgcell img { max-width:62mm; max-height:42mm; }
+    .imgcell img { max-width:100%; max-height:46mm; }
+    /* 名稱與圖示同一格：名稱在上、置中、底下一條細線分隔（照紙本） */
+    .steps .imgcell .sname { font-weight:bold; padding-bottom:1mm; margin-bottom:1mm;
+                             border-bottom:1px solid #bbb; }
+    .steps td.no { font-size:13pt; font-weight:bold; vertical-align:middle; }
+    .steps td { vertical-align:top; }
     /* 資料列不可以被切成上下兩半，表頭跨頁重複（ai-rules/16） */
     thead { display:table-header-group; }
     tr { page-break-inside:avoid; }
@@ -251,18 +261,24 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
             <td class="mid"><?= h($ver['ver_no']) ?>　<?= h(eg_fmt_date($formDate)) ?></td>
         </tr>
     </table>
-    <table class="blk">
+    <!-- 照紙本排：名稱與圖示**同一格**（名稱在上、圖在下），不另外開一欄（使用者 2026-09-22 指定） -->
+    <table class="blk steps">
         <thead><tr>
-            <th style="width:12mm;">項次</th><th style="width:28mm;">名稱</th><th style="width:56mm;">參考圖示</th>
-            <th>操作步驟</th><th style="width:60mm;">說明</th>
+            <th style="width:12mm;">項次</th><th style="width:62mm;">參考圖示</th>
+            <th>操作步驟</th><th style="width:52mm;">說明</th>
         </tr></thead>
         <tbody>
         <?php foreach ($F['steps'] as $i => $s): ?>
             <tr>
-                <td class="mid"><?= $i + 1 ?></td>
-                <td class="mid"><?= h($s['step_name']) ?></td>
-                <td class="imgcell"><?php if ((int)$s['img_file_id']): ?>
-                    <img src="<?= pf((int)$s['img_file_id']) ?>"><?php endif; ?></td>
+                <td class="mid no"><?= $i + 1 ?></td>
+                <td class="imgcell">
+                    <?php if (trim((string)$s['step_name']) !== ''): ?>
+                        <div class="sname"><?= h($s['step_name']) ?></div>
+                    <?php endif; ?>
+                    <?php if ((int)$s['img_file_id']): ?><img src="<?= pf((int)$s['img_file_id']) ?>"><?php endif; ?>
+                </td>
+                <?php /* 步驟文字**不要自己補編號**：現場輸入的內容本來就帶「1.」「2.」（實測全部如此），
+                         補了會變成「1.1.以氣槍清潔…」 */ ?>
                 <td><?php foreach (lines($s['step_text']) as $l): ?><div><?= h($l) ?></div><?php endforeach; ?></td>
                 <td><?php foreach (lines($s['note']) as $l): ?><div><?= h($l) ?></div><?php endforeach; ?></td>
             </tr>
@@ -439,10 +455,32 @@ var SS_AUTOPRINT = <?= isset($_GET['noprint']) ? '0' : '1' ?>;
         left.forEach(function (im) { im.addEventListener('load', one); im.addEventListener('error', one); });
         setTimeout(function () { if (!done) { done = true; cb(); } }, 6000);   // 圖載不出來也不能卡死
     }
+    /* 只差一點點就放得下一張紙時自動縮一點（使用者 2026-09-22：實際縮得進一張 A4 的就該印成一張）。
+       兩個重點，都是 KPI 列印版踩出來的：
+       ① **套上去之後一定要再量一次**——zoom 會改變字級與換行，實際高度不等於原高度×比例，
+          所以是「縮一點→重量→還超出再縮」而不是一次算好比例。
+       ② 只縮不放大，而且有下限（0.62）：縮到看不清楚就不如乖乖印兩張。 */
+    var PAGE_MM = <?= (int)$sheetH ?>;          // 這次用的紙張高度（mm）
+    function mm2px(mm) { return mm * 96 / 25.4; }
+    function fitOnePage() {
+        var sheet = document.querySelector('.sheet');
+        if (!sheet) return;
+        var limit = mm2px(PAGE_MM) - 2;          // 留 2px 給捨入誤差
+        var z = 1;
+        for (var i = 0; i < 12; i++) {
+            var h = sheet.getBoundingClientRect().height;
+            if (h <= limit) break;
+            if (h > limit * 1.75) break;         // 本來就要兩張以上，不必硬縮
+            if (z <= 0.62) break;
+            z = Math.max(0.62, z - 0.04);
+            sheet.style.zoom = z;
+        }
+    }
     function go() {
         drawStamps();
-        if (!SS_AUTOPRINT) return;
         imagesReady(function () {
+            fitOnePage();                        // 圖載完、章畫完才量得準
+            if (!SS_AUTOPRINT) return;
             setTimeout(function () { window.print(); }, 150);
         });
     }

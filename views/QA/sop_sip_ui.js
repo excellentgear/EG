@@ -80,6 +80,9 @@ function acAttach(inputSel, opt) {
                 acCur = opt;
                 $AC.html(h || '<div class="it muted-help">查無資料</div>').data('rows', rows);
                 var o = $in.offset(), st = $(window).scrollTop();
+                /* 建議清單一出現就把 data-eg-hint 的提示氣泡收掉：兩個都浮在欄位下方同一個位置，
+                   不收的話氣泡會壓在第一筆建議上（使用者 2026-09-22 回報「文字被欄位說明遮蔽」）。 */
+                $('.eg-hint-pop').hide();
                 $AC.css({ left: o.left, top: o.top - st + $in.outerHeight() + 2,
                           width: Math.max(320, $in.outerWidth()) }).show();
             });
