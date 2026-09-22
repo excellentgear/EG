@@ -136,14 +136,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         .help-doc li{ margin-bottom:4px; font-size:13px; line-height:1.6; }
         .help-doc .hd-warn{ background:#FBEEE6; border:1px solid #F3D9C4; color:#8A5A2B; border-radius:6px; padding:8px 10px; font-size:13px; }
         @media print{ .page-help-btn{ display:none !important; } }
-        /* 異常原因分類：三層縮排樹、單選（版面比照品質異常處理單的 .ctree） */
-        .car-ctree{ max-height:240px; overflow:auto; border:1px solid #ddd; border-radius:6px;
-                    padding:6px 10px; background:#fff; }
-        .car-ctree .lv1{ margin-top:4px; font-weight:700; color:#5b3a1e; }
-        .car-ctree .lv2{ margin-left:20px; }
-        .car-ctree .lv3{ margin-left:40px; }
-        .car-ctree label{ font-weight:normal; margin:0; cursor:pointer; display:inline-flex;
-                          align-items:center; gap:5px; font-size:13px; line-height:20px; }
+        /* 異常原因分類：逐層挑選（共用元件 eg_cause_picker.js），這裡只放按鈕與已選路徑 */
+        .cc-pick{ display:flex; align-items:center; gap:4px; }
         .cc-path{ margin-top:4px; font-size:12px; background:#FBEEE6; border:1px solid #F3D9C4;
                   color:#8A5A2B; border-radius:5px; padding:3px 8px; }
         /* 補資料（代填／代簽）面板：暖琥珀色，與一般作業區塊明顯區隔（ai-rules/10 暖色系） */
@@ -682,6 +676,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_stamp.js'); ?>"></script>
+<script src="../../resource/js/eg_cause_picker.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_cause_picker.js'); ?>"></script>
 <?php if (!$isPopup): ?><script src="../../resource/js/custom.min.js"></script><?php endif; ?>
 <script>
 (function(){
@@ -1294,29 +1289,28 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
             .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'指派失敗'); }); });
       }
 
-      // 異常原因分類：選了哪一條路徑即時顯示在樹的下方（66 個節點，光看勾勾看不出選到哪一層）
+      // 異常原因分類：逐層挑選（共用元件 EGCausePicker），選好的路徑顯示在按鈕下方
       function refreshCausePath(){
         if(!$('#rp-cause-path').length) return;
-        var v=$('#view-body input[name="rp-cause-cat"]:checked').val()||'';
+        var v=$('#rp-cause-cat').val()||'';
         $('#rp-cause-path').html(v
-          ? ('已選：<b>'+esc(causePathOf(r.causes, v, ''))+'</b>')
+          ? ('已選：<b>'+esc(EGCausePicker.pathOf(r.causes, v)||('#'+v))+'</b>')
           : '<span style="color:#a94442;">尚未選擇（簽章前一定要選一個）</span>');
       }
-      // 直接綁在這次重畫出來的 radio 上（不用 #view-body 事件委派，那個元素不會被換掉、會累積 handler）
-      $('#view-body input[name="rp-cause-cat"]').on('change', refreshCausePath);
       refreshCausePath();
-      // 已選的節點捲進視野（**只捲分類框自己**，不可用 scrollIntoView——那會連整個單據檢視
-      // 一起往下捲，一開跳窗就跳到中間，看不到表頭）
-      (function(){
-        var box=$('#view-body .car-ctree')[0], c=$('#view-body input[name="rp-cause-cat"]:checked')[0];
-        if(!box || !c) return;
-        box.scrollTop += (c.getBoundingClientRect().top - box.getBoundingClientRect().top) - box.clientHeight/2;
-      })();
+      $('#btn-pick-cause').on('click', function(){
+        EGCausePicker.open({
+          tree: r.causes||[], selected: ($('#rp-cause-cat').val()? [$('#rp-cause-cat').val()] : []),
+          multi: false, title: '選擇異常原因分類',
+          onApply: function(ids){ $('#rp-cause-cat').val(ids.length?ids[0]:''); refreshCausePath(); }
+        });
+      });
+      $('#btn-clear-cause').on('click', function(){ $('#rp-cause-cat').val(''); refreshCausePath(); });
 
       // 回覆三段：儲存/簽章/修改/送出
       function gatherReply(){
         return { car_id:id,
-          cause_cat_id: $('#view-body input[name="rp-cause-cat"]:checked').val()||'',
+          cause_cat_id: $('#rp-cause-cat').val()||'',
           cause_detail: $('#rp-cause-detail').val()||'',
           disposition_opt_id: $('#view-body input[name="rp-disp-opt"]:checked').val()||'',
           correction_measure:$('#rp-corr').val()||'', correction_due:$('#rp-corr-due').val()||'',
@@ -1358,28 +1352,6 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     });
   }
 
-  /* 異常原因分類（三層、**單選**）與處置方式：選單來源＝品質異常處理單的 qa_cause_cat／
-     qa_option（管理員在異常單設定頁維護），CAR 不自己留一份（鐵律4）。 */
-  function causeTreeHtml(nodes, lv, sel){
-    var h='';
-    (nodes||[]).forEach(function(n){
-      h += '<div class="lv'+lv+'"><label><input type="radio" name="rp-cause-cat" value="'+n.cat_id+'"'
-         + ((parseInt(sel,10)===parseInt(n.cat_id,10))?' checked':'') + '> '+esc(n.name)+'</label></div>';
-      if(n.children && n.children.length) h += causeTreeHtml(n.children, Math.min(lv+1,3), sel);
-    });
-    return h;
-  }
-  function causePathOf(nodes, id, prefix){
-    var found='';
-    (nodes||[]).forEach(function(n){
-      if(found) return;
-      var p = prefix ? (prefix+' → '+n.name) : n.name;
-      if(parseInt(n.cat_id,10)===parseInt(id,10)) { found=p; return; }
-      if(n.children && n.children.length) found = causePathOf(n.children, id, p) || '';
-    });
-    return found;
-  }
-
   // 三段回覆區塊（原因分析 / 矯正措施 / 預防措施）；附件矯正/預防分開顯示於各自區塊
   function renderReply(o, perm, sigMap, L, atts, causes, dispOpts){
     causes = causes||[]; dispOpts = dispOpts||[];
@@ -1410,11 +1382,15 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       body+='</div>';
       return '<div class="panel panel-default" style="margin-bottom:8px;">'+head+body+'</div>';
     }
-    // ── 異常原因分類：三層樹、單選（勾一個就好，不複選）──
+    // ── 異常原因分類：逐層挑選（先第一層→第二層→第三層）、單選 ──
     var causeEdit='<div style="font-weight:600;margin-bottom:3px;">異常原因分類'
       +' <small class="text-muted" style="font-weight:normal;">（單選；選單與品質異常處理單同一份，由管理員在異常單設定頁維護）</small></div>'
       + (causes.length
-          ? '<div class="car-ctree">'+causeTreeHtml(causes,1,o.cause_cat_id)+'</div><div class="cc-path" id="rp-cause-path"></div>'
+          ? '<input type="hidden" id="rp-cause-cat" value="'+esc(o.cause_cat_id||'')+'">'
+            +'<div class="cc-pick"><button type="button" class="btn btn-default btn-sm" id="btn-pick-cause">'
+            +'<i class="fa fa-sitemap"></i> 選擇分類</button>'
+            +'<button type="button" class="btn btn-link btn-sm" id="btn-clear-cause">清除</button></div>'
+            +'<div class="cc-path" id="rp-cause-path"></div>'
           : '<div class="alert alert-warning" style="padding:6px 10px;margin-bottom:4px;">管理員尚未建立異常原因分類，'
             +'請到<b>品質異常處理單 → 設定 → 異常原因分類</b>建立後再回來選。</div>')
       + (o.cause_is_legacy

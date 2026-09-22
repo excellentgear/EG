@@ -112,6 +112,7 @@ try {
 
             // 共同編輯者（部門或最多 5 位人員；會並列於自動產生公告的公告者，且可修改此單）
             if (isset($_POST['co_editors'])) qaSaveOrderEditors($db, $orderId, (string)$_POST['co_editors']);
+            qaSaveCauseIds($db, $orderId, $_POST['cause_ids'] ?? null);
 
             $db->commit();
 
@@ -228,6 +229,7 @@ try {
 
             // 共同編輯者（有傳才更新）
             if (isset($_POST['co_editors'])) qaSaveOrderEditors($db, $orderId, (string)$_POST['co_editors']);
+            qaSaveCauseIds($db, $orderId, $_POST['cause_ids'] ?? null);
 
             $db->commit();
 
@@ -286,6 +288,9 @@ try {
             $data = $order->fetch(PDO::FETCH_ASSOC);
             if (!$data) { echo json_encode(['success'=>false,'message'=>'找不到異常單']); break; }
 
+            $cst = $db->prepare("SELECT cat_id FROM qa_abnormal_cause WHERE order_id=?");
+            $cst->execute([$orderId]);
+            $data['cause_ids']   = array_map('intval', $cst->fetchAll(PDO::FETCH_COLUMN));
             $data['flow']        = getFlows($db, $orderId);
             $data['attachments'] = getOrderAttachments($db, $orderId);
             $data['co_editors']  = function_exists('eg_qa_order_editors') ? eg_qa_order_editors($db, $orderId) : [];
@@ -1154,9 +1159,34 @@ try {
     if ($db->inTransaction()) $db->rollBack();
     error_log('[store_QA_Abnormal_API] ' . $e->getMessage());
     echo json_encode(['success' => false, 'message' => '資料庫錯誤', 'detail' => $e->getMessage()]);
+} catch (Throwable $e) {
+    // 原本只攔 PDOException，其餘例外會變成空白 500（畫面上就是「按了沒反應也沒有錯誤訊息」），
+    // 而且交易還開著。一律轉成 JSON 並回滾。
+    if ($db->inTransaction()) $db->rollBack();
+    error_log('[store_QA_Abnormal_API] ' . $e->getMessage());
+    echo json_encode(['success' => false, 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
 }
 
 // ─── 輔助函式 ───────────────────────────────────────────────
+
+
+/**
+ * 異常原因分類：與品質異常處理單新版共用同一張 qa_abnormal_cause（存 id 不存文字）。
+ * 2026-09-22 起這一頁的挑選介面改成逐層挑選，送過來的是 cause_ids（JSON 陣列）；
+ * **沒有送這個欄位＝舊呼叫端，一律不動既有的分類**（別把人家填好的清掉）。
+ */
+function qaSaveCauseIds(PDO $db, int $orderId, $raw): void {
+    if ($raw === null) return;
+    require_once __DIR__ . '/../common/qa_abnormal_lib.php';
+    $ids = json_decode((string)$raw, true);
+    if (!is_array($ids)) $ids = [];
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+    $map = qab_cause_map($db);
+    foreach ($ids as $c) if (!isset($map[$c])) throw new RuntimeException('選到的異常原因分類不存在，請重新整理頁面再試');
+    $db->prepare("DELETE FROM qa_abnormal_cause WHERE order_id=?")->execute([$orderId]);
+    $ins = $db->prepare("INSERT IGNORE INTO qa_abnormal_cause (order_id,cat_id) VALUES (?,?)");
+    foreach ($ids as $c) $ins->execute([$orderId, $c]);
+}
 
 function ensureQASchema(PDO $db): void {
     $cols = $db->query("SHOW COLUMNS FROM qa_abnormal_order")->fetchAll(PDO::FETCH_COLUMN);

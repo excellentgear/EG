@@ -24,6 +24,10 @@ try {
 } catch (Throwable $e) {}
 if (empty($_SESSION['qab_csrf'])) $_SESSION['qab_csrf'] = bin2hex(random_bytes(16));
 $QAB_CSRF = $_SESSION['qab_csrf'];
+/* 異常原因分類：與品質異常處理單共用同一份代碼表（qa_cause_cat 三層），
+   逐層挑選的畫面走全站共用元件 eg_cause_picker.js，這裡只負責把樹帶進來。 */
+$QAB_CAUSE_TREE = [];
+try { $QAB_CAUSE_TREE = qab_cause_tree($db, true); } catch (Throwable $e) {}
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -78,10 +82,6 @@ $QAB_CSRF = $_SESSION['qab_csrf'];
         .suggestion-item:hover { background-color:#eee; }
         #all_depts_container { max-height:none !important; overflow-y:visible !important; }
         #custom-toast { position:fixed; bottom:20px; right:20px; z-index:9999; min-width:250px; display:none; padding:15px; color:#fff; border-radius:4px; box-shadow:0 2px 10px rgba(0,0,0,.2); font-size:14px; }
-        /* 異常單 5M+T 選項樣式 */
-        .m5t-grid { display:flex; flex-wrap:wrap; gap:6px; margin-top:5px; }
-        .m5t-item { display:flex; align-items:center; gap:4px; padding:4px 10px; border:1px solid #ddd; border-radius:4px; cursor:pointer; font-size:13px; background:#f9f9f9; transition:all .15s; }
-        .m5t-item:has(input:checked) { background:#2A3F54; color:#fff; border-color:#2A3F54; }
         /* 流程表 */
         .flow-table th, .flow-table td { vertical-align:middle !important; }
         .flow-status-badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:12px; font-weight:600; }
@@ -632,15 +632,14 @@ $QAB_CSRF = $_SESSION['qab_csrf'];
                         <div id="attachments_phenomenon" class="qa-attach-list"></div>
                     </div>
                     <div class="form-group">
-                        <label>5M+T 異常原因分類（單選）</label>
-                        <div class="m5t-grid" id="m5t_grid">
-                            <?php foreach(['人','機器','材料','方法','工具','環','其他'] as $m): ?>
-                            <label class="m5t-item">
-                                <input type="radio" name="qa_defect_category" value="<?=$m?>" style="margin:0;">
-                                <?=$m?>
-                            </label>
-                            <?php endforeach; ?>
+                        <label>異常原因分類（單選）</label>
+                        <div>
+                            <input type="hidden" id="qa_cause_cat">
+                            <button type="button" class="btn btn-default btn-sm" id="qa_pick_cause">
+                                <i class="fa fa-sitemap"></i> 選擇分類</button>
+                            <span class="text-muted" style="font-size:12px;margin-left:6px;">先點第一層 → 第二層 → 第三層，逐層往下選</span>
                         </div>
+                        <div id="qa_cause_chips" style="margin-top:5px;"></div>
                     </div>
                     <div class="form-group">
                         <label>原因詳細說明
@@ -811,10 +810,28 @@ $QAB_CSRF = $_SESSION['qab_csrf'];
      DataTables 會等那支 AJAX 回來才初始化，廠內網路實測要 6.4 秒才看得到表格 -->
 <script src="../../resource/js/eg_dt_zhtw.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_dt_zhtw.js') ?>"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_cause_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_cause_picker.js') ?>"></script>
 
 <script>
 var IR_API   = '../../src/store/store_IR_Track_API.php';
 var QA_API   = '../../src/store/store_QA_Abnormal_API.php';
+/* 異常原因分類（與品質異常處理單同一份代碼表）：逐層挑選走共用元件 eg_cause_picker.js */
+var QAB_CAUSE_TREE = <?= json_encode($QAB_CAUSE_TREE, JSON_UNESCAPED_UNICODE) ?>;
+function qaSetCause(id){
+    $('#qa_cause_cat').val(id || '');
+    $('#qa_cause_chips').html(id
+        ? EGCausePicker.chipsHtml(QAB_CAUSE_TREE, [id], { removable:true })
+        : '<span class="text-muted" style="font-size:12px;">尚未選擇</span>');
+}
+$(document).on('click', '#qa_pick_cause', function(){
+    if (!QAB_CAUSE_TREE.length) { alert('管理員尚未建立異常原因分類，請到「品質異常處理單 → 設定 → 異常原因分類」建立。'); return; }
+    EGCausePicker.open({
+        tree: QAB_CAUSE_TREE, selected: ($('#qa_cause_cat').val() ? [$('#qa_cause_cat').val()] : []),
+        multi: false, title: '選擇異常原因分類',
+        onApply: function(ids){ qaSetCause(ids.length ? ids[0] : ''); }
+    });
+});
+$(document).on('click', '#qa_cause_chips .egcp-chip-x', function(){ qaSetCause(''); });
 var allIRData = [];
 var allDepts  = [];
 var currentFilter = 'all';
@@ -1250,8 +1267,7 @@ function openEditQAModal() {
         $('#qa_sqty').val(d.sqty || '');
         $('#qa_found_unit').val(d.found_unit || '');
         $('#qa_phenomenon').val(d.abnormal_phenomenon || '');
-        $('input[name="qa_defect_category"]').prop('checked', false);
-        if (d.defect_category) $('input[name="qa_defect_category"][value="' + d.defect_category + '"]').prop('checked', true);
+        qaSetCause((d.cause_ids && d.cause_ids.length) ? d.cause_ids[0] : '');
         $('#qa_defect_detail').val(d.defect_detail || '');
         $('#qa_ps').val(d.qa_ps || '');
         $('#qa_disposition_note').val(d.disposition_note || '');
@@ -1314,7 +1330,8 @@ function openEditQAModal() {
 function resetQAForm() {
     $('#qa_no,#qa_sqty,#qa_occurrence_date,#qa_phenomenon,#qa_defect_detail,#qa_ps,#qa_disposition_note').val('');
     $('#qa_abnormal_type,#qa_found_unit').val('');
-    $('input[name="qa_defect_category"],input[name="qa_disposition"]').prop('checked', false);
+    $('input[name="qa_disposition"]').prop('checked', false);
+    qaSetCause('');
     $('#qa_dept_container').empty();
     // 重置BOM
     $('#qa_bom_no').val('');
@@ -1427,7 +1444,7 @@ function buildQAFormData() {
         found_unit:           $('#qa_found_unit').val(),
         abnormal_phenomenon:  $('#qa_phenomenon').val(),
         abnormal_type_id:     $('#qa_abnormal_type').val(),
-        defect_category:      $('input[name="qa_defect_category"]:checked').val() || '',
+        cause_ids:            JSON.stringify($('#qa_cause_cat').val() ? [parseInt($('#qa_cause_cat').val(), 10)] : []),
         defect_detail:        $('#qa_defect_detail').val(),
         disposition:          disposition.join(','),
         disposition_note:     $('#qa_disposition_note').val(),
@@ -1461,7 +1478,10 @@ function loadQADetail(orderId) {
         var d = res.data;
 
         // 資訊卡
-        var m5t = d.defect_category ? ('<span class="label label-default">' + d.defect_category + '</span>') : '-';
+        var m5t = (d.cause_ids && d.cause_ids.length)
+            ? d.cause_ids.map(function(cid){ return '<span class="label label-default">'
+                  + (EGCausePicker.pathOf(QAB_CAUSE_TREE, cid) || ('#' + cid)) + '</span>'; }).join(' ')
+            : '-';
         var disp = d.disposition ? d.disposition.split(',').map(v=>`<span class="label label-primary">${v.trim()}</span>`).join(' ') : '-';
         $('#qa_detail_info').html(`
             <div class="col-md-6">

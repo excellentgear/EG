@@ -97,11 +97,6 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
         table.mtb input { width:100%; border:0; text-align:center; font-size:12px; padding:2px 1px; background:transparent; }
         table.mtb input:focus { background:#FFF8EC; outline:1px solid var(--amber); }
         /* 原因分類樹 */
-        .ctree { max-height:260px; overflow:auto; border:1px solid var(--line); border-radius:6px; padding:6px 10px; background:#fff; }
-        .ctree .lv1 { margin-top:4px; font-weight:bold; color:var(--ink2); }
-        .ctree .lv2 { margin-left:20px; }
-        .ctree .lv3 { margin-left:40px; }
-        .ctree label { font-weight:normal; margin:0; cursor:pointer; display:inline-flex; align-items:center; gap:5px; font-size:13px; }
         .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
         .chip { display:inline-flex; align-items:center; gap:6px; background:var(--cream); border:1px solid var(--line);
                 border-radius:12px; padding:2px 10px; font-size:12.5px; color:var(--ink2); line-height:18px; }
@@ -327,7 +322,11 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     <span class="saved" id="savedCause"></span>
                 </h4>
                 <div class="sec-body">
-                    <div class="ctree" id="causeTree"></div>
+                    <div style="margin-bottom:6px;">
+                        <button type="button" class="btn btn-default btn-sm" id="btnPickCause">
+                            <i class="fa fa-sitemap"></i> 選擇分類</button>
+                        <span class="muted-help" style="margin-left:6px;">先點第一層 → 第二層 → 第三層，逐層往下選；可以選好幾個</span>
+                    </div>
                     <div class="chips" id="causeChips"></div>
                 </div>
             </div>
@@ -519,6 +518,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_date_fmt.js') ?>"></script>
+<script src="../../resource/js/eg_cause_picker.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_cause_picker.js') ?>"></script>
 <script>
 var API  = '../../src/store/QaAbnormal_API.php';
 var CSRF = '<?= $CSRF ?>';
@@ -563,16 +563,9 @@ function buildStaticOpts(){
     var h = '<option value="">未指定</option>';
     (D.deciders || []).forEach(function(c){ h += '<option value="' + c.cfg_id + '">' + esc(c.show_name) + '</option>'; });
     $('#f_decider').html(h);
-    // 原因分類樹
-    var t = '';
-    function walk(nodes, lv){
-        nodes.forEach(function(n){
-            t += '<div class="lv' + lv + '"><label><input type="checkbox" class="cchk" value="' + n.cat_id + '"> ' + esc(n.name) + '</label></div>';
-            if (n.children && n.children.length) walk(n.children, Math.min(lv + 1, 3));
-        });
-    }
-    walk(D.causes || [], 1);
-    $('#causeTree').html(t || '<span class="muted-help">管理員尚未建立任何異常原因分類（清單頁 → 設定）</span>');
+    // 原因分類：逐層挑選（共用元件 eg_cause_picker.js），這裡只要一顆按鈕
+    $('#btnPickCause').prop('disabled', !((D.causes || []).length))
+        .attr('title', (D.causes || []).length ? '' : '管理員尚未建立任何異常原因分類（清單頁 → 設定）');
     // 處置／裁示選項
     $('#dispOpts').html((D.disp_opts || []).map(function(o){
         return '<label data-opt="' + o.opt_id + '"><input type="checkbox" class="dchk" value="' + o.opt_id + '"> ' + esc(o.name) + '</label>';
@@ -685,8 +678,8 @@ function render(){
 
     // ② 原因分類
     CAUSE_SEL = (o.cause_ids || []).slice();
-    $('.cchk').prop('checked', false).prop('disabled', !(canEdit || (p.canDecide && !o.is_closed)));
-    CAUSE_SEL.forEach(function(id){ $('.cchk[value="' + id + '"]').prop('checked', true); });
+    CAUSE_CAN_EDIT = (canEdit || (p.canDecide && !o.is_closed));
+    $('#btnPickCause').toggle(CAUSE_CAN_EDIT && (D.causes || []).length > 0);
     renderCauseChips();
     $('#btnSaveCause').toggle(!o.is_closed && (D.can_edit || p.canDecide));
 
@@ -1028,34 +1021,31 @@ function syncOptStyle(){
 }
 $(document).on('change', '.opts input', syncOptStyle);
 
-/* 原因分類 */
-$(document).on('change', '.cchk', function(){
-    var id = parseInt($(this).val(), 10);
-    if ($(this).prop('checked')) { if (CAUSE_SEL.indexOf(id) < 0) CAUSE_SEL.push(id); }
-    else CAUSE_SEL = CAUSE_SEL.filter(function(x){ return x !== id; });
-    renderCauseChips();
-});
-function causePath(id){
-    var found = '';
-    function walk(nodes, prefix){
-        nodes.forEach(function(n){
-            var p = prefix ? (prefix + ' → ' + n.name) : n.name;
-            if (Number(n.cat_id) === Number(id)) found = p;
-            if (n.children) walk(n.children, p);
-        });
-    }
-    walk(D.causes || [], '');
-    return found || ('#' + id);
-}
+/* 原因分類：逐層挑選（先第一層 → 第二層 → 第三層），全站共用 eg_cause_picker.js */
+var CAUSE_CAN_EDIT = false;
+function causePath(id){ return EGCausePicker.pathOf(D.causes || [], id) || ('#' + id); }
 function renderCauseChips(){
     $('#causeChips').html(CAUSE_SEL.length
-        ? CAUSE_SEL.map(function(id){ return '<span class="chip">' + esc(causePath(id)) + '</span>'; }).join('')
-        : '<span class="muted-help">尚未勾選（結案前一定要勾）</span>');
+        ? EGCausePicker.chipsHtml(D.causes || [], CAUSE_SEL, { removable: CAUSE_CAN_EDIT })
+        : '<span class="muted-help">尚未選擇（結案前一定要選）</span>');
 }
+function causeChanged(){ renderCauseChips(); autoSave('cause', saveCause, 400); }
+$(document).on('click', '#btnPickCause', function(){
+    if (!CAUSE_CAN_EDIT) return;
+    EGCausePicker.open({
+        tree: D.causes || [], selected: CAUSE_SEL, multi: true, title: '選擇異常原因分類',
+        onApply: function(ids){ CAUSE_SEL = ids; causeChanged(); }
+    });
+});
+$(document).on('click', '#causeChips .egcp-chip-x', function(){
+    if (!CAUSE_CAN_EDIT) return;
+    var id = parseInt($(this).data('id'), 10);
+    CAUSE_SEL = CAUSE_SEL.filter(function(x){ return Number(x) !== id; });
+    causeChanged();
+});
 function saveCause(){
     post('save_cause', { id:OID, cause_ids: JSON.stringify(CAUSE_SEL) }, function(){ savedAt('#savedCause'); }, true);
 }
-$(document).on('change', '.cchk', function(){ autoSave('cause', saveCause, 400); });
 
 /* 責任單位：部門／人員 */
 var RESP = [];
