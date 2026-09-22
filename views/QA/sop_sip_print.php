@@ -95,7 +95,8 @@ function secImgs(array $secFiles, string $key): string {
     return $h . '</div>';
 }
 
-$SLOTS = ss_slots();
+$SLOTS   = ss_slots();
+$SLOTS_D = ss_slots_display();   // 顯示順序（核准→審核→製表）
 $stampTpl = [];
 foreach (array_keys($SLOTS) as $k) $stampTpl[$k] = ss_stamp_tpl($db, $k);
 
@@ -377,13 +378,14 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
     </table>
 <?php endif; ?>
 
-    <!-- 簽章：製表 → 審核 → 核准（使用者拍板三關統一） -->
+    <!-- 簽章：簽的順序是製表→審核→核准，但**印出來由左到右是核准→審核→製表**
+         （使用者 2026-09-22 指定，職位高的在左，比照紙本；順序唯一登記處＝ss_slots_display()） -->
     <table class="blk">
         <thead><tr>
-            <?php foreach ($SLOTS as $k => $def): ?><th style="width:33.3%;"><?= h($def['label']) ?></th><?php endforeach; ?>
+            <?php foreach ($SLOTS_D as $k => $def): ?><th style="width:<?= number_format(100 / max(1, count($SLOTS_D)), 1) ?>%;"><?= h($def['label']) ?></th><?php endforeach; ?>
         </tr></thead>
         <tbody><tr>
-            <?php foreach ($SLOTS as $k => $def): $s = $F['signs'][$k] ?? null; ?>
+            <?php foreach ($SLOTS_D as $k => $def): $s = $F['signs'][$k] ?? null; ?>
                 <td class="sg" data-slot="<?= h($k) ?>"
                     data-name="<?= h($s['user_name'] ?? '') ?>"
                     data-date="<?= h($s['sign_date'] ?? '') ?>"

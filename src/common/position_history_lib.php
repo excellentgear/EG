@@ -79,9 +79,24 @@ function eg_position_resolve_from_rows(array $rows, string $date): array {
 function eg_position_snap_decode($json): array {
     $a = json_decode((string)$json, true);
     if (!is_array($a)) return [];
-    return array_values(array_filter(array_map(function ($r) {
+    $rows = array_values(array_filter(array_map(function ($r) {
         return is_array($r) ? eg_position_snap_row($r + ['department_id' => 0, 'position_id' => 0, 'is_main' => 0]) : null;
     }, $a)));
+    /* 同一個「部門＋職稱」在快照裡出現兩次一律只留一筆（是主職就留主職那一筆）。
+       一個人不可能同時兼任自己的同一個職務，這種是異動紀錄存進去時就重複了
+       （實測 user_position_history 有 2 筆這種資料：同一格既是 is_main=1 又是 is_main=0）。
+       不在這裡收斂的話，**每一個依日期列人員的模組都會把那個人印兩次**，
+       而且看起來像系統壞掉——使用者 2026-09-22 在 SOP／SIP 的簽核人下拉上回報。
+       只收斂顯示，不動已經存下來的異動紀錄。 */
+    $out = [];
+    foreach ($rows as $r) {
+        $k = $r['department_id'] . ':' . $r['position_id'];
+        if (!isset($out[$k])) { $out[$k] = $r; continue; }
+        if ((int)$r['is_main'] === 1) $out[$k]['is_main'] = 1;          // 主職優先，不可被兼任那筆蓋掉
+        if ($out[$k]['department_name'] === '') $out[$k]['department_name'] = $r['department_name'];
+        if ($out[$k]['position_name'] === '')   $out[$k]['position_name']   = $r['position_name'];
+    }
+    return array_values($out);
 }
 
 /** 快照 → 顯示字串：「部門/職稱(主)、部門/職稱」 */

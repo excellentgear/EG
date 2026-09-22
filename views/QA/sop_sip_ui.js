@@ -2,7 +2,8 @@
  * sop_sip_ui.js — 作業標準書(SOP)／標準檢驗指導書(SIP) 前端
  * 建立：2026-09-21　｜　2026-09-21（二次）依使用者交辦那一批大改
  *
- * 由 sop_sip.php 提供：SS_API／SS_CSRF／SS_PERMS／SS_KINDS／SS_SCOPES／SS_SLOTS／SS_STATUSES／SS_TODAY
+ * 由 sop_sip.php 提供：SS_API／SS_CSRF／SS_PERMS／SS_KINDS／SS_SCOPES／SS_SLOTS／SS_SLOTS_D／SS_STATUSES／SS_TODAY
+ *   SS_SLOTS＝簽核的先後順序（製表→審核→核准）；SS_SLOTS_D＝簽章格由左到右的排法（核准→審核→製表）
  * 規則的唯一來源在後端 sopsip_lib.php，這裡只做「即時提示」，存檔仍以後端回覆為準（鐵律8）。
  *
  * 這一版的幾個重點
@@ -795,12 +796,13 @@ function sipExtraHtml() {
     return h;
 }
 
-/** 簽章三格 */
+/** 簽章格：**簽的順序是製表→審核→核准，排出來由左到右是核准→審核→製表**（職位高的在左，比照紙本） */
 function signHtml() {
     var h = '<div class="sec"><h5>簽核'
-          + '<span class="muted-help">依序 製表 → 審核 → 核准；可簽的人限表單日期當時在職、且簽章當天沒請整天假</span></h5>'
+          + '<span class="muted-help">簽的順序是 製表 → 審核 → 核准（欄位由左到右是核准、審核、製表，與列印版相同）；'
+          + '可簽的人限表單日期當時在職、且簽章當天沒請整天假</span></h5>'
           + '<div class="sign-row">';
-    $.each(SS_SLOTS, function (k, def) {
+    $.each(SS_SLOTS_D, function (k, def) {
         var s = CUR.signs[k];
         h += '<div class="sign-box"><div class="t"><b>' + esc(def.label) + '</b></div>';
         if (s && num(s.user_id)) {

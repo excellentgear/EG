@@ -460,6 +460,11 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
                 所以總經理室與董事長室也選得到；<b>職稱只會列出「選到的那個部門底下真的有的職稱」</b>，
                 換部門時職稱跟著換（原本選的職稱在新部門也有就留著，沒有才退回「不限職稱」）。</li>
         </ul>
+        <h4>簽章格的排法</h4>
+        <p><b>簽的順序仍然是 製表 → 審核 → 核准</b>（前一關沒簽就不給簽下一關）；
+            但<b>畫面與列印上由左到右排的是 核准、審核、製表</b>（職位高的在左，比照紙本）。
+            兩者是分開的：順序由 <code>ss_slots()</code> 決定、排法由 <code>ss_slots_display()</code> 決定，
+            日後關卡增減（例如只剩兩格）排法會自動跟著變，不會出現兩份對不起來的順序。</p>
         <h4>送出簽核那個視窗</h4>
         <ul>
             <li><b>「自動簽核」預設跟著設定裡這個版面的開關</b>；勾起來時，審核與核准會
@@ -522,6 +527,8 @@ var SS_PERMS = <?= json_encode($P, JSON_UNESCAPED_UNICODE) ?>;
 var SS_KINDS = <?= json_encode($KINDS, JSON_UNESCAPED_UNICODE) ?>;
 var SS_SCOPES = <?= json_encode($SCOPES, JSON_UNESCAPED_UNICODE) ?>;
 var SS_SLOTS = <?= json_encode($SLOTS, JSON_UNESCAPED_UNICODE) ?>;
+/* 簽的順序是 SS_SLOTS（製表→審核→核准）；畫面上由左到右排的是 SS_SLOTS_D（核准→審核→製表） */
+var SS_SLOTS_D = <?= json_encode(ss_slots_display(), JSON_UNESCAPED_UNICODE) ?>;
 var SS_STATUSES = <?= json_encode($STATUSES, JSON_UNESCAPED_UNICODE) ?>;
 var SS_KIND_SCOPES = <?= json_encode($KIND_SCOPES, JSON_UNESCAPED_UNICODE) ?>;
 var SS_TODAY = '<?= date('Y-m-d') ?>';

@@ -68,6 +68,18 @@ function ss_slots(): array
     ];
 }
 
+/**
+ * 簽章格**由左到右的顯示順序**＝核准 → 審核 → 製表（使用者 2026-09-22 指定，職位高的在左，比照紙本）。
+ * 只影響「畫面與列印怎麼排」，**簽核的先後順序仍然是 ss_slots() 的製表→審核→核准**
+ * （ss_next_slot()／ss_sign_set() 的時間錯開都吃 ss_slots()，不可以改那邊）。
+ * 刻意寫成「把 ss_slots() 反過來」而不是另外列一份：日後關卡增減（例如只有兩格）
+ * 這裡自動跟著變，不會出現兩份對不起來的順序。
+ */
+function ss_slots_display(): array
+{
+    return array_reverse(ss_slots(), true);
+}
+
 function ss_statuses(): array
 {
     return ['draft' => '草稿', 'submitted' => '簽核中', 'approved' => '已核准', 'obsolete' => '已作廢'];
