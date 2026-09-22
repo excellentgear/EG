@@ -1492,8 +1492,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         try {
             $kw = trim($_POST['keyword'] ?? '');
             if ($kw === '') { echo json_encode(['success'=>true,'data'=>[]]); exit; }
+            // customer_list 沒有 is_active 這個欄位，停用旗標是 is_inactive（1＝已停用）。
+            // 寫錯欄位名時整支查詢丟例外 → 前端只是「打了字卻沒有清單可以選」，畫面上完全看不出是壞掉的。
             $stmt = $pdo->prepare("SELECT customer_id, customer FROM customer_list
-                WHERE is_active=1 AND (customer_id LIKE ? OR customer LIKE ?)
+                WHERE (is_inactive IS NULL OR is_inactive=0) AND (customer_id LIKE ? OR customer LIKE ?)
                 ORDER BY customer LIMIT 20");
             $stmt->execute(["%$kw%", "%$kw%"]);
             echo json_encode(['success' => true, 'data' => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
@@ -3728,9 +3730,16 @@ foreach($dCounts as $c) {
 
                     <!-- Filter Bar -->
                     <style>
-                    /* 篩選列自適應：一行放不下時加上 .fb-compact，按鈕只顯示圖示（滑鼠移過看 title 名稱） */
-                    .filter-bar.fb-compact .fb-txt { display:none; }
-                    /* 圖示化後仍塞不下而換行：分頁不再靠右推出大片空白，改為緊接按鈕排列 */
+                    /* 篩選列自適應（2026-09-22 使用者指定口徑）：一行放不下時**先把搜尋欄位縮小**，
+                       **按鈕文字一律保留不可以收成圖示**——只剩圖示時根本看不出哪顆是哪顆。
+                       第一段只縮客戶（使用者指定），還不夠才連料號與全表搜尋一起縮，
+                       再放不下就讓它換行（分頁不靠右，避免第二行留一大片空白）。
+                       欄位變窄時 placeholder 也會換成短字（由 fbFit() 處理），否則只看得到半個字。 */
+                    .filter-bar.fb-narrow  #filter-client { width:70px !important; }
+                    .filter-bar.fb-narrow2 #filter-client { width:64px !important; }
+                    .filter-bar.fb-narrow2 #filter-part   { width:72px !important; }
+                    .filter-bar.fb-narrow2 #filter-global { width:88px !important; }
+                    /* 仍塞不下而換行：分頁不再靠右推出大片空白，改為緊接按鈕排列 */
                     .filter-bar.fb-packed #pagination-container { margin-left:0 !important; }
                     </style>
                     <div class="filter-bar" style="background: #fff; padding: 8px 10px; border-radius: 8px; margin-bottom: 15px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
@@ -11566,21 +11575,48 @@ window.otHasFeat = function(code) {
     return window.OT_FEAT.indexOf('all') !== -1 || window.OT_FEAT.indexOf(code) !== -1;
 };
 
-// ── 篩選列自適應：一行放不下時按鈕改只顯示圖示（.fb-compact 隱藏 .fb-txt）──
+// ── 篩選列自適應（2026-09-22 使用者指定口徑）──────────────────────────────
+// 一行放不下時**先縮搜尋欄位**（先客戶、還不夠再連料號與全表搜尋），
+// **按鈕文字一律保留**——舊版是把 .fb-txt 藏起來只留圖示，使用者回報看不出哪顆是哪顆。
+// 縮到底還是放不下就讓它換行，只把分頁拉回來貼齊按鈕（不留第二行的大片空白）。
 (function() {
     var fbFitTimer = null;
+    // 原始 placeholder 由 DOM 讀一次存起來，不在這裡寫死第二份文字
+    var PH = null;
+    function phInit() {
+        if (PH) return;
+        PH = {};
+        [['filter-client', '客戶'], ['filter-part', '料號'], ['filter-global', '全表']].forEach(function (x) {
+            var el = document.getElementById(x[0]);
+            if (el) PH[x[0]] = { full: el.getAttribute('placeholder') || '', short: x[1] };
+        });
+    }
+    function setPh(id, useShort) {
+        var el = document.getElementById(id), p = PH && PH[id];
+        if (el && p) el.setAttribute('placeholder', useShort ? p.short : p.full);
+    }
     function fbFit() {
         var bar = document.querySelector('.filter-bar');
         if (!bar) return;
-        bar.classList.remove('fb-compact');
+        phInit();
+        bar.classList.remove('fb-narrow');
+        bar.classList.remove('fb-narrow2');
         bar.classList.remove('fb-packed');
+        setPh('filter-client', false); setPh('filter-part', false); setPh('filter-global', false);
         // 單行高度約 46px（input-sm 30 + 上下 padding 16）；超過即代表換行了
-        if (bar.offsetHeight > 56) {
-            bar.classList.add('fb-compact');           // 先把按鈕文字收成圖示
-            if (bar.offsetHeight > 56) {               // 仍放不下 → 分頁不靠右，避免第二行整排空白
-                bar.classList.add('fb-packed');
-            }
-        }
+        if (bar.offsetHeight <= 56) return;
+        bar.classList.add('fb-narrow');                // ① 只縮客戶搜尋欄位
+        setPh('filter-client', true);
+        if (bar.offsetHeight <= 56) return;
+        bar.classList.add('fb-narrow2');               // ② 料號與全表搜尋一起縮
+        setPh('filter-part', true); setPh('filter-global', true);
+        if (bar.offsetHeight <= 56) return;
+        // ③ 縮到底還是得換行 → 把剛剛縮的全部還原（既然一樣要換行，就不要白白把欄位變小），
+        //    只把分頁拉回來貼齊按鈕，避免第二行留一大片空白
+        bar.classList.remove('fb-narrow');
+        bar.classList.remove('fb-narrow2');
+        setPh('filter-client', false); setPh('filter-part', false); setPh('filter-global', false);
+        bar.classList.add('fb-packed');
     }
     window.addEventListener('resize', function() {
         clearTimeout(fbFitTimer);
