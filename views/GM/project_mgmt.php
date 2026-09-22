@@ -584,7 +584,11 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
                 <span style="background:#C97B2E;color:#fff;padding:0 6px;border-radius:4px;">深色條</span>＝實際、
                 <span style="background:#DD5138;color:#fff;padding:0 6px;border-radius:4px;">紅色</span>＝逾期未完成、
                 ◆＝里程碑、紅色垂直線＝今天。可切日／週／月刻度，也可切成清單檢視。</li>
-            <li><b>列印版仍是紙本的格狀周期表</b>（預計／實際兩列），維持 AS 文件 1:1。</li>
+            <li><b>列印版仍是紙本的格狀周期表</b>（預計／實際兩列），維持 AS 文件 1:1；
+                <b>執行規劃表與專案管理卡都是 A4 橫式</b>（周期欄超過 10 欄時自動改成 A3 橫式，長條圖才看得出來）。
+                表單名稱與右下角 AS 編號取自綁定的 AS 文件、版次依該張表單的業務日期回推；
+                <b>列印時請把瀏覽器列印視窗的「邊界」留在「預設」</b>，選「無」會連頁碼與 AS 編號一起被蓋掉。</li>
+            <li><b>每按一次列印都會留下列印紀錄</b>（誰、何時、哪一台電腦），可在<b>系統管理 → 列印與簽核紀錄</b>查詢。</li>
             <li>末列按 <b>↓</b> 自動加一列、空白末列按 <b>↑</b> 自動移除（全站共用規則）。
                 <b>新加的一列會自動把上一列的預計完成日當成預計開始日</b>，一路往下排很快。</li>
             <li><b>「帶入標準流程」帶的是可以自己改的範本</b>：管理員到<b>模組設定 → 執行規劃表標準流程範本</b>
@@ -740,6 +744,7 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
 <script src="../../resource/js/eg_stamp.js?v=<?= $av('resource/js/eg_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_stamp_tpl.js?v=<?= $av('resource/js/eg_stamp_tpl.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= $av('resource/js/eg_asdoc_picker.js') ?>"></script>
+<script src="../../resource/js/eg_print_log.js?v=<?= $av('resource/js/eg_print_log.js') ?>"></script>
 <script>
 /* ══════════════════════════════════════════════════════════════
    專案管理 前端

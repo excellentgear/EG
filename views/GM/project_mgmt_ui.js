@@ -2764,7 +2764,18 @@ $(document).on('click', '#btnAsCard', function () { pickAsDoc('project_card', '#
    ・頁碼「第X頁／共Y頁」左下角，交給列印引擎的 counter(pages) 算，多頁才顯示
    ・AS 文件編號右下角每頁都印，版次依該單據的業務日期回推（第三之四節）
    ・簽章一律走 eg_stamp.js 帶日期印章，代理人右下角加「代」字
-   ・紙張方向依紙本：執行規劃表＝A4 直式、專案管理卡＝A4 橫式
+   ・列印紀錄依 ai-rules/23：三種列印都留一筆（來源代碼 project_mgmt）
+   ・紙張方向：執行規劃表與專案管理卡皆 A4 橫式（2026-09-22 使用者回報）。
+     紙本 2-GM-02-02 的 pageSetup 雖然是 portrait（27 個窄欄手寫），但網頁版的「周期」
+     欄數是依專案期間動態切出來的，直式一律擠成一條看不出長條圖。使用者原話
+     「A4橫式或是A3橫式才正確」——兩種都用得到，所以規劃表是：**周期欄 >10 欄**（橫向放不下）
+     或 **內容超過一張 A4 橫式**（縱向放不下，printBootstrap 在 onload 實測）時自動升 A3 橫式。
+     甘特格狀表被切成兩頁就看不出長短，寧可換大一張紙也要印在同一面。
+   ・四邊留白依第四之二之二節：@page 14mm ＋ body padding 5mm 兩段式。
+     **不可以再用原本的 10/8/12/8mm**——margin box 是貼著頁邊排的，實測
+     12mm 底邊時 AS 編號只離紙張底緣 4.9mm，正好落在雷射印表機的不可列印區，
+     畫面上（列印預覽）看得到、印出來卻不見了＝使用者回報「沒有照 AS 編號規則列印」的真因。
+     margin box 另加 vertical-align:middle 讓它落在留白帶中央（約 7mm），不要貼邊。
    ══════════════════════════════════════════════════════════════ */
 
 /* 圖章 HTML（掃描實體章是非同步載入的，要等 whenReady 才拿得到正確的章） */
@@ -2779,28 +2790,79 @@ function stampHtml(name, date, isDeputy, dept, post) {
     return '<div style="text-align:center;">' + esc(name) + '<br><span style="font-size:10px;">' + d + '</span></div>';
 }
 
-/* 列印共用 CSS：頁碼與 AS 編號都交給 @page，不用 JS 量高度自算分頁（列印分頁鐵則） */
-function printBaseCss(orientation, docNo, pageCount) {
-    var css = '@page { size: A4 ' + orientation + '; margin: 10mm 8mm 12mm 8mm;';
-    if (pageCount > 1) {
-        css += ' @bottom-left { content: "第 " counter(page) " 頁／共 " counter(pages) " 頁"; font-size:9pt; color:#333; }';
-    }
-    if (docNo) {
-        css += ' @bottom-right { content: "' + String(docNo).replace(/"/g, '') + '"; font-size:9pt; color:#333; }';
+/* 四邊留白（ai-rules/16 第四之二之二）：@page 14mm ＋ body padding 5mm 兩段式。
+   body 那 5mm 是保險——列印視窗的「邊界」被選成「無／最小」時 Chrome 會直接蓋掉 @page 的 margin。 */
+var PRINT_MG = 14, PRINT_PAD = 5;
+
+/** 紙張短邊/長邊（mm），用來換算「內容有沒有超過一頁」＝要不要印頁碼 */
+function printPageMm(paper, landscape) {
+    var s = (paper === 'A3') ? 297 : 210, l = (paper === 'A3') ? 420 : 297;
+    return landscape ? s : l;
+}
+
+/* 列印共用 CSS：頁碼與 AS 編號都交給 @page 的 margin box，不用 JS 量高度自算分頁（列印分頁鐵則）。
+   頁碼那一條不寫在這裡——「多頁才印」要等內容排好才量得出來，由 printBootstrap() 在 onload 注入。 */
+function printBaseCss(opt) {
+    opt = opt || {};
+    var paper = opt.paper || 'A4', land = !!opt.landscape;
+    var css = '@page { size: ' + paper + ' ' + (land ? 'landscape' : 'portrait') + '; margin: ' + PRINT_MG + 'mm;';
+    if (opt.docNo) {
+        /* 動態塞進 content 前先濾掉引號與反斜線，避免撐破 CSS（ai-rules/16 第三節） */
+        css += ' @bottom-right { content: "' + String(opt.docNo).replace(/['"\\]/g, '')
+             + '"; font-size:9pt; color:#333; vertical-align:middle; }';
     }
     css += ' }\n';
-    css += 'body { font-family:"標楷體","DFKai-sb","Microsoft JhengHei",serif; color:#000; margin:0; }\n'
+    /* 字型一律用全站同一套堆疊（ai-rules/16 第四之四），不要各頁自己選 */
+    css += 'body { font-family:"Microsoft JhengHei","微軟正黑體",sans-serif; color:#000; margin:0;'
+        +  ' padding:' + PRINT_PAD + 'mm; }\n'
+        +  '* { box-sizing:border-box; }\n'
         +  '.p-co { text-align:center; font-size:16pt; font-weight:bold; letter-spacing:2px; }\n'
         +  '.p-en { text-align:center; font-size:9pt; letter-spacing:1px; margin-bottom:2mm; }\n'
         +  '.p-tt { text-align:center; font-size:14pt; font-weight:bold; margin-bottom:3mm; }\n'
-        +  'table { border-collapse:collapse; width:100%; font-size:9pt; }\n'
-        +  'th, td { border:1px solid #000; padding:1mm 1.5mm; vertical-align:top; }\n'
+        /* table-layout:fixed＋colgroup：欄一多時中文才不會被壓成直排一長條（第四之三節） */
+        +  'table { border-collapse:collapse; width:100%; max-width:100%; table-layout:fixed; font-size:9pt; }\n'
+        +  'th, td { border:1px solid #000; padding:1mm 1.5mm; vertical-align:top;'
+        +  ' word-wrap:break-word; overflow-wrap:break-word; }\n'
         +  'th { background:#f2f2f2; text-align:center; font-weight:bold; }\n'
         +  '.c { text-align:center; }\n'
         +  '.nb { border:none; }\n'
         +  'thead { display:table-header-group; }\n'   /* 跨頁時表頭自然重複 */
         +  'tr { page-break-inside:avoid; }\n';
     return css;
+}
+
+/** 列印視窗的 onload，做兩件只有「內容排好之後」才量得出來的事（ai-rules/16 第二節）：
+ *   ① A4 橫式放不下就升成 A3 橫式（opt.autoUpgrade）——這張是甘特格狀表，
+ *      被切成兩頁就看不出長短了，寧可換大一張紙也要印在同一面。
+ *   ② 還是超過一頁時才補左下角頁碼。
+ *  兩件事都要用「量的」，不可以用筆數猜：換紙張方向、換周期欄數，筆數的門檻就不準了。
+ *  後補的 @page 規則會和原本那條合併（同一份文件的 @page 會疊加），已用 printToPDF 實測。 */
+function printBootstrap(opt) {
+    opt = opt || {};
+    var land = !!opt.landscape, dir = land ? 'landscape' : 'portrait';
+    var lim = function (paper) {
+        return Math.round((printPageMm(paper, land) - PRINT_MG * 2 - PRINT_PAD * 2) * 96 / 25.4);
+    };
+    var js = 'window.onload=function(){try{'
+        + 'var add=function(css){var s=document.createElement("style");s.textContent=css;document.head.appendChild(s);};'
+        + 'var h=document.body.scrollHeight, lim=' + lim(opt.paper || 'A4') + ';';
+    if (opt.autoUpgrade && (opt.paper || 'A4') !== 'A3') {
+        js += 'if(h > lim*0.98){ add("@page{size:A3 ' + dir + ';}"); lim=' + lim('A3') + '; }';
+    }
+    js += 'if(h > lim*0.98){ add(\'@page{@bottom-left{content:"第 " counter(page) " 頁／共 " counter(pages) " 頁";'
+        + 'font-size:9pt;color:#333;vertical-align:middle;}}\'); }'
+        + '}catch(e){}setTimeout(function(){window.print();},350);};';
+    return '<scr' + 'ipt>' + js + '</scr' + 'ipt>';
+}
+
+/** 列印紀錄（ai-rules/23）：按下列印就留一筆，寫不寫得進去都不影響列印 */
+function printLog(docName, refId, note) {
+    try {
+        if (window.EGPrintLog) {
+            EGPrintLog.record({ source: 'project_mgmt', doc_name: docName, doc_kind: 'form',
+                                ref_table: 'project', ref_id: refId || 0, note: note || '' });
+        }
+    } catch (e) { /* 靜默 */ }
 }
 
 function egPrintWindow(html) {
@@ -2810,14 +2872,17 @@ function egPrintWindow(html) {
     w.document.close();
 }
 
-/* ── 2-GM-02-02 專案執行規劃表（A4 直式，紙本 pageSetup orientation=portrait）── */
+/* ── 2-GM-02-02 專案執行規劃表（A4 橫式；周期欄多時升 A3 橫式）── */
 function printPlan(res) {
     var p = res.project;
     api('print_meta', { module: 'project_plan', biz_date: p.plan_date || p.start_date || META.today,
                         signer_ids: num(p.owner_id) })
     .done(function (m) {
         /* 掃描實體章是非同步載入的，沒等它有實體章的人會印成預設 SVG 章（eg_stamp.js 記過的坑） */
-        var go = function () { egPrintWindow(buildPlanHtml(res, m)); };
+        var go = function () {
+            printLog((m.meta.doc_name || '專案執行規劃表') + ' ' + (p.project_no || ''), num(p.project_id));
+            egPrintWindow(buildPlanHtml(res, m));
+        };
         if (window.EGStamp && EGStamp.whenReady) EGStamp.whenReady(go); else go();
     });
 }
@@ -2826,13 +2891,12 @@ function buildPlanHtml(res, m) {
     var p = res.project;
     var grouped = groupTasks(res.goals || [], res.tasks || []);
     var periods = planPeriods(res);
-    var rowCount = 0;
-    $.each(grouped, function (i, g) { rowCount += Math.max(1, g.tasks.length); });
-    var pageCount = rowCount > 14 ? 2 : 1;   // 只用來決定要不要印頁碼；實際分頁交給列印引擎
+    /* 周期欄是依專案期間動態切出來的：超過 10 欄時 A4 橫式會把長條圖擠成一條線，升成 A3 橫式 */
+    var paper = periods.length > 10 ? 'A3' : 'A4';
 
-    var css = printBaseCss('portrait', m.meta.doc_no, pageCount)
+    var css = printBaseCss({ landscape: true, paper: paper, docNo: m.meta.doc_no })
       + '.hdr td { border:1px solid #000; font-size:10pt; }\n'
-      + '.pd { width:' + (periods.length ? (44 / periods.length) : 44) + '%; }\n'
+      + '.pd { width:' + (periods.length ? (42 / periods.length) : 42) + '%; }\n'
       + '.pcell { padding:0; height:5mm; }\n'
       + '.pbar { display:block; height:3mm; margin:1mm 0; }\n'
       + '.pbar.plan { background:#d9d9d9; }\n'
@@ -2855,9 +2919,10 @@ function buildPlanHtml(res, m) {
       + '</table><div style="height:2mm;"></div>';
 
     /* 表身：目標｜主要任務｜專案完成日期(預計/實際)｜周期格狀圖｜負責人 */
-    h += '<table><colgroup><col style="width:15%"><col style="width:20%"><col style="width:6%"><col style="width:9%">';
+    /* table-layout:fixed 之後欄寬以 colgroup 為準，各欄加總要剛好 100%（超過會被整體壓縮） */
+    h += '<table><colgroup><col style="width:14%"><col style="width:19%"><col style="width:6%"><col style="width:9%">';
     $.each(periods, function () { h += '<col class="pd">'; });
-    h += '<col style="width:11%"></colgroup><thead><tr>'
+    h += '<col style="width:10%"></colgroup><thead><tr>'
       + '<th rowspan="2">目標</th><th rowspan="2">主要任務</th>'
       + '<th colspan="2">專案完成日期</th>'
       + '<th colspan="' + Math.max(1, periods.length) + '">周期</th>'
@@ -2889,7 +2954,7 @@ function buildPlanHtml(res, m) {
 
     return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'
         + esc(m.meta.doc_name || '專案執行規劃表') + '</title><style>' + css + '</style></head><body>' + h
-        + '<scr' + 'ipt>window.onload=function(){setTimeout(function(){window.print();},350);};</scr' + 'ipt></body></html>';
+        + printBootstrap({ landscape: true, paper: paper, autoUpgrade: true }) + '</body></html>';
 }
 
 /* 周期欄位：依專案期間切成月（超過 12 個月改成季，避免欄位窄到看不出來） */
@@ -2939,7 +3004,10 @@ function printCard(res) {
     var c = res.card, p = res.project;
     var ids = [c.sign_approve_id, c.sign_review_id, c.sign_maker_id].filter(function (x) { return num(x); }).join(',');
     api('print_meta', { module: 'project_card', biz_date: c.review_date, signer_ids: ids }).done(function (m) {
-        var go = function () { egPrintWindow(buildCardHtml(res, m)); };
+        var go = function () {
+            printLog((m.meta.doc_name || '專案管理卡') + ' ' + (c.card_no || p.project_no || ''), num(p.project_id));
+            egPrintWindow(buildCardHtml(res, m));
+        };
         if (window.EGStamp && EGStamp.whenReady) EGStamp.whenReady(go); else go();
     });
 }
@@ -2947,7 +3015,7 @@ function printCard(res) {
 function buildCardHtml(res, m) {
     var c = res.card, p = res.project;
     var items = c.items || [];
-    var css = printBaseCss('landscape', m.meta.doc_no, items.length > 12 ? 2 : 1)
+    var css = printBaseCss({ landscape: true, docNo: m.meta.doc_no })
       + '.sign td { border:1px solid #000; height:22mm; vertical-align:middle; text-align:center; }\n'
       + '.sign .lb { width:8%; background:#f2f2f2; font-weight:bold; }\n'
       + '.meta { border:none; margin-bottom:2mm; font-size:10pt; }\n'
@@ -2998,7 +3066,7 @@ function buildCardHtml(res, m) {
 
     return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'
         + esc(m.meta.doc_name || '專案管理卡') + '</title><style>' + css + '</style></head><body>' + h
-        + '<scr' + 'ipt>window.onload=function(){setTimeout(function(){window.print();},350);};</scr' + 'ipt></body></html>';
+        + printBootstrap({ landscape: true }) + '</body></html>';
 }
 
 /* ══════════════════════════ 跨專案總覽（內部用，不是 AS 表單） ══════════════════════════ */
@@ -3030,7 +3098,8 @@ $(document).on('click', '#btnOvPrint', function () {
     var rows = $.grep(LIST, function (r) { return r.status !== 'closed' && r.status !== 'terminated'; });
     var company = ((META.asdoc || {}).plan || {}).company || '';
     /* 內部用清單：不印 AS 編號（第三之三節：AS 編號只給真的對應到那份 AS 表單的列印版） */
-    var css = printBaseCss('landscape', '', rows.length > 18 ? 2 : 1);
+    var css = printBaseCss({ landscape: true, docNo: '' });
+    printLog('專案執行狀況總覽（內部管理用，' + rows.length + ' 筆）', 0, '非 AS 表單');
     var h = '<div class="p-co">' + esc(company) + '</div>'
       + '<div class="p-tt">專案執行狀況總覽（內部管理用）</div>'
       + '<div style="text-align:right;font-size:9pt;margin-bottom:2mm;">列印日期：' + dispDate(META.today) + '</div>'
@@ -3048,6 +3117,5 @@ $(document).on('click', '#btnOvPrint', function () {
     });
     h += '</tbody></table>';
     egPrintWindow('<!DOCTYPE html><html><head><meta charset="utf-8"><title>專案執行狀況總覽</title><style>'
-        + css + '</style></head><body>' + h
-        + '<scr' + 'ipt>window.onload=function(){setTimeout(function(){window.print();},300);};</scr' + 'ipt></body></html>');
+        + css + '</style></head><body>' + h + printBootstrap({ landscape: true }) + '</body></html>');
 });
