@@ -1789,6 +1789,52 @@ function prj_order_readiness(PDO $db, array $rows): array
     return $rows;
 }
 
+/**
+ * 自動送簽核准的「業務日期」可填範圍（2026-09-22 使用者指定）。
+ *
+ *   預設＝**專案起日**；可以往後改，但一定要**早於最早那張製令的開立日**。
+ *   理由是流程本來的先後：先立案核准，才會去開製令——核准日排在製令之後，
+ *   印出來的表單就會自相矛盾（製令都開了專案還沒核准）。
+ *
+ * 邊界處理（都不猜、不硬塞）：
+ *   · 還沒有製令 → 沒有上界，最多到今天（未來日期一律不給）
+ *   · 專案起日沒填 → 退回專案建檔日；再沒有就用今天
+ *   · 算出來的上界比下界還早（專案起日當天就開了製令）→ 上下界都壓成專案起日，
+ *     並在 note 講明原因，不要給一個空的區間讓人不知道要填什麼
+ */
+function prj_auto_sign_range(PDO $db, array $prj, string $today): array
+{
+    $min = (string)($prj['start_date'] ?? '');
+    if ($min === '') $min = substr((string)($prj['created_at'] ?? ''), 0, 10);
+    if ($min === '') $min = $today;
+
+    // 最早的製令開立日（一律由製令編號回推，不可用 bom.Created_At＝ERP 匯入時間）
+    $bomDate = null;
+    try {
+        $st = $db->prepare("SELECT bom FROM project_process WHERE project_id=? AND bom<>''");
+        $st->execute([(int)$prj['project_id']]);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $b) {
+            $d = prj_bom_open_date((string)$b);
+            if ($d && ($bomDate === null || $d < $bomDate)) $bomDate = $d;
+        }
+    } catch (Throwable $e) {}
+
+    $note = '';
+    if ($bomDate) {
+        $max = date('Y-m-d', strtotime($bomDate . ' -1 day'));   // 要早於製令開立日
+        $note = '最早的製令開立日是 ' . $bomDate . '，核准日必須早於它（先立案核准才開製令）。';
+    } else {
+        $max = $today;
+        $note = '這個專案還沒有製令，所以只限制不可以填未來日期。';
+    }
+    if ($max < $min) {
+        $max = $min;
+        $note = '專案起日（' . $min . '）當天或之前就已經開了製令（' . $bomDate . '），'
+              . '所以核准日只能填專案起日。';
+    }
+    return ['min' => $min, 'max' => $max, 'default' => $min, 'bom_date' => $bomDate, 'note' => $note];
+}
+
 /** 專案附件的實體資料夾（鐵律5：走共用 attach_lib，預設在 AS9100 根目錄底下的「專案管理」） */
 function prj_attach_dir(PDO $db): string
 {

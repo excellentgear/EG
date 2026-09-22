@@ -592,6 +592,32 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
     </div>
 </div></div>
 
+<!-- ══════════ 自動送簽核准（限專案管理員） ══════════ -->
+<div class="pj-mask" id="asMask"><div class="pj-modal" style="max-width:620px;">
+    <div class="m-head"><span><i class="fa fa-bolt"></i> 自動送簽核准</span><span class="m-close" onclick="closeMask('asMask')">✕</span></div>
+    <div class="m-body">
+        <div class="pj-warn" style="margin-bottom:10px;">
+            這會把專案<b>直接標記成「已送簽＋已核准」</b>，不跑會簽與核准流程，並留下自動簽核紀錄。<br>
+            核准後「實際開始／實際完成」才會出現，也才回報得了進度。
+        </div>
+        <div class="sec">
+            <h5>核准業務日期</h5>
+            <div id="asRangeHint" class="pj-hint" style="margin-bottom:6px;"></div>
+            <input type="date" id="asDate" style="max-width:220px;">
+            <div class="pj-err" id="asErr" style="display:none;"></div>
+            <p class="pj-hint" style="margin-top:8px;">
+                預設就是<b>專案起日</b>。可以往後改，但必須<b>早於最早那張製令的開立日</b>
+                ——先立案核准才會去開製令，核准日排在製令後面，印出來的表單會自相矛盾。<br>
+                簽核的<b>時間</b>由系統自動錯開（不跨日），不必自己填。
+            </p>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button onclick="closeMask('asMask')">取消</button>
+        <button class="b-ok" id="btnAutoSignGo"><i class="fa fa-bolt"></i> 確定送簽核准</button>
+    </div>
+</div></div>
+
 <!-- ══════════ 圖面檢視（把「圖面查閱」那一頁嵌進跳窗，不另外刻一個看圖畫面） ══════════ -->
 <div class="pj-mask" id="pvMask"><div class="pj-modal" style="max-width:1200px;">
     <div class="m-head"><span><i class="fa fa-picture-o"></i> <span id="pvTitle">圖面檢視</span></span><span class="m-close" onclick="closeMask('pvMask')">✕</span></div>

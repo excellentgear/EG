@@ -2549,18 +2549,46 @@ $(document).on('click', '#btnSubmit', function () {
             try { showFieldErrors((JSON.parse(xhr.responseText) || {}).fields); } catch (e) { /* ajaxError 已提示 */ }
         });
 });
-/* 自動送簽核准：問一個業務日期就好。簽核時間由後端依 ai-rules/21 隨機錯開、不跨日。 */
+/* 自動送簽核准。簽核時間由後端依 ai-rules/21 隨機錯開、不跨日。
+   日期一律用月曆挑（UI 規則：日期欄位不可只讓人打字），而且有上下界——
+   原本用 prompt() 既沒有月曆、也沒辦法把允許範圍講清楚。 */
 $(document).on('click', '#btnAutoSign', function () {
     if (!planLeaveOk('自動送簽')) return;
-    var d = prompt('自動送簽核准：請輸入業務日期（YYYY-MM-DD）。\n\n'
-        + '這會把專案直接標記成「已送簽＋已核准」，不跑會簽與核准流程，\n'
-        + '並留下自動簽核紀錄。核准後「實際開始／實際完成」才能填，也才回報得了進度。',
-        META.today || '');
-    if (d === null) return;
-    d = $.trim(d);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) { alert('日期格式要像 2026-09-22'); return; }
-    api('auto_sign', { project_ids: String(CUR.project.project_id), biz_date: d }, 'POST')
-        .done(function (r) { alert(r.message); openProject(num(CUR.project.project_id)); loadList(); });
+    var g = (CUR && CUR.auto_sign_range) || {};
+    $('#asDate').val(g['default'] || META.today || '')
+        .attr('min', g.min || '').attr('max', g.max || '');
+    $('#asRangeHint').html('可填範圍：<b>' + esc(dispDate(g.min)) + '</b> ~ <b>' + esc(dispDate(g.max)) + '</b>'
+        + (g.note ? '<br>' + esc(g.note) : ''));
+    $('#asErr').hide().text('');
+    openMask('asMask');
+});
+/* 即時驗證：超出範圍當場紅字講原因，不要等按下去才被後端擋（ai-rules/08 第二之二節） */
+function asDateCheck() {
+    var g = (CUR && CUR.auto_sign_range) || {}, v = $('#asDate').val();
+    var msg = '';
+    if (!v) msg = '請選擇核准日期';
+    else if (g.min && v < g.min) msg = '不可以早於專案起日（' + dispDate(g.min) + '）';
+    else if (g.max && v > g.max) {
+        msg = g.bom_date
+            ? '必須早於最早的製令開立日（' + dispDate(g.bom_date) + '），最晚只能填 ' + dispDate(g.max)
+            : '不可以填未來日期，最晚只能填 ' + dispDate(g.max);
+    }
+    $('#asErr').toggle(!!msg).text(msg);
+    $('#asDate').toggleClass('fld-bad', !!msg);
+    return !msg;
+}
+$(document).on('change input', '#asDate', asDateCheck);
+$(document).on('click', '#btnAutoSignGo', function () {
+    if (!asDateCheck()) return;
+    api('auto_sign', { project_ids: String(CUR.project.project_id), biz_date: $('#asDate').val() }, 'POST')
+        .done(function (r) {
+            closeMask('asMask');
+            loadList();
+            /* 訊息要在重繪之後才顯示——renderDetail() 一開頭會 pjMsgClear()，先顯示會被清掉 */
+            openProject(num(CUR.project.project_id), function () {
+                pjMsg(r.message + '：現在可以回報進度了（實際開始／實際完成已開放）', { ok: true });
+            });
+        });
 });
 
 $(document).on('click', '[data-cosign]', function () {
@@ -3495,13 +3523,19 @@ function printPageMm(paper, landscape) {
 function printBaseCss(opt) {
     opt = opt || {};
     var paper = opt.paper || 'A4', land = !!opt.landscape;
-    var css = '@page { size: ' + paper + ' ' + (land ? 'landscape' : 'portrait') + '; margin: ' + PRINT_MG + 'mm;';
+    var css = '@page { size: ' + paper + ' ' + (land ? 'landscape' : 'portrait') + '; margin: ' + PRINT_MG + 'mm; }\n';
+    /* AS 文件編號用**內文寫法**印在內容尾端靠右，不要用 @page 的 @bottom-right，也不要用 position:fixed。
+       使用者 2026-09-22 回報「綁定的 AS 文件編號沒有顯示上去」，兩種頁角寫法都實測過：
+         · `@page{@bottom-right}` 的 margin box：用 printToPDF 量得到，但**列印對話框的「邊界」
+           被選成「無／最小」時 Chrome 會直接蓋掉 @page 的 margin，連帶整個 margin box 都不見**
+           （ai-rules/16 第四之二之二節記過同一件事）。
+         · `position:fixed; right:0; bottom:0`：實測在 Chrome 列印裡**根本沒畫出來**
+           （`bottom:0` 的元素整個消失、`top:0` 的還跑到左邊），不可用。
+       內文寫法唯一的缺點是內容短時離頁面實際右下角有距離，但**一定印得出來**，
+       而本表單已設計成剛好一張 A3，內容本來就填滿整頁。 */
     if (opt.docNo) {
-        /* 動態塞進 content 前先濾掉引號與反斜線，避免撐破 CSS（ai-rules/16 第三節） */
-        css += ' @bottom-right { content: "' + String(opt.docNo).replace(/['"\\]/g, '')
-             + '"; font-size:9pt; color:#333; vertical-align:middle; }';
+        css += '.as-doc-no { text-align:right; font-size:9pt; color:#333; margin-top:3mm; }\n';
     }
-    css += ' }\n';
     /* 字型一律用全站同一套堆疊（ai-rules/16 第四之四），不要各頁自己選 */
     css += 'body { font-family:"Microsoft JhengHei","微軟正黑體",sans-serif; color:#000; margin:0;'
         +  ' padding:' + PRINT_PAD + 'mm; }\n'
@@ -3541,6 +3575,11 @@ function printBootstrap(opt) {
         + 'document.head.appendChild(s);}'
         + '}catch(e){}setTimeout(function(){window.print();},350);};';
     return '<scr' + 'ipt>' + js + '</scr' + 'ipt>';
+}
+
+/** AS 文件編號（內文寫法，印在內容尾端靠右；理由見 printBaseCss 的註解） */
+function docNoFixedHtml(docNo) {
+    return docNo ? '<div class="as-doc-no">' + esc(docNo) + '</div>' : '';
 }
 
 /** 列印紀錄（ai-rules/23）：按下列印就留一筆，寫不寫得進去都不影響列印 */
@@ -3594,17 +3633,27 @@ function buildPlanHtml(res, m) {
     var isList  = (String(p.plan_view || 'gantt') === 'list');
     var periods = isList ? [] : planPeriods(res);
 
-    /* 紙張一律 A4 橫式。**不要自動換 A3**：紙匣裡是 A4 時 Chrome 會把 A3 版面套到 A4 紙上，
-       結果是右邊被裁掉又多出一張紙（使用者 2026-09-22 實測回報）。放不下就讓它自然分頁。 */
-    var css = printBaseCss({ landscape: true, docNo: m.meta.doc_no })
+    /* 甘特式一律 **A3 橫式**（使用者指定「專案一樣要在一張 A3 橫式內」）：
+       周期欄是依專案期間切出來的，A4 橫式塞不下就會分頁，甘特圖被切成兩頁就看不出長短。
+       **列印時記得在對話框把紙張選成 A3**——CSS 只能宣告，紙匣裡放什麼是設備決定的，
+       選成 A4 的話 Chrome 會把 A3 版面套到 A4 紙上、右邊被裁掉（2026-09-22 踩過）。
+       清單式沒有周期欄，維持 A4 橫式就夠。 */
+    var paper = isList ? 'A4' : 'A3';
+    var css = printBaseCss({ landscape: true, paper: paper, docNo: m.meta.doc_no })
       + '.hdr td { border:1px solid #000; font-size:10pt; }\n'
       + '.ms { font-size:10pt; text-align:center; }\n'
-      + (isList ? '' :                                   /* 清單式不畫格狀周期，這幾條就不要輸出 */
-          '.pd { width:' + (periods.length ? (42 / periods.length) : 42) + '%; }\n'
-        + '.pcell { padding:0; height:5mm; }\n'
-        + '.pbar { display:block; height:3mm; margin:1mm 0; }\n'
-        + '.pbar.plan { background:#d9d9d9; }\n'
-        + '.pbar.act  { background:#000; }\n');
+      + (isList ? '' :
+          /* 周期格：預計與實際**畫在同一格**，靠線型區分（使用者指定）。
+             上下錯開一點點，兩條重疊時才不會被實線蓋掉虛線。 */
+          '.pd { width:' + (periods.length ? (40 / periods.length) : 40) + '%; }\n'
+        + '.pcell { padding:0; height:7mm; position:relative; }\n'
+        + '.pbar { display:block; height:0; }\n'
+        + '.pbar.plan { border-top:0.7mm solid #000; margin-top:2mm; }\n'
+        + '.pbar.act  { border-top:0.7mm dashed #000; margin-top:1.6mm; }\n'
+        + '.gl { margin-top:2mm; font-size:9pt; }\n'
+        + '.gl i { display:inline-block; width:14mm; vertical-align:middle; margin:0 2mm 0 6mm; }\n'
+        + '.gl i.p { border-top:0.7mm solid #000; }\n'
+        + '.gl i.a { border-top:0.7mm dashed #000; }\n');
 
     var h = '<div class="p-co">' + esc(m.meta.company || '') + '</div>'
       + '<div class="p-en">EXCELLENT GEAR TECHNOLOGY CO.,LTD</div>'
@@ -3620,23 +3669,26 @@ function buildPlanHtml(res, m) {
       + '</table><div style="height:2mm;"></div>';
 
     h += isList ? planListTable(grouped) : planGanttTable(grouped, periods);
+    h += docNoFixedHtml(m.meta.doc_no);
 
     return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'
         + esc(m.meta.doc_name || '專案執行規劃表') + '</title><style>' + css + '</style></head><body>' + h
-        + printBootstrap({ landscape: true }) + '</body></html>';
+        + printBootstrap({ landscape: true, paper: paper }) + '</body></html>';
 }
 
-/* 甘特（格狀周期表）版：比照紙本，每個任務兩列＝預計／實際 */
+/* 甘特（格狀周期表）版：**一個任務一列**，預計與實際畫在同一格、靠線型區分（使用者指定）。
+   原本一個任務佔兩列（預計一列、實際一列），13 個任務就是 26 列，A3 也放不下；
+   併成一列之後列數直接減半，而且同一格上下比對才看得出「實際有沒有落後預計」。 */
 function planGanttTable(grouped, periods) {
     /* table-layout:fixed 之後欄寬以 colgroup 為準，各欄加總要剛好 100%（超過會被整體壓縮） */
-    var h = '<table><colgroup><col style="width:14%"><col style="width:19%"><col style="width:6%"><col style="width:9%">';
+    var h = '<table><colgroup><col style="width:14%"><col style="width:20%"><col style="width:8%"><col style="width:8%">';
     $.each(periods, function () { h += '<col class="pd">'; });
     h += '<col style="width:10%"></colgroup><thead><tr>'
       + '<th rowspan="2">目標</th><th rowspan="2">主要任務</th>'
       + '<th colspan="2">專案完成日期</th>'
       + '<th colspan="' + Math.max(1, periods.length) + '">周期</th>'
       + '<th rowspan="2">負責人</th></tr><tr>'
-      + '<th></th><th>日期</th>';
+      + '<th>預計</th><th>實際</th>';
     if (periods.length) { $.each(periods, function (i, pr) { h += '<th style="font-size:8pt;">' + esc(pr.label) + '</th>'; }); }
     else h += '<th></th>';
     h += '</tr></thead><tbody>';
@@ -3647,19 +3699,19 @@ function planGanttTable(grouped, periods) {
     $.each(grouped, function (gi, g) {
         var list = g.tasks.length ? g.tasks : [{ task_name: '', owner_name: '' }];
         $.each(list, function (ti, t) {
-            /* 每個任務佔兩列：預計、實際（比照紙本 P9/P10 的 預計/實際） */
             h += '<tr>';
-            if (ti === 0) h += '<td rowspan="' + (list.length * 2) + '">' + esc(g.goal_name) + '</td>';
-            h += '<td rowspan="2">' + esc(t.task_name)
-               + (num(t.is_milestone) ? '<div class="ms">◆</div>' : '') + '</td>'
-               + '<td class="c">預計</td><td class="c">' + dispDate(t.plan_end) + '</td>'
-               + periodCells(t, periods, 'plan')
-               + '<td rowspan="2" class="c">' + esc(t.owner_name || '') + '</td></tr>'
-               + '<tr><td class="c">實際</td><td class="c">' + dispDate(t.act_end) + '</td>'
-               + periodCells(t, periods, 'act') + '</tr>';
+            if (ti === 0) h += '<td rowspan="' + list.length + '">' + esc(g.goal_name) + '</td>';
+            h += '<td>' + esc(t.task_name) + (num(t.is_milestone) ? '<span class="ms"> ◆</span>' : '') + '</td>'
+               + '<td class="c">' + dispDate(t.plan_end) + '</td>'
+               + '<td class="c">' + dispDate(t.act_end) + '</td>'
+               + periodCellsBoth(t, periods)
+               + '<td class="c">' + esc(t.owner_name || '') + '</td></tr>';
         });
     });
-    return h + '</tbody></table>';
+    /* 線型圖例：紙上沒有顏色可用，不寫圖例就看不懂哪條是預計哪條是實際 */
+    return h + '</tbody></table>'
+         + '<div class="gl">線型說明：<i class="p"></i>預計<i class="a"></i>實際'
+         + '　　◆ 里程碑</div>';
 }
 
 /* 清單版：沒有周期格，改印完整的預計／實際起迄與進度（一個任務一列，不分成兩列） */
@@ -3743,6 +3795,24 @@ function fmtYmd(d) {
     return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
 }
 
+/** 同一格裡同時畫預計與實際（線型不同、上下略錯開，重疊時才不會被實線蓋掉虛線） */
+function periodCellsBoth(t, periods) {
+    if (!periods.length) return '<td></td>';
+    var hit = function (kind, pr) {
+        var s = kind === 'plan' ? (t.plan_start || t.plan_end) : (t.act_start || t.act_end);
+        var e = kind === 'plan' ? (t.plan_end || t.plan_start) : (t.act_end || t.act_start);
+        return (s && e && s <= pr.end && e >= pr.start);
+    };
+    var out = '';
+    $.each(periods, function (i, pr) {
+        out += '<td class="pcell">'
+            + (hit('plan', pr) ? '<span class="pbar plan"></span>' : '')
+            + (hit('act', pr) ? '<span class="pbar act"></span>' : '')
+            + '</td>';
+    });
+    return out;
+}
+
 function periodCells(t, periods, kind) {
     if (!periods.length) return '<td></td>';
     var s = kind === 'plan' ? (t.plan_start || t.plan_end) : (t.act_start || t.act_end);
@@ -3818,7 +3888,8 @@ function buildCardHtml(res, m) {
       + '<td class="lb">核准</td><td>' + sg(c.sign_approve_id, c.sign_approve_name, c.sign_approve_date) + '</td>'
       + '<td class="lb">審查</td><td>' + sg(c.sign_review_id, c.sign_review_name, c.sign_review_date) + '</td>'
       + '<td class="lb">製表</td><td>' + sg(c.sign_maker_id, c.sign_maker_name, c.sign_maker_date) + '</td>'
-      + '</tr></table>';
+      + '</tr></table>'
+      + docNoFixedHtml(m.meta.doc_no);
 
     return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'
         + esc(m.meta.doc_name || '專案管理卡') + '</title><style>' + css + '</style></head><body>' + h

@@ -214,6 +214,7 @@ case 'get':
         // 不必先點開回報跳窗才知道系統有沒有抓到——使用者回報「這些功能有做嗎」就是因為看不到。
         'evidence'         => prj_task_evidence($db, $pid, $prj),
         'auto_kinds'       => PRJ_AUTO_KINDS,
+        'auto_sign_range'  => prj_auto_sign_range($db, $prj, $NOW['date']),
         'shipments' => prj_shipments($db, $pid),
         'work_reports' => prj_work_reports($db, $pid),
         'fai'          => prj_fai_list($db, $pid),
@@ -1110,14 +1111,26 @@ case 'auto_sign':
     if (!is_array($ids)) $ids = array_filter(explode(',', (string)$ids));
     $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
     if (!$ids) jerr('請至少勾選一筆專案');
-    $bizDate = trim((string)($_POST['biz_date'] ?? '')) ?: $NOW['date'];
+    $bizDate = trim((string)($_POST['biz_date'] ?? '')) ?: '';
     $done = 0;
     $db->beginTransaction();
     try {
         foreach ($ids as $pid) {
             $prj = prj_get($db, $pid);
             if (!$prj || in_array((string)$prj['status'], ['approved', 'closed'], true)) continue;
-            [$d, $ts] = prj_auto_sign_stamp($bizDate, $bizDate . ' 09:00:00');
+            /* 業務日期一律逐案夾在允許範圍內（前端已擋一次，後端同規則再擋一次＝鐵律8）。
+               範圍是「專案起日 ~ 最早製令開立日的前一天」——先立案核准才開製令，
+               核准日排在製令之後，印出來的表單就自相矛盾。 */
+            $rg = prj_auto_sign_range($db, $prj, $NOW['date']);
+            $d0 = $bizDate !== '' ? $bizDate : $rg['default'];
+            if ($d0 < $rg['min'] || $d0 > $rg['max']) {
+                if (count($ids) === 1) {
+                    $db->rollBack();
+                    jerr('核准日期只能填 ' . $rg['min'] . ' ~ ' . $rg['max'] . '。' . $rg['note']);
+                }
+                $d0 = min(max($d0, $rg['min']), $rg['max']);   // 批次時逐案夾住，不要整批失敗
+            }
+            [$d, $ts] = prj_auto_sign_stamp($d0, $d0 . ' 09:00:00');
             $pool = prj_approver_pool($db, (int)$prj['created_by']);
             $apId = $pool[0] ?? 0;
             $apName = '';
