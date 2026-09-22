@@ -40,6 +40,9 @@ const IA_ASDOC_MODULES = [
     'system' => ['module' => 'ia_system', 'label' => '系統稽核紀錄表',     'fallback' => '2-GM-06-06'],
     'nc'     => ['module' => 'ia_nc',     'label' => '內稽不符合通知單',   'fallback' => '2-GM-06-07'],
     'report' => ['module' => 'ia_report', 'label' => '稽核報告表',         'fallback' => '2-GM-06-08'],
+    // 產品型態稽核表是文管中心 2-DC 的表單，但程序書 2-DC-03 明訂由品保「於年度內稽時實施」，
+    // 所以它的線上版做在內稽裡（2026-09-22 使用者拍板：入口只放內稽）。
+    'type'   => ['module' => 'ia_type',   'label' => '產品型態稽核表',     'fallback' => '2-DC-03-02'],
 ];
 
 /** 查檢表種類 → 顯示名稱／AS 綁定鍵。新增種類只要加在這裡（鐵律4：不在別處再寫一份對照） */
@@ -47,6 +50,7 @@ const IA_CHECK_KINDS = [
     'as'     => ['label' => 'AS稽核查檢表',       'asdoc' => 'as'],
     'system' => ['label' => '系統稽核紀錄表',     'asdoc' => 'system'],
     'kpi'    => ['label' => '績效執行稽核查檢表', 'asdoc' => 'kpi'],
+    'type'   => ['label' => '產品型態稽核表',     'asdoc' => 'type'],
 ];
 
 /* AS稽核查檢表＝**全自動、內容一律唯讀**（2026-09-22 使用者要求）。
@@ -89,6 +93,11 @@ const IA_SETTING_KEYS  = [
     'ia_extra_years',     // 管理員登記「要補資料的舊年度」JSON 陣列（選單只列有資料的年度＋今年明年＋這裡登記的）
     'ia_auto_sign_case',  // 稽核通知單按下「完成」時要不要直接簽完（與年度計畫表的 ia_auto_sign 分開設定）
     'ia_dqa_item_doc',    // 資料稽核的檢核項目 → AS 文件 id 對照（JSON 物件；決定開 IA 單時帶哪個受稽單位與違反條文）
+    // 產品型態稽核表的抽樣設定（2026-09-22）：預設抽幾筆／排除哪些客戶／排除哪些料號。
+    // 排除清單**只存 id**（客戶是 char(11) 文字、料號是 d_setting.d_id），名稱一律即時查主檔。
+    'ia_type_sample_n',
+    'ia_type_excl_cust',
+    'ia_type_excl_part',
 ];
 
 /**
@@ -462,6 +471,12 @@ function ia_ensure_schema(PDO $db): void
             ['ia_case_dept', 'escort_position_id',  "INT NULL COMMENT '陪檢員的職稱'"],
             ['ia_case',      'leader_dept_id',      "INT NULL COMMENT '稽核組長的部門'"],
             ['ia_case',      'leader_position_id',  "INT NULL COMMENT '稽核組長的職稱'"],
+            /* 產品型態稽核表（2026-09-22）：這張表是「對某一張型態識別文件管制表做稽核」，
+               所以一定要記住是哪一張；客戶與產品編號刻意不存快照，一律由 src_doc_id 即時查
+               （管制表改了料號或客戶，稽核表打開也要跟著對＝鐵律4）。
+               訂單號碼是紙本表頭上的欄位，系統裡沒有來源可推，只能讓稽核員自己填。 */
+            ['ia_check',     'src_doc_id',          "INT NULL COMMENT '產品型態稽核表：來源的型態識別文件管制表 type_id_ctrl_doc.id'"],
+            ['ia_check',     'order_no',            "VARCHAR(60) NULL COMMENT '產品型態稽核表：紙本表頭的訂單號碼（手填）'"],
             ['ia_check',     'auditor_dept_id',     "INT NULL COMMENT '稽核人的部門'"],
             ['ia_check',     'auditor_position_id', "INT NULL COMMENT '稽核人的職稱'"],
             // 稽核通知單「完成」（2026-09-18 使用者要求：完成後不可修改、取消要管理員＋操作確認密碼）
@@ -1251,8 +1266,543 @@ function ia_kpi_audit_rows(PDO $db, int $year): array
     return $out;
 }
 
+/* ============================ 產品型態稽核表 2-DC-03-02 ============================
+ * 2026-09-22 使用者交辦：併入內稽執行（只放內稽，不在型態識別文件管制表那一頁另開入口）。
+ *
+ * 為什麼是「查檢表的第四種種類」而不是新開一支模組：
+ *   紙本 2-DC-03-02 的欄位與 2-DC-03-01 型態識別文件管制表**完全一樣**
+ *   （項次／型態項目名稱／型態生效日期／型態類別／版別文件編號），只多一欄「審查結果」。
+ *   而 2-DC-03-01 早就 E 化在 views/TD/type_id_ctrl_doc.php，所以這張表要的其實是
+ *   「把某一張管制表的每一列抄過來、逐列判合格／不合格」——那正是 ia_check/ia_check_item
+ *   這套查檢表引擎在做的事，再刻一份就是第二套一模一樣的東西（鐵律4）。
+ *
+ * 三個使用者拍板的口徑（2026-09-22）：
+ *   ①入口只放內稽（程序書雖寫「年度內稽及有追溯必要時」，但實務上就是內稽時做）；
+ *   ②管制表上被標「不列入」（is_excluded=1）的那幾列**不帶進稽核表**；
+ *   ③判不合格一律開**內稽不符合通知單**（紙本註記寫「品質異常單／內稽不符合通知單」兩種，
+ *     統一走 IA 單，才連得回這次稽核的案件與稽核員）。
+ *
+ * 項目列的顯示內容（生效日期、版別／文件編號）一律走共用庫 type_id_ctrl_item_view()
+ * 即時解析，**不在這裡自己再解析一次**——管制表那一列連到的是外來文件／PFMEA／NAS 檔案，
+ * 解析規則只有那一支才是對的。
+ */
+
+/** 可以拿來建產品型態稽核表的「型態識別文件管制表」清單（供挑選） */
+function ia_type_ctrl_docs(PDO $db, string $kw = '', int $limit = 300): array
+{
+    $sql = "SELECT h.id, h.doc_no, h.review_status,
+                   COALESCE(cl.customer,'') AS customer_name,
+                   COALESCE(ds.D_Setting_Id,'') AS part_no,
+                   (SELECT COUNT(*) FROM type_id_ctrl_item i
+                     WHERE i.doc_id=h.id AND i.is_deleted=0 AND i.is_excluded=0) AS item_cnt
+              FROM type_id_ctrl_doc h
+              LEFT JOIN customer_list cl ON cl.customer_id = h.customer_id
+              LEFT JOIN d_setting ds ON ds.d_id = h.part_d_id
+             WHERE h.is_deleted=0";
+    $args = [];
+    $kw = trim($kw);
+    if ($kw !== '') {
+        $sql .= " AND (h.doc_no LIKE ? OR ds.D_Setting_Id LIKE ? OR cl.customer LIKE ?)";
+        $like = '%' . $kw . '%';
+        $args = [$like, $like, $like];
+    }
+    $sql .= " ORDER BY h.created_at DESC LIMIT " . max(1, min(1000, $limit));
+    try {
+        $st = $db->prepare($sql);
+        $st->execute($args);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    foreach ($rows as &$r) { $r['item_cnt'] = (int)$r['item_cnt']; $r['id'] = (int)$r['id']; }
+    unset($r);
+    return $rows;
+}
+
+/** 這一張管制表的表頭（客戶／產品編號／管制表編號）——即時查，不隨查檢表存快照 */
+function ia_type_ctrl_head(PDO $db, int $docId): array
+{
+    if ($docId <= 0) return [];
+    /* **一定要在這裡也 require**：本函式會呼叫 type_id_ctrl_process_header_summary()，
+       而整段包在 catch(Throwable) 裡——沒載入時丟的是 Error，會被一起吃掉、回傳空陣列，
+       症狀是「挑得到管制表，按建立卻說『型態識別文件管制表不存在或已刪除』」（2026-09-22 實測踩到）。 */
+    require_once __DIR__ . '/type_id_ctrl_lib.php';
+    try {
+        $st = $db->prepare("SELECT h.id, h.doc_no, h.part_d_id,
+                                   COALESCE(cl.customer,'') AS customer_name,
+                                   COALESCE(ds.D_Setting_Id,'') AS part_no
+                              FROM type_id_ctrl_doc h
+                              LEFT JOIN customer_list cl ON cl.customer_id = h.customer_id
+                              LEFT JOIN d_setting ds ON ds.d_id = h.part_d_id
+                             WHERE h.id=? AND h.is_deleted=0");
+        $st->execute([$docId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) return [];
+        $r['id'] = (int)$r['id'];
+        $r['process_summary'] = type_id_ctrl_process_header_summary($db, (int)$r['part_d_id']);
+        return $r;
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 這一張管制表要帶進稽核表的項目列。
+ * 使用者拍板：**被標「不列入」的不帶**（is_excluded=1）。
+ * 顯示內容走共用庫 type_id_ctrl_item_view()（即時解析連結，不快照）。
+ */
+function ia_type_ctrl_items(PDO $db, int $docId): array
+{
+    if ($docId <= 0) return [];
+    require_once __DIR__ . '/type_id_ctrl_lib.php';
+    try {
+        $st = $db->prepare("SELECT * FROM type_id_ctrl_item
+                             WHERE doc_id=? AND is_deleted=0 AND is_excluded=0 ORDER BY seq, id");
+        $st->execute([$docId]);
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $it) $out[] = type_id_ctrl_item_view($db, $it);
+        return $out;
+    } catch (Throwable $e) { return []; }
+}
+
+/* ======================= 產品型態稽核表：抽樣自動建立 =======================
+ * 2026-09-22 使用者交辦：「產品型態稽核表要有自動建立的功能，這應該是可以選定哪幾個月份
+ * 出貨的資料中隨機選定料號（要可以設定排除的客戶／料號），預設抽 3 筆，但管理員可以更改。」
+ *
+ * 為什麼抽樣的母體是「出貨資料」而不是料號主檔：
+ *   型態稽核問的是「**實際交出去的東西**，它的圖面／治夾具／報告版本對不對」，
+ *   料號主檔有八千多筆、大部分是很久沒動的舊料號，從那裡抽等於抽到一堆不會出貨的東西。
+ *
+ * 三個一定要處理、不處理就會變成「抽出來卻建不了」的現實問題：
+ *   ①**出貨的料號多半還沒有型態識別文件管制表**（實測 2026 年出貨 1,881 個料號只有 129 個有）。
+ *     所以抽中沒有管制表的料號時，建立當下呼叫 type_id_ctrl_sync_part() 自動把管制表建起來
+ *     （那正是型態識別文件管制表那一頁「掃描缺少的料號」在做的事，不另外刻一份）。
+ *   ②**建出來可能是 0 項**（這個料號根本沒有任何外來文件／PFMEA／報告）——那種
+ *     建了也是一張沒有題目的空表，所以抽樣預覽就先把項目數算出來、標成「沒有可稽核的文件」，
+ *     預設不建立（可以按「換一筆」重抽）。
+ *   ③**同一年不要重複抽到同一個料號**（預設排除今年已經建過產品型態稽核表的料號）。
+ *
+ * 抽樣本身刻意用 PHP 的 shuffle 不用 SQL 的 ORDER BY RAND()：母體要先扣掉排除清單與
+ * 已稽核過的料號，那幾段在 PHP 端做比較清楚，母體也只有幾百到兩千筆。
+ */
+
+/** 預設抽樣筆數（管理員可在設定頁改；沒設定過＝使用者指定的 3 筆） */
+function ia_type_sample_n(PDO $db): int
+{
+    $n = (int)(ia_settings($db)['ia_type_sample_n'] ?? 0);
+    return ($n >= 1 && $n <= 50) ? $n : 3;
+}
+
+/**
+ * 排除清單（客戶／料號）—— **只存 id，名稱一律即時查主檔**（鐵律4：存一份名稱下來，
+ * 主檔改名之後排除規則會繼續顯示舊名稱而且不報錯）。
+ * 客戶 id 是 char(11) 文字（C2005、T2001…）**不可以 intval**。
+ *
+ * @return array ['cust'=>[['id'=>'C2005','name'=>'和大'],…], 'part'=>[['d_id'=>1,'part_no'=>…,'customer_name'=>…],…]]
+ */
+function ia_type_excl_list(PDO $db): array
+{
+    $s = ia_settings($db);
+    $dec = function ($raw) {
+        $a = ((string)$raw === '') ? [] : json_decode((string)$raw, true);
+        return is_array($a) ? $a : [];
+    };
+    $custIds = [];
+    foreach ($dec($s['ia_type_excl_cust'] ?? '') as $v) {
+        $v = trim((string)$v);
+        if ($v !== '' && !in_array($v, $custIds, true)) $custIds[] = $v;
+    }
+    $partIds = [];
+    foreach ($dec($s['ia_type_excl_part'] ?? '') as $v) {
+        $v = (int)$v;
+        if ($v > 0 && !in_array($v, $partIds, true)) $partIds[] = $v;
+    }
+
+    $cust = [];
+    if ($custIds) {
+        $in = implode(',', array_fill(0, count($custIds), '?'));
+        try {
+            $q = $db->prepare("SELECT customer_id, customer FROM customer_list WHERE customer_id IN ($in)");
+            $q->execute($custIds);
+            $map = [];
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $map[(string)$r['customer_id']] = (string)$r['customer'];
+            foreach ($custIds as $id) {
+                // 主檔查不到的照樣列出來並講明白，不要安靜地從清單裡消失（看起來像設定自己不見了）
+                $cust[] = ['id' => $id, 'name' => $map[$id] ?? '（客戶主檔查無此編號）'];
+            }
+        } catch (Throwable $e) {
+            foreach ($custIds as $id) $cust[] = ['id' => $id, 'name' => ''];
+        }
+    }
+    $part = [];
+    if ($partIds) {
+        $in = implode(',', array_fill(0, count($partIds), '?'));
+        try {
+            $q = $db->prepare("SELECT ds.d_id, ds.D_Setting_Id AS part_no, COALESCE(cl.customer,'') AS customer_name
+                                 FROM d_setting ds LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
+                                WHERE ds.d_id IN ($in)");
+            $q->execute($partIds);
+            $map = [];
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $map[(int)$r['d_id']] = $r;
+            foreach ($partIds as $id) {
+                $r = $map[$id] ?? null;
+                $part[] = ['d_id' => $id, 'part_no' => $r ? (string)$r['part_no'] : '（料號主檔查無此筆）',
+                           'customer_name' => $r ? (string)$r['customer_name'] : ''];
+            }
+        } catch (Throwable $e) {
+            foreach ($partIds as $id) $part[] = ['d_id' => $id, 'part_no' => '', 'customer_name' => ''];
+        }
+    }
+    return ['cust' => $cust, 'part' => $part];
+}
+
+/** 排除設定用的搜尋（客戶／料號一律從主檔挑，不給打字自由輸入＝打錯一個字規則永遠不會命中） */
+function ia_type_excl_search(PDO $db, string $dim, string $kw, int $limit = 30): array
+{
+    $kw = trim($kw);
+    if ($kw === '') return [];
+    $like = '%' . $kw . '%';
+    try {
+        if ($dim === 'cust') {
+            $q = $db->prepare("SELECT customer_id AS id, customer AS name, '' AS sub FROM customer_list
+                                WHERE customer LIKE ? OR customer_id LIKE ?
+                                ORDER BY customer LIMIT " . (int)$limit);
+            $q->execute([$like, $like]);
+            return $q->fetchAll(PDO::FETCH_ASSOC);
+        }
+        if ($dim === 'part') {
+            $q = $db->prepare("SELECT ds.d_id AS id, ds.D_Setting_Id AS name, COALESCE(cl.customer,'') AS sub
+                                 FROM d_setting ds LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
+                                WHERE ds.D_Setting_Id LIKE ?
+                                ORDER BY ds.D_Setting_Id LIMIT " . (int)$limit);
+            $q->execute([$like]);
+            return $q->fetchAll(PDO::FETCH_ASSOC);
+        }
+    } catch (Throwable $e) {}
+    return [];
+}
+
+/** 有出貨資料的月份（抽樣跳窗的月份清單就是它，不要讓人挑到根本沒有出貨的月份） */
+function ia_type_ship_months(PDO $db, int $limit = 36): array
+{
+    try {
+        $q = $db->query("SELECT DATE_FORMAT(Order_date,'%Y-%m') ym, COUNT(*) c,
+                                COUNT(DISTINCT d_setting_id) parts
+                           FROM is_list WHERE Order_date IS NOT NULL AND d_setting_id > 0
+                          GROUP BY ym ORDER BY ym DESC LIMIT " . max(1, $limit));
+        $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as &$r) { $r['c'] = (int)$r['c']; $r['parts'] = (int)$r['parts']; }
+        unset($r);
+        return $rows;
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 「這個料號有沒有東西可以做型態稽核」的**快速**判定（d_id => 大約幾份文件）。
+ *
+ * 為什麼不直接用型態識別文件管制表那一頁的 type_id_ctrl_find_missing_parts()：
+ *   那一支為了求完整，會用 JSON_CONTAINS 去 JOIN 報價附件，**實測跑超過兩分鐘**，
+ *   抽樣跳窗一開就卡死。這裡只取三個「有索引、查得動」的來源（實測 0.08 秒）：
+ *   料號附件（外來文件／型態識別要列入的類別）、PFMEA、產品開發評估表。
+ *
+ * 所以它是**偏保守的下界**：報價附件與 ERP/資材報告這兩種來源沒有算進去，
+ * 真正的項目數以 ia_type_sample_eval() 對抽中的那幾筆逐一精算為準（那一段才是寫進表裡的依據）。
+ * 這裡的用途只有一個——把「連一份文件都沒有的料號」先排除在抽樣母體外，
+ * 否則實測 829 個出貨料號裡抽三筆會有兩筆是空的，等於這個功能不能用。
+ */
+function ia_type_doc_hint_map(PDO $db): array
+{
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $out = [];
+    $bump = function ($rows, $col) use (&$out) {
+        foreach ($rows as $r) {
+            $id = (int)$r[$col];
+            if ($id > 0) $out[$id] = ($out[$id] ?? 0) + (int)$r['c'];
+        }
+    };
+    try {
+        require_once __DIR__ . '/imgedit_visibility.php';
+        $cats = $db->query("SELECT id FROM quotation_file_categories
+                             WHERE is_external_doc=1 OR type_id_ctrl_include=1")->fetchAll(PDO::FETCH_COLUMN);
+        if ($cats) {
+            $cond = [];
+            foreach ($cats as $cid) $cond[] = "FIND_IN_SET(" . (int)$cid . ", REPLACE(COALESCE(pa.category_ids,''),' ',''))";
+            $bump($db->query("SELECT pa.d_id, COUNT(*) c FROM part_attachments pa
+                               WHERE pa.deleted_at IS NULL AND " . imgedit_sql_not_draft('pa') . "
+                                 AND (" . implode(' OR ', $cond) . ") GROUP BY pa.d_id")->fetchAll(PDO::FETCH_ASSOC), 'd_id');
+        }
+    } catch (Throwable $e) {}
+    foreach (['pfmea_doc', 'td_dev_eval'] as $t) {
+        try {
+            $bump($db->query("SELECT part_d_id, COUNT(*) c FROM `$t`
+                               WHERE is_deleted=0 AND part_d_id IS NOT NULL GROUP BY part_d_id")->fetchAll(PDO::FETCH_ASSOC), 'part_d_id');
+        } catch (Throwable $e) {}   // 模組沒安裝就少一個來源，不可以讓整個抽樣失敗
+    }
+    return $cache = $out;
+}
+
+/**
+ * 抽樣母體：指定月份出貨過的料號（已扣掉排除清單）。
+ * @param array $months ['2026-01','2026-02',…]
+ * @param array $opt  skip_years=>[2026] 這幾年已經建過產品型態稽核表的料號不再抽
+ *                    mode=>'auditable'（預設，只抽查得到文件的）／'has_doc'（只抽已有管制表的）／'all'（全部）
+ */
+function ia_type_sample_pool(PDO $db, array $months, array $opt = []): array
+{
+    $ym = [];
+    foreach ($months as $m) {
+        $m = trim((string)$m);
+        if (preg_match('/^\d{4}-\d{2}$/', $m) && !in_array($m, $ym, true)) $ym[] = $m;
+    }
+    if (!$ym) return [];
+    sort($ym);
+    $from = $ym[0] . '-01';
+    $to   = date('Y-m-t', strtotime(end($ym) . '-01'));
+
+    $in = implode(',', array_fill(0, count($ym), '?'));
+    $sql = "SELECT il.d_setting_id AS d_id,
+                   COALESCE(ds.D_Setting_Id,'') AS part_no,
+                   COALESCE(NULLIF(TRIM(ds.Customer_Id),''),'') AS cust_id,
+                   COALESCE(cl.customer,'') AS customer_name,
+                   COUNT(*) AS ship_cnt,
+                   MAX(il.Order_date) AS last_ship,
+                   SUBSTRING_INDEX(GROUP_CONCAT(ot.Order_oo ORDER BY il.Order_date DESC SEPARATOR '|'), '|', 1) AS order_no
+              FROM is_list il
+              JOIN d_setting ds ON ds.d_id = il.d_setting_id
+         LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
+         LEFT JOIN order_track ot ON ot.Order_id = il.Order_id
+             WHERE il.d_setting_id > 0
+               AND il.Order_date BETWEEN ? AND ?
+               AND DATE_FORMAT(il.Order_date,'%Y-%m') IN ($in)
+             GROUP BY il.d_setting_id";
+    try {
+        $q = $db->prepare($sql);
+        $q->execute(array_merge([$from, $to], $ym));
+        $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    if (!$rows) return [];
+
+    $excl = ia_type_excl_list($db);
+    $exCust = [];  foreach ($excl['cust'] as $c) $exCust[(string)$c['id']] = 1;
+    $exPart = [];  foreach ($excl['part'] as $c) $exPart[(int)$c['d_id']] = 1;
+
+    // 這幾個年度已經建過產品型態稽核表的料號（預設不再抽到）
+    $audited = [];
+    $skipYears = array_values(array_filter(array_map('intval', (array)($opt['skip_years'] ?? []))));
+    if ($skipYears) {
+        $yin = implode(',', array_fill(0, count($skipYears), '?'));
+        try {
+            $q = $db->prepare("SELECT DISTINCT h.part_d_id FROM ia_check k
+                                 JOIN type_id_ctrl_doc h ON h.id = k.src_doc_id
+                                WHERE k.kind='type' AND COALESCE(k.is_deleted,0)=0 AND k.year IN ($yin)");
+            $q->execute($skipYears);
+            foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $v) $audited[(int)$v] = 1;
+        } catch (Throwable $e) {}
+    }
+
+    // 已經有管制表的料號（順便帶回 doc_id 與項目數，預覽就看得到）
+    $docMap = [];
+    try {
+        $q = $db->query("SELECT h.id, h.doc_no, h.part_d_id,
+                                (SELECT COUNT(*) FROM type_id_ctrl_item i
+                                  WHERE i.doc_id=h.id AND i.is_deleted=0 AND i.is_excluded=0) AS item_cnt
+                           FROM type_id_ctrl_doc h WHERE h.is_deleted=0 AND h.part_d_id IS NOT NULL");
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $pid = (int)$r['part_d_id'];
+            if (!isset($docMap[$pid])) {
+                $docMap[$pid] = ['doc_id' => (int)$r['id'], 'doc_no' => (string)$r['doc_no'],
+                                 'item_cnt' => (int)$r['item_cnt']];
+            }
+        }
+    } catch (Throwable $e) {}
+
+    $mode = (string)($opt['mode'] ?? 'auditable');
+    $hint = ($mode === 'auditable') ? ia_type_doc_hint_map($db) : [];
+    $out = [];
+    foreach ($rows as $r) {
+        $id = (int)$r['d_id'];
+        if (isset($exPart[$id]))                       continue;
+        if ($r['cust_id'] !== '' && isset($exCust[(string)$r['cust_id']])) continue;
+        if (isset($audited[$id]))                      continue;
+        $d = $docMap[$id] ?? null;
+        if ($mode === 'has_doc' && !$d)                continue;
+        /* 預設只抽「查得到文件」的：已經有管制表而且有項目，或至少有一份料號附件／PFMEA／開發評估表。
+           連一份都查不到的抽出來也只會是一張沒有題目的空表（要連那些一起抽請選「全部出貨料號」）。 */
+        if ($mode === 'auditable'
+            && !($d && $d['item_cnt'] > 0)
+            && empty($hint[$id]))                      continue;
+        $out[] = ['d_id' => $id, 'part_no' => (string)$r['part_no'],
+                  'cust_id' => (string)$r['cust_id'], 'customer_name' => (string)$r['customer_name'],
+                  'ship_cnt' => (int)$r['ship_cnt'], 'last_ship' => (string)$r['last_ship'],
+                  'order_no' => (string)($r['order_no'] ?? ''),
+                  'doc_id' => $d ? $d['doc_id'] : 0, 'doc_no' => $d ? $d['doc_no'] : '',
+                  'item_cnt' => $d ? $d['item_cnt'] : 0];
+    }
+    return $out;
+}
+
+/**
+ * 抽 N 筆，並把每一筆「建得起來嗎、有幾項」算出來。
+ * 沒有管制表的要即時試算「建立後會有幾項」——那一段會去掃附件與 PFMEA，所以**只對抽中的那幾筆做**。
+ */
+function ia_type_sample_draw(PDO $db, array $pool, int $n, array $skipIds = []): array
+{
+    $skip = [];
+    foreach ($skipIds as $v) $skip[(int)$v] = 1;
+    $cand = [];
+    foreach ($pool as $p) { if (!isset($skip[(int)$p['d_id']])) $cand[] = $p; }
+    if (!$cand) return [];
+    shuffle($cand);
+    $n = max(1, min(50, $n));
+    $picks = array_slice($cand, 0, $n);
+    foreach ($picks as &$p) $p = ia_type_sample_eval($db, $p);
+    unset($p);
+    return $picks;
+}
+
+/**
+ * 單筆抽樣結果補上「建得起來嗎、有幾項」（抽一筆、換一筆共用同一份判定）。
+ * state：ready＝已有管制表且有項目／will_create＝還沒有管制表，建立時自動產生／
+ *        empty＝沒有任何可稽核的型態文件（不建議建立，請換一筆）
+ */
+function ia_type_sample_eval(PDO $db, array $p): array
+{
+    require_once __DIR__ . '/type_id_ctrl_lib.php';
+    $p['est_item_cnt'] = (int)($p['item_cnt'] ?? 0);
+    if ((int)($p['doc_id'] ?? 0) > 0 && $p['est_item_cnt'] > 0) {
+        $p['state'] = 'ready';
+        $p['state_text'] = '已有管制表 ' . $p['doc_no'] . '，' . $p['est_item_cnt'] . ' 項';
+        return $p;
+    }
+    /* 管制表已經建了、卻一項都沒有（建立當時還沒有文件，之後才上傳）——
+       這種不是「沒東西可稽核」，而是管制表沒同步過，建立時順手同步一次就有題目了。 */
+    if ((int)($p['doc_id'] ?? 0) > 0) {
+        $est = 0;
+        try { $est = count(type_id_ctrl_fetch_ext_docs_for_part($db, (int)$p['d_id'])); }
+        catch (Throwable $e) { $est = 0; }
+        $p['est_item_cnt'] = $est;
+        $p['state'] = $est > 0 ? 'will_sync' : 'empty';
+        $p['state_text'] = $est > 0
+            ? ('管制表 ' . $p['doc_no'] . ' 目前一項都沒有，建立時會自動同步（預估 ' . $est . ' 項）')
+            : ('已有管制表 ' . $p['doc_no'] . '，但查不到任何型態文件（沒有東西可稽核）');
+        return $p;
+    }
+    // 還沒有管制表：試算建立之後會帶進幾項（不寫入任何資料，真正建立在按下「建立」時才做）
+    $est = 0;
+    try { $est = count(type_id_ctrl_fetch_ext_docs_for_part($db, (int)$p['d_id'])); }
+    catch (Throwable $e) { $est = 0; }
+    $p['est_item_cnt'] = $est;
+    $p['state'] = $est > 0 ? 'will_create' : 'empty';
+    $p['state_text'] = $est > 0
+        ? ('還沒有管制表，建立時會自動產生（預估 ' . $est . ' 項）')
+        : '這個料號沒有任何型態文件（外來文件／PFMEA／報告都沒有），沒有東西可稽核';
+    return $p;
+}
+
+/**
+ * 依抽樣結果批次建立產品型態稽核表（一個料號一張）。
+ *
+ * ①沒有管制表的先呼叫 type_id_ctrl_sync_part() 建起來（與型態識別文件管制表那一頁同一支，不另刻）
+ * ②建出來 0 項的**不建立**並回報原因——空的查檢表只會讓人以為系統壞了
+ * ③**逐張各自 transaction**：其中一張建不了不該把其他張一起回滾
+ *
+ * @param array $picks [['d_id'=>1,'order_no'=>'OO…'],…]
+ * @return array ['created'=>[…], 'skipped'=>[…]]
+ */
+function ia_type_sample_create(PDO $db, array $picks, array $head): array
+{
+    require_once __DIR__ . '/type_id_ctrl_lib.php';
+    $created = []; $skipped = [];
+    foreach ($picks as $pk) {
+        $dsPk = (int)($pk['d_id'] ?? 0);
+        if ($dsPk <= 0) continue;
+        $partNo = '';
+        try {
+            $q = $db->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
+            $q->execute([$dsPk]);
+            $partNo = (string)($q->fetchColumn() ?: '');
+        } catch (Throwable $e) {}
+        if ($partNo === '') { $skipped[] = ['part_no' => '#' . $dsPk, 'reason' => '料號主檔查不到這一筆']; continue; }
+
+        // 已有管制表就用它，沒有才建（建立同時把外來文件／PFMEA／報告帶進項目列）
+        $docId = 0;
+        try {
+            $q = $db->prepare("SELECT id FROM type_id_ctrl_doc WHERE part_d_id=? AND is_deleted=0 ORDER BY id LIMIT 1");
+            $q->execute([$dsPk]);
+            $docId = (int)($q->fetchColumn() ?: 0);
+        } catch (Throwable $e) {}
+        $newDoc = false;
+        if (!$docId) {
+            /* **沒有文件的料號不可以先把管制表建起來再略過**——那會在型態識別文件管制表那一頁
+               留下一堆 0 項的空管制表（而且是「系統自動同步」建的，沒人知道哪來的）。
+               先確認真的有文件可帶，才建。 */
+            $src = 0;
+            try { $src = count(type_id_ctrl_fetch_ext_docs_for_part($db, $dsPk)); }
+            catch (Throwable $e) { $src = 0; }
+            if ($src <= 0) {
+                $skipped[] = ['part_no' => $partNo,
+                              'reason' => '這個料號查不到任何型態文件（外來文件／PFMEA／報告都沒有），'
+                                        . '沒有東西可稽核，已略過（也沒有建立管制表）'];
+                continue;
+            }
+            try {
+                $r = type_id_ctrl_sync_part($db, $dsPk);
+                $docId = (int)($r['doc_id'] ?? 0);
+                $newDoc = !empty($r['is_new']);
+            } catch (Throwable $e) {
+                $skipped[] = ['part_no' => $partNo, 'reason' => '型態識別文件管制表建立失敗：' . $e->getMessage()];
+                continue;
+            }
+        }
+        if (!$docId) { $skipped[] = ['part_no' => $partNo, 'reason' => '建不出型態識別文件管制表']; continue; }
+
+        $items = ia_check_build_items($db, 'type', (int)$head['year'], [], $docId);
+        /* 管制表存在但一項都沒有：同步一次（多半是建立當時還沒有文件）。
+           **有項目的管制表刻意不重新同步**——稽核要看的是「目前登記了什麼」，
+           而同步會把已確認的管制表改成「需重新確認」，等於稽核動作反過來改到被稽核的文件。 */
+        if (!$items && !$newDoc) {
+            try {
+                type_id_ctrl_sync_part($db, $dsPk);
+                $items = ia_check_build_items($db, 'type', (int)$head['year'], [], $docId);
+            } catch (Throwable $e) {}
+        }
+        if (!$items) {
+            $skipped[] = ['part_no' => $partNo,
+                          'reason' => '這個料號沒有任何可稽核的型態文件（管制表 0 項），已略過不建立'];
+            continue;
+        }
+
+        $orderNo = mb_substr(trim((string)($pk['order_no'] ?? '')), 0, 60) ?: null;
+        $db->beginTransaction();
+        try {
+            $db->prepare("INSERT INTO ia_check (case_id, year, kind, title, auditor_id, auditor_name,
+                              auditor_dept_id, auditor_position_id, src_doc_id, order_no,
+                              check_date, status, created_by, created_by_name, created_at, updated_at)
+                          VALUES (?,?,'type',?,?,?,?,?,?,?,?, 'draft', ?,?, NOW(), NOW())")
+               ->execute([($head['case_id'] ?: null), (int)$head['year'],
+                          mb_substr(trim((string)($head['title'] ?? '')), 0, 150) ?: null,
+                          (int)$head['auditor_id'], (string)$head['auditor_name'],
+                          $head['auditor_dept'] ?: null, $head['auditor_pos'] ?: null,
+                          $docId, $orderNo, (string)$head['check_date'],
+                          (int)$head['uid'], (string)$head['uname']]);
+            $kid = (int)$db->lastInsertId();
+            $ins = $db->prepare("INSERT INTO ia_check_item (check_id, sort_order, is_header, col_a, col_b, col_c, col_d,
+                                     ref_kind, ref_id) VALUES (?,?,?,?,?,?,?,?,?)");
+            foreach ($items as $it) {
+                $ins->execute([$kid, $it['sort_order'], $it['is_header'], $it['col_a'], $it['col_b'],
+                               $it['col_c'], $it['col_d'], $it['ref_kind'], $it['ref_id']]);
+            }
+            $db->commit();
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            $skipped[] = ['part_no' => $partNo, 'reason' => '建立失敗：' . $e->getMessage()];
+            continue;
+        }
+        $created[] = ['check_id' => $kid, 'd_id' => $dsPk, 'part_no' => $partNo,
+                      'doc_id' => $docId, 'item_cnt' => count($items), 'new_doc' => $newDoc ? 1 : 0];
+    }
+    return ['created' => $created, 'skipped' => $skipped];
+}
+
 /** 依種類建出查檢表的初始題目列（勾選哪幾題由呼叫端決定，這裡只負責題庫轉成列） */
-function ia_check_build_items(PDO $db, string $kind, int $year, array $pick = []): array
+function ia_check_build_items(PDO $db, string $kind, int $year, array $pick = [], int $srcDocId = 0): array
 {
     $items = [];
     if ($kind === 'as') {
@@ -1269,6 +1819,20 @@ function ia_check_build_items(PDO $db, string $kind, int $year, array $pick = []
             if ($pick && !in_array($id, $pick, true)) continue;
             $items[] = ['is_header'=>0, 'col_a'=>(string)$f['doc_no'], 'col_b'=>(string)$f['doc_name'],
                         'col_c'=>null, 'col_d'=>null, 'ref_kind'=>'as_document', 'ref_id'=>$id];
+        }
+    } elseif ($kind === 'type') {
+        /* 產品型態稽核表：題目＝某一張型態識別文件管制表的項目列（不列入的不帶，使用者拍板）。
+           四個欄位對得剛剛好：col_a 型態項目名稱／col_b 型態生效日期／col_c 型態類別／
+           col_d 版別·文件編號。判定（合格／不合格）由稽核員自己填，不自動帶。 */
+        foreach (ia_type_ctrl_items($db, $srcDocId) as $t) {
+            $id = (int)$t['id'];
+            if ($pick && !in_array($id, $pick, true)) continue;
+            $items[] = ['is_header' => 0,
+                        'col_a' => (string)$t['item_name'],
+                        'col_b' => (string)($t['effective_date'] ?? ''),
+                        'col_c' => (string)($t['item_type_label'] ?? ''),
+                        'col_d' => (string)($t['doc_no_text'] ?? ''),
+                        'ref_kind' => 'type_item', 'ref_id' => $id];
         }
     } elseif ($kind === 'kpi') {
         // 2026-09-15 起：部門／目標／受稽人（擔當者）／達成與否全部自動帶，
@@ -2458,6 +3022,45 @@ function ia_nc_remind_tick(PDO $db): int
 /* ============================ 稽核報告表：自動彙總 ============================ */
 
 /**
+ * 「已發出」但底下已經有查檢表的稽核通知單，自動補成「執行中」——順路觸發，唯一實作。
+ *
+ * 2026-09-22 使用者問「尚未執行是什麼意思？兩次都已經有系統稽核紀錄表且都結案了」——
+ * 根因是 `ia_case.status` 只能由管理員在清單上**手動**改，而現場不會有人記得回去改它，
+ * 於是永遠停在「已發出」；而年度計畫表的 ◎（實際實施）看的又正是 `executed` 旗標，
+ * 結果「明明查完了、計畫表上卻沒有 ◎」。
+ *
+ * 判定就用**證據**：這張通知單底下只要建了任何一張查檢表，就是真的去稽核了。
+ * 只動 `issued` 這一種：草稿還沒發出、已結案的更不可以回頭改。
+ * 日期取 audit_from（沒有就 notify_date），與管理員手動改狀態那一條完全同一個口徑。
+ *
+ * @return int 這一次補了幾張
+ */
+function ia_case_exec_sync(PDO $db): int
+{
+    static $ran = false;
+    if ($ran) return 0;          // 同一個 request 只跑一次
+    $ran = true;
+    try {
+        $rows = $db->query("SELECT c.case_id, c.audit_from, c.notify_date FROM ia_case c
+                             WHERE c.status='issued' AND COALESCE(c.is_deleted,0)=0
+                               AND EXISTS (SELECT 1 FROM ia_check k
+                                            WHERE k.case_id=c.case_id AND COALESCE(k.is_deleted,0)=0)")
+                   ->fetchAll(PDO::FETCH_ASSOC);
+        if (!$rows) return 0;
+        $up = $db->prepare("UPDATE ia_case SET status='executing', executed=1,
+                                executed_date=COALESCE(executed_date, ?), updated_at=NOW()
+                             WHERE case_id=? AND status='issued'");
+        $n = 0;
+        foreach ($rows as $r) {
+            $d = trim((string)($r['audit_from'] ?: ($r['notify_date'] ?? '')));
+            $up->execute([$d !== '' ? $d : null, (int)$r['case_id']]);
+            $n += $up->rowCount();
+        }
+        return $n;
+    } catch (Throwable $e) { return 0; }
+}
+
+/**
  * 年度內稽「單據點檢表」—— 唯一實作（2026-09-22 使用者交辦）
  *
  * 解決的問題：一次內部稽核從頭到尾會產出十種單據（計畫表→通知單→事前會議→三種查檢表
@@ -2542,6 +3145,19 @@ function ia_year_checklist(PDO $db, int $year): array
 
     $needCase = count($planMonths);   // 排了幾個月份就至少要有幾張通知單（推不出來＝0＝只要求至少一張）
     list($no, $nm) = $docOf('case');
+    /* 這一年每一張通知單底下建了幾張查檢表（判「到底有沒有真的去稽核」用）。
+       2026-09-22 使用者回報：兩次稽核都已經有系統稽核紀錄表且已結案，點檢表卻寫「尚未執行」——
+       因為 ia_case.status 是**人工改的**，沒人回去改它就永遠停在「已發出」。
+       改成**看證據**：這張通知單底下已經有查檢表，就是真的執行過了；
+       資料上的狀態另由 ia_case_exec_sync() 順路補成 executing（年度計畫表的 ◎ 要看它）。 */
+    $caseChk = [];
+    try {
+        $q = $db->prepare("SELECT case_id, COUNT(*) c FROM ia_check
+                            WHERE case_id IS NOT NULL AND COALESCE(is_deleted,0)=0
+                            GROUP BY case_id");
+        $q->execute();
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $caseChk[(int)$r['case_id']] = (int)$r['c'];
+    } catch (Throwable $e) {}
     $caseDone = 0; $missCase = [];
     foreach ($cases as $c) {
         $tag = '第 ' . (int)$c['seq_no'] . ' 次'
@@ -2551,7 +3167,15 @@ function ia_year_checklist(PDO $db, int $year): array
             $m = ia_case_required_missing($db, (int)$c['case_id']);
             $missCase[] = $tag . '：還是草稿' . ($m ? '，缺 ' . implode('；', $m) : '，尚未按「完成」發出');
         } else {
-            $missCase[] = $tag . '：' . (['issued' => '已發出，尚未執行', 'executing' => '執行中，尚未結案'][(string)$c['status']] ?? (string)$c['status']);
+            /* 「尚未執行」不可以只看狀態欄：底下有查檢表就是已經去稽核過了。 */
+            $nChk = (int)($caseChk[(int)$c['case_id']] ?? 0);
+            $missCase[] = $tag . '：' . ((string)$c['status'] === 'executing'
+                ? ('執行中' . ($nChk ? '（已建立 ' . $nChk . ' 張查檢表）' : '') . '，尚未結案')
+                : ((string)$c['status'] === 'issued'
+                    ? ($nChk
+                        ? ('已發出且已建立 ' . $nChk . ' 張查檢表（實際已執行），尚未結案')
+                        : '已發出，還沒有建立任何查檢表（還沒開始稽核）')
+                    : (string)$c['status']));
         }
     }
     if ($needCase > count($cases)) {
@@ -2579,21 +3203,37 @@ function ia_year_checklist(PDO $db, int $year): array
     };
     foreach ([['pre', '③事前會議', 'pre_meeting_id', '事前會議紀錄'],
               ['end', '⑨結束會議', 'end_meeting_id', '結束會議紀錄']] as $mm) {
-        $have = 0; $done = 0; $miss = [];
+        /* 2026-09-22 使用者拍板：**同一個稽核期間只需要各一份**事前／結束會議紀錄，
+           不是每一張稽核通知單各一份——同一次稽核分兩天查就會有兩張通知單，
+           會議卻只開一次（舊版一張單算一份，第 2 張永遠被報成「還沒建立」）。
+           同一份會議挂在好幾張通知單上也只算一份（以 meeting_id 去重）。 */
+        $seen = []; $done = 0; $miss = []; $extra = [];
         foreach ($cases as $c) {
-            $tag = '第 ' . (int)$c['seq_no'] . ' 次';
-            $s = $meetStatus($c[$mm[2]] ?? 0);
-            if ($s === '') { $miss[] = $tag . '：還沒建立' . $mm[3]; continue; }
-            $have++;
-            if ($s === 'done') { $done++; }
-            else { $miss[] = $tag . '：' . $mm[3] . '還是' . ($s === 'draft' ? '草稿' : '待簽核') . '，尚未完成'; }
+            $mid = (int)($c[$mm[2]] ?? 0);
+            if ($mid <= 0 || isset($seen[$mid])) continue;
+            $st = $meetStatus($mid);
+            if ($st === '') continue;                 // 紀錄被刪了＝等同沒有
+            $seen[$mid] = $st;
+            $tag = '第 ' . (int)$c['seq_no'] . ' 次建立的';
+            if ($st === 'done') $done++;
+            else $extra[] = $tag . $mm[3] . '還是' . ($st === 'draft' ? '草稿' : '待簽核') . '，尚未完成';
+        }
+        $have = count($seen);
+        /* 已經有一份完成的就算齊了，其餘未完成的降為說明（放在「還缺什麼」裡
+           會變成「已完成」卻同時列着缺項，自相矛盾）。 */
+        if ($cases && $have <= 0) {
+            $miss[] = '這一次稽核還沒有' . $mm[3] . '（在任一張稽核通知單上建立一份即可）';
+        } elseif ($done <= 0) {
+            $miss = $extra;
         }
         $add(['key' => 'meet_' . $mm[0], 'stage' => $mm[1], 'doc_no' => $meetNo,
               'doc_name' => $meetNm . '（' . $mm[3] . '）', 'pane' => 'case',
-              'have' => $have, 'need' => count($cases), 'done' => $done, 'missing' => $miss,
-              'label' => $cases ? ($have . '／' . count($cases) . ' 張通知單已建，完成 ' . $done . ' 份')
+              'have' => $have, 'need' => ($cases ? 1 : 0), 'done' => $done, 'missing' => $miss,
+              'label' => $cases ? ($have ? ('已建立 ' . $have . ' 份，完成 ' . $done . ' 份') : '尚未建立')
                                 : '沒有稽核通知單，無從建立',
-              'state' => (!$cases ? 'todo' : ($have <= 0 ? 'todo' : ($done >= count($cases) ? 'ok' : 'doing')))]);
+              'note' => (!$cases ? '' : ('同一個稽核期間只需要一份'
+                        . ($done > 0 && $extra ? '；另有尚未完成的：' . implode('、', $extra) : ''))),
+              'state' => (!$cases ? 'todo' : ($done >= 1 ? 'ok' : ($have > 0 ? 'doing' : 'todo')))]);
     }
 
     /* ── ④⑤⑥三種查檢表 ── */
@@ -2603,7 +3243,7 @@ function ia_year_checklist(PDO $db, int $year): array
         $q->execute([$year]);
         foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $chkCnt[(string)$r['kind']] = (int)$r['c'];
     } catch (Throwable $e) {}
-    $stageOf = ['kpi' => '④查檢', 'system' => '⑤查檢', 'as' => '⑥查檢'];
+    $stageOf = ['kpi' => '④查檢', 'system' => '⑤查檢', 'as' => '⑥查檢', 'type' => '⑥查檢'];
     foreach (array_keys(IA_CHECK_KINDS) as $k) {
         list($no, $nm) = $docOf($k);
         $n = (int)($chkCnt[$k] ?? 0);
@@ -2613,15 +3253,6 @@ function ia_year_checklist(PDO $db, int $year): array
               'label' => $n ? ('已建立 ' . $n . ' 份') : '尚未建立',
               'missing' => $n ? [] : ['這一年還沒有' . $nm]]);
     }
-
-    /* ── ⑥-2 產品型態稽核表（2-DC-03-02）──
-       程序書 2-DC-03 明訂「品保定期於年度內稽及有追溯必要時實施」，所以它是內稽該有的單據之一；
-       但目前還是紙本、系統裡沒有資料來源，所以標成「系統判不了」而不是「缺」——
-       憑空報缺會讓整張點檢表永遠紅著，反而沒人看。E 化之後這一列自然會有資料。 */
-    list($no, $nm) = $docByNo('2-DC-03-02', '產品型態稽核表');
-    $add(['key' => 'type_audit', 'stage' => '⑥查檢', 'doc_no' => $no, 'doc_name' => $nm, 'pane' => '',
-          'state' => 'na', 'label' => '紙本作業，系統無法判定',
-          'note' => '依 2-DC-03 型態管理作業程序，品保於年度內稽時實施；尚未 E 化']);
 
     /* ── ⑦不符合通知單 ── */
     list($no, $nm) = $docOf('nc');
@@ -2682,14 +3313,18 @@ function ia_year_checklist(PDO $db, int $year): array
         $add(['key' => 'report', 'stage' => '⑩結案', 'doc_no' => $no, 'doc_name' => $nm, 'pane' => 'report',
               'state' => 'todo', 'label' => '尚未建立', 'missing' => ['這一年還沒有稽核報告表']]);
     } else {
+        /* 2026-09-22 使用者拍板：**稽核報告表不需要核准，送出就是完成**
+           （紙本 2-GM-06-08 本來就沒有核准格，畫面上也只有一顆「送出」）。
+           舊資料還是 approved 的一律照算，不然以前核准過的年度會突然變回進行中
+           （與 ia_year_status() 同一個口徑，兩邊不可以各自判一套）。 */
         $st  = (string)($rep['status'] ?? 'draft');
-        $lab = ['draft' => '草稿（未送出）', 'submitted' => '已送出，待核准', 'approved' => '已核准'][$st] ?? $st;
-        $miss = [];
-        if ($st === 'draft')     $miss[] = '已建立但還沒送出';
-        if ($st === 'submitted') $miss[] = '已送出，還在等核准';
+        $sent = in_array($st, ['submitted', 'approved'], true);
+        $lab = ['draft' => '草稿（未送出）', 'submitted' => '已送出（完成）', 'approved' => '已送出（完成）'][$st] ?? $st;
+        $miss = $sent ? [] : ['已建立但還沒送出'];
         $add(['key' => 'report', 'stage' => '⑩結案', 'doc_no' => $no, 'doc_name' => $nm, 'pane' => 'report',
-              'have' => 1, 'need' => 1, 'done' => ($st === 'approved' ? 1 : 0),
-              'state' => ($st === 'approved' ? 'ok' : 'doing'), 'label' => $lab, 'missing' => $miss]);
+              'have' => 1, 'need' => 1, 'done' => ($sent ? 1 : 0),
+              'state' => ($sent ? 'ok' : 'doing'), 'label' => $lab, 'missing' => $miss,
+              'note' => ($sent && !empty($rep['submit_date']) ? '送出日期 ' . eg_fmt_date((string)$rep['submit_date']) : '')]);
     }
 
     /* 依流程順序排列：stage 開頭的 ①~⑩ 是連續的 Unicode 字元（U+2460~U+2469），

@@ -40,6 +40,9 @@ $today  = ia_today($db);
 
 /** 到期提醒順路觸發：不另開排程，有人用這個模組就順便檢查一次（內部 static 擋重複、每單每天最多一則） */
 ia_nc_remind_tick($db);
+/* 同樣順路觸發：「已發出」但已經建了查檢表的通知單自動補成「執行中」
+   （2026-09-22 使用者回報「尚未執行是什麼意思」；年度計畫表的 ◎ 也要靠這個旗標） */
+ia_case_exec_sync($db);
 
 /**
  * 資料稽核送來的訂單 id 清單（唯一實作，dqa_prefill／dqa_existing 共用）。
@@ -918,6 +921,16 @@ case 'check_bank': {
         // 所以每一份表單一併帶出它的部門（編號的部門代碼推導）與對應的品質管理系統要求。
         jout(['kind' => $kind, 'rows' => ia_system_forms_full($db), 'dept_codes' => ia_as_dept_code_names($db)]);
     }
+    elseif ($kind === 'type') {
+        /* 產品型態稽核表：題目＝某一張型態識別文件管制表的項目列。
+           還沒挑管制表時只回清單（畫面要先選一張才有題目可勾），挑了才回它的項目列。
+           被標「不列入」的不帶（使用者 2026-09-22 拍板），判定由稽核員自己填、不自動帶。 */
+        $srcDoc = iaInt($_GET['src_doc_id'] ?? '');
+        jout(['kind' => $kind,
+              'rows'      => $srcDoc ? ia_type_ctrl_items($db, $srcDoc) : [],
+              'type_docs' => ia_type_ctrl_docs($db, (string)($_GET['doc_kw'] ?? '')),
+              'src_doc'   => $srcDoc ? ia_type_ctrl_head($db, $srcDoc) : null]);
+    }
     else {
         // 績效執行稽核查檢表稽核的是「去年整年度」，且達成／沒達成與受稽人（擔當者）全自動帶
         $ay = ia_kpi_audit_year((string)($_GET['check_date'] ?? ''));
@@ -974,6 +987,80 @@ case 'check_list': {
     jout(['rows' => $rows, 'other_years' => $others]);
 }
 
+/* ================= 產品型態稽核表：抽樣自動建立（2026-09-22 使用者交辦）=================
+   「選定哪幾個月份出貨的資料 → 隨機選定料號 → 建成產品型態稽核表」，
+   排除的客戶／料號與預設抽樣筆數在「設定」裡由管理員維護。
+   判定與寫入一律在共用庫 ia_type_sample_*()，這裡只負責收參數與守門。 */
+case 'type_sample_meta': {
+    iaReqAudit($perms);
+    jout(['months'    => ia_type_ship_months($db),
+          'default_n' => ia_type_sample_n($db),
+          'excl'      => ia_type_excl_list($db)]);
+}
+
+case 'type_sample_draw': {
+    iaReqAudit($perms);
+    $months = json_decode((string)($_POST['months'] ?? $_GET['months'] ?? '[]'), true);
+    $months = is_array($months) ? $months : [];
+    if (!$months) jerr('請至少選一個出貨月份');
+    $n    = (int)($_POST['n'] ?? $_GET['n'] ?? 0);
+    if ($n <= 0) $n = ia_type_sample_n($db);
+    $mode = (string)($_POST['mode'] ?? $_GET['mode'] ?? 'auditable');
+    if (!in_array($mode, ['auditable', 'has_doc', 'all'], true)) $mode = 'auditable';
+    $opt  = ['mode' => $mode];
+    // 「不要抽到今年已經稽核過的」預設開；年度取畫面上的稽核年度（不是今天）
+    $year = (int)($_POST['year'] ?? $_GET['year'] ?? 0) ?: (int)substr($today, 0, 4);
+    if (empty($_POST['allow_repeat'] ?? $_GET['allow_repeat'] ?? 0)) $opt['skip_years'] = [$year];
+    $pool = ia_type_sample_pool($db, $months, $opt);
+    $keep = json_decode((string)($_POST['keep'] ?? $_GET['keep'] ?? '[]'), true);
+    $keep = is_array($keep) ? array_values(array_filter(array_map('intval', $keep))) : [];
+    $picks = ia_type_sample_draw($db, $pool, $n, $keep);
+    jout(['pool' => count($pool), 'picks' => $picks]);
+}
+
+case 'type_sample_create': {
+    iaReqAudit($perms);
+    $cd = iaDate($_POST['check_date'] ?? '');
+    if (!$cd) jerr('請填建立（稽核）日期');
+    $picks = json_decode((string)($_POST['picks'] ?? '[]'), true);
+    $picks = is_array($picks) ? $picks : [];
+    if (!$picks) jerr('請先抽樣，並至少保留一筆要建立的料號');
+    if (count($picks) > 50) jerr('一次最多建立 50 張');
+    $caseId = iaInt($_POST['case_id'] ?? '');
+    if ($caseId) {
+        $q = $db->prepare("SELECT 1 FROM ia_case WHERE case_id=? AND COALESCE(is_deleted,0)=0");
+        $q->execute([$caseId]);
+        if (!$q->fetchColumn()) jerr('稽核案件不存在');
+    }
+    // 稽核人與 check_create 同一條規則：挑的是職務，後端再驗一次稽核員資格（鐵律8）
+    $auditorKey = trim((string)($_POST['auditor_key'] ?? ''));
+    $auditorDept = null; $auditorPos = null;
+    if ($auditorKey !== '') {
+        $ap = ia_resolve_post($db, $auditorKey, 'auditor', $cd);
+        if (!$ap) jerr('稽核人沒有該職務的稽核員資格');
+        $auditorId = $ap['user_id']; $auditorName = $ap['user_name'];
+        $auditorDept = $ap['dept_id']; $auditorPos = $ap['position_id'];
+    } else {
+        $auditorId = $uid; $auditorName = $uname;
+    }
+    $r = ia_type_sample_create($db, $picks, [
+        'year' => (int)substr($cd, 0, 4), 'case_id' => $caseId, 'check_date' => $cd,
+        'title' => (string)($_POST['title'] ?? ''),
+        'auditor_id' => $auditorId, 'auditor_name' => $auditorName,
+        'auditor_dept' => $auditorDept, 'auditor_pos' => $auditorPos,
+        'uid' => $uid, 'uname' => $uname]);
+    jout($r);
+}
+
+/* 排除設定的主檔搜尋（客戶／料號）：一律從主檔挑，不給自由打字——
+   打錯一個字那條排除規則永遠不會命中，而且完全不報錯（資料稽核踩過同一個坑）。 */
+case 'type_excl_search': {
+    iaReqAudit($perms);
+    $dim = (string)($_GET['dim'] ?? '');
+    if (!in_array($dim, ['cust', 'part'], true)) jerr('搜尋對象不正確');
+    jout(['rows' => ia_type_excl_search($db, $dim, (string)($_GET['kw'] ?? ''))]);
+}
+
 case 'check_create': {
     iaReqAudit($perms);
     $kind = (string)($_POST['kind'] ?? '');
@@ -1002,7 +1089,17 @@ case 'check_create': {
     $pick = json_decode((string)($_POST['pick'] ?? '[]'), true);
     $pick = is_array($pick) ? array_values(array_filter(array_map('intval', $pick))) : [];
     if (!$pick) jerr('請至少勾選一個要查核的項目');
-    $items = ia_check_build_items($db, $kind, $bankYear, $pick);
+    /* 產品型態稽核表一定要指定「對哪一張型態識別文件管制表稽核」——沒有它就沒有題目，
+       也印不出表頭的客戶與產品編號。前端擋一次、這裡同規則再擋一次（鐵律8）。 */
+    $srcDocId = iaInt($_POST['src_doc_id'] ?? '');
+    if ($kind === 'type') {
+        if (!$srcDocId) jerr('請先選擇要稽核的型態識別文件管制表');
+        if (!ia_type_ctrl_head($db, $srcDocId)) jerr('型態識別文件管制表不存在或已刪除');
+    } else {
+        $srcDocId = 0;   // 別的種類用不到，不要讓前端亂送的值寫進去
+    }
+    $orderNo = ($kind === 'type') ? (mb_substr(trim((string)($_POST['order_no'] ?? '')), 0, 60) ?: null) : null;
+    $items = ia_check_build_items($db, $kind, $bankYear, $pick, $srcDocId);
     // 只勾到章節標題列也算沒勾（會建出一張只有標題沒有題目的空表）
     $real = 0; foreach ($items as $it) { if (!$it['is_header']) $real++; }
     if ($real === 0) jerr('請至少勾選一個要查核的項目（目前只勾到章節標題列）');
@@ -1024,12 +1121,13 @@ case 'check_create': {
     $db->beginTransaction();
     try {
         $db->prepare("INSERT INTO ia_check (case_id, year, kind, half, title, auditor_id, auditor_name,
-                          auditor_dept_id, auditor_position_id,
+                          auditor_dept_id, auditor_position_id, src_doc_id, order_no,
                           check_date, status, created_by, created_by_name, created_at, updated_at)
-                      VALUES (?,?,?,?,?,?,?,?,?,?, 'draft', ?,?, NOW(), NOW())")
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'draft', ?,?, NOW(), NOW())")
            ->execute([$caseId, $year, $kind, $kind === 'kpi' ? $half : null,
                       mb_substr(trim((string)($_POST['title'] ?? '')), 0, 150) ?: null,
-                      $auditorId, $auditorName, $auditorDept, $auditorPos, $cd, $uid, $uname]);
+                      $auditorId, $auditorName, $auditorDept, $auditorPos,
+                      $srcDocId ?: null, $orderNo, $cd, $uid, $uname]);
         $kid = (int)$db->lastInsertId();
         // result／evidence：績效查檢表建立當下就由 KPI 資料自動判定好（2026-09-15），
         // 其他兩種維持空白由稽核員填。
@@ -1111,7 +1209,8 @@ case 'check_item_add': {
 
     $kind = (string)$k['kind'];
     $bankYear = ($kind === 'kpi') ? ia_kpi_audit_year((string)$k['check_date']) : (int)$k['year'];
-    $items = ia_check_build_items($db, $kind, $bankYear, $pick);
+    // 產品型態稽核表的題庫是「這張表自己綁的那一張管制表」，不是全站所有管制表
+    $items = ia_check_build_items($db, $kind, $bankYear, $pick, (int)($k['src_doc_id'] ?? 0));
 
     // 這張表已經有的就不要再加一次
     $have = [];
@@ -1224,6 +1323,9 @@ case 'check_get': {
         }
         unset($it);
     }
+    /* 產品型態稽核表：表頭的客戶／產品編號一律由來源管制表即時查（不存快照＝鐵律4），
+       所以這裡要把它帶回去給畫面與列印版用。管制表被刪掉時回 null，畫面會提示。 */
+    if ($k['kind'] === 'type') $k['src_doc'] = ia_type_ctrl_head($db, (int)($k['src_doc_id'] ?? 0)) ?: null;
     // 系統稽核紀錄表：每一列補上「這份表單對應到哪幾條品質管理系統要求」（即時查條文題庫＝鐵律4）。
     // 開不符合通知單時的「違反條文」就是從這裡帶的（2026-09-15 使用者交辦）。
     if ($k['kind'] === 'system') {
@@ -1457,6 +1559,12 @@ case 'check_save_items': {
         }
         $db->prepare("UPDATE ia_check SET title=?, check_date=COALESCE(?, check_date), updated_at=NOW() WHERE check_id=?")
            ->execute([mb_substr(trim((string)($_POST['title'] ?? '')), 0, 150) ?: null, $ad, $kid]);
+        /* 訂單號碼（產品型態稽核表紙本表頭的欄位）。**沒送這個欄位＝不要動它**，
+           送了空字串才是真的清空——與製表人／稽核人同一種語意，否則別的呼叫端存一次就把它洗掉。 */
+        if ((string)$k['kind'] === 'type' && array_key_exists('order_no', $_POST)) {
+            $db->prepare("UPDATE ia_check SET order_no=? WHERE check_id=?")
+               ->execute([mb_substr(trim((string)$_POST['order_no']), 0, 60) ?: null, $kid]);
+        }
         if ($auditorSet !== null) {
             if (!empty($auditorSet['clear'])) {
                 $db->prepare("UPDATE ia_check SET auditor_id=NULL, auditor_name=NULL,

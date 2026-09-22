@@ -160,10 +160,26 @@ $roleLabel = ia_role_label($perms);
         .ck-na    { background:#EFE7D8; color:#6b5535; }
         .ck-row-warn td { background:#FBEAE4; }
         .ck-row-todo td { background:#FDF8EF; }
-        .ck-miss  { margin:4px 0 0; padding-left:18px; color:#8a6d45; font-size:12px; line-height:1.7; }
+        /* 「目前情形／還缺什麼」欄（2026-09-22 使用者要求）：整欄靠左，
+           「目前情形」算標題（靠左置頂），底下的「還缺什麼」與說明一律再退縮一層。 */
+        .ck-cur   { text-align:left; }
+        .ck-label { color:#5b3a1e; font-weight:bold; line-height:1.6; }
+        .ck-miss  { margin:3px 0 0 16px; padding-left:16px; color:#8a6d45; font-size:12px; line-height:1.7; }
         .ck-miss li { list-style:disc; }
-        .ck-note  { color:#a08356; font-size:12px; line-height:1.6; margin-top:2px; }
+        .ck-note  { color:#a08356; font-size:12px; line-height:1.6; margin:2px 0 0 16px; }
         .ck-no    { color:#8A5A2B; white-space:nowrap; }
+        /* 產品型態稽核表抽樣的排除設定：已選的排除對象用標籤列出，打字搜尋主檔後點選加入 */
+        .ex-chips { margin-bottom:4px; }
+        .ex-chip  { display:inline-block; background:#FBF5EA; border:1px solid #E8D5B5; border-radius:12px;
+                    padding:1px 8px; margin:0 4px 4px 0; font-size:12px; line-height:20px; color:#5b3a1e; }
+        .ex-chip .sub { color:#a08356; margin-left:5px; }
+        .ex-chip .ex-del { color:#C4442D; margin-left:6px; text-decoration:none; font-weight:bold; }
+        .ex-res   { display:none; border:1px solid #D8BE93; border-radius:4px; background:#fff;
+                    max-height:150px; overflow:auto; margin-top:3px; width:380px; }
+        .ex-res .ex-row { padding:3px 8px; font-size:13px; cursor:pointer; color:#5b3a1e; }
+        .ex-res .ex-row:hover { background:#FDF3E2; }
+        .ex-res .ex-row .sub { color:#a08356; font-size:12px; }
+        .ex-res .ex-none { padding:4px 8px; font-size:12px; color:#a08356; }
 
 
         /* ---- 年度計畫格狀表 ---- */
@@ -494,9 +510,11 @@ $roleLabel = ia_role_label($perms);
                 <button id="btnCheckSearch"><i class="fa fa-search"></i> 查詢</button>
                 <?php if ($perms['canAudit']): ?>
                 <button id="btnCheckNew" class="btn-warm"><i class="fa fa-plus"></i> 建立查檢表</button>
+                <button id="btnTypeSample" title="從選定月份的出貨資料隨機抽料號，一次建好幾張產品型態稽核表"><i class="fa fa-random"></i> 自動建立產品型態稽核表</button>
                 <?php endif; ?>
             </div>
-            <div class="ia-hint">先選<b>種類</b>，畫面才會長出該種類要填的欄位與挑題方式：<b>AS稽核查檢表</b>帶 AS9100 條文題庫、<b>系統稽核紀錄表</b>帶 AS 表單編號與名稱、<b>績效執行稽核查檢表</b>自動帶去年整年的 KPI 與達成與否。前兩種的<b>左欄標籤（部門／作業項目）只是把中間清單聚焦</b>，<b>不會自動勾選</b>；勾好的一律列在<b>最右側「已選擇」欄</b>，取消標籤不會把它們清掉。<b>系統稽核紀錄表</b>判定「不合格」的開<b>內稽不符合通知單</b>、<b>績效</b>「沒達成」的開<b>異常矯正處理單</b>；<b>AS稽核查檢表是全自動的</b>（內容唯讀、不在那張表開單，見使用說明）。</div>
+            <div class="ia-hint">先選<b>種類</b>，畫面才會長出該種類要填的欄位與挑題方式：<b>AS稽核查檢表</b>帶 AS9100 條文題庫、<b>系統稽核紀錄表</b>帶 AS 表單編號與名稱、<b>績效執行稽核查檢表</b>自動帶去年整年的 KPI 與達成與否。前兩種的<b>左欄標籤（部門／作業項目）只是把中間清單聚焦</b>，<b>不會自動勾選</b>；勾好的一律列在<b>最右側「已選擇」欄</b>，取消標籤不會把它們清掉。<b>產品型態稽核表</b>先挑一張<b>型態識別文件管制表</b>，它的項目列就是題目（不列入的不帶）。
+                <b>系統稽核紀錄表</b>與<b>產品型態稽核表</b>判定「不合格」的開<b>內稽不符合通知單</b>、<b>績效</b>「沒達成」的開<b>異常矯正處理單</b>；<b>AS稽核查檢表是全自動的</b>（內容唯讀、不在那張表開單，見使用說明）。</div>
             <!-- 能自動建立的就自動建立，人工才要填的地方主動提醒（2026-09-14 使用者要求） -->
             <div class="ia-hint" id="checkAutoHint" style="display:none;background:#FDF0DC;border-color:#F0A24B;"></div>
             <div class="ia-pager" id="checkPager"></div>
@@ -724,7 +742,27 @@ $roleLabel = ia_role_label($perms);
                 年度稽核計劃表、稽核通知單、事前／結束會議紀錄、三種查檢表、不符合通知單、<b>由內稽開立的異常矯正處理單（2-QA-01-04）</b>、稽核報告表。
                 「份數」是<b>已建立／應有</b>；應有份數由<b>年度計畫表排到的月份數</b>推，推不出來時只檢查「至少有一份」，<b>不會憑空報缺</b>。
                 狀態<b>即時由各分頁的資料算出來</b>，不需要人工勾選、也不會另外存一份，所以單據一建立或一結案，這裡立刻跟著變。
-                右側「開啟」直接切到該單據的分頁。<b>產品型態稽核表（2-DC-03-02）目前還是紙本</b>，系統判不出來，故只列出來提醒、標成「系統判不了」。</li>
+                右側「開啟」直接切到該單據的分頁。
+                <b>三個判定口徑（2026-09-22 使用者拍板）</b>：
+                ⑴<b>事前／結束會議紀錄在同一個稽核期間只需要各一份</b>——同一次稽核分兩天查會有兩張通知單，
+                會議只開一次，所以在<b>任一張通知單上建立一份</b>就算齊了（同一份掛在好幾張通知單上也只算一份）。
+                ⑵<b>稽核通知單「有沒有執行」看的是證據不是狀態欄</b>：這張通知單底下只要建了任何一張查檢表，
+                就視同已經去稽核，狀態會自動由「已發出」補成「執行中」（年度計畫表上那一格 ◎ 也才會出現）；
+                所以點檢表不會再出現「已發出，尚未執行」這種跟事實不符的字樣，剩下要做的只有<b>結案</b>。
+                ⑶<b>稽核報告表送出就是完成</b>，不需要再核准（紙本本來就沒有核准格）。</li>
+            <li><b>產品型態稽核表（2-DC-03-02）可以自動抽樣建立</b>（2026-09-22 使用者交辦）：
+                查檢表分頁工具列的<b>「自動建立產品型態稽核表」</b>——
+                勾<b>要抽哪幾個月份的出貨資料</b>（括號內是該月出貨過幾個不同料號）、填<b>抽幾筆</b>（預設 3 筆，可在設定改預設值），
+                按<b>抽樣</b>就從那些月份<b>實際出貨過的料號</b>裡隨機挑出來，每一筆可以<b>換一筆</b>或<b>移除</b>，
+                確認後按<b>建立</b>＝一個料號一張稽核表，題目就是該料號的<b>型態識別文件管制表</b>項目列。
+                <b>還沒有管制表的料號會在建立當下自動建立管制表並帶入項目</b>（外來文件／PFMEA／產品開發評估表／ERP·資材報告）；
+                <b>查不到任何文件的料號不會建立，也不會留下一張空的管制表</b>，並會在結果裡告訴您略過了哪幾筆。
+                預設<b>不會抽到本年度已經稽核過的料號</b>（可勾「連本年度已經稽核過的料號也抽」放寬），
+                也預設<b>只抽查得到文件的料號</b>（「抽樣範圍」可改成只抽已建管制表的、或全部出貨料號）。
+                <b>要固定排除某些客戶或料號</b>請到<b>設定 → 產品型態稽核表抽樣</b>：對象一律打字從主檔搜尋後點選
+                （手打一個對不上的字，那條排除永遠不會生效而且不會報錯），存的是編號不是名稱，所以主檔改名也不會失效。
+                <b>訂單號碼</b>會由「該料號最近一次出貨綁到的訂單」自動帶，<b>出貨單多半還沒做訂單綁定（實測約只有一成）</b>，
+                空白是正常的，可在表上自行填寫或留白。</li>
             <li><b>分頁會依進度逐步出現</b>：這一年還沒建<b>年度計畫表</b>時，只看得到「總覽」與「年度計畫」；
                 建了計畫表才出現<b>稽核通知單</b>，建了通知單才出現<b>查檢表／不符合通知單／稽核報告表</b>。
                 分頁上方會寫出「還差什麼」。年度一打開<b>自動停在進行中的那一年</b>（沒有進行中的才停在今年）。</li>
@@ -884,6 +922,29 @@ $roleLabel = ia_role_label($perms);
                  <div class="err-msg" id="errCaseRemark"></div>
                  <div style="margin-top:4px;"><button type="button" id="btnCaseRemarkDefault">還原內建預設文字</button>
                       <span style="font-size:12px;color:#8a6d45;margin-left:6px;" id="setCaseRemarkCnt"></span></div>
+            </div>
+        </div>
+        <div class="ia-sec"><h5>產品型態稽核表　抽樣</h5>
+            <div class="ia-hint">查檢表分頁的<b>「自動建立產品型態稽核表」</b>用的設定。
+                抽樣母體＝<b>選定月份實際出貨過的料號</b>，這裡設定的客戶與料號<b>一律不會被抽到</b>。
+                對象<b>一律從主檔挑</b>（打字搜尋後點選）——手打一個對不上的字，那條排除永遠不會生效而且完全不報錯。</div>
+            <div class="ia-form">
+                <label>預設抽幾筆</label>
+                <div><input type="text" id="setTypeN" style="width:80px;"> 筆
+                     <span style="font-size:12px;color:#8a6d45;">　1～50；抽樣跳窗每次都帶這個值，當下仍可改</span>
+                     <div class="err-msg" id="errTypeN"></div></div>
+                <label>排除客戶</label>
+                <div>
+                    <div id="exCustChips" class="ex-chips"></div>
+                    <input type="text" id="exCustKw" data-eg-skip placeholder="輸入客戶名稱或編號搜尋…" style="width:280px;">
+                    <div id="exCustRes" class="ex-res"></div>
+                </div>
+                <label>排除料號</label>
+                <div>
+                    <div id="exPartChips" class="ex-chips"></div>
+                    <input type="text" id="exPartKw" data-eg-skip placeholder="輸入料號搜尋…" style="width:280px;">
+                    <div id="exPartRes" class="ex-res"></div>
+                </div>
             </div>
         </div>
         <div class="ia-sec"><h5>會議主旨預設文字</h5>
@@ -1102,6 +1163,15 @@ $roleLabel = ia_role_label($perms);
                  同一份表單在好幾張裡都出現時<b>以不合格優先</b>。
                  <br><b style="color:#C4442D;">AS稽核查檢表建立之後內容一律唯讀</b>（合格／不合格、所見證據或建議、備註全部由系統帶入），
                  判定要更新請開啟該表按「重新自動判定」；<b>沒查到的那幾條留白即可，不影響結案</b>。</div></div>
+            <!-- 產品型態稽核表：一定要先指定「對哪一張型態識別文件管制表稽核」，題目就是它的項目列 -->
+            <label id="nkTypeDocLab">型態識別文件管制表<span style="color:#DD5138;">*</span></label>
+            <div id="nkTypeDocWrap">
+                 <select id="nkTypeDoc" data-eg-filter="輸入料號／客戶／管制表編號篩選…" style="min-width:420px;"></select>
+                 <div id="nkTypeDocInfo" class="ia-hint" style="display:none;margin-top:4px;"></div>
+                 <div class="err-msg" id="errNkTypeDoc"></div></div>
+            <label id="nkOrderNoLab">訂單號碼</label>
+            <div id="nkOrderNoWrap"><input type="text" id="nkOrderNo" style="width:220px;" data-eg-hint="例 P1150812003">
+                 <span style="font-size:12px;color:#8a6d45;">　紙本表頭上的欄位，系統裡沒有來源可推，選填。</span></div>
             <label>標題</label><div><input type="text" id="nkTitle" placeholder="留空＝用種類名稱"></div>
         </div>
         <div style="margin-top:10px;" class="nk-split">
@@ -1145,6 +1215,69 @@ $roleLabel = ia_role_label($perms);
 </div></div>
 
 <!-- ============================ 查檢表填寫 ============================ -->
+<!-- ==================== 產品型態稽核表：抽樣自動建立（2026-09-22 使用者交辦） ====================
+     「選定哪幾個月份出貨的資料 → 隨機抽料號 → 一鍵建成產品型態稽核表」。
+     抽樣範圍與預設筆數、要排除的客戶／料號都在「設定」裡由管理員維護。 -->
+<div class="ia-mask" id="typeSampleMask"><div class="ia-modal wide">
+    <div class="ia-mhead"><h4><i class="fa fa-random"></i> 自動建立產品型態稽核表（依出貨資料抽樣）</h4>
+        <span class="x" data-close>&times;</span></div>
+    <div class="ia-mbody">
+        <div class="ia-hint">從<b>選定月份實際出貨過的料號</b>裡隨機抽樣，每抽中一個料號就建一張產品型態稽核表，
+            題目＝該料號的<b>型態識別文件管制表</b>項目列。<b>還沒有管制表的會在建立當下自動建立並帶入項目</b>
+            （外來文件／PFMEA／產品開發評估表／ERP·資材報告）。
+            預設<b>不會抽到本年度已經稽核過的料號</b>，也<b>不會抽到查不到任何文件的料號</b>（那種建出來是空表）。
+            要排除某些客戶或料號請到工具列的<b>「設定」→ 產品型態稽核表抽樣</b>。
+            <b>訂單號碼</b>由「該料號最近一次出貨綁到的訂單」自動帶——<b>出貨單多半還沒做訂單綁定（實測約只有一成）</b>，
+            所以空白是正常的，可以直接在下表填或留白。</div>
+        <div class="ia-form">
+            <label>出貨月份<span style="color:#DD5138;">*</span></label>
+            <div>
+                <div id="tsMonths" style="max-height:120px;overflow:auto;border:1px solid #D8BE93;border-radius:4px;
+                     background:#fff;padding:5px 8px;min-width:420px;font-size:13px;"></div>
+                <div style="margin-top:3px;font-size:12px;color:#8a6d45;">
+                    <a href="javascript:void(0)" id="tsMonAll">全選</a>
+                    <a href="javascript:void(0)" id="tsMonNone">全不選</a>
+                    <a href="javascript:void(0)" id="tsMonYear">只選本年度</a>
+                    　括號內是該月出貨了幾個不同料號。</div>
+                <div class="err-msg" id="errTsMonth"></div>
+            </div>
+            <label>抽幾筆</label>
+            <div><input type="text" id="tsN" style="width:80px;"> 筆
+                 <span style="font-size:12px;color:#8a6d45;">　預設值在「設定」裡改（目前 <b id="tsNDef">3</b> 筆）</span>
+                 <div class="err-msg" id="errTsN"></div></div>
+            <label>抽樣範圍</label>
+            <div>
+                <select id="tsMode" style="min-width:320px;">
+                    <option value="auditable">查得到型態文件的料號（建議）</option>
+                    <option value="has_doc">只抽已經建立型態識別文件管制表的料號</option>
+                    <option value="all">全部出貨料號（可能抽到沒有文件可稽核的）</option>
+                </select>
+                <label style="font-weight:normal;margin-left:10px;cursor:pointer;font-size:13px;">
+                    <input type="checkbox" id="tsRepeat" data-eg-skip style="vertical-align:-2px;">
+                    連本年度已經稽核過的料號也抽</label>
+            </div>
+            <label>建立（稽核）日期<span style="color:#DD5138;">*</span></label>
+            <div><input type="date" id="tsDate"><div class="err-msg" id="errTsDate"></div></div>
+            <label>所屬件號</label>
+            <div><select id="tsCase" data-eg-filter="輸入件號或日期篩選…"></select>
+                 <span style="font-size:12px;color:#8a6d45;">　抽出來的每一張都掛在同一張稽核通知單底下</span></div>
+            <label>稽核人</label>
+            <div><select id="tsAuditor" data-eg-filter="輸入人員姓名篩選…"></select></div>
+        </div>
+        <div style="margin:10px 0 6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <button id="btnTsDraw" class="btn-warm"><i class="fa fa-random"></i> 抽樣</button>
+            <span id="tsPoolInfo" style="font-size:12px;color:#8a6d45;"></span>
+        </div>
+        <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
+            <th style="width:34px;">#</th><th>料號</th><th style="width:100px;">客戶</th>
+            <th style="width:64px;">出貨次數</th><th style="width:96px;">最後出貨</th>
+            <th style="width:150px;">訂單號碼</th><th>型態識別文件管制表</th><th style="width:110px;">操作</th>
+        </tr></thead><tbody id="tsBody"><tr><td colspan="8" class="ia-empty">請先選月份再按「抽樣」</td></tr></tbody></table></div>
+    </div>
+    <div class="ia-mfoot"><button data-close>取消</button>
+        <button id="btnTsCreate" class="btn-warm">建立</button></div>
+</div></div>
+
 <div class="ia-mask" id="checkMask"><div class="ia-modal wide">
     <div class="ia-mhead"><h4 id="ckTitle">查檢表</h4><span class="x" data-close>&times;</span></div>
     <div class="ia-mbody">
@@ -1155,6 +1288,12 @@ $roleLabel = ia_role_label($perms);
             <label>稽核日期</label><div><input type="date" id="ckDate"></div>
             <label>稽核人</label><div><select id="ckAuditor" data-eg-filter="輸入人員姓名篩選…"></select></div>
             <label>狀態</label><div><input type="text" id="ckStatus" readonly></div>
+            <!-- 產品型態稽核表：客戶與產品編號由來源管制表即時查，一律唯讀（改要回管制表改） -->
+            <label id="ckSrcLab">稽核對象</label>
+            <div id="ckSrcWrap"><input type="text" id="ckSrcShow" readonly style="width:100%;max-width:520px;">
+                 <div id="ckSrcHint" style="font-size:12px;color:#8a6d45;margin-top:3px;"></div></div>
+            <label id="ckOrderLab">訂單號碼</label>
+            <div id="ckOrderWrap"><input type="text" id="ckOrderNo" style="width:220px;" data-eg-hint="例 P1150812003"></div>
         </div>
         <div id="ckAutoBar" class="ia-hint" style="display:none;"></div>
         <div class="ia-table-wrap"><table class="ia-table"><thead id="ckHead"></thead><tbody id="ckBody"></tbody></table></div>
@@ -2128,7 +2267,7 @@ function loadChecklist(){
                + '<td>'+esc(r.doc_name||'')+'</td>'
                + '<td>'+esc(cnt)+'</td>'
                + '<td><span class="ck-st ck-'+esc(r.state)+'">'+esc(CK_LABEL[r.state]||r.state)+'</span></td>'
-               + '<td>'+esc(r.label||'')+note+miss+'</td>'
+               + '<td class="l ck-cur"><div class="ck-label">'+esc(r.label||'')+'</div>'+note+miss+'</td>'
                + '<td>'+go+'</td></tr>';
         });
         $('#ckBody').html(b || '<tr><td colspan="7" class="ia-empty">沒有資料</td></tr>');
@@ -3352,6 +3491,154 @@ function autoNewCheck(kind){
         }, 600);
     }, 0);
 }
+/* ============ 產品型態稽核表：抽樣自動建立（2026-09-22 使用者交辦） ============
+   「選定哪幾個月份出貨的資料 → 隨機抽料號 → 一鍵建成產品型態稽核表」。
+   抽樣、判定「建得起來嗎」與寫入一律在後端共用庫（ia_type_sample_*），
+   這裡只負責收參數與排版——兩邊各判一次遲早走鐘（鐵律4）。 */
+var TS_MONTHS = [], TS_PICKS = [], TS_META = null;
+
+function tsRenderMonths(cur){
+    var h = '';
+    TS_MONTHS.forEach(function(m){
+        var on = cur ? (cur.indexOf(m.ym) >= 0) : false;
+        h += '<label style="display:inline-block;width:150px;font-weight:normal;cursor:pointer;margin:1px 0;">'
+           + '<input type="checkbox" class="tsMon" data-eg-skip value="'+esc(m.ym)+'"'+(on?' checked':'')
+           + ' style="vertical-align:-2px;"> '+esc(m.ym)+' <span style="color:#8a6d45;">（'+(+m.parts)+'）</span></label>';
+    });
+    $('#tsMonths').html(h || '<span style="color:#C4442D;">查不到任何出貨資料</span>');
+}
+function tsCheckedMonths(){
+    return $('#tsMonths .tsMon:checked').map(function(){ return this.value; }).get();
+}
+$('#tsMonAll').on('click',  function(){ $('#tsMonths .tsMon').prop('checked', true); });
+$('#tsMonNone').on('click', function(){ $('#tsMonths .tsMon').prop('checked', false); });
+$('#tsMonYear').on('click', function(){
+    $('#tsMonths .tsMon').each(function(){ $(this).prop('checked', String(this.value).slice(0,4) === String(YEAR)); });
+});
+
+$('#btnTypeSample').on('click', function(){
+    TS_PICKS = [];
+    $('#tsBody').html('<tr><td colspan="8" class="ia-empty">請先選月份再按「抽樣」</td></tr>');
+    $('#tsPoolInfo').text(''); $('#tsDate').val(inputDate(META.today));
+    clearErrs($('#typeSampleMask'));
+    $('#tsCase').html(caseOptions(''));
+    nkSelBusy('#tsCase', true);
+    $.getJSON(API, {action:'case_list', year:YEAR}, function(res){
+        if (res && res.ok) { CASES = res.rows || []; $('#tsCase').html(caseOptions('')); }
+    }).always(function(){ nkSelBusy('#tsCase', false); });
+    nkSelBusy('#tsAuditor', true);
+    peopleAsof(META.today, function(){
+        $('#tsAuditor').html(postOptions(META.auditors, '', META.me.id, '（未指定）'));
+        nkSelBusy('#tsAuditor', false);
+    });
+    $.getJSON(API, {action:'type_sample_meta'}, function(res){
+        if (!res || !res.ok) { alert((res&&res.error)||'載入失敗'); return; }
+        TS_META = res;
+        TS_MONTHS = res.months || [];
+        $('#tsNDef').text(res.default_n);
+        $('#tsN').val(res.default_n);
+        // 預設勾「本年度、而且真的有出貨的月份」；本年度一個月都沒有就勾最近三個月
+        var cur = TS_MONTHS.filter(function(m){ return String(m.ym).slice(0,4) === String(YEAR); })
+                           .map(function(m){ return m.ym; });
+        if (!cur.length) cur = TS_MONTHS.slice(0, 3).map(function(m){ return m.ym; });
+        tsRenderMonths(cur);
+        var ex = res.excl || {};
+        var n1 = (ex.cust||[]).length, n2 = (ex.part||[]).length;
+        $('#tsPoolInfo').text((n1||n2) ? ('目前排除 '+n1+' 家客戶、'+n2+' 個料號（在「設定」裡調整）') : '');
+    });
+    openMask('typeSampleMask');
+});
+
+/* 抽樣。keep＝畫面上已經留著的那幾筆（換一筆、補抽時不可以抽到重複的）。
+   replaceIdx 有值＝只換那一列（使用者按「換一筆」），沒有＝整批重抽。 */
+function tsDraw(replaceIdx){
+    var months = tsCheckedMonths();
+    var okAll = true;
+    okAll = fieldErr($('#tsMonths'), 'errTsMonth', months.length ? '' : '請至少選一個出貨月份') && okAll;
+    var n = ($('#tsN').val()||'').trim();
+    okAll = fieldErr($('#tsN'), 'errTsN', (/^\d+$/.test(n) && +n >= 1 && +n <= 50) ? '' : '請填 1～50 的整數') && okAll;
+    if (!okAll) return;
+    var keep = TS_PICKS.map(function(p){ return p.d_id; });
+    var want = (replaceIdx === undefined) ? +n : 1;
+    if (replaceIdx !== undefined) keep = keep.filter(function(id, i){ return i !== replaceIdx; });
+    $('#btnTsDraw').prop('disabled', true);
+    $.post(API, {action:'type_sample_draw', months:JSON.stringify(months), n:want, year:YEAR,
+                 mode:$('#tsMode').val(), allow_repeat:($('#tsRepeat').prop('checked')?1:0),
+                 keep:JSON.stringify(replaceIdx === undefined ? [] : keep)}, function(res){
+        if (!res.ok) { alert(res.error||'抽樣失敗'); return; }
+        var got = res.picks || [];
+        if (!got.length) {
+            alert('這個範圍裡已經沒有可以抽的料號了。\n可以改選更多月份，或把「抽樣範圍」放寬。');
+            if (replaceIdx === undefined) { TS_PICKS = []; tsRender(); }
+            return;
+        }
+        if (replaceIdx === undefined) TS_PICKS = got;
+        else TS_PICKS[replaceIdx] = got[0];
+        $('#tsPoolInfo').text('這個範圍共有 '+(+res.pool)+' 個料號可抽，已抽出 '+TS_PICKS.length+' 筆');
+        tsRender();
+    }, 'json').always(function(){ $('#btnTsDraw').prop('disabled', false); });
+}
+$('#btnTsDraw').on('click', function(){ tsDraw(); });
+
+var TS_STATE = {ready:['可建立','#C9B18A'], will_create:['自動建立管制表','#F0A24B'],
+                will_sync:['自動同步管制表','#F0A24B'], empty:['沒有東西可稽核','#DD5138']};
+function tsRender(){
+    if (!TS_PICKS.length) {
+        $('#tsBody').html('<tr><td colspan="8" class="ia-empty">請先選月份再按「抽樣」</td></tr>');
+        return;
+    }
+    var h = '';
+    TS_PICKS.forEach(function(p, i){
+        var st = TS_STATE[p.state] || ['—','#8a6d45'];
+        h += '<tr'+(p.state==='empty'?' style="background:#FBEAE4;"':'')+'>'
+          + '<td>'+(i+1)+'</td>'
+          + '<td class="l"><b>'+esc(p.part_no||'')+'</b></td>'
+          + '<td>'+esc(p.customer_name||'')+'</td>'
+          + '<td>'+(+p.ship_cnt)+'</td>'
+          + '<td>'+dispDate(p.last_ship)+'</td>'
+          + '<td><input type="text" class="tsOrd" data-i="'+i+'" value="'+esc(p.order_no||'')+'"'
+          + ' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 4px;font-size:12px;"></td>'
+          + '<td class="l"><span class="ck-st" style="background:'+st[1]+';color:#fff;">'+esc(st[0])+'</span> '
+          + '<span style="font-size:12px;color:#8a6d45;">'+esc(p.state_text||'')+'</span></td>'
+          + '<td><span class="ia-op" onclick="tsDraw('+i+')"><i class="fa fa-refresh"></i> 換一筆</span>'
+          + '<span class="ia-op danger" onclick="tsDrop('+i+')"><i class="fa fa-times"></i> 移除</span></td></tr>';
+    });
+    $('#tsBody').html(h);
+    var can = TS_PICKS.filter(function(p){ return p.state !== 'empty'; }).length;
+    $('#btnTsCreate').text('建立 '+can+' 張').prop('disabled', can === 0);
+}
+function tsDrop(i){ TS_PICKS.splice(i, 1); tsRender(); }
+// 訂單號碼是紙本表頭的欄位，系統由「該料號最近一次出貨綁到的訂單」自動帶，改了要留住
+$(document).on('input', '.tsOrd', function(){ TS_PICKS[+$(this).data('i')].order_no = $(this).val(); });
+
+$('#btnTsCreate').on('click', function(){
+    if (!fieldErr($('#tsDate'), 'errTsDate', $('#tsDate').val() ? '' : '請填建立（稽核）日期')) return;
+    // 沒有東西可稽核的那幾筆一律不建（建出來是空表），這裡先講清楚會建哪幾張
+    var use = TS_PICKS.filter(function(p){ return p.state !== 'empty'; });
+    if (!use.length) { alert('目前抽到的料號都沒有可稽核的型態文件，請按「換一筆」重抽。'); return; }
+    var skip = TS_PICKS.length - use.length;
+    if (!confirm('要建立 '+use.length+' 張產品型態稽核表嗎？\n'
+               + use.map(function(p){ return '　・'+p.part_no+'（'+(p.customer_name||'—')+'）'; }).join('\n')
+               + (skip ? ('\n\n另有 '+skip+' 筆沒有可稽核的型態文件，不會建立。') : ''))) return;
+    $('#btnTsCreate').prop('disabled', true);
+    $.post(API, {action:'type_sample_create', check_date:$('#tsDate').val(),
+                 case_id:($('#tsCase').val()||''), auditor_key:($('#tsAuditor').val()||''),
+                 picks:JSON.stringify(use.map(function(p){ return {d_id:p.d_id, order_no:p.order_no||''}; }))},
+      function(res){
+        if (!res.ok) { alert(res.error||'建立失敗'); return; }
+        var msg = '已建立 '+(res.created||[]).length+' 張產品型態稽核表';
+        var nNew = (res.created||[]).filter(function(c){ return +c.new_doc; }).length;
+        if (nNew) msg += '\n其中 '+nNew+' 個料號原本沒有型態識別文件管制表，已一併建立';
+        if ((res.skipped||[]).length) {
+            msg += '\n\n略過 '+res.skipped.length+' 筆：\n'
+                 + res.skipped.map(function(s){ return '　・'+s.part_no+'：'+s.reason; }).join('\n');
+        }
+        alert(msg);
+        closeMask('typeSampleMask');
+        loadChecks();
+    }, 'json').always(function(){ $('#btnTsCreate').prop('disabled', false); });
+});
+
 /* 刪除查檢表（管理員限定）。已經開過不符合通知單的擋在後端，這裡先把原因講清楚。 */
 function delCheck(id){
     if (!IS_ADMIN) return;
@@ -3395,16 +3682,21 @@ var NK_KIND_HINT = {
           + '本表建立之後【內容一律唯讀】——合格／不合格、所見證據或建議、備註全部由下面勾的「系統稽核紀錄表」自動帶入，'
           + '不提供人工填寫，也不在這張表開不符合通知單（要開請回到系統稽核紀錄表）。沒查到的那幾條會留白，不影響結案。',
     system: '系統稽核紀錄表：稽核對象是「AS 表單」，清單上直接列表單編號與名稱。左欄挑部門＝把中間清單聚焦到該部門的表單（不會自動勾選），逐張勾或按「全選」；已選的表單列在最右側，取消部門不會把它們清掉。',
-    kpi:    '績效執行稽核查檢表：稽核「去年一整年」的 KPI。部門／指標／目標／受稽人（擔當者）與達成／沒達成全部自動帶入，您只要確認建立日期與要查哪幾項。'
+    kpi:    '績效執行稽核查檢表：稽核「去年一整年」的 KPI。部門／指標／目標／受稽人（擔當者）與達成／沒達成全部自動帶入，您只要確認建立日期與要查哪幾項。',
+    type:   '產品型態稽核表（2-DC-03-02）：先挑一張「型態識別文件管制表」，它的項目列就是這次要查的題目（項目名稱／生效日期／型態類別／版別文件編號全部自動帶入，被標「不列入」的不會帶）。'
+          + '預設全部勾起來，不查的自己取消。判不合格時在這張表直接開「內稽不符合通知單」。'
 };
 function kpiAuditYear(d){ var y = parseInt(String(d||META.today).substr(0,4),10)||0; return y-1; }
 function nkKindChanged(){
-    var kind = $('#nkKind').val(), isKpi = (kind==='kpi'), isAs = (kind==='as');
+    var kind = $('#nkKind').val(), isKpi = (kind==='kpi'), isAs = (kind==='as'), isType = (kind==='type');
     $('#nkKindHint').text(NK_KIND_HINT[kind]||'');
     // **不可以用 `$('#nkYearLab').closest('div')`**：label 的 closest('div') 是整個 .ia-form，
     // 一 toggle 會把種類／日期整區都藏起來（2026-09-14 踩過一次）。
     $('#nkYearLab').toggle(isKpi); $('#nkYearWrap').toggle(isKpi);
     $('#nkSrcLab').toggle(isAs);   $('#nkSrcWrap').toggle(isAs);
+    // 產品型態稽核表專屬的兩個欄位（同樣不可以用 label 的 closest('div')，那是整個 .ia-form）
+    $('#nkTypeDocLab').toggle(isType); $('#nkTypeDocWrap').toggle(isType);
+    $('#nkOrderNoLab').toggle(isType); $('#nkOrderNoWrap').toggle(isType);
     /* AS 查檢表不再顯示「所屬件號」下拉（2026-09-22 使用者要求）：
        下面的「自動判定來源」已經是逐張多選的系統稽核紀錄表，件號由它推導就好，
        再要人選一次是同一份資訊有兩個來源（鐵律4），選成不一致還完全不會報錯。 */
@@ -3626,15 +3918,47 @@ $(document).on('change', '.nkSrcChk', function(){
 });
 // 人工改過日期就不再視為「自動帶的」，換種類時不可以把他填的值蓋掉
 $('#nkDate').on('input', function(){ NK_DATE_FROM_SRC = false; });
+/* 型態識別文件管制表下拉（產品型態稽核表專用）。
+   **每次 loadBank 回來都重填**，但要保住目前選到的那一張——否則換了日期或重開跳窗，
+   使用者剛挑好的管制表會被洗掉，而且畫面上看不出來為什麼題目突然空了。 */
+function fillTypeDocs(docs, cur){
+    var sel = String($('#nkTypeDoc').val() || (cur && cur.id) || '');
+    var h = '<option value="">（請選擇要稽核的型態識別文件管制表）</option>';
+    (docs||[]).forEach(function(d){
+        h += '<option value="'+d.id+'"'+(String(d.id)===sel?' selected':'')+'>'
+           + esc((d.part_no||'（無料號）') + '　' + (d.customer_name||'—')
+                 + '　' + (d.doc_no||'') + '　（' + d.item_cnt + ' 項）') + '</option>';
+    });
+    $('#nkTypeDoc').html(h);
+    if (cur) {
+        $('#nkTypeDocInfo').html('產品編號 <b>'+esc(cur.part_no||'—')+'</b>　客戶 <b>'+esc(cur.customer_name||'—')
+            + '</b>　管制表編號 <b>'+esc(cur.doc_no||'—')+'</b>'
+            + (cur.process_summary ? ('<br>製程：'+esc(cur.process_summary)) : '')).show();
+    } else {
+        $('#nkTypeDocInfo').hide();
+    }
+}
+$('#nkTypeDoc').on('change', function(){
+    // 換一張管制表＝整份題目重來，上一張勾的不可以留著（id 是項目列 id，兩張表不會重複但語意上也不該留）
+    NK_CHECKED = {};
+    loadBank();
+});
 function loadBank(){
     var kind = $('#nkKind').val();
     NK_TASKS = []; NK_CHECKED = {}; NK_GRP_OPEN = {};   // 換種類＝重來一次，不要把上一種的勾選帶過去
     NK_AUTOPICK = false; $('#nkAutoPick').prop('checked', false);
     $('#nkTaskFilter').val('');
-    $.getJSON(API, {action:'check_bank', kind:kind, year:YEAR, check_date:$('#nkDate').val()}, function(res){
+    $.getJSON(API, {action:'check_bank', kind:kind, year:YEAR, check_date:$('#nkDate').val(),
+                    src_doc_id:(kind==='type' ? ($('#nkTypeDoc').val()||'') : '')}, function(res){
         if (!res.ok) { $('#nkPick').html('<div class="ia-empty">'+esc(res.error||'載入失敗')+'</div>'); return; }
         BANK = res.rows||[];
         NK_DEPT_CODES = res.dept_codes || {};   // AS 文件編號的部門代碼→部門名稱（標籤分類用）
+        if (kind==='type') {
+            fillTypeDocs(res.type_docs||[], res.src_doc||null);
+            /* 挑一張管制表＝「這一張的型態項目全部要查」，所以預設整份勾起來，不查的自己取消
+               （AS／系統／績效那三種是從幾十上百項裡挑幾項，預設全不勾才合理，這裡剛好相反）。 */
+            BANK.forEach(function(r){ NK_CHECKED[+r.id] = true; });
+        }
         renderBank();
     });
 }
@@ -3654,6 +3978,18 @@ function bankRow(kind, r){
                                  tip:(r.clauses||[]).map(function(c){ return c.clause_text; }).join('；'),
                                  dept:r.dept_name||'未分類',
                                  tags:[r.dept_name||'未分類'], badges:[r.dept_name||'未分類']};
+    /* 產品型態稽核表：題目＝型態識別文件管制表的項目列。
+       左欄的標籤用「型態類別」（圖面／治夾具／報告／其他文件）＝紙本上本來就有的分類。 */
+    if (kind==='type') {
+        var tcat = r.item_type_label || '未分類';
+        return {id:+r.id, hdr:false, no:'', name:r.item_name||'', dept:tcat,
+                text:r.item_name||'（未命名項目）',
+                sub:'型態類別：'+tcat
+                    +'　生效日期：'+(r.effective_date ? dispDate(r.effective_date) : '—')
+                    +'　版別／文件編號：'+(r.doc_no_text || '—')
+                    +(r.ref_broken ? '　⚠ 原本連結的文件已不存在' : ''),
+                tags:[tcat], badges:[tcat]};
+    }
     var res = r.result==='ng' ? '沒達成' : (r.result==='ok' ? '達成' : '資料不足');
     return {id:+r.indicator_id, hdr:false, no:'', name:r.name||'', dept:r.dept_name||'',
             text:(r.dept_name?r.dept_name+'　':'')+(r.name||''),
@@ -3921,7 +4257,8 @@ function renderSelBox(){
         if (!r.hdr && nkIsChecked(r)) sel.push(r);
     });
     $('#nkSelHd').text(kind==='system' ? ('已選擇的表單（'+sel.length+'）')
-                     : (kind==='as' ? ('已選擇的條文（'+sel.length+'）') : ('已選擇的指標（'+sel.length+'）')));
+                     : (kind==='as' ? ('已選擇的條文（'+sel.length+'）')
+                     : (kind==='type' ? ('已選擇的型態項目（'+sel.length+'）') : ('已選擇的指標（'+sel.length+'）'))));
     $('#nkSelSub').text(sel.length ? '取消左側標籤不會影響這裡；按 × 可單筆取消。'
                                    : '從中間清單勾選，這裡就會列出來。');
     if (!sel.length) {
@@ -3980,6 +4317,10 @@ $('#btnCheckCreate').on('click', function(){
     var kind = $('#nkKind').val(), ok = true;
     ok = fieldErr($('#nkDate'), 'errNkDate', $('#nkDate').val() ? '' : '請填建立（稽核）日期') && ok;
     // 篩選中被藏起來的項目仍然算數（否則使用者打了關鍵字就只會建出看得到的那幾題）
+    if (kind==='type') {
+        ok = fieldErr($('#nkTypeDoc'), 'errNkTypeDoc',
+                      $('#nkTypeDoc').val() ? '' : '請選擇要稽核的型態識別文件管制表') && ok;
+    }
     var p = nkPicked(), picked = p.ids, real = p.real;
     if (!real) { $('#errNkPick').addClass('on').text('請至少勾選一個要查核的項目'); ok = false; }
     if (!ok) return;
@@ -3990,6 +4331,8 @@ $('#btnCheckCreate').on('click', function(){
         src_check_ids:(kind==='as'
             ? JSON.stringify($('#nkSrcList .nkSrcChk:checked').map(function(){ return +this.value; }).get())
             : '[]'),
+        src_doc_id:(kind==='type' ? ($('#nkTypeDoc').val()||'') : ''),
+        order_no:(kind==='type' ? $('#nkOrderNo').val() : ''),
         pick:JSON.stringify(picked)}, function(res){
         if (!res.ok) { alert(res.error||'建立失敗'); return; }
         closeMask('checkNewMask');
@@ -4032,6 +4375,22 @@ function openCheck(id){
         $('#ckAuditor').prop('disabled', ro);
         /* AS稽核查檢表的內容是系統自動帶的：不給補加項目（題目在建立當下決定），
            改用「重新自動判定」重新選一次來源。可用條件與後端 can_edit 同一條（鐵律8）。 */
+        /* 產品型態稽核表的表頭：客戶／產品編號一律由來源管制表即時查、唯讀
+           （要改請到型態識別文件管制表改，這裡存快照就會出現兩份對不起來的資料＝鐵律4）。 */
+        var isType = (CHK.kind === 'type');
+        $('#ckSrcLab,#ckSrcWrap,#ckOrderLab,#ckOrderWrap').toggle(isType);
+        if (isType) {
+            var sd = CHK.src_doc || null;
+            $('#ckSrcShow').val(sd ? ((sd.part_no||'（無料號）')
+                                      + '　客戶：' + (sd.customer_name||'—')
+                                      + '　管制表：' + (sd.doc_no||'—')) : '');
+            $('#ckSrcHint').html(sd
+                ? ('題目取自這一張<b>型態識別文件管制表</b>；客戶與產品編號由它即時帶入，'
+                   + '要改請到 <a href="../TD/type_id_ctrl_doc.php?kw='
+                   + encodeURIComponent(sd.doc_no||'') + '" target="_blank" rel="noopener">型態識別文件管制表</a> 修改。')
+                : '<span style="color:#C4442D;">來源的型態識別文件管制表已被刪除，表頭的客戶與產品編號印不出來。</span>');
+            $('#ckOrderNo').val(CHK.order_no||'').prop('readonly', ro);
+        }
         var asLock = (CHK.kind === 'as');
         $('#btnCheckSave,#btnCheckDone').toggle(!ro);
         $('#btnCheckAddItem').toggle(!ro && !asLock);
@@ -4091,7 +4450,9 @@ $('#ckAuditor').on('change', function(){
 var CK_HEADS = {
     as:     ['項次','品質管理系統要求','建立的文件、表單','合格','不合格','所見證據或建議','備註'],
     system: ['序號','表單編號','表單名稱','受稽人','合格','不合格','備註（內稽不符合通知單編號）'],
-    kpi:    ['序','部門','內容','目標','受稽人','達成','沒達成','備註（異常矯正處理單編號）']
+    kpi:    ['序','部門','內容','目標','受稽人','達成','沒達成','備註（異常矯正處理單編號）'],
+    // 產品型態稽核表＝紙本 2-DC-03-02 的欄位，只多「審查結果」＝合格／不合格兩欄
+    type:   ['項次','型態項目名稱','型態生效日期','型態類別','版別／文件編號','合格','不合格','備註（內稽不符合通知單編號）']
 };
 function renderCheckItems(){
     var k = CHK.kind, ro = !CHK.can_edit;
@@ -4128,6 +4489,14 @@ function renderCheckItems(){
               + (fro?' readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;'
               + 'padding:2px 4px;font-size:12px;'+lockCss+'"></td>'
               + '<td>'+remark+ncBtn+'</td>';
+        } else if (k==='type') {
+            /* 四個資料欄都來自型態識別文件管制表，一律唯讀＝在這裡改不會回寫管制表，
+               改了只會讓兩邊對不起來。稽核員要填的只有「合格／不合格」與備註。 */
+            h += '<td>'+n+'</td><td class="l">'+esc(it.col_a||'')+'</td>'
+              + '<td>'+(it.col_b ? dispDate(it.col_b) : '')+'</td>'
+              + '<td>'+esc(it.col_c||'')+'</td>'
+              + '<td class="l" style="font-size:12px;color:#7a6444;">'+esc(it.col_d||'')+'</td>'
+              + '<td>'+okChk+'</td><td>'+ngChk+'</td><td>'+remark+ncBtn+'</td>';
         } else if (k==='system') {
             h += '<td>'+n+'</td><td>'+esc(it.col_a)+'</td><td class="l">'+esc(it.col_b||'')+'</td>'
               + '<td><select class="ckF ckWho" data-id="'+it.item_id+'" data-f="auditee_key"'+(ro?' disabled':'')
@@ -4243,7 +4612,8 @@ $('#btnCheckAddItem').on('click', function(){
     var year = (CHK.kind==='kpi') ? '' : CHK.year;
     $('#ckAddList').html('<div style="color:#a08356;">載入題庫中…</div>');
     $('#ckAddKw').val(''); openMask('ckAddMask');
-    $.getJSON(API, {action:'check_bank', kind:CHK.kind, year:year || String(CHK.check_date||'').slice(0,4)}, function(res){
+    $.getJSON(API, {action:'check_bank', kind:CHK.kind, year:year || String(CHK.check_date||'').slice(0,4),
+                    src_doc_id:(CHK.kind==='type' ? (CHK.src_doc_id||'') : '')}, function(res){
         if (!res.ok) { $('#ckAddList').html('<div style="color:#C4442D;">'+esc(res.error||'載入失敗')+'</div>'); return; }
         // 這張表已經有的就不要再列出來
         var have = {};
@@ -4259,14 +4629,20 @@ $('#btnCheckAddItem').on('click', function(){
 function ckBankRefKind(){
     // 必須與 ia_check_build_items() 寫進 ia_check_item.ref_kind 的值一字不差，
     // 不然「這張表已經有的」會濾不掉，補加時就會出現兩列一模一樣的項目
-    return CHK.kind==='as' ? 'as_clause' : (CHK.kind==='system' ? 'as_document' : 'kpi_indicator');
+    return CHK.kind==='as' ? 'as_clause'
+         : (CHK.kind==='system' ? 'as_document'
+         : (CHK.kind==='type' ? 'type_item' : 'kpi_indicator'));
 }
 function ckBankId(r){
-    return CHK.kind==='as' ? r.clause_id : (CHK.kind==='system' ? r.id : r.indicator_id);
+    return CHK.kind==='as' ? r.clause_id
+         : (CHK.kind==='system' ? r.id
+         : (CHK.kind==='type' ? r.id : r.indicator_id));
 }
 function ckBankLabel(r){
     if (CHK.kind==='as')     return (r.clause_text||'');
     if (CHK.kind==='system') return (r.doc_no||'') + '　' + (r.doc_name||'');
+    if (CHK.kind==='type')   return (r.item_name||'') + '　' + (r.item_type_label||'')
+                                  + (r.doc_no_text ? ('　'+r.doc_no_text) : '');
     return (r.dept_name||'') + '　' + (r.name||'');
 }
 function renderCkAdd(){
@@ -4503,9 +4879,12 @@ function collectCheckItems(){
 }
 $('#btnCheckSave').on('click', function(){ saveCheck(false); });
 function saveCheck(silent, cb){
-    $.post(API, {action:'check_save_items', check_id:CHK.check_id, title:$('#ckTitleInput').val(),
+    var pd = {action:'check_save_items', check_id:CHK.check_id, title:$('#ckTitleInput').val(),
         check_date:$('#ckDate').val(), auditor_key:($('#ckAuditor').val()||''),
-        items:JSON.stringify(collectCheckItems())}, function(res){
+        items:JSON.stringify(collectCheckItems())};
+    // 只有產品型態稽核表才送訂單號碼；其他種類**完全不送這個欄位**＝後端一個字都不會動它
+    if (CHK.kind === 'type') pd.order_no = $('#ckOrderNo').val();
+    $.post(API, pd, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         if (!silent) iaToast('已儲存' + (+res.resorted ? '（已依受稽人部門、表單編號重新排序）' : ''));
         loadChecks();
@@ -4568,6 +4947,26 @@ function newNcFromItem(itemId){
 function ncPrefillFromItem(it){
     var sysNo = CHK.kind==='system' ? (it.col_a||'') : '';
     var dept  = CHK.kind==='kpi' ? (it.col_a||'') : (it.dept_name||'');
+    /* 產品型態稽核表：不合格的是「這個料號的某一份型態文件」，所以相關表單欄位帶的是
+       該列的版別／文件編號與型態項目名稱（不是 2-DC-03-02 本身——那是稽核用的表，不是出問題的文件）。
+       受稽核單位系統推不出來（管制表上沒有部門），留給稽核員在開單畫面自己選。 */
+    if (CHK.kind === 'type') {
+        var sd = CHK.src_doc || {};
+        return {
+            case_id: CHK.case_id || '',
+            audit_date: inputDate(CHK.check_date),
+            src_kind: 'type', src_item_id: it.item_id,
+            ref_form_no: it.col_d || '',
+            ref_form_name: it.col_a || '',
+            clause_ref: '',
+            clauses: [],
+            fact: '產品型態稽核（料號 ' + (sd.part_no || '—') + '）型態項目「' + (it.col_a || '') + '」'
+                + (it.col_c ? ('（' + it.col_c + '）') : '') + '稽核不合格'
+                + (it.col_d ? ('，版別／文件編號 ' + it.col_d) : ''),
+            auditee_name: '', auditee_id: '',
+            dept_hint: '', dept_id: '', due_date: ''
+        };
+    }
     return {
         case_id: CHK.case_id || '',
         audit_date: inputDate(CHK.check_date),
@@ -5408,10 +5807,86 @@ $('#btnSetting').on('click', function(){
     $('#setMeetEnd').val(s.ia_meeting_end_subject||'');
     $('#setMeetPlace').val(s.ia_meeting_place||'');
     $('#setCaseRemark').val(s.ia_case_remark_tpl||'');
+    $('#setTypeN').val(s.ia_type_sample_n||'3');
+    exLoad();                              // 排除客戶／料號（名稱即時查主檔，不存快照）
     clearErrs($('#settingMask'));
     caseRemarkCnt();                       // clearErrs 之後才算，否則紅字會被清掉
     openMask('settingMask');
 });
+/* ---------- 產品型態稽核表抽樣：排除客戶／料號（2026-09-22 使用者交辦） ----------
+   對象一律從主檔挑（打字搜尋→點選→變成標籤），**存的是 id 不是名稱**：
+   存名稱下來，主檔改名之後這條排除會繼續顯示舊名稱而且安靜地不再命中（鐵律4）。 */
+var EXCL = {cust: [], part: []};
+var EXCL_TIMER = {};
+function exRender(dim){
+    var rows = EXCL[dim] || [], h = '';
+    rows.forEach(function(r, i){
+        var main = (dim === 'cust') ? (r.name || '') : (r.part_no || '');
+        var sub  = (dim === 'cust') ? r.id : (r.customer_name || '');
+        h += '<span class="ex-chip">'+esc(main)
+           + (sub ? ('<span class="sub">'+esc(sub)+'</span>') : '')
+           + '<a href="javascript:void(0)" data-dim="'+dim+'" data-i="'+i+'" class="ex-del">×</a></span>';
+    });
+    $('#ex'+(dim==='cust'?'Cust':'Part')+'Chips')
+        .html(h || '<span style="font-size:12px;color:#a08356;">（沒有排除任何'+(dim==='cust'?'客戶':'料號')+'）</span>');
+}
+$(document).on('click', '.ex-del', function(){
+    var dim = String($(this).data('dim'));
+    EXCL[dim].splice(+$(this).data('i'), 1);
+    exRender(dim);
+});
+function exSearch(dim){
+    var $kw = $('#ex'+(dim==='cust'?'Cust':'Part')+'Kw');
+    var $res = $('#ex'+(dim==='cust'?'Cust':'Part')+'Res');
+    var kw = ($kw.val()||'').trim();
+    if (kw.length < 1) { $res.hide().empty(); return; }
+    $.getJSON(API, {action:'type_excl_search', dim:dim, kw:kw}, function(res){
+        if (!res || !res.ok) { $res.hide(); return; }
+        var rows = res.rows || [];
+        if (!rows.length) { $res.show().html('<div class="ex-none">查不到符合的'+(dim==='cust'?'客戶':'料號')+'</div>'); return; }
+        var h = '';
+        rows.forEach(function(r){
+            h += '<div class="ex-row" data-dim="'+dim+'" data-id="'+esc(r.id)+'" data-name="'+esc(r.name||'')
+               + '" data-sub="'+esc(r.sub||'')+'">'+esc(r.name||'')
+               + (r.sub ? (' <span class="sub">'+esc(r.sub)+'</span>') : '')
+               + (dim==='cust' ? (' <span class="sub">'+esc(r.id)+'</span>') : '') + '</div>';
+        });
+        $res.show().html(h);
+    });
+}
+$('#exCustKw,#exPartKw').on('input', function(){
+    var dim = (this.id === 'exCustKw') ? 'cust' : 'part';
+    clearTimeout(EXCL_TIMER[dim]);
+    EXCL_TIMER[dim] = setTimeout(function(){ exSearch(dim); }, 250);
+});
+$(document).on('click', '.ex-row', function(){
+    var dim = String($(this).data('dim')), id = String($(this).data('id'));
+    var dup = (EXCL[dim]||[]).some(function(r){
+        return String(dim === 'cust' ? r.id : r.d_id) === id;
+    });
+    if (!dup) {
+        if (dim === 'cust') EXCL.cust.push({id:id, name:String($(this).data('name')||'')});
+        else EXCL.part.push({d_id:+id, part_no:String($(this).data('name')||''),
+                             customer_name:String($(this).data('sub')||'')});
+        exRender(dim);
+    }
+    $('#ex'+(dim==='cust'?'Cust':'Part')+'Kw').val('');
+    $('#ex'+(dim==='cust'?'Cust':'Part')+'Res').hide().empty();
+});
+/** 開設定跳窗時把目前的排除清單讀回來（名稱是後端即時查主檔給的，不是存下來的） */
+function exLoad(){
+    EXCL = {cust: [], part: []};
+    exRender('cust'); exRender('part');
+    $('#exCustKw,#exPartKw').val('');
+    $('#exCustRes,#exPartRes').hide().empty();
+    $.getJSON(API, {action:'type_sample_meta'}, function(res){
+        if (!res || !res.ok) return;
+        EXCL.cust = (res.excl && res.excl.cust) || [];
+        EXCL.part = (res.excl && res.excl.part) || [];
+        exRender('cust'); exRender('part');
+        $('#setTypeN').val(res.default_n);
+    });
+}
 function pickAsDoc(key){
     if (!window.EGAsDoc) { alert('AS 文件挑選器未載入'); return; }
     var docs = META.as_doc_list || [];
@@ -5459,6 +5934,10 @@ $('#btnSettingSave').on('click', function(){
     var v = $('#setRemindDays').val().trim();
     if (!(v==='' || (/^\d+$/.test(v) && +v<=365))) { fieldErr($('#setRemindDays'),'errRemindDays','請填 0～365 的整數'); return; }
     if (caseRemarkCnt() > 2000) { $('#setCaseRemark').focus(); return; }
+    var tn = ($('#setTypeN').val()||'').trim();
+    if (!(/^\d+$/.test(tn) && +tn >= 1 && +tn <= 50)) {
+        fieldErr($('#setTypeN'), 'errTypeN', '請填 1～50 的整數'); $('#setTypeN').focus(); return;
+    }
     var jobs = [
         ['ia_stamp_tpl_id',       $('#setStampTpl').val()],
         ['ia_sign_approve',       $('#setSignApprove').val()],
@@ -5469,7 +5948,11 @@ $('#btnSettingSave').on('click', function(){
         ['ia_meeting_pre_subject',$('#setMeetPre').val()],
         ['ia_meeting_end_subject',$('#setMeetEnd').val()],
         ['ia_meeting_place',      $('#setMeetPlace').val()],
-        ['ia_case_remark_tpl',    $('#setCaseRemark').val().replace(/\r\n/g,'\n')]
+        ['ia_case_remark_tpl',    $('#setCaseRemark').val().replace(/\r\n/g,'\n')],
+        // 產品型態稽核表抽樣：預設筆數與排除清單（排除清單一律只存 id）
+        ['ia_type_sample_n',      tn],
+        ['ia_type_excl_cust',     JSON.stringify((EXCL.cust||[]).map(function(r){ return String(r.id); }))],
+        ['ia_type_excl_part',     JSON.stringify((EXCL.part||[]).map(function(r){ return +r.d_id; }))]
     ];
     var done = 0, failed = '', backfill = null;
     jobs.forEach(function(j){
@@ -6155,7 +6638,9 @@ function printCheck(id){
                次別與日期改印在標題下方那一列，與稽核人、日期同一行。 */
             /* AS稽核查檢表**預設 A4 橫式**（2026-09-22 使用者要求）：那張表的「所見證據或建議」
                是系統自動帶進來的一整串表單編號與名稱，直式印會一直換行把列撐高、印不進一頁。 */
-            var land = (k.kind === 'as');
+            /* 產品型態稽核表也用 A4 橫式：8 個欄位裡有「型態項目名稱」與「版別／文件編號」
+               兩個長字串欄，直式會一直換行把列撐高。 */
+            var land = (k.kind === 'as' || k.kind === 'type');
             var h = printHead(m, k.kind_label || m.doc_name || k.title);
             /* 日期一律 YYYY.MM.DD（ai-rules/20；2026-09-22 使用者指出績效執行稽核查檢表印成
                「2026 年 01 月 05 日」）——走共用的 dispDate()，與右下角圖章上的日期同一種寫法。 */
@@ -6163,16 +6648,29 @@ function printCheck(id){
                + '<span>稽核人: '+esc(k.auditor_name||'')+'</span>'
                + (k.title ? '<span style="margin-left:18px;">'+esc(k.title)+'</span>' : '')
                + '<span style="float:right;">'+esc(dispDate(k.check_date))+'</span></div>';
+            /* 產品型態稽核表的表頭（照紙本 2-DC-03-02）：客戶／訂單號碼／件號。
+               客戶與產品編號來自綁定的型態識別文件管制表，件號＝所屬稽核通知單的稽核件號。 */
+            if (k.kind === 'type') {
+                var sd = k.src_doc || {};
+                h += '<div style="font-size:12px;margin-bottom:5px;overflow:hidden;">'
+                   + '<span>客戶: '+esc(sd.customer_name||'')+'</span>'
+                   + '<span style="margin-left:18px;">產品編號: '+esc(sd.part_no||'')+'</span>'
+                   + '<span style="margin-left:18px;">訂單號碼: '+esc(k.order_no||'')+'</span>'
+                   + '<span style="float:right;">件號: '+esc(k.case_no||'')+'</span></div>';
+            }
             h += '<table class="ia-p"><thead><tr>';
             var heads = (k.kind==='as')
                 ? ['項次','品質管理系統要求','建立的文件、表單','合格','不合格','所見證據或建議']
                 : (k.kind==='system')
                     ? ['序號','表單編號','表單名稱','受稽人','合格','不合格','備註']
-                    : ['序','部門','內容','目標','受稽人','達成','沒達成','備註(異常矯正處理單編號)'];
+                    : (k.kind==='type')
+                        ? ['項次','型態項目名稱','型態生效日期','型態類別','版別／文件編號','合格','不合格','備註']
+                        : ['序','部門','內容','目標','受稽人','達成','沒達成','備註(異常矯正處理單編號)'];
             /* AS 是橫式，寬度多出來就分給「建立的文件、表單」與「所見證據或建議」（兩欄都是長字串）。
                2026-09-22 使用者要求：「建立的文件、表單」再寬一點、「所見證據或建議」窄一點。 */
             var widths = (k.kind==='as') ? ['34px','','265px','36px','40px','200px']
                        : (k.kind==='system') ? ['34px','86px','','66px','36px','40px','92px']
+                       : (k.kind==='type') ? ['34px','','86px','62px','200px','36px','44px','120px']
                        : ['28px','62px','','76px','60px','36px','44px','110px'];
             heads.forEach(function(t,i){ h += '<th'+(widths[i]?(' style="width:'+widths[i]+';"'):'')+'>'+esc(t)+'</th>'; });
             h += '</tr></thead><tbody>';
@@ -6189,6 +6687,12 @@ function printCheck(id){
                     h += '<tr><td>'+n+'</td><td class="l">'+esc(it.col_a)+'</td>'
                       + '<td class="pre" style="font-size:11px;">'+esc(it.col_b||'')+'</td>'
                       + '<td>'+okM+'</td><td>'+ngM+'</td><td class="pre">'+esc(it.evidence||'')+'</td></tr>';
+                } else if (k.kind==='type') {
+                    h += '<tr><td>'+n+'</td><td class="l">'+esc(it.col_a||'')+'</td>'
+                      + '<td>'+(it.col_b ? dispDate(it.col_b) : '')+'</td>'
+                      + '<td>'+esc(it.col_c||'')+'</td><td class="l">'+esc(it.col_d||'')+'</td>'
+                      + '<td>'+okM+'</td><td>'+ngM+'</td>'
+                      + '<td>'+esc(it.nc_no || it.remark || '')+'</td></tr>';
                 } else if (k.kind==='system') {
                     h += '<tr><td>'+n+'</td><td>'+esc(it.col_a||'')+'</td><td class="l">'+esc(it.col_b||'')+'</td>'
                       + '<td>'+esc(it.col_c||'')+'</td><td>'+okM+'</td><td>'+ngM+'</td>'
@@ -6208,9 +6712,19 @@ function printCheck(id){
                說明文字擺左、圖章擺右，一列裝得下；圖章尺寸不受影響（ai-rules/18）。 */
             h += '<tr class="sig-row"><td colspan="'+heads.length+'" class="l">'
                + '<div class="sig-row-in"><div class="sig-note">'
-               + (k.kind==='as' ? '' : '確認項目及結果；以「V」表示之。') + '</div>'
+               + (k.kind==='as' ? ''
+                  : k.kind==='type'
+                    ? '※若審查通過則應填寫合格；若審查不通過則需填上不合格並附註內稽不符合通知單單號。'
+                    : '確認項目及結果；以「V」表示之。') + '</div>'
                // 2026-08-27 使用者要求：稽核員的簽章跟一般表格的「製表」一樣靠右，不要放左下角
-               + '<div class="sig-who">稽核員: <span class="stamp-inline">'
+               + '<div class="sig-who">'
+               /* 產品型態稽核表的紙本左下角還有一格「核准」（其餘三種查檢表只有稽核員）。
+                  核准人走設定裡的「核准」簽章格，與年度計畫表同一個來源，不寫死人名。 */
+               + (k.kind === 'type'
+                  ? ('核准: <span class="stamp-inline">'
+                     + stampHtml(m, m.sign_approve, k.check_date) + '</span>　　')
+                  : '')
+               + '稽核員: <span class="stamp-inline">'
                + stampHtml(m, sp(k.auditor_id, k.auditor_name, k.check_date), k.check_date)
                + '</span></div></div></td></tr>';
             h += '</tbody></table>';

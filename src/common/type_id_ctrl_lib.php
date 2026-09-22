@@ -15,6 +15,49 @@
 // 放在檔案層級載入，不再散在各函式內 require——漏一處就是那支函式突然找不到函式）
 require_once __DIR__ . '/bom_dir_lib.php';
 
+/* 型態類別與連結來源的顯示標籤 —— 唯一登記處。
+   原本寫在 src/store/ConfigIdDoc_API.php，但 2026-09-22 起內部稽核的「產品型態稽核表」
+   也要照同一份標籤把管制表的項目列帶進查檢表，兩邊各留一份遲早走鐘（鐵律4），故收斂到共用庫；
+   ConfigIdDoc_API 原本的 TYPE_LABELS／SOURCE_LABELS 改成指向這裡，既有呼叫端一行都不必改。 */
+const TIC_TYPE_LABELS   = ['drawing' => '圖面', 'jig' => '治夾具', 'report' => '報告', 'other' => '其他文件'];
+const TIC_SOURCE_LABELS = ['part' => '外來文件', 'quote' => '外來文件', 'dev_eval' => '產品開發評估表',
+                           'pfmea' => 'PFMEA', 'bomfile' => 'ERP/資材報告'];
+
+/** 組出單筆項目列的顯示資料（即時解析連結，不快照）。原 ConfigIdDoc_API::buildItemView() */
+function type_id_ctrl_item_view(PDO $db, array $it): array {
+    $linked = null;
+    // bomfile 來源沒有 attach_id，識別鍵是檔名（見本檔 type_id_ctrl_resolve_ref 的說明）
+    $hasRef = $it['ref_source'] && ($it['ref_attach_id'] || ($it['ref_source'] === 'bomfile' && !empty($it['ref_file_name'])));
+    if ($hasRef) {
+        $linked = type_id_ctrl_resolve_ref($db, $it['ref_source'], (int)$it['ref_attach_id'], (int)$it['ref_ds_pk'], $it['ref_file_name'] ?? null);
+    }
+    return [
+        'id' => (int)$it['id'],
+        'seq' => (int)$it['seq'],
+        'item_name' => $it['item_name'],
+        'item_type' => $it['item_type'],
+        'item_type_label' => TIC_TYPE_LABELS[$it['item_type']] ?? '其他文件',
+        'process_tag' => $it['process_tag'] ?? null,
+        'need_process_hint' => !empty($it['need_process_hint']),
+        'is_linked' => $linked !== null,
+        'is_excluded' => !empty($it['is_excluded']),
+        'ref_source' => $it['ref_source'],
+        'ref_source_label' => $it['ref_source'] ? (TIC_SOURCE_LABELS[$it['ref_source']] ?? '自動帶入') : '',
+        'ref_attach_id' => $it['ref_attach_id'] ? (int)$it['ref_attach_id'] : null,
+        'ref_ds_pk' => $it['ref_ds_pk'] ? (int)$it['ref_ds_pk'] : null,
+        'ref_file_name' => $it['ref_file_name'] ?? null,
+        'ref_bom_tag' => $it['ref_bom_tag'] ?? null,
+        'ref_broken' => ($hasRef && $linked === null), // 曾連結但來源已消失
+        'effective_date' => $linked ? $linked['doc_date'] : $it['manual_effective_date'],
+        'doc_no_text' => $linked ? $linked['doc_name'] : $it['manual_doc_no'],
+        // 列印版：連結列若沒有真正版次、退回顯示檔名時，檔名不算真正的「版別／文件編號」，
+        // 列印不印（畫面上仍用 doc_no_text 顯示檔名以利辨識；手動輸入列一律視為真實文件編號）
+        'print_doc_no' => ($linked && !empty($linked['doc_no_is_filename'])) ? '' : ($linked ? $linked['doc_name'] : $it['manual_doc_no']),
+        'file_url' => $linked ? $linked['file_url'] : null,
+    ];
+}
+
+
 function type_id_ctrl_ensure_schema(PDO $db): void {
     $db->exec("CREATE TABLE IF NOT EXISTS type_id_ctrl_doc (
         id INT AUTO_INCREMENT PRIMARY KEY,
