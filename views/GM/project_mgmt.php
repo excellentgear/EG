@@ -222,6 +222,20 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         .pj-noperm { border:1.5px solid #E8D5B5; background:#FDF8EF; border-radius:8px; padding:24px; color:#5b3a1e; }
         .pj-totop { position:fixed; right:24px; bottom:24px; width:40px; height:40px; border-radius:20px; background:#F0A24B;
             color:#fff; border:none; font-size:18px; cursor:pointer; display:none; z-index:8000; }
+        /* 凍結表頭（使用者要求）：訂單轉專案的候選清單捲動時表頭要留在上面。
+           sticky 是黏在**捲動容器的 padding box 邊緣**，所以容器不可以有上內距
+           （有的話資料列會從那段內距底下穿過表頭，已在別的模組踩過）；
+           表頭還要補不透明底色與 z-index，否則會被資料列蓋過去。 */
+        .pj-freeze { max-height:280px; overflow:auto; padding:0;
+                     border:1px solid #EADFC8; border-radius:4px; }
+        .pj-freeze thead th { position:sticky; top:0; z-index:3; background:#F7EFE0;
+                              box-shadow:inset 0 -1px 0 #D8BE93; }
+
+        /* 自動偵測提示條 */
+        .pj-auto-bar { background:#FBF3E6; border:1px solid #E0C9A2; border-radius:6px;
+                       padding:8px 10px; margin-bottom:8px; font-size:12.5px; line-height:1.8; color:#5b3a1e; }
+        .pj-auto-bar .fa-magic { color:#C97B2E; }
+
         /* 訂單轉專案的資料完整度小籤（ai-rules/10 暖色系；td span 一定要自己指定 line-height，
            Gentelella 全站 td span{line-height:28px} 會把整列撐高，已踩過三次） */
         .rdy { display:inline-block; font-size:10px; line-height:16px; padding:0 5px; border-radius:3px;
@@ -361,7 +375,7 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
                 <b>完整度只認「這張訂單接單日之後」的製令／出貨／報工</b>——那些才是這張訂單自己產生的資料；
                 用全部歷史去算的話，重複下單的料號會每一列都 100%、完全分不出差別。
                 （料號附件是料號本身的屬性，不跟著訂單日篩。<b>檢驗表目前還沒有電子化</b>，只標示、不列入計算。）</p>
-            <div style="max-height:280px;overflow:auto;border:1px solid #EADFC8;border-radius:4px;">
+            <div class="pj-freeze">
                 <table class="sub-tbl" id="oTable">
                     <thead><tr>
                         <th style="width:28px;"><input type="checkbox" id="oCkAll" data-eg-skip="1"></th>
@@ -660,6 +674,15 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
                 </ul>
                 <b>首件檢驗與最終檢驗目前沒有電子化</b>，請品管直接填日期並<b>上傳附件佐證</b>（每個步驟都可以傳）。
                 多筆佐證時會全部列出來讓你自己挑，系統不會替你決定是哪一筆。</li>
+            <li><b>「自動偵測」那一欄就是系統抓到的完成日</b>（切到「清單」檢視就看得到，不必先點開回報）。
+                系統<b>刻意不自動幫你填進去</b>——同一個專案常有好幾張製令、好幾份圖面附件，
+                挑哪一筆是猜的；按「回報」會把偵測到的每一筆都列出來，按「採用」才寫入。</li>
+            <li><b>進度%</b>＝這一步完成到幾成。底下的「<b>自動</b>」勾起來時不用自己填：
+                填了實際完成日就是 100%、還沒完成就是 0%；你手動改過數字，「自動」會自己取消勾選、之後以你填的為準。
+                <b>專案整體進度＝所有步驟進度的平均。</b></li>
+            <li><b>里程碑</b>＝這一步是專案的關鍵查核點（例如首件檢驗通過）。勾起來後時間軸上不畫長條、
+                改畫一個 <b>◆</b> 菱形，列印的執行規劃表也會標 ◆。
+                <b>純粹是標記，不影響進度計算與任何判定</b>，只是讓人一眼看出哪幾步是關鍵。</li>
             <li><b>實際日期要等立案核准後才能填</b>（草稿／已退回的專案還沒正式成案）。</li>
             <li>勾「<b>隱藏已完成的步驟</b>」只看還沒做完的；這個勾選和專案清單上的那一個是同一個。</li>
             <li>專案清單上點專案代號旁的 <b>▸</b> 可以<b>就地展開</b>看進度，不必開專案。</li>

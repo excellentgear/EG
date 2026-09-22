@@ -626,12 +626,34 @@ function renderPlan(res) {
                       + '<button id="btnGoalAdd"><i class="fa fa-plus"></i> 新增目標</button>'
                       + '<button class="btn-warm" id="btnPlanSave"><i class="fa fa-save"></i> 儲存規劃表</button>' : '')
       + '</div>'
+      + autoEvidenceBar(res)
       + '<div id="ganttBox"></div>'
       + '<div id="planEditBox"' + (res.can_edit ? '' : ' style="display:none;"') + '></div>';
     $('#panePlan').html(h);
     drawGantt(res);
     if (res.can_edit) drawPlanEditor(res);
 }
+
+/** 執行規劃表上方的提示條：系統偵測到幾個步驟的完成日佐證。
+ *  編輯檢視看不到「自動偵測」那一欄，只放在清單檢視的話使用者根本不知道有這個功能
+ *  （2026-09-22 使用者問「這些功能有做嗎」就是因為看不到）。 */
+function autoEvidenceBar(res) {
+    var tasks = res.tasks || [];
+    if (!tasks.length || !res.evidence) return '';
+    var hit = 0, done = 0;
+    $.each(tasks, function (i, t) {
+        if (t.act_end) { done++; return; }
+        if (autoHintOf(t)) hit++;
+    });
+    if (!hit) return '';
+    return '<div class="pj-auto-bar"><i class="fa fa-magic"></i> '
+      + '系統已自動偵測到 <b>' + hit + '</b> 個步驟的完成日佐證'
+      + (done ? '（另有 ' + done + ' 個步驟已回報）' : '')
+      + '：製令開立日、圖面發行章日期、PFMEA／SOP／SIP 表單日期、客供料回廠日、報工架機與完工日。'
+      + '切到<b>「清單」檢視</b>可以看到每一步偵測到什麼，按「回報」逐筆確認後採用。'
+      + '<span class="pj-op" id="btnGoList">切到清單檢視</span></div>';
+}
+$(document).on('click', '#btnGoList', function () { $('#gView').val('list').trigger('change'); });
 
 /* ── 甘特時間軸 ──
    drawGantt() 只是把 ganttHtml() 的結果塞進 #ganttBox；
@@ -778,13 +800,14 @@ function drawGanttList(res) {
       + '<th style="width:34px;">項次</th><th>目標／主要任務</th><th style="width:84px;">負責人</th>'
       + '<th style="width:170px;">預計</th><th style="width:170px;">實際</th>'
       + '<th style="width:96px;">進度</th><th style="width:82px;">狀態</th>'
+      + '<th style="width:150px;" title="系統從製令/圖面/SOP/SIP/報工等資料自動偵測到的完成日">自動偵測</th>'
       + '<th style="width:96px;">回報</th></tr></thead><tbody>';
-    if (!grouped.length) h += '<tr><td colspan="8" style="padding:14px;color:#8a6d45;">'
+    if (!grouped.length) h += '<tr><td colspan="9" style="padding:14px;color:#8a6d45;">'
         + (HIDE_DONE && tasksAll.length ? '目前的步驟都已完成（已勾選隱藏已完成）。' : '尚未建立目標與任務') + '</td></tr>';
     $.each(grouped, function (gi, g) {
         h += '<tr style="background:#FBF3E6;font-weight:bold;"><td>' + (gi + 1) + '</td>'
            + '<td class="l">' + esc(g.goal_name) + '</td><td>' + esc(g.dept_name || '') + '</td>'
-           + '<td colspan="5"></td></tr>';
+           + '<td colspan="6"></td></tr>';
         $.each(g.tasks, function (ti, t) {
             var stt = taskState(t, META.today);
             var nAtt = num(cnt[t.task_id]);
@@ -796,16 +819,52 @@ function drawGanttList(res) {
                + '<td>' + dispDate(t.act_start) + ' ~ ' + dispDate(t.act_end) + '</td>'
                + '<td>' + barHtml(num(t.progress)) + '</td>'
                + '<td>' + stateBadge(stt) + '</td>'
+               + '<td>' + autoHintCell(t) + '</td>'
                + '<td><span class="pj-op" data-report="' + t.task_id + '">回報</span>'
                + (nAtt ? '<span class="pj-hint" title="佐證附件"><i class="fa fa-paperclip"></i>' + nAtt + '</span>' : '')
                + '</td></tr>';
         });
     });
     h += '</tbody></table></div>'
-       + '<p class="pj-hint">按「回報」可以看到系統自動偵測到的佐證（製令開立日、圖面發行日、SOP/SIP 版次日、'
-       + '客供料進料日、報工架機與完工日…），按一下就帶進實際完成日；沒有電子化的（首件檢驗、最終檢驗）'
-       + '請直接填日期並上傳附件佐證。<b>各步驟的負責人本人就可以回報，不必有專案登錄權限。</b></p>';
+       + '<p class="pj-hint"><b>「自動偵測」欄就是系統自己去別的模組抓到的完成日</b>'
+       + '（開立製令→製令編號回推的開立日、製作加工圖面→料號附件的發行章日期、'
+       + 'PFMEA／SOP／SIP→各自模組的表單日期與版次日期、客供品點交→BOM 客供料製程的回廠日、'
+       + '架機與整批加工→報工紀錄）。<b>系統刻意不自動幫你填進去</b>——同一個專案常有好幾張製令、'
+       + '好幾份圖面附件，挑哪一筆是猜的；按「回報」在跳窗裡會把偵測到的每一筆都列出來，按「採用」才寫入。<br>'
+       + '沒有電子化的（首件檢驗、最終檢驗）請直接填日期並<b>上傳附件佐證</b>。'
+       + '<b>各步驟的負責人本人就可以回報，不必有專案登錄權限。</b></p>';
     $('#ganttBox').html(h);
+}
+
+/* ── 這個步驟屬於哪幾種自動佐證 ──
+   與後端 prj_auto_kinds_of() 同一套判定，順序也要一致（畫面上顯示「建議日期」，
+   真正要寫入時仍由後端 report_get 自己重算一次，前端只是為了不必逐列打 API）。 */
+function autoKindsOf(t) {
+    var n = String(t.task_name || ''), k = String(t.task_kind || ''), out = [];
+    var has = function (s) { return n.indexOf(s) >= 0; };
+    if (k === 'fai' || has('首件')) out.push('fai');
+    if (has('製令')) out.push('bom_create');
+    if (has('圖面')) out.push('part_drawing');
+    if (has('PFMEA')) out.push('doc_pfmea');
+    if (has('SOP')) out.push('doc_sop');
+    if (has('SIP')) out.push('doc_sip');
+    if (has('客供') || has('進料')) out.push('incoming_qc');
+    if (has('架機') || has('修砂')) out.push('setup');
+    if (has('整批') || has('完工')) out.push('mass_done');
+    if (has('最終檢驗')) out.push('final_qc');
+    return out;
+}
+
+/** 這個步驟系統偵測到的「建議完成日」（沒抓到回 null） */
+function autoHintOf(t) {
+    var ev = (CUR && CUR.evidence) || {}, labels = (CUR && CUR.auto_kinds) || {};
+    var kinds = autoKindsOf(t), best = null;
+    $.each(kinds, function (i, k) {
+        var o = ((ev[k] || {}).options || [])[0];
+        if (o && !best) best = { kind: k, label: labels[k] || k, date: o.date,
+                                 n: (ev[k].options || []).length };
+    });
+    return best;
 }
 
 /* ══════════════════════════ 進度回報 ══════════════════════════
@@ -1367,7 +1426,15 @@ function drawPlanEditor(res) {
       + '部門清單由管理員在「模組設定 → 執行規劃表負責人部門」設定。<br>'
       + '<b>工作天數</b>與<b>預計完成</b>兩邊同動：填了開始日就自動帶出當天完成（＝1 天），'
       + '改天數會重算完成日、直接改完成日也會反算天數。天數只算工作日（週末與行事曆上的休假日不算、補班日要算）。'
-      + '<b>上一列的預計完成日會自動變成下一列的預計開始日</b>——你自己改過的開始日不會被蓋掉。</p>'
+      + '<b>上一列的預計完成日會自動變成下一列的預計開始日</b>——你自己改過的開始日不會被蓋掉。<br>'
+      /* 使用者 2026-09-22 直接問「進度% 跟里程碑的勾選是甚麼？」——原本只寫在 th 的 title 裡，
+         滑鼠移過去才看得到，等於沒寫。 */
+      + '<b>進度%</b>＝這一步完成到幾成，底下的「<b>自動</b>」勾起來時<b>不用自己填</b>：'
+      + '填了實際完成日就是 100%、還沒完成就是 0%（你手動改過數字，「自動」就會自己取消勾選，之後都以你填的為準）。'
+      + '專案整體進度＝所有步驟進度的平均。<br>'
+      + '<b>里程碑</b>＝這一步是專案的關鍵查核點（例如首件檢驗通過）。勾起來後：'
+      + '時間軸上不畫長條、改畫一個<b>◆</b>菱形；列印的執行規劃表也會在該列標 ◆。'
+      + '<b>純粹是標記，不影響進度計算與任何判定</b>，只是讓人一眼看出哪幾步是關鍵。</p>'
       + (PLAN_ACT_OPEN ? ''
           : '<p class="pj-hint" style="color:#C4442D;">「實際開始／實際完成」兩欄要等<b>立案核准</b>之後才會出現'
             + '（目前狀態：' + esc(STATUS_LABEL[res.project.status] || res.project.status) + '），此階段只排預計日程。'
@@ -1391,7 +1458,8 @@ function drawPlanEditor(res) {
           + (PLAN_ST_OPEN ? '<th style="width:96px;" title="1~2 天完工的製程用狀態管理，不記時分秒">狀態</th>' : '')
           + '<th style="width:180px;">負責人（先選部門）</th>'
           + '<th style="width:76px;" title="勾「自動」時：填了實際完成日就是 100%，否則 0%；自己改過就不再自動">進度%</th>'
-          + '<th style="width:44px;">里程碑</th><th style="width:30px;"></th></tr></thead>'
+          + '<th style="width:44px;" title="關鍵查核點：時間軸上畫成 ◆ 菱形、列印也標 ◆；純標記，不影響進度計算">里程碑</th>'
+          + '<th style="width:30px;"></th></tr></thead>'
           + '<tbody class="t-body" data-eg-row-add="planRowAdd" data-eg-row-del="planRowDel">';
         var list = g.tasks.length ? g.tasks : [{}];
         $.each(list, function (ti, t) { h += planRowHtml(t, ti); });
@@ -3492,6 +3560,22 @@ function planListTable(grouped) {
         });
     });
     return h + '</tbody></table>';
+}
+
+/* 清單檢視的「自動偵測」欄：直接把建議完成日印出來，讓人一眼看得到系統有沒有抓到。
+   已經有實際完成日的就不再勸你改，只標「已回報」。 */
+function autoHintCell(t) {
+    if (t.act_end) return '<span class="pj-hint">已回報</span>';
+    var a = autoHintOf(t);
+    if (!a) {
+        return autoKindsOf(t).length
+            ? '<span class="pj-hint" title="這一類有自動偵測，但目前查不到資料">查無資料</span>'
+            : '<span class="pj-hint" title="這個步驟不屬於可自動偵測的標準項目，請人工回報">－</span>';
+    }
+    return '<span class="pj-op" data-report="' + t.task_id + '" title="' + esc(a.label)
+         + '：偵測到 ' + a.n + ' 筆，點開可逐筆確認後採用">'
+         + '<i class="fa fa-magic"></i> ' + dispDate(a.date)
+         + (a.n > 1 ? '<span class="pj-hint">（' + a.n + ' 筆）</span>' : '') + '</span>';
 }
 
 /* 列印用的狀態文字：畫面上是彩色小籤，紙上只能印字 */

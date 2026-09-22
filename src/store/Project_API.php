@@ -210,6 +210,10 @@ case 'get':
         'processes' => prj_processes($db, $pid, $prj),
         'scope_candidates' => prj_scope_candidates($db, $pid),
         'attach_counts'    => prj_task_attach_counts($db, $pid),
+        // 自動偵測到的完成日佐證（實測 40ms）。放進 get 是為了讓畫面**直接看得到**偵測結果，
+        // 不必先點開回報跳窗才知道系統有沒有抓到——使用者回報「這些功能有做嗎」就是因為看不到。
+        'evidence'         => prj_task_evidence($db, $pid, $prj),
+        'auto_kinds'       => PRJ_AUTO_KINDS,
         'shipments' => prj_shipments($db, $pid),
         'work_reports' => prj_work_reports($db, $pid),
         'fai'          => prj_fai_list($db, $pid),
