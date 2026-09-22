@@ -526,12 +526,36 @@ function ss_ver_get(PDO $db, int $verId): ?array
     return $v ?: null;
 }
 
-/** 一份文件的全部版次，新→舊（修訂履歷表就是它反過來印） */
+/**
+ * 修改記錄／修訂履歷的「說明」怎麼印（唯一實作，畫面與列印共用同一份說法）。
+ * 使用者 2026-09-22 指定：**第一筆（最舊的那一版）固定是「制訂」，其餘一律「修訂」＋說明內容**，
+ * 而且**不可以印出「紙本匯入」**——那是匯入程式自己寫的備註，不是修訂事項
+ * （實測全庫 53 筆 rev_note 全是系統寫的「紙本匯入／紙本掃描匯入／初訂」，沒有一筆是人填的）。
+ */
+function ss_rev_text(bool $isFirst, string $note): string
+{
+    $note = trim($note);
+    // 系統自己填的字樣一律不印；使用者自己打的內容才留下來
+    if (preg_match('/^(紙本匯入|紙本掃描匯入|匯入|初訂|制訂|制定|修訂)$/u', $note)) $note = '';
+    if ($isFirst) return '制訂';
+    // 使用者自己已經寫了「修訂…」就不要再前綴一次
+    if ($note !== '' && preg_match('/^修訂/u', $note)) return $note;
+    return $note !== '' ? '修訂　' . $note : '修訂';
+}
+
+/**
+ * 一份文件的全部版次，新→舊（修訂履歷表就是它反過來印）。
+ * 每一列附上 rev_text＝該列在修改記錄上要印的說明，畫面與列印一律讀它，不要各自再組一次。
+ */
 function ss_ver_rows(PDO $db, int $docId): array
 {
     $st = $db->prepare("SELECT * FROM ss_ver WHERE doc_id=? ORDER BY ver_id DESC");
     $st->execute([$docId]);
-    return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    // 新→舊，所以最後一列才是最舊的那一版＝修改記錄上印在第一行的那一筆
+    $last = count($rows) - 1;
+    foreach ($rows as $i => $r) $rows[$i]['rev_text'] = ss_rev_text($i === $last, (string)($r['rev_note'] ?? ''));
+    return $rows;
 }
 
 function ss_sign_map(PDO $db, int $verId): array

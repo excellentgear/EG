@@ -541,7 +541,9 @@ function headHtml() {
     h += '</select><span class="muted-help">　沒特別改就用預設：綁機台或量具＝A4 直式，綁料號＝A3 橫式。</span></div>';
     h += '<label>版次</label><div><input id="fVer" value="' + esc(v.ver_no) + '"' + ro + '></div>'
        + '<label>表單日期</label><div><input type="date" id="fDate" value="' + esc(v.form_date || '') + '"' + ro + '></div>'
-       + '<label>制/修訂事項</label><div class="wide"><input id="fRev" value="' + esc(v.rev_note || '') + '"' + ro + '></div>';
+       + '<label>修改說明</label><div class="wide"><input id="fRev" value="' + esc(v.rev_note || '') + '"' + ro + '>'
+       + '<div class="muted-help" style="margin-top:3px;">修改記錄上，<b>最舊的那一版固定印「制訂」</b>，'
+       + '其餘印「修訂　＋　這裡填的內容」。匯入時自動填的「紙本匯入」「初訂」不會印出來。</div></div>';
 
     if (CUR.kind === 'equip') {
         h += '<label>機器製造商</label><div><input id="f_m_maker" value="' + esc(v.m_maker || '') + '"' + ro + '></div>'
@@ -824,13 +826,13 @@ function signHtml() {
 function versHtml() {
     var h = '<div class="sec"><h5>版次歷程<span class="muted-help">紙本的「修訂履歷／修改記錄」就是這一份</span></h5>'
           + '<table class="grid"><thead><tr><th style="width:70px;">版次</th><th style="width:110px;">日期</th>'
-          + '<th>制/修訂事項</th><th style="width:90px;">狀態</th><th style="width:80px;"></th></tr></thead><tbody>';
+          + '<th>說明</th><th style="width:90px;">狀態</th><th style="width:80px;"></th></tr></thead><tbody>';
     $.each(CUR.vers || [], function (i, v) {
         var cur = num(v.ver_id) === num(CUR.ver.ver_id);
         h += '<tr' + (cur ? ' style="background:#FFF6E6;"' : '') + '>'
            + '<td class="c">' + esc(v.ver_no) + (cur ? '　<span class="muted-help">目前</span>' : '') + '</td>'
            + '<td class="c">' + dispDate(v.form_date) + '</td>'
-           + '<td>' + esc(v.rev_note || '') + '</td>'
+           + '<td>' + esc(v.rev_text || v.rev_note || '') + '</td>'
            + '<td class="c"><span class="st st-' + esc(v.status) + '">' + esc(SS_STATUSES[v.status] || v.status) + '</span></td>'
            + '<td class="c">' + (cur ? '' : '<button class="btn btn-xs btn-warm-o v-open" data-ver="' + num(v.ver_id) + '">開啟</button>') + '</td>'
            + '</tr>';

@@ -352,7 +352,7 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
             <tr>
                 <td class="mid"><?= h($v['ver_no']) ?></td>
                 <td class="mid"><?= h(eg_fmt_date($v['form_date'])) ?></td>
-                <td><?= h($v['rev_note']) ?></td>
+                <td><?= h($v['rev_text'] ?? $v['rev_note']) ?></td>
             </tr>
         <?php endforeach; ?>
         </tbody>
@@ -368,7 +368,7 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
             <tr>
                 <td class="mid"><?= h($v['ver_no']) ?></td>
                 <td class="mid"><?= h(eg_fmt_date($v['form_date'])) ?></td>
-                <td><?= h($v['rev_note']) ?></td>
+                <td><?= h($v['rev_text'] ?? $v['rev_note']) ?></td>
                 <td class="mid"><?= h($sg['maker']['user_name'] ?? '') ?></td>
                 <td class="mid"><?= h(ss_statuses()[$v['status']] ?? $v['status']) ?></td>
             </tr>
