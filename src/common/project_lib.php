@@ -1664,23 +1664,29 @@ function prj_order_readiness(PDO $db, array $rows): array
                 $ordFirst[(int)$x['pk']] = (string)$x['k'];
             }
         } catch (Throwable $e) {}
-        // 出貨／退貨／BOM／料號附件：各取「最早一筆的日期」，用來判斷是不是在這張訂單之前就有歷史
+        /* 出貨／退貨／BOM：**最早**那筆用來判「這張訂單之前有沒有歷史」＝是不是第一次下訂；
+           **最晚**那筆用來判「這張訂單之後有沒有資料」＝這張訂單自己做到哪裡了。
+           只要最晚那筆不早於訂單日，就代表至少有一筆是這張訂單之後才產生的，不必把每一筆都撈回來。 */
         try {
-            foreach ($db->query("SELECT d_setting_id pk, MIN(Order_date) d, COUNT(*) c
+            foreach ($db->query("SELECT d_setting_id pk, MIN(Order_date) d, MAX(Order_date) dmax, COUNT(*) c
                                  FROM is_list WHERE d_setting_id IN ($in) GROUP BY d_setting_id")->fetchAll(PDO::FETCH_ASSOC) as $x) {
-                $shipAny[(int)$x['pk']] = ['first' => $x['d'], 'cnt' => (int)$x['c']];
+                $shipAny[(int)$x['pk']] = ['first' => $x['d'], 'last' => $x['dmax'], 'cnt' => (int)$x['c']];
             }
         } catch (Throwable $e) {}
         try {
-            foreach ($db->query("SELECT d_setting_id pk, MIN(bom) b, COUNT(*) c
+            /* 製令沒有可靠的日期欄位（Created_At 是 ERP 匯入時間，實測差好幾天），一律用製令編號回推。
+               編號尾 10 碼＝民國年3＋MMDD＋流水3，固定寬度且補零，所以 MIN/MAX 取字串就等於取時間先後。 */
+            foreach ($db->query("SELECT d_setting_id pk, MIN(RIGHT(bom,10)) b, MAX(RIGHT(bom,10)) bmax, COUNT(*) c
                                  FROM bom WHERE d_setting_id IN ($in) GROUP BY d_setting_id")->fetchAll(PDO::FETCH_ASSOC) as $x) {
-                $bomAny[(int)$x['pk']] = ['first' => prj_bom_open_date((string)$x['b']), 'cnt' => (int)$x['c']];
+                $bomAny[(int)$x['pk']] = ['first' => prj_bom_open_date((string)$x['b']),
+                                          'last'  => prj_bom_open_date((string)$x['bmax']),
+                                          'cnt'   => (int)$x['c']];
             }
         } catch (Throwable $e) {}
         try {
-            foreach ($db->query("SELECT r.d_setting_id pk, MIN(r.IR_date) d, COUNT(*) c
+            foreach ($db->query("SELECT r.d_setting_id pk, MIN(r.IR_date) d, MAX(r.IR_date) dmax, COUNT(*) c
                                  FROM ir_track r WHERE r.d_setting_id IN ($in) GROUP BY r.d_setting_id")->fetchAll(PDO::FETCH_ASSOC) as $x) {
-                $retAny[(int)$x['pk']] = ['first' => $x['d'], 'cnt' => (int)$x['c']];
+                $retAny[(int)$x['pk']] = ['first' => $x['d'], 'last' => $x['dmax'], 'cnt' => (int)$x['c']];
             }
         } catch (Throwable $e) { /* 退貨表結構不同時不擋，只是判不出退貨 */ }
 
@@ -1698,14 +1704,14 @@ function prj_order_readiness(PDO $db, array $rows): array
             foreach ($db->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $x) $attAny[(int)$x['pk']] = (int)$x['c'];
         } catch (Throwable $e) {}
 
-        // 報工紀錄：該料號的 BOM 有沒有被報工過
+        // 報工紀錄：該料號的 BOM 有沒有被報工過（同樣要拿最晚那一筆來判斷是不是這張訂單之後的）
         try {
-            foreach ($db->query("SELECT b.d_setting_id pk, COUNT(*) c
+            foreach ($db->query("SELECT b.d_setting_id pk, MAX(r.report_date) dmax, COUNT(*) c
                                  FROM pm_process_daily_report r
                                  JOIN bom_ing bi ON bi.bom_ing_fid = r.bom_ing_fid
                                  JOIN bom b ON b.bom = bi.bom
                                  WHERE b.d_setting_id IN ($in) GROUP BY b.d_setting_id")->fetchAll(PDO::FETCH_ASSOC) as $x) {
-                $workAny[(int)$x['pk']] = (int)$x['c'];
+                $workAny[(int)$x['pk']] = ['last' => $x['dmax'], 'cnt' => (int)$x['c']];
             }
         } catch (Throwable $e) {}
     }
@@ -1730,13 +1736,24 @@ function prj_order_readiness(PDO $db, array $rows): array
             $r['first_why'] = $why ? implode('、', $why) : '這個料號沒有更早的訂單／製令／出貨／退貨紀錄';
         }
 
-        /* 資料完整度：檢驗表目前沒有電子化，一律標成 n/a（不算分母，免得每一列都缺一項） */
+        /* 資料完整度：**只認訂單日之後的資料**（使用者 2026-09-22 指正）。
+           「其他資料在訂單日期之後，那必是這筆訂單才產生的資料」——所以製令／出貨／報工
+           一律比對「最晚那一筆是不是不早於訂單日」，用全部筆數去算會把**前幾張訂單**做的
+           製令與出貨算成這一張的成績，重複下單的料號就會每一列都 100%、完全分不出差別。
+           料號附件是**料號本身的屬性**（客戶給的圖多半在報價階段就上傳了），不跟著訂單日篩，
+           篩了會讓重複下單的料號一律顯示缺圖面。檢驗表沒有電子化，標 n/a 不列入分母。 */
+        $after = static function ($info, $orderDate) {
+            if (empty($info) || empty($info['cnt'])) return 0;
+            if ($orderDate === '') return 1;                 // 訂單沒有接單日就不篩，有資料就算有
+            $last = (string)($info['last'] ?? '');
+            return ($last !== '' && $last >= $orderDate) ? 1 : 0;
+        };
         $ready = [
             'order'  => ($r['Delivery_date'] && (int)$r['Qty'] > 0) ? 1 : 0,
-            'bom'    => !empty($bomAny[$pk]['cnt']) ? 1 : 0,
-            'ship'   => !empty($shipAny[$pk]['cnt']) ? 1 : 0,
+            'bom'    => $after($bomAny[$pk]  ?? null, $date),
+            'ship'   => $after($shipAny[$pk] ?? null, $date),
             'insp'   => null,                              // 檢驗表尚未電子化
-            'work'   => !empty($workAny[$pk]) ? 1 : 0,
+            'work'   => $after($workAny[$pk] ?? null, $date),
             'attach' => !empty($attAny[$pk]) ? 1 : 0,
         ];
         $have = 0; $tot = 0;
