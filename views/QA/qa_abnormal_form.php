@@ -1034,6 +1034,8 @@ $(document).on('click', '#btnPickCause', function(){
     if (!CAUSE_CAN_EDIT) return;
     EGCausePicker.open({
         tree: D.causes || [], selected: CAUSE_SEL, multi: true, title: '選擇異常原因分類',
+        add: { url: API, csrf: CSRF, can: !!(D.perms && D.perms.canAdmin) },
+        onTreeChange: function(t){ D.causes = t; },
         onApply: function(ids){ CAUSE_SEL = ids; causeChanged(); }
     });
 });

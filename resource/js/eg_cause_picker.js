@@ -68,6 +68,11 @@
             '.egcp-grid button small{display:block;font-weight:normal;font-size:11px;color:#8a6a45;margin-top:2px;}',
             '.egcp-grid button.on small{color:#6B4A22;}',
             '.egcp-empty{color:#8a6a45;font-size:13px;padding:10px 2px;}',
+            '.egcp-grid button.egcp-add{border-style:dashed;color:#8A5A2B;font-weight:normal;}',
+            '.egcp-grid button.egcp-add:hover{background:#FBEEE6;}',
+            '.egcp-new{background:#FFF8EE;border:1px solid #E4D3BC;border-radius:6px;padding:8px 10px;margin-bottom:8px;}',
+            '.egcp-new input{border:1px solid #D9A066;border-radius:5px;padding:4px 8px;font-size:14px;width:260px;}',
+            '.egcp-new .egcp-err{color:#DD5138;font-size:12px;margin-top:4px;}',
             '.egcp-ft{border-top:1px solid #eee;padding:10px 14px;display:flex;align-items:center;gap:8px;}',
             '.egcp-ft .egcp-sp{margin-left:auto;}',
             '.egcp-ok{border:1px solid #C0703A;background:#F0A24B;color:#3B2A18;border-radius:5px;padding:5px 14px;',
@@ -149,6 +154,68 @@
 
     var cur = null;   // 目前開著的挑選器狀態
 
+    /* ── 管理員可以就地新增分類（不必離開表單跑去設定頁）────────────────────
+       寫入一律打品質異常處理單那支 `cause_save`（唯一實作，管理員判定與三層上限都在那邊），
+       這裡不自己寫 SQL、也不自己判權限：畫面上藏起來只是省得誤點，後端會再擋一次（鐵律8）。 */
+    function canAddHere() {
+        if (!cur || !cur.add || !cur.add.can || !cur.add.url) return false;
+        return cur.path.length < 3;          // 最多三層
+    }
+    function addTile() {
+        if (!canAddHere()) return '';
+        var where = cur.path.length
+            ? ('在「' + (findNode(cur.tree, cur.path[cur.path.length - 1]) || {}).name + '」底下新增')
+            : '新增第一層分類';
+        return '<button type="button" class="egcp-add" data-act="addnew">＋ ' + esc(where)
+             + '<small>管理員限定，新增後全站表單一起看得到</small></button>';
+    }
+    function showNewRow() {
+        var where = cur.path.length
+            ? ('「' + (findNode(cur.tree, cur.path[cur.path.length - 1]) || {}).name + '」底下的第 ' + (cur.path.length + 1) + ' 層')
+            : '第 1 層';
+        cur.$new.innerHTML = '<b style="font-size:13px;">新增 ' + esc(where) + '分類：</b> '
+            + '<input type="text" class="egcp-nm" maxlength="60" placeholder="輸入分類名稱…"> '
+            + '<button type="button" class="egcp-ok" data-act="addsave">建立</button> '
+            + '<button type="button" class="egcp-cancel" data-act="addcancel">取消</button>'
+            + '<div class="egcp-err"></div>';
+        cur.$new.style.display = '';
+        var i = cur.$new.querySelector('.egcp-nm');
+        if (i) { i.focus(); i.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); doAdd(); } }); }
+    }
+    function hideNewRow() { cur.$new.style.display = 'none'; cur.$new.innerHTML = ''; }
+    function onlyActive(list) {           // cause_save 回的樹含停用中的，挑選畫面只要啟用的
+        return (list || []).filter(function (n) { return Number(n.is_active) !== 0; })
+            .map(function (n) { var c = {}; for (var k in n) c[k] = n[k]; c.children = onlyActive(n.children); return c; });
+    }
+    function doAdd() {
+        if (!canAddHere()) return;
+        var $i = cur.$new.querySelector('.egcp-nm'), $e = cur.$new.querySelector('.egcp-err');
+        var name = ($i.value || '').trim();
+        if (!name) { $e.textContent = '請輸入分類名稱'; $i.focus(); return; }
+        var sibs = nodesOf(cur.tree, cur.path);
+        for (var k = 0; k < sibs.length; k++) {
+            if (String(sibs[k].name).trim() === name) { $e.textContent = '這一層已經有同名的分類了'; $i.focus(); return; }
+        }
+        var sort = 0;
+        sibs.forEach(function (n) { sort = Math.max(sort, parseInt(n.sort_order, 10) || 0); });
+        $e.textContent = '建立中…';
+        var body = 'action=cause_save&csrf=' + encodeURIComponent(cur.add.csrf || '')
+                 + '&name=' + encodeURIComponent(name)
+                 + '&parent_id=' + encodeURIComponent(cur.path.length ? cur.path[cur.path.length - 1] : 0)
+                 + '&sort_order=' + (sort + 1) + '&is_active=1';
+        fetch(cur.add.url, {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }, body: body
+        }).then(function (r) { return r.json(); }).then(function (res) {
+            if (!res || !res.success) { $e.textContent = (res && res.message) || '建立失敗'; return; }
+            cur.tree = onlyActive(res.causes || []);
+            hideNewRow();
+            render();
+            if (cur.onTreeChange) cur.onTreeChange(cur.tree);
+        }).catch(function () { $e.textContent = '建立失敗，請重新整理頁面後再試'; });
+    }
+
+
     function close() {
         if (!cur) return;
         if (cur.mask && cur.mask.parentNode) cur.mask.parentNode.removeChild(cur.mask);
@@ -180,7 +247,8 @@
 
         // 方塊
         if (!list.length) {
-            cur.$grid.innerHTML = '<div class="egcp-empty">這一層底下沒有更細的分類了，請用上面的「就選…這一層」選定，或按「← 上一層」換一個。</div>';
+            cur.$grid.innerHTML = '<div class="egcp-empty">這一層底下沒有更細的分類了，請用上面的「就選…這一層」選定，或按「← 上一層」換一個。</div>'
+                                + addTile();
         } else {
             cur.$grid.innerHTML = list.map(function (n) {
                 var kids = (n.children || []).length;
@@ -189,7 +257,7 @@
                 return '<button type="button" class="' + (on ? 'on' : '') + mark + '" data-act="go" data-id="' + esc(n.cat_id) + '">'
                     + esc(n.name)
                     + '<small>' + (kids ? ('往下還有 ' + kids + ' 項') : (on ? '✓ 已選' : '可直接選')) + '</small></button>';
-            }).join('');
+            }).join('') + addTile();
         }
         cur.$okN.textContent = String(sel.length);
     }
@@ -231,6 +299,7 @@
                 + '<br>分類清單由管理員在<b>品質異常處理單 → 設定 → 異常原因分類</b>維護，各表單共用同一份。'))
             + '</div>'
             + '<div class="egcp-picked"></div>'
+            + '<div class="egcp-new" style="display:none;"></div>'
             + '<div class="egcp-crumb"></div>'
             + '<div class="egcp-grid"></div>'
             + '</div>'
@@ -247,11 +316,14 @@
             sel: (opt.selected || []).filter(function (x) { return x !== null && x !== undefined && x !== ''; }).map(String),
             multi: !!opt.multi,
             onApply: opt.onApply,
+            add: opt.add || null,
+            onTreeChange: opt.onTreeChange,
             path: [],
             mask: mask,
             $picked: mask.querySelector('.egcp-picked'),
             $crumb: mask.querySelector('.egcp-crumb'),
             $grid: mask.querySelector('.egcp-grid'),
+            $new: mask.querySelector('.egcp-new'),
             $okN: mask.querySelector('.egcp-n')
         };
         // 已經選過的：直接把畫面停在它的上一層，不用再從第一層點下來
@@ -281,12 +353,15 @@
             if (act === 'close') { close(); return; }
             if (act === 'clear') { cur.sel = []; render(); return; }
             if (act === 'ok') { apply(); return; }
-            if (act === 'up') { cur.path = cur.path.slice(0, -1); render(); return; }
+            if (act === 'addnew') { showNewRow(); return; }
+            if (act === 'addcancel') { hideNewRow(); return; }
+            if (act === 'addsave') { doAdd(); return; }
+            if (act === 'up') { cur.path = cur.path.slice(0, -1); hideNewRow(); render(); return; }
             if (act === 'self') { pick(b.getAttribute('data-id')); return; }
             if (act === 'go') {
                 var id = b.getAttribute('data-id');
                 var n = findNode(cur.tree, id);
-                if (n && n.children && n.children.length) { cur.path = cur.path.concat([String(id)]); render(); }
+                if (n && n.children && n.children.length) { cur.path = cur.path.concat([String(id)]); hideNewRow(); render(); }
                 else pick(id);                                           // 最底層＝直接選
                 return;
             }

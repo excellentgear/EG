@@ -17,9 +17,11 @@ $IR_YEARS    = irYears($db);                   // 年度下拉：只列真的有
 /* 開立異常單一律走新版模組（qa_abnormal_list.php 同一支 API、同一套權限與編號規則），
    所以這一頁要先備好那支 API 認的 CSRF 權杖與開單權限。 */
 $QAB_CAN_CREATE = false;
+$QAB_CAN_ADMIN  = false;
 $QAB_BF_DAYS    = 10;   // 「補資料」的天數門檻一律取異常單模組的設定，不在這裡寫死一份
 try {
     $QAB_CAN_CREATE = (bool)(qab_perms($db, $IR_UID)['canCreate'] ?? false);
+    $QAB_CAN_ADMIN  = (bool)(qab_perms($db, $IR_UID)['canAdmin'] ?? false);   // 就地新增異常原因分類
     $QAB_BF_DAYS    = (int)qab_backfill_days($db);
 } catch (Throwable $e) {}
 if (empty($_SESSION['qab_csrf'])) $_SESSION['qab_csrf'] = bin2hex(random_bytes(16));
@@ -817,6 +819,7 @@ var IR_API   = '../../src/store/store_IR_Track_API.php';
 var QA_API   = '../../src/store/store_QA_Abnormal_API.php';
 /* 異常原因分類（與品質異常處理單同一份代碼表）：逐層挑選走共用元件 eg_cause_picker.js */
 var QAB_CAUSE_TREE = <?= json_encode($QAB_CAUSE_TREE, JSON_UNESCAPED_UNICODE) ?>;
+var QAB_CAN_ADMIN  = <?= $QAB_CAN_ADMIN ? 'true' : 'false' ?>;
 function qaSetCause(id){
     $('#qa_cause_cat').val(id || '');
     $('#qa_cause_chips').html(id
@@ -828,6 +831,8 @@ $(document).on('click', '#qa_pick_cause', function(){
     EGCausePicker.open({
         tree: QAB_CAUSE_TREE, selected: ($('#qa_cause_cat').val() ? [$('#qa_cause_cat').val()] : []),
         multi: false, title: '選擇異常原因分類',
+        add: { url: QAB_API, csrf: QAB_CSRF, can: QAB_CAN_ADMIN },
+        onTreeChange: function(t){ QAB_CAUSE_TREE = t; },
         onApply: function(ids){ qaSetCause(ids.length ? ids[0] : ''); }
     });
 });

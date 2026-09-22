@@ -35,6 +35,14 @@ $CAN_SETTINGS = rbac_has($features, 'car_manage_settings');
 // 補資料（代填單據／代簽圖章／調整簽章日期）：角色功能碼；實際執行還要逐張單輸入操作確認密碼
 $CAN_BACKFILL = car_can_backfill($features);
 
+/* 異常原因分類：清單與品質異常處理單共用同一張代碼表，所以「就地新增分類」一律打那支 API
+   （`QaAbnormal_API.php` 的 cause_save，唯一實作），這裡只要備好它認的 CSRF 與管理員判定。 */
+require_once __DIR__ . '/../../src/common/qa_abnormal_lib.php';
+$QAB_CAN_ADMIN = false;
+try { $QAB_CAN_ADMIN = (bool)(qab_perms($pdo, (int)$me['id'])['canAdmin'] ?? false); } catch (Throwable $e) {}
+if (empty($_SESSION['qab_csrf'])) $_SESSION['qab_csrf'] = bin2hex(random_bytes(16));
+$QAB_CSRF = $_SESSION['qab_csrf'];
+
 $permParts = [];
 if ($CAN_VIEW) $permParts[] = '檢閱';
 if ($CAN_CREATE) $permParts[] = '開立';
@@ -687,6 +695,11 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
   var ME_ID      = <?php echo (int)$me['id']; ?>;
   var CAN_VIEW   = <?php echo $CAN_VIEW ? 'true':'false'; ?>;
   var CAN_BACKFILL = <?php echo $CAN_BACKFILL ? 'true':'false'; ?>;   // 補資料（代填／代簽）功能碼
+  // 就地新增異常原因分類（管理員限定；後端 cause_save 會再擋一次）
+  var QAB_API = '../../src/store/QaAbnormal_API.php';
+  var QAB_CSRF = '<?php echo $QAB_CSRF; ?>';
+  var QAB_CAN_ADMIN = <?php echo $QAB_CAN_ADMIN ? 'true':'false'; ?>;
+  function causeAddCfg(){ return { url: QAB_API, csrf: QAB_CSRF, can: QAB_CAN_ADMIN }; }
   var OPEN_ID    = <?php echo (int)($_GET['open_id'] ?? 0); ?>;   // 通知直開的單據 id（當事人無 car_view 也可開）
   var state = { card:'all', page:1, size:10 };
   var REMIND_WD = 5;   // 逾期提醒工作天門檻（load_page_data 回傳後覆蓋）
@@ -1301,7 +1314,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       $('#btn-pick-cause').on('click', function(){
         EGCausePicker.open({
           tree: r.causes||[], selected: ($('#rp-cause-cat').val()? [$('#rp-cause-cat').val()] : []),
-          multi: false, title: '選擇異常原因分類',
+          multi: false, title: '選擇異常原因分類', add: causeAddCfg(),
+          onTreeChange: function(t){ r.causes = t; },   // 就地新增後本頁的樹也要跟著更新，路徑才印得出來
           onApply: function(ids){ $('#rp-cause-cat').val(ids.length?ids[0]:''); refreshCausePath(); }
         });
       });
