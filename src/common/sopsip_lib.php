@@ -2237,14 +2237,71 @@ function ss_search_tool(PDO $db, string $kw, int $limit = 40): array
  */
 function ss_equip_pick_groups(PDO $db, string $kw): array
 {
+    return array_merge(ss_pick_groups($db, 'machine', $kw), ss_pick_groups($db, 'tool', $kw));
+}
+
+/**
+ * 「先點分類、再點項目」那種兩層挑選器的資料（唯一實作，四個地方共用：
+ * 新增文件的機台型號／量具、改綁定對象、以及製造製程說明書的使用設備）。
+ * 分類一律**依綁定的製程**（機台）或**量具種類**（量具）——使用者 2026-09-22 指定。
+ *
+ * @param string $mode machine＝個別機台／model＝機台型號／tool＝量具
+ * @return array [['kind'=>…,'group'=>組名,'rows'=>[['value','no','name','sub']]]]
+ */
+function ss_pick_groups(PDO $db, string $mode, string $kw): array
+{
     $out = [];
-    // ── 機台：依製程分組 ──
+    if ($mode === 'tool') {
+        $t = [];
+        foreach (ss_search_tool($db, $kw, 500) as $r) {
+            $key = trim((string)($r['tool_type'] ?? '')) ?: '未分類';
+            $t[$key][] = [
+                // value＝編號（填進「使用設備」那種文字欄位用）、id＝Tool_id（真的要綁定量具時用）
+                'value' => (string)$r['tool_no'],
+                'id'    => (int)$r['tool_id'],
+                'no'    => (string)$r['tool_no'],
+                'name'  => trim((string)($r['tool_type'] ?? '')),
+                'sub'   => trim(implode('　', array_filter([(string)($r['spec_desc'] ?? ''), (string)($r['manufacturer'] ?? '')]))),
+            ];
+        }
+        foreach ($t as $name => $rows) $out[] = ['kind' => 'tool', 'group' => $name, 'rows' => $rows];
+        return $out;
+    }
+    if ($mode === 'model') {
+        // 機台型號：一樣依製程分組（同型號的機台製程一定相同，取第一台的就好）
+        $g = [];
+        foreach (ss_search_machine($db, $kw, 500) as $m) {
+            $key   = trim((string)($m['proc_type_name'] ?? '')) ?: '未分類';
+            $model = trim((string)$m['machine_model']);
+            if ($model === '') continue;
+            $g[$key]['sort'] = (int)($m['proc_sort'] ?? 9999);
+            if (!isset($g[$key]['rows'][$model])) {
+                $g[$key]['rows'][$model] = ['value' => $model, 'no' => $model,
+                                            'name' => trim((string)$m['machine']), 'cnt' => 0, 'nos' => []];
+            }
+            $g[$key]['rows'][$model]['cnt']++;
+            $g[$key]['rows'][$model]['nos'][] = (string)($m['asset_no'] ?: $m['field_no']);
+        }
+        uasort($g, fn($a, $b) => [$a['sort']] <=> [$b['sort']]);
+        foreach ($g as $name => $x) {
+            $rows = [];
+            foreach ($x['rows'] as $r) {
+                $r['sub'] = $r['cnt'] . ' 台：' . implode('、', array_slice(array_filter($r['nos']), 0, 6));
+                unset($r['cnt'], $r['nos']);
+                $rows[] = $r;
+            }
+            $out[] = ['kind' => 'model', 'group' => $name, 'rows' => $rows];
+        }
+        return $out;
+    }
+    // machine：個別機台，依製程分組
     $g = [];
     foreach (ss_search_machine($db, $kw, 500) as $m) {
         $key = trim((string)($m['proc_type_name'] ?? '')) ?: '未分類';
         $g[$key]['sort'] = (int)($m['proc_sort'] ?? 9999);
         $g[$key]['rows'][] = [
             'value' => (string)($m['asset_no'] ?: ($m['field_no'] ?: $m['machine'])),
+            'id'    => (int)$m['machine_id'],          // 要綁定機台時用 id，填文字欄位時才用 value
             'no'    => (string)($m['asset_no'] ?: '(未編號)'),
             'name'  => trim((string)($m['field_no'] ?: $m['machine'])),
             'sub'   => trim(implode('　', array_filter([(string)$m['machine'], (string)$m['machine_model']]))),
@@ -2252,19 +2309,6 @@ function ss_equip_pick_groups(PDO $db, string $kw): array
     }
     uasort($g, fn($a, $b) => [$a['sort']] <=> [$b['sort']]);
     foreach ($g as $name => $x) $out[] = ['kind' => 'machine', 'group' => $name, 'rows' => $x['rows']];
-
-    // ── 量具／檢驗設備：依量具種類分組 ──
-    $t = [];
-    foreach (ss_search_tool($db, $kw, 500) as $r) {
-        $key = trim((string)($r['tool_type'] ?? '')) ?: '未分類';
-        $t[$key][] = [
-            'value' => (string)$r['tool_no'],
-            'no'    => (string)$r['tool_no'],
-            'name'  => trim((string)($r['tool_type'] ?? '')),
-            'sub'   => trim(implode('　', array_filter([(string)($r['spec_desc'] ?? ''), (string)($r['manufacturer'] ?? '')]))),
-        ];
-    }
-    foreach ($t as $name => $rows) $out[] = ['kind' => 'tool', 'group' => $name, 'rows' => $rows];
     return $out;
 }
 

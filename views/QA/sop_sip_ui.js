@@ -210,23 +210,148 @@ function delDoc(docId, title) {
     post('doc_delete', { doc_id: docId }, function () { load(true); });
 }
 
+
+/* ══════════════════════ 兩層挑選器（唯一實作，四個地方共用） ══════════════════════
+   ① 先點分類（機台依綁定的製程、量具依種類）② 再點項目；也可以直接打字跨分類搜尋。
+   與線上檢驗「選擇本單使用的量具」同一套操作方式（使用者 2026-09-22 指定）。
+   用法：ssPick({ box:'#xxx', mode:'model|machine|tool', multi:true/false,
+                  sel:[已選的 value…], onChange:function(list){} })
+   沿用 .eqgrid/.eq-cat/.eq-no/.eq-chip 那組樣式，不另外再刻一份。 */
+var SSPICK = {};
+function ssPick(cfg) {
+    var st = SSPICK[cfg.box] = {
+        box: cfg.box, mode: cfg.mode, multi: !!cfg.multi, onChange: cfg.onChange || function () {},
+        groups: [], sel: {}, order: [], cat: null, kw: ''
+    };
+    $(cfg.box).html('<div class="sspk">'
+        + '<div class="sspk-sel"></div>'
+        + '<input type="text" class="sspk-kw" data-eg-hint="打分類、型號、名稱或編號直接搜尋" style="margin-bottom:6px;">'
+        + '<div class="sspk-pane"><span class="muted-help">載入中…</span></div></div>');
+    api('equip_pick', { mode: cfg.mode, kw: '' }, function (res) {
+        st.groups = res.groups || [];
+        $.each(cfg.sel || [], function (i, v) { ssPickAdd(st, String(v)); });
+        ssPickRender(st);
+    });
+    return st;
+}
+function ssPickFind(st, v) {
+    var hit = null;
+    $.each(st.groups, function (i, g) {
+        $.each(g.rows || [], function (j, r) {
+            if (String(r.value) === String(v) || (r.id && String(r.id) === String(v))) { hit = [g, r]; return false; }
+        });
+        return hit ? false : true;
+    });
+    return hit;
+}
+function ssPickAdd(st, v) {
+    var f = ssPickFind(st, v); if (!f || st.sel[v]) return;
+    st.sel[v] = { value: f[1].value, id: f[1].id || 0, no: f[1].no, name: f[1].name || '', cat: f[0].group };
+    st.order.push(v);
+}
+function ssPickList(st) { return $.map(st.order, function (v) { return st.sel[v]; }); }
+function ssPickRender(st) {
+    var $b = $(st.box), kw = String($b.find('.sspk-kw').val() || '').trim().toLowerCase();
+    var words = kw ? kw.split(/\s+/) : [], h = '';
+    function hit(r, cat) {
+        if (!words.length) return true;
+        var hay = ((r.no || '') + ' ' + (r.name || '') + ' ' + (r.sub || '') + ' ' + cat).toLowerCase();
+        for (var i = 0; i < words.length; i++) if (hay.indexOf(words[i]) < 0) return false;
+        return true;
+    }
+    function btn(r, cat) {
+        var on = !!st.sel[r.value];
+        return '<button type="button" class="eq-no sspk-it' + (on ? ' on' : '') + '" data-v="' + esc(r.value) + '">'
+             + esc(r.no) + '<small>' + (on ? '✔ 已選（再點一次取消）' : esc(r.name || r.sub || cat)) + '</small></button>';
+    }
+    if (words.length) {
+        var rows = [];
+        $.each(st.groups, function (i, g) { $.each(g.rows || [], function (j, r) { if (hit(r, g.group)) rows.push([g, r]); }); });
+        h = '<div class="eq-sub">符合「' + esc(kw) + '」<b>' + rows.length + '</b> 項（清空搜尋回到分類）</div><div class="eqgrid">';
+        $.each(rows, function (i, x) { h += btn(x[1], x[0].group); });
+        h += '</div>';
+        if (!rows.length) h = '<span class="muted-help">查無符合的項目。</span>';
+    } else if (st.cat === null) {
+        h = '<div class="eq-sub">① 先點分類</div><div class="eqgrid">';
+        $.each(st.groups, function (i, g) {
+            if (!g.rows || !g.rows.length) return;
+            var n = 0; $.each(g.rows, function (j, r) { if (st.sel[r.value]) n++; });
+            h += '<button type="button" class="eq-cat sspk-cat' + (n ? ' has-sel' : '') + '" data-i="' + i + '">'
+               + esc(g.group) + '<small>' + (g.kind === 'tool' ? '量具　' : '機台　') + g.rows.length + ' 項'
+               + (n ? '　已選 ' + n : '') + '</small></button>';
+        });
+        h += '</div>';
+    } else {
+        var g2 = st.groups[st.cat] || { rows: [] };
+        h = '<div class="eq-sub">② 點' + (st.mode === 'tool' ? '量具' : (st.mode === 'model' ? '型號' : '機台'))
+          + (st.multi ? '（可以連續點好幾項，再點一次取消）' : '') + '　'
+          + '<button type="button" class="btn btn-xs btn-warm-o sspk-back">← 換一個分類</button></div><div class="eqgrid">';
+        $.each(g2.rows || [], function (i, r) { h += btn(r, g2.group); });
+        h += '</div>';
+    }
+    $b.find('.sspk-pane').html(h);
+    var c = '';
+    $.each(st.order, function (i, v) {
+        var s = st.sel[v]; if (!s) return;
+        c += '<span class="eq-chip"><span class="c">' + esc(s.cat) + '</span><span>' + esc(s.no) + '</span>'
+           + '<button type="button" class="x sspk-rm" data-v="' + esc(v) + '">×</button></span>';
+    });
+    $b.find('.sspk-sel').html('<b class="muted-help">已選：</b>'
+        + (c || '<span class="eq-none">（尚未選擇）</span>'));
+    st.onChange(ssPickList(st));
+}
+function ssPickOf(el) { var $b = $(el).closest('.sspk').parent(); return SSPICK['#' + $b.attr('id')]; }
+$(document).on('click', '.sspk-cat', function () { var st = ssPickOf(this); st.cat = num($(this).data('i')); ssPickRender(st); });
+$(document).on('click', '.sspk-back', function () { var st = ssPickOf(this); st.cat = null; ssPickRender(st); });
+$(document).on('click', '.sspk-it', function () {
+    var st = ssPickOf(this), v = String($(this).data('v'));
+    if (st.sel[v]) { delete st.sel[v]; st.order = st.order.filter(function (x) { return x !== v; }); }
+    else {
+        if (!st.multi) { st.sel = {}; st.order = []; }   // 單選：一次只留一個
+        ssPickAdd(st, v);
+    }
+    ssPickRender(st);
+});
+$(document).on('click', '.sspk-rm', function (e) {
+    e.stopPropagation();
+    var st = ssPickOf(this), v = String($(this).data('v'));
+    delete st.sel[v]; st.order = st.order.filter(function (x) { return x !== v; });
+    ssPickRender(st);
+});
+$(document).on('input', '.sspk-kw', function () {
+    var st = ssPickOf(this);
+    clearTimeout(st._t);
+    st._t = setTimeout(function () { ssPickRender(st); }, 150);
+});
+
 /* ══════════════════════ 新增 ══════════════════════ */
 
 $('#btnNew').on('click', function () {
     kindOptions('#nKind', false);
     NEW = { titleTouched: false, machines: [], partMachines: [], dups: [] };
     $('#nErr').text(''); $('#nDup').html('');
-    $('#nModel').val(''); $('#nModelVal').val('');
-    $('#nTool').val(''); $('#nToolId').val('');
+    $('#nModelVal').val(''); $('#nToolId').val('');
     $('#nPart').val(''); $('#nPartId').val('');
+    // 機台型號／量具／使用機台一律用兩層挑選器（先點分類再點項目），與線上檢驗挑量具同一套
+    ssPick({ box: '#nModelPick', mode: 'model', multi: false, onChange: function (l) {
+        var v = l.length ? l[0].value : '';
+        $('#nModelVal').val(v);
+        if (v) loadModelMachines(v); else { NEW.machines = []; $('#nMachines').html('先選機台型號。').addClass('muted-help'); }
+        probe();
+    } });
+    ssPick({ box: '#nToolPick', mode: 'tool', multi: false, onChange: function (l) {
+        $('#nToolId').val(l.length ? num(l[0].id) : '');   // 綁定存的是 Tool_id，不是編號文字
+        probe();
+    } });
+    ssPick({ box: '#nPartMachines', mode: 'machine', multi: true, onChange: function (l) {
+        NEW.partMachines = $.map(l, function (x) { return num(x.id); });
+    } });
     $('#nProc').val(''); $('#nProcNo').val('');
     $('#nCus').val(''); $('#nCusId').val('');
     $('#nTitle').val(''); $('#nVer').val('01');
     $('#nDate').val(SS_TODAY); $('#nNote').val('初訂');
     $('#nApplyTpl').prop('checked', true);
     $('#nMachines').html('先選機台型號。').addClass('muted-help');
-    $('#nPMModel').val(''); $('#nPMModelVal').val('');
-    $('#nPartMachines').html('選了型號就會把在用的機台列出來，逐台勾選；可以換型號再加別的。').addClass('muted-help');
     syncScope();
     openMask('maskNew');
 });
@@ -265,69 +390,21 @@ function syncScopeFields() {
 $('#nKind').on('change', syncScope);
 $('#nScope').on('change', function () {
     $('#nPart').val(''); $('#nPartId').val('');
-    $('#nTool').val(''); $('#nToolId').val('');
-    $('#nModel').val(''); $('#nModelVal').val('');
+    $('#nToolId').val(''); $('#nModelVal').val('');
     $('#nMachines').html('先選機台型號。').addClass('muted-help');
-    $('#nPMModel').val(''); $('#nPMModelVal').val('');
-    $('#nPartMachines').html('選了型號就會把在用的機台列出來，逐台勾選；可以換型號再加別的。').addClass('muted-help');
-    NEW.machines = [];
+    NEW.machines = []; NEW.partMachines = [];
+    // 換了適用範圍＝前面挑的綁定對象已經不適用，三個挑選器一起重來（留著會送出對不上的 id）
+    $.each(['#nModelPick', '#nToolPick', '#nPartMachines'], function (i, b) {
+        var st = SSPICK[b]; if (!st) return;
+        st.sel = {}; st.order = []; st.cat = null;
+        $(b).find('.sspk-kw').val('');
+        ssPickRender(st);
+    });
     syncScopeFields();
 });
 
 /* 綁定對象：機台型號 */
-acAttach('#nModel', {
-    action: 'machine_models', hidden: '#nModelVal',
-    onClear: function () { NEW.machines = []; $('#nMachines').html('先選機台型號。').addClass('muted-help'); probe(); },
-    row: function (r) {
-        return '<span class="hit">' + esc(r.machine_model) + '</span>　' + esc(r.machine || '')
-             + '　<span class="muted-help">' + num(r.cnt) + ' 台：' + esc(r.asset_nos || '') + '</span>';
-    },
-    pick: function (r) {
-        $('#nModel').val(r.machine_model);
-        $('#nModelVal').val(r.machine_model);
-        loadModelMachines(r.machine_model);
-    }
-});
 
-/* ── 綁料號時的「使用機台」：打型號 → 列出該型號在用的機台 → 逐台勾；可以換型號再加別的
-      （使用者 2026-09-22：SOP 必定是此料號在特定機台上的規範，所以要能複選） ── */
-acAttach('#nPMModel', {
-    action: 'machine_models', hidden: '#nPMModelVal',
-    row: function (r) {
-        return '<span class="hit">' + esc(r.machine_model) + '</span>　' + esc(r.machine || '')
-             + '　<span class="muted-help">' + num(r.cnt) + ' 台：' + esc(r.asset_nos || '') + '</span>';
-    },
-    pick: function (r) {
-        $('#nPMModel').val(r.machine_model); $('#nPMModelVal').val(r.machine_model);
-        api('machines_by_model', { model: r.machine_model }, function (res) {
-            var sel = NEW.partMachines || [], h = '';
-            $.each(res.rows || [], function (i, m) {
-                var on = sel.indexOf(num(m.machine_id)) >= 0;
-                h += '<label><input type="checkbox" class="pmchk" value="' + num(m.machine_id) + '"'
-                   + (on ? ' checked' : '') + '> <span class="mno">' + esc(m.asset_no || '(未編號)') + '</span> '
-                   + esc(m.field_no || '') + '</label>';
-            });
-            $('#nPartMachines').removeClass('muted-help')
-                .html(h || '<span class="muted-help">這個型號沒有在用的機台。</span>');
-            pmSync();
-        });
-    }
-});
-/** 勾選狀態一律收進 NEW.partMachines——換了型號之後畫面會重畫，只看畫面上的勾就會把前一個型號選的弄丟 */
-function pmSync() {
-    var keep = (NEW.partMachines || []).slice();
-    $('#nPartMachines .pmchk').each(function () {
-        var id = num($(this).value !== undefined ? this.value : $(this).val());
-        var i = keep.indexOf(id);
-        if (this.checked) { if (i < 0) keep.push(id); }
-        else if (i >= 0) keep.splice(i, 1);
-    });
-    NEW.partMachines = keep;
-    $('#nPartMachines').next('.muted-help').text(keep.length
-        ? ('已選 ' + keep.length + ' 台；這個料號實際在哪幾台機器上做（不影響重複判定）。')
-        : '這個料號實際在哪幾台機器上做；不影響重複判定（同一個料號＋同一個製程仍然只能有一份）。');
-}
-$(document).on('change', '.pmchk', pmSync);
 
 /** 選了型號就把該型號在用的機台全部帶進來（使用者拍板），再逐台勾掉不適用的 */
 function loadModelMachines(model) {
@@ -345,14 +422,6 @@ function loadModelMachines(model) {
 }
 
 /* 綁定對象：量具（檢驗設備一覽表） */
-acAttach('#nTool', {
-    action: 'search_tool', hidden: '#nToolId', onClear: probe,
-    row: function (r) {
-        return '<span class="hit">' + esc(r.tool_no) + '</span>　' + esc(r.tool_type || '')
-             + '　<span class="muted-help">' + esc(r.spec_desc || r.manufacturer || '') + '</span>';
-    },
-    pick: function (r) { $('#nTool').val(r.tool_no); $('#nToolId').val(r.tool_id); probe(); }
-});
 
 /* 綁定對象：料號 */
 acAttach('#nPart', {
@@ -1084,13 +1153,14 @@ $(document).on('click', '#btnReScope', function () {
         h += '<option value="' + k + '"' + (k === d.scope ? ' selected' : '') + '>' + esc(SS_SCOPES[k]) + '</option>';
     });
     h += '</select></div>'
-       + '<label id="rsLab">綁定對象</label><div class="wide ac-wrap">'
-       + '<input type="text" id="rsBind"><input type="hidden" id="rsBindId">'
+       + '<label id="rsLab">綁定對象</label><div class="wide">'
+       + '<div id="rsPick"></div>'                       // 機台型號／量具：兩層挑選器
+       + '<div class="ac-wrap" id="rsPartWrap"><input type="text" id="rsBind" data-eg-hint="打料號從清單挑"></div>'
+       + '<input type="hidden" id="rsBindId">'
        + '<div class="muted-help" id="rsHint"></div></div>'
        + '<label id="rsPMLab">機器編號</label><div class="wide">'
-       + '<div class="ac-wrap" id="rsPMWrap" style="margin-bottom:4px;">'
-       + '<input type="text" id="rsPMModel" data-eg-hint="打機台型號或機台名稱，從清單挑"></div>'
        + '<div id="rsMachines" class="pickbox muted-help">先選機台型號。</div>'
+       + '<div id="rsPartMachines"></div>'               // 綁料號時的「使用機台」（可複選）
        + '<div class="muted-help" id="rsPMHint"></div></div>'
        + '</div><div class="err" id="rsErr" style="margin-top:6px;"></div>'
        + '<div style="margin-top:8px;"><button class="btn btn-sm btn-warm" id="rsSave">套用</button></div>';
@@ -1099,7 +1169,9 @@ $(document).on('click', '#btnReScope', function () {
     openMask('maskPick');
     rsSync();
     // 原本就綁好的機台要先帶進來，不然改個適用範圍就把已經綁好的機台清掉了
-    RSPM = $.map(CUR.machines || [], function (m) { return num(m.machine_id); });
+    RSPM0 = $.map(CUR.machines || [], function (m) { return num(m.machine_id); });
+    RSPM = RSPM0.slice();
+    if (d.scope === 'part') rsSync();          // 帶著已綁機台重畫一次挑選器
     if (d.scope === 'part' && RSPM.length) $('#rsPMHint').text('原本已綁 ' + RSPM.length + ' 台；可以換型號再加別的。');
 });
 function rsSync() {
@@ -1107,56 +1179,49 @@ function rsSync() {
     $('#rsBind').val(''); $('#rsBindId').val('');
     RSPM = [];
     $('#rsMachines').html('先選機台型號。').addClass('muted-help');
-    $('#rsPMModel').val('');
+    // 機台型號與量具走兩層挑選器（先點製程／量具種類再點項目）；料號仍然是打字挑（幾千筆，卡片排不下）
+    var isPick = (k === 'machine' || k === 'tool');
+    $('#rsPick').toggle(isPick);
+    $('#rsPartWrap').toggle(k === 'part');
+    if (isPick) {
+        ssPick({ box: '#rsPick', mode: (k === 'machine' ? 'model' : 'tool'), multi: false,
+                 onChange: function (l) {
+                     // 機台綁的是「型號文字」，量具綁的是 Tool_id——兩種不一樣，不可以都用 value
+                     var v = l.length ? (k === 'tool' ? num(l[0].id) : l[0].value) : '';
+                     $('#rsBindId').val(v); $('#rsBind').val(l.length ? l[0].no : '');
+                     if (k === 'machine' && v) rsLoadMachines(v);
+                 } });
+    } else { $('#rsPick').empty(); }
     // 機台：機器編號跟著型號；料號：可以再挑「用哪幾台機器」（選填、可跨型號累加）
     var showM = (k === 'machine' || k === 'part');
     $('#rsPMLab').toggle(showM).text(k === 'part' ? '使用機台' : '機器編號');
     $('#rsMachines').closest('.wide').toggle(showM);
-    $('#rsPMWrap').toggle(k === 'part');
+    $('#rsMachines').toggle(k === 'machine');
+    $('#rsPartMachines').toggle(k === 'part');
+    if (k === 'part') {
+        ssPick({ box: '#rsPartMachines', mode: 'machine', multi: true, sel: RSPM0 || [],
+                 onChange: function (l) { RSPM = $.map(l, function (x) { return num(x.id); }); } });
+    } else { $('#rsPartMachines').empty(); }
     $('#rsPMHint').text(k === 'part'
-        ? '選填：這個料號實際在哪幾台機器上做。打型號挑一個就會列出該型號的機台，可以換型號再加別的；不影響重複判定。'
+        ? '選填：這個料號實際在哪幾台機器上做；不影響重複判定。'
         : '');
     var lab = { machine: '機台型號', tool: '量具', part: '料號', general: '綁定對象' }[k] || '綁定對象';
     $('#rsLab').text(lab);
-    $('#rsBind').closest('.ac-wrap').toggle(k !== 'general');
+    // #rsBind 現在只有「料號」在用，所以顯示條件是 part 不是「不是 general」
+    // （舊條件會在機台／量具時把料號輸入框一起顯示出來，畫面上就出現一個沒有用的輸入框）
+    $('#rsPartWrap').toggle(k === 'part');
     $('#rsHint').text(k === 'machine' ? '打型號、機台名稱或機器編號，從清單挑。'
         : (k === 'tool' ? '打量具編號或種類，從清單挑。'
         : (k === 'part' ? '打料號從清單挑；同一個料號文字可能分屬好幾家客戶。' : '')));
 }
-var RSPM = [];      // 改綁定跳窗裡「綁料號時要用的機台」（跨型號累加，不能只看畫面上的勾）
-acAttach('#rsPMModel', {
-    action: 'machine_models', hidden: null,
-    row: function (r) {
-        return '<span class="hit">' + esc(r.machine_model) + '</span>　' + esc(r.machine || '')
-             + '　<span class="muted-help">' + num(r.cnt) + ' 台</span>';
-    },
-    pick: function (r) {
-        $('#rsPMModel').val(r.machine_model);
-        api('machines_by_model', { model: r.machine_model }, function (res) {
-            var h = '';
-            $.each(res.rows || [], function (i, m) {
-                h += '<label><input type="checkbox" class="rspm" value="' + num(m.machine_id) + '"'
-                   + (RSPM.indexOf(num(m.machine_id)) >= 0 ? ' checked' : '') + '> '
-                   + '<span class="mno">' + esc(m.asset_no || '(未編號)') + '</span> ' + esc(m.field_no || '') + '</label>';
-            });
-            $('#rsMachines').removeClass('muted-help')
-                .html(h || '<span class="muted-help">這個型號沒有在用的機台。</span>');
-        });
-    }
-});
-$(document).on('change', '.rspm', function () {
-    var id = num($(this).val()), i = RSPM.indexOf(id);
-    if (this.checked) { if (i < 0) RSPM.push(id); } else if (i >= 0) RSPM.splice(i, 1);
-    $('#rsPMHint').text('已選 ' + RSPM.length + ' 台；可以換型號再加別的，不影響重複判定。');
-});
+var RSPM = [], RSPM0 = [];   // 改綁定跳窗裡「綁料號時要用的機台」（跨型號累加，不能只看畫面上的勾）
 $(document).on('change', '#rsScope', rsSync);
 /* 一個輸入框要查三種主檔，所以 action 給成函式，依目前選的適用範圍決定要打哪一支 */
+/* #rsBind 現在只剩「料號」在用（機台型號與量具都改走兩層挑選器），
+   料號有幾千筆、卡片排不下，所以維持打字挑 */
 acAttach('#rsBind', {
     hidden: '#rsBindId',
-    action: function () {
-        var k = $('#rsScope').val();
-        return k === 'machine' ? 'machine_models' : (k === 'tool' ? 'search_tool' : 'search_part');
-    },
+    action: 'search_part',
     row: function (r) { return rsRow(r); },
     pick: function (r) { rsPick(r); }
 });
@@ -1168,19 +1233,20 @@ function rsRow(r) {
     return '<span class="hit">' + esc(r.D_Setting_Id) + '</span>　' + esc(r.customer || '')
         + '　<span class="muted-help">#' + num(r.d_id) + '</span>';
 }
+/** 選了型號就把該型號在用的機台全部帶進來，再逐台勾掉不適用的 */
+function rsLoadMachines(model) {
+    api('machines_by_model', { model: model }, function (res) {
+        var h = '';
+        $.each(res.rows || [], function (i, m) {
+            h += '<label><input type="checkbox" class="rschk" value="' + num(m.machine_id) + '" checked> '
+               + '<span class="mno">' + esc(m.asset_no || '(未編號)') + '</span> ' + esc(m.field_no || '') + '</label>';
+        });
+        $('#rsMachines').removeClass('muted-help').html(h || '<span class="muted-help">這個型號沒有在用的機台。</span>');
+    });
+}
 function rsPick(r) {
     var k = $('#rsScope').val();
-    if (k === 'machine') {
-        $('#rsBind').val(r.machine_model); $('#rsBindId').val(r.machine_model);
-        api('machines_by_model', { model: r.machine_model }, function (res) {
-            var h = '';
-            $.each(res.rows || [], function (i, m) {
-                h += '<label><input type="checkbox" class="rschk" value="' + num(m.machine_id) + '" checked> '
-                   + '<span class="mno">' + esc(m.asset_no || '(未編號)') + '</span> ' + esc(m.field_no || '') + '</label>';
-            });
-            $('#rsMachines').removeClass('muted-help').html(h || '<span class="muted-help">這個型號沒有在用的機台。</span>');
-        });
-    } else if (k === 'tool') { $('#rsBind').val(r.tool_no); $('#rsBindId').val(r.tool_id); }
+    if (k === 'machine' || k === 'tool') { return; }   // 這兩種改走兩層挑選器，不再打字挑
     else { $('#rsBind').val(r.D_Setting_Id); $('#rsBindId').val(r.d_id); }
 }
 $(document).on('click', '#rsSave', function () {

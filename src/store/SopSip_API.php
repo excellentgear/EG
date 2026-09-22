@@ -253,9 +253,15 @@ case 'search_part':
 case 'search_machine':
     jout(true, ['rows' => ss_search_machine($db, (string)($_GET['kw'] ?? ''))]);
 
-/** 「挑使用設備」：機台依製程分組＋量具依種類分組（分組規則在 lib，畫面只排版） */
-case 'equip_pick':
-    jout(true, ['groups' => ss_equip_pick_groups($db, (string)($_GET['kw'] ?? ''))]);
+/** 兩層挑選器的資料：mode＝machine（個別機台）／model（機台型號）／tool（量具）／空＝機台＋量具
+ *  分組規則一律在 lib（機台依綁定的製程、量具依種類），畫面只負責排版 */
+case 'equip_pick': {
+    $mode = (string)($_GET['mode'] ?? '');
+    $kw   = (string)($_GET['kw'] ?? '');
+    jout(true, ['groups' => in_array($mode, ['machine', 'model', 'tool'], true)
+                            ? ss_pick_groups($db, $mode, $kw)
+                            : ss_equip_pick_groups($db, $kw)]);
+}
 
 /** 量具（檢驗設備一覽表）——設備操作說明書除了機台也能綁它 */
 case 'search_tool':

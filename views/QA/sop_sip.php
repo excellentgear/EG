@@ -303,32 +303,29 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
             <label>表單版面 *</label><div class="wide"><select id="nKind"></select></div>
             <label>適用範圍 *</label><div class="wide"><select id="nScope"></select></div>
 
-            <!-- 機台：綁的是型號（同型號好幾台共用一份 SOP），底下勾要涵蓋哪幾台 -->
+            <!-- 機台：綁的是型號（同型號好幾台共用一份 SOP），底下勾要涵蓋哪幾台。
+                 型號與量具一律走兩層挑選器（先點製程／量具種類，再點項目），與線上檢驗挑量具同一套 -->
             <label id="nModelLab" class="mrow">機台型號 *</label>
-            <div class="wide ac-wrap mrow">
-                <input type="text" id="nModel" data-eg-hint="打型號（HGH250）、機台名稱（滾齒機）或機器編號（EG-016）">
+            <div class="wide mrow">
+                <div id="nModelPick"></div>
                 <input type="hidden" id="nModelVal">
-                <div class="muted-help" id="nModelHint">同一個型號常常有好幾台，選了型號會自動把在用的機台全部帶進來，再勾掉不適用的。</div>
+                <div class="muted-help" id="nModelHint">分類就是機台綁定的製程。選了型號會自動把在用的機台全部帶進來，再勾掉不適用的。</div>
             </div>
             <label class="mrow">機器編號</label>
             <div class="wide mrow"><div id="nMachines" class="pickbox muted-help">先選機台型號。</div></div>
             <!-- 綁料號時也可以再指定用哪幾台機器（使用者 2026-09-22：SOP 必定是此料號在特定機台上的規範） -->
             <label class="pmrow">使用機台<span class="muted-help">（可複選、選填）</span></label>
             <div class="wide pmrow">
-                <div class="ac-wrap" style="margin-bottom:4px;">
-                    <input type="text" id="nPMModel" data-eg-hint="打機台型號或機台名稱，從清單挑">
-                    <input type="hidden" id="nPMModelVal">
-                </div>
-                <div id="nPartMachines" class="pickbox muted-help">選了型號就會把在用的機台列出來，逐台勾選；可以換型號再加別的。</div>
+                <div id="nPartMachines"></div>
                 <div class="muted-help">這個料號實際在哪幾台機器上做；<b>不影響重複判定</b>（同一個料號＋同一個製程仍然只能有一份）。</div>
             </div>
 
             <!-- 量具（檢驗設備一覽表）：設備操作說明書的第二種綁法 -->
             <label class="trow">量具 *</label>
-            <div class="wide ac-wrap trow">
-                <input type="text" id="nTool" data-eg-hint="打量具編號（A-040-Q）或種類（盤式分厘卡）">
+            <div class="wide trow">
+                <div id="nToolPick"></div>
                 <input type="hidden" id="nToolId">
-                <div class="muted-help">清單就是「檢驗設備一覽表」裡還在用的量具。</div>
+                <div class="muted-help">先點量具種類再點編號；清單就是「檢驗設備一覽表」裡還在用的量具。</div>
             </div>
 
             <!-- 料號 -->
@@ -440,6 +437,10 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
                 （「製程名稱」那格會退回用文件名稱），只影響「工程名稱」欄與檢驗項目預設值的代入。</li>
             <li><b>「工程名稱」就是製程</b>（日式用語，工程＝工序），所以只有一欄「製程」，一律從製程主檔挑。</li>
             <li><b>三種版面都可以選「通用」或「特定料號」</b>；設備操作說明書另外還有「機台」「量具」。</li>
+            <li><b>機台型號、量具、使用機台一律是「先點分類、再點項目」的兩層挑選器</b>
+                （與線上檢驗「選擇本單使用的量具」同一套）：<b>機台的分類就是它在機台主檔綁定的製程</b>、
+                量具的分類是量具種類；每張分類卡上標有幾項與已選幾項，也可以直接打字跨分類搜尋。
+                只有<b>料號</b>維持打字挑——幾千筆排不成卡片。</li>
             <li><b>綁「特定料號」時還可以再指定用哪幾台機器</b>（選填、可複選、可以換型號再加別的）——
                 現場的 SOP 本來就是「這個料號在這幾台機器上怎麼做」。
                 <b>料號才是主鍵、機台只是附帶條件</b>：重複判定仍然只看料號＋製程，
