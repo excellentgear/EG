@@ -446,6 +446,13 @@ case 'order_unlink':
     prj_sync_parts_from_orders($db, $pid, $uname);
     jout(['message' => '已移出專案']);
 
+/** 清單頁「就地展開進度」要的資料：只有目標與任務。
+ *  刻意不用 get——那支會順路同步 BOM、算文件檢核、撈報工與出貨，展開一列不需要那些。 */
+case 'plan_rows':
+    $pid = (int)($_GET['project_id'] ?? 0);
+    $prj = prj_need($db, $P, $pid);
+    jout(['project' => $prj, 'goals' => prj_goals($db, $pid), 'tasks' => prj_tasks($db, $pid)]);
+
 /** 執行規劃表的檢視方式（甘特／清單）。存在專案上不是只存在瀏覽器——
  *  使用者要求「專案若是設定使用清單式，列印就不該顯示甘特圖」，
  *  而清單那一列的「列印」不會先開專案，只有存進 DB 列印才跟得上。 */
@@ -1277,7 +1284,14 @@ case 'print_meta':
     $signers = [];
     foreach (explode(',', (string)($_GET['signer_ids'] ?? '')) as $sid) {
         $sid = (int)$sid;
-        if ($sid > 0) $signers[$sid] = prj_sign_post($db, $sid, $bizDate, $NOW['date']);
+        if ($sid <= 0) continue;
+        $signers[$sid] = prj_sign_post($db, $sid, $bizDate, $NOW['date']);
+        // 執行規劃表的「專案負責人」不是簽章、只是印出他是誰，所以印**主職務**
+        // （prj_sign_post 取的是職級最高那筆＝代表身分，那是給圖章用的，兩者刻意分開）
+        $one = eg_people_annotate_posts($db, [['id' => $sid, 'dept_name' => $signers[$sid]['dept'],
+                                               'position_name' => $signers[$sid]['post']]]);
+        $signers[$sid]['main_dept'] = (string)($one[0]['main_dept_name'] ?? '');
+        $signers[$sid]['main_post'] = (string)($one[0]['main_position_name'] ?? '');
     }
     jout(['meta' => $meta, 'signers' => $signers,
           'stamp_tpl_id' => (int)prj_setting_get($db, $module === PRJ_ASDOC_CARD ? 'card_stamp_tpl_id' : 'plan_stamp_tpl_id', '0')]);

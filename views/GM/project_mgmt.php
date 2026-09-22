@@ -220,6 +220,11 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         .pj-noperm { border:1.5px solid #E8D5B5; background:#FDF8EF; border-radius:8px; padding:24px; color:#5b3a1e; }
         .pj-totop { position:fixed; right:24px; bottom:24px; width:40px; height:40px; border-radius:20px; background:#F0A24B;
             color:#fff; border:none; font-size:18px; cursor:pointer; display:none; z-index:8000; }
+        /* 清單就地展開（使用者要求：點一下在前端直接看到甘特進度） */
+        .pj-exp { display:inline-block; margin-left:6px; cursor:pointer; color:#B5762A; width:14px; text-align:center; }
+        .pj-exp:hover { color:#DD5138; }
+        .pj-exp-row > td { border-top:0 !important; }
+        .pj-inline-gantt .gantt-wrap { max-height:260px; overflow-y:auto; }
         @media print { .pj-toolbar, .pj-tabs, .pj-totop, .nav_menu, .left_col, footer { display:none !important; } }
     </style>
 </head>
@@ -272,6 +277,9 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         <div class="pj-pager">
             <label>每頁</label>
             <select id="pgSize" style="height:26px;"><option>5</option><option selected>10</option><option>20</option><option>50</option></select>
+            <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-left:10px;">
+                <input type="checkbox" id="listHideDone" data-eg-skip="1">隱藏已完成的步驟</label>
+            <span class="pj-hint" style="margin-left:6px;">（點專案代號旁的 ▸ 可以就地展開進度）</span>
             <span id="pgInfo"></span>
             <span id="pgBtns"></span>
         </div>
@@ -757,7 +765,10 @@ var LIST  = [];            // 清單（前端純顯示分頁）
 var PAGE  = 1, PSIZE = 10;
 var FTAGS = [];            // 已選的篩選標籤
 var GSCALE = 'week';       // 甘特刻度：day/week/month
-var GVIEW  = 'gantt';      // gantt / list
+var GVIEW  = 'gantt';      // gantt / list（實際以專案上的 plan_view 為準，列印要跟著走）
+var HIDE_DONE = false;     // 隱藏已完成的步驟（詳情頁與清單就地展開共用同一個勾選）
+var PLAN_CACHE = {};       // 清單就地展開用：project_id → {project,goals,tasks}，展開過就不再重打 API
+var LIST_OPEN  = [];       // 清單上目前展開了哪幾個專案（換頁/篩選後仍留著）
 
 function esc(s){ return $('<div>').text(s == null ? '' : s).html(); }
 /* 顯示用日期一律 YYYY.MM.DD（ai-rules/20；eg_date_fmt.js 只匯出 egFmtDate，各頁自己包一層是既有慣例） */

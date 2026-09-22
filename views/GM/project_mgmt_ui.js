@@ -173,8 +173,11 @@ function renderList() {
     var h = '';
     $.each(rows, function (i, r) {
         var miss = missCountOf(r);
-        h += '<tr>'
-          + '<td><b>' + esc(r.project_no) + '</b></td>'
+        var open = $.inArray(num(r.project_id), LIST_OPEN) >= 0;
+        h += '<tr class="pj-row" data-pid="' + r.project_id + '">'
+          + '<td><b>' + esc(r.project_no) + '</b>'
+          + '<span class="pj-exp" data-exp="' + r.project_id + '" title="就地展開／收合進度">'
+          + '<i class="fa fa-' + (open ? 'caret-down' : 'caret-right') + '"></i></span></td>'
           + '<td>' + esc(r.type_label) + '</td>'
           + '<td class="l"><span class="pj-op" data-open="' + r.project_id + '">' + esc(r.project_name) + '</span></td>'
           + '<td class="l">' + esc(r.customer_name || '－') + '</td>'
@@ -196,9 +199,42 @@ function renderList() {
           + '<span class="pj-op" data-print="' + r.project_id + '">列印</span>'
           + (PERM.canAdmin ? '<span class="pj-op" data-del="' + r.project_id + '" style="color:#DD5138;">刪除</span>' : '')
           + '</td></tr>';
+        if (open) {
+            h += '<tr class="pj-exp-row" data-exprow="' + r.project_id + '"><td colspan="14" style="padding:8px 10px;background:#FFFCF7;">'
+              + '<div class="pj-inline-gantt" data-pid="' + r.project_id + '">'
+              + '<span class="pj-hint">載入中…</span></div></td></tr>';
+        }
     });
     $('#listBody').html(h);
+    /* 展開的列各自把進度畫進去（資料抓過就留在 PLAN_CACHE，換頁再回來不會重打 API） */
+    $.each(LIST_OPEN, function (i, pid) { fillInlineGantt(pid); });
 }
+
+/* ── 清單就地展開甘特進度（使用者要求：點選就自動在前端展開甘特圖進度）──
+   刻意不整包呼叫 get（那支會順路同步 BOM、算文件檢核，重很多），
+   只要目標與任務就夠畫圖了。 */
+function fillInlineGantt(pid) {
+    var $box = $('.pj-inline-gantt[data-pid="' + pid + '"]');
+    if (!$box.length) return;
+    var draw = function (res) {
+        $box.html(ganttHtml(res, { hideDone: HIDE_DONE, scale: 'week', compact: true })
+            + '<div class="pj-hint" style="margin-top:4px;">'
+            + (res.tasks || []).length + ' 個步驟。點「檢視」開啟專案可以編輯。</div>');
+    };
+    if (PLAN_CACHE[pid]) { draw(PLAN_CACHE[pid]); return; }
+    api('plan_rows', { project_id: pid }).done(function (r) {
+        PLAN_CACHE[pid] = { project: r.project || {}, goals: r.goals || [], tasks: r.tasks || [] };
+        draw(PLAN_CACHE[pid]);
+    });
+}
+
+$(document).on('click', '[data-exp]', function (e) {
+    e.stopPropagation();
+    var pid = num($(this).data('exp'));
+    var at = $.inArray(pid, LIST_OPEN);
+    if (at >= 0) LIST_OPEN.splice(at, 1); else LIST_OPEN.push(pid);
+    renderList();
+});
 
 /* 清單的「文件」欄只知道有幾個料號，缺幾件要開專案才算得出來；這裡不猜，開過的才顯示 */
 function missCountOf(r) {
@@ -567,14 +603,20 @@ function renderPlan(res) {
         $('#panePlan').html('<div class="pj-hint" style="padding:14px;">請先儲存專案基本資料，才能編排目標與任務。</div>');
         return;
     }
+    /* 檢視方式是「這個專案的設定」不是瀏覽器的暫存狀態——列印要跟著它走
+       （使用者指定：清單式的專案，列印就不該印甘特圖），所以以專案上存的為準。 */
+    GVIEW = (String(p.plan_view || '') === 'list') ? 'list' : 'gantt';
     var h = '<div class="pj-toolbar" style="margin-bottom:8px;">'
       + '<label>檢視</label>'
-      + '<select id="gView"><option value="gantt"' + (GVIEW === 'gantt' ? ' selected' : '') + '>時間軸（甘特）</option>'
+      + '<select id="gView" title="這個設定會記在專案上，列印版也會跟著換（清單式不印甘特圖）">'
+      + '<option value="gantt"' + (GVIEW === 'gantt' ? ' selected' : '') + '>時間軸（甘特）</option>'
       + '<option value="list"' + (GVIEW === 'list' ? ' selected' : '') + '>清單</option></select>'
       + '<label>刻度</label><select id="gScale">'
       + '<option value="day"' + (GSCALE === 'day' ? ' selected' : '') + '>日</option>'
       + '<option value="week"' + (GSCALE === 'week' ? ' selected' : '') + '>週</option>'
       + '<option value="month"' + (GSCALE === 'month' ? ' selected' : '') + '>月</option></select>'
+      + '<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">'
+      + '<input type="checkbox" id="gHideDone" data-eg-skip="1"' + (HIDE_DONE ? ' checked' : '') + '>隱藏已完成的步驟</label>'
       + (res.can_edit ? '<button id="btnSeed" title="帶入 AS9100 標準流程（三個階段與各步驟）"><i class="fa fa-magic"></i> 帶入標準流程</button>'
                       + '<button id="btnGoalAdd"><i class="fa fa-plus"></i> 新增目標</button>'
                       + '<button class="btn-warm" id="btnPlanSave"><i class="fa fa-save"></i> 儲存規劃表</button>' : '')
@@ -586,14 +628,37 @@ function renderPlan(res) {
     if (res.can_edit) drawPlanEditor(res);
 }
 
-/* ── 甘特時間軸 ── */
+/* ── 甘特時間軸 ──
+   drawGantt() 只是把 ganttHtml() 的結果塞進 #ganttBox；
+   清單頁的「點一下就地展開進度」用的是同一支 ganttHtml()，兩邊不會畫出兩種樣子（鐵律4）。 */
 function drawGantt(res) {
-    var tasks = res.tasks || [], goals = res.goals || [];
     if (GVIEW === 'list') { drawGanttList(res); return; }
+    $('#ganttBox').html(ganttHtml(res, { hideDone: HIDE_DONE, scale: GSCALE }));
+}
+
+/**
+ * @param opt.hideDone 隱藏已完成的步驟（使用者要求的勾選項）
+ * @param opt.scale    day/week/month；不給就用目前的 GSCALE
+ * @param opt.compact  清單頁就地展開用的精簡版（不畫圖例）
+ */
+function ganttHtml(res, opt) {
+    opt = opt || {};
+    var GSCALE = opt.scale || 'week';            // 區域變數，刻意遮蔽全域：清單展開時不受詳情頁的刻度影響
+    var goals = res.goals || [];
+    var tasks = res.tasks || [];
+    if (opt.hideDone) {
+        tasks = $.grep(tasks, function (t) { return taskState(t, META.today) !== 'done'; });
+    }
     var range = ganttRange(res.project, tasks);
     if (!range) {
-        $('#ganttBox').html('<div class="pj-hint" style="padding:14px;">還沒有任何日期，填好任務的預計起迄日後就會畫出時間軸。</div>');
-        return;
+        return '<div class="pj-hint" style="padding:14px;">'
+             + (opt.hideDone && (res.tasks || []).length ? '目前的步驟都已完成（已勾選隱藏已完成）。'
+                                                         : '還沒有任何日期，填好任務的預計起迄日後就會畫出時間軸。')
+             + '</div>';
+    }
+    function tickLabel(d) {
+        if (GSCALE === 'month') return (d.getMonth() + 1) + '月';
+        return (d.getMonth() + 1) + '/' + d.getDate();
     }
     var d0 = new Date(range.start + 'T00:00:00'), d1 = new Date(range.end + 'T00:00:00');
     /* 左右各留 3 天，條子才不會貼著邊 */
@@ -639,27 +704,33 @@ function drawGantt(res) {
                + barsFor(t, d0, span, today) + '</div></div>';
         });
     });
-    h += '</div></div>'
-      + '<div class="gantt-legend">'
-      + '<span><em style="background:#F7E0BD;border:1px solid #E0C9A2;"></em> 預計</span>'
-      + '<span><em style="background:#C97B2E;"></em> 實際</span>'
-      + '<span><em style="background:#DD5138;"></em> 逾期未完成</span>'
-      + '<span><em style="background:#8A5A2B;width:10px;height:10px;transform:rotate(45deg);border-radius:2px;"></em> 里程碑</span>'
-      + '<span><em style="background:#DD5138;width:2px;height:14px;border-radius:0;"></em> 今天（' + dispDate(META.today) + '）</span>'
-      + '</div>';
-    $('#ganttBox').html(h);
-}
-
-function tickLabel(d) {
-    if (GSCALE === 'month') return (d.getMonth() + 1) + '月';
-    return (d.getMonth() + 1) + '/' + d.getDate();
+    h += '</div></div>';
+    if (!opt.compact) {
+        h += '<div class="gantt-legend">'
+          + '<span><em style="background:#F7E0BD;border:1px solid #E0C9A2;"></em> 預計</span>'
+          + '<span><em style="background:#C97B2E;"></em> 實際</span>'
+          + '<span><em style="background:#DD5138;"></em> 逾期未完成</span>'
+          + '<span><em style="background:#8A5A2B;width:10px;height:10px;transform:rotate(45deg);border-radius:2px;"></em> 里程碑</span>'
+          + '<span><em style="background:#DD5138;width:2px;height:14px;border-radius:0;"></em> 今天（' + dispDate(META.today) + '）</span>'
+          + '</div>';
+    }
+    return h;
 }
 
 function barsFor(t, d0, span, today) {
     var out = '';
+    /* 一定要夾在軸的範圍內（0~100%）。
+       逾期那一條是從「預計完成日」畫到「今天」，而軸的右界只算到專案/任務的最後一個日期——
+       今天遠晚於那個日期時（例：5/21 到期、今天 9/22），沒夾住的話寬度會算成好幾百 %，
+       整條紅棒橫跨整張圖、把底下真正的預計長條蓋掉：使用者回報「甘特圖跟我設定的不同」就是這個。 */
     function pos(a, b) {
         var s = dayDiff(d0, a) / span * 100;
-        var w = Math.max(0.6, dayDiff(a, b) / span * 100);
+        var e = dayDiff(d0, b) / span * 100;
+        if (e < s) e = s;
+        s = Math.max(0, Math.min(100, s));
+        e = Math.max(0, Math.min(100, e));
+        var w = Math.max(0.6, e - s);
+        if (s + w > 100) w = Math.max(0.6, 100 - s);
         return 'left:' + s + '%;width:' + w + '%;';
     }
     var ps = t.plan_start ? new Date(t.plan_start + 'T00:00:00') : null;
@@ -743,7 +814,8 @@ function groupTasks(goals, tasks) {
 }
 
 function ganttRange(p, tasks) {
-    var min = p.start_date || '', max = p.end_date || '';
+    var min = p.start_date || '', max = p.end_date || '', overdue = false;
+    var today = META.today || '';
     $.each(tasks, function (i, t) {
         $.each(['plan_start', 'plan_end', 'act_start', 'act_end'], function (j, k) {
             var v = t[k] || '';
@@ -751,7 +823,11 @@ function ganttRange(p, tasks) {
             if (!min || v < min) min = v;
             if (!max || v > max) max = v;
         });
+        if (t.plan_end && !t.act_end && today && t.plan_end < today) overdue = true;
     });
+    /* 有逾期未完成的任務時把軸拉到今天為止——不然「逾期到今天」那一段畫不進來，
+       使用者只會看到一條被夾在右邊界的紅棒，看不出到底逾期多久。 */
+    if (overdue && today && max && today > max) max = today;
     return (min && max) ? { start: min, end: max } : null;
 }
 function dayDiff(a, b) { return (b - a) / 86400000; }
@@ -1391,8 +1467,27 @@ $(document).on('click', '#planEditBox .g-del', function () {
     drawGantt(CUR);
     PLAN_DIRTY = true; PLAN_HAS_DEL = true;
 });
-$(document).on('change', '#gView', function () { GVIEW = $(this).val(); drawGantt(CUR); });
+$(document).on('change', '#gView', function () {
+    GVIEW = $(this).val();
+    drawGantt(CUR);
+    /* 記在專案上（列印版要跟著走）。只是個顯示偏好，存不進去也不擋畫面。 */
+    if (CUR && num(CUR.project.project_id) && CUR.can_edit) {
+        CUR.project.plan_view = GVIEW;
+        api('plan_view_save', { project_id: CUR.project.project_id, plan_view: GVIEW }, 'POST');
+        $.each(LIST, function (i, r) { if (num(r.project_id) === num(CUR.project.project_id)) r.plan_view = GVIEW; });
+    }
+});
 $(document).on('change', '#gScale', function () { GSCALE = $(this).val(); drawGantt(CUR); });
+/* 「隱藏已完成的步驟」詳情頁與清單就地展開共用同一個開關，勾一次兩邊一起變 */
+$(document).on('change', '#gHideDone, #listHideDone', function () {
+    HIDE_DONE = $(this).is(':checked');
+    $('#gHideDone, #listHideDone').prop('checked', HIDE_DONE);
+    if (CUR && $('#ganttBox').length) drawGantt(CUR);
+    $('.pj-inline-gantt').each(function () {
+        var pid = num($(this).data('pid'));
+        if (PLAN_CACHE[pid]) $(this).html(ganttHtml(PLAN_CACHE[pid], { hideDone: HIDE_DONE, scale: 'week', compact: true }));
+    });
+});
 $(document).on('click', '#btnSeed', function () {
     if (!planLeaveOk('帶入標準流程')) return;
     if (!confirm('帶入 AS9100 標準流程？\n\n會新增三個階段（前置審查與準備／備料與首件驗證／批量生產與結案）與底下的步驟。\n已經存在的階段不會重複建立，你自己排的內容也不會被覆蓋。')) return;
@@ -2996,26 +3091,24 @@ function printBaseCss(opt) {
     return css;
 }
 
-/** 列印視窗的 onload，做兩件只有「內容排好之後」才量得出來的事（ai-rules/16 第二節）：
- *   ① A4 橫式放不下就升成 A3 橫式（opt.autoUpgrade）——這張是甘特格狀表，
- *      被切成兩頁就看不出長短了，寧可換大一張紙也要印在同一面。
- *   ② 還是超過一頁時才補左下角頁碼。
- *  兩件事都要用「量的」，不可以用筆數猜：換紙張方向、換周期欄數，筆數的門檻就不準了。
- *  後補的 @page 規則會和原本那條合併（同一份文件的 @page 會疊加），已用 printToPDF 實測。 */
+/** 列印視窗的 onload：量內容有沒有超過一頁，超過才補左下角頁碼（ai-rules/16 第二節）。
+ *  「多頁才印頁碼」一律用量的，不可以用筆數猜——換紙張方向、換欄數，筆數的門檻就不準了。
+ *  後補的 @page 規則會和原本那條合併（同一份文件的 @page 會疊加），已用 printToPDF 實測。
+ *
+ *  **不要再做「放不下就自動換成 A3」**（2026-09-22 試過又拿掉）：
+ *  CSS 說 A3、印表機紙匣裡是 A4 時，Chrome 會把 A3 的版面套到 A4 紙上，
+ *  使用者看到的就是「內容只印在左半邊、右邊被裁掉、還變成 2 張紙」。
+ *  紙張尺寸是實體設備決定的，網頁單方面宣告沒有用——一律 A4 橫式，
+ *  放不下就讓瀏覽器自然分頁（表頭會跨頁重複、資料列不會被切成兩半、左下角有頁碼）。 */
 function printBootstrap(opt) {
     opt = opt || {};
-    var land = !!opt.landscape, dir = land ? 'landscape' : 'portrait';
-    var lim = function (paper) {
-        return Math.round((printPageMm(paper, land) - PRINT_MG * 2 - PRINT_PAD * 2) * 96 / 25.4);
-    };
+    var lim = Math.round((printPageMm(opt.paper || 'A4', !!opt.landscape) - PRINT_MG * 2 - PRINT_PAD * 2) * 96 / 25.4);
     var js = 'window.onload=function(){try{'
-        + 'var add=function(css){var s=document.createElement("style");s.textContent=css;document.head.appendChild(s);};'
-        + 'var h=document.body.scrollHeight, lim=' + lim(opt.paper || 'A4') + ';';
-    if (opt.autoUpgrade && (opt.paper || 'A4') !== 'A3') {
-        js += 'if(h > lim*0.98){ add("@page{size:A3 ' + dir + ';}"); lim=' + lim('A3') + '; }';
-    }
-    js += 'if(h > lim*0.98){ add(\'@page{@bottom-left{content:"第 " counter(page) " 頁／共 " counter(pages) " 頁";'
-        + 'font-size:9pt;color:#333;vertical-align:middle;}}\'); }'
+        + 'if(document.body.scrollHeight > ' + lim + '*0.98){'
+        + 'var s=document.createElement("style");'
+        + 's.textContent=\'@page{@bottom-left{content:"第 " counter(page) " 頁／共 " counter(pages) " 頁";'
+        + 'font-size:9pt;color:#333;vertical-align:middle;}}\';'
+        + 'document.head.appendChild(s);}'
         + '}catch(e){}setTimeout(function(){window.print();},350);};';
     return '<scr' + 'ipt>' + js + '</scr' + 'ipt>';
 }
@@ -3052,40 +3145,61 @@ function printPlan(res) {
     });
 }
 
+/** 負責人欄：使用者指定「顯示部門與職稱、人名就好，不需要簽章」，
+ *  而且「部門 職稱 換行後顯示人名」。部門職稱一律取**主職務**
+ *  （兼任職級較高的人用職級最高那筆會印成兼任身分，使用者已回報過這個問題）。 */
+function ownerBlock(m, userId, name) {
+    var s = (m.signers || {})[userId] || {};
+    var d = s.main_dept || s.dept || '', j = s.main_post || s.post || '';
+    var top = ((d ? d + ' ' : '') + j).replace(/\s+$/, '');
+    return (top ? '<div style="font-size:9pt;">' + esc(top) + '</div>' : '')
+         + '<div style="font-size:11pt;">' + esc(name || '') + '</div>';
+}
+
 function buildPlanHtml(res, m) {
     var p = res.project;
     var grouped = groupTasks(res.goals || [], res.tasks || []);
-    var periods = planPeriods(res);
-    /* 周期欄是依專案期間動態切出來的：超過 10 欄時 A4 橫式會把長條圖擠成一條線，升成 A3 橫式 */
-    var paper = periods.length > 10 ? 'A3' : 'A4';
+    /* 專案設定成「清單」檢視時列印就不畫甘特（使用者指定）：
+       清單式的人要的是日期與進度，硬印一排空白周期格只是浪費半張紙。 */
+    var isList  = (String(p.plan_view || 'gantt') === 'list');
+    var periods = isList ? [] : planPeriods(res);
 
-    var css = printBaseCss({ landscape: true, paper: paper, docNo: m.meta.doc_no })
+    /* 紙張一律 A4 橫式。**不要自動換 A3**：紙匣裡是 A4 時 Chrome 會把 A3 版面套到 A4 紙上，
+       結果是右邊被裁掉又多出一張紙（使用者 2026-09-22 實測回報）。放不下就讓它自然分頁。 */
+    var css = printBaseCss({ landscape: true, docNo: m.meta.doc_no })
       + '.hdr td { border:1px solid #000; font-size:10pt; }\n'
-      + '.pd { width:' + (periods.length ? (42 / periods.length) : 42) + '%; }\n'
-      + '.pcell { padding:0; height:5mm; }\n'
-      + '.pbar { display:block; height:3mm; margin:1mm 0; }\n'
-      + '.pbar.plan { background:#d9d9d9; }\n'
-      + '.pbar.act  { background:#000; }\n'
-      + '.ms { font-size:10pt; text-align:center; }\n';
+      + '.ms { font-size:10pt; text-align:center; }\n'
+      + (isList ? '' :                                   /* 清單式不畫格狀周期，這幾條就不要輸出 */
+          '.pd { width:' + (periods.length ? (42 / periods.length) : 42) + '%; }\n'
+        + '.pcell { padding:0; height:5mm; }\n'
+        + '.pbar { display:block; height:3mm; margin:1mm 0; }\n'
+        + '.pbar.plan { background:#d9d9d9; }\n'
+        + '.pbar.act  { background:#000; }\n');
 
     var h = '<div class="p-co">' + esc(m.meta.company || '') + '</div>'
       + '<div class="p-en">EXCELLENT GEAR TECHNOLOGY CO.,LTD</div>'
       + '<div class="p-tt">' + esc(m.meta.doc_name || '專案執行規劃表') + '</div>';
 
     /* 表頭：專案名稱／專案負責人／專案目標／日期（比照紙本 B4/U4/B6/U6） */
-    var ownerSign = stampHtml(p.owner_name, p.plan_date || p.start_date || '', false,
-        (m.signers[p.owner_id] || {}).dept, (m.signers[p.owner_id] || {}).post);
     h += '<table class="hdr"><colgroup><col style="width:16%"><col style="width:44%"><col style="width:16%"><col style="width:24%"></colgroup>'
       + '<tr><td>專案名稱</td><td>' + esc(p.project_name) + '　<span style="font-size:9pt;">（專案代號 '
       + esc(p.project_no) + '）</span></td>'
-      + '<td>專案負責人</td><td class="c">' + ownerSign + '</td></tr>'
+      + '<td>專案負責人</td><td class="c">' + ownerBlock(m, p.owner_id, p.owner_name) + '</td></tr>'
       + '<tr><td>專案目標</td><td>' + esc(p.goal_desc || '').replace(/\n/g, '<br>') + '</td>'
       + '<td>日期</td><td class="c">' + dispDate(p.plan_date || p.start_date) + '</td></tr>'
       + '</table><div style="height:2mm;"></div>';
 
-    /* 表身：目標｜主要任務｜專案完成日期(預計/實際)｜周期格狀圖｜負責人 */
+    h += isList ? planListTable(grouped) : planGanttTable(grouped, periods);
+
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'
+        + esc(m.meta.doc_name || '專案執行規劃表') + '</title><style>' + css + '</style></head><body>' + h
+        + printBootstrap({ landscape: true }) + '</body></html>';
+}
+
+/* 甘特（格狀周期表）版：比照紙本，每個任務兩列＝預計／實際 */
+function planGanttTable(grouped, periods) {
     /* table-layout:fixed 之後欄寬以 colgroup 為準，各欄加總要剛好 100%（超過會被整體壓縮） */
-    h += '<table><colgroup><col style="width:14%"><col style="width:19%"><col style="width:6%"><col style="width:9%">';
+    var h = '<table><colgroup><col style="width:14%"><col style="width:19%"><col style="width:6%"><col style="width:9%">';
     $.each(periods, function () { h += '<col class="pd">'; });
     h += '<col style="width:10%"></colgroup><thead><tr>'
       + '<th rowspan="2">目標</th><th rowspan="2">主要任務</th>'
@@ -3115,11 +3229,42 @@ function buildPlanHtml(res, m) {
                + periodCells(t, periods, 'act') + '</tr>';
         });
     });
-    h += '</tbody></table>';
+    return h + '</tbody></table>';
+}
 
-    return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'
-        + esc(m.meta.doc_name || '專案執行規劃表') + '</title><style>' + css + '</style></head><body>' + h
-        + printBootstrap({ landscape: true, paper: paper, autoUpgrade: true }) + '</body></html>';
+/* 清單版：沒有周期格，改印完整的預計／實際起迄與進度（一個任務一列，不分成兩列） */
+function planListTable(grouped) {
+    var h = '<table><colgroup><col style="width:16%"><col style="width:24%">'
+      + '<col style="width:9%"><col style="width:9%"><col style="width:9%"><col style="width:9%">'
+      + '<col style="width:7%"><col style="width:7%"><col style="width:10%"></colgroup><thead><tr>'
+      + '<th rowspan="2">目標</th><th rowspan="2">主要任務</th>'
+      + '<th colspan="2">預計</th><th colspan="2">實際</th>'
+      + '<th rowspan="2">進度</th><th rowspan="2">狀態</th><th rowspan="2">負責人</th></tr>'
+      + '<tr><th>開始</th><th>完成</th><th>開始</th><th>完成</th></tr></thead><tbody>';
+    if (!grouped.length) h += '<tr><td colspan="9" class="c">（尚未建立目標與任務）</td></tr>';
+    $.each(grouped, function (gi, g) {
+        var list = g.tasks.length ? g.tasks : [{ task_name: '', owner_name: '' }];
+        $.each(list, function (ti, t) {
+            h += '<tr>';
+            if (ti === 0) h += '<td rowspan="' + list.length + '">' + esc(g.goal_name) + '</td>';
+            h += '<td>' + esc(t.task_name) + (num(t.is_milestone) ? '<span class="ms"> ◆</span>' : '') + '</td>'
+               + '<td class="c">' + dispDate(t.plan_start) + '</td><td class="c">' + dispDate(t.plan_end) + '</td>'
+               + '<td class="c">' + dispDate(t.act_start) + '</td><td class="c">' + dispDate(t.act_end) + '</td>'
+               + '<td class="c">' + (t.task_name ? num(t.progress) + '%' : '') + '</td>'
+               + '<td class="c">' + esc(t.task_name ? taskStateLabel(t) : '') + '</td>'
+               + '<td class="c">' + esc(t.owner_name || '') + '</td></tr>';
+        });
+    });
+    return h + '</tbody></table>';
+}
+
+/* 列印用的狀態文字：畫面上是彩色小籤，紙上只能印字 */
+function taskStateLabel(t) {
+    var m = META.task_status || {};
+    if (t.status_code && m[t.status_code]) return m[t.status_code];
+    if (t.act_end) return '已完成';
+    if (t.act_start) return '進行中';
+    return '未開始';
 }
 
 /* 周期欄位：依專案期間切成月（超過 12 個月改成季，避免欄位窄到看不出來） */
