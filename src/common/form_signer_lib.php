@@ -30,6 +30,9 @@ require_once __DIR__ . '/org_role_lib.php';
 
 const FSD_SIGNER_MODES = ['user', 'dept_auto_manager', 'submitter_supervisor', 'filler_supervisor', 'top_approver', 'filler'];
 
+/** 自動簽核紀錄的意見文字。approval_record 沒有 is_auto 欄位，只能靠這行字認出「哪幾筆是系統蓋的」。 */
+const FSD_AUTO_SIGN_NOTE = '（系統自動簽核）';
+
 const FSD_FEATURES = [
     ['code' => 'fsd_view',          'group' => 'view', 'label' => '檢閱案件列表（沒勾也看得到自己建立的案件）'],
     ['code' => 'fsd_view_all',      'group' => 'view', 'label' => '檢視全部人員建立的案件'],
@@ -1799,6 +1802,98 @@ function fsd_post_edit_sync_response(PDO $db, array $case, string $slotKey, int 
     $db->prepare("INSERT INTO fsd_case_response (case_id,stage_seq,slot_key,resolved_user_id,resolved_user_name,decision,is_auto,reply_text,responded_at)
                   VALUES (?,0,?,?,?,'approved',1,'（系統自動簽核）',?)")
        ->execute([$caseId, $slotKey, $signerId, $signerName, $ts]);
+}
+
+/** 這件案子有幾個章的日期會跟著業務日期走（自動簽核）、幾個不會（真人當場簽的）。 */
+function fsd_case_biz_date_stats(PDO $db, int $caseId): array {
+    $st = $db->prepare("SELECT SUM(COALESCE(is_auto,0)=1) a, SUM(COALESCE(is_auto,0)=0) m
+                        FROM fsd_case_response WHERE case_id=? AND responded_at IS NOT NULL");
+    $st->execute([$caseId]);
+    $r = $st->fetch(PDO::FETCH_ASSOC) ?: [];
+    return ['auto' => (int)($r['a'] ?? 0), 'manual' => (int)($r['m'] ?? 0)];
+}
+
+/**
+ * 更改業務日期（草稿隨時可改；已送出的案件＝事後編修的一部分，僅超級管理員）。
+ * 2026-09-22 使用者回報：案件業務日期是 2026.09.01、文件上的章卻印 2026.08.26。
+ * 原因是**文件上那個日期印的是該筆簽核紀錄的時間**，而自動簽核的時間是「送出當下」依當時的
+ * 業務日期算出來的；事後把業務日期改掉（或當初填錯），簽核紀錄不會自己跟著動，章就停在舊日期。
+ * 所以改業務日期一定要連動：
+ *   ①自動簽核的紀錄（fsd_case_response.is_auto=1 與 approval_record 上成對的那一筆，兩者本來就
+ *     共用同一個時間戳）整批重排到新業務日期，**先後順序完全保留**，時間仍走共用窗口 09:30~19:00、
+ *     人人錯開 5~30 分（ai-rules/21）。
+ *   ②真人當場按下核准的紀錄**一律不動**——那是實際發生的事，改掉就是假造簽核時間；那幾個章上的
+ *     日期因此仍是原本的日期，呼叫端要把筆數講給使用者聽，不可以默默留著讓人以為沒生效。
+ *   ③已存檔的合成 PDF 作廢，下次開啟案件時重新產生（章的日期是產生當下燒進去的，不作廢就只有
+ *     畫面變、下載到的 PDF 還是舊日期而且完全看不出來）。
+ * 圖章上的部門職稱（依業務日期回推當時職務）與列印右下角的 AS 編號版次都是即時算的，改完自動跟著
+ * 新日期，不必在這裡另外處理。
+ */
+function fsd_case_set_business_date(PDO $db, int $caseId, int $byUid, string $newDate, bool $canAdmin = false, ?callable $onExportInvalidated = null): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    $newDate = trim($newDate);
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $newDate)
+        || !checkdate((int)substr($newDate, 5, 2), (int)substr($newDate, 8, 2), (int)substr($newDate, 0, 4)))
+        return ['ok'=>false, 'msg'=>'請填寫正確的業務日期'];
+
+    $isDraft = ($case['status'] ?? '') === 'draft';
+    if ($isDraft) {
+        if ((int)$case['applicant_id'] !== $byUid && !$canAdmin && $byUid !== 1)
+            return ['ok'=>false, 'msg'=>'只有申請人本人或管理員可以修改業務日期'];
+    } elseif ($byUid !== 1) {
+        return ['ok'=>false, 'msg'=>'案件已送出，僅超級管理員可以更改業務日期'];
+    }
+
+    $old = (string)($case['business_date'] ?? '');
+    $stats = fsd_case_biz_date_stats($db, $caseId);
+    if ($old === $newDate)
+        return ['ok'=>true, 'business_date'=>$newDate, 'old_date'=>$old, 'unchanged'=>true,
+                'auto_shifted'=>0, 'manual_kept'=>$stats['manual']];
+
+    // 一個舊時間戳對應一個新時間戳：response 與 approval_record 成對的那兩筆本來就是同一個時間，
+    // 用「舊時間→新時間」的對照表更新，兩邊才不會各自重排而失去配對。
+    $st = $db->prepare("SELECT t FROM (
+            SELECT DISTINCT responded_at t FROM fsd_case_response
+             WHERE case_id=? AND COALESCE(is_auto,0)=1 AND responded_at IS NOT NULL
+            UNION
+            SELECT DISTINCT decided_at t FROM approval_record
+             WHERE module='form_signer' AND entity_id=? AND note=? AND decided_at IS NOT NULL
+        ) x ORDER BY t");
+    $st->execute([$caseId, $caseId, FSD_AUTO_SIGN_NOTE]);
+    $olds = array_column($st->fetchAll(PDO::FETCH_ASSOC), 't');
+
+    $map = []; $last = null; $left = count($olds);
+    foreach ($olds as $t) {
+        $ts = eg_auto_sign_next_ts($db, $newDate, $last, $left--);
+        $map[(string)$t] = $ts;
+        $last = $ts;
+    }
+
+    $oldExport = trim((string)($case['export_pdf_name'] ?? ''));
+    $shifted = 0;
+    $db->beginTransaction();
+    try {
+        $db->prepare("UPDATE fsd_case SET business_date=?, updated_at=NOW() WHERE id=?")->execute([$newDate, $caseId]);
+        $uR = $db->prepare("UPDATE fsd_case_response SET responded_at=? WHERE case_id=? AND COALESCE(is_auto,0)=1 AND responded_at=?");
+        $uA = $db->prepare("UPDATE approval_record SET submitted_at=?, decided_at=?
+                             WHERE module='form_signer' AND entity_id=? AND note=? AND decided_at=?");
+        foreach ($map as $t => $ts) {
+            $uR->execute([$ts, $caseId, $t]);
+            $shifted += $uR->rowCount();
+            $uA->execute([eg_auto_sign_before_ts($ts), $ts, $caseId, FSD_AUTO_SIGN_NOTE, $t]);
+        }
+        if ($oldExport !== '')
+            $db->prepare("UPDATE fsd_case SET export_pdf_name=NULL,export_pdf_at=NULL,export_mode=NULL WHERE id=?")->execute([$caseId]);
+        $db->commit();
+    } catch (Throwable $e) {
+        $db->rollBack();
+        return ['ok'=>false, 'msg'=>'更改失敗：' . $e->getMessage()];
+    }
+    if ($oldExport !== '' && $onExportInvalidated) { try { $onExportInvalidated($oldExport); } catch (Throwable $e) {} }
+
+    return ['ok'=>true, 'business_date'=>$newDate, 'old_date'=>$old,
+            'auto_shifted'=>$shifted, 'manual_kept'=>$stats['manual'], 'pdf_invalidated'=>($oldExport !== '')];
 }
 
 /* ============================================================ 補案件（backfill；2026-08-17 使用者明確要求） ============================================================

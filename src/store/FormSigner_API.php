@@ -402,6 +402,9 @@ case 'case_get': {
         'can_delete_hard'=>$canDeleteHard, 'can_delete_soft'=>$canDeleteSoft,
         // 草稿：申請人本人或管理員可設填表人（不然「預設未選定」會沒人設得了）；已送出：仍限超級管理員回改
         'can_set_filler'=>$case['status']==='draft' ? ($isOwner || $perms['canAdmin'] || $uid === 1) : $uid === 1,
+        // 業務日期：草稿＝申請人本人或管理員；已送出＝僅超級管理員（章的日期會跟著重排，見 fsd_case_set_business_date）
+        'can_set_biz_date'=>$case['status']==='draft' ? ($isOwner || $perms['canAdmin'] || $uid === 1) : $uid === 1,
+        'biz_date_stats'=>fsd_case_biz_date_stats($db, $id),        // 改日期前要先告訴使用者會動到幾個章、幾個不會動
         'needs_filler'=>fsd_case_needs_filler($db, $case),          // 有框填表人圖章＝沒選填表人不准送出
         'filler_stamped'=>fsd_case_filler_stamped_count($db, $case), // 已蓋幾個填表人章（換人前跳確認用）
         'pages'=>fsd_case_pages_get($db, $id),
@@ -709,6 +712,30 @@ case 'case_set_filler': {
         if ($oldName !== '' && is_file($dir . $oldName)) @unlink($dir . $oldName);
     }, (int)($_POST['filler_dept_id'] ?? 0));
     if (!$r['ok']) jerr($r['msg']);
+    jout($r);
+}
+
+/**
+ * 更改業務日期。草稿＝申請人本人或管理員；已送出＝事後編修的一部分，僅超級管理員。
+ * 自動簽核的蓋章時間會整批重排到新日期（章上印的日期才會跟著變），真人簽的一律不動，
+ * 已產生的合成 PDF 作廢並刪實體檔。詳見 fsd_case_set_business_date()。
+ */
+case 'case_set_biz_date': {
+    fsd_need_csrf();
+    $id = (int)($_POST['case_id'] ?? 0);
+    $case = fsd_case_get($db, $id);
+    if (!$case) jerr('找不到此案件', 404);
+    $newDate = trim((string)($_POST['business_date'] ?? ''));
+    $dir = fsd_case_attach_dir_safe($db);
+    $r = fsd_case_set_business_date($db, $id, $uid, $newDate, $perms['canAdmin'], function ($oldName) use ($dir) {
+        if ($oldName !== '' && is_file($dir . $oldName)) @unlink($dir . $oldName);
+    });
+    if (!$r['ok']) jerr($r['msg']);
+    // 已送出的案件改日期＝動到已經簽核完成的正式文件，一律留稽核（誰、什麼時候、從哪一天改到哪一天）
+    if (($case['status'] ?? '') !== 'draft' && empty($r['unchanged']))
+        fsd_post_edit_audit($db, $uid, $uname, $id, '更改業務日期',
+            [['field'=>'業務日期', 'old'=>(string)$r['old_date'], 'new'=>(string)$r['business_date']],
+             ['field'=>'自動簽核蓋章時間重排', 'old'=>'', 'new'=>(string)$r['auto_shifted'] . ' 筆']]);
     jout($r);
 }
 
