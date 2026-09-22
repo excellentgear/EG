@@ -625,7 +625,7 @@ try {
         $lg = $pdo->prepare("SELECT l.action, l.actor_id, COALESCE(u.user_cname, l.actor_name) AS actor_name, l.note, l.created_at
                              FROM car_activity_log l LEFT JOIN user u ON u.id = l.actor_id
                              WHERE l.car_id = ? ORDER BY l.id");
-        $lg->execute([$id]); $acts = $lg->fetchAll(PDO::FETCH_ASSOC);
+        $lg->execute([$id]); $acts = car_acts_merge($lg->fetchAll(PDO::FETCH_ASSOC));
         foreach ($acts as &$_a) { $_a['title'] = car_user_title($pdo, $_a['actor_id'] ? (int)$_a['actor_id'] : null); } unset($_a);
         $at = $pdo->prepare("SELECT id, field_type, file_name, original_filename, file_size, tag_id, created_by, description, sort_order
                              FROM car_attachment WHERE car_id = ? ORDER BY sort_order, id");
@@ -716,6 +716,8 @@ try {
                  'me_id' => $meId, 'me_name' => $me['name']];
 
         jout(['success' => true, 'order' => $o, 'labels' => $L, 'bf_slots' => car_bf_slots(),
+              // 補資料的章格預設帶誰（主管簽核＝責任單位最高主管、總經理核准＝全站最高核准人員）
+              'bf_defaults' => $bfOn ? car_bf_default_signers($pdo, $o) : null,
               // 異常原因分類（三層樹）與處置方式：與品質異常處理單共用同一份代碼表
               'causes' => car_cause_tree($pdo), 'disp_opts' => car_disp_options($pdo),
               'signatures' => $sigs, 'signed' => $signed,
@@ -1006,7 +1008,8 @@ try {
         if (!$sets) jfail('沒有要儲存的欄位');
         $pdo->prepare("UPDATE car_order SET " . implode(',', $sets) . " WHERE id=:id")->execute($p);
         if ($bf) {
-            car_log($pdo, $id, 'bf_edit', (int)$me['id'], $me['name'], '補資料：代填異常原因分析／矯正措施／預防措施內容');
+            // 改到哪存到哪＝每打幾個字就寫一列，處理軌跡會被洗版，故同一個人短時間內合併成一筆
+            car_log_merge($pdo, $id, 'bf_edit', (int)$me['id'], $me['name'], '補資料：代填異常原因分析／矯正措施／預防措施內容');
             car_bf_audit($pdo, $id, (string)$o['car_no'], (int)$me['id'], $me['name'], '代填三段回覆內容');
         }
         jout(['success' => true, 'message' => $bf ? '已儲存代填內容' : '已儲存']);
@@ -1398,6 +1401,10 @@ try {
                        // 一人多職時要挑哪一個職務顯示，前端靠 is_main（主職）＋單據上的部門決定，
                        // 少回這一欄就會挑到「職級最高」那個兼任，跟表頭顯示的職稱對不起來
                        'is_main' => !empty($r['is_main']) ? 1 : 0,
+                       // 下拉排序一律「部門→職稱→姓名」；一人多職去重之後順序會跑掉，
+                       // 所以把排序鍵一起回去讓前端重排（使用者回報「代簽人員排列亂七八糟」）
+                       'dept_sort' => (int)($r['dept_sort'] ?? 999),
+                       'position_sort' => (int)($r['position_sort'] ?? 999),
                        'is_former' => !empty($r['is_former']) ? 1 : 0];
         }
         jout(['success' => true, 'date' => $date, 'data' => $rows]);
@@ -1475,8 +1482,11 @@ try {
         }
         car_bf_audit($pdo, $id, (string)$o['car_no'], (int)$me['id'], $me['name'], '代簽圖章',
                      $sl['label'] . '＝' . $label . '／' . $dl);
+        // 已結案的單每簽完一格就重報一次「還缺哪幾格」，補到齊提示自然消失
+        $warn = ((string)($o['status'] ?? '') === 'closed')
+              ? car_bf_missing_text(car_bf_missing_signs($pdo, $o)) : '';
         jout(['success' => true, 'message' => "已代簽「{$sl['label']}」：{$label}（{$dl}）",
-              'signer' => $label, 'date' => $dl,
+              'signer' => $label, 'date' => $dl, 'warn' => $warn,
               'title' => car_user_title_asof($pdo, $who, $date)]);
     }
 
@@ -1606,7 +1616,7 @@ try {
         try {
             $prm[] = $id;
             $pdo->prepare("UPDATE car_order SET " . implode(', ', $sets) . " WHERE id = ?")->execute($prm);
-            car_log($pdo, $id, 'bf_edit', (int)$me['id'], $me['name'],
+            car_log_merge($pdo, $id, 'bf_edit', (int)$me['id'], $me['name'],
                     '補資料：代填單據' . ($diff ? '（' . implode('；', $diff) . '）' : '（內容未變更）'));
             $pdo->commit();
         } catch (Throwable $e) {
@@ -1614,7 +1624,15 @@ try {
             jerr('儲存失敗：' . $e->getMessage(), 500);
         }
         car_bf_audit($pdo, $id, (string)$o['car_no'], (int)$me['id'], $me['name'], '代填單據', implode('；', $diff));
-        jout(['success' => true, 'message' => '已儲存代填內容' . ($diff ? '' : '（內容未變更）')]);
+        /* 設為結案時自動檢查應簽章的格子是否都補完（使用者要求）。
+           **刻意只提醒不擋下**：補的是幾年前的紙本，有時候現場就是少蓋了一格，
+           擋下會讓這張單永遠補不完；缺哪幾格一律講清楚，由補資料的人自己判斷。 */
+        $o2 = $pdo->prepare("SELECT * FROM car_order WHERE id = ?"); $o2->execute([$id]);
+        $now = $o2->fetch(PDO::FETCH_ASSOC) ?: $o;
+        $warn = ((string)($now['status'] ?? '') === 'closed')
+              ? car_bf_missing_text(car_bf_missing_signs($pdo, $now)) : '';
+        jout(['success' => true, 'warn' => $warn,
+              'message' => '已儲存代填內容' . ($diff ? '' : '（內容未變更）')]);
     }
 
     // ── 修改表頭（僅開立人本人；系統管理員例外；限 申請中/申請退回/待指派）───
@@ -1670,7 +1688,7 @@ try {
                                VALUES (?, 'desc', ?, ?, NOW(), ?)")
                     ->execute([$id, $me['id'], $me['name'], car_sign_date_label()]);
             }
-            car_log($pdo, $id, ($bf ? 'bf_edit' : 'edit'), (int)$me['id'], $me['name'],
+            car_log_merge($pdo, $id, ($bf ? 'bf_edit' : 'edit'), (int)$me['id'], $me['name'],
                     $bf ? '補資料：代填表頭內容' : '修改表頭內容');
             $pdo->commit();
             if ($bf) car_bf_audit($pdo, $id, (string)$o['car_no'], (int)$me['id'], $me['name'], '代填表頭內容');

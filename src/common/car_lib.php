@@ -528,6 +528,26 @@ function car_bf_slots(): array {
     ];
 }
 
+/**
+ * 一張「已結案」的單，紙本上這幾格一定要有章（扣款判定除外——那是結案之後、而且不一定要扣款）。
+ * @return string[] 缺章的章格代碼
+ */
+function car_bf_missing_signs(PDO $pdo, array $o): array {
+    $need = ['desc', 'cause', 'correction', 'prevention', 'primary', 'final'];
+    $map  = car_signed_map($pdo, (int)$o['id']);      // section => 是否已簽（未作廢）
+    $miss = [];
+    foreach ($need as $k) if (empty($map[$k])) $miss[] = $k;
+    return $miss;
+}
+
+/** 缺章清單轉成看得懂的一句話（沒有缺就回空字串） */
+function car_bf_missing_text(array $miss): string {
+    if (!$miss) return '';
+    $sl = car_bf_slots();
+    $names = array_map(fn($k) => $sl[$k]['label'] ?? $k, $miss);
+    return '這張單已設為結案，但還有 ' . count($miss) . ' 格沒有簽章：' . implode('、', $names);
+}
+
 /** 是否具備「補資料」功能碼（系統管理員 all 亦可）。刻意不 fail-open，見本區塊註解第3點。 */
 function car_can_backfill(array $features): bool {
     return rbac_has($features, CAR_BF_ACTION);
@@ -771,6 +791,145 @@ function car_disp_label(PDO $pdo, array $o): string {
     $txt = car_labels()['disposition'][$legacy] ?? $legacy;
     $other = trim((string)($o['disposition_other'] ?? ''));
     return $txt . ($other !== '' ? ('、' . $other) : '');
+}
+
+/* ── 處理軌跡：連續的「微幅更動」合併成一筆 ────────────────────────────────
+ * 補資料改成「改到哪存到哪」之後，打一段字就會寫好幾十列 bf_edit，處理軌跡整片被洗版
+ * （使用者回報）。做法分兩層：
+ *   ① 寫入當下就合併（car_log_merge）——同一個人、同一種動作、短時間內的連續紀錄，
+ *      直接更新上一列，不再長出新的一列；欄位異動的內容會逐欄合併成「最早的舊值 → 最新的新值」。
+ *   ② 顯示時再合併一次（car_acts_merge）——把改版之前已經寫進去的舊紀錄也收乾淨。
+ * **簽章、指派、核准、退回一律不合併**（使用者明確要求），那些是一件一件的事實。
+ * ------------------------------------------------------------------------ */
+
+/** 可合併的動作（只有「編輯內容」這一類；簽章等一律不在內） */
+function car_log_mergeable(string $action): bool {
+    return in_array($action, ['bf_edit', 'edit'], true);
+}
+
+/**
+ * 把兩筆「欄位異動」說明合併成一筆：同一個欄位取「最早的舊值 → 最新的新值」，
+ * 不同欄位則接在後面。格式＝「前綴（欄位：舊 → 新；欄位：舊 → 新）」。
+ * 兩筆的前綴不同（＝根本不是同一種動作）時回 null＝不要合併。
+ */
+function car_log_merge_note(?string $old, ?string $new): ?string {
+    $old = (string)$old; $new = (string)$new;
+    if ($old === $new) return $old;                       // 一模一樣（例：三段內容存檔）＝直接沿用
+    $split = function (string $t): ?array {
+        $pos = mb_strpos($t, '（');
+        if ($pos === false || mb_substr($t, -1) !== '）') return null;
+        $prefix = mb_substr($t, 0, $pos);
+        $body   = mb_substr($t, $pos + 1, mb_strlen($t) - $pos - 2);
+        $map = [];
+        foreach (explode('；', $body) as $part) {
+            $part = trim($part);
+            if ($part === '') continue;
+            $p = mb_strpos($part, '：');
+            if ($p === false) return null;
+            $map[mb_substr($part, 0, $p)] = mb_substr($part, $p + 1);
+        }
+        return [$prefix, $map];
+    };
+    $a = $split($old); $b = $split($new);
+    if (!$a || !$b || $a[0] !== $b[0]) return null;
+    $merged = $a[1];
+    foreach ($b[1] as $k => $v) {
+        if (isset($merged[$k])) {
+            // 舊值取最早那一次的、新值取最新那一次的
+            $from = explode(' → ', $merged[$k]); $to = explode(' → ', $v);
+            $merged[$k] = $from[0] . ' → ' . end($to);
+        } else $merged[$k] = $v;
+    }
+    // 改回原值的欄位（舊值＝新值）就不必再列了
+    $parts = [];
+    foreach ($merged as $k => $v) {
+        $kv = explode(' → ', $v);
+        if (count($kv) === 2 && $kv[0] === $kv[1]) continue;
+        $parts[] = $k . '：' . $v;
+    }
+    if (!$parts) return $a[0] . '（內容改回原樣）';
+    return $a[0] . '（' . implode('；', $parts) . '）';
+}
+
+/** 寫處理軌跡，但同一個人短時間內的連續「編輯」合併成同一列（見上方說明） */
+function car_log_merge(PDO $pdo, int $carId, string $action, ?int $actorId, ?string $actorName,
+                       ?string $note, int $windowSec = 600): void {
+    if (car_log_mergeable($action)) {
+        try {
+            $st = $pdo->prepare("SELECT id, action, actor_id, note,
+                                        TIMESTAMPDIFF(SECOND, created_at, NOW()) AS age
+                                 FROM car_activity_log WHERE car_id = ? ORDER BY id DESC LIMIT 1");
+            $st->execute([$carId]);
+            $last = $st->fetch(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) { $last = null; }
+        if ($last && (string)$last['action'] === $action && (int)$last['actor_id'] === (int)$actorId
+            && $last['age'] !== null && (int)$last['age'] >= 0 && (int)$last['age'] <= $windowSec) {
+            $m = car_log_merge_note($last['note'], $note);
+            if ($m !== null) {
+                try {
+                    $pdo->prepare("UPDATE car_activity_log SET note = ?, created_at = NOW() WHERE id = ?")
+                        ->execute([$m, (int)$last['id']]);
+                    return;
+                } catch (Throwable $e) {}
+            }
+        }
+    }
+    car_log($pdo, $carId, $action, $actorId, $actorName, $note);
+}
+
+/**
+ * 顯示用合併：把已經寫進去的連續微幅更動收成一筆（改版前留下來的紀錄也適用）。
+ * 合併後多回兩個欄位：merged_count（合併了幾筆）、merged_from（最早那一筆的時間）。
+ */
+function car_acts_merge(array $acts, int $windowSec = 600): array {
+    $out = [];
+    foreach ($acts as $a) {
+        $n = count($out);
+        if ($n > 0 && car_log_mergeable((string)$a['action'])) {
+            $prev = &$out[$n - 1];
+            $same = ((string)$prev['action'] === (string)$a['action'])
+                 && ((int)($prev['actor_id'] ?? 0) === (int)($a['actor_id'] ?? 0));
+            $gap  = strtotime((string)$a['created_at']) - strtotime((string)$prev['created_at']);
+            if ($same && $gap >= 0 && $gap <= $windowSec) {
+                $m = car_log_merge_note($prev['note'] ?? '', $a['note'] ?? '');
+                if ($m !== null) {
+                    $prev['note']         = $m;
+                    $prev['merged_from']  = $prev['merged_from'] ?? $prev['created_at'];
+                    $prev['created_at']   = $a['created_at'];
+                    $prev['merged_count'] = (int)($prev['merged_count'] ?? 1) + 1;
+                    unset($prev);
+                    continue;
+                }
+            }
+            unset($prev);
+        }
+        $a['merged_count'] = 1;
+        $out[] = $a;
+    }
+    return $out;
+}
+
+/**
+ * 補資料的章格「預設帶誰」（使用者要求）。
+ * - primary 主管簽核＝**責任單位裡職級最高的那位主管**（責任單位是廠商時＝生管主管，
+ *   與正式流程 car_primary_pool_ids() 用的是同一份名單，不另外發明規則）。
+ * - final 總經理核准＝**全站設定的最高核准人員**（org_role_setting 的 top_approver），
+ *   設定沒綁人才退回本模組的「最終決策者職位」設定。禁止寫死人名。
+ * 只是「預設選起來」，超管仍可自己改；解析不到就回 0（留白）。
+ * @return array{primary:int,final:int}
+ */
+function car_bf_default_signers(PDO $pdo, array $o): array {
+    $primary = 0;
+    $pool = car_primary_pool_ids($pdo, $o);         // 已依職級由高到低排序
+    if ($pool) $primary = (int)$pool[0];
+
+    $final = 0;
+    require_once __DIR__ . '/org_role_lib.php';
+    $top = eg_org_user($pdo, 'top_approver');
+    if ($top && !empty($top['id'])) $final = (int)$top['id'];
+    if (!$final) { $d = car_final_deciders($pdo); if ($d) $final = (int)$d[0]['id']; }
+
+    return ['primary' => $primary, 'final' => $final];
 }
 
 /** 補資料一律留 audit_log（全站共用表；寫入失敗不影響主要作業） */

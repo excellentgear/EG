@@ -160,6 +160,10 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
                             display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
         .bf-panel .bf-head .bf-left{ font-size:12px; font-weight:normal; margin-left:auto; }
         .bf-msg{ font-size:12px; font-weight:normal; color:#3B2A18; }
+        .bf-chk{ font-size:12px; background:#FDF3E3; border:1px solid #E7C89A; color:#7A4A18;
+                 border-radius:4px; padding:6px 9px; margin-bottom:10px; line-height:1.7; }
+        .bf-chk .miss{ color:#8E2B1B; font-weight:700; }
+        .bf-chk .done{ color:#3F7A33; }
         .bf-msg.err{ color:#8E2B1B; font-weight:700; }
         .bf-panel .bf-body{ background:#FEF7F0; padding:10px 12px; }
         .bf-panel .bf-note{ font-size:12px; color:#8A5A2B; margin-bottom:8px; line-height:1.6; }
@@ -1221,7 +1225,14 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       window.__ownCompany = r.own_company || '';
       var sigMap={}; (r.signatures||[]).forEach(function(s){ if(!parseInt(s.revoked,10)) sigMap[s.section]={name:s.signed_name,date:s.signed_date_label,title:s.title||'',by:parseInt(s.signed_by,10)||0}; });
       function sigText(x){ return x ? EGStamp.stamp(x.name, x.date) : '—'; }
-      var acts=(r.activity||[]).map(function(a){ return '<div class="timeline-mini">'+fmtDT(a.created_at)+' '+esc(a.actor_name||'')+(a.title?'（'+esc(a.title)+'）':'')+'：'+esc(a.note||a.action)+'</div>'; }).join('');
+      /* 連續的微幅更動（補資料自動存檔）由後端合併成一筆，這裡把「合併了幾筆、從幾點開始」標出來，
+         讓人看得出這一列其實是一段時間內的連續修改，不是把紀錄藏起來。簽章類一律不合併。 */
+      var acts=(r.activity||[]).map(function(a){
+        var n=parseInt(a.merged_count,10)||1;
+        var tail = (n>1) ? ('<span class="text-muted" style="font-size:11px;">　・連續修改 '+n+' 次，'
+                            +fmtDT(a.merged_from)+' 起</span>') : '';
+        return '<div class="timeline-mini">'+fmtDT(a.created_at)+' '+esc(a.actor_name||'')
+             +(a.title?'（'+esc(a.title)+'）':'')+'：'+esc(a.note||a.action)+tail+'</div>'; }).join('');
       var grp=(r.group||[]).length>1 ? '<div class="alert alert-info" style="padding:6px 10px;">同事件('+esc(o.group_no)+')共 '+r.group.length+' 張：'+r.group.map(function(g){return esc(g.car_no||'（未配號）');}).join('、')+'</div>' : '';
       if(o.reissue_of && r.parent_no){ grp+='<div class="alert alert-warning" style="padding:6px 10px;">本單為退件重發（第 '+esc(o.reissue_seq)+' 次），母單：<a href="#" class="open-car" data-id="'+o.reissue_of+'">'+esc(r.parent_no)+'</a></div>'; }
       if((r.reissues||[]).length){ grp+='<div class="alert alert-warning" style="padding:6px 10px;">本單退件後產生：'+r.reissues.map(function(g){return '<a href="#" class="open-car" data-id="'+g.id+'">'+esc(g.car_no)+'</a>';}).join('、')+'</div>'; }
@@ -1296,6 +1307,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         + renderBackfill(o, perm, sigMap, L, r.bf_slots)
         + '<h5 style="margin-top:12px;">處理軌跡</h5>'+(acts||'<span class="text-muted">—</span>')
       );
+      BF.defaults = r.bf_defaults || {};
+      BF.slots = r.bf_slots || {};
       bfBind(id, o, perm, sigMap);   // 補資料面板的下拉與按鈕（未解鎖時只綁那顆解鎖鈕）
 
       // 使用者一動過的欄位就標記起來——重畫時只有這些會被保留（見 snapView）
@@ -1631,7 +1644,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
    * 兩道門：角色功能碼 car_backfill ＋ 每張單各輸入一次操作確認密碼（後端同規則再擋一次）。
    * 人員清單一律**依印章日期回推當時在職者**（當時在職、現已離職的人也要挑得到，ai-rules/22）。
    * ════════════════════════════════════════════════════════════════════════ */
-  var BF = { people:{}, timer:null, askId:0 };     // people: {'YYYY-MM-DD':[rows]}（同一個日期只查一次）
+  var BF = { people:{}, timer:null, askId:0, defaults:{}, slots:{} };   // people: {'YYYY-MM-DD':[rows]}（同一個日期只查一次）
 
   function bfPeople(date, cb){
     if(!date) date = '';
@@ -1655,15 +1668,27 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
        吳仁隆」，看起來像兩個人（使用者回報）。優先序：指定部門 → 主要職務 → 第一列。 */
     prefDept = String(prefDept||'');
     if(mode==='user'){
-      var best={};
+      /* 去重**不可以用物件再 Object.keys() 取回**：員工編號是數字字串，JS 會自動改成
+         「數字由小到大」，伺服器排好的部門→職稱順序整個被打散（使用者回報「排列亂七八糟」）。
+         這裡改成保留陣列、最後再依排序鍵重排一次。 */
+      var best=[], idx={};
+      var sc=function(x){ return (prefDept && String(x.dept_id)===prefDept ? 2 : 0) + (x.is_main ? 1 : 0); };
       rows.forEach(function(p){
-        var k=String(p.id), cur=best[k];
-        if(!cur){ best[k]=p; return; }
-        var sc=function(x){ return (prefDept && String(x.dept_id)===prefDept ? 2 : 0) + (x.is_main ? 1 : 0); };
-        if(sc(p) > sc(cur)) best[k]=p;
+        var k=String(p.id);
+        if(idx[k]===undefined){ idx[k]=best.length; best.push(p); return; }
+        if(sc(p) > sc(best[idx[k]])) best[idx[k]]=p;     // 換人不換位置，最後統一重排
       });
-      rows = Object.keys(best).map(function(k){ return best[k]; });
+      rows = best;
     }
+    // 排序一律「部門 → 職稱 → 姓名」（鐵則第 5 條第 5 點），排序鍵由後端一起回來
+    rows = rows.slice().sort(function(a,b){
+      return (a.dept_sort||999)-(b.dept_sort||999)
+          || (a.dept_id||0)-(b.dept_id||0)
+          || (a.position_sort||999)-(b.position_sort||999)
+          || (a.position_id||0)-(b.position_id||0)
+          || String(a.name||'').localeCompare(String(b.name||''), 'zh-Hant')
+          || (a.id||0)-(b.id||0);
+    });
     rows.forEach(function(p){
       var v = (mode==='post') ? (p.id+':'+p.dept_id+':'+p.position_id) : String(p.id);
       if(mode==='user'){ if(seen[v]) return; seen[v]=1; }
@@ -1783,6 +1808,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       + '</tbody></table>'
       + '<div style="margin-bottom:10px;"><button class="btn btn-warning btn-sm" id="btn-bf-save"><i class="fa fa-save"></i> 儲存代填欄位</button> '
       + '<span class="text-muted" id="bf-save-msg" style="font-size:12px;"></span></div>'
+      // 設為結案時自動檢查「應簽章的格子補完了沒有」（使用者要求）；只提醒不擋下
+      + '<div id="bf-sign-chk" class="bf-chk" style="display:none;"></div>'
       + '<table class="table table-bordered bf-t"><thead><tr>'
       + '<th>章格</th><th>目前章</th><th>代簽人員</th><th>印章日期</th><th>動作</th></tr></thead><tbody>'+rows+'</tbody></table>'
       + '</div></div>';
@@ -1830,6 +1857,10 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         if(!sb){
           if(k==='desc') sb = o.created_by||0;
           else if(k==='cause'||k==='correction'||k==='prevention') sb = o.assigned_to || o.resp_person_id || 0;
+          /* 主管簽核＝責任單位裡職級最高的主管、總經理核准＝全站設定的最高核准人員
+             （兩者都由後端解析，禁止在這裡寫死人名；扣款判定仍留白＝那是管理課的人，猜不得）*/
+          else if(k==='primary') sb = (BF.defaults.primary||0);
+          else if(k==='final')   sb = (BF.defaults.final||0);
         }
         if(sb) init = String(sb);
       }
@@ -1842,6 +1873,27 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       bfSyncSelect($(this).closest('tr').find('.bf-person'));
     });
     $('#bf-fill-date').on('change', function(){ $('#view-body').find('.bf-filler,.bf-assignee').each(function(){ bfSyncSelect($(this)); }); });
+
+    /* 「設為結案」時自動檢查應簽章的格子補完了沒有（使用者要求）。
+       前端即時算（不必等存檔），後端存檔與代簽時也各回一次 warn＝同一條規則兩邊都擋一次；
+       但**一律只提醒不擋下**：補的是幾年前的紙本，真的少蓋一格也要存得進去。 */
+    function bfSignCheck(){
+        var $b=$('#bf-sign-chk'); if(!$b.length) return;
+        if($('#bf-status').val()!=='closed'){ $b.hide().empty(); return; }
+        var need=['desc','cause','correction','prevention','primary','final'], miss=[], html='結案前應完成的簽章：';
+        need.forEach(function(k){
+            var ok = !!sigMap[k];
+            if(!ok) miss.push(k);
+            html += '<span class="'+(ok?'done':'miss')+'">'+(ok?'✓ ':'✗ ')
+                 + esc(((BF.slots||{})[k]||{}).label || k)+'</span>　';
+        });
+        html += miss.length ? ('<br><b class="miss">還有 '+miss.length+' 格沒有簽章</b>'
+                               +'（可以直接在下方章格代簽；確定紙本當年就沒有蓋，也可以維持現狀存檔）')
+                            : '<br><span class="done">全部簽章都補齊了</span>';
+        $b.html(html).show();
+    }
+    bfSignCheck();
+    $('#bf-status,#bf-result').on('change', bfSignCheck);
 
     // 狀態 ↔ 效果確認 互相連動：畫面上不可能送出「結案了但狀態還停在填寫中」這種矛盾組合
     // （後端以「單據狀態」為權威欄位，這裡把兩個下拉維持一致，避免使用者以為改了效果確認卻沒生效）
@@ -1871,7 +1923,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       bfMsg('代簽中…');
       api('bf_sign',{car_id:id, slot:slot, user_id:who, date:d}).done(function(r){
         if(!r||!r.success){ bfMsg((r&&r.message)||'代簽失敗', true); return; }
-        bfMsg(r.message||'已代簽'); refreshView(id); fetchPage(state.page);
+        bfMsg(r.warn ? ((r.message||'已代簽')+'　'+r.warn) : (r.message||'已代簽'), !!r.warn);
+        refreshView(id); fetchPage(state.page);
       }).fail(function(xhr){ bfMsg((xhr.responseJSON&&xhr.responseJSON.message)||'代簽失敗', true); });
     });
     // 清除是把章拿掉，維持問一次（按錯就要重簽一次）
@@ -1920,6 +1973,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       api('bf_save',p).done(function(r){
         if(!r||!r.success){ $('#bf-save-msg').text((r&&r.message)||'儲存失敗'); bfMsg((r&&r.message)||'儲存失敗', true); return; }
         $('#bf-save-msg').text((auto?'已自動儲存 ':'已儲存 ')+bfNowHM());
+        if(r.warn){ bfMsg(r.warn, true); }              // 設為結案但章沒補齊＝就地提醒（不擋存檔）
         // 自動存檔刻意不重畫（重畫會打斷正在輸入的人）；按鈕存檔才順便把上方表頭更新成新值
         if(!auto){ refreshView(id); fetchPage(state.page); }
       }).fail(function(xhr){
@@ -1937,35 +1991,69 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
 
   // ---------- 列印 / CSV / 統計 ----------
   function curFilters(){ return { card:state.card, resp:$('#f-dept').val()||'', source_type:$('#f-source').val()||'', kw:$('#f-kw').val()||'' }; }
-  function printShell(title, bodyHtml, header, footer){
+  /* 列印外框（單張＝限一張 A4 直式；總表＝可多頁）
+     ── 四周留白為什麼要做在「紙張內容」上 ───────────────────────────────
+     瀏覽器列印跳窗的「邊界」如果被設成「無」，CSS 的 @page margin 會被整個蓋掉，
+     所有列印版就會變成貼著紙邊的超滿版（使用者回報「之前調好的列印都變滿版」）。
+     所以單張列印改成 @page margin:0 ＋ 由 .sheet 自己給 padding——白邊變成內容的一部分，
+     不管列印跳窗選哪一種邊界都印得出來。總表可能有很多頁，每一頁都要留白就只能靠 @page，
+     那一份維持 @page margin（並把數字調大回正常值）。 */
+  function printShell(title, bodyHtml, header, footer, opts){
+    opts = opts||{};
+    var one = !!opts.onePage;              // true＝限一張 A4 直式，內容太多自動縮小字級
     var w=window.open('','_blank');
     w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title>'
-      +'<style>@page{size:A4;margin:9mm;}'
-      +'body{font-family:"Microsoft JhengHei","PMingLiU",sans-serif;font-size:12px;margin:6px;color:#000;}'
-      // 內容過多時允許換頁：整張表格為單位乾淨地移到下一頁（page-break-inside:avoid），不會從儲存格中間截斷
-      +'table{border-collapse:collapse;width:100%;margin-bottom:5px;page-break-inside:avoid;}th,td{border:1px solid #000;padding:3px 6px;font-size:12px;vertical-align:top;}'
-      +'th{background:#f0f0f0;white-space:nowrap;}'
-      +'.hd{text-align:center;font-size:16px;font-weight:bold;margin-bottom:5px;}'
-      +'.ft{margin-top:5px;font-size:10px;text-align:right;page-break-inside:avoid;}'
-      +'.sec{white-space:pre-wrap;min-height:42px;}'
-      +'.srow{display:flex;justify-content:flex-end;align-items:flex-end;gap:4px;margin-top:1px;}'
-      +'.srow2{display:flex;justify-content:space-between;align-items:flex-end;margin-top:1px;}'   /* 左=預定完成日、右=印章 */
+      +'<style>'
+      + (one ? '@page{size:A4 portrait;margin:0;}' : '@page{size:A4 portrait;margin:14mm 12mm 16mm;}')
+      +'html,body{margin:0;padding:0;}'
+      +'body{font-family:"Microsoft JhengHei","PMingLiU",sans-serif;font-size:12px;color:#000;}'
+      // .sheet＝一張紙：白邊做在這裡（見上方說明）
+      + (one ? '.sheet{width:210mm;min-height:297mm;box-sizing:border-box;padding:12mm 11mm 13mm;margin:0 auto;}'
+             : '.sheet{padding:0;margin:0;}')
+      +'table{border-collapse:collapse;width:100%;margin-bottom:5px;page-break-inside:avoid;}'
+      // 長字串（例：對應單號「2-GM-06-03 2025年度績效執行稽核查檢表」）一律自動換行，
+      // 不可以把欄位撐寬——單張用 table-layout:fixed 把欄寬釘在表頭指定的寬度上
+      + (one ? 'table{table-layout:fixed;}' : '')
+      +'th,td{border:1px solid #000;padding:3px 6px;font-size:1em;vertical-align:top;'
+      +'word-break:break-word;overflow-wrap:anywhere;}'
+      +'th{background:#f0f0f0;}'
+      +'.hd{text-align:center;font-size:1.34em;font-weight:bold;margin-bottom:5px;}'
+      +'.ft{margin-top:5px;font-size:0.84em;text-align:right;page-break-inside:avoid;}'
+      +'.sec{white-space:pre-wrap;min-height:3.4em;}'
+      // 圖章＝Word 的「文繞圖」：浮動在格子右側，文字自動繞開，不會被擠成新的一列把格子撐高
+      +'.pstamp{float:right;margin:0 0 3px 8px;text-align:center;}'
+      +'.pstamp .lb{font-size:0.84em;color:#555;display:block;}'
+      +'.pdue{font-size:0.9em;color:#555;margin-top:2px;}'
       +'svg.car-stamp{width:91px !important;height:91px !important;}'
-      +'h2{font-size:16px;}'
-      +'</style></head><body>'
+      +'h2{font-size:1.34em;margin:0 0 6px;}'
+      +'</style></head><body><div class="sheet'+(one?' one':'')+'">'
       +(header?'<div class="hd">'+esc(header)+'</div>':'')
       +bodyHtml
       +(footer?'<div class="ft">'+esc(footer)+'</div>':'')
-      +'<scr'+'ipt>window.onload=function(){window.print();};<\/scr'+'ipt>'
+      +'</div>'
+      +'<scr'+'ipt>'
+      + (one ? ('window.__fit=function(){'
+              + ' var sh=document.querySelector(".sheet"); if(!sh) return;'
+              // A4 直式可印高度＝297mm（96dpi 下 1122.5px）。內容超出就把字級一級一級調小，
+              // **最小 10px**（使用者指定）；到了 10px 還放不下就讓它自然換頁，不可以把資料裁掉。
+              + ' var MAX=Math.round(297/25.4*96), fs=12;'
+              + ' while(sh.scrollHeight>MAX && fs>10){ fs=Math.round((fs-0.25)*100)/100;'
+              + '   document.body.style.fontSize=fs+"px"; }'
+              + ' window.__fitFont=fs; window.__fitH=sh.scrollHeight; window.__fitMax=MAX;'
+              + '};') : 'window.__fit=function(){};')
+      +'window.onload=function(){ window.__fit(); if(!window.__noPrint) window.print(); };'
+      +'<\/scr'+'ipt>'
       +'</body></html>');
     w.document.close();
+    return w;
   }
-  function pStamp(x){ return x ? ('<div class="srow"><span style="font-size:11px;color:#555;">簽章：</span>'+EGStamp.stamp(x.name,x.date)+'</div>') : ''; }
-  // 左下=預定完成日等文字、右下=簽章印章（同一列底部對齊）
-  function pStampRow(leftTxt, x){
-    return '<div class="srow2"><span style="font-size:11px;color:#555;">'+leftTxt+'</span>'
-      +(x?('<span style="display:inline-flex;align-items:flex-end;gap:4px;"><span style="font-size:11px;color:#555;">簽章：</span>'+EGStamp.stamp(x.name,x.date)+'</span>'):'<span></span>')+'</div>';
+  /* 圖章一律「浮」在格子右側（Word 的文繞圖）：文字自己繞開，不會被擠成新的一列，
+     也不會因為多一列而把欄位撐高（使用者要求）。**要放在文字前面**，float 才繞得起來。 */
+  function pStamp(x){
+    return x ? ('<div class="pstamp"><span class="lb">簽章</span>'+EGStamp.stamp(x.name,x.date)+'</div>') : '';
   }
+  // 圖章浮右、預定完成日接在內容下方（不再獨佔一列）
+  function pDue(txt){ return '<div class="pdue">'+txt+'</div>'; }
   // 單張列印（仿紙本 2-QA-01-04 版式）
   function printOrder(id){
     api('get_detail',{id:id}).done(function(r){
@@ -1994,20 +2082,25 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       }
       var h='<h2 style="text-align:center;margin:0 0 6px;">異常矯正處理單</h2>'
         +'<table><tr><th style="width:90px;">表單編號</th><td>'+esc(o.car_no||'（未配號）')+'</td>'
-        +'<th style="width:90px;">異常來源</th><td>'+ckList(L.source_type,[o.source_type])+(o.source_no?('　對應單號：'+esc(o.source_no)):'')+'</td></tr>'
+        +'<th style="width:90px;">異常來源</th><td>'+ckList(L.source_type,[o.source_type])
+        // 對應單號常常是「2-GM-06-03 2025年度績效執行稽核查檢表」這種長字串：自己一行並自動換行，
+        // 不可以把欄位撐寬（使用者回報）
+        +(o.source_no?('<div style="margin-top:2px;">對應單號：'+esc(o.source_no)+'</div>'):'')+'</td></tr>'
         +'<tr><th>客戶/供應商</th><td>'+esc(String(o.counterparty_display||'').replace(/^\[.\]\s*/,''))+'</td><th>料號</th><td>'+esc(o.drawing_no||'')+'</td></tr>'
         +'<tr><th>廠內製令單號</th><td>'+esc(o.work_order||'')+'</td><th>數量</th><td>'+esc(o.qty!=null?parseFloat(o.qty):'')+'</td></tr>'
         +'<tr><th>填表日期</th><td>'+esc(o.fill_date||'')+'</td><th>發現日期</th><td>'+esc(o.found_date||'')+'</td></tr>'
         +'<tr><th>開立人員</th><td>'+esc(o.created_by_name||'')+'</td><th>製程</th><td>'+esc(o.process_name||'')+'</td></tr>'
         +'<tr><th>責任單位</th><td colspan="3">'+esc(o.resp_display||'')+'</td></tr></table>'
-        +'<table><tr><th style="width:90px;">異常說明</th><td><div class="sec">'+esc(o.abnormal_desc||'')+'</div>'+attNote('desc')+pStamp(sm['desc'])+'</td></tr>'
+        +'<table><tr><th style="width:90px;">異常說明</th><td>'+pStamp(sm['desc'])+'<div class="sec">'+esc(o.abnormal_desc||'')+'</div>'+attNote('desc')+'</td></tr>'
         // 異常原因分類有三層、選項由管理員維護（幾十項），列印不可能把全部選項印成 ☑/☐ 清單，
         // 一律印「選到的那一條路徑」；舊資料的勾選項也由 car_cause_label() 組成同樣格式的文字
-        +'<tr><th>異常原因分析</th><td>異常原因分類：'+esc(o.cause_label||'')
-          +'<div class="sec">'+esc(o.cause_detail||'')+'</div>'+attNote('cause')+pStamp(sm['cause'])+'</td></tr>'
-        +'<tr><th>矯正措施</th><td>處置方式：'+esc(o.disp_label||'')
-          +'<div class="sec">'+esc(o.correction_measure||'')+'</div>'+attNote('correction')+pStampRow('預定完成日：'+(o.correction_due?esc(o.correction_due).replace(/-/g,'.'):'未填寫'), sm['correction'])+'</td></tr>'
-        +'<tr><th>預防措施</th><td><div class="sec">'+esc(o.prevention_measure||'')+'</div>'+attNote('prevention')+pStampRow('預定完成日：'+(o.prevention_due?esc(o.prevention_due).replace(/-/g,'.'):'未填寫'), sm['prevention'])+'</td></tr></table>'
+        +'<tr><th>異常原因分析</th><td>'+pStamp(sm['cause'])+'異常原因分類：'+esc(o.cause_label||'')
+          +'<div class="sec">'+esc(o.cause_detail||'')+'</div>'+attNote('cause')+'</td></tr>'
+        +'<tr><th>矯正措施</th><td>'+pStamp(sm['correction'])+'處置方式：'+esc(o.disp_label||'')
+          +'<div class="sec">'+esc(o.correction_measure||'')+'</div>'+attNote('correction')
+          +pDue('預定完成日：'+(o.correction_due?esc(o.correction_due).replace(/-/g,'.'):'未填寫'))+'</td></tr>'
+        +'<tr><th>預防措施</th><td>'+pStamp(sm['prevention'])+'<div class="sec">'+esc(o.prevention_measure||'')+'</div>'+attNote('prevention')
+          +pDue('預定完成日：'+(o.prevention_due?esc(o.prevention_due).replace(/-/g,'.'):'未填寫'))+'</td></tr></table>'
         // 效果確認 2×2 格（同前端跳窗版面）：左上=主管簽核、左下=扣款判定、右上=效果確認、右下=總經理核准
         +(function(){
           var resultTxt = (o.result==='close') ? ('☑ 結案，結案日期：'+esc((o.close_date||'').replace(/-/g,'.')))
@@ -2043,7 +2136,9 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
           });
         });
       }
-      printShell('異常矯正處理單 '+(o.car_no||''), h, r.print_header||'', r.print_footer||'');
+      // 單張一律限一張 A4 直式（內容太多自動縮小字級，最小 10px）；
+      // 另外要印附件時會接在後面，那種情況本來就會多頁，不套一頁限制
+      printShell('異常矯正處理單 '+(o.car_no||''), h, r.print_header||'', r.print_footer||'', {onePage:!withAtt});
     });
   }
   // 總表列印（依目前篩選）
