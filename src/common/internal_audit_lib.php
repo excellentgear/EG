@@ -2458,6 +2458,255 @@ function ia_nc_remind_tick(PDO $db): int
 /* ============================ 稽核報告表：自動彙總 ============================ */
 
 /**
+ * 年度內稽「單據點檢表」—— 唯一實作（2026-09-22 使用者交辦）
+ *
+ * 解決的問題：一次內部稽核從頭到尾會產出十種單據（計畫表→通知單→事前會議→三種查檢表
+ * →不符合通知單→矯正單→結束會議→報告表），原本要一張一張切分頁去看「建了沒、結案沒」，
+ * 少建一張根本不會有人發現——AS9100 稽核當天被問到「這一年的紀錄齊不齊」就只能現場翻。
+ * 這支把該有的單據攤成一張點檢表，逐列標出「已建立幾份／已完成幾份／還缺什麼」。
+ *
+ * 三個刻意的設計：
+ *   ①一列一種單據，全部即時由各自的來源算，不另存任何一張表（鐵律4）。
+ *     存下來就會出現「單據刪掉了、點檢表還說有」這種對不起來的狀況。
+ *   ②「應有幾份」能推就推、推不出來就不假裝：稽核通知單的份數用年度計畫表排定的
+ *     「有排到的月份數」當提示（2024 紙本就是排 2 次做 2 次），推不出來時 need=0
+ *     ＝只檢查「至少有一份」，不會憑空報缺。
+ *   ③由內稽開出去的矯正單也要算進來（使用者明確要求）——它不在 ia_* 任何一張表裡，
+ *     要從 ia_check_item.car_id 反查 car_order；不追的話「績效沒達成開了單卻沒人結案」
+ *     在內稽這一頭完全看不到。
+ *
+ * state：todo＝還沒建　doing＝建了還沒完成　ok＝完成　warn＝有逾期要追　na＝系統判不了（紙本）
+ */
+function ia_year_checklist(PDO $db, int $year): array
+{
+    $today = ia_today($db);
+    $rows  = [];
+
+    /* AS 編號與名稱一律由綁定推導（ai-rules/16：禁寫死）。
+       內稽自己的七份走 IA_ASDOC_MODULES；會議紀錄／矯正單／產品型態稽核表是別的模組的表單，
+       用編號回查 as_document 取中文名（查不到就用這裡的預設字樣，點檢表照樣列得出來）。 */
+    $docOf = function (string $key) use ($db): array {
+        $m = IA_ASDOC_MODULES[$key] ?? null;
+        if (!$m) return ['', ''];
+        $d = eg_asdoc_get($db, $m['module']);
+        return [$d ? eg_asdoc_no($d) : $m['fallback'], (string)($d['doc_name'] ?? $m['label'])];
+    };
+    $docByNo = function (string $no, string $fallbackName) use ($db): array {
+        $n = ia_asdoc_name_by_no($db, $no);
+        return [$no, $n !== '' ? $n : $fallbackName];
+    };
+    $add = function (array $r) use (&$rows) {
+        $r += ['have' => 0, 'need' => 0, 'done' => 0, 'missing' => [], 'pane' => 'dash', 'note' => ''];
+        // 狀態沒指定時的通則：一份都沒有＝todo、都完成＝ok、其餘＝doing
+        if (!isset($r['state'])) {
+            $r['state'] = $r['have'] <= 0 ? 'todo' : ($r['done'] >= $r['have'] ? 'ok' : 'doing');
+        }
+        $rows[] = $r;
+    };
+
+    /* ── ①年度稽核計劃表 ── */
+    list($no, $nm) = $docOf('plan');
+    $plan = ia_plan_get($db, $year);
+    $planMonths = [];
+    if ($plan) {
+        foreach (array_keys($plan['cells']) as $k) {
+            $p = explode('-', (string)$k);
+            if (count($p) === 2) $planMonths[(int)$p[1]] = 1;
+        }
+    }
+    if (!$plan) {
+        $add(['key' => 'plan', 'stage' => '①事前', 'doc_no' => $no, 'doc_name' => $nm, 'pane' => 'plan',
+              'state' => 'todo', 'label' => '尚未建立',
+              'missing' => ['這一年還沒有年度稽核計劃表，請先到「年度計畫」分頁建立']]);
+    } else {
+        $st  = (string)($plan['status'] ?? 'draft');
+        $lab = ['draft' => '草稿（未送審）', 'submitted' => '已送審，待核准', 'approved' => '已核准'][$st] ?? $st;
+        $miss = [];
+        if ($st === 'draft')     $miss[] = '已建立但還沒送審';
+        if ($st === 'submitted') $miss[] = '已送審，還在等核准';
+        if (!$planMonths)        $miss[] = '表上一格 ○ 都沒排，等於沒有排定稽核月份';
+        $add(['key' => 'plan', 'stage' => '①事前', 'doc_no' => $no, 'doc_name' => $nm, 'pane' => 'plan',
+              'have' => 1, 'need' => 1, 'done' => ($st === 'approved' ? 1 : 0),
+              'state' => ($st === 'approved' ? ($planMonths ? 'ok' : 'doing') : 'doing'),
+              'label' => $lab, 'missing' => $miss,
+              'note' => $planMonths ? ('排定 ' . count($planMonths) . ' 個月份') : '']);
+    }
+
+    /* ── ②稽核通知單（每一次稽核一張） ── */
+    $cases = [];
+    try {
+        $q = $db->prepare("SELECT * FROM ia_case WHERE year=? AND COALESCE(is_deleted,0)=0 ORDER BY seq_no, case_id");
+        $q->execute([$year]);
+        $cases = $q->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {}
+
+    $needCase = count($planMonths);   // 排了幾個月份就至少要有幾張通知單（推不出來＝0＝只要求至少一張）
+    list($no, $nm) = $docOf('case');
+    $caseDone = 0; $missCase = [];
+    foreach ($cases as $c) {
+        $tag = '第 ' . (int)$c['seq_no'] . ' 次'
+             . (trim((string)$c['case_no']) !== '' ? '（' . $c['case_no'] . '）' : '');
+        if ((string)$c['status'] === 'closed') { $caseDone++; continue; }
+        if ((string)$c['status'] === 'draft') {
+            $m = ia_case_required_missing($db, (int)$c['case_id']);
+            $missCase[] = $tag . '：還是草稿' . ($m ? '，缺 ' . implode('；', $m) : '，尚未按「完成」發出');
+        } else {
+            $missCase[] = $tag . '：' . (['issued' => '已發出，尚未執行', 'executing' => '執行中，尚未結案'][(string)$c['status']] ?? (string)$c['status']);
+        }
+    }
+    if ($needCase > count($cases)) {
+        $missCase[] = '年度計畫排了 ' . $needCase . ' 個月份，目前只建了 ' . count($cases) . ' 張通知單';
+    }
+    $add(['key' => 'case', 'stage' => '②通知', 'doc_no' => $no, 'doc_name' => $nm, 'pane' => 'case',
+          'have' => count($cases), 'need' => max(1, $needCase), 'done' => $caseDone, 'missing' => $missCase,
+          'label' => $cases ? ('已建 ' . count($cases) . ' 張，已結案 ' . $caseDone . ' 張') : '尚未建立']);
+
+    /* ── ③事前會議／⑨結束會議（不在內稽自己的表裡，一律回查 meeting_record） ── */
+    $meetNo = '2-GM-05-01'; $meetNm = '會議記錄';
+    try {
+        $d = eg_asdoc_get($db, 'meeting_record');
+        if ($d) { $meetNo = eg_asdoc_no($d); $meetNm = (string)($d['doc_name'] ?? $meetNm); }
+    } catch (Throwable $e) {}
+    $meetStatus = function ($mid) use ($db): string {
+        $mid = (int)$mid;
+        if ($mid <= 0) return '';
+        try {
+            $q = $db->prepare("SELECT status FROM meeting_record WHERE meeting_id=?");
+            $q->execute([$mid]);
+            $s = $q->fetchColumn();
+            return $s === false ? '' : (string)$s;   // 查不到＝紀錄被刪了，等同沒有
+        } catch (Throwable $e) { return ''; }
+    };
+    foreach ([['pre', '③事前會議', 'pre_meeting_id', '事前會議紀錄'],
+              ['end', '⑨結束會議', 'end_meeting_id', '結束會議紀錄']] as $mm) {
+        $have = 0; $done = 0; $miss = [];
+        foreach ($cases as $c) {
+            $tag = '第 ' . (int)$c['seq_no'] . ' 次';
+            $s = $meetStatus($c[$mm[2]] ?? 0);
+            if ($s === '') { $miss[] = $tag . '：還沒建立' . $mm[3]; continue; }
+            $have++;
+            if ($s === 'done') { $done++; }
+            else { $miss[] = $tag . '：' . $mm[3] . '還是' . ($s === 'draft' ? '草稿' : '待簽核') . '，尚未完成'; }
+        }
+        $add(['key' => 'meet_' . $mm[0], 'stage' => $mm[1], 'doc_no' => $meetNo,
+              'doc_name' => $meetNm . '（' . $mm[3] . '）', 'pane' => 'case',
+              'have' => $have, 'need' => count($cases), 'done' => $done, 'missing' => $miss,
+              'label' => $cases ? ($have . '／' . count($cases) . ' 張通知單已建，完成 ' . $done . ' 份')
+                                : '沒有稽核通知單，無從建立',
+              'state' => (!$cases ? 'todo' : ($have <= 0 ? 'todo' : ($done >= count($cases) ? 'ok' : 'doing')))]);
+    }
+
+    /* ── ④⑤⑥三種查檢表 ── */
+    $chkCnt = [];
+    try {
+        $q = $db->prepare("SELECT kind, COUNT(*) c FROM ia_check WHERE year=? AND COALESCE(is_deleted,0)=0 GROUP BY kind");
+        $q->execute([$year]);
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $chkCnt[(string)$r['kind']] = (int)$r['c'];
+    } catch (Throwable $e) {}
+    $stageOf = ['kpi' => '④查檢', 'system' => '⑤查檢', 'as' => '⑥查檢'];
+    foreach (array_keys(IA_CHECK_KINDS) as $k) {
+        list($no, $nm) = $docOf($k);
+        $n = (int)($chkCnt[$k] ?? 0);
+        $add(['key' => 'check_' . $k, 'stage' => ($stageOf[$k] ?? '④查檢'),
+              'doc_no' => $no, 'doc_name' => $nm, 'pane' => 'check',
+              'have' => $n, 'need' => 1, 'done' => $n,
+              'label' => $n ? ('已建立 ' . $n . ' 份') : '尚未建立',
+              'missing' => $n ? [] : ['這一年還沒有' . $nm]]);
+    }
+
+    /* ── ⑥-2 產品型態稽核表（2-DC-03-02）──
+       程序書 2-DC-03 明訂「品保定期於年度內稽及有追溯必要時實施」，所以它是內稽該有的單據之一；
+       但目前還是紙本、系統裡沒有資料來源，所以標成「系統判不了」而不是「缺」——
+       憑空報缺會讓整張點檢表永遠紅著，反而沒人看。E 化之後這一列自然會有資料。 */
+    list($no, $nm) = $docByNo('2-DC-03-02', '產品型態稽核表');
+    $add(['key' => 'type_audit', 'stage' => '⑥查檢', 'doc_no' => $no, 'doc_name' => $nm, 'pane' => '',
+          'state' => 'na', 'label' => '紙本作業，系統無法判定',
+          'note' => '依 2-DC-03 型態管理作業程序，品保於年度內稽時實施；尚未 E 化']);
+
+    /* ── ⑦不符合通知單 ── */
+    list($no, $nm) = $docOf('nc');
+    $ncAll = 0; $ncClosed = 0; $ncOver = 0; $missNc = [];
+    try {
+        $q = $db->prepare("SELECT nc_no, stage, due_date FROM ia_nc WHERE year=? AND COALESCE(is_deleted,0)=0 ORDER BY nc_no");
+        $q->execute([$year]);
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $ncAll++;
+            if ((string)$r['stage'] === 'closed') { $ncClosed++; continue; }
+            $due  = (string)($r['due_date'] ?? '');
+            $over = ($due !== '' && $due < $today);
+            if ($over) $ncOver++;
+            $missNc[] = $r['nc_no'] . '：' . (IA_NC_STAGES[(string)$r['stage']] ?? (string)$r['stage'])
+                      . ($over ? '（已逾期 ' . eg_fmt_date($due) . '）'
+                               : ($due !== '' ? '（期限 ' . eg_fmt_date($due) . '）' : ''));
+        }
+    } catch (Throwable $e) {}
+    $add(['key' => 'nc', 'stage' => '⑦缺失', 'doc_no' => $no, 'doc_name' => $nm, 'pane' => 'nc',
+          'have' => $ncAll, 'need' => 0, 'done' => $ncClosed, 'missing' => $missNc,
+          'label' => $ncAll ? ('開立 ' . $ncAll . ' 張，已結案 ' . $ncClosed . ' 張' . ($ncOver ? '，逾期 ' . $ncOver . ' 張' : ''))
+                            : '本年度沒有開立不符合通知單',
+          'state' => ($ncOver ? 'warn' : ($ncAll === 0 ? 'ok' : ($ncClosed >= $ncAll ? 'ok' : 'doing'))),
+          'note' => $ncAll ? '' : '沒有缺失不算漏單']);
+
+    /* ── ⑧由內稽開立的異常矯正處理單（CAR）──
+       來源＝績效執行稽核查檢表「沒達成」自動開的那幾張，靠 ia_check_item.car_id 反查。 */
+    list($no, $nm) = $docByNo('2-QA-01-04', '異常矯正處理單');
+    $carAll = 0; $carClosed = 0; $missCar = [];
+    try {
+        $q = $db->prepare("SELECT o.car_no, o.status FROM ia_check_item it
+                             JOIN ia_check ck ON ck.check_id = it.check_id
+                             JOIN car_order o ON o.id = it.car_id
+                            WHERE ck.year=? AND COALESCE(ck.is_deleted,0)=0 AND it.car_id IS NOT NULL
+                            ORDER BY o.car_no");
+        $q->execute([$year]);
+        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $carAll++;
+            if ((string)$r['status'] === 'closed') $carClosed++;
+            else $missCar[] = $r['car_no'] . '：尚未結案（目前 ' . (string)$r['status'] . '）';
+        }
+    } catch (Throwable $e) {}
+    $add(['key' => 'car', 'stage' => '⑧缺失', 'doc_no' => $no, 'doc_name' => $nm . '（由內稽開立）', 'pane' => 'check',
+          'have' => $carAll, 'need' => 0, 'done' => $carClosed, 'missing' => $missCar,
+          'label' => $carAll ? ('開立 ' . $carAll . ' 張，已結案 ' . $carClosed . ' 張') : '本年度沒有由內稽開立矯正單',
+          'state' => ($carAll === 0 ? 'ok' : ($carClosed >= $carAll ? 'ok' : 'doing')),
+          'note' => $carAll ? '績效執行稽核查檢表「沒達成」自動開立' : '沒有未達標的指標不算漏單']);
+
+    /* ── ⑩稽核報告表 ── */
+    list($no, $nm) = $docOf('report');
+    $rep = null;
+    try {
+        $q = $db->prepare("SELECT * FROM ia_report WHERE year=? AND COALESCE(is_deleted,0)=0 LIMIT 1");
+        $q->execute([$year]);
+        $rep = $q->fetch(PDO::FETCH_ASSOC) ?: null;
+    } catch (Throwable $e) {}
+    if (!$rep) {
+        $add(['key' => 'report', 'stage' => '⑩結案', 'doc_no' => $no, 'doc_name' => $nm, 'pane' => 'report',
+              'state' => 'todo', 'label' => '尚未建立', 'missing' => ['這一年還沒有稽核報告表']]);
+    } else {
+        $st  = (string)($rep['status'] ?? 'draft');
+        $lab = ['draft' => '草稿（未送出）', 'submitted' => '已送出，待核准', 'approved' => '已核准'][$st] ?? $st;
+        $miss = [];
+        if ($st === 'draft')     $miss[] = '已建立但還沒送出';
+        if ($st === 'submitted') $miss[] = '已送出，還在等核准';
+        $add(['key' => 'report', 'stage' => '⑩結案', 'doc_no' => $no, 'doc_name' => $nm, 'pane' => 'report',
+              'have' => 1, 'need' => 1, 'done' => ($st === 'approved' ? 1 : 0),
+              'state' => ($st === 'approved' ? 'ok' : 'doing'), 'label' => $lab, 'missing' => $miss]);
+    }
+
+    /* 依流程順序排列：stage 開頭的 ①~⑩ 是連續的 Unicode 字元（U+2460~U+2469），
+       直接比碼位就是正確順序，不必再另外維護一份排序表（三種查檢表的來源是
+       IA_CHECK_KINDS，它的登記順序不等於流程順序，靠插入順序排會變成 ⑥⑤④）。
+       PHP 8 的 usort 是穩定排序，所以同一個階段的兩列仍維持加入的先後。 */
+    usort($rows, function ($a, $b) {
+        $k = function ($x) { $c = mb_substr((string)$x['stage'], 0, 1, 'UTF-8'); return mb_ord($c, 'UTF-8') ?: 0; };
+        return $k($a) <=> $k($b);
+    });
+
+    $sum = ['ok' => 0, 'doing' => 0, 'todo' => 0, 'warn' => 0, 'na' => 0];
+    foreach ($rows as $r) { $sum[$r['state']] = ($sum[$r['state']] ?? 0) + 1; }
+    return ['year' => $year, 'rows' => $rows, 'summary' => $sum];
+}
+
+/**
  * 稽核報告表（2-GM-06-08）內容全部由該年度的 IA 單算出來：
  *   每個受稽單位一列：主／次／觀 缺點數、受稽時間、稽核員、預定完成改善時間
  *   缺點記錄＝「單位-IA編號 表單編號 表單名稱」逐條列出

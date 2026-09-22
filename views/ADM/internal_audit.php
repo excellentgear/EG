@@ -148,6 +148,23 @@ $roleLabel = ia_role_label($perms);
         .st-major     { background:#DD5138; color:#fff; }
         .st-minor     { background:#F0A24B; color:#fff; }
         .st-observe   { background:#F7E0BD; color:#8A5A2B; }
+        /* ---- 年度單據點檢表（總覽；2026-09-22 使用者交辦） ----
+           表格裡的小籤一定要自己指定 line-height：Gentelella 全站有一條 td span{line-height:28px}，
+           不指定的話 12px 的字會佔掉 28px 把整列撐高（本專案已踩過三次）。 */
+        .ck-st { display:inline-block; padding:1px 9px; border-radius:10px; font-size:12px;
+                 line-height:18px; white-space:nowrap; }
+        .ck-ok    { background:#C9B18A; color:#fff; }
+        .ck-doing { background:#F0A24B; color:#fff; }
+        .ck-todo  { background:#F7E0BD; color:#8A5A2B; }
+        .ck-warn  { background:#DD5138; color:#fff; }
+        .ck-na    { background:#EFE7D8; color:#6b5535; }
+        .ck-row-warn td { background:#FBEAE4; }
+        .ck-row-todo td { background:#FDF8EF; }
+        .ck-miss  { margin:4px 0 0; padding-left:18px; color:#8a6d45; font-size:12px; line-height:1.7; }
+        .ck-miss li { list-style:disc; }
+        .ck-note  { color:#a08356; font-size:12px; line-height:1.6; margin-top:2px; }
+        .ck-no    { color:#8A5A2B; white-space:nowrap; }
+
 
         /* ---- 年度計畫格狀表 ---- */
         table.plan-grid { border-collapse:collapse; font-size:13px; background:#fff; }
@@ -391,6 +408,18 @@ $roleLabel = ia_role_label($perms);
         <div class="ia-pane on" id="pane-dash">
             <div class="ia-cards" id="dashCards"></div>
             <div class="ia-hint">這一頁只是看板。實際操作請切到上方各分頁；<b>順序是</b>年度計畫 → 稽核通知單（含事前會議） → 查檢表 → 不符合通知單 → 稽核報告表（含結束會議）。</div>
+            <h4 style="font-size:15px;color:#8A5A2B;">年度單據點檢表
+                <span id="ckSum" style="font-size:12px;color:#8a6d45;font-weight:normal;margin-left:8px;"></span></h4>
+            <div class="ia-hint">這一年的內部稽核<b>該有哪些單據、建了沒、結案了沒、還缺什麼</b>，一次列出來；
+                <b>由內稽開立的異常矯正處理單（2-QA-01-04）也一併追蹤</b>。
+                狀態一律<b>即時由各分頁的資料算出來</b>，不需要人工勾選、也不會另外存一份。
+                「份數」是<b>已建立／應有</b>，應有份數推不出來時只檢查「至少有一份」。</div>
+            <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
+                <th style="width:100px;">流程</th><th style="width:120px;">表單編號</th><th style="width:210px;">表單名稱</th>
+                <th style="width:80px;">份數</th><th style="width:92px;">狀態</th>
+                <th>目前情形／還缺什麼</th><th style="width:76px;">前往</th>
+            </tr></thead><tbody id="ckBody"></tbody></table></div>
+
             <h4 style="font-size:15px;color:#8A5A2B;">即將到期／逾期的不符合改善</h4>
             <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
                 <th>IA編號</th><th>受稽核單位</th><th>要求完成期限</th><th>目前狀態</th><th>操作</th>
@@ -691,6 +720,11 @@ $roleLabel = ia_role_label($perms);
                 <b>沒有年度計畫表的年度一律不顯示圖示</b>（一年的內稽是從年度計畫表開始的；若該年已有零星資料，旁邊會寫「還沒有年度計畫表」）。
                 年度選單<b>只列「已經有資料的年度」與今年、明年</b>（不再一路往前補十年的空年度）；要補更舊的資料，
                 請<b>內稽管理員</b>按年度旁的「<b>補舊年度</b>」把那一年加進來（該年度一旦有資料就不能再從選單移除）。</li>
+            <li><b>總覽有一張「年度單據點檢表」</b>（2026-09-22）：一次列出這一年的內稽<b>該有哪些單據、建了沒、結案了沒、還缺什麼</b>——
+                年度稽核計劃表、稽核通知單、事前／結束會議紀錄、三種查檢表、不符合通知單、<b>由內稽開立的異常矯正處理單（2-QA-01-04）</b>、稽核報告表。
+                「份數」是<b>已建立／應有</b>；應有份數由<b>年度計畫表排到的月份數</b>推，推不出來時只檢查「至少有一份」，<b>不會憑空報缺</b>。
+                狀態<b>即時由各分頁的資料算出來</b>，不需要人工勾選、也不會另外存一份，所以單據一建立或一結案，這裡立刻跟著變。
+                右側「開啟」直接切到該單據的分頁。<b>產品型態稽核表（2-DC-03-02）目前還是紙本</b>，系統判不出來，故只列出來提醒、標成「系統判不了」。</li>
             <li><b>分頁會依進度逐步出現</b>：這一年還沒建<b>年度計畫表</b>時，只看得到「總覽」與「年度計畫」；
                 建了計畫表才出現<b>稽核通知單</b>，建了通知單才出現<b>查檢表／不符合通知單／稽核報告表</b>。
                 分頁上方會寫出「還差什麼」。年度一打開<b>自動停在進行中的那一年</b>（沒有進行中的才停在今年）。</li>
@@ -2033,6 +2067,7 @@ function peopleAsof(date, cb){
 
 /* ============================ 總覽 ============================ */
 function loadDash(){
+    loadChecklist();
     $.getJSON(API, {action:'dashboard', year:YEAR}, function(res){
         if (!res.ok) return;
         var st = res.nc_by_stage||{}, ty = res.nc_by_type||{};
@@ -2064,6 +2099,45 @@ function loadDash(){
         $('#dashNcBody').html(b);
     });
 }
+/* ---------- 年度單據點檢表（2026-09-22 使用者交辦）----------
+   判定一律在後端 ia_year_checklist() 一處，這裡只負責排版；
+   前端不再自己算一次「有沒有建、結案了沒」，否則兩邊遲早講出不同的答案（鐵律4）。 */
+var CK_LABEL = {ok:'已完成', doing:'進行中', todo:'尚未建立', warn:'要追蹤', na:'系統判不了'};
+function loadChecklist(){
+    $('#ckBody').html('<tr><td colspan="7" class="ia-empty">載入中…</td></tr>');
+    $.getJSON(API, {action:'year_checklist', year:YEAR}, function(res){
+        if (!res || !res.ok){ $('#ckBody').html('<tr><td colspan="7" class="ia-empty">點檢表載入失敗</td></tr>'); return; }
+        var s = res.summary || {};
+        $('#ckSum').text('已完成 '+(s.ok||0)+'　進行中 '+(s.doing||0)+'　尚未建立 '+(s.todo||0)
+                        + ((s.warn||0) ? '　要追蹤 '+s.warn : '') + ((s.na||0) ? '　系統判不了 '+s.na : ''));
+        var b = '';
+        (res.rows||[]).forEach(function(r){
+            // 份數：應有幾份推得出來才印「已建／應有」，推不出來就只印已建幾份
+            var cnt = (+r.need > 0) ? ((+r.have)+'／'+(+r.need)) : ((+r.have) ? String(+r.have) : '—');
+            var miss = '';
+            if ((r.missing||[]).length){
+                miss = '<ul class="ck-miss">';
+                r.missing.forEach(function(m){ miss += '<li>'+esc(m)+'</li>'; });
+                miss += '</ul>';
+            }
+            var note = r.note ? '<div class="ck-note">'+esc(r.note)+'</div>' : '';
+            var go = r.pane ? '<span class="ia-op ck-go" data-pane="'+esc(r.pane)+'"><i class="fa fa-arrow-right"></i> 開啟</span>' : '';
+            b += '<tr class="ck-row-'+esc(r.state)+'">'
+               + '<td>'+esc(r.stage||'')+'</td>'
+               + '<td class="ck-no">'+esc(r.doc_no||'')+'</td>'
+               + '<td>'+esc(r.doc_name||'')+'</td>'
+               + '<td>'+esc(cnt)+'</td>'
+               + '<td><span class="ck-st ck-'+esc(r.state)+'">'+esc(CK_LABEL[r.state]||r.state)+'</span></td>'
+               + '<td>'+esc(r.label||'')+note+miss+'</td>'
+               + '<td>'+go+'</td></tr>';
+        });
+        $('#ckBody').html(b || '<tr><td colspan="7" class="ia-empty">沒有資料</td></tr>');
+    }).fail(function(){
+        $('#ckBody').html('<tr><td colspan="7" class="ia-empty">點檢表載入失敗</td></tr>');
+    });
+}
+$(document).on('click', '.ck-go', function(){ switchPane(String($(this).data('pane'))); });
+
 function card(t, v, s, warn){
     return '<div class="ia-card'+(warn?' warn':'')+'"><div class="t">'+esc(t)+'</div>'
          + '<div class="v">'+esc(v)+'</div><div class="s">'+esc(s||'')+'</div></div>';

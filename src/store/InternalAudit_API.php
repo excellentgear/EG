@@ -2631,6 +2631,16 @@ case 'dashboard': {
 }
 
 
+/* ============================ 年度單據點檢表 ============================ */
+/* 「這一年該有的單據建齊了沒、結案了沒、還缺什麼」——判定全部在共用庫 ia_year_checklist()，
+   這裡不再算第二份（鐵律4）。純讀取，檢閱權即可。 */
+case 'year_checklist': {
+    iaReqView($perms);
+    $year = (int)($_GET['year'] ?? substr($today, 0, 4));
+    try { jout(ia_year_checklist($db, $year)); }
+    catch (Throwable $e) { jerr('點檢表計算失敗：' . $e->getMessage()); }
+}
+
 /* ============================ 受稽單位群組 ============================ */
 case 'unit_list': {
     iaReqView($perms);
