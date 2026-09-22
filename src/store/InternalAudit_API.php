@@ -838,6 +838,28 @@ case 'case_reopen': {
     jout($r);
 }
 
+/* 結案前先告訴使用者「底下還有什麼沒收尾」（2026-09-22 使用者問「稽核通知單要怎麼結案」）。
+   只回數字不做判斷，要不要照樣結案由管理員決定——硬擋住的話，改善期拖很久的 IA 單
+   會讓整張通知單一年都結不了案。 */
+case 'case_close_info': {
+    iaReqView($perms);
+    $cid = (int)($_GET['case_id'] ?? 0);
+    $q = $db->prepare("SELECT case_id, case_no, seq_no, status FROM ia_case
+                        WHERE case_id=? AND COALESCE(is_deleted,0)=0");
+    $q->execute([$cid]);
+    $c = $q->fetch(PDO::FETCH_ASSOC);
+    if (!$c) jerr('找不到這張稽核通知單', 404);
+    $one = function (string $sql) use ($db, $cid): int {
+        try { $st = $db->prepare($sql); $st->execute([$cid]); return (int)$st->fetchColumn(); }
+        catch (Throwable $e) { return 0; }
+    };
+    jout(['case' => $c,
+          'check_all'  => $one("SELECT COUNT(*) FROM ia_check WHERE case_id=? AND COALESCE(is_deleted,0)=0"),
+          'check_open' => $one("SELECT COUNT(*) FROM ia_check WHERE case_id=? AND COALESCE(is_deleted,0)=0 AND status<>'done'"),
+          'nc_all'     => $one("SELECT COUNT(*) FROM ia_nc WHERE case_id=? AND COALESCE(is_deleted,0)=0"),
+          'nc_open'    => $one("SELECT COUNT(*) FROM ia_nc WHERE case_id=? AND COALESCE(is_deleted,0)=0 AND stage<>'closed'")]);
+}
+
 case 'case_status': {
     iaReqAdmin($perms);
     $cid = (int)($_POST['case_id'] ?? 0);
@@ -847,6 +869,11 @@ case 'case_status': {
     $q->execute([$cid]);
     $c = $q->fetch(PDO::FETCH_ASSOC);
     if (!$c) jerr('找不到這張稽核通知單', 404);
+    /* 草稿不可以直接結案（2026-09-22）：那張單還沒按「完成」，核准／審查都還沒簽，
+       結案等於跳過整個流程。前端不給按、這裡同規則再擋一次（鐵律8）。 */
+    if ((string)$c['status'] === 'draft' && in_array($to, ['executing', 'closed'], true)) {
+        jerr('這張通知單還是草稿，請先按「完成」把它發出，才能標記為執行中／結案');
+    }
     // 「實際實施」＝執行中或已結案；年度計劃表的◎就是看這個旗標
     $executed = in_array($to, ['executing', 'closed'], true) ? 1 : 0;
     $edate = $executed ? (iaDate($_POST['executed_date'] ?? '') ?: ($c['audit_from'] ?: $c['notify_date'])) : null;

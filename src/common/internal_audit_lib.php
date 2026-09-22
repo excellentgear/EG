@@ -1497,7 +1497,7 @@ function ia_type_ship_months(PDO $db, int $limit = 36): array
  * 「這個料號有沒有東西可以做型態稽核」的**快速**判定（d_id => 大約幾份文件）。
  *
  * 為什麼不直接用型態識別文件管制表那一頁的 type_id_ctrl_find_missing_parts()：
- *   那一支為了求完整，會用 JSON_CONTAINS 去 JOIN 報價附件，**實測跑超過兩分鐘**，
+ *   那一支為了求完整，會用 JSON_CONTAINS 去 JOIN 報價附件，**實測單次要 14 分鐘**（847 秒），
  *   抽樣跳窗一開就卡死。這裡只取三個「有索引、查得動」的來源（實測 0.08 秒）：
  *   料號附件（外來文件／型態識別要列入的類別）、PFMEA、產品開發評估表。
  *

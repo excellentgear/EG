@@ -750,6 +750,13 @@ $roleLabel = ia_role_label($perms);
                 就視同已經去稽核，狀態會自動由「已發出」補成「執行中」（年度計畫表上那一格 ◎ 也才會出現）；
                 所以點檢表不會再出現「已發出，尚未執行」這種跟事實不符的字樣，剩下要做的只有<b>結案</b>。
                 ⑶<b>稽核報告表送出就是完成</b>，不需要再核准（紙本本來就沒有核准格）。</li>
+            <li><b>稽核通知單怎麼結案</b>（2026-09-22 使用者提問時才發現畫面上根本沒有這一步）：
+                開啟該張通知單，下方有<b>「結案」</b>（限內稽管理員）。三件事要知道：
+                ⑴<b>還是草稿的不給結案</b>——請先按「完成」把它發出（核准／審查也是那一刻才簽）；
+                ⑵按下去會先跟後端要最新狀態，把<b>底下還有幾張查檢表沒結案、幾張不符合通知單沒結案</b>列給您看，
+                <b>但不會硬擋</b>（改善期拖很久的 IA 單會讓整張通知單一年都結不了案），確認是刻意保留的再結案；
+                ⑶結案之後年度單據點檢表上那一列才會變成<b>已完成</b>；要再改按<b>「取消結案」</b>退回執行中。
+                <b>「執行中」不必手動改</b>——這張通知單底下只要建了任何一張查檢表，系統就會自動把它從「已發出」推到「執行中」。</li>
             <li><b>產品型態稽核表（2-DC-03-02）可以自動抽樣建立</b>（2026-09-22 使用者交辦）：
                 查檢表分頁工具列的<b>「自動建立產品型態稽核表」</b>——
                 勾<b>要抽哪幾個月份的出貨資料</b>（括號內是該月出貨過幾個不同料號）、填<b>抽幾筆</b>（預設 3 筆，可在設定改預設值），
@@ -762,7 +769,12 @@ $roleLabel = ia_role_label($perms);
                 <b>要固定排除某些客戶或料號</b>請到<b>設定 → 產品型態稽核表抽樣</b>：對象一律打字從主檔搜尋後點選
                 （手打一個對不上的字，那條排除永遠不會生效而且不會報錯），存的是編號不是名稱，所以主檔改名也不會失效。
                 <b>訂單號碼</b>會由「該料號最近一次出貨綁到的訂單」自動帶，<b>出貨單多半還沒做訂單綁定（實測約只有一成）</b>，
-                空白是正常的，可在表上自行填寫或留白。</li>
+                空白是正常的，可在表上自行填寫或留白。
+                <b>出貨月份只列「目前選的那個年度」</b>（2026-09-22 使用者要求），要抽別年度請先改上方工具列的年度；
+                補舊年度時<b>建立日期會預設成該年度的最後一天</b>，日期欄旁邊也會寫明「這幾張會歸在哪一個年度」——
+                稽核表歸在哪一年是<b>依這個日期</b>推的，停在今天就會變成「抽去年的出貨、表卻歸在今年」。
+                <b>稽核人清單依「建立（稽核）日期」當時的在職狀態與職稱</b>（ai-rules/22），
+                所以補去年的稽核時，<b>當時在職、現在已離職的人也挑得到</b>；改日期會重抓，已經選好的人不會被洗掉。</li>
             <li><b>分頁會依進度逐步出現</b>：這一年還沒建<b>年度計畫表</b>時，只看得到「總覽」與「年度計畫」；
                 建了計畫表才出現<b>稽核通知單</b>，建了通知單才出現<b>查檢表／不符合通知單／稽核報告表</b>。
                 分頁上方會寫出「還差什麼」。年度一打開<b>自動停在進行中的那一年</b>（沒有進行中的才停在今年）。</li>
@@ -1109,6 +1121,10 @@ $roleLabel = ia_role_label($perms);
         <!-- 完成＝這張通知單填好了，之後不可修改；要改回去得輸入操作確認密碼（2026-09-18 使用者要求） -->
         <button id="btnCaseComplete" class="btn-warm" style="display:none;"><i class="fa fa-check-circle"></i> 完成</button>
         <button id="btnCaseReopen" style="display:none;"><i class="fa fa-unlock"></i> 取消完成</button>
+        <!-- 結案＝這一次稽核整個收尾了（2026-09-22 使用者問「稽核通知單要怎麼結案」：
+             原本畫面上根本沒有這一步，狀態只能停在已發出／執行中） -->
+        <button id="btnCaseClose" class="btn-warm" style="display:none;"><i class="fa fa-flag-checkered"></i> 結案</button>
+        <button id="btnCaseUnclose" style="display:none;"><i class="fa fa-undo"></i> 取消結案</button>
 <?php endif; ?>
     </div>
 </div></div>
@@ -1237,8 +1253,7 @@ $roleLabel = ia_role_label($perms);
                 <div style="margin-top:3px;font-size:12px;color:#8a6d45;">
                     <a href="javascript:void(0)" id="tsMonAll">全選</a>
                     <a href="javascript:void(0)" id="tsMonNone">全不選</a>
-                    <a href="javascript:void(0)" id="tsMonYear">只選本年度</a>
-                    　括號內是該月出貨了幾個不同料號。</div>
+                    　<b>只列目前選的年度</b>（要抽別年度請先改上方工具列的年度）；括號內是該月出貨了幾個不同料號。</div>
                 <div class="err-msg" id="errTsMonth"></div>
             </div>
             <label>抽幾筆</label>
@@ -1257,7 +1272,9 @@ $roleLabel = ia_role_label($perms);
                     連本年度已經稽核過的料號也抽</label>
             </div>
             <label>建立（稽核）日期<span style="color:#DD5138;">*</span></label>
-            <div><input type="date" id="tsDate"><div class="err-msg" id="errTsDate"></div></div>
+            <div><input type="date" id="tsDate">
+                 <span id="tsYearNote" style="font-size:12px;color:#8a6d45;"></span>
+                 <div class="err-msg" id="errTsDate"></div></div>
             <label>所屬件號</label>
             <div><select id="tsCase" data-eg-filter="輸入件號或日期篩選…"></select>
                  <span style="font-size:12px;color:#8a6d45;">　抽出來的每一張都掛在同一張稽核通知單底下</span></div>
@@ -2612,6 +2629,11 @@ function applyCaseLock(c){
     var canReopen = !!CASE_ID && CASE_DONE && String((c||{}).status) !== 'closed';
     var hasPw = +((META||{}).can_confirm_pw) === 1;
     $('#btnCaseReopen').toggle(canReopen && hasPw);
+    /* 結案／取消結案（2026-09-22 使用者交辦）：
+       草稿不給結案（還沒按「完成」＝還沒發出、核准審查都還沒簽）；已結案的只剩「取消結案」。 */
+    var cSt = String((c||{}).status || '');
+    $('#btnCaseClose').toggle(!!CASE_ID && (cSt === 'issued' || cSt === 'executing'));
+    $('#btnCaseUnclose').toggle(!!CASE_ID && cSt === 'closed');
     var $noPw = $('#caseReopenNoPw');
     if (!$noPw.length) $noPw = $('<span id="caseReopenNoPw" style="font-size:12px;color:#a08356;margin-left:8px;"></span>')
                                  .insertBefore($('#btnCaseReopen'));
@@ -2624,7 +2646,10 @@ function applyCaseLock(c){
             + ((c && c.completed_by_name) ? '　完成：'+esc(c.completed_by_name)+(c.completed_at ? (' '+String(c.completed_at).substr(0,16)) : '') : '')
             + ((c && c.approver_name) ? '　核准：'+esc(c.approver_name) : '')
             + ((c && c.reviewer_name) ? '　審查：'+esc(c.reviewer_name) : '')
-            + '<br>要修改請按下方「取消完成」（限內稽管理員，需輸入操作確認密碼）。');
+            + '<br>要修改請按下方「取消完成」（限內稽管理員，需輸入操作確認密碼）。'
+            + (String((c||{}).status) === 'closed'
+                ? '<br><b style="color:#7a5217;">這一次稽核已結案。</b>要再修改請先按下方「取消結案」。'
+                : '<br>這一次稽核全部收尾之後，請按下方<b>「結案」</b>（年度單據點檢表上這一列才會變成已完成）。'));
     } else { $box.hide().empty(); }
 }
 $('#btnCaseComplete').on('click', function(){
@@ -2670,6 +2695,36 @@ function caseDoComplete(d){
                 loadCases(function(){ openCase(CASE_ID); });
             }, 'json');
 }
+/* 結案：先跟後端要「底下還有什麼沒收尾」再問一次（點開即刷新）。
+   **刻意不硬擋**未結案的查檢表或 IA 單——改善期拖很久的 IA 單會讓整張通知單一年都結不了案；
+   但一定要把數字講出來，不然結案的人根本不知道自己跳過了什麼。 */
+$('#btnCaseClose').on('click', function(){
+    if (!CASE_ID) return;
+    $.getJSON(API, {action:'case_close_info', case_id:CASE_ID}, function(res){
+        if (!res.ok) { alert(res.error||'讀取失敗'); return; }
+        var warn = '';
+        if (+res.check_open > 0) warn += '\n・還有 ' + res.check_open + ' 張查檢表沒有結案（共 ' + res.check_all + ' 張）';
+        if (+res.nc_open   > 0) warn += '\n・還有 ' + res.nc_open   + ' 張不符合通知單沒有結案（共 ' + res.nc_all + ' 張）';
+        if (+res.check_all === 0) warn += '\n・這張通知單底下一張查檢表都沒有';
+        if (!confirm('要把第 ' + ((res.case||{}).seq_no||'') + ' 次稽核（' + ((res.case||{}).case_no||'') + '）結案嗎？'
+                   + (warn ? ('\n\n目前還有：' + warn + '\n\n仍然可以結案，但請先確認上面這幾項是刻意保留的。') : '')
+                   + '\n\n結案後年度單據點檢表上這一列會變成「已完成」；要再改可以按「取消結案」。')) return;
+        $.post(API, {action:'case_status', case_id:CASE_ID, status:'closed'}, function(r){
+            if (!r.ok) { alert(r.error||'結案失敗'); return; }
+            iaToast('已結案');
+            loadCases(function(){ openCase(CASE_ID); });
+        }, 'json');
+    });
+});
+$('#btnCaseUnclose').on('click', function(){
+    if (!CASE_ID) return;
+    if (!confirm('要取消結案嗎？\n這張通知單會退回「執行中」，年度單據點檢表上會重新變成未結案。')) return;
+    $.post(API, {action:'case_status', case_id:CASE_ID, status:'executing'}, function(r){
+        if (!r.ok) { alert(r.error||'取消結案失敗'); return; }
+        iaToast('已取消結案，退回執行中');
+        loadCases(function(){ openCase(CASE_ID); });
+    }, 'json');
+});
 $('#btnCaseReopen').on('click', function(){
     $('#caseReopenPw').val(''); clearErrs($('#caseReopenMask')); openMask('caseReopenMask');
     // 跳窗一開就把游標放進密碼欄（使用者回報過「無法輸入密碼」，先排除焦點沒進到欄位的可能）
@@ -3497,50 +3552,56 @@ function autoNewCheck(kind){
    這裡只負責收參數與排版——兩邊各判一次遲早走鐘（鐵律4）。 */
 var TS_MONTHS = [], TS_PICKS = [], TS_META = null;
 
+/* 月份清單**只列目前選的這個年度**（2026-09-22 使用者要求）：
+   後端一次回近 36 個月，全部攤出來會讓人不小心抽到別的年度的出貨，
+   而這張稽核表本來就屬於某一個年度。要抽別年度的請先換上方的年度選單。 */
 function tsRenderMonths(cur){
-    var h = '';
+    var h = '', n = 0;
     TS_MONTHS.forEach(function(m){
+        if (String(m.ym).slice(0,4) !== String(YEAR)) return;
+        n++;
         var on = cur ? (cur.indexOf(m.ym) >= 0) : false;
         h += '<label style="display:inline-block;width:150px;font-weight:normal;cursor:pointer;margin:1px 0;">'
            + '<input type="checkbox" class="tsMon" data-eg-skip value="'+esc(m.ym)+'"'+(on?' checked':'')
            + ' style="vertical-align:-2px;"> '+esc(m.ym)+' <span style="color:#8a6d45;">（'+(+m.parts)+'）</span></label>';
     });
-    $('#tsMonths').html(h || '<span style="color:#C4442D;">查不到任何出貨資料</span>');
+    $('#tsMonths').html(n ? h
+        : ('<span style="color:#C4442D;">'+esc(String(YEAR))+' 年度查不到任何出貨資料</span>'
+           + '<span style="color:#8a6d45;">　要抽別的年度請先改上方工具列的年度。</span>'));
 }
 function tsCheckedMonths(){
     return $('#tsMonths .tsMon:checked').map(function(){ return this.value; }).get();
 }
 $('#tsMonAll').on('click',  function(){ $('#tsMonths .tsMon').prop('checked', true); });
 $('#tsMonNone').on('click', function(){ $('#tsMonths .tsMon').prop('checked', false); });
-$('#tsMonYear').on('click', function(){
-    $('#tsMonths .tsMon').each(function(){ $(this).prop('checked', String(this.value).slice(0,4) === String(YEAR)); });
-});
+
 
 $('#btnTypeSample').on('click', function(){
     TS_PICKS = [];
     $('#tsBody').html('<tr><td colspan="8" class="ia-empty">請先選月份再按「抽樣」</td></tr>');
-    $('#tsPoolInfo').text(''); $('#tsDate').val(inputDate(META.today));
+    $('#tsPoolInfo').text('');
+    /* 預設日期：今年就用今天；補**舊年度**的稽核時用該年度的最後一天——
+       月份清單只列所選年度，日期卻停在今天的話，會變成「抽 2025 的出貨、表卻歸在 2026 年度」
+       （ia_check.year 是由這個日期推的），而且畫面上完全看不出來。 */
+    $('#tsDate').val(String(YEAR) === String(META.today).slice(0,4)
+                     ? inputDate(META.today) : (YEAR + '-12-31'));
     clearErrs($('#typeSampleMask'));
     $('#tsCase').html(caseOptions(''));
     nkSelBusy('#tsCase', true);
     $.getJSON(API, {action:'case_list', year:YEAR}, function(res){
         if (res && res.ok) { CASES = res.rows || []; $('#tsCase').html(caseOptions('')); }
     }).always(function(){ nkSelBusy('#tsCase', false); });
-    nkSelBusy('#tsAuditor', true);
-    peopleAsof(META.today, function(){
-        $('#tsAuditor').html(postOptions(META.auditors, '', META.me.id, '（未指定）'));
-        nkSelBusy('#tsAuditor', false);
-    });
+    tsYearNote();
+    tsLoadAuditors('');
     $.getJSON(API, {action:'type_sample_meta'}, function(res){
         if (!res || !res.ok) { alert((res&&res.error)||'載入失敗'); return; }
         TS_META = res;
         TS_MONTHS = res.months || [];
         $('#tsNDef').text(res.default_n);
         $('#tsN').val(res.default_n);
-        // 預設勾「本年度、而且真的有出貨的月份」；本年度一個月都沒有就勾最近三個月
+        // 本年度有出貨的月份預設全部勾起來（清單本來就只列這個年度，不要退回別年度的月份）
         var cur = TS_MONTHS.filter(function(m){ return String(m.ym).slice(0,4) === String(YEAR); })
                            .map(function(m){ return m.ym; });
-        if (!cur.length) cur = TS_MONTHS.slice(0, 3).map(function(m){ return m.ym; });
         tsRenderMonths(cur);
         var ex = res.excl || {};
         var n1 = (ex.cust||[]).length, n2 = (ex.part||[]).length;
@@ -3579,6 +3640,27 @@ function tsDraw(replaceIdx){
     }, 'json').always(function(){ $('#btnTsDraw').prop('disabled', false); });
 }
 $('#btnTsDraw').on('click', function(){ tsDraw(); });
+/* 稽核人清單一律以**建立（稽核）日期**當時的在職狀態與職稱為準（ai-rules/22）——
+   補去年的稽核時，當時在職、現在已離職的人也要挑得到；日期一改就重抓，
+   原本選好的人如果那天還在職就保留（postOptions 的 curKey 會處理）。 */
+function tsLoadAuditors(cur){
+    nkSelBusy('#tsAuditor', true);
+    peopleAsof($('#tsDate').val() || META.today, function(){
+        $('#tsAuditor').html(postOptions(META.auditors, cur, cur ? 0 : META.me.id, '（未指定）'));
+        nkSelBusy('#tsAuditor', false);
+    });
+}
+function tsYearNote(){
+    var d = String($('#tsDate').val() || '');
+    var y = d.slice(0, 4);
+    if (!y) { $('#tsYearNote').text(''); return; }
+    var same = (y === String(YEAR));
+    $('#tsYearNote').html(same
+        ? ('　這幾張稽核表會歸在 <b>' + esc(y) + '</b> 年度')
+        : ('　<b style="color:#C4442D;">注意：抽的是 ' + esc(String(YEAR)) + ' 年度的出貨，'
+           + '但依這個日期，稽核表會歸在 ' + esc(y) + ' 年度</b>'));
+}
+$('#tsDate').on('change', function(){ tsYearNote(); tsLoadAuditors($('#tsAuditor').val() || ''); });
 
 var TS_STATE = {ready:['可建立','#C9B18A'], will_create:['自動建立管制表','#F0A24B'],
                 will_sync:['自動同步管制表','#F0A24B'], empty:['沒有東西可稽核','#DD5138']};
