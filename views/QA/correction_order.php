@@ -1020,7 +1020,16 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
   $(function(){
     // 安全網：任一 Modal 關閉後若已無開啟中的 Modal，清除殘留 backdrop（防整頁不可點擊）
     $(document).on('hidden.bs.modal', '.modal', function(){
-      if(!$('.modal.in').length){ $('.modal-backdrop').remove(); $('body').removeClass('modal-open').css('padding-right',''); }
+      if($('.modal.in').length){
+        /* 疊第二層跳窗（例：單據檢視上再開「補資料操作確認密碼」）關掉時，**Bootstrap 3 的
+           hideModal() 會無條件把 body 的 modal-open 移除**，而 `.modal` 的 overflow-y:auto
+           只寫在 `.modal-open .modal` 底下——於是底下那一層跳窗從此 overflow:hidden，
+           沒有捲軸、滑鼠滾輪也不動，內容比視窗高就再也看不到下半部
+           （2026-09-22 使用者回報「進入補單狀態後無法捲動」的根因）。這裡補回來。 */
+        $('body').addClass('modal-open');
+      } else {
+        $('.modal-backdrop').remove(); $('body').removeClass('modal-open').css('padding-right','');
+      }
     });
     // 篩選卡片
     $('.car-stat').on('click', function(){ $('.car-stat').removeClass('active'); $(this).addClass('active'); state.card=$(this).data('card'); fetchPage(1); });
@@ -1588,6 +1597,13 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       return;
     }
     if(!perm.bf_on) return;
+
+    // 解鎖後（以及每次代簽/代填完重畫後）直接捲到補資料面板——單據檢視很長，每次都從最上面
+    // 重新捲下來找那張章格表非常難用（使用者回報的同一個情境）
+    setTimeout(function(){
+      var p=document.querySelector('.bf-panel'), m=document.querySelector('#viewModal');
+      if(p && m) m.scrollTop = Math.max(0, p.offsetTop - 70);
+    }, 250);
 
     // 解鎖剩餘時間倒數（逾時就地提示，避免按下去才被後端擋）
     if(BF.timer){ clearInterval(BF.timer); BF.timer=null; }
