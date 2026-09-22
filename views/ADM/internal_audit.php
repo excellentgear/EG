@@ -6121,9 +6121,16 @@ function printCheck(id){
                  不會被切開。
                ②簽章那一列的內距用 !important 固定，不跟著 fitTable 一起被縮到 0——
                  圖章擠在框線上很難看，而且整份只有這一列，省下來的高度沒有意義。 */
+            /* 簽章那一列**只留上方那一條框線**（＝資料表格自己的收尾線），左右與下方都不畫
+               （2026-09-22 使用者要求：稽核員圖章左右兩側與下方不要框線）。
+               所以它在紙上看起來就是「表格下面接著一段說明文字與一個章」，
+               而不是又多一個框——但它在 HTML 上仍然是表格的一列，
+               分頁時才會跟資料列綁在一起、不會被推到空白頁（見上方註解）。
+               說明文字靠上（align-items:flex-start）＋上內距只留 2px＝緊貼在表格線下面。 */
             var ckCss = 'table.ia-p tbody tr{page-break-inside:avoid;}'
-                      + 'table.ia-p tr.sig-row td{padding:6px 8px !important;vertical-align:middle;}'
-                      + 'table.ia-p .sig-row-in{display:flex;align-items:center;justify-content:space-between;gap:12px;}'
+                      + 'table.ia-p tr.sig-row td{border-left:0 !important;border-right:0 !important;'
+                      + 'border-bottom:0 !important;padding:2px 0 0 0 !important;vertical-align:top;}'
+                      + 'table.ia-p .sig-row-in{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;}'
                       + 'table.ia-p .sig-note{font-size:11px;line-height:1.6;white-space:pre-wrap;text-align:left;}'
                       + 'table.ia-p .sig-who{white-space:nowrap;font-size:12px;}';
             iaPrintWindow(ckTitle, h, ckCss, m.doc_no, land, {topMm:8, fitTable:true});
