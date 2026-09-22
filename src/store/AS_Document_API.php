@@ -1096,6 +1096,23 @@ case 'add_version':
         }
 
         $db->commit();
+
+        /* 編號變更之後掃一次線上版內文：哪幾份一階／二階的線上版還寫著舊編號（2026-09-22）。
+           掃描放 commit 之後、整段包 try——掃描失敗絕不可以把「已經改版成功」變成失敗。
+           這裡只建立「待確認」列，不直接動別人的文件：要改到哪幾處、改完要不要重送，
+           由那份文件的人在線上版編輯器裡逐處確認（使用者要求「重送之前明顯標示修改處」）。 */
+        if ($renumResult) {
+            try {
+                require_once __DIR__ . '/../common/as_doc_ref_lib.php';
+                $renumResult['ref_scan'] = adr_scan_on_change($db, [
+                    'kind'   => 'renumber', 'doc_id' => $docId,
+                    'old_no' => $renumResult['old_doc_no'], 'new_no' => $renumResult['new_doc_no'],
+                    'date'   => $rdate,
+                    'note'   => (string)$doc['doc_name'] . ' 編號由 ' . $renumResult['old_doc_no']
+                                . ' 變更為 ' . $renumResult['new_doc_no'],
+                ]);
+            } catch (Throwable $e) { error_log('[as_doc] renumber ref scan: ' . $e->getMessage()); }
+        }
         jout(['status'=>'success','version_id'=>$verId,'renumber'=>$renumResult]);
     } catch (Exception $e) {
         $db->rollBack();
@@ -1448,7 +1465,26 @@ case 'doc_obsolete':
                $now['t'], $who]);
         $db->commit();
     } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
-    jout(['status'=>'success','children'=>count($kids)]);
+
+    /* 廢止之後掃一次線上版內文：有哪幾份一階／二階的線上版還引用著這個編號（2026-09-22）。
+       廢止**沒有新編號可以換**，所以一律只標示不自動改（使用者拍板）——
+       要改指到別份文件、還是整段刪掉，只有寫那份程序書的人知道。
+       掃描放在 commit 之後、且整段包 try：掃描失敗絕不可以把「已經廢止成功」變成失敗。 */
+    $refScan = null;
+    try {
+        require_once __DIR__ . '/../common/as_doc_ref_lib.php';
+        $refScan = adr_scan_on_change($db, ['kind'=>'obsolete', 'doc_id'=>$id,
+            'old_no'=>(string)$doc['doc_no'], 'date'=>$odate,
+            'note'=>(string)$doc['doc_name'] . ' 已於 ' . $odate . ' 廢止']);
+        foreach ($kids as $k) {
+            $r2 = adr_scan_on_change($db, ['kind'=>'obsolete', 'doc_id'=>(int)$k['id'],
+                'old_no'=>(string)$k['doc_no'], 'date'=>$odate, 'note'=>'隨母文件一併廢止']);
+            $refScan['targets'] += $r2['targets']; $refScan['hits'] += $r2['hits'];
+            $refScan['rows'] = array_merge($refScan['rows'], $r2['rows']);
+        }
+    } catch (Throwable $e) { error_log('[as_doc] obsolete ref scan: ' . $e->getMessage()); }
+
+    jout(['status'=>'success','children'=>count($kids),'ref_scan'=>$refScan]);
 
 case 'doc_unobsolete':
     if (!asIsAdmin()) jout(['status'=>'error','message'=>'取消廢止僅限管理員使用']);
