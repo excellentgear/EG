@@ -55,6 +55,35 @@
   vertical-align:middle;cursor:pointer;margin:0 1px;}
 .egf-sw.on{outline:2px solid #8A5A2B;}
 .egf-canwrap{background:#fff;border:1px solid #d8c7b0;display:inline-block;box-shadow:0 1px 4px rgba(0,0,0,.12);}
+/* 畫布放大時不可以把左側面板擠掉，所以面板固定寬、畫布區自己捲動 */
+.egf-work{display:flex;gap:10px;align-items:flex-start;}
+.egf-canhost{flex:1 1 auto;min-width:0;overflow:auto;}
+.egf-pal{flex:0 0 164px;width:164px;background:#fff;border:1px solid #e4d3ba;border-radius:4px;padding:8px;}
+.egf-pal-t{font-size:12px;color:#8A5A2B;font-weight:bold;margin:2px 0 5px;}
+.egf-tiles{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:9px;}
+.egf-tile{width:70px;height:56px;border:1px solid #e4d3ba;border-radius:4px;background:#faf6f0;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:grab;
+  -webkit-user-select:none;user-select:none;}
+.egf-tile:hover{background:#f2e6d4;border-color:#d8c7b0;}
+.egf-tile.on{background:#e8d5b8;border-color:#8A5A2B;}
+.egf-tile:active{cursor:grabbing;}
+.egf-tile i{font-style:normal;font-size:11px;color:#6B471A;line-height:1;}
+.egf-ic{display:block;width:34px;height:18px;border:1.5px solid #6B471A;background:#fff;}
+.egf-ic-term{border-radius:9px;}
+.egf-ic-judge{width:22px;height:22px;transform:rotate(45deg) scale(.78);}
+.egf-ic-doc{transform:skewX(-12deg);}
+.egf-ic-text{border:0;background:none;font-size:15px;color:#6B471A;line-height:18px;text-align:center;font-weight:bold;}
+.egf-ic-arrow,.egf-ic-line{height:0;border:0;border-top:2px solid #6B471A;width:34px;margin-top:8px;position:relative;}
+.egf-ic-arrow:after{content:'';position:absolute;right:-1px;top:-4px;border-left:7px solid #6B471A;
+  border-top:4px solid transparent;border-bottom:4px solid transparent;}
+.egf-tpl{display:block;width:100%;text-align:left;border:1px solid #e4d3ba;border-radius:4px;
+  background:#FCEFD9;color:#6B471A;padding:5px 7px;margin-bottom:5px;}
+.egf-tpl:hover{background:#F7E0BD;border-color:#d8c7b0;}
+.egf-tpl b{display:block;font-size:12.5px;color:#4E2C0B;}
+.egf-tpl span{display:block;font-size:11px;color:#8A5A2B;line-height:1.5;}
+.egf-pal-tip{font-size:11px;color:#8A5A2B;line-height:1.7;margin-top:8px;
+  border-top:1px dashed #e4d3ba;padding-top:6px;}
+.egf-canwrap.egf-drop{outline:2px dashed #F0A24B;outline-offset:-2px;}
 </style>
 
 <div id="egfMask">
@@ -68,16 +97,7 @@
     </div>
     <div class="egf-bd">
       <div class="egf-bar">
-        <button type="button" class="egf-btn" data-add="proc"><i class="fa fa-square-o"></i> 處理</button>
-        <button type="button" class="egf-btn" data-add="judge">◇ 判斷</button>
-        <button type="button" class="egf-btn" data-add="term">▭ 起訖</button>
-        <button type="button" class="egf-btn" data-add="doc">▱ 文件</button>
-        <button type="button" class="egf-btn" data-add="text"><i class="fa fa-font"></i> 文字</button>
-        <span class="egf-sep"></span>
-        <button type="button" class="egf-btn" data-add="arrow"><i class="fa fa-long-arrow-down"></i> 箭頭</button>
-        <button type="button" class="egf-btn" data-add="line">— 直線</button>
-        <span class="egf-sep"></span>
-        <span class="egf-lab">框線</span><span id="egfSwLine"></span>
+        <span class="egf-lab" style="margin-left:0">框線</span><span id="egfSwLine"></span>
         <span class="egf-lab">填色</span><span id="egfSwFill"></span>
         <span class="egf-lab">字級</span>
         <select class="egf-sel" id="egfFontSize" data-eg-skip>
@@ -95,7 +115,44 @@
         <input type="number" class="egf-num" id="egfCH" value="560" min="200" max="3000" step="20" data-eg-skip>
         <button type="button" class="egf-btn" id="egfResize">套用</button>
       </div>
-      <div class="egf-canwrap"><canvas id="egfCanvas" width="760" height="560"></canvas></div>
+      <div class="egf-work">
+        <div class="egf-pal">
+          <div class="egf-pal-t">圖形（拖到畫布上）</div>
+          <div class="egf-tiles">
+            <div class="egf-tile" draggable="true" data-drag="proc"  title="處理／作業步驟">
+              <span class="egf-ic egf-ic-proc"></span><i>處理</i></div>
+            <div class="egf-tile" draggable="true" data-drag="judge" title="判斷／分歧">
+              <span class="egf-ic egf-ic-judge"></span><i>判斷</i></div>
+            <div class="egf-tile" draggable="true" data-drag="term"  title="開始／結束">
+              <span class="egf-ic egf-ic-term"></span><i>起訖</i></div>
+            <div class="egf-tile" draggable="true" data-drag="doc"   title="文件／表單">
+              <span class="egf-ic egf-ic-doc"></span><i>文件</i></div>
+            <div class="egf-tile" draggable="true" data-drag="text"  title="純文字說明">
+              <span class="egf-ic egf-ic-text">字</span><i>文字</i></div>
+          </div>
+          <div class="egf-pal-t">連線（在畫布上拖）</div>
+          <div class="egf-tiles">
+            <div class="egf-tile" data-add="arrow" title="由起點拖到終點">
+              <span class="egf-ic egf-ic-arrow"></span><i>箭頭</i></div>
+            <div class="egf-tile" data-add="line" title="由起點拖到終點">
+              <span class="egf-ic egf-ic-line"></span><i>直線</i></div>
+          </div>
+          <div class="egf-pal-t">範本（一鍵插入）</div>
+          <button type="button" class="egf-tpl" data-tpl="turtle">
+            <b>烏龜圖</b><span>過程分析：輸入／輸出＋四隻腳</span></button>
+          <button type="button" class="egf-tpl" data-tpl="flow3">
+            <b>基本流程</b><span>開始→作業→判斷→結束</span></button>
+          <button type="button" class="egf-tpl" data-tpl="pdca">
+            <b>PDCA 循環</b><span>規劃→執行→查核→改善</span></button>
+          <div class="egf-pal-tip">
+            拖不習慣也可以直接點一下圖形，會放到畫布上。<br>
+            圖形<b>雙擊</b>就能打字。
+          </div>
+        </div>
+        <div class="egf-canhost">
+          <div class="egf-canwrap"><canvas id="egfCanvas" width="760" height="560"></canvas></div>
+        </div>
+      </div>
     </div>
     <div class="egf-ft">
       <span class="egf-hint" id="egfStat">　</span>
@@ -260,7 +317,11 @@
     var hd = headOf(ln);
     if (!hd) return;
     var a = lineAbs(ln);
-    var ang = Math.atan2(a.y2 - a.y1, a.x2 - a.x1) * 180 / Math.PI + 90;
+    /* 箭頭本體的三個點是 (0,0) 尖端、(±6,-11) 底邊，配上 originY:'bottom'
+       ＝「left/top 指的是尖端」，而**沒有旋轉時它是朝下的**（底邊在尖端上方）。
+       所以要轉到線的方向是 φ−90，不是 φ+90——寫成 +90 會讓每一支箭頭都剛好
+       反過來指（尖端位置仍在終點上，所以乍看很像對的，要量底邊在哪一側才看得出來）。 */
+    var ang = Math.atan2(a.y2 - a.y1, a.x2 - a.x1) * 180 / Math.PI - 90;
     hd.set({ left: a.x2, top: a.y2, angle: ang, fill: ln.stroke, stroke: ln.stroke });
     hd.setCoords();
   }
@@ -470,7 +531,7 @@
       addConn(pend, x1, y1, p.x, p.y);
       pend = null; drag = null;
       cv.defaultCursor = 'default';
-      Array.prototype.slice.call(d.querySelectorAll('#egfWin .egf-btn[data-add]')).forEach(function (b) { b.classList.remove('on'); });
+      clearPendUI();
       snapshot();
     });
     w.__egfSetPending = function (k) {
@@ -481,25 +542,151 @@
     };
   }
 
+  /* ── 面板：拖曳產生與一鍵範本 ─────────────────────────────────────────
+     使用者要求「希望可以快速用拉的產生，不需要真的自己畫」，所以圖形改成
+     從左側面板拖到畫布上；拖不習慣的人點一下也一樣放得上去。 */
+  var SHAPE_SIZE = { proc:{w:130,h:50}, judge:{w:120,h:68}, term:{w:120,h:44},
+                     doc:{w:134,h:48}, text:{w:150,h:22} };
+  var KIND_NAME  = { proc:'處理', judge:'判斷', term:'起訖', doc:'文件', text:'文字' };
+  var dragKind = null;
+
+  function clearPendUI() {
+    Array.prototype.slice.call(d.querySelectorAll('#egfWin [data-add],#egfWin [data-drag]'))
+      .forEach(function (b) { b.classList.remove('on'); });
+  }
+
+  /** 放一個圖形到畫布；x/y 省略＝點擊新增（自動往右下錯開，不會全部疊在一起） */
+  function dropShape(kind, x, y) {
+    if (x === null || x === undefined) {
+      var n = cv.getObjects().filter(function (o) { return o.egRole === 'shape' || o.egRole === 'text'; }).length;
+      x = 60 + (n % 5) * 20; y = 50 + (n % 8) * 30;
+    } else {
+      // 拖放時讓游標落在圖形中央，比較符合直覺
+      var sz = SHAPE_SIZE[kind] || SHAPE_SIZE.proc;
+      x = x - sz.w / 2; y = y - sz.h / 2;
+    }
+    x = Math.max(0, x); y = Math.max(0, y);
+    var o = (kind === 'text') ? addFreeText(x, y) : addNode(kind, x, y, '');
+    snapshot();
+    stat('已放上「' + (KIND_NAME[kind] || kind) + '」——雙擊圖形就可以打字');
+    return o;
+  }
+
+  /* ── 範本 ─────────────────────────────────────────────────────────── */
+  /** 畫布至少要這麼大，範本才放得下 */
+  function ensureCanvas(ww, hh) {
+    if (cv.getWidth()  < ww) cv.setWidth(ww);
+    if (cv.getHeight() < hh) cv.setHeight(hh);
+    el('egfCW').value = cv.getWidth();
+    el('egfCH').value = cv.getHeight();
+  }
+  function hasContent() {
+    return cv.getObjects().some(function (o) {
+      return o.egRole === 'shape' || o.egRole === 'conn' || o.egRole === 'text';
+    });
+  }
+  /** 指定尺寸的方框（範本用；judge/doc 是多邊形不吃 width/height，範本一律用方框） */
+  function boxAt(x, y, ww, hh, text, kind) {
+    var s = addNode(kind || 'proc', x, y, text);
+    if (ww) { s.set({ width: ww, height: hh }); s.setCoords(); syncLabel(s); }
+    return s;
+  }
+  function textAt(x, y, s, size) {
+    var t = addFreeText(x, y);
+    t.set({ text: s, width: 60, fontSize: size || fontSize, textAlign: 'center' });
+    t.setCoords();
+    return t;
+  }
+
+  function tplTurtle() {
+    ensureCanvas(900, 640);
+    // 中心＝這個過程本身；左右是輸入輸出；四隻腳是「用什麼／用誰／如何做／做得如何」
+    boxAt(370, 288, 170, 70, '過程名稱\n（請填）');
+    boxAt( 55, 296, 150, 56, '輸入\n上游過程・需求');
+    boxAt(700, 296, 150, 56, '輸出\n下游過程・成果');
+    boxAt(150,  70, 170, 62, '用什麼？\n設備・工具・材料');
+    boxAt(585,  70, 170, 62, '用誰？\n人員・職能・訓練');
+    boxAt(150, 508, 170, 62, '如何做？\n程序書・作業標準');
+    boxAt(585, 508, 170, 62, '做得如何？\n績效指標・量測方式');
+    addConn('arrow', 205, 324, 370, 324);   // 輸入 → 過程
+    addConn('arrow', 540, 324, 700, 324);   // 過程 → 輸出
+    addConn('arrow', 235, 132, 400, 288);   // 用什麼 ↘
+    addConn('arrow', 670, 132, 510, 288);   // 用誰 ↙
+    addConn('arrow', 235, 508, 400, 358);   // 如何做 ↗
+    addConn('arrow', 670, 508, 510, 358);   // 做得如何 ↖
+  }
+
+  function tplFlow3() {
+    ensureCanvas(560, 470);
+    boxAt(180,  26, 120, 44, '開始', 'term');
+    boxAt(175, 106, 130, 50, '作業步驟');
+    boxAt(180, 192, 120, 68, '判斷', 'judge');
+    boxAt(175, 300, 130, 50, '後續作業');
+    boxAt(180, 386, 120, 44, '結束', 'term');
+    addConn('arrow', 240,  70, 240, 106);
+    addConn('arrow', 240, 156, 240, 192);
+    addConn('arrow', 240, 260, 240, 300);
+    addConn('arrow', 240, 350, 240, 386);
+    // 「否」回到作業步驟：兩段直線＋一支回頭的箭頭
+    addConn('line',  300, 226, 430, 226);
+    addConn('line',  430, 226, 430, 131);
+    addConn('arrow', 430, 131, 305, 131);
+    textAt(250, 262, '是', 11);
+    textAt(330, 196, '否', 11);
+  }
+
+  function tplPdca() {
+    ensureCanvas(560, 420);
+    boxAt( 60,  60, 170, 70, 'P 規劃 Plan\n訂目標與做法');
+    boxAt(330,  60, 170, 70, 'D 執行 Do\n照做法實施');
+    boxAt(330, 280, 170, 70, 'C 查核 Check\n量測與比對');
+    boxAt( 60, 280, 170, 70, 'A 改善 Act\n矯正與標準化');
+    addConn('arrow', 230,  95, 330,  95);
+    addConn('arrow', 415, 130, 415, 280);
+    addConn('arrow', 330, 315, 230, 315);
+    addConn('arrow', 145, 280, 145, 130);
+  }
+
+  function insertTemplate(key) {
+    if (hasContent() && !w.confirm(
+        '畫布上已經有內容。\n\n按「確定」＝清空後插入這個範本；\n按「取消」＝保留目前的圖、不插入。')) return;
+    w.__egfSetPending(null);
+    clearPendUI();
+    quiet = true;                       // 範本是一次成形，中間過程不要進復原歷史
+    try {
+      cv.clear();
+      cv.backgroundColor = '#ffffff';
+      nextId = 1;
+      if      (key === 'turtle') tplTurtle();
+      else if (key === 'flow3')  tplFlow3();
+      else if (key === 'pdca')   tplPdca();
+    } finally { quiet = false; }
+    cv.discardActiveObject();
+    cv.requestRenderAll();
+    snapshot();
+    stat('已插入範本——雙擊任何一個框就可以改字，不要的框選起來按 Delete');
+  }
+
   /* ── 工具列綁定 ───────────────────────────────────────────────────── */
   function bind() {
     var win = el('egfWin');
     win.addEventListener('click', function (e) {
       // .egf-x（右上角的 ×）是 <span> 不是 button，選擇器漏掉它就會「關不掉，只能按 ESC」
-      var t = e.target.closest ? e.target.closest('[data-add],.egf-sw,button,.egf-x') : null;
+      // 面板上的圖形是 <div data-drag>、範本是 <button data-tpl>，
+      // 選擇器漏掉它們就會「點了完全沒反應」（.egf-x 當初就是這樣被漏掉的）
+      var t = e.target.closest ? e.target.closest('[data-add],[data-drag],[data-tpl],.egf-sw,button,.egf-x') : null;
       if (!t) return;
-      var add = t.getAttribute && t.getAttribute('data-add');
+      // 範本：一鍵把整張圖放上去（使用者：不需要真的自己畫）
+      var tpl = t.getAttribute && t.getAttribute('data-tpl');
+      if (tpl) { insertTemplate(tpl); return; }
+
+      // 面板上的圖形：拖比較快，但也要能點一下就放上去（拖不習慣的人）
+      var add = t.getAttribute && (t.getAttribute('data-add') || t.getAttribute('data-drag'));
       if (add) {
-        Array.prototype.slice.call(win.querySelectorAll('.egf-btn[data-add]')).forEach(function (b) { b.classList.remove('on'); });
+        clearPendUI();
         if (add === 'arrow' || add === 'line') { t.classList.add('on'); w.__egfSetPending(add); return; }
         w.__egfSetPending(null);
-        if (add === 'text') addFreeText(60, 60);
-        else {
-          // 每次新增往右下錯開一點，不然全部疊在同一個位置
-          var n = cv.getObjects().filter(function (o) { return o.egRole === 'shape'; }).length;
-          addNode(add, 60 + (n % 5) * 20, 50 + (n % 8) * 30, '');
-        }
-        snapshot();
+        dropShape(add, null, null);
         return;
       }
       if (t.classList && t.classList.contains('egf-sw')) {
@@ -528,6 +715,48 @@
         case 'egfClose':  close(); break;
       }
     });
+    /* 從面板把圖形拖到畫布上。
+       用 HTML5 dragstart/drop：畫布是 <canvas>，fabric 自己的 mouse 事件抓不到
+       「從畫面別的地方拖進來」這件事，硬用 mousemove 模擬會跟 fabric 的框選打架。 */
+    win.addEventListener('dragstart', function (e) {
+      var t = e.target.closest ? e.target.closest('[data-drag]') : null;
+      if (!t) return;
+      dragKind = t.getAttribute('data-drag');
+      try {
+        e.dataTransfer.setData('text/plain', dragKind);
+        e.dataTransfer.effectAllowed = 'copy';
+      } catch (err) {}
+      stat('拖到右邊畫布上放開就會建立「' + (KIND_NAME[dragKind] || dragKind) + '」');
+    });
+    win.addEventListener('dragend', function () {
+      dragKind = null;
+      var wr = d.querySelector('#egfWin .egf-canwrap');
+      if (wr) wr.classList.remove('egf-drop');
+    });
+    var wrap = d.querySelector('#egfWin .egf-canwrap');
+    if (wrap) {
+      wrap.addEventListener('dragover', function (e) {
+        if (!dragKind) return;
+        e.preventDefault();                       // 不 preventDefault 就不會觸發 drop
+        try { e.dataTransfer.dropEffect = 'copy'; } catch (err) {}
+        wrap.classList.add('egf-drop');
+      });
+      wrap.addEventListener('dragleave', function (e) {
+        if (e.target === wrap) wrap.classList.remove('egf-drop');
+      });
+      wrap.addEventListener('drop', function (e) {
+        e.preventDefault();
+        wrap.classList.remove('egf-drop');
+        var kind = dragKind;
+        if (!kind) { try { kind = e.dataTransfer.getData('text/plain'); } catch (err) {} }
+        dragKind = null;
+        if (!kind || !SHAPE_SIZE[kind]) return;
+        // 座標要相對「畫布本身」不是外框（外框有邊框與捲動位移）
+        var r = el('egfCanvas').getBoundingClientRect();
+        dropShape(kind, e.clientX - r.left, e.clientY - r.top);
+      });
+    }
+
     el('egfFontSize').addEventListener('change', function () {
       fontSize = parseInt(this.value, 10) || 12;
       var objs = cv.getActiveObjects();
@@ -599,6 +828,8 @@
     onSaveCb = null;
   }
 
-  w.EGFlow = { open: open, close: close };
+  // canvas() 是唯讀存取器：fabric 不會把實例掛在 <canvas> 元素上，
+  // 所以自動測試與日後要整合的程式沒有別的辦法拿到畫布內容。
+  w.EGFlow = { open: open, close: close, canvas: function () { return cv; } };
 })(window, document);
 </script>
