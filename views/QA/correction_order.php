@@ -159,6 +159,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         .bf-panel .bf-head{ background:#F0A24B; color:#4a2f10; padding:6px 12px; font-weight:700;
                             display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
         .bf-panel .bf-head .bf-left{ font-size:12px; font-weight:normal; margin-left:auto; }
+        .bf-msg{ font-size:12px; font-weight:normal; color:#3B2A18; }
+        .bf-msg.err{ color:#8E2B1B; font-weight:700; }
         .bf-panel .bf-body{ background:#FEF7F0; padding:10px 12px; }
         .bf-panel .bf-note{ font-size:12px; color:#8A5A2B; margin-bottom:8px; line-height:1.6; }
         .bf-panel table.bf-t{ background:#fff; margin-bottom:8px; }
@@ -1179,9 +1181,40 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
   });
 
   // ---------- 檢視 / 處理 ----------
-  function openView(id){
+  /* 重畫前先把「使用者改過、還沒存檔」的欄位與捲動位置記下來，重畫後放回去。
+     原本每做一個動作就 openView() 整個重畫，正在打的字會直接消失、畫面還會跳回上面
+     （使用者回報）。只記**改過的**欄位，沒動過的一律用伺服器回來的新值。 */
+  function snapView(){
+    var snap={ scroll:(document.querySelector('#viewModal')||{}).scrollTop||0, vals:{} };
+    $('#view-body').find('input,select,textarea').each(function(){
+      if(!$(this).data('dirty')) return;
+      if(this.type==='radio'){ if(this.checked) snap.vals['name:'+this.name]=this.value; return; }
+      if(this.type==='checkbox'){ if(this.id) snap.vals[this.id]=this.checked; return; }
+      if(this.id) snap.vals[this.id]=this.value;
+      else if($(this).hasClass('bf-person')) snap.vals['slot:'+($(this).closest('tr').data('slot')||$(this).attr('class'))]=this.value;
+    });
+    return snap;
+  }
+  function applySnap(snap){
+    if(!snap) return;
+    Object.keys(snap.vals).forEach(function(k){
+      var v=snap.vals[k];
+      if(k.indexOf('name:')===0){ $('#view-body').find('input[name="'+k.slice(5)+'"]').filter('[value="'+v+'"]').prop('checked',true); return; }
+      if(k.indexOf('slot:')===0){ $('#view-body').find('tr[data-slot="'+k.slice(5)+'"] select.bf-person').val(v); return; }
+      var el=document.getElementById(k); if(!el) return;
+      if(el.type==='checkbox') el.checked=!!v; else el.value=v;
+      $(el).data('dirty',1);
+    });
+    var m=document.querySelector('#viewModal');
+    if(m && snap.scroll) setTimeout(function(){ m.scrollTop=snap.scroll; }, 60);
+  }
+  /** 只更新資料、不弄丟正在輸入的內容（代簽等動作一律走這支，不要再呼叫 openView） */
+  function refreshView(id){ openView(id, snapView()); }
+
+  function openView(id, snap){
     curViewId = id;
-    $('#view-body').html('載入中…'); $('#viewModal').modal('show');
+    if(!snap) $('#view-body').html('載入中…');
+    $('#viewModal').modal('show');
     api('get_detail',{id:id}).done(function(r){
       if(!r||!r.success){ $('#view-body').html('<div class="text-danger">'+esc(r&&r.message||'載入失敗')+'</div>'); return; }
       var o=r.order, L=r.labels, perm=r.perm||{};
@@ -1264,6 +1297,10 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         + '<h5 style="margin-top:12px;">處理軌跡</h5>'+(acts||'<span class="text-muted">—</span>')
       );
       bfBind(id, o, perm, sigMap);   // 補資料面板的下拉與按鈕（未解鎖時只綁那顆解鎖鈕）
+
+      // 使用者一動過的欄位就標記起來——重畫時只有這些會被保留（見 snapView）
+      $('#view-body').find('input,select,textarea').on('input change', function(){ $(this).data('dirty',1); });
+      applySnap(snap);
       // 母單/退件單跳轉
       $('#view-body .open-car').on('click', function(e){ e.preventDefault(); openView($(this).data('id')); });
 
@@ -1279,13 +1316,13 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
           .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'放棄失敗'); }); });
       if(perm.can_withdraw){ $('#btn-withdraw').on('click', function(){
         var reason=prompt('撤回原因（必填）'); if(!reason) return;
-        api('withdraw_application',{car_id:o.id, reason:reason}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ openView(o.id); fetchPage(state.page);} })
+        api('withdraw_application',{car_id:o.id, reason:reason}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ refreshView(o.id); fetchPage(state.page);} })
           .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'撤回失敗'); }); }); }
 
       // 申請核准/退回
       if(perm.can_approve){
         $('#btn-approve-open').on('click', function(){ if(!confirm('確定核准成立？將產生正式單號並開始流程。')) return;
-          api('approve_open',{group_no:o.group_no}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ openView(id); fetchPage(state.page);} }); });
+          api('approve_open',{group_no:o.group_no}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ refreshView(id); fetchPage(state.page);} }); });
         $('#btn-reject-open').on('click', function(){ var reason=prompt('退回原因'); if(!reason) return;
           api('reject_open',{group_no:o.group_no, reason:reason}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ $('#viewModal').modal('hide'); fetchPage(state.page);} }); });
       }
@@ -1304,7 +1341,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
             var nm=$('#assignee-sel option:selected').text();
             if(!confirm('確定將本單改派給 '+nm+' 接手回覆？\n原回覆人已簽章的段落會保留，接手者可取消簽章後修改重簽。')) return;
           }
-          api('assign',{car_id:id, assignee_id:aid}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ openView(id); fetchPage(state.page);} })
+          api('assign',{car_id:id, assignee_id:aid}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ refreshView(id); fetchPage(state.page);} })
             .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'指派失敗'); }); });
       }
 
@@ -1342,10 +1379,10 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
           tree: r.causes||[], selected: ($('#rp-cause-cat').val()? [$('#rp-cause-cat').val()] : []),
           multi: false, title: '選擇異常原因分類', add: causeAddCfg(),
           onTreeChange: function(t){ r.causes = t; },   // 就地新增後本頁的樹也要跟著更新，路徑才印得出來
-          onApply: function(ids){ $('#rp-cause-cat').val(ids.length?ids[0]:''); refreshCausePath(); }
+          onApply: function(ids){ $('#rp-cause-cat').val(ids.length?ids[0]:''); refreshCausePath(); rpAutoSave(); }
         });
       });
-      $('#btn-clear-cause').on('click', function(){ $('#rp-cause-cat').val(''); refreshCausePath(); });
+      $('#btn-clear-cause').on('click', function(){ $('#rp-cause-cat').val(''); refreshCausePath(); rpAutoSave(); });
 
       // 回覆三段：儲存/簽章/修改/送出
       function gatherReply(){
@@ -1355,6 +1392,22 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
           disposition_opt_id: $('#view-body input[name="rp-disp-opt"]:checked').val()||'',
           correction_measure:$('#rp-corr').val()||'', correction_due:$('#rp-corr-due').val()||'',
           prevention_measure:$('#rp-prev').val()||'', prevention_due:$('#rp-prev-due').val()||'' };
+      }
+      /* 補資料模式：三段內容也改到哪存到哪（使用者要求：常忘記按儲存）。
+         正式流程維持原本要自己按「儲存草稿」——那是回覆人的作業節奏，不要替他決定何時送出。 */
+      var RP_AUTO_T=null;
+      function rpAutoSave(){
+        if(!perm.bf_on) return;
+        clearTimeout(RP_AUTO_T);
+        RP_AUTO_T=setTimeout(function(){
+          api('save_reply', gatherReply()).done(function(rr){
+            $('#reply-msg').text((rr&&rr.success) ? ('已自動儲存 '+bfNowHM()) : ((rr&&rr.message)||'儲存失敗'));
+          }).fail(function(xhr){ $('#reply-msg').text((xhr.responseJSON&&xhr.responseJSON.message)||'儲存失敗'); });
+        }, 900);
+      }
+      if(perm.bf_on){
+        $('#view-body').find('#rp-cause-detail,#rp-corr,#rp-corr-due,#rp-prev,#rp-prev-due').on('input change', rpAutoSave);
+        $('#view-body').find('input[name="rp-disp-opt"]').on('change', rpAutoSave);
       }
       $('#btn-save-reply').on('click', function(){ api('save_reply', gatherReply()).done(function(rr){ $('#reply-msg').text(rr&&rr.message||''); }); });
       $('.sign-btn').on('click', function(){ var sec=$(this).data('sec');
@@ -1370,7 +1423,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
 
       // 效果確認：主管簽核 / 總經理裁決 / 管理課扣款判定
       $('#btn-primary-sign').on('click', function(){ if(!confirm('確認簽核通過？將送交總經理裁決。')) return;
-        api('primary_sign',{car_id:id}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ openView(id); fetchPage(state.page);} })
+        api('primary_sign',{car_id:id}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ refreshView(id); fetchPage(state.page);} })
           .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'簽核失敗'); }); });
       $('#btn-primary-reject').on('click', function(){ var reason=prompt('退回原因（必填）——將退回責任人依此原因重新填寫'); if(!reason) return;
         api('primary_reject',{car_id:id, reason:reason}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ $('#viewModal').modal('hide'); fetchPage(state.page);} })
@@ -1379,15 +1432,15 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         var amt=$('#final-deduct-amount').val(), note=$('#final-deduct-note').val();
         var amtTxt = (amt!=='' && parseFloat(amt)>0) ? ('扣款 '+amt+' 元') : '不扣款';
         if(!confirm('確認結案？（'+amtTxt+'）\n將自動簽章並押上今日結案日期。')) return;
-        api('final_decide',{car_id:id, result:'close', deduct_amount:amt, deduct_note:note}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ openView(id); fetchPage(state.page);} })
+        api('final_decide',{car_id:id, result:'close', deduct_amount:amt, deduct_note:note}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ refreshView(id); fetchPage(state.page);} })
           .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'裁決失敗'); }); });
       $('#btn-final-reject').on('click', function(){ var reason=prompt('不可結案原因（必填）'); if(!reason) return;
-        api('final_decide',{car_id:id, result:'not_close', reason:reason}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ openView(id); fetchPage(state.page); if(window.__loadRespFilter) window.__loadRespFilter(); } })
+        api('final_decide',{car_id:id, result:'not_close', reason:reason}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ refreshView(id); fetchPage(state.page); if(window.__loadRespFilter) window.__loadRespFilter(); } })
           .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'裁決失敗'); }); });
       $('#btn-deduct-sign').on('click', function(){ var amt=$('#deduct-amount').val(); var note=$('#deduct-note').val();
         if(amt===''){ alert('請填寫扣款金額（0 表示不扣款）'); return; }
         if(!confirm('確認判定：'+(parseFloat(amt)>0?('扣款 '+amt+' 元'):'不扣款')+'？')) return;
-        api('deduct_sign',{car_id:id, amount:amt, note:note}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ openView(id); fetchPage(state.page);} })
+        api('deduct_sign',{car_id:id, amount:amt, note:note}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ refreshView(id); fetchPage(state.page);} })
           .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'判定失敗'); }); });
     });
   }
@@ -1645,6 +1698,18 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       + (dateref?(' data-dateref="'+dateref+'"'):'')
       + (prefDept?(' data-prefdept="'+prefDept+'"'):'') + '><option value="">載入中…</option></select></span>';
   }
+  /* 面板上的狀態文字（代簽結果、自動存檔時間、錯誤）——一律寫在這裡，不跳 alert */
+  var BF_MSG_T=null, BF_MSG={txt:'', err:false};
+  function bfMsg(txt, isErr){
+    BF_MSG={txt:txt||'', err:!!isErr};          // 記下來：代簽之後會重畫，元素會換一個新的
+    var $m=$('#bf-msg'); if(!$m.length) return;
+    $m.text(BF_MSG.txt).toggleClass('err', BF_MSG.err);
+    clearTimeout(BF_MSG_T);
+    if(txt && !isErr) BF_MSG_T=setTimeout(function(){ BF_MSG={txt:'',err:false}; $('#bf-msg').text(''); }, 6000);
+  }
+  function bfMsgRestore(){ if(BF_MSG.txt) $('#bf-msg').text(BF_MSG.txt).toggleClass('err', BF_MSG.err); }
+  function bfNowHM(){ var d=new Date();
+    return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2); }
   function bfMMSS(sec){ sec=Math.max(0,parseInt(sec,10)||0); var m=Math.floor(sec/60); return m+':'+('0'+(sec%60)).slice(-2); }
 
   // 解鎖跳窗（操作確認密碼）
@@ -1693,6 +1758,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       +'<option value="not_close"'+(o.result==='not_close'?' selected':'')+'>不可結案</option></select>';
 
     var h='<div class="bf-panel"><div class="bf-head"><i class="fa fa-history"></i> 補資料模式（代填／代簽）'
+      + '<span id="bf-msg" class="bf-msg"></span>'
       + '<span class="bf-left">解鎖剩餘 <b id="bf-ttl">'+bfMMSS(perm.bf_ttl)+'</b></span>'
       + '<button class="btn btn-default btn-xs" id="btn-bf-lock" style="margin-left:6px;">離開補資料模式</button>'
       + '</div><div class="bf-body">'
@@ -1738,6 +1804,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       var p=document.querySelector('.bf-panel'), m=document.querySelector('#viewModal');
       if(p && m) m.scrollTop = Math.max(0, p.offsetTop - 70);
     }, 250);
+
+    bfMsgRestore();   // 上一個動作的結果（例：已代簽…）重畫之後要接著顯示
 
     // 解鎖剩餘時間倒數（逾時就地提示，避免按下去才被後端擋）
     if(BF.timer){ clearInterval(BF.timer); BF.timer=null; }
@@ -1793,48 +1861,78 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     });
 
     // 代簽 / 清除
+    /* 按下「代簽」就直接簽——不再 confirm 一次、也不再 alert 一次（使用者要求）。
+       結果寫在面板上方的狀態列，錯誤也寫在那裡，不用跳窗打斷。 */
     $('#view-body').find('.bf-sign').on('click', function(){
       var $tr=$(this).closest('tr'), slot=$tr.data('slot');
       var who=$tr.find('.bf-person').val()||'', d=$tr.find('.bf-date').val()||'';
-      if(!who){ alert('請先選擇代簽人員'); return; }
-      if(!d){ alert('請選擇印章日期'); return; }
-      var nm=$tr.find('.bf-person option:selected').text();
-      if(!confirm('確定以「'+nm+'」代簽「'+$tr.find('td:first b').text()+'」，章面日期 '+d.replace(/-/g,'.')+'？')) return;
+      if(!who){ bfMsg('請先選擇「'+$tr.find('td:first b').text()+'」的代簽人員', true); return; }
+      if(!d){ bfMsg('請選擇「'+$tr.find('td:first b').text()+'」的印章日期', true); return; }
+      bfMsg('代簽中…');
       api('bf_sign',{car_id:id, slot:slot, user_id:who, date:d}).done(function(r){
-        alert((r&&r.message)||''); if(r&&r.success){ openView(id); fetchPage(state.page); }
-      }).fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'代簽失敗'); });
+        if(!r||!r.success){ bfMsg((r&&r.message)||'代簽失敗', true); return; }
+        bfMsg(r.message||'已代簽'); refreshView(id); fetchPage(state.page);
+      }).fail(function(xhr){ bfMsg((xhr.responseJSON&&xhr.responseJSON.message)||'代簽失敗', true); });
     });
+    // 清除是把章拿掉，維持問一次（按錯就要重簽一次）
     $('#view-body').find('.bf-clear').on('click', function(){
       var $tr=$(this).closest('tr'), slot=$tr.data('slot');
       if(!confirm('確定清除「'+$tr.find('td:first b').text()+'」的簽章？該格會回到未簽狀態。')) return;
+      bfMsg('清除中…');
       api('bf_sign',{car_id:id, slot:slot, clear:1}).done(function(r){
-        alert((r&&r.message)||''); if(r&&r.success){ openView(id); fetchPage(state.page); }
-      }).fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'清除失敗'); });
+        if(!r||!r.success){ bfMsg((r&&r.message)||'清除失敗', true); return; }
+        bfMsg(r.message||'已清除'); refreshView(id); fetchPage(state.page);
+      }).fail(function(xhr){ bfMsg((xhr.responseJSON&&xhr.responseJSON.message)||'清除失敗', true); });
     });
 
     // 代填欄位
-    $('#btn-bf-save').on('click', function(){
-      var p = { car_id:id,
-        filler: $('#view-body').find('.bf-filler').val()||'',
+    /* 代填欄位：改到哪存到哪（使用者要求：常忘記按儲存）。
+       前端先擋掉必填不全的情況——那種狀態下自動送出只會一直跳錯誤，反而更吵。 */
+    function bfFields(){
+      var f = { car_id:id,
         fill_date: $('#bf-fill-date').val()||'',
         found_date: $('#bf-found-date').val()||'',
-        assigned_to: $('#view-body').find('.bf-assignee').val()||'',
         status: $('#bf-status').val()||'',
         result: $('#bf-result').val()||'',
         close_date: $('#bf-close-date').val()||'',
         not_close_reason: $('#bf-not-reason').val()||'',
         deduct_amount: $('#bf-deduct-amt').val(),
         deduct_note: $('#bf-deduct-note').val()||'' };
-      if(!p.filler){ alert('請選擇開立人員'); return; }
-      if(!p.fill_date){ alert('請填寫填表日期'); return; }
-      if((p.status==='closed'||p.result==='close') && !p.close_date){ alert('結案時「結案日期」為必填'); return; }
-      if((p.status==='rejected'||p.result==='not_close') && !p.not_close_reason.trim()){ alert('不可結案時「不可結案原因」為必填'); return; }
-      $('#bf-save-msg').text('儲存中…');
+      /* 人員欄位「沒值就不要送」（後端的 array_key_exists 語意＝沒送就不動它）。
+         原本一律送，遇到「目前的開立人員在人員清單裡找不到」（例如那個人沒有部門職務）
+         就會每次都被擋在「請選擇開立人員」，連別的欄位都存不了（自動存檔更是整個卡死）。 */
+      var fl=$('#view-body').find('.bf-filler').val()||'';
+      if(fl) f.filler = fl;
+      var $as=$('#view-body').find('.bf-assignee'), av=$as.val()||'';
+      if(av || $as.data('dirty')) f.assigned_to = av;   // 空值只有在使用者自己清掉時才送（＝真的要清除回覆人）
+      return f;
+    }
+    function bfWhyCant(p){
+      // 只擋真正會互相矛盾、後端也一定會退的那兩種；其餘一律讓它存（沒填的欄位就是沒填）
+      if(p.status==='closed' && !p.close_date) return '結案時「結案日期」為必填';
+      if(p.status==='rejected' && !String(p.not_close_reason).trim()) return '不可結案時「不可結案原因」為必填';
+      return '';
+    }
+    function bfSaveFields(auto){
+      var p=bfFields(), why=bfWhyCant(p);
+      if(why){ $('#bf-save-msg').text(why); if(!auto) bfMsg(why, true); return; }
+      $('#bf-save-msg').text(auto?'自動儲存中…':'儲存中…');
       api('bf_save',p).done(function(r){
-        $('#bf-save-msg').text((r&&r.message)||'');
-        if(r&&r.success){ openView(id); fetchPage(state.page); }
-      }).fail(function(xhr){ $('#bf-save-msg').text((xhr.responseJSON&&xhr.responseJSON.message)||'儲存失敗'); });
-    });
+        if(!r||!r.success){ $('#bf-save-msg').text((r&&r.message)||'儲存失敗'); bfMsg((r&&r.message)||'儲存失敗', true); return; }
+        $('#bf-save-msg').text((auto?'已自動儲存 ':'已儲存 ')+bfNowHM());
+        // 自動存檔刻意不重畫（重畫會打斷正在輸入的人）；按鈕存檔才順便把上方表頭更新成新值
+        if(!auto){ refreshView(id); fetchPage(state.page); }
+      }).fail(function(xhr){
+        var m=(xhr.responseJSON&&xhr.responseJSON.message)||'儲存失敗';
+        $('#bf-save-msg').text(m); bfMsg(m, true);
+      });
+    }
+    var BF_AUTO_T=null;
+    function bfAutoSave(){ clearTimeout(BF_AUTO_T); BF_AUTO_T=setTimeout(function(){ bfSaveFields(true); }, 900); }
+    $('#btn-bf-save').on('click', function(){ bfSaveFields(false); });
+    $('#view-body').find('#bf-fill-date,#bf-found-date,#bf-status,#bf-result,#bf-close-date,#bf-not-reason,#bf-deduct-amt,#bf-deduct-note')
+      .on('change input', bfAutoSave);
+    $('#view-body').find('.bf-filler,.bf-assignee').on('change', bfAutoSave);
   }
 
   // ---------- 列印 / CSV / 統計 ----------
