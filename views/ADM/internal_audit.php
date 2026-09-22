@@ -570,7 +570,9 @@ $roleLabel = ia_role_label($perms);
                         勾好的表單會列在<b>最右側「已選擇」欄</b>（編號／名稱／對應部門，可按 × 單筆取消）——<b>取消左欄的部門不會把已選的表單清掉</b>，所以可以一個部門一個部門挑完再一次建立。逐列選受稽人、判定合格／不合格。</li>
                     <li><b>AS稽核查檢表（2-GM-06-04）＝全自動，內容一律不提供修改</b>（2026-09-22 起）：
                         題目＝AS9100 條文題庫，挑題方式與系統稽核紀錄表相同——<b>左側的作業項目標籤</b>（品管檢測／外包加工…）只負責把中間清單聚焦（已選的標籤下方會列出它掛在哪幾份文件表單），要勾請自己勾或按「全選」，已勾的列在最右側且不受標籤增減影響；
-                        在「自動判定來源」勾已填好的<b>系統稽核紀錄表</b>（可複選），建立時就依它自動判定合格／不合格，並在「所見證據或建議」列出是哪幾份表單不合格（含 IA 單號）方便比對。
+                        在「自動判定來源」勾已填好的<b>系統稽核紀錄表</b>（可複選，<b>本年度的預設全勾</b>），建立時就依它自動判定合格／不合格，並在「所見證據或建議」列出是哪幾份表單不合格（含 IA 單號）方便比對。
+                        <b>所屬件號不再單獨選</b>：由勾起來的來源（最晚的那一張）直接推導，建立（稽核）日期也一併帶好。
+                        <b>列印預設 A4 橪式</b>（所見證據那一欄是自動帶入的一整串表單編號與名稱，直式印會一直換行）。
                         <ul>
                           <li><b>合格／不合格、所見證據或建議、備註四個欄位一律反灰</b>，由系統帶入，不提供人工填寫或修改；
                               也<b>不提供新增項目與刪除列</b>（要查哪幾條是建立當下決定的）。</li>
@@ -1043,8 +1045,8 @@ $roleLabel = ia_role_label($perms);
             <label>建立（稽核）日期<span style="color:#DD5138;">*</span></label>
             <div><input type="date" id="nkDate"><div class="err-msg" id="errNkDate"></div></div>
             <label>稽核人</label><div><select id="nkAuditor" data-eg-filter="輸入人員姓名篩選…"></select></div>
-            <label>所屬件號</label>
-            <div><select id="nkCase" data-eg-filter="輸入件號或日期篩選…"></select>
+            <label id="nkCaseLab">所屬件號</label>
+            <div id="nkCaseWrap"><select id="nkCase" data-eg-filter="輸入件號或日期篩選…"></select>
                  <!-- 選了件號之後：自動帶受稽日期（多天可挑），並列出當天要稽核哪些主過程與單位
                       —— 不然使用者要另外開通知單才知道這次要查哪些表單（2026-09-18 使用者要求） -->
                  <span id="nkCaseDayWrap" style="display:none;margin-left:8px;font-size:12px;color:#6b5535;">
@@ -1059,9 +1061,10 @@ $roleLabel = ia_role_label($perms);
             <div id="nkSrcWrap">
                  <div id="nkSrcList" style="max-height:120px;overflow:auto;border:1px solid #D8BE93;border-radius:4px;
                       background:#fff;padding:4px 8px;min-width:360px;font-size:13px;"></div>
-                 <div style="font-size:12px;color:#8a6d45;margin-top:3px;">勾選已經填好的<b>系統稽核紀錄表</b>（<b>可複選同一次稽核的好幾張</b>），
+                 <div style="font-size:12px;color:#8a6d45;margin-top:3px;"><b>本年度的系統稽核紀錄表預設全部勾起來</b>（<b>可複選同一次稽核的好幾張</b>），要排除哪一張自己取消；
                  建立時會自動把合格／不合格判定過來，並在「所見證據或建議」列出是哪幾份表單不合格。
-                 <b>只列本年度的</b>；勾了之後上面的「建立（稽核）日期」會自動跟著改成來源的稽核日期。
+                 <b>只列本年度的</b>；上面的「建立（稽核）日期」與「所屬件號」都由這裡自動帶入（取最晚的那一張），
+                 所以 AS 查檢表不再單獨選一次所屬件號。
                  同一份表單在好幾張裡都出現時<b>以不合格優先</b>。
                  <br><b style="color:#C4442D;">AS稽核查檢表建立之後內容一律唯讀</b>（合格／不合格、所見證據或建議、備註全部由系統帶入），
                  判定要更新請開啟該表按「重新自動判定」；<b>沒查到的那幾條留白即可，不影響結案</b>。</div></div>
@@ -3241,11 +3244,8 @@ function autoNewCheck(kind){
         nkKindChanged();
         setTimeout(function(){
             $('#nkAll').trigger('click');            // 全部帶入（要取消的自己取消）
-            if (kind==='as') {
-                // 自動判定來源預設**全部勾起來**（本年度的系統稽核紀錄表通常就是同一次稽核的那幾張），
-                // 要排除哪一張自己取消；勾選的 change 會順便把建立日期帶成來源的稽核日期
-                $('#nkSrcList .nkSrcChk').prop('checked', true).last().trigger('change');
-            }
+            // AS 的「自動判定來源」現在由 loadSrcChecks() 預設全勾（並帶好日期與所屬件號），
+            // 這裡不再勾第二次——兩處各勾一次遲早會走鐘（鐵律4）
             $('#nkDate').focus();
         }, 600);
     }, 0);
@@ -3303,6 +3303,10 @@ function nkKindChanged(){
     // 一 toggle 會把種類／日期整區都藏起來（2026-09-14 踩過一次）。
     $('#nkYearLab').toggle(isKpi); $('#nkYearWrap').toggle(isKpi);
     $('#nkSrcLab').toggle(isAs);   $('#nkSrcWrap').toggle(isAs);
+    /* AS 查檢表不再顯示「所屬件號」下拉（2026-09-22 使用者要求）：
+       下面的「自動判定來源」已經是逐張多選的系統稽核紀錄表，件號由它推導就好，
+       再要人選一次是同一份資訊有兩個來源（鐵律4），選成不一致還完全不會報錯。 */
+    $('#nkCaseLab').toggle(!isAs); $('#nkCaseWrap').toggle(!isAs);
     $('#nkYearShow').val(isKpi ? (kpiAuditYear($('#nkDate').val())+' 年度（去年整年）') : '');
     if (isAs) loadSrcChecks();
     loadBank();
@@ -3469,14 +3473,31 @@ function loadSrcChecks(){
                 + '所以現在建立會整張留白——等那一張填好之後，再用本表的「重新自動判定」補上。</span>');
             return;
         }
+        /* **本年度的來源預設全部勾起來**（2026-09-22 使用者要求）。
+           這一年的系統稽核紀錄表通常就是同一次稽核的那幾張，而 AS 查檢表的内容現在全部靠它帶入，
+           一張都沒勾就會建出一張整張留白而且人工改不了的表；要排除哪一張自己取消。
+           `所屬件號` 也直接由這裡推導（見 nkSrcCaseId()），不再另外長一個下拉要人選一次。 */
         $('#nkSrcList').html(rows.map(function(r){
             return '<label style="display:block;font-weight:normal;margin:2px 0;cursor:pointer;">'
-                 + '<input type="checkbox" class="nkSrcChk" data-eg-skip value="'+r.check_id+'"'
-                 + ' data-date="'+esc(r.check_date||'')+'" style="vertical-align:-1px;"> '
+                 + '<input type="checkbox" class="nkSrcChk" data-eg-skip value="'+r.check_id+'" checked'
+                 + ' data-date="'+esc(r.check_date||'')+'" data-case="'+esc(r.case_id||'')+'"'
+                 + ' data-caseno="'+esc(r.case_no||'')+'" style="vertical-align:-1px;"> '
                  + esc(dispDate(r.check_date)+'　'+(r.title||'系統稽核紀錄表')
                        +'（'+r.item_cnt+' 項，不合格 '+r.ng_cnt+'）') + '</label>';
         }).join(''));
+        // 勾好之後把「建立（稽核）日期」跟所屬件號一併帶好（與人工勾走同一條規則）
+        $('#nkSrcList .nkSrcChk').last().trigger('change');
     }).fail(function(){ $('#nkSrcList').html('<span style="color:#C4442D;">載入失敗</span>'); });
+}
+/** 勾起來的來源屬於哪一張稽核通知單（最晚那一張為準，與日期同一條規則）。
+    回空字串＝那幾張本來就沒綁件號，建出來的 AS 查檢表也不綁（不推測、不亂猜）。 */
+function nkSrcCaseId(){
+    var d = '', cid = '';
+    $('#nkSrcList .nkSrcChk:checked').each(function(){
+        var x = String($(this).data('date')||'');
+        if (x >= d) { d = x; cid = String($(this).data('case')||''); }
+    });
+    return (cid && cid !== '0') ? cid : '';
 }
 /* 勾選來源之後，建立（稽核）日期自動跟著來源走（2026-09-21 使用者要求）。
    勾了好幾張時取**最晚的那一張**——那是這一次稽核實際做完的日子。 */
@@ -3845,7 +3866,9 @@ $('#btnCheckCreate').on('click', function(){
     if (!real) { $('#errNkPick').addClass('on').text('請至少勾選一個要查核的項目'); ok = false; }
     if (!ok) return;
     $.post(API, {action:'check_create', kind:kind, check_date:$('#nkDate').val(),
-        auditor_key:$('#nkAuditor').val(), case_id:$('#nkCase').val(), title:$('#nkTitle').val(),
+        auditor_key:$('#nkAuditor').val(),
+        // AS 是由勾選的系統稽核紀錄表推導所屬件號（畫面上沒有那個下拉）
+        case_id:(kind==='as' ? nkSrcCaseId() : $('#nkCase').val()), title:$('#nkTitle').val(),
         src_check_ids:(kind==='as'
             ? JSON.stringify($('#nkSrcList .nkSrcChk:checked').map(function(){ return +this.value; }).get())
             : '[]'),
@@ -5688,7 +5711,17 @@ $(function(){
    版次依該單據的業務日期回推當時生效的版次（後端 print_meta 已處理）。
    簽章一律走 eg_stamp.js 產生帶日期印章，不只印人名。                              */
 
-function iaPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
+/**
+ * @param opt 選填：{topMm:上方留白(mm，預設同四邊), fitTable:true}
+ *   topMm  ＝上方留白單獨縮小（2026-09-22 使用者要求：表頭上方的空白太多）。
+ *            **只縮上方**：下方留白是 @bottom-left／@bottom-right 兩個頁邊框在用的
+ *            （頁碼與 AS 編號印在那裡），縮了就會把它們裁掉。
+ *   fitTable＝內容超過一頁時自動縮**表格**塞進一頁（字級／格距／行高逐級縮小）。
+ *            **圖章一律不縮**（ai-rules/18）——只改 table.ia-p 底下的樣式，
+ *            章在表格外面（.stamp-inline／.ia-sign）所以不受影響。
+ */
+function iaPrintWindow(title, bodyHtml, extraCss, docNo, landscape, opt){
+    opt = opt || {};
     var asCss = String(docNo||'').replace(/['\\]/g,'');
     // 版面留白（2026-09-17 使用者回報「上方與左右都沒留空，很難看」）：上 18mm／左右 15mm／下 16mm
     /* 版面留白（2026-09-21 使用者回報：左右被裁掉／上方完全沒有留白）。
@@ -5699,11 +5732,17 @@ function iaPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
        上下用同一個數字，單頁高度判定才算得準（下方 onePage 就是用 MG*2 推的）。 */
     var MG = 14;                       // @page 四邊留白（mm）
     var PAD = 5;                       // body 保險留白（mm）
-    var css = '@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:'+MG+'mm;'
+    /* 上方留白可以單獨縮（2026-09-22 使用者要求）：表頭上方原本留了 14+5＝19mm，
+       整張只差一點就印得進一頁時，這段空白就是最沒有作用的浪費。
+       縮上方時 body 的上內距一併歸零，否則兩段相加又補回來了。 */
+    var MGT = (opt.topMm != null) ? +opt.topMm : MG;
+    var PADT = (opt.topMm != null) ? 0 : PAD;
+    var css = '@page{size:A4 '+(landscape?'landscape':'portrait')+';'
+            + 'margin:'+MGT+'mm '+MG+'mm '+MG+'mm '+MG+'mm;'
             + (asCss ? " @bottom-right{ content:'"+asCss+"'; font-size:9pt; color:#333; }" : '')
             + '}'
             + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;'
-            + 'margin:0;padding:'+PAD+'mm;'
+            + 'margin:0;padding:'+PADT+'mm '+PAD+'mm '+PAD+'mm '+PAD+'mm;'
             + '-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.pt-head{text-align:center;margin-bottom:8px;}'
             + '.pt-head .co{font-size:20px;font-weight:bold;letter-spacing:2px;}'
@@ -5742,8 +5781,39 @@ function iaPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
     if (!w){ alert('請允許彈出視窗才能列印'); return; }
     // 只有真的超過一頁才注入頁碼（單頁表單印「第1頁／共1頁」很醜，紙本也沒有）
     // 可印高度＝紙張高 − 上下 @page 留白 − 上下 body padding（換算成 px @96dpi）
-    var onePage = ((landscape?210:297) - MG*2 - PAD*2) * 96 / 25.4;
-    var js = 'if(document.body.scrollHeight>'+Math.round(onePage*0.92)+'){'
+    var onePage = ((landscape?210:297) - MGT - MG - PADT - PAD) * 96 / 25.4;
+    /* fitTable 模式下的判定基準要用**真正的可印方塊高**（紙張高 − 上下 @page 留白）——
+       body 的 scrollHeight 本來就含 body padding，拿「已經扣掉 padding 的高度」去比會偏保守，
+       縮到剛好塞進一頁了還是會被判成超頁而印出「第1頁／共1頁」。
+       非 fitTable 的呼叫端維持原本的 0.92 保守值，不去動既有四張表單印出來的樣子。 */
+    var boxPage = ((landscape?210:297) - MGT - MG) * 96 / 25.4;
+    /* 內容超過一頁時自動縮表格（2026-09-22 使用者要求：壓在一頁 A4 高，可以縮表格但**不可以縮圖章**）。
+       只改 table.ia-p 的字級／格距／行高——圖章在表格外面（.stamp-inline／.ia-sign），碰不到它。
+       一定要「套上去之後再量一次」：字級會改變換行，縮完的實際高度不等於原高度乘比例
+       （2026-09-18 在 KPI 列印版已經踩過一次，估算的比例永遠對不準）。 */
+    var fitJs = !opt.fitTable ? '' :
+             'var _steps=[[11,"3px 5px",1.5],[10,"2px 4px",1.45],[9,"2px 3px",1.35],'
+           + '[8,"1px 3px",1.3],[7.5,"1px 2px",1.25],[7,"0 2px",1.2]];'
+           + 'var _st=document.createElement("style");document.head.appendChild(_st);'
+           + 'var _hd=document.querySelector(".pt-head");'
+           + 'for(var _i=0;_i<_steps.length;_i++){'
+           + '  if(document.body.scrollHeight<='+Math.round(boxPage)+') break;'
+           + '  var _f=_steps[_i];'
+           + '  _st.textContent="table.ia-p{font-size:"+_f[0]+"px}"'
+           + '    +"table.ia-p th,table.ia-p td{padding:"+_f[1]+"}"'
+           + '    +"table.ia-p td.pre{line-height:"+_f[2]+"}"'
+           + '    +"table.ia-p td.pre{font-size:"+Math.max(7,_f[0]-1)+"px}"'
+           + '    +".ia-note{font-size:"+Math.max(8,_f[0]-1)+"px;line-height:1.4}";'
+           + '  if(_hd&&_i>=1){_hd.style.marginBottom="3px";}'
+           + '}'
+           /* **縮到最小仍然放不進一頁就整個還原**（2026-09-22 實測 AS 查檢表 75 條：縮到 7px
+              還是 10 頁）。縮小的唯一目的是「省下那一頁」，省不到的時候只剩副作用——
+              一份本來就要印好幾頁的表被縮成 7px，等於整份都看不清楚還是好幾頁。 */
+           + 'if(document.body.scrollHeight>'+Math.round(boxPage)+'){'
+           + '_st.textContent="";if(_hd)_hd.style.marginBottom="";}';
+    var limit = opt.fitTable ? Math.round(boxPage) : Math.round(onePage*0.92);
+    var js = fitJs
+           + 'if(document.body.scrollHeight>'+limit+'){'
            + 'var st=document.createElement("style");'
            + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
            + 'document.head.appendChild(st);}';
@@ -5965,19 +6035,24 @@ function printCheck(id){
                也就是清單上「種類」那一欄（2026-09-21 使用者要求）。
                原本印的是 k.title（「第2次　2025.11.03」），那是次別與日期、不是表單名稱。
                次別與日期改印在標題下方那一列，與稽核人、日期同一行。 */
+            /* AS稽核查檢表**預設 A4 橫式**（2026-09-22 使用者要求）：那張表的「所見證據或建議」
+               是系統自動帶進來的一整串表單編號與名稱，直式印會一直換行把列撐高、印不進一頁。 */
+            var land = (k.kind === 'as');
             var h = printHead(m, k.kind_label || m.doc_name || k.title);
-            var d = String(k.check_date||'').split('-');
+            /* 日期一律 YYYY.MM.DD（ai-rules/20；2026-09-22 使用者指出績效執行稽核查檢表印成
+               「2026 年 01 月 05 日」）——走共用的 dispDate()，與右下角圖章上的日期同一種寫法。 */
             h += '<div style="font-size:12px;margin-bottom:5px;overflow:hidden;">'
                + '<span>稽核人: '+esc(k.auditor_name||'')+'</span>'
                + (k.title ? '<span style="margin-left:18px;">'+esc(k.title)+'</span>' : '')
-               + '<span style="float:right;">'+(d[0]||'')+' 年 '+(d[1]||'')+' 月 '+(d[2]||'')+' 日</span></div>';
+               + '<span style="float:right;">'+esc(dispDate(k.check_date))+'</span></div>';
             h += '<table class="ia-p"><thead><tr>';
             var heads = (k.kind==='as')
                 ? ['項次','品質管理系統要求','建立的文件、表單','合格','不合格','所見證據或建議']
                 : (k.kind==='system')
                     ? ['序號','表單編號','表單名稱','受稽人','合格','不合格','備註']
                     : ['序','部門','內容','目標','受稽人','達成','沒達成','備註(異常矯正處理單編號)'];
-            var widths = (k.kind==='as') ? ['34px','','170px','36px','40px','130px']
+            // AS 是橫式，寬度多出來就分給「建立的文件、表單」與「所見證據或建議」（兩欄都是長字串）
+            var widths = (k.kind==='as') ? ['34px','','210px','36px','40px','250px']
                        : (k.kind==='system') ? ['34px','86px','','66px','36px','40px','92px']
                        : ['28px','62px','','76px','60px','36px','44px','110px'];
             heads.forEach(function(t,i){ h += '<th'+(widths[i]?(' style="width:'+widths[i]+';"'):'')+'>'+esc(t)+'</th>'; });
@@ -6017,7 +6092,10 @@ function printCheck(id){
                           .replace(/[\s　]*\d{4}[-\/.]\d{1,2}[-\/.]\d{1,2}[\s　]*$/, '').trim()
                           || (m.doc_name || '');
             logPrint(ckTitle + ' ' + dispDate(k.check_date), 'ia_check', id);
-            iaPrintWindow(ckTitle, h, '', m.doc_no, false);
+            /* 上方留白縮到 8mm、並讓表格自動縮到塞進一頁（2026-09-22 使用者要求）。
+               **下方留白不動**：頁碼與 AS 編號是印在下方頁邊框裡的，縮了會被裁掉。
+               圖章不縮（ai-rules/18）——fitTable 只動 table.ia-p，章在表格外面。 */
+            iaPrintWindow(ckTitle, h, '', m.doc_no, land, {topMm:8, fitTable:true});
         }, [{id:k.auditor_id, date:k.check_date}]);
     });
 }
