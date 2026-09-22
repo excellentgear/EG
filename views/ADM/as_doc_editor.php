@@ -390,6 +390,7 @@ function load() {
         if (CAN_EDIT) {
             if (!ED) ED = mkEditor();
             ED.set(html);
+            loadChrome();              // 版面樣板（封面/制修訂紀錄書/目錄/頁首頁尾）
             setDirty(false);
             if (c && c.updated_at) $('#adSaved').text('上次存檔 ' + fmt(c.updated_at));
         } else {
@@ -473,6 +474,28 @@ function paintReport(rep) {
     $('#adReport').show();
 }
 function esc(s) { return $('<i>').text(s == null ? '' : s).html(); }
+
+/* ── 版面樣板 ─────────────────────────────────────────────────────────────
+   封面、文件制修訂紀錄書、目錄、每一頁的頁首頁尾一律由後端產生（API action=tpl），
+   資料來源是 as_document / as_document_version / customer_list，
+   使用者只編正文——「可以自動代入的資料全部自動帶入」（使用者 2026-09-22 定調）。 */
+var TPL = null;
+function loadChrome(cb) {
+    $.getJSON(API, { action:'tpl', version_id: VID }, function(r){
+        if (!r.success) { if (cb) cb(); return; }
+        TPL = r;
+        if (ED && ED.setChrome) {
+            ED.setChrome({ sys: r.sys || [], hdrTpl: r.hdr_tpl || '', ftr: r.ftr || '',
+                           pageVers: r.page_vers || [], docVer: r.doc_ver || '' });
+        }
+        paintTplBar(r);
+        if (cb) cb();
+    });
+}
+function paintTplBar(r) {
+    $('#adKind').text(r.kind || '');
+    $('#adIssueDept').text((r.cfg && r.cfg.issue_dept_id) ? '' : '');
+}
 
 /* ── 建立編輯器（圖片/流程圖/裁切都掛回呼，共用元件不碰模組 API）────────── */
 function mkEditor() {

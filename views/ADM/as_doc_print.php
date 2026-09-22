@@ -54,11 +54,35 @@ $footRight  = $docNo . ($ver !== '' ? '　版次 ' . $ver : '');
 $revDate    = $V['revised_date'] ? eg_fmt_date($V['revised_date']) : '';
 $isPrimary  = (int)($C['is_primary'] ?? 0) === 1;
 
-// 圖片走本站 API 網址（同一個 session，cookie 帶得過去）；列印前會等圖片載完才叫 print()
-$body = $err === ''
-    ? adc_hydrate_html($db, (string)$C['content_html'], (int)$C['id'],
-                       '../../src/store/AsDocContent_API.php?action=asset&id=')
-    : '';
+/* 版面（封面／制修訂紀錄書／目錄／每一頁的頁首頁尾）一律由 as_doc_tpl_lib 產生，
+   編輯器用的是同一支——兩邊各寫一份版面一定會走鐘（鐵律4）。
+   圖片走本站 API 網址（同一個 session，cookie 帶得過去）；列印前會等圖片載完才叫 print()。 */
+$pagesHtml = [];
+if ($err === '') {
+    require_once '../../src/common/as_doc_tpl_lib.php';
+    $ctx  = adt_context($db, $versionId);
+    $body = adc_hydrate_html($db, (string)$C['content_html'], (int)$C['id'],
+                             '../../src/store/AsDocContent_API.php?action=asset&id=');
+    $conts = adt_split_pages($body);
+    $sys   = adt_system_pages($ctx, $conts);
+    $total = count($sys) + count($conts);
+    $pv    = adt_page_versions($ctx['versions'], count($conts), $ctx['version']);
+    $no    = 0;
+    foreach ($sys as $s) {
+        $no++;
+        // 系統頁不印頁首（它們自己就是完整版面），但頁尾照印
+        $pagesHtml[] = '<section class="adt-page adt-page-' . $s['key'] . '">'
+                     . '<div class="adt-body eg-docbody">' . $s['html'] . '</div>'
+                     . adt_footer_html($ctx) . '</section>';
+    }
+    foreach ($conts as $i => $one) {
+        $no++;
+        $pagesHtml[] = '<section class="adt-page">'
+                     . adt_header_html($ctx, $no, $total, $pv[$i] ?? $ctx['version'])
+                     . '<div class="adt-body eg-docbody">' . $one . '</div>'
+                     . adt_footer_html($ctx) . '</section>';
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -80,14 +104,27 @@ html, body { margin: 0; padding: 0; }
 body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size: 12pt; color: #000; line-height: 1.6; }
 /* 內文的字級、行高、段落與表格間距一律來自 eg_doc_page.css（.eg-docbody），
    這裡只加「列印特有」的規則，不可以再寫一份排版 */
-.doc thead { display: table-header-group; }      /* 表頭跨頁重複 */
-.doc tr { page-break-inside: avoid; }            /* 資料列不可被切成上下兩半 */
-.doc hr[style*="page-break"] { border: 0; height: 0; margin: 0; }  /* 分頁符不要印出線 */
+.adt-page thead { display: table-header-group; }   /* 表頭跨頁重複 */
+.adt-page tr { page-break-inside: avoid; }         /* 資料列不可被切成上下兩半 */
+.adt-page hr[style*="page-break"] { display: none; }  /* 頁界標記本身不印（頁已經切開了） */
+/* 一個 .adt-page ＝ 一張紙：高度固定成可印區、強制換頁，
+   這樣編輯器上看到的一頁就是印出來的一頁（不會再出現「下方被切得亂七八糟」）。 */
+.adt-page { page-break-after: always; break-after: page;
+            display: flex; flex-direction: column; }
+.adt-page:last-child { page-break-after: auto; break-after: auto; }
+/* ⚠ 不可以用 overflow:hidden：內容比一頁高時（實測都是很長的表格）會被**裁掉看不見**，
+   使用者在預覽上根本不知道有東西沒印到。改成讓那一頁自己長高，
+   列印時本來就會依 page-break 規則跨頁，內容不會漏。 */
+.adt-page > .adt-body { flex: 1 1 auto; overflow: visible; }
 .err { padding: 40px; text-align: center; color: #A34E2A; font-size: 14pt; }
 @media screen {
     body { background: #efe9e0; }
-    .sheet { background: #fff; width: <?= $orient === 'landscape' ? ($pageSize === 'A3' ? '420mm' : '297mm') : ($pageSize === 'A3' ? '297mm' : '210mm') ?>;
-             margin: 14px auto; padding: 16mm 15mm 18mm; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+    /* 螢幕上也一頁一張紙，跟編輯器與實際列印一致 */
+    /* min-height 而不是 height：比 A4 高的那幾頁（長表格）要看得到全部內容 */
+    .adt-page { background: #fff; box-sizing: border-box;
+        width: <?= $orient === 'landscape' ? ($pageSize === 'A3' ? '420mm' : '297mm') : ($pageSize === 'A3' ? '297mm' : '210mm') ?>;
+        min-height: <?= $orient === 'landscape' ? ($pageSize === 'A3' ? '297mm' : '210mm') : ($pageSize === 'A3' ? '420mm' : '297mm') ?>;
+        margin: 14px auto; padding: 16mm 15mm 18mm; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
     .bar { position: fixed; top: 0; left: 0; right: 0; background: #faf6f0; border-bottom: 1px solid #e4d3ba;
            padding: 7px 14px; text-align: center; z-index: 9; }
     .bar button { border: 1px solid #d98a33; background: #F0A24B; color: #fff; border-radius: 4px;
@@ -95,7 +132,11 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
     .bar span { font-size: 12px; color: #8A5A2B; margin-left: 10px; }
     body { padding-top: 44px; }
 }
-@media print { .bar { display: none !important; } .sheet { width: auto; margin: 0; padding: 0; box-shadow: none; } }
+@media print {
+    .bar { display: none !important; }
+    /* 列印時留白交給 @page，.adt-page 不再自己加內距（兩邊各留一次會把內容擠到中間又切邊） */
+    .adt-page { width: auto; height: auto; min-height: 0; margin: 0; padding: 0; box-shadow: none; }
+}
 </style>
 </head>
 <body>
@@ -107,13 +148,9 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
     <span>紙張 <?= $pageSize ?> <?= $orient === 'landscape' ? '橫式' : '直式' ?>
         <?= $isPrimary ? '' : '（此版次的線上內容尚未設為正本，目前僅供預覽）' ?></span>
 </div>
-<div class="sheet">
-    <?php /* 刻意不再印公司名／文件名／版次那一段抬頭（使用者 2026-09-22 明確要求拿掉）：
-             這些本來就屬於文件自己的表頭（第一頁的制修訂紀錄書、第二頁起的頁首欄位），
-             由內容自己帶，系統再印一份只會變成同一頁兩組抬頭。
-             草稿狀態改成只在畫面上方的工具列提示，列印不出現。 */ ?>
-    <div class="doc eg-docbody"><?= $body ?></div>
-</div>
+<?php /* 一個 .adt-page ＝ 一張紙。系統頁（封面／制修訂紀錄書／目錄）與正文頁的頁首頁尾
+         全部由 as_doc_tpl_lib 產生，使用者只編正文。 */ ?>
+<?php foreach ($pagesHtml as $one) { echo $one; } ?>
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script>
 function doPrint(){
@@ -130,7 +167,7 @@ function doPrint(){
 }
 // 圖片沒載完就叫 print() 會印出空白的圖框，所以等全部圖片就緒（含失敗的）才自動跳列印
 (function(){
-    var imgs = Array.prototype.slice.call(document.querySelectorAll('.doc img'));
+    var imgs = Array.prototype.slice.call(document.querySelectorAll('.adt-page img'));
     var left = imgs.filter(function(i){ return !i.complete; }).length;
     function go(){ setTimeout(doPrint, 250); }
     if (!left) { go(); return; }

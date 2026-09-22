@@ -132,6 +132,69 @@ case 'get': {
     ]);
 }
 
+/* ── 版面樣板（封面／制修訂紀錄書／目錄／頁首／頁尾）─────────────────────
+   HTML 一律由 as_doc_tpl_lib 產生，編輯器只是把頁首樣板裡的 {{PAGE}} 之類代入，
+   **不在 JS 再組一次版面**——兩邊各寫一份版面一定會走鐘（鐵律4）。 */
+case 'tpl': {
+    require_once __DIR__ . '/../common/as_doc_tpl_lib.php';
+    $vid = (int)($_GET['version_id'] ?? 0);
+    $v = needVersion($db, $P, $vid);
+    $ctx = adt_context($db, $vid);
+    if (!$ctx) jerr('找不到這個版次');
+    $c = adc_content_by_version($db, $vid);
+    $body = $c ? adc_hydrate_html($db, (string)$c['content_html'], (int)$c['id'],
+                                  '../../src/store/AsDocContent_API.php?action=asset&id=') : '';
+    $conts = adt_split_pages($body);
+    $sys   = adt_system_pages($ctx, $conts);
+    $pv    = adt_page_versions($ctx['versions'], count($conts), $ctx['version']);
+
+    // 部門清單給「發行單位」挑選用
+    $depts = [];
+    try {
+        $depts = $db->query("SELECT id, name, level FROM department ORDER BY level, sort_order, name")
+                    ->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        foreach ($depts as &$d2) { $d2['label'] = adt_dept_label($db, (int)$d2['id']); }
+        unset($d2);
+    } catch (Throwable $e) {}
+
+    jout(true, [
+        'sys'       => $sys,
+        'sys_count' => count($sys),
+        // 頁首是「一頁一個樣」，所以回傳帶佔位符的樣板由前端代入（結構仍只有 PHP 這一份）
+        'hdr_tpl'   => adt_header_html($ctx, '{{PAGE}}', '{{TOTAL}}', '{{VER}}'),
+        'ftr'       => adt_footer_html($ctx),
+        'page_vers' => $pv,
+        'doc_ver'   => $ctx['version'],
+        'doc_no'    => $ctx['doc_no'],
+        'doc_name'  => $ctx['doc_name'],
+        'kind'      => $ctx['kind'],
+        'level'     => $ctx['doc_level'],
+        'cfg'       => $ctx['cfg'],
+        'foot_default' => ADT_FOOT_LEFT_DEFAULT,
+        'depts'     => $depts,
+        'can_edit'  => !empty($P['edit']),
+    ]);
+}
+
+/* ── 版面樣板設定（發行單位／頁尾字樣／封面英文／要不要目錄）───────────── */
+case 'tpl_save': {
+    needEdit($P);
+    require_once __DIR__ . '/../common/as_doc_tpl_lib.php';
+    $vid = (int)($_POST['version_id'] ?? 0);
+    $v = needVersion($db, $P, $vid);
+    $in = [];
+    foreach (['issue_dept_id', 'cover_en', 'foot_left', 'toc_on'] as $k) {
+        if (array_key_exists($k, $_POST)) $in[$k] = $_POST[$k];
+    }
+    if (!empty($in['issue_dept_id'])) {
+        $st = $db->prepare("SELECT COUNT(*) FROM department WHERE id=?");
+        $st->execute([(int)$in['issue_dept_id']]);
+        if (!(int)$st->fetchColumn()) jerr('選到的發行單位不存在');
+    }
+    if (!adt_settings_save($db, (int)$v['doc_id'], $in, $uid)) jerr('設定存檔失敗');
+    jout(true, ['message' => '版面設定已存檔']);
+}
+
 /* ── 存內容 ───────────────────────────────────────────────────────────── */
 case 'save': {
     needEdit($P);

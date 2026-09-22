@@ -508,7 +508,20 @@
       // 內文排版（字級、行高、段落與表格間距）一律由 resource/css/eg_doc_page.css 提供，
       // 列印版 <link> 的是同一個檔——兩邊各寫一份的話換頁位置會對不起來（見該檔說明）
       '.egrt-sheet{background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.18);padding:16mm 15mm 18mm;',
-      'max-height:none;overflow:hidden;box-sizing:border-box;}',
+      'max-height:none;overflow:hidden;box-sizing:border-box;display:flex;flex-direction:column;}',
+      /* 可編輯區＝紙張內容高扣掉頁首頁尾。這樣編輯器塞得下的量就是列印放得下的量，
+         不然列印會因為多了頁首頁尾而把內容擠到下一頁（實測畫面 14 頁、PDF 卻 22 頁）。 */
+      /* ⚠ max-height/min-height 一定要重設：.egrt-main 同時掛著 .egrt-body（備註欄用的 class），
+         那邊有 max-height:260px，不蓋掉的話可編輯區會被壓成 260px，
+         編輯器一頁塞得下的量遠小於列印可用高，列印就會整批多出一倍的頁數（實測畫面 14 頁、PDF 22 頁）。 */
+      '.egrt-main{flex:1 1 auto;overflow:hidden;outline:none;min-height:0 !important;',
+      'max-height:none !important;padding:0;}',
+      '.egrt-chrome{flex:0 0 auto;}',
+      '.egrt-chrome *{cursor:default;}',
+      // 系統頁（封面／制修訂紀錄書／目錄）：唯讀，標示「系統自動產生」
+      '.egrt-sys .egrt-sheet{background:#fdfbf7;}',
+      '.egrt-syslab{position:absolute;left:0;top:-19px;font-size:11px;line-height:16px;color:#fff;',
+      'background:#8A5A2B;border-radius:3px;padding:0 7px;white-space:nowrap;}',
       '.egrt-pageno{position:absolute;left:0;bottom:-19px;font-size:11px;line-height:16px;',
       'color:#8A5A2B;background:#e6ddd0;border-radius:3px;padding:0 7px;white-space:nowrap;}',
       // 內容超出這一頁：紙張加紅框，右上角掛提示（搬不動時才會留著，一般會自動回流）
@@ -576,13 +589,17 @@
        （exec／插入／表格加減列欄／縮排／圖片選取）都自動作用在使用者正在編輯的那一頁，
        不必逐一改寫成「找出目前是哪一頁」。 */
     var body = null;
+    /** 可編輯的正文區（一頁一個）。系統頁沒有正文區，所以不會被算進來 */
     function sheets() {
-      return pagesBox ? Array.prototype.slice.call(pagesBox.querySelectorAll('.egrt-sheet')) : [];
+      return pagesBox ? Array.prototype.slice.call(pagesBox.querySelectorAll('.egrt-main')) : [];
+    }
+    /** 正文區所在的那張紙 */
+    function sheetOf(m) {
+      return (m && m.closest) ? m.closest('.egrt-sheet') : null;
     }
     /** 紙張的外框（頁碼籤等輔助元素掛在這裡，不在紙張裡面） */
     function wrapOf(s) {
-      return (s && s.parentNode && s.parentNode.classList
-        && s.parentNode.classList.contains('egrt-sheetwrap')) ? s.parentNode : null;
+      return (s && s.closest) ? s.closest('.egrt-sheetwrap') : null;
     }
     if (isDoc) { body = mkSheet(); }
     else { body = host.querySelector('.egrt-body'); bindSheet(body); }
@@ -1110,24 +1127,42 @@
       var d2 = (String(paper.size).toUpperCase() === 'A3') ? [297, 420] : [210, 297];
       return (paper.orient === 'landscape') ? [d2[1], d2[0]] : d2;
     }
+    /** $el2 可以是正文區或紙張，一律套到「紙」上 */
     function applyPaper(el2) {
+      var sh = (el2 && el2.classList && el2.classList.contains('egrt-sheet')) ? el2 : sheetOf(el2);
+      if (!sh) return;
       var mm = paperMM();
-      el2.style.width = mm[0] + 'mm';
-      el2.style.height = mm[1] + 'mm';     // 固定高度，見 .egrt-sheet 的說明
+      sh.style.width = mm[0] + 'mm';
+      sh.style.height = mm[1] + 'mm';     // 固定高度，見 .egrt-sheet 的說明
     }
 
     /** 建立一張紙（html＝內容；beforeSheet＝插在哪一張紙之前，省略＝加在最後） */
     function mkSheet(html, beforeSheet) {
       var wrap = d.createElement('div');
       wrap.className = 'egrt-sheetwrap';
+      var sh = d.createElement('div');
+      sh.className = 'egrt-sheet';
+      wrap.appendChild(sh);
+
+      var hdr = d.createElement('div');
+      hdr.className = 'egrt-chrome egrt-chrome-hdr';
+      hdr.setAttribute('contenteditable', 'false');
+      sh.appendChild(hdr);
+
       var s = d.createElement('div');
-      s.className = 'egrt-body egrt-page egrt-sheet eg-docbody';
+      s.className = 'egrt-body egrt-page egrt-main eg-docbody';
       s.setAttribute('contenteditable', 'true');
       s.setAttribute('data-eg-skip', '');
       s.setAttribute('data-ph', opt.placeholder || '');
-      applyPaper(s);
       s.innerHTML = (html === undefined || html === null || html === '') ? '<p><br></p>' : html;
-      wrap.appendChild(s);
+      sh.appendChild(s);
+
+      var ftr = d.createElement('div');
+      ftr.className = 'egrt-chrome egrt-chrome-ftr';
+      ftr.setAttribute('contenteditable', 'false');
+      sh.appendChild(ftr);
+
+      applyPaper(sh);
       var no = d.createElement('span');
       no.className = 'egrt-pageno';
       wrap.appendChild(no);
@@ -1144,6 +1179,7 @@
       var parts = String(html || '').split(/<hr[^>]*page-break-after[^>]*>/i);
       if (!parts.length) parts = [''];
       parts.forEach(function (p) { mkSheet(p); });
+      renderSysPages();
       body = sheets()[0] || null;
       hydrate();
       numberPages();
@@ -1179,13 +1215,87 @@
       return ss.map(function (s) { return s.innerHTML; }).join(PAGE_MARK);
     }
 
+    /* ── 版面樣板（封面／制修訂紀錄書／目錄／頁首／頁尾）────────────────────
+       HTML 全部由後端 as_doc_tpl_lib 產生（API action=tpl），這裡只負責擺位置
+       與把頁首樣板裡的 {{PAGE}}/{{TOTAL}}/{{VER}} 代入。
+       **不在這裡再組一次版面**——兩邊各寫一份版面一定會走鐘（鐵律4）。 */
+    var chrome = null;
+
+    function mkSysSheet(sp) {
+      var wrap = d.createElement('div');
+      wrap.className = 'egrt-sheetwrap egrt-sys';
+      var sh = d.createElement('div');
+      sh.className = 'egrt-sheet';
+      wrap.appendChild(sh);
+      var bd = d.createElement('div');
+      // 刻意不叫 .egrt-main：那個 class 是「可編輯的正文區」，系統頁不能被算成正文頁
+      bd.className = 'egrt-sysbody eg-docbody';
+      bd.innerHTML = sp.html || '';
+      sh.appendChild(bd);
+      var ft = d.createElement('div');
+      ft.className = 'egrt-chrome egrt-chrome-ftr';
+      ft.innerHTML = (chrome && chrome.ftr) || '';
+      sh.appendChild(ft);
+      applyPaper(sh);
+      var lab = d.createElement('span');
+      lab.className = 'egrt-syslab';
+      lab.textContent = (sp.label || '') + '（系統自動產生，不必也不能在這裡編輯）';
+      wrap.appendChild(lab);
+      var no = d.createElement('span');
+      no.className = 'egrt-pageno';
+      wrap.appendChild(no);
+      return wrap;
+    }
+
+    function renderSysPages() {
+      if (!pagesBox) return;
+      Array.prototype.slice.call(pagesBox.querySelectorAll('.egrt-sheetwrap.egrt-sys'))
+        .forEach(function (w2) { w2.parentNode.removeChild(w2); });
+      if (!chrome || !chrome.sys || !chrome.sys.length) return;
+      var first = pagesBox.firstElementChild;
+      chrome.sys.forEach(function (sp) {
+        var wp = mkSysSheet(sp);
+        if (first) pagesBox.insertBefore(wp, first); else pagesBox.appendChild(wp);
+      });
+    }
+
+    /** 這一頁的頁版別（後端算好的；頁數比存檔時多出來的那幾頁退回文件目前版次） */
+    function pageVerOf(i) {
+      if (!chrome) return '';
+      var a = chrome.pageVers || [];
+      return (a[i] !== undefined && a[i] !== null && a[i] !== '') ? a[i] : (chrome.docVer || '');
+    }
+
+    function fillChrome(mainEl, pageNo, total, ver) {
+      var sh = sheetOf(mainEl);
+      if (!sh) return;
+      var h = sh.querySelector('.egrt-chrome-hdr');
+      var f = sh.querySelector('.egrt-chrome-ftr');
+      if (h) {
+        h.innerHTML = (chrome && chrome.hdrTpl)
+          ? String(chrome.hdrTpl).split('{{PAGE}}').join(pageNo)
+              .split('{{TOTAL}}').join(total).split('{{VER}}').join(ver)
+          : '';
+      }
+      if (f) f.innerHTML = (chrome && chrome.ftr) || '';
+    }
+
     function numberPages() {
       var ss = sheets(), n = ss.length;
+      var sysN = (chrome && chrome.sys) ? chrome.sys.length : 0;
+      var total = sysN + n;
+      // 系統頁也要編號（它們排在正文之前）
+      Array.prototype.slice.call(pagesBox ? pagesBox.querySelectorAll('.egrt-sheetwrap.egrt-sys') : [])
+        .forEach(function (wp, i) {
+          var no2 = wp.querySelector('.egrt-pageno');
+          if (no2) no2.textContent = '第 ' + (i + 1) + ' 頁 / 共 ' + total + ' 頁';
+        });
       ss.forEach(function (s, i) {
         var wrap = wrapOf(s);
         if (!wrap) return;
+        fillChrome(s, sysN + i + 1, total, pageVerOf(i));
         var no = wrap.querySelector('.egrt-pageno');
-        if (no) no.textContent = '第 ' + (i + 1) + ' 頁 / 共 ' + n + ' 頁';
+        if (no) no.textContent = '第 ' + (sysN + i + 1) + ' 頁 / 共 ' + total + ' 頁';
         var del = wrap.querySelector('.egrt-delpage');
         if (n > 1) {
           if (!del) {
@@ -1219,25 +1329,27 @@
      *   所以量測前先把高度還原成固定值，量完再依結果決定要不要加長——這樣才可重複執行。
      */
     function isOverPage(s) {
-      var wasGrown = s.classList.contains('egrt-grown');
-      if (wasGrown) { s.style.height = paperMM()[1] + 'mm'; s.style.minHeight = ''; }
+      var sh = sheetOf(s) || s;
+      var wasGrown = sh.classList.contains('egrt-grown');
+      if (wasGrown) { sh.style.height = paperMM()[1] + 'mm'; sh.style.minHeight = ''; }
       var over = s.scrollHeight > s.clientHeight + 2;
-      if (wasGrown && over) { s.style.height = 'auto'; s.style.minHeight = paperMM()[1] + 'mm'; }
+      if (wasGrown && over) { sh.style.height = 'auto'; sh.style.minHeight = paperMM()[1] + 'mm'; }
       return over;
     }
 
     function markOverflow() {
       sheets().forEach(function (s) {
+        var sh = sheetOf(s) || s;
         var over = isOverPage(s);
         if (over && blocksOf(s).length <= 1) {
-          s.style.height = 'auto';
-          s.style.minHeight = paperMM()[1] + 'mm';
-          s.classList.add('egrt-grown');
-        } else if (s.classList.contains('egrt-grown')) {
-          s.classList.remove('egrt-grown');
-          applyPaper(s);
+          sh.style.height = 'auto';
+          sh.style.minHeight = paperMM()[1] + 'mm';
+          sh.classList.add('egrt-grown');
+        } else if (sh.classList.contains('egrt-grown')) {
+          sh.classList.remove('egrt-grown');
+          applyPaper(sh);
         }
-        s.classList.toggle('egrt-over', over);
+        sh.classList.toggle('egrt-over', over);
         var wrap = wrapOf(s);
         if (!wrap) return;
         var b = wrap.querySelector('.egrt-ovbadge');
@@ -1252,7 +1364,8 @@
             });
             wrap.appendChild(b);
           }
-          b.textContent = s.classList.contains('egrt-grown')
+          // ⚠ egrt-grown 是掛在「紙」上不是可編輯區，這裡判錯會顯示錯的說明（實測抓到）
+          b.textContent = sh.classList.contains('egrt-grown')
             ? '這一頁只有一個區塊比 A4 還高，已自動加長（列印會自動跨頁，內容不會漏）'
             : '內容超出這一頁，點這裡把超出的搬到下一頁';
         } else if (b) { b.parentNode.removeChild(b); }
@@ -1299,7 +1412,10 @@
     function nextSheet(s, create) {
       var wrap = wrapOf(s);
       var nw = wrap && wrap.nextElementSibling;
-      if (nw && nw.classList && nw.classList.contains('egrt-sheetwrap')) return nw.querySelector('.egrt-sheet');
+      // 回傳的必須是「可編輯的正文區」而不是「紙」——回傳紙的話回流會把區塊插到
+      // 頁首/頁尾的旁邊而不是正文裡，結果就是整份只剩一頁（實測抓到）
+      if (nw && nw.classList && nw.classList.contains('egrt-sheetwrap')
+          && !nw.classList.contains('egrt-sys')) return nw.querySelector('.egrt-main');
       if (!create) return null;
       var ss = sheets(), i = ss.indexOf(s);
       var ns = mkSheet('', (i >= 0 && i + 1 < ss.length) ? ss[i + 1] : null);
@@ -1314,7 +1430,8 @@
       reflowing = true;
       // 先把「之前被加長過」的頁還原成固定高度，不然量不出有沒有超出
       sheets().forEach(function (s) {
-        if (s.classList.contains('egrt-grown')) { s.classList.remove('egrt-grown'); applyPaper(s); }
+        var sh = sheetOf(s);
+        if (sh && sh.classList.contains('egrt-grown')) { sh.classList.remove('egrt-grown'); applyPaper(sh); }
       });
       var guard = 0, i = Math.max(0, from || 0);
       // ① 往後推：超出的區塊搬到下一頁
@@ -1461,6 +1578,14 @@
       pageCount: function () { return isDoc ? sheets().length : 1; },
       addPage: function () { var s = mkSheet(); numberPages(); fitPages(); changed(); s.focus(); body = s; return s; },
       refit: function () { fitPages(); markOverflow(); },
+      /** 帶入版面樣板（由 API action=tpl 取得）：系統頁、頁首樣板、頁尾、頁版別 */
+      setChrome: function (o) {
+        chrome = o || null;
+        renderSysPages();
+        numberPages();
+        reflow(0);      // 頁首頁尾會佔掉高度，要重新分頁
+        fitPages(); markOverflow();
+      },
       autoPaginate: function () { autoPaginate(); },
       /** 讓模組頁面在上傳/編輯完之後把圖插進來或重新載入 */
       insertAsset: function (id, o) { insertAsset(id, o); },
