@@ -73,6 +73,7 @@ if ($kw !== '') {
             case 'target':  $cond = sprintf($targetExists, $k, $k, $k, $k); break;
             case 'title':   $cond = "(le.title LIKE $k OR le.content LIKE $k)"; break;
             default:        $cond = "(le.title LIKE $k OR le.content LIKE $k OR le.source LIKE $k OR u.user_cname LIKE $k OR "
+                                  . "le.event_no LIKE $k OR le.contact_no LIKE $k OR "
                                   . sprintf($targetExists, $k, $k, $k, $k) . ")";
         }
         $where .= " AND $cond";
@@ -323,6 +324,8 @@ try {
             'eventdate' => $r['eventdate'],
             'enddate'   => $r['enddate'],
             'created_at'=> $r['created_at'] ?? null,
+            'event_no'  => $r['event_no'] ?? '',        // 公告編號 PU…
+            'contact_no'=> $r['contact_no'] ?? '',      // 聯絡單號 OI…（有列印聯絡單才會有）
             'source'    => $r['source'] ?: '',
             'creator'   => $r['creator_name'] ?: '',
             'editors'   => $edLabels,

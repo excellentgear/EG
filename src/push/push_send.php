@@ -201,8 +201,16 @@ if (!function_exists('eg_push_send_raw')) {
 }
 
 if (!function_exists('eg_push_event_recipients')) {
-    /** 解析公告對象 → 收件 user.id 清單。僅 在職(1)/最高權限(99)；離職(0)/留職停薪(2)/育嬰留停(3)/特殊帳號(90) 不收推播（規格 6-1）。 */
-    function eg_push_event_recipients(PDO $db, int $eventId): array
+    /**
+     * 解析公告對象 → 收件 user.id 清單。僅 在職(1)/最高權限(99)；離職(0)/留職停薪(2)/育嬰留停(3)/特殊帳號(90) 不收推播（規格 6-1）。
+     *
+     * $asofDate（2026-09-22 新增，選填，不傳＝行為與原本完全相同）：
+     *   要的是「某個業務日期當時」的名單時傳 Y-m-d，回傳結果會**額外補上**「那天還在職、現在已離職」的人
+     *   （ai-rules/22 第5坑：補印/補登歷史單據時，當時在職現已離職的人一個都撈不到而且完全不報錯）。
+     *   刻意只做「補上」不做「減去」——現職者一律保留，免得既有呼叫端哪天傳了日期就少發通知給人。
+     *   在職判定走 people_lib 的 eg_people_list_asof()（全站唯一實作），不在這裡另寫一套。
+     */
+    function eg_push_event_recipients(PDO $db, int $eventId, ?string $asofDate = null): array
     {
         $rows = $db->prepare("SELECT target_type, target_id FROM live_event_target WHERE live_event_id = ?");
         $rows->execute([$eventId]);
@@ -210,7 +218,10 @@ if (!function_exists('eg_push_event_recipients')) {
         if (empty($targets)) return [];
 
         $ids = [];
-        $active = "state IN (1,99)";
+        // 帶 asof 時先放寬 SQL 的在職條件（離職者也撈進來），下面再用「當時在職」的名單過濾，
+        // 否則離職者在這一步就被濾掉，補歷史單據永遠看不到當時的人。
+        $asof = ($asofDate !== null && preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $asofDate)) ? $asofDate : '';
+        $active = $asof !== '' ? "state NOT IN (90)" : "state IN (1,99)";
         foreach ($targets as $t) {
             switch ($t['target_type']) {
                 case 'all':
@@ -233,7 +244,18 @@ if (!function_exists('eg_push_event_recipients')) {
                     break;
             }
         }
-        return array_keys($ids);
+        if ($asof === '') return array_keys($ids);
+
+        // 「那天在職」的名單（含當時在職、現已離職者）∪「現在仍在職(1,99)」
+        $keep = [];
+        try {
+            require_once __DIR__ . '/../common/people_lib.php';
+            foreach (eg_people_list_asof($db, [], $asof) as $p) $keep[(int)$p['id']] = 1;
+        } catch (\Throwable $e) {}
+        try {
+            foreach ($db->query("SELECT id FROM user WHERE state IN (1,99)")->fetchAll(PDO::FETCH_COLUMN) as $u) $keep[(int)$u] = 1;
+        } catch (\Throwable $e) {}
+        return array_values(array_intersect(array_keys($ids), array_keys($keep)));
     }
 }
 

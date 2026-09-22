@@ -43,7 +43,17 @@ $PAGE_FEATURES = [
     ['code' => 'notice_edit',       'label' => '編輯公告/通知'],
     ['code' => 'notice_delete',     'label' => '刪除公告/通知'],
     ['code' => 'notice_tag_manage', 'label' => '附件標籤管理（主管：新增/停用標籤、4G/Telegram/浮水印開關、預設標籤）'],
+    ['code' => 'notice_contact_sign',     'label' => '聯絡單：列印補簽、指定製表 / 核准人員與日期、改受文者'],
+    ['code' => 'notice_contact_setting',  'label' => '聯絡單：模組設定（AS 文件綁定、圖章型式、預設簽章人）'],
+    ['code' => 'notice_contact_backfill', 'label' => '聯絡單：補資料（補登歷史聯絡單，完全不發通知）'],
 ];
+
+/* === 聯絡單（AS 2-DC-02-01）=== 判定一律走共用庫，頁面與 API 用同一支，不各判一次（鐵律8） */
+require_once '../../src/common/notice_contact_lib.php';
+$NC_PDO   = $conn->getPDO();
+nc_ensure_schema($NC_PDO);
+$NC_PERMS = nc_perms($NC_PDO, (int)$id);
+$NC_DOC   = eg_asdoc_get($NC_PDO, NC_ASDOC_MODULE);
 
 // 目前使用者的公告角色（標題列顯示用）＋ 是否為初始全權(bootstrap)
 $my_notice_roles = [];
@@ -526,6 +536,13 @@ if (isset($_POST['btn_go_events'])) {
         .eg-mini-del:hover { background: #fbd9d4; }
         .eg-mini-hist { background: #eef2f5; color: #5a6b7b; }
         .eg-mini-hist:hover { background: #e1e8ee; }
+        /* 聯絡單（暖色系，ai-rules/10） */
+        .nc-mini { background: #f7efe2; color: #8a6a3d; }
+        .nc-mini:hover { background: #efe1c9; color: #6d5230; }
+        /* 表格裡的小字一定要自己指定 line-height（Gentelella 全站 td span{line-height:28px}，
+           不指定的話 11px 的字會佔掉 28px 把整列撐高，本專案已踩過三次） */
+        .eg-docno { display: inline-block; font-size: 11px; line-height: 15px; color: #9aa7b3; letter-spacing: .3px; }
+        .eg-docno-oi { color: #b07a33; font-weight: 600; }
         .eg-src { display: inline-block; font-size: 12px; font-weight: 600; color: #5a6b7b; background: #f0f4f7; border-radius: 5px; padding: 2px 8px; white-space: nowrap; }
         .eg-creator { font-size: 13px; color: var(--eg-text); white-space: nowrap; }
 
@@ -830,6 +847,12 @@ if (isset($_POST['btn_go_events'])) {
                                 <?php endif; ?>
                                 <?php if ($IS_ADMIN) : ?>
                                     <button type="button" id="eg-autoread-src-btn" class="eg-tool-btn" title="免點開自動已閱（來源規則）：指定來源往後發出的通知，對象不必點開就視為已閱"><i class="fa fa-bolt"></i></button>
+                                <?php endif; ?>
+                                <?php if (!empty($NC_PERMS['canBackfill'])) : ?>
+                                    <button type="button" id="nc-backfill-btn" class="eg-tool-btn" title="補資料：補登一張歷史聯絡單。完全不發任何通知（不推播、不進鈴鐺以外的管道），發文者與受文者由您直接指定"><i class="fa fa-history"></i> 聯絡單補資料</button>
+                                <?php endif; ?>
+                                <?php if (!empty($NC_PERMS['canSetting'])) : ?>
+                                    <button type="button" id="nc-setting-btn" class="eg-tool-btn" title="聯絡單設定：AS 文件編號綁定、圖章型式、預設製表人與核准"><i class="fa fa-file-text-o"></i> 聯絡單設定</button>
                                 <?php endif; ?>
                                 <button type="button" id="eg-export-csv" class="eg-tool-btn" title="匯出 CSV"><i class="fa fa-file-excel-o"></i> CSV</button>
                                 <button type="button" id="eg-export-pdf" class="eg-tool-btn" title="列印 / PDF"><i class="fa fa-file-pdf-o"></i> PDF</button>
@@ -1304,6 +1327,39 @@ if (isset($_POST['btn_go_events'])) {
                         <li>想找出「還沒被讀完」的通知，先用工具列的<b>已讀狀態篩選 →「尚有人未閱」</b>，再全選處理最快。</li>
                     </ul>
 
+                    <h4>列印聯絡單（AS 2-DC-02-01）</h4>
+                    <ul>
+                        <li>每一列「操作」欄的 <b>「聯絡單」</b> 按鈕，可以把這則公告 / 通知印成紙本聯絡單。<b>有回簽的人都會在紙上蓋出圖章</b>（章面日期＝他實際回簽的日期）。</li>
+                        <li><b>聯絡單號（OI）</b>＝<code>OI</code>＋西元年月日＋當日流水 3 碼，<b>按下「列印」當下才產生</b>（沒印過的公告不佔號）。
+                            它和原本的<b>公告編號（PU）</b>存在同一筆資料上，列表的日期欄兩個都看得到，<b>搜尋框打任一個編號都查得到</b>。</li>
+                        <li>版面依全站列印標準：大標題＝本公司全名、表頭＝綁定 AS 文件的表單名稱、頁尾右下＝文件編號（版次依公告日期回推）、多頁才印頁碼。
+                            這幾項<b>都由設定推導、不可手填</b>；公司名稱與地址電話取自客戶主檔標記為「本公司」的那一筆。</li>
+                        <li>列印跳窗可調整（需<b>「聯絡單列印補簽」權限</b>）：<b>受文者、發文者文字</b>、<b>製表人與核准要蓋誰的章、章面日期</b>、
+                            <b>回簽欄要列出哪些人</b>（「列印」欄取消勾選的人就不會出現在紙上）、<b>要不要印出回覆內容</b>。改完按「儲存設定」，下次列印同一則會沿用。</li>
+                        <li><b>補簽</b>：在「補簽」欄勾選還沒簽的人、選好日期再按「補簽勾選的人」。
+                            <b>一般公告的補簽只影響這張紙上要不要蓋章，不會動到原始回簽紀錄</b>（鈴鐺、已讀 / 應讀、回簽人數一律不變），隨時可以取消。
+                            日期<b>不可早於公告 / 通知日期，也不可以是未來</b>，而且<b>只能補被通知的人</b>；這三條前端擋一次、後端再擋一次。每一次補簽都會留下是誰、什麼時候補的稽核紀錄。</li>
+                        <li>按下「列印」會依 AS9100 規定留下列印紀錄（誰、什麼時候、從哪一台電腦印的），可在「列印與簽核紀錄」頁查詢。</li>
+                    </ul>
+
+                    <h4>聯絡單補資料（限有「聯絡單補資料」權限者）</h4>
+                    <ul>
+                        <li>工具列的 <b>「聯絡單補資料」</b> 是用來<b>補登以前的紙本聯絡單</b>的，不是發公告：
+                            建立之後<b>完全不會發出任何通知</b>——不推播、不發 Telegram，對方不會被打擾。</li>
+                        <li>可以<b>直接指定發文者</b>（紙上是誰發的就選誰），受文者可複選部門 / 身分 / 人員，<b>第一個選項就是「全體員工」</b>。</li>
+                        <li>建立完會直接打開聯絡單，可以逐一補簽。
+                            <b>補資料模式的補簽跟一般公告不同：它會真的寫入回簽紀錄</b>（因為補的就是「這個人當時確實簽過」這件事），
+                            系統會在紀錄上留下<b>是哪一位管理員、什麼時候補的</b>。跳窗上方會用紅色警語提醒您現在是哪一種。</li>
+                        <li>日期不可以是未來；補簽的時間戳會自動錯開，不會出現一整批人同一秒回簽這種一看就知道是機器寫的紀錄。</li>
+                    </ul>
+
+                    <h4>聯絡單設定（限有「聯絡單模組設定」權限者）</h4>
+                    <ul>
+                        <li>工具列的 <b>「聯絡單設定」</b>：綁定要印哪一份 AS 文件（預設 2-DC-02-01 聯絡單）、選<b>圖章型式</b>、
+                            指定<b>製表人</b>（預設＝公告建立者）與<b>核准</b>（預設＝組織角色綁定的「最高核准人員」，換人只改那裡、本頁不另存一份人名）。</li>
+                        <li>圖章型式改了之後，聯絡單上所有的章都會跟著換；沒有指定時用系統預設的回墨印。</li>
+                    </ul>
+
                     <h4>免點開自動已閱（來源規則，限系統管理員）</h4>
                     <ul>
                         <li>工具列的 <i class="fa fa-bolt"></i> 按鈕，可指定<b>哪些來源</b>（表單簽核、報價單簽核…）的通知<b>往後發出時一律不必點開就視為已閱</b>，<b>全公司套用</b>。</li>
@@ -1371,6 +1427,192 @@ if (isset($_POST['btn_go_events'])) {
     </div>
     <?php endif; ?>
 
+    <!-- ===================== 聯絡單 2-DC-02-01 ===================== -->
+    <style>
+        #ncPrintModal .modal-dialog { width: 1080px; max-width: 96%; }   /* 固定像素，禁用 vw（會蓋過側邊選單） */
+        #ncSetModal .modal-dialog, #ncBackfillModal .modal-dialog { width: 780px; max-width: 96%; }
+        .nc-modal .modal-header { background: var(--eg-dark); color: #fff; border-radius: 6px 6px 0 0; }
+        .nc-modal .modal-header .close { color: #fff; opacity: .9; }
+        .nc-modal .modal-body { max-height: 70vh; overflow-y: auto; }
+        .nc-row { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 10px; }
+        .nc-fld { display: flex; flex-direction: column; gap: 3px; }
+        .nc-fld > label { font-size: 12px; color: #7b8a99; margin: 0; font-weight: 600; }
+        .nc-fld input[type=text], .nc-fld input[type=date], .nc-fld select, .nc-fld textarea {
+            height: 32px; border: 1px solid #cdd8e1; border-radius: 4px; padding: 0 8px; font-size: 13px; background: #fff; }
+        .nc-fld textarea { height: auto; padding: 5px 8px; line-height: 1.5; }
+        .nc-fld input[readonly], .nc-fld textarea[readonly], .nc-fld select[disabled] { background: #f3f5f7; color: #6b7883; }
+        .nc-info { background: #f7efe2; border: 1px solid #e2d3ba; color: #6d5230; border-radius: 5px; padding: 7px 11px; font-size: 12.5px; line-height: 1.7; margin-bottom: 10px; }
+        .nc-warn { background: #fdecea; border: 1px solid #f3c6c0; color: #9c3b2e; border-radius: 5px; padding: 7px 11px; font-size: 12.5px; line-height: 1.7; margin-bottom: 10px; }
+        .nc-err  { color: #c0392b; font-size: 12.5px; margin-top: 3px; }
+        table.nc-tb { width: 100%; border-collapse: collapse; font-size: 13px; }
+        table.nc-tb th, table.nc-tb td { border: 1px solid #e3e9ee; padding: 5px 7px; text-align: center; }
+        table.nc-tb th { background: #f0f4f7; color: #5a6b7b; font-weight: 600; position: sticky; top: 0; z-index: 1; }
+        table.nc-tb td.l { text-align: left; }
+        table.nc-tb tr.nc-off td { background: #fafbfc; color: #a9b4bd; }
+        /* 表格裡的小籤一律自己指定 line-height（Gentelella 的 td span{line-height:28px} 會把列撐高） */
+        table.nc-tb .nc-tag { display: inline-block; font-size: 11px; line-height: 16px; padding: 1px 7px; border-radius: 9px; }
+        .nc-tag-ok   { background: #e8f3ec; color: #2e7d4f; }
+        .nc-tag-fill { background: #f7efe2; color: #8a6a3d; }
+        .nc-tag-no   { background: #f1f3f5; color: #97a3ad; }
+        .nc-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin: 10px 0 8px; }
+        .nc-btn { height: 30px; padding: 0 13px; border-radius: 4px; font-size: 13px; cursor: pointer; border: 1px solid #D8BE93; background: #fff; color: #5b3a1e; }
+        .nc-btn:hover { background: #f7efe2; }
+        .nc-btn-main { border-color: #d98a33; background: #F0A24B; color: #fff; }
+        .nc-btn-main:hover { background: #e0913c; }
+        .nc-kwbox { height: 30px; border: 1px solid #cdd8e1; border-radius: 4px; padding: 0 8px; font-size: 13px; width: 100%; margin-bottom: 3px; }
+        @media print { .nc-modal { display: none !important; } }
+    </style>
+
+    <!-- 列印聯絡單（含逐則設定與補簽） -->
+    <div class="modal fade nc-modal" id="ncPrintModal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog"><div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title"><i class="fa fa-print"></i> 列印聯絡單　<small id="ncPrintSub" style="color:rgba(255,255,255,.8);"></small></h4>
+            </div>
+            <div class="modal-body" id="ncPrintBody">
+                <div style="text-align:center;padding:26px;color:#9aa7b3;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>
+            </div>
+            <div class="modal-footer">
+                <span id="ncPrintMsg" style="float:left;font-size:12.5px;color:#7b8a99;"></span>
+                <button type="button" class="nc-btn" data-dismiss="modal">關閉</button>
+                <button type="button" class="nc-btn" id="ncCfgSave" style="display:none;">儲存設定</button>
+                <button type="button" class="nc-btn nc-btn-main" id="ncDoPrint"><i class="fa fa-print"></i> 列印</button>
+            </div>
+        </div></div>
+    </div>
+
+    <?php if (!empty($NC_PERMS['canSetting'])) : ?>
+    <!-- 聯絡單設定（AS 綁定 / 圖章型式 / 預設簽章人） -->
+    <div class="modal fade nc-modal" id="ncSetModal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog"><div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title"><i class="fa fa-file-text-o"></i> 聯絡單設定</h4>
+            </div>
+            <div class="modal-body">
+                <div class="nc-info">
+                    列印版依全站列印標準（ai-rules/16）：大標題＝本公司全名、表頭＝下方綁定的 AS 文件名稱、頁尾右下＝該文件編號（版次依公告日期回推）。
+                    這幾項都由綁定推導，<b>不可手填</b>。
+                </div>
+                <div class="nc-row">
+                    <div class="nc-fld" style="flex:1;min-width:360px;">
+                        <label>AS 文件編號綁定</label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <input type="text" id="ncAsLabel" readonly style="flex:1;">
+                            <button type="button" class="nc-btn" id="ncAsPick">變更綁定</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="nc-row">
+                    <div class="nc-fld" style="min-width:300px;">
+                        <label>圖章型式（聯絡單上所有簽章共用）</label>
+                        <input type="text" class="nc-kwbox" id="ncStampKw" placeholder="輸入關鍵字篩選圖章型式…" data-eg-skip="1">
+                        <select id="ncStampTpl" style="min-width:300px;"></select>
+                    </div>
+                    <div class="nc-fld">
+                        <label>回覆內容</label>
+                        <label style="font-weight:400;color:#41505d;font-size:13px;">
+                            <input type="checkbox" id="ncShowReplyDef"> 預設在聯絡單上印出回覆內容
+                        </label>
+                    </div>
+                </div>
+                <div class="nc-row">
+                    <div class="nc-fld" style="min-width:250px;">
+                        <label>製表人</label>
+                        <select id="ncMakerSrc">
+                            <option value="creator">公告 / 通知的建立者（建議）</option>
+                            <option value="user">指定人員</option>
+                        </select>
+                    </div>
+                    <div class="nc-fld" style="min-width:300px;">
+                        <label>指定的製表人</label>
+                        <input type="text" class="nc-kwbox" id="ncMakerKw" placeholder="輸入姓名 / 部門篩選…" data-eg-skip="1">
+                        <select id="ncMakerUser" style="min-width:300px;"></select>
+                    </div>
+                </div>
+                <div class="nc-row">
+                    <div class="nc-fld" style="min-width:250px;">
+                        <label>核准</label>
+                        <select id="ncApprSrc">
+                            <option value="top">組織角色綁定的「最高核准人員」（建議）</option>
+                            <option value="user">指定人員</option>
+                            <option value="none">留白（紙本手蓋）</option>
+                        </select>
+                    </div>
+                    <div class="nc-fld" style="min-width:300px;">
+                        <label>指定的核准人</label>
+                        <input type="text" class="nc-kwbox" id="ncApprKw" placeholder="輸入姓名 / 部門篩選…" data-eg-skip="1">
+                        <select id="ncApprUser" style="min-width:300px;"></select>
+                    </div>
+                </div>
+                <div class="nc-info" style="background:#f2f7fc;border-color:#cfe0ef;color:#40576b;">
+                    「最高核准人員」在 <a href="../admin/org_role_setting.php" target="_blank">管理設定 → 組織角色綁定</a> 維護，
+                    全站表單共用同一位，換人只改那裡（本頁不另存一份人名）。
+                </div>
+                <div class="nc-err" id="ncSetErr"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="nc-btn" data-dismiss="modal">關閉</button>
+                <button type="button" class="nc-btn nc-btn-main" id="ncSetSave">儲存設定</button>
+            </div>
+        </div></div>
+    </div>
+    <?php endif; ?>
+
+    <?php if (!empty($NC_PERMS['canBackfill'])) : ?>
+    <!-- 聯絡單補資料（補登歷史聯絡單，完全不發通知） -->
+    <div class="modal fade nc-modal" id="ncBackfillModal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog"><div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title"><i class="fa fa-history"></i> 聯絡單補資料</h4>
+            </div>
+            <div class="modal-body">
+                <div class="nc-warn">
+                    <b>這是補登歷史紙本用的，不是發公告。</b>建立之後<b>完全不會發出任何通知</b>——不推播、不發 Telegram、不寄信，
+                    對方不會被打擾。建立完可直接在聯絡單上補簽；<b>補資料模式的補簽會寫入真實的回簽紀錄</b>（系統會記下是哪一位管理員、什麼時候補的）。
+                </div>
+                <div class="nc-row">
+                    <div class="nc-fld"><label>聯絡單日期（＝紙上的 DATE，不可未來）</label><input type="date" id="ncBfDate"></div>
+                    <div class="nc-fld" style="flex:1;min-width:280px;">
+                        <label>發文者</label>
+                        <input type="text" class="nc-kwbox" id="ncBfFromKw" placeholder="輸入姓名 / 部門篩選…" data-eg-skip="1">
+                        <select id="ncBfFrom" style="width:100%;"></select>
+                    </div>
+                </div>
+                <div class="nc-row">
+                    <div class="nc-fld" style="flex:1;min-width:100%;"><label>標題</label><input type="text" id="ncBfTitle" maxlength="100" style="width:100%;"></div>
+                </div>
+                <div class="nc-row">
+                    <div class="nc-fld" style="flex:1;min-width:100%;"><label>內容</label><textarea id="ncBfContent" rows="5" style="width:100%;"></textarea></div>
+                </div>
+                <div class="nc-row">
+                    <div class="nc-fld" style="flex:1;min-width:340px;">
+                        <label>受文者（可複選；<b>第一個選項就是「全體員工」</b>）</label>
+                        <input type="text" class="nc-kwbox" id="ncBfToKw" placeholder="輸入部門 / 身分 / 姓名篩選…" data-eg-skip="1">
+                        <select id="ncBfTo" multiple size="10" style="width:100%;"></select>
+                    </div>
+                    <div class="nc-fld" style="min-width:220px;">
+                        <label>當時要求的回覆方式</label>
+                        <select id="ncBfMode">
+                            <option value="sign">回簽（聯絡單最常用）</option>
+                            <option value="reply">回覆 + 回簽</option>
+                            <option value="read">已閱</option>
+                            <option value="autoread">開啟自動已閱</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="nc-err" id="ncBfErr"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="nc-btn" data-dismiss="modal">取消</button>
+                <button type="button" class="nc-btn nc-btn-main" id="ncBfSave">建立（不發通知）並開啟聯絡單</button>
+            </div>
+        </div></div>
+    </div>
+    <?php endif; ?>
+
     <!-- jQuery -->
     <script src="../../resource/js/jquery.min.js"></script>
     <!-- Bootstrap -->
@@ -1387,6 +1629,15 @@ if (isset($_POST['btn_go_events'])) {
     <!-- Web Push 前端用戶端 -->
     <script>window.EG_PUSH_BASE = '../../';</script>
     <script src="../../resource/js/push-client.js"></script>
+
+    <!-- 聯絡單（2-DC-02-01）：圖章 / AS文件綁定 / 日期格式 / 列印紀錄，一律用共用檔不自刻 -->
+    <!-- eg_stamp_tpl.js 不可漏載：漏了會「靜默」退回較小的預設印章而不報錯（ai-rules/18 第11條） -->
+    <script>window.__ownCompany = <?= json_encode(nc_company($NC_PDO)['name'] ?? '', JSON_UNESCAPED_UNICODE) ?>;</script>
+    <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+    <script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
+    <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
+    <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+    <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 
     <!-- 附件標籤/轉檔/預覽 共用元件（標籤管理跳窗、Excel工作表選擇、PDF預覽確認） -->
     <?php include '../common/attachment_ui.php'; ?>
@@ -1510,7 +1761,7 @@ if (isset($_POST['btn_go_events'])) {
     <script>
         $(function() {
             // 跳窗統一移到 body 底下（避免被版面容器的定位/裁切影響），關閉後清除殘留背板
-            $('#readersModal,#subsModal,#histModal,#roleHelpModal,#permModal,#settingsModal,#srcPrefModal,#attTagModal,#attSheetModal,#attPrevModal,#helpUseMask,#batchTargetModal,#autoReadModal,#autoReadSrcModal').appendTo('body');
+            $('#readersModal,#subsModal,#histModal,#roleHelpModal,#permModal,#settingsModal,#srcPrefModal,#attTagModal,#attSheetModal,#attPrevModal,#helpUseMask,#batchTargetModal,#autoReadModal,#autoReadSrcModal,#ncPrintModal,#ncSetModal,#ncBackfillModal').appendTo('body');
             $('#btnPageHelp').on('click', function() { $('#helpUseMask').modal('show'); });
             $(document).on('hidden.bs.modal', '.modal', function() {
                 if (!$('.modal.in').length) { $('.modal-backdrop').remove(); $('body').removeClass('modal-open'); }
@@ -1977,6 +2228,9 @@ if (isset($_POST['btn_go_events'])) {
                               + egEsc(cd === r.eventdate ? ct : cd.substring(5) + ' ' + ct) + '</span>';
                     }
                     var dateHtml = egEsc(r.eventdate) + ctime + (r.enddate ? '<br><span class="end">~ ' + egEsc(r.enddate) + '</span>' : '');
+                    // 公告編號(PU)與聯絡單號(OI)放在一起顯示，兩個都搜得到（使用者要求「跟PU編號記錄在一起，方便查找」）
+                    if (r.event_no)   dateHtml += '<br><span class="eg-docno" title="公告編號">' + egEsc(r.event_no) + '</span>';
+                    if (r.contact_no) dateHtml += '<br><span class="eg-docno eg-docno-oi" title="聯絡單號（列印聯絡單時產生）">' + egEsc(r.contact_no) + '</span>';
                     var pills = '';
                     (r.targets || []).forEach(function(t) {
                         var ico = t.cls === 'eg-pill-user' ? '<i class="fa fa-user"></i> ' : '';
@@ -2015,6 +2269,8 @@ if (isset($_POST['btn_go_events'])) {
                     }
                     // 操作欄：逐列權限（只有系統管理員可改/刪任何公告；其他人僅本人建立或本人為共同編輯者）
                     html += '<td class="eg-op">';
+                    // 聯絡單（2-DC-02-01）：列印不是修改，所以連「訂單變更」這種鎖定的通知也印得出來
+                    html += '<a href="javascript:;" class="nc-print-btn" data-eid="' + r.id + '" title="列印成紙本聯絡單 2-DC-02-01（回簽者會蓋章）"><span class="eg-mini nc-mini"><i class="fa fa-print"></i> 聯絡單</span></a>';
                     if (r.source === '訂單變更') {
                         // 來源『訂單變更』的通知為衍生副本，鎖定禁止刪改（請至訂單頁作廢變更單，會連動移除通知）
                         html += '<span class="eg-mini" style="background:#eceff1;color:#90a4ae;cursor:not-allowed;" title="此通知由「訂單變更」產生已鎖定；如需移除請至訂單追蹤頁作廢該變更單"><i class="fa fa-lock"></i> 鎖定</span>';
@@ -2031,7 +2287,6 @@ if (isset($_POST['btn_go_events'])) {
                         }
                         // 刪除改走 AJAX（原本是整頁轉址，刪完畫面會捲回最上面）
                         if (r.can_delete) html += '<a href="javascript:;" class="eg-row-del" data-eid="' + r.id + '"><span class="eg-mini eg-mini-del"><i class="fa fa-trash"></i> 刪除</span></a>';
-                        if (!showEdit && !r.can_delete) html += '<span style="color:#c3ccd4;">—</span>';
                     }
                     html += '</td>';
                     html += '</tr>';
@@ -2674,6 +2929,461 @@ if (isset($_POST['btn_go_events'])) {
         $('#permModal').on('shown.bs.modal', function() { permLoadRoles(); });
     </script>
     <?php endif; ?>
+
+    <!-- ===================== 聯絡單 2-DC-02-01：列印 / 設定 / 補資料 ===================== -->
+    <script>
+    (function () {
+        'use strict';
+        var API = '../../src/store/NoticeContact_API.php';
+        var NC = { csrf: '', perms: <?= json_encode($NC_PERMS, JSON_UNESCAPED_UNICODE) ?>, meta: null, d: null, eid: 0, people: [], targets: null };
+
+        function esc(s) { return $('<div>').text(s == null ? '' : s).html(); }
+        function fmtD(s) { return (window.egFmtDate ? egFmtDate(s) : (s || '')); }
+        function get(p, ok) { $.get(API, p, function (r) { if (r && r.ok) ok(r); else alert((r && r.error) || '讀取失敗'); }, 'json'); }
+        function post(p, ok) {
+            p.csrf = NC.csrf;
+            $.post(API, p, function (r) { if (r && r.ok) ok(r); else alert((r && r.error) || '操作失敗'); }, 'json')
+             .fail(function (x) { var m = ''; try { m = JSON.parse(x.responseText).error; } catch (e) {} alert(m || '操作失敗（' + x.status + '）'); });
+        }
+        /* 掃描實體章的對照表是非同步載入的，沒等它就會把有實體章的人印成預設 SVG 章、跟畫面上看到的不一樣 */
+        function whenStampReady(fn) {
+            try { if (window.EGStamp && EGStamp.whenReady) { EGStamp.whenReady(fn); return; } } catch (e) {}
+            fn();
+        }
+        /* 長清單下拉一律要能打字篩選。本頁在 input_rules_baseline 內（沒有載入 eg_input_rules.js，
+           載了會改變本頁既有的 Enter 行為），所以這裡自備一支給本模組的所有下拉共用，不逐個自刻。 */
+        function bindFilter(kwSel, selSel) {
+            var $kw = $(kwSel), $s = $(selSel);
+            $kw.off('input.ncf').on('input.ncf', function () {
+                var terms = String($kw.val() || '').toLowerCase().split(/\s+/).filter(Boolean);
+                var keep = $s.val();
+                $s.find('option').each(function () {
+                    var t = ($(this).text() || '').toLowerCase();
+                    var hit = !terms.length || terms.every(function (k) { return t.indexOf(k) >= 0; });
+                    // 目前選中的永遠留著（篩選不可以把已選的洗掉）
+                    var mine = (keep instanceof Array) ? (keep.indexOf(this.value) >= 0) : (String(keep) === this.value);
+                    $(this).prop('hidden', !(hit || mine)).toggle(hit || mine);
+                });
+            });
+        }
+        function peopleOptions(list, cur, blank) {
+            var h = blank ? '<option value="">' + esc(blank) + '</option>' : '';
+            (list || []).forEach(function (p) {
+                h += '<option value="' + p.id + '"' + (String(cur) === String(p.id) ? ' selected' : '') + '>'
+                   + esc((p.dept ? p.dept + '　' : '') + (p.position ? p.position + '　' : '') + p.name) + '</option>';
+            });
+            return h;
+        }
+
+        /* ---------------- 列印版（版面照紙本 2-DC-02-01） ---------------- */
+        function stampHtml(name, date, dept, pos) {
+            if (!name) return '';
+            var schema = (NC.d && NC.d.stamp_tpl) ? NC.d.stamp_tpl.schema : null;
+            try { return EGStamp.stamp(name, fmtD(date), false, schema, dept || '', pos || ''); } catch (e) { return esc(name); }
+        }
+        function signCell(p) {
+            var st = p.sign_date ? stampHtml(p.name, p.sign_date, p.dept, p.position) : '';
+            return '<td class="ct-sc"><div class="ct-sn">' + esc((p.dept ? p.dept + ' ' : '') + p.name) + '</div>'
+                 + '<div class="ct-sb">' + (st || '<span class="ct-blank"></span>') + '</div></td>';
+        }
+        function buildBody(d, people) {
+            var co = d.company || {};
+            var h = '<div class="ct-head"><div class="co">' + esc(co.name) + '</div>'
+                  + '<div class="ad">' + esc(co.addr) + (co.tel ? '　TEL:' + esc(co.tel) : '') + (co.fax ? '　FAX:' + esc(co.fax) : '') + '</div></div>';
+            h += '<div class="ct-no"><span>聯絡單號：' + esc(d.contact_no || '') + '</span>'
+               + '<span>DATE：' + esc(d.date_disp || '') + '</span></div>';
+            h += '<div class="ct-tt">' + esc(d.doc_name || '聯絡單') + '</div>';
+            h += '<div class="ct-fr">發文者：<u>' + esc(d.from_text || '') + '</u></div>';
+            h += '<div class="ct-to">受文者：<u>' + esc(d.to_text || '') + '</u></div>';
+
+            h += '<table class="ct-box"><tr><td class="ct-title">標題：' + esc(d.title || '') + '</td></tr>';
+            var body = '<div class="ct-text">' + esc(d.content || '').replace(/\n/g, '<br>') + '</div>';
+            if (d.files && d.files.length) {
+                body += '<div class="ct-att">附件：' + d.files.map(function (f) { return esc(f); }).join('、') + '</div>';
+            }
+            if (d.show_reply) {
+                var rp = (people || []).filter(function (p) { return p.reply && String(p.reply).trim() !== ''; });
+                if (rp.length) {
+                    body += '<div class="ct-rep"><div class="ct-rep-h">回覆內容</div>';
+                    rp.forEach(function (p) {
+                        body += '<div class="ct-rep-i"><b>' + esc(p.name) + '</b>（' + esc(fmtD(p.replied_at)) + '）：'
+                              + esc(p.reply).replace(/\n/g, '<br>') + '</div>';
+                    });
+                    body += '</div>';
+                }
+            }
+            h += '<tr><td class="ct-body">' + body + '</td></tr>';
+
+            if (people && people.length) {
+                var per = 5, rows = '';
+                for (var i = 0; i < people.length; i += per) {
+                    rows += '<tr>';
+                    for (var j = 0; j < per; j++) rows += (people[i + j] ? signCell(people[i + j]) : '<td class="ct-sc"></td>');
+                    rows += '</tr>';
+                }
+                h += '<tr><td class="ct-sign"><div class="ct-sign-h">回簽</div>'
+                   + '<table class="ct-st">' + rows + '</table></td></tr>';
+            }
+
+            var mk = d.maker || {}, ap = d.approver || {};
+            h += '<tr><td class="ct-foot"><table class="ct-ft"><tr>'
+               + '<td class="l"><span class="lb">製表人：</span>' + stampHtml(mk.name, mk.date, mk.dept, mk.position) + '</td>'
+               + '<td class="l"><span class="lb">核准：</span>' + stampHtml(ap.name, ap.date, ap.dept, ap.position) + '</td>'
+               + '</tr></table></td></tr>';
+            h += '</table>';
+            return h;
+        }
+        /* 列印視窗：四邊留白用 ai-rules/16 四之二之二的兩段式（@page 14mm ＋ body 5mm 保險），
+           頁碼左下、AS 編號右下；圖章一律 91px 且**沒有任何整頁縮放邏輯**（ai-rules/18 第6、8條）。 */
+        function printWindow(title, bodyHtml, docNo) {
+            var asCss = String(docNo || '').replace(/['\\]/g, '');
+            var MG = 14, PAD = 5;
+            var css = '@page{size:A4 portrait;margin:' + MG + 'mm;'
+                    + (asCss ? " @bottom-right{ content:'" + asCss + "'; font-size:9pt; color:#333; }" : '') + '}'
+                    + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;margin:0;padding:' + PAD + 'mm;'
+                    + '-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+                    + '*{box-sizing:border-box;} img{max-width:100%;}'
+                    + '.ct-head{text-align:center;}'
+                    + '.ct-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}'
+                    + '.ct-head .ad{font-size:11px;margin-top:2px;}'
+                    + '.ct-no{display:flex;justify-content:space-between;font-size:14px;margin:10px 0 2px;}'
+                    + '.ct-tt{text-align:center;font-size:24px;font-weight:bold;letter-spacing:12px;margin:2px 0 6px;}'
+                    + '.ct-fr{text-align:center;font-size:14px;}'
+                    + '.ct-to{font-size:16px;margin:4px 0 6px;}'
+                    + '.ct-fr u,.ct-to u{text-underline-offset:3px;}'
+                    + 'table.ct-box{width:100%;border-collapse:collapse;table-layout:fixed;border:2px double #000;}'
+                    + 'table.ct-box>tbody>tr>td{border:1px solid #000;padding:6px 10px;word-wrap:break-word;overflow-wrap:break-word;}'
+                    + '.ct-title{text-align:center;font-size:20px;font-weight:bold;}'
+                    /* 書寫區高度照紙本（紙本本文欄本來就佔掉半頁）。td 的 height 等同「最低高度」，
+                       內容長就自己撐開、不會被截掉；短的時候版面也不會縮成薄薄一條 */
+                    + '.ct-body{height:330px;vertical-align:top;font-size:14px;line-height:1.9;}'
+                    + '.ct-text{white-space:normal;}'
+                    + '.ct-att{margin-top:10px;font-size:12px;color:#333;}'
+                    + '.ct-rep{margin-top:12px;border-top:1px dashed #999;padding-top:6px;font-size:12.5px;line-height:1.8;}'
+                    + '.ct-rep-h{font-weight:bold;margin-bottom:2px;}'
+                    + '.ct-rep-i{margin-bottom:3px;}'
+                    + '.ct-sign{padding:4px 6px !important;}'
+                    + '.ct-sign-h{font-size:13px;font-weight:bold;margin:2px 0 3px;}'
+                    + 'table.ct-st{width:100%;border-collapse:collapse;table-layout:fixed;}'
+                    /* 簽章格高度要留給章（ai-rules/18 第7條：≥95px，含章體 91px 加上下留白） */
+                    + 'table.ct-st td.ct-sc{border:1px solid #bbb;height:112px;text-align:center;vertical-align:top;padding:2px;}'
+                    + '.ct-sn{font-size:11px;line-height:15px;color:#333;}'
+                    + '.ct-sb{height:93px;display:flex;align-items:center;justify-content:center;}'
+                    + '.ct-blank{display:inline-block;width:80px;border-bottom:1px solid #999;}'
+                    + '.ct-foot{padding:8px 10px !important;}'
+                    + 'table.ct-ft{width:100%;border-collapse:collapse;table-layout:fixed;}'
+                    + 'table.ct-ft td{border:none !important;vertical-align:bottom;height:104px;}'
+                    + 'table.ct-ft td.l{text-align:left;}'
+                    + 'table.ct-ft .lb{font-size:16px;vertical-align:bottom;}'
+                    /* 圖章尺寸一律抄 ai-rules/18 鐵則6 這一行，不要自己另外發明數字；整頁縮放邏輯一概不加 */
+                    + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+                    + '.stamp-wrap{vertical-align:bottom;}'
+                    + '.eg-stamp-tpl{-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
+            var w = window.open('', '_blank');
+            if (!w) { alert('請允許彈出視窗才能列印'); return; }
+            // 可印高度＝紙張高 − 上下 @page 留白 − 上下 body padding（只決定要不要印頁碼，不影響分頁）
+            var onePage = Math.round((297 - MG * 2 - PAD * 2) * 96 / 25.4 * 0.92);
+            var js = 'if(document.body.scrollHeight>' + onePage + '){var st=document.createElement("style");'
+                   + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
+                   + 'document.head.appendChild(st);}';
+            // <!DOCTYPE html> 不可省略：少了它會落入 Quirks Mode，scrollHeight 量不準、單頁也會印出「第1頁／共1頁」
+            w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>' + css
+                + '</style></head><body>' + bodyHtml
+                + '<scr' + 'ipt>window.onload=function(){' + js + 'setTimeout(function(){window.print();},300);};</scr' + 'ipt></body></html>');
+            w.document.close();
+            return w;
+        }
+
+        /* ---------------- 列印跳窗 ---------------- */
+        function printablePeople(d) {
+            var inc = d.include;   // null＝全部
+            return (d.people || []).filter(function (p) { return !inc || inc.indexOf(p.user_id) >= 0; });
+        }
+        function renderPrintBody(d) {
+            NC.d = d;
+            var canSign = !!NC.perms.canSign, ro = canSign ? '' : ' readonly', dis = canSign ? '' : ' disabled';
+            var h = '';
+            if (d.is_backfill) {
+                h += '<div class="nc-warn"><b>這是「補資料」建立的聯絡單</b>（建立當時完全沒有發出通知）。'
+                   + '在這裡補簽<b>會直接寫入真實的回簽紀錄</b>，系統會記下是哪一位管理員、什麼時候補的。</div>';
+            } else {
+                h += '<div class="nc-info">這裡的補簽<b>只影響這張紙上要不要蓋章，不會動到原始回簽紀錄</b>'
+                   + '（鈴鐺、已讀 / 應讀統計、回簽人數一律不變）。</div>';
+            }
+            h += '<div class="nc-row">'
+               + '<div class="nc-fld"><label>聯絡單號</label><input type="text" readonly value="'
+                 + esc(d.contact_no || '（按下列印時自動產生）') + '" style="width:190px;"></div>'
+               + '<div class="nc-fld"><label>公告編號</label><input type="text" readonly value="' + esc(d.event_no || '—') + '" style="width:160px;"></div>'
+               + '<div class="nc-fld"><label>DATE（公告日期）</label><input type="text" readonly value="' + esc(d.date_disp) + '" style="width:130px;"></div>'
+               + '<div class="nc-fld" style="flex:1;min-width:240px;"><label>標題</label><input type="text" readonly value="' + esc(d.title) + '" style="width:100%;"></div>'
+               + '</div>';
+            h += '<div class="nc-row">'
+               + '<div class="nc-fld" style="flex:1;min-width:300px;"><label>發文者</label><input type="text" id="ncFrom"' + ro + ' value="' + esc(d.from_text) + '" style="width:100%;"></div>'
+               + '<div class="nc-fld" style="flex:1;min-width:300px;"><label>受文者</label><textarea id="ncTo" rows="2"' + ro + ' style="width:100%;">' + esc(d.to_text) + '</textarea></div>'
+               + '</div>';
+            var mk = d.maker || {}, ap = d.approver || {};
+            h += '<div class="nc-row">'
+               + '<div class="nc-fld" style="min-width:260px;"><label>製表人</label>'
+                 + '<input type="text" class="nc-kwbox" id="ncMkKw" placeholder="輸入姓名 / 部門篩選…" data-eg-skip="1"' + dis + '>'
+                 + '<select id="ncMk" style="width:260px;"' + dis + '></select></div>'
+               + '<div class="nc-fld"><label>製表日期</label><input type="date" id="ncMkD" value="' + esc(mk.date || '') + '"' + dis + '></div>'
+               + '<div class="nc-fld" style="min-width:260px;"><label>核准</label>'
+                 + '<input type="text" class="nc-kwbox" id="ncApKw" placeholder="輸入姓名 / 部門篩選…" data-eg-skip="1"' + dis + '>'
+                 + '<select id="ncAp" style="width:260px;"' + dis + '></select></div>'
+               + '<div class="nc-fld"><label>核准日期</label><input type="date" id="ncApD" value="' + esc(ap.date || '') + '"' + dis + '></div>'
+               + '</div>';
+            h += '<div class="nc-row"><label style="font-weight:400;color:#41505d;font-size:13px;">'
+               + '<input type="checkbox" id="ncShowReply"' + (d.show_reply ? ' checked' : '') + dis + '> 在聯絡單上印出回覆內容</label></div>';
+
+            h += '<div class="nc-tools">'
+               + '<div class="nc-fld"><label>補簽日期（不得早於 ' + esc(d.date_disp) + '，也不可以是未來）</label>'
+                 + '<input type="date" id="ncSignDate" value="' + esc(d.eventdate) + '" min="' + esc(d.eventdate) + '"' + dis + '></div>'
+               + (canSign ? '<button type="button" class="nc-btn" id="ncFillSel"><i class="fa fa-pencil"></i> 補簽勾選的人</button>' : '')
+               + '<button type="button" class="nc-btn" id="ncChkAll">全部列印</button>'
+               + '<button type="button" class="nc-btn" id="ncChkNone">全部不列印</button>'
+               + '<span style="font-size:12.5px;color:#7b8a99;">「列印」欄決定這個人要不要出現在聯絡單的回簽欄。</span>'
+               + '</div>';
+
+            h += '<table class="nc-tb"><thead><tr><th style="width:56px;">列印</th><th style="width:46px;">補簽</th>'
+               + '<th>部門</th><th>職稱</th><th>姓名</th><th style="width:96px;">通知方式</th>'
+               + '<th style="width:150px;">簽署狀態</th><th style="width:120px;">章面日期</th></tr></thead><tbody>';
+            var inc = d.include;
+            (d.people || []).forEach(function (p) {
+                var on = !inc || inc.indexOf(p.user_id) >= 0;
+                var tag, act = '';
+                if (p.signed_at) {
+                    tag = '<span class="nc-tag nc-tag-ok">已回簽</span>';
+                } else if (p.fill_date) {
+                    tag = '<span class="nc-tag nc-tag-fill">列印補簽</span>'
+                        + (canSign ? ' <a href="javascript:;" class="nc-undo" data-uid="' + p.user_id + '" style="font-size:11px;color:#c0392b;">取消</a>' : '');
+                } else {
+                    tag = '<span class="nc-tag nc-tag-no">未簽</span>';
+                    act = '<input type="checkbox" class="nc-fill-cb" data-uid="' + p.user_id + '"' + dis + '>';
+                }
+                h += '<tr class="' + (on ? '' : 'nc-off') + '" data-uid="' + p.user_id + '">'
+                   + '<td><input type="checkbox" class="nc-inc-cb" data-uid="' + p.user_id + '"' + (on ? ' checked' : '') + dis + '></td>'
+                   + '<td>' + act + '</td>'
+                   + '<td class="l">' + esc(p.dept) + '</td><td class="l">' + esc(p.position) + '</td><td class="l">' + esc(p.name) + '</td>'
+                   + '<td>' + esc(p.mode_label) + '</td><td>' + tag + '</td>'
+                   + '<td>' + esc(p.sign_date ? fmtD(p.sign_date) : '—') + '</td></tr>';
+            });
+            if (!(d.people || []).length) h += '<tr><td colspan="8" style="color:#9aa7b3;padding:14px;">這則通知沒有對應到任何在職人員</td></tr>';
+            h += '</tbody></table>';
+
+            $('#ncPrintBody').html(h);
+            $('#ncPrintSub').text((d.contact_no || '') + '　' + d.title);
+            $('#ncCfgSave').toggle(canSign);
+
+            // 製表 / 核准的人員下拉（依公告日期回推當時在職者與當時職稱＝ai-rules/22）
+            get({ action: 'people', date: d.eventdate }, function (r) {
+                NC.people = r.people || [];
+                $('#ncMk').html(peopleOptions(NC.people, (mk.id || ''), '（留白，紙本手蓋）'));
+                $('#ncAp').html(peopleOptions(NC.people, (ap.id || ''), '（留白，紙本手蓋）'));
+                bindFilter('#ncMkKw', '#ncMk');
+                bindFilter('#ncApKw', '#ncAp');
+            });
+        }
+        function loadPrint(eid, alloc, after) {
+            NC.eid = eid;
+            get({ action: 'print_data', eventid: eid, alloc: alloc ? 1 : 0 }, function (r) {
+                NC.csrf = r.csrf || NC.csrf;
+                NC.perms = r.perms || NC.perms;
+                renderPrintBody(r.data);
+                if (after) after(r.data);
+            });
+        }
+        function collectCfg() {
+            var inc = [];
+            $('#ncPrintBody .nc-inc-cb:checked').each(function () { inc.push(+$(this).data('uid')); });
+            var all = $('#ncPrintBody .nc-inc-cb').length;
+            return {
+                eventid: NC.eid,
+                from_text: $('#ncFrom').val() || '',
+                to_text: $('#ncTo').val() || '',
+                maker_user_id: $('#ncMk').val() || '',
+                maker_date: $('#ncMkD').val() || '',
+                approver_user_id: $('#ncAp').val() || '',
+                approver_date: $('#ncApD').val() || '',
+                show_reply: $('#ncShowReply').is(':checked') ? 1 : 0,
+                include_uids: (inc.length === all) ? '' : JSON.stringify(inc)   // 全選＝不設限（之後新增的人自動納入）
+            };
+        }
+
+        $(document).on('click', '.nc-print-btn', function () {
+            $('#ncPrintBody').html('<div style="text-align:center;padding:26px;color:#9aa7b3;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>');
+            $('#ncPrintMsg').text('');
+            $('#ncPrintModal').modal('show');
+            loadPrint(+$(this).data('eid'), false);
+        });
+        // 列印欄勾選 → 該列即時變灰，看得出來哪些人不會印出來
+        $(document).on('change', '#ncPrintBody .nc-inc-cb', function () {
+            $(this).closest('tr').toggleClass('nc-off', !this.checked);
+        });
+        $(document).on('click', '#ncChkAll',  function () { $('#ncPrintBody .nc-inc-cb').prop('checked', true).trigger('change'); });
+        $(document).on('click', '#ncChkNone', function () { $('#ncPrintBody .nc-inc-cb').prop('checked', false).trigger('change'); });
+
+        $(document).on('click', '#ncFillSel', function () {
+            var ids = [];
+            $('#ncPrintBody .nc-fill-cb:checked').each(function () { ids.push(+$(this).data('uid')); });
+            if (!ids.length) { alert('請先在「補簽」欄勾選要補簽的人員'); return; }
+            var dt = $('#ncSignDate').val() || '';
+            // 前端先擋一次（後端用同一支 nc_sign_date_check() 再擋一次＝鐵律8）
+            if (!dt) { alert('請先選擇補簽日期'); return; }
+            if (dt < NC.d.eventdate) { alert('補簽日期不可早於公告 / 通知日期（' + fmtD(NC.d.eventdate) + '）'); return; }
+            var today = new Date(); today = today.getFullYear() + '-' + ('0' + (today.getMonth() + 1)).slice(-2) + '-' + ('0' + today.getDate()).slice(-2);
+            if (dt > today) { alert('補簽日期不可以是未來日期'); return; }
+            var real = !!NC.d.is_backfill;
+            if (!confirm('確定要補簽 ' + ids.length + ' 位人員（日期 ' + fmtD(dt) + '）？\n\n'
+                + (real ? '※ 這是補資料的聯絡單：會直接寫入真實的回簽紀錄，並記下是您在什麼時候補的。'
+                        : '※ 只會影響這張聯絡單上的章，不會動到原始回簽紀錄。'))) return;
+            post({ action: 'sign_fill', eventid: NC.eid, sign_date: dt, user_ids: JSON.stringify(ids) }, function (r) {
+                renderPrintBody(r.data);
+                var msg = '已補簽 ' + (r.done || []).length + ' 位';
+                if ((r.fail || []).length) msg += '；' + r.fail.length + ' 位未成功：' + r.fail.map(function (f) { return f.msg; }).join('、');
+                $('#ncPrintMsg').text(msg);
+            });
+        });
+        $(document).on('click', '.nc-undo', function () {
+            if (!confirm('取消這一位的列印補簽？（原始回簽紀錄本來就沒被動過）')) return;
+            post({ action: 'sign_undo', eventid: NC.eid, user_id: +$(this).data('uid') }, function (r) {
+                renderPrintBody(r.data); $('#ncPrintMsg').text('已取消補簽');
+            });
+        });
+        $(document).on('click', '#ncCfgSave', function () {
+            post($.extend({ action: 'cfg_save' }, collectCfg()), function (r) {
+                renderPrintBody(r.data.data || r.data); $('#ncPrintMsg').text('設定已儲存');
+            });
+        });
+        $(document).on('click', '#ncDoPrint', function () {
+            var go = function () {
+                // 按下列印才配聯絡單號（使用者要求：有列印才產生）
+                loadPrint(NC.eid, true, function (d) {
+                    whenStampReady(function () {
+                        printWindow('聯絡單 ' + (d.contact_no || '') + ' ' + d.title, buildBody(d, printablePeople(d)), d.doc_no);
+                        try {
+                            if (window.EGPrintLog) EGPrintLog.record({
+                                source: 'notice_contact', doc_kind: 'form',
+                                doc_name: '聯絡單 ' + (d.contact_no || '') + '　' + d.title,
+                                ref_table: 'live_event', ref_id: d.event_id
+                            });
+                        } catch (e) {}
+                    });
+                });
+            };
+            // 有改過設定就先存再印，免得印出來跟畫面上看到的不一樣
+            if (NC.perms.canSign) post($.extend({ action: 'cfg_save' }, collectCfg()), function () { go(); });
+            else go();
+        });
+
+        /* ---------------- 聯絡單設定 ---------------- */
+        $(document).on('click', '#nc-setting-btn', function () {
+            get({ action: 'meta' }, function (r) {
+                NC.csrf = r.csrf; NC.meta = r;
+                var s = r.settings || {};
+                $('#ncAsLabel').val(r.as_doc ? (r.as_doc.doc_no + '（' + r.as_doc.doc_name + '）') : '尚未綁定');
+                var sh = '<option value="">（不指定，用系統預設回墨印）</option>';
+                (r.stamps || []).forEach(function (t) {
+                    sh += '<option value="' + t.id + '"' + (String(s.stamp_tpl_id) === String(t.id) ? ' selected' : '') + '>'
+                        + esc((t.type_name ? t.type_name + '／' : '') + t.tpl_name) + '</option>';
+                });
+                $('#ncStampTpl').html(sh);
+                $('#ncMakerSrc').val(s.maker_src || 'creator');
+                $('#ncApprSrc').val(s.approver_src || 'top');
+                $('#ncShowReplyDef').prop('checked', String(s.show_reply) === '1');
+                get({ action: 'people' }, function (p) {
+                    $('#ncMakerUser').html(peopleOptions(p.people, s.maker_user_id, '（請選擇）'));
+                    $('#ncApprUser').html(peopleOptions(p.people, s.approver_user_id, '（請選擇）'));
+                    bindFilter('#ncMakerKw', '#ncMakerUser');
+                    bindFilter('#ncApprKw', '#ncApprUser');
+                    bindFilter('#ncStampKw', '#ncStampTpl');
+                    srcToggle();
+                });
+                $('#ncSetErr').text('');
+                $('#ncSetModal').modal('show');
+            });
+        });
+        function srcToggle() {
+            $('#ncMakerUser').closest('.nc-fld').toggle($('#ncMakerSrc').val() === 'user');
+            $('#ncApprUser').closest('.nc-fld').toggle($('#ncApprSrc').val() === 'user');
+        }
+        $(document).on('change', '#ncMakerSrc,#ncApprSrc', srcToggle);
+        $(document).on('click', '#ncAsPick', function () {
+            if (!window.EGAsDoc) { alert('AS 文件挑選器未載入'); return; }
+            EGAsDoc.open({
+                docs: (NC.meta && NC.meta.as_docs) || [], current: (NC.meta && NC.meta.as_doc ? NC.meta.as_doc.id : 0),
+                title: '聯絡單要印哪一份 AS 文件的編號',
+                onSave: function (docId) {
+                    post({ action: 'asdoc_save', doc_id: docId }, function (r) {
+                        NC.meta.as_doc = r.as_doc;
+                        $('#ncAsLabel').val(r.as_doc ? (r.as_doc.doc_no + '（' + r.as_doc.doc_name + '）') : '尚未綁定');
+                    });
+                }
+            });
+        });
+        $(document).on('click', '#ncSetSave', function () {
+            $('#ncSetErr').text('');
+            post({
+                action: 'settings_save',
+                stamp_tpl_id: $('#ncStampTpl').val() || '',
+                maker_src: $('#ncMakerSrc').val(), maker_user_id: $('#ncMakerUser').val() || '',
+                approver_src: $('#ncApprSrc').val(), approver_user_id: $('#ncApprUser').val() || '',
+                show_reply: $('#ncShowReplyDef').is(':checked') ? '1' : '0'
+            }, function () { $('#ncSetModal').modal('hide'); });
+        });
+
+        /* ---------------- 補資料 ---------------- */
+        $(document).on('click', '#nc-backfill-btn', function () {
+            get({ action: 'meta' }, function (r) {
+                NC.csrf = r.csrf;
+                var today = new Date();
+                $('#ncBfDate').val(today.getFullYear() + '-' + ('0' + (today.getMonth() + 1)).slice(-2) + '-' + ('0' + today.getDate()).slice(-2))
+                              .attr('max', $('#ncBfDate').val());
+                $('#ncBfTitle').val(''); $('#ncBfContent').val(''); $('#ncBfErr').text('');
+                get({ action: 'targets' }, function (t) {
+                    NC.targets = t;
+                    // 受文者：第一個就是「全體員工」（使用者明確要求要有這個選項）
+                    var h = '<option value="all">全體員工</option>';
+                    (t.depts || []).forEach(function (d) { h += '<option value="dept-' + d.id + '">部門：' + esc(d.name) + '</option>'; });
+                    (t.statuses || []).forEach(function (s) { h += '<option value="status-' + s.id + '">身分：' + esc(s.title) + '</option>'; });
+                    (t.people || []).forEach(function (p) {
+                        h += '<option value="user-' + p.id + '">人員：' + esc((p.dept ? p.dept + ' ' : '') + p.name) + '</option>';
+                    });
+                    $('#ncBfTo').html(h);
+                    $('#ncBfFrom').html(peopleOptions(t.people, '', '（請選擇發文者）'));
+                    bindFilter('#ncBfToKw', '#ncBfTo');
+                    bindFilter('#ncBfFromKw', '#ncBfFrom');
+                });
+                $('#ncBackfillModal').modal('show');
+            });
+        });
+        $(document).on('click', '#ncBfSave', function () {
+            var tg = $('#ncBfTo').val() || [];
+            // 選了全體就不必再選別的（與新增公告同一套語意）
+            if (tg.indexOf('all') >= 0) tg = ['all'];
+            var err = '';
+            if (!$('#ncBfDate').val()) err = '請填寫聯絡單日期';
+            else if (!$('#ncBfFrom').val()) err = '請選擇發文者';
+            else if (!$.trim($('#ncBfTitle').val())) err = '請填寫標題';
+            else if (!$.trim($('#ncBfContent').val())) err = '請填寫內容';
+            else if (!tg.length) err = '請選擇受文者';
+            if (err) { $('#ncBfErr').text(err); return; }
+            $('#ncBfErr').text('');
+            post({
+                action: 'backfill_create',
+                eventdate: $('#ncBfDate').val(), title: $('#ncBfTitle').val(), content: $('#ncBfContent').val(),
+                from_user_id: $('#ncBfFrom').val(), mode: $('#ncBfMode').val(), targets: JSON.stringify(tg)
+            }, function (r) {
+                $('#ncBackfillModal').modal('hide');
+                if (typeof egLoadList === 'function') { try { egLoadList(1); } catch (e) {} }
+                $('#ncPrintModal').modal('show');
+                loadPrint(r.event_id, false);
+            });
+        });
+
+        // 進頁面先拿一次 CSRF 與權限（列印跳窗要用）
+        $(function () { get({ action: 'meta' }, function (r) { NC.csrf = r.csrf; NC.perms = r.perms || NC.perms; NC.meta = r; }); });
+    })();
+    </script>
 </body>
 <?php if ($IS_ADMIN) : /* iPhone 推播測試按鈕：僅管理者顯示（原程式有 JS 語法錯誤導致整段失效並在所有人的 console 報錯，2026-07-07 修正） */ ?>
 <script>

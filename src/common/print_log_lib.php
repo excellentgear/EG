@@ -211,6 +211,7 @@ if (!function_exists('eg_print_sources')) {
             'internal_audit' => ['label' => '內部稽核－各式表單', 'page' => 'views/ADM/internal_audit.php',         'kind' => 'form'],
             'acc_recon'      => ['label' => '會計－對帳單',       'page' => 'views/ACC/reconcile.php',              'kind' => 'form'],
             'as_doc'         => ['label' => 'AS 文件管理－各式清單', 'page' => 'views/ADM/as_document_management.php', 'kind' => 'form'],
+            'as_doc_content' => ['label' => 'AS 文件線上版（程序書電子版）', 'page' => 'views/ADM/as_doc_editor.php', 'kind' => 'form'],
             'comm_mgmt'      => ['label' => '溝通管理－三份表單',   'page' => 'views/GM/communication_mgmt.php',      'kind' => 'form'],
             'shipping_note'  => ['label' => '快速出貨－出貨單',     'page' => 'views/Sales/Shipping_Quick.php',       'kind' => 'form'],
             'leave_stats'    => ['label' => '請假系統－請假統計表',  'page' => 'views/ADM/leave_request.php',          'kind' => 'form'],
@@ -221,6 +222,7 @@ if (!function_exists('eg_print_sources')) {
             'data_audit'     => ['label' => '資料稽核－流程順序／基本資料',  'page' => 'views/ADM/data_audit.php',                'kind' => 'form'],
             'qa_abnormal'    => ['label' => '品質異常處理單',               'page' => 'views/QA/qa_abnormal_list.php',           'kind' => 'form'],
             'sop_sip'        => ['label' => '作業標準書SOP／標準檢驗指導書SIP', 'page' => 'views/QA/sop_sip.php',              'kind' => 'form'],
+            'notice_contact' => ['label' => '公告 / 通知－聯絡單',            'page' => 'views/liveEvent/createEvent.php',        'kind' => 'form'],
         ];
     }
 }
