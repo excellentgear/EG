@@ -1397,15 +1397,23 @@ function ss_search_part(PDO $db, string $kw, int $limit = 30): array
 function ss_search_machine(PDO $db, string $kw, int $limit = 30): array
 {
     $kw = trim($kw);
-    $w  = ["(state IS NULL OR state <> '1')"];   // state='1' 才是停用（見 kpi_main 的機台資產設定）
+    $w  = ["(m.state IS NULL OR m.state <> '1')"];   // state='1' 才是停用（見 kpi_main 的機台資產設定）
     $p  = [];
     if ($kw !== '') {
-        $w[] = "(asset_no LIKE ? OR field_no LIKE ? OR machine LIKE ? OR machine_model LIKE ?)";
+        $w[] = "(m.asset_no LIKE ? OR m.field_no LIKE ? OR m.machine LIKE ? OR m.machine_model LIKE ?)";
         for ($i = 0; $i < 4; $i++) $p[] = '%' . $kw . '%';
     }
-    $st = $db->prepare("SELECT machine_id, machine, field_no, asset_no, machine_model, manufacturer, spec
-                        FROM machine_list WHERE " . implode(' AND ', $w) . "
-                        ORDER BY asset_no, field_no LIMIT $limit");
+    /* 一併帶回「這台機器屬於哪一個製程」給畫面分組用（使用者 2026-09-22：挑使用設備要依製程分類）。
+       **機台的製程掛在 machine_list.machine_type_id，對到的是 process_type 表**
+       （不是那張早就沒在用的 machine_type，記憶 machine_asset_process_type）。 */
+    $st = $db->prepare("SELECT m.machine_id, m.machine, m.field_no, m.asset_no, m.machine_model,
+                               m.manufacturer, m.spec, m.machine_type_id,
+                               pt.process_type AS proc_type_name,
+                               COALESCE(pt.sort_order, 9999) AS proc_sort
+                        FROM machine_list m
+                        LEFT JOIN process_type pt ON pt.process_type_id = m.machine_type_id
+                        WHERE " . implode(' AND ', $w) . "
+                        ORDER BY proc_sort, pt.process_type, m.asset_no, m.field_no LIMIT $limit");
     $st->execute($p);
     return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
 }
@@ -2116,6 +2124,49 @@ function ss_search_tool(PDO $db, string $kw, int $limit = 40): array
         $st->execute($p);
         return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
     } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 「挑使用設備」的清單（唯一實作，畫面只負責排版）。使用者 2026-09-22 交辦兩件：
+ *   ① 平鋪 34 台機器看不出哪台是哪一關的，一律**依綁定的製程分組**
+ *      （機台的製程在 machine_list.machine_type_id → process_type，見 ss_search_machine()）
+ *   ② **量具也要挑得到**——製造製程說明書的「使用設備」本來就常常是量具（三次元、投影機…），
+ *      原本只查 machine_list，量具一支都選不到。
+ * 沒有分到製程的機台收在「未分類」，不可以整批不見。
+ *
+ * @return array [['kind'=>'machine|tool','group'=>組名,'rows'=>[['value'=>勾起來要填的字,'no'=>編號,'name'=>名稱,'sub'=>補充]]]]
+ */
+function ss_equip_pick_groups(PDO $db, string $kw): array
+{
+    $out = [];
+    // ── 機台：依製程分組 ──
+    $g = [];
+    foreach (ss_search_machine($db, $kw, 500) as $m) {
+        $key = trim((string)($m['proc_type_name'] ?? '')) ?: '未分類';
+        $g[$key]['sort'] = (int)($m['proc_sort'] ?? 9999);
+        $g[$key]['rows'][] = [
+            'value' => (string)($m['asset_no'] ?: ($m['field_no'] ?: $m['machine'])),
+            'no'    => (string)($m['asset_no'] ?: '(未編號)'),
+            'name'  => trim((string)($m['field_no'] ?: $m['machine'])),
+            'sub'   => trim(implode('　', array_filter([(string)$m['machine'], (string)$m['machine_model']]))),
+        ];
+    }
+    uasort($g, fn($a, $b) => [$a['sort']] <=> [$b['sort']]);
+    foreach ($g as $name => $x) $out[] = ['kind' => 'machine', 'group' => $name, 'rows' => $x['rows']];
+
+    // ── 量具／檢驗設備：依量具種類分組 ──
+    $t = [];
+    foreach (ss_search_tool($db, $kw, 500) as $r) {
+        $key = trim((string)($r['tool_type'] ?? '')) ?: '未分類';
+        $t[$key][] = [
+            'value' => (string)$r['tool_no'],
+            'no'    => (string)$r['tool_no'],
+            'name'  => trim((string)($r['tool_type'] ?? '')),
+            'sub'   => trim(implode('　', array_filter([(string)($r['spec_desc'] ?? ''), (string)($r['manufacturer'] ?? '')]))),
+        ];
+    }
+    foreach ($t as $name => $rows) $out[] = ['kind' => 'tool', 'group' => $name, 'rows' => $rows];
+    return $out;
 }
 
 /**

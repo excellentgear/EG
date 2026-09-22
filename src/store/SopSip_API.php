@@ -242,6 +242,10 @@ case 'search_part':
 case 'search_machine':
     jout(true, ['rows' => ss_search_machine($db, (string)($_GET['kw'] ?? ''))]);
 
+/** 「挑使用設備」：機台依製程分組＋量具依種類分組（分組規則在 lib，畫面只排版） */
+case 'equip_pick':
+    jout(true, ['groups' => ss_equip_pick_groups($db, (string)($_GET['kw'] ?? ''))]);
+
 /** 量具（檢驗設備一覽表）——設備操作說明書除了機台也能綁它 */
 case 'search_tool':
     jout(true, ['rows' => ss_search_tool($db, (string)($_GET['kw'] ?? ''))]);

@@ -30,7 +30,16 @@ function dispDate(s) { return (window.egFmtDate ? egFmtDate(s) : (s || '')) || '
 function openMask(id) { $('#' + id).addClass('on'); }
 function closeMask(id) { $('#' + id).removeClass('on'); }
 $(document).on('click', '[data-close]', function () { closeMask($(this).data('close')); });
-$(document).on('click', '.ss-mask', function (e) { if (e.target === this) $(this).removeClass('on'); });
+/* 點跳窗外面（遮罩）才關閉，而且**一定要「按下」與「放開」都在遮罩上**。
+   只看 click 的話有兩種情況會把跳窗莫名其妙關掉，使用者看起來就是「按了沒反應」：
+   ⑴ 原生下拉（select）彈出的選單是瀏覽器自己畫的視窗，點選項時底下的頁面可能收到一個
+      落在遮罩上的 click；⑵ 在跳窗裡框選文字、滑鼠放開時滑到跳窗外面。 */
+var MASK_DOWN = null;
+$(document).on('mousedown', '.ss-mask', function (e) { MASK_DOWN = (e.target === this) ? this : null; });
+$(document).on('click', '.ss-mask', function (e) {
+    if (e.target === this && MASK_DOWN === this) $(this).removeClass('on');
+    MASK_DOWN = null;
+});
 
 function api(action, data, cb, method) {
     var d = $.extend({ action: action }, data || {});
@@ -1149,29 +1158,42 @@ $(document).on('click', '#btnRefillMachine', function () {
 
 /** 製造製程說明書的「使用設備」：可複選機器編號（使用者要求） */
 $(document).on('click', '#btnPickEquip', function () {
-    var h = '<div class="note-box">勾選這個製程會用到的機台，按「帶入」會把機器編號填進「使用設備」欄，'
-          + '之後仍然可以自己改文字。</div>'
-          + '<div class="frm" style="margin-bottom:6px;"><label>找機台</label><div class="wide">'
-          + '<input type="text" id="eqKw" data-eg-hint="打型號、機台名稱或機器編號"></div></div>'
-          + '<div class="pickbox" id="eqList" style="max-height:260px;">打字搜尋，或直接看下面的清單。</div>'
-          + '<div style="margin-top:8px;"><button class="btn btn-sm btn-warm" id="eqApply">帶入</button></div>';
+    var h = '<div class="note-box">勾選這個製程會用到的<b>機台或量具</b>，按「帶入」會把編號填進「使用設備」欄，'
+          + '之後仍然可以自己改文字。機台依<b>綁定的製程</b>分組、量具依<b>種類</b>分組。</div>'
+          + '<div class="frm" style="margin-bottom:6px;"><label>搜尋</label><div class="wide">'
+          + '<input type="text" id="eqKw" data-eg-hint="打製程、型號、機台名稱、機器編號或量具編號"></div></div>'
+          + '<div class="pickbox eqbox" id="eqList" style="max-height:330px;">載入中…</div>'
+          + '<div style="margin-top:8px;"><span class="muted-help" id="eqSel">已勾 0 項</span>'
+          + '　<button class="btn btn-sm btn-warm" id="eqApply">帶入</button></div>';
     $('#pickTitle').text('挑使用設備');
     $('#pickBody').html(h);
     openMask('maskPick');
     loadEqList('');
 });
+/** 依「製程／量具種類」分組列出，一組一個標題一列一台——平鋪 34 台看不出哪台是哪一關的 */
 function loadEqList(kw) {
-    api('search_machine', { kw: kw }, function (res) {
-        var h = '';
-        $.each(res.rows || [], function (i, m) {
-            h += '<label><input type="checkbox" class="eqchk" value="' + esc(m.asset_no || m.field_no || m.machine) + '"> '
-               + '<span class="mno">' + esc(m.asset_no || '(未編號)') + '</span> '
-               + esc(m.field_no || '') + ' <span class="muted-help">' + esc(m.machine || '') + '　'
-               + esc(m.machine_model || '') + '</span></label>';
+    api('equip_pick', { kw: kw }, function (res) {
+        var gs = res.groups || [], h = '', n = 0;
+        $.each(gs, function (i, g) {
+            if (!g.rows || !g.rows.length) return;
+            n += g.rows.length;
+            h += '<div class="eqgrp"><div class="eqgh">'
+               + (g.kind === 'tool' ? '量具／檢驗設備　' : '製程　') + esc(g.group)
+               + '<span class="muted-help">　' + g.rows.length + ' 項</span></div>';
+            $.each(g.rows, function (j, r) {
+                h += '<label class="eqit"><input type="checkbox" class="eqchk" value="' + esc(r.value) + '"> '
+                   + '<span class="mno">' + esc(r.no) + '</span> ' + esc(r.name || '')
+                   + (r.sub ? ' <span class="muted-help">' + esc(r.sub) + '</span>' : '')
+                   + '</label>';
+            });
+            h += '</div>';
         });
-        $('#eqList').html(h || '<span class="muted-help">查無機台。</span>');
+        $('#eqList').html(h || '<span class="muted-help">查無符合的機台或量具。</span>');
+        eqCount();
     });
 }
+function eqCount() { $('#eqSel').text('已勾 ' + $('.eqchk:checked').length + ' 項'); }
+$(document).on('change', '.eqchk', eqCount);
 $(document).on('input', '#eqKw', function () {
     var kw = $(this).val();
     clearTimeout(window._eqT);

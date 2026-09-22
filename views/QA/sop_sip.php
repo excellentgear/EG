@@ -167,6 +167,13 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
         .pickbox label { display:inline-block; font-weight:normal; text-align:left; margin:0 12px 3px 0;
                          font-size:12.5px; color:var(--ink2); cursor:pointer; }
         .pickbox .mno { font-weight:bold; color:var(--amber-d); }
+        /* 挑使用設備：依製程／量具種類分組，一組一個標題、一列一台
+           （34 台平鋪成一大片時完全看不出哪一台是哪一關的，使用者 2026-09-22 回報） */
+        .eqbox .eqgrp { margin-bottom:7px; }
+        .eqbox .eqgh { background:var(--sand); color:var(--ink2); font-size:12px; font-weight:bold;
+                       padding:2px 8px; border-radius:4px; margin-bottom:3px; position:sticky; top:-6px; z-index:1; }
+        .eqbox label.eqit { display:block; margin:0 0 2px 0; padding:1px 4px 1px 10px; border-radius:3px; }
+        .eqbox label.eqit:hover { background:#FFF3E0; }
         /* 撞到既有文件時的提示（重複一律擋下，只能去更新既有那一份） */
         .dup-box { border:1px solid #E2A15A; background:#FDF3E3; border-radius:5px; padding:8px 10px; font-size:12.5px; }
         .dup-box .t { font-weight:bold; color:#A4541A; margin-bottom:4px; }
@@ -409,6 +416,9 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
             <li><b>「工程名稱」就是製程</b>（日式用語，工程＝工序），所以只有一欄「製程」，一律從製程主檔挑。</li>
             <li><b>同一個對象＋同一個製程只能有一份文件</b>：建立時如果撞到既有的，會直接擋下並附上
                 「開啟並更新這一份」的按鈕。同一個料號的「粗滾」與「齒研」可以各有一份。</li>
+            <li><b>「挑使用設備」依製程分組，量具也挑得到</b>：機台依它在機台主檔綁的製程分組
+                （未分到製程的收在「未分類」，不會不見），量具依量具種類分組，一列一台；
+                勾好按「帶入」會把編號填進「使用設備」欄，之後仍然可以自己改文字。</li>
             <li><b>設備操作說明書綁的是機台型號，不是單一台機器</b>——同型號（例 HGH250 有三台）共用一份 SOP。
                 選了型號會自動把在用的機台全部帶進來，不適用的逐台勾掉；同型號日後新增的機台
                 <b>不會自動加入</b>，清單與表頭會標出「還有幾台未納入」。機器製造商／名稱／型式規格／
