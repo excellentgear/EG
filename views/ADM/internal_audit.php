@@ -2160,23 +2160,26 @@ $('#btnPlanSave').on('click', function(){
                  remark:$('#planRemark').val(),
                  maker_id:($('#planMaker').val()||''), maker_date:($('#planMakerDate').val()||'')}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
-        alert('已儲存'); loadPlan();
+        iaToast('已儲存排定'); loadPlan();
     }, 'json');
 });
 $('#btnPlanSubmit').on('click', function(){
     if (!PLAN) return;
     var auto = String((META.settings||{}).ia_auto_sign||'') === '1';
-    askDate('送審年度稽核計劃表',
-        '審查日期會印在表格下方「審查」欄。審查人＝設定裡「審查格」指定的那一位。'
-        + (auto ? '\n目前已開啟「自動簽核」：按下去會一併完成核准（核准人＝設定裡「核准格」指定的那一位）。' : ''),
-        function(d){
-        $.post(API, {action:'plan_decide', plan_id:PLAN.plan_id, status:'submitted', biz_date:d}, function(res){
-            if (!res.ok) { alert(res.error||'失敗'); return; }
-            if (res.auto_signed) alert('已自動完成簽核：審查 ' + (res.reviewer||'（留白）')
-                + '／核准 ' + (res.approver||'（留白）'));
-            loadPlan();
-        }, 'json');
-    });
+    /* 送審日期不再詢問（2026-09-22 使用者要求）：**一律＝製表日期**。
+       這張表的審查／核准都印在同一張紙上，日期本來就該跟製表日期一致；
+       每次送審再問一次只是多一個跳窗，而且很容易不小心填成今天。 */
+    var d = inputDate(PLAN.maker_date) || META.today;
+    if (!confirm('要送審 '+YEAR+' 年度稽核計劃表嗎？\n審查日期＝製表日期 '+dispDate(d)
+               + '，審查人＝設定裡「審查格」指定的那一位。'
+               + (auto ? '\n目前已開啟「自動簽核」：按下去會一併完成核准。' : ''))) return;
+    $.post(API, {action:'plan_decide', plan_id:PLAN.plan_id, status:'submitted', biz_date:d}, function(res){
+        if (!res.ok) { alert(res.error||'失敗'); return; }
+        iaToast(res.auto_signed
+            ? ('已送審並自動完成簽核：審查 ' + (res.reviewer||'（留白）') + '／核准 ' + (res.approver||'（留白）'))
+            : '已送審（審查日期 ' + dispDate(d) + '）');
+        loadPlan();
+    }, 'json');
 });
 $('#btnPlanApprove').on('click', function(){
     if (!PLAN) return;
@@ -3035,7 +3038,9 @@ $('#btnCaseSave').on('click', function(){
     $.post(API, caseSavePayload(), function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         // 稽核日期改過的話件號會跟著重編，要講出來（不然使用者只會覺得編號莫名其妙變了）
-        alert('已儲存' + (res.no_changed ? ('\n\n稽核日期改變，稽核件號已由 ' + res.no_old + ' 重編為 ' + res.case_no) : ''));
+        // 件號被重編是非看不可的事，那種情況才留 alert；單純存好就用提示
+        if (res.no_changed) alert('已儲存\n\n稽核日期改變，稽核件號已由 ' + res.no_old + ' 重編為 ' + res.case_no);
+        else iaToast('已儲存');
         CASE_ID = res.case_id;
         loadCases(function(){ openCase(CASE_ID); });
     }, 'json');
@@ -4069,7 +4074,7 @@ $('#btnCkAddGo').on('click', function(){
     $.post(API, {action:'check_item_add', check_id:CHK.check_id, pick:JSON.stringify(pick)}, function(res){
         if (!res.ok) { alert(res.error||'加入失敗'); return; }
         closeMask('ckAddMask');
-        alert('已加入 '+res.added+' 項'+(+res.skipped ? ('（略過 '+res.skipped+' 項已存在）') : ''));
+        iaToast('已加入 '+res.added+' 項'+(+res.skipped ? ('（略過 '+res.skipped+' 項已存在）') : ''));
         openCheck(CHK.check_id); loadChecks();
     }, 'json');
 });
@@ -4089,7 +4094,9 @@ $('#btnCheckAuto').on('click', function(){
         var okN = 0, errs = [];
         (function next(i){
             if (i >= items.length) {
-                alert('完成：已開立 '+okN+' 張矯正單'+(errs.length?('\n失敗 '+errs.length+' 張：\n'+errs.join('\n')):''));
+                // 有失敗才需要人真的按確定看清楚；全部成功就用自動消失的提示（使用者要求）
+                if (errs.length) alert('完成：已開立 '+okN+' 張矯正單\n失敗 '+errs.length+' 張：\n'+errs.join('\n'));
+                else iaToast('已開立 '+okN+' 張異常矯正處理單，單號都寫進備註欄了。');
                 openCheck(CHK.check_id); loadChecks(); return;
             }
             $.post(API, {action:'car_from_item', item_id:items[i].item_id}, function(res){
@@ -4240,7 +4247,7 @@ function saveCheck(silent, cb){
         check_date:$('#ckDate').val(), auditor_key:($('#ckAuditor').val()||''),
         items:JSON.stringify(collectCheckItems())}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
-        if (!silent) alert('已儲存' + (+res.resorted ? '（已依受稽人部門、表單編號重新排序）' : ''));
+        if (!silent) iaToast('已儲存' + (+res.resorted ? '（已依受稽人部門、表單編號重新排序）' : ''));
         loadChecks();
         // 順序是後端排的，重新載入這張表才看得到新的排列
         if (+res.resorted && !cb) { openCheck(CHK.check_id); return; }
@@ -4251,7 +4258,7 @@ $('#btnCheckDone').on('click', function(){
     saveCheck(true, function(){
         $.post(API, {action:'check_done', check_id:CHK.check_id, status:'done'}, function(res){
             if (!res.ok) { alert(res.error||'無法結案'); return; }
-            alert('已結案'); closeMask('checkMask'); loadChecks();
+            iaToast('已結案'); closeMask('checkMask'); loadChecks();
         }, 'json');
     });
 });
@@ -4269,12 +4276,14 @@ function carFromItem(itemId){
     var it = null;
     (CHK.items||[]).forEach(function(x){ if (+x.item_id===+itemId) it = x; });
     if (!it) return;
+    /* 只在開單前確認一次；**成功結果不再跳 alert**（2026-09-22 使用者回報：
+       一直要按確定很沒效率）——改用右下角自動消失的提示，失敗才需要人真的看到。 */
     if (!confirm('要為「'+(it.col_b||'')+'」開立異常矯正處理單嗎？\n'
                + '責任單位：'+(it.col_a||'—')+'　回覆人：'+(it.col_d||'（未設定擔當者，將通知該單位主管指派）'))) return;
     saveCheck(true, function(){
         $.post(API, {action:'car_from_item', item_id:itemId}, function(res){
             if (!res.ok) { alert(res.error||'開立失敗'); return; }
-            alert('已開立異常矯正處理單 '+res.car_no+'，單號已寫入備註欄。');
+            iaToast('已開立異常矯正處理單 '+res.car_no+'，單號已寫入備註欄。');
             openCheck(CHK.check_id); loadChecks();
         }, 'json');
     });
@@ -4724,6 +4733,21 @@ $('#ncMask').on('input change', 'input,select,textarea', function(){
 /* 關掉跳窗前先把還沒送出的變更存起來（使用者按 X 或點遮罩時，debounce 可能還沒觸發） */
 $('#ncMask').on('mousedown', '[data-close],.x', function(){ clearTimeout(AUTOSAVE.t); ncAutoSaveNow(); });
 
+/* 右下角自動消失的提示（2026-09-22 使用者回報：每個結果都要按「確定」很沒效率）。
+   用在「做完了、沒有人需要做決定」的情況；**失敗或需要人看清楚的訊息仍然用 alert**，
+   否則錯誤會一閃而過沒人看到。刻意不做成共用檔——本頁自己用，避免動到全站。 */
+function iaToast(msg, ms){
+    var $b = $('#iaToastBox');
+    if (!$b.length) {
+        $b = $('<div id="iaToastBox" style="position:fixed;right:18px;bottom:18px;z-index:12000;"></div>').appendTo('body');
+    }
+    var $t = $('<div>').text(String(msg||'')).css({
+        background:'#5b3a1e', color:'#fff', padding:'10px 16px', borderRadius:'6px',
+        marginTop:'8px', fontSize:'13px', maxWidth:'420px', lineHeight:'1.6',
+        boxShadow:'0 4px 14px rgba(0,0,0,.25)', opacity:0
+    }).appendTo($b).animate({opacity:1}, 120);
+    setTimeout(function(){ $t.animate({opacity:0}, 250, function(){ $t.remove(); }); }, ms || 3200);
+}
 function lockSec(sel, allow, lockSel, why){
     var $s = $(sel);
     $s.toggleClass('locked', !allow);
@@ -4817,7 +4841,7 @@ function saveSec1(silent, cb){
         auditee_id:$('#nAuditee').val(),
         auditor_key:($('#nAuditor').prop('disabled') ? '' : ($('#nAuditor').val()||''))}, function(res){
         if (!res.ok) { if (!silent) alert(res.error||'儲存失敗'); if (cb) cb(false); return; }
-        if (!silent) { alert('已儲存'); openNc(NC.nc_id); }
+        if (!silent) { iaToast('已儲存'); openNc(NC.nc_id); }
         loadNcs(); if (cb) cb(true);
     }, 'json').fail(function(){ if (cb) cb(false); });
 }
@@ -4897,7 +4921,7 @@ $('#btnNcReopen').on('click', function(){
                + '（受稽單位回覆那一段仍是鎖住的，要改請按該段的「解鎖修改」。）\n確定要取消結案嗎？')) return;
     $.post(API, {action:'nc_reopen', nc_id:NC.nc_id}, function(res){
         if (!res.ok) { alert(res.error||'取消結案失敗'); return; }
-        alert('已取消結案，現在可以修改；改完請再按一次「結案」。');
+        iaToast('已取消結案，現在可以修改；改完請再按一次「結案」。', 4500);
         openNc(NC.nc_id); loadNcs();
     }, 'json');
 });
@@ -5002,7 +5026,7 @@ $('#btnReportSave').on('click', function(){
     $.post(API, {action:'report_save', year:YEAR, extra_note:$('#reportNote').val(),
                  dues:JSON.stringify(dues)}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
-        alert('已儲存'); loadReport();
+        iaToast('已儲存'); loadReport();
     }, 'json');
 });
 /* 送出（取代原本的核准）：送出後自動通知管理員設定好的那些部門的那些職位。
@@ -5015,9 +5039,10 @@ $('#btnReportSubmit').on('click', function(){
     if (!confirm('要送出 '+YEAR+' 年度的稽核報告表嗎？\n送出後會通知「通知對象設定」裡登記的人員。')) return;
     $.post(API, {action:'report_submit', year:YEAR}, function(res){
         if (!res.ok) { alert(res.error||'送出失敗'); return; }
-        alert('已送出\n'
-            + (res.notified ? ('已通知 '+res.notified+' 人：'+(res.users||[]).join('、'))
-                            : '目前沒有設定通知對象，所以沒有發出通知。\n可按工具列的「通知對象設定」設定要通知哪些部門的哪些職位。'));
+        // 沒設定通知對象是要人去處理的事，那種才用 alert；正常送出用提示就好
+        if (res.notified) iaToast('已送出，已通知 '+res.notified+' 人：'+(res.users||[]).join('、'), 4500);
+        else alert('已送出\n目前沒有設定通知對象，所以沒有發出通知。\n'
+                 + '可按工具列的「通知對象設定」設定要通知哪些部門的哪些職位。');
         loadMeta(function(){ loadReport(); });      // 年度完成狀態要跟著更新
     }, 'json');
 });
