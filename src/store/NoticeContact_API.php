@@ -85,6 +85,13 @@ switch ($action) {
         $eid = (int)($_GET['eventid'] ?? $_POST['eventid'] ?? 0);
         ncEvent($db, $eid);
         $alloc = !empty($_GET['alloc']) || !empty($_POST['alloc']);
+        // 製表人必填（使用者要求）：先不配號算一次，沒有製表人就擋下——
+        // 不可以先配了聯絡單號再擋，那會白白佔掉一個號碼
+        if ($alloc) {
+            $chk = nc_print_data($db, $eid, false);
+            if (empty($chk['ok'])) ncErr($chk['msg'] ?? '讀取失敗');
+            if ((int)($chk['maker']['id'] ?? 0) <= 0) ncErr('請先指定「製表人」再列印');
+        }
         $d = nc_print_data($db, $eid, $alloc);
         if (empty($d['ok'])) ncErr($d['msg'] ?? '讀取失敗');
         ncOut(['data' => $d, 'perms' => $P, 'csrf' => $_SESSION['nc_csrf']]);

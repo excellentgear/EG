@@ -527,9 +527,10 @@ if (isset($_POST['btn_go_events'])) {
         .qr-list td { padding: 6px 10px; border-bottom: 1px solid #f2eee6; font-size: 12.5px; }
         .qr-list tr.qr-off td { color: #a9b4bd; background: #fafafa; }
         .qr-why { font-size: 11px; color: #b08a5a; }
-        .eg-op { text-align: center; white-space: nowrap; }
+        /* 操作欄放得下就一行、放不下就自己換行——nowrap 在較窄的視窗會讓內容溢出表格、右側按鈕被裁掉 */
+        .eg-op { text-align: center; white-space: normal; }
         .eg-op a { text-decoration: none; display: inline-block; }
-        .eg-op .eg-mini { display: inline-block; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 6px; margin: 0 2px; text-align: center; transition: all .15s; }
+        .eg-op .eg-mini { display: inline-block; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 6px; margin: 1px 2px; text-align: center; transition: all .15s; white-space: nowrap; }
         .eg-mini-edit { background: #fff3df; color: #d68910; }
         .eg-mini-edit:hover { background: #ffe9c7; }
         .eg-mini-del { background: #fdecea; color: #e74c3c; }
@@ -1329,7 +1330,10 @@ if (isset($_POST['btn_go_events'])) {
 
                     <h4>列印聯絡單（AS 2-DC-02-01）</h4>
                     <ul>
-                        <li>每一列「操作」欄的 <b>「聯絡單」</b> 按鈕，可以把這則公告 / 通知印成紙本聯絡單。<b>有回簽的人都會在紙上蓋出圖章</b>（章面日期＝他實際回簽的日期）。</li>
+                        <li>每一列「操作」欄的 <b>「聯絡單」</b> 按鈕，可以把這則公告 / 通知印成紙本聯絡單。
+                            <b>有回簽的人都會在紙上蓋出圖章</b>（章面日期＝他實際回簽的日期）；
+                            回簽欄<b>只印章、不印名單</b>，沒簽的人不會留空格（章面本來就有姓名與日期）。</li>
+                        <li><b>「製表人」是必填的</b>，沒指定不給列印（預設帶公告建立者）；「核准」可以留白讓紙本手蓋。</li>
                         <li><b>聯絡單號（OI）</b>＝<code>OI</code>＋西元年月日＋當日流水 3 碼，<b>按下「列印」當下才產生</b>（沒印過的公告不佔號）。
                             它和原本的<b>公告編號（PU）</b>存在同一筆資料上，列表的日期欄兩個都看得到，<b>搜尋框打任一個編號都查得到</b>。</li>
                         <li>版面依全站列印標準：大標題＝本公司全名、表頭＝綁定 AS 文件的表單名稱、頁尾右下＝文件編號（版次依公告日期回推）、多頁才印頁碼。
@@ -2981,10 +2985,12 @@ if (isset($_POST['btn_go_events'])) {
             var schema = (NC.d && NC.d.stamp_tpl) ? NC.d.stamp_tpl.schema : null;
             try { return EGStamp.stamp(name, fmtD(date), false, schema, dept || '', pos || ''); } catch (e) { return esc(name); }
         }
-        function signCell(p) {
-            var st = p.sign_date ? stampHtml(p.name, p.sign_date, p.dept, p.position) : '';
-            return '<td class="ct-sc"><div class="ct-sn">' + esc((p.dept ? p.dept + ' ' : '') + p.name) + '</div>'
-                 + '<div class="ct-sb">' + (st || '<span class="ct-blank"></span>') + '</div></td>';
+        /* 回簽欄只印「真的有簽的那幾顆章」——使用者明確要求：直接顯示圖章就好，
+           不要印姓名欄、也不要留空格讓人看出誰沒簽（章面本來就有姓名與日期）。 */
+        function signStamps(people) {
+            return (people || []).filter(function (p) { return !!p.sign_date; })
+                .map(function (p) { return '<span class="ct-si">' + stampHtml(p.name, p.sign_date, p.dept, p.position) + '</span>'; })
+                .join('');
         }
         function buildBody(d, people) {
             var co = d.company || {};
@@ -3014,16 +3020,8 @@ if (isset($_POST['btn_go_events'])) {
             }
             h += '<tr><td class="ct-body">' + body + '</td></tr>';
 
-            if (people && people.length) {
-                var per = 5, rows = '';
-                for (var i = 0; i < people.length; i += per) {
-                    rows += '<tr>';
-                    for (var j = 0; j < per; j++) rows += (people[i + j] ? signCell(people[i + j]) : '<td class="ct-sc"></td>');
-                    rows += '</tr>';
-                }
-                h += '<tr><td class="ct-sign"><div class="ct-sign-h">回簽</div>'
-                   + '<table class="ct-st">' + rows + '</table></td></tr>';
-            }
+            var stamps = signStamps(people);
+            if (stamps) h += '<tr><td class="ct-sign"><div class="ct-sign-h">回簽</div><div class="ct-sw">' + stamps + '</div></td></tr>';
 
             var mk = d.maker || {}, ap = d.approver || {};
             h += '<tr><td class="ct-foot"><table class="ct-ft"><tr>'
@@ -3062,14 +3060,12 @@ if (isset($_POST['btn_go_events'])) {
                     + '.ct-rep{margin-top:12px;border-top:1px dashed #999;padding-top:6px;font-size:12.5px;line-height:1.8;}'
                     + '.ct-rep-h{font-weight:bold;margin-bottom:2px;}'
                     + '.ct-rep-i{margin-bottom:3px;}'
-                    + '.ct-sign{padding:4px 6px !important;}'
-                    + '.ct-sign-h{font-size:13px;font-weight:bold;margin:2px 0 3px;}'
-                    + 'table.ct-st{width:100%;border-collapse:collapse;table-layout:fixed;}'
-                    /* 簽章格高度要留給章（ai-rules/18 第7條：≥95px，含章體 91px 加上下留白） */
-                    + 'table.ct-st td.ct-sc{border:1px solid #bbb;height:112px;text-align:center;vertical-align:top;padding:2px;}'
-                    + '.ct-sn{font-size:11px;line-height:15px;color:#333;}'
-                    + '.ct-sb{height:93px;display:flex;align-items:center;justify-content:center;}'
-                    + '.ct-blank{display:inline-block;width:80px;border-bottom:1px solid #999;}'
+                    /* 回簽欄：只是一排章，沒有格線也沒有姓名欄（章面自己就有姓名與日期）。
+                       高度留給章本身（ai-rules/18 第7條：≥95px），章一律不縮小 */
+                    + '.ct-sign{padding:5px 10px !important;}'
+                    + '.ct-sign-h{font-size:12px;color:#333;margin:0 0 2px;}'
+                    + '.ct-sw{display:flex;flex-wrap:wrap;align-items:flex-end;gap:2px 10px;min-height:95px;}'
+                    + '.ct-si{display:inline-flex;align-items:flex-end;}'
                     + '.ct-foot{padding:8px 10px !important;}'
                     + 'table.ct-ft{width:100%;border-collapse:collapse;table-layout:fixed;}'
                     + 'table.ct-ft td{border:none !important;vertical-align:bottom;height:104px;}'
@@ -3123,7 +3119,7 @@ if (isset($_POST['btn_go_events'])) {
                + '</div>';
             var mk = d.maker || {}, ap = d.approver || {};
             h += '<div class="nc-row">'
-               + '<div class="nc-fld" style="min-width:260px;"><label>製表人</label>'
+               + '<div class="nc-fld" style="min-width:260px;"><label>製表人 <span style="color:#c0392b;">＊必填</span></label>'
                  + '<input type="text" class="nc-kwbox" id="ncMkKw" placeholder="輸入姓名 / 部門篩選…" data-eg-skip="1"' + dis + '>'
                  + '<select id="ncMk" style="width:260px;"' + dis + '></select></div>'
                + '<div class="nc-fld"><label>製表日期</label><input type="date" id="ncMkD" value="' + esc(mk.date || '') + '"' + dis + '></div>'
@@ -3177,7 +3173,8 @@ if (isset($_POST['btn_go_events'])) {
             // 製表 / 核准的人員下拉（依公告日期回推當時在職者與當時職稱＝ai-rules/22）
             get({ action: 'people', date: d.eventdate }, function (r) {
                 NC.people = r.people || [];
-                $('#ncMk').html(peopleOptions(NC.people, (mk.id || ''), '（留白，紙本手蓋）'));
+                // 製表人是必填（使用者要求）；核准可以留白給紙本手蓋
+                $('#ncMk').html(peopleOptions(NC.people, (mk.id || ''), '（請選擇製表人）'));
                 $('#ncAp').html(peopleOptions(NC.people, (ap.id || ''), '（留白，紙本手蓋）'));
                 bindFilter('#ncMkKw', '#ncMk');
                 bindFilter('#ncApKw', '#ncAp');
@@ -3255,6 +3252,12 @@ if (isset($_POST['btn_go_events'])) {
             });
         });
         $(document).on('click', '#ncDoPrint', function () {
+            // 製表人必填（使用者要求）。前端擋一次，後端在真的要配號列印時用同一條規則再擋一次（鐵律8）
+            if (NC.perms.canSign && !$('#ncMk').val()) {
+                $('#ncPrintMsg').html('<span style="color:#c0392b;">請先指定「製表人」再列印</span>');
+                try { $('#ncMk').focus(); } catch (e) {}
+                return;
+            }
             var go = function () {
                 // 按下列印才配聯絡單號（使用者要求：有列印才產生）
                 loadPrint(NC.eid, true, function (d) {
