@@ -419,15 +419,29 @@ function nc_people(PDO $db, int $eventId, string $asof): array
         }
     } catch (Throwable $e) {}
 
-    // 真實回簽 / 回覆
+    /* 真實回簽 / 回覆 / 已閱。
+       **已閱有兩個來源，兩個都要讀**（與 _eventReaders.php 同一套合併規則）：
+         live_event_response  → 回簽 / 回覆模式的紀錄（read_at / signed_at / reply_content）
+         live_event_for_user  → 純「已閱」模式的閱讀紀錄（oready_read / read_at）
+       只讀前者的話，通知方式是「已閱」的人一個都抓不到——實測 event 25 有 15 人已閱全部漏掉，
+       畫面上只會看到「未簽、章面日期 —」，完全看不出是漏讀了一張表。 */
     $resp = [];
     try {
-        $in = implode(',', array_map('intval', $ids));
         foreach ($db->query("SELECT user_id, read_at, signed_at, reply_content, replied_at, signed_via
                              FROM live_event_response WHERE live_event_id=" . (int)$eventId)->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $resp[(int)$r['user_id']] = $r;
         }
-        unset($in);
+    } catch (Throwable $e) {}
+    $readFlag = [];   // 有「已閱」這個事實（不管有沒有留下時間）
+    try {
+        foreach ($db->query("SELECT user_id, read_at FROM live_event_for_user
+                             WHERE live_event_id=" . (int)$eventId . " AND oready_read=1")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $u = (int)$r['user_id'];
+            $readFlag[$u] = true;
+            if (!isset($resp[$u])) $resp[$u] = ['read_at' => $r['read_at'], 'signed_at' => null,
+                                                'reply_content' => null, 'replied_at' => null, 'signed_via' => null];
+            elseif (empty($resp[$u]['read_at'])) $resp[$u]['read_at'] = $r['read_at'];
+        }
     } catch (Throwable $e) {}
 
     // 列印用補簽
@@ -476,7 +490,20 @@ function nc_people(PDO $db, int $eventId, string $asof): array
         $r  = $resp[$uid] ?? null;
         $fl = $fill[$uid] ?? null;
         $signedAt = $r && !empty($r['signed_at']) ? (string)$r['signed_at'] : '';
-        $signDate = $signedAt !== '' ? substr($signedAt, 0, 10) : (string)($fl['sign_date'] ?? '');
+        $readAt   = $r && !empty($r['read_at'])   ? (string)$r['read_at']   : '';
+
+        /* 章面日期與「這顆章是怎麼來的」（使用者定調：**蓋章＝已閱**，回簽一定也已閱，所以兩種都蓋章）
+           優先序：真的回簽 → 管理員補簽（那是他刻意指定的日期，要蓋得過自動推出來的已閱日）→ 已閱
+
+           read_nodate＝舊資料裡「oready_read=1 但 read_at 是 NULL」的那幾筆（全庫 23 筆）：
+           他確實讀過，但系統沒有留下時間。**刻意不替他編一個日期**——章面日期是 AS9100 紀錄的一部分，
+           編一個看起來合理的日期比留白更糟；改成標示「已閱（無日期）」並照樣給補簽勾選框，
+           由管理員指定一個講得出來的日期。 */
+        if ($signedAt !== '')                 { $src = 'sign'; $signDate = substr($signedAt, 0, 10); }
+        elseif (!empty($fl['sign_date']))     { $src = 'fill'; $signDate = (string)$fl['sign_date']; }
+        elseif ($readAt !== '')               { $src = 'read'; $signDate = substr($readAt, 0, 10); }
+        elseif (!empty($readFlag[$uid]))      { $src = 'read_nodate'; $signDate = ''; }
+        else                                  { $src = 'none'; $signDate = ''; }
 
         $out[] = [
             'user_id'    => $uid,
@@ -485,8 +512,9 @@ function nc_people(PDO $db, int $eventId, string $asof): array
             'position'   => $pNm,
             'mode'       => $modeOf[$uid] ?? 'read',
             'mode_label' => eg_notice_mode_label($modeOf[$uid] ?? 'read'),
-            'read_at'    => $r['read_at'] ?? null,
+            'read_at'    => $readAt ?: null,
             'signed_at'  => $signedAt ?: null,
+            'stamp_src'  => $src,   // sign＝真的回簽／read＝已閱／fill＝列印補簽／none＝完全沒動作（不蓋章）
             'signed_via' => $r['signed_via'] ?? null,
             'reply'      => $r['reply_content'] ?? null,
             'replied_at' => $r['replied_at'] ?? null,
@@ -818,8 +846,12 @@ function nc_print_data(PDO $db, int $eventId, bool $alloc): array
         'content'    => (string)$ev['content'],
         'source'     => (string)$ev['source'],
         'files'      => $files,
+        /* 發文者：①管理員在列印設定填的 → ②公告建立者（部門 職稱 姓名）→ ③來源（多半就是發文的部門名稱）
+           →④留白給紙本手寫。**舊公告有 274 則的 created_by 是空的**（早期資料沒記建立者），
+           沒有第③段的話那幾張印出來發文者會是一片空白，看起來像程式壞了。 */
         'from_text'  => $cfg['from_text'] !== null && $cfg['from_text'] !== ''
-                        ? (string)$cfg['from_text'] : nc_person_label(nc_person($db, (int)$ev['created_by'], $asof)),
+                        ? (string)$cfg['from_text']
+                        : (nc_person_label(nc_person($db, (int)$ev['created_by'], $asof)) ?: trim((string)$ev['source'])),
         'to_text'    => $cfg['to_text'] !== null && $cfg['to_text'] !== ''
                         ? (string)$cfg['to_text'] : nc_targets_text($db, $eventId),
         'maker'      => nc_person($db, $makerId, $asof) + ['date' => (string)($cfg['maker_date'] ?: $asof)],

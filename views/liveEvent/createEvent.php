@@ -1330,9 +1330,10 @@ if (isset($_POST['btn_go_events'])) {
 
                     <h4>列印聯絡單（AS 2-DC-02-01）</h4>
                     <ul>
-                        <li>每一列「操作」欄的 <b>「聯絡單」</b> 按鈕，可以把這則公告 / 通知印成紙本聯絡單。
-                            <b>有回簽的人都會在紙上蓋出圖章</b>（章面日期＝他實際回簽的日期）；
-                            回簽欄<b>只印章、不印名單</b>，沒簽的人不會留空格（章面本來就有姓名與日期）。</li>
+                        <li>每一列「操作」欄的 <b>「聯絡單」</b> 按鈕，可以把這則公告 / 通知印成紙本聯絡單。</li>
+                        <li><b>聯絡單上「蓋章」＝已閱</b>（回簽的人一定也已閱），所以<b>「已回簽」與「已閱」的人都會蓋出圖章</b>。
+                            章面日期的取法：真的回簽過就用<b>回簽日</b>，管理員補簽過就用<b>補簽日</b>，其餘用<b>已閱日</b>。
+                            這一欄<b>只印章、不印名單</b>，「未閱」的人不會留空格（章面本來就有姓名與日期）。</li>
                         <li><b>「製表人」是必填的</b>，沒指定不給列印（預設帶公告建立者）；「核准」可以留白讓紙本手蓋。</li>
                         <li><b>聯絡單號（OI）</b>＝<code>OI</code>＋西元年月日＋當日流水 3 碼，<b>按下「列印」當下才產生</b>（沒印過的公告不佔號）。
                             它和原本的<b>公告編號（PU）</b>存在同一筆資料上，列表的日期欄兩個都看得到，<b>搜尋框打任一個編號都查得到</b>。</li>
@@ -1340,7 +1341,8 @@ if (isset($_POST['btn_go_events'])) {
                             這幾項<b>都由設定推導、不可手填</b>；公司名稱與地址電話取自客戶主檔標記為「本公司」的那一筆。</li>
                         <li>列印跳窗可調整（需<b>「聯絡單列印補簽」權限</b>）：<b>受文者、發文者文字</b>、<b>製表人與核准要蓋誰的章、章面日期</b>、
                             <b>回簽欄要列出哪些人</b>（「列印」欄取消勾選的人就不會出現在紙上）、<b>要不要印出回覆內容</b>。改完按「儲存設定」，下次列印同一則會沿用。</li>
-                        <li><b>補簽</b>：在「補簽」欄勾選還沒簽的人、選好日期再按「補簽勾選的人」。
+                        <li><b>補簽</b>：只有<b>「未閱」</b>（完全沒動作）的人才需要補簽——已閱或已回簽的人本來就會蓋章。
+                            在「補簽」欄勾選、選好日期再按「補簽勾選的人」。
                             <b>一般公告的補簽只影響這張紙上要不要蓋章，不會動到原始回簽紀錄</b>（鈴鐺、已讀 / 應讀、回簽人數一律不變），隨時可以取消。
                             日期<b>不可早於公告 / 通知日期，也不可以是未來</b>，而且<b>只能補被通知的人</b>；這三條前端擋一次、後端再擋一次。每一次補簽都會留下是誰、什麼時候補的稽核紀錄。</li>
                         <li>按下「列印」會依 AS9100 規定留下列印紀錄（誰、什麼時候、從哪一台電腦印的），可在「列印與簽核紀錄」頁查詢。</li>
@@ -1457,6 +1459,7 @@ if (isset($_POST['btn_go_events'])) {
         table.nc-tb .nc-tag { display: inline-block; font-size: 11px; line-height: 16px; padding: 1px 7px; border-radius: 9px; }
         .nc-tag-ok   { background: #e8f3ec; color: #2e7d4f; }
         .nc-tag-fill { background: #f7efe2; color: #8a6a3d; }
+        .nc-tag-read { background: #fdf0dc; color: #a2701f; }
         .nc-tag-no   { background: #f1f3f5; color: #97a3ad; }
         .nc-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin: 10px 0 8px; }
         .nc-btn { height: 30px; padding: 0 13px; border-radius: 4px; font-size: 13px; cursor: pointer; border: 1px solid #D8BE93; background: #fff; color: #5b3a1e; }
@@ -3021,7 +3024,7 @@ if (isset($_POST['btn_go_events'])) {
             h += '<tr><td class="ct-body">' + body + '</td></tr>';
 
             var stamps = signStamps(people);
-            if (stamps) h += '<tr><td class="ct-sign"><div class="ct-sign-h">回簽</div><div class="ct-sw">' + stamps + '</div></td></tr>';
+            if (stamps) h += '<tr><td class="ct-sign"><div class="ct-sign-h">已閱簽章</div><div class="ct-sw">' + stamps + '</div></td></tr>';
 
             var mk = d.maker || {}, ap = d.approver || {};
             h += '<tr><td class="ct-foot"><table class="ct-ft"><tr>'
@@ -3137,23 +3140,30 @@ if (isset($_POST['btn_go_events'])) {
                + (canSign ? '<button type="button" class="nc-btn" id="ncFillSel"><i class="fa fa-pencil"></i> 補簽勾選的人</button>' : '')
                + '<button type="button" class="nc-btn" id="ncChkAll">全部列印</button>'
                + '<button type="button" class="nc-btn" id="ncChkNone">全部不列印</button>'
-               + '<span style="font-size:12.5px;color:#7b8a99;">「列印」欄決定這個人要不要出現在聯絡單的回簽欄。</span>'
+               + '<span style="font-size:12.5px;color:#7b8a99;">聯絡單上<b>蓋章＝已閱</b>（回簽一定也已閱），所以「已回簽」與「已閱」都會蓋章；只有「未閱」的人需要補簽。「列印」欄決定這個人的章要不要印出來。</span>'
                + '</div>';
 
             h += '<table class="nc-tb"><thead><tr><th style="width:56px;">列印</th><th style="width:46px;">補簽</th>'
                + '<th>部門</th><th>職稱</th><th>姓名</th><th style="width:96px;">通知方式</th>'
-               + '<th style="width:150px;">簽署狀態</th><th style="width:120px;">章面日期</th></tr></thead><tbody>';
+               + '<th style="width:150px;">已閱 / 回簽</th><th style="width:120px;">章面日期</th></tr></thead><tbody>';
             var inc = d.include;
             (d.people || []).forEach(function (p) {
                 var on = !inc || inc.indexOf(p.user_id) >= 0;
                 var tag, act = '';
-                if (p.signed_at) {
+                // 蓋章＝已閱（回簽一定也已閱），所以「已回簽」與「已閱」兩種都會在聯絡單上蓋章；
+                // 只有「未閱」＝完全沒動作的人才需要補簽
+                if (p.stamp_src === 'sign') {
                     tag = '<span class="nc-tag nc-tag-ok">已回簽</span>';
-                } else if (p.fill_date) {
+                } else if (p.stamp_src === 'fill') {
                     tag = '<span class="nc-tag nc-tag-fill">列印補簽</span>'
                         + (canSign ? ' <a href="javascript:;" class="nc-undo" data-uid="' + p.user_id + '" style="font-size:11px;color:#c0392b;">取消</a>' : '');
+                } else if (p.stamp_src === 'read') {
+                    tag = '<span class="nc-tag nc-tag-read">已閱</span>';
                 } else {
-                    tag = '<span class="nc-tag nc-tag-no">未簽</span>';
+                    // read_nodate＝舊資料有已閱、但沒留下時間，章面日期不能用編的，請管理員補一個日期
+                    tag = (p.stamp_src === 'read_nodate')
+                        ? '<span class="nc-tag nc-tag-read" title="系統有這個人已閱的紀錄，但舊資料沒有留下時間；章面日期不能用猜的，請補簽指定一個日期">已閱（無日期）</span>'
+                        : '<span class="nc-tag nc-tag-no">未閱</span>';
                     act = '<input type="checkbox" class="nc-fill-cb" data-uid="' + p.user_id + '"' + dis + '>';
                 }
                 h += '<tr class="' + (on ? '' : 'nc-off') + '" data-uid="' + p.user_id + '">'
