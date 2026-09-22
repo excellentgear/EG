@@ -20,7 +20,13 @@ require_once __DIR__ . '/../common/as_doc_import_lib.php';
 require_once __DIR__ . '/../common/attach_lib.php';
 
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
-$isWrite = isset($_POST['action']);
+/* 「這是不是寫入」一律看**請求方法**，不可以看 action 放在哪裡（2026-09-22 測試抓到的真漏洞）。
+   原本寫的是 isset($_POST['action'])，於是只要把 action 改放在查詢字串
+   （POST 到 ?action=save，body 只放資料），CSRF 檢查就整段跳過——
+   而 $action 那一行仍然吃得到 $_GET['action']，端點照常執行。
+   本 API 的讀取端點全部是 GET，所以「POST 進來就是寫入」這個判定是成立的；
+   前端每一支 POST 本來就都有帶 csrf，改嚴不影響既有呼叫端。 */
+$isWrite = ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST';
 
 /* 圖檔輸出不是 JSON，要在設 header 之前處理掉 */
 function adcApiJsonHeader(): void { header('Content-Type: application/json; charset=utf-8'); }
@@ -169,7 +175,13 @@ case 'tpl': {
         'doc_name'  => $ctx['doc_name'],
         'kind'      => $ctx['kind'],
         'level'     => $ctx['doc_level'],
+        // doc_level 是中文（一階／二階／四階），前端不要自己比字串
+        'is_level1' => adt_is_level1($ctx),
         'cfg'       => $ctx['cfg'],
+        // 發行單位：issue_dept 是「實際會印在紙上的那一個」（沒設定時＝文件自己的部門），
+        // dept_label 則是文件自己的部門，設定跳窗要靠它說明「留空會變成什麼」
+        'issue_dept'   => $ctx['issue_dept'],
+        'dept_label'   => $ctx['dept_label'],
         'foot_default' => ADT_FOOT_LEFT_DEFAULT,
         'depts'     => $depts,
         'can_edit'  => !empty($P['edit']),
@@ -311,6 +323,74 @@ case 'fork': {
     $r = adc_version_fork($db, $from, $to, $uid);
     if (empty($r['ok'])) jerr($r['msg']);
     jout(true, ['message' => '已複製 ' . $fv['version'] . ' 版的內容（含 ' . $r['assets'] . ' 張圖）', 'assets' => $r['assets']]);
+}
+
+/* ══════════════ 內文引用的文件編號：待處理／預覽／套用／略過 ══════════════
+   規則一律在 as_doc_ref_lib.php，這裡只守門與轉呼叫（鐵律4）。 */
+
+/** 這個版次有哪些待確認的引用變更（編輯器一開就問，有才跳提示條） */
+case 'ref_pending': {
+    require_once __DIR__ . '/../common/as_doc_ref_lib.php';
+    $vid = (int)($_GET['version_id'] ?? 0);
+    $v   = needVersion($db, $P, $vid);
+    $rows = adr_pending_for_version($db, $vid);
+    $out = [];
+    foreach ($rows as $r) {
+        $out[] = [
+            'id' => (int)$r['id'], 'kind' => $r['src_kind'],
+            'old_no' => $r['src_old_no'], 'new_no' => $r['src_new_no'],
+            'date' => $r['src_date'], 'note' => $r['src_note'],
+            'hits' => (int)$r['hits'], 'pages' => $r['pages'],
+            'hits_list' => $r['hits_list'],
+        ];
+    }
+    // 套用之後版別會變成這個，先算好讓確認畫面直接寫出來（使用者才知道會變 2.1 還是 A.1）
+    jout(true, ['rows' => $out, 'next_version' => adr_next_version((string)$v['version']),
+                'cur_version' => (string)$v['version'], 'can_edit' => !empty($P['edit'])]);
+}
+
+/** 標示過的內文預覽：舊編號畫刪除線、新編號綠底；廢止的只標黃底不給新編號。
+ *  **標示永遠不寫進 as_doc_content**，只在這支即時產生（存進正本就會印出一堆刪除線）。 */
+case 'ref_preview': {
+    require_once __DIR__ . '/../common/as_doc_ref_lib.php';
+    $vid = (int)($_GET['version_id'] ?? 0);
+    $v   = needVersion($db, $P, $vid);
+    $c   = adc_content_by_version($db, $vid);
+    if (!$c) jerr('這個版次還沒有線上版內容');
+    $ids  = array_values(array_filter(array_map('intval', explode(',', (string)($_GET['ids'] ?? '')))));
+    $rows = adr_pending_for_version($db, $vid);
+    if ($ids) $rows = array_values(array_filter($rows, fn($r) => in_array((int)$r['id'], $ids, true)));
+    if (!$rows) jerr('沒有待處理的項目');
+    // 圖片要看得到才能判斷改的位置對不對，所以跟編輯器一樣先把資產編號組回網址
+    $html = adc_hydrate_html($db, (string)$c['content_html'], (int)$c['id'],
+                             'AsDocContent_API.php?action=asset&id=');
+    $mk = adr_mark_html($html, $rows);
+    jout(true, ['html' => $mk['html'], 'marks' => $mk['marks']]);
+}
+
+/** 套用：改內容＋在制修訂紀錄書補一列（版別小數點+1／日期／頁次／摘要） */
+case 'ref_apply': {
+    require_once __DIR__ . '/../common/as_doc_ref_lib.php';
+    $vid = (int)($_POST['version_id'] ?? 0);
+    $v   = needVersion($db, $P, $vid);
+    if (empty($P['edit'])) { http_response_code(403); jerr('沒有修改線上版內容的權限'); }
+    if ((int)$v['is_obsolete'] === 1 && empty($P['admin'])) jerr('這份文件已廢止，只有管理員能改');
+    $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+    $r = adr_apply($db, $vid, is_array($ids) ? $ids : [], $uid, (string)($_SESSION['user_cname'] ?? ''));
+    if (empty($r['ok'])) jerr($r['msg']);
+    jout(true, $r);
+}
+
+/** 略過（這一處確認過不需要改）——留紀錄，不是直接刪掉 */
+case 'ref_dismiss': {
+    require_once __DIR__ . '/../common/as_doc_ref_lib.php';
+    $vid = (int)($_POST['version_id'] ?? 0);
+    needVersion($db, $P, $vid);
+    if (empty($P['edit'])) { http_response_code(403); jerr('沒有修改線上版內容的權限'); }
+    $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+    $r = adr_dismiss($db, $vid, is_array($ids) ? $ids : [], $uid, (string)($_SESSION['user_cname'] ?? ''));
+    if (empty($r['ok'])) jerr($r['msg']);
+    jout(true, $r);
 }
 
 default:

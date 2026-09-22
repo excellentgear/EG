@@ -87,6 +87,37 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
 
         /* 未轉換清單：匯入之後最重要的東西，所以用強調色而且預設展開 */
         .ad-report { border:1px solid #e4b77a; background:#fdf6ea; border-radius:5px; padding:9px 12px; margin-bottom:10px; }
+        /* ── 內文引用的文件編號：提示條與確認跳窗（暖色系，ai-rules/10）── */
+        .ad-ref { border:1px solid #F0A24B; background:#FCEFD9; border-radius:5px; padding:9px 12px; margin-bottom:10px; }
+        .ad-ref-t { color:#8a5a12; font-size:14px; line-height:1.6; }
+        .ad-ref-t b { margin:0 4px; }
+        .ad-ref-b { margin-top:6px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+        .ad-ref-note { font-size:12px; color:#8a6d45; line-height:1.6; }
+        .adr-grid { display:flex; gap:10px; align-items:stretch; }
+        .adr-left { width:360px; flex:0 0 360px; display:flex; flex-direction:column; }
+        .adr-right { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; }
+        .adr-hd { font-size:12px; color:#6B471A; background:#F6EBD9; border:1px solid #E6CFA6;
+                  border-bottom:0; border-radius:4px 4px 0 0; padding:5px 8px;
+                  display:flex; align-items:center; gap:8px; }
+        .adr-hd-n { margin-left:auto; color:#8a6d45; }
+        .adr-list, .adr-prev { border:1px solid #E6CFA6; border-radius:0 0 4px 4px; background:#fff;
+                               overflow:auto; height:420px; }
+        .adr-list { padding:4px; }
+        .adr-it { border:1px solid #EADCC4; border-radius:4px; padding:6px 8px; margin-bottom:5px; }
+        .adr-it.on { border-color:#F0A24B; background:#FFF9F0; }
+        .adr-it-h { font-size:13px; color:#4A3524; line-height:1.6; }
+        .adr-it-h input { margin-right:5px; }
+        .adr-it-s { font-size:11px; color:#8a6d45; line-height:1.6; margin-top:3px; }
+        .adr-hit { font-size:11px; color:#5b4a33; line-height:1.6; border-top:1px dashed #EADCC4;
+                   padding-top:3px; margin-top:3px; }
+        .adr-hit b { color:#8a5a12; }
+        .adr-prev { padding:10px 14px; }
+        .adr-apply { margin-top:8px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+        .adr-will { font-size:12px; color:#8a6d45; line-height:1.6; width:100%; }
+        /* 標示樣式：預覽用，也給列表裡的小字共用 */
+        .adr-old, del.adr-old { color:#A5502E; text-decoration:line-through; background:#FBE6DE; padding:0 2px; }
+        .adr-new, ins.adr-new { color:#3E6B2E; text-decoration:none; background:#E4F2D9; padding:0 2px; font-weight:bold; }
+        .adr-warn, mark.adr-warn { background:#FCE9A8; color:#7a5a12; padding:0 2px; }
         .ad-report h4 { margin:0 0 6px; font-size:14px; color:#8A5A2B; }
         .ad-report ul { margin:0 0 4px 0; padding-left:20px; }
         .ad-report li { font-size:12.5px; line-height:1.75; color:#5a4326; }
@@ -126,6 +157,11 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
         .help-doc ol, .help-doc ul { padding-left:22px; }
         .help-doc .hl { background:#F7E0BD; padding:0 3px; border-radius:2px; }
 
+        .tpl-row { margin-bottom:13px; }
+        .tpl-row > label:first-child { display:block; font-size:13px; color:#6B471A; font-weight:bold; margin-bottom:3px; }
+        .tpl-hint { font-size:12px; color:#8A5A2B; line-height:1.6; margin-top:3px; }
+        .tpl-row.tpl-l1 { display:none; }        /* 只有一階文件才顯示，由 JS 打開 */
+
         @media print { .page-help-btn, .ad-bar, .ad-report, .m-mask { display:none !important; } }
     </style>
 </head>
@@ -154,6 +190,8 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
             <span class="ad-kv">階別 <b><?= htmlspecialchars((string)$V['doc_level']) ?></b></span>
             <span class="ad-kv">版次 <b><?= htmlspecialchars((string)$V['version']) ?></b></span>
             <span class="ad-kv">修訂日 <b id="adRevDate"><?= htmlspecialchars((string)($V['revised_date'] ?: '—')) ?></b></span>
+            <span class="ad-kv">類別 <b id="adKind">—</b></span>
+            <span class="ad-kv" title="印在文件制修訂紀錄書上的「發行單位」">發行單位 <b id="adIssueDept">—</b></span>
             <span id="adPrimaryBadge" class="ad-badge none">尚未建立線上版</span>
             <?php if ((int)$V['current_version_id'] !== (int)$V['version_id']): ?>
               <span class="ad-badge draft" title="這不是目前生效的版次，是歷史版本">歷史版本</span>
@@ -173,6 +211,8 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
               <i class="fa fa-file-word-o"></i> 從 Word 匯入</button>
             <button class="btn btn-default btn-sm" id="btnFork" title="把同一份文件其他版次的線上內容複製過來（含圖片與流程圖）">
               <i class="fa fa-copy"></i> 從其他版次複製</button>
+            <button class="btn btn-default btn-sm" id="btnTpl" title="設定發行單位、頁尾左下文字、一階封面英文與目錄">
+              <i class="fa fa-sliders"></i> 版面設定</button>
             <span style="width:10px"></span>
             <label style="font-weight:normal;font-size:12px;color:#6B471A;margin:0;">
               <input type="checkbox" id="chkPrimary"> 設為此版次的正本
@@ -191,6 +231,20 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
             <button class="btn btn-default btn-sm" id="btnPrint"><i class="fa fa-print"></i> 列印預覽</button>
         </div>
 
+        <!-- 別份文件改了編號或被廢止，而這份線上版的內文還寫著舊編號（2026-09-22 使用者交辦）。
+             預設就展開，不給收起來——收起來等於沒做，印出去的還是指向不存在的編號。 -->
+        <div class="ad-ref" id="adRefBar" style="display:none">
+          <div class="ad-ref-t"><i class="fa fa-exclamation-triangle"></i>
+            <b>內文引用的文件編號需要確認</b>
+            <span id="adRefSum"></span>
+          </div>
+          <div class="ad-ref-b">
+            <button class="btn btn-warning btn-sm" id="btnRefOpen"><i class="fa fa-search"></i> 檢視並確認</button>
+            <span class="ad-ref-note">確認之後會<b>自動補一列制修訂紀錄</b>（版別
+              <span id="adRefNextVer">—</span>、修訂日期＝來源異動日、頁次＝實際改到的頁）。</span>
+          </div>
+        </div>
+
         <div class="ad-report" id="adReport" style="display:none">
           <span class="ad-rp-x" id="adReportX" title="收起">&times;</span>
           <h4><i class="fa fa-info-circle"></i> 這份文件從 Word 匯入的結果</h4>
@@ -203,6 +257,41 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
     </div>
 </div>
 </div>
+
+<!-- 內文引用的文件編號：確認與套用（2026-09-22 使用者交辦） -->
+<div class="m-mask" id="mRef"><div class="m-win" style="width:1000px;max-width:96vw;">
+  <div class="m-head">內文引用的文件編號 — 確認後才會改
+    <span class="m-x" data-close="mRef">&times;</span></div>
+  <div class="m-body">
+    <div class="m-note">
+      別的文件改了編號或被廢止，而這份文件的內文還寫著舊的。<br>
+      <b>編號變更</b>系統已經算好要換成什麼，下方預覽裡<span class="adr-old">舊編號會畫刪除線</span>、<span class="adr-new">新編號是綠底</span>；<br>
+      <b>廢止</b>沒有新編號可以換，只會用<span class="adr-warn">黃底標出來</span>，<b>系統不會自己改</b>——要改指到別份文件還是整段刪掉，請自行編輯。<br>
+      勾選要套用的項目後按「套用」，系統會改內文並<b>在文件制修訂紀錄書補一列</b>。
+    </div>
+    <div class="adr-grid">
+      <div class="adr-left">
+        <div class="adr-hd">
+          <label style="font-weight:normal;margin:0;"><input type="checkbox" id="refAll"> 全選</label>
+          <span class="adr-hd-n" id="refCnt"></span>
+        </div>
+        <div id="refList" class="adr-list"></div>
+        <div class="adr-apply">
+          <div class="adr-will" id="refWill"></div>
+          <button class="btn btn-warning btn-sm" id="btnRefApply"><i class="fa fa-check"></i> 套用並補制修訂紀錄</button>
+          <button class="btn btn-default btn-sm" id="btnRefSkip" title="確認過這幾處不需要改；會留下誰在什麼時候略過的紀錄">
+            這幾處不用改</button>
+        </div>
+      </div>
+      <div class="adr-right">
+        <div class="adr-hd">預覽（<b>只是預覽</b>，這些標示不會存進文件）
+          <span class="adr-hd-n" id="refMarks"></span></div>
+        <div id="refPrev" class="adr-prev eg-docbody"></div>
+      </div>
+    </div>
+  </div>
+  <div class="m-foot"><button class="btn btn-default btn-sm" data-close="mRef">關閉</button></div>
+</div></div>
 
 <!-- 插入圖片 -->
 <div class="m-mask" id="mUpload"><div class="m-win">
@@ -263,6 +352,60 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
   </div>
 </div></div>
 
+<!-- 版面設定（發行單位／頁尾左下文字／一階封面英文／目錄） -->
+<div class="m-mask" id="mTpl"><div class="m-win">
+  <div class="m-head">版面設定 <span class="m-x" data-close="mTpl">&times;</span></div>
+  <div class="m-body">
+    <div class="m-note">
+      這裡設定的是<b>整份文件</b>（<span id="tplDocNo"></span>）的版面，<b>所有版次共用</b>；
+      內容本身仍然逐版次各自編輯。<br>
+      封面、文件制修訂紀錄書、目錄、每一頁的頁首頁尾都是<b>系統自動產生</b>的，
+      下面這幾項是少數沒辦法從資料推導、需要管理員指定的。
+    </div>
+
+    <div class="tpl-row">
+      <label>發行單位</label>
+      <select id="tplDept" class="form-control" data-eg-filter="輸入部門名稱篩選…"></select>
+      <div class="tpl-hint">
+        印在文件制修訂紀錄書下方的「發行單位」。
+        留空＝用這份文件自己隸屬的部門（目前是 <b id="tplDeptFallback">—</b>）。
+      </div>
+    </div>
+
+    <div class="tpl-row">
+      <label>頁尾左下文字</label>
+      <input type="text" id="tplFoot" class="form-control" maxlength="120"
+             data-eg-hint="留空就會印預設的「(本文件不得擅自塗改或影印)」">
+      <div class="tpl-hint">
+        每一頁的左下角。留空＝印預設值 <b id="tplFootDefault"></b>。
+        （右下角固定是 AS 文件編號，不可更改）
+      </div>
+    </div>
+
+    <div class="tpl-row tpl-l1">
+      <label>封面英文書名</label>
+      <input type="text" id="tplCoverEn" class="form-control" maxlength="255"
+             data-eg-hint="例：QUALITY MANUAL">
+      <div class="tpl-hint">
+        一階文件封面外框內、中文文件名稱下方的那一行英文。只有<b>一階（品質手冊）</b>會用到。
+      </div>
+    </div>
+
+    <div class="tpl-row tpl-l1">
+      <label>目錄頁</label>
+      <label style="font-weight:normal;font-size:13px;color:#6B471A;margin:0;">
+        <input type="checkbox" id="tplToc"> 自動產生目錄頁（排在制修訂紀錄書之後）
+      </label>
+      <div class="tpl-hint">目錄依正文裡的標題自動產生，不必自己維護。只有<b>一階</b>會用到。</div>
+    </div>
+  </div>
+  <div class="m-foot">
+    <span id="tplMsg" style="float:left;color:#8A5A2B;font-size:12px;line-height:28px"></span>
+    <button class="btn btn-default btn-sm" data-close="mTpl">取消</button>
+    <button class="btn btn-warning btn-sm" id="btnTplSave"><i class="fa fa-save"></i> 存檔</button>
+  </div>
+</div></div>
+
 <!-- 使用說明（鐵律7） -->
 <div class="m-mask" id="helpUseMask"><div class="m-win wide">
   <div class="m-head">使用說明 — AS 文件線上版編輯器 <span class="m-x" data-close="helpUseMask">&times;</span></div>
@@ -281,6 +424,26 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
       <li><b>插入圖片</b>：按「插入圖片」上傳，之後點一下圖片可改寬度、對齊、裁切。</li>
       <li><b>存檔</b>（Ctrl+S）。確認整份沒問題之後再勾<span class="hl">「設為此版次的正本」</span>。</li>
     </ol>
+
+    <h4>封面、制修訂紀錄書、目錄、頁首頁尾都不必自己打</h4>
+    <p>這幾頁是<span class="hl">系統自動產生</span>的，你只要編正文：</p>
+    <ul>
+      <li><b>文件制修訂紀錄書</b>：公司中文全名取自客戶主檔裡標記為「本公司」的那一筆（發票用全名）、
+          第二列是公司英文全名；左上放大置中顯示這份 AS 文件的名稱、右上是文件編號；
+          文件類別依階別自動顯示（一階＝品質手冊(1)、二階＝程序書(2)）。
+          底下的制修訂紀錄<span class="hl">逐列帶出這份文件的版次履歷</span>，
+          制修訂部門自動帶入文件隸屬的部門（是「組」時會一併顯示上層，例：資材課 倉管組）。</li>
+      <li><b>每一頁的頁首</b>（二階第二頁起）：公司英文＋中文、右上 AS 文件編號、頁次／總頁次自動編號。
+          <b>頁版別</b>會依制修訂紀錄裡的「制修訂頁次」<span class="hl">自動跳版</span>——
+          寫「全冊」就整份跟著跳，寫「4」或「4,5」或「4-6」就只有那幾頁跳。</li>
+      <li><b>頁尾</b>：左下是固定字樣、右下固定是 AS 文件編號。</li>
+      <li><b>一階文件</b>另外會自動產生封面頁與目錄頁。</li>
+    </ul>
+    <p>其中只有四項系統推導不出來，需要管理員在工具列的
+       <span class="hl">「版面設定」</span>指定：<b>發行單位</b>（不指定就用文件自己的部門）、
+       <b>頁尾左下文字</b>（不填就印「(本文件不得擅自塗改或影印)」）、
+       <b>一階封面的英文書名</b>、<b>要不要自動產生目錄頁</b>。
+       這四項是掛在「文件」上的，<span class="hl">所有版次共用</span>。</p>
 
     <h4>重要行為與常見疑問</h4>
     <ul>
@@ -431,8 +594,132 @@ function load() {
                 });
             })();
         }
+        loadRef();                 // 內文引用的文件編號有沒有待確認的
     });
 }
+
+/* ── 內文引用的文件編號：待確認 → 預覽標示 → 套用（2026-09-22 使用者交辦）───────
+   別份文件改了編號或被廢止時，AS_Document_API 會掃過所有線上版內文並建立待處理列。
+   這裡負責讓使用者**看到每一處改在哪**再決定，規則全部在 as_doc_ref_lib.php。 */
+var REF = [];            // 待確認清單
+var REF_PICK = {};       // id → 勾了沒
+var REF_NEXT = '';       // 套用之後的版別
+
+function loadRef() {
+    $.getJSON(API, { action:'ref_pending', version_id: VID }, function(r){
+        if (!r || !r.success) return;
+        REF = r.rows || [];
+        REF_NEXT = r.next_version || '';
+        if (!REF.length) { $('#adRefBar').hide(); return; }
+        var hits = 0, obs = 0;
+        REF.forEach(function(x){ hits += (x.hits || 0); if (x.kind === 'obsolete') obs++; });
+        $('#adRefSum').text('：' + REF.length + ' 個編號、共 ' + hits + ' 處'
+            + (obs ? ('（其中 ' + obs + ' 個是廢止，系統不會自動改）') : ''));
+        $('#adRefNextVer').text((r.cur_version || '—') + ' → ' + REF_NEXT);
+        $('#adRefBar').show();
+    });
+}
+
+function refPickedIds() {
+    return REF.filter(function(x){ return REF_PICK[x.id]; }).map(function(x){ return x.id; });
+}
+function refPaintList() {
+    var h = REF.map(function(x){
+        var on = !!REF_PICK[x.id];
+        var head = x.kind === 'obsolete'
+            ? ('<span class="adr-warn">' + esc(x.old_no) + '</span> 已廢止')
+            : ('<span class="adr-old">' + esc(x.old_no) + '</span> → <span class="adr-new">' + esc(x.new_no) + '</span>');
+        var hits = (x.hits_list || []).map(function(t){
+            return '<div class="adr-hit"><b>正文第 ' + t.page + ' 頁</b>　…'
+                 + esc(t.before) + '<b>' + esc(t.old) + '</b>' + esc(t.after) + '…</div>';
+        }).join('');
+        return '<div class="adr-it' + (on ? ' on' : '') + '">'
+             + '<div class="adr-it-h"><label style="font-weight:normal;margin:0;">'
+             + '<input type="checkbox" class="refChk" value="' + x.id + '"' + (on ? ' checked' : '') + '>'
+             + head + '　<span style="color:#8a6d45;">' + x.hits + ' 處</span></label></div>'
+             + '<div class="adr-it-s">' + esc(x.note || '') + (x.date ? ('　異動日 ' + esc(x.date)) : '') + '</div>'
+             + hits + '</div>';
+    }).join('');
+    $('#refList').html(h || '<div style="padding:12px;color:#8a6d45;">沒有待確認的項目。</div>');
+    $('#refCnt').text('共 ' + REF.length + ' 個編號');
+    refPaintWill();
+}
+function refPaintWill() {
+    var ids = refPickedIds();
+    if (!ids.length) { $('#refWill').html('<span style="color:#DD5138;">請先勾選要套用的項目。</span>'); return; }
+    var picked = REF.filter(function(x){ return REF_PICK[x.id]; });
+    var pages = {}, dates = [];
+    picked.forEach(function(x){
+        String(x.pages || '').split(',').forEach(function(p){ p = p.trim(); if (p) pages[+p] = 1; });
+        if (x.date) dates.push(x.date);
+    });
+    dates.sort();
+    var ps = Object.keys(pages).map(Number).sort(function(a,b){ return a-b; });
+    $('#refWill').html('套用後會補一列制修訂紀錄：版別 <b>' + esc(REF_NEXT) + '</b>'
+        + '、修訂日期 <b>' + esc(dates.length ? dates[dates.length-1] : '（今天）') + '</b>'
+        + '、制修訂頁次 <b>' + (ps.length ? ('第 ' + ps.join('、') + ' 頁') : '—') + '</b>（正文頁碼）。');
+}
+function refPaintPreview() {
+    var ids = refPickedIds();
+    if (!ids.length) { $('#refPrev').html('<div style="color:#8a6d45;">勾選左邊的項目就會在這裡標出來。</div>'); $('#refMarks').text(''); return; }
+    $('#refPrev').html('<div style="color:#8a6d45;">載入中…</div>');
+    $.getJSON(API, { action:'ref_preview', version_id: VID, ids: ids.join(',') }, function(r){
+        if (!r || !r.success) { $('#refPrev').html('<div style="color:#DD5138;">' + esc((r||{}).message || '載入失敗') + '</div>'); return; }
+        // 這是後端已經清洗過的內容再加上 del/ins/mark 標示，直接放進預覽區
+        $('#refPrev').html(r.html || '<div style="color:#8a6d45;">這個版次沒有內容。</div>');
+        $('#refMarks').text('標出 ' + (r.marks || 0) + ' 處');
+    });
+}
+$('#btnRefOpen').on('click', function(){
+    REF_PICK = {};
+    // 預設把「編號變更」全勾起來（那種系統算得出正確答案）；廢止的不預設勾，要人自己決定
+    REF.forEach(function(x){ if (x.kind !== 'obsolete') REF_PICK[x.id] = true; });
+    $('#refAll').prop('checked', REF.length > 0 && refPickedIds().length === REF.length);
+    refPaintList(); refPaintPreview();
+    openMask('mRef');
+});
+$(document).on('change', '.refChk', function(){
+    REF_PICK[+this.value] = this.checked;
+    $(this).closest('.adr-it').toggleClass('on', this.checked);
+    $('#refAll').prop('checked', refPickedIds().length === REF.length && REF.length > 0);
+    refPaintWill(); refPaintPreview();
+});
+$('#refAll').on('change', function(){
+    var on = this.checked;
+    REF.forEach(function(x){ REF_PICK[x.id] = on; });
+    refPaintList(); refPaintPreview();
+});
+$('#btnRefApply').on('click', function(){
+    var ids = refPickedIds();
+    if (!ids.length) { alert('請先勾選要套用的項目'); return; }
+    var obs = REF.filter(function(x){ return REF_PICK[x.id] && x.kind === 'obsolete'; });
+    var msg = '將套用 ' + ids.length + ' 個編號的變更，並在文件制修訂紀錄書補一列（版別 ' + REF_NEXT + '）。\n';
+    if (obs.length) msg += '\n注意：其中 ' + obs.length + ' 個是「廢止」，系統不會自動改內文，'
+                         + '只會記進制修訂摘要，請自行編輯內文。\n';
+    if (DIRTY) msg += '\n你目前有未存檔的變更，套用會以「已存檔的內容」為準，請先存檔。\n';
+    if (!confirm(msg + '\n確定要套用嗎？')) return;
+    NProgress.start();
+    $.post(API, { action:'ref_apply', version_id: VID, ids: JSON.stringify(ids), csrf: CSRF }, function(r){
+        NProgress.done();
+        if (!r || !r.success) { alert((r||{}).message || '套用失敗'); return; }
+        closeMask('mRef');
+        alert('已套用。\n版別：' + r.version + '\n修訂日期：' + r.date
+            + '\n制修訂頁次：' + (r.pages || '—')
+            + '\n制修訂摘要：' + (r.summary || '')
+            + '\n\n（線上版的送審／自動簽核還沒做，之後會接上這裡。）');
+        // 版次換了，網址要跟著換，不然重新整理會回到舊版次
+        location.href = 'as_doc_editor.php?version_id=' + r.version_id;
+    }, 'json');
+});
+$('#btnRefSkip').on('click', function(){
+    var ids = refPickedIds();
+    if (!ids.length) { alert('請先勾選要略過的項目'); return; }
+    if (!confirm('確認這 ' + ids.length + ' 個編號不需要改？\n會留下是誰在什麼時候略過的紀錄，之後不再提示。')) return;
+    $.post(API, { action:'ref_dismiss', version_id: VID, ids: JSON.stringify(ids), csrf: CSRF }, function(r){
+        if (!r || !r.success) { alert((r||{}).message || '失敗'); return; }
+        closeMask('mRef'); loadRef();
+    }, 'json');
+});
 
 function fmt(s) {
     if (!s) return '';
@@ -493,9 +780,64 @@ function loadChrome(cb) {
     });
 }
 function paintTplBar(r) {
-    $('#adKind').text(r.kind || '');
-    $('#adIssueDept').text((r.cfg && r.cfg.issue_dept_id) ? '' : '');
+    $('#adKind').text(r.kind || '—');
+    // 顯示「實際會印出來的那一個」：沒設定時是文件自己的部門，所以永遠不會是空白；
+    // 是自動帶入的就標一下，管理員才知道它可以改
+    var auto = !(r.cfg && Number(r.cfg.issue_dept_id) > 0);
+    $('#adIssueDept').text(r.issue_dept || '—')
+        .attr('title', auto ? '沒有特別設定，自動帶入這份文件隸屬的部門' : '由版面設定指定');
+    $('#adIssueDept').next('.ad-auto').remove();
+    if (auto && r.issue_dept) $('#adIssueDept').after('<span class="ad-auto" style="font-size:11px;color:#A8804C">（自動）</span>');
 }
+
+/* ── 版面設定 ─────────────────────────────────────────────────────────────
+   只有這四項沒辦法從資料推導，其餘（公司名、文件名稱與編號、類別、制修訂紀錄、
+   制修訂部門、頁次、頁版別）一律自動帶入，所以這個跳窗刻意就只有這四格。
+   設定是掛在「文件」上的，所有版次共用。 */
+$('#btnTpl').on('click', function(){
+    if (!TPL) { alert('版面資料還在載入中，請稍候再試一次。'); return; }
+    var cfg = TPL.cfg || {};
+    $('#tplDocNo').text((TPL.doc_no || '') + ' ' + (TPL.doc_name || ''));
+    $('#tplFootDefault').text(TPL.foot_default || '');
+    $('#tplDeptFallback').text(TPL.dept_label || '（這份文件沒有設定隸屬部門）');
+
+    var cur = Number(cfg.issue_dept_id || 0);
+    $('#tplDept').html(
+        '<option value="0">（不指定，用文件自己的部門：' + esc(TPL.dept_label || '—') + '）</option>' +
+        (TPL.depts || []).map(function(d){
+            return '<option value="' + d.id + '"' + (Number(d.id) === cur ? ' selected' : '') + '>' +
+                   esc(d.label || d.name) + '</option>';
+        }).join('')
+    ).trigger('change');          // 讓共用的打字篩選框重新取一次選項快照
+
+    $('#tplFoot').val(cfg.foot_left || '');
+    $('#tplCoverEn').val(cfg.cover_en || '');
+    $('#tplToc').prop('checked', !(String(cfg.toc_on) === '0'));
+    // 封面英文與目錄只有一階用得到，二階以下顯示出來只會讓人以為設了有效
+    // （階別存的是中文，判定由後端給旗標，前端不自己比字串）
+    $('.tpl-l1').toggle(!!TPL.is_level1);
+    $('#tplMsg').text('');
+    $('#btnTplSave').prop('disabled', !CAN_EDIT);
+    openMask('mTpl');
+});
+$('#btnTplSave').on('click', function(){
+    var $b = $(this).prop('disabled', true);
+    $('#tplMsg').text('存檔中…');
+    $.post(API, {
+        action: 'tpl_save', csrf: CSRF, version_id: VID,
+        issue_dept_id: $('#tplDept').val() || 0,
+        foot_left:     $('#tplFoot').val(),
+        cover_en:      $('#tplCoverEn').val(),
+        toc_on:        $('#tplToc').prop('checked') ? 1 : 0
+    }, function(r){
+        $b.prop('disabled', false);
+        if (!r.success) { $('#tplMsg').text(''); alert(r.message || '設定存檔失敗'); return; }
+        $('#tplMsg').text('');
+        closeMask('mTpl');
+        // 版面是後端產生的，存完一定要重新拿一次，畫面上的封面／頁尾才會跟著變
+        loadChrome(function(){ $('#adSaved').text('版面設定已存檔').show(); });
+    }, 'json');
+});
 
 /* ── 建立編輯器（圖片/流程圖/裁切都掛回呼，共用元件不碰模組 API）────────── */
 function mkEditor() {

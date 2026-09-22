@@ -119,6 +119,16 @@ function adt_dept_label(PDO $db, int $deptId): string
     } catch (Throwable $e) { return ''; }
 }
 
+/**
+ * 是不是一階（品質手冊）——只有一階有封面頁。
+ * as_document.doc_level 存的是中文「一階／二階／四階」不是數字，
+ * 判定寫在這裡一處，前端也是拿 API 回傳的旗標，不要在別的地方再比對一次字串。
+ */
+function adt_is_level1(array $ctx): bool
+{
+    return ((string)($ctx['doc_level'] ?? '')) === '一階';
+}
+
 /** 文件類別顯示字樣：一階＝品質手冊(1)、二階＝程序書(2)、三階＝指導書(3)、四階＝表單(4) */
 function adt_kind_label(?string $level): string
 {
@@ -190,6 +200,10 @@ function adt_parse_pages(?string $s): ?array
     if ($s === '') return [];
     // 全冊／全部／all：整份都更新
     if (preg_match('/全\s*冊|全\s*部|all/iu', $s)) return null;
+    // 範圍符號現場實際會寫成 ~ ～ － – —（不是只有半形 -），
+    // 全部先正規化成 '-'，否則「39~43」會被當成兩個獨立頁碼、中間 40~42 不會跳版
+    //（1-GM-01 的制修訂紀錄就是寫「4、23、39~43」）
+    $s = str_replace(['～', '〜', '－', '–', '—', '‐', '~'], '-', $s);
     $out = [];
     foreach (preg_split('/[^\d\-]+/', $s) as $part) {
         $part = trim($part);
@@ -352,8 +366,7 @@ function adt_footer_html(array $ctx): string
 function adt_system_pages(array $ctx, array $contentPages): array
 {
     $out = [];
-    $isL1 = ($ctx['doc_level'] === '一階');
-    if ($isL1) $out[] = ['key' => 'cover', 'label' => '封面', 'html' => adt_cover_html($ctx)];
+    if (adt_is_level1($ctx)) $out[] = ['key' => 'cover', 'label' => '封面', 'html' => adt_cover_html($ctx)];
     $out[] = ['key' => 'revlog', 'label' => '文件制修訂紀錄書', 'html' => adt_revlog_html($ctx)];
     // 目錄一律依設定決定（不要再看頁數）：編輯器剛匯入時內容還沒分頁，
     // 用頁數判斷會出現「存檔前沒有目錄、存檔後才冒出來」這種不可預期的行為
