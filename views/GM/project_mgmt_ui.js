@@ -436,7 +436,9 @@ function scopeHintText(sel, cands) {
 }
 /* 勾選只改畫面，跟其他欄位一起按「儲存」才寫入（避免點一下就送一次 API） */
 /* 設定頁的「加工圖面標籤」勾選（按「儲存設定」才寫入） */
-$(document).on('click', '#setDwgCats .pj-tag[data-dwgcat]', function () { $(this).toggleClass('on'); });
+$(document).on('click', '#setDwgCats .pj-tag[data-dwgcat], #setO2pCats .pj-tag[data-o2pcat]', function () {
+    $(this).toggleClass('on');
+});
 
 $(document).on('click', '#eScopeBar .pj-tag[data-scope]', function () {
     if ($(this).hasClass('ro')) return;
@@ -2469,7 +2471,7 @@ function openO2P(forceMode) {
     $('#o2pOwner').html(ownerOpt || '<option value="">（沒有符合資格的人員，請洽管理員設定）</option>');
     $('#oCust').val('');   /* 客戶改為模糊輸入（客戶ID或名稱），不再提供下拉 */
     renderTagPick('o2pTagBar', 'project', [], true);
-    $('#oBody').html('<tr><td colspan="9" style="padding:12px;color:#8a6d45;">請先按「查詢」</td></tr>');
+    $('#oBody').html('<tr><td colspan="10" style="padding:12px;color:#8a6d45;">請先按「查詢」</td></tr>');
     $('#oCount').text('');
 
     /* 從專案詳情按「加入訂單」進來時，直接鎖定 append 模式並選好目標專案 */
@@ -2490,25 +2492,67 @@ $(document).on('change', 'input[name=o2pMode]', function () {
     $('#o2pAppendBox').toggle(m === 'append');
 });
 $(document).on('click', '#btnOSearch', function () {
-    $('#oBody').html('<tr><td colspan="9" style="padding:12px;color:#8a6d45;">查詢中…</td></tr>');
+    $('#oBody').html('<tr><td colspan="10" style="padding:12px;color:#8a6d45;">查詢中…</td></tr>');
     api('order_candidates', {
         kw: $('#oKw').val(), cust: $('#oCust').val(), from: $('#oFrom').val(), to: $('#oTo').val(),
-        include_closed: $('#oClosed').is(':checked') ? 1 : 0
+        include_closed: $('#oClosed').is(':checked') ? 1 : 0,
+        first_only: $('#oFirst').is(':checked') ? 1 : 0
     }).done(function (res) {
-        var rows = res.rows || [];
-        $('#oCount').text('找到 ' + rows.length + ' 張未綁定的訂單' + (rows.length >= 500 ? '（僅顯示前 500 張，請縮小條件）' : ''));
-        if (!rows.length) { $('#oBody').html('<tr><td colspan="9" style="padding:12px;color:#8a6d45;">沒有符合條件的訂單</td></tr>'); return; }
+        var rows = res.rows || [], items = res.ready_items || {};
+        $('#oCount').text('找到 ' + rows.length + ' 張未綁定的訂單'
+            + ($('#oFirst').is(':checked') ? '（只列第一次下訂）' : '')
+            + (rows.length >= 500 ? '（僅顯示前 500 張，請縮小條件）' : ''));
+        if (!rows.length) { $('#oBody').html('<tr><td colspan="10" style="padding:12px;color:#8a6d45;">沒有符合條件的訂單</td></tr>'); return; }
         var h = '';
         $.each(rows, function (i, o) {
             h += '<tr><td><input type="checkbox" class="o-ck" value="' + o.Order_id + '" data-eg-skip="1"></td>'
               + '<td>' + esc(o.Order_oo) + '</td><td>' + esc(o.C_order || '') + '</td>'
               + '<td>' + esc(o.Client_name || '') + '</td><td>' + esc(o.part_no) + '</td>'
               + '<td>' + num(o.Qty) + '</td><td>' + dispDate(o.Order_date) + '</td>'
-              + '<td>' + dispDate(o.Delivery_date) + '</td><td>' + esc(o.Processing_items || '') + '</td></tr>';
+              + '<td>' + dispDate(o.Delivery_date) + '</td>'
+              + '<td title="' + esc(o.first_why || '') + '">' + firstBadge(o.is_first) + '</td>'
+              + '<td>' + readyCells(o, items) + '</td></tr>';
         });
         $('#oBody').html(h);
     });
 });
+
+function firstBadge(v) {
+    if (v === null || v === undefined) return '<span class="pj-hint">？</span>';
+    return num(v) ? '<span class="st st-approved">首次</span>' : '<span class="pj-hint">－</span>';
+}
+
+/* 資料完整度：每一項一顆小籤，點下去開新分頁核對那份資料（使用者要求「可以點擊開啟資料確認」）。
+   檢驗表尚未電子化＝灰籤「未電子化」，不列入分母。 */
+function readyCells(o, items) {
+    var r = o.ready || {}, pk = num(o.ds_pk), pn = o.part_no || '';
+    var url = {
+        order : '/EGsystem/src/store/_cleanNewOrder_Track.php',
+        bom   : '/EGsystem/views/pm/bom_viewer.php?pk=' + pk + '&d_id=' + encodeURIComponent(pn),
+        ship  : '/EGsystem/views/Sales/Shipping_Analysis_new.php?kw=' + encodeURIComponent(pn),
+        work  : '/EGsystem/views/pm/bom_viewer.php?pk=' + pk + '&d_id=' + encodeURIComponent(pn),
+        attach: '/EGsystem/views/pm/part_viewer.php?pk=' + pk + '&d_id=' + encodeURIComponent(pn)
+    };
+    var h = '<div style="display:flex;flex-wrap:nowrap;gap:2px;align-items:center;">';
+    $.each(items, function (k, pair) {
+        var full = pair[0] || pair, shortLbl = pair[1] || pair[0] || pair;
+        var v = r[k];
+        if (v === null || v === undefined) {
+            h += '<span class="rdy rdy-na" title="' + esc(full) + '目前還沒有電子化，無法自動確認">' + esc(shortLbl) + '</span>';
+            return;
+        }
+        var cls = num(v) ? 'rdy-ok' : 'rdy-no';
+        var u = url[k] || '';
+        var tip = full + '：' + (num(v) ? '有資料' : '查不到資料') + (u ? '（點開核對）' : '');
+        h += u
+            ? '<a class="rdy ' + cls + '" href="' + u + '" target="_blank" rel="noopener" title="' + esc(tip) + '">'
+              + (num(v) ? '✓' : '✗') + esc(shortLbl) + '</a>'
+            : '<span class="rdy ' + cls + '" title="' + esc(tip) + '">' + (num(v) ? '✓' : '✗') + esc(shortLbl) + '</span>';
+    });
+    h += '<b style="margin-left:4px;color:' + (num(o.ready_pct) === 100 ? '#2E7D32' : '#8a6d45') + ';">'
+       + num(o.ready_pct) + '%</b></div>';
+    return h;
+}
 $(document).on('change', '#oCkAll', function () { $('.o-ck').prop('checked', $(this).is(':checked')); });
 $(document).on('click', '#btnO2pGo', function () {
     var ids = [];
@@ -2982,6 +3026,14 @@ function openSetting() {
         });
         $('#setDwgCats').html(ch || '<span class="pj-hint">目前沒有啟用中的附件標籤。</span>');
 
+        var on2 = String(s.o2p_attach_cats || '').split(',').map(num);
+        var ch2 = '';
+        $.each(res.attach_cats || [], function (i, c) {
+            ch2 += '<span class="pj-tag' + ($.inArray(num(c.id), on2) >= 0 ? ' on' : '') + '" data-o2pcat="' + c.id + '">'
+                 + esc(c.category_name) + '</span>';
+        });
+        $('#setO2pCats').html(ch2 || '<span class="pj-hint">目前沒有啟用中的附件標籤。</span>');
+
         /* 專案負責人資格（部門×職稱） */
         var odOpt = '<option value="">（請選擇部門）</option>';
         $.each(META.depts || [], function (i, x) { odOpt += '<option value="' + x.id + '">' + esc(x.name) + '</option>'; });
@@ -3151,6 +3203,7 @@ $(document).on('click', '#btnSetSave', function () {
         block_close_on_missing: $('#setBlockClose').is(':checked') ? '1' : '0',
         plan_stamp_tpl_id: $('#setPlanTpl').val() || '0', card_stamp_tpl_id: $('#setCardTpl').val() || '0',
         drawing_attach_cats: $('#setDwgCats .pj-tag.on').map(function () { return num($(this).data('dwgcat')); }).get().join(','),
+        o2p_attach_cats: $('#setO2pCats .pj-tag.on').map(function () { return num($(this).data('o2pcat')); }).get().join(','),
         task_owner_depts: pickedTaskDepts().join(','),
         seed_template: JSON.stringify(collectSeedTpl()),
         owner_scope: JSON.stringify($.map(OWN_SCOPE, function (r) { return { d: num(r.d), p: num(r.p) }; }))

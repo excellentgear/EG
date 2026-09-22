@@ -18,6 +18,11 @@ var ROWS = [];              // 目前清單（全部，分頁在前端做）
 var PAGE = 1, PER = 8;   // 每頁預設 8 筆（使用者 2026-09-21 指定）
 var CUR = null;             // 目前打開的文件 detail
 var NEW = {};               // 新增跳窗目前的狀態（綁定對象、自動名稱有沒有被改過）
+/* 剛按「新增」建出來、**還沒存過任何內容**的文件；關掉文件跳窗就自動刪除
+   （使用者 2026-09-22：「建立完文件未存檔就自動視為刪除」）。
+   FRESH 只在「建立當下」設起來，之後只要對這份文件有任何一次寫入成功就清掉（見 api()）。 */
+var FRESH = null;           // {doc_id, ver_id, title}
+var DIRTY = false;          // 文件跳窗打開之後有沒有被動過（決定要不要問一句再刪）
 
 function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -34,6 +39,49 @@ function closeMask(id) {
        關掉時一定要把內容清掉：不清的話，只要有哪一次跳窗被打開卻沒重組內容（例如按到一個
        其實不存在的按鈕），畫面上就會出現**上一次用剩的舊內容**，看起來像「下拉選單內容不一樣」。 */
     if (id === 'maskPick') { $('#pickBody').empty(); $('#pickTitle').text('挑選'); }
+    /* 看圖視窗：關掉時一定要把「釘在旁邊」的狀態也還原，否則下次開會是一個釘在上次位置的小窗 */
+    if (id === 'maskImg') {
+        $('#maskImg').removeClass('pin').find('.ss-modal').css({ left: '', top: '' });
+        $('#imgPin').text('釘在旁邊');
+    }
+    if (id === 'maskDoc') {
+        closeMask('maskImg');       // 圖面看到一半關掉文件，那張浮在畫面上的圖要跟著收起來
+        ssFreshDiscard();           // 建立完沒存檔＝自動刪除
+    }
+}
+/** 右下角的小提示（沒有阻斷性，不必按確定） */
+function ssToast(msg) {
+    var $t = $('#ssToast');
+    if (!$t.length) $t = $('<div id="ssToast"></div>').appendTo('body');
+    $t.text(msg).addClass('on');
+    clearTimeout(ssToast._t);
+    ssToast._t = setTimeout(function () { $t.removeClass('on'); }, 4000);
+}
+/**
+ * 建立完卻一個字都沒存過的文件，關掉文件跳窗時自動刪除（使用者 2026-09-22 要求）。
+ * 不這樣做的話，按了「新增」又改變主意，清單上就會永遠留一份空殼草稿，而且它還會佔住
+ * 「同一個對象＋同一個製程只能有一份」的名額，下次要建同一份時反而被自己擋下來。
+ *
+ * 動過但沒存的情形**刻意問一句**：那是使用者真的填了東西只是忘了按存檔，
+ * 直接刪掉就是把人家打的字丟掉（自動刪除的本意是清空殼，不是清內容）。
+ */
+function ssFreshDiscard() {
+    var f = FRESH;
+    if (!f || !num(f.doc_id)) return;
+    FRESH = null;
+    if (DIRTY) {
+        if (confirm('「' + (f.title || '這份文件') + '」還沒有存過檔。\n\n'
+                  + '按【確定】先存檔留下來。\n'
+                  + '按【取消】直接刪除這份文件，剛才填的內容不會留下。')) {
+            openMask('maskDoc');    // 先開回來：存檔若被擋下（例如製程只打字沒挑），使用者才看得到要修哪裡
+            saveDoc(function () { closeMask('maskDoc'); load(true); });
+            return;
+        }
+    }
+    post('doc_delete', { doc_id: num(f.doc_id) }, function () {
+        load(true);
+        ssToast('「' + (f.title || '未命名') + '」建立後沒有存檔，已自動刪除。');
+    });
 }
 $(document).on('click', '[data-close]', function () { closeMask($(this).data('close')); });
 /* 點跳窗外面（遮罩）才關閉，而且**一定要「按下」與「放開」都在遮罩上**。
@@ -62,6 +110,9 @@ function api(action, data, cb, method) {
     $.ajax({ url: SS_API, type: method || 'GET', data: d, dataType: 'json' })
         .done(function (res) {
             if (!res || !res.success) { alert((res && res.message) || '操作失敗'); return; }
+            /* 這份文件只要有過任何一次寫入成功（存檔、送簽、帶圖面、上傳附件、改綁定、手動刪除…），
+               它就不再是「建立完沒存檔」的空殼，關掉時絕對不可以再自動刪掉它 */
+            if ((method || 'GET') === 'POST' && FRESH && $('#maskDoc').hasClass('on')) FRESH = null;
             if (cb) cb(res);
         })
         .fail(function (x) { alert('連線失敗（' + x.status + '）' + (x.responseText || '').slice(0, 200)); });
@@ -569,6 +620,8 @@ $('#nSave').on('click', function () {
         apply_default: $('#nApplyTpl').is(':checked') ? 1 : 0
     }, function (res) {
         closeMask('maskNew');
+        /* 剛建出來、還沒存過內容：關掉文件跳窗就自動刪除（見 ssFreshDiscard 的說明） */
+        FRESH = { doc_id: num(res.doc_id), ver_id: num(res.ver_id), title: $('#nTitle').val() || '' };
         load();
         openDoc(num(res.ver_id));
     });
@@ -781,9 +834,10 @@ function equipHtml() {
 function stepsHtml() {
     var ro = CUR.can_edit ? '' : ' readonly', dis = CUR.can_edit ? '' : ' disabled';
     var h = '<div class="sec"><h5>操作步驟'
-          + '<span class="muted-help">最後一列按 ↓ 自動加一列；沒填東西的末列按 ↑ 自動移除</span></h5>'
+          + '<span class="muted-help">最後一列按 ↓ 自動加一列；沒填東西的末列按 ↑ 自動移除'
+          + (CUR.can_edit ? '；<b>按住最左邊的「☰ 項次」上下拖曳可以調整順序</b>' : '') + '</span></h5>'
           + '<table class="grid" id="tblSteps"><thead><tr>'
-          + '<th style="width:44px;">項次</th><th style="width:130px;">名稱</th><th style="width:170px;">參考圖示</th>'
+          + '<th style="width:52px;">項次</th><th style="width:130px;">名稱</th><th style="width:170px;">參考圖示</th>'
           + '<th>操作步驟</th><th style="width:200px;">說明</th>'
           + (CUR.can_edit ? '<th style="width:38px;"></th>' : '') + '</tr></thead><tbody data-eg-row-add="stepAdd" data-eg-row-del="stepDel">';
     var rows = CUR.steps.length ? CUR.steps : (CUR.can_edit ? [{}] : []);
@@ -810,7 +864,7 @@ function stepImgCell(fid) {
 function stepRow(i, s, ro, dis) {
     s = s || {};
     return '<tr data-img="' + num(s.img_file_id) + '">'
-        + '<td class="c">' + (i + 1) + '</td>'
+        + dragCell(i, !!CUR.can_edit)
         + '<td><input class="s-name" value="' + esc(s.step_name || '') + '"' + ro + '></td>'
         + '<td class="c">' + stepImgCell(s.img_file_id) + '</td>'
         + '<td><textarea class="s-text" rows="2"' + ro + '>' + esc(s.step_text || '') + '</textarea></td>'
@@ -818,17 +872,54 @@ function stepRow(i, s, ro, dis) {
         + (CUR.can_edit ? '<td class="c"><button class="btn btn-xs s-del"' + dis + '>×</button></td>' : '')
         + '</tr>';
 }
-/* 共用檔 eg_input_rules.js 的可增列表格會呼叫這兩支（禁止各頁自刻增刪列邏輯） */
+/* 共用檔 eg_input_rules.js 的可增列表格會呼叫這兩支（禁止各頁自刻增刪列邏輯）。
+   ★ 共用檔是**不帶參數**呼叫的（規則 6：末列按 ↓ 加一列、空的末列按 ↑ 移除）。
+     原本寫成 stepAdd($tbody)／stepDel($tr)，共用檔叫下去時參數是 undefined、當場丟例外，
+     而共用檔的 callFn() 用 try/catch 把例外吃掉 → 畫面上就是「最後一列按 ↓ 完全沒反應」
+     （使用者 2026-09-22 回報）。一律做成「沒給參數就自己找那張表／自己取最後一列」，
+     × 按鈕那條路仍然照舊把 $tr 傳進來。 */
 function stepAdd($tbody) {
+    $tbody = ($tbody && $tbody.length) ? $tbody : $('#tblSteps tbody');
+    if (!$tbody.length) return;
     $tbody.append(stepRow($tbody.children('tr').length, {}, '', ''));
     renumber($tbody);
 }
 function stepDel($tr) {
-    var $tb = $tr.closest('tbody');
+    var $tb = ($tr && $tr.length) ? $tr.closest('tbody') : $('#tblSteps tbody');
+    if (!$tb.length) return;
+    if (!$tr || !$tr.length) $tr = $tb.children('tr').last();   // 不帶參數＝移除最後一列
     if ($tb.children('tr').length <= 1) return;
     $tr.remove(); renumber($tb);
 }
 function renumber($tb) { $tb.children('tr').each(function (i) { $(this).children('td').first().text(i + 1); }); }
+
+/**
+ * 明細表格的拖曳排序（唯一實作，操作步驟／檢驗項目／檢驗項目預設值三張表共用）。
+ * 使用者 2026-09-22 要求：檢驗項目與預設值都要能拖移調順序。
+ *
+ * ★ 把手一定要限定在最左邊那一格（`.dragh`），**不可以整列都能拖**：
+ *   這幾張表整列都是輸入框，整列可拖等於「在欄位裡按住想反白一段文字」就變成拖列，
+ *   使用者連複製一段品質特性都做不到（KPI 不符合標準明細那次踩過同一個坑）。
+ * ★ 順序就是 DOM 順序，collectItems()／collectSteps()／tplSave 本來就是照 DOM 逐列讀，
+ *   所以拖完只要按原本的「存檔／儲存這一組」就會存下去（後端 seq 也照送出的順序寫）。
+ */
+function ssSortable(tblSel, after) {
+    var tb = document.querySelector(tblSel + ' tbody');
+    if (!tb) return;
+    if (tb._ssSortable) { try { tb._ssSortable.destroy(); } catch (e) {} tb._ssSortable = null; }
+    if (typeof Sortable === 'undefined') return;             // 共用檔沒載到就只是不能拖，其他照常
+    if (!tb.querySelector('td.dragh')) return;               // 唯讀（沒有把手）就不啟用
+    tb._ssSortable = Sortable.create(tb, {
+        animation: 140, draggable: 'tr', handle: 'td.dragh', ghostClass: 'ss-ghost',
+        onEnd: function () { renumber($(tb)); if (after) after(); }
+    });
+}
+/** 最左邊那一格＝拖曳把手（唯讀時不給把手）。序號仍由 renumber() 用 .text() 寫，
+    所以 ☰ 一律走 CSS 的 ::before，寫進 HTML 會被下一次重新編號洗掉。 */
+function dragCell(i, canDrag) {
+    return canDrag ? '<td class="c dragh" title="按住這裡上下拖曳可以調整順序">' + (i + 1) + '</td>'
+                   : '<td class="c">' + (i + 1) + '</td>';
+}
 $(document).on('click', '.s-del', function () { stepDel($(this).closest('tr')); });
 
 /* ───────────── 標準檢驗指導書的檢驗項目 ───────────── */
@@ -859,7 +950,8 @@ function methodSel(val, tt, ro) {
 function itemsHtml() {
     var ro = CUR.can_edit ? '' : ' readonly';
     var h = '<div class="sec"><h5>檢驗項目'
-          + '<span class="muted-help">最後一列按 ↓ 自動加一列；尺寸類填上下限，其餘填品質特性</span>'
+          + '<span class="muted-help">最後一列按 ↓ 自動加一列；尺寸類填上下限，其餘填品質特性'
+          + (CUR.can_edit ? '；<b>按住最左邊的「☰ #」上下拖曳可以調整順序</b>' : '') + '</span>'
           + (CUR.can_edit
               ? '<button class="btn btn-xs btn-warm-o" id="btnApplyTpl" style="margin-left:8px;">代入預設項目</button>'
               : '')
@@ -871,7 +963,7 @@ function itemsHtml() {
     }
     // 品質特性給明確寬度：不給的話它是唯一的彈性欄，欄位一多就會被壓成一條（表頭變直書）
     h += '<div class="gridwrap"><table class="grid" id="tblItems" style="min-width:1060px;"><thead><tr>'
-          + '<th style="width:36px;">#</th><th style="width:140px;">管理重點</th><th style="width:200px;">品質特性</th>'
+          + '<th style="width:46px;">#</th><th style="width:140px;">管理重點</th><th style="width:200px;">品質特性</th>'
           + '<th style="width:74px;">上限</th><th style="width:74px;">下限</th>'
           + '<th style="width:86px;">擔當者</th><th style="width:122px;">檢驗方法</th>'
           + '<th style="width:130px;">檢具編號</th><th style="width:104px;">檢驗頻率</th><th>備註</th>'
@@ -884,7 +976,7 @@ function itemsHtml() {
 function itemRow(i, r, ro) {
     r = r || {};
     var dis = ro ? ' disabled' : '';
-    return '<tr data-tt="' + num(r.tool_type_id) + '"><td class="c">' + (i + 1) + '</td>'
+    return '<tr data-tt="' + num(r.tool_type_id) + '">' + dragCell(i, !!CUR.can_edit)
         + '<td><input class="i-ctrl" value="' + esc(r.ctrl_point || '') + '"' + ro + '></td>'
         + '<td><input class="i-q" value="' + esc(r.q_char || '') + '"' + ro + '></td>'
         + '<td><input class="i-up" value="' + esc(r.up_limit || '') + '"' + ro + '></td>'
@@ -898,9 +990,17 @@ function itemRow(i, r, ro) {
         + (CUR.can_edit ? '<td class="c"><button class="btn btn-xs i-del"' + dis + '>×</button></td>' : '')
         + '</tr>';
 }
-function itemAdd($tbody) { $tbody.append(itemRow($tbody.children('tr').length, {}, '')); renumber($tbody); }
+/* 同 stepAdd／stepDel：共用檔是不帶參數呼叫的，一定要自己找得到那張表（見上方說明） */
+function itemAdd($tbody) {
+    $tbody = ($tbody && $tbody.length) ? $tbody : $('#tblItems tbody');
+    if (!$tbody.length) return;
+    $tbody.append(itemRow($tbody.children('tr').length, {}, ''));
+    renumber($tbody);
+}
 function itemDel($tr) {
-    var $tb = $tr.closest('tbody');
+    var $tb = ($tr && $tr.length) ? $tr.closest('tbody') : $('#tblItems tbody');
+    if (!$tb.length) return;
+    if (!$tr || !$tr.length) $tr = $tb.children('tr').last();
     if ($tb.children('tr').length <= 1) { $tb.children('tr').first().replaceWith(itemRow(0, {}, '')); return; }
     $tr.remove(); renumber($tb);
 }
@@ -1112,6 +1212,10 @@ function renderDoc() {
     else body += sipExtraHtml() + itemsHtml();
     body += asRefHtml() + signHtml() + versHtml() + filesHtml();
     $('#docBody').html(body);
+    /* 明細表格的拖曳排序（唯讀的版次沒有把手，ssSortable 會自己不啟用） */
+    ssSortable('#tblSteps');
+    ssSortable('#tblItems');
+    DIRTY = false;              // 每次重畫（含存檔後重新開啟）都重新起算
     // 打字挑的那兩欄：先把「目前畫面上的字」記成已挑過的值，否則使用者一動就被判成改過而解除綁定
     $('#fProc').data('picked', $('#fProc').val() || '');
     $('#fCus').data('picked', $('#fCus').val() || '');
@@ -1393,6 +1497,24 @@ function saveDoc(cb) {
 }
 $(document).on('click', '#btnSave', function () { saveDoc(); });
 
+/* 文件跳窗裡只要動過任何一個欄位就記起來：決定「建立完沒存檔」要不要先問一句再刪 */
+$(document).on('input change', '#docBody', function () { DIRTY = true; });
+/* 直接關掉整個分頁時也要收乾淨——beforeunload 沒辦法等 AJAX 回來，改用 sendBeacon 送一筆刪除。
+   真的填過東西的（DIRTY）先讓瀏覽器問一句，免得辛苦填的內容就這樣不見。 */
+$(window).on('beforeunload', function (e) {
+    if (FRESH && DIRTY) {
+        (e.originalEvent || e).returnValue = '這份文件還沒有存檔，離開就會被刪除。';
+        return '這份文件還沒有存檔，離開就會被刪除。';
+    }
+});
+window.addEventListener('pagehide', function () {
+    if (!FRESH || !navigator.sendBeacon) return;
+    var fd = new FormData();
+    fd.append('action', 'doc_delete'); fd.append('csrf', SS_CSRF); fd.append('doc_id', num(FRESH.doc_id));
+    try { navigator.sendBeacon(SS_API, fd); } catch (err) {}
+    FRESH = null;
+});
+
 /* ══════════════════════ 機台：調整機器編號／重新帶入／使用設備 ══════════════════════ */
 
 /** 同型號的機台一次列出來勾（使用者拍板：自動帶全部、可勾掉） */
@@ -1667,6 +1789,145 @@ $(document).on('click', '.f-rot', function (e) {
             $(this).attr('src', fileUrl(fid) + '&t=' + (new Date()).getTime());
         });
     });
+});
+
+/* ══════════════════════ 圖面放大檢視（跳窗） ══════════════════════
+ * 使用者 2026-09-22：「點圖面要可以使用跳窗放大顯示，方便看圖填寫相關資料」。
+ * 縮圖只有 120×70（SIP 的圖面 340×250），圖面上的尺寸根本看不清楚，等於要另開分頁才讀得到。
+ *
+ * 三件刻意這樣做的事：
+ *  ① 滾輪縮放是**以游標下面那一點為準**放大，不是以圖片中心——看圖填資料時多半是盯著某一個
+ *     尺寸標註放大，以中心放大的話那個標註會跑出畫面外，還要再拖回來。
+ *  ② 可以「釘在旁邊」：釘住之後遮罩變透明且 pointer-events:none，底下的文件跳窗照樣打得了字，
+ *     等於一邊看圖一邊填（這就是使用者說的「方便看圖填寫相關資料」）。標題列可以拖著搬位置。
+ *  ③ 圖轉方向的按鈕**刻意不放進來**：那幾顆是真的去轉檔案（file_rotate），跟「只是看大一點」
+ *     不是同一件事，混在同一個視窗裡很容易按錯而動到文件內容。
+ */
+var IMGV = { fid: 0, zoom: 1, fit: true, drag: null, win: null };
+
+function imgViewOpen(fid, label) {
+    fid = num(fid);
+    if (!fid) return;
+    IMGV.fid = fid; IMGV.zoom = 1; IMGV.fit = true;
+    $('#imgName').text(label || '');
+    $('#imgErr').hide();
+    $('#imgBig').show().addClass('fit').css({ width: '', height: '' })
+        .off('load.iv error.iv')
+        .on('load.iv', function () { $(this).show(); $('#imgErr').hide(); imgViewLabel(); })
+        /* 挑到的圖面也可能是 PDF（挑圖面的清單本來就含 PDF），那種 <img> 一定載不出來——
+           不處理的話畫面上是一個破圖示，看起來像系統壞掉 */
+        .on('error.iv', function () { $(this).hide(); $('#imgErr').show(); })
+        .attr('src', fileUrl(fid) + '&t=' + (new Date()).getTime());
+    $('#imgOpenNew').attr('href', fileUrl(fid));
+    $('#imgBody').scrollTop(0).scrollLeft(0);
+    imgViewLabel();
+    openMask('maskImg');
+}
+function imgViewLabel() {
+    var $i = $('#imgBig'), nw = $i.length ? ($i[0].naturalWidth || 0) : 0;
+    var z = IMGV.fit ? (nw ? ($i.width() / nw) : 1) : IMGV.zoom;
+    $('#imgZoom').text(Math.round(z * 100) + '%');
+    $('#imgFit').toggleClass('btn-warm', !!IMGV.fit).toggleClass('btn-warm-o', !IMGV.fit);
+}
+function imgViewApply() {
+    var $i = $('#imgBig');
+    /* .fit＝交給 CSS 的 max-width/max-height 把整張圖縮進畫面；
+       放大模式一定要拿掉它，否則 inline width 會被 max-width:100% 夾住＝按了放大沒反應 */
+    if (IMGV.fit) $i.addClass('fit').css({ width: '', height: '' });
+    else $i.removeClass('fit').css({ width: Math.round(($i[0].naturalWidth || $i.width()) * IMGV.zoom) + 'px', height: 'auto' });
+    imgViewLabel();
+}
+/** 倍率調整；從「符合視窗」切過來時，以目前看到的大小當起點，才不會一按就跳一大格 */
+function imgViewZoom(mul) {
+    var $i = $('#imgBig');
+    if (IMGV.fit) {
+        var nw = $i[0].naturalWidth || 0;
+        IMGV.zoom = nw ? ($i.width() / nw) : 1;
+        IMGV.fit = false;
+    }
+    IMGV.zoom = Math.min(8, Math.max(0.1, IMGV.zoom * mul));
+    imgViewApply();
+}
+$(document).on('click', '#imgIn',  function () { imgViewZoom(1.25); });
+$(document).on('click', '#imgOut', function () { imgViewZoom(1 / 1.25); });
+$(document).on('click', '#img100', function () { IMGV.fit = false; IMGV.zoom = 1; imgViewApply(); });
+$(document).on('click', '#imgFit', function () { IMGV.fit = true; imgViewApply(); });
+/* load／error **不會往上冒泡**，所以這兩個不可以用 $(document).on(...) 委派
+   （委派靠的就是冒泡），一律在 imgViewOpen() 裡直接綁在那張 img 上。 */
+/* 滾輪縮放：以游標那一點為準（見上方說明①） */
+$(document).on('wheel', '#imgBody', function (e) {
+    var ev = e.originalEvent, el = this, im = document.getElementById('imgBig');
+    if (!im || !$(im).is(':visible')) return;
+    ev.preventDefault();
+    var r = im.getBoundingClientRect();
+    var px = r.width ? (ev.clientX - r.left) / r.width : .5;
+    var py = r.height ? (ev.clientY - r.top) / r.height : .5;
+    imgViewZoom(ev.deltaY < 0 ? 1.2 : 1 / 1.2);
+    var r2 = im.getBoundingClientRect();
+    el.scrollLeft += (r2.left + px * r2.width) - ev.clientX;
+    el.scrollTop  += (r2.top  + py * r2.height) - ev.clientY;
+});
+/* 按住拖曳平移 */
+$(document).on('mousedown', '#imgBody', function (e) {
+    if (e.which !== 1) return;
+    IMGV.drag = { x: e.clientX, y: e.clientY, sl: this.scrollLeft, st: this.scrollTop };
+    $(this).addClass('grabbing');
+    e.preventDefault();                       // 不讓瀏覽器把圖當成可以拖放的檔案
+});
+/* 釘在旁邊：遮罩讓路，底下的文件跳窗照樣可以打字（見上方說明②） */
+$(document).on('click', '#imgPin', function () {
+    var $m = $('#maskImg'), on = !$m.hasClass('pin'), $w = $m.find('.ss-modal');
+    if (on) {
+        $m.addClass('pin');
+        /* 「釘在旁邊」就要真的靠到旁邊去：留在原本置中的位置等於還是壓在表單上面，
+           使用者得先拖開才填得了字（測試實際量到它蓋住第一列的管理重點欄）。
+           一律貼右緣，再自己拖到順手的位置。 */
+        $w.css({ left: Math.max(8, $(window).width() - $w.outerWidth() - 18), top: 74 });
+    } else {
+        $m.removeClass('pin');
+        $w.css({ left: '', top: '' });
+    }
+    $(this).text(on ? '取消釘選' : '釘在旁邊').attr('title',
+        on ? '回到一般跳窗（會蓋住下面的表單）' : '把這張圖縮到旁邊，一邊看圖一邊填表');
+    imgViewApply();
+});
+/* 釘住時可以拖著標題列搬位置 */
+$(document).on('mousedown', '#imgHead', function (e) {
+    if (!$('#maskImg').hasClass('pin')) return;
+    if ($(e.target).closest('button,a,input,select').length) return;
+    var $w = $('#maskImg .ss-modal'), o = $w.offset();
+    IMGV.win = { x: e.clientX, y: e.clientY,
+                 l: o.left - $(window).scrollLeft(), t: o.top - $(window).scrollTop() };
+    e.preventDefault();
+});
+$(document).on('mousemove', function (e) {
+    if (IMGV.drag) {
+        var el = document.getElementById('imgBody');
+        if (el) { el.scrollLeft = IMGV.drag.sl - (e.clientX - IMGV.drag.x);
+                  el.scrollTop  = IMGV.drag.st - (e.clientY - IMGV.drag.y); }
+    }
+    if (IMGV.win) {
+        var $w = $('#maskImg .ss-modal');
+        $w.css({ left: Math.max(0, IMGV.win.l + (e.clientX - IMGV.win.x)),
+                 top:  Math.max(0, IMGV.win.t + (e.clientY - IMGV.win.y)) });
+    }
+});
+$(document).on('mouseup', function () {
+    if (IMGV.drag) { IMGV.drag = null; $('#imgBody').removeClass('grabbing'); }
+    IMGV.win = null;
+});
+/* 點縮圖就放大：SIP 的圖面、操作步驟的參考圖示、各段落的附件圖都算 */
+$(document).on('click', '.thumb', function (e) {
+    e.stopPropagation();
+    var $t = $(this), lab = '圖面';
+    var $tr = $t.closest('#tblSteps tbody tr');
+    if ($tr.length) lab = '參考圖示　第 ' + ($tr.index() + 1) + ' 項';
+    imgViewOpen($t.data('file'), lab);
+});
+$(document).on('click', '.secfile img', function (e) {
+    e.stopPropagation();
+    var $b = $(this).closest('.secfile');
+    imgViewOpen($b.data('file'), $b.find('.nm').text());
 });
 
 /* 上傳：依記憶 file_upload_change_event 三鐵則——送出時直讀 input.files，不倚賴 change 事件被觸發 */
@@ -2085,7 +2346,9 @@ function setPaneTpl(pno) {
         var h = '<div class="note-box">'
               + '<b>標準項目</b>是每一份檢驗指導書都會有的那幾列（精度等級、外觀、包裝…）；'
               + '<b>製程專屬項目</b>是某個製程才有的（例如齒研的跨齒厚）。'
-              + '建立文件時會先帶專屬項目、再帶標準項目，<b>代入之後仍然可以逐列刪掉不要的</b>。</div>';
+              + '建立文件時會先帶專屬項目、再帶標準項目，<b>代入之後仍然可以逐列刪掉不要的</b>。'
+              + '<br><b>順序＝代入之後的排列順序</b>：按住最左邊的「☰ #」上下拖曳就可以調整，'
+              + '最後一列按 ↓ 自動加一列，改完記得按下面的「儲存這一組」。</div>';
         h += '<div class="frm" style="margin-bottom:8px;">'
            + '<label>要編哪一組</label><div class="wide">'
            + '<button class="btn btn-xs ' + (pno ? 'btn-warm-o' : 'btn-warm') + ' tpl-std">標準項目（全站共用）</button>　'
@@ -2114,7 +2377,7 @@ function setPaneTpl(pno) {
         }
         // 欄位與文件裡的檢驗項目一樣多，品質特性一定要給寬度，否則會被擠成一條（表頭變直書）
         h += '<div class="gridwrap"><table class="grid" id="tblTpl" style="min-width:1060px;"><thead><tr>'
-           + '<th style="width:36px;">#</th><th style="width:140px;">管理重點</th><th style="width:200px;">品質特性</th>'
+           + '<th style="width:46px;">#</th><th style="width:140px;">管理重點</th><th style="width:200px;">品質特性</th>'
            + '<th style="width:74px;">上限</th><th style="width:74px;">下限</th>'
            + '<th style="width:86px;">擔當者</th><th style="width:122px;">檢驗方法</th>'
            + '<th style="width:130px;">檢具編號</th><th style="width:104px;">檢驗頻率</th><th>備註</th>'
@@ -2130,6 +2393,7 @@ function setPaneTpl(pno) {
            + '「找出重複的項目」會統計既有的檢驗指導書裡每一份都有的那幾列（有上下限的尺寸列不算，'
            + '那是各料號自己的），列出來讓你挑，<b>按了儲存才會真的存下去</b>。</span></div>';
         $('#setPane').html(h);
+        ssSortable('#tblTpl');          // 拖曳排序（順序就是代入文件時的順序）
     });
 }
 var TPLCTX = null;
@@ -2139,7 +2403,7 @@ function tplRow(i, r) {
     CUR = TPLCTX;                                   // ownerSel/methodSel 讀的是 CUR，暫時換成樣板的選項
     var own = ownerSel(r.owner_dept_id, ''), mth = methodSel(r.method, r.tool_type_id, '');
     CUR = save;
-    return '<tr data-tt="' + num(r.tool_type_id) + '"><td class="c">' + (i + 1) + '</td>'
+    return '<tr data-tt="' + num(r.tool_type_id) + '">' + dragCell(i, true)
         + '<td><input class="i-ctrl" value="' + esc(r.ctrl_point || '') + '"></td>'
         + '<td><input class="i-q" value="' + esc(r.q_char || '') + '"></td>'
         + '<td><input class="i-up" value="' + esc(r.up_limit || '') + '"></td>'
@@ -2150,9 +2414,17 @@ function tplRow(i, r) {
         + '<td><input class="i-note" value="' + esc(r.note || '') + '"></td>'
         + '<td class="c"><button class="btn btn-xs tpl-rm">×</button></td></tr>';
 }
-function tplAdd($tbody) { $tbody.append(tplRow($tbody.children('tr').length, {})); renumber($tbody); }
+/* 同 stepAdd／stepDel：共用檔是不帶參數呼叫的，一定要自己找得到那張表（見上方說明） */
+function tplAdd($tbody) {
+    $tbody = ($tbody && $tbody.length) ? $tbody : $('#tblTpl tbody');
+    if (!$tbody.length) return;
+    $tbody.append(tplRow($tbody.children('tr').length, {}));
+    renumber($tbody);
+}
 function tplDel($tr) {
-    var $tb = $tr.closest('tbody');
+    var $tb = ($tr && $tr.length) ? $tr.closest('tbody') : $('#tblTpl tbody');
+    if (!$tb.length) return;
+    if (!$tr || !$tr.length) $tr = $tb.children('tr').last();
     if ($tb.children('tr').length <= 1) { $tb.children('tr').first().replaceWith(tplRow(0, {})); return; }
     $tr.remove(); renumber($tb);
 }

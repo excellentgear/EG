@@ -148,6 +148,37 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
             width:100%; border:1px solid transparent; background:transparent; font-size:12.5px; padding:2px 3px; }
         table.grid input:focus, table.grid textarea:focus { border-color:var(--amber-d); background:#fff; }
         .err { color:var(--coral); font-size:12px; }
+        /* ── 明細表格的拖曳排序把手（使用者 2026-09-22 要求）──
+           ☰ 一律走 ::before：序號那一格的文字由 renumber() 用 .text() 重寫，
+           寫進 HTML 的 ☰ 會在下一次重新編號時被整個洗掉。 */
+        table.grid td.dragh { cursor:grab; user-select:none; -webkit-user-select:none; white-space:nowrap; }
+        table.grid td.dragh:active { cursor:grabbing; }
+        table.grid td.dragh::before { content:'\2630'; color:#C9B79C; margin-right:3px; font-size:11px; }
+        table.grid tr.ss-ghost { opacity:.45; background:#FFF3E2; }
+        /* 右下角小提示（自動刪除空殼文件之類的，不用按確定的那種） */
+        #ssToast { position:fixed; right:18px; bottom:18px; z-index:10600; background:rgba(74,53,36,.94); color:#fff;
+                   padding:9px 14px; border-radius:6px; font-size:13px; max-width:420px; line-height:1.6;
+                   box-shadow:0 6px 20px rgba(0,0,0,.3); opacity:0; transform:translateY(8px);
+                   transition:opacity .18s, transform .18s; pointer-events:none; }
+        #ssToast.on { opacity:1; transform:translateY(0); }
+        /* ── 圖面放大檢視 ── */
+        #maskImg { z-index:10500; }
+        .ss-imgwin { width:1120px; }
+        #imgBody { padding:0; background:#3A3027; overflow:auto; cursor:grab;
+                   height:calc(92vh - 118px); text-align:center; }
+        #imgBody.grabbing { cursor:grabbing; }
+        /* 放大時是用 inline width 指定的，max-width 一定要是 none，否則會被 100% 夾住＝按了放大沒反應。
+           「符合視窗」才掛 .fit 讓整張圖縮進畫面。 */
+        #imgBody img { display:block; margin:0 auto; max-width:none; }
+        #imgBody img.fit { max-width:100%; max-height:calc(92vh - 126px); width:auto; }
+        #imgHead .btn-xs { height:24px; padding:1px 8px; font-size:12px; line-height:20px; }
+        /* 釘在旁邊：遮罩不擋事件（pointer-events:none），底下的文件跳窗照樣可以打字 */
+        #maskImg.pin { display:block; background:transparent; pointer-events:none; }
+        #maskImg.pin .ss-modal { pointer-events:auto; position:fixed; width:620px; margin:0;
+                                 max-height:72vh; border:1px solid var(--amber-d); box-shadow:0 10px 34px rgba(0,0,0,.38); }
+        #maskImg.pin #imgHead { cursor:move; }
+        #maskImg.pin #imgBody { height:calc(72vh - 118px); }
+        #maskImg.pin #imgBody img.fit { max-height:calc(72vh - 126px); }
         .thumb { max-width:120px; max-height:70px; border:1px solid var(--line); border-radius:4px; cursor:pointer; }
         .sign-row { display:flex; gap:10px; flex-wrap:wrap; }
         .sign-box { flex:1 1 200px; border:1px solid var(--line); border-radius:6px; padding:7px 9px; background:#fff; min-width:200px; }
@@ -423,8 +454,15 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
         <ol>
             <li>按「新增」選版面與適用範圍，綁好機台型號或料號（<b>一定要從清單挑</b>，打字不選存不進去）。
                 <b>文件名稱會自動產生</b>，要改直接改掉即可。</li>
-            <li>在文件跳窗填內容；明細表格<b>在最後一列按 ↓ 會自動長出新的一列</b>，沒填東西的末列按 ↑ 會自動移除。</li>
-            <li>要帶圖面時按「挑圖面」，清單就是<b>這個料號的料號附件</b>，挑一個帶入（只建立關聯，不複製檔案）。</li>
+            <li>在文件跳窗填內容；明細表格<b>在最後一列按 ↓ 會自動長出新的一列</b>，沒填東西的末列按 ↑ 會自動移除。
+                <b>要調整順序就按住最左邊那一格（☰ 項次／☰ #）上下拖曳</b>——操作步驟、檢驗項目、
+                設定裡的檢驗項目預設值三張表都一樣；拖完序號會自動重編，<b>按存檔才會真的存下去</b>。
+                把手刻意只放在那一格，這樣在欄位裡反白文字複製仍然不受影響。</li>
+            <li>要帶圖面時按「挑圖面」，清單就是<b>這個料號的料號附件</b>，挑一個帶入（只建立關聯，不複製檔案）。
+                <b>圖點下去會跳窗放大</b>（圖面、操作步驟的參考圖示、各段落的附件圖都可以）：
+                滾輪縮放（以游標那一點為準）、按住拖曳平移、「符合視窗」整張看完、「100%」原始尺寸；
+                按<b>「釘在旁邊」</b>會把它縮到畫面右側變成浮動視窗，<b>這時候底下的表單照樣可以打字</b>，
+                可以一邊看圖一邊填上下限，標題列可以拖著搬位置。</li>
             <li>填完按「送出簽核」，依序完成 製表 → 審核 → 核准，三格都蓋完這一版就變成已核准。</li>
             <li>要改版按「建立新版次」，內容會整份帶過來，舊版仍查得到印得出來，修訂履歷自動由各版次組出。</li>
         </ol>
@@ -562,6 +600,11 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
         <h4>刪除</h4>
         <p>管理員可以刪除任何一份文件；一般使用者<b>只能刪除自己建立、而且一個版次都還沒核准過的</b>。
             已經核准過的不可刪除，要停用請把該版次「作廢」。</p>
+        <p><b>按了「新增」卻沒有存過檔的文件，關掉跳窗時會自動刪除</b>——建了又改變主意是常有的事，
+            留在清單上只會變成一份空殼，而且還會佔住「同一個對象＋同一個製程只能有一份」的名額，
+            下次要建同一份反而被自己擋下來。<b>已經填了東西才關掉的會先問一句</b>：
+            按【確定】先存檔留下來，按【取消】才刪掉。只要存過一次檔（或送過簽、帶過圖面、傳過附件），
+            這份文件就不再是空殼，之後怎麼關都不會被自動刪除。</p>
         <h4>簽核人員的限制</h4>
         <p>可以簽的人一律是<b>表單日期當時在職</b>的人，部門職稱也印當時的（所以補舊文件時，
             當時在職、現在已離職的人仍然挑得到）；而且<b>簽章日期當天不能請整天假</b>——
@@ -586,6 +629,35 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
     <div class="m-foot"><span class="sp"></span><button class="btn btn-sm btn-warm" data-close="helpUseMask">知道了</button></div>
 </div></div>
 
+<!-- ══════════ 圖面放大（使用者 2026-09-22：點圖面要能跳窗放大，方便一邊看圖一邊填） ══════════
+     刻意放在最後面：Esc 關的是「.ss-mask.on 裡的最後一個」，放最後才會先關掉這個看圖視窗，
+     而不是把底下正在編輯的文件跳窗關掉。 -->
+<div class="ss-mask" id="maskImg"><div class="ss-modal ss-imgwin">
+    <div class="m-head" id="imgHead">
+        <span>圖面</span><span class="muted-help" id="imgName"></span>
+        <span style="margin-left:auto;"></span>
+        <button class="btn btn-xs btn-warm-o" id="imgOut" title="縮小">－</button>
+        <span class="muted-help" id="imgZoom" style="min-width:42px;text-align:center;">100%</span>
+        <button class="btn btn-xs btn-warm-o" id="imgIn" title="放大">＋</button>
+        <button class="btn btn-xs btn-warm" id="imgFit" title="整張圖縮到看得完">符合視窗</button>
+        <button class="btn btn-xs btn-warm-o" id="img100" title="原始尺寸">100%</button>
+        <button class="btn btn-xs btn-warm-o" id="imgPin" title="把這張圖縮到旁邊，一邊看圖一邊填表">釘在旁邊</button>
+        <a class="btn btn-xs btn-warm-o" id="imgOpenNew" href="#" target="_blank" title="用瀏覽器自己的檢視器開">另開分頁</a>
+        <button class="x" data-close="maskImg">&times;</button>
+    </div>
+    <div class="m-body" id="imgBody">
+        <img id="imgBig" class="fit" src="" alt="圖面">
+        <div id="imgErr" style="display:none;color:#F7E0BD;padding:40px;text-align:center;">
+            這個檔案不是圖片（多半是 PDF），沒辦法在這裡放大。<br>請按上方的「另開分頁」用瀏覽器開啟。
+        </div>
+    </div>
+    <div class="m-foot">
+        <span class="muted-help">滾輪縮放（以游標那一點為準）　按住拖曳可平移
+            「釘在旁邊」之後底下的表單照樣可以打字，標題列可以拖著搬位置</span>
+        <span class="sp"></span><button class="btn btn-sm" data-close="maskImg">關閉</button>
+    </div>
+</div></div>
+
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/fastclick.js"></script>
@@ -594,6 +666,8 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_asdoc_picker.js') ?>"></script>
+<!-- 明細表格的拖曳排序（站上既有的共用檔，不要再引 CDN 版） -->
+<script src="../../resource/js/Sortable.min.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/Sortable.min.js') ?>"></script>
 <script>
 var SS_API   = '../../src/store/SopSip_API.php';
 var SS_CSRF  = '<?= $CSRF ?>';

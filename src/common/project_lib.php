@@ -1619,6 +1619,137 @@ function prj_task_evidence(PDO $db, int $projectId, ?array $prj = null): array
     return $out;
 }
 
+/* ══════════════════════════ 訂單轉專案：第一次下訂偵測與資料完整度 ══════════════════════════
+   使用者 2026-09-22 交辦：
+     「訂單轉專案 請自動篩選第一次下訂（無舊訂單、BOM、出貨、退貨…紀錄者）」
+     「且先幫忙確認此料號是否有完善的訂單、BOM、出貨單、檢驗表(目前尚未電子化)、報工紀錄、料號附件」
+     「自動建議所有資料完整優先，但不完整者一樣列出，越完整的列在越上面」
+
+   兩個設計決定：
+   ① 「第一次下訂」一律以**料號主檔 id（d_setting.d_id）**判定，不比料號文字
+      ——同一個料號文字在 d_setting 常分屬好幾家客戶，比文字會把別家的歷史算進來
+      （記憶 bom_client_name_cache／ship_stats_by_dsetting_id 同一條）。
+      料號主檔 id 是空的舊訂單無從判定，一律回 null（顯示「無法判定」）而不是硬猜成「是」。
+   ② 完整度只「排序與標示」，**不過濾**——使用者明講「不完整者一樣列出」。 */
+
+/* [完整名稱, 小籤上的短名]——短名是因為一列要塞六項，用全名會折成三行、
+   142 筆候選就要捲很久（實測列高 28px→68px）。全名放在 title 上，滑過去看得到。 */
+const PRJ_READY_ITEMS = [
+    'order'  => ['訂單',      '訂單'],
+    'bom'    => ['BOM 製令',  'BOM'],
+    'ship'   => ['出貨單',    '出貨'],
+    'insp'   => ['檢驗表',    '檢驗'],
+    'work'   => ['報工紀錄',  '報工'],
+    'attach' => ['料號附件',  '附件'],
+];
+
+/**
+ * 幫候選訂單標上「第一次下訂」與各項資料完整度。
+ * 一律批次查（候選最多 500 筆，逐筆查會變成幾千次查詢）。
+ */
+function prj_order_readiness(PDO $db, array $rows): array
+{
+    if (!$rows) return $rows;
+    $pks = [];
+    foreach ($rows as $r) { $pk = (int)($r['ds_pk'] ?? 0); if ($pk > 0) $pks[$pk] = 1; }
+    $pks = array_keys($pks);
+
+    $ordFirst = $shipAny = $bomAny = $retAny = $attAny = $workAny = [];
+    if ($pks) {
+        $in = implode(',', $pks);
+        // 每個料號最早的訂單（日期＋id，同一天時用 id 決定先後）
+        try {
+            foreach ($db->query("SELECT d_id_ID pk, MIN(CONCAT(COALESCE(Order_date,'9999-12-31'), '#', LPAD(Order_id,10,'0'))) k
+                                 FROM order_track WHERE d_id_ID IN ($in) GROUP BY d_id_ID")->fetchAll(PDO::FETCH_ASSOC) as $x) {
+                $ordFirst[(int)$x['pk']] = (string)$x['k'];
+            }
+        } catch (Throwable $e) {}
+        // 出貨／退貨／BOM／料號附件：各取「最早一筆的日期」，用來判斷是不是在這張訂單之前就有歷史
+        try {
+            foreach ($db->query("SELECT d_setting_id pk, MIN(Order_date) d, COUNT(*) c
+                                 FROM is_list WHERE d_setting_id IN ($in) GROUP BY d_setting_id")->fetchAll(PDO::FETCH_ASSOC) as $x) {
+                $shipAny[(int)$x['pk']] = ['first' => $x['d'], 'cnt' => (int)$x['c']];
+            }
+        } catch (Throwable $e) {}
+        try {
+            foreach ($db->query("SELECT d_setting_id pk, MIN(bom) b, COUNT(*) c
+                                 FROM bom WHERE d_setting_id IN ($in) GROUP BY d_setting_id")->fetchAll(PDO::FETCH_ASSOC) as $x) {
+                $bomAny[(int)$x['pk']] = ['first' => prj_bom_open_date((string)$x['b']), 'cnt' => (int)$x['c']];
+            }
+        } catch (Throwable $e) {}
+        try {
+            foreach ($db->query("SELECT r.d_setting_id pk, MIN(r.IR_date) d, COUNT(*) c
+                                 FROM ir_track r WHERE r.d_setting_id IN ($in) GROUP BY r.d_setting_id")->fetchAll(PDO::FETCH_ASSOC) as $x) {
+                $retAny[(int)$x['pk']] = ['first' => $x['d'], 'cnt' => (int)$x['c']];
+            }
+        } catch (Throwable $e) { /* 退貨表結構不同時不擋，只是判不出退貨 */ }
+
+        // 料號附件：只認管理員指定的標籤（沒設定＝任何附件都算）
+        $catIds = [];
+        foreach (explode(',', prj_setting_get($db, 'o2p_attach_cats', '')) as $v) { $v = (int)trim($v); if ($v > 0) $catIds[] = $v; }
+        $sql = "SELECT d_id pk, COUNT(*) c FROM part_attachments WHERE d_id IN ($in) AND deleted_at IS NULL";
+        if ($catIds) {
+            $or = [];
+            foreach ($catIds as $c) $or[] = "FIND_IN_SET($c, category_ids)";
+            $sql .= ' AND (' . implode(' OR ', $or) . ')';
+        }
+        $sql .= ' GROUP BY d_id';
+        try {
+            foreach ($db->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $x) $attAny[(int)$x['pk']] = (int)$x['c'];
+        } catch (Throwable $e) {}
+
+        // 報工紀錄：該料號的 BOM 有沒有被報工過
+        try {
+            foreach ($db->query("SELECT b.d_setting_id pk, COUNT(*) c
+                                 FROM pm_process_daily_report r
+                                 JOIN bom_ing bi ON bi.bom_ing_fid = r.bom_ing_fid
+                                 JOIN bom b ON b.bom = bi.bom
+                                 WHERE b.d_setting_id IN ($in) GROUP BY b.d_setting_id")->fetchAll(PDO::FETCH_ASSOC) as $x) {
+                $workAny[(int)$x['pk']] = (int)$x['c'];
+            }
+        } catch (Throwable $e) {}
+    }
+
+    foreach ($rows as &$r) {
+        $pk   = (int)($r['ds_pk'] ?? 0);
+        $date = (string)($r['Order_date'] ?? '');
+        $key  = ($date !== '' ? $date : '9999-12-31') . '#' . str_pad((string)(int)$r['Order_id'], 10, '0', STR_PAD_LEFT);
+
+        /* 第一次下訂：這張就是該料號最早的訂單，而且之前沒有出貨／退貨／製令的歷史 */
+        if ($pk <= 0) {
+            $r['is_first'] = null;                       // 訂單沒綁料號主檔 id，判不出來（不硬猜）
+            $r['first_why'] = '這張訂單沒有綁定料號主檔，無法判定是不是第一次下訂';
+        } else {
+            $why = [];
+            if (($ordFirst[$pk] ?? $key) < $key) $why[] = '有更早的訂單';
+            foreach (['ship' => ['出貨', $shipAny], 'bom' => ['製令', $bomAny], 'ret' => ['退貨', $retAny]] as $kk => $pair) {
+                $f = $pair[1][$pk]['first'] ?? null;
+                if ($f && $date !== '' && $f < $date) $why[] = '訂單日之前就有' . $pair[0] . '紀錄';
+            }
+            $r['is_first']  = $why ? 0 : 1;
+            $r['first_why'] = $why ? implode('、', $why) : '這個料號沒有更早的訂單／製令／出貨／退貨紀錄';
+        }
+
+        /* 資料完整度：檢驗表目前沒有電子化，一律標成 n/a（不算分母，免得每一列都缺一項） */
+        $ready = [
+            'order'  => ($r['Delivery_date'] && (int)$r['Qty'] > 0) ? 1 : 0,
+            'bom'    => !empty($bomAny[$pk]['cnt']) ? 1 : 0,
+            'ship'   => !empty($shipAny[$pk]['cnt']) ? 1 : 0,
+            'insp'   => null,                              // 檢驗表尚未電子化
+            'work'   => !empty($workAny[$pk]) ? 1 : 0,
+            'attach' => !empty($attAny[$pk]) ? 1 : 0,
+        ];
+        $have = 0; $tot = 0;
+        foreach ($ready as $v) { if ($v === null) continue; $tot++; if ($v) $have++; }
+        $r['ready']       = $ready;
+        $r['ready_have']  = $have;
+        $r['ready_total'] = $tot;
+        $r['ready_pct']   = $tot ? (int)round($have * 100 / $tot) : 0;
+    }
+    unset($r);
+    return $rows;
+}
+
 /** 專案附件的實體資料夾（鐵律5：走共用 attach_lib，預設在 AS9100 根目錄底下的「專案管理」） */
 function prj_attach_dir(PDO $db): string
 {

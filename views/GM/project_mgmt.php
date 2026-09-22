@@ -222,6 +222,15 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         .pj-noperm { border:1.5px solid #E8D5B5; background:#FDF8EF; border-radius:8px; padding:24px; color:#5b3a1e; }
         .pj-totop { position:fixed; right:24px; bottom:24px; width:40px; height:40px; border-radius:20px; background:#F0A24B;
             color:#fff; border:none; font-size:18px; cursor:pointer; display:none; z-index:8000; }
+        /* 訂單轉專案的資料完整度小籤（ai-rules/10 暖色系；td span 一定要自己指定 line-height，
+           Gentelella 全站 td span{line-height:28px} 會把整列撐高，已踩過三次） */
+        .rdy { display:inline-block; font-size:10px; line-height:16px; padding:0 5px; border-radius:3px;
+               border:1px solid transparent; text-decoration:none; white-space:nowrap; }
+        a.rdy:hover { text-decoration:underline; }
+        .rdy-ok { background:#F7E0BD; border-color:#E0C9A2; color:#5b3a1e; }
+        .rdy-no { background:#FCE4E4; border-color:#E7B4A8; color:#A32E1A; }
+        .rdy-na { background:#F2ECE1; border-color:#E0D6C4; color:#8a6d45; }
+
         /* 清單就地展開（使用者要求：點一下在前端直接看到甘特進度） */
         .pj-exp { display:inline-block; margin-left:6px; cursor:pointer; color:#B5762A; width:14px; text-align:center; }
         .pj-exp:hover { color:#DD5138; }
@@ -342,15 +351,20 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             </div>
             <div style="margin-bottom:8px;">
                 <label style="display:inline;"><input type="checkbox" id="oClosed" data-eg-skip="1"> 含已結束訂單</label>
+                <label style="display:inline;margin-left:12px;"><input type="checkbox" id="oFirst" data-eg-skip="1" checked>
+                    <b>只列第一次下訂</b>（這個料號沒有更早的訂單／製令／出貨／退貨紀錄）</label>
                 <button id="btnOSearch" style="height:28px;margin-left:10px;border:1px solid #D8BE93;border-radius:4px;background:#F0A24B;color:#fff;cursor:pointer;padding:0 12px;">查詢</button>
                 <span id="oCount" class="pj-hint" style="margin-left:10px;"></span>
             </div>
+            <p class="pj-hint" style="margin:0 0 6px;">清單依<b>資料完整度由高到低</b>排序；不完整的一樣列出來。
+                每一格可以點開去核對那份資料（會開新分頁）。<b>檢驗表目前還沒有電子化</b>，所以不列入完整度計算。</p>
             <div style="max-height:280px;overflow:auto;border:1px solid #EADFC8;border-radius:4px;">
                 <table class="sub-tbl" id="oTable">
                     <thead><tr>
                         <th style="width:28px;"><input type="checkbox" id="oCkAll" data-eg-skip="1"></th>
                         <th>訂單編號</th><th>客戶單號</th><th>客戶</th><th>料號</th>
-                        <th style="width:60px;">數量</th><th style="width:88px;">接單日</th><th style="width:88px;">交期</th><th>加工製程</th>
+                        <th style="width:60px;">數量</th><th style="width:88px;">接單日</th><th style="width:88px;">交期</th>
+                        <th style="width:64px;">首次<br>下訂</th><th style="width:270px;">資料完整度</th>
                     </tr></thead>
                     <tbody id="oBody"><tr><td colspan="9" style="padding:12px;color:#8a6d45;">請先按「查詢」</td></tr></tbody>
                 </table>
@@ -528,6 +542,12 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <div id="setDwgCats" class="pj-tagbar"></div>
         </div>
         <div class="sec">
+            <h5>訂單轉專案：「料號附件」完整度認哪幾個標籤</h5>
+            <p class="pj-hint">挑訂單時那一欄的「料號附件 ✓」是看這幾個標籤有沒有檔案。
+                <b>不勾＝任何附件都算</b>。</p>
+            <div id="setO2pCats" class="pj-tagbar"></div>
+        </div>
+        <div class="sec">
             <h5>圖章模板</h5>
             <p class="pj-hint">留空＝使用系統預設圖章。模板於「圖章管理」頁維護。</p>
             <div class="grid2">
@@ -582,6 +602,14 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <li><b>手動建立</b>：還沒有訂單的開發型專案（D）用這個，之後訂單進來再用「訂單轉專案→加入既有專案」併進來。
                 沒有訂單時可在「關聯資料」分頁直接掛料號。</li>
             <li><b>一張訂單只能屬於一個專案</b>；重複綁定會被擋下並告訴你它已經在哪個專案。</li>
+            <li><b>挑訂單時預設只列「第一次下訂」</b>：該料號沒有更早的訂單／製令／出貨／退貨紀錄，
+                才是真正需要開專案的新案子。判定一律以<b>料號主檔 id</b> 為準（同一個料號文字常分屬好幾家客戶，
+                比文字會把別家的歷史算進來）；訂單沒綁料號主檔 id 的判不出來，會標「？」但仍然列出。
+                取消勾選就會把全部未綁定的訂單都列出來。</li>
+            <li><b>每一列都會標出該料號的資料完整度</b>（訂單／BOM／出貨／報工／附件，各一顆小籤，
+                <b>點小籤會開新分頁</b>去核對那份資料）：清單<b>依完整度由高到低排序</b>，
+                不完整的一樣列出來、不會被藏起來。<b>檢驗表目前還沒有電子化</b>，所以只標「未電子化」、不列入計算。
+                「料號附件」要認哪幾個標籤可在<b>模組設定</b>調整（不勾＝任何附件都算）。</li>
         </ul>
 
         <h4>二之二、專案內容與「常用語句」</h4>
@@ -612,6 +640,21 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
                 表單名稱與右下角 AS 編號取自綁定的 AS 文件、版次依該張表單的業務日期回推；
                 <b>列印時請把瀏覽器列印視窗的「邊界」留在「預設」</b>，選「無」會連頁碼與 AS 編號一起被蓋掉。</li>
             <li><b>每按一次列印都會留下列印紀錄</b>（誰、何時、哪一台電腦），可在<b>系統管理 → 列印與簽核紀錄</b>查詢。</li>
+            <li><b>怎麼回報進度</b>：切到「清單」檢視，每一列右邊有「<b>回報</b>」（甘特檢視點步驟名稱也可以）。
+                <b>各步驟的負責人本人就能回報，不必有專案登錄權限。</b>跳窗裡會先列出
+                <b>系統自動偵測到的佐證</b>，按「採用」就把那個日期帶進實際完成日：
+                <ul style="margin:4px 0 0 18px;">
+                    <li>開立製令 → 製令編號回推的開立日</li>
+                    <li>製作加工圖面 → 料號附件的<b>發行章日期</b>（哪些標籤算圖面在模組設定調）</li>
+                    <li>PFMEA／SOP／SIP → 各自模組的表單日期／版次日期</li>
+                    <li>客供品點交（進料檢驗）→ BOM 上「客供料」製程的回廠日</li>
+                    <li>架機與修砂 → 報工紀錄的架機時間；整批加工 → 報工回報<b>完工</b>的日期</li>
+                </ul>
+                <b>首件檢驗與最終檢驗目前沒有電子化</b>，請品管直接填日期並<b>上傳附件佐證</b>（每個步驟都可以傳）。
+                多筆佐證時會全部列出來讓你自己挑，系統不會替你決定是哪一筆。</li>
+            <li><b>實際日期要等立案核准後才能填</b>（草稿／已退回的專案還沒正式成案）。</li>
+            <li>勾「<b>隱藏已完成的步驟</b>」只看還沒做完的；這個勾選和專案清單上的那一個是同一個。</li>
+            <li>專案清單上點專案代號旁的 <b>▸</b> 可以<b>就地展開</b>看進度，不必開專案。</li>
             <li>末列按 <b>↓</b> 自動加一列、空白末列按 <b>↑</b> 自動移除（全站共用規則）。
                 <b>新加的一列會自動把上一列的預計完成日當成預計開始日</b>，一路往下排很快。</li>
             <li><b>「帶入標準流程」帶的是可以自己改的範本</b>：管理員到<b>模組設定 → 執行規劃表標準流程範本</b>
@@ -684,6 +727,12 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
                 如果同步後仍是空的，代表這張製令三種對應都沒有——請確認開製令時有沒有選到這張訂單。</li>
             <li><b>BOM 製程被改動時會主動提示</b>（新增／異動／移除，並說明改了哪個欄位，例如「發包日 (空)→2026.08.01」），
                 清單上會出現紅色徽章。看過後按「知悉」即可清除。你自己在製程列加的註記與里程碑<b>不會被同步覆蓋</b>。</li>
+            <li><b>出貨紀錄</b>：列出本專案料號在<b>訂單接單日之後</b>的所有出貨（每個料號各自以「本專案該料號最早的接單日」起算）。
+                預設只顯示 <b>5 筆</b>，按「顯示全部」才全列。歸戶用的是<b>料號主檔 id</b> 不是料號文字。
+                每一列可以「<b>綁定</b>」到這個專案——<b>只是方便你確認資料，不會改動出貨單本身</b>，
+                也不影響對帳與毛利；自動清單沒抓到的（舊資料常常沒帶料號主檔 id）可用「綁定其他出貨單」以單號搜尋後綁上。</li>
+            <li><b>專案涵蓋的製程</b>（在「專案基本資料」設定）：<b>不勾＝整張 BOM 的所有製程</b>。
+                有綁定時，不在範圍內的製程仍然看得到（淡字標示），但<b>進度佐證與統計只認範圍內的</b>。</li>
         </ul>
 
         <h4>七、文件檢核（自動提醒）</h4>

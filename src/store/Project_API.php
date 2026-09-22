@@ -340,7 +340,18 @@ case 'delete':
 /* ══════════════════════════ 訂單轉專案 ══════════════════════════ */
 case 'order_candidates':
     if (!$P['canEdit']) jerr('無權限', 403);
-    jout(['rows' => prj_order_candidates($db, $_GET)]);
+    $rows = prj_order_readiness($db, prj_order_candidates($db, $_GET));
+    // 只看第一次下訂（使用者要求的預設）；判不出來的（訂單沒綁料號主檔 id）一律保留，
+    // 直接濾掉會讓人以為系統漏了訂單，而且完全看不出原因
+    if (!empty($_GET['first_only'])) {
+        $rows = array_values(array_filter($rows, static fn($r) => $r['is_first'] !== 0));
+    }
+    // 「所有資料完整優先，不完整者一樣列出，越完整的列在越上面」（使用者原話）
+    usort($rows, static function ($a, $b) {
+        return [(int)$b['ready_pct'], (string)$b['Order_date'], (int)$b['Order_id']]
+           <=> [(int)$a['ready_pct'], (string)$a['Order_date'], (int)$a['Order_id']];
+    });
+    jout(['rows' => $rows, 'ready_items' => PRJ_READY_ITEMS]);
 
 /**
  * 三種粒度：
@@ -533,7 +544,8 @@ case 'report_upload':
     } catch (Throwable $e) {
         // 寫不進 DB 就把剛落地的實體檔收掉，不然 NAS 上會留一個沒人認得的孤兒檔
         @unlink(rtrim($dir, '/\\') . DIRECTORY_SEPARATOR . $fn);
-        jerr('附件資料寫入失敗');
+        error_log('[Project_API] report_upload insert failed: ' . $e->getMessage());
+        jerr('附件資料寫入失敗（詳細原因已寫入伺服器錯誤紀錄）');
     }
     jout(['message' => '已上傳', 'attaches' => prj_task_attaches($db, $tid)]);
 
@@ -1343,6 +1355,8 @@ case 'setting_get':
         'task_owner_depts'       => implode(',', prj_task_owner_depts($db)),
         // 哪些附件標籤算「加工圖面」（進度佐證用，不寫死標籤名稱＝鐵律4）
         'drawing_attach_cats'    => prj_setting_get($db, 'drawing_attach_cats', ''),
+        // 訂單轉專案「料號附件」完整度認哪幾個標籤（不設＝任何附件都算）
+        'o2p_attach_cats'        => prj_setting_get($db, 'o2p_attach_cats', ''),
     ], 'owner_scope_rows' => prj_owner_scope_labeled($db),
      'attach_cats' => (function (PDO $db) {
          try {
@@ -1359,7 +1373,8 @@ case 'setting_save':
     foreach (['approver_dept_id' => '立案核准綁定部門', 'approver_user_id' => '立案核准綁定人員',
               'default_cosign_depts' => '預設會簽單位', 'block_close_on_missing' => '結案前強制文件檢核',
               'plan_stamp_tpl_id' => '執行規劃表圖章模板', 'card_stamp_tpl_id' => '管理卡圖章模板',
-              'drawing_attach_cats' => '算「加工圖面」的附件標籤'] as $k => $desc) {
+              'drawing_attach_cats' => '算「加工圖面」的附件標籤',
+              'o2p_attach_cats' => '訂單轉專案「料號附件」認的標籤'] as $k => $desc) {
         if (!array_key_exists($k, $_POST)) continue;
         prj_setting_save($db, $k, trim((string)$_POST[$k]), $desc, $uname);
     }
