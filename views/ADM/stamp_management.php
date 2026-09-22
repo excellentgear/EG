@@ -403,7 +403,8 @@ try {
 
     <h5>重要行為</h5>
     <ul>
-      <li>列印版是 <b>A4 橫式</b>，超過一頁時左下角自動加頁碼；表頭會在每一頁重複。</li>
+      <li>列印版是 <b>A4 橫式</b>，每頁固定 8 筆；<b>每一頁</b>都會重複印公司名稱、表單名稱與表頭，左下角是頁次（超過一頁才印）、右下角是 AS 文件編號。</li>
+      <li>頁碼與編號是<b>印在內容裡</b>的，不靠瀏覽器的頁首頁尾，所以列印視窗的「邊界」不論選預設、無還是最小，都印得出來，也不會有內容貼齊紙緣被裁掉的情形。</li>
       <li>備註欄若是系統自動寫入的「批次建立」，列印時不印（清冊是給外部稽核看的正式文件，不放內部作業痕跡）。</li>
       <li>按下「列印/PDF」會留下一筆<b>列印紀錄</b>（列印時間、列印人、登入電腦），可在「列印與簽核紀錄」頁查到。</li>
       <li>課室章／職稱章沒有特定個人，保管人欄會印職稱或「（部門保管）」。</li>
@@ -822,7 +823,7 @@ $('#btnPrint').on('click',function(){
     //   作廢＝已停用（status=revoked）／修訂＝登記內容被編輯過（modified_at 晚於 created_at）／其餘＝新增。
     //   停用動作本身也會寫 modified_at，所以一定要先判作廢，否則停用的章會同時打到「修訂」。
     const tick=v=>v?'V':'';
-    const rows=r.rows.map((x,i)=>{
+    function rowHtml(x,i){
       // 備註：系統自動寫入的「批次建立」屬內部作業痕跡，正式清冊（外部稽核用）一律不印；人工填寫的備註照印
       const note=(String(x.note||'').trim()===SYS_NOTE_BATCH)?'':x.note;
       const isVoid = x.status==='revoked';
@@ -844,24 +845,42 @@ $('#btnPrint').on('click',function(){
       <td class="tl">${esc(keepDept)}</td>
       <td class="tl">${esc(keepWho)}</td>
       <td class="tl">${esc(note)}</td></tr>`;
-    }).join('');
-    // 四邊留白＝@page 14mm ＋ body padding 5mm 兩段式（ai-rules/16 第四之二之二）：
-    // 列印視窗的「邊界」被選成「無／最小」時 Chrome 會蓋掉 @page 的 margin，那時只剩 body 這 5mm 撐著，才不會被印表機裁到。
-    const MG=14, PAD=5;
+    }
+    // 【為什麼不用 @page 的 @bottom-left／@bottom-right 印頁碼與編號】2026-09-22 使用者實測回報
+    // 「多頁沒有頁次」「已綁定卻印不出 AS 編號」「第二頁貼齊紙張最上緣會被裁掉」——三件事是同一個根因：
+    // 瀏覽器列印視窗的「邊界」只要被選成「無／最小」，Chrome 就直接蓋掉 @page 的 margin，
+    // margin box 一沒有空間，頁碼與編號整組不會被畫出來，內容也同時貼到紙邊（ai-rules/16 第四之二之二已記載此行為）。
+    // 所以改成「每頁固定筆數分段」＝ai-rules/16 第四之五節清單型多頁文件的作法：每頁自己印大標題、表頭與頁尾，
+    // 留白由每頁容器的 padding 提供，不論使用者的列印邊界怎麼設定都一定看得到、也不會被裁到。
+    // 這不違反 print_pagination 鐵則——鐵則禁的是「JS 量高度自算分頁」，這裡是固定筆數切頁、頁數是確定的。
+    const PER_PAGE=8;                      // 每頁筆數：A4 橫式可用高度換算（印模列高 62px），已用 printToPDF 實測不溢出
+    const MG=6, PAD_T=10, PAD_B=8;         // @page 邊界(mm)＋每頁容器的上/下留白(mm)；左右同 PAD_T
+                                           // 留白刻意由容器 padding 撐（10mm），@page 這 6mm 只是加碼：
+                                           // 列印邊界被選成「無」時 @page 會被蓋掉，那時仍有 10mm 不會被裁
+    const chunks=[];
+    for(let i=0;i<r.rows.length;i+=PER_PAGE) chunks.push({rows:r.rows.slice(i,i+PER_PAGE),base:i});
+    if(!chunks.length) chunks.push({rows:[],base:0});
+    const totalPages=chunks.length;
     const css=`
       *{box-sizing:border-box;}
-      @page{size:A4 landscape;margin:${MG}mm;${asTxt?` @bottom-right{content:'${asTxt}';font-size:9pt;color:#333;vertical-align:top;padding-top:1mm;}`:''}}
-      body{margin:0;padding:${PAD}mm;font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#3a2a17;font-size:12px;
+      @page{size:A4 landscape;margin:${MG}mm;}
+      body{margin:0;padding:0;font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#3a2a17;font-size:12px;
            -webkit-print-color-adjust:exact;print-color-adjust:exact;}
+      /* 每頁一個容器，四邊留白由它自己的 padding 給（列印邊界被設成「無」時 @page 的 margin 會被蓋掉，
+         那時就只剩這一層撐著，所以這裡不能只給 5mm） */
+      .pg{padding:${PAD_T}mm ${PAD_T}mm ${PAD_B}mm;page-break-after:always;break-after:page;}
+      .pg:last-child{page-break-after:auto;break-after:auto;}
       .p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:2px;}
       .p-title{font-size:16px;font-weight:bold;text-align:center;letter-spacing:4px;margin-bottom:4px;}
-      .p-sub{font-size:11px;color:#6b5636;text-align:center;margin-bottom:8px;}
+      .p-sub{font-size:11px;color:#6b5636;text-align:center;margin-bottom:6px;}
       table{width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse;}
       th,td{border:1px solid #666;padding:3px 5px;text-align:center;word-wrap:break-word;overflow-wrap:break-word;}
       th{background:#f7e0bd;font-size:11.5px;}
       td.tl{text-align:left;}
       td.tk{font-weight:bold;font-size:13px;}
-      thead{display:table-header-group;} tr{page-break-inside:avoid;break-inside:avoid;}
+      tr{page-break-inside:avoid;break-inside:avoid;}
+      /* 頁尾：左下＝頁次（多頁才印）、右下＝綁定的 AS 文件編號（每頁都印，ai-rules/16 第二、三節） */
+      .pg-foot{display:flex;justify-content:space-between;align-items:flex-end;font-size:9pt;color:#333;margin-top:5px;}
       /* 印模欄：章一律等比例，不可用 width/height 各給一個值把長方形模板章壓成正方形（ai-rules/18 第10條：
          密集逐列表格不套 91px 固定尺寸，改以列高為準等比縮放，這樣圓章與長方章都不會變形） */
       td.pst{height:62px;padding:2px;}
@@ -869,33 +888,31 @@ $('#btnPrint').on('click',function(){
       td.pst svg,td.pst img{width:auto;height:auto;max-height:56px;max-width:100%;vertical-align:middle;
            -webkit-print-color-adjust:exact;print-color-adjust:exact;}
     `;
-    const body=`<div class="p-comp">${esc(window.__ownCompany||'')}</div>
-      <div class="p-title">${esc(title)}</div>
-      <div class="p-sub">使用中 ${r.summary.active} 顆／已停用 ${r.summary.revoked} 顆，共 ${r.total} 筆　列印日期：${dot(today())}</div>
-      <table><colgroup>
+    const colg=`<colgroup>
         <col style="width:34px"><col style="width:74px"><col style="width:74px">
         <col style="width:38px"><col style="width:38px"><col style="width:38px">
         <col style="width:9%"><col style="width:12%"><col style="width:96px">
         <col style="width:10%"><col style="width:9%"><col>
-      </colgroup>
-      <thead><tr><th>NO</th><th>核發日期</th><th>停用／繳回日</th><th>新增</th><th>修訂</th><th>作廢</th>
-      <th>類別</th><th>印章名稱</th><th>印章樣</th><th>保管部門</th><th>保管人</th><th>備註</th></tr></thead>
-      <tbody>${rows}</tbody></table>`;
+      </colgroup>`;
+    const thead=`<thead><tr><th>NO</th><th>核發日期</th><th>停用／繳回日</th><th>新增</th><th>修訂</th><th>作廢</th>
+      <th>類別</th><th>印章名稱</th><th>印章樣</th><th>保管部門</th><th>保管人</th><th>備註</th></tr></thead>`;
+    // 每頁都重複大標題與表頭（清單型多頁文件，ai-rules/16 第四之五節）；統計那一行只印在第 1 頁
+    const body=chunks.map(function(ck,pi){
+      return `<div class="pg">
+        <div class="p-comp">${esc(window.__ownCompany||'')}</div>
+        <div class="p-title">${esc(title)}</div>
+        <div class="p-sub">使用中 ${r.summary.active} 顆／已停用 ${r.summary.revoked} 顆，共 ${r.total} 筆　列印日期：${dot(today())}</div>
+        <table>${colg}${thead}<tbody>${ck.rows.map(function(x,i){return rowHtml(x,ck.base+i);}).join('')
+          || '<tr><td colspan="12" style="padding:18px;color:#8a7455;">無符合條件的資料</td></tr>'}</tbody></table>
+        <div class="pg-foot"><span>${totalPages>1?('第 '+(pi+1)+' 頁／共 '+totalPages+' 頁'):''}</span><span>${esc(asTxt)}</span></div>
+      </div>`;
+    }).join('');
     const w=window.open('','_blank');
     if(!w){alert('列印視窗被瀏覽器封鎖，請允許此網站開啟彈出視窗');return;}
     // <base>：新視窗是 about:blank，掃描實體章的 <image href="/EGsystem/..."> 沒有 base 就解析不出來＝整欄印不出章
     w.document.write(`<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8">
       <base href="${location.origin}/"><title>${esc(title)}</title><style>${css}</style></head><body>${body}
-      <scr`+`ipt>window.onload=function(){
-        // 內容超過一頁才加左下角頁碼（只決定顯示與否、不影響分頁）；高度要把 @page 與 body padding 兩段留白都扣掉
-        var onePage=(210-${MG}*2-${PAD}*2)*96/25.4;   // A4 橫式，可印高度是 210mm 那一邊
-        if(document.body.scrollHeight>onePage*0.92){
-          var stl=document.createElement('style');
-          stl.textContent="@page{ @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";
-          document.head.appendChild(stl);
-        }
-        setTimeout(function(){window.print();},600);   // 等掃描章圖載入
-      };</scr`+`ipt></body></html>`);
+      <scr`+`ipt>window.onload=function(){ setTimeout(function(){window.print();},600); };</scr`+`ipt></body></html>`);
     w.document.close();
     // 列印紀錄（ai-rules/23）：記的是「按下列印」這個動作，送出即忘、失敗不影響列印
     if(window.EGPrintLog) EGPrintLog.record({source:'stamp_list', doc_name:title, doc_kind:'form',
