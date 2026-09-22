@@ -68,6 +68,14 @@
             '.egcp-grid button small{display:block;font-weight:normal;font-size:11px;color:#8a6a45;margin-top:2px;}',
             '.egcp-grid button.on small{color:#6B4A22;}',
             '.egcp-empty{color:#8a6a45;font-size:13px;padding:10px 2px;}',
+            '.egcp-cell{display:inline-flex;align-items:stretch;}',
+            '.egcp-cell>button:first-child{border-top-right-radius:0;border-bottom-right-radius:0;}',
+            '.egcp-into{min-width:0 !important;border:1px solid #E4D3BC;border-left:0;background:#FFF8EE;color:#8A5A2B;',
+            '  border-radius:0 8px 8px 0;padding:0 10px;font-size:16px;font-weight:bold;cursor:pointer;}',
+            '.egcp-into:hover{background:#F0A24B;color:#3B2A18;border-color:#C0703A;}',
+            '.egcp-cell.egcp-just>button{box-shadow:0 0 0 2px #F0A24B;}',
+            '.egcp-hint{font-size:12px;color:#8A5A2B;background:#FBEEE6;border:1px solid #F3D9C4;border-radius:5px;',
+            '  padding:4px 8px;margin-bottom:8px;}',
             '.egcp-grid button.egcp-add{border-style:dashed;color:#8A5A2B;font-weight:normal;}',
             '.egcp-grid button.egcp-add:hover{background:#FBEEE6;}',
             '.egcp-new{background:#FFF8EE;border:1px solid #E4D3BC;border-radius:6px;padding:8px 10px;margin-bottom:8px;}',
@@ -209,7 +217,21 @@
         }).then(function (r) { return r.json(); }).then(function (res) {
             if (!res || !res.success) { $e.textContent = (res && res.message) || '建立失敗'; return; }
             cur.tree = onlyActive(res.causes || []);
+            var newId = parseInt(res.cat_id, 10) || 0;
             hideNewRow();
+            /* 新建的分類底下一定是空的＝在畫面上會被當成「最底層、點了就選它」，
+               所以還可以再往下一層時，**直接帶進它底下**，使用者才看得到「＋ 在○○底下新增」
+               （使用者回報：新增完第二層沒有出現可以新增第三層的畫面就被自動選定）。 */
+            if (newId && cur.path.length < 2) {
+                cur.path = cur.path.concat([String(newId)]);
+                cur.justAdded = 0;
+                cur.hint = '已新增「<b>' + esc(name) + '</b>」，現在在它底下。要再往下加一層就按「＋ 在「'
+                         + esc(name) + '」底下新增」；要直接用這一層，按上面的「就選「' + esc(name) + '」這一層」；'
+                         + '要回去加同一層的，按「← 上一層」。';
+            } else {
+                cur.justAdded = newId;
+                cur.hint = '已新增「<b>' + esc(name) + '</b>」，點它就可以選定。';
+            }
             render();
             if (cur.onTreeChange) cur.onTreeChange(cur.tree);
         }).catch(function () { $e.textContent = '建立失敗，請重新整理頁面後再試'; });
@@ -245,18 +267,33 @@
         }
         cur.$crumb.innerHTML = crumb;
 
+        // 提示列（只在剛新增完那一次顯示）
+        cur.$hint.style.display = cur.hint ? '' : 'none';
+        cur.$hint.innerHTML = cur.hint || '';
+
         // 方塊
         if (!list.length) {
-            cur.$grid.innerHTML = '<div class="egcp-empty">這一層底下沒有更細的分類了，請用上面的「就選…這一層」選定，或按「← 上一層」換一個。</div>'
+            cur.$grid.innerHTML = '<div class="egcp-empty">這一層底下還沒有更細的分類'
+                                + (canAddHere() ? '，可以用右邊的「＋」新增一個' : '')
+                                + '；也可以用上面的「就選…這一層」直接選定，或按「← 上一層」換一個。</div>'
                                 + addTile();
         } else {
             cur.$grid.innerHTML = list.map(function (n) {
                 var kids = (n.children || []).length;
                 var on = sel.indexOf(String(n.cat_id)) >= 0;
                 var mark = (!on && hasSelectedUnder(n, sel)) ? ' has-sel' : '';
-                return '<button type="button" class="' + (on ? 'on' : '') + mark + '" data-act="go" data-id="' + esc(n.cat_id) + '">'
+                var just = (String(n.cat_id) === String(cur.justAdded)) ? ' egcp-just' : '';
+                /* 沒有子項的分類本來就是「點了就選它」。但管理員要在它底下再加一層時，
+                   一路點下去只會變成選取、永遠進不去（使用者回報：新增完第二層就被自動選定，
+                   看不到新增第三層的畫面）——所以多一顆窄的「＋」把「選它」與「進去它底下」分開。 */
+                var canInto = !kids && cur.add && cur.add.can && cur.path.length < 2;
+                return '<span class="egcp-cell' + just + '">'
+                    + '<button type="button" class="' + (on ? 'on' : '') + mark + '" data-act="go" data-id="' + esc(n.cat_id) + '">'
                     + esc(n.name)
-                    + '<small>' + (kids ? ('往下還有 ' + kids + ' 項') : (on ? '✓ 已選' : '可直接選')) + '</small></button>';
+                    + '<small>' + (kids ? ('往下還有 ' + kids + ' 項') : (on ? '✓ 已選' : '可直接選')) + '</small></button>'
+                    + (canInto ? ('<button type="button" class="egcp-into" data-act="into" data-id="' + esc(n.cat_id)
+                                  + '" title="在「' + esc(n.name) + '」底下再加一層">＋</button>') : '')
+                    + '</span>';
             }).join('') + addTile();
         }
         cur.$okN.textContent = String(sel.length);
@@ -300,6 +337,7 @@
             + '</div>'
             + '<div class="egcp-picked"></div>'
             + '<div class="egcp-new" style="display:none;"></div>'
+            + '<div class="egcp-hint" style="display:none;"></div>'
             + '<div class="egcp-crumb"></div>'
             + '<div class="egcp-grid"></div>'
             + '</div>'
@@ -324,6 +362,8 @@
             $crumb: mask.querySelector('.egcp-crumb'),
             $grid: mask.querySelector('.egcp-grid'),
             $new: mask.querySelector('.egcp-new'),
+            $hint: mask.querySelector('.egcp-hint'),
+            hint: '', justAdded: 0,
             $okN: mask.querySelector('.egcp-n')
         };
         // 已經選過的：直接把畫面停在它的上一層，不用再從第一層點下來
@@ -353,15 +393,19 @@
             if (act === 'close') { close(); return; }
             if (act === 'clear') { cur.sel = []; render(); return; }
             if (act === 'ok') { apply(); return; }
+            if (act === 'into') { cur.path = cur.path.concat([String(b.getAttribute('data-id'))]);
+                                  cur.hint = ''; cur.justAdded = 0; hideNewRow(); render(); return; }
             if (act === 'addnew') { showNewRow(); return; }
             if (act === 'addcancel') { hideNewRow(); return; }
             if (act === 'addsave') { doAdd(); return; }
-            if (act === 'up') { cur.path = cur.path.slice(0, -1); hideNewRow(); render(); return; }
+            if (act === 'up') { cur.path = cur.path.slice(0, -1); cur.hint = ''; cur.justAdded = 0;
+                                hideNewRow(); render(); return; }
             if (act === 'self') { pick(b.getAttribute('data-id')); return; }
             if (act === 'go') {
                 var id = b.getAttribute('data-id');
                 var n = findNode(cur.tree, id);
-                if (n && n.children && n.children.length) { cur.path = cur.path.concat([String(id)]); hideNewRow(); render(); }
+                if (n && n.children && n.children.length) { cur.path = cur.path.concat([String(id)]);
+                    cur.hint = ''; cur.justAdded = 0; hideNewRow(); render(); }
                 else pick(id);                                           // 最底層＝直接選
                 return;
             }
