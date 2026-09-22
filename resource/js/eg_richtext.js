@@ -73,9 +73,10 @@
     'text-align':        /^(left|right|center|justify)$/i,
     'text-indent':       /^(-?\d{1,2}(\.\d)?)(em|pt)$/,
     'line-height':       /^(\d(\.\d{1,2})?|1[0-9]{1,2}%|[1-9]\d?0%)$/,
-    'width':             /^(\d{1,3}(\.\d{1,2})?)(px|%|em)$/,
-    'height':            /^(\d{1,4}(\.\d{1,2})?)(px|em)$/,
-    'padding':           /^(\d{1,2}(\.\d)?(px|em)\s*){1,4}$/,
+    // cm/mm 要放行：Word 匯入進來的版面單位就是 cm（流程圖方框是 width:3.55cm）
+    'width':             /^(\d{1,3}(\.\d{1,2})?)(px|%|em|cm|mm)$/,
+    'height':            /^(\d{1,4}(\.\d{1,2})?)(px|em|cm|mm)$/,
+    'padding':           /^(\d{1,2}(\.\d{1,2})?(px|em|cm|mm)\s*){1,4}$/,
     'vertical-align':    /^(top|middle|bottom|baseline)$/i,
     'border':            /^(\d{1,2}px\s+(solid|dashed|dotted|none)\s+(#[0-9A-Fa-f]{3,8}|[a-zA-Z]{3,20})|none|0)$/i,
     'border-collapse':   /^(collapse|separate)$/i,
@@ -83,8 +84,8 @@
     'border-style':      /^((solid|dashed|dotted|none)\s*){1,4}$/i,
     'border-color':      /^((#[0-9A-Fa-f]{3,8}|[a-zA-Z]{3,20})\s*){1,4}$/,
     'float':             /^(left|right|none)$/i,
-    'margin':            /^(\d{1,2}(\.\d)?(px|em)\s*){1,4}$/,
-    'margin-right':      /^(\d{1,2}(\.\d)?)(em|px)$/,
+    'margin':            /^(\d{1,2}(\.\d{1,2})?(px|em|cm|mm)\s*){1,4}$/,
+    'margin-right':      /^(\d{1,2}(\.\d{1,2})?)(em|px|cm|mm)$/,
     'page-break-before': /^(always|auto|avoid)$/i,
     'page-break-after':  /^(always|auto|avoid)$/i,
     'page-break-inside': /^(avoid|auto)$/i
@@ -557,9 +558,45 @@
       Array.prototype.slice.call(host.querySelectorAll('.egrt-pop')).forEach(function (p) { p.classList.remove('open'); });
     }
     function changed() { refreshState(); refreshCount(); if (opt.onChange) opt.onChange(); }
+
+    /* 記住游標位置。
+       插入圖片／流程圖要先開跳窗，跳窗一開（尤其流程圖那個 Fabric 畫布）焦點就離開編輯區、
+       選取範圍跟著失效；等回來再 execCommand('insertHTML') 時，圖會插到文件開頭之類
+       完全不是使用者原本游標的地方。所以在編輯區裡每次移動游標都把範圍記下來，
+       插入前若目前選取已經不在編輯區內，就先還原回去。 */
+    var lastRange = null;
+    function rememberRange() {
+      var sel = w.getSelection();
+      if (!sel || !sel.rangeCount) return;
+      var r = sel.getRangeAt(0);
+      if (body.contains(r.commonAncestorContainer)) lastRange = r.cloneRange();
+    }
+    function restoreRange() {
+      var sel = w.getSelection();
+      var inBody = sel && sel.rangeCount && body.contains(sel.getRangeAt(0).commonAncestorContainer);
+      if (inBody) return true;
+      if (!lastRange) return false;
+      try {
+        sel.removeAllRanges();
+        sel.addRange(lastRange);
+        return true;
+      } catch (e) { return false; }
+    }
+    ['keyup', 'mouseup', 'input'].forEach(function (ev) { body.addEventListener(ev, rememberRange); });
+
     function insertHtml(html) {
       body.focus();
+      if (!restoreRange()) {
+        // 真的沒有游標可用（例如一打開就按插入）→ 補在內容最後，而不是開頭
+        var r = d.createRange();
+        r.selectNodeContents(body);
+        r.collapse(false);
+        var s = w.getSelection();
+        s.removeAllRanges();
+        s.addRange(r);
+      }
       try { d.execCommand('insertHTML', false, html); } catch (e) {}
+      rememberRange();
       changed();
     }
     /** 字級：execCommand('fontSize') 只吃 1~7，所以先用 size=7 當記號標出選取範圍，
@@ -612,8 +649,9 @@
         }
         if (cmd === 'egHr')        { insertHtml('<hr>'); return; }
         if (cmd === 'egPageBreak') { insertHtml('<hr style="page-break-after:always">'); return; }
-        if (cmd === 'egImage')     { if (opt.onInsertImage) opt.onInsertImage(insertAsset); return; }
-        if (cmd === 'egFlow')      { if (opt.onInsertFlow)  opt.onInsertFlow(insertAsset);  return; }
+        // 開跳窗之前先把游標位置記下來（跳窗一開選取就沒了，回來要插在原處）
+        if (cmd === 'egImage')     { rememberRange(); if (opt.onInsertImage) opt.onInsertImage(insertAsset); return; }
+        if (cmd === 'egFlow')      { rememberRange(); if (opt.onInsertFlow)  opt.onInsertFlow(insertAsset);  return; }
       }
       useCss(cmd);
       try { d.execCommand(cmd, false, val === undefined ? null : val); } catch (e) {}

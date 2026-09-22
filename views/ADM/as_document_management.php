@@ -68,6 +68,9 @@ $asCaps = [
     'delete'   => $asIsRoleAdmin || strpos($pp,'A')!==false || strpos($pp,'D')!==false || in_array('asdoc_delete', $asFeatures, true),
     'settings' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_settings', $asFeatures, true),
     'edit_online' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_edit_online', $asFeatures, true),
+    // 編輯線上內容（程序書電子版）：與「線上開檔」是兩件事——那個是用本機 Word 開檔案，
+    // 這個是在網頁上直接編輯整份文件的內容（views/ADM/as_doc_editor.php）
+    'edit_content' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_edit_content', $asFeatures, true),
     'download' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_download', $asFeatures, true),
     // 免附件補登：只認明確功能碼，管理員不自動豁免（維持改版必附申請單的管控）
     'no_attach' => in_array('asdoc_no_attach', $asFeatures, true),
@@ -1089,7 +1092,7 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
         <div class="table-responsive">
           <table class="table table-bordered table-condensed">
             <thead><tr>
-              <th>版本</th><th>狀況</th><th>階級</th><th>部門</th><th>修訂日期</th><th>制修訂頁次</th><th>制修訂摘要</th><th>上傳者</th><th>文件檔（下載版）</th><th>檢視版</th><th>申請單</th><?= $asCaps['super_delete'] ? '<th>永久刪除</th>' : '' ?>
+              <th>版本</th><th>狀況</th><th>階級</th><th>部門</th><th>修訂日期</th><th>制修訂頁次</th><th>制修訂摘要</th><th>上傳者</th><th>文件檔（下載版）</th><th>檢視版</th><th>線上版</th><th>申請單</th><?= $asCaps['super_delete'] ? '<th>永久刪除</th>' : '' ?>
             </tr></thead>
             <tbody id="historyBody"></tbody>
           </table>
@@ -3190,6 +3193,22 @@ $(function(){
           af += ` <a class="btn btn-xs btn-warning" href="doc_apply.php" target="_blank" rel="noopener"
                     title="此版本尚無線上文件制、修申請單，可到該頁用「建議建立」一次補齊">補線上單</a>`;
         }
+        /* 線上版（程序書電子版）：每個版次各有自己的線上內容，所以入口放在版次這一列。
+           內容綁版次是刻意的——AS9100 的舊版必須永遠印得出當時的樣子。 */
+        let onl;
+        if(v.online_primary){
+          onl = `<a class="btn btn-xs btn-success" href="as_doc_editor.php?version_id=${v.id}" target="_blank" rel="noopener"
+                   title="這個版次以線上版為正本">線上版</a>`;
+        } else if(v.has_online){
+          onl = `<a class="btn btn-xs btn-default" href="as_doc_editor.php?version_id=${v.id}" target="_blank" rel="noopener"
+                   title="已有線上內容，但尚未設為此版次的正本（目前仍以 Word／PDF 為準）">草稿</a>`;
+        } else if(window.asPerm.edit_content){
+          onl = `<a class="btn btn-xs btn-primary" href="as_doc_editor.php?version_id=${v.id}" target="_blank" rel="noopener"
+                   title="把這個版次做成線上版（可從 Word 匯入文字與表格，流程圖用內建編輯器重畫）">建立</a>`;
+        } else {
+          onl = '<span class="text-muted">無</span>';
+        }
+
         const verDel = window.asPerm.super_delete
           ? `<td><a href="javascript:void(0)" class="btn btn-xs btn-danger op-ver-del" data-id="${v.id}" data-version="${esc(v.version)}" title="永久刪除此改版紀錄與附件（不可復原）"><i class="fa fa-trash-o"></i></a></td>` : '';
         tb.append(`<tr>
@@ -3201,10 +3220,10 @@ $(function(){
           <td>${esc(v.revised_pages)||'-'}</td>
           <td>${esc(v.revised_summary)||'-'}</td>
           <td>${esc(v.uploaded_by)||'-'}</td>
-          <td>${dl}</td><td>${vw}</td><td>${af}</td>${verDel}
+          <td>${dl}</td><td>${vw}</td><td>${onl}</td><td>${af}</td>${verDel}
         </tr>`);
       });
-      if((r.data.versions||[]).length===0) tb.append('<tr><td colspan="11" class="text-center text-muted">無版本</td></tr>');
+      if((r.data.versions||[]).length===0) tb.append('<tr><td colspan="12" class="text-center text-muted">無版本</td></tr>');
       // 管理員：批次補建版本入口／超級管理員：補舊版次入口
       $('#hisBatchBtn, #hisOldBtn').remove();
       if(window.asPerm.backfill_old && curHistCurVer){
@@ -4144,6 +4163,7 @@ $(function(){
     {code:'asdoc_delete',      label:'刪除/還原'},
     {code:'asdoc_settings',    label:'文管設定'},
     {code:'asdoc_edit_online', label:'線上開檔'},
+    {code:'asdoc_edit_content', label:'編輯線上內容（程序書電子版）'},
     {code:'asdoc_no_attach',   label:'免附件補登'},
     {code:'asdoc_upload_record', label:'上傳紀錄'},
     {code:'asdoc_online_form_beta', label:'線上表單模板(測試功能)'}
@@ -4360,6 +4380,10 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
     <li>一份文件底下可以有多個版本（版次＋修訂日）。<b>列印任何單據時要印哪一版，是依「那張單據自己的日期」回推當時生效的版次</b>，不是一律印現在最新版。</li>
     <li>【<b>程序書快速建檔</b>】：前期補件用，一次把程序書＋全部歷史版本＋底下表單建好（免申請單）。</li>
     <li>正式的制訂／修訂請走<b>文件制、修申請單</b>模組；那邊核准後這裡會自動對得起來，文件的歷史版本跳窗看得到對應的申請單。</li>
+    <li>【<b>線上版（程序書電子版）</b>】歷史版本跳窗的「線上版」欄可以把該版次<b>直接在網頁上編輯</b>
+        （字型字級顏色縮排、表格、可縮放裁切的圖片、可再編輯的流程圖），取代「線下用 Word 編→上傳→轉 PDF」。
+        按「建立」可從該版次掛的 Word <b>匯入文字與表格</b>，轉不進來的（Word 繪圖物件＝流程圖的線條箭頭）會列成清單請你重畫。
+        內容<b>綁在版次上</b>，所以改版不會動到舊版印出來的樣子。編好要勾「設為此版次的正本」，檢視與列印才會走線上版。</li>
 </ul>
 
 <h4>三、填寫紀錄（品質紀錄）</h4>

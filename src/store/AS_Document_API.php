@@ -319,14 +319,13 @@ function asSetSetting(PDO $db, string $key, string $val): void {
                   ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)")
        ->execute([$key, $val]);
 }
+/* 路徑規則已收斂進共用庫 src/common/asdoc_lib.php（鐵律4）——二階文件線上版要讀
+   同一批 Word 原始檔做匯入，而本檔是 API（頂層有 session 與權限判定）不能被 include。
+   這裡只留薄包裝，既有呼叫端不必改。 */
 /** NAS 根路徑（去尾斜線）。此為唯一存 DB 的路徑資訊，其餘一律現場組。 */
-function asDocRoot(PDO $db): string {
-    return rtrim(asGetSetting($db, 'as_doc_nas_dir'), "/\\");
-}
+function asDocRoot(PDO $db): string { return eg_asdoc_root($db); }
 /** 某文件的實體資料夾＝根 / docs / {doc_id}（doc_id 為不可變主鍵，符合路徑規範） */
-function asDocDir(PDO $db, int $docId): string {
-    return asDocRoot($db) . DIRECTORY_SEPARATOR . 'docs' . DIRECTORY_SEPARATOR . $docId;
-}
+function asDocDir(PDO $db, int $docId): string { return eg_asdoc_doc_dir($db, $docId); }
 /** 表單填寫紀錄的實體資料夾＝根 / records / {form_doc_id} */
 function asRecordDir(PDO $db, int $docId): string {
     return asDocRoot($db) . DIRECTORY_SEPARATOR . 'records' . DIRECTORY_SEPARATOR . $docId;
@@ -764,6 +763,28 @@ case 'get_document':
     $vs = $db->prepare("SELECT v.*, dep.name AS dept_name_snapshot FROM as_document_version v LEFT JOIN department dep ON dep.id=v.department_id_snapshot WHERE v.doc_id=? ORDER BY v.revised_date DESC, v.id DESC");
     $vs->execute([$id]);
     $doc['versions'] = $vs->fetchAll(PDO::FETCH_ASSOC);
+
+    /* 線上版內容（程序書電子版）：每個版次各有自己的內容，所以逐版次標出「有沒有」與「是不是正本」。
+       一次查完再對映，不要在迴圈裡逐版次查（版次多的文件會變成 N 次查詢）。 */
+    try {
+        require_once __DIR__ . '/../common/as_doc_content_lib.php';
+        adc_ensure_schema($db);
+        $oc = [];
+        $ocSt = $db->prepare("SELECT version_id, is_primary,
+                                     (content_html IS NOT NULL AND content_html<>'') AS has_html
+                              FROM as_doc_content WHERE doc_id=?");
+        $ocSt->execute([$id]);
+        foreach ($ocSt->fetchAll(PDO::FETCH_ASSOC) as $r) $oc[(int)$r['version_id']] = $r;
+        foreach ($doc['versions'] as &$_v) {
+            $k = (int)$_v['id'];
+            $_v['has_online']     = isset($oc[$k]) && (int)$oc[$k]['has_html'] === 1 ? 1 : 0;
+            $_v['online_primary'] = isset($oc[$k]) && (int)$oc[$k]['is_primary'] === 1 && (int)$oc[$k]['has_html'] === 1 ? 1 : 0;
+        }
+        unset($_v);
+    } catch (Throwable $e) {
+        foreach ($doc['versions'] as &$_v) { $_v['has_online'] = 0; $_v['online_primary'] = 0; }
+        unset($_v);
+    }
 
     // 線上「文件制、修申請單」(2-DC-01-01) 自動連結：每個版本掛上對應的線上申請單（沒有就是 null）
     // 由 doc_apply.as_version_id 連過來；掃描頁「建議建立」會把缺的補上。

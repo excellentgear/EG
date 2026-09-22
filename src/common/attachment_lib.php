@@ -312,11 +312,16 @@ function eg_att_pending_commit(string $tempRoot, string $uploadId, string $destD
 // ---------------------------------------------------------------------------
 // 5. LibreOffice headless 轉 PDF
 // ---------------------------------------------------------------------------
-/** 轉出 PDF 至 $outDir，回傳 PDF 路徑或 null。用 proc_open 陣列參數避開 cmd 引號地雷。 */
-function eg_att_soffice_convert(string $src, string $outDir, int $timeoutSec = 120): ?string {
+/** 轉檔至 $outDir，回傳輸出檔路徑或 null。用 proc_open 陣列參數避開 cmd 引號地雷。
+ *  $convertTo：LibreOffice 的 --convert-to 值，預設 PDF（既有呼叫端行為完全不變）。
+ *    另一個用得到的是 'html:HTML (StarWriter)'＝把 Word 轉成 HTML，供二階文件線上版匯入
+ *    （見 as_doc_content_lib.php 的 adc_import_word）。輸出副檔名取 $convertTo 的第一段。 */
+function eg_att_soffice_convert(string $src, string $outDir, int $timeoutSec = 120,
+                                string $convertTo = 'pdf:writer_pdf_Export:{"SelectPdfVersion":{"type":"long","value":14}}'): ?string {
     if (!is_file(EG_ATT_SOFFICE)) { error_log('[att_lib] LibreOffice not found: ' . EG_ATT_SOFFICE); return null; }
+    $outExt = strtolower(trim(strtok($convertTo, ':'))) ?: 'pdf';
     // 先清掉舊的同名輸出檔，避免殘留檔被誤判為轉檔成功
-    $expect = rtrim($outDir, '\\/') . DIRECTORY_SEPARATOR . pathinfo($src, PATHINFO_FILENAME) . '.pdf';
+    $expect = rtrim($outDir, '\\/') . DIRECTORY_SEPARATOR . pathinfo($src, PATHINFO_FILENAME) . '.' . $outExt;
     if (is_file($expect)) @unlink($expect);
     // 每次獨立 profile，避免與桌面版/併發轉檔互鎖
     $profile = rtrim(sys_get_temp_dir(), '\\/') . DIRECTORY_SEPARATOR . 'lo_' . bin2hex(random_bytes(6));
@@ -326,7 +331,7 @@ function eg_att_soffice_convert(string $src, string $outDir, int $timeoutSec = 1
     $cmd = [
         EG_ATT_SOFFICE, '--headless', '--norestore', '--nolockcheck',
         '-env:UserInstallation=' . $profileUrl,
-        '--convert-to', 'pdf:writer_pdf_Export:{"SelectPdfVersion":{"type":"long","value":14}}',
+        '--convert-to', $convertTo,
         '--outdir', $outDir, $src,
     ];
     // mod_fcgid 下 PHP 環境變數被剝到近乎空，soffice 啟動即失敗(2026-07-16 實測：
@@ -358,7 +363,7 @@ function eg_att_soffice_convert(string $src, string $outDir, int $timeoutSec = 1
     }
     fclose($pipes[1]); fclose($pipes[2]);
     proc_close($proc);
-    $pdf = rtrim($outDir, '\\/') . DIRECTORY_SEPARATOR . pathinfo($src, PATHINFO_FILENAME) . '.pdf';
+    $pdf = rtrim($outDir, '\\/') . DIRECTORY_SEPARATOR . pathinfo($src, PATHINFO_FILENAME) . '.' . $outExt;
     if (is_file($pdf) && filesize($pdf) > 0) { eg_att_rrmdir($profile); return $pdf; }
 
     // 直接啟動失敗——Apache 行程樹的 Job UI 限制會讓 GUI 程式 DLL 初始化失敗(0xC0000142，
@@ -368,7 +373,7 @@ function eg_att_soffice_convert(string $src, string $outDir, int $timeoutSec = 1
         try {
             $cmdline = '"' . EG_ATT_SOFFICE . '" --headless --norestore --nolockcheck'
                      . ' -env:UserInstallation=' . $profileUrl
-                     . ' --convert-to "pdf:writer_pdf_Export:{\"SelectPdfVersion\":{\"type\":\"long\",\"value\":14}}"'
+                     . ' --convert-to "' . str_replace('"', '\\"', $convertTo) . '"'
                      . ' --outdir "' . $outDir . '" "' . $src . '"';
             $wmi = new COM('winmgmts://./root/cimv2');
             $wp  = $wmi->Get('Win32_Process');

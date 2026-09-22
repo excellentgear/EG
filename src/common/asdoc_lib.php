@@ -211,6 +211,29 @@ function eg_asdoc_user_can(PDO $db, int $uid, string $what): bool {
     return eg_asdoc_can_with($features, in_array('all', $features, true), eg_asdoc_page_perm($db, $uid), $what);
 }
 
+/* ── AS 文件的實體檔案位置（唯一實作，2026-09-22 下移） ──────────────────────
+   原本寫在 AS_Document_API.php 的 asDocRoot()／asDocDir()，但那支檔案是 API
+   （頂層有 session 與權限判定，不能被別的模組 include）。二階文件線上版要讀
+   同一批 Word 原始檔來做匯入，所以把路徑規則下移到這裡當唯一實作，
+   AS_Document_API 改成薄包裝（同檔已有 asEditorTermEnsure 這個先例）。
+   ⚠ 只有「根路徑」存在 DB，其餘一律現場組（鐵律5）。 */
+
+/** NAS 根路徑（去尾斜線） */
+function eg_asdoc_root(PDO $db): string {
+    $v = '';
+    try {
+        $st = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key='as_doc_nas_dir'");
+        $st->execute();
+        $v = (string)($st->fetchColumn() ?: '');
+    } catch (Throwable $e) {}
+    return rtrim($v, "/\\");
+}
+
+/** 某文件的實體資料夾＝根 / docs / {doc_id}（doc_id 為不可變主鍵，符合路徑規範） */
+function eg_asdoc_doc_dir(PDO $db, int $docId): string {
+    return eg_asdoc_root($db) . DIRECTORY_SEPARATOR . 'docs' . DIRECTORY_SEPARATOR . $docId;
+}
+
 /* ════════════════ AS 文件的「作業項目」（2026-09-11 使用者交辦） ════════════════
  * 是什麼：一份 AS 文件用白話寫出「這份文件實際上在做哪幾件事」，例如
  *   供應商管理程序 → 外包加工、供應商評鑑；品質管制程序 → 品管檢測、進料檢驗。
