@@ -104,6 +104,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .m-body textarea { resize:vertical; }
         .ro-auto { background:#F3EADB; color:#7a6446; }
         .da-hint { font-size:12px; color:#8a6d45; line-height:1.7; }
+        /* 建議建立清單上的「編號變更」註記（暖色系，ai-rules/10）。
+           line-height 一定要自己寫死：本專案表格內的小字被全域 td span 的 28px 行高撐高過三次 */
+        .sug-renum { font-size:11px; line-height:1.5; color:#8a5a12; background:#FCEFD9;
+                     border:1px solid #F0D3A2; border-radius:3px; padding:2px 5px; margin-top:3px;
+                     display:inline-block; text-align:left; }
         .da-err { color:#DD5138; font-size:12px; margin-top:2px; display:none; }
         .fld-bad input, .fld-bad select, .fld-bad textarea { border-color:#DD5138 !important; background:#FDF1EE; }
         .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
@@ -531,7 +536,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <li><b>不可填的欄位一律反灰</b>；送出前前端與後端<b>各驗一次</b>，直接打 API 也繞不過去。</li>
             <li><b>核准後需同時更改</b>「文件管制總覽表」或「品質記錄一覽表」是紙本上的勾選項，請據實勾選。</li>
             <li><b>回收記錄</b>：簽收者＝<b>填寫單位</b>的主管（不是申請人），回收者<b>固定為文管中心負責人</b>，由系統帶入。</li>
-            <li><b>建議建立</b>（管理員）：掃描 AS 文件管理裡「有新文件或改版、但還沒有線上申請單」的版本，可設定只掃某日期之後、可多選或全選一次建立；建立出來的草稿<b>日期以修訂日為準</b>並自動帶入相關資料。</li>
+            <li><b>建議建立</b>（管理員）：掃描 AS 文件管理裡「有新文件或改版、但還沒有線上申請單」的版本，可設定只掃某日期之後、可多選或全選一次建立；建立出來的草稿<b>日期以修訂日為準</b>並自動帶入相關資料。
+                在 AS 文件管理改版時<b>一併變更文件編號／所屬部門</b>的那幾筆，清單上會用橘色標出「編號變更　舊 → 新」，
+                建立出來的申請單<b>第一列制修訂內容就是「文件編號變更」</b>（變更前＝舊編號、變更後＝新編號），不必自己打。</li>
             <li><b>自動簽核</b>（管理員）：需輸入<b>操作確認密碼</b>；簽核日期＝申請日期，精確時間戳自動錯開 5～30 分鐘且不跨日。可在跳窗<b>手動指定本次填表人與日期</b>（補歷史紙本用）。</li>
             <li><b>匯出</b>：「匯出 CSV」會依<b>目前的搜尋條件把全部資料</b>由後端組檔（不是只匯出畫面上這一頁）；
                 需要 PDF 就用<b>列印</b>（列印目的地選「另存為 PDF」即可，版面與紙本完全一致）。</li>
@@ -1296,7 +1303,12 @@ $('#btnSugScan').on('click', function(){
             b.append('<tr>'
                 + '<td><input type="checkbox" class="sugChk" value="' + v.version_id + '"></td>'
                 + '<td>' + esc(dispDate(v.revised_date)) + '</td>'
-                + '<td>' + esc(v.doc_no) + '</td>'
+                // 這一版同時改過文件編號／所屬部門時一定要標出來：清單上只看得到新編號，
+                // 不標的話開單的人根本不會知道這張申請單的重點是「編號從舊的改成新的」（2026-09-22）
+                + '<td>' + esc(v.doc_no)
+                    + (v.renumber_from ? '<div class="sug-renum">編號變更　' + esc(v.renumber_from) + ' → ' + esc(v.renumber_to)
+                        + (v.renumber_dept ? '<br>部門　' + esc(v.renumber_dept) : '') + '</div>' : '')
+                  + '</td>'
                 + '<td class="l">' + esc(v.doc_name) + '</td>'
                 + '<td>' + esc(v.doc_type || v.doc_level || '') + '</td>'
                 + '<td>' + esc(v.dept_name || '') + '</td>'

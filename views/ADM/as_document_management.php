@@ -129,6 +129,14 @@ if ($deptPerm === 'R') {
         .req-note{color:#a94442;font-size:12px;}
         .scroll-to-top{position:fixed;bottom:20px;right:20px;width:50px;height:50px;background:rgba(255,255,255,.6);color:#000;border:none;border-radius:50%;text-align:center;line-height:50px;cursor:pointer;font-size:12px;font-weight:bold;box-shadow:0 4px 8px rgba(0,0,0,.2);z-index:1000;}
         .apply-alert{background:#fcf8e3;border:1px solid #faebcc;color:#8a6d3b;padding:10px;border-radius:4px;margin-bottom:12px;}
+        /* 變更文件編號區（暖色系，ai-rules/10）；只有管理員看得到 */
+        .renum-box{border:1px solid #E6CFA6;background:#FDF8F0;border-radius:4px;padding:8px 10px;margin-top:6px;}
+        .renum-head{font-weight:normal;margin:0;cursor:pointer;}
+        .renum-head input{margin-right:6px;}
+        .renum-cur{font-size:12px;color:#7a5a2e;background:#F6EBD9;border-radius:3px;padding:4px 8px;margin:8px 0;}
+        .renum-note{font-size:12px;color:#8a6d3b;line-height:1.7;background:#FCEFD9;border:1px solid #F0D3A2;
+                    border-radius:3px;padding:6px 9px;}
+        .renum-err{color:#DD5138;font-size:12px;line-height:1.5;margin-top:3px;min-height:1px;}
     </style>
 </head>
 <body class="nav-sm">
@@ -1070,6 +1078,62 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
               </div></div>
             <div class="form-group col-md-4"><label>文件制修申請單（附件一）* <span class="req-note">改版必附</span></label><input type="file" name="apply_form" id="ver_apply_form" required></div>
           </div>
+<?php if ($asCaps['admin']): ?>
+          <!-- ═══ 變更文件編號與所屬部門（僅管理員，2026-09-22 使用者交辦） ═══
+               綁在改版裡是刻意的：改編號在文件管制上就是一次文件異動，要留版次紀錄、要開制修申請單。
+               階層欄位唯讀＝使用者明確要求「階層自動帶入原有階層，不可修改」。 -->
+          <div class="renum-box">
+            <label class="renum-head">
+              <input type="checkbox" id="ver_renum_on" name="renumber" value="1">
+              <b>同時變更文件編號與所屬部門</b>
+              <span class="text-muted" style="font-weight:normal;">（僅管理員，需輸入管理員操作確認密碼）</span>
+            </label>
+            <div id="ver_renum_body" style="display:none;">
+              <div class="renum-cur">
+                目前：<b id="rn_cur_no"></b>　<span id="rn_cur_dept"></span>　<span id="rn_cur_level"></span>
+                <span id="rn_cur_parent" class="text-muted"></span>
+              </div>
+              <div class="row">
+                <div class="form-group col-md-3"><label>新所屬部門 *</label>
+                  <select class="form-control" name="new_department_id" id="rn_dept"></select></div>
+                <div class="form-group col-md-2"><label>文件代碼 *</label>
+                  <select class="form-control" name="new_dept_code" id="rn_code"></select>
+                  <span class="text-muted" style="font-size:11px;">編號第二段</span></div>
+                <div class="form-group col-md-2"><label>文件階層</label>
+                  <input type="text" class="form-control" id="rn_level" readonly disabled
+                         style="background:#eee;color:#666;cursor:not-allowed;">
+                  <span class="text-muted" style="font-size:11px;">沿用原階層，不可修改</span></div>
+                <div class="form-group col-md-5" id="rn_parent_wrap"><label>掛在哪一份母文件底下 *</label>
+                  <select class="form-control" name="new_parent_doc_id" id="rn_parent"></select>
+                  <span class="text-muted" style="font-size:11px;">新編號的前段就是它（例：掛在 2-SM-01 底下 → 2-SM-01-○○）</span></div>
+              </div>
+              <div class="row">
+                <div class="form-group col-md-4"><label>新文件編號 *</label>
+                  <div style="display:flex;gap:6px;">
+                    <input type="text" class="form-control" name="new_doc_no" id="rn_no" placeholder="例：2-SM-01-06">
+                    <button type="button" class="btn btn-default" id="rn_resuggest" title="重新取一次建議編號">建議</button>
+                  </div>
+                  <span class="text-muted" style="font-size:11px;">自動帶「該範圍最後一號＋1」，最後一段可自行修改</span>
+                  <div id="rn_no_err" class="renum-err"></div></div>
+                <div class="form-group col-md-4" id="rn_cascade_wrap" style="display:none;">
+                  <label>子文件連動</label>
+                  <div class="checkbox" style="margin-top:4px;">
+                    <label style="font-weight:normal;"><input type="checkbox" name="cascade_children" value="1" id="rn_cascade">
+                      一併改掉底下 <b id="rn_child_cnt">0</b> 份子文件的編號</label>
+                  </div>
+                  <span class="text-muted" style="font-size:11px;">不勾＝子文件維持原編號，要自己逐份處理</span></div>
+                <div class="form-group col-md-4"><label>管理員操作確認密碼 *</label>
+                  <input type="password" class="form-control" name="confirm_password" id="rn_pwd" autocomplete="new-password">
+                  <span class="text-muted" style="font-size:11px;" id="rn_pwd_hint">與「資料急救台／永久刪除」用的是同一組操作確認密碼。</span></div>
+              </div>
+              <div class="renum-note">
+                <i class="fa fa-info-circle"></i> 送出後：文件編號與所屬部門立即變更並記錄一筆變更歷程；
+                <b>已印出去的紙本是舊編號</b>，重新列印一律印新編號。
+                這一次改版會出現在「文件制修申請單 → 建議建立」清單裡並標示編號變更，記得補開一張申請單。
+              </div>
+            </div>
+          </div>
+<?php endif; ?>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
@@ -3114,8 +3178,106 @@ $(function(){
     $('#ver_apply_form').prop('required', !canNA);
     $('#naHint').remove();
     if(canNA) $('#versionModal .apply-alert').after('<div id="naHint" class="alert alert-info" style="padding:6px 10px;">你有「補登免附件」權限：補舊資料時，新版文件檔與申請單皆可暫不上傳。</div>');
+    rnReset();   // 上一次開跳窗可能勾過「變更文件編號」，reset() 只清 value 不會把區塊收起來
     $('#versionModal').modal('show');
   });
+  /* ── 變更文件編號與所屬部門（僅管理員，2026-09-22 使用者交辦）───────────────────
+     規則（使用者定的）：①部門用選的 ②階層沿用原有、唯讀 ③選完自動帶「該範圍最後一號＋1」
+     ④四階要先選母文件，新編號的前段就是母文件編號（2-TD-01-02 改到業務課 → 掛 2-SM-01 底下 → 2-SM-01-○○）
+     ⑤最後一段仍可自己改 ⑥送出要輸入管理員操作確認密碼
+     前端即時驗證＋後端同規則再擋一次（鐵律8），這裡不是唯一防線。 */
+  let RN = null;   // renumber_meta 回來的資料（目前文件狀態＋可選部門）
+  function rnReset(){
+    RN = null;
+    $('#ver_renum_on').prop('checked', false);
+    $('#ver_renum_body').hide();
+    $('#rn_dept,#rn_code,#rn_parent').html('');
+    $('#rn_no').val(''); $('#rn_pwd').val(''); $('#rn_no_err').text('');
+    $('#rn_cascade').prop('checked', false); $('#rn_cascade_wrap').hide();
+  }
+  function rnCodes(){   // 目前選到的部門有哪些文件代碼
+    const d = (RN && RN.depts || []).find(x => String(x.id) === String($('#rn_dept').val()));
+    return d ? (d.codes || []) : [];
+  }
+  function rnFillCodes(){
+    const cs = rnCodes();
+    $('#rn_code').html(cs.map(c =>
+      `<option value="${esc(c.code)}">${esc(c.code)}${c.label ? '（'+esc(c.label)+'）' : ''}</option>`).join(''));
+  }
+  // 向後端要「這個部門＋代碼底下可掛的母文件」與建議編號；keepParent=true 時不覆蓋使用者已選的母文件
+  function rnSuggest(keepParent){
+    if(!RN) return;
+    const p = {action:'renumber_suggest', doc_id:$('#ver_doc_id').val(),
+               department_id:$('#rn_dept').val(), code:$('#rn_code').val()};
+    if(keepParent && $('#rn_parent').val()) p.parent_doc_id = $('#rn_parent').val();
+    $.getJSON(API, p, function(r){
+      if(!r || r.status!=='success'){ $('#rn_no_err').text(r && r.message || '無法取得建議編號'); return; }
+      $('#rn_no_err').text('');
+      if(r.is_child){
+        $('#rn_parent_wrap').show();
+        const cur = keepParent ? $('#rn_parent').val() : '';
+        $('#rn_parent').html((r.parents||[]).map(x =>
+          `<option value="${x.id}">${esc(x.doc_no)}　${esc(x.doc_name)}</option>`).join(''));
+        if(!(r.parents||[]).length){
+          $('#rn_no_err').text('這個部門底下還沒有可以掛的母文件（程序書／辦法），請先到該部門建立母文件，或改選其他部門。');
+          $('#rn_no').val(''); return;
+        }
+        $('#rn_parent').val(cur || r.parent_doc_id || (r.parents[0]||{}).id);
+      } else {
+        $('#rn_parent_wrap').hide(); $('#rn_parent').html('');
+      }
+      $('#rn_no').val(r.doc_no || '');
+      rnValidate();
+    });
+  }
+  /** 前端即時檢查：格式、與原編號相同、母文件前綴。後端 add_version 會用同一組規則再擋一次。 */
+  function rnValidate(){
+    if(!$('#ver_renum_on').is(':checked')) { $('#rn_no_err').text(''); return true; }
+    const no = ($('#rn_no').val()||'').trim().toUpperCase();
+    if(!no){ $('#rn_no_err').text('請填寫新的文件編號'); return false; }
+    if(!/^\d-[A-Z]{2,4}(-\d{2,3})+$/.test(no)){
+      $('#rn_no_err').text('格式應為「數字-部門代碼-序號」，例如 2-SM-01-06'); return false; }
+    if(RN && no === String(RN.doc.doc_no||'').toUpperCase()){
+      $('#rn_no_err').text('新編號與目前編號相同；不需要改編號請取消上方勾選'); return false; }
+    const code = no.split('-')[1] || '';
+    if($('#rn_code').val() && code !== $('#rn_code').val()){
+      $('#rn_no_err').text('編號第二段「'+code+'」與所選文件代碼「'+$('#rn_code').val()+'」不一致'); return false; }
+    if($('#rn_parent_wrap').is(':visible')){
+      const pNo = ($('#rn_parent option:selected').text()||'').trim().split(/\s+/)[0] || '';
+      if(pNo && no.indexOf(pNo + '-') !== 0){
+        $('#rn_no_err').text('新編號必須以母文件編號「'+pNo+'-」開頭'); return false; }
+    }
+    $('#rn_no_err').text(''); return true;
+  }
+  $('#ver_renum_on').on('change', function(){
+    if(!this.checked){ $('#ver_renum_body').hide(); $('#rn_no_err').text(''); return; }
+    $('#ver_renum_body').show();
+    $.getJSON(API, {action:'renumber_meta', doc_id:$('#ver_doc_id').val()}, function(r){
+      if(!r || r.status!=='success'){ alert(r && r.message || '無法載入'); $('#ver_renum_on').prop('checked',false).change(); return; }
+      RN = r;
+      $('#rn_cur_no').text(r.doc.doc_no);
+      $('#rn_cur_dept').text(r.doc.dept_name || '（未設部門）');
+      $('#rn_cur_level').text(r.doc.doc_level || '');
+      $('#rn_cur_parent').text(r.doc.parent_doc_no ? ('　母文件：'+r.doc.parent_doc_no+' '+r.doc.parent_doc_name) : '');
+      $('#rn_level').val(r.doc.doc_level || '');
+      $('#rn_dept').html((r.depts||[]).map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join(''));
+      // 預設停在目前部門，使用者才看得出「現在在哪、要改去哪」
+      if((r.depts||[]).some(d => String(d.id)===String(r.doc.department_id))) $('#rn_dept').val(r.doc.department_id);
+      rnFillCodes();
+      if(r.child_count > 0){ $('#rn_child_cnt').text(r.child_count); $('#rn_cascade_wrap').show(); $('#rn_cascade').prop('checked', true); }
+      else { $('#rn_cascade_wrap').hide(); $('#rn_cascade').prop('checked', false); }
+      // 還沒設定操作確認密碼的話先講清楚，不要讓人填完整張表才在送出時被擋
+      if(!r.pw_allowed) $('#rn_pwd_hint').html('<span style="color:#DD5138;">你還沒有操作確認密碼的使用權限，請先洽超級管理員開通，否則送出會被擋下。</span>');
+      if(r.pw_locked) $('#rn_pwd_hint').html('<span style="color:#DD5138;">此功能的密碼已被鎖定至 '+esc(String(r.pw_locked).substr(0,16))+'，請洽超級管理員解鎖。</span>');
+      rnSuggest(false);
+    });
+  });
+  $('#rn_dept').on('change', function(){ rnFillCodes(); rnSuggest(false); });
+  $('#rn_code').on('change', function(){ rnSuggest(false); });
+  $('#rn_parent').on('change', function(){ rnSuggest(true); });
+  $('#rn_resuggest').on('click', function(){ rnSuggest(true); });
+  $('#rn_no').on('input', function(){ rnValidate(); });
+
   $('#dlTplBtn').on('click', function(e){ e.preventDefault(); window.location = API+'?action=download_template'; });
   // 選了導入來源就鎖住「檢視版」上傳欄（後端同樣二擇一，不做只擋前端的半套）；下載版不受影響仍需自行上傳
   $('#ver_fsd_case').on('change', function(){
@@ -3128,10 +3290,41 @@ $(function(){
     if($('#ver_fsd_case').val() && $('#ver_view_file')[0].files.length){
       alert('檢視版請擇一：上傳檔案，或由表單簽核案件導入。'); return;
     }
+    if($('#ver_renum_on').is(':checked')){
+      if(!rnValidate()){ $('#rn_no').focus(); return; }
+      if(!($('#rn_pwd').val()||'').length){ $('#rn_no_err').text('請輸入管理員操作確認密碼'); $('#rn_pwd').focus(); return; }
+      const oldNo = RN ? RN.doc.doc_no : '', newNo = ($('#rn_no').val()||'').trim().toUpperCase();
+      const cas = $('#rn_cascade').is(':checked') && $('#rn_cascade_wrap').is(':visible')
+                  ? ('\n底下 '+$('#rn_child_cnt').text()+' 份子文件的編號會一併換成新前綴。') : '';
+      if(!confirm('【變更文件編號】\n'+oldNo+'　→　'+newNo
+                  +'\n所屬部門改為：'+$('#rn_dept option:selected').text()+cas
+                  +'\n\n舊編號之後不會再出現在任何列印上（已印出去的紙本仍是舊編號）。\n確定要一併變更嗎？')) return;
+    }
     const fd = new FormData(this);
+    // 沒勾「變更文件編號」時，把那一區的欄位整批拿掉——不拿掉的話空的部門/母文件會被送到後端，
+    // 雖然後端看 renumber 旗標不會處理，但留著只會讓之後查問題的人以為有送出改編號
+    if(!$('#ver_renum_on').is(':checked')){
+      ['renumber','new_doc_no','new_department_id','new_dept_code','new_parent_doc_id','cascade_children','confirm_password']
+        .forEach(k => fd.delete(k));
+    } else {
+      fd.set('new_doc_no', ($('#rn_no').val()||'').trim().toUpperCase());
+    }
     NProgress.start();
     $.ajax({url:API+'?action=add_version', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
-     .done(r=>{ if(r.status==='success'){ $('#versionModal').modal('hide'); loadDocs(true); } else alert(r.message||'失敗'); })
+     .done(r=>{
+       if(r.status!=='success'){
+         // 密碼相關的錯誤留在原地讓人重打，不要把整張表關掉（檔案都選好了，關掉要重來）
+         if(r.code==='PWD'){ $('#rn_no_err').text(r.message||'操作確認密碼驗證失敗'); $('#rn_pwd').val('').focus(); }
+         else alert(r.message||'失敗');
+         return;
+       }
+       $('#versionModal').modal('hide'); loadDocs(true);
+       if(r.renumber){
+         alert('改版完成，文件編號已變更：\n'+r.renumber.old_doc_no+'　→　'+r.renumber.new_doc_no
+               +(r.renumber.cascade ? ('\n連帶更新 '+r.renumber.cascade+' 份子文件的編號。') : '')
+               +'\n\n請到「文件制修申請單 → 建議建立」補開一張申請單（清單上會標示編號變更）。');
+       }
+     })
      .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
   });
 

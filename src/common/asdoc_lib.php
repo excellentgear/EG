@@ -370,4 +370,103 @@ function eg_asdoc_save(PDO $db, string $module, int $docId, string $by = ''): vo
     } catch (Throwable $e) {}
 }
 
+/* ════════════ 文件編號／所屬部門變更紀錄（2026-09-22 使用者交辦） ════════════
+ * 為什麼要留這一張表：改編號是在「改版」裡面做的，改完之後 as_document 上只剩新編號，
+ * **舊編號在資料庫裡一個字都不會留下**——事後看歷史版本完全看不出「這份文件本來是 2-TD-01-02」，
+ * 而紙本上印的就是舊編號，對不起來就是一筆查不出來的帳。
+ * 另一個用途是制修申請單：改編號一樣要開一張「修正」的申請單，
+ * 建議建立（da_suggest_scan）靠 version_id 對回來，才顯示得出「編號變更 舊→新」。
+ * 放在 asdoc_lib 是因為 AS 文件管理（寫入端）與 doc_apply_lib（讀取端）都已經載入這一支。 */
+
+/**
+ * 建表（可重複執行；sql.php 擋 DDL，故走程式面 migration，比照本專案其他模組）。
+ *
+ * **一定要先 SHOW TABLES 確認不存在、而且不在交易中，才可以下 DDL**——
+ * `CREATE TABLE IF NOT EXISTS` 即使表已經存在，在 MySQL 裡**照樣造成隱式 commit**，
+ * 於是呼叫端外層的 `commit()` 會爆「There is no active transaction」。
+ * 最難查的是症狀：**資料其實已經寫進去了**（隱式 commit 已經把前面的寫入定案），
+ * 畫面卻顯示失敗，看起來像沒成功、實際上改好了。
+ * 本專案踩過三次（2026-08-03 `eg_org_save()`、2026-09-21 資料稽核、2026-09-22 本函式）。
+ */
+function eg_asdoc_nochange_ensure(PDO $db): void {
+    static $done = false;
+    if ($done) return;
+    try {
+        $st = $db->query("SHOW TABLES LIKE 'as_doc_no_change'");
+        if ($st && $st->fetchColumn()) { $done = true; return; }   // 已存在＝不下 DDL
+        if ($db->inTransaction()) return;                          // 交易中一律不建表（下次非交易時再建）
+    } catch (Throwable $e) { return; }
+    $done = true;
+    try {
+        $db->exec("CREATE TABLE IF NOT EXISTS as_doc_no_change (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            doc_id INT NOT NULL COMMENT 'as_document.id',
+            version_id INT NULL COMMENT '這次變更掛在哪一筆改版 as_document_version.id（制修申請單靠它對回來）',
+            old_doc_no VARCHAR(40) NOT NULL COMMENT '變更前的文件編號',
+            new_doc_no VARCHAR(40) NOT NULL COMMENT '變更後的文件編號',
+            old_department_id INT NULL, new_department_id INT NULL,
+            old_parent_doc_id INT NULL, new_parent_doc_id INT NULL,
+            cascade_count INT NOT NULL DEFAULT 0 COMMENT '連帶改掉幾份子文件的編號',
+            changed_by_id INT NULL, changed_by VARCHAR(60) NULL,
+            changed_at DATETIME NOT NULL,
+            INDEX idx_doc (doc_id), INDEX idx_ver (version_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AS 文件編號／所屬部門變更紀錄'");
+    } catch (Throwable $e) {}
+}
+
+/** 記一筆變更。呼叫端自行控制 transaction。 */
+function eg_asdoc_nochange_add(PDO $db, array $d): void {
+    eg_asdoc_nochange_ensure($db);
+    $db->prepare("INSERT INTO as_doc_no_change
+        (doc_id, version_id, old_doc_no, new_doc_no, old_department_id, new_department_id,
+         old_parent_doc_id, new_parent_doc_id, cascade_count, changed_by_id, changed_by, changed_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())")
+       ->execute([
+           (int)$d['doc_id'], ($d['version_id'] ?? null) ?: null,
+           (string)$d['old_doc_no'], (string)$d['new_doc_no'],
+           ($d['old_department_id'] ?? null) ?: null, ($d['new_department_id'] ?? null) ?: null,
+           ($d['old_parent_doc_id'] ?? null) ?: null, ($d['new_parent_doc_id'] ?? null) ?: null,
+           (int)($d['cascade_count'] ?? 0), ($d['changed_by_id'] ?? null) ?: null,
+           (string)($d['changed_by'] ?? ''),
+       ]);
+}
+
+/**
+ * 依 as_document_version.id 批次取回「這一版有沒有伴隨編號變更」。
+ * @return array version_id => ['old_doc_no'=>…, 'new_doc_no'=>…, 'old_dept'=>…, 'new_dept'=>…]
+ */
+function eg_asdoc_nochange_by_versions(PDO $db, array $versionIds): array {
+    $ids = array_values(array_unique(array_filter(array_map('intval', $versionIds))));
+    if (!$ids) return [];
+    eg_asdoc_nochange_ensure($db);
+    try {
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $st = $db->prepare("SELECT c.version_id, c.old_doc_no, c.new_doc_no,
+                                   do_.name AS old_dept, dn.name AS new_dept
+                            FROM as_doc_no_change c
+                            LEFT JOIN department do_ ON do_.id = c.old_department_id
+                            LEFT JOIN department dn  ON dn.id  = c.new_department_id
+                            WHERE c.version_id IN ($in)");
+        $st->execute($ids);
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(int)$r['version_id']] = $r;
+        return $out;
+    } catch (Throwable $e) { return []; }
+}
+
+/** 某一份文件的編號變更歷程（新→舊），給文件管理的歷史版本區顯示 */
+function eg_asdoc_nochange_rows(PDO $db, int $docId): array {
+    if ($docId <= 0) return [];
+    eg_asdoc_nochange_ensure($db);
+    try {
+        $st = $db->prepare("SELECT c.*, do_.name AS old_dept, dn.name AS new_dept
+                            FROM as_doc_no_change c
+                            LEFT JOIN department do_ ON do_.id = c.old_department_id
+                            LEFT JOIN department dn  ON dn.id  = c.new_department_id
+                            WHERE c.doc_id=? ORDER BY c.id DESC");
+        $st->execute([$docId]);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
 }

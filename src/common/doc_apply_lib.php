@@ -853,6 +853,12 @@ function da_suggest_scan(PDO $db, string $sinceDate = '', int $limit = 500): arr
         $rows = $st->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) { return []; }
 
+    /* 這一版有沒有伴隨「文件編號／所屬部門變更」（2026-09-22）。
+       改編號是在 AS 文件管理的「改版」裡做的，所以版次列本來就會被掃到、不必另外開一種來源；
+       但清單上一定要標出來——不標的話畫面只看得到新編號，
+       開單的人不會知道這一張申請單的重點其實是「編號從 2-TD-01-02 改成 2-SM-01-06」。 */
+    $chg = eg_asdoc_nochange_by_versions($db, array_column($rows, 'version_id'));
+
     foreach ($rows as &$r) {
         $isFirst = ((int)$r['first_ver_id'] === (int)$r['version_id']);
         $r['is_first']        = $isFirst ? 1 : 0;
@@ -861,9 +867,29 @@ function da_suggest_scan(PDO $db, string $sinceDate = '', int $limit = 500): arr
         $r['suggest_status']  = in_array($cs, DA_DOC_STATUS, true) ? $cs : ($isFirst ? '制訂' : '修正');
         $r['first_issue_date']= (string)($r['first_date'] ?? '');
         $r['has_paper']       = $r['apply_form_file_name'] ? 1 : 0;
+        $c = $chg[(int)$r['version_id']] ?? null;
+        $r['renumber_from']   = $c ? (string)$c['old_doc_no'] : '';
+        $r['renumber_to']     = $c ? (string)$c['new_doc_no'] : '';
+        $r['renumber_dept']   = ($c && (string)$c['old_dept'] !== (string)$c['new_dept'])
+                                ? trim((string)$c['old_dept']) . '→' . trim((string)$c['new_dept']) : '';
         unset($r['first_ver_id'], $r['first_date'], $r['apply_form_file_name']);
     }
     return $rows;
+}
+
+/**
+ * 編號變更要寫進申請單的那一句話（建議建立與畫面提示共用，不要兩邊各寫一種說法）。
+ * 沒有伴隨編號變更就回空字串。
+ */
+function da_renumber_note(array $v): string
+{
+    $from = trim((string)($v['renumber_from'] ?? ''));
+    $to   = trim((string)($v['renumber_to'] ?? ''));
+    if ($from === '' || $to === '') return '';
+    $s = '文件編號由 ' . $from . ' 變更為 ' . $to;
+    $d = trim((string)($v['renumber_dept'] ?? ''));
+    if ($d !== '') $s .= '，所屬部門由 ' . str_replace('→', ' 變更為 ', $d);
+    return $s . '。';
 }
 
 /** 依掃描結果建立一張申請單（草稿）；回傳 apply_id，失敗回 0。呼叫端自行控制 transaction。 */
@@ -920,11 +946,22 @@ function da_create_from_version(PDO $db, array $v, int $createdBy, string $creat
     } catch (Throwable $e) { return 0; }
 
     // 制修訂內容：帶入 AS 版本履歷的頁次／摘要（使用者要求「自動顯示相關資料」）
+    $row  = 0;
+    $ins  = $db->prepare("INSERT INTO doc_apply_change (apply_id,row_no,page_no,item,before_txt,after_txt) VALUES (?,?,?,?,?,?)");
+    // 這一版伴隨編號／部門變更時，第一列就寫它——制修訂內容本來就有「變更前／變更後」兩欄，
+    // 舊編號放變更前、新編號放變更後，是這張表上最自然也最看得懂的寫法（2026-09-22）
+    $rFrom = trim((string)($v['renumber_from'] ?? ''));
+    $rTo   = trim((string)($v['renumber_to'] ?? ''));
+    if ($rFrom !== '' && $rTo !== '') {
+        $item = '文件編號變更';
+        $rd   = trim((string)($v['renumber_dept'] ?? ''));
+        if ($rd !== '') $item .= '（所屬部門 ' . $rd . '）';
+        $ins->execute([$applyId, ++$row, '', $item, $rFrom, $rTo]);
+    }
     $pages = trim((string)($v['revised_pages'] ?? ''));
     $sum   = trim((string)($v['revised_summary'] ?? ''));
     if ($pages !== '' || $sum !== '') {
-        $db->prepare("INSERT INTO doc_apply_change (apply_id,row_no,page_no,item,before_txt,after_txt) VALUES (?,1,?,?,?,?)")
-           ->execute([$applyId, $pages, $sum !== '' ? mb_substr($sum, 0, 120) : '', '', $sum]);
+        $ins->execute([$applyId, ++$row, $pages, $sum !== '' ? mb_substr($sum, 0, 120) : '', '', $sum]);
     }
     da_sync_cosign_rows($db, $applyId, $def['dept_ids'], $applicantId, $applyDate);
     return $applyId;
