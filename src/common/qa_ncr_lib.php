@@ -164,8 +164,14 @@ function ncr_rows(PDO $db, string $from, string $to, array $opt = []): array {
     // ② 異常矯正處理單（fill_date 為表單日期；只收已核准開立的，草稿不算不合格品事件）
     if (in_array('car', $srcs, true)) {
         try {
+            // 2026-09-22：異常矯正單的處置方式改存 id（沿用異常單的 qa_option），舊資料還在 enum
+            // 欄位裡；顯示文字一律走 car_disp_label()（唯一實作），不要在這裡自己判一次。
+            // 順帶修掉既有問題：原本直接印 enum 代碼（'rework'），現在印中文。
+            require_once __DIR__ . '/car_lib.php';
+            car_ensure_cause_cols($db);
             $st = $db->prepare("SELECT c.id, c.car_no, c.fill_date, c.found_date, c.qty, c.d_id, c.drawing_no,
-                                       c.abnormal_desc, c.cause_detail, c.resp_display, c.disposition,
+                                       c.abnormal_desc, c.cause_detail, c.resp_display,
+                                       c.disposition, c.disposition_other, c.disposition_opt_id,
                                        c.close_date, c.status, c.counterparty_type, c.customer_id, c.maker_id_no,
                                        cl.customer AS cname, m.maker_id AS mname
                                 FROM car_order c
@@ -185,7 +191,7 @@ function ncr_rows(PDO $db, string $from, string $to, array $opt = []): array {
                     'src_no'     => (string)$r['car_no'],
                     'src_cause'  => trim((string)($r['abnormal_desc'] ?: $r['cause_detail'])),
                     'src_resp'   => (string)($r['resp_display'] ?? ''),
-                    'src_disp'   => trim((string)($r['disposition'] ?? '')),
+                    'src_disp'   => car_disp_label($db, $r),
                     'src_closed' => ($r['close_date'] || $r['status'] === 'closed') ? 1 : 0,
                     'src_closed_date' => substr((string)($r['close_date'] ?? ''), 0, 10),
                     'src_link'   => '../QA/correction_order.php',

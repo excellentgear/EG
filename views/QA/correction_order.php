@@ -136,6 +136,16 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         .help-doc li{ margin-bottom:4px; font-size:13px; line-height:1.6; }
         .help-doc .hd-warn{ background:#FBEEE6; border:1px solid #F3D9C4; color:#8A5A2B; border-radius:6px; padding:8px 10px; font-size:13px; }
         @media print{ .page-help-btn{ display:none !important; } }
+        /* 異常原因分類：三層縮排樹、單選（版面比照品質異常處理單的 .ctree） */
+        .car-ctree{ max-height:240px; overflow:auto; border:1px solid #ddd; border-radius:6px;
+                    padding:6px 10px; background:#fff; }
+        .car-ctree .lv1{ margin-top:4px; font-weight:700; color:#5b3a1e; }
+        .car-ctree .lv2{ margin-left:20px; }
+        .car-ctree .lv3{ margin-left:40px; }
+        .car-ctree label{ font-weight:normal; margin:0; cursor:pointer; display:inline-flex;
+                          align-items:center; gap:5px; font-size:13px; line-height:20px; }
+        .cc-path{ margin-top:4px; font-size:12px; background:#FBEEE6; border:1px solid #F3D9C4;
+                  color:#8A5A2B; border-radius:5px; padding:3px 8px; }
         /* 補資料（代填／代簽）面板：暖琥珀色，與一般作業區塊明顯區隔（ai-rules/10 暖色系） */
         .bf-panel{ border:2px solid #F0A24B; border-radius:8px; margin-top:12px; overflow:hidden; }
         .bf-panel .bf-head{ background:#F0A24B; color:#4a2f10; padding:6px 12px; font-weight:700;
@@ -619,7 +629,9 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
           → 加責任單位（部門可再指定人員，或指定廠商）→ 送出。<br>
           <span class="text-muted">非主管職開立時會先送所屬部門主管核准，核准後才配發正式單號。</span></li>
       <li><b>指派</b>：責任單位主管在單據內指派一名回覆人（也可指派給自己）。原回覆人離職／留停時可重新指派。</li>
-      <li><b>回覆</b>：回覆人逐段填寫並各自簽章，三段都簽好才能送出；要改內容先按該段的「修改（取消簽章）」。</li>
+      <li><b>回覆</b>：回覆人逐段填寫並各自簽章，三段都簽好才能送出；要改內容先按該段的「修改（取消簽章）」。<br>
+          <span class="text-muted">「異常原因分類」是三層的樹狀清單、<b>只能選一個</b>；「處置方式」也是單選。
+          兩者的選單與<b>品質異常處理單共用同一份</b>（在異常單的設定頁維護），所以那邊加一層或改名，這裡跟著變。</span></li>
       <li><b>簽核／裁決</b>：主管簽核通過或退回重改 → 總經理裁決結案（填結案日與扣款）或不可結案（自動產生退件 R 單）。</li>
       <li><b>列印</b>：單據內「列印」為紙本版式；列表右上可印總表與匯出 CSV。</li>
     </ul>
@@ -1232,7 +1244,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
                   ['draft','applying','app_rejected'].indexOf(o.status)<0)   /* 核准成立後不可刪 */
         + EGStamp.row(descSig)+'</td></tr>'
         + '</tbody></table>'
-        + actions + assignHtml + renderReply(o, perm, sigMap, L, r.attachments)
+        + actions + assignHtml + renderReply(o, perm, sigMap, L, r.attachments, r.causes, r.disp_opts)
         + renderDecision(o, perm, sigMap, r.attachments)
         + renderBackfill(o, perm, sigMap, L, r.bf_slots)
         + '<h5 style="margin-top:12px;">處理軌跡</h5>'+(acts||'<span class="text-muted">—</span>')
@@ -1282,12 +1294,31 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
             .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'指派失敗'); }); });
       }
 
+      // 異常原因分類：選了哪一條路徑即時顯示在樹的下方（66 個節點，光看勾勾看不出選到哪一層）
+      function refreshCausePath(){
+        if(!$('#rp-cause-path').length) return;
+        var v=$('#view-body input[name="rp-cause-cat"]:checked').val()||'';
+        $('#rp-cause-path').html(v
+          ? ('已選：<b>'+esc(causePathOf(r.causes, v, ''))+'</b>')
+          : '<span style="color:#a94442;">尚未選擇（簽章前一定要選一個）</span>');
+      }
+      // 直接綁在這次重畫出來的 radio 上（不用 #view-body 事件委派，那個元素不會被換掉、會累積 handler）
+      $('#view-body input[name="rp-cause-cat"]').on('change', refreshCausePath);
+      refreshCausePath();
+      // 已選的節點捲進視野（**只捲分類框自己**，不可用 scrollIntoView——那會連整個單據檢視
+      // 一起往下捲，一開跳窗就跳到中間，看不到表頭）
+      (function(){
+        var box=$('#view-body .car-ctree')[0], c=$('#view-body input[name="rp-cause-cat"]:checked')[0];
+        if(!box || !c) return;
+        box.scrollTop += (c.getBoundingClientRect().top - box.getBoundingClientRect().top) - box.clientHeight/2;
+      })();
+
       // 回覆三段：儲存/簽章/修改/送出
       function gatherReply(){
-        var ci=[]; $('.ci-chk:checked').each(function(){ ci.push($(this).val()); });
-        return { car_id:id, cause_investigation:JSON.stringify(ci),
-          cause_other:$('#rp-cause-other').val()||'', cause_detail:$('#rp-cause-detail').val()||'',
-          disposition:$('input[name="rp-disp"]:checked').val()||'', disposition_other:$('#rp-disp-other').val()||'',
+        return { car_id:id,
+          cause_cat_id: $('#view-body input[name="rp-cause-cat"]:checked').val()||'',
+          cause_detail: $('#rp-cause-detail').val()||'',
+          disposition_opt_id: $('#view-body input[name="rp-disp-opt"]:checked').val()||'',
           correction_measure:$('#rp-corr').val()||'', correction_due:$('#rp-corr-due').val()||'',
           prevention_measure:$('#rp-prev').val()||'', prevention_due:$('#rp-prev-due').val()||'' };
       }
@@ -1327,8 +1358,31 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     });
   }
 
+  /* 異常原因分類（三層、**單選**）與處置方式：選單來源＝品質異常處理單的 qa_cause_cat／
+     qa_option（管理員在異常單設定頁維護），CAR 不自己留一份（鐵律4）。 */
+  function causeTreeHtml(nodes, lv, sel){
+    var h='';
+    (nodes||[]).forEach(function(n){
+      h += '<div class="lv'+lv+'"><label><input type="radio" name="rp-cause-cat" value="'+n.cat_id+'"'
+         + ((parseInt(sel,10)===parseInt(n.cat_id,10))?' checked':'') + '> '+esc(n.name)+'</label></div>';
+      if(n.children && n.children.length) h += causeTreeHtml(n.children, Math.min(lv+1,3), sel);
+    });
+    return h;
+  }
+  function causePathOf(nodes, id, prefix){
+    var found='';
+    (nodes||[]).forEach(function(n){
+      if(found) return;
+      var p = prefix ? (prefix+' → '+n.name) : n.name;
+      if(parseInt(n.cat_id,10)===parseInt(id,10)) { found=p; return; }
+      if(n.children && n.children.length) found = causePathOf(n.children, id, p) || '';
+    });
+    return found;
+  }
+
   // 三段回覆區塊（原因分析 / 矯正措施 / 預防措施）；附件矯正/預防分開顯示於各自區塊
-  function renderReply(o, perm, sigMap, L, atts){
+  function renderReply(o, perm, sigMap, L, atts, causes, dispOpts){
+    causes = causes||[]; dispOpts = dispOpts||[];
     // 補資料模式一律顯示（補歷史紙本時單子多半還停在「待指派」，不顯示就沒地方填三段內容）
     if(!perm.bf_on && !o.assigned_to && ['assigned','replying','pending_primary','pending_final','closed','rejected'].indexOf(o.status)<0) return '';
     var editable = !!perm.can_reply;
@@ -1356,18 +1410,37 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       body+='</div>';
       return '<div class="panel panel-default" style="margin-bottom:8px;">'+head+body+'</div>';
     }
-    var ciArr=(o.cause_investigation||'').split(',').filter(Boolean);
-    var causeEdit='<div>原因調查：';
-    Object.keys(L.cause).forEach(function(k){ causeEdit+='<label class="checkbox-inline"><input type="checkbox" class="ci-chk" value="'+k+'" '+(ciArr.indexOf(k)>=0?'checked':'')+'> '+esc(L.cause[k])+'</label>'; });
-    causeEdit+=' <input type="text" id="rp-cause-other" class="input-sm" style="width:120px;" placeholder="其他說明" value="'+esc(o.cause_other||'')+'"></div>'
-      +'<textarea id="rp-cause-detail" class="form-control" rows="2" placeholder="異常原因分析" style="margin-top:6px;">'+esc(o.cause_detail||'')+'</textarea>';
-    var causeRO='原因調查：'+(ciArr.map(function(k){return L.cause[k]||k;}).join('、')||'—')+(o.cause_other?('、'+esc(o.cause_other)):'')+'<div style="white-space:pre-wrap;margin-top:4px;">'+esc(o.cause_detail||'')+'</div>';
-    var dispEdit='<div>處置方式：';
-    Object.keys(L.disposition).forEach(function(k){ dispEdit+='<label class="radio-inline"><input type="radio" name="rp-disp" value="'+k+'" '+(o.disposition===k?'checked':'')+'> '+esc(L.disposition[k])+'</label>'; });
-    dispEdit+=' <input type="text" id="rp-disp-other" class="input-sm" style="width:120px;" placeholder="其他說明" value="'+esc(o.disposition_other||'')+'"></div>'
+    // ── 異常原因分類：三層樹、單選（勾一個就好，不複選）──
+    var causeEdit='<div style="font-weight:600;margin-bottom:3px;">異常原因分類'
+      +' <small class="text-muted" style="font-weight:normal;">（單選；選單與品質異常處理單同一份，由管理員在異常單設定頁維護）</small></div>'
+      + (causes.length
+          ? '<div class="car-ctree">'+causeTreeHtml(causes,1,o.cause_cat_id)+'</div><div class="cc-path" id="rp-cause-path"></div>'
+          : '<div class="alert alert-warning" style="padding:6px 10px;margin-bottom:4px;">管理員尚未建立異常原因分類，'
+            +'請到<b>品質異常處理單 → 設定 → 異常原因分類</b>建立後再回來選。</div>')
+      + (o.cause_is_legacy
+          ? '<div class="text-muted" style="font-size:11px;margin-top:3px;">舊資料原本勾選：'+esc(o.cause_label)
+            +'（改用上面的分類並儲存後，會以新分類為準）</div>' : '')
+      + '<textarea id="rp-cause-detail" class="form-control" rows="2" placeholder="異常原因分析" style="margin-top:6px;">'+esc(o.cause_detail||'')+'</textarea>';
+    var causeRO='異常原因分類：'+(o.cause_label?('<b>'+esc(o.cause_label)+'</b>'):'—')
+      +'<div style="white-space:pre-wrap;margin-top:4px;">'+esc(o.cause_detail||'')+'</div>';
+
+    // ── 處置方式：選項與異常單同一份（qa_option kind=disp），單選 ──
+    var dispEdit='<div style="font-weight:600;margin-bottom:3px;">處置方式'
+      +' <small class="text-muted" style="font-weight:normal;">（單選；選單與品質異常處理單同一份）</small></div>'
+      + (dispOpts.length
+          ? '<div>'+dispOpts.map(function(op){
+              return '<label class="radio-inline"><input type="radio" name="rp-disp-opt" value="'+op.opt_id+'"'
+                   + ((parseInt(o.disposition_opt_id,10)===parseInt(op.opt_id,10))?' checked':'')+'> '+esc(op.name)+'</label>';
+            }).join('')+'</div>'
+          : '<div class="alert alert-warning" style="padding:6px 10px;margin-bottom:4px;">管理員尚未建立處置方式選項，'
+            +'請到<b>品質異常處理單 → 設定 → 處置方式</b>建立後再回來選。</div>')
+      + (o.disp_is_legacy
+          ? '<div class="text-muted" style="font-size:11px;margin-top:3px;">舊資料原本選：'+esc(o.disp_label)
+            +'（改用上面的選項並儲存後，會以新選項為準）</div>' : '')
       +'<textarea id="rp-corr" class="form-control" rows="2" placeholder="矯正措施" style="margin-top:6px;">'+esc(o.correction_measure||'')+'</textarea>'
       +'<div style="margin-top:4px;">預定完成日 <input type="date" id="rp-corr-due" class="input-sm" value="'+esc(o.correction_due||'')+'"></div>';
-    var corrRO='處置：'+(L.disposition[o.disposition]||'—')+(o.disposition_other?('、'+esc(o.disposition_other)):'')+'<div style="white-space:pre-wrap;margin-top:4px;">'+esc(o.correction_measure||'')+'</div>';
+    var corrRO='處置方式：'+(o.disp_label?('<b>'+esc(o.disp_label)+'</b>'):'—')
+      +'<div style="white-space:pre-wrap;margin-top:4px;">'+esc(o.correction_measure||'')+'</div>';
     var prevEdit='<textarea id="rp-prev" class="form-control" rows="2" placeholder="預防措施">'+esc(o.prevention_measure||'')+'</textarea>'
       +'<div style="margin-top:4px;">預定完成日 <input type="date" id="rp-prev-due" class="input-sm" value="'+esc(o.prevention_due||'')+'"></div>';
     var prevRO='<div style="white-space:pre-wrap;">'+esc(o.prevention_measure||'')+'</div>';
@@ -1738,7 +1811,6 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         if(otherVal) h+='：'+esc(otherVal);
         return h;
       }
-      var ciKeys=(o.cause_investigation||'').split(',').filter(Boolean);
       // 各區段附件「附件N：說明」逐列清單（列印於該區段文字下方）
       function attNote(sec){
         var items=(r.attachments||[]).filter(function(a){ return a.field_type===sec; });
@@ -1761,9 +1833,11 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         +'<tr><th>開立人員</th><td>'+esc(o.created_by_name||'')+'</td><th>製程</th><td>'+esc(o.process_name||'')+'</td></tr>'
         +'<tr><th>責任單位</th><td colspan="3">'+esc(o.resp_display||'')+'</td></tr></table>'
         +'<table><tr><th style="width:90px;">異常說明</th><td><div class="sec">'+esc(o.abnormal_desc||'')+'</div>'+attNote('desc')+pStamp(sm['desc'])+'</td></tr>'
-        +'<tr><th>異常原因分析</th><td>原因調查：'+ckList(L.cause, ciKeys, o.cause_other)
+        // 異常原因分類有三層、選項由管理員維護（幾十項），列印不可能把全部選項印成 ☑/☐ 清單，
+        // 一律印「選到的那一條路徑」；舊資料的勾選項也由 car_cause_label() 組成同樣格式的文字
+        +'<tr><th>異常原因分析</th><td>異常原因分類：'+esc(o.cause_label||'')
           +'<div class="sec">'+esc(o.cause_detail||'')+'</div>'+attNote('cause')+pStamp(sm['cause'])+'</td></tr>'
-        +'<tr><th>矯正措施</th><td>處置方式：'+ckList(L.disposition, [o.disposition], o.disposition_other)
+        +'<tr><th>矯正措施</th><td>處置方式：'+esc(o.disp_label||'')
           +'<div class="sec">'+esc(o.correction_measure||'')+'</div>'+attNote('correction')+pStampRow('預定完成日：'+(o.correction_due?esc(o.correction_due).replace(/-/g,'.'):'未填寫'), sm['correction'])+'</td></tr>'
         +'<tr><th>預防措施</th><td><div class="sec">'+esc(o.prevention_measure||'')+'</div>'+attNote('prevention')+pStampRow('預定完成日：'+(o.prevention_due?esc(o.prevention_due).replace(/-/g,'.'):'未填寫'), sm['prevention'])+'</td></tr></table>'
         // 效果確認 2×2 格（同前端跳窗版面）：左上=主管簽核、左下=扣款判定、右上=效果確認、右下=總經理核准

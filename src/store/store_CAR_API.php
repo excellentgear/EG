@@ -67,6 +67,8 @@ function _carBfOrder(PDO $pdo, array $me, array $features, bool $needUnlock = tr
 
 // 附件排序欄位（既有環境自動補欄；已存在時靜默略過）
 try { $pdo->exec("ALTER TABLE car_attachment ADD COLUMN sort_order INT NOT NULL DEFAULT 0 AFTER description"); } catch (Throwable $_e) {}
+// 異常原因分類／處置方式改存 id（沿用異常單的代碼表）；DDL 一律在任何交易之前跑
+car_ensure_cause_cols($pdo);
 
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
 
@@ -608,6 +610,11 @@ try {
         $o['source_label'] = $L['source_type'][$o['source_type']] ?? $o['source_type'];
         $o['counterparty_display'] = car_counterparty_display($pdo, $o['counterparty_type'],
             $o['counterparty_type'] === 'maker' ? $o['maker_id_no'] : $o['customer_id']);
+        // 異常原因分類／處置方式的顯示文字由後端組（畫面與列印共用同一支，見 car_lib）
+        $o['cause_label'] = car_cause_label($pdo, $o);
+        $o['disp_label']  = car_disp_label($pdo, $o);
+        $o['cause_is_legacy'] = (empty($o['cause_cat_id']) && trim((string)($o['cause_investigation'] ?? '')) !== '');
+        $o['disp_is_legacy']  = (empty($o['disposition_opt_id']) && trim((string)($o['disposition'] ?? '')) !== '');
         $o['created_by_title']      = car_user_title($pdo, $o['created_by'] ? (int)$o['created_by'] : null);
         $o['open_approved_by_title'] = car_user_title($pdo, $o['open_approved_by'] ? (int)$o['open_approved_by'] : null);
 
@@ -709,6 +716,8 @@ try {
                  'me_id' => $meId, 'me_name' => $me['name']];
 
         jout(['success' => true, 'order' => $o, 'labels' => $L, 'bf_slots' => car_bf_slots(),
+              // 異常原因分類（三層樹）與處置方式：與品質異常處理單共用同一份代碼表
+              'causes' => car_cause_tree($pdo), 'disp_opts' => car_disp_options($pdo),
               'signatures' => $sigs, 'signed' => $signed,
               'activity' => $acts, 'attachments' => $atts,
               'group' => $grp, 'reissues' => $reissues, 'parent_no' => $parentNo,
@@ -935,6 +944,16 @@ try {
         }
         $signed = $bf ? [] : car_signed_map($pdo, $id);
 
+        /* 異常原因分類（單選、三層，來源＝異常單的 qa_cause_cat）與處置方式（qa_option kind=disp）。
+           送 cause_cat_id／disposition_opt_id 就走新制並把同區段的舊欄位清掉；
+           完全沒送這兩個鍵時才沿用舊制欄位（相容尚未改過的呼叫端）。 */
+        $useCat  = array_key_exists('cause_cat_id', $_POST);
+        $useOpt  = array_key_exists('disposition_opt_id', $_POST);
+        $catId   = $useCat ? (int)$_POST['cause_cat_id'] : 0;
+        $optId   = $useOpt ? (int)$_POST['disposition_opt_id'] : 0;
+        if ($useCat && $catId > 0 && !car_cause_exists($pdo, $catId)) jfail('選到的異常原因分類不存在，請重新整理後再選');
+        if ($useOpt && $optId > 0 && !car_disp_exists($pdo, $optId))  jfail('選到的處置方式不存在，請重新整理後再選');
+
         $validCause = ['person','material','machine','method','tool','other'];
         $ciArr = json_decode($_POST['cause_investigation'] ?? '[]', true);
         if (!is_array($ciArr)) $ciArr = array_filter(array_map('trim', explode(',', (string)($_POST['cause_investigation'] ?? ''))));
@@ -945,21 +964,34 @@ try {
            少了這個判斷另外兩段會被靜默清成 NULL——正式流程有簽章保護所以踩不到，
            解鎖之後就踩得到了（本次測試從列印版反查出來的）。 */
         $sent = function (array $keys) { foreach ($keys as $k) if (array_key_exists($k, $_POST)) return true; return false; };
-        $wCause = empty($signed['cause'])      && (!$bf || $sent(['cause_investigation','cause_other','cause_detail']));
-        $wCorr  = empty($signed['correction']) && (!$bf || $sent(['disposition','disposition_other','correction_measure','correction_due']));
+        $wCause = empty($signed['cause'])      && (!$bf || $sent(['cause_cat_id','cause_investigation','cause_other','cause_detail']));
+        $wCorr  = empty($signed['correction']) && (!$bf || $sent(['disposition_opt_id','disposition','disposition_other','correction_measure','correction_due']));
         $wPrev  = empty($signed['prevention']) && (!$bf || $sent(['prevention_measure','prevention_due']));
 
         $sets = []; $p = [':id' => $id];
         if ($wCause) {
-            $sets[] = 'cause_investigation=:ci'; $p[':ci'] = ($ci ?: null);
-            $sets[] = 'cause_other=:co';        $p[':co'] = (trim($_POST['cause_other'] ?? '') ?: null);
+            if ($useCat) {
+                // 新制：存分類 id，同時清掉舊制欄位（不然畫面上會有兩個「目前選的」分不出誰算）
+                $sets[] = 'cause_cat_id=:cat';      $p[':cat'] = ($catId > 0 ? $catId : null);
+                $sets[] = 'cause_investigation=NULL';
+                $sets[] = 'cause_other=NULL';
+            } else {
+                $sets[] = 'cause_investigation=:ci'; $p[':ci'] = ($ci ?: null);
+                $sets[] = 'cause_other=:co';        $p[':co'] = (trim($_POST['cause_other'] ?? '') ?: null);
+            }
             $sets[] = 'cause_detail=:cd';       $p[':cd'] = (trim($_POST['cause_detail'] ?? '') ?: null);
         }
         if ($wCorr) {
-            $disp = $_POST['disposition'] ?? '';
-            if (!in_array($disp, ['special_accept','rework','scrap','return','other'], true)) $disp = null;
-            $sets[] = 'disposition=:dp';        $p[':dp'] = $disp;
-            $sets[] = 'disposition_other=:dpo'; $p[':dpo'] = (trim($_POST['disposition_other'] ?? '') ?: null);
+            if ($useOpt) {
+                $sets[] = 'disposition_opt_id=:opt'; $p[':opt'] = ($optId > 0 ? $optId : null);
+                $sets[] = 'disposition=NULL';
+                $sets[] = 'disposition_other=NULL';
+            } else {
+                $disp = $_POST['disposition'] ?? '';
+                if (!in_array($disp, ['special_accept','rework','scrap','return','other'], true)) $disp = null;
+                $sets[] = 'disposition=:dp';        $p[':dp'] = $disp;
+                $sets[] = 'disposition_other=:dpo'; $p[':dpo'] = (trim($_POST['disposition_other'] ?? '') ?: null);
+            }
             $sets[] = 'correction_measure=:cm'; $p[':cm'] = (trim($_POST['correction_measure'] ?? '') ?: null);
             $sets[] = 'correction_due=:cdue';   $p[':cdue'] = (trim($_POST['correction_due'] ?? '') ?: null);
         }
@@ -994,10 +1026,11 @@ try {
         if (!empty($signed[$sec])) jfail('該區段已簽章，如需修改請先按「修改」');
 
         // 必填檢核（以 DB 現值）
-        if ($sec === 'cause' && (($o['cause_investigation'] ?? '') === '' || trim((string)$o['cause_detail']) === ''))
-            jfail('請先填寫原因調查與原因分析內容再簽章');
-        if ($sec === 'correction' && (($o['disposition'] ?? '') === '' || trim((string)$o['correction_measure']) === ''))
-            jfail('請先填寫處置方式與矯正措施再簽章');
+        // 原因分類／處置方式：新制看 id 欄位，舊資料看原本的欄位（兩者任一有值就算填了）
+        if ($sec === 'cause' && (car_cause_label($pdo, $o) === '' || trim((string)$o['cause_detail']) === ''))
+            jfail('請先選擇異常原因分類並填寫原因分析內容再簽章');
+        if ($sec === 'correction' && (car_disp_label($pdo, $o) === '' || trim((string)$o['correction_measure']) === ''))
+            jfail('請先選擇處置方式並填寫矯正措施再簽章');
         if ($sec === 'prevention' && trim((string)$o['prevention_measure']) === '')
             jfail('請先填寫預防措施再簽章');
 

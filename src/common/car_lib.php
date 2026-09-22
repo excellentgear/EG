@@ -660,6 +660,119 @@ function car_bf_time(PDO $pdo, int $carId, array $o, string $slot, string $date)
     return date('Y-m-d H:i:s', min($ts, $upper));
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════
+ * 異常原因分類／處置方式 —— 一律沿用品質異常處理單的那兩張代碼表
+ * ──────────────────────────────────────────────────────────────────────────────
+ * 2026-09-22 使用者要求：「原因調查只能勾選一個、不可複選；內容要跟異常單一樣可以多層
+ * 選擇（選單要同異常單內的異常原因分類）；處置方式也要跟異常單的選單相同。」
+ *
+ * 所以 CAR **不自己建一份分類表**，直接讀 `qa_cause_cat`（三層，管理員在異常單設定頁維護）
+ * 與 `qa_option`（kind=disp）；讀取走 qa_abnormal_lib 的唯一實作（`qab_cause_map()`／
+ * `qab_cause_tree()`／`qab_options()`／`qab_option_map()`），不在這裡再寫一份查詢
+ * ——否則管理員改名／加一層之後，兩張單會顯示不一樣的東西（鐵律4）。
+ *
+ * 舊資料相容：`car_order.cause_investigation`(SET) 與 `disposition`(ENUM) 保留不動，
+ * 只在新欄位是 NULL 時當退路顯示；新存檔一律寫 `cause_cat_id`／`disposition_opt_id`
+ * 並把同區段的舊欄位清掉（不然畫面上會同時有兩個「目前選的」，分不出哪個才算）。
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/** 確保 car_order 上的兩個新欄位存在（一個 request 只檢查一次；**不可在交易中呼叫**，DDL 會隱式 commit） */
+function car_ensure_cause_cols(PDO $pdo): void {
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try {
+        $cols = [];
+        foreach ($pdo->query("SHOW COLUMNS FROM car_order")->fetchAll(PDO::FETCH_ASSOC) as $c) $cols[$c['Field']] = 1;
+        if (!isset($cols['cause_cat_id'])) {
+            $pdo->exec("ALTER TABLE car_order ADD COLUMN cause_cat_id INT NULL
+                        COMMENT '異常原因分類(qa_cause_cat.cat_id)，單選；NULL 且有 cause_investigation=舊資料'
+                        AFTER cause_investigation");
+        }
+        if (!isset($cols['disposition_opt_id'])) {
+            $pdo->exec("ALTER TABLE car_order ADD COLUMN disposition_opt_id INT NULL
+                        COMMENT '處置方式(qa_option.opt_id, kind=disp)，單選；NULL 且有 disposition=舊資料'
+                        AFTER disposition");
+        }
+    } catch (Throwable $e) {}
+}
+
+/** 載入異常單共用庫（只在真的要用代碼表時才載，避免每支 API 都多吃一個 1600 行的檔案） */
+function car_qab_lib(): void {
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    require_once __DIR__ . '/qa_abnormal_lib.php';
+}
+
+/** 異常原因分類：三層樹（給勾選介面用；只列啟用中的） */
+function car_cause_tree(PDO $pdo): array {
+    car_qab_lib();
+    try { return qab_cause_tree($pdo, true); } catch (Throwable $e) { return []; }
+}
+
+/** 處置方式選項（qa_option kind=disp；只列啟用中的） */
+function car_disp_options(PDO $pdo): array {
+    car_qab_lib();
+    try { return qab_options($pdo, 'disp', true); } catch (Throwable $e) { return []; }
+}
+
+/** 這個 cat_id 存不存在（存檔守門；停用的也放行——舊單重存時不該因為管理員停用了分類就存不回去） */
+function car_cause_exists(PDO $pdo, int $catId): bool {
+    car_qab_lib();
+    try { $m = qab_cause_map($pdo); } catch (Throwable $e) { return false; }
+    return isset($m[$catId]);
+}
+
+/** 這個 opt_id 存不存在、而且是「處置方式」那一種 */
+function car_disp_exists(PDO $pdo, int $optId): bool {
+    car_qab_lib();
+    try { $m = qab_option_map($pdo); } catch (Throwable $e) { return false; }
+    return isset($m[$optId]) && ($m[$optId]['kind'] ?? '') === 'disp';
+}
+
+/**
+ * 顯示用：這張單的「異常原因分類」文字（新欄位優先，舊資料退回原本的勾選項）。
+ * 畫面與列印共用同一支，不要在 JS 再組一次（兩邊遲早長出不同說法）。
+ */
+function car_cause_label(PDO $pdo, array $o): string {
+    $cat = (int)($o['cause_cat_id'] ?? 0);
+    if ($cat > 0) {
+        car_qab_lib();
+        try {
+            $m = qab_cause_map($pdo);
+            if (isset($m[$cat])) return (string)$m[$cat]['path'];   // 例「人 → 操作疏失 → 未依SOP標準作業」
+        } catch (Throwable $e) {}
+        return '#' . $cat;
+    }
+    $legacy = trim((string)($o['cause_investigation'] ?? ''));
+    if ($legacy === '') return '';
+    $L = car_labels()['cause'];
+    $names = [];
+    foreach (explode(',', $legacy) as $k) { $k = trim($k); if ($k !== '') $names[] = ($L[$k] ?? $k); }
+    $txt = implode('、', $names);
+    $other = trim((string)($o['cause_other'] ?? ''));
+    return $txt . ($other !== '' ? ('、' . $other) : '');
+}
+
+/** 顯示用：這張單的「處置方式」文字（新欄位優先，舊資料退回原本的 enum） */
+function car_disp_label(PDO $pdo, array $o): string {
+    $opt = (int)($o['disposition_opt_id'] ?? 0);
+    if ($opt > 0) {
+        car_qab_lib();
+        try {
+            $m = qab_option_map($pdo);
+            if (isset($m[$opt])) return (string)$m[$opt]['name'];
+        } catch (Throwable $e) {}
+        return '#' . $opt;
+    }
+    $legacy = trim((string)($o['disposition'] ?? ''));
+    if ($legacy === '') return '';
+    $txt = car_labels()['disposition'][$legacy] ?? $legacy;
+    $other = trim((string)($o['disposition_other'] ?? ''));
+    return $txt . ($other !== '' ? ('、' . $other) : '');
+}
+
 /** 補資料一律留 audit_log（全站共用表；寫入失敗不影響主要作業） */
 function car_bf_audit(PDO $pdo, int $carId, string $carNo, int $uid, string $uname, string $what, string $detail = ''): void {
     try {
