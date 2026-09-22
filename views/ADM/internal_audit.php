@@ -2384,8 +2384,14 @@ function applyCaseLock(c){
         else $(this).prop('readonly', CASE_DONE);
     });
     $m.find('[data-ro-always]').prop('readonly', true);
-    $m.find('.ia-op, .nk-chip, button[id^=btnCaseTpl], #btnAllAudited, #btnAllDue, #btnAllTime')
+    /* **`.ia-op-ro` 是「純查閱」的操作，鎖定時不可以把它一起關掉**（2026-09-22 使用者回報：
+       通知單已發出／已結案之後，連「開啟會議紀錄」都點不動，會議紀錄就查不到了）。
+       這一行原本是 `.ia-op` 全掃，於是把唯一一個不會改資料的連結也一起停用了。
+       會改資料的（重新帶入與會人員、解除連結、帶入範本…）沒有這個標記，照樣鎖住。 */
+    $m.find('.ia-op:not(.ia-op-ro), .nk-chip, button[id^=btnCaseTpl], #btnAllAudited, #btnAllDue, #btnAllTime')
       .css({'pointer-events': CASE_DONE ? 'none' : '', 'opacity': CASE_DONE ? .5 : ''});
+    // 解鎖回可編輯時，剛才被排除的那些唯讀連結也要確保是可按的（避免上一次鎖定留下 inline style）
+    $m.find('.ia-op-ro').css({'pointer-events': '', 'opacity': ''});
     $('#btnCaseSave').toggle(!CASE_DONE);
     $('#btnCaseComplete').toggle(!!CASE_ID && !CASE_DONE);
     /* 取消完成要輸入操作確認密碼——**沒有那個權限的人就不要讓他按**（2026-09-18 使用者回報）：
@@ -3094,8 +3100,12 @@ function renderCaseMeeting(c){
         var m = c[k[0]+'_meeting'];
         h += '<div style="margin-bottom:6px;"><b style="color:#8A5A2B;">'+k[1]+'：</b>';
         if (m) {
+            /* 「開啟會議紀錄」是**純查閱**，所以標成 ia-op-ro＝已完成／已結案也點得動
+               （2026-09-22 使用者要求：結案一樣要能點連結開會議紀錄方便查閱）。
+               同一列的「重新帶入與會人員」「解除連結」**刻意沒有這個標記**，
+               所以結案後仍然被 applyCaseLock() 鎖住不可按。 */
             h += esc(m.subject)+'　'+dispDate(m.meeting_date)
-               + ' <span class="ia-op" onclick="openMeeting('+m.meeting_id+')"><i class="fa fa-external-link"></i> 開啟會議紀錄</span>';
+               + ' <span class="ia-op ia-op-ro" onclick="openMeeting('+m.meeting_id+')"><i class="fa fa-external-link"></i> 開啟會議紀錄</span>';
             if (admin) h += ' <span class="ia-op" onclick="syncMeetingAtt(\''+k[0]+'\')" title="依目前的稽核小組重新帶入出席人員；會議內容與已簽到狀態都保留"><i class="fa fa-refresh"></i> 重新帶入與會人員</span>'
                           + ' <span class="ia-op" onclick="unlinkMeeting(\''+k[0]+'\')">解除連結</span>';
         } else {
@@ -6051,8 +6061,9 @@ function printCheck(id){
                 : (k.kind==='system')
                     ? ['序號','表單編號','表單名稱','受稽人','合格','不合格','備註']
                     : ['序','部門','內容','目標','受稽人','達成','沒達成','備註(異常矯正處理單編號)'];
-            // AS 是橫式，寬度多出來就分給「建立的文件、表單」與「所見證據或建議」（兩欄都是長字串）
-            var widths = (k.kind==='as') ? ['34px','','210px','36px','40px','250px']
+            /* AS 是橫式，寬度多出來就分給「建立的文件、表單」與「所見證據或建議」（兩欄都是長字串）。
+               2026-09-22 使用者要求：「建立的文件、表單」再寬一點、「所見證據或建議」窄一點。 */
+            var widths = (k.kind==='as') ? ['34px','','265px','36px','40px','200px']
                        : (k.kind==='system') ? ['34px','86px','','66px','36px','40px','92px']
                        : ['28px','62px','','76px','60px','36px','44px','110px'];
             heads.forEach(function(t,i){ h += '<th'+(widths[i]?(' style="width:'+widths[i]+';"'):'')+'>'+esc(t)+'</th>'; });
@@ -6080,12 +6091,21 @@ function printCheck(id){
                       + '<td>'+okM+'</td><td>'+ngM+'</td><td>'+esc(it.remark||'')+'</td></tr>';
                 }
             });
+            /* 說明列與稽核員簽章做成**表格的最後一列**（2026-09-22 使用者回報：
+               「稽核員」被換到一張空白頁上去了）。
+               原本這兩塊是接在 </table> 後面的獨立 div，多頁表格的實際分頁位置與 DOM 的流動位置
+               對不起來（實測 flow 上表格結束那一頁還剩 297px，真的印出來卻多一頁只放那個章），
+               所以只要它是表格外面的區塊，就永遠有機會被推到下一張紙上去。
+               **改成表格裡的一列之後，它就跟資料列一起分頁**——不會自己跑到空白頁。
+               說明文字擺左、圖章擺右，一列裝得下；圖章尺寸不受影響（ai-rules/18）。 */
+            h += '<tr class="sig-row"><td colspan="'+heads.length+'" class="l">'
+               + '<div class="sig-row-in"><div class="sig-note">'
+               + (k.kind==='as' ? '' : '確認項目及結果；以「V」表示之。') + '</div>'
+               // 2026-08-27 使用者要求：稽核員的簽章跟一般表格的「製表」一樣靠右，不要放左下角
+               + '<div class="sig-who">稽核員: <span class="stamp-inline">'
+               + stampHtml(m, sp(k.auditor_id, k.auditor_name, k.check_date), k.check_date)
+               + '</span></div></div></td></tr>';
             h += '</tbody></table>';
-            h += '<div class="ia-note">'
-               + (k.kind==='as' ? '' : '確認項目及結果；以「V」表示之。') + '</div>';
-            // 2026-08-27 使用者要求：稽核員的簽章跟一般表格的「製表」一樣靠右，不要放左下角
-            h += '<div style="margin-top:10px;font-size:12px;text-align:right;">稽核員: <span class="stamp-inline">'
-               + stampHtml(m, sp(k.auditor_id, k.auditor_name, k.check_date), k.check_date) + '</span></div>';
             // 2026-08-27 使用者要求：右側已經印了稽核日期，標題就不要重複出現日期
             // （標題常被存成「系統稽核紀錄表 2024-12-16」，這裡把結尾的日期去掉）
             var ckTitle = String(k.title || m.doc_name || '')
@@ -6094,8 +6114,19 @@ function printCheck(id){
             logPrint(ckTitle + ' ' + dispDate(k.check_date), 'ia_check', id);
             /* 上方留白縮到 8mm、並讓表格自動縮到塞進一頁（2026-09-22 使用者要求）。
                **下方留白不動**：頁碼與 AS 編號是印在下方頁邊框裡的，縮了會被裁掉。
-               圖章不縮（ai-rules/18）——fitTable 只動 table.ia-p，章在表格外面。 */
-            iaPrintWindow(ckTitle, h, '', m.doc_no, land, {topMm:8, fitTable:true});
+               圖章不縮（ai-rules/18）——fitTable 只動字級與格距，圖章有自己的尺寸不受影響。 */
+            /* 只給查檢表的列印樣式（不動其他四張表單的版面）：
+               ①**一列不可以被切成上下兩半**（ai-rules/16）——多頁表格原本會把一列剖半，
+                 上一頁印上半、下一頁印下半，紙本上完全看不懂；順帶也讓最後那一列簽章
+                 不會被切開。
+               ②簽章那一列的內距用 !important 固定，不跟著 fitTable 一起被縮到 0——
+                 圖章擠在框線上很難看，而且整份只有這一列，省下來的高度沒有意義。 */
+            var ckCss = 'table.ia-p tbody tr{page-break-inside:avoid;}'
+                      + 'table.ia-p tr.sig-row td{padding:6px 8px !important;vertical-align:middle;}'
+                      + 'table.ia-p .sig-row-in{display:flex;align-items:center;justify-content:space-between;gap:12px;}'
+                      + 'table.ia-p .sig-note{font-size:11px;line-height:1.6;white-space:pre-wrap;text-align:left;}'
+                      + 'table.ia-p .sig-who{white-space:nowrap;font-size:12px;}';
+            iaPrintWindow(ckTitle, h, ckCss, m.doc_no, land, {topMm:8, fitTable:true});
         }, [{id:k.auditor_id, date:k.check_date}]);
     });
 }
