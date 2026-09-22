@@ -2234,23 +2234,13 @@ function ss_resolve_signer(PDO $db, string $kind, string $slot, string $date): a
     return [0, '這個日期找不到符合「部門＋職稱」的在職人員'];
 }
 
-/* ─────────── 取消自動核准：只退自動簽的，人工簽的不動 ─────────── */
+/* ─────────── 取消送簽：整版退回草稿，沒有「只取消某一格」 ─────────── */
 
 /**
- * 這個版次是不是「整份都是自動簽核」的。
- * 只有這種才給管理員退回草稿——人工一格一格蓋過的章，退回等於把別人的決定抹掉。
+ * 退回草稿（清掉**全部**簽章，人工蓋的也一起清）。呼叫端負責權限（管理員限定）。
+ * 2026-09-22 刪掉了原本的 ss_all_auto_signed() 前置判定：那條規則會在管理員清掉其中一格之後
+ * 不成立，於是退回鈕跟著消失、版次卡在「簽核中、零個章」再也救不回來（使用者實際踩到）。
  */
-function ss_all_auto_signed(PDO $db, int $verId): bool
-{
-    try {
-        $st = $db->prepare("SELECT COUNT(*) total, SUM(is_auto=1) autos FROM ss_sign WHERE ver_id=? AND user_id IS NOT NULL");
-        $st->execute([$verId]);
-        $r = $st->fetch(PDO::FETCH_ASSOC);
-        return (int)($r['total'] ?? 0) > 0 && (int)($r['total'] ?? 0) === (int)($r['autos'] ?? 0);
-    } catch (Throwable $e) { return false; }
-}
-
-/** 退回草稿（清掉全部簽章）。呼叫端負責權限與 ss_all_auto_signed() 的判定 */
 function ss_unsubmit(PDO $db, int $verId, int $uid): void
 {
     $v = ss_ver_get($db, $verId);

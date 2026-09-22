@@ -184,9 +184,11 @@ case 'detail': {
     // 管理員可以在核准之後補附件（使用者 2026-09-22 要求），但仍然不可以改內容
     $full['can_attach'] = (ss_perm_for_kind($P, $kind, 'edit')
                            && ((string)$full['ver']['status'] === 'draft' || !empty($P['canAdmin']))) ? 1 : 0;
-    // 只有「整份都是自動簽核」的才給退回草稿——人工蓋過的章退回等於抹掉別人的決定
-    $full['can_unsubmit'] = (!empty($P['canAdmin']) && (string)$full['ver']['status'] !== 'draft'
-                             && ss_all_auto_signed($db, $verId)) ? 1 : 0;
+    /* 送簽之後的版次一律讓管理員整版退回草稿（使用者 2026-09-22 指定）。
+       原本限「整份都是自動簽核」，結果管理員清掉其中一格之後這個條件就不成立、按鈕跟著消失，
+       版次卡在「簽核中、零個章」而且再也沒有任何路徑救得回來。 */
+    $full['can_unsubmit'] = (!empty($P['canAdmin'])
+                             && !in_array((string)$full['ver']['status'], ['draft', 'obsolete'], true)) ? 1 : 0;
     $full['paper']   = ss_paper($db, $full['doc'], $full['ver']);
     $full['papers']  = ss_papers();
     $full['orients'] = ss_orients();
@@ -320,35 +322,30 @@ case 'sign': {
                     (string)($_POST['note'] ?? ''), 0, (int)($_POST['dept_id'] ?? 0));
         ss_maybe_approve($db, $verId);
         $db->commit();
-    } catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
+    } catch (Throwable $e) {
+        $db->rollBack();
+        /* 最常見的是「用超級管理員（特殊帳號）按蓋這一格」——它不是真的員工，蓋不上去。
+           原訊息只說「當時不在職」，看不出該怎麼辦，所以在這裡講清楚下一步（比照 ss_submit）。 */
+        if ($signer === $uid && !empty($P['canAdmin'])) {
+            jerr('你的帳號不能列為簽核人（' . $e->getMessage() . '）。'
+               . '請用頁尾的「取消送簽（退回草稿）」把這一版退回，再重新送出簽核並指定簽核人員。');
+        }
+        jerr($e->getMessage());
+    }
     jout(true, ['status' => (string)(ss_ver_get($db, $verId)['status'] ?? ''), 'next_slot' => ss_next_slot($db, $verId)]);
 }
 
-case 'sign_clear': {
-    $verId = (int)($_POST['ver_id'] ?? 0);
-    $slot  = (string)($_POST['slot'] ?? '');
-    [$kind] = $kindOfVer($verId);
-    $needAdmin();
-    if (!isset(ss_slots()[$slot])) jerr('簽核關卡代碼不正確');
-    $db->prepare("DELETE FROM ss_sign WHERE ver_id=? AND slot=?")->execute([$verId, $slot]);
-    $db->prepare("UPDATE ss_ver SET status='submitted' WHERE ver_id=? AND status='approved'")->execute([$verId]);
-    $v = ss_ver_get($db, $verId);
-    if ($v) ss_refresh_cur_ver($db, (int)$v['doc_id']);
-    jout(true, ['next_slot' => ss_next_slot($db, $verId)]);
-}
-
 /**
- * 取消自動核准，退回「尚未送審」。使用者 2026-09-22 指定：**只針對自動核准的部分**——
- * 人工一格一格蓋過的章退回等於把別人的決定抹掉，所以 ss_all_auto_signed() 不成立就擋下。
+ * 取消送簽，整版退回「尚未送審」（管理員限定）。使用者 2026-09-22 指定：
+ * **不做「只取消其中一格」**——單格清掉之後這一版會停在「簽核中、卻一個章都沒有」，
+ * 而重蓋是以登入者本人的身分蓋（超級管理員這種特殊帳號蓋不上去），等於整份文件卡死。
+ * 要重來一律整版退回草稿，再重新送簽（管理員可勾自動簽核一次蓋滿）。
  */
 case 'unsubmit': {
     $verId = (int)($_POST['ver_id'] ?? 0);
     [$kind, $v, $d] = $kindOfVer($verId);
     $needAdmin();
     if ((string)$v['status'] === 'draft') jerr('這個版次本來就是草稿');
-    if (!ss_all_auto_signed($db, $verId)) {
-        jerr('這一版有人工蓋過的簽章，不可以退回。只有「送出時自動完成審核與核准」的那種才退得回來。');
-    }
     $db->beginTransaction();
     try { ss_unsubmit($db, $verId, $uid); $db->commit(); }
     catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }

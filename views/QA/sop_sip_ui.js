@@ -759,7 +759,9 @@ function signHtml() {
         if (s && num(s.user_id)) {
             h += '<div class="who">' + esc(s.dept_name || '') + '　' + esc(s.position_name || '') + '<br>'
                + '<b>' + esc(s.user_name || '') + '</b>　' + dispDate(s.sign_date) + '</div>';
-            if (SS_PERMS.canAdmin) h += '<div style="margin-top:5px;"><button class="btn btn-xs sg-clr" data-slot="' + k + '">清除</button></div>';
+            /* 刻意沒有「清除這一格」：只清掉其中一格會讓這一版停在「簽核中、卻一個章都沒有」，
+               而重蓋時是以登入者本人的身分蓋，超級管理員這種特殊帳號蓋不上去就整個卡死。
+               要重來一律用頁尾的「取消送簽（退回草稿）」整版退回再重送（使用者 2026-09-22 指定）。 */
         } else if (CUR.ver.status === 'draft') {
             h += '<div class="muted-help">送簽後才會出現</div>';
         } else if (CUR.can_sign) {
@@ -842,7 +844,7 @@ function renderDoc() {
     }
     if (ssCanEditKind()) foot += ' <button class="btn btn-sm btn-warm-o" id="btnNewVer">建立新版次</button>';
     if (num(CUR.can_unsubmit)) {
-        foot += ' <button class="btn btn-sm btn-warm-o" id="btnUnsubmit">取消自動核准（退回草稿）</button>';
+        foot += ' <button class="btn btn-sm btn-warm-o" id="btnUnsubmit">取消送簽（退回草稿）</button>';
     }
     if (num(CUR.can_delete)) foot += ' <button class="btn btn-sm" id="btnDelDoc">刪除文件</button>';
     foot += ' <button class="btn btn-sm" data-close="maskDoc">關閉</button>';
@@ -854,11 +856,13 @@ function ssCanEditKind() {
 }
 
 $(document).on('click', '.v-open', function (e) { e.stopPropagation(); openDoc(num($(this).data('ver'))); });
-/** 只有「整份都是自動核准」的才退得回來——人工蓋過的章退回等於抹掉別人的決定 */
+/** 整版退回草稿（管理員限定）＝唯一的重來方式；沒有「只取消其中一格」那種做法 */
 $(document).on('click', '#btnUnsubmit', function () {
+    var n = 0;
+    $.each(SS_SLOTS, function (k) { if (CUR.signs[k] && num(CUR.signs[k].user_id)) n++; });
     if (!confirm('確定把這一版退回「尚未送審」？\n\n'
-        + '自動蓋上的三個簽章會被清掉，狀態回到草稿，可以重新編輯後再送一次。\n'
-        + '（人工一格一格蓋過的版次不會出現這顆按鈕。）')) return;
+        + '目前已經蓋好的 ' + n + ' 個簽章（含人工蓋的）會全部清掉，狀態回到草稿。\n'
+        + '退回後可以重新編輯，再按「送出簽核」一次重送（管理員可勾「自動簽核」一次蓋滿三格）。')) return;
     post('unsubmit', { ver_id: num(CUR.ver.ver_id) }, function () {
         openDoc(num(CUR.ver.ver_id)); load(true);
     });
@@ -1364,12 +1368,6 @@ $(document).on('click', '.sg-go', function () {
         });
     });
 });
-$(document).on('click', '.sg-clr', function () {
-    if (!confirm('確定清除這一格簽章？清掉之後這一版會退回「簽核中」。')) return;
-    post('sign_clear', { ver_id: num(CUR.ver.ver_id), slot: $(this).data('slot') },
-         function () { openDoc(num(CUR.ver.ver_id)); load(true); });
-});
-
 $(document).on('click', '#btnNewVer', function () {
     var v = prompt('新版次的版次號（留空＝自動遞增）', '');
     if (v === null) return;
