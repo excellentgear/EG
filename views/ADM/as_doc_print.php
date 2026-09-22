@@ -78,18 +78,12 @@ $body = $err === ''
 /* 留白一律交給 @page，body 不再自己加 padding——兩邊各留一次會把內容擠到中間又切邊 */
 html, body { margin: 0; padding: 0; }
 body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size: 12pt; color: #000; line-height: 1.6; }
-.ph { text-align: center; margin: 0 0 4mm; }
-.ph .co { font-size: 16pt; font-weight: bold; letter-spacing: 1px; }
-.ph .nm { font-size: 14pt; margin-top: 1.5mm; }
-.ph .mt { font-size: 9pt; color: #333; margin-top: 1.5mm; }
 /* 內文的字級、行高、段落與表格間距一律來自 eg_doc_page.css（.eg-docbody），
    這裡只加「列印特有」的規則，不可以再寫一份排版 */
 .doc thead { display: table-header-group; }      /* 表頭跨頁重複 */
 .doc tr { page-break-inside: avoid; }            /* 資料列不可被切成上下兩半 */
 .doc hr[style*="page-break"] { border: 0; height: 0; margin: 0; }  /* 分頁符不要印出線 */
 .err { padding: 40px; text-align: center; color: #A34E2A; font-size: 14pt; }
-.draftmark { text-align:center; color:#A34E2A; font-size:10pt; border:1px dashed #A34E2A;
-             padding:2px 6px; display:inline-block; margin-bottom:3mm; }
 @media screen {
     body { background: #efe9e0; }
     .sheet { background: #fff; width: <?= $orient === 'landscape' ? ($pageSize === 'A3' ? '420mm' : '297mm') : ($pageSize === 'A3' ? '297mm' : '210mm') ?>;
@@ -114,13 +108,10 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
         <?= $isPrimary ? '' : '（此版次的線上內容尚未設為正本，目前僅供預覽）' ?></span>
 </div>
 <div class="sheet">
-    <div class="ph">
-        <?php if (!$isPrimary): ?><div class="draftmark">線上版草稿（尚未設為此版次的正本）</div><?php endif; ?>
-        <div class="co"><?= htmlspecialchars($company !== '' ? $company : '（尚未設定本公司全名）') ?></div>
-        <div class="nm"><?= htmlspecialchars($docName) ?></div>
-        <div class="mt">版次 <?= htmlspecialchars($ver !== '' ? $ver : '—') ?>
-            <?= $revDate !== '' ? '　修訂日期 ' . htmlspecialchars($revDate) : '' ?></div>
-    </div>
+    <?php /* 刻意不再印公司名／文件名／版次那一段抬頭（使用者 2026-09-22 明確要求拿掉）：
+             這些本來就屬於文件自己的表頭（第一頁的制修訂紀錄書、第二頁起的頁首欄位），
+             由內容自己帶，系統再印一份只會變成同一頁兩組抬頭。
+             草稿狀態改成只在畫面上方的工具列提示，列印不出現。 */ ?>
     <div class="doc eg-docbody"><?= $body ?></div>
 </div>
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>

@@ -253,8 +253,14 @@
     // 第一排：區塊階層／字型／字級／字形／顏色
     h += '<select class="egrt-sel egrt-sel-block" data-eg-skip title="段落階層">' + opts(DOC_BLOCKS, 'P') + '</select>';
     h += '<select class="egrt-sel egrt-sel-font" data-eg-skip title="字型">' + opts(DOC_FONTS, '') + '</select>';
-    h += '<select class="egrt-sel egrt-sel-size" data-eg-skip title="字級">'
-       + '<option value="">字級</option>' + opts(DOC_SIZES, '') + '</select>';
+    h += btn('egFontDown', 'minus', '字級調小（選取的字會保持選取，可以連按）')
+       + '<select class="egrt-sel egrt-sel-size" data-eg-skip title="字級">'
+       + '<option value="">字級</option>' + opts(DOC_SIZES, '') + '</select>'
+       + btn('egFontUp', 'plus', '字級調大（選取的字會保持選取，可以連按）');
+    h += '<span class="egrt-sep"></span><span class="egrt-lab">行距</span>'
+       + btn('egLhDown', 'minus', '行距調小')
+       + '<span class="egrt-read egrt-lh-read" title="目前行距">1.6</span>'
+       + btn('egLhUp', 'plus', '行距調大');
     h += '<span class="egrt-sep"></span>'
        + btn('bold', 'bold', '粗體 (Ctrl+B)') + btn('italic', 'italic', '斜體 (Ctrl+I)')
        + btn('underline', 'underline', '底線 (Ctrl+U)') + btn('strikeThrough', 'strikethrough', '刪除線');
@@ -471,6 +477,10 @@
       '.egrt-sel{height:26px;border:1px solid #d8c7b0;border-radius:3px;background:#fff;color:#4E2C0B;',
       'font-size:12px;padding:0 2px;margin:0 2px;vertical-align:middle;max-width:130px;}',
       '.egrt-pop-wide{width:172px;}',
+      '.egrt-lab{font-size:12px;color:#8A5A2B;margin:0 2px 0 4px;vertical-align:middle;}',
+      '.egrt-read{display:inline-block;min-width:30px;text-align:center;font-size:12px;color:#4E2C0B;',
+      'background:#fff;border:1px solid #d8c7b0;border-radius:3px;line-height:24px;height:26px;',
+      'padding:0 4px;vertical-align:middle;}',
       '.egrt-pf{margin-bottom:5px;font-size:12px;color:#6B471A;}',
       '.egrt-pf label{display:inline-block;width:44px;margin:0;font-weight:normal;}',
       '.egrt-ti{width:62px;height:24px;border:1px solid #d8c7b0;border-radius:3px;padding:0 4px;font-size:12px;}',
@@ -600,6 +610,8 @@
         b.classList.toggle('on', !!on);
       });
       if (!isDoc) return;
+      syncLhRead();
+      syncSizeRead();
       // 選單要跟著游標位置顯示「現在是什麼」，不然使用者永遠看到「正文」而不知道自己在標題裡
       var blkSel = host.querySelector('.egrt-sel-block');
       if (blkSel) {
@@ -675,13 +687,100 @@
       restoreRange();      // 下拉會搶走焦點，要把使用者原本選的那段字還原回來
       try { d.execCommand('styleWithCSS', false, false); } catch (e) {}
       try { d.execCommand('fontSize', false, '7'); } catch (e) {}
+      var made = [];
       Array.prototype.slice.call(body.querySelectorAll('font[size="7"]')).forEach(function (f) {
         var sp = d.createElement('span');
         sp.style.fontSize = val;
         while (f.firstChild) sp.appendChild(f.firstChild);
         f.parentNode.replaceChild(sp, f);
+        made.push(sp);
       });
+      /* 換掉節點會讓選取消失（使用者回報「每次修改完就取消我選擇的文字」）。
+         這裡把選取重新框到剛產生的那幾個 span，所以可以連按 +／- 一直調。 */
+      if (made.length) {
+        try {
+          var rg = d.createRange();
+          rg.setStartBefore(made[0]);
+          rg.setEndAfter(made[made.length - 1]);
+          var sl = w.getSelection();
+          sl.removeAllRanges();
+          sl.addRange(rg);
+          rememberRange();
+        } catch (e) {}
+      }
+      syncSizeRead();
       changed();
+    }
+
+    /** 目前游標／選取處的字級（pt，四捨五入到整數）
+     *  ⚠ 不可以直接用 anchorNode：套用字級之後選取是用 setStartBefore/setEndAfter 重設的，
+     *    anchorNode 會是**父層**，量到的是段落的字級而不是剛套上去的那個，
+     *    結果就是「連按第二次沒有變大」（13pt→13pt，實測抓到）。
+     *    所以要取選取範圍內第一個真的有字的文字節點，看它的父元素。 */
+    function curFontPt() {
+      var sel = w.getSelection();
+      var nd = null;
+      if (sel && sel.rangeCount) {
+        var rg = sel.getRangeAt(0);
+        var root = rg.commonAncestorContainer;
+        if (root.nodeType === 3) root = root.parentNode;
+        try {
+          var tw = d.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+          var t;
+          while ((t = tw.nextNode())) {
+            if (t.textContent.replace(/\s/g, '') === '') continue;
+            if (rg.intersectsNode ? rg.intersectsNode(t) : true) { nd = t.parentNode; break; }
+          }
+        } catch (e) {}
+        if (!nd) nd = rg.startContainer;
+      }
+      if (nd && nd.nodeType === 3) nd = nd.parentNode;
+      if (!nd || !body.contains(nd)) nd = body;
+      var px = parseFloat(getComputedStyle(nd).fontSize) || 16;
+      return Math.max(6, Math.min(72, Math.round(px * 72 / 96)));
+    }
+    /** 字級 +/-：一次 1pt，連按可以邊看邊調 */
+    function bumpFont(step) {
+      body.focus();
+      restoreRange();
+      applyFontSize(Math.max(6, Math.min(72, curFontPt() + step)) + 'pt');
+    }
+    function syncSizeRead() {
+      var sel = host.querySelector('.egrt-sel-size');
+      if (sel) {
+        var v = curFontPt() + 'pt';
+        var has = false;
+        Array.prototype.slice.call(sel.options).forEach(function (o) { if (o.value === v) has = true; });
+        sel.value = has ? v : '';
+      }
+    }
+
+    /** 目前選取處的行距（沒設過就換算 computed 值） */
+    function curLineHeight() {
+      var bs = selectedBlocks(body);
+      var b = bs[0];
+      if (!b) return 1.6;
+      if (b.style.lineHeight) return parseFloat(b.style.lineHeight) || 1.6;
+      var cs = getComputedStyle(b);
+      var lh = parseFloat(cs.lineHeight), fs = parseFloat(cs.fontSize);
+      return (lh && fs) ? Math.round(lh / fs * 10) / 10 : 1.6;
+    }
+    /** 行距 +/-：一次 0.1，套在選取涵蓋的區塊上（line-height 在 doc 白名單內，存得住） */
+    function bumpLineHeight(step) {
+      body.focus();
+      restoreRange();
+      var bs = selectedBlocks(body);
+      if (!bs.length) return;
+      var v = Math.max(1, Math.min(3, Math.round((curLineHeight() + step) * 10) / 10));
+      bs.forEach(function (b) { b.style.lineHeight = String(v); });
+      var read = host.querySelector('.egrt-lh-read');
+      if (read) read.textContent = v.toFixed(1);
+      rememberRange();
+      changed();
+    }
+    function syncLhRead() {
+      var read = host.querySelector('.egrt-lh-read');
+      if (read) read.textContent = curLineHeight().toFixed(1);
     }
     /** 依資產編號把 <img> 的 src 補回來。
      *  src 刻意不存進內容（見 richtext_lib.php 的說明），所以每次帶入內容都要補一次。 */
@@ -721,6 +820,10 @@
         if (cmd === 'egPageBreak') { splitAtCaret(); return; }
         if (cmd === 'egAddPage')   { api.addPage(); return; }
         if (cmd === 'egAutoPage')  { autoPaginate(); return; }
+        if (cmd === 'egFontUp')    { bumpFont(1);  return; }
+        if (cmd === 'egFontDown')  { bumpFont(-1); return; }
+        if (cmd === 'egLhUp')      { bumpLineHeight(0.1);  return; }
+        if (cmd === 'egLhDown')    { bumpLineHeight(-0.1); return; }
         // 開跳窗之前先把游標位置記下來（跳窗一開選取就沒了，回來要插在原處）
         if (cmd === 'egImage')     { rememberRange(); if (opt.onInsertImage) opt.onInsertImage(insertAsset); return; }
         if (cmd === 'egFlow')      { rememberRange(); if (opt.onInsertFlow)  opt.onInsertFlow(insertAsset);  return; }

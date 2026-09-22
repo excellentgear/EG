@@ -31,7 +31,11 @@
   display:flex;align-items:center;gap:10px;}
 #egfWin .egf-hd b{color:#4E2C0B;font-size:15px;}
 #egfWin .egf-hd .egf-x{margin-left:auto;cursor:pointer;color:#8A5A2B;font-size:20px;line-height:1;}
-#egfWin .egf-bd{padding:10px 14px;overflow:auto;background:#efe9e0;flex:0 0 auto;}
+/* flex:1 1 auto + min-height:0 ＝ 內容區可收縮並自己捲動，
+   標題列與頁尾（含「放進文件」）永遠留在畫面上。
+   先前寫 flex:0 0 auto，畫布一放大（例如改成 900×700）頁尾就被擠出視窗外，
+   使用者會以為「畫完之後沒有按鈕可以插入到文件上」。 */
+#egfWin .egf-bd{padding:10px 14px;overflow:auto;background:#efe9e0;flex:1 1 auto;min-height:0;}
 #egfWin .egf-ft{padding:9px 14px;border-top:1px solid #e4d3ba;background:#faf6f0;border-radius:0 0 6px 6px;
   display:flex;align-items:center;gap:8px;}
 #egfWin .egf-ft .egf-hint{color:#8A5A2B;font-size:12px;}
@@ -96,8 +100,9 @@
     <div class="egf-ft">
       <span class="egf-hint" id="egfStat">　</span>
       <span class="egf-sp"></span>
-      <button type="button" class="btn btn-sm btn-default" id="egfCancel">取消</button>
-      <button type="button" class="btn btn-sm btn-warning" id="egfSave"><i class="fa fa-check"></i> 放進文件</button>
+      <button type="button" class="btn btn-default" id="egfCancel">取消</button>
+      <button type="button" class="btn btn-warning" id="egfSave" style="font-weight:bold;padding:6px 18px;">
+        <i class="fa fa-check"></i> 插入到文件</button>
     </div>
   </div>
 </div>
@@ -480,7 +485,8 @@
   function bind() {
     var win = el('egfWin');
     win.addEventListener('click', function (e) {
-      var t = e.target.closest ? e.target.closest('[data-add],.egf-sw,button') : null;
+      // .egf-x（右上角的 ×）是 <span> 不是 button，選擇器漏掉它就會「關不掉，只能按 ESC」
+      var t = e.target.closest ? e.target.closest('[data-add],.egf-sw,button,.egf-x') : null;
       if (!t) return;
       var add = t.getAttribute && t.getAttribute('data-add');
       if (add) {
