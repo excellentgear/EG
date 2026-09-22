@@ -123,15 +123,19 @@ case 'perms':
 case 'meta':
     if (!$P['canView']) jerr('無權限', 403);
     // 人員清單一律走 people_lib（只列未離職、標長期請假、依職稱排序並顯示職稱＝ai-rules/08 第五節）
+    // 一人一列，但 dept/position 一律換成「主職務」、其餘職務放進 alt_posts（前端標「（兼 …）」）。
+    // eg_people_list() 挑的是職級最高那筆，兼任職級較高的人（主職 技術課 工程師、兼任 生管組 組長）
+    // 在下拉裡會只剩兼任身分、主職完全看不到——使用者 2026-09-22 回報的就是這個。
     $people = [];
-    try { $people = eg_people_list($db, []); } catch (Throwable $e) {}
+    try { $people = eg_people_annotate_posts($db, eg_people_list($db, [])); } catch (Throwable $e) {}
     // 專案負責人候選＝兩層限制疊起來（見 prj_owner_people 的註解）：
     //   ① 模組設定的「專案負責人資格」（部門×職稱），未設定＝不限制
     //   ② 非專案管理員只能挑自己所屬部門（含兼任與子部門）內的人，管理員不受限
     // 這裡刻意不額外保留目前登入者——下拉列得出來、後端 prj_owner_allowed() 卻擋下來會很難理解。
     // 既有專案原本的負責人由前端 renderBase() 自己補回下拉（後端存檔時亦放行未變更的負責人）。
     $ownerPeople = [];
-    try { $ownerPeople = prj_owner_people($db, [], $uid, (bool)$P['canAdmin']); } catch (Throwable $e) { $ownerPeople = $people; }
+    try { $ownerPeople = eg_people_annotate_posts($db, prj_owner_people($db, [], $uid, (bool)$P['canAdmin'])); }
+    catch (Throwable $e) { $ownerPeople = $people; }
     // 部門一律依 sort_order 由小到大（＝組織由上而下：董事長室→總經理室→生產部…→文管中心）。
     // 原本寫 DESC，畫面上的部門下拉會從文管中心倒著列，跟 ai-rules/08 鐵則6 的排序方向相反。
     // parent_id／level 是給「先選部門再選人」展開子部門用的（組織是樹狀的，只比單一 id 會漏掉底下的組）
@@ -168,7 +172,7 @@ case 'meta':
         'owner_scope'  => prj_owner_scope_labeled($db),
         'owner_default'    => $uid,                    // 新專案／訂單轉專案的負責人預設＝目前使用者
         'owner_restricted' => !$P['canAdmin'],         // 非管理員：只能挑自己部門（含兼任）的人
-        'owner_scope_all'  => prj_owner_scope_labeled($db) ? prj_owner_people($db) : null,
+        'owner_scope_all'  => prj_owner_scope_labeled($db) ? eg_people_annotate_posts($db, prj_owner_people($db)) : null,
         'depts'      => $depts,
         'positions'  => $positions,
         'customers'  => $custs,
@@ -203,7 +207,9 @@ case 'get':
         'tasks'     => prj_tasks($db, $pid),
         'orders'    => prj_orders($db, $pid),
         'parts'     => prj_parts($db, $pid),
-        'processes' => prj_processes($db, $pid),
+        'processes' => prj_processes($db, $pid, $prj),
+        'scope_candidates' => prj_scope_candidates($db, $pid),
+        'shipments' => prj_shipments($db, $pid),
         'work_reports' => prj_work_reports($db, $pid),
         'fai'          => prj_fai_list($db, $pid),
         'fai_pass_date'=> prj_fai_pass_date($db, $pid),
@@ -240,6 +246,8 @@ case 'save':
         'end_date'     => trim((string)($_POST['end_date'] ?? '')) ?: null,
         'budget'       => trim((string)($_POST['budget'] ?? '')) === '' ? null : (float)$_POST['budget'],
         'tag_ids'      => prj_tag_csv(prj_tag_ids((string)($_POST['tag_ids'] ?? ''))),
+        // 專案涵蓋的製程：空＝整張 BOM 所有製程（使用者指定的預設語意）
+        'scope_process_no' => prj_tag_csv(prj_tag_ids((string)($_POST['scope_process_no'] ?? ''))),
     ];
     if (!isset(PRJ_PHASES[$data['phase']])) $data['phase'] = 'initiating';
     $err = prj_validate($data);
@@ -291,13 +299,13 @@ case 'save':
             $st = $db->prepare("UPDATE project SET project_type=?, project_name=?, customer_id=?, customer_name=?,
                                     owner_id=?, owner_name=?, dept_id=?, dept_name=?, phase=?, purpose=?,
                                     goal_desc=?, plan_date=?, start_date=?, end_date=?, budget=?,
-                                    tag_ids=?, modified_by=?, modified_at=?
+                                    tag_ids=?, scope_process_no=?, modified_by=?, modified_at=?
                                 WHERE project_id=?");
             $st->execute([$data['project_type'], $data['project_name'], $data['customer_id'], $custName,
                           $data['owner_id'], $ownerName, $data['dept_id'], $deptName, $data['phase'],
                           $data['purpose'], $data['goal_desc'],
                           $data['plan_date'], $data['start_date'], $data['end_date'], $data['budget'],
-                          $data['tag_ids'], $uid, $NOW['dt'], $pid]);
+                          $data['tag_ids'], $data['scope_process_no'], $uid, $NOW['dt'], $pid]);
         } else {
             if (!$P['canEdit']) throw new RuntimeException('無新增權限（需「專案登錄」角色）');
             $no = prj_next_no($db, $data['project_type'], $data['start_date'] ?: $NOW['date']);
@@ -437,6 +445,37 @@ case 'order_unlink':
     $db->prepare("DELETE FROM project_order WHERE project_id=? AND order_id=?")->execute([$pid, $oid]);
     prj_sync_parts_from_orders($db, $pid, $uname);
     jout(['message' => '已移出專案']);
+
+/** 執行規劃表的檢視方式（甘特／清單）。存在專案上不是只存在瀏覽器——
+ *  使用者要求「專案若是設定使用清單式，列印就不該顯示甘特圖」，
+ *  而清單那一列的「列印」不會先開專案，只有存進 DB 列印才跟得上。 */
+case 'plan_view_save':
+    $pid = (int)($_POST['project_id'] ?? 0);
+    prj_need($db, $P, $pid, true);
+    $v = (string)($_POST['plan_view'] ?? 'gantt');
+    if (!in_array($v, ['gantt', 'list'], true)) jerr('參數錯誤');
+    $db->prepare("UPDATE project SET plan_view=? WHERE project_id=?")->execute([$v, $pid]);
+    jout(['message' => '已記住檢視方式', 'plan_view' => $v]);
+
+/* ══════════════════════════ 出貨單綁定（只作確認資料用） ══════════════════════════ */
+case 'ship_bind':
+    $pid = (int)($_POST['project_id'] ?? 0);
+    prj_need($db, $P, $pid, true);
+    $isId = (int)($_POST['is_id'] ?? 0);
+    if (!$isId) jerr('請選擇出貨明細');
+    try { $no = prj_ship_bind($db, $pid, $isId, $uname); } catch (Throwable $e) { jerr($e->getMessage()); }
+    jout(['message' => '已綁定出貨單 ' . $no]);
+
+case 'ship_unbind':
+    $pid = (int)($_POST['project_id'] ?? 0);
+    prj_need($db, $P, $pid, true);
+    prj_ship_unbind($db, $pid, (int)($_POST['is_id'] ?? 0));
+    jout(['message' => '已解除綁定']);
+
+case 'ship_search':
+    $pid = (int)($_GET['project_id'] ?? 0);
+    prj_need($db, $P, $pid);
+    jout(['rows' => prj_ship_search($db, $pid, (string)($_GET['kw'] ?? ''))]);
 
 /* ══════════════════════════ 料號（手動補掛） ══════════════════════════ */
 case 'part_add':
@@ -725,7 +764,8 @@ case 'bom_sync':
     $pid = (int)($_POST['project_id'] ?? 0);
     prj_need($db, $P, $pid, true);
     $r = prj_bom_sync($db, $pid, $uname, false);
-    jout(['result' => $r, 'processes' => prj_processes($db, $pid), 'alerts' => prj_bom_alerts($db, $pid),
+    jout(['result' => $r, 'processes' => prj_processes($db, $pid, prj_get($db, $pid)),
+          'scope_candidates' => prj_scope_candidates($db, $pid), 'alerts' => prj_bom_alerts($db, $pid),
           'message' => '同步完成：新增 ' . $r['added'] . '、異動 ' . $r['changed'] . '、移除 ' . $r['removed'] . ' 道製程']);
 
 case 'bom_alert_ack':
@@ -1216,8 +1256,8 @@ case 'setting_save':
     jout(['message' => '已儲存設定', 'owner_scope_rows' => prj_owner_scope_labeled($db),
           'seed_template' => prj_seed_template($db), 'seed_is_custom' => prj_seed_template_rows($db) ? 1 : 0,
           'task_owner_depts' => prj_task_owner_depts($db),
-          'owner_people'    => prj_owner_people($db, [], $uid, (bool)$P['canAdmin']),
-          'owner_scope_all' => prj_owner_scope_labeled($db) ? prj_owner_people($db) : null]);
+          'owner_people'    => eg_people_annotate_posts($db, prj_owner_people($db, [], $uid, (bool)$P['canAdmin'])),
+          'owner_scope_all' => prj_owner_scope_labeled($db) ? eg_people_annotate_posts($db, prj_owner_people($db)) : null]);
 
 case 'asdoc_save':
     if (!$P['canAdmin']) jerr('無權限（需「專案管理員」角色）', 403);

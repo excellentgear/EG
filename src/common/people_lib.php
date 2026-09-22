@@ -288,6 +288,64 @@ if (!function_exists('eg_people_expand_posts')) {
     }
 }
 
+if (!function_exists('eg_people_annotate_posts')) {
+    /**
+     * 「一人一列」的名單補上**主職務**與兼任職務（2026-09-22 使用者回報：
+     * 「人員選單中都沒有顯示主要部門職位，只有顯示兼任的」）。
+     *
+     * 根因：eg_people_list() 一人只回一列、挑的是**職級最高**那一筆，
+     * 所以兼任的職級比主職高時（例：主職 技術課 工程師、兼任 生管組 組長），
+     * 名單上只剩兼任那一個身分，主職整個看不到、在主職部門底下也找不到他。
+     *
+     * 兩條路擇一，不要混用：
+     *   · 要讓人「以某個身分」被挑（先選部門再選人）→ 用 all_posts＝一個職務一列（post_key 當 value）
+     *   · 只是要挑「這個人」（負責人、核准人、篩選）→ 用本函式，維持一人一列，
+     *     但把 dept_name／position_name 換成**主職務**，其餘職務放進 alt_posts 由呼叫端標「（兼 …）」
+     *
+     * 沒有登記 is_main 的人（舊資料）退回原本那一筆，不會讓人從名單上消失。
+     *
+     * 回傳每列新增：main_dept_name／main_position_name／alt_posts[{dept_name,position_name}]
+     */
+    function eg_people_annotate_posts(PDO $db, array $rows): array {
+        if (!$rows) return [];
+        $uidIn = implode(',', array_map('intval', array_column($rows, 'id')));
+        $posts = [];
+        try {
+            $posts = $db->query("SELECT m.user_id, m.is_main, d.name AS dept_name,
+                                        COALESCE(d.sort_order,999) AS dept_sort,
+                                        p.name AS position_name, COALESCE(p.sort_order,999) AS position_sort
+                                 FROM user_department_position_map m
+                                 LEFT JOIN department d ON d.id = m.department_id
+                                 LEFT JOIN position   p ON p.id = m.position_id
+                                 WHERE m.user_id IN ({$uidIn})
+                                 ORDER BY m.is_main DESC, dept_sort, position_sort")
+                       ->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) { return $rows; }
+        $byUser = [];
+        foreach ($posts as $po) $byUser[(int)$po['user_id']][] = $po;
+
+        foreach ($rows as &$r) {
+            $list = $byUser[(int)$r['id']] ?? [];
+            $r['main_dept_name']     = (string)($r['dept_name'] ?? '');
+            $r['main_position_name'] = (string)($r['position_name'] ?? '');
+            $r['alt_posts']          = [];
+            if (!$list) continue;
+            // is_main 那一筆優先；都沒標 is_main 時取排序後的第一筆（部門→職稱）
+            $main = $list[0];
+            foreach ($list as $po) { if ((int)$po['is_main']) { $main = $po; break; } }
+            $r['main_dept_name']     = (string)($main['dept_name'] ?? '');
+            $r['main_position_name'] = (string)($main['position_name'] ?? '');
+            foreach ($list as $po) {
+                if ($po === $main) continue;
+                $r['alt_posts'][] = ['dept_name'     => (string)($po['dept_name'] ?? ''),
+                                     'position_name' => (string)($po['position_name'] ?? '')];
+            }
+        }
+        unset($r);
+        return $rows;
+    }
+}
+
 if (!function_exists('eg_people_list_asof')) {
     /**
      * 「某個日期當時」的人員列表（ai-rules/22：表單一律以業務日期當時的在職狀態與職務為準）

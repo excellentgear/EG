@@ -89,8 +89,20 @@ function fillMeta() {
 }
 
 /* 人員顯示：部門/職稱/姓名，長期請假要標假別期間（ai-rules/08 第五節） */
+/* 人員下拉的顯示字串：一律「主部門 主職稱 姓名（兼 …）」。
+   eg_people_list() 一人只回一列、挑的是職級最高那筆，所以兼任職級比主職高的人
+   （主職 技術課 工程師、兼任 生管組 組長）原本只印得出兼任身分、主職整個看不到
+   ——使用者 2026-09-22 回報的就是這個。後端 eg_people_annotate_posts() 已把主職務
+   放進 main_dept_name／main_position_name，其餘職務放在 alt_posts。 */
 function peopleLabel(p) {
-    var s = (p.dept_name ? p.dept_name + ' ' : '') + (p.position_name ? p.position_name + ' ' : '') + (p.user_cname || '');
+    var d = p.main_dept_name || p.dept_name || '', j = p.main_position_name || p.position_name || '';
+    var s = (d ? d + ' ' : '') + (j ? j + ' ' : '') + (p.user_cname || '');
+    var alt = p.alt_posts || [];
+    if (alt.length) {
+        var t = [];
+        $.each(alt, function (i, a) { t.push(((a.dept_name || '') + ' ' + (a.position_name || '')).replace(/\s+/g, ' ').replace(/^ | $/g, '')); });
+        s += '（兼 ' + t.join('、') + '）';
+    }
     if (p.leave_note) s += '（' + p.leave_note + '）';
     return s;
 }
@@ -261,7 +273,7 @@ function openProject(id, after) {
 function newProjectShell() {
     return {
         project: { project_id: 0, project_type: 'C', phase: 'initiating', status: 'draft', progress: 0 },
-        goals: [], tasks: [], orders: [], parts: [], processes: [], cards: [], cosigns: [],
+        goals: [], tasks: [], orders: [], parts: [], processes: [], shipments: [], cards: [], cosigns: [],
         alerts: [], doc_check: [], can_edit: true, can_approve: false
     };
 }
@@ -337,6 +349,7 @@ function renderBase(res) {
       + '<div id="fldEnd"><label>專案迄日</label><input type="date" id="eEnd" value="' + esc(p.end_date || '') + '"' + ro + '><div class="pj-err"></div></div>'
       + '<div><label>核定預算</label><input type="number" step="0.01" id="eBudget" value="' + esc(p.budget || '') + '"' + ro + '></div>'
       + '<div style="grid-column:1 / -1;"><label>專案分類標籤</label><div class="pj-tagbar" id="eTagBar"></div></div>'
+      + '<div style="grid-column:1 / -1;">' + scopeProcHtml(res) + '</div>'
       + '</div></div>'
       /* 專案內容只留「專案目的／專案目標」兩項（使用者要求，2026-08-25）；
          每欄右上角有「常用語句」可挑事先編好的句子帶入（語句本身在同一個跳窗裡新增/修改/刪除）。 */
@@ -352,6 +365,50 @@ function renderBase(res) {
     }
     $('#paneBase').html(h);
     renderTagPick('eTagBar', 'project', (p.tag_ids || '').split(',').map(num), res.can_edit);
+}
+
+/* ── 專案涵蓋的製程（使用者 2026-09-22 指定）──
+   一個都不勾＝整張 BOM 的所有製程（不是「都不算」）——這是使用者定的預設語意，
+   所以既有專案不必回頭設定、行為完全不變。候選只列**這個專案的 BOM 上真的有的製程**，
+   綁一道 BOM 上根本沒有的製程會永遠偵測不到進度而且不報錯。 */
+function scopeProcHtml(res) {
+    var p = res.project, cands = res.scope_candidates || [];
+    var sel = String(p.scope_process_no || '').split(',').map(num);
+    var h = '<label>專案涵蓋的製程 <span class="pj-hint">（不勾＝整張 BOM 的所有製程）</span></label>';
+    if (!num(p.project_id)) {
+        return h + '<div class="pj-hint">存檔並綁定訂單、BOM 同步進來之後才挑得到製程。</div>';
+    }
+    if (!cands.length) {
+        return h + '<div class="pj-hint">這個專案還沒有 BOM 製程可以挑（到「關聯資料」按「同步 BOM」，或等製令開立）。'
+             + '目前等同<b>整張 BOM 所有製程</b>。</div>';
+    }
+    h += '<div class="pj-tagbar" id="eScopeBar">';
+    $.each(cands, function (i, c) {
+        var on = $.inArray(num(c.process_no), sel) >= 0;
+        h += '<span class="pj-tag' + (on ? ' on' : '') + (res.can_edit ? '' : ' ro') + '" data-scope="' + c.process_no + '">'
+          + esc(c.process_name) + '</span>';
+    });
+    h += '</div><div class="pj-hint" id="eScopeHint">' + scopeHintText(sel, cands) + '</div>';
+    return h;
+}
+function scopeHintText(sel, cands) {
+    var on = [];
+    $.each(cands || [], function (i, c) { if ($.inArray(num(c.process_no), sel) >= 0) on.push(c.process_name); });
+    return on.length
+        ? '目前只涵蓋 ' + on.length + ' 道：<b>' + esc(on.join('、')) + '</b>（其餘製程仍看得到，但不列入本專案的進度與統計）'
+        : '未指定＝<b>整張 BOM 的所有製程</b>都算本專案。';
+}
+/* 勾選只改畫面，跟其他欄位一起按「儲存」才寫入（避免點一下就送一次 API） */
+$(document).on('click', '#eScopeBar .pj-tag[data-scope]', function () {
+    if ($(this).hasClass('ro')) return;
+    $(this).toggleClass('on');
+    var sel = $('#eScopeBar .pj-tag.on').map(function () { return num($(this).data('scope')); }).get();
+    $('#eScopeHint').html(scopeHintText(sel, (CUR || {}).scope_candidates || []));
+    PLAN_DIRTY = PLAN_DIRTY;   // 基本資料自己有存檔鈕，不借用規劃表的未存旗標
+});
+function scopeProcValue() {
+    if (!$('#eScopeBar').length) return String((CUR && CUR.project && CUR.project.scope_process_no) || '');
+    return $('#eScopeBar .pj-tag.on').map(function () { return num($(this).data('scope')); }).get().join(',');
 }
 
 /* 專案內容欄位＋「常用語句」入口（只有可編輯時才出現按鈕；唯讀檢視不給帶入） */
@@ -422,6 +479,7 @@ function collectBase() {
         customer_id: $('#eCust').val(), owner_id: $('#eOwner').val(), dept_id: $('#eDept').val(),
         phase: $('#ePhase').val(), start_date: $('#eStart').val(), end_date: $('#eEnd').val(),
         budget: $('#eBudget').val(), tag_ids: pickedTags('eTagBar'),
+        scope_process_no: scopeProcValue(),
         goal_desc: $('#eGoalDesc').val(), purpose: $('#ePurpose').val()
     };
 }
@@ -1690,12 +1748,16 @@ function renderRel(res) {
           + '<th style="width:110px;">廠商</th><th style="width:60px;">發包數</th>'
           + '<th style="width:88px;">發包日</th><th style="width:88px;">回廠日</th>'
           + '<th style="width:64px;">檢驗</th><th style="width:44px;">里程碑</th><th>專案註記</th></tr></thead><tbody>';
-        var lastBom = '';
+        var lastBom = '', outCnt = 0;
         $.each(res.processes, function (i, x) {
             var show = (x.bom !== lastBom); lastBom = x.bom;
-            h += '<tr data-proc="' + x.id + '"><td>' + (show ? '<b>' + esc(x.bom) + '</b>' : '') + '</td>'
+            var out = !num(x.in_scope);            // 專案有綁定製程、而這一道不在範圍內
+            if (out) outCnt++;
+            h += '<tr data-proc="' + x.id + '"' + (out ? ' style="opacity:.55;"' : '') + '>'
+              + '<td>' + (show ? '<b>' + esc(x.bom) + '</b>' : '') + '</td>'
               + '<td>' + esc(x.part_no || '') + '</td><td>' + num(x.bom_sn) + '</td>'
-              + '<td>' + esc(x.process_name || ('製程' + num(x.process_no))) + '</td>'
+              + '<td>' + esc(x.process_name || ('製程' + num(x.process_no)))
+              + (out ? ' <span class="pj-hint">（不在本專案範圍）</span>' : '') + '</td>'
               + '<td>' + esc(x.maker_name || '－') + '</td><td>' + num(x.sqty) + '</td>'
               + '<td>' + dispDate(x.outsource_date) + '</td><td>' + dispDate(x.return_date) + '</td>'
               + '<td>' + qcLabel(x.qc_check) + '</td>'
@@ -1705,9 +1767,16 @@ function renderRel(res) {
               + '</tr>';
         });
         h += '</tbody></table></div>'
-          + '<p class="pj-hint">本頁只讀 BOM，不會改動 BOM 任何資料；你在這裡加的註記與里程碑同步時不會被覆蓋。</p>';
+          + '<p class="pj-hint">本頁只讀 BOM，不會改動 BOM 任何資料；你在這裡加的註記與里程碑同步時不會被覆蓋。'
+          + (outCnt ? '<br><b>本專案已綁定特定製程</b>，上面有 ' + outCnt + ' 道不在範圍內（淡字那幾列）：'
+                    + '整張 BOM 的製程鏈仍然看得到，但進度與統計只認範圍內的。範圍在「專案基本資料 → 專案涵蓋的製程」設定。' : '')
+          + '</p>';
     }
     h += '</div>';
+
+    /* 出貨紀錄（使用者要求）：此料號在「本專案該料號最早接單日」之後的所有出貨。
+       預設只顯示 5 筆、超過要點開；綁定只是為了方便確認資料，不動 is_list 任何欄位。 */
+    h += renderShipSec(res);
 
     /* 報工紀錄（使用者要求）：廠內每日報工＋委外轉出入，一律唯讀 */
     h += '<div class="sec"><h5>報工紀錄（唯讀，來自生產現場）</h5>';
@@ -1743,6 +1812,102 @@ function renderRel(res) {
 
     $('#paneRel').html(h);
 }
+
+/* ── 出貨紀錄 ──
+   SHIP_ALL：是不是已經按過「顯示全部」。預設 false＝只顯示前 5 筆（使用者指定）。
+   截斷一律放在顯示層，後端回的是完整清單，否則「共 N 筆」會跟著被截掉而失真。 */
+var SHIP_ALL = false, SHIP_LIMIT = 5;
+
+function renderShipSec(res) {
+    var rows = res.shipments || [], canEdit = !!res.can_edit;
+    var h = '<div class="sec"><h5>出貨紀錄（本專案料號，訂單接單日之後）'
+      + (canEdit ? ' <button id="btnShipFind" style="float:right;height:26px;padding:0 10px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;">綁定其他出貨單</button>' : '')
+      + '</h5>';
+    if (!rows.length) {
+        h += '<div class="pj-hint">這些料號在本專案訂單接單日之後還沒有出貨紀錄。'
+           + '（歸戶用的是<b>料號主檔 id</b>不是料號文字——同一個料號文字常分屬好幾家客戶，比文字會把別家的出貨也算進來。）</div>';
+        return h + (canEdit ? '<div id="shipFound"></div>' : '') + '</div>';
+    }
+    var show = SHIP_ALL ? rows : rows.slice(0, SHIP_LIMIT);
+    var sumQty = 0, sumAmt = 0;
+    $.each(rows, function (i, r) { sumQty += num(r.Qty); sumAmt += (parseFloat(r.amount) || 0); });
+
+    h += '<div style="overflow-x:auto;"><table class="sub-tbl"><thead><tr>'
+      + '<th style="width:88px;">出貨日</th><th style="width:120px;">出貨單號</th><th>料號</th>'
+      + '<th style="width:100px;">客戶</th><th style="width:60px;">數量</th><th style="width:78px;">單價</th>'
+      + '<th style="width:88px;">金額</th><th style="width:110px;">對應訂單</th>'
+      + (canEdit ? '<th style="width:56px;">綁定</th>' : '') + '</tr></thead><tbody>';
+    $.each(show, function (i, r) {
+        h += '<tr><td>' + dispDate(r.ship_date) + '</td>'
+          + '<td>' + esc(r.IS_number || '') + '</td>'
+          + '<td>' + esc(r.part_no || '') + '</td>'
+          + '<td>' + esc(r.Client_name || '') + '</td>'
+          + '<td>' + num(r.Qty) + '</td>'
+          + '<td>' + (r.Unit_price === null ? '－' : esc(String(r.Unit_price))) + '</td>'
+          + '<td>' + (r.amount ? esc(String(r.amount)) : '－') + '</td>'
+          + '<td>' + (r.Order_oo
+                ? esc(r.Order_oo) + (num(r.in_project) ? ' <span class="st st-approved">本專案</span>' : '')
+                : '<span class="pj-hint">未綁訂單</span>') + '</td>'
+          + (canEdit ? '<td>' + (num(r.is_bound)
+                ? '<span class="pj-op" data-shipunbind="' + r.IS_id + '" style="color:#DD5138;">解除</span>'
+                : '<span class="pj-op" data-shipbind="' + r.IS_id + '">綁定</span>') + '</td>' : '')
+          + '</tr>';
+    });
+    h += '</tbody></table></div>';
+    if (rows.length > SHIP_LIMIT) {
+        h += '<div style="margin-top:6px;"><button id="btnShipMore" style="height:26px;padding:0 12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;">'
+          + (SHIP_ALL ? '只顯示前 ' + SHIP_LIMIT + ' 筆' : '顯示全部 ' + rows.length + ' 筆') + '</button></div>';
+    }
+    h += '<p class="pj-hint">共 ' + rows.length + ' 筆、合計 ' + sumQty + ' 件'
+       + (sumAmt ? '／金額 ' + Math.round(sumAmt * 100) / 100 : '')
+       + '。起算日＝本專案訂單中<b>該料號</b>最早的接單日（每個料號各自起算）。'
+       + '綁定只是把這張出貨單標記成本專案的資料，<b>不會改動出貨單本身</b>，也不影響對帳與毛利。</p>';
+    h += (canEdit ? '<div id="shipFound"></div>' : '');
+    return h + '</div>';
+}
+
+$(document).on('click', '#btnShipMore', function () { SHIP_ALL = !SHIP_ALL; renderRel(CUR); });
+
+$(document).on('click', '[data-shipbind]', function () {
+    api('ship_bind', { project_id: CUR.project.project_id, is_id: num($(this).data('shipbind')) }, 'POST')
+        .done(function () { openProject(num(CUR.project.project_id)); });   /* 會自動回到原本看的分頁 */
+});
+$(document).on('click', '[data-shipunbind]', function () {
+    api('ship_unbind', { project_id: CUR.project.project_id, is_id: num($(this).data('shipunbind')) }, 'POST')
+        .done(function () { openProject(num(CUR.project.project_id)); });
+});
+
+/* 綁定其他出貨單：自動清單只涵蓋「本專案料號＋接單日之後」，
+   舊資料常常沒帶料號主檔 id（is_list.d_setting_id 是空的），那種就得用單號找出來綁。 */
+$(document).on('click', '#btnShipFind', function () {
+    var h = '<div style="margin-top:8px;padding:8px;border:1px dashed #D8BE93;border-radius:6px;">'
+      + '<label>輸入出貨單號或料號後按 Enter</label>'
+      + '<input type="text" id="shipKw" data-eg-hint="例：IS1150609018" style="max-width:320px;">'
+      + '<div id="shipHits" style="margin-top:6px;"></div></div>';
+    $('#shipFound').html(h);
+    $('#shipKw').focus();
+});
+$(document).on('keydown', '#shipKw', function (e) {
+    if (e.which !== 13) return;
+    e.preventDefault();
+    var kw = $.trim($(this).val());
+    if (!kw) return;
+    $('#shipHits').html('<span class="pj-hint">搜尋中…</span>');
+    api('ship_search', { project_id: CUR.project.project_id, kw: kw }).done(function (r) {
+        var rows = r.rows || [];
+        if (!rows.length) { $('#shipHits').html('<span class="pj-hint">找不到符合的出貨明細。</span>'); return; }
+        var h = '<table class="sub-tbl"><thead><tr><th style="width:88px;">出貨日</th><th style="width:120px;">出貨單號</th>'
+          + '<th>料號</th><th style="width:100px;">客戶</th><th style="width:60px;">數量</th><th style="width:56px;"></th></tr></thead><tbody>';
+        $.each(rows, function (i, x) {
+            h += '<tr><td>' + dispDate(x.ship_date) + '</td><td>' + esc(x.IS_number || '') + '</td>'
+              + '<td>' + esc(x.part_no || '') + '</td><td>' + esc(x.Client_name || '') + '</td>'
+              + '<td>' + num(x.Qty) + '</td>'
+              + '<td>' + (num(x.is_bound) ? '<span class="pj-hint">已綁</span>'
+                    : '<span class="pj-op" data-shipbind="' + x.IS_id + '">綁定</span>') + '</td></tr>';
+        });
+        $('#shipHits').html(h + '</tbody></table>');
+    });
+});
 
 function qcLabel(q) {
     var m = { ok: '允收', ng: '驗退', QQ: '異常', AOD: '特採' };
@@ -2647,9 +2812,9 @@ function ownScopeWhoText() {
     /* 這裡要看的是「資格」命中誰（全公司），不是目前這位管理員自己能挑誰 */
     var ps = META.owner_scope_all || META.owner_people || [];
     if (!ps.length) return '<br><span style="color:#DD5138;">目前沒有任何人符合已儲存的設定，負責人會選不到人。</span>';
-    var names = $.map(ps, function (x) { return (x.dept_name ? x.dept_name + ' ' : '') + (x.position_name ? x.position_name + ' ' : '') + x.user_cname; });
+    var names = $.map(ps, function (x) { return peopleLabel(x); });
     return '<br>目前符合資格（依<b>已儲存</b>的設定）共 ' + ps.length + ' 人：' + esc(names.join('、'))
-         + '<br><span style="color:#8a6d45;">※ 兼任者以<b>職級最高的職務</b>顯示，所以名單上的部門/職稱可能跟你設的那一組不同（例：兼任技術部課長的董事長，設技術部後也會出現）。</span>';
+         + '<br><span style="color:#8a6d45;">※ 名單上印的是<b>主要部門職稱</b>，兼任的職務列在括號裡，所以有人是靠兼任那個職務命中你設的部門（例：兼任技術部課長的董事長，設技術部後也會出現）。</span>';
 }
 
 $(document).on('click', '#btnOwnScopeAdd', function () {

@@ -160,6 +160,20 @@ function prj_ensure_schema(PDO $db): void
         KEY idx_prj (project_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='專案綁定的訂單（主軸）'");
 
+    /* 專案綁定的出貨單（2026-09-22 使用者要求：「增加綁定出貨單，方便確認資料而已」）。
+       刻意只是一條「這張出貨單屬於本專案」的參照：不動 is_list 一個欄位、不影響任何
+       出貨/對帳/毛利的既有判定；出貨與訂單的正式分配關係仍然只在 trace_chain_lib 的
+       is_order_map（鐵律4：同一件事不要有第二份資料來源）。 */
+    $db->exec("CREATE TABLE IF NOT EXISTS project_shipment (
+        id          INT AUTO_INCREMENT PRIMARY KEY,
+        project_id  INT NOT NULL,
+        is_id       INT NOT NULL COMMENT 'is_list.IS_id（出貨明細列）',
+        note        VARCHAR(200) NULL,
+        added_by    VARCHAR(60) NULL, added_at DATETIME NULL,
+        UNIQUE KEY uq_is (project_id, is_id),
+        KEY idx_prj (project_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='專案綁定的出貨單（只作確認資料用，不改 is_list）'");
+
     $db->exec("CREATE TABLE IF NOT EXISTS project_part (
         id          INT AUTO_INCREMENT PRIMARY KEY,
         project_id  INT NOT NULL,
@@ -333,6 +347,10 @@ function prj_ensure_schema(PDO $db): void
     prj_ensure_col($db, 'project_task', 'progress_auto', "TINYINT NOT NULL DEFAULT 1 COMMENT '1=進度跟著實際完成日自動算' AFTER progress");
     prj_ensure_col($db, 'project_task', 'task_kind', "VARCHAR(20) NOT NULL DEFAULT '' COMMENT 'fai/rca/delta_fai' AFTER is_milestone");
     prj_ensure_col($db, 'project_task', 'status_code', "VARCHAR(20) NOT NULL DEFAULT '' COMMENT '未開始/doing/wait_qc/abnormal/done' AFTER task_kind");
+    // 專案涵蓋的製程（2026-09-22 使用者要求）：空＝整張 BOM 的所有製程，有值＝只算這幾道
+    prj_ensure_col($db, 'project', 'scope_process_no', "VARCHAR(255) NULL COMMENT '專案涵蓋的製程 process_no.ProcessNo 逗號串；空＝整張BOM所有製程' AFTER dept_name");
+    // 執行規劃表的檢視方式（甘特／清單）：列印要跟著走，所以存在專案上不是只存在瀏覽器
+    prj_ensure_col($db, 'project', 'plan_view', "VARCHAR(10) NOT NULL DEFAULT 'gantt' COMMENT 'gantt=時間軸 / list=清單；列印版跟著它走' AFTER scope_process_no");
     // 附件標籤要能勾「這個標籤算 SOP／SIP」——比照 is_external_doc／is_photo_album 的既有做法，
     // 不在程式裡寫死標籤名稱（鐵律4：使用者改名或新增標籤時不可失效）
     prj_ensure_col($db, 'quotation_file_categories', 'is_sop', "TINYINT NOT NULL DEFAULT 0 COMMENT '1=這個附件標籤算 SOP 作業標準書'");
@@ -1292,6 +1310,166 @@ function prj_parts(PDO $db, int $projectId): array
 }
 
 /**
+ * 這個專案的出貨紀錄（2026-09-22 使用者要求：
+ * 「顯示此料號在此訂單日期之後的所有出貨紀錄（預設顯示5筆，超過需點開才顯示）」）。
+ *
+ * 三個要點：
+ *  ① 歸戶一律用 `is_list.d_setting_id`（料號主檔 id），**不可以比料號文字**——
+ *     同一個料號文字在 d_setting 常分屬好幾家客戶，比文字會把別家的出貨也算進來
+ *     （記憶 ship_stats_by_dsetting_id：159 個重複料號會灌水）。
+ *  ② 「此訂單日期之後」＝**逐料號**取本專案訂單中該料號最早的接單日當起點，
+ *     不是整個專案取一個日期——同一個專案可能有好幾個料號、接單日差很多。
+ *  ③ 回傳全部（不在 SQL 截斷），前端預設只顯示 5 筆、點開才全列；
+ *     截斷要放在顯示層，否則「共幾筆」會跟著被截掉而失真。
+ */
+function prj_shipments(PDO $db, int $projectId): array
+{
+    // 逐料號的起算日：本專案訂單中該料號最早的接單日（沒有訂單的手動料號＝不限日期）
+    $st = $db->prepare("SELECT o.d_id_ID AS ds_pk, MIN(o.Order_date) AS from_date
+                        FROM project_order po JOIN order_track o ON o.Order_id=po.order_id
+                        WHERE po.project_id=? AND o.d_id_ID IS NOT NULL AND o.d_id_ID>0
+                        GROUP BY o.d_id_ID");
+    $st->execute([$projectId]);
+    $fromOf = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $fromOf[(int)$r['ds_pk']] = $r['from_date'];
+
+    // 料號範圍＝專案料號（含手動補掛的）
+    $st = $db->prepare("SELECT ds_pk FROM project_part WHERE project_id=?");
+    $st->execute([$projectId]);
+    $pks = array_map('intval', array_column($st->fetchAll(PDO::FETCH_ASSOC), 'ds_pk'));
+    $pks = array_values(array_filter(array_unique($pks)));
+    if (!$pks) return [];
+
+    // 手動綁定的出貨單一定要列出來，即使它的料號或日期不在自動範圍內
+    // （使用者就是為了「方便確認資料」才綁的，綁了卻看不到等於白綁）
+    $st = $db->prepare("SELECT is_id FROM project_shipment WHERE project_id=?");
+    $st->execute([$projectId]);
+    $boundIds = array_map('intval', array_column($st->fetchAll(PDO::FETCH_ASSOC), 'is_id'));
+
+    $in    = implode(',', $pks);
+    $inB   = $boundIds ? implode(',', $boundIds) : '0';
+    $sql = "SELECT s.IS_id, s.IS_number, s.Order_date AS ship_date, s.Qty, s.Unit_price,
+                   s.d_setting_id AS ds_pk, s.Client_name, s.Order_id, s.Specification, s.Note,
+                   COALESCE(ds.D_Setting_Id, s.Product_id) AS part_no,
+                   o.Order_oo, po.project_id AS order_in_project,
+                   ps.id AS bind_id
+            FROM is_list s
+            LEFT JOIN d_setting ds ON ds.d_id = s.d_setting_id
+            LEFT JOIN order_track o ON o.Order_id = s.Order_id
+            LEFT JOIN project_order po ON po.order_id = s.Order_id AND po.project_id = ?
+            LEFT JOIN project_shipment ps ON ps.is_id = s.IS_id AND ps.project_id = ?
+            WHERE s.d_setting_id IN ($in) OR s.IS_id IN ($inB)
+            ORDER BY s.Order_date DESC, s.IS_id DESC";
+    $st = $db->prepare($sql);
+    $st->execute([$projectId, $projectId]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    $out = [];
+    foreach ($rows as $r) {
+        $pk    = (int)$r['ds_pk'];
+        $from  = $fromOf[$pk] ?? null;
+        $bound = $r['bind_id'] !== null;
+        // 起算日之前的出貨是「上一批／別張訂單」的貨，不列（使用者指定：此訂單日期之後）；
+        // 但手動綁定的一律保留，不然綁了會消失。
+        if (!$bound && $from && $r['ship_date'] && $r['ship_date'] < $from) continue;
+        $r['from_date']   = $from;
+        $r['in_project']  = $r['order_in_project'] !== null ? 1 : 0;   // 出貨單掛的訂單就在本專案裡
+        $r['is_bound']    = $r['bind_id'] !== null ? 1 : 0;            // 本頁手動綁定的
+        $r['amount']      = round(((float)$r['Qty']) * ((float)$r['Unit_price']), 2);
+        $out[] = $r;
+    }
+    return $out;
+}
+
+/* ══════════════════════════ 專案涵蓋的製程 ══════════════════════════
+   使用者 2026-09-22 指定：「要可以綁定特定製程，或是不綁定就認定是整張 BOM 所有製程」。
+   空值＝全部，所以既有專案不必回頭設定、行為完全不變。 */
+
+/** 專案綁定的製程代號陣列（空陣列＝不限定＝整張 BOM 所有製程） */
+function prj_scope_process_ids(?array $prj): array
+{
+    $raw = (string)($prj['scope_process_no'] ?? '');
+    $out = [];
+    foreach (explode(',', $raw) as $v) { $v = (int)trim($v); if ($v > 0) $out[] = $v; }
+    return array_values(array_unique($out));
+}
+
+/** 這道製程算不算在專案範圍內（沒綁定一律算） */
+function prj_in_scope(array $scope, $processNo): bool
+{
+    if (!$scope) return true;
+    return in_array((int)$processNo, $scope, true);
+}
+
+/**
+ * 可以綁的製程候選＝這個專案的 BOM 上實際有的製程（不是整份製程主檔）。
+ * 綁一道「這張 BOM 根本沒有的製程」沒有意義，而且會永遠偵測不到進度也不報錯。
+ */
+function prj_scope_candidates(PDO $db, int $projectId): array
+{
+    $st = $db->prepare("SELECT pp.process_no,
+                               COALESCE(MAX(pn.ProcessName), MAX(pp.process_name)) AS process_name,
+                               COUNT(*) AS cnt, MIN(pp.bom_sn) AS first_sn
+                        FROM project_process pp
+                        LEFT JOIN process_no pn ON pn.ProcessNo = pp.process_no
+                        WHERE pp.project_id=? AND pp.process_no IS NOT NULL
+                        GROUP BY pp.process_no
+                        ORDER BY first_sn, pp.process_no");
+    $st->execute([$projectId]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        $r['process_no']   = (int)$r['process_no'];
+        $r['cnt']          = (int)$r['cnt'];
+        $r['process_name'] = (string)($r['process_name'] ?: ('製程' . $r['process_no']));
+    }
+    unset($r);
+    return $rows;
+}
+
+/** 綁一張出貨單到專案（只寫 project_shipment，不動 is_list 任何欄位） */
+function prj_ship_bind(PDO $db, int $projectId, int $isId, string $by): string
+{
+    $st = $db->prepare("SELECT IS_number FROM is_list WHERE IS_id=?");
+    $st->execute([$isId]);
+    $no = $st->fetchColumn();
+    if ($no === false) throw new RuntimeException('找不到這筆出貨明細');
+    $db->prepare("INSERT IGNORE INTO project_shipment (project_id, is_id, added_by, added_at) VALUES (?,?,?,NOW())")
+       ->execute([$projectId, $isId, $by]);
+    return (string)$no;
+}
+
+function prj_ship_unbind(PDO $db, int $projectId, int $isId): void
+{
+    $db->prepare("DELETE FROM project_shipment WHERE project_id=? AND is_id=?")->execute([$projectId, $isId]);
+}
+
+/**
+ * 出貨單搜尋（綁定用）：打出貨單號或料號即時找。
+ * 只回「本專案料號以外」也找得到的結果，讓自動清單漏掉的（例如料號主檔 id 沒帶到的舊資料）也綁得進來。
+ */
+function prj_ship_search(PDO $db, int $projectId, string $kw): array
+{
+    $kw = trim($kw);
+    if ($kw === '') return [];
+    $like = '%' . $kw . '%';
+    $st = $db->prepare("SELECT s.IS_id, s.IS_number, s.Order_date AS ship_date, s.Qty, s.Unit_price,
+                               s.Client_name, s.Order_id, COALESCE(ds.D_Setting_Id, s.Product_id) AS part_no,
+                               o.Order_oo, ps.id AS bind_id
+                        FROM is_list s
+                        LEFT JOIN d_setting ds ON ds.d_id = s.d_setting_id
+                        LEFT JOIN order_track o ON o.Order_id = s.Order_id
+                        LEFT JOIN project_shipment ps ON ps.is_id = s.IS_id AND ps.project_id = ?
+                        WHERE s.IS_number LIKE ? OR ds.D_Setting_Id LIKE ? OR s.Product_id LIKE ?
+                        ORDER BY s.Order_date DESC, s.IS_id DESC
+                        LIMIT 50");
+    $st->execute([$projectId, $like, $like, $like]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) { $r['is_bound'] = $r['bind_id'] !== null ? 1 : 0; }
+    unset($r);
+    return $rows;
+}
+
+/**
  * 把訂單帶出的料號同步進 project_part。
  * 手動掛的（source=manual）永遠不動；由訂單帶進來但訂單已被移出專案的才退場。
  */
@@ -1694,7 +1872,7 @@ function prj_bom_diff_text(array $prev, array $now): string
     return $diff ? '：' . implode('、', $diff) : '';
 }
 
-function prj_processes(PDO $db, int $projectId): array
+function prj_processes(PDO $db, int $projectId, ?array $prj = null): array
 {
     $st = $db->prepare("SELECT pp.*, COALESCE(ds.D_Setting_Id, '') AS part_no
                         FROM project_process pp
@@ -1702,7 +1880,13 @@ function prj_processes(PDO $db, int $projectId): array
                         WHERE pp.project_id=?
                         ORDER BY pp.bom, pp.bom_sn, pp.id");
     $st->execute([$projectId]);
-    return $st->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    // 專案綁定製程時標出哪幾道在範圍內（刻意標示不刪除：BOM 的完整製程鏈本來就該看得到，
+    // 只是進度判定與統計只認範圍內那幾道）
+    $scope = prj_scope_process_ids($prj);
+    foreach ($rows as &$r) { $r['in_scope'] = prj_in_scope($scope, $r['process_no']) ? 1 : 0; }
+    unset($r);
+    return $rows;
 }
 
 /** 未知悉的 BOM 變更提示（專案清單的紅色徽章與詳情頁的提示條都用這支） */
