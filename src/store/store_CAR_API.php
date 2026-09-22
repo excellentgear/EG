@@ -1395,6 +1395,9 @@ try {
             $rows[] = ['id' => (int)$r['id'], 'name' => (string)$r['user_cname'],
                        'dept_id' => (int)$r['dept_id'], 'dept_name' => (string)$r['dept_name'],
                        'position_id' => (int)$r['position_id'], 'position_name' => (string)$r['position_name'],
+                       // 一人多職時要挑哪一個職務顯示，前端靠 is_main（主職）＋單據上的部門決定，
+                       // 少回這一欄就會挑到「職級最高」那個兼任，跟表頭顯示的職稱對不起來
+                       'is_main' => !empty($r['is_main']) ? 1 : 0,
                        'is_former' => !empty($r['is_former']) ? 1 : 0];
         }
         jout(['success' => true, 'date' => $date, 'data' => $rows]);

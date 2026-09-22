@@ -68,11 +68,14 @@
             '.egcp-grid button small{display:block;font-weight:normal;font-size:11px;color:#8a6a45;margin-top:2px;}',
             '.egcp-grid button.on small{color:#6B4A22;}',
             '.egcp-empty{color:#8a6a45;font-size:13px;padding:10px 2px;}',
-            '.egcp-cell{display:inline-flex;align-items:stretch;}',
-            '.egcp-cell>button:first-child{border-top-right-radius:0;border-bottom-right-radius:0;}',
-            '.egcp-into{min-width:0 !important;border:1px solid #E4D3BC;border-left:0;background:#FFF8EE;color:#8A5A2B;',
-            '  border-radius:0 8px 8px 0;padding:0 10px;font-size:16px;font-weight:bold;cursor:pointer;}',
-            '.egcp-into:hover{background:#F0A24B;color:#3B2A18;border-color:#C0703A;}',
+            '.egcp-cell{position:relative;display:inline-flex;}',
+            '.egcp-grid .egcp-cell.has-into>button:first-child{padding-right:38px;}',
+            /* 選擇器要比 `.egcp-grid button` 更明確，否則會被大方塊那組樣式蓋掉
+               （那條是 class+type＝比單一 class 高，寫 .egcp-into 是吃不到的） */
+            '.egcp-grid .egcp-into{position:absolute;right:6px;bottom:6px;min-width:0;width:24px;height:24px;',
+            '  min-height:0;border:1px solid #D9A066;background:#FFF8EE;color:#8A5A2B;border-radius:50%;',
+            '  padding:0;font-size:15px;font-weight:bold;line-height:20px;text-align:center;cursor:pointer;}',
+            '.egcp-grid .egcp-into:hover{background:#F0A24B;color:#3B2A18;border-color:#C0703A;}',
             '.egcp-cell.egcp-just>button{box-shadow:0 0 0 2px #F0A24B;}',
             '.egcp-hint{font-size:12px;color:#8A5A2B;background:#FBEEE6;border:1px solid #F3D9C4;border-radius:5px;',
             '  padding:4px 8px;margin-bottom:8px;}',
@@ -242,6 +245,14 @@
         if (!cur) return;
         if (cur.mask && cur.mask.parentNode) cur.mask.parentNode.removeChild(cur.mask);
         document.removeEventListener('keydown', cur.onKey, true);
+        // 還原底下那個 Bootstrap 跳窗的焦點鎖（開啟時為了讓輸入框打得了字而暫時拿掉）
+        if (cur.focusFreed && global.jQuery) {
+            try {
+                var $m = global.jQuery('.modal.in').last();
+                var inst = $m.length ? $m.data('bs.modal') : null;
+                if (inst && typeof inst.enforceFocus === 'function') inst.enforceFocus();
+            } catch (e) {}
+        }
         cur = null;
     }
 
@@ -287,12 +298,12 @@
                    一路點下去只會變成選取、永遠進不去（使用者回報：新增完第二層就被自動選定，
                    看不到新增第三層的畫面）——所以多一顆窄的「＋」把「選它」與「進去它底下」分開。 */
                 var canInto = !kids && cur.add && cur.add.can && cur.path.length < 2;
-                return '<span class="egcp-cell' + just + '">'
+                return '<span class="egcp-cell' + just + (canInto ? ' has-into' : '') + '">'
                     + '<button type="button" class="' + (on ? 'on' : '') + mark + '" data-act="go" data-id="' + esc(n.cat_id) + '">'
                     + esc(n.name)
                     + '<small>' + (kids ? ('往下還有 ' + kids + ' 項') : (on ? '✓ 已選' : '可直接選')) + '</small></button>'
                     + (canInto ? ('<button type="button" class="egcp-into" data-act="into" data-id="' + esc(n.cat_id)
-                                  + '" title="在「' + esc(n.name) + '」底下再加一層">＋</button>') : '')
+                                  + '" title="在「' + esc(n.name) + '」底下再加一層（不是選它）">＋</button>') : '')
                     + '</span>';
             }).join('') + addTile();
         }
@@ -410,6 +421,17 @@
                 return;
             }
         });
+        /* Bootstrap 3 的 modal 會在 document 上掛 focusin.bs.modal，只要焦點跑到跳窗外面就
+           立刻搶回去（enforceFocus）——這個挑選視窗刻意掛在 body 上、不依賴 Bootstrap modal
+           （見檔頭），於是輸入框一拿到焦點就被搶走＝**打不了字**（使用者回報）。
+           **在遮罩上攔 focusin 沒有用**：jQuery 的 focusin 是用 document 的 capture 階段實作的，
+           比我們的冒泡監聽先跑。所以改成「開著的時候先把那個監聽拿掉、關閉時再裝回去」，
+           也不必去改 Bootstrap 本身（那是全站共用的版型檔）。 */
+        if (global.jQuery && global.jQuery('.modal.in').length) {
+            global.jQuery(document).off('focusin.bs.modal');
+            cur.focusFreed = true;            // 關閉時再把焦點鎖還給底下那個跳窗
+        }
+
         cur.onKey = function (e) { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
         document.addEventListener('keydown', cur.onKey, true);
 

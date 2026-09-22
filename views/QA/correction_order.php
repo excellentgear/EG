@@ -144,6 +144,12 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         .help-doc li{ margin-bottom:4px; font-size:13px; line-height:1.6; }
         .help-doc .hd-warn{ background:#FBEEE6; border:1px solid #F3D9C4; color:#8A5A2B; border-radius:6px; padding:8px 10px; font-size:13px; }
         @media print{ .page-help-btn{ display:none !important; } }
+        /* 三段回覆可收合：標題列整條可點 */
+        .car-sec-h{ padding:6px 10px; cursor:pointer; user-select:none; }
+        .car-sec-h:hover{ background:#f3f6f8; }
+        .car-sec-ic{ color:#8A5A2B; margin-right:6px; width:12px; }
+        .car-sec-brief{ color:#888; font-size:12px; margin-left:8px; }
+        .car-sec-all{ float:right; font-size:12px; font-weight:normal; }
         /* 異常原因分類：逐層挑選（共用元件 eg_cause_picker.js），這裡只放按鈕與已選路徑 */
         .cc-pick{ display:flex; align-items:center; gap:4px; }
         .cc-path{ margin-top:4px; font-size:12px; background:#FBEEE6; border:1px solid #F3D9C4;
@@ -1302,6 +1308,26 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
             .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'指派失敗'); }); });
       }
 
+      // 三段收合／展開（只 show/hide，不重畫——重畫會把還沒存檔的輸入洗掉）
+      function secApply($h, folded){
+        var sec=$h.data('sec');
+        $h.closest('.panel').find('.car-sec-b[data-sec="'+sec+'"]').toggle(!folded);
+        $h.find('.car-sec-ic').toggleClass('fa-chevron-down', !folded).toggleClass('fa-chevron-right', folded);
+        $h.find('.car-sec-brief').toggle(folded);
+        secSetFold(sec, folded);
+      }
+      $('#view-body .car-sec-h').on('click', function(){
+        var $h=$(this);
+        secApply($h, $h.find('.car-sec-ic').hasClass('fa-chevron-down'));   // 目前是展開的 → 收起來
+        $('#btn-sec-fold-all').text(secAllFolded()?'全部展開':'全部收合');
+      });
+      $('#btn-sec-fold-all').on('click', function(e){
+        e.preventDefault();
+        var fold = !secAllFolded();
+        $('#view-body .car-sec-h').each(function(){ secApply($(this), fold); });
+        $(this).text(secAllFolded()?'全部展開':'全部收合');
+      });
+
       // 異常原因分類：逐層挑選（共用元件 EGCausePicker），選好的路徑顯示在按鈕下方
       function refreshCausePath(){
         if(!$('#rp-cause-path').length) return;
@@ -1366,6 +1392,30 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     });
   }
 
+  /* 三段（異常原因分析／矯正措施／預防措施）收合狀態
+     記在 localStorage：這張跳窗每做一個動作就整個重畫，不記下來的話一重畫就又全部展開。
+     只是個人的畫面偏好，不進資料庫。 */
+  var SEC_KEYS=['cause','correction','prevention'];
+  function secFoldMap(){
+    try{ return JSON.parse(localStorage.getItem('car_sec_fold')||'{}')||{}; }catch(e){ return {}; }
+  }
+  function secIsFolded(sec){ return !!secFoldMap()[sec]; }
+  function secAllFolded(){ var m=secFoldMap(); return SEC_KEYS.every(function(k){ return !!m[k]; }); }
+  function secSetFold(sec, on){
+    var m=secFoldMap(); if(on) m[sec]=1; else delete m[sec];
+    try{ localStorage.setItem('car_sec_fold', JSON.stringify(m)); }catch(e){}
+  }
+  function secSetAll(on){
+    var m={}; if(on) SEC_KEYS.forEach(function(k){ m[k]=1; });
+    try{ localStorage.setItem('car_sec_fold', JSON.stringify(m)); }catch(e){}
+  }
+  // 收起來的時候，標題旁邊給一行摘要，不必展開也知道裡面填了什麼
+  function secBrief(sec, o, L){
+    if(sec==='cause')      return (o.cause_label||'尚未選擇分類') + (o.cause_detail? '｜'+String(o.cause_detail).replace(/\s+/g,' ').substring(0,28) : '');
+    if(sec==='correction') return (o.disp_label||'尚未選擇處置方式') + (o.correction_measure? '｜'+String(o.correction_measure).replace(/\s+/g,' ').substring(0,28) : '');
+    return (o.prevention_measure? String(o.prevention_measure).replace(/\s+/g,' ').substring(0,36) : '尚未填寫');
+  }
+
   // 三段回覆區塊（原因分析 / 矯正措施 / 預防措施）；附件矯正/預防分開顯示於各自區塊
   function renderReply(o, perm, sigMap, L, atts, causes, dispOpts){
     causes = causes||[]; dispOpts = dispOpts||[];
@@ -1375,10 +1425,14 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     var bf = !!perm.bf_on;     // 補資料模式：內容一律可改（含已簽章的段落），章由下方補資料面板處理
     function secBox(title, sec, editHtml, roHtml, dueLeft){
       var attHtml = attList(atts, sec, editable);
-      var s=sigMap[sec], head='<div class="panel-heading" style="padding:6px 10px;"><b>'+title+'</b>';
+      var s=sigMap[sec], folded=secIsFolded(sec);
+      // 標題列整條可點＝收合／展開（三段都填完之後這張跳窗很長，收起來才找得到下面的東西）
+      var head='<div class="panel-heading car-sec-h" data-sec="'+sec+'" title="點標題可收合／展開">'
+        +'<i class="fa fa-chevron-'+(folded?'right':'down')+' car-sec-ic"></i><b>'+title+'</b>';
       if(s) head+=' <span class="label label-success pull-right">已簽章</span>';
+      head+=' <span class="car-sec-brief"'+(folded?'':' style="display:none;"')+'>'+esc(secBrief(sec, o, L))+'</span>';
       head+='</div>';
-      var body='<div class="panel-body">';
+      var body='<div class="panel-body car-sec-b" data-sec="'+sec+'"'+(folded?' style="display:none;"':'')+'>';
       if(bf){
         body+=editHtml+attHtml;
         if(s) body+=EGStamp.row(EGStamp.stamp(s.name, s.date), dueLeft||'');
@@ -1435,7 +1489,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       +'<div style="margin-top:4px;">預定完成日 <input type="date" id="rp-prev-due" class="input-sm" value="'+esc(o.prevention_due||'')+'"></div>';
     var prevRO='<div style="white-space:pre-wrap;">'+esc(o.prevention_measure||'')+'</div>';
 
-    var h='<h5 style="margin-top:12px;">異常原因分析 / 異常處理情形</h5>';
+    var h='<h5 style="margin-top:12px;">異常原因分析 / 異常處理情形'
+      +'<a href="#" id="btn-sec-fold-all" class="car-sec-all">'+(secAllFolded()?'全部展開':'全部收合')+'</a></h5>';
     var corrDue='預定完成日：'+(o.correction_due?esc(o.correction_due).replace(/-/g,'.'):'未填寫');
     var prevDue='預定完成日：'+(o.prevention_due?esc(o.prevention_due).replace(/-/g,'.'):'未填寫');
     h+=secBox('異常原因分析','cause',causeEdit,causeRO);
@@ -1534,13 +1589,28 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     }).fail(function(){ BF.people[date]=[]; cb([]); });
   }
   // 人員下拉選項：mode='post' 一個職務一列(value=uid:dept:pos)、'user' 一人一列(value=uid)
-  function bfOptions(rows, mode, val, kw){
+  function bfOptions(rows, mode, val, kw, prefDept){
     var words=String(kw||'').trim().split(/\s+/).filter(Boolean), seen={}, items=[];
     val = (val===null||val===undefined) ? '' : String(val);
     // 職務對不上時退回「同一個人」：舊資料常常只留 user_id、沒留當時的部門職務 id，
     // 硬比整串 uid:dept:pos 會變成「明明有簽章人，下拉卻停在（請選擇）」
     var uid = (mode==='post') ? String(val).split(':')[0] : val;
     if(uid==='0') uid='';
+    /* 一人多職的人（何沐桐＝技術課工程師＋生管組組長、吳仁隆＝業務課＋資材課課長…）
+       在 mode='user' 時只會出現一列，**挑哪一個職務不可以只看人名**：要挑跟這張單有關的那個
+       部門（責任單位／開立部門），否則畫面上半部寫「業務課 吳仁隆」、下半部卻寫「資材課 課長
+       吳仁隆」，看起來像兩個人（使用者回報）。優先序：指定部門 → 主要職務 → 第一列。 */
+    prefDept = String(prefDept||'');
+    if(mode==='user'){
+      var best={};
+      rows.forEach(function(p){
+        var k=String(p.id), cur=best[k];
+        if(!cur){ best[k]=p; return; }
+        var sc=function(x){ return (prefDept && String(x.dept_id)===prefDept ? 2 : 0) + (x.is_main ? 1 : 0); };
+        if(sc(p) > sc(cur)) best[k]=p;
+      });
+      rows = Object.keys(best).map(function(k){ return best[k]; });
+    }
     rows.forEach(function(p){
       var v = (mode==='post') ? (p.id+':'+p.dept_id+':'+p.position_id) : String(p.id);
       if(mode==='user'){ if(seen[v]) return; seen[v]=1; }
@@ -1566,13 +1636,14 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     var mode=$sel.data('mode')||'user', want=(keepVal!==undefined)?keepVal:($sel.val()||'');
     bfPeople(bfDateOf($sel), function(rows){
       var kw=$sel.closest('.bf-pwrap').find('.bf-pfilter').val()||'';
-      $sel.html(bfOptions(rows, mode, want, kw));
+      $sel.html(bfOptions(rows, mode, want, kw, $sel.data('prefdept')||''));
     });
   }
-  function bfPicker(cls, mode, dateref){
+  function bfPicker(cls, mode, dateref, prefDept){
     return '<span class="bf-pwrap"><input type="text" class="form-control input-sm bf-pfilter" placeholder="篩選">'
       + '<select class="form-control input-sm bf-person '+cls+'" data-mode="'+mode+'"'
-      + (dateref?(' data-dateref="'+dateref+'"'):'') + '><option value="">載入中…</option></select></span>';
+      + (dateref?(' data-dateref="'+dateref+'"'):'')
+      + (prefDept?(' data-prefdept="'+prefDept+'"'):'') + '><option value="">載入中…</option></select></span>';
   }
   function bfMMSS(sec){ sec=Math.max(0,parseInt(sec,10)||0); var m=Math.floor(sec/60); return m+':'+('0'+(sec%60)).slice(-2); }
 
@@ -1605,7 +1676,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       rows += '<tr data-slot="'+k+'">'
         + '<td><b>'+esc(sl.label)+'</b></td>'
         + '<td class="bf-sig-cell">'+(cur?EGStamp.stamp(cur.name,cur.date):'<span class="text-muted">（未簽）</span>')+'</td>'
-        + '<td>'+bfPicker('', 'user', '')+'</td>'
+        + '<td>'+bfPicker('', 'user', '', (k==='desc' ? (o.opener_dept_id||'') : (o.resp_dept_id||'')))+'</td>'
         + '<td><input type="date" class="form-control input-sm bf-date" value="'+esc(d)+'" style="width:142px;"></td>'
         + '<td style="white-space:nowrap;">'
         + '<button class="btn btn-warning btn-xs bf-sign"><i class="fa fa-pencil"></i> 代簽</button> '
@@ -1631,10 +1702,10 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       + (o.resp_type==='maker' ? '<br>本單責任單位是廠商，三段回覆的章面依規則壓<b>廠商名稱</b>（與正式流程同一條規則）。' : '')
       + '<br>表頭內容請按上方「修改」（解鎖後不受狀態限制）；三段內容直接在上面的區塊改完按「儲存代填內容（三段）」。</div>'
       + '<table class="table table-bordered bf-t"><tbody>'
-      + '<tr><th>開立人員</th><td>'+bfPicker('bf-filler','post','#bf-fill-date')+'</td>'
+      + '<tr><th>開立人員</th><td>'+bfPicker('bf-filler','post','#bf-fill-date',(o.opener_dept_id||''))+'</td>'
       +     '<th>填表日期</th><td><input type="date" class="form-control input-sm" id="bf-fill-date" value="'+esc(biz)+'" style="width:142px;"></td></tr>'
       + '<tr><th>發現日期</th><td><input type="date" class="form-control input-sm" id="bf-found-date" value="'+esc(String(o.found_date||'').substring(0,10))+'" style="width:142px;"></td>'
-      +     '<th>回覆人</th><td>'+bfPicker('bf-assignee','user','#bf-fill-date')+'</td></tr>'
+      +     '<th>回覆人</th><td>'+bfPicker('bf-assignee','user','#bf-fill-date',(o.resp_dept_id||''))+'</td></tr>'
       + '<tr><th>單據狀態</th><td>'+st+'</td>'
       +     '<th>效果確認</th><td>'+rs+' 結案日期 <input type="date" class="form-control input-sm" id="bf-close-date" value="'
       +     esc(String(o.close_date||'').substring(0,10))+'" style="width:142px;display:inline-block;"></td></tr>'
@@ -1682,9 +1753,18 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       var $s=$(this), init='';
       if($s.hasClass('bf-filler') && o.created_by) init = o.created_by+':'+(o.opener_dept_id||0)+':'+(o.opener_position_id||0);
       else if($s.hasClass('bf-assignee') && o.assigned_to) init = String(o.assigned_to);
-      else { var k=$s.closest('tr').data('slot');
-             var sb = (k==='deduct') ? o.deduct_by : ((sigMap[k]||{}).by||0);
-             if(sb) init = String(sb); }
+      else {
+        var k=$s.closest('tr').data('slot');
+        var sb = (k==='deduct') ? o.deduct_by : ((sigMap[k]||{}).by||0);
+        /* 還沒簽的格子先自動帶人（使用者要求）：異常說明那一格＝填表人（開立人員）；
+           三段回覆＝責任單位人員（回覆人，沒指派就用責任單位指定的人）。
+           主管簽核／總經理／扣款判定刻意不預設——那是另一個層級的人，猜錯比留白更糟。 */
+        if(!sb){
+          if(k==='desc') sb = o.created_by||0;
+          else if(k==='cause'||k==='correction'||k==='prevention') sb = o.assigned_to || o.resp_person_id || 0;
+        }
+        if(sb) init = String(sb);
+      }
       bfSyncSelect($s, init);
     });
     $('#view-body').find('.bf-pfilter').on('input', function(){
