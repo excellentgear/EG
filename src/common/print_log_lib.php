@@ -223,6 +223,8 @@ if (!function_exists('eg_print_sources')) {
             'qa_abnormal'    => ['label' => '品質異常處理單',               'page' => 'views/QA/qa_abnormal_list.php',           'kind' => 'form'],
             'sop_sip'        => ['label' => '作業標準書SOP／標準檢驗指導書SIP', 'page' => 'views/QA/sop_sip.php',              'kind' => 'form'],
             'notice_contact' => ['label' => '公告 / 通知－聯絡單',            'page' => 'views/liveEvent/createEvent.php',        'kind' => 'form'],
+            'project_mgmt'   => ['label' => '專案管理－執行規劃表／專案管理卡', 'page' => 'views/GM/project_mgmt.php',            'kind' => 'form'],
+            'stamp_list'     => ['label' => '圖章管理記錄表',                 'page' => 'views/ADM/stamp_management.php',          'kind' => 'form'],
         ];
     }
 }

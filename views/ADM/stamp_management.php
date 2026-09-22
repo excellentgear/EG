@@ -57,6 +57,8 @@ try {
   #tplRowsTbl td{padding:3px 4px;}
   #tplRowsTbl input[type=number]{padding:3px 2px;text-align:center;font-size:12px;}
   #tplRowsTbl select{padding:3px 2px;font-size:12px;}
+  .page-help-btn{margin-left:4px;}
+  @media print{ .page-help-btn{display:none!important;} }
 </style>
 </head>
 <body class="nav-sm">
@@ -70,6 +72,7 @@ try {
     <span id="roleBadge">
       <button class="btn btn-info btn-xs" id="btnBatchAdd" style="display:none;" title="多選部門全選成員，可跨模板一次建立多種章"><i class="fa fa-object-group"></i> 批次建立</button>
       <button class="btn btn-default btn-xs" id="btnSettings" style="display:none;" data-toggle="modal" data-target="#settingsModal"><i class="fa fa-cog"></i> 設定</button>
+      <button class="btn btn-default btn-xs page-help-btn" id="btnPageHelp"><i class="fa fa-book"></i> 使用說明</button>
       　目前角色：<strong id="myRole">…</strong>　<i class="fa fa-question-circle" data-toggle="modal" data-target="#permModal" title="權限說明"></i></span>
   </h4>
   <div id="noPermMsg" style="display:none;padding:18px;text-align:center;color:#8a7455;font-size:14px;">
@@ -362,6 +365,61 @@ try {
     <div class="form-group"><label style="font-size:12.5px;">停用/繳回日期</label>
       <input type="date" id="revDate" class="form-control input-sm" max="9999-12-31"></div>
     <div style="text-align:right;"><button class="btn btn-warning btn-sm" id="btnRevSave"><i class="fa fa-ban"></i> 確認停用</button></div>
+  </div>
+</div></div></div>
+
+<!-- 使用說明 Modal（鐵律7）-->
+<div class="modal fade" id="helpUseMask" tabindex="-1"><div class="modal-dialog" style="width:720px;"><div class="modal-content">
+  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+    <h4 class="modal-title"><i class="fa fa-book"></i> 圖章管理 使用說明</h4></div>
+  <div class="modal-body help-doc" style="font-size:13px;max-height:70vh;overflow:auto;">
+    <h5>這一頁是什麼</h5>
+    <p>公司所有圖章的<strong>納管清冊</strong>，列印出來就是 AS 四階表單<strong>「2-DC-05-02 圖章管理記錄表」</strong>。
+       每一顆章登記「核發給誰、哪個部門保管、什麼種類、用哪個模板、什麼時候核發／停用」，
+       清冊上的「印章樣」直接顯示該章的實際樣式（掃描實體章或線上模板），不必另外貼印模。</p>
+
+    <h5>操作步驟</h5>
+    <ol>
+      <li><b>核發一顆章</b>：上方「新增登記」選模板（種類自動帶入）→ 選對象別與對象 → 填核發日期 → 新增。</li>
+      <li><b>停用／繳回</b>：該列按「停用」，填停用日期。章不會被刪掉，清冊上會保留並標示為已停用。</li>
+      <li><b>報廢</b>：報廢就是停用 — 填上繳回日期後，列印的記錄表該列會自動打在「作廢」欄。</li>
+      <li><b>列印</b>：右上「列印/PDF」印出目前篩選條件下的全部資料（不是只有這一頁）。</li>
+    </ol>
+
+    <h5>列印版的「新增／修訂／作廢」是怎麼判定的</h5>
+    <p>三個欄位<strong>不是另外填的，由資料自動推導</strong>（所以不會有「打勾跟實際狀態對不起來」的情形）：</p>
+    <table class="list">
+      <tr><th style="width:80px;">欄位</th><th>什麼情況會打勾</th></tr>
+      <tr><td>作廢</td><td>已停用（有填停用／繳回日）— <b>優先判定</b></td></tr>
+      <tr><td>修訂</td><td>使用中，且這筆登記事後被編輯過（改過種類、核發日期或備註）</td></tr>
+      <tr><td>新增</td><td>使用中，且登記之後沒有再改過</td></tr>
+    </table>
+
+    <h5>列印版要印出正式的表單名稱與編號，必須先綁定 AS 文件</h5>
+    <p>到「<b>設定 → 列印文件（AS 編號）</b>」選 <b>2-DC-05-02 圖章管理記錄表</b>（四階表單）。
+       綁定後，列印版的<strong>表頭</strong>會顯示該文件的表單名稱、<strong>右下角</strong>顯示文件編號；
+       沒有綁定時表頭會退回「圖章清冊」、右下角不印編號。<br>
+       <span style="color:#a5642a;">注意：要綁<b>四階表單</b> 2-DC-05-02，不要綁二階的 2-DC-05 圖章管理程序 — 那是程序書不是這張表。</span></p>
+
+    <h5>重要行為</h5>
+    <ul>
+      <li>列印版是 <b>A4 橫式</b>，超過一頁時左下角自動加頁碼；表頭會在每一頁重複。</li>
+      <li>備註欄若是系統自動寫入的「批次建立」，列印時不印（清冊是給外部稽核看的正式文件，不放內部作業痕跡）。</li>
+      <li>按下「列印/PDF」會留下一筆<b>列印紀錄</b>（列印時間、列印人、登入電腦），可在「列印與簽核紀錄」頁查到。</li>
+      <li>課室章／職稱章沒有特定個人，保管人欄會印職稱或「（部門保管）」。</li>
+    </ul>
+
+    <h5>設定入口</h5>
+    <ul>
+      <li><b>設定 → 印章種類</b>：種類主檔（可設定該種類允許的持有對象）。</li>
+      <li><b>設定 → 儲存路徑</b>：掃描實體章的存放資料夾（僅管理者）。</li>
+      <li><b>設定 → 列印文件（AS 編號）</b>：綁定 2-DC-05-02。</li>
+      <li><b>線上圖章設計（模板）</b>分頁：建立／維護章的樣式模板。</li>
+    </ul>
+
+    <h5>權限</h5>
+    <p>檢閱與列印需要「圖章檢閱」或「圖章管理員」角色（未指派角色者看不到清冊內容，避免圖章被瀏覽轉存）；
+       登記／編輯／停用／刪除／上傳掃描章需要「圖章管理員」或管理者。指派入口：人員權限設定 → 圖章管理。</p>
   </div>
 </div></div></div>
 
@@ -747,6 +805,7 @@ $('#regBody').on('click','.del-btn',function(){
 $('#btnCsv').on('click',function(){
   location.href=API+'?action=csv&q='+encodeURIComponent($('#fltName').val().trim())+'&status='+encodeURIComponent($('#fltStatus').val())+'&type_id='+encodeURIComponent($('#fltType').val()||'');
 });
+$('#btnPageHelp').on('click',function(){ $('#helpUseMask').modal('show'); });
 $('#btnPrint').on('click',function(){
   const q=$('#fltName').val().trim(), st=$('#fltStatus').val(), tid=$('#fltType').val()||'';
   // 抬頭資料（公司全名＋綁定的 AS 文件）與清冊資料一起備齊才開視窗，避免標題先出來、編號後到
