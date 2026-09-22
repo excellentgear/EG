@@ -10,6 +10,7 @@
  */
 
 require_once __DIR__ . '/user_active_lib.php';   // 回覆人是否已離職／留停（重新指派判定）
+require_once __DIR__ . '/rbac.php';             // 補資料權限判定（rbac_has）
 
 if (!function_exists('car_labels')) {
 
@@ -481,6 +482,192 @@ function car_working_days_between(PDO $pdo, string $fromDate, ?string $toDate = 
         $cur = strtotime('+1 day', $cur);
     }
     return $count;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * 補資料（代填單據／代簽圖章／調整簽章日期）—— 全站唯一實作
+ * ──────────────────────────────────────────────────────────────────────────────
+ * 2026-09-22 使用者要求：「要可以另外開超級管理員權限，可以代填單據與代簽圖章(可設定
+ * 人員)與修改/調整簽核日期，需要輸入管理員操作密碼後可執行，方便補資料。」
+ *
+ * 四個刻意這樣做的地方：
+ *  1. **兩道門而不是一道**：①角色功能碼 `car_backfill`（或系統管理員 all）②每一張單各自
+ *     輸入一次**操作確認密碼**（`confirm_password_lib`，action_key=CAR_BF_ACTION，錯三次
+ *     鎖七天）。只靠角色＝任何被指派到那個角色的人都能無聲改掉已結案單據的簽章。
+ *  2. **解鎖逐張單、逐人、有有效期**（比照 order_track_perm_lib 的客戶解鎖）：否則解鎖
+ *     一次之後這個人當天改任何一張單的簽章都不必再驗密碼。
+ *  3. **`car_can_backfill()` 不 fail-open**：`rbac_user_features()` 對「系統尚無管理員」
+ *     的情況會回全權，那是開站用的 bootstrap；補資料是繞過整條流程的動作，寧可擋下。
+ *  4. **代簽不是代理簽核**：章面壓的是**當年紙本上那個人**的姓名與日期，所以
+ *     **不加 ai-rules/18 的「代」字**（那是代理人代簽本人職務時才加的）。誰在什麼時候
+ *     補的，記在 `car_activity_log` 與 `audit_log`，不寫在章面上。
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+if (!defined('CAR_BF_UNLOCK_TTL')) define('CAR_BF_UNLOCK_TTL', 1800);       // 解鎖有效秒數（30 分鐘）
+if (!defined('CAR_BF_ACTION'))     define('CAR_BF_ACTION', 'car_backfill'); // 操作確認密碼的用途代碼（錯誤次數／鎖定按用途分開計）
+
+/**
+ * 可補簽的「章格」登記表（唯一登記處；新增章格只改這裡）。
+ *  kind=sig → 寫 `car_signature`（section 就是 key，**必須是該欄 ENUM 既有的值**）
+ *  kind=col → 寫 `car_order` 上的欄位（扣款判定的章是讀 deduct_by_name/deduct_at 畫出來的，
+ *             不在 car_signature 裡，硬塞會違反 ENUM）
+ *  ord     → 章面時間的先後順序（見 car_bf_time()），也是畫面上的排列順序
+ */
+function car_bf_slots(): array {
+    return [
+        'desc'       => ['label' => '異常說明（填表人）',   'kind' => 'sig', 'ord' => 1],
+        'cause'      => ['label' => '異常原因分析',         'kind' => 'sig', 'ord' => 2],
+        'correction' => ['label' => '矯正措施',             'kind' => 'sig', 'ord' => 3],
+        'prevention' => ['label' => '預防措施',             'kind' => 'sig', 'ord' => 4],
+        'primary'    => ['label' => '主管簽核',             'kind' => 'sig', 'ord' => 5,
+                         'by' => 'primary_by', 'at' => 'primary_at'],
+        'final'      => ['label' => '總經理核准',           'kind' => 'sig', 'ord' => 6,
+                         'by' => 'final_by',   'at' => 'final_at'],
+        'deduct'     => ['label' => '扣款判定（管理課）',   'kind' => 'col', 'ord' => 7,
+                         'by' => 'deduct_by', 'name' => 'deduct_by_name', 'at' => 'deduct_at'],
+    ];
+}
+
+/** 是否具備「補資料」功能碼（系統管理員 all 亦可）。刻意不 fail-open，見本區塊註解第3點。 */
+function car_can_backfill(array $features): bool {
+    return rbac_has($features, CAR_BF_ACTION);
+}
+
+/** 補資料解鎖狀態（逐人、逐張單、逾時自動失效） */
+function car_bf_unlock_mark(int $uid, int $carId): void {
+    if (!isset($_SESSION['car_bf_unlock']) || !is_array($_SESSION['car_bf_unlock'])) $_SESSION['car_bf_unlock'] = [];
+    $_SESSION['car_bf_unlock'][$uid . ':' . $carId] = time();
+}
+function car_bf_unlock_valid(int $uid, int $carId): bool {
+    $k = $uid . ':' . $carId;
+    $t = (int)($_SESSION['car_bf_unlock'][$k] ?? 0);
+    if (!$t) return false;
+    if (time() - $t > CAR_BF_UNLOCK_TTL) { unset($_SESSION['car_bf_unlock'][$k]); return false; }
+    return true;
+}
+function car_bf_unlock_left(int $uid, int $carId): int {
+    $t = (int)($_SESSION['car_bf_unlock'][$uid . ':' . $carId] ?? 0);
+    if (!$t) return 0;
+    $left = $t + CAR_BF_UNLOCK_TTL - time();
+    return $left > 0 ? $left : 0;
+}
+function car_bf_unlock_clear(int $uid, int $carId): void {
+    unset($_SESSION['car_bf_unlock'][$uid . ':' . $carId]);
+}
+
+/** Y-m-d 格式檢查（補資料的日期一律走這支，不要各處自己 preg） */
+function car_bf_is_date(string $d): bool {
+    return (bool)preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $d);
+}
+
+/**
+ * 今天（以 **DB 的本地時間** 為準）。
+ * **不可以用 PHP 的 date('Y-m-d')**：本站 PHP 跑 UTC、MySQL 跑本地（實測差 8 小時），
+ * 所以本地時間 00:00~07:59 之間 PHP 還停在前一天——「日期不可以是未來」的檢查會把
+ * 今天的日期整批擋下來，而且看起來像使用者選錯日期。同一個坑 2026-08-18 公出單踩過。
+ */
+function car_db_today(PDO $pdo): string {
+    static $d = null;
+    if ($d === null) {
+        try { $d = (string)$pdo->query("SELECT CURDATE()")->fetchColumn(); }
+        catch (Throwable $e) { $d = date('Y-m-d'); }
+    }
+    return $d;
+}
+
+/**
+ * 這個人在「那一天」是不是在職（補簽的守門）。
+ * 走 eg_people_list_asof()：帶 asof 時**當時在職、現在已離職的人也會在名單裡**，補歷史
+ * 紙本才挑得到當年的人（ai-rules/22 第5坑）；用現況清單會整批挑不到又完全不報錯。
+ */
+function car_bf_user_asof_ok(PDO $pdo, int $uid, string $date): bool {
+    if ($uid <= 0 || !car_bf_is_date($date)) return false;
+    require_once __DIR__ . '/people_lib.php';
+    static $cache = [];
+    if (!isset($cache[$date])) {
+        $ids = [];
+        foreach (eg_people_list_asof($pdo, [], $date) as $r) $ids[(int)$r['id']] = 1;
+        $cache[$date] = $ids;
+    }
+    return isset($cache[$date][$uid]);
+}
+
+/** 某人在「那一天」的部門/職稱（章面旁的說明文字用；回推不到才退回現況） */
+function car_user_title_asof(PDO $pdo, ?int $uid, string $date): string {
+    if (!$uid) return '';
+    if (!car_bf_is_date($date)) return car_user_title($pdo, (int)$uid);
+    try {
+        require_once __DIR__ . '/position_history_lib.php';
+        $snap = eg_position_snapshot_at($pdo, (int)$uid, $date);
+        if ($snap) {
+            $best = $snap[0];
+            foreach ($snap as $s) if (!empty($s['is_main'])) { $best = $s; break; }
+            /* 名稱一律取「目前設定值」，只有 id 真的被刪掉才退回快照裡凍結的舊名——
+               改名不是改組織（部門早就由「部」改成「課」），同一條規則見 eg_people_list_asof()。 */
+            $dn = (string)($best['department_name'] ?? '');
+            $pn = (string)($best['position_name'] ?? '');
+            $q = $pdo->prepare("SELECT name FROM department WHERE id = ?");
+            $q->execute([(int)$best['department_id']]);
+            $cur = $q->fetchColumn(); if ($cur !== false && $cur !== null) $dn = (string)$cur;
+            $q = $pdo->prepare("SELECT name FROM position WHERE id = ?");
+            $q->execute([(int)$best['position_id']]);
+            $cur = $q->fetchColumn(); if ($cur !== false && $cur !== null) $pn = (string)$cur;
+            if ($dn !== '' || $pn !== '') return $dn . '/' . $pn;
+        }
+    } catch (Throwable $e) {}
+    return car_user_title($pdo, (int)$uid);
+}
+
+/**
+ * 補簽要用的時間戳：**日期由補登者指定**，時間則排在同一天其他章格之間（ai-rules/21 第3條）。
+ * 下界＝同一天「表單順序在我前面」那些章的最晚時間（沒有就當天 09:00）；
+ * 上界＝同一天「順序在我後面」那些章的最早時間（沒有就當天 23:59）。
+ * 這樣不管管理員是照順序補還是跳著補，印出來都不會出現「總經理核准早於填表人」。
+ */
+function car_bf_time(PDO $pdo, int $carId, array $o, string $slot, string $date): string {
+    $slots = car_bf_slots();
+    $myOrd = (int)($slots[$slot]['ord'] ?? 99);
+    $lower = strtotime($date . ' 09:00:00');
+    $upper = strtotime($date . ' 23:59:00');
+
+    $have = [];
+    try {
+        $st = $pdo->prepare("SELECT section, signed_at FROM car_signature
+                             WHERE car_id = ? AND revoked = 0 AND signed_at IS NOT NULL");
+        $st->execute([$carId]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if (substr((string)$r['signed_at'], 0, 10) !== $date) continue;
+            $ord = $slots[$r['section']]['ord'] ?? null;
+            if ($ord === null || (int)$ord === $myOrd) continue;
+            $have[] = [(int)$ord, (int)strtotime((string)$r['signed_at'])];
+        }
+    } catch (Throwable $e) {}
+    $dAt = trim((string)($o['deduct_at'] ?? ''));
+    if ($dAt !== '' && substr($dAt, 0, 10) === $date && $myOrd !== (int)$slots['deduct']['ord']) {
+        $have[] = [(int)$slots['deduct']['ord'], (int)strtotime($dAt)];
+    }
+    foreach ($have as $h) {
+        if ($h[0] < $myOrd) { if ($h[1] > $lower) $lower = $h[1]; }
+        else                { if ($h[1] < $upper) $upper = $h[1]; }
+    }
+
+    if ($upper <= $lower) {                       // 同一天章格已經排滿（時間擠在一起）→ 貼著下界放，不跨日
+        return date('Y-m-d H:i:s', min($lower + 60, strtotime($date . ' 23:59:00')));
+    }
+    $ts = $lower + random_int(5, 180) * 60;       // 5 分～3 小時隨機錯開（ai-rules/21）
+    if ($ts >= $upper) $ts = $lower + (int)(($upper - $lower) / 2);
+    if ($ts <= $lower) $ts = $lower + 60;
+    return date('Y-m-d H:i:s', min($ts, $upper));
+}
+
+/** 補資料一律留 audit_log（全站共用表；寫入失敗不影響主要作業） */
+function car_bf_audit(PDO $pdo, int $carId, string $carNo, int $uid, string $uname, string $what, string $detail = ''): void {
+    try {
+        $pdo->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                       VALUES ('backfill', 'car_order', ?, ?, ?, ?, ?, NOW())")
+            ->execute([(string)$carId, ($carNo !== '' ? $carNo : ('#' . $carId)),
+                       trim($what . ($detail !== '' ? ('：' . $detail) : '')), $uid, $uname]);
+    } catch (Throwable $e) {}
 }
 
 } // end function_exists guard

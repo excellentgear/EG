@@ -47,6 +47,24 @@ $me       = car_current_user($pdo);
 $features = rbac_user_features($pdo, (int)$me['id']);
 function _carHas($f) { global $features; return rbac_has($features, $f); }
 
+/**
+ * 補資料（代填／代簽）共用守門：六個端點一律走這支，規則只有一份。
+ * 三道檢查：①一律 POST ②角色功能碼 car_backfill（或系統管理員） ③該張單已用操作確認密碼解鎖。
+ * @param bool $needUnlock false＝解鎖端點自己（還沒解鎖才要來解）
+ */
+function _carBfOrder(PDO $pdo, array $me, array $features, bool $needUnlock = true): array {
+    if (strtoupper($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') jerr('補資料一律以 POST 呼叫', 405);
+    if (!car_can_backfill($features)) jerr('您沒有補資料（代填／代簽）的權限，請洽管理員於角色設定勾選「補資料」', 403);
+    $id = (int)($_POST['car_id'] ?? 0);
+    $st = $pdo->prepare("SELECT * FROM car_order WHERE id = ?");
+    $st->execute([$id]);
+    $o = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$o) jfail('查無此單');
+    if ($needUnlock && !car_bf_unlock_valid((int)$me['id'], $id))
+        jerr('補資料模式尚未解鎖或已逾時，請重新輸入操作確認密碼', 403);
+    return $o;
+}
+
 // 附件排序欄位（既有環境自動補欄；已存在時靜默略過）
 try { $pdo->exec("ALTER TABLE car_attachment ADD COLUMN sort_order INT NOT NULL DEFAULT 0 AFTER description"); } catch (Throwable $_e) {}
 
@@ -240,6 +258,17 @@ try {
         $temp_key    = trim($_POST['temp_key'] ?? '');
         $found_date  = trim($_POST['found_date'] ?? '') ?: null;
 
+        /* 補資料模式（限有 car_backfill 功能碼者）：填表日期改由紙本指定、直接成立不走申請核准、
+           **一則通知都不發**——幾年前的事件再通知一次只會吵到人，對方也無從處理
+           （同一條口徑見品質異常處理單的補登意見不發通知）。 */
+        $bfMode = car_can_backfill($features) && !empty($_POST['bf_mode']);
+        $bfFill = trim($_POST['fill_date'] ?? '');
+        if ($bfMode) {
+            if (!car_bf_is_date($bfFill))    jfail('補資料模式請指定紙本上的填表日期');
+            if ($bfFill > car_db_today($pdo))     jfail('填表日期不可以是未來');
+            if ($found_date !== null && !car_bf_is_date($found_date)) jfail('發現日期格式錯誤');
+        }
+
         // 開單身分（兼任時前端指定以哪個職務開立）
         $opener_dept_id     = (int)($_POST['opener_dept_id'] ?? 0) ?: null;
         $opener_position_id = (int)($_POST['opener_position_id'] ?? 0) ?: null;
@@ -258,8 +287,8 @@ try {
             $isSupervisorOpen = true;   // 無任何職務身分(如純管理員) → 允許直接開立
         }
         if (rbac_has($features, 'all')) $isSupervisorOpen = $isSupervisorOpen; // 管理員仍依所選職務；如需一律直開可改此處
-        // 非主管職開立且指定了部門 → 走申請；否則直接開立
-        $isApplication = (!$isSupervisorOpen && $opener_dept_id);
+        // 非主管職開立且指定了部門 → 走申請；否則直接開立（補資料一律直接成立，紙本早就簽完了）
+        $isApplication = (!$isSupervisorOpen && $opener_dept_id && !$bfMode);
 
         // 責任單位（可多選）→ 每個一張獨立單；空 = 一張無責任單位單
         $responsible = json_decode($_POST['responsible'] ?? '[]', true);
@@ -275,7 +304,9 @@ try {
                 $group_no = 'APP' . uniqid();           // 臨時群組(核准時換成正式首號)
                 $status = 'applying';
             } else {
-                $nos  = car_alloc_numbers($pdo, $n);    // 直接開立：原子連號
+                // 直接開立：原子連號。**補資料的單號依紙本填表日期配號**（YYYYMMDD+流水），
+                // 不是建檔當天——否則 2025 年的紙本會拿到 2026 的單號，跟紙本對不起來
+                $nos  = car_alloc_numbers($pdo, $n, $bfMode ? str_replace('-', '', $bfFill) : null);
                 $base = $nos[0];
                 $group_no = $base;
                 $status = 'open';
@@ -294,7 +325,7 @@ try {
                    (:car_no, :group_no, :source_type, :source_ref_id, :source_no, :source_desc,
                     :counterparty_type, :customer_id, :maker_id_no,
                     :d_id, :drawing_no, :bom_no, :work_order, :bom_ing_fid, :qty,
-                    CURDATE(), :found_date, :created_by, :created_by_name,
+                    :fill_date, :found_date, :created_by, :created_by_name,
                     :opener_dept_id, :opener_position_id, :opener_position_name, :open_applied_at,
                     :resp_type, :resp_dept_id, :resp_maker_id, :resp_own_customer_id, :resp_person_id, :resp_display,
                     :process_no, :process_name, :abnormal_desc, :status, NOW())");
@@ -319,7 +350,7 @@ try {
                     ':customer_id' => ($customer_id ?: null), ':maker_id_no' => ($maker_id_no ?: null),
                     ':d_id' => $d_id, ':drawing_no' => ($drawing_no ?: null), ':bom_no' => ($bom_no ?: null),
                     ':work_order' => ($work_order ?: null), ':bom_ing_fid' => $bom_ing_fid, ':qty' => $qty,
-                    ':found_date' => $found_date,
+                    ':fill_date' => ($bfMode ? $bfFill : car_db_today($pdo)), ':found_date' => $found_date,
                     ':created_by' => $me['id'], ':created_by_name' => $me['name'],
                     ':opener_dept_id' => $opener_dept_id, ':opener_position_id' => $opener_position_id,
                     ':opener_position_name' => $opener_position_name,
@@ -331,15 +362,25 @@ try {
                 ]);
                 $carId = (int)$pdo->lastInsertId();
 
-                // 異常說明由填表人自動簽章（壓今日日期）
-                $pdo->prepare(
-                    "INSERT INTO car_signature (car_id, section, signed_by, signed_name, signed_at, signed_date_label)
-                     VALUES (?, 'desc', ?, ?, NOW(), ?)")
-                    ->execute([$carId, $me['id'], $me['name'], car_sign_date_label()]);
+                // 異常說明由填表人自動簽章（壓今日日期；補資料壓紙本上的填表日期，之後可在
+                // 補資料面板把這一格改成當年實際填表的那個人）
+                if ($bfMode) {
+                    $pdo->prepare(
+                        "INSERT INTO car_signature (car_id, section, signed_by, signed_name, signed_at, signed_date_label)
+                         VALUES (?, 'desc', ?, ?, ?, ?)")
+                        ->execute([$carId, $me['id'], $me['name'], $bfFill . ' 09:00:00', str_replace('-', '.', $bfFill)]);
+                } else {
+                    $pdo->prepare(
+                        "INSERT INTO car_signature (car_id, section, signed_by, signed_name, signed_at, signed_date_label)
+                         VALUES (?, 'desc', ?, ?, NOW(), ?)")
+                        ->execute([$carId, $me['id'], $me['name'], car_sign_date_label()]);
+                }
 
                 car_log($pdo, $carId, ($isApplication ? 'apply' : 'create'), (int)$me['id'], $me['name'],
-                        $isApplication ? ($n > 1 ? "提出開立申請（同事件 $n 單之一）" : '提出開立申請')
-                                       : ($n > 1 ? "開立（同事件拆 $n 單之一）" : '開立單據'));
+                        $bfMode ? ('補資料：建立歷史紙本單據（填表日期 ' . str_replace('-', '.', $bfFill) . '，未發送通知）'
+                                   . ($n > 1 ? "（同事件拆 $n 單之一）" : ''))
+                        : ($isApplication ? ($n > 1 ? "提出開立申請（同事件 $n 單之一）" : '提出開立申請')
+                                          : ($n > 1 ? "開立（同事件拆 $n 單之一）" : '開立單據')));
 
                 // 責任單位已指定人員 → 該人員即回覆人，免主管指派（直接開立時）
                 if (!$isApplication && $r_person) {
@@ -369,9 +410,17 @@ try {
             jerr('建立失敗：' . $e->getMessage(), 500);
         }
 
+        if ($bfMode) foreach ($created as $c) {
+            car_bf_audit($pdo, (int)$c['id'], (string)$c['car_no'], (int)$me['id'], $me['name'],
+                         '補資料建立單據', '填表日期 ' . $bfFill . '（未發送通知）');
+        }
+
         // ── 通知（commit 後發送，推播失敗不影響建立）──
+        // 補資料模式一則都不發：那是幾年前就處理完的事件，通知出去只會吵到人、對方也無從處理
         try {
-            if ($isApplication) {
+            if ($bfMode) {
+                /* 不發通知 */
+            } elseif ($isApplication) {
                 // 申請：通知開單者所屬部門主管核准
                 $sup = array_map(function ($s) { return (int)$s['id']; }, car_dept_supervisors($pdo, (int)$opener_dept_id));
                 $first = $created[0] ?? null;
@@ -608,6 +657,10 @@ try {
         $canAssign  = car_can_assign_order($pdo, $o, $meId)
                       || (_carHas('car_assign') && ($o['status'] === 'open' || $canReassign));
         $canReply   = $isAssignee && in_array($o['status'], ['assigned', 'replying'], true);
+        // 補資料（代填／代簽）：角色功能碼 ＋ 本單已用操作確認密碼解鎖，兩者都成立才算解鎖中
+        $canBackfill = car_can_backfill($features);
+        $bfOn        = $canBackfill && car_bf_unlock_valid($meId, $id);
+        if ($bfOn) $canReply = true;                  // 代填三段內容（後端 save_reply 同規則放寬）
         $canApprove = false;
         if ($o['status'] === 'applying') {
             if (_carHas('car_assign')) $canApprove = true;
@@ -615,8 +668,8 @@ try {
         }
         $isCreator = ((int)$o['created_by'] === $meId);
         // 非開立人不可修改他人開立之單據（car_edit 不放行；唯系統管理員 all 例外）
-        $canEditHeader = ($isCreator || _carHas('all'))
-                         && in_array($o['status'], ['draft', 'applying', 'app_rejected', 'open'], true);
+        $canEditHeader = (($isCreator || _carHas('all'))
+                         && in_array($o['status'], ['draft', 'applying', 'app_rejected', 'open'], true)) || $bfOn;
         $canResubmit = $isCreator && in_array($o['status'], ['app_rejected', 'draft'], true);
         $canWithdraw = $isCreator && $o['status'] === 'applying';
         $canSignPrimary = $o['status'] === 'pending_primary'
@@ -627,7 +680,9 @@ try {
                      && (car_is_admin_deduct($pdo, $meId) || _carHas('car_manage_settings'));
         // 機密可視性：扣款判定與不可結案原因僅 扣款判定人員/最終決策者本人/系統管理員 可見。
         // 注意：未來實作代理簽核時，最終決策者的「代理人」不得納入此名單（見 圖章系統說明.md）。
-        $canSeeDeduct = car_is_admin_deduct($pdo, $meId) || car_is_final_decider($pdo, $meId) || _carHas('all');
+        // 補資料解鎖中才納入（不是「有這個角色」就看得到）——補歷史紙本要把當年的扣款金額填回去，
+        // 看不到就填不了；純粹持有角色但沒解鎖的人維持看不到。
+        $canSeeDeduct = car_is_admin_deduct($pdo, $meId) || car_is_final_decider($pdo, $meId) || _carHas('all') || $bfOn;
         if (!$canSeeDeduct) {
             $o['deduct_by'] = $o['deduct_by_name'] = $o['deduct_at'] = $o['deduct_amount'] = $o['deduct_note'] = null;
             $o['not_close_reason'] = null;
@@ -649,9 +704,11 @@ try {
                  'can_sign_primary' => (bool)$canSignPrimary, 'can_final' => (bool)$canFinal,
                  'can_deduct' => (bool)$canDeduct, 'can_see_deduct' => (bool)$canSeeDeduct,
                  'can_withdraw' => (bool)$canWithdraw,
+                 'can_backfill' => (bool)$canBackfill, 'bf_on' => (bool)$bfOn,
+                 'bf_ttl' => $bfOn ? car_bf_unlock_left($meId, $id) : 0,
                  'me_id' => $meId, 'me_name' => $me['name']];
 
-        jout(['success' => true, 'order' => $o, 'labels' => $L,
+        jout(['success' => true, 'order' => $o, 'labels' => $L, 'bf_slots' => car_bf_slots(),
               'signatures' => $sigs, 'signed' => $signed,
               'activity' => $acts, 'attachments' => $atts,
               'group' => $grp, 'reissues' => $reissues, 'parent_no' => $parentNo,
@@ -869,22 +926,36 @@ try {
         $st = $pdo->prepare("SELECT * FROM car_order WHERE id = ?"); $st->execute([$id]);
         $o = $st->fetch(PDO::FETCH_ASSOC);
         if (!$o) jfail('查無此單');
-        if ((int)$o['assigned_to'] !== (int)$me['id']) jerr('您不是本單的回覆人', 403);
-        if (!in_array($o['status'], ['assigned', 'replying'], true)) jfail('目前狀態不可填寫');
-        $signed = car_signed_map($pdo, $id);
+        // 補資料模式（已解鎖）：代填三段內容，不受「是不是回覆人／目前狀態／已簽章」限制。
+        // 章面的姓名與日期是當年紙本上的，所以代填不作廢已補上的章（要改章請用補資料面板重簽）。
+        $bf = car_can_backfill($features) && car_bf_unlock_valid((int)$me['id'], $id);
+        if (!$bf) {
+            if ((int)$o['assigned_to'] !== (int)$me['id']) jerr('您不是本單的回覆人', 403);
+            if (!in_array($o['status'], ['assigned', 'replying'], true)) jfail('目前狀態不可填寫');
+        }
+        $signed = $bf ? [] : car_signed_map($pdo, $id);
 
         $validCause = ['person','material','machine','method','tool','other'];
         $ciArr = json_decode($_POST['cause_investigation'] ?? '[]', true);
         if (!is_array($ciArr)) $ciArr = array_filter(array_map('trim', explode(',', (string)($_POST['cause_investigation'] ?? ''))));
         $ci = implode(',', array_values(array_intersect($validCause, $ciArr)));
 
+        /* 補資料模式沒有「已簽章保護」，所以要另外擋一件事：**沒送的那一段不要動它**。
+           畫面上的 gatherReply() 一律三段一起送（行為不變），但直接打 API 只送其中一段時，
+           少了這個判斷另外兩段會被靜默清成 NULL——正式流程有簽章保護所以踩不到，
+           解鎖之後就踩得到了（本次測試從列印版反查出來的）。 */
+        $sent = function (array $keys) { foreach ($keys as $k) if (array_key_exists($k, $_POST)) return true; return false; };
+        $wCause = empty($signed['cause'])      && (!$bf || $sent(['cause_investigation','cause_other','cause_detail']));
+        $wCorr  = empty($signed['correction']) && (!$bf || $sent(['disposition','disposition_other','correction_measure','correction_due']));
+        $wPrev  = empty($signed['prevention']) && (!$bf || $sent(['prevention_measure','prevention_due']));
+
         $sets = []; $p = [':id' => $id];
-        if (empty($signed['cause'])) {
+        if ($wCause) {
             $sets[] = 'cause_investigation=:ci'; $p[':ci'] = ($ci ?: null);
             $sets[] = 'cause_other=:co';        $p[':co'] = (trim($_POST['cause_other'] ?? '') ?: null);
             $sets[] = 'cause_detail=:cd';       $p[':cd'] = (trim($_POST['cause_detail'] ?? '') ?: null);
         }
-        if (empty($signed['correction'])) {
+        if ($wCorr) {
             $disp = $_POST['disposition'] ?? '';
             if (!in_array($disp, ['special_accept','rework','scrap','return','other'], true)) $disp = null;
             $sets[] = 'disposition=:dp';        $p[':dp'] = $disp;
@@ -892,14 +963,21 @@ try {
             $sets[] = 'correction_measure=:cm'; $p[':cm'] = (trim($_POST['correction_measure'] ?? '') ?: null);
             $sets[] = 'correction_due=:cdue';   $p[':cdue'] = (trim($_POST['correction_due'] ?? '') ?: null);
         }
-        if (empty($signed['prevention'])) {
+        if ($wPrev) {
             $sets[] = 'prevention_measure=:pm'; $p[':pm'] = (trim($_POST['prevention_measure'] ?? '') ?: null);
             $sets[] = 'prevention_due=:pdue';   $p[':pdue'] = (trim($_POST['prevention_due'] ?? '') ?: null);
         }
-        $sets[] = "status='replying'";
-        if ($o['status'] !== 'replying') $sets[] = "stage_since=NOW()";   // 進入「填寫中」起算逾期
+        if (!$bf) {
+            $sets[] = "status='replying'";
+            if ($o['status'] !== 'replying') $sets[] = "stage_since=NOW()";   // 進入「填寫中」起算逾期
+        }
+        if (!$sets) jfail('沒有要儲存的欄位');
         $pdo->prepare("UPDATE car_order SET " . implode(',', $sets) . " WHERE id=:id")->execute($p);
-        jout(['success' => true, 'message' => '已儲存']);
+        if ($bf) {
+            car_log($pdo, $id, 'bf_edit', (int)$me['id'], $me['name'], '補資料：代填異常原因分析／矯正措施／預防措施內容');
+            car_bf_audit($pdo, $id, (string)$o['car_no'], (int)$me['id'], $me['name'], '代填三段回覆內容');
+        }
+        jout(['success' => true, 'message' => $bf ? '已儲存代填內容' : '已儲存']);
     }
 
     // ── 被指派者：某區段簽章（壓日期；廠商責任壓廠商名）────────────────────
@@ -1242,6 +1320,267 @@ try {
         jout(['success' => true, 'message' => '已完成扣款判定']);
     }
 
+    /* ══════════════════════════════════════════════════════════════════════════
+     * 補資料：代填單據／代簽圖章（可設定人員）／調整簽章日期
+     * ──────────────────────────────────────────────────────────────────────────
+     * 2026-09-22 使用者要求。兩道門：角色功能碼 car_backfill ＋ 每張單各解鎖一次
+     * 操作確認密碼（`confirm_password_lib`，錯三次鎖七天）。判定一律走 _carBfOrder()。
+     *
+     * **代填內容刻意不另寫一份欄位寫入**：三段回覆走既有 save_reply、表頭走既有
+     * update_order（兩支在解鎖後放寬 狀態／回覆人 限制），否則同一批欄位會有兩套
+     * 驗證規則，遲早走鐘（鐵律4）。這裡只做既有端點碰不到的那幾格。
+     * ════════════════════════════════════════════════════════════════════════ */
+    case 'bf_unlock': {
+        $o = _carBfOrder($pdo, $me, $features, false);
+        require_once __DIR__ . '/../common/confirm_password_lib.php';
+        if (!eg_confirm_password_allowed($pdo, (int)$me['id']))
+            jerr('您沒有操作確認密碼的使用權限，請洽超級管理員於「修改個人密碼」頁授權', 403);
+        $chk = eg_confirm_password_verify_scoped($pdo, (int)$me['id'], (string)($_POST['password'] ?? ''), CAR_BF_ACTION);
+        if (!$chk['ok']) jfail($chk['msg']);
+        car_bf_unlock_mark((int)$me['id'], (int)$o['id']);
+        car_log($pdo, (int)$o['id'], 'bf_unlock', (int)$me['id'], $me['name'], '進入補資料模式（代填／代簽）');
+        car_bf_audit($pdo, (int)$o['id'], (string)$o['car_no'], (int)$me['id'], $me['name'], '解鎖補資料模式');
+        jout(['success' => true, 'ttl' => car_bf_unlock_left((int)$me['id'], (int)$o['id']),
+              'message' => '已解鎖，' . (int)(CAR_BF_UNLOCK_TTL / 60) . ' 分鐘內可代填／代簽本單']);
+    }
+
+    case 'bf_lock': {
+        $o = _carBfOrder($pdo, $me, $features, false);
+        car_bf_unlock_clear((int)$me['id'], (int)$o['id']);
+        jout(['success' => true, 'message' => '已離開補資料模式']);
+    }
+
+    // 代簽人員候選：以「印章日期」回推當時在職者與當時的部門職稱（ai-rules/22 第5坑：
+    // 用現況清單的話，當年在職、現已離職的人一個都挑不到，而且完全不報錯）
+    case 'bf_people': {
+        if (!car_can_backfill($features)) jerr('您沒有補資料的權限', 403);
+        require_once __DIR__ . '/../common/people_lib.php';
+        $date = trim((string)($_POST['date'] ?? $_GET['date'] ?? ''));
+        if (!car_bf_is_date($date)) $date = car_db_today($pdo);
+        $rows = [];
+        foreach (eg_people_posts_asof($pdo, [], $date) as $r) {
+            $rows[] = ['id' => (int)$r['id'], 'name' => (string)$r['user_cname'],
+                       'dept_id' => (int)$r['dept_id'], 'dept_name' => (string)$r['dept_name'],
+                       'position_id' => (int)$r['position_id'], 'position_name' => (string)$r['position_name'],
+                       'is_former' => !empty($r['is_former']) ? 1 : 0];
+        }
+        jout(['success' => true, 'date' => $date, 'data' => $rows]);
+    }
+
+    // 代簽／清除某一個章格（章面日期＝指定的印章日期；時間戳依表單順序排在同日其他章之間）
+    case 'bf_sign': {
+        $o  = _carBfOrder($pdo, $me, $features);
+        $id = (int)$o['id'];
+        $slots = car_bf_slots();
+        $slot  = (string)($_POST['slot'] ?? '');
+        if (!isset($slots[$slot])) jfail('不支援的簽章格');
+        $sl = $slots[$slot];
+
+        if (!empty($_POST['clear'])) {
+            $pdo->beginTransaction();
+            try {
+                if ($sl['kind'] === 'sig') {
+                    $pdo->prepare("UPDATE car_signature SET revoked=1 WHERE car_id=? AND section=? AND revoked=0")
+                        ->execute([$id, $slot]);
+                    if (!empty($sl['by']))
+                        $pdo->prepare("UPDATE car_order SET {$sl['by']}=NULL, {$sl['at']}=NULL WHERE id=?")->execute([$id]);
+                } else {
+                    $pdo->prepare("UPDATE car_order SET {$sl['by']}=NULL, {$sl['name']}=NULL, {$sl['at']}=NULL WHERE id=?")
+                        ->execute([$id]);
+                }
+                car_log($pdo, $id, 'bf_sign', (int)$me['id'], $me['name'], "補資料：清除「{$sl['label']}」簽章");
+                $pdo->commit();
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                jerr('清除失敗：' . $e->getMessage(), 500);
+            }
+            car_bf_audit($pdo, $id, (string)$o['car_no'], (int)$me['id'], $me['name'], '清除簽章', $sl['label']);
+            jout(['success' => true, 'message' => "已清除「{$sl['label']}」的簽章"]);
+        }
+
+        $who  = (int)($_POST['user_id'] ?? 0);
+        $date = trim((string)($_POST['date'] ?? ''));
+        if ($who <= 0) jfail('請選擇代簽人員');
+        if (!car_bf_is_date($date)) jfail('請選擇印章日期');
+        if ($date > car_db_today($pdo)) jfail('印章日期不可以是未來');
+        // 補歷史紙本一律以「那一天」判定在職（當時在職、現已離職的人也要簽得下去）
+        if (!car_bf_user_asof_ok($pdo, $who, $date)) jfail("選擇的人員在 {$date} 並不在職，請改選當時在職的人");
+        $un = $pdo->prepare("SELECT user_cname FROM `user` WHERE id = ?"); $un->execute([$who]);
+        $wname = trim((string)($un->fetchColumn() ?: ''));
+        if ($wname === '') jfail('查無此人員');
+
+        // 責任單位是廠商時，三段回覆的章面壓廠商名稱——沿用正式流程同一條規則（car_reply_signer_name），
+        // 不在這裡另外判一次，否則補出來的章跟當初真的簽會長得不一樣
+        $label = in_array($slot, ['cause', 'correction', 'prevention'], true)
+               ? car_reply_signer_name($pdo, $o, $wname) : $wname;
+        $label = mb_substr($label, 0, 30);
+        $ts = car_bf_time($pdo, $id, $o, $slot, $date);
+        $dl = str_replace('-', '.', $date);     // 章面日期＝YYYY.MM.DD（ai-rules/20）
+
+        $pdo->beginTransaction();
+        try {
+            if ($sl['kind'] === 'sig') {
+                $pdo->prepare("UPDATE car_signature SET revoked=1 WHERE car_id=? AND section=? AND revoked=0")
+                    ->execute([$id, $slot]);
+                $pdo->prepare("INSERT INTO car_signature (car_id, section, signed_by, signed_name, signed_at, signed_date_label)
+                               VALUES (?, ?, ?, ?, ?, ?)")->execute([$id, $slot, $who, $label, $ts, $dl]);
+                if (!empty($sl['by']))
+                    $pdo->prepare("UPDATE car_order SET {$sl['by']}=?, {$sl['at']}=? WHERE id=?")->execute([$who, $ts, $id]);
+            } else {
+                $pdo->prepare("UPDATE car_order SET {$sl['by']}=?, {$sl['name']}=?, {$sl['at']}=? WHERE id=?")
+                    ->execute([$who, $label, $ts, $id]);
+            }
+            car_log($pdo, $id, 'bf_sign', (int)$me['id'], $me['name'],
+                    "補資料：「{$sl['label']}」代簽 {$label}（章面日期 {$dl}）");
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            jerr('代簽失敗：' . $e->getMessage(), 500);
+        }
+        car_bf_audit($pdo, $id, (string)$o['car_no'], (int)$me['id'], $me['name'], '代簽圖章',
+                     $sl['label'] . '＝' . $label . '／' . $dl);
+        jout(['success' => true, 'message' => "已代簽「{$sl['label']}」：{$label}（{$dl}）",
+              'signer' => $label, 'date' => $dl,
+              'title' => car_user_title_asof($pdo, $who, $date)]);
+    }
+
+    // 代填既有端點碰不到的那幾格：開立人員／填表日期／回覆人／效果確認／扣款金額／單據狀態
+    case 'bf_save': {
+        $o  = _carBfOrder($pdo, $me, $features);
+        $id = (int)$o['id'];
+        $has = function ($k) { return array_key_exists($k, $_POST); };   // 沒送＝不要動它，送空字串才是清空
+        $sets = []; $prm = []; $diff = [];
+        $put = function ($col, $val, $label, $oldOverride = null) use (&$sets, &$prm, &$diff, $o) {
+            $old = $oldOverride !== null ? $oldOverride : ($o[$col] ?? null);
+            $sets[] = "$col = ?"; $prm[] = $val;
+            $a = ($old === null || $old === '') ? '（空白）' : (string)$old;
+            $b = ($val === null || $val === '') ? '（空白）' : (string)$val;
+            if ($a !== $b) $diff[] = "{$label}：{$a} → {$b}";
+        };
+
+        // ── 填表日期（章面與編號的業務日期基準，原本只有建立當天、完全改不了）──
+        $fillDate = trim((string)($o['fill_date'] ?? ''));
+        if ($has('fill_date')) {
+            $v = trim((string)$_POST['fill_date']);
+            if ($v !== '' && !car_bf_is_date($v)) jfail('填表日期格式錯誤');
+            if ($v !== '' && $v > car_db_today($pdo)) jfail('填表日期不可以是未來');
+            $put('fill_date', ($v ?: null), '填表日期');
+            $fillDate = $v;
+        }
+        if ($has('found_date')) {
+            $v = trim((string)$_POST['found_date']);
+            if ($v !== '' && !car_bf_is_date($v)) jfail('發現日期格式錯誤');
+            if ($v !== '' && $v > car_db_today($pdo)) jfail('發現日期不可以是未來');
+            $put('found_date', ($v ?: null), '發現日期');
+        }
+
+        // ── 開立人員（代填：紙本上填表的是別人，不是現在按鈕的這個管理員）──
+        if ($has('filler')) {
+            $f = trim((string)$_POST['filler']);
+            if ($f === '') jfail('開立人員不可清空');
+            $pp  = explode(':', $f);
+            $fu  = (int)($pp[0] ?? 0); $fd = (int)($pp[1] ?? 0); $fp = (int)($pp[2] ?? 0);
+            $asof = car_bf_is_date(substr($fillDate, 0, 10)) ? substr($fillDate, 0, 10) : car_db_today($pdo);
+            if (!car_bf_user_asof_ok($pdo, $fu, $asof)) jfail("開立人員在 {$asof} 並不在職，請改選當時在職的人");
+            $un = $pdo->prepare("SELECT user_cname FROM `user` WHERE id = ?"); $un->execute([$fu]);
+            $fname = trim((string)($un->fetchColumn() ?: ''));
+            if ($fname === '') jfail('查無此開立人員');
+            $fpname = null;
+            if ($fp > 0) {
+                $q = $pdo->prepare("SELECT name FROM position WHERE id = ?"); $q->execute([$fp]);
+                $fpname = $q->fetchColumn() ?: null;
+            }
+            $sets[] = 'created_by = ?';           $prm[] = $fu;
+            $sets[] = 'created_by_name = ?';      $prm[] = $fname;
+            $sets[] = 'opener_dept_id = ?';       $prm[] = ($fd ?: null);
+            $sets[] = 'opener_position_id = ?';   $prm[] = ($fp ?: null);
+            $sets[] = 'opener_position_name = ?'; $prm[] = $fpname;
+            if ((int)($o['created_by'] ?? 0) !== $fu || (string)($o['opener_position_name'] ?? '') !== (string)$fpname) {
+                $diff[] = '開立人員：' . (((string)($o['created_by_name'] ?? '')) ?: '（空白）')
+                        . ' → ' . $fname . ($fpname ? "（{$fpname}）" : '');
+            }
+        }
+
+        // ── 回覆人（三段回覆區塊要有回覆人才顯示得出來；紙本上填的是誰就設誰）──
+        if ($has('assigned_to')) {
+            $av = trim((string)$_POST['assigned_to']);
+            if ($av === '') {
+                $sets[] = 'assigned_to = NULL'; $sets[] = 'assigned_to_name = NULL'; $sets[] = 'assigned_at = NULL';
+                if ((string)($o['assigned_to_name'] ?? '') !== '') $diff[] = '回覆人：' . $o['assigned_to_name'] . ' →（清除）';
+            } else {
+                $au = (int)$av;
+                $asof = car_bf_is_date(substr($fillDate, 0, 10)) ? substr($fillDate, 0, 10) : car_db_today($pdo);
+                if (!car_bf_user_asof_ok($pdo, $au, $asof)) jfail("回覆人在 {$asof} 並不在職，請改選當時在職的人");
+                $un = $pdo->prepare("SELECT user_cname FROM `user` WHERE id = ?"); $un->execute([$au]);
+                $aname = trim((string)($un->fetchColumn() ?: ''));
+                if ($aname === '') jfail('查無此回覆人');
+                $sets[] = 'assigned_to = ?';      $prm[] = $au;
+                $sets[] = 'assigned_to_name = ?'; $prm[] = $aname;
+                $sets[] = 'assigned_at = ?';      $prm[] = ($asof . ' 09:00:00');
+                if ((int)($o['assigned_to'] ?? 0) !== $au)
+                    $diff[] = '回覆人：' . (((string)($o['assigned_to_name'] ?? '')) ?: '（空白）') . " → {$aname}";
+            }
+        }
+
+        /* ── 效果確認 / 狀態 ──
+           兩者一律互相對齊，不留「結案了但狀態還停在填寫中」這種矛盾。
+           **權威欄位是「單據狀態」**：有送 status 就以它為準，效果確認由它推導
+           （畫面上兩個下拉會互相連動，所以送過來的一定是一致的）；只送 result 沒送 status
+           時才反過來由 result 推狀態，給不經畫面直接打 API 的呼叫端一條明確的路。 */
+        $status = $has('status') ? trim((string)$_POST['status']) : (string)$o['status'];
+        if (!$has('status') && $has('result')) {
+            $res = trim((string)$_POST['result']);
+            if ($res !== '' && !in_array($res, ['close', 'not_close'], true)) jfail('效果確認選項不合法');
+            if ($res === 'close')          $status = 'closed';
+            elseif ($res === 'not_close')  $status = 'rejected';
+        }
+        if ($has('result') && !in_array(trim((string)$_POST['result']), ['', 'close', 'not_close'], true))
+            jfail('效果確認選項不合法');
+        if (!array_key_exists($status, car_labels()['status'])) jfail('單據狀態代碼不合法');
+        $closeDate = $has('close_date')       ? trim((string)$_POST['close_date'])       : (string)($o['close_date'] ?? '');
+        $notReason = $has('not_close_reason') ? trim((string)$_POST['not_close_reason']) : (string)($o['not_close_reason'] ?? '');
+        $result = ($status === 'closed') ? 'close' : (($status === 'rejected') ? 'not_close' : '');
+        if ($status === 'closed'   && !car_bf_is_date($closeDate)) jfail('結案時「結案日期」為必填');
+        if ($status === 'closed'   && $closeDate > car_db_today($pdo))  jfail('結案日期不可以是未來');
+        if ($status === 'rejected' && $notReason === '')            jfail('不可結案時「不可結案原因」為必填');
+        if ($status !== 'closed')   $closeDate = '';
+        if ($status !== 'rejected') $notReason = '';
+        if ($has('status') || $has('result') || $has('close_date') || $has('not_close_reason')) {
+            $L = car_labels()['status'];
+            $sets[] = 'status = ?'; $prm[] = $status;
+            if ($status !== (string)$o['status'])
+                $diff[] = '單據狀態：' . ($L[(string)$o['status']] ?? $o['status']) . ' → ' . ($L[$status] ?? $status);
+            $put('result', ($result ?: null), '效果確認');
+            $put('close_date', ($closeDate ?: null), '結案日期');
+            $put('not_close_reason', ($notReason ?: null), '不可結案原因');
+            if ($status !== (string)$o['status']) { $sets[] = 'stage_since = NOW()'; }
+        }
+
+        // ── 扣款金額／備註（判定人與日期走 bf_sign 的「扣款判定」章格）──
+        if ($has('deduct_amount')) {
+            $av = trim((string)$_POST['deduct_amount']);
+            if ($av !== '' && (!is_numeric($av) || (float)$av < 0)) jfail('扣款金額格式錯誤');
+            $put('deduct_amount', ($av === '' ? null : (float)$av), '扣款金額');
+        }
+        if ($has('deduct_note')) $put('deduct_note', (trim((string)$_POST['deduct_note']) ?: null), '扣款備註');
+
+        if (!$sets) jfail('沒有要儲存的欄位');
+
+        $pdo->beginTransaction();
+        try {
+            $prm[] = $id;
+            $pdo->prepare("UPDATE car_order SET " . implode(', ', $sets) . " WHERE id = ?")->execute($prm);
+            car_log($pdo, $id, 'bf_edit', (int)$me['id'], $me['name'],
+                    '補資料：代填單據' . ($diff ? '（' . implode('；', $diff) . '）' : '（內容未變更）'));
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            jerr('儲存失敗：' . $e->getMessage(), 500);
+        }
+        car_bf_audit($pdo, $id, (string)$o['car_no'], (int)$me['id'], $me['name'], '代填單據', implode('；', $diff));
+        jout(['success' => true, 'message' => '已儲存代填內容' . ($diff ? '' : '（內容未變更）')]);
+    }
+
     // ── 修改表頭（僅開立人本人；系統管理員例外；限 申請中/申請退回/待指派）───
     case 'update_order': {
         $id = (int)($_POST['car_id'] ?? 0);
@@ -1249,9 +1588,13 @@ try {
         $o = $st->fetch(PDO::FETCH_ASSOC);
         if (!$o) jfail('查無此單');
         $isCreator = ((int)$o['created_by'] === (int)$me['id']);
-        if (!$isCreator && !_carHas('all')) jerr('非開立人不可修改他人開立之單據', 403);
-        if (!in_array($o['status'], ['draft', 'applying', 'app_rejected', 'open'], true))
-            jfail('此單已進入回覆/簽核流程，表頭不可修改');
+        // 補資料模式（已解鎖）：表頭不受「只有開立人」與「只能在核准成立前」兩道限制
+        $bf = car_can_backfill($features) && car_bf_unlock_valid((int)$me['id'], $id);
+        if (!$bf) {
+            if (!$isCreator && !_carHas('all')) jerr('非開立人不可修改他人開立之單據', 403);
+            if (!in_array($o['status'], ['draft', 'applying', 'app_rejected', 'open'], true))
+                jfail('此單已進入回覆/簽核流程，表頭不可修改');
+        }
 
         $source_type = $_POST['source_type'] ?? $o['source_type'];
         if (!in_array($source_type, ['QA', 'IR', 'OTHER'], true)) jfail('異常來源錯誤');
@@ -1283,14 +1626,18 @@ try {
                     $abnormal_desc, $id]);
 
             // 異常說明有變更 → 作廢原簽章、由修改者重新簽章
-            if ($abnormal_desc !== (string)$o['abnormal_desc']) {
+            // （補資料模式例外：章面壓的是當年紙本上那個人，不可以被補登的管理員蓋掉；
+            //   要換人或換日期請用補資料面板的「異常說明（填表人）」章格重簽）
+            if (!$bf && $abnormal_desc !== (string)$o['abnormal_desc']) {
                 $pdo->prepare("UPDATE car_signature SET revoked=1 WHERE car_id=? AND section='desc' AND revoked=0")->execute([$id]);
                 $pdo->prepare("INSERT INTO car_signature (car_id, section, signed_by, signed_name, signed_at, signed_date_label)
                                VALUES (?, 'desc', ?, ?, NOW(), ?)")
                     ->execute([$id, $me['id'], $me['name'], car_sign_date_label()]);
             }
-            car_log($pdo, $id, 'edit', (int)$me['id'], $me['name'], '修改表頭內容');
+            car_log($pdo, $id, ($bf ? 'bf_edit' : 'edit'), (int)$me['id'], $me['name'],
+                    $bf ? '補資料：代填表頭內容' : '修改表頭內容');
             $pdo->commit();
+            if ($bf) car_bf_audit($pdo, $id, (string)$o['car_no'], (int)$me['id'], $me['name'], '代填表頭內容');
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             jerr('修改失敗：' . $e->getMessage(), 500);

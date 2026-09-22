@@ -32,6 +32,8 @@ $CAN_CREATE   = rbac_has($features, 'car_create');
 $CAN_EDIT     = rbac_has($features, 'car_edit');
 $CAN_DELETE   = rbac_has($features, 'car_delete');
 $CAN_SETTINGS = rbac_has($features, 'car_manage_settings');
+// 補資料（代填單據／代簽圖章／調整簽章日期）：角色功能碼；實際執行還要逐張單輸入操作確認密碼
+$CAN_BACKFILL = car_can_backfill($features);
 
 $permParts = [];
 if ($CAN_VIEW) $permParts[] = '檢閱';
@@ -39,6 +41,7 @@ if ($CAN_CREATE) $permParts[] = '開立';
 if ($CAN_EDIT) $permParts[] = '修改';
 if ($CAN_DELETE) $permParts[] = '刪除';
 if ($CAN_SETTINGS) $permParts[] = '設定';
+if ($CAN_BACKFILL) $permParts[] = '補資料';
 $permBadge = $permParts ? implode('+', $permParts) : '無';
 ?>
 <!DOCTYPE html>
@@ -126,6 +129,30 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         .st-closed{background:#D5F5E3;color:#1E8449;border:1px solid #ABEBC6;}
         .st-rejected{background:#FADBD8;color:#922B21;border:1px solid #F1948A;}
         .req::after{ content:" *"; color:#d9534f; }
+        /* 使用說明（鐵律7：全站統一放頁首右上角、列印不印） */
+        .page-help-btn{ margin-right:6px; }
+        .help-doc h5{ margin:14px 0 6px; font-weight:700; color:#8A5A2B; }
+        .help-doc ul{ padding-left:20px; margin-bottom:8px; }
+        .help-doc li{ margin-bottom:4px; font-size:13px; line-height:1.6; }
+        .help-doc .hd-warn{ background:#FBEEE6; border:1px solid #F3D9C4; color:#8A5A2B; border-radius:6px; padding:8px 10px; font-size:13px; }
+        @media print{ .page-help-btn{ display:none !important; } }
+        /* 補資料（代填／代簽）面板：暖琥珀色，與一般作業區塊明顯區隔（ai-rules/10 暖色系） */
+        .bf-panel{ border:2px solid #F0A24B; border-radius:8px; margin-top:12px; overflow:hidden; }
+        .bf-panel .bf-head{ background:#F0A24B; color:#4a2f10; padding:6px 12px; font-weight:700;
+                            display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+        .bf-panel .bf-head .bf-left{ font-size:12px; font-weight:normal; margin-left:auto; }
+        .bf-panel .bf-body{ background:#FEF7F0; padding:10px 12px; }
+        .bf-panel .bf-note{ font-size:12px; color:#8A5A2B; margin-bottom:8px; line-height:1.6; }
+        .bf-panel table.bf-t{ background:#fff; margin-bottom:8px; }
+        .bf-panel table.bf-t>tbody>tr>td, .bf-panel table.bf-t>tbody>tr>th,
+        .bf-panel table.bf-t>thead>tr>th{ padding:5px 7px; font-size:12px; vertical-align:middle; }
+        .bf-panel table.bf-t>thead>tr>th,
+        .bf-panel table.bf-t>tbody>tr>th{ background:#F6E2CC; color:#7A4A18; border-color:#EBD3B7; white-space:nowrap; width:92px; }
+        .bf-panel .bf-sig-cell{ min-width:110px; }
+        .bf-pwrap{ display:flex; gap:4px; align-items:center; }
+        .bf-pwrap input.bf-pfilter{ width:78px; }
+        .bf-pwrap select{ min-width:150px; }
+        .bf-panel .form-control, .bf-panel select, .bf-panel input{ font-size:12px; }
         .car-warm{ background:#FBEEE6; border:1px solid #F3D9C4; color:#8A5A2B; border-radius:6px; padding:10px 12px; margin-top:8px; }
         .car-warm .btn{ margin-top:6px; }
         #carTable td, #carTable th{ vertical-align:middle; font-size:13px; }
@@ -149,8 +176,9 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
             </small>
           </h3>
         </div>
-        <?php if ($CAN_SETTINGS): ?>
         <div class="title_right"><div class="pull-right">
+          <button class="btn btn-warning btn-sm page-help-btn" id="btnPageHelp"><i class="fa fa-book"></i> 使用說明</button>
+          <?php if ($CAN_SETTINGS): ?>
           <div class="btn-group">
             <button class="btn btn-default btn-sm dropdown-toggle" data-toggle="dropdown"><i class="fa fa-cog"></i> 設定 <span class="caret"></span></button>
             <ul class="dropdown-menu dropdown-menu-right">
@@ -158,8 +186,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
               <li><a href="#" id="btn-role-setting"><i class="fa fa-key"></i> 權限設定（角色）</a></li>
             </ul>
           </div>
+          <?php endif; ?>
         </div></div>
-        <?php endif; ?>
       </div>
       <div class="clearfix"></div>
 
@@ -270,6 +298,23 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         <input type="text" id="src-other-desc" class="form-control input-sm" placeholder="來源說明">
       </div>
     </div>
+
+    <?php if ($CAN_BACKFILL): ?>
+    <!-- 補資料模式（限有「補資料」功能碼者）：補幾年前的紙本單據用 -->
+    <div id="bf-create-box" style="background:#FEF7F0;border:1px solid #F0A24B;border-radius:6px;padding:8px 10px;margin-bottom:10px;">
+      <label class="checkbox-inline" style="font-weight:700;color:#8A5A2B;padding-left:0;">
+        <input type="checkbox" id="bf-create-on"> 補資料模式（補登歷史紙本單據）
+      </label>
+      <span id="bf-create-fields" style="display:none;margin-left:10px;">
+        <label style="font-weight:normal;">紙本填表日期
+          <input type="date" id="bf-create-date" class="input-sm" style="width:145px;"></label>
+      </span>
+      <div class="text-muted" style="font-size:12px;margin-top:4px;line-height:1.6;">
+        勾選後：<b>單號依紙本填表日期配號</b>（不是今天）、<b>直接成立不走申請核准</b>、<b>一則通知都不發</b>；
+        建立後請在單據的「補資料」面板代填內容與代簽各格圖章（需輸入操作確認密碼）。
+      </div>
+    </div>
+    <?php endif; ?>
 
     <div class="row">
       <div class="col-md-4">
@@ -533,6 +578,94 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
   </div>
 </div></div></div>
 
+<?php if ($CAN_BACKFILL): ?>
+<!-- 補資料：操作確認密碼 Modal（逐張單解鎖一次，30 分鐘） -->
+<div class="modal fade" id="bfPwMask" tabindex="-1" role="dialog" data-backdrop="static"><div class="modal-dialog modal-sm"><div class="modal-content">
+  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+    <h4 class="modal-title"><i class="fa fa-unlock-alt"></i> 進入補資料模式</h4></div>
+  <div class="modal-body">
+    <div style="background:#FBEEE6;border:1px solid #F3D9C4;color:#8A5A2B;border-radius:6px;padding:8px 10px;font-size:12px;line-height:1.7;margin-bottom:10px;">
+      解鎖後可 <b>代填單據</b>、<b>代簽各格圖章（自行指定人員）</b>、<b>調整簽章日期</b>，
+      單號 <b id="bf-pw-no"></b>。所有補登動作都會留下處理軌跡與稽核紀錄。
+    </div>
+    <label style="font-weight:normal;">操作確認密碼</label>
+    <input type="password" id="bf-pw" class="form-control input-sm" autocomplete="off" placeholder="請輸入您的操作確認密碼">
+    <div class="text-muted" style="font-size:11px;margin-top:4px;">
+      與登入密碼不同；未設定過請到「修改個人密碼」頁設定。連續錯誤 3 次會鎖定 7 天。
+    </div>
+    <div id="bf-pw-msg" class="text-danger" style="font-size:12px;margin-top:6px;"></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-default btn-sm" data-dismiss="modal">取消</button>
+    <button class="btn btn-warning btn-sm" id="bf-pw-ok"><i class="fa fa-unlock"></i> 解鎖</button>
+  </div>
+</div></div></div>
+<?php endif; ?>
+
+<!-- 使用說明（鐵律7） -->
+<div class="modal fade" id="helpUseMask" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content">
+  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+    <h4 class="modal-title"><i class="fa fa-book"></i> 異常矯正處理單 — 使用說明</h4></div>
+  <div class="modal-body help-doc" style="max-height:72vh;overflow:auto;">
+    <h5>這一頁做什麼</h5>
+    <ul>
+      <li>把紙本「異常矯正處理單（CAR）」線上化：開立 → 指派回覆人 → 三段填寫（異常原因分析／矯正措施／預防措施）
+          → 主管簽核 → 總經理裁決（結案／不可結案）→ 扣款判定。</li>
+      <li>來源可掛 <b>品質異常處理單</b>、<b>客戶退貨單</b> 或 <b>其他</b>；同一個事件可一次對多個責任單位各開一張獨立單。</li>
+    </ul>
+    <h5>操作步驟</h5>
+    <ul>
+      <li><b>開立</b>：按右上「開立」→ 選異常來源 → 填發現日期、客戶／供應商、料號、製令 → 填異常說明
+          → 加責任單位（部門可再指定人員，或指定廠商）→ 送出。<br>
+          <span class="text-muted">非主管職開立時會先送所屬部門主管核准，核准後才配發正式單號。</span></li>
+      <li><b>指派</b>：責任單位主管在單據內指派一名回覆人（也可指派給自己）。原回覆人離職／留停時可重新指派。</li>
+      <li><b>回覆</b>：回覆人逐段填寫並各自簽章，三段都簽好才能送出；要改內容先按該段的「修改（取消簽章）」。</li>
+      <li><b>簽核／裁決</b>：主管簽核通過或退回重改 → 總經理裁決結案（填結案日與扣款）或不可結案（自動產生退件 R 單）。</li>
+      <li><b>列印</b>：單據內「列印」為紙本版式；列表右上可印總表與匯出 CSV。</li>
+    </ul>
+    <h5>補資料（代填單據／代簽圖章／調整簽章日期）</h5>
+    <div class="hd-warn">
+      給「把幾年前的紙本補進系統」用的。需要 <b>①角色勾選「補資料」功能碼</b> ＋ <b>②每一張單各輸入一次操作確認密碼</b>，
+      解鎖 30 分鐘。每個動作都會寫進「處理軌跡」與系統稽核紀錄，誰在什麼時候補的查得到。
+    </div>
+    <ul>
+      <li><b>建立歷史單據</b>：開立跳窗勾「補資料模式」並填紙本填表日期 →
+          單號依 <b>紙本日期</b> 配號、<b>直接成立不走申請核准</b>、<b>一則通知都不發</b>。</li>
+      <li><b>解鎖</b>：打開單據按右上「補資料」→ 輸入操作確認密碼。</li>
+      <li><b>代填</b>：解鎖後表頭的「修改」不再受「只有開立人、只能在成立前」限制；三段回覆可直接改內容
+          （不會動到已補上的章）。另可代填 開立人員、填表日期、發現日期、回覆人、單據狀態、效果確認、結案日期、扣款金額。</li>
+      <li><b>代簽圖章</b>：七個章格（異常說明／原因分析／矯正措施／預防措施／主管簽核／總經理核准／扣款判定）
+          各自挑人員與印章日期，章面壓的就是 <b>當年紙本上那個人</b>的姓名與日期。</li>
+      <li><b>人員清單依印章日期回推當時在職者</b>：當時在職、現已離職的人也選得到；選了那天不在職的人會被擋下。</li>
+      <li><b>調整簽章日期</b>：同一個章格重新代簽一次即覆蓋（舊章作廢留紀錄）；按「清除」則回到未簽狀態。</li>
+      <li>章面時間會依表單順序自動排在同一天其他章之間，<b>不會印出「總經理核准早於填表人」</b>。</li>
+      <li>責任單位是廠商時，三段回覆的章面依規則壓 <b>廠商名稱</b>（與正式流程同一條規則）。</li>
+    </ul>
+    <h5>重要行為／常見疑問</h5>
+    <ul>
+      <li><b>沒有檢閱權限也能處理自己的單</b>：被指派回覆／簽核的人從置頂欄通知點進來即可填寫。</li>
+      <li><b>已歷工作天</b>依行事曆的休假日與補班日計算；卡在同一關卡超過設定天數會自動發逾期提醒（已結案／不可結案不提醒）。</li>
+      <li><b>扣款判定與不可結案原因是機密</b>，只有扣款判定人員、最終決策者本人、系統管理員，以及補資料解鎖中的人看得到。</li>
+      <li><b>退件 R 單</b>：不可結案時自動由母單複製表頭產生 <code>母號R01</code>，三段需重新填寫。</li>
+    </ul>
+    <h5>設定入口</h5>
+    <ul>
+      <li>右上「設定 → 簽核流程設定」：主管職層級門檻、生管部門、最終決策者職位、附件路徑、逾期提醒天數、管理課扣款判定人員。</li>
+      <li>右上「設定 → 權限設定（角色）」：建立角色並勾選功能碼（含「補資料」）。使用者與角色的對應在「人員權限設定」。</li>
+      <li>操作確認密碼的授權與重設：由超級管理員在「修改個人密碼」頁指定。</li>
+    </ul>
+    <h5>權限角色</h5>
+    <ul>
+      <li>檢閱 <code>car_view</code>／開立 <code>car_create</code>／修改 <code>car_edit</code>／刪除 <code>car_delete</code>／
+          管理設定 <code>car_manage_settings</code>／指派 <code>car_assign</code>／回覆 <code>car_reply</code>／
+          主管簽核 <code>car_sign_primary</code>／最終裁決 <code>car_sign_final</code>／
+          <b>補資料 <code>car_backfill</code></b>。</li>
+      <li>系統管理員（<code>all</code>）固定擁有全部權限。各角色的詳細說明另見標題旁的 <i class="fa fa-question-circle"></i>。</li>
+    </ul>
+  </div>
+  <div class="modal-footer"><button class="btn btn-default btn-sm" data-dismiss="modal">關閉</button></div>
+</div></div></div>
+
 <?php if (!$isPopup) include '../partPage/footer.html'; ?>
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
@@ -546,6 +679,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
   var IS_ADMIN   = <?php echo rbac_has($features, 'all') ? 'true':'false'; ?>;
   var ME_ID      = <?php echo (int)$me['id']; ?>;
   var CAN_VIEW   = <?php echo $CAN_VIEW ? 'true':'false'; ?>;
+  var CAN_BACKFILL = <?php echo $CAN_BACKFILL ? 'true':'false'; ?>;   // 補資料（代填／代簽）功能碼
   var OPEN_ID    = <?php echo (int)($_GET['open_id'] ?? 0); ?>;   // 通知直開的單據 id（當事人無 car_view 也可開）
   var state = { card:'all', page:1, size:10 };
   var REMIND_WD = 5;   // 逾期提醒工作天門檻（load_page_data 回傳後覆蓋）
@@ -565,6 +699,11 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
   function selectedOpener(){ var v=$('#f-opener').val(); if(v==='-1'||v===null||v==='') return null; return myPositions[parseInt(v,10)]||null; }
   function updateOpenerHint(){
     var p=selectedOpener();
+    // 補資料模式一律直接成立（紙本早就簽完了），不論開立職務是不是主管職
+    if(CAN_BACKFILL && $('#bf-create-on').prop('checked')){
+      $('#opener-hint').html('<span style="color:#8A5A2B;">補資料模式 → 依紙本填表日期配號、直接成立、不發通知。</span>');
+      $('#btn-create-submit').html('<i class="fa fa-history"></i> 建立（補資料）'); return;
+    }
     if(!p || p.is_supervisor){ $('#opener-hint').html(p?'<span class="text-success">主管職 → 直接開立並產生單號。</span>':'將直接開立並產生單號。'); $('#btn-create-submit').html('<i class="fa fa-check"></i> 建立'); }
     else { $('#opener-hint').html('<span class="text-warning">一般職 → 送出後需「'+esc(p.dept_name)+'」主管核准才成立（核准時才配號）。</span>'); $('#btn-create-submit').html('<i class="fa fa-paper-plane"></i> 送出申請'); }
   }
@@ -789,13 +928,15 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     $('#src-qa-pick,#src-ir-pick,#cp-pick,#part-pick,#wo-pick,#create-msg').text('');
     $('#pick-dept,#pick-maker,#qty-wrap').hide();
     $('#resp-block,#opener-block').show();
+    $('#bf-create-box').show(); $('#bf-create-on').prop('checked',false);
+    $('#bf-create-fields').hide(); $('#bf-create-date').val('');
     $('#createModal .modal-title').html('<i class="fa fa-file-text-o"></i> 開立異常矯正處理單 <small class="text-muted">（表單編號於建立時自動產生）</small>');
     updateOpenerHint();
   }
   // 以既有單據內容進入修改模式（責任單位/開立職務不可改，隱藏）
   function openEdit(o){
     resetCreate(); editId=o.id;
-    $('#resp-block,#opener-block').hide();
+    $('#resp-block,#opener-block,#bf-create-box').hide();
     $('#createModal .modal-title').html('<i class="fa fa-pencil"></i> 修改異常矯正處理單 '+esc(o.car_no||'（未配號）'));
     $('#btn-create-submit').html('<i class="fa fa-save"></i> 儲存修改');
     $('input[name="src"][value="'+o.source_type+'"]').prop('checked',true);
@@ -856,6 +997,12 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       abnormal_desc: desc,
       responsible: JSON.stringify(resp)
     };
+    // 補資料模式（新增時才有；修改走 update_order）
+    if(!editId && CAN_BACKFILL && $('#bf-create-on').prop('checked')){
+      var bfd = $('#bf-create-date').val()||'';
+      if(!bfd){ alert('補資料模式請填寫紙本上的填表日期'); return; }
+      payload.bf_mode = 1; payload.fill_date = bfd;
+    }
     $('#btn-create-submit').prop('disabled',true);
     if(editId){ payload.car_id = editId; }
     api(editId ? 'update_order' : 'create', payload).done(function(r){
@@ -889,6 +1036,31 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'刪除失敗'); });
     });
     $('#btn-perm-help').on('click', function(e){ e.preventDefault(); $('#permHelp').modal('show'); });
+    $('#btnPageHelp').on('click', function(){ $('#helpUseMask').modal('show'); });
+
+    // 補資料：開立跳窗的模式切換 ＋ 解鎖跳窗
+    $('#bf-create-on').on('change', function(){
+      var on=$(this).prop('checked');
+      $('#bf-create-fields').toggle(on);
+      if(on && !$('#bf-create-date').val()) $('#bf-create-date').focus();
+      updateOpenerHint();
+    });
+    $('#bf-pw-ok').on('click', function(){
+      var pw=$('#bf-pw').val()||'';
+      if(!pw){ $('#bf-pw-msg').text('請輸入操作確認密碼'); return; }
+      var id=BF.askId;
+      $('#bf-pw-ok').prop('disabled',true); $('#bf-pw-msg').text('驗證中…');
+      api('bf_unlock',{car_id:id, password:pw}).done(function(r){
+        $('#bf-pw-ok').prop('disabled',false);
+        if(!r||!r.success){ $('#bf-pw-msg').text((r&&r.message)||'解鎖失敗'); return; }
+        $('#bf-pw').val(''); $('#bf-pw-msg').text('');
+        $('#bfPwMask').modal('hide'); openView(id);
+      }).fail(function(xhr){
+        $('#bf-pw-ok').prop('disabled',false);
+        $('#bf-pw-msg').text((xhr.responseJSON&&xhr.responseJSON.message)||'解鎖失敗');
+      });
+    });
+    $('#bf-pw').on('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); $('#bf-pw-ok').click(); } });
 
     // 責任單位篩選下拉：只列「已被開立過」的部門；有廠商責任單則加「廠商責任」選項
     function loadRespFilter(){
@@ -979,7 +1151,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       if(!r||!r.success){ $('#view-body').html('<div class="text-danger">'+esc(r&&r.message||'載入失敗')+'</div>'); return; }
       var o=r.order, L=r.labels, perm=r.perm||{};
       window.__ownCompany = r.own_company || '';
-      var sigMap={}; (r.signatures||[]).forEach(function(s){ if(!parseInt(s.revoked,10)) sigMap[s.section]={name:s.signed_name,date:s.signed_date_label,title:s.title||''}; });
+      var sigMap={}; (r.signatures||[]).forEach(function(s){ if(!parseInt(s.revoked,10)) sigMap[s.section]={name:s.signed_name,date:s.signed_date_label,title:s.title||'',by:parseInt(s.signed_by,10)||0}; });
       function sigText(x){ return x ? EGStamp.stamp(x.name, x.date) : '—'; }
       var acts=(r.activity||[]).map(function(a){ return '<div class="timeline-mini">'+fmtDT(a.created_at)+' '+esc(a.actor_name||'')+(a.title?'（'+esc(a.title)+'）':'')+'：'+esc(a.note||a.action)+'</div>'; }).join('');
       var grp=(r.group||[]).length>1 ? '<div class="alert alert-info" style="padding:6px 10px;">同事件('+esc(o.group_no)+')共 '+r.group.length+' 張：'+r.group.map(function(g){return esc(g.car_no||'（未配號）');}).join('、')+'</div>' : '';
@@ -1053,8 +1225,10 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         + '</tbody></table>'
         + actions + assignHtml + renderReply(o, perm, sigMap, L, r.attachments)
         + renderDecision(o, perm, sigMap, r.attachments)
+        + renderBackfill(o, perm, sigMap, L, r.bf_slots)
         + '<h5 style="margin-top:12px;">處理軌跡</h5>'+(acts||'<span class="text-muted">—</span>')
       );
+      bfBind(id, o, perm, sigMap);   // 補資料面板的下拉與按鈕（未解鎖時只綁那顆解鎖鈕）
       // 母單/退件單跳轉
       $('#view-body .open-car').on('click', function(e){ e.preventDefault(); openView($(this).data('id')); });
 
@@ -1146,15 +1320,24 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
 
   // 三段回覆區塊（原因分析 / 矯正措施 / 預防措施）；附件矯正/預防分開顯示於各自區塊
   function renderReply(o, perm, sigMap, L, atts){
-    if(!o.assigned_to && ['assigned','replying','pending_primary','pending_final','closed','rejected'].indexOf(o.status)<0) return '';
+    // 補資料模式一律顯示（補歷史紙本時單子多半還停在「待指派」，不顯示就沒地方填三段內容）
+    if(!perm.bf_on && !o.assigned_to && ['assigned','replying','pending_primary','pending_final','closed','rejected'].indexOf(o.status)<0) return '';
     var editable = !!perm.can_reply;
+    var bf = !!perm.bf_on;     // 補資料模式：內容一律可改（含已簽章的段落），章由下方補資料面板處理
     function secBox(title, sec, editHtml, roHtml, dueLeft){
       var attHtml = attList(atts, sec, editable);
       var s=sigMap[sec], head='<div class="panel-heading" style="padding:6px 10px;"><b>'+title+'</b>';
       if(s) head+=' <span class="label label-success pull-right">已簽章</span>';
       head+='</div>';
       var body='<div class="panel-body">';
-      if(editable && !s){ body+=editHtml+attHtml+'<div style="margin-top:6px;"><button class="btn btn-success btn-xs sign-btn" data-sec="'+sec+'"><i class="fa fa-pencil"></i> 簽章</button></div>'; }
+      if(bf){
+        body+=editHtml+attHtml;
+        if(s) body+=EGStamp.row(EGStamp.stamp(s.name, s.date), dueLeft||'');
+        else if(dueLeft) body+='<div style="font-size:12px;color:#777;margin-top:4px;">'+dueLeft+'</div>';
+        body+='<div style="font-size:11px;color:#8A5A2B;margin-top:4px;">補資料模式：內容可直接修改（不會動到章）；'
+            + '要換簽章人員或日期請用下方「補資料」面板的章格。</div>';
+      }
+      else if(editable && !s){ body+=editHtml+attHtml+'<div style="margin-top:6px;"><button class="btn btn-success btn-xs sign-btn" data-sec="'+sec+'"><i class="fa fa-pencil"></i> 簽章</button></div>'; }
       else {
         body+=roHtml+attHtml;
         if(s) body+=EGStamp.row(EGStamp.stamp(s.name, s.date), dueLeft||'');           // 左下=預定完成日、右下=簽章印章
@@ -1186,7 +1369,11 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     h+=secBox('異常原因分析','cause',causeEdit,causeRO);
     h+=secBox('矯正措施','correction',dispEdit,corrRO,corrDue);
     h+=secBox('預防措施','prevention',prevEdit,prevRO,prevDue);
-    if(editable){
+    if(bf){
+      // 補資料模式不出現「簽章／送出」——章走補資料面板，狀態由代填欄位指定，不再跑一次流程
+      h+='<div style="margin-bottom:8px;"><button class="btn btn-warning btn-sm" id="btn-save-reply"><i class="fa fa-save"></i> 儲存代填內容（三段）</button> '
+        +'<span class="text-muted" id="reply-msg"></span></div>';
+    } else if(editable){
       h+='<div style="margin-bottom:8px;"><button class="btn btn-default btn-sm" id="btn-save-reply"><i class="fa fa-save"></i> 儲存草稿</button> '
         +'<button class="btn btn-primary btn-sm" id="btn-submit-reply"><i class="fa fa-paper-plane"></i> 送出（待主管簽核）</button> '
         +'<span class="text-muted" id="reply-msg"></span></div>';
@@ -1257,6 +1444,238 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       + attList(atts, 'result', !!(perm.can_sign_primary||perm.can_final||perm.can_deduct)) + '</div>';
     h+='</div></div>';
     return h;
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════
+   * 補資料（代填單據／代簽圖章／調整簽章日期）
+   * 兩道門：角色功能碼 car_backfill ＋ 每張單各輸入一次操作確認密碼（後端同規則再擋一次）。
+   * 人員清單一律**依印章日期回推當時在職者**（當時在職、現已離職的人也要挑得到，ai-rules/22）。
+   * ════════════════════════════════════════════════════════════════════════ */
+  var BF = { people:{}, timer:null, askId:0 };     // people: {'YYYY-MM-DD':[rows]}（同一個日期只查一次）
+
+  function bfPeople(date, cb){
+    if(!date) date = '';
+    if(BF.people[date]){ cb(BF.people[date]); return; }
+    api('bf_people',{date:date}).done(function(r){
+      BF.people[date] = (r&&r.success&&r.data) ? r.data : [];
+      cb(BF.people[date]);
+    }).fail(function(){ BF.people[date]=[]; cb([]); });
+  }
+  // 人員下拉選項：mode='post' 一個職務一列(value=uid:dept:pos)、'user' 一人一列(value=uid)
+  function bfOptions(rows, mode, val, kw){
+    var words=String(kw||'').trim().split(/\s+/).filter(Boolean), seen={}, items=[];
+    val = (val===null||val===undefined) ? '' : String(val);
+    // 職務對不上時退回「同一個人」：舊資料常常只留 user_id、沒留當時的部門職務 id，
+    // 硬比整串 uid:dept:pos 會變成「明明有簽章人，下拉卻停在（請選擇）」
+    var uid = (mode==='post') ? String(val).split(':')[0] : val;
+    if(uid==='0') uid='';
+    rows.forEach(function(p){
+      var v = (mode==='post') ? (p.id+':'+p.dept_id+':'+p.position_id) : String(p.id);
+      if(mode==='user'){ if(seen[v]) return; seen[v]=1; }
+      var txt = [(p.dept_name||''), (p.position_name||''), p.name].filter(Boolean).join('　') + (p.is_former?'（已離職）':'');
+      // 篩掉的不列，但「目前已選的那個人」永遠保留（同 eg_input_rules.js 規則7 的行為）
+      var mine = (v===val) || (uid!=='' && String(p.id)===uid);
+      if(words.length && !mine && !words.every(function(w){ return txt.indexOf(w)>=0; })) return;
+      items.push({v:v, txt:txt, uid:String(p.id)});
+    });
+    var pick='';
+    for(var i=0;i<items.length;i++){ if(items[i].v===val){ pick=val; break; } }
+    if(pick==='' && uid!==''){ for(var j=0;j<items.length;j++){ if(items[j].uid===uid){ pick=items[j].v; break; } } }
+    var h='<option value="">（請選擇）</option>';
+    items.forEach(function(it){ h += '<option value="'+it.v+'"'+(it.v===pick?' selected':'')+'>'+esc(it.txt)+'</option>'; });
+    return h;
+  }
+  function bfDateOf($sel){
+    var ref=$sel.data('dateref');
+    if(ref) return $('#view-body').find(ref).val()||'';
+    return $sel.closest('tr').find('.bf-date').val()||'';
+  }
+  function bfSyncSelect($sel, keepVal){
+    var mode=$sel.data('mode')||'user', want=(keepVal!==undefined)?keepVal:($sel.val()||'');
+    bfPeople(bfDateOf($sel), function(rows){
+      var kw=$sel.closest('.bf-pwrap').find('.bf-pfilter').val()||'';
+      $sel.html(bfOptions(rows, mode, want, kw));
+    });
+  }
+  function bfPicker(cls, mode, dateref){
+    return '<span class="bf-pwrap"><input type="text" class="form-control input-sm bf-pfilter" placeholder="篩選">'
+      + '<select class="form-control input-sm bf-person '+cls+'" data-mode="'+mode+'"'
+      + (dateref?(' data-dateref="'+dateref+'"'):'') + '><option value="">載入中…</option></select></span>';
+  }
+  function bfMMSS(sec){ sec=Math.max(0,parseInt(sec,10)||0); var m=Math.floor(sec/60); return m+':'+('0'+(sec%60)).slice(-2); }
+
+  // 解鎖跳窗（操作確認密碼）
+  function bfAskUnlock(id, no){
+    BF.askId = id;
+    $('#bf-pw-no').text(no||('#'+id));
+    $('#bf-pw').val(''); $('#bf-pw-msg').text('');
+    $('#bfPwMask').modal('show');
+    setTimeout(function(){ $('#bf-pw').focus(); }, 400);
+  }
+
+  // 補資料面板（未解鎖＝只顯示一顆解鎖鈕）
+  function renderBackfill(o, perm, sigMap, L, slots){
+    if(!perm.can_backfill) return '';
+    if(!perm.bf_on){
+      return '<div class="car-warm"><b><i class="fa fa-history"></i> 補資料（代填單據／代簽圖章／調整簽章日期）</b>'
+        + '<div style="font-size:12px;margin-top:2px;">要把紙本上的內容與各格圖章補進這張單（可自行指定簽章人員與印章日期），'
+        + '請輸入操作確認密碼解鎖，解鎖後 30 分鐘內有效。所有補登動作都會留下處理軌跡與稽核紀錄。</div>'
+        + '<div><button class="btn btn-warning btn-sm" id="btn-bf-unlock"><i class="fa fa-unlock-alt"></i> 補資料</button></div></div>';
+    }
+    var biz = String(o.fill_date||'').substring(0,10);
+    // ── 章格表：一格一列，各自挑人員與印章日期 ──
+    var rows='';
+    Object.keys(slots||{}).sort(function(a,b){ return (slots[a].ord||99)-(slots[b].ord||99); }).forEach(function(k){
+      var sl=slots[k], cur=null;
+      if(k==='deduct'){ if(o.deduct_at) cur={name:(o.deduct_by_name||''), date:String(o.deduct_at).substring(0,10).replace(/-/g,'.')}; }
+      else cur = sigMap[k]||null;
+      var d = cur ? String(cur.date).replace(/\./g,'-') : biz;
+      rows += '<tr data-slot="'+k+'">'
+        + '<td><b>'+esc(sl.label)+'</b></td>'
+        + '<td class="bf-sig-cell">'+(cur?EGStamp.stamp(cur.name,cur.date):'<span class="text-muted">（未簽）</span>')+'</td>'
+        + '<td>'+bfPicker('', 'user', '')+'</td>'
+        + '<td><input type="date" class="form-control input-sm bf-date" value="'+esc(d)+'" style="width:142px;"></td>'
+        + '<td style="white-space:nowrap;">'
+        + '<button class="btn btn-warning btn-xs bf-sign"><i class="fa fa-pencil"></i> 代簽</button> '
+        + (cur?'<button class="btn btn-default btn-xs bf-clear">清除</button>':'')
+        + '</td></tr>';
+    });
+    // ── 代填欄位 ──
+    var st='<select class="form-control input-sm" id="bf-status">';
+    Object.keys(L.status).forEach(function(k){ st+='<option value="'+k+'"'+(o.status===k?' selected':'')+'>'+esc(L.status[k])+'</option>'; });
+    st+='</select>';
+    var rs='<select class="form-control input-sm" id="bf-result" style="width:auto;display:inline-block;">'
+      +'<option value=""'+(!o.result?' selected':'')+'>（尚未裁決）</option>'
+      +'<option value="close"'+(o.result==='close'?' selected':'')+'>結案</option>'
+      +'<option value="not_close"'+(o.result==='not_close'?' selected':'')+'>不可結案</option></select>';
+
+    var h='<div class="bf-panel"><div class="bf-head"><i class="fa fa-history"></i> 補資料模式（代填／代簽）'
+      + '<span class="bf-left">解鎖剩餘 <b id="bf-ttl">'+bfMMSS(perm.bf_ttl)+'</b></span>'
+      + '<button class="btn btn-default btn-xs" id="btn-bf-lock" style="margin-left:6px;">離開補資料模式</button>'
+      + '</div><div class="bf-body">'
+      + '<div class="bf-note">章面壓的是<b>當年紙本上那個人</b>的姓名與日期（不是您），所以不加代簽的「代」字；'
+      + '人員清單依<b>印章日期</b>回推當時在職者，當時在職、現已離職的人也選得到。'
+      + '章面時間會依表單順序自動排在同一天其他章之間，不會印出「總經理核准早於填表人」。'
+      + (o.resp_type==='maker' ? '<br>本單責任單位是廠商，三段回覆的章面依規則壓<b>廠商名稱</b>（與正式流程同一條規則）。' : '')
+      + '<br>表頭內容請按上方「修改」（解鎖後不受狀態限制）；三段內容直接在上面的區塊改完按「儲存代填內容（三段）」。</div>'
+      + '<table class="table table-bordered bf-t"><tbody>'
+      + '<tr><th>開立人員</th><td>'+bfPicker('bf-filler','post','#bf-fill-date')+'</td>'
+      +     '<th>填表日期</th><td><input type="date" class="form-control input-sm" id="bf-fill-date" value="'+esc(biz)+'" style="width:142px;"></td></tr>'
+      + '<tr><th>發現日期</th><td><input type="date" class="form-control input-sm" id="bf-found-date" value="'+esc(String(o.found_date||'').substring(0,10))+'" style="width:142px;"></td>'
+      +     '<th>回覆人</th><td>'+bfPicker('bf-assignee','user','#bf-fill-date')+'</td></tr>'
+      + '<tr><th>單據狀態</th><td>'+st+'</td>'
+      +     '<th>效果確認</th><td>'+rs+' 結案日期 <input type="date" class="form-control input-sm" id="bf-close-date" value="'
+      +     esc(String(o.close_date||'').substring(0,10))+'" style="width:142px;display:inline-block;"></td></tr>'
+      + '<tr><th>不可結案原因</th><td colspan="3"><input type="text" class="form-control input-sm" id="bf-not-reason" value="'
+      +     esc(o.not_close_reason||'')+'" placeholder="狀態為「不可結案」時必填"></td></tr>'
+      + '<tr><th>扣款金額</th><td><input type="number" step="any" min="0" class="form-control input-sm" id="bf-deduct-amt" value="'
+      +     esc(o.deduct_amount!=null?parseFloat(o.deduct_amount):'')+'" placeholder="0＝不扣款，留空＝未判定" style="width:160px;"></td>'
+      +     '<th>扣款備註</th><td><input type="text" class="form-control input-sm" id="bf-deduct-note" value="'+esc(o.deduct_note||'')+'"></td></tr>'
+      + '</tbody></table>'
+      + '<div style="margin-bottom:10px;"><button class="btn btn-warning btn-sm" id="btn-bf-save"><i class="fa fa-save"></i> 儲存代填欄位</button> '
+      + '<span class="text-muted" id="bf-save-msg" style="font-size:12px;"></span></div>'
+      + '<table class="table table-bordered bf-t"><thead><tr>'
+      + '<th>章格</th><th>目前章</th><th>代簽人員</th><th>印章日期</th><th>動作</th></tr></thead><tbody>'+rows+'</tbody></table>'
+      + '</div></div>';
+    return h;
+  }
+
+  // 面板上的事件與下拉初始化（openView 每次重畫後呼叫；元素都是新的，不會累積 handler）
+  function bfBind(id, o, perm, sigMap){
+    sigMap = sigMap||{};
+    if(perm.can_backfill && !perm.bf_on){
+      $('#btn-bf-unlock').on('click', function(){ bfAskUnlock(id, o.car_no); });
+      return;
+    }
+    if(!perm.bf_on) return;
+
+    // 解鎖剩餘時間倒數（逾時就地提示，避免按下去才被後端擋）
+    if(BF.timer){ clearInterval(BF.timer); BF.timer=null; }
+    var left = parseInt(perm.bf_ttl,10)||0;
+    BF.timer = setInterval(function(){
+      if(!$('#bf-ttl').length){ clearInterval(BF.timer); BF.timer=null; return; }
+      left--; $('#bf-ttl').text(bfMMSS(left));
+      if(left<=0){ clearInterval(BF.timer); BF.timer=null; $('#bf-ttl').text('已逾時，請重新解鎖'); }
+    }, 1000);
+
+    // 人員下拉：各自依自己的參照日期載入
+    $('#view-body .bf-person').each(function(){
+      var $s=$(this), init='';
+      if($s.hasClass('bf-filler') && o.created_by) init = o.created_by+':'+(o.opener_dept_id||0)+':'+(o.opener_position_id||0);
+      else if($s.hasClass('bf-assignee') && o.assigned_to) init = String(o.assigned_to);
+      else { var k=$s.closest('tr').data('slot');
+             var sb = (k==='deduct') ? o.deduct_by : ((sigMap[k]||{}).by||0);
+             if(sb) init = String(sb); }
+      bfSyncSelect($s, init);
+    });
+    $('#view-body').find('.bf-pfilter').on('input', function(){
+      bfSyncSelect($(this).closest('.bf-pwrap').find('.bf-person'));
+    });
+    $('#view-body').find('.bf-date').on('change', function(){
+      bfSyncSelect($(this).closest('tr').find('.bf-person'));
+    });
+    $('#bf-fill-date').on('change', function(){ $('#view-body').find('.bf-filler,.bf-assignee').each(function(){ bfSyncSelect($(this)); }); });
+
+    // 狀態 ↔ 效果確認 互相連動：畫面上不可能送出「結案了但狀態還停在填寫中」這種矛盾組合
+    // （後端以「單據狀態」為權威欄位，這裡把兩個下拉維持一致，避免使用者以為改了效果確認卻沒生效）
+    $('#bf-result').on('change', function(){
+      var v=$(this).val();
+      if(v==='close')      $('#bf-status').val('closed');
+      else if(v==='not_close') $('#bf-status').val('rejected');
+      else if(['closed','rejected'].indexOf($('#bf-status').val())>=0) $('#bf-status').val('replying');
+    });
+    $('#bf-status').on('change', function(){
+      var v=$(this).val();
+      $('#bf-result').val(v==='closed' ? 'close' : (v==='rejected' ? 'not_close' : ''));
+    });
+
+    $('#btn-bf-lock').on('click', function(){
+      api('bf_lock',{car_id:id}).done(function(r){ alert((r&&r.message)||'已離開補資料模式'); openView(id); });
+    });
+
+    // 代簽 / 清除
+    $('#view-body').find('.bf-sign').on('click', function(){
+      var $tr=$(this).closest('tr'), slot=$tr.data('slot');
+      var who=$tr.find('.bf-person').val()||'', d=$tr.find('.bf-date').val()||'';
+      if(!who){ alert('請先選擇代簽人員'); return; }
+      if(!d){ alert('請選擇印章日期'); return; }
+      var nm=$tr.find('.bf-person option:selected').text();
+      if(!confirm('確定以「'+nm+'」代簽「'+$tr.find('td:first b').text()+'」，章面日期 '+d.replace(/-/g,'.')+'？')) return;
+      api('bf_sign',{car_id:id, slot:slot, user_id:who, date:d}).done(function(r){
+        alert((r&&r.message)||''); if(r&&r.success){ openView(id); fetchPage(state.page); }
+      }).fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'代簽失敗'); });
+    });
+    $('#view-body').find('.bf-clear').on('click', function(){
+      var $tr=$(this).closest('tr'), slot=$tr.data('slot');
+      if(!confirm('確定清除「'+$tr.find('td:first b').text()+'」的簽章？該格會回到未簽狀態。')) return;
+      api('bf_sign',{car_id:id, slot:slot, clear:1}).done(function(r){
+        alert((r&&r.message)||''); if(r&&r.success){ openView(id); fetchPage(state.page); }
+      }).fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'清除失敗'); });
+    });
+
+    // 代填欄位
+    $('#btn-bf-save').on('click', function(){
+      var p = { car_id:id,
+        filler: $('#view-body').find('.bf-filler').val()||'',
+        fill_date: $('#bf-fill-date').val()||'',
+        found_date: $('#bf-found-date').val()||'',
+        assigned_to: $('#view-body').find('.bf-assignee').val()||'',
+        status: $('#bf-status').val()||'',
+        result: $('#bf-result').val()||'',
+        close_date: $('#bf-close-date').val()||'',
+        not_close_reason: $('#bf-not-reason').val()||'',
+        deduct_amount: $('#bf-deduct-amt').val(),
+        deduct_note: $('#bf-deduct-note').val()||'' };
+      if(!p.filler){ alert('請選擇開立人員'); return; }
+      if(!p.fill_date){ alert('請填寫填表日期'); return; }
+      if((p.status==='closed'||p.result==='close') && !p.close_date){ alert('結案時「結案日期」為必填'); return; }
+      if((p.status==='rejected'||p.result==='not_close') && !p.not_close_reason.trim()){ alert('不可結案時「不可結案原因」為必填'); return; }
+      $('#bf-save-msg').text('儲存中…');
+      api('bf_save',p).done(function(r){
+        $('#bf-save-msg').text((r&&r.message)||'');
+        if(r&&r.success){ openView(id); fetchPage(state.page); }
+      }).fail(function(xhr){ $('#bf-save-msg').text((xhr.responseJSON&&xhr.responseJSON.message)||'儲存失敗'); });
+    });
   }
 
   // ---------- 列印 / CSV / 統計 ----------
@@ -1434,7 +1853,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     ['car_assign','指派回覆人（主管）'],
     ['car_reply','回覆填寫（被指派者）'],
     ['car_sign_primary','首要決策者簽核'],
-    ['car_sign_final','最終決策者裁決']
+    ['car_sign_final','最終決策者裁決'],
+    ['car_backfill','補資料（代填單據／代簽圖章／調整簽章日期，另需操作確認密碼）']
   ];
   var curRole = null;
   function loadRoles(){

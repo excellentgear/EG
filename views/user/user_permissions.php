@@ -1428,7 +1428,7 @@ $_quotDepts = array_keys($_deptSet);
                         rs_of('qc'), rsu_of('qc'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('car', 'car', '異常矯正處理單', 'fa-wrench', '#16a085',
-                        '為每位使用者指派異常矯正處理單頁面的操作角色（檢閱、開立、修改、刪除、管理設定）。角色與功能定義請至 <strong>異常矯正處理單 → 設定（齒輪圖示）→ 權限設定（角色）</strong>。',
+                        '為每位使用者指派異常矯正處理單頁面的操作角色（檢閱、開立、修改、刪除、管理設定、<strong>補資料</strong>）。角色與功能定義請至 <strong>異常矯正處理單 → 設定（齒輪圖示）→ 權限設定（角色）</strong>。補資料（代填單據／代簽圖章／調整簽章日期）除了角色，執行時還要再輸入操作確認密碼。',
                         rs_of('car'), rsu_of('car'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('mdata', 'master_data', '主檔管理（附件 / 圖面查閱）', 'fa-database', '#d4761a',
