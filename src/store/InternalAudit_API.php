@@ -1059,6 +1059,7 @@ case 'check_item_del': {
     $st->execute([$kid]); $k = $st->fetch(PDO::FETCH_ASSOC);
     if (!$k) jerr('找不到這張查檢表', 404);
     if ((string)$k['status'] === 'done') jerr('這張查檢表已結案，要先取消結案才能增刪項目');
+    if ((string)$k['kind'] === 'as') jerr(IA_AS_READONLY_MSG);
     $st = $db->prepare("SELECT * FROM ia_check_item WHERE item_id=? AND check_id=?");
     $st->execute([$iid, $kid]); $it = $st->fetch(PDO::FETCH_ASSOC);
     if (!$it) jerr('找不到這個項目', 404);
@@ -1084,6 +1085,7 @@ case 'check_item_add': {
     $st->execute([$kid]); $k = $st->fetch(PDO::FETCH_ASSOC);
     if (!$k) jerr('找不到這張查檢表', 404);
     if ((string)$k['status'] === 'done') jerr('這張查檢表已結案，要先取消結案才能增刪項目');
+    if ((string)$k['kind'] === 'as') jerr(IA_AS_READONLY_MSG);
     $pick = json_decode((string)($_POST['pick'] ?? '[]'), true);
     $pick = is_array($pick) ? array_values(array_filter(array_map('intval', $pick))) : [];
     if (!$pick) jerr('請至少勾選一個要加入的項目');
@@ -1119,6 +1121,65 @@ case 'check_item_add': {
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('加入失敗：' . $e->getMessage(), 500); }
     jout(['added' => $added, 'skipped' => $skipped]);
+}
+
+case 'check_as_reapply': {
+    /* AS稽核查檢表「重新自動判定」（2026-09-22）。
+       內容改成全自動唯讀之後，這是唯一能更新判定的路：**先把整張表的判定與所見證據清空，
+       再依這次勾選的來源重算**——不清空的話上一次的結果會留在這次沒查到的那幾條上，
+       畫面上看起來像有判定、其實是別次稽核的結果（而且人工又改不掉）。
+       來源與 check_create 用同一支 ia_as_apply_system_result()，判定規則不會有第二套。 */
+    iaReqAudit($perms);
+    $kid = (int)($_POST['check_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM ia_check WHERE check_id=? AND COALESCE(is_deleted,0)=0");
+    $st->execute([$kid]); $k = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$k) jerr('找不到這張查檢表', 404);
+    if ((string)$k['kind'] !== 'as') jerr('只有 AS稽核查檢表才需要自動判定');
+    if ((string)$k['status'] === 'done' && empty($perms['canAdmin']))
+        jerr('這張查檢表已結案，需內稽管理員才能重新判定');
+
+    $srcIds = json_decode((string)($_POST['src_check_ids'] ?? '[]'), true);
+    $srcIds = is_array($srcIds) ? array_values(array_unique(array_filter(array_map('intval', $srcIds)))) : [];
+    if (!$srcIds) jerr('請至少勾選一張系統稽核紀錄表當判定來源');
+    $in = implode(',', array_fill(0, count($srcIds), '?'));
+    $q = $db->prepare("SELECT check_id, kind, year FROM ia_check
+                        WHERE check_id IN ($in) AND COALESCE(is_deleted,0)=0");
+    $q->execute($srcIds);
+    $got = $q->fetchAll(PDO::FETCH_ASSOC);
+    if (count($got) !== count($srcIds)) jerr('有來源查檢表不存在或已刪除');
+    foreach ($got as $g) {
+        if ((string)$g['kind'] !== 'system') jerr('來源必須是系統稽核紀錄表');
+        if ((int)$g['year'] !== (int)$k['year'])
+            jerr('來源查檢表必須與本表同一個年度（' . (int)$k['year'] . ' 年度）');
+    }
+
+    /* 已經開過不符合通知單的那幾列一律原樣保留（那張 IA 單是真的存在的稽核紀錄，
+       把判定清成空白或改成合格，會讓那張單掛在一條「沒有不合格」的要求上）。
+       **清空時排除它們還不夠**——ia_as_apply_system_result() 是共用實作，
+       只要新來源剛好也對到這一條就會把它覆寫掉，所以先存一份、重算完再寫回去。
+       （開 IA 單的路已經封掉，這只會發生在改版前留下的舊資料上。） */
+    $q = $db->prepare("SELECT item_id, result, evidence FROM ia_check_item
+                        WHERE check_id=? AND is_header=0 AND COALESCE(nc_id,0)>0");
+    $q->execute([$kid]);
+    $keep = $q->fetchAll(PDO::FETCH_ASSOC);
+
+    $db->beginTransaction();
+    try {
+        $db->prepare("UPDATE ia_check_item SET result=NULL, evidence=NULL
+                       WHERE check_id=? AND is_header=0 AND ref_kind='as_clause'
+                         AND COALESCE(nc_id,0)=0")->execute([$kid]);
+        $applied = ia_as_apply_system_result($db, $kid, $srcIds);
+        if ($keep) {
+            $rb = $db->prepare("UPDATE ia_check_item SET result=?, evidence=? WHERE item_id=? AND check_id=?");
+            foreach ($keep as $r) $rb->execute([$r['result'], $r['evidence'], (int)$r['item_id'], $kid]);
+        }
+        $db->prepare("UPDATE ia_check SET updated_at=NOW() WHERE check_id=?")->execute([$kid]);
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        jerr('重新判定失敗：' . $e->getMessage(), 500);
+    }
+    jout(['applied' => $applied]);
 }
 
 case 'check_get': {
@@ -1292,6 +1353,11 @@ case 'check_save_items': {
 
     $items = json_decode((string)($_POST['items'] ?? '[]'), true);
     if (!is_array($items)) jerr('格式錯誤');
+    /* AS稽核查檢表的內容一律唯讀（2026-09-22 使用者要求，見 IA_AS_READONLY_MSG）：
+       前端已經把欄位反灰、也不送 items，這裡**直接把送進來的 items 丟掉**再做一次防線——
+       只擋前端＝直打 API 就能改掉系統自動判定的結果，而且完全看不出來。
+       表頭（標題／稽核日期／稽核人）不在唯讀範圍內，那是這張表自己的資料、簽章與列印都要用。 */
+    if ((string)$k['kind'] === 'as') $items = [];
 
     /* 稽核人事後可改（2026-09-17 使用者要求；製表人 2026-09-14 就開放了，稽核人一直只有建檔當下決定，
        補歷史紙本或換人接手時只能眼睜睜看著印錯人）。
@@ -1402,7 +1468,10 @@ case 'check_done': {
     $st->execute([$kid]);
     $k = $st->fetch(PDO::FETCH_ASSOC);
     if (!$k) jerr('找不到這張查檢表', 404);
-    if ($to === 'done') {
+    /* 「每一項都要判定過才能結案」刻意**不套用在 AS稽核查檢表**（2026-09-22 使用者要求）：
+       那張表的判定是系統從系統稽核紀錄表帶過來的，一條要求底下列到的表單這次沒有查到時
+       本來就該留白（不可以亂猜成合格），而人工又不能填——套這條規則等於永遠結不了案。 */
+    if ($to === 'done' && (string)$k['kind'] !== 'as') {
         $q = $db->prepare("SELECT COUNT(*) FROM ia_check_item WHERE check_id=? AND is_header=0
                             AND (result IS NULL OR result='')");
         $q->execute([$kid]);
@@ -1714,6 +1783,11 @@ case 'nc_create': {
     }
     $srcItem = iaInt($_POST['src_item_id'] ?? '');
     $srcKind = (string)($_POST['src_kind'] ?? '');
+    /* AS稽核查檢表不開不符合通知單（2026-09-22 使用者要求）：那張表的不合格是從
+       **系統稽核紀錄表**帶過來的，單要在那邊開才連得回真正查到問題的那一份表單；
+       在 AS 這邊再開一張，同一件事會變成兩張單、而且違反條文與相關表單都對不起來。 */
+    if ($srcKind === 'as')
+        jerr('AS稽核查檢表不開立不符合通知單，請到該筆不合格對應的「系統稽核紀錄表」開單。');
     $srcCode = mb_substr(trim((string)($_POST['src_code'] ?? '')), 0, 30);
     /* 資料稽核開過來的單要防重複（鐵律8：前端擋一次、這裡同規則再擋一次）。
        鍵是「訂單＋檢核項目」三件一組——同一張訂單的「無報價單」與「出貨早於訂單」是兩張單，

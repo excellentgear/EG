@@ -467,7 +467,7 @@ $roleLabel = ia_role_label($perms);
                 <button id="btnCheckNew" class="btn-warm"><i class="fa fa-plus"></i> 建立查檢表</button>
                 <?php endif; ?>
             </div>
-            <div class="ia-hint">先選<b>種類</b>，畫面才會長出該種類要填的欄位與挑題方式：<b>AS稽核查檢表</b>帶 AS9100 條文題庫、<b>系統稽核紀錄表</b>帶 AS 表單編號與名稱、<b>績效執行稽核查檢表</b>自動帶去年整年的 KPI 與達成與否。前兩種的<b>左欄標籤（部門／作業項目）只是把中間清單聚焦</b>，<b>不會自動勾選</b>；勾好的一律列在<b>最右側「已選擇」欄</b>，取消標籤不會把它們清掉。判定「不合格」的開<b>內稽不符合通知單</b>、「沒達成」的開<b>異常矯正處理單</b>。</div>
+            <div class="ia-hint">先選<b>種類</b>，畫面才會長出該種類要填的欄位與挑題方式：<b>AS稽核查檢表</b>帶 AS9100 條文題庫、<b>系統稽核紀錄表</b>帶 AS 表單編號與名稱、<b>績效執行稽核查檢表</b>自動帶去年整年的 KPI 與達成與否。前兩種的<b>左欄標籤（部門／作業項目）只是把中間清單聚焦</b>，<b>不會自動勾選</b>；勾好的一律列在<b>最右側「已選擇」欄</b>，取消標籤不會把它們清掉。<b>系統稽核紀錄表</b>判定「不合格」的開<b>內稽不符合通知單</b>、<b>績效</b>「沒達成」的開<b>異常矯正處理單</b>；<b>AS稽核查檢表是全自動的</b>（內容唯讀、不在那張表開單，見使用說明）。</div>
             <!-- 能自動建立的就自動建立，人工才要填的地方主動提醒（2026-09-14 使用者要求） -->
             <div class="ia-hint" id="checkAutoHint" style="display:none;background:#FDF0DC;border-color:#F0A24B;"></div>
             <div class="ia-pager" id="checkPager"></div>
@@ -568,12 +568,26 @@ $roleLabel = ia_role_label($perms);
                     <li><b>系統稽核紀錄表（2-GM-06-06）</b>：稽核對象是「AS 表單」，建立跳窗的清單上<b>直接列表單編號與名稱</b>（品質管理系統要求改成滑鼠移上去才顯示，開不符合通知單時「違反條文」照樣自動帶入）。
                         <b>左欄挑部門</b>（依 AS 文件編號的部門代碼分類）只是把中間清單<b>聚焦</b>到該部門的表單，<b>不會自動勾選</b>；要整批勾請按<b>「全選」</b>（只動目前顯示的），或勾上<b>「點標籤時自動勾選底下的表單」</b>。
                         勾好的表單會列在<b>最右側「已選擇」欄</b>（編號／名稱／對應部門，可按 × 單筆取消）——<b>取消左欄的部門不會把已選的表單清掉</b>，所以可以一個部門一個部門挑完再一次建立。逐列選受稽人、判定合格／不合格。</li>
-                    <li><b>AS稽核查檢表（2-GM-06-04）</b>：題目＝AS9100 條文題庫，挑題方式與系統稽核紀錄表相同——<b>左側的作業項目標籤</b>（品管檢測／外包加工…）只負責把中間清單聚焦（已選的標籤下方會列出它掛在哪幾份文件表單），要勾請自己勾或按「全選」，已勾的列在最右側且不受標籤增減影響；
-                        也可以在「自動判定來源」選一張已填好的<b>系統稽核紀錄表</b>，建立時就依它自動判定合格／不合格，並在「所見證據或建議」列出是哪幾份表單不合格（含 IA 單號）方便比對。</li>
+                    <li><b>AS稽核查檢表（2-GM-06-04）＝全自動，內容一律不提供修改</b>（2026-09-22 起）：
+                        題目＝AS9100 條文題庫，挑題方式與系統稽核紀錄表相同——<b>左側的作業項目標籤</b>（品管檢測／外包加工…）只負責把中間清單聚焦（已選的標籤下方會列出它掛在哪幾份文件表單），要勾請自己勾或按「全選」，已勾的列在最右側且不受標籤增減影響；
+                        在「自動判定來源」勾已填好的<b>系統稽核紀錄表</b>（可複選），建立時就依它自動判定合格／不合格，並在「所見證據或建議」列出是哪幾份表單不合格（含 IA 單號）方便比對。
+                        <ul>
+                          <li><b>合格／不合格、所見證據或建議、備註四個欄位一律反灰</b>，由系統帶入，不提供人工填寫或修改；
+                              也<b>不提供新增項目與刪除列</b>（要查哪幾條是建立當下決定的）。</li>
+                          <li><b>可以留白</b>：一條要求底下列到的表單這次沒有查到時就<b>留白不判定</b>（不會亂猜成合格），
+                              而且<b>不影響結案</b>——這是三種查檢表裡唯一不要求「每一項都判定過」的。</li>
+                          <li><b>不在這張表開不符合通知單</b>：不合格是從系統稽核紀錄表帶過來的，
+                              單要回到<b>那一張</b>去開（那邊才連得回真正查到問題的表單與違反條文），
+                              在這裡再開一張會變成同一件事兩張單。已經開過的 IA 編號在備註欄照樣看得到、點得進去。</li>
+                          <li><b>判定要更新</b>就開啟該表按下方「<b>重新自動判定</b>」，重新勾一次來源的系統稽核紀錄表——
+                              建立當下系統稽核紀錄表還沒填好而整張留白時，就是用這顆按鈕補上。
+                              重算會<b>覆蓋</b>原本的判定與所見證據（已開過 IA 單的那幾列保留不動）。</li>
+                        </ul></li>
                     <li><b>績效執行稽核查檢表（2-GM-06-03）</b>：稽核<b>去年一整年</b>的 KPI（2026 年建立＝稽核 2025 年度），<b>不分上下半年</b>。部門、指標、目標、受稽人（KPI 頁面設定的<b>擔當者</b>，兼任者取該指標登記部門的職稱）與<b>達成／沒達成全部自動判定</b>——該年度只要有<b>任一次</b>未達標就算沒達成。您只要確認建立日期與要查哪幾項。</li>
                 </ul>
-                判「不合格」的列按「開不符合單」、績效「沒達成」的列按「開矯正單」；表格上方會統計還有幾件沒開單，下方「<b>一鍵開立</b>」可一次全部開完。
-                <b>建好之後還可以增刪項目</b>（限結案前）：下方「<b>新增項目</b>」從題庫補上漏掉的（已經有的不會重複列出），
+                判「不合格」的列按「開不符合單」、績效「沒達成」的列按「開矯正單」；表格上方會統計還有幾件沒開單，下方「<b>一鍵開立</b>」可一次全部開完
+                （<b>AS稽核查檢表沒有這兩顆</b>，見上）。
+                <b>建好之後還可以增刪項目</b>（限結案前、<b>AS稽核查檢表除外</b>）：下方「<b>新增項目</b>」從題庫補上漏掉的（已經有的不會重複列出），
                 每一列最後面的垃圾桶可以刪掉那一列——<b>已經開過不符合通知單／矯正單的那一列不給刪</b>（刪了那張單會變成孤兒）。
                 <b>受稽人不可以是稽核人本人</b>，選到當下就會退回（自己稽核自己等於沒有稽核）。
                 <b>列印版的大標題是「種類名稱」</b>（系統稽核紀錄表／AS稽核查檢表／績效執行稽核查檢表），次別與日期印在標題下那一列。
@@ -731,7 +745,8 @@ $roleLabel = ia_role_label($perms);
             <li><b>製表人可以改</b>（2026-09-14 起，限內稽管理員）：<b>年度計畫</b>（表格下方）、<b>稽核通知單</b>（基本資料區）、<b>稽核報告表</b>（補充文字下方）三張都有「製表人／製表日期」，
                 改完存檔，<b>列印版的製表圖章會跟著換</b>。原本的製表人已離職時仍會留在下拉選項裡（標「已離職／非在職」），不會因為開來存個檔就被洗掉。</li>
             <li><b>到期提醒</b>：期限前 N 天（預設 7 天，可在「設定」改）與逾期後，每天最多發一則通知給受稽單位主管與受審核人。提醒是有人用到這個模組時順便檢查，不是背景排程。</li>
-            <li><b>查檢表結案前必須每一項都判定過</b>合格／不合格，否則不讓結案（避免漏查）。</li>
+            <li><b>查檢表結案前必須每一項都判定過</b>合格／不合格，否則不讓結案（避免漏查）。
+                <b>唯一例外是 AS稽核查檢表</b>——它的判定是系統帶的、人工也填不了，這次沒查到的那幾條本來就該留白。</li>
             <li><b>建錯的稽核通知單怎麼刪</b>（2026-09-11 起）：<b>內稽管理員</b>可以刪除<b>尚未結案</b>的通知單——清單操作欄的垃圾桶圖示，或開啟後按下方的「刪除」。兩個限制：<b>已結案的不給刪</b>（要刪請先把狀態改回「執行中」）、<b>底下還有不符合通知單的不給刪</b>（那些 IA 單會變孤兒、仍留在清單與稽核報告表裡，請先到「不符合通知單」分頁處理或刪除）。刪除會<b>連同底下的查檢表一起刪</b>（含已填好的結果），年度計畫表上這一次稽核的 ◎ 也會一併消失；<b>已建立的會議紀錄不會被刪除</b>，那是會議紀錄模組自己的資料，請自行過去處理。</li>
             <li><b>條文題庫刪不掉</b>：已經被既有查檢表引用的 AS 條文按刪除會自動改成「停用」（不再出現在新建的查檢表），舊表內容不受影響。</li>
             <li><b>作業項目：看不懂條文在查什麼的解法</b>（2026-09-11 起）。AS 條文是原文（「8.4 外部提供的過程、產品和服務的控制」），看不出實務上對應公司哪一段作業，所以加了一層白話的<b>作業項目</b>：
@@ -1047,7 +1062,9 @@ $roleLabel = ia_role_label($perms);
                  <div style="font-size:12px;color:#8a6d45;margin-top:3px;">勾選已經填好的<b>系統稽核紀錄表</b>（<b>可複選同一次稽核的好幾張</b>），
                  建立時會自動把合格／不合格判定過來，並在「所見證據或建議」列出是哪幾份表單不合格。
                  <b>只列本年度的</b>；勾了之後上面的「建立（稽核）日期」會自動跟著改成來源的稽核日期。
-                 同一份表單在好幾張裡都出現時<b>以不合格優先</b>。</div></div>
+                 同一份表單在好幾張裡都出現時<b>以不合格優先</b>。
+                 <br><b style="color:#C4442D;">AS稽核查檢表建立之後內容一律唯讀</b>（合格／不合格、所見證據或建議、備註全部由系統帶入），
+                 判定要更新請開啟該表按「重新自動判定」；<b>沒查到的那幾條留白即可，不影響結案</b>。</div></div>
             <label>標題</label><div><input type="text" id="nkTitle" placeholder="留空＝用種類名稱"></div>
         </div>
         <div style="margin-top:10px;" class="nk-split">
@@ -1108,6 +1125,7 @@ $roleLabel = ia_role_label($perms);
     <div class="ia-mfoot">
         <button data-close>關閉</button>
         <button id="btnCheckAddItem"><i class="fa fa-plus"></i> 新增項目</button>
+        <button id="btnCheckAsReapply" style="display:none;"><i class="fa fa-refresh"></i> 重新自動判定</button>
         <button id="btnCheckPrint"><i class="fa fa-print"></i> 列印</button>
         <button id="btnCheckAuto" class="btn-warm"><i class="fa fa-magic"></i> 一鍵開立</button>
         <button id="btnCheckReopen">取消結案</button>
@@ -1133,6 +1151,25 @@ $roleLabel = ia_role_label($perms);
     </div>
     <div class="ia-mfoot"><button data-close>取消</button>
         <button id="btnCkAddGo" class="btn-warm">加入</button></div>
+</div></div>
+
+<!-- ============================ AS稽核查檢表：重新自動判定（2026-09-22 使用者要求） ============================
+     內容改成全自動唯讀之後，這是唯一能更新判定的路（原本只有建立當下能帶一次，
+     若那時系統稽核紀錄表還沒填好，這張表就會永遠留白而且人工也改不了）。 -->
+<div class="ia-mask" id="ckReapplyMask"><div class="ia-modal">
+    <div class="ia-mhead"><h4><i class="fa fa-refresh"></i> 重新自動判定</h4><span class="x" data-close>&times;</span></div>
+    <div class="ia-mbody">
+        <div class="ia-hint">勾選已經填好的<b>系統稽核紀錄表</b>（<b>可複選同一次稽核的好幾張</b>），
+            系統會依「一條要求底下列到哪些表單」重新判定合格／不合格，並在「所見證據或建議」列出是哪幾份表單不合格。
+            <br><b>只列本表同一個年度的</b>；同一份表單在好幾張裡都出現時<b>以不合格優先</b>；
+            一份都沒查到的那一條<b>留白不判定</b>（不會亂猜成合格）。
+            <br><b style="color:#C4442D;">這張表原本的判定與所見證據會被這次勾選的來源覆蓋</b>——
+            已經開過不符合通知單的那幾列例外，一律保留不動。</div>
+        <div id="ckReSrcList" style="max-height:44vh;overflow:auto;border:1px solid #E8D5B5;border-radius:6px;
+             background:#fff;padding:6px 10px;font-size:13px;"></div>
+    </div>
+    <div class="ia-mfoot"><button data-close>取消</button>
+        <button id="btnCkReapplyGo" class="btn-warm">依勾選的來源重新判定</button></div>
 </div></div>
 
 <!-- ============================ 稽核報告表：通知對象設定 ============================ -->
@@ -3157,7 +3194,10 @@ function renderChecks(){
           + '<td>'+dispDate(r.check_date)+'</td>'
           + '<td>'+esc(r.item_cnt)+'</td>'
           + '<td>'+(+r.ng_cnt ? '<b style="color:#C4442D;">'+esc(r.ng_cnt)+'</b>' : '0')+'</td>'
-          + '<td>'+(+r.todo_cnt ? '<b style="color:#d98a33;">'+esc(r.todo_cnt)+'</b>' : '0')+'</td>'
+          /* AS稽核查檢表的「未判定」是正常的（那一條要求列到的表單這次沒有查到就該留白，
+             人工也不能填、更不影響結案），所以不標成待辦的橘色，只印數字 */
+          + '<td>'+(+r.todo_cnt ? (r.kind==='as' ? esc(r.todo_cnt)
+                   : '<b style="color:#d98a33;">'+esc(r.todo_cnt)+'</b>') : '0')+'</td>'
           + '<td><span class="st st-'+(r.status==='done'?'done':'draft')+'">'+(r.status==='done'?'已結案':'填寫中')+'</span></td>'
           + '<td><span class="ia-op" onclick="openCheck('+r.check_id+')"><i class="fa fa-edit"></i> 開啟</span>'
           + '<span class="ia-op" onclick="printCheck('+r.check_id+')"><i class="fa fa-print"></i></span>'
@@ -3187,7 +3227,9 @@ function renderCheckAutoHint(){
         msgs.push('已經有填好的<b>系統稽核紀錄表</b>，可直接建立 <b>AS稽核查檢表</b>並自動判定合格／不合格。'
             + '<span class="ia-op" onclick="autoNewCheck(\'as\')"><i class="fa fa-magic"></i> 依系統稽核紀錄表建立</span>');
     }
-    var pend = all.filter(function(r){ return +r.ng_cnt > 0; }).length;
+    /* AS稽核查檢表不算在這條提示裡：它不開不符合通知單（單要在系統稽核紀錄表那一張開），
+       算進來會變成「叫人去一張沒有開單鈕的表按一鍵開立」。 */
+    var pend = all.filter(function(r){ return +r.ng_cnt > 0 && r.kind !== 'as'; }).length;
     if (pend) msgs.push('有 '+pend+' 張查檢表判定出不合格／沒達成的項目，開啟後可用「一鍵開立」批次開單。');
     $('#checkAutoHint').toggle(msgs.length>0).html(msgs.join('<br>'));
 }
@@ -3247,7 +3289,9 @@ $('#btnCheckNew').on('click', function(){
 });
 /* 先選種類，畫面再依種類長出對應的選項（2026-09-14 使用者要求）。 */
 var NK_KIND_HINT = {
-    as:     'AS稽核查檢表：題目＝AS9100 條文題庫。左欄的「作業項目」只是把中間清單聚焦到相關條文（不會自動勾選），勾好的會列在最右側；也可以指定一張已填好的系統稽核紀錄表，建立時自動判定合格／不合格。',
+    as:     'AS稽核查檢表：題目＝AS9100 條文題庫。左欄的「作業項目」只是把中間清單聚焦到相關條文（不會自動勾選），勾好的會列在最右側。'
+          + '本表建立之後【內容一律唯讀】——合格／不合格、所見證據或建議、備註全部由下面勾的「系統稽核紀錄表」自動帶入，'
+          + '不提供人工填寫，也不在這張表開不符合通知單（要開請回到系統稽核紀錄表）。沒查到的那幾條會留白，不影響結案。',
     system: '系統稽核紀錄表：稽核對象是「AS 表單」，清單上直接列表單編號與名稱。左欄挑部門＝把中間清單聚焦到該部門的表單（不會自動勾選），逐張勾或按「全選」；已選的表單列在最右側，取消部門不會把它們清掉。',
     kpi:    '績效執行稽核查檢表：稽核「去年一整年」的 KPI。部門／指標／目標／受稽人（擔當者）與達成／沒達成全部自動帶入，您只要確認建立日期與要查哪幾項。'
 };
@@ -3420,8 +3464,9 @@ function loadSrcChecks(){
     $.getJSON(API, {action:'check_list', kind:'system', year:YEAR}, function(res){
         var rows = res.rows || [];
         if (!rows.length) {
-            $('#nkSrcList').html('<span style="color:#a08356;">'+YEAR+' 年度還沒有系統稽核紀錄表，'
-                + '建立後才能自動判定（現在建立的話合格／不合格要自己填）。</span>');
+            $('#nkSrcList').html('<span style="color:#C4442D;">'+YEAR+' 年度還沒有系統稽核紀錄表。'
+                + 'AS稽核查檢表的合格／不合格<b>只能由系統自動帶入、不提供人工填寫</b>，'
+                + '所以現在建立會整張留白——等那一張填好之後，再用本表的「重新自動判定」補上。</span>');
             return;
         }
         $('#nkSrcList').html(rows.map(function(r){
@@ -3808,8 +3853,10 @@ $('#btnCheckCreate').on('click', function(){
         if (!res.ok) { alert(res.error||'建立失敗'); return; }
         closeMask('checkNewMask');
         if (res.applied) {
-            alert('已依系統稽核紀錄表自動判定：不合格 '+res.applied.ng+' 條、合格 '+res.applied.ok+' 條、'
-                + '未判定 '+res.applied.skip+' 條（未判定＝這一條列的表單這次沒有查到，請自行填寫）。');
+            /* 2026-09-22：AS稽核查檢表的內容改成一律唯讀，「請自行填寫」這句已經不成立
+               （人工填不了），未判定就是留白、不影響結案。 */
+            iaToast('已依系統稽核紀錄表自動判定：不合格 '+res.applied.ng+' 條、合格 '+res.applied.ok+' 條、'
+                + '未判定 '+res.applied.skip+' 條（未判定＝這一條列到的表單這次沒有查到，留白即可）。', 6500);
         }
         loadChecks(); openCheck(res.check_id);
     }, 'json');
@@ -3842,7 +3889,12 @@ function openCheck(id){
         $('#ckDate').prop('readonly', ro);
         $('#ckTitleInput').prop('readonly', ro || !!autoTitle);
         $('#ckAuditor').prop('disabled', ro);
-        $('#btnCheckSave,#btnCheckDone,#btnCheckAddItem').toggle(!ro);
+        /* AS稽核查檢表的內容是系統自動帶的：不給補加項目（題目在建立當下決定），
+           改用「重新自動判定」重新選一次來源。可用條件與後端 can_edit 同一條（鐵律8）。 */
+        var asLock = (CHK.kind === 'as');
+        $('#btnCheckSave,#btnCheckDone').toggle(!ro);
+        $('#btnCheckAddItem').toggle(!ro && !asLock);
+        $('#btnCheckAsReapply').toggle(asLock && !ro);
         $('#btnCheckReopen').toggle(CHK.status==='done' && <?= $perms['canAdmin'] ? 'true' : 'false' ?>);
         renderCheckItems();
         renderCheckAutoBar(ro);
@@ -3902,6 +3954,11 @@ var CK_HEADS = {
 };
 function renderCheckItems(){
     var k = CHK.kind, ro = !CHK.can_edit;
+    /* AS稽核查檢表＝全自動、內容一律唯讀（2026-09-22 使用者要求）：
+       合格／不合格、所見證據或建議、備註一律由系統依「系統稽核紀錄表」帶入，欄位直接反灰，
+       也不提供增列／刪列。要更新判定請按「重新自動判定」重新選一次來源（後端同規則再擋一次＝鐵律8）。 */
+    var lock = (k === 'as'), fro = ro || lock;
+    var lockCss = fro ? 'background:#f5efe4;color:#6b5535;cursor:default;' : '';
     $('#ckHead').html('<tr>'+CK_HEADS[k].map(function(t){ return '<th>'+esc(t)+'</th>'; }).join('')+'</tr>');
     var h = '', n = 0;
     (CHK.items||[]).forEach(function(it){
@@ -3911,11 +3968,12 @@ function renderCheckItems(){
         }
         n++;
         var okChk = '<input type="radio" name="r'+it.item_id+'" class="ckR" data-id="'+it.item_id+'" value="ok"'
-                  + (it.result==='ok'?' checked':'')+(ro?' disabled':'')+'>';
+                  + (it.result==='ok'?' checked':'')+(fro?' disabled':'')+'>';
         var ngChk = '<input type="radio" name="r'+it.item_id+'" class="ckR" data-id="'+it.item_id+'" value="ng"'
-                  + (it.result==='ng'?' checked':'')+(ro?' disabled':'')+'>';
+                  + (it.result==='ng'?' checked':'')+(fro?' disabled':'')+'>';
         var remark = '<input type="text" class="ckF" data-id="'+it.item_id+'" data-f="remark" value="'+esc(it.remark||'')+'"'
-                   + (ro?' readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 4px;font-size:12px;">';
+                   + (fro?' readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;'
+                   + 'padding:2px 4px;font-size:12px;'+lockCss+'">';
         // 績效沒達成開的是「異常矯正處理單」（紙本備註欄本來就印 CAR 單號），不是 IA 單
         var ncBtn = ncBtnHtml(it, ro);
         h += '<tr>';
@@ -3926,7 +3984,8 @@ function renderCheckItems(){
               + '<td class="l" style="font-size:12px;color:#7a6444;">'+esc(it.col_b||'')+'</td>'
               + '<td>'+okChk+'</td><td>'+ngChk+'</td>'
               + '<td><input type="text" class="ckF" data-id="'+it.item_id+'" data-f="evidence" value="'+esc(it.evidence||'')+'"'
-              + (ro?' readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 4px;font-size:12px;"></td>'
+              + (fro?' readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;'
+              + 'padding:2px 4px;font-size:12px;'+lockCss+'"></td>'
               + '<td>'+remark+ncBtn+'</td>';
         } else if (k==='system') {
             h += '<td>'+n+'</td><td>'+esc(it.col_a)+'</td><td class="l">'+esc(it.col_b||'')+'</td>'
@@ -3943,7 +4002,8 @@ function renderCheckItems(){
               + '<td>'+okChk+'</td><td>'+ngChk+'</td><td>'+remark+ncBtn+'</td>';
         }
         // 結案前可以刪除某一列（已開過不符合通知單／矯正單的不給刪，那張單會變孤兒）
-        if (!ro && CAN_AUDIT && !it.nc_id && !it.car_id) {
+        // AS稽核查檢表整張表的內容都是系統帶的，連刪列都不給（題目要怎麼挑是建立當下決定的）
+        if (!fro && CAN_AUDIT && !it.nc_id && !it.car_id) {
             h = h.replace(/<\/td>$/, '<span class="ia-op danger" title="從這張查檢表刪除這一列"'
                 + ' onclick="delCheckItem(' + it.item_id + ',\'' + esc(String(it.col_b || it.col_a || '')).replace(/'/g, '') + '\')">'
                 + '<i class="fa fa-trash"></i></span></td>');
@@ -3981,6 +4041,10 @@ function ncBtnHtml(it, ro){
         return '';
     }
     if (it.nc_id) return '<span class="ia-op" onclick="openNc('+it.nc_id+')">'+esc(it.nc_no||'IA單')+'</span>';
+    /* AS稽核查檢表不開不符合通知單（2026-09-22 使用者要求）：那張表的不合格是從系統稽核紀錄表
+       帶過來的，單要在**那一張**開才連得回真正查到問題的表單與違反條文；在這裡再開一張，
+       同一件事會變成兩張單。已經有單號的仍然顯示得出來（點得進去看）。 */
+    if (k === 'as') return '';
     if (it.result==='ng' && !ro && CAN_AUDIT)
         return '<span class="ia-op" onclick="newNcFromItem('+it.item_id+')"><i class="fa fa-plus"></i> 開不符合單</span>';
     return '';
@@ -4005,6 +4069,19 @@ function renderCheckAutoBar(ro){
     if (k==='system') manual = items.filter(function(x){ return !x.col_c; });      // 受稽人沒填
     if (k==='kpi')    manual = items.filter(function(x){ return !x.col_d || !x.result; });
     var msg = [];
+    /* AS稽核查檢表：欄位全部反灰、不開不符合通知單，所以「還有幾項沒判定」「快去開單」這兩句
+       在這裡都是誤導（人工什麼都做不了）。改成講清楚判定是哪裡來的、留白代表什麼、單要去哪開。 */
+    if (k === 'as') {
+        msg.push('本表<b>由系統依「系統稽核紀錄表」自動判定</b>：合格／不合格、所見證據或建議、備註'
+            + '一律自動帶入，<b>欄位反灰不提供修改</b>。要更新判定請按下方「重新自動判定」重新選來源。');
+        if (todo.length) msg.push('其中 <b>'+todo.length+'</b> 項<b>留白（未判定）</b>'
+            + '＝這一條要求列到的表單這次沒有查到，<b>留白即可、不影響結案</b>。');
+        if (ng.length) msg.push('判定不合格 <b style="color:#C4442D;">'+ng.length+'</b> 項——'
+            + '<b>不符合通知單請到對應的「系統稽核紀錄表」開立</b>（那一張才連得回真正查到問題的表單與違反條文）。');
+        $('#ckAutoBar').toggle(true).html(msg.join('<br>'));
+        $('#btnCheckAuto').hide();
+        return;
+    }
     if (pending.length) msg.push('<b style="color:#C4442D;">有 '+pending.length+' 項判定為'
         + (k==='kpi'?'沒達成但還沒開矯正單':'不合格但還沒開不符合通知單')+'</b>，可按下方「一鍵開立」一次處理。');
     if (todo.length)   msg.push('還有 '+todo.length+' 項沒有判定。');
@@ -4075,6 +4152,44 @@ $('#btnCkAddGo').on('click', function(){
         if (!res.ok) { alert(res.error||'加入失敗'); return; }
         closeMask('ckAddMask');
         iaToast('已加入 '+res.added+' 項'+(+res.skipped ? ('（略過 '+res.skipped+' 項已存在）') : ''));
+        openCheck(CHK.check_id); loadChecks();
+    }, 'json');
+});
+
+/* ==================== AS稽核查檢表：重新自動判定（2026-09-22 使用者要求） ====================
+   來源清單與建立查檢表時用的是**同一支 check_list(kind=system)**，不另外刻一份。
+   **一定要帶本表的年度**——不帶的話會把別年度的稽核結果混進來當證據，而且完全看不出來。 */
+$('#btnCheckAsReapply').on('click', function(){
+    if (!CHK || CHK.kind !== 'as') return;
+    $('#ckReSrcList').html('<div style="color:#a08356;">載入中…</div>');
+    openMask('ckReapplyMask');
+    $.getJSON(API, {action:'check_list', kind:'system', year:CHK.year}, function(res){
+        var rows = (res && res.rows) || [];
+        if (!rows.length) {
+            $('#ckReSrcList').html('<div style="color:#C4442D;">'+esc(String(CHK.year))
+                + ' 年度還沒有系統稽核紀錄表，先把那一張填好才有判定可以帶過來。</div>');
+            return;
+        }
+        $('#ckReSrcList').html(rows.map(function(r){
+            return '<label style="display:block;font-weight:normal;margin:3px 0;cursor:pointer;">'
+                 + '<input type="checkbox" class="ckReChk" data-eg-skip value="'+r.check_id+'" style="vertical-align:-1px;"> '
+                 + esc(dispDate(r.check_date)+'　'+(r.title||'系統稽核紀錄表')
+                       +'（'+r.item_cnt+' 項，不合格 '+r.ng_cnt+'）')
+                 + (r.status==='done' ? '' : ' <span style="color:#C4442D;font-size:12px;">（還在填寫中）</span>')
+                 + '</label>';
+        }).join(''));
+    }).fail(function(){ $('#ckReSrcList').html('<div style="color:#C4442D;">載入失敗</div>'); });
+});
+$('#btnCkReapplyGo').on('click', function(){
+    var pick = $('#ckReSrcList .ckReChk:checked').map(function(){ return +this.value; }).get();
+    if (!pick.length) { alert('請至少勾選一張系統稽核紀錄表當判定來源'); return; }
+    if (!confirm('要依勾選的 '+pick.length+' 張系統稽核紀錄表重新判定嗎？\n'
+               + '這張表原本的合格／不合格與所見證據會被覆蓋（已開過不符合通知單的那幾列保留不動）。')) return;
+    $.post(API, {action:'check_as_reapply', check_id:CHK.check_id, src_check_ids:JSON.stringify(pick)}, function(res){
+        if (!res.ok) { alert(res.error||'重新判定失敗'); return; }
+        closeMask('ckReapplyMask');
+        var a = res.applied || {};
+        iaToast('已重新判定：不合格 '+(+a.ng||0)+' 條、合格 '+(+a.ok||0)+' 條、未判定 '+(+a.skip||0)+' 條。', 6500);
         openCheck(CHK.check_id); loadChecks();
     }, 'json');
 });
@@ -4218,6 +4333,10 @@ function escortOptions(it){
     return h;
 }
 function collectCheckItems(){
+    /* AS稽核查檢表的內容一律不由畫面回送（2026-09-22 使用者要求）：欄位是反灰唯讀的，
+       這裡直接回空陣列＝存檔只會動表頭（標題／稽核日期／稽核人）。
+       **收斂在這一處**，不要在各個呼叫端各自判斷一次，否則遲早有一條路把自動判定蓋掉。 */
+    if (CHK && CHK.kind === 'as') return [];
     var map = {};
     $('#ckBody .ckF').each(function(){
         var id = $(this).data('id');
