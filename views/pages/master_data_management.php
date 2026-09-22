@@ -153,7 +153,7 @@ $db  = new DBConnection();
 $pdo = $db->getPDO();
 
 // ── Migration 版本鎖：版本符合時跳過所有 ALTER/CREATE，只跑一次 ──────────
-define('MDM_MIGRATION_VERSION', '20260904_01');   // 2026-09-04 齒輪類型去重（同名重複選項）＋皮帶輪規格模板改為「齒型-齒數」
+define('MDM_MIGRATION_VERSION', '20260922_01');   // 2026-09-22 客戶新增「英文全名」欄位（customer_full_en）
 $_mdm_skip_migration = false;
 try {
     // system_settings 可能尚不存在（第一次執行），用 try 保護
@@ -465,6 +465,10 @@ try {
     try { $pdo->exec("ALTER TABLE customer_list ADD COLUMN Modified_At     TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP"); } catch(Exception $e){}
     // ── 新增客戶擴充欄位 ──────────────────────────────────────────
     try { $pdo->exec("ALTER TABLE customer_list ADD COLUMN customer_full   VARCHAR(100) NULL DEFAULT NULL COMMENT '客戶全名（發票用）'"); } catch(Exception $e){}
+    try {
+        $colChk = $pdo->query("SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='customer_list' AND COLUMN_NAME='customer_full_en'")->fetchColumn();
+        if (!$colChk) $pdo->exec("ALTER TABLE customer_list ADD COLUMN customer_full_en VARCHAR(150) NULL DEFAULT NULL COMMENT '客戶英文全名（非必填）'");
+    } catch(Exception $e){}
     try {
         $colChk = $pdo->query("SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='customer_list' AND COLUMN_NAME='customer_grade'")->fetchColumn();
         if (!$colChk) $pdo->exec("ALTER TABLE customer_list ADD COLUMN customer_grade ENUM('S','A','B','C','D') NULL DEFAULT NULL COMMENT '客戶等級：S=最高級 A=優 B=良 C=普通 D=觀察'");
@@ -1134,7 +1138,7 @@ function _zh_field($f) {
     static $m = [
         'D_Setting_Id'=>'料號','Spec_No'=>'規格','Revision'=>'版次','Issue_Date'=>'發行日',
         'Type'=>'種類','Is_Assembly'=>'組合件','Customer_Id'=>'客戶','Remark'=>'備註',
-        'customer'=>'客戶簡稱','customer_full'=>'客戶全名','customer_tel'=>'電話','customer_fax'=>'傳真',
+        'customer'=>'客戶簡稱','customer_full'=>'客戶全名','customer_full_en'=>'客戶英文全名','customer_tel'=>'電話','customer_fax'=>'傳真',
         'customer_address'=>'地址','is_inactive'=>'停用狀態','customer_grade'=>'等級',
         'settlement_mode'=>'結帳方式','settlement_day'=>'結帳日',
         'maker_id'=>'廠商簡稱','maker_id_all'=>'廠商全名','m_tel'=>'電話','m_fax'=>'傳真',
@@ -2897,6 +2901,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $is_new          = intval($_POST['is_new'] ?? 0);
             $customer        = trim($_POST['customer'] ?? '');
             $customer_full   = trim($_POST['customer_full'] ?? '');
+            $customer_full_en= trim($_POST['customer_full_en'] ?? '');
             $customer_grade  = trim($_POST['customer_grade'] ?? '');
             $customer_tel    = trim($_POST['customer_tel'] ?? '');
             $customer_fax    = trim($_POST['customer_fax'] ?? '');
@@ -2944,7 +2949,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $old_cust_row = [];
             $old_sales_p_uid=0; $old_sales_p_name=''; $old_sales_d_uid=0; $old_sales_d_name='';
             if (!$is_new) {
-                $oq = $pdo->prepare("SELECT customer,customer_full,customer_tel,customer_fax,customer_address,is_inactive,customer_grade,settlement_mode,settlement_day,tax_id,quote_method,payment_method,net_days,allow_deduct,bank_name,bank_branch,bank_account,billing_contact,shipping_req,invoice_email,billing_note,general_note FROM customer_list WHERE customer_id=?");
+                $oq = $pdo->prepare("SELECT customer,customer_full,customer_full_en,customer_tel,customer_fax,customer_address,is_inactive,customer_grade,settlement_mode,settlement_day,tax_id,quote_method,payment_method,net_days,allow_deduct,bank_name,bank_branch,bank_account,billing_contact,shipping_req,invoice_email,billing_note,general_note FROM customer_list WHERE customer_id=?");
                 $oq->execute([$customer_id]);
                 $old_cust_row = $oq->fetch(PDO::FETCH_ASSOC) ?: [];
                 // 取舊業務
@@ -2967,23 +2972,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $ck->execute([$customer_id]);
                 if ($ck->fetch()) throw new Exception("客戶代碼「{$customer_id}」已存在");
                 $pdo->prepare("INSERT INTO customer_list
-                    (customer_id,customer,customer_full,customer_tel,customer_fax,customer_address,is_inactive,customer_grade,
+                    (customer_id,customer,customer_full,customer_full_en,customer_tel,customer_fax,customer_address,is_inactive,customer_grade,
                      settlement_mode,settlement_day,tax_id,quote_method,payment_method,net_days,allow_deduct,
                      bank_name,bank_branch,bank_account,billing_contact,shipping_req,invoice_email,billing_note,general_note,
                      confirmed_settlement,confirmed_payment,is_own_company,Created_By,Created_At)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
-                    ->execute([$customer_id,$customer,$customer_full,$customer_tel,$customer_fax,$customer_address,$is_inactive,$customer_grade,
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+                    ->execute([$customer_id,$customer,$customer_full,$customer_full_en,$customer_tel,$customer_fax,$customer_address,$is_inactive,$customer_grade,
                                $settlement_mode,$settlement_day,$tax_id,$quote_method,$payment_method,$net_days,$allow_deduct,
                                $bank_name,$bank_branch,$bank_account,$billing_contact,$shipping_req,$invoice_email,$billing_note,$general_note,
                                $confirmed_settlement,$confirmed_payment,$is_own_company,$uid]);
             } else {
                 if (!$can_update) throw new Exception('無修改權限');
                 $pdo->prepare("UPDATE customer_list SET
-                    customer=?,customer_full=?,customer_tel=?,customer_fax=?,customer_address=?,is_inactive=?,customer_grade=?,
+                    customer=?,customer_full=?,customer_full_en=?,customer_tel=?,customer_fax=?,customer_address=?,is_inactive=?,customer_grade=?,
                     settlement_mode=?,settlement_day=?,tax_id=?,quote_method=?,payment_method=?,net_days=?,allow_deduct=?,
                     bank_name=?,bank_branch=?,bank_account=?,billing_contact=?,shipping_req=?,invoice_email=?,billing_note=?,general_note=?,
                     confirmed_settlement=?,confirmed_payment=?,is_own_company=?,Modified_By=?,Modified_At=NOW() WHERE customer_id=?")
-                    ->execute([$customer,$customer_full,$customer_tel,$customer_fax,$customer_address,$is_inactive,$customer_grade,
+                    ->execute([$customer,$customer_full,$customer_full_en,$customer_tel,$customer_fax,$customer_address,$is_inactive,$customer_grade,
                                $settlement_mode,$settlement_day,$tax_id,$quote_method,$payment_method,$net_days,$allow_deduct,
                                $bank_name,$bank_branch,$bank_account,$billing_contact,$shipping_req,$invoice_email,$billing_note,$general_note,
                                $confirmed_settlement,$confirmed_payment,$is_own_company,$uid,$customer_id]);
@@ -3035,7 +3040,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($is_new) {
                 _log_audit($pdo,'insert','customer',$customer_id,$customer,null,$uid,$op_name);
             } else {
-                $new_cust_arr = ['customer'=>$customer,'customer_full'=>$customer_full,'customer_tel'=>$customer_tel,'customer_fax'=>$customer_fax,'customer_address'=>$customer_address,'is_inactive'=>$is_inactive,'customer_grade'=>$customer_grade,'settlement_mode'=>$settlement_mode,'settlement_day'=>$settlement_day,'tax_id'=>$tax_id,'quote_method'=>$quote_method,'payment_method'=>$payment_method,'net_days'=>$net_days,'allow_deduct'=>$allow_deduct,'bank_name'=>$bank_name,'bank_branch'=>$bank_branch,'bank_account'=>$bank_account,'billing_contact'=>$billing_contact,'shipping_req'=>$shipping_req,'invoice_email'=>$invoice_email,'billing_note'=>$billing_note,'general_note'=>$general_note];
+                $new_cust_arr = ['customer'=>$customer,'customer_full'=>$customer_full,'customer_full_en'=>$customer_full_en,'customer_tel'=>$customer_tel,'customer_fax'=>$customer_fax,'customer_address'=>$customer_address,'is_inactive'=>$is_inactive,'customer_grade'=>$customer_grade,'settlement_mode'=>$settlement_mode,'settlement_day'=>$settlement_day,'tax_id'=>$tax_id,'quote_method'=>$quote_method,'payment_method'=>$payment_method,'net_days'=>$net_days,'allow_deduct'=>$allow_deduct,'bank_name'=>$bank_name,'bank_branch'=>$bank_branch,'bank_account'=>$bank_account,'billing_contact'=>$billing_contact,'shipping_req'=>$shipping_req,'invoice_email'=>$invoice_email,'billing_note'=>$billing_note,'general_note'=>$general_note];
                 $ch = _diff_rows($old_cust_row, $new_cust_arr, array_keys($new_cust_arr));
                 // 業務變動追蹤
                 if ($old_sales_p_uid !== $primary_uid) {
@@ -8070,6 +8075,10 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 <div class="form-group">
     <label>客戶全名（發票用）</label>
     <input type="text" class="form-control" id="cf-customer_full" name="customer_full" placeholder="正式公司全名，用於開立發票" maxlength="100">
+</div>
+<div class="form-group">
+    <label>客戶英文全名</label>
+    <input type="text" class="form-control" id="cf-customer_full_en" name="customer_full_en" data-eg-hint="英文正式公司全名，非必填" maxlength="150">
 </div>
 <div class="form-group">
     <label>地址</label>
@@ -16111,7 +16120,7 @@ function openCustomerModal(customer_id) {
             var cidEl = document.getElementById('cf-customer_id');
             cidEl.value = d.customer_id; cidEl.readOnly = true; cidEl.style.background = '#f5f5f5';
             // Basic fields
-            ['customer','customer_full','customer_tel','customer_fax','customer_address','tax_id',
+            ['customer','customer_full','customer_full_en','customer_tel','customer_fax','customer_address','tax_id',
              'quote_method','payment_method','net_days','bank_name','bank_branch','bank_account',
              'billing_contact','invoice_email'].forEach(function(f){
                 var el = document.getElementById('cf-'+f);
@@ -16203,6 +16212,7 @@ function submitCustomerForm() {
         customer_id:      gv('cf-customer_id').toUpperCase().trim(),
         customer:         gv('cf-customer').trim(),
         customer_full:    gv('cf-customer_full').trim(),
+        customer_full_en: gv('cf-customer_full_en').trim(),
         customer_grade:   gv('cf-customer_grade'),
         customer_tel:     gv('cf-customer_tel'),
         customer_fax:     gv('cf-customer_fax'),
