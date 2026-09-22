@@ -1363,7 +1363,9 @@ if (isset($_POST['btn_go_events'])) {
                     <ul>
                         <li>工具列的 <b>「聯絡單設定」</b>：綁定要印哪一份 AS 文件（預設 2-DC-02-01 聯絡單）、選<b>圖章型式</b>、
                             指定<b>製表人</b>（預設＝公告建立者）與<b>核准</b>（預設＝組織角色綁定的「最高核准人員」，換人只改那裡、本頁不另存一份人名）。</li>
-                        <li>圖章型式改了之後，聯絡單上所有的章都會跟著換；沒有指定時用系統預設的回墨印。</li>
+                        <li><b>圖章型式分兩種可各自設定</b>：<b>「製表人 / 核准」</b>用的章，與<b>「已閱簽章」</b>那一整排人用的章
+                            （每人一顆、數量多，常會想用比較小或不同型式的章）。已閱簽章留空＝沿用製表人 / 核准那一個；兩個都沒指定時用系統預設的回墨印。
+                            圖章型式本身在 <a href="../admin/stamp_management.php" target="_blank">圖章管理 → 線上圖章設計</a> 維護。</li>
                     </ul>
 
                     <h4>免點開自動已閱（來源規則，限系統管理員）</h4>
@@ -1513,9 +1515,14 @@ if (isset($_POST['btn_go_events'])) {
                 </div>
                 <div class="nc-row">
                     <div class="nc-fld" style="min-width:300px;">
-                        <label>圖章型式（聯絡單上所有簽章共用）</label>
+                        <label>圖章型式：製表人 / 核准</label>
                         <input type="text" class="nc-kwbox" id="ncStampKw" placeholder="輸入關鍵字篩選圖章型式…" data-eg-skip="1">
                         <select id="ncStampTpl" style="min-width:300px;"></select>
+                    </div>
+                    <div class="nc-fld" style="min-width:300px;">
+                        <label>圖章型式：已閱簽章</label>
+                        <input type="text" class="nc-kwbox" id="ncStampReadKw" placeholder="輸入關鍵字篩選圖章型式…" data-eg-skip="1">
+                        <select id="ncStampReadTpl" style="min-width:300px;"></select>
                     </div>
                     <div class="nc-fld">
                         <label>回覆內容</label>
@@ -2983,16 +2990,18 @@ if (isset($_POST['btn_go_events'])) {
         }
 
         /* ---------------- 列印版（版面照紙本 2-DC-02-01） ---------------- */
-        function stampHtml(name, date, dept, pos) {
+        /* which: 'read'＝已閱簽章那一區／其餘＝製表人與核准。兩區各有自己的圖章型式設定 */
+        function stampHtml(name, date, dept, pos, which) {
             if (!name) return '';
-            var schema = (NC.d && NC.d.stamp_tpl) ? NC.d.stamp_tpl.schema : null;
+            var tpl = (which === 'read') ? (NC.d && NC.d.stamp_tpl_read) : (NC.d && NC.d.stamp_tpl);
+            var schema = tpl ? tpl.schema : null;
             try { return EGStamp.stamp(name, fmtD(date), false, schema, dept || '', pos || ''); } catch (e) { return esc(name); }
         }
         /* 回簽欄只印「真的有簽的那幾顆章」——使用者明確要求：直接顯示圖章就好，
            不要印姓名欄、也不要留空格讓人看出誰沒簽（章面本來就有姓名與日期）。 */
         function signStamps(people) {
             return (people || []).filter(function (p) { return !!p.sign_date; })
-                .map(function (p) { return '<span class="ct-si">' + stampHtml(p.name, p.sign_date, p.dept, p.position) + '</span>'; })
+                .map(function (p) { return '<span class="ct-si">' + stampHtml(p.name, p.sign_date, p.dept, p.position, 'read') + '</span>'; })
                 .join('');
         }
         function buildBody(d, people) {
@@ -3074,9 +3083,18 @@ if (isset($_POST['btn_go_events'])) {
                     + 'table.ct-ft td{border:none !important;vertical-align:bottom;height:104px;}'
                     + 'table.ct-ft td.l{text-align:left;}'
                     + 'table.ct-ft .lb{font-size:16px;vertical-align:bottom;}'
-                    /* 圖章尺寸一律抄 ai-rules/18 鐵則6 這一行，不要自己另外發明數字；整頁縮放邏輯一概不加 */
-                    + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+                    /* 圖章尺寸（ai-rules/18）。**兩種章要分開處理，不可以用同一條規則全部蓋掉**：
+                       ⑴預設回墨印與掃描實體章的 viewBox 是 100×100 正方形 → 固定 91px（鐵則6 那一行照抄）。
+                       ⑵**圖章模板產生的章（svg.eg-stamp-tpl）自帶「設計尺寸」與長寬比**（width=size、height=size×ratio），
+                         用 `.stamp-wrap svg{width:91px;height:91px}` 一起蓋下去，會把「人員簽章(長方)」這種
+                         非正方形的模板章硬壓成正方形＝就是使用者交代不可以發生的失真。故一律讓它用模板設計的尺寸。
+                       整頁縮放邏輯（document.body.style.zoom）一概不加（鐵則8）。 */
+                    + '.stamp-wrap svg.car-stamp,svg.car-stamp{width:91px;height:91px;}'
+                    + '.stamp-wrap svg{-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
                     + '.stamp-wrap{vertical-align:bottom;}'
+                    /* stamp-fill 的百分比高度是給「有固定列高的密集表格」用的，這裡的格子沒有固定高度，
+                       留著只會讓模板章的高度失準 */
+                    + '.stamp-wrap.stamp-fill{height:auto !important;display:inline-flex;align-items:flex-end;}'
                     + '.eg-stamp-tpl{-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
             var w = window.open('', '_blank');
             if (!w) { alert('請允許彈出視窗才能列印'); return; }
@@ -3300,6 +3318,12 @@ if (isset($_POST['btn_go_events'])) {
                         + esc((t.type_name ? t.type_name + '／' : '') + t.tpl_name) + '</option>';
                 });
                 $('#ncStampTpl').html(sh);
+                var sh2 = '<option value="">（同上，沿用製表人 / 核准的圖章型式）</option>';
+                (r.stamps || []).forEach(function (t) {
+                    sh2 += '<option value="' + t.id + '"' + (String(s.stamp_tpl_read_id) === String(t.id) ? ' selected' : '') + '>'
+                         + esc((t.type_name ? t.type_name + '／' : '') + t.tpl_name) + '</option>';
+                });
+                $('#ncStampReadTpl').html(sh2);
                 $('#ncMakerSrc').val(s.maker_src || 'creator');
                 $('#ncApprSrc').val(s.approver_src || 'top');
                 $('#ncShowReplyDef').prop('checked', String(s.show_reply) === '1');
@@ -3309,6 +3333,7 @@ if (isset($_POST['btn_go_events'])) {
                     bindFilter('#ncMakerKw', '#ncMakerUser');
                     bindFilter('#ncApprKw', '#ncApprUser');
                     bindFilter('#ncStampKw', '#ncStampTpl');
+                    bindFilter('#ncStampReadKw', '#ncStampReadTpl');
                     srcToggle();
                 });
                 $('#ncSetErr').text('');
@@ -3338,6 +3363,7 @@ if (isset($_POST['btn_go_events'])) {
             post({
                 action: 'settings_save',
                 stamp_tpl_id: $('#ncStampTpl').val() || '',
+                stamp_tpl_read_id: $('#ncStampReadTpl').val() || '',
                 maker_src: $('#ncMakerSrc').val(), maker_user_id: $('#ncMakerUser').val() || '',
                 approver_src: $('#ncApprSrc').val(), approver_user_id: $('#ncApprUser').val() || '',
                 show_reply: $('#ncShowReplyDef').is(':checked') ? '1' : '0'

@@ -106,7 +106,8 @@ function nc_ensure_schema(PDO $db): void
 function nc_setting_defaults(): array
 {
     return [
-        'stamp_tpl_id'     => '',        // 圖章型式（stamp_template.id；空＝系統預設回墨印）
+        'stamp_tpl_id'     => '',        // 製表人 / 核准的圖章型式（stamp_template.id；空＝系統預設回墨印）
+        'stamp_tpl_read_id'=> '',        // 已閱簽章的圖章型式（空＝沿用上面那個；再空＝系統預設回墨印）
         'maker_src'        => 'creator', // 製表人來源：creator＝公告建立者／user＝指定人員
         'maker_user_id'    => '',
         'approver_src'     => 'top',     // 核准來源：none＝留白手簽／top＝組織角色綁定的最高核准人員／user＝指定人員
@@ -115,6 +116,14 @@ function nc_setting_defaults(): array
     ];
 }
 
+/**
+ * ⚠ `system_parameters.param_value` 是 **JSON 欄位**（不是 varchar）。
+ * 寫進去的值一定要先 json_encode，否則像 ''、'creator'、'top' 這種裸字串會被 MySQL 以
+ * 3140 Invalid JSON text 直接拒絕——而且 nc_settings_save() 是逐筆寫入、不是一次交易，
+ * 前幾筆（剛好是數字的那些）已經寫進去了才爆，症狀是「有些設定存得起來、有些永遠存不起來」，
+ * 尤其是「清空某個設定」一定失敗（空字串不是合法 JSON）。2026-09-22 實測踩到。
+ * 讀的時候一律 json_decode，舊資料是純數字（例 9）也解得出來。
+ */
 function nc_settings(PDO $db): array
 {
     $out = nc_setting_defaults();
@@ -122,7 +131,12 @@ function nc_settings(PDO $db): array
         $st = $db->prepare("SELECT param_key, param_value FROM system_parameters WHERE param_group=?");
         $st->execute([NC_PARAM_GROUP]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            if (array_key_exists($r['param_key'], $out)) $out[$r['param_key']] = (string)$r['param_value'];
+            if (!array_key_exists($r['param_key'], $out)) continue;
+            $raw = (string)$r['param_value'];
+            $dec = json_decode($raw, true);
+            $out[$r['param_key']] = (is_scalar($dec) || $dec === null)
+                ? (string)($dec === null ? '' : $dec)
+                : $raw;
         }
     } catch (Throwable $e) {}
     return $out;
@@ -133,7 +147,7 @@ function nc_settings_save(PDO $db, array $in, string $by): void
     foreach (nc_setting_defaults() as $k => $_) {
         // 沒送的欄位不要動它（本專案踩過好幾次：沒送＝舊呼叫端，送空字串才是清空）
         if (!array_key_exists($k, $in)) continue;
-        $v = (string)$in[$k];
+        $v = json_encode((string)$in[$k], JSON_UNESCAPED_UNICODE);   // JSON 欄位，見上方說明
         $st = $db->prepare("SELECT id FROM system_parameters WHERE param_group=? AND param_key=? LIMIT 1");
         $st->execute([NC_PARAM_GROUP, $k]);
         $id = $st->fetchColumn();
@@ -147,9 +161,13 @@ function nc_settings_save(PDO $db, array $in, string $by): void
 }
 
 /** 圖章型式（id=0 或查無回 null，呼叫端拿不到就退回 EGStamp 預設回墨印） */
-function nc_stamp_template(PDO $db): ?array
+function nc_stamp_template(PDO $db, string $which = 'main'): ?array
 {
-    $id = (int)(nc_settings($db)['stamp_tpl_id'] ?? 0);
+    $s = nc_settings($db);
+    // 已閱簽章沒有單獨設定時沿用製表 / 核准那一個（多數情況本來就想用同一顆章）
+    $id = ($which === 'read')
+        ? (int)($s['stamp_tpl_read_id'] ?: ($s['stamp_tpl_id'] ?? 0))
+        : (int)($s['stamp_tpl_id'] ?? 0);
     if ($id <= 0) return null;
     try {
         $st = $db->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");
@@ -863,7 +881,8 @@ function nc_print_data(PDO $db, int $eventId, bool $alloc): array
         'company'    => nc_company($db),
         'doc_name'   => $doc['doc_name'] ?? '聯絡單',
         'doc_no'     => $docId ? eg_asdoc_no_asof_id($db, $docId, $asof) : '',
-        'stamp_tpl'  => nc_stamp_template($db),
+        'stamp_tpl'  => nc_stamp_template($db),            // 製表人 / 核准
+        'stamp_tpl_read' => nc_stamp_template($db, 'read'), // 已閱簽章
     ];
 }
 

@@ -77,6 +77,7 @@ switch ($action) {
             'as_docs'   => $P['canSetting'] ? eg_asdoc_list($db) : [],
             'as_doc'    => eg_asdoc_get($db, NC_ASDOC_MODULE),
             'stamp_tpl' => nc_stamp_template($db),
+            'stamp_tpl_read' => nc_stamp_template($db, 'read'),
         ]);
     }
 
@@ -167,13 +168,15 @@ switch ($action) {
                 if (!(int)$st->fetchColumn()) ncErr($c[2] . '人員不存在');
             }
         }
-        if (!empty($in['stamp_tpl_id'])) {
+        foreach ([['stamp_tpl_id', '製表人 / 核准'], ['stamp_tpl_read_id', '已閱簽章']] as $k) {
+            if (empty($in[$k[0]])) continue;
             $st = $db->prepare("SELECT COUNT(*) FROM stamp_template WHERE id=? AND is_active=1");
-            $st->execute([(int)$in['stamp_tpl_id']]);
-            if (!(int)$st->fetchColumn()) ncErr('選擇的圖章型式不存在或已停用');
+            $st->execute([(int)$in[$k[0]]]);
+            if (!(int)$st->fetchColumn()) ncErr('選擇的「' . $k[1] . '」圖章型式不存在或已停用');
         }
         nc_settings_save($db, $in, (string)($_SESSION['user_cname'] ?? $uid));
-        ncOut(['settings' => nc_settings($db), 'stamp_tpl' => nc_stamp_template($db)]);
+        ncOut(['settings' => nc_settings($db), 'stamp_tpl' => nc_stamp_template($db),
+               'stamp_tpl_read' => nc_stamp_template($db, 'read')]);
     }
 
     /* AS 文件編號綁定（走全站唯一實作 asdoc_lib） */
