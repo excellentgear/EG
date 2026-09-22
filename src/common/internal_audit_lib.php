@@ -1296,6 +1296,13 @@ function ia_car_create_from_kpi(PDO $db, array $check, array $item, int $uid, st
     require_once __DIR__ . '/car_lib.php';
     require_once __DIR__ . '/car_notify.php';
 
+    /* 開單人／通知者＝**這張查檢表的稽核人**，不是按下按鈕的人（2026-09-21 使用者要求）。
+       管理員代開時，矯正單上的填表人與通知寄件者原本會變成管理員自己，
+       受稽單位收到通知會看不出是誰稽核出來的。查檢表沒指定稽核人才退回操作者。 */
+    $auId   = (int)($check['auditor_id'] ?? 0);
+    $auName = trim((string)($check['auditor_name'] ?? ''));
+    if ($auId > 0) { $uid = $auId; $uname = ($auName !== '' ? $auName : $uname); }
+
     $year    = ia_kpi_audit_year((string)($check['check_date'] ?? ''));
     $bizDate = substr((string)($check['check_date'] ?? ''), 0, 10);
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $bizDate)) $bizDate = date('Y-m-d');
@@ -1401,16 +1408,26 @@ function ia_car_create_from_kpi(PDO $db, array $check, array $item, int $uid, st
  *   ③一份都沒查到 → **不判定**（留白給稽核員自己看），不要亂猜成合格。
  * 回傳 ['ng'=>n, 'ok'=>n, 'skip'=>n]
  */
-function ia_as_apply_system_result(PDO $db, int $checkId, int $srcCheckId): array
+/**
+ * @param int|array $srcCheckId 一張或**多張**系統稽核紀錄表（2026-09-21 使用者要求可多選同一次稽核的幾張）
+ */
+function ia_as_apply_system_result(PDO $db, int $checkId, $srcCheckId): array
 {
+    $ids = array_values(array_unique(array_filter(array_map('intval', (array)$srcCheckId))));
+    if (!$ids) return ['ng' => 0, 'ok' => 0, 'skip' => 0];
+    $in = implode(',', array_fill(0, count($ids), '?'));
     $st = $db->prepare("SELECT i.col_a, i.col_b, i.result, n.nc_no
                           FROM ia_check_item i LEFT JOIN ia_nc n ON n.nc_id = i.nc_id
-                         WHERE i.check_id=? AND i.is_header=0 AND i.ref_kind='as_document'");
-    $st->execute([$srcCheckId]);
+                         WHERE i.check_id IN ($in) AND i.is_header=0 AND i.ref_kind='as_document'");
+    $st->execute($ids);
     $forms = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $no = trim((string)$r['col_a']);
         if ($no === '') continue;
+        /* 同一份表單在好幾張紀錄表裡都出現時：**不合格優先**。
+           與單張時的規則一致（只要有一份不合格，這一條就是不合格），
+           否則後讀到的那一張若是合格，會把前一張的不合格蓋掉。 */
+        if (isset($forms[$no]) && $forms[$no]['result'] === 'ng') continue;
         $forms[$no] = ['name' => (string)$r['col_b'], 'result' => (string)$r['result'], 'nc_no' => (string)($r['nc_no'] ?? '')];
     }
     $out = ['ng' => 0, 'ok' => 0, 'skip' => 0];

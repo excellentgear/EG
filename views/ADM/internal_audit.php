@@ -407,6 +407,7 @@ $roleLabel = ia_role_label($perms);
                 <button id="btnPlanSave" class="btn-warm"><i class="fa fa-save"></i> 儲存排定</button>
                 <button id="btnPlanSubmit"><i class="fa fa-paper-plane"></i> 送審</button>
                 <button id="btnPlanApprove"><i class="fa fa-check"></i> 核准</button>
+                <button id="btnPlanUnsubmit"><i class="fa fa-undo"></i> 取消送出</button>
                 <button id="btnPlanDelete" class="btn-danger"><i class="fa fa-trash"></i> 刪除計畫表</button>
                 <?php endif; ?>
                 <button id="btnPlanPrint"><i class="fa fa-print"></i> 列印</button>
@@ -500,10 +501,10 @@ $roleLabel = ia_role_label($perms);
             <div class="ia-toolbar">
                 <span id="reportStatusBox" style="font-size:13px;color:#5b3a1e;"></span>
                 <?php if ($perms['canAdmin']): ?>
-                <button id="btnReportSave" class="btn-warm"><i class="fa fa-save"></i> 儲存</button>
+                <button id="btnReportSave" class="btn-warm" title="儲存「預定完成改善時間」與下方補充文字（其餘欄位都是自動彙總的，不必也不能手改）"><i class="fa fa-save"></i> 儲存（改善期限與補充文字）</button>
                 <button id="btnReportSubmit"><i class="fa fa-paper-plane"></i> 送出</button>
                 <button id="btnReportNotifySet"><i class="fa fa-bell"></i> 通知對象設定</button>
-                <button id="btnReportDelete" class="btn-danger"><i class="fa fa-trash"></i> 刪除報告表</button>
+
                 <?php endif; ?>
                 <button id="btnReportPrint"><i class="fa fa-print"></i> 列印</button>
                 <label style="font-size:12px;color:#6b5535;font-weight:normal;margin:0 0 0 auto;cursor:pointer;">
@@ -1040,9 +1041,13 @@ $roleLabel = ia_role_label($perms);
                  style="width:120px;background:#f5efe4;border:1px solid #D8BE93;border-radius:4px;padding:3px 6px;">
                  <span style="font-size:12px;color:#8a6d45;">　績效執行稽核查檢表稽核的是<b>去年一整年</b>，年度由上面的建立日期自動推導，不分上／下半年。</span></div>
             <label id="nkSrcLab">自動判定來源</label>
-            <div id="nkSrcWrap"><select id="nkSrc" style="min-width:320px;"></select>
-                 <div style="font-size:12px;color:#8a6d45;margin-top:3px;">選一張已經填好的<b>系統稽核紀錄表</b>，建立時會自動把合格／不合格判定過來，
-                 並在「所見證據或建議」列出是哪幾份表單不合格，方便兩張表互相比對。</div></div>
+            <div id="nkSrcWrap">
+                 <div id="nkSrcList" style="max-height:120px;overflow:auto;border:1px solid #D8BE93;border-radius:4px;
+                      background:#fff;padding:4px 8px;min-width:360px;font-size:13px;"></div>
+                 <div style="font-size:12px;color:#8a6d45;margin-top:3px;">勾選已經填好的<b>系統稽核紀錄表</b>（<b>可複選同一次稽核的好幾張</b>），
+                 建立時會自動把合格／不合格判定過來，並在「所見證據或建議」列出是哪幾份表單不合格。
+                 <b>只列本年度的</b>；勾了之後上面的「建立（稽核）日期」會自動跟著改成來源的稽核日期。
+                 同一份表單在好幾張裡都出現時<b>以不合格優先</b>。</div></div>
             <label>標題</label><div><input type="text" id="nkTitle" placeholder="留空＝用種類名稱"></div>
         </div>
         <div style="margin-top:10px;" class="nk-split">
@@ -2040,7 +2045,21 @@ function loadPlan(){
             $('#planMakerBox').hide();
             return;
         }
-        $('#btnPlanCreate').hide(); $('#btnPlanDepts,#btnPlanSave,#btnPlanSubmit,#btnPlanApprove').show();
+        $('#btnPlanCreate').hide();
+        /* 按鈕依狀態顯示（2026-09-21 使用者要求）：
+           ①送審與核准都過了就不該再出現「送審」「核准」「儲存排定」——那張表已經定案了
+           ②送出之後不給直接刪，改成先「取消送出」退回草稿；**自動簽核開著時不顯示取消送出**，
+             因為送出當下就核准完畢，那顆鈕點下去只會讓人以為可以反悔 */
+        var pSt   = String(PLAN.status||'draft');
+        var pDone = (pSt === 'approved');
+        var pSent = (pSt !== 'draft');
+        var pAuto = String((META.settings||{}).ia_auto_sign||'') === '1';
+        $('#btnPlanDepts').show();
+        $('#btnPlanSave').toggle(!pDone);
+        $('#btnPlanSubmit').toggle(pSt === 'draft');
+        $('#btnPlanApprove').toggle(pSt === 'submitted');
+        $('#btnPlanUnsubmit').toggle(pSent && !pDone && !pAuto && IS_ADMIN);
+        $('#btnPlanDelete').toggle(!pSent && IS_ADMIN);
         $('#planRemark').val(PLAN.remark||'');
         // 製表人（可改）；已核准的計劃表比照其他欄位只有系統管理員動得了
         $('#planMakerBox').toggle(<?= $perms['canAdmin'] ? 'true' : 'false' ?>);
@@ -2167,6 +2186,16 @@ $('#btnPlanApprove').on('click', function(){
             loadPlan();
         }, 'json');
     }, true);
+});
+/* 取消送出：退回草稿，讓人可以再改排定（2026-09-21 使用者要求；已核准的不給退） */
+$('#btnPlanUnsubmit').on('click', function(){
+    if (!PLAN) return;
+    if (!confirm('取消送出後這張年度稽核計劃表會退回「草稿」，可以再修改排定。\n確定嗎？')) return;
+    $.post(API, {action:'plan_unsubmit', plan_id:PLAN.plan_id}, function(res){
+        if (!res.ok) { alert(res.error||'取消送出失敗'); return; }
+        alert('已取消送出，現在可以再修改排定。');
+        loadPlan();
+    }, 'json');
 });
 /* 刪除年度計畫表（管理員限定；API 早就有，只是畫面上一直沒有按鈕＝使用者 2026-09-14 回報） */
 $('#btnPlanDelete').on('click', function(){
@@ -3165,9 +3194,10 @@ function autoNewCheck(kind){
         nkKindChanged();
         setTimeout(function(){
             $('#nkAll').trigger('click');            // 全部帶入（要取消的自己取消）
-            if (kind==='as') {                       // 自動判定來源預設選最近一張系統稽核紀錄表
-                var $s = $('#nkSrc');
-                if ($s.find('option').length > 1) $s.val($s.find('option').eq(1).val());
+            if (kind==='as') {
+                // 自動判定來源預設**全部勾起來**（本年度的系統稽核紀錄表通常就是同一次稽核的那幾張），
+                // 要排除哪一張自己取消；勾選的 change 會順便把建立日期帶成來源的稽核日期
+                $('#nkSrcList .nkSrcChk').prop('checked', true).last().trigger('change');
             }
             $('#nkDate').focus();
         }, 600);
@@ -3378,19 +3408,35 @@ function nkPickAuditorFromCase(){
     });
 }
 
-/** AS 查檢表的「自動判定來源」下拉：已建立的系統稽核紀錄表 */
+/** AS 查檢表的「自動判定來源」：本年度已建立的系統稽核紀錄表，可複選（2026-09-21 使用者要求）。
+    **一定要帶 year**——不帶的話會把別年度的稽核結果混進來當證據，而且完全看不出來。 */
 function loadSrcChecks(){
-    nkSelBusy('#nkSrc', true);
-    $.getJSON(API, {action:'check_list', kind:'system'}, function(res){
-        var h = '<option value="">（不自動判定，合格／不合格留白自己填）</option>';
-        (res.rows||[]).forEach(function(r){
-            h += '<option value="'+r.check_id+'">'
-               + esc(dispDate(r.check_date)+'　'+(r.title||'系統稽核紀錄表')
-                     +'（'+r.item_cnt+' 項，不合格 '+r.ng_cnt+'）')+'</option>';
-        });
-        $('#nkSrc').html(h);
-    }).always(function(){ nkSelBusy('#nkSrc', false); });
+    $('#nkSrcList').html('<span style="color:#a08356;">載入中…</span>');
+    $.getJSON(API, {action:'check_list', kind:'system', year:YEAR}, function(res){
+        var rows = res.rows || [];
+        if (!rows.length) {
+            $('#nkSrcList').html('<span style="color:#a08356;">'+YEAR+' 年度還沒有系統稽核紀錄表，'
+                + '建立後才能自動判定（現在建立的話合格／不合格要自己填）。</span>');
+            return;
+        }
+        $('#nkSrcList').html(rows.map(function(r){
+            return '<label style="display:block;font-weight:normal;margin:2px 0;cursor:pointer;">'
+                 + '<input type="checkbox" class="nkSrcChk" data-eg-skip value="'+r.check_id+'"'
+                 + ' data-date="'+esc(r.check_date||'')+'" style="vertical-align:-1px;"> '
+                 + esc(dispDate(r.check_date)+'　'+(r.title||'系統稽核紀錄表')
+                       +'（'+r.item_cnt+' 項，不合格 '+r.ng_cnt+'）') + '</label>';
+        }).join(''));
+    }).fail(function(){ $('#nkSrcList').html('<span style="color:#C4442D;">載入失敗</span>'); });
 }
+/* 勾選來源之後，建立（稽核）日期自動跟著來源走（2026-09-21 使用者要求）。
+   勾了好幾張時取**最晚的那一張**——那是這一次稽核實際做完的日子。 */
+$(document).on('change', '.nkSrcChk', function(){
+    var d = '';
+    $('#nkSrcList .nkSrcChk:checked').each(function(){
+        var x = String($(this).data('date')||''); if (x && x > d) d = x;
+    });
+    if (d) $('#nkDate').val(inputDate(d)).trigger('change');
+});
 function loadBank(){
     var kind = $('#nkKind').val();
     NK_TASKS = []; NK_CHECKED = {}; NK_GRP_OPEN = {};   // 換種類＝重來一次，不要把上一種的勾選帶過去
@@ -3750,7 +3796,9 @@ $('#btnCheckCreate').on('click', function(){
     if (!ok) return;
     $.post(API, {action:'check_create', kind:kind, check_date:$('#nkDate').val(),
         auditor_key:$('#nkAuditor').val(), case_id:$('#nkCase').val(), title:$('#nkTitle').val(),
-        src_check_id:(kind==='as' ? ($('#nkSrc').val()||'') : ''),
+        src_check_ids:(kind==='as'
+            ? JSON.stringify($('#nkSrcList .nkSrcChk:checked').map(function(){ return +this.value; }).get())
+            : '[]'),
         pick:JSON.stringify(picked)}, function(res){
         if (!res.ok) { alert(res.error||'建立失敗'); return; }
         closeMask('checkNewMask');
@@ -4905,6 +4953,10 @@ function loadReport(){
                       + (done && sName ? '　送出：'+esc(sName)+' '+dispDate(sDate) : ''))
                     : '<span style="color:#8a6d45;">尚未建立（按「儲存」即建立）</span>';
         $('#reportStatusBox').html(box);
+        /* 送出之後就不要再顯示「儲存」「送出」（2026-09-21 使用者要求）。
+           「儲存」存的是**預定完成改善時間與補充文字**這兩個人工欄位（其餘都是自動彙總的），
+           送出後那兩個欄位也跟著唯讀，所以兩顆一起收起來。 */
+        $('#btnReportSave,#btnReportSubmit').toggle(!done && IS_ADMIN);
         $('#reportNote').val(r ? (r.extra_note||'') : '');
         var rows = reportRows(), admin = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
         if (!rows.length) {
@@ -5037,16 +5089,9 @@ $(document).on('click', '#btnYearAdd', function(){
         loadMeta(function(){ $('#yearSel').val(y).trigger('change'); });
     }, 'json');
 });
-/* 刪除稽核報告表（管理員限定）。表格內容本來就是由不符合通知單即時算出來的，
-   刪掉的只有「補充文字＋製表／核准」這張表本身，稽核資料一筆都不會少。 */
-$('#btnReportDelete').on('click', function(){
-    if (!REPORT) { alert(YEAR+' 年度還沒有建立稽核報告表（按「儲存」才會建立）'); return; }
-    if (!confirm('確定刪除 '+YEAR+' 年度稽核報告表？\n表格上的缺點數是即時算出來的不受影響，刪掉的是補充文字與送出紀錄。')) return;
-    $.post(API, {action:'report_delete', year:YEAR}, function(res){
-        if (!res.ok) { alert(res.error||'刪除失敗'); return; }
-        loadReport();
-    }, 'json');
-});
+/* 「刪除報告表」按鈕 2026-09-21 依使用者要求移除：這張表的欄位全部由不符合通知單即時彙總，
+   刪掉它不會少任何稽核資料，只會把補充文字與送出紀錄清掉，實務上沒有人需要按。
+   後端 report_delete 端點保留（給資料修補用），畫面上不再提供入口。 */
 
 /* ============================ 設定 ============================ */
 $('#btnSetting').on('click', function(){

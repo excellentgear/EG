@@ -303,16 +303,41 @@ case 'plan_create': {
     $st->execute([$year]);
     if ($st->fetchColumn()) jerr('該年度的稽核計劃表已存在');
 
+    /* 同一年度**被軟刪除**的舊計畫表（2026-09-21 使用者回報「建立新計畫表失敗」的根因）：
+       `ia_plan` 上有 UNIQUE(year)，但上面那句存在檢查只看沒刪除的，
+       於是「刪掉 2026 再重建 2026」會直接撞唯一鍵、丟出 1062 原始 SQL 錯誤。
+       刪除本來就是軟刪除，正確做法是**把那一列救回來重用**（同時清掉它底下的舊資料），
+       而不是再 INSERT 一筆——不然這張表永遠只能建立一次。 */
+    $st = $db->prepare("SELECT plan_id FROM ia_plan WHERE year=? AND COALESCE(is_deleted,0)=1 ORDER BY plan_id DESC LIMIT 1");
+    $st->execute([$year]);
+    $reuseId = (int)($st->fetchColumn() ?: 0);
+
     $deptIds = json_decode((string)($_POST['dept_ids'] ?? '[]'), true);
     if (!is_array($deptIds) || !$deptIds) jerr('請至少選一個受稽單位');
 
     $db->beginTransaction();
     try {
-        $db->prepare("INSERT INTO ia_plan (year, status, created_by, created_by_name, created_at, updated_at,
-                          maker_id, maker_name, maker_date)
-                      VALUES (?, 'draft', ?, ?, NOW(), NOW(), ?, ?, ?)")
-           ->execute([$year, $uid, $uname, $uid, $uname, $today]);
-        $pid = (int)$db->lastInsertId();
+        if ($reuseId) {
+            // 重用那一列：狀態、簽核、製表全部歸零，底下的受稽單位與排定格一併清掉
+            $db->prepare("UPDATE ia_plan SET is_deleted=0, status='draft',
+                              submit_date=NULL, submitted_at=NULL,
+                              reviewer_id=NULL, reviewer_name=NULL, reviewer_date=NULL,
+                              approver_id=NULL, approver_name=NULL, approver_date=NULL,
+                              approved_date=NULL, approved_at=NULL, decide_note=NULL,
+                              maker_id=?, maker_name=?, maker_date=?,
+                              created_by=?, created_by_name=?, created_at=NOW(), updated_at=NOW()
+                           WHERE plan_id=?")
+               ->execute([$uid, $uname, $today, $uid, $uname, $reuseId]);
+            $db->prepare("DELETE FROM ia_plan_dept WHERE plan_id=?")->execute([$reuseId]);
+            $db->prepare("DELETE FROM ia_plan_cell WHERE plan_id=?")->execute([$reuseId]);
+            $pid = $reuseId;
+        } else {
+            $db->prepare("INSERT INTO ia_plan (year, status, created_by, created_by_name, created_at, updated_at,
+                              maker_id, maker_name, maker_date)
+                          VALUES (?, 'draft', ?, ?, NOW(), NOW(), ?, ?, ?)")
+               ->execute([$year, $uid, $uname, $uid, $uname, $today]);
+            $pid = (int)$db->lastInsertId();
+        }
         $ins = $db->prepare("INSERT INTO ia_plan_dept (plan_id, dept_id, dept_name, sort_order) VALUES (?,?,?,?)");
         $nameSt = $db->prepare("SELECT name FROM department WHERE id=?");
         $i = 0;
@@ -437,6 +462,23 @@ case 'plan_decide': {
         $db->prepare("UPDATE ia_plan SET status='draft', updated_at=NOW() WHERE plan_id=?")->execute([$pid]);
     }
     jout(['saved' => true]);
+}
+
+case 'plan_unsubmit': {
+    /* 取消送出（2026-09-21 使用者要求）：送出之後不給直接刪掉整張計畫表，
+       改成退回草稿再修改。**已核准的不給退**——那是已經定案的年度計畫，
+       要改請先由核准人取消核准（plan_decide 改回 submitted）。 */
+    iaReqAdmin($perms);
+    $pid = (int)($_POST['plan_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM ia_plan WHERE plan_id=? AND COALESCE(is_deleted,0)=0");
+    $st->execute([$pid]); $plan = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$plan) jerr('找不到這張計劃表');
+    if ((string)$plan['status'] === 'draft')    jerr('這張計劃表還沒送出，不需要取消送出');
+    if ((string)$plan['status'] === 'approved') jerr('這張計劃表已經核准，不可以取消送出');
+    $db->prepare("UPDATE ia_plan SET status='draft', submit_date=NULL, submitted_at=NULL,
+                      reviewer_id=NULL, reviewer_name=NULL, reviewer_date=NULL, updated_at=NOW()
+                   WHERE plan_id=?")->execute([$pid]);
+    jout(['unsubmitted' => true]);
 }
 
 case 'plan_delete': {
@@ -919,7 +961,11 @@ case 'check_create': {
     if (!isset(IA_CHECK_KINDS[$kind])) jerr('查檢表種類不正確');
     $cd = iaDate($_POST['check_date'] ?? '');
     if (!$cd) jerr('請填稽核日期');
-    $year = (int)substr($cd, 0, 4);
+    /* 績效執行稽核查檢表稽核的是**去年一整年**，所以它要歸在**被稽核的那個年度**
+       （2026-09-21 使用者回報：2026-01-05 建立、稽核 2025 的 KPI，卻列在 2026 的清單裡找不到）。
+       其餘兩種維持「建立年＝自己的年度」。 */
+    $year = ((string)($_POST['kind'] ?? '') === 'kpi')
+          ? ia_kpi_audit_year($cd) : (int)substr($cd, 0, 4);
     // 績效執行稽核查檢表稽核的是**去年整年度**（2026 年建立＝稽核 2025），所以不分上／下半年
     // （2026-09-15 使用者拍板，取代原本必選 H1/H2 的作法）。
     // 注意 ia_check.year 仍然是「這張表自己的年度＝建立年」——清單、年度篩選、稽核報告表都吃它；
@@ -976,13 +1022,25 @@ case 'check_create': {
                            ($it['result'] ?? '') ?: null, ($it['evidence'] ?? '') ?: null]);
         }
         // AS稽核查檢表可以直接沿用「系統稽核紀錄表」的結果自動判定（使用者 2026-09-15 交辦）
-        $srcId = iaInt($_POST['src_check_id'] ?? '');
+        /* 自動判定來源可多選（2026-09-21 使用者要求）：舊呼叫端送單一 src_check_id 仍相容。
+           每一張都要驗「真的是系統稽核紀錄表」**而且是同一個年度**——跨年度的判定混進來，
+           這張 AS 查檢表就會拿別次稽核的結果當證據。 */
+        $srcIds = json_decode((string)($_POST['src_check_ids'] ?? '[]'), true);
+        $srcIds = is_array($srcIds) ? array_values(array_filter(array_map('intval', $srcIds))) : [];
+        if (!$srcIds && ($one = iaInt($_POST['src_check_id'] ?? ''))) $srcIds = [$one];
         $applied = null;
-        if ($kind === 'as' && $srcId) {
-            $q = $db->prepare("SELECT kind FROM ia_check WHERE check_id=? AND COALESCE(is_deleted,0)=0");
-            $q->execute([$srcId]);
-            if ((string)$q->fetchColumn() !== 'system') jerr('來源必須是系統稽核紀錄表');
-            $applied = ia_as_apply_system_result($db, $kid, $srcId);
+        if ($kind === 'as' && $srcIds) {
+            $in = implode(',', array_fill(0, count($srcIds), '?'));
+            $q = $db->prepare("SELECT check_id, kind, year FROM ia_check
+                                WHERE check_id IN ($in) AND COALESCE(is_deleted,0)=0");
+            $q->execute($srcIds);
+            $got = $q->fetchAll(PDO::FETCH_ASSOC);
+            if (count($got) !== count($srcIds)) jerr('有來源查檢表不存在或已刪除');
+            foreach ($got as $g) {
+                if ((string)$g['kind'] !== 'system') jerr('來源必須是系統稽核紀錄表');
+                if ((int)$g['year'] !== $year) jerr('來源查檢表必須與本表同一個年度（' . $year . ' 年度）');
+            }
+            $applied = ia_as_apply_system_result($db, $kid, $srcIds);
         }
         $db->commit();
         jout(['check_id' => $kid, 'items' => count($items), 'applied' => $applied]);
@@ -2206,6 +2264,18 @@ case 'report_submit': {
     iaReqAdmin($perms);
     $year = (int)($_POST['year'] ?? 0);
     $d = iaDate($_POST['biz_date'] ?? '') ?: $today;
+    /* AS稽核查檢表還沒建立就不給送出（2026-09-21 使用者要求）：
+       稽核報告表是整個年度稽核的結案文件，AS 查檢表都還沒做就送出，報告表是空的。 */
+    $asCnt = 0;
+    try {
+        $q = $db->prepare("SELECT COUNT(*) FROM ia_check
+                            WHERE year=? AND kind='as' AND COALESCE(is_deleted,0)=0");
+        $q->execute([$year]);
+        $asCnt = (int)$q->fetchColumn();
+    } catch (Throwable $e) { $asCnt = 1; }   // 查不到就不擋，不要因為查詢失敗把流程卡死
+    if ($asCnt === 0)
+        jerr($year . ' 年度還沒有建立「AS稽核查檢表」，不可以送出稽核報告表——'
+             . '請先到「查檢表」分頁建立 AS稽核查檢表並完成判定。');
     try {
         $r = ia_report_submit($db, $year, $d, $uid, $uname);
     } catch (Throwable $e) { jerr($e->getMessage()); }
