@@ -276,6 +276,23 @@ if (is_array($OreadyReply_list_base)) {
         $all_boms = array_column($OreadyReply_list_base, 'bom');
         $all_boms = array_filter(array_unique($all_boms));
 
+        // 這張 BOM 實際綁定的訂單（2026-09-23 修正，與主頁面初載同一份邏輯，見該檔註解）：
+        // OrderList 是「同一個料號主檔的所有訂單」（給參考用，料號重複下單時會有好幾筆），
+        // 不是「這張 BOM 真正綁定了哪張訂單」——後者的唯一權威來源是 bom_order_process_map。
+        // 訂單追蹤頁「BOM開立」帶入的 order_id_filter 原本誤用 OrderList 比對，料號重複下單時
+        // 點任一張訂單都會把該料號全部歷史 BOM 列出來，改用這裡的 BoundOrderIds 才正確。
+        $bom_bound_orders_map = [];
+        if (!empty($all_boms)) {
+            try {
+                $ph_bo = implode(',', array_fill(0, count($all_boms), '?'));
+                $stmt_bo = $db->prepare("SELECT bom, Order_id FROM bom_order_process_map WHERE bom IN ($ph_bo)");
+                $stmt_bo->execute(array_values($all_boms));
+                foreach ($stmt_bo->fetchAll(PDO::FETCH_ASSOC) as $bo) {
+                    $bom_bound_orders_map[$bo['bom']][] = (int)$bo['Order_id'];
+                }
+            } catch (PDOException $eBo) { $bom_bound_orders_map = []; }
+        }
+
         $qq_details_map = [];
         if (!empty($all_boms)) {
             $placeholders = implode(',', array_fill(0, count($all_boms), '?'));
@@ -602,6 +619,7 @@ if (is_array($OreadyReply_list_base)) {
             // ✅ 關鍵修正：將 shipment_history 加入回傳，讓 10 秒刷新後客戶欄位仍能顯示最近出貨
             $item['shipment_history']  = $shipment_history_map[$item['d_id']] ?? [];
             $item['OrderList']         = $order_list_map[$item['d_id']] ?? [];
+            $item['BoundOrderIds']     = $bom_bound_orders_map[$item['bom']] ?? []; // 這張BOM真正綁定的訂單ID
 
             // ✅【報工欄位計算】與主頁面邏輯一致
             $pm_latest_date         = null;

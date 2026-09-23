@@ -3830,11 +3830,11 @@ foreach($dCounts as $c) {
                             <?php endforeach; ?>
                         </select>
                         <div style="position:relative;display:inline-block;vertical-align:middle;">
-                            <input type="text" id="filter-client" class="form-control input-sm" placeholder="搜尋客戶(名稱/ID)" style="width:115px;" autocomplete="off">
+                            <input type="text" id="filter-client" class="form-control input-sm" placeholder="搜尋客戶(名稱/ID)" style="width:115px;" autocomplete="new-password" data-lpignore="true" data-form-type="other">
                             <div id="filter-client-dd" style="display:none;position:absolute;top:100%;left:0;z-index:9999;background:#fff;border:1px solid #ccc;border-radius:4px;box-shadow:0 3px 8px rgba(0,0,0,.15);min-width:220px;max-height:220px;overflow-y:auto;font-size:12px;"></div>
                         </div>
-                        <input type="text" id="filter-part" class="form-control input-sm" placeholder="搜尋料號" style="width: 105px;" autocomplete="off">
-                        <input type="text" id="filter-global" class="form-control input-sm" placeholder="全表搜尋" style="width: 130px;" autocomplete="off">
+                        <input type="text" id="filter-part" class="form-control input-sm" placeholder="搜尋料號" style="width: 105px;" autocomplete="new-password" data-lpignore="true" data-form-type="other">
+                        <input type="text" id="filter-global" class="form-control input-sm" placeholder="全表搜尋" style="width: 130px;" autocomplete="new-password" data-lpignore="true" data-form-type="other">
                         <button type="button" class="btn btn-warning btn-sm" id="filter-unbound" style="margin:0;" title="篩選尚未綁定客戶ID或料號ID的訂單">
                             <i class="fa fa-unlink"></i><span class="fb-txt"> 未綁定</span>
                         </button>
@@ -4038,7 +4038,7 @@ foreach($dCounts as $c) {
                                             <button type="button" id="btn-quick-add-customer" class="btn btn-xs btn-link" style="display:none;color:#27ae60;padding:0;margin-left:4px;font-size:10px;" onclick="openQuickAddCustomer()"><i class="fa fa-plus-circle"></i>新增</button>
                                         </label>
                                         <div class="input-group input-group-sm">
-                                            <input type="text" class="form-control" name="Client_Name" id="client_name_input" placeholder="客戶代碼或名稱..." autocomplete="off">
+                                            <input type="text" class="form-control" name="Client_Name" id="client_name_input" placeholder="客戶代碼或名稱..." autocomplete="new-password" data-lpignore="true" data-form-type="other">
                                             <span class="input-group-btn">
                                                 <button type="button" class="btn btn-default" title="客戶資料管理" onclick="openCustomerSettingsModal()" tabindex="-1"><i class="fa fa-cog"></i></button>
                                             </span>

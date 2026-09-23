@@ -1136,6 +1136,28 @@ if (is_array($OreadyReply_list_base)) {
         }
     }
 
+    // --- 這張 BOM 實際綁定的訂單（2026-09-23 修正）─────────────────────────
+    //   上面的 $order_list_map／$item['OrderList'] 是「同一個料號主檔的所有訂單」
+    //   （給人看「這支料號還有哪些訂單」用的參考清單，料號重複下單時會有好幾筆），
+    //   跟「這張 BOM 真正綁定了哪張訂單」是兩件事——後者的唯一權威來源是
+    //   bom_order_process_map（訂單追蹤頁的 BOM 開立圖示／$bomBindMap 也是查這張表）。
+    //   訂單追蹤頁「BOM開立」帶入的 order_id_filter 原本誤用 OrderList 比對，
+    //   同一個料號重複下單時（例：和大 2010862 下過 12 次）點任何一張訂單的
+    //   BOM開立，都會把這 12 張 BOM 全部列出來——因為它們的 OrderList 都含有
+    //   使用者點的那筆訂單。改用這裡新查的 $bom_bound_orders_map（BOM→真正綁定
+    //   的訂單ID清單）就只會列出真正綁定的那一張。
+    $bom_bound_orders_map = [];
+    if (!empty($all_boms)) {
+        $placeholders_bo = implode(',', array_fill(0, count($all_boms), '?'));
+        try {
+            $stmt_bo = $db->prepare("SELECT bom, Order_id FROM bom_order_process_map WHERE bom IN ($placeholders_bo)");
+            $stmt_bo->execute(array_values($all_boms));
+            foreach ($stmt_bo->fetchAll(PDO::FETCH_ASSOC) as $bo) {
+                $bom_bound_orders_map[$bo['bom']][] = (int)$bo['Order_id'];
+            }
+        } catch (Exception $eBo) { $bom_bound_orders_map = []; }
+    }
+
     // --- New Logic for Future Reports Check (有新製程報工) ---
     $max_reported_sn_map = [];
     if (!empty($all_boms)) {
@@ -1308,6 +1330,7 @@ if (is_array($OreadyReply_list_base)) {
 
     foreach ($OreadyReply_list_base as $item) {
         $item['OrderList'] = $order_list_map[$item['d_setting_id']] ?? [];
+        $item['BoundOrderIds'] = $bom_bound_orders_map[$item['bom']] ?? []; // 這張BOM真正綁定的訂單ID（見上方 $bom_bound_orders_map 註解）
         $OreadyReply_list_final[] = $item;
     }
 }
@@ -8393,9 +8416,14 @@ echo "</script>\n";
             // BOM/料號
             if (filters.bom && (!row.bom || row.bom.toLowerCase().indexOf(filters.bom) === -1) && (!row.d_id || row.d_id.toLowerCase().indexOf(filters.bom) === -1)) show = false;
 
-            // 訂單ID篩選（由訂單列表頁點擊BOM綁定狀態圖示帶入，比對此BOM的OrderList是否含該訂單）
+            // 訂單ID篩選（由訂單列表頁點擊BOM綁定狀態圖示帶入）
+            // 2026-09-23 修正：不可以比對 OrderList——那是「同一個料號主檔的所有訂單」，
+            // 料號重複下單時（例：同一客戶同一料號下過 12 次）會把 12 張 BOM 全部列出來，
+            // 因為它們的 OrderList 都含有使用者點的那筆訂單。改比對 BoundOrderIds（這張BOM
+            // 真正綁定的訂單ID，唯一來源 bom_order_process_map），才只會列出真正綁定的那一張。
             if (filters.orderId) {
-                const orderIdMatch = orderList.some(function(o) { return o && String(o.Order_id) === String(filters.orderId); });
+                const boundIds = Array.isArray(row.BoundOrderIds) ? row.BoundOrderIds : [];
+                const orderIdMatch = boundIds.some(function(oid) { return String(oid) === String(filters.orderId); });
                 if (!orderIdMatch) show = false;
             }
 
