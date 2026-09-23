@@ -762,51 +762,25 @@ function ec_in_service_asof(array $u, string $date): bool
 }
 
 /**
- * 依業務日期回推的逐職務人員清單（含兼任）。
- * 與現況清單的差別：部門/職稱取自 user_position_history 在該日期的快照，
- * 在職與否也用該日期判定，所以**當時在職、現已離職的人也會列出**（標 is_former=1）。
+ * 依業務日期回推的逐職務人員清單（含兼任，一個職務一列，主職與兼任都要各自出現）。
+ *
+ * ★這裡原本自己刻了一份 SQL（重複實作，違反鐵律4），而且刻出來的版本有兩個真的
+ *   會讓畫面看起來很亂的 bug：
+ *   ① 排序 tie-break 用 dept_sort 相同時比較 dept_id（資料庫流水號），跟部門在
+ *      組織圖上的實際順序完全無關，畫面上就是使用者說的「各部門混合亂排序」。
+ *   ② 呼叫端把「一人多職」去重成一列，只留其中一筆——但人員列表鐵則第⑥條明講
+ *      「給人挑」的名單要一個職務一列，主職跟兼任都要能被挑到，不可以合併。
+ *   兩者都已經在共用庫 `people_lib.php` 的 `eg_people_posts_asof()` 正確做好
+ *   （唯一實作），這裡改成直接轉呼叫，不要再維護第二份。
  */
 function ec_people_posts_asof(PDO $db, string $date): array
 {
     static $cache = [];
+    require_once __DIR__ . '/people_lib.php';
     if ($date === '') { try { return eg_people_posts($db, []); } catch (Throwable $e) { return []; } }
     if (isset($cache[$date])) return $cache[$date];
 
-    try { $users = $db->query("SELECT id, user_cname, state, hire_date, leave_date FROM `user`")->fetchAll(PDO::FETCH_ASSOC); }
-    catch (Throwable $e) { return []; }
-
-    $deptMap = []; $posMap = [];
-    try {
-        foreach ($db->query("SELECT id, name, COALESCE(sort_order,999) s FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d)
-            $deptMap[(int)$d['id']] = ['name' => (string)$d['name'], 'sort' => (int)$d['s']];
-        foreach ($db->query("SELECT id, name, COALESCE(sort_order,999) s FROM position")->fetchAll(PDO::FETCH_ASSOC) as $p)
-            $posMap[(int)$p['id']] = ['name' => (string)$p['name'], 'sort' => (int)$p['s']];
-    } catch (Throwable $e) {}
-
-    $snapAll = eg_position_snapshot_at_bulk($db, $date);
-    $out = [];
-    foreach ($users as $u) {
-        if (!ec_in_service_asof($u, $date)) continue;
-        $uid = (int)$u['id'];
-        foreach (($snapAll[$uid] ?? []) as $s) {
-            $did = (int)($s['department_id'] ?? 0);
-            $pid = (int)($s['position_id'] ?? 0);
-            $isFormer = (int)($u['state'] ?? 1) === 0 ? 1 : 0;
-            $dn = $deptMap[$did]['name'] ?? (string)($s['department_name'] ?? '');
-            $pn = $posMap[$pid]['name']  ?? (string)($s['position_name'] ?? '');
-            $out[] = [
-                'id' => $uid, 'user_cname' => (string)$u['user_cname'],
-                'dept_id' => $did ?: null, 'dept_name' => $dn, 'dept_sort' => $deptMap[$did]['sort'] ?? 999,
-                'position_id' => $pid ?: null, 'position_name' => $pn, 'position_sort' => $posMap[$pid]['sort'] ?? 999,
-                'is_main' => (int)($s['is_main'] ?? 0), 'is_former' => $isFormer,
-                'display' => trim($dn . '　' . $pn . '　' . $u['user_cname'])
-                           . ((int)($s['is_main'] ?? 0) ? '' : '（兼任）') . ($isFormer ? '（已離職）' : ''),
-            ];
-        }
-    }
-    // 欄位順序固定「部門/職稱/姓名」，排序依 sort_order（人員列表鐵則第 5 條）
-    usort($out, fn($a, $b) => [$a['dept_sort'], $a['dept_id'], $a['position_sort'], $a['id']]
-                          <=> [$b['dept_sort'], $b['dept_id'], $b['position_sort'], $b['id']]);
+    try { $out = eg_people_posts_asof($db, [], $date); } catch (Throwable $e) { $out = []; }
     $cache[$date] = $out;
     return $out;
 }

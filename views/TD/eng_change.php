@@ -1391,30 +1391,32 @@ function loadPeople(date, pickId, pickDept){
     }
     $('#e_applicant_ro').hide();
     $('#e_applicant').show();
-    $('#e_applicant_hint').text('（管理員可代其他人開單；依日期列出當時在職者）');
+    $('#e_applicant_hint').text('（管理員可代其他人開單；依日期列出當時在職者，主職與兼任皆可選）');
     $.getJSON(API, {action:'people', date:date}, function(r){
         if (!r.ok) return;
-        // ★一人多職只列一次，但顯示文字要優先用「主職」——後端 people 清單是依部門／職稱
-        //   排序，不是依主職優先，兼任的部門排在主職前面時，只取第一筆會把主職蓋掉
-        //   （使用者回報：管理員補資料時申請人只顯示兼任職務）。
-        //   idx 只當查找表用（get/set by key），不可以用 Object.keys() 迭代它來組清單——
-        //   員工編號是數字字串，JS 規格會把數字鍵改成由小到大排序，後端排好的部門／
-        //   職稱順序會被打散（ai-rules 記憶 js_object_key_numeric_reorder 同一個坑）。
-        //   改成維持一個純陣列，主職出現時**原地覆蓋**第一次出現的那個位置，不重新排序。
-        var list = [], idx = {};
-        (r.rows || []).forEach(function(p){
-            var key = String(p.id);
-            if (idx.hasOwnProperty(key)) {
-                if (p.is_main && !list[idx[key]].is_main) list[idx[key]] = p;
-                return;
-            }
-            idx[key] = list.length;
-            list.push(p);
-        });
+        // ★人員列表鐵則第⑥條：「給人挑」的名單要一個職務一列，主職與兼任都要能被挑到——
+        //   不可以去重成一人一列（曾經改成「只留主職」，結果變成顯示文字換了、但陣列位置
+        //   還是兼任那一筆原本排序的位置，畫面看起來像各部門混合亂排序；使用者回報後
+        //   確認應該照人員列表鐵則第⑥條原樣列出，不要去重）。
+        //   後端 ec_people_posts_asof() 現在直接轉呼叫共用庫 eg_people_posts_asof()，
+        //   已經是 all_posts 風格、一個職務一列並依「部門→職稱→人名」排好，這裡原樣列出。
+        //   value 用 post_key（uid:deptId）不可用 id，否則同一人兩列 value 會重複；
+        //   name 直接存在 data-name（不要用 display 文字反解析，兼任會多帶「（兼任）」字樣）。
+        var rows = r.rows || [];
         var s = $('#e_applicant').empty().append('<option value="">請選擇…</option>');
-        list.forEach(function(p){ s.append('<option value="'+p.id+'">'+esc(p.display)+'</option>'); });
-        s.val(String(pickId || ME.uid));
-        loadPosts(s.val(), date, pickDept);
+        rows.forEach(function(p){
+            s.append('<option value="'+esc(p.post_key)+'" data-uid="'+p.id+'" data-dept="'+(p.dept_id||0)+'" '
+                   + 'data-name="'+esc(p.user_cname||'')+'">'+esc(p.display)+'</option>');
+        });
+        // pickId／pickDept 是「使用者 id ＋（可能有的）部門 id」，換算成對應的那一列 post_key：
+        // 有指定部門就精準比對那一筆，沒有就取主職，都找不到才退回第一筆屬於這個人的職務。
+        var uidWant = pickId || ME.uid;
+        var mine = rows.filter(function(p){ return +p.id === +uidWant; });
+        var pick = (pickDept ? mine.filter(function(p){ return +p.dept_id === +pickDept; })[0] : null)
+                 || mine.filter(function(p){ return p.is_main; })[0]
+                 || mine[0];
+        s.val(pick ? pick.post_key : '');
+        loadPosts(pick ? pick.id : 0, date, pick ? pick.dept_id : pickDept);
     });
 }
 /** 該申請人在該日期當時的所有職務（含兼任）；只有一個就自動選起來 */
@@ -1458,7 +1460,11 @@ function syncDept(){
     var o = $('#e_post').find('option:selected');
     $('#e_post').data('did', o.val() || 0).data('deptname', o.data('deptname') || '');
 }
-$('#e_applicant').on('change', function(){ loadPosts(this.value, $('#e_apply_date').val(), ''); });
+$('#e_applicant').on('change', function(){
+    // value 現在是 post_key（uid:deptId），真正的 uid 與部門要從 option 的 data 屬性讀
+    var o = $(this).find('option:selected');
+    loadPosts(o.data('uid') || 0, $('#e_apply_date').val(), o.data('dept') || '');
+});
 $('#e_post').on('change', syncDept);
 $('#e_apply_date').on('change', function(){
     // 日期一改，「當時的職務」就可能不一樣了（ai-rules/22）
@@ -1536,6 +1542,10 @@ function validateHead(){
     ok &= markErr('#e_apply_date', $('#e_apply_date').val() ? '' : '請填寫日期');
     ok &= markErr('#e_part_kw',    $('#e_part_kw').val().trim() ? '' : '請填寫料號');
     ok &= markErr('#e_customer',   $('#e_customer').val().trim() ? '' : '請填寫客戶名稱');
+    // 管理員代開時申請人不會有預設值（超級管理員本身不是真實員工，人員清單本來就不列他），
+    // 沒選就直接在這一格報錯，不要讓錯誤只出現在「申請職務」上而看不出真正原因
+    if (PERMS && PERMS.canAdmin)
+        ok &= markErr('#e_applicant', $('#e_applicant').val() ? '' : '請選擇申請人');
     ok &= markErr('#e_post', $('#e_post').val() ? '' : '請選擇申請職務（部門／職稱）');
     var ct = $('input[name=ctype]:checked').val() || '';
     ok &= markErr('#e_ctype',      ct ? '' : '請選擇變更方式');
@@ -1554,9 +1564,11 @@ function headPayload(){
         apply_date: $('#e_apply_date').val(),
         part_no: $('#e_part_kw').val().trim(), d_id: $('#e_part_kw').data('did') || 0,
         customer_name: $('#e_customer').val().trim(), customer_id: $('#e_customer').data('cid') || 0,
-        applicant_id: (PERMS && PERMS.canAdmin) ? ($('#e_applicant').val() || 0) : ME.uid,
+        // #e_applicant 的 value 是 post_key（uid:deptId），真正要送出的 uid／姓名要讀 data 屬性
+        // （不要反解析 display 文字，兼任者的文字後面會多帶「（兼任）」字樣）
+        applicant_id: (PERMS && PERMS.canAdmin) ? ($('#e_applicant').find('option:selected').data('uid') || 0) : ME.uid,
         applicant_name: (PERMS && PERMS.canAdmin)
-            ? (($('#e_applicant').find('option:selected').text() || '').split('　').pop()) : ME.name,
+            ? ($('#e_applicant').find('option:selected').data('name') || '') : ME.name,
         apply_dept_id: $('#e_post').val() || 0,
         apply_dept_name: $('#e_post').find('option:selected').data('deptname') || '',
         change_type: $('input[name=ctype]:checked').val() || '',
