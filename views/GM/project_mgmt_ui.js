@@ -4245,6 +4245,9 @@ function buildPlanHtml(res, m) {
     var css = printBaseCss({ landscape: true, paper: paper, docNo: m.meta.doc_no })
       + '.hdr td { border:1px solid #000; font-size:10pt; }\n'
       + '.ms { font-size:10pt; text-align:center; }\n'
+      /* .p-no（專案代號那一行）在清單式與甘特式都會印，CSS 不可以放進下面「僅甘特」的
+         三元判斷式裡——2026-09-23 第一版就是這樣寫的，清單式檢視時代號印出來完全沒有樣式。 */
+      + '.p-no { text-align:left; font-size:10pt; font-weight:bold; margin:0 0 1mm 0; }\n'
       + (isList ? '' :
           /* 周期格：預計與實際**畫在同一格**，靠線型區分（使用者指定）。
              上下錯開一點點，兩條重疊時才不會被實線蓋掉虛線。 */
@@ -4257,8 +4260,7 @@ function buildPlanHtml(res, m) {
         + '.gl i { display:inline-block; width:14mm; vertical-align:middle; margin:0 2mm 0 6mm; }\n'
         + '.gl i.p { border-top:0.7mm solid #000; }\n'
         + '.gl i.a { border-top:0.7mm dashed #000; }\n'
-        + '.pdh { font-size:7.5pt; padding:0.5mm 0; }\n'
-        + '.p-no { text-align:left; font-size:10pt; font-weight:bold; margin:0 0 1mm 0; }\n');
+        + '.pdh { font-size:7.5pt; padding:0.5mm 0; }\n');
 
     var h = '<div class="p-co">' + esc(m.meta.company || '') + '</div>'
       + '<div class="p-en">EXCELLENT GEAR TECHNOLOGY CO.,LTD</div>'
