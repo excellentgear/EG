@@ -612,6 +612,7 @@ try {
             $o['counterparty_type'] === 'maker' ? $o['maker_id_no'] : $o['customer_id']);
         // 異常原因分類／處置方式的顯示文字由後端組（畫面與列印共用同一支，見 car_lib）
         $o['cause_label'] = car_cause_label($pdo, $o);
+        $o['cause_cat_ids'] = car_cause_ids($pdo, (int)$o['id'], $o);   // 可複選（2026-09-23 起）
         $o['disp_label']  = car_disp_label($pdo, $o);
         $o['cause_is_legacy'] = (empty($o['cause_cat_id']) && trim((string)($o['cause_investigation'] ?? '')) !== '');
         $o['disp_is_legacy']  = (empty($o['disposition_opt_id']) && trim((string)($o['disposition'] ?? '')) !== '');
@@ -949,11 +950,24 @@ try {
         /* 異常原因分類（單選、三層，來源＝異常單的 qa_cause_cat）與處置方式（qa_option kind=disp）。
            送 cause_cat_id／disposition_opt_id 就走新制並把同區段的舊欄位清掉；
            完全沒送這兩個鍵時才沿用舊制欄位（相容尚未改過的呼叫端）。 */
-        $useCat  = array_key_exists('cause_cat_id', $_POST);
+        /* 2026-09-23 起原因分類可複選：新呼叫端送 cause_cat_ids（JSON 陣列），
+           舊呼叫端送單一 cause_cat_id 照樣收（當成只有一個）。 */
+        $useCat  = array_key_exists('cause_cat_ids', $_POST) || array_key_exists('cause_cat_id', $_POST);
         $useOpt  = array_key_exists('disposition_opt_id', $_POST);
-        $catId   = $useCat ? (int)$_POST['cause_cat_id'] : 0;
+        $catIds  = [];
+        if (array_key_exists('cause_cat_ids', $_POST)) {
+            $arr = json_decode((string)$_POST['cause_cat_ids'], true);
+            if (!is_array($arr)) $arr = array_map('trim', explode(',', (string)$_POST['cause_cat_ids']));
+            foreach ($arr as $v) { $v = (int)$v; if ($v > 0 && !in_array($v, $catIds, true)) $catIds[] = $v; }
+        } elseif (array_key_exists('cause_cat_id', $_POST)) {
+            $v = (int)$_POST['cause_cat_id'];
+            if ($v > 0) $catIds[] = $v;
+        }
+        $catId   = $catIds ? $catIds[0] : 0;          // car_order.cause_cat_id＝主要分類快取
         $optId   = $useOpt ? (int)$_POST['disposition_opt_id'] : 0;
-        if ($useCat && $catId > 0 && !car_cause_exists($pdo, $catId)) jfail('選到的異常原因分類不存在，請重新整理後再選');
+        foreach ($catIds as $v) {
+            if (!car_cause_exists($pdo, $v)) jfail('選到的異常原因分類不存在，請重新整理後再選');
+        }
         if ($useOpt && $optId > 0 && !car_disp_exists($pdo, $optId))  jfail('選到的處置方式不存在，請重新整理後再選');
 
         $validCause = ['person','material','machine','method','tool','other'];
@@ -966,7 +980,7 @@ try {
            少了這個判斷另外兩段會被靜默清成 NULL——正式流程有簽章保護所以踩不到，
            解鎖之後就踩得到了（本次測試從列印版反查出來的）。 */
         $sent = function (array $keys) { foreach ($keys as $k) if (array_key_exists($k, $_POST)) return true; return false; };
-        $wCause = empty($signed['cause'])      && (!$bf || $sent(['cause_cat_id','cause_investigation','cause_other','cause_detail']));
+        $wCause = empty($signed['cause'])      && (!$bf || $sent(['cause_cat_id','cause_cat_ids','cause_investigation','cause_other','cause_detail']));
         $wCorr  = empty($signed['correction']) && (!$bf || $sent(['disposition_opt_id','disposition','disposition_other','correction_measure','correction_due']));
         $wPrev  = empty($signed['prevention']) && (!$bf || $sent(['prevention_measure','prevention_due']));
 
@@ -1007,6 +1021,9 @@ try {
         }
         if (!$sets) jfail('沒有要儲存的欄位');
         $pdo->prepare("UPDATE car_order SET " . implode(',', $sets) . " WHERE id=:id")->execute($p);
+        /* 複選的分類寫在子表（唯一寫入點 car_cause_set，順便同步上面那個快取欄位）。
+           只有「這一段真的要寫」而且有送分類時才動它——否則只存矯正措施那一次會把原因分類清空。 */
+        if ($wCause && $useCat) car_cause_set($pdo, $id, $catIds);
         if ($bf) {
             // 改到哪存到哪＝每打幾個字就寫一列，處理軌跡會被洗版，故同一個人短時間內合併成一筆
             car_log_merge($pdo, $id, 'bf_edit', (int)$me['id'], $me['name'], '補資料：代填異常原因分析／矯正措施／預防措施內容');

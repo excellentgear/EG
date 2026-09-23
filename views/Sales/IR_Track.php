@@ -634,7 +634,7 @@ try { $QAB_CAUSE_TREE = qab_cause_tree($db, true); } catch (Throwable $e) {}
                         <div id="attachments_phenomenon" class="qa-attach-list"></div>
                     </div>
                     <div class="form-group">
-                        <label>異常原因分類（單選）</label>
+                        <label>異常原因分類（可複選）</label>
                         <div>
                             <input type="hidden" id="qa_cause_cat">
                             <button type="button" class="btn btn-default btn-sm" id="qa_pick_cause">
@@ -820,23 +820,34 @@ var QA_API   = '../../src/store/store_QA_Abnormal_API.php';
 /* 異常原因分類（與品質異常處理單同一份代碼表）：逐層挑選走共用元件 eg_cause_picker.js */
 var QAB_CAUSE_TREE = <?= json_encode($QAB_CAUSE_TREE, JSON_UNESCAPED_UNICODE) ?>;
 var QAB_CAN_ADMIN  = <?= $QAB_CAN_ADMIN ? 'true' : 'false' ?>;
-function qaSetCause(id){
-    $('#qa_cause_cat').val(id || '');
-    $('#qa_cause_chips').html(id
-        ? EGCausePicker.chipsHtml(QAB_CAUSE_TREE, [id], { removable:true })
+/* 2026-09-23 起可複選（異常單本來就存得下好幾個，這裡原本只送一個）；值存逗號分隔 */
+function qaCauseSel(){
+    return String($('#qa_cause_cat').val()||'').split(',')
+             .map(function(s){ return s.trim(); }).filter(function(s){ return s!==''; });
+}
+function qaSetCause(ids){
+    ids = (ids === '' || ids === null || ids === undefined) ? []
+        : (Array.isArray(ids) ? ids.map(String) : [String(ids)]);
+    ids = ids.filter(function(s){ return s !== ''; });
+    $('#qa_cause_cat').val(ids.join(','));
+    $('#qa_cause_chips').html(ids.length
+        ? EGCausePicker.chipsHtml(QAB_CAUSE_TREE, ids, { removable:true })
         : '<span class="text-muted" style="font-size:12px;">尚未選擇</span>');
 }
 $(document).on('click', '#qa_pick_cause', function(){
     if (!QAB_CAUSE_TREE.length) { alert('管理員尚未建立異常原因分類，請到「品質異常處理單 → 設定 → 異常原因分類」建立。'); return; }
     EGCausePicker.open({
-        tree: QAB_CAUSE_TREE, selected: ($('#qa_cause_cat').val() ? [$('#qa_cause_cat').val()] : []),
-        multi: false, title: '選擇異常原因分類',
+        tree: QAB_CAUSE_TREE, selected: qaCauseSel(),
+        multi: true, title: '選擇異常原因分類',
         add: { url: QAB_API, csrf: QAB_CSRF, can: QAB_CAN_ADMIN },
         onTreeChange: function(t){ QAB_CAUSE_TREE = t; },
-        onApply: function(ids){ qaSetCause(ids.length ? ids[0] : ''); }
+        onApply: function(ids){ qaSetCause(ids); }
     });
 });
-$(document).on('click', '#qa_cause_chips .egcp-chip-x', function(){ qaSetCause(''); });
+$(document).on('click', '#qa_cause_chips .egcp-chip-x', function(){
+    var rid = String($(this).data('id'));
+    qaSetCause(qaCauseSel().filter(function(x){ return x !== rid; }));
+});
 var allIRData = [];
 var allDepts  = [];
 var currentFilter = 'all';
@@ -1272,7 +1283,7 @@ function openEditQAModal() {
         $('#qa_sqty').val(d.sqty || '');
         $('#qa_found_unit').val(d.found_unit || '');
         $('#qa_phenomenon').val(d.abnormal_phenomenon || '');
-        qaSetCause((d.cause_ids && d.cause_ids.length) ? d.cause_ids[0] : '');
+        qaSetCause(d.cause_ids || []);
         $('#qa_defect_detail').val(d.defect_detail || '');
         $('#qa_ps').val(d.qa_ps || '');
         $('#qa_disposition_note').val(d.disposition_note || '');
@@ -1449,7 +1460,7 @@ function buildQAFormData() {
         found_unit:           $('#qa_found_unit').val(),
         abnormal_phenomenon:  $('#qa_phenomenon').val(),
         abnormal_type_id:     $('#qa_abnormal_type').val(),
-        cause_ids:            JSON.stringify($('#qa_cause_cat').val() ? [parseInt($('#qa_cause_cat').val(), 10)] : []),
+        cause_ids:            JSON.stringify(qaCauseSel().map(function(x){ return parseInt(x, 10); })),
         defect_detail:        $('#qa_defect_detail').val(),
         disposition:          disposition.join(','),
         disposition_note:     $('#qa_disposition_note').val(),

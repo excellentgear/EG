@@ -1378,29 +1378,39 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         $(this).text(secAllFolded()?'全部展開':'全部收合');
       });
 
-      // 異常原因分類：逐層挑選（共用元件 EGCausePicker），選好的路徑顯示在按鈕下方
+      // 異常原因分類：逐層挑選（共用元件 EGCausePicker），可複選，已選的以標籤顯示在按鈕下方
+      function causeSel(){
+        return String($('#rp-cause-cat').val()||'').split(',')
+                 .map(function(s){ return s.trim(); }).filter(function(s){ return s!==''; });
+      }
       function refreshCausePath(){
         if(!$('#rp-cause-path').length) return;
-        var v=$('#rp-cause-cat').val()||'';
-        $('#rp-cause-path').html(v
-          ? ('已選：<b>'+esc(EGCausePicker.pathOf(r.causes, v)||('#'+v))+'</b>')
-          : '<span style="color:#a94442;">尚未選擇（簽章前一定要選一個）</span>');
+        var ids=causeSel();
+        $('#rp-cause-path').html(ids.length
+          ? ('已選：'+EGCausePicker.chipsHtml(r.causes, ids, { removable:true }))
+          : '<span style="color:#a94442;">尚未選擇（簽章前至少要選一個）</span>');
       }
       refreshCausePath();
       $('#btn-pick-cause').on('click', function(){
         EGCausePicker.open({
-          tree: r.causes||[], selected: ($('#rp-cause-cat').val()? [$('#rp-cause-cat').val()] : []),
-          multi: false, title: '選擇異常原因分類', add: causeAddCfg(),
+          tree: r.causes||[], selected: causeSel(),
+          multi: true, title: '選擇異常原因分類', add: causeAddCfg(),
           onTreeChange: function(t){ r.causes = t; },   // 就地新增後本頁的樹也要跟著更新，路徑才印得出來
-          onApply: function(ids){ $('#rp-cause-cat').val(ids.length?ids[0]:''); refreshCausePath(); rpAutoSave(); }
+          onApply: function(ids){ $('#rp-cause-cat').val(ids.join(',')); refreshCausePath(); rpAutoSave(); }
         });
+      });
+      // 標籤上的 × ＝取消其中一個（不必重開挑選視窗）
+      $(document).on('click', '#rp-cause-path .egcp-chip-x', function(){
+        var rid=String($(this).data('id'));
+        $('#rp-cause-cat').val(causeSel().filter(function(x){ return x!==rid; }).join(','));
+        refreshCausePath(); rpAutoSave();
       });
       $('#btn-clear-cause').on('click', function(){ $('#rp-cause-cat').val(''); refreshCausePath(); rpAutoSave(); });
 
       // 回覆三段：儲存/簽章/修改/送出
       function gatherReply(){
         return { car_id:id,
-          cause_cat_id: $('#rp-cause-cat').val()||'',
+          cause_cat_ids: JSON.stringify(causeSel().map(function(x){ return parseInt(x,10); })),
           cause_detail: $('#rp-cause-detail').val()||'',
           disposition_opt_id: $('#view-body input[name="rp-disp-opt"]:checked').val()||'',
           correction_measure:$('#rp-corr').val()||'', correction_due:$('#rp-corr-due').val()||'',
@@ -1516,11 +1526,14 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       body+='</div>';
       return '<div class="panel panel-default" style="margin-bottom:8px;">'+head+body+'</div>';
     }
-    // ── 異常原因分類：逐層挑選（先第一層→第二層→第三層）、單選 ──
+    /* ── 異常原因分類：逐層挑選（先第一層→第二層→第三層）──
+       2026-09-23 使用者要求改成**可複選**（原本只存得下一個）：一張矯正單的原因常常不只
+       一個，而品質異常處理單本來就是複選，兩邊口徑不同對不起來。值存在隱藏欄位裡（逗號
+       分隔），送出時轉成 cause_cat_ids。 */
     var causeEdit='<div style="font-weight:600;margin-bottom:3px;">異常原因分類'
-      +' <small class="text-muted" style="font-weight:normal;">（單選；選單與品質異常處理單同一份，由管理員在異常單設定頁維護）</small></div>'
+      +' <small class="text-muted" style="font-weight:normal;">（<b>可複選</b>；選單與品質異常處理單同一份，由管理員在異常單設定頁維護）</small></div>'
       + (causes.length
-          ? '<input type="hidden" id="rp-cause-cat" value="'+esc(o.cause_cat_id||'')+'">'
+          ? '<input type="hidden" id="rp-cause-cat" value="'+esc((o.cause_cat_ids||[]).join(','))+'">'
             +'<div class="cc-pick"><button type="button" class="btn btn-default btn-sm" id="btn-pick-cause">'
             +'<i class="fa fa-sitemap"></i> 選擇分類</button>'
             +'<button type="button" class="btn btn-link btn-sm" id="btn-clear-cause">清除</button></div>'

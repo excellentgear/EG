@@ -903,6 +903,133 @@ function qab_cause_tree(PDO $db, bool $activeOnly = true): array
     return $build(0);
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   異常原因分類：使用中偵測與移轉（**全站唯一實作**）
+   ---------------------------------------------------------------------------
+   2026-09-23 使用者要求：設定頁改成逐層挑選之後，「修改／刪除都要偵測是否有已選定
+   此項之異常單、矯正單」，刪除時還要能「詢問是否轉到別的選項，設定完直接自動全部移轉」。
+
+   這份代碼表同時被三個地方選用，偵測與移轉一定要在同一支函式裡做完：
+     ① qa_abnormal_cause      品質異常處理單（可複選）
+     ② car_order_cause        異常矯正處理單（可複選，2026-09-23 之前是單選）
+     ③ car_order.cause_cat_id 矯正單的「主要分類」快取欄位（舊資料可能只有這一欄）
+   少算任何一個，畫面就會說「沒有人在用」，然後把別張單的分類刪成空白。
+
+   刻意不 require car_lib.php：那支會反過來 require 本檔，而且這裡只要對兩張表下最
+   單純的 SQL；矯正單模組還沒建過表時（乾淨安裝）一律當成 0 筆，不可以讓異常單的
+   設定頁因此整個開不起來。
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/** 這張表在不在（矯正單模組可能還沒初始化過）；一個 request 只查一次 */
+function qab_tbl_exists(PDO $db, string $tbl): bool
+{
+    static $cache = [];
+    if (isset($cache[$tbl])) return $cache[$tbl];
+    try {
+        $st = $db->prepare("SHOW TABLES LIKE ?");
+        $st->execute([$tbl]);
+        return $cache[$tbl] = (bool)$st->fetchColumn();
+    } catch (Throwable $e) { return $cache[$tbl] = false; }
+}
+
+/** 這個分類自己＋底下所有子孫的 cat_id（偵測與移轉都要含子孫，不然數字會少算） */
+function qab_cause_subtree_ids(PDO $db, int $catId): array
+{
+    $map = qab_cause_map($db);
+    $out = [];
+    $walk = function ($id) use (&$walk, $map, &$out) {
+        $out[] = (int)$id;
+        foreach ($map as $r) if ((int)$r['parent_id'] === (int)$id) $walk((int)$r['cat_id']);
+    };
+    if (isset($map[$catId])) $walk($catId); else $out[] = $catId;
+    return array_values(array_unique($out));
+}
+
+/**
+ * 這個分類被哪些單據選用了（$withSub=true 連子孫一起算）。
+ * 回傳 ['ab'=>['cnt'=>n,'docs'=>[單號…]], 'car'=>[...], 'total'=>n, 'ids'=>[算進去的cat_id]]
+ * docs 最多列 20 筆（只是給人確認「是哪幾張」，不是報表）。
+ */
+function qab_cause_usage(PDO $db, int $catId, bool $withSub = true): array
+{
+    $ids = $withSub ? qab_cause_subtree_ids($db, $catId) : [$catId];
+    $in  = implode(',', array_fill(0, count($ids), '?'));
+    $out = ['ab' => ['cnt' => 0, 'docs' => []], 'car' => ['cnt' => 0, 'docs' => []], 'total' => 0, 'ids' => $ids];
+
+    try {
+        $st = $db->prepare("SELECT o.abnormal_order_no AS no
+                              FROM qa_abnormal_cause c
+                              JOIN qa_abnormal_order o ON o.id = c.order_id
+                             WHERE c.cat_id IN ($in)
+                             GROUP BY o.id ORDER BY o.id DESC");
+        $st->execute($ids);
+        $rows = array_values(array_filter($st->fetchAll(PDO::FETCH_COLUMN)));
+        $out['ab'] = ['cnt' => count($rows), 'docs' => array_slice($rows, 0, 20)];
+    } catch (Throwable $e) {}
+
+    if (qab_tbl_exists($db, 'car_order')) {
+        try {
+            /* 矯正單兩個來源要一起看：新的多選子表，以及舊資料只寫了主要分類快取欄位的。
+               UNION 之後再取單號，同一張單不會被算成兩筆。 */
+            $sub = "SELECT id FROM car_order WHERE cause_cat_id IN ($in)";
+            $par = $ids;
+            if (qab_tbl_exists($db, 'car_order_cause')) {
+                $sub .= " UNION SELECT car_id FROM car_order_cause WHERE cat_id IN ($in)";
+                $par = array_merge($ids, $ids);
+            }
+            $st = $db->prepare("SELECT c.car_no FROM car_order c WHERE c.id IN ($sub) ORDER BY c.id DESC");
+            $st->execute($par);
+            $rows = array_values(array_filter($st->fetchAll(PDO::FETCH_COLUMN)));
+            $out['car'] = ['cnt' => count($rows), 'docs' => array_slice($rows, 0, 20)];
+        } catch (Throwable $e) {}
+    }
+
+    $out['total'] = $out['ab']['cnt'] + $out['car']['cnt'];
+    return $out;
+}
+
+/**
+ * 把「選用 $fromIds 這幾個分類」的單據全部改成選用 $toId。
+ * **呼叫端要自己包 transaction**（刪除分類時「移轉＋刪除」要一起成立或一起不成立）。
+ *
+ * 異常單那張是 UNIQUE(order_id,cat_id) 的複選表，直接 UPDATE 會在「同一張單原本就
+ * 同時選了來源與目標」時撞鍵（1062）——所以一律先插目標再刪來源，不用 UPDATE。
+ */
+function qab_cause_transfer(PDO $db, array $fromIds, int $toId): array
+{
+    $fromIds = array_values(array_unique(array_map('intval', $fromIds)));
+    $fromIds = array_values(array_filter($fromIds, function ($v) use ($toId) { return $v > 0 && $v !== $toId; }));
+    $res = ['ab' => 0, 'car' => 0, 'car_cache' => 0];
+    if (!$fromIds || $toId <= 0) return $res;
+    $in = implode(',', array_fill(0, count($fromIds), '?'));
+
+    // ① 異常單（複選表）
+    $st = $db->prepare("INSERT IGNORE INTO qa_abnormal_cause (order_id, cat_id)
+                        SELECT DISTINCT order_id, ? FROM qa_abnormal_cause WHERE cat_id IN ($in)");
+    $st->execute(array_merge([$toId], $fromIds));
+    $st = $db->prepare("DELETE FROM qa_abnormal_cause WHERE cat_id IN ($in)");
+    $st->execute($fromIds);
+    $res['ab'] = $st->rowCount();
+
+    // ② 矯正單（複選子表，可能還沒建）
+    if (qab_tbl_exists($db, 'car_order_cause')) {
+        $st = $db->prepare("INSERT IGNORE INTO car_order_cause (car_id, cat_id)
+                            SELECT DISTINCT car_id, ? FROM car_order_cause WHERE cat_id IN ($in)");
+        $st->execute(array_merge([$toId], $fromIds));
+        $st = $db->prepare("DELETE FROM car_order_cause WHERE cat_id IN ($in)");
+        $st->execute($fromIds);
+        $res['car'] = $st->rowCount();
+    }
+
+    // ③ 矯正單的主要分類快取欄位（舊資料只有這一欄，不改的話畫面照樣印著被刪掉的分類）
+    if (qab_tbl_exists($db, 'car_order')) {
+        $st = $db->prepare("UPDATE car_order SET cause_cat_id=? WHERE cause_cat_id IN ($in)");
+        $st->execute(array_merge([$toId], $fromIds));
+        $res['car_cache'] = $st->rowCount();
+    }
+    return $res;
+}
+
 /** 處置方式／總經理裁示 選項 */
 function qab_options(PDO $db, string $kind, bool $activeOnly = true): array
 {

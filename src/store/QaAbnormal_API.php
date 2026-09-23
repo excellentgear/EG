@@ -879,17 +879,94 @@ case 'cfg_save_all': {
                 'gm_person' => qab_gm_person($db)]);
 }
 
+/* 這個分類（含底下子孫）被哪幾張異常單／矯正單選用了——改名與刪除前都會先問一次。
+   唯一實作在 qab_cause_usage()，畫面只負責顯示。 */
+case 'cause_usage': {
+    if (!$perms['canAdmin']) jerr('只有管理員可以維護異常原因分類');
+    $catId = (int)($_POST['cat_id'] ?? $_GET['cat_id'] ?? 0);
+    if ($catId <= 0) jerr('請指定分類');
+    $map = qab_cause_map($db);
+    if (!isset($map[$catId])) jerr('分類不存在，請重新整理後再試');
+    $st = $db->prepare("SELECT COUNT(*) FROM qa_cause_cat WHERE parent_id=?"); $st->execute([$catId]);
+    jout(true, [
+        'cat_id'    => $catId,
+        'path'      => $map[$catId]['path'],
+        'kids'      => (int)$st->fetchColumn(),
+        'usage'     => qab_cause_usage($db, $catId, true),      // 含子孫
+        'usage_self' => qab_cause_usage($db, $catId, false),    // 只有自己
+    ]);
+}
+
+/* 刪除分類：有單據選用時一定要指定「移轉到哪一個分類」，移轉與刪除包在同一個交易裡。
+   使用者要求「詢問是否轉到別的選項，設定完直接自動全部移轉」——所以不再像舊版直接擋下。 */
 case 'cause_del': {
     if (!$perms['canAdmin']) jerr('只有管理員可以維護異常原因分類');
     $catId = (int)($_POST['cat_id'] ?? 0);
+    $toId  = (int)($_POST['to_cat_id'] ?? 0);
+    $map   = qab_cause_map($db);
+    if (!isset($map[$catId])) jerr('分類不存在，請重新整理後再試');
+
     $st = $db->prepare("SELECT COUNT(*) FROM qa_cause_cat WHERE parent_id=?"); $st->execute([$catId]);
-    if ((int)$st->fetchColumn() > 0) jerr('這個分類底下還有下層分類，請先處理下層');
-    // 已經被異常單選過的一律不給刪（刪掉那些單的原因分類會變成空白，而且看不出原因）
-    $st = $db->prepare("SELECT COUNT(*) FROM qa_abnormal_cause WHERE cat_id=?"); $st->execute([$catId]);
-    $used = (int)$st->fetchColumn();
-    if ($used > 0) jerr("已有 {$used} 張異常單選用這個分類，不可刪除；請改成「停用」（既有單仍看得到，新單不會再出現）");
-    $db->prepare("DELETE FROM qa_cause_cat WHERE cat_id=?")->execute([$catId]);
-    jout(true, ['causes' => qab_cause_tree($db, false)]);
+    if ((int)$st->fetchColumn() > 0) jerr('這個分類底下還有下層分類，請先刪除或移走下層，再刪除它');
+
+    $usage = qab_cause_usage($db, $catId, true);
+    if ($usage['total'] > 0) {
+        if ($toId <= 0) {
+            // 前端正常情況下會先問過；直打 API 或畫面沒刷新時由這裡擋下並回報現況
+            jout(false, ['need_transfer' => true, 'usage' => $usage,
+                         'message' => '已有 ' . $usage['total'] . ' 張單據選用這個分類，請先指定要移轉到哪一個分類']);
+        }
+        if (!isset($map[$toId]))  jerr('要移轉到的分類不存在，請重新整理後再選');
+        if ($toId === $catId)     jerr('不可以移轉到自己');
+        // 移轉目標若在自己底下，刪完之後一樣會不見（這裡子孫已擋在前面，仍再防一次）
+        if (in_array($toId, qab_cause_subtree_ids($db, $catId), true)) jerr('不可以移轉到自己底下的分類');
+    }
+
+    $moved = ['ab' => 0, 'car' => 0, 'car_cache' => 0];
+    $db->beginTransaction();
+    try {
+        if ($usage['total'] > 0) $moved = qab_cause_transfer($db, [$catId], $toId);
+        $db->prepare("DELETE FROM qa_cause_cat WHERE cat_id=?")->execute([$catId]);
+        $db->commit();
+    } catch (Throwable $ex) { if ($db->inTransaction()) $db->rollBack(); throw $ex; }
+
+    jout(true, [
+        'causes'   => qab_cause_tree($db, false),
+        'moved'    => $moved,
+        'moved_to' => $toId > 0 ? ($map[$toId]['path'] ?? '') : '',
+        'deleted'  => $map[$catId]['path'],
+    ]);
+}
+
+/* 同一層之內上下移（取代舊設定頁的拖曳排序；挑選畫面是大方塊，拖曳不好操作） */
+case 'cause_move': {
+    if (!$perms['canAdmin']) jerr('只有管理員可以維護異常原因分類');
+    $catId = (int)($_POST['cat_id'] ?? 0);
+    $dir   = ($_POST['dir'] ?? '') === 'down' ? 1 : -1;
+    $map   = qab_cause_map($db);
+    if (!isset($map[$catId])) jerr('分類不存在，請重新整理後再試');
+
+    // 同一層的兄弟依目前順序排好，跟隔壁那一個互換位置後整層重新編號（10,20,30…）
+    $pid = $map[$catId]['parent_id'];
+    $sib = [];
+    foreach ($map as $r) if ((string)$r['parent_id'] === (string)$pid) $sib[] = $r;
+    usort($sib, function ($a, $b) {
+        if ($a['sort_order'] === $b['sort_order']) return $a['cat_id'] <=> $b['cat_id'];
+        return $a['sort_order'] <=> $b['sort_order'];
+    });
+    $idx = -1;
+    foreach ($sib as $i => $r) if ((int)$r['cat_id'] === $catId) { $idx = $i; break; }
+    $swap = $idx + $dir;
+    if ($idx < 0 || $swap < 0 || $swap >= count($sib)) jout(true, ['causes' => qab_cause_tree($db, false), 'moved' => 0]);
+    $tmp = $sib[$idx]; $sib[$idx] = $sib[$swap]; $sib[$swap] = $tmp;
+
+    $db->beginTransaction();
+    try {
+        $up = $db->prepare("UPDATE qa_cause_cat SET sort_order=? WHERE cat_id=?");
+        foreach ($sib as $i => $r) $up->execute([($i + 1) * 10, (int)$r['cat_id']]);
+        $db->commit();
+    } catch (Throwable $ex) { if ($db->inTransaction()) $db->rollBack(); throw $ex; }
+    jout(true, ['causes' => qab_cause_tree($db, false), 'moved' => 1]);
 }
 
 case 'opt_save': {

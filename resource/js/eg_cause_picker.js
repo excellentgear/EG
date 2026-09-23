@@ -84,6 +84,31 @@
             '.egcp-new{background:#FFF8EE;border:1px solid #E4D3BC;border-radius:6px;padding:8px 10px;margin-bottom:8px;}',
             '.egcp-new input{border:1px solid #D9A066;border-radius:5px;padding:4px 8px;font-size:14px;width:260px;}',
             '.egcp-new .egcp-err{color:#DD5138;font-size:12px;margin-top:4px;}',
+            /* ── 維護模式（設定頁用）：右上角鉛筆＝修改，修改面板裡才有刪除 ── */
+            '.egcp-grid .egcp-cell.has-pen>button:first-child{padding-right:34px;}',
+            '.egcp-grid .egcp-pen{position:absolute;right:5px;top:5px;min-width:0;width:23px;height:23px;min-height:0;',
+            '  border:1px solid #D9A066;background:#FFF8EE;color:#8A5A2B;border-radius:50%;padding:0;font-size:12px;',
+            '  font-weight:normal;line-height:19px;text-align:center;cursor:pointer;}',
+            '.egcp-grid .egcp-pen:hover{background:#F0A24B;color:#3B2A18;border-color:#C0703A;}',
+            '.egcp-grid button.off{background:#F5F1EA;color:#9c8b76;border-style:dashed;}',
+            '.egcp-ed{background:#FFF8EE;border:1px solid #D9A066;border-radius:6px;padding:10px 12px;margin-bottom:10px;}',
+            '.egcp-ed h5{margin:0 0 8px;font-size:14px;color:#8A5A2B;}',
+            '.egcp-ed .egcp-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;}',
+            '.egcp-ed input[type=text]{border:1px solid #D9A066;border-radius:5px;padding:4px 8px;font-size:14px;flex:1 1 220px;min-width:180px;}',
+            '.egcp-ed label{font-size:13px;font-weight:normal;margin:0;display:inline-flex;align-items:center;gap:4px;}',
+            '.egcp-ed .egcp-use{font-size:12px;background:#fff;border:1px solid #E4D3BC;border-radius:5px;padding:6px 8px;',
+            '  line-height:1.7;margin-bottom:8px;max-height:110px;overflow:auto;}',
+            '.egcp-ed .egcp-use b{color:#C0703A;}',
+            '.egcp-ed .egcp-err{color:#DD5138;font-size:12px;margin-top:4px;}',
+            '.egcp-del{border:1px solid #DD5138;background:#fff;color:#DD5138;border-radius:5px;padding:4px 12px;font-size:13px;cursor:pointer;}',
+            '.egcp-del:hover{background:#DD5138;color:#fff;}',
+            '.egcp-xfer{background:#fff;border:1px solid #DD5138;border-radius:6px;padding:8px 10px;margin-top:8px;}',
+            '.egcp-xfer .egcp-flt{width:100%;margin-bottom:6px;}',
+            '.egcp-xlist{max-height:170px;overflow:auto;border:1px solid #eee;border-radius:5px;}',
+            '.egcp-xlist button{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid #f3f3f3;',
+            '  background:#fff;padding:5px 8px;font-size:13px;cursor:pointer;color:#4A3524;}',
+            '.egcp-xlist button:hover{background:#FDF6EC;}',
+            '.egcp-xlist button.on{background:#F0A24B;color:#3B2A18;font-weight:bold;}',
             '.egcp-ft{border-top:1px solid #eee;padding:10px 14px;display:flex;align-items:center;gap:8px;}',
             '.egcp-ft .egcp-sp{margin-left:auto;}',
             '.egcp-ok{border:1px solid #C0703A;background:#F0A24B;color:#3B2A18;border-radius:5px;padding:5px 14px;',
@@ -219,7 +244,8 @@
             headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }, body: body
         }).then(function (r) { return r.json(); }).then(function (res) {
             if (!res || !res.success) { $e.textContent = (res && res.message) || '建立失敗'; return; }
-            cur.tree = onlyActive(res.causes || []);
+            // 維護模式要連停用的一起看得到（挑選模式只要啟用中的）
+            cur.tree = isManage() ? (res.causes || []) : onlyActive(res.causes || []);
             var newId = parseInt(res.cat_id, 10) || 0;
             hideNewRow();
             /* 新建的分類底下一定是空的＝在畫面上會被當成「最底層、點了就選它」，
@@ -241,8 +267,210 @@
     }
 
 
+    /* ══════════════════════════════════════════════════════════════════════
+       維護模式（管理員在「品質異常處理單 → 設定 → 異常原因分類」用）
+       ----------------------------------------------------------------------
+       2026-09-23 使用者要求：設定頁那張表格不好用，改成跟挑選畫面同一套大方塊，
+       「修改用筆圖示表示在選項右上角，刪除則需要進去修改才能按刪除」。
+       所以維護模式與挑選模式共用同一份方塊與同一套逐層瀏覽，差別只有三件事：
+         ① 點方塊＝往下一層看（不是選它）   ② 右上角多一顆鉛筆＝開修改面板
+         ③ 底部沒有「確定」，改的東西當下就存
+       寫入一律打後端 cause_save／cause_del／cause_move／cause_usage（唯一實作），
+       這裡不自己算使用筆數、也不自己判權限（後端會再擋一次＝鐵律8）。
+       ══════════════════════════════════════════════════════════════════════ */
+    function isManage() { return !!(cur && cur.manage && cur.manage.can); }
+
+    function mgPost(action, params, ok, fail) {
+        var body = 'action=' + encodeURIComponent(action)
+                 + '&csrf=' + encodeURIComponent((cur.manage && cur.manage.csrf) || '');
+        Object.keys(params || {}).forEach(function (k) {
+            body += '&' + k + '=' + encodeURIComponent(params[k] === null || params[k] === undefined ? '' : params[k]);
+        });
+        fetch(cur.manage.url, {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' }, body: body
+        }).then(function (r) { return r.json(); }).then(function (res) {
+            if (res && res.success) { ok(res); return; }
+            if (fail) fail(res || {}); else alert((res && res.message) || '操作失敗');
+        }).catch(function () {
+            if (fail) fail({ message: '連線失敗，請重新整理頁面後再試' });
+            else alert('連線失敗，請重新整理頁面後再試');
+        });
+    }
+
+    /** 換掉整棵樹之後要把畫面與呼叫端一起更新（停用的分類在維護模式一樣要看得到） */
+    function mgAfterTree(res) {
+        cur.tree = res.causes || [];
+        if (cur.onTreeChange) cur.onTreeChange(cur.tree);
+    }
+
+    function openEdit(id) {
+        var n = findNode(cur.tree, id);
+        if (!n) return;
+        cur.edit = { id: String(id), name: n.name, active: Number(n.is_active) !== 0, usage: null, xfer: false, to: '', flt: '' };
+        hideNewRow();
+        renderEdit();
+        loadUsage(id);
+        render();
+    }
+    function closeEdit() { cur.edit = null; renderEdit(); render(); }
+
+    function loadUsage(id) {
+        mgPost('cause_usage', { cat_id: id }, function (res) {
+            if (!cur || !cur.edit || String(cur.edit.id) !== String(id)) return;   // 已經換一個在改了
+            cur.edit.usage = res;
+            renderEdit();
+        }, function (res) {
+            if (!cur || !cur.edit) return;
+            cur.edit.usage = { err: (res && res.message) || '查不到使用情形' };
+            renderEdit();
+        });
+    }
+
+    function usageHtml(u) {
+        if (!u) return '<span style="color:#8a6a45;">使用情形查詢中…</span>';
+        if (u.err) return '<span style="color:#DD5138;">' + esc(u.err) + '</span>';
+        var t = (u.usage && u.usage.total) || 0;
+        if (!t) return '目前<b>沒有</b>任何異常單或矯正單選用這個分類（含底下的下層分類），可以安全修改或刪除。';
+        var ab = u.usage.ab || { cnt: 0, docs: [] }, car = u.usage.car || { cnt: 0, docs: [] };
+        var h = '已經有 <b>' + t + '</b> 張單據選用這個分類';
+        h += (u.kids ? '（含底下 ' + u.kids + ' 個下層分類）' : '') + '：<br>';
+        if (ab.cnt) h += '　異常單 <b>' + ab.cnt + '</b> 張：' + esc(ab.docs.join('、'))
+                      + (ab.cnt > ab.docs.length ? ' …等' : '') + '<br>';
+        if (car.cnt) h += '　矯正單 <b>' + car.cnt + '</b> 張：' + esc(car.docs.join('、'))
+                       + (car.cnt > car.docs.length ? ' …等' : '') + '<br>';
+        h += '<span style="color:#8a6a45;">改名稱不會影響這些單據的歸屬，但它們顯示的分類名稱會一起變成新名稱；'
+           + '要刪除的話必須指定移轉到哪一個分類。</span>';
+        return h;
+    }
+
+    /** 移轉目標的候選：全部分類扣掉自己與自己的子孫（移到自己底下＝刪完一樣會不見） */
+    function xferCandidates(excludeId) {
+        var bad = {}, out = [];
+        (function mark(n) { bad[String(n.cat_id)] = 1; (n.children || []).forEach(mark); })(findNode(cur.tree, excludeId) || { cat_id: excludeId, children: [] });
+        (function walk(ns, prefix) {
+            (ns || []).forEach(function (n) {
+                var p = prefix ? (prefix + ' → ' + n.name) : n.name;
+                if (!bad[String(n.cat_id)]) out.push({ id: String(n.cat_id), path: p, active: Number(n.is_active) !== 0 });
+                walk(n.children, p);
+            });
+        })(cur.tree, '');
+        return out;
+    }
+
+    function renderEdit() {
+        if (!cur) return;
+        if (!cur.edit) { cur.$ed.style.display = 'none'; cur.$ed.innerHTML = ''; return; }
+        var e = cur.edit;
+        /* 使用情形是非同步查回來的，回來時會重畫這個面板——要先把「使用者已經打到一半的
+           名稱」接回來，否則查詢一回來就把剛打的字洗掉（而且完全看不出原因）。 */
+        var $nm = cur.$ed.querySelector('.egcp-ed-nm');
+        if ($nm) {
+            e.name = $nm.value;
+            var $ac = cur.$ed.querySelector('.egcp-ed-act');
+            if ($ac) e.active = $ac.checked;
+        }
+        var full = pathOf(cur.tree, e.id) || e.name;
+        var h = '<h5><i class="fa fa-pencil"></i> 修改分類：' + esc(full) + '</h5>'
+              + '<div class="egcp-row">'
+              + '<input type="text" class="egcp-ed-nm" maxlength="60" value="' + esc(e.name) + '" placeholder="分類名稱">'
+              + '<label><input type="checkbox" class="egcp-ed-act"' + (e.active ? ' checked' : '') + '> 啟用</label>'
+              + '<button type="button" class="egcp-btn" data-act="mgup" title="在同一層往前移">↑</button>'
+              + '<button type="button" class="egcp-btn" data-act="mgdown" title="在同一層往後移">↓</button>'
+              + '<button type="button" class="egcp-ok" data-act="mgsave">儲存</button>'
+              + '<button type="button" class="egcp-cancel" data-act="mgclose">關閉</button>'
+              + '</div>'
+              + '<div class="egcp-use">' + usageHtml(e.usage) + '</div>'
+              + '<div class="egcp-row"><button type="button" class="egcp-del" data-act="mgdel">'
+              + '<i class="fa fa-trash"></i> 刪除這個分類</button>'
+              + '<span style="font-size:12px;color:#8a6a45;">停用＝既有單據仍看得到，新單不再出現（比刪除安全）。</span></div>'
+              + '<div class="egcp-err"></div>';
+
+        if (e.xfer) {
+            var cands = xferCandidates(e.id).filter(function (c) {
+                if (!e.flt) return true;
+                return c.path.toLowerCase().indexOf(String(e.flt).toLowerCase()) >= 0;
+            });
+            h += '<div class="egcp-xfer">'
+               + '<div style="font-weight:bold;color:#DD5138;margin-bottom:6px;">'
+               + '這個分類已經有單據在用，要刪除的話請先選一個「改成哪一個分類」，'
+               + '按下之後會<b>自動把全部單據移轉過去</b>再刪除。</div>'
+               + '<input type="text" class="egcp-flt" placeholder="輸入關鍵字縮小範圍…" value="' + esc(e.flt || '') + '">'
+               + '<div class="egcp-xlist">'
+               + (cands.length ? cands.map(function (c) {
+                     return '<button type="button" data-act="mgto" data-id="' + esc(c.id) + '"'
+                          + (String(e.to) === c.id ? ' class="on"' : '') + '>' + esc(c.path)
+                          + (c.active ? '' : '（已停用）') + '</button>';
+                 }).join('') : '<div style="padding:8px;color:#8a6a45;font-size:13px;">沒有符合的分類</div>')
+               + '</div>'
+               + '<div class="egcp-row" style="margin:8px 0 0;">'
+               + '<button type="button" class="egcp-del" data-act="mgdelgo"'
+               + (e.to ? '' : ' disabled style="opacity:.5;cursor:not-allowed;"') + '>移轉並刪除</button>'
+               + '<button type="button" class="egcp-cancel" data-act="mgxcancel">取消</button>'
+               + '</div></div>';
+        }
+        cur.$ed.innerHTML = h;
+        cur.$ed.style.display = '';
+    }
+
+    function mgSave() {
+        var e = cur.edit, $e = cur.$ed.querySelector('.egcp-err');
+        var nm = (cur.$ed.querySelector('.egcp-ed-nm').value || '').trim();
+        var act = cur.$ed.querySelector('.egcp-ed-act').checked ? 1 : '';
+        if (!nm) { $e.textContent = '請填分類名稱'; return; }
+        var n = findNode(cur.tree, e.id) || {};
+        $e.textContent = '儲存中…';
+        mgPost('cause_save', { cat_id: e.id, name: nm, parent_id: n.parent_id || '',
+                               sort_order: n.sort_order || 0, is_active: act },
+            function (res) {
+                mgAfterTree(res);
+                cur.edit.name = nm; cur.edit.active = !!act;
+                cur.hint = '已儲存「<b>' + esc(nm) + '</b>」。';
+                renderEdit(); render();
+            },
+            function (res) { $e.textContent = (res && res.message) || '儲存失敗'; });
+    }
+
+    function mgMove(dir) {
+        var e = cur.edit, $e = cur.$ed.querySelector('.egcp-err');
+        $e.textContent = '';
+        mgPost('cause_move', { cat_id: e.id, dir: dir }, function (res) {
+            mgAfterTree(res); renderEdit(); render();
+        }, function (res) { $e.textContent = (res && res.message) || '移動失敗'; });
+    }
+
+    function mgDelete() {
+        var e = cur.edit, $e = cur.$ed.querySelector('.egcp-err');
+        var u = e.usage;
+        if (!u || u.err) { $e.textContent = '使用情形還沒查回來，請稍候再按一次'; return; }
+        if (u.kids) { $e.textContent = '這個分類底下還有 ' + u.kids + ' 個下層分類，請先刪除或移走下層，再刪除它'; return; }
+        var total = (u.usage && u.usage.total) || 0;
+        if (total > 0) {           // 有單據在用 → 一定要先挑移轉目標
+            cur.edit.xfer = true; renderEdit(); return;
+        }
+        if (!confirm('確定要刪除「' + (pathOf(cur.tree, e.id) || e.name) + '」？\n目前沒有任何單據選用它。')) return;
+        doDelete(0);
+    }
+    function doDelete(toId) {
+        var e = cur.edit, $e = cur.$ed.querySelector('.egcp-err');
+        $e.textContent = '處理中…';
+        mgPost('cause_del', { cat_id: e.id, to_cat_id: toId || 0 }, function (res) {
+            mgAfterTree(res);
+            var m = res.moved || {};
+            var n = (m.ab || 0) + (m.car || 0);
+            cur.edit = null;
+            /* 刪掉的如果正好是目前停留的那一層，畫面要退回上一層，否則會停在一個不存在的節點 */
+            if (cur.path.length && !findNode(cur.tree, cur.path[cur.path.length - 1])) cur.path = cur.path.slice(0, -1);
+            cur.hint = '已刪除「<b>' + esc(res.deleted || '') + '</b>」'
+                     + (res.moved_to ? ('，原本選用它的單據已全部移轉到「<b>' + esc(res.moved_to) + '</b>」'
+                                        + (n ? ('（' + n + ' 筆）') : '')) : '') + '。';
+            renderEdit(); render();
+        }, function (res) { $e.textContent = (res && res.message) || '刪除失敗'; });
+    }
+
     function close() {
         if (!cur) return;
+        var onClose = cur.onClose, tree = cur.tree;
         if (cur.mask && cur.mask.parentNode) cur.mask.parentNode.removeChild(cur.mask);
         document.removeEventListener('keydown', cur.onKey, true);
         // 還原底下那個 Bootstrap 跳窗的焦點鎖（開啟時為了讓輸入框打得了字而暫時拿掉）
@@ -254,6 +482,7 @@
             } catch (e) {}
         }
         cur = null;
+        if (onClose) onClose(tree);      // 設定頁要用它把畫面上的分類總覽重畫
     }
 
     function render() {
@@ -262,19 +491,25 @@
         var list = nodesOf(tree, path);
         var lv = path.length + 1;
 
-        // 已選
-        cur.$picked.innerHTML = '<b>已選：</b>' + chipsHtml(tree, sel, { removable: true });
+        var mg = isManage();
 
-        // 麵包屑＋「直接選這一層」
+        // 已選（維護模式沒有「選」這件事）
+        if (mg) { cur.$picked.style.display = 'none'; }
+        else cur.$picked.innerHTML = '<b>已選：</b>' + chipsHtml(tree, sel, { removable: true });
+
+        // 麵包屑＋「直接選這一層」／維護模式的「修改這一層」
         var crumb = '<span class="egcp-here">第 ' + lv + ' 層</span>';
         if (path.length) {
             var names = path.map(function (id) { var n = findNode(tree, id); return n ? n.name : ('#' + id); });
             crumb = '<b>' + esc(names.join(' → ')) + '</b>';
             var here = path[path.length - 1];
             crumb += '<button type="button" class="egcp-btn" data-act="up">← 上一層</button>';
-            crumb += '<button type="button" class="egcp-btn" data-act="self" data-id="' + esc(here) + '">'
+            crumb += mg
+                ? ('<button type="button" class="egcp-btn" data-act="pen" data-id="' + esc(here) + '">'
+                   + '✎ 修改「' + esc(names[names.length - 1]) + '」這一層</button>')
+                : ('<button type="button" class="egcp-btn" data-act="self" data-id="' + esc(here) + '">'
                    + (sel.indexOf(String(here)) >= 0 ? '取消選這一層' : '就選「' + esc(names[names.length - 1]) + '」這一層')
-                   + '</button>';
+                   + '</button>');
         }
         cur.$crumb.innerHTML = crumb;
 
@@ -285,29 +520,39 @@
         // 方塊
         if (!list.length) {
             cur.$grid.innerHTML = '<div class="egcp-empty">這一層底下還沒有更細的分類'
-                                + (canAddHere() ? '，可以用右邊的「＋」新增一個' : '')
-                                + '；也可以用上面的「就選…這一層」直接選定，或按「← 上一層」換一個。</div>'
+                                + (canAddHere() ? '，可以用下面的「＋」新增一個'
+                                               : (path.length >= 3 ? '（已經是第三層，不能再往下）' : ''))
+                                + '；'
+                                + (mg ? '按「← 上一層」可以換一個。' : '也可以用上面的「就選…這一層」直接選定，或按「← 上一層」換一個。')
+                                + '</div>'
                                 + addTile();
         } else {
             cur.$grid.innerHTML = list.map(function (n) {
                 var kids = (n.children || []).length;
-                var on = sel.indexOf(String(n.cat_id)) >= 0;
-                var mark = (!on && hasSelectedUnder(n, sel)) ? ' has-sel' : '';
+                var on = !mg && sel.indexOf(String(n.cat_id)) >= 0;
+                var mark = (!mg && !on && hasSelectedUnder(n, sel)) ? ' has-sel' : '';
                 var just = (String(n.cat_id) === String(cur.justAdded)) ? ' egcp-just' : '';
+                var off = Number(n.is_active) === 0 ? ' off' : '';
                 /* 沒有子項的分類本來就是「點了就選它」。但管理員要在它底下再加一層時，
                    一路點下去只會變成選取、永遠進不去（使用者回報：新增完第二層就被自動選定，
-                   看不到新增第三層的畫面）——所以多一顆窄的「＋」把「選它」與「進去它底下」分開。 */
-                var canInto = !kids && cur.add && cur.add.can && cur.path.length < 2;
-                return '<span class="egcp-cell' + just + (canInto ? ' has-into' : '') + '">'
-                    + '<button type="button" class="' + (on ? 'on' : '') + mark + '" data-act="go" data-id="' + esc(n.cat_id) + '">'
+                   看不到新增第三層的畫面）——所以多一顆窄的「＋」把「選它」與「進去它底下」分開。
+                   維護模式沒有這個問題（點方塊本來就是往下看），所以只長鉛筆不長「＋」。 */
+                var canInto = !mg && !kids && cur.add && cur.add.can && cur.path.length < 2;
+                return '<span class="egcp-cell' + just + (canInto ? ' has-into' : '') + (mg ? ' has-pen' : '') + '">'
+                    + '<button type="button" class="' + (on ? 'on' : '') + mark + off + '" data-act="go" data-id="' + esc(n.cat_id) + '">'
                     + esc(n.name)
-                    + '<small>' + (kids ? ('往下還有 ' + kids + ' 項') : (on ? '✓ 已選' : '可直接選')) + '</small></button>'
+                    + '<small>' + (mg
+                        ? ((kids ? ('底下有 ' + kids + ' 項') : '底下沒有下層') + (off ? '｜已停用' : ''))
+                        : (kids ? ('往下還有 ' + kids + ' 項') : (on ? '✓ 已選' : '可直接選')))
+                      + '</small></button>'
                     + (canInto ? ('<button type="button" class="egcp-into" data-act="into" data-id="' + esc(n.cat_id)
                                   + '" title="在「' + esc(n.name) + '」底下再加一層（不是選它）">＋</button>') : '')
+                    + (mg ? ('<button type="button" class="egcp-pen" data-act="pen" data-id="' + esc(n.cat_id)
+                             + '" title="修改「' + esc(n.name) + '」（名稱／停用／排序／刪除）">&#9998;</button>') : '')
                     + '</span>';
             }).join('') + addTile();
         }
-        cur.$okN.textContent = String(sel.length);
+        if (cur.$okN) cur.$okN.textContent = String(sel.length);
     }
 
     function pick(id) {
@@ -333,30 +578,40 @@
         opt = opt || {};
         injectCss();
         close();
+        var manage = (opt.manage && opt.manage.can) ? opt.manage : null;
         var mask = document.createElement('div');
         mask.className = 'egcp-mask';
         mask.innerHTML =
             '<div class="egcp-win" role="dialog">'
-            + '<div class="egcp-hd"><b>' + esc(opt.title || '選擇異常原因分類') + '</b>'
+            + '<div class="egcp-hd"><b>' + esc(opt.title || (manage ? '維護異常原因分類' : '選擇異常原因分類')) + '</b>'
             + '<button type="button" class="egcp-x" data-act="close" title="關閉">&times;</button></div>'
             + '<div class="egcp-bd">'
-            + '<div class="egcp-tip">' + (opt.tip || (
-                '先點<b>第一層</b>，再點<b>第二層</b>、<b>第三層</b>，一層一層往下選。'
-                + (opt.multi ? '可以選好幾個（再點一次＝取消），選完按「確定」。'
-                             : '<b>只能選一個</b>，點到最後要的那一個就直接套用。')
-                + '<br>分類清單由管理員在<b>品質異常處理單 → 設定 → 異常原因分類</b>維護，各表單共用同一份。'))
+            + '<div class="egcp-tip">' + (opt.tip || (manage
+                ? ('<b>點方塊</b>＝進去看它底下的分類；<b>右上角的 ✎</b>＝修改這一個（名稱、停用、排序，<b>刪除也在裡面</b>）；'
+                   + '<b>＋</b>＝在目前這一層新增。最多三層（例：人 → 操作疏失 → 未依SOP）。'
+                   + '<br>改好當下就存檔，不必再按儲存。<b>修改與刪除前會自動查「有沒有異常單／矯正單已經選了它」</b>；'
+                   + '要刪除有單據在用的分類時，會請你指定移轉到哪一個分類，按下去就自動全部移轉。')
+                : ('先點<b>第一層</b>，再點<b>第二層</b>、<b>第三層</b>，一層一層往下選。'
+                   + (opt.multi ? '可以選好幾個（再點一次＝取消），選完按「確定」。'
+                                : '<b>只能選一個</b>，點到最後要的那一個就直接套用。')
+                   + '<br>分類清單由管理員在<b>品質異常處理單 → 設定 → 異常原因分類</b>維護，各表單共用同一份。')))
             + '</div>'
             + '<div class="egcp-picked"></div>'
+            + '<div class="egcp-ed" style="display:none;"></div>'
             + '<div class="egcp-new" style="display:none;"></div>'
             + '<div class="egcp-hint" style="display:none;"></div>'
             + '<div class="egcp-crumb"></div>'
             + '<div class="egcp-grid"></div>'
             + '</div>'
             + '<div class="egcp-ft">'
-            + '<button type="button" class="egcp-cancel" data-act="clear">清除全部</button>'
-            + '<span class="egcp-sp"></span>'
-            + '<button type="button" class="egcp-cancel" data-act="close">取消</button>'
-            + '<button type="button" class="egcp-ok" data-act="ok">確定（已選 <b class="egcp-n">0</b> 項）</button>'
+            + (manage
+                ? ('<span style="font-size:12px;color:#8a6a45;">分類是各張表單共用的，改了之後品質異常處理單、'
+                   + '異常矯正處理單、客退單都會一起變。</span><span class="egcp-sp"></span>'
+                   + '<button type="button" class="egcp-ok" data-act="close">完成，關閉</button>')
+                : ('<button type="button" class="egcp-cancel" data-act="clear">清除全部</button>'
+                   + '<span class="egcp-sp"></span>'
+                   + '<button type="button" class="egcp-cancel" data-act="close">取消</button>'
+                   + '<button type="button" class="egcp-ok" data-act="ok">確定（已選 <b class="egcp-n">0</b> 項）</button>'))
             + '</div></div>';
         document.body.appendChild(mask);
 
@@ -365,10 +620,15 @@
             sel: (opt.selected || []).filter(function (x) { return x !== null && x !== undefined && x !== ''; }).map(String),
             multi: !!opt.multi,
             onApply: opt.onApply,
-            add: opt.add || null,
+            /* 維護模式本來就是管理員在用，新增那一套（＋ 方塊）直接沿用同一份設定 */
+            add: opt.add || (manage ? { can: true, url: manage.url, csrf: manage.csrf } : null),
+            manage: manage,
+            edit: null,
             onTreeChange: opt.onTreeChange,
+            onClose: opt.onClose,
             path: [],
             mask: mask,
+            $ed: mask.querySelector('.egcp-ed'),
             $picked: mask.querySelector('.egcp-picked'),
             $crumb: mask.querySelector('.egcp-crumb'),
             $grid: mask.querySelector('.egcp-grid'),
@@ -404,6 +664,23 @@
             if (act === 'close') { close(); return; }
             if (act === 'clear') { cur.sel = []; render(); return; }
             if (act === 'ok') { apply(); return; }
+            /* ── 維護模式 ── */
+            if (act === 'pen') { openEdit(b.getAttribute('data-id')); return; }
+            if (act === 'mgclose') { closeEdit(); return; }
+            if (act === 'mgsave') { mgSave(); return; }
+            if (act === 'mgup') { mgMove('up'); return; }
+            if (act === 'mgdown') { mgMove('down'); return; }
+            if (act === 'mgdel') { mgDelete(); return; }
+            if (act === 'mgto') { cur.edit.to = String(b.getAttribute('data-id')); renderEdit(); return; }
+            if (act === 'mgxcancel') { cur.edit.xfer = false; cur.edit.to = ''; renderEdit(); return; }
+            if (act === 'mgdelgo') {
+                if (!cur.edit.to) return;
+                var toPath = pathOf(cur.tree, cur.edit.to) || ('#' + cur.edit.to);
+                if (!confirm('確定要把目前選用「' + (pathOf(cur.tree, cur.edit.id) || cur.edit.name)
+                           + '」的所有異常單／矯正單，全部改成「' + toPath + '」，然後刪除這個分類？')) return;
+                doDelete(cur.edit.to);
+                return;
+            }
             if (act === 'into') { cur.path = cur.path.concat([String(b.getAttribute('data-id'))]);
                                   cur.hint = ''; cur.justAdded = 0; hideNewRow(); render(); return; }
             if (act === 'addnew') { showNewRow(); return; }
@@ -415,11 +692,30 @@
             if (act === 'go') {
                 var id = b.getAttribute('data-id');
                 var n = findNode(cur.tree, id);
-                if (n && n.children && n.children.length) { cur.path = cur.path.concat([String(id)]);
-                    cur.hint = ''; cur.justAdded = 0; hideNewRow(); render(); }
-                else pick(id);                                           // 最底層＝直接選
+                // 維護模式：點方塊一律是「進去看它底下」，沒有「選它」這件事
+                if (isManage() || (n && n.children && n.children.length)) {
+                    cur.path = cur.path.concat([String(id)]);
+                    cur.hint = ''; cur.justAdded = 0; hideNewRow();
+                    if (cur.edit) { cur.edit = null; renderEdit(); }
+                    render();
+                } else pick(id);                                         // 最底層＝直接選
                 return;
             }
+        });
+        // 移轉目標的關鍵字篩選：只重畫清單那一塊，整個面板重畫會讓輸入框失去焦點
+        mask.addEventListener('input', function (e) {
+            if (!cur || !cur.edit || !e.target.classList.contains('egcp-flt')) return;
+            cur.edit.flt = e.target.value || '';
+            var $l = cur.$ed.querySelector('.egcp-xlist');
+            if (!$l) return;
+            var cands = xferCandidates(cur.edit.id).filter(function (c) {
+                return !cur.edit.flt || c.path.toLowerCase().indexOf(cur.edit.flt.toLowerCase()) >= 0;
+            });
+            $l.innerHTML = cands.length ? cands.map(function (c) {
+                return '<button type="button" data-act="mgto" data-id="' + esc(c.id) + '"'
+                     + (String(cur.edit.to) === c.id ? ' class="on"' : '') + '>' + esc(c.path)
+                     + (c.active ? '' : '（已停用）') + '</button>';
+            }).join('') : '<div style="padding:8px;color:#8a6a45;font-size:13px;">沒有符合的分類</div>';
         });
         /* Bootstrap 3 的 modal 會在 document 上掛 focusin.bs.modal，只要焦點跑到跳窗外面就
            立刻搶回去（enforceFocus）——這個挑選視窗刻意掛在 body 上、不依賴 Bootstrap modal

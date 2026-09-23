@@ -714,7 +714,66 @@ function car_ensure_cause_cols(PDO $pdo): void {
                         COMMENT '處置方式(qa_option.opt_id, kind=disp)，單選；NULL 且有 disposition=舊資料'
                         AFTER disposition");
         }
+        /* 2026-09-23 使用者要求「異常原因分類要可以多選」（品質異常單本來就可複選，
+           矯正單原本只存得下一個）。比照站上既有做法：**複選的唯一來源是這張子表**，
+           `car_order.cause_cat_id` 降為「主要分類」快取（取第一個），由 car_cause_set()
+           一處同步——這樣既有讀 cause_cat_id 的程式（列印、清單摘要）一行都不必改。 */
+        $st = $pdo->query("SHOW TABLES LIKE 'car_order_cause'");
+        if (!$st->fetchColumn()) {
+            $pdo->exec("CREATE TABLE car_order_cause (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                car_id INT NOT NULL,
+                cat_id INT NOT NULL COMMENT '選到的那一層(qa_cause_cat.cat_id)，上層由該表推導',
+                UNIQUE KEY uk_cc (car_id, cat_id),
+                KEY idx_car (car_id)
+            ) DEFAULT CHARSET=utf8mb4 COMMENT='矯正單↔異常原因分類（可複選，存 id）'");
+            // 舊資料（只寫了單選欄位的）一次搬進子表，之後兩邊才會一致
+            $pdo->exec("INSERT IGNORE INTO car_order_cause (car_id, cat_id)
+                        SELECT id, cause_cat_id FROM car_order WHERE cause_cat_id IS NOT NULL AND cause_cat_id > 0");
+        }
     } catch (Throwable $e) {}
+}
+
+/**
+ * 這張矯正單選了哪些異常原因分類（**複選的唯一讀取點**）。
+ * 子表查不到時退回 `cause_cat_id`：萬一建表或回填沒跑到，舊單仍然看得到原本那一個，
+ * 不會整欄變空白（站上出貨綁定也是用同一種「即時退路」）。
+ */
+function car_cause_ids(PDO $pdo, int $carId, array $o = []): array {
+    if ($carId <= 0) return [];
+    try {
+        $st = $pdo->prepare("SELECT cat_id FROM car_order_cause WHERE car_id=? ORDER BY id");
+        $st->execute([$carId]);
+        $ids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+        if ($ids) return $ids;
+    } catch (Throwable $e) {}
+    $one = (int)($o['cause_cat_id'] ?? 0);
+    if ($one > 0) return [$one];
+    try {
+        $st = $pdo->prepare("SELECT cause_cat_id FROM car_order WHERE id=?");
+        $st->execute([$carId]);
+        $v = (int)$st->fetchColumn();
+        return $v > 0 ? [$v] : [];
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 寫入這張單的異常原因分類（**複選的唯一寫入點**）。
+ * 一併把 `car_order.cause_cat_id` 同步成「第一個」＝主要分類快取，
+ * 舊程式（列印摘要、清單）讀那一欄照樣拿得到東西。
+ * 呼叫端自己決定要不要包 transaction。
+ */
+function car_cause_set(PDO $pdo, int $carId, array $catIds): void {
+    if ($carId <= 0) return;
+    $ids = [];
+    foreach ($catIds as $v) { $v = (int)$v; if ($v > 0 && !in_array($v, $ids, true)) $ids[] = $v; }
+    $pdo->prepare("DELETE FROM car_order_cause WHERE car_id=?")->execute([$carId]);
+    if ($ids) {
+        $ins = $pdo->prepare("INSERT IGNORE INTO car_order_cause (car_id, cat_id) VALUES (?,?)");
+        foreach ($ids as $v) $ins->execute([$carId, $v]);
+    }
+    $pdo->prepare("UPDATE car_order SET cause_cat_id=? WHERE id=?")
+        ->execute([$ids ? $ids[0] : null, $carId]);
 }
 
 /** 載入異常單共用庫（只在真的要用代碼表時才載，避免每支 API 都多吃一個 1600 行的檔案） */
@@ -756,14 +815,15 @@ function car_disp_exists(PDO $pdo, int $optId): bool {
  * 畫面與列印共用同一支，不要在 JS 再組一次（兩邊遲早長出不同說法）。
  */
 function car_cause_label(PDO $pdo, array $o): string {
-    $cat = (int)($o['cause_cat_id'] ?? 0);
-    if ($cat > 0) {
+    // 2026-09-23 起可複選：一律以子表為準（沒有子表資料時 car_cause_ids() 會退回單選欄位）
+    $ids = car_cause_ids($pdo, (int)($o['id'] ?? 0), $o);
+    if ($ids) {
         car_qab_lib();
-        try {
-            $m = qab_cause_map($pdo);
-            if (isset($m[$cat])) return (string)$m[$cat]['path'];   // 例「人 → 操作疏失 → 未依SOP標準作業」
-        } catch (Throwable $e) {}
-        return '#' . $cat;
+        $m = [];
+        try { $m = qab_cause_map($pdo); } catch (Throwable $e) {}
+        $out = [];
+        foreach ($ids as $cat) $out[] = isset($m[$cat]) ? (string)$m[$cat]['path'] : ('#' . $cat);
+        return implode('；', $out);   // 例「人 → 操作疏失 → 未依SOP標準作業；機器 → 保養不足」
     }
     $legacy = trim((string)($o['cause_investigation'] ?? ''));
     if ($legacy === '') return '';

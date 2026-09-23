@@ -123,6 +123,19 @@ $backfillDays = qab_backfill_days($db);
                        border-radius:3px; padding:1px 4px; font-size:12.5px; }
         table.cfg td.c { text-align:center; }
         .lv-in { padding-left:0; } .lv-in2 { padding-left:22px; } .lv-in3 { padding-left:44px; }
+        /* 異常原因分類總覽（唯讀；維護一律開 EGCausePicker 的維護模式） */
+        .cause-ov .ov-grid { display:flex; flex-wrap:wrap; gap:8px; }
+        .cause-ov .ov-card { flex:1 1 220px; min-width:200px; border:1px solid var(--line); border-radius:8px;
+                             background:#fff; padding:8px 10px; cursor:pointer; }
+        .cause-ov .ov-card:hover { border-color:var(--amber-d); background:#FFFDF8; }
+        .cause-ov .ov-h { font-weight:bold; color:var(--ink); border-bottom:1px solid var(--line);
+                          padding-bottom:4px; margin-bottom:5px; }
+        .cause-ov .ov-l2 { font-size:12.5px; color:var(--ink2); margin:4px 0 0; }
+        .cause-ov .ov-l3 { display:flex; flex-wrap:wrap; gap:3px; margin:2px 0 4px 10px; }
+        .cause-ov .ov-t { background:var(--cream); border:1px solid var(--line); border-radius:9px;
+                          padding:0 6px; font-size:11.5px; line-height:18px; color:var(--ink2); }
+        .cause-ov .ov-off { color:#9c8b76; border-style:dashed; }
+        .cause-ov .ov-x { font-size:10.5px; color:#9c8b76; margin-left:4px; }
         .help-doc { font-size:13px; color:#5b3a1e; line-height:1.75; }
         .help-doc h4 { color:#8A5A2B; border-bottom:2px solid #F7E0BD; padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
         .help-doc h4:first-child { margin-top:0; }
@@ -258,27 +271,16 @@ $backfillDays = qab_backfill_days($db);
             </div>
 
             <div class="tabp" id="tab-cause">
-                <div class="note-box">最多三層（例：<b>人 → 方法 → 程式</b>）。這一欄會延伸到之後的異常分析與報告，所以<b>沒有「其他」這個選項</b>；
-                    已經被異常單選過的分類不可刪除，請改成「停用」（既有單仍看得到，新單不再出現）。</div>
-                <div style="margin:6px 0;display:flex;gap:6px;align-items:center;">
-                    <button class="btn btn-warm-o btn-xs" id="btnCauseExpand">全部展開</button>
-                    <button class="btn btn-warm-o btn-xs" id="btnCauseCollapse">全部收合</button>
-                    <span class="muted-help">點第一層的 ▸ 可以只看那一類；拖曳左側 ⠿ 調整順序（同一層之內）。</span>
+                <div class="note-box">最多三層（例：<b>人 → 方法 → 程式</b>）。這一欄會延伸到之後的異常分析與報告，所以<b>沒有「其他」這個選項</b>。<br>
+                    新增／修改／停用／排序／刪除<b>全部在「維護分類」裡面做</b>，操作方式與各表單挑選分類時<b>完全一樣</b>（逐層大方塊）：
+                    點方塊進去下一層、<b>右上角的 ✎ 改這一個</b>、刪除在 ✎ 裡面。
+                    <b>改名與刪除前會自動查「有沒有異常單／矯正單已經選了它」</b>；要刪除有單據在用的分類時，
+                    會請你指定移轉到哪一個分類，按下去就把那些單據<b>全部自動移轉</b>再刪除。</div>
+                <div style="margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <button class="btn btn-warm btn-sm" id="btnCauseMgr"><i class="fa fa-sitemap"></i> 維護分類（逐層挑選畫面）</button>
+                    <span class="muted-help">下方是目前的分類總覽（唯讀）；點任何一列也可以直接開啟維護畫面。</span>
                 </div>
-                <table class="cfg"><thead><tr>
-                    <th style="width:28px"></th>
-                    <th style="width:46%">分類名稱</th><th style="width:24%">上層</th>
-                    <th style="width:10%">啟用</th><th style="width:12%">操作</th></tr></thead>
-                    <tbody id="cfgCause" data-sortgrp="cause"></tbody></table>
-                <div style="margin-top:8px;text-align:right;">
-                    <button class="btn btn-warm btn-sm" data-saveall="cause"><i class="fa fa-save"></i> 一鍵存檔（本頁全部）</button>
-                </div>
-                <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end;">
-                    <div class="fld" style="width:220px;"><label>新增分類名稱</label>
-                        <input type="text" id="nc_name" placeholder="打完按 Enter 就直接新增"></div>
-                    <div class="fld" style="width:260px;"><label>上層（留空＝第一層）</label><select id="nc_parent"></select></div>
-                    <button class="btn btn-warm btn-sm" id="btnCauseAdd"><i class="fa fa-plus"></i> 新增</button>
-                </div>
+                <div id="causeOv" class="cause-ov"></div>
             </div>
 
             <div class="tabp" id="tab-disp" style="display:none;">
@@ -411,7 +413,11 @@ $backfillDays = qab_backfill_days($db);
             </ul>
             <h4>設定（限管理員）</h4>
             <ul>
-                <li><b>異常原因分類</b>：最多三層，可停用；已被單子選過的不可刪除。</li>
+                <li><b>異常原因分類</b>：最多三層。按「維護分類」開啟的畫面<b>和填表時挑分類的畫面一模一樣</b>——
+                    點方塊進去下一層、<b>右上角 ✎</b> 改這一個（名稱、停用、排序，<b>刪除也在 ✎ 裡面</b>）、<b>＋</b> 新增。
+                    改名／刪除前會自動查「有沒有異常單、矯正單已經選了它」並列出單號；
+                    要刪除有單據在用的分類時，會請你選一個移轉對象，按下去就<b>把那些單據全部自動移轉</b>再刪除。
+                    只是想讓它不再出現在新單上，請用<b>停用</b>（既有單仍看得到）。</li>
                 <li><b>異常處置方式／總經理裁示</b>：選項可增修；「是報廢」旗標決定結案時要不要配發報廢單號，「轉總經理」旗標決定要不要通知最終決策者。</li>
                 <li><b>決策者</b>：設定可以做處置判定的「部門＋職稱」範圍。
                     <b>最高決策者（總經理裁示）不在這裡設定</b>——自動套用全站「組織角色綁定 → 最高核准人員」，
@@ -441,6 +447,8 @@ $backfillDays = qab_backfill_days($db);
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_asdoc_picker.js') ?>"></script>
+<!-- 異常原因分類的維護畫面＝各表單挑選用的那一套逐層方塊（共用元件，禁止本頁自刻） -->
+<script src="../../resource/js/eg_cause_picker.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_cause_picker.js') ?>"></script>
 <script>
 var API = '../../src/store/QaAbnormal_API.php';
 var CSRF = '<?= $CSRF ?>';
@@ -759,57 +767,54 @@ function flatCause(){
     (function walk(ns, lv){ (ns || []).forEach(function(n){ n._lv = lv; out.push(n); walk(n.children, lv + 1); }); })(CFG.causes, 1);
     return out;
 }
-var CAUSE_OPEN = {};                 // cat_id => 是否展開（分類一多，全部攤開看不完）
+/* ───────── 異常原因分類：總覽（唯讀）＋維護畫面 ─────────
+   2026-09-23 使用者要求：原本那張「一列一個輸入框＋刪」的表格不好用，改成與各表單挑選
+   分類時完全一樣的逐層大方塊（共用元件 eg_cause_picker.js 的維護模式）——新增／改名／
+   停用／排序／刪除全部在那裡做，本頁只負責顯示目前有哪些分類。
+   **刻意不在這裡再寫一份維護 UI**：挑選與維護是同一棵樹、同一種操作，兩份遲早長出兩種
+   操作方式（鐵律4）。 */
 function renderCause(){
     var rows = flatCause();
     rows.forEach(function(n){ n._kids = rows.some(function(x){ return Number(x.parent_id) === Number(n.cat_id); }); });
-    $('#cfgCause').html(rows.map(function(n){
-        return '<tr data-cat="' + n.cat_id + '" data-parent="' + (n.parent_id || 0) + '">'
-            + '<td class="drag" draggable="true" title="按住拖曳可以調整順序">&#x2822;</td>'
-            + '<td><div class="lv-in' + (n._lv > 1 ? n._lv : '') + '">'
-                + (n._kids ? ('<span class="c-tog" data-cat="' + n.cat_id + '">' + (CAUSE_OPEN[n.cat_id] ? '&#9662;' : '&#9656;') + '</span>') : '<span class="c-tog-x"></span>')
-                + '<input type="text" class="c-name" value="' + esc(n.name) + '"></div></td>'
-            + '<td class="c">' + esc(n.parent_id ? (rows.filter(function(x){ return x.cat_id === n.parent_id; })[0] || {}).name || '' : '（第一層）') + '</td>'
-            + '<td class="c"><input type="checkbox" class="c-act" ' + (Number(n.is_active) ? 'checked' : '') + '></td>'
-            + '<td class="c"><input type="hidden" class="c-sort" value="' + n.sort_order + '">'
-            + '<button class="btn btn-warm-o btn-xs c-del">刪</button></td></tr>';
-    }).join('') || '<tr><td colspan="5" class="c">尚未建立</td></tr>');
-    $('#nc_parent').html('<option value="">（第一層）</option>' + rows.filter(function(n){ return n._lv < 3; }).map(function(n){
-        return '<option value="' + n.cat_id + '">' + esc('　'.repeat(n._lv - 1) + n.name) + '</option>';
-    }).join(''));
-    applyCauseFold(rows);
+    if (!rows.length) {
+        $('#causeOv').html('<div class="muted-help" style="padding:10px;">尚未建立任何分類，請按上方的「維護分類」新增。</div>');
+        return;
+    }
+    var off = 0;
+    $('#causeOv').html('<div class="ov-grid">' + rows.filter(function(n){ return n._lv === 1; }).map(function(a){
+        var subs = rows.filter(function(x){ return Number(x.parent_id) === Number(a.cat_id); });
+        return '<div class="ov-card' + (Number(a.is_active) ? '' : ' ov-off') + '" data-cat="' + a.cat_id + '">'
+            + '<div class="ov-h">' + esc(a.name) + (Number(a.is_active) ? '' : '<span class="ov-x">已停用</span>') + '</div>'
+            + (subs.length ? subs.map(function(b){
+                    var thirds = rows.filter(function(x){ return Number(x.parent_id) === Number(b.cat_id); });
+                    if (!Number(b.is_active)) off++;
+                    return '<div class="ov-l2' + (Number(b.is_active) ? '' : ' ov-off') + '">' + esc(b.name)
+                        + (Number(b.is_active) ? '' : '<span class="ov-x">停用</span>')
+                        + (thirds.length ? ('<div class="ov-l3">' + thirds.map(function(c){
+                              if (!Number(c.is_active)) off++;
+                              return '<span class="ov-t' + (Number(c.is_active) ? '' : ' ov-off') + '">' + esc(c.name) + '</span>';
+                          }).join('') + '</div>') : '');
+                }).join('') : '<div class="muted-help" style="font-size:12px;">（底下沒有下層）</div>')
+            + '</div>';
+    }).join('') + '</div>'
+    + '<div class="muted-help" style="margin-top:6px;">共 ' + rows.length + ' 個分類'
+    + '（第一層 ' + rows.filter(function(n){ return n._lv === 1; }).length + '、'
+    + '第二層 ' + rows.filter(function(n){ return n._lv === 2; }).length + '、'
+    + '第三層 ' + rows.filter(function(n){ return n._lv === 3; }).length + '）'
+    + '；灰色虛線＝已停用（既有單據仍看得到，新單不再出現）。</div>');
 }
-/* 收合：只要祖先有一個是收起來的，這一列就不顯示 */
-function applyCauseFold(rows){
-    var byId = {};
-    (rows || flatCause()).forEach(function(n){ byId[n.cat_id] = n; });
-    $('#cfgCause tr[data-cat]').each(function(){
-        var n = byId[Number($(this).data('cat'))];
-        var show = true, p = n && n.parent_id;
-        while (p) { if (!CAUSE_OPEN[p]) { show = false; break; } p = (byId[p] || {}).parent_id; }
-        $(this).toggle(show);
+/** 開啟維護畫面（＝各表單挑選分類的同一套介面，只是多了 ✎ 與 ＋） */
+function openCauseMgr(){
+    EGCausePicker.open({
+        title: '維護異常原因分類',
+        tree: CFG.causes || [],                        // 維護模式要連停用的一起看得到
+        manage: { can: true, url: API, csrf: CSRF },
+        onTreeChange: function(t){ CFG.causes = t; renderCause(); },
+        onClose: function(t){ CFG.causes = t || CFG.causes; renderCause(); savedTick(); }
     });
 }
-$(document).on('click', '.c-tog', function(){
-    var id = Number($(this).data('cat'));
-    CAUSE_OPEN[id] = !CAUSE_OPEN[id];
-    $(this).html(CAUSE_OPEN[id] ? '&#9662;' : '&#9656;');
-    applyCauseFold();
-});
-$('#btnCauseExpand').on('click', function(){ flatCause().forEach(function(n){ CAUSE_OPEN[n.cat_id] = true; }); renderCause(); });
-$('#btnCauseCollapse').on('click', function(){ CAUSE_OPEN = {}; renderCause(); });
-function saveCauseRow($tr, silent){
-    if (!$tr.data('cat')) return;
-    post('cause_save', { cat_id:$tr.data('cat'), name:$tr.find('.c-name').val(),
-        parent_id:(flatCause().filter(function(x){ return x.cat_id === Number($tr.data('cat')); })[0] || {}).parent_id || '',
-        sort_order:$tr.find('.c-sort').val(), is_active:$tr.find('.c-act').prop('checked') ? 1 : '' },
-        function(res){ CFG.causes = res.causes; if (!silent) { renderCause(); } savedTick(); });
-}
-$(document).on('change', '#cfgCause .c-name, #cfgCause .c-act', function(){ saveCauseRow($(this).closest('tr'), true); });
-$(document).on('click', '.c-del', function(){
-    if (!confirm('刪除這個分類？')) return;
-    post('cause_del', { cat_id:$(this).closest('tr').data('cat') }, function(res){ CFG.causes = res.causes; renderCause(); });
-});
+$(document).on('click', '#btnCauseMgr', openCauseMgr);
+$(document).on('click', '#causeOv .ov-card', openCauseMgr);
 function nextSort(list, parentId){
     var mx = 0;
     (list || []).forEach(function(n){
@@ -818,15 +823,7 @@ function nextSort(list, parentId){
     });
     return mx + 10;                       // 排序號自動跳，畫面上不必顯示
 }
-function addCause(){
-    var nm = $('#nc_name').val().trim();
-    if (!nm) { alert('請填分類名稱'); return; }
-    var pid = $('#nc_parent').val();
-    post('cause_save', { name:nm, parent_id:pid, sort_order:nextSort(flatCause(), pid), is_active:1 },
-        function(res){ CFG.causes = res.causes; $('#nc_name').val('').focus(); renderCause(); savedTick(); });
-}
-$('#btnCauseAdd').on('click', addCause);
-$('#nc_name').on('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); addCause(); } });
+/* 新增分類已收進維護畫面（EGCausePicker 維護模式的「＋ 在○○底下新增」），本頁不再各留一份 */
 
 function optRow(o, kind){
     return '<tr data-opt="' + o.opt_id + '" data-kind="' + kind + '">'
