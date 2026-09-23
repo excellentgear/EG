@@ -82,17 +82,16 @@
 .adt-cover-nameen { font-size: 14pt; margin-top: 6mm; letter-spacing: 1px; }
 
 /* ── 文件制修訂紀錄書 ───────────────────────────────────────────────── */
-/* 中間空白列：固定高度撐開，讓「發行單位」簽章區落在跟其他頁面同一條底線
-   （使用者 2026-09-23 指出）。**刻意不用 flex-grow 撐滿剩餘高度**——
-   實測過 `min-height:100%` 疊在 .adt-page 的 flex 鏈上，在瀏覽器「列印成PDF」
-   的分頁情境下會算出比一頁還高的框，多印出一張幾乎全空白的續頁。
-   固定高度改用無頭 Chrome 實際印成 PDF 逐格試出安全值：以 2-DC-01（A4 直式、
-   文件名稱一行、7 筆歷程）實測 9mm 以內都是 11 頁（沒有多印空白頁）、
-   10mm 就整份多一張幾乎全空白的續頁（頁尾表格被擠到下一頁）——**臨界點很敏感
-   且會因文件名稱是否換行、歷程筆數是否超過 ADT_REVLOG_MIN_ROWS 而變動**，
-   故刻意抓保守值，寧可還留一點空白，也不要有文件因此多印出空白頁。
-   只用於 A4 直式；A3／橫式的落差本來就小很多，先不處理。 */
-.adt-rev-mid { height: 4mm;
+/* 中間空白列：撐滿剩餘高度，讓「發行單位」簽章區落在跟其他頁面同一條底線
+   （使用者 2026-09-23 指出）。
+   ⚠ 這裡原本試過 flex-grow 撐滿剩餘高度，結果列印成 PDF 會多印出一張幾乎全
+   空白的續頁——當時的根因其實不在這裡，是 as_doc_print.php 的 .adt-page 在
+   @media print 下 min-height 給 0，.adt-body 的 flex:1 沒有「明確的容器高度」
+   可以撐、百分比高度鏈在 Chrome 的分頁列印下算出不可預期的結果。
+   .adt-page 補上正確的 min-height（可印區實際高度）之後，這裡的 100% 就是
+   相對一個明確數字（不再是 auto），flex 鏈才會照預期運作。 */
+.adt-body > .adt-rev { display: flex; flex-direction: column; min-height: 100%; }
+.adt-rev-mid { flex: 1 1 auto; min-height: 4mm;
     border-left: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color);
     border-right: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color); }
 .adt-rev-co { text-align: center; font-size: 14pt; }

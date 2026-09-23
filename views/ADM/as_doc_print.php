@@ -47,6 +47,12 @@ try {
 
 $pageSize   = ($C['page_size'] ?? 'A4') === 'A3' ? 'A3' : 'A4';
 $orient     = ($C['orientation'] ?? 'portrait') === 'landscape' ? 'landscape' : 'portrait';
+/* @page margin 固定「上16／左右15／下18mm」，內容區的實際可印高度＝紙張長邊
+   （直式）或短邊（橫式）扣掉上下邊界，用來讓 .adt-page 在列印時有一個「明確的
+   高度」可以撐開（見下方 @media print 的說明，這裡先算好給 CSS 字串直接套）。 */
+$paperWH = $pageSize === 'A3' ? [297, 420] : [210, 297];
+if ($orient === 'landscape') $paperWH = [$paperWH[1], $paperWH[0]];
+$printContentH = $paperWH[1] - 16 - 18;
 $docNo      = (string)($V['doc_no'] ?? '');
 $docName    = (string)($V['doc_name'] ?? '');
 $ver        = (string)($V['version'] ?? '');
@@ -157,8 +163,16 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
 }
 @media print {
     .bar { display: none !important; }
-    /* 列印時留白交給 @page，.adt-page 不再自己加內距（兩邊各留一次會把內容擠到中間又切邊） */
-    .adt-page { width: auto; height: auto; min-height: 0; margin: 0; padding: 0; box-shadow: none; }
+    /* 列印時留白交給 @page，.adt-page 不再自己加內距（兩邊各留一次會把內容擠到中間又切邊）。
+       ⚠ min-height 不可以留 0（原本是 0）：.adt-page 是 flex 直欄容器，
+       .adt-body 靠 flex:1 撐滿剩餘高度才會讓公版大框（body_frame 開啟時）的外框
+       延伸到頁底——但 flex-grow 要有「明確的容器高度」才算得出剩餘空間，
+       min-height:0 等於沒有，容器只會縮到跟內容一樣高，內容比較短的那幾頁
+       （使用者 2026-09-23 實測抓到：不含制修訂紀錄書的正文第 1 頁）外框就會
+       中途停住、下面留一整片沒有框線的空白，跟其他頁對不齊。
+       改成可印區的實際高度（紙張扣掉上 16／下 18mm）：內容比一頁短時撐滿，
+       比一頁長時 min-height 不會限制它變得更高、照樣自然換頁不受影響。 */
+    .adt-page { width: auto; height: auto; min-height: <?= $printContentH ?>mm; margin: 0; padding: 0; box-shadow: none; }
 }
 </style>
 </head>
