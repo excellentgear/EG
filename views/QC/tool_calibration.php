@@ -279,6 +279,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <span class="st-pill st-ok">正常</span> <span class="st-pill st-nobaseline">未設基準</span>
             <span class="st-pill st-unmanaged">未列入統計</span>。
             「列入校驗率統計」者才計入 KPI；下次應校驗月＝上次校驗月＋週期（登錄完成後自動前滾）；同月內完成即算準時。
+            <b>已停用的量具一律排在清單最後並整列反灰</b>（編號後面標停用日期）——只是淡化不隱藏，
+            舊單據上還查得到它，藏起來會變成「以前明明有、現在不見了」。
             <span id="tcExcluded" style="color:#b5762a;"></span>
         </div>
 <?php endif; ?>
@@ -531,7 +533,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <b>需校驗</b>：不是實體量具、只是檢驗方式者（例如「目視」）請取消勾選，其量具不會出現在本頁、也不列入 KPI。<br>
             <b>可設定量具編號</b>：取消後該類別不能再新增／移入量具編號。<br>
             <b>列入分頁</b>：勾選者會在清單上方出現專屬分頁；需先勾「需校驗」才能設定，未列入分頁者歸在「其他」分頁。<br>
-            <b>分頁名稱</b>：選「（自成一頁）」＝用類別名當分頁；也可把數個類別指到同一個自訂分頁合併顯示。
+            <b>分頁名稱</b>：選「（自成一頁）」＝用類別名當分頁；也可把數個類別指到同一個自訂分頁合併顯示。<br>
+            <b>其他頁面顯示</b>（2026-09-23 新增，使用者要求）：這個類別的量具被<b>別的頁面</b>挑選時要印哪幾個欄位。
+            量具編號本身看不出是什麼——<code>QC-001</code> 現場叫它「TTi 齒輪量測機」、<code>K-555-P</code> 現場講的是
+            「100-125mm」，所以逐類別各自設一次，<b>設定入口只有這裡一個，改完全站一起跟著改</b>
+            （標準檢驗指導書的「挑檢具編號」就是吃這份設定）。重複或互相包含的欄位會自動合併，
+            右邊的「→」就是套到這個類別實際的量具上會長什麼樣子。
         </div>
         <div style="border:1px solid #EADFC8;border-radius:6px;padding:8px 10px;margin-bottom:8px;background:#FDF8EF;">
             <div style="font-size:12px;color:#5b3a1e;margin-bottom:6px;">
