@@ -46,7 +46,8 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 // 重新產生、比對必定不過，但那其實是「已經被登出」不是 CSRF 攻擊，訊息講錯使用者只會一直重整
 // 卻永遠存不進去（見 src/common/_config.php 的防護說明）。
 $WRITE = ['create', 'save', 'submit', 'resubmit', 'sign_stage', 'reject', 'set_review_units',
-          'sign_review', 'save_stage_fields', 'delete', 'save_setting', 'save_asdoc', 'log_print'];
+          'sign_review', 'save_stage_fields', 'delete', 'save_setting', 'save_asdoc', 'log_print',
+          'attach_save', 'attach_del'];
 if (in_array($action, $WRITE, true)) {
     if ($uid <= 0) jerr('登入已逾時，請重新登入後再儲存（您填的內容還在，重新登入後再按一次即可）', 401, ['code' => 'LOGIN']);
     $tok = $_POST['csrf'] ?? '';
@@ -82,6 +83,32 @@ function ec_can_edit_row(array $r, array $P, int $uid): bool
     return in_array((string)$r['status'], ['DRAFT', 'REJECTED'], true);
 }
 
+/**
+ * 這個人現在能不能改某一段的附件。
+ * 申請內容那一段跟著「表頭能不能改」（草稿／被退回時申請人可改，管理員隨時可改）；
+ * 設計分析那一段跟著技術課那一關的填寫權（含提早填寫），已經簽過就不能再動。
+ */
+function ec_attach_can_edit(PDO $db, array $r, string $slot, array $P, int $uid): bool
+{
+    if (!isset(EC_ATTACH_SLOTS[$slot])) return false;
+    if ($slot === 'apply')  return ec_can_edit_row($r, $P, $uid);
+    if ($slot === 'design') return ec_can_prefill_stage($db, $r, 'TD', $uid, (bool)$P['canAdmin']);
+    return false;
+}
+
+/**
+ * 這個人能不能刪這一張單。
+ * 管理員：任何一張都可以。
+ * 一般使用者（使用者要求 2026-09-23）：**只能刪自己建立、而且還沒送出（草稿）的那一張**——
+ * 送出之後已經有簽核事實與通知在外面跑，刪掉會讓別人手上的待辦指向不存在的單。
+ */
+function ec_can_delete_row(array $r, array $P, int $uid): bool
+{
+    if ($P['canAdmin']) return true;
+    if ((string)$r['status'] !== 'DRAFT') return false;
+    return (int)($r['created_by'] ?? 0) === $uid || (int)($r['applicant_id'] ?? 0) === $uid;
+}
+
 /** 把一列補上畫面要用的衍生欄位 */
 function ec_decorate(PDO $db, array $r, array $P, int $uid): array
 {
@@ -90,6 +117,7 @@ function ec_decorate(PDO $db, array $r, array $P, int $uid): array
     $r['stage_label']  = $stage !== '' ? (EC_STAGES[$stage]['label'] ?? $stage) : '';
     $r['status_label'] = ec_status_label($r);
     $r['can_edit']     = ec_can_edit_row($r, $P, $uid) ? 1 : 0;
+    $r['can_delete']   = ec_can_delete_row($r, $P, $uid) ? 1 : 0;
     $r['can_sign']     = ($stage !== '' && $stage !== 'REVIEW'
                           && ec_can_sign_stage($db, $r, $stage, $uid, (bool)$P['canAdmin'])) ? 1 : 0;
     // 使用者本身就在該課室時，可以提早把自己那一段填好（填但不簽）
@@ -139,7 +167,12 @@ try {
                 'stages'         => array_map(fn($s) => $s['label'], EC_STAGES),
                 'review_units'   => EC_REVIEW_UNITS,
                 'sign_sources'   => EC_SIGN_SOURCES,
+                'attach_slots'   => EC_ATTACH_SLOTS,
+                'attach_rules'   => EC_ATTACH_RULES,
             ],
+            // 附件提示文字（管理員可改；一般使用者也要拿得到，否則畫面上沒有說明）
+            'attach_hint' => ['apply'  => (string)ec_settings($db)['ec_attach_hint_apply'],
+                              'design' => (string)ec_settings($db)['ec_attach_hint_design']],
             'settings' => $P['canAdmin'] ? ec_settings($db) : null,
             'as_doc'   => $doc ? ['id' => (int)$doc['id'], 'doc_no' => $doc['doc_no'], 'doc_name' => $doc['doc_name']] : null,
         ]);
@@ -181,13 +214,39 @@ try {
         if (!$r) jerr('查無此申請單', 404);
         if (!ec_can_see($db, $r, $P, $uid)) jerr('沒有這張申請單的檢視權限', 403);
         $r = ec_decorate($db, $r, $P, $uid);
-        // 各關卡目前解析到誰要簽（畫面上要看得到「現在輪到誰」）
+        // 各關卡目前解析到誰要簽（畫面上要看得到「現在輪到誰」）。
+        // 使用者要求 2026-09-23：連**部門與職稱**一起顯示，而且多人可簽的關卡要把人全部列出來，
+        // 不能只印名單第一位（否則看起來像只有經理能簽、課長其實也能簽卻看不到）。
         $signers = [];
         foreach (EC_STAGES as $k => $def) {
             if ($def['setting'] === '') continue;
-            $s = ec_stage_signer($db, $r, $k);
-            $signers[$k] = ['name' => $s['name'], 'for_name' => $s['for_name']];
+            $pool = ec_stage_signer_pool($db, $r, $k);
+            $list = [];
+            foreach ($pool as $p) {
+                // 名單自己帶了部門職稱（sup_above：他是以哪個單位的身分入選）就用那一份；
+                // 沒帶的來源才回頭解析（兼任者會取職級最高那一筆）
+                $idt = ['dept_name' => (string)($p['dept_name'] ?? ''), 'position_name' => (string)($p['position_name'] ?? '')];
+                if ($idt['dept_name'] === '' && $idt['position_name'] === '')
+                    $idt = ec_user_identity_asof($db, (int)$p['id'], (string)$r['apply_date']);
+                $list[] = ['id' => (int)$p['id'], 'name' => (string)$p['name'],
+                           'dept' => (string)$idt['dept_name'], 'position' => (string)$idt['position_name'],
+                           'for_name' => (string)$p['for_name'],
+                           'label' => trim(($idt['dept_name'] !== '' ? $idt['dept_name'] . '　' : '')
+                                    . ($idt['position_name'] !== '' ? $idt['position_name'] . '　' : '')
+                                    . (string)$p['name'])
+                                    . ((string)$p['for_name'] !== '' ? '（代理 ' . (string)$p['for_name'] . '）' : '')];
+            }
+            $signers[$k] = ['name' => $pool ? (string)$pool[0]['name'] : '',
+                            'for_name' => $pool ? (string)$pool[0]['for_name'] : '',
+                            'list' => $list];
         }
+        // 申請人在本單日期當時的部門／職稱（畫面上「申請職務」要印得出職稱；
+        // 一般使用者不能查別人的職務，但這張單他本來就看得到，所以由後端直接給）
+        $aidt = ec_user_identity_asof($db, (int)$r['applicant_id'], (string)$r['apply_date'],
+                                      (int)$r['apply_dept_id']);
+        $r['applicant_post_label'] = trim(((string)$aidt['dept_name'] !== '' ? (string)$aidt['dept_name']
+                                            : (string)$r['apply_dept_name'])
+                                   . '　' . (string)$aidt['position_name']);
         $reviews = ec_review_rows($db, $ecId);
         foreach ($reviews as &$rv) {
             $s = ec_review_signer($db, $r, (string)$rv['unit_key']);
@@ -196,7 +255,16 @@ try {
                                && ec_can_sign_review($db, $r, (string)$rv['unit_key'], $uid, (bool)$P['canAdmin'])) ? 1 : 0;
         }
         unset($rv);
+        // 附件：已選的（含編號）＋各段可挑的標籤＋這個變更方式的附件規則
+        $attachCats = [];
+        foreach (array_keys(EC_ATTACH_SLOTS) as $slot) $attachCats[$slot] = ec_attach_allowed_cats($db, $slot);
         jout(['row' => $r, 'signers' => $signers, 'reviews' => $reviews,
+              'attachments' => ec_attach_rows($db, $ecId),
+              'attach_cats' => $attachCats,
+              'attach_rule' => ec_attach_rule($db, (string)$r['change_type']),
+              'attach_rules_all' => array_combine(
+                    array_keys(EC_CHANGE_TYPES),
+                    array_map(fn($ct) => ec_attach_rule($db, $ct), array_keys(EC_CHANGE_TYPES))),
               'approvals' => ec_approval_history($db, $ecId)]);
     }
 
@@ -292,7 +360,10 @@ try {
         $fields = [];
         foreach (ec_stage_editable_fields($stage) as $f)
             if (isset($_POST[$f])) $fields[$f] = $_POST[$f];
-        jout(ec_sign_stage($db, $ecId, $stage, $uid, $uname, $fields));
+        // 管理員代簽時可以指定「代誰簽」（這一關有好幾位合格簽核人時）；
+        // 非管理員送這個參數沒有作用——他本來就只能以自己的身分簽。
+        $signAs = $P['canAdmin'] ? (int)($_POST['sign_as'] ?? 0) : 0;
+        jout(ec_sign_stage($db, $ecId, $stage, $uid, $uname, $fields, $signAs));
     }
 
     if ($action === 'reject') {
@@ -324,17 +395,87 @@ try {
     }
 
     if ($action === 'delete') {
-        if (!$P['canAdmin']) jerr('只有管理員可以刪除申請單', 403);
         $ecId = (int)($_POST['ec_id'] ?? 0);
-        if (!ec_row($db, $ecId)) jerr('查無此申請單', 404);
+        $r = ec_row($db, $ecId);
+        if (!$r) jerr('查無此申請單', 404);
+        // 管理員可刪任何一張；一般使用者只能刪自己建立且尚未送出的草稿（使用者要求 2026-09-23）
+        if (!ec_can_delete_row($r, $P, $uid))
+            jerr($P['canEdit'] ? '只能刪除自己建立、而且還沒送出的申請單' : '沒有刪除申請單的權限', 403);
         $db->beginTransaction();
         try {
+            $db->prepare("DELETE FROM eng_change_attach WHERE ec_id=?")->execute([$ecId]);
             $db->prepare("DELETE FROM eng_change_review WHERE ec_id=?")->execute([$ecId]);
             $db->prepare("DELETE FROM eng_change WHERE ec_id=?")->execute([$ecId]);
             $db->commit();
         } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); throw $e; }
         ec_close_notices($db, $ecId);
         jout(['deleted' => $ecId]);
+    }
+
+    /* -------- 附件（選定料號附件；只存參照，不複製檔案） -------- */
+
+    /** 這張單的料號底下、某個標籤有哪些附件可以挑 */
+    if ($action === 'attach_candidates') {
+        $ecId = (int)($_GET['id'] ?? 0);
+        $slot = trim((string)($_GET['slot'] ?? ''));
+        $cat  = (int)($_GET['cat_id'] ?? 0);
+        $r = ec_row($db, $ecId);
+        if (!$r) jerr('查無此申請單', 404);
+        if (!ec_can_see($db, $r, $P, $uid)) jerr('沒有這張申請單的檢視權限', 403);
+        if (!isset(EC_ATTACH_SLOTS[$slot])) jerr('無效的附件區塊', 400);
+        $allow = array_column(ec_attach_allowed_cats($db, $slot), 'id');
+        if (!in_array($cat, $allow, true)) jerr('這個附件標籤不在管理員允許的清單內', 400);
+        if (!(int)$r['d_id']) jout(['rows' => [], 'no_part' => 1]);
+        // 只列這張單的料號底下、掛了這個標籤、未刪除的附件（新到舊）
+        $st = $db->prepare("SELECT pa.id, pa.filename, pa.original_name, pa.note, pa.revision,
+                                   pa.issue_stamp_date, pa.uploaded_at,
+                                   COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by
+                              FROM part_attachments pa
+                              LEFT JOIN `user` u ON u.id = pa.uploaded_by_id
+                             WHERE pa.d_id = ? AND pa.deleted_at IS NULL
+                               AND FIND_IN_SET(?, REPLACE(COALESCE(pa.category_ids,''), ' ', ''))
+                             ORDER BY COALESCE(pa.issue_stamp_date, DATE(pa.uploaded_at)) DESC, pa.id DESC
+                             LIMIT 200");
+        $st->execute([(int)$r['d_id'], $cat]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as &$x) {
+            $x['id']        = (int)$x['id'];
+            $x['is_pdf']    = strtolower(pathinfo((string)$x['filename'], PATHINFO_EXTENSION)) === 'pdf' ? 1 : 0;
+            $x['show_name'] = (string)($x['original_name'] ?: $x['filename']);
+            $x['url']       = '../../src/store/Part_Attachment_API.php?action=download&id=' . $x['id'];
+        }
+        unset($x);
+        jout(['rows' => $rows, 'need_page' => (int)EC_ATTACH_SLOTS[$slot]['need_page']]);
+    }
+
+    if ($action === 'attach_save') {
+        $ecId = (int)($_POST['ec_id'] ?? 0);
+        $slot = trim((string)($_POST['slot'] ?? ''));
+        $r = ec_row($db, $ecId);
+        if (!$r) jerr('查無此申請單', 404);
+        if (!ec_attach_can_edit($db, $r, $slot, $P, $uid)) jerr('你現在不能修改這一段的附件', 403);
+        jout(ec_attach_set($db, $ecId, $slot, (int)($_POST['cat_id'] ?? 0), (int)($_POST['attach_id'] ?? 0),
+                           ((int)($_POST['page_no'] ?? 0)) ?: null, ((int)($_POST['page_count'] ?? 0)) ?: null, $uid));
+    }
+
+    if ($action === 'attach_del') {
+        $ecId = (int)($_POST['ec_id'] ?? 0);
+        $rowId = (int)($_POST['row_id'] ?? 0);
+        $r = ec_row($db, $ecId);
+        if (!$r) jerr('查無此申請單', 404);
+        $slot = '';
+        foreach (ec_attach_rows($db, $ecId) as $a) if ((int)$a['id'] === $rowId) { $slot = (string)$a['slot']; break; }
+        if ($slot === '') jerr('查無這一筆附件', 404);
+        if (!ec_attach_can_edit($db, $r, $slot, $P, $uid)) jerr('你現在不能修改這一段的附件', 403);
+        jout(ec_attach_del($db, $ecId, $rowId));
+    }
+
+    /** 全部附件標籤（管理員設定「哪些標籤可以挑」用） */
+    if ($action === 'attach_cat_list') {
+        if (!$P['canAdmin']) jerr('只有管理員可以變更設定', 403);
+        $out = [];
+        foreach (ec_attach_cat_map($db) as $c) if ($c['is_active']) $out[] = ['id' => $c['id'], 'name' => $c['name']];
+        jout(['rows' => $out]);
     }
 
     /** 列印所需資料（表頭公司全名、AS 編號與版次、各格簽章人與當時職稱） */

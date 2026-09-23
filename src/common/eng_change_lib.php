@@ -83,6 +83,9 @@ const EC_SIGN_SOURCES = [
     ''                => '（留白，紙本手蓋）',
     // 單位主管：申請人自己就是本單位最高主管時往上一層單位找，到課級為止（ai-rules/24）
     'unit_sup'        => '單位主管（本人即本單位最高主管時往上一層單位，到課為止）',
+    // 使用者要求 2026-09-23：單位主管不該只解析出「職級最高的那一位」——
+    // 業務課的組員開單時，課長與經理都應該簽得下去（實測舊設定只通知經理，課長收不到）。
+    'sup_above'       => '職級高於申請人的主管（申請單位內，任一位皆可簽；該單位沒有才往上到課為止）',
     'apply_dept_mgr'  => '申請部門主管（就是這個單位的主管，不往上追溯）',
     'applicant_sup'   => '單位主管（同上，舊設定值相容）',
     'wh_dept_mgr'     => '倉管部門主管（組織角色綁定）',
@@ -133,6 +136,27 @@ const EC_REVIEW_UNITS = [
  */
 const EC_STAGE_DEPT = ['WH' => 'wh_dept', 'TD' => 'rd_dept', 'CTRL' => 'rd_dept'];
 
+/**
+ * 附件區塊（使用者要求 2026-09-23）。
+ * 附件一律**只存參照**（part_attachments.id）＋當時的檔名／標籤／備註快照，
+ * 不複製檔案到別的地方（鐵律5：DB 只存檔名，路徑讀取當下組出來）。
+ *
+ * apply ＝申請內容那一段（PDF 必須指定一頁；使用者：「若檔案為PDF，需選擇其中一個頁面」）
+ * design＝設計分析那一段（使用者：「可以接受多頁PDF檔」＝不必指定頁）
+ * 兩段都是**同一個標籤底下只能選一個檔案**（UNIQUE(ec_id,slot,cat_id) 就是這條規則）。
+ */
+const EC_ATTACH_SLOTS = [
+    'apply'  => ['label' => '申請內容附件', 'need_page' => 1, 'setting' => 'ec_attach_cats_apply'],
+    'design' => ['label' => '設計分析附件', 'need_page' => 0, 'setting' => 'ec_attach_cats_design'],
+];
+
+/** 變更方式 × 附件規則（管理員逐項設定，使用者要求 2026-09-23） */
+const EC_ATTACH_RULES = [
+    'required' => '必選附件（沒挑附件不給送出）',
+    'optional' => '可選附件（非必選）',
+    'none'     => '不可選附件（這個變更方式不出現附件區）',
+];
+
 const EC_SETTING_KEYS = ['ec_stamp_tpl_id', 'ec_review_stamp_tpl_id',
                          'ec_sign_sup', 'ec_sign_wh', 'ec_sign_td', 'ec_sign_appr', 'ec_sign_ctrl',
                          // 來源選「指定人員」時用的：_users＝勾選的 user.id（逗號字串）、
@@ -141,7 +165,12 @@ const EC_SETTING_KEYS = ['ec_stamp_tpl_id', 'ec_review_stamp_tpl_id',
                          'ec_sign_appr_users', 'ec_sign_ctrl_users',
                          'ec_sign_sup_dept', 'ec_sign_wh_dept', 'ec_sign_td_dept',
                          'ec_sign_appr_dept', 'ec_sign_ctrl_dept',
-                         'ec_auto_from_dwg'];
+                         'ec_auto_from_dwg',
+                         // 附件：可選的標籤（逗號分隔 quotation_file_categories.id）與畫面提示文字
+                         'ec_attach_cats_apply', 'ec_attach_cats_design',
+                         'ec_attach_hint_apply', 'ec_attach_hint_design',
+                         // 變更方式 × 附件規則（required/optional/none）；鍵名對應 EC_CHANGE_TYPES 的 key
+                         'ec_attach_rule_customer_notify', 'ec_attach_rule_blueprint_error', 'ec_attach_rule_other'];
 
 /* ============================ Schema ============================ */
 
@@ -207,7 +236,46 @@ function ec_ensure_schema(PDO $db): void
         try { $db->exec("ALTER TABLE eng_change ADD COLUMN sign_{$k}_at DATETIME NULL"); } catch (Throwable $e) {}
         // 代理人代簽時右下角要加「代」字（ai-rules/18），所以要記「本來該誰簽」
         try { $db->exec("ALTER TABLE eng_change ADD COLUMN sign_{$k}_for_id INT NULL COMMENT '被代理人 user.id；有值＝這一格是代簽'"); } catch (Throwable $e) {}
+        // 管理員代簽（使用者要求 2026-09-23）：章仍蓋「原本該簽的人」，但要留得下「實際是誰按的」。
+        // ★刻意用獨立欄位而不是寫進 approval_record.note——那個欄位的文字會被 eg_sign_note_public()
+        //   的全站遮蔽規則處理，而且會跑到「列印與簽核紀錄」頁；這裡只要在本單的簽核紀錄區顯示、
+        //   列印一律不讀（使用者原話：「請在列印不會印出的地方提供備註是由管理員代簽」）。
+        try { $db->exec("ALTER TABLE eng_change ADD COLUMN sign_{$k}_proxy_by INT NULL COMMENT '實際按下簽核的管理員 user.id（代簽時才有值）'"); } catch (Throwable $e) {}
+        try { $db->exec("ALTER TABLE eng_change ADD COLUMN sign_{$k}_proxy_name VARCHAR(60) NULL COMMENT '實際按下簽核的管理員姓名'"); } catch (Throwable $e) {}
+        // 這一格「是以哪個單位的身分簽的」——兼任的人一定要記下來，
+        // 否則列印時 ec_user_identity_asof() 會挑他職級最高的那個職務，印出跟這張單無關的部門職稱
+        //（實測：業務課課長吳佳靜的主職是資材課副理，圖章會印成「資材課 副理」）。
+        try { $db->exec("ALTER TABLE eng_change ADD COLUMN sign_{$k}_dept_id INT NULL COMMENT '簽核當下採用的部門 id（兼任者的圖章職稱要用這個）'"); } catch (Throwable $e) {}
     }
+
+    // 單一製程＝不必經過倉管確認庫存（使用者要求 2026-09-23，欄位放在技術課那一段）
+    try { $db->exec("ALTER TABLE eng_change ADD COLUMN single_process TINYINT NOT NULL DEFAULT 0 COMMENT '1=單一製程，不需倉管確認庫存（送簽自動略過 WH 關卡）'"); } catch (Throwable $e) {}
+    // 管理員代簽：記下「這一格是管理員代誰簽的」——列印不印，只在畫面的簽核紀錄顯示
+    try { $db->exec("ALTER TABLE eng_change ADD COLUMN proxy_note VARCHAR(255) NULL COMMENT '管理員代簽備註（畫面顯示用，列印不印）'"); } catch (Throwable $e) {}
+
+    /**
+     * 選定的料號附件（只存參照＋快照，不複製檔案）。
+     * UNIQUE(ec_id,slot,cat_id)＝同一段、同一個標籤只能選一個檔案（使用者明確要求）。
+     */
+    try {
+        $db->exec("CREATE TABLE IF NOT EXISTS eng_change_attach (
+            id          INT AUTO_INCREMENT PRIMARY KEY,
+            ec_id       INT NOT NULL,
+            slot        VARCHAR(10) NOT NULL COMMENT '見 EC_ATTACH_SLOTS：apply 申請內容／design 設計分析',
+            cat_id      INT NOT NULL COMMENT 'quotation_file_categories.id',
+            cat_name    VARCHAR(50) NULL COMMENT '標籤名稱快照（標籤被改名後列印仍印當時的名稱）',
+            attach_id   INT NOT NULL COMMENT 'part_attachments.id（只存參照）',
+            file_name   VARCHAR(255) NULL COMMENT '實體檔名快照',
+            orig_name   VARCHAR(255) NULL COMMENT '原始檔名快照（畫面與列印顯示這個）',
+            note        VARCHAR(255) NULL COMMENT '附件備註快照（列印在標籤名稱後面）',
+            page_no     INT NULL COMMENT 'PDF 指定頁；NULL=整份檔案',
+            page_count  INT NULL COMMENT 'PDF 總頁數（挑選當下由前端量出來，僅供顯示）',
+            created_by  INT NULL,
+            created_at  DATETIME NULL,
+            UNIQUE KEY uk_ec_slot_cat (ec_id, slot, cat_id),
+            KEY idx_ec (ec_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='工程變更申請單：選定的料號附件'");
+    } catch (Throwable $e) {}
 
     try {
         $db->exec("CREATE TABLE IF NOT EXISTS eng_change_review (
@@ -227,6 +295,8 @@ function ec_ensure_schema(PDO $db): void
             KEY idx_ec (ec_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='工程變更申請單：相關單位會審'");
     } catch (Throwable $e) {}
+    // 會審也可能由管理員代簽，比照各關卡記下實際操作者（畫面顯示用，列印不讀）
+    try { $db->exec("ALTER TABLE eng_change_review ADD COLUMN signer_proxy_name VARCHAR(60) NULL COMMENT '實際按下簽核的管理員姓名（代簽時才有值）'"); } catch (Throwable $e) {}
 }
 
 /* ============================ 基礎 ============================ */
@@ -293,7 +363,13 @@ function ec_perms(PDO $db, ?array $u): array
 
 function ec_settings(PDO $db): array
 {
-    $out = ['ec_stamp_tpl_id' => null, 'ec_review_stamp_tpl_id' => null, 'ec_auto_from_dwg' => 1];
+    $out = ['ec_stamp_tpl_id' => null, 'ec_review_stamp_tpl_id' => null, 'ec_auto_from_dwg' => 1,
+            'ec_attach_cats_apply' => '', 'ec_attach_cats_design' => '',
+            // 使用者指定的提示文字（做成設定值，往後改口徑不必動程式）
+            'ec_attach_hint_apply'  => '僅需點選最新客戶圖面',
+            'ec_attach_hint_design' => '「更新圖面需附上」選了任一結果就必須挑附件；同一個標籤只能挑一個檔案，PDF 可整份多頁。'];
+    // 沒設定過的變更方式一律「可選附件」——預設不要擋住既有使用者送出單子
+    foreach (array_keys(EC_CHANGE_TYPES) as $ct) $out['ec_attach_rule_' . $ct] = 'optional';
     foreach (EC_STAGES as $st) {
         if ($st['setting'] === '') continue;
         $out[$st['setting']]            = $st['default_src'];
@@ -308,7 +384,7 @@ function ec_settings(PDO $db): array
             $k = (string)$r['setting_key']; $v = $r['setting_value'];
             if (substr($k, -7) === '_tpl_id')      $out[$k] = ($v === '' || $v === null) ? null : (int)$v;
             elseif ($k === 'ec_auto_from_dwg')     $out[$k] = (int)$v;
-            else                                   $out[$k] = (string)$v;   // _users / _dept 都是字串
+            else                                   $out[$k] = (string)$v;   // _users / _dept / 附件設定都是字串
         }
     } catch (Throwable $e) {}
     return $out;
@@ -324,6 +400,14 @@ function ec_save_setting(PDO $db, string $key, $val): void
         $val = implode(',', array_slice($ids, 0, 50));   // 上限 50 人，避免一次通知全公司
     } elseif (substr($key, -5) === '_dept') {
         $val = (string)((int)$val ?: '');
+    } elseif (strpos($key, 'ec_attach_cats_') === 0) {
+        // 只收真的存在且啟用中的附件標籤 id（打錯一個 id 那個標籤永遠不會出現，而且完全不報錯）
+        $ids = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)$val)), fn($i) => $i > 0)));
+        $val = $ids ? implode(',', ec_filter_valid_cat_ids($db, $ids)) : '';
+    } elseif (strpos($key, 'ec_attach_rule_') === 0) {
+        if (!array_key_exists((string)$val, EC_ATTACH_RULES)) return;
+    } elseif (strpos($key, 'ec_attach_hint_') === 0) {
+        $val = mb_substr(trim((string)$val), 0, 200, 'UTF-8');
     } elseif (strpos($key, 'ec_sign_') === 0 && !array_key_exists((string)$val, EC_SIGN_SOURCES)) {
         return;
     }
@@ -343,6 +427,170 @@ function ec_stamp_template(PDO $db, string $key): ?array
         if (!$r) return null;
         return ['id' => (int)$r['id'], 'tpl_name' => $r['tpl_name'], 'schema' => json_decode((string)$r['schema_json'], true)];
     } catch (Throwable $e) { return null; }
+}
+
+/* ============================ 附件（選定料號附件） ============================ */
+
+/**
+ * 附件標籤主檔（quotation_file_categories）。
+ * ★不在本模組另存一份標籤清單（鐵律4）：標籤是全站共用的，改名／停用一處生效。
+ */
+function ec_attach_cat_map(PDO $db): array
+{
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $cache = [];
+    try {
+        $rows = $db->query("SELECT id, category_name, COALESCE(sort_order,999) s, is_active
+                              FROM quotation_file_categories ORDER BY COALESCE(sort_order,999), id")
+                   ->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $r)
+            $cache[(int)$r['id']] = ['id' => (int)$r['id'], 'name' => (string)$r['category_name'],
+                                     'sort' => (int)$r['s'], 'is_active' => (int)$r['is_active']];
+    } catch (Throwable $e) { $cache = []; }
+    return $cache;
+}
+
+/** 把一串標籤 id 過濾成「真的存在且啟用中」的，並依 sort_order 排好 */
+function ec_filter_valid_cat_ids(PDO $db, array $ids): array
+{
+    $map = ec_attach_cat_map($db);
+    $ok = [];
+    foreach ($map as $id => $c) if (in_array($id, array_map('intval', $ids), true) && $c['is_active']) $ok[] = $id;
+    return $ok;
+}
+
+/** 某一段（apply／design）管理員允許挑選的附件標籤 */
+function ec_attach_allowed_cats(PDO $db, string $slot): array
+{
+    $def = EC_ATTACH_SLOTS[$slot] ?? null;
+    if (!$def) return [];
+    $ids = array_filter(array_map('intval', explode(',', (string)(ec_settings($db)[$def['setting']] ?? ''))));
+    $map = ec_attach_cat_map($db);
+    $out = [];
+    foreach (ec_filter_valid_cat_ids($db, $ids) as $id) $out[] = ['id' => $id, 'name' => $map[$id]['name']];
+    return $out;
+}
+
+/** 這個變更方式的附件規則（required／optional／none） */
+function ec_attach_rule(PDO $db, string $changeType): string
+{
+    if (!array_key_exists($changeType, EC_CHANGE_TYPES)) return 'optional';
+    $v = (string)(ec_settings($db)['ec_attach_rule_' . $changeType] ?? 'optional');
+    return array_key_exists($v, EC_ATTACH_RULES) ? $v : 'optional';
+}
+
+/**
+ * 某張單已選的附件，**依列印編號排好**（使用者要求：附件1、附件2…）。
+ * 順序＝申請內容那一段在前、設計分析在後，段內依標籤的 sort_order。
+ * 編號會一路帶到畫面、列印表格與「一鍵列印所有附件」的右上角，三處必須是同一份順序，
+ * 所以只在這裡算一次，不要在前端各自重排。
+ */
+function ec_attach_rows(PDO $db, int $ecId): array
+{
+    ec_ensure_schema($db);
+    $map = ec_attach_cat_map($db);
+    $rows = [];
+    try {
+        $st = $db->prepare("SELECT * FROM eng_change_attach WHERE ec_id=?");
+        $st->execute([$ecId]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    $slotOrder = array_keys(EC_ATTACH_SLOTS);
+    usort($rows, function ($a, $b) use ($slotOrder, $map) {
+        $sa = array_search((string)$a['slot'], $slotOrder, true); $sa = $sa === false ? 99 : $sa;
+        $sb = array_search((string)$b['slot'], $slotOrder, true); $sb = $sb === false ? 99 : $sb;
+        return [$sa, $map[(int)$a['cat_id']]['sort'] ?? 999, (int)$a['id']]
+           <=> [$sb, $map[(int)$b['cat_id']]['sort'] ?? 999, (int)$b['id']];
+    });
+    $out = []; $n = 0;
+    foreach ($rows as $r) {
+        $n++;
+        $cat = (string)($r['cat_name'] ?: ($map[(int)$r['cat_id']]['name'] ?? ''));
+        $out[] = [
+            'id'         => (int)$r['id'],
+            'slot'       => (string)$r['slot'],
+            'slot_label' => EC_ATTACH_SLOTS[(string)$r['slot']]['label'] ?? (string)$r['slot'],
+            'cat_id'     => (int)$r['cat_id'],
+            'cat_name'   => $cat,
+            'attach_id'  => (int)$r['attach_id'],
+            'file_name'  => (string)$r['file_name'],
+            'orig_name'  => (string)($r['orig_name'] ?: $r['file_name']),
+            'note'       => (string)$r['note'],
+            'page_no'    => $r['page_no'] !== null ? (int)$r['page_no'] : null,
+            'page_count' => $r['page_count'] !== null ? (int)$r['page_count'] : null,
+            'seq'        => $n,
+            'seq_label'  => '附件' . $n,
+            // 列印格內要印的那一行（使用者指定：編號＋一個空白＋標籤名稱＋附件備註）
+            'print_text' => '附件' . $n . ' ' . $cat . ((string)$r['note'] !== '' ? '　' . (string)$r['note'] : ''),
+        ];
+    }
+    return $out;
+}
+
+/** 這張單的附件是不是已經挑過了（某一段） */
+function ec_attach_has(PDO $db, int $ecId, string $slot): bool
+{
+    foreach (ec_attach_rows($db, $ecId) as $a) if ((string)$a['slot'] === $slot) return true;
+    return false;
+}
+
+/**
+ * 挑一個附件進來（同一段、同一個標籤只留一筆＝覆蓋）。
+ * 一律重新讀 part_attachments 取檔名／備註快照，不採信前端送來的字（鐵律8）。
+ */
+function ec_attach_set(PDO $db, int $ecId, string $slot, int $catId, int $attachId,
+                       ?int $pageNo, ?int $pageCount, int $uid): array
+{
+    ec_ensure_schema($db);
+    if (!isset(EC_ATTACH_SLOTS[$slot])) throw new Exception('無效的附件區塊');
+    $row = ec_row($db, $ecId);
+    if (!$row) throw new Exception('查無此申請單');
+
+    $allow = array_column(ec_attach_allowed_cats($db, $slot), 'id');
+    if (!in_array($catId, $allow, true))
+        throw new Exception('這個附件標籤不在管理員允許的清單內');
+
+    $st = $db->prepare("SELECT id, d_id, filename, original_name, note, category_ids
+                          FROM part_attachments WHERE id=? AND deleted_at IS NULL");
+    $st->execute([$attachId]);
+    $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) throw new Exception('查無這個附件，或它已經被刪除');
+    // 附件一定要屬於這張單的料號——不擋的話直打 API 就能把別的料號的圖掛上來
+    if ((int)$a['d_id'] !== (int)$row['d_id'])
+        throw new Exception('這個附件不屬於本單的料號');
+    $cats = array_filter(array_map('intval', explode(',', (string)$a['category_ids'])));
+    if (!in_array($catId, $cats, true))
+        throw new Exception('這個附件沒有掛這個標籤');
+
+    // 申請內容那一段：PDF 一定要指定頁（使用者明確要求）
+    $isPdf = strtolower(pathinfo((string)$a['filename'], PATHINFO_EXTENSION)) === 'pdf';
+    if ($isPdf && EC_ATTACH_SLOTS[$slot]['need_page'] && (int)$pageNo <= 0)
+        throw new Exception('這是 PDF 檔，請指定要附上第幾頁');
+    if (!$isPdf) { $pageNo = null; $pageCount = null; }
+    if ($pageNo !== null && $pageCount !== null && $pageCount > 0 && $pageNo > $pageCount)
+        throw new Exception('指定的頁數超過這份 PDF 的總頁數');
+
+    $map = ec_attach_cat_map($db);
+    $db->prepare("INSERT INTO eng_change_attach
+            (ec_id, slot, cat_id, cat_name, attach_id, file_name, orig_name, note, page_no, page_count, created_by, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())
+         ON DUPLICATE KEY UPDATE cat_name=VALUES(cat_name), attach_id=VALUES(attach_id),
+                                 file_name=VALUES(file_name), orig_name=VALUES(orig_name), note=VALUES(note),
+                                 page_no=VALUES(page_no), page_count=VALUES(page_count),
+                                 created_by=VALUES(created_by), created_at=VALUES(created_at)")
+       ->execute([$ecId, $slot, $catId, ($map[$catId]['name'] ?? ''), $attachId,
+                  (string)$a['filename'], (string)($a['original_name'] ?: $a['filename']),
+                  mb_substr(trim((string)$a['note']), 0, 255, 'UTF-8'),
+                  $pageNo ?: null, $pageCount ?: null, $uid ?: null]);
+    return ['rows' => ec_attach_rows($db, $ecId)];
+}
+
+function ec_attach_del(PDO $db, int $ecId, int $rowId): array
+{
+    ec_ensure_schema($db);
+    $db->prepare("DELETE FROM eng_change_attach WHERE ec_id=? AND id=?")->execute([$ecId, $rowId]);
+    return ['rows' => ec_attach_rows($db, $ecId)];
 }
 
 /* ============================ 文件編號 ============================ */
@@ -414,6 +662,7 @@ function ec_review_rows(PDO $db, int $ecId): array
             'signer_id'   => $r ? (int)$r['signer_id'] : 0,
             'signer_name' => $r ? (string)$r['signer_name'] : '',
             'signer_for_id' => $r ? (int)$r['signer_for_id'] : 0,
+            'signer_proxy_name' => $r ? (string)($r['signer_proxy_name'] ?? '') : '',
             'signed_at'   => $r ? (string)$r['signed_at'] : '',
         ];
     }
@@ -552,6 +801,64 @@ function ec_user_identity_asof(PDO $db, int $uid, string $date, int $preferDeptI
 }
 
 /**
+ * 「職級高於申請人的主管」名單（使用者要求 2026-09-23，任一位皆可簽）。
+ *
+ * 為什麼要有這一支：`unit_sup`／`apply_dept_mgr` 都只回**一個人**（該單位職級最高的那位），
+ * 所以業務課的組員開單時只有經理收到通知、課長收不到——但現場是課長與經理誰在誰簽。
+ *
+ * 規則（使用者拍板）：
+ *   ① 先取**申請單位內**職級高於申請人的全部主管（申請人自己沒有職級＝該單位全部主管）。
+ *   ② 該單位一個都沒有時才往上一層單位找，**天花板一樣是課級**（ai-rules/24，
+ *      共用 unit_supervisor_lib 的 EG_UNIT_SUP_TOP_LEVEL，不在這裡另外寫一個 3）。
+ *   ③ 一律以本單日期回推當時職務（ai-rules/22）；回推不到不退回現況。
+ *
+ * @return array<int,array{id:int,name:string,dept_name:string,position_name:string,level:int}>
+ */
+function ec_sup_above_pool(PDO $db, array $row): array
+{
+    $date = (string)($row['apply_date'] ?? '');
+    $aid  = (int)($row['applicant_id'] ?? 0);
+    $dept = (int)($row['apply_dept_id'] ?? 0) ?: eg_unit_user_dept($db, $aid, $date);
+    if (!$dept) return [];
+
+    $depts  = eg_unit_dept_map($db);
+    $lvMap  = eg_unit_position_levels($db);
+    $posts  = eg_unit_posts($db, $date);
+    $myLv   = eg_unit_user_level($db, $aid, $dept, $date);   // 99＝申請人在該單位沒有職級
+
+    $cursor = $dept;
+    for ($hop = 0; $hop < 6; $hop++) {
+        // 往上一層之後，申請人已經不在那個單位裡，門檻就不再是他自己的職級（那個單位的主管全算）
+        $threshold = ($hop === 0) ? $myLv : 99;
+        $found = [];
+        foreach ($posts as $p) {
+            if ((int)($p['dept_id'] ?? 0) !== $cursor) continue;
+            if ($aid > 0 && (int)$p['id'] === $aid) continue;          // 不可以自己簽自己
+            $lv = $lvMap[(int)($p['position_id'] ?? 0)] ?? null;
+            if ($lv === null || $lv >= $threshold) continue;            // 沒職級＝不是主管；不比申請人高也不算
+            $uidP = (int)$p['id'];
+            // 同一人在同單位兼多個職務時只留職級最高的那一筆
+            if (isset($found[$uidP]) && $found[$uidP]['level'] <= $lv) continue;
+            $found[$uidP] = ['id' => $uidP, 'name' => (string)$p['user_cname'],
+                             'dept_id' => $cursor, 'dept_name' => (string)($p['dept_name'] ?? ''),
+                             'position_name' => (string)($p['position_name'] ?? ''), 'level' => $lv];
+        }
+        if ($found) {
+            $out = array_values($found);
+            usort($out, fn($a, $b) => [$a['level'], $a['id']] <=> [$b['level'], $b['id']]);
+            return $out;
+        }
+        // 這一層沒有主管 → 能不能再往上（課級以上不追，那是所有單位的共同上級不是誰的主管）
+        $curLevel = $depts[$cursor]['level'] ?? 9;
+        $parent   = $depts[$cursor]['parent_id'] ?? null;
+        if ($curLevel <= EG_UNIT_SUP_TOP_LEVEL) return [];
+        if (!$parent || !isset($depts[$parent]) || ($depts[$parent]['level'] ?? 9) < EG_UNIT_SUP_TOP_LEVEL) return [];
+        $cursor = $parent;
+    }
+    return [];
+}
+
+/**
  * 把「簽章來源代碼」解析成人。回 ['id'=>int,'name'=>string]，解析不到回 id=0。
  * 一律以該單據的業務日期回推當時職務（ai-rules/22）；回推不到不退回現況。
  */
@@ -571,6 +878,11 @@ function ec_resolve_src(PDO $db, string $src, array $row): array
             if (!$uid) return $none;
             $idt = ec_user_identity_asof($db, $uid, $date);
             return ['id' => $uid, 'name' => $idt['user_name']];
+        case 'sup_above':
+            // 多人來源：這裡只回名單第一位（職級最高的那個）供「代表性簽核人」用，
+            // 真正的 OR-gate 名單走 ec_stage_signer_pool()
+            $pool = ec_sup_above_pool($db, $row);
+            return $pool ? ['id' => (int)$pool[0]['id'], 'name' => (string)$pool[0]['name']] : $none;
         case 'apply_dept_mgr':
             $did = (int)($row['apply_dept_id'] ?? 0);
             if (!$did) return $none;
@@ -625,6 +937,24 @@ function ec_stage_signer_pool(PDO $db, array $row, string $stage): array
             $nm  = $idt['user_name'];
             if ($nm === '') continue;                    // 帳號已被刪掉就跳過，不要留一個空白的簽核人
             $out[] = ec_apply_delegate($db, $uid, $nm);
+        }
+        return $out;
+    }
+
+    if ($src === 'sup_above') {
+        // 職級高於申請人的主管：全部都放進名單，誰先簽就算誰的（OR-gate）。
+        // ★部門與職稱一定要沿用「他是以哪個單位的身分入選」那一筆，不可以讓呼叫端自己去解析——
+        //   兼任的人會被解析成職級最高的那個職務（實測吳佳靜的主職是資材課副理，
+        //   但她在這張單是以「業務課 課長」的身分簽，印成資材課副理就對不起來了＝ai-rules/22 第二坑）。
+        $out = [];
+        foreach (ec_sup_above_pool($db, $row) as $p) {
+            $d = ec_apply_delegate($db, (int)$p['id'], (string)$p['name']);
+            if (!$d['for_id']) {            // 沒被代理才沿用；換成代理人時部門職稱就是代理人自己的
+                $d['dept_id']       = (int)$p['dept_id'];
+                $d['dept_name']     = (string)$p['dept_name'];
+                $d['position_name'] = (string)$p['position_name'];
+            }
+            $out[] = $d;
         }
         return $out;
     }
@@ -852,6 +1182,10 @@ function ec_next_stage(array $row, string $stage): string
     for ($j = $i + 1; $j < count($order); $j++) {
         $next = $order[$j];
         if ($next === 'REVIEW' && (string)($row['design_result'] ?? '') !== 'need_review') continue;
+        // 單一製程＝不必確認庫存（使用者要求 2026-09-23）：倉管那一關整個略過，也不會發通知給倉管。
+        // 這個旗標是技術課那一段的欄位，但技術課的人本來就可以在送出前先勾（提早填寫），
+        // 所以實務上是在單子還沒走到 WH 之前就決定好的。
+        if ($next === 'WH' && (int)($row['single_process'] ?? 0) === 1) continue;
         return $next;
     }
     return 'CLOSED';
@@ -874,11 +1208,20 @@ function ec_validate(PDO $db, array $r): array
     // 紙本明文：「(僅其他變更須填寫) 設變事由說明」
     if ($ct === 'other' && trim((string)($r['change_reason'] ?? '')) === '')
         $e['change_reason'] = '變更方式選「其他變更」時，必須在設變事由說明內詳述變更原因';
+    // 變更方式 × 附件規則（管理員逐項設定）：設成「必選附件」的就一定要挑一個附件才送得出去
+    if ($ct !== '' && array_key_exists($ct, EC_CHANGE_TYPES) && (int)($r['ec_id'] ?? 0) > 0) {
+        $rule = ec_attach_rule($db, $ct);
+        if ($rule === 'required' && !ec_attach_has($db, (int)$r['ec_id'], 'apply'))
+            $e['attach_apply'] = '變更方式「' . EC_CHANGE_TYPES[$ct] . '」必須附上附件，請在申請內容右側挑選料號附件';
+    }
     return $e;
 }
 
-/** 各關卡簽核前的必填檢查（那一關自己要填的欄位沒填完就不給簽） */
-function ec_validate_stage(array $r, string $stage): array
+/**
+ * 各關卡簽核前的必填檢查（那一關自己要填的欄位沒填完就不給簽）。
+ * $db/$ecId 是為了檢查附件（設計分析那一段選了結果就一定要附圖），舊呼叫端不傳也不會壞。
+ */
+function ec_validate_stage(array $r, string $stage, ?PDO $db = null, int $ecId = 0): array
 {
     $e = [];
     if ($stage === 'WH') {
@@ -889,6 +1232,10 @@ function ec_validate_stage(array $r, string $stage): array
             $e['design_result'] = '請選擇設計分析結果';
         if (!array_key_exists((string)($r['old_stock'] ?? ''), EC_OLD_STOCK))
             $e['old_stock'] = '請選擇庫存舊料可否修改';
+        // 使用者要求 2026-09-23：「更新圖面需附上」選了任一結果，就一定要挑附件
+        if ($db && $ecId > 0 && array_key_exists((string)($r['design_result'] ?? ''), EC_DESIGN_RESULTS)
+            && !ec_attach_has($db, $ecId, 'design'))
+            $e['attach_design'] = '「更新圖面需附上」選了結果就必須挑選附件（設計分析區塊下方）';
     } elseif ($stage === 'APPROVE') {
         if (!array_key_exists((string)($r['verdict'] ?? ''), EC_VERDICTS))
             $e['verdict'] = '請選擇核示結果';
@@ -1092,7 +1439,8 @@ function ec_route_to_review(PDO $db, array $row, int $fromUid, string $fromName)
  * 簽掉某一關並往下推。
  * $fields＝這一關自己要填的欄位（例：倉管的庫存數量、技術的設計分析），先存再驗再簽。
  */
-function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $uname, array $fields = []): array
+function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $uname, array $fields = [],
+                       int $signAsId = 0): array
 {
     ec_ensure_schema($db);
     $row = ec_row($db, $ecId);
@@ -1104,21 +1452,29 @@ function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $unam
     $def = EC_STAGES[$stage] ?? null;
     if (!$def) throw new Exception('無效的關卡');
 
+    $fields = ec_normalize_stage_fields($stage, $fields);
     $row = array_merge($row, $fields);
-    $err = ec_validate_stage($row, $stage);
+    $err = ec_validate_stage($row, $stage, $db, $ecId);
     if ($err) throw new Exception(implode('、', array_values($err)));
 
     // 蓋誰的章：
     //   ① 操作者本人就在合格名單裡 → 蓋他自己的（管制員指定多人時，誰簽就蓋誰）
-    //   ② 不在名單裡（管理員代簽補歷史紙本）→ 蓋「這一關本來該簽的人」
+    //   ② 不在名單裡（管理員代簽補歷史紙本）→ 蓋「這一關本來該簽的人」；
+    //      名單有多位時由管理員在畫面上指定要代誰簽（$signAsId），沒指定就取第一位
     //   ③ 名單是空的（組織角色沒綁好）→ 退回操作者本人，至少留得下紀錄
     $pool   = ec_stage_signer_pool($db, ec_row($db, $ecId), $stage);
     $signer = null;
     foreach ($pool as $p) { if ((int)$p['id'] === $uid) { $signer = $p; break; } }
+    $isProxy = ($signer === null && $pool);          // 操作者不在名單裡＝管理員代簽
+    if ($isProxy && $signAsId > 0)
+        foreach ($pool as $p) { if ((int)$p['id'] === $signAsId) { $signer = $p; break; } }
     $signer = $signer ?: ($pool[0] ?? ['id' => 0, 'name' => '', 'for_id' => 0]);
     $signId   = $signer['id'] ?: $uid;
     $signName = $signer['name'] !== '' ? $signer['name'] : $uname;
     $forId    = (int)$signer['for_id'];
+    // 代簽時記下實際操作者（畫面顯示用，列印不讀）
+    $proxyBy   = ($isProxy && $signId !== $uid) ? $uid : 0;
+    $proxyName = $proxyBy ? $uname : '';
 
     $now = ec_db_now($db);
     $db->beginTransaction();
@@ -1127,13 +1483,15 @@ function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $unam
         foreach (ec_stage_editable_fields($stage) as $f) {
             if (!array_key_exists($f, $fields)) continue;
             $sets[] = "`$f`=?";
-            $args[] = in_array($f, ['ctrl_drawing', 'ctrl_bom', 'ctrl_manual'], true)
-                    ? ((int)$fields[$f] ? 1 : 0) : (string)$fields[$f];
+            $args[] = ec_stage_field_value($f, $fields[$f]);
         }
         $k = $def['sign_key'];
         $sets[] = "sign_{$k}_id=?";      $args[] = $signId ?: null;
         $sets[] = "sign_{$k}_name=?";    $args[] = $signName;
         $sets[] = "sign_{$k}_for_id=?";  $args[] = $forId ?: null;
+        $sets[] = "sign_{$k}_proxy_by=?";   $args[] = $proxyBy ?: null;
+        $sets[] = "sign_{$k}_proxy_name=?"; $args[] = $proxyName;
+        $sets[] = "sign_{$k}_dept_id=?";    $args[] = ((int)($signer['dept_id'] ?? 0)) ?: null;
         $sets[] = "sign_{$k}_at=NOW()";
 
         // 這一關填完之後才算得出下一關（技術課選了「僅修改圖面」就要跳過會審）
@@ -1151,11 +1509,15 @@ function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $unam
         throw $e;
     }
 
-    // 簽核事實寫進全站共用的 approval_record（ai-rules/23）
+    // 簽核事實寫進全站共用的 approval_record（ai-rules/23）。
+    // ★簽核人記的是**原本該簽的那個人**（＝章上蓋的人），不是按下按鈕的管理員——
+    //   使用者要求 2026-09-23：「管理員代簽核的簽核人一樣要顯示是原需簽核人員」。
+    //   實際操作者留在 eng_change.sign_*_proxy_*（只在本單畫面顯示，列印不讀）。
     try {
         $rec = eg_approval_latest($db, EC_APPROVAL_MODULE, $ecId, $stage);
         if ($rec && (string)$rec['status'] === 'pending')
-            eg_approval_decide($db, (int)$rec['id'], $uid, $uname, 'approved', null);
+            eg_approval_decide($db, (int)$rec['id'], $signId ?: $uid,
+                               $signName !== '' ? $signName : $uname, 'approved', null);
     } catch (Throwable $e) {}
 
     $row2 = ec_row($db, $ecId);
@@ -1165,7 +1527,9 @@ function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $unam
         ec_notify_result($db, $row2, (int)$row2['applicant_id'],
             ec_notify_body($row2) . "\n\n此工程變更申請單已全部簽核完成、結案。", $uid);
     } else {
-        ec_route_to_stage($db, $row2, $next, $uid, $uname);
+        // 「送出人員」一律記成**上一關實際蓋章的那個人**，不是按下按鈕的管理員
+        //（使用者要求 2026-09-23）。管理員代簽的事實另外記在 sign_*_proxy_* 欄位。
+        ec_route_to_stage($db, $row2, $next, $signId ?: $uid, $signName !== '' ? $signName : $uname);
     }
     return ['ec_id' => $ecId, 'status' => $next];
 }
@@ -1179,12 +1543,12 @@ function ec_save_stage_fields(PDO $db, int $ecId, string $stage, array $fields, 
     ec_ensure_schema($db);
     $allow = ec_stage_editable_fields($stage);
     if (!$allow) throw new Exception('這一關沒有可以填寫的欄位');
+    $fields = ec_normalize_stage_fields($stage, $fields);
     $sets = []; $args = [];
     foreach ($allow as $f) {
         if (!array_key_exists($f, $fields)) continue;
         $sets[] = "`$f`=?";
-        $args[] = in_array($f, ['ctrl_drawing', 'ctrl_bom', 'ctrl_manual'], true)
-                ? ((int)$fields[$f] ? 1 : 0) : (string)$fields[$f];
+        $args[] = ec_stage_field_value($f, $fields[$f]);
     }
     if (!$sets) return ['saved' => 0];
     $sets[] = "updated_by=?"; $args[] = $uid ?: null;
@@ -1194,12 +1558,35 @@ function ec_save_stage_fields(PDO $db, int $ecId, string $stage, array $fields, 
     return ['saved' => count($sets) - 2];
 }
 
+/**
+ * 關卡欄位寫進 DB 前的型別整理（勾選框是 TINYINT，其他是字串）。
+ * 兩個寫入點（ec_sign_stage／ec_save_stage_fields）共用同一份，
+ * 否則新加一個勾選欄位時只改到其中一邊，另一邊會把 "on"／"" 直接塞進 TINYINT。
+ */
+function ec_stage_field_value(string $f, $v)
+{
+    $bools = ['ctrl_drawing', 'ctrl_bom', 'ctrl_manual', 'single_process'];
+    return in_array($f, $bools, true) ? ((int)$v ? 1 : 0) : (string)$v;
+}
+
+/**
+ * 關卡欄位的強制值。
+ * 管制（技術課）的「圖面」固定勾選、不給取消（使用者要求 2026-09-23：
+ * 工程變更一定會動到圖面，那一格本來就不該是選填；BOM 與操作手冊才是選填）。
+ * 前端把它 checked+disabled，後端在這裡再強制一次（disabled 的勾選框根本不會送出＝鐵律8）。
+ */
+function ec_normalize_stage_fields(string $stage, array $fields): array
+{
+    if ($stage === 'CTRL') $fields['ctrl_drawing'] = 1;
+    return $fields;
+}
+
 /** 各關卡可以編輯的欄位（其他欄位就算前端硬送也不會被寫入＝鐵律8） */
 function ec_stage_editable_fields(string $stage): array
 {
     switch ($stage) {
         case 'WH':      return ['stock_qty', 'wip_qty'];
-        case 'TD':      return ['design_result', 'design_note', 'old_stock'];
+        case 'TD':      return ['design_result', 'design_note', 'old_stock', 'single_process'];
         case 'APPROVE': return ['verdict', 'verdict_other', 'verdict_note'];
         case 'CTRL':    return ['ctrl_drawing', 'ctrl_bom', 'ctrl_manual'];
         default:        return [];
@@ -1278,21 +1665,24 @@ function ec_sign_review(PDO $db, int $ecId, string $unitKey, int $uid, string $u
     $s = ec_review_signer($db, $row, $unitKey);
     $signId   = $s['id'] ?: $uid;
     $signName = $s['name'] !== '' ? $s['name'] : $uname;
+    // 管理員代簽：章仍蓋原本該簽的人，另外記下實際按的人（比照各關卡）
+    $proxyName = ($signId !== $uid && (int)$s['id'] > 0) ? $uname : '';
 
     $db->prepare("INSERT INTO eng_change_review (ec_id, unit_key, needed, checks_json, extras_json, opinion,
-                                                 signer_id, signer_name, signer_for_id, signed_at)
-                  VALUES (?,?,1,?,?,?,?,?,?,NOW())
+                                                 signer_id, signer_name, signer_for_id, signer_proxy_name, signed_at)
+                  VALUES (?,?,1,?,?,?,?,?,?,?,NOW())
                   ON DUPLICATE KEY UPDATE checks_json=VALUES(checks_json), extras_json=VALUES(extras_json),
                                           opinion=VALUES(opinion), signer_id=VALUES(signer_id),
                                           signer_name=VALUES(signer_name), signer_for_id=VALUES(signer_for_id),
+                                          signer_proxy_name=VALUES(signer_proxy_name),
                                           signed_at=VALUES(signed_at)")
        ->execute([$ecId, $unitKey, json_encode($checks, JSON_UNESCAPED_UNICODE),
                   json_encode($extras, JSON_UNESCAPED_UNICODE), $opinion,
-                  $signId ?: null, $signName, ((int)$s['for_id']) ?: null]);
+                  $signId ?: null, $signName, ((int)$s['for_id']) ?: null, $proxyName]);
     try {
         $rec = eg_approval_latest($db, EC_APPROVAL_MODULE, $ecId, 'REVIEW:' . $unitKey);
         if ($rec && (string)$rec['status'] === 'pending')
-            eg_approval_decide($db, (int)$rec['id'], $uid, $uname, 'approved', $opinion !== '' ? $opinion : null);
+            eg_approval_decide($db, (int)$rec['id'], $signId, $signName, 'approved', $opinion !== '' ? $opinion : null);
     } catch (Throwable $e) {}
 
     // 需會審的單位全簽完了嗎？
@@ -1433,7 +1823,10 @@ function ec_print_meta(PDO $db, array $row): array
         // 申請人那一格的部門要用**這張單填的申請單位**，不能讓它自己去挑職級最高的那個職務——
         // 兼任的人（例：技術部工程師＋生管組組長）會被挑成生管組，印出來就跟表頭的申請單位對不起來
         //（使用者實測回報：申請單位技術部、章卻印生管組）。
-        $prefer = ($key === 'applicant') ? (int)($row['apply_dept_id'] ?? 0) : 0;
+        // 兼任者的圖章職稱：優先用簽核當下記下來的那個單位（sign_*_dept_id），
+        // 沒有的（舊資料）才退回原本的規則——申請人那一格用本單的申請單位，其餘讓它自己挑職級最高的。
+        $prefer = (int)($row['sign_' . $key . '_dept_id'] ?? 0);
+        if (!$prefer && $key === 'applicant') $prefer = (int)($row['apply_dept_id'] ?? 0);
         $idt = ec_user_identity_asof($db, $uid, $date, $prefer);
         $signs[$key] = [
             'label'    => $label,
@@ -1464,6 +1857,9 @@ function ec_print_meta(PDO $db, array $row): array
         'as_doc_no'    => $docNo,
         'signs'        => $signs,
         'review_signs' => $reviewSigns,
+        // 選定的附件（已經編好號：附件1、附件2…）。列印表格只印 print_text，
+        // 實體檔案由「列印所有附件」另外開視窗印，右上角印同一個編號。
+        'attachments'  => ec_attach_rows($db, (int)$row['ec_id']),
         'stamp_tpl'        => ec_stamp_template($db, 'ec_stamp_tpl_id'),
         'review_stamp_tpl' => ec_stamp_template($db, 'ec_review_stamp_tpl_id'),
     ];

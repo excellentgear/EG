@@ -135,6 +135,38 @@ $openId = (int)($_GET['id'] ?? 0);
         .rv-card { border:1px solid #E8D5B5; border-radius:6px; padding:8px 10px; margin-bottom:8px; background:#FDF8EF; }
         .rv-card.skip { opacity:.55; }
         .rv-card .rh { font-weight:700; color:#7A4A12; font-size:13px; margin-bottom:4px; display:flex; align-items:center; gap:8px; }
+        /* 綁定圖示：選了料號當下就要看得到「已經綁上主檔了」（暖色系，淺底深棕字） */
+        .bind-tag { display:inline-block; font-size:11px; line-height:16px; border-radius:9px; padding:0 8px;
+            background:#F7E0BD; color:#7A4A12; border:1px solid #E4D3BC; margin-left:6px; font-weight:normal; }
+        .bind-tag.bad { background:#FFF3F0; color:#DD5138; border-color:#F3C4BB; }
+
+        /* 附件區：一個標籤一列（同一個標籤只能挑一個檔案） */
+        .att-box { border:1px solid #E8D5B5; border-radius:6px; background:#FDF8EF; padding:6px 8px; min-height:34px; }
+        .att-row { display:flex; align-items:center; gap:6px; padding:3px 0; border-bottom:1px dashed #EFE3D0; font-size:12px; }
+        .att-row:last-child { border-bottom:0; }
+        .att-cat { color:#7A4A12; font-weight:700; white-space:nowrap; }
+        .att-file { flex:1; color:#5b3a1e; word-break:break-all; }
+        .att-file .none { color:#aaa; }
+        .att-seq { display:inline-block; background:#8A5A2B; color:#fff; border-radius:9px;
+            font-size:10px; line-height:16px; padding:0 7px; margin-right:4px; }
+        .att-mini { height:22px; padding:0 8px; font-size:11px; border-radius:3px; border:1px solid #d98a33;
+            background:#fff; color:#8A5A2B; cursor:pointer; white-space:nowrap; }
+        .att-mini:hover { background:#F7E0BD; }
+        .att-mini.del { border-color:#DD5138; color:#DD5138; }
+        .att-empty { color:#aaa; font-size:12px; }
+        /* 挑檔案清單／PDF 頁縮圖 */
+        .att-f { display:flex; align-items:center; gap:8px; border:1px solid #EFE3D0; border-radius:5px;
+            padding:5px 8px; margin-bottom:5px; background:#fff; font-size:12px; }
+        .att-f:hover { background:#FFF7E8; }
+        .att-f .nm { flex:1; color:#5b3a1e; word-break:break-all; }
+        .att-f .mt { color:#8a6d45; font-size:11px; white-space:nowrap; }
+        .att-pages { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:8px; }
+        .att-pg { border:1.5px solid #E8D5B5; border-radius:5px; padding:4px; background:#fff; cursor:pointer; text-align:center; }
+        .att-pg:hover { border-color:#F0A24B; background:#FFF7E8; }
+        .att-pg canvas { width:100%; height:auto; display:block; border:1px solid #EFE3D0; }
+        .att-pg .pn { font-size:11px; color:#7A4A12; margin-top:2px; }
+        .cat-pick { border:1px solid #EFE3D0; border-radius:4px; background:#fff; padding:5px;
+            max-height:160px; overflow:auto; font-size:12px; }
         .hist { font-size:12px; border-collapse:collapse; width:100%; }
         .hist th { background:#F7E0BD; color:#7A4A12; padding:4px 6px; }
         .hist td { border-bottom:1px solid #EFE3D0; padding:4px 6px; }
@@ -234,11 +266,13 @@ $openId = (int)($_GET['id'] ?? 0);
                 <div class="fld"><label>日期 <span style="color:#DD5138">*</span></label>
                     <input type="date" id="e_apply_date" class="form-control"><div class="err"></div></div>
                 <div class="fld half"><label>料號 <span style="color:#DD5138">*</span>
-                        <small style="font-weight:normal;color:#aaa;">（選了自動帶客戶）</small></label>
+                        <small style="font-weight:normal;color:#aaa;">（選了自動帶客戶）</small>
+                        <span id="e_part_bind" class="bind-tag" style="display:none;"></span></label>
                     <input type="text" id="e_part_kw" class="form-control" placeholder="輸入料號或客戶關鍵字後選擇…" list="partList">
                     <datalist id="partList"></datalist><div class="err"></div></div>
                 <div class="fld half"><label>客戶名稱 <span style="color:#DD5138">*</span>
-                        <small style="font-weight:normal;color:#aaa;">（由料號綁定產生，不可修改）</small></label>
+                        <small style="font-weight:normal;color:#aaa;">（由料號綁定產生，不可修改）</small>
+                        <span id="e_cust_bind" class="bind-tag" style="display:none;"></span></label>
                     <input type="text" id="e_customer" class="form-control ro-auto" readonly data-eg-skip>
                     <div class="err"></div></div>
                 <div class="fld half"><label>申請人 <span style="color:#DD5138">*</span>
@@ -250,11 +284,19 @@ $openId = (int)($_GET['id'] ?? 0);
                         <small style="font-weight:normal;color:#aaa;">（有兼任時請選要用哪個身分申請）</small></label>
                     <select id="e_post" class="form-control" data-eg-filter="輸入部門或職稱篩選…"></select>
                     <div class="err"></div></div>
-                <div class="fld full"><label>變更方式 <span style="color:#DD5138">*</span></label>
+                <div class="fld half"><label>變更方式 <span style="color:#DD5138">*</span></label>
                     <div id="e_ctype"></div><div class="err"></div></div>
+                <!-- 使用者要求 2026-09-23：變更方式右側的空白處放「挑料號附件」，
+                     可挑哪些標籤由管理員在設定裡指定，附件規則（必選／可選／不可選）隨變更方式而不同。 -->
+                <div class="fld half" id="attApplyWrap"><label>附件
+                        <small style="font-weight:normal;color:#aaa;" id="attApplyRule"></small></label>
+                    <div class="att-box" id="attApplyBox"></div><div class="err"></div></div>
                 <div class="fld full"><label>設變事由說明
                         <small style="font-weight:normal;color:#aaa;">（僅「其他變更」須填寫；請簡述變更原因，例：生產課因架機需求提出變更…）</small></label>
-                    <textarea id="e_reason" class="form-control" rows="3"></textarea><div class="err"></div></div>
+                    <textarea id="e_reason" class="form-control" rows="3"></textarea>
+                    <div id="e_reason_lock" style="display:none;font-size:11px;color:#8a6d45;margin-top:2px;">
+                        目前的變更方式不需要填寫設變事由說明（僅「其他變更」須填寫）。</div>
+                    <div class="err"></div></div>
             </div>
         </div></div>
 
@@ -280,7 +322,16 @@ $openId = (int)($_GET['id'] ?? 0);
         <!-- 技術：設計分析 -->
         <div class="sec" data-stage="TD"><div class="sh">設計分析（技術課）</div><div class="sb">
             <div class="fld"><label>更新圖面需附上</label><div id="e_design"></div><div class="err"></div></div>
+            <!-- 使用者要求 2026-09-23：選了「更新圖面需附上」的任一結果，就一定要挑附件；
+                 可挑多個標籤，但同一個標籤只能挑一個檔案，PDF 可以整份多頁不必指定頁。 -->
+            <div class="fld" style="margin-top:6px;" id="attDesignWrap"><label>附件（更新圖面需附上）
+                    <small style="font-weight:normal;color:#aaa;" id="attDesignHint"></small></label>
+                <div class="att-box" id="attDesignBox"></div><div class="err"></div></div>
             <div class="fld" style="margin-top:6px;"><label>1. 庫存舊料</label><div id="e_oldstock"></div><div class="err"></div></div>
+            <!-- 單一製程＝不必經過倉管確認庫存（使用者要求 2026-09-23）；勾了之後送簽自動略過倉管那一關 -->
+            <div class="fld" style="margin-top:6px;"><label>製程型態</label>
+                <label class="chk"><input type="checkbox" id="e_single_process"> 單一製程（不需確認庫存）
+                    <small style="color:#8a6d45;">勾選後<b>不經過倉管組確認庫存</b>，送簽時自動略過那一關、也不會通知倉管。</small></label></div>
             <div class="fld" style="margin-top:6px;"><label>設計分析補充</label>
                 <textarea id="e_design_note" class="form-control" rows="2"></textarea></div>
             <div id="e_review_pick" style="margin-top:10px;display:none;border:1px solid #E8D5B5;
@@ -309,7 +360,10 @@ $openId = (int)($_GET['id'] ?? 0);
         <!-- 管制 -->
         <div class="sec" data-stage="CTRL"><div class="sh">管制（技術課）</div><div class="sb">
             <div class="fld"><label>需修改文件資料</label>
-                <label class="chk"><input type="checkbox" id="e_ctrl_drawing"> 圖面</label>
+                <!-- 「圖面」固定勾選不給取消（使用者要求 2026-09-23）：工程變更一定會動到圖面。
+                     disabled 的勾選框不會送出，所以後端 ec_normalize_stage_fields() 會再強制一次。 -->
+                <label class="chk"><input type="checkbox" id="e_ctrl_drawing" checked disabled> 圖面
+                    <small style="color:#8a6d45;">（固定勾選，不可取消）</small></label>
                 <label class="chk"><input type="checkbox" id="e_ctrl_bom"> BOM</label>
                 <label class="chk"><input type="checkbox" id="e_ctrl_manual"> 操作手冊</label>
                 <div class="err"></div></div>
@@ -323,6 +377,8 @@ $openId = (int)($_GET['id'] ?? 0);
     <div class="m-foot" style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;">
         <span id="ecHint" style="flex:1;text-align:left;font-size:12px;color:#8a6d45;align-self:center;"></span>
         <button class="ec-btn ghost" id="btnEcPrint"><i class="fa fa-print"></i> 列印</button>
+        <button class="ec-btn ghost" id="btnEcPrintAtt" style="display:none;"><i class="fa fa-paperclip"></i> 列印所有附件</button>
+        <button class="ec-btn ghost" id="btnEcDel" style="display:none;border-color:#DD5138;color:#DD5138;"><i class="fa fa-trash"></i> 刪除</button>
         <button class="ec-btn ghost" id="btnEcSave" style="display:none;"><i class="fa fa-save"></i> 儲存草稿</button>
         <button class="ec-btn" id="btnEcSubmit" style="display:none;"><i class="fa fa-paper-plane"></i> 送出</button>
         <button class="ec-btn ghost" id="btnEcReject" style="display:none;border-color:#DD5138;color:#DD5138;">退回</button>
@@ -340,6 +396,41 @@ $openId = (int)($_GET['id'] ?? 0);
             <textarea id="rejReason" class="form-control" rows="4"></textarea><div class="err">請填寫退回原因</div></div>
     </div>
     <div class="m-foot"><button class="b-ok" id="btnRejOk">確定退回</button></div>
+</div></div>
+
+<!-- ══════════ 挑選料號附件 ══════════ -->
+<div class="ec-mask" id="attMask"><div class="ec-modal xwide">
+    <div class="m-head"><span id="attTitle">挑選附件</span><span class="m-close" onclick="closeMask('attMask')">✕</span></div>
+    <div class="m-body">
+        <div id="attHint" style="border:1px solid #E8D5B5;background:#FFF7E8;border-radius:6px;
+             padding:6px 10px;margin-bottom:8px;color:#7A4A12;font-size:12px;"></div>
+        <div id="attStep1">
+            <div id="attFiles"></div>
+        </div>
+        <!-- PDF 要指定頁（申請內容那一段）：直接把每一頁畫成縮圖讓人點，不要叫人自己數第幾頁 -->
+        <div id="attStep2" style="display:none;">
+            <div style="margin-bottom:6px;">
+                <button class="ec-btn ghost" id="btnAttBack"><i class="fa fa-arrow-left"></i> 換一個檔案</button>
+                <span id="attPickedName" style="font-size:12px;color:#7A4A12;margin-left:8px;"></span>
+            </div>
+            <div id="attPages" class="att-pages"></div>
+        </div>
+    </div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('attMask')">關閉</button></div>
+</div></div>
+
+<!-- ══════════ 管理員代簽：要代誰簽 ══════════ -->
+<div class="ec-mask" id="proxyMask"><div class="ec-modal narrow">
+    <div class="m-head"><span>代理簽核</span><span class="m-close" onclick="closeMask('proxyMask')">✕</span></div>
+    <div class="m-body">
+        <div style="border:1px solid #E8D5B5;background:#FFF7E8;border-radius:6px;padding:6px 10px;
+             margin-bottom:8px;color:#7A4A12;font-size:12px;">
+            你不是這一關的簽核人，這是<b>管理員代簽</b>。<b>章仍然蓋原本該簽的那個人</b>，
+            下一關的「送出人員」也記成他；實際是你按的這件事會記在本單的簽核紀錄（<b>列印不會印出來</b>）。</div>
+        <div class="fld"><label>這一關要代誰簽 <span style="color:#DD5138">*</span></label>
+            <select id="proxyWho" class="form-control" data-eg-filter="輸入姓名或部門篩選…"></select></div>
+    </div>
+    <div class="m-foot"><button class="b-ok" id="btnProxyOk">確定代簽</button></div>
 </div></div>
 
 <!-- ══════════ 會審填寫 ══════════ -->
@@ -373,6 +464,30 @@ $openId = (int)($_GET['id'] ?? 0);
             <div class="fgrid" id="setSigns"></div>
             <div style="font-size:11px;color:#aaa;margin-top:6px;">
                 一律即時解析（不寫死人名）；解析時以本單日期回推當時的職務，本人不在時自動換代理人並在圖章加「代」字。</div>
+        </div></div>
+        <div class="sec"><div class="sh">附件：可挑選的標籤</div><div class="sb">
+            <div style="font-size:11px;color:#8a6d45;margin-bottom:6px;">
+                勾選之後，申請人／技術課才挑得到那個標籤底下的料號附件。
+                標籤本身在<b>主檔管理 → 附件標籤設定</b>維護（本頁不另存一份，改名一處生效）。
+                <b>同一段、同一個標籤只能挑一個檔案</b>。</div>
+            <div class="fgrid">
+                <div class="fld half"><label>申請內容可挑的標籤
+                        <small style="font-weight:normal;color:#aaa;">（PDF 必須指定一頁）</small></label>
+                    <div class="cat-pick" id="catPickApply"></div></div>
+                <div class="fld half"><label>設計分析可挑的標籤
+                        <small style="font-weight:normal;color:#aaa;">（PDF 可整份多頁）</small></label>
+                    <div class="cat-pick" id="catPickDesign"></div></div>
+                <div class="fld half"><label>申請內容的提示文字</label>
+                    <input type="text" id="set_hint_apply" class="form-control" maxlength="200"></div>
+                <div class="fld half"><label>設計分析的提示文字</label>
+                    <input type="text" id="set_hint_design" class="form-control" maxlength="200"></div>
+            </div>
+        </div></div>
+        <div class="sec"><div class="sh">附件：各變更方式的規則</div><div class="sb">
+            <div id="setAttachRules"></div>
+            <div style="font-size:11px;color:#aaa;margin-top:6px;">
+                「必選附件」＝沒挑附件就送不出去（前端即時擋、後端同規則再擋一次）；
+                「不可選附件」＝選了這個變更方式時，申請內容的附件區整個不出現。</div>
         </div></div>
         <div class="sec"><div class="sh">圖章模板</div><div class="sb">
             <div class="fgrid">
@@ -436,19 +551,41 @@ $openId = (int)($_GET['id'] ?? 0);
         <h4>流程與關卡</h4>
         <p style="font-size:13px;">申請單位　↓　倉管　↓　技術　↓　其他單位（僅需會審者）　↓　技術</p>
         <ul>
-            <li><b>申請人</b>：填客戶、料號、變更方式與設變事由，按「送出」正式成立。</li>
-            <li><b>單位主管</b>：申請單位的主管簽核。申請人自己就是本單位最高主管時（例：組長開單），自動往上一層單位取（＝該課的課長）；<b>只追溯到「課」級</b>，課級最高主管本人開單時這一關從缺、簽章欄留白由紙本手蓋（規則見 ai-rules/24 審核層級規範）。</li>
+            <li><b>申請人</b>：填料號（選了自動綁客戶）、變更方式與附件，按「送出」正式成立。
+                <b>設變事由說明只有選「其他變更」時才打得了字</b>，其餘變更方式一律反灰。</li>
+            <li><b>單位主管</b>：依「設定 → 各關卡簽章人來源」解析。要讓<b>部門內職級比申請人高的主管都能簽（任一位即可）</b>，
+                請選<b>「職級高於申請人的主管」</b>——例如業務課組員開單，經理與課長<b>兩位都會收到通知</b>，誰先簽就算誰的。
+                選「單位主管」或「申請部門主管」時只會解析出<b>一位</b>（該單位職級最高的那個），其他主管收不到通知。
+                該單位一位主管都沒有時才往上一層單位找，<b>只追溯到「課」級</b>（規則見 ai-rules/24 審核層級規範）。</li>
             <li><b>倉管組</b>：填「庫存數量」「已完工待入庫數量」後簽核。這兩個數字系統會<b>自動帶入讓你確認是否相同</b>——
                 庫存數量取自庫存管理、已完工待入庫取自「未結案 BOM 中最後一道製程已完工」的批次；
-                <b>實際以清點為準，可直接改</b>，也可以按「重新帶入系統數量」還原。</li>
+                <b>實際以清點為準，可直接改</b>，也可以按「重新帶入系統數量」還原。
+                <b>技術課勾了「單一製程（不需確認庫存）」時，這一關會整個跳過、也不會通知倉管。</b></li>
             <li><b>技術課</b>：做設計分析——勾<b>「僅修改圖面（修改後結案）」</b>就不跑會審；
-                勾<b>「需修改圖面與會審」</b>要一併勾選需要哪些單位會審。同時判定庫存舊料可否修改。</li>
+                勾<b>「需修改圖面與會審」</b>要一併勾選需要哪些單位會審。同時判定庫存舊料可否修改。
+                <b>選了「更新圖面需附上」的任一結果，就一定要挑附件才簽得下去。</b>
+                另可勾<b>「單一製程（不需確認庫存）」</b>＝這張單不必經過倉管（在送出前勾才來得及跳過那一關）。</li>
             <li><b>核准</b>：核示「准予變更／暫緩變更／其他」，可填補充意見。</li>
             <li><b>相關單位會審</b>：<b>由技術課那一關的填寫人員決定哪些單位需要會審</b>，不是六個單位一律都會簽——
                 沒有被勾選的單位不會收到通知、也不必簽。被勾選的單位<b>各自獨立、不分先後</b>，
                 全部簽完才會往下一關（管制員）。</li>
-            <li><b>管制員</b>：勾選需修改的文件資料（圖面／BOM／操作手冊），簽完即<b>結案</b>。
+            <li><b>管制員</b>：勾選需修改的文件資料，簽完即<b>結案</b>。
+                <b>「圖面」固定勾選、不可取消</b>（工程變更一定會動到圖面），BOM 與操作手冊才是選填。
                 管制員可以在<b>設定</b>裡指定某個課室底下的<b>特定幾個人（複選）</b>，其中任何一位簽了就算過這一關。</li>
+        </ul>
+
+        <h4>附件（挑料號附件）</h4>
+        <ul>
+            <li>附件<b>不是重新上傳</b>，是從<b>這張單料號底下已經有的料號附件</b>裡挑一個引用——
+                料號附件本身不會被複製也不會被改到，移除只是解除這張單的引用。</li>
+            <li>可以挑哪些<b>標籤</b>由管理員在<b>設定 → 附件：可挑選的標籤</b>指定，申請內容與設計分析<b>各一份清單</b>。</li>
+            <li><b>同一段、同一個標籤只能挑一個檔案</b>；要換就按「換一個」（原本那一個自動被取代）。</li>
+            <li><b>申請內容的 PDF 一定要指定其中一頁</b>——挑了檔案之後系統會把每一頁畫成縮圖讓你點。
+                <b>設計分析的 PDF 可以整份多頁</b>，不必指定頁。</li>
+            <li>各個<b>變更方式</b>要不要附件由管理員設定：<b>必選</b>（沒挑就送不出去）／<b>可選</b>／<b>不可選</b>（附件區整個不出現）。</li>
+            <li>列印時附件會<b>自動編號</b>（附件1、附件2…），表單上印「編號　標籤名稱　附件備註」；
+                按<b>「列印所有附件」</b>可以把選定的附件逐張印出來，<b>每一張右上角印同一個編號</b>，跟表單對得起來。
+                PDF 會自動轉成可列印的頁面；Word／Excel 這類系統畫不出來的檔會印一張說明頁提醒你自己開檔列印。</li>
         </ul>
         <div class="tip">任何一關都可以<b>退回</b>，退回<b>必須填原因</b>，系統會通知申請人；
             申請人修正後按「重新送出」會從第一關重跑。</div>
@@ -457,8 +594,20 @@ $openId = (int)($_GET['id'] ?? 0);
         <ul>
             <li>簽核權<b>不看角色</b>：系統依「本單日期<b>當時</b>的職務」解析出各關卡該簽的人，是那個人才簽得下去。</li>
             <li>該簽的人請假／不在時，自動換成他的<b>代理人</b>，圖章右下角會多一個「代」字。</li>
-            <li>各關卡要找誰簽可以在<b>設定</b>裡改（申請部門主管／各部門主管／最高核准人員…），一律即時解析，不寫死人名。</li>
-            <li>管理員可以代簽任何一關（用於補歷史紙本，或當事人長期不在時把單子推動）。</li>
+            <li>各關卡要找誰簽可以在<b>設定</b>裡改（職級高於申請人的主管／各部門主管／最高核准人員／指定人員…），一律即時解析，不寫死人名。</li>
+            <li>畫面左下角的<b>「目前等待」</b>會把該關卡<b>全部</b>可簽的人連同<b>部門與職稱</b>列出來，不是只印一位。</li>
+            <li><b>管理員代簽</b>（補歷史紙本，或當事人長期不在時把單子推動）：
+                <b>章仍然蓋原本該簽的那個人</b>，這一關有好幾位合格簽核人時會先問要代誰簽；
+                下一關的「送出人員」也記成他。實際是管理員按的這件事<b>只在本單的簽核紀錄顯示</b>（橘色小籤），
+                <b>列印版不會印出來</b>。</li>
+        </ul>
+
+        <h4>刪除</h4>
+        <ul>
+            <li><b>申請人可以刪除自己建立、而且還沒送出的草稿</b>（明細右下角的「刪除這張草稿」）。
+                送出之後就刪不掉了——那時候簽核紀錄與通知已經在外面跑。</li>
+            <li>刪除是<b>真的刪掉、不留紀錄</b>，無法復原；文件編號的流水號不回收。</li>
+            <li>管理員可以刪任何一張（含已送出的），刪除時相關通知會一併關閉。</li>
         </ul>
 
         <h4>會自動產生嗎？</h4>
@@ -493,7 +642,8 @@ $openId = (int)($_GET['id'] ?? 0);
             <li><b>eng_change_admin（管理員）</b>：代開、改他人的單、刪除、模組設定、AS 綁定、代簽任何一關。</li>
             <li>沒有任何角色的人，仍看得到「輪到自己簽」的那幾張單（否則收到通知點進來會是空白頁）。</li>
         </ul>
-        <div class="tip">設定入口：右上工具列的「設定」（限管理員）——AS 文件綁定、各關卡簽章人來源、圖章模板、自動產生開關。</div>
+        <div class="tip">設定入口：右上工具列的「設定」（限管理員）——AS 文件綁定、各關卡簽章人來源、
+            <b>附件可挑選的標籤</b>、<b>各變更方式的附件規則</b>、圖章模板、自動產生開關。</div>
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">我知道了</button></div>
 </div></div>
@@ -524,6 +674,11 @@ var DICT  = null, PERMS = null, ME = null, SETTINGS = null, AS_DOC = null;
 var ROWS = [], PAGE = 1, PER = 20;
 var CUR = null, CUR_REVIEWS = [], CUR_UNIT = '', CUR_CAN_TD = false;
 var PART_CACHE = {};
+/* 附件（使用者要求 2026-09-23）：CUR_ATT 已經由後端編好號（附件1、附件2…），
+   畫面／列印／「列印所有附件」三處一律沿用同一份順序，不在前端重排。 */
+var CUR_ATT = [], ATT_CATS = {apply:[], design:[]}, ATT_RULE = 'optional', ATT_RULES_ALL = {}, ATT_HINT = {};
+var ATT_SLOT = '', ATT_CAT = 0, ATT_FILE = null;   // 挑選跳窗目前的狀態
+var CUR_SIGNERS = {}, ATT_EDIT = {apply:false, design:false};
 
 function esc(s){ return $('<div>').text(s == null ? '' : s).html(); }
 /* 日期顯示一律 YYYY.MM.DD（ai-rules/20）；空值不要印成 "1970.01.01" */
@@ -559,6 +714,7 @@ function stampHtml(name, date, deputy, tpl, dept, pos){
 $.getJSON(API, {action:'bootstrap'}, function(r){
     if (!r.ok) return;
     CSRF = r.csrf; DICT = r.dict; PERMS = r.perms; ME = r.me; SETTINGS = r.settings; AS_DOC = r.as_doc;
+    ATT_HINT = r.attach_hint || {};
     buildRadios('#e_ctype',    'ctype',    DICT.change_types);
     buildRadios('#e_design',   'design',   DICT.design_results);
     buildRadios('#e_oldstock', 'oldstock', DICT.old_stock);
@@ -640,6 +796,9 @@ function openEc(id, scrollToStage){
     $.getJSON(API, {action:'get', id:id}, function(r){
         if (!r.ok) return;
         CUR = r.row; CUR_REVIEWS = r.reviews || [];
+        CUR_ATT = r.attachments || []; ATT_CATS = r.attach_cats || {apply:[], design:[]};
+        ATT_RULE = r.attach_rule || 'optional'; ATT_RULES_ALL = r.attach_rules_all || {};
+        CUR_SIGNERS = r.signers || {};
         fillEc(r);
         openMask('ecMask');
         // 從通知點進來時直接捲到「目前輪到的那一關」，不要讓人自己從頭找到底
@@ -683,6 +842,7 @@ function fillEc(r){
     $('#e_apply_date').val(String(d.apply_date || '').substring(0,10));
     $('#e_part_kw').val(d.part_no || '').data('did', d.d_id || 0);
     $('#e_customer').val(d.customer_name || '').data('cid', d.customer_id || 0);
+    showBindTags(d.d_id || 0, d.customer_name || '', d.customer_id || '');
 
     $('input[name=ctype]').prop('checked', false).filter('[value="'+(d.change_type||'')+'"]').prop('checked', true);
     $('#e_reason').val(d.change_reason || '');
@@ -695,7 +855,9 @@ function fillEc(r){
     $('#e_verdict_other').val(d.verdict_other || '');
     $('#e_verdict_other_wrap').toggle(d.verdict === 'other');
     $('#e_verdict_note').val(d.verdict_note || '');
-    $('#e_ctrl_drawing').prop('checked', +d.ctrl_drawing === 1);
+    $('#e_single_process').prop('checked', +d.single_process === 1);
+    // 「圖面」固定勾選（後端也會強制），舊資料沒勾的開起來也一律顯示成勾選
+    $('#e_ctrl_drawing').prop('checked', true);
     $('#e_ctrl_bom').prop('checked', +d.ctrl_bom === 1);
     $('#e_ctrl_manual').prop('checked', +d.ctrl_manual === 1);
     $('.rv-need').prop('checked', false);
@@ -704,8 +866,10 @@ function fillEc(r){
     loadPeople(String(d.apply_date||'').substring(0,10), d.applicant_id, d.apply_dept_id);
     loadStockSnap(d);
     renderReviews(r);
-    renderHist(r.approvals || []);
+    renderHist(r.approvals || [], d);
     applyStageUI(d, r.signers || {});
+    renderAttach('apply');
+    renderAttach('design');
 }
 
 /** 依關卡決定「哪一段可以填、哪些按鈕出現」——不是這一關的人一律唯讀（後端也會再擋一次） */
@@ -726,7 +890,9 @@ function applyStageUI(d, signers){
 
     $('#e_stock_qty,#e_wip_qty').prop('disabled', !canWH);
     $('input[name=design],input[name=oldstock],.rv-need').prop('disabled', !canTD);
-    $('#e_design_note').prop('disabled', !canTD);
+    $('#e_design_note,#e_single_process').prop('disabled', !canTD);
+    // 附件能不能改：申請內容那一段跟著表頭、設計分析那一段跟著技術課（後端 ec_attach_can_edit 同一套）
+    ATT_EDIT = {apply: editHead, design: canTD};
     // 這一區一律顯示給「填得了技術課那一段」的人，不隨 radio 開開關關——
     // 整區消失會讓人以為系統沒有這個功能（使用者實際回報過）。
     CUR_CAN_TD = canTD;
@@ -734,7 +900,9 @@ function applyStageUI(d, signers){
     syncReviewPick();
     $('input[name=verdict]').prop('disabled', !canAP);
     $('#e_verdict_other,#e_verdict_note').prop('disabled', !canAP);
-    $('#e_ctrl_drawing,#e_ctrl_bom,#e_ctrl_manual').prop('disabled', !canCT);
+    $('#e_ctrl_bom,#e_ctrl_manual').prop('disabled', !canCT);
+    $('#e_ctrl_drawing').prop('checked', true).prop('disabled', true);   // 固定勾選，任何人都不給取消
+    syncReasonLock();
     // 提早填的區塊給個提示，免得使用者以為自己已經簽了
     $('#preHint').toggle(pre.length > 0 && st !== 'CLOSED').html(
         pre.length ? ('<i class="fa fa-pencil"></i> 你是「'
@@ -746,16 +914,32 @@ function applyStageUI(d, signers){
     $('#btnEcSubmit').toggle(editHead).text(st === 'REJECTED' ? '重新送出' : '送出');
     $('#btnEcSign').toggle(mine && st !== 'REVIEW').text('簽核（' + (DICT.stages[st] || '') + '）');
     $('#btnEcReject').toggle((mine && st !== 'REVIEW') || (st === 'REVIEW' && (d.my_review_units||[]).length > 0));
+    // 只能刪自己建立且尚未送出的（管理員任何一張都可以）＝後端 ec_can_delete_row 同一套
+    $('#btnEcDel').toggle(+d.can_delete === 1)
+                  .html('<i class="fa fa-trash"></i> ' + (d.status === 'DRAFT' ? '刪除這張草稿' : '刪除'));
+    $('#btnEcPrintAtt').toggle(CUR_ATT.length > 0).html('<i class="fa fa-paperclip"></i> 列印所有附件（' + CUR_ATT.length + '）');
 
-    var who = signers[st];
+    // 「目前等待」要印出**部門與職稱**，而且多人可簽的關卡要把人全部列出來（使用者要求 2026-09-23）
+    var who = signers[st] || {}, list = who.list || [];
+    var whoTxt = list.length ? list.map(function(x){ return x.label; }).join('、')
+                             : '（解析不到簽核人，請檢查「設定 → 各關卡簽章人來源」與組織角色綁定）';
     $('#ecHint').text(
         st === 'CLOSED'  ? '已結案' :
         st === 'REJECTED'? '已退回，請修正後重新送出' :
         st === 'DRAFT'   ? '草稿（尚未送出，不會通知任何人）' :
         st === 'REVIEW'  ? '會審中，需會審的單位全部簽完才會進入管制關卡'
-                         : ('目前等待：' + (DICT.stages[st] || '') + (who && who.name ? '　' + who.name : '（解析不到簽核人，請檢查組織角色綁定）')
-                            + (who && who.for_name ? '（代理 ' + who.for_name + '）' : ''))
+                         : ('目前等待：' + (DICT.stages[st] || '') + '　' + whoTxt
+                            + (list.length > 1 ? '（其中任一位簽了就算過這一關）' : ''))
     );
+}
+
+/** 設變事由說明：只有「其他變更」可以填，其餘一律反灰（使用者要求 2026-09-23） */
+function syncReasonLock(){
+    var editHead = CUR && +CUR.can_edit === 1;
+    var ct = $('input[name=ctype]:checked').val() || '';
+    var on = editHead && ct === 'other';
+    $('#e_reason').prop('disabled', !on).toggleClass('ro-auto', !on);
+    $('#e_reason_lock').toggle(!!editHead && ct !== '' && ct !== 'other');
 }
 
 function renderReviews(r){
@@ -778,6 +962,8 @@ function renderReviews(r){
         if (rv.opinion) lines += '<div style="font-size:12px;color:#7A4A12;margin-top:2px;">意見：'+esc(rv.opinion)+'</div>';
         var right = rv.signed_at
             ? '<span class="pill done">已簽　'+esc(rv.signer_name)+'　'+dispDate(rv.signed_at)+'</span>'
+              + (rv.signer_proxy_name ? ' <span class="pill todo" title="實際按下簽核的人；列印不會印出">管理員 '
+                  + esc(rv.signer_proxy_name) + ' 代簽</span>' : '')
             : '<span class="pill wait">待簽'+(rv.expect_name ? '：'+esc(rv.expect_name) : '')+'</span>';
         var btn = rv.can_sign
             ? ' <button class="ec-btn" style="height:24px;padding:0 10px;font-size:12px;" onclick="openReview(\''+rv.unit_key+'\')">填寫並簽名</button>' : '';
@@ -786,15 +972,222 @@ function renderReviews(r){
     $('#reviewBody').html(h || '<div style="color:#aaa;font-size:12px;">技術課尚未判定是否需要會審</div>');
 }
 
-function renderHist(rows){
+/* 關卡 → eng_change 上那一組簽章欄位的前綴（要跟 lib 的 EC_STAGES.sign_key 對得起來） */
+var SIGN_KEY = {SUP:'sup', WH:'wh', TD:'td', APPROVE:'appr', CTRL:'ctrl'};
+function renderHist(rows, d){
     var h = '';
     rows.forEach(function(a){
         var stx = a.status === 'approved' ? '已簽核' : (a.status === 'rejected' ? '退回' : '待簽核');
+        // 管理員代簽：簽核人欄位仍然是「原本該簽的人」（章也蓋他），
+        // 這裡另外標一個橘色小籤說明實際是誰按的。**列印版不讀這個欄位**（使用者明確要求）。
+        var k = SIGN_KEY[a.level] || '', proxy = (k && d) ? (d['sign_' + k + '_proxy_name'] || '') : '';
+        var tag = proxy ? ' <span class="pill todo" title="實際按下簽核的人；列印不會印出">管理員 '
+                        + esc(proxy) + ' 代簽</span>' : '';
         h += '<tr><td>'+esc(a.label)+'</td><td>'+stx+'</td><td>'+esc(a.submitted_by)+'</td>'
-           + '<td>'+esc(a.approved_by)+'</td><td>'+esc(String(a.approved_at||'').substring(0,16))+'</td>'
+           + '<td>'+esc(a.approved_by)+tag+'</td><td>'+esc(String(a.approved_at||'').substring(0,16))+'</td>'
            + '<td>'+esc(a.note||'')+'</td></tr>';
     });
     $('#histBody').html(h || '<tr><td colspan="6" style="color:#aaa;text-align:center;">尚無簽核紀錄</td></tr>');
+}
+
+/* ══════════════════ 附件（挑料號附件）══════════════════
+   使用者要求 2026-09-23：
+     ① 可挑哪些標籤由管理員設定（申請內容／設計分析各一份清單）
+     ② 同一段、同一個標籤只能挑一個檔案
+     ③ 申請內容的 PDF 要指定其中一頁；設計分析可以整份多頁
+     ④ 變更方式決定申請內容的附件是必選／可選／不可選
+   附件編號（附件1、附件2…）一律由後端算好帶回來，前端不重排。 */
+function attOf(slot, catId){
+    for (var i = 0; i < CUR_ATT.length; i++)
+        if (CUR_ATT[i].slot === slot && +CUR_ATT[i].cat_id === +catId) return CUR_ATT[i];
+    return null;
+}
+function renderAttach(slot){
+    var isApply = slot === 'apply';
+    var $wrap = $(isApply ? '#attApplyWrap' : '#attDesignWrap');
+    var $box  = $(isApply ? '#attApplyBox'  : '#attDesignBox');
+    var cats  = ATT_CATS[slot] || [];
+    var rule  = isApply ? ATT_RULE : 'required';    // 設計分析那一段：選了結果就是必選
+
+    if (isApply) {
+        // 「不可選附件」的變更方式：整個附件區不出現（使用者指定）
+        $wrap.toggle(rule !== 'none');
+        $('#attApplyRule').text(rule === 'required' ? '（本變更方式必須附上附件）'
+                              : rule === 'optional' ? '（可附可不附）' : '');
+        if (rule === 'none') return;
+    } else {
+        $('#attDesignHint').text('');
+    }
+    if (!cats.length) {
+        $box.html('<span class="att-empty">管理員還沒有設定這一段可以挑哪些附件標籤（設定 → 附件：可挑選的標籤）。</span>');
+        return;
+    }
+    var canEdit = !!ATT_EDIT[slot];
+    var hint = ATT_HINT[slot] || '';
+    var h = hint ? '<div style="font-size:11px;color:#8a6d45;margin-bottom:3px;">'+esc(hint)+'</div>' : '';
+    cats.forEach(function(c){
+        var a = attOf(slot, c.id);
+        h += '<div class="att-row"><span class="att-cat">'+esc(c.name)+'</span><span class="att-file">';
+        if (a) {
+            h += '<span class="att-seq">'+esc(a.seq_label)+'</span>' + esc(a.orig_name)
+               + (a.page_no ? '　<b>第 '+a.page_no+' 頁</b>' + (a.page_count ? '／共 '+a.page_count+' 頁' : '') : '')
+               + (a.note ? '　<span style="color:#8a6d45;">'+esc(a.note)+'</span>' : '');
+        } else {
+            h += '<span class="none">（未選）</span>';
+        }
+        h += '</span>';
+        if (a) h += '<button type="button" class="att-mini" onclick="openAttFile('+a.attach_id+')">檢視</button>';
+        if (canEdit) {
+            h += '<button type="button" class="att-mini" onclick="openAttPick(\''+slot+'\','+c.id+')">'
+               + (a ? '換一個' : '挑選…') + '</button>';
+            if (a) h += '<button type="button" class="att-mini del" onclick="delAttach('+a.id+')">移除</button>';
+        }
+        h += '</div>';
+    });
+    $box.html(h);
+}
+function openAttFile(attachId){
+    window.open('../../src/store/Part_Attachment_API.php?action=download&id=' + attachId, '_blank');
+}
+function delAttach(rowId){
+    if (!CUR) return;
+    if (!confirm('確定移除這一個附件？（只是解除這張單的引用，料號附件本身不會被刪掉）')) return;
+    post({action:'attach_del', ec_id:CUR.ec_id, row_id:rowId}, function(r){
+        if (!r.ok) return;
+        CUR_ATT = r.rows || [];
+        renderAttach('apply'); renderAttach('design');
+        $('#btnEcPrintAtt').toggle(CUR_ATT.length > 0)
+            .html('<i class="fa fa-paperclip"></i> 列印所有附件（' + CUR_ATT.length + '）');
+    });
+}
+function openAttPick(slot, catId){
+    if (!CUR) return;
+    /* ★候選清單是依「DB 上這張單的料號」篩的，所以剛開的草稿在畫面上打完料號、
+       還沒按儲存就來挑附件時，後端看到的 d_id 還是空的 → 候選永遠 0 筆，
+       而且訊息會變成「這個料號底下沒有掛○○標籤的附件」，看起來像資料有問題（實測踩到）。
+       改成：畫面上的料號跟 DB 不一致時，先把表頭存起來再開跳窗。 */
+    var uiDid = +($('#e_part_kw').data('did') || 0);
+    if (+CUR.can_edit === 1 && uiDid && uiDid !== +(CUR.d_id || 0)) {
+        post($.extend({action:'save'}, headPayload()), function(r){
+            if (!r.ok) return;
+            $('#e_doc_no').val(r.doc_no || '');
+            CUR.d_id = uiDid; CUR.part_no = $('#e_part_kw').val().trim();
+            openAttPick(slot, catId);
+        });
+        return;
+    }
+    if (!+(CUR.d_id || 0)) { alert('請先選好料號（附件是從這張單料號底下的料號附件裡挑）'); return; }
+    ATT_SLOT = slot; ATT_CAT = catId; ATT_FILE = null;
+    var cat = (ATT_CATS[slot] || []).filter(function(c){ return +c.id === +catId; })[0] || {name:''};
+    $('#attTitle').text('挑選附件　' + (DICT.attach_slots[slot] ? DICT.attach_slots[slot].label : slot) + '　—　' + cat.name);
+    $('#attStep1').show(); $('#attStep2').hide();
+    $('#attFiles').html('<div style="color:#aaa;">載入中…</div>');
+    $('#attHint').html(esc(ATT_HINT[slot] || '') + '<br>只列本單料號「<b>' + esc(CUR.part_no || '') + '</b>」底下掛「'
+                     + esc(cat.name) + '」標籤的附件，<b>新的排在最前面</b>。同一個標籤只能挑一個檔案。');
+    openMask('attMask');
+    $.getJSON(API, {action:'attach_candidates', id:CUR.ec_id, slot:slot, cat_id:catId}, function(r){
+        if (!r.ok) return;
+        var rows = r.rows || [];
+        if (!rows.length) {
+            $('#attFiles').html('<div style="color:#aaa;">這個料號底下沒有掛「'+esc(cat.name)
+                + '」標籤的附件。請先到料號主檔上傳，或改挑其他標籤。</div>');
+            return;
+        }
+        var h = '';
+        rows.forEach(function(f){
+            h += '<div class="att-f">'
+              +  '<span class="nm">' + esc(f.show_name)
+              +  (f.is_pdf ? ' <span class="pill draft">PDF</span>' : '')
+              +  (f.note ? '<br><span class="mt">' + esc(f.note) + '</span>' : '') + '</span>'
+              +  '<span class="mt">' + (f.issue_stamp_date ? '發行 ' + dispDate(f.issue_stamp_date) + '　' : '')
+              +  '上傳 ' + dispDate(f.uploaded_at) + '　' + esc(f.uploaded_by || '') + '</span>'
+              +  '<button type="button" class="att-mini" onclick="window.open(\'' + f.url + '\',\'_blank\')">預覽</button>'
+              +  '<button type="button" class="att-mini" onclick="pickAttFile(' + f.id + ',' + f.is_pdf + ','
+              +     JSON.stringify(f.show_name).replace(/"/g,'&quot;') + ',' + (r.need_page?1:0) + ')">選這一個</button>'
+              +  '</div>';
+        });
+        $('#attFiles').html(h);
+    });
+}
+/** 選定檔案：要指定頁的 PDF 進第二步挑頁，其餘直接存 */
+function pickAttFile(attachId, isPdf, showName, needPage){
+    ATT_FILE = {id:attachId, name:showName};
+    if (!isPdf || !needPage) { saveAttach(attachId, 0, 0); return; }
+    $('#attStep1').hide(); $('#attStep2').show();
+    $('#attPickedName').html('<b>' + esc(showName) + '</b>　請點選要附上的那一頁');
+    $('#attPages').html('<div style="color:#aaa;">正在載入 PDF…</div>');
+    renderPdfPages('../../src/store/Part_Attachment_API.php?action=download&id=' + attachId, attachId);
+}
+$('#btnAttBack').on('click', function(){ $('#attStep2').hide(); $('#attStep1').show(); });
+
+/* pdf.js：把每一頁畫成縮圖讓人點（不要叫使用者自己數第幾頁）。
+   pdf.js 是非同步載入的，沒載成功時退回「自己輸入頁碼」，不要讓人完全挑不了。 */
+var PDFJS_BASE = '../../resource/js/pdfjs/';
+var pdfjsLoading = null;
+function loadPdfJs(){
+    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    if (pdfjsLoading) return pdfjsLoading;
+    pdfjsLoading = new Promise(function(resolve, reject){
+        var s = document.createElement('script');
+        s.src = PDFJS_BASE + 'pdf.min.js';
+        s.onload = function(){
+            if (!window.pdfjsLib) { pdfjsLoading = null; reject(new Error('pdfjsLib 未載入')); return; }
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_BASE + 'pdf.worker.min.js';
+            resolve(window.pdfjsLib);
+        };
+        s.onerror = function(){ pdfjsLoading = null; reject(new Error('pdf.min.js 載入失敗')); };
+        document.head.appendChild(s);
+    });
+    return pdfjsLoading;
+}
+function renderPdfPages(url, attachId){
+    loadPdfJs().then(function(lib){
+        return lib.getDocument(url).promise;
+    }).then(function(pdf){
+        var total = pdf.numPages;
+        $('#attPages').empty();
+        var chain = Promise.resolve();
+        for (var p = 1; p <= total; p++) (function(pn){
+            chain = chain.then(function(){
+                return pdf.getPage(pn).then(function(page){
+                    var vp0 = page.getViewport({scale:1});
+                    var scale = 200 / vp0.width;               // 縮圖寬約 200px
+                    var vp = page.getViewport({scale:scale});
+                    var cv = document.createElement('canvas');
+                    cv.width = Math.ceil(vp.width); cv.height = Math.ceil(vp.height);
+                    var $d = $('<div class="att-pg"></div>')
+                        .append(cv).append('<div class="pn">第 ' + pn + ' 頁</div>')
+                        .on('click', function(){ saveAttach(attachId, pn, total); });
+                    $('#attPages').append($d);
+                    return page.render({canvasContext:cv.getContext('2d'), viewport:vp}).promise;
+                });
+            });
+        })(p);
+        return chain;
+    }).catch(function(e){
+        // 退路：至少讓人自己輸入頁碼，不要卡在這裡什麼都做不了
+        $('#attPages').html('<div style="color:#DD5138;font-size:12px;">PDF 縮圖產生失敗（' + esc(e.message || '')
+            + '）。請直接輸入要附上的頁碼：</div>'
+            + '<div style="margin-top:6px;"><input type="number" id="attManualPage" class="form-control" '
+            + 'style="width:120px;display:inline-block;" min="1" value="1"> '
+            + '<button type="button" class="att-mini" id="btnAttManual">確定</button></div>');
+        $('#btnAttManual').on('click', function(){
+            var pn = parseInt($('#attManualPage').val(), 10) || 0;
+            if (pn < 1) { alert('請輸入正確的頁碼'); return; }
+            saveAttach(attachId, pn, 0);
+        });
+    });
+}
+function saveAttach(attachId, pageNo, pageCount){
+    post({action:'attach_save', ec_id:CUR.ec_id, slot:ATT_SLOT, cat_id:ATT_CAT,
+          attach_id:attachId, page_no:pageNo || 0, page_count:pageCount || 0}, function(r){
+        if (!r.ok) return;
+        CUR_ATT = r.rows || [];
+        closeMask('attMask');
+        renderAttach('apply'); renderAttach('design');
+        $('#btnEcPrintAtt').toggle(CUR_ATT.length > 0)
+            .html('<i class="fa fa-paperclip"></i> 列印所有附件（' + CUR_ATT.length + '）');
+    });
 }
 
 /* ── 確認庫存：系統自動帶入讓倉管比對（使用者要求 2026-08-25）──────────────
@@ -835,22 +1228,39 @@ $('#btnStockReload').on('click', function(){
    ★不可以靠關鍵字查詢的前端快取來帶客戶：從清單選料號時 input 事件會先把快取清空
      再發非同步查詢，緊接著的 change 事件查到的必定是空的——這就是「綁了料號客戶沒出現」
      的原因。改成選定後向後端做一次**精確查詢**，拿到什麼就是什麼。 */
+/* ★「選了料號還要再點一下客戶才出現」的根因（使用者回報 2026-09-23）：
+     客戶原本只掛在 change/blur —— 從 <datalist> 點一個選項時瀏覽器只保證發 input，
+     change 要等游標離開欄位才發，所以使用者一定要再點一下別的地方客戶才跑出來。
+     改成 input 當下就判斷：**打的字正好等於清單裡的某一個料號**就立刻去查（等於「選到了」），
+     還在打字的中間狀態則用 350ms 防抖，不會每打一個字就打一支 API。 */
+var partTimer = null, partLast = '';
 $('#e_part_kw').on('input', function(){
     var kw = $(this).val().trim();
-    if (kw.length < 2) return;
+    showBindTags(0, '', '');                        // 還沒確認前先把綁定標記收起來
+    if (kw.length < 2) { clearTimeout(partTimer); return; }
     $.getJSON(API, {action:'parts', kw:kw}, function(r){
         if (!r.ok) return;
-        var dl = $('#partList').empty();
+        var dl = $('#partList').empty(), exact = false;
         (r.rows || []).forEach(function(p){
             PART_CACHE[p.part_no] = p;                 // 只累加不清空
+            if (p.part_no === kw) exact = true;
             dl.append('<option value="'+esc(p.part_no)+'">'+esc(p.customer_name)+'</option>');
         });
+        // 打的字剛好就是一個完整料號＝從清單選到了，立刻帶客戶（不等 blur）
+        if (exact && $('#e_part_kw').val().trim() === kw) pullPartCustomer(kw);
     });
+    clearTimeout(partTimer);
+    partTimer = setTimeout(function(){
+        var v = $('#e_part_kw').val().trim();
+        if (v && v !== partLast) pullPartCustomer(v);
+    }, 350);
 }).on('change blur', function(){
     pullPartCustomer($(this).val().trim());
 });
 function pullPartCustomer(pn){
-    if (!pn) { setCustomer(null); return; }
+    if (!pn) { partLast = ''; setCustomer(null); return; }
+    if (pn === partLast && +($('#e_part_kw').data('did') || 0) > 0) return;   // 已經查過同一個就不重打
+    partLast = pn;
     $.getJSON(API, {action:'part_one', part_no:pn}, function(r){
         if (!r.ok) return;
         setCustomer(r.row);
@@ -863,6 +1273,18 @@ function setCustomer(row){
     $('#e_customer').val(row ? (row.customer_name || '') : '').data('cid', row ? (row.customer_id || '') : '');
     if (row && !row.customer_name) markErr('#e_customer', '這個料號在主檔沒有綁定客戶，請先到料號主檔設定');
     else markErr('#e_customer', '');
+    showBindTags(row ? row.d_id : 0, row ? (row.customer_name || '') : '', row ? (row.customer_id || '') : '');
+}
+/** 綁定圖示：綁上料號主檔的當下，料號與客戶兩格同時長出「已綁定」標記（使用者要求 2026-09-23） */
+function showBindTags(dId, custName, custId){
+    if (+dId > 0) $('#e_part_bind').show().removeClass('bad')
+                    .html('<i class="fa fa-link"></i> 已綁定料號主檔 #' + (+dId));
+    else          $('#e_part_bind').hide();
+    if (+dId > 0 && custName) $('#e_cust_bind').show().removeClass('bad')
+                    .html('<i class="fa fa-link"></i> 由料號帶入' + (custId ? '（' + esc(custId) + '）' : ''));
+    else if (+dId > 0)        $('#e_cust_bind').show().addClass('bad')
+                    .html('<i class="fa fa-unlink"></i> 此料號主檔未綁客戶');
+    else                      $('#e_cust_bind').hide();
 }
 
 /* ── 申請人：**除管理員外一律固定是開單的人**，不可更改（使用者要求 2026-08-25）。
@@ -903,11 +1325,17 @@ function loadPosts(userId, date, pickDept){
     $.getJSON(API, {action:'my_posts', user_id:userId, date:date}, function(r){
         if (!r.ok) return;
         var rows = r.rows || [];
-        // 一般使用者不能查別人的職務（後端會擋回自己）→ 看別人的單時直接顯示單上存的部門，不要顯示成自己的
+        // 一般使用者不能查別人的職務（後端會擋回自己）→ 看別人的單時顯示單上那個人的部門與職稱。
+        // ★使用者回報 2026-09-23「申請職務沒有顯示出職稱」的根因就在這裡：原本只印 apply_dept_name
+        //   （欄位裡本來就只有部門名稱、沒有職稱），所以主管開別人的單一定只看得到「業務課」。
+        //   職稱由後端在 get 裡依本單日期回推好帶回來（applicant_post_label），前端不必也不能自己查。
         if (+r.user_id !== +userId) {
-            s.append('<option value="' + (CUR ? (CUR.apply_dept_id || 0) : 0) + '">'
-                   + esc((CUR && CUR.apply_dept_name) || '（申請單位）') + '</option>');
+            var lb = (CUR && CUR.applicant_post_label) ? CUR.applicant_post_label
+                   : ((CUR && CUR.apply_dept_name) || '（申請單位）');
+            s.append('<option value="' + (CUR ? (CUR.apply_dept_id || 0) : 0) + '" data-deptname="'
+                   + esc((CUR && CUR.apply_dept_name) || '') + '">' + esc(lb) + '</option>');
             s.prop('disabled', true);
+            syncDept();
             return;
         }
         if (!rows.length) {
@@ -944,6 +1372,12 @@ $(document).on('change', 'input[name=verdict]', function(){
     $('#e_verdict_other_wrap').toggle($('input[name=verdict]:checked').val() === 'other');
 });
 $(document).on('change', 'input[name=design]', function(){ syncReviewPick(); });
+/* 變更方式一改：設變事由的反灰狀態要跟著變，附件規則（必選／可選／不可選）也跟著變 */
+$(document).on('change', 'input[name=ctype]', function(){
+    syncReasonLock();
+    ATT_RULE = ATT_RULES_ALL[$('input[name=ctype]:checked').val() || ''] || 'optional';
+    renderAttach('apply');
+});
 /** 目前這張單有沒有已經被勾為「需會審」的單位 */
 function hasNeeded(){ return (CUR_REVIEWS || []).some(function(x){ return x.needed; }); }
 /**
@@ -987,6 +1421,11 @@ function validateHead(){
     ok &= markErr('#e_ctype',      ct ? '' : '請選擇變更方式');
     ok &= markErr('#e_reason', (ct === 'other' && !$('#e_reason').val().trim())
                                ? '變更方式選「其他變更」時，必須在設變事由說明內詳述變更原因' : '');
+    // 變更方式 × 附件規則（後端 ec_validate 同一套再擋一次＝鐵律8）
+    var needAtt = (ATT_RULES_ALL[ct] || 'optional') === 'required';
+    var hasAtt  = CUR_ATT.some(function(a){ return a.slot === 'apply'; });
+    ok &= markErr('#attApplyBox', (needAtt && !hasAtt)
+                                  ? '這個變更方式必須附上附件，請在右側挑選料號附件' : '');
     return !!ok;
 }
 function headPayload(){
@@ -1021,8 +1460,10 @@ function stageFields(stage){
     if (stage === 'WH')   return {stock_qty:$('#e_stock_qty').val(), wip_qty:$('#e_wip_qty').val()};
     if (stage === 'TD')   return {design_result:$('input[name=design]:checked').val()||'',
                                   old_stock:$('input[name=oldstock]:checked').val()||'',
+                                  single_process:$('#e_single_process').is(':checked')?1:0,
                                   design_note:$('#e_design_note').val()};
-    if (stage === 'CTRL') return {ctrl_drawing:$('#e_ctrl_drawing').is(':checked')?1:0,
+    // 圖面固定 1（畫面上是 disabled 的勾選框，讀 :checked 也永遠是 true，這裡直接寫死比較清楚）
+    if (stage === 'CTRL') return {ctrl_drawing:1,
                                   ctrl_bom:$('#e_ctrl_bom').is(':checked')?1:0,
                                   ctrl_manual:$('#e_ctrl_manual').is(':checked')?1:0};
     return {};
@@ -1082,11 +1523,18 @@ $('#btnEcSign').on('click', function(){
         fields.stock_qty = $('#e_stock_qty').val(); fields.wip_qty = $('#e_wip_qty').val();
         if (!fields.stock_qty.trim() || !fields.wip_qty.trim()) { alert('請先填寫庫存數量與已完工待入庫數量'); return; }
     } else if (st === 'TD') {
-        fields.design_result = $('input[name=design]:checked').val() || '';
-        fields.old_stock     = $('input[name=oldstock]:checked').val() || '';
-        fields.design_note   = $('#e_design_note').val();
+        fields.design_result   = $('input[name=design]:checked').val() || '';
+        fields.old_stock       = $('input[name=oldstock]:checked').val() || '';
+        fields.single_process  = $('#e_single_process').is(':checked') ? 1 : 0;
+        fields.design_note     = $('#e_design_note').val();
         if (!fields.design_result) { alert('請先選擇設計分析結果'); return; }
         if (!fields.old_stock)     { alert('請先選擇庫存舊料可否修改'); return; }
+        // 選了「更新圖面需附上」的任一結果就一定要挑附件（後端同規則再擋一次）
+        if (!CUR_ATT.some(function(a){ return a.slot === 'design'; })) {
+            alert('「更新圖面需附上」選了結果就必須挑選附件，請在設計分析區塊挑一個料號附件');
+            markErr('#attDesignBox', '請挑選附件'); return;
+        }
+        markErr('#attDesignBox', '');
         if (fields.design_result === 'need_review') {
             var units = $('.rv-need:checked').map(function(){ return this.value; }).get();
             if (!units.length) { alert('選了「需修改圖面與會審」就要勾選至少一個會審單位'); return; }
@@ -1101,23 +1549,58 @@ $('#btnEcSign').on('click', function(){
         if (!fields.verdict) { alert('請先選擇核示結果'); return; }
         if (fields.verdict === 'other' && !fields.verdict_other.trim()) { alert('核示選「其他」時請填寫內容'); return; }
     } else if (st === 'CTRL') {
-        fields.ctrl_drawing = $('#e_ctrl_drawing').is(':checked') ? 1 : 0;
+        fields.ctrl_drawing = 1;                       // 固定勾選（使用者要求），不可取消
         fields.ctrl_bom     = $('#e_ctrl_bom').is(':checked') ? 1 : 0;
         fields.ctrl_manual  = $('#e_ctrl_manual').is(':checked') ? 1 : 0;
-        if (!fields.ctrl_drawing && !fields.ctrl_bom && !fields.ctrl_manual) {
-            alert('請至少勾選一項需修改的文件資料（圖面／BOM／操作手冊）'); return;
-        }
     }
     doSign(fields);
 });
+/**
+ * 管理員代簽（使用者要求 2026-09-23）：操作者不在這一關的合格簽核人名單裡時，
+ * 先問「要代誰簽」——名單只有一位就直接用那一位、有多位才跳出來選。
+ * 章一律蓋原本該簽的那個人，下一關的「送出人員」也記成他。
+ */
 function doSign(fields){
-    if (!confirm('確定簽核這一關？簽完會自動通知下一關的人。')) return;
+    var list = (CUR_SIGNERS[fields.stage] || {}).list || [];
+    var mine = list.some(function(x){ return +x.id === +ME.uid; });
+    if (!mine && list.length > 1) {
+        var s = $('#proxyWho').empty();
+        list.forEach(function(x){ s.append('<option value="'+x.id+'">'+esc(x.label)+'</option>'); });
+        $('#btnProxyOk').off('click').on('click', function(){
+            fields.sign_as = $('#proxyWho').val() || 0;
+            closeMask('proxyMask');
+            sendSign(fields, '確定代「' + ($('#proxyWho option:selected').text() || '') + '」簽核這一關？');
+        });
+        openMask('proxyMask');
+        return;
+    }
+    if (!mine && list.length === 1) {
+        fields.sign_as = list[0].id;
+        sendSign(fields, '你不是這一關的簽核人，這是管理員代簽。章會蓋「' + list[0].label + '」，確定？');
+        return;
+    }
+    sendSign(fields, '確定簽核這一關？簽完會自動通知下一關的人。');
+}
+function sendSign(fields, ask){
+    if (!confirm(ask)) return;
     post(fields, function(r){
         if (!r.ok) return;
         alert(r.status === 'CLOSED' ? '已簽核完成，本單結案' : ('已簽核，接下來由「' + (DICT.stages[r.status] || '') + '」處理'));
         closeMask('ecMask'); loadList();
     });
 }
+
+/* 刪除：管理員任何一張都可以；一般使用者只能刪自己建立且尚未送出的草稿（後端同規則再擋一次） */
+$('#btnEcDel').on('click', function(){
+    if (!CUR) return;
+    var isDraft = CUR.status === 'DRAFT';
+    if (!confirm(isDraft ? ('確定刪除草稿 ' + (CUR.doc_no || '') + '？此動作無法復原，也不會保留任何紀錄。')
+                         : ('確定刪除 ' + (CUR.doc_no || '') + '？這張單已經進入簽核流程，刪除後相關通知也會一併關閉，無法復原。'))) return;
+    post({action:'delete', ec_id:CUR.ec_id}, function(r){
+        if (!r.ok) return;
+        closeMask('ecMask'); loadList();
+    });
+});
 
 $('#btnEcReject').on('click', function(){ $('#rejReason').val(''); $('#rejReason').closest('.fld').removeClass('bad'); openMask('rejMask'); });
 $('#btnRejOk').on('click', function(){
@@ -1206,8 +1689,42 @@ function buildSettings(){
     });
     $('.set-sign').each(function(){ togglePick($(this).data('k'), this.value); });
     $('#set_auto').prop('checked', +SETTINGS.ec_auto_from_dwg === 1);
+    buildAttachSettings();
     showAsDoc();
     loadStampTemplates();
+}
+
+/* 附件設定：可挑選的標籤（逐段勾選）＋ 各變更方式的附件規則 ＋ 提示文字 */
+function buildAttachSettings(){
+    $('#set_hint_apply').val(SETTINGS.ec_attach_hint_apply || '');
+    $('#set_hint_design').val(SETTINGS.ec_attach_hint_design || '');
+    var rh = '';
+    $.each(DICT.change_types, function(ct, label){
+        var cur = SETTINGS['ec_attach_rule_' + ct] || 'optional';
+        rh += '<div class="att-row" style="border-bottom:1px dashed #EFE3D0;">'
+           +  '<span class="att-file">' + esc(label) + '</span>'
+           +  '<select class="form-control set-attrule" data-ct="' + esc(ct) + '" data-eg-skip '
+           +    'style="width:auto;height:28px;font-size:12px;">';
+        $.each(DICT.attach_rules, function(v, t){
+            rh += '<option value="'+esc(v)+'"'+(cur === v ? ' selected' : '')+'>'+esc(t)+'</option>';
+        });
+        rh += '</select></div>';
+    });
+    $('#setAttachRules').html(rh);
+    // 標籤清單走 API 即時查（不在本頁寫死一份＝鐵律4）
+    $.getJSON(API, {action:'attach_cat_list'}, function(r){
+        if (!r.ok) return;
+        [['apply', '#catPickApply', 'ec_attach_cats_apply'], ['design', '#catPickDesign', 'ec_attach_cats_design']]
+        .forEach(function(p){
+            var picked = String(SETTINGS[p[2]] || '').split(',').filter(Boolean);
+            var h = '';
+            (r.rows || []).forEach(function(c){
+                h += '<label class="chk" style="margin:1px 0;"><input type="checkbox" class="cat-u" data-slot="'+p[0]+'" value="'+c.id+'"'
+                  +  (picked.indexOf(String(c.id)) >= 0 ? ' checked' : '') + '> ' + esc(c.name) + '</label>';
+            });
+            $(p[1]).html(h || '<span style="color:#aaa;">目前沒有啟用中的附件標籤</span>');
+        });
+    });
 }
 function showAsDoc(){
     $('#setAsDoc').text(AS_DOC ? (AS_DOC.doc_no + '　' + AS_DOC.doc_name) : '（未綁定）');
@@ -1296,7 +1813,22 @@ $('#btnClearAsDoc').on('click', function(){
 });
 $('#btnSetSave').on('click', function(){
     var p = {action:'save_setting', ec_auto_from_dwg: $('#set_auto').is(':checked') ? 1 : 0,
-             ec_stamp_tpl_id: $('#set_stamp').val() || '', ec_review_stamp_tpl_id: $('#set_rv_stamp').val() || ''};
+             ec_stamp_tpl_id: $('#set_stamp').val() || '', ec_review_stamp_tpl_id: $('#set_rv_stamp').val() || '',
+             ec_attach_hint_apply: $('#set_hint_apply').val() || '',
+             ec_attach_hint_design: $('#set_hint_design').val() || ''};
+    ['apply','design'].forEach(function(slot){
+        p['ec_attach_cats_' + slot] = $('.cat-u[data-slot="'+slot+'"]:checked')
+            .map(function(){ return this.value; }).get().join(',');
+    });
+    $('.set-attrule').each(function(){ p['ec_attach_rule_' + $(this).data('ct')] = this.value; });
+    // 設成「必選附件」卻一個標籤都沒開放＝申請人永遠挑不到附件、也永遠送不出去，先擋下來
+    var badRule = '';
+    $('.set-attrule').each(function(){
+        if (this.value === 'required' && !p.ec_attach_cats_apply)
+            badRule = $(this).closest('.att-row').find('.att-file').text();
+    });
+    if (badRule) { alert('「' + badRule + '」設成必選附件，但「申請內容可挑的標籤」一個都沒有勾——'
+                       + '這樣申請人永遠挑不到附件、也永遠送不出單。請先勾選至少一個標籤。'); return; }
     $('.set-sign').each(function(){ p[$(this).data('k')] = this.value; });
     var bad = '';
     $('.pick-wrap').each(function(){
@@ -1373,6 +1905,20 @@ function printHtml(res){
     var dr = d.design_result || '';
     var os = d.old_stock || '';
     var vd = d.verdict || '';
+
+    /* 附件（使用者指定的格式 2026-09-23）：編號＋一個空白＋標籤名稱＋附件備註。
+       編號由後端算好（print_text），畫面、這裡、以及「列印所有附件」右上角都用同一份，
+       三個地方各自重排遲早對不起來。 */
+    var attOfSlot = function(slot){
+        return (m.attachments || []).filter(function(a){ return a.slot === slot; });
+    };
+    var attLines = function(slot){
+        var list = attOfSlot(slot);
+        if (!list.length) return '';
+        return '<br>附件：' + list.map(function(a){
+            return esc(a.print_text) + (a.page_no ? '（第 ' + a.page_no + ' 頁）' : '');
+        }).join('　');
+    };
 
     // 會審六列（紙本固定全部列出，不需會審的也印出來留白）
     var rvRows = rvs.map(function(rv){
@@ -1451,7 +1997,8 @@ function printHtml(res){
         +     '<td class="opt" rowspan="2">'
         +       box(ct === 'customer_notify') + ' 客戶通知變更(包含新訂單版次變更)<br>'
         +       box(ct === 'blueprint_error') + ' 客戶藍圖有誤，通知客戶之建議變更(客戶同意後需附上新版客戶藍圖)<br>'
-        +       box(ct === 'other') + ' 其他變更(請於設變事由說明內詳述)</td>'
+        +       box(ct === 'other') + ' 其他變更(請於設變事由說明內詳述)'
+        +       attLines('apply') + '</td>'
         +     '<td class="lbs">申請人</td><td class="sig">' + sg('applicant') + '</td></tr>'
         + '<tr><td class="lbs">單位主管</td><td class="sig">' + sg('sup') + '</td></tr>'
         + '<tr><td class="lbs"><span class="sub">(僅其他變更須填寫)</span>設變事由說明</td>'
@@ -1462,7 +2009,9 @@ function printHtml(res){
         // 確認庫存（倉管組）
         + '<table><colgroup><col style="width:22mm"><col style="width:116mm"><col style="width:22mm"><col style="width:34mm"></colgroup>'
         + '<tr><td class="lbs">確認庫存</td>'
-        +     '<td class="opt">庫存數量：' + esc(d.stock_qty || '') + '<br>已完工待入庫數量：' + esc(d.wip_qty || '') + '</td>'
+        +     '<td class="opt">' + (+d.single_process === 1
+                ? '☑ 單一製程，不需確認庫存'
+                : ('庫存數量：' + esc(d.stock_qty || '') + '<br>已完工待入庫數量：' + esc(d.wip_qty || ''))) + '</td>'
         +     '<td class="lbs">倉管組</td><td class="sig">' + sg('wh') + '</td></tr>'
         + '</table>'
 
@@ -1471,6 +2020,8 @@ function printHtml(res){
         + '<tr><td class="lbs"><span class="sub">(更新圖面需附上)</span>設計分析</td>'
         +     '<td class="opt">' + box(dr === 'drawing_only') + ' 僅修改圖面(修改後結案)<br>'
         +       box(dr === 'need_review') + ' 需修改圖面與會審(單據續跑，下方需勾選)'
+        +       (+d.single_process === 1 ? '<br>☑ 單一製程(不需確認庫存)' : '')
+        +       attLines('design')
         +       (d.design_note ? '<br>' + esc(d.design_note) : '') + '</td>'
         +     '<td class="lbs">技術課</td><td class="sig">' + sg('td') + '</td></tr>'
         + '<tr><td colspan="4" class="opt">1.庫存舊料：'
@@ -1497,7 +2048,8 @@ function printHtml(res){
         // 管制
         + '<table style="margin-top:1mm;"><colgroup><col style="width:22mm"><col style="width:116mm"><col style="width:22mm"><col style="width:34mm"></colgroup>'
         + '<tr><td class="lb">管制</td>'
-        +     '<td class="opt">需修改文件資料：' + box(+d.ctrl_drawing === 1) + ' 圖面　'
+        // 圖面固定勾選（使用者要求 2026-09-23）：工程變更一定會動到圖面，紙本上那一格永遠是打勾的
+        +     '<td class="opt">需修改文件資料：' + box(true) + ' 圖面　'
         +       box(+d.ctrl_bom === 1) + ' BOM　' + box(+d.ctrl_manual === 1) + ' 操作手冊</td>'
         +     '<td class="lbs">管制員</td><td class="sig">' + sg('ctrl') + '</td></tr>'
         + '</table>'
@@ -1515,6 +2067,96 @@ function printHtml(res){
         +   'window.print();};<\/script>'
         + '</body></html>';
     return h;
+}
+
+/* ══════════════════ 一鍵列印所有附件（使用者要求 2026-09-23）══════════════════
+   ★每一張附件的**右上角固定印該附件的編號**（附件1、附件2…），與表單上那一行的編號是同一份。
+   PDF 一律用 pdf.js 畫成圖再放進列印視窗——直接用 <embed>／<iframe> 塞 PDF，
+   瀏覽器的列印只會印外層那張空白頁（不同瀏覽器行為還不一樣），這條路走不通。
+   指定了頁的只印那一頁，沒指定的整份逐頁印。畫不出來的檔（Word／Excel）印一張說明頁，
+   不要安靜地跳過——少印一張附件現場不會發現。 */
+$('#btnEcPrintAtt').on('click', function(){
+    if (!CUR || !CUR_ATT.length) { alert('這張單目前沒有選定任何附件'); return; }
+    printAttachments(CUR_ATT.slice(), CUR);
+});
+function attExt(name){ return String(name || '').split('.').pop().toLowerCase(); }
+function printAttachments(list, row){
+    var w = window.open('', '_blank');
+    if (!w) { alert('請允許彈出視窗'); return; }
+    w.document.write('<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8">'
+        + '<title>' + esc(row.doc_no || '') + ' 附件</title><style>'
+        + '@page{size:A4 portrait;margin:8mm;}'
+        + 'html,body{margin:0;padding:0;font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;}'
+        + '.pg{page-break-after:always;position:relative;text-align:center;}'
+        + '.pg:last-child{page-break-after:auto;}'
+        + '.no{position:absolute;top:0;right:0;font-size:12pt;font-weight:bold;letter-spacing:1px;}'
+        + '.cap{font-size:9pt;color:#333;text-align:left;margin:0 0 2mm;padding-right:28mm;}'
+        + '.im{max-width:100%;max-height:262mm;}'
+        + '.na{border:0.4mm dashed #999;padding:20mm 10mm;font-size:11pt;color:#333;margin-top:20mm;}'
+        + '</style></head><body><div id="bd"><div style="padding:20mm;color:#888;">正在準備附件，請稍候…</div></div></body></html>');
+    w.document.close();
+
+    var done = [];
+    var step = function(i){
+        if (i >= list.length) {
+            var bd = w.document.getElementById('bd');
+            bd.innerHTML = done.join('');
+            // 圖片要真的解碼完才印得出來，否則會印出一片空白
+            var imgs = bd.getElementsByTagName('img'), left = imgs.length;
+            var go = function(){ if (--left <= 0) setTimeout(function(){ w.focus(); w.print(); }, 250); };
+            if (!imgs.length) { setTimeout(function(){ w.focus(); w.print(); }, 250); }
+            else for (var k = 0; k < imgs.length; k++) {
+                if (imgs[k].complete) go(); else { imgs[k].onload = go; imgs[k].onerror = go; }
+            }
+            post({action:'log_print', ids:JSON.stringify([row.ec_id])}, function(){});
+            return;
+        }
+        var a = list[i];
+        var url = '../../src/store/Part_Attachment_API.php?action=download&id=' + a.attach_id;
+        var cap = '<div class="no">' + esc(a.seq_label) + '</div>'
+                + '<div class="cap">' + esc(a.print_text)
+                + '　' + esc(a.orig_name) + (a.page_no ? '（第 ' + a.page_no + ' 頁）' : '') + '</div>';
+        var ext = attExt(a.file_name || a.orig_name);
+        if (['jpg','jpeg','png','gif','webp','bmp'].indexOf(ext) >= 0) {
+            done.push('<div class="pg">' + cap + '<img class="im" src="' + url + '"></div>');
+            step(i + 1); return;
+        }
+        if (ext !== 'pdf') {
+            done.push('<div class="pg">' + cap + '<div class="na">這個附件是 <b>.' + esc(ext)
+                + '</b> 檔，系統無法直接轉成可列印的頁面。<br>請自行開啟該檔列印，並在紙本右上角註明「'
+                + esc(a.seq_label) + '」。</div></div>');
+            step(i + 1); return;
+        }
+        // PDF：指定頁只畫那一頁，沒指定就整份逐頁
+        loadPdfJs().then(function(lib){ return lib.getDocument(url).promise; }).then(function(pdf){
+            var from = a.page_no ? a.page_no : 1, to = a.page_no ? a.page_no : pdf.numPages;
+            if (from > pdf.numPages) { from = to = pdf.numPages; }
+            var chain = Promise.resolve();
+            for (var p = from; p <= to; p++) (function(pn){
+                chain = chain.then(function(){
+                    return pdf.getPage(pn).then(function(page){
+                        var vp0 = page.getViewport({scale:1});
+                        var scale = Math.min(1600 / vp0.width, 3);   // 1600px 寬足夠 A4 列印又不會讓檔案爆掉
+                        var vp = page.getViewport({scale:scale});
+                        var cv = w.document.createElement('canvas');
+                        cv.width = Math.ceil(vp.width); cv.height = Math.ceil(vp.height);
+                        return page.render({canvasContext:cv.getContext('2d'), viewport:vp}).promise.then(function(){
+                            done.push('<div class="pg">' + cap.replace('</div><div class="cap">',
+                                        '</div><div class="cap">')
+                                   + '<img class="im" src="' + cv.toDataURL('image/jpeg', 0.9) + '"></div>');
+                        });
+                    });
+                });
+            })(p);
+            return chain;
+        }).then(function(){ step(i + 1); })
+          .catch(function(e){
+            done.push('<div class="pg">' + cap + '<div class="na">這個 PDF 讀不出來（' + esc(e.message || '')
+                + '），請自行開啟列印，並在紙本右上角註明「' + esc(a.seq_label) + '」。</div></div>');
+            step(i + 1);
+          });
+    };
+    step(0);
 }
 
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
