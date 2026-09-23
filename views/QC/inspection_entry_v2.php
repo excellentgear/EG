@@ -1050,11 +1050,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     /* 標準值欄：輸入框在上、公差/範圍切換鈕在下（小長方形，不搶輸入框的空間） */
     #items-table .td-std-wrap { display:flex; flex-direction:column; gap:2px; }
     #items-table .td-std .table-input { width:100%; box-sizing:border-box; }
-    #items-table .tol-range-disp { display:block; width:100%; padding:3px 5px; color:var(--ink2); font-size:12px;
-                                    box-sizing:border-box; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .btn-tol-mode { display:block; width:100%; height:15px; line-height:13px; font-size:10px;
                     border:1px solid var(--amber-d); border-radius:2px; background:#fff; color:var(--amber-d); cursor:pointer; padding:0; }
     .btn-tol-mode.on { background:var(--amber-d); color:#fff; }
+    #items-table .td-std .table-input[disabled] { background:#F3EEE6; color:#b3a58f; }
+    /* 範圍模式：上公差/下公差合併成一格，顯示「下限輸入框 ~ 上限輸入框」 */
+    #items-table .td-range-wrap { display:flex; align-items:center; gap:4px; }
+    #items-table .td-range-wrap .table-input { width:0; flex:1 1 auto; min-width:0; }
+    #items-table .td-range-sep { color:var(--ink2); font-weight:bold; flex:0 0 auto; }
     /* 型態：點一下切換的雙色鈕，取代原本的下拉選單（數值=琥珀、OK/NG=深棕，一眼分辨） */
     .btn-type-toggle { width:100%; border:1px solid; border-radius:3px; padding:4px 2px; font-size:12px; font-weight:bold; cursor:pointer; }
     .btn-type-toggle.type-num { background:var(--amber); border-color:var(--amber-d); color:#4A3524; }
@@ -1363,6 +1366,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         <span class="stat">整體判定 <b id="dk-judge">—</b></span>
         <span class="stat warn" id="dk-warn" style="display:none;"></span>
         <span class="draft-note" id="draft-status"></span>
+        <button class="btn btn-default btn-xs" id="btn-save-draft" title="立刻存一次草稿，不必等自動存檔的間隔"><i class="fa fa-clock-o"></i> 儲存草稿</button>
         <span style="flex:1 1 auto;"></span>
         <button class="btn btn-default btn-sm" id="btn-dock-extra"><i class="fa fa-sliders"></i> 數量 / 處置備註</button>
         <button class="btn btn-default btn-sm" id="btn-cancel"><i class="fa fa-times"></i> 取消</button>
@@ -1608,7 +1612,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
 
             <h4>一之二、標準／公差怎麼填、型態怎麼切換</h4>
             <ul>
-                <li>總表勾「編輯標準」後，<b>標準值欄輸入框下方有一顆「公差／範圍」切換鈕</b>：預設是<b>公差模式</b>（填標準值＋上公差＋下公差）；按一下切成<b>範圍模式</b>後，不用填標準值，直接在原本上下公差的兩格<b>填絕對下限／上限</b>（例如圖面直接標 Ø12.20~12.30 就用這個），畫面與列印都會顯示成「<b>下限~上限</b>」。切換時會盡量互相換算帶入，不會把你填好的資料洗掉；下限≧上限會即時紅框並擋下存檔。</li>
+                <li>總表勾「編輯標準」後，<b>標準值欄輸入框下方有一顆「公差／範圍」切換鈕</b>：預設是<b>公差模式</b>（填標準值＋上公差＋下公差）；按一下切成<b>範圍模式</b>後，<b>標準值欄留空不需要填也不會自動帶值</b>，原本的上下公差兩欄會<b>合併成一格</b>直接<b>填絕對下限～上限</b>（例如圖面直接標 Ø12.20~12.30 就用這個），畫面與列印都會顯示成「<b>下限~上限</b>」。下限≧上限會即時紅框並擋下存檔。</li>
                 <li><b>型態</b>欄是一顆點一下就切換的雙色按鈕：<b>琥珀色＝數值型</b>、<b>深棕色＝OK/NG 型</b>，不再是下拉選單。</li>
             </ul>
 
@@ -1646,7 +1650,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
 
             <h4>四、草稿與自動存檔</h4>
             <ul>
-                <li>填寫過程<b>會自動存草稿</b>（停止輸入約 2.5 秒後背景存一次，關掉視窗前也會補存一次），畫面上會顯示「已自動存草稿 時:分:秒」。</li>
+                <li>填寫過程<b>會自動存草稿</b>（停止輸入約 2.5 秒後背景存一次，關掉視窗前也會補存一次），畫面上會顯示「已自動存草稿 時:分:秒」；底部也有一顆<b>「儲存草稿」按鈕</b>可以不等 2.5 秒直接立刻存一次。</li>
                 <li>下次由待驗清單開同一個製程，上方會出現橫幅可<b>載回草稿</b>或<b>捨棄</b>。</li>
                 <li>草稿是<b>每人各自一份</b>，只有自己看得到、也只有自己載得回；正式存檔後草稿自動清除。</li>
                 <li>草稿會記錄<b>建立人、建立時間、最後修改人、最後修改時間</b>。</li>
@@ -3005,27 +3009,31 @@ $(function(){
             body += '<tr data-i="'+i+'"><td class="text-center">'+codeLabel(i)+'</td>';
             if(stdEdit){
                 var isOkng=it.type==='OKNG', isRange=it.mode==='RANGE';
+                // 範圍模式：標準值不需要、也不自動帶入任何值（使用者明確要求）
                 var stdCell = (isRange && !isOkng)
-                    ? '<span class="tol-range-disp" title="下限~上限（由下方兩欄計算，已不需要標準值）">'+(L?(trimNum(L.low.toFixed(4))+'~'+trimNum(L.hi.toFixed(4))):'—')+'</span>'
-                    : '<input class="table-input f-std" data-i="'+i+'" value="'+esc(it.std)+'" '+(isOkng?'':'')+'>';
+                    ? '<input class="table-input f-std" data-i="'+i+'" value="" disabled placeholder="—" title="範圍模式不需要標準值">'
+                    : '<input class="table-input f-std" data-i="'+i+'" value="'+esc(it.std)+'">';
                 var tolBtn = isOkng ? '' :
                     '<button type="button" class="btn-tol-mode'+(isRange?' on':'')+'" data-i="'+i+'" '+
                     'title="按一下切換輸入方式：標準值±公差　／　直接填絕對上下限">'+(isRange?'範圍':'公差')+'</button>';
-                var aCell, bCell;
+                // 上公差/下公差兩欄：範圍模式合併成一格，顯示「下限輸入框 ~ 上限輸入框」
+                var tolCells;
                 if(isOkng){
-                    aCell='<input class="table-input f-up" data-i="'+i+'" value="" readonly>';
-                    bCell='<input class="table-input f-lo" data-i="'+i+'" value="" readonly>';
+                    tolCells = '<td><input class="table-input f-up" data-i="'+i+'" value="" readonly></td>'+
+                               '<td><input class="table-input f-lo" data-i="'+i+'" value="" readonly></td>';
                 } else if(isRange){
-                    aCell='<input class="table-input f-min" data-i="'+i+'" placeholder="下限" value="'+esc(it.min)+'">';
-                    bCell='<input class="table-input f-max" data-i="'+i+'" placeholder="上限" value="'+esc(it.max)+'">';
+                    tolCells = '<td colspan="2"><div class="td-range-wrap">'+
+                        '<input class="table-input f-min" data-i="'+i+'" placeholder="下限" value="'+esc(it.min)+'">'+
+                        '<span class="td-range-sep">~</span>'+
+                        '<input class="table-input f-max" data-i="'+i+'" placeholder="上限" value="'+esc(it.max)+'">'+
+                        '</div></td>';
                 } else {
-                    aCell='<input class="table-input f-up" data-i="'+i+'" placeholder="上公差" value="'+esc(it.up)+'">';
-                    bCell='<input class="table-input f-lo" data-i="'+i+'" placeholder="下公差" value="'+esc(it.lo)+'">';
+                    tolCells = '<td><input class="table-input f-up" data-i="'+i+'" placeholder="上公差" value="'+esc(it.up)+'"></td>'+
+                               '<td><input class="table-input f-lo" data-i="'+i+'" placeholder="下公差" value="'+esc(it.lo)+'"></td>';
                 }
                 body += '<td><input class="table-input f-name" data-i="'+i+'" value="'+esc(it.name)+'">'+rowActs(it,i)+'</td>'+
                         '<td class="td-std"><div class="td-std-wrap">'+stdCell+tolBtn+'</div></td>'+
-                        '<td>'+aCell+'</td>'+
-                        '<td>'+bCell+'</td>'+
+                        tolCells+
                         '<td><button type="button" class="btn-type-toggle type-'+(isOkng?'okng':'num')+'" data-i="'+i+'" '+
                         'title="按一下切換：數值型 ／ OK/NG型">'+(isOkng?'OK/NG':'數值')+'</button></td>';
             } else {
@@ -4097,6 +4105,7 @@ $(function(){
                     return '<button type="button" class="ki-btn" data-kind="'+k+'">'+lbl+'</button>';
                 }).join('')+'</span></span></div>'));
         applyInspKindUI();
+        refreshSaveDraftBtn();
         if(!ctx.adhoc) loadSiblingProcesses();
     }
     // ---------- 製程切換（同一 BOM 的其他製程，不用回待驗清單重找）----------
@@ -4431,6 +4440,7 @@ $(function(){
             $('#inp-sample').val(state.sampleN);
             $('#inp-remark').val(h.main_remark||'');
             applyInspKindUI();
+            refreshSaveDraftBtn();
             // 本單使用量具：帶回這張檢驗單原本選的那幾支（舊紀錄由 migration 從量測明細回填）
             MODEL.tools=(res.tools||[]).map(function(t){ return String(t.id); });
             renderItems(res.items||[]);
@@ -4494,9 +4504,11 @@ $(function(){
         if(draftTimer) clearTimeout(draftTimer);
         draftTimer=setTimeout(saveDraftNow, 2500);
     }
-    function saveDraftNow(){
-        if(!draftEligible() || !draftDirty) return;
-        var items=collectItems(); if(!items.length){ draftDirty=false; return; }
+    function saveDraftNow(manual){
+        if(!draftEligible()) return;
+        if(!manual && !draftDirty) return;   // 手動按鈕一律真的存一次，不管有沒有偵測到變更
+        var items=collectItems();
+        if(!items.length){ draftDirty=false; if(manual) alert('尚無檢驗項目可存草稿'); return; }
         var b=state.batches[state.curBatch]||{no:1,rounds:[]};
         $.post(API,{ action:'save_draft', bom_ing_fid:ctx.bom_ing_fid, d_id:ctx.d_id, process_name:ctx.process,
             batch_no:b.no, round_no:(b.rounds.length+1),
@@ -4507,11 +4519,16 @@ $(function(){
             if(res && res.success){
                 draftDirty=false; state.draftFormId=res.draft_form_id;
                 var t=new Date(), p=function(n){return('0'+n).slice(-2);};
-                $('#draft-status').html('<i class="fa fa-check"></i> 已自動存草稿 '+p(t.getHours())+':'+p(t.getMinutes())+':'+p(t.getSeconds()));
+                $('#draft-status').html('<i class="fa fa-check"></i> 已'+(manual?'手動':'自動')+'存草稿 '+p(t.getHours())+':'+p(t.getMinutes())+':'+p(t.getSeconds()));
+            } else if(manual){
+                alert('存草稿失敗：'+((res&&res.message)||''));
             }
-        }, 'json');
+        }, 'json').fail(function(){ if(manual) alert('存草稿失敗：伺服器錯誤'); });
     }
     $(window).on('beforeunload', function(){ if(draftEligible() && draftDirty){ try{ saveDraftNow(); }catch(e){} } });
+    // 手動「儲存草稿」鈕：不必等 2.5 秒自動存檔間隔，立刻存一次；只在草稿功能適用時顯示
+    $('#btn-save-draft').on('click', function(){ saveDraftNow(true); });
+    function refreshSaveDraftBtn(){ $('#btn-save-draft').toggle(draftEligible()); }
     function maybeOfferDraft(draftId){
         if(!draftId || state.editFormId){ $('#draft-banner').remove(); return; }
         state.draftFormId=draftId;
