@@ -5994,18 +5994,12 @@ foreach($dCounts as $c) {
                     finish(true, res.reason || '');
                 }, 'json').fail(function() { alert('連線失敗，請重試'); finish(false); });
             } else {
-                // 新增中的訂單尚無 Order_id：先記在畫面上，存檔成功後一次補寫
+                // 新增中的訂單尚無 Order_id：只先記在畫面上，存檔成功拿到新訂單編號後才由後端
+                // commit_new 補寫（ocr_ack_pending() 那時才把摘要插入業務備註，且只會插入一次）。
+                // 刻意不在這裡先手動把摘要塞進畫面上的業務備註欄——那樣送出訂單時等於把摘要跟著
+                // 存進 DB 一次，commit_new 事後又用同一則提醒的內容再插入一次，會變成重複兩段。
                 window.ocrPendingDecisions.push({ reminder_id: reminderId, status: status });
-                if (status === 'pending') {
-                    var $ps = $('#newOrderForm textarea[name="Order_ps"]');
-                    if ($ps.length) {
-                        var content = $(btn).closest('[data-rid]').find('div').first().text();
-                        var cur = $ps.val();
-                        var summary = '【客戶提醒待處理】' + (content.length > 40 ? content.substring(0, 40) + '…' : content);
-                        $ps.val(cur ? (cur + '\n' + summary) : summary);
-                    }
-                }
-                finish(true);
+                finish(true, status === 'pending' ? '（存檔成功後會自動加進業務備註）' : '');
             }
         }
 
