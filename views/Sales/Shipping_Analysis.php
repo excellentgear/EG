@@ -2595,6 +2595,16 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             $('#filter-warehouse').on('keyup change', function() { table.column(11).search(this.value).draw(); });
             $('#filter-note').on('keyup change', function() { table.column(12).search(this.value).draw(); });
 
+            /* 由別的頁面帶參數進來時自動套上篩選（專案管理的「出貨紀錄」就是這樣開過來的）。
+               一定要 .trigger('change') 才會真的過 DataTable 的欄位篩選，只 .val() 是不會動的。 */
+            (function(){
+                var p = new URLSearchParams(location.search);
+                var isNo = (p.get('is_no') || '').trim();
+                var prod = (p.get('product') || '').trim();
+                if (isNo) $('#filter-is-no').val(isNo).trigger('change');
+                if (prod) $('#filter-product').val(prod).trigger('change');
+            })();
+
             // 雙擊清除篩選欄位內容
             $('#external-filter-container input').on('dblclick', function() {
                 $(this).val('').trigger('change');

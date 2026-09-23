@@ -321,12 +321,14 @@ function partLinksHtml(res) {
     return h + '</span>';
 }
 
-/* 圖面檢視跳窗：直接把「圖面查閱」那一頁嵌進來（同一份實作，不在這裡另外刻一個看圖的畫面）。
-   同源所以載入後可以把它自己的側欄／頁首藏掉，看起來就像本頁的跳窗——**刻意不去改 bom_viewer.php**。 */
-$(document).on('click', '[data-viewpart]', function () {
-    var pk = num($(this).data('viewpart')), pn = String($(this).data('partno') || '');
-    var url = '/EGsystem/views/pm/bom_viewer.php?pk=' + pk + '&d_id=' + encodeURIComponent(pn);
-    $('#pvTitle').text('圖面檢視：' + pn);
+/**
+ * 把站上**既有的那一頁**嵌進跳窗（唯一實作）。圖面查閱、訂單追蹤、BOM 總表、
+ * 出貨紀錄、報工紀錄全部走這一支——不要在專案管理裡另外刻五個看資料的畫面（鐵律4）。
+ * 同源所以載入後可以把它自己的側欄／頁首藏掉，看起來就像本頁的跳窗；
+ * **刻意不去改那些頁面本身**（只有「用網址帶篩選條件」那一小段是加在對方頁面上的）。
+ */
+function openPageModal(title, url) {
+    $('#pvTitle').text(title);
     $('#pvOpen').attr('href', url);
     $('#pvBody').html('<div class="pj-hint" style="padding:14px;">載入中…</div>'
         + '<iframe id="pvFrame" src="' + url + '" style="width:100%;height:72vh;border:0;display:none;"></iframe>');
@@ -344,6 +346,40 @@ $(document).on('click', '[data-viewpart]', function () {
             d.head.appendChild(s);
         } catch (e) { /* 藏不掉就維持原樣，不影響檢視 */ }
     });
+}
+
+/* 圖面檢視：views/pm/bom_viewer.php（使用者指定就是要這一頁） */
+$(document).on('click', '[data-viewpart]', function () {
+    var pk = num($(this).data('viewpart')), pn = String($(this).data('partno') || '');
+    openPageModal('圖面檢視：' + pn,
+        '/EGsystem/views/pm/bom_viewer.php?pk=' + pk + '&d_id=' + encodeURIComponent(pn));
+});
+/* 訂單編號 → 訂單追蹤，並自動篩出「這個訂單編號＋這個料號」那一列
+   （只帶單號不夠：同一個訂單編號會有好幾列，拆批與同編號多料號都會一起列出來） */
+$(document).on('click', '[data-vieworder]', function () {
+    var no = String($(this).data('vieworder') || ''), pn = String($(this).data('partno') || '');
+    openPageModal('訂單追蹤：' + no,
+        '/EGsystem/views/Sales/NewOrder_Track.php?kw=' + encodeURIComponent(no)
+        + '&part=' + encodeURIComponent(pn));
+});
+/* 製令單號 → BOM 總表（它吃 ?b=製令單號） */
+$(document).on('click', '[data-viewbom]', function () {
+    var b = String($(this).data('viewbom') || '');
+    openPageModal('BOM 總表：' + b, '/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php?b=' + encodeURIComponent(b));
+});
+/* 出貨單號 → 出貨紀錄分析，自動篩出這張單號 */
+$(document).on('click', '[data-viewship]', function () {
+    var no = String($(this).data('viewship') || ''), pn = String($(this).data('partno') || '');
+    openPageModal('出貨紀錄：' + no,
+        '/EGsystem/views/Sales/Shipping_Analysis.php?is_no=' + encodeURIComponent(no)
+        + '&product=' + encodeURIComponent(pn));
+});
+/* 報工 → 報工紀錄查詢，自動篩出這張製令／這個料號 */
+$(document).on('click', '[data-viewwork]', function () {
+    var b = String($(this).data('viewwork') || ''), pn = String($(this).data('partno') || '');
+    openPageModal('報工紀錄：' + (b || pn),
+        '/EGsystem/views/pm/process_report_query.php?bom=' + encodeURIComponent(b)
+        + '&part=' + encodeURIComponent(pn));
 });
 
 function newProjectShell() {
@@ -567,7 +603,8 @@ function renderTypeFilter() {
 }
 
 /* 設定頁的「加工圖面標籤」勾選（按「儲存設定」才寫入） */
-$(document).on('click', '#setDwgCats .pj-tag[data-dwgcat], #setO2pCats .pj-tag[data-o2pcat]', function () {
+$(document).on('click', '#setDwgCats .pj-tag[data-dwgcat], #setO2pCats .pj-tag[data-o2pcat],'
+              + ' #setSopScopes .pj-tag[data-scp], #setSipScopes .pj-tag[data-scp]', function () {
     $(this).toggleClass('on');
 });
 
@@ -1006,6 +1043,21 @@ function autoKindsOf(t) {
     return out;
 }
 
+/** 這個步驟「偵測不到、但站上有那一頁可以建立」時的入口（沒有就回 null） */
+function autoCreateOf(t) {
+    var ev = (CUR && CUR.evidence) || {}, hit = null;
+    $.each(autoKindsOf(t), function (i, k) {
+        var v = ev[k] || {};
+        if (!hit && !(v.options || []).length && v.create) hit = v.create;
+    });
+    return hit;
+}
+/* ➕ 圖示：開既有的那一頁（同一個跳窗實作，不另外刻） */
+$(document).on('click', '[data-mkurl]', function (e) {
+    e.stopPropagation();
+    openPageModal(String($(this).data('mktitle') || '建立'), String($(this).data('mkurl')));
+});
+
 /** 這個步驟系統偵測到的「建議完成日」（沒抓到回 null） */
 function autoHintOf(t) {
     var ev = (CUR && CUR.evidence) || {}, labels = (CUR && CUR.auto_kinds) || {};
@@ -1082,6 +1134,13 @@ function renderReport(r) {
             kh += '</tbody></table>';
         }
         if (v.note) kh += '<div class="pj-hint">' + esc(v.note) + '</div>';
+        /* 查不到資料、但站上有那一頁可以建立的，直接給入口（使用者要求） */
+        if (!(v.options || []).length && v.create) {
+            kh += '<div style="margin-top:4px;"><span class="pj-op pj-mk" data-mkurl="' + esc(v.create.url)
+                + '" data-mktitle="' + esc(v.create.label) + '"><i class="fa fa-plus-circle"></i> '
+                + esc(v.create.label) + '</span>'
+                + '<span class="pj-hint">（本系統已經有這一頁，建好之後回來重開這個跳窗就會自動偵測到）</span></div>';
+        }
         kh += '</div>';
     });
     h += '<div class="sec"><h5>系統自動偵測到的佐證</h5>'
@@ -1103,14 +1162,20 @@ function renderReport(r) {
       + '<div><label>實際完成</label><input type="date" id="rAe" value="' + esc(t.act_end || '') + '"' + ro + '></div>'
       + '<div><label>進度％</label><input type="number" id="rPg" min="0" max="100" value="' + num(t.progress) + '"' + ro + '></div>'
       + '</div>'
-      + '<label>狀態</label><select id="rSt"' + ro + '><option value="">（依日期自動判定）</option>';
+      /* 狀態：進度 100%（或填了實際完成日）一律自動判定「已完成」並鎖住，
+         只有未完成時才讓人自己挑（使用者指定）。後端 report_save 同規則再擋一次（鐵律8）。
+         清單裡刻意不放「已完成」——那一個是系統判的，不是人選的。 */
+      + '<label>狀態 <span class="pj-hint" id="rStHint"></span></label>'
+      + '<select id="rSt"' + ro + '><option value="">未開始</option>';
     $.each(META.task_status || {}, function (k, v) {
+        if (k === '' || k === 'done') return;
         h += '<option value="' + esc(k) + '"' + (t.status_code === k ? ' selected' : '') + '>' + esc(v) + '</option>';
     });
     h += '</select>'
       + '<label style="margin-top:6px;">回報說明</label>'
       + '<textarea id="rNote" rows="3"' + ro + ' data-eg-hint="例：首件檢驗判定通過，附檢驗報告">' + esc(t.report_note || '') + '</textarea>'
-      + '<div class="pj-hint">填了<b>實際完成日</b>就代表這一步完成了，進度會自動變成 100%。</div></div>';
+      + '<div class="pj-hint">填了<b>實際完成日</b>就代表這一步完成了，進度會自動變成 100%、狀態自動變「已完成」。'
+      + '<b>只有進度還沒到 100% 時才需要自己選狀態</b>（進行中／待檢驗／異常）。</div></div>';
 
     /* ③ 佐證附件 */
     h += '<div class="sec"><h5>佐證附件</h5>';
@@ -1147,9 +1212,28 @@ function renderReport(r) {
     }
     $('#rptBody').html(h);
     evPickHint();                      // 重開跳窗時把「已勾選 N 筆」帶回來
+    rptStatusSync();                   // 狀態欄要不要鎖住，依目前的進度／完成日決定
     $('#rptFoot').html('<button onclick="closeMask(\'rptMask\')">關閉</button>'
         + (ro ? '' : '<button class="b-ok" id="btnRptSave"><i class="fa fa-save"></i> 儲存回報</button>'));
 }
+
+/** 狀態欄與進度連動：100%（或有實際完成日）＝自動判定「已完成」並鎖住，其餘才給人選。
+ *  使用者指定「狀態應該要自動依照進度判定是否結束，只有進度非 100% 才可手動選擇狀態」。 */
+function rptStatusSync() {
+    var $s = $('#rSt');
+    if (!$s.length) return;
+    var done = num($('#rPg').val()) >= 100 || !!$.trim($('#rAe').val() || '');
+    if (done) {
+        $s.prop('disabled', true).addClass('ro-auto');
+        $('#rStHint').text('（進度 100%，系統自動判定為「已完成」）');
+    } else {
+        /* 唯讀檢視時本來就該維持停用，不可以被這裡打開 */
+        if (!(RPT_TASK && RPT_TASK.can_report && RPT_TASK.act_open)) return;
+        $s.prop('disabled', false).removeClass('ro-auto');
+        $('#rStHint').text('（進度未滿 100%，可自行選擇）');
+    }
+}
+$(document).on('change input', '#rPg, #rAe', rptStatusSync);
 
 /** 已採用的佐證（存在 project_task.evidence_json） */
 function parseEvidence(raw) {
@@ -1181,6 +1265,7 @@ $(document).on('click', '#btnUseEv', function () {
     $('#rAe').val(last);
     if (!$('#rAs').val()) $('#rAs').val(last);
     $('#rPg').val(100);
+    rptStatusSync();                   // 帶入完成日之後狀態要跟著鎖成「已完成」
     pjMsgLite('已採用 ' + p.length + ' 筆佐證，實際完成日帶入 ' + dispDate(last) + '（記得按「儲存回報」）');
 });
 /* 跳窗內的小提示：用原生 alert 會卡住流程，改成就地顯示一行 */
@@ -2146,38 +2231,121 @@ $(document).on('click', '[data-cardprint]', function () {
     api('card_get', { card_id: num($(this).data('cardprint')) }).done(function (res) { printCard(res); });
 });
 
+/* ── 管理卡表身：階段（可展開收合）＋ 底下的核心作業項目 ──
+   欄位依使用者指定：項次／專案階段與核心作業項目／主辦·承辦人／預計完成日／實際完成日／
+   交付成果·單號／狀態·簽核。
+   **已完成的階段預設展開、未完成的預設收合**（使用者指定）——檢討會要看的是已經做完的那幾段。
+   交付成果取回報時採用的佐證（evidence_json），那本來就是「這一步憑什麼算完成」的單號。 */
+function cardItemsHtml(res, ro) {
+    var tasks = res.tasks || [], items = (res.card || {}).items || [];
+    var stMap = res.task_status || META.task_status || {};
+    var h = '<div style="overflow-x:auto;"><table class="sub-tbl" id="cardItems"><thead><tr>'
+      + '<th style="width:46px;">項次</th><th>專案階段與核心作業項目</th>'
+      + '<th style="width:130px;">主辦／承辦人</th><th style="width:96px;">預計完成日</th>'
+      + '<th style="width:96px;">實際完成日</th><th style="width:210px;">交付成果／單號</th>'
+      + '<th style="width:110px;">狀態／簽核</th></tr></thead><tbody>';
+    if (!items.length) h += '<tr><td colspan="7" style="padding:12px;color:#8a6d45;">（這張管理卡沒有項次）</td></tr>';
+
+    $.each(items, function (i, it) {
+        var gid = num(it.goal_id);
+        var gt = $.grep(tasks, function (t) { return num(t.goal_id) === gid; });
+        var done = gt.length ? $.grep(gt, function (t) { return taskState(t, META.today) === 'done'; }).length : 0;
+        var allDone = gt.length > 0 && done >= gt.length;
+        var open = allDone;                       // 已完成的展開、未完成的收合
+        var pct = gt.length ? Math.round(done * 100 / gt.length) : 0;
+
+        h += '<tr class="cd-goal" data-cg="' + gid + '"><td class="c">' + (i + 1) + '</td>'
+          + '<td class="l"><span class="cd-tog" data-cgtog="' + gid + '">'
+          + '<i class="fa fa-caret-' + (open ? 'down' : 'right') + '"></i></span> <b>' + esc(it.goal_name || '') + '</b>'
+          + '<span class="pj-hint">　' + done + '/' + gt.length + ' 項完成（' + pct + '%）</span></td>'
+          + '<td>' + esc(it.dept_name || '') + (it.owner_name ? '<br><span class="pj-hint">' + esc(it.owner_name) + '</span>' : '') + '</td>'
+          + '<td class="c">' + dispDate(cardGoalDate(gt, 'plan_end', true)) + '</td>'
+          + '<td class="c">' + (allDone ? dispDate(cardGoalDate(gt, 'act_end', true)) : '－') + '</td>'
+          + '<td class="l"><span class="pj-hint">' + (allDone ? '本階段已完成' : '尚在進行') + '</span></td>'
+          + '<td class="c">' + (allDone ? '<span class="st st-approved">已完成</span>'
+                                        : '<span class="st st-submitted">進行中</span>') + '</td></tr>';
+
+        /* 階段底下的作業項目 */
+        $.each(gt, function (ti, t) {
+            var ev = parseEvidence(t.evidence_json);
+            var deliver = $.map(ev, function (e) { return String(e.label || '').replace(/<[^>]*>/g, ''); });
+            var stt = taskState(t, META.today);
+            h += '<tr class="cd-task cd-of-' + gid + '"' + (open ? '' : ' style="display:none;"') + '>'
+              + '<td class="c">' + (i + 1) + '.' + (ti + 1) + '</td>'
+              + '<td class="l" style="padding-left:22px;">' + esc(t.task_name)
+              + (num(t.is_milestone) ? ' <span style="color:#8A5A2B;">◆</span>' : '') + '</td>'
+              + '<td>' + esc(t.owner_dept_name || '') + '<br><span class="pj-hint">'
+              + esc(t.owner_name || '排班人員') + '</span></td>'
+              + '<td class="c">' + dispDate(t.plan_end) + '</td>'
+              + '<td class="c">' + dispDate(t.act_end) + '</td>'
+              + '<td class="l">' + (deliver.length
+                    ? esc(deliver.join('；'))
+                    : '<span class="pj-hint">' + (t.act_end ? '（未登錄佐證）' : '－') + '</span>') + '</td>'
+              + '<td class="c">' + stateBadge(stt)
+              + (t.reported_by_name ? '<br><span class="pj-hint">' + esc(t.reported_by_name) + '</span>' : '')
+              + '</td></tr>';
+        });
+
+        /* 這個階段的管理卡填寫欄（問題／後續辦法／備註）跟著階段一起收合 */
+        h += '<tr class="cd-edit cd-of-' + gid + '"' + (open ? '' : ' style="display:none;"')
+          + ' data-item="' + it.item_id + '"><td></td><td colspan="6">'
+          + '<div class="grid3">'
+          + '<div><label>目前應達成基準</label><textarea class="i-base" rows="2"' + ro + '>' + esc(it.baseline || '') + '</textarea>'
+          + '<label style="font-size:11px;display:block;margin-top:2px;">'
+          + '<input type="checkbox" class="i-auto" data-eg-skip="1"' + (num(it.baseline_auto) ? ' checked' : '')
+          + (res.can_edit ? '' : ' disabled') + '> 跟著日程自動更新</label></div>'
+          + '<div><label>現階段問題</label><textarea class="i-issue" rows="2"' + ro + '>' + esc(it.issue_text || '') + '</textarea></div>'
+          + '<div><label>後續辦理方法</label><textarea class="i-follow" rows="2"' + ro + '>' + esc(it.follow_text || '') + '</textarea></div>'
+          + '</div>'
+          + '<div style="display:flex;gap:10px;align-items:flex-end;margin-top:4px;">'
+          + '<div style="flex:1;"><label>備註</label><input type="text" class="i-note" value="' + esc(it.note || '') + '"' + ro + '></div>'
+          + '<label style="white-space:nowrap;"><input type="checkbox" class="i-ontrack" data-eg-skip="1"'
+          + (num(it.on_track) ? ' checked' : '') + (res.can_edit ? '' : ' disabled') + '> 依計畫進行</label>'
+          /* 存檔仍以這幾欄為準，目標名稱／單位／承辦人維持可改（紙本上是手寫欄） */
+          + '</div>'
+          + '<input type="hidden" class="i-goal" value="' + esc(it.goal_name || '') + '">'
+          + '<input type="hidden" class="i-dept" value="' + esc(it.dept_name || '') + '">'
+          + '<input type="hidden" class="i-owner" value="' + esc(it.owner_name || '') + '">'
+          + '</td></tr>';
+    });
+    return h + '</tbody></table></div>';
+}
+/** 一個階段的預計／實際完成日＝底下任務的最晚那一天（全部做完才算這個階段完成） */
+function cardGoalDate(tasks, field, last) {
+    var v = '';
+    $.each(tasks, function (i, t) {
+        var d = t[field] || '';
+        if (!d) return;
+        if (!v || (last ? d > v : d < v)) v = d;
+    });
+    return v;
+}
+$(document).on('click', '[data-cgtog]', function () {
+    var gid = num($(this).data('cgtog'));
+    var $rows = $('.cd-of-' + gid);
+    var show = !$rows.first().is(':visible');
+    $rows.toggle(show);
+    $(this).find('i').attr('class', 'fa fa-caret-' + (show ? 'down' : 'right'));
+});
+
 function openCard(cardId) {
     api('card_get', { card_id: cardId }).done(function (res) {
         var c = res.card, ro = res.can_edit ? '' : ' readonly';
+        /* 表頭寫客戶與料號，**不寫專案名稱**（使用者指定）——管理卡是對這個件的檢討，
+           看的人要知道是哪一家的哪一個料號，專案名稱在管理卡編號裡已經隱含了。 */
+        var pj = res.project || {};
+        var pns = $.map(res.parts || [], function (x) { return x.part_no || ''; }).join('、');
         var h = '<div class="sec" data-card="' + c.card_id + '"><h5>管理卡 ' + esc(c.card_no || '') + '</h5>'
           + '<div class="grid3" style="margin-bottom:8px;">'
+          + '<div><label>客戶</label><input type="text" class="ro-auto" readonly value="' + esc(pj.customer_name || '－') + '"></div>'
+          + '<div><label>料號</label><input type="text" class="ro-auto" readonly value="' + esc(pns || '－') + '"></div>'
           + '<div><label>檢討日期</label><input type="date" id="ciDate" value="' + esc(c.review_date) + '"'
           + (res.can_edit ? '' : ' disabled') + '></div>'
           + '<div><label>狀態</label><input type="text" class="ro-auto" readonly value="'
           + esc(STATUS_LABEL[c.status] || c.status) + '"></div>'
-          + '<div><label>製表</label><input type="text" class="ro-auto" readonly value="' + esc(c.created_by_name || '') + '"></div>'
+          + '<div><label>製表（專案負責人）</label><input type="text" class="ro-auto" readonly value="' + esc(c.created_by_name || '') + '"></div>'
           + '</div>'
-          + '<div style="overflow-x:auto;"><table class="sub-tbl" id="cardItems"><thead><tr>'
-          + '<th style="width:34px;">項次</th><th style="width:170px;">各項目標名稱</th>'
-          + '<th style="width:96px;">主辦單位</th><th style="width:96px;">承辦人</th>'
-          + '<th style="width:250px;">目前應達成基準</th><th>現階段問題</th><th>後續辦理方法</th>'
-          + '<th style="width:110px;">備註</th><th style="width:58px;">依計畫<br>進行</th></tr></thead><tbody>';
-        $.each(c.items || [], function (i, it) {
-            h += '<tr data-item="' + it.item_id + '"><td>' + (i + 1) + '</td>'
-              + '<td><input type="text" class="i-goal" value="' + esc(it.goal_name || '') + '"' + ro + '></td>'
-              + '<td><input type="text" class="i-dept" value="' + esc(it.dept_name || '') + '"' + ro + '></td>'
-              + '<td><input type="text" class="i-owner" value="' + esc(it.owner_name || '') + '"' + ro + '></td>'
-              + '<td><textarea class="i-base" rows="2"' + ro + '>' + esc(it.baseline || '') + '</textarea>'
-              + '<label style="font-size:11px;display:block;margin-top:2px;">'
-              + '<input type="checkbox" class="i-auto" data-eg-skip="1"' + (num(it.baseline_auto) ? ' checked' : '')
-              + (res.can_edit ? '' : ' disabled') + '> 跟著日程自動更新</label></td>'
-              + '<td><textarea class="i-issue" rows="2"' + ro + '>' + esc(it.issue_text || '') + '</textarea></td>'
-              + '<td><textarea class="i-follow" rows="2"' + ro + '>' + esc(it.follow_text || '') + '</textarea></td>'
-              + '<td><input type="text" class="i-note" value="' + esc(it.note || '') + '"' + ro + '></td>'
-              + '<td><input type="checkbox" class="i-ontrack" data-eg-skip="1"' + (num(it.on_track) ? ' checked' : '')
-              + (res.can_edit ? '' : ' disabled') + '></td></tr>';
-        });
-        h += '</tbody></table></div>';
+          + cardItemsHtml(res, ro);
         if (res.can_edit) {
             h += '<div style="margin-top:8px;text-align:right;">'
               + '<button id="btnCardSave" style="height:30px;padding:0 14px;border:1px solid #d98a33;border-radius:4px;background:#F0A24B;color:#fff;cursor:pointer;">儲存</button>'
@@ -2194,7 +2362,9 @@ function openCard(cardId) {
 
 function collectCardItems() {
     var items = [];
-    $('#cardItems tbody tr').each(function () {
+    /* 只收「管理卡填寫列」（.cd-edit）——表身現在還有階段列與作業項目列，
+       全部掃進來會送出一堆沒有 item_id 的空白列，把原本填好的內容洗掉。 */
+    $('#cardItems tbody tr.cd-edit').each(function () {
         items.push({
             item_id: num($(this).data('item')),
             goal_name: $(this).find('.i-goal').val(), dept_name: $(this).find('.i-dept').val(),
@@ -2252,7 +2422,10 @@ function renderRel(res) {
           + '<th style="width:88px;">接單日</th><th style="width:88px;">交期</th><th style="width:70px;">狀態</th>'
           + '<th style="width:90px;">報價單</th>' + (res.can_edit ? '<th style="width:50px;"></th>' : '') + '</tr></thead><tbody>';
         $.each(res.orders, function (i, o) {
-            h += '<tr><td>' + esc(o.Order_oo) + '</td><td>' + esc(o.C_order || '') + '</td>'
+            /* 訂單編號可點：開訂單追蹤並自動篩出這個單號＋這個料號（使用者要求） */
+            h += '<tr><td><span class="pj-op" data-vieworder="' + esc(o.Order_oo)
+              + '" data-partno="' + esc(o.master_part_no || o.part_no || '') + '" title="開啟訂單追蹤">'
+              + esc(o.Order_oo) + '</span></td><td>' + esc(o.C_order || '') + '</td>'
               + '<td>' + esc(o.Client_name || '') + '</td><td>' + esc(o.master_part_no || o.part_no) + '</td>'
               + '<td>' + num(o.Qty) + '</td><td>' + dispDate(o.Order_date) + '</td><td>' + dispDate(o.Delivery_date) + '</td>'
               + '<td>' + esc(o.status_label) + '</td>'
@@ -2310,7 +2483,9 @@ function renderRel(res) {
             var out = !num(x.in_scope);            // 專案有綁定製程、而這一道不在範圍內
             if (out) outCnt++;
             h += '<tr data-proc="' + x.id + '"' + (out ? ' style="opacity:.55;"' : '') + '>'
-              + '<td>' + (show ? '<b>' + esc(x.bom) + '</b>' : '') + '</td>'
+              /* 製令單號可點：開 BOM 總表（使用者要求） */
+              + '<td>' + (show ? '<span class="pj-op" data-viewbom="' + esc(x.bom) + '" title="開啟 BOM 總表"><b>'
+                    + esc(x.bom) + '</b></span>' : '') + '</td>'
               + '<td>' + esc(x.part_no || '') + '</td><td>' + num(x.bom_sn) + '</td>'
               + '<td>' + esc(x.process_name || ('製程' + num(x.process_no)))
               + (out ? ' <span class="pj-hint">（不在本專案範圍）</span>' : '') + '</td>'
@@ -2351,7 +2526,9 @@ function renderRel(res) {
             var isIn = (r.kind === 'in');
             h += '<tr><td>' + dispDate(r.rdate) + '</td>'
               + '<td>' + (isIn ? '<span class="st st-approved">廠內</span>' : '<span class="st st-submitted">委外</span>') + '</td>'
-              + '<td>' + esc(r.bom || '') + '</td><td>' + num(r.bom_sn) + '</td>'
+              /* 製令單號可點：開報工紀錄查詢（使用者要求） */
+              + '<td>' + (r.bom ? '<span class="pj-op" data-viewwork="' + esc(r.bom) + '" title="開啟報工紀錄查詢">' + esc(r.bom) + '</span>' : '')
+              + '</td><td>' + num(r.bom_sn) + '</td>'
               + '<td>' + esc(r.process_name || ('製程' + num(r.process_no))) + '</td>'
               + '<td>' + esc(isIn ? (r.machine_name || '－') : (r.maker_to_name || r.maker_from_name || '－')) + '</td>'
               + '<td>' + esc(isIn
@@ -2395,7 +2572,8 @@ function renderShipSec(res) {
       + (canEdit ? '<th style="width:56px;">綁定</th>' : '') + '</tr></thead><tbody>';
     $.each(show, function (i, r) {
         h += '<tr><td>' + dispDate(r.ship_date) + '</td>'
-          + '<td>' + esc(r.IS_number || '') + '</td>'
+          /* 出貨單號可點：開出貨紀錄分析並篩出這張單（使用者要求） */
+          + '<td><span class="pj-op" data-viewship="' + esc(r.IS_number || '') + '" data-partno="' + esc(r.part_no || '') + '" title="開啟出貨紀錄">' + esc(r.IS_number || '') + '</span></td>'
           + '<td>' + esc(r.part_no || '') + '</td>'
           + '<td>' + esc(r.Client_name || '') + '</td>'
           + '<td>' + num(r.Qty) + '</td>'
@@ -3364,6 +3542,18 @@ function openSetting() {
         });
         $('#setO2pCats').html(ch2 || '<span class="pj-hint">目前沒有啟用中的附件標籤。</span>');
 
+        /* 文件檢核：SOP／SIP 認列來源（可複選；勾選的一起算） */
+        var SCOPES = { part: '綁料號', process: '製程', general: '通用' };
+        $.each({ setSopScopes: 'doc_sop_scopes', setSipScopes: 'doc_sip_scopes' }, function (boxId, key) {
+            var on = String(s[key] || 'part,process').split(',');
+            var hh = '';
+            $.each(SCOPES, function (k, v) {
+                hh += '<span class="pj-tag' + ($.inArray(k, on) >= 0 ? ' on' : '') + '" data-scp="' + k + '">'
+                    + esc(v) + '</span>';
+            });
+            $('#' + boxId).html(hh);
+        });
+
         /* 專案負責人資格（部門×職稱） */
         var odOpt = '<option value="">（請選擇部門）</option>';
         $.each(META.depts || [], function (i, x) { odOpt += '<option value="' + x.id + '">' + esc(x.name) + '</option>'; });
@@ -3534,6 +3724,8 @@ $(document).on('click', '#btnSetSave', function () {
         plan_stamp_tpl_id: $('#setPlanTpl').val() || '0', card_stamp_tpl_id: $('#setCardTpl').val() || '0',
         drawing_attach_cats: $('#setDwgCats .pj-tag.on').map(function () { return num($(this).data('dwgcat')); }).get().join(','),
         o2p_attach_cats: $('#setO2pCats .pj-tag.on').map(function () { return num($(this).data('o2pcat')); }).get().join(','),
+        doc_sop_scopes: $('#setSopScopes .pj-tag.on').map(function () { return String($(this).data('scp')); }).get().join(','),
+        doc_sip_scopes: $('#setSipScopes .pj-tag.on').map(function () { return String($(this).data('scp')); }).get().join(','),
         task_owner_depts: pickedTaskDepts().join(','),
         seed_template: JSON.stringify(collectSeedTpl()),
         owner_scope: JSON.stringify($.map(OWN_SCOPE, function (r) { return { d: num(r.d), p: num(r.p) }; }))
@@ -3659,7 +3851,10 @@ function printBaseCss(opt) {
         +  '.c { text-align:center; }\n'
         +  '.nb { border:none; }\n'
         +  'thead { display:table-header-group; }\n'   /* 跨頁時表頭自然重複 */
-        +  'tr { page-break-inside:avoid; }\n';
+        +  'tr { page-break-inside:avoid; }\n'
+        /* 階段之間的粗分隔線（使用者指定）：整張表都是細線時分不出階段在哪裡斷開。
+           規劃表與管理卡都用得到，所以放在共用的 base 裡不要各寫一份。 */
+        +  'tr.gsep > td { border-top:0.8mm solid #000; }\n';
     return css;
 }
 
@@ -3765,9 +3960,7 @@ function buildPlanHtml(res, m) {
         + '.gl i { display:inline-block; width:14mm; vertical-align:middle; margin:0 2mm 0 6mm; }\n'
         + '.gl i.p { border-top:0.7mm solid #000; }\n'
         + '.gl i.a { border-top:0.7mm dashed #000; }\n'
-        + '.pdh { font-size:7.5pt; padding:0.5mm 0; }\n'
-        /* 階段之間的粗分隔線（使用者指定）：整張表都是細線時分不出階段在哪裡斷開 */
-        + 'tr.gsep > td { border-top:0.8mm solid #000; }\n');
+        + '.pdh { font-size:7.5pt; padding:0.5mm 0; }\n');
 
     var h = '<div class="p-co">' + esc(m.meta.company || '') + '</div>'
       + '<div class="p-en">EXCELLENT GEAR TECHNOLOGY CO.,LTD</div>'
@@ -3871,9 +4064,14 @@ function autoHintCell(t) {
     if (t.act_end) return '<span class="pj-hint">已回報</span>';
     var a = autoHintOf(t);
     if (!a) {
-        return autoKindsOf(t).length
-            ? '<span class="pj-hint" title="這一類有自動偵測，但目前查不到資料">查無資料</span>'
-            : '<span class="pj-hint" title="這個步驟不屬於可自動偵測的標準項目，請人工回報">－</span>';
+        /* 偵測不到、但站上有那一頁可以建立的，給一個 ➕ 圖示直接開過去（使用者要求） */
+        var c = autoCreateOf(t);
+        return (autoKindsOf(t).length
+                ? '<span class="pj-hint" title="這一類有自動偵測，但目前查不到資料">查無資料</span>'
+                : '<span class="pj-hint" title="這個步驟不屬於可自動偵測的標準項目，請人工回報">－</span>')
+             + (c ? ' <span class="pj-op pj-mk" data-mkurl="' + esc(c.url) + '" data-mktitle="' + esc(c.label)
+                    + '" title="' + esc(c.label) + '（本系統已經有這一頁，點一下直接開過去建立）">'
+                    + '<i class="fa fa-plus-circle"></i></span>' : '');
     }
     return '<span class="pj-op" data-report="' + t.task_id + '" title="' + esc(a.label)
          + '：偵測到 ' + a.n + ' 筆，點開可逐筆確認後採用">'
@@ -4011,33 +4209,59 @@ function buildCardHtml(res, m) {
     var h = '<div class="p-co">' + esc(m.meta.company || '') + '</div>'
       + '<div class="p-en">EXCELLENT GEAR TECHNOLOGY CO.,LTD</div>'
       + '<div class="p-tt">' + esc(m.meta.doc_name || '專案管理卡') + '</div>'
+      /* 表頭寫**客戶與料號**、**不寫專案名稱**（使用者指定）：
+         管理卡是對「這一家的這個料號」的檢討，看的人要的是客戶與料號。 */
       + '<table class="meta"><tr>'
+      + '<td><b>客戶：</b>' + esc(p.customer_name || '－') + '</td>'
+      + '<td><b>料號：</b>' + esc($.map(res.parts || [], function (x) { return x.part_no || ''; }).join('、') || '－') + '</td>'
       + '<td><b>專案代號：</b>' + esc(p.project_no) + '</td>'
-      + '<td><b>專案名稱：</b>' + esc(p.project_name) + '</td>'
       + '<td><b>管理卡編號：</b>' + esc(c.card_no || '') + '</td>'
       + '<td style="text-align:right;"><b>檢討日期：</b>' + dispDate(c.review_date) + '</td>'
       + '</tr></table>';
 
-    h += '<table><colgroup><col style="width:4%"><col style="width:14%"><col style="width:8%"><col style="width:7%">'
-      + '<col style="width:19%"><col style="width:17%"><col style="width:17%"><col style="width:14%"></colgroup>'
-      + '<thead><tr><th>項次</th><th>各項目標名稱</th><th>主辦單位</th><th>承辦人</th>'
-      + '<th>目前應達成基準</th><th>現階段問題</th><th>後續辦理方法</th><th>備註</th></tr></thead><tbody>';
-    if (!items.length) h += '<tr><td colspan="8" class="c">（無項次）</td></tr>';
+    /* 表身依使用者指定的欄位：項次／專案階段與核心作業項目／主辦·承辦人／預計完成日／
+       實際完成日／交付成果·單號／狀態·簽核。階段一列，底下接它的作業項目。 */
+    var tasks = res.tasks || [];
+    h += '<table><colgroup><col style="width:5%"><col style="width:28%"><col style="width:12%">'
+      + '<col style="width:9%"><col style="width:9%"><col style="width:22%"><col style="width:15%"></colgroup>'
+      + '<thead><tr><th>項次</th><th>專案階段與核心作業項目</th><th>主辦／承辦人</th>'
+      + '<th>預計完成日</th><th>實際完成日</th><th>交付成果／單號</th><th>狀態／簽核</th></tr></thead><tbody>';
+    if (!items.length) h += '<tr><td colspan="7" class="c">（無項次）</td></tr>';
     $.each(items, function (i, it) {
-        h += '<tr><td class="c">' + (i + 1) + '</td>'
-          + '<td>' + esc(it.goal_name || '') + '</td>'
-          + '<td class="c">' + esc(it.dept_name || '') + '</td>'
-          + '<td class="c">' + esc(it.owner_name || '') + '</td>'
-          + '<td>' + esc(it.baseline || '') + '</td>'
+        var gid = num(it.goal_id);
+        var gt = $.grep(tasks, function (t) { return num(t.goal_id) === gid; });
+        var doneN = $.grep(gt, function (t) { return taskState(t, META.today) === 'done'; }).length;
+        var allDone = gt.length > 0 && doneN >= gt.length;
+        h += '<tr class="gsep"><td class="c">' + (i + 1) + '</td>'
+          + '<td><b>' + esc(it.goal_name || '') + '</b></td>'
+          + '<td class="c">' + esc(it.dept_name || '') + (it.owner_name ? '<br>' + esc(it.owner_name) : '') + '</td>'
+          + '<td class="c">' + dispDate(cardGoalDate(gt, 'plan_end', true)) + '</td>'
+          + '<td class="c">' + (allDone ? dispDate(cardGoalDate(gt, 'act_end', true)) : '') + '</td>'
           + '<td>' + (num(it.on_track) && !$.trim(it.issue_text || '')
                       ? '依計畫進行' : esc(it.issue_text || '').replace(/\n/g, '<br>')) + '</td>'
-          + '<td>' + esc(it.follow_text || '').replace(/\n/g, '<br>') + '</td>'
-          + '<td>' + esc(it.note || '') + '</td></tr>';
+          + '<td class="c">' + (allDone ? '已完成' : doneN + '/' + gt.length) + '</td></tr>';
+        $.each(gt, function (ti, t) {
+            var deliver = $.map(parseEvidence(t.evidence_json), function (e) {
+                return String(e.label || '').replace(/<[^>]*>/g, '');
+            });
+            h += '<tr><td class="c">' + (i + 1) + '.' + (ti + 1) + '</td>'
+              + '<td style="padding-left:4mm;">' + esc(t.task_name)
+              + (num(t.is_milestone) ? ' ◆' : '') + '</td>'
+              + '<td class="c">' + esc(t.owner_dept_name || '')
+              + '<br>' + esc(t.owner_name || '排班人員') + '</td>'
+              + '<td class="c">' + dispDate(t.plan_end) + '</td>'
+              + '<td class="c">' + dispDate(t.act_end) + '</td>'
+              + '<td>' + esc(deliver.join('；')) + '</td>'
+              + '<td class="c">' + esc(taskStateLabel(t))
+              + (t.reported_by_name ? '<br>' + esc(t.reported_by_name) : '') + '</td></tr>';
+        });
+        /* 後續辦理方法／備註有填才印一列，沒填不要浪費紙面 */
+        var extra = $.trim(String(it.follow_text || '')) + ($.trim(String(it.note || '')) ? '　【備註】' + it.note : '');
+        if ($.trim(extra)) {
+            h += '<tr><td></td><td colspan="6" style="padding-left:4mm;"><b>後續辦理：</b>'
+              + esc(extra).replace(/\n/g, '<br>') + '</td></tr>';
+        }
     });
-    /* 紙本固定 17 列格子，不足的補空列讓版面跟紙本一致 */
-    for (var k = items.length; k < 12; k++) {
-        h += '<tr><td class="c">' + (k + 1) + '</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>';
-    }
     h += '</tbody></table>';
 
     function sg(id, name, date) {

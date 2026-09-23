@@ -1046,6 +1046,14 @@ $('#btnRoleHelp').on('click', function(){ openMask('helpMask'); });
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 $('.xd-mask').on('click', function(e){ if (e.target === this) this.style.display='none'; });
 
+/* 由別的頁面帶料號進來時先填好篩選（專案管理的「文件檢核 → 外來文件清單」就是這樣開過來的）。
+   一定要在 loadOptions() 之前填——它載完選項就會直接觸發 loadList()，
+   晚一步填就會先撈到全部資料、畫面閃一下才縮小。 */
+(function(){
+    var p = new URLSearchParams(location.search);
+    var part = (p.get('part') || p.get('kw') || '').trim();
+    if (part) $('#partKw').val(part);
+})();
 if (canView){ loadOptions(true); }   // 選項(含類別配色)載好後由 loadOptions 觸發 loadList
 </script>
 </body>

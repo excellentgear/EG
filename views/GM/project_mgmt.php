@@ -237,6 +237,16 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
                     background:#F7E0BD; border:1px solid #E0C9A2; color:#5b3a1e; font-size:12px; line-height:18px; }
         .prj-part:hover { background:#F0A24B; border-color:#d98a33; color:#fff; }
 
+        /* 管理卡表身：階段列可展開收合 */
+        tr.cd-goal > td { background:#FBF3E6; }
+        .cd-tog { cursor:pointer; color:#B5762A; display:inline-block; width:14px; text-align:center; }
+        .cd-tog:hover { color:#DD5138; }
+        tr.cd-edit > td { background:#FFFCF7; }
+
+        /* 「去建立」圖示（偵測不到但站上有那一頁可以建立） */
+        .pj-mk { color:#2E7D32; }
+        .pj-mk:hover { color:#1B5E20; }
+
         /* 甘特列上的自動偵測小籤（td span 行高老坑：一定要自己指定 line-height，否則整列被撐高） */
         .g-auto { display:inline-block; margin-left:6px; padding:0 5px; border-radius:3px; cursor:pointer;
                   background:#F7E0BD; border:1px solid #E0C9A2; color:#8A5A2B;
@@ -593,6 +603,16 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <p class="pj-hint">步驟「製作加工圖面」的完成日，系統會去找專案料號底下掛了這些標籤的附件，
                 日期取<b>發行章日期</b>（沒有發行章日期才退回上傳日）。不勾＝這一項偵測不出來，要人工填。</p>
             <div id="setDwgCats" class="pj-tagbar"></div>
+        </div>
+        <div class="sec">
+            <h5>文件檢核：SOP／SIP 要認列哪幾種來源</h5>
+            <p class="pj-hint">同一個料號常常要好幾份（上下料一份、加工另一份），所以<b>勾選的來源會一起算</b>、不是抓到一種就不看其他的。<br>
+                <b>綁料號</b>＝SOP/SIP 模組裡直接綁這個料號的；<b>製程</b>＝這個料號用到的製程各自的製程說明書
+                （缺哪幾個製程會列出來）；<b>通用</b>＝模組裡 scope 設為「通用」的那幾份。</p>
+            <div class="grid2">
+                <div><label>SOP 認列來源</label><div id="setSopScopes" class="pj-tagbar"></div></div>
+                <div><label>SIP 認列來源</label><div id="setSipScopes" class="pj-tagbar"></div></div>
+            </div>
         </div>
         <div class="sec">
             <h5>訂單轉專案：「料號附件」完整度認哪幾個標籤</h5>

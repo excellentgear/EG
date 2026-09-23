@@ -1575,6 +1575,21 @@ function prj_shipments(PDO $db, int $projectId): array
       推不出來的步驟一樣可以回報，只是沒有自動佐證。
    ③ **沒電子化的（首件檢驗、最終檢驗）就老實留給人填**，但一律要能上傳附件佐證。 */
 
+/**
+ * 偵測不到資料、但站上**本來就有那一頁可以建立**的，給一個「去建立」的入口
+ * （2026-09-22 使用者要求：「不存在但有現有網頁可以快速建立者，請提供某圖示表示，
+ *  並可點選圖示快速進入建立頁面」）。
+ * 沒有對應頁面的（進料檢驗、架機、首件、整批、最終檢驗）就不給——那幾項本來就是人工回報。
+ * 網址一律帶料號，開過去就先篩好，不要讓人再找一次。
+ */
+const PRJ_AUTO_CREATE = [
+    'bom_create'   => ['url' => '/EGsystem/src/store/_cleanNewBom.php',      'label' => '去建立製令'],
+    'part_drawing' => ['url' => '/EGsystem/views/pm/bom_viewer.php',         'label' => '去上傳圖面附件'],
+    'doc_pfmea'    => ['url' => '/EGsystem/views/TD/pfmea.php',              'label' => '去建立 PFMEA'],
+    'doc_sop'      => ['url' => '/EGsystem/views/QA/sop_sip.php?tab=sop',    'label' => '去建立 SOP'],
+    'doc_sip'      => ['url' => '/EGsystem/views/QA/sop_sip.php?tab=sip',    'label' => '去建立 SIP'],
+];
+
 const PRJ_AUTO_KINDS = [
     'bom_create'  => '開立製令',
     'part_drawing'=> '加工圖面',
@@ -1795,6 +1810,25 @@ function prj_task_evidence(PDO $db, int $projectId, ?array $prj = null): array
             $seen[$sig] = 1; $keep[] = $o;
         }
         $out[$k]['options'] = $keep;
+    }
+
+    /* 偵測不到、但站上有那一頁可以建立的，附上「去建立」的網址（帶著料號開過去先篩好）。
+       已經抓到資料的就不給——那會變成鼓勵重複建一份。 */
+    $pk0 = $pks[0] ?? 0;
+    $pn0 = '';
+    if ($pk0) {
+        try {
+            $st = $db->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
+            $st->execute([$pk0]);
+            $pn0 = (string)$st->fetchColumn();
+        } catch (Throwable $e) {}
+    }
+    foreach (PRJ_AUTO_CREATE as $k => $c) {
+        if (!isset($out[$k]) || $out[$k]['options']) continue;
+        $u = $c['url'] . (strpos($c['url'], '?') === false ? '?' : '&');
+        if ($k === 'part_drawing') $u .= 'pk=' . (int)$pk0 . '&d_id=' . rawurlencode($pn0) . '&tab=attach';
+        else                       $u .= 'kw=' . rawurlencode($pn0);
+        $out[$k]['create'] = ['url' => $u, 'label' => $c['label']];
     }
     return $out;
 }
@@ -2360,7 +2394,9 @@ function prj_work_reports(PDO $db, int $projectId): array
     try {
         $sql = "SELECT 'in' AS kind, r.report_id AS id, bi.bom, bi.bom_sn, r.report_date AS rdate,
                        pn.ProcessName AS process_name, r.process_no,
-                       ml.machine AS machine_name,
+                       /* 機台一律優先印**現場編號**（machine_list.field_no），那才是現場看得懂的那一種；
+                          沒有現場編號才退回機台名稱（記憶 machine_field_no_display） */
+                       COALESCE(NULLIF(ml.field_no,''), ml.machine) AS machine_name,
                        us.user_cname AS setup_user, up.user_cname AS prod_user,
                        r.produced_qty AS qty, r.is_finished, r.remark AS note,
                        r.production_start_time AS t1, r.production_end_time AS t2
@@ -2671,12 +2707,36 @@ function prj_doc_sopsip_map(PDO $db, array $dsPks, array $noOf): array
             }
         }
 
-        /* ② 製程 SOP：這個料號用到的製程，是不是每一個都有一份製程說明書 */
-        $covered = [];
-        foreach ($db->query("SELECT DISTINCT process_no FROM ss_doc
-                             WHERE is_deleted=0 AND kind='process'
-                               AND process_no IS NOT NULL AND process_no>0")->fetchAll(PDO::FETCH_COLUMN) as $p) {
-            $covered[(int)$p] = true;
+        /* ② 製程 SOP／SIP：這個料號用到的製程，是不是每一個都有一份說明書。
+           ③ 通用 SOP／SIP（ss_doc.scope='general'）：管理員可以決定要不要認列。
+
+           使用者 2026-09-22 指定兩件事：
+             ·「各種都不限定綁訂一項」——上下料一份 SOP、加工另一份是常態，
+               所以**綁料號的、製程的、通用的一起算**，不是抓到一種就不看其他的。
+               原本只要綁到料號就 `continue`，製程 SOP 有沒有齊全根本不看，
+               缺了上下料那一份也照樣顯示「有」。
+             ·「一樣可以設定指定目前料號」——認列範圍由管理員逐項勾選（doc_sop_scopes／doc_sip_scopes），
+               預設 part,process（維持原本行為），要認通用的再自己勾。 */
+        $scopeOf = static function (PDO $db, string $k): array {
+            $raw = trim(prj_setting_get($db, 'doc_' . $k . '_scopes', 'part,process'));
+            $out = [];
+            foreach (explode(',', $raw) as $v) { $v = trim($v); if ($v !== '') $out[$v] = true; }
+            return $out ?: ['part' => true, 'process' => true];
+        };
+        $genCnt = ['sop' => 0, 'sip' => 0];
+        foreach ($db->query("SELECT kind, COUNT(*) c FROM ss_doc
+                             WHERE is_deleted=0 AND scope='general' GROUP BY kind")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $k = ((string)$r['kind'] === 'sip') ? 'sip' : 'sop';
+            $genCnt[$k] += (int)$r['c'];
+        }
+        // 各製程各自有哪幾份製程說明書（一個製程可以有好幾份，數量要算得出來）
+        $covered = ['sop' => [], 'sip' => []];
+        foreach ($db->query("SELECT kind, process_no, COUNT(*) c FROM ss_doc
+                             WHERE is_deleted=0 AND kind IN ('process','sip')
+                               AND process_no IS NOT NULL AND process_no>0
+                             GROUP BY kind, process_no")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $k = ((string)$r['kind'] === 'sip') ? 'sip' : 'sop';
+            $covered[$k][(int)$r['process_no']] = (int)$r['c'];
         }
         $need = [];
         $st = $db->prepare("SELECT DISTINCT ds_pk, process_no, process_name FROM project_process
@@ -2685,18 +2745,38 @@ function prj_doc_sopsip_map(PDO $db, array $dsPks, array $noOf): array
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $need[(int)$r['ds_pk']][(int)$r['process_no']] = trim((string)($r['process_name'] ?? ''));
         }
-        foreach ($need as $pk => $procs) {
-            if (!empty($out['sop'][$pk])) continue;          // 已經有綁這個料號的 SOP，不必再看製程
-            $m = count($procs); $n = 0; $lack = [];
-            foreach ($procs as $no => $nm) {
-                if (!empty($covered[$no])) { $n++; continue; }
-                $lack[] = $nm !== '' ? $nm : ('製程' . $no);
-            }
-            if ($n >= $m && $m > 0) {
-                $out['sop'][$pk] = ['rev' => '製程 SOP ' . $n . '/' . $m];
-            } else {
-                $out['note']['sop'][$pk] = '製程 SOP ' . $n . '/' . $m . '，缺：'
-                    . implode('、', array_slice($lack, 0, 3)) . (count($lack) > 3 ? ' 等' : '');
+        foreach (['sop', 'sip'] as $k) {
+            $sc = $scopeOf($db, $k);
+            foreach ($dsPks as $pk) {
+                $bits = [];
+                $partN = empty($sc['part']) ? 0 : count($bucket[$k][$pk] ?? []);
+                if ($partN) $bits[] = '綁料號 ' . $partN . ' 份';
+                $procOk = true;
+                if (!empty($sc['process'])) {
+                    $procs = $need[$pk] ?? [];
+                    $m = count($procs); $n = 0; $lack = [];
+                    foreach ($procs as $no => $nm) {
+                        if (!empty($covered[$k][$no])) { $n += (int)$covered[$k][$no]; continue; }
+                        $lack[] = $nm !== '' ? $nm : ('製程' . $no);
+                    }
+                    if ($m > 0) {
+                        $bits[] = '製程 ' . ($m - count($lack)) . '/' . $m . ($n > ($m - count($lack)) ? '（共 ' . $n . ' 份）' : '');
+                        if ($lack) {
+                            $procOk = false;
+                            $out['note'][$k][$pk] = '製程' . strtoupper($k) . ' 缺：'
+                                . implode('、', array_slice($lack, 0, 3)) . (count($lack) > 3 ? ' 等' : '');
+                        }
+                    }
+                }
+                $genN = empty($sc['general']) ? 0 : $genCnt[$k];
+                if ($genN) $bits[] = '通用 ' . $genN . ' 份';
+
+                /* 判定「有」：綁料號的有、或製程全部涵蓋、或認列通用且真的有通用文件。
+                   製程沒齊全時就算綁了料號也要把缺的講出來（上面已寫進 note），
+                   但仍算「有」——那是使用者自己決定要不要補的事，不是缺件。 */
+                if ($partN || ($procOk && !empty($sc['process']) && !empty($need[$pk])) || $genN) {
+                    $out[$k][$pk] = ['rev' => implode('／', $bits)];
+                }
             }
         }
     } catch (Throwable $e) {
@@ -2951,10 +3031,16 @@ function prj_card_create(PDO $db, int $projectId, string $reviewDate, array $goa
     }
     $now = prj_db_now($db);
 
+    /* 製表**固定套入專案負責人**（2026-09-22 使用者指定），不是按下建立的那個人——
+       管理卡是專案負責人對外負責的文件，管理員代開一張不該把製表變成管理員。
+       專案還沒指定負責人時才退回操作者，不要讓製表整格空白。 */
+    $mkId   = (int)($prj['owner_id'] ?? 0) ?: (int)($who['uid'] ?? 0);
+    $mkName = trim((string)($prj['owner_name'] ?? '')) !== ''
+            ? (string)$prj['owner_name'] : (string)($who['uname'] ?? '');
     $st = $db->prepare("INSERT INTO project_card (project_id, card_no, review_date, status, created_by, created_by_name, created_at)
                         VALUES (?,?,?,'draft',?,?,?)");
     $st->execute([$projectId, prj_card_next_no($db, $projectId, (string)$prj['project_no']),
-                  $reviewDate, (int)($who['uid'] ?? 0), (string)($who['uname'] ?? ''), $now['dt']]);
+                  $reviewDate, $mkId, $mkName, $now['dt']]);
     $cardId = (int)$db->lastInsertId();
 
     $ins = $db->prepare("INSERT INTO project_card_item

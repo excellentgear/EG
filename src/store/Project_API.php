@@ -598,8 +598,13 @@ case 'report_save':
     if ($pg < 0) $pg = 0; if ($pg > 100) $pg = 100;
     // 有實際完成日就一律 100%（避免出現「已完成但進度 60%」這種自相矛盾的列）
     if ($ae) $pg = 100;
+    /* 狀態：**進度 100% 一律自動判定為「已完成」**，不接受前端送進來的值（使用者指定）；
+       只有進度 <100% 時才由人自己挑進行中／待檢驗／異常。
+       否則會出現「進度 100% 但狀態寫異常」這種自相矛盾、而且沒人看得出哪個才算數的列。 */
     $sc = (string)($_POST['status_code'] ?? '');
     if ($sc !== '' && !isset(PRJ_TASK_STATUS[$sc])) $sc = '';
+    if ($pg >= 100 || $ae) { $sc = 'done'; }
+    elseif ($sc === 'done') { $sc = ''; }          // 沒完成卻送 done＝矛盾，退回「未開始」讓它照進度走
 
     /* 採用了哪幾筆自動佐證（可多選）。後端**重新查一次佐證**再比對，只留真的存在的那幾筆——
        前端送什麼就存什麼的話，任何人都能塞一筆假佐證進去，而佐證正是「這個日期憑什麼填」的依據。 */
@@ -1310,7 +1315,13 @@ case 'card_get':
     $card = prj_card_get($db, $cid);
     if (!$card) jerr('管理卡不存在', 404);
     $prj = prj_need($db, $P, (int)$card['project_id']);
-    jout(['card' => $card, 'project' => $prj, 'goals' => prj_goals($db, (int)$card['project_id']),
+    /* 管理卡的表身要印「階段 → 作業項目」兩層（使用者指定的欄位是
+       項次／專案階段與核心作業項目／主辦·承辦人／預計完成日／實際完成日／交付成果·單號／狀態·簽核），
+       所以任務與料號一起帶下去；交付成果取回報時採用的佐證（evidence_json）。 */
+    $pid2 = (int)$card['project_id'];
+    jout(['card' => $card, 'project' => $prj, 'goals' => prj_goals($db, $pid2),
+          'tasks' => prj_tasks($db, $pid2), 'parts' => prj_parts($db, $pid2),
+          'task_status' => PRJ_TASK_STATUS,
           'can_edit' => prj_can_edit_project($P, $prj) && (string)$card['status'] !== 'approved']);
 
 case 'card_save':
@@ -1499,6 +1510,9 @@ case 'setting_get':
         'drawing_attach_cats'    => prj_setting_get($db, 'drawing_attach_cats', ''),
         // 訂單轉專案「料號附件」完整度認哪幾個標籤（不設＝任何附件都算）
         'o2p_attach_cats'        => prj_setting_get($db, 'o2p_attach_cats', ''),
+        // 文件檢核：SOP／SIP 要認列哪幾種來源（綁料號／製程／通用），可複選
+        'doc_sop_scopes'          => prj_setting_get($db, 'doc_sop_scopes', 'part,process'),
+        'doc_sip_scopes'          => prj_setting_get($db, 'doc_sip_scopes', 'part,process'),
     ], 'owner_scope_rows' => prj_owner_scope_labeled($db),
      'attach_cats' => (function (PDO $db) {
          try {
@@ -1516,7 +1530,8 @@ case 'setting_save':
               'default_cosign_depts' => '預設會簽單位', 'block_close_on_missing' => '結案前強制文件檢核',
               'plan_stamp_tpl_id' => '執行規劃表圖章模板', 'card_stamp_tpl_id' => '管理卡圖章模板',
               'drawing_attach_cats' => '算「加工圖面」的附件標籤',
-              'o2p_attach_cats' => '訂單轉專案「料號附件」認的標籤'] as $k => $desc) {
+              'o2p_attach_cats' => '訂單轉專案「料號附件」認的標籤',
+              'doc_sop_scopes' => '文件檢核 SOP 認列來源', 'doc_sip_scopes' => '文件檢核 SIP 認列來源'] as $k => $desc) {
         if (!array_key_exists($k, $_POST)) continue;
         prj_setting_save($db, $k, trim((string)$_POST[$k]), $desc, $uname);
     }

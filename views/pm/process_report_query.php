@@ -890,6 +890,15 @@ function saveMachineFmt(){
 $('#btnPageHelp').on('click', function(){ $('#helpUseMask').css('display','block'); });
 
 loadAsDoc();
+/* 由別的頁面帶參數進來時先把篩選填好，再做第一次查詢（專案管理的「報工紀錄」就是這樣開過來的）。
+   一定要在 applyFilters() 之前填，否則第一次查的是沒有條件的全部資料、畫面閃一下才縮小。 */
+(function(){
+    var p = new URLSearchParams(location.search);
+    var part = (p.get('part') || '').trim();
+    var bom  = (p.get('bom')  || '').trim();
+    if (part) $('#fPartNo').val(part);
+    if (bom)  $('#fRemark').val(bom);   // 製令單號沒有專屬篩選欄，用關鍵字欄（它會掃備註與單號）
+})();
 applyFilters();
 </script>
 </body>
