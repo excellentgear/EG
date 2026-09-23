@@ -3833,8 +3833,8 @@ foreach($dCounts as $c) {
                             <input type="text" id="filter-client" class="form-control input-sm" placeholder="搜尋客戶(名稱/ID)" style="width:115px;" autocomplete="off">
                             <div id="filter-client-dd" style="display:none;position:absolute;top:100%;left:0;z-index:9999;background:#fff;border:1px solid #ccc;border-radius:4px;box-shadow:0 3px 8px rgba(0,0,0,.15);min-width:220px;max-height:220px;overflow-y:auto;font-size:12px;"></div>
                         </div>
-                        <input type="text" id="filter-part" class="form-control input-sm" placeholder="搜尋料號" style="width: 105px;">
-                        <input type="text" id="filter-global" class="form-control input-sm" placeholder="全表搜尋" style="width: 130px;">
+                        <input type="text" id="filter-part" class="form-control input-sm" placeholder="搜尋料號" style="width: 105px;" autocomplete="off">
+                        <input type="text" id="filter-global" class="form-control input-sm" placeholder="全表搜尋" style="width: 130px;" autocomplete="off">
                         <button type="button" class="btn btn-warning btn-sm" id="filter-unbound" style="margin:0;" title="篩選尚未綁定客戶ID或料號ID的訂單">
                             <i class="fa fa-unlink"></i><span class="fb-txt"> 未綁定</span>
                         </button>
