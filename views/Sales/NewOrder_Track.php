@@ -4604,7 +4604,7 @@ foreach($dCounts as $c) {
                         <span style="color:#a0522d;">※ 客戶一經更動，原本的料號綁定會自動清除，必須重新選定料號才能存檔。</span>
                     </div>
                     <label style="font-size:12px;font-weight:600;">請輸入<span style="color:#DD5138;">您本人的登入密碼</span></label>
-                    <input type="password" id="cu-password" class="form-control input-sm" autocomplete="off" data-eg-skip placeholder="本人登入密碼">
+                    <input type="password" id="cu-password" class="form-control input-sm" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-eg-skip placeholder="本人登入密碼">
                     <div id="cu-msg" style="display:none;margin-top:6px;font-size:11.5px;color:#DD5138;"></div>
                 </div>
                 <div class="modal-footer" style="padding:8px 14px;">
