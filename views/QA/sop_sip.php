@@ -355,7 +355,7 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
                 <div class="muted-help" id="nModelHint">分類就是機台綁定的製程。選了型號會自動把在用的機台全部帶進來，再勾掉不適用的。</div>
             </div>
             <label class="mrow">機器編號</label>
-            <div class="wide mrow"><div id="nMachines" class="pickbox muted-help">先選機台型號。</div></div>
+            <div class="wide mrow"><div id="nMachines" class="pickbox muted-help">先選機台型號（可以多選）。</div></div>
             <!-- 綁料號時也可以再指定用哪幾台機器（使用者 2026-09-22：SOP 必定是此料號在特定機台上的規範） -->
             <label class="pmrow">使用機台<span class="muted-help">（可複選、選填）</span></label>
             <div class="wide pmrow">

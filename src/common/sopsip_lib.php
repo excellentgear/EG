@@ -267,6 +267,15 @@ function ss_ensure_schema(PDO $db): void
         ss_ensure_col($db, 'ss_ver', 'orient', "VARCHAR(10) NULL COMMENT '列印方向 portrait/landscape，空＝用預設'");
         ss_ensure_col($db, 'ss_doc', 'process_no', "INT NULL COMMENT '綁定製程 process_no.ProcessNo（工程名稱就是它）'");
         ss_ensure_col($db, 'ss_doc', 'machine_model', "VARCHAR(100) NULL COMMENT '設備SOP綁的機台型號'");
+        /* 2026-09-23：型號可以多選，所以這一欄會存「A、B、C」——100 字不夠，放寬到 255。
+           `ss_ensure_col` 只在欄位不存在時建，既有欄位要另外 MODIFY 一次（只加長不縮短，安全）。 */
+        try {
+            $st = $db->query("SHOW COLUMNS FROM ss_doc LIKE 'machine_model'");
+            $c = $st->fetch(PDO::FETCH_ASSOC);
+            if ($c && stripos((string)$c['Type'], 'varchar(100)') === 0) {
+                $db->exec("ALTER TABLE ss_doc MODIFY machine_model VARCHAR(255) NULL COMMENT '設備SOP綁的機台型號（可多個，以、串接並排序）'");
+            }
+        } catch (Throwable $e) { /* 動不了就維持原樣，短一點只是會被截斷 */ }
         ss_ensure_col($db, 'ss_doc', 'customer_id', "VARCHAR(20) NULL COMMENT '客戶（綁料號時由料號主檔帶入）'");
         ss_ensure_col($db, 'ss_doc', 'customer_name', "VARCHAR(120) NULL");
         ss_ensure_col($db, 'ss_file', 'rot', "SMALLINT NOT NULL DEFAULT 0 COMMENT '顯示旋轉 0/90/180/270，只影響本文件不動原檔'");
@@ -887,19 +896,30 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
         $toolId = (int)($in['tool_id'] ?? 0);
         if (!ss_tool_row($db, $toolId)) throw new RuntimeException('請選擇量具（在檢驗設備一覽表裡找不到這一支）');
     } elseif ($scope === 'machine') {
-        // 綁的是**型號**（同型號好幾台共用一份 SOP），機器編號是底下的一對多明細
-        $model = trim((string)($in['machine_model'] ?? ''));
+        /* 綁的是**型號**（同型號好幾台共用一份 SOP），機器編號是底下的一對多明細。
+           2026-09-23 起型號**可以多選**（使用者要求）：`machine_models` 收陣列、
+           `machine_model` 仍收單一型號的舊寫法，兩者都會正規化成排序後的「A、B」字串。 */
         $machineIds = $in['machine_ids'] ?? [];
         if (is_string($machineIds)) { $d = json_decode($machineIds, true); $machineIds = is_array($d) ? $d : []; }
         $machineIds = array_values(array_unique(array_filter(array_map('intval', (array)$machineIds))));
-        if ($model === '' && $machineIds) {
-            $one = ss_machine_row($db, (int)$machineIds[0]);
-            $model = (string)($one['machine_model'] ?? '');
+
+        $model = ss_models_join($in['machine_models'] ?? ($in['machine_model'] ?? ''));
+        /* 勾好的機器編號才是真的：型號一律由它們回推，畫面上多選了卻一台都沒勾的型號自動不算。
+           不這樣做的話會留下「綁著某個型號、底下一台機器都沒有」的文件，
+           清單上只會顯示「還有 N 台未納入」，看不出是怎麼來的。 */
+        if ($machineIds) {
+            $in2 = implode(',', array_fill(0, count($machineIds), '?'));
+            $st = $db->prepare("SELECT DISTINCT machine_model FROM machine_list
+                                WHERE machine_id IN ($in2) AND machine_model IS NOT NULL AND machine_model<>''");
+            $st->execute($machineIds);
+            $fromIds = $st->fetchAll(PDO::FETCH_COLUMN) ?: [];
+            if ($fromIds) $model = ss_models_join($fromIds);
         }
-        if ($model === '' && !$machineIds) throw new RuntimeException('請選擇機台型號');
+        if ($model === '') throw new RuntimeException('請選擇機台型號');
         // 以表單日期判在不在用：2025 年才停用的機台，2022 年的舊 SOP 當然要補得進來
-        if ($model !== '' && !ss_machines_by_model($db, $model, $asof)) {
-            throw new RuntimeException('找不到這個機台型號（表單日期 ' . $asof . ' 當時沒有這個型號在用的機台）');
+        if (!ss_machines_by_model($db, $model, $asof)) {
+            throw new RuntimeException('找不到這些機台型號（' . $model . '）——表單日期 ' . $asof
+                . ' 當時沒有這些型號在用的機台');
         }
         // 主檔上的 machine_id 降為「代表機台」快取，方便既有查詢沿用；真正的清單在 ss_doc_machine
         $machineId = $machineIds ? (int)$machineIds[0] : 0;
@@ -928,12 +948,20 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
         $procNm = (string)$pr['process_name'];
     }
 
+    /* 沒送的欄位一律不動（`array_key_exists` 判「有沒有送這個欄位」，送空字串才是清空）。
+       本專案已經踩過好幾次：「調整機器編號」「改綁定對象」那兩支只送了一部分欄位，
+       沒送的客戶／型式就被一起寫成 NULL，畫面上完全看不出是什麼時候不見的。 */
+    $old = $docId > 0 ? ss_doc_get($db, $docId) : null;
+
     // 客戶：綁料號就由料號主檔決定（使用者要求不給手打）；通用型才採用送進來的值
     $cusId = null; $cusNm = null;
     if ($scope === 'part') {
         $c = ss_customer_of_part($db, $partDId);
         $cusId = $c['id'] !== '' ? $c['id'] : null;
         $cusNm = $c['name'] !== '' ? $c['name'] : null;
+    } elseif (!array_key_exists('customer_id', $in) && $old) {
+        $cusId = $old['customer_id'] !== '' ? $old['customer_id'] : null;
+        $cusNm = $old['customer_name'] !== '' ? $old['customer_name'] : null;
     } else {
         $cid = trim((string)($in['customer_id'] ?? ''));
         if ($cid !== '') {
@@ -945,8 +973,11 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
         }
     }
 
-    // 型式（有隆齒／無隆齒…）：同一個料號＋製程＋機台＋客戶底下的分版，最多三種
-    $variant = trim((string)($in['variant'] ?? ''));
+    // 型式（有隆齒／無隆齒…）：同一個料號＋製程＋機台＋客戶底下的分版，最多三種。
+    // 沒送＝舊的呼叫端，原樣不動；送空字串才是真的清成「未分型式」
+    $variant = array_key_exists('variant', $in)
+             ? trim((string)$in['variant'])
+             : trim((string)($old['variant'] ?? ''));
     if (mb_strlen($variant) > 30) throw new RuntimeException('型式請在 30 字以內');
 
     // 文件名稱自動產生，但使用者自己打過就以他打的為準
@@ -968,7 +999,6 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
        （EG-002／EG-027 各兩份），每次存檔都擋的話那幾份會變成連改都改不動。 */
     $keyChanged = true;
     if ($docId > 0) {
-        $old = ss_doc_get($db, $docId);
         $oldM = ss_machine_key(array_column(ss_doc_machines($db, $docId), 'machine_id'));
         $newM = array_key_exists('machine_ids', $in) ? ss_machine_key($machineIds) : $oldM;
         $keyChanged = !$old || (string)($old['scope'] ?? '') !== $scope
@@ -1007,7 +1037,7 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
     }
 
     if ($docId > 0) {
-        if (!ss_doc_get($db, $docId)) throw new RuntimeException('找不到這份文件');
+        if (!$old) throw new RuntimeException('找不到這份文件');
         $st = $db->prepare("UPDATE ss_doc SET scope=?, machine_id=?, machine_model=?, tool_id=?, part_d_id=?, part_no_text=?,
                                 title=?, process_no=?, proc_name=?, customer_id=?, customer_name=?, variant=?,
                                 modified_at=NOW(), modified_by=? WHERE doc_id=?");
@@ -1804,23 +1834,58 @@ function ss_machine_models(PDO $db, string $kw = '', int $limit = 60, string $as
     } catch (Throwable $e) { return []; }
 }
 
+/* ── 機台型號可以綁「好幾個」（使用者 2026-09-23：「機台要可以多選型號」）──────────
+   `ss_doc.machine_model` 因此變成「一個或多個型號，以『、』串起來」的字串；
+   真正的機台清單一直都在 ss_doc_machine（一對多），型號只是給畫面與重複判定用的鍵。
+   **串接前一定要排序**，否則同樣兩個型號換個順序就會被當成不同的鍵，重複判定跟著失效。 */
+const SS_MODEL_SEP = '、';
+
+/** 把存起來的型號字串拆回陣列 */
+function ss_models_split(string $s): array
+{
+    $out = [];
+    foreach (preg_split('/[、,]+/u', trim($s)) ?: [] as $m) {
+        $m = trim($m);
+        if ($m !== '' && !in_array($m, $out, true)) $out[] = $m;
+    }
+    return $out;
+}
+
+/** 陣列 → 存起來的型號字串（排序後串接，唯一實作） */
+function ss_models_join($models): string
+{
+    if (is_string($models)) {
+        $d = json_decode($models, true);
+        $models = is_array($d) ? $d : ss_models_split($models);
+    }
+    $out = [];
+    foreach ((array)$models as $m) {
+        $m = trim((string)$m);
+        if ($m !== '' && !in_array($m, $out, true)) $out[] = $m;
+    }
+    sort($out, SORT_STRING);
+    return implode(SS_MODEL_SEP, $out);
+}
+
 /**
- * 某個型號的全部機台（使用者拍板：選型號就全部帶進來，再逐台勾掉不要的）。
+ * 某幾個型號的全部機台（使用者拍板：選型號就全部帶進來，再逐台勾掉不要的）。
+ * $model 可以是單一型號，也可以是「A、B」這種多型號字串（2026-09-23 起）。
  * $asof＝表單日期：那一天還沒停用的也會回，並標 `off`／`off_date`，
  * 讓畫面明白寫出「這台已經停用，是因為表單日期在停用之前才列出來的」。
  */
 function ss_machines_by_model(PDO $db, string $model, string $asof = ''): array
 {
-    $model = trim($model);
-    if ($model === '') return [];
-    $p = [$model];
+    $models = ss_models_split($model);
+    if (!$models) return [];
+    $p = $models;
     $cond = ss_machine_active_cond($asof, $p);
+    $in = implode(',', array_fill(0, count($models), '?'));
     try {
         $st = $db->prepare("SELECT machine_id, machine, field_no, asset_no, machine_model, manufacturer, spec,
                                    machine_type_id, state, disabled_date
                             FROM machine_list
-                            WHERE machine_model=? AND $cond
-                            ORDER BY (state='1'), asset_no, field_no");
+                            WHERE machine_model IN ($in) AND $cond
+                            ORDER BY (state='1'), machine_model, asset_no, field_no");
         $st->execute($p);
         $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
         foreach ($rows as &$r) {
@@ -1948,7 +2013,8 @@ function ss_auto_title_base(PDO $db, string $kind, string $scope, array $in): st
     if ($scope === 'machine') {
         $model = trim((string)($in['machine_model'] ?? ''));
         $name  = '';
-        foreach (ss_machines_by_model($db, $model) as $m) { $name = (string)$m['machine']; break; }
+        // 多選型號時名稱只取第一台機器的機種名稱，型號則整串接上去（例「展成磨削機床 KNe3G、KX500」）
+        foreach (ss_machines_by_model($db, $model) as $m0) { $name = (string)$m0['machine']; break; }
         if ($name === '' && (int)($in['machine_id'] ?? 0) > 0) {
             $one   = ss_machine_row($db, (int)$in['machine_id']);
             $name  = (string)($one['machine'] ?? '');
