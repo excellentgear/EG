@@ -4902,8 +4902,9 @@ $(function(){
         // loadPrintCfg()做AS編號版次回推比對，不能改格式，只在這裡(純顯示用途)轉點分格式。
         var dateStr=printSignDate().replace(/-/g,'.');
         // 大標題＝本公司全名、副標題＝綁定 AS 文件的表單名稱（皆動態取，禁寫死；ai-rules/16）
+        var kindTag = state.inspKind==='FIRST' ? '　【首件檢驗】' : state.inspKind==='LAST' ? '　【末件檢驗】' : '';
         var head='<div class="pr-co">'+esc(PRINTCFG.company||'')+'</div>'+
-            '<div class="pr-title">'+esc((PRINTCFG.doc&&PRINTCFG.doc.name)||'檢驗記錄表')+'</div>'+
+            '<div class="pr-title">'+esc((PRINTCFG.doc&&PRINTCFG.doc.name)||'檢驗記錄表')+esc(kindTag)+'</div>'+
             '<table class="pr-meta"><tr>'+
             '<td class="k">料號</td><td>'+esc(m.part)+'</td><td class="k">客戶</td><td>'+esc(m.client)+'</td><td class="k">日期</td><td>'+dateStr+'</td></tr>'+
             '<tr><td class="k">製令/BOM</td><td>'+esc(m.bom)+'</td><td class="k">製程</td><td>'+esc(m.process)+'</td><td class="k">送驗數</td><td>'+m.incoming+'</td></tr>'+

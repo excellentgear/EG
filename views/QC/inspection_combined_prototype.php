@@ -763,8 +763,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $ng_qty = $tot['ng_qty']; $aod_qty = $tot['aod_qty']; $check_result = $tot['check_result'];
 
             // 更新表頭 + 自動回鎖
-            $pdo->prepare("UPDATE qc_check_form SET incoming_qty=?, sample_qty=?, ng_qty=?, check_result=?, main_remark=?, pcs_verdicts=?, edit_unlocked=0, last_edited_by=?, last_edited_at=NOW() WHERE qc_form_id=?")
-                ->execute([$incoming_qty, $sample_qty, $ng_qty, $check_result, $main_remark, json_encode($pcs, JSON_UNESCAPED_UNICODE), $user_id, $qid]);
+            if ($hasInspKind) {
+                $pdo->prepare("UPDATE qc_check_form SET incoming_qty=?, sample_qty=?, ng_qty=?, check_result=?, main_remark=?, pcs_verdicts=?, insp_kind=?, edit_unlocked=0, last_edited_by=?, last_edited_at=NOW() WHERE qc_form_id=?")
+                    ->execute([$incoming_qty, $sample_qty, $ng_qty, $check_result, $main_remark, json_encode($pcs, JSON_UNESCAPED_UNICODE), $insp_kind, $user_id, $qid]);
+            } else {
+                $pdo->prepare("UPDATE qc_check_form SET incoming_qty=?, sample_qty=?, ng_qty=?, check_result=?, main_remark=?, pcs_verdicts=?, edit_unlocked=0, last_edited_by=?, last_edited_at=NOW() WHERE qc_form_id=?")
+                    ->execute([$incoming_qty, $sample_qty, $ng_qty, $check_result, $main_remark, json_encode($pcs, JSON_UNESCAPED_UNICODE), $user_id, $qid]);
+            }
 
             $after = ['header'=>['incoming_qty'=>$incoming_qty,'sample_qty'=>$sample_qty,'ng_qty'=>$ng_qty,'check_result'=>$check_result,'main_remark'=>$main_remark], 'items'=>$items];
             $pdo->prepare("INSERT INTO qc_inspection_edit_log (qc_form_id, action, reason, changes_json, changed_by) VALUES (?, 'EDIT', ?, ?, ?)")
