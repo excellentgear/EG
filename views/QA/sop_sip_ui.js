@@ -126,12 +126,20 @@ function post(action, data, cb) { api(action, data, cb, 'POST'); }
  * 另外**手動改字就自動解除綁定**，否則會出現「畫面寫 A、實際綁著 B」而且完全看不出來。
  */
 var $AC = $('<div class="ac-list"></div>').appendTo('body');
-var acTimer = null, acSeq = 0, acCur = null;
+var acTimer = null, acSeq = 0, acCur = null, acIn = null;
 
+/**
+ * 打字搜尋主檔的自動完成。
+ * `opt.hidden` 是固定的選擇器；**同一種欄位會出現好幾列時**（注意事項範本的客戶欄）
+ * 改用 `opt.hiddenOf($in)` 取「這一列自己的」隱藏欄位——
+ * 用固定選擇器的話，第 2 列挑客戶會把第 1 列的 id 寫掉，而且完全看不出來。
+ */
 function acAttach(inputSel, opt) {
     $(document).on('input', inputSel, function () {
         var $in = $(this);
-        if (opt.hidden) $(opt.hidden).val('');
+        acIn = $in;
+        var $hid = opt.hiddenOf ? opt.hiddenOf($in) : (opt.hidden ? $(opt.hidden) : null);
+        if ($hid && $hid.length) $hid.val('');
         if (opt.onClear) opt.onClear();
         var kw = $in.val().trim();
         clearTimeout(acTimer);
@@ -159,7 +167,7 @@ $AC.on('click', '.it', function () {
     var rows = $AC.data('rows') || [], r = rows[num($(this).data('i'))];
     $AC.hide();
     if (!r || !acCur) return;
-    acCur.pick(r);
+    acCur.pick(r, acIn);       // 第二個參數＝剛剛在打字的那一格（多列共用同一種欄位時要用）
 });
 $(document).on('click', function (e) {
     if (!$(e.target).closest('input').length && !$(e.target).closest($AC).length) $AC.hide();
@@ -2435,7 +2443,8 @@ $('#btnSetting').on('click', function () {
         var h = '<div class="ss-tabs" style="margin-bottom:8px;">'
               + '<div class="ss-tab on" data-set="base">簽核與圖章</div>'
               + '<div class="ss-tab" data-set="owner">擔當者與檢驗方法</div>'
-              + '<div class="ss-tab" data-set="tpl">檢驗項目預設值</div></div>'
+              + '<div class="ss-tab" data-set="tpl">檢驗項目預設值</div>'
+              + '<div class="ss-tab" data-set="list">頻率／型式／注意事項</div></div>'
               + '<div id="setPane"></div>';
         $('#setBody').html(h);
         setPane('base');
@@ -2450,7 +2459,97 @@ $(document).on('click', '.ss-tab[data-set]', function () {
 function setPane(which) {
     if (which === 'base') return setPaneBase();
     if (which === 'owner') return setPaneOwner();
+    if (which === 'list') return setPaneList();
     return setPaneTpl(0);
+}
+
+/**
+ * 頻率／型式／注意事項範本（使用者 2026-09-23 交辦的三件設定）。
+ * 三樣都是「現場一直在用、但寫法會變」的清單，所以一律由管理員維護，程式裡不寫死。
+ */
+function setPaneList() {
+    var res = SET;
+    var h = '<div class="note-box">這三樣都是給現場「點選」用的清單，'
+          + '<b>仍然可以自行輸入</b>——現場一定會有還沒登記的寫法，只給固定選項會變成填不下去。</div>';
+
+    h += '<div class="sec"><h5>檢驗頻率的下拉選項'
+       + '<span class="muted-help">一行一個；檢驗項目那一欄會依這份清單長出下拉</span></h5>'
+       + '<textarea id="stFreq" style="width:100%;min-height:110px;border:1px solid var(--line);border-radius:4px;'
+       + 'padding:5px 7px;font-size:13px;line-height:1.7;">'
+       + esc((res.freq_options || []).join('\n')) + '</textarea></div>';
+
+    h += '<div class="sec"><h5>型式的建議選項'
+       + '<span class="muted-help">一行一個；同一個料號＋製程＋機台＋客戶底下最多 '
+       + num(res.variant_max || 3) + ' 種型式</span></h5>'
+       + '<textarea id="stVariant" style="width:100%;min-height:90px;border:1px solid var(--line);border-radius:4px;'
+       + 'padding:5px 7px;font-size:13px;line-height:1.7;">'
+       + esc((res.variant_options || []).join('\n')) + '</textarea></div>';
+
+    h += '<div class="sec"><h5>注意事項範本'
+       + '<span class="muted-help">可以綁客戶；綁了客戶的範本在該客戶的文件上會自動帶入，'
+       + '其餘的一律列在「帶入範本」讓人點</span>'
+       + ' <button class="btn btn-xs btn-warm-o" id="ntAdd" style="margin-left:8px;">新增一筆</button></h5>'
+       + '<div id="ntBox"></div></div>';
+    $('#setPane').html(h);
+    NTROWS = (res.notice_tpls || []).slice();
+    ntRender();
+}
+var NTROWS = [];
+function ntRender() {
+    var h = '';
+    if (!NTROWS.length) h = '<div class="muted-help">還沒有任何範本。按上面的「新增一筆」開始。</div>';
+    $.each(NTROWS, function (i, t) {
+        h += '<div class="nt-row" data-i="' + i + '" style="border:1px solid var(--line);border-radius:4px;'
+           + 'padding:6px 8px;margin-bottom:6px;">'
+           + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
+           + '<input class="nt-name" value="' + esc(t.name || '') + '" data-eg-hint="範本名稱，例如 熱處理件" style="width:180px;">'
+           + '<span class="ac-wrap" style="position:relative;"><input class="nt-cus" value="'
+           + esc(t.customer_name || '') + '" data-eg-hint="綁客戶（留空＝通用）" style="width:190px;"></span>'
+           + '<input type="hidden" class="nt-cusid" value="' + esc(t.customer_id || '') + '">'
+           + '<button class="btn btn-xs nt-cusclr">清除客戶</button>'
+           + '<span class="sp" style="flex:1;"></span>'
+           + '<button class="btn btn-xs nt-rm">刪除</button></div>'
+           + '<textarea class="nt-body" style="width:100%;min-height:70px;margin-top:5px;border:1px solid var(--line);'
+           + 'border-radius:4px;padding:5px 7px;font-size:12.5px;line-height:1.7;">' + esc(t.body || '') + '</textarea>'
+           + '</div>';
+    });
+    $('#ntBox').html(h);
+}
+/* 客戶欄的自動完成**只掛一次**（事件委派到 document），每一列各自找自己的隱藏欄位。
+   放在 ntRender() 裡逐列掛的話，每重畫一次就多一組 handler，打一個字會送好幾支查詢。 */
+acAttach('#ntBox .nt-cus', {
+    action: 'search_customer',
+    hiddenOf: function ($in) { return $in.closest('.nt-row').find('.nt-cusid'); },
+    row: function (r) {
+        return '<span class="hit">' + esc(r.customer_id) + '</span>　' + esc(r.customer || '')
+             + '　<span class="muted-help">' + esc(r.customer_full || '') + '</span>';
+    },
+    pick: function (r, $in) {
+        if (!$in || !$in.length) return;
+        $in.val(r.customer);
+        $in.closest('.nt-row').find('.nt-cusid').val(r.customer_id);
+    }
+});
+$(document).on('click', '#ntAdd', function () { ntCollect(); NTROWS.push({ name: '', body: '', customer_id: '', customer_name: '' }); ntRender(); });
+$(document).on('click', '.nt-rm', function () {
+    ntCollect();
+    NTROWS.splice(num($(this).closest('.nt-row').attr('data-i')), 1);
+    ntRender();
+});
+$(document).on('click', '.nt-cusclr', function () {
+    var $r = $(this).closest('.nt-row');
+    $r.find('.nt-cus').val(''); $r.find('.nt-cusid').val('');
+});
+/** 把畫面上的值收回 NTROWS（新增／刪除前一定要先收，不然剛打的字會被重畫洗掉） */
+function ntCollect() {
+    $('#ntBox .nt-row').each(function () {
+        var i = num($(this).attr('data-i'));
+        if (!NTROWS[i]) return;
+        NTROWS[i].name = $(this).find('.nt-name').val() || '';
+        NTROWS[i].body = $(this).find('.nt-body').val() || '';
+        NTROWS[i].customer_id = $(this).find('.nt-cusid').val() || '';
+        NTROWS[i].customer_name = $(this).find('.nt-cus').val() || '';
+    });
 }
 
 /** 下拉的共用產生器（key=>label 的物件） */
@@ -2617,10 +2716,22 @@ function setPaneOwner() {
 /** 檢驗項目預設值：標準項目（全站）＋ 逐製程的專屬項目 */
 function setPaneTpl(pno) {
     api('tpl_get', { tpl_kind: pno ? 'proc' : 'std', process_no: pno }, function (res) {
+        TPLCTX = { owner_depts: res.owner_depts || [], methods: res.methods || [], tool_types: res.tool_types || [] };
+        // 頻率下拉與符號面板：設定頁的表格也要用，所以先掛到 CUR 上（tplRow 會暫時把 CUR 換成 TPLCTX）
+        CUR = CUR || {};
+        CUR.freq_options = res.freq_options || CUR.freq_options || [];
+        CUR.symbols      = res.symbols || CUR.symbols || [];
+        CUR.tool_types   = res.tool_types || CUR.tool_types || [];
+        TPLCTX.freq_options = CUR.freq_options;
+        TPLCTX.symbols      = CUR.symbols;
         var h = '<div class="note-box">'
               + '<b>標準項目</b>是每一份檢驗指導書都會有的那幾列（精度等級、外觀、包裝…）；'
               + '<b>製程專屬項目</b>是某個製程才有的（例如齒研的跨齒厚）。'
-              + '建立文件時會先帶專屬項目、再帶標準項目，<b>代入之後仍然可以逐列刪掉不要的</b>。'
+              + '<b>這個製程只要設過專屬項目，建立文件時就只帶它自己的</b>，'
+              + '一列都沒設才退回帶全站共用的標準項目；代入之後仍然可以逐列刪掉不要的。'
+              + '<br><b>鎖定</b>：勾起來的欄位帶進文件之後不可以被改掉。要讓現場填數字，'
+              + '就在品質特性裡用 <b>{ }</b> 圈出可以填的位置——例如 <b>跨珠Ø{}</b> ＝'
+              + '固定印「跨珠Ø」、後面那一格由現場填（{ } 裡面可以寫提示字，不會印出來）。'
               + '<br><b>順序＝代入之後的排列順序</b>：按住最左邊的「☰ #」上下拖曳就可以調整，'
               + '最後一列按 ↓ 自動加一列，改完記得按下面的「儲存這一組」。</div>';
         h += '<div class="frm" style="margin-bottom:8px;">'
@@ -2646,7 +2757,9 @@ function setPaneTpl(pno) {
                + '<label style="font-weight:normal;text-align:left;margin-right:14px;">'
                + '<input type="checkbox" id="tplAuto"' + (num(cfg.auto_apply) ? ' checked' : '') + '> 新文件綁到這個製程時自動代入</label>'
                + '<label style="font-weight:normal;text-align:left;">'
-               + '<input type="checkbox" id="tplStd"' + (num(cfg.with_std) ? ' checked' : '') + '> 代入時一併帶標準項目</label>'
+               + '<input type="checkbox" id="tplStd"' + (num(cfg.with_std) ? ' checked' : '') + '> 另外再帶一份全站共用的標準項目</label>'
+               + '<div class="muted-help">這個製程只要設過專屬項目，預設<b>只帶它自己的</b>'
+               + '（使用者 2026-09-23 指定）；真的兩套都要才勾這一項。</div>'
                + '</div></div>';
         }
         // 欄位與文件裡的檢驗項目一樣多，品質特性一定要給寬度，否則會被擠成一條（表頭變直書）
@@ -2657,8 +2770,7 @@ function setPaneTpl(pno) {
            + '<th style="width:130px;">檢具編號</th><th style="width:104px;">檢驗頻率</th><th>備註</th>'
            + '<th style="width:38px;"></th></tr></thead><tbody data-eg-row-add="tplAdd" data-eg-row-del="tplDel">';
         var rows = (res.rows || []).length ? res.rows : [{}];
-        // 樣板列用同一份 ownerSel/methodSel，所以先把選項塞進 CUR 的替身
-        TPLCTX = { owner_depts: res.owner_depts || [], methods: res.methods || [], tool_types: res.tool_types || [] };
+        // TPLCTX（ownerSel/methodSel 讀的替身）在這支函式開頭就建好了，這裡不要再建第二份
         $.each(rows, function (i, r) { h += tplRow(i, r); });
         h += '</tbody></table></div>';
         h += '<div style="margin-top:8px;"><button class="btn btn-sm btn-warm" id="tplSave">儲存這一組</button> '
@@ -2677,17 +2789,47 @@ function tplRow(i, r) {
     CUR = TPLCTX;                                   // ownerSel/methodSel 讀的是 CUR，暫時換成樣板的選項
     var own = ownerSel(r.owner_dept_id, ''), mth = methodSel(r.method, r.tool_type_id, '');
     CUR = save;
-    return '<tr data-tt="' + num(r.tool_type_id) + '">' + dragCell(i, true)
-        + '<td><input class="i-ctrl" value="' + esc(r.ctrl_point || '') + '"></td>'
-        + '<td><input class="i-q" value="' + esc(r.q_char || '') + '"></td>'
+    // 沒設定過的一律預設「鎖住」（使用者 2026-09-23：預設值帶進文件之後不可以被改掉）
+    var lc = (r.lock_ctrl === undefined) ? 1 : (num(r.lock_ctrl) === 1 ? 1 : 0);
+    var lq = (r.lock_q === undefined) ? 1 : (num(r.lock_q) === 1 ? 1 : 0);
+    var toolTxt = r.tool_label || r.tool_no || '';
+    return '<tr data-tt="' + num(r.tool_type_id) + '" data-tool="' + num(r.tool_id) + '">' + dragCell(i, true)
+        + '<td><input class="i-ctrl" value="' + esc(r.ctrl_point || '') + '">'
+            + '<label class="tpl-lk"><input type="checkbox" class="i-lc"' + (lc ? ' checked' : '') + '> 鎖定</label></td>'
+        + '<td><input class="i-q" value="' + esc(r.q_char || '') + '">'
+            + '<div style="margin-top:2px;">'
+            + '<label class="tpl-lk"><input type="checkbox" class="i-lq"' + (lq ? ' checked' : '') + '> 鎖定</label>'
+            + ' <button class="btn btn-xs btn-warm-o sym-open" title="插入符號（Ø ± 幾何公差…）">Ø±</button>'
+            + ' <button class="btn btn-xs btn-warm-o tpl-slot" title="在游標處插入一個「可填空」">{ }</button>'
+            + '</div></td>'
         + '<td><input class="i-up" value="' + esc(r.up_limit || '') + '"></td>'
         + '<td><input class="i-lo" value="' + esc(r.lo_limit || '') + '"></td>'
         + '<td>' + own + '</td><td>' + mth + '</td>'
-        + '<td><input class="i-tool" value="' + esc(r.tool_no || '') + '"></td>'
-        + '<td><input class="i-freq" value="' + esc(r.freq || '') + '"></td>'
+        + '<td><input class="i-tool" value="' + esc(toolTxt || 'N/A') + '" readonly title="檢具只能從量具主檔挑，不可手打">'
+            + '<div style="margin-top:2px;"><button class="btn btn-xs btn-warm-o i-pick">挑檢具</button>'
+            + ' <button class="btn btn-xs i-toolclr" title="改成 N/A">清除</button></div></td>'
+        + '<td>' + freqCell(r.freq, '') + '</td>'
         + '<td><input class="i-note" value="' + esc(r.note || '') + '"></td>'
         + '<td class="c"><button class="btn btn-xs tpl-rm">×</button></td></tr>';
 }
+/* 在游標處插入一組 {}＝「這裡讓現場填」。大括號外面的字就是固定的前綴／後綴，
+   例如「跨珠Ø{}」＝固定印「跨珠Ø」，後面那一格由現場填 7.3152。 */
+$(document).on('click', '.tpl-slot', function () {
+    var $tr = $(this).closest('tr');
+    var $in = $tr.data('lastInput');
+    if (!$in || !$in.length || !$in.hasClass('i-q')) $in = $tr.find('.i-q').first();
+    if (!$in.length) return;
+    var el = $in[0], v = el.value || '';
+    var a = (el.selectionStart == null) ? v.length : el.selectionStart;
+    var b = (el.selectionEnd == null) ? v.length : el.selectionEnd;
+    el.value = v.substring(0, a) + '{}' + v.substring(b);
+    try { el.selectionStart = el.selectionEnd = a + 1; } catch (e) {}
+    $in.focus();
+});
+/* 設定頁的表格也要記住游標停在哪一格，符號才插得到正確的欄位 */
+$(document).on('focus', '#tblTpl input', function () {
+    $(this).closest('tr').data('lastInput', $(this));
+});
 /* 同 stepAdd／stepDel：共用檔是不帶參數呼叫的，一定要自己找得到那張表（見上方說明） */
 function tplAdd($tbody) {
     $tbody = ($tbody && $tbody.length) ? $tbody : $('#tblTpl tbody');
@@ -2735,17 +2877,22 @@ $(document).on('click', '#tplSave', function () {
     var rows = [];
     $('#tblTpl tbody tr').each(function () {
         var $t = $(this);
+        var $fs = $t.find('.i-freq-sel'), fv = $fs.val() || '';
+        if (fv === '__other') fv = $t.find('.i-freq-txt').val() || '';
         rows.push({ ctrl_point: $t.find('.i-ctrl').val() || '', q_char: $t.find('.i-q').val() || '',
                     up_limit: $t.find('.i-up').val() || '', lo_limit: $t.find('.i-lo').val() || '',
                     owner_dept_id: num($t.find('.i-own').val()), method: $t.find('.i-mth').val() || '',
                     tool_type_id: num($t.find('.i-mth option:selected').data('tt')) || num($t.attr('data-tt')),
-                    tool_no: $t.find('.i-tool').val() || '', freq: $t.find('.i-freq').val() || '',
+                    tool_id: num($t.attr('data-tool')),
+                    tool_no: $t.find('.i-tool').val() || '', freq: fv,
+                    lock_ctrl: $t.find('.i-lc').is(':checked') ? 1 : 0,
+                    lock_q: $t.find('.i-lq').is(':checked') ? 1 : 0,
                     note: $t.find('.i-note').val() || '' });
     });
     post('tpl_save', {
         tpl_kind: pno ? 'proc' : 'std', process_no: pno, rows: JSON.stringify(rows),
         auto_apply: $('#tplAuto').is(':checked') ? 1 : 0,
-        with_std: $('#tplStd').length ? ($('#tplStd').is(':checked') ? 1 : 0) : 1
+        with_std: $('#tplStd').length ? ($('#tplStd').is(':checked') ? 1 : 0) : 0
     }, function () { alert('已儲存'); setPaneTpl(pno); });
 });
 
@@ -2791,6 +2938,13 @@ $('#setSave').on('click', function () {
         p.method_tool_types = JSON.stringify(tt);
         p.method_extra = JSON.stringify(($('#mtExtra').val() || '').split('\n'));
         p.sip_notice_default = $('#sipNotice').val() || '';
+    }
+    // 頻率／型式／注意事項範本這一頁
+    if ($('#stFreq').length) {
+        ntCollect();
+        p.freq_options    = JSON.stringify(($('#stFreq').val() || '').split('\n'));
+        p.variant_options = JSON.stringify(($('#stVariant').val() || '').split('\n'));
+        p.notice_tpls     = JSON.stringify(NTROWS);
     }
     if (!Object.keys(p).length) { alert('「檢驗項目預設值」請用該分頁裡的「儲存這一組」。'); return; }
     post('settings_save', p, function () { alert('已儲存'); });

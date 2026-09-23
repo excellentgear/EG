@@ -243,6 +243,11 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
         .lk-fix { font-size:12.5px; color:var(--ink); line-height:22px; white-space:pre-wrap; }
         .lk-slot { min-width:48px; max-width:110px; flex:0 1 auto; }
         .lk-row .btn { padding:0 5px; line-height:18px; font-size:11px; }
+        /* 檢驗項目預設值：每一欄可以各自決定帶進文件之後鎖不鎖 */
+        .tpl-lk { display:inline-block; font-weight:normal; font-size:11px; color:var(--ink2);
+                  margin:2px 0 0; line-height:16px; }
+        .tpl-lk input { margin-right:2px; vertical-align:-1px; }
+        .nt-row textarea { font-family:inherit; }
         /* 段落附件放的不是圖片時（Word／Excel／PDF）不要擺一個破圖 */
         .secfile .nofile { display:block; padding:14px 0; color:#9A8A7A; text-decoration:none; font-size:11.5px; }
         .secfile .nofile:hover { color:var(--amber-d); }
