@@ -747,7 +747,10 @@ function renderPlan(res) {
     }
     /* 檢視方式是「這個專案的設定」不是瀏覽器的暫存狀態——列印要跟著它走
        （使用者指定：清單式的專案，列印就不該印甘特圖），所以以專案上存的為準。 */
-    GVIEW = (String(p.plan_view || '') === 'list') ? 'list' : 'gantt';
+    GVIEW  = (String(p.plan_view || '') === 'list') ? 'list' : 'gantt';
+    /* 刻度也以專案上存的為準（使用者回報「刻度都會一直跳掉，我儲存也沒有用」——
+       原本它只是一個 JS 全域變數，重新整理頁面或換一台電腦就回到「週」）。 */
+    GSCALE = ($.inArray(String(p.plan_scale || ''), ['day', 'week', 'month']) >= 0) ? String(p.plan_scale) : 'week';
     var h = '<div class="pj-toolbar" style="margin-bottom:8px;">'
       + '<label>檢視</label>'
       + '<select id="gView" title="這個設定會記在專案上，列印版也會跟著換（清單式不印甘特圖）">'
@@ -827,7 +830,9 @@ function ganttHtml(res, opt) {
     var d0 = new Date(range.start + 'T00:00:00'), d1 = new Date(range.end + 'T00:00:00');
     /* 左右各留 3 天，條子才不會貼著邊 */
     d0.setDate(d0.getDate() - 3); d1.setDate(d1.getDate() + 3);
-    var span = Math.max(1, dayDiff(d0, d1));
+    /* +1：軸要含「最後那一天」本身。起訖日 9/3~9/4 是**兩天**不是一天，
+       不加的話整條軸短一天，每一根長條也都會短一天（使用者回報「線條長度跟我設定的不同」）。 */
+    var span = Math.max(1, dayDiff(d0, d1) + 1);
     var today = META.today ? new Date(META.today + 'T00:00:00') : new Date();
 
     function pct(d) { return (dayDiff(d0, d) / span) * 100; }
@@ -898,7 +903,10 @@ function barsFor(t, d0, span, today) {
        整條紅棒橫跨整張圖、把底下真正的預計長條蓋掉：使用者回報「甘特圖跟我設定的不同」就是這個。 */
     function pos(a, b) {
         var s = dayDiff(d0, a) / span * 100;
-        var e = dayDiff(d0, b) / span * 100;
+        /* 結束日**含當天**：9/3~9/4 要畫滿 9/3 與 9/4 兩格，所以右緣取 (結束日 - 起點 + 1) 天。
+           原本沒有 +1，1 天的任務會被算成寬度 0（只剩 0.6% 的一條細線），
+           2 天的只畫 1 天——這就是「線條長度跟我設定的不同」。 */
+        var e = (dayDiff(d0, b) + 1) / span * 100;
         if (e < s) e = s;
         s = Math.max(0, Math.min(100, s));
         e = Math.max(0, Math.min(100, e));
@@ -1922,7 +1930,15 @@ $(document).on('change', '#gView', function () {
         $.each(LIST, function (i, r) { if (num(r.project_id) === num(CUR.project.project_id)) r.plan_view = GVIEW; });
     }
 });
-$(document).on('change', '#gScale', function () { GSCALE = $(this).val(); drawGantt(CUR); });
+$(document).on('change', '#gScale', function () {
+    GSCALE = $(this).val();
+    drawGantt(CUR);
+    /* 記在專案上，不然重新整理就跳回「週」。只是顯示偏好，存不進去也不擋畫面。 */
+    if (CUR && num(CUR.project.project_id) && CUR.can_edit) {
+        CUR.project.plan_scale = GSCALE;
+        api('plan_view_save', { project_id: CUR.project.project_id, plan_scale: GSCALE }, 'POST');
+    }
+});
 /* 「隱藏已完成的步驟」詳情頁與清單就地展開共用同一個開關，勾一次兩邊一起變 */
 $(document).on('change', '#gHideDone, #listHideDone', function () {
     HIDE_DONE = $(this).is(':checked');
@@ -3814,7 +3830,7 @@ function planGanttTable(grouped, periods) {
                + '<td class="c">' + dispDate(t.plan_end) + '</td>'
                + '<td class="c">' + dispDate(t.act_end) + '</td>'
                + periodCellsBoth(t, periods)
-               + '<td class="c">' + esc(t.owner_name || '') + '</td></tr>';
+               + '<td class="c">' + taskOwnerCell(t) + '</td></tr>';
         });
     });
     /* 線型圖例：紙上沒有顏色可用，不寫圖例就看不懂哪條是預計哪條是實際 */
@@ -3843,7 +3859,7 @@ function planListTable(grouped) {
                + '<td class="c">' + dispDate(t.act_start) + '</td><td class="c">' + dispDate(t.act_end) + '</td>'
                + '<td class="c">' + (t.task_name ? num(t.progress) + '%' : '') + '</td>'
                + '<td class="c">' + esc(t.task_name ? taskStateLabel(t) : '') + '</td>'
-               + '<td class="c">' + esc(t.owner_name || '') + '</td></tr>';
+               + '<td class="c">' + taskOwnerCell(t) + '</td></tr>';
         });
     });
     return h + '</tbody></table>';
@@ -3863,6 +3879,17 @@ function autoHintCell(t) {
          + '：偵測到 ' + a.n + ' 筆，點開可逐筆確認後採用">'
          + '<i class="fa fa-magic"></i> ' + dispDate(a.date)
          + (a.n > 1 ? '<span class="pj-hint">（' + a.n + ' 筆）</span>' : '') + '</span>';
+}
+
+/** 列印的「負責人」欄：部門在上、姓名在下（使用者指定要顯示部門）。
+ *  還沒指定負責人的印「排班人員」——紙本上留白看不出是漏填還是本來就由排班決定。
+ *  部門取 project_task.owner_dept_id 對應的部門名（那是「以哪個部門的身分被指派」，
+ *  不是這個人現在的主職部門，兼任者才不會印錯邊）。 */
+function taskOwnerCell(t) {
+    var nm = $.trim(String(t.owner_name || ''));
+    if (!nm) return '<span style="font-size:8.5pt;">排班人員</span>';
+    var dp = $.trim(String(t.owner_dept_name || ''));
+    return (dp ? '<div style="font-size:8pt;">' + esc(dp) + '</div>' : '') + esc(nm);
 }
 
 /* 列印用的狀態文字：畫面上是彩色小籤，紙上只能印字 */

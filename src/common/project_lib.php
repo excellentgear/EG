@@ -519,6 +519,8 @@ function prj_ensure_schema(PDO $db): void
     prj_ensure_col($db, 'project', 'scope_process_no', "VARCHAR(255) NULL COMMENT '專案涵蓋的製程 process_no.ProcessNo 逗號串；空＝整張BOM所有製程' AFTER dept_name");
     // 執行規劃表的檢視方式（甘特／清單）：列印要跟著走，所以存在專案上不是只存在瀏覽器
     prj_ensure_col($db, 'project', 'plan_view', "VARCHAR(10) NOT NULL DEFAULT 'gantt' COMMENT 'gantt=時間軸 / list=清單；列印版跟著它走' AFTER scope_process_no");
+    // 甘特刻度也要記在專案上（2026-09-22 使用者回報「刻度都會一直跳掉，我儲存也沒有用」）
+    prj_ensure_col($db, 'project', 'plan_scale', "VARCHAR(10) NOT NULL DEFAULT 'week' COMMENT '甘特刻度 day/week/month' AFTER plan_view");
     // 附件標籤要能勾「這個標籤算 SOP／SIP」——比照 is_external_doc／is_photo_album 的既有做法，
     // 不在程式裡寫死標籤名稱（鐵律4：使用者改名或新增標籤時不可失效）
     prj_ensure_col($db, 'quotation_file_categories', 'is_sop', "TINYINT NOT NULL DEFAULT 0 COMMENT '1=這個附件標籤算 SOP 作業標準書'");
@@ -2205,9 +2207,13 @@ function prj_goals(PDO $db, int $projectId): array
 
 function prj_tasks(PDO $db, int $projectId): array
 {
-    $st = $db->prepare("SELECT t.*, g.goal_name, g.dept_name AS goal_dept_name
+    /* owner_dept_name：負責人是以「哪個部門的身分」被指派的（兼任者靠這欄決定顯示哪個職稱）。
+       列印的負責人欄要印部門，所以在這裡一起帶出來，不要讓前端自己拿 id 去查（鐵律4）。 */
+    $st = $db->prepare("SELECT t.*, g.goal_name, g.dept_name AS goal_dept_name,
+                               d.name AS owner_dept_name
                         FROM project_task t
                         LEFT JOIN project_goal g ON g.goal_id=t.goal_id
+                        LEFT JOIN department d ON d.id=t.owner_dept_id
                         WHERE t.project_id=?
                         ORDER BY g.sort_order, t.goal_id, t.sort_order, t.task_id");
     $st->execute([$projectId]);

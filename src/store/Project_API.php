@@ -714,10 +714,20 @@ case 'plan_rows':
 case 'plan_view_save':
     $pid = (int)($_POST['project_id'] ?? 0);
     prj_need($db, $P, $pid, true);
-    $v = (string)($_POST['plan_view'] ?? 'gantt');
-    if (!in_array($v, ['gantt', 'list'], true)) jerr('參數錯誤');
-    $db->prepare("UPDATE project SET plan_view=? WHERE project_id=?")->execute([$v, $pid]);
-    jout(['message' => '已記住檢視方式', 'plan_view' => $v]);
+    // 檢視方式與刻度都記在專案上——只送其中一個就只改那一個（沒送＝不要動它）
+    if (array_key_exists('plan_view', $_POST)) {
+        $v = (string)$_POST['plan_view'];
+        if (!in_array($v, ['gantt', 'list'], true)) jerr('參數錯誤');
+        $db->prepare("UPDATE project SET plan_view=? WHERE project_id=?")->execute([$v, $pid]);
+    }
+    if (array_key_exists('plan_scale', $_POST)) {
+        $s2 = (string)$_POST['plan_scale'];
+        if (!in_array($s2, ['day', 'week', 'month'], true)) jerr('參數錯誤');
+        $db->prepare("UPDATE project SET plan_scale=? WHERE project_id=?")->execute([$s2, $pid]);
+    }
+    $p2 = prj_get($db, $pid);
+    jout(['message' => '已記住檢視設定',
+          'plan_view' => (string)($p2['plan_view'] ?? 'gantt'), 'plan_scale' => (string)($p2['plan_scale'] ?? 'week')]);
 
 /* ══════════════════════════ 出貨單綁定（只作確認資料用） ══════════════════════════ */
 case 'ship_bind':
