@@ -1,0 +1,93 @@
+{
+    "rowCount": 11,
+    "rows": [
+        {
+            "sub_map_id": 674,
+            "parent_map_id": 1608,
+            "sub_id": 26,
+            "value_min": "9.5000",
+            "tol_upper": "5.5000",
+            "qty": "6.0000"
+        },
+        {
+            "sub_map_id": 692,
+            "parent_map_id": 1629,
+            "sub_id": 26,
+            "value_min": "17.5000",
+            "tol_upper": "11.0000",
+            "qty": "6.0000"
+        },
+        {
+            "sub_map_id": 1039,
+            "parent_map_id": 2196,
+            "sub_id": 26,
+            "value_min": "11.0000",
+            "tol_upper": "7.0000",
+            "qty": "6.0000"
+        },
+        {
+            "sub_map_id": 1066,
+            "parent_map_id": 2241,
+            "sub_id": 26,
+            "value_min": "11.0000",
+            "tol_upper": "6.6000",
+            "qty": "4.0000"
+        },
+        {
+            "sub_map_id": 1124,
+            "parent_map_id": 2342,
+            "sub_id": 26,
+            "value_min": "9.5000",
+            "tol_upper": "5.5000",
+            "qty": "4.0000"
+        },
+        {
+            "sub_map_id": 1170,
+            "parent_map_id": 2414,
+            "sub_id": 26,
+            "value_min": "9.0000",
+            "tol_upper": "5.5000",
+            "qty": "4.0000"
+        },
+        {
+            "sub_map_id": 1921,
+            "parent_map_id": 2822,
+            "sub_id": 26,
+            "value_min": "16.0000",
+            "tol_upper": "9.0000",
+            "qty": "1.0000"
+        },
+        {
+            "sub_map_id": 1933,
+            "parent_map_id": 2836,
+            "sub_id": 26,
+            "value_min": "11.0000",
+            "tol_upper": "37.0000",
+            "qty": "6.0000"
+        },
+        {
+            "sub_map_id": 1937,
+            "parent_map_id": 2842,
+            "sub_id": 26,
+            "value_min": "11.5000",
+            "tol_upper": "6.6000",
+            "qty": "2.0000"
+        },
+        {
+            "sub_map_id": 1943,
+            "parent_map_id": 2848,
+            "sub_id": 26,
+            "value_min": "11.1250",
+            "tol_upper": "7.1370",
+            "qty": "3.0000"
+        },
+        {
+            "sub_map_id": 1969,
+            "parent_map_id": 2885,
+            "sub_id": 26,
+            "value_min": "14.0000",
+            "tol_upper": "9.0000",
+            "qty": "8.0000"
+        }
+    ]
+}

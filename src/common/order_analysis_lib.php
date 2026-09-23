@@ -713,7 +713,10 @@ function oa_analyze(PDO $db, array $opt = []): array
         foreach ($rows as $r) {
             if (!$inSel($r) || !$inRange($r, $p)) continue;
             $k = $r['pkey'];
+            // pid＝d_setting.d_id（料號主檔整數 PK）：畫面上點料號要用它開圖面檢視
+            // （同名料號可能有好幾筆主檔、分屬不同客戶，不指名會開到別家的圖）
             if (!isset($byPart[$k])) $byPart[$k] = ['key' => $k, 'pno' => $r['pno'], 'cname' => $r['cname'],
+                                                    'pid' => (int)$r['pid'],
                                                     'first' => $r['first'], 'fsrc' => $r['fsrc'],
                                                     'cur' => oa_blank(), 'cmp' => oa_blank()];
             oa_add($byPart[$k][$slot], $r, false);
@@ -741,7 +744,7 @@ function oa_analyze(PDO $db, array $opt = []): array
     $newList = [];
     foreach ($partRows as $p) {
         if (!$p['is_new']) continue;
-        $newList[] = ['key' => $p['key'], 'pno' => $p['pno'], 'cname' => $p['cname'],
+        $newList[] = ['key' => $p['key'], 'pno' => $p['pno'], 'cname' => $p['cname'], 'pid' => (int)$p['pid'],
                       'first' => $p['first'], 'fsrc' => $p['fsrc'],
                       'orders' => $p['cur']['orders'], 'qty' => $p['cur']['qty'],
                       'amount' => $p['cur']['amount'], 'px' => $p['cur']['px_orders']];
@@ -791,6 +794,460 @@ function oa_analyze(PDO $db, array $opt = []): array
         'rank_parts_drop'  => array_slice(array_reverse($rankPartsDelta), 0, $topN),
         'new_list'     => $newList,
     ];
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 訂單 KPI 連動（views/news/KPI.php 的「月份受訂目標達成金額」）
+ *
+ * 指標 id 刻意不寫死：管理員可以在設定裡指定，沒指定時自動找
+ * calculator_key='order_target_amount' 的那一項（目前是 item_no 2）。
+ * 達標與否一律呼叫 KPI 模組自己的 kpi_as_display_value()／kpi_as_below_target()，
+ * 不在這裡另寫一套判定——兩套遲早算出不一樣的結果而且看不出誰對。
+ * ══════════════════════════════════════════════════════════════════ */
+function oa_settings_default(): array
+{
+    return [
+        'kpi_indicator_id' => 0,        // 0＝自動找 order_target_amount
+        'kpi_alert_months' => 3,        // 看最近幾個「已結束的月份」
+        'ma_enabled'       => 0,
+        'ma_months'        => 3,        // 移動平均取前幾個月
+        'ma_consecutive'   => 2,        // 連續幾個月低於安全水平才通知
+        'ma_threshold_mode' => 'kpi',   // kpi＝用該年度訂單 KPI 的月目標金額／manual＝自訂
+        'ma_threshold_value' => 0,
+        'ma_min_coverage'  => 60,       // 該月「有填單價」的訂單佔比低於此值 → 該月金額不可信，不納入評估
+        'ma_notify_users'  => [],
+    ];
+}
+function oa_settings(PDO $db): array
+{
+    $d = oa_settings_default();
+    $s = oa_param_get($db, 'alert_settings', null);
+    if (!is_array($s)) return $d;
+    $out = $d;
+    foreach ($d as $k => $v) {
+        if (!array_key_exists($k, $s)) continue;
+        if (is_array($v)) $out[$k] = is_array($s[$k]) ? array_values(array_map('intval', $s[$k])) : [];
+        elseif (is_int($v)) $out[$k] = (int)$s[$k];
+        else $out[$k] = (string)$s[$k];
+    }
+    $out['kpi_alert_months']  = max(1, min(12, (int)$out['kpi_alert_months']));
+    $out['ma_months']         = max(2, min(12, (int)$out['ma_months']));
+    $out['ma_consecutive']    = max(1, min(6,  (int)$out['ma_consecutive']));
+    $out['ma_min_coverage']   = max(0, min(100, (int)$out['ma_min_coverage']));
+    $out['ma_threshold_value'] = max(0, (int)$out['ma_threshold_value']);
+    if (!in_array($out['ma_threshold_mode'], ['kpi', 'manual'], true)) $out['ma_threshold_mode'] = 'kpi';
+    return $out;
+}
+function oa_settings_save(PDO $db, array $in, string $by): array
+{
+    $cur = oa_settings($db);
+    $err = [];
+    foreach (oa_settings_default() as $k => $v) {
+        if (!array_key_exists($k, $in)) continue;
+        if (is_array($v))      $cur[$k] = array_values(array_unique(array_map('intval', (array)$in[$k])));
+        elseif (is_int($v))    $cur[$k] = (int)$in[$k];
+        else                   $cur[$k] = (string)$in[$k];
+    }
+    if (!in_array($cur['ma_threshold_mode'], ['kpi', 'manual'], true)) $err[] = '安全水平的來源只能是「訂單 KPI 月目標」或「自訂金額」';
+    if ($cur['ma_threshold_mode'] === 'manual' && (int)$cur['ma_threshold_value'] <= 0) $err[] = '選「自訂金額」時，安全水平金額必須大於 0';
+    if (!empty($cur['ma_enabled']) && !$cur['ma_notify_users']) $err[] = '啟用移動平均監控時，一定要指定至少一位收通知的人員（不然算出來沒有人會知道）';
+    if ($err) return ['ok' => false, 'errors' => $err];
+    $cur = oa_settings($db) + $cur;                       // 先過一次正規化的上下限
+    foreach (oa_settings_default() as $k => $v) { if (!array_key_exists($k, $cur)) $cur[$k] = $v; }
+    oa_param_save($db, 'alert_settings', $cur, $by);
+    return ['ok' => true, 'settings' => oa_settings($db)];
+}
+
+/** 訂單 KPI 的指標與該年度設定（找不到回 null；畫面要據此說明「沒有設定就不會有提醒」） */
+function oa_kpi_iy(PDO $db, int $year): ?array
+{
+    $sid = (int)oa_settings($db)['kpi_indicator_id'];
+    try {
+        if ($sid > 0) {
+            $st = $db->prepare("SELECT iy.*, i.name, i.value_type FROM kpi_as_indicator_year iy
+                                JOIN kpi_as_indicator i ON i.indicator_id=iy.indicator_id
+                                WHERE iy.indicator_id=? AND iy.year=? LIMIT 1");
+            $st->execute([$sid, $year]);
+        } else {
+            $st = $db->prepare("SELECT iy.*, i.name, i.value_type FROM kpi_as_indicator_year iy
+                                JOIN kpi_as_indicator i ON i.indicator_id=iy.indicator_id
+                                WHERE iy.calculator_key='order_target_amount' AND iy.year=? LIMIT 1");
+            $st->execute([$year]);
+        }
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return $r ?: null;
+    } catch (Throwable $e) { return null; }
+}
+/** 該年度逐月的受訂目標金額（params_json 的 monthly_targets） */
+function oa_kpi_monthly_targets(?array $iy): array
+{
+    if (!$iy) return [];
+    $p = json_decode((string)($iy['params_json'] ?? ''), true);
+    $v = $p['monthly_targets']['v'] ?? null;
+    if (!is_array($v)) return [];
+    $out = [];
+    foreach ($v as $m => $amt) { $m = (int)$m; if ($m >= 1 && $m <= 12) $out[$m] = (float)$amt; }
+    return $out;
+}
+/**
+ * 「最近 N 個已結束的月份」訂單 KPI 有沒有達標。
+ * 刻意不看本月——本月還沒過完，拿半個月的數字去判未達標一定是錯的。
+ */
+function oa_kpi_recent(PDO $db, int $n, ?string $today = null): array
+{
+    require_once __DIR__ . '/kpi_as_lib.php';
+    $today = $today ?: date('Y-m-d');
+    $y = (int)date('Y', strtotime($today));
+    $m = (int)date('n', strtotime($today));
+    $rows = []; $iyCache = [];
+    for ($i = 1; $i <= $n; $i++) {
+        $mm = $m - $i; $yy = $y;
+        while ($mm <= 0) { $mm += 12; $yy--; }
+        if (!isset($iyCache[$yy])) $iyCache[$yy] = oa_kpi_iy($db, $yy);
+        $iy = $iyCache[$yy];
+        if (!$iy) { $rows[] = ['year' => $yy, 'month' => $mm, 'has' => 0]; continue; }
+        $mv = null;
+        try {
+            $st = $db->prepare("SELECT * FROM kpi_as_monthly_value WHERE indicator_id=? AND year=? AND month=? LIMIT 1");
+            $st->execute([(int)$iy['indicator_id'], $yy, $mm]);
+            $mv = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+        } catch (Throwable $e) {}
+        $val   = kpi_as_display_value($mv);
+        $below = kpi_as_below_target($val, $iy);
+        $tg    = oa_kpi_monthly_targets($iy);
+        $rows[] = [
+            'year' => $yy, 'month' => $mm, 'has' => $val === null ? 0 : 1,
+            'value' => $val, 'below' => $below ? 1 : 0,
+            'target' => $iy['target_value'] === null ? null : (float)$iy['target_value'],
+            'target_text' => (string)($iy['target_text'] ?? ''),
+            'unit' => (string)($iy['target_unit'] ?? ''),
+            'num' => $mv && $mv['numerator'] !== null ? (float)$mv['numerator'] : null,
+            'den' => $mv && $mv['denominator'] !== null ? (float)$mv['denominator'] : null,
+            'month_target' => $tg[$mm] ?? null,
+            'indicator' => (string)$iy['name'],
+        ];
+    }
+    return array_reverse($rows);   // 由舊到新
+}
+/**
+ * 「最近 N 個月的訂單 KPI 未達標 → 本月要衝刺」的提醒內容。
+ * 使用者要的是「提醒本月需要衝刺出貨量」，所以除了未達標的月份，
+ * 還要算出**本月到目前為止離月目標還差多少**，不然只講「未達標」沒有行動可言。
+ */
+function oa_kpi_alert(PDO $db, ?string $today = null): ?array
+{
+    $s = oa_settings($db);
+    $n = (int)$s['kpi_alert_months'];
+    $rows = oa_kpi_recent($db, $n, $today);
+    $have = array_values(array_filter($rows, function ($r) { return !empty($r['has']); }));
+    if (!$have) return ['enabled' => 1, 'no_data' => 1, 'months' => $rows, 'n' => $n];
+
+    $bad = array_values(array_filter($have, function ($r) { return !empty($r['below']); }));
+    if (!$bad) return ['enabled' => 1, 'ok' => 1, 'months' => $rows, 'n' => $n];
+
+    // 本月進度：目標金額 vs 目前已接到的訂單金額（只算得出有填單價的）
+    $today = $today ?: date('Y-m-d');
+    $y = (int)date('Y', strtotime($today)); $m = (int)date('n', strtotime($today));
+    $iy = oa_kpi_iy($db, $y);
+    $tg = oa_kpi_monthly_targets($iy);
+    $mt = $tg[$m] ?? null;
+    $cur = oa_month_amounts($db, sprintf('%04d-%02d', $y, $m), sprintf('%04d-%02d', $y, $m));
+    $k  = sprintf('%04d-%02d', $y, $m);
+    $got = $cur[$k]['amount'] ?? 0.0;
+    $days = (int)date('t', strtotime($today));
+    $left = max(0, $days - (int)date('j', strtotime($today)) + 1);
+    return [
+        'enabled' => 1, 'below' => 1, 'n' => $n, 'months' => $rows,
+        'bad_count' => count($bad),
+        'bad_list'  => array_map(function ($r) { return $r['year'] . '/' . $r['month'] . '月'; }, $bad),
+        'this_year' => $y, 'this_month' => $m,
+        'month_target' => $mt, 'month_got' => $got,
+        'month_gap' => ($mt === null) ? null : max(0, $mt - $got),
+        'days_left' => $left,
+        'coverage' => $cur[$k]['cov'] ?? 0,
+        'orders' => $cur[$k]['orders'] ?? 0, 'px_orders' => $cur[$k]['px'] ?? 0,
+        'indicator' => $have[0]['indicator'] ?? '月份受訂目標達成金額',
+    ];
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 逐月訂單金額 ＆ 移動平均監控
+ * ══════════════════════════════════════════════════════════════════ */
+/** 逐月訂單金額（口徑與本頁其他數字一致：排除暫停/取消，金額只算得出有填單價的） */
+function oa_month_amounts(PDO $db, string $fromYm, string $toYm): array
+{
+    $from = $fromYm . '-01';
+    $to   = date('Y-m-t', strtotime($toYm . '-01'));
+    $sql = "SELECT DATE_FORMAT(Order_date,'%Y-%m') ym, COUNT(*) orders,
+                   SUM(unit_price>0) px, SUM(Qty) qty,
+                   SUM(CASE WHEN unit_price>0 THEN Qty*unit_price ELSE 0 END) amount
+              FROM order_track
+             WHERE Order_date BETWEEN ? AND ?
+               AND (Order_status IS NULL OR Order_status <> 6)
+             GROUP BY ym";
+    $st = $db->prepare($sql);
+    $st->execute([$from, $to]);
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $o = (int)$r['orders']; $p = (int)$r['px'];
+        $out[(string)$r['ym']] = ['ym' => (string)$r['ym'], 'orders' => $o, 'px' => $p, 'qty' => (int)$r['qty'],
+                                  'amount' => (float)$r['amount'], 'cov' => $o ? round($p * 100 / $o, 1) : 0.0];
+    }
+    // 沒有訂單的月份也要有一格（不然移動平均會把沒資料的月份直接跳過而算錯）
+    $cur = $fromYm;
+    while ($cur <= $toYm) {
+        if (!isset($out[$cur])) $out[$cur] = ['ym' => $cur, 'orders' => 0, 'px' => 0, 'qty' => 0, 'amount' => 0.0, 'cov' => 0.0];
+        $cur = date('Y-m', strtotime($cur . '-01 +1 month'));
+    }
+    ksort($out);
+    return $out;
+}
+/**
+ * 移動平均監控。
+ *
+ * 一個一定要處理的資料事實：**2026-03 以前幾乎沒有人填單價**（2025-11 整個月 0 張），
+ * 那幾個月的「訂單金額」是 0，直接拿去算移動平均一定會低於安全水平而發出假警報。
+ * 所以每個月都要先看「有填單價的訂單佔比」（ma_min_coverage，預設 60%），
+ * 不到門檻的月份一律標成「資料不足」**不納入評估、也不觸發通知**，並在畫面與通知裡講明是哪幾個月。
+ */
+function oa_moving_avg(PDO $db, array $opt = []): array
+{
+    $s      = oa_settings($db);
+    $n      = (int)($opt['months'] ?? $s['ma_months']);
+    $need   = (int)($opt['consecutive'] ?? $s['ma_consecutive']);
+    $minCov = (int)($opt['min_coverage'] ?? $s['ma_min_coverage']);
+    $endYm  = (string)($opt['end_ym'] ?? date('Y-m', strtotime('first day of last month')));
+    $show   = max($need + 1, (int)($opt['show'] ?? 12));
+
+    $startYm = date('Y-m', strtotime($endYm . '-01 -' . ($show + $n) . ' month'));
+    $mon = oa_month_amounts($db, $startYm, $endYm);
+    $keys = array_keys($mon);
+
+    // 門檻：kpi＝該月的訂單 KPI 月目標金額；manual＝固定金額
+    $thrOf = function (string $ym) use ($db, $s) {
+        if ($s['ma_threshold_mode'] === 'manual') return (float)$s['ma_threshold_value'];
+        static $cache = [];
+        $y = (int)substr($ym, 0, 4); $m = (int)substr($ym, 5, 2);
+        if (!array_key_exists($y, $cache)) $cache[$y] = oa_kpi_monthly_targets(oa_kpi_iy($db, $y));
+        return $cache[$y][$m] ?? null;
+    };
+
+    $series = [];
+    foreach ($keys as $i => $ym) {
+        if ($i < $n - 1) continue;                       // 前面不足 n 個月，算不出移動平均
+        $win = array_slice($keys, $i - $n + 1, $n);
+        $sum = 0.0; $bad = [];
+        foreach ($win as $w) {
+            $sum += $mon[$w]['amount'];
+            if ($mon[$w]['cov'] < $minCov) $bad[] = $w;
+        }
+        $avg = $sum / $n;
+        $thr = $thrOf($ym);
+        $series[] = [
+            'ym' => $ym, 'avg' => $avg, 'amount' => $mon[$ym]['amount'],
+            'orders' => $mon[$ym]['orders'], 'cov' => $mon[$ym]['cov'],
+            'threshold' => $thr,
+            'window' => $win,
+            'unreliable' => $bad ? 1 : 0, 'unreliable_months' => $bad,
+            'below' => ($thr !== null && !$bad && $avg < $thr) ? 1 : 0,
+        ];
+    }
+    $series = array_slice($series, -$show);
+
+    // 連續低於安全水平幾個月（只看最新那幾筆；資料不足的月份一律中斷連續判定）
+    $streak = 0;
+    for ($i = count($series) - 1; $i >= 0; $i--) {
+        if (!empty($series[$i]['unreliable'])) break;
+        if (empty($series[$i]['below'])) break;
+        $streak++;
+    }
+    $last = $series ? $series[count($series) - 1] : null;
+    return [
+        'enabled' => (int)$s['ma_enabled'], 'months' => $n, 'need' => $need, 'min_coverage' => $minCov,
+        'mode' => $s['ma_threshold_mode'], 'manual_value' => (float)$s['ma_threshold_value'],
+        'series' => $series, 'streak' => $streak, 'hit' => ($streak >= $need) ? 1 : 0,
+        'end_ym' => $endYm, 'last' => $last,
+        'notify_users' => $s['ma_notify_users'],
+    ];
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 自動分析（把「要自己盯著圖表看才發現得了」的事直接寫成句子）
+ *
+ * 每一條都要附數字，不可以只講結論——沒有數字的結論沒有人敢拿去做決定。
+ * level：bad＝要處理／warn＝要注意／good＝正面／info＝說明
+ * ══════════════════════════════════════════════════════════════════ */
+function oa_insights(PDO $db, array $res, ?array $kpiAlert = null, ?array $ma = null): array
+{
+    $out = [];
+    $add = function ($level, $title, $detail, $metric = '') use (&$out) {
+        $out[] = ['level' => $level, 'title' => $title, 'detail' => $detail, 'metric' => $metric];
+    };
+    $m   = $res['meta'];
+    $cur = $res['kpi']['cur'];
+    $cmp = $res['kpi']['cmp'];
+    $cl  = $m['cmp_label'];
+    $useAmt = ($m['px_cov_cur'] >= 30 && $m['px_cov_cmp'] >= 30);
+    $fmt = function ($v) { return number_format((float)$v); };
+    $rate = function ($a, $b) { $b = (float)$b; if (!$b) return null; return round((($a - $b) / abs($b)) * 100, 1); };
+
+    /* ① 整體走勢 */
+    $qd = $rate($cur['qty'], $cmp['qty']);
+    $od = $rate($cur['orders'], $cmp['orders']);
+    if ($useAmt) {
+        $ad = $rate($cur['amount'], $cmp['amount']);
+        if ($ad !== null && $ad <= -10) {
+            $add('bad', '整體訂單金額衰退', '本期 ' . $fmt($cur['amount']) . ' 元，較' . $cl . '的 ' . $fmt($cmp['amount'])
+                 . ' 元減少 ' . $fmt($cmp['amount'] - $cur['amount']) . ' 元。', $ad . '%');
+        } elseif ($ad !== null && $ad >= 10) {
+            $add('good', '整體訂單金額成長', '本期 ' . $fmt($cur['amount']) . ' 元，較' . $cl . '增加 '
+                 . $fmt($cur['amount'] - $cmp['amount']) . ' 元。', '+' . $ad . '%');
+        }
+    } else {
+        $add('info', '金額無法比較，已改看數量', '本期有填單價的訂單佔 ' . $m['px_cov_cur'] . '%、'
+             . $cl . '只有 ' . $m['px_cov_cmp'] . '%，金額比較沒有意義，以下結論一律以「數量／筆數」為準。');
+    }
+    if ($qd !== null && $qd <= -10) {
+        $add('bad', '訂單數量衰退', '本期 ' . $fmt($cur['qty']) . ' 支，較' . $cl . '的 ' . $fmt($cmp['qty'])
+             . ' 支減少 ' . $fmt($cmp['qty'] - $cur['qty']) . ' 支。', $qd . '%');
+    } elseif ($qd !== null && $qd >= 10) {
+        $add('good', '訂單數量成長', '本期 ' . $fmt($cur['qty']) . ' 支，較' . $cl . '增加 '
+             . $fmt($cur['qty'] - $cmp['qty']) . ' 支。', '+' . $qd . '%');
+    }
+    if ($od !== null && abs($od) >= 10) {
+        $add($od < 0 ? 'warn' : 'good', '訂單筆數' . ($od < 0 ? '減少' : '增加'),
+             '本期 ' . $fmt($cur['orders']) . ' 筆，' . $cl . ' ' . $fmt($cmp['orders']) . ' 筆。', ($od > 0 ? '+' : '') . $od . '%');
+    }
+
+    /* ② 連續下滑（單期比較看不出來的趨勢型警訊） */
+    $tr = $res['trend']['cur'];
+    $idx = -1;
+    foreach ($tr as $i => $b) if ((int)$b['idx'] === (int)$m['idx']) { $idx = $i; break; }
+    if ($idx >= 2) {
+        $k = $useAmt ? 'amount' : 'qty';
+        $a0 = (float)$tr[$idx][$k]; $a1 = (float)$tr[$idx - 1][$k]; $a2 = (float)$tr[$idx - 2][$k];
+        if ($a0 < $a1 && $a1 < $a2 && $a2 > 0) {
+            $add('bad', '連續兩期下滑', '「' . $tr[$idx - 2]['label'] . '」→「' . $tr[$idx - 1]['label'] . '」→「'
+                 . $tr[$idx]['label'] . '」的' . ($useAmt ? '訂單金額' : '訂單數量') . '一路往下（'
+                 . $fmt($a2) . ' → ' . $fmt($a1) . ' → ' . $fmt($a0) . '），這種趨勢單看一期比較是看不出來的。',
+                 round(($a0 - $a2) / $a2 * 100, 1) . '%');
+        }
+    }
+
+    /* ③ 客戶集中度 */
+    $mk = $useAmt ? 'amount' : 'qty';
+    $tot = 0.0; $vals = [];
+    foreach ($res['clients'] as $c) { $v = (float)$c['cur'][$mk]; if ($v > 0) { $vals[] = ['n' => $c['name'], 'v' => $v]; $tot += $v; } }
+    usort($vals, function ($a, $b) { return $b['v'] <=> $a['v']; });
+    if ($tot > 0 && count($vals) >= 3) {
+        $t3 = $vals[0]['v'] + $vals[1]['v'] + $vals[2]['v'];
+        $p3 = round($t3 * 100 / $tot, 1);
+        if ($p3 >= 50) {
+            $add('warn', '客戶集中度偏高', '前三大客戶（' . $vals[0]['n'] . '、' . $vals[1]['n'] . '、' . $vals[2]['n']
+                 . '）就佔了本期' . ($useAmt ? '金額' : '數量') . ' ' . $p3 . '%，其中任何一家減單都會直接反映在總量上。', $p3 . '%');
+        }
+    }
+
+    /* ④ 流失客戶（基期有下單、本期完全沒有） */
+    $lost = array_values(array_filter($res['clients'], function ($c) { return $c['flag'] === 'lost'; }));
+    if ($lost) {
+        usort($lost, function ($a, $b) use ($mk) { return $b['cmp'][$mk] <=> $a['cmp'][$mk]; });
+        $sum = 0.0; foreach ($lost as $c) $sum += (float)$c['cmp'][$mk];
+        $names = array_slice(array_map(function ($c) { return $c['name']; }, $lost), 0, 6);
+        $add('bad', '有 ' . count($lost) . ' 家客戶本期完全沒有下單',
+             $cl . '合計 ' . $fmt($sum) . ($useAmt ? ' 元' : ' 支') . '，'
+             . implode('、', $names) . (count($lost) > 6 ? ' 等' : '') . '。建議業務逐一聯繫確認原因。',
+             count($lost) . ' 家');
+    }
+
+    /* ⑤ 新料號貢獻 */
+    if ($cur['parts'] > 0) {
+        $np = round($cur['new_parts'] * 100 / $cur['parts'], 1);
+        $no = $cur['orders'] ? round($cur['new_orders'] * 100 / $cur['orders'], 1) : 0;
+        $lv = $np >= 30 ? 'good' : ($np <= 10 ? 'warn' : 'info');
+        $add($lv, '新料號佔本期料號 ' . $np . '%',
+             '本期 ' . $fmt($cur['parts']) . ' 支料號裡有 ' . $fmt($cur['new_parts']) . ' 支是系統裡第一次出現，'
+             . '帶來 ' . $fmt($cur['new_orders']) . ' 筆訂單（佔 ' . $no . '%）'
+             . ($useAmt ? ('、金額 ' . $fmt($cur['new_amount']) . ' 元') : '') . '。'
+             . ($np <= 10 ? '新案源偏少，營收會越來越依賴既有料號的重複下單。' : ''), $np . '%');
+    }
+
+    /* ⑥ 全製／單製結構 */
+    if ($cur['orders'] > 0 && $cmp['orders'] > 0) {
+        $f0 = round($cur['full'] * 100 / $cur['orders'], 1);
+        $f1 = round($cmp['full'] * 100 / $cmp['orders'], 1);
+        $d  = round($f0 - $f1, 1);
+        if (abs($d) >= 5) {
+            $add($d < 0 ? 'warn' : 'good', '全製比例' . ($d < 0 ? '下降' : '上升'),
+                 '本期全製佔 ' . $f0 . '%（' . $fmt($cur['full']) . ' 筆），' . $cl . ' ' . $f1 . '%。'
+                 . ($d < 0 ? '全製單通常單價與毛利較高，比例下降會直接稀釋整體金額。' : ''), ($d > 0 ? '+' : '') . $d . '個百分點');
+        }
+    }
+
+    /* ⑦ 數量區間結構：小量單變多＝換線與管理成本上升 */
+    $bands = $res['bands'];
+    if ($bands && $cur['orders'] > 0) {
+        $b0 = $bands[0];
+        if ((float)$b0['pct_orders'] >= 30) {
+            $add('warn', '小量訂單佔比偏高', '數量在「' . $b0['label'] . '」的訂單有 ' . $fmt($b0['orders'])
+                 . ' 筆、佔 ' . $b0['pct_orders'] . '%，但只貢獻 ' . $b0['pct_qty'] . '% 的數量'
+                 . ($useAmt ? ('、' . $b0['pct_amount'] . '% 的金額') : '') . '。換線與管理成本會被這一段吃掉。',
+                 $b0['pct_orders'] . '%');
+        }
+    }
+
+    /* ⑧ 未開價訂單（這是資料品質，不是業績） */
+    $noPx = (int)$cur['orders'] - (int)$cur['px_orders'];
+    if ($noPx > 0) {
+        $add($m['px_cov_cur'] < 80 ? 'warn' : 'info', '本期有 ' . $fmt($noPx) . ' 筆訂單沒有填單價',
+             '這些訂單的金額一律以 0 計，所有金額類的數字都會被低估（本期覆蓋率 ' . $m['px_cov_cur'] . '%）。'
+             . '要讓金額分析可信，請補上單價。', $m['px_cov_cur'] . '%');
+    }
+
+    /* ⑨ 訂單 KPI 未達標 → 本月要衝刺 */
+    if ($kpiAlert && !empty($kpiAlert['below'])) {
+        $g = $kpiAlert['month_gap'];
+        $add('bad', '最近 ' . $kpiAlert['n'] .' 個月有 ' . $kpiAlert['bad_count'] . ' 個月訂單 KPI 未達標',
+             '未達標月份：' . implode('、', $kpiAlert['bad_list']) . '。'
+             . ($g === null ? '本年度沒有設定每月受訂目標金額，算不出本月還差多少。'
+                            : ('本月目標 ' . $fmt($kpiAlert['month_target']) . ' 元，目前已接 ' . $fmt($kpiAlert['month_got'])
+                               . ' 元，' . ($g > 0 ? ('還差 ' . $fmt($g) . ' 元、剩 ' . $kpiAlert['days_left'] . ' 天')
+                                                  : '已達標'))) . '。',
+             $kpiAlert['bad_count'] . '/' . $kpiAlert['n'] . ' 個月');
+    }
+
+    /* ⑩ 移動平均 */
+    if ($ma && !empty($ma['series'])) {
+        $last = $ma['last'];
+        if (!empty($ma['hit'])) {
+            $add('bad', '訂單金額移動平均已連續 ' . $ma['streak'] . ' 個月低於安全水平',
+                 '最近一期（' . $last['ym'] . '）前 ' . $ma['months'] . ' 個月移動平均 ' . $fmt($last['avg'])
+                 . ' 元，低於安全水平 ' . $fmt($last['threshold']) . ' 元。', $ma['streak'] . ' 個月');
+        } elseif (!empty($last['unreliable'])) {
+            $add('info', '移動平均暫時無法評估',
+                 '「' . implode('、', $last['unreliable_months']) . '」這幾個月有填單價的訂單不到 '
+                 . $ma['min_coverage'] . '%，金額不可信，已排除在評估之外（避免發出假警報）。');
+        }
+    }
+
+    return $out;
+}
+
+/**
+ * 畫面／列印／通知一律呼叫這一支：分析結果＋KPI 提醒＋移動平均＋自動分析。
+ * 三個附掛區塊刻意不寫進 oa_analyze()——那支是純計算，而這三個會去讀 KPI 模組與設定。
+ */
+function oa_report(PDO $db, array $opt = []): array
+{
+    $res = oa_analyze($db, $opt);
+    $kpi = null; $ma = null;
+    try { $kpi = oa_kpi_alert($db); }   catch (Throwable $e) { $kpi = ['enabled' => 0, 'error' => $e->getMessage()]; }
+    try { $ma  = oa_moving_avg($db); }  catch (Throwable $e) { $ma  = ['enabled' => 0, 'error' => $e->getMessage()]; }
+    $res['kpi_alert'] = $kpi;
+    $res['ma']        = $ma;
+    try { $res['insights'] = oa_insights($db, $res, $kpi, $ma); }
+    catch (Throwable $e) { $res['insights'] = []; }
+    return $res;
 }
 
 /** 有訂單資料的年度（下拉用） */

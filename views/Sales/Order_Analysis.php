@@ -24,6 +24,7 @@ include_once '../../src/common/_config.php';
 include_once '../../src/common/DBConnection.php';
 include_once '../../src/common/order_analysis_lib.php';
 include_once '../../src/common/role_features_helper.php';
+include_once '../../src/common/org_role_lib.php';   // eg_company_full_name()：列印大標題的公司全名（禁寫死）
 
 $db  = (new DBConnection())->getPDO();
 $uid = (int)($_SESSION['id'] ?? 0);
@@ -40,6 +41,9 @@ $years     = oa_years($db);
 $thisYear  = (int)date('Y');
 $defYear   = in_array($thisYear, $years, true) ? $thisYear : (int)$years[0];
 $roleLabel = $isAdmin ? '管理員' : ($canSet ? '訂單分析（可設定）' : ($canView ? '訂單分析（檢視）' : '無權限'));
+// 列印大標題＝本公司全名（ai-rules/16 第一節：動態取自客戶主檔標記「本公司」那一筆，禁寫死）
+$COMPANY = '';
+try { $COMPANY = eg_company_full_name($db); } catch (Throwable $e) { $COMPANY = ''; }
 function oaEsc($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
 ?>
 <!DOCTYPE html>
@@ -133,6 +137,30 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 .nav-jump a { font-size:12px; border:1px solid var(--line); background:#fff; color:#6B4423;
               border-radius:14px; padding:3px 12px; text-decoration:none; }
 .nav-jump a:hover { background:var(--sand); }
+/* 自動分析卡片 */
+.ins-list { display:flex; flex-direction:column; gap:6px; }
+.ins { display:flex; gap:10px; align-items:flex-start; border:1px solid var(--line); border-left-width:4px;
+       border-radius:6px; padding:7px 10px; background:#fffdfa; }
+.ins .ic { font-size:15px; line-height:20px; width:18px; text-align:center; flex:0 0 18px; }
+.ins .bd { flex:1 1 auto; min-width:0; }
+.ins .tt { font-weight:700; color:var(--ink); font-size:13px; }
+.ins .dt { font-size:12px; color:#6B4423; line-height:1.7; }
+.ins .mt { flex:0 0 auto; font-weight:700; font-size:13px; white-space:nowrap; }
+.ins-bad  { border-left-color:var(--coral); }           .ins-bad  .ic,.ins-bad  .mt { color:var(--coral); }
+.ins-warn { border-left-color:var(--amber); }           .ins-warn .ic,.ins-warn .mt { color:var(--amber-d); }
+.ins-good { border-left-color:#4F8A4F; }                .ins-good .ic,.ins-good .mt { color:#2E7D32; }
+.ins-info { border-left-color:#B9A78C; }                .ins-info .ic,.ins-info .mt { color:var(--muted); }
+/* 可點的料號（開圖面檢視） */
+.pno-link { color:#8a5a2b; border-bottom:1px dotted #8a5a2b; cursor:pointer; }
+.pno-link:hover { color:var(--coral); border-bottom-color:var(--coral); }
+/* 右下角回首頁 */
+.go-home { position:fixed; right:18px; bottom:18px; z-index:9000; width:52px; height:52px; border-radius:50%;
+           background:linear-gradient(135deg,#8a5a2b,#F0A24B); color:#fff; border:none; box-shadow:0 4px 14px rgba(0,0,0,.25);
+           display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer;
+           font-size:10px; font-weight:600; line-height:1.1; text-decoration:none; }
+.go-home:hover,.go-home:focus { color:#fff; text-decoration:none; filter:brightness(1.08); }
+.go-home i { font-size:17px; margin-bottom:1px; }
+@media print { .go-home { display:none !important; } }
 </style>
 </head>
 <!-- 側欄載入時維持收合（全站慣例 nav-sm） -->
@@ -198,6 +226,7 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
         含暫停/取消的訂單</label>
       <span class="sec-tools">
         <button class="btn btn-sm btn-warm" id="btnReload"><i class="fa fa-refresh"></i> 重新計算</button>
+        <button class="btn btn-sm btn-warm-o" id="btnPrint"><i class="fa fa-print"></i> 列印報告</button>
         <button class="btn btn-sm btn-warm-o" id="btnCsv"><i class="fa fa-file-excel-o"></i> CSV</button>
         <?php if ($canSet): ?>
         <button class="btn btn-sm btn-warm-o" id="btnSetting"><i class="fa fa-cog"></i> 設定</button>
@@ -213,12 +242,22 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
   </div>
 
   <div id="noteBar"></div>
+  <div id="kpiAlertBar"></div>
   <div class="nav-jump">
-    <a href="#secTrend">訂單趨勢</a><a href="#secNew">新訂單（新料號）</a><a href="#secProc">全製／單製</a>
-    <a href="#secBand">數量區間</a><a href="#secClient">客戶比較</a><a href="#secRank">客戶增減排名</a><a href="#secPart">受訂料號排名</a>
+    <a href="#secInsight">自動分析</a><a href="#secTrend">訂單趨勢</a><a href="#secNew">新訂單（新料號）</a><a href="#secProc">全製／單製</a>
+    <a href="#secBand">數量區間</a><a href="#secClient">客戶比較</a><a href="#secRank">客戶增減排名</a>
+    <a href="#secMa">訂單量監控</a><a href="#secPart">受訂料號排名</a>
   </div>
 
   <div id="kpiRow" class="kpi-row"></div>
+
+  <!-- ── 自動分析 ─────────────────────────────────────── -->
+  <div class="sec" id="secInsight">
+    <h4><i class="fa fa-lightbulb-o" style="color:var(--coral);"></i> 自動分析
+      <span class="hint">系統直接把「要自己盯著圖表看才發現得了」的事寫成結論，每一條都附數字</span>
+    </h4>
+    <div id="insightList" class="ins-list"></div>
+  </div>
 
   <!-- ── 趨勢 ─────────────────────────────────────────── -->
   <div class="sec" id="secTrend">
@@ -350,6 +389,23 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
     </div>
   </div>
 
+  <!-- ── 訂單量監控（移動平均）───────────────────────── -->
+  <div class="sec" id="secMa">
+    <h4><i class="fa fa-heartbeat" style="color:var(--amber-d);"></i> 訂單量監控（金額移動平均）
+      <span class="hint" id="maHint"></span>
+      <?php if ($canSet): ?>
+      <span class="sec-tools"><button class="btn btn-xs btn-warm-o" id="btnMaSetting"><i class="fa fa-cog"></i> 監控設定</button></span>
+      <?php endif; ?>
+    </h4>
+    <div id="maNote" class="oa-note" style="margin-bottom:10px;"></div>
+    <div id="chMa" class="chart-box"></div>
+    <table class="oa-t" id="tblMa" style="margin-top:10px;">
+      <colgroup><col style="width:12%"><col style="width:16%"><col style="width:12%"><col style="width:18%"><col style="width:16%"><col style="width:26%"></colgroup>
+      <thead><tr><th>月份</th><th>當月訂單金額</th><th>有單價佔比</th><th>前 N 月移動平均</th><th>安全水平</th><th>判定</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
   <!-- ── 料號排名 ─────────────────────────────────────── -->
   <div class="sec" id="secPart">
     <h4><i class="fa fa-cube" style="color:var(--amber-d);"></i> 受訂料號排名
@@ -369,6 +425,9 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 <?php endif; ?>
 </div><!-- /right_col -->
 </div></div>
+
+<!-- 右下角回首頁（使用者要求；列印時隱藏） -->
+<a href="../admin/dashboard.php" class="go-home" title="回首頁"><i class="fa fa-home"></i>首頁</a>
 
 <!-- ── 使用說明（鐵律7）──────────────────────────────── -->
 <div class="m-mask" id="helpUseMask">
@@ -503,6 +562,63 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
           <option value="unknown">無法判定（不歸類）</option>
         </select>
       </div>
+
+      <h4 style="font-size:15px;color:var(--amber-d);margin:18px 0 6px;">訂單 KPI 未達標提醒</h4>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">
+        讀「KPI 關鍵績效指標」的<b id="setKpiName">月份受訂目標達成金額</b>，
+        看最近幾個<b>已經結束的月份</b>有沒有未達標（本月還沒過完，拿半個月的數字判未達標一定是錯的，所以不看本月）。
+        有未達標就在頁面最上方顯示紅色提醒，並算出<b>本月離月目標還差多少、剩幾天</b>。
+        <span id="setKpiWarn" style="color:var(--coral);"></span>
+      </div>
+      <div class="oa-bar">
+        <label>看最近</label>
+        <input type="number" id="setKpiMonths" class="rm-in" style="width:70px;" min="1" max="12">
+        <label>個已結束的月份</label>
+      </div>
+
+      <h4 style="font-size:15px;color:var(--amber-d);margin:18px 0 6px;">訂單量監控（金額移動平均，自動通知）</h4>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">
+        每月自動評估一次：取「前 N 個月訂單金額的移動平均」，<b>連續 M 個月低於安全水平</b>就自動通知指定人員
+        （站內通知＋Web Push＋Telegram，內容附逐月數據與判定，並附開啟本頁的連結）。<br>
+        <b style="color:var(--coral);">資料品質保護</b>：訂單金額只算得出「有填單價」的訂單，
+        當月有填單價的訂單佔比低於下面設定的門檻時，該月視為<b>資料不足、不納入評估</b>——
+        本站 2026-03 以前幾乎沒有人填單價，不擋的話每個月都會發出假警報。
+      </div>
+      <div class="oa-bar">
+        <label style="font-weight:normal;"><input type="checkbox" id="setMaEnabled" data-eg-skip> 啟用自動通知</label>
+        <label>移動平均取前</label>
+        <input type="number" id="setMaMonths" class="rm-in" style="width:64px;" min="2" max="12">
+        <label>個月，連續</label>
+        <input type="number" id="setMaCons" class="rm-in" style="width:56px;" min="1" max="6">
+        <label>個月低於安全水平就通知</label>
+      </div>
+      <div class="oa-bar" style="margin-top:6px;">
+        <label>安全水平</label>
+        <select id="setMaMode" class="form-control input-sm" style="width:210px;">
+          <option value="kpi">該年度訂單 KPI 的月受訂目標金額</option>
+          <option value="manual">自訂金額</option>
+        </select>
+        <input type="number" id="setMaValue" class="rm-in" style="width:130px;" min="0" data-eg-hint="每月安全水平金額（元）">
+        <label>當月有單價佔比低於</label>
+        <input type="number" id="setMaCov" class="rm-in" style="width:64px;" min="0" max="100">
+        <label>% 視為資料不足</label>
+      </div>
+      <div class="oa-bar" style="margin-top:6px;align-items:flex-start;">
+        <label style="padding-top:4px;">收通知人員</label>
+        <div style="flex:1 1 auto;min-width:240px;">
+          <div class="oa-bar" style="margin-bottom:4px;">
+            <select id="setMaUserPick" class="form-control input-sm" style="width:260px;"
+                    data-eg-filter="輸入姓名或部門篩選…"></select>
+            <button type="button" class="btn btn-xs btn-warm-o" id="setMaUserAdd">＋ 加入</button>
+          </div>
+          <div class="chips" id="setMaUsers"></div>
+        </div>
+      </div>
+      <div class="oa-bar" style="margin-top:8px;">
+        <button type="button" class="btn btn-xs btn-warm-o" id="btnMaPreview"><i class="fa fa-flask"></i> 用目前設定試算（只計算，不會發通知）</button>
+        <span id="maPreviewOut" style="font-size:12px;color:#6B4423;"></span>
+      </div>
+
       <div class="err-txt" id="setErr"></div>
     </div>
     <div class="m-foot">
@@ -519,6 +635,10 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../code/highcharts.js"></script>
+<!-- exporting：列印報告要把圖表轉成 SVG 放進列印版（chart.getSVG() 由這支提供） -->
+<script src="../../code/modules/exporting.js"></script>
+<!-- 列印紀錄（ai-rules/23：會列印的頁面一律留下列印時間·列印人·登入電腦·文件名稱） -->
+<script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <!-- 日期顯示一律走共用檔（ai-rules/20：YYYY.MM.DD） -->
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <!-- 輸入欄位共用規則（雙擊清空／聚焦全選／Enter 跳欄／可增列表格／下拉打字篩選） -->
@@ -530,6 +650,27 @@ $(document).ready(function(){ $('#sidebar-menu').css('visibility','visible'); })
 var OA_API  = '../../src/store/OrderAnalysis_API.php';
 var OA_CSRF = '<?= oaEsc($CSRF) ?>';
 var CAN_SET = <?= $canSet ? 'true' : 'false' ?>;
+var COMPANY = <?= json_encode($COMPANY, JSON_UNESCAPED_UNICODE) ?>;
+
+/* 點料號 → 開圖面檢視（與訂單追蹤頁同一種開法：帶料號主檔 PK 的獨立視窗）。
+   一定要帶 pk＝d_setting.d_id：同名料號常有好幾筆主檔分屬不同客戶，只帶料號文字會開到別家的圖。 */
+function oaOpenDrawing(pid, pno){
+  pid = parseInt(pid, 10) || 0;
+  if(!pid){ alert('這一筆沒有綁定料號主檔，無法開啟圖面檢視。'); return; }
+  var w = screen.availWidth, h = screen.availHeight;
+  var pw = Math.min(1400, Math.round(w * 0.85)), ph = Math.min(900, Math.round(h * 0.88));
+  window.open('../pm/bom_viewer.php?pk=' + encodeURIComponent(pid), 'drawing_' + pid,
+    'width=' + pw + ',height=' + ph + ',left=' + Math.round((w - pw) / 2) + ',top=' + Math.round((h - ph) / 2)
+    + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no');
+}
+/* 料號儲存格：有綁主檔才可點 */
+function pnoCell(p){
+  var t = esc(p.pno);
+  if(!p.pid) return t + ' <span style="font-size:10px;color:#a08a6f;" title="沒有綁定料號主檔，無法開圖">（未綁主檔）</span>';
+  return '<span class="pno-link" data-pid="' + p.pid + '" title="點一下開啟圖面檢視（圖面／報價／訂單附件）">'
+       + '<i class="fa fa-picture-o" style="font-size:11px;opacity:.75;"></i> ' + t + '</span>';
+}
+$(document).on('click', '.pno-link', function(){ oaOpenDrawing($(this).data('pid')); });
 
 /* ai-rules/10 暖色調色盤（同語意同色、跨頁一致；禁止隨機或 HSL 上色） */
 var PAL = ['#DD5138','#F0A24B','#B06F27','#E8C07A','#8A5A2B','#D98A5F','#C9A227','#A34E2A','#EBD3A8','#7A4A34'];
@@ -669,8 +810,9 @@ function load(){
   $.post(OA_API, req, function(r){
     if(!r || !r.ok){ $('#noteBar').html('<div class="oa-note oa-warn">'+esc((r&&r.error)||'載入失敗')+'</div>'); return; }
     DATA = r;
-    renderNote(); renderKpi(); renderTrend(); renderNew(); renderProc(); renderBand();
-    renderClient(); renderRank(); renderParts();
+    renderNote(); renderKpiAlert(); renderKpi(); renderInsights();
+    renderTrend(); renderNew(); renderProc(); renderBand();
+    renderClient(); renderRank(); renderMa(); renderParts();
   }, 'json').fail(function(x){
     $('#noteBar').html('<div class="oa-note oa-warn">載入失敗（HTTP '+x.status+'）'
       + (x.status===403?'：權限不足或連線憑證失效，請重新整理頁面':'') + '</div>');
@@ -702,6 +844,90 @@ function renderNote(){
        + (m.warn.no_part   ? '　有 <b>'+nf(m.warn.no_part)+'</b> 筆訂單沒有綁料號主檔，無法判定是不是新料號。' : ''));
   $('#noteBar').html('<div class="oa-note">'+h.join('<br>')+'</div>');
   $('.cmpLab').text(m.cmp_label);
+}
+
+/* ── 訂單 KPI 未達標 → 本月要衝刺（使用者要求的提醒）──────── */
+function renderKpiAlert(){
+  var a = DATA.kpi_alert;
+  if(!a || !a.below){ $('#kpiAlertBar').html(''); return; }
+  var gap = a.month_gap;
+  var h = '<div class="oa-note oa-warn" style="border-left-color:var(--coral);background:#FDF2EE;">'
+    + '<div style="font-size:15px;font-weight:700;color:var(--coral);margin-bottom:4px;">'
+    + '<i class="fa fa-exclamation-triangle"></i> 本月要衝刺：最近 '+a.n+' 個月有 '+a.bad_count+' 個月「'+esc(a.indicator)+'」未達標</div>'
+    + '未達標月份：<b>'+esc(a.bad_list.join('、'))+'</b>（判定與目標值一律取自 KPI 關鍵績效指標頁的年度設定，本頁不另設一套）。<br>';
+  if(gap === null){
+    h += '本年度沒有設定「每月受訂目標金額」，所以算不出本月還差多少；請到 KPI 設定頁補上月目標。';
+  }else{
+    h += '<b>'+a.this_year+'/'+a.this_month+'月</b> 目標 <b>'+money(a.month_target)+'</b> 元，'
+       + '目前已接 <b>'+money(a.month_got)+'</b> 元（'+nf(a.px_orders)+'/'+nf(a.orders)+' 張有填單價）'
+       + (gap > 0 ? ('，<b style="color:var(--coral);font-size:15px;">還差 '+money(gap)+' 元</b>，只剩 <b>'+a.days_left+'</b> 天。')
+                  : '，<b style="color:#2E7D32;">本月已達標</b>。');
+  }
+  h += '<br><span style="color:var(--muted);">※ 本月還沒過完，所以「未達標」只看已經結束的月份；'
+     + '本月進度只是提醒衝刺用，不代表本月已未達標。</span></div>';
+  $('#kpiAlertBar').html(h);
+}
+
+/* ── 自動分析 ───────────────────────────────────────── */
+function renderInsights(){
+  var list = DATA.insights || [], icons = {bad:'fa-times-circle', warn:'fa-exclamation-circle',
+                                           good:'fa-check-circle', info:'fa-info-circle'};
+  if(!list.length){ $('#insightList').html('<div style="font-size:12px;color:var(--muted);">本期沒有需要特別指出的變化。</div>'); return; }
+  var order = {bad:0, warn:1, good:2, info:3};
+  list = list.slice().sort(function(a,b){ return (order[a.level]||9) - (order[b.level]||9); });
+  var h = '';
+  list.forEach(function(x){
+    h += '<div class="ins ins-'+esc(x.level)+'">'
+       + '<div class="ic"><i class="fa '+(icons[x.level]||'fa-info-circle')+'"></i></div>'
+       + '<div class="bd"><div class="tt">'+esc(x.title)+'</div><div class="dt">'+esc(x.detail)+'</div></div>'
+       + (x.metric ? '<div class="mt">'+esc(x.metric)+'</div>' : '') + '</div>';
+  });
+  $('#insightList').html(h);
+}
+
+/* ── 訂單量監控（移動平均）─────────────────────────── */
+function renderMa(){
+  var ma = DATA.ma;
+  if(!ma || !ma.series){ $('#maNote').html('無法計算'); return; }
+  var thrTxt = ma.mode === 'manual' ? ('自訂 '+money(ma.manual_value)+' 元／月') : '該年度訂單 KPI 的月受訂目標金額';
+  var st = ma.hit ? ('<b style="color:var(--coral);">已連續 '+ma.streak+' 個月低於安全水平（達到通知條件）</b>')
+                  : (ma.streak ? ('目前連續 '+ma.streak+' 個月低於安全水平（需連續 '+ma.need+' 個月才通知）')
+                               : '<b style="color:#2E7D32;">目前正常</b>');
+  var bad = (ma.series||[]).filter(function(s){ return s.unreliable; }).map(function(s){ return s.ym; });
+  $('#maNote').html(
+      '判定方式：取「前 <b>'+ma.months+'</b> 個月訂單金額的移動平均」，連續 <b>'+ma.need+'</b> 個月低於安全水平就自動通知。'
+    + '　安全水平＝'+esc(thrTxt)+'。　狀態：'+st
+    + '<br>自動通知：<b>'+(ma.enabled?'已啟用':'未啟用')+'</b>'
+    + (ma.notify_users && ma.notify_users.length ? ('，收件 '+ma.notify_users.length+' 人') : '，尚未指定收通知人員')
+    + '。評估每月一次（由系統順路觸發，不需要工作排程器）。'
+    + (bad.length ? ('<br><b>'+bad.length+'</b> 個月因「有填單價的訂單不到 '+ma.min_coverage
+                     +'%」視為資料不足、不納入評估（'+esc(bad.join('、'))+'）——不擋的話會發出假警報。') : ''));
+  $('#maHint').text('每月自動評估，連續低於安全水平就通知指定人員');
+
+  var cats = ma.series.map(function(s){ return s.ym; });
+  chart('chMa', opt({
+    xAxis:{ categories:cats },
+    yAxis:{ title:{text:'金額（萬元）',style:{fontSize:'11px',color:'#a08a6f'}}, gridLineColor:'#F0E8DC',
+            labels:{style:{fontSize:'10px',color:'#a08a6f'}} },
+    tooltip:{ shared:true, style:{fontSize:'11px'} },
+    series:[
+      { name:'當月訂單金額', type:'column', color:C_SAND, borderRadius:3,
+        data: ma.series.map(function(s){ return { y:wan(s.amount), color: s.unreliable ? '#E0D6C6' : C_SAND }; }) },
+      { name:'前'+ma.months+'月移動平均', type:'line', color:C_AMBER, lineWidth:3, marker:{radius:4},
+        data: ma.series.map(function(s){ return { y:wan(s.avg), color: s.below ? C_CORAL : C_AMBER }; }) },
+      { name:'安全水平', type:'line', color:C_CORAL, dashStyle:'ShortDash', lineWidth:2, marker:{enabled:false},
+        data: ma.series.map(function(s){ return s.threshold===null? null : wan(s.threshold); }) }
+    ]
+  }));
+  var h = '';
+  ma.series.forEach(function(s){
+    var judge = s.unreliable ? '<span class="badge-warn">資料不足，不評估</span>'
+              : (s.below ? '<span class="badge-new">低於安全水平</span>' : '<span style="color:#2E7D32;">正常</span>');
+    h += '<tr><td>'+esc(s.ym)+'</td><td class="n">'+money(s.amount)+'</td><td class="n">'+nf1(s.cov)+'%</td>'
+       + '<td class="n">'+money(s.avg)+'</td><td class="n">'+(s.threshold===null?'未設定':money(s.threshold))+'</td>'
+       + '<td>'+judge+(s.unreliable?('（'+esc(s.unreliable_months.join('、'))+'）'):'')+'</td></tr>';
+  });
+  $('#tblMa tbody').html(h||'<tr><td colspan="6" style="text-align:center;color:#a08a6f;">沒有資料</td></tr>');
 }
 
 /* ── KPI ────────────────────────────────────────────── */
@@ -814,7 +1040,7 @@ function renderNewTable(){
   (DATA.new_list||[]).forEach(function(p){
     if(kw && (String(p.pno).toLowerCase().indexOf(kw)<0 && String(p.cname).toLowerCase().indexOf(kw)<0)) return;
     n++;
-    h += '<tr><td>'+esc(p.pno)+'</td><td>'+esc(p.cname)+'</td><td>'+dispDate(p.first)+'</td>'
+    h += '<tr><td>'+pnoCell(p)+'</td><td>'+esc(p.cname)+'</td><td>'+dispDate(p.first)+'</td>'
        + '<td style="text-align:center;">'+esc(lab[p.fsrc]||p.fsrc||'—')+'</td>'
        + '<td class="n">'+nf(p.orders)+'</td><td class="n">'+nf(p.qty)+'</td>'
        + '<td class="n">'+(p.px? money(p.amount) : '<span style="color:#a08a6f;">未開價</span>')+'</td></tr>';
@@ -1022,7 +1248,7 @@ function renderParts(){
   }));
   var fmt = isAmt? money : nf, h='';
   (DATA.rank_parts||[]).forEach(function(p, i){
-    h += '<tr><td class="n">'+(i+1)+'</td><td>'+esc(p.pno)+'</td><td>'+esc(p.cname)+'</td>'
+    h += '<tr><td class="n">'+(i+1)+'</td><td>'+pnoCell(p)+'</td><td>'+esc(p.cname)+'</td>'
        + '<td class="n">'+nf(p.cur.orders)+'</td><td class="n">'+nf(p.cur.qty)+'</td>'
        + '<td class="n">'+money(p.cur.amount)+'</td>'
        + '<td class="n">'+deltaHtml(p.cur[m.rank_metric], p.cmp[m.rank_metric], fmt)+'</td>'

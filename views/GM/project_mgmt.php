@@ -287,6 +287,12 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         font-weight:normal;cursor:pointer;}
 .ss-row.on{background:#FDF3E4;border-color:#E0B277;}
 .ss-row input{margin-right:6px;}
+
+/* 送簽後的鎖定版規劃表：欄位照舊全列，排版壓緊 */
+.pj-tight th,.pj-tight td{padding:2px 4px !important;font-size:12px !important;line-height:17px !important;}
+.pj-tight td.l{text-align:left;}
+.dep-par{display:inline-block;padding:0 4px;font-size:11px;line-height:15px;border-radius:3px;
+         background:#F7E0BD;color:#7a4a18;}
 </style>
 </head>
 <body class="nav-sm">

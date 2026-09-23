@@ -202,6 +202,10 @@ case 'get':
     try { prj_bom_sync($db, $pid, $uname, true); } catch (Throwable $e) {}
     // 「送首件檢驗」是系統固定環節：只要專案已經有目標就要看得到那一列（不必等到存過規劃表）
     try { prj_fai_ensure_task($db, $pid); } catch (Throwable $e) {}
+    /* 偵測得到的佐證直接套用（順路觸發）：使用者要求「綁定後自動認定已完成、進度 100%，
+       不需另外填回報進度」，所以在開專案的當下就把該補的完成日與負責人補上，
+       畫面看到的與資料庫存的才是同一份（只填空的，人工填過的一律不動）。 */
+    try { prj_auto_fill_tasks($db, $pid, $prj); } catch (Throwable $e) {}
     jout([
         'project'   => $prj,
         'goals'     => prj_goals($db, $pid),
@@ -921,18 +925,20 @@ case 'plan_save':
                 $tStatus,
                 prj_tag_csv(prj_tag_ids((string)($t['tag_ids'] ?? ''))),
                 trim((string)($t['note'] ?? '')), $j,
+                /* 流程相依：只收 par／seq 兩種，第一列一律 seq（沒有「上一列」可以並行） */
+                ($j > 0 && (string)($t['dep_mode'] ?? '') === 'par') ? 'par' : 'seq',
             ];
             if ($tid) {
                 $db->prepare("UPDATE project_task SET goal_id=?, task_name=?, plan_start=?, plan_end=?, act_start=?,
                                     act_end=?, owner_id=?, owner_name=?, owner_dept_id=?, progress=?, progress_auto=?,
-                                    is_milestone=?, status_code=?, tag_ids=?, note=?, sort_order=?
+                                    is_milestone=?, status_code=?, tag_ids=?, note=?, sort_order=?, dep_mode=?
                               WHERE task_id=? AND project_id=?")
                    ->execute(array_merge($args, [$tid, $pid]));
             } else {
                 $db->prepare("INSERT INTO project_task (goal_id, task_name, plan_start, plan_end, act_start, act_end,
                                     owner_id, owner_name, owner_dept_id, progress, progress_auto, is_milestone,
-                                    status_code, tag_ids, note, sort_order, project_id)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                                    status_code, tag_ids, note, sort_order, dep_mode, project_id)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                    ->execute(array_merge($args, [$pid]));
                 $tid = (int)$db->lastInsertId();
             }

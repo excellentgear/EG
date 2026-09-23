@@ -47,7 +47,7 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 // 卻永遠存不進去（見 src/common/_config.php 的防護說明）。
 $WRITE = ['create', 'save', 'submit', 'resubmit', 'sign_stage', 'reject', 'set_review_units',
           'sign_review', 'save_stage_fields', 'delete', 'save_setting', 'save_asdoc', 'log_print',
-          'attach_save', 'attach_del'];
+          'attach_save', 'attach_del', 'bulk_sign', 'fix_sign'];
 if (in_array($action, $WRITE, true)) {
     if ($uid <= 0) jerr('登入已逾時，請重新登入後再儲存（您填的內容還在，重新登入後再按一次即可）', 401, ['code' => 'LOGIN']);
     $tok = $_POST['csrf'] ?? '';
@@ -121,9 +121,13 @@ function ec_decorate(PDO $db, array $r, array $P, int $uid): array
     $r['can_sign']     = ($stage !== '' && $stage !== 'REVIEW'
                           && ec_can_sign_stage($db, $r, $stage, $uid, (bool)$P['canAdmin'])) ? 1 : 0;
     // 使用者本身就在該課室時，可以提早把自己那一段填好（填但不簽）
+    // ★這裡要掃**全部有欄位可填的關卡**，不能只掃 EC_STAGE_DEPT（那份只有倉管與技術課）——
+    //   漏掉「核准」的話，管理員在單子走到核准之前填不了核示結果，
+    //   於是「一次代簽全部」永遠會卡在「請選擇核示結果」而完全用不起來（實測踩到）。
     $r['prefill'] = [];
-    foreach (array_keys(EC_STAGE_DEPT) as $st)
-        if (ec_can_prefill_stage($db, $r, $st, $uid, (bool)$P['canAdmin'])) $r['prefill'][] = $st;
+    foreach (array_keys(EC_STAGES) as $st)
+        if (ec_stage_editable_fields($st) && ec_can_prefill_stage($db, $r, $st, $uid, (bool)$P['canAdmin']))
+            $r['prefill'][] = $st;
     $r['my_review_units'] = [];
     if ($stage === 'REVIEW') {
         foreach (ec_review_rows($db, (int)$r['ec_id']) as $rv) {
@@ -258,7 +262,21 @@ try {
         // 附件：已選的（含編號）＋各段可挑的標籤＋這個變更方式的附件規則
         $attachCats = [];
         foreach (array_keys(EC_ATTACH_SLOTS) as $slot) $attachCats[$slot] = ec_attach_allowed_cats($db, $slot);
+        // 各簽章格目前蓋的是誰（畫面的「簽核紀錄」直接用這一份，不必從 approval_record 湊，
+        // 申請人那一格本來就沒有 approval_record）。候選名單是重運算，這裡不帶，
+        // 要代簽時才另外打 sign_slots。
+        $slotState = [];
+        foreach (ec_sign_slots($db, $r) as $s) {
+            $st = ec_slot_state($db, $r, (string)$s['key']);
+            $slotState[] = ['key' => $s['key'], 'label' => $s['label'], 'kind' => $s['kind'],
+                            'signed' => $st['signed'], 'signer_name' => $st['name'],
+                            'signed_at' => $st['at'],
+                            // proxy_name 只給管理員看（畫面上的橘色小籤），一般使用者拿不到
+                            'proxy_name' => $P['canAdmin'] ? $st['proxy_name'] : '',
+                            'can_fix' => ($P['canAdmin'] && $st['signed'] && $st['proxy_name'] !== '') ? 1 : 0];
+        }
         jout(['row' => $r, 'signers' => $signers, 'reviews' => $reviews,
+              'sign_slots' => $slotState,
               'attachments' => ec_attach_rows($db, $ecId),
               'attach_cats' => $attachCats,
               'attach_rule' => ec_attach_rule($db, (string)$r['change_type']),
@@ -293,14 +311,18 @@ try {
         // 非管理員不可改申請人（連自己開的單也不行改成別人）
         if (!$P['canAdmin']) { $p['applicant_id'] = $uid; $p['applicant_name'] = $uname; }
         $p = ec_fix_applicant_post($db, $p);
+        // 日期只有草稿／被退回時可以改，送出後一律鎖住（使用者要求 2026-09-23）——
+        // 這一道**連管理員都不能繞過**：不採信前端送來的日期，直接沿用資料庫現有值
+        $dateLocked = ec_date_locked($r);
+        if ($dateLocked) $p['apply_date'] = (string)$r['apply_date'];
         $db->prepare("UPDATE eng_change SET apply_date=?, customer_id=?, customer_name=?, d_id=?, part_no=?,
                         apply_dept_id=?, apply_dept_name=?, applicant_id=?, applicant_name=?,
                         change_type=?, change_reason=?, updated_by=?, updated_at=NOW() WHERE ec_id=?")
            ->execute([$p['apply_date'], ($p['customer_id'] !== '' ? $p['customer_id'] : null), $p['customer_name'], $p['d_id'] ?: null, $p['part_no'],
                       $p['apply_dept_id'] ?: null, $p['apply_dept_name'], $p['applicant_id'] ?: null, $p['applicant_name'],
                       $p['change_type'], $p['change_reason'], $uid, $ecId]);
-        // 日期改了就重編文件編號（前八碼永遠＝表單上的日期）
-        ec_sync_doc_no($db, $ecId);
+        // 日期改了就重編文件編號（前八碼永遠＝表單上的日期）；日期鎖住時不會變，不必重編
+        if (!$dateLocked) ec_sync_doc_no($db, $ecId);
         $r2 = ec_row($db, $ecId);
         jout(['doc_no' => (string)$r2['doc_no'], 'errors' => ec_validate($db, $r2)]);
     }
@@ -363,7 +385,53 @@ try {
         // 管理員代簽時可以指定「代誰簽」（這一關有好幾位合格簽核人時）；
         // 非管理員送這個參數沒有作用——他本來就只能以自己的身分簽。
         $signAs = $P['canAdmin'] ? (int)($_POST['sign_as'] ?? 0) : 0;
-        jout(ec_sign_stage($db, $ecId, $stage, $uid, $uname, $fields, $signAs));
+        // 簽章時間也只有管理員代簽時可以自己指定（不可早於申請單日期，lib 會再擋一次）
+        $signAt = $P['canAdmin'] ? trim((string)($_POST['sign_at'] ?? '')) : '';
+        jout(ec_sign_stage($db, $ecId, $stage, $uid, $uname, $fields, $signAs, $signAt));
+    }
+
+    /* -------- 代簽（管理員）：一次代簽全部／事後更正某一格 -------- */
+
+    /** 這張單有哪些簽章格、目前誰簽的、各格可以挑誰代簽（含選定日期當天的請假標註） */
+    if ($action === 'sign_slots') {
+        if (!$P['canAdmin']) jerr('只有管理員可以代簽', 403);
+        $ecId = (int)($_GET['id'] ?? 0);
+        $r = ec_row($db, $ecId);
+        if (!$r) jerr('查無此申請單', 404);
+        $date = trim((string)($_GET['date'] ?? ''));
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) $date = ec_db_now($db)['d'];
+        $slots = [];
+        foreach (ec_sign_slots($db, $r) as $s) {
+            $st = ec_slot_state($db, $r, (string)$s['key']);
+            $slots[] = [
+                'key' => $s['key'], 'label' => $s['label'], 'kind' => $s['kind'],
+                'signed' => $st['signed'], 'signer_id' => $st['user_id'], 'signer_name' => $st['name'],
+                'signed_at' => $st['at'], 'proxy_name' => $st['proxy_name'],
+                // 只有管理員代簽過的格子才可以事後更正（本人自己簽的不可以被改掉）
+                'can_fix' => ($st['signed'] && $st['proxy_name'] !== '') ? 1 : 0,
+                // 這一格對應的關卡還缺哪些必填欄位（代簽前就讓管理員看到，不要按下去才報）
+                'missing' => ($s['kind'] === 'stage' && !$st['signed'])
+                             ? array_values(ec_validate_stage($r, (string)$s['key'], $db, (int)$r['ec_id'])) : [],
+                'candidates' => ec_slot_candidates($db, $r, (string)$s['key'], $date),
+            ];
+        }
+        jout(['slots' => $slots, 'date' => $date, 'apply_date' => (string)$r['apply_date'],
+              'today' => ec_db_now($db)['d']]);
+    }
+
+    if ($action === 'bulk_sign') {
+        if (!$P['canAdmin']) jerr('只有管理員可以代簽', 403);
+        $ecId  = (int)($_POST['ec_id'] ?? 0);
+        $picks = json_decode((string)($_POST['picks'] ?? '{}'), true);
+        jout(ec_bulk_proxy_sign($db, $ecId, is_array($picks) ? $picks : [],
+                                trim((string)($_POST['date'] ?? '')), $uid, $uname));
+    }
+
+    if ($action === 'fix_sign') {
+        if (!$P['canAdmin']) jerr('只有管理員可以更正簽章', 403);
+        $ecId = (int)($_POST['ec_id'] ?? 0);
+        jout(ec_fix_sign($db, $ecId, trim((string)($_POST['slot'] ?? '')),
+                         (int)($_POST['user_id'] ?? 0), trim((string)($_POST['sign_at'] ?? '')), $uid, $uname));
     }
 
     if ($action === 'reject') {

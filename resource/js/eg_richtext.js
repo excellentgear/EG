@@ -275,6 +275,8 @@
        + btn('justifyRight', 'align-right', '靠右') + btn('justifyFull', 'align-justify', '兩端對齊')
        + '<span class="egrt-sep"></span>'
        + btn('egOutdent', 'outdent', '減少縮排') + btn('egIndent', 'indent', '增加縮排')
+       + btn('egNumIndent', 'sort-numeric-asc', '依編號自動縮排：整份文件重新掃一遍，'
+           + '段落開頭是 1. / 1.1 / 1.1.1 這種階層編號的，依「.」的段數自動排縮並對齊數字後的內容')
        + '<span class="egrt-sep"></span>'
        // 上下對齊（作用在游標所在的表格儲存格；整張表選起來就整張套用）
        + btn('egVaTop', 'angle-up', '儲存格靠上')
@@ -491,6 +493,78 @@
       else b.style.marginLeft = nx + 'em';
     });
     return blocks.length > 0;
+  }
+
+  /* ── 依編號自動縮排（使用者 2026-09-23）───────────────────────────────────
+     「2.1、2.2 是 2. 底下，所以要自動排縮；另外 2.1、2.2 的內容也要對齊數字標籤」。
+     判斷法：段落開頭若是 1. / 1.1 / 6.1.1.2 這種階層編號，用「.」分成幾段就是第幾層，
+     階層每深一層縮排一級（跟手動按縮排鈕用同一個 INDENT_STEP，兩者才不會兜不起來）；
+     同一段落換行後要對齊「數字後面的內容」不是對齊數字本身，靠吊掛縮排做到
+     （padding-left 把整段推進去、text-indent 用等量負值只把第一行往回拉，
+     第一行因此停在「數字」的位置、換行後的每一行都停在「內容」的位置）。
+     吊掛的寬度**用 canvas 實際量字寬**，不用「一個字幾 px」用猜的——
+     這份文件是中西文混排（標楷體/Times New Roman 交錯），猜的話寬度一定兜不準。 */
+  // 匯入的文件常常沒有在編號後面留空白（「2.範圍：」「2.1分發」都直接接文字），
+  // 所以**不強制要求後面有空白**——判斷是不是編號改看「有沒有點」：
+  // 只有一段數字時必須帶著句點（「2.」才算，光是「10月份」的 10 不算）；
+  // 有兩段以上（「2.1」本身就帶了點）不論後面有沒有句點都算。
+  var NUM_LABEL_RE = /^([\s　]*)(\d{1,2}(?:\.\d{1,2}){0,5})(\.?)/;
+
+  /** 段落文字開頭是不是階層編號；不是就回 null，是的話回 {depth,label}（label 含編號本身、可能的句點與緊接的空白，供量寬用） */
+  function numLabelMatch(text) {
+    text = text || '';
+    var m = NUM_LABEL_RE.exec(text);
+    if (!m) return null;
+    var num = m[2], depth = num.split('.').length;
+    if (depth === 1 && !m[3]) return null;   // 純數字開頭又沒有點——當內文看，不當編號（避免「10月份」誤判）
+    var wsAfter = /^[\s　]*/.exec(text.slice(m[0].length))[0];
+    return { depth: depth, label: m[0] + wsAfter };
+  }
+
+  var _numMeasureCanvas = null;
+  /** 量這段文字（通常是「編號＋空白」）在該區塊實際字型下的寬度，回傳 {px, fontSizePx} */
+  function measureLabelPx(block, label) {
+    if (!_numMeasureCanvas) _numMeasureCanvas = d.createElement('canvas');
+    var ctx = _numMeasureCanvas.getContext('2d');
+    // 字型盡量取「第一個真的有文字的節點」的樣式——匯入的內容常把字型字級包在
+    // 段落裡層的 <span> 上，段落本身沒設定的話這裡量出來的寬度會不準
+    var walker = d.createTreeWalker(block, NodeFilter.SHOW_TEXT, null);
+    var n = walker.nextNode();
+    var el = (n && n.parentNode && n.parentNode.nodeType === 1) ? n.parentNode : block;
+    var cs = w.getComputedStyle(el);
+    ctx.font = cs.font || (cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily);
+    return { px: ctx.measureText(label).width, fontSizePx: parseFloat(cs.fontSize) || 16 };
+  }
+
+  /** 對單一區塊套用「依編號自動縮排」。不是編號段落就不動它（不清掉別的手動縮排）。回傳有沒有套用到 */
+  function applyNumIndent(block) {
+    if (!block || block.nodeType !== 1) return false;
+    var m = numLabelMatch(block.textContent);
+    if (!m) return false;
+    var level = Math.max(0, m.depth - 1);
+    var meas = measureLabelPx(block, m.label);
+    var hangEm = Math.min(9.9, Math.max(0, Math.round((meas.px / meas.fontSizePx) * 10) / 10));
+    var mgEm = Math.min(INDENT_MAX, level * INDENT_STEP);
+    block.style.marginLeft = mgEm ? (mgEm + 'em') : '';
+    // padding-left 這個個別屬性不在白名單裡（見 richtext_lib.php），要用 padding 簡寫
+    block.style.padding = '0em 0em 0em ' + hangEm.toFixed(1) + 'em';
+    block.style.textIndent = '-' + hangEm.toFixed(1) + 'em';
+    return true;
+  }
+
+  /** 整份文件（doc profile）逐區塊套用一次，回傳套到幾段 */
+  function applyNumIndentAll(root) {
+    var n = 0;
+    Array.prototype.slice.call(root.querySelectorAll('div,p,li')).forEach(function (b) {
+      // 只對「最外層」的區塊做——巢狀在別的區塊裡面的（縮排時包出來的那層）不用重複量
+      var parentBlock = b.parentNode;
+      while (parentBlock && parentBlock !== root) {
+        if (parentBlock.nodeType === 1 && /^(DIV|P|LI)$/.test(parentBlock.nodeName)) return;
+        parentBlock = parentBlock.parentNode;
+      }
+      if (applyNumIndent(b)) n++;
+    });
+    return n;
   }
 
   /** 載入共用的內文排版 CSS（與列印版同一個檔，保證換頁位置一致） */
@@ -925,6 +999,11 @@
         if (cmd === 'egPageBreak') { splitAtCaret(); return; }
         if (cmd === 'egAddPage')   { api.addPage(); return; }
         if (cmd === 'egAutoPage')  { autoPaginate(); return; }
+        if (cmd === 'egNumIndent') {
+          var got = autoNumIndent();
+          w.alert(got ? ('已依編號自動縮排 ' + got + ' 段。') : '這份文件裡沒有找到「1. / 1.1 / 1.1.1」這種階層編號的段落。');
+          return;
+        }
         if (cmd === 'egFontUp')    { bumpFont(1);  return; }
         if (cmd === 'egFontDown')  { bumpFont(-1); return; }
         if (cmd === 'egLhUp')      { bumpLineHeight(0.1);  return; }
@@ -1194,6 +1273,13 @@
     }
 
     function afterEdit() {
+      // 即時依編號自動縮排：只掃游標目前所在的那一段（不是整份文件），
+      // 打字打出「2.1」的當下那一段就自動排縮，不必等按「依編號自動縮排」。
+      if (isDoc) {
+        var sel = w.getSelection();
+        var blk = (sel && sel.rangeCount) ? blockOf(sel.anchorNode, body) : null;
+        if (blk) applyNumIndent(blk);
+      }
       refreshCount();
       markOverflow();
       reflowSoon();      // 打滿一頁就自動流到下一頁（刪字之後也會把下一頁的內容拉回來）
@@ -1767,6 +1853,16 @@
 
     /** 工具列的「自動分頁」：整份文件重排一次（匯入完的一整頁就是靠這個變成一頁一頁） */
     function autoPaginate() { reflow(0); changed(); }
+
+    /** 工具列的「依編號自動縮排」：整份文件重新掃一遍套用，並重新分頁
+     *  （縮排改變了換行位置，某幾頁可能因此變多或變少列，要重排才會準）。 */
+    function autoNumIndent() {
+      var n = 0;
+      sheets().forEach(function (s) { n += applyNumIndentAll(s); });
+      reflow(0);
+      changed();
+      return n;
+    }
 
     /** 在游標處分頁：游標所在區塊之後的內容整批移到新的一頁 */
     function splitAtCaret() {

@@ -157,6 +157,33 @@ const EC_ATTACH_RULES = [
     'none'     => '不可選附件（這個變更方式不出現附件區）',
 ];
 
+/**
+ * 簽章格登記表（使用者要求 2026-09-23：一次代簽全部時，**一格一個代簽人員**——
+ * 技術課在這張表單有兩格要蓋章（設計分析、管制員），必須分別挑不同的人）。
+ *
+ * key 就是「這一格」的識別字：applicant／SUP／WH／TD／APPROVE／CTRL／REVIEW:<unit>。
+ * 順序＝紙本由上而下的蓋章順序，也就是自動配時間時的先後順序。
+ */
+function ec_sign_slots(PDO $db, array $row): array
+{
+    $out = [['key' => 'applicant', 'label' => '申請人', 'sign_key' => 'applicant', 'kind' => 'applicant']];
+    foreach (EC_STAGES as $k => $def) {
+        if ($def['sign_key'] === '') continue;                      // REVIEW 沒有單一簽章格
+        // 單一製程＝倉管那一關整個略過，不該出現在代簽清單（會蓋一個根本沒跑過的章）
+        if ($k === 'WH' && (int)($row['single_process'] ?? 0) === 1) continue;
+        $slot = ['key' => $k, 'label' => $def['label'], 'sign_key' => $def['sign_key'], 'kind' => 'stage'];
+        if ($k === 'CTRL') {                                        // 管制員排在會審之後
+            foreach (ec_review_rows($db, (int)$row['ec_id']) as $rv) {
+                if (!$rv['needed']) continue;
+                $out[] = ['key' => 'REVIEW:' . $rv['unit_key'], 'label' => '會審－' . $rv['label'],
+                          'sign_key' => '', 'kind' => 'review', 'unit_key' => $rv['unit_key']];
+            }
+        }
+        $out[] = $slot;
+    }
+    return $out;
+}
+
 const EC_SETTING_KEYS = ['ec_stamp_tpl_id', 'ec_review_stamp_tpl_id',
                          'ec_sign_sup', 'ec_sign_wh', 'ec_sign_td', 'ec_sign_appr', 'ec_sign_ctrl',
                          // 來源選「指定人員」時用的：_users＝勾選的 user.id（逗號字串）、
@@ -170,7 +197,9 @@ const EC_SETTING_KEYS = ['ec_stamp_tpl_id', 'ec_review_stamp_tpl_id',
                          'ec_attach_cats_apply', 'ec_attach_cats_design',
                          'ec_attach_hint_apply', 'ec_attach_hint_design',
                          // 變更方式 × 附件規則（required/optional/none）；鍵名對應 EC_CHANGE_TYPES 的 key
-                         'ec_attach_rule_customer_notify', 'ec_attach_rule_blueprint_error', 'ec_attach_rule_other'];
+                         'ec_attach_rule_customer_notify', 'ec_attach_rule_blueprint_error', 'ec_attach_rule_other',
+                         // 列印時要不要在頁尾附註下方印一份簽核紀錄（**永遠不含代簽字樣**）
+                         'ec_print_sign_log'];
 
 /* ============================ Schema ============================ */
 
@@ -365,6 +394,7 @@ function ec_perms(PDO $db, ?array $u): array
 function ec_settings(PDO $db): array
 {
     $out = ['ec_stamp_tpl_id' => null, 'ec_review_stamp_tpl_id' => null, 'ec_auto_from_dwg' => 1,
+            'ec_print_sign_log' => 0,
             'ec_attach_cats_apply' => '', 'ec_attach_cats_design' => '',
             // 使用者指定的提示文字（做成設定值，往後改口徑不必動程式）
             'ec_attach_hint_apply'  => '僅需點選最新客戶圖面',
@@ -384,7 +414,7 @@ function ec_settings(PDO $db): array
         foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $k = (string)$r['setting_key']; $v = $r['setting_value'];
             if (substr($k, -7) === '_tpl_id')      $out[$k] = ($v === '' || $v === null) ? null : (int)$v;
-            elseif ($k === 'ec_auto_from_dwg')     $out[$k] = (int)$v;
+            elseif ($k === 'ec_auto_from_dwg' || $k === 'ec_print_sign_log') $out[$k] = (int)$v;
             else                                   $out[$k] = (string)$v;   // _users / _dept / 附件設定都是字串
         }
     } catch (Throwable $e) {}
@@ -601,6 +631,12 @@ function ec_attach_del(PDO $db, int $ecId, int $rowId): array
  *
  * 依「表單上的日期」產生而不是建檔當天——補歷史紙本時編號要跟表單上的日期對得起來
  * （比照 td_dev_eval／pfmea 2026-08-20 的既有決定）。日期事後被改時要呼叫 ec_sync_doc_no()。
+ *
+ * ★使用者要求 2026-09-23：**草稿階段的號碼只是預覽，真正「佔用」這個號碼的是送出**——
+ *   所以這裡只算「已經送出（status<>DRAFT）」的單據，草稿彼此不會互相搶號、也不會
+ *   讓草稿佔掉的號碼在它被刪除或改期之後留下一個永遠用不到的缺口。兩個人同一天各開一張
+ *   草稿時可能會預覽到一樣的號碼，這是正常的——誰先送出誰就拿到那個號碼，另一位在自己
+ *   送出的當下（ec_submit 內）會被 ec_doc_no_taken() 抓到碰撞再重編一次。
  */
 function ec_next_doc_no(PDO $db, string $applyDate, int $excludeId = 0): string
 {
@@ -608,7 +644,7 @@ function ec_next_doc_no(PDO $db, string $applyDate, int $excludeId = 0): string
     $d = preg_match('/^\d{4}-\d{2}-\d{2}$/', $applyDate) ? $applyDate : ec_db_now($db)['d'];
     $prefix = str_replace('-', '', $d);
     try {
-        $sql = "SELECT doc_no FROM eng_change WHERE doc_no LIKE ?";
+        $sql = "SELECT doc_no FROM eng_change WHERE doc_no LIKE ? AND status<>'DRAFT'";
         $args = [$prefix . '%'];
         if ($excludeId > 0) { $sql .= " AND ec_id<>?"; $args[] = $excludeId; }
         $sql .= " ORDER BY doc_no DESC LIMIT 1";
@@ -628,6 +664,38 @@ function ec_sync_doc_no(PDO $db, int $ecId): void
     if ($want !== '' && strpos((string)$row['doc_no'], $want) === 0) return;
     $no = ec_next_doc_no($db, (string)$row['apply_date'], $ecId);
     $db->prepare("UPDATE eng_change SET doc_no=? WHERE ec_id=?")->execute([$no, $ecId]);
+}
+
+/** 這個編號現在是不是已經被「別的已送出單據」用掉了（真正的碰撞檢查，只有送出前才需要跑） */
+function ec_doc_no_taken(PDO $db, string $docNo, int $excludeId = 0): bool
+{
+    if ($docNo === '') return false;
+    try {
+        $sql = "SELECT 1 FROM eng_change WHERE doc_no=? AND status<>'DRAFT'";
+        $args = [$docNo];
+        if ($excludeId > 0) { $sql .= " AND ec_id<>?"; $args[] = $excludeId; }
+        $st = $db->prepare($sql . " LIMIT 1"); $st->execute($args);
+        return (bool)$st->fetchColumn();
+    } catch (Throwable $e) { return false; }
+}
+
+/**
+ * 送出前的最後一道編號檢查（使用者要求 2026-09-23：「送出時需重新檢查此單號是否已被利用」）。
+ * 先照日期重編一次（若日期跟目前編號的前綴對不上），再檢查重編後的號碼有沒有被別的
+ * 已送出單據用掉——兩個人同一天各開一張草稿常會預覽到同一個號碼，誰先送出誰拿到，
+ * 晚送出的人在這裡被攔下來重新分配，不會撞號。
+ */
+function ec_lock_doc_no_on_submit(PDO $db, int $ecId): void
+{
+    ec_sync_doc_no($db, $ecId);
+    $row = ec_row($db, $ecId);
+    if (!$row) return;
+    $docNo = (string)$row['doc_no'];
+    $tries = 0;
+    while (ec_doc_no_taken($db, $docNo, $ecId) && $tries++ < 20)
+        $docNo = ec_next_doc_no($db, (string)$row['apply_date'], $ecId);
+    if ($docNo !== (string)$row['doc_no'])
+        $db->prepare("UPDATE eng_change SET doc_no=? WHERE ec_id=?")->execute([$docNo, $ecId]);
 }
 
 /* ============================ 讀取 ============================ */
@@ -1225,6 +1293,19 @@ function ec_current_stage(array $row): string
 }
 
 /**
+ * 日期是不是鎖住了（使用者要求 2026-09-23：「只有送出才鎖定日期」「送出後不可修改日期」）。
+ *
+ * ★這條規則刻意跟 ec_can_edit_row() 分開、**連管理員都不能繞過**——一般表頭欄位管理員可以
+ *   隨時代改（補歷史紙本），但日期一旦送出就是文件編號的依據，若管理員還能任意改期，
+ *   單號自動產生＋碰撞檢查那一整套規則就沒有意義了（改了日期卻不用重新過碰撞檢查）。
+ * 回到 DRAFT／REJECTED（草稿、被退回待修正）才解鎖，跟表頭其他欄位的可編輯狀態一致。
+ */
+function ec_date_locked(array $row): bool
+{
+    return !in_array((string)($row['status'] ?? 'DRAFT'), ['DRAFT', 'REJECTED'], true);
+}
+
+/**
  * 這一關簽完之後接下來是哪一關。
  * 技術課判定「僅修改圖面（修改後結案）」時跳過會審關卡直接到管制；
  * 判定「需修改圖面與會審」才會走會審那一段（紙本：↓以下僅技術課判定需會審才填寫↓）。
@@ -1391,6 +1472,379 @@ function ec_close_notices(PDO $db, int $ecId, array $refTypes = ['ENG_CHANGE_APP
     }
 }
 
+/* ============================ 代簽（管理員） ============================ */
+
+/** 某一格目前蓋的是誰、什麼時候蓋的、是不是管理員代簽的 */
+function ec_slot_state(PDO $db, array $row, string $slotKey): array
+{
+    if (strpos($slotKey, 'REVIEW:') === 0) {
+        $unit = substr($slotKey, 7);
+        foreach (ec_review_rows($db, (int)$row['ec_id']) as $rv) {
+            if ((string)$rv['unit_key'] !== $unit) continue;
+            return ['signed' => $rv['signed_at'] ? 1 : 0, 'user_id' => (int)$rv['signer_id'],
+                    'name' => (string)$rv['signer_name'], 'at' => (string)$rv['signed_at'],
+                    'proxy_name' => (string)$rv['signer_proxy_name'], 'dept_id' => (int)$rv['signer_dept_id']];
+        }
+        return ['signed' => 0, 'user_id' => 0, 'name' => '', 'at' => '', 'proxy_name' => '', 'dept_id' => 0];
+    }
+    $k = $slotKey === 'applicant' ? 'applicant' : (EC_STAGES[$slotKey]['sign_key'] ?? '');
+    if ($k === '') return ['signed' => 0, 'user_id' => 0, 'name' => '', 'at' => '', 'proxy_name' => '', 'dept_id' => 0];
+    return ['signed' => (string)($row['sign_' . $k . '_at'] ?? '') !== '' ? 1 : 0,
+            'user_id' => (int)($row['sign_' . $k . '_id'] ?? 0),
+            'name' => (string)($row['sign_' . $k . '_name'] ?? ''),
+            'at' => (string)($row['sign_' . $k . '_at'] ?? ''),
+            'proxy_name' => (string)($row['sign_' . $k . '_proxy_name'] ?? ''),
+            'dept_id' => (int)($row['sign_' . $k . '_dept_id'] ?? 0)];
+}
+
+/** 這一格「原本該誰簽」的名單（代簽時要優先列出來） */
+function ec_slot_pool(PDO $db, array $row, string $slotKey): array
+{
+    if ($slotKey === 'applicant') {
+        $uid = (int)($row['applicant_id'] ?? 0);
+        if (!$uid) return [];
+        return [['id' => $uid, 'name' => (string)$row['applicant_name'],
+                 'dept_id' => (int)($row['apply_dept_id'] ?? 0)]];
+    }
+    if (strpos($slotKey, 'REVIEW:') === 0) {
+        $s = ec_review_signer($db, $row, substr($slotKey, 7));
+        return $s['id'] ? [['id' => (int)$s['id'], 'name' => (string)$s['name'],
+                            'dept_id' => (int)($s['dept_id'] ?? 0)]] : [];
+    }
+    $out = [];
+    foreach (ec_stage_signer_pool($db, $row, $slotKey) as $p)
+        $out[] = ['id' => (int)$p['id'], 'name' => (string)$p['name'], 'dept_id' => (int)($p['dept_id'] ?? 0)];
+    return $out;
+}
+
+/**
+ * 這一格可以挑誰來代簽（使用者要求 2026-09-23：「特別注意可簽章人員的列表」）。
+ *
+ * 名單＝①原本該簽的人 ②這一格對應單位（含子部門）在該日期當時的在職人員
+ *       ③名單裡那幾個人自己所屬的單位（核准那一關沒有對應部門，靠這條才列得出人）
+ *
+ * 每個人都標出**管理員選定的那個日期**當天的行程（走全站共用的 person_schedule_lib）；
+ * **請假當天一律不可選**（使用者明確要求），畫面上仍然列出來並寫明是什麼假——
+ * 不列出來的話管理員會以為是資料沒建好，而不是「這個人那天請假」。
+ * 那個人請假時請改挑他的代理人，或把簽章日期改到他沒請假的那一天。
+ */
+function ec_slot_candidates(PDO $db, array $row, string $slotKey, string $date): array
+{
+    require_once __DIR__ . '/person_schedule_lib.php';
+    $pool    = ec_slot_pool($db, $row, $slotKey);
+    $deptIds = [];
+    if ($slotKey === 'applicant' || $slotKey === 'SUP') {
+        $did = (int)($row['apply_dept_id'] ?? 0);
+        if ($did) $deptIds = array_merge($deptIds, eg_dept_subtree_ids($db, $did));
+    } elseif (strpos($slotKey, 'REVIEW:') === 0) {
+        $def = EC_REVIEW_UNITS[substr($slotKey, 7)] ?? null;
+        if ($def) $deptIds = array_merge($deptIds, eg_org_dept_ids($db, $def['org']));
+    } elseif (isset(EC_STAGE_DEPT[$slotKey])) {
+        $deptIds = array_merge($deptIds, eg_org_dept_ids($db, EC_STAGE_DEPT[$slotKey]));
+    }
+    foreach ($pool as $p) if ((int)$p['dept_id']) $deptIds[] = (int)$p['dept_id'];
+    $deptIds = array_values(array_unique(array_filter(array_map('intval', $deptIds))));
+
+    $poolIds = array_map(fn($p) => (int)$p['id'], $pool);
+    $rows = [];
+    foreach (ec_people_posts_asof($db, $date) as $p) {
+        $uidP = (int)$p['id'];
+        $inDept = in_array((int)$p['dept_id'], $deptIds, true);
+        if (!$inDept && !in_array($uidP, $poolIds, true)) continue;
+        // 一人多職時只留一筆（優先留在名單裡的那個單位，其次主職）
+        $pref = in_array($uidP, $poolIds, true)
+                && in_array((int)$p['dept_id'], array_map(fn($x) => (int)$x['dept_id'], $pool), true);
+        if (isset($rows[$uidP]) && !$pref && !(int)$p['is_main']) continue;
+        if (isset($rows[$uidP]) && $rows[$uidP]['_pref'] && !$pref) continue;
+        $rows[$uidP] = [
+            'id' => $uidP, 'name' => (string)$p['user_cname'],
+            'dept_id' => (int)$p['dept_id'], 'dept_name' => (string)$p['dept_name'],
+            'position_name' => (string)$p['position_name'],
+            'is_pool' => in_array($uidP, $poolIds, true) ? 1 : 0,
+            'dept_sort' => (int)$p['dept_sort'], 'position_sort' => (int)$p['position_sort'],
+            '_pref' => $pref,
+        ];
+    }
+    if (!$rows) return [];
+
+    // 當天行程（只有請假會擋，見 person_schedule_lib 檔頭）
+    $sched = [];
+    try { $sched = eg_psched_for_users($db, array_keys($rows), $date); } catch (Throwable $e) {}
+    $out = [];
+    foreach ($rows as $uidP => $r) {
+        unset($r['_pref']);
+        $items = $sched[$uidP] ?? [];
+        $notes = array_map(fn($x) => (string)$x['label'] . ' ' . (string)$x['time'], $items);
+        $blocked = false;
+        foreach ($items as $it) if ((string)$it['source'] === 'leave') $blocked = true;   // 請假一律不可選
+        $r['busy_note'] = implode('、', $notes);
+        $r['blocked']   = $blocked ? 1 : 0;
+        $r['label']     = trim($r['dept_name'] . '　' . $r['position_name'] . '　' . $r['name'])
+                        . ($r['is_pool'] ? '（本關卡簽核人）' : '')
+                        . ($r['busy_note'] !== '' ? '［' . $r['busy_note'] . '］' : '');
+        $out[] = $r;
+    }
+    // 原本該簽的人排最前面，其餘依 部門→職稱（人員列表鐵則第 5 條）
+    usort($out, fn($a, $b) => [-$a['is_pool'], $a['dept_sort'], $a['dept_id'], $a['position_sort'], $a['id']]
+                          <=> [-$b['is_pool'], $b['dept_sort'], $b['dept_id'], $b['position_sort'], $b['id']]);
+    return $out;
+}
+
+/**
+ * 一次代簽全部時，每一格的簽核時間（使用者指定 2026-09-23）：
+ *   依正確簽核順序，**每一次隨機增加 8~54 分鐘，而且全部要在同一天簽完**。
+ *
+ * 隨機量總和放不進當天剩下的時間時，改成把剩餘時間平均分配（寧可間隔變小，
+ * 也不可以跨日——跨日的話紙本上會出現「隔天才簽的章」）。
+ *
+ * ★選的日期是**今天**時，收尾一定要再蓋一個「不可晚於現在」的上限——
+ *   否則若申請人剛好是幾分鐘前才送出（sign_applicant_at 已經很接近現在），
+ *   往後排的每一格 +8~54 分鐘很容易算出「還沒到的時間」，蓋下去時會被
+ *   ec_check_sign_at() 的「簽核時間不可晚於現在」擋下（實測踩到）——
+ *   這裡先把當天的收尾時間夾到 now，寧可間隔被壓縮也不要排出還沒發生的時間。
+ *
+ * @param string $date  簽章日期 Y-m-d
+ * @param string $after 必須晚於這個時間（前一關已經簽掉的時間），空＝不限
+ * @param string $nowAt 目前的真實時間 'Y-m-d H:i:s'（只在 $date 是今天時用來夾住收尾）
+ * @return string[] N 個 'Y-m-d H:i:s'
+ */
+function ec_sign_time_series(int $n, string $date, string $after = '', string $nowAt = ''): array
+{
+    if ($n <= 0) return [];
+    $dayStart = strtotime($date . ' 08:30:00');
+    $dayEnd   = strtotime($date . ' 23:30:00');
+    if ($nowAt !== '' && substr($nowAt, 0, 10) === $date) {
+        $now = strtotime($nowAt);
+        if ($now < $dayEnd) $dayEnd = $now;         // 今天：收尾不可以是還沒發生的時間
+    }
+    $base = $dayStart;
+    if ($after !== '' && substr($after, 0, 10) === $date) {
+        $a = strtotime($after);
+        if ($a > $base) $base = $a;                  // 一定要晚於前一格，不可以為了塞得下而往前退
+    }
+    // ★base 可能已經等於（甚至理論上晚於）dayEnd——例如申請人幾秒鐘前才剛送出、
+    //   現在就要接著代簽其餘幾格。這種情況下「今天」已經沒有時間可用，
+    //   寧可把剩下幾格都貼在收尾那一刻（頂多相差幾秒），也不可以往前退到 base 之前
+    //   （那會出現「單位主管簽核時間早於申請人送出時間」）或超過現在。
+    if ($base > $dayEnd) $base = $dayEnd;
+    $room = $dayEnd - $base;
+
+    // 先抽 n 個 8~54 分鐘的間隔；空間不夠塞滿 8 分鐘門檻時改成平均分配（至少 1 分鐘一格）
+    $gaps = [];
+    for ($i = 0; $i < $n; $i++) $gaps[] = random_int(8, 54) * 60;
+    if (array_sum($gaps) > $room || $room < $n * 8 * 60) {
+        $step = max(60, (int)floor($room / $n));
+        $gaps = array_fill(0, $n, $step);
+    }
+    $out = []; $t = $base;
+    foreach ($gaps as $g) { $t += $g; if ($t > $dayEnd) $t = $dayEnd; $out[] = date('Y-m-d H:i:s', $t); }
+    return $out;
+}
+
+/** 簽章時間的合法性（使用者要求：不可早於申請單日期；也不可以是未來） */
+function ec_check_sign_at(PDO $db, array $row, string $at): string
+{
+    $at = trim($at);
+    if ($at === '') return '';
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$/', $at)) throw new Exception('簽核時間格式不正確');
+    $at = str_replace('T', ' ', $at);
+    if (strlen($at) === 10) $at .= ' 09:00:00';
+    elseif (strlen($at) === 16) $at .= ':00';
+    $apply = (string)($row['apply_date'] ?? '');
+    if ($apply !== '' && $at < $apply . ' 00:00:00')
+        throw new Exception('簽核時間不可早於申請單日期（' . eg_fmt_date($apply) . '）');
+    $now = ec_db_now($db)['dt'];
+    if ($at > $now) throw new Exception('簽核時間不可晚於現在');
+    return $at;
+}
+
+/**
+ * 一次代簽全部（管理員）。$picks＝['格位key' => 要代誰簽的 user id]。
+ * 依 ec_sign_slots() 的順序逐格蓋章，時間由 ec_sign_time_series() 自動配。
+ *
+ * ★申請人那一格會在「送出」當下就自動蓋上**真實的現在時間**（ec_submit()），
+ *   跟補歷史紙本要用的日期常常對不上——admin 代開一張 2026-09-18 的舊單，
+ *   按下送出當下蓋的卻是「今天」。這種**代簽過（proxy）而且日期跟這次要的不同**的格子，
+ *   一律當成「連同這次一起重新排時間」（signer 不變，只重排時間），
+ *   而不是當成不能動的錨點去擋住整次代簽——不然「一次代簽全部」在補歷史紙本這個
+ *   最主要的使用情境下反而永遠用不起來。
+ *   **本人自己簽的格子**（proxy_name 空）才是真正不能動的錨點——那是實際發生過的事，
+ *   代簽日期不可以比它更早（見下方 $immutableAfter 那道擋）。
+ */
+function ec_bulk_proxy_sign(PDO $db, int $ecId, array $picks, string $date, int $uid, string $uname): array
+{
+    ec_ensure_schema($db);
+    $row = ec_row($db, $ecId);
+    if (!$row) throw new Exception('查無此申請單');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) throw new Exception('請選擇簽章日期');
+    if ($date < (string)$row['apply_date']) throw new Exception('簽章日期不可早於申請單日期');
+    if ($date > ec_db_now($db)['d']) throw new Exception('簽章日期不可晚於今天');
+
+    $slots = ec_sign_slots($db, $row);
+    $todo  = [];              // ['slot'=>,'pick'=>,'cand'=>,'mode'=>'sign'|'reflow']
+    $immutableAfter = '';     // 本人自己簽、動不了的章當中最晚的那個時間（真正的下限）
+    foreach ($slots as $s) {
+        $st = ec_slot_state($db, $row, $s['key']);
+        if ($st['signed']) {
+            $fixable = $st['proxy_name'] !== '';
+            if (!$fixable) {                                    // 本人自己簽的：不可動，當成錨點
+                if ($st['at'] > $immutableAfter) $immutableAfter = $st['at'];
+                continue;
+            }
+            if (substr($st['at'], 0, 10) === $date) {            // 代簽過但日期本來就對得上：當錨點沿用
+                if ($st['at'] > $immutableAfter) $immutableAfter = $st['at'];
+                continue;
+            }
+            // 代簽過、日期對不上這次選的日期：連同這次一起重新排時間（簽核人不變）
+            $todo[] = ['slot' => $s, 'pick' => (int)$st['user_id'],
+                       'cand' => ['dept_id' => (int)$st['dept_id']], 'mode' => 'reflow'];
+            continue;
+        }
+        $pick = (int)($picks[$s['key']] ?? 0);
+        if ($pick <= 0) throw new Exception('「' . $s['label'] . '」還沒有選代簽人員');
+        // 選到的人那天請假一律擋下（前端已經不給選，後端同規則再擋一次＝鐵律8）
+        $ok = false;
+        foreach (ec_slot_candidates($db, $row, $s['key'], $date) as $c) {
+            if ((int)$c['id'] !== $pick) continue;
+            if ($c['blocked']) throw new Exception('「' . $s['label'] . '」選的 ' . $c['name']
+                . ' 在 ' . eg_fmt_date($date) . ' 請假（' . $c['busy_note'] . '），請改挑代理人或改簽章日期');
+            $ok = true; $todo[] = ['slot' => $s, 'pick' => $pick, 'cand' => $c, 'mode' => 'sign'];
+            break;
+        }
+        if (!$ok) throw new Exception('「' . $s['label'] . '」選的人不在可簽核名單內');
+    }
+    if (!$todo) return ['signed' => 0, 'status' => (string)$row['status'], 'message' => '這張單所有簽章格都已經簽過了'];
+
+    // ★選的日期不可以早於「本人自己簽下去、真正動不了」的那個時間——例如申請人是今天
+    //   正常自己送出的，代簽卻選昨天，會排出「單位主管簽核時間早於申請人送出時間」這種
+    //   時序顛倒的章（這條規則跟 apply_date／今天那兩道邊界是分開的：申請單日期可能是
+    //   很久以前，但本人親自蓋下去的章代表的是「實際發生過的事」，不能被代簽日期蓋到它之前）。
+    if ($immutableAfter !== '' && $date < substr($immutableAfter, 0, 10))
+        throw new Exception('簽章日期不可早於「' . eg_fmt_date(substr($immutableAfter, 0, 10))
+            . '」——這張單已經有本人親自簽下的章在那一天，代簽日期不能比它更早');
+
+    // 各關卡自己的必填欄位要先填完才蓋得下去（跟一格一格簽是同一套規則＝鐵律8）。
+    // 只驗真正要「簽」的關卡（reflow 是已經簽過的舊格子，欄位早就填過了，不必重驗）。
+    // ★一次把**全部**缺的欄位列出來，不要一關一關報——否則管理員得按五次才知道還缺什麼。
+    $miss = [];
+    foreach ($todo as $t) {
+        if ($t['mode'] !== 'sign' || $t['slot']['kind'] !== 'stage') continue;
+        foreach (ec_validate_stage($row, (string)$t['slot']['key'], $db, $ecId) as $m)
+            $miss[] = '「' . $t['slot']['label'] . '」' . $m;
+    }
+    if ($miss) throw new Exception('這些欄位還沒填完，填完才簽得下去：' . implode('；', $miss));
+
+    $times = ec_sign_time_series(count($todo), $date, $immutableAfter, ec_db_now($db)['dt']);
+
+    $n = 0;
+    foreach ($todo as $i => $t) {
+        $at = $times[$i];
+        $row = ec_row($db, $ecId);
+        if ($t['slot']['kind'] === 'applicant') {
+            ec_stamp_applicant($db, $ecId, $t['pick'], $at, (int)$t['cand']['dept_id'], $uid, $uname);
+        } elseif ($t['slot']['kind'] === 'review') {
+            ec_stamp_review($db, $ecId, (string)$t['slot']['unit_key'], $t['pick'], $at,
+                            (int)$t['cand']['dept_id'], $uid, $uname);
+        } elseif ($t['mode'] === 'reflow') {
+            // 只重排時間，不重新走一次簽核流程（那是已經簽過的關卡，走 ec_sign_stage 會因狀態
+            // 對不上而報「這張單目前在...」，所以直接改欄位；approval_record 的時間一併更新）
+            $k = EC_STAGES[(string)$t['slot']['key']]['sign_key'];
+            $db->prepare("UPDATE eng_change SET sign_{$k}_at=? WHERE ec_id=?")->execute([$at, $ecId]);
+            try {
+                $rec = eg_approval_latest($db, EC_APPROVAL_MODULE, $ecId, (string)$t['slot']['key']);
+                if ($rec) $db->prepare("UPDATE approval_record SET decided_at=? WHERE id=?")->execute([$at, (int)$rec['id']]);
+            } catch (Throwable $e) {}
+        } else {
+            // 一般關卡：先把單子推到那一關（代簽本來就是在補流程），再用同一支簽核函式蓋章
+            if ((string)$row['status'] !== $t['slot']['key'])
+                $db->prepare("UPDATE eng_change SET status=? WHERE ec_id=?")->execute([$t['slot']['key'], $ecId]);
+            ec_sign_stage($db, $ecId, (string)$t['slot']['key'], $uid, $uname, [], $t['pick'], $at);
+        }
+        $n++;
+    }
+    $row = ec_row($db, $ecId);
+    return ['signed' => $n, 'status' => (string)$row['status']];
+}
+
+/** 直接蓋「申請人」那一格（送出時系統自己蓋，代簽時管理員指定） */
+function ec_stamp_applicant(PDO $db, int $ecId, int $userId, string $at, int $deptId, int $byUid, string $byName): void
+{
+    $nm = '';
+    try { $st = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $st->execute([$userId]); $nm = (string)$st->fetchColumn(); }
+    catch (Throwable $e) {}
+    $db->prepare("UPDATE eng_change SET sign_applicant_id=?, sign_applicant_name=?, sign_applicant_at=?,
+                    sign_applicant_dept_id=?, sign_applicant_proxy_by=?, sign_applicant_proxy_name=?,
+                    updated_by=?, updated_at=NOW() WHERE ec_id=?")
+       ->execute([$userId, $nm, $at, $deptId ?: null,
+                  $userId === $byUid ? null : $byUid, $userId === $byUid ? '' : $byName, $byUid, $ecId]);
+}
+
+/** 直接蓋某個會審單位那一格 */
+function ec_stamp_review(PDO $db, int $ecId, string $unitKey, int $userId, string $at, int $deptId,
+                         int $byUid, string $byName): void
+{
+    if (!isset(EC_REVIEW_UNITS[$unitKey])) throw new Exception('無效的會審單位');
+    $nm = '';
+    try { $st = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $st->execute([$userId]); $nm = (string)$st->fetchColumn(); }
+    catch (Throwable $e) {}
+    $db->prepare("INSERT INTO eng_change_review (ec_id, unit_key, needed, signer_id, signer_name,
+                                                 signer_proxy_name, signer_dept_id, signed_at)
+                  VALUES (?,?,1,?,?,?,?,?)
+                  ON DUPLICATE KEY UPDATE signer_id=VALUES(signer_id), signer_name=VALUES(signer_name),
+                                          signer_proxy_name=VALUES(signer_proxy_name),
+                                          signer_dept_id=VALUES(signer_dept_id), signed_at=VALUES(signed_at)")
+       ->execute([$ecId, $unitKey, $userId, $nm, $userId === $byUid ? '' : $byName, $deptId ?: null, $at]);
+    try {
+        $rec = eg_approval_latest($db, EC_APPROVAL_MODULE, $ecId, 'REVIEW:' . $unitKey);
+        if ($rec && (string)$rec['status'] === 'pending') eg_approval_decide($db, (int)$rec['id'], $userId, $nm, 'approved', null);
+    } catch (Throwable $e) {}
+}
+
+/**
+ * 事後改某一格的簽章人員／時間（使用者要求 2026-09-23：
+ * 「結案後不可修改任何資料，但由管理員代簽者，管理員可以更改各欄位已簽章人員」）。
+ *
+ * 因此**只有「管理員代簽過」的格子**可以改——本人自己簽的章不可以被別人改掉，
+ * 那等於偽造他的簽名。結案後仍然可以改（這正是這個功能存在的理由）。
+ */
+function ec_fix_sign(PDO $db, int $ecId, string $slotKey, int $newUserId, string $at, int $uid, string $uname): array
+{
+    ec_ensure_schema($db);
+    $row = ec_row($db, $ecId);
+    if (!$row) throw new Exception('查無此申請單');
+    $known = array_column(ec_sign_slots($db, $row), 'key');
+    if (!in_array($slotKey, $known, true)) throw new Exception('無效的簽章欄位');
+    $st = ec_slot_state($db, $row, $slotKey);
+    if (!$st['signed'])       throw new Exception('這一格還沒有蓋章，請直接用代簽功能');
+    if ($st['proxy_name'] === '')
+        throw new Exception('這一格是本人自己簽的，不可以改成別人——只有「管理員代簽」的欄位才可以更正');
+
+    $at = $at !== '' ? ec_check_sign_at($db, $row, $at) : $st['at'];
+    $cand = null;
+    foreach (ec_slot_candidates($db, $row, $slotKey, substr($at, 0, 10)) as $c)
+        if ((int)$c['id'] === $newUserId) { $cand = $c; break; }
+    if (!$cand) throw new Exception('這個人不在本欄位的可簽核名單內');
+    if ($cand['blocked']) throw new Exception($cand['name'] . ' 在 ' . eg_fmt_date(substr($at, 0, 10))
+        . ' 請假（' . $cand['busy_note'] . '），請改挑代理人或改簽章日期');
+
+    if ($slotKey === 'applicant')            ec_stamp_applicant($db, $ecId, $newUserId, $at, (int)$cand['dept_id'], $uid, $uname);
+    elseif (strpos($slotKey, 'REVIEW:') === 0) ec_stamp_review($db, $ecId, substr($slotKey, 7), $newUserId, $at, (int)$cand['dept_id'], $uid, $uname);
+    else {
+        $k = EC_STAGES[$slotKey]['sign_key'];
+        $nm = (string)$cand['name'];
+        $db->prepare("UPDATE eng_change SET sign_{$k}_id=?, sign_{$k}_name=?, sign_{$k}_at=?, sign_{$k}_dept_id=?,
+                        sign_{$k}_proxy_by=?, sign_{$k}_proxy_name=?, updated_by=?, updated_at=NOW()
+                      WHERE ec_id=?")
+           ->execute([$newUserId, $nm, $at, ((int)$cand['dept_id']) ?: null, $uid, $uname, $uid, $ecId]);
+        try {
+            $rec = eg_approval_latest($db, EC_APPROVAL_MODULE, $ecId, $slotKey);
+            if ($rec) $db->prepare("UPDATE approval_record SET approver_id=?, approver_name=?, decided_at=? WHERE id=?")
+                         ->execute([$newUserId, $nm, $at, (int)$rec['id']]);
+        } catch (Throwable $e) {}
+    }
+    return ['slot' => $slotKey, 'name' => (string)$cand['name'], 'at' => $at];
+}
+
 /* ============================ 寫入 ============================ */
 
 /** 建立一張草稿；回 ec_id */
@@ -1436,15 +1890,21 @@ function ec_submit(PDO $db, int $ecId, int $uid, string $uname): array
     $now = ec_db_now($db);
     $db->beginTransaction();
     try {
-        ec_sync_doc_no($db, $ecId);
+        ec_lock_doc_no_on_submit($db, $ecId);
         // 申請人的章：蓋「這張單上填的申請人」，不是按下送出的人
         //（管理員代開歷史單時，章要蓋當初真正提出的人）
         $applicantId = (int)$row['applicant_id'];
         $ap = ec_apply_delegate($db, $applicantId, (string)$row['applicant_name']);
+        // 按下送出的不是申請人本人時（管理員代開歷史單）＝這一格也是代簽，要記下實際操作者，
+        // 事後才改得動（只有代簽過的格子可以由管理員更正，見 ec_fix_sign）
+        $proxy = ((int)$ap['id'] > 0 && (int)$ap['id'] !== $uid) ? $uid : 0;
         $db->prepare("UPDATE eng_change SET status='SUP', submitted_at=NOW(),
                         sign_applicant_id=?, sign_applicant_name=?, sign_applicant_for_id=?, sign_applicant_at=NOW(),
+                        sign_applicant_dept_id=?, sign_applicant_proxy_by=?, sign_applicant_proxy_name=?,
                         updated_by=?, updated_at=NOW() WHERE ec_id=?")
-           ->execute([$ap['id'] ?: null, $ap['name'], $ap['for_id'] ?: null, $uid ?: null, $ecId]);
+           ->execute([$ap['id'] ?: null, $ap['name'], $ap['for_id'] ?: null,
+                      ((int)($row['apply_dept_id'] ?? 0)) ?: null,
+                      $proxy ?: null, $proxy ? $uname : '', $uid ?: null, $ecId]);
         $db->commit();
     } catch (Throwable $e) {
         if ($db->inTransaction()) $db->rollBack();
@@ -1497,7 +1957,7 @@ function ec_route_to_review(PDO $db, array $row, int $fromUid, string $fromName)
  * $fields＝這一關自己要填的欄位（例：倉管的庫存數量、技術的設計分析），先存再驗再簽。
  */
 function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $uname, array $fields = [],
-                       int $signAsId = 0): array
+                       int $signAsId = 0, string $signAt = ''): array
 {
     ec_ensure_schema($db);
     $row = ec_row($db, $ecId);
@@ -1519,13 +1979,28 @@ function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $unam
     //   ② 不在名單裡（管理員代簽補歷史紙本）→ 蓋「這一關本來該簽的人」；
     //      名單有多位時由管理員在畫面上指定要代誰簽（$signAsId），沒指定就取第一位
     //   ③ 名單是空的（組織角色沒綁好）→ 退回操作者本人，至少留得下紀錄
-    $pool   = ec_stage_signer_pool($db, ec_row($db, $ecId), $stage);
+    $cur    = ec_row($db, $ecId);
+    $pool   = ec_stage_signer_pool($db, $cur, $stage);
     $signer = null;
-    foreach ($pool as $p) { if ((int)$p['id'] === $uid) { $signer = $p; break; } }
-    $isProxy = ($signer === null && $pool);          // 操作者不在名單裡＝管理員代簽
-    if ($isProxy && $signAsId > 0)
+    // ★管理員明確指定了「要代誰簽」時一律以它為準（不論操作者自己在不在名單裡）。
+    //   一次代簽全部時可挑的人比名單更廣（同單位的其他人），所以名單裡找不到就到
+    //   ec_slot_candidates() 再找一次；兩邊都沒有＝直打 API 硬塞，擋下（鐵律8）。
+    if ($signAsId > 0) {
         foreach ($pool as $p) { if ((int)$p['id'] === $signAsId) { $signer = $p; break; } }
+        if (!$signer) {
+            foreach (ec_slot_candidates($db, $cur, $stage, substr($signAt ?: ec_db_now($db)['dt'], 0, 10)) as $c) {
+                if ((int)$c['id'] !== $signAsId) continue;
+                $signer = ['id' => (int)$c['id'], 'name' => (string)$c['name'], 'for_id' => 0, 'for_name' => '',
+                           'dept_id' => (int)$c['dept_id'], 'position_name' => (string)$c['position_name']];
+                break;
+            }
+            if (!$signer) throw new Exception('指定的簽核人不在這一關的可簽核名單內');
+        }
+    }
+    if (!$signer) foreach ($pool as $p) { if ((int)$p['id'] === $uid) { $signer = $p; break; } }
+    $isProxy = ($signer === null && $pool);          // 操作者不在名單裡＝管理員代簽
     $signer = $signer ?: ($pool[0] ?? ['id' => 0, 'name' => '', 'for_id' => 0]);
+    if ($signAsId > 0 && (int)$signer['id'] !== $uid) $isProxy = true;
     $signId   = $signer['id'] ?: $uid;
     $signName = $signer['name'] !== '' ? $signer['name'] : $uname;
     $forId    = (int)$signer['for_id'];
@@ -1549,7 +2024,10 @@ function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $unam
         $sets[] = "sign_{$k}_proxy_by=?";   $args[] = $proxyBy ?: null;
         $sets[] = "sign_{$k}_proxy_name=?"; $args[] = $proxyName;
         $sets[] = "sign_{$k}_dept_id=?";    $args[] = ((int)($signer['dept_id'] ?? 0)) ?: null;
-        $sets[] = "sign_{$k}_at=NOW()";
+        // 管理員代簽時可以自己指定簽章時間（使用者要求 2026-09-23，不可早於申請單日期＝已由
+        // ec_check_sign_at() 擋過）；沒指定就是當下
+        if ($signAt !== '') { $sets[] = "sign_{$k}_at=?"; $args[] = ec_check_sign_at($db, $cur, $signAt); }
+        else                { $sets[] = "sign_{$k}_at=NOW()"; }
 
         // 這一關填完之後才算得出下一關（技術課選了「僅修改圖面」就要跳過會審）
         $after = array_merge(ec_row($db, $ecId), $fields);
@@ -1572,9 +2050,14 @@ function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $unam
     //   實際操作者留在 eng_change.sign_*_proxy_*（只在本單畫面顯示，列印不讀）。
     try {
         $rec = eg_approval_latest($db, EC_APPROVAL_MODULE, $ecId, $stage);
-        if ($rec && (string)$rec['status'] === 'pending')
+        if ($rec && (string)$rec['status'] === 'pending') {
             eg_approval_decide($db, (int)$rec['id'], $signId ?: $uid,
                                $signName !== '' ? $signName : $uname, 'approved', null);
+            // 指定了簽章時間時，簽核紀錄的時間也要跟著（不然畫面上的章是 9/23、紀錄卻是今天）
+            if ($signAt !== '')
+                $db->prepare("UPDATE approval_record SET decided_at=? WHERE id=?")
+                   ->execute([ec_check_sign_at($db, $cur, $signAt), (int)$rec['id']]);
+        }
     } catch (Throwable $e) {}
 
     $row2 = ec_row($db, $ecId);
@@ -1684,6 +2167,8 @@ function ec_resubmit(PDO $db, int $ecId, int $uid, string $uname): array
     if ((string)$row['status'] !== 'REJECTED') throw new Exception('只有被退回的申請單才需要重新送出');
     $err = ec_validate($db, $row);
     if ($err) throw new Exception('還有必填欄位沒填完：' . implode('、', array_values($err)));
+    // 重新送出也是「送出」的一種——被退回期間日期可能被改過，一樣要重編並檢查碰撞（使用者要求 2026-09-23）
+    ec_lock_doc_no_on_submit($db, $ecId);
     $db->prepare("UPDATE eng_change SET status='SUP', reject_stage=NULL, reject_reason=NULL,
                     updated_by=?, updated_at=NOW() WHERE ec_id=?")->execute([$uid ?: null, $ecId]);
     $row = ec_row($db, $ecId);
@@ -1855,6 +2340,28 @@ function ec_auto_from_dwg_change(PDO $db, int $changeId, int $uid, string $uname
 /* ============================ 列印用資料 ============================ */
 
 /**
+ * 列印版的簽核紀錄（頁尾附註下方那一小塊）。
+ * 只輸出 關卡／簽核人／簽核日期——**不可以帶任何代簽相關欄位**（使用者明確要求）。
+ */
+function ec_print_sign_log_rows(PDO $db, array $row): array
+{
+    $date = (string)$row['apply_date'];
+    $out = [];
+    foreach (ec_sign_slots($db, $row) as $s) {
+        $st = ec_slot_state($db, $row, (string)$s['key']);
+        if (!$st['signed']) continue;
+        $idt = ec_user_identity_asof($db, (int)$st['user_id'], $date, (int)$st['dept_id']);
+        $out[] = ['label' => (string)$s['label'],
+                  'name'  => (string)($st['name'] ?: $idt['user_name']),
+                  'dept'  => (string)$idt['dept_name'],
+                  'position' => (string)$idt['position_name'],
+                  'date'  => substr((string)$st['at'], 0, 10),
+                  'time'  => substr((string)$st['at'], 11, 5)];
+    }
+    return $out;
+}
+
+/**
  * 列印一張單需要的全部資料（表頭公司全名、AS 編號與版次、各格簽章人與職稱）。
  * 版次依業務日期回推當時生效的那一版（ai-rules/16 第三之四節）。
  */
@@ -1920,6 +2427,12 @@ function ec_print_meta(PDO $db, array $row): array
         // 選定的附件（已經編好號：附件1、附件2…）。列印表格只印 print_text，
         // 實體檔案由「列印所有附件」另外開視窗印，右上角印同一個編號。
         'attachments'  => ec_attach_rows($db, (int)$row['ec_id']),
+        // 列印用的簽核紀錄（管理員可設定要不要印）。
+        // ★資料來源刻意是「各簽章格」而不是 approval_record——後者的意見欄可能帶內部註記，
+        //   而使用者明確要求列印**絕對禁止出現「管理員○○○代簽」字樣**。
+        //   這裡只輸出 關卡／簽核人／日期，proxy 欄位一個都不帶出去。
+        'print_sign_log' => (int)(ec_settings($db)['ec_print_sign_log'] ?? 0),
+        'sign_log'       => ec_print_sign_log_rows($db, $row),
         'stamp_tpl'        => ec_stamp_template($db, 'ec_stamp_tpl_id'),
         'review_stamp_tpl' => ec_stamp_template($db, 'ec_review_stamp_tpl_id'),
     ];

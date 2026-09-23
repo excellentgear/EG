@@ -834,17 +834,38 @@ function renderPlan(res) {
       + '<option value="month"' + (GSCALE === 'month' ? ' selected' : '') + '>月</option></select>'
       + '<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">'
       + '<input type="checkbox" id="gHideDone" data-eg-skip="1"' + (HIDE_DONE ? ' checked' : '') + '>隱藏已完成的步驟</label>'
-      + (res.can_edit ? '<button id="btnSeed" title="帶入 AS9100 標準流程（三個階段與各步驟）"><i class="fa fa-magic"></i> 帶入標準流程</button>'
-                      + '<button id="btnGoalAdd"><i class="fa fa-plus"></i> 新增目標</button>'
-                      + '<button class="btn-warm" id="btnPlanSave"><i class="fa fa-save"></i> 儲存規劃表</button>' : '')
+      + (res.can_edit && !planLocked(res)
+            ? '<button id="btnSeed" title="帶入 AS9100 標準流程（三個階段與各步驟）"><i class="fa fa-magic"></i> 帶入標準流程</button>'
+              + '<button id="btnGoalAdd"><i class="fa fa-plus"></i> 新增目標</button>'
+              + '<button class="btn-warm" id="btnPlanSave"><i class="fa fa-save"></i> 儲存規劃表</button>' : '')
+      /* 送簽之後編排鎖定，但管理員要留一條救援路徑——排錯了卻改不了、又不想退回重簽時用 */
+      + (res.can_edit && planLocked(res) && PERM.canAdmin
+            ? '<button id="btnPlanUnlock" title="送簽後編排已鎖定；管理員可暫時解鎖修正排程"><i class="fa fa-unlock"></i> 解鎖編排</button>' : '')
       + '</div>'
       + autoEvidenceBar(res)
       + '<div id="ganttBox"></div>'
       + '<div id="planEditBox"' + (res.can_edit ? '' : ' style="display:none;"') + '></div>';
     $('#panePlan').html(h);
     drawGantt(res);
-    if (res.can_edit) drawPlanEditor(res);
+    if (res.can_edit) { if (planLocked(res)) drawPlanLocked(res); else drawPlanEditor(res); }
 }
+
+/* ── 送簽之後「編排目標與主要任務」鎖定（使用者 2026-09-23 指定） ──────────
+   送出去的排程就是對外承諾的日程，簽完再改等於簽的東西跟現在看到的不是同一份。
+   **只鎖「編排」**（任務名稱、日期、負責人、增刪列）——實際開始／實際完成／狀態／進度
+   仍然由各負責人走「回報進度」更新，那是執行結果不是編排。 */
+var PLAN_UNLOCK = false;
+function planLocked(res) {
+    if (PLAN_UNLOCK) return false;
+    var st = String(((res || CUR || {}).project || {}).status || '');
+    return st !== '' && st !== 'draft' && st !== 'rejected';
+}
+$(document).on('click', '#btnPlanUnlock', function () {
+    if (!confirm('這份規劃表已經送簽，排程是對外承諾的日程。\n\n確定要暫時解鎖編排嗎？'
+               + '\n（解鎖只在這一次開啟有效，關掉專案再打開就會恢復鎖定）')) return;
+    PLAN_UNLOCK = true;
+    renderPlan(CUR);
+});
 
 /** 執行規劃表上方的提示條：系統偵測到幾個步驟的完成日佐證。
  *  編輯檢視看不到「自動偵測」那一欄，只放在清單檢視的話使用者根本不知道有這個功能
@@ -1181,6 +1202,20 @@ function renderReport(r) {
         }
         kh += '</div>';
     });
+    /* 系統已經自動採用過的（evidence_json 裡有 auto 標記）要講出來，
+       不然使用者只看到日期已經填好，會以為是別人填的、或以為系統亂寫（2026-09-23 使用者回報的就是
+       「已綁定卻顯示沒有」的反面：填好了卻不知道是誰填的）。 */
+    var autoEv = [];
+    try { $.each(JSON.parse(t.evidence_json || '[]') || [], function (i, x) { if (x && x.auto) autoEv.push(x); }); } catch (e) {}
+    if (autoEv.length) {
+        var al = $.map(autoEv, function (x) { return esc(String(x.label || '')); }).join('<br>・');
+        h += '<div class="pj-auto-bar" style="margin-bottom:8px;">'
+           + '<b>這一步是系統自動認定完成的</b>（實際完成日 ' + dispDate(t.act_end) + '、進度 100%），'
+           + '不需要再填一次；依據：<br>・' + al
+           + '<br><span class="pj-hint">要改成別的日期，直接改下面的「實際完成」再按儲存回報即可——'
+           + '人工填過之後系統就不會再自動覆蓋。</span></div>';
+    }
+
     h += '<div class="sec"><h5>系統自動偵測到的佐證</h5>'
        + (hasKind ? kh : '<div class="pj-hint">這個步驟沒有可以自動偵測的來源（步驟名稱不屬於標準流程的那幾項），請直接填寫下面的日期並上傳佐證附件。</div>')
        + (hasKind && !ro
@@ -1744,6 +1779,57 @@ function planLeaveOk(what) {
     return confirm(box.join('與') + '還有沒有儲存的變更，' + (what || '離開') + '之後就會不見。\n\n要繼續嗎？（要保留請按取消，再按「儲存」）');
 }
 
+/**
+ * 鎖定版（送簽之後）：一樣把整份排程完整列出來，只是不能改。
+ * 欄位與編輯版**完全一致**（使用者要求「主要任務需要完整顯示…只是不需要可以更改」），
+ * 排版刻意壓緊（12px／列高 22px），一頁看得完整份流程。
+ */
+function drawPlanLocked(res) {
+    var grouped = groupTasks(res.goals || [], res.tasks || []);
+    var stMap   = (CUR && CUR.task_status) || META.task_status || {};
+    var actOpen = !!res.act_open, stOpen = !!res.status_open;
+    var h = faiBoxHtml(res)
+      + '<div class="sec"><h5>目標與主要任務（已送簽，編排鎖定）</h5>'
+      + '<p class="pj-hint">這份規劃表<b>已經送簽</b>，所以目標、任務名稱、預計日程、負責人與增刪列都<b>鎖定不可變更</b>'
+      + '——送出去的排程就是對外承諾的日程，簽完再改等於簽的跟現在看到的不是同一份。<br>'
+      + '<b>實際開始／實際完成／狀態／進度% 仍然會更新</b>：由各步驟的負責人在「清單」或時間軸上按<b>回報進度</b>填寫，'
+      + '系統偵測得到的（製令開立日、圖面發行日、報工架機與完工日…）會自動帶入。'
+      + (PERM.canAdmin ? '<br>排程真的排錯了，管理員可以按上方的<b>「解鎖編排」</b>暫時打開。' : '') + '</p>';
+    if (!grouped.length) h += '<div class="pj-hint">這份規劃表還沒有任何目標。</div>';
+    $.each(grouped, function (gi, g) {
+        h += '<div class="sec" style="background:#fff;">'
+          + '<div style="font-weight:bold;color:#7a4a18;margin-bottom:4px;">目標 ' + (gi + 1) + '：' + esc(g.goal_name || '')
+          + (g.dept_name ? '　<span class="pj-hint">主辦單位 ' + esc(g.dept_name) + '</span>' : '') + '</div>'
+          + '<div class="pj-table-wrap"><table class="pj-table pj-tight"><thead><tr>'
+          + '<th style="width:26px;">#</th><th>主要任務</th>'
+          + '<th style="width:52px;">接續</th>'
+          + '<th style="width:86px;">預計開始</th><th style="width:44px;">天數</th><th style="width:86px;">預計完成</th>'
+          + (actOpen ? '<th style="width:86px;">實際開始</th><th style="width:86px;">實際完成</th>' : '')
+          + (stOpen ? '<th style="width:70px;">狀態</th>' : '')
+          + '<th style="width:140px;">負責人</th><th style="width:52px;">進度%</th><th style="width:36px;">里程碑</th>'
+          + '</tr></thead><tbody>';
+        $.each(g.tasks || [], function (ti, t) {
+            var days = (t.plan_start && t.plan_end) ? planDaysBetween(t.plan_start, t.plan_end) : 0;
+            var par  = (ti > 0 && String(t.dep_mode || 'seq') === 'par');
+            h += '<tr><td>' + (ti + 1) + '</td>'
+              + '<td class="l">' + esc(t.task_name || '') + '</td>'
+              + '<td>' + (ti === 0 ? '<span class="pj-hint">起始</span>'
+                                   : (par ? '<span class="dep-par" title="與上一列同時進行">同時</span>' : '順序')) + '</td>'
+              + '<td>' + dispDate(t.plan_start) + '</td><td>' + (days > 0 ? days : '') + '</td>'
+              + '<td>' + dispDate(t.plan_end) + '</td>'
+              + (actOpen ? '<td>' + dispDate(t.act_start) + '</td><td>' + dispDate(t.act_end) + '</td>' : '')
+              + (stOpen ? '<td>' + esc(stMap[String(t.status_code || '')] || '') + '</td>' : '')
+              + '<td class="l">' + taskOwnerCell(t) + '</td>'
+              + '<td>' + num(t.progress) + '</td>'
+              + '<td>' + (num(t.is_milestone) ? '◆' : '') + '</td></tr>';
+        });
+        h += '</tbody></table></div></div>';
+    });
+    h += '</div>';
+    $('#planEditBox').html(h);
+    PLAN_DIRTY = false;
+}
+
 function drawPlanEditor(res) {
     var grouped = groupTasks(res.goals || [], res.tasks || []);
     PLAN_ACT_OPEN = !!res.act_open;
@@ -1759,7 +1845,10 @@ function drawPlanEditor(res) {
       + '部門清單由管理員在「模組設定 → 執行規劃表負責人部門」設定。<br>'
       + '<b>工作天數</b>與<b>預計完成</b>兩邊同動：填了開始日就自動帶出當天完成（＝1 天），'
       + '改天數會重算完成日、直接改完成日也會反算天數。天數只算工作日（週末與行事曆上的休假日不算、補班日要算）。'
-      + '<b>上一列的預計完成日會自動變成下一列的預計開始日</b>——你自己改過的開始日不會被蓋掉。<br>'
+      + '<b>接續</b>：預設「順序」＝接在前面那些步驟都做完之後才開始；改成「<b>同時</b>」就與上一列<b>一起開始</b>'
+      + '（例如 PFMEA／SOP／SIP／開立製令 可以並行，但「確認加工圖面 → PFMEA」一定要照順序）。'
+      + '同時進行的幾列算成一個群組，<b>下一個「順序」的步驟要等整組都做完才開始</b>。'
+      + '你自己改過的開始日不會被蓋掉。<br>'
       /* 使用者 2026-09-22 直接問「進度% 跟里程碑的勾選是甚麼？」——原本只寫在 th 的 title 裡，
          滑鼠移過去才看得到，等於沒寫。 */
       + '<b>進度%</b>＝這一步完成到幾成，底下的「<b>自動</b>」勾起來時<b>不用自己填</b>：'
@@ -1784,6 +1873,7 @@ function drawPlanEditor(res) {
           + '</div>'
           + '<table class="sub-tbl"><thead><tr>'
           + '<th style="width:28px;">#</th><th>主要任務</th>'
+          + '<th style="width:74px;" title="順序＝接在前面那些步驟之後才開始；同時＝與上一列一起開始">接續</th>'
           + '<th style="width:114px;">預計開始</th>'
           + '<th style="width:62px;" title="預計開始當天算第 1 天，只算工作日">工作天數</th>'
           + '<th style="width:114px;">預計完成</th>'
@@ -1838,7 +1928,8 @@ function planRowHtml(t, i) {
     var days = (t.plan_start && t.plan_end) ? planDaysBetween(t.plan_start, t.plan_end) : 0;
     /* 新列預設跟著自動；既有列看資料庫存的（沒有這個欄位的舊資料視同自動） */
     var pgAuto = (t.progress_auto === undefined || t.progress_auto === null) ? true : !!num(t.progress_auto);
-    return '<tr data-task="' + num(t.task_id) + '" data-kind="' + esc(kind) + '" data-pe0="' + esc(t.plan_end || '') + '">'
+    return '<tr data-task="' + num(t.task_id) + '" data-kind="' + esc(kind) + '"'
+      + ' data-pe0="' + esc(t.plan_end || '') + '" data-ps0="' + esc(t.plan_start || '') + '">'
       + '<td>' + (i + 1) + '</td>'
       + '<td><input type="text" class="t-name' + (isSys ? ' ro-auto' : '') + '" value="'
       + esc(t.task_name || '') + '"' + (isSys ? ' readonly title="系統環節，名稱不可修改"' : '') + '>'
@@ -1854,6 +1945,7 @@ function planRowHtml(t, i) {
               + '<input type="hidden" class="t-ae" value="' + esc(t.act_end || '') + '">')
       + (PLAN_ST_OPEN ? '' : '<input type="hidden" class="t-status" value="">')
       + '</td>'
+      + '<td>' + depModeSelect(t, i) + '</td>'
       + '<td><input type="date" class="t-ps"' + planMinAttr() + ' value="' + esc(t.plan_start || '') + '"></td>'
       + '<td><input type="number" class="t-days" min="1" max="999" value="' + (days > 0 ? days : '') + '"></td>'
       + '<td><input type="date" class="t-pe" value="' + esc(t.plan_end || '') + '"></td>'
@@ -1949,26 +2041,83 @@ function planRowCheck($tr) {
 }
 
 /** 把後續「還跟著上一列」的列一起往後推（使用者自己改過的開始日不覆蓋，遇到就停） */
-function planChainFrom($tr) {
-    var guard = 0;
-    while (guard++ < 500) {
-        var pe = $.trim($tr.find('.t-pe').val());
-        var old = String($tr.attr('data-pe0') || '');
-        $tr.attr('data-pe0', pe);
-        var $next = $tr.next('tr');
-        if (!$next.length || !pe) return;
-        var $nps = $next.find('.t-ps');
-        var cur = $.trim($nps.val());
-        if (cur !== '' && cur !== old) return;        // 下一列的開始日是使用者自己填的，不動它
-        if (cur === pe) { $tr = $next; continue; }    // 已經一致，往後檢查下一列
-        $nps.val(pe);
-        var ndy = num($next.find('.t-days').val());
-        var npe = ndy > 0 ? planEndByDays(pe, ndy) : pe;
-        $next.find('.t-pe').val(npe).removeClass('fld-bad').attr('title', '');
-        if (!(ndy > 0)) $next.find('.t-days').val(planDaysBetween(pe, npe) || '');
-        $tr = $next;
+/* ── 流程相依：順序 / 與上一列同時 ──────────────────────────────────
+   使用者 2026-09-23：「流程要可以一起或是順序執行——PFMEA SOP SIP 開立製令 是可以同時執行，
+   但確認加工圖面 跟 PFMEA 就一定要順序執行」。
+   seq＝接在「前面所有步驟」之後才開始（不是只接上一列——上一列可能是平行群組裡的短工項）
+   par＝與上一列同時開始（同一群組），下一個 seq 要等整組做完。 */
+function depModeSelect(t, i) {
+    var v = (String((t || {}).dep_mode || 'seq') === 'par' && i > 0) ? 'par' : 'seq';
+    if (i === 0) {
+        /* 第一列沒有「上一列」可以並行，不給選但仍要送值出去（hidden） */
+        return '<span class="pj-hint">起始</span><input type="hidden" class="t-dep" value="seq">';
     }
+    return '<select class="t-dep" data-eg-skip="1">'
+         + '<option value="seq"' + (v === 'seq' ? ' selected' : '') + '>順序</option>'
+         + '<option value="par"' + (v === 'par' ? ' selected' : '') + '>同時</option></select>';
 }
+function depModeOf($tr, i) {
+    if (num(i) === 0) return 'seq';
+    return String($tr.find('.t-dep').val() || 'seq') === 'par' ? 'par' : 'seq';
+}
+
+/**
+ * 整個目標的日期重排（取代原本「只往下推一列」的 planChainFrom）。
+ * 逐列走一次：
+ *   par 且不是第一列 → 開始日＝目前這個平行群組的開始日
+ *   seq              → 開始日＝到目前為止所有列裡最晚的完成日（cursor）
+ * 每一列算完就把 cursor 往後推到 max(cursor, 這一列的完成日)。
+ * **使用者自己改過的開始日不覆蓋**：判定方式沿用原本的 data-ps0（上一次由系統寫進去的值），
+ * 目前欄位值與它不同就表示是人改的。
+ */
+function planChainGoal($tbody) {
+    var $rows = $tbody.find('tr');
+    /* 第一段：先用「這一輪開始前的值」（data-ps0／data-pe0）算一次鏈，得到每一列
+       「照鏈排的話應該是哪一天」。第二段才真的寫值，而且**只寫「使用者從來沒有偏離過鏈」的那幾列**
+       ——不這樣分兩段的話，任何一次改動都會把手調過的日程整批蓋掉。 */
+    var seedWant = [], cur0 = '', grp0 = '';
+    $rows.each(function (i) {
+        var $tr = $(this);
+        var ps0 = String($tr.attr('data-ps0') || '');
+        var pe0 = String($tr.attr('data-pe0') || '');
+        var dep = depModeOf($tr, i);
+        var want = (i === 0) ? ps0 : ((dep === 'par' && grp0) ? grp0 : cur0);
+        seedWant.push(want);
+        if (dep !== 'par' || !grp0) grp0 = ps0 || want;
+        if (pe0 && (!cur0 || pe0 > cur0)) cur0 = pe0;
+    });
+
+    var cursor = '', groupStart = '';
+    $rows.each(function (i) {
+        var $tr = $(this);
+        var $ps = $tr.find('.t-ps'), $dy = $tr.find('.t-days'), $pe = $tr.find('.t-pe');
+        var dep = depModeOf($tr, i);
+        var want = (dep === 'par' && groupStart) ? groupStart : cursor;
+        var cur  = $.trim($ps.val());
+        if (i === 0) {
+            want = cur;                                   // 第一列的開始日永遠由使用者（或專案起日）決定
+        } else if (want && (cur === '' || cur === seedWant[i])) {
+            $ps.val(want);
+            cur = want;
+        } else {
+            want = cur;                                   // 人自己排過就以他的為準，後面照他的往下排
+        }
+        $tr.attr('data-ps0', cur);
+        if (dep !== 'par' || !groupStart) groupStart = cur;
+        var dy = num($dy.val());
+        var pe = $.trim($pe.val());
+        if (cur) {
+            if (dy > 0) { pe = planEndByDays(cur, dy); $pe.val(pe); }
+            else if (!pe || pe < cur) { pe = cur; $pe.val(pe); $dy.val(planDaysBetween(cur, pe) || ''); }
+        }
+        $tr.attr('data-pe0', pe);
+        planRowCheck($tr);
+        if (pe && (!cursor || pe > cursor)) cursor = pe;
+    });
+}
+/** 相容舊呼叫端：改一列就把整個目標重排一次 */
+function planChainFrom($tr) { planChainGoal($tr.closest('.t-body')); }
+$(document).on('change', '#planEditBox .t-dep', function () { planChainGoal($(this).closest('.t-body')); });
 $(document).on('change', '#planEditBox .t-ps', function () { planRowRecalc($(this).closest('tr'), 'ps'); });
 /* 專案起日一改，規劃表上每一列都要重驗一次（本來合法的可能就變成早於專案起日了） */
 $(document).on('change', '#eStart', function () {
@@ -2128,6 +2277,7 @@ function planSyncToCur() {
                 progress: num($r.find('.t-pg').val()),
                 progress_auto: $r.find('.t-pgauto').is(':checked') ? 1 : 0,
                 is_milestone: $r.find('.t-ms').is(':checked') ? 1 : 0,
+                dep_mode: depModeOf($r, ti),
                 sort_order: ti
             });
         });
@@ -2180,7 +2330,8 @@ function savePlan(pid, cb) {
                 owner_dept_id: $(this).find('.t-odept').val(),
                 progress: $(this).find('.t-pg').val(),
                 progress_auto: $(this).find('.t-pgauto').is(':checked') ? 1 : 0,
-                is_milestone: $(this).find('.t-ms').is(':checked') ? 1 : 0
+                is_milestone: $(this).find('.t-ms').is(':checked') ? 1 : 0,
+                dep_mode: depModeOf($(this), $(this).index())
             });
         });
     });
@@ -4106,7 +4257,8 @@ function buildPlanHtml(res, m) {
         + '.gl i { display:inline-block; width:14mm; vertical-align:middle; margin:0 2mm 0 6mm; }\n'
         + '.gl i.p { border-top:0.7mm solid #000; }\n'
         + '.gl i.a { border-top:0.7mm dashed #000; }\n'
-        + '.pdh { font-size:7.5pt; padding:0.5mm 0; }\n');
+        + '.pdh { font-size:7.5pt; padding:0.5mm 0; }\n'
+        + '.p-no { text-align:left; font-size:10pt; font-weight:bold; margin:0 0 1mm 0; }\n');
 
     var h = '<div class="p-co">' + esc(m.meta.company || '') + '</div>'
       + '<div class="p-en">EXCELLENT GEAR TECHNOLOGY CO.,LTD</div>'
@@ -4115,9 +4267,11 @@ function buildPlanHtml(res, m) {
     /* 表頭：專案名稱／專案負責人／專案目標／日期（比照紙本 B4/U4/B6/U6） */
     /* 專案料號（使用者要求「專案要顯示專案料號」）：取自專案料號清單，多個就全部列出來 */
     var partNos = $.map(res.parts || [], function (x) { return x.part_no || ''; });
-    h += '<table class="hdr"><colgroup><col style="width:16%"><col style="width:44%"><col style="width:16%"><col style="width:24%"></colgroup>'
-      + '<tr><td>專案名稱</td><td>' + esc(p.project_name) + '　<span style="font-size:9pt;">（專案代號 '
-      + esc(p.project_no) + '）</span></td>'
+    /* 專案代號印在**表格左上角的上方**（使用者 2026-09-23 指定），不再塞在專案名稱那一格裡；
+       表頭第一欄改印**客戶**（使用者：「列印的專案名稱改顯示客戶」——紙本上要先看到是哪一家的案子）。 */
+    h += '<div class="p-no">專案代號：' + esc(p.project_no) + '</div>'
+      + '<table class="hdr"><colgroup><col style="width:16%"><col style="width:44%"><col style="width:16%"><col style="width:24%"></colgroup>'
+      + '<tr><td>客戶</td><td>' + esc(p.customer_name || '－') + '</td>'
       + '<td>專案負責人</td><td class="c">' + ownerBlock(m, p.owner_id, p.owner_name) + '</td></tr>'
       /* 日期＝**專案建立日期**（使用者 2026-09-22 指定），不是規劃表填寫日或專案起日 */
       + '<tr><td>專案料號</td><td>' + esc(partNos.length ? partNos.join('、') : '－') + '</td>'

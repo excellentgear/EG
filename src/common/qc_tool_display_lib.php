@@ -241,6 +241,7 @@ function qc_tool_pick_rows(PDO $db, array $opt = []): array
             'type_name'     => (string)($r['QC_Tool'] ?? ''),
             'spec_desc'     => (string)($r['spec_desc'] ?? ''),
             'machine'       => (string)($r['machine'] ?? ''),
+            'manufacturer'  => (string)($r['manufacturer'] ?? ''),
             'disabled'      => $off ? 1 : 0,
             'disabled_date' => (string)($r['disabled_date'] ?? ''),
             // usable＝這份單據挑得挑不得：在用的一律可挑；停用的要「業務日期早於停用日」才可挑

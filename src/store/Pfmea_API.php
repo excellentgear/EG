@@ -730,6 +730,9 @@ case 'set_created_by':
     $nm = (string)($st->fetchColumn() ?: '');
     if ($nm === '') jout(['success'=>false,'message'=>'選擇的人員不存在']);
     $db->prepare("UPDATE pfmea_doc SET created_by=?, created_by_name=? WHERE id=?")->execute([$newUid, $nm, $id]);
+    // 列印版右上角的修訂履歷「新增文件」那一列準備人是另一份快照(pfmea_revision.prepared_by_name)，
+    // 不會因為改了 pfmea_doc.created_by_name 而跟著變，要在這裡一併同步（見函式註解）
+    pfmea_revision_sync_first_preparer($db, $id, $nm);
     jout(['success'=>true,'created_by'=>$newUid,'created_by_name'=>$nm]);
 
 // ── AS 文件編號綁定（本頁自身模板）────────────────────────────────

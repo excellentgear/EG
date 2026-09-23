@@ -321,6 +321,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sample_qty   = (int)($_POST['sample_qty'] ?? 0);
             $main_remark  = trim($_POST['main_remark'] ?? '');
             $update_std   = ($_POST['update_std'] ?? '0') === '1';
+            // 首件/末件：不必走抽樣，直接全檢＝抽驗數強制等於送驗數（後端再驗一次，不採信前端）
+            $insp_kind = in_array(($_POST['insp_kind'] ?? 'NORMAL'), ['FIRST','LAST'], true) ? $_POST['insp_kind'] : 'NORMAL';
+            if ($insp_kind !== 'NORMAL' && $incoming_qty > 0) $sample_qty = $incoming_qty;
             // 改寫料號標準(update_std)屬設定層級 → 需「管理檢驗設定」權限
             if ($update_std && !hasFeature($featsS, 'qc_manage_settings')) {
                 throw new QcPermException('修改檢驗標準需「管理檢驗設定」權限；如僅要記錄本次實測，請取消「同步更新標準」後再存檔');
@@ -408,11 +411,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // --- 2c. 先寫入檢驗表頭（ng/判定先給預設值，寫完明細再由後端彙總回填）---
             $insForm = $pdo->prepare(
                 "INSERT INTO qc_check_form
-                 (bom_ing_fid, d_id, version_id, form_type_id, process_name, batch_no, round_no,
+                 (bom_ing_fid, d_id, version_id, form_type_id, insp_kind, process_name, batch_no, round_no,
                   incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, pcs_verdicts, check_date, created_by, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, NOW(), ?, NOW())");
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, NOW(), ?, NOW())");
             $insForm->execute([
-                $fid, $d_id, $version_id, (string)$form_type_id, $process, $batch_no, $round_no,
+                $fid, $d_id, $version_id, (string)$form_type_id, $insp_kind, $process, $batch_no, $round_no,
                 $incoming_qty, $sample_qty, $main_remark,
                 json_encode($pcs, JSON_UNESCAPED_UNICODE), $user_id,
             ]);
@@ -711,6 +714,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $main_remark  = trim($_POST['main_remark'] ?? '');
             if (!$qid) throw new Exception('缺少 qc_form_id');
             if ($reason === '') throw new Exception('請填寫修改原因');
+            // 沒送 insp_kind＝舊呼叫端，維持原本內容不動；首件/末件一律全檢＝抽驗數強制等於送驗數
+            $hasInspKind = array_key_exists('insp_kind', $_POST);
+            $insp_kind = $hasInspKind && in_array($_POST['insp_kind'], ['FIRST','LAST'], true) ? $_POST['insp_kind'] : 'NORMAL';
+            if ($hasInspKind && $insp_kind !== 'NORMAL' && $incoming_qty > 0) $sample_qty = $incoming_qty;
 
             $h = $pdo->prepare("SELECT * FROM qc_check_form WHERE qc_form_id=?");
             $h->execute([$qid]);

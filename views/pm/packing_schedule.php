@@ -3,6 +3,10 @@
 // 包裝製程排程與檢驗回報頁（獨立於待加工排程 process_schedule_NOW.php）
 include_once '../../src/common/_config.php';
 include "../../src/common/DBConnection.php";
+require_once __DIR__ . '/../../src/common/role_features_helper.php';
+require_once __DIR__ . '/../../src/common/confirm_password_lib.php';
+require_once __DIR__ . '/../../src/common/packing_notify.php';
+require_once __DIR__ . '/../../src/common/people_lib.php';
 
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
@@ -71,6 +75,53 @@ try {
     }
 } catch (Exception $e) { /* 忽略：資料表不存在時由 inspection 頁建立 */ }
 
+// 欄位不存在才新增（重複執行安全）。ADD COLUMN 沒有 IF NOT EXISTS，所有 ALTER 都走這支。
+if (!function_exists('pk_ensure_column')) {
+    function pk_ensure_column(PDO $pdo, string $table, string $col, string $addSql): void {
+        try {
+            $chk = $pdo->query("SHOW COLUMNS FROM `$table` LIKE " . $pdo->quote($col));
+            if ($chk && $chk->rowCount() == 0) {
+                $pdo->exec("ALTER TABLE `$table` ADD COLUMN $addSql");
+            }
+        } catch (Exception $e) { /* 資料表不存在時忽略 */ }
+    }
+}
+if (!function_exists('pk_ensure_index')) {
+    function pk_ensure_index(PDO $pdo, string $table, string $idxName, string $addSql): void {
+        try {
+            $chk = $pdo->query("SHOW INDEX FROM `$table` WHERE Key_name = " . $pdo->quote($idxName));
+            if ($chk && $chk->rowCount() == 0) {
+                $pdo->exec("ALTER TABLE `$table` ADD $addSql");
+            }
+        } catch (Exception $e) { /* 忽略 */ }
+    }
+}
+
+// qc_packing_inspection 擴充：支援「暫存/結案」狀態機、分批出貨與入庫、管理員補登（2026-09-23）
+pk_ensure_column($pdo, 'qc_packing_inspection', 'status',        "status VARCHAR(10) NOT NULL DEFAULT 'closed' COMMENT '包裝紀錄狀態:open=暫存中可續編 closed=已結案鎖定（既有舊資料一律視為已結案）' AFTER judgement");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'bom',           "bom VARCHAR(30) NULL COMMENT '快照:製令號碼(對應bom.bom)，供補登搜尋與結案清單篩選' AFTER bom_ing_fid");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'part_no',       "part_no VARCHAR(30) NULL COMMENT '快照:料號(對應d_setting.D_Setting_Id)，供結案清單篩選' AFTER customer_name");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'bom_total_qty', "bom_total_qty INT NULL COMMENT '快照:BOM總數(bom.sqty)，因BOM可能分批送到包裝，此欄與order_qty意義不同' AFTER order_qty");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'ship_now_qty',  "ship_now_qty INT NOT NULL DEFAULT 0 COMMENT '本次直接出貨數量（勾選直接出貨才會有值）' AFTER ok_qty");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'warehouse_qty', "warehouse_qty INT NULL COMMENT '本次實際入庫數量' AFTER ship_now_qty");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'is_full_shipment', "is_full_shipment TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否勾選直接出貨' AFTER warehouse_qty");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'storage_method', "storage_method VARCHAR(20) NULL COMMENT '成品入庫方式:direct/pallet，全部直接出貨(無剩餘入庫量)時可空白' AFTER is_full_shipment");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'pallet_qty',    "pallet_qty INT NULL COMMENT '棧板數（storage_method=pallet時）' AFTER storage_method");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'packer_id',     "packer_id INT NULL COMMENT '包裝人員 user.id（補登用；一般填寫仍以packer文字快照為準）' AFTER packer");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'is_backfill',   "is_backfill TINYINT(1) NOT NULL DEFAULT 0 COMMENT '管理員補登舊資料=1' AFTER remark");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'backfill_by',   "backfill_by INT NULL COMMENT '補登操作人 user.id' AFTER is_backfill");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'backfill_at',   "backfill_at DATETIME NULL COMMENT '補登操作時間' AFTER backfill_by");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'closed_by',     "closed_by INT NULL COMMENT '完成包裝(結案)操作人 user.id' AFTER backfill_at");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'closed_at',     "closed_at DATETIME NULL COMMENT '完成包裝(結案)時間' AFTER closed_by");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'updated_by',    "updated_by INT NULL COMMENT '最後修改人 user.id' AFTER updated_at");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'edit_note',     "edit_note VARCHAR(255) NULL COMMENT '已結案紀錄由管理員解鎖修改時的原因（最後一次）' AFTER updated_by");
+pk_ensure_index($pdo, 'qc_packing_inspection', 'idx_pki_status', "INDEX idx_pki_status (bom_ing_fid, status)");
+pk_ensure_index($pdo, 'qc_packing_inspection', 'idx_pki_bom',    "INDEX idx_pki_bom (bom)");
+pk_ensure_index($pdo, 'qc_packing_inspection', 'idx_pki_insdate', "INDEX idx_pki_insdate (inspection_date)");
+
+// 既有資料（本次改版前寫入的）一律視為已結案：status 預設值已是 'closed'，這裡只需確保欄位不是 NULL（保險）
+try { $pdo->exec("UPDATE qc_packing_inspection SET status='closed' WHERE status IS NULL OR status=''"); } catch (Exception $e) {}
+
 // 包裝外觀檢驗「預設模板」（全系統一份）
 $pdo->exec("CREATE TABLE IF NOT EXISTS pm_packing_appearance_template (
     id INT AUTO_INCREMENT PRIMARY KEY COMMENT '主鍵',
@@ -117,6 +168,18 @@ function get_packing_process_nos(PDO $pdo): array
     $rows = $pdo->query("SELECT process_no FROM pm_packing_process_setting ORDER BY process_no")->fetchAll(PDO::FETCH_COLUMN);
     return array_map('intval', $rows);
 }
+
+// =============================================================================
+// 權限（module='packing_schedule'）：一般包裝填寫維持既有開放（不因本次新增角色而鎖死既有使用者）
+// 僅新增的管理性功能（補登舊資料／解鎖修改已結案紀錄／角色與功能設定）才需要下列功能碼；
+// 角色的建立與功能碼勾選在本頁「角色與功能設定」跳窗操作（呼叫共用 Roles_API.php），
+// 角色與使用者的對應仍統一在 user_permissions.php 指派（鐵律4：不另開第二套指派介面）
+// =============================================================================
+$pk_uid = (int)$user_id;
+$pk_features = rf_load_user_features($pdo, $pk_uid);
+$PK_CAN_BACKFILL = rf_has_feature($pk_features, 'pk_backfill');
+$PK_CAN_BACKFILL_PACKER = rf_has_feature($pk_features, 'pk_backfill_change_packer');
+$PK_CAN_ADMIN = rf_has_feature($pk_features, 'pk_admin');
 
 // =============================================================================
 // 後端 API
@@ -173,25 +236,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         bi.sqty,
                         pn.ProcessName,
                         b.d_id,
+                        b.sqty                 AS bom_total_qty,
                         b.Client_Name,
                         b.priority_type        AS bom_priority,
-                        COALESCE(b.Delivery_date, ol.Delivery_date) AS delivery_date,
+                        COALESCE(bopm_agg.min_delivery, b.Delivery_date, ol.Delivery_date) AS delivery_date,
+                        bopm_agg.min_delivery  AS order_bound_delivery,
+                        bopm_agg.order_cnt,
                         COALESCE(d.D_Setting_Id, b.d_id) AS part_no,
                         d.Revision,
                         pp.priority_type       AS pack_priority,
-                        pp.sort_seq
+                        pp.sort_seq,
+                        qpi_open.packing_inspection_id AS draft_id
                     FROM bom_ing bi
                     JOIN bom b               ON bi.bom = b.bom
                     LEFT JOIN order_list ol  ON b.o_order_id = ol.Order_id
                     LEFT JOIN process_no pn  ON bi.process_no = pn.ProcessNo
                     LEFT JOIN d_setting d    ON b.d_setting_id = d.d_id
                     LEFT JOIN pm_packing_priority pp ON bi.bom_ing_fid = pp.bom_ing_fid
+                    LEFT JOIN (
+                        SELECT bopm.bom, MIN(ot.Delivery_date) AS min_delivery, COUNT(*) AS order_cnt
+                        FROM bom_order_process_map bopm
+                        JOIN order_track ot ON ot.Order_id = bopm.order_id
+                        GROUP BY bopm.bom
+                    ) bopm_agg ON bopm_agg.bom = bi.bom
+                    LEFT JOIN qc_packing_inspection qpi_open
+                           ON qpi_open.bom_ing_fid = bi.bom_ing_fid AND qpi_open.status = 'open'
                     WHERE bi.process_no IN ($inQuery)
                       AND bi.processing_state = 'ing'
                       AND (b.processing_state <> 1 OR b.processing_state IS NULL)
                       AND NOT EXISTS (
                           SELECT 1 FROM qc_packing_inspection qpi
-                          WHERE qpi.bom_ing_fid = bi.bom_ing_fid
+                          WHERE qpi.bom_ing_fid = bi.bom_ing_fid AND qpi.status = 'closed'
                       )";
             $stmt = $pdo->prepare($sql);
             $stmt->execute($procNos);
@@ -205,6 +280,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $r['eff_priority'] = ($r['pack_priority'] !== null && $r['pack_priority'] !== '')
                     ? $r['pack_priority'] : $r['bom_priority'];
                 $r['is_overdue'] = (!empty($r['delivery_date']) && strtotime($r['delivery_date']) < $today) ? 1 : 0;
+                $r['has_draft'] = !empty($r['draft_id']) ? 1 : 0;
             }
             unset($r);
 
@@ -233,17 +309,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             exit;
         }
 
-        // 5. 取得單筆包裝檢驗表單資料（外觀檢驗項目：先料號專用、無則預設模板）
+        // 5. 取得單筆包裝檢驗表單資料（外觀檢驗項目：先料號專用、無則預設模板；
+        //    另帶回 BOM 總數／訂單綁定交期／若已有暫存中紀錄一併回傳供續編）
         if ($action === 'get_form') {
             $bom = $_POST['bom'];
+            $bomIngFid = (int)($_POST['bom_ing_fid'] ?? 0);
 
             // 取得料號版本 d_id：優先用 b.d_setting_id（精確版次），沒有則以料號字串對應最新版本
             $stmt = $pdo->prepare("SELECT COALESCE(NULLIF(b.d_setting_id, 0),
-                                          (SELECT MAX(d.d_id) FROM d_setting d WHERE d.D_Setting_Id = b.d_id)) AS d_id
+                                          (SELECT MAX(d.d_id) FROM d_setting d WHERE d.D_Setting_Id = b.d_id)) AS d_id,
+                                          b.sqty AS bom_total_qty
                                    FROM bom b WHERE b.bom = ? LIMIT 1");
             $stmt->execute([$bom]);
-            $dId = $stmt->fetchColumn();
-            $dId = $dId ? (int)$dId : null;
+            $bomRow = $stmt->fetch(PDO::FETCH_ASSOC);
+            $dId = $bomRow ? ($bomRow['d_id'] ? (int)$bomRow['d_id'] : null) : null;
+            $bomTotalQty = $bomRow ? (int)$bomRow['bom_total_qty'] : null;
 
             $items = [];
             $source = 'none'; // custom=料號專用 / template=預設模板 / none=皆無
@@ -259,7 +339,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if ($items) $source = 'template';
             }
 
-            echo json_encode(['success' => true, 'items' => $items, 'source' => $source, 'd_id' => $dId]);
+            // 訂單綁定交期（bom_order_process_map → order_track，支援多對多）
+            $orderBind = [];
+            $ob = $pdo->prepare("SELECT ot.Order_id, ot.Order_oo, ot.C_order, ot.Client_name, ot.Delivery_date, ot.Qty AS order_qty, bopm.allocated_qty
+                                  FROM bom_order_process_map bopm
+                                  JOIN order_track ot ON ot.Order_id = bopm.order_id
+                                  WHERE bopm.bom = ? ORDER BY ot.Delivery_date ASC");
+            $ob->execute([$bom]);
+            $orderBind = $ob->fetchAll(PDO::FETCH_ASSOC);
+
+            // 暫存中的既有紀錄（同一 bom_ing_fid 續編用）
+            $draft = null;
+            if ($bomIngFid) {
+                $dr = $pdo->prepare("SELECT * FROM qc_packing_inspection WHERE bom_ing_fid = ? AND status = 'open' ORDER BY packing_inspection_id DESC LIMIT 1");
+                $dr->execute([$bomIngFid]);
+                $draft = $dr->fetch(PDO::FETCH_ASSOC) ?: null;
+                if ($draft) {
+                    $dj = $pdo->prepare("SELECT data_json FROM qc_packing_inspection_data WHERE packing_inspection_id = ? ORDER BY data_id DESC LIMIT 1");
+                    $dj->execute([$draft['packing_inspection_id']]);
+                    $draft['packaging_data'] = $dj->fetchColumn() ?: null;
+                }
+            }
+
+            echo json_encode(['success' => true, 'items' => $items, 'source' => $source, 'd_id' => $dId,
+                'bom_total_qty' => $bomTotalQty, 'order_bind' => $orderBind, 'draft' => $draft]);
             exit;
         }
 
@@ -341,30 +444,165 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         // 6. 儲存包裝檢驗結果（寫入 qc_packing_inspection + qc_packing_inspection_data）
+        //    支援：暫存(status=open，續編同一列不新增)／完成包裝(status=closed，鎖定+通知生管)／
+        //    管理員補登舊資料(is_backfill，可指定日期與包裝人員)／已結案紀錄由管理員以操作密碼解鎖修改
         if ($action === 'save_result') {
-            $bomIngFid = (int)$_POST['bom_ing_fid'];
+            $bomIngFid = (int)($_POST['bom_ing_fid'] ?? 0);
+            if (!$bomIngFid) throw new Exception('缺少製程資料(bom_ing_fid)');
             $orderQty = intval($_POST['order_qty'] ?? 0);
             $ngQty = intval($_POST['ng_qty'] ?? 0);
+            $shipNowQty = intval($_POST['ship_now_qty'] ?? 0);
+            $isFullShip = !empty($_POST['is_full_shipment']) ? 1 : 0;
+            $storageMethod = trim($_POST['storage_method'] ?? '');
+            $palletQty = (($_POST['pallet_qty'] ?? '') !== '') ? intval($_POST['pallet_qty']) : null;
             $packagingData = $_POST['packaging_data'] ?? null;
             $remark = $_POST['remark'] ?? '';
+            $complete = !empty($_POST['complete']) ? 1 : 0;
+            $isBackfill = !empty($_POST['is_backfill']) ? 1 : 0;
+
             $okQty = $orderQty - $ngQty;
+            if ($okQty < 0) throw new Exception('NG數量不可大於數量');
             $judgement = ($ngQty > 0) ? 'FAIL' : 'PASS';
 
-            $pdo->beginTransaction();
-            $sql = "INSERT INTO qc_packing_inspection
-                    (bom_ing_fid, inspection_date, order_qty, inspected_qty, ok_qty, ng_qty, judgement, inspector, packer, remark)
-                    VALUES (?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)";
-            $pdo->prepare($sql)->execute([
-                $bomIngFid, $orderQty, $orderQty, $okQty, $ngQty, $judgement,
-                $user_cname, $user_cname, $remark
-            ]);
-            $pkgId = $pdo->lastInsertId();
+            // 直接出貨／成品入庫方式檢核（前端已擋一次，這裡同規則再擋一次＝鐵律8）
+            if ($isFullShip) {
+                if ($shipNowQty <= 0) throw new Exception('請輸入本次出貨數量');
+                if ($shipNowQty > $okQty) throw new Exception('本次出貨數量不可大於可出/入庫數量(' . $okQty . ')');
+                $warehouseQty = $okQty - $shipNowQty;
+                if ($warehouseQty > 0 && $storageMethod === '') throw new Exception('尚有 ' . $warehouseQty . ' 個需要入庫，請選擇成品入庫方式');
+                if ($warehouseQty === 0) { $storageMethod = ''; $palletQty = null; }
+            } else {
+                $shipNowQty = 0;
+                $warehouseQty = (($_POST['warehouse_qty'] ?? '') !== '') ? intval($_POST['warehouse_qty']) : $okQty;
+            }
 
+            // BOM／料號／客戶快照（結案清單篩選、通知內文用；一律以資料庫現況為準，不採信前端送來的名稱）
+            $biStmt = $pdo->prepare("SELECT bi.bom, bi.process_no, b.sqty AS bom_total_qty, b.Client_Name,
+                                            COALESCE(d.D_Setting_Id, b.d_id) AS part_no
+                                     FROM bom_ing bi JOIN bom b ON bi.bom = b.bom
+                                     LEFT JOIN d_setting d ON b.d_setting_id = d.d_id
+                                     WHERE bi.bom_ing_fid = ? LIMIT 1");
+            $biStmt->execute([$bomIngFid]);
+            $bi = $biStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$bi) throw new Exception('查無此製程資料');
+            $bomTotalQty = $bi['bom_total_qty'] !== null ? (int)$bi['bom_total_qty'] : null;
+
+            // 找出這個 bom_ing_fid 目前是否已有紀錄可以續編（explicit id 優先，否則找暫存中的那一列）
+            $editId = intval($_POST['packing_inspection_id'] ?? 0);
+            $cur = null;
+            if ($editId) {
+                $cs = $pdo->prepare("SELECT * FROM qc_packing_inspection WHERE packing_inspection_id = ?");
+                $cs->execute([$editId]);
+                $cur = $cs->fetch(PDO::FETCH_ASSOC);
+                if (!$cur) throw new Exception('查無此包裝紀錄，可能已被刪除，請重新整理');
+                if ((int)$cur['bom_ing_fid'] !== $bomIngFid) throw new Exception('資料不一致，請重新整理後再試');
+            } else {
+                $os = $pdo->prepare("SELECT * FROM qc_packing_inspection WHERE bom_ing_fid = ? AND status = 'open' ORDER BY packing_inspection_id DESC LIMIT 1");
+                $os->execute([$bomIngFid]);
+                $cur = $os->fetch(PDO::FETCH_ASSOC) ?: null;
+            }
+
+            // 管理員補登：需要補登權限；只用來「新建缺漏的舊紀錄」，已存在任何紀錄(暫存或結案)一律
+            // 改請到已結案清單解鎖修改，不重複補一筆——避免同一個製程冒出兩筆包裝紀錄講不同的事實
+            $recordDate = null; // null=沿用既有值或今天
+            $packerName = $user_cname;
+            $packerId = null;
+            if ($isBackfill) {
+                if (!$PK_CAN_BACKFILL) throw new Exception('無補登權限，請洽管理員於「角色與功能設定」授權');
+                if (!$cur) {
+                    $chkAny = $pdo->prepare("SELECT COUNT(*) FROM qc_packing_inspection WHERE bom_ing_fid = ?");
+                    $chkAny->execute([$bomIngFid]);
+                    if ((int)$chkAny->fetchColumn() > 0) throw new Exception('此製程已有包裝紀錄，請至已結案清單解鎖後修改，不要重複補登');
+                }
+                $procNos = get_packing_process_nos($pdo);
+                if (!in_array((int)$bi['process_no'], $procNos, true)) throw new Exception('此製程不是目前設定的包裝製程，無法補登');
+                $rd = trim($_POST['record_date'] ?? '');
+                if ($rd === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $rd)) throw new Exception('請選擇補登日期');
+                if (strtotime($rd) > strtotime(date('Y-m-d'))) throw new Exception('補登日期不可為未來');
+                $recordDate = $rd;
+                if ($PK_CAN_BACKFILL_PACKER) {
+                    $pid = intval($_POST['packer_id'] ?? 0);
+                    if ($pid) {
+                        $pu = $pdo->prepare("SELECT id, user_cname FROM `user` WHERE id = ? LIMIT 1");
+                        $pu->execute([$pid]);
+                        $pr = $pu->fetch(PDO::FETCH_ASSOC);
+                        if (!$pr) throw new Exception('指定的包裝人員不存在');
+                        $packerId = (int)$pr['id'];
+                        $packerName = trim((string)$pr['user_cname']) !== '' ? $pr['user_cname'] : $packerName;
+                    }
+                }
+            }
+
+            // 已結案紀錄要改：僅管理員可操作，且要輸入操作確認密碼才算解鎖（鐵律8：不可只靠前端擋）
+            $needPasswordNote = false;
+            if ($cur && $cur['status'] === 'closed') {
+                if (!$PK_CAN_ADMIN) throw new Exception('此紀錄已結案鎖定，需管理員權限才能修改');
+                $pw = (string)($_POST['confirm_password'] ?? '');
+                if ($pw === '') throw new Exception('此紀錄已結案鎖定，請輸入操作確認密碼才能修改');
+                $vr = eg_confirm_password_verify_scoped($pdo, $pk_uid, $pw, 'pk_edit_closed');
+                if (empty($vr['ok'])) throw new Exception($vr['msg']);
+                $needPasswordNote = true;
+            }
+
+            $insDate = $recordDate !== null ? $recordDate : ($cur ? $cur['inspection_date'] : date('Y-m-d'));
+            $newStatus = $complete ? 'closed' : 'open';
+            $now = date('Y-m-d H:i:s');
+
+            $pdo->beginTransaction();
+            if ($cur) {
+                $pkgId = (int)$cur['packing_inspection_id'];
+                $sql = "UPDATE qc_packing_inspection SET
+                            inspection_date = ?, bom = ?, part_no = ?, customer_name = ?,
+                            order_qty = ?, bom_total_qty = ?, inspected_qty = ?, ok_qty = ?, ng_qty = ?,
+                            ship_now_qty = ?, warehouse_qty = ?, is_full_shipment = ?, storage_method = ?, pallet_qty = ?,
+                            judgement = ?, inspector = ?, packer = ?, packer_id = ?, remark = ?, status = ?,
+                            is_backfill = GREATEST(is_backfill, ?), backfill_by = COALESCE(backfill_by, ?), backfill_at = COALESCE(backfill_at, ?),
+                            closed_by = " . ($complete ? "COALESCE(closed_by, ?)" : "closed_by") . ",
+                            closed_at = " . ($complete ? "COALESCE(closed_at, ?)" : "closed_at") . ",
+                            updated_by = ?" . ($needPasswordNote ? ", edit_note = ?" : "") . "
+                        WHERE packing_inspection_id = ?";
+                $params = [
+                    $insDate, $bi['bom'], $bi['part_no'], $bi['Client_Name'],
+                    $orderQty, $bomTotalQty, $orderQty, $okQty, $ngQty,
+                    $shipNowQty, $warehouseQty, $isFullShip, ($storageMethod ?: null), $palletQty,
+                    $judgement, $user_cname, $packerName, $packerId, $remark, $newStatus,
+                    $isBackfill, ($isBackfill ? $pk_uid : null), ($isBackfill ? $now : null),
+                ];
+                if ($complete) $params[] = $pk_uid;
+                if ($complete) $params[] = $now;
+                $params[] = $pk_uid;
+                if ($needPasswordNote) $params[] = ('管理員解鎖修改：' . $user_cname . ' ' . date('Y-m-d H:i'));
+                $params[] = $pkgId;
+                $pdo->prepare($sql)->execute($params);
+            } else {
+                $sql = "INSERT INTO qc_packing_inspection
+                        (bom_ing_fid, bom, part_no, inspection_date, customer_name, order_qty, bom_total_qty,
+                         inspected_qty, ok_qty, ng_qty, ship_now_qty, warehouse_qty, is_full_shipment, storage_method, pallet_qty,
+                         judgement, inspector, packer, packer_id, remark, status,
+                         is_backfill, backfill_by, backfill_at, closed_by, closed_at, updated_by)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                $pdo->prepare($sql)->execute([
+                    $bomIngFid, $bi['bom'], $bi['part_no'], $insDate, $bi['Client_Name'], $orderQty, $bomTotalQty,
+                    $orderQty, $okQty, $ngQty, $shipNowQty, $warehouseQty, $isFullShip, ($storageMethod ?: null), $palletQty,
+                    $judgement, $user_cname, $packerName, $packerId, $remark, $newStatus,
+                    $isBackfill, ($isBackfill ? $pk_uid : null), ($isBackfill ? $now : null),
+                    ($complete ? $pk_uid : null), ($complete ? $now : null), $pk_uid,
+                ]);
+                $pkgId = (int)$pdo->lastInsertId();
+            }
+
+            $pdo->prepare("DELETE FROM qc_packing_inspection_data WHERE packing_inspection_id = ?")->execute([$pkgId]);
             $pdo->prepare("INSERT INTO qc_packing_inspection_data (packing_inspection_id, data_json) VALUES (?, ?)")
                 ->execute([$pkgId, json_encode($packagingData)]);
             $pdo->commit();
 
-            echo json_encode(['success' => true, 'message' => '包裝檢驗紀錄已儲存', 'pkg_id' => $pkgId]);
+            if ($complete && !$isBackfill) {
+                // 通知生管可安排出貨（補登舊資料是補歷史紀錄，不重新觸發即時通知）
+                try { pk_packing_notify_closed($pdo, (string)$bi['bom'], (string)$bi['part_no'], $orderQty, $pk_uid); } catch (Throwable $e) {}
+            }
+
+            echo json_encode(['success' => true, 'message' => $complete ? '包裝已完成並結案' : '已暫存，可稍後繼續填寫',
+                'pkg_id' => $pkgId, 'status' => $newStatus]);
             exit;
         }
 
@@ -397,6 +635,136 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
             $pdo->commit();
             echo json_encode(['success' => true]);
+            exit;
+        }
+
+        // 8a. 補登可指定包裝人員時，供挑選的在職人員清單（人員列表鐵則：走共用 eg_people_list，不自寫SQL）
+        if ($action === 'people_list') {
+            if (!$PK_CAN_BACKFILL) { echo json_encode(['success' => false, 'message' => '無補登權限']); exit; }
+            $rows = eg_people_list($pdo);
+            $out = array_map(function ($r) {
+                return ['id' => $r['id'], 'name' => $r['user_cname'], 'dept_name' => $r['dept_name'], 'position_name' => $r['position_name']];
+            }, $rows);
+            echo json_encode(['success' => true, 'data' => $out]);
+            exit;
+        }
+
+        // 9. 管理員補登：搜尋「尚未有任何包裝紀錄」的 BOM 製程（不限 processing_state，含已完工/已結案的舊資料）
+        if ($action === 'backfill_search') {
+            if (!$PK_CAN_BACKFILL) { echo json_encode(['success' => false, 'message' => '無補登權限']); exit; }
+            $procNos = get_packing_process_nos($pdo);
+            if (empty($procNos)) { echo json_encode(['success' => true, 'data' => [], 'need_setting' => true]); exit; }
+            $kw = trim($_POST['kw'] ?? '');
+            $inQuery = implode(',', array_fill(0, count($procNos), '?'));
+            $sql = "SELECT
+                        bi.bom_ing_fid, bi.bom, bi.process_no, bi.sqty,
+                        pn.ProcessName, b.d_id, b.sqty AS bom_total_qty, b.Client_Name,
+                        COALESCE(d.D_Setting_Id, b.d_id) AS part_no, d.Revision,
+                        COALESCE(b.Delivery_date, ol.Delivery_date) AS delivery_date
+                    FROM bom_ing bi
+                    JOIN bom b               ON bi.bom = b.bom
+                    LEFT JOIN order_list ol  ON b.o_order_id = ol.Order_id
+                    LEFT JOIN process_no pn  ON bi.process_no = pn.ProcessNo
+                    LEFT JOIN d_setting d    ON b.d_setting_id = d.d_id
+                    WHERE bi.process_no IN ($inQuery)
+                      AND NOT EXISTS (SELECT 1 FROM qc_packing_inspection qpi WHERE qpi.bom_ing_fid = bi.bom_ing_fid)";
+            $params = $procNos;
+            if ($kw !== '') {
+                $sql .= " AND (bi.bom LIKE ? OR b.d_id LIKE ? OR b.Client_Name LIKE ? OR d.D_Setting_Id LIKE ?)";
+                $like = '%' . $kw . '%';
+                array_push($params, $like, $like, $like, $like);
+            }
+            $sql .= " ORDER BY bi.bom DESC LIMIT 50";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            echo json_encode(['success' => true, 'data' => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
+            exit;
+        }
+
+        // 10. 已結案清單（分頁＋篩選：BOM／料號關鍵字，日期區間預設本月，不限定年份）
+        if ($action === 'list_closed') {
+            $bomKw = trim($_POST['bom'] ?? '');
+            $partKw = trim($_POST['part_no'] ?? '');
+            $dateFrom = trim($_POST['date_from'] ?? '');
+            $dateTo = trim($_POST['date_to'] ?? '');
+            $page = max(1, intval($_POST['page'] ?? 1));
+            $per = intval($_POST['per'] ?? 20);
+            if (!in_array($per, [10, 20, 50, 100], true)) $per = 20;
+
+            $where = ["qpi.status = 'closed'"];
+            $params = [];
+            if ($bomKw !== '') { $where[] = 'qpi.bom LIKE ?'; $params[] = '%' . $bomKw . '%'; }
+            if ($partKw !== '') { $where[] = 'qpi.part_no LIKE ?'; $params[] = '%' . $partKw . '%'; }
+            if ($dateFrom !== '') { $where[] = 'qpi.inspection_date >= ?'; $params[] = $dateFrom; }
+            if ($dateTo !== '') { $where[] = 'qpi.inspection_date <= ?'; $params[] = $dateTo; }
+            $whereSql = implode(' AND ', $where);
+
+            $cnt = $pdo->prepare("SELECT COUNT(*) FROM qc_packing_inspection qpi WHERE $whereSql");
+            $cnt->execute($params);
+            $total = (int)$cnt->fetchColumn();
+
+            $sql = "SELECT qpi.packing_inspection_id, qpi.bom_ing_fid, qpi.bom, qpi.part_no, qpi.customer_name,
+                           qpi.inspection_date, qpi.order_qty, qpi.bom_total_qty, qpi.ok_qty, qpi.ng_qty, qpi.judgement,
+                           qpi.ship_now_qty, qpi.warehouse_qty, qpi.is_full_shipment, qpi.storage_method,
+                           qpi.packer, qpi.inspector, qpi.is_backfill, qpi.closed_by, qpi.closed_at, qpi.remark,
+                           uc.user_cname AS closed_by_name
+                    FROM qc_packing_inspection qpi
+                    LEFT JOIN `user` uc ON uc.id = qpi.closed_by
+                    WHERE $whereSql
+                    ORDER BY qpi.inspection_date DESC, qpi.packing_inspection_id DESC
+                    LIMIT $per OFFSET " . (($page - 1) * $per);
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            echo json_encode(['success' => true, 'data' => $stmt->fetchAll(PDO::FETCH_ASSOC), 'total' => $total, 'page' => $page, 'per' => $per]);
+            exit;
+        }
+
+        // 10a. 已結案清單：不分頁，全部符合條件的資料（列印用，鐵律「要看過全部資料才能算出結果」）
+        if ($action === 'list_closed_all') {
+            $bomKw = trim($_POST['bom'] ?? '');
+            $partKw = trim($_POST['part_no'] ?? '');
+            $dateFrom = trim($_POST['date_from'] ?? '');
+            $dateTo = trim($_POST['date_to'] ?? '');
+            $where = ["qpi.status = 'closed'"];
+            $params = [];
+            if ($bomKw !== '') { $where[] = 'qpi.bom LIKE ?'; $params[] = '%' . $bomKw . '%'; }
+            if ($partKw !== '') { $where[] = 'qpi.part_no LIKE ?'; $params[] = '%' . $partKw . '%'; }
+            if ($dateFrom !== '') { $where[] = 'qpi.inspection_date >= ?'; $params[] = $dateFrom; }
+            if ($dateTo !== '') { $where[] = 'qpi.inspection_date <= ?'; $params[] = $dateTo; }
+            $whereSql = implode(' AND ', $where);
+            $sql = "SELECT qpi.bom, qpi.part_no, qpi.customer_name, qpi.inspection_date, qpi.order_qty, qpi.bom_total_qty,
+                           qpi.ok_qty, qpi.ng_qty, qpi.judgement, qpi.ship_now_qty, qpi.warehouse_qty, qpi.packer, qpi.remark
+                    FROM qc_packing_inspection qpi
+                    WHERE $whereSql
+                    ORDER BY qpi.inspection_date ASC, qpi.packing_inspection_id ASC";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            echo json_encode(['success' => true, 'data' => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
+            exit;
+        }
+
+        // 11. 已結案紀錄明細（開啟編輯／檢視用；含外觀檢驗項目、訂單綁定交期）
+        if ($action === 'get_closed_detail') {
+            $id = (int)($_POST['id'] ?? 0);
+            $st = $pdo->prepare("SELECT * FROM qc_packing_inspection WHERE packing_inspection_id = ?");
+            $st->execute([$id]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$row) { echo json_encode(['success' => false, 'message' => '查無此紀錄']); exit; }
+            $dj = $pdo->prepare("SELECT data_json FROM qc_packing_inspection_data WHERE packing_inspection_id = ? ORDER BY data_id DESC LIMIT 1");
+            $dj->execute([$id]);
+            $row['packaging_data'] = $dj->fetchColumn() ?: null;
+
+            // 補上目前的製程/客戶/料號基本資料（給編輯視窗表頭顯示用，bom_ing 可能已不在待包裝清單裡）
+            $hdr = $pdo->prepare("SELECT bi.process_no, pn.ProcessName, b.d_id, COALESCE(d.D_Setting_Id, b.d_id) AS part_no, d.Revision
+                                  FROM bom_ing bi
+                                  LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
+                                  LEFT JOIN bom b ON bi.bom = b.bom
+                                  LEFT JOIN d_setting d ON b.d_setting_id = d.d_id
+                                  WHERE bi.bom_ing_fid = ? LIMIT 1");
+            $hdr->execute([(int)$row['bom_ing_fid']]);
+            $row['header'] = $hdr->fetch(PDO::FETCH_ASSOC) ?: null;
+
+            echo json_encode(['success' => true, 'row' => $row, 'can_edit' => (bool)$PK_CAN_ADMIN]);
             exit;
         }
 
@@ -516,6 +884,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         /* 項目編輯 Modal 需高於浮動視窗(10060) */
         #itemEditModal { z-index: 10070; }
         #pk-src-badge .label { font-size: 12px; vertical-align: middle; }
+
+        /* 使用說明按鈕（ai-rules/08 鐵律7 全站統一樣式） */
+        .page-help-btn { height:30px; font-size:13px; padding:0 12px; border:1px solid #d98a33; border-radius:15px;
+            background:#F7E0BD; color:#8A5A2B; }
+        .page-help-btn:hover { background:#d98a33; color:#fff; }
+        @media print { .page-help-btn { display:none !important; } }
+        .help-doc { font-size:13px; color:#3D4B5C; line-height:1.75; }
+        .help-doc p { margin:6px 0; }
+
+        /* 分頁（待包裝／已結案） */
+        #pk-main-tabs li { cursor:pointer; }
+        #pk-main-tabs .badge { background:#F0A24B; }
+
+        /* 已結案清單狀態小籤 */
+        .pk-status-badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; margin-right:6px; }
+        .pk-badge-open   { background:#eaf4fd; color:#2980b9; }
+        .pk-badge-closed { background:#eafaf1; color:#27ae60; }
+        .pk-badge-backfill { background:#fff4e5; color:#e8920c; }
     </style>
 </head>
 
@@ -531,21 +917,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             <h3>包裝製程排程 <small>Packing Schedule</small></h3>
                         </div>
                         <div class="title_right">
-                            <button class="btn btn-default pull-right" id="btn-setting"><i class="fa fa-cog"></i> 包裝製程設定</button>
+                            <button class="page-help-btn pull-right" id="btn-page-help" title="使用說明" style="margin-right:8px;"><i class="fa fa-question-circle"></i> 使用說明</button>
+                            <?php if ($PK_CAN_ADMIN): ?>
+                            <button class="btn btn-default pull-right" id="btn-role-setting" style="margin-right:8px;"><i class="fa fa-key"></i> 角色與功能設定</button>
+                            <?php endif; ?>
+                            <?php if ($PK_CAN_BACKFILL): ?>
+                            <button class="btn btn-warning pull-right" id="btn-backfill" style="margin-right:8px;"><i class="fa fa-history"></i> 補登包裝紀錄</button>
+                            <?php endif; ?>
+                            <button class="btn btn-default pull-right" id="btn-setting" style="margin-right:8px;"><i class="fa fa-cog"></i> 包裝製程設定</button>
                             <button class="btn btn-default pull-right" id="btn-template" style="margin-right:8px;"><i class="fa fa-list-alt"></i> 外觀檢驗模板</button>
                             <button class="btn btn-default pull-right" id="btn-refresh" style="margin-right:8px;"><i class="fa fa-refresh"></i> 重新整理</button>
                         </div>
                     </div>
                     <div class="clearfix"></div>
 
+                    <ul class="nav nav-tabs" id="pk-main-tabs" style="margin-bottom:0;">
+                        <li class="active" data-tab="pending"><a href="#">待包裝 <span class="badge" id="tab-pending-count"></span></a></li>
+                        <li data-tab="closed"><a href="#">已結案清單</a></li>
+                    </ul>
+
                     <div class="row">
                         <div class="col-md-12">
-                            <div class="x_panel">
+                            <div class="x_panel" id="pk-tab-pending" style="border-top:0;">
                                 <div class="x_content">
                                     <p class="text-muted" style="margin-bottom:14px;">
                                         <i class="fa fa-info-circle"></i>
                                         依訂單交期由近到遠排序（<span class="text-danger">逾期排最上面</span>）；可調整急件等級或拖曳
-                                        <i class="fa fa-bars"></i> 手把調整順序。點擊任一列開啟包裝檢驗填寫視窗。
+                                        <i class="fa fa-bars"></i> 手把調整順序。點擊任一列開啟包裝檢驗填寫視窗；
+                                        <span class="label label-info">暫存中</span> 表示先前已暫存過、尚未完成包裝。
                                         <span class="pk-count-badge pull-right" id="list-count"></span>
                                     </p>
                                     <div id="list-msg"></div>
@@ -559,13 +958,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                                 <th>客戶</th>
                                                 <th>BOM</th>
                                                 <th>料號 / 版次</th>
-                                                <th width="80" class="text-right">數量</th>
+                                                <th width="90" class="text-right">BOM總數</th>
                                             </tr>
                                         </thead>
                                         <tbody id="bom-list">
                                             <tr><td colspan="8" class="text-center text-muted">載入中...</td></tr>
                                         </tbody>
                                     </table>
+                                </div>
+                            </div>
+
+                            <div class="x_panel" id="pk-tab-closed" style="border-top:0;display:none;">
+                                <div class="x_content">
+                                    <div class="row" style="margin-bottom:10px;">
+                                        <div class="col-md-2">
+                                            <input type="text" id="cl-f-bom" class="form-control input-sm" placeholder="BOM 關鍵字">
+                                        </div>
+                                        <div class="col-md-2">
+                                            <input type="text" id="cl-f-part" class="form-control input-sm" placeholder="料號關鍵字">
+                                        </div>
+                                        <div class="col-md-2">
+                                            <input type="date" id="cl-f-from" class="form-control input-sm">
+                                        </div>
+                                        <div class="col-md-2">
+                                            <input type="date" id="cl-f-to" class="form-control input-sm">
+                                        </div>
+                                        <div class="col-md-4 text-right">
+                                            <button class="btn btn-default btn-sm" id="btn-cl-search"><i class="fa fa-search"></i> 查詢</button>
+                                            <button class="btn btn-default btn-sm" id="btn-cl-reset">清除篩選(本月)</button>
+                                            <button class="btn btn-default btn-sm" id="btn-cl-print"><i class="fa fa-print"></i> 列印已包裝明細</button>
+                                        </div>
+                                    </div>
+                                    <p class="text-muted" style="margin-bottom:10px;">
+                                        <i class="fa fa-info-circle"></i> 預設顯示本月資料；篩選 BOM／料號不限定年月份。
+                                        已結案紀錄鎖定不可修改，<?= $PK_CAN_ADMIN ? '管理員可點列表右側「解鎖修改」以操作確認密碼開鎖。' : '如需修改請洽管理員以操作確認密碼開鎖。' ?>
+                                        <span class="pk-count-badge pull-right" id="cl-count"></span>
+                                    </p>
+                                    <table class="table pk-table">
+                                        <thead>
+                                            <tr>
+                                                <th width="110">結案日期</th>
+                                                <th>BOM</th>
+                                                <th>料號</th>
+                                                <th>客戶</th>
+                                                <th width="90" class="text-right">數量</th>
+                                                <th width="70" class="text-right">NG</th>
+                                                <th width="90">出貨/入庫</th>
+                                                <th>包裝人員</th>
+                                                <th width="70">補登</th>
+                                                <th width="90"></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="cl-list">
+                                            <tr><td colspan="10" class="text-center text-muted">請點「已結案清單」分頁載入</td></tr>
+                                        </tbody>
+                                    </table>
+                                    <div class="text-right" id="cl-pager" style="margin-top:8px;"></div>
                                 </div>
                             </div>
                         </div>
@@ -636,6 +1084,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <div class="pk-float-body">
             <!-- 表頭資訊 -->
             <div class="well well-sm" style="background:#f9f9f9;">
+                <div id="f-status-badges" style="margin-bottom:6px;"></div>
                 <div class="row">
                     <div class="col-md-3"><strong>BOM：</strong><span id="f-bom"></span></div>
                     <div class="col-md-3"><strong>料號：</strong><span id="f-part"></span></div>
@@ -645,10 +1094,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <div class="row" style="margin-top:6px;">
                     <div class="col-md-3"><strong>製程：</strong><span id="f-proc"></span></div>
                     <div class="col-md-3">
-                        <strong>訂單數量：</strong>
+                        <strong>BOM總數：</strong>
                         <input type="number" id="f-order-qty" class="form-control input-sm" style="display:inline-block;width:100px;">
+                        <span class="text-muted small">（因BOM可能分批送包裝，此為整張BOM的總數，非本次數量）</span>
                     </div>
-                    <div class="col-md-3"><strong>交期：</strong><span id="f-delivery"></span></div>
+                    <div class="col-md-3"><strong>系統交期：</strong><span id="f-delivery"></span></div>
+                </div>
+                <div class="row" id="f-order-bind-wrap" style="margin-top:8px;">
+                    <div class="col-md-12">
+                        <strong>訂單綁定交期與數量：</strong>
+                        <table class="table table-condensed table-bordered" id="f-order-bind-table" style="background:#fff;margin:6px 0 0;font-size:12px;">
+                            <thead><tr><th>訂單編號</th><th>客戶單號</th><th>客戶</th><th>交期</th><th class="text-right">訂單數量</th><th class="text-right">分配數量</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="row" id="f-backfill-fields" style="margin-top:8px;display:none;">
+                    <div class="col-md-4">
+                        <label>補登日期：<span class="text-danger">*</span></label>
+                        <input type="date" id="f-record-date" class="form-control input-sm">
+                    </div>
+                    <div class="col-md-4" id="f-packer-wrap">
+                        <label>包裝人員：</label>
+                        <select id="f-packer-select" class="form-control input-sm" data-eg-filter="輸入姓名篩選..."></select>
+                    </div>
+                </div>
+                <div class="row" id="f-unlock-fields" style="margin-top:8px;display:none;">
+                    <div class="col-md-6">
+                        <label class="text-danger">此紀錄已結案鎖定，輸入操作確認密碼才能存檔修改：</label>
+                        <input type="password" id="f-confirm-password" class="form-control input-sm" placeholder="操作確認密碼" autocomplete="new-password">
+                    </div>
                 </div>
             </div>
 
@@ -725,20 +1200,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <button class="btn btn-default btn-sm" id="btn-add-pkg-row"><i class="fa fa-plus"></i> 新增容器</button>
             <div class="row" style="margin-top:10px;">
                 <div class="col-md-6">
-                    <label>實際出貨數量說明：</label>
+                    <label>包裝說明：</label>
                     <input type="text" id="pkg-shipment-desc" class="form-control input-sm" placeholder="例如: 100 x 5 桶 + 20 = 520">
+                    <div style="margin-top:8px;">
+                        <label><input type="checkbox" id="pkg-direct-ship"> <strong>直接出貨</strong>（本批有數量不入庫、直接出給客戶）</label>
+                        <div class="form-inline" id="pkg-ship-now-wrap" style="display:none;margin-top:4px;">
+                            <label>本次出貨數量：</label>
+                            <input type="number" id="pkg-ship-now-qty" class="form-control input-sm" style="width:100px;" min="1">
+                        </div>
+                    </div>
                 </div>
                 <div class="col-md-6">
-                    <label>成品入庫方式：</label>
-                    <div class="form-inline">
-                        <label class="radio-inline"><input type="radio" name="pkg-storage-method" value="direct" checked> 直接入庫</label>
-                        <label class="radio-inline"><input type="radio" name="pkg-storage-method" value="pallet"> 棧板+膠膜</label>
-                        <input type="number" id="pkg-pallet-qty" class="form-control input-sm" style="width:80px;display:inline-block;" placeholder="棧板數">
+                    <div id="f-storage-wrap">
+                        <label>成品入庫方式：<span id="f-storage-required" class="text-danger" style="display:none;">*</span></label>
+                        <div class="form-inline">
+                            <label class="radio-inline"><input type="radio" name="pkg-storage-method" value="direct" checked> 直接入庫</label>
+                            <label class="radio-inline"><input type="radio" name="pkg-storage-method" value="pallet"> 棧板+膠膜</label>
+                            <input type="number" id="pkg-pallet-qty" class="form-control input-sm" style="width:80px;display:inline-block;" placeholder="棧板數">
+                        </div>
+                        <div class="form-inline" style="margin-top:5px;">
+                            <label>實際入庫數：</label>
+                            <input type="number" id="pkg-actual-qty" class="form-control input-sm" style="width:100px;" placeholder="實際數量">
+                            <span class="text-muted small">(預設: BOM總數 - NG數)</span>
+                        </div>
                     </div>
-                    <div class="form-inline" style="margin-top:5px;">
-                        <label>實際入庫數：</label>
-                        <input type="number" id="pkg-actual-qty" class="form-control input-sm" style="width:100px;" placeholder="實際數量">
-                        <span class="text-muted small">(預設: 訂單數 - NG數)</span>
+                    <div class="well well-sm" style="margin-top:8px;margin-bottom:0;padding:8px;">
+                        本次數量（出貨＋入庫）：<strong id="pkg-total-now" style="font-size:1.1em;">0</strong>
+                        <span class="text-muted small" id="pkg-total-now-hint"></span>
                     </div>
                 </div>
             </div>
@@ -749,8 +1237,95 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         </div>
         <div class="pk-float-footer">
             <button type="button" class="btn btn-default" id="pkWindowCancel">取消</button>
-            <button type="button" class="btn btn-success" id="btn-save-pkg"><i class="fa fa-save"></i> 儲存包裝檢驗</button>
+            <button type="button" class="btn btn-default" id="btn-save-draft"><i class="fa fa-clock-o"></i> 暫存</button>
+            <button type="button" class="btn btn-success" id="btn-save-pkg"><i class="fa fa-check"></i> 完成包裝</button>
         </div>
+    </div>
+
+    <?php if ($PK_CAN_BACKFILL): ?>
+    <!-- 補登包裝紀錄：搜尋尚未有任何包裝紀錄的 BOM 製程 -->
+    <div class="modal fade" id="backfillModal" tabindex="-1" role="dialog">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal">&times;</button>
+                    <h4 class="modal-title"><i class="fa fa-history"></i> 補登包裝紀錄（僅限補舊資料用）</h4>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted">搜尋<strong>尚未有任何包裝紀錄</strong>的 BOM 製程（不限狀態，含已完工／已結案的舊資料）。若該製程已有紀錄，請至「已結案清單」解鎖修改，不要重複補登。</p>
+                    <div class="input-group input-group-sm" style="margin-bottom:10px;">
+                        <span class="input-group-addon"><i class="fa fa-search"></i></span>
+                        <input type="text" id="bf-kw" class="form-control" placeholder="輸入 BOM / 料號 / 客戶關鍵字...">
+                        <span class="input-group-btn"><button class="btn btn-primary" id="bf-search-btn">搜尋</button></span>
+                    </div>
+                    <table class="table table-hover pk-table" style="font-size:13px;">
+                        <thead><tr><th>BOM</th><th>製程</th><th>料號/版次</th><th>客戶</th><th class="text-right">BOM總數</th><th width="70"></th></tr></thead>
+                        <tbody id="bf-result"><tr><td colspan="6" class="text-center text-muted">請輸入關鍵字搜尋</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <?php if ($PK_CAN_ADMIN): ?>
+    <!-- 角色與功能設定（module=packing_schedule）；使用者與角色的對應請至 user_permissions.php 指派 -->
+    <div class="modal fade" id="roleModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content">
+        <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title"><i class="fa fa-key"></i> 包裝製程排程 — 角色與功能設定</h4></div>
+        <div class="modal-body">
+            <p class="text-muted" style="font-size:12px;">在此建立/命名角色並勾選其功能；使用者與角色的對應請至 <b>人員權限設定（user_permissions）</b>。系統管理員角色固定擁有全部權限，不可修改。一般包裝填寫（暫存/完成包裝）本頁維持全體登入者皆可使用，此處僅管理「補登舊資料」相關的進階權限。</p>
+            <div class="row">
+                <div class="col-md-5">
+                    <div class="input-group input-group-sm" style="margin-bottom:6px;">
+                        <input type="text" id="new-role-name" class="form-control" placeholder="新角色名稱…">
+                        <span class="input-group-btn"><button class="btn btn-success" id="btn-add-role">新增</button></span>
+                    </div>
+                    <div class="list-group" id="role-list" style="max-height:320px;overflow:auto;"></div>
+                </div>
+                <div class="col-md-7">
+                    <div id="role-feat-area" style="display:none;">
+                        <h5>角色「<span id="rf-role-name"></span>」的功能</h5>
+                        <div id="rf-checks"></div>
+                        <div style="margin-top:10px;">
+                            <button class="btn btn-primary btn-sm" id="btn-save-feats"><i class="fa fa-check"></i> 儲存功能</button>
+                            <button class="btn btn-default btn-sm" id="btn-rename-role">改名</button>
+                            <button class="btn btn-danger btn-sm pull-right" id="btn-del-role"><i class="fa fa-trash"></i> 刪除角色</button>
+                            <span class="text-muted" id="rf-msg" style="margin-left:8px;"></span>
+                        </div>
+                    </div>
+                    <div id="role-feat-empty" class="text-muted">← 請於左側選擇一個角色</div>
+                </div>
+            </div>
+        </div>
+    </div></div></div>
+    <?php endif; ?>
+
+    <!-- 使用說明 -->
+    <div class="modal fade" id="helpUseMask" tabindex="-1" role="dialog">
+        <div class="modal-dialog" role="document"><div class="modal-content">
+            <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title">包裝製程排程 — 使用說明</h4></div>
+            <div class="modal-body help-doc">
+                <p><strong>功能說明：</strong>依訂單交期排序待包裝的製程，可填寫外觀檢驗、防護、容器與出貨資訊，完成後自動通知生管安排出貨。</p>
+                <p><strong>操作步驟：</strong></p>
+                <ol>
+                    <li>點擊清單中任一列開啟填寫視窗。</li>
+                    <li>填寫外觀檢驗項目、防護與容器資訊。</li>
+                    <li>若本批數量有一部分要<strong>直接出貨</strong>，勾選「直接出貨」並填入本次出貨數量；若還有剩餘數量，需再選擇成品入庫方式。</li>
+                    <li>尚未填完可按「<strong>暫存</strong>」，資料會保留、BOM 仍留在待包裝清單（標示「暫存中」），可稍後回來繼續填寫。</li>
+                    <li>填完按「<strong>完成包裝</strong>」即結案：紀錄鎖定不可再修改、BOM 從待包裝清單移除並列入「已結案清單」、同時通知生管可安排出貨。</li>
+                </ol>
+                <p><strong>重要行為 / 常見疑問：</strong></p>
+                <ul>
+                    <li>「BOM總數」是整張 BOM 的總數量，因為同一張 BOM 可能分批送到包裝，這裡顯示的不是本次的數量。</li>
+                    <li>「訂單綁定交期與數量」列出這張 BOM 目前綁定的訂單資料；若查無綁定，會退回顯示系統交期。</li>
+                    <li>已結案的紀錄無法直接修改，需由管理員在「已結案清單」點「解鎖修改」並輸入操作確認密碼。</li>
+                    <?php if ($PK_CAN_BACKFILL): ?><li>「補登包裝紀錄」僅能用於<strong>完全沒有包裝紀錄</strong>的舊 BOM，已有紀錄的請改用「已結案清單」解鎖修改。<?= $PK_CAN_BACKFILL_PACKER ? '你目前有權限可指定其他人為包裝人員。' : '你目前只能以自己的身分補登，如需指定他人請洽管理員授權。' ?></li><?php endif; ?>
+                </ul>
+                <p><strong>設定入口：</strong>包裝製程設定／外觀檢驗模板（頁首按鈕）。</p>
+                <p><strong>權限角色：</strong>一般包裝填寫（暫存/完成包裝）全體登入者皆可使用；「補登舊資料」與「指定補登包裝人員」「解鎖修改已結案紀錄／角色與功能設定」由管理員於本頁「角色與功能設定」指派角色，再到人員權限設定指派給人員。</p>
+            </div>
+        </div></div>
     </div>
 
     <script src="../../resource/js/jquery.min.js"></script>
@@ -759,6 +1334,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/select2@4.0.13/dist/js/select2.min.js"></script>
+    <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+    <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
     <script>
     $(function () {
         var API = 'packing_schedule.php';
@@ -768,6 +1345,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         var currentSource = 'none';  // custom / template / none
         var sortableInstance = null;
         var itemEditMode = 'template'; // template / custom
+        var currentMode = 'normal';  // normal / backfill / editClosed / view
+        var currentPkgId = null;     // 續編/補登/解鎖修改中的 qc_packing_inspection.packing_inspection_id
+        var currentIsClosed = false; // 目前這筆是否為已結案（解鎖修改中）
 
         // 數字格式：小數點後皆為0則省略
         function fmtNum(v) {
@@ -814,12 +1394,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     return;
                 }
                 $('#list-count').html('共 <strong>' + res.data.length + '</strong> 筆待包裝');
+                $('#tab-pending-count').text(res.data.length);
                 var html = '';
                 res.data.forEach(function (r) {
                     var rev = r.Revision ? ('<span class="rev-badge">版 ' + r.Revision + '</span>') : '';
+                    var draftTag = r.has_draft ? ' <span class="label label-info">暫存中</span>' : '';
                     html += '<tr class="pk-row ' + rowPriClass(r.eff_priority) + '" data-fid="' + r.bom_ing_fid + '">' +
                         '<td class="text-center"><i class="fa fa-bars pk-drag-handle" title="拖曳調整順序"></i></td>' +
-                        '<td>' + dueCell(r.delivery_date) + '</td>' +
+                        '<td>' + dueCell(r.delivery_date) + (r.order_cnt ? ' <span class="text-muted small">(綁定' + r.order_cnt + '張訂單)</span>' : '') + '</td>' +
                         '<td>' +
                           '<select class="form-control input-sm pk-pri-select" onclick="event.stopPropagation();">' +
                             '<option value="" ' + (r.eff_priority !== 'E' && r.eff_priority !== 'U' ? 'selected' : '') + '>一般</option>' +
@@ -827,11 +1409,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             '<option value="E" ' + (r.eff_priority === 'E' ? 'selected' : '') + '>特急</option>' +
                           '</select>' +
                         '</td>' +
-                        '<td><span class="label label-info" style="font-size:12px;">' + (r.ProcessName || ('製程' + r.process_no)) + '</span></td>' +
+                        '<td><span class="label label-info" style="font-size:12px;">' + (r.ProcessName || ('製程' + r.process_no)) + '</span>' + draftTag + '</td>' +
                         '<td>' + (r.Client_Name || '') + '</td>' +
                         '<td><span class="bom-code">' + r.bom + '</span></td>' +
                         '<td>' + (r.part_no || '') + ' ' + rev + '</td>' +
-                        '<td class="text-right"><strong>' + fmtNum(r.sqty) + '</strong></td>' +
+                        '<td class="text-right"><strong>' + fmtNum(r.bom_total_qty != null ? r.bom_total_qty : r.sqty) + '</strong></td>' +
                         '</tr>';
                 });
                 $('#bom-list').html(html);
@@ -880,41 +1462,193 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $(document).on('click', '.pk-row', function () {
             var r = $(this).data('row');
             if (!r) return;
-            openWindow(r);
+            openWindow(r, 'normal');
         });
 
-        function openWindow(r) {
+        var PK_CAN_BACKFILL = <?= $PK_CAN_BACKFILL ? 'true' : 'false' ?>;
+        var PK_CAN_BACKFILL_PACKER = <?= $PK_CAN_BACKFILL_PACKER ? 'true' : 'false' ?>;
+        var PK_CAN_ADMIN = <?= $PK_CAN_ADMIN ? 'true' : 'false' ?>;
+
+        function todayStr() {
+            var d = new Date();
+            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        }
+
+        // mode: 'normal'=一般填寫／續編暫存 'backfill'=管理員補登 'editClosed'=已結案解鎖修改 'view'=唯讀檢視
+        function openWindow(r, mode) {
+            mode = mode || 'normal';
+            currentMode = mode;
             currentRow = r;
+            currentPkgId = null;
+            currentIsClosed = false;
             $('#f-bom').text(r.bom);
             $('#f-part').text(r.part_no || '');
             $('#f-rev').text(r.Revision || '');
             $('#f-client').text(r.Client_Name || '');
             $('#f-proc').text(r.ProcessName || ('製程' + r.process_no));
             $('#f-delivery').text(r.delivery_date || '無');
-            $('#f-order-qty').val(r.sqty || 0);
+            $('#f-order-qty').val((r.bom_total_qty != null ? r.bom_total_qty : r.sqty) || 0);
             $('#pk-win-sub').text('- ' + r.bom);
 
             // 重置表單
             $('#pkg-appearance-tbody').empty();
             $('#pkg-appearance-tfoot').empty();
-            $('.pkg-rust, .pkg-collision').prop('checked', false);
-            $('.pkg-rust-other, .pkg-collision-other, .pkg-collision-detail, .pkg-collision-detail-2').val('');
+            $('.pkg-rust, .pkg-collision').prop('checked', false).closest('label').removeClass('active');
+            $('.pkg-rust-other, .pkg-collision-other, .pkg-collision-detail, .pkg-collision-detail-2').val('').hide();
             $('#pkg-return-jig, #pkg-return-sample, #pkg-shipment-desc, #pkg-pallet-qty, #pkg-actual-qty, #pkg-remark').val('');
             $('input[name="pkg-storage-method"][value="direct"]').prop('checked', true);
+            $('#pkg-direct-ship').prop('checked', false);
+            $('#pkg-ship-now-wrap').hide();
+            $('#pkg-ship-now-qty').val('');
+            $('#f-storage-wrap').show();
             $('#pkg-rows-container').empty();
+            $('#f-confirm-password').val('');
+            $('#f-unlock-fields').hide();
+            $('#f-backfill-fields').toggle(mode === 'backfill');
+            setFormReadOnly(mode === 'view');
 
-            // 載入外觀檢驗項目（先料號專用、無則預設模板）
-            $.post(API, { action: 'get_form', bom: r.bom }, function (res) {
+            if (mode === 'backfill') {
+                $('#f-record-date').val(todayStr()).attr('max', todayStr());
+                loadPackerOptions();
+            }
+
+            // 載入外觀檢驗項目（先料號專用、無則預設模板）＋訂單綁定交期＋既有暫存紀錄
+            $.post(API, { action: 'get_form', bom: r.bom, bom_ing_fid: r.bom_ing_fid }, function (res) {
                 if (!res.success) { alert('載入失敗: ' + res.message); return; }
                 currentItems = res.items || [];
                 currentDId = res.d_id || null;
                 currentSource = res.source || 'none';
                 renderSourceBadge();
                 renderAppearance();
+                renderOrderBind(res.order_bind || []);
+                if (res.bom_total_qty != null && res.bom_total_qty !== '') $('#f-order-qty').val(res.bom_total_qty);
                 addPkgRow();
-                calcActualQty();
+                if (mode === 'normal' && res.draft) {
+                    fillFromRecord(res.draft, false);
+                } else {
+                    calcActualQty();
+                }
+                renderStatusBadges();
                 showWindow();
             }, 'json');
+        }
+
+        // 開啟已結案紀錄（檢視／解鎖修改）
+        function openClosedRecord(id, unlock) {
+            $.post(API, { action: 'get_closed_detail', id: id }, function (res) {
+                if (!res.success) { alert('載入失敗: ' + (res.message || '')); return; }
+                var row = res.row, hdr = row.header || {};
+                var r = {
+                    bom_ing_fid: row.bom_ing_fid, bom: row.bom, part_no: row.part_no || (hdr.part_no || ''),
+                    Revision: hdr.Revision || '', Client_Name: row.customer_name,
+                    process_no: hdr.process_no, ProcessName: hdr.ProcessName,
+                    delivery_date: null, bom_total_qty: row.bom_total_qty, sqty: row.order_qty
+                };
+                openWindow(r, unlock ? 'editClosed' : 'view');
+                // openWindow 是非同步載入題庫，等它做完再覆蓋成這筆紀錄的內容
+                var waitFill = setInterval(function () {
+                    if (!$('#pkWindow').is(':visible')) return;
+                    clearInterval(waitFill);
+                    fillFromRecord(row, unlock);
+                    if (!unlock) setFormReadOnly(true);
+                }, 120);
+            }, 'json');
+        }
+
+        function setFormReadOnly(ro) {
+            var $scope = $('#pkWindow');
+            $scope.find('input, select, textarea, button.pkg-remove, .pk-drag-handle').not('#f-confirm-password, #pkWindowClose, #pkWindowCancel').prop('disabled', ro);
+            $('#btn-save-draft, #btn-save-pkg, #btn-add-pkg-row').toggle(!ro);
+        }
+
+        function renderOrderBind(rows) {
+            var $tb = $('#f-order-bind-table tbody').empty();
+            if (!rows.length) {
+                $('#f-order-bind-wrap').hide();
+                return;
+            }
+            $('#f-order-bind-wrap').show();
+            rows.forEach(function (o) {
+                $tb.append('<tr><td>' + (o.Order_oo || o.Order_id) + '</td><td>' + (o.C_order || '') + '</td><td>' +
+                    (o.Client_name || '') + '</td><td>' + (o.Delivery_date || '') + '</td><td class="text-right">' +
+                    fmtNum(o.order_qty) + '</td><td class="text-right">' + fmtNum(o.allocated_qty) + '</td></tr>');
+            });
+        }
+
+        function renderStatusBadges() {
+            var html = '';
+            if (currentIsClosed) html += '<span class="pk-status-badge pk-badge-closed"><i class="fa fa-lock"></i> 已結案鎖定';
+            else if (currentPkgId) html += '<span class="pk-status-badge pk-badge-open"><i class="fa fa-clock-o"></i> 暫存中，尚未完成';
+            if (html) html += '</span>';
+            if (currentMode === 'backfill') html += '<span class="pk-status-badge pk-badge-backfill"><i class="fa fa-history"></i> 補登模式</span>';
+            $('#f-status-badges').html(html);
+        }
+
+        function loadPackerOptions() {
+            var $sel = $('#f-packer-select');
+            if (!PK_CAN_BACKFILL_PACKER) {
+                $('#f-packer-wrap').hide();
+                return;
+            }
+            $('#f-packer-wrap').show();
+            if ($sel.data('loaded')) return;
+            $.post(API, { action: 'people_list' }, function (res) {
+                var rows = (res && res.success) ? res.data : [];
+                var h = '<option value="">（本人）</option>';
+                rows.forEach(function (u) {
+                    h += '<option value="' + u.id + '">' + (u.dept_name ? (u.dept_name + ' ') : '') +
+                        (u.position_name ? (u.position_name + ' ') : '') + u.name + '</option>';
+                });
+                $sel.html(h).data('loaded', 1);
+            }, 'json');
+        }
+
+        // 把既有紀錄（暫存續編／補登草稿續編／已結案解鎖修改／檢視）填回表單
+        function fillFromRecord(rec, isClosedEdit) {
+            currentPkgId = rec.packing_inspection_id;
+            currentIsClosed = (rec.status === 'closed');
+            if (rec.order_qty != null) $('#f-order-qty').val(rec.order_qty);
+            var pd = {};
+            try { pd = rec.packaging_data ? JSON.parse(rec.packaging_data) : {}; } catch (e) { pd = {}; }
+
+            $('#pkg-appearance-tbody tr[data-pkg-id]').each(function () {
+                var $tr = $(this);
+                var id = $tr.data('pkg-id');
+                var a = pd.appearance ? pd.appearance[id] : null;
+                if (!a) return;
+                $tr.find('.pkg-ng-qty').val(a.ng_qty || '');
+                (a.disposition || []).forEach(function (v) {
+                    $tr.find('input[type=checkbox][value="' + v + '"]').prop('checked', true).closest('label').addClass('active');
+                });
+                if (a.other_text) $tr.find('.pkg-other-input').val(a.other_text).show();
+            });
+            (pd.rust || []).forEach(function (v) { $('.pkg-rust[value="' + v + '"]').prop('checked', true); });
+            if (pd.rust_other) $('.pkg-rust-other').val(pd.rust_other).show();
+            (pd.collision || []).forEach(function (v) { $('.pkg-collision[value="' + v + '"]').prop('checked', true); });
+            if (pd.collision_other) $('.pkg-collision-other').val(pd.collision_other).show();
+            $('.pkg-collision-detail').val(pd.collision_detail_1 || '');
+            $('.pkg-collision-detail-2').val(pd.collision_detail_2 || '');
+            $('#pkg-return-jig').val(pd.return_jig || '');
+            $('#pkg-return-sample').val(pd.return_sample || '');
+            $('#pkg-shipment-desc').val(pd.shipment_desc || '');
+
+            $('#pkg-rows-container').empty();
+            if (pd.rows && pd.rows.length) pd.rows.forEach(function (row) { addPkgRow(row); });
+            else addPkgRow();
+
+            var shipNow = parseFloat(rec.ship_now_qty) || 0;
+            $('#pkg-direct-ship').prop('checked', !!(rec.is_full_shipment * 1)).trigger('change');
+            $('#pkg-ship-now-qty').val(shipNow || '');
+            if (rec.storage_method) $('input[name="pkg-storage-method"][value="' + rec.storage_method + '"]').prop('checked', true);
+            $('#pkg-pallet-qty').val(rec.pallet_qty || '');
+            $('#pkg-actual-qty').val(rec.warehouse_qty != null ? rec.warehouse_qty : '');
+            $('#pkg-remark').val(rec.remark || '');
+
+            if (isClosedEdit) {
+                $('#f-unlock-fields').show();
+            }
+            calcActualQty();
+            renderStatusBadges();
         }
 
         function renderSourceBadge() {

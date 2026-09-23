@@ -302,12 +302,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 $itemIds[$idx] = (int)$iid;
             }
 
+            // 首件/末件：不必走抽樣，直接全檢＝抽驗數強制等於送驗數（後端再驗一次，不採信前端）
+            $inspKind = in_array(($_POST['insp_kind'] ?? 'NORMAL'), ['FIRST','LAST'], true) ? $_POST['insp_kind'] : 'NORMAL';
+            if ($inspKind !== 'NORMAL' && $incoming > 0) $sample = $incoming;
+
             // bom_ing_fid=0 代表「非 BOM 來源」的臨時檢驗單
             $pdo->prepare("INSERT INTO qc_check_form
-                 (bom_ing_fid, d_id, version_id, form_type_id, process_name, batch_no, round_no,
+                 (bom_ing_fid, d_id, version_id, form_type_id, insp_kind, process_name, batch_no, round_no,
                   incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, pcs_verdicts, check_date, created_by, created_at)
-                 VALUES (0, ?, ?, ?, ?, 1, 1, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, NOW(), ?, NOW())")
-                ->execute([$d_id, $version_id, (string)$form_type_id, $process, $incoming, $sample, $remark,
+                 VALUES (0, ?, ?, ?, ?, ?, 1, 1, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, NOW(), ?, NOW())")
+                ->execute([$d_id, $version_id, (string)$form_type_id, $inspKind, $process, $incoming, $sample, $remark,
                            json_encode($pcs, JSON_UNESCAPED_UNICODE), $uid]);
             $qc_form_id = (int)$pdo->lastInsertId();
 
@@ -737,6 +741,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .btn-warm-o { background:#fff; border:1px solid var(--amber-d); color:var(--amber-d); }
     .btn-warm-o:hover { background:var(--sand); color:var(--ink); }
     .btn-coral { background:var(--coral); border:1px solid #b9401f; color:#fff; font-weight:bold; }
+    /* 首件/末件：簡單按鈕，按了才算，不按＝一般檢驗（使用者指定的極簡操作） */
+    .insp-kind-btns { display:flex; gap:6px; }
+    .insp-kind-btns .kind-btn { flex:1 1 auto; border:1px solid var(--amber-d); background:#fff; color:var(--amber-d);
+                                 border-radius:4px; padding:5px 0; font-size:13px; font-weight:bold; cursor:pointer; }
+    .insp-kind-btns .kind-btn.on { background:var(--amber-d); color:#fff; }
     .btn-coral:hover,.btn-coral:focus { background:#b9401f; color:#fff; }
 
     /* ---------- 頂部固定情境列：料號/客戶/製程/數量隨時看得到 ---------- */
@@ -1203,7 +1212,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <input type="number" class="form-control input-sm" id="inp-sample" value="5"></div>
             <div class="col-sm-2 form-group"><label class="muted-help">不良數（自動）</label>
                 <input type="number" class="form-control input-sm" id="inp-ng" value="0" readonly></div>
-            <div class="col-sm-6 form-group"><label class="muted-help">處置 / 備註</label>
+            <div class="col-sm-2 form-group">
+                <label class="muted-help">檢驗性質<span id="kind-hint" class="muted-help" style="display:none;color:var(--amber-d);margin-left:4px;"></span></label>
+                <div class="insp-kind-btns">
+                    <button type="button" class="kind-btn" data-kind="FIRST" title="首件全檢：直接輸入全數件數，不走抽樣；同一製程可以有好幾張（重做再驗各存一張）">首件</button>
+                    <button type="button" class="kind-btn" data-kind="LAST" title="末件全檢：直接輸入全數件數，不走抽樣">末件</button>
+                </div>
+            </div>
+            <div class="col-sm-4 form-group"><label class="muted-help">處置 / 備註</label>
                 <input type="text" class="form-control input-sm" id="inp-remark" placeholder="例：尺寸 A 超差，退回重做…"></div>
         </div>
         <div class="row">
@@ -2314,7 +2330,7 @@ $(function(){
     }
     var state = { sampleN:5, batches:[], curBatch:0, processes:[], curProc:0, demo:false,
                   is_supervisor:false, can_fill:true, canManageSettings:false, canManageSampling:false,
-                  canView:true, editFormId:null, draftFormId:0 };
+                  canView:true, editFormId:null, draftFormId:0, inspKind:'NORMAL' };
     var MODEL = { items:[], pcs:[], tools:[] };   // tools＝本單使用量具（Tool_id 字串陣列）
     var TOOLS = ['卡尺','分厘卡','投影機','三次元','針規','目視'];
     var TOOL_INSTANCES = [];                                  // [{id,no,cat}]
@@ -3349,6 +3365,31 @@ $(function(){
     $('#inp-qty,#inp-remark').on('input', scheduleDraftSave);
     $('#btn-dock-extra').on('click', function(){ $('#dock-extra').slideToggle(120, syncDockPad); });
 
+    // ---------- 首件/末件：簡單按鈕，按了才算，不按＝一般檢驗；直接全檢(=送驗數件)不走抽樣 ----------
+    function applyInspKindUI(){
+        var full = state.inspKind==='FIRST' || state.inspKind==='LAST';
+        $('.insp-kind-btns .kind-btn').removeClass('on').filter('[data-kind="'+state.inspKind+'"]').addClass('on');
+        $('#inp-sample').prop('readonly', full);
+        if(full){
+            var qty=parseInt($('#inp-qty').val())||0;
+            if(qty>0){ setSampleN(qty); $('#inp-sample').val(qty).data('prev', qty); }
+            $('#kind-hint').show().text('（全數檢驗，抽驗數已鎖定＝送驗數）');
+        } else {
+            $('#kind-hint').hide().text('');
+        }
+    }
+    $(document).on('click', '.insp-kind-btns .kind-btn', function(){
+        var k=$(this).data('kind');
+        state.inspKind = (state.inspKind===k) ? 'NORMAL' : k;
+        applyInspKindUI(); scheduleDraftSave();
+    });
+    // 首件/末件模式下，送驗數一改，全檢件數要跟著變
+    $('#inp-qty').on('input', function(){
+        if(state.inspKind!=='FIRST' && state.inspKind!=='LAST') return;
+        var qty=parseInt($(this).val())||0;
+        if(qty>0){ setSampleN(qty); $('#inp-sample').val(qty).data('prev', qty); }
+    });
+
     // =====================================================================
     // 工程符號（Ø ± ▽ …）：插到最後聚焦的文字欄游標處；主檔僅管理員可增修刪
     // 參考 views/Sales/image_editor.php 的符號列做法，但符號改由 qc_symbol 主檔維護
@@ -3534,6 +3575,7 @@ $(function(){
             applyMenuPerms();
             state.sampleN = ctx.sample_qty || 5;
             state.processes = [ ctx.process || '檢驗' ];
+            state.inspKind = 'NORMAL';
             buildBatchesFromHistory(res.history || []);
             renderCtxBar();
             $('#main-area').show(); $('#dock').show(); syncDockPad();
@@ -3541,6 +3583,7 @@ $(function(){
             $('#inp-sample').val(state.sampleN);
             $('#insp-container-1,#insp-container-2').val('');
             $('#insp-quantity-1,#insp-quantity-2').val('');
+            applyInspKindUI();
             renderBatches();
             MODEL.tools=[];                       // 新的一張檢驗單：本單使用量具從空的開始
             renderItems(res.items || []);
@@ -3836,7 +3879,7 @@ $(function(){
         // 自行組出 ctx（不打 load_context，因為沒有 bom_ing_fid）
         ctx = { bom_ing_fid:0, bom:'—（無製令）', part_no:ahPart.part_no, client:'', order_qty:parseInt($('#ah-qty').val())||0,
                 process:type, d_id:ahPart.d_id, sample_qty:sample, adhoc:true };
-        state.demo=false; state.sampleN=sample; state.editFormId=null; state.sampleChanges=[];
+        state.demo=false; state.sampleN=sample; state.editFormId=null; state.sampleChanges=[]; state.inspKind='NORMAL';
         state.batches=[{ no:1, status:'WAIT', rounds:[] }]; state.curBatch=0;
         $('#adhocModal').modal('hide');
         $('#step-search').hide();
@@ -3844,6 +3887,7 @@ $(function(){
         renderCtxBar();
         $('#main-area').show(); $('#dock').show(); syncDockPad();
         $('#inp-qty').val(ctx.order_qty); $('#inp-sample').val(sample).data('prev', sample);
+        applyInspKindUI();
         $('#inp-remark').val($('#ah-remark').val());
         $('#chk-save-std').prop('checked', false).closest('label').hide();  // 臨時檢驗不改寫料號標準
         renderBatches();
@@ -4044,9 +4088,11 @@ $(function(){
             // 列印簽章用：已存檔紀錄的簽章日期＝檢驗日、檢驗員＝存檔者
             state.editMeta={ check_date:h.check_date||'', creator_name:h.creator_name||'' };
             state.sampleN=h.sample_qty||state.sampleN;
+            state.inspKind = (h.insp_kind==='FIRST'||h.insp_kind==='LAST') ? h.insp_kind : 'NORMAL';
             $('#inp-qty').val(h.incoming_qty||0);
             $('#inp-sample').val(state.sampleN);
             $('#inp-remark').val(h.main_remark||'');
+            applyInspKindUI();
             // 本單使用量具：帶回這張檢驗單原本選的那幾支（舊紀錄由 migration 從量測明細回填）
             MODEL.tools=(res.tools||[]).map(function(t){ return String(t.id); });
             renderItems(res.items||[]);
@@ -4662,7 +4708,7 @@ $(function(){
             var $eb=$('#btn-save').prop('disabled',true);
             $.post(API,{ action:'update_inspection', qc_form_id:state.editFormId, reason:reason,
                 incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
-                main_remark:$('#inp-remark').val(), items:JSON.stringify(items),
+                main_remark:$('#inp-remark').val(), items:JSON.stringify(items), insp_kind:state.inspKind,
                 pcs_verdicts:JSON.stringify(collectPcsVerdicts()), tool_ids:JSON.stringify(MODEL.tools||[])
             }, function(res){
                 $eb.prop('disabled',false);
@@ -4683,7 +4729,7 @@ $(function(){
             var $ab=$('#btn-save').prop('disabled',true);
             $.post(V2API, { v2action:'save_adhoc', d_id:ctx.d_id, process_name:ctx.process,
                 incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
-                main_remark:$('#inp-remark').val(), items:JSON.stringify(items),
+                main_remark:$('#inp-remark').val(), items:JSON.stringify(items), insp_kind:state.inspKind,
                 pcs_verdicts:JSON.stringify(collectPcsVerdicts()), tool_ids:JSON.stringify(MODEL.tools||[])
             }, function(res){
                 $ab.prop('disabled',false);
@@ -4706,6 +4752,7 @@ $(function(){
             process_name:ctx.process, batch_no:b.no, round_no:(b.rounds.length+1),
             incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
             main_remark:$('#inp-remark').val(), update_std:$('#chk-save-std').is(':checked')?'1':'0',
+            insp_kind:state.inspKind,
             items:JSON.stringify(items), pcs_verdicts:JSON.stringify(collectPcsVerdicts()),
             tool_ids:JSON.stringify(MODEL.tools||[]) };
         var $btn=$(asRedo?'#btn-redo':'#btn-save').prop('disabled',true);

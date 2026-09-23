@@ -1,0 +1,755 @@
+{
+    "rowCount": 125,
+    "rows": [
+        {
+            "sub_map_id": 733,
+            "sub_id": 4,
+            "value_min": "22.0000",
+            "value_max": "25.0000"
+        },
+        {
+            "sub_map_id": 761,
+            "sub_id": 4,
+            "value_min": "22.0000",
+            "value_max": "25.0000"
+        },
+        {
+            "sub_map_id": 767,
+            "sub_id": 4,
+            "value_min": "22.0000",
+            "value_max": "25.0000"
+        },
+        {
+            "sub_map_id": 950,
+            "sub_id": 4,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 993,
+            "sub_id": 4,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 997,
+            "sub_id": 4,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1008,
+            "sub_id": 4,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1972,
+            "sub_id": 4,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1975,
+            "sub_id": 4,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1985,
+            "sub_id": 4,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1990,
+            "sub_id": 4,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1997,
+            "sub_id": 4,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2044,
+            "sub_id": 4,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2092,
+            "sub_id": 4,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2125,
+            "sub_id": 4,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 776,
+            "sub_id": 5,
+            "value_min": "48.0000",
+            "value_max": "53.0000"
+        },
+        {
+            "sub_map_id": 1100,
+            "sub_id": 5,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2021,
+            "sub_id": 5,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2126,
+            "sub_id": 5,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 198,
+            "sub_id": 6,
+            "value_min": "48.0000",
+            "value_max": "53.0000"
+        },
+        {
+            "sub_map_id": 583,
+            "sub_id": 6,
+            "value_min": "48.0000",
+            "value_max": "53.0000"
+        },
+        {
+            "sub_map_id": 612,
+            "sub_id": 6,
+            "value_min": "48.0000",
+            "value_max": "53.0000"
+        },
+        {
+            "sub_map_id": 681,
+            "sub_id": 6,
+            "value_min": "45.0000",
+            "value_max": "51.0000"
+        },
+        {
+            "sub_map_id": 685,
+            "sub_id": 6,
+            "value_min": "45.0000",
+            "value_max": "51.0000"
+        },
+        {
+            "sub_map_id": 720,
+            "sub_id": 6,
+            "value_min": "48.0000",
+            "value_max": "52.0000"
+        },
+        {
+            "sub_map_id": 734,
+            "sub_id": 6,
+            "value_min": "58.0000",
+            "value_max": "62.0000"
+        },
+        {
+            "sub_map_id": 744,
+            "sub_id": 6,
+            "value_min": "45.0000",
+            "value_max": "51.0000"
+        },
+        {
+            "sub_map_id": 779,
+            "sub_id": 6,
+            "value_min": "45.0000",
+            "value_max": "51.0000"
+        },
+        {
+            "sub_map_id": 1056,
+            "sub_id": 6,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1101,
+            "sub_id": 6,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1168,
+            "sub_id": 6,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1920,
+            "sub_id": 6,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2014,
+            "sub_id": 6,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2045,
+            "sub_id": 6,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2055,
+            "sub_id": 6,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2089,
+            "sub_id": 6,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2093,
+            "sub_id": 6,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2136,
+            "sub_id": 6,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 257,
+            "sub_id": 7,
+            "value_min": "57.0000",
+            "value_max": "61.0000"
+        },
+        {
+            "sub_map_id": 417,
+            "sub_id": 7,
+            "value_min": "57.0000",
+            "value_max": "61.0000"
+        },
+        {
+            "sub_map_id": 506,
+            "sub_id": 7,
+            "value_min": "58.0000",
+            "value_max": "62.0000"
+        },
+        {
+            "sub_map_id": 574,
+            "sub_id": 7,
+            "value_min": "57.0000",
+            "value_max": "61.0000"
+        },
+        {
+            "sub_map_id": 615,
+            "sub_id": 7,
+            "value_min": "59.0000",
+            "value_max": "61.0000"
+        },
+        {
+            "sub_map_id": 636,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 654,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 660,
+            "sub_id": 7,
+            "value_min": "58.0000",
+            "value_max": "62.0000"
+        },
+        {
+            "sub_map_id": 666,
+            "sub_id": 7,
+            "value_min": "58.0000",
+            "value_max": "62.0000"
+        },
+        {
+            "sub_map_id": 671,
+            "sub_id": 7,
+            "value_min": "54.0000",
+            "value_max": "58.0000"
+        },
+        {
+            "sub_map_id": 695,
+            "sub_id": 7,
+            "value_min": "57.0000",
+            "value_max": "61.0000"
+        },
+        {
+            "sub_map_id": 701,
+            "sub_id": 7,
+            "value_min": "54.0000",
+            "value_max": "58.0000"
+        },
+        {
+            "sub_map_id": 710,
+            "sub_id": 7,
+            "value_min": "54.0000",
+            "value_max": "58.0000"
+        },
+        {
+            "sub_map_id": 713,
+            "sub_id": 7,
+            "value_min": "57.0000",
+            "value_max": "61.0000"
+        },
+        {
+            "sub_map_id": 724,
+            "sub_id": 7,
+            "value_min": "54.0000",
+            "value_max": "58.0000"
+        },
+        {
+            "sub_map_id": 727,
+            "sub_id": 7,
+            "value_min": "58.0000",
+            "value_max": "62.0000"
+        },
+        {
+            "sub_map_id": 752,
+            "sub_id": 7,
+            "value_min": "54.0000",
+            "value_max": "56.0000"
+        },
+        {
+            "sub_map_id": 758,
+            "sub_id": 7,
+            "value_min": "57.0000",
+            "value_max": "61.0000"
+        },
+        {
+            "sub_map_id": 762,
+            "sub_id": 7,
+            "value_min": "58.0000",
+            "value_max": "62.0000"
+        },
+        {
+            "sub_map_id": 768,
+            "sub_id": 7,
+            "value_min": "58.0000",
+            "value_max": "62.0000"
+        },
+        {
+            "sub_map_id": 802,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 806,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 815,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 818,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 823,
+            "sub_id": 7,
+            "value_min": "56.0000",
+            "value_max": "58.0000"
+        },
+        {
+            "sub_map_id": 826,
+            "sub_id": 7,
+            "value_min": "56.0000",
+            "value_max": "58.0000"
+        },
+        {
+            "sub_map_id": 830,
+            "sub_id": 7,
+            "value_min": "56.0000",
+            "value_max": "58.0000"
+        },
+        {
+            "sub_map_id": 833,
+            "sub_id": 7,
+            "value_min": "56.0000",
+            "value_max": "58.0000"
+        },
+        {
+            "sub_map_id": 836,
+            "sub_id": 7,
+            "value_min": "56.0000",
+            "value_max": "58.0000"
+        },
+        {
+            "sub_map_id": 840,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 843,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 846,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 872,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 933,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 938,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 941,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 944,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 969,
+            "sub_id": 7,
+            "value_min": "58.0000",
+            "value_max": "61.0000"
+        },
+        {
+            "sub_map_id": 974,
+            "sub_id": 7,
+            "value_min": "58.0000",
+            "value_max": "61.0000"
+        },
+        {
+            "sub_map_id": 979,
+            "sub_id": 7,
+            "value_min": "58.0000",
+            "value_max": "61.0000"
+        },
+        {
+            "sub_map_id": 985,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 994,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 998,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1005,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1009,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1015,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1035,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1042,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1048,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1064,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1069,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1097,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1105,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1113,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1122,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1127,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1135,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1137,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1139,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1141,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1160,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1178,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1185,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1195,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1198,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1210,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1213,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1929,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1936,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1946,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1951,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1956,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 1959,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2000,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2048,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2082,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2102,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2110,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2113,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2118,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2121,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2129,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2133,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2150,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2162,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2197,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        },
+        {
+            "sub_map_id": 2215,
+            "sub_id": 7,
+            "value_min": null,
+            "value_max": null
+        }
+    ]
+}

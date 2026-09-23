@@ -1,0 +1,113 @@
+{
+    "rowCount": 12,
+    "rows": [
+        {
+            "map_id": 1302,
+            "d_id": 4789,
+            "label_id": 6,
+            "label_name": "厚度",
+            "input_value": null,
+            "draw_dim": "45.0000",
+            "lathe_dim": "45.3000"
+        },
+        {
+            "map_id": 1588,
+            "d_id": 736,
+            "label_id": 6,
+            "label_name": "厚度",
+            "input_value": null,
+            "draw_dim": "28.0000",
+            "lathe_dim": "28.1000"
+        },
+        {
+            "map_id": 1596,
+            "d_id": 737,
+            "label_id": 6,
+            "label_name": "厚度",
+            "input_value": null,
+            "draw_dim": "28.0000",
+            "lathe_dim": "28.1000"
+        },
+        {
+            "map_id": 1604,
+            "d_id": 486,
+            "label_id": 6,
+            "label_name": "厚度",
+            "input_value": null,
+            "draw_dim": "20.0000",
+            "lathe_dim": "20.2000"
+        },
+        {
+            "map_id": 1621,
+            "d_id": 19,
+            "label_id": 6,
+            "label_name": "厚度",
+            "input_value": null,
+            "draw_dim": "65.0000",
+            "lathe_dim": "67.0000"
+        },
+        {
+            "map_id": 1702,
+            "d_id": 4753,
+            "label_id": 6,
+            "label_name": "厚度",
+            "input_value": null,
+            "draw_dim": "141.0000",
+            "lathe_dim": "141.3000"
+        },
+        {
+            "map_id": 1746,
+            "d_id": 4620,
+            "label_id": 6,
+            "label_name": "厚度",
+            "input_value": null,
+            "draw_dim": "45.0000",
+            "lathe_dim": "45.3000"
+        },
+        {
+            "map_id": 1760,
+            "d_id": 4754,
+            "label_id": 6,
+            "label_name": "厚度",
+            "input_value": null,
+            "draw_dim": "110.0000",
+            "lathe_dim": "110.2000"
+        },
+        {
+            "map_id": 1770,
+            "d_id": 4755,
+            "label_id": 6,
+            "label_name": "厚度",
+            "input_value": null,
+            "draw_dim": "110.0000",
+            "lathe_dim": "110.2000"
+        },
+        {
+            "map_id": 1914,
+            "d_id": 4447,
+            "label_id": 6,
+            "label_name": "厚度",
+            "input_value": null,
+            "draw_dim": "40.0000",
+            "lathe_dim": "40.4000"
+        },
+        {
+            "map_id": 2081,
+            "d_id": 5155,
+            "label_id": 12,
+            "label_name": "外徑(>齒部外徑)",
+            "input_value": null,
+            "draw_dim": "43.0000",
+            "lathe_dim": "43.0000"
+        },
+        {
+            "map_id": 3374,
+            "d_id": 4517,
+            "label_id": 12,
+            "label_name": "外徑(>齒部外徑)",
+            "input_value": null,
+            "draw_dim": "60.0000",
+            "lathe_dim": "60.3500"
+        }
+    ]
+}

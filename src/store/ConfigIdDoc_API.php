@@ -30,45 +30,14 @@ function needView(array $perms) { if (!$perms['canView']) jout(['success'=>false
 function needEdit(array $perms) { if (!$perms['canEdit']) jout(['success'=>false,'message'=>'無登錄權限']); }
 function needAdmin(array $perms) { if (!$perms['canAdmin']) jout(['success'=>false,'message'=>'無管理權限']); }
 
-const TYPE_LABELS = ['drawing'=>'圖面','jig'=>'治夾具','report'=>'報告','other'=>'其他文件'];
+/* 型態類別與連結來源的顯示標籤：唯一登記處已移到 src/common/type_id_ctrl_lib.php
+   （2026-09-22 內部稽核的「產品型態稽核表」也要照同一份標籤把管制表的項目列帶進查檢表，
+   兩邊各留一份遲早走鐘＝鐵律4）。這裡只保留原本的常數名稱，讓本檔既有的呼叫端一行都不必改。 */
+const TYPE_LABELS   = TIC_TYPE_LABELS;
+const SOURCE_LABELS = TIC_SOURCE_LABELS;
 
-// 連結來源顯示標籤（畫面上那顆小徽章要看得出這一列是哪裡自動帶進來的）
-const SOURCE_LABELS = ['part'=>'外來文件', 'quote'=>'外來文件', 'dev_eval'=>'產品開發評估表',
-                       'pfmea'=>'PFMEA', 'bomfile'=>'ERP/資材報告'];
-
-/** 組出單筆項目列的顯示資料（即時解析連結，不快照） */
-function buildItemView(PDO $db, array $it): array {
-    $linked = null;
-    // bomfile 來源沒有 attach_id，識別鍵是檔名（見 type_id_ctrl_lib 的說明）
-    $hasRef = $it['ref_source'] && ($it['ref_attach_id'] || ($it['ref_source'] === 'bomfile' && !empty($it['ref_file_name'])));
-    if ($hasRef) {
-        $linked = type_id_ctrl_resolve_ref($db, $it['ref_source'], (int)$it['ref_attach_id'], (int)$it['ref_ds_pk'], $it['ref_file_name'] ?? null);
-    }
-    return [
-        'id' => (int)$it['id'],
-        'seq' => (int)$it['seq'],
-        'item_name' => $it['item_name'],
-        'item_type' => $it['item_type'],
-        'item_type_label' => TYPE_LABELS[$it['item_type']] ?? '其他文件',
-        'process_tag' => $it['process_tag'] ?? null,
-        'need_process_hint' => !empty($it['need_process_hint']),
-        'is_linked' => $linked !== null,
-        'is_excluded' => !empty($it['is_excluded']),
-        'ref_source' => $it['ref_source'],
-        'ref_source_label' => $it['ref_source'] ? (SOURCE_LABELS[$it['ref_source']] ?? '自動帶入') : '',
-        'ref_attach_id' => $it['ref_attach_id'] ? (int)$it['ref_attach_id'] : null,
-        'ref_ds_pk' => $it['ref_ds_pk'] ? (int)$it['ref_ds_pk'] : null,
-        'ref_file_name' => $it['ref_file_name'] ?? null,
-        'ref_bom_tag' => $it['ref_bom_tag'] ?? null,
-        'ref_broken' => ($hasRef && $linked === null), // 曾連結但來源已消失
-        'effective_date' => $linked ? $linked['doc_date'] : $it['manual_effective_date'],
-        'doc_no_text' => $linked ? $linked['doc_name'] : $it['manual_doc_no'],
-        // 列印版：連結列若沒有真正版次、退回顯示檔名時，檔名不算真正的「版別／文件編號」，
-        // 列印不印（畫面上仍用 doc_no_text 顯示檔名以利辨識；手動輸入列一律視為真實文件編號）
-        'print_doc_no' => ($linked && !empty($linked['doc_no_is_filename'])) ? '' : ($linked ? $linked['doc_name'] : $it['manual_doc_no']),
-        'file_url' => $linked ? $linked['file_url'] : null,
-    ];
-}
+/** 組出單筆項目列的顯示資料（即時解析連結，不快照）——實作在共用庫，這裡只是薄包裝 */
+function buildItemView(PDO $db, array $it): array { return type_id_ctrl_item_view($db, $it); }
 
 const REVIEW_LABELS = ['pending'=>'待確認','confirmed'=>'已確認','needs_recheck'=>'需重新確認'];
 

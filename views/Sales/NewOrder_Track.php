@@ -1624,6 +1624,8 @@ $can_boss_review_setting   = false;
 // 訂單分析（2026-09-22 新增的獨立頁面）：全新功能，舊制沒有對應權限碼，一律預設關閉
 // （不改變任何現有使用者看到的畫面；要用請由管理員在「角色設定」勾選 ot_analysis）
 $can_analysis              = false;
+// 客戶提醒設定（2026-09-23 新增）：全新功能，舊制沒有對應權限碼，一律預設關閉
+$can_client_reminder_manage = false;
 $can_op_convert            = $can_create;                               // OP轉訂單（舊制沿用一般新增權限）
 $can_view_amount           = true;                                      // 金額顯示（舊制從未限制過，一律可見）
 $can_keyway_calc           = true;                                      // 鍵槽計算（舊制從未限制過，一律可見）
@@ -1735,6 +1737,9 @@ $OT_PAGE_FEATURES = [
     // 本頁只多一顆開啟按鈕，其餘一行都不動（使用者明確要求「嚴禁影響現有使用者」）。
     ['group'=>'訂單分析',     'code'=>'ot_analysis',             'label'=>'訂單分析（新訂單／趨勢／全製單製／數量區間／客戶與料號排名）'],
     ['group'=>'訂單分析',     'code'=>'ot_analysis_setting',     'label'=>'訂單分析設定（數量區間、全製／單製關鍵字規則）'],
+    // 2026-09-23 使用者要求：客戶欄旁筆記本圖示可綁定「這個客戶有哪些事要注意」（同客戶可多筆），
+    // 選定/變更客戶時跳窗提醒；本項只管「誰能新增/編輯/停用提醒內容」，跳窗本身看得到這頁的人都看得到。
+    ['group'=>'客戶提醒',     'code'=>'ot_client_reminder_manage', 'label'=>'設定客戶提醒（新增/編輯/停用提醒內容）'],
 ];
 
 // ── RBAC 權限檢查（$OT_USE_RBAC = true 時生效）───────────────────────────
@@ -1757,6 +1762,7 @@ if ($OT_USE_RBAC) {
     $can_op_convert             = ot_hasF('ot_op_convert');
     $can_view_amount            = ot_hasF('ot_view_amount');
     $can_keyway_calc            = ot_hasF('ot_keyway_calc');
+    $can_client_reminder_manage = ot_hasF('ot_client_reminder_manage');
     $can_designer_assign_cog   = $IS_OT_RBAC_ADMIN;
     $can_master_edit           = ot_hasF('ot_master_edit');
     $show_op_col      = ($can_create || $can_update);
@@ -1780,6 +1786,10 @@ $OT_IS_ADMIN_ANY = ($id === 1);
 // 唯一實作在 src/common/order_boss_review_lib.php；名單沒設定＝這整套等於不存在，
 // 所有判定一律回 false，畫面與行為與改動前完全相同。
 require_once __DIR__ . '/../../src/common/order_boss_review_lib.php';
+// ── 客戶提醒（2026-09-23 使用者要求）─────────────────────────────────────
+// 唯一實作在 src/common/order_client_reminder_lib.php；沒有任何客戶被設定提醒時
+// 這整套等於不存在（清單一律是空的），畫面與行為與改動前完全相同。
+require_once __DIR__ . '/../../src/common/order_client_reminder_lib.php';
 
 if (!($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']))) {
     $ate_list = $conn->getAll("SELECT `user_cname`,`user_uname`,`id` FROM `user` WHERE `user_status`=63");
@@ -3257,6 +3267,7 @@ catch (Exception $_eUrg) {
 // 相容舊表：BOSS 審圖（客戶名單表＋order_track 的 boss_review_at/boss_ok_at 等四欄）首次載入自動補建
 // 只在「真的開頁面」時跑一次（AJAX 清單不跑，避免每次翻頁都 SHOW COLUMNS）
 try { ot_boss_ensure_schema($conn->getPDO()); } catch (Exception $_eBoss) {}
+try { ocr_ensure_schema($conn->getPDO()); } catch (Exception $_eOcr) {}
 $initStatsSql = "SELECT
     COUNT(*) as total_records,
     SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op,
@@ -4996,6 +5007,7 @@ foreach($dCounts as $c) {
         window.canChangeClient = <?= json_encode((bool)$can_order_change_client) ?>; // 更改已建立訂單的客戶（ot_order_change_client）
         window.OT_CAN_CHANGE_SETTING = <?= json_encode((bool)$can_order_change_setting) ?>; // 訂單變更設定（ot_order_change_setting）
         window.OT_CAN_BOSS_SETTING   = <?= json_encode((bool)$can_boss_review_setting) ?>;  // 設定「需給 BOSS 審圖」客戶名單（ot_boss_review_setting）
+        window.OT_CAN_REMINDER_MANAGE = <?= json_encode((bool)$can_client_reminder_manage) ?>; // 設定客戶提醒（ot_client_reminder_manage）
         window.designerList = <?= json_encode($ate_list) ?>; // 傳遞設計師列表給 JS
         
         function escapeHtml(text) {

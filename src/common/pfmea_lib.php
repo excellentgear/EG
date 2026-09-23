@@ -527,6 +527,16 @@ function pfmea_revision_sync_first_date(PDO $db, int $docId, ?string $bizDate): 
     $db->prepare("UPDATE pfmea_revision SET rev_date=? WHERE doc_id=? AND rev_no=1")->execute([$bizDate, $docId]);
 }
 
+/** 「更改建立人」時要跟著改的另一份資料：修訂履歷第一列「新增文件」的準備人是存檔當下
+ *  的快照文字（pfmea_revision.prepared_by_name），跟 pfmea_doc.created_by_name 是兩份獨立
+ *  存放的資料——只改 created_by_name 不動這裡，列印版右上角的修訂履歷仍會印出舊建立人，
+ *  使用者才會回報「更改建立人後，列印資料上還是錯的」。只動 rev_no=1，後續「修改文件」
+ *  各列各自代表當次真正動手改的人，不可被「更改建立人」一併覆寫。 */
+function pfmea_revision_sync_first_preparer(PDO $db, int $docId, string $name): void {
+    if ($name === '') return;
+    $db->prepare("UPDATE pfmea_revision SET prepared_by_name=? WHERE doc_id=? AND rev_no=1")->execute([$name, $docId]);
+}
+
 /** 記一筆列印紀錄。時間戳一律取 DB 時間——PHP date() 是 UTC、MySQL NOW() 是本地，
  *  混用會讓紀錄差 8 小時（CLAUDE.md 已載明的既有踩坑） */
 function pfmea_print_log_add(PDO $db, int $docId, string $kind, int $uid, string $uname): void {

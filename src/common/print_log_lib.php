@@ -225,6 +225,7 @@ if (!function_exists('eg_print_sources')) {
             'notice_contact' => ['label' => '公告 / 通知－聯絡單',            'page' => 'views/liveEvent/createEvent.php',        'kind' => 'form'],
             'project_mgmt'   => ['label' => '專案管理－執行規劃表／專案管理卡', 'page' => 'views/GM/project_mgmt.php',            'kind' => 'form'],
             'stamp_list'     => ['label' => '圖章管理記錄表',                 'page' => 'views/ADM/stamp_management.php',          'kind' => 'form'],
+            'order_analysis' => ['label' => '訂單分析報告',                   'page' => 'views/Sales/Order_Analysis.php',          'kind' => 'form'],
         ];
     }
 }

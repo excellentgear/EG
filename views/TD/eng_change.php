@@ -370,7 +370,10 @@ $openId = (int)($_GET['id'] ?? 0);
         </div></div>
 
         <div class="sec"><div class="sh">簽核紀錄</div><div class="sb">
-            <table class="hist"><thead><tr><th>關卡</th><th>狀態</th><th>送出</th><th>簽核人</th><th>簽核時間</th><th>意見</th></tr></thead>
+            <!-- 使用者要求 2026-09-23：簽核紀錄不顯示「送出人」 -->
+            <table class="hist"><thead><tr><th style="width:110px;">關卡</th><th style="width:70px;">狀態</th>
+                <th>簽核人</th><th style="width:130px;">簽核時間</th><th>意見</th>
+                <th style="width:70px;" class="only-admin">操作</th></tr></thead>
             <tbody id="histBody"></tbody></table>
         </div></div>
     </div>
@@ -378,6 +381,9 @@ $openId = (int)($_GET['id'] ?? 0);
         <span id="ecHint" style="flex:1;text-align:left;font-size:12px;color:#8a6d45;align-self:center;"></span>
         <button class="ec-btn ghost" id="btnEcPrint"><i class="fa fa-print"></i> 列印</button>
         <button class="ec-btn ghost" id="btnEcPrintAtt" style="display:none;"><i class="fa fa-paperclip"></i> 列印所有附件</button>
+<?php if ($P['canAdmin']): ?>
+        <button class="ec-btn ghost" id="btnEcBulk" style="display:none;"><i class="fa fa-stamp"></i> 一次代簽全部</button>
+<?php endif; ?>
         <button class="ec-btn ghost" id="btnEcDel" style="display:none;border-color:#DD5138;color:#DD5138;"><i class="fa fa-trash"></i> 刪除</button>
         <button class="ec-btn ghost" id="btnEcSave" style="display:none;"><i class="fa fa-save"></i> 儲存草稿</button>
         <button class="ec-btn" id="btnEcSubmit" style="display:none;"><i class="fa fa-paper-plane"></i> 送出</button>
@@ -419,6 +425,45 @@ $openId = (int)($_GET['id'] ?? 0);
     <div class="m-foot"><button class="b-ok" onclick="closeMask('attMask')">關閉</button></div>
 </div></div>
 
+<!-- ══════════ 一次代簽全部（管理員） ══════════ -->
+<div class="ec-mask" id="bulkMask"><div class="ec-modal xwide">
+    <div class="m-head"><span>一次代簽全部</span><span class="m-close" onclick="closeMask('bulkMask')">✕</span></div>
+    <div class="m-body">
+        <div style="border:1px solid #E8D5B5;background:#FFF7E8;border-radius:6px;padding:6px 10px;
+             margin-bottom:8px;color:#7A4A12;font-size:12px;">
+            <b>一欄一個簽章人員</b>——技術課在這張表單有兩格要蓋章（設計分析、管制員），可以分別挑不同的人。<br>
+            簽章時間由系統依<b>正確的簽核順序</b>自動配：每一格比前一格晚
+            <b>隨機 8~54 分鐘</b>，而且<b>全部在同一天簽完</b>。<br>
+            <b>當天請假的人一律不可選</b>（清單上會寫明是什麼假）——請改挑他的代理人，或把簽章日期改到他沒請假的那一天。
+        </div>
+        <div class="fld" style="max-width:240px;margin-bottom:8px;"><label>簽章日期 <span style="color:#DD5138">*</span>
+                <small style="font-weight:normal;color:#aaa;">（不可早於申請單日期）</small></label>
+            <input type="date" id="bulkDate" class="form-control"><div class="err"></div></div>
+        <div id="bulkSlots"></div>
+    </div>
+    <div class="m-foot" style="display:flex;gap:6px;justify-content:flex-end;">
+        <span id="bulkHint" style="flex:1;text-align:left;font-size:12px;color:#8a6d45;align-self:center;"></span>
+        <button class="b-ok" id="btnBulkOk">確定代簽</button>
+    </div>
+</div></div>
+
+<!-- ══════════ 更正某一格的簽章（管理員，限代簽過的） ══════════ -->
+<div class="ec-mask" id="fixMask"><div class="ec-modal">
+    <div class="m-head"><span id="fixTitle">更正簽章</span><span class="m-close" onclick="closeMask('fixMask')">✕</span></div>
+    <div class="m-body">
+        <div style="border:1px solid #E8D5B5;background:#FFF7E8;border-radius:6px;padding:6px 10px;
+             margin-bottom:8px;color:#7A4A12;font-size:12px;">
+            這一格是<b>管理員代簽</b>的，所以可以更正簽章人員與時間（<b>結案後也可以</b>）。
+            本人自己簽的章不會出現這個按鈕——那等於改掉別人的簽名。</div>
+        <div class="fld"><label>簽章人員 <span style="color:#DD5138">*</span></label>
+            <select id="fixWho" class="form-control" data-eg-filter="輸入姓名或部門篩選…"></select><div class="err"></div></div>
+        <div class="fld" style="margin-top:6px;"><label>簽章時間 <span style="color:#DD5138">*</span>
+                <small style="font-weight:normal;color:#aaa;">（不可早於申請單日期，也不可晚於現在）</small></label>
+            <input type="datetime-local" id="fixAt" class="form-control"><div class="err"></div></div>
+    </div>
+    <div class="m-foot"><button class="b-ok" id="btnFixOk">確定更正</button></div>
+</div></div>
+
 <!-- ══════════ 管理員代簽：要代誰簽 ══════════ -->
 <div class="ec-mask" id="proxyMask"><div class="ec-modal narrow">
     <div class="m-head"><span>代理簽核</span><span class="m-close" onclick="closeMask('proxyMask')">✕</span></div>
@@ -429,6 +474,9 @@ $openId = (int)($_GET['id'] ?? 0);
             下一關的「送出人員」也記成他；實際是你按的這件事會記在本單的簽核紀錄（<b>列印不會印出來</b>）。</div>
         <div class="fld"><label>這一關要代誰簽 <span style="color:#DD5138">*</span></label>
             <select id="proxyWho" class="form-control" data-eg-filter="輸入姓名或部門篩選…"></select></div>
+        <div class="fld" style="margin-top:6px;"><label>簽章時間
+                <small style="font-weight:normal;color:#aaa;">（留空＝現在；不可早於申請單日期）</small></label>
+            <input type="datetime-local" id="proxyAt" class="form-control"></div>
     </div>
     <div class="m-foot"><button class="b-ok" id="btnProxyOk">確定代簽</button></div>
 </div></div>
@@ -496,6 +544,12 @@ $openId = (int)($_GET['id'] ?? 0);
                 <div class="fld half"><label>會審簽章</label>
                     <select id="set_rv_stamp" class="form-control" data-eg-filter="輸入模板名稱篩選…"></select></div>
             </div>
+        </div></div>
+        <div class="sec"><div class="sh">列印</div><div class="sb">
+            <label class="chk"><input type="checkbox" id="set_print_sign_log"> 在頁尾附註下方加印一份「簽核紀錄」</label>
+            <div style="font-size:11px;color:#aaa;">
+                印的是 <b>關卡／簽核人（含當時部門職稱）／簽核日期</b>。
+                <b>絕對不會出現「管理員○○○代簽」之類的字樣</b>——那只在系統畫面的簽核紀錄看得到。</div>
         </div></div>
         <div class="sec"><div class="sh">自動產生</div><div class="sb">
             <label class="chk"><input type="checkbox" id="set_auto"> 圖面變更紀錄送出且「變更來源＝客戶」時，自動建立一張工程變更申請單草稿</label>
@@ -679,6 +733,7 @@ var PART_CACHE = {};
 var CUR_ATT = [], ATT_CATS = {apply:[], design:[]}, ATT_RULE = 'optional', ATT_RULES_ALL = {}, ATT_HINT = {};
 var ATT_SLOT = '', ATT_CAT = 0, ATT_FILE = null;   // 挑選跳窗目前的狀態
 var CUR_SIGNERS = {}, ATT_EDIT = {apply:false, design:false};
+var CUR_SLOTS = [], FIX_SLOT = '';   // 各簽章格的狀態／正在更正哪一格
 
 function esc(s){ return $('<div>').text(s == null ? '' : s).html(); }
 /* 日期顯示一律 YYYY.MM.DD（ai-rules/20）；空值不要印成 "1970.01.01" */
@@ -798,7 +853,7 @@ function openEc(id, scrollToStage){
         CUR = r.row; CUR_REVIEWS = r.reviews || [];
         CUR_ATT = r.attachments || []; ATT_CATS = r.attach_cats || {apply:[], design:[]};
         ATT_RULE = r.attach_rule || 'optional'; ATT_RULES_ALL = r.attach_rules_all || {};
-        CUR_SIGNERS = r.signers || {};
+        CUR_SIGNERS = r.signers || {}; CUR_SLOTS = r.sign_slots || [];
         fillEc(r);
         openMask('ecMask');
         // 從通知點進來時直接捲到「目前輪到的那一關」，不要讓人自己從頭找到底
@@ -886,7 +941,10 @@ function applyStageUI(d, signers){
     var pre = d.prefill || [];
     var may = function(stage){ return pre.indexOf(stage) >= 0 || (mine && st === stage); };
     var canWH = may('WH'), canTD = may('TD'), canCT = may('CTRL');
-    var canAP = mine && st === 'APPROVE';      // 核示沒有「本身部門」的概念，仍只有核准人能填
+    // 核示沒有「本身部門」的概念，所以一般人只有輪到自己那一關才填得了；
+    // 但管理員要能提早填（後端 ec_can_prefill_stage 也是同一套），否則「一次代簽全部」
+    // 永遠會卡在「請選擇核示結果」——那一關的欄位在單子走到之前根本打不開。
+    var canAP = may('APPROVE');
 
     $('#e_stock_qty,#e_wip_qty').prop('disabled', !canWH);
     $('input[name=design],input[name=oldstock],.rv-need').prop('disabled', !canTD);
@@ -918,6 +976,10 @@ function applyStageUI(d, signers){
     $('#btnEcDel').toggle(+d.can_delete === 1)
                   .html('<i class="fa fa-trash"></i> ' + (d.status === 'DRAFT' ? '刪除這張草稿' : '刪除'));
     $('#btnEcPrintAtt').toggle(CUR_ATT.length > 0).html('<i class="fa fa-paperclip"></i> 列印所有附件（' + CUR_ATT.length + '）');
+    // 一次代簽全部：管理員限定，且要先送出（DRAFT 的申請人那一格是由「送出」蓋的），還有沒簽的格子才出現
+    var pending = (CUR_SLOTS || []).filter(function(s){ return !s.signed; }).length;
+    $('#btnEcBulk').toggle(!!(PERMS && PERMS.canAdmin) && st !== 'DRAFT' && pending > 0)
+                   .html('<i class="fa fa-pencil-square-o"></i> 一次代簽全部（' + pending + '）');
 
     // 「目前等待」要印出**部門與職稱**，而且多人可簽的關卡要把人全部列出來（使用者要求 2026-09-23）
     var who = signers[st] || {}, list = who.list || [];
@@ -972,20 +1034,34 @@ function renderReviews(r){
     $('#reviewBody').html(h || '<div style="color:#aaa;font-size:12px;">技術課尚未判定是否需要會審</div>');
 }
 
-/* 關卡 → eng_change 上那一組簽章欄位的前綴（要跟 lib 的 EC_STAGES.sign_key 對得起來） */
-var SIGN_KEY = {SUP:'sup', WH:'wh', TD:'td', APPROVE:'appr', CTRL:'ctrl'};
-function renderHist(rows, d){
+/* 簽核紀錄（使用者要求 2026-09-23）：
+     ・不顯示「送出人」
+     ・以**各簽章格**為主（申請人那一格本來就沒有 approval_record，用簽核紀錄湊會漏掉）
+     ・管理員代簽過的格子標橘色小籤並可「更正」（改人、改時間）；**列印版一律不印這個** */
+function renderHist(approvals, d){
+    var isAdmin = !!(PERMS && PERMS.canAdmin);
+    $('.only-admin').toggle(isAdmin);
     var h = '';
-    rows.forEach(function(a){
-        var stx = a.status === 'approved' ? '已簽核' : (a.status === 'rejected' ? '退回' : '待簽核');
-        // 管理員代簽：簽核人欄位仍然是「原本該簽的人」（章也蓋他），
-        // 這裡另外標一個橘色小籤說明實際是誰按的。**列印版不讀這個欄位**（使用者明確要求）。
-        var k = SIGN_KEY[a.level] || '', proxy = (k && d) ? (d['sign_' + k + '_proxy_name'] || '') : '';
-        var tag = proxy ? ' <span class="pill todo" title="實際按下簽核的人；列印不會印出">管理員 '
-                        + esc(proxy) + ' 代簽</span>' : '';
-        h += '<tr><td>'+esc(a.label)+'</td><td>'+stx+'</td><td>'+esc(a.submitted_by)+'</td>'
-           + '<td>'+esc(a.approved_by)+tag+'</td><td>'+esc(String(a.approved_at||'').substring(0,16))+'</td>'
-           + '<td>'+esc(a.note||'')+'</td></tr>';
+    (CUR_SLOTS || []).forEach(function(s){
+        var tag = (isAdmin && s.proxy_name)
+            ? ' <span class="pill todo" title="實際按下簽核的人；列印不會印出">管理員 ' + esc(s.proxy_name) + ' 代簽</span>' : '';
+        var act = (isAdmin && s.can_fix)
+            ? '<button type="button" class="att-mini" onclick="openFixSign(\''+s.key+'\')">更正</button>' : '';
+        h += '<tr><td>'+esc(s.label)+'</td>'
+          +  '<td>'+(s.signed ? '已簽核' : '<span style="color:#aaa;">未簽</span>')+'</td>'
+          +  '<td>'+esc(s.signer_name||'')+tag+'</td>'
+          +  '<td>'+esc(String(s.signed_at||'').substring(0,16))+'</td>'
+          +  '<td></td>'
+          +  (isAdmin ? '<td>'+act+'</td>' : '') + '</tr>';
+    });
+    // 退回是流程事實不是簽章格，仍然要看得到（含退回原因）
+    (approvals || []).forEach(function(a){
+        if (a.status !== 'rejected') return;
+        h += '<tr><td>'+esc(a.label)+'</td><td style="color:#DD5138;">退回</td>'
+          +  '<td>'+esc(a.approved_by||'')+'</td>'
+          +  '<td>'+esc(String(a.approved_at||'').substring(0,16))+'</td>'
+          +  '<td>'+esc(a.note||'')+'</td>'
+          +  (isAdmin ? '<td></td>' : '') + '</tr>';
     });
     $('#histBody').html(h || '<tr><td colspan="6" style="color:#aaa;text-align:center;">尚無簽核紀錄</td></tr>');
 }
@@ -1563,20 +1639,19 @@ $('#btnEcSign').on('click', function(){
 function doSign(fields){
     var list = (CUR_SIGNERS[fields.stage] || {}).list || [];
     var mine = list.some(function(x){ return +x.id === +ME.uid; });
-    if (!mine && list.length > 1) {
+    if (!mine && list.length >= 1) {
         var s = $('#proxyWho').empty();
         list.forEach(function(x){ s.append('<option value="'+x.id+'">'+esc(x.label)+'</option>'); });
+        $('#proxyAt').val('');
         $('#btnProxyOk').off('click').on('click', function(){
             fields.sign_as = $('#proxyWho').val() || 0;
+            // 管理員代簽時可以自己指定簽章時間（使用者要求 2026-09-23）；後端會擋「早於申請單日期」
+            var at = $('#proxyAt').val();
+            if (at) fields.sign_at = at;
             closeMask('proxyMask');
             sendSign(fields, '確定代「' + ($('#proxyWho option:selected').text() || '') + '」簽核這一關？');
         });
         openMask('proxyMask');
-        return;
-    }
-    if (!mine && list.length === 1) {
-        fields.sign_as = list[0].id;
-        sendSign(fields, '你不是這一關的簽核人，這是管理員代簽。章會蓋「' + list[0].label + '」，確定？');
         return;
     }
     sendSign(fields, '確定簽核這一關？簽完會自動通知下一關的人。');
@@ -1589,6 +1664,133 @@ function sendSign(fields, ask){
         closeMask('ecMask'); loadList();
     });
 }
+
+/* ══════════════════ 代簽（管理員）══════════════════
+   使用者要求 2026-09-23：
+     ① 一次代簽全部，**一欄一個簽章人員**（技術課有兩格＝可挑兩個不同的人）
+     ② 簽章時間依正確順序每次隨機 +8~54 分鐘，且當天全部簽完（後端 ec_sign_time_series 算）
+     ③ 當天請假的人列得出來但**不可選**，請改挑代理人或改日期
+     ④ 代簽過的格子事後可以更正人員與時間（結案後也可以） */
+<?php if ($P['canAdmin']): ?>
+var BULK_SLOTS = [];
+$('#btnEcBulk').on('click', function(){
+    if (!CUR) return;
+    $('#bulkDate').val(String(CUR.apply_date||'').substring(0,10));
+    loadBulkSlots();
+    openMask('bulkMask');
+});
+$('#bulkDate').on('change', loadBulkSlots);
+function loadBulkSlots(){
+    if (!CUR) return;
+    $('#bulkSlots').html('<div style="color:#aaa;">載入中…</div>');
+    $.getJSON(API, {action:'sign_slots', id:CUR.ec_id, date:$('#bulkDate').val()}, function(r){
+        if (!r.ok) return;
+        BULK_SLOTS = r.slots || [];
+        var pend = 0, h = '', miss = [];
+        BULK_SLOTS.forEach(function(s){
+            (s.missing || []).forEach(function(m){ miss.push('「' + s.label + '」' + m); });
+            h += '<div class="att-row" style="align-items:flex-start;">'
+              +  '<span class="att-cat" style="width:110px;">' + esc(s.label) + '</span>';
+            if (s.signed) {
+                h += '<span class="att-file"><span class="pill done">已簽　' + esc(s.signer_name) + '　'
+                  +  esc(String(s.signed_at||'').substring(0,16)) + '</span>'
+                  +  (s.proxy_name ? ' <span class="pill todo">管理員 '+esc(s.proxy_name)+' 代簽</span>' : '')
+                  +  '</span>';
+            } else {
+                pend++;
+                var opts = '<option value="">請選擇…</option>';
+                (s.candidates||[]).forEach(function(c){
+                    opts += '<option value="'+c.id+'"'+(c.blocked?' disabled':'')+'>'
+                         +  esc(c.label) + (c.blocked ? '　← 當天請假，不可選' : '') + '</option>';
+                });
+                var free = (s.candidates||[]).filter(function(c){ return !c.blocked; });
+                h += '<span class="att-file"><select class="form-control bulk-pick" data-k="'+esc(s.key)+'" '
+                  +  'data-eg-filter="輸入姓名或部門篩選…" style="height:28px;font-size:12px;">'+opts+'</select>'
+                  +  (free.length ? '' : '<div style="color:#DD5138;font-size:11px;margin-top:2px;">'
+                       + '這一格當天沒有任何人可以簽（都請假了），請改簽章日期。</div>')
+                  +  '</span>';
+            }
+            h += '</div>';
+        });
+        $('#bulkSlots').html(h);
+        // 預設選「本關卡簽核人」裡第一個沒請假的
+        BULK_SLOTS.forEach(function(s){
+            if (s.signed) return;
+            var pick = (s.candidates||[]).filter(function(c){ return c.is_pool && !c.blocked; })[0];
+            if (pick) $('.bulk-pick[data-k="'+s.key+'"]').val(String(pick.id));
+        });
+        // 各關卡自己的必填欄位沒填完就簽不下去（後端同一套規則）——先講出來還缺什麼，
+        // 不要等按下去才報，也不要讓人一關一關試
+        if (miss.length) {
+            $('#bulkSlots').prepend('<div style="border:1px solid #DD5138;background:#FFF3F0;border-radius:6px;'
+                + 'padding:6px 10px;margin-bottom:8px;color:#8a2b1a;font-size:12px;">'
+                + '<b>下面這些欄位還沒填完，填完才簽得下去：</b><br>' + esc(miss.join('；')) + '</div>');
+        }
+        $('#bulkHint').text(miss.length ? ('還有 ' + pend + ' 格沒簽，但有必填欄位沒填完')
+                          : (pend ? ('還有 ' + pend + ' 格沒簽') : '這張單所有簽章格都已經簽過了'));
+        $('#btnBulkOk').prop('disabled', pend === 0 || miss.length > 0);
+    });
+}
+$('#btnBulkOk').on('click', function(){
+    if (!CUR) return;
+    var picks = {}, miss = '';
+    $('.bulk-pick').each(function(){
+        var k = $(this).data('k'), v = this.value;
+        if (!v) { if (!miss) miss = k; return; }
+        picks[k] = v;
+    });
+    if (miss) {
+        var lb = (BULK_SLOTS.filter(function(s){ return s.key === miss; })[0]||{}).label || miss;
+        alert('「' + lb + '」還沒有選簽章人員'); return;
+    }
+    if (!confirm('確定一次代簽 ' + Object.keys(picks).length + ' 個簽章格？\n'
+               + '簽章時間會依簽核順序自動配（每格 +8~54 分鐘，同一天內簽完）。')) return;
+    post({action:'bulk_sign', ec_id:CUR.ec_id, date:$('#bulkDate').val(), picks:JSON.stringify(picks)}, function(r){
+        if (!r.ok) return;
+        alert('已代簽 ' + r.signed + ' 格'
+            + (r.status === 'CLOSED' ? '，本單結案' : ('，目前在「' + (DICT.stages[r.status] || r.status) + '」')));
+        closeMask('bulkMask'); openEc(CUR.ec_id); loadList();
+    });
+});
+
+/* 更正某一格的簽章（限管理員代簽過的格子；結案後也可以改） */
+function openFixSign(slotKey){
+    if (!CUR) return;
+    FIX_SLOT = slotKey;
+    var cur = (CUR_SLOTS||[]).filter(function(s){ return s.key === slotKey; })[0] || {};
+    $('#fixTitle').text('更正簽章　' + (cur.label || slotKey));
+    var at = String(cur.signed_at || '').replace(' ', 'T').substring(0,16);
+    $('#fixAt').val(at);
+    $('#fixWho').html('<option value="">載入中…</option>');
+    openMask('fixMask');
+    reloadFixCandidates();
+}
+function reloadFixCandidates(){
+    var d = String($('#fixAt').val() || '').substring(0,10);
+    $.getJSON(API, {action:'sign_slots', id:CUR.ec_id, date:d}, function(r){
+        if (!r.ok) return;
+        var s = (r.slots||[]).filter(function(x){ return x.key === FIX_SLOT; })[0];
+        var cur = (CUR_SLOTS||[]).filter(function(x){ return x.key === FIX_SLOT; })[0] || {};
+        var sel = $('#fixWho').empty().append('<option value="">請選擇…</option>');
+        (s ? s.candidates : []).forEach(function(c){
+            sel.append('<option value="'+c.id+'"'+(c.blocked?' disabled':'')+'>'
+                     + esc(c.label) + (c.blocked ? '　← 當天請假，不可選' : '') + '</option>');
+        });
+        if (cur.signer_id) sel.val(String(cur.signer_id));
+    });
+}
+$('#fixAt').on('change', reloadFixCandidates);
+$('#btnFixOk').on('click', function(){
+    var who = $('#fixWho').val(), at = $('#fixAt').val();
+    if (!markErr('#fixWho', who ? '' : '請選擇簽章人員')) return;
+    if (!markErr('#fixAt',  at  ? '' : '請填寫簽章時間')) return;
+    post({action:'fix_sign', ec_id:CUR.ec_id, slot:FIX_SLOT, user_id:who, sign_at:at}, function(r){
+        if (!r.ok) return;
+        closeMask('fixMask'); alert('已更正為 ' + r.name + '（' + r.at.substring(0,16) + '）');
+        openEc(CUR.ec_id); loadList();
+    });
+});
+<?php endif; ?>
 
 /* 刪除：管理員任何一張都可以；一般使用者只能刪自己建立且尚未送出的草稿（後端同規則再擋一次） */
 $('#btnEcDel').on('click', function(){
@@ -1979,6 +2181,9 @@ function printHtml(res){
         /* 流程註記改放最右側一整欄、由上往下（使用者要求 2026-09-23） */
         + '.flowcell{text-align:center;vertical-align:top;padding:1mm 0.5mm;}'
         + '.ft{font-size:8pt;margin-top:1.5mm;}'
+        /* 頁尾附註下方的簽核紀錄（可設定是否列印） */
+        + 'table.siglog{margin-top:1.5mm;}'
+        + 'table.siglog td{font-size:8pt;padding:0.4mm 1.2mm;}'
         /* AS 文件編號固定在頁面實際右下角（ai-rules/16 第三節：不可用 inline，內容短時會離右下角很遠） */
         + '.as-doc-fixed{position:fixed;right:6mm;bottom:5mm;font-size:8pt;}'
         + '.divider{text-align:center;font-size:8.5pt;font-weight:bold;margin:0.8mm 0 0.4mm;}'
@@ -2068,6 +2273,21 @@ function printHtml(res){
         + '</table>'
 
         + '<div class="ft">※此表單底稿由技術課存查　※文件編號以西元年月日加流水號，例如：20220101001</div>'
+        /* 簽核紀錄（管理員可設定是否列印）。
+           ★這一塊**絕對不可以出現「管理員○○○代簽」字樣**（使用者明確要求）——
+             資料來自 meta.sign_log，後端組的時候就只放 關卡／簽核人／部門職稱／日期，
+             proxy 欄位一個都不帶出來，所以前端這裡不可能印得出來。 */
+        + (( +m.print_sign_log === 1 && (m.sign_log || []).length)
+            ? ('<table class="siglog"><colgroup><col style="width:34mm"><col style="width:46mm">'
+              +  '<col style="width:76mm"><col style="width:38mm"></colgroup>'
+              +  '<tr><td class="lb" colspan="4">簽核紀錄</td></tr>'
+              +  m.sign_log.map(function(x){
+                    return '<tr><td class="lb">' + esc(x.label) + '</td>'
+                         + '<td>' + esc(x.name) + '</td>'
+                         + '<td>' + esc([x.dept, x.position].filter(Boolean).join('　')) + '</td>'
+                         + '<td>' + dispDate(x.date) + '</td></tr>'; }).join('')
+              + '</table>')
+            : '')
         + (m.as_doc_no ? '<div class="as-doc-fixed">' + esc(m.as_doc_no) + '</div>' : '')
         // 頁碼左下角、且「多頁才顯示」（ai-rules/16）：CSS 無法依 counter(pages) 條件顯示，
         // 改由列印視窗自己量高度，真的超過一頁才注入 @bottom-left。

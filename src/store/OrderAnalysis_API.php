@@ -83,7 +83,7 @@ switch ($action) {
         $rm = (string)($_REQUEST['rank_metric'] ?? '');
         if ($rm !== '' && !in_array($rm, ['amount', 'qty', 'orders'], true)) oaErr('不合法的排序口徑');
 
-        $res = oa_analyze($db, [
+        $res = oa_report($db, [
             'year'           => (int)($_REQUEST['year'] ?? date('Y')),
             'gran'           => $gran,
             'idx'            => (int)($_REQUEST['idx'] ?? 1),
@@ -122,14 +122,48 @@ switch ($action) {
 
     /* ── 設定（數量區間／全製單製關鍵字）─────────────────────── */
     case 'settings_get': {
+        $s  = oa_settings($db);
+        $iy = oa_kpi_iy($db, (int)date('Y'));
         oaOut([
             'bands'    => oa_qty_bands($db),
             'rules'    => oa_proc_rules($db),
             'fallback' => oa_proc_fallback($db),
-            'defaults' => ['bands' => oa_qty_bands_default(), 'rules' => oa_proc_rules_default()],
+            'defaults' => ['bands' => oa_qty_bands_default(), 'rules' => oa_proc_rules_default(),
+                           'alert' => oa_settings_default()],
+            'alert'    => $s,
+            'kpi_info' => $iy ? ['indicator_id' => (int)$iy['indicator_id'], 'name' => (string)$iy['name'],
+                                 'target_text' => (string)($iy['target_text'] ?? ''),
+                                 'monthly_targets' => oa_kpi_monthly_targets($iy)]
+                              : null,
             'canSet'   => $canSet ? 1 : 0,
             'csrf'     => $_SESSION['oa_csrf'],
         ]);
+    }
+
+    /* 收通知的人員候選：一律走全站共用 people_lib（只列在職者、依部門/職稱排序） */
+    case 'users': {
+        require_once $document_root . '/EGsystem/src/common/people_lib.php';
+        $list = [];
+        foreach (eg_people_list($db, ['multi_dept' => true]) as $p) {
+            $list[] = ['id' => (int)$p['id'], 'name' => (string)($p['user_cname'] ?: $p['user_uname']),
+                       'dept' => (string)($p['dept_name'] ?? ''),
+                       'post' => (string)($p['position_name'] ?? ''),
+                       'note' => trim((string)($p['leave_label'] ?? '') . ' ' . (string)($p['leave_note'] ?? ''))];
+        }
+        oaOut(['users' => $list]);
+    }
+
+    /* 移動平均試算：只計算不發通知（管理員要先看清楚會不會誤報才敢啟用） */
+    case 'ma_preview': {
+        $opt = [];
+        foreach (['months', 'consecutive', 'min_coverage'] as $k) {
+            if (isset($_REQUEST[$k]) && $_REQUEST[$k] !== '') $opt[$k] = (int)$_REQUEST[$k];
+        }
+        if (!empty($_REQUEST['end_ym']) && preg_match('/^\d{4}-\d{2}$/', (string)$_REQUEST['end_ym'])) {
+            $opt['end_ym'] = (string)$_REQUEST['end_ym'];
+        }
+        $opt['show'] = 18;
+        oaOut(['ma' => oa_moving_avg($db, $opt), 'last_eval' => oa_param_get($db, 'ma_last_eval', '')]);
     }
 
     case 'settings_save': {
@@ -149,18 +183,26 @@ switch ($action) {
         );
         if ($errs) oaErr(implode("\n", $errs), 400, ['errors' => $errs]);
 
+        // 提醒／監控設定（前端同樣先驗一次，這裡用 oa_settings_save() 的同一套規則再擋一次）
+        $alert = json_decode((string)($_POST['alert'] ?? 'null'), true);
+        if ($alert !== null && !is_array($alert)) oaErr('提醒設定格式不正確');
+
         $uname = (string)($_SESSION['userName'] ?? $uid);
         $db->beginTransaction();
         try {
             oa_param_save($db, 'qty_bands',     $nb['bands'], $uname);
             oa_param_save($db, 'proc_rules',    $nr['rules'], $uname);
             oa_param_save($db, 'proc_fallback', $fb,          $uname);
+            if (is_array($alert)) {
+                $sv = oa_settings_save($db, $alert, $uname);
+                if (empty($sv['ok'])) { $db->rollBack(); oaErr(implode("\n", $sv['errors']), 400, ['errors' => $sv['errors']]); }
+            }
             $db->commit();
         } catch (Throwable $e) {
             if ($db->inTransaction()) $db->rollBack();
             oaErr('儲存失敗：' . $e->getMessage(), 500);
         }
-        oaOut(['bands' => $nb['bands'], 'rules' => $nr['rules'], 'fallback' => $fb]);
+        oaOut(['bands' => $nb['bands'], 'rules' => $nr['rules'], 'fallback' => $fb, 'alert' => oa_settings($db)]);
     }
 
     default:

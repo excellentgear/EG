@@ -126,6 +126,16 @@ try {
     error_log('[user_leave] tick hook failed: ' . $e->getMessage());
 }
 
+// === 訂單金額移動平均監控 順路觸發（2026-09-22 新增；做法同上，免工作排程器）===
+// 距上次檢查超過 3600 秒才背景啟動；工人自己判斷「這一期評估過了沒」，一個月只評估一次。
+// 連續 N 個月移動平均低於安全水平時，通知管理員設定好的人員（站內通知＋Web Push＋Telegram）。
+try {
+    require_once __DIR__ . '/order_analysis_tick.php';
+    eg_order_analysis_tick();
+} catch (Throwable $e) {
+    error_log('[order_ma] tick hook failed: ' . $e->getMessage());
+}
+
 // === 移機快速備份 順路觸發（2026-07-24 新增；做法同上，免工作排程器）===
 // 距上次檢查超過 3600 秒才背景啟動；是否執行由工人依 migbk_interval_days 判斷(0=未啟用)
 try {

@@ -1,0 +1,371 @@
+{
+    "rowCount": 61,
+    "rows": [
+        {
+            "map_id": 1302,
+            "d_id": 4789,
+            "label_id": 6,
+            "input_value": "45"
+        },
+        {
+            "map_id": 1588,
+            "d_id": 736,
+            "label_id": 6,
+            "input_value": "28"
+        },
+        {
+            "map_id": 1596,
+            "d_id": 737,
+            "label_id": 6,
+            "input_value": "28"
+        },
+        {
+            "map_id": 1604,
+            "d_id": 486,
+            "label_id": 6,
+            "input_value": "20"
+        },
+        {
+            "map_id": 1621,
+            "d_id": 19,
+            "label_id": 6,
+            "input_value": "65"
+        },
+        {
+            "map_id": 1702,
+            "d_id": 4753,
+            "label_id": 6,
+            "input_value": "141"
+        },
+        {
+            "map_id": 1746,
+            "d_id": 4620,
+            "label_id": 6,
+            "input_value": "45"
+        },
+        {
+            "map_id": 1760,
+            "d_id": 4754,
+            "label_id": 6,
+            "input_value": "110"
+        },
+        {
+            "map_id": 1770,
+            "d_id": 4755,
+            "label_id": 6,
+            "input_value": "110"
+        },
+        {
+            "map_id": 1914,
+            "d_id": 4447,
+            "label_id": 6,
+            "input_value": "40"
+        },
+        {
+            "map_id": 2081,
+            "d_id": 5155,
+            "label_id": 12,
+            "input_value": "43"
+        },
+        {
+            "map_id": 3374,
+            "d_id": 4517,
+            "label_id": 12,
+            "input_value": "60"
+        },
+        {
+            "map_id": 1470,
+            "d_id": 219,
+            "label_id": 21,
+            "input_value": "122.2"
+        },
+        {
+            "map_id": 1473,
+            "d_id": 143,
+            "label_id": 21,
+            "input_value": "142.9"
+        },
+        {
+            "map_id": 1475,
+            "d_id": 849,
+            "label_id": 21,
+            "input_value": "184.41"
+        },
+        {
+            "map_id": 1520,
+            "d_id": 633,
+            "label_id": 21,
+            "input_value": "142.875"
+        },
+        {
+            "map_id": 1523,
+            "d_id": 78,
+            "label_id": 21,
+            "input_value": "122.2"
+        },
+        {
+            "map_id": 1532,
+            "d_id": 581,
+            "label_id": 21,
+            "input_value": "122.2"
+        },
+        {
+            "map_id": 1535,
+            "d_id": 93,
+            "label_id": 21,
+            "input_value": "122.2"
+        },
+        {
+            "map_id": 1538,
+            "d_id": 590,
+            "label_id": 21,
+            "input_value": "111.125"
+        },
+        {
+            "map_id": 1541,
+            "d_id": 297,
+            "label_id": 21,
+            "input_value": "183.8"
+        },
+        {
+            "map_id": 1866,
+            "d_id": 613,
+            "label_id": 21,
+            "input_value": "257"
+        },
+        {
+            "map_id": 1870,
+            "d_id": 611,
+            "label_id": 21,
+            "input_value": "52"
+        },
+        {
+            "map_id": 1876,
+            "d_id": 68,
+            "label_id": 21,
+            "input_value": "52"
+        },
+        {
+            "map_id": 1883,
+            "d_id": 249,
+            "label_id": 21,
+            "input_value": "43"
+        },
+        {
+            "map_id": 1889,
+            "d_id": 284,
+            "label_id": 21,
+            "input_value": "52"
+        },
+        {
+            "map_id": 1895,
+            "d_id": 4603,
+            "label_id": 21,
+            "input_value": "52"
+        },
+        {
+            "map_id": 1941,
+            "d_id": 306,
+            "label_id": 21,
+            "input_value": "103.188"
+        },
+        {
+            "map_id": 1944,
+            "d_id": 88,
+            "label_id": 21,
+            "input_value": "155.575"
+        },
+        {
+            "map_id": 1962,
+            "d_id": 69,
+            "label_id": 21,
+            "input_value": "103.188"
+        },
+        {
+            "map_id": 1965,
+            "d_id": 303,
+            "label_id": 21,
+            "input_value": "111.252"
+        },
+        {
+            "map_id": 1968,
+            "d_id": 70,
+            "label_id": 21,
+            "input_value": "111.252"
+        },
+        {
+            "map_id": 1990,
+            "d_id": 169,
+            "label_id": 21,
+            "input_value": "103.188"
+        },
+        {
+            "map_id": 1993,
+            "d_id": 1468,
+            "label_id": 21,
+            "input_value": "142.9"
+        },
+        {
+            "map_id": 1996,
+            "d_id": 677,
+            "label_id": 21,
+            "input_value": "142.9"
+        },
+        {
+            "map_id": 1999,
+            "d_id": 609,
+            "label_id": 21,
+            "input_value": "183.8"
+        },
+        {
+            "map_id": 2002,
+            "d_id": 512,
+            "label_id": 21,
+            "input_value": "198.2"
+        },
+        {
+            "map_id": 2005,
+            "d_id": 612,
+            "label_id": 21,
+            "input_value": "257"
+        },
+        {
+            "map_id": 2008,
+            "d_id": 1498,
+            "label_id": 21,
+            "input_value": "103.19"
+        },
+        {
+            "map_id": 2011,
+            "d_id": 292,
+            "label_id": 21,
+            "input_value": "183.8"
+        },
+        {
+            "map_id": 2014,
+            "d_id": 1474,
+            "label_id": 21,
+            "input_value": "103.188"
+        },
+        {
+            "map_id": 2017,
+            "d_id": 4752,
+            "label_id": 21,
+            "input_value": "155.575"
+        },
+        {
+            "map_id": 2020,
+            "d_id": 144,
+            "label_id": 21,
+            "input_value": "155.575"
+        },
+        {
+            "map_id": 2023,
+            "d_id": 1496,
+            "label_id": 21,
+            "input_value": "155.575"
+        },
+        {
+            "map_id": 2026,
+            "d_id": 1497,
+            "label_id": 21,
+            "input_value": "198.20"
+        },
+        {
+            "map_id": 2029,
+            "d_id": 170,
+            "label_id": 21,
+            "input_value": "198.2"
+        },
+        {
+            "map_id": 2032,
+            "d_id": 64,
+            "label_id": 21,
+            "input_value": "257"
+        },
+        {
+            "map_id": 2035,
+            "d_id": 1511,
+            "label_id": 21,
+            "input_value": "273.05"
+        },
+        {
+            "map_id": 2038,
+            "d_id": 1508,
+            "label_id": 21,
+            "input_value": "273.05"
+        },
+        {
+            "map_id": 2041,
+            "d_id": 1507,
+            "label_id": 21,
+            "input_value": "273.05"
+        },
+        {
+            "map_id": 2044,
+            "d_id": 1509,
+            "label_id": 21,
+            "input_value": "273.05"
+        },
+        {
+            "map_id": 2047,
+            "d_id": 1510,
+            "label_id": 21,
+            "input_value": "273.05"
+        },
+        {
+            "map_id": 2920,
+            "d_id": 5624,
+            "label_id": 21,
+            "input_value": "132"
+        },
+        {
+            "map_id": 2936,
+            "d_id": 5821,
+            "label_id": 21,
+            "input_value": "68"
+        },
+        {
+            "map_id": 2951,
+            "d_id": 5822,
+            "label_id": 21,
+            "input_value": "117"
+        },
+        {
+            "map_id": 2992,
+            "d_id": 5825,
+            "label_id": 21,
+            "input_value": "23"
+        },
+        {
+            "map_id": 3162,
+            "d_id": 6489,
+            "label_id": 21,
+            "input_value": "110"
+        },
+        {
+            "map_id": 3164,
+            "d_id": 6488,
+            "label_id": 21,
+            "input_value": "145"
+        },
+        {
+            "map_id": 3166,
+            "d_id": 6490,
+            "label_id": 21,
+            "input_value": "110"
+        },
+        {
+            "map_id": 3168,
+            "d_id": 6491,
+            "label_id": 21,
+            "input_value": "75"
+        },
+        {
+            "map_id": 3175,
+            "d_id": 6510,
+            "label_id": 21,
+            "input_value": "120"
+        }
+    ]
+}

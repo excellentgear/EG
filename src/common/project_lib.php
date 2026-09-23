@@ -539,6 +539,11 @@ function prj_ensure_schema(PDO $db): void
     prj_ensure_col($db, 'project_task', 'reported_by_name', "VARCHAR(60) NULL AFTER reported_by");
     prj_ensure_col($db, 'project_task', 'reported_at', "DATETIME NULL AFTER reported_by_name");
     // 回報時採用了哪幾筆自動佐證（使用者要求可多選）：存下來才看得出「這個日期是憑什麼填的」
+    /* 流程相依（使用者 2026-09-23：「流程要可以一起或是順序執行」——
+       PFMEA／SOP／SIP／開立製令 可以同時做，但「確認加工圖面 → PFMEA」一定要照順序）。
+       seq＝接在前面那些步驟之後開始（預設，維持原本的日期串接行為）
+       par＝與上一列**同時**開始（同一個平行群組，下一個 seq 步驟要等整組都做完才開始）。 */
+    prj_ensure_col($db, 'project_task', 'dep_mode', "VARCHAR(4) NOT NULL DEFAULT 'seq' COMMENT 'seq=順序執行 / par=與上一列同時進行' AFTER sort_order");
     prj_ensure_col($db, 'project_task', 'evidence_json', "TEXT NULL COMMENT '採用的自動佐證清單 [{kind,date,label,ref}]' AFTER reported_at");
     // 專案涵蓋的製程（2026-09-22 使用者要求）：空＝整張 BOM 的所有製程，有值＝只算這幾道
     prj_ensure_col($db, 'project', 'scope_process_no', "VARCHAR(255) NULL COMMENT '專案涵蓋的製程 process_no.ProcessNo 逗號串；空＝整張BOM所有製程' AFTER dept_name");
@@ -1781,7 +1786,50 @@ function prj_task_evidence(PDO $db, int $projectId, ?array $prj = null): array
             }
         } catch (Throwable $e) {}
     }
+    /* **製程** SOP／SIP：製造製程說明書是跟著製程走、跨料號共用的，文件檢核本來就認它，
+       這裡不認就會出現「文件檢核說齊全、回報進度卻說還沒建立」（使用者 2026-09-23 回報的正是這個）。
+       只看**專案涵蓋的製程**（沒綁定就看這個專案用到的全部製程）。 */
+    try {
+        if ($db->query("SHOW TABLES LIKE 'ss_doc'")->fetchColumn()) {
+            $need = [];
+            foreach ($procs as $r) {
+                $no = (int)($r['process_no'] ?? 0);
+                if ($no > 0 && $inScope($r)) $need[$no] = trim((string)($r['process_name'] ?? ''));
+            }
+            if ($need) {
+                $inP = implode(',', array_map('intval', array_keys($need)));
+                foreach ($db->query("SELECT d.kind, d.title, d.proc_name, d.process_no, v.ver_no, v.form_date
+                                     FROM ss_doc d LEFT JOIN ss_ver v ON v.ver_id = d.cur_ver_id
+                                     WHERE d.is_deleted=0 AND d.kind IN ('process','sip')
+                                       AND d.process_no IN ($inP)")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    $k = ((string)$r['kind'] === 'sip') ? 'doc_sip' : 'doc_sop';
+                    $d = (string)($r['form_date'] ?? '');
+                    if ($d === '') continue;
+                    $out[$k]['options'][] = ['date' => $d,
+                        'label' => '製程' . strtoupper($k === 'doc_sip' ? 'SIP' : 'SOP') . '：' . (string)$r['title']
+                                 . '（' . ($need[(int)$r['process_no']] ?: ('製程' . (int)$r['process_no'])) . '）'
+                                 . ((string)($r['ver_no'] ?? '') !== '' ? ' Ver.' . $r['ver_no'] : ''),
+                        'ref'   => 'ssproc:' . (int)$r['process_no']];
+                }
+            }
+        }
+    } catch (Throwable $e) {}
+
+    /* 專案**自己綁定**的 SOP／SIP（含通用文件）一樣算數——使用者 2026-09-23 回報
+       「資料檢核顯示已綁定，但回報進度卻顯示沒有」。文件檢核認列的東西，這裡不認就是兩套答案。
+       日期取該文件現行版次的表單日期，沒有就退回綁定當下的日期（至少那天它已經成立）。 */
+    foreach (prj_ss_binds($db, $projectId) as $b) {
+        $k = (prj_ss_kind((string)$b['kind']) === 'sip') ? 'doc_sip' : 'doc_sop';
+        $d = (string)($b['form_date'] ?? '') ?: substr((string)($b['added_at'] ?? ''), 0, 10);
+        if ($d === '') continue;
+        $out[$k]['options'][] = ['date' => $d,
+            'label' => '本專案綁定：' . (string)$b['title']
+                     . ((string)($b['ver_no'] ?? '') !== '' ? ' Ver.' . $b['ver_no'] : '')
+                     . ((string)($b['scope'] ?? '') === 'general' ? '（通用）' : ''),
+            'ref'   => 'ssbind:' . (int)$b['doc_id']];
+    }
     foreach (['doc_pfmea' => 'PFMEA', 'doc_sop' => 'SOP', 'doc_sip' => 'SIP'] as $k => $lbl) {
+        usort($out[$k]['options'], static fn($a, $b) => strcmp($a['date'], $b['date']));
         if (!$out[$k]['options']) $out[$k]['note'] = '這些料號還沒有建立 ' . $lbl . '（或建了但沒有填日期）。';
     }
 
@@ -1798,6 +1846,7 @@ function prj_task_evidence(PDO $db, int $projectId, ?array $prj = null): array
     if (!$out['incoming_qc']['options']) $out['incoming_qc']['note'] = 'BOM 上找不到「客供料」製程，或那一道還沒有回廠日。';
 
     /* ⑤⑥⑦ 架機／首件／整批完工：都來自報工紀錄（廠內每日報工） */
+    $setupCnt = $setupNm = $prodQty = $prodNm = [];
     $wr = prj_work_reports($db, $projectId);
     foreach ($wr as $r) {
         if (($r['kind'] ?? '') !== 'in') continue;                 // 委外轉出入沒有架機/完工的語意
@@ -1808,14 +1857,39 @@ function prj_task_evidence(PDO $db, int $projectId, ?array $prj = null): array
         if (!empty($r['t1']) || !empty($r['setup_user'])) {
             $out['setup']['options'][] = ['date' => $d,
                 'label' => $r['bom'] . '　' . $pn . '　報工架機' . ($r['setup_user'] ? '（' . $r['setup_user'] . '）' : ''),
-                'ref'   => 'wr:' . (int)$r['id']];
+                'ref'   => 'wr:' . (int)$r['id'],
+                'owner_id' => (int)($r['setup_user_id'] ?? 0), 'owner_name' => (string)($r['setup_user'] ?? '')];
+            // 架機人數通常只有一兩位，用「架機次數」決定建議誰（使用者：架機與修砂／FAI 抓架機人員）
+            if ((int)($r['setup_user_id'] ?? 0) > 0) {
+                $setupCnt[(int)$r['setup_user_id']] = ($setupCnt[(int)$r['setup_user_id']] ?? 0) + 1;
+                $setupNm[(int)$r['setup_user_id']]  = (string)($r['setup_user'] ?? '');
+            }
         }
         $out['fai']['options'][] = ['date' => $d,
             'label' => $r['bom'] . '　' . $pn . '　報工 ' . (int)$r['qty'] . ' 件', 'ref' => 'wr:' . (int)$r['id']];
         if (!empty($r['is_finished'])) {
             $out['mass_done']['options'][] = ['date' => $d,
-                'label' => $r['bom'] . '　' . $pn . '　報工回報<b>完工</b>', 'ref' => 'wr:' . (int)$r['id']];
+                'label' => $r['bom'] . '　' . $pn . '　報工回報<b>完工</b>', 'ref' => 'wr:' . (int)$r['id'],
+                'owner_id' => (int)($r['production_user_id'] ?? 0), 'owner_name' => (string)($r['prod_user'] ?? '')];
         }
+        // 整批加工的建議負責人＝**加工數量最多**的那一位（使用者指定），不是報工筆數最多的
+        if ((int)($r['production_user_id'] ?? 0) > 0) {
+            $prodQty[(int)$r['production_user_id']] = ($prodQty[(int)$r['production_user_id']] ?? 0) + (int)$r['qty'];
+            $prodNm[(int)$r['production_user_id']]  = (string)($r['prod_user'] ?? '');
+        }
+    }
+    /* 建議負責人（只建議；要不要真的指派由 prj_auto_fill_tasks 判斷「目前沒指定人」才套用） */
+    if ($setupCnt) {
+        arsort($setupCnt);
+        $uid = (int)array_key_first($setupCnt);
+        $out['setup']['owner'] = ['id' => $uid, 'name' => $setupNm[$uid] ?? '', 'why' => '報工紀錄的架機人員'];
+        $out['fai']['owner']   = $out['setup']['owner'];   // 首件也是架機的人做（使用者指定）
+    }
+    if ($prodQty) {
+        arsort($prodQty);
+        $uid = (int)array_key_first($prodQty);
+        $out['mass_done']['owner'] = ['id' => $uid, 'name' => $prodNm[$uid] ?? '',
+                                      'why' => '報工紀錄中加工數量最多者（' . (int)$prodQty[$uid] . ' 件）'];
     }
     foreach (['setup' => '架機', 'fai' => '報工', 'mass_done' => '完工'] as $k => $lbl) {
         // 報工是由新到舊排的，佐證清單改成由舊到新（第一筆＝建議值）
@@ -1856,6 +1930,130 @@ function prj_task_evidence(PDO $db, int $projectId, ?array $prj = null): array
         $out[$k]['create'] = ['url' => $u, 'label' => $c['label']];
     }
     return $out;
+}
+
+/* ── 自動採用佐證：偵測得到的就直接填完，不必再叫人回報一次 ─────────────
+   使用者 2026-09-23：「資料檢核顯示已綁定，但回報進度卻顯示沒有，應該綁定後自動認定已完成、
+   進度 100%，不需另外填回報進度」、「架機與修砂／試作與首件檢驗 自動抓報工的架機人員」、
+   「整批加工完成 自動抓加工數量最多的人」、「客供品料號核對／流程卡綁定 自動＝進料檢驗完成日」。
+
+   三條界線（很重要，不然會把人填的東西蓋掉）：
+   ① **只填空的**——已經有實際完成日、或有人按過「回報進度」（reported_at 有值）的一律不動。
+   ② **要人判定的不自動完成**：首件檢驗（合格與否）與最終檢驗結案本來就沒有電子化，
+      系統只幫它們補負責人，完成與否仍由品管自己填。
+   ③ 一個步驟對到好幾種佐證時（例「整批加工完成與最終檢驗結案」），
+      只要其中一種是「要人判定」的就不自動完成。 */
+
+/** 哪幾種自動佐證可以直接判定「這一步完成了」（fai／final_qc 要人判定，刻意不在內） */
+const PRJ_AUTO_DONE_KINDS = ['bom_create', 'part_drawing', 'doc_pfmea', 'doc_sop', 'doc_sip',
+                             'incoming_qc', 'setup', 'mass_done'];
+
+/**
+ * 把偵測得到的佐證直接寫進任務（順路觸發，開專案時跑一次）。
+ * 回傳實際異動的筆數；任何例外一律吞掉，絕不影響專案開得起來。
+ */
+function prj_auto_fill_tasks(PDO $db, int $projectId, ?array $prj = null): int
+{
+    $n = 0;
+    try {
+        $prj = $prj ?: prj_get($db, $projectId);
+        if (!$prj || !prj_act_dates_open($prj)) return 0;   // 核准之後才有「實際完成」可言
+        $ev    = prj_task_evidence($db, $projectId, $prj);
+        $tasks = prj_tasks($db, $projectId);
+        if (!$tasks) return 0;
+        $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
+
+        /* 同一種佐證的「兄弟步驟」：使用者要求「客供品料號核對／流程卡綁定 自動＝進料檢驗完成日，
+           進度跟進料檢驗綁在一起」。兩者本來就對到同一種佐證（incoming_qc），所以規則寫成通則——
+           系統偵測不到時，只要**同一種佐證**的另一個步驟已經完成，就沿用它那一天。 */
+        $sibling = [];
+        foreach ($tasks as $t0) {
+            $ae0 = trim((string)($t0['act_end'] ?? ''));
+            if ($ae0 === '') continue;
+            foreach (prj_auto_kinds_of((string)$t0['task_name'], (string)($t0['task_kind'] ?? '')) as $k0) {
+                if (!isset($sibling[$k0]) || $ae0 < $sibling[$k0]) $sibling[$k0] = $ae0;
+            }
+        }
+
+        // 建議負責人要連部門一起帶（列印的負責人欄要印「部門 職稱／人名」）
+        $wantUsers = [];
+        foreach ($ev as $v) if (!empty($v['owner']['id'])) $wantUsers[(int)$v['owner']['id']] = 1;
+        $deptOf = [];
+        if ($wantUsers) {
+            require_once __DIR__ . '/people_lib.php';
+            foreach (eg_people_list($db, ['user_ids' => array_keys($wantUsers)]) as $u) {
+                $deptOf[(int)$u['id']] = $u['dept_id'] !== null ? (int)$u['dept_id'] : null;
+            }
+        }
+
+        foreach ($tasks as $t) {
+            $kinds = prj_auto_kinds_of((string)$t['task_name'], (string)($t['task_kind'] ?? ''));
+            if (!$kinds) continue;
+            $set = []; $args = [];
+
+            /* ── 負責人：沒指定人就用建議的（使用者要求「未指定人員的…自動抓取」） */
+            if (!(int)($t['owner_id'] ?? 0)) {
+                foreach ($kinds as $k) {
+                    $o = $ev[$k]['owner'] ?? null;
+                    if (!$o || empty($o['id'])) continue;
+                    $set[] = 'owner_id=?';   $args[] = (int)$o['id'];
+                    $set[] = 'owner_name=?'; $args[] = (string)$o['name'];
+                    if (array_key_exists((int)$o['id'], $deptOf)) { $set[] = 'owner_dept_id=?'; $args[] = $deptOf[(int)$o['id']]; }
+                    break;
+                }
+            }
+
+            /* ── 完成日：所有佐證都齊了才算完成（人工判定的那幾種不在此列） */
+            if (!trim((string)($t['act_end'] ?? '')) && empty($t['reported_at'])) {
+                $ok = true; $dates = []; $used = [];
+                foreach ($kinds as $k) {
+                    if (!in_array($k, PRJ_AUTO_DONE_KINDS, true)) { $ok = false; break; }
+                    $op = $ev[$k]['options'][0] ?? null;
+                    if (!$op && !empty($sibling[$k])) {
+                        // 偵測不到，但同一種佐證的另一個步驟已經完成＝沿用那一天
+                        $op = ['date' => $sibling[$k],
+                               'label' => '與「' . (PRJ_AUTO_KINDS[$k] ?? $k) . '」同一份佐證的步驟已完成',
+                               'ref' => 'sib:' . $k];
+                    }
+                    if (!$op) { $ok = false; break; }
+                    $dates[] = (string)$op['date'];
+                    $used[]  = ['kind' => $k, 'date' => (string)$op['date'],
+                                'label' => (string)($op['label'] ?? ''), 'ref' => (string)($op['ref'] ?? ''),
+                                'auto' => 1];
+                }
+                if ($ok && $dates) {
+                    sort($dates);
+                    $ae = end($dates);                     // 全部佐證都到齊的那一天＝完成日
+                    $as = trim((string)($t['act_start'] ?? '')) ?: $dates[0];
+                    /* **夾在專案期間內**：SOP／SIP／圖面這種「沿用現有文件」的步驟，佐證日期常常是
+                       文件本身好幾年前的發行日（實測抓到 2022-07-05），拿它當「這個專案完成這一步的日期」
+                       會讓時間軸上出現一條從 2022 年拉過來的長條、管理卡也會印出不合理的日期。
+                       這一步實際發生的是「在這個專案裡確認它可以沿用」，所以不早於專案起日；
+                       也不可以晚於今天（文件上的日期可能填成未來）。 */
+                    $ps0 = trim((string)($prj['start_date'] ?? ''));
+                    if ($ps0 !== '' && $ae < $ps0) $ae = $ps0;
+                    if ($ps0 !== '' && $as < $ps0) $as = $ps0;
+                    if ($ae > $today) $ae = $today;
+                    if ($as > $ae)    $as = $ae;
+                    [$stc, $ae] = prj_task_status_sync('done', $ae, $today);
+                    $set[] = 'act_start=?';  $args[] = $as;
+                    $set[] = 'act_end=?';    $args[] = $ae;
+                    $set[] = 'status_code=?'; $args[] = $stc;
+                    if ((int)($t['progress_auto'] ?? 1)) { $set[] = 'progress=?'; $args[] = 100; }
+                    $set[] = 'evidence_json=?'; $args[] = json_encode($used, JSON_UNESCAPED_UNICODE);
+                }
+            }
+
+            if (!$set) continue;
+            $args[] = (int)$t['task_id']; $args[] = $projectId;
+            $db->prepare("UPDATE project_task SET " . implode(',', $set) . " WHERE task_id=? AND project_id=?")
+               ->execute($args);
+            $n++;
+        }
+    } catch (Throwable $e) {
+        return $n;
+    }
+    return $n;
 }
 
 /* ══════════════════════════ 訂單轉專案：第一次下訂偵測與資料完整度 ══════════════════════════
@@ -2423,6 +2621,7 @@ function prj_work_reports(PDO $db, int $projectId): array
                           沒有現場編號才退回機台名稱（記憶 machine_field_no_display） */
                        COALESCE(NULLIF(ml.field_no,''), ml.machine) AS machine_name,
                        us.user_cname AS setup_user, up.user_cname AS prod_user,
+                       r.setup_user_id, r.production_user_id,
                        r.produced_qty AS qty, r.is_finished, r.remark AS note,
                        r.production_start_time AS t1, r.production_end_time AS t2
                   FROM pm_process_daily_report r
@@ -2694,7 +2893,7 @@ function prj_ss_binds(PDO $db, int $projectId): array
         if (!$db->query("SHOW TABLES LIKE 'ss_doc'")->fetchColumn()) return [];
         $st = $db->prepare("SELECT b.id, b.ds_pk, b.doc_id, b.kind, b.added_by, b.added_at,
                                    d.title, d.scope, d.proc_name, d.process_no, d.is_deleted,
-                                   v.ver_no, v.status
+                                   v.ver_no, v.status, v.form_date
                             FROM project_ss_bind b
                             LEFT JOIN ss_doc d ON d.doc_id = b.doc_id
                             LEFT JOIN ss_ver v ON v.ver_id = d.cur_ver_id
