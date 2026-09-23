@@ -33,6 +33,26 @@ if (!function_exists('qc_suggest_sample_qty')) {
     }
 }
 
+if (!function_exists('qc_item_tolerance_params')) {
+    /**
+     * 由前端送來的單一項目($it，items[idx])，解出要寫進 qc_inspection_item 的公差欄位組合。
+     * **全站唯一實作**：新增檢驗項目的寫入點有 save_inspection／update_inspection／save_adhoc／
+     * save_ship 四處，公差輸入模式(TOL 標準值±公差 vs RANGE 直接填絕對上下限)的判斷邏輯
+     * 只能有一份，四處各自判斷遲早會有一處漏改、變成「這裡存得對、那裡存不對」。
+     * 回傳 [type, std, min_value, max_value, plus_tolerance, minus_tolerance]。
+     */
+    function qc_item_tolerance_params($it) {
+        $type = (($it['type'] ?? 'NUM') === 'OKNG') ? 'OKNG' : 'NUMERIC';
+        $std  = $it['std'] ?? '';
+        $isRange = ($it['mode'] ?? '') === 'RANGE';
+        $plus  = (!$isRange && ($it['up'] ?? '') !== '') ? $it['up'] : null;
+        $minus = (!$isRange && ($it['lo'] ?? '') !== '') ? $it['lo'] : null;
+        $minV  = ($isRange && ($it['min'] ?? '') !== '') ? $it['min'] : null;
+        $maxV  = ($isRange && ($it['max'] ?? '') !== '') ? $it['max'] : null;
+        return [$type, $std, $minV, $maxV, $plus, $minus];
+    }
+}
+
 if (!function_exists('qc_recompute_result')) {
     // 以「權威公差」重算單筆數值型判定。
     // $spec = ['type'=>'NUM'|'OKNG','std'=>基準,'up'=>上公差,'lo'=>下公差,'min'=>絕對下限,'max'=>絕對上限]
@@ -98,8 +118,15 @@ if (!function_exists('qc_persist_readings')) {
             $iid = (int)$iid;
             $manualVerdict = $it['verdict'] ?? 'OK'; // 僅認 AOD 手動特採
             $remark = (isset($it['remark']) && $it['remark'] !== '') ? mb_substr((string)$it['remark'], 0, 255) : null;
-            // 權威公差(DB) 優先；DB 無則回退前端顯示值
-            $spec = $specMap[$iid] ?? ['type'=>($it['type'] ?? 'NUM')==='OKNG'?'OKNG':'NUM','std'=>($it['std'] ?? ''),'up'=>($it['up'] ?? ''),'lo'=>($it['lo'] ?? ''),'min'=>null,'max'=>null];
+            // 權威公差(DB) 優先；DB 無則回退前端顯示值——回退組合與寫入 qc_inspection_item
+            // 用同一支 qc_item_tolerance_params()，避免「新項目第一次存檔時(DB尚無資料)」
+            // 被 std+up/lo 誤判成 TOL 模式(公差輸入模式=RANGE 時本該用 min/max)。
+            if (isset($specMap[$iid])) {
+                $spec = $specMap[$iid];
+            } else {
+                [$fType, $fStd, $fMin, $fMax, $fUp, $fLo] = qc_item_tolerance_params($it);
+                $spec = ['type'=>$fType==='OKNG'?'OKNG':'NUM', 'std'=>$fStd, 'up'=>$fUp, 'lo'=>$fLo, 'min'=>$fMin, 'max'=>$fMax];
+            }
 
             // 組讀值：主讀值 + 加量測
             $readings = [['tool_id'=>(isset($it['tool_id']) && $it['tool_id'] !== '' ? (int)$it['tool_id'] : null),

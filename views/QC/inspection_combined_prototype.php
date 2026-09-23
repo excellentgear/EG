@@ -354,7 +354,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 "INSERT INTO qc_inspection_item
                  (version_id, form_type_id, process_name, item_code, item_name, standard_text,
                   min_value, max_value, plus_tolerance, minus_tolerance, result_type, sort_order, is_active)
-                 VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)");
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
             $findItem = $pdo->prepare(
                 "SELECT item_id FROM qc_inspection_item
                  WHERE version_id=? AND form_type_id=? AND (process_name <=> ?) AND item_name=? ORDER BY item_id DESC LIMIT 1");
@@ -379,9 +379,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             foreach ($items as $idx => $it) {
                 $name = trim($it['name'] ?? '');
                 if ($name === '') { $itemIds[$idx] = null; continue; }
-                $type = ($it['type'] ?? 'NUM') === 'OKNG' ? 'OKNG' : 'NUMERIC';
-                $plus  = ($it['up'] ?? '') !== '' ? $it['up'] : null;
-                $minus = ($it['lo'] ?? '') !== '' ? $it['lo'] : null;
+                [$type, $stdTxt, $minV, $maxV, $plus, $minus] = qc_item_tolerance_params($it);
                 $code  = (string)($idx + 1);
 
                 $iid = null;
@@ -393,7 +391,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (!$iid) {
                     $insItem->execute([
                         $version_id, $form_type_id, $process, $code, $name,
-                        ($it['std'] ?? ''), $plus, $minus, $type, $idx + 1,
+                        $stdTxt, $minV, $maxV, $plus, $minus, $type, $idx + 1,
                         $update_std ? 1 : 0,
                     ]);
                     $iid = (int)$pdo->lastInsertId();
@@ -553,7 +551,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // #10：帶回 measure_method/tool_id/Tool_No，依 (方法,量具) 分組還原「主讀值 + 加量測」
             $mq = "SELECT m.item_id, m.sample_no, m.measured_value, m.result, m.item_verdict, m.remark,
                           m.measure_method, m.tool_id, m.reading_seq, t.Tool_No,
-                          i.item_name, i.standard_text, i.plus_tolerance, i.minus_tolerance, i.result_type,
+                          i.item_name, i.standard_text, i.plus_tolerance, i.minus_tolerance, i.min_value, i.max_value, i.result_type,
                           (SELECT tl.QC_Tool FROM qc_inspection_item_tool_type itt JOIN qc_tool_list tl ON itt.QC_Tool_List_id=tl.QC_Tool_List_id WHERE itt.item_id=i.item_id ORDER BY itt.is_primary DESC LIMIT 1) AS tool_name
                    FROM qc_measurement m JOIN qc_inspection_item i ON m.item_id=i.item_id
                    LEFT JOIN qc_tool t ON m.tool_id=t.Tool_id
@@ -564,9 +562,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             foreach ($ms->fetchAll(PDO::FETCH_ASSOC) as $r) {
                 $iid = (int)$r['item_id'];
                 if (!isset($byItem[$iid])) {
+                    // 公差輸入模式：DB 有 min_value/max_value 才算 RANGE(直接填絕對上下限)，否則 TOL(標準值±公差)
+                    $hasRange = $r['min_value'] !== null && $r['max_value'] !== null;
                     $byItem[$iid] = [
                         'item_id'=>$iid, 'name'=>$r['item_name'], 'std'=>$r['standard_text'],
                         'up'=>$fmt($r['plus_tolerance']), 'lo'=>$fmt($r['minus_tolerance']),
+                        'mode'=>$hasRange?'RANGE':'TOL', 'min'=>$hasRange?$fmt($r['min_value']):'', 'max'=>$hasRange?$fmt($r['max_value']):'',
                         'tool'=>$r['tool_name'] ?: '', 'type'=>$r['result_type']==='OKNG'?'OKNG':'NUM',
                         'verdict'=>$r['item_verdict'] ?: 'OK', 'remark'=>($r['remark'] ?? ''),
                         '_groups'=>[],
@@ -728,7 +729,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $version_id = (int)$form['version_id']; $form_type_id = (int)$form['form_type_id']; $process = $form['process_name'];
             $findItem = $pdo->prepare("SELECT item_id FROM qc_inspection_item WHERE version_id=? AND form_type_id=? AND (process_name <=> ?) AND item_name=? ORDER BY item_id DESC LIMIT 1");
-            $insItem  = $pdo->prepare("INSERT INTO qc_inspection_item (version_id, form_type_id, process_name, item_code, item_name, standard_text, plus_tolerance, minus_tolerance, result_type, sort_order, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)");
+            $insItem  = $pdo->prepare("INSERT INTO qc_inspection_item (version_id, form_type_id, process_name, item_code, item_name, standard_text, min_value, max_value, plus_tolerance, minus_tolerance, result_type, sort_order, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)");
 
             $pdo->beginTransaction();
             // 解析 item_id
@@ -742,10 +743,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $iid = $findItem->fetchColumn();
                 }
                 if (!$iid) {
-                    $type = ($it['type'] ?? 'NUM') === 'OKNG' ? 'OKNG' : 'NUMERIC';
-                    $plus  = ($it['up'] ?? '') !== '' ? $it['up'] : null;
-                    $minus = ($it['lo'] ?? '') !== '' ? $it['lo'] : null;
-                    $insItem->execute([$version_id, $form_type_id, $process, (string)($idx+1), $name, ($it['std'] ?? ''), $plus, $minus, $type, $idx+1]);
+                    [$type, $stdTxt, $minV, $maxV, $plus, $minus] = qc_item_tolerance_params($it);
+                    $insItem->execute([$version_id, $form_type_id, $process, (string)($idx+1), $name, $stdTxt, $minV, $maxV, $plus, $minus, $type, $idx+1]);
                     $iid = (int)$pdo->lastInsertId();
                 }
                 $itemIds[$idx] = (int)$iid;

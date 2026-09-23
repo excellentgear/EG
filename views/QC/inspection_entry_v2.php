@@ -286,7 +286,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             $insItem = $pdo->prepare("INSERT INTO qc_inspection_item
                  (version_id, form_type_id, process_name, item_code, item_name, standard_text,
                   min_value, max_value, plus_tolerance, minus_tolerance, result_type, sort_order, is_active)
-                 VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, 0)");
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)");
             $itemIds = [];
             foreach ($items as $idx => $it) {
                 $name = trim($it['name'] ?? '');
@@ -294,9 +294,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 $findItem->execute([$version_id, $form_type_id, $process, $name]);
                 $iid = $findItem->fetchColumn();
                 if (!$iid) {
-                    $insItem->execute([$version_id, $form_type_id, $process, (string)($idx + 1), $name, ($it['std'] ?? ''),
-                        (($it['up'] ?? '') !== '' ? $it['up'] : null), (($it['lo'] ?? '') !== '' ? $it['lo'] : null),
-                        (($it['type'] ?? 'NUM') === 'OKNG' ? 'OKNG' : 'NUMERIC'), $idx + 1]);
+                    [$type, $stdTxt, $minV, $maxV, $plus, $minus] = qc_item_tolerance_params($it);
+                    $insItem->execute([$version_id, $form_type_id, $process, (string)($idx + 1), $name, $stdTxt,
+                        $minV, $maxV, $plus, $minus, $type, $idx + 1]);
                     $iid = (int)$pdo->lastInsertId();
                 }
                 $itemIds[$idx] = (int)$iid;
@@ -874,6 +874,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     #items-table .g-spec { font-size:13px; color:var(--ink2); white-space:nowrap; }
     #items-table .table-input { width:100%; min-width:0; border:1px solid #ccc; padding:3px 5px; border-radius:3px; }
     #items-table .gcells { gap:4px; }
+    /* 標準值欄：公差輸入模式(TOL⇄RANGE)切換鈕，就近放在標準值欄裡（使用者指定的位置） */
+    #items-table .td-std { position:relative; }
+    #items-table .td-std .table-input { padding-right:38px; }
+    #items-table .tol-range-disp { display:inline-block; width:100%; padding:3px 38px 3px 5px; color:var(--ink2); font-size:12px;
+                                    box-sizing:border-box; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .btn-tol-mode { position:absolute; right:2px; top:2px; bottom:2px; width:32px; font-size:11px; line-height:1;
+                    border:1px solid var(--amber-d); border-radius:3px; background:#fff; color:var(--amber-d); cursor:pointer; padding:0; }
+    .btn-tol-mode.on { background:var(--amber-d); color:#fff; }
+    /* 型態：點一下切換的雙色鈕，取代原本的下拉選單（數值=琥珀、OK/NG=深棕，一眼分辨） */
+    .btn-type-toggle { width:100%; border:1px solid; border-radius:3px; padding:4px 2px; font-size:12px; font-weight:bold; cursor:pointer; }
+    .btn-type-toggle.type-num { background:var(--amber); border-color:var(--amber-d); color:#4A3524; }
+    .btn-type-toggle.type-num:hover { background:var(--amber-d); color:#fff; }
+    .btn-type-toggle.type-okng { background:var(--ink2); border-color:var(--ink); color:#fff; }
+    .btn-type-toggle.type-okng:hover { background:var(--ink); }
+    /* RANGE 模式下限≥上限：即時紅框提示（表單三總則③錯誤即時偵測並顯示原因） */
+    #items-table .table-input.tol-invalid { border-color:var(--coral); background:#FDEDEA; }
     /* 項目列的操作鈕（加量測/備註/刪除）改放在「檢驗項目」欄名稱下方，
        原本擺最右欄會被視窗右緣切掉看不到（2026-07-30 現場回饋） */
     .row-acts { margin-top:4px; font-size:12px; }
@@ -2321,17 +2337,38 @@ $(function(){
         s=s.replace(/0+$/,'').replace(/\.$/,''); return s===''||s==='-' ? '0' : s;
     }
     function blankVals(n, def){ var a=[]; for(var i=0;i<n;i++) a.push(def||''); return a; }
+    // 規格顯示文字（總表非編輯欄、逐項/逐件檢視、列印、CSV 共用同一份說法）：
+    // TOL 模式印「標準值〔上限~下限〕」；RANGE 模式直接印「下限~上限」，不印標準值。
+    function specDisplayText(it){
+        if(it.type==='OKNG') return it.std||'OK/NG';
+        var L=limits(it);
+        if(it.mode==='RANGE') return L ? (trimNum(L.low.toFixed(4))+' ~ '+trimNum(L.hi.toFixed(4))) : '—';
+        return trimNum(it.std)||'—';
+    }
 
     // ---------- 判定（與後端 qc_inspection_lib 同一套規則；後端仍會重算為準） ----------
+    // 公差輸入模式：TOL(預設)＝標準值±公差；RANGE＝直接填絕對上下限，不必填標準值。
     function judge(it, raw){
         if(raw===''||raw==null) return '';
         if(it.type==='OKNG') return (raw==='NG') ? 'NG' : 'OK';
-        var base=parseFloat(it.std), up=parseFloat(it.up), lo=parseFloat(it.lo), v=parseFloat(raw);
-        if(isNaN(v)||isNaN(base)) return '';
+        var v=parseFloat(raw);
+        if(isNaN(v)) return '';
+        if(it.mode==='RANGE'){
+            var mn=parseFloat(it.min), mx=parseFloat(it.max);
+            if(isNaN(mn)||isNaN(mx)) return '';
+            return (v>mx||v<mn) ? 'NG' : 'OK';
+        }
+        var base=parseFloat(it.std), up=parseFloat(it.up), lo=parseFloat(it.lo);
+        if(isNaN(base)) return '';
         var hi=base+(isNaN(up)?0:up), low=base+(isNaN(lo)?0:lo);
         return (v>hi||v<low) ? 'NG' : 'OK';
     }
     function limits(it){
+        if(it.mode==='RANGE'){
+            var mn=parseFloat(it.min), mx=parseFloat(it.max);
+            if(isNaN(mn)||isNaN(mx)) return null;
+            return { hi:mx, low:mn, base:(mn+mx)/2 };
+        }
         var base=parseFloat(it.std);
         if(isNaN(base)) return null;
         var up=parseFloat(it.up), lo=parseFloat(it.lo);
@@ -2355,9 +2392,18 @@ $(function(){
     var OUTLIER_TOL_X = 20, OUTLIER_STD_RATIO = 0.30;
     function isOutlier(it, raw){
         if(!it || it.type==='OKNG' || raw===''||raw==null) return false;
-        var base=parseFloat(it.std), v=parseFloat(raw);
-        if(isNaN(base)||isNaN(v)) return false;
-        var tol=Math.max(Math.abs(parseFloat(it.up)||0), Math.abs(parseFloat(it.lo)||0));
+        var v=parseFloat(raw);
+        if(isNaN(v)) return false;
+        var base, tol;
+        if(it.mode==='RANGE'){
+            var mn=parseFloat(it.min), mx=parseFloat(it.max);
+            if(isNaN(mn)||isNaN(mx)) return false;
+            base=(mn+mx)/2; tol=(mx-mn)/2;
+        } else {
+            base=parseFloat(it.std);
+            if(isNaN(base)) return false;
+            tol=Math.max(Math.abs(parseFloat(it.up)||0), Math.abs(parseFloat(it.lo)||0));
+        }
         if(tol<=0 && base===0) return false;          // 無標準也無公差 → 無從判斷，不亂示警
         var dev=Math.abs(v-base);
         return dev > Math.max(tol*OUTLIER_TOL_X, Math.abs(base)*OUTLIER_STD_RATIO);
@@ -2449,6 +2495,8 @@ $(function(){
     function normItem(r){
         var it = { item_id:(r.item_id||''), name:(r.name||''), std:(r.std==null?'':String(r.std)),
                    up:(r.up==null?'':String(r.up)), lo:(r.lo==null?'':String(r.lo)),
+                   mode:(r.mode==='RANGE'?'RANGE':'TOL'),
+                   min:(r.min==null?'':String(r.min)), max:(r.max==null?'':String(r.max)),
                    type:(r.type==='OKNG'?'OKNG':'NUM'), remark:(r.remark||''), readings:[] };
         // 量具已改綁在整張檢驗單（MODEL.tools），這裡不再逐項保留 tool_id
         it.readings.push({ vals:valsFrom(r.samples, it.type) });
@@ -2468,7 +2516,7 @@ $(function(){
         return a;
     }
     function newItem(){
-        return { item_id:'', name:'', std:'', up:'', lo:'', type:'NUM', remark:'',
+        return { item_id:'', name:'', std:'', up:'', lo:'', mode:'TOL', min:'', max:'', type:'NUM', remark:'',
                  readings:[{ vals:blankVals(state.sampleN) }] };
     }
     function setSampleN(n){
@@ -2524,6 +2572,7 @@ $(function(){
             }
             out.push({
                 item_id:it.item_id||'', name:name, std:it.std, up:it.up, lo:it.lo,
+                mode:it.mode, min:it.min, max:it.max,
                 type:it.type, verdict:(itemVerdict(it)==='NG'?'NG':'OK'),
                 samples:mk(it.readings[0]), extra:extra, remark:it.remark||''
             });
@@ -2610,11 +2659,14 @@ $(function(){
         if(it.type==='OKNG'){
             h+='<div class="spec std"><div class="k">判定方式</div><div class="v">OK / NG</div></div>'+
                '<div class="spec lim" style="min-width:200px;"><div class="k">判定基準</div><div class="v" style="font-size:15px;">'+esc(it.std||'目視/功能檢查')+'</div></div>';
-        } else {
+        } else if(it.mode==='RANGE'){
             var L=limits(it);
+            h+='<div class="spec std"><div class="k">規格範圍</div><div class="v">'+(L?(trimNum(L.low.toFixed(4))+' ~ '+trimNum(L.hi.toFixed(4))):'—')+'</div></div>';
+        } else {
+            var L2=limits(it);
             h+='<div class="spec std"><div class="k">標準值</div><div class="v">'+esc(trimNum(it.std)||'—')+'</div></div>'+
-               '<div class="spec lim"><div class="k">上限（'+esc(it.up||'0')+'）</div><div class="v">'+(L?trimNum(L.hi.toFixed(4)):'—')+'</div></div>'+
-               '<div class="spec lim"><div class="k">下限（'+esc(it.lo||'0')+'）</div><div class="v">'+(L?trimNum(L.low.toFixed(4)):'—')+'</div></div>';
+               '<div class="spec lim"><div class="k">上限（'+esc(it.up||'0')+'）</div><div class="v">'+(L2?trimNum(L2.hi.toFixed(4)):'—')+'</div></div>'+
+               '<div class="spec lim"><div class="k">下限（'+esc(it.lo||'0')+'）</div><div class="v">'+(L2?trimNum(L2.low.toFixed(4)):'—')+'</div></div>';
         }
         h+='</div>';
         return h;
@@ -2682,6 +2734,7 @@ $(function(){
         MODEL.items.forEach(function(it,i){
             var L=limits(it);
             var spec = it.type==='OKNG' ? esc(it.std||'目視/功能檢查')
+                     : it.mode==='RANGE' ? esc(specDisplayText(it))
                      : (esc(trimNum(it.std)||'—')+'　'+(L?('['+trimNum(L.low.toFixed(4))+' ~ '+trimNum(L.hi.toFixed(4))+']'):''));
             h+='<div class="prow"><div class="pnm"><div class="n">'+codeLabel(i)+'　'+esc(it.name||'（未命名）')+'</div>'+
                '<div class="s">'+spec+'</div></div>'+
@@ -2733,16 +2786,34 @@ $(function(){
             var L=limits(it), v=itemVerdict(it);
             body += '<tr data-i="'+i+'"><td class="text-center">'+codeLabel(i)+'</td>';
             if(stdEdit){
+                var isOkng=it.type==='OKNG', isRange=it.mode==='RANGE';
+                var stdCell = (isRange && !isOkng)
+                    ? '<span class="tol-range-disp" title="下限~上限（由下方兩欄計算，已不需要標準值）">'+(L?(trimNum(L.low.toFixed(4))+'~'+trimNum(L.hi.toFixed(4))):'—')+'</span>'
+                    : '<input class="table-input f-std" data-i="'+i+'" value="'+esc(it.std)+'" '+(isOkng?'':'')+'>';
+                var tolBtn = isOkng ? '' :
+                    '<button type="button" class="btn-tol-mode'+(isRange?' on':'')+'" data-i="'+i+'" '+
+                    'title="按一下切換輸入方式：標準值±公差　／　直接填絕對上下限">'+(isRange?'範圍':'公差')+'</button>';
+                var aCell, bCell;
+                if(isOkng){
+                    aCell='<input class="table-input f-up" data-i="'+i+'" value="" readonly>';
+                    bCell='<input class="table-input f-lo" data-i="'+i+'" value="" readonly>';
+                } else if(isRange){
+                    aCell='<input class="table-input f-min" data-i="'+i+'" placeholder="下限" value="'+esc(it.min)+'">';
+                    bCell='<input class="table-input f-max" data-i="'+i+'" placeholder="上限" value="'+esc(it.max)+'">';
+                } else {
+                    aCell='<input class="table-input f-up" data-i="'+i+'" placeholder="上公差" value="'+esc(it.up)+'">';
+                    bCell='<input class="table-input f-lo" data-i="'+i+'" placeholder="下公差" value="'+esc(it.lo)+'">';
+                }
                 body += '<td><input class="table-input f-name" data-i="'+i+'" value="'+esc(it.name)+'">'+rowActs(it,i)+'</td>'+
-                        '<td><input class="table-input f-std" data-i="'+i+'" value="'+esc(it.std)+'"></td>'+
-                        '<td><input class="table-input f-up" data-i="'+i+'" value="'+esc(it.up)+'" '+(it.type==='OKNG'?'readonly':'')+'></td>'+
-                        '<td><input class="table-input f-lo" data-i="'+i+'" value="'+esc(it.lo)+'" '+(it.type==='OKNG'?'readonly':'')+'></td>'+
-                        '<td><select class="table-input f-type" data-i="'+i+'">'+
-                          '<option value="NUM" '+(it.type==='NUM'?'selected':'')+'>數值</option>'+
-                          '<option value="OKNG" '+(it.type==='OKNG'?'selected':'')+'>OK/NG</option></select></td>';
+                        '<td class="td-std">'+stdCell+tolBtn+'</td>'+
+                        '<td>'+aCell+'</td>'+
+                        '<td>'+bCell+'</td>'+
+                        '<td><button type="button" class="btn-type-toggle type-'+(isOkng?'okng':'num')+'" data-i="'+i+'" '+
+                        'title="按一下切換：數值型 ／ OK/NG型">'+(isOkng?'OK/NG':'數值')+'</button></td>';
             } else {
                 body += '<td class="g-name">'+esc(it.name||'（未命名）')+rowActs(it,i)+'</td>'+
                         '<td class="g-spec">'+(it.type==='OKNG' ? esc(it.std||'OK/NG')
+                            : it.mode==='RANGE' ? esc(specDisplayText(it))
                             : (esc(trimNum(it.std)||'—')+(L?('<br><span class="muted-help">'+trimNum(L.low.toFixed(4))+' ~ '+trimNum(L.hi.toFixed(4))+'</span>'):'')))+'</td>';
             }
             var cells=''; for(var s=0;s<state.sampleN;s++) cells+=cellHtml(it,i,0,s,false);
@@ -2902,7 +2973,7 @@ $(function(){
             var last = MODEL.items.length-1;
             if(isDown && myItem===last){
                 var keepCls=null;
-                ['f-name','f-std','f-up','f-lo'].forEach(function(c){ if($(self).hasClass(c)) keepCls=c; });
+                ['f-name','f-std','f-up','f-lo','f-min','f-max'].forEach(function(c){ if($(self).hasClass(c)) keepCls=c; });
                 var keepS = $self.attr('data-s');
                 addItemRow(false);
                 setTimeout(function(){
@@ -2928,7 +2999,7 @@ $(function(){
             if(!navGo($col, $col.index(this)+step) && view!=='GRID') autoAdvance(step);
         } else {
             var cls=null;
-            ['f-name','f-std','f-up','f-lo','f-remark'].forEach(function(c){ if($(self).hasClass(c)) cls=c; });
+            ['f-name','f-std','f-up','f-lo','f-min','f-max','f-remark'].forEach(function(c){ if($(self).hasClass(c)) cls=c; });
             if(cls){
                 var $col2=navPane(this).find('input.'+cls).filter(':visible');
                 navGo($col2, $col2.index(this)+step);
@@ -2939,7 +3010,8 @@ $(function(){
     function isItemEmpty(it){
         if(!it) return true;
         if((it.name||'').trim()!=='' || (it.std||'').trim()!=='' || (it.up||'').trim()!=='' ||
-           (it.lo||'').trim()!=='' || (it.remark||'').trim()!=='') return false;
+           (it.lo||'').trim()!=='' || (it.min||'').trim()!=='' || (it.max||'').trim()!=='' ||
+           (it.remark||'').trim()!=='') return false;
         for(var r=0;r<it.readings.length;r++){
             for(var s=0;s<it.readings[r].vals.length;s++){
                 var v=it.readings[r].vals[s];
@@ -3131,11 +3203,46 @@ $(function(){
     $(document).on('input', '.f-std',  function(){ var i=+$(this).data('i'); MODEL.items[i].std =$(this).val(); repaintItem(i); });
     $(document).on('input', '.f-up',   function(){ var i=+$(this).data('i'); MODEL.items[i].up  =$(this).val(); repaintItem(i); });
     $(document).on('input', '.f-lo',   function(){ var i=+$(this).data('i'); MODEL.items[i].lo  =$(this).val(); repaintItem(i); });
+    // 公差輸入模式=RANGE：直接填絕對下限/上限（不填標準值），即時檢查下限須小於上限（表單三總則③錯誤即時偵測）
+    $(document).on('input', '.f-min',  function(){ var i=+$(this).data('i'); MODEL.items[i].min=$(this).val(); checkRangeRow(i); repaintItem(i); });
+    $(document).on('input', '.f-max',  function(){ var i=+$(this).data('i'); MODEL.items[i].max=$(this).val(); checkRangeRow(i); repaintItem(i); });
+    function checkRangeRow(i){
+        var it=MODEL.items[i]; if(!it) return;
+        var $tr=$('#items-body tr[data-i="'+i+'"]');
+        var mn=parseFloat(it.min), mx=parseFloat(it.max);
+        var bad = it.mode==='RANGE' && !isNaN(mn) && !isNaN(mx) && mn>=mx;
+        $tr.find('.f-min,.f-max').toggleClass('tol-invalid', bad)
+           .attr('title', bad?'下限須小於上限':'');
+    }
     $(document).on('input', '.f-remark',function(){ var i=+$(this).data('i'); MODEL.items[i].remark=$(this).val(); scheduleDraftSave(); });
-    $(document).on('change', '.f-type', function(){
-        var i=+$(this).data('i'), t=$(this).val()==='OKNG'?'OKNG':'NUM';
-        var it=MODEL.items[i]; it.type=t;
+    // 型態：點一下切換數值型／OK,NG型（原下拉選單改成雙色切換鈕，兩色分開一眼看出目前型態）
+    $(document).on('click', '.btn-type-toggle', function(e){
+        e.preventDefault();
+        var i=+$(this).data('i'), it=MODEL.items[i]; if(!it) return;
+        var t = it.type==='OKNG' ? 'NUM' : 'OKNG';
+        it.type=t;
         it.readings.forEach(function(rd){ rd.vals=blankVals(state.sampleN, t==='OKNG'?'OK':''); });
+        render(); scheduleDraftSave();
+    });
+    // 公差輸入模式切換：標準值±公差(TOL，預設) ⇄ 直接填絕對上下限(RANGE)。
+    // 切換時盡量互相換算帶入，避免使用者剛填好的資料因為誤按而整個消失。
+    $(document).on('click', '.btn-tol-mode', function(e){
+        e.preventDefault();
+        var i=+$(this).data('i'), it=MODEL.items[i]; if(!it) return;
+        if(it.mode==='RANGE'){
+            var mn=parseFloat(it.min), mx=parseFloat(it.max);
+            if(!isNaN(mn) && !isNaN(mx)){
+                var mid=(mn+mx)/2, half=(mx-mn)/2;
+                if(!it.std) it.std=trimNum(mid.toFixed(4));
+                if(!it.up)  it.up =trimNum(half.toFixed(4));
+                if(!it.lo)  it.lo =trimNum((-half).toFixed(4));
+            }
+            it.mode='TOL';
+        } else {
+            var L=limits(it);
+            if(L){ if(!it.min) it.min=trimNum(L.low.toFixed(4)); if(!it.max) it.max=trimNum(L.hi.toFixed(4)); }
+            it.mode='RANGE';
+        }
         render(); scheduleDraftSave();
     });
     function repaintItem(i){
@@ -3250,7 +3357,7 @@ $(function(){
     // 記住最後聚焦的「可插符號」欄位：只有純文字欄位可以（項目名稱／備註／臨時單檢驗類型）
     $(document).on('focus', 'input.f-name, input.f-remark, #ah-type, #inp-remark', function(){ lastTextEl=this; });
     // 標準值與實測值要參與公差計算，插入符號會讓數值解析失敗 → 聚焦這些欄位時清掉插入目標
-    $(document).on('focus', 'input.f-std, input.f-up, input.f-lo, input.mval', function(){ lastTextEl=null; });
+    $(document).on('focus', 'input.f-std, input.f-up, input.f-lo, input.f-min, input.f-max, input.mval', function(){ lastTextEl=null; });
     function loadSymbols(){
         $.post(V2API, { v2action:'sym_list' }, function(res){
             if(!res || !res.success) return;
@@ -4434,7 +4541,17 @@ $(function(){
                 if(!nm) out.push({ i:i, r:r, field:'name', text:where+'：<b>未填檢驗項目名稱</b>' });
                 if(it.type!=='OKNG'){
                     anyNum=true;
-                    if(r===0 && (it.std==null || String(it.std).trim()==='')) out.push({ i:i, r:r, field:'std', text:where+'：<b>未填標準值</b>（沒有標準值就無法判定 OK/NG）' });
+                    if(r===0){
+                        if(it.mode==='RANGE'){
+                            var mn=parseFloat(it.min), mx=parseFloat(it.max);
+                            if(it.min==null||String(it.min).trim()===''||it.max==null||String(it.max).trim()==='')
+                                out.push({ i:i, r:r, field:'min', text:where+'：<b>未填下限或上限</b>（已切換為直接填上下限，沒有上下限就無法判定 OK/NG）' });
+                            else if(!isNaN(mn) && !isNaN(mx) && mn>=mx)
+                                out.push({ i:i, r:r, field:'min', text:where+'：<b>下限須小於上限</b>（目前下限 '+esc(it.min)+' ≥ 上限 '+esc(it.max)+'）' });
+                        } else if(it.std==null || String(it.std).trim()===''){
+                            out.push({ i:i, r:r, field:'std', text:where+'：<b>未填標準值</b>（沒有標準值就無法判定 OK/NG）' });
+                        }
+                    }
                 }
             });
         });
@@ -4468,11 +4585,12 @@ $(function(){
         // 量具是整張單的設定，不屬於任何一列 → 直接把量具挑選跳窗打開
         if(f==='formtool'){ openToolPicker(); return; }
         view='GRID'; localStorage.setItem('qc2_view', view);
-        if(f==='name' || f==='std') $('#chk-std-edit').prop('checked', true);
+        if(f==='name' || f==='std' || f==='min') $('#chk-std-edit').prop('checked', true);
         render();
         setTimeout(function(){
             var $tr=$('#items-body tr[data-i="'+i+'"]');
-            var $t=$tr.find(f==='name' ? 'input.f-name' : 'input.f-std');
+            var sel = f==='name' ? 'input.f-name' : f==='min' ? 'input.f-min' : 'input.f-std';
+            var $t=$tr.find(sel);
             if($t.length){ $t.focus(); $('html,body').animate({ scrollTop:$t.offset().top-160 }, 200); }
         }, 120);
     });
@@ -4759,9 +4877,16 @@ $(function(){
                 }
                 // 加量測列：前四欄不用 rowspan 併格，改在「檢驗項目」欄標「↳ 加量測 N」，
                 // 這樣少了量具欄之後每一列的欄數仍然對得起來（判定欄維持併格）
+                var stdTd, tolTd;
+                if(it.mode==='RANGE' && it.type!=='OKNG'){
+                    stdTd='<td>'+esc(specDisplayText(it))+'</td>'; tolTd='<td class="c-tol"></td>';
+                } else {
+                    stdTd='<td>'+esc(it.std||'')+'</td>';
+                    tolTd='<td class="c-tol">'+esc(it.up||'')+(it.lo?('<span class="lo">'+esc(it.lo)+'</span>'):'')+'</td>';
+                }
                 body+='<tr>'+
                     (ri===0
-                      ? ('<td>'+codeLabel(idx)+'</td><td style="text-align:left">'+esc(it.name)+'</td><td>'+esc(it.std||'')+'</td><td class="c-tol">'+esc(it.up||'')+(it.lo?('<span class="lo">'+esc(it.lo)+'</span>'):'')+'</td>')
+                      ? ('<td>'+codeLabel(idx)+'</td><td style="text-align:left">'+esc(it.name)+'</td>'+stdTd+tolTd)
                       : ('<td></td><td style="text-align:left;font-size:10px;color:#7A5A35">↳ 加量測 '+ri+'</td><td></td><td class="c-tol"></td>'))+
                     cells+
                     (ri===0?('<td rowspan="'+readings.length+'">'+(it.verdict==='NG'?'NG':'OK')+'</td>'):'')+'</tr>';
@@ -4798,7 +4923,7 @@ $(function(){
         if(!ctx){ alert('請先開啟一筆檢驗再匯出。'); return; }
         var items=collectItems(); if(!items.length){ alert('尚無檢驗項目可匯出。'); return; }
         var n=state.sampleN, m=currentMeta();
-        var head=['編號','檢驗項目','標準','上公差','下公差'];
+        var head=['編號','檢驗項目','標準／範圍','上公差','下公差'];
         for(var i=1;i<=n;i++) head.push('第'+i+'件');
         head.push('判定','備註');
         var q=function(s){ s=(s==null?'':String(s)); return '"'+s.replace(/"/g,'""')+'"'; };
@@ -4807,8 +4932,11 @@ $(function(){
         items.forEach(function(it,idx){
             var readings=[{samples:it.samples}];
             (it.extra||[]).forEach(function(ex){ readings.push({samples:ex.samples}); });
+            var isRange = it.mode==='RANGE' && it.type!=='OKNG';
             readings.forEach(function(rd,ri){
-                var row=[ri===0?codeLabel(idx):'', ri===0?it.name:('↳ 加量測 '+ri), ri===0?(it.std||''):'', ri===0?(it.up||''):'', ri===0?(it.lo||''):''];
+                var row=[ri===0?codeLabel(idx):'', ri===0?it.name:('↳ 加量測 '+ri),
+                         ri===0?(isRange?specDisplayText(it):(it.std||'')):'',
+                         ri===0?(isRange?'':(it.up||'')):'', ri===0?(isRange?'':(it.lo||'')):''];
                 for(var i3=0;i3<n;i3++){ var sv=(rd.samples||[])[i3]; row.push((sv&&sv.v!=null)?sv.v:''); }
                 row.push(ri===0?(it.verdict||''):'', ri===0?(it.remark||''):'');
                 lines.push(row.map(q).join(','));
