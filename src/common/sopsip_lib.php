@@ -31,6 +31,10 @@
 require_once __DIR__ . '/people_lib.php';
 require_once __DIR__ . '/position_history_lib.php';
 require_once __DIR__ . '/asdoc_lib.php';
+/* 量具（檢驗設備一覽表）怎麼判在不在用、在別的頁面要顯示哪幾欄：一律走這一支，不自己寫條件。
+   **qc_tool.state 是 1＝停用、0/NULL＝在用**，本檔原本寫反了，
+   於是在用的 QC-001／QC-002 在挑檢具清單裡一支都看不到、停用的 QC-003 反而一直列出來。 */
+require_once __DIR__ . '/qc_tool_display_lib.php';
 
 /** 版面（kind）＝紙本的三種表單。唯一登記處，新增版面只改這裡 */
 function ss_kinds(): array
@@ -269,6 +273,25 @@ function ss_ensure_schema(PDO $db): void
         ss_ensure_col($db, 'ss_file', 'sec_key', "VARCHAR(20) NULL COMMENT 'usage_kind=sec 時屬於哪一個段落'");
         ss_ensure_col($db, 'ss_item', 'owner_dept_id', "INT NULL COMMENT '擔當者部門 id（owner 只是顯示文字）'");
         ss_ensure_col($db, 'ss_item', 'tool_type_id', "INT NULL COMMENT '檢具類型 qc_tool_list.QC_Tool_List_id'");
+
+        /* ── 2026-09-23 使用者交辦那一批 ── */
+        // 檢具一律存 qc_tool.Tool_id：存編號文字的話，量具在檢驗設備一覽表改個名字，
+        // 這裡的字就對不回主檔了（使用者實測 K-555-P 改名後整個選項不見）。tool_no 降為顯示用快取。
+        ss_ensure_col($db, 'ss_item', 'tool_id', "INT NULL COMMENT '綁 qc_tool.Tool_id；tool_no 只是顯示快取'");
+        ss_ensure_col($db, 'ss_item_tpl', 'tool_id', "INT NULL COMMENT '綁 qc_tool.Tool_id'");
+        // 預設值帶進文件之後，管理重點與品質特性預設鎖住不給改（使用者要求），
+        // 要讓現場填數字的地方在文字裡用 {} 標出來（見 ss_slot_parse()）
+        ss_ensure_col($db, 'ss_item_tpl', 'lock_ctrl', "TINYINT NOT NULL DEFAULT 1 COMMENT '1＝管理重點帶入後不可改'");
+        ss_ensure_col($db, 'ss_item_tpl', 'lock_q', "TINYINT NOT NULL DEFAULT 1 COMMENT '1＝品質特性帶入後不可改（{} 的空格仍可填）'");
+        // 帶進文件的那一列是不是從預設值來的（決定要不要鎖），以及鎖的是哪幾欄
+        ss_ensure_col($db, 'ss_item', 'tpl_id', "INT NULL COMMENT '這一列是從哪一筆預設值帶進來的'");
+        ss_ensure_col($db, 'ss_item', 'lock_ctrl', "TINYINT NOT NULL DEFAULT 0");
+        ss_ensure_col($db, 'ss_item', 'lock_q', "TINYINT NOT NULL DEFAULT 0");
+        // 帶 {} 可填空的原始樣板文字（ctrl_point／q_char 存的是填完之後的完整字串）
+        ss_ensure_col($db, 'ss_item', 'ctrl_pat', "VARCHAR(200) NULL COMMENT '管理重點的可填空樣板，例 跨珠Ø{}'");
+        ss_ensure_col($db, 'ss_item', 'q_pat', "VARCHAR(255) NULL COMMENT '品質特性的可填空樣板'");
+        // 同一個料號＋製程＋機台底下可以再分「型式」（有隆齒／無隆齒…），使用者 2026-09-23 指定最多三種
+        ss_ensure_col($db, 'ss_doc', 'variant', "VARCHAR(60) NULL COMMENT '型式（同料號同製程同機台底下的分版，最多三種）'");
     } catch (Throwable $e) { /* 交給呼叫端失敗得明確一點 */ }
 }
 
@@ -608,7 +631,30 @@ function ss_item_rows(PDO $db, int $verId): array
 {
     $st = $db->prepare("SELECT * FROM ss_item WHERE ver_id=? ORDER BY seq, item_id");
     $st->execute([$verId]);
-    return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    /* 檢具：**編號與顯示文字一律即時由 qc_tool 主檔查**（鐵律4）。
+       存文字的話量具在檢驗設備一覽表改個名字，這裡就會繼續顯示舊名而且不報錯
+       （使用者實測 K-555-P 改名之後整個選項不見）。tool_no 欄位只當舊資料的退路。 */
+    foreach ($rows as &$r) {
+        $tid = (int)($r['tool_id'] ?? 0);
+        $r['tool_label'] = '';
+        $r['tool_off']   = 0;
+        if ($tid > 0) {
+            $t = qc_tool_pick_one($db, $tid);
+            if ($t) {
+                $r['tool_no']    = $t['tool_no'];
+                $r['tool_label'] = $t['label'];
+                $r['tool_off']   = $t['disabled'];
+                if (!(int)($r['tool_type_id'] ?? 0)) $r['tool_type_id'] = $t['type_id'];
+            } else {
+                // 主檔那一支被刪掉了：留著原本的文字並標出來，不可以安靜變成空白
+                $r['tool_label'] = trim((string)($r['tool_no'] ?? '')) . '（已不在量具主檔）';
+            }
+        } else {
+            $r['tool_label'] = (string)($r['tool_no'] ?? '');
+        }
+    }
+    return $rows;
 }
 
 function ss_file_rows(PDO $db, int $docId, int $verId = 0): array
@@ -824,6 +870,17 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
         throw new RuntimeException(ss_kinds()[$kind]['label'] . ' 不適用「' . (ss_scopes()[$scope] ?? $scope) . '」這個適用範圍');
     }
 
+    /* 表單日期＝業務日期。機台／量具「在不在用」一律以它為準，不是以今天為準
+       （使用者 2026-09-23：停用的機台一樣要可以補資料，那份表單日期是 2022）。
+       沒送就用這份文件現行版次的表單日期，再沒有才退回今天。 */
+    $asof = trim((string)($in['form_date'] ?? ''));
+    if ($asof !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $asof)) $asof = '';
+    if ($asof === '' && $docId > 0) {
+        $cur = ss_current_ver($db, $docId);
+        $asof = (string)($cur['form_date'] ?? '');
+    }
+    if ($asof === '') $asof = date('Y-m-d');
+
     $machineId = 0; $partDId = 0; $partNo = null; $model = null; $toolId = 0;
     $machineIds = [];
     if ($scope === 'tool') {
@@ -840,7 +897,10 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
             $model = (string)($one['machine_model'] ?? '');
         }
         if ($model === '' && !$machineIds) throw new RuntimeException('請選擇機台型號');
-        if ($model !== '' && !ss_machines_by_model($db, $model)) throw new RuntimeException('找不到這個機台型號（可能已全部停用）');
+        // 以表單日期判在不在用：2025 年才停用的機台，2022 年的舊 SOP 當然要補得進來
+        if ($model !== '' && !ss_machines_by_model($db, $model, $asof)) {
+            throw new RuntimeException('找不到這個機台型號（表單日期 ' . $asof . ' 當時沒有這個型號在用的機台）');
+        }
         // 主檔上的 machine_id 降為「代表機台」快取，方便既有查詢沿用；真正的清單在 ss_doc_machine
         $machineId = $machineIds ? (int)$machineIds[0] : 0;
     } elseif ($scope === 'part') {
@@ -885,56 +945,84 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
         }
     }
 
+    // 型式（有隆齒／無隆齒…）：同一個料號＋製程＋機台＋客戶底下的分版，最多三種
+    $variant = trim((string)($in['variant'] ?? ''));
+    if (mb_strlen($variant) > 30) throw new RuntimeException('型式請在 30 字以內');
+
     // 文件名稱自動產生，但使用者自己打過就以他打的為準
     $title = trim((string)($in['title'] ?? ''));
     if ($title === '') {
         $title = ss_auto_title($db, $kind, $scope, [
             'process_no' => $procNo, 'machine_model' => $model, 'machine_id' => $machineId,
-            'part_d_id' => $partDId, 'tool_id' => $toolId,
+            'part_d_id' => $partDId, 'tool_id' => $toolId, 'variant' => $variant,
         ]);
     }
     if ($title === '') throw new RuntimeException('請填寫文件名稱');
 
-    // 「同一個料號／機台不可以有兩份」（使用者要求）：版面＋綁定對象＋製程。
-    // **只有新建、或綁定真的被改過時才檢查**——匯入的資料裡本來就有重複（EG-002／EG-027 各兩份），
-    // 每次存檔都擋的話那幾份會變成連改都改不動，使用者只會覺得系統壞了。
+    /* 重複判定（使用者 2026-09-23 重新定調）：
+       **料號（或機台型號／量具）＋製程＋機台明細＋客戶＋型式，五個全部相同才算重複。**
+       原本只比「對象＋製程」，所以同一台 KAPP 的「心軸偏擺確認」與「上下料」被判成同一份，
+       第二份永遠建不起來。
+
+       **只有新建、或判定鍵真的被改過時才檢查**——匯入的資料裡本來就有重複
+       （EG-002／EG-027 各兩份），每次存檔都擋的話那幾份會變成連改都改不動。 */
     $keyChanged = true;
     if ($docId > 0) {
         $old = ss_doc_get($db, $docId);
+        $oldM = ss_machine_key(array_column(ss_doc_machines($db, $docId), 'machine_id'));
+        $newM = array_key_exists('machine_ids', $in) ? ss_machine_key($machineIds) : $oldM;
         $keyChanged = !$old || (string)($old['scope'] ?? '') !== $scope
             || trim((string)($old['machine_model'] ?? '')) !== (string)$model
             || (int)($old['part_d_id'] ?? 0) !== $partDId
             || (int)($old['tool_id'] ?? 0) !== $toolId
-            || (int)($old['process_no'] ?? 0) !== $procNo;
+            || (int)($old['process_no'] ?? 0) !== $procNo
+            || trim((string)($old['customer_id'] ?? '')) !== trim((string)$cusId)
+            || ss_variant_norm((string)($old['variant'] ?? '')) !== ss_variant_norm($variant)
+            || $oldM !== $newM;
     }
-    $dup = $keyChanged ? ss_dup_find($db, $kind, $scope, [
-        'machine_model' => $model, 'machine_id' => $machineId, 'part_d_id' => $partDId,
-        'tool_id' => $toolId, 'process_no' => $procNo,
-    ], $docId) : [];
-    if ($dup && empty($in['_dup_ok'])) {
-        $d0 = $dup[0];
-        throw new RuntimeException('已經有一份同樣的文件了（' . (string)$d0['title'] . '，版次 '
-            . (string)$d0['ver_no'] . '、' . (string)$d0['status_label'] . '）。'
-            . '同一個對象＋同一個製程只能有一份，請直接更新那一份（doc:' . (int)$d0['doc_id'] . '）');
+    if ($keyChanged) {
+        $scan = ss_dup_scan($db, $kind, $scope, [
+            'machine_model' => $model, 'machine_id' => $machineId, 'part_d_id' => $partDId,
+            'tool_id' => $toolId, 'process_no' => $procNo, 'machine_ids' => $machineIds,
+            'customer_id' => (string)$cusId, 'variant' => $variant,
+        ], $docId);
+        $dup = array_values(array_filter($scan, fn($r) => !empty($r['is_dup'])));
+        if ($dup && empty($in['_dup_ok'])) {
+            $d0 = $dup[0];
+            throw new RuntimeException('已經有一份完全一樣的文件了（' . (string)$d0['title'] . '，版次 '
+                . (string)$d0['ver_no'] . '、' . (string)$d0['status_label'] . '）。'
+                . '料號／機台型號、製程、機台明細、客戶、型式五項都相同時只能有一份，'
+                . '請直接更新那一份（doc:' . (int)$d0['doc_id'] . '）；'
+                . '如果這是不同的作業內容，請在「型式」填上分別（例如 上下料／偏擺確認／架機）。');
+        }
+        // 型式上限（使用者指定最多三種）：含這一份在內算
+        $vs = [ss_variant_norm($variant) => 1];
+        foreach ($scan as $r) $vs[ss_variant_norm((string)$r['variant'])] = 1;
+        if (count($vs) > SS_VARIANT_MAX && empty($in['_dup_ok'])) {
+            throw new RuntimeException('同一個料號＋製程＋機台＋客戶底下最多只能有 ' . SS_VARIANT_MAX
+                . ' 種型式，目前已經有：' . implode('、', array_map(
+                    fn($v) => $v === '' ? '（未分型式）' : $v,
+                    array_values(array_diff(array_keys($vs), [ss_variant_norm($variant)])))));
+        }
     }
 
     if ($docId > 0) {
         if (!ss_doc_get($db, $docId)) throw new RuntimeException('找不到這份文件');
         $st = $db->prepare("UPDATE ss_doc SET scope=?, machine_id=?, machine_model=?, tool_id=?, part_d_id=?, part_no_text=?,
-                                title=?, process_no=?, proc_name=?, customer_id=?, customer_name=?,
+                                title=?, process_no=?, proc_name=?, customer_id=?, customer_name=?, variant=?,
                                 modified_at=NOW(), modified_by=? WHERE doc_id=?");
         $st->execute([$scope, $machineId ?: null, $model ?: null, $toolId ?: null, $partDId ?: null, $partNo, $title,
-                      $procNo ?: null, $procNm, $cusId, $cusNm, $uid, $docId]);
-        if (ss_scope_has_machines($scope) && array_key_exists('machine_ids', $in)) ss_doc_machines_set($db, $docId, $machineIds);
+                      $procNo ?: null, $procNm, $cusId, $cusNm, $variant !== '' ? $variant : null, $uid, $docId]);
+        if (ss_scope_has_machines($scope) && array_key_exists('machine_ids', $in)) ss_doc_machines_set($db, $docId, $machineIds, $asof);
         return $docId;
     }
     $st = $db->prepare("INSERT INTO ss_doc (kind, scope, machine_id, machine_model, tool_id, part_d_id, part_no_text, title,
-                            process_no, proc_name, customer_id, customer_name, created_at, created_by, created_by_name)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?)");
+                            process_no, proc_name, customer_id, customer_name, variant, created_at, created_by, created_by_name)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?)");
     $st->execute([$kind, $scope, $machineId ?: null, $model ?: null, $toolId ?: null, $partDId ?: null, $partNo, $title,
-                  $procNo ?: null, $procNm, $cusId, $cusNm, $uid, $uname]);
+                  $procNo ?: null, $procNm, $cusId, $cusNm, $variant !== '' ? $variant : null, $uid, $uname]);
     $newId = (int)$db->lastInsertId();
-    if (ss_scope_has_machines($scope)) ss_doc_machines_set($db, $newId, $machineIds);
+    if (ss_scope_has_machines($scope)) ss_doc_machines_set($db, $newId, $machineIds, $asof);
     return $newId;
 }
 
@@ -1160,17 +1248,50 @@ function ss_items_replace(PDO $db, int $verId, array $rows): void
     $seq = 0;
     $f = fn($k, $r) => (($s = trim((string)($r[$k] ?? ''))) !== '' ? $s : null);
     foreach ($rows as $r) {
+        /* 鎖住的欄位一律由「樣板＋現場填的空格」在後端重新組一次字，不採信前端送來的完整字串。
+           樣板本身以**預設值那一筆**為準（tpl_id），前端連樣板都改不了；
+           預設值被刪掉時才退回用前端送的樣板（不然舊文件會整列變空白）。 */
+        foreach ([['ctrl', 'ctrl_point', 'ctrl_pat'], ['q', 'q_char', 'q_pat']] as [$k, $fld, $patFld]) {
+            if ((int)($r['lock_' . $k] ?? 0) !== 1) continue;
+            $pat = trim((string)($r[$patFld] ?? ''));
+            $tpl = (int)($r['tpl_id'] ?? 0) > 0 ? ss_tpl_one($db, (int)$r['tpl_id']) : null;
+            if ($tpl) $pat = trim((string)($tpl[$fld] ?? '')) ?: $pat;
+            if ($pat === '') { $r['lock_' . $k] = 0; continue; }   // 沒有樣板就不鎖，免得整列被清空
+            $r[$patFld] = $pat;
+            $vals = $r[$k . '_slots'] ?? [];
+            if (is_string($vals)) { $d = json_decode($vals, true); $vals = is_array($d) ? $d : []; }
+            $r[$fld] = ss_slot_has($pat) ? ss_slot_compose($pat, (array)$vals) : $pat;
+        }
         if (trim((string)($r['ctrl_point'] ?? '')) === '' && trim((string)($r['q_char'] ?? '')) === '') continue;
         $seq++;
         // 擔當者存部門 id，owner 只是當下的顯示文字快取（管理員改別名之後由 ss_owner_label 重算）
         $deptId = (int)($r['owner_dept_id'] ?? 0);
         $owner  = $deptId > 0 ? ss_owner_label($db, $deptId, (string)($r['owner'] ?? '')) : $f('owner', $r);
+        /* 檢具一律存 Tool_id；tool_no 只是顯示快取，由主檔即時回填（改名不會失聯）。
+           前端限定點選、不給手打，所以 tool_id 是 0 就表示「沒有指定檢具」，
+           這時一律寫成 N/A（使用者 2026-09-23：未選擇自動代入 N/A），
+           不可以留空白——空白在紙本上看起來像漏填。 */
+        $toolId = (int)($r['tool_id'] ?? 0);
+        $toolNo = null; $toolTt = (int)($r['tool_type_id'] ?? 0) ?: null;
+        if ($toolId > 0) {
+            $t = qc_tool_pick_one($db, $toolId);
+            if ($t) { $toolNo = $t['tool_no']; $toolTt = $t['type_id'] ?: $toolTt; }
+            else    { $toolId = 0; }
+        }
+        if ($toolId <= 0) {
+            $txt = trim((string)($r['tool_no'] ?? ''));
+            $toolNo = ($txt === '' || $txt === 'N/A') ? 'N/A' : $txt;   // 舊資料的手打文字仍留著
+        }
         $db->prepare("INSERT INTO ss_item (ver_id, seq, ctrl_point, q_char, up_limit, lo_limit, owner, owner_dept_id,
-                          method, tool_type_id, tool_no, freq, note)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                          method, tool_type_id, tool_id, tool_no, freq, note, tpl_id, lock_ctrl, lock_q,
+                          ctrl_pat, q_pat)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
            ->execute([$verId, $seq, $f('ctrl_point', $r), $f('q_char', $r), $f('up_limit', $r), $f('lo_limit', $r),
-                      $owner ?: null, $deptId ?: null, $f('method', $r), (int)($r['tool_type_id'] ?? 0) ?: null,
-                      $f('tool_no', $r), $f('freq', $r), $f('note', $r)]);
+                      $owner ?: null, $deptId ?: null, $f('method', $r), $toolTt,
+                      $toolId ?: null, $toolNo, $f('freq', $r), $f('note', $r),
+                      (int)($r['tpl_id'] ?? 0) ?: null,
+                      (int)($r['lock_ctrl'] ?? 0) === 1 ? 1 : 0, (int)($r['lock_q'] ?? 0) === 1 ? 1 : 0,
+                      $f('ctrl_pat', $r), $f('q_pat', $r)]);
     }
 }
 
@@ -1499,12 +1620,15 @@ function ss_search_part(PDO $db, string $kw, int $limit = 30): array
     return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
 }
 
-/** 機台搜尋（機器編號 asset_no／現場編號 field_no／名稱都搜得到；停用的不列） */
-function ss_search_machine(PDO $db, string $kw, int $limit = 30): array
+/**
+ * 機台搜尋（機器編號 asset_no／現場編號 field_no／名稱都搜得到）。
+ * $asof＝表單日期，有給時「那一天還沒停用」的也列出來（補舊資料用，使用者 2026-09-23）。
+ */
+function ss_search_machine(PDO $db, string $kw, int $limit = 30, string $asof = ''): array
 {
     $kw = trim($kw);
-    $w  = ["(m.state IS NULL OR m.state <> '1')"];   // state='1' 才是停用（見 kpi_main 的機台資產設定）
     $p  = [];
+    $w  = [ss_machine_active_cond($asof, $p, 'm')];   // state='1' 才是停用（見 kpi_main 的機台資產設定）
     if ($kw !== '') {
         $w[] = "(m.asset_no LIKE ? OR m.field_no LIKE ? OR m.machine LIKE ? OR m.machine_model LIKE ?)";
         for ($i = 0; $i < 4; $i++) $p[] = '%' . $kw . '%';
@@ -1513,15 +1637,20 @@ function ss_search_machine(PDO $db, string $kw, int $limit = 30): array
        **機台的製程掛在 machine_list.machine_type_id，對到的是 process_type 表**
        （不是那張早就沒在用的 machine_type，記憶 machine_asset_process_type）。 */
     $st = $db->prepare("SELECT m.machine_id, m.machine, m.field_no, m.asset_no, m.machine_model,
-                               m.manufacturer, m.spec, m.machine_type_id,
+                               m.manufacturer, m.spec, m.machine_type_id, m.state, m.disabled_date,
                                pt.process_type AS proc_type_name,
                                COALESCE(pt.sort_order, 9999) AS proc_sort
                         FROM machine_list m
                         LEFT JOIN process_type pt ON pt.process_type_id = m.machine_type_id
                         WHERE " . implode(' AND ', $w) . "
-                        ORDER BY proc_sort, pt.process_type, m.asset_no, m.field_no LIMIT $limit");
+                        ORDER BY (m.state='1'), proc_sort, pt.process_type, m.asset_no, m.field_no LIMIT $limit");
     $st->execute($p);
-    return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    foreach ($rows as &$r) {
+        $r['off']      = ((string)($r['state'] ?? '') === '1') ? 1 : 0;
+        $r['off_date'] = (string)($r['disabled_date'] ?? '');
+    }
+    return $rows;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -1621,12 +1750,32 @@ function ss_search_customer(PDO $db, string $kw, int $limit = 30): array
 /** 在用的機台（state='1' 才是停用，見 kpi_main 的機台資產設定） */
 const SS_MACHINE_ACTIVE = "(state IS NULL OR state <> '1')";
 
+/**
+ * 「這台機器在**表單日期那一天**還算不算在用」的 SQL 條件（唯一實作）。
+ *
+ * 使用者 2026-09-23 明講：**停用的機台一樣要可以補資料**——他要補的那份表單日期是 2022，
+ * 而 KNe3G（EG-004）是 2025-01-14 才停用的，畫面卻回「找不到這個機台型號（可能已全部停用）」。
+ * 停用日期沒填的（實測 8 台停用的有 1 台沒填）一律只當「現在不可用」，
+ * 補舊資料時仍然列得出來、只是會標示出來要人自己確認。
+ *
+ * @param string $asof 空＝只要現在在用的；有給＝現在在用的 ＋ 那一天還沒停用的
+ */
+function ss_machine_active_cond(string $asof, array &$p, string $a = ''): string
+{
+    $pre = $a !== '' ? preg_replace('/[^A-Za-z0-9_]/', '', $a) . '.' : '';
+    $live = "({$pre}state IS NULL OR {$pre}state <> '1')";
+    $asof = trim($asof);
+    if ($asof === '') return $live;
+    $p[] = $asof;
+    return "($live OR ({$pre}disabled_date IS NOT NULL AND ? < {$pre}disabled_date))";
+}
+
 /** 機台型號清單（同型號幾台一起回；設備 SOP 綁的就是型號） */
-function ss_machine_models(PDO $db, string $kw = '', int $limit = 60): array
+function ss_machine_models(PDO $db, string $kw = '', int $limit = 60, string $asof = ''): array
 {
     $kw = trim($kw);
-    $w  = [SS_MACHINE_ACTIVE, "machine_model IS NOT NULL", "machine_model <> ''"];
     $p  = [];
+    $w  = [ss_machine_active_cond($asof, $p), "machine_model IS NOT NULL", "machine_model <> ''"];
     if ($kw !== '') {
         $w[] = "(machine_model LIKE ? OR machine LIKE ? OR asset_no LIKE ? OR field_no LIKE ?)";
         for ($i = 0; $i < 4; $i++) $p[] = '%' . $kw . '%';
@@ -1634,6 +1783,7 @@ function ss_machine_models(PDO $db, string $kw = '', int $limit = 60): array
     try {
         $st = $db->prepare("SELECT machine_model, COUNT(*) AS cnt,
                                    MIN(machine) AS machine, MIN(manufacturer) AS manufacturer,
+                                   SUM(state='1') AS off_cnt,
                                    GROUP_CONCAT(asset_no ORDER BY asset_no SEPARATOR '、') AS asset_nos
                             FROM machine_list WHERE " . implode(' AND ', $w) . "
                             GROUP BY machine_model ORDER BY machine_model LIMIT $limit");
@@ -1642,19 +1792,30 @@ function ss_machine_models(PDO $db, string $kw = '', int $limit = 60): array
     } catch (Throwable $e) { return []; }
 }
 
-/** 某個型號目前在用的全部機台（使用者拍板：選型號就全部帶進來，再逐台勾掉不要的） */
-function ss_machines_by_model(PDO $db, string $model): array
+/**
+ * 某個型號的全部機台（使用者拍板：選型號就全部帶進來，再逐台勾掉不要的）。
+ * $asof＝表單日期：那一天還沒停用的也會回，並標 `off`／`off_date`，
+ * 讓畫面明白寫出「這台已經停用，是因為表單日期在停用之前才列出來的」。
+ */
+function ss_machines_by_model(PDO $db, string $model, string $asof = ''): array
 {
     $model = trim($model);
     if ($model === '') return [];
+    $p = [$model];
+    $cond = ss_machine_active_cond($asof, $p);
     try {
         $st = $db->prepare("SELECT machine_id, machine, field_no, asset_no, machine_model, manufacturer, spec,
-                                   machine_type_id
+                                   machine_type_id, state, disabled_date
                             FROM machine_list
-                            WHERE machine_model=? AND " . SS_MACHINE_ACTIVE . "
-                            ORDER BY asset_no, field_no");
-        $st->execute([$model]);
-        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                            WHERE machine_model=? AND $cond
+                            ORDER BY (state='1'), asset_no, field_no");
+        $st->execute($p);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        foreach ($rows as &$r) {
+            $r['off']      = ((string)($r['state'] ?? '') === '1') ? 1 : 0;
+            $r['off_date'] = (string)($r['disabled_date'] ?? '');
+        }
+        return $rows;
     } catch (Throwable $e) { return []; }
 }
 
@@ -1673,8 +1834,12 @@ function ss_doc_machines(PDO $db, int $docId): array
     } catch (Throwable $e) { return []; }
 }
 
-/** 覆寫這份文件掛的機器編號（唯一寫入點；不存在或已停用的機台一律不寫進去） */
-function ss_doc_machines_set(PDO $db, int $docId, array $ids): void
+/**
+ * 覆寫這份文件掛的機器編號（唯一寫入點）。
+ * 不存在的機台一律不寫進去；**已停用的要看表單日期**——補 2022 年的舊 SOP 時，
+ * 2025 年才停用的那台當然要掛得上去（使用者 2026-09-23）。
+ */
+function ss_doc_machines_set(PDO $db, int $docId, array $ids, string $asof = ''): void
 {
     $db->prepare("DELETE FROM ss_doc_machine WHERE doc_id=?")->execute([$docId]);
     $seen = [];
@@ -1682,8 +1847,10 @@ function ss_doc_machines_set(PDO $db, int $docId, array $ids): void
         $id = (int)$id;
         if ($id <= 0 || isset($seen[$id])) continue;
         $seen[$id] = 1;
-        $st = $db->prepare("SELECT 1 FROM machine_list WHERE machine_id=? AND " . SS_MACHINE_ACTIVE);
-        $st->execute([$id]);
+        $p = [$id];
+        $cond = ss_machine_active_cond($asof, $p);
+        $st = $db->prepare("SELECT 1 FROM machine_list WHERE machine_id=? AND $cond");
+        $st->execute($p);
         if (!$st->fetchColumn()) continue;
         $db->prepare("INSERT IGNORE INTO ss_doc_machine (doc_id, machine_id) VALUES (?,?)")->execute([$docId, $id]);
     }
@@ -1744,6 +1911,16 @@ function ss_machine_meta(PDO $db, array $doc): array
  */
 function ss_auto_title(PDO $db, string $kind, string $scope, array $in): string
 {
+    $t = ss_auto_title_base($db, $kind, $scope, $in);
+    // 型式（有隆齒／無隆齒／上下料…）接在名稱最後面——同一個對象底下好幾份時，
+    // 清單上不接型式就會看到好幾列一模一樣的名稱，根本分不出哪一份是哪一份
+    $v = trim((string)($in['variant'] ?? ''));
+    if ($v !== '' && mb_strpos($t, $v) === false) $t = trim($t . ' ' . $v);
+    return $t;
+}
+
+function ss_auto_title_base(PDO $db, string $kind, string $scope, array $in): string
+{
     $proc = '';
     $pno  = (int)($in['process_no'] ?? 0);
     if ($pno > 0) { $r = ss_proc_row($db, $pno); $proc = (string)($r['process_name'] ?? ''); }
@@ -1796,6 +1973,30 @@ function ss_auto_title(PDO $db, string $kind, string $scope, array $in): string
  */
 function ss_dup_find(PDO $db, string $kind, string $scope, array $in, int $exceptDocId = 0): array
 {
+    foreach (ss_dup_scan($db, $kind, $scope, $in, $exceptDocId) as $r) if (!empty($r['is_dup'])) $out[] = $r;
+    return $out ?? [];
+}
+
+/**
+ * 同一組「對象」底下的全部文件（撞到的與沒撞到的都回，`is_dup` 標出真正算重複的那幾份）。
+ *
+ * **判定鍵＝料號（或機台型號／量具）＋製程＋機台明細＋客戶＋型式，五個全部相同才算重複**
+ * ——使用者 2026-09-23 原話：「不可重複建立 SOP SIP 的是特定料號＋特定製程＋設定機台
+ * 都完全相同者的相同 SIP 或相同 SOP 不可重複」，
+ * 並補充「SIP SOP 要可以設定為特定客戶，又可以分最多三種型式（例如有隆齒、無隆齒…）」。
+ *
+ * 原本只比「對象＋製程」，所以同一台 KAPP 上的「心軸偏擺確認」與「上下料」被判成同一份，
+ * 第二份永遠建不起來（畫面只回「已經有一份同樣的文件了」，看不出是哪裡一樣）。
+ *
+ * 機台明細（ss_doc_machine）刻意在 PHP 端比，而不是寫成一句 SQL：
+ * 要比的是「集合完全相同」，用 JOIN 只比得出「有沒有交集」，
+ * 同一個料號掛 3 台與掛 1 台會被判成重複。
+ *
+ * `sibling` ＝ 對象與製程相同、但客戶或型式不同的既有文件；畫面要列出來讓人確認
+ * （不列的話使用者會以為系統沒在管重複）。型式上限也由這份清單算出來。
+ */
+function ss_dup_scan(PDO $db, string $kind, string $scope, array $in, int $exceptDocId = 0): array
+{
     $w = ["d.is_deleted=0", "d.kind=?"];
     $p = [$kind];
 
@@ -1824,7 +2025,8 @@ function ss_dup_find(PDO $db, string $kind, string $scope, array $in, int $excep
 
     try {
         $st = $db->prepare("SELECT d.doc_id, d.title, d.kind, d.scope, d.part_no_text, d.machine_model,
-                                   d.proc_name, d.created_by_name, d.created_at,
+                                   d.proc_name, d.customer_id, d.customer_name, d.variant,
+                                   d.created_by_name, d.created_at,
                                    v.ver_id, v.ver_no, v.form_date, v.status
                             FROM ss_doc d
                             LEFT JOIN ss_ver v ON v.ver_id = COALESCE(d.cur_ver_id,
@@ -1833,10 +2035,50 @@ function ss_dup_find(PDO $db, string $kind, string $scope, array $in, int $excep
                             ORDER BY d.doc_id");
         $st->execute($p);
         $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        foreach ($rows as &$r) $r['status_label'] = ss_statuses()[$r['status']] ?? (string)$r['status'];
-        return $rows;
     } catch (Throwable $e) { return []; }
+
+    $myM   = ss_machine_key($in['machine_ids'] ?? []);
+    $myCus = trim((string)($in['customer_id'] ?? ''));
+    $myVar = ss_variant_norm((string)($in['variant'] ?? ''));
+
+    foreach ($rows as &$r) {
+        $r['status_label'] = ss_statuses()[$r['status']] ?? (string)$r['status'];
+        $r['variant']      = (string)($r['variant'] ?? '');
+        $theirM = ss_machine_key(array_column(ss_doc_machines($db, (int)$r['doc_id']), 'machine_id'));
+        $sameM  = ($theirM === $myM);
+        $sameC  = (trim((string)($r['customer_id'] ?? '')) === $myCus);
+        $sameV  = (ss_variant_norm($r['variant']) === $myVar);
+        $r['same_machines'] = $sameM ? 1 : 0;
+        $r['same_customer'] = $sameC ? 1 : 0;
+        $r['same_variant']  = $sameV ? 1 : 0;
+        $r['is_dup']        = ($sameM && $sameC && $sameV) ? 1 : 0;
+        // 哪裡不一樣——畫面要講得出來，不然使用者只看到「有一份一樣的」卻找不到差在哪
+        $why = [];
+        if (!$sameM) $why[] = '機台不同';
+        if (!$sameC) $why[] = '客戶不同';
+        if (!$sameV) $why[] = '型式不同';
+        $r['diff_why'] = implode('、', $why);
+    }
+    return $rows;
 }
+
+/** 機台集合的比較鍵（排序後串起來；空集合也是一種值，不可以當成「不比」） */
+function ss_machine_key($ids): string
+{
+    if (is_string($ids)) { $d = json_decode($ids, true); $ids = is_array($d) ? $d : []; }
+    $ids = array_values(array_unique(array_filter(array_map('intval', (array)$ids))));
+    sort($ids);
+    return implode(',', $ids);
+}
+
+/** 型式的正規化（前後空白與全形空白一律吃掉；空字串＝沒分型式，本身也是一種型式） */
+function ss_variant_norm(string $v): string
+{
+    return trim(preg_replace('/[\s\x{3000}]+/u', '', $v) ?? '');
+}
+
+/** 同一個對象＋製程底下最多幾種型式（使用者 2026-09-23 指定 3） */
+const SS_VARIANT_MAX = 3;
 
 /* ────────────────── 擔當者部門（顯示文字可改） ────────────────── */
 
@@ -1895,18 +2137,29 @@ function ss_tool_types(PDO $db): array
     } catch (Throwable $e) { return []; }
 }
 
-/** 某個量具類型底下還在用的編號（qc_tool.state=0 是停用） */
-function ss_tools_by_type(PDO $db, int $typeId): array
+/**
+ * 某個量具類型底下的編號（唯一實作已收斂到 qc_tool_display_lib）。
+ *
+ * 兩件事一定要記住：
+ * ① **state 1＝停用、0/NULL＝在用**。本函式原本寫成 `(state IS NULL OR state<>0)`，
+ *    把在用的整批當成停用——QC-001／QC-002 一支都挑不到，停用的 QC-003 反而列出來，
+ *    而且完全不報錯。判定一律交給 qc_tool_pick_rows()。
+ * ② **停用的量具要列得出來**（使用者 2026-09-23：「停用的機台一樣要可以補資料，
+ *    表單日期是 2022，那時候根本還沒停用」）。給 $asof＝這份文件的表單日期，
+ *    停用日期晚於表單日期的照樣可挑（usable=1），其餘標成停用且不可挑。
+ */
+function ss_tools_by_type(PDO $db, int $typeId, string $asof = ''): array
 {
     if ($typeId <= 0) return [];
-    try {
-        $st = $db->prepare("SELECT Tool_id AS id, Tool_No AS tool_no, spec_desc
-                            FROM qc_tool
-                            WHERE QC_Tool_List_id=? AND (state IS NULL OR state<>0)
-                            ORDER BY Tool_No");
-        $st->execute([$typeId]);
-        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
-    } catch (Throwable $e) { return []; }
+    $rows = qc_tool_pick_rows($db, ['type_id' => $typeId, 'asof' => $asof, 'with_off' => 1]);
+    $out = [];
+    foreach ($rows as $r) {
+        $out[] = ['id' => $r['tool_id'], 'tool_no' => $r['tool_no'], 'label' => $r['label'],
+                  'spec_desc' => $r['spec_desc'], 'machine' => $r['machine'],
+                  'disabled' => $r['disabled'], 'disabled_date' => $r['disabled_date'],
+                  'usable' => $r['usable']];
+    }
+    return $out;
 }
 
 /**
@@ -1944,6 +2197,188 @@ function ss_method_options(PDO $db): array
     return ['tool_type_ids' => $ids, 'extra' => $clean, 'list' => $list];
 }
 
+/* ═══════════ 檢驗頻率選項／注意事項預設值／型式選項（管理員可維護） ═══════════ */
+
+/**
+ * 檢驗頻率的下拉選項（使用者 2026-09-23：「檢驗頻率要有下拉選單」）。
+ * 從來沒設定過就給一組現場真的在用的預設值；管理員改過之後一律以設定為準。
+ * **仍然可以自行輸入**——現場一定有「每 4 hr」這種還沒登記的寫法，
+ * 只給固定選項會變成填不下去（畫面上的「其他…」就是這個用途）。
+ */
+function ss_freq_options(PDO $db): array
+{
+    $v = ss_setting_get($db, 'freq_options', null);
+    if (is_array($v)) {
+        $out = [];
+        foreach ($v as $s) { $s = trim((string)$s); if ($s !== '' && !in_array($s, $out, true)) $out[] = $s; }
+        return $out;
+    }
+    return ['每顆', '每批', '首件', '每 1 hr', '每 2 hr', '每 4 hr', '1 pc / 1 hr', '抽驗', '全檢', '每箱'];
+}
+
+/**
+ * 「注意事項」的可儲存範本（使用者 2026-09-23：
+ * 「注意事項要可以設定儲存值（要可以綁定客戶或不綁），方便可以點開帶入，
+ *   有綁定此客戶之預設值時請自動帶入」）。
+ * 一筆＝['name'=>標題, 'body'=>內容, 'customer_id'=>客戶編號或空字串]。
+ * **客戶編號是 char(11) 文字不是整數**（C2005、T2001…），一律當字串比，不可 intval。
+ *
+ * @param string $customerId 有給時只回「綁這家客戶的 ＋ 沒綁客戶的通用範本」，綁定的排前面
+ */
+function ss_notice_tpls(PDO $db, string $customerId = ''): array
+{
+    $v = ss_setting_get($db, 'notice_tpls', []);
+    if (!is_array($v)) $v = [];
+    $cid = trim($customerId);
+    $mine = []; $common = [];
+    foreach ($v as $r) {
+        $row = ['name' => trim((string)($r['name'] ?? '')),
+                'body' => (string)($r['body'] ?? ''),
+                'customer_id' => trim((string)($r['customer_id'] ?? '')),
+                'customer_name' => trim((string)($r['customer_name'] ?? ''))];
+        if ($row['name'] === '' && trim($row['body']) === '') continue;
+        if ($row['customer_id'] === '')                       { $common[] = $row; continue; }
+        if ($cid !== '' && $row['customer_id'] === $cid)      { $mine[] = $row; continue; }
+        if ($cid === '')                                      { $common[] = $row; }   // 設定頁要看得到全部
+    }
+    foreach ($mine as &$m) $m['for_customer'] = 1;
+    foreach ($common as &$c) $c['for_customer'] = 0;
+    return array_merge($mine, $common);
+}
+
+/** 這家客戶有沒有專屬的注意事項範本（有就在建立文件時自動帶入第一筆） */
+function ss_notice_auto(PDO $db, string $customerId): string
+{
+    if (trim($customerId) === '') return '';
+    foreach (ss_notice_tpls($db, $customerId) as $t) {
+        if (!empty($t['for_customer'])) return (string)$t['body'];
+    }
+    return '';
+}
+
+/** 型式的建議選項（有隆齒／無隆齒…；只是建議，仍可自行輸入） */
+function ss_variant_options(PDO $db): array
+{
+    $v = ss_setting_get($db, 'variant_options', null);
+    if (is_array($v)) {
+        $out = [];
+        foreach ($v as $s) { $s = trim((string)$s); if ($s !== '' && !in_array($s, $out, true)) $out[] = $s; }
+        return $out;
+    }
+    return ['有隆齒', '無隆齒', '上下料', '架機', '偏擺確認'];
+}
+
+/* ═══════════════════ 可填空樣板（{} 變數）唯一實作 ═══════════════════
+ * 使用者 2026-09-23：「檢驗項目預設值的管理重點跟品質特性不可修改內容，
+ * 除非有設定可填空——品質特性要增加設定是否可填空在特定位置，可以使用變數之類的方式，
+ * 變數要可以固定帶前綴或後綴。」
+ *
+ * 寫法刻意選最好懂的一種：**在文字裡用 {} 圈出「要現場填」的位置**，
+ * 大括號外面的字就是固定的前綴／後綴。
+ *   跨珠Ø{}        → 固定「跨珠Ø」＋一個空格讓人填 7.3152
+ *   {}±0.05        → 先填數字，後面固定「±0.05」
+ *   硬度 {HRC} 以上 → 大括號裡可以寫提示字，畫面上當 placeholder（**不會印出來**）
+ *
+ * 三件事一定要記住：
+ * ① 文件上存的是**填完之後的完整字串**（ctrl_point／q_char），列印與其他模組一行都不必改。
+ * ② 樣板另外存在 ctrl_pat／q_pat，畫面才畫得出「固定文字＋輸入格」。
+ * ③ **鎖住的那幾列，後端一律拿樣板重新組一次字**（ss_items_replace），
+ *    不採信前端送來的完整字串——只擋前端等於沒擋（鐵律8）。
+ */
+
+/** 樣板拆成 [固定文字, 空格, 固定文字, …]。回 ['parts'=>[], 'hints'=>[], 'n'=>空格數] */
+function ss_slot_parse(string $pat): array
+{
+    $parts = []; $hints = [];
+    $buf = ''; $len = mb_strlen($pat);
+    for ($i = 0; $i < $len; $i++) {
+        $ch = mb_substr($pat, $i, 1);
+        if ($ch === '{') {
+            $end = mb_strpos($pat, '}', $i);
+            if ($end === false) { $buf .= $ch; continue; }       // 沒收尾的 { 當一般文字
+            $parts[] = $buf; $buf = '';
+            $hints[] = trim(mb_substr($pat, $i + 1, $end - $i - 1));
+            $i = $end;
+        } else { $buf .= $ch; }
+    }
+    $parts[] = $buf;
+    return ['parts' => $parts, 'hints' => $hints, 'n' => count($hints)];
+}
+
+/** 這段文字有沒有可填空 */
+function ss_slot_has(string $pat): bool { return mb_strpos($pat, '{') !== false && mb_strpos($pat, '}') !== false; }
+
+/** 樣板＋填進去的值 → 完整字串（值不足時補空字串） */
+function ss_slot_compose(string $pat, array $vals): string
+{
+    $p = ss_slot_parse($pat);
+    $out = '';
+    foreach ($p['parts'] as $i => $txt) {
+        $out .= $txt;
+        if ($i < $p['n']) $out .= trim((string)($vals[$i] ?? ''));
+    }
+    return trim($out);
+}
+
+/**
+ * 反過來把「已經填好的完整字串」拆回各個空格的值（重新打開文件時要把值放回輸入格）。
+ * 固定文字對不起來時回 null，呼叫端就當成自由文字處理（不可以硬拆，會把使用者的字切爛）。
+ */
+function ss_slot_extract(string $pat, string $full): ?array
+{
+    $p = ss_slot_parse($pat);
+    if ($p['n'] === 0) return [];
+    $vals = []; $pos = 0;
+    $head = $p['parts'][0];
+    if ($head !== '' && mb_strpos($full, $head) !== 0) return null;
+    $pos = mb_strlen($head);
+    for ($i = 0; $i < $p['n']; $i++) {
+        $next = $p['parts'][$i + 1] ?? '';
+        if ($next === '') { $vals[] = mb_substr($full, $pos); $pos = mb_strlen($full); continue; }
+        $at = mb_strpos($full, $next, $pos);
+        if ($at === false) return null;
+        $vals[] = mb_substr($full, $pos, $at - $pos);
+        $pos = $at + mb_strlen($next);
+    }
+    return $vals;
+}
+
+/**
+ * 符號面板的清單（唯一實作）。兩個來源合併、重複的只出現一次（使用者 2026-09-23 指定）：
+ *   ① 工程符號＝批圖編輯器那一條（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×）
+ *   ② 幾何公差與特殊項目＝線上檢驗的 **qc_special_characteristic 主檔**
+ *      （鐵律4：那張表就是唯一主檔，這裡不另外抄一份符號清單）
+ */
+function ss_symbols(PDO $db): array
+{
+    $out = []; $seen = [];
+    $add = function (string $sym, string $name, string $grp) use (&$out, &$seen) {
+        $sym = trim($sym);
+        if ($sym === '' || isset($seen[$sym])) return;
+        $seen[$sym] = 1;
+        $out[] = ['sym' => $sym, 'name' => $name, 'group' => $grp];
+    };
+    foreach (ss_eng_symbols() as $s) $add($s[0], $s[1], '工程符號');
+    try {
+        $st = $db->query("SELECT name, symbol, description FROM qc_special_characteristic
+                          WHERE COALESCE(is_active,1)=1 ORDER BY characteristic_id");
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) ?: [] as $r) {
+            $add((string)$r['symbol'], (string)$r['name'], '幾何公差');
+        }
+    } catch (Throwable $e) { /* 表不存在就只給工程符號 */ }
+    return $out;
+}
+
+/** 工程符號（與批圖編輯器 EG_SYMBOLS 同一份內容；改這裡兩邊一起改） */
+function ss_eng_symbols(): array
+{
+    return [
+        ['Ø', '直徑'], ['°', '度'], ['±', '正負公差'], ['▽', '加工符號'],
+        ['↧', '深度'], ['⌴', '沉頭孔／柱坑'], ['⌵', '錐坑'], ['□', '正方形'],
+        ['⌒', '圓弧'], ['Ra', '表面粗糙度'], ['×', '乘號'],
+    ];
+}
+
 /* ─────────────────── 檢驗項目的預設值（兩層） ─────────────────── */
 
 /** 樣板列（tpl_kind=std 全站標準項目／proc 某個製程專屬） */
@@ -1960,9 +2395,25 @@ function ss_tpl_rows(PDO $db, string $kind, int $processNo = 0): array
         $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
         foreach ($rows as &$r) {
             $r['owner_label'] = ss_owner_label($db, (int)$r['owner_dept_id'], (string)($r['owner'] ?? ''));
+            // 檢具顯示文字一律即時由主檔查（鐵律4；改名不會失聯）
+            $t = qc_tool_pick_one($db, (int)($r['tool_id'] ?? 0));
+            $r['tool_label'] = $t ? $t['label'] : (string)($r['tool_no'] ?? '');
+            if ($t) $r['tool_no'] = $t['tool_no'];
         }
         return $rows;
     } catch (Throwable $e) { return []; }
+}
+
+/** 單筆預設值（鎖定判定要以主檔那一筆為準，不採信前端送的樣板） */
+function ss_tpl_one(PDO $db, int $tplId): ?array
+{
+    if ($tplId <= 0) return null;
+    try {
+        $st = $db->prepare("SELECT * FROM ss_item_tpl WHERE tpl_id=?");
+        $st->execute([$tplId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return $r ?: null;
+    } catch (Throwable $e) { return null; }
 }
 
 /** 覆寫一組樣板（整批取代，唯一寫入點） */
@@ -1981,21 +2432,36 @@ function ss_tpl_replace(PDO $db, string $kind, int $processNo, array $rows, int 
         if (trim((string)($r['ctrl_point'] ?? '')) === '' && trim((string)($r['q_char'] ?? '')) === '') continue;
         $seq++;
         $deptId = (int)($r['owner_dept_id'] ?? 0);
+        // 檢具一律存 Tool_id（改名不會失聯）；tool_no 只是顯示快取
+        $toolId = (int)($r['tool_id'] ?? 0);
+        $toolNo = $f('tool_no', $r); $toolTt = (int)($r['tool_type_id'] ?? 0) ?: null;
+        if ($toolId > 0) {
+            $t = qc_tool_pick_one($db, $toolId);
+            if ($t) { $toolNo = $t['tool_no']; $toolTt = $t['type_id'] ?: $toolTt; } else { $toolId = 0; }
+        }
         $db->prepare("INSERT INTO ss_item_tpl (tpl_kind, process_no, seq, ctrl_point, q_char, up_limit, lo_limit,
-                          owner_dept_id, owner, method, tool_type_id, tool_no, freq, note, is_active, modified_at, modified_by)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,NOW(),?)")
+                          owner_dept_id, owner, method, tool_type_id, tool_id, tool_no, freq, note,
+                          lock_ctrl, lock_q, is_active, modified_at, modified_by)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,NOW(),?)")
            ->execute([$kind, $kind === 'proc' ? $processNo : null, $seq,
                       $f('ctrl_point', $r), $f('q_char', $r), $f('up_limit', $r), $f('lo_limit', $r),
                       $deptId ?: null, $deptId > 0 ? ss_owner_label($db, $deptId) : $f('owner', $r),
-                      $f('method', $r), (int)($r['tool_type_id'] ?? 0) ?: null, $f('tool_no', $r),
-                      $f('freq', $r), $f('note', $r), $uid]);
+                      $f('method', $r), $toolTt, $toolId ?: null, $toolNo,
+                      $f('freq', $r), $f('note', $r),
+                      (int)($r['lock_ctrl'] ?? 1) === 1 ? 1 : 0, (int)($r['lock_q'] ?? 1) === 1 ? 1 : 0,
+                      $uid]);
     }
 }
 
-/** 逐製程的代入設定（沒設定過＝預設兩個都開） */
+/**
+ * 逐製程的代入設定。
+ * `with_std` 的意思在 2026-09-23 改過：**「這個製程已經有專屬項目時，要不要『另外再』帶全站共用項目」**，
+ * 預設 **0＝不帶**（使用者要求「有製程預設的要優先帶入，沒有才帶入全站共用」）。
+ * 製程一列專屬項目都沒設時，不管這個旗標怎麼設都一律退回全站共用（見 ss_default_items）。
+ */
 function ss_proc_cfg(PDO $db, int $processNo): array
 {
-    $out = ['process_no' => $processNo, 'auto_apply' => 1, 'with_std' => 1];
+    $out = ['process_no' => $processNo, 'auto_apply' => 1, 'with_std' => 0];
     if ($processNo <= 0) return $out;
     try {
         $st = $db->prepare("SELECT auto_apply, with_std FROM ss_proc_cfg WHERE process_no=?");
@@ -2039,19 +2505,37 @@ function ss_tpl_processes(PDO $db): array
 function ss_default_items(PDO $db, int $processNo, ?bool $withStd = null): array
 {
     $cfg  = ss_proc_cfg($db, $processNo);
-    $std  = $withStd === null ? ((int)$cfg['with_std'] === 1) : $withStd;
-    $rows = [];
-    foreach (ss_tpl_rows($db, 'proc', $processNo) as $r) $rows[] = $r;
-    if ($std) foreach (ss_tpl_rows($db, 'std') as $r) $rows[] = $r;
+    $proc = ss_tpl_rows($db, 'proc', $processNo);
+
+    /* 使用者 2026-09-23：「有製程預設的檢驗項目預設值要優先帶入，沒有才帶入全站共用。」
+       原本是「製程專屬 ＋ 全站共用」一律兩份都帶，所以綁齒研時會同時帶進齒研與全站兩套，
+       現場要一列一列刪。改成：**這個製程自己有設，就只帶它自己的**；
+       真的兩套都要的才在該製程的設定勾「另外再帶全站共用項目」（預設不勾）。 */
+    $std = $withStd === null ? ((int)$cfg['with_std'] === 1) : $withStd;
+    $rows = $proc;
+    if (!$proc)      foreach (ss_tpl_rows($db, 'std') as $r) $rows[] = $r;   // 製程沒設 → 退回全站共用
+    elseif ($std)    foreach (ss_tpl_rows($db, 'std') as $r) $rows[] = $r;   // 製程有設、又明講要一起帶
 
     $out = [];
     foreach ($rows as $r) {
+        $ctrl = (string)($r['ctrl_point'] ?? '');
+        $q    = (string)($r['q_char'] ?? '');
+        $lc   = (int)($r['lock_ctrl'] ?? 1) === 1 ? 1 : 0;
+        $lq   = (int)($r['lock_q'] ?? 1) === 1 ? 1 : 0;
         $out[] = [
-            'ctrl_point' => (string)($r['ctrl_point'] ?? ''), 'q_char' => (string)($r['q_char'] ?? ''),
+            'tpl_id'     => (int)($r['tpl_id'] ?? 0),
+            'tpl_kind'   => (string)($r['tpl_kind'] ?? ''),
+            // 鎖住的欄位：ctrl_pat／q_pat 是原始樣板（可能含 {}），ctrl_point／q_char 是先填空的結果
+            'ctrl_pat'   => $lc ? $ctrl : '', 'q_pat' => $lq ? $q : '',
+            'lock_ctrl'  => $lc, 'lock_q' => $lq,
+            'ctrl_point' => $lc && ss_slot_has($ctrl) ? ss_slot_compose($ctrl, []) : $ctrl,
+            'q_char'     => $lq && ss_slot_has($q)    ? ss_slot_compose($q, [])    : $q,
             'up_limit'   => (string)($r['up_limit'] ?? ''),   'lo_limit' => (string)($r['lo_limit'] ?? ''),
             'owner_dept_id' => (int)($r['owner_dept_id'] ?? 0), 'owner' => (string)($r['owner_label'] ?? ''),
             'method'     => (string)($r['method'] ?? ''),     'tool_type_id' => (int)($r['tool_type_id'] ?? 0),
-            'tool_no'    => (string)($r['tool_no'] ?? ''),    'freq' => (string)($r['freq'] ?? ''),
+            'tool_id'    => (int)($r['tool_id'] ?? 0),
+            'tool_no'    => (string)($r['tool_no'] ?? ''),    'tool_label' => (string)($r['tool_label'] ?? ''),
+            'freq'       => (string)($r['freq'] ?? ''),
             'note'       => (string)($r['note'] ?? ''),       'from_tpl' => 1,
         ];
     }
@@ -2215,26 +2699,23 @@ function ss_tool_row(PDO $db, int $toolId): ?array
     } catch (Throwable $e) { return null; }
 }
 
-/** 量具搜尋（編號、種類、製造商、規格都搜得到；停用的不列） */
-function ss_search_tool(PDO $db, string $kw, int $limit = 40): array
+/**
+ * 量具搜尋（編號、種類、製造商、規格都搜得到）。
+ * 在不在用一律交給 qc_tool_active_cond()——**state 1 才是停用**，自己寫條件已經寫反過一次。
+ * $asof 有給時連停用的也列出來（那一天還沒停用的 usable=1），補歷史文件用。
+ */
+function ss_search_tool(PDO $db, string $kw, int $limit = 40, string $asof = ''): array
 {
-    $kw = trim($kw);
-    $w = ["(t.state IS NULL OR t.state<>0)"];
-    $p = [];
-    if ($kw !== '') {
-        $w[] = "(t.Tool_No LIKE ? OR l.QC_Tool LIKE ? OR t.manufacturer LIKE ? OR t.spec_desc LIKE ?)";
-        for ($i = 0; $i < 4; $i++) $p[] = '%' . $kw . '%';
+    $rows = qc_tool_pick_rows($db, ['kw' => $kw, 'limit' => $limit, 'asof' => $asof,
+                                    'with_off' => $asof !== '']);
+    $out = [];
+    foreach ($rows as $r) {
+        $out[] = ['tool_id' => $r['tool_id'], 'tool_no' => $r['tool_no'], 'label' => $r['label'],
+                  'manufacturer' => $r['manufacturer'], 'spec_desc' => $r['spec_desc'],
+                  'tool_type' => $r['type_name'], 'machine' => $r['machine'],
+                  'disabled' => $r['disabled'], 'usable' => $r['usable']];
     }
-    try {
-        $st = $db->prepare("SELECT t.Tool_id AS tool_id, t.Tool_No AS tool_no, t.manufacturer, t.spec_desc,
-                                   l.QC_Tool AS tool_type
-                            FROM qc_tool t
-                            LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id = t.QC_Tool_List_id
-                            WHERE " . implode(' AND ', $w) . "
-                            ORDER BY t.Tool_No LIMIT $limit");
-        $st->execute($p);
-        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
-    } catch (Throwable $e) { return []; }
+    return $out;
 }
 
 /**
