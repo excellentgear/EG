@@ -430,6 +430,72 @@ function td_dev_eval_slot_item_nos(string $slotKey): array {
     return $out;
 }
 
+/**
+ * 反查「這個項次歸哪一個部門簽認欄位負責」——與前端 itemOwnerSlot() 同一套判定。
+ * 只在六個部門欄裡找（決行欄不負責任何項次），查不到回 null。
+ */
+function td_dev_eval_item_owner_slot(int $itemNo): ?string {
+    $t = TD_DEV_EVAL_TEMPLATE[$itemNo] ?? null;
+    if (!$t) return null;
+    foreach (TD_DEV_EVAL_DEPT_SLOTS as $k) if (TD_DEV_EVAL_SLOTS[$k][0] === $t[2]) return $k;
+    return null;
+}
+
+/**
+ * 確認項目及結果的**唯一寫入點**（save／sign／answer_save 三條路共用）。
+ * 原本三個地方各寫一份同樣的 INSERT ... ON DUPLICATE，規則遲早走鐘（鐵律4）。
+ * $map 的 key 是項次、value 是 yes/no/na 或 null（null＝清空該項）；不合法的值一律略過不寫，
+ * 不可以自作主張轉成 null——那會把別人已經填好的答案洗掉。
+ */
+function td_dev_eval_answer_write(PDO $db, int $docId, array $map): int {
+    $st = $db->prepare("INSERT INTO td_dev_eval_answer (doc_id, item_no, result) VALUES (?,?,?)
+                         ON DUPLICATE KEY UPDATE result=VALUES(result)");
+    $n = 0;
+    foreach ($map as $itemNo => $result) {
+        $itemNo = (int)$itemNo;
+        if (!isset(TD_DEV_EVAL_TEMPLATE[$itemNo])) continue;
+        if ($result !== null && !in_array($result, ['yes','no','na'], true)) continue;
+        $st->execute([$docId, $itemNo, $result]);
+        $n++;
+    }
+    return $n;
+}
+
+/**
+ * 自動儲存時逐項判定「這個人現在改不改得動這一項」——後端獨立再判一次，
+ * 不採信前端送什麼（鐵律8）。回傳可寫入的項次對應表，被擋下的列在 $rejected。
+ *
+ * 判定與前端 itemEditable() 完全同一套：
+ *   ・系統管理員（全表填寫模式）＝不受限制，任何狀態任何項次都可寫（補舊資料用）
+ *   ・其餘一律要 status=submitted，且該項次所屬部門欄「本人在簽核池內」「該欄尚未有人簽核」
+ * 已經簽核完成的欄位一律不可再改——那等於從側門繞過已完成的簽認。
+ */
+function td_dev_eval_answer_filter_writable(PDO $db, array $doc, array $answers, int $uid, bool $isSuperAdmin, array &$rejected = []): array {
+    $rejected = [];
+    $out = [];
+    if ($isSuperAdmin) {                       // 全表填寫模式：不受狀態與部門限制
+        foreach ($answers as $no => $v) $out[(int)$no] = $v;
+        return $out;
+    }
+    if (($doc['status'] ?? '') !== 'submitted') { $rejected[] = '表單尚未送出或已結案'; return []; }
+    $poolCache = [];  $signedCache = [];
+    foreach ($answers as $no => $v) {
+        $no = (int)$no;
+        $slot = td_dev_eval_item_owner_slot($no);
+        if (!$slot) { $rejected[] = "第 {$no} 項無對應部門"; continue; }
+        if (!array_key_exists($slot, $signedCache)) $signedCache[$slot] = td_dev_eval_slot_signed($db, (int)$doc['id'], $slot);
+        if ($signedCache[$slot]) { $rejected[] = "第 {$no} 項所屬欄位已簽核，不可再修改"; continue; }
+        if (!array_key_exists($slot, $poolCache)) {
+            $ok = false;
+            foreach (td_dev_eval_slot_pool($db, $slot, (int)$doc['id']) as $p) if ((int)$p['id'] === $uid) { $ok = true; break; }
+            $poolCache[$slot] = $ok;
+        }
+        if (!$poolCache[$slot]) { $rejected[] = "第 {$no} 項不在您可填寫的範圍"; continue; }
+        $out[$no] = $v;
+    }
+    return $out;
+}
+
 /** 通知（比照 review_form 的 rvf_notify 同一套 live_event + push 寫法） */
 function td_dev_eval_notify(PDO $db, int $docId, array $toUids, string $title, string $content, int $fromUid, string $mode = 'sign'): int {
     $toUids = array_values(array_unique(array_map('intval', $toUids)));

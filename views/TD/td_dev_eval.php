@@ -101,6 +101,12 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
         .te-noperm { margin:40px auto; max-width:520px; text-align:center; border:1.5px solid #E8D5B5; border-radius:10px;
             padding:30px; background:#FDF8EF; color:#5b3a1e; }
         .te-sec-title { font-size:14px; font-weight:bold; color:#8A5A2B; border-left:4px solid #F0A24B; padding-left:8px; margin:16px 0 6px; }
+        /* 自動儲存狀態：字級小，但一定要自己給 line-height，否則會繼承標題行高把整列撐高 */
+        .te-autosave { font-size:11px; line-height:14px; font-weight:normal; margin-left:10px; padding:1px 7px;
+                       border-radius:9px; vertical-align:middle; }
+        .te-autosave.saving { color:#8A5A2B; background:#F7E0BD; }
+        .te-autosave.saved  { color:#4A3524; background:#EFE3CC; }
+        .te-autosave.failed { color:#fff;    background:#DD5138; }
         table.te-chk { width:100%; border-collapse:collapse; font-size:12px; margin-top:4px; }
         table.te-chk th, table.te-chk td { border:1px solid #EADFC8; padding:3px 5px; }
         table.te-chk thead th { background:#F7E0BD; color:#5b3a1e; }
@@ -225,7 +231,8 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
         <div style="margin-top:6px;font-size:12px;color:#8a6d45;">表單編號：<b id="fDocNo">存檔後依填表日期自動產生</b>
             ｜ 建立：<span id="fCreatedInfo">—</span></div>
 
-        <div class="te-sec-title">確認項目及結果</div>
+        <div class="te-sec-title">確認項目及結果
+            <span id="chkAutoSave" class="te-autosave" style="display:none;"></span></div>
         <div id="chkDraftTip" class="te-blocked-hint" style="display:none;margin-bottom:4px;"><i class="fa fa-hourglass-half"></i> 尚未送出，送出後才能由各部門在自己的簽核關卡填寫負責的項次。</div>
         <table class="te-chk">
             <thead><tr><th style="width:60px;">區分</th><th style="width:36px;">項次</th><th>評估項目</th>
@@ -430,7 +437,15 @@ var RESULT_OPTS = [['yes','是'],['no','否'],['na','N/A']];
 var STATUS_LABELS = {draft:'草稿', submitted:'簽核中', closed:'已結案'};
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
-function closeMask(id){ document.getElementById(id).style.display='none'; }
+function closeMask(id){
+    // 關閉填寫跳窗前，把還在防抖佇列裡的確認項目立刻送出去——不補這一下，
+    // 「點完最後一項馬上按取消」那 600ms 內的改動就永遠不見了（自動儲存最常被抱怨的漏洞）
+    if (id === 'editMask' && typeof AUTOSAVE_TIMER !== 'undefined') {
+        clearTimeout(AUTOSAVE_TIMER);
+        if (Object.keys(AUTOSAVE_PENDING).length) flushAnswerAutoSave();
+    }
+    document.getElementById(id).style.display='none';
+}
 function openMask(id){ document.getElementById(id).style.display='block'; }
 function fmtDate(s){ return (window.egFmtDate ? egFmtDate(s) : (s||'')); }
 function stampHtml(name, date, isDeputy){
@@ -574,12 +589,60 @@ function collectAnswers(){
     });
     return out;
 }
+/* ---------- 確認項目及結果：每改一項就自動儲存（2026-09-23 使用者要求） ----------
+   為什麼要做：原本 32 項只存在前端記憶體，非得按「我要簽核」或表頭「存檔」才寫 DB，
+   所以填完一整排卻還沒簽核就關掉跳窗 → 打的全部不見。
+   ・防抖 600ms：連點好幾項只送一次，不要一項一個請求。
+   ・只送「這次真的改動過的項次」，不整張表覆蓋——別人同時在填別的部門項次時才不會被洗掉。
+   ・後端會自己再判一次權限（鐵律8），這裡送不該送的也寫不進去。
+   ・刻意不碰簽核與決行：自動儲存只是別讓人打的字消失，不是替他把流程往前推。 */
+var AUTOSAVE_PENDING = {}, AUTOSAVE_TIMER = null, AUTOSAVE_INFLIGHT = false;
+function autoSaveBadge(cls, text){
+    var $b = $('#chkAutoSave');
+    if (!cls){ $b.hide(); return; }
+    $b.attr('class', 'te-autosave ' + cls).text(text).show();
+}
+function flushAnswerAutoSave(){
+    if (AUTOSAVE_INFLIGHT) { AUTOSAVE_TIMER = setTimeout(flushAnswerAutoSave, 300); return; }  // 上一發還沒回來，等它
+    var payload = AUTOSAVE_PENDING; AUTOSAVE_PENDING = {};
+    if (!CUR_ID || !Object.keys(payload).length) return;
+    AUTOSAVE_INFLIGHT = true;
+    autoSaveBadge('saving', '儲存中…');
+    $.post(API, {action:'answer_save', doc_id:CUR_ID, answers:JSON.stringify(payload)}, function(res){
+        AUTOSAVE_INFLIGHT = false;
+        if (!res || !res.success){
+            // 失敗一律把這批放回待送佇列，下次改動時連同補送；絕不可安靜吞掉讓人以為已經存好
+            Object.keys(payload).forEach(function(k){ if (!(k in AUTOSAVE_PENDING)) AUTOSAVE_PENDING[k] = payload[k]; });
+            autoSaveBadge('failed', '未儲存：' + ((res && res.message) || '連線失敗'));
+            if (res && res.reload) setTimeout(function(){ openEdit(CUR_ID); }, 1200);   // 點開即刷新鐵則
+            return;
+        }
+        autoSaveBadge('saved', '已自動儲存 ' + nowHm());
+        if (res.skipped && res.skipped.length) autoSaveBadge('failed', '部分未儲存：' + res.skipped[0]);
+    }, 'json').fail(function(){
+        AUTOSAVE_INFLIGHT = false;
+        Object.keys(payload).forEach(function(k){ if (!(k in AUTOSAVE_PENDING)) AUTOSAVE_PENDING[k] = payload[k]; });
+        autoSaveBadge('failed', '未儲存：連線失敗');
+    });
+}
+function nowHm(){
+    var d = new Date(), p = function(n){ return (n<10?'0':'')+n; };
+    return p(d.getHours())+':'+p(d.getMinutes());
+}
+function queueAnswerAutoSave(no, val){
+    AUTOSAVE_PENDING[no] = val;
+    autoSaveBadge('saving', '儲存中…');
+    clearTimeout(AUTOSAVE_TIMER);
+    AUTOSAVE_TIMER = setTimeout(flushAnswerAutoSave, 600);
+}
+
 /* 填項次當下即時解鎖對應部門的意見/簽核區，不必等重新整理（推導欄位鐵則：來源一改就重算）；
    重繪簽核表格前先保留使用者正在打的意見草稿，避免因為改動其他項次而被清空 */
 $(document).on('change', '#chkBody input[type=radio]', function(){
     var no = $(this).closest('tr').data('item-no');
     CUR_ANSWERS[no] = $(this).val();
     if (!CUR_ID) return;
+    queueAnswerAutoSave(no, $(this).val());
     var draftNotes = {};
     $('textarea[data-slot-note]').each(function(){ draftNotes[$(this).data('slot-note')] = $(this).val(); });
     renderSlots(CUR_SLOTS);
@@ -675,6 +738,7 @@ function applyStatusUI(){
     $('#btnAdminAutoSignAll').prop('disabled', !CUR_ID);
 }
 function resetEditForm(){
+    clearTimeout(AUTOSAVE_TIMER); AUTOSAVE_PENDING = {}; autoSaveBadge('');   // 換一筆就不要把上一筆的待送佇列帶過去
     CUR_ID = 0; CUR_STATUS = 'draft'; CUR_SLOTS = {}; FULL_EDIT_MODE = false;
     $('#fCustomerName').val(''); $('#fPartNo').val(''); $('#fPartDId').val('0');
     $('#fProductName').val(DEFAULT_PRODUCT_NAME || ''); $('#fEstQty').val(''); $('#fFillDate').val(''); $('#fSampleTime').val('');

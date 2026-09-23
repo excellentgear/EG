@@ -191,12 +191,15 @@ case 'save':
         // 確認項目及結果只能透過「送出後在自己部門的簽核關卡」(sign動作) 或系統管理員的全表填寫模式來填，
         // 不論表單處於什麼狀態，一般使用者一律不可經由 save 動作寫入(即使是草稿階段)——各使用者只能點選/回覆
         // 自己能簽核的範圍，跟評估表登錄/管理員這種頁面操作角色無關，此處後端同步前端 itemEditable() 的收斂
-        if ($perms['isAdmin']) foreach (TD_DEV_EVAL_TEMPLATE as $itemNo => $tpl) {
-            $result = $answersRaw[$itemNo] ?? $answersRaw[(string)$itemNo] ?? null;
-            if (!in_array($result, ['yes','no','na'], true)) $result = null;
-            $st = $db->prepare("INSERT INTO td_dev_eval_answer (doc_id, item_no, result) VALUES (?,?,?)
-                                 ON DUPLICATE KEY UPDATE result=VALUES(result)");
-            $st->execute([$id, $itemNo, $result]);
+        if ($perms['isAdmin']) {
+            // 管理員整批存檔：沒送到的項次一律寫成 null（＝清空），這是「整張表以送來的為準」的語意，
+            // 與 answer_save 的逐項更新不同，所以這裡要自己先補齊 null 再交給唯一寫入點
+            $full = [];
+            foreach (TD_DEV_EVAL_TEMPLATE as $itemNo => $tpl) {
+                $result = $answersRaw[$itemNo] ?? $answersRaw[(string)$itemNo] ?? null;
+                $full[$itemNo] = in_array($result, ['yes','no','na'], true) ? $result : null;
+            }
+            td_dev_eval_answer_write($db, $id, $full);
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'儲存失敗：'.$e->getMessage()]); }
@@ -270,13 +273,13 @@ case 'sign':
     $db->beginTransaction();
     try {
         if (in_array($slotKey, TD_DEV_EVAL_DEPT_SLOTS, true)) {
+            $mineMap = [];
             foreach (td_dev_eval_slot_item_nos($slotKey) as $itemNo) {
                 $result = $answersRaw[$itemNo] ?? $answersRaw[(string)$itemNo] ?? null;
                 if (!in_array($result, ['yes','no','na'], true)) continue; // 已在上方驗證過DB已有值，這裡只是不覆蓋成空值
-                $st = $db->prepare("INSERT INTO td_dev_eval_answer (doc_id, item_no, result) VALUES (?,?,?)
-                                     ON DUPLICATE KEY UPDATE result=VALUES(result)");
-                $st->execute([$docId, $itemNo, $result]);
+                $mineMap[$itemNo] = $result;
             }
+            td_dev_eval_answer_write($db, $docId, $mineMap);
         }
         if ($slotKey === 'prod_decision' || $slotKey === 'gm') {
             // 總經理決行是最終決策：即使跟生產課選的一樣也重寫一次，若不同則以總經理這次選的為準(覆蓋)
@@ -295,6 +298,36 @@ case 'sign':
     } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'簽核失敗：'.$e->getMessage()]); }
     td_dev_eval_advance_after_sign($db, $docId, $slotKey, $uid, $uname);
     jout(['success'=>true]);
+
+/* ── 確認項目及結果：改一項就存一項（2026-09-23 使用者要求「每次變動都要自動儲存」） ──
+   原本 32 項點選只留在前端記憶體，要按「我要簽核」或表頭「存檔」才真的寫進 DB，所以各部門點完一整排
+   項次、還沒按簽核就關掉跳窗＝全部不見。這裡只負責寫「確認結果」這一件事，**不碰簽核、不碰決行、
+   不碰表頭**——自動儲存的本意是別讓人打的字消失，不是替他把流程往前推。
+   權限一律由後端 td_dev_eval_answer_filter_writable() 重新判一次，不採信前端送來的範圍（鐵律8）。 */
+case 'answer_save':
+    needView($perms);
+    $docId = (int)($_POST['doc_id'] ?? 0);
+    $answersRaw = json_decode((string)($_POST['answers'] ?? '{}'), true);
+    if (!is_array($answersRaw)) $answersRaw = [];
+    if (!$docId) jout(['success'=>false,'message'=>'請先儲存後再填寫確認項目']);
+
+    $st = $db->prepare("SELECT id, status FROM td_dev_eval WHERE id=? AND is_deleted=0");
+    $st->execute([$docId]);
+    $doc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$doc) jout(['success'=>false,'message'=>'找不到該筆或已刪除']);
+
+    $rejected = [];
+    $writable = td_dev_eval_answer_filter_writable($db, $doc, $answersRaw, $uid, !empty($perms['isAdmin']), $rejected);
+    if (!$writable) {
+        // 一項都寫不進去才算失敗，要講清楚原因（點開即刷新鐵則：多半是別人已經簽走了這一關）
+        jout(['success'=>false,'message'=>$rejected ? implode('；', array_slice(array_unique($rejected), 0, 3)) : '沒有可儲存的項目', 'reload'=>true]);
+    }
+    $db->beginTransaction();
+    try {
+        $n = td_dev_eval_answer_write($db, $docId, $writable);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'自動儲存失敗：'.$e->getMessage()]); }
+    jout(['success'=>true, 'saved'=>$n, 'skipped'=>array_values(array_unique($rejected))]);
 
 // ── 超級管理員：32項快速設定 + 全部自動簽核(指定日期)，補舊資料用，不受送出/簽核狀態限制 ──
 case 'admin_auto_sign_all':
