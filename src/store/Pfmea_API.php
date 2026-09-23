@@ -691,11 +691,30 @@ case 'delete_header':
 
 // 更改建立人（僅管理員；補歷史紀錄或建檔者填錯時用）。
 // asof_date 有帶就依該日期回推當時在職者（含已離職者），沒帶則列現況在職者。
+// 一律「逐職務」列出（eg_people_posts_asof/eg_people_posts）：兼任者的主職務與兼任職務各一列，
+// 不可只挑「職級最高」那一筆——否則主職是一般職員、兼任組長的人只看得到「組長」那一列，
+// 在自己真正的部門底下反而找不到人（人員列表鐵則⑥，本頁 2026-09-23 曾踩過一次）。
+// 人員清單同時受「建立人可選部門」設定限制（管理員設，空＝不限制）。
 case 'creator_people_list':
     needAdmin($perms);
     $asof = trim((string)($_GET['asof_date'] ?? ''));
-    $rows = ($asof !== '') ? eg_people_list_asof($db, [], $asof) : eg_people_list($db, []);
+    $deptIds = pfmea_creator_dept_scope_expand($db);
+    $opt = $deptIds ? ['dept_ids'=>$deptIds] : [];
+    $rows = ($asof !== '') ? eg_people_posts_asof($db, $opt, $asof) : eg_people_posts($db, $opt);
     jout(['success'=>true,'rows'=>$rows]);
+
+// 「更改建立人」可選部門設定（僅管理員）：複選部門（自動含子部門），空＝不限制
+case 'creator_dept_scope_get':
+    needAdmin($perms);
+    jout(['success'=>true,'depts'=>pfmea_creator_dept_scope_get($db),
+          'rows'=>$db->query("SELECT id,name,parent_id,COALESCE(level,1) AS level FROM department ORDER BY COALESCE(sort_order,999),id")->fetchAll(PDO::FETCH_ASSOC)]);
+
+case 'creator_dept_scope_save':
+    needAdmin($perms);
+    $ids = json_decode((string)($_POST['dept_ids'] ?? '[]'), true);
+    if (!is_array($ids)) $ids = [];
+    pfmea_creator_dept_scope_save($db, array_map('intval', $ids), $uid);
+    jout(['success'=>true,'depts'=>pfmea_creator_dept_scope_get($db)]);
 
 case 'set_created_by':
     needAdmin($perms);

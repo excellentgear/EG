@@ -461,6 +461,46 @@ function pfmea_dept_defaults_save(PDO $db, array $depts, int $uid): void {
     }
 }
 
+/** 「更改建立人」可挑選的部門範圍（2026-09-23使用者要求：避免整份人員清單亂選，管理員可設限定
+ *  哪幾個部門，複選、且各自含底下子部門）。存的是管理員勾選的那幾個部門 id（不含展開的子孫），
+ *  展開一律即時算（eg_dept_subtree_ids，見 pfmea_creator_dept_scope_expand），部門異動後才不會過期。
+ *  空陣列＝不限制（列全公司），是預設值。 */
+function pfmea_creator_dept_scope_get(PDO $db): array {
+    $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='PFMEA' AND param_key='creator_dept_scope' LIMIT 1");
+    $st->execute();
+    $v = $st->fetchColumn();
+    if (!$v) return [];
+    $arr = json_decode((string)$v, true);
+    return is_array($arr) ? array_values(array_unique(array_map('intval', $arr))) : [];
+}
+
+function pfmea_creator_dept_scope_save(PDO $db, array $deptIds, int $uid): void {
+    // 只收真的存在的部門 id，避免存進一個已刪除/亂打的值卡在設定裡看不出原因
+    $valid = array_map('intval', $db->query("SELECT id FROM department")->fetchAll(PDO::FETCH_COLUMN));
+    $clean = array_values(array_intersect($valid, array_map('intval', $deptIds)));
+    $json = json_encode($clean, JSON_UNESCAPED_UNICODE);
+    $st = $db->prepare("SELECT id FROM system_parameters WHERE param_group='PFMEA' AND param_key='creator_dept_scope' LIMIT 1");
+    $st->execute();
+    $id = $st->fetchColumn();
+    if ($id) {
+        $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")->execute([$json, $uid, $id]);
+    } else {
+        $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by)
+                      VALUES ('PFMEA','creator_dept_scope',?,'更改建立人時人員清單限定的部門(JSON id陣列，含子部門，空=不限制)',?)")->execute([$json, $uid]);
+    }
+}
+
+/** 展開設定值成含子部門的完整 id 集合（空＝不限制，呼叫端看到空陣列就不要加部門篩選）。
+ *  需要 org_role_lib.php 的 eg_dept_subtree_ids()（Pfmea_API.php 已 include）。 */
+function pfmea_creator_dept_scope_expand(PDO $db): array {
+    $ids = pfmea_creator_dept_scope_get($db);
+    if (!$ids) return [];
+    if (!function_exists('eg_dept_subtree_ids')) return $ids;
+    $out = [];
+    foreach ($ids as $d) $out = array_merge($out, eg_dept_subtree_ids($db, $d));
+    return array_values(array_unique(array_map('intval', $out)));
+}
+
 /** 新增一筆修訂履歷（新增文件/修改文件），rev_no 自動接續 */
 /* $revDate（2026-08-18 使用者要求）：列印修訂履歷第一列「新增文件」的日期要等於這份分析表的
    業務日期，不是它被建進系統那天；後續「修改文件」維持原本邏輯用當天日期，不受影響。 */

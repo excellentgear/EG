@@ -247,6 +247,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
             <button class="btn-warm" id="btnAdd" style="<?= $perms['canEdit']?'':'display:none;' ?>"><i class="fa fa-plus"></i> 新增</button>
             <button id="btnSuggest" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="從已建立產品開發評估表(2-TD-02-01)、但還沒建立PFMEA的料號自動列出建議清單"><i class="fa fa-magic"></i> 建議建立清單</button>
             <button id="btnAsDoc" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-link"></i> AS文件綁定</button>
+            <button id="btnCreatorDeptScope" style="<?= $perms['canAdmin']?'':'display:none;' ?>" title="限定「更改建立人」名單只列哪幾個部門的人（含子部門），避免全公司名單太長亂選"><i class="fa fa-users"></i> 建立人部門設定</button>
             <button id="btnRefSettings" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-cogs"></i> 參考資料設定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <span class="pf-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
@@ -827,6 +828,20 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
         <button type="button" class="pf-row-btn" onclick="openAsDocPicker()">變更綁定</button>
     </div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('asDocMask')">關閉</button></div>
+</div></div>
+
+<!-- 建立人部門設定（2026-09-23使用者要求：避免「更改建立人」的人員清單太長亂選，管理員可複選部門，
+     自動含底下子部門；不選任何部門＝不限制，列全公司） -->
+<div class="pf-mask" id="creatorDeptMask"><div class="pf-modal">
+    <div class="m-head"><span>建立人部門設定（僅管理員）</span><span class="m-close" onclick="closeMask('creatorDeptMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;">勾選的部門會自動含底下所有子部門；一個都不勾＝不限制，「更改建立人」列出全公司在職人員。</div>
+        <div id="creatorDeptTree" style="max-height:320px;overflow-y:auto;border:1px solid #EADFC8;border-radius:6px;padding:8px 10px;"></div>
+    </div>
+    <div class="m-foot">
+        <button class="pf-row-btn" onclick="saveCreatorDeptScope()">儲存</button>
+        <button class="b-cancel" onclick="closeMask('creatorDeptMask')">關閉</button>
+    </div>
 </div></div>
 
 <!-- 參考資料設定（2026-08-14使用者要求：找不到能個別設定各欄下拉選單/階層的地方）僅管理員 -->
@@ -2056,22 +2071,27 @@ function openEdit(id){
 }
 /* 更改建立人（僅管理員；2026-09-23使用者要求，補歷史紀錄或代他人建檔時建立人填錯要能改）。
    人員清單依業務日期回推當時在職者（沒填業務日期就用建檔日期），補舊資料時當時在職、
-   現已離職的人一樣挑得到（ai-rules/22 第5坑）；姓名一律由後端查 user 表，不採信前端送來的名字。 */
+   現已離職的人一樣挑得到（ai-rules/22 第5坑）；姓名一律由後端查 user 表，不採信前端送來的名字。
+   人員一律「逐職務」列出（後端 eg_people_posts_asof，value 用 post_key=uid:部門id）：
+   兼任者的主職務與兼任職務各一列都要看得到，不可只挑職級最高那一筆（人員列表鐵則⑥，
+   本頁 2026-09-23 剛踩過——選建立人時清單只看得到大家的兼任組長職位，主職務整個不見）。
+   人員清單可另由管理員在「建立人部門設定」限定範圍，避免全公司名單太長亂選。 */
 window.openEditCreator = function(){
     if (!CUR_ID) return;
     var asof = ($('#fBizDate').val() || '').substring(0,10);
     $.getJSON(API, {action:'creator_people_list', asof_date: asof}, function(res){
         if (!res.success){ alert(res.message||'載入人員清單失敗'); return; }
         var curId = $('#fCreatedById').val();
-        var h = '<option value="">（請選擇）</option>', found = false;
-        (res.rows||[]).forEach(function(p){ if (String(p.id)===String(curId)) found = true; });
-        if (curId && curId!=='0' && !found) {
-            h += '<option value="'+curId+'" selected>'+esc($('#fCreatedInfo').text().split(' ')[0]||('#'+curId))+'（已離職，不在此清單）</option>';
-        }
+        var h = '<option value="">（請選擇）</option>', foundId = null;
         (res.rows||[]).forEach(function(p){
-            var label = (p.dept_name?p.dept_name+'　':'') + (p.position_name?p.position_name+'　':'') + p.user_cname;
-            h += '<option value="'+p.id+'"'+(String(curId)===String(p.id)?' selected':'')+'>'+esc(label)+'</option>';
+            if (foundId===null && String(p.id)===String(curId)) foundId = p.post_key;
+            h += '<option value="'+esc(p.post_key)+'"'+(foundId===p.post_key?' selected':'')+'>'+esc(p.display)+'</option>';
         });
+        if (curId && curId!=='0' && foundId===null) {
+            // 值直接用純 uid（不含冒號）：applyEditCreator 用 split(':')[0] 取 uid，
+            // 純數字字串 split 後仍是原字串本身，跟正常的 post_key 走同一條路不必特別處理
+            h = '<option value="'+curId+'" selected>'+esc($('#fCreatedInfo').text().split(' ')[0]||('#'+curId))+'（不在目前可選清單，設定部門或人員異動所致）</option>' + h;
+        }
         $('#fCreatorSel').html(h);
         var selEl = $('#fCreatorSel')[0];
         if (selEl && typeof selEl.egFilterResnap === 'function') selEl.egFilterResnap();
@@ -2082,8 +2102,9 @@ window.cancelEditCreator = function(){
     $('#editCreatorBox').hide(); $('#btnEditCreator').show();
 };
 window.applyEditCreator = function(){
-    var newId = $('#fCreatorSel').val();
-    if (!newId){ alert('請先選擇人員'); return; }
+    var postKey = $('#fCreatorSel').val();
+    if (!postKey){ alert('請先選擇人員'); return; }
+    var newId = postKey.split(':')[0];   // post_key＝uid:部門id，送後端只需要 uid
     $.post(API, {action:'set_created_by', id:CUR_ID, created_by:newId}, function(res){
         if (!res.success){ alert(res.message||'更改失敗'); return; }
         $('#fCreatedById').val(res.created_by);
@@ -2553,6 +2574,42 @@ function viewDoc(id){
     });
 }
 window.openViewDrawing = function(){ if (VIEW_PART_NO || VIEW_PART_PK) EGPartPicker.openViewer(VIEW_PART_NO, VIEWER_URL, VIEW_PART_PK); };
+
+/* ---------- 建立人部門設定（僅管理員） ---------- */
+$('#btnCreatorDeptScope').on('click', function(){
+    $.getJSON(API, {action:'creator_dept_scope_get'}, function(res){
+        if (!res.success){ alert(res.message||'載入失敗'); return; }
+        var byId = {}; (res.rows||[]).forEach(function(d){ byId[d.id] = d; });
+        var children = {};
+        (res.rows||[]).forEach(function(d){
+            var pid = d.parent_id || 0;
+            (children[pid] = children[pid]||[]).push(d);
+        });
+        var checked = {}; (res.depts||[]).forEach(function(id){ checked[id] = 1; });
+        function renderLevel(pid, depth){
+            var list = children[pid] || [];
+            var h = '';
+            list.forEach(function(d){
+                h += '<label style="display:block;font-weight:normal;padding:2px 0 2px '+(depth*18)+'px;">'
+                   + '<input type="checkbox" class="creator-dept-ck" value="'+d.id+'"'+(checked[d.id]?' checked':'')+'> '
+                   + esc(d.name) + '</label>';
+                h += renderLevel(d.id, depth+1);
+            });
+            return h;
+        }
+        $('#creatorDeptTree').html(renderLevel(0, 0) || '<span style="color:#8a6d45;">尚無部門資料</span>');
+        openMask('creatorDeptMask');
+    });
+});
+window.saveCreatorDeptScope = function(){
+    var ids = $('.creator-dept-ck:checked').map(function(){ return +$(this).val(); }).get();
+    $.post(API, {action:'creator_dept_scope_save', dept_ids:JSON.stringify(ids)}, function(res){
+        if (!res.success){ alert(res.message||'儲存失敗'); return; }
+        alert(ids.length ? ('已儲存，「更改建立人」名單將限定這 '+ids.length+' 個部門（含子部門）。')
+                          : '已儲存，「更改建立人」名單不再限制部門（列全公司在職人員）。');
+        closeMask('creatorDeptMask');
+    }, 'json');
+};
 
 /* ---------- AS 文件綁定 ---------- */
 function renderAsDocLabel(){
