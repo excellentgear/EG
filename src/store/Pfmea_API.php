@@ -23,6 +23,9 @@ include_once $document_root . '/EGsystem/src/common/type_id_ctrl_lib.php';
 include_once $document_root . '/EGsystem/src/common/td_dev_eval_lib.php';
 // td_dev_eval_suggest_part_reference()：業務日期建議(BOM/報工/訂單最早日期)沿用建議建立清單同一支查詢，不重寫
 include_once $document_root . '/EGsystem/src/common/td_dev_eval_suggest_lib.php';
+// 更改建立人（管理員）用：eg_people_list_asof() 依業務日期回推當時在職者，補歷史紀錄時
+// 當時在職、現已離職的人一樣挑得到（ai-rules/22 第5坑）
+include_once $document_root . '/EGsystem/src/common/people_lib.php';
 
 if (!isset($_SESSION['userName'])) {
     http_response_code(403);
@@ -685,6 +688,30 @@ case 'delete_header':
     if (!$id) jout(['success'=>false,'message'=>'缺少id']);
     $db->prepare("UPDATE pfmea_doc SET is_deleted=1 WHERE id=?")->execute([$id]);
     jout(['success'=>true]);
+
+// 更改建立人（僅管理員；補歷史紀錄或建檔者填錯時用）。
+// asof_date 有帶就依該日期回推當時在職者（含已離職者），沒帶則列現況在職者。
+case 'creator_people_list':
+    needAdmin($perms);
+    $asof = trim((string)($_GET['asof_date'] ?? ''));
+    $rows = ($asof !== '') ? eg_people_list_asof($db, [], $asof) : eg_people_list($db, []);
+    jout(['success'=>true,'rows'=>$rows]);
+
+case 'set_created_by':
+    needAdmin($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    $newUid = (int)($_POST['created_by'] ?? 0);
+    if (!$id || !$newUid) jout(['success'=>false,'message'=>'缺少必要參數']);
+    $st = $db->prepare("SELECT 1 FROM pfmea_doc WHERE id=? AND is_deleted=0");
+    $st->execute([$id]);
+    if (!$st->fetchColumn()) jout(['success'=>false,'message'=>'找不到該筆或已刪除']);
+    // 姓名一律由 user 表現查，不採信前端送來的名字（鐵律：只擋前端＝存起來的資料可被冒充）
+    $st = $db->prepare("SELECT user_cname FROM `user` WHERE id=?");
+    $st->execute([$newUid]);
+    $nm = (string)($st->fetchColumn() ?: '');
+    if ($nm === '') jout(['success'=>false,'message'=>'選擇的人員不存在']);
+    $db->prepare("UPDATE pfmea_doc SET created_by=?, created_by_name=? WHERE id=?")->execute([$newUid, $nm, $id]);
+    jout(['success'=>true,'created_by'=>$newUid,'created_by_name'=>$nm]);
 
 // ── AS 文件編號綁定（本頁自身模板）────────────────────────────────
 case 'asdoc_list':

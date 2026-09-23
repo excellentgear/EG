@@ -547,7 +547,15 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         </div>
 
         <div style="margin-top:6px;font-size:12px;color:#8a6d45;">表單編號：<b id="fDocNo">存檔後依業務日期自動產生</b>
-            ｜ 建立：<span id="fCreatedInfo">—</span></div>
+            ｜ 建立：<span id="fCreatedInfo">—</span>
+            <span id="btnEditCreator" class="pf-op" title="更改建立人（管理員）" style="display:none;margin-left:4px;" onclick="openEditCreator()"><i class="fa fa-pencil"></i></span>
+            <span id="editCreatorBox" style="display:none;margin-left:6px;">
+                <select id="fCreatorSel" style="width:220px;border:1px solid #D8BE93;border-radius:4px;padding:3px 6px;font-size:12px;" data-eg-filter="輸入姓名篩選…"></select>
+                <button type="button" class="pf-row-btn" onclick="applyEditCreator()">套用</button>
+                <button type="button" class="pf-row-btn" onclick="cancelEditCreator()">取消</button>
+            </span>
+        </div>
+        <input type="hidden" id="fCreatedById" value="0">
 
         <div class="pf-sec-title pf-collapsible" onclick="openRatingInfo()">
             <i class="fa fa-question-circle"></i> 評級對照表（固定參考，不隨本表個別修改；點擊標題查看完整說明文字）
@@ -1942,6 +1950,7 @@ function resetEditForm(){
         if (res.success && res.depts && res.depts.length && CUR_ID === 0) $('#fDeptChecks').html(deptChecksHtml(res.depts));
     });
     $('#fDocNo').text('存檔後依業務日期自動產生'); $('#fCreatedInfo').text('—');
+    $('#fCreatedById').val('0'); $('#btnEditCreator').hide(); $('#editCreatorBox').hide();
     renderItems([]);
 }
 /* 綁定料號後共用動作：開圖按鈕/訂單製程履歷側欄/齒輪規格自動偵測/建議建立日期快速套用按鈕
@@ -2031,6 +2040,9 @@ function openEdit(id){
         $('#fDeptChecks').html(deptChecksHtml((res.doc.related_depts||'').split(',').filter(Boolean)));
         $('#fDocNo').text(res.doc.doc_no);
         $('#fCreatedInfo').text((res.doc.created_by_name||'')+' '+fmtDate((res.doc.created_at||'').substring(0,10)));
+        $('#fCreatedById').val(res.doc.created_by||0);
+        $('#editCreatorBox').hide();
+        $('#btnEditCreator').toggle(!!CAN_ADMIN);
         renderItems(res.items || []);
         ITEM_ORIG = {};
         (res.items || []).forEach(function(it){
@@ -2042,6 +2054,47 @@ function openEdit(id){
         openMask('editMask');
     });
 }
+/* 更改建立人（僅管理員；2026-09-23使用者要求，補歷史紀錄或代他人建檔時建立人填錯要能改）。
+   人員清單依業務日期回推當時在職者（沒填業務日期就用建檔日期），補舊資料時當時在職、
+   現已離職的人一樣挑得到（ai-rules/22 第5坑）；姓名一律由後端查 user 表，不採信前端送來的名字。 */
+window.openEditCreator = function(){
+    if (!CUR_ID) return;
+    var asof = ($('#fBizDate').val() || '').substring(0,10);
+    $.getJSON(API, {action:'creator_people_list', asof_date: asof}, function(res){
+        if (!res.success){ alert(res.message||'載入人員清單失敗'); return; }
+        var curId = $('#fCreatedById').val();
+        var h = '<option value="">（請選擇）</option>', found = false;
+        (res.rows||[]).forEach(function(p){ if (String(p.id)===String(curId)) found = true; });
+        if (curId && curId!=='0' && !found) {
+            h += '<option value="'+curId+'" selected>'+esc($('#fCreatedInfo').text().split(' ')[0]||('#'+curId))+'（已離職，不在此清單）</option>';
+        }
+        (res.rows||[]).forEach(function(p){
+            var label = (p.dept_name?p.dept_name+'　':'') + (p.position_name?p.position_name+'　':'') + p.user_cname;
+            h += '<option value="'+p.id+'"'+(String(curId)===String(p.id)?' selected':'')+'>'+esc(label)+'</option>';
+        });
+        $('#fCreatorSel').html(h);
+        var selEl = $('#fCreatorSel')[0];
+        if (selEl && typeof selEl.egFilterResnap === 'function') selEl.egFilterResnap();
+        $('#btnEditCreator').hide(); $('#editCreatorBox').show();
+    });
+};
+window.cancelEditCreator = function(){
+    $('#editCreatorBox').hide(); $('#btnEditCreator').show();
+};
+window.applyEditCreator = function(){
+    var newId = $('#fCreatorSel').val();
+    if (!newId){ alert('請先選擇人員'); return; }
+    $.post(API, {action:'set_created_by', id:CUR_ID, created_by:newId}, function(res){
+        if (!res.success){ alert(res.message||'更改失敗'); return; }
+        $('#fCreatedById').val(res.created_by);
+        // 建立時間不變，只有建立人換了；重讀該筆確保日期字樣（含建檔時間）與資料庫一致
+        $.getJSON(API, {action:'get', id:CUR_ID}, function(r2){
+            if (r2.success) $('#fCreatedInfo').text((r2.doc.created_by_name||'')+' '+fmtDate((r2.doc.created_at||'').substring(0,10)));
+        });
+        cancelEditCreator();
+        loadList(true);
+    }, 'json');
+};
 $('#btnAdd').on('click', function(){ openEdit(0); });
 
 EGPartPicker.attach(document.getElementById('fPartNo'), {
