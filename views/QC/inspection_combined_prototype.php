@@ -150,6 +150,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'can_manage_settings' => hasFeature($feats, 'qc_manage_settings'),
                 'can_manage_sampling' => canManageSampling($feats),
                 'is_admin'            => hasFeature($feats, 'all'),
+                'can_backfill'        => hasFeature($feats, 'all') || hasFeature($feats, 'qc_backfill_data'),
                 'current_user'        => $user_id,
             ], JSON_UNESCAPED_UNICODE);
             exit;
@@ -330,6 +331,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 首件/末件：不必走抽樣，直接全檢＝抽驗數強制等於送驗數（後端再驗一次，不採信前端）
             $insp_kind = in_array(($_POST['insp_kind'] ?? 'NORMAL'), ['FIRST','LAST'], true) ? $_POST['insp_kind'] : 'NORMAL';
             if ($insp_kind !== 'NORMAL' && $incoming_qty > 0) $sample_qty = $incoming_qty;
+            // 補資料（管理員）：首次建立就能一併指定檢驗日期/檢驗人員/主管審核，不必存檔後再開一次修改
+            // 「今天」一律問 DB 的 CURDATE()，不用 PHP date()——PHP 是 UTC、MySQL 是本地，混用會讓
+            // 邊界日期的「不可為未來」判定差到 8 小時（本專案已踩過同一個坑好幾次）。
+            $canBackfillS = hasFeature($featsS, 'all') || hasFeature($featsS, 'qc_backfill_data');
+            $todayS = (string)$pdo->query("SELECT CURDATE()")->fetchColumn();
+            [$bfCheckDate, $bfInspector, $bfApprovedBy, $bfApprovedAt] = qc_backfill_extract($pdo, $canBackfillS, $todayS);
             // 改寫料號標準(update_std)屬設定層級 → 需「管理檢驗設定」權限
             if ($update_std && !hasFeature($featsS, 'qc_manage_settings')) {
                 throw new QcPermException('修改檢驗標準需「管理檢驗設定」權限；如僅要記錄本次實測，請取消「同步更新標準」後再存檔');
@@ -415,15 +422,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
 
             // --- 2c. 先寫入檢驗表頭（ng/判定先給預設值，寫完明細再由後端彙總回填）---
+            // check_date 用 COALESCE(?,CURDATE())：一般填寫者沒送補資料日期(綁定值 NULL)時
+            // 行為與改版前完全相同（沿用 DB 的 CURDATE()），只有補資料時才會用指定的日期覆蓋。
             $insForm = $pdo->prepare(
                 "INSERT INTO qc_check_form
                  (bom_ing_fid, d_id, version_id, form_type_id, insp_kind, process_name, batch_no, round_no,
-                  incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, pcs_verdicts, check_date, created_by, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, NOW(), ?, NOW())");
+                  incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, pcs_verdicts, check_date,
+                  inspector_by, approved_by, approved_at, created_by, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, COALESCE(?, CURDATE()), ?, ?, ?, ?, NOW())");
             $insForm->execute([
                 $fid, $d_id, $version_id, (string)$form_type_id, $insp_kind, $process, $batch_no, $round_no,
                 $incoming_qty, $sample_qty, $main_remark,
-                json_encode($pcs, JSON_UNESCAPED_UNICODE), $user_id,
+                json_encode($pcs, JSON_UNESCAPED_UNICODE), $bfCheckDate, $bfInspector, $bfApprovedBy, $bfApprovedAt, $user_id,
             ]);
             $qc_form_id = (int)$pdo->lastInsertId();
 

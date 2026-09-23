@@ -33,6 +33,45 @@ if (!function_exists('qc_suggest_sample_qty')) {
     }
 }
 
+if (!function_exists('qc_backfill_extract')) {
+    /**
+     * 補資料（管理員）：首次建立檢驗單時就能一併指定「檢驗日期／檢驗人員／主管審核人員與日期」，
+     * 不必等存檔完再打開修改一次（使用者明確要求避免做兩次事）。
+     * **全站唯一實作**：save_inspection／save_adhoc／save_ship 三個「首次建立」寫入點共用，
+     * 與既有的 backfill_save（改既有紀錄用）走同一套驗證規則，兩邊不會走鐘。
+     * 沒有權限或前端沒送 bf_check_date（一般填寫者的正常存檔）時，四個回傳值全部是 null，
+     * 呼叫端接原本的預設值（check_date=CURDATE()、inspector_by/approved_by/approved_at=NULL），
+     * 行為與補資料功能上線之前完全相同。
+     * @return array [check_date, inspector_by, approved_by, approved_at]，皆可能為 null
+     */
+    function qc_backfill_extract(PDO $pdo, bool $canBackfill, string $today): array {
+        if (!$canBackfill) return [null, null, null, null];
+        $checkDate = trim($_POST['bf_check_date'] ?? '');
+        if ($checkDate === '') return [null, null, null, null];
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $checkDate)) throw new Exception('補資料：檢驗日期格式錯誤');
+        if ($checkDate > $today) throw new Exception('補資料：檢驗日期不可以是未來日期');
+        $inspectorId = (int)($_POST['bf_inspector_id'] ?? 0);
+        if (!$inspectorId) throw new Exception('補資料：請選擇檢驗人員');
+        require_once __DIR__ . '/people_lib.php';
+        $ids = array_column(eg_people_list_asof($pdo, [], $checkDate), 'id');
+        if (!in_array($inspectorId, $ids, false)) throw new Exception('補資料：檢驗人員在檢驗日期當天不在職，請重新選擇');
+
+        $approvedBy = null; $approvedAt = null;
+        if (($_POST['bf_approved'] ?? '0') === '1') {
+            $approvedAt = trim($_POST['bf_approved_date'] ?? '');
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $approvedAt)) throw new Exception('補資料：主管審核日期格式錯誤');
+            if ($approvedAt > $today) throw new Exception('補資料：主管審核日期不可以是未來日期');
+            if ($approvedAt < $checkDate) throw new Exception('補資料：主管審核日期不可以早於檢驗日期');
+            $approverId = (int)($_POST['bf_approver_id'] ?? 0);
+            if (!$approverId) throw new Exception('補資料：請選擇主管審核人員');
+            $aids = array_column(eg_people_list_asof($pdo, [], $approvedAt), 'id');
+            if (!in_array($approverId, $aids, false)) throw new Exception('補資料：審核人員在審核日期當天不在職，請重新選擇');
+            $approvedBy = $approverId;
+        }
+        return [$checkDate, $inspectorId, $approvedBy, $approvedAt];
+    }
+}
+
 if (!function_exists('qc_item_tolerance_params')) {
     /**
      * 由前端送來的單一項目($it，items[idx])，解出要寫進 qc_inspection_item 的公差欄位組合。

@@ -308,14 +308,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             // 首件/末件：不必走抽樣，直接全檢＝抽驗數強制等於送驗數（後端再驗一次，不採信前端）
             $inspKind = in_array(($_POST['insp_kind'] ?? 'NORMAL'), ['FIRST','LAST'], true) ? $_POST['insp_kind'] : 'NORMAL';
             if ($inspKind !== 'NORMAL' && $incoming > 0) $sample = $incoming;
+            // 補資料（管理員）：首次建立就能一併指定檢驗日期/檢驗人員/主管審核
+            $canBackfillA = $isAdmin || $hasF('qc_backfill_data');
+            $todayA = (string)$pdo->query("SELECT CURDATE()")->fetchColumn();
+            [$bfCheckDate, $bfInspector, $bfApprovedBy, $bfApprovedAt] = qc_backfill_extract($pdo, $canBackfillA, $todayA);
 
             // bom_ing_fid=0 代表「非 BOM 來源」的臨時檢驗單
             $pdo->prepare("INSERT INTO qc_check_form
                  (bom_ing_fid, d_id, version_id, form_type_id, insp_kind, process_name, batch_no, round_no,
-                  incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, pcs_verdicts, check_date, created_by, created_at)
-                 VALUES (0, ?, ?, ?, ?, ?, 1, 1, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, NOW(), ?, NOW())")
+                  incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, pcs_verdicts, check_date,
+                  inspector_by, approved_by, approved_at, created_by, created_at)
+                 VALUES (0, ?, ?, ?, ?, ?, 1, 1, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, COALESCE(?, CURDATE()), ?, ?, ?, ?, NOW())")
                 ->execute([$d_id, $version_id, (string)$form_type_id, $inspKind, $process, $incoming, $sample, $remark,
-                           json_encode($pcs, JSON_UNESCAPED_UNICODE), $uid]);
+                           json_encode($pcs, JSON_UNESCAPED_UNICODE), $bfCheckDate, $bfInspector, $bfApprovedBy, $bfApprovedAt, $uid]);
             $qc_form_id = (int)$pdo->lastInsertId();
 
             // 本張檢驗單使用的量具（整張單綁一次，不綁到個別檢驗項目）
@@ -463,12 +468,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 $itemIds[$idx] = (int)$iid;
             }
 
+            // 補資料（管理員）：首次建立就能一併指定檢驗日期/檢驗人員/主管審核
+            $canBackfillP = $isAdmin || $hasF('qc_backfill_data');
+            $todayP = (string)$pdo->query("SELECT CURDATE()")->fetchColumn();
+            [$bfCheckDate, $bfInspector, $bfApprovedBy, $bfApprovedAt] = qc_backfill_extract($pdo, $canBackfillP, $todayP);
+
             $pdo->prepare("INSERT INTO qc_check_form
                  (bom_ing_fid, d_id, version_id, form_type_id, insp_kind, ship_bom, process_name, batch_no, round_no,
-                  incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, pcs_verdicts, check_date, created_by, created_at)
-                 VALUES (0, ?, ?, ?, 'SHIP', ?, ?, 1, 1, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, NOW(), ?, NOW())")
+                  incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, pcs_verdicts, check_date,
+                  inspector_by, approved_by, approved_at, created_by, created_at)
+                 VALUES (0, ?, ?, ?, 'SHIP', ?, ?, 1, 1, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, COALESCE(?, CURDATE()), ?, ?, ?, ?, NOW())")
                 ->execute([$d_id, $version_id, (string)$form_type_id, $bom, $process, $incoming, $sample, $remark,
-                           json_encode($pcs, JSON_UNESCAPED_UNICODE), $uid]);
+                           json_encode($pcs, JSON_UNESCAPED_UNICODE), $bfCheckDate, $bfInspector, $bfApprovedBy, $bfApprovedAt, $uid]);
             $qc_form_id = (int)$pdo->lastInsertId();
 
             qc_form_tools_save($pdo, $qc_form_id, $_POST['tool_ids'] ?? '[]');
@@ -1373,7 +1384,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <div id="edit-mode-banner" class="alert alert-info" style="display:none;">
                     <i class="fa fa-pencil"></i> <b>修改模式</b>：正在修改歷程 qc_form_id=<span id="edit-form-id"></span>，儲存時需填修改原因，存檔後此筆會自動回鎖。
                     <button class="btn btn-xs btn-default pull-right" id="btn-exit-edit">取消修改，回到新檢驗</button>
-                    <button class="btn btn-xs btn-warm-o pull-right" id="btn-backfill" style="display:none;margin-right:6px;"><i class="fa fa-calendar"></i> 補資料設定</button>
+                </div>
+                <div id="bf-stage-banner" class="alert alert-warning" style="display:none;">
+                    <i class="fa fa-calendar"></i> <b>補資料</b>已設定：<span id="bf-stage-text"></span>（存檔時會一併套用）
+                    <a href="#" id="bf-stage-clear" class="pull-right">清除</a>
                 </div>
 
                 <!-- 批次 / 歷程（預設收合，不佔填寫版面） -->
@@ -1461,6 +1475,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         <span class="stat warn" id="dk-warn" style="display:none;"></span>
         <span class="draft-note" id="draft-status"></span>
         <button class="btn btn-default btn-xs" id="btn-save-draft" title="立刻存一次草稿，不必等自動存檔的間隔"><i class="fa fa-clock-o"></i> 儲存草稿</button>
+        <button class="btn btn-default btn-xs" id="btn-backfill" style="display:none;" title="設定檢驗日期／檢驗人員／主管審核，補歷史紙本用；新建的單也可以先設定，存檔時一併套用"><i class="fa fa-calendar"></i> 補資料設定</button>
         <span style="flex:1 1 auto;"></span>
         <button class="btn btn-default btn-sm" id="btn-dock-extra"><i class="fa fa-sliders"></i> 數量 / 處置備註</button>
         <button class="btn btn-default btn-sm" id="btn-cancel"><i class="fa fa-times"></i> 取消</button>
@@ -1777,7 +1792,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <li><b>唯讀檢閱</b>：只能看，不能填。沒有這個權限連內容都不會顯示。</li>
                 <li><b>管理檢驗設定</b>：量具／幾何公差／通用樣板／檢驗標準。</li>
                 <li><b>抽樣規則管理</b>（主管固定可用）、<b>主管審核</b>相關動作另有各自的功能碼。</li>
-                <li><b>補資料</b>：管理員專用，可在「修改模式」下按<b>「補資料設定」</b>調整某一筆歷史紀錄的<b>檢驗日期／檢驗人員／主管審核人員與日期</b>，用於補登舊的紙本檢驗紀錄；設定過之後列印簽章會改用這裡設的人員與日期，不影響其他沒補過資料的紀錄。</li>
+                <li><b>補資料</b>：管理員專用，底部工具列有<b>「補資料設定」</b>按鈕，可設定<b>檢驗日期／檢驗人員／主管審核人員與日期</b>，用於補登舊的紙本檢驗紀錄。
+                    <b>新建的單也能先設定</b>：還沒存檔前按這顆鈕，設定會先暫存（畫面上會出現黃色提示列），等按「儲存檢驗結果」時才一起寫入，不必先存檔一次再打開修改——這是刻意的設計，避免補資料要做兩次事。
+                    <b>已存檔的紀錄</b>則是「修改模式」下按同一顆鈕，選好之後立刻存檔生效。設定過之後列印簽章會改用這裡設的人員與日期，不影響其他沒補過資料的紀錄。</li>
                 <li>角色設定在「設定 → 權限設定（角色）」，或使用者權限設定頁。</li>
             </ul>
             <div class="tip">找不到某個按鈕多半是<b>權限沒開</b>——設定選單裡的項目會依角色自動隱藏，請洽管理員。</div>
@@ -2670,7 +2687,8 @@ $(function(){
     }
     var state = { sampleN:5, batches:[], curBatch:0, processes:[], curProc:0, demo:false,
                   is_supervisor:false, can_fill:true, canManageSettings:false, canManageSampling:false,
-                  canView:true, editFormId:null, draftFormId:0, inspKind:'NORMAL', canBackfill:false };
+                  canView:true, editFormId:null, draftFormId:0, inspKind:'NORMAL', canBackfill:false,
+                  currentUserId:'', bfStage:null };
     var MODEL = { items:[], pcs:[], tools:[] };   // tools＝本單使用量具（Tool_id 字串陣列）
     var TOOLS = ['卡尺','分厘卡','投影機','三次元','針規','目視'];
     var TOOL_INSTANCES = [];                                  // [{id,no,cat}]
@@ -3843,7 +3861,7 @@ $(function(){
         ctx = { bom_ing_fid:0, bom:SHIP_DATA.bom, ship:true, part_no:ctx.part_no||'', client:SHIP_DATA.client||'',
                 order_qty:SHIP_DATA.total_qty||0, process:'出貨檢驗', d_id:SHIP_DATA.d_id, sample_qty:maxN, adhoc:false };
         state.demo=false; state.sampleN=maxN;
-        state.editFormId=null; state.editMeta=null; state.sampleChanges=[]; state.inspKind='SHIP';
+        state.editFormId=null; state.editMeta=null; state.sampleChanges=[]; state.inspKind='SHIP'; state.bfStage=null;
         state.batches=[{ no:1, status:'WAIT', rounds:[] }]; state.curBatch=0;
         $('#mode-banner').html('<i class="fa fa-truck"></i> <b>出貨檢驗</b>（BOM '+esc(SHIP_DATA.bom)+'）：由各製程檢驗數據自動生成的草稿，數值可再調整，存檔後寫入正式檢驗表。');
         renderCtxBar();
@@ -3852,6 +3870,7 @@ $(function(){
         $('#inp-sample').val(state.sampleN).data('prev', state.sampleN);
         $('#insp-container-1,#insp-container-2').val(''); $('#insp-quantity-1,#insp-quantity-2').val('');
         applyInspKindUI();
+        renderBfStageBanner();
         renderBatches();
         MODEL.tools=[];
         view='GRID'; localStorage.setItem('qc2_view', view);
@@ -3999,7 +4018,10 @@ $(function(){
         state.canManageSettings = !!res.can_manage_settings;
         state.canManageSampling = !!res.can_manage_sampling;
         state.canView = !!res.can_view;
+        state.canBackfill = !!res.can_backfill;
+        state.currentUserId = res.current_user || '';
         applyMenuPerms();
+        refreshBackfillBtn();
         if(!state.canView && state.demo){
             $('#no-view-hint').html('<i class="fa fa-ban"></i> 您沒有檢閱檢驗表的權限，請洽管理員於 設定 → 權限設定 開通「唯讀檢閱」').show();
             $('#step-search').hide();
@@ -4050,8 +4072,10 @@ $(function(){
             state.sampleN = ctx.sample_qty || 5;
             state.processes = [ ctx.process || '檢驗' ];
             state.inspKind = 'NORMAL';
+            state.bfStage = null;
             buildBatchesFromHistory(res.history || []);
             renderCtxBar();
+            renderBfStageBanner();
             $('#main-area').show(); $('#dock').show(); syncDockPad();
             $('#inp-qty').val(ctx.order_qty || 0);
             $('#inp-sample').val(state.sampleN);
@@ -4241,6 +4265,7 @@ $(function(){
                 }).join('')+'</span></span></div>'));
         applyInspKindUI();
         refreshSaveDraftBtn();
+        refreshBackfillBtn();
         if(!ctx.adhoc) loadSiblingProcesses();
     }
     // ---------- 製程切換（同一 BOM 的其他製程，不用回待驗清單重找）----------
@@ -4360,7 +4385,7 @@ $(function(){
         // 自行組出 ctx（不打 load_context，因為沒有 bom_ing_fid）
         ctx = { bom_ing_fid:0, bom:'—（無製令）', part_no:ahPart.part_no, client:'', order_qty:parseInt($('#ah-qty').val())||0,
                 process:type, d_id:ahPart.d_id, sample_qty:sample, adhoc:true };
-        state.demo=false; state.sampleN=sample; state.editFormId=null; state.sampleChanges=[]; state.inspKind='NORMAL';
+        state.demo=false; state.sampleN=sample; state.editFormId=null; state.sampleChanges=[]; state.inspKind='NORMAL'; state.bfStage=null;
         state.batches=[{ no:1, status:'WAIT', rounds:[] }]; state.curBatch=0;
         $('#adhocModal').modal('hide');
         $('#step-search').hide();
@@ -4369,6 +4394,7 @@ $(function(){
         $('#main-area').show(); $('#dock').show(); syncDockPad();
         $('#inp-qty').val(ctx.order_qty); $('#inp-sample').val(sample).data('prev', sample);
         applyInspKindUI();
+        renderBfStageBanner();
         $('#inp-remark').val($('#ah-remark').val());
         $('#chk-save-std').prop('checked', false).closest('label').hide();  // 臨時檢驗不改寫料號標準
         renderBatches();
@@ -4588,7 +4614,7 @@ $(function(){
             $('#no-std-hint').hide();
             $('#edit-form-id').text(qcFormId);
             $('#edit-mode-banner').show();
-            $('#btn-backfill').toggle(!!state.canBackfill);
+            refreshBackfillBtn();
             $('#chk-save-std').prop('checked',false).closest('label').hide();
             $('#btn-save').html('<i class="fa fa-save"></i> 儲存修改');
             $('#btn-redo').hide();
@@ -4612,6 +4638,9 @@ $(function(){
     // =====================================================================
     // 補資料設定（管理員）：檢驗日期／檢驗人員／主管審核人員與日期。
     // 人員候選一律依所選日期回推當時在職者(ai-rules/22)，換日期即時重取候選名單。
+    // 兩種模式：① 修改既有紀錄(state.editFormId 有值) → 立刻打 API 存檔；
+    //          ② 尚未存檔的新單 → 只先暫存在 state.bfStage，等按「儲存檢驗結果」時
+    //            隨主要存檔一起送出，不必先存一次正式紀錄再回頭修改（使用者明確要求避免做兩次事）。
     // =====================================================================
     function bfFillPeople($sel, people, curId){
         $sel.html((people||[]).map(function(p){
@@ -4619,43 +4648,75 @@ $(function(){
         }).join(''));
         if(curId) $sel.val(String(curId));
     }
+    function bfToday(){
+        var d=new Date(), p=function(n){return('0'+n).slice(-2);};
+        return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
+    }
+    function bfLoadPeopleFor($sel, date, curId){
+        if(!date) return;
+        $.post(V2API, { v2action:'backfill_people', date:date }, function(res){
+            if(!res.success) return;
+            bfFillPeople($sel, res.people, curId);
+        }, 'json');
+    }
     $('#btn-backfill').on('click', function(){
-        if(!state.editFormId){ alert('請先開啟一筆歷史紀錄再補資料。'); return; }
-        $.post(V2API, { v2action:'backfill_get', qc_form_id:state.editFormId }, function(res){
-            if(!res.success){ alert('載入失敗：'+res.message); return; }
-            $('#bf-check-date').val(res.check_date||'');
-            bfFillPeople($('#bf-inspector'), res.inspector_people, res.inspector_id);
-            $('#bf-approved').prop('checked', !!res.approved);
-            $('#bf-approved-box').toggle(!!res.approved);
-            $('#bf-approved-date').val(res.approved_date||res.check_date||'');
-            bfFillPeople($('#bf-approver'), res.approver_people, res.approved_id);
+        if(state.editFormId){
+            $('#backfillModal').data('mode','edit');
+            $.post(V2API, { v2action:'backfill_get', qc_form_id:state.editFormId }, function(res){
+                if(!res.success){ alert('載入失敗：'+res.message); return; }
+                $('#bf-check-date').val(res.check_date||'');
+                bfFillPeople($('#bf-inspector'), res.inspector_people, res.inspector_id);
+                $('#bf-approved').prop('checked', !!res.approved);
+                $('#bf-approved-box').toggle(!!res.approved);
+                $('#bf-approved-date').val(res.approved_date||res.check_date||'');
+                bfFillPeople($('#bf-approver'), res.approver_people, res.approved_id);
+                $('#backfillModal').modal('show');
+            }, 'json').fail(function(x){ alert('載入錯誤：'+x.responseText); });
+        } else {
+            // 尚未存檔：用暫存的值(若有)或預設今天／自己，候選名單即時依日期回推
+            $('#backfillModal').data('mode','new');
+            var stage=state.bfStage||{};
+            var checkDate=stage.check_date||bfToday();
+            var apprDate=stage.approved_date||checkDate;
+            $('#bf-check-date').val(checkDate);
+            $('#bf-approved').prop('checked', !!stage.approved);
+            $('#bf-approved-box').toggle(!!stage.approved);
+            $('#bf-approved-date').val(apprDate);
+            bfLoadPeopleFor($('#bf-inspector'), checkDate, stage.inspector_id || state.currentUserId);
+            bfLoadPeopleFor($('#bf-approver'), apprDate, stage.approver_id || '');
             $('#backfillModal').modal('show');
-        }, 'json').fail(function(x){ alert('載入錯誤：'+x.responseText); });
+        }
     });
     $('#bf-approved').on('change', function(){ $('#bf-approved-box').toggle(this.checked); });
     // 換日期即時重取「當時在職」的人員候選（不必整包重新載入）
-    $('#bf-check-date').on('change', function(){
-        var d=$(this).val(); if(!d) return;
-        var curId=$('#bf-inspector').val();
-        $.post(V2API, { v2action:'backfill_people', date:d }, function(res){
-            if(!res.success) return;
-            bfFillPeople($('#bf-inspector'), res.people, curId);
-        }, 'json');
-    });
-    $('#bf-approved-date').on('change', function(){
-        var d=$(this).val(); if(!d) return;
-        var curId=$('#bf-approver').val();
-        $.post(V2API, { v2action:'backfill_people', date:d }, function(res){
-            if(!res.success) return;
-            bfFillPeople($('#bf-approver'), res.people, curId);
-        }, 'json');
-    });
+    $('#bf-check-date').on('change', function(){ bfLoadPeopleFor($('#bf-inspector'), $(this).val(), $('#bf-inspector').val()); });
+    $('#bf-approved-date').on('change', function(){ bfLoadPeopleFor($('#bf-approver'), $(this).val(), $('#bf-approver').val()); });
+    function bfStageLabel(stage){
+        var t=esc(stage.check_date)+'／'+esc(stage.inspector_name||'');
+        if(stage.approved) t+='　主管審核：'+esc(stage.approved_date)+'／'+esc(stage.approver_name||'');
+        return t;
+    }
+    function renderBfStageBanner(){
+        var stage=state.bfStage;
+        $('#bf-stage-banner').toggle(!!stage);
+        if(stage) $('#bf-stage-text').html(bfStageLabel(stage));
+    }
+    $('#bf-stage-clear').on('click', function(e){ e.preventDefault(); state.bfStage=null; renderBfStageBanner(); });
     $('#btn-bf-save').on('click', function(){
         var checkDate=$('#bf-check-date').val(), inspId=$('#bf-inspector').val();
         var approved=$('#bf-approved').is(':checked'), apprId=$('#bf-approver').val(), apprDate=$('#bf-approved-date').val();
         if(!checkDate){ alert('請填寫檢驗日期'); return; }
         if(!inspId){ alert('請選擇檢驗人員'); return; }
         if(approved && (!apprDate || !apprId)){ alert('已勾選主管已審核，請填寫審核日期與審核人員'); return; }
+
+        if($('#backfillModal').data('mode')==='new'){
+            state.bfStage = { check_date:checkDate, inspector_id:inspId, inspector_name:$('#bf-inspector option:selected').text(),
+                               approved:approved, approver_id:(approved?apprId:''), approver_name:(approved?$('#bf-approver option:selected').text():''),
+                               approved_date:(approved?apprDate:'') };
+            renderBfStageBanner();
+            $('#backfillModal').modal('hide');
+            return;
+        }
         var $b=$(this).prop('disabled',true);
         $.post(V2API, { v2action:'backfill_save', csrf:CSRF, qc_form_id:state.editFormId,
             check_date:checkDate, inspector_id:inspId,
@@ -4732,6 +4793,8 @@ $(function(){
     // 手動「儲存草稿」鈕：不必等 2.5 秒自動存檔間隔，立刻存一次；只在草稿功能適用時顯示
     $('#btn-save-draft').on('click', function(){ saveDraftNow(true); });
     function refreshSaveDraftBtn(){ $('#btn-save-draft').toggle(draftEligible()); }
+    // 補資料設定鈕：純看權限，新建/修改模式都可能用得到（不像草稿只有正常製程新建才適用）
+    function refreshBackfillBtn(){ $('#btn-backfill').toggle(!!state.canBackfill); }
     function maybeOfferDraft(draftId){
         if(!draftId || state.editFormId){ $('#draft-banner').remove(); return; }
         state.draftFormId=draftId;
@@ -5259,6 +5322,16 @@ $(function(){
         if(warnCells.length && !confirm('下列實測值與標準值差異過大，可能是誤填：\n\n'+warnCells.join('\n')+
             '\n\n確定這些數值正確、要照這樣存檔嗎？')) return;
 
+        // 補資料（管理員）：新單暫存的檢驗日期/檢驗人員/主管審核，隨這次存檔一起送出；
+        // 只有「尚未存檔的新單」才會有暫存值，修改既有紀錄一律走「補資料設定」自己的即時存檔，不重複套用。
+        function bfPayloadFields(){
+            var stage=state.bfStage;
+            if(!stage || state.editFormId) return {};
+            return { bf_check_date:stage.check_date, bf_inspector_id:stage.inspector_id,
+                     bf_approved:stage.approved?'1':'0', bf_approver_id:(stage.approved?stage.approver_id:''),
+                     bf_approved_date:(stage.approved?stage.approved_date:'') };
+        }
+
         if(state.editFormId){
             var reason=prompt('請填寫修改原因（必填，會記錄於稽核）：','');
             if(reason===null) return;
@@ -5285,14 +5358,15 @@ $(function(){
         // 出貨檢驗（SHIP，不屬於單一製程）：走 v2 後端 save_ship
         if(ctx.ship){
             var $sb=$('#btn-save').prop('disabled',true);
-            $.post(V2API, { v2action:'save_ship', bom:ctx.bom,
+            $.post(V2API, $.extend({ v2action:'save_ship', bom:ctx.bom,
                 incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
                 main_remark:$('#inp-remark').val(), items:JSON.stringify(items),
-                pcs_verdicts:JSON.stringify(collectPcsVerdicts()), tool_ids:JSON.stringify(MODEL.tools||[])
-            }, function(res){
+                pcs_verdicts:JSON.stringify(collectPcsVerdicts()), tool_ids:JSON.stringify(MODEL.tools||[]) }, bfPayloadFields())
+            , function(res){
                 $sb.prop('disabled',false);
                 if(!res.success){ alert('儲存失敗：'+res.message); return; }
                 var s=res.summary;
+                state.bfStage=null; renderBfStageBanner();
                 flushSampleChanges(res.qc_form_id);
                 state.batches[0].rounds.push({ date:'剛剛', status:s.check_result, qc_form_id:res.qc_form_id, round_no:1, ng_qty:s.ng_qty });
                 state.batches[0].status=s.check_result;
@@ -5308,14 +5382,15 @@ $(function(){
         // 臨時檢驗單（無製令/無製程）：走 v2 後端 save_adhoc
         if(ctx.adhoc){
             var $ab=$('#btn-save').prop('disabled',true);
-            $.post(V2API, { v2action:'save_adhoc', d_id:ctx.d_id, process_name:ctx.process,
+            $.post(V2API, $.extend({ v2action:'save_adhoc', d_id:ctx.d_id, process_name:ctx.process,
                 incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
                 main_remark:$('#inp-remark').val(), items:JSON.stringify(items), insp_kind:state.inspKind,
-                pcs_verdicts:JSON.stringify(collectPcsVerdicts()), tool_ids:JSON.stringify(MODEL.tools||[])
-            }, function(res){
+                pcs_verdicts:JSON.stringify(collectPcsVerdicts()), tool_ids:JSON.stringify(MODEL.tools||[]) }, bfPayloadFields())
+            , function(res){
                 $ab.prop('disabled',false);
                 if(!res.success){ alert('儲存失敗：'+res.message); return; }
                 var s=res.summary;
+                state.bfStage=null; renderBfStageBanner();
                 flushSampleChanges(res.qc_form_id);
                 state.batches[0].rounds.push({ date:'剛剛', status:s.check_result, qc_form_id:res.qc_form_id, round_no:1, ng_qty:s.ng_qty });
                 state.batches[0].status=s.check_result;
@@ -5329,18 +5404,19 @@ $(function(){
         }
 
         var b=state.batches[state.curBatch];
-        var payload={ action:'save_inspection', bom_ing_fid:ctx.bom_ing_fid, d_id:ctx.d_id, part_no:ctx.part_no,
+        var payload=$.extend({ action:'save_inspection', bom_ing_fid:ctx.bom_ing_fid, d_id:ctx.d_id, part_no:ctx.part_no,
             process_name:ctx.process, batch_no:b.no, round_no:(b.rounds.length+1),
             incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
             main_remark:$('#inp-remark').val(), update_std:$('#chk-save-std').is(':checked')?'1':'0',
             insp_kind:state.inspKind,
             items:JSON.stringify(items), pcs_verdicts:JSON.stringify(collectPcsVerdicts()),
-            tool_ids:JSON.stringify(MODEL.tools||[]) };
+            tool_ids:JSON.stringify(MODEL.tools||[]) }, bfPayloadFields());
         var $btn=$(asRedo?'#btn-redo':'#btn-save').prop('disabled',true);
         $.post(API, payload, function(res){
             $btn.prop('disabled',false);
             if(!res.success){ alert('儲存失敗：'+res.message); return; }
             var s=res.summary;
+            state.bfStage=null; renderBfStageBanner();
             flushSampleChanges(res.qc_form_id);
             b.rounds.push({ date:'剛剛', status:(asRedo?'NG':s.check_result), qc_form_id:res.qc_form_id,
                             round_no:(b.rounds.length+1), ng_qty:s.ng_qty });
