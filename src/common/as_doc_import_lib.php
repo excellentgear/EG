@@ -34,6 +34,8 @@ define('ADI_WORD_EXT', ['doc', 'docx', 'rtf', 'odt']);
 /** 一頁的內容寬（px）：A4 直式 210mm 扣掉左右各 15mm 邊界＝180mm ≒ 680px。
  *  表格比這個寬就一定會溢出紙張，一律改成 100%。 */
 define('ADI_PAGE_CONTENT_PX', 680);
+/** 繪圖物件要多大才當成「圖」匯入：長寬都達到這個值才算（以下是連接線碎片） */
+define('ADI_DRAW_MIN_PX', 40);
 
 /**
  * 匯入某版次自己掛的 Word 檔。
@@ -123,6 +125,140 @@ function adi_import_file(PDO $db, int $versionId, string $src, string $showName,
     return ['ok' => true, 'msg' => '已匯入', 'report' => $report, 'content_id' => $contentId];
 }
 
+/** 掃出「頂層」的 <table>…</table> 區間（略過巢狀的），回傳 [[起,迄], …] */
+function adi_top_tables(string $html): array
+{
+    $out = [];
+    $len = strlen($html);
+    $i = 0;
+    while ($i < $len) {
+        if (!preg_match('#<table\b[^>]*>#i', $html, $m, PREG_OFFSET_CAPTURE, $i)) break;
+        $start = $m[0][1];
+        $depth = 0;
+        $j = $start;
+        while ($j < $len) {
+            if (!preg_match('#<(/?)table\b[^>]*>#i', $html, $m2, PREG_OFFSET_CAPTURE, $j)) { $j = $len; break; }
+            $depth += ($m2[1][0] === '/') ? -1 : 1;
+            $j = $m2[0][1] + strlen($m2[0][0]);
+            if ($depth === 0) break;
+        }
+        $out[] = [$start, $j];
+        $i = $j;
+    }
+    return $out;
+}
+
+/** 取一張表格「頂層」的每一個 <tr> 內容（不含巢狀表格裡的 tr） */
+function adi_top_rows(string $table): array
+{
+    $inner = preg_replace('#^<table\b[^>]*>#i', '', $table);
+    $inner = preg_replace('#</table>\s*$#i', '', (string)$inner);
+    $rows = [];
+    $depth = 0; $start = null;
+    if (preg_match_all('#<(/?)(table|tr)\b[^>]*>#i', (string)$inner, $ms, PREG_OFFSET_CAPTURE | PREG_SET_ORDER)) {
+        foreach ($ms as $m) {
+            $close = ($m[1][0] === '/');
+            $tag = strtolower($m[2][0]);
+            $pos = $m[0][1]; $end = $pos + strlen($m[0][0]);
+            if ($tag === 'table') { $depth += $close ? -1 : 1; continue; }
+            if ($depth !== 0) continue;                 // 巢狀表格裡的 tr 不算
+            if (!$close) { $start = $end; }
+            elseif ($start !== null) { $rows[] = substr((string)$inner, $start, $pos - $start); $start = null; }
+        }
+    }
+    return $rows;
+}
+
+function adi_plain(string $html): string
+{
+    $t = preg_replace('#<[^>]+>#', '', $html);
+    return preg_replace('/\s|\x{00a0}/u', '', (string)$t) ?: '';
+}
+
+/** 丟掉字串尾端那一串「只有文字的段落」（＝擺在頁框表格外面的頁面標題） */
+function adi_strip_tail_paragraphs(string $s): string
+{
+    // 表格前面常跟著一個還沒關起來的 <center>／<div>（它的結束標籤在表格之後），
+    // 先把這一截收起來，剝完標題再接回去，否則尾端比對永遠對不到段落
+    $tail = '';
+    if (preg_match('#(?:\s*<(?:center|div)\b[^>]*>)+\s*$#i', $s, $t)) {
+        $tail = $t[0];
+        $s = substr($s, 0, strlen($s) - strlen($tail));
+    }
+    for ($i = 0; $i < 12; $i++) {
+        if (!preg_match('#<(p|h[1-6]|center)\b[^>]*>(?:(?!</?(?:p|h[1-6]|center|table)\b).)*</\1>\s*$#is', $s, $m)) break;
+        if (stripos($m[0], '<img') !== false) break;      // 有圖就不是純標題，留著
+        $s = substr($s, 0, strlen($s) - strlen($m[0]));
+    }
+    return $s . $tail;
+}
+
+/**
+ * 拆掉 Word 的頁框表格：頁首列丟掉、內文拆出來，頁與頁之間補上線上版的頁界。
+ * 同時把「文件制修訂紀錄書」那一頁整頁丟掉——系統本來就會自己產生一份。
+ */
+function adi_unwrap_page_tables(string $raw, array &$stat): string
+{
+    $tables = adi_top_tables($raw);
+    if (!$tables) return $raw;
+
+    $out = '';
+    $prev = 0;
+    $pages = 0;
+    foreach ($tables as $rg) {
+        $out .= substr($raw, $prev, $rg[0] - $prev);
+        $prev = $rg[1];
+        $tbl = substr($raw, $rg[0], $rg[1] - $rg[0]);
+        $txt = adi_plain($tbl);
+
+        // 制修訂紀錄書那一頁：系統會自己產生，不要匯入第二份
+        if (mb_strpos($txt, '制修訂紀錄') !== false && mb_strpos($txt, '文件版別') !== false) {
+            $stat['revlog_dropped']++;
+            // 這一頁的標題（公司名／文件制修訂紀錄書）是**擺在表格外面**的段落，
+            // 只丟表格的話那幾行字會黏到下一頁開頭，所以剛收進來的段落一起丟掉
+            $out = adi_strip_tail_paragraphs($out);
+            continue;
+        }
+        // 頁框表格的特徵：頁首那幾列會同時出現文件編號與頁版別
+        if (!(mb_strpos($txt, '文件編號') !== false && mb_strpos($txt, '頁版別') !== false)) {
+            $out .= $tbl;                                // 一般的內容表格，原樣保留
+            continue;
+        }
+        $rows = adi_top_rows($tbl);
+        if (!$rows) { $out .= $tbl; continue; }
+
+        // 由上往下把「頁首列」丟掉：沒有巢狀表格、字數不多、而且是頁首那幾個欄位名
+        $bodyRows = [];
+        $inHeader = true;
+        foreach ($rows as $r) {
+            if ($inHeader) {
+                $rt = adi_plain($r);
+                $isHdr = (stripos($r, '<table') === false) && mb_strlen($rt) <= 80
+                       && preg_match('/文件編號|文件名稱|頁\s*次|頁\s*版\s*別|^\s*$/u', $rt);
+                if ($isHdr) { $stat['hdr_rows_dropped']++; continue; }
+                $inHeader = false;
+            }
+            $bodyRows[] = $r;
+        }
+        // 內文：把剩下那些列的儲存格內容攤平（外框就是這樣消失的）
+        $body = '';
+        foreach ($bodyRows as $r) {
+            if (preg_match_all('#<t[dh]\b[^>]*>(.*?)</t[dh]>#is', $r, $cs)) {
+                foreach ($cs[1] as $cell) $body .= $cell;
+            } else {
+                $body .= $r;
+            }
+        }
+        if (trim(adi_plain($body)) === '' && stripos($body, '<img') === false) { continue; }
+        if ($pages > 0) $out .= '<hr style="page-break-after:always">';
+        $out .= $body;
+        $pages++;
+        $stat['page_frames']++;
+    }
+    $out .= substr($raw, $prev);
+    return $out;
+}
+
 /**
  * HTML 前置整理：把 LibreOffice 的輸出改寫成 doc profile 留得住的形狀，
  * 並把圖片收成資產。**一定要在清洗之前做**，否則 <font> 與 width 屬性會先被脫殼丟掉。
@@ -131,7 +267,8 @@ function adi_transform(PDO $db, string $raw, string $workDir, int $contentId, in
 {
     $stat = ['img_in' => 0, 'img_ok' => 0, 'draw' => 0, 'draw_px' => [], 'img_fail' => 0,
              'tables' => 0, 'boxes' => 0, 'objects' => 0, 'pagebreaks' => 0, 'tbl_shrunk' => 0,
-             'borders_dropped' => 0];
+             'borders_dropped' => 0, 'page_frames' => 0, 'hdr_rows_dropped' => 0,
+             'revlog_dropped' => 0, 'draw_img' => 0, 'foot_dropped' => 0, 'blank_pages' => 0];
 
     // 只取 <body> 內容；<style>/<head> 整段丟掉（清洗器也會擋，但先丟掉省得白做工）
     if (preg_match('#<body[^>]*>(.*)</body>#is', $raw, $m)) $raw = $m[1];
@@ -139,10 +276,20 @@ function adi_transform(PDO $db, string $raw, string $workDir, int $contentId, in
     $raw = (string)preg_replace('#<(meta|link)\b[^>]*>#i', '', $raw);
     $raw = (string)preg_replace('#<!--.*?-->#s', '', $raw);
 
-    $stat['tables']     = preg_match_all('#<table\b#i', $raw);
     $stat['boxes']      = preg_match_all('#border:\s*1px solid#i', $raw);
     $stat['objects']    = preg_match_all('#<(object|embed|svg|applet)\b#i', $raw);
     $stat['pagebreaks'] = preg_match_all('#page-break-before\s*:\s*always#i', $raw);
+
+    /* ①-0 拆掉「Word 的頁框表格」──────────────────────────────────────────
+       實測（2-DC-01）：LibreOffice 把 **Word 的每一頁輸出成一個頂層 <TABLE>**，
+       前幾個 <TR> 是頁首（公司名／文件編號／文件名稱／頁次／頁版別），最後一個 <TR> 才是內文。
+       所以使用者看到的「外框」與「重複的表頭」其實是同一件事＝這張頁框表格。
+       線上版的頁首頁尾與外框由系統自己畫，這裡一律拆掉只留內文，並在每一頁之間補上頁界。
+       （使用者 2026-09-23：自動匯入時自動去除原資料外框、表頭也自動去除） */
+    $raw = adi_unwrap_page_tables($raw, $stat);
+    // 表格張數要在「拆掉頁框之後」才數，否則會把 Word 的頁框表格也算成內容表格
+    // （實測 2-DC-03：拆之前 5 張全是頁框，真正的內容表格 0 張）
+    $stat['tables'] = preg_match_all('#<table\b#i', $raw);
 
     // ① <font face size style> → <span style="font-family:…;font-size:…">
     //    <font> 不在白名單，直接清洗會脫殼＝字型字級全部不見
@@ -230,13 +377,26 @@ function adi_transform(PDO $db, string $raw, string $workDir, int $contentId, in
         $src  = preg_match('/\bsrc="([^"]*)"/i', $at, $s) ? $s[1] : '';
 
         if (stripos($name, 'DrawObject') === 0) {
-            $stat['draw']++;
             $wpx = preg_match('/\bwidth="(\d+)"/i', $at, $w)  ? (int)$w[1] : 0;
             $hpx = preg_match('/\bheight="(\d+)"/i', $at, $h) ? (int)$h[1] : 0;
-            // 只有其中一邊有值是常態（純橫線只寫 height），印成「0x34」看起來像壞掉
-            if ($wpx && $hpx)      $stat['draw_px'][] = $wpx . '×' . $hpx;
-            elseif ($wpx || $hpx)  $stat['draw_px'][] = ($wpx ? '寬' . $wpx : '高' . $hpx);
-            return '';   // 不匯入，改由未轉換清單提醒重畫
+            /* 2026-09-23 使用者要求「無法轉過來的自動變成圖面匯入正確位置」。
+               實測 2-DC-01 的 44 個繪圖物件裡：**6 個是有內容的圖**
+               （文件階層金字塔 522×218、文件清單方塊、審查菱形…）、
+               其餘 38 個是 1px 的連接線碎片。所以改成：
+                 長寬都夠大的**當成圖片匯入、放在原來的位置**；
+                 線段碎片仍然跳過（單獨貼回去只是一條線，拼不回流程圖）。 */
+            if ($wpx >= ADI_DRAW_MIN_PX && $hpx >= ADI_DRAW_MIN_PX) {
+                $stat['draw_img']++;
+                // 交給下面的一般圖片流程處理（把 name 拿掉避免再判成繪圖物件）
+                $at = (string)preg_replace('/\bname="[^"]*"/i', '', $at);
+                $mm[1] = $at;
+            } else {
+                $stat['draw']++;
+                // 只有其中一邊有值是常態（純橫線只寫 height），印成「0x34」看起來像壞掉
+                if ($wpx && $hpx)      $stat['draw_px'][] = $wpx . '×' . $hpx;
+                elseif ($wpx || $hpx)  $stat['draw_px'][] = ($wpx ? '寬' . $wpx : '高' . $hpx);
+                return '';   // 線段碎片不匯入，改由未轉換清單提醒重畫
+            }
         }
         if ($src === '' || preg_match('#^(https?:)?//#i', $src)) { $stat['img_fail']++; return ''; }
 
@@ -257,6 +417,31 @@ function adi_transform(PDO $db, string $raw, string $workDir, int $contentId, in
         return '<img data-asset="' . (int)$r['id'] . '"' . $style . '>';
     }, $raw);
 
+    /* ④ 頁尾字樣與孤零零的文件編號：線上版的頁尾由系統自己印，
+          匯進來只會在每一頁的正文裡多出一行重複的字。 */
+    $raw = (string)preg_replace_callback('#<(p|div)\b[^>]*>(.*?)</\1>#is', function ($mm) use (&$stat) {
+        $t = adi_plain($mm[2]);
+        if ($t === '') return $mm[0];
+        // 只清「整段就是這一行」的情形，段落裡夾雜其他字一律不動
+        if (preg_match('/^\(?本文件不得擅自塗改或影印\)?[0-9A-Za-z\-]*$/u', $t)) {
+            $stat['foot_dropped']++;
+            return '';
+        }
+        return $mm[0];
+    }, $raw);
+
+    /* ⑤ 清掉整頁空白的頁：拆掉頁框與頁首之後，原本只放頁首的那些頁會變成空的，
+          留著就是使用者看到的「刪不掉的空白頁」。 */
+    $parts = preg_split('#<hr[^>]*page-break-after[^>]*>#i', $raw);
+    if (is_array($parts) && count($parts) > 1) {
+        $keep = [];
+        foreach ($parts as $p) {
+            $has = adi_plain($p) !== '' || stripos($p, '<img') !== false || stripos($p, '<table') !== false;
+            if ($has) $keep[] = $p; else $stat['blank_pages']++;
+        }
+        if ($keep) $raw = implode('<hr style="page-break-after:always">', $keep);
+    }
+
     return ['html' => $raw, 'stat' => $stat];
 }
 
@@ -271,6 +456,18 @@ function adi_build_report(array $res, string $showName, float $secs, string $cle
     if ($s['tables'])     $done[] = ['type' => 'table', 'n' => $s['tables'], 'note' => '表格 ' . $s['tables'] . ' 張已轉入（含框線與合併儲存格）'];
     if ($s['img_ok'])     $done[] = ['type' => 'image', 'n' => $s['img_ok'], 'note' => '圖片 ' . $s['img_ok'] . ' 張已轉入'];
     if ($s['boxes'])      $done[] = ['type' => 'box',   'n' => $s['boxes'],  'note' => '帶框線的文字方塊 ' . $s['boxes'] . ' 個的文字已轉入'];
+    if (!empty($s['page_frames'])) $done[] = ['type' => 'box', 'n' => $s['page_frames'],
+        'note' => 'Word 的頁框表格 ' . $s['page_frames'] . ' 頁已拆開：外框與重複的表頭（公司名／文件編號／頁次／頁版別）都沒有匯入，'
+                . '因為線上版的頁首頁尾與外框由系統自己畫，匯進來會變成兩層'];
+    if (!empty($s['revlog_dropped'])) $done[] = ['type' => 'box', 'n' => $s['revlog_dropped'],
+        'note' => '原檔裡的「文件制修訂紀錄書」沒有匯入——系統會依版次履歷自動產生一份，匯進來會有兩份'];
+    if (!empty($s['foot_dropped'])) $done[] = ['type' => 'box', 'n' => $s['foot_dropped'],
+        'note' => '頁尾字樣 ' . $s['foot_dropped'] . ' 處沒有匯入（系統會自己印在每一頁的左下角）'];
+    if (!empty($s['blank_pages'])) $done[] = ['type' => 'pagebreak', 'n' => $s['blank_pages'],
+        'note' => '拆掉頁框之後有 ' . $s['blank_pages'] . ' 頁變成空白（原本只放頁首），已自動移除'];
+    if (!empty($s['draw_img'])) $done[] = ['type' => 'image', 'n' => $s['draw_img'],
+        'note' => 'Word 繪圖物件裡 ' . $s['draw_img'] . ' 個「有內容的圖」已當成圖片匯入原來的位置'
+                . '（例如流程圖的方塊、菱形、金字塔圖）'];
     if (!empty($s['borders_dropped'])) $done[] = ['type' => 'box', 'n' => $s['borders_dropped'],
         'note' => 'Word 版面用的外框線 ' . $s['borders_dropped'] . ' 處沒有匯入（頁框與頁首頁尾由系統自己畫，再匯一份進來會變成兩層框）；表格本身的框線都有保留'];
     if ($s['pagebreaks']) $done[] = ['type' => 'pagebreak', 'n' => $s['pagebreaks'],
@@ -281,7 +478,7 @@ function adi_build_report(array $res, string $showName, float $secs, string $cle
     if ($s['draw']) {
         $sizes = array_slice(array_unique($s['draw_px']), 0, 6);
         $todo[] = ['type' => 'flow', 'n' => $s['draw'], 'level' => 'must',
-            'note' => 'Word 繪圖物件 ' . $s['draw'] . ' 個沒有轉入（流程圖的方框連接線與箭頭'
+            'note' => 'Word 繪圖物件裡有 ' . $s['draw'] . ' 個是「連接線與箭頭」的碎片沒有轉入（'
                     . ($sizes ? '，尺寸如 ' . implode('、', $sizes) : '') . '）。'
                     . '這些在 Word 裡是靠繪圖畫布定位的，單獨拆出來不會組回原來的流程圖，'
                     . '所以請用工具列的「插入流程圖」重畫一次；方框裡的文字大多已經轉進來了，可以照著打。'];

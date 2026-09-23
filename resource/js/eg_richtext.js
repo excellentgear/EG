@@ -345,7 +345,9 @@
     return h + '</table><p><br></p>';
   }
 
-  /** 表格加減列欄。回傳有沒有真的做到事（沒做到＝游標不在表格內） */
+  /** 表格加減列欄。做到了就回傳「游標該落在哪一格」，沒做到回傳 false
+   *  （刪掉的那一格本來就是游標所在的格子，不指定新位置的話選取會整個消失，
+   *    畫面就會跳回文件開頭＝使用者 2026-09-23 回報的「焦點跳動」） */
   function tableOp(body, op) {
     var cell = cellOf(body);
     if (!cell) return false;
@@ -354,13 +356,18 @@
     if (!tbl) return false;
     var idx = Array.prototype.indexOf.call(row.children, cell);
 
+    var keep = cell;                       // 做完之後游標要落在哪一格
     if (op === 'egRowAdd') {
       var nr = d.createElement('tr');
       for (var i = 0; i < row.children.length; i++) nr.appendChild(newCell('td'));
       row.parentNode.insertBefore(nr, row.nextSibling);
+      keep = nr.children[idx] || nr.children[0];     // 游標移到新加的那一列同一欄
     } else if (op === 'egRowDel') {
       // 只剩一列就不給刪整列（整張表都不見了使用者會以為系統壞掉），請他刪整張表
       if (tbl.rows && tbl.rows.length <= 1) return false;
+      var rows = Array.prototype.slice.call(tbl.rows), ri = rows.indexOf(row);
+      var nextRow = rows[ri + 1] || rows[ri - 1];    // 刪完接手的那一列：優先下面那列
+      keep = nextRow ? (nextRow.children[idx] || nextRow.children[0]) : null;
       row.parentNode.removeChild(row);
     } else if (op === 'egColAdd') {
       Array.prototype.slice.call(tbl.rows).forEach(function (r) {
@@ -368,12 +375,26 @@
         var nc = newCell(ref && ref.nodeName === 'TH' ? 'th' : 'td');
         r.insertBefore(nc, ref ? ref.nextSibling : null);
       });
+      keep = row.children[idx + 1] || cell;
     } else if (op === 'egColDel') {
       if (row.children.length <= 1) return false;
       Array.prototype.slice.call(tbl.rows).forEach(function (r) {
         if (r.children[idx]) r.removeChild(r.children[idx]);
       });
+      keep = row.children[idx] || row.children[row.children.length - 1];
     } else return false;
+    return keep || true;
+  }
+
+  /** 把游標放進某一格（並讓那一頁成為目前的編輯區），不捲動畫面 */
+  function caretIntoCell(cell) {
+    if (!cell || !cell.parentNode) return false;
+    var r = d.createRange();
+    r.selectNodeContents(cell);
+    r.collapse(true);
+    var s = w.getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
     return true;
   }
 
@@ -393,7 +414,13 @@
     return null;
   }
   /** 取得選取範圍涵蓋的區塊元素；整段還沒有區塊容器時就地包一個 <div> */
-  function selectedBlocks(body) {
+  /** 選取範圍涵蓋的區塊元素。
+   *  @param {boolean} [createIfNone] 真的要改東西（縮排／行距）時才傳 true。
+   *  ⚠ 這個旗標非常重要：整份文件連一個 div/p 都沒有時，舊版**一律**把整頁內容
+   *    搬進一個新的 <div>——而 refreshState() 只是要「讀」目前的行距也會呼叫它，
+   *    於是「游標一點進表格儲存格，工具列一更新就把整頁重新包一層」，
+   *    節點被搬走游標當然就掉到文件開頭＝使用者 2026-09-23 回報的「刪除表格後焦點亂跳」。 */
+  function selectedBlocks(body, createIfNone) {
     var sel = w.getSelection();
     if (!sel || !sel.rangeCount || !body.contains(sel.anchorNode)) return [];
     var rg = sel.getRangeAt(0);
@@ -411,11 +438,17 @@
       var b = blockOf(rg.startContainer, body);
       if (b) { out.push(b); }
       else {
-        // 整個編輯區還是純文字（沒有任何區塊）→ 包一層 div 才有東西可以縮排
-        var dv = d.createElement('div');
-        while (body.firstChild) dv.appendChild(body.firstChild);
-        body.appendChild(dv);
-        out.push(dv);
+        // 游標在表格的儲存格裡（格子裡常常只有純文字，沒有 div/p）→ 就以那一格為準，
+        // 行距與縮排套在 <td> 上一樣有效，也不必去動整頁的結構
+        var cell = cellOf(body);
+        if (cell) out.push(cell);
+        else if (createIfNone) {
+          // 整個編輯區還是純文字（沒有任何區塊）→ 包一層 div 才有東西可以縮排
+          var dv = d.createElement('div');
+          while (body.firstChild) dv.appendChild(body.firstChild);
+          body.appendChild(dv);
+          out.push(dv);
+        }
       }
     }
     return out;
@@ -450,7 +483,7 @@
   }
 
   function indentBlocks(body, dir) {
-    var blocks = selectedBlocks(body);
+    var blocks = selectedBlocks(body, true);
     blocks.forEach(function (b) {
       var cur = parseFloat((b.style.marginLeft || '').replace('em', '')) || 0;
       var nx  = Math.max(0, Math.min(INDENT_MAX, cur + dir * INDENT_STEP));
@@ -541,7 +574,10 @@
       '.egrt-sheetwrap{position:relative;flex:0 0 auto;}',
       // 內文排版（字級、行高、段落與表格間距）一律由 resource/css/eg_doc_page.css 提供，
       // 列印版 <link> 的是同一個檔——兩邊各寫一份的話換頁位置會對不起來（見該檔說明）
-      '.egrt-sheet{background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.18);padding:16mm 15mm 18mm;',
+      /* 下緣多留 12px 的安全邊：列印引擎排出來的行高跟編輯器會差個幾 px，
+         剛好塞滿的一頁列印時就會多擠出一張幾乎空白的紙（實測畫面 8 頁、PDF 卻 10 頁）。
+         寧可每頁少排一點點，也不要印出來多好幾張。 */
+      '.egrt-sheet{background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.18);padding:16mm 15mm calc(18mm + 12px);',
       'max-height:none;overflow:hidden;box-sizing:border-box;display:flex;flex-direction:column;}',
       /* 可編輯區＝紙張內容高扣掉頁首頁尾。這樣編輯器塞得下的量就是列印放得下的量，
          不然列印會因為多了頁首頁尾而把內容擠到下一頁（實測畫面 14 頁、PDF 卻 22 頁）。 */
@@ -824,7 +860,7 @@
     function bumpLineHeight(step) {
       body.focus();
       restoreRange();
-      var bs = selectedBlocks(body);
+      var bs = selectedBlocks(body, true);
       if (!bs.length) return;
       var v = Math.max(1, Math.min(3, Math.round((curLineHeight() + step) * 10) / 10));
       bs.forEach(function (b) { b.style.lineHeight = String(v); });
@@ -872,12 +908,15 @@
       }
       if (isDoc) {
         if (cmd === 'egRowAdd' || cmd === 'egRowDel' || cmd === 'egColAdd' || cmd === 'egColDel') {
-          if (!tableOp(body, cmd)) {
+          var keepCell = tableOp(body, cmd);
+          if (!keepCell) {
             alert(cmd === 'egRowDel' ? '只剩一列了，不能再刪。要整張表拿掉請把表格選起來按 Delete。'
                 : cmd === 'egColDel' ? '只剩一欄了，不能再刪。'
                 : '請先把游標點進表格裡的任一個儲存格。');
             return;
           }
+          // 游標留在「接手的那一格」，不要讓它掉到文件開頭（焦點跳動）
+          if (keepCell && keepCell.nodeType === 1) caretIntoCell(keepCell);
           changed();
           return;
         }
@@ -1257,11 +1296,38 @@
       }
     }
 
-    /** 各頁接回一份 HTML（頁與頁之間放回分頁標記） */
+    /** 各頁接回一份 HTML（頁與頁之間放回分頁標記）
+     *  ⚠ 被自動拆到下一頁的長表格，**存檔時一律接回成一張完整的表**——
+     *    存成兩張的話，下次載入就永遠是兩張、再拆一次還會愈拆愈碎。
+     *    接合是在**複本**上做的，畫面上的分頁完全不受影響。 */
     function joinPages() {
       var ss = sheets();
       if (!ss.length) return '';
-      return ss.map(function (s) { return s.innerHTML; }).join(PAGE_MARK);
+      var cs = ss.map(function (s) { return s.cloneNode(true); });
+      // ⚠ 一定要「先全部接合完，最後才拿掉記號」──
+      //   邊接邊拿掉的話，第二張續表就找不到原表了（原表的記號已經被前一頁清掉），
+      //   結果是存檔時後面的列整批不見（實測 70 列只剩 24 列）
+      cs.forEach(function (n) {
+        Array.prototype.forEach.call(n.querySelectorAll('table[data-egrt-cont]'), function (t) {
+          var id = t.getAttribute('data-egrt-split'), org = null;
+          for (var k = 0; k < cs.length && !org; k++) {
+            org = cs[k].querySelector('table[data-egrt-split="' + id + '"]:not([data-egrt-cont])');
+          }
+          if (org) {
+            var tb = tblBody(org);
+            tblRows(t).forEach(function (r) { tb.appendChild(r); });
+          }
+          var blk = t.closest('div,p');
+          if (blk && blk.children.length === 1 && blk.parentNode) blk.parentNode.removeChild(blk);
+          else if (t.parentNode) t.parentNode.removeChild(t);
+        });
+      });
+      cs.forEach(function (n) {
+        Array.prototype.forEach.call(n.querySelectorAll('table[data-egrt-split]'), function (t) {
+          t.removeAttribute('data-egrt-split'); t.removeAttribute('data-egrt-cont');
+        });
+      });
+      return cs.map(function (n) { return n.innerHTML; }).join(PAGE_MARK);
     }
 
     /* ── 版面樣板（封面／制修訂紀錄書／目錄／頁首／頁尾）────────────────────
@@ -1425,7 +1491,7 @@
           }
           // ⚠ egrt-grown 是掛在「紙」上不是可編輯區，這裡判錯會顯示錯的說明（實測抓到）
           b.textContent = sh.classList.contains('egrt-grown')
-            ? '這一頁只有一個區塊比 A4 還高，已自動加長（列印會自動跨頁，內容不會漏）'
+            ? '這一頁只有一個區塊（單一列或一張大圖）比 A4 還高、拆不開，已自動加長（列印會自動跨頁，內容不會漏）'
             : '內容超出這一頁，點這裡把超出的搬到下一頁';
         } else if (b) { b.parentNode.removeChild(b); }
       });
@@ -1433,18 +1499,15 @@
 
     /** 點紅色提示：把超出這一頁的內容搬到下一頁（就是從這一頁開始回流一次） */
     function pushOverflow(s) {
-      /* 只有一個區塊卻比一頁高（實測都是很長的表格）＝搬不動，那一頁已經自動加長。
-         這種情況不提供「自動拆表格」：試作過（把放不下的列搬到下一頁的續表），
-         在真實文件上**不收斂**——一張表拆完會讓後面每一頁連鎖重排，
-         實測連點 30 次頁數完全沒變。與其留一個半成品的按鈕，不如說清楚怎麼處理。
-         列印本來就會依 page-break 規則正確跨頁，所以不處理也印得對。 */
+      /* 長表格現在會自動拆列跨頁（見 splitTailTable），所以按下去先跑一次回流。
+         還是放不下的只剩「單一列或單張圖本身就比一頁高」——那真的搬不動，
+         那一頁已經自動加長，列印時仍會依 page-break 規則正確跨頁。 */
       var ks = blocksOf(s);
-      if (ks.length === 1) {
-        w.alert('這一頁只有一個區塊（通常是一張很長的表格）比 A4 還高，沒辦法用搬移的方式分頁，'
-              + '所以這一頁已經自動加長。\n\n'
+      if (ks.length === 1 && !splitTailTable(s)) {
+        w.alert('這一頁只有一個區塊比 A4 還高，而且沒辦法再往下拆'
+              + '（通常是「單獨一列」的內容太長，或是一張很大的圖），所以這一頁已經自動加長。\n\n'
               + '・列印沒問題：列印時會自動跨頁，內容不會遺漏。\n'
-              + '・想讓編輯畫面也剛好一頁：把這張表格自己拆成兩張（在要分頁的位置插入分頁，'
-              + '再把後半的列剪貼到新的表格），或把紙張改成 A3／橫式。');
+              + '・想讓編輯畫面也剛好一頁：把那一列的內容拆成兩列、把圖縮小，或把紙張改成 A3／橫式。');
         return;
       }
       var idx = sheets().indexOf(s);
@@ -1482,28 +1545,193 @@
       return ns;
     }
 
+    /* ── 長表格自動跨頁（使用者 2026-09-23：不希望超過 A4，超過的要自動到下一頁）──
+       把放不下的「列」搬到下一頁的續表（欄寬與表頭跟著複製），原表至少留一列。
+       ⚠ 會不收斂的做法是「拆了就不管」：回流的第二階段又把續表往前拉、再拆一次，
+         一張表拆完還會讓後面每一頁連鎖重排（先前試作實測連點 30 次頁數完全沒變）。
+         所以每次回流**一開始先把所有續表接回原表**，再依當時的高度從頭重拆——
+         同樣的內容一定得到同樣的結果，可重複執行。
+       存檔時存的也一律是「接回去的完整表格」（見 joinPages），
+       下次載入再依當時的紙張大小重拆，不會把使用者的表格永久拆成兩張。 */
+    var splitSeq = 0;
+    /** 表格最外層的資料列（<thead> 的不算，那是表頭要留在原表並複製到續表） */
+    function tblRows(t) {
+      var out = [];
+      Array.prototype.forEach.call(t.children, function (c) {
+        if (c.tagName === 'TR') out.push(c);
+        else if (c.tagName === 'TBODY') {
+          Array.prototype.forEach.call(c.children, function (r) { if (r.tagName === 'TR') out.push(r); });
+        }
+      });
+      return out;
+    }
+    function tblBody(t) {
+      var tb = null;
+      Array.prototype.forEach.call(t.children, function (c) { if (!tb && c.tagName === 'TBODY') tb = c; });
+      if (!tb) { tb = d.createElement('tbody'); t.appendChild(tb); }
+      return tb;
+    }
+    /** 續表：複製 <table> 本身與 colgroup／thead（欄寬與表頭才會跟原表一樣） */
+    function mkContTable(t, id) {
+      var c = t.cloneNode(false);
+      c.setAttribute('data-egrt-split', id);
+      c.setAttribute('data-egrt-cont', '1');
+      Array.prototype.forEach.call(t.children, function (ch) {
+        if (ch.tagName === 'COLGROUP' || ch.tagName === 'THEAD') c.appendChild(ch.cloneNode(true));
+      });
+      c.appendChild(d.createElement('tbody'));
+      return c;
+    }
+    /** 這一頁最後一個區塊是表格的話，把放不下的列搬到下一頁。回傳有沒有真的搬 */
+    function splitTailTable(s) {
+      var ks = blocksOf(s);
+      var last = ks[ks.length - 1];
+      if (!last || last.nodeType !== 1) return false;
+      var box = null, tbl = last;
+      if (last.tagName !== 'TABLE') {                 // 匯入的內容常把表格包在一層 <div> 裡
+        var inner = last.querySelector && last.querySelector('table');
+        if (!inner || inner.parentNode !== last) return false;
+        box = last; tbl = inner;
+      }
+      var rows = tblRows(tbl);
+      if (rows.length < 2) return false;              // 只有一列＝拆不動（那一頁自己加長）
+      var id = tbl.getAttribute('data-egrt-split') || ('sp' + (++splitSeq) + '-' + Date.now().toString(36));
+      tbl.setAttribute('data-egrt-split', id);
+      var cont = mkContTable(tbl, id), cb = tblBody(cont), moved = 0;
+      while (rows.length - moved > 1) {
+        cb.insertBefore(rows[rows.length - 1 - moved], cb.firstChild);
+        moved++;
+        if (fitsPage(s)) break;
+      }
+      if (!moved) return false;
+      var blk = cont;
+      if (box) { blk = box.cloneNode(false); blk.appendChild(cont); }
+      prependBlock(nextSheet(s, true), blk);
+      return true;
+    }
+    /* 把「整頁內容被包在一層沒有任何屬性的 <div> 裡」這種結構攤平。
+       兩個來源：⑴舊版 selectedBlocks() 的 bug（游標一點進表格儲存格就把整頁包一層，已修）
+                 ⑵有些匯入來源本來就多包一層。
+       不攤平的話**整頁就只有一個區塊、回流永遠搬不動**，那一頁只好一直往下長高，
+       使用者看到的就是「這一頁超過 A4 了還是不會自動分頁」。
+       只動「沒有任何屬性、而且裡面裝的是區塊元素」的 div——
+       打字產生的 <div>一行字</div> 裝的是純文字，不會被誤拆。 */
+    function unwrapNakedBlocks(s) {
+      var hit = false;
+      Array.prototype.slice.call(s.children).forEach(function (k) {
+        if (k.tagName !== 'DIV' || k.attributes.length) return;
+        var hasBlock = false;
+        Array.prototype.forEach.call(k.children, function (c) {
+          if (/^(DIV|P|TABLE|H[1-6]|UL|OL|HR)$/.test(c.tagName)) hasBlock = true;
+        });
+        if (!hasBlock) return;
+        while (k.firstChild) s.insertBefore(k.firstChild, k);
+        s.removeChild(k);
+        hit = true;
+      });
+      return hit;
+    }
+
+    /* 「整頁內容被塞在一張單列單格的表格裡」＝Word 的頁框表格（舊版匯入會連框一起帶進來）。
+       這種表格**拆不動**（只有一列），那一頁只好一直長高、永遠超過 A4。
+       只有在「這一頁放不下、而且真的拆不動」時才拆掉外框，把格子裡的內容攤到頁面上——
+       攤開之後才有多個區塊可以往下一頁搬。新版匯入已經在匯入當下就拆掉了（adi_unwrap_page_tables），
+       這裡是為了救「之前就已經匯進來的舊內容」。 */
+    function unwrapFrameTable(s) {
+      var ks = blocksOf(s);
+      if (ks.length !== 1) return false;
+      var t = ks[0];
+      if (!t || t.tagName !== 'TABLE') return false;
+      var rows = tblRows(t);
+      if (rows.length !== 1) return false;                 // 有兩列以上就交給 splitTailTable 拆
+      var cells = Array.prototype.slice.call(rows[0].children);
+      if (cells.length !== 1) return false;                // 只處理「單列單格」的頁框
+      var cell = cells[0];
+      if (!cell.querySelector('table,p,div')) return false; // 格子裡不是整段內容就別動它
+      while (cell.firstChild) s.insertBefore(cell.firstChild, t);
+      s.removeChild(t);
+      return true;
+    }
+
+    /** 把所有續表接回原表。回傳受影響的最前面那一頁（沒有就 -1） */
+    function unsplitTables() {
+      var conts = host.querySelectorAll('.egrt-main table[data-egrt-cont]');
+      if (!conts.length) return -1;
+      var ss = sheets(), minIdx = -1;
+      Array.prototype.forEach.call(conts, function (t) {
+        var id = t.getAttribute('data-egrt-split');
+        var org = id ? host.querySelector('.egrt-main table[data-egrt-split="' + id + '"]:not([data-egrt-cont])') : null;
+        if (org) {
+          var tb = tblBody(org);
+          tblRows(t).forEach(function (r) { tb.appendChild(r); });
+          var os = org.closest('.egrt-main'), oi = ss.indexOf(os);
+          if (oi >= 0 && (minIdx < 0 || oi < minIdx)) minIdx = oi;
+        }
+        // 續表自己（連同幫它包的那層 div）整塊拿掉；空掉的頁由回流第③步清除
+        var blk = t.closest('.egrt-main > *');
+        if (blk && blk.parentNode) blk.parentNode.removeChild(blk);
+        else if (t.parentNode) t.parentNode.removeChild(t);
+      });
+      Array.prototype.forEach.call(host.querySelectorAll('.egrt-main table[data-egrt-split]'), function (t) {
+        t.removeAttribute('data-egrt-split');
+      });
+      return minIdx;
+    }
+
+    /** 回流前後把畫面「釘」在同一個位置：以游標所在的那一頁為錨，
+     *  不然刪掉一張表或一列之後版面一重排，畫面就會自己跳到別的地方
+     *  （使用者 2026-09-23 回報的「焦點跳動」另一半）。 */
+    function scrollAnchor() {
+      var sc = host.querySelector('.egrt-doc-scroll');
+      if (!sc) return null;
+      var sel = w.getSelection();
+      var n = sel && sel.rangeCount ? sel.getRangeAt(0).startContainer : null;
+      if (n && n.nodeType === 3) n = n.parentNode;
+      var sh = (n && n.closest) ? n.closest('.egrt-sheetwrap') : null;
+      if (!sh || !host.contains(sh)) return null;
+      return { sc: sc, sh: sh, top: sh.getBoundingClientRect().top - sc.getBoundingClientRect().top };
+    }
+    function scrollRestore(a) {
+      if (!a || !a.sh || !host.contains(a.sh)) return;
+      var now = a.sh.getBoundingClientRect().top - a.sc.getBoundingClientRect().top;
+      var diff = now - a.top;
+      if (Math.abs(diff) > 1) a.sc.scrollTop += diff;
+    }
+
     var reflowing = false;
     /** @param {number} [from] 從第幾頁開始（打字時只從目前那一頁往後算，整份文件才不會每次都重排） */
     function reflow(from) {
       if (!isDoc || reflowing) return;
       reflowing = true;
+      var anchor = scrollAnchor();
       // 先把「之前被加長過」的頁還原成固定高度，不然量不出有沒有超出
       sheets().forEach(function (s) {
         var sh = sheetOf(s);
         if (sh && sh.classList.contains('egrt-grown')) { sh.classList.remove('egrt-grown'); applyPaper(sh); }
       });
-      var guard = 0, i = Math.max(0, from || 0);
-      // ① 往後推：超出的區塊搬到下一頁
+      // 整頁被包在一層空 div 裡的先攤平，否則那一頁永遠只有一個區塊、搬不動也拆不開
+      sheets().forEach(function (s0) { unwrapNakedBlocks(s0); });
+      // 先把上一輪拆開的續表接回原表，再從頭重拆（不這樣做就不會收斂）
+      var merged = unsplitTables();
+      var start = Math.max(0, from || 0);
+      if (merged >= 0) start = Math.min(start, merged);
+
+      var guard = 0, i = start;
+      // ① 往後推：超出的區塊搬到下一頁；只剩一張長表格就改「拆列」
       for (; i < sheets().length && guard < 4000; i++) {
         var s = sheets()[i];
         while (!fitsPage(s) && guard++ < 4000) {
           var ks = blocksOf(s);
-          if (ks.length <= 1) break;      // 單一區塊就超出（例如一張很長的表格）＝搬不動
+          if (ks.length <= 1) {
+            // 拆列 → 拆不動就試著拆掉 Word 頁框 → 都不行才放棄（那一頁自己加長）
+            if (!splitTailTable(s) && !unwrapFrameTable(s)) break;
+            continue;
+          }
           prependBlock(nextSheet(s, true), ks[ks.length - 1]);
         }
       }
       // ② 往前拉：下一頁的第一個區塊如果這一頁放得下就拉回來（刪字之後版面才會回流）
-      for (i = Math.max(0, from || 0); i < sheets().length - 1 && guard < 9000; i++) {
+      for (i = start; i < sheets().length - 1 && guard < 9000; i++) {
         var a = sheets()[i], b = sheets()[i + 1];
         while (guard++ < 9000) {
           var bk = blocksOf(b);
@@ -1521,6 +1749,7 @@
       if (!sheets().length) { body = mkSheet(); }
       else if (!body || !host.contains(body)) { body = sheets()[0]; }
       numberPages(); fitPages(); markOverflow();
+      scrollRestore(anchor);
       reflowing = false;
     }
 
