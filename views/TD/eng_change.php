@@ -327,7 +327,7 @@ $openId = (int)($_GET['id'] ?? 0);
             <div class="fld" style="margin-top:6px;" id="attDesignWrap"><label>附件（更新圖面需附上）
                     <small style="font-weight:normal;color:#aaa;" id="attDesignHint"></small></label>
                 <div class="att-box" id="attDesignBox"></div><div class="err"></div></div>
-            <div class="fld" style="margin-top:6px;"><label>1. 庫存舊料</label><div id="e_oldstock"></div><div class="err"></div></div>
+            <div class="fld" style="margin-top:6px;"><label>庫存舊料</label><div id="e_oldstock"></div><div class="err"></div></div>
             <!-- 單一製程＝不必經過倉管確認庫存（使用者要求 2026-09-23）；勾了之後送簽自動略過倉管那一關 -->
             <div class="fld" style="margin-top:6px;"><label>製程型態</label>
                 <label class="chk"><input type="checkbox" id="e_single_process"> 單一製程（不需確認庫存）
@@ -1947,7 +1947,8 @@ function printHtml(res){
         + '.co{font-size:14pt;font-weight:bold;text-align:center;letter-spacing:3px;}'
         + '.co small{display:block;font-size:8pt;font-weight:normal;letter-spacing:0;}'
         + '.tt{font-size:19pt;font-weight:bold;text-align:center;letter-spacing:8px;margin:0.8mm 0 0.4mm;}'
-        + '.ymd{text-align:right;font-size:9pt;margin-bottom:0.6mm;}'
+        /* 文件編號靠左、日期靠右（使用者要求 2026-09-23） */
+        + '.ymd{display:flex;justify-content:space-between;font-size:9pt;margin-bottom:0.6mm;}'
         + 'table{border-collapse:collapse;width:194mm;table-layout:fixed;}'
         + 'td,th{border:0.4mm solid #000;padding:0.6mm 1.2mm;font-size:9.5pt;vertical-align:middle;word-break:break-all;}'
         + '.lb{background:#F2F2F2;text-align:center;font-weight:bold;white-space:nowrap;}'
@@ -1959,6 +1960,12 @@ function printHtml(res){
         +   'white-space:normal;word-break:break-all;margin-bottom:0.4mm;}'
         + '.sig{height:18mm;text-align:center;vertical-align:middle;padding:0.5mm;}'
         + '.opt{font-size:9pt;line-height:1.35;text-align:left;}'
+        /* 內容少的格子一律靠上，不要浮在儲存格中間（使用者要求 2026-09-23） */
+        + '.optT{vertical-align:top;}'
+        /* 設變事由說明：縮排掛在「其他變更」底下 */
+        + '.rsn{margin-left:5mm;margin-top:0.6mm;}'
+        + '.rsn .h{font-size:8pt;color:#333;}'
+        + '.rsn .b{min-height:8mm;border:0.25mm dashed #999;padding:0.6mm 1mm;font-size:9pt;}'
         + '.rvbody{font-size:7.5pt;line-height:1.28;text-align:left;height:9mm;vertical-align:top;padding:0.5mm 1.2mm;}'
         + '.rvname{width:22mm;text-align:center;font-size:9pt;background:#F2F2F2;font-weight:bold;}'
         + '.rvsig{width:34mm;height:9mm;text-align:center;padding:0.5mm;}'
@@ -1968,8 +1975,9 @@ function printHtml(res){
            ★這裡絕對不能加 white-space:nowrap——垂直模式下它代表「整串不換欄」，
              會把整列撐成一頁高（實測踩過）。用 max-height 限制欄高讓它自然折欄。 */
         +   'writing-mode:vertical-rl;text-orientation:upright;'
-        +   'max-height:15mm;display:inline-block;}'
-        + '.flowcell{text-align:right;vertical-align:middle;padding:1mm 1.5mm 1mm 0.5mm;}'
+        +   'max-height:34mm;display:inline-block;}'
+        /* 流程註記改放最右側一整欄、由上往下（使用者要求 2026-09-23） */
+        + '.flowcell{text-align:center;vertical-align:top;padding:1mm 0.5mm;}'
         + '.ft{font-size:8pt;margin-top:1.5mm;}'
         /* AS 文件編號固定在頁面實際右下角（ai-rules/16 第三節：不可用 inline，內容短時會離右下角很遠） */
         + '.as-doc-fixed{position:fixed;right:6mm;bottom:5mm;font-size:8pt;}'
@@ -1981,7 +1989,8 @@ function printHtml(res){
         + '<title>' + esc(d.doc_no || '工程變更申請單') + '</title><style>' + css + '</style></head><body>'
         + '<div class="co">' + esc(m.company || '') + '</div>'
         + '<div class="tt">' + esc(m.as_doc_name || '工程變更申請/審查/通知單') + '</div>'
-        + '<div class="ymd">日期：' + dispDate(d.apply_date) + '　　文件編號：' + esc(d.doc_no || '') + '</div>'
+        + '<div class="ymd"><span>文件編號：' + esc(d.doc_no || '') + '</span>'
+        +   '<span>日期：' + dispDate(d.apply_date) + '</span></div>'
 
         // 表頭
         + '<table><colgroup><col style="width:22mm"><col style="width:52mm"><col style="width:20mm">'
@@ -1991,25 +2000,28 @@ function printHtml(res){
         +     '<td class="lb">申請單位</td><td>' + esc(d.apply_dept_name || '') + '</td></tr>'
         + '</table>'
 
-        // 變更方式 ＋ 申請人/單位主管簽章
-        + '<table><colgroup><col style="width:22mm"><col style="width:116mm"><col style="width:22mm"><col style="width:34mm"></colgroup>'
+        /* 變更方式 ＋ 申請人/單位主管簽章。使用者要求 2026-09-23：
+             ① 設變事由說明掛在「其他變更」底下（不再自成一列）
+             ② 流程註記移到**最右側一整欄、由上往下**（rowspan 兩列） */
+        + '<table><colgroup><col style="width:22mm"><col style="width:98mm"><col style="width:22mm">'
+        +   '<col style="width:34mm"><col style="width:18mm"></colgroup>'
         + '<tr><td class="lb" rowspan="2">變更方式</td>'
-        +     '<td class="opt" rowspan="2">'
+        +     '<td class="opt optT" rowspan="2">'
         +       box(ct === 'customer_notify') + ' 客戶通知變更(包含新訂單版次變更)<br>'
         +       box(ct === 'blueprint_error') + ' 客戶藍圖有誤，通知客戶之建議變更(客戶同意後需附上新版客戶藍圖)<br>'
         +       box(ct === 'other') + ' 其他變更(請於設變事由說明內詳述)'
+        +       '<div class="rsn"><div class="h">設變事由說明（僅其他變更須填寫）</div>'
+        +         '<div class="b">' + esc(d.change_reason || '').replace(/\n/g, '<br>') + '</div></div>'
         +       attLines('apply') + '</td>'
-        +     '<td class="lbs">申請人</td><td class="sig">' + sg('applicant') + '</td></tr>'
+        +     '<td class="lbs">申請人</td><td class="sig">' + sg('applicant') + '</td>'
+        +     '<td class="flowcell" rowspan="2"><span class="flow">流程：申請單位↓倉管↓技術↓其他單位(僅需會審者)↓技術</span></td></tr>'
         + '<tr><td class="lbs">單位主管</td><td class="sig">' + sg('sup') + '</td></tr>'
-        + '<tr><td class="lbs"><span class="sub">(僅其他變更須填寫)</span>設變事由說明</td>'
-        +     '<td class="opt" style="height:12mm;vertical-align:top;">' + esc(d.change_reason || '').replace(/\n/g, '<br>') + '</td>'
-        +     '<td class="flowcell" colspan="2"><span class="flow">流程：申請單位↓倉管↓技術↓其他單位(僅需會審者)↓技術</span></td></tr>'
         + '</table>'
 
         // 確認庫存（倉管組）
         + '<table><colgroup><col style="width:22mm"><col style="width:116mm"><col style="width:22mm"><col style="width:34mm"></colgroup>'
         + '<tr><td class="lbs">確認庫存</td>'
-        +     '<td class="opt">' + (+d.single_process === 1
+        +     '<td class="opt optT">' + (+d.single_process === 1
                 ? '☑ 單一製程，不需確認庫存'
                 : ('庫存數量：' + esc(d.stock_qty || '') + '<br>已完工待入庫數量：' + esc(d.wip_qty || ''))) + '</td>'
         +     '<td class="lbs">倉管組</td><td class="sig">' + sg('wh') + '</td></tr>'
@@ -2018,13 +2030,13 @@ function printHtml(res){
         // 設計分析（技術課）＋ 庫存舊料
         + '<table><colgroup><col style="width:22mm"><col style="width:116mm"><col style="width:22mm"><col style="width:34mm"></colgroup>'
         + '<tr><td class="lbs"><span class="sub">(更新圖面需附上)</span>設計分析</td>'
-        +     '<td class="opt">' + box(dr === 'drawing_only') + ' 僅修改圖面(修改後結案)<br>'
+        // 單一製程只印在「確認庫存」那一格，這裡不重複（使用者要求 2026-09-23）
+        +     '<td class="opt optT">' + box(dr === 'drawing_only') + ' 僅修改圖面(修改後結案)<br>'
         +       box(dr === 'need_review') + ' 需修改圖面與會審(單據續跑，下方需勾選)'
-        +       (+d.single_process === 1 ? '<br>☑ 單一製程(不需確認庫存)' : '')
         +       attLines('design')
         +       (d.design_note ? '<br>' + esc(d.design_note) : '') + '</td>'
         +     '<td class="lbs">技術課</td><td class="sig">' + sg('td') + '</td></tr>'
-        + '<tr><td colspan="4" class="opt">1.庫存舊料：'
+        + '<tr><td colspan="4" class="opt">庫存舊料：'
         +       box(os === 'can') + ' 可修改　' + box(os === 'cannot') + ' 無法修改(轉業務確認客戶收貨或報廢)</td></tr>'
         + '</table>'
 
@@ -2040,8 +2052,9 @@ function printHtml(res){
 
         + '<div class="divider">↓以下僅技術課判定需會審才填寫↓</div>'
 
-        // 相關單位會審
+        // 相關單位會審（使用者要求 2026-09-23：分隔線下方要有表頭「單位會簽」）
         + '<table><colgroup><col style="width:138mm"><col style="width:22mm"><col style="width:34mm"></colgroup>'
+        + '<tr><td class="lb">單位會簽</td><td class="lb">單　位</td><td class="lb">簽　章</td></tr>'
         + rvRows
         + '</table>'
 
@@ -2049,7 +2062,7 @@ function printHtml(res){
         + '<table style="margin-top:1mm;"><colgroup><col style="width:22mm"><col style="width:116mm"><col style="width:22mm"><col style="width:34mm"></colgroup>'
         + '<tr><td class="lb">管制</td>'
         // 圖面固定勾選（使用者要求 2026-09-23）：工程變更一定會動到圖面，紙本上那一格永遠是打勾的
-        +     '<td class="opt">需修改文件資料：' + box(true) + ' 圖面　'
+        +     '<td class="opt optT">需修改文件資料：' + box(true) + ' 圖面　'
         +       box(+d.ctrl_bom === 1) + ' BOM　' + box(+d.ctrl_manual === 1) + ' 操作手冊</td>'
         +     '<td class="lbs">管制員</td><td class="sig">' + sg('ctrl') + '</td></tr>'
         + '</table>'

@@ -297,6 +297,7 @@ function ec_ensure_schema(PDO $db): void
     } catch (Throwable $e) {}
     // 會審也可能由管理員代簽，比照各關卡記下實際操作者（畫面顯示用，列印不讀）
     try { $db->exec("ALTER TABLE eng_change_review ADD COLUMN signer_proxy_name VARCHAR(60) NULL COMMENT '實際按下簽核的管理員姓名（代簽時才有值）'"); } catch (Throwable $e) {}
+    try { $db->exec("ALTER TABLE eng_change_review ADD COLUMN signer_dept_id INT NULL COMMENT '簽核當下採用的部門 id（兼任者的圖章職稱要用這個）'"); } catch (Throwable $e) {}
 }
 
 /* ============================ 基礎 ============================ */
@@ -663,6 +664,7 @@ function ec_review_rows(PDO $db, int $ecId): array
             'signer_name' => $r ? (string)$r['signer_name'] : '',
             'signer_for_id' => $r ? (int)$r['signer_for_id'] : 0,
             'signer_proxy_name' => $r ? (string)($r['signer_proxy_name'] ?? '') : '',
+            'signer_dept_id' => $r ? (int)($r['signer_dept_id'] ?? 0) : 0,
             'signed_at'   => $r ? (string)$r['signed_at'] : '',
         ];
     }
@@ -761,9 +763,16 @@ function ec_dept_manager_asof(PDO $db, array $deptIds, string $date): ?array
         $lv = $levels[(int)$p['position_id']] ?? null;
         if ($lv === null) continue;                       // 職級沒設定的職稱不算主管
         if ($best === null || $lv < $best['level'])
-            $best = ['id' => (int)$p['id'], 'user_cname' => (string)$p['user_cname'], 'level' => $lv];
+            // ★部門與職稱一定要跟著回傳：解析出來的人常常是兼任的（實測技術課課長陳俊宏的主職是
+            //   董事長室董事長），呼叫端若自己回頭解析就會取到職級最高的那個職務，
+            //   畫面上的「目前等待」與列印圖章都會印成「董事長室　董事長」（使用者 2026-09-23 回報）。
+            $best = ['id' => (int)$p['id'], 'user_cname' => (string)$p['user_cname'], 'level' => $lv,
+                     'dept_id' => (int)$p['dept_id'], 'dept_name' => (string)($p['dept_name'] ?? ''),
+                     'position_name' => (string)($p['position_name'] ?? '')];
     }
-    return $best ? ['id' => $best['id'], 'user_cname' => $best['user_cname']] : null;
+    if (!$best) return null;
+    return ['id' => $best['id'], 'user_cname' => $best['user_cname'], 'dept_id' => $best['dept_id'],
+            'dept_name' => $best['dept_name'], 'position_name' => $best['position_name']];
 }
 
 /** 某人在指定業務日期當時的身分（姓名＋當時部門／職稱）；回推不到就只回姓名。 */
@@ -893,11 +902,17 @@ function ec_resolve_src(PDO $db, string $src, array $row): array
             return $none;
         case 'top':
         case 'mgmt_rep':
-            $b = eg_org_bindings($db)[$src] ?? null;
+            // ★綁定鍵是 org_role_lib 的 'top_approver'／'mgmt_rep'，不是來源代碼本身。
+            //   原本直接拿 $src('top') 去查，永遠查不到 → **「核准」那一關從來沒有解析出簽核人**，
+            //   章一直是空的、也只有管理員推得動（既有 bug，2026-09-23 順手修掉）。
+            $key = $src === 'top' ? 'top_approver' : $src;
+            $b = eg_org_bindings($db)[$key] ?? null;
             $uid = (int)($b['user_id'] ?? 0);
             if (!$uid) return $none;
             $idt = ec_user_identity_asof($db, $uid, $date);
-            return ['id' => $uid, 'name' => $idt['user_name']];
+            return ['id' => $uid, 'name' => $idt['user_name'],
+                    'dept_id' => (int)($idt['dept_id'] ?? 0), 'dept_name' => (string)$idt['dept_name'],
+                    'position_name' => (string)$idt['position_name']];
         case 'sup_above':
             // 多人來源：這裡只回名單第一位（職級最高的那個）供「代表性簽核人」用，
             // 真正的 OR-gate 名單走 ec_stage_signer_pool()
@@ -907,7 +922,7 @@ function ec_resolve_src(PDO $db, string $src, array $row): array
             $did = (int)($row['apply_dept_id'] ?? 0);
             if (!$did) return $none;
             $m = ec_dept_manager_asof($db, eg_dept_subtree_ids($db, $did), $date);
-            return $m ? ['id' => $m['id'], 'name' => $m['user_cname']] : $none;
+            return $m ? ec_src_person($m) : $none;
         case 'unit_sup':
         case 'applicant_sup':
             // 單位主管：一律走共用庫（ai-rules/24 審核層級規範，唯一實作 unit_supervisor_lib.php）。
@@ -916,7 +931,9 @@ function ec_resolve_src(PDO $db, string $src, array $row): array
             if (!$aid) return $none;
             $sup = eg_unit_supervisor($db, $aid, (int)($row['apply_dept_id'] ?? 0) ?: null, $date);
             if (empty($sup['id'])) return $none;   // 從缺（申請人即課級最高主管）＝這一關略過，章留白由紙本手蓋
-            return ['id' => (int)$sup['id'], 'name' => (string)$sup['name']];
+            return ['id' => (int)$sup['id'], 'name' => (string)$sup['name'],
+                    'dept_id' => (int)($sup['dept_id'] ?? 0), 'dept_name' => (string)($sup['dept_name'] ?? ''),
+                    'position_name' => (string)($sup['position_name'] ?? '')];
         default:
             // xx_dept_mgr → 對應的組織角色綁定部門主管
             if (substr($src, -9) === '_dept_mgr') {
@@ -924,10 +941,18 @@ function ec_resolve_src(PDO $db, string $src, array $row): array
                 $ids = $deptOf($key);
                 if (!$ids) return $none;
                 $m = ec_dept_manager_asof($db, $ids, $date);
-                return $m ? ['id' => $m['id'], 'name' => $m['user_cname']] : $none;
+                return $m ? ec_src_person($m) : $none;
             }
             return $none;
     }
+}
+
+/** ec_dept_manager_asof() 的回傳轉成簽章人格式（部門職稱一起帶，兼任者才不會印錯身分） */
+function ec_src_person(array $m): array
+{
+    return ['id' => (int)$m['id'], 'name' => (string)$m['user_cname'],
+            'dept_id' => (int)($m['dept_id'] ?? 0), 'dept_name' => (string)($m['dept_name'] ?? ''),
+            'position_name' => (string)($m['position_name'] ?? '')];
 }
 
 /**
@@ -981,7 +1006,13 @@ function ec_stage_signer_pool(PDO $db, array $row, string $stage): array
 
     $p = ec_resolve_src($db, $src, $row);
     if (!$p['id']) return [];
-    return [ec_apply_delegate($db, (int)$p['id'], (string)$p['name'])];
+    $d = ec_apply_delegate($db, (int)$p['id'], (string)$p['name']);
+    if (!$d['for_id'] && (int)($p['dept_id'] ?? 0)) {   // 沒被代理才沿用解析當下那個身分
+        $d['dept_id']       = (int)$p['dept_id'];
+        $d['dept_name']     = (string)($p['dept_name'] ?? '');
+        $d['position_name'] = (string)($p['position_name'] ?? '');
+    }
+    return [$d];
 }
 
 /**
@@ -1021,7 +1052,13 @@ function ec_review_signer(PDO $db, array $row, string $unitKey): array
     if (!$ids) return ['id' => 0, 'name' => '', 'for_id' => 0, 'for_name' => ''];
     $m = ec_dept_manager_asof($db, $ids, (string)($row['apply_date'] ?? ''));
     if (!$m) return ['id' => 0, 'name' => '', 'for_id' => 0, 'for_name' => ''];
-    return ec_apply_delegate($db, (int)$m['id'], (string)$m['user_cname']);
+    $d = ec_apply_delegate($db, (int)$m['id'], (string)$m['user_cname']);
+    if (!$d['for_id']) {           // 兼任者的身分要沿用「他是以哪個單位入選」那一筆
+        $d['dept_id']       = (int)($m['dept_id'] ?? 0);
+        $d['dept_name']     = (string)($m['dept_name'] ?? '');
+        $d['position_name'] = (string)($m['position_name'] ?? '');
+    }
+    return $d;
 }
 
 /**
@@ -1689,16 +1726,19 @@ function ec_sign_review(PDO $db, int $ecId, string $unitKey, int $uid, string $u
     $proxyName = ($signId !== $uid && (int)$s['id'] > 0) ? $uname : '';
 
     $db->prepare("INSERT INTO eng_change_review (ec_id, unit_key, needed, checks_json, extras_json, opinion,
-                                                 signer_id, signer_name, signer_for_id, signer_proxy_name, signed_at)
-                  VALUES (?,?,1,?,?,?,?,?,?,?,NOW())
+                                                 signer_id, signer_name, signer_for_id, signer_proxy_name,
+                                                 signer_dept_id, signed_at)
+                  VALUES (?,?,1,?,?,?,?,?,?,?,?,NOW())
                   ON DUPLICATE KEY UPDATE checks_json=VALUES(checks_json), extras_json=VALUES(extras_json),
                                           opinion=VALUES(opinion), signer_id=VALUES(signer_id),
                                           signer_name=VALUES(signer_name), signer_for_id=VALUES(signer_for_id),
                                           signer_proxy_name=VALUES(signer_proxy_name),
+                                          signer_dept_id=VALUES(signer_dept_id),
                                           signed_at=VALUES(signed_at)")
        ->execute([$ecId, $unitKey, json_encode($checks, JSON_UNESCAPED_UNICODE),
                   json_encode($extras, JSON_UNESCAPED_UNICODE), $opinion,
-                  $signId ?: null, $signName, ((int)$s['for_id']) ?: null, $proxyName]);
+                  $signId ?: null, $signName, ((int)$s['for_id']) ?: null, $proxyName,
+                  ((int)($s['dept_id'] ?? 0)) ?: null]);
     try {
         $rec = eg_approval_latest($db, EC_APPROVAL_MODULE, $ecId, 'REVIEW:' . $unitKey);
         if ($rec && (string)$rec['status'] === 'pending')
@@ -1862,7 +1902,7 @@ function ec_print_meta(PDO $db, array $row): array
     $reviewSigns = [];
     foreach (ec_review_rows($db, (int)$row['ec_id']) as $r) {
         if (!$r['signer_id']) { $reviewSigns[$r['unit_key']] = null; continue; }
-        $idt = ec_user_identity_asof($db, (int)$r['signer_id'], $date);
+        $idt = ec_user_identity_asof($db, (int)$r['signer_id'], $date, (int)($r['signer_dept_id'] ?? 0));
         $reviewSigns[$r['unit_key']] = [
             'label' => $r['label'], 'user_id' => (int)$r['signer_id'], 'name' => (string)$r['signer_name'],
             'dept' => (string)$idt['dept_name'], 'position' => (string)$idt['position_name'],
