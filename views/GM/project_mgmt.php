@@ -560,6 +560,21 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <p class="pj-hint" id="ownScopeCount" style="margin-top:6px;"></p>
         </div>
         <div class="sec">
+            <h5>專案負責人預設部門與順序</h5>
+            <p class="pj-hint">選一個<b>預設部門</b>，下拉／訂單轉專案跳窗的專案負責人清單會把這個部門的人排在最前面，
+                並依這裡設定的<b>順序</b>顯示（不影響「資格」，只影響排序；資格仍由上面的「專案負責人資格」決定）。
+                <b>未設定＝維持原本依部門/職稱排序</b>。</p>
+            <div style="display:flex;gap:10px;align-items:flex-end;margin-bottom:8px;">
+                <div style="min-width:200px;"><label>預設部門</label>
+                    <select id="setOwnOrderDept" data-eg-filter="輸入部門名稱篩選…"></select></div>
+                <span class="pj-hint" id="ownOrderHint"></span>
+            </div>
+            <table class="sub-tbl" id="ownOrderTable">
+                <thead><tr><th style="width:60px;">順序</th><th>人員</th><th style="width:90px;">操作</th></tr></thead>
+                <tbody id="ownOrderBody"></tbody>
+            </table>
+        </div>
+        <div class="sec">
             <h5>執行規劃表負責人部門</h5>
             <p class="pj-hint">指定<b>哪些部門</b>會出現在執行規劃表「負責人」的部門下拉裡（避免整間公司的人擠在同一個下拉）。
                 填表時是<b>先選部門、再選人</b>；勾一個部門就連同它<b>底下的子部門</b>一起帶出來（例：勾「生產部」會帶出生產1／2／3廠的人），

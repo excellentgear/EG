@@ -311,7 +311,7 @@ if (!function_exists('eg_people_annotate_posts')) {
         $uidIn = implode(',', array_map('intval', array_column($rows, 'id')));
         $posts = [];
         try {
-            $posts = $db->query("SELECT m.user_id, m.is_main, d.name AS dept_name,
+            $posts = $db->query("SELECT m.user_id, m.is_main, m.department_id AS dept_id, d.name AS dept_name,
                                         COALESCE(d.sort_order,999) AS dept_sort,
                                         p.name AS position_name, COALESCE(p.sort_order,999) AS position_sort
                                  FROM user_department_position_map m
@@ -328,6 +328,7 @@ if (!function_exists('eg_people_annotate_posts')) {
             $list = $byUser[(int)$r['id']] ?? [];
             $r['main_dept_name']     = (string)($r['dept_name'] ?? '');
             $r['main_position_name'] = (string)($r['position_name'] ?? '');
+            $r['main_dept_id']       = 0;
             $r['alt_posts']          = [];
             if (!$list) continue;
             // is_main 那一筆優先；都沒標 is_main 時取排序後的第一筆（部門→職稱）
@@ -335,9 +336,12 @@ if (!function_exists('eg_people_annotate_posts')) {
             foreach ($list as $po) { if ((int)$po['is_main']) { $main = $po; break; } }
             $r['main_dept_name']     = (string)($main['dept_name'] ?? '');
             $r['main_position_name'] = (string)($main['position_name'] ?? '');
+            $r['main_dept_id']       = (int)($main['dept_id'] ?? 0);
             foreach ($list as $po) {
                 if ($po === $main) continue;
-                $r['alt_posts'][] = ['dept_name'     => (string)($po['dept_name'] ?? ''),
+                // dept_id 一併帶出（原本只有名稱，2026-09-23 補上）——「主辦部門自動＝負責人部門」
+                // 這種要把部門選進 <select> 的情境非有 id 不可，只有名稱沒辦法對應到 META.depts 的 value。
+                $r['alt_posts'][] = ['dept_id' => (int)($po['dept_id'] ?? 0), 'dept_name' => (string)($po['dept_name'] ?? ''),
                                      'position_name' => (string)($po['position_name'] ?? '')];
             }
         }

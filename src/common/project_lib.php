@@ -84,6 +84,29 @@ function prj_types(PDO $db, bool $activeOnly = false): array
  *
  * @return array|null [old, new]；沒有重編時回 null（第三個元素是沒重編的原因）
  */
+/** 專案是否已過草稿階段（送簽以上）——專案性質、料號綁定等「送出後不得再改」的欄位共用同一條界線，
+ *  前端 JS 的 prjSubmitLocked() 是同一份規則的鏡像，改這裡務必連同前端一起改。 */
+/** 由本專案綁定的料號推出客戶（使用者 2026-09-23 要求：有綁定料號時客戶要自動帶入且鎖住，
+ *  不可再手打）。優先取訂單自動帶出的那筆，找不到才退回第一筆解析得到客戶主檔的；
+ *  同一批料號分屬不同客戶的極端情況不強制，回 null 交由呼叫端維持原值可自由選。
+ *  前端 renderBase() 是同一份規則的鏡像，這裡是後端最終防線（鐵律8：不可只在前端擋）。 */
+function prj_customer_from_parts(PDO $db, int $projectId): ?array
+{
+    // Customer_Id 是 char(11) 文字代號（如 C2005），絕對不可 (int) 轉型——那會把每一個代號都轉成 0
+    // 而且不報錯（本專案已在別的模組踩過很多次同一種坑）。
+    $parts = prj_parts($db, $projectId);
+    $pick = null;
+    foreach ($parts as $x) { if ($x['source'] === 'order' && trim((string)($x['Customer_Id'] ?? '')) !== '') { $pick = $x; break; } }
+    if (!$pick) { foreach ($parts as $x) { if (trim((string)($x['Customer_Id'] ?? '')) !== '') { $pick = $x; break; } } }
+    if (!$pick) return null;
+    return ['id' => trim((string)$pick['Customer_Id']), 'name' => (string)$pick['customer_name']];
+}
+
+function prj_submit_locked(array $p): bool
+{
+    return (int)($p['project_id'] ?? 0) > 0 && !in_array((string)($p['status'] ?? ''), ['draft', 'rejected'], true);
+}
+
 function prj_sync_no(PDO $db, int $projectId, string $newType, string $by, bool $force = false): ?array
 {
     $st = $db->prepare("SELECT project_id, project_no, project_type, status, start_date, created_at
@@ -821,7 +844,7 @@ function prj_owner_people(PDO $db, array $keepIds = [], ?int $actorId = null, bo
             $mine = [$actorId];
             if ($ids !== null && !in_array($actorId, $ids, true)) $mine = [];
             $mine = array_values(array_unique(array_merge($mine, $keep)));
-            return $mine ? eg_people_list($db, ['user_ids' => $mine]) : [];
+            return $mine ? prj_owner_order_apply($db, eg_people_list($db, ['user_ids' => $mine])) : [];
         }
         $rows = eg_people_list($db, ['dept_ids' => $depts]);
         if ($ids !== null) {
@@ -832,12 +855,49 @@ function prj_owner_people(PDO $db, array $keepIds = [], ?int $actorId = null, bo
         $have = array_flip(array_map(static fn($r) => (int)$r['id'], $rows));
         $add  = array_values(array_filter($keep, static fn($k) => !isset($have[$k])));
         if ($add) $rows = array_merge($rows, eg_people_list($db, ['user_ids' => $add]));
-        return $rows;
+        return prj_owner_order_apply($db, $rows);
     }
 
-    if ($ids === null) return eg_people_list($db, []);
+    if ($ids === null) return prj_owner_order_apply($db, eg_people_list($db, []));
     $all = array_values(array_unique(array_merge($ids, $keep)));
-    return $all ? eg_people_list($db, ['user_ids' => $all]) : [];
+    return $all ? prj_owner_order_apply($db, eg_people_list($db, ['user_ids' => $all])) : [];
+}
+
+/**
+ * 管理員設定的「預設部門」與「該部門底下顯示為負責人的順序」（使用者 2026-09-23 要求）。
+ * 預設部門本身只是「順序」設定的作用範圍——被排序的人一定要在這個部門底下才有意義，
+ * 不是額外多一層資格限制（資格仍然只看 owner_scope），所以不影響 prj_owner_scope_user_ids()。
+ */
+function prj_owner_default_dept(PDO $db): int { return (int) prj_setting_get($db, 'owner_default_dept_id', '0'); }
+
+/** 已存的順序（user_id 陣列，由前到後＝優先顯示） */
+function prj_owner_order(PDO $db): array
+{
+    $raw = prj_setting_get($db, 'owner_order', '');
+    $a = json_decode($raw, true);
+    return is_array($a) ? array_values(array_unique(array_map('intval', $a))) : [];
+}
+
+/** 依已存順序把候選名單重排：順序清單裡的人排最前面（依清單順序），其餘維持原本排序 */
+function prj_owner_order_apply(PDO $db, array $rows): array
+{
+    $order = prj_owner_order($db);
+    if (!$order) return $rows;
+    $rank = array_flip($order);
+    $n = count($order);
+    usort($rows, static function ($a, $b) use ($rank, $n) {
+        $ra = $rank[(int)$a['id']] ?? ($n + (int)$a['id']);
+        $rb = $rank[(int)$b['id']] ?? ($n + (int)$b['id']);
+        return $ra <=> $rb;
+    });
+    return $rows;
+}
+
+function prj_owner_order_save(PDO $db, int $deptId, array $userIds, string $by): void
+{
+    prj_setting_save($db, 'owner_default_dept_id', (string)$deptId, '專案負責人預設部門', $by);
+    $ids = array_values(array_unique(array_map('intval', $userIds)));
+    prj_setting_save($db, 'owner_order', $ids ? json_encode($ids, JSON_UNESCAPED_UNICODE) : '', '專案負責人顯示順序（該部門底下）', $by);
 }
 
 /**

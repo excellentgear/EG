@@ -258,6 +258,12 @@ case 'save':
         // 專案涵蓋的製程：空＝整張 BOM 所有製程（使用者指定的預設語意）
         'scope_process_no' => prj_tag_csv(prj_tag_ids((string)($_POST['scope_process_no'] ?? ''))),
     ];
+    // 客戶：有綁定料號就一律由料號推導、不採信前端送來的值（鐵律8——前端已鎖住輸入框，
+    // 這裡是最後防線，避免直打 API 塞進別的客戶代號）。新專案（pid=0）此時通常還沒有綁料號，維持自由填寫。
+    if ($pid > 0) {
+        $cf = prj_customer_from_parts($db, $pid);
+        if ($cf) $data['customer_id'] = $cf['id'];
+    }
     $err = prj_validate($data, [], $db);
     // 專案負責人資格（模組設定 → 專案負責人資格）：前端下拉已只列合格的人，後端同規則再擋一次（鐵律8）。
     // 既有專案的負責人維持原值時一律放行——設定改嚴不該讓舊專案變成存不了檔。
@@ -776,7 +782,9 @@ case 'ship_search':
 /* ══════════════════════════ 料號（手動補掛） ══════════════════════════ */
 case 'part_add':
     $pid = (int)($_POST['project_id'] ?? 0);
-    prj_need($db, $P, $pid, true);
+    $prj = prj_need($db, $P, $pid, true);
+    // 已送簽的專案不可再增減料號綁定（使用者 2026-09-23 要求，與基本資料頁「已送簽不可更改」同一條界線）
+    if (prj_submit_locked($prj)) jerr('已送簽的專案不可以再新增料號，要調整請先退回成草稿');
     $dsPk = (int)($_POST['ds_pk'] ?? 0);
     if (!$dsPk) jerr('請選擇料號');
     $st = $db->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
@@ -791,7 +799,8 @@ case 'part_add':
 
 case 'part_remove':
     $pid = (int)($_POST['project_id'] ?? 0);
-    prj_need($db, $P, $pid, true);
+    $prj = prj_need($db, $P, $pid, true);
+    if (prj_submit_locked($prj)) jerr('已送簽的專案不可以再移除料號，要調整請先退回成草稿');
     $dsPk = (int)($_POST['ds_pk'] ?? 0);
     // 由訂單帶出的料號不給手動刪（要刪請移除訂單），否則同步一跑就又長回來
     $st = $db->prepare("SELECT source FROM project_part WHERE project_id=? AND ds_pk=?");
@@ -1583,6 +1592,8 @@ case 'setting_get':
         // 文件檢核：SOP／SIP 要認列哪幾種來源（綁料號／製程／通用），可複選
         'doc_sop_scopes'          => prj_setting_get($db, 'doc_sop_scopes', 'part,process'),
         'doc_sip_scopes'          => prj_setting_get($db, 'doc_sip_scopes', 'part,process'),
+        'owner_default_dept_id'   => (string)prj_owner_default_dept($db),
+        'owner_order'             => implode(',', prj_owner_order($db)),
     ], 'owner_scope_rows' => prj_owner_scope_labeled($db),
      'attach_cats' => (function (PDO $db) {
          try {
@@ -1636,12 +1647,26 @@ case 'setting_save':
         prj_setting_save($db, 'owner_scope', $scope ? json_encode($scope, JSON_UNESCAPED_UNICODE) : '',
                          '專案負責人資格（部門×職稱）', $uname);
     }
+    // 專案負責人預設部門＋該部門底下的顯示順序（使用者 2026-09-23 要求）
+    if (array_key_exists('owner_order_dept', $_POST) || array_key_exists('owner_order', $_POST)) {
+        $ordIds = [];
+        foreach (explode(',', (string)($_POST['owner_order'] ?? '')) as $v) { $v = (int)trim($v); if ($v > 0) $ordIds[] = $v; }
+        prj_owner_order_save($db, (int)($_POST['owner_order_dept'] ?? 0), $ordIds, $uname);
+    }
     // 回傳兩份：owner_people＝目前這位管理員實際可挑的人；owner_scope_all＝純「資格」命中的全公司名單（設定畫面預覽用）
     jout(['message' => '已儲存設定', 'owner_scope_rows' => prj_owner_scope_labeled($db),
           'seed_template' => prj_seed_template($db), 'seed_is_custom' => prj_seed_template_rows($db) ? 1 : 0,
           'task_owner_depts' => prj_task_owner_depts($db),
+          'owner_default_dept_id' => prj_owner_default_dept($db), 'owner_order' => prj_owner_order($db),
           'owner_people'    => eg_people_annotate_posts($db, prj_owner_people($db, [], $uid, (bool)$P['canAdmin'])),
           'owner_scope_all' => prj_owner_scope_labeled($db) ? eg_people_annotate_posts($db, prj_owner_people($db)) : null]);
+
+/** 某個部門底下的人員（給「專案負責人順序」設定挑人用，不受 owner_scope 資格限制——
+ *  排序畫面要能看到整個部門的人，資格是另一層判定，兩者本來就是不同的事）。 */
+case 'owner_order_cand':
+    if (!$P['canAdmin']) jerr('無權限（需「專案管理員」角色）', 403);
+    $did = (int)($_GET['dept_id'] ?? 0);
+    jout(['rows' => $did > 0 ? eg_people_annotate_posts($db, eg_people_list($db, ['dept_ids' => [$did]])) : []]);
 
 case 'asdoc_save':
     if (!$P['canAdmin']) jerr('無權限（需「專案管理員」角色）', 403);

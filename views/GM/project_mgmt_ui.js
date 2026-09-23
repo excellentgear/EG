@@ -460,12 +460,36 @@ $(document).on('click', '#btnAckAll', function () {
     });
 });
 
+/* 專案是否已過草稿階段（送出後鎖定用，與 noSyncHint 旁的專案性質鎖定同一條界線）。 */
+function prjSubmitLocked(p) {
+    return num(p.project_id) > 0 && $.inArray(String(p.status), ['draft', 'rejected']) < 0;
+}
+/* 綁定的料號要拿哪一筆的客戶當「客戶」的來源：優先訂單自動帶出的（比手動加掛的權威），
+   同一批裡挑第一筆有解析到客戶主檔的（多料號分屬不同客戶的極端情況就不強制鎖，維持自由選）。 */
+function ownerDeptOptions(ownerId) {
+    var cands = ownerPeople().concat(META.people || []), found = null;
+    $.each(cands, function (i, x) { if (!found && num(x.id) === num(ownerId)) found = x; });
+    if (!found) return [];
+    var list = [];
+    if (num(found.main_dept_id)) list.push({ id: num(found.main_dept_id), name: found.main_dept_name || ('#' + found.main_dept_id) });
+    $.each(found.alt_posts || [], function (i, a) {
+        if (num(a.dept_id) && !$.grep(list, function (x) { return x.id === num(a.dept_id); }).length) {
+            list.push({ id: num(a.dept_id), name: a.dept_name || ('#' + a.dept_id) });
+        }
+    });
+    return list;
+}
+function renderDeptOpt(list, selId) {
+    var h = '<option value="">（無）</option>';
+    $.each(list, function (i, x) { h += '<option value="' + x.id + '"' + (num(selId) === x.id ? ' selected' : '') + '>' + esc(x.name) + '</option>'; });
+    return h;
+}
 /* ── 基本資料 ── */
 function renderBase(res) {
     var p = res.project, ro = res.can_edit ? '' : ' disabled';
     /* 送簽之後性質鎖住（後端 save 同規則再擋一次） */
-    var typeLocked = num(p.project_id) > 0 && $.inArray(String(p.status), ['draft', 'rejected']) < 0;
-    var typeOpt = '', ownerOpt = '<option value="">（請選擇）</option>', custOpt = '<option value="">（無）</option>', deptOpt = '<option value="">（無）</option>';
+    var typeLocked = prjSubmitLocked(p);
+    var typeOpt = '', ownerOpt = '<option value="">（請選擇）</option>';
     $.each(META.types || {}, function (k, v) { typeOpt += '<option value="' + k + '"' + (p.project_type === k ? ' selected' : '') + '>' + esc(v + '（' + k + '）') + '</option>'; });
     /* 只列合格的人；本專案目前的負責人即使事後不合資格也一定保留，否則一打開就變空白、一存檔就被洗掉。
        新專案（還沒有 owner_id）預設帶「目前使用者」——非管理員本來就只能挑自己部門的人。 */
@@ -478,8 +502,47 @@ function renderBase(res) {
         else ownerCands.unshift({ id: p.owner_id, user_cname: p.owner_name || ('#' + p.owner_id) });
     }
     $.each(ownerCands, function (i, x) { ownerOpt += '<option value="' + x.id + '"' + (num(p.owner_id) === num(x.id) ? ' selected' : '') + '>' + esc(peopleLabel(x)) + '</option>'; });
-    $.each(META.customers || [], function (i, x) { custOpt += '<option value="' + esc(x.customer_id) + '"' + (p.customer_id === x.customer_id ? ' selected' : '') + '>' + esc(x.customer) + '</option>'; });
-    $.each(META.depts || [], function (i, x) { deptOpt += '<option value="' + x.id + '"' + (num(p.dept_id) === num(x.id) ? ' selected' : '') + '>' + esc(x.name) + '</option>'; });
+
+    /* 主辦部門＝專案負責人所屬部門（使用者 2026-09-23 要求）：有兼任時主部門＋所有兼任部門都可選，
+       預設帶主部門；候選裡查不到人時（META 還沒載到 annotate 資料）退回完整部門清單，不強迫鎖死。 */
+    var deptCands = ownerDeptOptions(p.owner_id);
+    if (!deptCands.length) { deptCands = $.map(META.depts || [], function (x) { return { id: num(x.id), name: x.name }; }); }
+    else if (!num(p.dept_id)) { p.dept_id = deptCands[0].id; }
+    if (num(p.dept_id) && !$.grep(deptCands, function (x) { return x.id === num(p.dept_id); }).length) {
+        var dm = $.grep(META.depts || [], function (x) { return num(x.id) === num(p.dept_id); });
+        if (dm.length) deptCands.unshift({ id: num(dm[0].id), name: dm[0].name });
+    }
+    var deptOpt = renderDeptOpt(deptCands, p.dept_id);
+
+    /* 客戶：有綁定料號就由料號自動帶入並鎖住（使用者 2026-09-23 要求），沒有綁定才自由選。
+       優先取「訂單自動帶出」的那筆料號，找不到才退回第一筆解析得到客戶主檔的。 */
+    /* 客戶代號是 char(11) 文字（如 C2005），不是數字，這裡不可以用 num() 判斷有沒有值——
+       num('C2005') 會是 0／NaN，整個自動帶入會安靜失效（本站已在別處踩過很多次同一種坑）。 */
+    var parts = res.parts || [];
+    var ordParts = $.grep(parts, function (x) { return x.source === 'order' && $.trim(String(x.Customer_Id || '')) !== ''; });
+    var anyParts = $.grep(parts, function (x) { return $.trim(String(x.Customer_Id || '')) !== ''; });
+    var custSrc = ordParts[0] || anyParts[0] || null;
+    var custHtml;
+    if (custSrc) {
+        p.customer_id = $.trim(String(custSrc.Customer_Id));
+        custHtml = '<input type="hidden" id="eCust" value="' + esc(p.customer_id) + '">'
+                 + '<input type="text" class="ro-auto" readonly value="' + esc(custSrc.customer_name || p.customer_id) + '">';
+    } else {
+        var custOpt = '<option value="">（無）</option>';
+        $.each(META.customers || [], function (i, x) { custOpt += '<option value="' + esc(x.customer_id) + '"' + (p.customer_id === x.customer_id ? ' selected' : '') + '>' + esc(x.customer) + '</option>'; });
+        custHtml = '<select id="eCust" data-eg-filter="輸入客戶名稱篩選…"' + ro + '>' + custOpt + '</select>';
+    }
+
+    /* 綁定的料號（使用者 2026-09-23 要求在基本資料內也顯示，送出後鎖定不得改動——
+       實際的增減仍在「關聯資料」分頁，這裡只顯示現況＋綁定圖示，不是另一份可編輯欄位）。 */
+    var partHtml;
+    if (!parts.length) {
+        partHtml = '<span class="pj-hint">（尚未綁定料號，請到「關聯資料」分頁綁定）</span>';
+    } else {
+        var pt = [];
+        $.each(parts, function (i, x) { pt.push('<i class="fa fa-link" title="已綁定"></i> ' + esc(x.part_no || '')); });
+        partHtml = pt.join('、') + (typeLocked ? '<span class="pj-hint" style="margin-left:6px;">（已送簽，不可再增減）</span>' : '');
+    }
 
     var h = '<div class="sec"><h5>專案基本資料</h5><div class="grid3">'
       /* 代號第一碼＝專案性質。性質改過、但代號還是舊的第一碼時要講出來並給重編入口
@@ -498,14 +561,15 @@ function renderBase(res) {
       + '<input type="text" class="ro-auto" readonly value="' + esc(p.phase_label || '規劃') + '"></div>'
       + '<div style="grid-column:1 / -1;" id="fldName"><label>專案名稱 <span style="color:#DD5138;">*</span></label>'
       + '<input type="text" id="eName" value="' + esc(p.project_name || '') + '"' + ro + '><div class="pj-err"></div></div>'
-      + '<div><label>客戶</label><select id="eCust" data-eg-filter="輸入客戶名稱篩選…"' + ro + '>' + custOpt + '</select></div>'
+      + '<div><label>客戶' + (custSrc ? '<span class="pj-hint" style="margin-left:6px;">（由綁定料號自動帶入）</span>' : '') + '</label>' + custHtml + '</div>'
       + '<div id="fldOwner"><label>專案負責人 <span style="color:#DD5138;">*</span>'
       + (META.owner_restricted ? '<span class="pj-hint" style="margin-left:6px;">（只能挑自己部門，含兼任）</span>' : '')
       + '</label>'
       + '<select id="eOwner" data-eg-filter="輸入姓名篩選…"' + ro + '>' + ownerOpt + '</select><div class="pj-err"></div></div>'
-      + '<div><label>主辦部門</label><select id="eDept"' + ro + '>' + deptOpt + '</select></div>'
+      + '<div><label>主辦部門<span class="pj-hint" style="margin-left:6px;">（依負責人自動帶，兼任者可自選）</span></label><select id="eDept"' + ro + '>' + deptOpt + '</select></div>'
       + '<div><label>專案起日</label><input type="date" id="eStart" value="' + esc(p.start_date || '') + '"' + ro + '></div>'
       + '<div id="fldEnd"><label>專案迄日</label><input type="date" id="eEnd" value="' + esc(p.end_date || '') + '"' + ro + '><div class="pj-err"></div></div>'
+      + '<div style="grid-column:1 / -1;"><label>綁定料號</label><div>' + partHtml + '</div></div>'
       + '<div style="grid-column:1 / -1;"><label>專案分類標籤</label><div class="pj-tagbar" id="eTagBar"></div></div>'
       + '<div style="grid-column:1 / -1;">' + scopeProcHtml(res) + '</div>'
       + '</div></div>'
@@ -716,6 +780,14 @@ function showFieldErrors(fields) {
         pjMsg(all.join('；'), { sub: '（標紅的欄位請補齊後再儲存）', focus: firstSel || null });
     }
 }
+
+/* 換負責人就跟著換主辦部門候選（使用者 2026-09-23 要求）：預設選主部門，
+   兼任者可以再自己改選成其他兼任部門；查不到人時（例如清單還沒載完）維持原本的完整部門清單不動。 */
+$(document).on('change', '#eOwner', function () {
+    var list = ownerDeptOptions($(this).val());
+    if (!list.length) return;
+    $('#eDept').html(renderDeptOpt(list, list[0].id));
+});
 
 function collectBase() {
     return {
@@ -2598,6 +2670,9 @@ $(document).on('change', '#ciDate', function () {
 function renderRel(res) {
     var p = res.project;
     if (!num(p.project_id)) { $('#paneRel').html('<div class="pj-hint" style="padding:14px;">請先儲存專案。</div>'); return; }
+    /* 料號綁定送出後鎖定不得再改（使用者 2026-09-23 要求，與「基本資料」的綁定料號顯示同一條界線） */
+    var partsLocked = prjSubmitLocked(p);
+    var partsCanEdit = res.can_edit && !partsLocked;
     var h = '';
 
     /* 訂單 */
@@ -2628,8 +2703,9 @@ function renderRel(res) {
     h += '</div>';
 
     /* 料號 */
-    h += '<div class="sec"><h5>料號（由訂單自動帶出，可手動補掛）</h5>';
-    if (res.can_edit) {
+    h += '<div class="sec"><h5>料號（由訂單自動帶出，可手動補掛）'
+      + (partsLocked ? '<span class="pj-hint" style="margin-left:8px;">（已送簽，不可再增減）</span>' : '') + '</h5>';
+    if (partsCanEdit) {
         h += '<div style="display:flex;gap:6px;margin-bottom:8px;align-items:flex-end;">'
           + '<div style="flex:1;"><label>搜尋料號加入</label>'
           + '<input type="text" id="partKw" placeholder="輸入料號或圖號關鍵字後按 Enter"></div></div>'
@@ -2640,13 +2716,13 @@ function renderRel(res) {
     } else {
         h += '<div style="overflow-x:auto;"><table class="sub-tbl"><thead><tr>'
           + '<th>料號</th><th>圖號</th><th>規格</th><th style="width:60px;">版次</th><th style="width:100px;">客戶</th>'
-          + '<th style="width:80px;">來源</th>' + (res.can_edit ? '<th style="width:50px;"></th>' : '') + '</tr></thead><tbody>';
+          + '<th style="width:80px;">來源</th>' + (partsCanEdit ? '<th style="width:50px;"></th>' : '') + '</tr></thead><tbody>';
         $.each(res.parts, function (i, x) {
             h += '<tr><td><b>' + esc(x.part_no) + '</b>' + (num(x.Is_Assembly) ? ' <span class="pj-hint">(組合件)</span>' : '') + '</td>'
               + '<td>' + esc(x.Drawing_No || '') + '</td><td>' + esc(x.Spec_No || '') + '</td>'
               + '<td>' + esc(x.Revision || '') + '</td><td>' + esc(x.customer_name || '') + '</td>'
               + '<td>' + (x.source === 'order' ? '訂單帶出' : '手動') + '</td>'
-              + (res.can_edit ? '<td>' + (x.source === 'manual'
+              + (partsCanEdit ? '<td>' + (x.source === 'manual'
                     ? '<span class="pj-op" data-partdel="' + x.ds_pk + '" style="color:#DD5138;">移除</span>'
                     : '<span class="pj-hint" title="要移除請改移出對應訂單">－</span>') + '</td>' : '')
               + '</tr>';
@@ -3883,6 +3959,13 @@ function openSetting() {
         ownScopeReset();
         renderOwnScope();
 
+        /* 專案負責人預設部門與順序 */
+        var oodOpt = '<option value="">（不設定，維持原本排序）</option>';
+        $.each(META.depts || [], function (i, x) { oodOpt += '<option value="' + x.id + '">' + esc(x.name) + '</option>'; });
+        $('#setOwnOrderDept').html(oodOpt).val(String(s.owner_default_dept_id || ''));
+        OWN_ORDER = String(s.owner_order || '').split(',').map(num).filter(function (x) { return x > 0; });
+        loadOwnOrderCands();
+
         var plan = (META.asdoc || {}).plan || {}, card = (META.asdoc || {}).card || {};
         $('#asPlanTxt').val(plan.bound ? (plan.doc_no + '　' + plan.doc_name) : '（未綁定）');
         $('#asCardTxt').val(card.bound ? (card.doc_no + '　' + card.doc_name) : '（未綁定）');
@@ -3895,6 +3978,47 @@ function openSetting() {
    存進去的資料仍是 {d:部門id, p:職稱id} 的組合（p=0＝全部職稱），存檔時後端會再 parse 正規化一次。 */
 var OWN_SCOPE = [];       // [{d,p,dept_name,pos_name}, …]
 var OWN_EDIT  = 0;        // 目前正在「修改」哪個部門（0＝新增模式）
+
+/* ── 專案負責人預設部門與順序 ── */
+var OWN_ORDER = [];       // 已存的順序（user_id 陣列，前面優先）
+var OWN_ORDER_PEOPLE = []; // 目前選定部門的人員（已依 OWN_ORDER 排好）
+function loadOwnOrderCands() {
+    var d = num($('#setOwnOrderDept').val());
+    if (!d) { OWN_ORDER_PEOPLE = []; $('#ownOrderBody').html('<tr><td colspan="3" style="padding:8px;color:#8a6d45;">請先選部門</td></tr>'); $('#ownOrderHint').text(''); return; }
+    api('owner_order_cand', { dept_id: d }, 'GET').done(function (r) {
+        var rows = (r.rows || []).slice();
+        rows.sort(function (a, b) {
+            var ra = $.inArray(num(a.id), OWN_ORDER), rb = $.inArray(num(b.id), OWN_ORDER);
+            if (ra < 0) ra = 9999 + num(a.id); if (rb < 0) rb = 9999 + num(b.id);
+            return ra - rb;
+        });
+        OWN_ORDER_PEOPLE = rows;
+        renderOwnOrder();
+    });
+}
+function renderOwnOrder() {
+    var h = '';
+    $.each(OWN_ORDER_PEOPLE, function (i, x) {
+        h += '<tr><td>' + (i + 1) + '</td><td style="text-align:left;">' + esc(peopleLabel(x)) + '</td><td>'
+          + (i > 0 ? '<span class="pj-op own-ord-up" data-i="' + i + '" title="往上移"><i class="fa fa-arrow-up"></i></span> ' : '')
+          + (i < OWN_ORDER_PEOPLE.length - 1 ? '<span class="pj-op own-ord-dn" data-i="' + i + '" title="往下移"><i class="fa fa-arrow-down"></i></span>' : '')
+          + '</td></tr>';
+    });
+    if (!OWN_ORDER_PEOPLE.length) h = '<tr><td colspan="3" style="padding:8px;color:#8a6d45;">這個部門目前沒有人</td></tr>';
+    $('#ownOrderBody').html(h);
+    $('#ownOrderHint').text(OWN_ORDER_PEOPLE.length ? ('共 ' + OWN_ORDER_PEOPLE.length + ' 人，上下箭頭調整順序，存檔才會生效。') : '');
+}
+$(document).on('change', '#setOwnOrderDept', loadOwnOrderCands);
+$(document).on('click', '.own-ord-up', function () {
+    var i = num($(this).data('i'));
+    var t = OWN_ORDER_PEOPLE[i - 1]; OWN_ORDER_PEOPLE[i - 1] = OWN_ORDER_PEOPLE[i]; OWN_ORDER_PEOPLE[i] = t;
+    renderOwnOrder();
+});
+$(document).on('click', '.own-ord-dn', function () {
+    var i = num($(this).data('i'));
+    var t = OWN_ORDER_PEOPLE[i + 1]; OWN_ORDER_PEOPLE[i + 1] = OWN_ORDER_PEOPLE[i]; OWN_ORDER_PEOPLE[i] = t;
+    renderOwnOrder();
+});
 
 function ownPosName(pid) {
     if (num(pid) === 0) return '全部職稱';
@@ -4049,7 +4173,9 @@ $(document).on('click', '#btnSetSave', function () {
         doc_sip_scopes: $('#setSipScopes .pj-tag.on').map(function () { return String($(this).data('scp')); }).get().join(','),
         task_owner_depts: pickedTaskDepts().join(','),
         seed_template: JSON.stringify(collectSeedTpl()),
-        owner_scope: JSON.stringify($.map(OWN_SCOPE, function (r) { return { d: num(r.d), p: num(r.p) }; }))
+        owner_scope: JSON.stringify($.map(OWN_SCOPE, function (r) { return { d: num(r.d), p: num(r.p) }; })),
+        owner_order_dept: $('#setOwnOrderDept').val() || '0',
+        owner_order: $.map(OWN_ORDER_PEOPLE, function (x) { return x.id; }).join(',')
     }, 'POST').done(function (r) {
         alert(r.message);
         META.default_cosign_depts = cos.join(',');
