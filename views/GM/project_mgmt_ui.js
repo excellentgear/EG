@@ -309,6 +309,37 @@ function openProject(id, after) {
     });
 }
 
+/** 代號第一碼跟專案性質對得起來嗎（還沒發號的新專案視為一致） */
+function noTypeMismatch(p) {
+    var no = String(p.project_no || ''), tp = String(p.project_type || '');
+    if (!no || !tp) return true;
+    return no.charAt(0) === tp;
+}
+/** 對不起來時的提示與重編入口（限專案管理員） */
+function noSyncHint(p) {
+    if (noTypeMismatch(p)) return '';
+    var tp = String(p.project_type || '');
+    var nm = (META.types_all || META.types || {})[tp] || tp;
+    return '<span class="pj-hint" style="color:#A32E1A;">（第一碼 ' + esc(String(p.project_no).charAt(0))
+         + ' 與目前性質「' + esc(nm) + '（' + esc(tp) + '）」對不起來）</span>'
+         + (PERM.canAdmin ? '<span class="pj-op" id="btnRenum" style="margin-left:6px;">'
+                          + '<i class="fa fa-refresh"></i> 重編代號</span>' : '');
+}
+$(document).on('click', '#btnRenum', function () {
+    if (!CUR || !num(CUR.project.project_id)) return;
+    var p = CUR.project;
+    if (!confirm('把專案代號重編成符合目前性質的新號碼？\n\n'
+        + '目前代號：' + p.project_no + '\n'
+        + '這張專案的狀態：' + (STATUS_LABEL[p.status] || p.status) + '\n\n'
+        + '※ 已送簽／已核准的專案，舊號碼可能已經印在執行規劃表、專案管理卡與會簽通知上，\n'
+        + '　 重編之後紙本與系統會對不起來，請先確認那些紙本要不要一起換掉。\n'
+        + '※ 專案管理卡的卡號會一併更新。')) return;
+    api('renum', { project_id: p.project_id }, 'POST').done(function (r) {
+        loadList();
+        openProject(num(p.project_id), function () { pjMsg(r.message, { ok: true }); });
+    });
+});
+
 /** 標頭上的料號連結（點開圖面檢視跳窗）。料號多時全部列出來，不要只挑一個。 */
 function partLinksHtml(res) {
     var parts = res.parts || [];
@@ -450,7 +481,11 @@ function renderBase(res) {
     $.each(META.depts || [], function (i, x) { deptOpt += '<option value="' + x.id + '"' + (num(p.dept_id) === num(x.id) ? ' selected' : '') + '>' + esc(x.name) + '</option>'; });
 
     var h = '<div class="sec"><h5>專案基本資料</h5><div class="grid3">'
-      + '<div><label>專案代號</label><input type="text" class="ro-auto" readonly value="' + esc(p.project_no || '（存檔後自動產生）') + '"></div>'
+      /* 代號第一碼＝專案性質。性質改過、但代號還是舊的第一碼時要講出來並給重編入口
+         （已送簽以上不會在存檔時自動重編，號碼已經印在文件上了）。 */
+      + '<div><label>專案代號' + noSyncHint(p) + '</label>'
+      + '<input type="text" class="ro-auto' + (noTypeMismatch(p) ? '' : ' fld-bad') + '" readonly value="'
+      + esc(p.project_no || '（存檔後自動產生）') + '"></div>'
       /* 送簽之後不可以再改專案性質（使用者指定）——性質是專案代號的第一碼，號碼一送簽就跟著文件出去了。
          後端 save 同規則再擋一次（鐵律8）。 */
       + '<div id="fldType"><label>專案性質 <span style="color:#DD5138;">*</span>'
@@ -1052,10 +1087,13 @@ function autoCreateOf(t) {
     });
     return hit;
 }
-/* ➕ 圖示：開既有的那一頁（同一個跳窗實作，不另外刻） */
+/* ➕ 圖示：**另開新分頁**直接到那一頁（使用者指定「像快捷鍵那樣」）。
+   刻意不用跳窗——「去建立 SOP」是從回報跳窗裡按的，再開一層跳窗會被壓在它後面看不到；
+   而且建立文件要填一整張表，塞在 iframe 裡本來就難用。
+   這是使用者點擊觸發的 window.open，不會被彈出視窗封鎖。 */
 $(document).on('click', '[data-mkurl]', function (e) {
     e.stopPropagation();
-    openPageModal(String($(this).data('mktitle') || '建立'), String($(this).data('mkurl')));
+    window.open(String($(this).data('mkurl')), '_blank', 'noopener');
 });
 
 /** 這個步驟系統偵測到的「建議完成日」（沒抓到回 null） */
@@ -2712,6 +2750,8 @@ function renderCheck(res) {
           + 'SIP 是<b>綁到這個料號</b>的文件；SOP 因為製造製程說明書本來就跟著製程走、跨料號共用，'
           + '所以「綁這個料號」或「這個料號用到的製程都有製程 SOP」都算；只涵蓋一部分時會標出 n/m 與缺哪幾個製程。'
           + '舊資料若是掃描檔掛在料號附件（標籤勾了 SOP／SIP）一樣算數。<br>'
+          + '<b>通用的 SOP／SIP 請按欄位裡的「綁定文件」逐份挑</b>——上下料一份、加工另一份都挑得到，'
+          + '不限一份；挑到的會列在下面並直接算成已建立。<br>'
           + '欄名標 <b class="chk-before">［首件前］</b> 的（PFMEA／SOP／SIP）要在<b>送首件檢驗之前</b>備妥'
           + '——首件驗證的就是這套製程與這份文件，沒有它們就沒有判定依據（AS9102／AS9145）；'
           + '標 <b class="chk-after">［首件後］</b> 的（型態識別文件管制表）等首件<b>通過之後</b>再建立，'
@@ -2730,11 +2770,13 @@ function renderCheck(res) {
         h += '<tr><td class="l"><b>' + esc(r.part_no) + '</b></td><td>' + esc(r.customer_name || '') + '</td>';
         $.each(defs, function (k, d) {
             var ph = phase[k] || 'any', rev = r[k + '_rev'] || '';
+            /* SOP／SIP 才有「綁定文件」：其餘四項是一個料號一份表單，沒有「挑哪幾份」的問題 */
+            var bnd = (k === 'sop' || k === 'sip') ? ssBindCell(r, k, res) : '';
             if (num(r[k])) {
                 /* 已建立的也可以點——點下去開對應頁面並帶料號過去查（SOP／SIP 會自動開在該分頁上） */
                 h += '<td><span class="chk-y chk-go" data-go="' + esc(d[1]) + '" data-kw="' + esc(r.part_no) + '"'
                   + ' title="開啟' + esc(d[0]) + '">✓ 已建立</span>'
-                  + (rev ? '<br><span class="pj-hint">' + esc(rev) + '</span>' : '') + '</td>';
+                  + (rev ? '<br><span class="pj-hint">' + esc(rev) + '</span>' : '') + bnd + '</td>';
             } else if (ph === 'after' && !passed) {
                 h += '<td><span class="pj-hint" title="首件通過後才需要建立">－ 首件通過後</span></td>';
             } else {
@@ -2742,7 +2784,7 @@ function renderCheck(res) {
                   + ' data-doc="' + esc(k) + '" data-ds="' + num(r.ds_pk) + '">✗ 未建立</span>'
                   /* 缺件也要講得出差在哪裡：製程 SOP 只涵蓋一部分時後端會把 n/m 與缺的製程帶回來 */
                   + (rev ? '<br><span class="pj-hint">' + esc(rev) + '</span>' : '')
-                  + (ph === 'before' ? '<br><span class="chk-before">送首件前應備</span>' : '') + '</td>';
+                  + (ph === 'before' ? '<br><span class="chk-before">送首件前應備</span>' : '') + bnd + '</td>';
             }
         });
         h += '<td>' + (num(r.missing) ? '<span class="pj-miss-badge">' + num(r.missing) + '</span>' : '<span class="pj-ok-badge">齊全</span>') + '</td></tr>';
@@ -2750,6 +2792,110 @@ function renderCheck(res) {
     h += '</tbody></table></div>';
     $('#paneChk').html(h);
 }
+/* ── 專案自己綁定 SOP／SIP（使用者 2026-09-23：要能綁「通用」的，而且各種都不限一項） ── */
+
+/** 欄位裡那一小塊：已綁的逐份列出來（看得到綁的是哪一份），可編輯時再給一顆「綁定文件」 */
+function ssBindCell(r, kind, res) {
+    var list = (r.ss_bind && r.ss_bind[kind]) || [], h = '';
+    if (list.length) {
+        h += '<div class="ss-bd">';
+        $.each(list, function (i, b) {
+            h += '<div title="' + esc(String(b.title || '')) + '">・' + esc(String(b.title || ''))
+               + (b.ver_no ? ' Ver.' + esc(String(b.ver_no)) : '')
+               + (num(b.ds_pk) ? '' : '<span class="ss-all">全專案</span>') + '</div>';
+        });
+        h += '</div>';
+    }
+    if (res && res.can_edit) {
+        h += '<span class="ss-bind-btn" data-ss="' + esc(kind) + '" data-ds="' + num(r.ds_pk) + '"'
+           + ' data-part="' + esc(String(r.part_no || '')) + '">'
+           + '<i class="fa fa-link"></i> 綁定文件' + (list.length ? '（' + list.length + '）' : '') + '</span>';
+    }
+    return h;
+}
+
+var SSB = { kind: 'sop', ds: 0, part: '', picked: {} };
+
+$(document).on('click', '.ss-bind-btn', function () {
+    SSB.kind = String($(this).data('ss') || 'sop');
+    SSB.ds   = num($(this).data('ds'));
+    SSB.part = String($(this).data('part') || '');
+    SSB.picked = {};
+    $('#ssTitle').text((SSB.kind === 'sip' ? 'SIP 標準檢驗指導書' : 'SOP 作業標準書') + '　料號 ' + SSB.part);
+    $('#ssKw').val('');
+    openMask('ssMask');
+    loadSsCand();
+});
+$(document).on('input', '#ssKw', function () {
+    clearTimeout(SSB._t);
+    SSB._t = setTimeout(loadSsCand, 250);
+});
+
+function loadSsCand() {
+    $('#ssBody').html('<div class="pj-hint" style="padding:12px;">載入中…</div>');
+    api('ss_cand', {
+        project_id: CUR.project.project_id, kind: SSB.kind, ds_pk: SSB.ds, kw: $('#ssKw').val() || ''
+    }).done(function (res) {
+        var rows = res.rows || [];
+        /* 第一次載入時把「目前已綁的」帶成勾選狀態；之後重新搜尋不可以把使用者剛勾的洗掉
+           （換關鍵字不掉選＝與標籤管理跳窗同一條規則） */
+        $.each(rows, function (i, r) {
+            if (SSB.picked[r.doc_id] === undefined && num(r.bound)) SSB.picked[r.doc_id] = true;
+        });
+        if (!rows.length) {
+            $('#ssBody').html('<div class="pj-hint" style="padding:12px;">查不到可以綁的文件。'
+                + '通用文件請先在<b>作業標準書 SOP／標準檢驗指導書 SIP</b> 那一頁建立（適用範圍選「通用」）。</div>');
+            $('#ssCnt').text('');
+            return;
+        }
+        var grp = { general: [], part: [], other: [] };
+        $.each(rows, function (i, r) {
+            var g = (String(r.scope) === 'general') ? 'general'
+                  : ((num(r.part_d_id) === SSB.ds || String(r.part_no_text || '') === SSB.part) ? 'part' : 'other');
+            grp[g].push(r);
+        });
+        var lab = { general: '通用（跨料號共用）', part: '綁定本料號', other: '本專案製程的說明書' }, h = '';
+        $.each(['general', 'part', 'other'], function (i, g) {
+            if (!grp[g].length) return;
+            h += '<div class="ss-grp">' + esc(lab[g]) + '（' + grp[g].length + '）</div>';
+            $.each(grp[g], function (j, r) {
+                var on = !!SSB.picked[r.doc_id];
+                h += '<label class="ss-row' + (on ? ' on' : '') + '">'
+                   + '<input type="checkbox" class="ss-ck" data-id="' + num(r.doc_id) + '"' + (on ? ' checked' : '')
+                   + (num(r.bound_all) ? ' disabled' : '') + '>'
+                   + '<b>' + esc(String(r.title || '')) + '</b>'
+                   + (r.ver_no ? ' <span class="pj-hint">Ver.' + esc(String(r.ver_no)) + '</span>' : '')
+                   + (r.proc_name ? ' <span class="pj-hint">／' + esc(String(r.proc_name)) + '</span>' : '')
+                   + (num(r.bound_all) ? ' <span class="ss-all">已由「全專案」綁定</span>' : '')
+                   + '</label>';
+            });
+        });
+        $('#ssBody').html(h);
+        ssCnt();
+    });
+}
+function ssCnt() {
+    var n = 0;
+    $.each(SSB.picked, function (k, v) { if (v) n++; });
+    $('#ssCnt').text('已選 ' + n + ' 份');
+}
+$(document).on('change', '.ss-ck', function () {
+    SSB.picked[num($(this).data('id'))] = $(this).is(':checked');
+    $(this).closest('.ss-row').toggleClass('on', $(this).is(':checked'));
+    ssCnt();
+});
+$('#btnSsSave').on('click', function () {
+    var ids = [];
+    $.each(SSB.picked, function (k, v) { if (v) ids.push(num(k)); });
+    api('ss_bind_save', {
+        project_id: CUR.project.project_id, ds_pk: SSB.ds, kind: SSB.kind, doc_ids: JSON.stringify(ids)
+    }, 'POST').done(function (r) {
+        closeMask('ssMask');
+        if (r.doc_check) { CUR.doc_check = r.doc_check; renderCheck(CUR); }
+        pjMsg(r.message || '已儲存', { ok: true });
+    });
+});
+
 /** 目標頁的路徑本身可能已經帶參數（SOP／SIP 是 sop_sip.php?tab=sop），接參數前要先看有沒有 ? */
 function chkUrl(go, qs) {
     go = String(go || '');

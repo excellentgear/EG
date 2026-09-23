@@ -73,17 +73,18 @@ function prj_types(PDO $db, bool $activeOnly = false): array
  * 專案性質改掉之後，把專案代號一起重編（2026-09-22 使用者回報「改了性質但代號沒跟著改」）。
  *
  * 代號的第一碼**就是**性質（C260501 的 C＝客製），改了性質不重編就會對不起來。
- * 但**只重編「還沒發出去」的**——草稿／已退回才重編；已送簽、已核准、已結案、已終止的
- * 一律維持原號，因為那個號碼已經印在執行規劃表、專案管理卡與會簽通知上了，
- * 事後改號會跟紙本對不起來（比照內部稽核件號 ia_case_sync_no()、產品開發評估表 *_sync_doc_no()
- * 的同一條規則）。
+ * 存檔時的自動重編**只動「還沒發出去」的**——草稿／已退回才重編；已送簽、已核准、已結案、
+ * 已終止的一律維持原號，因為那個號碼已經印在執行規劃表、專案管理卡與會簽通知上了
+ * （比照內部稽核件號 ia_case_sync_no()、產品開發評估表 *_sync_doc_no() 的同一條規則）。
+ * 已發出去的要改，走 `$force=true`＝使用者在畫面上**明確按下「重編代號」**那一顆
+ * （2026-09-23 使用者要求：已核准的專案改了性質，代號也要跟著改）。
  *
  * 年月沿用**原本發號時的基準**（專案起日，沒有才用建檔日），不是今天——
  * 用今天會把 5 月立案的專案重編成 9 月的號碼，看起來像是新立案的。
  *
  * @return array|null [old, new]；沒有重編時回 null（第三個元素是沒重編的原因）
  */
-function prj_sync_no(PDO $db, int $projectId, string $newType, string $by): ?array
+function prj_sync_no(PDO $db, int $projectId, string $newType, string $by, bool $force = false): ?array
 {
     $st = $db->prepare("SELECT project_id, project_no, project_type, status, start_date, created_at
                         FROM project WHERE project_id=?");
@@ -94,8 +95,11 @@ function prj_sync_no(PDO $db, int $projectId, string $newType, string $by): ?arr
     $newType = strtoupper(substr(trim($newType), 0, 1));
     $old     = (string)$p['project_no'];
     if ($newType === '' || $newType === substr($old, 0, 1)) return null;   // 第一碼沒變就不用動
-    if (!in_array((string)$p['status'], ['draft', 'rejected'], true)) {
-        return ['old' => $old, 'new' => '', 'skip' => 'issued'];           // 已發出去的不重編
+    /* 自動重編只動「還沒發出去」的（草稿／已退回）。
+       已送簽以上要重編必須由人**明確按下「重編代號」**（$force）——號碼已經印在
+       執行規劃表、管理卡與會簽通知上，不可以在存檔時順手改掉。 */
+    if (!$force && !in_array((string)$p['status'], ['draft', 'rejected'], true)) {
+        return ['old' => $old, 'new' => '', 'skip' => 'issued'];
     }
 
     $base = (string)($p['start_date'] ?: substr((string)$p['created_at'], 0, 10));
@@ -318,6 +322,27 @@ function prj_ensure_schema(PDO $db): void
         UNIQUE KEY uq_is (project_id, is_id),
         KEY idx_prj (project_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='專案綁定的出貨單（只作確認資料用，不改 is_list）'");
+
+    /* 專案自己綁定的 SOP／SIP 文件（2026-09-23 使用者回報：
+       「你沒有提供我 SOP/SIP 可以綁定通用 SOP/SIP 的功能」）。
+       原本只有模組設定的「要不要認列通用文件」一個總開關——那是把全公司的通用文件
+       一律算進來（每個專案都寫「通用 12 份」），既看不出這個專案到底用哪幾份，
+       稽核時也講不出「上下料用的是哪一份 SOP」。使用者的原話是
+       「各種都不限定綁定一項（可能上下料是一個 SOP、加工是另一個）」＝
+       要逐份挑，所以改成**專案自己綁**：一個料號可以綁好幾份，通用的、綁別的料號的、
+       製程的都挑得到。ds_pk=0 代表「整個專案的料號都適用」。
+       刻意只存 doc_id 不存標題版次（鐵律4）：文件改名改版時這裡自動跟著變。 */
+    $db->exec("CREATE TABLE IF NOT EXISTS project_ss_bind (
+        id          INT AUTO_INCREMENT PRIMARY KEY,
+        project_id  INT NOT NULL,
+        ds_pk       INT NOT NULL DEFAULT 0 COMMENT 'd_setting.d_id；0＝本專案所有料號都適用',
+        doc_id      INT NOT NULL COMMENT 'ss_doc.doc_id',
+        kind        VARCHAR(8) NOT NULL COMMENT 'sop / sip（由 ss_doc.kind 推導後存下來，只為了查詢方便）',
+        note        VARCHAR(200) NULL,
+        added_by    VARCHAR(60) NULL, added_at DATETIME NULL,
+        UNIQUE KEY uq_bind (project_id, ds_pk, doc_id),
+        KEY idx_prj (project_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='專案綁定的 SOP／SIP 文件（含通用文件）'");
 
     /* 步驟進度回報的佐證附件（2026-09-22 使用者要求：
        「所有需要自行填寫的都要可以上傳附件佐證」）。
@@ -2618,13 +2643,19 @@ function prj_doc_check(PDO $db, int $projectId): array
     $parts = prj_parts($db, $projectId);
     if (!$parts) return [];
     $ids = array_map(static fn($r) => (int)$r['ds_pk'], $parts);
-    $have = prj_doc_have_map($db, $ids);
+    /* 專案有綁定製程時，製程 SOP／SIP 只看**範圍內**那幾道——使用者 2026-09-23 回報
+       「專案涵蓋的製程只綁了其中一個，卻還是報缺客供料、包裝」。 */
+    /* 專案自己綁定的 SOP／SIP：判定要吃它，畫面也要列得出「綁的是哪幾份」
+       （含 ds_pk=0 的全專案綁定），所以只查一次兩邊共用。 */
+    $bind = prj_ss_bind_map($db, $projectId, $ids);
+    $have = prj_doc_have_map($db, $ids, prj_scope_process_ids(prj_get($db, $projectId)), $bind);
     $passed = prj_fai_pass_date($db, $projectId) !== null;
     $out = [];
     foreach ($parts as $r) {
         $dsPk = (int)$r['ds_pk'];
         $row = ['ds_pk' => $dsPk, 'part_no' => $r['part_no'], 'source' => $r['source'],
-                'customer_name' => $r['customer_name'], 'missing' => 0, 'missing_before' => 0];
+                'customer_name' => $r['customer_name'], 'missing' => 0, 'missing_before' => 0,
+                'ss_bind' => ['sop' => $bind['sop'][$dsPk] ?? [], 'sip' => $bind['sip'][$dsPk] ?? []]];
         foreach (array_keys(PRJ_DOC_CHECKS) as $k) {
             $v  = $have[$k][$dsPk] ?? null;
             $ok = !empty($v);
@@ -2645,6 +2676,140 @@ function prj_doc_check(PDO $db, int $projectId): array
     return $out;
 }
 
+/* ── 專案自己綁定的 SOP／SIP（使用者 2026-09-23：要能綁「通用」的，而且不限一份） ── */
+
+/** ss_doc.kind → 檢核項目的 sop／sip（kind 有 process／equip／sip 三種，只有 sip 是 SIP） */
+function prj_ss_kind(string $kind): string
+{
+    return ((string)$kind === 'sip') ? 'sip' : 'sop';
+}
+
+/**
+ * 專案綁定的 SOP／SIP 文件清單（即時 JOIN 回 ss_doc／ss_ver，標題與版次永遠是現況）。
+ * 回傳一維陣列，每列含 ds_pk（0＝全專案）、kind、doc_id、title、ver_no、status、scope。
+ */
+function prj_ss_binds(PDO $db, int $projectId): array
+{
+    try {
+        if (!$db->query("SHOW TABLES LIKE 'ss_doc'")->fetchColumn()) return [];
+        $st = $db->prepare("SELECT b.id, b.ds_pk, b.doc_id, b.kind, b.added_by, b.added_at,
+                                   d.title, d.scope, d.proc_name, d.process_no, d.is_deleted,
+                                   v.ver_no, v.status
+                            FROM project_ss_bind b
+                            LEFT JOIN ss_doc d ON d.doc_id = b.doc_id
+                            LEFT JOIN ss_ver v ON v.ver_id = d.cur_ver_id
+                            WHERE b.project_id = ?
+                            ORDER BY b.kind, b.ds_pk, d.title");
+        $st->execute([$projectId]);
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            // 文件被刪掉之後這一列就不算數（不主動刪綁定，文件還原回來就自動恢復）
+            if ($r['title'] === null || (int)$r['is_deleted'] === 1) continue;
+            $out[] = $r;
+        }
+        return $out;
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+/** 整理成 [kind => [ds_pk => [文件…]]] 給文件檢核用；ds_pk=0 的會套到每一個料號 */
+function prj_ss_bind_map(PDO $db, int $projectId, array $dsPks = []): array
+{
+    $map = ['sop' => [], 'sip' => []];
+    foreach (prj_ss_binds($db, $projectId) as $r) {
+        $k    = prj_ss_kind((string)$r['kind']);
+        $pks  = ((int)$r['ds_pk'] > 0) ? [(int)$r['ds_pk']] : $dsPks;
+        foreach ($pks as $pk) $map[$k][(int)$pk][] = $r;
+    }
+    return $map;
+}
+
+/**
+ * 可以綁的候選文件：通用的（scope='general'）、綁到這個料號的、以及這個料號用到的製程那幾份。
+ * 使用者要的是「上下料一份、加工另一份」這種挑法，所以一律列得出來讓人逐份勾。
+ */
+function prj_ss_cands(PDO $db, int $projectId, string $kind, int $dsPk = 0, string $kw = ''): array
+{
+    $kind = ($kind === 'sip') ? 'sip' : 'sop';
+    try {
+        if (!$db->query("SHOW TABLES LIKE 'ss_doc'")->fetchColumn()) return [];
+        $w = ["d.is_deleted=0", $kind === 'sip' ? "d.kind='sip'" : "d.kind<>'sip'"];
+        $p = [];
+
+        // 這個專案（或這個料號）涵蓋的製程，用來把製程說明書一起列出來
+        $prj   = prj_get($db, $projectId);
+        $scope = $prj ? prj_scope_process_ids($prj) : [];
+        $procs = [];
+        try {
+            $sql = "SELECT DISTINCT process_no FROM project_process WHERE project_id=? AND process_no>0"
+                 . ($dsPk > 0 ? " AND ds_pk=?" : "");
+            $st = $db->prepare($sql);
+            $st->execute($dsPk > 0 ? [$projectId, $dsPk] : [$projectId]);
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $n) {
+                $n = (int)$n;
+                if ($scope && !in_array($n, $scope, true)) continue;
+                $procs[] = $n;
+            }
+        } catch (Throwable $e) {
+        }
+
+        $or = ["d.scope='general'"];
+        if ($dsPk > 0) {
+            $or[] = "d.part_d_id=?";
+            $p[]  = $dsPk;
+            $no   = (string)($db->query("SELECT D_Setting_Id FROM d_setting WHERE d_id=" . (int)$dsPk)->fetchColumn() ?: '');
+            if ($no !== '') { $or[] = "(d.part_d_id IS NULL AND d.part_no_text=?)"; $p[] = $no; }
+        }
+        if ($procs) $or[] = "d.process_no IN (" . implode(',', array_map('intval', $procs)) . ")";
+        $w[] = '(' . implode(' OR ', $or) . ')';
+
+        $kw = trim($kw);
+        if ($kw !== '') {
+            $w[] = "(d.title LIKE ? OR d.proc_name LIKE ? OR d.part_no_text LIKE ?)";
+            array_push($p, "%$kw%", "%$kw%", "%$kw%");
+        }
+        $st = $db->prepare("SELECT d.doc_id, d.kind, d.scope, d.title, d.proc_name, d.process_no,
+                                   d.part_d_id, d.part_no_text, v.ver_no, v.status
+                            FROM ss_doc d LEFT JOIN ss_ver v ON v.ver_id=d.cur_ver_id
+                            WHERE " . implode(' AND ', $w) . "
+                            ORDER BY (d.scope='general') DESC, d.title LIMIT 300");
+        $st->execute($p);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+/**
+ * 存綁定：整組取代（這個專案＋這個料號＋這一種）。
+ * 後端一律重新確認每一份 doc_id 真的存在且種類相符（鐵律8：前端擋過，後端同規則再擋一次），
+ * 不採信前端送來的 kind。
+ */
+function prj_ss_bind_save(PDO $db, int $projectId, int $dsPk, string $kind, array $docIds, string $by = ''): int
+{
+    $kind   = ($kind === 'sip') ? 'sip' : 'sop';
+    $docIds = array_values(array_unique(array_filter(array_map('intval', $docIds))));
+    $ok     = [];
+    if ($docIds) {
+        $in = implode(',', array_fill(0, count($docIds), '?'));
+        $st = $db->prepare("SELECT doc_id, kind FROM ss_doc WHERE is_deleted=0 AND doc_id IN ($in)");
+        $st->execute($docIds);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if (prj_ss_kind((string)$r['kind']) === $kind) $ok[] = (int)$r['doc_id'];
+        }
+    }
+    $db->prepare("DELETE FROM project_ss_bind WHERE project_id=? AND ds_pk=? AND kind=?")
+       ->execute([$projectId, $dsPk, $kind]);
+    if ($ok) {
+        $ins = $db->prepare("INSERT IGNORE INTO project_ss_bind
+                             (project_id, ds_pk, doc_id, kind, added_by, added_at)
+                             VALUES (?,?,?,?,?,NOW())");
+        foreach ($ok as $id) $ins->execute([$projectId, $dsPk, $id, $kind, $by]);
+    }
+    return count($ok);
+}
+
 /**
  * SOP／SIP 的判定來源①＝ SOP／SIP 模組（views/QA/sop_sip.php 的 ss_doc／ss_ver）。
  * 2026-09-21 使用者交辦「文件檢核的 SOP／SIP 要連動到新的 sop_sip.php」，故改以模組為主、
@@ -2661,7 +2826,7 @@ function prj_doc_check(PDO $db, int $projectId): array
  *
  * 回傳 ['sop'=>[ds_pk=>['rev'=>…]], 'sip'=>[…], 'note'=>['sop'=>[ds_pk=>'說明文字']]]
  */
-function prj_doc_sopsip_map(PDO $db, array $dsPks, array $noOf): array
+function prj_doc_sopsip_map(PDO $db, array $dsPks, array $noOf, array $scopeProc = [], array $bound = []): array
 {
     $out = ['sop' => [], 'sip' => [], 'note' => ['sop' => [], 'sip' => []]];
     if (!$dsPks) return $out;
@@ -2738,11 +2903,15 @@ function prj_doc_sopsip_map(PDO $db, array $dsPks, array $noOf): array
             $k = ((string)$r['kind'] === 'sip') ? 'sip' : 'sop';
             $covered[$k][(int)$r['process_no']] = (int)$r['c'];
         }
+        /* 要看哪幾道製程：專案有綁定「涵蓋的製程」時**只看範圍內的**
+           （使用者 2026-09-23 回報：只綁了其中一道，卻還是報缺客供料、包裝——
+             那兩道根本不在這個專案的範圍裡，本來就不該要求它們有 SOP）。 */
         $need = [];
         $st = $db->prepare("SELECT DISTINCT ds_pk, process_no, process_name FROM project_process
                             WHERE ds_pk IN ($in) AND process_no IS NOT NULL AND process_no>0");
         $st->execute($dsPks);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if ($scopeProc && !in_array((int)$r['process_no'], $scopeProc, true)) continue;
             $need[(int)$r['ds_pk']][(int)$r['process_no']] = trim((string)($r['process_name'] ?? ''));
         }
         foreach (['sop', 'sip'] as $k) {
@@ -2770,11 +2939,22 @@ function prj_doc_sopsip_map(PDO $db, array $dsPks, array $noOf): array
                 }
                 $genN = empty($sc['general']) ? 0 : $genCnt[$k];
                 if ($genN) $bits[] = '通用 ' . $genN . ' 份';
+                /* 專案自己綁的那幾份（使用者 2026-09-23 要的「綁定通用 SOP／SIP」）：
+                   一律算數，而且不受模組設定的「要不要認列通用」影響——那是全站的預設值，
+                   這裡是這個專案明確指定的，指定了就是要用它。 */
+                $bindDocs = $bound[$k][$pk] ?? [];
+                $bindN    = count($bindDocs);
+                if ($bindN) {
+                    $nm = [];
+                    foreach (array_slice($bindDocs, 0, 2) as $b) $nm[] = (string)($b['title'] ?? '');
+                    $bits[] = '本專案綁定 ' . $bindN . ' 份（'
+                            . implode('、', $nm) . ($bindN > 2 ? ' 等' : '') . '）';
+                }
 
                 /* 判定「有」：綁料號的有、或製程全部涵蓋、或認列通用且真的有通用文件。
                    製程沒齊全時就算綁了料號也要把缺的講出來（上面已寫進 note），
                    但仍算「有」——那是使用者自己決定要不要補的事，不是缺件。 */
-                if ($partN || ($procOk && !empty($sc['process']) && !empty($need[$pk])) || $genN) {
+                if ($partN || $bindN || ($procOk && !empty($sc['process']) && !empty($need[$pk])) || $genN) {
                     $out[$k][$pk] = ['rev' => implode('／', $bits)];
                 }
             }
@@ -2817,7 +2997,7 @@ function prj_doc_attach_flag_map(PDO $db, array $dsPks, string $flagCol): array
 }
 
 /** 一次查完所有文件的「哪些料號已有」，避免逐料號逐表 N+1 查詢 */
-function prj_doc_have_map(PDO $db, array $dsPks): array
+function prj_doc_have_map(PDO $db, array $dsPks, array $scopeProc = [], array $bound = []): array
 {
     $dsPks = array_values(array_unique(array_filter(array_map('intval', $dsPks))));
     $have = ['dev_eval' => [], 'type_id' => [], 'pfmea' => [], 'ext_doc' => [], 'sop' => [], 'sip' => []];
@@ -2875,7 +3055,7 @@ function prj_doc_have_map(PDO $db, array $dsPks): array
     }
 
     /* SOP／SIP：以 SOP／SIP 模組為主，模組裡查不到才退回料號附件標籤（舊資料是掃描檔掛標籤） */
-    $ss = prj_doc_sopsip_map($db, $dsPks, $noOf);
+    $ss = prj_doc_sopsip_map($db, $dsPks, $noOf, $scopeProc, $bound);
     foreach (['sop' => 'is_sop', 'sip' => 'is_sip'] as $k => $flagCol) {
         $have[$k] = $ss[$k];
         foreach (prj_doc_attach_flag_map($db, $dsPks, $flagCol) as $pk => $v) {
@@ -2949,6 +3129,19 @@ function prj_missing_for(PDO $db, string $target, bool $includeClosed = false): 
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
     if (!$rows) return [];
     $have = prj_doc_have_map($db, array_map(static fn($r) => (int)$r['ds_pk'], $rows));
+
+    /* SOP／SIP 若已由「專案自己綁定」認列，這裡也要算成有——不然文件檢核說齊全、
+       SOP／SIP 那一頁的建議建立清單卻還在催同一個料號（同一件事兩個答案）。
+       這支是跨專案掃描，所以逐專案把綁定併進來。 */
+    if ($target === 'sop' || $target === 'sip') {
+        $byPrj = [];
+        foreach ($rows as $r) $byPrj[(int)$r['project_id']][] = (int)$r['ds_pk'];
+        foreach ($byPrj as $prjId => $pks) {
+            foreach (prj_ss_bind_map($db, $prjId, $pks)[$target] ?? [] as $pk => $docs) {
+                if ($docs) $have[$target][(int)$pk] = ['rev' => '本專案綁定 ' . count($docs) . ' 份'];
+            }
+        }
+    }
 
     // 已被標記「不列入」的不再出現
     $ig = [];

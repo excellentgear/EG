@@ -706,6 +706,21 @@ case 'report_attach_dl':
     readfile($fp);
     exit;
 
+/**
+ * 重編專案代號（限專案管理員）。代號第一碼＝專案性質，性質改過之後兩者會對不起來。
+ * 存檔時的自動重編只動草稿／已退回，**已發出去的要由人明確按這一顆**——
+ * 號碼已經印在執行規劃表、管理卡與會簽通知上，不可以在存檔時順手改掉。
+ * 管理卡卡號（代號-01）一併同步。
+ */
+case 'renum':
+    if (!$P['canAdmin']) jerr('無權限（需「專案管理員」角色）', 403);
+    $pid = (int)($_POST['project_id'] ?? 0);
+    $prj = prj_need($db, $P, $pid);
+    $r = prj_sync_no($db, $pid, (string)$prj['project_type'], $uname, true);
+    if (!$r || empty($r['new'])) jout(['message' => '代號的第一碼已經跟專案性質一致，不需要重編', 'renum' => null]);
+    jout(['message' => '專案代號已由 ' . $r['old'] . ' 重編為 ' . $r['new'] . '（管理卡卡號一併更新）',
+          'renum' => $r]);
+
 /** 清單頁「就地展開進度」要的資料：只有目標與任務。
  *  刻意不用 get——那支會順路同步 BOM、算文件檢核、撈報工與出貨，展開一列不需要那些。 */
 case 'plan_rows':
@@ -1074,6 +1089,42 @@ case 'doc_check':
     $pid = (int)($_GET['project_id'] ?? 0);
     prj_need($db, $P, $pid);
     jout(['rows' => prj_doc_check($db, $pid), 'defs' => PRJ_DOC_CHECKS]);
+
+/**
+ * 可以綁的 SOP／SIP 候選文件（通用的、綁到這個料號的、這個料號用到的製程那幾份）。
+ * 使用者 2026-09-23：「要可以選定是否綁定通用的 SOP/SIP，各種都不限定綁定一項」。
+ */
+case 'ss_cand':
+    $pid = (int)($_GET['project_id'] ?? 0);
+    prj_need($db, $P, $pid);
+    $dsPk = (int)($_GET['ds_pk'] ?? 0);
+    $kind = (string)($_GET['kind'] ?? 'sop');
+    $rows = prj_ss_cands($db, $pid, $kind, $dsPk, (string)($_GET['kw'] ?? ''));
+    // 目前已綁的（這個料號自己綁的＋全專案綁的，要分得出來：全專案那幾份不在這裡取消）
+    $mine = [];
+    $all  = [];
+    foreach (prj_ss_binds($db, $pid) as $b) {
+        if (prj_ss_kind((string)$b['kind']) !== (($kind === 'sip') ? 'sip' : 'sop')) continue;
+        if ((int)$b['ds_pk'] === $dsPk) $mine[(int)$b['doc_id']] = true;
+        elseif ((int)$b['ds_pk'] === 0)  $all[(int)$b['doc_id']] = $b;
+    }
+    foreach ($rows as &$r) {
+        $r['bound']     = isset($mine[(int)$r['doc_id']]) ? 1 : 0;
+        $r['bound_all'] = isset($all[(int)$r['doc_id']]) ? 1 : 0;
+    }
+    unset($r);
+    jout(['rows' => $rows, 'kind' => (($kind === 'sip') ? 'sip' : 'sop'), 'ds_pk' => $dsPk]);
+
+/** 存綁定（整組取代這個料號、這一種的綁定） */
+case 'ss_bind_save':
+    $pid = (int)($_POST['project_id'] ?? 0);
+    prj_need($db, $P, $pid, true);
+    $ids = json_decode((string)($_POST['doc_ids'] ?? '[]'), true);
+    if (!is_array($ids)) $ids = [];
+    $n = prj_ss_bind_save($db, $pid, (int)($_POST['ds_pk'] ?? 0),
+                          (string)($_POST['kind'] ?? 'sop'), $ids, $uname);
+    jout(['message' => $n ? ('已綁定 ' . $n . ' 份') : '已清除綁定',
+          'doc_check' => prj_doc_check($db, $pid)]);
 
 /** 給四個頁面的偵測鈕呼叫：有專案但該頁未建立的料號 */
 case 'missing_for':

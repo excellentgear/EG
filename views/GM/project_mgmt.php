@@ -274,7 +274,20 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         .pj-exp-row > td { border-top:0 !important; }
         .pj-inline-gantt .gantt-wrap { max-height:260px; overflow-y:auto; }
         @media print { .pj-toolbar, .pj-tabs, .pj-totop, .nav_menu, .left_col, footer { display:none !important; } }
-    </style>
+    
+/* 文件檢核：專案自己綁定的 SOP／SIP */
+.ss-bd{margin-top:4px;font-size:11px;line-height:15px;color:#7a5a3a;}
+.ss-bd div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;}
+.ss-all{display:inline-block;margin-left:4px;padding:0 4px;font-size:10px;line-height:14px;
+        background:#F7E0BD;color:#7a4a18;border-radius:3px;}
+.ss-bind-btn{display:inline-block;margin-top:4px;font-size:11px;line-height:16px;color:#C4761E;cursor:pointer;}
+.ss-bind-btn:hover{text-decoration:underline;}
+.ss-grp{margin:10px 0 4px;font-weight:bold;color:#7a4a18;border-bottom:1px solid #E7D3B5;padding-bottom:3px;}
+.ss-row{display:block;padding:5px 8px;border:1px solid #EFE3D2;border-radius:4px;margin-bottom:4px;
+        font-weight:normal;cursor:pointer;}
+.ss-row.on{background:#FDF3E4;border-color:#E0B277;}
+.ss-row input{margin-right:6px;}
+</style>
 </head>
 <body class="nav-sm">
 <div class="container body">
@@ -679,6 +692,25 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
     <div class="m-foot" id="rptFoot"></div>
 </div></div>
 
+<!-- ══════════ 綁定 SOP／SIP（使用者 2026-09-23：通用文件要能逐份挑，不限一份） ══════════ -->
+<div class="pj-mask" id="ssMask"><div class="pj-modal" style="max-width:760px;">
+    <div class="m-head"><span><i class="fa fa-link"></i> 綁定文件　<span id="ssTitle"></span></span><span class="m-close" onclick="closeMask('ssMask')">✕</span></div>
+    <div class="m-body">
+        <p class="pj-hint">勾起來的文件就算這個料號已經有 SOP／SIP。<b>可以複選</b>——上下料一份、加工另一份是常態；
+            通用文件（跨料號共用）與這個專案製程的說明書都列在下面。
+            換關鍵字搜尋<b>不會</b>把已經勾好的洗掉。</p>
+        <div style="margin-bottom:8px;">
+            <input type="text" id="ssKw" style="width:260px;" data-eg-hint="打文件名稱或製程名稱篩選">
+            <span class="pj-hint" id="ssCnt" style="margin-left:10px;"></span>
+        </div>
+        <div id="ssBody"></div>
+    </div>
+    <div class="m-foot">
+        <button onclick="closeMask('ssMask')">取消</button>
+        <button class="b-ok" id="btnSsSave"><i class="fa fa-save"></i> 儲存綁定</button>
+    </div>
+</div></div>
+
 <!-- ══════════ 跨專案總覽（內部用，非 AS 表單） ══════════ -->
 <div class="pj-mask" id="ovMask"><div class="pj-modal">
     <div class="m-head"><span><i class="fa fa-th-list"></i> 跨專案總覽（內部用，不印 AS 編號）</span><span class="m-close" onclick="closeMask('ovMask')">✕</span></div>
@@ -888,6 +920,13 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
                         —— 製造製程說明書本來就是跟著製程走、跨料號共用的。只涵蓋一部分時仍算缺件，
                         並會標出「製程 SOP n/m、缺哪幾個製程」。</li>
                     <li>舊資料若是掃描檔掛在<b>料號附件</b>（附件標籤勾了 SOP／SIP）一樣算數。</li>
+                    <li><b>通用的 SOP／SIP 由專案自己綁</b>（欄位裡的「綁定文件」）：通用文件是跨料號共用的，
+                        系統無從得知這個料號要用哪幾份，所以改成<b>逐份挑</b>——<b>可以複選、不限一份</b>
+                        （上下料一份 SOP、加工另一份是常態）；除了通用文件，<b>綁到本料號的</b>與
+                        <b>本專案製程的</b>說明書也一起列出來讓你挑。綁到的會列在欄位裡（看得出是哪一份）
+                        並直接算成「已建立」。<br>
+                        另外在<b>模組設定→文件檢核</b>有一組全站預設的「認列來源」（綁料號／製程／通用），
+                        那是<b>沒有逐份綁定時的預設判定</b>；專案自己綁的一律算數，不受它影響。</li>
                 </ul></li>
             <li>反方向也會提醒：那四個頁面各自的<b>「建議建立清單／缺件偵測」</b>多了一個<b>「專案」來源</b>，
                 會列出「有專案、但這一頁還沒建立」的料號，可多選批次建立。</li>
