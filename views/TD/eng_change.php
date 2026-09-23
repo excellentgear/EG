@@ -1394,12 +1394,25 @@ function loadPeople(date, pickId, pickDept){
     $('#e_applicant_hint').text('（管理員可代其他人開單；依日期列出當時在職者）');
     $.getJSON(API, {action:'people', date:date}, function(r){
         if (!r.ok) return;
-        var seen = {}, s = $('#e_applicant').empty().append('<option value="">請選擇…</option>');
+        // ★一人多職只列一次，但顯示文字要優先用「主職」——後端 people 清單是依部門／職稱
+        //   排序，不是依主職優先，兼任的部門排在主職前面時，只取第一筆會把主職蓋掉
+        //   （使用者回報：管理員補資料時申請人只顯示兼任職務）。
+        //   idx 只當查找表用（get/set by key），不可以用 Object.keys() 迭代它來組清單——
+        //   員工編號是數字字串，JS 規格會把數字鍵改成由小到大排序，後端排好的部門／
+        //   職稱順序會被打散（ai-rules 記憶 js_object_key_numeric_reorder 同一個坑）。
+        //   改成維持一個純陣列，主職出現時**原地覆蓋**第一次出現的那個位置，不重新排序。
+        var list = [], idx = {};
         (r.rows || []).forEach(function(p){
-            if (seen[p.id]) return;                    // 一人多職只列一次，職務在另一個下拉選
-            seen[p.id] = 1;
-            s.append('<option value="'+p.id+'">'+esc(p.display)+'</option>');
+            var key = String(p.id);
+            if (idx.hasOwnProperty(key)) {
+                if (p.is_main && !list[idx[key]].is_main) list[idx[key]] = p;
+                return;
+            }
+            idx[key] = list.length;
+            list.push(p);
         });
+        var s = $('#e_applicant').empty().append('<option value="">請選擇…</option>');
+        list.forEach(function(p){ s.append('<option value="'+p.id+'">'+esc(p.display)+'</option>'); });
         s.val(String(pickId || ME.uid));
         loadPosts(s.val(), date, pickDept);
     });
