@@ -142,7 +142,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div class="eq-toolbar">
             <label>機台種類</label>
             <select id="eqTypeSel"><option value="0">全部</option></select>
-            <input type="text" id="eqKw" placeholder="機台名稱/編號/製造商" style="width:150px;">
+            <input type="text" id="eqKw" placeholder="機台名稱/編號/製造商" title="輸入即時篩選；雙擊清空＝取消篩選" style="width:150px;">
             <label><input type="checkbox" id="eqShowDisabled"> 含已停用</label>
             <button id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
             <button id="btnAdd" class="btn-warm" style="display:none;"><i class="fa fa-plus"></i> 新增機台</button>
@@ -357,6 +357,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <p>本頁是機台設備的正式 AS9100 文件呈現（機台設備一覽表＋機器設備履歴表），資料與 <b>生管 KPI「機台資產設定」共用同一張機台主檔</b>，兩邊新增/編輯即時互相反映。</p>
         <h4>操作步驟</h4>
         <ul>
+            <li><b>篩選</b>：關鍵字欄<b>輸入即時篩選</b>（停止打字約 0.3 秒自動查詢，不必按「查詢」）；<b>機台種類</b>下拉與<b>含已停用</b>勾選改了也立即套用。關鍵字<b>雙擊清空＝取消篩選</b>並立刻回到完整清單（「查詢」鈕仍可按，用於重新抓最新資料）。</li>
             <li>「新增機台」／點列表「機台資料」：編輯機器名稱、編號、機型、製造商、購入日期、規格、位置(廠別)、停用狀態等基本資料。位置(廠別)是<b>廠區下拉</b>（一廠/二廠/三廠，取自庫存區域設定），不是自由輸入。</li>
             <li>「保養人」：指派保養人並記錄日期區間；保養人異動時系統自動把前一位的生效區間結束、接續新一位。若目前指派中的保養人已離職，會以紅字警示提醒改派。</li>
             <li>「履歴」：登錄設備故障/維修紀錄（日期／廠商／問題／解決方式／執行者），可逐筆核准並列印。填寫時：
@@ -407,6 +408,7 @@ $(document).ready(function(){
 var API = '../../src/store/EquipMachineList_API.php';
 var META = null, PERMS = null, ROWS = [];
 var CUR_SVC_MID = 0, CUR_SVC_NAME = '', CUR_ASG_MID = 0;
+var KW_TIMER = null, LIST_SEQ = 0, LAST_FILTER_KEY = null;   // 即時篩選：防抖計時器／查詢序號（丟掉過期回應）／上次查過的條件
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -445,10 +447,27 @@ function loadMeta(cb){
     });
 }
 
+// 篩選條件的指紋：條件沒變就不必再向後端要一次（打字時每個鍵都送一次是浪費）
+function filterKey(){
+    return [$.trim($('#eqKw').val()), $('#eqTypeSel').val(), $('#eqShowDisabled').is(':checked')?1:0].join('|');
+}
 function loadList(){
-    post('list', {keyword: $('#eqKw').val(), machine_type_id: $('#eqTypeSel').val(), show_disabled: $('#eqShowDisabled').is(':checked')?1:0}, function(res){
+    var key = filterKey();
+    LAST_FILTER_KEY = key;
+    var seq = ++LIST_SEQ;
+    post('list', {keyword: $.trim($('#eqKw').val()), machine_type_id: $('#eqTypeSel').val(), show_disabled: $('#eqShowDisabled').is(':checked')?1:0}, function(res){
+        // 打字很快時前一次查詢可能比後一次晚回來，舊的結果一律丟掉，否則畫面會停在關鍵字比較短的那一批
+        if (seq !== LIST_SEQ) return;
         ROWS = res.rows; renderList(); renderPrintHead();
     });
+}
+// 輸入即時篩選：關鍵字打完 300ms 沒有再動才查；清空（含雙擊清空）當下立刻恢復完整清單
+function autoFilter(delay){
+    clearTimeout(KW_TIMER);
+    KW_TIMER = setTimeout(function(){
+        if (filterKey() === LAST_FILTER_KEY) return;
+        loadList();
+    }, delay == null ? 300 : delay);
 }
 function renderPrintHead(){
     $('#eqListPrintHead').html('<div class="co">'+esc((META&&META.company_name)||'')+'</div><div class="tt">機台設備一覽表</div>');
@@ -487,8 +506,12 @@ function renderList(){
     });
     $('#eqBody').html(h || '<tr><td colspan="9" style="padding:20px;color:#8a6d45;">查無資料</td></tr>');
 }
-$('#btnSearch').on('click', loadList);
-$('#eqKw').on('keydown', function(e){ if (e.key==='Enter') loadList(); });
+$('#btnSearch').on('click', function(){ clearTimeout(KW_TIMER); loadList(); });
+$('#eqKw').on('keydown', function(e){ if (e.key==='Enter'){ clearTimeout(KW_TIMER); loadList(); } });
+// input 同時涵蓋「打字」與「共用檔 eg_input_rules 的雙擊清空」（它清空後會補送 input 事件）；
+// 清成空白＝解除篩選，不必等 300ms
+$('#eqKw').on('input', function(){ autoFilter($.trim(this.value) === '' ? 0 : 300); });
+$('#eqTypeSel, #eqShowDisabled').on('change', function(){ clearTimeout(KW_TIMER); loadList(); });
 window.addEventListener('scroll', function(){ $('#btnTotop').toggle(window.scrollY > 300); });
 
 /* ── 機台資料 ── */
