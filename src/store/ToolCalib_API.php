@@ -11,6 +11,7 @@ header('Content-Type: application/json; charset=utf-8');
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/tool_calib_lib.php';
+include_once $document_root . '/EGsystem/src/common/qc_tool_display_lib.php';
 include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
 
 /** 本模組可綁定 AS 文件編號的三個列印文件（ai-rules/16 第一之三節，一律走 asdoc_lib.php，白名單防呼叫端亂帶模組代碼） */
@@ -131,6 +132,8 @@ case 'meta': {
           'company_name'=>eg_company_full_name($db),
           'cur_user_name'=>$uname,
           'as_docs'=>$asDocs,
+          // 量具在「其他頁面」顯示哪些欄位（ai-rules/25），設定入口在本頁的類別設定
+          'disp_fields'=>qc_tool_disp_fields(), 'disp_default'=>qc_tool_disp_default(),
           // 圖章樣式(schema)一律回傳給所有看得到頁面的人（列印是全體使用者都會用到的動作，不限管理員）
           'list_stamp'=>tool_calib_stamp_tpl_get($db, (int)($approvalCfg['list_stamp_tpl_id'] ?? 0)),
           'footer_stamp'=>tool_calib_stamp_tpl_get($db, (int)($approvalCfg['footer_stamp_tpl_id'] ?? 0)),
@@ -394,9 +397,19 @@ case 'list': {
     }
 
     $stat = tool_calib_kpi_compute($db, $y, $m, []);
+    /* 已停用的一律排到最後（使用者 2026-09-23：「已停用之設備沒有列到最底下並反灰」）。
+       原本的排序鍵是「列入統計→下次應校驗月」，停用的量具剛好都沒有應校驗月，
+       於是散落在「未設基準」那一段中間，看起來跟在用的一模一樣。 */
+    usort($rows, function ($a, $b) {
+        $oa = (int)($a['state'] ?? 0) === 1 ? 1 : 0;
+        $ob = (int)($b['state'] ?? 0) === 1 ? 1 : 0;
+        if ($oa !== $ob) return $oa <=> $ob;
+        return 0;                                    // 同一群維持 SQL 原本的順序（PHP 8 的 usort 是穩定排序）
+    });
     jout(['rows'=>$rows, 'ym'=>$ym, 'stat'=>$stat, 'perms'=>$perms,
           'see_spec_code'=>tool_calib_can_see_spec_code($db, $u, $perms),
-          'categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db), 'excluded'=>$excluded]);
+          'categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db), 'excluded'=>$excluded,
+          'disp_fields'=>qc_tool_disp_fields(), 'disp_default'=>qc_tool_disp_default()]);
 }
 
 /* ---------- 類別校驗屬性設定（管理員；只改旗標，不改名稱/不新增刪除類別） ----------
@@ -409,12 +422,22 @@ case 'save_categories': {
     $items = json_decode((string)($_POST['items'] ?? ''), true);
     if (!is_array($items) || !$items) jerr('無資料可儲存');
     $validTabs = array_column(tool_calib_tabs($db), 'tab_id');
+    $disp = [];
     try {
         $db->beginTransaction();
         $up = $db->prepare("UPDATE qc_tool_list SET calib_required=?, has_tool_no=?, calib_tab=?, calib_tab_group=? WHERE QC_Tool_List_id=?");
         foreach ($items as $it) {
             $id = (int)($it['id'] ?? 0);
             if (!$id) continue;
+            /* 這個類別的量具在其他頁面要顯示哪幾個欄位（ai-rules/25，唯一實作 qc_tool_display_lib）。
+               **一定要收 array_key_exists**：沒送＝舊的呼叫端，設定原樣不動；
+               送空陣列才是「這個類別只印編號」，兩者是不同的意思。 */
+            if (array_key_exists('disp_fields', $it)) {
+                $f = $it['disp_fields'];
+                if (is_string($f)) $f = $f === '' ? [] : explode(',', $f);
+                $disp[$id] = ['fields' => array_map('trim', (array)$f),
+                              'sep'    => (string)($it['disp_sep'] ?? ' ')];
+            }
             $req = (int)($it['calib_required'] ?? 0) === 1 ? 1 : 0;
             $hasNo = (int)($it['has_tool_no'] ?? 0) === 1 ? 1 : 0;
             $tab = ((int)($it['calib_tab'] ?? 0) === 1 && $req === 1) ? 1 : 0;   // 需校驗才可列入分頁
@@ -425,6 +448,15 @@ case 'save_categories': {
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
+    /* 顯示設定存在 system_settings（一列 JSON），刻意放在交易外：
+       它是整包覆寫、不是逐列 UPDATE，混進上面那個交易只會讓失敗時更難判斷是哪一半沒存。
+       沒有任何一列送 disp_fields 時完全不動（舊分頁按儲存不會把新設定洗掉）。 */
+    if ($disp) {
+        $cur = qc_tool_disp_cfg($db);
+        foreach ($disp as $id => $c) $cur[$id] = $c;
+        try { qc_tool_disp_cfg_set($db, $cur); }
+        catch (Throwable $e) { jerr('顯示欄位設定儲存失敗：'.$e->getMessage(), 500); }
+    }
     jout(['categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db)]);
 }
 

@@ -91,6 +91,15 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .tc-op.disabled { color:#c9bda9; cursor:not-allowed; text-decoration:none; }
         .managed-yes { color:#8A5A2B; font-weight:bold; }
         .managed-no { color:#b0a390; }
+        /* 已停用的量具：整列反灰並排在最後（使用者 2026-09-23）。只淡化不隱藏——
+           停用的量具在舊單據上還查得到，藏起來會變成「以前明明有、現在不見了」 */
+        tr.tc-off > td { background:#f6f3ee; color:#a79a8a; }
+        tr.tc-off > td b { font-weight:normal; }
+        .tc-off-tag { display:inline-block; font-size:11px; line-height:16px; padding:0 6px; border-radius:9px;
+                      background:#e6ddd0; color:#8a6d45; margin-left:4px; }
+        .tc-disp { font-size:11px; color:#8a6d45; }
+        .tc-disp-pick label { display:inline-block; font-weight:normal; margin:0 8px 2px 0; white-space:nowrap; }
+        .tc-disp-prev { font-size:11px; color:#8A5A2B; }
         input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
         input[type=number] { -moz-appearance:textfield; }
         /* modal */
@@ -542,6 +551,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <th>可設定量具編號<br><label class="ck-all-lab"><input type="checkbox" class="ck-all" data-col="hasno"> 全選</label></th>
                 <th>列入分頁<br><label class="ck-all-lab"><input type="checkbox" class="ck-all" data-col="tab"> 全選</label></th>
                 <th>分頁名稱</th>
+                <th style="text-align:left;min-width:280px;">其他頁面顯示<br>
+                    <span class="tc-disp" style="font-weight:normal;">這個類別的量具被別的頁面挑選時要印哪幾欄</span></th>
             </tr></thead>
             <tbody id="catBody"></tbody>
         </table>
@@ -866,6 +877,9 @@ $(document).ready(function(){
 
 var API = '../../src/store/ToolCalib_API.php';
 var META = null, ROWS = [], PERMS = null, CATS = [], TABS_DEF = [];
+/* 量具在「其他頁面」顯示哪些欄位：可選欄位與預設值一律由後端給（ai-rules/25），
+   前端不自己寫死一份清單——寫死的話後端新增欄位這裡就會少一個而且不報錯 */
+var DISP_FIELDS = {}, DISP_DEFAULT = {fields:['tool_no','machine','spec_desc'], sep:' '};
 var ATT_CFG = {types:[], ext:[], maxmb:20, dir:'', ext_raw:'', types_raw:''};
 var curTab = '';   // 目前分頁：'' 全部 ｜ 類別id ｜ 'other' 其他（需校驗但未設為分頁）
 var SEE_SPEC_CODE = false;   // 採購料號代碼只給採購看（後端 tool_calib_can_see_spec_code 決定）
@@ -903,6 +917,8 @@ function loadMeta(cb){
         ATT_CFG = m.attach || ATT_CFG;
         STAFF = m.staff || []; STAFF_MULTI_DEPT = !!m.staff_multi_dept; QC_DEPT_SET = !!m.qc_dept_set;
         window.__ownCompany = m.company_name || '';
+        if (m.disp_fields)  DISP_FIELDS  = m.disp_fields;
+        if (m.disp_default) DISP_DEFAULT = m.disp_default;
         setCats(m.categories);
         if (m.perms.canEdit)  { $('#btnBatch').show(); }
         if (m.perms.canAdmin) { $('#btnAdd').show(); $('#btnCycleSet').show(); $('#btnCfg').show(); }
@@ -1038,8 +1054,12 @@ function renderTable(){
     pageRows.forEach(function(r){
         var last = r.last ? (fmtDate(r.last.calib_date)+'（'+(RESULT_LABEL[r.last.result]||r.last.result)+'）') : '—';
         var canEdit = PERMS.canEdit, canAdmin = PERMS.canAdmin;
-        html += '<tr>';
-        html += '<td class="t-left"><b>'+esc(r.Tool_No)+'</b></td>';
+        // 已停用：整列反灰（排序已由後端把它們推到最後），並在編號後面標停用日期
+        var off = Number(r.state) === 1;
+        html += '<tr'+(off ? ' class="tc-off"' : '')+'>';
+        html += '<td class="t-left"><b>'+esc(r.Tool_No)+'</b>'
+              + (off ? ' <span class="tc-off-tag">已停用'+(r.disabled_date ? ' '+fmtDate(r.disabled_date) : '')+'</span>' : '')
+              + '</td>';
         html += '<td>'+esc(r.category_name||'')+'</td>';
         html += '<td>'+(Number(r.state)===1 ? '—' : esc(r.machine||''))+'</td>';
         html += '<td class="t-left">'+specCell(r)+'</td>';
@@ -1380,7 +1400,9 @@ function collectCatUI(){
             req:  $tr.find('.ck-req').prop('checked') ? 1 : 0,
             hasNo:$tr.find('.ck-hasno').prop('checked') ? 1 : 0,
             tab:  $tr.find('.ck-tab').prop('checked') ? 1 : 0,
-            grp:  $tr.find('.sel-grp').val() || ''
+            grp:  $tr.find('.sel-grp').val() || '',
+            dispF: $tr.find('.ck-disp:checked').map(function(){ return $(this).val(); }).get(),
+            dispSep: $tr.find('.in-disp-sep').val() || ' '
         };
     });
     return st;
@@ -1409,11 +1431,55 @@ function renderCatBody(state){
             + '<td><input type="checkbox" class="ck-hasno"'+(hasNo?' checked':'')+'></td>'
             + '<td><input type="checkbox" class="ck-tab"'+(tab?' checked':'')+(req?'':' disabled')+'></td>'
             + '<td><select class="sel-grp"'+(tab?'':' disabled')+'>'+grpOptions(tab?grp:'')+'</select></td>'
+            + '<td style="text-align:left;">'+dispCell(c, s)+'</td>'
             + '</tr>';
     }).join('');
-    $('#catBody').html(h || '<tr><td colspan="6" style="color:#8a6d45;padding:12px;">尚無量具類別</td></tr>');
+    $('#catBody').html(h || '<tr><td colspan="7" style="color:#8a6d45;padding:12px;">尚無量具類別</td></tr>');
     syncCkAll();
+    $('#catBody tr[data-id]').each(function(){ dispPreview($(this)); });
 }
+
+/* ── 其他頁面顯示欄位（ai-rules/25：量具在別的頁面長什麼樣子，只在這裡設定一次） ──
+   量具編號本身看不出是什麼（QC-001 現場叫它「TTi 齒輪量測機」），
+   而分厘卡那種編號本身就含量程，所以要逐類別挑。**重複或互相包含的欄位會自動合併**，
+   K-555-P／K-555-P (100-125mm)／100-125mm 只會印出最長的那一個。 */
+function dispCell(c, s){
+    var sel = s ? s.dispF : (c.disp_fields || (DISP_DEFAULT.fields || []));
+    var sep = s ? s.dispSep : (c.disp_sep != null ? c.disp_sep : (DISP_DEFAULT.sep || ' '));
+    var h = '<div class="tc-disp-pick">';
+    $.each(DISP_FIELDS, function(k, label){
+        h += '<label><input type="checkbox" class="ck-disp" value="'+esc(k)+'"'
+           + (sel.indexOf(k) >= 0 ? ' checked' : '') + '> '+esc(label)+'</label>';
+    });
+    h += '</div><div>分隔 <input class="in-disp-sep" value="'+esc(sep)+'" maxlength="4" '
+       + 'style="width:44px;padding:1px 4px;"> <span class="tc-disp-prev"></span></div>';
+    return h;
+}
+/** 即時預覽：拿這個類別實際存在的第一支量具套上去（沒有量具就用示意值），改勾選當下就看得到 */
+function dispPreview($tr){
+    var id = $tr.attr('data-id');
+    var fields = []; $tr.find('.ck-disp:checked').each(function(){ fields.push($(this).val()); });
+    var sep = $tr.find('.in-disp-sep').val() || ' ';
+    var sample = (ROWS || []).filter(function(r){ return String(r.QC_Tool_List_id)===String(id); })[0];
+    var vals = [];
+    fields.forEach(function(k){
+        var v = '';
+        if (!sample) v = {tool_no:'QC-001', category:'齒輪檢測機', machine:'TTi 齒輪量測機', spec_desc:'電子'}[k] || '';
+        else if (k === 'tool_no')  v = sample.Tool_No || '';
+        else if (k === 'category') v = sample.category_name || '';
+        else v = sample[k] || '';
+        v = $.trim(v); if (!v) return;
+        for (var i=0;i<vals.length;i++){
+            if (vals[i].indexOf(v) >= 0) return;                 // 已經被包住
+            if (v.indexOf(vals[i]) >= 0) { vals[i] = v; return; } // 反過來包住舊的
+        }
+        vals.push(v);
+    });
+    if (!vals.length) vals = [sample ? (sample.Tool_No||'') : 'QC-001'];
+    $tr.find('.tc-disp-prev').text('→ ' + vals.join(sep));
+}
+$('#catBody').on('change', '.ck-disp', function(){ dispPreview($(this).closest('tr')); });
+$('#catBody').on('input', '.in-disp-sep', function(){ dispPreview($(this).closest('tr')); });
 function renderTabChips(){
     var h = TABS_DEF.map(function(t){
         return '<span class="tab-chip" data-id="'+t.tab_id+'">'+esc(t.tab_name)
@@ -1535,10 +1601,12 @@ function submitCats(){
         var c = CATS.filter(function(x){ return String(x.QC_Tool_List_id)===String(id); })[0] || {};
         var req = $tr.find('.ck-req').prop('checked') ? 1 : 0;
         if (!req && (c.managed_cnt||0) > 0) warn.push('・'+c.QC_Tool+'（'+c.managed_cnt+' 支已列入統計）');
+        var df = $tr.find('.ck-disp:checked').map(function(){ return $(this).val(); }).get();
         items.push({id:id, calib_required:req,
                     has_tool_no:$tr.find('.ck-hasno').prop('checked')?1:0,
                     calib_tab:$tr.find('.ck-tab').prop('checked')?1:0,
-                    calib_tab_group:$tr.find('.sel-grp').val() || 0});
+                    calib_tab_group:$tr.find('.sel-grp').val() || 0,
+                    disp_fields:df.join(','), disp_sep:$tr.find('.in-disp-sep').val() || ' '});
     });
     if (warn.length && !confirm('下列類別取消「需校驗」後，其量具將不再顯示於本頁、也不計入 KPI：\n'
         + warn.join('\n') + '\n\n確定儲存？')) return;

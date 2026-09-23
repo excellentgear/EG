@@ -290,6 +290,8 @@ function tool_calib_add_months(string $date, int $months): ?string {
  * 旗標一律 COALESCE 預設值，欄位剛加或舊資料為 NULL 時行為與加欄前相同（需校驗、可設編號、無分頁）
  */
 function tool_calib_categories(PDO $db): array {
+    require_once __DIR__ . '/qc_tool_display_lib.php';
+    $disp = qc_tool_disp_cfg($db);
     $rows = $db->query("SELECT l.QC_Tool_List_id, l.QC_Tool, l.sort_order,
                                COALESCE(l.calib_required,1) AS calib_required,
                                COALESCE(l.has_tool_no,1)    AS has_tool_no,
@@ -305,6 +307,11 @@ function tool_calib_categories(PDO $db): array {
         }
         $r['calib_tab_group'] = ($r['calib_tab_group'] === null || $r['calib_tab_group'] === '')
                               ? null : (int)$r['calib_tab_group'];
+        /* 這個類別的量具在「其他頁面」要顯示哪幾個欄位（唯一實作 qc_tool_display_lib，設定入口就在本頁） */
+        $c = $disp[$r['QC_Tool_List_id']] ?? null;
+        $r['disp_fields'] = $c ? $c['fields'] : qc_tool_disp_default()['fields'];
+        $r['disp_sep']    = $c ? $c['sep']    : qc_tool_disp_default()['sep'];
+        $r['disp_set']    = $c ? 1 : 0;
     }
     return $rows;
 }
