@@ -755,15 +755,17 @@ function setEditorReady(on) {
     $('#adLayout').toggle(!on);
 }
 
-/** 等自動分頁穩定下來（頁數連續 3 次不變＝排完了），最多等 20 秒 */
-function waitLayout() {
+/** 等自動分頁穩定下來（頁數連續 3 次不變＝排完了），最多等 20 秒。
+ *  cb：排版真的穩定、EDITOR_READY 變 true 之後才執行（例如匯入後要在這時候再做事，
+ *  提早做的話量到的還是排版中途的頁數，縮排／存檔都會用到還沒定案的分頁）。 */
+function waitLayout(cb) {
     var last = -1, same = 0, tries = 0;
     (function tick(){
         if (!ED) return;
         var n = ED.pageCount();
         if (n === last) same++; else { same = 0; last = n; }
         tries++;
-        if (same >= 3 || tries > 60) { setEditorReady(true); return; }
+        if (same >= 3 || tries > 60) { setEditorReady(true); if (cb) cb(); return; }
         setTimeout(tick, 330);
     })();
 }
@@ -790,15 +792,20 @@ function load() {
         if (CAN_EDIT) {
             if (!ED) ED = mkEditor();
             ED.set(html);
-            if (AUTO_INDENT_AFTER_LOAD) {
-                AUTO_INDENT_AFTER_LOAD = false;
-                ED.autoNumIndent();    // 重新匯入後版面常常縮排全亂，直接比照按鈕效果補一次
-            }
             loadChrome();              // 版面樣板（封面/制修訂紀錄書/目錄/頁首頁尾）
             setDirty(false);
             // 自動分頁是非同步的（字型載入、圖片載入、350ms 防抖動都會再排一次），
             // 所以等「頁數連續幾次都不再變」才算排版完成、才開放存檔
-            waitLayout();
+            if (AUTO_INDENT_AFTER_LOAD) {
+                AUTO_INDENT_AFTER_LOAD = false;
+                // 縮排要等分頁真的穩定下來才做（提早做的話，量到的頁數還在跑，
+                // 縮排造成的換行又會再引發一次重排，兩件事疊在一起會亂套）；
+                // 縮排完馬上存檔——不然畫面上看到的是縮排後的新分頁，
+                // 資料庫裡存的、列印會印出來的卻還是縮排前的舊分頁，兩邊對不起來。
+                waitLayout(function(){ ED.autoNumIndent(); save(); });
+            } else {
+                waitLayout();
+            }
             if (c && c.updated_at) $('#adSaved').text('上次存檔 ' + fmt(c.updated_at));
         } else {
             // 沒有編輯權：唯讀顯示（清洗後才輸出，鐵律8 的第二道防線）

@@ -473,6 +473,13 @@ function adt_revlog_html(array $ctx): string
     }
     $h .= '</table>';
 
+    /* 中間空白列：制修訂紀錄固定 14 列＋抬頭＋簽章區，通常填不滿一整頁，
+       「發行單位」簽章區下面會空出一大截沒有格線的白底，跟其他頁面（開了
+       公版大框時）底部的框線對不齊（使用者 2026-09-23 指出）。這一格用
+       flex 把剩下的高度吃掉，兩側補上跟表格同一條直框線，看起來像表格
+       本來就延伸到底，不是憑空留白。 */
+    $h .= '<div class="adt-rev-mid"></div>';
+
     // 發行單位與簽章欄（簽章人由簽核流程填，這裡先留格）
     $h .= '<table class="adt-rev-foot">'
         . '<colgroup><col class="adt-fc1"><col class="adt-fc2"><col class="adt-fc3"><col class="adt-fc4"></colgroup>'

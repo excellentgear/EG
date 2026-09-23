@@ -169,6 +169,45 @@ function adi_top_rows(string $table): array
     return $rows;
 }
 
+/**
+ * 取一段 <tr>…</tr> 的列內容裡「頂層」的每一個 <td>/<th> 內容（不含巢狀表格裡的儲存格）。
+ * 用途：拆頁框表格時，頁的內文常常是「一個 <td> 包住整頁段落，段落裡又嵌了一張真正的
+ * 內容表格」（Word 用 <dl><dd> 縮排包表格），如果直接用 `preg_match_all('#<t[dh]…</t[dh]#')`
+ * 這種不辨深淺的正規式去找 cell，第一個比對會在**巢狀表格第一格**的 </td> 就提早結束
+ * （不是外層那個 </td>），後面接著把巢狀表格自己的每一格也各自比對成一個「cell」——
+ * 結果整張內嵌表格的 <table>/<tr>/<td> 邊界全部消失，變成一串攤平的段落
+ * （2026-09-23 使用者回報：重新匯入後 3.1 權責表變成一路往下的文字，不再是表格）。
+ * 這支函式比照 `adi_top_tables()` 的深度追蹤手法，遇到巢狀 <table> 就整段跳過，
+ * 抓到的才是「這一列真正的頂層儲存格」，儲存格裡若含完整的巢狀表格會原樣保留。
+ */
+function adi_top_cells(string $row): array
+{
+    $cells = [];
+    $len = strlen($row);
+    $i = 0;
+    while ($i < $len) {
+        if (!preg_match('#<t[dh]\b[^>]*>#i', $row, $m, PREG_OFFSET_CAPTURE, $i)) break;
+        $contentStart = $m[0][1] + strlen($m[0][0]);
+        $j = $contentStart;
+        $depth = 0;      // 巢狀 <table> 深度：>0 時途中遇到的 td/th 都不算頂層
+        $end = null;
+        while ($j < $len) {
+            if (!preg_match('#<(/?)(table|td|th)\b[^>]*>#i', $row, $m2, PREG_OFFSET_CAPTURE, $j)) { $j = $len; break; }
+            $close = ($m2[1][0] === '/');
+            $tag2  = strtolower($m2[2][0]);
+            $pos = $m2[0][1]; $tend = $pos + strlen($m2[0][0]);
+            if ($tag2 === 'table') { $depth += $close ? -1 : 1; $j = $tend; continue; }
+            if ($depth !== 0) { $j = $tend; continue; }              // 巢狀表格裡的 td/th，跳過
+            if ($close) { $end = $pos; $j = $tend; break; }          // 找到這一格自己的收尾
+            $end = $pos; $j = $pos; break;                          // 防呆：沒收尾就被下一格開始頂替
+        }
+        if ($end === null) $end = $len;
+        $cells[] = substr($row, $contentStart, $end - $contentStart);
+        $i = $j;
+    }
+    return $cells;
+}
+
 function adi_plain(string $html): string
 {
     $t = preg_replace('#<[^>]+>#', '', $html);
@@ -240,11 +279,14 @@ function adi_unwrap_page_tables(string $raw, array &$stat): string
             }
             $bodyRows[] = $r;
         }
-        // 內文：把剩下那些列的儲存格內容攤平（外框就是這樣消失的）
+        // 內文：把剩下那些列的儲存格內容攤平（外框就是這樣消失的）。
+        // 用深度感知的 adi_top_cells() 而不是不辨深淺的正規式——頁的內文儲存格裡
+        // 常常還嵌著一張真正的內容表格（如 3.1 權責表），不辨深淺會把那張表也拆散。
         $body = '';
         foreach ($bodyRows as $r) {
-            if (preg_match_all('#<t[dh]\b[^>]*>(.*?)</t[dh]>#is', $r, $cs)) {
-                foreach ($cs[1] as $cell) $body .= $cell;
+            $cells = adi_top_cells($r);
+            if ($cells) {
+                foreach ($cells as $cell) $body .= $cell;
             } else {
                 $body .= $r;
             }
