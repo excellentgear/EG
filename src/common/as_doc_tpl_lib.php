@@ -159,7 +159,9 @@ function adt_style_defaults(): array
 {
     return ['tbl_font' => '', 'tbl_size' => '', 'tbl_weight' => 'normal',
             'brd_style' => 'solid', 'brd_w' => '1px', 'brd_color' => '#000000',
-            'cell_pad' => '4px'];
+            'cell_pad' => '4px',
+            // 內容大框：把正文整塊框起來，框線與頁首同寬、上下自然對齊
+            'body_frame' => '0', 'body_pad' => '3mm'];
 }
 
 /** 目前的公版設定（沒設定過就回預設＝與改版前外觀完全相同） */
@@ -215,6 +217,14 @@ function adt_style_save(PDO $db, array $in, int $uid): array
         if (!array_key_exists($v, adt_style_colors())) return ['ok' => false, 'msg' => '框線顏色不在清單內'];
         $new['brd_color'] = $v;
     }
+    if (array_key_exists('body_frame', $in)) {
+        $new['body_frame'] = !empty($in['body_frame']) ? '1' : '0';
+    }
+    if (array_key_exists('body_pad', $in)) {
+        $v = trim((string)$in['body_pad']);
+        if ($v !== '' && !preg_match('/^\d{1,2}(\.\d)?(mm|px)$/', $v)) return ['ok' => false, 'msg' => '大框內距要像 3mm 這樣'];
+        $new['body_pad'] = $v ?: '3mm';
+    }
     if (array_key_exists('cell_pad', $in)) {
         $v = trim((string)$in['cell_pad']);
         if ($v !== '' && !preg_match('/^\d{1,2}px$/', $v)) return ['ok' => false, 'msg' => '儲存格內距要像 4px 這樣'];
@@ -248,6 +258,11 @@ function adt_style_css(PDO $db): string
     $css[] = '--adt-brd-w:' . $s['brd_w'];
     $css[] = '--adt-brd-color:' . $s['brd_color'];
     if ($s['cell_pad'] !== '')   $css[] = '--adt-cell-pad:' . $s['cell_pad'];
+    if (!empty($s['body_frame'])) {
+        // 大框用的是同一組框線設定，所以它一定跟頁首那張表看起來是同一套
+        $css[] = '--adt-body-brd:' . $s['brd_w'] . ' ' . $s['brd_style'] . ' ' . $s['brd_color'];
+        $css[] = '--adt-body-pad:' . ($s['body_pad'] !== '' ? $s['body_pad'] : '3mm');
+    }
     return ':root{' . implode(';', $css) . '}';
 }
 

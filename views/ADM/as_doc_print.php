@@ -65,12 +65,13 @@ if ($err === '') {
                              '../../src/store/AsDocContent_API.php?action=asset&id=');
     $conts = adt_split_pages($body);
     $sys   = adt_system_pages($ctx, $conts);
-    $total = count($sys) + count($conts);
+    /* 頁次只算正文（使用者 2026-09-23 指定：文件制修訂紀錄書與目錄都不算一頁），
+       所以正文第一頁就是「1 / 正文總頁數」。 */
+    $total = count($conts);
     $pv    = adt_page_versions($ctx['versions'], count($conts), $ctx['version']);
     $no    = 0;
     foreach ($sys as $s) {
-        $no++;
-        // 系統頁不印頁首（它們自己就是完整版面），但頁尾照印
+        // 系統頁不印頁首（它們自己就是完整版面），也不計入頁次，但頁尾照印
         $pagesHtml[] = '<section class="adt-page adt-page-' . $s['key'] . '">'
                      . '<div class="adt-body eg-docbody">' . $s['html'] . '</div>'
                      . adt_footer_html($ctx) . '</section>';

@@ -179,10 +179,23 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
         .tpl-row > label:first-child { display:block; font-size:13px; color:#6B471A; font-weight:bold; margin-bottom:3px; }
         .tpl-hint { font-size:12px; color:#8A5A2B; line-height:1.6; margin-top:3px; }
         .tpl-sub { display:block; font-size:12px; color:#6B471A; margin-bottom:2px; }
-        #stPreview { font-family:var(--adt-tbl-font); font-size:var(--adt-tbl-size);
-            font-weight:var(--adt-tbl-weight); }
-        #stPreview td, #stPreview th { border:var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color);
-            padding:var(--adt-cell-pad); }
+        /* 公版設定的工具列：長得跟文書軟體一樣，選了就在下面即時看到 */
+        .st-bar { background:#fff; border:1px solid #e4d3ba; border-radius:4px; padding:5px 6px;
+            display:flex; flex-wrap:wrap; align-items:center; gap:3px; margin-bottom:7px; }
+        .st-lab { font-size:12px; color:#8A5A2B; margin:0 2px 0 6px; }
+        .st-sel { height:26px; border:1px solid #d8c7b0; border-radius:3px; background:#fff;
+            color:#4E2C0B; font-size:12px; max-width:110px; }
+        .st-btn { border:1px solid #e4d3ba; background:#faf6f0; color:#6B471A; font-size:12px;
+            line-height:24px; height:26px; padding:0 9px; border-radius:3px; }
+        .st-btn:hover { background:#f2e6d4; }
+        .st-btn.on { background:#e8d5b8; border-color:#8A5A2B; font-weight:bold; }
+        .st-sp { display:inline-block; width:1px; height:18px; background:#e4d3ba; margin:0 5px; }
+        .st-prev-wrap { margin-top:8px; }
+        /* 預覽用「一張紙的一角」呈現，所見即所得 */
+        .st-prev { background:#fff; border:1px solid #d8c7b0; padding:10px 12px; border-radius:3px; }
+        .st-prev .st-body { font-size:11pt; line-height:1.5; }
+        .st-prev .st-body p { margin:0 0 4px; }
+        .st-prev table.adt-hdr { margin-bottom:2mm; }
         .tpl-row.tpl-l1 { display:none; }        /* 只有一階文件才顯示，由 JS 打開 */
 
         @media print { .page-help-btn, .ad-bar, .ad-report, .m-mask { display:none !important; } }
@@ -529,45 +542,60 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
         這一組是<b>全站所有 AS 文件共用</b>的公版：改一次，<b>每一份文件的表格與框線一起變</b>
         （含制修訂紀錄書、頁首與正文裡的表格）。只有管理員看得到這一區。
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:10px">
-        <div style="flex:1 1 180px">
-          <label class="tpl-sub">表格字型</label>
-          <select id="stFont" class="form-control input-sm" data-eg-skip></select>
-        </div>
-        <div style="flex:0 0 104px">
-          <label class="tpl-sub">表格字級</label>
-          <input type="text" id="stSize" class="form-control input-sm" data-eg-hint="例：10.5pt；留空＝跟著內文">
-        </div>
-        <div style="flex:0 0 104px">
-          <label class="tpl-sub">表格粗細</label>
-          <select id="stWeight" class="form-control input-sm" data-eg-skip>
-            <option value="normal">一般</option><option value="bold">粗體</option>
-          </select>
-        </div>
-        <div style="flex:0 0 118px">
-          <label class="tpl-sub">框線型式</label>
-          <select id="stBStyle" class="form-control input-sm" data-eg-skip></select>
-        </div>
-        <div style="flex:0 0 118px">
-          <label class="tpl-sub">框線粗細</label>
-          <select id="stBW" class="form-control input-sm" data-eg-skip></select>
-        </div>
-        <div style="flex:0 0 100px">
-          <label class="tpl-sub">框線顏色</label>
-          <select id="stBColor" class="form-control input-sm" data-eg-skip></select>
-        </div>
-        <div style="flex:0 0 104px">
-          <label class="tpl-sub">儲存格內距</label>
-          <input type="text" id="stPad" class="form-control input-sm" data-eg-hint="例：4px">
-        </div>
+      <!-- 工具列：排版與文書軟體一樣，選了就在下面的預覽即時看到結果 -->
+      <div class="st-bar">
+        <span class="st-lab">字型</span>
+        <select id="stFont" class="st-sel" style="max-width:150px" data-eg-skip></select>
+        <span class="st-lab">字級</span>
+        <select id="stSize" class="st-sel" data-eg-skip>
+          <option value="">（跟著內文）</option>
+          <option>9pt</option><option>9.5pt</option><option>10pt</option><option>10.5pt</option>
+          <option>11pt</option><option>12pt</option><option>14pt</option>
+        </select>
+        <button type="button" class="st-btn" id="stBold" title="表格文字粗體"><b>B</b></button>
+        <span class="st-sp"></span>
+        <span class="st-lab">框線</span>
+        <select id="stBStyle" class="st-sel" data-eg-skip></select>
+        <select id="stBW" class="st-sel" data-eg-skip></select>
+        <select id="stBColor" class="st-sel" data-eg-skip></select>
+        <span class="st-sp"></span>
+        <span class="st-lab">格內留白</span>
+        <select id="stPad" class="st-sel" data-eg-skip>
+          <option value="2px">窄</option><option value="4px">標準</option>
+          <option value="6px">寬</option><option value="8px">很寬</option>
+        </select>
+        <span class="st-sp"></span>
+        <button type="button" class="st-btn" id="stFrame" title="把正文整塊用外框框起來，框線與頁首同寬">
+          <i class="fa fa-square-o"></i> 內容大框</button>
+        <select id="stBodyPad" class="st-sel" data-eg-skip title="大框與文字之間留多少空白">
+          <option value="2mm">2mm</option><option value="3mm">3mm</option>
+          <option value="4mm">4mm</option><option value="5mm">5mm</option>
+        </select>
       </div>
-      <div class="tpl-hint">改完按下方「存檔」就會套用；預設值與改版前完全相同，沒動過的文件外觀不會變。</div>
-      <div style="margin-top:8px">
-        <div class="tpl-sub" style="margin-bottom:3px">預覽</div>
-        <table id="stPreview" style="border-collapse:collapse;width:100%">
-          <tr><th style="padding:4px">項目</th><th style="padding:4px">說明</th></tr>
-          <tr><td style="padding:4px">範例列</td><td style="padding:4px">框線與字型套用後的樣子</td></tr>
-        </table>
+      <div class="tpl-hint">
+        改完按下方「存檔」才會套用到所有文件；預設值與改版前完全相同，沒動過的文件外觀不會變。<br>
+        <b>內容大框</b>打開後，正文會被一個外框框起來，<b>框線與上方頁首同寬、左右自然對齊</b>，
+        匯入的內容直接放進這個大框裡。
+      </div>
+      <div class="st-prev-wrap">
+        <div class="tpl-sub" style="margin-bottom:3px">預覽（就是文件上會長的樣子）</div>
+        <div id="stPreview" class="st-prev">
+          <table class="adt-hdr">
+            <colgroup><col class="adt-c1"><col class="adt-c2"><col class="adt-c3"><col class="adt-c4"></colgroup>
+            <tr><td class="adt-hdr-co" rowspan="2" colspan="2">
+                  <div class="adt-hdr-coen">EXCELLENT GEAR TECHNOLOGY CO.,LTD</div>
+                  <div class="adt-hdr-cozh">超正齒輪科技有限公司</div></td>
+                <td class="adt-hdr-k">文件編號</td><td class="adt-hdr-v">2-DC-01</td></tr>
+            <tr><td class="adt-hdr-k">頁　　次</td><td class="adt-hdr-v">1 / 12</td></tr>
+            <tr><td class="adt-hdr-nk">文件名稱</td><td class="adt-hdr-nm">文件管理程序</td>
+                <td class="adt-hdr-k">頁 版 別</td><td class="adt-hdr-v">2.0</td></tr>
+          </table>
+          <div class="eg-docbody st-body">
+            <p>這裡是正文。打開「內容大框」之後，這一整塊會被框起來。</p>
+            <table><tr><th>項目</th><th>說明</th></tr>
+                   <tr><td>範例列</td><td>框線、字型與格內留白套用後的樣子</td></tr></table>
+          </div>
+        </div>
       </div>
     </div>
     <?php endif; ?>
@@ -1380,24 +1408,35 @@ function fillStyleForm() {
     fill($('#stBStyle'), o.borders, s.brd_style || 'solid');
     fill($('#stBW'), o.widths, s.brd_w || '1px');
     fill($('#stBColor'), o.colors, s.brd_color || '#000000');
-    $('#stWeight').val(s.tbl_weight || 'normal');
     $('#stSize').val(s.tbl_size || '');
     $('#stPad').val(s.cell_pad || '4px');
+    $('#stBodyPad').val(s.body_pad || '3mm');
+    $('#stBold').toggleClass('on', String(s.tbl_weight) === 'bold');
+    $('#stFrame').toggleClass('on', String(s.body_frame) === '1');
     previewStyle();
 }
-/** 預覽：只改跳窗內那張表的變數，不動整份文件（存檔後才真的套用） */
+/** 預覽：只改跳窗內那一塊的變數，不動整份文件（存檔後才真的套用） */
 function previewStyle() {
     var p = document.getElementById('stPreview');
     if (!p) return;
     p.style.setProperty('--adt-tbl-font', $('#stFont').val() || 'inherit');
     p.style.setProperty('--adt-tbl-size', $('#stSize').val() || 'inherit');
-    p.style.setProperty('--adt-tbl-weight', $('#stWeight').val() || 'inherit');
+    p.style.setProperty('--adt-tbl-weight', $('#stBold').hasClass('on') ? 'bold' : 'normal');
     p.style.setProperty('--adt-brd-style', $('#stBStyle').val() || 'solid');
     p.style.setProperty('--adt-brd-w', $('#stBW').val() || '1px');
     p.style.setProperty('--adt-brd-color', $('#stBColor').val() || '#000');
     p.style.setProperty('--adt-cell-pad', $('#stPad').val() || '4px');
+    if ($('#stFrame').hasClass('on')) {
+        p.style.setProperty('--adt-body-brd',
+            ($('#stBW').val() || '1px') + ' ' + ($('#stBStyle').val() || 'solid') + ' ' + ($('#stBColor').val() || '#000'));
+        p.style.setProperty('--adt-body-pad', $('#stBodyPad').val() || '3mm');
+    } else {
+        p.style.setProperty('--adt-body-brd', '0 none transparent');
+        p.style.setProperty('--adt-body-pad', '0');
+    }
 }
-$(document).on('change keyup', '#stFont,#stSize,#stWeight,#stBStyle,#stBW,#stBColor,#stPad', previewStyle);
+$(document).on('change', '#stFont,#stSize,#stBStyle,#stBW,#stBColor,#stPad,#stBodyPad', previewStyle);
+$(document).on('click', '#stBold,#stFrame', function(){ $(this).toggleClass('on'); previewStyle(); });
 $('#btnTplSave').on('click', function(){
     var $b = $(this).prop('disabled', true);
     $('#tplMsg').text('存檔中…');
@@ -1416,11 +1455,13 @@ $('#btnTplSave').on('click', function(){
             action: 'tpl_style_save', csrf: CSRF,
             tbl_font:   $('#stFont').val(),
             tbl_size:   $('#stSize').val(),
-            tbl_weight: $('#stWeight').val(),
+            tbl_weight: $('#stBold').hasClass('on') ? 'bold' : 'normal',
             brd_style:  $('#stBStyle').val(),
             brd_w:      $('#stBW').val(),
             brd_color:  $('#stBColor').val(),
-            cell_pad:   $('#stPad').val()
+            cell_pad:   $('#stPad').val(),
+            body_frame: $('#stFrame').hasClass('on') ? 1 : 0,
+            body_pad:   $('#stBodyPad').val()
         }, function(r2){
             if (!r2.success) { $('#tplMsg').text(''); alert(r2.message || '公版設定存檔失敗'); return; }
             finishTpl();
@@ -1576,10 +1617,22 @@ function save(cb) {
         alert('文件還在排版中（大文件需要幾秒），排版完成前先不要存檔，以免分頁被壓成一頁。\n請稍候再按一次存檔。');
         return;
     }
+    /* 最後一道防線：編輯器上明明有好幾頁，產出的內容卻一個分頁標記都沒有，
+       那一定是哪裡出了問題（曾經因此把整份文件的分頁洗成一頁）。
+       這種情況寧可不存，也不要覆蓋掉好的資料。 */
+    var _html = ED.get();
+    var _pages = ED.pageCount();
+    var _marks = (String(_html).match(/page-break-after/g) || []).length;
+    if (_pages > 1 && _marks === 0) {
+        alert('存檔已中止：編輯器上有 ' + _pages + ' 頁，但整理出來的內容卻沒有任何分頁標記。\n'
+            + '直接存下去會把整份文件的分頁壓成一頁。\n\n請重新整理頁面再試一次；'
+            + '若重整後仍然這樣，請截圖回報（原本的內容沒有被改動）。');
+        return;
+    }
     var $b = $('#btnSave').prop('disabled', true);
     $.post(API, {
         action:'save', csrf:CSRF, version_id:VID,
-        html: ED.get(),
+        html: _html,
         is_primary: $('#chkPrimary').is(':checked') ? 1 : 0,
         page_size: $('#selPage').val(),
         orientation: $('#selOrient').val()

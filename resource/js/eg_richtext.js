@@ -276,6 +276,11 @@
        + '<span class="egrt-sep"></span>'
        + btn('egOutdent', 'outdent', '減少縮排') + btn('egIndent', 'indent', '增加縮排')
        + '<span class="egrt-sep"></span>'
+       // 上下對齊（作用在游標所在的表格儲存格；整張表選起來就整張套用）
+       + btn('egVaTop', 'angle-up', '儲存格靠上')
+       + btn('egVaMid', 'minus', '儲存格上下置中')
+       + btn('egVaBot', 'angle-down', '儲存格靠下')
+       + '<span class="egrt-sep"></span>'
        + btn('insertUnorderedList', 'list-ul', '項目符號清單') + btn('insertOrderedList', 'list-ol', '編號清單')
        + '<span class="egrt-sep"></span>';
     // 插入表格（小面板選列欄數）
@@ -415,6 +420,35 @@
     }
     return out;
   }
+  /**
+   * 把「上下對齊」套到選取範圍碰到的每一個儲存格。
+   * 回傳有沒有套到任何一格——沒有的話呼叫端要提示使用者先點進表格裡。
+   */
+  function setCellVAlign(body, va) {
+    var sel = w.getSelection();
+    if (!sel || !sel.rangeCount) return false;
+    var rg = sel.getRangeAt(0);
+    // 游標所在的那一格。**不可以用模組層的 body 去判斷**——多頁文件時 body 是第一頁，
+    // 使用者點在第 4 頁的表格上就會被判成「不在編輯區裡」而整個沒反應（實測抓到）。
+    var one = rg.startContainer;
+    one = (one.nodeType === 1 ? one : one.parentNode);
+    one = one && one.closest ? one.closest('td,th') : null;
+    // 真正的範圍是「這一格所在的那一頁」，沒有就退回傳進來的 body
+    var scope = one && one.closest ? (one.closest('.egrt-main') || one.closest('[contenteditable]')) : null;
+    if (!scope) scope = body;
+    var cells = [];
+    if (one && rg.collapsed) cells = [one];
+    else {
+      Array.prototype.slice.call(scope.querySelectorAll('td,th')).forEach(function (c) {
+        if (rg.intersectsNode ? rg.intersectsNode(c) : false) cells.push(c);
+      });
+      if (!cells.length && one) cells = [one];
+    }
+    if (!cells.length) return false;
+    cells.forEach(function (c) { c.style.verticalAlign = va; });
+    return true;
+  }
+
   function indentBlocks(body, dir) {
     var blocks = selectedBlocks(body);
     blocks.forEach(function (b) {
@@ -493,7 +527,7 @@
            所以**結構上不可能出現左右拉桿**（使用者明確要求底下不要有左右移動的拉桿）。*/
       '.egrt-doc-scroll{background:#efe9e0;overflow-y:auto;overflow-x:hidden;border-radius:0 0 4px 4px;}',
       '.egrt-pages{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;',
-      'gap:16px;padding:16px 8px 22px;}',
+      'gap:26px 16px;padding:26px 8px 16px;}',
       /* 紙張高度是**固定**的（不是 min-height）：固定才量得出「內容有沒有超出這一頁」，
          也才有辦法自動把超出的搬到下一頁。先前寫 min-height 的話紙會跟著內容長高
          （實測長到 7553px），scrollHeight 永遠等於 clientHeight，偵測不到超出。
@@ -522,7 +556,7 @@
       '.egrt-sys .egrt-sheet{background:#fdfbf7;}',
       '.egrt-syslab{position:absolute;left:0;top:-19px;font-size:11px;line-height:16px;color:#fff;',
       'background:#8A5A2B;border-radius:3px;padding:0 7px;white-space:nowrap;}',
-      '.egrt-pageno{position:absolute;left:0;bottom:-19px;font-size:11px;line-height:16px;',
+      '.egrt-pageno{position:absolute;left:0;top:-19px;font-size:11px;line-height:16px;',
       'color:#8A5A2B;background:#e6ddd0;border-radius:3px;padding:0 7px;white-space:nowrap;}',
       // 內容超出這一頁：紙張加紅框，右上角掛提示（搬不動時才會留著，一般會自動回流）
       '.egrt-sheet.egrt-over{outline:2px solid #DD5138;outline-offset:0;}',
@@ -530,7 +564,7 @@
       '.egrt-sheet.egrt-grown{background:#fff;}',
       '.egrt-ovbadge{position:absolute;right:0;top:-19px;font-size:11px;line-height:16px;color:#fff;',
       'background:#DD5138;border-radius:3px;padding:0 7px;cursor:pointer;white-space:nowrap;}',
-      '.egrt-delpage{position:absolute;right:0;bottom:-19px;font-size:11px;line-height:16px;',
+      '.egrt-delpage{position:absolute;right:0;top:-19px;font-size:11px;line-height:16px;',
       'color:#A34E2A;background:#e6ddd0;border-radius:3px;padding:0 7px;cursor:pointer;}',
       '.egrt-delpage:hover{background:#DD5138;color:#fff;}',
       // 空白頁：按鈕標成橘色，使用者一眼看得出「這一頁是空的，可以刪」
@@ -817,6 +851,17 @@
     }
 
     function exec(cmd, val) {
+      /* 上下對齊要在「搶焦點之前」處理：body 是第一頁，body.focus() 會把游標從
+         使用者點的那一頁（例如第 4 頁的表格）拉回第一頁，restoreRange() 也還原不回來，
+         結果就是按了完全沒反應（實測抓到）。工具列的 mousedown 已經 preventDefault，
+         所以這時候的即時選取仍然是使用者點的那一格。 */
+      if (cmd === 'egVaTop' || cmd === 'egVaMid' || cmd === 'egVaBot') {
+        var va0 = cmd === 'egVaTop' ? 'top' : (cmd === 'egVaBot' ? 'bottom' : 'middle');
+        if (!setCellVAlign(body, va0)) {
+          alert('上下對齊是設定在表格的儲存格上。\n請把游標點進表格裡的某一格（或把整張表選起來）再按一次。');
+        } else { changed(); }
+        return;
+      }
       body.focus();
       restoreRange();   // 從下拉（會搶焦點）過來時，要把使用者原本選的那段字還原回來
       // 縮排是自己實作的（見 indentBlocks），不走 execCommand
@@ -1286,20 +1331,24 @@
 
     function numberPages() {
       var ss = sheets(), n = ss.length;
-      var sysN = (chrome && chrome.sys) ? chrome.sys.length : 0;
-      var total = sysN + n;
-      // 系統頁也要編號（它們排在正文之前）
+      /* 頁次只算正文（使用者 2026-09-23 指定：文件制修訂紀錄書與目錄都不算一頁），
+         所以正文從第 1 頁開始、總頁數也只算正文。系統頁的籤改成寫它自己是什麼。 */
+      var total = n;
+      var sysLabels = (chrome && chrome.sys) ? chrome.sys : [];
       Array.prototype.slice.call(pagesBox ? pagesBox.querySelectorAll('.egrt-sheetwrap.egrt-sys') : [])
         .forEach(function (wp, i) {
           var no2 = wp.querySelector('.egrt-pageno');
-          if (no2) no2.textContent = '第 ' + (i + 1) + ' 頁 / 共 ' + total + ' 頁';
+          if (no2) {
+            var lb = (sysLabels[i] && sysLabels[i].label) ? sysLabels[i].label : '系統頁';
+            no2.textContent = lb + '（不計入頁次）';
+          }
         });
       ss.forEach(function (s, i) {
         var wrap = wrapOf(s);
         if (!wrap) return;
-        fillChrome(s, sysN + i + 1, total, pageVerOf(i));
+        fillChrome(s, i + 1, total, pageVerOf(i));
         var no = wrap.querySelector('.egrt-pageno');
-        if (no) no.textContent = '第 ' + (sysN + i + 1) + ' 頁 / 共 ' + total + ' 頁';
+        if (no) no.textContent = '第 ' + (i + 1) + ' 頁 / 共 ' + total + ' 頁';
         var del = wrap.querySelector('.egrt-delpage');
         if (n > 1) {
           if (!del) {

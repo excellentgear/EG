@@ -258,7 +258,8 @@ case 'tpl_style_save': {
     needAdmin($P);
     require_once __DIR__ . '/../common/as_doc_tpl_lib.php';
     $in = [];
-    foreach (['tbl_font','tbl_size','tbl_weight','brd_style','brd_w','brd_color','cell_pad'] as $k) {
+    foreach (['tbl_font','tbl_size','tbl_weight','brd_style','brd_w','brd_color','cell_pad',
+              'body_frame','body_pad'] as $k) {
         if (array_key_exists($k, $_POST)) $in[$k] = $_POST[$k];
     }
     $r = adt_style_save($db, $in, $uid);

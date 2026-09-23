@@ -34,6 +34,12 @@
     font-size: 12pt;
     line-height: 1.6;
     color: #333;
+    /* 內容大框：預設沒有框。開啟之後編輯器與列印是**同一條規則**（兩邊都是 .eg-docbody），
+       所以框線寬度與內距對兩邊的影響完全相同，換頁位置不會走鐘。
+       box-sizing:border-box ＝ 外框吃的是內距不是額外高度，編輯區的可用高度算法不必改。 */
+    border: var(--adt-body-brd, 0 none transparent);
+    padding: var(--adt-body-pad, 0);
+    box-sizing: border-box;
 }
 
 /* 段落：間距要小，AS 文件是條列式的正式文件，不是網頁文章。
@@ -88,19 +94,20 @@
 .adt-rev-foot { table-layout: fixed; }
 .adt-rev-head { width: 100%; border-collapse: collapse; }
 .adt-rev-head td { border: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color); padding: 2mm 3mm; font-size: 11pt;
+  vertical-align: middle;
   word-wrap: break-word; overflow-wrap: break-word; }
 .adt-rev-head .adt-rev-name { text-align: center; font-size: 15pt; font-weight: bold;
                               letter-spacing: 2px; }
 .adt-rev-tbl { width: 100%; border-collapse: collapse; margin-top: -1px; }
 .adt-rev-tbl td, .adt-rev-tbl th { border: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color); padding: 1.4mm 2mm; font-size: 10.5pt;
-                                   text-align: center; }
+                                   text-align: center; vertical-align: middle; }
 .adt-rev-tbl .adt-rev-cap { letter-spacing: 6px; font-size: 12pt; font-weight: bold; padding: 1.6mm; }
 .adt-rev-tbl th { font-weight: normal; }
 /* 欄寬一律由上面的 colgroup 決定，這裡不再逐欄指定
    （nth-child 遇到 colspan 的那一列會算錯欄位） */
 .adt-rev-foot { width: 100%; border-collapse: collapse; margin-top: 3mm; }
 .adt-rev-foot td, .adt-rev-foot th { border: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color); padding: 1.6mm 2mm; font-size: 10.5pt;
-                                     text-align: center; }
+                                     text-align: center; vertical-align: middle; }
 .adt-rev-foot th { font-weight: normal; }
 .adt-rev-foot .adt-sign td { height: 16mm; vertical-align: middle; }
 .adt-l { text-align: left !important; }
@@ -125,6 +132,7 @@
    所以上下兩列的框線一定對齊（使用者 2026-09-22 指出的問題）。 */
 .adt-hdr { width: 100%; border-collapse: collapse; margin-bottom: 2.5mm; table-layout: fixed; }
 .adt-hdr td { border: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color); padding: .8mm 2mm; font-size: 9.5pt;
+  vertical-align: middle;
   word-wrap: break-word; overflow-wrap: break-word; }
 .adt-hdr .adt-c1 { width: 16%; }
 .adt-hdr .adt-c2 { width: 42%; }
