@@ -894,11 +894,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .btn-warm-o { background:#fff; border:1px solid var(--amber-d); color:var(--amber-d); }
     .btn-warm-o:hover { background:var(--sand); color:var(--ink); }
     .btn-coral { background:var(--coral); border:1px solid #b9401f; color:#fff; font-weight:bold; }
-    /* 首件/末件：簡單按鈕，按了才算，不按＝一般檢驗（使用者指定的極簡操作） */
-    .insp-kind-btns { display:flex; gap:6px; }
-    .insp-kind-btns .kind-btn { flex:1 1 auto; border:1px solid var(--amber-d); background:#fff; color:var(--amber-d);
-                                 border-radius:4px; padding:5px 0; font-size:13px; font-weight:bold; cursor:pointer; }
-    .insp-kind-btns .kind-btn.on { background:var(--amber-d); color:#fff; }
     /* 出貨檢驗：自動生成跳窗——逐製程區塊＋逐項目挑選 */
     .ship-proc { border:1px solid var(--line); border-radius:8px; margin-bottom:10px; overflow:hidden; }
     .ship-proc-hd { background:var(--cream); padding:7px 12px; font-weight:bold; color:var(--ink); display:flex; align-items:center; gap:8px; }
@@ -919,6 +914,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .ctx-bar b { color:#8a6a45; font-weight:normal; font-size:12px; display:block; line-height:1.1; }
     .ctx-bar .cv { font-weight:bold; font-size:15px; }
     .ctx-bar a.cv { color:var(--ink); text-decoration:underline; }
+    /* 檢驗性質：一般／首件／末件，三選一直接點選（首件/末件＝全數檢驗，抽驗數鎖定＝送驗數） */
+    .ctx-bar .ki-btns { display:inline-flex; gap:4px; }
+    .ctx-bar .ki-btn { border:1px solid var(--amber-d); background:#fff; color:var(--amber-d); border-radius:12px;
+                        padding:2px 10px; font-size:12px; font-weight:bold; cursor:pointer; }
+    .ctx-bar .ki-btn.on { background:var(--amber-d); color:#fff; }
 
     /* ---------- 檢視切換 ---------- */
     .view-switch { display:inline-flex; border:1px solid var(--line); border-radius:20px; overflow:hidden; background:#fff; }
@@ -1047,13 +1047,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     #items-table .g-spec { font-size:13px; color:var(--ink2); white-space:nowrap; }
     #items-table .table-input { width:100%; min-width:0; border:1px solid #ccc; padding:3px 5px; border-radius:3px; }
     #items-table .gcells { gap:4px; }
-    /* 標準值欄：公差輸入模式(TOL⇄RANGE)切換鈕，就近放在標準值欄裡（使用者指定的位置） */
-    #items-table .td-std { position:relative; }
-    #items-table .td-std .table-input { padding-right:38px; }
-    #items-table .tol-range-disp { display:inline-block; width:100%; padding:3px 38px 3px 5px; color:var(--ink2); font-size:12px;
+    /* 標準值欄：輸入框在上、公差/範圍切換鈕在下（小長方形，不搶輸入框的空間） */
+    #items-table .td-std-wrap { display:flex; flex-direction:column; gap:2px; }
+    #items-table .td-std .table-input { width:100%; box-sizing:border-box; }
+    #items-table .tol-range-disp { display:block; width:100%; padding:3px 5px; color:var(--ink2); font-size:12px;
                                     box-sizing:border-box; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .btn-tol-mode { position:absolute; right:2px; top:2px; bottom:2px; width:32px; font-size:11px; line-height:1;
-                    border:1px solid var(--amber-d); border-radius:3px; background:#fff; color:var(--amber-d); cursor:pointer; padding:0; }
+    .btn-tol-mode { display:block; width:100%; height:15px; line-height:13px; font-size:10px;
+                    border:1px solid var(--amber-d); border-radius:2px; background:#fff; color:var(--amber-d); cursor:pointer; padding:0; }
     .btn-tol-mode.on { background:var(--amber-d); color:#fff; }
     /* 型態：點一下切換的雙色鈕，取代原本的下拉選單（數值=琥珀、OK/NG=深棕，一眼分辨） */
     .btn-type-toggle { width:100%; border:1px solid; border-radius:3px; padding:4px 2px; font-size:12px; font-weight:bold; cursor:pointer; }
@@ -1377,14 +1377,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <input type="number" class="form-control input-sm" id="inp-sample" value="5"></div>
             <div class="col-sm-2 form-group"><label class="muted-help">不良數（自動）</label>
                 <input type="number" class="form-control input-sm" id="inp-ng" value="0" readonly></div>
-            <div class="col-sm-2 form-group" id="kind-box">
-                <label class="muted-help">檢驗性質<span id="kind-hint" class="muted-help" style="display:none;color:var(--amber-d);margin-left:4px;"></span></label>
-                <div class="insp-kind-btns">
-                    <button type="button" class="kind-btn" data-kind="FIRST" title="首件全檢：直接輸入全數件數，不走抽樣；同一製程可以有好幾張（重做再驗各存一張）">首件</button>
-                    <button type="button" class="kind-btn" data-kind="LAST" title="末件全檢：直接輸入全數件數，不走抽樣">末件</button>
-                </div>
-            </div>
-            <div class="col-sm-4 form-group"><label class="muted-help">處置 / 備註</label>
+            <div class="col-sm-6 form-group"><label class="muted-help">處置 / 備註</label>
                 <input type="text" class="form-control input-sm" id="inp-remark" placeholder="例：尺寸 A 超差，退回重做…"></div>
         </div>
         <div class="row">
@@ -1615,13 +1608,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
 
             <h4>一之二、標準／公差怎麼填、型態怎麼切換</h4>
             <ul>
-                <li>總表勾「編輯標準」後，<b>標準值欄右上角有一顆「公差／範圍」切換鈕</b>：預設是<b>公差模式</b>（填標準值＋上公差＋下公差）；按一下切成<b>範圍模式</b>後，不用填標準值，直接在原本上下公差的兩格<b>填絕對下限／上限</b>（例如圖面直接標 Ø12.20~12.30 就用這個），畫面與列印都會顯示成「<b>下限~上限</b>」。切換時會盡量互相換算帶入，不會把你填好的資料洗掉；下限≧上限會即時紅框並擋下存檔。</li>
+                <li>總表勾「編輯標準」後，<b>標準值欄輸入框下方有一顆「公差／範圍」切換鈕</b>：預設是<b>公差模式</b>（填標準值＋上公差＋下公差）；按一下切成<b>範圍模式</b>後，不用填標準值，直接在原本上下公差的兩格<b>填絕對下限／上限</b>（例如圖面直接標 Ø12.20~12.30 就用這個），畫面與列印都會顯示成「<b>下限~上限</b>」。切換時會盡量互相換算帶入，不會把你填好的資料洗掉；下限≧上限會即時紅框並擋下存檔。</li>
                 <li><b>型態</b>欄是一顆點一下就切換的雙色按鈕：<b>琥珀色＝數值型</b>、<b>深棕色＝OK/NG 型</b>，不再是下拉選單。</li>
             </ul>
 
             <h4>一之三、首件／末件（全數檢驗）</h4>
             <ul>
-                <li>「數量 / 處置備註」欄有<b>首件／末件</b>兩顆按鈕，<b>按了才算，不按就是一般檢驗</b>；再按一次可取消。</li>
+                <li>頁面上方資訊列「建議抽驗」右側有<b>一般／首件／末件</b>三顆按鈕可直接點選，<b>預設是一般</b>。</li>
                 <li>首件／末件一律<b>全數檢驗</b>：抽驗數自動鎖定＝送驗數，不走抽樣規則。</li>
                 <li>同一個製程<b>可以有好幾張首件</b>（前面驗有問題重做，再驗一次又是一張首件），不限一張。</li>
             </ul>
@@ -3030,7 +3023,7 @@ $(function(){
                     bCell='<input class="table-input f-lo" data-i="'+i+'" placeholder="下公差" value="'+esc(it.lo)+'">';
                 }
                 body += '<td><input class="table-input f-name" data-i="'+i+'" value="'+esc(it.name)+'">'+rowActs(it,i)+'</td>'+
-                        '<td class="td-std">'+stdCell+tolBtn+'</td>'+
+                        '<td class="td-std"><div class="td-std-wrap">'+stdCell+tolBtn+'</div></td>'+
                         '<td>'+aCell+'</td>'+
                         '<td>'+bCell+'</td>'+
                         '<td><button type="button" class="btn-type-toggle type-'+(isOkng?'okng':'num')+'" data-i="'+i+'" '+
@@ -3576,22 +3569,18 @@ $(function(){
 
     // ---------- 首件/末件：簡單按鈕，按了才算，不按＝一般檢驗；直接全檢(=送驗數件)不走抽樣 ----------
     function applyInspKindUI(){
-        // 出貨檢驗（SHIP）不屬於單一製程，首件/末件是製程層級的概念，兩者互斥，SHIP 模式下整組按鈕隱藏
-        $('#kind-box').toggle(!(ctx && ctx.ship));
+        // 出貨檢驗（SHIP）不屬於單一製程，首件/末件是製程層級的概念，兩者互斥，SHIP 模式下 #kind-box 根本不會被畫出來
         var full = state.inspKind==='FIRST' || state.inspKind==='LAST';
-        $('.insp-kind-btns .kind-btn').removeClass('on').filter('[data-kind="'+state.inspKind+'"]').addClass('on');
-        $('#inp-sample').prop('readonly', full);
+        $('#kind-box .ki-btn').removeClass('on').filter('[data-kind="'+state.inspKind+'"]').addClass('on');
+        $('#inp-sample').prop('readonly', full).attr('title', full?'首件/末件為全數檢驗，抽驗數已鎖定＝送驗數':'');
         if(full){
             var qty=parseInt($('#inp-qty').val())||0;
             if(qty>0){ setSampleN(qty); $('#inp-sample').val(qty).data('prev', qty); }
-            $('#kind-hint').show().text('（全數檢驗，抽驗數已鎖定＝送驗數）');
-        } else {
-            $('#kind-hint').hide().text('');
         }
     }
-    $(document).on('click', '.insp-kind-btns .kind-btn', function(){
-        var k=$(this).data('kind');
-        state.inspKind = (state.inspKind===k) ? 'NORMAL' : k;
+    // 檢驗性質三選一：直接點選一般／首件／末件，不是切換式（一般本身就是明確的選項之一）
+    $(document).on('click', '#kind-box .ki-btn', function(){
+        state.inspKind = $(this).data('kind');
         applyInspKindUI(); scheduleDraftSave();
     });
     // 首件/末件模式下，送驗數一改，全檢件數要跟著變
@@ -4101,7 +4090,13 @@ $(function(){
                     : '<select id="sel-switch-process" class="form-control input-sm" style="display:inline-block;width:auto;min-width:170px;font-weight:bold;"><option value="">'+esc(ctx.process||'載入中…')+'</option></select>')
             +'</span></div>'+
             '<div><b>'+(ctx.adhoc?'送驗數':'訂單數')+'</b><span class="cv">'+(ctx.order_qty||0)+'</span></div>'+
-            '<div><b>'+(ctx.adhoc?'抽驗數':'建議抽驗')+'</b><span class="cv">'+(ctx.sample_qty||0)+' 件</span></div>');
+            '<div><b>'+(ctx.adhoc?'抽驗數':'建議抽驗')+'</b><span class="cv">'+(ctx.sample_qty||0)+' 件</span></div>'+
+            (ctx.ship ? '' : '<div id="kind-box"><b>檢驗性質</b><span class="cv"><span class="ki-btns">'+
+                ['NORMAL','FIRST','LAST'].map(function(k){
+                    var lbl = k==='NORMAL'?'一般':(k==='FIRST'?'首件':'末件');
+                    return '<button type="button" class="ki-btn" data-kind="'+k+'">'+lbl+'</button>';
+                }).join('')+'</span></span></div>'));
+        applyInspKindUI();
         if(!ctx.adhoc) loadSiblingProcesses();
     }
     // ---------- 製程切換（同一 BOM 的其他製程，不用回待驗清單重找）----------
