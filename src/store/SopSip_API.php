@@ -69,6 +69,15 @@ $rows = function ($key) {
     $a = json_decode((string)$j, true);
     return is_array($a) ? $a : [];
 };
+/* 挑機台／量具一律帶「表單日期」：停用的機台與量具在**那一天之前**建立的文件上照樣要挑得到
+   （使用者 2026-09-23：「停用的機台一樣要可以補資料，我的表單日期是 2022，那時候根本還沒停用」）。
+   沒帶 asof＝只列現在在用的，行為與改版前完全相同。
+   **一定要宣告在 switch 之外**——寫在某個 case 裡面時，switch 會直接跳到命中的那個 case，
+   前面那幾行根本不會執行，其他 case 呼叫它就是「未定義的函式」。 */
+$asofParam = function (): string {
+    $d = trim((string)($_GET['asof'] ?? $_POST['asof'] ?? ''));
+    return preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) ? $d : '';
+};
 
 switch ($action) {
 
@@ -96,14 +105,15 @@ case 'search_customer':
     jout(true, ['rows' => ss_search_customer($db, (string)($_GET['kw'] ?? ''))]);
 
 case 'machine_models':
-    jout(true, ['rows' => ss_machine_models($db, (string)($_GET['kw'] ?? ''))]);
+    jout(true, ['rows' => ss_machine_models($db, (string)($_GET['kw'] ?? ''), 60, $asofParam())]);
 
 case 'machines_by_model':
-    jout(true, ['rows' => ss_machines_by_model($db, (string)($_GET['model'] ?? ''))]);
+    jout(true, ['rows' => ss_machines_by_model($db, (string)($_GET['model'] ?? ''), $asofParam())]);
 
 /** 量具編號：先選類型再選編號（使用者要求的兩段式） */
 case 'tools_by_type':
-    jout(true, ['rows' => ss_tools_by_type($db, (int)($_GET['type_id'] ?? 0))]);
+    jout(true, ['rows' => ss_tools_by_type($db, (int)($_GET['type_id'] ?? 0), $asofParam()),
+                'types' => ss_tool_types($db)]);
 
 /** 綁了料號就由料號主檔決定客戶，前端只負責顯示 */
 case 'customer_of_part':
@@ -118,23 +128,41 @@ case 'bind_probe': {
     $kind  = (string)($_GET['kind'] ?? '');
     $scope = (string)($_GET['scope'] ?? '');
     if (!isset(ss_kinds()[$kind])) jerr('表單版面代碼不正確');
+    $asof = $asofParam();
+    $out  = [];
+    $mids = $_GET['machine_ids'] ?? '';
+    $cusIn = trim((string)($_GET['customer_id'] ?? ''));
     $in = [
         'machine_model' => (string)($_GET['machine_model'] ?? ''),
         'machine_id'    => (int)($_GET['machine_id'] ?? 0),
         'part_d_id'     => (int)($_GET['part_d_id'] ?? 0),
         'tool_id'       => (int)($_GET['tool_id'] ?? 0),
         'process_no'    => (int)($_GET['process_no'] ?? 0),
+        'machine_ids'   => $mids,
+        'customer_id'   => $cusIn,
+        'variant'       => (string)($_GET['variant'] ?? ''),
     ];
-    $out = [
-        'dups'  => ss_dup_find($db, $kind, $scope, $in, (int)($_GET['doc_id'] ?? 0)),
-        'title' => ss_auto_title($db, $kind, $scope, $in),
-    ];
-    if ($scope === 'part')      $out['customer'] = ss_customer_of_part($db, $in['part_d_id']);
-    if ($scope === 'machine')   $out['machines'] = ss_machines_by_model($db, $in['machine_model']);
+    // 綁料號時客戶由料號主檔決定，不採信前端送的（與 ss_doc_save 同一條規則）
+    if ($scope === 'part') {
+        $c = ss_customer_of_part($db, $in['part_d_id']);
+        $in['customer_id'] = (string)($c['id'] ?? '');
+        $out['customer']   = $c;
+    }
+    $scan = ss_dup_scan($db, $kind, $scope, $in, (int)($_GET['doc_id'] ?? 0));
+    $out['dups']     = array_values(array_filter($scan, fn($r) => !empty($r['is_dup'])));
+    $out['siblings'] = array_values(array_filter($scan, fn($r) => empty($r['is_dup'])));
+    $out['title']    = ss_auto_title($db, $kind, $scope, $in);
+    // 這個對象底下已經用掉哪幾種型式（含「未分型式」），畫面要講得出「還剩幾種可以用」
+    $vs = [];
+    foreach ($scan as $r) $vs[ss_variant_norm((string)($r['variant'] ?? ''))] = 1;
+    $out['variants_used'] = array_values(array_keys($vs));
+    $out['variant_max']   = SS_VARIANT_MAX;
+    if ($scope === 'machine')   $out['machines'] = ss_machines_by_model($db, $in['machine_model'], $asof);
     if ($kind === 'sip') {
         $cfg = ss_proc_cfg($db, $in['process_no']);
         $out['proc_cfg']      = $cfg;
         $out['default_items'] = ss_default_items($db, $in['process_no'], null);
+        $out['notice_auto']   = ss_notice_auto($db, (string)$in['customer_id']);
     }
     jout(true, $out);
 }
@@ -208,10 +236,16 @@ case 'detail': {
     $full['owner_depts'] = array_values(array_filter(ss_owner_depts($db), fn($d) => !empty($d['on'])));
     $full['methods']     = ss_method_options($db)['list'];
     $full['tool_types']  = ss_tool_types($db);
+    $full['variant_options'] = ss_variant_options($db);
+    $full['variant_max']     = SS_VARIANT_MAX;
     if ($kind === 'sip') {
         $pno = (int)($full['doc']['process_no'] ?? 0);
         $full['proc_cfg']  = ss_proc_cfg($db, $pno);
         $full['tpl_count'] = count(ss_tpl_rows($db, 'proc', $pno)) + count(ss_tpl_rows($db, 'std'));
+        $full['freq_options'] = ss_freq_options($db);
+        $full['symbols']      = ss_symbols($db);
+        // 注意事項範本：綁這份文件客戶的排前面，沒綁客戶的通用範本接在後面
+        $full['notice_tpls']  = ss_notice_tpls($db, (string)($full['doc']['customer_id'] ?? ''));
     }
     jout(true, $full);
 }
@@ -251,21 +285,22 @@ case 'search_part':
     jout(true, ['rows' => ss_search_part($db, (string)($_GET['kw'] ?? ''))]);
 
 case 'search_machine':
-    jout(true, ['rows' => ss_search_machine($db, (string)($_GET['kw'] ?? ''))]);
+    jout(true, ['rows' => ss_search_machine($db, (string)($_GET['kw'] ?? ''), 30, $asofParam())]);
 
 /** 兩層挑選器的資料：mode＝machine（個別機台）／model（機台型號）／tool（量具）／空＝機台＋量具
  *  分組規則一律在 lib（機台依綁定的製程、量具依種類），畫面只負責排版 */
 case 'equip_pick': {
     $mode = (string)($_GET['mode'] ?? '');
     $kw   = (string)($_GET['kw'] ?? '');
+    $asof = $asofParam();
     jout(true, ['groups' => in_array($mode, ['machine', 'model', 'tool'], true)
-                            ? ss_pick_groups($db, $mode, $kw)
-                            : ss_equip_pick_groups($db, $kw)]);
+                            ? ss_pick_groups($db, $mode, $kw, $asof)
+                            : ss_equip_pick_groups($db, $kw, $asof)]);
 }
 
 /** 量具（檢驗設備一覽表）——設備操作說明書除了機台也能綁它 */
 case 'search_tool':
-    jout(true, ['rows' => ss_search_tool($db, (string)($_GET['kw'] ?? ''))]);
+    jout(true, ['rows' => ss_search_tool($db, (string)($_GET['kw'] ?? ''), 40, $asofParam())]);
 
 case 'draw_candidates':
     jout(true, ['rows' => ss_part_draw_candidates($db, (int)($_GET['part_d_id'] ?? 0))]);
@@ -552,6 +587,8 @@ case 'tpl_get': {
         'owner_depts' => array_values(array_filter(ss_owner_depts($db), fn($d) => !empty($d['on']))),
         'methods'     => ss_method_options($db)['list'],
         'tool_types'  => ss_tool_types($db),
+        'freq_options'=> ss_freq_options($db),
+        'symbols'     => ss_symbols($db),
     ]);
 }
 
@@ -569,7 +606,8 @@ case 'tpl_save': {
     try {
         ss_tpl_replace($db, $k, $pno, $rows('rows'), $uid);
         if ($k === 'proc') {
-            ss_proc_cfg_set($db, $pno, (int)($_POST['auto_apply'] ?? 1), (int)($_POST['with_std'] ?? 1), $uid);
+            // with_std 預設 0＝「這個製程有自己的項目時就不另外再帶全站共用」（2026-09-23 改的口徑）
+            ss_proc_cfg_set($db, $pno, (int)($_POST['auto_apply'] ?? 1), (int)($_POST['with_std'] ?? 0), $uid);
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
@@ -629,6 +667,12 @@ case 'settings_get': {
     $out['orients'] = ss_orients();
     // 標準檢驗指導書左下角那塊固定的「注意事項」（每一份都一樣，所以放設定不是逐份打）
     $out['sip_notice_default'] = (string)ss_setting_get($db, 'sip_notice_default', '');
+    // 2026-09-23：檢驗頻率下拉選項／注意事項可存範本（可綁客戶）／型式建議選項
+    $out['freq_options']    = ss_freq_options($db);
+    $out['notice_tpls']     = ss_notice_tpls($db, '');
+    $out['variant_options'] = ss_variant_options($db);
+    $out['variant_max']     = SS_VARIANT_MAX;
+    $out['symbols']         = ss_symbols($db);
     jout(true, $out);
 }
 
@@ -735,6 +779,51 @@ case 'settings_save': {
         $t = trim((string)$_POST['sip_notice_default']);
         if (mb_strlen($t) > 2000) jerr('注意事項最多 2000 個字');
         ss_setting_set($db, 'sip_notice_default', $t);
+    }
+    /* 檢驗頻率的下拉選項（使用者 2026-09-23）。空陣列也要被尊重＝管理員刻意不給選項、一律自行輸入。 */
+    if (array_key_exists('freq_options', $_POST)) {
+        $fo = [];
+        foreach ($rows('freq_options') as $s) {
+            $s = trim((string)$s);
+            if ($s === '') continue;
+            if (mb_strlen($s) > 40) jerr('檢驗頻率選項最多 40 個字');
+            if (!in_array($s, $fo, true)) $fo[] = $s;
+        }
+        ss_setting_set($db, 'freq_options', $fo);
+    }
+    /* 型式的建議選項 */
+    if (array_key_exists('variant_options', $_POST)) {
+        $vo = [];
+        foreach ($rows('variant_options') as $s) {
+            $s = trim((string)$s);
+            if ($s === '') continue;
+            if (mb_strlen($s) > 30) jerr('型式最多 30 個字');
+            if (!in_array($s, $vo, true)) $vo[] = $s;
+        }
+        ss_setting_set($db, 'variant_options', $vo);
+    }
+    /* 注意事項範本（可綁客戶）。**客戶編號是 char(11) 文字不可 intval**，
+       而且一律回主檔確認存在——打錯一個字那筆範本永遠不會被帶出來，還完全不報錯。 */
+    if (array_key_exists('notice_tpls', $_POST)) {
+        $nt = [];
+        foreach ($rows('notice_tpls') as $r) {
+            $name = trim((string)($r['name'] ?? ''));
+            $body = trim((string)($r['body'] ?? ''));
+            $cid  = trim((string)($r['customer_id'] ?? ''));
+            if ($name === '' && $body === '') continue;
+            if ($name === '') jerr('注意事項範本要有名稱');
+            if (mb_strlen($name) > 40)   jerr('注意事項範本名稱最多 40 個字');
+            if (mb_strlen($body) > 2000) jerr('注意事項範本內容最多 2000 個字');
+            $cname = '';
+            if ($cid !== '') {
+                $st = $db->prepare("SELECT customer FROM customer_list WHERE customer_id=?");
+                $st->execute([$cid]);
+                $cname = (string)($st->fetchColumn() ?: '');
+                if ($cname === '') jerr('注意事項範本「' . $name . '」綁的客戶不存在（' . $cid . '），請從清單挑');
+            }
+            $nt[] = ['name' => $name, 'body' => $body, 'customer_id' => $cid, 'customer_name' => $cname];
+        }
+        ss_setting_set($db, 'notice_tpls', $nt);
     }
     if (array_key_exists('method_extra', $_POST)) {
         $ex = [];

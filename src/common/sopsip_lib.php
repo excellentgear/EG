@@ -2728,9 +2728,9 @@ function ss_search_tool(PDO $db, string $kw, int $limit = 40, string $asof = '')
  *
  * @return array [['kind'=>'machine|tool','group'=>組名,'rows'=>[['value'=>勾起來要填的字,'no'=>編號,'name'=>名稱,'sub'=>補充]]]]
  */
-function ss_equip_pick_groups(PDO $db, string $kw): array
+function ss_equip_pick_groups(PDO $db, string $kw, string $asof = ''): array
 {
-    return array_merge(ss_pick_groups($db, 'machine', $kw), ss_pick_groups($db, 'tool', $kw));
+    return array_merge(ss_pick_groups($db, 'machine', $kw, $asof), ss_pick_groups($db, 'tool', $kw, $asof));
 }
 
 /**
@@ -2741,20 +2741,23 @@ function ss_equip_pick_groups(PDO $db, string $kw): array
  * @param string $mode machine＝個別機台／model＝機台型號／tool＝量具
  * @return array [['kind'=>…,'group'=>組名,'rows'=>[['value','no','name','sub']]]]
  */
-function ss_pick_groups(PDO $db, string $mode, string $kw): array
+function ss_pick_groups(PDO $db, string $mode, string $kw, string $asof = ''): array
 {
     $out = [];
     if ($mode === 'tool') {
         $t = [];
-        foreach (ss_search_tool($db, $kw, 500) as $r) {
+        foreach (ss_search_tool($db, $kw, 500, $asof) as $r) {
             $key = trim((string)($r['tool_type'] ?? '')) ?: '未分類';
             $t[$key][] = [
                 // value＝編號（填進「使用設備」那種文字欄位用）、id＝Tool_id（真的要綁定量具時用）
                 'value' => (string)$r['tool_no'],
                 'id'    => (int)$r['tool_id'],
                 'no'    => (string)$r['tool_no'],
-                'name'  => trim((string)($r['tool_type'] ?? '')),
+                // name＝這個類別設定要顯示的欄位組出來的文字（ai-rules/25），不是只印類別名稱
+                'name'  => (string)($r['label'] ?? ''),
                 'sub'   => trim(implode('　', array_filter([(string)($r['spec_desc'] ?? ''), (string)($r['manufacturer'] ?? '')]))),
+                'off'   => (int)($r['disabled'] ?? 0),
+                'usable'=> (int)($r['usable'] ?? 1),
             ];
         }
         foreach ($t as $name => $rows) $out[] = ['kind' => 'tool', 'group' => $name, 'rows' => $rows];
@@ -2763,7 +2766,7 @@ function ss_pick_groups(PDO $db, string $mode, string $kw): array
     if ($mode === 'model') {
         // 機台型號：一樣依製程分組（同型號的機台製程一定相同，取第一台的就好）
         $g = [];
-        foreach (ss_search_machine($db, $kw, 500) as $m) {
+        foreach (ss_search_machine($db, $kw, 500, $asof) as $m) {
             $key   = trim((string)($m['proc_type_name'] ?? '')) ?: '未分類';
             $model = trim((string)$m['machine_model']);
             if ($model === '') continue;
@@ -2789,7 +2792,7 @@ function ss_pick_groups(PDO $db, string $mode, string $kw): array
     }
     // machine：個別機台，依製程分組
     $g = [];
-    foreach (ss_search_machine($db, $kw, 500) as $m) {
+    foreach (ss_search_machine($db, $kw, 500, $asof) as $m) {
         $key = trim((string)($m['proc_type_name'] ?? '')) ?: '未分類';
         $g[$key]['sort'] = (int)($m['proc_sort'] ?? 9999);
         $g[$key]['rows'][] = [
@@ -2798,6 +2801,8 @@ function ss_pick_groups(PDO $db, string $mode, string $kw): array
             'no'    => (string)($m['asset_no'] ?: '(未編號)'),
             'name'  => trim((string)($m['field_no'] ?: $m['machine'])),
             'sub'   => trim(implode('　', array_filter([(string)$m['machine'], (string)$m['machine_model']]))),
+            'off'   => (int)($m['off'] ?? 0),
+            'off_date' => (string)($m['off_date'] ?? ''),
         ];
     }
     uasort($g, fn($a, $b) => [$a['sort']] <=> [$b['sort']]);
