@@ -2003,6 +2003,8 @@
         fitPages(); markOverflow();
       },
       autoPaginate: function () { autoPaginate(); },
+      /** 工具列「依編號自動縮排」的無提示版本，供呼叫端（如匯入完成後）直接觸發 */
+      autoNumIndent: function () { return autoNumIndent(); },
       /** 讓模組頁面在上傳/編輯完之後把圖插進來或重新載入 */
       insertAsset: function (id, o) { insertAsset(id, o); },
       reloadAsset: function (id) { reloadAsset(id); },

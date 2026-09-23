@@ -742,6 +742,10 @@ $(document).ajaxError(function(_e, xhr){
     alert(m || ('伺服器沒有正常回應（HTTP ' + xhr.status + '），請重新整理頁面後再試'));
 });
 
+/* 匯入完成後，下一次 load() 把內容排好就自動按一次「依編號自動縮排」（使用者要求）；
+   只作用這一次就清掉，一般開頁面/複製版次不受影響 */
+var AUTO_INDENT_AFTER_LOAD = false;
+
 /* 初次載入與自動分頁跑完之前不給存檔（見 save() 的說明） */
 var EDITOR_READY = false;
 function setEditorReady(on) {
@@ -786,6 +790,10 @@ function load() {
         if (CAN_EDIT) {
             if (!ED) ED = mkEditor();
             ED.set(html);
+            if (AUTO_INDENT_AFTER_LOAD) {
+                AUTO_INDENT_AFTER_LOAD = false;
+                ED.autoNumIndent();    // 重新匯入後版面常常縮排全亂，直接比照按鈕效果補一次
+            }
             loadChrome();              // 版面樣板（封面/制修訂紀錄書/目錄/頁首頁尾）
             setDirty(false);
             // 自動分頁是非同步的（字型載入、圖片載入、350ms 防抖動都會再排一次），
@@ -1676,8 +1684,9 @@ $('#btnImport').on('click', function(){
         $b.prop('disabled', false).html('<i class="fa fa-file-word-o"></i> 從 Word 匯入');
         if (!r.success) { alert(r.message || '匯入失敗'); return; }
         setDirty(false);
+        AUTO_INDENT_AFTER_LOAD = true;
         load();
-        alert('匯入完成。請看上方的清單確認還有哪些要人工補（尤其流程圖）。');
+        alert('匯入完成，已自動依編號縮排。請看上方的清單確認還有哪些要人工補（尤其流程圖）。');
       }, 'json')
       .fail(function(){ $b.prop('disabled', false).html('<i class="fa fa-file-word-o"></i> 從 Word 匯入'); });
 });
