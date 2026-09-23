@@ -7,6 +7,7 @@ require_once __DIR__ . '/../../src/common/role_features_helper.php';
 require_once __DIR__ . '/../../src/common/confirm_password_lib.php';
 require_once __DIR__ . '/../../src/common/packing_notify.php';
 require_once __DIR__ . '/../../src/common/people_lib.php';
+require_once __DIR__ . '/../../src/common/org_role_lib.php';
 
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
@@ -56,6 +57,15 @@ $pdo->exec("CREATE TABLE IF NOT EXISTS pm_packing_process_setting (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '建立時間',
     UNIQUE KEY uk_process_no (process_no)
 ) COMMENT='包裝排程：認定為包裝的製程編號設定（可多選）'");
+
+// 補登可指定包裝人員時，供挑選的部門範圍設定（可多選，各部門一律含底下子部門；空＝不限制，全公司皆可選）
+$pdo->exec("CREATE TABLE IF NOT EXISTS pm_packing_packer_dept_setting (
+    id INT AUTO_INCREMENT PRIMARY KEY COMMENT '主鍵',
+    dept_id INT NOT NULL COMMENT '認定為包裝人員候選範圍的部門，對應 department.id（含子部門）',
+    created_by VARCHAR(11) NULL COMMENT '建立人員',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '建立時間',
+    UNIQUE KEY uk_dept_id (dept_id)
+) COMMENT='包裝排程：補登可指定包裝人員的部門範圍設定（可多選，含子部門）'");
 
 // 包裝排程手動緊急性與拖曳排序（獨立於待加工 bom_ing.processing_sequence / bom.priority_type）
 $pdo->exec("CREATE TABLE IF NOT EXISTS pm_packing_priority (
@@ -169,6 +179,23 @@ function get_packing_process_nos(PDO $pdo): array
     return array_map('intval', $rows);
 }
 
+// 目前設定的「可選包裝人員」部門（未展開子部門，設定畫面用）
+function get_packing_packer_dept_ids(PDO $pdo): array
+{
+    $rows = $pdo->query("SELECT dept_id FROM pm_packing_packer_dept_setting ORDER BY dept_id")->fetchAll(PDO::FETCH_COLUMN);
+    return array_map('intval', $rows);
+}
+
+// 展開含子部門後、實際可選為包裝人員的部門 id（空陣列＝未設定限制，全公司皆可選）
+function get_packing_packer_allowed_dept_ids(PDO $pdo): array
+{
+    $depts = get_packing_packer_dept_ids($pdo);
+    if (!$depts) return [];
+    $out = [];
+    foreach ($depts as $d) $out = array_merge($out, eg_dept_subtree_ids($pdo, $d));
+    return array_values(array_unique(array_map('intval', $out)));
+}
+
 // =============================================================================
 // 權限（module='packing_schedule'）：一般包裝填寫維持既有開放（不因本次新增角色而鎖死既有使用者）
 // 僅新增的管理性功能（補登舊資料／解鎖修改已結案紀錄／角色與功能設定）才需要下列功能碼；
@@ -213,6 +240,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $ins = $pdo->prepare("INSERT INTO pm_packing_process_setting (process_no, created_by) VALUES (?, ?)");
                 foreach ($nos as $n) {
                     $ins->execute([$n, $user_id]);
+                }
+            }
+            $pdo->commit();
+            echo json_encode(['success' => true]);
+            exit;
+        }
+
+        // 3a. 取得全部部門（供「可選包裝人員部門」設定的多選清單）
+        if ($action === 'list_departments') {
+            $rows = $pdo->query("SELECT id, name, level FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success' => true, 'data' => $rows]);
+            exit;
+        }
+
+        // 3b. 取得目前「補登可指定包裝人員」的部門設定
+        if ($action === 'get_packer_dept_setting') {
+            echo json_encode(['success' => true, 'dept_ids' => get_packing_packer_dept_ids($pdo)]);
+            exit;
+        }
+
+        // 3c. 儲存「補登可指定包裝人員」的部門設定（可多選，含子部門；空＝不限制，僅管理員可設）
+        if ($action === 'save_packer_dept_setting') {
+            if (!$PK_CAN_ADMIN) throw new Exception('無權限，僅管理員可設定');
+            $ids = $_POST['dept_ids'] ?? [];
+            if (!is_array($ids)) $ids = [];
+            $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+            $pdo->beginTransaction();
+            $pdo->exec("DELETE FROM pm_packing_packer_dept_setting");
+            if (!empty($ids)) {
+                $ins = $pdo->prepare("INSERT INTO pm_packing_packer_dept_setting (dept_id, created_by) VALUES (?, ?)");
+                foreach ($ids as $d) {
+                    $ins->execute([$d, $user_id]);
                 }
             }
             $pdo->commit();
@@ -459,10 +518,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $remark = $_POST['remark'] ?? '';
             $complete = !empty($_POST['complete']) ? 1 : 0;
             $isBackfill = !empty($_POST['is_backfill']) ? 1 : 0;
+            $judgementIn = trim($_POST['judgement'] ?? '');
+            if ($judgementIn !== '' && !in_array($judgementIn, ['PASS', 'FAIL', 'PENDING'], true)) {
+                throw new Exception('判定結果不合法');
+            }
 
             $okQty = $orderQty - $ngQty;
             if ($okQty < 0) throw new Exception('NG數量不可大於數量');
-            $judgement = ($ngQty > 0) ? 'FAIL' : 'PASS';
 
             // 直接出貨／成品入庫方式檢核（前端已擋一次，這裡同規則再擋一次＝鐵律8）
             if ($isFullShip) {
@@ -486,6 +548,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $bi = $biStmt->fetch(PDO::FETCH_ASSOC);
             if (!$bi) throw new Exception('查無此製程資料');
             $bomTotalQty = $bi['bom_total_qty'] !== null ? (int)$bi['bom_total_qty'] : null;
+
+            // 判定結果（合格/不合格/待判定，擇一）：未手動勾選時，僅在「良品數＝BOM總數」（全數完成且零NG）
+            // 才自動認定合格，其餘情況（有NG、尚未收齊整張BOM數量、查無BOM總數可比對）一律留待判定，
+            // 不再像舊版那樣只要有NG就自動判不合格——不合格是需要人明確確認的判斷，不由系統代勞。
+            if ($judgementIn !== '') {
+                $judgement = $judgementIn;
+            } else {
+                $judgement = ($bomTotalQty !== null && $okQty === $bomTotalQty) ? 'PASS' : 'PENDING';
+            }
 
             // 找出這個 bom_ing_fid 目前是否已有紀錄可以續編（explicit id 優先，否則找暫存中的那一列）
             $editId = intval($_POST['packing_inspection_id'] ?? 0);
@@ -641,7 +712,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // 8a. 補登可指定包裝人員時，供挑選的在職人員清單（人員列表鐵則：走共用 eg_people_list，不自寫SQL）
         if ($action === 'people_list') {
             if (!$PK_CAN_BACKFILL) { echo json_encode(['success' => false, 'message' => '無補登權限']); exit; }
-            $rows = eg_people_list($pdo);
+            $allowDeptIds = get_packing_packer_allowed_dept_ids($pdo);
+            $rows = eg_people_list($pdo, $allowDeptIds ? ['dept_ids' => $allowDeptIds] : []);
             $out = array_map(function ($r) {
                 return ['id' => $r['id'], 'name' => $r['user_cname'], 'dept_name' => $r['dept_name'], 'position_name' => $r['position_name']];
             }, $rows);
@@ -687,6 +759,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $partKw = trim($_POST['part_no'] ?? '');
             $dateFrom = trim($_POST['date_from'] ?? '');
             $dateTo = trim($_POST['date_to'] ?? '');
+            $judgeFilter = trim($_POST['judgement'] ?? '');
             $page = max(1, intval($_POST['page'] ?? 1));
             $per = intval($_POST['per'] ?? 20);
             if (!in_array($per, [10, 20, 50, 100], true)) $per = 20;
@@ -697,6 +770,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($partKw !== '') { $where[] = 'qpi.part_no LIKE ?'; $params[] = '%' . $partKw . '%'; }
             if ($dateFrom !== '') { $where[] = 'qpi.inspection_date >= ?'; $params[] = $dateFrom; }
             if ($dateTo !== '') { $where[] = 'qpi.inspection_date <= ?'; $params[] = $dateTo; }
+            $whereSqlNoJudge = implode(' AND ', $where);   // 給判定結果卡片計數用：不含判定篩選本身，才能同時看到各判定的筆數
+
+            // 判定結果卡片計數（依目前 BOM／料號／日期篩選，逐判定各算一次，供快速篩選卡片顯示；
+            // 鐵律「總計要看過全部符合條件的資料才能算」，故用 SQL 對全部命中列彙總，不是只算這一頁）
+            $cntSql = "SELECT qpi.judgement, COUNT(*) AS n FROM qc_packing_inspection qpi WHERE $whereSqlNoJudge GROUP BY qpi.judgement";
+            $cntStmt = $pdo->prepare($cntSql);
+            $cntStmt->execute($params);
+            $counts = ['ALL' => 0, 'PASS' => 0, 'FAIL' => 0, 'PENDING' => 0];
+            foreach ($cntStmt->fetchAll(PDO::FETCH_ASSOC) as $cr) {
+                $counts['ALL'] += (int)$cr['n'];
+                if (isset($counts[$cr['judgement']])) $counts[$cr['judgement']] = (int)$cr['n'];
+            }
+
+            if ($judgeFilter !== '' && in_array($judgeFilter, ['PASS', 'FAIL', 'PENDING'], true)) {
+                $where[] = 'qpi.judgement = ?';
+                $params[] = $judgeFilter;
+            }
             $whereSql = implode(' AND ', $where);
 
             $cnt = $pdo->prepare("SELECT COUNT(*) FROM qc_packing_inspection qpi WHERE $whereSql");
@@ -715,7 +805,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     LIMIT $per OFFSET " . (($page - 1) * $per);
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
-            echo json_encode(['success' => true, 'data' => $stmt->fetchAll(PDO::FETCH_ASSOC), 'total' => $total, 'page' => $page, 'per' => $per]);
+            echo json_encode(['success' => true, 'data' => $stmt->fetchAll(PDO::FETCH_ASSOC), 'total' => $total, 'page' => $page, 'per' => $per, 'counts' => $counts]);
             exit;
         }
 
@@ -725,12 +815,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $partKw = trim($_POST['part_no'] ?? '');
             $dateFrom = trim($_POST['date_from'] ?? '');
             $dateTo = trim($_POST['date_to'] ?? '');
+            $judgeFilter = trim($_POST['judgement'] ?? '');
             $where = ["qpi.status = 'closed'"];
             $params = [];
             if ($bomKw !== '') { $where[] = 'qpi.bom LIKE ?'; $params[] = '%' . $bomKw . '%'; }
             if ($partKw !== '') { $where[] = 'qpi.part_no LIKE ?'; $params[] = '%' . $partKw . '%'; }
             if ($dateFrom !== '') { $where[] = 'qpi.inspection_date >= ?'; $params[] = $dateFrom; }
             if ($dateTo !== '') { $where[] = 'qpi.inspection_date <= ?'; $params[] = $dateTo; }
+            if ($judgeFilter !== '' && in_array($judgeFilter, ['PASS', 'FAIL', 'PENDING'], true)) {
+                $where[] = 'qpi.judgement = ?';
+                $params[] = $judgeFilter;
+            }
             $whereSql = implode(' AND ', $where);
             $sql = "SELECT qpi.bom, qpi.part_no, qpi.customer_name, qpi.inspection_date, qpi.order_qty, qpi.bom_total_qty,
                            qpi.ok_qty, qpi.ng_qty, qpi.judgement, qpi.ship_now_qty, qpi.warehouse_qty, qpi.packer, qpi.remark
@@ -902,6 +997,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         .pk-badge-open   { background:#eaf4fd; color:#2980b9; }
         .pk-badge-closed { background:#eafaf1; color:#27ae60; }
         .pk-badge-backfill { background:#fff4e5; color:#e8920c; }
+
+        /* 判定結果（合格/不合格/待判定）：全站暖色系固定三色，見 ai-rules/10 */
+        .pk-judge-pass    { color:#8a5a0a; font-weight:600; }
+        .pk-judge-fail    { color:#DD5138; font-weight:600; }
+        .pk-judge-pending { color:#8a6a45; font-weight:600; }
+        .pk-judge-tag { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; }
+        .pk-judge-tag-pass    { background:#F7E0BD; color:#4A3524; }
+        .pk-judge-tag-fail    { background:#DD5138; color:#fff; }
+        .pk-judge-tag-pending { background:#EDE3D3; color:#8a6a45; }
+
+        /* 判定結果快速篩選卡片 */
+        .pk-judge-cards { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+        .pk-judge-card {
+            flex:1 1 120px; min-width:110px; cursor:pointer; border:2px solid #E4D3BC; border-radius:6px;
+            padding:8px 10px; background:#fff; text-align:center; user-select:none;
+        }
+        .pk-judge-card .n { display:block; font-size:1.4em; font-weight:bold; }
+        .pk-judge-card .t { font-size:12px; color:#8a6a45; }
+        .pk-judge-card.active { border-color:#C77C1A; background:#FCF7F0; }
+        .pk-judge-card.jc-all.active    { border-color:#C77C1A; }
+        .pk-judge-card.jc-pass.active   { border-color:#C77C1A; background:#F7E0BD; }
+        .pk-judge-card.jc-fail.active   { border-color:#DD5138; background:#fbe3df; }
+        .pk-judge-card.jc-pending.active{ border-color:#8a6a45; background:#EDE3D3; }
     </style>
 </head>
 
@@ -970,6 +1088,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
                             <div class="x_panel" id="pk-tab-closed" style="border-top:0;display:none;">
                                 <div class="x_content">
+                                    <div class="pk-judge-cards" id="cl-judge-cards">
+                                        <div class="pk-judge-card jc-all active" data-judge=""><span class="n" id="jc-n-all">0</span><span class="t">全部</span></div>
+                                        <div class="pk-judge-card jc-pass" data-judge="PASS"><span class="n" id="jc-n-pass">0</span><span class="t">合格</span></div>
+                                        <div class="pk-judge-card jc-fail" data-judge="FAIL"><span class="n" id="jc-n-fail">0</span><span class="t">不合格</span></div>
+                                        <div class="pk-judge-card jc-pending" data-judge="PENDING"><span class="n" id="jc-n-pending">0</span><span class="t">待判定</span></div>
+                                    </div>
                                     <div class="row" style="margin-bottom:10px;">
                                         <div class="col-md-2">
                                             <input type="text" id="cl-f-bom" class="form-control input-sm" placeholder="BOM 關鍵字">
@@ -1003,6 +1127,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                                 <th>客戶</th>
                                                 <th width="90" class="text-right">數量</th>
                                                 <th width="70" class="text-right">NG</th>
+                                                <th width="90">判定</th>
                                                 <th width="90">出貨/入庫</th>
                                                 <th>包裝人員</th>
                                                 <th width="70">補登</th>
@@ -1010,7 +1135,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                             </tr>
                                         </thead>
                                         <tbody id="cl-list">
-                                            <tr><td colspan="10" class="text-center text-muted">請點「已結案清單」分頁載入</td></tr>
+                                            <tr><td colspan="11" class="text-center text-muted">請點「已結案清單」分頁載入</td></tr>
                                         </tbody>
                                     </table>
                                     <div class="text-right" id="cl-pager" style="margin-top:8px;"></div>
@@ -1034,6 +1159,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <div class="modal-body">
                     <p class="text-muted">選擇要視為「包裝製程」的製程編號，可多選。設定後此頁僅顯示這些製程的 BOM。</p>
                     <select id="setting-process" class="form-control" multiple style="width:100%;"></select>
+                    <?php if ($PK_CAN_ADMIN): ?>
+                    <hr>
+                    <p class="text-muted">補登舊資料時可指定的「包裝人員」範圍（僅管理員可設定）：選擇部門，可多選，<strong>各部門一律含底下所有子部門</strong>；不選任何部門＝不限制，全公司在職人員皆可挑選。</p>
+                    <select id="setting-packer-dept" class="form-control" multiple style="width:100%;"></select>
+                    <?php endif; ?>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
@@ -1144,6 +1274,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <tbody id="pkg-appearance-tbody"></tbody>
                 <tfoot id="pkg-appearance-tfoot" style="background:#f9f9f9; font-weight:bold;"></tfoot>
             </table>
+
+            <!-- 判定結果（合格/不合格/待判定，擇一） -->
+            <div class="pk-section-title">判定結果</div>
+            <div class="well well-sm" style="background:#f9f9f9;margin-bottom:15px;">
+                <label class="radio-inline"><input type="radio" name="pkg-judgement" value="" checked> 依系統自動判定</label>
+                <label class="radio-inline"><input type="radio" name="pkg-judgement" value="PASS"> <span class="pk-judge-pass">合格</span></label>
+                <label class="radio-inline"><input type="radio" name="pkg-judgement" value="FAIL"> <span class="pk-judge-fail">不合格</span></label>
+                <label class="radio-inline"><input type="radio" name="pkg-judgement" value="PENDING"> <span class="pk-judge-pending">待判定</span></label>
+                <div class="text-muted small" id="pkg-judge-hint" style="margin-top:6px;"></div>
+            </div>
 
             <!-- 2. 防護與備註 -->
             <div class="pk-section-title">2. 防護與備註</div>
@@ -1312,6 +1452,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     <li>點擊清單中任一列開啟填寫視窗。</li>
                     <li>填寫外觀檢驗項目、防護與容器資訊。</li>
                     <li>若本批數量有一部分要<strong>直接出貨</strong>，勾選「直接出貨」並填入本次出貨數量；若還有剩餘數量，需再選擇成品入庫方式。</li>
+                    <li>若「判定結果」不手動勾選，存檔時系統會自動判定：良品數＝BOM總數（全數完成且零NG）才自動判為<strong>合格</strong>，其餘一律列為<strong>待判定</strong>，需人工確認後手動改成合格或不合格。</li>
                     <li>尚未填完可按「<strong>暫存</strong>」，資料會保留、BOM 仍留在待包裝清單（標示「暫存中」），可稍後回來繼續填寫。</li>
                     <li>填完按「<strong>完成包裝</strong>」即結案：紀錄鎖定不可再修改、BOM 從待包裝清單移除並列入「已結案清單」、同時通知生管可安排出貨。</li>
                 </ol>
@@ -1319,11 +1460,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <ul>
                     <li>「BOM總數」是整張 BOM 的總數量，因為同一張 BOM 可能分批送到包裝，這裡顯示的不是本次的數量。</li>
                     <li>「訂單綁定交期與數量」列出這張 BOM 目前綁定的訂單資料；若查無綁定，會退回顯示系統交期。</li>
+                    <li>「判定結果」分合格／不合格／待判定三種，擇一：不合格一律要人工手動勾選，系統不會自動判不合格；「已結案清單」上方的卡片可依判定結果快速篩選（全部／合格／不合格／待判定），數字是該篩選條件下符合的筆數。</li>
                     <li>已結案的紀錄無法直接修改，需由管理員在「已結案清單」點「解鎖修改」並輸入操作確認密碼。</li>
-                    <?php if ($PK_CAN_BACKFILL): ?><li>「補登包裝紀錄」僅能用於<strong>完全沒有包裝紀錄</strong>的舊 BOM，已有紀錄的請改用「已結案清單」解鎖修改。<?= $PK_CAN_BACKFILL_PACKER ? '你目前有權限可指定其他人為包裝人員。' : '你目前只能以自己的身分補登，如需指定他人請洽管理員授權。' ?></li><?php endif; ?>
+                    <?php if ($PK_CAN_BACKFILL): ?><li>「補登包裝紀錄」僅能用於<strong>完全沒有包裝紀錄</strong>的舊 BOM，已有紀錄的請改用「已結案清單」解鎖修改。<?= $PK_CAN_BACKFILL_PACKER ? '你目前有權限可指定其他人為包裝人員；管理員可在「包裝製程設定」限制可挑選的部門範圍（含子部門），未設定則全公司在職人員皆可選。' : '你目前只能以自己的身分補登，如需指定他人請洽管理員授權。' ?></li><?php endif; ?>
                 </ul>
-                <p><strong>設定入口：</strong>包裝製程設定／外觀檢驗模板（頁首按鈕）。</p>
-                <p><strong>權限角色：</strong>一般包裝填寫（暫存/完成包裝）全體登入者皆可使用；「補登舊資料」與「指定補登包裝人員」「解鎖修改已結案紀錄／角色與功能設定」由管理員於本頁「角色與功能設定」指派角色，再到人員權限設定指派給人員。</p>
+                <p><strong>設定入口：</strong>包裝製程設定／外觀檢驗模板（頁首按鈕）；補登可指定包裝人員的部門範圍在「包裝製程設定」跳窗內（僅管理員看得到）。</p>
+                <p><strong>權限角色：</strong>一般包裝填寫（暫存/完成包裝、勾選判定結果）全體登入者皆可使用；「補登舊資料」與「指定補登包裝人員」「解鎖修改已結案紀錄／角色與功能設定」「設定包裝人員部門範圍」由管理員於本頁「角色與功能設定」指派角色，再到人員權限設定指派給人員。</p>
             </div>
         </div></div>
     </div>
@@ -1347,6 +1489,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         var itemEditMode = 'template'; // template / custom
         var currentMode = 'normal';  // normal / backfill / editClosed / view
         var currentPkgId = null;     // 續編/補登/解鎖修改中的 qc_packing_inspection.packing_inspection_id
+        var currentBomTotalQty = null; // 這張 BOM 真正的總數量（來自 bom.sqty，非可手改的 f-order-qty），判定結果自動認定合格要比對這個
         var currentIsClosed = false; // 目前這筆是否為已結案（解鎖修改中）
 
         // 數字格式：小數點後皆為0則省略
@@ -1489,10 +1632,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $('#f-delivery').text(r.delivery_date || '無');
             $('#f-order-qty').val((r.bom_total_qty != null ? r.bom_total_qty : r.sqty) || 0);
             $('#pk-win-sub').text('- ' + r.bom);
+            currentBomTotalQty = (r.bom_total_qty != null) ? parseFloat(r.bom_total_qty) : (r.sqty != null ? parseFloat(r.sqty) : null);
 
             // 重置表單
             $('#pkg-appearance-tbody').empty();
             $('#pkg-appearance-tfoot').empty();
+            $('input[name="pkg-judgement"][value=""]').prop('checked', true);
+            $('#pkg-judge-hint').text('');
             $('.pkg-rust, .pkg-collision').prop('checked', false).closest('label').removeClass('active');
             $('.pkg-rust-other, .pkg-collision-other, .pkg-collision-detail, .pkg-collision-detail-2').val('').hide();
             $('#pkg-return-jig, #pkg-return-sample, #pkg-shipment-desc, #pkg-pallet-qty, #pkg-actual-qty, #pkg-remark').val('');
@@ -1521,7 +1667,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 renderSourceBadge();
                 renderAppearance();
                 renderOrderBind(res.order_bind || []);
-                if (res.bom_total_qty != null && res.bom_total_qty !== '') $('#f-order-qty').val(res.bom_total_qty);
+                if (res.bom_total_qty != null && res.bom_total_qty !== '') {
+                    $('#f-order-qty').val(res.bom_total_qty);
+                    currentBomTotalQty = parseFloat(res.bom_total_qty);
+                }
                 addPkgRow();
                 if (mode === 'normal' && res.draft) {
                     fillFromRecord(res.draft, false);
@@ -1608,6 +1757,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             currentPkgId = rec.packing_inspection_id;
             currentIsClosed = (rec.status === 'closed');
             if (rec.order_qty != null) $('#f-order-qty').val(rec.order_qty);
+            if (rec.bom_total_qty != null) currentBomTotalQty = parseFloat(rec.bom_total_qty);
+            // 既有紀錄的判定結果就照當時存的值勾選（不管當初是自動還是手動判定的），
+            // 讓填表人看得到目前狀態、要改再改；不預先猜是自動還手動
+            $('input[name="pkg-judgement"][value="' + (rec.judgement || '') + '"]').prop('checked', true);
             var pd = {};
             try { pd = rec.packaging_data ? JSON.parse(rec.packaging_data) : {}; } catch (e) { pd = {}; }
 
@@ -1726,7 +1879,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'NG總數: <span class="text-danger">' + totalNg + '</span> = ' +
                 '<span class="text-success">小計(OK): ' + okQty + '</span></td></tr>'
             );
+            updateJudgeHint(okQty);
         }
+
+        // 判定結果自動判定的即時提示：跟著「良品數」「BOM總數」變動更新，讓填表人知道沒手動勾選時會存成什麼
+        function updateJudgeHint(okQty) {
+            var manual = $('input[name="pkg-judgement"]:checked').val();
+            if (manual) { $('#pkg-judge-hint').text(''); return; }
+            var bomTotal = currentBomTotalQty;
+            if (bomTotal !== null && okQty === bomTotal) {
+                $('#pkg-judge-hint').html('目前未勾選，良品數 ' + okQty + ' ＝ BOM總數 ' + bomTotal + '，存檔時將自動判定為<span class="pk-judge-pass">合格</span>。');
+            } else {
+                $('#pkg-judge-hint').html('目前未勾選，良品數 ' + okQty + (bomTotal !== null ? '　BOM總數 ' + bomTotal : '') + '，存檔時將自動列為<span class="pk-judge-pending">待判定</span>，請確認後手動選擇判定結果。');
+            }
+        }
+        $(document).on('change', 'input[name="pkg-judgement"]', function () {
+            updateJudgeHint((parseFloat($('#f-order-qty').val()) || 0) - (function () {
+                var n = 0; $('.pkg-ng-qty').each(function () { n += (parseFloat($(this).val()) || 0); }); return n;
+            })());
+        });
 
         $(document).on('input', '.pkg-ng-qty', function () {
             if ((parseFloat($(this).val()) || 0) > 0) $(this).addClass('ng-value'); else $(this).removeClass('ng-value');
@@ -1895,7 +2066,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 pallet_qty: $('#pkg-pallet-qty').val(),
                 packaging_data: packagingData,
                 remark: $('#pkg-remark').val(),
-                complete: complete ? 1 : 0
+                complete: complete ? 1 : 0,
+                judgement: $('input[name="pkg-judgement"]:checked').val() || ''
             };
             if (currentMode === 'backfill') {
                 payload.is_backfill = 1;
@@ -1934,15 +2106,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $.post(API, { action: 'get_packing_setting' }, function (r2) {
                     $sel.val((r2.process_nos || []).map(String));
                     $sel.select2({ dropdownParent: $('#settingModal'), placeholder: '選擇包裝製程...', width: '100%' });
-                    $('#settingModal').modal('show');
+                    if (PK_CAN_ADMIN && $('#setting-packer-dept').length) {
+                        $.post(API, { action: 'list_departments' }, function (dres) {
+                            var $dsel = $('#setting-packer-dept').empty();
+                            if ($dsel.hasClass('select2-hidden-accessible')) $dsel.select2('destroy');
+                            (dres.data || []).forEach(function (d) {
+                                $dsel.append('<option value="' + d.id + '">' + d.name + '</option>');
+                            });
+                            $.post(API, { action: 'get_packer_dept_setting' }, function (dr2) {
+                                $dsel.val((dr2.dept_ids || []).map(String));
+                                $dsel.select2({ dropdownParent: $('#settingModal'), placeholder: '不限制（全公司皆可選）', width: '100%' });
+                                $('#settingModal').modal('show');
+                            }, 'json');
+                        }, 'json');
+                    } else {
+                        $('#settingModal').modal('show');
+                    }
                 }, 'json');
             }, 'json');
         });
         $('#btn-save-setting').click(function () {
             var vals = $('#setting-process').val() || [];
             $.post(API, { action: 'save_packing_setting', process_nos: vals }, function (res) {
-                if (res.success) { $('#settingModal').modal('hide'); loadList(); }
-                else alert('儲存失敗: ' + res.message);
+                if (!res.success) { alert('儲存失敗: ' + res.message); return; }
+                if (PK_CAN_ADMIN && $('#setting-packer-dept').length) {
+                    var deptVals = $('#setting-packer-dept').val() || [];
+                    $.post(API, { action: 'save_packer_dept_setting', dept_ids: deptVals }, function (dres) {
+                        if (!dres.success) { alert('包裝人員部門設定儲存失敗: ' + dres.message); return; }
+                        $('#settingModal').modal('hide'); loadList();
+                    }, 'json');
+                } else {
+                    $('#settingModal').modal('hide'); loadList();
+                }
             }, 'json');
         });
 
@@ -2085,6 +2280,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         // ---------- 已結案清單 ----------
         var clPage = 1;
+        var clJudgeFilter = '';   // ''=全部 PASS/FAIL/PENDING＝判定結果快速篩選卡片
+        var JUDGE_TAG = {
+            PASS: '<span class="pk-judge-tag pk-judge-tag-pass">合格</span>',
+            FAIL: '<span class="pk-judge-tag pk-judge-tag-fail">不合格</span>',
+            PENDING: '<span class="pk-judge-tag pk-judge-tag-pending">待判定</span>'
+        };
         function clDefaultRange() {
             var now = new Date();
             var first = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-01';
@@ -2096,14 +2297,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             var params = {
                 action: 'list_closed', page: clPage, per: 20,
                 bom: $('#cl-f-bom').val(), part_no: $('#cl-f-part').val(),
-                date_from: $('#cl-f-from').val(), date_to: $('#cl-f-to').val()
+                date_from: $('#cl-f-from').val(), date_to: $('#cl-f-to').val(),
+                judgement: clJudgeFilter
             };
-            $('#cl-list').html('<tr><td colspan="10" class="text-center text-muted">載入中...</td></tr>');
+            $('#cl-list').html('<tr><td colspan="11" class="text-center text-muted">載入中...</td></tr>');
             $.post(API, params, function (res) {
-                if (!res.success) { $('#cl-list').html('<tr><td colspan="10" class="text-danger">' + (res.message || '載入失敗') + '</td></tr>'); return; }
+                if (!res.success) { $('#cl-list').html('<tr><td colspan="11" class="text-danger">' + (res.message || '載入失敗') + '</td></tr>'); return; }
                 $('#cl-count').html('共 <strong>' + res.total + '</strong> 筆已結案');
+                var c = res.counts || {};
+                $('#jc-n-all').text(c.ALL || 0);
+                $('#jc-n-pass').text(c.PASS || 0);
+                $('#jc-n-fail').text(c.FAIL || 0);
+                $('#jc-n-pending').text(c.PENDING || 0);
                 if (!res.data.length) {
-                    $('#cl-list').html('<tr><td colspan="10" class="text-center text-muted" style="padding:20px;">查無資料</td></tr>');
+                    $('#cl-list').html('<tr><td colspan="11" class="text-center text-muted" style="padding:20px;">查無資料</td></tr>');
                     $('#cl-pager').html('');
                     return;
                 }
@@ -2119,6 +2326,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         '<td>' + (r.customer_name || '') + '</td>' +
                         '<td class="text-right">' + fmtNum(r.order_qty) + '</td>' +
                         '<td class="text-right">' + (r.ng_qty > 0 ? ('<span class="text-danger">' + fmtNum(r.ng_qty) + '</span>') : '0') + '</td>' +
+                        '<td>' + (JUDGE_TAG[r.judgement] || '') + '</td>' +
                         '<td>' + shipTxt + '</td>' +
                         '<td>' + (r.packer || '') + '</td>' +
                         '<td>' + (r.is_backfill * 1 === 1 ? '<span class="label label-warning">補登</span>' : '') + '</td>' +
@@ -2144,9 +2352,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $('#btn-cl-reset').click(function () { $('#cl-f-bom, #cl-f-part').val(''); clDefaultRange(); loadClosedList(1); });
         $(document).on('click', '.cl-view', function () { openClosedRecord($(this).data('id'), false); });
         $(document).on('click', '.cl-unlock', function () { openClosedRecord($(this).data('id'), true); });
+        $(document).on('click', '.pk-judge-card', function () {
+            $('.pk-judge-card').removeClass('active');
+            $(this).addClass('active');
+            clJudgeFilter = $(this).data('judge') || '';
+            loadClosedList(1);
+        });
 
         $('#btn-cl-print').click(function () {
-            var params = { action: 'list_closed_all', bom: $('#cl-f-bom').val(), part_no: $('#cl-f-part').val(), date_from: $('#cl-f-from').val(), date_to: $('#cl-f-to').val() };
+            var params = { action: 'list_closed_all', bom: $('#cl-f-bom').val(), part_no: $('#cl-f-part').val(), date_from: $('#cl-f-from').val(), date_to: $('#cl-f-to').val(), judgement: clJudgeFilter };
             $.post(API, params, function (res) {
                 if (!res.success) { alert('取得資料失敗'); return; }
                 printClosedList(res.data, params);
@@ -2158,12 +2372,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             var filterTxt = [];
             if (params.bom) filterTxt.push('BOM: ' + params.bom);
             if (params.part_no) filterTxt.push('料號: ' + params.part_no);
+            var judgeName = { PASS: '合格', FAIL: '不合格', PENDING: '待判定' };
+            if (params.judgement) filterTxt.push('判定: ' + (judgeName[params.judgement] || params.judgement));
             var body = '<h3>已包裝明細</h3><div>期間：' + rangeTxt + (filterTxt.length ? '　篩選：' + filterTxt.join('、') : '') + '　共 ' + rows.length + ' 筆</div>' +
                 '<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;width:100%;font-size:12px;margin-top:8px;">' +
-                '<thead><tr style="background:#eee;"><th>結案日期</th><th>BOM</th><th>料號</th><th>客戶</th><th>數量</th><th>NG</th><th>出貨數</th><th>入庫數</th><th>包裝人員</th><th>備註</th></tr></thead><tbody>';
+                '<thead><tr style="background:#eee;"><th>結案日期</th><th>BOM</th><th>料號</th><th>客戶</th><th>數量</th><th>NG</th><th>判定</th><th>出貨數</th><th>入庫數</th><th>包裝人員</th><th>備註</th></tr></thead><tbody>';
             rows.forEach(function (r) {
                 body += '<tr><td>' + egFmtDate(r.inspection_date) + '</td><td>' + r.bom + '</td><td>' + (r.part_no || '') + '</td><td>' +
                     (r.customer_name || '') + '</td><td>' + fmtNum(r.order_qty) + '</td><td>' + fmtNum(r.ng_qty) + '</td><td>' +
+                    (judgeName[r.judgement] || r.judgement || '') + '</td><td>' +
                     fmtNum(r.ship_now_qty) + '</td><td>' + fmtNum(r.warehouse_qty) + '</td><td>' + (r.packer || '') + '</td><td>' + (r.remark || '') + '</td></tr>';
             });
             body += '</tbody></table>';
