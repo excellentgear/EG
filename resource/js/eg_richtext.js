@@ -533,6 +533,10 @@
       '.egrt-delpage{position:absolute;right:0;bottom:-19px;font-size:11px;line-height:16px;',
       'color:#A34E2A;background:#e6ddd0;border-radius:3px;padding:0 7px;cursor:pointer;}',
       '.egrt-delpage:hover{background:#DD5138;color:#fff;}',
+      // 空白頁：按鈕標成橘色，使用者一眼看得出「這一頁是空的，可以刪」
+      '.egrt-delpage.egrt-blankpage{background:#F0A24B;color:#fff;font-weight:bold;}',
+      // 待確認：紅底閃一下，並且明講要再按一次或按 Enter
+      '.egrt-delpage.egrt-delarm{background:#DD5138;color:#fff;font-weight:bold;}',
       // 內容裡若還殘留分頁標記（舊資料），在編輯器裡標示出來
       '.egrt-page hr[style*="page-break"]{border-top:2px dashed #D6851F;position:relative;margin:18px 0;}',
       '.egrt-page hr[style*="page-break"]:after{content:"分頁";position:absolute;right:0;top:-9px;',
@@ -1301,15 +1305,21 @@
           if (!del) {
             del = d.createElement('span');
             del.className = 'egrt-delpage';
-            del.textContent = '刪除此頁';
             del.addEventListener('mousedown', function (e) { e.preventDefault(); e.stopPropagation(); });
+            /* 兩段式確認（使用者指定）：第一次按＝進入待確認，第二次按或按 Enter 才真的刪。
+               刻意不用原生 confirm——那個跳窗會把焦點搶走，回來之後游標位置就沒了。 */
             del.addEventListener('click', function (e) {
               e.preventDefault(); e.stopPropagation();
-              if (!w.confirm('確定要刪除這一頁嗎？這一頁的內容會一起刪掉。')) return;
-              delPage(s);
+              if (del.getAttribute('data-arm') === '1') { disarmDel(); delPage(s); return; }
+              armDel(del, s);
             });
             wrap.appendChild(del);
           }
+          // 空白頁另外標出來，使用者才找得到要刪哪一頁
+          var blank = !s.textContent.replace(/ |\s/g, '') && !s.querySelector('img,table,hr');
+          del.textContent = del.getAttribute('data-arm') === '1'
+            ? '再按一次或按 Enter 刪除' : (blank ? '刪除此空白頁' : '刪除此頁');
+          del.classList.toggle('egrt-blankpage', blank);
         } else if (del) { del.parentNode.removeChild(del); }
       });
     }
@@ -1498,6 +1508,38 @@
       numberPages(); fitPages(); markOverflow(); changed();
       ns.focus();
       body = ns;
+    }
+
+    /* ── 刪除此頁的兩段式確認 ──────────────────────────────────────────
+       armDel() 把按鈕切成待確認狀態並接管 Enter；8 秒沒動作或按 Esc 自動取消，
+       免得使用者離開之後還留著一個「按 Enter 就會刪頁」的狀態。 */
+    var delArmed = null, delTimer = null, delKeyBound = false;
+    function disarmDel() {
+      if (delTimer) { clearTimeout(delTimer); delTimer = null; }
+      if (delArmed) {
+        delArmed.removeAttribute('data-arm');
+        delArmed.classList.remove('egrt-delarm');
+        delArmed = null;
+      }
+      numberPages();                    // 讓按鈕文字回到「刪除此頁／刪除此空白頁」
+    }
+    function armDel(btn, s) {
+      disarmDel();
+      delArmed = btn;
+      btn.setAttribute('data-arm', '1');
+      btn.classList.add('egrt-delarm');
+      btn.textContent = '再按一次或按 Enter 刪除';
+      delTimer = setTimeout(disarmDel, 8000);
+      if (!delKeyBound) {
+        delKeyBound = true;
+        d.addEventListener('keydown', function (e) {
+          if (!delArmed) return;
+          var target = delArmed._sheet;
+          if (e.key === 'Enter') { e.preventDefault(); disarmDel(); if (target) delPage(target); }
+          else if (e.key === 'Escape') { disarmDel(); }
+        }, true);
+      }
+      btn._sheet = s;
     }
 
     function delPage(s) {

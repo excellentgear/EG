@@ -15,6 +15,20 @@
  * （編輯器用 padding 模擬紙張邊界、列印用 @page margin），不要放進來。
  */
 
+/* ── 公版設定（管理員可調）────────────────────────────────────────────
+   表格的字型／字級／粗細與框線型式一律走這幾個變數，
+   後端只要覆寫變數就整份文件（系統頁與正文）一起變，不必到處改規則。
+   預設值＝改版前的既有外觀，所以沒有設定過的文件看起來完全一樣。 */
+:root {
+    --adt-tbl-font: inherit;
+    --adt-tbl-size: inherit;
+    --adt-tbl-weight: inherit;
+    --adt-brd-w: 1px;
+    --adt-brd-style: solid;
+    --adt-brd-color: #000;
+    --adt-cell-pad: 4px;
+}
+
 .eg-docbody {
     font-family: "微軟正黑體", "Microsoft JhengHei", sans-serif;
     font-size: 12pt;
@@ -37,9 +51,11 @@
 .eg-docbody ol { margin: 0 0 4px; padding-left: 22px; }
 .eg-docbody li { margin: 0; }
 
-.eg-docbody table { border-collapse: collapse; margin: 6px 0; }
+.eg-docbody table { border-collapse: collapse; margin: 6px 0;
+    font-family: var(--adt-tbl-font); font-size: var(--adt-tbl-size); font-weight: var(--adt-tbl-weight); }
 .eg-docbody td,
-.eg-docbody th { border: 1px solid #333; padding: 4px; vertical-align: top; }
+.eg-docbody th { border: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color);
+    padding: var(--adt-cell-pad); vertical-align: top; }
 .eg-docbody th { text-align: center; }
 
 .eg-docbody img { max-width: 100%; }
@@ -55,7 +71,7 @@
 .adt-cover { text-align: center; padding-top: 18mm; }
 .adt-cover-co { font-size: 15pt; letter-spacing: 2px; }
 .adt-cover-coen { font-size: 11pt; margin-top: 1mm; letter-spacing: .5px; }
-.adt-cover-box { border: 1.5pt solid #000; margin: 26mm 6mm 0; padding: 34mm 6mm; }
+.adt-cover-box { border: calc(var(--adt-brd-w) * 2) var(--adt-brd-style) var(--adt-brd-color); margin: 26mm 6mm 0; padding: 34mm 6mm; }
 .adt-cover-name { font-size: 26pt; letter-spacing: 8px; font-weight: bold; }
 .adt-cover-nameen { font-size: 14pt; margin-top: 6mm; letter-spacing: 1px; }
 
@@ -64,20 +80,26 @@
 .adt-rev-coen { text-align: center; font-size: 10pt; margin-top: .5mm; }
 .adt-rev-ttl { text-align: center; font-size: 16pt; font-weight: bold; letter-spacing: 4px;
                margin: 2mm 0 4mm; }
+/* 抬頭／紀錄本體共用同一組四欄格線，直框線才會上下對齊 */
+.adt-rev-head, .adt-rev-tbl { table-layout: fixed; }
+.adt-rc1 { width: 14%; } .adt-rc2 { width: 20%; } .adt-rc3 { width: 16%; } .adt-rc4 { width: 50%; }
+/* 簽章區：34% 與 50% 這兩條線與上面的格線同位置 */
+.adt-fc1 { width: 34%; } .adt-fc2 { width: 16%; } .adt-fc3 { width: 25%; } .adt-fc4 { width: 25%; }
+.adt-rev-foot { table-layout: fixed; }
 .adt-rev-head { width: 100%; border-collapse: collapse; }
-.adt-rev-head td { border: 1px solid #000; padding: 2mm 3mm; font-size: 11pt; }
-.adt-rev-head .adt-rev-name { width: 58%; text-align: center; font-size: 15pt; font-weight: bold;
+.adt-rev-head td { border: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color); padding: 2mm 3mm; font-size: 11pt;
+  word-wrap: break-word; overflow-wrap: break-word; }
+.adt-rev-head .adt-rev-name { text-align: center; font-size: 15pt; font-weight: bold;
                               letter-spacing: 2px; }
 .adt-rev-tbl { width: 100%; border-collapse: collapse; margin-top: -1px; }
-.adt-rev-tbl td, .adt-rev-tbl th { border: 1px solid #000; padding: 1.4mm 2mm; font-size: 10.5pt;
+.adt-rev-tbl td, .adt-rev-tbl th { border: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color); padding: 1.4mm 2mm; font-size: 10.5pt;
                                    text-align: center; }
 .adt-rev-tbl .adt-rev-cap { letter-spacing: 6px; font-size: 12pt; font-weight: bold; padding: 1.6mm; }
 .adt-rev-tbl th { font-weight: normal; }
-.adt-rev-tbl td:nth-child(1) { width: 14%; }
-.adt-rev-tbl td:nth-child(2) { width: 20%; }
-.adt-rev-tbl td:nth-child(3) { width: 16%; }
+/* 欄寬一律由上面的 colgroup 決定，這裡不再逐欄指定
+   （nth-child 遇到 colspan 的那一列會算錯欄位） */
 .adt-rev-foot { width: 100%; border-collapse: collapse; margin-top: 3mm; }
-.adt-rev-foot td, .adt-rev-foot th { border: 1px solid #000; padding: 1.6mm 2mm; font-size: 10.5pt;
+.adt-rev-foot td, .adt-rev-foot th { border: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color); padding: 1.6mm 2mm; font-size: 10.5pt;
                                      text-align: center; }
 .adt-rev-foot th { font-weight: normal; }
 .adt-rev-foot .adt-sign td { height: 16mm; vertical-align: middle; }
@@ -98,13 +120,22 @@
 .adt-toc-empty { color: #8A5A2B; font-size: 10.5pt; }
 
 /* ── 每一頁的頁首／頁尾 ─────────────────────────────────────────────── */
-.adt-hdr { width: 100%; border-collapse: collapse; margin-bottom: 2.5mm; }
-.adt-hdr td { border: 1px solid #000; padding: .8mm 2mm; font-size: 9.5pt; }
-.adt-hdr .adt-hdr-co { width: 58%; text-align: center; vertical-align: middle; }
+/* 頁首是固定四欄格線（table-layout:fixed ＋ colgroup）：
+   每一條直框線都由 colgroup 決定，跨欄的儲存格不會把下一列的線推歪，
+   所以上下兩列的框線一定對齊（使用者 2026-09-22 指出的問題）。 */
+.adt-hdr { width: 100%; border-collapse: collapse; margin-bottom: 2.5mm; table-layout: fixed; }
+.adt-hdr td { border: var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color); padding: .8mm 2mm; font-size: 9.5pt;
+  word-wrap: break-word; overflow-wrap: break-word; }
+.adt-hdr .adt-c1 { width: 16%; }
+.adt-hdr .adt-c2 { width: 42%; }
+.adt-hdr .adt-c3 { width: 16%; }
+.adt-hdr .adt-c4 { width: 26%; }
+.adt-hdr .adt-hdr-co { text-align: center; vertical-align: middle; }
 .adt-hdr-coen { font-size: 9pt; }
 .adt-hdr-cozh { font-size: 11pt; letter-spacing: 1px; }
-.adt-hdr .adt-hdr-k { width: 16%; text-align: center; }
-.adt-hdr .adt-hdr-v { width: 26%; text-align: center; }
+.adt-hdr .adt-hdr-k { text-align: center; }
+.adt-hdr .adt-hdr-v { text-align: center; }
+.adt-hdr .adt-hdr-nk { text-align: center; }
 .adt-hdr .adt-hdr-nm { text-align: left; }
 .adt-ftr { width: 100%; border-collapse: collapse; margin-top: 2mm; }
 .adt-ftr td { border: 0; padding: 0; font-size: 9.5pt; }

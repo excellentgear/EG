@@ -130,7 +130,8 @@ function adi_import_file(PDO $db, int $versionId, string $src, string $showName,
 function adi_transform(PDO $db, string $raw, string $workDir, int $contentId, int $uid): array
 {
     $stat = ['img_in' => 0, 'img_ok' => 0, 'draw' => 0, 'draw_px' => [], 'img_fail' => 0,
-             'tables' => 0, 'boxes' => 0, 'objects' => 0, 'pagebreaks' => 0, 'tbl_shrunk' => 0];
+             'tables' => 0, 'boxes' => 0, 'objects' => 0, 'pagebreaks' => 0, 'tbl_shrunk' => 0,
+             'borders_dropped' => 0];
 
     // 只取 <body> 內容；<style>/<head> 整段丟掉（清洗器也會擋，但先丟掉省得白做工）
     if (preg_match('#<body[^>]*>(.*)</body>#is', $raw, $m)) $raw = $m[1];
@@ -169,6 +170,32 @@ function adi_transform(PDO $db, string $raw, string $workDir, int $contentId, in
     $raw = (string)preg_replace(
         '#<(p|div|table|h[1-6])\b([^>]*style="[^"]*page-break-before\s*:\s*always[^"]*")#i',
         '<hr style="page-break-after:always"><\1\2', $raw);
+
+    /* ②-1 把「非表格元素」上的框線拿掉（使用者 2026-09-22：匯入 WORD 時就不需匯入外框線）。
+       Word 的頁面外框與那些當版面用的文字方塊，LibreOffice 會轉成
+       `<span style="...;border:1px solid #000">`／`<div style="border:…">`；
+       線上版的頁框（頁首頁尾與外框）本來就由系統自己畫，再匯一份進來就是**兩層框**。
+       **表格的框線一律保留**——那是內容，不是版面。 */
+    $raw = (string)preg_replace_callback('#<(span|div|p)\b([^>]*)>#i', function ($mm) use (&$stat) {
+        $tag = $mm[1]; $at = $mm[2];
+        if (stripos($at, 'border') === false) return $mm[0];
+        if (!preg_match('#style="([^"]*)"#i', $at, $st)) return $mm[0];
+        $keep = [];
+        $dropped = false;
+        foreach (explode(';', $st[1]) as $decl) {
+            if (trim($decl) === '') continue;
+            // border / border-top / border-left … 一律丟掉；border-radius 之類也一起（沒有意義）
+            if (preg_match('/^\s*border(-[a-z]+)*\s*:/i', $decl)) { $dropped = true; continue; }
+            $keep[] = trim($decl);
+        }
+        if (!$dropped) return $mm[0];
+        $stat['borders_dropped']++;
+        $newStyle = implode(';', $keep);
+        $at = $newStyle === ''
+            ? str_replace($st[0], '', $at)
+            : str_replace($st[0], 'style="' . $newStyle . '"', $at);
+        return '<' . $tag . $at . '>';
+    }, $raw);
 
     // ② 表格的 width="112" 屬性 → style width:112px（屬性不在白名單，欄寬會全丟）
     //    ⚠ 超過「一頁的內容寬」的一律改成 100%：Word 的絕對像素寬加上儲存格內距與框線之後
@@ -243,7 +270,9 @@ function adi_build_report(array $res, string $showName, float $secs, string $cle
     $done[] = ['type' => 'text',  'n' => $chars,       'note' => '文字已轉入約 ' . number_format($chars) . ' 字'];
     if ($s['tables'])     $done[] = ['type' => 'table', 'n' => $s['tables'], 'note' => '表格 ' . $s['tables'] . ' 張已轉入（含框線與合併儲存格）'];
     if ($s['img_ok'])     $done[] = ['type' => 'image', 'n' => $s['img_ok'], 'note' => '圖片 ' . $s['img_ok'] . ' 張已轉入'];
-    if ($s['boxes'])      $done[] = ['type' => 'box',   'n' => $s['boxes'],  'note' => '帶框線的文字方塊 ' . $s['boxes'] . ' 個已轉成框線區塊'];
+    if ($s['boxes'])      $done[] = ['type' => 'box',   'n' => $s['boxes'],  'note' => '帶框線的文字方塊 ' . $s['boxes'] . ' 個的文字已轉入'];
+    if (!empty($s['borders_dropped'])) $done[] = ['type' => 'box', 'n' => $s['borders_dropped'],
+        'note' => 'Word 版面用的外框線 ' . $s['borders_dropped'] . ' 處沒有匯入（頁框與頁首頁尾由系統自己畫，再匯一份進來會變成兩層框）；表格本身的框線都有保留'];
     if ($s['pagebreaks']) $done[] = ['type' => 'pagebreak', 'n' => $s['pagebreaks'],
         'note' => 'Word 的分頁 ' . $s['pagebreaks'] . ' 處已轉成線上版的分頁（已經幫你切成一頁一頁）'];
     if (!empty($s['tbl_shrunk'])) $done[] = ['type' => 'table', 'n' => $s['tbl_shrunk'],

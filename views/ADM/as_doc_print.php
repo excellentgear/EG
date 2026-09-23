@@ -92,6 +92,9 @@ if ($err === '') {
 <!-- 內文排版與編輯器共用同一個檔：兩邊各寫一份的話換頁位置會對不起來
      （實測過：列印頁少了 p{margin:0 0 4px}，編輯器 12 頁列印卻變 23 頁） -->
 <link rel="stylesheet" href="../../resource/css/eg_doc_page.css?v=<?= @filemtime(__DIR__.'/../../resource/css/eg_doc_page.css') ?>">
+<?php /* 公版設定（表格字型與框線型式）只覆寫 CSS 變數，不動任何規則 */
+      require_once __DIR__ . '/../../src/common/as_doc_tpl_lib.php'; ?>
+<style><?= adt_style_css($db) ?></style>
 <style>
 @page {
     size: <?= $pageSize ?> <?= $orient ?>;
@@ -151,6 +154,8 @@ body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size
 <?php /* 一個 .adt-page ＝ 一張紙。系統頁（封面／制修訂紀錄書／目錄）與正文頁的頁首頁尾
          全部由 as_doc_tpl_lib 產生，使用者只編正文。 */ ?>
 <?php foreach ($pagesHtml as $one) { echo $one; } ?>
+<script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+<script src="../../resource/js/eg_doc_sign_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_doc_sign_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script>
 function doPrint(){
@@ -165,8 +170,9 @@ function doPrint(){
     }
     window.print();
 }
-// 圖片沒載完就叫 print() 會印出空白的圖框，所以等全部圖片就緒（含失敗的）才自動跳列印
-(function(){
+// 圖片沒載完就叫 print() 會印出空白的圖框，所以等全部圖片就緒（含失敗的）才自動跳列印。
+// 簽章要**先畫**再等圖片：掃描實體章本身也是圖，先畫才會被下面那一輪等到。
+function startAutoPrint(){
     var imgs = Array.prototype.slice.call(document.querySelectorAll('.adt-page img'));
     var left = imgs.filter(function(i){ return !i.complete; }).length;
     function go(){ setTimeout(doPrint, 250); }
@@ -179,7 +185,9 @@ function doPrint(){
     });
     // 保險：圖片一直載不完也不要卡住不列印
     setTimeout(function(){ if (left > 0) { left = 0; go(); } }, 6000);
-})();
+}
+if (window.egDocStamps) egDocStamps(document, startAutoPrint);
+else startAutoPrint();
 </script>
 <?php endif; ?>
 </body>

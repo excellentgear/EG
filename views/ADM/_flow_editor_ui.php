@@ -114,6 +114,13 @@
         <span class="egf-lab" style="margin-left:0">×</span>
         <input type="number" class="egf-num" id="egfCH" value="560" min="200" max="3000" step="20" data-eg-skip>
         <button type="button" class="egf-btn" id="egfResize">套用</button>
+        <span class="egf-sep"></span>
+        <span class="egf-lab">顯示</span>
+        <button type="button" class="egf-btn" id="egfZoomOut" title="縮小顯示（不會改變實際大小）">－</button>
+        <span class="egf-lab" id="egfZoomVal" style="min-width:38px;display:inline-block;text-align:center">100%</span>
+        <button type="button" class="egf-btn" id="egfZoomIn" title="放大顯示（不會改變實際大小）">＋</button>
+        <button type="button" class="egf-btn" id="egfZoomFit" title="縮放到剛好看得到整張圖">符合視窗</button>
+        <button type="button" class="egf-btn" id="egfZoom1" title="回到 100%">100%</button>
       </div>
       <div class="egf-work">
         <div class="egf-pal">
@@ -542,6 +549,43 @@
     };
   }
 
+  /* ── 顯示縮放 ──────────────────────────────────────────────────────────
+     使用者要求「流程圖要可以在跳窗內放大」。
+     **只放大顯示，不動畫布的實際尺寸**——所以只改 canvas 的 CSS 尺寸
+     （`setDimensions(..., {cssOnly:true})`），backstore 維持原樣，
+     匯出與存檔拿到的仍是原尺寸；fabric v5 的 getPointer 會自己換算 CSS 縮放，
+     滑鼠點擊位置不會跑掉。 */
+  var ZOOM = 1;
+  var ZOOM_STEPS = [0.25, 0.4, 0.5, 0.6, 0.75, 0.9, 1, 1.25, 1.5, 2, 2.5, 3];
+
+  function applyZoom() {
+    if (!cv) return;
+    cv.setDimensions({ width: Math.round(cv.getWidth() * ZOOM) + 'px',
+                       height: Math.round(cv.getHeight() * ZOOM) + 'px' }, { cssOnly: true });
+    var v = el('egfZoomVal');
+    if (v) v.textContent = Math.round(ZOOM * 100) + '%';
+  }
+  function setZoom(z) {
+    ZOOM = Math.max(0.15, Math.min(4, z));
+    applyZoom();
+    stat('顯示縮放 ' + Math.round(ZOOM * 100) + '%（只是看起來變大，實際尺寸沒有變）');
+  }
+  function zoomStep(dir) {
+    var i = 0, best = 0, d = 1e9;
+    for (i = 0; i < ZOOM_STEPS.length; i++) {
+      var dd = Math.abs(ZOOM_STEPS[i] - ZOOM);
+      if (dd < d) { d = dd; best = i; }
+    }
+    setZoom(ZOOM_STEPS[Math.max(0, Math.min(ZOOM_STEPS.length - 1, best + dir))]);
+  }
+  function zoomFit() {
+    var host = d.querySelector('#egfWin .egf-canhost');
+    if (!host || !cv) return;
+    var k = Math.min((host.clientWidth - 16) / cv.getWidth(),
+                     (host.clientHeight - 16) / cv.getHeight());
+    setZoom(k > 0 ? k : 1);
+  }
+
   /* ── 面板：拖曳產生與一鍵範本 ─────────────────────────────────────────
      使用者要求「希望可以快速用拉的產生，不需要真的自己畫」，所以圖形改成
      從左側面板拖到畫布上；拖不習慣的人點一下也一樣放得上去。 */
@@ -662,6 +706,7 @@
       else if (key === 'pdca')   tplPdca();
     } finally { quiet = false; }
     cv.discardActiveObject();
+    applyZoom();
     cv.requestRenderAll();
     snapshot();
     stat('已插入範本——雙擊任何一個框就可以改字，不要的框選起來按 Delete');
@@ -705,11 +750,15 @@
         case 'egfResize': {
           var ww = Math.max(200, Math.min(2000, parseInt(el('egfCW').value, 10) || 760));
           var hh = Math.max(200, Math.min(3000, parseInt(el('egfCH').value, 10) || 560));
-          cv.setWidth(ww); cv.setHeight(hh); cv.requestRenderAll();
+          cv.setWidth(ww); cv.setHeight(hh); applyZoom(); cv.requestRenderAll();
           stat('畫布已改成 ' + ww + '×' + hh);
           snapshot();
           break;
         }
+        case 'egfZoomIn':  zoomStep(+1); break;
+        case 'egfZoomOut': zoomStep(-1); break;
+        case 'egfZoomFit': zoomFit(); break;
+        case 'egfZoom1':   setZoom(1); break;
         case 'egfSave':   doSave(); break;
         case 'egfCancel':
         case 'egfClose':  close(); break;
@@ -788,8 +837,25 @@
     cv.requestRenderAll();
     var objs = cv.getObjects().filter(function (o) { return o.egRole !== 'handle'; });
     if (!objs.length) { stat('畫布是空的，沒有東西可以放進文件'); return; }
+    /* 只輸出「真的有畫東西」的那一塊，不要把畫布兩側的空白也插進文件
+       （使用者：插入文件上時，應該依照實際大小插入，不是連旁邊畫布空白都插入）。
+       取所有物件的外接矩形再留一點邊，並夾在畫布範圍內。 */
+    var PAD = 8;
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    objs.forEach(function (o) {
+      var r = o.getBoundingRect(true, true);
+      if (r.left < minX) minX = r.left;
+      if (r.top  < minY) minY = r.top;
+      if (r.left + r.width  > maxX) maxX = r.left + r.width;
+      if (r.top  + r.height > maxY) maxY = r.top + r.height;
+    });
+    var cx = Math.max(0, Math.floor(minX - PAD)), cy = Math.max(0, Math.floor(minY - PAD));
+    var cw = Math.min(cv.getWidth()  - cx, Math.ceil(maxX - minX + PAD * 2));
+    var ch = Math.min(cv.getHeight() - cy, Math.ceil(maxY - minY + PAD * 2));
+    if (!(cw > 0 && ch > 0)) { cx = 0; cy = 0; cw = cv.getWidth(); ch = cv.getHeight(); }
     // multiplier 2.5＝列印時不會鋸齒（列印是 300dpi 等級，螢幕 1x 印出來會糊）
-    var png = cv.toDataURL({ format: 'png', multiplier: 2.5, enableRetinaScaling: false });
+    var png = cv.toDataURL({ format: 'png', multiplier: 2.5, enableRetinaScaling: false,
+                             left: cx, top: cy, width: cw, height: ch });
     var json = serialize();
     var cb = onSaveCb;
     close();
@@ -809,6 +875,8 @@
     function afterLoad() {
       el('egfCW').value = cv.getWidth();
       el('egfCH').value = cv.getHeight();
+      // 每次開啟都回到 100%，不要沿用上一次的顯示縮放
+      ZOOM = 1; applyZoom();
       snapshot();
     }
     if (opt.json) {

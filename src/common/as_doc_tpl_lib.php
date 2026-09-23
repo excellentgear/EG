@@ -119,6 +119,138 @@ function adt_dept_label(PDO $db, int $deptId): string
     } catch (Throwable $e) { return ''; }
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+   公版設定（管理員可調整的表格字型／字級／粗細與框線型式）
+   ——存在 system_parameters，全站文件共用一份，改一次全部跟著變。
+   ════════════════════════════════════════════════════════════════════════ */
+
+/** 可選的字型（只給固定清單：任意字型打錯字就整份文件變預設字體而且不報錯） */
+function adt_style_fonts(): array
+{
+    return [
+        ''                => '（跟著內文，不特別指定）',
+        '"標楷體","DFKai-SB",serif'            => '標楷體',
+        '"新細明體","PMingLiU",serif'          => '新細明體',
+        '"微軟正黑體","Microsoft JhengHei",sans-serif' => '微軟正黑體',
+        '"Arial",sans-serif'                   => 'Arial',
+        '"Times New Roman",serif'              => 'Times New Roman',
+    ];
+}
+/** 框線型式（使用者要求的「框線分類型式」） */
+function adt_style_borders(): array
+{
+    return [
+        'solid'  => '實線',
+        'double' => '雙線',
+        'dashed' => '虛線',
+        'dotted' => '點線',
+    ];
+}
+function adt_style_widths(): array
+{
+    return ['0.5pt' => '細 0.5pt', '1px' => '標準 1px', '1.5pt' => '粗 1.5pt', '2pt' => '特粗 2pt'];
+}
+function adt_style_colors(): array
+{
+    return ['#000000' => '黑', '#333333' => '深灰', '#8A5A2B' => '暖棕'];
+}
+
+function adt_style_defaults(): array
+{
+    return ['tbl_font' => '', 'tbl_size' => '', 'tbl_weight' => 'normal',
+            'brd_style' => 'solid', 'brd_w' => '1px', 'brd_color' => '#000000',
+            'cell_pad' => '4px'];
+}
+
+/** 目前的公版設定（沒設定過就回預設＝與改版前外觀完全相同） */
+function adt_style_get(PDO $db): array
+{
+    static $cache = null;
+    if (!empty($GLOBALS['__adt_style_dirty'])) { $cache = null; unset($GLOBALS['__adt_style_dirty']); }
+    if ($cache !== null) return $cache;
+    $out = adt_style_defaults();
+    try {
+        $st = $db->prepare("SELECT param_value FROM system_parameters
+                            WHERE param_group=? AND param_key=? LIMIT 1");
+        $st->execute(['AS_DOC_TPL', 'style']);
+        $j = (string)$st->fetchColumn();
+        $a = $j !== '' ? json_decode($j, true) : null;
+        if (is_array($a)) foreach ($out as $k => $v) if (isset($a[$k])) $out[$k] = (string)$a[$k];
+    } catch (Throwable $e) {}
+    return $cache = $out;
+}
+
+/** 存公版設定；值一律過白名單，不採信前端送什麼就寫什麼（鐵律8） */
+function adt_style_save(PDO $db, array $in, int $uid): array
+{
+    $cur = adt_style_get($db);
+    $new = $cur;
+    if (array_key_exists('tbl_font', $in)) {
+        $v = (string)$in['tbl_font'];
+        if (!array_key_exists($v, adt_style_fonts())) return ['ok' => false, 'msg' => '字型不在可選清單內'];
+        $new['tbl_font'] = $v;
+    }
+    if (array_key_exists('tbl_size', $in)) {
+        $v = trim((string)$in['tbl_size']);
+        if ($v !== '' && !preg_match('/^\d{1,2}(\.\d)?pt$/', $v)) return ['ok' => false, 'msg' => '字級要像 10.5pt 這樣'];
+        $new['tbl_size'] = $v;
+    }
+    if (array_key_exists('tbl_weight', $in)) {
+        $v = (string)$in['tbl_weight'];
+        if (!in_array($v, ['normal', 'bold'], true)) return ['ok' => false, 'msg' => '粗細只能是一般或粗體'];
+        $new['tbl_weight'] = $v;
+    }
+    if (array_key_exists('brd_style', $in)) {
+        $v = (string)$in['brd_style'];
+        if (!array_key_exists($v, adt_style_borders())) return ['ok' => false, 'msg' => '框線型式不在清單內'];
+        $new['brd_style'] = $v;
+    }
+    if (array_key_exists('brd_w', $in)) {
+        $v = (string)$in['brd_w'];
+        if (!array_key_exists($v, adt_style_widths())) return ['ok' => false, 'msg' => '框線粗細不在清單內'];
+        $new['brd_w'] = $v;
+    }
+    if (array_key_exists('brd_color', $in)) {
+        $v = strtolower((string)$in['brd_color']);
+        if (!array_key_exists($v, adt_style_colors())) return ['ok' => false, 'msg' => '框線顏色不在清單內'];
+        $new['brd_color'] = $v;
+    }
+    if (array_key_exists('cell_pad', $in)) {
+        $v = trim((string)$in['cell_pad']);
+        if ($v !== '' && !preg_match('/^\d{1,2}px$/', $v)) return ['ok' => false, 'msg' => '儲存格內距要像 4px 這樣'];
+        $new['cell_pad'] = $v ?: '4px';
+    }
+    try {
+        $st = $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, updated_by, updated_at)
+                            VALUES ('AS_DOC_TPL','style',?,?,NOW())
+                            ON DUPLICATE KEY UPDATE param_value=VALUES(param_value),
+                                updated_by=VALUES(updated_by), updated_at=NOW()");
+        $st->execute([json_encode($new, JSON_UNESCAPED_UNICODE), (string)$uid]);
+        $GLOBALS['__adt_style_dirty'] = 1;
+    } catch (Throwable $e) {
+        return ['ok' => false, 'msg' => '公版設定存檔失敗：' . $e->getMessage()];
+    }
+    return ['ok' => true, 'msg' => '公版設定已存檔', 'style' => $new];
+}
+
+/**
+ * 把公版設定變成一段 CSS 變數覆寫，編輯器與列印版都注入這一段。
+ * 只覆寫變數、不動任何規則——所以不會跟 eg_doc_page.css 打架。
+ */
+function adt_style_css(PDO $db): string
+{
+    $s = adt_style_get($db);
+    $css = [];
+    if ($s['tbl_font'] !== '')   $css[] = '--adt-tbl-font:' . $s['tbl_font'];
+    if ($s['tbl_size'] !== '')   $css[] = '--adt-tbl-size:' . $s['tbl_size'];
+    if ($s['tbl_weight'] !== '') $css[] = '--adt-tbl-weight:' . $s['tbl_weight'];
+    $css[] = '--adt-brd-style:' . $s['brd_style'];
+    $css[] = '--adt-brd-w:' . $s['brd_w'];
+    $css[] = '--adt-brd-color:' . $s['brd_color'];
+    if ($s['cell_pad'] !== '')   $css[] = '--adt-cell-pad:' . $s['cell_pad'];
+    return ':root{' . implode(';', $css) . '}';
+}
+
 /**
  * 是不是一階（品質手冊）——只有一階有封面頁。
  * as_document.doc_level 存的是中文「一階／二階／四階」不是數字，
@@ -186,6 +318,16 @@ function adt_context(PDO $db, int $versionId): ?array
         'issue_dept' => adt_dept_label($db, $issueDept),
         'versions'   => $vers,
         'cfg'        => $cfg,
+        // 制修訂／審查／核准三格要蓋誰的章：由送簽流程決定，這裡只是把結果帶進版面。
+        // 延後 require：版面樣板本身不依賴簽核流程（沒送簽時就是三個空格）。
+        'stamps'     => (function () use ($db, $versionId) {
+            try {
+                require_once __DIR__ . '/as_doc_sign_lib.php';
+                return ads_stamp_map($db, $versionId);
+            } catch (Throwable $e) {
+                return ['draft' => [], 'review' => [], 'approve' => []];
+            }
+        })(),
     ];
 }
 
@@ -247,6 +389,27 @@ function adt_page_versions(array $versions, int $pageCount, string $fallback): a
    ════════════════════════════════════════════════════════════════════════ */
 function adt_e($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 
+/**
+ * 制修訂紀錄書上的一格簽章。
+ * 這裡只輸出「要蓋誰的章」的資料，真正畫成印章是前端 eg_stamp.js 的事
+ * （ai-rules/18：簽章一律走共用元件，不可只印姓名文字）——
+ * 編輯器與列印版都會跑 egDocStamps() 把這些格子填起來。
+ * 還沒簽的關卡留空格，紙本照樣印得出來、手簽也可以。
+ */
+function adt_sign_cell(array $ctx, string $stage): string
+{
+    $list = $ctx['stamps'][$stage] ?? [];
+    if (!$list) return '<td data-sign="' . $stage . '">&nbsp;</td>';
+    $attr = '';
+    $s = $list[0];                       // 一格只蓋一個章；同一關多人時蓋最先簽的那一位
+    foreach (['name' => 'name', 'dept' => 'dept', 'pos' => 'pos'] as $k => $a) {
+        $attr .= ' data-stamp-' . $a . '="' . adt_e((string)($s[$k] ?? '')) . '"';
+    }
+    $attr .= ' data-stamp-date="' . adt_e($s['date'] ? eg_fmt_date($s['date']) : '') . '"';
+    $more = count($list) > 1 ? ' data-stamp-more="' . (count($list) - 1) . '"' : '';
+    return '<td data-sign="' . $stage . '"' . $attr . $more . '>&nbsp;</td>';
+}
+
 /** 一階封面（使用者指定：上方公司中文、第二列英文、下方外框內為文件名稱與可自填英文） */
 function adt_cover_html(array $ctx): string
 {
@@ -269,14 +432,17 @@ function adt_revlog_html(array $ctx): string
        . '<div class="adt-rev-coen">' . adt_e($ctx['co_en']) . '</div>'
        . '<div class="adt-rev-ttl">文件制修訂紀錄書</div>';
 
-    // 抬頭：左格放大置中的文件名稱、右格文件編號與類別
-    $h .= '<table class="adt-rev-head"><tr>'
-        . '<td rowspan="2" class="adt-rev-name">' . adt_e($ctx['doc_name']) . '</td>'
+    /* 抬頭與下面的制修訂紀錄共用同一組四欄格線（14/20/16/50）：
+       文件名稱那一格跨前三欄，所以它的右邊框線正好落在「制修訂摘要」欄的起點，
+       上下對得起來（使用者：底下框線務必要跟上方對齊）。 */
+    $cols = '<colgroup><col class="adt-rc1"><col class="adt-rc2"><col class="adt-rc3"><col class="adt-rc4"></colgroup>';
+    $h .= '<table class="adt-rev-head">' . $cols . '<tr>'
+        . '<td rowspan="2" colspan="3" class="adt-rev-name">' . adt_e($ctx['doc_name']) . '</td>'
         . '<td>文件編號：' . adt_e($ctx['doc_no']) . '</td></tr>'
         . '<tr><td>文件類別：' . adt_e($ctx['kind']) . '</td></tr></table>';
 
-    // 制修訂紀錄本體
-    $h .= '<table class="adt-rev-tbl">'
+    // 制修訂紀錄本體（與抬頭同一組格線）
+    $h .= '<table class="adt-rev-tbl">' . $cols
         . '<tr><td colspan="4" class="adt-rev-cap">制　修　訂　紀　錄</td></tr>'
         . '<tr><th>文件版別</th><th>制修訂日期</th><th>制修訂頁次</th><th>制修訂摘要（增、減、改、廢項目）</th></tr>';
     $n = 0;
@@ -294,11 +460,12 @@ function adt_revlog_html(array $ctx): string
 
     // 發行單位與簽章欄（簽章人由簽核流程填，這裡先留格）
     $h .= '<table class="adt-rev-foot">'
+        . '<colgroup><col class="adt-fc1"><col class="adt-fc2"><col class="adt-fc3"><col class="adt-fc4"></colgroup>'
         . '<tr><td colspan="4" class="adt-l">發行單位：' . adt_e($ctx['issue_dept']) . '</td></tr>'
         . '<tr><th>制修訂部門</th><th>制修訂</th><th>審查</th><th>核准</th></tr>'
         . '<tr class="adt-sign"><td>' . adt_e($ctx['dept_label']) . '</td>'
-        . '<td data-sign="draft">&nbsp;</td><td data-sign="review">&nbsp;</td><td data-sign="approve">&nbsp;</td></tr>'
-        . '</table>';
+        . adt_sign_cell($ctx, 'draft') . adt_sign_cell($ctx, 'review') . adt_sign_cell($ctx, 'approve')
+        . '</tr></table>';
 
     return $h . '</div>';
 }
@@ -335,14 +502,21 @@ function adt_toc_html(array $ctx, array $pages, int $startNo): string
  *  這樣版面的 HTML 結構只有這一份，前端只做字串代入、不會再組一次版面。 */
 function adt_header_html(array $ctx, $pageNo, $total, string $pageVer): string
 {
-    return '<table class="adt-hdr"><tr>'
-         . '<td class="adt-hdr-co" rowspan="2">'
+    /* 四欄固定格線：[文件名稱標題][文件名稱內容][項目][值]
+       公司名與「文件名稱」那一格各自跨欄，所以**每一條直框線都落在同一個位置**，
+       上下兩列不會像原本那樣各切各的（使用者：底下框線務必要跟上方對齊）。 */
+    return '<table class="adt-hdr">'
+         . '<colgroup><col class="adt-c1"><col class="adt-c2"><col class="adt-c3"><col class="adt-c4"></colgroup>'
+         . '<tr>'
+         . '<td class="adt-hdr-co" rowspan="2" colspan="2">'
          . '<div class="adt-hdr-coen">' . adt_e($ctx['co_en']) . '</div>'
          . '<div class="adt-hdr-cozh">' . adt_e($ctx['co_full']) . '</div>'
          . '</td>'
          . '<td class="adt-hdr-k">文件編號</td><td class="adt-hdr-v">' . adt_e($ctx['doc_no']) . '</td></tr>'
          . '<tr><td class="adt-hdr-k">頁　　次</td><td class="adt-hdr-v">' . adt_e($pageNo) . ' / ' . adt_e($total) . '</td></tr>'
-         . '<tr><td class="adt-hdr-nm">文件名稱　' . adt_e($ctx['doc_name']) . '</td>'
+         // 文件名稱與內容分兩格（使用者指定：文件名稱 ｜ 文件管理程序，內容佔大格）
+         . '<tr><td class="adt-hdr-nk">文件名稱</td>'
+         . '<td class="adt-hdr-nm">' . adt_e($ctx['doc_name']) . '</td>'
          . '<td class="adt-hdr-k">頁 版 別</td><td class="adt-hdr-v">' . adt_e($pageVer) . '</td></tr>'
          . '</table>';
 }
@@ -368,9 +542,9 @@ function adt_system_pages(array $ctx, array $contentPages): array
     $out = [];
     if (adt_is_level1($ctx)) $out[] = ['key' => 'cover', 'label' => '封面', 'html' => adt_cover_html($ctx)];
     $out[] = ['key' => 'revlog', 'label' => '文件制修訂紀錄書', 'html' => adt_revlog_html($ctx)];
-    // 目錄一律依設定決定（不要再看頁數）：編輯器剛匯入時內容還沒分頁，
-    // 用頁數判斷會出現「存檔前沒有目錄、存檔後才冒出來」這種不可預期的行為
-    if (!empty($ctx['cfg']['toc_on'])) {
+    // 目錄**只有一階（品質手冊）才有**（2026-09-22 使用者指定：二階文件不需要目錄）。
+    // 設定值仍然保留，但二階以下一律不產生——否則舊設定會讓程序書冒出一頁空目錄。
+    if (adt_is_level1($ctx) && !empty($ctx['cfg']['toc_on'])) {
         // 目錄本身也佔一頁，所以正文從「系統頁數＋1」開始編號
         $startNo = count($out) + 2;
         $out[] = ['key' => 'toc', 'label' => '目錄', 'html' => adt_toc_html($ctx, $contentPages, $startNo)];

@@ -157,9 +157,32 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
         .help-doc ol, .help-doc ul { padding-left:22px; }
         .help-doc .hl { background:#F7E0BD; padding:0 3px; border-radius:2px; }
 
+        .ad-sign-box { display:inline-flex; align-items:center; gap:5px; padding:0 8px; margin:0 2px;
+            border-left:1px solid #e4d3ba; border-right:1px solid #e4d3ba; }
+        .ad-badge.sign-wait { background:#F0A24B; color:#fff; }
+        .ad-badge.sign-ok   { background:#7A9A4A; color:#fff; }
+        .ad-badge.sign-no   { background:#DD5138; color:#fff; }
+        .ad-badge.sign-rel  { background:#8A5A2B; color:#fff; }
+        .sg-step { border:1px solid #e4d3ba; border-radius:4px; padding:7px 10px; margin-bottom:6px;
+            display:flex; align-items:center; gap:10px; font-size:13px; }
+        .sg-step.on   { border-color:#F0A24B; background:#FFF9F0; }
+        .sg-step.done { background:#F6F8F2; }
+        .sg-step .sg-s { width:62px; color:#8A5A2B; font-weight:bold; }
+        .sg-step .sg-p { flex:1 1 auto; color:#4E2C0B; }
+        .sg-step .sg-t { color:#8A5A2B; font-size:12px; }
+        .sg-note { font-size:12px; color:#8A5A2B; margin-top:2px; }
+        .sg-pick { border:1px solid #e4d3ba; border-radius:4px; padding:8px 10px; margin-bottom:7px; }
+        .sg-pick .sg-h { font-size:13px; color:#4E2C0B; font-weight:bold; margin-bottom:4px; }
+        .sg-pick .sg-f { font-size:12px; color:#8A5A2B; }
+
         .tpl-row { margin-bottom:13px; }
         .tpl-row > label:first-child { display:block; font-size:13px; color:#6B471A; font-weight:bold; margin-bottom:3px; }
         .tpl-hint { font-size:12px; color:#8A5A2B; line-height:1.6; margin-top:3px; }
+        .tpl-sub { display:block; font-size:12px; color:#6B471A; margin-bottom:2px; }
+        #stPreview { font-family:var(--adt-tbl-font); font-size:var(--adt-tbl-size);
+            font-weight:var(--adt-tbl-weight); }
+        #stPreview td, #stPreview th { border:var(--adt-brd-w) var(--adt-brd-style) var(--adt-brd-color);
+            padding:var(--adt-cell-pad); }
         .tpl-row.tpl-l1 { display:none; }        /* 只有一階文件才顯示，由 JS 打開 */
 
         @media print { .page-help-btn, .ad-bar, .ad-report, .m-mask { display:none !important; } }
@@ -205,6 +228,8 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
           <?php if ($P['edit']): ?>
             <button class="btn btn-warning btn-sm" id="btnSave"><i class="fa fa-save"></i> 存檔 <small>(Ctrl+S)</small></button>
             <span class="ad-dirty" id="adDirty"><i class="fa fa-exclamation-circle"></i> 有未存檔的變更</span>
+            <span id="adLayout" style="display:none;font-size:12px;color:#8A5A2B">
+              <i class="fa fa-spinner fa-spin"></i> 排版中…</span>
             <span class="ad-saved" id="adSaved"></span>
             <span style="width:10px"></span>
             <button class="btn btn-default btn-sm" id="btnImport" title="用 LibreOffice 把這個版次掛的 Word 原始檔轉成線上內容">
@@ -213,6 +238,31 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
               <i class="fa fa-copy"></i> 從其他版次複製</button>
             <button class="btn btn-default btn-sm" id="btnTpl" title="設定發行單位、頁尾左下文字、一階封面英文與目錄">
               <i class="fa fa-sliders"></i> 版面設定</button>
+            <span style="width:10px"></span>
+          <?php endif; ?>
+
+            <span class="ad-sign-box">
+              <span class="ad-badge none" id="adSignBadge">尚未送簽</span>
+              <?php if ($P['edit']): ?>
+                <button class="btn btn-default btn-sm" id="btnSignSubmit" title="送出制修訂／審查／核准的簽核">
+                  <i class="fa fa-paper-plane-o"></i> 送審</button>
+                <button class="btn btn-default btn-sm" id="btnSignCancel" style="display:none">取消送簽</button>
+              <?php endif; ?>
+              <button class="btn btn-warning btn-sm" id="btnSignDo" style="display:none">
+                <i class="fa fa-check"></i> 換我簽核</button>
+              <?php if ($P['edit']): ?>
+                <button class="btn btn-success btn-sm" id="btnRelease" style="display:none">
+                  <i class="fa fa-certificate"></i> 正式發行</button>
+              <?php endif; ?>
+              <button class="btn btn-link btn-sm" id="btnSignInfo" style="padding:4px 6px" title="看簽核進度">
+                <i class="fa fa-list-ul"></i> 簽核進度</button>
+              <?php if ($P['admin']): ?>
+                <button class="btn btn-link btn-sm" id="btnSignCfg" style="padding:4px 6px" title="設定制修訂／審查／核准由誰簽、順序、要不要自動簽核">
+                  <i class="fa fa-cog"></i> 簽核設定</button>
+              <?php endif; ?>
+            </span>
+
+          <?php if ($P['edit']): ?>
             <span style="width:10px"></span>
             <label style="font-weight:normal;font-size:12px;color:#6B471A;margin:0;">
               <input type="checkbox" id="chkPrimary"> 設為此版次的正本
@@ -352,6 +402,78 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
   </div>
 </div></div>
 
+<!-- 送審：挑各關卡的簽核人 -->
+<div class="m-mask" id="mSign"><div class="m-win">
+  <div class="m-head">送出簽核 <span class="m-x" data-close="mSign">&times;</span></div>
+  <div class="m-body">
+    <div class="m-note">
+      關卡與順序是<b>管理員設定</b>的，這裡只挑人。<br>
+      候選名單是<b>送審當下在職</b>的人——設定存的是「部門＋職稱」不是某個人，
+      所以有人離職或調部門也不必回頭改設定。<br>
+      標「自動簽核」的關卡送出當下就會簽掉，並留下簽核紀錄。
+    </div>
+    <div id="signPickBody"></div>
+  </div>
+  <div class="m-foot">
+    <span id="signMsg" style="float:left;color:#8A5A2B;font-size:12px;line-height:28px"></span>
+    <button class="btn btn-default btn-sm" data-close="mSign">取消</button>
+    <button class="btn btn-warning btn-sm" id="btnSignGo"><i class="fa fa-paper-plane-o"></i> 送出</button>
+  </div>
+</div></div>
+
+<!-- 簽核進度／簽核與退回 -->
+<div class="m-mask" id="mSignInfo"><div class="m-win wide">
+  <div class="m-head">簽核進度 <span class="m-x" data-close="mSignInfo">&times;</span></div>
+  <div class="m-body">
+    <div id="signInfoBody"></div>
+    <div id="signDoBox" style="display:none;margin-top:10px;border-top:1px dashed #e4d3ba;padding-top:10px">
+      <div style="font-size:13px;color:#4E2C0B;font-weight:bold;margin-bottom:4px">輪到你簽這一關</div>
+      <textarea id="signNote" class="form-control" rows="2"
+                data-eg-hint="同意可以不填；退回一定要填原因"></textarea>
+      <div style="margin-top:7px;text-align:right">
+        <button class="btn btn-danger btn-sm" id="btnSignReject">退回</button>
+        <button class="btn btn-warning btn-sm" id="btnSignOk"><i class="fa fa-check"></i> 簽核</button>
+      </div>
+    </div>
+  </div>
+  <div class="m-foot"><button class="btn btn-default btn-sm" data-close="mSignInfo">關閉</button></div>
+</div></div>
+
+<?php if ($P['admin']): ?>
+<!-- 簽核設定（管理員） -->
+<div class="m-mask" id="mSignCfg"><div class="m-win wide">
+  <div class="m-head">簽核設定 <span class="m-x" data-close="mSignCfg">&times;</span></div>
+  <div class="m-body">
+    <div class="m-note">
+      設定<b>制修訂／審查／核准</b>三關由誰簽、<b>順序</b>，以及要不要<b>自動簽核</b>。<br>
+      簽核人一律設<b>部門＋職稱</b>不要指定到某一個人——人員異動、離職、調部門都不必回來改，
+      系統會在<b>送審當下</b>解析「現在在職的是誰」讓建立者挑。<br>
+      制修訂那一關預設是<b>內容的最後修改人</b>（表單修改人），要改成別人也可以。
+    </div>
+    <div style="margin-bottom:8px">
+      <label style="font-size:13px;color:#6B471A;margin:0 8px 0 0">套用範圍</label>
+      <select id="cfgScope" class="form-control input-sm" style="width:auto;display:inline-block" data-eg-skip>
+        <option value="0">全站預設（所有文件共用）</option>
+      </select>
+      <span id="cfgScopeNote" style="font-size:12px;color:#8A5A2B;margin-left:8px"></span>
+    </div>
+    <table class="table table-bordered" id="cfgTbl" style="font-size:13px;margin-bottom:6px">
+      <thead><tr>
+        <th style="width:52px">順序</th><th style="width:96px">關卡</th><th style="width:190px">簽核人來源</th>
+        <th>對象</th><th style="width:78px">自動簽核</th><th style="width:96px"></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <button class="btn btn-default btn-sm" id="btnCfgAdd"><i class="fa fa-plus"></i> 增加一關</button>
+  </div>
+  <div class="m-foot">
+    <span id="cfgMsg" style="float:left;color:#8A5A2B;font-size:12px;line-height:28px"></span>
+    <button class="btn btn-default btn-sm" data-close="mSignCfg">取消</button>
+    <button class="btn btn-warning btn-sm" id="btnCfgSave"><i class="fa fa-save"></i> 存檔</button>
+  </div>
+</div></div>
+<?php endif; ?>
+
 <!-- 版面設定（發行單位／頁尾左下文字／一階封面英文／目錄） -->
 <div class="m-mask" id="mTpl"><div class="m-win">
   <div class="m-head">版面設定 <span class="m-x" data-close="mTpl">&times;</span></div>
@@ -398,6 +520,57 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
       </label>
       <div class="tpl-hint">目錄依正文裡的標題自動產生，不必自己維護。只有<b>一階</b>會用到。</div>
     </div>
+
+    <?php if ($P['admin']): ?>
+    <div style="border-top:1px dashed #e4d3ba;margin-top:14px;padding-top:12px">
+      <div style="font-size:13px;color:#4E2C0B;font-weight:bold;margin-bottom:4px">
+        <i class="fa fa-table"></i> 公版設定（表格外觀）</div>
+      <div class="m-note" style="margin-top:0">
+        這一組是<b>全站所有 AS 文件共用</b>的公版：改一次，<b>每一份文件的表格與框線一起變</b>
+        （含制修訂紀錄書、頁首與正文裡的表格）。只有管理員看得到這一區。
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px">
+        <div style="flex:1 1 180px">
+          <label class="tpl-sub">表格字型</label>
+          <select id="stFont" class="form-control input-sm" data-eg-skip></select>
+        </div>
+        <div style="flex:0 0 104px">
+          <label class="tpl-sub">表格字級</label>
+          <input type="text" id="stSize" class="form-control input-sm" data-eg-hint="例：10.5pt；留空＝跟著內文">
+        </div>
+        <div style="flex:0 0 104px">
+          <label class="tpl-sub">表格粗細</label>
+          <select id="stWeight" class="form-control input-sm" data-eg-skip>
+            <option value="normal">一般</option><option value="bold">粗體</option>
+          </select>
+        </div>
+        <div style="flex:0 0 118px">
+          <label class="tpl-sub">框線型式</label>
+          <select id="stBStyle" class="form-control input-sm" data-eg-skip></select>
+        </div>
+        <div style="flex:0 0 118px">
+          <label class="tpl-sub">框線粗細</label>
+          <select id="stBW" class="form-control input-sm" data-eg-skip></select>
+        </div>
+        <div style="flex:0 0 100px">
+          <label class="tpl-sub">框線顏色</label>
+          <select id="stBColor" class="form-control input-sm" data-eg-skip></select>
+        </div>
+        <div style="flex:0 0 104px">
+          <label class="tpl-sub">儲存格內距</label>
+          <input type="text" id="stPad" class="form-control input-sm" data-eg-hint="例：4px">
+        </div>
+      </div>
+      <div class="tpl-hint">改完按下方「存檔」就會套用；預設值與改版前完全相同，沒動過的文件外觀不會變。</div>
+      <div style="margin-top:8px">
+        <div class="tpl-sub" style="margin-bottom:3px">預覽</div>
+        <table id="stPreview" style="border-collapse:collapse;width:100%">
+          <tr><th style="padding:4px">項目</th><th style="padding:4px">說明</th></tr>
+          <tr><td style="padding:4px">範例列</td><td style="padding:4px">框線與字型套用後的樣子</td></tr>
+        </table>
+      </div>
+    </div>
+    <?php endif; ?>
   </div>
   <div class="m-foot">
     <span id="tplMsg" style="float:left;color:#8A5A2B;font-size:12px;line-height:28px"></span>
@@ -492,6 +665,9 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_richtext.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_richtext.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+<!-- 簽章：制修訂紀錄書上的制修訂／審查／核准三格（ai-rules/18 一律走共用圖章元件） -->
+<script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+<script src="../../resource/js/eg_doc_sign_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_doc_sign_stamp.js') ?>"></script>
 <?php if ($blocked === ''): ?>
 <script src="../../resource/js/fabric.min.js?v=<?= @filemtime(__DIR__.'/../../resource/js/fabric.min.js') ?>"></script>
 <?php endif; ?>
@@ -538,8 +714,31 @@ $(document).ajaxError(function(_e, xhr){
     alert(m || ('伺服器沒有正常回應（HTTP ' + xhr.status + '），請重新整理頁面後再試'));
 });
 
+/* 初次載入與自動分頁跑完之前不給存檔（見 save() 的說明） */
+var EDITOR_READY = false;
+function setEditorReady(on) {
+    EDITOR_READY = !!on;
+    $('#btnSave').prop('disabled', !on)
+                 .attr('title', on ? '' : '文件排版中，排版完成才可存檔');
+    $('#adLayout').toggle(!on);
+}
+
+/** 等自動分頁穩定下來（頁數連續 3 次不變＝排完了），最多等 20 秒 */
+function waitLayout() {
+    var last = -1, same = 0, tries = 0;
+    (function tick(){
+        if (!ED) return;
+        var n = ED.pageCount();
+        if (n === last) same++; else { same = 0; last = n; }
+        tries++;
+        if (same >= 3 || tries > 60) { setEditorReady(true); return; }
+        setTimeout(tick, 330);
+    })();
+}
+
 /* ── 載入 ─────────────────────────────────────────────────────────────── */
 function load() {
+    setEditorReady(false);
     $.getJSON(API, { action:'get', version_id: VID }, function(r){
         if (!r.success) { alert(r.message || '讀取失敗'); return; }
         if (r.csrf) CSRF = r.csrf;
@@ -553,6 +752,7 @@ function load() {
         $('#selOrient').val((c && c.orientation) || 'portrait');
         paintPrimaryBadge(c);
         paintReport(c && c.report);
+        loadSign();                    // 送簽狀態（沒有編輯權的人也要看得到簽到哪裡了）
 
         var html = (c && c.html) || '';
         if (CAN_EDIT) {
@@ -560,6 +760,9 @@ function load() {
             ED.set(html);
             loadChrome();              // 版面樣板（封面/制修訂紀錄書/目錄/頁首頁尾）
             setDirty(false);
+            // 自動分頁是非同步的（字型載入、圖片載入、350ms 防抖動都會再排一次），
+            // 所以等「頁數連續幾次都不再變」才算排版完成、才開放存檔
+            waitLayout();
             if (c && c.updated_at) $('#adSaved').text('上次存檔 ' + fmt(c.updated_at));
         } else {
             // 沒有編輯權：唯讀顯示（清洗後才輸出，鐵律8 的第二道防線）
@@ -572,22 +775,52 @@ function load() {
             var clean = EGRichText.render(html, 'doc');
             var parts = clean ? clean.split(/<hr[^>]*page-break-after[^>]*>/i) : [];
             if (!parts.length) parts = ['<p style="color:#a08a6f">這個版次還沒有線上版內容。</p>'];
-            host.innerHTML = '<div class="egrt-doc-scroll" style="max-height:680px"><div class="egrt-pages">'
-                + parts.map(function(p, i){
-                    // 頁碼籤放紙張外面（與編輯模式同一套結構，見 eg_richtext.js 的說明）
+            // 封面／制修訂紀錄書／目錄與逐頁頁首頁尾一樣要顯示給唯讀的人看——
+            // **被指派的簽核人多半就沒有編輯權**，看不到制修訂紀錄書就等於不知道自己在簽什麼。
+            // 版面一律用後端那一份（action=tpl），不在這裡自己組第二套。
+            $.getJSON(API, { action:'tpl', version_id: VID }, function(t){
+                var sys = (t && t.success && t.sys) ? t.sys : [];
+                var hdrTpl = (t && t.hdr_tpl) || '', ftr = (t && t.ftr) || '';
+                var pv = (t && t.page_vers) || [], dv = (t && t.doc_ver) || '';
+                var total = sys.length + parts.length;
+                function sheet(inner, no, chromeTop, chromeBot) {
                     return '<div class="egrt-sheetwrap">'
                          + '<div class="egrt-page egrt-sheet" style="width:' + mm[0] + 'mm;height:' + mm[1] + 'mm">'
-                         + p + '</div>'
-                         + '<span class="egrt-pageno">第 ' + (i+1) + ' 頁 / 共 ' + parts.length + ' 頁</span>'
-                         + '</div>';
-                  }).join('')
-                + '</div></div>';
-            // src 不存在內容裡，唯讀顯示也要依資產編號補回來
-            Array.prototype.slice.call(host.querySelectorAll('img[data-asset]')).forEach(function(im){
-                im.setAttribute('src', assetUrl(im.getAttribute('data-asset')));
+                         + (chromeTop || '') + inner + (chromeBot || '') + '</div>'
+                         + '<span class="egrt-pageno">第 ' + no + ' 頁 / 共 ' + total + ' 頁</span></div>';
+                }
+                var h = '';
+                sys.forEach(function(s, i){ h += sheet(s.html, i + 1, '', ftr); });
+                parts.forEach(function(p, i){
+                    var no = sys.length + i + 1;
+                    var hdr = hdrTpl.replace(/\{\{PAGE\}\}/g, no)
+                                    .replace(/\{\{TOTAL\}\}/g, total)
+                                    .replace(/\{\{VER\}\}/g, pv[i] || dv);
+                    h += sheet(p, no, hdr, ftr);
+                });
+                host.innerHTML = '<div class="egrt-doc-scroll" style="max-height:680px"><div class="egrt-pages">'
+                               + h + '</div></div>';
+                afterRo();
+            }).fail(function(){
+                // 拿不到版面時至少要把正文顯示出來，不要整頁空白
+                host.innerHTML = '<div class="egrt-doc-scroll" style="max-height:680px"><div class="egrt-pages">'
+                    + parts.map(function(p, i){
+                        return '<div class="egrt-sheetwrap">'
+                             + '<div class="egrt-page egrt-sheet" style="width:' + mm[0] + 'mm;height:' + mm[1] + 'mm">'
+                             + p + '</div>'
+                             + '<span class="egrt-pageno">第 ' + (i+1) + ' 頁 / 共 ' + parts.length + ' 頁</span></div>';
+                      }).join('')
+                    + '</div></div>';
+                afterRo();
             });
-            // 唯讀也要縮放到容器寬度內，否則同樣會出現左右拉桿
-            (function fitRo(){
+            function afterRo() {
+                // src 不存在內容裡，唯讀顯示也要依資產編號補回來
+                Array.prototype.slice.call(host.querySelectorAll('img[data-asset]')).forEach(function(im){
+                    im.setAttribute('src', assetUrl(im.getAttribute('data-asset')));
+                });
+                // 制修訂紀錄書上的簽章
+                if (window.egDocStamps) egDocStamps(host);
+                // 唯讀也要縮放到容器寬度內，否則同樣會出現左右拉桿
                 var sc = host.querySelector('.egrt-doc-scroll'), box = host.querySelector('.egrt-pages');
                 if (!sc || !box) return;
                 var pw = mm[0] * 96 / 25.4, need = pw + 32;
@@ -597,7 +830,7 @@ function load() {
                     var k2 = Math.min(1, (sc.clientWidth || need) / need);
                     box.style.zoom = k2 < 1 ? k2 : '';
                 });
-            })();
+            }
         }
         loadRef();                 // 內文引用的文件編號有沒有待確認的
     });
@@ -781,6 +1014,14 @@ function loadChrome(cb) {
                            pageVers: r.page_vers || [], docVer: r.doc_ver || '' });
         }
         paintTplBar(r);
+        // 公版設定（表格字型／框線型式）：只覆寫 CSS 變數，與列印版同一段
+        if (r.style_css) {
+            var st = document.getElementById('adTplStyle');
+            if (!st) { st = document.createElement('style'); st.id = 'adTplStyle'; document.head.appendChild(st); }
+            st.textContent = r.style_css;
+        }
+        // 制修訂紀錄書的三格簽章：版面是後端重新產生的，所以每次都要再畫一次
+        if (window.egDocStamps) egDocStamps(document.getElementById('adEditorHost'));
         if (cb) cb();
     });
 }
@@ -794,6 +1035,304 @@ function paintTplBar(r) {
     $('#adIssueDept').next('.ad-auto').remove();
     if (auto && r.issue_dept) $('#adIssueDept').after('<span class="ad-auto" style="font-size:11px;color:#A8804C">（自動）</span>');
 }
+
+/* ── 送簽（制修訂／審查／核准）─────────────────────────────────────────
+   關卡、順序、誰能簽一律由後端算（ads_plan/ads_state），前端只負責顯示與挑人；
+   兩邊各算一次「輪到誰」一定會走鐘。 */
+var SIGN = null;
+function loadSign(cb) {
+    $.getJSON(API, { action:'sign_state', version_id: VID }, function(r){
+        if (!r.success) { if (cb) cb(); return; }
+        SIGN = r;
+        paintSignBar();
+        if (cb) cb();
+    });
+}
+function paintSignBar() {
+    if (!SIGN) return;
+    var c = SIGN.state.case, $b = $('#adSignBadge');
+    var cls = 'none', txt = '尚未送簽';
+    if (c) {
+        if (c.status === 'pending')  { cls = 'sign-wait'; txt = '簽核中'; }
+        else if (c.status === 'approved') { cls = 'sign-ok'; txt = c.released_at ? '已正式發行' : '簽核完成'; if (c.released_at) cls = 'sign-rel'; }
+        else if (c.status === 'rejected') { cls = 'sign-no'; txt = '已退回'; }
+        else if (c.status === 'canceled') { cls = 'none'; txt = '已取消送簽'; }
+        if (c.status === 'approved' && c.is_auto) txt += '（自動）';
+    }
+    $b.attr('class', 'ad-badge ' + cls).text(txt);
+
+    var pending = c && c.status === 'pending';
+    var mine = false;
+    (SIGN.state.steps || []).forEach(function(s){
+        if (s.id === SIGN.state.current_step_id && s.signer_user_id === SIGN.me) mine = true;
+    });
+    $('#btnSignSubmit').toggle(!pending && !(c && c.status === 'approved'));
+    $('#btnSignCancel').toggle(!!pending);
+    $('#btnSignDo').toggle(!!(pending && mine));
+    // 「正式發行」只在簽核完成且還沒發行時出現；能不能真的發行由後端再判一次
+    $('#btnRelease').toggle(!!(c && c.status === 'approved' && !c.released_at));
+}
+function signStageRows() {
+    var st = SIGN && SIGN.state ? SIGN.state.steps : [];
+    return st;
+}
+$('#btnSignInfo').on('click', function(){
+    loadSign(function(){
+        var st = signStageRows(), c = SIGN.state.case;
+        var h = '';
+        if (!c) {
+            h = '<div class="m-note">這個版次還沒有送簽。內容確認好之後按「送審」。</div>';
+        } else {
+            h += '<div class="sg-note">送審人：' + esc(c.submitted_by_name || '') + '　送出日：' + esc(c.submit_date || '') +
+                 (c.released_at ? ('　<b>已於 ' + esc(String(c.released_at).substring(0,10)) + ' 由 ' + esc(c.released_by_name||'') + ' 正式發行</b>') : '') +
+                 '</div>';
+            if (c.reject_note) h += '<div class="sg-note" style="color:#DD5138">退回原因：' + esc(c.reject_note) + '</div>';
+            h += '<div style="margin-top:8px"></div>';
+            st.forEach(function(s){
+                var cls = s.status === 'ok' ? 'done' : (s.id === SIGN.state.current_step_id ? 'on' : '');
+                var mark = s.status === 'ok' ? '<span style="color:#7A9A4A">✔ 已簽</span>'
+                         : s.status === 'reject' ? '<span style="color:#DD5138">✘ 退回</span>'
+                         : (s.id === SIGN.state.current_step_id ? '<span style="color:#F0A24B">← 等這一關</span>' : '等候中');
+                h += '<div class="sg-step ' + cls + '">'
+                   + '<span class="sg-s">' + esc(s.stage_name) + '</span>'
+                   + '<span class="sg-p">' + esc(s.signer_name || '—')
+                   + '<span class="sg-t">　' + esc(s.dept_name || '') + ' ' + esc(s.position_name || '') + '</span>'
+                   + (s.note ? '<div class="sg-note">' + esc(s.note) + '</div>' : '')
+                   + '</span>'
+                   + '<span class="sg-t">' + esc(s.sign_date || '') + (s.is_auto ? '　自動' : '') + '</span>'
+                   + '<span>' + mark + '</span></div>';
+            });
+            var rel = SIGN.state.release;
+            if (rel && !rel.ok && rel.newer) {
+                h += '<div class="m-note" style="border-color:#DD5138;background:#FBE6DE;color:#A5502E">'
+                   + esc(rel.msg) + '</div>';
+            }
+        }
+        $('#signInfoBody').html(h);
+        var mine = false;
+        st.forEach(function(s){ if (s.id === SIGN.state.current_step_id && s.signer_user_id === SIGN.me) mine = true; });
+        $('#signDoBox').toggle(!!(c && c.status === 'pending' && mine));
+        $('#signNote').val('');
+        openMask('mSignInfo');
+    });
+});
+$('#btnSignDo').on('click', function(){ $('#btnSignInfo').click(); });
+function signDecide(ok) {
+    var step = 0;
+    (SIGN.state.steps || []).forEach(function(s){ if (s.id === SIGN.state.current_step_id) step = s.id; });
+    if (!step) { alert('找不到目前這一關，請重新整理頁面。'); return; }
+    var note = $('#signNote').val() || '';
+    if (!ok && !note.trim()) { alert('退回一定要填原因。'); $('#signNote').focus(); return; }
+    $.post(API, { action:'sign_decide', csrf:CSRF, step_id:step, ok: ok ? 1 : 0, note:note }, function(r){
+        if (!r.success) { alert(r.message || '簽核失敗'); loadSign(); return; }
+        closeMask('mSignInfo');
+        // 簽完要重畫制修訂紀錄書上的章。沒有編輯權的人（被指派的簽核人多半就是）
+        // 走的是唯讀渲染那一條路，loadChrome() 對他們沒有作用，要整個重載才會更新。
+        if (CAN_EDIT) loadChrome(); else load();
+        loadSign(function(){ $('#adSaved').text(r.message || '已簽核'); });
+    }, 'json');
+}
+$('#btnSignOk').on('click', function(){ signDecide(true); });
+$('#btnSignReject').on('click', function(){ signDecide(false); });
+
+$('#btnSignSubmit').on('click', function(){
+    if (DIRTY && !confirm('有未存檔的變更，送審的是「上次存檔」的內容。\n要繼續送審嗎？（建議先按存檔）')) return;
+    loadSign(function(){
+        var p = SIGN.plan;
+        if (!p || !p.ok) {
+            alert((p && p.msg ? p.msg : '無法送審') +
+                  (p && p.need_cfg ? '\n\n請管理員先到工具列的「簽核設定」設定制修訂／審查／核准由誰簽。' : ''));
+            return;
+        }
+        var h = '';
+        p.steps.forEach(function(s){
+            h += '<div class="sg-pick" data-cfg="' + s.cfg_id + '">'
+               + '<div class="sg-h">' + s.seq + '. ' + esc(s.stage_name)
+               + (s.auto_sign ? ' <span style="color:#8A5A2B;font-weight:normal">（自動簽核）</span>' : '') + '</div>';
+            if (!s.candidates.length) {
+                h += '<div class="sg-f" style="color:#DD5138">管理員設定的部門與職稱目前沒有在職人員，送不出去。</div>';
+            } else if (s.fixed || s.auto_sign) {
+                var c0 = s.candidates[0];
+                h += '<div class="sg-f">' + esc(c0.name) + '　' + esc(c0.dept) + ' ' + esc(c0.pos)
+                   + (s.mode === 'editor' ? '（內容的最後修改人）' : '') + '</div>';
+            } else {
+                h += '<select class="form-control input-sm sg-sel" data-eg-filter="輸入姓名篩選…">'
+                   + s.candidates.map(function(c2){
+                       return '<option value="' + c2.id + '">' + esc(c2.name) + '　' + esc(c2.dept) + ' ' + esc(c2.pos) + '</option>';
+                     }).join('') + '</select>';
+            }
+            h += '</div>';
+        });
+        $('#signPickBody').html(h);
+        $('#signMsg').text('');
+        openMask('mSign');
+    });
+});
+$('#btnSignGo').on('click', function(){
+    var picks = {};
+    $('#signPickBody .sg-pick').each(function(){
+        var cfg = $(this).data('cfg'), v = $(this).find('.sg-sel').val();
+        if (v) picks[cfg] = v;
+    });
+    var $b = $(this).prop('disabled', true);
+    $('#signMsg').text('送出中…');
+    $.post(API, { action:'sign_submit', csrf:CSRF, version_id:VID, picks: JSON.stringify(picks) }, function(r){
+        $b.prop('disabled', false); $('#signMsg').text('');
+        if (!r.success) { alert(r.message || '送審失敗'); return; }
+        closeMask('mSign');
+        loadChrome();
+        loadSign(function(){ $('#adSaved').text(r.message || '已送出簽核'); });
+    }, 'json');
+});
+$('#btnSignCancel').on('click', function(){
+    if (!confirm('要取消這次送簽嗎？\n已經簽過的關卡會一起作廢，之後可以重新送審。')) return;
+    $.post(API, { action:'sign_cancel', csrf:CSRF, version_id:VID }, function(r){
+        if (!r.success) { alert(r.message || '取消失敗'); return; }
+        loadChrome();
+        loadSign(function(){ $('#adSaved').text('已取消送簽'); });
+    }, 'json');
+});
+$('#btnRelease').on('click', function(){
+    var rel = SIGN && SIGN.state ? SIGN.state.release : null;
+    if (rel && !rel.ok) { alert(rel.msg); return; }
+    if (!confirm('正式發行之後：\n・這一版的線上內容會變成正本（大家看到與印出來的就是它）\n・AS 文件管理的「目前版次」會指到這一版\n・同一份文件其他版次的線上內容會退回草稿\n\n要發行嗎？')) return;
+    $.post(API, { action:'sign_release', csrf:CSRF, version_id:VID }, function(r){
+        if (!r.success) { alert(r.message || '發行失敗'); loadSign(); return; }
+        alert(r.message);
+        $('#chkPrimary').prop('checked', true);
+        loadSign();
+    }, 'json');
+});
+
+<?php if ($P['admin']): ?>
+/* ── 簽核設定（管理員）───────────────────────────────────────────── */
+var CFG = null;
+function cfgRowHtml(r) {
+    var st = CFG.stages, md = CFG.modes;
+    function opts(obj, cur) {
+        return Object.keys(obj).map(function(k){
+            return '<option value="' + k + '"' + (k === cur ? ' selected' : '') + '>' + esc(obj[k]) + '</option>';
+        }).join('');
+    }
+    return '<tr>'
+      + '<td style="text-align:center"><span class="cfg-seq"></span>'
+      +   '<div style="margin-top:3px"><button class="btn btn-xs btn-default cfg-up">↑</button> '
+      +   '<button class="btn btn-xs btn-default cfg-dn">↓</button></div></td>'
+      + '<td><select class="form-control input-sm cfg-stage" data-eg-skip>' + opts(st, r.stage) + '</select></td>'
+      + '<td><select class="form-control input-sm cfg-mode" data-eg-skip>' + opts(md, r.mode) + '</select></td>'
+      + '<td class="cfg-target"></td>'
+      + '<td style="text-align:center"><input type="checkbox" class="cfg-auto"' + (Number(r.auto_sign) ? ' checked' : '') + '></td>'
+      + '<td style="text-align:center"><button class="btn btn-xs btn-danger cfg-del">刪除</button></td>'
+      + '</tr>';
+}
+function cfgPaintTarget($tr, r) {
+    var mode = $tr.find('.cfg-mode').val();
+    var h = '';
+    if (mode === 'editor') {
+        h = '<span style="font-size:12px;color:#8A5A2B">由系統自動判定（這一版內容的最後修改人）</span>';
+    } else if (mode === 'user') {
+        h = '<select class="form-control input-sm cfg-user" data-eg-filter="輸入姓名篩選…">'
+          + CFG.people.map(function(p){
+              return '<option value="' + p.id + '"' + (Number(r.user_id) === p.id ? ' selected' : '') + '>'
+                   + esc(p.name) + '　' + esc(p.dept) + ' ' + esc(p.pos) + '</option>';
+            }).join('') + '</select>';
+    } else {
+        h = '<select class="form-control input-sm cfg-dept" data-eg-filter="輸入部門篩選…" style="margin-bottom:4px">'
+          + '<option value="0">（請選部門）</option>'
+          + CFG.depts.map(function(d2){
+              return '<option value="' + d2.id + '"' + (Number(r.pick_dept_id) === Number(d2.id) ? ' selected' : '') + '>'
+                   + esc(d2.name) + '</option>';
+            }).join('') + '</select>'
+          + '<select class="form-control input-sm cfg-pos" data-eg-filter="輸入職稱篩選…">'
+          + '<option value="0">不限職稱（這個部門的人都可以簽）</option>'
+          + CFG.positions.map(function(p2){
+              return '<option value="' + p2.id + '"' + (Number(r.position_id) === Number(p2.id) ? ' selected' : '') + '>'
+                   + esc(p2.name) + '</option>';
+            }).join('') + '</select>';
+    }
+    $tr.find('.cfg-target').html(h);
+}
+function cfgRenumber() {
+    $('#cfgTbl tbody tr').each(function(i){ $(this).find('.cfg-seq').text(i + 1); });
+}
+function cfgLoad(deptId) {
+    $.getJSON(API, { action:'sign_cfg', dept_id: deptId || 0 }, function(r){
+        if (!r.success) { alert(r.message || '讀取失敗'); return; }
+        CFG = r;
+        if ($('#cfgScope option').length < 2 && TPL) {
+            $('#cfgScope').append('<option value="' + (TPL.cfg && TPL.dept_id ? TPL.dept_id : 0) + '"></option>');
+        }
+        $('#cfgScopeNote').text(Number(deptId) > 0
+            ? (r.scope_is_own ? '這個部門有自己的設定' : '這個部門目前沿用全站預設，存檔後就會變成它自己的設定')
+            : '沒有自己設定的部門都會用這一組');
+        var rows = r.rows.length ? r.rows : [
+            { stage:'draft',   mode:'editor',   auto_sign:0 },
+            { stage:'review',  mode:'dept_pos', auto_sign:0 },
+            { stage:'approve', mode:'dept_pos', auto_sign:0 }
+        ];
+        $('#cfgTbl tbody').empty();
+        rows.forEach(function(row){
+            var $tr = $(cfgRowHtml(row));
+            $('#cfgTbl tbody').append($tr);
+            cfgPaintTarget($tr, row);
+        });
+        cfgRenumber();
+        $('#cfgMsg').text('');
+        openMask('mSignCfg');
+    });
+}
+$('#btnSignCfg').on('click', function(){
+    // 範圍下拉：全站預設＋這份文件自己的部門
+    var $s = $('#cfgScope');
+    $s.find('option[value!="0"]').remove();
+    if (SIGN && SIGN.plan && SIGN.plan.dept_id) {
+        $s.append('<option value="' + SIGN.plan.dept_id + '">只套用到這份文件的部門（'
+                  + esc((TPL && TPL.dept_label) || '本部門') + '）</option>');
+    }
+    $s.val('0');
+    cfgLoad(0);
+});
+$('#cfgScope').on('change', function(){ cfgLoad($(this).val()); });
+$('#cfgTbl').on('change', '.cfg-mode', function(){ cfgPaintTarget($(this).closest('tr'), {}); });
+$('#cfgTbl').on('click', '.cfg-del', function(){ $(this).closest('tr').remove(); cfgRenumber(); });
+$('#cfgTbl').on('click', '.cfg-up', function(){
+    var $tr = $(this).closest('tr'), $p = $tr.prev();
+    if ($p.length) { $tr.insertBefore($p); cfgRenumber(); }
+});
+$('#cfgTbl').on('click', '.cfg-dn', function(){
+    var $tr = $(this).closest('tr'), $n = $tr.next();
+    if ($n.length) { $tr.insertAfter($n); cfgRenumber(); }
+});
+$('#btnCfgAdd').on('click', function(){
+    var $tr = $(cfgRowHtml({ stage:'review', mode:'dept_pos', auto_sign:0 }));
+    $('#cfgTbl tbody').append($tr);
+    cfgPaintTarget($tr, {});
+    cfgRenumber();
+});
+$('#btnCfgSave').on('click', function(){
+    var rows = [];
+    $('#cfgTbl tbody tr').each(function(){
+        var $t = $(this);
+        rows.push({
+            stage: $t.find('.cfg-stage').val(),
+            mode:  $t.find('.cfg-mode').val(),
+            pick_dept_id: $t.find('.cfg-dept').val() || 0,
+            position_id:  $t.find('.cfg-pos').val() || 0,
+            user_id:      $t.find('.cfg-user').val() || 0,
+            auto_sign:    $t.find('.cfg-auto').prop('checked') ? 1 : 0
+        });
+    });
+    var $b = $(this).prop('disabled', true);
+    $('#cfgMsg').text('存檔中…');
+    $.post(API, { action:'sign_cfg_save', csrf:CSRF, dept_id: $('#cfgScope').val() || 0,
+                  rows: JSON.stringify(rows) }, function(r){
+        $b.prop('disabled', false); $('#cfgMsg').text('');
+        if (!r.success) { alert(r.message || '存檔失敗'); return; }
+        closeMask('mSignCfg');
+        loadSign(function(){ $('#adSaved').text('簽核設定已存檔'); });
+    }, 'json');
+});
+<?php endif; ?>
 
 /* ── 版面設定 ─────────────────────────────────────────────────────────────
    只有這四項沒辦法從資料推導，其餘（公司名、文件名稱與編號、類別、制修訂紀錄、
@@ -823,8 +1362,42 @@ $('#btnTpl').on('click', function(){
     $('.tpl-l1').toggle(!!TPL.is_level1);
     $('#tplMsg').text('');
     $('#btnTplSave').prop('disabled', !CAN_EDIT);
+    fillStyleForm();
     openMask('mTpl');
 });
+
+/* ── 公版設定（管理員）──────────────────────────────────────────────── */
+function fillStyleForm() {
+    if (!$('#stFont').length || !TPL || !TPL.style_opts) return;
+    var o = TPL.style_opts, s = TPL.style || {};
+    function fill($el, map, cur) {
+        $el.html(Object.keys(map).map(function(k){
+            return '<option value="' + esc(k) + '"' + (k === String(cur) ? ' selected' : '') + '>'
+                 + esc(map[k]) + '</option>';
+        }).join(''));
+    }
+    fill($('#stFont'), o.fonts, s.tbl_font || '');
+    fill($('#stBStyle'), o.borders, s.brd_style || 'solid');
+    fill($('#stBW'), o.widths, s.brd_w || '1px');
+    fill($('#stBColor'), o.colors, s.brd_color || '#000000');
+    $('#stWeight').val(s.tbl_weight || 'normal');
+    $('#stSize').val(s.tbl_size || '');
+    $('#stPad').val(s.cell_pad || '4px');
+    previewStyle();
+}
+/** 預覽：只改跳窗內那張表的變數，不動整份文件（存檔後才真的套用） */
+function previewStyle() {
+    var p = document.getElementById('stPreview');
+    if (!p) return;
+    p.style.setProperty('--adt-tbl-font', $('#stFont').val() || 'inherit');
+    p.style.setProperty('--adt-tbl-size', $('#stSize').val() || 'inherit');
+    p.style.setProperty('--adt-tbl-weight', $('#stWeight').val() || 'inherit');
+    p.style.setProperty('--adt-brd-style', $('#stBStyle').val() || 'solid');
+    p.style.setProperty('--adt-brd-w', $('#stBW').val() || '1px');
+    p.style.setProperty('--adt-brd-color', $('#stBColor').val() || '#000');
+    p.style.setProperty('--adt-cell-pad', $('#stPad').val() || '4px');
+}
+$(document).on('change keyup', '#stFont,#stSize,#stWeight,#stBStyle,#stBW,#stBColor,#stPad', previewStyle);
 $('#btnTplSave').on('click', function(){
     var $b = $(this).prop('disabled', true);
     $('#tplMsg').text('存檔中…');
@@ -837,10 +1410,28 @@ $('#btnTplSave').on('click', function(){
     }, function(r){
         $b.prop('disabled', false);
         if (!r.success) { $('#tplMsg').text(''); alert(r.message || '設定存檔失敗'); return; }
-        $('#tplMsg').text('');
-        closeMask('mTpl');
-        // 版面是後端產生的，存完一定要重新拿一次，畫面上的封面／頁尾才會跟著變
-        loadChrome(function(){ $('#adSaved').text('版面設定已存檔').show(); });
+        // 管理員的公版設定與版面設定一起存（同一顆按鈕，使用者不必按兩次）
+        if (!$('#stFont').length) { finishTpl(); return; }
+        $.post(API, {
+            action: 'tpl_style_save', csrf: CSRF,
+            tbl_font:   $('#stFont').val(),
+            tbl_size:   $('#stSize').val(),
+            tbl_weight: $('#stWeight').val(),
+            brd_style:  $('#stBStyle').val(),
+            brd_w:      $('#stBW').val(),
+            brd_color:  $('#stBColor').val(),
+            cell_pad:   $('#stPad').val()
+        }, function(r2){
+            if (!r2.success) { $('#tplMsg').text(''); alert(r2.message || '公版設定存檔失敗'); return; }
+            finishTpl();
+        }, 'json');
+
+        function finishTpl() {
+            $('#tplMsg').text('');
+            closeMask('mTpl');
+            // 版面是後端產生的，存完一定要重新拿一次，畫面上的封面／頁尾才會跟著變
+            loadChrome(function(){ $('#adSaved').text('版面設定已存檔').show(); });
+        }
     }, 'json');
 });
 
@@ -978,6 +1569,13 @@ $('#btnCropReset').on('click', function(){
 /* ── 存檔 ─────────────────────────────────────────────────────────────── */
 function save(cb) {
     if (!CAN_EDIT || !ED) return;
+    /* 還沒排版完就存檔，ED.get() 只會拿到還沒分頁的那一大團內容，
+       **分頁標記會整份被洗掉**（存下去之後列印就變成一頁到底）。
+       所以在初次載入＋自動分頁跑完之前一律不給存。 */
+    if (!EDITOR_READY) {
+        alert('文件還在排版中（大文件需要幾秒），排版完成前先不要存檔，以免分頁被壓成一頁。\n請稍候再按一次存檔。');
+        return;
+    }
     var $b = $('#btnSave').prop('disabled', true);
     $.post(API, {
         action:'save', csrf:CSRF, version_id:VID,

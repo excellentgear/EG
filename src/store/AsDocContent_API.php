@@ -57,6 +57,10 @@ if ($isWrite) {
     }
 }
 function needEdit(array $P) { if (empty($P['edit'])) { http_response_code(403); jerr('沒有編輯線上內容的權限（需要 AS 文件管理的「編輯線上內容」）'); } }
+function needAdmin(array $P) { if (empty($P['admin'])) { http_response_code(403); jerr('只有 AS 文件管理員可以改簽核設定'); } }
+/* 送簽用的共用庫；**一定要宣告在 switch 外面**——寫在 case 之間的話，
+   前一個 case 以 jout()/exit 結束就永遠執行不到那幾行，函式根本不會被定義。 */
+function adsLib() { require_once __DIR__ . '/../common/as_doc_sign_lib.php'; }
 
 /** 版次守門：不存在／已刪除一律擋；已廢止的文件只有管理員能碰（比照 AS 文件管理的既有口徑） */
 function needVersion(PDO $db, array $P, int $vid): array {
@@ -183,6 +187,11 @@ case 'tpl': {
         'issue_dept'   => $ctx['issue_dept'],
         'dept_label'   => $ctx['dept_label'],
         'foot_default' => ADT_FOOT_LEFT_DEFAULT,
+        // 公版設定（表格字型／字級／粗細＋框線型式）：CSS 變數覆寫，兩邊都注入同一段
+        'style'      => adt_style_get($db),
+        'style_css'  => adt_style_css($db),
+        'style_opts' => ['fonts' => adt_style_fonts(), 'borders' => adt_style_borders(),
+                         'widths' => adt_style_widths(), 'colors' => adt_style_colors()],
         'depts'     => $depts,
         'can_edit'  => !empty($P['edit']),
     ]);
@@ -205,6 +214,121 @@ case 'tpl_save': {
     }
     if (!adt_settings_save($db, (int)$v['doc_id'], $in, $uid)) jerr('設定存檔失敗');
     jout(true, ['message' => '版面設定已存檔']);
+}
+
+/* ── 送簽（制修訂／審查／核准）─────────────────────────────────────────
+   規則一律在 as_doc_sign_lib，這裡只做守門與呼叫。 */
+
+/** 簽核設定（管理員） */
+case 'sign_cfg': {
+    adsLib();
+    $deptId = (int)($_GET['dept_id'] ?? 0);
+    $rows = ads_cfg_rows($db, $deptId);
+    // 讓畫面知道這組設定是「這個部門自己的」還是「沿用全站預設」
+    $own = $deptId > 0 && (int)($rows[0]['_scope'] ?? 0) === $deptId;
+    $depts = $db->query("SELECT id, name FROM department ORDER BY level, sort_order, name")
+                ->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    $poss  = $db->query("SELECT id, name FROM position ORDER BY sort_order, id")
+                ->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    require_once __DIR__ . '/../common/people_lib.php';
+    jout(true, [
+        'rows' => $rows, 'scope_is_own' => $own, 'dept_id' => $deptId,
+        'stages' => ads_stages(), 'modes' => ads_modes(),
+        'depts' => $depts, 'positions' => $poss,
+        'people' => array_map(function ($p) {
+            return ['id' => (int)$p['id'], 'name' => $p['user_cname'],
+                    'dept' => $p['dept_name'] ?? '', 'pos' => $p['position_name'] ?? ''];
+        }, eg_people_list($db, [])),
+        'can_admin' => !empty($P['admin']),
+    ]);
+}
+case 'sign_cfg_save': {
+    needAdmin($P);
+    adsLib();
+    $deptId = (int)($_POST['dept_id'] ?? 0);
+    $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
+    if (!is_array($rows)) jerr('設定內容格式不正確');
+    $r = ads_cfg_save($db, $deptId, $rows, $uid);
+    if (empty($r['ok'])) jerr($r['msg']);
+    jout(true, ['message' => $r['msg'], 'count' => $r['count'] ?? 0]);
+}
+
+/** 公版設定（管理員）：表格字型／字級／粗細與框線型式，全站文件共用 */
+case 'tpl_style_save': {
+    needAdmin($P);
+    require_once __DIR__ . '/../common/as_doc_tpl_lib.php';
+    $in = [];
+    foreach (['tbl_font','tbl_size','tbl_weight','brd_style','brd_w','brd_color','cell_pad'] as $k) {
+        if (array_key_exists($k, $_POST)) $in[$k] = $_POST[$k];
+    }
+    $r = adt_style_save($db, $in, $uid);
+    if (empty($r['ok'])) jerr($r['msg']);
+    jout(true, ['message' => $r['msg'], 'style' => $r['style'], 'style_css' => adt_style_css($db)]);
+}
+
+/** 這個版次目前的送簽狀態＋可挑的人 */
+case 'sign_state': {
+    adsLib();
+    $vid = (int)($_GET['version_id'] ?? 0);
+    needVersion($db, $P, $vid);
+    // 帶目前使用者：最後修改人是系統帳號或已離職時，制修訂那一關退回用「現在這個人」
+    $plan = ads_plan($db, $vid, $uid);
+    jout(true, [
+        'state' => ads_state($db, $vid),
+        'plan'  => $plan,
+        'me'    => $uid,
+        'perms' => $P,
+    ]);
+}
+case 'sign_submit': {
+    needEdit($P);
+    adsLib();
+    $vid = (int)($_POST['version_id'] ?? 0);
+    needVersion($db, $P, $vid);
+    $picks = json_decode((string)($_POST['picks'] ?? '{}'), true);
+    if (!is_array($picks)) $picks = [];
+    $name = (string)($_SESSION['userCname'] ?? $_SESSION['userName'] ?? '');
+    if ($name === '') {
+        $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
+        $st->execute([$uid]); $name = (string)$st->fetchColumn();
+    }
+    $r = ads_submit($db, $vid, $picks, $uid, $name);
+    if (empty($r['ok'])) jerr($r['msg'], !empty($r['need_cfg']) ? 'NEED_CFG' : '');
+    jout(true, $r);
+}
+case 'sign_decide': {
+    adsLib();
+    // 簽核不需要編輯權（被指派的簽核人多半不是編輯者），
+    // 但一定要是「這一關指定的那個人」——判定在 lib 裡再擋一次
+    $stepId = (int)($_POST['step_id'] ?? 0);
+    $ok = !empty($_POST['ok']);
+    $note = (string)($_POST['note'] ?? '');
+    $r = ads_decide($db, $stepId, $uid, $ok, $note, !empty($P['admin']));
+    if (empty($r['ok'])) jerr($r['msg']);
+    jout(true, $r);
+}
+case 'sign_cancel': {
+    needEdit($P);
+    adsLib();
+    $vid = (int)($_POST['version_id'] ?? 0);
+    needVersion($db, $P, $vid);
+    $r = ads_cancel($db, $vid, $uid);
+    if (empty($r['ok'])) jerr($r['msg']);
+    jout(true, $r);
+}
+case 'sign_release': {
+    needEdit($P);
+    adsLib();
+    $vid = (int)($_POST['version_id'] ?? 0);
+    needVersion($db, $P, $vid);
+    $name = (string)($_SESSION['userCname'] ?? $_SESSION['userName'] ?? '');
+    if ($name === '') {
+        $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
+        $st->execute([$uid]); $name = (string)$st->fetchColumn();
+    }
+    $r = ads_release($db, $vid, $uid, $name);
+    if (empty($r['ok'])) jerr($r['msg']);
+    jout(true, $r);
 }
 
 /* ── 存內容 ───────────────────────────────────────────────────────────── */
