@@ -1390,10 +1390,9 @@ function ec_validate_stage(array $r, string $stage, ?PDO $db = null, int $ecId =
             $e['verdict'] = '請選擇核示結果';
         if ((string)($r['verdict'] ?? '') === 'other' && trim((string)($r['verdict_other'] ?? '')) === '')
             $e['verdict_other'] = '核示選「其他」時請填寫內容';
-    } elseif ($stage === 'CTRL') {
-        if (!(int)($r['ctrl_drawing'] ?? 0) && !(int)($r['ctrl_bom'] ?? 0) && !(int)($r['ctrl_manual'] ?? 0))
-            $e['ctrl'] = '請至少勾選一項需修改的文件資料（圖面／BOM／操作手冊）';
     }
+    // 管制（CTRL）沒有必填檢查：圖面固定勾選（ec_normalize_stage_fields 強制），
+    // BOM／操作手冊使用者要求 2026-09-23 明確表示「不需要強制要求勾選」，純依實際情況勾選。
     return $e;
 }
 

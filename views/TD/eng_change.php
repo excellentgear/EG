@@ -1858,8 +1858,8 @@ $('#btnBulkOk').on('click', function(){
             if (!f.single_process && !f.old_stock) fieldMiss.push('「' + lb + '」請選擇庫存舊料可否修改');
         }
         if (k === 'APPROVE' && !f.verdict) fieldMiss.push('「' + lb + '」請選擇核示結果');
-        if (k === 'CTRL' && !f.ctrl_bom && !f.ctrl_manual)
-            fieldMiss.push('「' + lb + '」需修改文件資料至少勾選 BOM 或操作手冊其中一項（圖面固定勾選）');
+        // 管制員不強制要求勾選 BOM 或操作手冊（使用者要求 2026-09-23）：
+        // 圖面固定勾選，BOM／操作手冊純粹依實際情況勾選，兩個都不勾也合法。
     });
     if (fieldMiss.length) { alert(fieldMiss.join('\n')); return; }
     if (!confirm('確定一次代簽 ' + Object.keys(picks).length + ' 個簽章格？\n'
