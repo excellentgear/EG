@@ -1090,6 +1090,19 @@ case 'process_note':
                   (int)($_POST['id'] ?? 0), $pid]);
     jout(['message' => '已儲存']);
 
+/** 管理員手動修改發包日／回廠日（使用者明確要求，不在本專案範圍的製程列也要能改）。
+ *  這裡是本模組唯一寫回 bom_ing 的入口，限管理員，見 prj_bom_dates_admin_update() 說明。 */
+case 'process_dates':
+    $pid = (int)($_POST['project_id'] ?? 0);
+    prj_need($db, $P, $pid, true);
+    if (!$P['canAdmin']) jerr('無權限（需「專案管理員」角色）', 403);
+    $fid = (int)($_POST['bom_ing_fid'] ?? 0);
+    if ($fid <= 0) jerr('缺少製程列');
+    try {
+        $r = prj_bom_dates_admin_update($db, $pid, $fid, $_POST['outsource_date'] ?? null, $_POST['return_date'] ?? null, $u);
+    } catch (Throwable $e) { jerr($e->getMessage()); }
+    jout(['message' => '已儲存', 'row' => $r, 'processes' => prj_processes($db, $pid, prj_get($db, $pid))]);
+
 /* ══════════════════════════ 文件檢核 ══════════════════════════ */
 case 'doc_check':
     $pid = (int)($_GET['project_id'] ?? 0);

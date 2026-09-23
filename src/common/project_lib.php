@@ -2620,6 +2620,7 @@ function prj_work_reports(PDO $db, int $projectId): array
                        /* 機台一律優先印**現場編號**（machine_list.field_no），那才是現場看得懂的那一種；
                           沒有現場編號才退回機台名稱（記憶 machine_field_no_display） */
                        COALESCE(NULLIF(ml.field_no,''), ml.machine) AS machine_name,
+                       r.machine_id, ml.machine_type_id AS machine_proc_type_id, pn.process_type_id AS proc_type_id,
                        us.user_cname AS setup_user, up.user_cname AS prod_user,
                        r.setup_user_id, r.production_user_id,
                        r.produced_qty AS qty, r.is_finished, r.remark AS note,
@@ -2634,7 +2635,17 @@ function prj_work_reports(PDO $db, int $projectId): array
                  ORDER BY r.report_date DESC, r.report_id DESC";
         $st = $db->prepare($sql);
         $st->execute([$projectId, $projectId]);
-        $out = array_merge($out, $st->fetchAll(PDO::FETCH_ASSOC));
+        $rowsIn = $st->fetchAll(PDO::FETCH_ASSOC);
+        /* 機台＋製程編號交叉驗證（使用者要求「請確實確認」）：機台在 machine_list 登記的
+           製程種類(machine_type_id→process_type) 跟這筆報工的製程(process_no→process_type_id)
+           對不起來，才標警示——不是「機台名稱看起來像不像」這種主觀判斷，兩邊都對得到
+           process_type_id 才有依據；任一邊查無分類就不判定（沒登記不代表錯）。 */
+        foreach ($rowsIn as &$rr) {
+            $mt = $rr['machine_proc_type_id'] ?? null; $pt = $rr['proc_type_id'] ?? null;
+            $rr['machine_mismatch'] = ($mt !== null && $pt !== null && (int)$mt !== (int)$pt) ? 1 : 0;
+        }
+        unset($rr);
+        $out = array_merge($out, $rowsIn);
     } catch (Throwable $e) {}
 
     // ② 委外轉出入
@@ -2792,6 +2803,47 @@ function prj_processes(PDO $db, int $projectId, ?array $prj = null): array
     foreach ($rows as &$r) { $r['in_scope'] = prj_in_scope($scope, $r['process_no']) ? 1 : 0; }
     unset($r);
     return $rows;
+}
+
+/**
+ * 管理員手動修改發包日／回廠日（使用者明確要求，含「不在本專案範圍」的製程列也要能改）。
+ * 這是本模組唯一破例會寫回 bom_ing 的地方——別處一律唯讀（見 prj_bom_rows()/prj_work_reports()
+ * 的說明），這裡刻意獨立成一支、限定管理員呼叫，方便日後追查誰動過原始生產資料。
+ * 同時把 project_process 的鏡像欄位一起更新，不然「同步 BOM」或變更偵測下一次跑就會把
+ * 剛改的值蓋掉，或誤判成「BOM 被外部改過」而跳提示。
+ */
+function prj_bom_dates_admin_update(PDO $db, int $projectId, int $bomIngFid, $outsourceDate, $returnDate, array $user): array
+{
+    $st = $db->prepare("SELECT pp.id, pp.bom_ing_fid, pp.outsource_date AS old_out, pp.return_date AS old_ret
+                        FROM project_process pp WHERE pp.project_id=? AND pp.bom_ing_fid=? LIMIT 1");
+    $st->execute([$projectId, $bomIngFid]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row) throw new RuntimeException('這道製程不屬於本專案，或尚未同步 BOM');
+
+    $norm = static function ($v) {
+        $v = trim((string)($v ?? ''));
+        if ($v === '') return null;
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) throw new RuntimeException('日期格式不正確');
+        return $v;
+    };
+    $out = $norm($outsourceDate);
+    $ret = $norm($returnDate);
+
+    $db->beginTransaction();
+    try {
+        $u1 = $db->prepare("UPDATE bom_ing SET outsource_date=?, return_date=?, Modified_At=NOW(), Modified_By=? WHERE bom_ing_fid=?");
+        $u1->execute([$out, $ret, (string)($user['id'] ?? ''), $bomIngFid]);
+        $u2 = $db->prepare("UPDATE project_process SET outsource_date=?, return_date=? WHERE id=?");
+        $u2->execute([$out, $ret, $row['id']]);
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                     VALUES ('update','project_bom_date',?,?,?,?,?,NOW())")
+           ->execute([(string)$bomIngFid, '專案#' . $projectId . ' 製令列#' . $bomIngFid,
+                      json_encode(['outsource_date' => [$row['old_out'], $out], 'return_date' => [$row['old_ret'], $ret]], JSON_UNESCAPED_UNICODE),
+                      (int)($user['id'] ?? 0), (string)($user['user_cname'] ?? 'system')]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); throw $e; }
+
+    return ['bom_ing_fid' => $bomIngFid, 'outsource_date' => $out, 'return_date' => $ret];
 }
 
 /** 未知悉的 BOM 變更提示（專案清單的紅色徽章與詳情頁的提示條都用這支） */

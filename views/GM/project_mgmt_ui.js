@@ -2665,14 +2665,15 @@ function renderRel(res) {
         h += '<div style="overflow-x:auto;"><table class="sub-tbl"><thead><tr>'
           + '<th style="width:110px;">製令單</th><th>料號</th><th style="width:52px;">順序</th><th>製程</th>'
           + '<th style="width:110px;">廠商</th><th style="width:60px;">發包數</th>'
-          + '<th style="width:88px;">發包日</th><th style="width:88px;">回廠日</th>'
+          + '<th style="width:' + (PERM.canAdmin ? '118' : '88') + 'px;">發包日</th>'
+          + '<th style="width:' + (PERM.canAdmin ? '118' : '88') + 'px;">回廠日</th>'
           + '<th style="width:64px;">檢驗</th><th style="width:44px;">里程碑</th><th>專案註記</th></tr></thead><tbody>';
         var lastBom = '', outCnt = 0;
         $.each(res.processes, function (i, x) {
             var show = (x.bom !== lastBom); lastBom = x.bom;
             var out = !num(x.in_scope);            // 專案有綁定製程、而這一道不在範圍內
             if (out) outCnt++;
-            h += '<tr data-proc="' + x.id + '"' + (out ? ' style="opacity:.55;"' : '') + '>'
+            h += '<tr data-proc="' + x.id + '" data-fid="' + num(x.bom_ing_fid) + '"' + (out ? ' style="opacity:.55;"' : '') + '>'
               /* 製令單號可點：開 BOM 總表（使用者要求） */
               + '<td>' + (show ? '<span class="pj-op" data-viewbom="' + esc(x.bom) + '" title="開啟 BOM 總表"><b>'
                     + esc(x.bom) + '</b></span>' : '') + '</td>'
@@ -2680,7 +2681,12 @@ function renderRel(res) {
               + '<td>' + esc(x.process_name || ('製程' + num(x.process_no)))
               + (out ? ' <span class="pj-hint">（不在本專案範圍）</span>' : '') + '</td>'
               + '<td>' + esc(x.maker_name || '－') + '</td><td>' + num(x.sqty) + '</td>'
-              + '<td>' + dispDate(x.outsource_date) + '</td><td>' + dispDate(x.return_date) + '</td>'
+              + '<td>' + (PERM.canAdmin
+                    ? '<input type="date" class="p-outdate" value="' + esc(x.outsource_date || '') + '" style="width:112px;">'
+                    : dispDate(x.outsource_date)) + '</td>'
+              + '<td>' + (PERM.canAdmin
+                    ? '<input type="date" class="p-retdate" value="' + esc(x.return_date || '') + '" style="width:112px;">'
+                    : dispDate(x.return_date)) + '</td>'
               + '<td>' + qcLabel(x.qc_check) + '</td>'
               + '<td><input type="checkbox" class="p-ms" data-eg-skip="1"' + (num(x.is_milestone) ? ' checked' : '')
               + (res.can_edit ? '' : ' disabled') + '></td>'
@@ -2689,6 +2695,7 @@ function renderRel(res) {
         });
         h += '</tbody></table></div>'
           + '<p class="pj-hint">本頁只讀 BOM，不會改動 BOM 任何資料；你在這裡加的註記與里程碑同步時不會被覆蓋。'
+          + (PERM.canAdmin ? '<br><b>發包日／回廠日是唯一的例外</b>：管理員可以直接改，改了會同步寫回原始 BOM 資料（含不在本專案範圍的列），並留稽核紀錄。' : '')
           + (outCnt ? '<br><b>本專案已綁定特定製程</b>，上面有 ' + outCnt + ' 道不在範圍內（淡字那幾列）：'
                     + '整張 BOM 的製程鏈仍然看得到，但進度與統計只認範圍內的。範圍在「專案基本資料 → 專案涵蓋的製程」設定。' : '')
           + '</p>';
@@ -2720,7 +2727,9 @@ function renderRel(res) {
               + '<td>' + (r.bom ? '<span class="pj-op" data-viewwork="' + esc(r.bom) + '" title="開啟報工紀錄查詢">' + esc(r.bom) + '</span>' : '')
               + '</td><td>' + num(r.bom_sn) + '</td>'
               + '<td>' + esc(r.process_name || ('製程' + num(r.process_no))) + '</td>'
-              + '<td>' + esc(isIn ? (r.machine_name || '－') : (r.maker_to_name || r.maker_from_name || '－')) + '</td>'
+              + '<td>' + esc(isIn ? (r.machine_name || '－') : (r.maker_to_name || r.maker_from_name || '－'))
+                    + (isIn && num(r.machine_mismatch) ? ' <span class="fa fa-exclamation-triangle" style="color:#DD5138;" '
+                        + 'title="機台登記的製程種類跟這筆報工的製程對不起來，請確認機台是否填錯"></span>' : '') + '</td>'
               + '<td>' + esc(isIn
                     ? ((r.setup_user ? '上機 ' + r.setup_user + '　' : '') + (r.prod_user ? '生產 ' + r.prod_user : '') || '－')
                     : ((r.maker_from_name || '?') + ' → ' + (r.maker_to_name || '?'))) + '</td>'
@@ -2880,6 +2889,18 @@ $(document).on('change', '#paneRel .p-ms, #paneRel .p-note', function () {
         project_id: CUR.project.project_id, id: num($tr.data('proc')),
         note: $tr.find('.p-note').val(), is_milestone: $tr.find('.p-ms').is(':checked') ? 1 : 0
     }, 'POST');
+});
+/* 管理員手動修改發包日／回廠日（使用者明確要求，含不在本專案範圍的列）——
+   這是本頁唯一會真的改到 BOM 原始資料的動作，限管理員，且會留稽核紀錄。 */
+$(document).on('change', '#paneRel .p-outdate, #paneRel .p-retdate', function () {
+    var $tr = $(this).closest('tr'), fid = num($tr.data('fid'));
+    if (!fid) { alert('這一列還沒有製令資料'); return; }
+    api('process_dates', {
+        project_id: CUR.project.project_id, bom_ing_fid: fid,
+        outsource_date: $tr.find('.p-outdate').val(), return_date: $tr.find('.p-retdate').val()
+    }, 'POST').fail(function (xhr) {
+        alert((xhr.responseJSON && xhr.responseJSON.error) || '儲存失敗');
+    });
 });
 $(document).on('click', '#btnRelAddOrder', function () { openO2P('append'); });
 
