@@ -67,6 +67,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     include_once '../../src/common/rbac.php';
     include_once '../../src/common/qc_inspection_lib.php'; // 共用：後端重算判定＋寫 qc_measurement
     include_once '../../src/common/asdoc_lib.php';
+    include_once '../../src/common/people_lib.php'; // 補資料：人員一律依業務日期回推當時在職者（ai-rules/22）
 
     $pdo = (new DBConnection())->getPDO();
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -96,7 +97,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     try {
         $WRITE = ['sym_save', 'sym_delete', 'save_adhoc', 'log_sample_change', 'del_inspection',
                   'dwg_confirm', 'std_item_save', 'std_item_delete', 'std_version_activate', 'std_version_delete',
-                  'print_cfg_save', 'tol_table_save', 'tol_table_delete', 'save_ship'];
+                  'print_cfg_save', 'tol_table_save', 'tol_table_delete', 'save_ship', 'backfill_save'];
         if (in_array($act, $WRITE, true)) {
             $tok = $_POST['csrf'] ?? '';
             if (!is_string($tok) || $tok === '' || !hash_equals((string)($_SESSION['qc_csrf'] ?? ''), $tok)) {
@@ -481,6 +482,98 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 'incoming_qty' => $incoming, 'sample_qty' => $sample, 'total_items' => count($items),
                 'ng_qty' => $tot['ng_qty'], 'aod_qty' => $tot['aod_qty'], 'check_result' => $tot['check_result'],
             ]], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // =====================================================================
+        // ⑤ 補資料（管理員）：設定檢驗日期／檢驗人員／主管審核人員與日期
+        //   比照 qa_abnormal_lib.php 的補資料設計（qab_sign_slots/qab_user_asof_ok）：
+        //   人員一律依「那一天」回推當時在職者(ai-rules/22)，不是今天的在職名單；
+        //   檢驗人員與主管審核各自有自己的日期，人員候選各自依那個日期回推。
+        //   權限：qc_backfill_data 或管理員，不對外公開給一般填寫者。
+        // =====================================================================
+        $canBackfill = $isAdmin || $hasF('qc_backfill_data');
+        if ($act === 'backfill_get') {
+            if (!$canBackfill) throw new Exception('您沒有「補資料」權限');
+            $qid = (int)($_POST['qc_form_id'] ?? 0);
+            $s = $pdo->prepare("SELECT qc_form_id, check_date, created_by, created_at, inspector_by, approved_by, approved_at FROM qc_check_form WHERE qc_form_id=?");
+            $s->execute([$qid]);
+            $f = $s->fetch(PDO::FETCH_ASSOC);
+            if (!$f) throw new Exception('查無此檢驗紀錄');
+            $checkDate = $f['check_date'] ?: substr((string)$f['created_at'], 0, 10);
+            $approvedDate = $f['approved_at'] ?: $checkDate;
+            $nm = function ($id) use ($pdo) {
+                if (!$id) return '';
+                $n = $pdo->prepare("SELECT COALESCE(NULLIF(user_cname,''), user_uname) FROM user WHERE id=?");
+                $n->execute([$id]);
+                return (string)($n->fetchColumn() ?: '');
+            };
+            echo json_encode(['success' => true,
+                'check_date' => $checkDate,
+                'inspector_id' => (int)($f['inspector_by'] ?: $f['created_by']),
+                'inspector_name' => $nm($f['inspector_by'] ?: $f['created_by']),
+                'approved' => $f['approved_by'] ? 1 : 0,
+                'approved_id' => (int)($f['approved_by'] ?: 0),
+                'approved_name' => $nm($f['approved_by']),
+                'approved_date' => $approvedDate,
+                'inspector_people' => eg_people_list_asof($pdo, [], $checkDate),
+                'approver_people' => eg_people_list_asof($pdo, [], $approvedDate),
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'backfill_people') {
+            // 換日期時前端即時重取當時在職的人員候選（不必整包 backfill_get 重查一次）
+            if (!$canBackfill) throw new Exception('您沒有「補資料」權限');
+            $date = trim($_POST['date'] ?? '');
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) throw new Exception('日期格式錯誤');
+            echo json_encode(['success' => true, 'people' => eg_people_list_asof($pdo, [], $date)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'backfill_save') {
+            if (!$canBackfill) throw new Exception('您沒有「補資料」權限');
+            $qid = (int)($_POST['qc_form_id'] ?? 0);
+            $checkDate = trim($_POST['check_date'] ?? '');
+            $inspectorId = (int)($_POST['inspector_id'] ?? 0);
+            $approved = ($_POST['approved'] ?? '0') === '1';
+            $approverId = (int)($_POST['approver_id'] ?? 0);
+            $approvedDate = trim($_POST['approved_date'] ?? '');
+            $today = date('Y-m-d');
+
+            if (!$qid) throw new Exception('缺少 qc_form_id');
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $checkDate)) throw new Exception('檢驗日期格式錯誤');
+            if ($checkDate > $today) throw new Exception('檢驗日期不可以是未來日期');
+            if (!$inspectorId) throw new Exception('請選擇檢驗人員');
+            $inspectorIds = array_column(eg_people_list_asof($pdo, [], $checkDate), 'id');
+            if (!in_array($inspectorId, $inspectorIds, false)) {
+                throw new Exception('檢驗人員在檢驗日期當天不在職，請重新選擇');
+            }
+            if ($approved) {
+                if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $approvedDate)) throw new Exception('主管審核日期格式錯誤');
+                if ($approvedDate > $today) throw new Exception('主管審核日期不可以是未來日期');
+                if ($approvedDate < $checkDate) throw new Exception('主管審核日期不可以早於檢驗日期');
+                if (!$approverId) throw new Exception('請選擇主管審核人員');
+                if (!in_array($approverId, array_column(eg_people_list_asof($pdo, [], $approvedDate), 'id'), false)) {
+                    throw new Exception('審核人員在審核日期當天不在職，請重新選擇');
+                }
+            }
+
+            $s = $pdo->prepare("SELECT qc_form_id FROM qc_check_form WHERE qc_form_id=? AND status<>'DRAFT'");
+            $s->execute([$qid]);
+            if (!$s->fetchColumn()) throw new Exception('查無此檢驗紀錄（或仍為草稿）');
+
+            $pdo->beginTransaction();
+            $before = $pdo->prepare("SELECT check_date, inspector_by, approved_by, approved_at FROM qc_check_form WHERE qc_form_id=?");
+            $before->execute([$qid]);
+            $beforeRow = $before->fetch(PDO::FETCH_ASSOC);
+
+            $pdo->prepare("UPDATE qc_check_form SET check_date=?, inspector_by=?, approved_by=?, approved_at=? WHERE qc_form_id=?")
+                ->execute([$checkDate, $inspectorId, $approved ? $approverId : null, $approved ? $approvedDate : null, $qid]);
+
+            $after = ['check_date' => $checkDate, 'inspector_by' => $inspectorId, 'approved_by' => $approved ? $approverId : null, 'approved_at' => $approved ? $approvedDate : null];
+            $pdo->prepare("INSERT INTO qc_inspection_edit_log (qc_form_id, action, reason, changes_json, changed_by) VALUES (?, 'BACKFILL', '管理員補資料', ?, ?)")
+                ->execute([$qid, json_encode(['before' => $beforeRow, 'after' => $after], JSON_UNESCAPED_UNICODE), $uid]);
+            $pdo->commit();
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
             exit;
         }
 
@@ -1280,6 +1373,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <div id="edit-mode-banner" class="alert alert-info" style="display:none;">
                     <i class="fa fa-pencil"></i> <b>修改模式</b>：正在修改歷程 qc_form_id=<span id="edit-form-id"></span>，儲存時需填修改原因，存檔後此筆會自動回鎖。
                     <button class="btn btn-xs btn-default pull-right" id="btn-exit-edit">取消修改，回到新檢驗</button>
+                    <button class="btn btn-xs btn-warm-o pull-right" id="btn-backfill" style="display:none;margin-right:6px;"><i class="fa fa-calendar"></i> 補資料設定</button>
                 </div>
 
                 <!-- 批次 / 歷程（預設收合，不佔填寫版面） -->
@@ -1683,6 +1777,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <li><b>唯讀檢閱</b>：只能看，不能填。沒有這個權限連內容都不會顯示。</li>
                 <li><b>管理檢驗設定</b>：量具／幾何公差／通用樣板／檢驗標準。</li>
                 <li><b>抽樣規則管理</b>（主管固定可用）、<b>主管審核</b>相關動作另有各自的功能碼。</li>
+                <li><b>補資料</b>：管理員專用，可在「修改模式」下按<b>「補資料設定」</b>調整某一筆歷史紀錄的<b>檢驗日期／檢驗人員／主管審核人員與日期</b>，用於補登舊的紙本檢驗紀錄；設定過之後列印簽章會改用這裡設的人員與日期，不影響其他沒補過資料的紀錄。</li>
                 <li>角色設定在「設定 → 權限設定（角色）」，或使用者權限設定頁。</li>
             </ul>
             <div class="tip">找不到某個按鈕多半是<b>權限沒開</b>——設定選單裡的項目會依角色自動隱藏，請洽管理員。</div>
@@ -1740,6 +1835,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             <span class="muted-help pull-left">已選 <b id="ship-pick-n">0</b> 項</span>
             <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
             <button type="button" class="btn btn-warm" id="btn-ship-build" disabled><i class="fa fa-magic"></i> 帶入編輯（可再調整後存檔）</button>
+        </div>
+    </div></div>
+</div>
+
+<!-- ===================== 補資料設定（管理員）：檢驗日期／檢驗人員／主管審核 ===================== -->
+<div class="modal fade" id="backfillModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header" style="background:#FFF8EE;border-bottom:1px solid #E4D3BC;">
+            <button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-calendar"></i> 補資料設定</h4>
+        </div>
+        <div class="modal-body">
+            <div class="muted-help" style="margin-bottom:10px;">用於補登歷史紙本檢驗紀錄：可設定實際的檢驗日期／檢驗人員，以及主管審核人員與日期。人員清單會依所選日期回推「當時在職」的人員，僅供管理員使用。</div>
+            <div class="form-group">
+                <label>檢驗日期</label>
+                <input type="date" class="form-control input-sm" id="bf-check-date" style="max-width:200px;">
+            </div>
+            <div class="form-group">
+                <label>檢驗人員</label><br>
+                <select class="form-control input-sm" id="bf-inspector" data-eg-filter="輸入姓名篩選…" style="max-width:280px;"></select>
+            </div>
+            <hr>
+            <div class="checkbox" style="margin-top:0;">
+                <label><input type="checkbox" id="bf-approved"> 主管已審核</label>
+            </div>
+            <div id="bf-approved-box" style="display:none;">
+                <div class="form-group">
+                    <label>審核日期</label>
+                    <input type="date" class="form-control input-sm" id="bf-approved-date" style="max-width:200px;">
+                </div>
+                <div class="form-group">
+                    <label>審核人員</label><br>
+                    <select class="form-control input-sm" id="bf-approver" data-eg-filter="輸入姓名篩選…" style="max-width:280px;"></select>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-warm" id="btn-bf-save"><i class="fa fa-save"></i> 儲存</button>
         </div>
     </div></div>
 </div>
@@ -2536,7 +2670,7 @@ $(function(){
     }
     var state = { sampleN:5, batches:[], curBatch:0, processes:[], curProc:0, demo:false,
                   is_supervisor:false, can_fill:true, canManageSettings:false, canManageSampling:false,
-                  canView:true, editFormId:null, draftFormId:0, inspKind:'NORMAL' };
+                  canView:true, editFormId:null, draftFormId:0, inspKind:'NORMAL', canBackfill:false };
     var MODEL = { items:[], pcs:[], tools:[] };   // tools＝本單使用量具（Tool_id 字串陣列）
     var TOOLS = ['卡尺','分厘卡','投影機','三次元','針規','目視'];
     var TOOL_INSTANCES = [];                                  // [{id,no,cat}]
@@ -3911,6 +4045,7 @@ $(function(){
             state.can_fill = res.can_fill !== false;
             state.canManageSettings = !!res.can_manage_settings;
             state.canManageSampling = !!res.can_manage_sampling;
+            state.canBackfill = !!res.can_backfill;
             applyMenuPerms();
             state.sampleN = ctx.sample_qty || 5;
             state.processes = [ ctx.process || '檢驗' ];
@@ -4432,7 +4567,8 @@ $(function(){
             var h=res.header;
             state.editFormId=qcFormId;
             // 列印簽章用：已存檔紀錄的簽章日期＝檢驗日、檢驗員＝存檔者
-            state.editMeta={ check_date:h.check_date||'', creator_name:h.creator_name||'' };
+            state.editMeta={ check_date:h.check_date||'', creator_name:h.creator_name||'',
+                              approved_name:h.approved_name||'', approved_at:h.approved_at||'' };
             state.sampleN=h.sample_qty||state.sampleN;
             state.inspKind = (h.insp_kind==='FIRST'||h.insp_kind==='LAST'||h.insp_kind==='SHIP') ? h.insp_kind : 'NORMAL';
             if(ctx) ctx.ship = (h.insp_kind==='SHIP');
@@ -4452,6 +4588,7 @@ $(function(){
             $('#no-std-hint').hide();
             $('#edit-form-id').text(qcFormId);
             $('#edit-mode-banner').show();
+            $('#btn-backfill').toggle(!!state.canBackfill);
             $('#chk-save-std').prop('checked',false).closest('label').hide();
             $('#btn-save').html('<i class="fa fa-save"></i> 儲存修改');
             $('#btn-redo').hide();
@@ -4471,6 +4608,72 @@ $(function(){
         if(qid){ $.post(API,{action:'relock_record',qc_form_id:qid},function(){ exitEditMode(); },'json').fail(exitEditMode); }
         else exitEditMode();
     });
+
+    // =====================================================================
+    // 補資料設定（管理員）：檢驗日期／檢驗人員／主管審核人員與日期。
+    // 人員候選一律依所選日期回推當時在職者(ai-rules/22)，換日期即時重取候選名單。
+    // =====================================================================
+    function bfFillPeople($sel, people, curId){
+        $sel.html((people||[]).map(function(p){
+            return '<option value="'+p.id+'">'+esc(p.display||p.user_cname||p.name||('#'+p.id))+'</option>';
+        }).join(''));
+        if(curId) $sel.val(String(curId));
+    }
+    $('#btn-backfill').on('click', function(){
+        if(!state.editFormId){ alert('請先開啟一筆歷史紀錄再補資料。'); return; }
+        $.post(V2API, { v2action:'backfill_get', qc_form_id:state.editFormId }, function(res){
+            if(!res.success){ alert('載入失敗：'+res.message); return; }
+            $('#bf-check-date').val(res.check_date||'');
+            bfFillPeople($('#bf-inspector'), res.inspector_people, res.inspector_id);
+            $('#bf-approved').prop('checked', !!res.approved);
+            $('#bf-approved-box').toggle(!!res.approved);
+            $('#bf-approved-date').val(res.approved_date||res.check_date||'');
+            bfFillPeople($('#bf-approver'), res.approver_people, res.approved_id);
+            $('#backfillModal').modal('show');
+        }, 'json').fail(function(x){ alert('載入錯誤：'+x.responseText); });
+    });
+    $('#bf-approved').on('change', function(){ $('#bf-approved-box').toggle(this.checked); });
+    // 換日期即時重取「當時在職」的人員候選（不必整包重新載入）
+    $('#bf-check-date').on('change', function(){
+        var d=$(this).val(); if(!d) return;
+        var curId=$('#bf-inspector').val();
+        $.post(V2API, { v2action:'backfill_people', date:d }, function(res){
+            if(!res.success) return;
+            bfFillPeople($('#bf-inspector'), res.people, curId);
+        }, 'json');
+    });
+    $('#bf-approved-date').on('change', function(){
+        var d=$(this).val(); if(!d) return;
+        var curId=$('#bf-approver').val();
+        $.post(V2API, { v2action:'backfill_people', date:d }, function(res){
+            if(!res.success) return;
+            bfFillPeople($('#bf-approver'), res.people, curId);
+        }, 'json');
+    });
+    $('#btn-bf-save').on('click', function(){
+        var checkDate=$('#bf-check-date').val(), inspId=$('#bf-inspector').val();
+        var approved=$('#bf-approved').is(':checked'), apprId=$('#bf-approver').val(), apprDate=$('#bf-approved-date').val();
+        if(!checkDate){ alert('請填寫檢驗日期'); return; }
+        if(!inspId){ alert('請選擇檢驗人員'); return; }
+        if(approved && (!apprDate || !apprId)){ alert('已勾選主管已審核，請填寫審核日期與審核人員'); return; }
+        var $b=$(this).prop('disabled',true);
+        $.post(V2API, { v2action:'backfill_save', csrf:CSRF, qc_form_id:state.editFormId,
+            check_date:checkDate, inspector_id:inspId,
+            approved:approved?'1':'0', approver_id:(approved?apprId:''), approved_date:(approved?apprDate:'')
+        }, function(res){
+            $b.prop('disabled',false);
+            if(!res.success){ alert('儲存失敗：'+res.message); return; }
+            // 立刻更新畫面上的簽章來源，不必重新整理就能馬上看到列印結果反映新設定
+            if(state.editMeta){
+                state.editMeta.check_date=checkDate;
+                state.editMeta.creator_name=$('#bf-inspector option:selected').text();
+                state.editMeta.approved_name=approved?$('#bf-approver option:selected').text():'';
+                state.editMeta.approved_at=approved?apprDate:'';
+            }
+            $('#backfillModal').modal('hide');
+            alert('補資料已儲存。');
+        }, 'json').fail(function(x){ $b.prop('disabled',false); alert('儲存錯誤：'+x.responseText); });
+    });
     function viewEditLog(qcFormId){
         $.post(API,{action:'get_edit_log',qc_form_id:qcFormId},function(res){
             if(!res.success){ alert('查詢失敗：'+res.message); return; }
@@ -4478,7 +4681,7 @@ $(function(){
             var html='<table class="table table-condensed table-bordered"><thead><tr><th>時間</th><th>行為</th><th>人員</th><th>原因/變更</th></tr></thead><tbody>';
             if(!logs.length) html+='<tr><td colspan="4" class="text-center muted-help">尚無修改紀錄</td></tr>';
             logs.forEach(function(l){
-                var actMap={UNLOCK:'開放修改',EDIT:'修改',RELOCK:'回鎖'};
+                var actMap={UNLOCK:'開放修改',EDIT:'修改',RELOCK:'回鎖',BACKFILL:'補資料設定'};
                 var detail=esc(l.reason||'');
                 if(l.changes_json) detail+=' <a href="#" class="show-diff" data-json=\''+esc(l.changes_json)+'\'>[改前/改後]</a>';
                 html+='<tr><td>'+esc(l.changed_at)+'</td><td>'+(actMap[l.action]||l.action)+'</td><td>'+esc(l.user_cname||l.changed_by)+'</td><td>'+detail+'</td></tr>';
@@ -5323,7 +5526,11 @@ $(function(){
                 '<th class="c-tol">公差</th>'+pcsHead+'<th>判定</th></tr></thead><tbody>'+body+'</tbody></table>';
         // 簽章：印章本身自帶日期（故不再另設日期欄）；代理人代簽由 EGStamp 於右下角加「代」字
         var insp = (state.editMeta && state.editMeta.creator_name) || <?php echo json_encode($CURRENT_CNAME, JSON_UNESCAPED_UNICODE); ?>;
-        var appr = (PRINTCFG.auto_approve && PRINTCFG.approver && PRINTCFG.approver.name)
+        // 主管審核：補資料設定過(state.editMeta.approved_name)優先，用補登的審核日期；
+        // 沒補過的一律照舊走全站「主管自動核可」設定（行為完全不變）
+        var appr = (state.editMeta && state.editMeta.approved_name)
+                 ? EGStamp.stamp(state.editMeta.approved_name, String(state.editMeta.approved_at||printSignDate()).substring(0,10).replace(/-/g,'.'), false)
+                 : (PRINTCFG.auto_approve && PRINTCFG.approver && PRINTCFG.approver.name)
                  ? EGStamp.stamp(PRINTCFG.approver.name, dateStr, !!PRINTCFG.approver.deputy) : '';
         var sign='<table class="pr-sign"><tr>'+
                  '<td>'+EGStamp.stamp(insp, dateStr, false)+'<div class="lbl">檢驗員 Inspector</div></td>'+
@@ -5385,7 +5592,8 @@ $(function(){
         { code:'qc_view_readonly',     label:'唯讀檢閱（僅可檢視檢驗表與異常單，不可修改/開單）' },
         { code:'qa_disposition_reply', label:'勾選 / 回覆異常單「異常處置方式、處置說明」' },
         { code:'qc_supervisor',        label:'認定為主管（收到並核准異常單修改請求、可直接修改異常單；與管理員不同）' },
-        { code:'qc_print_approve_setting', label:'列印：主管審核自動核可設定（可指定核可主管）' }
+        { code:'qc_print_approve_setting', label:'列印：主管審核自動核可設定（可指定核可主管）' },
+        { code:'qc_backfill_data',     label:'補資料：設定檢驗日期／檢驗人員／主管審核人員與日期（補歷史紙本用）' }
     ];
     var QC_CODES = QC_FEATURES.map(function(f){ return f.code; });
     var _permRole = null, _permRoleCur = [], _permRolesData = [], _permRoleName = '', _permRoleSys = false;

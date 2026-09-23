@@ -283,6 +283,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'can_fill'      => hasFeature($feats, 'qc_fill_inspection'),
                 'can_manage_settings' => hasFeature($feats, 'qc_manage_settings'),
                 'can_manage_sampling' => canManageSampling($feats),
+                'can_backfill'  => hasFeature($feats, 'all') || hasFeature($feats, 'qc_backfill_data'),
                 'current_user'  => $user_id,
             ], JSON_UNESCAPED_UNICODE);
             exit;
@@ -631,13 +632,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'process_name'=>$form['process_name'], 'main_remark'=>$form['main_remark'],
                     'pcs_verdicts'=>(is_array($pv = json_decode($form['pcs_verdicts'] ?? '[]', true)) ? $pv : []),
                     'edit_unlocked'=>(int)$form['edit_unlocked'],
-                    // 列印簽章用：已存檔紀錄的簽章日期＝檢驗日，簽章人＝存檔者（v2 列印版）
+                    // 列印簽章用：已存檔紀錄的簽章日期＝檢驗日，簽章人＝檢驗人員
+                    // （補資料(inspector_by)優先，沒補過就是存檔者(created_by)，行為不變）
                     'check_date'=>$form['check_date'] ?? ($form['created_at'] ?? ''),
                     'created_by'=>$form['created_by'] ?? '',
                     'creator_name'=>(function() use ($pdo, $form) {
                         try {
                             $q = $pdo->prepare("SELECT COALESCE(NULLIF(user_cname,''), user_uname) FROM user WHERE id=?");
-                            $q->execute([(int)$form['created_by']]);
+                            $q->execute([(int)($form['inspector_by'] ?: $form['created_by'])]);
+                            return (string)($q->fetchColumn() ?: '');
+                        } catch (Exception $e) { return ''; }
+                    })(),
+                    'insp_kind'=>$form['insp_kind'] ?? 'NORMAL',
+                    // 主管審核（補資料）：有設定才回傳，前端沒有這筆時照舊用全站自動核可設定
+                    'approved_at'=>$form['approved_by'] ? ($form['approved_at'] ?? '') : '',
+                    'approved_name'=>(function() use ($pdo, $form) {
+                        if (!$form['approved_by']) return '';
+                        try {
+                            $q = $pdo->prepare("SELECT COALESCE(NULLIF(user_cname,''), user_uname) FROM user WHERE id=?");
+                            $q->execute([(int)$form['approved_by']]);
                             return (string)($q->fetchColumn() ?: '');
                         } catch (Exception $e) { return ''; }
                     })(),

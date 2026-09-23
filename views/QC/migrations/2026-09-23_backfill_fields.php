@@ -35,4 +35,15 @@ foreach ($cols as $col => $sql) {
     }
 }
 
+// qc_inspection_edit_log.action 原本是 ENUM('UNLOCK','EDIT','RELOCK')，補資料要留一筆稽核紀錄
+// 但不算「修改」（不需要填修改原因），故另立一個 BACKFILL 動作，不要混進 EDIT 裡讓歷程看不出差異。
+$actEnum = $pdo->query("SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+                         WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='qc_inspection_edit_log' AND COLUMN_NAME='action'")->fetchColumn();
+if ($actEnum && strpos($actEnum, "'BACKFILL'") === false) {
+    $pdo->exec("ALTER TABLE qc_inspection_edit_log MODIFY COLUMN action ENUM('UNLOCK','EDIT','RELOCK','BACKFILL') NOT NULL");
+    echo "已擴充 qc_inspection_edit_log.action 加入 BACKFILL\n";
+} else {
+    echo "qc_inspection_edit_log.action 已含 BACKFILL，略過\n";
+}
+
 echo "完成。\n";
