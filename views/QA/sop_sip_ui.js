@@ -32,9 +32,27 @@ function esc(s) {
 function num(v) { return parseInt(v, 10) || 0; }
 /** 日期顯示一律 YYYY.MM.DD（ai-rules/20），走共用 egFmtDate，不自寫 */
 function dispDate(s) { return (window.egFmtDate ? egFmtDate(s) : (s || '')) || ''; }
-function openMask(id) { $('#' + id).addClass('on'); }
+/**
+ * 打開跳窗。
+ * **後開的一定要疊在先開的上面**——全站的 `.ss-mask` z-index 都一樣（10200），
+ * 同層時是「DOM 在後面的贏」，所以從「設定」跳窗裡按「插入符號」時，
+ * `#maskPick`（HTML 寫在前面）會被 `#maskSet` 整個壓在底下，看得到卻點不到
+ * （使用者 2026-09-23 回報：「插入符號按了跳窗出現在目前跳窗底下，無法點擊」）。
+ * 所以開啟時算一次「目前開著的最高層」，自己再疊上去；關掉時還原，免得越疊越高。
+ */
+function openMask(id) {
+    var $m = $('#' + id);
+    var top = 0;
+    $('.ss-mask.on').each(function () {
+        if (this.id === id) return;
+        var z = parseInt($(this).css('z-index'), 10) || 0;
+        if (z > top) top = z;
+    });
+    if (top) $m.css('z-index', top + 10);
+    $m.addClass('on');
+}
 function closeMask(id) {
-    $('#' + id).removeClass('on');
+    $('#' + id).removeClass('on').css('z-index', '');   // 還原疊層，不然每開一次就高 10
     /* #maskPick 是「改綁定／挑使用設備／挑檢具／挑圖面」共用的跳窗，內容由各自的按鈕當場組出來。
        關掉時一定要把內容清掉：不清的話，只要有哪一次跳窗被打開卻沒重組內容（例如按到一個
        其實不存在的按鈕），畫面上就會出現**上一次用剩的舊內容**，看起來像「下拉選單內容不一樣」。 */
@@ -485,10 +503,12 @@ function syncScopeFields() {
     $('#nCus').prop('readonly', byPart).toggleClass('ro-auto', byPart);
     $('#nCusHint').text(byPart ? '綁了料號就由料號主檔自動帶入，不用也不可以自己打。'
                                : '通用型文件可以自己挑客戶（打編號或簡稱從清單選），不挑也可以。');
-    // 設備操作說明書不綁製程：machine_list 本來就有製程類別，再綁一次就是同一份資訊兩個來源
-    $('#nProcLab,#nProc').closest('.frm').find('#nProcLab').toggle(kind !== 'equip');
-    $('#nProc').closest('.ac-wrap').toggle(kind !== 'equip');
-    if (kind === 'equip') { $('#nProc').val(''); $('#nProcNo').val(''); }
+    /* 設備操作說明書不綁製程：machine_list 本來就有製程類別，再綁一次就是同一份資訊兩個來源。
+       **綁量具的也不綁製程**（使用者 2026-09-23），後端 ss_doc_save 會再歸零一次。 */
+    var noProc = (kind === 'equip' || s === 'tool');
+    $('#nProcLab,#nProc').closest('.frm').find('#nProcLab').toggle(!noProc);
+    $('#nProc').closest('.ac-wrap').toggle(!noProc);
+    if (noProc) { $('#nProc').val(''); $('#nProcNo').val(''); }
     probe();
 }
 $('#nKind').on('change', syncScope);
@@ -804,8 +824,11 @@ function headHtml() {
            + '<span id="btCus"></span></div>';
     }
 
-    // 製程＝紙本上的「工程名稱」。設備操作說明書不綁製程（機台主檔本來就有製程類別）
-    if (CUR.kind !== 'equip') {
+    /* 製程＝紙本上的「工程名稱」。
+       設備操作說明書不綁製程（機台主檔本來就有製程類別）；
+       **綁量具的也不綁製程**（使用者 2026-09-23：「量具也不需要製程欄位」）——
+       量具的操作說明書講的是「這支量具怎麼用」，跟走到哪一關製程無關。 */
+    if (CUR.kind !== 'equip' && d.scope !== 'tool') {
         h += '<label>製程</label><div class="bindline"><span class="ac-wrap"><input id="fProc" value="'
            + esc(d.proc_name || '') + '"' + ro + ' data-eg-hint="打製程名稱或編號"></span>'
            + '<input type="hidden" id="fProcNo" value="' + num(d.process_no) + '">'
@@ -859,14 +882,19 @@ function headHtml() {
     } else if (CUR.kind === 'process') {
         /* 綁機台的文件，上面的「機台型號／機器編號」就是使用設備，這裡不再重複開一個欄位
            （使用者 2026-09-22：「上方已經顯示機器編號，下方就不要重複有使用設備」）。
+           **綁量具的同理**（使用者 2026-09-23：「綁定量具應該就不需要另外綁定使用設備
+           跟不需要預計工時」）——上面的量具編號就是它用的設備，而量具的操作說明書
+           講的是「怎麼用這支量具」，沒有工時可言。
            列印時的「使用設備」那一格改由綁定的機器編號直接帶出，所以紙本不會因此變空白。 */
-        if (d.scope !== 'machine') {
+        if (d.scope !== 'machine' && d.scope !== 'tool') {
             h += '<label>使用設備</label><div class="wide"><input id="f_use_equip" value="' + esc(v.use_equip || '') + '"' + ro + '>'
                + (CUR.can_edit ? '<div class="muted-help" style="margin-top:3px;">'
                    + '<button class="btn btn-xs btn-warm-o" id="btnPickEquip">從機台挑（可複選機器編號）</button>'
                    + '　也可以直接打字。</div>' : '') + '</div>';
         }
-        h += '<label>預計工時</label><div><input id="f_est_hours" value="' + esc(v.est_hours || '') + '"' + ro + '></div>';
+        if (d.scope !== 'tool') {
+            h += '<label>預計工時</label><div><input id="f_est_hours" value="' + esc(v.est_hours || '') + '"' + ro + '></div>';
+        }
     }
     h += '</div></div>';
     return h;
@@ -1150,6 +1178,25 @@ function freqCell(val, ro) {
        + '<input class="i-freq-txt" value="' + esc(val) + '" style="display:none;margin-top:2px;"' + ro + '>';
     return h;
 }
+/**
+ * 品質特性欄。三種型態：
+ *   ① 輸入方式＝齒輪精度等級 → **只能從對照表挑**（使用者 2026-09-23），欄位唯讀＋「挑等級」
+ *   ② 鎖定且有 {} 樣板 → 固定文字＋可填空格
+ *   ③ 其餘 → 自由文字＋符號鈕
+ */
+function qCharCell(r, ro) {
+    if ((r.input_kind || '') === 'gear_grade') {
+        return '<input class="i-q" value="' + esc(r.q_char || '') + '" readonly'
+             + ' title="精度等級只能從主檔管理設定的齒輪等級對照表挑，不可手打">'
+             + (ro ? '' : '<div style="margin-top:2px;">'
+                        + '<button class="btn btn-xs btn-warm-o q-grade">挑等級</button>'
+                        + ' <button class="btn btn-xs q-gradeclr" title="清空">清除</button></div>');
+    }
+    if (num(r.lock_q) === 1 && (r.q_pat || '') !== '') return lockedCell('i-q', r.q_pat, r.q_char, ro);
+    return '<input class="i-q" value="' + esc(r.q_char || '') + '"' + ro + '>'
+         + (ro ? '' : '<button class="btn btn-xs btn-warm-o sym-open" style="margin-top:2px;"'
+                    + ' title="插入符號（Ø ± 幾何公差…）">Ø±</button>');
+}
 function itemRow(i, r, ro) {
     r = r || {};
     var dis = ro ? ' disabled' : '';
@@ -1157,14 +1204,12 @@ function itemRow(i, r, ro) {
     var lq = num(r.lock_q) === 1 && (r.q_pat || '') !== '';
     var toolTxt = r.tool_label || r.tool_no || '';
     return '<tr data-tt="' + num(r.tool_type_id) + '" data-tool="' + num(r.tool_id) + '"'
-        + ' data-tpl="' + num(r.tpl_id) + '" data-lc="' + (lc ? 1 : 0) + '" data-lq="' + (lq ? 1 : 0) + '">'
+        + ' data-tpl="' + num(r.tpl_id) + '" data-lc="' + (lc ? 1 : 0) + '" data-lq="' + (lq ? 1 : 0) + '"'
+        + ' data-ik="' + esc(r.input_kind || '') + '">'
         + dragCell(i, !!CUR.can_edit)
         + '<td>' + (lc ? lockedCell('i-ctrl', r.ctrl_pat, r.ctrl_point, ro)
                        : '<input class="i-ctrl" value="' + esc(r.ctrl_point || '') + '"' + ro + '>') + '</td>'
-        + '<td>' + (lq ? lockedCell('i-q', r.q_pat, r.q_char, ro)
-                       : '<input class="i-q" value="' + esc(r.q_char || '') + '"' + ro + '>'
-                         + (ro ? '' : '<button class="btn btn-xs btn-warm-o sym-open" style="margin-top:2px;"'
-                                    + ' title="插入符號（Ø ± 幾何公差…）">Ø±</button>')) + '</td>'
+        + '<td>' + qCharCell(r, ro) + '</td>'
         + '<td><input class="i-up" value="' + esc(r.up_limit || '') + '"' + ro + '></td>'
         + '<td><input class="i-lo" value="' + esc(r.lo_limit || '') + '"' + ro + '></td>'
         + '<td>' + ownerSel(r.owner_dept_id, ro) + '</td>'
@@ -1692,7 +1737,10 @@ function collectItems() {
     var out = [];
     $('#tblItems tbody tr').each(function () {
         var $t = $(this);
-        var lc = num($t.attr('data-lc')) === 1, lq = num($t.attr('data-lq')) === 1;
+        var ik = $t.attr('data-ik') || '';
+        // 齒輪等級是從對照表挑進來的完整字串（例「AGMA 11」），不走 {} 樣板那一套
+        var lc = num($t.attr('data-lc')) === 1;
+        var lq = num($t.attr('data-lq')) === 1 && ik !== 'gear_grade';
         var ctrlPat = $t.find('.i-ctrl-pat').val() || '', qPat = $t.find('.i-q-pat').val() || '';
         var ctrlSlots = $t.find('.i-ctrl-slot').map(function () { return $(this).val() || ''; }).get();
         var qSlots    = $t.find('.i-q-slot').map(function () { return $(this).val() || ''; }).get();
@@ -1706,6 +1754,7 @@ function collectItems() {
                    ctrl_pat: lc ? ctrlPat : '', q_pat: lq ? qPat : '',
                    ctrl_slots: JSON.stringify(ctrlSlots), q_slots: JSON.stringify(qSlots),
                    lock_ctrl: lc ? 1 : 0, lock_q: lq ? 1 : 0, tpl_id: num($t.attr('data-tpl')),
+                   input_kind: ik,
                    up_limit: $t.find('.i-up').val() || '', lo_limit: $t.find('.i-lo').val() || '',
                    owner_dept_id: num($t.find('.i-own').val()), method: $t.find('.i-mth').val() || '',
                    tool_type_id: num($t.attr('data-tt')),
@@ -1751,7 +1800,8 @@ function saveDoc(cb) {
             // 綁機台時畫面上沒有這個欄位，**就不要送**——送空字串會把既有的使用設備洗成空的
             // （ss_ver_save 是用 array_key_exists 判「有沒有送這個欄位」）
             if ($('#f_use_equip').length) p.use_equip = $('#f_use_equip').val() || '';
-            p.est_hours = $('#f_est_hours').val() || '';
+            // 同理：綁量具時畫面上沒有預計工時，沒送就不要動它
+            if ($('#f_est_hours').length) p.est_hours = $('#f_est_hours').val() || '';
             p.steps = JSON.stringify(collectSteps());
         } else {
             p.notice = $('#f_notice').val() || '';
@@ -2014,6 +2064,58 @@ $(document).on('click', '.tn-go', function () {
         TOOL_FOR.attr('data-tt', num($(this).data('tt')));
         TOOL_FOR.find('.i-tool').val($(this).data('lab') || $(this).data('no'));
     }
+    closeMask('maskPick');
+});
+
+/* ══════════════════ 精度等級：先選標準（ISO／DIN…）再點數字 ══════════════════
+   使用者 2026-09-23：「精度等級可以固定只能選取主檔管理內設定之齒輪等級嗎？
+   要跟選擇機台一樣先出現大選項（像是 ISO、DIN…標題），才進去點數字」。
+   等級清單**一律即時取自主檔管理的齒輪等級對照表**（dict_gear_quality_ref），
+   這裡不另外寫一份（鐵律4：那邊改了這裡才會跟著改）。 */
+var GRADE_FOR = null;
+$(document).on('click', '.q-grade', function () {
+    GRADE_FOR = $(this).closest('tr');
+    gradeStds();
+    $('#pickTitle').text('挑精度等級');
+    openMask('maskPick');
+});
+$(document).on('click', '.q-gradeclr', function () {
+    $(this).closest('tr').find('.i-q').val('');
+});
+function gradeStds() {
+    var g = (CUR.gear_grades || {}), def = g.default || {};
+    var h = '<div class="note-box">① 先選<b>標準</b>，再點等級數字。'
+          + '等級清單取自<b>主檔管理 →「類別字典設定」→ 齒輪等級</b>的對照表，'
+          + '要增減等級請到那裡改，這一頁會跟著變。'
+          + (def.std ? '<br>主檔設定的預設等級是 <b>' + esc(def.std) + ' ' + esc(def.grade) + '</b>。' : '')
+          + '</div><div class="tpick">';
+    $.each(g.stds || [], function (i, s) {
+        h += '<button class="btn btn-sm btn-warm-o gs-go" data-i="' + i + '">' + esc(s.std)
+           + ' <span class="muted-help">' + (s.grades || []).length + ' 級</span></button>';
+    });
+    h += '</div>';
+    if (!(g.stds || []).length) {
+        h += '<div class="muted-help" style="margin-top:6px;">齒輪等級對照表還沒有資料，'
+           + '請到主檔管理 →「類別字典設定」→ 齒輪等級 建立。</div>';
+    }
+    $('#pickBody').html(h);
+}
+$(document).on('click', '.gs-go', function () {
+    var g = (CUR.gear_grades || {}), def = g.default || {};
+    var s = (g.stds || [])[num($(this).data('i'))];
+    if (!s) return;
+    var h = '<div class="note-box">② 點<b>' + esc(s.std) + '</b> 的等級　'
+          + '<button class="btn btn-xs btn-warm-o" id="gsBack">← 換一個標準</button></div><div class="tpick">';
+    $.each(s.grades || [], function (i, v) {
+        var isDef = (String(def.std) === String(s.std) && String(def.grade) === String(v));
+        h += '<button class="btn btn-sm btn-warm-o gv-go" data-v="' + esc(s.std + ' ' + v) + '">'
+           + esc(v) + (isDef ? ' <span class="muted-help">預設</span>' : '') + '</button>';
+    });
+    $('#pickBody').html(h + '</div>');
+});
+$(document).on('click', '#gsBack', gradeStds);
+$(document).on('click', '.gv-go', function () {
+    if (GRADE_FOR) GRADE_FOR.find('.i-q').val($(this).data('v'));
     closeMask('maskPick');
 });
 
@@ -2536,9 +2638,13 @@ function setPaneList() {
        + 'padding:5px 7px;font-size:13px;line-height:1.7;">'
        + esc((res.freq_options || []).join('\n')) + '</textarea></div>';
 
-    h += '<div class="sec"><h5>型式的建議選項'
-       + '<span class="muted-help">一行一個；同一個料號＋製程＋機台＋客戶底下最多 '
-       + num(res.variant_max || 3) + ' 種型式</span></h5>'
+    h += '<div class="sec"><h5>型式'
+       + '<span class="muted-help">同一個料號（或機台型號／量具）＋製程＋機台＋客戶底下可以分幾種型式</span></h5>'
+       + '<div class="frm" style="margin-bottom:6px;"><label>型式上限</label><div class="wide">'
+       + '<input type="number" id="stVarMax" min="1" max="20" value="' + num(res.variant_max || 3) + '" '
+       + 'style="width:80px;"> 種'
+       + '<div class="muted-help">超過這個數量就不給再建（含「未分型式」那一種）。1~20。</div></div></div>'
+       + '<div class="muted-help" style="margin-bottom:3px;">建議選項（一行一個，仍然可以自己打）：</div>'
        + '<textarea id="stVariant" style="width:100%;min-height:90px;border:1px solid var(--line);border-radius:4px;'
        + 'padding:5px 7px;font-size:13px;line-height:1.7;">'
        + esc((res.variant_options || []).join('\n')) + '</textarea></div>';
@@ -2774,12 +2880,15 @@ function setPaneOwner() {
 /** 檢驗項目預設值：標準項目（全站）＋ 逐製程的專屬項目 */
 function setPaneTpl(pno) {
     api('tpl_get', { tpl_kind: pno ? 'proc' : 'std', process_no: pno }, function (res) {
-        TPLCTX = { owner_depts: res.owner_depts || [], methods: res.methods || [], tool_types: res.tool_types || [] };
+        TPLCTX = { owner_depts: res.owner_depts || [], methods: res.methods || [], tool_types: res.tool_types || [],
+                   input_kinds: res.input_kinds || { '': '自由文字' } };
         // 頻率下拉與符號面板：設定頁的表格也要用，所以先掛到 CUR 上（tplRow 會暫時把 CUR 換成 TPLCTX）
         CUR = CUR || {};
         CUR.freq_options = res.freq_options || CUR.freq_options || [];
         CUR.symbols      = res.symbols || CUR.symbols || [];
         CUR.tool_types   = res.tool_types || CUR.tool_types || [];
+        CUR.gear_grades  = res.gear_grades || CUR.gear_grades || {};
+        CUR.input_kinds  = TPLCTX.input_kinds;
         TPLCTX.freq_options = CUR.freq_options;
         TPLCTX.symbols      = CUR.symbols;
         var h = '<div class="note-box">'
@@ -2841,6 +2950,16 @@ function setPaneTpl(pno) {
     });
 }
 var TPLCTX = null;
+/** 品質特性的輸入方式（可選項由後端 ss_input_kinds() 給，前端不寫死一份） */
+function inputKindSel(val) {
+    var kinds = (TPLCTX && TPLCTX.input_kinds) || (CUR && CUR.input_kinds) || { '': '自由文字' };
+    var h = '<select class="i-ik" style="font-size:11px;height:22px;padding:0 2px;">';
+    $.each(kinds, function (k, lab) {
+        h += '<option value="' + esc(k) + '"' + (String(k) === String(val || '') ? ' selected' : '') + '>'
+           + esc(lab) + '</option>';
+    });
+    return h + '</select>';
+}
 function tplRow(i, r) {
     r = r || {};
     var save = CUR;
@@ -2859,7 +2978,10 @@ function tplRow(i, r) {
             + '<label class="tpl-lk"><input type="checkbox" class="i-lq"' + (lq ? ' checked' : '') + '> 鎖定</label>'
             + ' <button class="btn btn-xs btn-warm-o sym-open" title="插入符號（Ø ± 幾何公差…）">Ø±</button>'
             + ' <button class="btn btn-xs btn-warm-o tpl-slot" title="在游標處插入一個「可填空」">{ }</button>'
-            + '</div></td>'
+            + '</div>'
+            /* 輸入方式：選「齒輪精度等級」之後，文件上那一格就只能從主檔管理的對照表挑，
+               不再是自由文字（使用者 2026-09-23 要精度等級固定只能選取設定好的等級）。 */
+            + '<div style="margin-top:2px;">' + inputKindSel(r.input_kind) + '</div></td>'
         + '<td><input class="i-up" value="' + esc(r.up_limit || '') + '"></td>'
         + '<td><input class="i-lo" value="' + esc(r.lo_limit || '') + '"></td>'
         + '<td>' + own + '</td><td>' + mth + '</td>'
@@ -2945,6 +3067,7 @@ $(document).on('click', '#tplSave', function () {
                     tool_no: $t.find('.i-tool').val() || '', freq: fv,
                     lock_ctrl: $t.find('.i-lc').is(':checked') ? 1 : 0,
                     lock_q: $t.find('.i-lq').is(':checked') ? 1 : 0,
+                    input_kind: $t.find('.i-ik').val() || '',
                     note: $t.find('.i-note').val() || '' });
     });
     post('tpl_save', {
@@ -3002,6 +3125,7 @@ $('#setSave').on('click', function () {
         ntCollect();
         p.freq_options    = JSON.stringify(($('#stFreq').val() || '').split('\n'));
         p.variant_options = JSON.stringify(($('#stVariant').val() || '').split('\n'));
+        p.variant_max     = num($('#stVarMax').val()) || 3;
         p.notice_tpls     = JSON.stringify(NTROWS);
     }
     if (!Object.keys(p).length) { alert('「檢驗項目預設值」請用該分頁裡的「儲存這一組」。'); return; }

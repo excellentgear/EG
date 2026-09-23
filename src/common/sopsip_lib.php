@@ -299,6 +299,9 @@ function ss_ensure_schema(PDO $db): void
         // 帶 {} 可填空的原始樣板文字（ctrl_point／q_char 存的是填完之後的完整字串）
         ss_ensure_col($db, 'ss_item', 'ctrl_pat', "VARCHAR(200) NULL COMMENT '管理重點的可填空樣板，例 跨珠Ø{}'");
         ss_ensure_col($db, 'ss_item', 'q_pat', "VARCHAR(255) NULL COMMENT '品質特性的可填空樣板'");
+        // 品質特性的輸入方式：空＝自由文字，gear_grade＝只能從齒輪等級對照表挑（見 ss_input_kinds）
+        ss_ensure_col($db, 'ss_item', 'input_kind', "VARCHAR(16) NULL COMMENT '品質特性輸入方式'");
+        ss_ensure_col($db, 'ss_item_tpl', 'input_kind', "VARCHAR(16) NULL COMMENT '品質特性輸入方式'");
         // 同一個料號＋製程＋機台底下可以再分「型式」（有隆齒／無隆齒…），使用者 2026-09-23 指定最多三種
         ss_ensure_col($db, 'ss_doc', 'variant', "VARCHAR(60) NULL COMMENT '型式（同料號同製程同機台底下的分版，最多三種）'");
     } catch (Throwable $e) { /* 交給呼叫端失敗得明確一點 */ }
@@ -696,7 +699,11 @@ function ss_ver_full(PDO $db, int $verId): ?array
     /* 機台資料（機器編號 asset_text 就在裡面）：**綁機台的一律要算**，不能只算設備操作說明書——
        製造製程說明書與標準檢驗指導書現在也綁得了機台（ss_kind_scopes 四種全開），
        只看版面的話畫面上「機器編號」會是空白，看起來像綁定沒有成功（使用者 2026-09-22 回報）。 */
-    $meta = ($kind === 'equip' || (string)($d['scope'] ?? '') === 'machine') ? ss_equip_meta($db, $d) : null;
+    /* **綁量具（scope=tool）也一定要算**——使用者 2026-09-23 回報「綁定了量具但量具編號沒有顯示出來」，
+       根因就是這一行原本只認 equip 版面與 machine 範圍，製造製程說明書綁量具時 meta 是 null，
+       畫面上那一格就永遠空白（而且完全不報錯，看起來像綁定沒有成功）。 */
+    $sc   = (string)($d['scope'] ?? '');
+    $meta = ($kind === 'equip' || $sc === 'machine' || $sc === 'tool') ? ss_equip_meta($db, $d) : null;
     return [
         'doc'   => $d,
         'ver'   => $v,
@@ -939,8 +946,12 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
         $machineIds = array_values(array_unique(array_filter(array_map('intval', (array)$machineIds))));
     }
 
-    // 製程＝紙本上的「工程名稱」（同一件事，只留一欄）。存編號，名稱只是顯示用快取
-    $procNo = (int)($in['process_no'] ?? 0);
+    /* 製程＝紙本上的「工程名稱」（同一件事，只留一欄）。存編號，名稱只是顯示用快取。
+       **綁量具的文件不綁製程**（使用者 2026-09-23：「量具也不需要製程欄位」）——
+       量具的說明書講的是「這支量具怎麼用」，跟走到哪一關無關；
+       在這裡歸零是刻意的：只把畫面上的欄位藏起來，舊值會一直留著，
+       重複判定還會把它算進鍵裡，看起來就像「明明沒設製程卻說撞到」。 */
+    $procNo = $scope === 'tool' ? 0 : (int)($in['process_no'] ?? 0);
     $procNm = null;
     if ($procNo > 0) {
         $pr = ss_proc_row($db, $procNo);
@@ -1028,8 +1039,8 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
         // 型式上限（使用者指定最多三種）：含這一份在內算
         $vs = [ss_variant_norm($variant) => 1];
         foreach ($scan as $r) $vs[ss_variant_norm((string)$r['variant'])] = 1;
-        if (count($vs) > SS_VARIANT_MAX && empty($in['_dup_ok'])) {
-            throw new RuntimeException('同一個料號＋製程＋機台＋客戶底下最多只能有 ' . SS_VARIANT_MAX
+        if (count($vs) > ss_variant_max($db) && empty($in['_dup_ok'])) {
+            throw new RuntimeException('同一個料號＋製程＋機台＋客戶底下最多只能有 ' . ss_variant_max($db)
                 . ' 種型式，目前已經有：' . implode('、', array_map(
                     fn($v) => $v === '' ? '（未分型式）' : $v,
                     array_values(array_diff(array_keys($vs), [ss_variant_norm($variant)])))));
@@ -1166,13 +1177,13 @@ function ss_ver_clone(PDO $db, int $fromVerId, array $in, int $uid): int
         // 漏帶的話改版之後那幾欄會突然變成可以亂改、檢具也會退化成純文字
         $db->prepare("INSERT INTO ss_item (ver_id, seq, ctrl_point, q_char, up_limit, lo_limit, owner, owner_dept_id,
                           method, tool_type_id, tool_id, tool_no, freq, note, tpl_id, lock_ctrl, lock_q,
-                          ctrl_pat, q_pat)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                          ctrl_pat, q_pat, input_kind)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
            ->execute([$newId, (int)$i['seq'], $i['ctrl_point'], $i['q_char'], $i['up_limit'], $i['lo_limit'],
                       $i['owner'], $i['owner_dept_id'] ?? null, $i['method'], $i['tool_type_id'] ?? null,
                       $i['tool_id'] ?? null, $i['tool_no'], $i['freq'], $i['note'],
                       $i['tpl_id'] ?? null, (int)($i['lock_ctrl'] ?? 0), (int)($i['lock_q'] ?? 0),
-                      $i['ctrl_pat'] ?? null, $i['q_pat'] ?? null]);
+                      $i['ctrl_pat'] ?? null, $i['q_pat'] ?? null, $i['input_kind'] ?? null]);
     }
     // 段落附件與圖面：新版次要看得到同一批圖（ver_id 指到新版，舊版原本掛的那幾列不動）
     foreach (ss_file_rows($db, $docId, $fromVerId) as $fl) {
@@ -1326,14 +1337,15 @@ function ss_items_replace(PDO $db, int $verId, array $rows): void
         }
         $db->prepare("INSERT INTO ss_item (ver_id, seq, ctrl_point, q_char, up_limit, lo_limit, owner, owner_dept_id,
                           method, tool_type_id, tool_id, tool_no, freq, note, tpl_id, lock_ctrl, lock_q,
-                          ctrl_pat, q_pat)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                          ctrl_pat, q_pat, input_kind)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
            ->execute([$verId, $seq, $f('ctrl_point', $r), $f('q_char', $r), $f('up_limit', $r), $f('lo_limit', $r),
                       $owner ?: null, $deptId ?: null, $f('method', $r), $toolTt,
                       $toolId ?: null, $toolNo, $f('freq', $r), $f('note', $r),
                       (int)($r['tpl_id'] ?? 0) ?: null,
                       (int)($r['lock_ctrl'] ?? 0) === 1 ? 1 : 0, (int)($r['lock_q'] ?? 0) === 1 ? 1 : 0,
-                      $f('ctrl_pat', $r), $f('q_pat', $r)]);
+                      $f('ctrl_pat', $r), $f('q_pat', $r),
+                      isset(ss_input_kinds()[(string)($r['input_kind'] ?? '')]) ? ((string)$r['input_kind'] ?: null) : null]);
     }
 }
 
@@ -2155,8 +2167,20 @@ function ss_variant_norm(string $v): string
     return trim(preg_replace('/[\s\x{3000}]+/u', '', $v) ?? '');
 }
 
-/** 同一個對象＋製程底下最多幾種型式（使用者 2026-09-23 指定 3） */
-const SS_VARIANT_MAX = 3;
+/** 型式上限沒設定過時的預設值（使用者 2026-09-23 一開始指定 3，之後要求改成管理員可設定） */
+const SS_VARIANT_MAX_DEFAULT = 3;
+
+/**
+ * 同一個對象＋製程＋機台＋客戶底下最多幾種型式。
+ * **不可以寫死**（使用者 2026-09-23：「型式最多?種的種類上限要改成讓管理員可以設定」）——
+ * 現場哪天多出第四種型式，寫死的話就變成「系統擋著不給建」而且只能改程式。
+ * 1~20 之間；設定成 0 或超出範圍一律退回預設值。
+ */
+function ss_variant_max(PDO $db): int
+{
+    $v = (int)ss_setting_get($db, 'variant_max', 0);
+    return ($v >= 1 && $v <= 20) ? $v : SS_VARIANT_MAX_DEFAULT;
+}
 
 /* ────────────────── 擔當者部門（顯示文字可改） ────────────────── */
 
@@ -2447,6 +2471,59 @@ function ss_symbols(PDO $db): array
     return $out;
 }
 
+/**
+ * 齒輪精度等級（唯一來源＝主檔管理的「齒輪等級對照表」dict_gear_quality_ref）。
+ *
+ * 使用者 2026-09-23：「精度等級可以固定只能選取 master_data_management 內設定之齒輪等級嗎？
+ * 要跟選擇機台一樣先出現大選項（像是 ISO、DIN…標題），才進去點數字」。
+ *
+ * **絕對不可以在這裡另外寫一份等級清單**（鐵律4）——對照表在主檔管理那邊可以增修，
+ * 抄一份過來的話那邊改了這裡不會跟著改，而且完全不報錯。
+ *
+ * @return array [['std'=>'ISO','col'=>'iso_grade','grades'=>[1,2,…]], …] ＋ 預設值
+ */
+function ss_gear_grades(PDO $db): array
+{
+    $cols = ['ISO' => 'iso_grade', 'DIN' => 'din_grade', 'JIS' => 'jis_grade', 'AGMA' => 'agma_grade'];
+    $out = [];
+    try {
+        $rows = $db->query("SELECT iso_grade, din_grade, jis_grade, agma_grade
+                            FROM dict_gear_quality_ref ORDER BY sort_order, quality_ref_id")
+                   ->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { $rows = []; }
+    foreach ($cols as $std => $col) {
+        $g = [];
+        foreach ($rows as $r) {
+            $v = $r[$col];
+            if ($v === null || $v === '') continue;          // 該標準沒有對應等級就不列（JIS 前幾階是空的）
+            $v = (string)(int)$v;
+            if (!in_array($v, $g, true)) $g[] = $v;
+        }
+        if ($g) $out[] = ['std' => $std, 'grades' => $g];
+    }
+    // 主檔管理設的「未設定時套用的預設等級」，畫面上標出來讓人一眼看到常用的是哪一個
+    $def = ['std' => '', 'grade' => ''];
+    try {
+        $st = $db->prepare("SELECT setting_key, setting_value FROM system_settings
+                            WHERE setting_key IN ('gear_quality_default_std','gear_quality_default_grade')");
+        $st->execute();
+        foreach ($st->fetchAll(PDO::FETCH_KEY_PAIR) ?: [] as $k => $v) {
+            if ($k === 'gear_quality_default_std')   $def['std'] = trim((string)$v);
+            if ($k === 'gear_quality_default_grade') $def['grade'] = trim((string)$v);
+        }
+    } catch (Throwable $e) { /* 沒設定就留空 */ }
+    return ['stds' => $out, 'default' => $def];
+}
+
+/** 品質特性的輸入方式（唯一登記處；新增一種只改這裡） */
+function ss_input_kinds(): array
+{
+    return [
+        ''           => '自由文字',
+        'gear_grade' => '齒輪精度等級（只能從對照表挑）',
+    ];
+}
+
 /** 工程符號（與批圖編輯器 EG_SYMBOLS 同一份內容；改這裡兩邊一起改） */
 function ss_eng_symbols(): array
 {
@@ -2519,14 +2596,16 @@ function ss_tpl_replace(PDO $db, string $kind, int $processNo, array $rows, int 
         }
         $db->prepare("INSERT INTO ss_item_tpl (tpl_kind, process_no, seq, ctrl_point, q_char, up_limit, lo_limit,
                           owner_dept_id, owner, method, tool_type_id, tool_id, tool_no, freq, note,
-                          lock_ctrl, lock_q, is_active, modified_at, modified_by)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,NOW(),?)")
+                          lock_ctrl, lock_q, input_kind, is_active, modified_at, modified_by)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,NOW(),?)")
            ->execute([$kind, $kind === 'proc' ? $processNo : null, $seq,
                       $f('ctrl_point', $r), $f('q_char', $r), $f('up_limit', $r), $f('lo_limit', $r),
                       $deptId ?: null, $deptId > 0 ? ss_owner_label($db, $deptId) : $f('owner', $r),
                       $f('method', $r), $toolTt, $toolId ?: null, $toolNo,
                       $f('freq', $r), $f('note', $r),
                       (int)($r['lock_ctrl'] ?? 1) === 1 ? 1 : 0, (int)($r['lock_q'] ?? 1) === 1 ? 1 : 0,
+                      // 輸入方式一律過白名單（ss_input_kinds），前端亂送的代碼不寫進去
+                      isset(ss_input_kinds()[(string)($r['input_kind'] ?? '')]) ? ((string)$r['input_kind'] ?: null) : null,
                       $uid]);
     }
 }
@@ -2608,6 +2687,7 @@ function ss_default_items(PDO $db, int $processNo, ?bool $withStd = null): array
             'lock_ctrl'  => $lc, 'lock_q' => $lq,
             'ctrl_point' => $lc && ss_slot_has($ctrl) ? ss_slot_compose($ctrl, []) : $ctrl,
             'q_char'     => $lq && ss_slot_has($q)    ? ss_slot_compose($q, [])    : $q,
+            'input_kind' => (string)($r['input_kind'] ?? ''),
             'up_limit'   => (string)($r['up_limit'] ?? ''),   'lo_limit' => (string)($r['lo_limit'] ?? ''),
             'owner_dept_id' => (int)($r['owner_dept_id'] ?? 0), 'owner' => (string)($r['owner_label'] ?? ''),
             'method'     => (string)($r['method'] ?? ''),     'tool_type_id' => (int)($r['tool_type_id'] ?? 0),

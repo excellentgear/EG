@@ -156,7 +156,7 @@ case 'bind_probe': {
     $vs = [];
     foreach ($scan as $r) $vs[ss_variant_norm((string)($r['variant'] ?? ''))] = 1;
     $out['variants_used'] = array_values(array_keys($vs));
-    $out['variant_max']   = SS_VARIANT_MAX;
+    $out['variant_max']   = ss_variant_max($db);
     if ($scope === 'machine')   $out['machines'] = ss_machines_by_model($db, $in['machine_model'], $asof);
     if ($kind === 'sip') {
         $cfg = ss_proc_cfg($db, $in['process_no']);
@@ -237,13 +237,15 @@ case 'detail': {
     $full['methods']     = ss_method_options($db)['list'];
     $full['tool_types']  = ss_tool_types($db);
     $full['variant_options'] = ss_variant_options($db);
-    $full['variant_max']     = SS_VARIANT_MAX;
+    $full['variant_max']     = ss_variant_max($db);
     if ($kind === 'sip') {
         $pno = (int)($full['doc']['process_no'] ?? 0);
         $full['proc_cfg']  = ss_proc_cfg($db, $pno);
         $full['tpl_count'] = count(ss_tpl_rows($db, 'proc', $pno)) + count(ss_tpl_rows($db, 'std'));
         $full['freq_options'] = ss_freq_options($db);
         $full['symbols']      = ss_symbols($db);
+        $full['gear_grades']  = ss_gear_grades($db);
+        $full['input_kinds']  = ss_input_kinds();
         // 注意事項範本：綁這份文件客戶的排前面，沒綁客戶的通用範本接在後面
         $full['notice_tpls']  = ss_notice_tpls($db, (string)($full['doc']['customer_id'] ?? ''));
     }
@@ -589,6 +591,8 @@ case 'tpl_get': {
         'tool_types'  => ss_tool_types($db),
         'freq_options'=> ss_freq_options($db),
         'symbols'     => ss_symbols($db),
+        'gear_grades' => ss_gear_grades($db),
+        'input_kinds' => ss_input_kinds(),
     ]);
 }
 
@@ -671,7 +675,7 @@ case 'settings_get': {
     $out['freq_options']    = ss_freq_options($db);
     $out['notice_tpls']     = ss_notice_tpls($db, '');
     $out['variant_options'] = ss_variant_options($db);
-    $out['variant_max']     = SS_VARIANT_MAX;
+    $out['variant_max']     = ss_variant_max($db);
     $out['symbols']         = ss_symbols($db);
     jout(true, $out);
 }
@@ -790,6 +794,12 @@ case 'settings_save': {
             if (!in_array($s, $fo, true)) $fo[] = $s;
         }
         ss_setting_set($db, 'freq_options', $fo);
+    }
+    /* 型式上限（使用者 2026-09-23：要改成管理員可以設定，不可寫死） */
+    if (array_key_exists('variant_max', $_POST)) {
+        $vm = (int)$_POST['variant_max'];
+        if ($vm < 1 || $vm > 20) jerr('型式上限請填 1~20');
+        ss_setting_set($db, 'variant_max', $vm);
     }
     /* 型式的建議選項 */
     if (array_key_exists('variant_options', $_POST)) {

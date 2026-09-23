@@ -740,7 +740,7 @@ var SS_KIND_SCOPES = <?= json_encode($KIND_SCOPES, JSON_UNESCAPED_UNICODE) ?>;
 var SS_TODAY = '<?= date('Y-m-d') ?>';
 /* 型式的建議選項（管理員可在設定頁維護；只是建議，仍可自行輸入） */
 var SS_VARIANTS = <?= json_encode(ss_variant_options($db), JSON_UNESCAPED_UNICODE) ?>;
-var SS_VARIANT_MAX = <?= (int)SS_VARIANT_MAX ?>;
+var SS_VARIANT_MAX = <?= (int)ss_variant_max($db) ?>;
 </script>
 <script src="sop_sip_ui.js?v=<?= @filemtime(__DIR__ . '/sop_sip_ui.js') ?>"></script>
 <script>
