@@ -327,11 +327,15 @@ $openId = (int)($_GET['id'] ?? 0);
             <div class="fld" style="margin-top:6px;" id="attDesignWrap"><label>附件（更新圖面需附上）
                     <small style="font-weight:normal;color:#aaa;" id="attDesignHint"></small></label>
                 <div class="att-box" id="attDesignBox"></div><div class="err"></div></div>
-            <div class="fld" style="margin-top:6px;"><label>庫存舊料</label><div id="e_oldstock"></div><div class="err"></div></div>
-            <!-- 單一製程＝不必經過倉管確認庫存（使用者要求 2026-09-23）；勾了之後送簽自動略過倉管那一關 -->
+            <!-- 單一製程＝不必經過倉管確認庫存（使用者要求 2026-09-23）；勾了之後送簽自動略過倉管那一關，
+                 庫存舊料這一題也一併不必判定（同一件事：既然不需要確認庫存，庫存舊料能不能修改也就無所謂）。 -->
             <div class="fld" style="margin-top:6px;"><label>製程型態</label>
                 <label class="chk"><input type="checkbox" id="e_single_process"> 單一製程（不需確認庫存）
                     <small style="color:#8a6d45;">勾選後<b>不經過倉管組確認庫存</b>，送簽時自動略過那一關、也不會通知倉管。</small></label></div>
+            <div class="fld" style="margin-top:6px;"><label>庫存舊料</label><div id="e_oldstock"></div>
+                <div id="e_oldstock_na" style="display:none;color:#8a6d45;font-size:12px;">
+                    （單一製程不需確認庫存，此項不需確認）</div>
+                <div class="err"></div></div>
             <div class="fld" style="margin-top:6px;"><label>設計分析補充</label>
                 <textarea id="e_design_note" class="form-control" rows="2"></textarea></div>
             <div id="e_review_pick" style="margin-top:10px;display:none;border:1px solid #E8D5B5;
@@ -930,7 +934,12 @@ function fillEc(r){
 /** 依關卡決定「哪一段可以填、哪些按鈕出現」——不是這一關的人一律唯讀（後端也會再擋一次） */
 function applyStageUI(d, signers){
     var editHead = +d.can_edit === 1;
-    $('#e_apply_date,#e_part_kw,#e_reason').prop('disabled', !editHead);
+    // 日期是不是鎖住了：使用者要求「只有送出才鎖定日期」，且**連管理員都不能繞過**
+    // （後端 ec_date_locked 同一套規則再擋一次），所以這裡不能只看 editHead（那對管理員永遠是 true）
+    var dateLocked = +d.date_locked === 1;
+    $('#e_apply_date').prop('disabled', !editHead || dateLocked)
+        .attr('title', dateLocked ? '已送出，日期不可再修改' : '');
+    $('#e_part_kw,#e_reason').prop('disabled', !editHead);
     $('#e_applicant,#e_post').prop('disabled', !editHead);
     if (!editHead) $('#e_post').prop('disabled', true);
     $('input[name=ctype]').prop('disabled', !editHead);
@@ -947,8 +956,9 @@ function applyStageUI(d, signers){
     var canAP = may('APPROVE');
 
     $('#e_stock_qty,#e_wip_qty').prop('disabled', !canWH);
-    $('input[name=design],input[name=oldstock],.rv-need').prop('disabled', !canTD);
+    $('input[name=design],.rv-need').prop('disabled', !canTD);
     $('#e_design_note,#e_single_process').prop('disabled', !canTD);
+    syncSingleProcess(canTD);
     // 附件能不能改：申請內容那一段跟著表頭、設計分析那一段跟著技術課（後端 ec_attach_can_edit 同一套）
     ATT_EDIT = {apply: editHead, design: canTD};
     // 這一區一律顯示給「填得了技術課那一段」的人，不隨 radio 開開關關——
@@ -1440,6 +1450,13 @@ $('#e_post').on('change', syncDept);
 $('#e_apply_date').on('change', function(){
     // 日期一改，「當時的職務」就可能不一樣了（ai-rules/22）
     loadPeople($(this).val(), $('#e_applicant').val() || ME.uid, $('#e_post').val());
+    // 單號要跟著自動變（使用者要求 2026-09-23）：草稿階段只是預覽，不寫入任何東西，
+    // 真正佔號是在送出當下（ec_lock_doc_no_on_submit）才決定
+    if (CUR && CUR.ec_id) {
+        $.getJSON(API, {action:'doc_no_preview', id:CUR.ec_id, apply_date:$(this).val()}, function(r){
+            if (r.ok) $('#e_doc_no').val(r.doc_no || '');
+        });
+    }
 });
 $('input[name=verdict]').on('change', function(){
     $('#e_verdict_other_wrap').toggle($('input[name=verdict]:checked').val() === 'other');
@@ -1456,6 +1473,20 @@ $(document).on('change', 'input[name=ctype]', function(){
 });
 /** 目前這張單有沒有已經被勾為「需會審」的單位 */
 function hasNeeded(){ return (CUR_REVIEWS || []).some(function(x){ return x.needed; }); }
+/**
+ * 單一製程（不需確認庫存）連動（使用者要求 2026-09-23）：勾了之後「庫存舊料」這一題
+ * 也一併不需要判定——兩者是同一件事，既然不必經過倉管確認庫存，庫存舊料能不能修改
+ * 也就無所謂。反灰＋顯示「不需確認」，後端 ec_validate_stage() 同規則再擋一次。
+ * $canEdit 省略時沿用目前的 disabled 狀態（純粹重新整理「不需確認」提示文字用）。
+ */
+function syncSingleProcess(canEdit){
+    var sp = $('#e_single_process').is(':checked');
+    if (canEdit === undefined) canEdit = !$('#e_single_process').is(':disabled');
+    $('#e_oldstock_na').toggle(sp);
+    $('input[name=oldstock]').prop('disabled', !canEdit || sp);
+    if (sp) $('#e_oldstock').css('opacity', '.5'); else $('#e_oldstock').css('opacity', '1');
+}
+$(document).on('change', '#e_single_process', function(){ syncSingleProcess(); });
 /**
  * 會簽單位區塊的狀態（使用者回報「技術課人員開立單據但無法選擇需會簽單位」後改）：
  *   選「需修改圖面與會審」→ 可勾選
@@ -1604,7 +1635,8 @@ $('#btnEcSign').on('click', function(){
         fields.single_process  = $('#e_single_process').is(':checked') ? 1 : 0;
         fields.design_note     = $('#e_design_note').val();
         if (!fields.design_result) { alert('請先選擇設計分析結果'); return; }
-        if (!fields.old_stock)     { alert('請先選擇庫存舊料可否修改'); return; }
+        // 單一製程時庫存舊料不需要判定（後端 ec_validate_stage 同規則）
+        if (!fields.single_process && !fields.old_stock) { alert('請先選擇庫存舊料可否修改'); return; }
         // 選了「更新圖面需附上」的任一結果就一定要挑附件（後端同規則再擋一次）
         if (!CUR_ATT.some(function(a){ return a.slot === 'design'; })) {
             alert('「更新圖面需附上」選了結果就必須挑選附件，請在設計分析區塊挑一個料號附件');
@@ -1686,9 +1718,8 @@ function loadBulkSlots(){
     $.getJSON(API, {action:'sign_slots', id:CUR.ec_id, date:$('#bulkDate').val()}, function(r){
         if (!r.ok) return;
         BULK_SLOTS = r.slots || [];
-        var pend = 0, h = '', miss = [];
+        var pend = 0, h = '';
         BULK_SLOTS.forEach(function(s){
-            (s.missing || []).forEach(function(m){ miss.push('「' + s.label + '」' + m); });
             h += '<div class="att-row" style="align-items:flex-start;">'
               +  '<span class="att-cat" style="width:110px;">' + esc(s.label) + '</span>';
             if (s.signed) {
@@ -1704,10 +1735,14 @@ function loadBulkSlots(){
                          +  esc(c.label) + (c.blocked ? '　← 當天請假，不可選' : '') + '</option>';
                 });
                 var free = (s.candidates||[]).filter(function(c){ return !c.blocked; });
-                h += '<span class="att-file"><select class="form-control bulk-pick" data-k="'+esc(s.key)+'" '
-                  +  'data-eg-filter="輸入姓名或部門篩選…" style="height:28px;font-size:12px;">'+opts+'</select>'
+                // ★使用者要求 2026-09-23：這一關自己的選項（庫存數量、設計分析結果、核示、
+                //   需修改文件資料…）要能在這裡一次選完，不必先跳出去用「提早填寫」補一次。
+                h += '<span class="att-file">'
+                  +  '<select class="form-control bulk-pick" data-k="'+esc(s.key)+'" '
+                  +    'data-eg-filter="輸入姓名或部門篩選…" style="height:28px;font-size:12px;">'+opts+'</select>'
                   +  (free.length ? '' : '<div style="color:#DD5138;font-size:11px;margin-top:2px;">'
                        + '這一格當天沒有任何人可以簽（都請假了），請改簽章日期。</div>')
+                  +  renderBulkStageFields(s.key)
                   +  '</span>';
             }
             h += '</div>';
@@ -1719,33 +1754,118 @@ function loadBulkSlots(){
             var pick = (s.candidates||[]).filter(function(c){ return c.is_pool && !c.blocked; })[0];
             if (pick) $('.bulk-pick[data-k="'+s.key+'"]').val(String(pick.id));
         });
-        // 各關卡自己的必填欄位沒填完就簽不下去（後端同一套規則）——先講出來還缺什麼，
-        // 不要等按下去才報，也不要讓人一關一關試
-        if (miss.length) {
-            $('#bulkSlots').prepend('<div style="border:1px solid #DD5138;background:#FFF3F0;border-radius:6px;'
-                + 'padding:6px 10px;margin-bottom:8px;color:#8a2b1a;font-size:12px;">'
-                + '<b>下面這些欄位還沒填完，填完才簽得下去：</b><br>' + esc(miss.join('；')) + '</div>');
-        }
-        $('#bulkHint').text(miss.length ? ('還有 ' + pend + ' 格沒簽，但有必填欄位沒填完')
-                          : (pend ? ('還有 ' + pend + ' 格沒簽') : '這張單所有簽章格都已經簽過了'));
-        $('#btnBulkOk').prop('disabled', pend === 0 || miss.length > 0);
+        syncBulkFieldState();
+        $('#bulkHint').text(pend ? ('還有 ' + pend + ' 格沒簽') : '這張單所有簽章格都已經簽過了');
+        $('#btnBulkOk').prop('disabled', pend === 0);
     });
+}
+/**
+ * 一次代簽跳窗內、各關卡自己的選項（使用者要求 2026-09-23）。
+ * name 一律加上 `bulk_` 前綴＋關卡代碼，避免跟主表單同名的 radio 群組互相干擾
+ * （這頁沒有 `<form>` 包住欄位，同名 radio 在同一頁會被瀏覽器當成同一群組）。
+ * 預設值沿用畫面上主表單目前的內容（多半是先前用「提早填寫」存過的）。
+ */
+function renderBulkStageFields(key){
+    var d = CUR || {};
+    var rd = function(name, map, val){
+        var h = '';
+        $.each(map, function(k, label){
+            h += '<label class="chk" style="display:inline-block;margin-right:8px;">'
+              +  '<input type="radio" name="'+name+'" value="'+k+'"'+(val===k?' checked':'')+'> '+esc(label)+'</label>';
+        });
+        return h;
+    };
+    if (key === 'WH') {
+        return '<div class="bulk-fields" data-stage="WH" style="margin-top:4px;">'
+          + '<input type="text" class="form-control bulk-f" data-f="stock_qty" placeholder="庫存數量" '
+          +   'value="'+esc(d.stock_qty||'')+'" style="width:110px;display:inline-block;height:26px;font-size:12px;"> '
+          + '<input type="text" class="form-control bulk-f" data-f="wip_qty" placeholder="已完工待入庫數量" '
+          +   'value="'+esc(d.wip_qty||'')+'" style="width:150px;display:inline-block;height:26px;font-size:12px;">'
+          + '</div>';
+    }
+    if (key === 'TD') {
+        var sp = +d.single_process === 1;
+        return '<div class="bulk-fields" data-stage="TD" style="margin-top:4px;font-size:12px;">'
+          + '<div>更新圖面需附上：' + rd('bulk_design_TD', DICT.design_results, d.design_result||'') + '</div>'
+          + '<div style="margin-top:2px;">'
+          +   '<label class="chk"><input type="checkbox" class="bulk-f" data-f="single_process" id="bulk_sp"'
+          +     (sp?' checked':'')+'> 單一製程（不需確認庫存）</label></div>'
+          + '<div style="margin-top:2px;" id="bulk_oldstock_wrap">庫存舊料：'
+          +   rd('bulk_oldstock_TD', DICT.old_stock, d.old_stock||'') + '</div>'
+          + '</div>';
+    }
+    if (key === 'APPROVE') {
+        return '<div class="bulk-fields" data-stage="APPROVE" style="margin-top:4px;font-size:12px;">'
+          + '核示：' + rd('bulk_verdict', DICT.verdicts, d.verdict||'')
+          + '</div>';
+    }
+    if (key === 'CTRL') {
+        return '<div class="bulk-fields" data-stage="CTRL" style="margin-top:4px;font-size:12px;">'
+          + '需修改文件資料：<label class="chk" style="display:inline-block;">'
+          +   '<input type="checkbox" checked disabled> 圖面（固定勾選）</label> '
+          + '<label class="chk" style="display:inline-block;"><input type="checkbox" class="bulk-f" '
+          +   'data-f="ctrl_bom" id="bulk_ctrl_bom"'+(+d.ctrl_bom===1?' checked':'')+'> BOM</label> '
+          + '<label class="chk" style="display:inline-block;"><input type="checkbox" class="bulk-f" '
+          +   'data-f="ctrl_manual" id="bulk_ctrl_manual"'+(+d.ctrl_manual===1?' checked':'')+'> 操作手冊</label>'
+          + '</div>';
+    }
+    return '';
+}
+// 單一製程勾選時，這個跳窗裡的庫存舊料也要跟著反灰（跟主表單同一條規則）
+$(document).on('change', '#bulk_sp', function(){ syncBulkFieldState(); });
+function syncBulkFieldState(){
+    var sp = $('#bulk_sp').is(':checked');
+    $('#bulk_oldstock_wrap input[name=bulk_oldstock_TD]').prop('disabled', sp);
+    $('#bulk_oldstock_wrap').css('opacity', sp ? '.5' : '1');
+}
+/** 收集某關卡在跳窗裡填的欄位值（radio 用 name、其餘用 data-f） */
+function collectBulkFields(stageKey){
+    var $wrap = $('.bulk-fields[data-stage="'+stageKey+'"]');
+    if (!$wrap.length) return null;
+    var out = {};
+    $wrap.find('input.bulk-f').each(function(){
+        var f = $(this).data('f');
+        out[f] = (this.type === 'checkbox') ? (this.checked ? 1 : 0) : this.value;
+    });
+    if (stageKey === 'TD') out.design_result = $wrap.find('input[name=bulk_design_TD]:checked').val() || '';
+    if (stageKey === 'TD') out.old_stock = out.single_process ? '' : ($wrap.find('input[name=bulk_oldstock_TD]:checked').val() || '');
+    if (stageKey === 'APPROVE') out.verdict = $wrap.find('input[name=bulk_verdict]:checked').val() || '';
+    return out;
 }
 $('#btnBulkOk').on('click', function(){
     if (!CUR) return;
-    var picks = {}, miss = '';
+    var picks = {}, fields = {}, missPick = '';
     $('.bulk-pick').each(function(){
         var k = $(this).data('k'), v = this.value;
-        if (!v) { if (!miss) miss = k; return; }
+        if (!v) { if (!missPick) missPick = k; return; }
         picks[k] = v;
     });
-    if (miss) {
-        var lb = (BULK_SLOTS.filter(function(s){ return s.key === miss; })[0]||{}).label || miss;
+    if (missPick) {
+        var lb = (BULK_SLOTS.filter(function(s){ return s.key === missPick; })[0]||{}).label || missPick;
         alert('「' + lb + '」還沒有選簽章人員'); return;
     }
+    // 收集各關卡自己的欄位，順便用跟主表單一樣的規則先在前端擋一次（後端同規則再擋一次＝鐵律8）
+    var fieldMiss = [];
+    Object.keys(picks).forEach(function(k){
+        var f = collectBulkFields(k);
+        if (!f) return;
+        fields[k] = f;
+        var lb = (BULK_SLOTS.filter(function(s){ return s.key === k; })[0]||{}).label || k;
+        if (k === 'WH' && (!f.stock_qty || !String(f.stock_qty).trim() || !String(f.wip_qty||'').trim()))
+            fieldMiss.push('「' + lb + '」請填寫庫存數量與已完工待入庫數量');
+        if (k === 'TD') {
+            if (!f.design_result) fieldMiss.push('「' + lb + '」請選擇設計分析結果');
+            if (!f.single_process && !f.old_stock) fieldMiss.push('「' + lb + '」請選擇庫存舊料可否修改');
+        }
+        if (k === 'APPROVE' && !f.verdict) fieldMiss.push('「' + lb + '」請選擇核示結果');
+        if (k === 'CTRL' && !f.ctrl_bom && !f.ctrl_manual)
+            fieldMiss.push('「' + lb + '」需修改文件資料至少勾選 BOM 或操作手冊其中一項（圖面固定勾選）');
+    });
+    if (fieldMiss.length) { alert(fieldMiss.join('\n')); return; }
     if (!confirm('確定一次代簽 ' + Object.keys(picks).length + ' 個簽章格？\n'
                + '簽章時間會依簽核順序自動配（每格 +8~54 分鐘，同一天內簽完）。')) return;
-    post({action:'bulk_sign', ec_id:CUR.ec_id, date:$('#bulkDate').val(), picks:JSON.stringify(picks)}, function(r){
+    post({action:'bulk_sign', ec_id:CUR.ec_id, date:$('#bulkDate').val(),
+          picks:JSON.stringify(picks), fields:JSON.stringify(fields)}, function(r){
         if (!r.ok) return;
         alert('已代簽 ' + r.signed + ' 格'
             + (r.status === 'CLOSED' ? '，本單結案' : ('，目前在「' + (DICT.stages[r.status] || r.status) + '」')));
@@ -2172,15 +2292,10 @@ function printHtml(res){
         + '.rvname{width:22mm;text-align:center;font-size:9pt;background:#F2F2F2;font-weight:bold;}'
         + '.rvsig{width:34mm;height:9mm;text-align:center;padding:0.5mm;}'
         + '.op{display:block;margin-top:0.6mm;}'
-        + '.flow{font-size:7.5pt;line-height:1.3;letter-spacing:1px;'
-        /* 直書（紙本就是靠右直式標註）：vertical-rl＝文字由上往下、欄由右往左。
-           ★這裡絕對不能加 white-space:nowrap——垂直模式下它代表「整串不換欄」，
-             會把整列撐成一頁高（實測踩過）。用 max-height 限制欄高讓它自然折欄。 */
-        +   'writing-mode:vertical-rl;text-orientation:upright;'
-        +   'max-height:34mm;display:inline-block;}'
-        /* 流程註記改放最右側一整欄、由上往下（使用者要求 2026-09-23） */
-        + '.flowcell{text-align:center;vertical-align:top;padding:1mm 0.5mm;}'
-        + '.ft{font-size:8pt;margin-top:1.5mm;}'
+        /* 流程註記改放頁尾附註**上方**、橫排一整行（使用者要求 2026-09-23：
+           原本放在申請單位表格右下角，改成顯示在「※此表單底稿由技術課存查…」上方）。 */
+        + '.flowline{font-size:8pt;text-align:center;letter-spacing:0.5px;margin-top:1.5mm;}'
+        + '.ft{font-size:8pt;margin-top:0.8mm;}'
         /* 頁尾附註下方的簽核紀錄（可設定是否列印） */
         + 'table.siglog{margin-top:1.5mm;}'
         + 'table.siglog td{font-size:8pt;padding:0.4mm 1.2mm;}'
@@ -2206,10 +2321,10 @@ function printHtml(res){
         + '</table>'
 
         /* 變更方式 ＋ 申請人/單位主管簽章。使用者要求 2026-09-23：
-             ① 設變事由說明掛在「其他變更」底下（不再自成一列）
-             ② 流程註記移到**最右側一整欄、由上往下**（rowspan 兩列） */
-        + '<table><colgroup><col style="width:22mm"><col style="width:98mm"><col style="width:22mm">'
-        +   '<col style="width:34mm"><col style="width:18mm"></colgroup>'
+             設變事由說明掛在「其他變更」底下（不再自成一列）。
+             流程註記已改移到頁尾附註上方（見下方 .flowline），這裡不再佔一欄。 */
+        + '<table><colgroup><col style="width:22mm"><col style="width:116mm"><col style="width:22mm">'
+        +   '<col style="width:34mm"></colgroup>'
         + '<tr><td class="lb" rowspan="2">變更方式</td>'
         +     '<td class="opt optT" rowspan="2">'
         +       box(ct === 'customer_notify') + ' 客戶通知變更(包含新訂單版次變更)<br>'
@@ -2218,8 +2333,7 @@ function printHtml(res){
         +       '<div class="rsn"><div class="h">設變事由說明（僅其他變更須填寫）</div>'
         +         '<div class="b">' + esc(d.change_reason || '').replace(/\n/g, '<br>') + '</div></div>'
         +       attLines('apply') + '</td>'
-        +     '<td class="lbs">申請人</td><td class="sig">' + sg('applicant') + '</td>'
-        +     '<td class="flowcell" rowspan="2"><span class="flow">流程：申請單位↓倉管↓技術↓其他單位(僅需會審者)↓技術</span></td></tr>'
+        +     '<td class="lbs">申請人</td><td class="sig">' + sg('applicant') + '</td></tr>'
         + '<tr><td class="lbs">單位主管</td><td class="sig">' + sg('sup') + '</td></tr>'
         + '</table>'
 
@@ -2241,14 +2355,17 @@ function printHtml(res){
         +       attLines('design')
         +       (d.design_note ? '<br>' + esc(d.design_note) : '') + '</td>'
         +     '<td class="lbs">技術課</td><td class="sig">' + sg('td') + '</td></tr>'
-        + '<tr><td colspan="4" class="opt">庫存舊料：'
-        +       box(os === 'can') + ' 可修改　' + box(os === 'cannot') + ' 無法修改(轉業務確認客戶收貨或報廢)</td></tr>'
+        // 單一製程時庫存舊料不需要判定，直接印「不需確認」（使用者要求 2026-09-23）
+        + '<tr><td colspan="4" class="opt">庫存舊料：' + (+d.single_process === 1
+                ? '不需確認'
+                : (box(os === 'can') + ' 可修改　' + box(os === 'cannot') + ' 無法修改(轉業務確認客戶收貨或報廢)'))
+        +       '</td></tr>'
         + '</table>'
 
         // 核示
         + '<table><colgroup><col style="width:22mm"><col style="width:116mm"><col style="width:22mm"><col style="width:34mm"></colgroup>'
         + '<tr><td class="lb" rowspan="2">核示</td>'
-        +     '<td class="opt">' + box(vd === 'approve') + ' 准予變更　' + box(vd === 'hold') + ' 暫緩變更　'
+        +     '<td class="opt optT">' + box(vd === 'approve') + ' 准予變更　' + box(vd === 'hold') + ' 暫緩變更　'
         +       box(vd === 'other') + ' 其他　' + esc(d.verdict_other || '') + '</td>'
         +     '<td class="lbs" rowspan="2">核准</td><td class="sig" rowspan="2">' + sg('appr') + '</td></tr>'
         + '<tr><td class="opt" style="height:7mm;vertical-align:top;">補充意見：'
@@ -2272,6 +2389,7 @@ function printHtml(res){
         +     '<td class="lbs">管制員</td><td class="sig">' + sg('ctrl') + '</td></tr>'
         + '</table>'
 
+        + '<div class="flowline">流程：申請單位↓倉管↓技術↓其他單位(僅需會審者)↓技術</div>'
         + '<div class="ft">※此表單底稿由技術課存查　※文件編號以西元年月日加流水號，例如：20220101001</div>'
         /* 簽核紀錄（管理員可設定是否列印）。
            ★這一塊**絕對不可以出現「管理員○○○代簽」字樣**（使用者明確要求）——

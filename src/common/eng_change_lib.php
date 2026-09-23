@@ -257,6 +257,14 @@ function ec_ensure_schema(PDO $db): void
     // 一開始誤宣告成 INT，那樣會把 'Z2001A' 轉成 0 把客戶編號存丟；本表建立後才發現，故補一道 MODIFY。
     try { $db->exec("ALTER TABLE eng_change MODIFY customer_id VARCHAR(20) NULL COMMENT '客戶編號＝customer_list.customer_id（字串）'"); } catch (Throwable $e) {}
 
+    // ★使用者要求 2026-09-23：草稿階段的號碼只是「預覽」，兩張草稿同一天可能預覽到同一個
+    //   號碼是正常的（真正搶號在送出當下由 ec_lock_doc_no_on_submit() 決勝負）。doc_no
+    //   原本掛了 UNIQUE KEY（給舊版「草稿也算佔號」的邏輯用），改了 ec_next_doc_no() 之後
+    //   第二張草稿一建立就會被這個唯一索引擋下（1062 撞號，實測踩到）——改成一般索引，
+    //   保留查詢效能，唯一性交給應用層在送出當下自己保證。
+    try { $db->exec("ALTER TABLE eng_change DROP INDEX uk_doc_no"); } catch (Throwable $e) {}
+    try { $db->exec("ALTER TABLE eng_change ADD INDEX idx_doc_no (doc_no)"); } catch (Throwable $e) {}
+
     // 各關卡簽章欄位（誰簽的、什麼時候簽的）。簽核事實同時寫 approval_record（ai-rules/23），
     // 這裡存一份是為了列印時直接取得該格要蓋誰的章、不必每次回頭掃簽核紀錄。
     foreach (['applicant', 'sup', 'wh', 'td', 'appr', 'ctrl'] as $k) {
@@ -1368,7 +1376,10 @@ function ec_validate_stage(array $r, string $stage, ?PDO $db = null, int $ecId =
     } elseif ($stage === 'TD') {
         if (!array_key_exists((string)($r['design_result'] ?? ''), EC_DESIGN_RESULTS))
             $e['design_result'] = '請選擇設計分析結果';
-        if (!array_key_exists((string)($r['old_stock'] ?? ''), EC_OLD_STOCK))
+        // 單一製程（不需確認庫存）連動：這種情況下不必經過倉管，庫存舊料的可否修改也一併不必判定
+        // （使用者要求 2026-09-23：兩者是同一件事，勾了單一製程庫存舊料就跟著反灰不必填）
+        if ((int)($r['single_process'] ?? 0) !== 1
+            && !array_key_exists((string)($r['old_stock'] ?? ''), EC_OLD_STOCK))
             $e['old_stock'] = '請選擇庫存舊料可否修改';
         // 使用者要求 2026-09-23：「更新圖面需附上」選了任一結果，就一定要挑附件
         if ($db && $ecId > 0 && array_key_exists((string)($r['design_result'] ?? ''), EC_DESIGN_RESULTS)
@@ -1671,7 +1682,8 @@ function ec_check_sign_at(PDO $db, array $row, string $at): string
  *   **本人自己簽的格子**（proxy_name 空）才是真正不能動的錨點——那是實際發生過的事，
  *   代簽日期不可以比它更早（見下方 $immutableAfter 那道擋）。
  */
-function ec_bulk_proxy_sign(PDO $db, int $ecId, array $picks, string $date, int $uid, string $uname): array
+function ec_bulk_proxy_sign(PDO $db, int $ecId, array $picks, string $date, int $uid, string $uname,
+                            array $fields = []): array
 {
     ec_ensure_schema($db);
     $row = ec_row($db, $ecId);
@@ -1679,6 +1691,16 @@ function ec_bulk_proxy_sign(PDO $db, int $ecId, array $picks, string $date, int 
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) throw new Exception('請選擇簽章日期');
     if ($date < (string)$row['apply_date']) throw new Exception('簽章日期不可早於申請單日期');
     if ($date > ec_db_now($db)['d']) throw new Exception('簽章日期不可晚於今天');
+
+    // ★單一製程要不要略過倉管，ec_sign_slots() 是看「目前 DB 裡」的 single_process 決定的——
+    //   如果這次代簽正是要**順便勾選**單一製程（技術課欄位跟簽核一次做完），這個值這時候
+    //   還沒寫進去，倉管那一格就會被誤判成還要簽（實測踩到）。先把這個值寫進去，
+    //   下面組簽核清單時才看得到正確結果。
+    if (isset($fields['TD']['single_process'])
+        && (int)($row['single_process'] ?? 0) !== ((int)$fields['TD']['single_process'] ? 1 : 0)) {
+        ec_save_stage_fields($db, $ecId, 'TD', ['single_process' => (int)$fields['TD']['single_process']], $uid);
+        $row = ec_row($db, $ecId);
+    }
 
     $slots = ec_sign_slots($db, $row);
     $todo  = [];              // ['slot'=>,'pick'=>,'cand'=>,'mode'=>'sign'|'reflow']
@@ -1714,6 +1736,20 @@ function ec_bulk_proxy_sign(PDO $db, int $ecId, array $picks, string $date, int 
         if (!$ok) throw new Exception('「' . $s['label'] . '」選的人不在可簽核名單內');
     }
     if (!$todo) return ['signed' => 0, 'status' => (string)$row['status'], 'message' => '這張單所有簽章格都已經簽過了'];
+
+    // ★使用者要求 2026-09-23：「一次代簽全部」原本要一格一格另外去補（提早填寫）才填得到的
+    //   關卡欄位（庫存數量、設計分析結果、核示、需修改文件資料…），這裡也要能一次填完。
+    //   跟一格一格簽是同一套白名單（ec_stage_editable_fields），直打 API 也繞不過去＝鐵律8。
+    foreach ($todo as $t) {
+        if ($t['mode'] !== 'sign' || $t['slot']['kind'] !== 'stage') continue;
+        $stKey = (string)$t['slot']['key'];
+        if (!isset($fields[$stKey]) || !is_array($fields[$stKey])) continue;
+        $allow = ec_stage_editable_fields($stKey);
+        $f = [];
+        foreach ($allow as $k) if (array_key_exists($k, $fields[$stKey])) $f[$k] = $fields[$stKey][$k];
+        if ($f) ec_save_stage_fields($db, $ecId, $stKey, $f, $uid);
+    }
+    $row = ec_row($db, $ecId);   // 欄位可能剛被上面那段改過，重新讀一次才驗得到最新內容
 
     // ★選的日期不可以早於「本人自己簽下去、真正動不了」的那個時間——例如申請人是今天
     //   正常自己送出的，代簽卻選昨天，會排出「單位主管簽核時間早於申請人送出時間」這種

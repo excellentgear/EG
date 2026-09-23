@@ -117,6 +117,8 @@ function ec_decorate(PDO $db, array $r, array $P, int $uid): array
     $r['stage_label']  = $stage !== '' ? (EC_STAGES[$stage]['label'] ?? $stage) : '';
     $r['status_label'] = ec_status_label($r);
     $r['can_edit']     = ec_can_edit_row($r, $P, $uid) ? 1 : 0;
+    // 日期是不是鎖住了（送出後即使是管理員也不給改，見 ec_date_locked 說明）
+    $r['date_locked']  = ec_date_locked($r) ? 1 : 0;
     $r['can_delete']   = ec_can_delete_row($r, $P, $uid) ? 1 : 0;
     $r['can_sign']     = ($stage !== '' && $stage !== 'REVIEW'
                           && ec_can_sign_stage($db, $r, $stage, $uid, (bool)$P['canAdmin'])) ? 1 : 0;
@@ -301,6 +303,23 @@ try {
         jout(['ec_id' => $ecId, 'doc_no' => (string)$r['doc_no']]);
     }
 
+    /**
+     * 單號預覽（使用者要求 2026-09-23：日期一改，單號要跟著自動變）。
+     * 純讀取、不寫入任何東西——**草稿階段的號碼只是預覽**，真正佔號在送出當下
+     * 才由 ec_lock_doc_no_on_submit() 決定（見 ec_next_doc_no 的說明）。
+     * 日期已經鎖住（送出後）時直接回目前的正式編號，不重算。
+     */
+    if ($action === 'doc_no_preview') {
+        $ecId = (int)($_GET['id'] ?? 0);
+        $r = ec_row($db, $ecId);
+        if (!$r) jerr('查無此申請單', 404);
+        if (!ec_can_see($db, $r, $P, $uid)) jerr('沒有這張申請單的檢視權限', 403);
+        if (ec_date_locked($r)) jout(['doc_no' => (string)$r['doc_no'], 'locked' => 1]);
+        $date = trim((string)($_GET['apply_date'] ?? ''));
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) $date = (string)$r['apply_date'];
+        jout(['doc_no' => ec_next_doc_no($db, $date, $ecId), 'locked' => 0]);
+    }
+
     if ($action === 'save') {
         $ecId = (int)($_POST['ec_id'] ?? 0);
         $r = ec_row($db, $ecId);
@@ -423,8 +442,12 @@ try {
         if (!$P['canAdmin']) jerr('只有管理員可以代簽', 403);
         $ecId  = (int)($_POST['ec_id'] ?? 0);
         $picks = json_decode((string)($_POST['picks'] ?? '{}'), true);
+        // 各關卡自己的選項（庫存數量、設計分析結果、核示、需修改文件資料…）也可以在這裡一次填完
+        // （使用者要求 2026-09-23），格式 {stage_key: {欄位:值}}；白名單在 lib 內再擋一次＝鐵律8
+        $fields = json_decode((string)($_POST['fields'] ?? '{}'), true);
         jout(ec_bulk_proxy_sign($db, $ecId, is_array($picks) ? $picks : [],
-                                trim((string)($_POST['date'] ?? '')), $uid, $uname));
+                                trim((string)($_POST['date'] ?? '')), $uid, $uname,
+                                is_array($fields) ? $fields : []));
     }
 
     if ($action === 'fix_sign') {
