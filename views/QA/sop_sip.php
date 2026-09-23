@@ -236,6 +236,13 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
         .tpick { display:flex; flex-wrap:wrap; gap:6px; }
         .tpick button { font-size:12.5px; }
         .tpick .on { background:var(--amber-d); color:#fff; border-color:var(--amber-d); }
+        /* 已停用（或表單日期當時就已停用）的量具：看得到但點不下去，不是安靜地消失 */
+        .tpick button.tn-off[disabled] { opacity:.55; }
+        /* 鎖定欄位：固定文字直接印出來，只有 {} 的位置給輸入格（使用者 2026-09-23） */
+        .lk-row { display:flex; flex-wrap:wrap; align-items:center; gap:2px; }
+        .lk-fix { font-size:12.5px; color:var(--ink); line-height:22px; white-space:pre-wrap; }
+        .lk-slot { min-width:48px; max-width:110px; flex:0 1 auto; }
+        .lk-row .btn { padding:0 5px; line-height:18px; font-size:11px; }
         /* 段落附件放的不是圖片時（Word／Excel／PDF）不要擺一個破圖 */
         .secfile .nofile { display:block; padding:14px 0; color:#9A8A7A; text-decoration:none; font-size:11.5px; }
         .secfile .nofile:hover { color:var(--amber-d); }
@@ -380,6 +387,16 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
                 <input type="text" id="nCus" data-eg-hint="打客戶編號或簡稱">
                 <input type="hidden" id="nCusId">
                 <div class="muted-help" id="nCusHint">綁了料號就由料號主檔自動帶入，不用也不可以自己打。</div>
+            </div>
+
+            <!-- 型式（使用者 2026-09-23）：同一個料號＋製程＋機台＋客戶底下可以再分最多三種型式。
+                 它是重複判定的一部分——不填＝「未分型式」，那本身也算一種。 -->
+            <label>型式</label>
+            <div class="wide">
+                <input type="text" id="nVariant" list="nVariantList" data-eg-hint="例如 有隆齒／上下料，可留空" style="max-width:220px;">
+                <datalist id="nVariantList"></datalist>
+                <div class="muted-help">同一個料號＋製程＋機台＋客戶底下，只要型式不同就可以各有一份
+                    （例如同一台機器的<b>上下料／架機／偏擺確認</b>，或<b>有隆齒／無隆齒</b>），最多三種。</div>
             </div>
 
             <label>文件名稱 *</label>
@@ -680,6 +697,9 @@ var SS_SLOTS_D = <?= json_encode(ss_slots_display(), JSON_UNESCAPED_UNICODE) ?>;
 var SS_STATUSES = <?= json_encode($STATUSES, JSON_UNESCAPED_UNICODE) ?>;
 var SS_KIND_SCOPES = <?= json_encode($KIND_SCOPES, JSON_UNESCAPED_UNICODE) ?>;
 var SS_TODAY = '<?= date('Y-m-d') ?>';
+/* 型式的建議選項（管理員可在設定頁維護；只是建議，仍可自行輸入） */
+var SS_VARIANTS = <?= json_encode(ss_variant_options($db), JSON_UNESCAPED_UNICODE) ?>;
+var SS_VARIANT_MAX = <?= (int)SS_VARIANT_MAX ?>;
 </script>
 <script src="sop_sip_ui.js?v=<?= @filemtime(__DIR__ . '/sop_sip_ui.js') ?>"></script>
 <script>

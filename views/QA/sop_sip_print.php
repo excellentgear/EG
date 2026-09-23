@@ -190,6 +190,8 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
     .lim { display:flex; }
     .lim .k { width:9mm; flex:0 0 9mm; color:#444; }
     .lim .v { flex:1; }
+    /* 品質特性的文字（跨珠Ø7.3152 這種）印在上下限上方，比照紙本 */
+    .qc { font-weight:bold; margin-bottom:0.4mm; }
 
     /* 圖章一律不縮小（ai-rules/18）；列印新視窗拿不到 eg_stamp.js 注入的 CSS，樣式要自己寫齊 */
     .sg { height:24mm; text-align:center; vertical-align:middle; }
@@ -341,11 +343,16 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
                     <tr>
                         <td><?= h($it['ctrl_point']) ?></td>
                         <td>
+                            <?php
+                                /* 品質特性與上下限**兩個都要印**（使用者 2026-09-23 回報）。
+                                   原本只要有上下限就整個不印 q_char，於是設定好的「跨珠Ø7.3152」
+                                   在紙本上完全看不到——而那正是這一列到底在量什麼的唯一說明。 */
+                                $qc = trim((string)$it['q_char']);
+                            ?>
+                            <?php if ($qc !== ''): ?><div class="qc"><?= h($qc) ?></div><?php endif; ?>
                             <?php if ($hasLim): ?>
                                 <div class="lim ul"><span class="k">上限</span><span class="v"><?= h($up) ?></span></div>
                                 <div class="lim"><span class="k">下限</span><span class="v"><?= h($lo) ?></span></div>
-                            <?php else: ?>
-                                <?= h($it['q_char']) ?>
                             <?php endif; ?>
                         </td>
                         <td class="mid"><?= h($it['owner_label'] ?? $it['owner']) ?></td>

@@ -287,7 +287,8 @@ function ssPick(cfg) {
         + '<div class="sspk-sel"></div>'
         + '<input type="text" class="sspk-kw" data-eg-hint="打分類、型號、名稱或編號直接搜尋" style="margin-bottom:6px;">'
         + '<div class="sspk-pane"><span class="muted-help">載入中…</span></div></div>');
-    api('equip_pick', { mode: cfg.mode, kw: '' }, function (res) {
+    // asof＝表單日期：停用的機台與量具在「那一天還沒停用」時照樣要挑得到（補舊資料用）
+    api('equip_pick', { mode: cfg.mode, kw: '', asof: cfg.asof || $('#nDate').val() || '' }, function (res) {
         /* **回來的時候要先確認這個挑選器還是「現在這一個」**：切換適用範圍會重建挑選器，
            前一次的請求晚回來就會把上一個模式的卡片畫進去，畫面上就變成「內容跟選的不一樣」
            （使用者 2026-09-22 回報改綁定對象的內容不正確）。 */
@@ -413,14 +414,28 @@ $('#btnNew').on('click', function () {
     $('#nProc').val(''); $('#nProcNo').val('');
     $('#nCus').val(''); $('#nCusId').val('');
     $('#nTitle').val(''); $('#nVer').val('01');
+    $('#nVariant').val(''); fillVariantList();
     $('#nDate').val(SS_TODAY); $('#nNote').val('初訂');
     $('#nApplyTpl').prop('checked', true);
     $('#nMachines').html('先選機台型號。').addClass('muted-help');
     syncScope();
     openMask('maskNew');
 });
+/* 型式改了要重問一次重複——它是判定鍵的一部分，不重問就會「畫面說重複、其實不重複」 */
+$(document).on('input', '#nVariant', probe);
+/* 表單日期改了也要重問：停用的機台與量具是以這一天判在不在用的 */
+$(document).on('change', '#nDate', function () {
+    var v = $('#nModelVal').val();
+    if (v) loadModelMachines(v);      // 停用機台的清單會跟著變
+    probe();
+});
 
 /** 版面換了就重算「這個版面可以用哪些適用範圍」，並把分頁（SOP／SIP）標出來 */
+/** 新增跳窗的型式建議清單（datalist），開啟跳窗時填一次 */
+function fillVariantList() {
+    var opts = window.SS_VARIANTS || [];
+    $('#nVariantList').html($.map(opts, function (s) { return '<option value="' + esc(s) + '">'; }).join(''));
+}
 function syncScope() {
     var kind = $('#nKind').val(), h = '';
     // 後備清單要跟後端 ss_kind_scopes() 一樣是四種全給，寫成別的內容就等於前端偷偷多了一套規則
@@ -472,15 +487,18 @@ $('#nScope').on('change', function () {
 
 /** 選了型號就把該型號在用的機台全部帶進來（使用者拍板），再逐台勾掉不適用的 */
 function loadModelMachines(model) {
-    api('machines_by_model', { model: model }, function (res) {
+    // 帶表單日期：那一天還沒停用的機台照樣要列得出來（補舊 SOP 用，使用者 2026-09-23）
+    api('machines_by_model', { model: model, asof: $('#nDate').val() || '' }, function (res) {
         NEW.machines = res.rows || [];
         var h = '';
         $.each(NEW.machines, function (i, m) {
             h += '<label><input type="checkbox" class="nmchk" value="' + num(m.machine_id) + '" checked> '
-               + '<span class="mno">' + esc(m.asset_no || '(未編號)') + '</span> ' + esc(m.field_no || '') + '</label>';
+               + '<span class="mno">' + esc(m.asset_no || '(未編號)') + '</span> ' + esc(m.field_no || '')
+               + (num(m.off) === 1 ? ' <span class="muted-help">（已停用 ' + esc(dispDate(m.off_date))
+                    + '，表單日期在停用之前才列出來）</span>' : '') + '</label>';
         });
         $('#nMachines').removeClass('muted-help')
-            .html(h || '<span class="muted-help">這個型號目前沒有在用的機台。</span>');
+            .html(h || '<span class="muted-help">這個型號在表單日期當時沒有在用的機台。</span>');
         probe();
     });
 }
@@ -533,18 +551,29 @@ function probe() {
     probeTimer = setTimeout(function () {
         var kind = $('#nKind').val(), s = $('#nScope').val();
         if (!kind || !s) return;
+        // 重複判定要比機台集合、客戶與型式，所以這三樣也要一起送（與存檔時送的完全一樣）
+        var mids = [];
+        if (s === 'part') mids = (NEW.partMachines || []).slice();
+        else $('.nmchk:checked').each(function () { mids.push(num($(this).val())); });
         var p = {
             kind: kind, scope: s,
             machine_model: $('#nModelVal').val() || '',
             part_d_id: num($('#nPartId').val()),
             tool_id: num($('#nToolId').val()),
-            process_no: num($('#nProcNo').val())
+            process_no: num($('#nProcNo').val()),
+            machine_ids: JSON.stringify(mids),
+            customer_id: s === 'part' ? '' : ($('#nCusId').val() || ''),
+            variant: $('#nVariant').val() || '',
+            asof: $('#nDate').val() || ''
         };
         if (s === 'machine' && !p.machine_model) { $('#nDup').html(''); return; }
         if (s === 'tool' && !p.tool_id) { $('#nDup').html(''); return; }
         if (s === 'part' && !p.part_d_id) { $('#nDup').html(''); return; }
         api('bind_probe', p, function (res) {
             NEW.dups = res.dups || [];
+            NEW.siblings = res.siblings || [];
+            NEW.variantsUsed = res.variants_used || [];
+            NEW.variantMax = num(res.variant_max) || 3;
             if (!NEW.titleTouched && res.title) $('#nTitle').val(res.title);
             if (res.customer) {
                 $('#nCus').val(res.customer.name || '');
@@ -563,18 +592,40 @@ function probe() {
     }, 200);
 }
 
-/** 重複一律擋下（使用者要求不可有兩份一樣的），並直接給連結去更新既有那一份 */
+/**
+ * 重複判定的提示（使用者 2026-09-23 重新定調）：
+ * **料號（或機台型號／量具）＋製程＋機台明細＋客戶＋型式，五項全部相同才算重複。**
+ * 只有「真正五項都一樣」的才擋下；其餘同對象的文件列在下面當提醒，
+ * 並標出是哪裡不一樣（機台／客戶／型式），不然使用者只看到「有一份一樣的」卻找不到差在哪。
+ */
 function renderDup() {
-    if (!NEW.dups || !NEW.dups.length) { $('#nDup').html(''); return; }
-    var h = '<div class="dup-box"><div class="t">這個對象＋這個製程已經有文件了，不可以再建一份</div>';
-    $.each(NEW.dups, function (i, d) {
-        h += '<div class="row"><b>' + esc(d.title) + '</b>　版次 ' + esc(d.ver_no || '')
-           + '　' + esc(d.status_label || '') + '　<span class="muted-help">'
-           + esc(d.created_by_name || '') + ' 建立於 ' + dispDate(d.created_at) + '</span>　'
-           + '<button class="btn btn-xs btn-warm dup-go" data-ver="' + num(d.ver_id) + '">開啟並更新這一份</button></div>';
-    });
-    h += '<div class="muted-help" style="margin-top:5px;">'
-       + '要建立不同製程的文件，請在上面的「製程」挑另一個製程。</div></div>';
+    var dups = NEW.dups || [], sib = NEW.siblings || [];
+    if (!dups.length && !sib.length) { $('#nDup').html(''); return; }
+    var h = '';
+    if (dups.length) {
+        h += '<div class="dup-box"><div class="t">已經有一份「料號／機台型號、製程、機台、客戶、型式」完全相同的文件，不可以再建一份</div>';
+        $.each(dups, function (i, d) {
+            h += '<div class="row"><b>' + esc(d.title) + '</b>　版次 ' + esc(d.ver_no || '')
+               + '　' + esc(d.status_label || '') + '　<span class="muted-help">'
+               + esc(d.created_by_name || '') + ' 建立於 ' + dispDate(d.created_at) + '</span>　'
+               + '<button class="btn btn-xs btn-warm dup-go" data-ver="' + num(d.ver_id) + '">開啟並更新這一份</button></div>';
+        });
+        h += '<div class="muted-help" style="margin-top:5px;">'
+           + '如果這其實是<b>不同的作業內容</b>（例如同一台機器的上下料／架機／偏擺確認），'
+           + '請在下面的「型式」填上分別，就可以各建一份。</div></div>';
+    }
+    if (sib.length) {
+        h += '<div class="note-box" style="margin-top:6px;"><b>同一個對象底下已經有這幾份</b>（不算重複，只是讓你確認沒有重覆做）：';
+        $.each(sib, function (i, d) {
+            h += '<div style="margin-top:3px;">・' + esc(d.title)
+               + (d.variant ? '　型式：' + esc(d.variant) : '　<span class="muted-help">未分型式</span>')
+               + (d.diff_why ? '　<span class="muted-help">（' + esc(d.diff_why) + '）</span>' : '')
+               + '　<button class="btn btn-xs btn-warm-o dup-go" data-ver="' + num(d.ver_id) + '">開啟</button></div>';
+        });
+        var used = (NEW.variantsUsed || []).length;
+        h += '<div class="muted-help" style="margin-top:4px;">已經用掉 ' + used + ' 種型式，'
+           + '同一個對象＋製程＋機台＋客戶底下最多 ' + num(NEW.variantMax || 3) + ' 種。</div></div>';
+    }
     $('#nDup').html(h);
 }
 $(document).on('click', '.dup-go', function () {
@@ -593,7 +644,8 @@ $('#nSave').on('click', function () {
     if ($('#nProc').val().trim() && !num($('#nProcNo').val())) err.push('製程（打了字但沒有從清單挑）');
     if (err.length) { $('#nErr').text('還沒填：' + err.join('、')); return; }
     if (NEW.dups && NEW.dups.length) {
-        $('#nErr').text('已經有一份同樣的文件了，請直接更新那一份（或換一個製程）。');
+        $('#nErr').text('已經有一份完全相同的文件了（料號／機台、製程、機台明細、客戶、型式都一樣）。'
+                      + '請直接更新那一份，或在「型式」填上分別（例如 上下料／架機／偏擺確認）。');
         return;
     }
     $('#nErr').text('');
@@ -615,6 +667,7 @@ $('#nSave').on('click', function () {
         part_d_id: s === 'part' ? num($('#nPartId').val()) : 0,
         process_no: num($('#nProcNo').val()),
         customer_id: s === 'part' ? '' : ($('#nCusId').val() || ''),
+        variant: $('#nVariant').val() || '',
         title: $('#nTitle').val(),
         ver_no: $('#nVer').val(), form_date: $('#nDate').val(), rev_note: $('#nNote').val(),
         apply_default: $('#nApplyTpl').is(':checked') ? 1 : 0
@@ -730,6 +783,18 @@ function headHtml() {
            + '<input type="hidden" id="fProcNo" value="' + num(d.process_no) + '">'
            + '<span id="btProc"></span></div>';
     }
+    /* 型式（使用者 2026-09-23）：同一個料號＋製程＋機台＋客戶底下可以再分最多三種型式，
+       例如有隆齒／無隆齒，或同一台機器的上下料／架機／偏擺確認。
+       **它是重複判定的一部分**——不填就代表「未分型式」，那本身也算一種。 */
+    var vopt = CUR.variant_options || [];
+    h += '<label>型式</label><div class="wide"><input id="fVariant" list="ssVariantList" value="'
+       + esc(d.variant || '') + '"' + ro + ' data-eg-hint="例如 有隆齒／上下料，可留空" style="max-width:220px;">'
+       + '<datalist id="ssVariantList">'
+       + $.map(vopt, function (s) { return '<option value="' + esc(s) + '">'; }).join('')
+       + '</datalist>'
+       + '<span class="muted-help">　同一個料號＋製程＋機台＋客戶底下，'
+       + '只要型式不同就可以各有一份（最多 ' + num(CUR.variant_max || 3) + ' 種）；留空＝未分型式。</span></div>';
+
     // 自動建立的文件可能綁錯適用範圍，開放管理員改（使用者 2026-09-22 要求）
     if (SS_PERMS.canAdmin && CUR.can_edit) {
         h += '<label>適用範圍</label><div class="wide">'
@@ -973,23 +1038,130 @@ function itemsHtml() {
     h += '</tbody></table></div></div>';
     return h;
 }
+/* ── 可填空樣板（{} 變數）：與後端 ss_slot_parse()／ss_slot_compose() 完全同一套規則 ──
+   「跨珠Ø{}」＝固定前綴「跨珠Ø」＋一個讓現場填的空格；{} 裡面可以寫提示字（只當 placeholder，不會印出來）。 */
+function slotParse(pat) {
+    var parts = [], hints = [], buf = '';
+    for (var i = 0; i < pat.length; i++) {
+        var ch = pat.charAt(i);
+        if (ch === '{') {
+            var end = pat.indexOf('}', i);
+            if (end < 0) { buf += ch; continue; }
+            parts.push(buf); buf = '';
+            hints.push($.trim(pat.substring(i + 1, end)));
+            i = end;
+        } else buf += ch;
+    }
+    parts.push(buf);
+    return { parts: parts, hints: hints, n: hints.length };
+}
+function slotHas(pat) { return !!pat && pat.indexOf('{') >= 0 && pat.indexOf('}') >= 0; }
+function slotCompose(pat, vals) {
+    var p = slotParse(pat), out = '';
+    for (var i = 0; i < p.parts.length; i++) {
+        out += p.parts[i];
+        if (i < p.n) out += $.trim(vals[i] || '');
+    }
+    return $.trim(out);
+}
+/** 把「已經填好的完整字串」拆回各空格的值；對不起來回 null（不可以硬拆，會把字切爛） */
+function slotExtract(pat, full) {
+    var p = slotParse(pat);
+    if (!p.n) return [];
+    full = full || '';
+    var vals = [], pos = 0, head = p.parts[0];
+    if (head && full.indexOf(head) !== 0) return null;
+    pos = head.length;
+    for (var i = 0; i < p.n; i++) {
+        var next = p.parts[i + 1] || '';
+        if (!next) { vals.push(full.substring(pos)); pos = full.length; continue; }
+        var at = full.indexOf(next, pos);
+        if (at < 0) return null;
+        vals.push(full.substring(pos, at));
+        pos = at + next.length;
+    }
+    return vals;
+}
+/**
+ * 鎖住的欄位（管理重點／品質特性）：固定文字直接印出來、{} 的位置才給一個輸入格。
+ * 使用者 2026-09-23：「檢驗項目預設值的管理重點跟品質特性不可修改內容，除非有設定可填空」。
+ * 沒有 {} 的就整格唯讀，只看得到不改得動。
+ */
+function lockedCell(cls, pat, full, ro) {
+    var p = slotParse(pat);
+    if (!p.n) {
+        return '<div class="lk-fix" title="這一欄由檢驗項目預設值決定，不可修改">' + esc(pat) + '</div>'
+             + '<input type="hidden" class="' + cls + '-pat" value="' + esc(pat) + '">';
+    }
+    var vals = slotExtract(pat, full || '');
+    if (!vals) vals = [];
+    var h = '<div class="lk-row">';
+    for (var i = 0; i < p.parts.length; i++) {
+        if (p.parts[i] !== '') h += '<span class="lk-fix">' + esc(p.parts[i]) + '</span>';
+        if (i < p.n) {
+            h += '<input class="' + cls + '-slot lk-slot" value="' + esc(vals[i] || '') + '"'
+               + (p.hints[i] ? ' data-eg-hint="' + esc(p.hints[i]) + '"' : '') + ro + '>';
+        }
+    }
+    h += (ro ? '' : '<button class="btn btn-xs btn-warm-o sym-open" title="插入符號（Ø ± 幾何公差…）">Ø±</button>');
+    h += '</div><input type="hidden" class="' + cls + '-pat" value="' + esc(pat) + '">';
+    return h;
+}
+/** 檢驗頻率：管理員維護的下拉；清單裡沒有的舊值仍要看得到，另有「其他…」可自行輸入 */
+function freqCell(val, ro) {
+    var opts = CUR.freq_options || [];
+    val = val || '';
+    var hit = false;
+    var h = '<select class="i-freq-sel"' + (ro ? ' disabled' : '') + '><option value="">（未指定）</option>';
+    $.each(opts, function (i, s) {
+        if (s === val) hit = true;
+        h += '<option value="' + esc(s) + '"' + (s === val ? ' selected' : '') + '>' + esc(s) + '</option>';
+    });
+    if (val && !hit) h += '<option value="' + esc(val) + '" selected>' + esc(val) + '（既有）</option>';
+    h += '<option value="__other">其他（自行輸入）…</option></select>'
+       + '<input class="i-freq-txt" value="' + esc(val) + '" style="display:none;margin-top:2px;"' + ro + '>';
+    return h;
+}
 function itemRow(i, r, ro) {
     r = r || {};
     var dis = ro ? ' disabled' : '';
-    return '<tr data-tt="' + num(r.tool_type_id) + '">' + dragCell(i, !!CUR.can_edit)
-        + '<td><input class="i-ctrl" value="' + esc(r.ctrl_point || '') + '"' + ro + '></td>'
-        + '<td><input class="i-q" value="' + esc(r.q_char || '') + '"' + ro + '></td>'
+    var lc = num(r.lock_ctrl) === 1 && (r.ctrl_pat || '') !== '';
+    var lq = num(r.lock_q) === 1 && (r.q_pat || '') !== '';
+    var toolTxt = r.tool_label || r.tool_no || '';
+    return '<tr data-tt="' + num(r.tool_type_id) + '" data-tool="' + num(r.tool_id) + '"'
+        + ' data-tpl="' + num(r.tpl_id) + '" data-lc="' + (lc ? 1 : 0) + '" data-lq="' + (lq ? 1 : 0) + '">'
+        + dragCell(i, !!CUR.can_edit)
+        + '<td>' + (lc ? lockedCell('i-ctrl', r.ctrl_pat, r.ctrl_point, ro)
+                       : '<input class="i-ctrl" value="' + esc(r.ctrl_point || '') + '"' + ro + '>') + '</td>'
+        + '<td>' + (lq ? lockedCell('i-q', r.q_pat, r.q_char, ro)
+                       : '<input class="i-q" value="' + esc(r.q_char || '') + '"' + ro + '>'
+                         + (ro ? '' : '<button class="btn btn-xs btn-warm-o sym-open" style="margin-top:2px;"'
+                                    + ' title="插入符號（Ø ± 幾何公差…）">Ø±</button>')) + '</td>'
         + '<td><input class="i-up" value="' + esc(r.up_limit || '') + '"' + ro + '></td>'
         + '<td><input class="i-lo" value="' + esc(r.lo_limit || '') + '"' + ro + '></td>'
         + '<td>' + ownerSel(r.owner_dept_id, ro) + '</td>'
         + '<td>' + methodSel(r.method, r.tool_type_id, ro) + '</td>'
-        + '<td><input class="i-tool" value="' + esc(r.tool_no || '') + '"' + ro + '>'
-            + (ro ? '' : '<button class="btn btn-xs btn-warm-o i-pick" style="margin-top:2px;">挑檢具</button>') + '</td>'
-        + '<td><input class="i-freq" value="' + esc(r.freq || '') + '"' + ro + '></td>'
+        /* 檢具編號**一律不給手打**（使用者 2026-09-23：避免輸入錯誤，請限制使用點選）。
+           欄位唯讀、只能按「挑檢具」，沒挑就是 N/A。實際存的是 qc_tool.Tool_id。 */
+        + '<td><input class="i-tool" value="' + esc(toolTxt || 'N/A') + '" readonly'
+            + ' title="檢具只能從量具主檔挑，不可手打">'
+            + (ro ? '' : '<div style="margin-top:2px;"><button class="btn btn-xs btn-warm-o i-pick">挑檢具</button>'
+                       + ' <button class="btn btn-xs i-toolclr" title="改成 N/A">清除</button></div>') + '</td>'
+        + '<td>' + freqCell(r.freq, ro) + '</td>'
         + '<td><input class="i-note" value="' + esc(r.note || '') + '"' + ro + '></td>'
         + (CUR.can_edit ? '<td class="c"><button class="btn btn-xs i-del"' + dis + '>×</button></td>' : '')
         + '</tr>';
 }
+/* 頻率下拉選「其他」才長出輸入框；選既有選項就直接用那個值 */
+$(document).on('change', '.i-freq-sel', function () {
+    var $t = $(this), $x = $t.siblings('.i-freq-txt');
+    if ($t.val() === '__other') { $x.show().focus(); }
+    else { $x.hide().val($t.val()); }
+});
+$(document).on('click', '.i-toolclr', function () {
+    var $tr = $(this).closest('tr');
+    $tr.attr('data-tool', 0).find('.i-tool').val('N/A');
+});
 /* 同 stepAdd／stepDel：共用檔是不帶參數呼叫的，一定要自己找得到那張表（見上方說明） */
 function itemAdd($tbody) {
     $tbody = ($tbody && $tbody.length) ? $tbody : $('#tblItems tbody');
@@ -1019,10 +1191,15 @@ $(document).on('click', '#btnApplyTpl', function () {
             return;
         }
         var $tb = $('#tblItems tbody');
-        // 整列都還空白的末列先拿掉，免得代入後中間夾一列空的
+        /* 整列都還空白的先拿掉，免得代入後中間夾一列空的。
+           **只能看得見的輸入框算數**——鎖定欄位有 .i-ctrl-pat 這種隱藏欄位永遠有值，
+           連隱藏欄位一起算的話「空白列」就永遠判不出來。 */
         $tb.children('tr').each(function () {
             var any = false;
-            $(this).find('input').each(function () { if ($(this).val().trim() !== '') any = true; });
+            $(this).find('input:not([type=hidden])').each(function () {
+                var v = $.trim($(this).val() || '');
+                if (v !== '' && v !== 'N/A') any = true;
+            });
             if (!any) $(this).remove();
         });
         $.each(rows, function (i, r) { $tb.append(itemRow($tb.children('tr').length, r, '')); });
@@ -1053,8 +1230,26 @@ function sipExtraHtml() {
     }
     h += '</div>';
     h += secBox('f_notice', 'notice', '注意事項', v.notice, '一行一條；留空就印設定裡那份固定的注意事項');
+    /* 注意事項可以存成範本再點開帶入（使用者 2026-09-23），範本可以綁客戶。
+       綁到這份文件客戶的排在最前面並標出來——建立文件時本來就會自動帶第一筆。 */
+    if (CUR.can_edit && (CUR.notice_tpls || []).length) {
+        var nh = '<div class="muted-help" style="margin:-8px 0 10px;">帶入範本：';
+        $.each(CUR.notice_tpls, function (i, t) {
+            nh += '<button class="btn btn-xs btn-warm-o nt-go" data-i="' + i + '" style="margin:0 4px 4px 0;">'
+                + esc(t.name) + (num(t.for_customer) ? '（本客戶）' : '') + '</button>';
+        });
+        nh += '　<span>點一下接在現有內容後面；要整段換掉請先清空欄位。</span></div>';
+        h += nh;
+    }
     return h;
 }
+$(document).on('click', '.nt-go', function () {
+    var t = (CUR.notice_tpls || [])[num($(this).data('i'))];
+    if (!t) return;
+    var $x = $('#f_notice');
+    var cur = $.trim($x.val() || '');
+    $x.val(cur ? (cur + '\n' + t.body) : t.body).trigger('input').focus();
+});
 
 /* ── 操作步驟的項次編號一律由系統代入（使用者 2026-09-22：手打最容易跳號或重號） ──
    規則與後端 ss_renumber_lines() 完全相同：認得出來的舊寫法（1. 1、 1) (1) 全形數字…）
@@ -1442,11 +1637,25 @@ function collectItems() {
     var out = [];
     $('#tblItems tbody tr').each(function () {
         var $t = $(this);
-        out.push({ ctrl_point: $t.find('.i-ctrl').val() || '', q_char: $t.find('.i-q').val() || '',
+        var lc = num($t.attr('data-lc')) === 1, lq = num($t.attr('data-lq')) === 1;
+        var ctrlPat = $t.find('.i-ctrl-pat').val() || '', qPat = $t.find('.i-q-pat').val() || '';
+        var ctrlSlots = $t.find('.i-ctrl-slot').map(function () { return $(this).val() || ''; }).get();
+        var qSlots    = $t.find('.i-q-slot').map(function () { return $(this).val() || ''; }).get();
+        // 鎖住的欄位：完整字串由「樣板＋空格」現場組出來（後端會用同一套規則再組一次＝鐵律8）
+        var ctrl = lc ? slotCompose(ctrlPat, ctrlSlots) : ($t.find('.i-ctrl').val() || '');
+        var q    = lq ? slotCompose(qPat, qSlots)       : ($t.find('.i-q').val() || '');
+        // 頻率：選了「其他」才吃輸入框的值
+        var $fs = $t.find('.i-freq-sel'), fv = $fs.val() || '';
+        if (fv === '__other') fv = $t.find('.i-freq-txt').val() || '';
+        out.push({ ctrl_point: ctrl, q_char: q,
+                   ctrl_pat: lc ? ctrlPat : '', q_pat: lq ? qPat : '',
+                   ctrl_slots: JSON.stringify(ctrlSlots), q_slots: JSON.stringify(qSlots),
+                   lock_ctrl: lc ? 1 : 0, lock_q: lq ? 1 : 0, tpl_id: num($t.attr('data-tpl')),
                    up_limit: $t.find('.i-up').val() || '', lo_limit: $t.find('.i-lo').val() || '',
                    owner_dept_id: num($t.find('.i-own').val()), method: $t.find('.i-mth').val() || '',
                    tool_type_id: num($t.attr('data-tt')),
-                   tool_no: $t.find('.i-tool').val() || '', freq: $t.find('.i-freq').val() || '',
+                   tool_id: num($t.attr('data-tool')),
+                   tool_no: $t.find('.i-tool').val() || '', freq: fv,
                    note: $t.find('.i-note').val() || '' });
     });
     return out;
@@ -1471,6 +1680,9 @@ function saveDoc(cb) {
         part_d_id: num(d.part_d_id),
         process_no: $('#fProcNo').length ? num($('#fProcNo').val()) : num(d.process_no),
         customer_id: $('#fCusId').length ? ($('#fCusId').val() || '') : (d.customer_id || ''),
+        variant: $('#fVariant').length ? ($('#fVariant').val() || '') : (d.variant || ''),
+        // 表單日期一起送：機台與量具「在不在用」以它為準，停用的機台才補得了舊資料
+        form_date: $('#fDate').val() || CUR.ver.form_date || '',
         title: $('#fTitle').val()
     }, function () {
         var p = { ver_id: num(CUR.ver.ver_id), ver_no: $('#fVer').val(), form_date: $('#fDate').val(),
@@ -1685,7 +1897,8 @@ $(document).on('click', '.i-pick', function () {
 });
 function toolTypes() {
     var h = '<div class="note-box">先選<b>量具類型</b>，再選編號。'
-          + '（檢驗方法那一欄如果選的本來就是一種量具，這裡會直接跳到該類型的編號）</div><div class="tpick">';
+          + '（檢驗方法那一欄如果選的本來就是一種量具，這裡會直接跳到該類型的編號）<br>'
+          + '檢具編號<b>只能從這裡挑，不可以手打</b>；沒有適用的檢具就按欄位下面的「清除」，會填成 N/A。</div><div class="tpick">';
     $.each(CUR.tool_types || [], function (i, t) {
         h += '<button class="btn btn-sm btn-warm-o tt-go" data-id="' + num(t.id) + '">' + esc(t.name) + '</button>';
     });
@@ -1694,20 +1907,35 @@ function toolTypes() {
 }
 $(document).on('click', '.tt-go', function () { toolNums(num($(this).data('id'))); });
 function toolNums(typeId) {
-    api('tools_by_type', { type_id: typeId }, function (res) {
+    /* 一律帶表單日期：停用的量具在「那一天還沒停用」的文件上照樣挑得到（補舊資料用）。
+       顯示文字由量測儀器校驗頁的類別設定決定（ai-rules/25），
+       所以齒輪檢測機看得到「QC-001 TTi 齒輪量測機」而不是光一個編號。 */
+    var asof = $('#fDate').val() || (CUR.ver && CUR.ver.form_date) || '';
+    api('tools_by_type', { type_id: typeId, asof: asof }, function (res) {
         var name = '';
-        $.each(CUR.tool_types || [], function (i, t) { if (num(t.id) === typeId) name = t.name; });
+        $.each(res.types || CUR.tool_types || [], function (i, t) { if (num(t.id) === typeId) name = t.name; });
         var h = '<div class="note-box"><b>' + esc(name) + '</b>　'
               + '<button class="btn btn-xs btn-warm-o" id="ttBack">← 換一個類型</button></div><div class="tpick">';
+        var usable = 0, off = 0;
         $.each(res.rows || [], function (i, t) {
-            h += '<button class="btn btn-sm btn-warm-o tn-go" data-no="' + esc(t.tool_no) + '" data-tt="' + typeId + '">'
-               + esc(t.tool_no) + (t.spec_desc ? ' <span class="muted-help">' + esc(t.spec_desc) + '</span>' : '')
+            var ok = num(t.usable) === 1;
+            if (ok) usable++;
+            if (num(t.disabled) === 1) off++;
+            h += '<button class="btn btn-sm ' + (ok ? 'btn-warm-o' : 'btn-warm-o tn-off') + ' tn-go"'
+               + ' data-id="' + num(t.id) + '" data-no="' + esc(t.tool_no) + '" data-lab="' + esc(t.label || t.tool_no) + '"'
+               + ' data-tt="' + typeId + '"' + (ok ? '' : ' disabled title="這支量具在表單日期之後才停用以外的情況不可選"') + '>'
+               + esc(t.label || t.tool_no)
+               + (num(t.disabled) === 1 ? ' <span class="muted-help">（' + (ok ? '當時仍在用，' : '') + '已停用 '
+                    + esc(dispDate(t.disabled_date)) + '）</span>' : '')
                + '</button>';
         });
         h += '</div>';
         if (!(res.rows || []).length) {
-            h += '<div class="muted-help" style="margin-top:6px;">這個類型底下沒有在用的編號。'
-               + '可以直接在欄位裡打字（例如 N/A）。</div>';
+            h += '<div class="muted-help" style="margin-top:6px;">這個類型底下一支量具都沒有。'
+               + '請先到「量測儀器校驗管理」建立，或按欄位下面的「清除」填成 N/A。</div>';
+        } else if (!usable) {
+            h += '<div class="muted-help" style="margin-top:6px;color:#A4541A;">'
+               + '這個類型底下的 ' + off + ' 支量具在表單日期（' + esc(dispDate(asof) || '未填') + '）都已經停用了。</div>';
         }
         $('#pickBody').html(h);
     });
@@ -1715,10 +1943,56 @@ function toolNums(typeId) {
 $(document).on('click', '#ttBack', toolTypes);
 $(document).on('click', '.tn-go', function () {
     if (TOOL_FOR) {
-        TOOL_FOR.find('.i-tool').val($(this).data('no'));
+        // 存的是 Tool_id（量具改名不會失聯），畫面上顯示的是設定好的那組欄位
+        TOOL_FOR.attr('data-tool', num($(this).data('id')));
         TOOL_FOR.attr('data-tt', num($(this).data('tt')));
+        TOOL_FOR.find('.i-tool').val($(this).data('lab') || $(this).data('no'));
     }
     closeMask('maskPick');
+});
+
+/* ══════════════════════ 符號面板（工程符號＋幾何公差） ══════════════════════
+   使用者 2026-09-23：品質特性要能插入批圖編輯器那條工程符號，以及線上檢驗
+   「幾何公差與特殊項目設定」裡的符號，兩者重複的只出現一次。
+   符號清單由後端合併（ss_symbols()：工程符號 ＋ qc_special_characteristic 主檔）。 */
+var SYM_FOR = null;
+$(document).on('click', '.sym-open', function () {
+    var $tr = $(this).closest('tr');
+    // 插到「剛剛在打字的那一格」：同一列裡最後聚焦過的輸入框，沒有就用第一個可填的
+    SYM_FOR = $tr.data('lastInput') || $tr.find('.i-q, .i-q-slot, .i-ctrl-slot').filter(':visible').first();
+    if (!SYM_FOR || !SYM_FOR.length) return;
+    var groups = {};
+    $.each(CUR.symbols || [], function (i, s) { (groups[s.group] = groups[s.group] || []).push(s); });
+    var h = '<div class="note-box">點一下就插到游標的位置。'
+          + '（工程符號與幾何公差合併成一份，重複的只會出現一次）</div>';
+    $.each(groups, function (g, list) {
+        h += '<div style="margin-bottom:6px;"><div class="muted-help" style="margin-bottom:3px;">' + esc(g) + '</div><div class="tpick">';
+        $.each(list, function (i, s) {
+            h += '<button class="btn btn-sm btn-warm-o sym-go" data-s="' + esc(s.sym) + '" title="' + esc(s.name) + '">'
+               + esc(s.sym) + ' <span class="muted-help">' + esc(s.name) + '</span></button>';
+        });
+        h += '</div></div>';
+    });
+    $('#pickTitle').text('插入符號');
+    $('#pickBody').html(h);
+    openMask('maskPick');
+});
+/* 記住游標停在哪一格，符號才插得到「剛剛在打的那一欄」 */
+$(document).on('focus', '#tblItems input', function () {
+    $(this).closest('tr').data('lastInput', $(this));
+});
+$(document).on('click', '.sym-go', function () {
+    var s = $(this).data('s');
+    if (SYM_FOR && SYM_FOR.length) {
+        var el = SYM_FOR[0], v = el.value || '';
+        var a = (el.selectionStart == null) ? v.length : el.selectionStart;
+        var b = (el.selectionEnd == null) ? v.length : el.selectionEnd;
+        el.value = v.substring(0, a) + s + v.substring(b);
+        try { el.selectionStart = el.selectionEnd = a + String(s).length; } catch (e) {}
+        $(el).trigger('input');
+    }
+    closeMask('maskPick');
+    if (SYM_FOR && SYM_FOR.length) SYM_FOR.focus();
 });
 
 /* ══════════════════════ 圖面／附件 ══════════════════════ */
