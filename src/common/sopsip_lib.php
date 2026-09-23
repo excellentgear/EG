@@ -1081,6 +1081,13 @@ function ss_ver_create(PDO $db, int $docId, array $in, int $uid): int
     }
     ss_ver_save($db, $verId, $in, $uid);
 
+    /* 注意事項：這家客戶有設專屬範本就在建立當下自動帶入（使用者 2026-09-23）。
+       只在「使用者自己沒填」的時候帶，填過的一個字都不動。 */
+    if ($doc && (string)$doc['kind'] === 'sip' && trim((string)($in['notice'] ?? '')) === '') {
+        $auto = ss_notice_auto($db, (string)($doc['customer_id'] ?? ''));
+        if ($auto !== '') $db->prepare("UPDATE ss_ver SET notice=? WHERE ver_id=?")->execute([$auto, $verId]);
+    }
+
     // 標準檢驗指導書：綁到的製程有設「自動代入」時，檢驗項目直接帶一份進來（代入後仍可逐列刪）
     if ($doc && (string)$doc['kind'] === 'sip' && empty($in['_no_default_items'])) {
         $pno = (int)($doc['process_no'] ?? 0);
@@ -1125,12 +1132,17 @@ function ss_ver_clone(PDO $db, int $fromVerId, array $in, int $uid): int
            ->execute([$newId, (int)$s['seq'], $s['step_name'], $s['img_file_id'], $s['step_text'], $s['note']]);
     }
     foreach (ss_item_rows($db, $fromVerId) as $i) {
+        // 新版次要連「檢具綁定」與「鎖定／可填空樣板」一起帶過去，
+        // 漏帶的話改版之後那幾欄會突然變成可以亂改、檢具也會退化成純文字
         $db->prepare("INSERT INTO ss_item (ver_id, seq, ctrl_point, q_char, up_limit, lo_limit, owner, owner_dept_id,
-                          method, tool_type_id, tool_no, freq, note)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                          method, tool_type_id, tool_id, tool_no, freq, note, tpl_id, lock_ctrl, lock_q,
+                          ctrl_pat, q_pat)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
            ->execute([$newId, (int)$i['seq'], $i['ctrl_point'], $i['q_char'], $i['up_limit'], $i['lo_limit'],
                       $i['owner'], $i['owner_dept_id'] ?? null, $i['method'], $i['tool_type_id'] ?? null,
-                      $i['tool_no'], $i['freq'], $i['note']]);
+                      $i['tool_id'] ?? null, $i['tool_no'], $i['freq'], $i['note'],
+                      $i['tpl_id'] ?? null, (int)($i['lock_ctrl'] ?? 0), (int)($i['lock_q'] ?? 0),
+                      $i['ctrl_pat'] ?? null, $i['q_pat'] ?? null]);
     }
     // 段落附件與圖面：新版次要看得到同一批圖（ver_id 指到新版，舊版原本掛的那幾列不動）
     foreach (ss_file_rows($db, $docId, $fromVerId) as $fl) {
