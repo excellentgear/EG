@@ -421,11 +421,12 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
                 <table class="sub-tbl" id="oTable">
                     <thead><tr>
                         <th style="width:28px;"><input type="checkbox" id="oCkAll" data-eg-skip="1"></th>
-                        <th>訂單編號</th><th>客戶單號</th><th>客戶</th><th>料號</th>
-                        <th style="width:60px;">數量</th><th style="width:88px;">接單日</th><th style="width:88px;">交期</th>
+                        <th>訂單編號</th><th>客戶</th><th>料號</th>
+                        <th style="width:60px;">數量</th><th>製程</th>
+                        <th style="width:88px;">接單日</th><th style="width:88px;">交期</th>
                         <th style="width:64px;">首次<br>下訂</th><th style="width:270px;">資料完整度</th>
                     </tr></thead>
-                    <tbody id="oBody"><tr><td colspan="9" style="padding:12px;color:#8a6d45;">請先按「查詢」</td></tr></tbody>
+                    <tbody id="oBody"><tr><td colspan="10" style="padding:12px;color:#8a6d45;">請先按「查詢」</td></tr></tbody>
                 </table>
             </div>
         </div>

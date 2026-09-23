@@ -393,10 +393,11 @@ $(document).on('click', '[data-vieworder]', function () {
         '/EGsystem/views/Sales/NewOrder_Track.php?kw=' + encodeURIComponent(no)
         + '&part=' + encodeURIComponent(pn));
 });
-/* 製令單號 → BOM 總表（它吃 ?b=製令單號） */
+/* 製令單號 → BOM 總表，直接開新分頁並自動篩選這張製令（它吃 ?b=製令單號）
+   使用者要求製令跟其他資料不同：不要嵌成跳窗，點了就是新分頁。 */
 $(document).on('click', '[data-viewbom]', function () {
     var b = String($(this).data('viewbom') || '');
-    openPageModal('BOM 總表：' + b, '/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php?b=' + encodeURIComponent(b));
+    window.open('/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php?b=' + encodeURIComponent(b), '_blank');
 });
 /* 出貨單號 → 出貨紀錄分析，自動篩出這張單號 */
 $(document).on('click', '[data-viewship]', function () {
@@ -3310,9 +3311,11 @@ $(document).on('click', '#btnOSearch', function () {
         var h = '';
         $.each(rows, function (i, o) {
             h += '<tr><td><input type="checkbox" class="o-ck" value="' + o.Order_id + '" data-eg-skip="1"></td>'
-              + '<td>' + esc(o.Order_oo) + '</td><td>' + esc(o.C_order || '') + '</td>'
+              + '<td>' + esc(o.Order_oo) + '</td>'
               + '<td>' + esc(o.Client_name || '') + '</td><td>' + esc(o.part_no) + '</td>'
-              + '<td>' + num(o.Qty) + '</td><td>' + dispDate(o.Order_date) + '</td>'
+              + '<td>' + num(o.Qty) + '</td>'
+              + '<td title="' + esc(o.Processing_items || '') + '">' + esc(o.Processing_items || '－') + '</td>'
+              + '<td>' + dispDate(o.Order_date) + '</td>'
               + '<td>' + dispDate(o.Delivery_date) + '</td>'
               + '<td title="' + esc(o.first_why || '') + '">' + firstBadge(o.is_first) + '</td>'
               + '<td>' + readyCells(o, items) + '</td></tr>';
