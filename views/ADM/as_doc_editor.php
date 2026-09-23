@@ -628,6 +628,10 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
           <b>基本流程</b>（開始→作業→判斷→結束，含「否」的回頭路）、<b>PDCA 循環</b>。
           插入之後每一個框都還可以改字、搬位置，不要的框選起來按 Delete。</li>
       <li><b>插入圖片</b>：按「插入圖片」上傳，之後點一下圖片可改寬度、對齊、裁切。</li>
+      <li><b>在圖片上加文字</b>：點一下圖片（尤其是匯入時轉不動、改用圖片方式帶進來的流程圖／示意圖），
+          按<span class="hl">「加文字」</span>——原圖會變成底圖鎖住，跟「插入流程圖」同一套工具疊文字方塊上去；
+          存檔後這張圖就變成可再編輯的流程圖，之後改用「編輯流程圖」繼續調整文字位置，
+          不必重新上傳底圖。</li>
       <li><b>存檔</b>（Ctrl+S）。確認整份沒問題之後再勾<span class="hl">「設為此版次的正本」</span>。</li>
     </ol>
 
@@ -1522,7 +1526,19 @@ function mkEditor() {
                 }});
             });
         },
-        onCropImage: function(assetId, done){ openCrop(assetId, done); }
+        onCropImage: function(assetId, done){ openCrop(assetId, done); },
+        onAddTextToImage: function(assetId, done){
+            // 拿這張既有圖片（例如匯入時轉不進來、改用圖片方式帶進來的流程圖）
+            // 當底圖，用跟「插入流程圖」同一套工具疊文字上去；
+            // 存的時候用 asset_id:0（另存一筆新的），原圖留在底層當底圖，
+            // 不去改原本那張圖片資產，document 上的 <img> 改指向新的這張
+            EGFlow.open({ json:null, bgImageUrl:assetUrl(assetId), onSave: function(png, json){
+                saveFlow(0, png, json, function(newId){
+                    ASSET_KIND[String(newId)] = 'flow';
+                    done(newId);
+                });
+            }});
+        }
     });
 }
 

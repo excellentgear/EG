@@ -20,7 +20,7 @@
  *      對接點已經留好：adr_apply() 回傳新版次 id，簽核流程做好之後在那裡接上即可。
  *
  * 為什麼「補一列」是新增 as_document_version 而不是改 HTML：
- *   制修訂紀錄書是 as_doc_tpl_lib.php 的 **系統頁**（adt_revlog_html），
+ *   制修訂紀錄書是 as_doc_tpl_lib.php 的 **系統頁**（adt_revlog_pages_html），
  *   內容直接來自 as_document_version 的版次列，不是存在 content_html 裡。
  *   所以「制修訂紀錄多一列」＝新增一筆版次列，不要去動內文的 HTML。
  */

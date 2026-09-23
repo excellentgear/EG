@@ -1054,6 +1054,9 @@
          + '<button type="button" data-al="right" title="靠右"><i class="fa fa-align-right"></i></button>';
       if (opt.onCropImage) h += '<button type="button" data-act="crop" title="裁切"><i class="fa fa-crop"></i> 裁切</button>';
       if (opt.onEditFlow)  h += '<button type="button" data-act="flow" title="編輯流程圖"><i class="fa fa-sitemap"></i> 編輯</button>';
+      if (opt.onAddTextToImage)
+        h += '<button type="button" data-act="addtext" title="用這張圖當底圖，疊文字上去（跟編輯流程圖同一套工具）">'
+           + '<i class="fa fa-font"></i> 加文字</button>';
       h += '<button type="button" class="egrt-ib-del" data-act="del" title="刪除"><i class="fa fa-trash-o"></i></button>';
       imgBar.innerHTML = h;
       host.appendChild(imgBar);
@@ -1082,6 +1085,17 @@
           if (act === 'del') { im.parentNode.removeChild(im); clearImgSel(); changed(); return; }
           if (act === 'crop' && opt.onCropImage) { opt.onCropImage(id, function () { reloadAsset(id); }); return; }
           if (act === 'flow' && opt.onEditFlow)  { opt.onEditFlow(id,  function () { reloadAsset(id); }); return; }
+          if (act === 'addtext' && opt.onAddTextToImage) {
+            // 「加文字」會另外存成一張新的流程圖資產（原圖保留在底層當底圖），
+            // 這個 <img> 要改指向新資產才看得到疊了文字的結果
+            opt.onAddTextToImage(id, function (newId) {
+              if (!newId) return;
+              im.setAttribute('data-asset', String(newId));
+              reloadAsset(newId);
+              selectImg(im);   // 重新整理按鈕：現在是流程圖了，「加文字」要換成「編輯流程圖」
+            });
+            return;
+          }
           return;
         }
         placeImgUi();
@@ -1158,6 +1172,13 @@
       if (cb) {
         var k2 = opt.assetKind ? opt.assetKind(im.getAttribute('data-asset')) : '';
         cb.style.display = (k2 === 'flow') ? 'none' : '';   // 流程圖要改內容不是裁切
+      }
+      // 「加文字」跟「編輯流程圖」是同一件事的兩個入口：還是純圖片時給「加文字」
+      // （拿它當底圖疊文字），已經是流程圖之後改用上面那顆「編輯」鈕繼續調整
+      var at = imgBar.querySelector('[data-act="addtext"]');
+      if (at) {
+        var k3 = opt.assetKind ? opt.assetKind(im.getAttribute('data-asset')) : '';
+        at.style.display = (k3 === 'flow') ? 'none' : '';
       }
       placeImgUi();
     }
@@ -1435,7 +1456,9 @@
       sh.appendChild(bd);
       var ft = d.createElement('div');
       ft.className = 'egrt-chrome egrt-chrome-ftr';
-      ft.innerHTML = (chrome && chrome.ftr) || '';
+      // 「文件制修訂紀錄書」自己的表格已經印了文件編號／版次（使用者 2026-09-23 指定），
+      // 系統頁尾（頁碼＋AS編號版次）在這一頁不印，跟列印版（as_doc_print.php）同規則
+      ft.innerHTML = (sp.key === 'revlog') ? '' : ((chrome && chrome.ftr) || '');
       sh.appendChild(ft);
       applyPaper(sh);
       var lab = d.createElement('span');

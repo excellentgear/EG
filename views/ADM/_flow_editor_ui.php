@@ -194,6 +194,8 @@
   var lineColor = '#333333', fillColor = '#ffffff', fontSize = 12;
   var onSaveCb = null;
   var GRID = 10;
+  // 用既有圖片當底圖時，畫布上限（等比例縮）：太大打開就要一直捲才看得到全貌
+  var EGF_BG_MAX_W = 1400, EGF_BG_MAX_H = 1000;
 
   function el(id) { return d.getElementById(id); }
   function stat(msg) { var s = el('egfStat'); if (s) s.textContent = msg || '　'; }
@@ -391,6 +393,9 @@
         if (o.egRole === 'label') { o.selectable = false; o.evented = false; }
         if (o.egRole === 'head')  { o.selectable = false; o.evented = false; }
         if (o.egRole === 'conn')  { o.hasControls = false; }
+        // 底圖鎖定：還原之後要再鎖一次，不然使用者拖曳挪動了底圖，
+        // 存檔會把移位後的座標一起存下去，之後每次重開都對不回原位
+        if (o.egRole === 'bg')    { o.selectable = false; o.evented = false; cv.sendToBack(o); }
       });
       nextId = mx + 1;
       cv.requestRenderAll();
@@ -881,6 +886,37 @@
     }
     if (opt.json) {
       restore(opt.json, afterLoad);   // restore 內已套用工作檔存的畫布尺寸
+    } else if (opt.bgImageUrl) {
+      /* 拿一張既有的圖片當底圖、疊文字上去（2026-09-23 使用者要求：像批圖編輯器
+         那樣有圖層可以加文字，用在匯入 Word 時轉不進來的流程圖/示意圖）。
+         底圖畫好就鎖起來（selectable:false）——這裡要保護的是「不小心把底圖拖走
+         或縮放」，不是真的要改圖片內容，改內容請回原檔重新插入。存檔後這張圖
+         就變成一張「流程圖」資產（含 fabric 工作檔），之後可以用同一顆
+         「編輯流程圖」鈕再回來調整文字位置，不必重新上傳底圖。 */
+      cv.clear();
+      cv.backgroundColor = '#ffffff';
+      nextId = 1;
+      stat('底圖載入中…');
+      fabric.Image.fromURL(opt.bgImageUrl, function (img) {
+        if (!img || !img.width) {
+          stat('底圖載入失敗，已改成空白畫布');
+          cv.setWidth(760); cv.setHeight(560);
+          cv.requestRenderAll();
+          afterLoad();
+          return;
+        }
+        // 過大的圖等比例縮進畫布可用的上限，避免視窗打開就要捲很遠才看得到全貌
+        var k = Math.min(1, EGF_BG_MAX_W / img.width, EGF_BG_MAX_H / img.height);
+        cv.setWidth(Math.round(img.width * k));
+        cv.setHeight(Math.round(img.height * k));
+        img.set({ left: 0, top: 0, originX: 'left', originY: 'top',
+                  scaleX: k, scaleY: k, selectable: false, evented: false, hasControls: false });
+        img.egRole = 'bg';
+        cv.add(img);
+        cv.sendToBack(img);
+        cv.requestRenderAll();
+        afterLoad();
+      }, { crossOrigin: 'anonymous' });
     } else {
       cv.clear();
       cv.backgroundColor = '#ffffff';

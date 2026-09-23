@@ -71,10 +71,13 @@ if ($err === '') {
     $pv    = adt_page_versions($ctx['versions'], count($conts), $ctx['version']);
     $no    = 0;
     foreach ($sys as $s) {
-        // 系統頁不印頁首（它們自己就是完整版面），也不計入頁次，但頁尾照印
+        // 系統頁不印頁首（它們自己就是完整版面），也不計入頁次。
+        // 頁尾（頁碼＋AS編號版次）原則上照印，但「文件制修訂紀錄書」自己的
+        // 表格已經印了文件編號／版次（使用者 2026-09-23 指定），再印一次頁尾是重複。
+        $ftr = ($s['key'] === 'revlog') ? '' : adt_footer_html($ctx);
         $pagesHtml[] = '<section class="adt-page adt-page-' . $s['key'] . '">'
                      . '<div class="adt-body eg-docbody">' . $s['html'] . '</div>'
-                     . adt_footer_html($ctx) . '</section>';
+                     . $ftr . '</section>';
     }
     foreach ($conts as $i => $one) {
         $no++;
@@ -103,6 +106,22 @@ if ($err === '') {
     @bottom-left  { content: "第 " counter(page) " 頁／共 " counter(pages) " 頁"; font-size: 9pt; color: #333; }
     @bottom-right { content: "<?= htmlspecialchars($footRight, ENT_QUOTES) ?>"; font-size: 9pt; color: #333; }
 }
+/* 「文件制修訂紀錄書」自己的表格已經印了文件編號／版次，頁碼與 AS 編號右下角
+   這兩件事在這一頁不用再印一次（使用者 2026-09-23 指定）。CSS 分頁媒體的
+   @bottom-left/@bottom-right 是綁在 @page 規則上、不是綁在單一元素上，
+   一般 @page 沒辦法只對某一頁關掉這兩格——要用「具名頁」：.adt-page-revlog
+   請求 page:revlog，那幾頁改吃下面這份 @page 規則。
+   ⚠ 實測過（無頭 Chrome）：具名頁沒有覆寫到的邊界框，Chrome 會直接沿用
+   最上面那個沒有名字的 @page 規則，不是「沒寫＝空白」——兩格margin box
+   一定要明寫 `content:""` 才是真的關掉，只是不寫 @bottom-left/@bottom-right
+   完全沒有作用（這裡曾經只宣告 size/margin、頁碼照樣印出來）。 */
+@page revlog {
+    size: <?= $pageSize ?> <?= $orient ?>;
+    margin: 16mm 15mm 18mm;
+    @bottom-left  { content: ""; }
+    @bottom-right { content: ""; }
+}
+.adt-page-revlog { page: revlog; }
 /* 留白一律交給 @page，body 不再自己加 padding——兩邊各留一次會把內容擠到中間又切邊 */
 html, body { margin: 0; padding: 0; }
 body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size: 12pt; color: #000; line-height: 1.6; }

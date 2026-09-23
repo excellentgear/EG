@@ -439,57 +439,84 @@ function adt_cover_html(array $ctx): string
          . '</div>';
 }
 
-/** 文件制修訂紀錄書（資料直接來自 as_document_version，不必也不可手打第二份） */
-function adt_revlog_html(array $ctx): string
+/**
+ * 文件制修訂紀錄書（資料直接來自 as_document_version，不必也不可手打第二份）。
+ * 回傳「每一頁」各一段 HTML（使用者 2026-09-23 拍板：紀錄超過一頁能放的量時
+ * 自然延伸到下一頁，抬頭每頁重印，「發行單位／簽章」只印在最後一頁）——
+ * 這是為了以後紀錄長到超過 ADT_REVLOG_MIN_ROWS 才會用到，目前的文件都還沒
+ * 碰到（全庫最多 revision 數遠低於 14），先把機制做好。
+ */
+function adt_revlog_pages_html(array $ctx): array
 {
-    $h = '<div class="adt-rev">'
-       . '<div class="adt-rev-co">' . adt_e($ctx['co_full']) . '</div>'
-       . '<div class="adt-rev-coen">' . adt_e($ctx['co_en']) . '</div>'
-       . '<div class="adt-rev-ttl">文件制修訂紀錄書</div>';
-
     /* 抬頭與下面的制修訂紀錄共用同一組四欄格線（14/20/16/50）：
        文件名稱那一格跨前三欄，所以它的右邊框線正好落在「制修訂摘要」欄的起點，
-       上下對得起來（使用者：底下框線務必要跟上方對齊）。 */
+       上下對得起來（使用者：底下框線務必要跟上方對齊）。每一頁都重印同一份抬頭。 */
     $cols = '<colgroup><col class="adt-rc1"><col class="adt-rc2"><col class="adt-rc3"><col class="adt-rc4"></colgroup>';
-    $h .= '<table class="adt-rev-head">' . $cols . '<tr>'
+    $head = '<table class="adt-rev-head">' . $cols . '<tr>'
         . '<td rowspan="2" colspan="3" class="adt-rev-name">' . adt_e($ctx['doc_name']) . '</td>'
         . '<td>文件編號：' . adt_e($ctx['doc_no']) . '</td></tr>'
         . '<tr><td>文件類別：' . adt_e($ctx['kind']) . '</td></tr></table>';
 
-    // 制修訂紀錄本體（與抬頭同一組格線）
-    $h .= '<table class="adt-rev-tbl">' . $cols
-        . '<tr><td colspan="4" class="adt-rev-cap">制　修　訂　紀　錄</td></tr>'
-        . '<tr><th>文件版別</th><th>制修訂日期</th><th>制修訂頁次</th><th>制修訂摘要（增、減、改、廢項目）</th></tr>';
-    $n = 0;
-    foreach ($ctx['versions'] as $v) {
-        $h .= '<tr><td>' . adt_e($v['version']) . '</td>'
-            . '<td>' . adt_e($v['revised_date'] ? eg_fmt_date($v['revised_date']) : '') . '</td>'
-            . '<td>' . adt_e($v['revised_pages']) . '</td>'
-            . '<td class="adt-l">' . adt_e($v['revised_summary']) . '</td></tr>';
-        $n++;
+    // 一頁最多放 ADT_REVLOG_MIN_ROWS 筆真實紀錄；超過才會有第二頁、第三頁…
+    $chunks = array_chunk($ctx['versions'], ADT_REVLOG_MIN_ROWS);
+    if (!$chunks) $chunks = [[]];   // 一筆版次都沒有時仍要有第一頁（全部留白）
+    $lastIdx = count($chunks) - 1;
+
+    $pages = [];
+    foreach ($chunks as $pi => $chunkVersions) {
+        $isLast = ($pi === $lastIdx);
+        $h = '<div class="adt-rev">'
+           . '<div class="adt-rev-co">' . adt_e($ctx['co_full']) . '</div>'
+           . '<div class="adt-rev-coen">' . adt_e($ctx['co_en']) . '</div>'
+           . '<div class="adt-rev-ttl">文件制修訂紀錄書' . ($pi > 0 ? '（續）' : '') . '</div>'
+           . $head;
+
+        // 制修訂紀錄本體（與抬頭同一組格線）
+        $h .= '<table class="adt-rev-tbl">' . $cols
+            . '<tr><td colspan="4" class="adt-rev-cap">制　修　訂　紀　錄</td></tr>'
+            . '<tr><th>文件版別</th><th>制修訂日期</th><th>制修訂頁次</th><th>制修訂摘要（增、減、改、廢項目）</th></tr>';
+        $n = 0;
+        foreach ($chunkVersions as $v) {
+            $h .= '<tr><td>' . adt_e($v['version']) . '</td>'
+                . '<td>' . adt_e($v['revised_date'] ? eg_fmt_date($v['revised_date']) : '') . '</td>'
+                . '<td>' . adt_e($v['revised_pages']) . '</td>'
+                . '<td class="adt-l">' . adt_e($v['revised_summary']) . '</td></tr>';
+            $n++;
+        }
+        // 只有「最後一頁」才補空白列撐到固定列數（紙本留白給日後手寫）；
+        // 中間那幾頁本來就整頁 ADT_REVLOG_MIN_ROWS 筆都是真實紀錄、已經滿版，不必也不該再補
+        if ($isLast) {
+            for (; $n < ADT_REVLOG_MIN_ROWS; $n++) {
+                $h .= '<tr><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>';
+            }
+        }
+        $h .= '</table>';
+
+        if ($isLast) {
+            /* 中間空白列：制修訂紀錄固定列數＋抬頭＋簽章區，通常填不滿一整頁，
+               「發行單位」簽章區下面會空出一大截沒有格線的白底，跟其他頁面（開了
+               公版大框時）底部的框線對不齊（使用者 2026-09-23 指出）。固定高度
+               撐開，兩側補上跟表格同一條直框線，看起來像表格本來就延伸到底，
+               不是憑空留白（高度校準與刻意不用 flex-grow 的原因見 CSS 檔註解）。 */
+            $h .= '<div class="adt-rev-mid"></div>';
+
+            // 發行單位與簽章欄（簽章人由簽核流程填，這裡先留格）——只印在最後一頁，
+            // 紀錄延伸到下一頁時，中間那幾頁不該出現簽章格（那不是這幾頁要簽的東西）
+            $h .= '<table class="adt-rev-foot">'
+                . '<colgroup><col class="adt-fc1"><col class="adt-fc2"><col class="adt-fc3"><col class="adt-fc4"></colgroup>'
+                . '<tr><td colspan="4" class="adt-l">發行單位：' . adt_e($ctx['issue_dept']) . '</td></tr>'
+                . '<tr><th>制修訂部門</th><th>制修訂</th><th>審查</th><th>核准</th></tr>'
+                . '<tr class="adt-sign"><td>' . adt_e($ctx['dept_label']) . '</td>'
+                . adt_sign_cell($ctx, 'draft') . adt_sign_cell($ctx, 'review') . adt_sign_cell($ctx, 'approve')
+                . '</tr></table>';
+        } else {
+            // 續頁提示：不寫這句的話，看到表格突然沒有簽章格會以為印漏了
+            $h .= '<div class="adt-rev-cont">（紀錄未完，續下頁）</div>';
+        }
+
+        $pages[] = $h . '</div>';
     }
-    for (; $n < ADT_REVLOG_MIN_ROWS; $n++) {
-        $h .= '<tr><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>';
-    }
-    $h .= '</table>';
-
-    /* 中間空白列：制修訂紀錄固定 14 列＋抬頭＋簽章區，通常填不滿一整頁，
-       「發行單位」簽章區下面會空出一大截沒有格線的白底，跟其他頁面（開了
-       公版大框時）底部的框線對不齊（使用者 2026-09-23 指出）。這一格用
-       flex 把剩下的高度吃掉，兩側補上跟表格同一條直框線，看起來像表格
-       本來就延伸到底，不是憑空留白。 */
-    $h .= '<div class="adt-rev-mid"></div>';
-
-    // 發行單位與簽章欄（簽章人由簽核流程填，這裡先留格）
-    $h .= '<table class="adt-rev-foot">'
-        . '<colgroup><col class="adt-fc1"><col class="adt-fc2"><col class="adt-fc3"><col class="adt-fc4"></colgroup>'
-        . '<tr><td colspan="4" class="adt-l">發行單位：' . adt_e($ctx['issue_dept']) . '</td></tr>'
-        . '<tr><th>制修訂部門</th><th>制修訂</th><th>審查</th><th>核准</th></tr>'
-        . '<tr class="adt-sign"><td>' . adt_e($ctx['dept_label']) . '</td>'
-        . adt_sign_cell($ctx, 'draft') . adt_sign_cell($ctx, 'review') . adt_sign_cell($ctx, 'approve')
-        . '</tr></table>';
-
-    return $h . '</div>';
+    return $pages;
 }
 
 /** 目錄（由正文各頁的標題產生；$pages＝各頁 HTML，$startNo＝正文第一頁的頁碼） */
@@ -563,7 +590,11 @@ function adt_system_pages(array $ctx, array $contentPages): array
 {
     $out = [];
     if (adt_is_level1($ctx)) $out[] = ['key' => 'cover', 'label' => '封面', 'html' => adt_cover_html($ctx)];
-    $out[] = ['key' => 'revlog', 'label' => '文件制修訂紀錄書', 'html' => adt_revlog_html($ctx)];
+    // 紀錄多到放不下一頁時會回傳好幾段（key 都是 revlog，讓頁尾判斷「這是制修訂紀錄書
+    // 不印系統頁尾」一次涵蓋全部續頁，不必另外判斷 revlog2/revlog3…）
+    foreach (adt_revlog_pages_html($ctx) as $ri => $revHtml) {
+        $out[] = ['key' => 'revlog', 'label' => '文件制修訂紀錄書' . ($ri > 0 ? '（續）' : ''), 'html' => $revHtml];
+    }
     // 目錄**只有一階（品質手冊）才有**（2026-09-22 使用者指定：二階文件不需要目錄）。
     // 設定值仍然保留，但二階以下一律不產生——否則舊設定會讓程序書冒出一頁空目錄。
     if (adt_is_level1($ctx) && !empty($ctx['cfg']['toc_on'])) {

@@ -123,6 +123,8 @@
                                      text-align: center; vertical-align: middle; }
 .adt-rev-foot th { font-weight: normal; }
 .adt-rev-foot .adt-sign td { height: 16mm; vertical-align: middle; }
+/* 續頁提示：制修訂紀錄超過一頁能放的量時，這幾頁沒有簽章格，補一句免得像印漏了 */
+.adt-rev-cont { text-align: right; font-size: 10pt; color: #8A5A2B; margin-top: 3mm; }
 .adt-l { text-align: left !important; }
 .adt-r { text-align: right !important; }
 
