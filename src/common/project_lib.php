@@ -2736,6 +2736,36 @@ function prj_work_reports(PDO $db, int $projectId): array
     return $out;
 }
 
+/**
+ * 這個專案實際報工用過哪些機台，依製程分組（給 SOP 覆蓋判定用，見 prj_doc_sopsip_map()）。
+ * 只看廠內報工（委外沒有機台概念），沿用 prj_work_reports() 同一套三段訂單→製令對應。
+ * 回傳 [process_no => [machine_id,…]]。
+ */
+function prj_process_machine_ids(PDO $db, int $projectId): array
+{
+    $out = [];
+    try {
+        $src = "SELECT m1.bom AS bom FROM bom_order_process_map m1
+                  JOIN project_order po1 ON po1.order_id = m1.order_id AND po1.project_id = ?
+                UNION
+                SELECT b2.bom FROM bom b2
+                  JOIN project_order po2 ON po2.project_id = ?
+                  JOIN order_track ot2 ON ot2.Order_id = po2.order_id
+                 WHERE b2.o_order_id IS NOT NULL AND b2.o_order_id <> ''
+                   AND (b2.o_order_id = CAST(po2.order_id AS CHAR) OR b2.o_order_id = ot2.Order_oo)";
+        $st = $db->prepare("SELECT DISTINCT r.process_no, r.machine_id
+                            FROM pm_process_daily_report r
+                            JOIN bom_ing bi ON bi.bom_ing_fid = r.bom_ing_fid
+                            JOIN ($src) srcA ON srcA.bom = bi.bom
+                            WHERE r.machine_id IS NOT NULL AND r.process_no IS NOT NULL");
+        $st->execute([$projectId, $projectId]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $out[(int)$r['process_no']][] = (int)$r['machine_id'];
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
 /** 同步比對指紋：這些欄位任一變動就算 BOM 製程被改過，要提示專案管理人 */
 function prj_bom_sig(array $r): string
 {
@@ -2959,7 +2989,7 @@ function prj_doc_check(PDO $db, int $projectId): array
     /* 專案自己綁定的 SOP／SIP：判定要吃它，畫面也要列得出「綁的是哪幾份」
        （含 ds_pk=0 的全專案綁定），所以只查一次兩邊共用。 */
     $bind = prj_ss_bind_map($db, $projectId, $ids);
-    $have = prj_doc_have_map($db, $ids, prj_scope_process_ids(prj_get($db, $projectId)), $bind);
+    $have = prj_doc_have_map($db, $ids, prj_scope_process_ids(prj_get($db, $projectId)), $bind, $projectId);
     $passed = prj_fai_pass_date($db, $projectId) !== null;
     $out = [];
     foreach ($parts as $r) {
@@ -3136,8 +3166,16 @@ function prj_ss_bind_save(PDO $db, int $projectId, int $dsPk, string $kind, arra
  * 常常有好幾筆、分屬不同客戶（記憶 bom_client_name_cache 同一條）。
  *
  * 回傳 ['sop'=>[ds_pk=>['rev'=>…]], 'sip'=>[…], 'note'=>['sop'=>[ds_pk=>'說明文字']]]
+ *
+ * 2026-09-23 使用者更正判定口徑（「已建立」原本只按製程比對，全公司任何一份都算，
+ * 使用者反映「都還沒建立、沒綁定卻顯示已建立」）：**製程 SOP（kind='process'）要同時比對
+ * 機台跟製程**——SOP 本來就是「這台機台這道製程怎麼做」，換一台機台做法通常不同；
+ * 機台取這個專案報工紀錄實際用過的那幾台（prj_process_machine_ids()），跟 ss_doc 登記的
+ * 機台（machine_id 或多台 ss_doc_machine）比對，交集才算覆蓋。**SIP 維持只比製程**（使用者
+ * 明確區分：檢驗指導書不像 SOP 綁機台）。**這個緊縮只影響「已建立」的判定，候選清單
+ * （prj_ss_cands，供人工挑選綁定）刻意不跟著收窄**——機台還沒對上的文件一樣要列出來讓人挑。
  */
-function prj_doc_sopsip_map(PDO $db, array $dsPks, array $noOf, array $scopeProc = [], array $bound = []): array
+function prj_doc_sopsip_map(PDO $db, array $dsPks, array $noOf, array $scopeProc = [], array $bound = [], int $projectId = 0): array
 {
     $out = ['sop' => [], 'sip' => [], 'note' => ['sop' => [], 'sip' => []]];
     if (!$dsPks) return $out;
@@ -3206,13 +3244,43 @@ function prj_doc_sopsip_map(PDO $db, array $dsPks, array $noOf, array $scopeProc
             $genCnt[$k] += (int)$r['c'];
         }
         // 各製程各自有哪幾份製程說明書（一個製程可以有好幾份，數量要算得出來）
+        // sip：只比製程，全公司任何一份都算（維持原口徑）。
         $covered = ['sop' => [], 'sip' => []];
-        foreach ($db->query("SELECT kind, process_no, COUNT(*) c FROM ss_doc
-                             WHERE is_deleted=0 AND kind IN ('process','sip')
+        foreach ($db->query("SELECT process_no, COUNT(*) c FROM ss_doc
+                             WHERE is_deleted=0 AND kind='sip'
                                AND process_no IS NOT NULL AND process_no>0
-                             GROUP BY kind, process_no")->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $k = ((string)$r['kind'] === 'sip') ? 'sip' : 'sop';
-            $covered[$k][(int)$r['process_no']] = (int)$r['c'];
+                             GROUP BY process_no")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $covered['sip'][(int)$r['process_no']] = (int)$r['c'];
+        }
+        // sop（kind='process'）：機台＋製程都要對得上，才算「這個專案已經有 SOP 可以用」。
+        // 機台取這個專案報工紀錄實際用過的那幾台；一台都還沒報工過就無從比對，一律當未覆蓋
+        // （寧可少算，也不要在還沒開工時就先告訴人家「已建立」）。
+        $projMachines = $projectId > 0 ? prj_process_machine_ids($db, $projectId) : [];
+        if ($projMachines) {
+            $procNosSop = array_keys($projMachines);
+            $inP = implode(',', array_fill(0, count($procNosSop), '?'));
+            $st = $db->prepare("SELECT d.doc_id, d.process_no, d.machine_id
+                                FROM ss_doc d
+                                WHERE d.is_deleted=0 AND d.kind='process'
+                                  AND d.process_no IN ($inP)");
+            $st->execute($procNosSop);
+            $sopDocs = $st->fetchAll(PDO::FETCH_ASSOC);
+            // 這些候選文件各自綁了哪些機台：ss_doc.machine_id（單台，舊資料）與 ss_doc_machine（多台）都要看
+            $docIds = array_column($sopDocs, 'doc_id');
+            $docMachines = []; // doc_id => [machine_id,…]
+            if ($docIds) {
+                $inD = implode(',', array_fill(0, count($docIds), '?'));
+                $st2 = $db->prepare("SELECT doc_id, machine_id FROM ss_doc_machine WHERE doc_id IN ($inD)");
+                $st2->execute($docIds);
+                foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) $docMachines[(int)$r['doc_id']][] = (int)$r['machine_id'];
+            }
+            foreach ($sopDocs as $r) {
+                $did = (int)$r['doc_id']; $pno = (int)$r['process_no'];
+                $ms = $docMachines[$did] ?? (((int)$r['machine_id']) > 0 ? [(int)$r['machine_id']] : []);
+                if (!$ms) continue;                              // 這份 SOP 完全沒登記機台，比不出來就不算
+                $used = $projMachines[$pno] ?? [];
+                if (array_intersect($ms, $used)) $covered['sop'][$pno] = ($covered['sop'][$pno] ?? 0) + 1;
+            }
         }
         /* 要看哪幾道製程：專案有綁定「涵蓋的製程」時**只看範圍內的**
            （使用者 2026-09-23 回報：只綁了其中一道，卻還是報缺客供料、包裝——
@@ -3308,7 +3376,7 @@ function prj_doc_attach_flag_map(PDO $db, array $dsPks, string $flagCol): array
 }
 
 /** 一次查完所有文件的「哪些料號已有」，避免逐料號逐表 N+1 查詢 */
-function prj_doc_have_map(PDO $db, array $dsPks, array $scopeProc = [], array $bound = []): array
+function prj_doc_have_map(PDO $db, array $dsPks, array $scopeProc = [], array $bound = [], int $projectId = 0): array
 {
     $dsPks = array_values(array_unique(array_filter(array_map('intval', $dsPks))));
     $have = ['dev_eval' => [], 'type_id' => [], 'pfmea' => [], 'ext_doc' => [], 'sop' => [], 'sip' => []];
@@ -3366,7 +3434,7 @@ function prj_doc_have_map(PDO $db, array $dsPks, array $scopeProc = [], array $b
     }
 
     /* SOP／SIP：以 SOP／SIP 模組為主，模組裡查不到才退回料號附件標籤（舊資料是掃描檔掛標籤） */
-    $ss = prj_doc_sopsip_map($db, $dsPks, $noOf, $scopeProc, $bound);
+    $ss = prj_doc_sopsip_map($db, $dsPks, $noOf, $scopeProc, $bound, $projectId);
     foreach (['sop' => 'is_sop', 'sip' => 'is_sip'] as $k => $flagCol) {
         $have[$k] = $ss[$k];
         foreach (prj_doc_attach_flag_map($db, $dsPks, $flagCol) as $pk => $v) {
