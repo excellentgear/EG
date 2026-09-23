@@ -207,10 +207,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 // 去除 DECIMAL 補的尾零（小數點後僅 0 則省略），避免浮點雜訊
                 $fmt = function($v){ if ($v === null) return ''; $s = rtrim(rtrim((string)$v, '0'), '.'); return ($s === '' || $s === '-') ? '0' : $s; };
                 foreach ($is->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    // 公差輸入模式：DB 有 min_value/max_value 才算 RANGE(直接填絕對上下限)，否則 TOL(標準值±公差)
+                    $hasRange = $r['min_value'] !== null && $r['max_value'] !== null;
                     $items[] = [
                         'item_id'   => (int)$r['item_id'],
                         'name'      => $r['item_name'],
                         'std'       => $r['standard_text'],
+                        'mode'      => $hasRange ? 'RANGE' : 'TOL',
+                        'min'       => $hasRange ? $fmt($r['min_value']) : '',
+                        'max'       => $hasRange ? $fmt($r['max_value']) : '',
                         'up'        => $fmt($r['plus_tolerance']),
                         'lo'        => $fmt($r['minus_tolerance']),
                         'tool'      => $r['tool_name'] ?: '',
