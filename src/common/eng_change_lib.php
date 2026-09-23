@@ -851,11 +851,31 @@ function ec_sup_above_pool(PDO $db, array $row): array
         // 這一層沒有主管 → 能不能再往上（課級以上不追，那是所有單位的共同上級不是誰的主管）
         $curLevel = $depts[$cursor]['level'] ?? 9;
         $parent   = $depts[$cursor]['parent_id'] ?? null;
-        if ($curLevel <= EG_UNIT_SUP_TOP_LEVEL) return [];
-        if (!$parent || !isset($depts[$parent]) || ($depts[$parent]['level'] ?? 9) < EG_UNIT_SUP_TOP_LEVEL) return [];
+        if ($curLevel <= EG_UNIT_SUP_TOP_LEVEL) return ec_sup_above_vacant($db, $aid, $dept, $date);
+        if (!$parent || !isset($depts[$parent]) || ($depts[$parent]['level'] ?? 9) < EG_UNIT_SUP_TOP_LEVEL)
+            return ec_sup_above_vacant($db, $aid, $dept, $date);
         $cursor = $parent;
     }
     return [];
+}
+
+/**
+ * 「職級高於申請人的主管」一個都找不到時怎麼辦。
+ *
+ * 依 ai-rules/24：**課級單位的最高主管本人開單時，單位主管從缺、由申請人自己簽**——
+ * 課級以上（總經理室／董事長室）是所有單位的共同上級，不是誰的單位主管。
+ * 不這樣處理的話，經理自己開的單會卡在單位主管那一關**沒有任何人簽得下去**（只剩管理員推得動），
+ * 這是換成本來源之後才會出現的死角，不是使用者要的結果。
+ * 申請人本身也不是主管（例：整個課一個主管都沒有）時才是真的從缺，章留白由紙本手蓋。
+ */
+function ec_sup_above_vacant(PDO $db, int $applicantId, int $deptId, string $date): array
+{
+    if ($applicantId <= 0 || $deptId <= 0) return [];
+    $head = eg_unit_dept_head($db, $deptId, $date, 0);
+    if (!$head || (int)$head['id'] !== $applicantId) return [];   // 真的從缺
+    return [['id' => $applicantId, 'name' => (string)$head['name'],
+             'dept_id' => $deptId, 'dept_name' => (string)$head['dept_name'],
+             'position_name' => (string)$head['position_name'], 'level' => (int)$head['level']]];
 }
 
 /**
