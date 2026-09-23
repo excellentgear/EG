@@ -400,6 +400,7 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
             <li>產品件號可點擊開啟圖面查閱（比照報價單頁做法）。</li>
             <li>清單的<b>簽核日期</b>＝該筆最後一次簽核的日期（人工逐關簽核時就是最後簽的那一關；自動簽核則為指定的簽核業務日期），滑鼠移上去可看完整時間；<b>列印日期</b>＝最後一次列印的日期，每按一次列印（含批次列印）就會留一筆紀錄，滑鼠移上去可看完整時間與累計列印次數。</li>
             <li>簽章使用全站通用圓形姓名章（若本人有上傳掃描實體章會優先用掃描章）；由代理人代簽時右下角加「代」字。</li>
+            <li><b>確認項目及結果每點選/變動一項就會立即自動儲存</b>（表格標題旁會顯示「儲存中…／已自動儲存」），不必也不需要另外按「儲存」——表頭的「儲存」鈕只用來存客戶/料號/品名/數量/填表日期/樣品時間，不會影響已填的確認項目。</li>
             <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號。</li>
         </ul>
         <h4>設定入口</h4>
@@ -821,6 +822,8 @@ $('#btnSetFixedName').on('click', function(){
 });
 
 function saveHeader(){
+    // 確認項目及結果不經這裡存檔——每改一項就已經自動儲存（queueAnswerAutoSave），這顆按鈕只管表頭欄位；
+    // 舊版曾在此一併整批覆寫 32 項答案，畫面沒即時反映最新狀態時會把已存好的答案洗成空白（2026-09-23 已修正）。
     var payload = {
         action: 'save', id: CUR_ID,
         customer_name: $('#fCustomerName').val(),
@@ -830,7 +833,6 @@ function saveHeader(){
         est_qty: $('#fEstQty').val(),
         fill_date: $('#fFillDate').val(),
         sample_time: $('#fSampleTime').val(),
-        answers: JSON.stringify(collectAnswers()),
     };
     $.post(API, payload, function(res){
         if (!res.success){ alert(res.message||'儲存失敗'); return; }
@@ -946,19 +948,28 @@ function submitFullEditUnlock(){
         if (!res.success){ alert(res.message||'密碼錯誤'); return; }
         FULL_EDIT_MODE = true;
         closeMask('fullEditMask');
-        // 開啟當下把管理員設定的確認項目預設值套用到「還沒填」的項次(不覆蓋已有答案)，畫面上先帶入、未存檔前不會真的變更
+        // 開啟當下把管理員設定的確認項目預設值套用到「還沒填」的項次(不覆蓋已有答案)；
+        // 這裡是程式改的值、不是使用者點擊，不會觸發 #chkBody 的 change 事件，所以要自己補送一次自動儲存
+        // ——否則畫面上看起來已經填好，實際上從未寫進 DB，關掉視窗重開就會「填完資料又一直不見」（2026-09-23 使用者回報）。
         $.getJSON(API, {action:'answer_defaults_get'}, function(dres){
+            var appliedAny = false;
             if (dres.success && dres.defaults) {
                 Object.keys(dres.defaults).forEach(function(no){
-                    if (!CUR_ANSWERS[no]) CUR_ANSWERS[no] = dres.defaults[no];
+                    if (!CUR_ANSWERS[no]) {
+                        CUR_ANSWERS[no] = dres.defaults[no];
+                        queueAnswerAutoSave(no, dres.defaults[no]);
+                        appliedAny = true;
+                    }
                 });
             }
             renderChecklist(CUR_ANSWERS);
             renderSlots(CUR_SLOTS);
             renderDecisionGrp($('#adminDecisionSelect').val() || '', CUR_SLOTS['prod_decision']);
             applyStatusUI();
+            alert('已開啟全表填寫模式：可自行填寫上方全部確認項目、決行選項與各部門意見'
+                + (appliedAny ? '（尚未填的確認項目已先帶入預設值並自動儲存，仍可修改，修改一樣會自動儲存）' : '（每次點選確認項目都會立即自動儲存）')
+                + '；填完後請用「補登簽核」或系統管理員快速設定的「全部自動簽核」正式完成簽核。');
         });
-        alert('已開啟全表填寫模式：可自行填寫上方全部確認項目、決行選項與各部門意見（尚未填的確認項目已先帶入預設值，仍可修改，未存檔前不會真的變更）；填完後請用「補登簽核」或系統管理員快速設定的「全部自動簽核」正式完成簽核。');
     }, 'json');
 }
 

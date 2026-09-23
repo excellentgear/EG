@@ -155,8 +155,6 @@ case 'save':
     $estQty = trim((string)($_POST['est_qty'] ?? ''));
     $fillDate = trim((string)($_POST['fill_date'] ?? ''));
     $sampleTime = trim((string)($_POST['sample_time'] ?? ''));
-    $answersRaw = json_decode((string)($_POST['answers'] ?? '{}'), true);
-    if (!is_array($answersRaw)) $answersRaw = [];
 
     $db->beginTransaction();
     try {
@@ -188,19 +186,11 @@ case 'save':
             $id = (int)$db->lastInsertId();
         }
 
-        // 確認項目及結果只能透過「送出後在自己部門的簽核關卡」(sign動作) 或系統管理員的全表填寫模式來填，
-        // 不論表單處於什麼狀態，一般使用者一律不可經由 save 動作寫入(即使是草稿階段)——各使用者只能點選/回覆
-        // 自己能簽核的範圍，跟評估表登錄/管理員這種頁面操作角色無關，此處後端同步前端 itemEditable() 的收斂
-        if ($perms['isAdmin']) {
-            // 管理員整批存檔：沒送到的項次一律寫成 null（＝清空），這是「整張表以送來的為準」的語意，
-            // 與 answer_save 的逐項更新不同，所以這裡要自己先補齊 null 再交給唯一寫入點
-            $full = [];
-            foreach (TD_DEV_EVAL_TEMPLATE as $itemNo => $tpl) {
-                $result = $answersRaw[$itemNo] ?? $answersRaw[(string)$itemNo] ?? null;
-                $full[$itemNo] = in_array($result, ['yes','no','na'], true) ? $result : null;
-            }
-            td_dev_eval_answer_write($db, $id, $full);
-        }
+        // 確認項目及結果不在這裡處理：一律由 answer_save（每改一項就自動存一項）與全表填寫模式的
+        // 預設值套用各自即時寫入（2026-09-23 使用者回報「填完確認項目後按儲存也沒儲存」）。
+        // 這裡原本對管理員做「整張表以送來的為準、沒送到的項次一律清成 null」，
+        // 但表頭儲存當下畫面上不一定完整反映每一項的最新狀態（例如全表填寫模式套用預設值時並不會
+        // 觸發每一格的變動事件），一旦如此就會把已經自動存好的答案整批洗成空白——這正是本次回報的根因。
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'儲存失敗：'.$e->getMessage()]); }
     jout(['success'=>true,'id'=>$id]);
