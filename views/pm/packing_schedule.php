@@ -1699,12 +1699,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             var orderQty = parseFloat($('#f-order-qty').val()) || 0;
             var totalNg = 0;
             $('.pkg-ng-qty').each(function () { totalNg += (parseFloat($(this).val()) || 0); });
-            $('#pkg-actual-qty').val(orderQty - totalNg);
+            var okQty = orderQty - totalNg;
+            var isFull = $('#pkg-direct-ship').is(':checked');
+            var shipNow = isFull ? (parseFloat($('#pkg-ship-now-qty').val()) || 0) : 0;
+            var warehouseQty;
+            if (isFull) {
+                warehouseQty = Math.max(0, okQty - shipNow);
+                $('#pkg-actual-qty').val(warehouseQty);
+                var needStorage = warehouseQty > 0;
+                $('#f-storage-wrap').toggle(needStorage);
+                $('#f-storage-required').toggle(needStorage);
+            } else {
+                warehouseQty = parseFloat($('#pkg-actual-qty').val());
+                if (isNaN(warehouseQty)) { warehouseQty = okQty; $('#pkg-actual-qty').val(warehouseQty); }
+                $('#f-storage-wrap').show();
+                $('#f-storage-required').hide();
+            }
+            var totalNow = shipNow + (parseFloat(warehouseQty) || 0);
+            $('#pkg-total-now').text(totalNow);
+            var hint = '';
+            if (totalNow !== okQty) hint = '（與 BOM總數-NG=' + okQty + ' 不同，請確認是否為分批中的一部分）';
+            $('#pkg-total-now-hint').text(hint);
             $('#pkg-appearance-tfoot').html(
                 '<tr><td colspan="4" class="text-right" style="font-size:1.05em;">' +
-                '訂單數量: <span class="text-primary">' + orderQty + '</span> - ' +
+                'BOM總數: <span class="text-primary">' + orderQty + '</span> - ' +
                 'NG總數: <span class="text-danger">' + totalNg + '</span> = ' +
-                '<span class="text-success">小計(OK): ' + (orderQty - totalNg) + '</span></td></tr>'
+                '<span class="text-success">小計(OK): ' + okQty + '</span></td></tr>'
             );
         }
 
@@ -1713,6 +1733,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             calcActualQty();
         });
         $('#f-order-qty').on('input', calcActualQty);
+        $('#pkg-actual-qty').on('input', calcActualQty);
+        $('#pkg-direct-ship').on('change', function () {
+            $('#pkg-ship-now-wrap').toggle($(this).is(':checked'));
+            if (!$(this).is(':checked')) $('#pkg-ship-now-qty').val('');
+            calcActualQty();
+        });
+        $('#pkg-ship-now-qty').on('input', calcActualQty);
 
         // "其他" 輸入框顯示 + 無/已處理 互斥
         $(document).on('change', '.pkg-rust, .pkg-collision, #pkg-appearance-tbody input[type="checkbox"]', function () {
@@ -1783,7 +1810,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $('#pkWindow').draggable({ handle: '#pkWindowHeader', cancel: '.close' });
 
         // ---------- 儲存 ----------
-        $('#btn-save-pkg').click(function () {
+        function doSave(complete) {
             if (!currentRow) return;
 
             // 外觀資料
@@ -1815,6 +1842,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             var rust = []; $('.pkg-rust:checked').each(function () { rust.push($(this).val()); });
             var collision = []; $('.pkg-collision:checked').each(function () { collision.push($(this).val()); });
 
+            var isFullShip = $('#pkg-direct-ship').is(':checked');
+            var shipNowQty = isFullShip ? (parseInt($('#pkg-ship-now-qty').val(), 10) || 0) : 0;
+            var okQty = (parseFloat($('#f-order-qty').val()) || 0) - totalNg;
+            var storageMethod = $('input[name="pkg-storage-method"]:checked').val();
+            var warehouseQty = parseFloat($('#pkg-actual-qty').val());
+            if (isNaN(warehouseQty)) warehouseQty = 0;
+
+            // 前端先擋一次（後端 save_result 同規則再擋一次＝鐵律8）
+            if (isFullShip) {
+                if (!shipNowQty || shipNowQty <= 0) { alert('請輸入本次出貨數量'); $('#pkg-ship-now-qty').focus(); return; }
+                if (shipNowQty > okQty) { alert('本次出貨數量不可大於可出/入庫數量(' + okQty + ')'); $('#pkg-ship-now-qty').focus(); return; }
+                if (warehouseQty > 0 && !storageMethod) { alert('尚有 ' + warehouseQty + ' 個需要入庫，請選擇成品入庫方式'); return; }
+            }
+            if (currentMode === 'backfill') {
+                if (!$('#f-record-date').val()) { alert('請選擇補登日期'); $('#f-record-date').focus(); return; }
+            }
+            if (currentIsClosed && !$('#f-confirm-password').val()) {
+                alert('此紀錄已結案鎖定，請輸入操作確認密碼才能存檔');
+                $('#f-confirm-password').focus();
+                return;
+            }
+
             var packagingData = {
                 appearance: appearance,
                 rows: rows,
@@ -1827,34 +1876,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 return_jig: $('#pkg-return-jig').val(),
                 return_sample: $('#pkg-return-sample').val(),
                 shipment_desc: $('#pkg-shipment-desc').val(),
-                storage_method: $('input[name="pkg-storage-method"]:checked').val(),
+                storage_method: storageMethod,
                 pallet_qty: $('#pkg-pallet-qty').val(),
-                actual_qty: $('#pkg-actual-qty').val()
+                actual_qty: $('#pkg-actual-qty').val(),
+                ship_now_qty: shipNowQty
             };
 
-            var $btn = $(this).prop('disabled', true);
-            $.post(API, {
+            var payload = {
                 action: 'save_result',
                 bom_ing_fid: currentRow.bom_ing_fid,
+                packing_inspection_id: currentPkgId || '',
                 order_qty: $('#f-order-qty').val(),
                 ng_qty: totalNg,
+                ship_now_qty: shipNowQty,
+                warehouse_qty: warehouseQty,
+                is_full_shipment: isFullShip ? 1 : 0,
+                storage_method: storageMethod || '',
+                pallet_qty: $('#pkg-pallet-qty').val(),
                 packaging_data: packagingData,
-                remark: $('#pkg-remark').val()
-            }, function (res) {
-                $btn.prop('disabled', false);
+                remark: $('#pkg-remark').val(),
+                complete: complete ? 1 : 0
+            };
+            if (currentMode === 'backfill') {
+                payload.is_backfill = 1;
+                payload.record_date = $('#f-record-date').val();
+                if (PK_CAN_BACKFILL_PACKER) payload.packer_id = $('#f-packer-select').val() || '';
+            }
+            if (currentIsClosed) payload.confirm_password = $('#f-confirm-password').val();
+
+            var $btns = $('#btn-save-draft, #btn-save-pkg').prop('disabled', true);
+            $.post(API, payload, function (res) {
+                $btns.prop('disabled', false);
                 if (res.success) {
-                    alert('儲存成功');
                     hideWindow();
-                    loadList(); // 已完成的會自動從清單移除
+                    if (currentMode === 'editClosed') { loadClosedList(); }
+                    else { loadList(); }
                 } else {
                     alert('儲存失敗: ' + res.message);
                 }
             }, 'json').fail(function (xhr) {
-                $btn.prop('disabled', false);
+                $btns.prop('disabled', false);
                 alert('連線失敗');
                 console.error(xhr.responseText);
             });
-        });
+        }
+        $('#btn-save-pkg').click(function () { doSave(true); });
+        $('#btn-save-draft').click(function () { doSave(false); });
 
         // ---------- 設定 ----------
         $('#btn-setting').click(function () {
@@ -2001,9 +2068,220 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (el.value !== '') setTimeout(function () { try { el.select(); } catch (err) {} }, 0);
         });
 
-        $('#btn-refresh').click(loadList);
+        $('#btn-refresh').click(function () {
+            if ($('#pk-main-tabs li[data-tab="closed"]').hasClass('active')) loadClosedList(); else loadList();
+        });
+        $('#btn-page-help').click(function () { $('#helpUseMask').modal('show'); });
+
+        // ---------- 分頁（待包裝／已結案） ----------
+        $('#pk-main-tabs').on('click', 'li', function () {
+            var tab = $(this).data('tab');
+            $('#pk-main-tabs li').removeClass('active');
+            $(this).addClass('active');
+            $('#pk-tab-pending').toggle(tab === 'pending');
+            $('#pk-tab-closed').toggle(tab === 'closed');
+            if (tab === 'closed') loadClosedList();
+        });
+
+        // ---------- 已結案清單 ----------
+        var clPage = 1;
+        function clDefaultRange() {
+            var now = new Date();
+            var first = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-01';
+            $('#cl-f-from').val(first);
+            $('#cl-f-to').val(todayStr());
+        }
+        function loadClosedList(page) {
+            clPage = page || 1;
+            var params = {
+                action: 'list_closed', page: clPage, per: 20,
+                bom: $('#cl-f-bom').val(), part_no: $('#cl-f-part').val(),
+                date_from: $('#cl-f-from').val(), date_to: $('#cl-f-to').val()
+            };
+            $('#cl-list').html('<tr><td colspan="10" class="text-center text-muted">載入中...</td></tr>');
+            $.post(API, params, function (res) {
+                if (!res.success) { $('#cl-list').html('<tr><td colspan="10" class="text-danger">' + (res.message || '載入失敗') + '</td></tr>'); return; }
+                $('#cl-count').html('共 <strong>' + res.total + '</strong> 筆已結案');
+                if (!res.data.length) {
+                    $('#cl-list').html('<tr><td colspan="10" class="text-center text-muted" style="padding:20px;">查無資料</td></tr>');
+                    $('#cl-pager').html('');
+                    return;
+                }
+                var html = '';
+                res.data.forEach(function (r) {
+                    var shipTxt = '';
+                    if (r.is_full_shipment * 1 === 1) shipTxt = '出' + fmtNum(r.ship_now_qty) + (r.warehouse_qty > 0 ? ' / 入' + fmtNum(r.warehouse_qty) : '（全出貨）');
+                    else shipTxt = '入' + fmtNum(r.warehouse_qty);
+                    html += '<tr>' +
+                        '<td>' + egFmtDate(r.inspection_date) + '</td>' +
+                        '<td><span class="bom-code">' + r.bom + '</span></td>' +
+                        '<td>' + (r.part_no || '') + '</td>' +
+                        '<td>' + (r.customer_name || '') + '</td>' +
+                        '<td class="text-right">' + fmtNum(r.order_qty) + '</td>' +
+                        '<td class="text-right">' + (r.ng_qty > 0 ? ('<span class="text-danger">' + fmtNum(r.ng_qty) + '</span>') : '0') + '</td>' +
+                        '<td>' + shipTxt + '</td>' +
+                        '<td>' + (r.packer || '') + '</td>' +
+                        '<td>' + (r.is_backfill * 1 === 1 ? '<span class="label label-warning">補登</span>' : '') + '</td>' +
+                        '<td class="text-right">' +
+                            '<button class="btn btn-xs btn-default cl-view" data-id="' + r.packing_inspection_id + '" title="檢視"><i class="fa fa-eye"></i></button> ' +
+                            (PK_CAN_ADMIN ? '<button class="btn btn-xs btn-warning cl-unlock" data-id="' + r.packing_inspection_id + '" title="解鎖修改"><i class="fa fa-unlock"></i></button>' : '') +
+                        '</td>' +
+                        '</tr>';
+                });
+                $('#cl-list').html(html);
+                var totalPages = Math.ceil(res.total / res.per) || 1;
+                var pg = '';
+                if (totalPages > 1) {
+                    for (var p = 1; p <= totalPages; p++) {
+                        pg += '<button class="btn btn-xs ' + (p === clPage ? 'btn-primary' : 'btn-default') + ' cl-page" data-p="' + p + '" style="margin-left:2px;">' + p + '</button>';
+                    }
+                }
+                $('#cl-pager').html(pg);
+            }, 'json');
+        }
+        $(document).on('click', '.cl-page', function () { loadClosedList($(this).data('p')); });
+        $('#btn-cl-search').click(function () { loadClosedList(1); });
+        $('#btn-cl-reset').click(function () { $('#cl-f-bom, #cl-f-part').val(''); clDefaultRange(); loadClosedList(1); });
+        $(document).on('click', '.cl-view', function () { openClosedRecord($(this).data('id'), false); });
+        $(document).on('click', '.cl-unlock', function () { openClosedRecord($(this).data('id'), true); });
+
+        $('#btn-cl-print').click(function () {
+            var params = { action: 'list_closed_all', bom: $('#cl-f-bom').val(), part_no: $('#cl-f-part').val(), date_from: $('#cl-f-from').val(), date_to: $('#cl-f-to').val() };
+            $.post(API, params, function (res) {
+                if (!res.success) { alert('取得資料失敗'); return; }
+                printClosedList(res.data, params);
+            }, 'json');
+        });
+        function printClosedList(rows, params) {
+            var win = window.open('', '_blank');
+            var rangeTxt = (params.date_from || '（不限）') + ' ~ ' + (params.date_to || '（不限）');
+            var filterTxt = [];
+            if (params.bom) filterTxt.push('BOM: ' + params.bom);
+            if (params.part_no) filterTxt.push('料號: ' + params.part_no);
+            var body = '<h3>已包裝明細</h3><div>期間：' + rangeTxt + (filterTxt.length ? '　篩選：' + filterTxt.join('、') : '') + '　共 ' + rows.length + ' 筆</div>' +
+                '<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;width:100%;font-size:12px;margin-top:8px;">' +
+                '<thead><tr style="background:#eee;"><th>結案日期</th><th>BOM</th><th>料號</th><th>客戶</th><th>數量</th><th>NG</th><th>出貨數</th><th>入庫數</th><th>包裝人員</th><th>備註</th></tr></thead><tbody>';
+            rows.forEach(function (r) {
+                body += '<tr><td>' + egFmtDate(r.inspection_date) + '</td><td>' + r.bom + '</td><td>' + (r.part_no || '') + '</td><td>' +
+                    (r.customer_name || '') + '</td><td>' + fmtNum(r.order_qty) + '</td><td>' + fmtNum(r.ng_qty) + '</td><td>' +
+                    fmtNum(r.ship_now_qty) + '</td><td>' + fmtNum(r.warehouse_qty) + '</td><td>' + (r.packer || '') + '</td><td>' + (r.remark || '') + '</td></tr>';
+            });
+            body += '</tbody></table>';
+            win.document.write('<html><head><meta charset="UTF-8"><title>已包裝明細</title></head><body>' + body +
+                '<script>window.onload=function(){window.print();};<' + '/script></body></html>');
+            win.document.close();
+        }
+
+        // ---------- 補登包裝紀錄 ----------
+        <?php if ($PK_CAN_BACKFILL): ?>
+        $('#btn-backfill').click(function () {
+            $('#bf-kw').val('');
+            $('#bf-result').html('<tr><td colspan="6" class="text-center text-muted">請輸入關鍵字搜尋</td></tr>');
+            $('#backfillModal').modal('show');
+        });
+        function bfSearch() {
+            $.post(API, { action: 'backfill_search', kw: $('#bf-kw').val() }, function (res) {
+                if (!res.success) { $('#bf-result').html('<tr><td colspan="6" class="text-danger">' + (res.message || '搜尋失敗') + '</td></tr>'); return; }
+                if (!res.data.length) { $('#bf-result').html('<tr><td colspan="6" class="text-center text-muted">查無符合的 BOM（或已有包裝紀錄）</td></tr>'); return; }
+                var html = '';
+                res.data.forEach(function (r, i) {
+                    html += '<tr><td>' + r.bom + '</td><td>' + (r.ProcessName || ('製程' + r.process_no)) + '</td><td>' +
+                        (r.part_no || '') + (r.Revision ? (' <span class="rev-badge">版' + r.Revision + '</span>') : '') + '</td><td>' +
+                        (r.Client_Name || '') + '</td><td class="text-right">' + fmtNum(r.bom_total_qty != null ? r.bom_total_qty : r.sqty) + '</td>' +
+                        '<td><button class="btn btn-xs btn-primary bf-pick" data-i="' + i + '">選擇</button></td></tr>';
+                });
+                $('#bf-result').html(html);
+                $('#bf-result').data('rows', res.data);
+            }, 'json');
+        }
+        $('#bf-search-btn').click(bfSearch);
+        $('#bf-kw').on('keydown', function (e) { if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); bfSearch(); } });
+        $(document).on('click', '.bf-pick', function () {
+            var rows = $('#bf-result').data('rows') || [];
+            var r = rows[$(this).data('i')];
+            if (!r) return;
+            $('#backfillModal').modal('hide');
+            openWindow(r, 'backfill');
+        });
+        <?php endif; ?>
+
+        // ---------- 角色與功能設定 ----------
+        <?php if ($PK_CAN_ADMIN): ?>
+        var ROLES_API = '../../src/store/Roles_API.php';
+        var PK_FEATURES = [
+            ['pk_backfill', '補登舊資料（開啟「補登包裝紀錄」搜尋與填寫）'],
+            ['pk_backfill_change_packer', '補登時可指定其他人為包裝人員（否則只能填寫自己）'],
+            ['pk_admin', '管理員（解鎖修改已結案紀錄、管理角色與功能設定）']
+        ];
+        var curRole = null;
+        function pkEsc(s) { return $('<div>').text(s == null ? '' : s).html(); }
+        function loadRoles() {
+            $.get(ROLES_API, { action: 'get_roles', module: 'packing_schedule' }, function (r) {
+                if (!r || !r.success) { $('#role-list').html('<div class="text-danger">' + pkEsc(r && r.message || '載入失敗') + '</div>'); return; }
+                var h = '';
+                r.data.forEach(function (ro) {
+                    var sys = parseInt(ro.is_system, 10) === 1;
+                    h += '<a href="#" class="list-group-item role-item" data-id="' + ro.role_id + '" data-name="' + pkEsc(ro.role_name) + '" data-sys="' + (sys ? 1 : 0) + '">'
+                       + pkEsc(ro.role_name) + (sys ? ' <span class="label label-info pull-right">系統(全權)</span>' : '') + '</a>';
+                });
+                $('#role-list').html(h || '<div class="text-muted">尚無角色</div>');
+                $('.role-item').on('click', function (e) {
+                    e.preventDefault();
+                    $('.role-item').removeClass('active'); $(this).addClass('active');
+                    selectRole($(this).data('id'), $(this).data('name'), $(this).data('sys') == 1);
+                });
+            }, 'json');
+        }
+        function selectRole(rid, rname, isSys) {
+            curRole = { id: rid, name: rname, sys: isSys };
+            $('#role-feat-empty').hide(); $('#role-feat-area').show(); $('#rf-role-name').text(rname); $('#rf-msg').text('');
+            $.get(ROLES_API, { action: 'get_role_features', role_id: rid }, function (r) {
+                var have = (r && r.success) ? r.data : [];
+                if (isSys) have = PK_FEATURES.map(function (f) { return f[0]; });
+                var h = '';
+                PK_FEATURES.forEach(function (f) {
+                    h += '<div class="checkbox"><label><input type="checkbox" class="rf-chk" value="' + f[0] + '" '
+                       + (have.indexOf(f[0]) >= 0 ? 'checked' : '') + (isSys ? ' disabled' : '') + '> ' + pkEsc(f[1]) + ' <code>' + f[0] + '</code></label></div>';
+                });
+                $('#rf-checks').html(h);
+                $('#btn-save-feats,#btn-del-role,#btn-rename-role').prop('disabled', isSys);
+            }, 'json');
+        }
+        $('#btn-role-setting').on('click', function (e) { e.preventDefault(); $('#role-feat-area').hide(); $('#role-feat-empty').show(); loadRoles(); $('#roleModal').modal('show'); });
+        $('#btn-add-role').on('click', function () {
+            var n = $('#new-role-name').val().trim();
+            if (!n) { alert('請輸入角色名稱'); return; }
+            $.post(ROLES_API, { action: 'save_role', role_name: n, module: 'packing_schedule' }, function (r) {
+                if (r && r.success) { $('#new-role-name').val(''); loadRoles(); } else alert(r && r.message || '新增失敗');
+            }, 'json');
+        });
+        $('#btn-rename-role').on('click', function () {
+            if (!curRole || curRole.sys) return;
+            var n = prompt('新角色名稱', curRole.name);
+            if (!n) return;
+            $.post(ROLES_API, { action: 'save_role', role_id: curRole.id, role_name: n.trim(), module: 'packing_schedule' }, function (r) {
+                if (r && r.success) loadRoles(); else alert(r && r.message || '改名失敗');
+            }, 'json');
+        });
+        $('#btn-del-role').on('click', function () {
+            if (!curRole || curRole.sys) return;
+            if (!confirm('確定刪除角色「' + curRole.name + '」？此角色的功能與使用者指派都會移除。')) return;
+            $.post(ROLES_API, { action: 'delete_role', role_id: curRole.id }, function (r) {
+                if (r && r.success) { $('#role-feat-area').hide(); $('#role-feat-empty').show(); loadRoles(); } else alert(r && r.message || '刪除失敗');
+            }, 'json');
+        });
+        $('#btn-save-feats').on('click', function () {
+            if (!curRole || curRole.sys) return;
+            var feats = [];
+            $('.rf-chk:checked').each(function () { feats.push($(this).val()); });
+            $.post(ROLES_API, { action: 'save_role_features', role_id: curRole.id, features: JSON.stringify(feats) }, function (r) {
+                $('#rf-msg').text(r && r.success ? '已儲存' : (r && r.message || '儲存失敗'));
+            }, 'json');
+        });
+        <?php endif; ?>
 
         // 初始
+        clDefaultRange();
         loadList();
     });
     </script>
