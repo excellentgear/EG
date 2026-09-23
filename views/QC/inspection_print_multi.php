@@ -40,7 +40,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
         // ── 製程清單（依 bom_sn 排序＝實際製程順序）──────────────────────
         $procs = $pdo->prepare("
-            SELECT bi.bom_ing_fid, bi.bom_sn, bi.process_no, pn.ProcessName, bi.sqty AS proc_qty, bi.maker_id
+            SELECT bi.bom_ing_fid, bi.bom_sn, bi.process_no, pn.ProcessName, bi.sqty AS proc_qty, bi.maker_id,
+                   COALESCE(pn.is_exclude_qc,0) AS is_exclude_qc
             FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
             WHERE bi.bom = ?
             ORDER BY bi.bom_sn ASC
@@ -65,6 +66,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
         }
 
+        // ── 出貨檢驗（insp_kind=SHIP）：不屬於任何一個 bom_ing 製程，改用 ship_bom 撈這張 BOM
+        // 的出貨檢驗單，一律只取最新一張（可能重新產生過好幾次），用固定 sentinel fid=-1 接到
+        // 下面同一套「批次/完整明細」組裝邏輯，不必另外複製一份 ──
+        $SHIP_FID = -1;
+        $shipForm = $pdo->prepare("SELECT qc_form_id, bom_ing_fid, batch_no, round_no, incoming_qty, sample_qty, ng_qty,
+                                    check_result, main_remark, check_date, created_by, created_at
+                                   FROM qc_check_form WHERE ship_bom=? AND insp_kind='SHIP' AND status<>'DRAFT'
+                                   ORDER BY qc_form_id DESC LIMIT 1");
+        $shipForm->execute([$bom]);
+        if ($sf = $shipForm->fetch(PDO::FETCH_ASSOC)) {
+            $sf['bom_ing_fid'] = $SHIP_FID;
+            $formsByFid[$SHIP_FID] = [$sf];
+        }
+
         // 檢驗人姓名一次查完（people_lib 只列在職會篩掉離職者名字，這裡單純顯示歷史紀錄的人名，不做在職判定）
         $uidSet = [];
         foreach ($formsByFid as $rows) foreach ($rows as $r) if (!empty($r['created_by'])) $uidSet[$r['created_by']] = true;
@@ -87,7 +102,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $mq = $pdo->prepare("
                     SELECT m.item_id, m.sample_no, m.measured_value, m.result, m.item_verdict,
                            m.measure_method, m.tool_id, t.Tool_No,
-                           i.item_name, i.standard_text, i.plus_tolerance, i.minus_tolerance, i.sort_order,
+                           i.item_name, i.standard_text, i.min_value, i.max_value, i.plus_tolerance, i.minus_tolerance, i.sort_order,
                            (SELECT tl.QC_Tool FROM qc_inspection_item_tool_type itt JOIN qc_tool_list tl ON itt.QC_Tool_List_id=tl.QC_Tool_List_id WHERE itt.item_id=i.item_id ORDER BY itt.is_primary DESC LIMIT 1) AS tool_name
                     FROM qc_measurement m JOIN qc_inspection_item i ON m.item_id=i.item_id
                     LEFT JOIN qc_tool t ON m.tool_id=t.Tool_id
@@ -99,8 +114,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 foreach ($mq->fetchAll(PDO::FETCH_ASSOC) as $r) {
                     $iid = (int)$r['item_id'];
                     if (!isset($byItem[$iid])) {
+                        // 公差輸入模式：DB 有 min_value/max_value 才算 RANGE(直接填絕對上下限)，否則 TOL(標準值±公差)
+                        $hasRange = $r['min_value'] !== null && $r['max_value'] !== null;
                         $byItem[$iid] = [
                             'name' => $r['item_name'], 'std' => $r['standard_text'],
+                            'mode' => $hasRange ? 'RANGE' : 'TOL', 'min' => $hasRange ? $fmt($r['min_value']) : '', 'max' => $hasRange ? $fmt($r['max_value']) : '',
                             'up' => $fmt($r['plus_tolerance']), 'lo' => $fmt($r['minus_tolerance']),
                             'tool' => $r['tool_name'] ?: ($r['measure_method'] ?: ''),
                             'verdict' => $r['item_verdict'] ?: 'OK',
@@ -171,9 +189,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             if ($dn = $d->fetchColumn()) $docName = $dn;
         }
 
-        $processes = [];
-        foreach ($procRows as $p) {
-            $fid = (int)$p['bom_ing_fid'];
+        // 逐一組出「一個製程一筆」的資料結構；出貨檢驗(SHIP)是額外插入的一筆(不是真正的 bom_ing 製程)，
+        // 沿用同一套 batches/detail 組裝寫法但要素材源不同，抽成小函式兩處共用，避免複製兩份邏輯。
+        $buildProcEntry = function ($fid, $label, $procQty, $makerId, $isExempt) use ($formsByFid, $itemsByFid, $nameMap) {
             $forms = $formsByFid[$fid] ?? [];
             $batches = [];
             foreach ($forms as $f) {
@@ -185,14 +203,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     'creator' => $nameMap[$f['created_by']] ?? '',
                 ];
             }
-            $processes[] = [
-                'bom_ing_fid' => $fid, 'bom_sn' => $p['bom_sn'], 'process_name' => $p['ProcessName'] ?: ('製程' . $p['process_no']),
-                'proc_qty' => $p['proc_qty'], 'maker_id' => $p['maker_id'],
+            return [
+                'bom_ing_fid' => $fid, 'bom_sn' => $label['sn'], 'process_name' => $label['name'],
+                'proc_qty' => $procQty, 'maker_id' => $makerId, 'exempt' => $isExempt,
                 'batches' => array_values($batches),
                 'last_form' => $forms ? end($forms) : null,
                 'detail' => $itemsByFid[$fid] ?? null,
             ];
+        };
+
+        $processes = [];
+        $shipInserted = !isset($formsByFid[$SHIP_FID]);   // 沒有出貨檢驗單就不必插入
+        foreach ($procRows as $p) {
+            $fid = (int)$p['bom_ing_fid'];
+            // 出貨檢驗一律排在「包裝」製程之前（使用者拍板：獨立為成品出貨，位置在包裝前面）；
+            // 找不到名稱含「包裝」的製程就排在最後（迴圈結束後補插）
+            if (!$shipInserted && mb_strpos((string)($p['ProcessName'] ?: ''), '包裝') !== false) {
+                $processes[] = $buildProcEntry($SHIP_FID, ['sn' => '', 'name' => '出貨檢驗'], null, null, false);
+                $shipInserted = true;
+            }
+            $processes[] = $buildProcEntry($fid, ['sn' => $p['bom_sn'], 'name' => $p['ProcessName'] ?: ('製程' . $p['process_no'])],
+                $p['proc_qty'], $p['maker_id'], (int)$p['is_exclude_qc'] === 1);
         }
+        if (!$shipInserted) $processes[] = $buildProcEntry($SHIP_FID, ['sn' => '', 'name' => '出貨檢驗'], null, null, false);
 
         echo json_encode(['success' => true, 'bom' => $bom, 'client' => $baseRow['Client_Name'], 'd_id' => $baseRow['d_id'],
             'total_qty' => (int)$baseRow['sqty'], 'company' => $company, 'doc_name' => $docName, 'as_doc_no' => $asDocNo,
@@ -227,7 +260,7 @@ body{ background:#F6F1EA; }
 <body>
 <div class="warm-panel">
     <h3 style="margin-top:0;color:var(--ink);"><i class="fa fa-files-o"></i> 全製程合併列印</h3>
-    <div class="muted-help" style="margin-bottom:10px;">依 BOM 號碼列出這批製令所有製程的檢驗狀態，自動帶入該圖號最新工程圖後合併列印。</div>
+    <div class="muted-help" style="margin-bottom:10px;">依 BOM 號碼自動產生封面頁（上半圖面／下半各製程檢驗狀態總覽）；「封面＋完整實測數值」會接著印出每個<b>已經有檢驗紀錄</b>的製程明細，尚無紀錄的製程只會列在封面、不會印出空白明細。</div>
     <div class="form-inline" style="margin-bottom:10px;">
         <div class="form-group" style="margin-right:14px;">
             <label>BOM 號碼</label>
@@ -240,8 +273,8 @@ body{ background:#F6F1EA; }
         <div class="form-inline" style="margin-bottom:10px;">
             <div class="form-group" style="margin-right:18px;">
                 <label>詳細度</label>
-                <label class="radio-inline"><input type="radio" name="mode" value="summary" checked> 概覽（每製程一行狀態）</label>
-                <label class="radio-inline"><input type="radio" name="mode" value="full"> 完整（展開最後一輪實測數值）</label>
+                <label class="radio-inline"><input type="radio" name="mode" value="summary" checked> 僅封面（圖面＋各製程狀態總覽）</label>
+                <label class="radio-inline"><input type="radio" name="mode" value="full"> 封面＋完整實測數值（無檢驗紀錄的製程不列印明細）</label>
             </div>
             <div class="form-group" style="margin-right:18px;">
                 <label>紙張</label>
@@ -260,6 +293,11 @@ body{ background:#F6F1EA; }
 <script src="../../resource/js/jquery.min.js"></script>
 <script>
 var esc=function(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); };
+function trimNum(v){ // 小數尾 0 省略（3.50→3.5），比照全站慣例
+    if(v===''||v==null) return '';
+    var s=String(v); if(s.indexOf('.')<0) return s;
+    s=s.replace(/0+$/,'').replace(/\.$/,''); return s===''||s==='-' ? '0' : s;
+}
 var DATA=null;
 
 function loadData(mode, drawing, cb){
@@ -274,14 +312,20 @@ function loadData(mode, drawing, cb){
         if(cb) cb();
     }, 'json').fail(function(){ alert('伺服器錯誤，請稍後再試'); });
 }
+// 出貨檢驗(SHIP)不是真正的 bom_ing 製程，用固定 sentinel bom_ing_fid=-1 識別，
+// 統計「製程是否齊全」與封面上的免檢/尚無紀錄提示都要把它排除在外。
+function isShipRow(p){ return p.bom_ing_fid===-1; }
 function renderInfoBar(){
-    var okN=0, ngN=0, waitN=0;
+    var okN=0, ngN=0, waitN=0, exemptN=0;
     DATA.processes.forEach(function(p){
+        if(isShipRow(p)) return;
+        if(p.exempt){ exemptN++; return; }
         if(!p.last_form){ waitN++; return; }
         if(p.last_form.check_result==='NG') ngN++; else okN++;
     });
     $('#info-bar').html('料號 <b>'+esc(DATA.d_id)+'</b>　客戶 <b>'+esc(DATA.client)+'</b>　BOM <b>'+esc(DATA.bom)+'</b>　總數 '+DATA.total_qty
-        +'　共 '+DATA.processes.length+' 個製程（<span class="st-ok">合格 '+okN+'</span>　<span class="st-ng">不良 '+ngN+'</span>　尚未檢驗 '+waitN+'）');
+        +'　共 '+DATA.processes.length+' 個製程（<span class="st-ok">合格 '+okN+'</span>　<span class="st-ng">不良 '+ngN+'</span>　尚未檢驗 '+waitN
+        +(exemptN?('　已設定免檢 '+exemptN):'')+'）');
 }
 function renderDrawingPicker(){
     var d=DATA.drawing;
@@ -311,7 +355,7 @@ $(function(){ loadData('summary',''); });
 
 // ===================== 組列印 HTML（沿用 external_doc_list.php 的作法：開新視窗寫入，交瀏覽器原生分頁）=====================
 function batchTrailHtml(p){
-    if(!p.batches.length) return '<span class="muted-help">尚未檢驗</span>';
+    if(!p.batches.length) return '<span class="muted-help">'+(p.exempt?'（免檢）':'尚未檢驗')+'</span>';
     return p.batches.map(function(b){
         return b.rounds.map(function(r,ri){
             var cls=(r.check_result==='NG')?'pm-ng':'pm-ok';
@@ -323,8 +367,11 @@ function batchTrailHtml(p){
 }
 function buildProcessSummaryRow(p, idx){
     var last=p.last_form;
-    var judge = !last ? '<span class="muted-help">—</span>' : (last.check_result==='NG' ? '<span class="pm-ng">✘ 不良</span>' : '<span class="pm-ok">✔ 合格</span>');
-    return '<tr><td>'+(idx+1)+'</td><td class="tl">'+esc(p.process_name)+'</td>'
+    var judge = p.exempt ? '<span class="muted-help">已設定免檢</span>'
+              : !last ? '<span class="pm-ng">✘ 尚無檢驗紀錄</span>'
+              : (last.check_result==='NG' ? '<span class="pm-ng">✘ 不良</span>' : '<span class="pm-ok">✔ 合格</span>');
+    var nameTxt = isShipRow(p) ? ('<b>'+esc(p.process_name)+'</b>') : esc(p.process_name);
+    return '<tr'+(isShipRow(p)?' class="pm-ship-row"':'')+'><td>'+(idx+1)+'</td><td class="tl">'+nameTxt+'</td>'
         + '<td>'+esc(p.proc_qty||'')+'</td><td>'+esc(p.maker_id||'')+'</td>'
         + '<td class="tl">'+batchTrailHtml(p)+'</td>'
         + '<td>'+judge+'</td>'
@@ -348,8 +395,13 @@ function buildProcessFullBlock(p, idx){
             var v=(sv&&sv.v!=null&&sv.v!=='')?sv.v:'';
             cells+='<td'+((sv&&sv.r==='NG'&&v!=='')?' class="pm-ng-cell"':'')+'>'+esc(v)+'</td>';
         });
-        body+='<tr><td>'+code+'</td><td class="tl">'+esc(it.name)+'</td><td>'+esc(it.std||'')+'</td>'
-            + '<td>'+esc(it.up||'')+'</td><td>'+esc(it.lo||'')+'</td>'
+        // 公差輸入模式=RANGE(直接填絕對上下限)：標準欄改印「下限~上限」，公差欄留空，
+        // 不然照舊印 it.std/it.up/it.lo 會是空的（RANGE 模式根本沒有這三個值）
+        var isRange = it.mode==='RANGE';
+        var stdTd = isRange ? (trimNum(it.min)+' ~ '+trimNum(it.max)) : (it.std||'');
+        var upTd = isRange ? '' : (it.up||''), loTd = isRange ? '' : (it.lo||'');
+        body+='<tr><td>'+code+'</td><td class="tl">'+esc(it.name)+'</td><td>'+esc(stdTd)+'</td>'
+            + '<td>'+esc(upTd)+'</td><td>'+esc(loTd)+'</td>'
             + cells + '<td>'+(it.verdict==='NG'?'<span class="pm-ng">NG</span>':(it.verdict==='AOD'?'特採':'OK'))+'</td></tr>';
     });
     body+='</tbody></table>';
@@ -364,23 +416,30 @@ $('#btn-print').on('click', function(){
 function doPrint(mode, paper){
     var d=DATA.drawing;
     var drawingHtml = d.url ? '<img class="pm-drawing-img" src="'+esc(d.url)+'">' : '<div class="pm-no-drawing">（無圖面）</div>';
-    var orient = d.url ? d.orient : 'landscape';
 
     var head = '<div class="pm-co">'+esc(DATA.company)+'</div>'
-        + '<div class="pm-title">'+esc(DATA.doc_name)+'</div>'
+        + '<div class="pm-title">'+esc(DATA.doc_name)+'　封面</div>'
         + '<table class="pm-meta"><tr><td class="k">料號</td><td>'+esc(DATA.d_id)+'</td><td class="k">客戶</td><td>'+esc(DATA.client)+'</td>'
         + '<td class="k">BOM</td><td>'+esc(DATA.bom)+'</td><td class="k">總數</td><td>'+DATA.total_qty+'</td></tr></table>';
 
-    var layoutClass = (orient==='portrait') ? 'pm-layout-side' : 'pm-layout-top';
-    var header = '<div class="'+layoutClass+'"><div class="pm-drawing">'+drawingHtml+'</div><div class="pm-headinfo">'+head+'</div></div>';
+    // ===== 封面頁：A4 直式，上半是圖面（可由使用者從候選圖面挑選）、下半是本 BOM 全部製程的檢驗狀態總覽 =====
+    // 無檢驗紀錄的製程不會印出明細，但一定要在這裡列出來，讓看的人知道「這個製程還沒驗」不是系統漏印。
+    var sumTable = '<table class="pm-sumtable"><thead><tr><th>#</th><th>製程</th><th>數量</th><th>廠商</th><th>批次/重驗歷程</th><th>檢驗狀態</th><th>檢驗人</th></tr></thead><tbody>';
+    DATA.processes.forEach(function(p,idx){ sumTable += buildProcessSummaryRow(p, idx); });
+    sumTable += '</tbody></table>';
+    var cover = '<div class="pm-cover'+(mode==='full'?' pm-cover-break':'')+'">'
+        + head
+        + '<div class="pm-cover-top"><div class="pm-drawing">'+drawingHtml+'</div></div>'
+        + '<div class="pm-cover-bottom">'+sumTable+'</div>'
+        + '</div>';
 
+    // ===== 明細頁：只印「已經有送出的檢驗紀錄」的製程／出貨檢驗，沒有紀錄的一律不印（使用者明確要求） =====
     var body='';
     if(mode==='full'){
-        DATA.processes.forEach(function(p,idx){ body += '<div class="pm-proc-block">'+buildProcessFullBlock(p, idx)+'</div>'; });
-    } else {
-        body = '<table class="pm-sumtable"><thead><tr><th>#</th><th>製程</th><th>數量</th><th>廠商</th><th>批次/重驗歷程</th><th>最終判定</th><th>檢驗人</th></tr></thead><tbody>';
-        DATA.processes.forEach(function(p,idx){ body += buildProcessSummaryRow(p, idx); });
-        body += '</tbody></table>';
+        DATA.processes.forEach(function(p,idx){
+            if(!p.last_form) return;
+            body += '<div class="pm-proc-block">'+buildProcessFullBlock(p, idx)+'</div>';
+        });
     }
 
     var asTxt = DATA.as_doc_no ? String(DATA.as_doc_no).replace(/['\\]/g,'') : '';
@@ -390,14 +449,14 @@ function doPrint(mode, paper){
         + '.pm-meta{width:100%;border-collapse:collapse;margin-bottom:4px;}'
         + '.pm-meta td{border:1px solid #000;padding:3px 6px;}'
         + '.pm-meta .k{background:#f0f0f0;font-weight:bold;white-space:nowrap;}'
-        + '.pm-layout-top{display:flex;flex-direction:column;}'
-        + '.pm-layout-top .pm-drawing{text-align:center;margin-bottom:6px;}'
-        + '.pm-layout-top .pm-drawing-img{max-width:100%;max-height:110mm;}'
-        + '.pm-layout-side{display:flex;flex-direction:row;gap:8mm;align-items:flex-start;}'
-        + '.pm-layout-side .pm-drawing{flex:0 0 38%;text-align:center;}'
-        + '.pm-layout-side .pm-drawing-img{max-width:100%;max-height:150mm;}'
-        + '.pm-layout-side .pm-headinfo{flex:1 1 auto;}'
+        // 封面：A4 直式，上半圖面／下半製程狀態總覽（使用者明確要求的版面）
+        + '.pm-cover{display:flex;flex-direction:column;min-height:0;}'
+        + '.pm-cover-break{page-break-after:always;}'
+        + '.pm-cover-top{text-align:center;margin:4mm 0 6mm;}'
+        + '.pm-cover-top .pm-drawing-img{max-width:100%;max-height:130mm;}'
         + '.pm-no-drawing{color:#999;border:1px dashed #ccc;padding:20px;text-align:center;}'
+        + '.pm-cover-bottom{flex:1 1 auto;}'
+        + '.pm-ship-row td{background:#FFF3E2;}'
         + 'table.pm-sumtable{width:100%;border-collapse:collapse;margin-top:6px;}'
         + 'table.pm-sumtable th,table.pm-sumtable td{border:1px solid #666;padding:4px 6px;text-align:center;}'
         + 'table.pm-sumtable thead th{background:#f3ead6;}'
@@ -422,7 +481,7 @@ function doPrint(mode, paper){
 
     var w=window.open('','_blank');
     w.document.write('<html><head><meta charset="utf-8"><title>全製程合併列印 - '+esc(DATA.bom)+'</title><style>'+css+'</style></head><body>'
-        + header + body
+        + cover + body
         + '<scr'+'ipt>window.onload=function(){'
         + 'var onePage=(297-30)*96/25.4;'
         + 'if(document.body.scrollHeight>onePage*0.9){'
