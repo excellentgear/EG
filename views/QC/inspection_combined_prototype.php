@@ -715,9 +715,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!$qid) throw new Exception('缺少 qc_form_id');
             if ($reason === '') throw new Exception('請填寫修改原因');
             // 沒送 insp_kind＝舊呼叫端，維持原本內容不動；首件/末件一律全檢＝抽驗數強制等於送驗數
+            // （SHIP 出貨檢驗理論上不會走這條修改路徑存檔，但仍列進白名單，避免萬一改到時被靜默降級成 NORMAL）
             $hasInspKind = array_key_exists('insp_kind', $_POST);
-            $insp_kind = $hasInspKind && in_array($_POST['insp_kind'], ['FIRST','LAST'], true) ? $_POST['insp_kind'] : 'NORMAL';
-            if ($hasInspKind && $insp_kind !== 'NORMAL' && $incoming_qty > 0) $sample_qty = $incoming_qty;
+            $insp_kind = $hasInspKind && in_array($_POST['insp_kind'], ['FIRST','LAST','SHIP'], true) ? $_POST['insp_kind'] : 'NORMAL';
+            if ($hasInspKind && in_array($insp_kind, ['FIRST','LAST'], true) && $incoming_qty > 0) $sample_qty = $incoming_qty;
 
             $h = $pdo->prepare("SELECT * FROM qc_check_form WHERE qc_form_id=?");
             $h->execute([$qid]);

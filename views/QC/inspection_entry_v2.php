@@ -96,7 +96,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     try {
         $WRITE = ['sym_save', 'sym_delete', 'save_adhoc', 'log_sample_change', 'del_inspection',
                   'dwg_confirm', 'std_item_save', 'std_item_delete', 'std_version_activate', 'std_version_delete',
-                  'print_cfg_save', 'tol_table_save', 'tol_table_delete'];
+                  'print_cfg_save', 'tol_table_save', 'tol_table_delete', 'save_ship'];
         if (in_array($act, $WRITE, true)) {
             $tok = $_POST['csrf'] ?? '';
             if (!is_string($tok) || $tok === '' || !hash_equals((string)($_SESSION['qc_csrf'] ?? ''), $tok)) {
@@ -253,11 +253,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             exit;
         }
         if ($act === 'adhoc_list') {
+            // 出貨檢驗(SHIP)雖然也是 bom_ing_fid=0，但概念上不是「無製令/無製程」的臨時檢驗單，
+            // 排除在外避免混進這份清單造成混淆（bom_ing_fid=0 只是兩者共用的技術實作，不是同一件事）
             $s = $pdo->query(
                 "SELECT f.qc_form_id, f.d_id, f.process_name, f.incoming_qty, f.sample_qty, f.ng_qty,
                         f.check_result, f.created_at, f.created_by, d.D_Setting_Id AS part_no
                  FROM qc_check_form f LEFT JOIN d_setting d ON d.d_id = f.d_id
-                 WHERE f.bom_ing_fid = 0 AND f.status <> 'DRAFT'
+                 WHERE f.bom_ing_fid = 0 AND f.status <> 'DRAFT' AND f.insp_kind <> 'SHIP'
                  ORDER BY f.qc_form_id DESC LIMIT 50");
             echo json_encode(['success' => true, 'rows' => $s->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
             exit;
@@ -318,6 +320,157 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             // 本張檢驗單使用的量具（整張單綁一次，不綁到個別檢驗項目）
             qc_form_tools_save($pdo, $qc_form_id, $_POST['tool_ids'] ?? '[]');
 
+            $tot = qc_persist_readings($pdo, $qc_form_id, $items, $itemIds, $pcs, $uid);
+            $pdo->prepare("UPDATE qc_check_form SET ng_qty=?, check_result=? WHERE qc_form_id=?")
+                ->execute([$tot['ng_qty'], $tot['check_result'], $qc_form_id]);
+            $pdo->commit();
+
+            echo json_encode(['success' => true, 'qc_form_id' => $qc_form_id, 'summary' => [
+                'bom_ing_fid' => 0, 'process' => $process, 'batch_no' => 1, 'round_no' => 1,
+                'incoming_qty' => $incoming, 'sample_qty' => $sample, 'total_items' => count($items),
+                'ng_qty' => $tot['ng_qty'], 'aod_qty' => $tot['aod_qty'], 'check_result' => $tot['check_result'],
+            ]], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // =====================================================================
+        // ⑤ 出貨檢驗（insp_kind=SHIP）：獨立於任何單一製程，不掛 bom_ing_fid（使用者拍板
+        //    「獨立為成品出貨，不需掛製程」），改用 ship_bom 記住是哪一張 BOM 的出貨檢驗。
+        //    自動生成＝從這張 BOM 底下每個製程「最後一批、最後一輪」已送出的檢驗單裡，
+        //    讓 QC 逐項目挑選(可跨製程混搭)要帶入出貨檢驗報告的項目；挑完仍可手動調整數值。
+        //    「製程檢驗關卡是否齊全」沿用製程主檔既有的 process_no.is_exclude_qc（排除QC檢驗，
+        //    在 主檔管理→製程 設定），不另開一套免檢設定——那面板本來就是管理員在維護的唯一入口。
+        // =====================================================================
+        if ($act === 'ship_source') {
+            if (!$hasF('qc_fill_inspection')) throw new Exception('您沒有「填寫檢驗表單」權限');
+            $bom = trim($_POST['bom'] ?? '');
+            if ($bom === '') throw new Exception('缺少 BOM 號碼');
+            $base = $pdo->prepare("SELECT Client_Name, d_id, sqty FROM bom WHERE bom=? LIMIT 1");
+            $base->execute([$bom]);
+            $baseRow = $base->fetch(PDO::FETCH_ASSOC);
+            if (!$baseRow) throw new Exception('查無此 BOM，請確認單號是否正確');
+
+            $procs = $pdo->prepare("
+                SELECT bi.bom_ing_fid, bi.bom_sn, bi.process_no, pn.ProcessName, COALESCE(pn.is_exclude_qc,0) AS is_exclude_qc
+                FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                WHERE bi.bom = ? ORDER BY bi.bom_sn ASC");
+            $procs->execute([$bom]);
+            $procRows = $procs->fetchAll(PDO::FETCH_ASSOC);
+
+            $fmt = function ($v) { if ($v === null) return ''; $s = rtrim(rtrim((string)$v, '0'), '.'); return ($s === '' || $s === '-') ? '0' : $s; };
+            $processes = []; $ready = true;
+            foreach ($procRows as $p) {
+                $fid = (int)$p['bom_ing_fid'];
+                $fs = $pdo->prepare("SELECT qc_form_id, incoming_qty, sample_qty, check_result, check_date, created_at
+                                     FROM qc_check_form WHERE bom_ing_fid=? AND status<>'DRAFT' ORDER BY batch_no ASC, round_no ASC");
+                $fs->execute([$fid]);
+                $rows = $fs->fetchAll(PDO::FETCH_ASSOC);
+                $last = $rows ? end($rows) : null;
+                $isExempt = (int)$p['is_exclude_qc'] === 1;
+                if (!$last && !$isExempt) $ready = false;
+
+                $items = [];
+                if ($last) {
+                    $qid = (int)$last['qc_form_id'];
+                    $sampleN = max(1, (int)$last['sample_qty']);
+                    $mq = $pdo->prepare("
+                        SELECT m.item_id, m.sample_no, m.measured_value, m.result,
+                               i.item_name, i.standard_text, i.min_value, i.max_value, i.plus_tolerance, i.minus_tolerance, i.result_type, i.sort_order,
+                               (SELECT tl.QC_Tool FROM qc_inspection_item_tool_type itt JOIN qc_tool_list tl ON itt.QC_Tool_List_id=tl.QC_Tool_List_id WHERE itt.item_id=i.item_id ORDER BY itt.is_primary DESC LIMIT 1) AS tool_name
+                        FROM qc_measurement m JOIN qc_inspection_item i ON m.item_id=i.item_id
+                        WHERE m.qc_form_id=? ORDER BY i.sort_order ASC, m.item_id ASC, m.measurement_id ASC");
+                    $mq->execute([$qid]);
+                    $byItem = [];
+                    foreach ($mq->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                        $iid = (int)$r['item_id'];
+                        if (!isset($byItem[$iid])) {
+                            $hasRange = $r['min_value'] !== null && $r['max_value'] !== null;
+                            $byItem[$iid] = [
+                                'item_id' => $iid, 'name' => $r['item_name'], 'std' => $r['standard_text'],
+                                'up' => $fmt($r['plus_tolerance']), 'lo' => $fmt($r['minus_tolerance']),
+                                'mode' => $hasRange ? 'RANGE' : 'TOL', 'min' => $hasRange ? $fmt($r['min_value']) : '', 'max' => $hasRange ? $fmt($r['max_value']) : '',
+                                'type' => $r['result_type'] === 'OKNG' ? 'OKNG' : 'NUM', 'tool' => $r['tool_name'] ?: '',
+                                'samples' => array_fill(0, $sampleN, ['v' => '', 'r' => 'OK']),
+                            ];
+                        }
+                        $pos = (int)$r['sample_no'] - 1;
+                        if ($pos >= 0 && $pos < $sampleN) $byItem[$iid]['samples'][$pos] = ['v' => $r['measured_value'], 'r' => $r['result']];
+                    }
+                    $items = array_values($byItem);
+                }
+                $processes[] = [
+                    'bom_ing_fid' => $fid, 'bom_sn' => $p['bom_sn'], 'process_name' => $p['ProcessName'] ?: ('製程' . $p['process_no']),
+                    'exempt' => $isExempt, 'has_form' => (bool)$last,
+                    'qc_form_id' => $last ? (int)$last['qc_form_id'] : 0,
+                    'check_date' => $last ? substr((string)($last['check_date'] ?: $last['created_at']), 0, 10) : '',
+                    'check_result' => $last['check_result'] ?? '', 'items' => $items,
+                ];
+            }
+
+            // 已經產生過的出貨檢驗單（供參考，避免重複產生一份一模一樣的）
+            $exist = $pdo->prepare("SELECT qc_form_id, check_date, created_at, check_result FROM qc_check_form
+                                    WHERE ship_bom=? AND insp_kind='SHIP' AND status<>'DRAFT' ORDER BY qc_form_id DESC");
+            $exist->execute([$bom]);
+
+            echo json_encode(['success' => true, 'bom' => $bom, 'client' => $baseRow['Client_Name'], 'd_id' => (int)$baseRow['d_id'],
+                'total_qty' => (int)$baseRow['sqty'], 'ready' => $ready, 'processes' => $processes,
+                'existing' => $exist->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // 產生出貨檢驗單：items 為 QC 挑選、可能已手動調整過的項目(格式與 save_inspection 相同)
+        if ($act === 'save_ship') {
+            if (!$hasF('qc_fill_inspection')) throw new Exception('您沒有「填寫檢驗表單」權限');
+            $bom = trim($_POST['bom'] ?? '');
+            if ($bom === '') throw new Exception('缺少 BOM 號碼');
+            $base = $pdo->prepare("SELECT d_id FROM bom WHERE bom=? LIMIT 1");
+            $base->execute([$bom]);
+            $d_id = (int)$base->fetchColumn();
+            if ($d_id <= 0) throw new Exception('查無此 BOM 對應的料號');
+
+            $incoming = (int)($_POST['incoming_qty'] ?? 0);
+            $sample   = (int)($_POST['sample_qty'] ?? 0);
+            $remark   = trim($_POST['main_remark'] ?? '');
+            $items    = json_decode($_POST['items'] ?? '[]', true); if (!is_array($items)) $items = [];
+            $pcs      = json_decode($_POST['pcs_verdicts'] ?? '[]', true); if (!is_array($pcs)) $pcs = [];
+            if (!$items) throw new Exception('請至少挑選一個要帶入出貨檢驗的項目');
+
+            $version_id = $v2Version($pdo, $d_id);
+            $form_type_id = $v2FormType($pdo);
+            $process = '出貨檢驗';
+            $pdo->beginTransaction();
+
+            // 出貨檢驗一律不改寫料號標準：找得到同名標準就沿用，找不到才新建且 is_active=0
+            $findItem = $pdo->prepare("SELECT item_id FROM qc_inspection_item
+                 WHERE version_id=? AND form_type_id=? AND (process_name <=> ?) AND item_name=? ORDER BY item_id DESC LIMIT 1");
+            $insItem = $pdo->prepare("INSERT INTO qc_inspection_item
+                 (version_id, form_type_id, process_name, item_code, item_name, standard_text,
+                  min_value, max_value, plus_tolerance, minus_tolerance, result_type, sort_order, is_active)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)");
+            $itemIds = [];
+            foreach ($items as $idx => $it) {
+                $name = trim($it['name'] ?? '');
+                if ($name === '') { $itemIds[$idx] = null; continue; }
+                $findItem->execute([$version_id, $form_type_id, $process, $name]);
+                $iid = $findItem->fetchColumn();
+                if (!$iid) {
+                    [$type, $stdTxt, $minV, $maxV, $plus, $minus] = qc_item_tolerance_params($it);
+                    $insItem->execute([$version_id, $form_type_id, $process, (string)($idx + 1), $name, $stdTxt,
+                        $minV, $maxV, $plus, $minus, $type, $idx + 1]);
+                    $iid = (int)$pdo->lastInsertId();
+                }
+                $itemIds[$idx] = (int)$iid;
+            }
+
+            $pdo->prepare("INSERT INTO qc_check_form
+                 (bom_ing_fid, d_id, version_id, form_type_id, insp_kind, ship_bom, process_name, batch_no, round_no,
+                  incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, pcs_verdicts, check_date, created_by, created_at)
+                 VALUES (0, ?, ?, ?, 'SHIP', ?, ?, 1, 1, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, NOW(), ?, NOW())")
+                ->execute([$d_id, $version_id, (string)$form_type_id, $bom, $process, $incoming, $sample, $remark,
+                           json_encode($pcs, JSON_UNESCAPED_UNICODE), $uid]);
+            $qc_form_id = (int)$pdo->lastInsertId();
+
+            qc_form_tools_save($pdo, $qc_form_id, $_POST['tool_ids'] ?? '[]');
             $tot = qc_persist_readings($pdo, $qc_form_id, $items, $itemIds, $pcs, $uid);
             $pdo->prepare("UPDATE qc_check_form SET ng_qty=?, check_result=? WHERE qc_form_id=?")
                 ->execute([$tot['ng_qty'], $tot['check_result'], $qc_form_id]);
@@ -746,6 +899,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .insp-kind-btns .kind-btn { flex:1 1 auto; border:1px solid var(--amber-d); background:#fff; color:var(--amber-d);
                                  border-radius:4px; padding:5px 0; font-size:13px; font-weight:bold; cursor:pointer; }
     .insp-kind-btns .kind-btn.on { background:var(--amber-d); color:#fff; }
+    /* 出貨檢驗：自動生成跳窗——逐製程區塊＋逐項目挑選 */
+    .ship-proc { border:1px solid var(--line); border-radius:8px; margin-bottom:10px; overflow:hidden; }
+    .ship-proc-hd { background:var(--cream); padding:7px 12px; font-weight:bold; color:var(--ink); display:flex; align-items:center; gap:8px; }
+    .ship-proc-hd .badge-ok { background:var(--amber); color:#4A3524; border-radius:10px; padding:1px 9px; font-size:11px; font-weight:bold; }
+    .ship-proc-hd .badge-miss { background:var(--coral); color:#fff; border-radius:10px; padding:1px 9px; font-size:11px; font-weight:bold; }
+    .ship-proc-hd .badge-exempt { background:#E4D3BC; color:#6B4423; border-radius:10px; padding:1px 9px; font-size:11px; font-weight:bold; }
+    .ship-item-row { display:flex; align-items:center; gap:8px; padding:5px 12px; border-top:1px solid var(--line); font-size:13px; }
+    .ship-item-row:hover { background:#FBF7F1; }
+    .ship-item-row .nm { flex:0 0 160px; font-weight:bold; color:var(--ink); }
+    .ship-item-row .sp { flex:0 0 170px; color:var(--ink2); }
+    .ship-item-row .sv { flex:1 1 auto; color:#8a6a45; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .btn-coral:hover,.btn-coral:focus { background:#b9401f; color:#fff; }
 
     /* ---------- 頂部固定情境列：料號/客戶/製程/數量隨時看得到 ---------- */
@@ -1047,6 +1211,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                         <button class="btn btn-default btn-sm" id="btn-csv"><i class="fa fa-file-excel-o"></i> 匯出CSV</button>
                         <button class="btn btn-default btn-sm" id="btn-history"><i class="fa fa-history"></i> 歷史紀錄</button>
                         <button class="btn btn-default btn-sm" id="btn-print-multi" title="本張製令(BOM)所有製程合併列印，自動帶入圖面"><i class="fa fa-files-o"></i> 全製程合併列印</button>
+                        <button class="btn btn-default btn-sm" id="btn-ship-gen" title="檢查這張 BOM 的製程檢驗關卡是否齊全，齊全後可自動挑選各製程檢驗數據生成出貨檢驗"><i class="fa fa-truck"></i> 出貨檢驗</button>
                         <div class="btn-group">
                             <button class="btn btn-default btn-sm dropdown-toggle" data-toggle="dropdown"><i class="fa fa-cog"></i> 設定 <span class="caret"></span></button>
                             <ul class="dropdown-menu dropdown-menu-right">
@@ -1212,7 +1377,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <input type="number" class="form-control input-sm" id="inp-sample" value="5"></div>
             <div class="col-sm-2 form-group"><label class="muted-help">不良數（自動）</label>
                 <input type="number" class="form-control input-sm" id="inp-ng" value="0" readonly></div>
-            <div class="col-sm-2 form-group">
+            <div class="col-sm-2 form-group" id="kind-box">
                 <label class="muted-help">檢驗性質<span id="kind-hint" class="muted-help" style="display:none;color:var(--amber-d);margin-left:4px;"></span></label>
                 <div class="insp-kind-btns">
                     <button type="button" class="kind-btn" data-kind="FIRST" title="首件全檢：直接輸入全數件數，不走抽樣；同一製程可以有好幾張（重做再驗各存一張）">首件</button>
@@ -1534,6 +1699,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             <button type="button" class="btn btn-default pull-left" id="tp-clear"><i class="fa fa-eraser"></i> 清除全部</button>
             <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
             <button type="button" class="btn btn-warm" id="tp-apply"><i class="fa fa-check"></i> 確定（已選 <b id="tp-apply-n">0</b> 支）</button>
+        </div>
+    </div></div>
+</div>
+
+<!-- ===================== 出貨檢驗：自動生成（跨製程逐項目挑選檢驗數據） ===================== -->
+<div class="modal fade" id="shipGenModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" style="width:840px;"><div class="modal-content">
+        <div class="modal-header" style="background:#FFF8EE;border-bottom:1px solid #E4D3BC;">
+            <button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-truck"></i> 出貨檢驗 — 自動生成</h4>
+        </div>
+        <div class="modal-body" style="max-height:72vh;overflow-y:auto;">
+            <div class="muted-help" style="margin-bottom:8px;">
+                先自動檢查這張 BOM 每個製程的檢驗關卡是否齊全；齊全後可從各製程「最後一批、最後一輪」的檢驗數據裡，
+                逐項目挑選要帶入出貨檢驗報告的內容（可跨製程混搭），帶入後仍可手動調整數值再存檔。</div>
+            <div id="ship-ready-bar" style="margin-bottom:10px;"></div>
+            <div id="ship-existing" style="display:none;margin-bottom:10px;font-size:12px;color:#8a6a45;"></div>
+            <div id="ship-proc-list"></div>
+        </div>
+        <div class="modal-footer">
+            <span class="muted-help pull-left">已選 <b id="ship-pick-n">0</b> 項</span>
+            <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-warm" id="btn-ship-build" disabled><i class="fa fa-magic"></i> 帶入編輯（可再調整後存檔）</button>
         </div>
     </div></div>
 </div>
@@ -3367,6 +3555,8 @@ $(function(){
 
     // ---------- 首件/末件：簡單按鈕，按了才算，不按＝一般檢驗；直接全檢(=送驗數件)不走抽樣 ----------
     function applyInspKindUI(){
+        // 出貨檢驗（SHIP）不屬於單一製程，首件/末件是製程層級的概念，兩者互斥，SHIP 模式下整組按鈕隱藏
+        $('#kind-box').toggle(!(ctx && ctx.ship));
         var full = state.inspKind==='FIRST' || state.inspKind==='LAST';
         $('.insp-kind-btns .kind-btn').removeClass('on').filter('[data-kind="'+state.inspKind+'"]').addClass('on');
         $('#inp-sample').prop('readonly', full);
@@ -3388,6 +3578,137 @@ $(function(){
         if(state.inspKind!=='FIRST' && state.inspKind!=='LAST') return;
         var qty=parseInt($(this).val())||0;
         if(qty>0){ setSampleN(qty); $('#inp-sample').val(qty).data('prev', qty); }
+    });
+
+    // =====================================================================
+    // 出貨檢驗：自動生成——先查這張 BOM 每個製程的檢驗關卡是否齊全，
+    // 齊全後讓 QC 逐項目挑選（可跨製程混搭）要帶入出貨檢驗報告的內容。
+    // =====================================================================
+    var SHIP_DATA = null, SHIP_PICKED = {};   // 已勾選：key = fid+'|'+item_id(或索引)
+    function shipItemKey(fid, it, ix){ return fid+'|'+(it.item_id||('n'+ix)); }
+    $('#btn-ship-gen').on('click', function(){
+        if(!ctx || ctx.adhoc || !ctx.bom){ alert('出貨檢驗需要有 BOM 號碼；臨時檢驗單（無製令/無BOM）不適用。請由待驗清單開啟正常製令的檢驗項目。'); return; }
+        var bom = ctx.bom;
+        $('#ship-proc-list').html('<div class="muted-help">載入中…</div>');
+        $('#ship-ready-bar').html(''); $('#ship-existing').hide();
+        $('#shipGenModal').modal('show');
+        SHIP_PICKED = {};
+        $.post(V2API, { v2action:'ship_source', bom:bom }, function(res){
+            if(!res.success){ $('#ship-proc-list').html('<div class="text-danger">'+esc(res.message||'載入失敗')+'</div>'); return; }
+            SHIP_DATA = res;
+            renderShipReadyBar();
+            renderShipProcList();
+            renderShipExisting();
+            updateShipPickCount();
+        }, 'json').fail(function(x){ $('#ship-proc-list').html('<div class="text-danger">載入錯誤：'+esc(x.responseText||'')+'</div>'); });
+    });
+    function renderShipReadyBar(){
+        var d=SHIP_DATA;
+        var missing = (d.processes||[]).filter(function(p){ return !p.exempt && !p.has_form; });
+        if(d.ready){
+            $('#ship-ready-bar').html('<div class="alert" style="background:#FFF3E2;border:1px solid #E4D3BC;color:#3c763d;padding:8px 12px;border-radius:6px;">'+
+                '<i class="fa fa-check-circle"></i> 製程檢驗關卡齊全（共 '+d.processes.length+' 個製程，'+
+                (d.processes.length - missing.length)+' 個已有紀錄或已設定免檢），可以挑選要帶入的項目。</div>');
+        } else {
+            $('#ship-ready-bar').html('<div class="alert" style="background:#FDEDEA;border:1px solid #DD5138;color:#b9401f;padding:8px 12px;border-radius:6px;">'+
+                '<i class="fa fa-exclamation-circle"></i> 製程檢驗關卡<b>尚未齊全</b>，以下製程還沒有已送出的檢驗紀錄，請先補齊：<br>'+
+                missing.map(function(p){ return '・'+esc(p.process_name); }).join('<br>')+
+                '<br><span class="muted-help" style="color:#b9401f;">（可到 主檔管理→製程 設定「排除QC檢驗」讓不需要檢驗的製程類型不列入這項判定）</span></div>');
+        }
+    }
+    function renderShipExisting(){
+        var ex=SHIP_DATA.existing||[];
+        if(!ex.length) return;
+        $('#ship-existing').show().html('<i class="fa fa-info-circle"></i> 這張 BOM 已經有 '+ex.length+' 張出貨檢驗單：'+
+            ex.map(function(e){ return '#'+e.qc_form_id+'（'+esc(e.check_date||e.created_at||'')+'　'+(e.check_result==='NG'?'不良':'合格')+'）'; }).join('、')+
+            '，如仍要再產生一份請自行確認是否重複。');
+    }
+    function shipItemSpecText(it){
+        if(it.type==='OKNG') return it.std||'OK/NG';
+        if(it.mode==='RANGE'){
+            var mn=parseFloat(it.min), mx=parseFloat(it.max);
+            return (!isNaN(mn)&&!isNaN(mx)) ? (trimNum(mn.toFixed(4))+' ~ '+trimNum(mx.toFixed(4))) : '—';
+        }
+        return (it.std||'—')+(it.up?('  +'+it.up):'')+(it.lo?('  '+it.lo):'');
+    }
+    function shipItemLastValText(it){
+        var vs=(it.samples||[]).map(function(s){ return (s&&s.v!=null&&s.v!=='')?s.v:null; }).filter(function(v){ return v!=null; });
+        if(!vs.length) return '（尚無實測值）';
+        return '實測：'+vs.slice(0,6).join('、')+(vs.length>6?'…':'')+(it.tool?('　量具：'+it.tool):'');
+    }
+    function renderShipProcList(){
+        var html = (SHIP_DATA.processes||[]).map(function(p){
+            var badge = p.exempt ? '<span class="badge-exempt">已設定免檢</span>'
+                       : p.has_form ? '<span class="badge-ok">'+esc(p.check_date||'')+'　'+(p.check_result==='NG'?'不良':'合格')+'</span>'
+                       : '<span class="badge-miss">尚無檢驗紀錄</span>';
+            var body = '';
+            if(p.items && p.items.length){
+                body = p.items.map(function(it,ix){
+                    var key = shipItemKey(p.bom_ing_fid, it, ix);
+                    var checked = SHIP_PICKED[key] ? 'checked' : '';
+                    return '<label class="ship-item-row" style="cursor:pointer;">'+
+                           '<input type="checkbox" class="ship-item-chk" data-key="'+esc(key)+'" '+checked+'>'+
+                           '<span class="nm">'+esc(it.name||'（未命名）')+'</span>'+
+                           '<span class="sp">'+esc(shipItemSpecText(it))+'</span>'+
+                           '<span class="sv">'+esc(shipItemLastValText(it))+'</span></label>';
+                }).join('');
+            } else if(!p.exempt) {
+                body = '<div class="muted-help" style="padding:6px 12px;">尚無檢驗紀錄，無法挑選。</div>';
+            }
+            return '<div class="ship-proc" data-fid="'+p.bom_ing_fid+'">'+
+                   '<div class="ship-proc-hd"><span>['+p.bom_sn+'] '+esc(p.process_name)+'</span>'+badge+'</div>'+body+'</div>';
+        }).join('');
+        $('#ship-proc-list').html(html || '<div class="muted-help">此 BOM 尚未建立任何製程。</div>');
+    }
+    $(document).on('change', '.ship-item-chk', function(){
+        var key=$(this).data('key');
+        if(this.checked) SHIP_PICKED[key]=1; else delete SHIP_PICKED[key];
+        updateShipPickCount();
+    });
+    function updateShipPickCount(){
+        var n=Object.keys(SHIP_PICKED).length;
+        $('#ship-pick-n').text(n);
+        $('#btn-ship-build').prop('disabled', n===0);
+    }
+    // 帶入編輯：把勾選到的項目組成新的一張出貨檢驗單草稿，接著沿用既有的總表編輯與儲存流程
+    $('#btn-ship-build').on('click', function(){
+        var picked=[];
+        (SHIP_DATA.processes||[]).forEach(function(p){
+            (p.items||[]).forEach(function(it,ix){
+                var key=shipItemKey(p.bom_ing_fid, it, ix);
+                if(!SHIP_PICKED[key]) return;
+                var it2 = $.extend({}, it);
+                it2.item_id = '';   // 出貨檢驗是新的一張單，不沿用來源的 item_id（來源項目仍是它自己製程的標準）
+                it2.remark = '（來源：'+(p.process_name||'')+'　'+(p.check_date||'')+'）'+(it.remark?(' '+it.remark):'');
+                picked.push(it2);
+            });
+        });
+        if(!picked.length){ alert('請至少挑選一個項目'); return; }
+        $('#shipGenModal').modal('hide');
+        // 不同來源製程原本的抽驗數可能不同；件數欄一律取最大值，避免樣本較多的項目被截斷
+        // （樣本較少的項目其餘欄位留空，不是資料不見，只是那個尺寸本來就沒量那麼多件）
+        var maxN=1; picked.forEach(function(it){ maxN=Math.max(maxN, (it.samples||[]).length); });
+        ctx = { bom_ing_fid:0, bom:SHIP_DATA.bom, ship:true, part_no:ctx.part_no||'', client:SHIP_DATA.client||'',
+                order_qty:SHIP_DATA.total_qty||0, process:'出貨檢驗', d_id:SHIP_DATA.d_id, sample_qty:maxN, adhoc:false };
+        state.demo=false; state.sampleN=maxN;
+        state.editFormId=null; state.editMeta=null; state.sampleChanges=[]; state.inspKind='SHIP';
+        state.batches=[{ no:1, status:'WAIT', rounds:[] }]; state.curBatch=0;
+        $('#mode-banner').html('<i class="fa fa-truck"></i> <b>出貨檢驗</b>（BOM '+esc(SHIP_DATA.bom)+'）：由各製程檢驗數據自動生成的草稿，數值可再調整，存檔後寫入正式檢驗表。');
+        renderCtxBar();
+        $('#main-area').show(); $('#dock').show(); syncDockPad();
+        $('#inp-qty').val(SHIP_DATA.total_qty||0);
+        $('#inp-sample').val(state.sampleN).data('prev', state.sampleN);
+        $('#insp-container-1,#insp-container-2').val(''); $('#insp-quantity-1,#insp-quantity-2').val('');
+        applyInspKindUI();
+        renderBatches();
+        MODEL.tools=[];
+        view='GRID'; localStorage.setItem('qc2_view', view);
+        $('#chk-std-edit').prop('checked', true);
+        $('#chk-save-std').prop('checked', false).closest('label').hide();  // 出貨檢驗不改寫各製程自己的標準
+        renderItems(picked);
+        $('#no-std-hint').hide(); $('#no-part-hint').hide(); $('#no-perm-hint').hide();
+        $('#btn-save,#btn-redo').prop('disabled', false);
+        $('html,body').animate({scrollTop:0},200);
     });
 
     // =====================================================================
@@ -4088,7 +4409,8 @@ $(function(){
             // 列印簽章用：已存檔紀錄的簽章日期＝檢驗日、檢驗員＝存檔者
             state.editMeta={ check_date:h.check_date||'', creator_name:h.creator_name||'' };
             state.sampleN=h.sample_qty||state.sampleN;
-            state.inspKind = (h.insp_kind==='FIRST'||h.insp_kind==='LAST') ? h.insp_kind : 'NORMAL';
+            state.inspKind = (h.insp_kind==='FIRST'||h.insp_kind==='LAST'||h.insp_kind==='SHIP') ? h.insp_kind : 'NORMAL';
+            if(ctx) ctx.ship = (h.insp_kind==='SHIP');
             $('#inp-qty').val(h.incoming_qty||0);
             $('#inp-sample').val(state.sampleN);
             $('#inp-remark').val(h.main_remark||'');
@@ -4721,6 +5043,29 @@ $(function(){
                 alert('已儲存修改（qc_form_id='+s.qc_form_id+'）\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty+'\n此筆已自動回鎖。');
                 exitEditMode();
             },'json').fail(function(x){ $eb.prop('disabled',false); alert('修改錯誤：'+x.responseText); });
+            return;
+        }
+
+        // 出貨檢驗（SHIP，不屬於單一製程）：走 v2 後端 save_ship
+        if(ctx.ship){
+            var $sb=$('#btn-save').prop('disabled',true);
+            $.post(V2API, { v2action:'save_ship', bom:ctx.bom,
+                incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
+                main_remark:$('#inp-remark').val(), items:JSON.stringify(items),
+                pcs_verdicts:JSON.stringify(collectPcsVerdicts()), tool_ids:JSON.stringify(MODEL.tools||[])
+            }, function(res){
+                $sb.prop('disabled',false);
+                if(!res.success){ alert('儲存失敗：'+res.message); return; }
+                var s=res.summary;
+                flushSampleChanges(res.qc_form_id);
+                state.batches[0].rounds.push({ date:'剛剛', status:s.check_result, qc_form_id:res.qc_form_id, round_no:1, ng_qty:s.ng_qty });
+                state.batches[0].status=s.check_result;
+                renderBatches();
+                function done(){
+                    alert('出貨檢驗單已儲存（qc_form_id='+res.qc_form_id+'）\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty);
+                }
+                if(s.check_result==='NG') openNgAsk(res.qc_form_id, s, items, done); else done();
+            }, 'json').fail(function(x){ $sb.prop('disabled',false); alert('儲存錯誤：'+x.responseText); });
             return;
         }
 
