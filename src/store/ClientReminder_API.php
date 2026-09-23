@@ -36,6 +36,15 @@ function ocrDeny(string $msg = '沒有權限執行這項操作') {
     echo json_encode(['success' => false, 'message' => $msg]);
     exit;
 }
+// 「確認／設為待處理／標記完成」比照本頁編輯訂單同一個門檻（ot_edit）——這是處理訂單流程
+// 的一部分，不該開放給連編輯訂單都不能的人；查詢失敗一律放行避免鎖死，與 ot_hasF() 同規則。
+function ocrCanEdit(PDO $pdo, int $uid): bool {
+    try {
+        $features = rf_load_user_features_all($pdo, $uid);
+        if (!empty($features)) return rf_has_feature($features, 'all') || rf_has_feature($features, 'ot_edit');
+    } catch (Exception $e) { return true; }
+    return true;
+}
 
 switch ($action) {
 
@@ -140,6 +149,7 @@ switch ($action) {
 
     // ── 確認 / 設為待處理（既有訂單，order_id 必須是真的訂單）──────────────
     case 'ack': {
+        if (!ocrCanEdit($pdo, $uid)) ocrDeny('您沒有編輯訂單的權限');
         $rid = intval($_POST['reminder_id'] ?? 0);
         $oid = intval($_POST['order_id'] ?? 0);
         $status = (string)($_POST['status'] ?? '');
@@ -160,6 +170,7 @@ switch ($action) {
 
     // ── 新增訂單存檔成功後，一次補寫先前在跳窗上做的決定 ───────────────────
     case 'commit_new': {
+        if (!ocrCanEdit($pdo, $uid)) ocrDeny('您沒有編輯訂單的權限');
         $oid = intval($_POST['order_id'] ?? 0);
         if ($oid <= 0) ocrReply(['success' => false, 'message' => '未指定訂單']);
         $decisions = json_decode((string)($_POST['decisions'] ?? '[]'), true);
@@ -185,8 +196,9 @@ switch ($action) {
         ocrReply(['success' => true, 'results' => $out]);
     }
 
-    // ── 標記已確認完成（誰都可以，跟編輯訂單同一群人）─────────────────────
+    // ── 標記已確認完成（跟編輯訂單同一個門檻，見 ocrCanEdit）───────────────
     case 'ack_resolve': {
+        if (!ocrCanEdit($pdo, $uid)) ocrDeny('您沒有編輯訂單的權限');
         $ackId = intval($_POST['ack_id'] ?? 0);
         try {
             ocr_ack_resolve($pdo, $ackId, $uid, $uname);

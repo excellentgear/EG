@@ -2021,6 +2021,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_note_logs') {
 // --- 新增：AJAX 分頁與篩選 API (由前端 JS 呼叫) ---
 if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     $pdo = $conn->getPDO(); // [FIX] 確保 $pdo 變數在此作用域可用
+    // 客戶提醒（2026-09-23）：這個 action 常常是整個 session 的第一個請求（頁面一載入就打），
+    // 檔案最下方那次 ocr_ensure_schema() 這裡還沒跑到就會 exit，所以本區塊自己也要確保一次
+    // （靜態快取，重複呼叫零成本）。
+    try { ocr_ensure_schema($pdo); } catch (Exception $eOcrEs) {}
     ob_start(); // 【防護罩開啟】攔截所有意外警告、空白行
 
     header('Content-Type: application/json');
@@ -2044,6 +2048,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     $unbound = !empty($_POST['unbound']) ? (int)$_POST['unbound'] : 0;
     $unbound_op = !empty($_POST['unbound_op']) ? (int)$_POST['unbound_op'] : 0;
     $qty_over = !empty($_POST['qty_over']) ? (int)$_POST['qty_over'] : 0; // 轉單數量超出階梯區間篩選
+    $ocr_pending_filter = !empty($_POST['pending_reminder']) ? (int)$_POST['pending_reminder'] : 0; // 客戶提醒「訂單待確認」篩選（2026-09-23）
     // 相容舊表：BOSS 審圖四個欄位（下方 dataSql 會 DATE_FORMAT 它們；部署後第一個請求可能就是 AJAX）
     // 一次便宜的 SELECT 探針，有欄位就什麼都不做，不要每次翻頁都跑 SHOW COLUMNS
     try { $pdo->query("SELECT boss_ok_at FROM order_track LIMIT 1"); }
@@ -2112,6 +2117,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         // OP轉訂單時輸入數量超出報價階梯區間（含容差後區間）的訂單，供補報價單追蹤
         $whereClauses[] = "ot.qty_over_range = 1";
     }
+    if ($ocr_pending_filter === 1) {
+        // 客戶提醒「訂單待確認」篩選（2026-09-23）：這張訂單目前有沒有狀態=pending 的客戶提醒
+        $whereClauses[] = ocr_pending_exists_sql('ot');
+    }
     // 半高卡片第一優先篩選（優先於 status 篩選）
     if ($order_status_filter === 'unfinished') {
         $whereClauses[] = "(ot.Order_status IS NULL)";
@@ -2151,13 +2160,17 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
 
     // 主統計：total_records/processing/done/communication/unbound_op 依照當前 WHERE（含 order_status_filter）
     // processing/done/communication 只在 unfinished 篩選時有意義
+    // 客戶提醒「訂單待確認」（2026-09-23）：跟 unbound_op/qty_over 同一種做法——這是疊在目前
+    // 分頁篩選上的一個跨欄位旗標，不是獨立的第四種互斥狀態，所以直接併進同一支 $mainStatsSql。
+    $ocrPendingExistsSql = ocr_pending_exists_sql('ot');
     if ($order_status_filter === 'unfinished') {
         $mainStatsSql = "SELECT COUNT(*) as total_records,
             SUM(CASE WHEN (ot.pmGet IS NULL AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as processing,
             SUM(CASE WHEN (ot.pmGet IS NOT NULL AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as done,
             SUM(CASE WHEN (ot.pmGet IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as communication,
             SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op,
-            SUM(CASE WHEN (ot.qty_over_range = 1) THEN 1 ELSE 0 END) as qty_over
+            SUM(CASE WHEN (ot.qty_over_range = 1) THEN 1 ELSE 0 END) as qty_over,
+            SUM(CASE WHEN ($ocrPendingExistsSql) THEN 1 ELSE 0 END) as pending_reminder
             FROM order_track ot LEFT JOIN user u ON u.id = ot.ate LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID $whereSql";
     } else {
         // 無半高篩選（paused/closed/無選）：正常計算 processing/done/communication
@@ -2167,7 +2180,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
             SUM(CASE WHEN (ot.pmGet IS NOT NULL AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as done,
             SUM(CASE WHEN (ot.pmGet IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as communication,
             SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op,
-            SUM(CASE WHEN (ot.qty_over_range = 1) THEN 1 ELSE 0 END) as qty_over
+            SUM(CASE WHEN (ot.qty_over_range = 1) THEN 1 ELSE 0 END) as qty_over,
+            SUM(CASE WHEN ($ocrPendingExistsSql) THEN 1 ELSE 0 END) as pending_reminder
             FROM order_track ot LEFT JOIN user u ON u.id = ot.ate LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID $whereSql";
     }
     $stmtMain = $pdo->prepare($mainStatsSql);
@@ -2191,6 +2205,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         'communication' => $mainResult['communication'] ?? 0,
         'unbound_op'    => $mainResult['unbound_op'] ?? 0,
         'qty_over'      => $mainResult['qty_over'] ?? 0,
+        'pending_reminder' => $mainResult['pending_reminder'] ?? 0,
         'paused'        => $globalResult['paused'] ?? 0,
         'closed'        => $globalResult['closed'] ?? 0,
         'unfinished'    => $globalResult['unfinished'] ?? 0,
@@ -2375,6 +2390,22 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                 foreach ($qL->fetchAll(PDO::FETCH_ASSOC) as $rL) { $ate_log_map[(int)$rL['Order_id']] = (int)$rL['cnt']; }
             }
         } catch (Exception $eL) { $ate_log_map = []; }
+    }
+
+    // 客戶提醒「待處理」筆數（2026-09-23）：Order_id => 筆數。整頁一次查完，不要每列各打一次；
+    // 表還沒建起來時 catch 掉當作沒有，清單照樣顯示得出來（鐵律：新客戶提醒功能不影響既有使用者）。
+    $ocr_pending_map = [];
+    if (!empty($order_list)) {
+        try {
+            $oidsR = array_values(array_filter(array_map('intval', array_column($order_list, 'Order_id'))));
+            if ($oidsR) {
+                $phR = implode(',', array_fill(0, count($oidsR), '?'));
+                $qR = $pdo->prepare("SELECT order_id, COUNT(*) AS cnt FROM order_client_reminder_ack
+                                     WHERE order_id IN ($phR) AND status='pending' GROUP BY order_id");
+                $qR->execute($oidsR);
+                foreach ($qR->fetchAll(PDO::FETCH_ASSOC) as $rR) { $ocr_pending_map[(int)$rR['order_id']] = (int)$rR['cnt']; }
+            }
+        } catch (Exception $eR) { $ocr_pending_map = []; }
     }
 
     if (!empty($order_list)) {
@@ -3055,6 +3086,18 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         <textarea class="table-textarea" name="Order_ps" <?= $can_update ? '' : 'readonly' ?> rows="1" data-orig="<?= safe_html($order['Order_ps']) ?>" oninput="autoResize(this)" onfocus="autoResize(this)" onblur="autoResize(this)" onkeydown="handleKeyDown(event, this, '<?= $order['Order_id'] ?>')"><?= safe_html($order['Order_ps']) ?></textarea>
                         <span class="note-more-hint" title="內容超過5行，點擊欄位可展開查看全文"><i class="fa fa-ellipsis-h"></i> 還有更多</span>
                     </div>
+                    <?php
+                    // 客戶提醒「待處理」的完成按鈕（2026-09-23）：只有這張訂單真的有待處理中的
+                    // 提醒才會出現，比照設計備註「已處理」按鈕同一種做法——沒有提醒的訂單完全
+                    // 不會多長出任何東西，不影響既有排版。
+                    $_ocrPendingCnt = (int)($ocr_pending_map[(int)$order['Order_id']] ?? 0);
+                    if ($_ocrPendingCnt > 0): ?>
+                    <div class="ocr-pending-bar" style="margin-top:2px;">
+                        <button type="button" class="btn btn-xs" style="background:#DD5138;border-color:#c14631;color:#fff;font-size:10px;padding:1px 6px;"
+                                onclick="ocrOpenResolvePicker(<?= (int)$order['Order_id'] ?>)"
+                                title="這張訂單有客戶提醒被設為待處理，點擊查看並標記已確認完成"><i class="fa fa-check-square-o"></i> 客戶提醒待確認 <span class="n"><?= $_ocrPendingCnt ?></span></button>
+                    </div>
+                    <?php endif; ?>
                 </td>
                 <td data-designer-name="<?= safe_html($order['user_cname'] ?? '') ?>">
                     <?php if ($order['user_cname']):
@@ -3274,7 +3317,8 @@ $initStatsSql = "SELECT
     SUM(CASE WHEN (ot.qty_over_range = 1) THEN 1 ELSE 0 END) as qty_over,
     SUM(CASE WHEN (ot.Order_status = 6) THEN 1 ELSE 0 END) as paused,
     SUM(CASE WHEN (ot.Order_status = 9) THEN 1 ELSE 0 END) as closed,
-    SUM(CASE WHEN (ot.Order_status IS NULL) THEN 1 ELSE 0 END) as unfinished
+    SUM(CASE WHEN (ot.Order_status IS NULL) THEN 1 ELSE 0 END) as unfinished,
+    SUM(CASE WHEN (" . ocr_pending_exists_sql('ot') . ") THEN 1 ELSE 0 END) as pending_reminder
     FROM order_track ot $yearCondInit";
 $initResult = $conn->getPDO()->query($initStatsSql)->fetch(PDO::FETCH_ASSOC);
 
@@ -3293,6 +3337,7 @@ $stats = [
     'communication'=> $processingResult['communication'] ?? 0,
     'unbound_op'   => $initResult['unbound_op'] ?? 0,
     'qty_over'     => $initResult['qty_over'] ?? 0,
+    'pending_reminder' => $initResult['pending_reminder'] ?? 0,
     'paused'       => $initResult['paused'] ?? 0,
     'closed'       => $initResult['closed'] ?? 0,
     'unfinished'   => $initResult['unfinished'] ?? 0,
@@ -3421,6 +3466,7 @@ foreach($dCounts as $c) {
         .stat-card.card-communication.active { box-shadow: 0 0 0 3px #9B59B6; }
         .stat-card.card-unbound-op { border-left-color: #E67E22; }
         .stat-card.card-unbound-op.active { box-shadow: 0 0 0 3px #E67E22; }
+        #stat-card-pending-reminder.active { background-color: #fff; transform: scale(1.02); box-shadow: 0 0 0 3px #DD5138; z-index: 1; }
 
         .stat-icon {
             position: absolute;
@@ -3707,6 +3753,12 @@ foreach($dCounts as $c) {
                                 <span id="count-qty-over"><?= number_format($stats['qty_over'] ?? 0) ?></span>筆數量超出區間
                             </div>
                         </div>
+                        <!-- 客戶提醒「訂單待確認」（2026-09-23）：這張訂單有客戶提醒被設為待處理、還沒標記完成 -->
+                        <div class="stat-card" id="stat-card-pending-reminder" onclick="toggleOcrPendingCard(this)" style="cursor:pointer;border-left-color:#DD5138;">
+                            <i class="fa fa-sticky-note-o stat-icon" style="color:#DD5138;"></i>
+                            <div class="stat-value" id="count-pending-reminder" style="color:#DD5138;"><?= number_format($stats['pending_reminder'] ?? 0) ?></div>
+                            <div class="stat-label">訂單待確認</div>
+                        </div>
                         <!-- 三個半高卡片 -->
                         <div style="display:flex;flex-direction:column;gap:4px;flex:0 0 auto;justify-content:center;">
                             <div class="stat-card-half" id="stat-card-unfinished" onclick="toggleStatusCard('unfinished',this)" style="cursor:pointer;padding:5px 10px;display:flex;align-items:center;justify-content:space-between;background:#f0f4f8;border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,0.08);min-width:110px;">
@@ -3980,6 +4032,7 @@ foreach($dCounts as $c) {
                                             <?php // 客戶鎖頭（2026-09-03）：綁定料號後客戶由料號決定＝唯讀，這顆圖示把「為什麼不能改」講清楚；
                                                   // 角色勾了「更改已建立訂單的客戶」的人可以點它，輸入本人密碼後解鎖重新指定客戶與料號 ?>
                                             <span id="client-lock-icon" style="display:none;margin-left:3px;"></span>
+                                            <a href="javascript:void(0)" id="client-reminder-icon" style="display:none;margin-left:3px;color:#8a5a2b;" onclick="openClientReminderPanel()" title="客戶提醒：查看/設定這個客戶的注意事項"><i class="fa fa-sticky-note-o"></i><span id="client-reminder-count" style="display:none;background:#DD5138;color:#fff;border-radius:8px;font-size:9px;padding:0 4px;margin-left:2px;vertical-align:top;"></span></a>
                                             <small id="customer-id-badge" style="display:none;background:#d4edda;color:#155724;padding:1px 5px;border-radius:10px;font-size:10px;font-weight:600;margin-left:3px;"></small>
                                             <small id="customer-id-missing" style="display:none;color:#c0392b;font-size:10px;margin-left:3px;">⚠未綁定</small>
                                             <button type="button" id="btn-quick-add-customer" class="btn btn-xs btn-link" style="display:none;color:#27ae60;padding:0;margin-left:4px;font-size:10px;" onclick="openQuickAddCustomer()"><i class="fa fa-plus-circle"></i>新增</button>
@@ -4563,6 +4616,66 @@ foreach($dCounts as $c) {
     </div>
     <?php endif; ?>
 
+    <!-- ═══ 客戶提醒：管理面板（筆記本圖示點開）═══════════════════════════════
+         2026-09-23 使用者要求：客戶欄旁筆記本圖示，可綁定「這個客戶有哪些事要注意」，
+         同客戶可多筆、各自可上傳附件、記錄修改者與時間。新增/編輯/停用需 ot_client_reminder_manage，
+         看得到本頁的人都能讀。唯一實作 src/common/order_client_reminder_lib.php。 -->
+    <div class="modal fade" id="clientReminderPanelModal" tabindex="-1" role="dialog">
+        <div class="modal-dialog" role="document" style="max-width:560px;">
+            <div class="modal-content">
+                <div class="modal-header" style="background:#8a5a2b;color:#fff;border-radius:8px 8px 0 0;">
+                    <button type="button" class="close" style="color:#fff;opacity:.8;" data-dismiss="modal"><span>&times;</span></button>
+                    <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-sticky-note-o"></i> 客戶提醒 － <span id="ocr-panel-cname">-</span></h4>
+                </div>
+                <div class="modal-body" style="padding:14px;max-height:70vh;overflow-y:auto;">
+                    <div id="ocr-panel-add-box" style="display:none;background:#FDF1DF;border:1px solid #F0A24B;border-radius:4px;padding:8px 10px;margin-bottom:10px;">
+                        <textarea id="ocr-panel-new-content" class="form-control input-sm" rows="2" maxlength="500" placeholder="輸入這個客戶的注意事項…"></textarea>
+                        <div style="margin-top:6px;text-align:right;">
+                            <button type="button" class="btn btn-xs" style="background:#8a5a2b;border-color:#7a4d24;color:#fff;" onclick="ocrSaveNew()"><i class="fa fa-plus"></i> 新增提醒</button>
+                        </div>
+                    </div>
+                    <div id="ocr-panel-list"><div class="text-center text-muted" style="padding:16px;font-size:12px;">載入中...</div></div>
+                </div>
+                <div class="modal-footer" style="padding:8px 14px;">
+                    <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ 客戶提醒：選定客戶時跳出（逐筆確認／設為待處理，必須都處理完才能關閉）═══ -->
+    <div class="modal fade" id="clientReminderPopupModal" tabindex="-1" role="dialog" data-backdrop="static" data-keyboard="false">
+        <div class="modal-dialog" role="document" style="max-width:560px;">
+            <div class="modal-content">
+                <div class="modal-header" style="background:#DD5138;color:#fff;border-radius:8px 8px 0 0;">
+                    <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-exclamation-circle"></i> 客戶提醒 － <span id="ocr-popup-cname">-</span></h4>
+                    <div style="font-size:11px;opacity:.9;margin-top:2px;">請逐筆按「確認」或「設為待處理」</div>
+                </div>
+                <div class="modal-body" style="padding:14px;max-height:65vh;overflow-y:auto;">
+                    <div id="ocr-popup-list"></div>
+                </div>
+                <div class="modal-footer" style="padding:8px 14px;">
+                    <button type="button" id="ocr-popup-close" class="btn btn-default btn-sm" style="display:none;" onclick="$('#clientReminderPopupModal').modal('hide');">全部已處理，關閉</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ 客戶提醒：待處理挑選（列表「已確認完成」按鈕，多筆待處理時挑選用）═══ -->
+    <div class="modal fade" id="ocrResolvePickModal" tabindex="-1" role="dialog">
+        <div class="modal-dialog" role="document" style="max-width:480px;">
+            <div class="modal-content">
+                <div class="modal-header" style="background:#8a5a2b;color:#fff;border-radius:8px 8px 0 0;">
+                    <button type="button" class="close" style="color:#fff;opacity:.8;" data-dismiss="modal"><span>&times;</span></button>
+                    <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-check-square-o"></i> 標記已確認完成</h4>
+                </div>
+                <div class="modal-body" style="padding:14px;">
+                    <div id="ocr-resolve-list"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <?php if ($can_update): ?>
     <!-- ═══ 批次自動綁定 Modal ═══════════════════════════════════════════════
          2026-09-18 使用者交辦：「未綁定料號但快速綁定內只有一個項目的，是否可以自動綁定完」。
@@ -5023,7 +5136,7 @@ foreach($dCounts as $c) {
         // 核心狀態變數
         // =====================================================================
         var currentPage = 1;
-        var currentFilters = { status: 'all', unbound: false, unbound_op: false, qty_over: false };
+        var currentFilters = { status: 'all', unbound: false, unbound_op: false, qty_over: false, pending_reminder: false };
         var isStatCardFilter = false;
         var lockedStats = null;
 
@@ -5070,7 +5183,8 @@ foreach($dCounts as $c) {
                 order_status_filter: currentStatusCardFilter || '',
                 unbound:           currentFilters.unbound    ? 1 : 0,
                 unbound_op:        currentFilters.unbound_op ? 1 : 0,
-                qty_over:          currentFilters.qty_over   ? 1 : 0
+                qty_over:          currentFilters.qty_over   ? 1 : 0,
+                pending_reminder:  currentFilters.pending_reminder ? 1 : 0
             }, function(res) {
                 if (!res.success) {
                     $('#orderTable tbody').html('<tr><td colspan="20" class="text-center text-danger">載入失敗: ' + (res.message || '未知錯誤') + '</td></tr>');
@@ -5091,7 +5205,8 @@ foreach($dCounts as $c) {
                             order_status_filter: currentStatusCardFilter || '',
                             unbound:  currentFilters.unbound    ? 1 : 0,
                             unbound_op: currentFilters.unbound_op ? 1 : 0,
-                            qty_over:   currentFilters.qty_over   ? 1 : 0
+                            qty_over:   currentFilters.qty_over   ? 1 : 0,
+                            pending_reminder: currentFilters.pending_reminder ? 1 : 0
                         }, function(r2) {
                             if (r2.success) {
                                 lockedStats = r2.stats;
@@ -5132,6 +5247,8 @@ foreach($dCounts as $c) {
             $('#count-all').text(s.total_records || 0);
             // unbound_op 跟著當前篩選
             if (s.unbound_op !== undefined) $('#count-unbound-op').text(s.unbound_op || 0);
+            // 客戶提醒「訂單待確認」跟著當前篩選（2026-09-23）
+            if (s.pending_reminder !== undefined) $('#count-pending-reminder').text(s.pending_reminder || 0);
             // 數量超出區間（OP轉訂單超出階梯區間）子連結：>0 才顯示
             if (s.qty_over !== undefined) {
                 $('#count-qty-over').text(s.qty_over || 0);
@@ -5260,6 +5377,7 @@ foreach($dCounts as $c) {
                 currentFilters.unbound = false;
                 currentFilters.unbound_op = false;
                 currentFilters.qty_over = false;
+                currentFilters.pending_reminder = false;
                 $('#count-qty-over-note').css({'font-weight':''});
                 currentStatusCardFilter = null;
                 isStatCardFilter = false;
@@ -5756,6 +5874,263 @@ foreach($dCounts as $c) {
                     $('#btn-open-split').hide();
                 }
             }
+
+            // 客戶提醒：圖示顯示/計數 + 選定/變更客戶當下跳窗（2026-09-23）
+            ocrMaybeCheckOnChange(custPk);
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        // 客戶提醒（order_client_reminder，唯一實作 src/common/order_client_reminder_lib.php）
+        // ─────────────────────────────────────────────────────────────────────
+        // 觸發時機（使用者拍板）：只在「選定/變更客戶」當下跳出，不是每次開單都跳。
+        // 做法：updateIdBadges() 每次都會算出目前的 custPk，這裡比對「跟上次真的檢查過的
+        // 客戶是不是同一個」——editOrder()/openNewOrderModal() 會先呼叫 ocrOnCustomerLoaded()
+        // 把「開單當下已經是這個客戶」記下來，所以單純開單或開單後沒改客戶都不會跳；
+        // 真的挑了不同客戶（或新增/快速建立客戶）才會跟上次記錄的值不一樣，因而觸發。
+        //
+        // 完成判定（使用者拍板）：只靠「已確認完成」按鈕，不去猜業務備註文字有沒有被改過；
+        // 該按鈕比照既有「設計備註／已處理」的樣式，只在這張訂單真的有待處理中的提醒時才出現，
+        // 沒有提醒的訂單完全不會多長出任何東西。
+        // ══════════════════════════════════════════════════════════════════════
+        window.ocrLastCheckedCustomer = null; // 上次真的檢查過（跳過窗）的客戶ID，null=尚未初始化
+        window.ocrPendingDecisions = [];      // 新增中的訂單（尚無 Order_id）暫存的決定，存檔成功後一次補寫
+
+        // 開單當下先「認帳」目前這個客戶，避免單純開單/開單後沒改客戶時誤跳窗
+        function ocrOnCustomerLoaded(custId) {
+            window.ocrLastCheckedCustomer = custId || '';
+            window.ocrPendingDecisions = [];
+        }
+
+        function ocrMaybeCheckOnChange(custPk) {
+            custPk = custPk || '';
+            ocrRefreshIcon(custPk);
+            if (custPk === window.ocrLastCheckedCustomer) return; // 沒換客戶，不重複跳窗
+            window.ocrLastCheckedCustomer = custPk;
+            if (!custPk) return;
+            var orderId = $('#hidden_Order_id').val();
+            $.post('../../src/store/ClientReminder_API.php', { action: 'unacked', customer_id: custPk, order_id: orderId || 0 }, function(res) {
+                if (!res || !res.success || !res.rows || !res.rows.length) return;
+                ocrOpenPopup(res.rows, orderId);
+            }, 'json');
+        }
+
+        // 筆記本圖示：顯示/隱藏 + 有效提醒數
+        function ocrRefreshIcon(custPk) {
+            var $icon = $('#client-reminder-icon'), $cnt = $('#client-reminder-count');
+            if (!custPk) { $icon.hide(); return; }
+            $.post('../../src/store/ClientReminder_API.php', { action: 'manage_list', customer_id: custPk }, function(res) {
+                if (!res || !res.success) { $icon.hide(); return; }
+                var active = (res.rows || []).filter(function(r) { return String(r.is_active) === '1'; });
+                $icon.show();
+                if (active.length > 0) { $cnt.text(active.length).show(); } else { $cnt.hide(); }
+            }, 'json').fail(function() { $icon.hide(); });
+        }
+
+        function ocrAttachListHtml(list) {
+            if (!list || !list.length) return '';
+            var h = '<div style="margin-top:4px;">';
+            list.forEach(function(a) {
+                h += '<a href="../../src/store/ClientReminder_API.php?action=download&id=' + a.att_id + '" target="_blank" '
+                   + 'style="display:inline-block;margin:2px 6px 2px 0;font-size:11px;color:#1a7abf;"><i class="fa fa-paperclip"></i> '
+                   + escapeHtml(a.orig_name || a.file_name) + '</a>';
+            });
+            return h + '</div>';
+        }
+
+        // ── 選定客戶跳窗：逐筆確認/設為待處理，必須都處理完才能關閉 ───────────
+        function ocrOpenPopup(rows, orderId) {
+            $('#ocr-popup-cname').text($('#client_name_input').val() || '-');
+            var $list = $('#ocr-popup-list').empty();
+            var remaining = rows.length;
+            $('#ocr-popup-close').hide();
+            rows.forEach(function(r) {
+                var $item = $('<div>').attr('data-rid', r.id).css({
+                    'border': '1px solid #eee', 'border-radius': '4px', 'padding': '8px 10px', 'margin-bottom': '8px', 'background': '#fffaf5'
+                });
+                $item.html(
+                    '<div style="font-size:12.5px;white-space:pre-wrap;">' + escapeHtml(r.content) + '</div>' +
+                    ocrAttachListHtml(r.attachments) +
+                    '<div style="font-size:10px;color:#999;margin-top:4px;">' + escapeHtml(r.created_by_name || '') + ' ' + escapeHtml(r.created_at || '') +
+                    (r.updated_at && r.updated_at !== r.created_at ? '（' + escapeHtml(r.updated_by_name || '') + ' ' + escapeHtml(r.updated_at) + ' 修改）' : '') + '</div>' +
+                    '<div style="margin-top:6px;text-align:right;" class="ocr-item-btns">' +
+                    '<button type="button" class="btn btn-xs btn-default" onclick="ocrDecide(' + r.id + ',\'confirmed\',this)"><i class="fa fa-check"></i> 確認</button> ' +
+                    '<button type="button" class="btn btn-xs" style="background:#DD5138;border-color:#c14631;color:#fff;" onclick="ocrDecide(' + r.id + ',\'pending\',this)"><i class="fa fa-clock-o"></i> 設為待處理</button>' +
+                    '</div>'
+                );
+                $list.append($item);
+            });
+            $('#clientReminderPopupModal').data('remaining', remaining).data('order-id', orderId || '').modal('show');
+        }
+
+        function ocrDecide(reminderId, status, btn) {
+            var $btns = $(btn).closest('.ocr-item-btns').find('button').prop('disabled', true);
+            var $modal = $('#clientReminderPopupModal');
+            var orderId = $modal.data('order-id');
+            var finish = function(ok, extra) {
+                if (!ok) { $btns.prop('disabled', false); return; }
+                var $item = $(btn).closest('[data-rid]');
+                var label = (status === 'pending') ? '<span style="color:#DD5138;"><i class="fa fa-clock-o"></i> 已設為待處理</span>' : '<span style="color:#27ae60;"><i class="fa fa-check"></i> 已確認</span>';
+                $item.find('.ocr-item-btns').html(label);
+                if (extra) $item.find('.ocr-item-btns').append('<div style="font-size:10.5px;color:#DD5138;margin-top:3px;">' + escapeHtml(extra) + '</div>');
+                var remaining = ($modal.data('remaining') || 1) - 1;
+                $modal.data('remaining', remaining);
+                if (remaining <= 0) {
+                    $('#ocr-popup-close').show();
+                    setTimeout(function() { $modal.modal('hide'); refreshOrderTable(); }, 900);
+                }
+            };
+            if (orderId) {
+                $.post('../../src/store/ClientReminder_API.php', { action: 'ack', reminder_id: reminderId, order_id: orderId, status: status }, function(res) {
+                    if (!res || !res.success) { alert((res && res.message) || '操作失敗'); finish(false); return; }
+                    if (status === 'pending') {
+                        // 業務備註可能已被系統插入摘要，同步目前開著的編輯視窗（只認訂單編輯彈窗那一個，
+                        // 不可用不限範圍的選擇器，清單裡每一列也有一個同名 textarea，選錯會改到別筆）
+                        if (String($('#hidden_Order_id').val()) === String(orderId)) {
+                            var ta = document.querySelector('#newOrderForm textarea[name="Order_ps"]');
+                            if (ta) { ta.value = res.order_ps || ta.value; ta.setAttribute('data-orig', ta.value); }
+                        }
+                        // 清單那一列由稍後的 refreshOrderTable() 一併重繪，不在這裡硬猜 DOM 節點
+                    }
+                    finish(true, res.reason || '');
+                }, 'json').fail(function() { alert('連線失敗，請重試'); finish(false); });
+            } else {
+                // 新增中的訂單尚無 Order_id：先記在畫面上，存檔成功後一次補寫
+                window.ocrPendingDecisions.push({ reminder_id: reminderId, status: status });
+                if (status === 'pending') {
+                    var $ps = $('#newOrderForm textarea[name="Order_ps"]');
+                    if ($ps.length) {
+                        var content = $(btn).closest('[data-rid]').find('div').first().text();
+                        var cur = $ps.val();
+                        var summary = '【客戶提醒待處理】' + (content.length > 40 ? content.substring(0, 40) + '…' : content);
+                        $ps.val(cur ? (cur + '\n' + summary) : summary);
+                    }
+                }
+                finish(true);
+            }
+        }
+
+        // ── 客戶提醒管理面板（筆記本圖示點開）────────────────────────────────
+        function openClientReminderPanel() {
+            var custPk = $('#selected_customer_pk').val();
+            if (!custPk) { showToast('請先選定客戶。', 'info'); return; }
+            $('#ocr-panel-cname').text($('#client_name_input').val() || '-');
+            $('#ocr-panel-add-box').toggle(!!window.OT_CAN_REMINDER_MANAGE);
+            $('#ocr-panel-new-content').val('');
+            $('#clientReminderPanelModal').data('customer-id', custPk).data('customer-name', $('#client_name_input').val() || '').modal('show');
+            ocrLoadPanelList();
+        }
+
+        function ocrLoadPanelList() {
+            var custPk = $('#clientReminderPanelModal').data('customer-id');
+            var $list = $('#ocr-panel-list').html('<div class="text-center text-muted" style="padding:16px;font-size:12px;">載入中...</div>');
+            $.post('../../src/store/ClientReminder_API.php', { action: 'manage_list', customer_id: custPk }, function(res) {
+                if (!res || !res.success) { $list.html('<div class="text-muted" style="font-size:12px;">載入失敗</div>'); return; }
+                if (!res.rows.length) { $list.html('<div class="text-muted" style="font-size:12px;padding:10px 0;">這個客戶目前沒有任何提醒。</div>'); return; }
+                var canManage = !!window.OT_CAN_REMINDER_MANAGE;
+                var h = '';
+                res.rows.forEach(function(r) {
+                    var inactive = String(r.is_active) !== '1';
+                    h += '<div data-id="' + r.id + '" style="border:1px solid ' + (inactive ? '#e0e0e0' : '#eee') + ';border-radius:4px;padding:8px 10px;margin-bottom:8px;'
+                       + (inactive ? 'background:#f5f5f5;opacity:.65;' : 'background:#fffaf5;') + '">'
+                       + (inactive ? '<span style="font-size:10px;color:#999;background:#e0e0e0;border-radius:8px;padding:0 6px;margin-right:4px;">已停用</span>' : '')
+                       + '<span class="ocr-view-content" style="font-size:12.5px;white-space:pre-wrap;' + (inactive ? 'text-decoration:line-through;' : '') + '">' + escapeHtml(r.content) + '</span>'
+                       + '<textarea class="form-control input-sm ocr-edit-content" style="display:none;margin-top:4px;" rows="2" maxlength="500">' + escapeHtml(r.content) + '</textarea>'
+                       + ocrAttachListHtml([]) // 附件於展開時另外載入，避免一開面板就打一堆附件查詢
+                       + '<div style="font-size:10px;color:#999;margin-top:4px;">' + escapeHtml(r.created_by_name || '') + ' ' + escapeHtml(r.created_at || '')
+                       + (r.updated_at && r.updated_at !== r.created_at ? '（' + escapeHtml(r.updated_by_name || '') + ' ' + escapeHtml(r.updated_at) + ' 修改）' : '')
+                       + (r.attach_count > 0 ? '　<i class="fa fa-paperclip"></i> ' + r.attach_count + ' 個附件' : '') + '</div>';
+                    if (canManage) {
+                        h += '<div style="margin-top:6px;text-align:right;">'
+                           + '<button type="button" class="btn btn-xs btn-default ocr-edit-btn" onclick="ocrToggleEdit(this)"><i class="fa fa-pencil"></i> 編輯</button> '
+                           + '<button type="button" class="btn btn-xs btn-default ocr-save-btn" style="display:none;" onclick="ocrSaveEdit(this,' + r.id + ')"><i class="fa fa-check"></i> 儲存</button> '
+                           + (inactive
+                                ? '<button type="button" class="btn btn-xs btn-default" onclick="ocrSetActive(' + r.id + ',1)"><i class="fa fa-undo"></i> 恢復</button>'
+                                : '<button type="button" class="btn btn-xs btn-default" onclick="ocrSetActive(' + r.id + ',0)"><i class="fa fa-ban"></i> 停用</button>')
+                           + '</div>';
+                    }
+                    h += '</div>';
+                });
+                $list.html(h);
+            }, 'json');
+        }
+
+        function ocrToggleEdit(btn) {
+            var $box = $(btn).closest('[data-id]');
+            $box.find('.ocr-view-content').hide();
+            $box.find('.ocr-edit-content').show().focus();
+            $box.find('.ocr-edit-btn').hide();
+            $box.find('.ocr-save-btn').show();
+        }
+
+        function ocrSaveEdit(btn, id) {
+            var $box = $(btn).closest('[data-id]');
+            var content = $box.find('.ocr-edit-content').val().trim();
+            if (!content) { alert('提醒內容不可空白'); return; }
+            $.post('../../src/store/ClientReminder_API.php', { action: 'save', id: id, content: content }, function(res) {
+                if (!res || !res.success) { alert((res && res.message) || '儲存失敗'); return; }
+                ocrLoadPanelList();
+            }, 'json');
+        }
+
+        function ocrSetActive(id, active) {
+            if (!confirm(active ? '確定要恢復這則提醒嗎？恢復後選定此客戶會再次跳出。' : '確定要停用這則提醒嗎？停用後不會刪除，只是往後不再跳出。')) return;
+            $.post('../../src/store/ClientReminder_API.php', { action: 'set_active', id: id, active: active }, function(res) {
+                if (!res || !res.success) { alert((res && res.message) || '操作失敗'); return; }
+                ocrLoadPanelList();
+                var custPk = $('#clientReminderPanelModal').data('customer-id');
+                ocrRefreshIcon(custPk);
+            }, 'json');
+        }
+
+        function ocrSaveNew() {
+            var content = $('#ocr-panel-new-content').val().trim();
+            if (!content) { alert('請輸入提醒內容'); return; }
+            var custPk = $('#clientReminderPanelModal').data('customer-id');
+            var cname = $('#clientReminderPanelModal').data('customer-name');
+            $.post('../../src/store/ClientReminder_API.php', { action: 'save', id: 0, customer_id: custPk, customer_name: cname, content: content }, function(res) {
+                if (!res || !res.success) { alert((res && res.message) || '新增失敗'); return; }
+                $('#ocr-panel-new-content').val('');
+                ocrLoadPanelList();
+                ocrRefreshIcon(custPk);
+            }, 'json');
+        }
+
+        // ── 清單列的「已確認完成」按鈕（有待處理中的提醒才出現）────────────────
+        // 完成按鈕本身由後端隨列表 HTML 一起輸出（見 $ocr_pending_map），這裡只負責點擊後的挑選跳窗。
+        function ocrOpenResolvePicker(orderId) {
+            $.post('../../src/store/ClientReminder_API.php', { action: 'pending_for_order', order_id: orderId }, function(res) {
+                if (!res || !res.success) return;
+                var rows = res.rows || [];
+                if (!rows.length) { showToast('這張訂單目前沒有待處理中的客戶提醒了，畫面已過期，重新整理即可。', 'info'); return; }
+                var h = '';
+                rows.forEach(function(r) {
+                    h += '<div style="border:1px solid #eee;border-radius:4px;padding:8px 10px;margin-bottom:8px;background:#fffaf5;">'
+                       + '<div style="font-size:12.5px;white-space:pre-wrap;">' + escapeHtml(r.content) + '</div>'
+                       + '<div style="font-size:10px;color:#999;margin-top:4px;">' + escapeHtml(r.pending_by_name || '') + ' ' + escapeHtml(r.pending_at || '') + ' 設為待處理</div>'
+                       + '<div style="margin-top:6px;text-align:right;">'
+                       + '<button type="button" class="btn btn-xs" style="background:#27ae60;border-color:#219150;color:#fff;" onclick="ocrResolve(' + r.ack_id + ',' + orderId + ',this)"><i class="fa fa-check"></i> 標記已確認完成</button>'
+                       + '</div></div>';
+                });
+                $('#ocr-resolve-list').html(h);
+                $('#ocrResolvePickModal').modal('show');
+            }, 'json');
+        }
+
+        function ocrResolve(ackId, orderId, btn) {
+            $(btn).prop('disabled', true);
+            $.post('../../src/store/ClientReminder_API.php', { action: 'ack_resolve', ack_id: ackId }, function(res) {
+                if (!res || !res.success) { alert((res && res.message) || '操作失敗'); $(btn).prop('disabled', false); return; }
+                $(btn).closest('div[style*="border"]').fadeOut(200, function() { $(this).remove(); });
+                // 篩選卡片「訂單待確認」數字-1（若目前顯示著）
+                var $cc = $('#count-pending-reminder');
+                if ($cc.length) {
+                    var cur = parseInt(String($cc.text()).replace(/,/g, ''), 10);
+                    if (!isNaN(cur) && cur > 0) $cc.text(cur - 1);
+                }
+                setTimeout(function() {
+                    if (!$('#ocr-resolve-list').children().length) { $('#ocrResolvePickModal').modal('hide'); refreshOrderTable(); }
+                }, 250);
+            }, 'json').fail(function() { alert('連線失敗，請重試'); $(btn).prop('disabled', false); });
         }
 
         // ── 載入報價單 & 出貨歷史 ───────────────────────────────────────────
@@ -7345,6 +7720,15 @@ foreach($dCounts as $c) {
             fetchTableData(1);
         }
 
+        // ── 客戶提醒「訂單待確認」快速篩選 toggle（2026-09-23）─────────────
+        function toggleOcrPendingCard(el) {
+            currentFilters.pending_reminder = !currentFilters.pending_reminder;
+            $(el).toggleClass('active', currentFilters.pending_reminder);
+            isStatCardFilter = false;
+            lockedStats = null;
+            fetchTableData(1);
+        }
+
         function copyToClipboard(text, el) {
             var $temp = $("<input>");
             $("body").append($temp);
@@ -7809,6 +8193,7 @@ foreach($dCounts as $c) {
             $('#newOrderForm')[0].reset();
             $('#op-cust-diff-hint').hide().empty();
             window._cuOrig = null; otResetClientUnlock();   // 新增模式客戶本來就可自由輸入，不帶著上一張訂單的解鎖狀態
+            ocrOnCustomerLoaded('');   // 客戶提醒：新增模式尚未選定任何客戶
             $('#orig_client_pk,#orig_part_pk').val('');
             $('#hidden_Order_id').val('');
             $('#selected_customer_pk').val('');
@@ -7889,6 +8274,8 @@ foreach($dCounts as $c) {
                 // 記下開啟當下的客戶／料號，供「客戶是不是被換掉了」的即時判定用（2026-09-03）
                 $('#orig_client_pk').val(data.Client_name_ID || '');
                 $('#orig_part_pk').val(data.d_id_ID || '');
+                // 客戶提醒：開單當下先「認帳」目前這個客戶，單純開單或沒改客戶不會跳窗（2026-09-23）
+                ocrOnCustomerLoaded(data.Client_name_ID || '');
                 $('#selected_part_drawing_no').val(data.Drawing_No || '');
                 $('#bound_quote_item_id').val(data.quote_item_id || '');
                 $('#hidden_quote_no').val(data.quote_no || '');
@@ -8642,6 +9029,14 @@ foreach($dCounts as $c) {
                     }
 
                     var newOrderId = (data && data.new_order_id) ? data.new_order_id : null;
+
+                    // 客戶提醒：新增中的訂單在跳窗上做的決定，存檔成功拿到訂單編號後一次補寫（2026-09-23）
+                    if (newOrderId && window.ocrPendingDecisions && window.ocrPendingDecisions.length) {
+                        $.post('../../src/store/ClientReminder_API.php', {
+                            action: 'commit_new', order_id: newOrderId, decisions: JSON.stringify(window.ocrPendingDecisions)
+                        }, function() {}, 'json');
+                        window.ocrPendingDecisions = [];
+                    }
 
                     // 若是「拆批觸發的新增」，新增完成後立即開拆批 Modal
                     if (window._splitAfterSave && newOrderId) {
@@ -11660,6 +12055,7 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
 <ul>
     <li><b>全部訂單</b>／<b>處理中</b>（還沒轉生管）／<b>已轉生管</b>／<b>批圖溝通中</b>。</li>
     <li><b>批圖溝通中</b>的定義：這張訂單<b>有設計備註、而且還沒轉生管</b>。所以在設計備註按下【已處理】把內容轉成溝通紀錄之後，它就會自動從這張卡片消失。</li>
+    <li><b>訂單待確認</b>（紅色）：這張訂單有<b>客戶提醒</b>被設為待處理、還沒標記完成，詳見下方「四之二、客戶提醒」。</li>
     <li>卡片下方若出現「N 筆訂單已暫停/取消」是提醒，不影響其他統計。</li>
 </ul>
 
@@ -11683,6 +12079,16 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
     <li>有「更改已建立訂單的客戶」角色的人可以點鎖頭、輸入<b>本人登入密碼</b>解鎖，解鎖後改法與新增訂單相同（先選客戶→料號只列該客戶底下的，或直接輸入料號自動帶出客戶）。</li>
     <li>改客戶時會<b>自動解除原本的料號綁定</b>（料號文字留著方便重搜）；解鎖<b>逐張訂單、30 分鐘有效、存檔後自動失效</b>。</li>
     <li>沒有這個權限時，「先清掉料號再挑別家客戶的料號」這條路一樣會被擋下，而且在按存檔<b>之前</b>就會紅字說明。</li>
+</ul>
+
+<h4>四之二、客戶提醒</h4>
+<ul>
+    <li>客戶欄標題旁的<b>筆記本圖示</b> <i class="fa fa-sticky-note-o"></i>：點開可查看/設定「這個客戶有哪些事要注意」，同一個客戶可以設多筆，各自記錄修改者與時間；圖示旁的紅色數字＝目前有效的提醒筆數。</li>
+    <li><b>新增/編輯/停用</b>提醒內容需要角色勾選「<b>設定客戶提醒</b>」；看得到本頁的人都能<b>查看</b>。</li>
+    <li>跳窗提醒的時機：只在<b>選定/變更客戶</b>當下跳出（新增訂單選客戶、或既有訂單解鎖後改客戶），單純開單或沒改客戶不會跳。同一則提醒對同一張訂單<b>只會跳一次</b>。</li>
+    <li>跳窗裡每則提醒要按【<b>確認</b>】或【<b>設為待處理</b>】才能關閉：<b>確認</b>＝單純表態看過了；<b>設為待處理</b>＝記進「<b>訂單待確認</b>」卡片，並把提醒摘要自動加進業務備註欄下方（原內容不動）。</li>
+    <li>要把「待處理」變成完成，一律用清單裡業務備註格下方出現的【<b>客戶提醒待確認</b>】按鈕逐筆按「<b>標記已確認完成</b>」——<b>不會</b>用「業務備註文字有沒有被改過」來猜，避免誤判。</li>
+    <li>沒有任何待處理提醒的訂單，畫面完全不會多出這顆按鈕，不影響原本排版。</li>
 </ul>
 
 <h4>五、急件標示</h4>
