@@ -366,15 +366,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $pdo->beginTransaction();
 
             // --- 2a. 解析/落地檢驗項目，取得 item_id ---
+            // 「同步更新標準」(update_std) 一律用 UPSERT（依名稱比對，同名更新原 item_id、
+            // 不在這次名單裡的停用 is_active=0），不可以整批 DELETE 再 INSERT。
+            // 原本那種「先砍光、再全部重新 INSERT」會讓每一支項目都拿到全新的 item_id，
+            // 而 qc_measurement 是靠 item_id 連回 qc_inspection_item 的——舊 item_id 一旦被刪，
+            // 所有指到它的歷史檢驗紀錄從此在「修改」/「同料號歷次檢驗」都會讀到 0 筆項目
+            // （使用者 2026-09-24 實測：round1 存完後，round2 存檔同步標準時把 round1 用的
+            // item_id 砍掉重建，round1 就再也讀不到任何檢驗項目——這個 checkbox 預設勾選，
+            // 所以幾乎每一次存檔都在悄悄弄壞上一輪的歷史資料，稽核時完全看不出來）。
             $itemIds = []; // 與 $items 同索引
+            $existingByName = []; $existingIds = []; $keptIds = [];
             if ($update_std) {
-                // 全量更新此料號(版本+型態+製程)的標準
-                $delTool = "DELETE t FROM qc_inspection_item_tool_type t
-                            JOIN qc_inspection_item i ON t.item_id=i.item_id
-                            WHERE i.version_id=? AND i.form_type_id=? AND (i.process_name <=> ?)";
-                $pdo->prepare($delTool)->execute([$version_id, $form_type_id, $process]);
-                $pdo->prepare("DELETE FROM qc_inspection_item WHERE version_id=? AND form_type_id=? AND (process_name <=> ?)")
-                    ->execute([$version_id, $form_type_id, $process]);
+                $exSt = $pdo->prepare(
+                    "SELECT item_id, item_name FROM qc_inspection_item
+                     WHERE version_id=? AND form_type_id=? AND (process_name <=> ?)");
+                $exSt->execute([$version_id, $form_type_id, $process]);
+                foreach ($exSt->fetchAll(PDO::FETCH_ASSOC) as $er) {
+                    $eid = (int)$er['item_id'];
+                    $existingIds[$eid] = true;
+                    $nm = (string)$er['item_name'];
+                    // 同名多筆（歷史髒資料）取 id 最大的那筆當現行代表，其餘視為多餘一併停用
+                    if (!isset($existingByName[$nm]) || $eid > $existingByName[$nm]) $existingByName[$nm] = $eid;
+                }
             }
 
             $insItem = $pdo->prepare(
@@ -382,11 +395,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                  (version_id, form_type_id, process_name, item_code, item_name, standard_text,
                   min_value, max_value, plus_tolerance, minus_tolerance, result_type, sort_order, is_active)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $updItem = $pdo->prepare(
+                "UPDATE qc_inspection_item SET item_code=?, standard_text=?, min_value=?, max_value=?,
+                 plus_tolerance=?, minus_tolerance=?, result_type=?, sort_order=?, is_active=1 WHERE item_id=?");
             $findItem = $pdo->prepare(
                 "SELECT item_id FROM qc_inspection_item
                  WHERE version_id=? AND form_type_id=? AND (process_name <=> ?) AND item_name=? ORDER BY item_id DESC LIMIT 1");
             $insTool = $pdo->prepare(
                 "INSERT INTO qc_inspection_item_tool_type (item_id, QC_Tool_List_id, is_primary) VALUES (?, ?, 1)");
+            $delToolOne = $pdo->prepare("DELETE FROM qc_inspection_item_tool_type WHERE item_id=?");
             $toolIdByName = function($name) use ($pdo) {
                 if ($name === '' || $name === null) return null;
                 $s = $pdo->prepare("SELECT QC_Tool_List_id FROM qc_tool_list WHERE QC_Tool=? LIMIT 1");
@@ -410,7 +427,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $code  = (string)($idx + 1);
 
                 $iid = null;
-                if (!$update_std) {
+                if ($update_std) {
+                    $iid = $existingByName[$name] ?? null;
+                    if ($iid) {
+                        $updItem->execute([$code, $stdTxt, $minV, $maxV, $plus, $minus, $type, $idx + 1, $iid]);
+                        $keptIds[$iid] = true;
+                        // 量具連結只重寫這一個 item_id 的那一列，不動其他項目
+                        $delToolOne->execute([$iid]);
+                        $tid = $catByToolId($it['tool_id'] ?? null);
+                        if (!$tid) $tid = $toolIdByName($it['tool'] ?? '');
+                        if ($tid) { try { $insTool->execute([$iid, $tid]); } catch (Exception $e) {} }
+                    }
+                } else {
                     // 沿用既有標準項目（依名稱比對），找不到才新建(設為停用，不污染標準)
                     $findItem->execute([$version_id, $form_type_id, $process, $name]);
                     $iid = $findItem->fetchColumn();
@@ -423,6 +451,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     ]);
                     $iid = (int)$pdo->lastInsertId();
                     if ($update_std) {
+                        $keptIds[$iid] = true;
                         // 優先由選定的量具實例反查類型；無則回退舊的類型名稱對應
                         $tid = $catByToolId($it['tool_id'] ?? null);
                         if (!$tid) $tid = $toolIdByName($it['tool'] ?? '');
@@ -430,6 +459,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     }
                 }
                 $itemIds[$idx] = (int)$iid;
+            }
+            // 這次「同步標準」沒有再送出的舊項目＝現場已經把它從表格拿掉了，停用但不刪除
+            // （不刪除才不會弄壞它底下已經存在的歷史檢驗紀錄）。
+            if ($update_std) {
+                $toDeactivate = array_diff(array_keys($existingIds), array_keys($keptIds));
+                if ($toDeactivate) {
+                    $phIn = implode(',', array_fill(0, count($toDeactivate), '?'));
+                    $pdo->prepare("UPDATE qc_inspection_item SET is_active=0 WHERE item_id IN ($phIn)")
+                        ->execute(array_values($toDeactivate));
+                }
             }
 
             // --- 2c. 先寫入檢驗表頭（ng/判定先給預設值，寫完明細再由後端彙總回填）---

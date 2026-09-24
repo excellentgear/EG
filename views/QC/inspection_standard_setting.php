@@ -321,30 +321,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $pdo->beginTransaction();
 
-            // 策略：先刪除該版本+類型的所有項目，再重新寫入 (全量更新)
-            // 1. 先刪除關聯的量具類型 (避免 Foreign Key 錯誤)
-            $del_tool_sql = "DELETE t FROM qc_inspection_item_tool_type t 
-                             INNER JOIN qc_inspection_item i ON t.item_id = i.item_id 
-                             WHERE i.version_id = ? AND i.form_type_id = ?";
-            $pdo->prepare($del_tool_sql)->execute([$version_id, $form_type_id]);
-
-            // 2. 刪除項目
-            $del_sql = "DELETE FROM qc_inspection_item WHERE version_id = ? AND form_type_id = ?";
-            $pdo->prepare($del_sql)->execute([$version_id, $form_type_id]);
+            // 策略：UPSERT（依 版本+類型+製程+名稱 比對，同名更新原 item_id、這次沒再送出的
+            // 舊項目停用 is_active=0），不可以先刪光整個版本+類型再全部重新 INSERT。
+            // qc_measurement 是靠 item_id 連回 qc_inspection_item 的——先刪光再重建，等於讓每一支
+            // 項目都拿到全新的 item_id，所有指到舊 item_id 的歷史檢驗紀錄（不分哪個製程）從此在
+            // 「修改」/「同料號歷次檢驗」都會讀到 0 筆項目，而且完全不報錯（2026-09-24 由
+            // inspection_combined_prototype.php 的 save_inspection 同一種寫法抓到，這裡是同一個坑）。
+            $exSt = $pdo->prepare(
+                "SELECT item_id, process_name, item_name FROM qc_inspection_item
+                 WHERE version_id=? AND form_type_id=?");
+            $exSt->execute([$version_id, $form_type_id]);
+            $existingByKey = []; $existingIds = []; $keptIds = [];
+            foreach ($exSt->fetchAll(PDO::FETCH_ASSOC) as $er) {
+                $eid = (int)$er['item_id'];
+                $existingIds[$eid] = true;
+                $key = (string)$er['process_name'] . '|' . (string)$er['item_name'];
+                // 同名多筆（歷史髒資料）取 id 最大的那筆當現行代表，其餘視為多餘一併停用
+                if (!isset($existingByKey[$key]) || $eid > $existingByKey[$key]) $existingByKey[$key] = $eid;
+            }
 
             if (!empty($items)) {
-                $sql_item = "INSERT INTO qc_inspection_item 
-                    (version_id, form_type_id, process_name, item_code, item_name, standard_text, min_value, max_value, plus_tolerance, minus_tolerance, result_type, sort_order, is_active) 
+                $sql_item = "INSERT INTO qc_inspection_item
+                    (version_id, form_type_id, process_name, item_code, item_name, standard_text, min_value, max_value, plus_tolerance, minus_tolerance, result_type, sort_order, is_active)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)";
                 $stmt_item = $pdo->prepare($sql_item);
-                
+                $sql_upd_item = "UPDATE qc_inspection_item SET item_code=?, standard_text=?, min_value=?, max_value=?,
+                    plus_tolerance=?, minus_tolerance=?, result_type=?, sort_order=?, is_active=1 WHERE item_id=?";
+                $stmt_upd_item = $pdo->prepare($sql_upd_item);
+
                 $sql_tool = "INSERT INTO qc_inspection_item_tool_type (item_id, QC_Tool_List_id, is_primary) VALUES (?, ?, ?)";
                 $stmt_tool = $pdo->prepare($sql_tool);
+                $stmt_del_tool_one = $pdo->prepare("DELETE FROM qc_inspection_item_tool_type WHERE item_id=?");
 
                 foreach ($items as $idx => $item) {
                     $item_name = trim($item['name']);
                     if (empty($item_name)) continue;
-                    
+
                     // 處理數值 (若為空則存 NULL)
                     $min = ($item['min'] !== '') ? $item['min'] : null;
                     $max = ($item['max'] !== '') ? $item['max'] : null;
@@ -356,23 +368,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         // 若為逗號分隔字串，則轉為陣列
                         $tool_ids = (strpos($tool_ids, ',') !== false) ? explode(',', $tool_ids) : [$tool_ids];
                     }
+                    $process_name = $item['process_name'] ?? null;
+                    $item_key = (string)$process_name . '|' . $item_name;
 
-                    $stmt_item->execute([
-                        $version_id,
-                        $form_type_id,
-                        $item['process_name'] ?? null, // 儲存製程名稱
-                        $item['code'],      // A, B, 1, 2...
-                        $item_name,
-                        $item['standard'] ?? '',
-                        $min,
-                        $max,
-                        $plus,
-                        $minus,
-                        $item['result_type'], // NUMERIC or OKNG
-                        $idx + 1 // sort_order
-                    ]);
-                    
-                    $new_item_id = $pdo->lastInsertId();
+                    $new_item_id = $existingByKey[$item_key] ?? null;
+                    if ($new_item_id) {
+                        $stmt_upd_item->execute([
+                            $item['code'], $item['standard'] ?? '', $min, $max, $plus, $minus,
+                            $item['result_type'], $idx + 1, $new_item_id
+                        ]);
+                        $keptIds[$new_item_id] = true;
+                        $stmt_del_tool_one->execute([$new_item_id]);
+                    } else {
+                        $stmt_item->execute([
+                            $version_id,
+                            $form_type_id,
+                            $process_name, // 儲存製程名稱
+                            $item['code'],      // A, B, 1, 2...
+                            $item_name,
+                            $item['standard'] ?? '',
+                            $min,
+                            $max,
+                            $plus,
+                            $minus,
+                            $item['result_type'], // NUMERIC or OKNG
+                            $idx + 1 // sort_order
+                        ]);
+                        $new_item_id = $pdo->lastInsertId();
+                        $keptIds[$new_item_id] = true;
+                    }
 
                     // 寫入量具關聯
                     foreach ($tool_ids as $t_idx => $tid) {
@@ -382,6 +406,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         $stmt_tool->execute([$new_item_id, $tid, $is_primary]);
                     }
                 }
+            }
+            // 這次沒有再送出的舊項目＝現場已經把它從清單拿掉了，停用但不刪除
+            // （不刪除才不會弄壞它底下已經存在的歷史檢驗紀錄）。
+            $toDeactivate = array_diff(array_keys($existingIds), array_keys($keptIds));
+            if ($toDeactivate) {
+                $ph = implode(',', array_fill(0, count($toDeactivate), '?'));
+                $pdo->prepare("UPDATE qc_inspection_item SET is_active=0 WHERE item_id IN ($ph)")
+                    ->execute(array_values($toDeactivate));
             }
 
             $pdo->commit();
