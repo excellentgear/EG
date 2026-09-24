@@ -16,6 +16,7 @@ include_once '../../src/common/rbac.php'; // #1 fail-closed：共用 RBAC bootst
 include_once '../../src/common/qc_inspection_lib.php'; // #3/#10/#12：後端重算/多量具/共用寫入
 include_once '../../src/common/qc_tool_display_lib.php'; // 量具顯示名稱統一格式（ai-rules/25，唯一實作）
 include_once '../../src/common/qa_abnormal_lib.php'; // 報廢扣減唯一實作 qab_bom_scrap_qty()（2026-09-24）
+include_once '../../src/common/packing_process_lib.php'; // 包裝製程不列入線上檢驗（2026-09-24，已獨立到包裝排程頁）
 
 // 權限不足專用例外：讓 catch 統一回 HTTP 403（前端可據此禁用/提示）
 if (!class_exists('QcPermException')) { class QcPermException extends Exception {} }
@@ -187,6 +188,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $ctx = $s->fetch(PDO::FETCH_ASSOC);
             if (!$ctx) throw new Exception('查無此待驗項目 (bom_ing_fid='.$fid.')');
 
+            // 包裝製程已獨立成自己的檢驗流程（views/pm/packing_schedule.php「包裝製程設定」），
+            // 不透過線上檢驗建立紀錄——就算是舊書籤直接帶 bom_ing_fid 進來也一律擋下並指路。
+            if (pk_is_packing_process_no($pdo, (int)$ctx['process_no'])) {
+                echo json_encode(['success' => false, 'is_packing' => true,
+                    'message' => '「' . $ctx['ProcessName'] . '」已設定為包裝製程，請改到「包裝排程」頁進行包裝檢驗與登錄。'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+
             $d_id = (int)$ctx['d_setting_pk'];
             $process = $ctx['ProcessName'];
 
@@ -316,12 +325,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         if ($_POST['action'] === 'search_pending') {
             requireViewPerm($pdo, $user_id);
             $kw = trim($_POST['keyword'] ?? '');
+            // 包裝製程不列入（已獨立成自己的檢驗流程，見 packing_process_lib.php）
+            $packingNosSp = pk_packing_process_nos($pdo);
+            $packingExclSp = $packingNosSp ? (' AND bi.process_no NOT IN (' . implode(',', array_map('intval', $packingNosSp)) . ')') : '';
             $sql = "SELECT bi.bom_ing_fid, bi.bom, b.d_id AS part_no, b.Client_Name AS client, pn.ProcessName AS process, bi.sqty, bi.batch_label
                     FROM bom_ing bi
                     LEFT JOIN bom b ON bi.bom = b.bom
                     LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
                     WHERE bi.processing_state IN ('Q','P') AND bi.qc_completed = 0
                       AND (bi.bom LIKE :kw OR b.d_id LIKE :kw OR b.Client_Name LIKE :kw)
+                      $packingExclSp
                     ORDER BY bi.outsource_date DESC LIMIT 30";
             $st = $pdo->prepare($sql);
             $st->execute([':kw' => "%$kw%"]);

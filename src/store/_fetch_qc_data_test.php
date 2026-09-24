@@ -14,9 +14,15 @@ if (!isset($_SESSION['userName'])) {
 
 include_once '../common/DBConnection.php';
 include_once '../common/_config.php';
+require_once '../common/packing_process_lib.php';   // 包裝製程不列入線上檢驗待驗清單（2026-09-24，改由包裝排程頁自己的檢驗流程管）
 
 $conn = new DBConnection();
 $db   = $conn->getPDO();
+
+// 被設定為「包裝製程」的 process_no（包裝排程頁「包裝製程設定」），這裡查一次全部查詢共用；
+// 沒有設定任何包裝製程時回傳空陣列，下面的 NOT IN 條件對空陣列一律成立（不影響既有清單）。
+$packingNos = pk_packing_process_nos($db);
+$packingExclSql = $packingNos ? (' AND bi.process_no NOT IN (' . implode(',', array_map('intval', $packingNos)) . ')') : '';
 
 // ── QC完工紀錄查詢模式 ───────────────────────────────────────
 if (($_GET['mode'] ?? '') === 'completed') {
@@ -222,6 +228,9 @@ WHERE
     AND bi.is_consumed = 0
     AND newer.bom_ing_fid IS NULL
     AND (bi.ps IS NULL OR bi.ps NOT LIKE '%(拆分工單)%')
+    -- 2026-09-24：被設定為「包裝製程」（包裝排程頁「包裝製程設定」）的站別不列入本清單，
+    -- 包裝有自己獨立的一套檢驗流程（qc_packing_inspection），不透過線上檢驗建立紀錄。
+    $packingExclSql
     -- ★ 2026-06-23 只取「目前製程」：每個 bom 取最新發外日(outsource_date)的工序，
     --   參照 views/pm/OreadyReply_ForPm_BaseOfTime2.php 的目前製程邏輯。
     --   目的：不再把已跳過的較舊工序全部當待驗列出。
@@ -272,6 +281,7 @@ try {
                   AND bi.is_consumed = 0
                   AND (bi.ps IS NULL OR bi.ps NOT LIKE '%(拆分工單)%')
                   AND pn.process_type_id IS NOT NULL
+                  $packingExclSql
                   AND COALESCE(bi.bom_sn, -1) = (   -- ★ 2026-07-14 改比對 bom_sn（見上方主查詢說明），同步「目前製程」過濾，使篩選按鈕與清單一致
                         SELECT COALESCE(cur.bom_sn, -1) FROM bom_ing cur
                         WHERE cur.bom = bi.bom AND cur.processing_state IN ('Q','P','ing','E')
@@ -288,6 +298,7 @@ try {
                   AND bi.qc_completed = 0
                   AND bi.is_consumed = 0
                   AND (bi.ps IS NULL OR bi.ps NOT LIKE '%(拆分工單)%')
+                  $packingExclSql
                   AND COALESCE(bi.bom_sn, -1) = (   -- ★ 2026-07-14 改比對 bom_sn（見上方主查詢說明），同步「目前製程」過濾，使篩選按鈕與清單一致
                         SELECT COALESCE(cur.bom_sn, -1) FROM bom_ing cur
                         WHERE cur.bom = bi.bom AND cur.processing_state IN ('Q','P','ing','E')

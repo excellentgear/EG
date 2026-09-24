@@ -68,6 +68,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     include_once '../../src/common/qc_inspection_lib.php'; // 共用：後端重算判定＋寫 qc_measurement
     include_once '../../src/common/asdoc_lib.php';
     include_once '../../src/common/people_lib.php'; // 補資料：人員一律依業務日期回推當時在職者（ai-rules/22）
+    include_once '../../src/common/packing_process_lib.php'; // 包裝製程不列入線上檢驗（2026-09-24，已獨立到包裝排程頁）
 
     $pdo = (new DBConnection())->getPDO();
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -356,10 +357,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             $baseRow = $base->fetch(PDO::FETCH_ASSOC);
             if (!$baseRow) throw new Exception('查無此 BOM，請確認單號是否正確');
 
+            // 判定「成品出貨檢驗表關卡是否齊全」也不把包裝製程算進去——包裝有自己獨立的檢驗流程，
+            // 不透過線上檢驗建立紀錄，硬要它「齊全」只會讓出貨檢驗永遠卡在「尚未齊全」（2026-09-24）。
+            $packingNos2 = pk_packing_process_nos($pdo);
+            $packingExcl2 = $packingNos2 ? (' AND bi.process_no NOT IN (' . implode(',', array_map('intval', $packingNos2)) . ')') : '';
             $procs = $pdo->prepare("
                 SELECT bi.bom_ing_fid, bi.bom_sn, bi.process_no, pn.ProcessName, COALESCE(pn.is_exclude_qc,0) AS is_exclude_qc
                 FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
-                WHERE bi.bom = ? ORDER BY bi.bom_sn ASC");
+                WHERE bi.bom = ? $packingExcl2 ORDER BY bi.bom_sn ASC");
             $procs->execute([$bom]);
             $procRows = $procs->fetchAll(PDO::FETCH_ASSOC);
 
@@ -956,15 +961,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         }
 
         // ---- ⑧ 同一 BOM 的其他製程清單：填寫頁「製程切換」下拉用 ----
+        //     包裝製程（views/pm/packing_schedule.php「包裝製程設定」）不列入，已獨立成自己的檢驗流程。
         if ($act === 'sibling_processes') {
             $bomSw = trim($_POST['bom'] ?? '');
             if ($bomSw === '') { echo json_encode(['success' => true, 'rows' => []], JSON_UNESCAPED_UNICODE); exit; }
+            $packingNos1 = pk_packing_process_nos($pdo);
+            $packingExcl1 = $packingNos1 ? (' AND bi.process_no NOT IN (' . implode(',', array_map('intval', $packingNos1)) . ')') : '';
             $sw = $pdo->prepare("
                 SELECT bi.bom_ing_fid, bi.bom_sn, bi.process_no, pn.ProcessName,
                        (SELECT f.check_result FROM qc_check_form f WHERE f.bom_ing_fid = bi.bom_ing_fid AND f.status <> 'DRAFT'
                         ORDER BY f.batch_no DESC, f.round_no DESC LIMIT 1) AS last_result
                 FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
                 WHERE bi.bom = ?
+                $packingExcl1
                 ORDER BY bi.bom_sn ASC
             ");
             $sw->execute([$bomSw]);
@@ -1009,6 +1018,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .btn-warm-o { background:#fff; border:1px solid var(--amber-d); color:var(--amber-d); }
     .btn-warm-o:hover { background:var(--sand); color:var(--ink); }
     .btn-coral { background:var(--coral); border:1px solid #b9401f; color:#fff; font-weight:bold; }
+    /* 檢視模式（唯讀）：批次與檢驗歷程點開已鎖定的紀錄——三種檢視與本單量具鎖住不可互動，
+       輸入/下拉/文字框一律反灰；純瀏覽（切換逐項/逐件/總表、切換製程）不受影響。 */
+    body.qc-view-only #view-item, body.qc-view-only #view-pcs, body.qc-view-only #view-grid,
+    body.qc-view-only #form-tool-row, body.qc-view-only #kind-box { pointer-events:none; }
+    body.qc-view-only #view-item input, body.qc-view-only #view-pcs input, body.qc-view-only #view-grid input,
+    body.qc-view-only #view-item select, body.qc-view-only #view-grid select,
+    body.qc-view-only #view-item textarea, body.qc-view-only #view-grid textarea,
+    body.qc-view-only #inp-qty, body.qc-view-only #inp-sample, body.qc-view-only #inp-remark {
+        background:#EFEAE0 !important; color:#8a7a63 !important; cursor:not-allowed; }
+    body.qc-view-only #btn-add-row-top, body.qc-view-only #btn-apply-tol, body.qc-view-only #btn-keypad,
+    body.qc-view-only #btn-add-row, body.qc-view-only #btn-import-tpl, body.qc-view-only #btn-import-tpl2,
+    body.qc-view-only #btn-form-tools { display:none; }
     /* 出貨檢驗：自動生成跳窗——逐製程區塊＋逐項目挑選 */
     .ship-proc { border:1px solid var(--line); border-radius:8px; margin-bottom:10px; overflow:hidden; }
     .ship-proc-hd { background:var(--cream); padding:7px 12px; font-weight:bold; color:var(--ink); display:flex; align-items:center; gap:8px; }
@@ -1403,6 +1424,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <div id="edit-mode-banner" class="alert alert-info" style="display:none;">
                     <i class="fa fa-pencil"></i> <b>修改模式</b>：正在修改歷程 qc_form_id=<span id="edit-form-id"></span>，儲存時需填修改原因，存檔後此筆會自動回鎖。
                     <button class="btn btn-xs btn-default pull-right" id="btn-exit-edit">取消修改，回到新檢驗</button>
+                </div>
+                <div id="view-mode-banner" class="alert alert-warning" style="display:none;">
+                    <i class="fa fa-eye"></i> <b>檢視模式（唯讀）</b>：正在檢視歷程 qc_form_id=<span id="view-form-id"></span>，欄位已反灰不可修改；如需修改請洽主管「開放修改」，或於本人修改寬限期內回來修改。
+                    <button class="btn btn-xs btn-default pull-right" id="btn-exit-view">關閉檢視，回到新檢驗</button>
                 </div>
                 <div id="bf-stage-banner" class="alert alert-warning" style="display:none;">
                     <i class="fa fa-calendar"></i> <b>補資料</b>已設定：<span id="bf-stage-text"></span>（存檔時會一併套用）
@@ -2723,7 +2748,7 @@ $(function(){
     }
     var state = { sampleN:5, batches:[], curBatch:0, processes:[], curProc:0, demo:false,
                   is_supervisor:false, can_fill:true, canManageSettings:false, canManageSampling:false,
-                  canView:true, editFormId:null, draftFormId:0, inspKind:'NORMAL', canBackfill:false,
+                  canView:true, editFormId:null, viewFormId:null, viewOnly:false, draftFormId:0, inspKind:'NORMAL', canBackfill:false,
                   currentUserId:'', bfStage:null };
     var MODEL = { items:[], pcs:[], tools:[] };   // tools＝本單使用量具（Tool_id 字串陣列）
     var TOOLS = ['卡尺','分厘卡','投影機','三次元','針規','目視'];
@@ -4128,8 +4153,20 @@ $(function(){
                     $('#main-area,#ctx-bar,#step-search,#dock').hide();
                     return;
                 }
+                if(res.is_packing){
+                    // 包裝製程已獨立成自己的檢驗流程，這裡（含舊書籤直接帶 bom_ing_fid 進來）一律擋下並指路
+                    $('#no-view-hint').html('<i class="fa fa-info-circle"></i> '+esc(res.message||'此製程已改到包裝排程頁進行檢驗')+
+                        ' <a href="../pm/packing_schedule.php" target="_blank">開啟包裝排程 <i class="fa fa-external-link"></i></a>').show();
+                    $('#main-area,#ctx-bar,#step-search,#dock').hide();
+                    return;
+                }
                 alert('載入失敗：'+res.message); return;
             }
+            // 每次載入新的情境（含由「批次與檢驗歷程」開啟舊紀錄後、再切換到其他製程）都要先
+            // 清掉修改／檢視模式殘留的狀態，否則切到別的製程時畫面會繼續鎖著、存檔鈕繼續藏著。
+            state.editFormId=null; state.viewFormId=null; state.editMeta=null;
+            $('#edit-mode-banner,#view-mode-banner').hide();
+            setViewOnlyMode(false);
             ctx = res.context;
             // 拆批時的批次代號：同一製程可能有好幾批同時待驗，標籤讓檢驗人員看得出是哪一批（避免與其他批混淆）
             if(ctx.batch_label){
@@ -4614,10 +4651,15 @@ $(function(){
             var act='';
             if(r.qc_form_id){
                 var locked=!r.edit_unlocked, selfGrace=!!r.self_grace && state.can_fill;
-                if(locked && !state.is_supervisor && !selfGrace) act+='<span class="muted-help" title="已鎖定，需主管開放"><i class="fa fa-lock"></i> 鎖定</span> ';
+                var editable=(!locked && state.can_fill) || state.is_supervisor || selfGrace;
+                if(locked && !editable) act+='<span class="muted-help" title="已鎖定，需主管開放"><i class="fa fa-lock"></i> 鎖定</span> ';
                 if(locked && state.is_supervisor) act+='<button class="btn btn-xs btn-warm-o act-unlock" data-id="'+r.qc_form_id+'"><i class="fa fa-unlock-alt"></i> 開放修改</button> ';
-                if((!locked && state.can_fill) || state.is_supervisor || selfGrace)
-                    act+='<button class="btn btn-xs btn-warm act-edit" data-id="'+r.qc_form_id+'"'+(locked&&selfGrace?' title="本人寬限期內可自改"':'')+'><i class="fa fa-pencil"></i> 修改'+(locked&&selfGrace?'（本人）':'')+'</button> ';
+                // 檢視／修改共用同一顆鈕點開：能不能真的存檔由後端 can_edit 再判一次，
+                // 不可修改時一律開「檢視畫面」（欄位反灰唯讀），不是完全不能看內容
+                // （使用者 2026-09-24 回報：鎖定的紀錄原本點不開，連檢驗相關資料都看不到）。
+                act+='<button class="btn btn-xs '+(editable?'btn-warm':'btn-default')+' act-edit" data-id="'+r.qc_form_id+'"'+(locked&&selfGrace?' title="本人寬限期內可自改"':'')+'>'+
+                     '<i class="fa fa-'+(editable?'pencil':'eye')+'"></i> '+(editable?('修改'+(locked&&selfGrace?'（本人）':'')):'檢視')+'</button> ';
+                act+='<button class="btn btn-xs btn-default act-print-hist" data-id="'+r.qc_form_id+'" title="列印這一筆檢驗紀錄"><i class="fa fa-print"></i> 列印</button> ';
                 if(r.edit_log_count>0) act+='<button class="btn btn-xs btn-default act-log" data-id="'+r.qc_form_id+'"><i class="fa fa-history"></i> 紀錄</button> ';
                 if(IS_SUPER) act+='<button class="btn btn-xs act-del-rec" data-id="'+r.qc_form_id+'" title="完全刪除此筆檢驗紀錄（測試用，需密碼）" style="background:#8F3016;color:#fff;border:0;"><i class="fa fa-trash"></i></button>';
             }
@@ -4640,7 +4682,7 @@ $(function(){
         }).join('');
         $('#batch-history').html(
             '<table class="table table-condensed table-bordered" style="background:#fff;"><thead>'+
-            '<tr><th width="70">次數</th><th width="230">日期</th><th width="90">結果</th><th width="110">檢驗數/不良數</th><th width="110">異常單</th><th width="230">操作</th></tr>'+
+            '<tr><th width="70">次數</th><th width="230">日期</th><th width="90">結果</th><th width="110">檢驗數/不良數</th><th width="110">異常單</th><th width="290">操作</th></tr>'+
             '</thead><tbody>'+rows+'</tbody></table>');
     }
     $('#batch-history').on('click','.act-unlock', function(){
@@ -4653,6 +4695,7 @@ $(function(){
         },'json');
     });
     $('#batch-history').on('click','.act-edit', function(){ openEditRecord($(this).data('id')); });
+    $('#batch-history').on('click','.act-print-hist', function(){ printHistoryRecord($(this).data('id')); });
 
     // ---------- 完全刪除檢驗紀錄（僅超級管理員；測試用） ----------
     var delTarget=null;
@@ -4695,8 +4738,9 @@ $(function(){
             $('#delRecModal').modal('hide');
             flashMsg('已完全刪除檢驗紀錄 #'+res.deleted.qc_form_id);
             delTarget=null;
-            // 若刪掉的正是目前正在修改的那筆，先退出修改模式
+            // 若刪掉的正是目前正在修改／檢視的那筆，先退出修改／檢視模式
             if(state.editFormId && String(state.editFormId)===String(res.deleted.qc_form_id)) state.editFormId=null;
+            if(state.viewFormId && String(state.viewFormId)===String(res.deleted.qc_form_id)){ state.viewFormId=null; setViewOnlyMode(false); }
             if(ctx && ctx.adhoc){ location.href = 'inspection_entry_v2.php' + (new URLSearchParams(location.search).get('popup')?'?popup=1':''); }
             else reloadContext();
         }, 'json').fail(function(x){ $b.prop('disabled',false); alert('刪除錯誤：'+x.responseText); });
@@ -4722,13 +4766,19 @@ $(function(){
         },'json');
     });
 
-    // ---------- 修改模式 ----------
-    function openEditRecord(qcFormId){
+    // ---------- 修改 / 檢視模式 ----------
+    // 使用者 2026-09-24 回報：鎖定的歷程原本完全點不開（連內容都看不到）。
+    // 改成一律先載入內容，後端 can_edit 判定「能不能真的存檔」——可以就走原本的修改模式，
+    // 不行就走「檢視模式」：畫面照常渲染，只是欄位反灰唯讀（setViewOnlyMode），
+    // 只有開放修改、或本人在修改寬限期內，才會落到可修改分支。
+    // afterFn：載入渲染完成後的回呼（列印該筆歷程時使用，見 printHistoryRecord）。
+    function openEditRecord(qcFormId, afterFn){
         $.post(API,{action:'get_history_record',qc_form_id:qcFormId},function(res){
             if(!res.success){ alert('載入失敗：'+res.message); return; }
-            if(!res.can_edit){ alert('此筆已鎖定，請主管先開放修改。'); return; }
             var h=res.header;
-            state.editFormId=qcFormId;
+            var editable=!!res.can_edit;
+            state.editFormId = editable ? qcFormId : null;
+            state.viewFormId = editable ? null : qcFormId;
             // 列印簽章用：已存檔紀錄的簽章日期＝檢驗日、檢驗員＝存檔者
             state.editMeta={ check_date:h.check_date||'', creator_name:h.creator_name||'',
                               approved_name:h.approved_name||'', approved_at:h.approved_at||'' };
@@ -4749,14 +4799,49 @@ $(function(){
             });
             recalc();
             $('#no-std-hint').hide();
-            $('#edit-form-id').text(qcFormId);
-            $('#edit-mode-banner').show();
+            setViewOnlyMode(!editable);
+            if(editable){
+                $('#view-mode-banner').hide();
+                $('#edit-form-id').text(qcFormId);
+                $('#edit-mode-banner').show();
+                $('#chk-save-std').prop('checked',false).closest('label').hide();
+                $('#btn-save').html('<i class="fa fa-save"></i> 儲存修改');
+                $('#btn-redo').hide();
+            } else {
+                $('#edit-mode-banner').hide();
+                $('#view-form-id').text(qcFormId);
+                $('#view-mode-banner').show();
+            }
             refreshBackfillBtn();
-            $('#chk-save-std').prop('checked',false).closest('label').hide();
-            $('#btn-save').html('<i class="fa fa-save"></i> 儲存修改');
-            $('#btn-redo').hide();
             $('html,body').animate({scrollTop:0},200);
+            if(afterFn) afterFn();
         },'json').fail(function(x){ alert('載入錯誤：'+x.responseText); });
+    }
+    // 欄位反灰唯讀：鎖定所有三種檢視（逐項/逐件/總表）的輸入與判定切換、本單量具挑選、
+    // 新增/匯入樣板/自動套公差/數字鍵盤等會改資料的按鈕；純瀏覽與製程切換不受影響。
+    function setViewOnlyMode(on){
+        state.viewOnly=!!on;
+        $('body').toggleClass('qc-view-only', !!on);
+        $('#inp-qty,#inp-sample,#inp-remark').prop('readonly', !!on);
+        $('#chk-save-std').closest('label').toggle(!on);
+        $('#btn-cancel,#btn-redo,#btn-save,#btn-save-draft,#btn-backfill').toggle(!on);
+    }
+    function exitViewMode(){
+        state.viewFormId=null; state.editMeta=null;
+        $('#view-mode-banner').hide();
+        setViewOnlyMode(false);
+        reloadContext();
+    }
+    $('#btn-exit-view').on('click', exitViewMode);
+    // 列印「批次與檢驗歷程」裡的某一筆：先把該筆載入畫面（檢視或修改模式皆可），
+    // 再沿用現有的 #btn-print 同一套 buildPrintHtml()，確保跟即時列印版面完全一致。
+    function printHistoryRecord(qcFormId){
+        openEditRecord(qcFormId, function(){
+            loadPrintCfg(function(){
+                $('#print-area').html(buildPrintHtml());
+                window.print();
+            }, printSignDate());
+        });
     }
     function exitEditMode(){
         state.editFormId=null; state.editMeta=null;

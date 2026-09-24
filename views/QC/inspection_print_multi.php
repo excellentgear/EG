@@ -24,6 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     header('Content-Type: application/json; charset=utf-8');
     include_once '../../src/common/DBConnection.php';
     include_once '../../src/common/qc_inspection_lib.php';   // 本單使用量具（qc_form_tool）共用查詢
+    include_once '../../src/common/packing_process_lib.php'; // 包裝製程判定＋包裝檢驗紀錄（2026-09-24：合併列印仍要印出包裝檢驗結果）
     $pdo = (new DBConnection())->getPDO();
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
@@ -205,25 +206,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
             return [
                 'bom_ing_fid' => $fid, 'bom_sn' => $label['sn'], 'process_name' => $label['name'],
-                'proc_qty' => $procQty, 'maker_id' => $makerId, 'exempt' => $isExempt,
+                'proc_qty' => $procQty, 'maker_id' => $makerId, 'exempt' => $isExempt, 'is_packing' => false,
                 'batches' => array_values($batches),
                 'last_form' => $forms ? end($forms) : null,
                 'detail' => $itemsByFid[$fid] ?? null,
             ];
         };
 
+        // 包裝製程一律不透過線上檢驗（qc_check_form）建立紀錄——已獨立成自己的檢驗流程
+        // （qc_packing_inspection，見 views/pm/packing_schedule.php）——但合併列印仍要把包裝
+        // 檢驗結果一併印出來，所以另外組一份、改讀 qc_packing_inspection（2026-09-24）。
+        $buildPackingEntry = function ($fid, $label, $procQty, $makerId) use ($pdo) {
+            $pkRows = pk_packing_rows_for_fid($pdo, $fid);
+            $judgeToResult = function ($j) { return $j === 'FAIL' ? 'NG' : ($j === 'PASS' ? 'OK' : 'HOLD'); };
+            $batches = [];
+            foreach ($pkRows as $i => $pr) {
+                $batches[$i + 1] = ['batch_no' => $i + 1, 'rounds' => [[
+                    'round_no' => 1, 'check_result' => $judgeToResult($pr['judgement']),
+                    'ng_qty' => (int)$pr['ng_qty'], 'date' => substr((string)$pr['inspection_date'], 0, 10),
+                    'creator' => $pr['packer'] ?: '',
+                ]]];
+            }
+            $last = $pkRows ? end($pkRows) : null;
+            return [
+                'bom_ing_fid' => $fid, 'bom_sn' => $label['sn'], 'process_name' => $label['name'],
+                'proc_qty' => $procQty, 'maker_id' => $makerId, 'exempt' => false, 'is_packing' => true,
+                'packing_open' => $last ? ($last['status'] !== 'closed') : false,
+                'batches' => array_values($batches),
+                'last_form' => $last ? ['check_result' => $judgeToResult($last['judgement']), 'creator' => $last['packer'] ?: ''] : null,
+                'detail' => $pkRows ? ['sample_n' => 0, 'items' => [], 'packing_rows' => array_map(function ($pr) {
+                    return [
+                        'date' => substr((string)$pr['inspection_date'], 0, 10),
+                        'order_qty' => (int)$pr['order_qty'], 'ok_qty' => (int)$pr['ok_qty'], 'ng_qty' => (int)$pr['ng_qty'],
+                        'ship_now_qty' => (int)$pr['ship_now_qty'],
+                        'warehouse_qty' => $pr['warehouse_qty'] !== null ? (int)$pr['warehouse_qty'] : null,
+                        'judgement' => $pr['judgement'], 'status' => $pr['status'],
+                        'packer' => $pr['packer'], 'inspector' => $pr['inspector'], 'remark' => $pr['remark'],
+                    ];
+                }, $pkRows)] : null,
+            ];
+        };
+
+        $packingNos = pk_packing_process_nos($pdo);
         $processes = [];
         $shipInserted = !isset($formsByFid[$SHIP_FID]);   // 沒有出貨檢驗單就不必插入
         foreach ($procRows as $p) {
             $fid = (int)$p['bom_ing_fid'];
+            $isPacking = in_array((int)$p['process_no'], $packingNos, true);
             // 出貨檢驗一律排在「包裝」製程之前（使用者拍板：獨立為成品出貨，位置在包裝前面）；
-            // 找不到名稱含「包裝」的製程就排在最後（迴圈結束後補插）
-            if (!$shipInserted && mb_strpos((string)($p['ProcessName'] ?: ''), '包裝') !== false) {
+            // 一律以「包裝製程設定」判定是不是包裝，不再用製程名稱猜（比對字串較不可靠）；
+            // 找不到包裝製程就排在最後（迴圈結束後補插）
+            if (!$shipInserted && $isPacking) {
                 $processes[] = $buildProcEntry($SHIP_FID, ['sn' => '', 'name' => '出貨檢驗'], null, null, false);
                 $shipInserted = true;
             }
-            $processes[] = $buildProcEntry($fid, ['sn' => $p['bom_sn'], 'name' => $p['ProcessName'] ?: ('製程' . $p['process_no'])],
-                $p['proc_qty'], $p['maker_id'], (int)$p['is_exclude_qc'] === 1);
+            $label = ['sn' => $p['bom_sn'], 'name' => $p['ProcessName'] ?: ('製程' . $p['process_no'])];
+            $processes[] = $isPacking
+                ? $buildPackingEntry($fid, $label, $p['proc_qty'], $p['maker_id'])
+                : $buildProcEntry($fid, $label, $p['proc_qty'], $p['maker_id'], (int)$p['is_exclude_qc'] === 1);
         }
         if (!$shipInserted) $processes[] = $buildProcEntry($SHIP_FID, ['sn' => '', 'name' => '出貨檢驗'], null, null, false);
 
@@ -370,7 +410,10 @@ function buildProcessSummaryRow(p, idx){
     var judge = p.exempt ? '<span class="muted-help">已設定免檢</span>'
               : !last ? '<span class="pm-ng">✘ 尚無檢驗紀錄</span>'
               : (last.check_result==='NG' ? '<span class="pm-ng">✘ 不良</span>' : '<span class="pm-ok">✔ 合格</span>');
+    // 包裝檢驗尚未結案時，在判定欄額外標一句提醒（列印仍照常進行，不阻擋）——2026-09-24
+    if(p.is_packing && p.packing_open) judge += '<br><span class="pm-ng" style="font-size:9px;">（包裝尚未結案）</span>';
     var nameTxt = isShipRow(p) ? ('<b>'+esc(p.process_name)+'</b>') : esc(p.process_name);
+    if(p.is_packing) nameTxt = esc(p.process_name)+'<span class="pm-pack-tag">包裝</span>';
     return '<tr'+(isShipRow(p)?' class="pm-ship-row"':'')+'><td>'+(idx+1)+'</td><td class="tl">'+nameTxt+'</td>'
         + '<td>'+esc(p.proc_qty||'')+'</td><td>'+esc(p.maker_id||'')+'</td>'
         + '<td class="tl">'+batchTrailHtml(p)+'</td>'
@@ -379,8 +422,25 @@ function buildProcessSummaryRow(p, idx){
 }
 function buildProcessFullBlock(p, idx){
     var head='<div class="pm-proc-head">['+(idx+1)+'] '+esc(p.process_name)
+        + (p.is_packing?'<span class="pm-pack-tag">包裝</span>':'')
         + '　送驗:'+esc(p.proc_qty||'')+'　廠商:'+esc(p.maker_id||'')+'</div>'
         + '<div class="pm-trail">'+batchTrailHtml(p)+'</div>';
+    if(p.is_packing){
+        var rows=(p.detail&&p.detail.packing_rows)||[];
+        if(!rows.length) return head + '<div class="muted-help" style="margin:4px 0 14px;">尚無包裝檢驗紀錄</div>';
+        var pbody='<table class="pm-items"><thead><tr><th>日期</th><th>訂單數</th><th>合格數</th><th>不良數</th>'
+            + '<th>本次出貨</th><th>入庫</th><th>判定</th><th>結案狀態</th><th>包裝人員</th><th>品檢人員</th><th>備註</th></tr></thead><tbody>';
+        rows.forEach(function(r){
+            var judge2 = r.judgement==='FAIL' ? '<span class="pm-ng">不良</span>' : (r.judgement==='PASS' ? '合格' : '待判定');
+            var stTxt = r.status==='closed' ? '已結案' : '<span class="pm-ng">未結案</span>';
+            pbody += '<tr><td>'+esc(r.date)+'</td><td>'+r.order_qty+'</td><td>'+r.ok_qty+'</td><td>'+r.ng_qty+'</td>'
+                + '<td>'+r.ship_now_qty+'</td><td>'+(r.warehouse_qty!=null?r.warehouse_qty:'')+'</td>'
+                + '<td>'+judge2+'</td><td>'+stTxt+'</td><td>'+esc(r.packer||'')+'</td><td>'+esc(r.inspector||'')+'</td>'
+                + '<td class="tl">'+esc(r.remark||'')+'</td></tr>';
+        });
+        pbody += '</tbody></table>';
+        return head + pbody;
+    }
     if(!p.detail || !p.detail.items || !p.detail.items.length){
         return head + '<div class="muted-help" style="margin:4px 0 14px;">尚無實測資料</div>';
     }
@@ -414,6 +474,13 @@ $('#btn-print').on('click', function(){
     loadData(mode, DATA.drawing.chosen, function(){ doPrint(mode, paper); });
 });
 function doPrint(mode, paper){
+    // 包裝檢驗尚未結案（可能還會再變動）時先提醒一次，但不阻擋列印——內容照現有資料照印
+    // （使用者 2026-09-24 明確要求：先判定包裝檢驗紀錄是否結案，未結案跳提醒但不阻擋列印）。
+    var openPacking=(DATA.processes||[]).filter(function(p){ return p.is_packing && p.packing_open; });
+    if(openPacking.length){
+        alert('提醒：以下包裝檢驗紀錄尚未結案（內容之後可能還會變動），仍會依目前內容列印：\n'
+            + openPacking.map(function(p){ return '・'+p.process_name; }).join('\n'));
+    }
     var d=DATA.drawing;
     var drawingHtml = d.url ? '<img class="pm-drawing-img" src="'+esc(d.url)+'">' : '<div class="pm-no-drawing">（無圖面）</div>';
 
@@ -475,6 +542,7 @@ function doPrint(mode, paper){
         + 'table.pm-items thead{display:table-header-group;}'
         + 'table.pm-items td.tl{text-align:left;}'
         + '.pm-ng-cell{color:#000;font-weight:bold;text-decoration:underline;}'
+        + '.pm-pack-tag{display:inline-block;margin-left:6px;background:#F0A24B;color:#4A3524;border-radius:8px;padding:0 6px;font-size:9px;font-weight:bold;vertical-align:middle;}'
         + '@page{size:'+paper+' portrait;margin:12mm 10mm 18mm;'
         + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
         + '}';

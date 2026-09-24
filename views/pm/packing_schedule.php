@@ -9,6 +9,7 @@ require_once __DIR__ . '/../../src/common/packing_notify.php';
 require_once __DIR__ . '/../../src/common/people_lib.php';
 require_once __DIR__ . '/../../src/common/org_role_lib.php';
 require_once __DIR__ . '/../../src/common/qa_abnormal_lib.php'; // 報廐扣減唯一實作 qab_bom_scrap_qty()（2026-09-24）
+require_once __DIR__ . '/../../src/common/packing_process_lib.php'; // 「是不是包裝製程」的唯一實作 pk_packing_process_nos()（2026-09-24）
 
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
@@ -173,11 +174,11 @@ try {
     }
 } catch (Exception $e) { /* ignore */ }
 
-// 取得目前設定的包裝製程編號
+// 取得目前設定的包裝製程編號——唯一實作在 packing_process_lib.php 的 pk_packing_process_nos()，
+// 這裡保留同名薄包裝，本頁其餘程式碼不必逐一改呼叫點。
 function get_packing_process_nos(PDO $pdo): array
 {
-    $rows = $pdo->query("SELECT process_no FROM pm_packing_process_setting ORDER BY process_no")->fetchAll(PDO::FETCH_COLUMN);
-    return array_map('intval', $rows);
+    return pk_packing_process_nos($pdo);
 }
 
 // 目前設定的「可選包裝人員」部門（未展開子部門，設定畫面用）
