@@ -697,7 +697,7 @@ function buildProcessFullBlock(p, idx){
     if(p.is_packing){
         var rows=(p.detail&&p.detail.packing_rows)||[];
         if(!rows.length) return head + '<div class="muted-help" style="margin:4px 0 14px;">尚無包裝檢驗紀錄</div>';
-        var pbody='<table class="pm-items"><thead><tr><th>日期</th><th>訂單數</th><th>合格數</th><th>不良數</th>'
+        var pbody='<table class="pm-items"><thead><tr><th>日期</th><th>待包裝數</th><th>合格數</th><th>不良數</th>'
             + '<th>本次出貨</th><th>入庫</th><th>判定</th><th>結案狀態</th><th>包裝人員</th><th>品檢人員</th><th>備註</th></tr></thead><tbody>';
         rows.forEach(function(r){
             var judge2 = r.judgement==='FAIL' ? '<span class="pm-ng">不良</span>' : (r.judgement==='PASS' ? '合格' : '待判定');
