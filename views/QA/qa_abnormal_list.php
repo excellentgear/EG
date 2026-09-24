@@ -532,7 +532,7 @@ function load(){
                 + '<td>' + bomIr + '</td>'
                 + '<td>' + esc((r.abnormal_phenomenon || '').substring(0, 60)) + '</td>'
                 + '<td>' + esc(r.responsible_unit) + '</td>'
-                + '<td>' + esc(r.final_label) + (r.scrap_no ? '<br><span class="st st-gm">報廢單 ' + esc(r.scrap_no) + '</span>' : '') + '</td>'
+                + '<td>' + esc(r.final_label) + (r.scrap_no ? '<br><span class="st st-gm">' + esc(r.scrap_no) + '</span>' : '') + '</td>'
                 + '<td class="c"><span class="st st-' + r.status.code + '">' + esc(r.status.label) + '</span>'
                     + (r.status.decider ? '<br><span class="muted-help" style="font-size:10.5px;white-space:normal;">' + esc(r.status.decider.label) + '</span>' : '')
                 + '</td>'
