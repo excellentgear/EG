@@ -8,6 +8,8 @@
  * 分頁走後端(不一次撈全部)；列印/CSV匯出走後端依目前篩選條件抓「全部」符合筆數(不受分頁限制)。
  * 製程/機台/工單/料號/人員五個篩選皆為「動態連動清單」（get_facets action）：只列目前其餘篩選條件下仍有資料的選項，
  * 選了製程會連動縮小機台/人員清單，反之亦然，比照 pivot table 的 facet filter 做法，避免選出兜不出資料的組合。
+ * 數量欄拆成「良品／NG／加工總數」三欄：良品＝pdr.produced_qty，NG＝pm_process_daily_ng 該筆報工的 ng_qty 加總，
+ * 加工總數＝良品+NG（現場填寫時「良品」與「NG」本來就是分開輸入的兩件事，不可只顯示良品數字冒充成生產數量）。
  */
 include_once '../../src/common/_config.php';
 include "../../src/common/DBConnection.php";
@@ -142,7 +144,8 @@ $PRQ_COLS = "pdr.report_id, pdr.report_date, pdr.report_source, pdr.remark, pdr.
     pdr.setup_start_time, pdr.setup_end_time, pdr.production_start_time, pdr.production_end_time,
     " . eg_machine_label_sql('m', 'mpt') . ",
     u1.user_cname AS setup_user, u2.user_cname AS prod_user, pn.ProcessName,
-    bi.bom, b.d_id, b.Client_Name";
+    bi.bom, b.d_id, b.Client_Name,
+    (SELECT COALESCE(SUM(ng_qty),0) FROM pm_process_daily_ng WHERE report_id = pdr.report_id) AS ng_qty";
 
 $PRQ_MLBL = eg_machine_label_cfg($pdo);
 
@@ -160,9 +163,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             header('Content-Disposition: attachment; filename="process_report_' . date('YmdHis') . '.csv"');
             echo "\xEF\xBB\xBF"; // Excel 判讀 UTF-8 BOM
             $out = fopen('php://output', 'w');
-            fputcsv($out, ['日期', '製程', '機台', '工單', '料號', '客戶', '架機人員', '架機時間', '生產人員', '生產時間', '生產數量', '完工', '加工面', '備註']);
+            fputcsv($out, ['日期', '製程', '機台', '工單', '料號', '客戶', '架機人員', '架機時間', '生產人員', '生產時間', '良品', 'NG', '加工總數', '完工', '加工面', '備註']);
             while ($r = $stmt->fetch(PDO::FETCH_ASSOC)) {
                 $isTemp = $r['report_source'] === 'TEMP';
+                $ngQty = (int)($r['ng_qty'] ?? 0);
                 fputcsv($out, [
                     $r['report_date'],
                     $r['ProcessName'],
@@ -175,6 +179,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $r['prod_user'],
                     prq_time_range($r['production_start_time'], $r['production_end_time']),
                     $r['produced_qty'],
+                    $ngQty,
+                    (int)$r['produced_qty'] + $ngQty,
                     $r['is_finished'] ? '是' : '否',
                     $r['process_face'],
                     $r['remark'],
@@ -454,9 +460,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <table class="prq-table" id="prqTable">
                 <thead><tr>
                     <th>日期</th><th>製程</th><th>機台</th><th class="t-left">工單</th><th class="t-left">料號</th><th>客戶</th>
-                    <th>架機人員</th><th>架機時間</th><th>生產人員</th><th>生產時間</th><th>生產數量</th><th>完工</th><th>加工面</th><th class="t-left">備註</th>
+                    <th>架機人員</th><th>架機時間</th><th>生產人員</th><th>生產時間</th><th>良品</th><th>NG</th><th>加工總數</th><th>完工</th><th>加工面</th><th class="t-left">備註</th>
                 </tr></thead>
-                <tbody id="prqTbody"><tr><td colspan="14" class="prq-empty">請設定篩選條件後查詢</td></tr></tbody>
+                <tbody id="prqTbody"><tr><td colspan="16" class="prq-empty">請設定篩選條件後查詢</td></tr></tbody>
             </table>
         </div>
         <div class="prq-pager" id="prqPager"></div>
@@ -514,6 +520,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <ul>
             <li>臨時加工（無綁定工單）的「工單」欄會顯示「臨時加工」、「料號」欄留空，客戶欄改顯示加工原因；<b>因為沒有料號，只要有指定料號篩選，臨時加工的紀錄就不會出現在結果中</b>。</li>
             <li>「架機人員」＝原「設置人員」正名；架機/生產時間欄留空代表該筆報工未填該項時間。</li>
+            <li><b>良品／NG／加工總數</b>：「良品」是該筆報工填寫的完成數量，「NG」取自該筆報工登記的 NG 明細加總（可能有多筆不同 NG 原因），「加工總數」＝良品＋NG，列表、列印、匯出CSV 三處口徑一致；NG 大於 0 時列表上會以紅字標示提醒。</li>
             <li><b>列印版的 AS 文件編號</b>：綁定後，列印時大標題下方那一行會自動改印該 AS 文件的<b>表單名稱</b>，頁尾<b>右下角每一頁</b>都會印出<b>文件編號</b>（四階文件會自動附加版次，例 2-PM-01-01A）。未綁定時表頭退回顯示「報工紀錄查詢列印」、右下角不印編號。</li>
             <li>本頁列印屬「多筆彙總的清單型列印」，印的是<b>當下現況</b>，所以文件版次一律取目前最新版，不會依報工日期回推舊版次。</li>
             <li>編號與表單名稱都直接取自 AS 文件管理主檔，日後該文件改名或改版，本頁列印會自動跟著變，不需回來改設定。</li>
@@ -586,6 +593,8 @@ function rowToTr(r){
     var bomTxt = isTemp ? '臨時加工' : esc(r.bom);
     var didTxt = isTemp ? '' : esc(r.d_id);
     var custTxt = isTemp ? esc(r.source_reason || '') : esc(r.Client_Name);
+    var okQty = parseInt(r.produced_qty, 10) || 0;
+    var ngQty = parseInt(r.ng_qty, 10) || 0;
     return '<tr>'
         + '<td>' + esc(egFmtDate(r.report_date)) + '</td>'
         + '<td>' + esc(r.ProcessName) + '</td>'
@@ -597,7 +606,9 @@ function rowToTr(r){
         + '<td>' + esc(timeRange(r.setup_start_time, r.setup_end_time)) + '</td>'
         + '<td>' + esc(r.prod_user) + '</td>'
         + '<td>' + esc(timeRange(r.production_start_time, r.production_end_time)) + '</td>'
-        + '<td>' + esc(r.produced_qty) + '</td>'
+        + '<td>' + okQty + '</td>'
+        + '<td' + (ngQty > 0 ? ' style="color:#DD5138;font-weight:bold;"' : '') + '>' + ngQty + '</td>'
+        + '<td>' + (okQty + ngQty) + '</td>'
         + '<td>' + (r.is_finished ? '是' : '否') + '</td>'
         + '<td>' + esc(r.process_face || '-') + '</td>'
         + '<td class="t-left">' + esc(r.remark || '') + '</td>'
@@ -629,13 +640,13 @@ function loadList(page){
     f.action = 'list';
     f.page = page;
     f.page_size = $('#pageSizeSel').val();
-    $('#prqTbody').html('<tr><td colspan="14" class="prq-empty"><i class="fa fa-spinner fa-spin"></i> 載入中...</td></tr>');
+    $('#prqTbody').html('<tr><td colspan="16" class="prq-empty"><i class="fa fa-spinner fa-spin"></i> 載入中...</td></tr>');
     $.post('', f, function(res){
-        if (!res.success){ $('#prqTbody').html('<tr><td colspan="14" class="prq-empty">' + esc(res.message||'查詢失敗') + '</td></tr>'); return; }
+        if (!res.success){ $('#prqTbody').html('<tr><td colspan="16" class="prq-empty">' + esc(res.message||'查詢失敗') + '</td></tr>'); return; }
         lastTotal = res.total;
         $('#statTotal').text(res.total);
         if (!res.rows.length){
-            $('#prqTbody').html('<tr><td colspan="14" class="prq-empty">查無符合條件的報工紀錄</td></tr>');
+            $('#prqTbody').html('<tr><td colspan="16" class="prq-empty">查無符合條件的報工紀錄</td></tr>');
         } else {
             $('#prqTbody').html(res.rows.map(rowToTr).join(''));
         }
@@ -745,17 +756,19 @@ $('#btnPrint').on('click', function(){
                  + '<div class="p-title">' + esc(docTitle) + '</div>'
                  + '<div class="p-sub">' + esc(sub) + '</div>';
         body += '<table class="p-tb"><thead><tr><th>日期</th><th>製程</th><th>機台</th><th>工單</th><th>料號</th><th>客戶</th>'
-              + '<th>架機人員</th><th>架機時間</th><th>生產人員</th><th>生產時間</th><th>數量</th><th>完工</th><th>備註</th></tr></thead><tbody>';
+              + '<th>架機人員</th><th>架機時間</th><th>生產人員</th><th>生產時間</th><th>良品</th><th>NG</th><th>加工總數</th><th>完工</th><th>備註</th></tr></thead><tbody>';
         res.rows.forEach(function(r){
             var isTemp = r.report_source === 'TEMP';
             var bomTxt = isTemp ? '臨時加工' : esc(r.bom);
             var didTxt = isTemp ? '' : esc(r.d_id);
             var custTxt = isTemp ? esc(r.source_reason||'') : esc(r.Client_Name);
+            var okQty = parseInt(r.produced_qty, 10) || 0;
+            var ngQty = parseInt(r.ng_qty, 10) || 0;
             body += '<tr><td>'+esc(egFmtDate(r.report_date))+'</td><td>'+esc(r.ProcessName)+'</td><td>'+esc(r.machine_label||r.machine)+'</td>'
                   + '<td class="tl">'+bomTxt+'</td><td class="tl">'+didTxt+'</td><td>'+custTxt+'</td>'
                   + '<td>'+esc(r.setup_user)+'</td><td>'+esc(timeRange(r.setup_start_time, r.setup_end_time))+'</td>'
                   + '<td>'+esc(r.prod_user)+'</td><td>'+esc(timeRange(r.production_start_time, r.production_end_time))+'</td>'
-                  + '<td>'+esc(r.produced_qty)+'</td><td>'+(r.is_finished?'是':'否')+'</td><td class="tl">'+esc(r.remark||'')+'</td></tr>';
+                  + '<td>'+okQty+'</td><td>'+ngQty+'</td><td>'+(okQty+ngQty)+'</td><td>'+(r.is_finished?'是':'否')+'</td><td class="tl">'+esc(r.remark||'')+'</td></tr>';
         });
         body += '</tbody></table>';
         if (!res.rows.length) body = body.replace('<tbody>','<tbody>').replace('</tbody></table>','</tbody></table>') + '<div style="padding:20px;color:#666;">查無符合條件的報工紀錄</div>';
