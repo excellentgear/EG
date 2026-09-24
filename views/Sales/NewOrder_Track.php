@@ -4223,7 +4223,7 @@ foreach($dCounts as $c) {
                     </div>
                     <div class="form-group" style="margin-bottom:8px;">
                         <label style="font-size:12px;">客戶名稱 <span class="text-danger">*</span></label>
-                        <input type="text" class="form-control input-sm" id="qac_name" placeholder="客戶全名">
+                        <input type="text" class="form-control input-sm" id="qac_name" placeholder="客戶全名" autocomplete="new-password" data-lpignore="true" data-form-type="other">
                     </div>
                     <div class="form-group" style="margin-bottom:0;">
                         <label style="font-size:12px;">地址 <small style="color:#999;">(選填)</small></label>
@@ -4553,7 +4553,7 @@ foreach($dCounts as $c) {
                 </div>
                 <div class="modal-body">
                     <div class="form-group">
-                        <input type="text" id="quotation-search-input" class="form-control" placeholder="搜尋報價單號、客戶、料號...">
+                        <input type="text" id="quotation-search-input" class="form-control" placeholder="搜尋報價單號、客戶、料號..." autocomplete="new-password" data-lpignore="true" data-form-type="other">
                     </div>
                     <div style="max-height: 500px; overflow-y: auto;">
                         <table id="quotationListTable" class="table table-striped table-bordered">
@@ -4773,7 +4773,7 @@ foreach($dCounts as $c) {
                                 <!-- 手動搜尋客戶（僅自動搜尋找不到時顯示） -->
                                 <div id="qb-client-search-area" style="display:none;margin-bottom:6px;">
                                     <div class="input-group input-group-xs">
-                                        <input type="text" id="qb-client-search-input" class="form-control" placeholder="搜尋客戶名稱或ID..." style="font-size:11px;" onkeydown="if(event.key==='Enter'){qbSearchCustomer();}">
+                                        <input type="text" id="qb-client-search-input" class="form-control" placeholder="搜尋客戶名稱或ID..." style="font-size:11px;" onkeydown="if(event.key==='Enter'){qbSearchCustomer();}" autocomplete="new-password" data-lpignore="true" data-form-type="other">
                                         <span class="input-group-btn">
                                             <button type="button" class="btn btn-default" onclick="qbSearchCustomer()" style="font-size:11px;padding:2px 7px;" title="搜尋"><i class="fa fa-search"></i></button>
                                         </span>
@@ -4901,7 +4901,7 @@ foreach($dCounts as $c) {
 
                         <div id="op-search-by-part" style="display:none;">
                             <div class="input-group input-group-sm" style="max-width:360px;">
-                                <input type="text" class="form-control" id="op-search-part-input" placeholder="輸入料號／客戶代號／等同料號，按Enter搜尋">
+                                <input type="text" class="form-control" id="op-search-part-input" placeholder="輸入料號／客戶代號／等同料號，按Enter搜尋" autocomplete="new-password" data-lpignore="true" data-form-type="other">
                                 <span class="input-group-btn"><button type="button" class="btn btn-primary" onclick="opSearchByPart()"><i class="fa fa-search"></i></button></span>
                             </div>
                             <div id="op-search-part-result" style="margin-top:12px;max-height:420px;overflow-y:auto;"></div>
@@ -10854,7 +10854,7 @@ foreach($dCounts as $c) {
 
               <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;">
                 <input type="text" id="brc-search" class="form-control input-sm" style="flex:1;"
-                       placeholder="輸入客戶名稱或客戶ID搜尋（模糊比對），再從下方清單點選加入" autocomplete="off">
+                       placeholder="輸入客戶名稱或客戶ID搜尋（模糊比對），再從下方清單點選加入" autocomplete="new-password" data-lpignore="true" data-form-type="other">
                 <button type="button" class="btn btn-default btn-sm" onclick="brcSearch()"><i class="fa fa-search"></i> 搜尋</button>
               </div>
               <div id="brc-suggest" style="display:none;border:1px solid #ddd;border-radius:4px;background:#fff;max-height:180px;overflow-y:auto;margin-bottom:8px;"></div>
@@ -10913,7 +10913,7 @@ foreach($dCounts as $c) {
           </div>
           <div class="modal-body" style="padding:12px;">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-              <input type="text" id="och-kw" class="form-control input-sm" placeholder="搜尋 變更單號/單號/客戶/料號/內容/備註/變更人" style="width:300px;" onkeydown="if(event.key==='Enter'){och_state.page=1;loadChangeHistory();}">
+              <input type="text" id="och-kw" class="form-control input-sm" placeholder="搜尋 變更單號/單號/客戶/料號/內容/備註/變更人" style="width:300px;" onkeydown="if(event.key==='Enter'){och_state.page=1;loadChangeHistory();}" autocomplete="new-password" data-lpignore="true" data-form-type="other">
               <button class="btn btn-sm btn-primary" onclick="och_state.page=1;loadChangeHistory();"><i class="fa fa-search"></i> 搜尋</button>
               <span style="margin-left:auto;display:flex;align-items:center;gap:6px;">
                 <label style="font-weight:400;font-size:12px;margin:0;">每頁
