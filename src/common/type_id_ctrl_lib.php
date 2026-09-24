@@ -191,6 +191,51 @@ function type_id_ctrl_company_name(PDO $db): string {
     return '超正齒輪科技有限公司';
 }
 
+/** 製表人圖章要套用的模板 id（0＝未設定，消費端退回 EGStamp 預設回墨印並套 91px，ai-rules/18 鐵則6） */
+function type_id_ctrl_stamp_tpl_id(PDO $db): int {
+    try {
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='TYPE_ID_CTRL' AND param_key='stamp_tpl_id' LIMIT 1");
+        $st->execute();
+        $v = $st->fetchColumn();
+        if ($v === false) return 0;
+        $d = json_decode((string)$v, true);
+        return (int)(is_numeric($d) ? $d : (is_numeric($v) ? $v : 0));
+    } catch (Throwable $e) { return 0; }
+}
+
+/** 圖章模板內容（停用或查無回 null） */
+function type_id_ctrl_stamp_tpl(PDO $db, int $tplId): ?array {
+    if (!$tplId) return null;
+    try {
+        $st = $db->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");
+        $st->execute([$tplId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return $r ? ['id'=>(int)$r['id'], 'tpl_name'=>$r['tpl_name'], 'schema'=>json_decode((string)$r['schema_json'], true)] : null;
+    } catch (Throwable $e) { return null; }
+}
+
+/** 圖章模板下拉清單（設定跳窗用） */
+function type_id_ctrl_stamp_tpl_options(PDO $db): array {
+    try {
+        return $db->query("SELECT p.id, p.tpl_name, t.type_name FROM stamp_template p
+                           LEFT JOIN stamp_type t ON t.id=p.type_id
+                           WHERE p.is_active=1 ORDER BY p.tpl_name")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+/** 儲存製表人圖章模板 id（0＝取消，用系統預設印章） */
+function type_id_ctrl_stamp_tpl_save(PDO $db, int $tplId, string $uname): void {
+    $ex = $db->prepare("SELECT id FROM system_parameters WHERE param_group='TYPE_ID_CTRL' AND param_key='stamp_tpl_id' LIMIT 1");
+    $ex->execute();
+    $rid = $ex->fetchColumn();
+    if ($rid) {
+        $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")->execute([(string)$tplId, $uname, $rid]);
+    } else {
+        $db->prepare("INSERT INTO system_parameters (param_group,param_key,param_value,description,updated_by) VALUES ('TYPE_ID_CTRL','stamp_tpl_id',?,?,?)")
+           ->execute([(string)$tplId, '型態識別文件管制表列印：製表人圖章模板 id（0=用系統預設印章）', $uname]);
+    }
+}
+
 /** 產生本表文件編號：YYYYMMDD + 3位流水號（以 DB 日期為準，避免 PHP 時區誤差） */
 function type_id_ctrl_next_doc_no(PDO $db): string {
     $today = $db->query("SELECT DATE_FORMAT(CURDATE(),'%Y%m%d')")->fetchColumn();

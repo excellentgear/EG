@@ -463,7 +463,7 @@ case 'refresh_item_names_by_category':
     $r = type_id_ctrl_refresh_synced_item_names($db);
     jout(['success'=>true,'updated_count'=>$r['updated_count'],'affected_docs'=>$r['affected_docs']]);
 
-// ── AS 文件編號綁定（本頁自身模板）────────────────────────────────
+// ── AS 文件編號綁定＋製表人圖章模板（本頁自身列印設定）────────────────
 case 'asdoc_list':
     needView($perms);
     jout(['success'=>true,'docs'=>eg_asdoc_list($db)]);
@@ -477,6 +477,22 @@ case 'as_doc_save':
     $docId = (int)($_POST['doc_id'] ?? 0);
     eg_asdoc_save($db, 'type_id_ctrl', $docId, $uname);
     jout(['success'=>true,'as_doc'=>eg_asdoc_get($db,'type_id_ctrl')]);
+
+// 圖章模板下拉清單＋目前設定值（讀取不卡管理員，ai-rules/18 鐵則9：卡了一般人列印永遠拿不到模板）
+case 'stamp_tpl_options':
+    needView($perms);
+    jout(['success'=>true,'tpls'=>type_id_ctrl_stamp_tpl_options($db),'tpl_id'=>type_id_ctrl_stamp_tpl_id($db)]);
+
+case 'stamp_tpl_save':
+    needAdmin($perms);
+    $tplId = (int)($_POST['tpl_id'] ?? 0);
+    if ($tplId) {
+        $chk = $db->prepare("SELECT id FROM stamp_template WHERE id=? AND is_active=1");
+        $chk->execute([$tplId]);
+        if (!$chk->fetchColumn()) jout(['success'=>false,'message'=>'選擇的圖章模板不存在或已停用']);
+    }
+    type_id_ctrl_stamp_tpl_save($db, $tplId, $uname);
+    jout(['success'=>true,'tpl_id'=>type_id_ctrl_stamp_tpl_id($db)]);
 
 case 'print_get':
     needView($perms);
@@ -504,6 +520,7 @@ case 'print_get':
         'company_name'=>type_id_ctrl_company_name($db),
         'as_doc_no'=>eg_asdoc_no_asof($db, 'type_id_ctrl', $bizDate),
         'as_doc_name'=>$asDoc['doc_name'] ?? '型態識別文件管制表',
+        'stamp_tpl'=>type_id_ctrl_stamp_tpl($db, type_id_ctrl_stamp_tpl_id($db)),
     ]);
 
 default:

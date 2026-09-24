@@ -375,12 +375,19 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
     </div>
 </div></div>
 
-<!-- AS 文件綁定 -->
+<!-- 列印設定：AS 文件綁定＋製表人圖章模板 -->
 <div class="ic-mask" id="asDocMask"><div class="ic-modal">
-    <div class="m-head"><span>AS 文件編號綁定</span><span class="m-close" onclick="closeMask('asDocMask')">✕</span></div>
+    <div class="m-head"><span>列印設定</span><span class="m-close" onclick="closeMask('asDocMask')">✕</span></div>
     <div class="m-body">
+        <label style="font-weight:700;">AS 文件編號綁定</label>
         <div style="margin-bottom:8px;">目前綁定：<b id="asDocLabel">尚未綁定</b></div>
         <button type="button" class="ic-row-btn" onclick="openAsDocPicker()">變更綁定</button>
+        <label style="font-weight:700;margin-top:16px;">製表人圖章模板</label>
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">列印時「製表」欄會蓋上此模板的圖章，並依模板設計的實際尺寸顯示（不會被縮小）；未指定則用系統預設回墨印章。模板在「圖章管理 → 線上圖章設計」建立。</div>
+        <select id="ticStampTpl" style="width:100%;max-width:420px;">
+            <option value="0">（用系統預設印章）</option>
+        </select>
+        <div style="margin-top:8px;"><button type="button" class="ic-row-btn" onclick="saveStampTpl()">儲存圖章模板</button></div>
     </div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('asDocMask')">關閉</button></div>
 </div></div>
@@ -488,6 +495,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+<script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <script src="../../resource/js/eg_part_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_part_picker.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
@@ -1106,53 +1114,65 @@ function delDoc(id){
 function printDoc(id, onDone){
     $.getJSON(API, {action:'print_get', id:id}, function(res){
         if (!res.success){ alert(res.message||'載入失敗'); if (onDone) onDone(); return; }
-        var d = res.doc;
-        window.__ownCompany = res.company_name || '';
-        var typeLabel = {drawing:'圖面', jig:'治夾具', report:'報告', other:'其他文件'};
-        var activeItems = (res.items||[]).filter(function(it){ return !it.is_excluded; });
-        var body = '<div class="p-comp">'+esc(res.company_name)+'</div>'
-            + '<div class="p-title">'+esc(res.as_doc_name)+'</div>'
-            + '<table class="p-hd"><tr><td>客戶</td><td>'+esc(d.customer_name||'')+'</td><td>建立日期</td><td>'+(res.doc_date_earliest?fmtDate(res.doc_date_earliest):'')+'</td></tr>'
-            + '<tr><td>料號</td><td>'+esc(d.part_no||'')+'</td><td>製程</td><td>'+esc(res.process_summary||'')+'</td></tr>'
-            + '</table>'
-            + '<table class="p-tb"><thead><tr><th style="width:26px;">項次</th><th>型態項目名稱</th><th style="width:85px;">型態生效日期</th><th style="width:65px;">型態類別</th><th style="width:90px;">所屬製程</th><th>版別／文件編號</th></tr></thead><tbody>';
-        activeItems.forEach(function(it, i){
-            body += '<tr><td>'+(i+1)+'</td><td class="tl">'+esc(it.item_name)+'</td><td>'+fmtDate(it.effective_date)+'</td><td>'+(typeLabel[it.item_type]||'')+'</td><td>'+esc(it.process_tag||'共用')+'</td><td class="tl">'+esc(it.print_doc_no||'')+'</td></tr>';
-        });
-        body += '</tbody></table>';
-        var makerName = d.confirmed_by_name || '';
-        var makerDate = res.sign_date_latest ? fmtDate(res.sign_date_latest) : '';
-        var makerStamp = makerName ? EGStamp.stamp(makerName, makerDate) : '<span style="color:#999;font-size:12px;">（尚未確認）</span>';
-        body += '<div style="margin-top:16px;display:flex;justify-content:flex-end;align-items:flex-end;gap:6px;">'
-              + '<span style="font-size:12px;color:#777;margin-bottom:8px;">製表：</span>' + makerStamp + '</div>';
-        var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-            + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:1px;}'
-            + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:4px;margin-bottom:10px;}'
-            + 'table.p-hd{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px;}'
-            + 'table.p-hd td{border:1px solid #666;padding:3px 6px;} table.p-hd td:nth-child(odd){background:#f3ead6;width:12%;font-weight:bold;}'
-            + 'table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:11px;}'
-            + 'table.p-tb thead{display:table-header-group;}'
-            + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:2px 5px;text-align:center;overflow-wrap:anywhere;}'
-            + 'table.p-tb thead th{background:#f3ead6;} table.p-tb td.tl{text-align:left;}'
-            + 'table.p-tb tr{break-inside:avoid;}'
-            + '.stamp-wrap{display:inline-block;text-align:center;margin:2px 10px 2px 0;}'
-            + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-            + '@page{margin:12mm 10mm 18mm;'
-            + (res.as_doc_no ? " @bottom-right{ content:'"+String(res.as_doc_no).replace(/['\\]/g,'')+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
-            + '}';
-        var w = window.open('', '_blank');
-        if (!w){ alert('瀏覽器封鎖了快顯視窗，無法開啟列印畫面。請允許本網站的快顯視窗後再試一次。'); if (onDone) onDone(); return; }
-        w.document.write('<html><head><meta charset="utf-8"><title>型態識別文件管制表</title><style>'+css+'</style></head><body>'+body
-            +'<scr'+'ipt>window.onload=function(){'
-            +'var onePageA4=(297-30)*96/25.4;'
-            +'if(document.body.scrollHeight>onePageA4*0.92){'
-            +'var st=document.createElement(\'style\');'
-            +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
-            +'document.head.appendChild(st);}'
-            +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
-        w.document.close();
-        if (onDone) setTimeout(onDone, 500);
+        // 掃描實體章對照表是非同步載入的，沒等它會把有實體章的人印成預設 SVG 章（eg_stamp.js whenReady，ai-rules/18）
+        if (window.EGStamp && EGStamp.whenReady) EGStamp.whenReady(function(){ buildTypeIdCtrlPrintWindow(res, onDone); });
+        else buildTypeIdCtrlPrintWindow(res, onDone);
     });
+}
+function buildTypeIdCtrlPrintWindow(res, onDone){
+    var d = res.doc;
+    window.__ownCompany = res.company_name || '';
+    var typeLabel = {drawing:'圖面', jig:'治夾具', report:'報告', other:'其他文件'};
+    var activeItems = (res.items||[]).filter(function(it){ return !it.is_excluded; });
+    var body = '<div class="p-comp">'+esc(res.company_name)+'</div>'
+        + '<div class="p-title">'+esc(res.as_doc_name)+'</div>'
+        + '<table class="p-hd"><tr><td>客戶</td><td>'+esc(d.customer_name||'')+'</td><td>建立日期</td><td>'+(res.doc_date_earliest?fmtDate(res.doc_date_earliest):'')+'</td></tr>'
+        + '<tr><td>料號</td><td>'+esc(d.part_no||'')+'</td><td>製程</td><td>'+esc(res.process_summary||'')+'</td></tr>'
+        + '</table>'
+        + '<table class="p-tb"><thead><tr><th style="width:26px;">項次</th><th>型態項目名稱</th><th style="width:85px;">型態生效日期</th><th style="width:65px;">型態類別</th><th style="width:90px;">所屬製程</th><th>版別／文件編號</th></tr></thead><tbody>';
+    activeItems.forEach(function(it, i){
+        body += '<tr><td>'+(i+1)+'</td><td class="tl">'+esc(it.item_name)+'</td><td>'+fmtDate(it.effective_date)+'</td><td>'+(typeLabel[it.item_type]||'')+'</td><td>'+esc(it.process_tag||'共用')+'</td><td class="tl">'+esc(it.print_doc_no||'')+'</td></tr>';
+    });
+    body += '</tbody></table>';
+    var makerName = d.confirmed_by_name || '';
+    var makerDate = res.sign_date_latest ? fmtDate(res.sign_date_latest) : '';
+    // 製表人圖章：模板由管理員在「列印設定」指定；未指定時退回系統預設回墨印並套 91px（ai-rules/18 鐵則6）
+    var schema = (res.stamp_tpl && res.stamp_tpl.schema) ? res.stamp_tpl.schema : null;
+    var makerStamp = makerName ? EGStamp.stamp(makerName, makerDate, false, schema) : '<span style="color:#999;font-size:12px;">（尚未確認）</span>';
+    body += '<div style="margin-top:16px;display:flex;justify-content:flex-end;align-items:flex-end;gap:6px;">'
+          + '<span style="font-size:12px;color:#777;margin-bottom:8px;">製表：</span>' + makerStamp + '</div>';
+    var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:1px;}'
+        + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:4px;margin-bottom:10px;}'
+        + 'table.p-hd{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px;}'
+        + 'table.p-hd td{border:1px solid #666;padding:3px 6px;} table.p-hd td:nth-child(odd){background:#f3ead6;width:12%;font-weight:bold;}'
+        + 'table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:11px;}'
+        + 'table.p-tb thead{display:table-header-group;}'
+        + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:2px 5px;text-align:center;overflow-wrap:anywhere;}'
+        + 'table.p-tb thead th{background:#f3ead6;} table.p-tb td.tl{text-align:left;}'
+        + 'table.p-tb tr{break-inside:avoid;}'
+        // 圖章（列印視窗拿不到 eg_stamp.js 注入的樣式，必須自己寫齊）：
+        //  ①掃描實體章／系統預設回墨印＝ai-rules/18 鐵則6 的 91px（svg.car-stamp）
+        //  ②模板章＝一律用模板設計的實際尺寸，並用 height:auto 蓋掉 fillRatio 的 height:%（不可縮小印章，svg.eg-stamp-tpl 不受下面這條 91px 規則影響）
+        + '.stamp-wrap{display:inline-block;text-align:center;margin:2px 10px 2px 0;}'
+        + '.stamp-wrap svg{-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        + '.stamp-wrap svg.car-stamp{width:91px;height:91px;}'
+        + '.stamp-wrap.stamp-fill{height:auto !important;display:inline-block;}'
+        + '@page{margin:12mm 10mm 18mm;'
+        + (res.as_doc_no ? " @bottom-right{ content:'"+String(res.as_doc_no).replace(/['\\]/g,'')+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
+        + '}';
+    var w = window.open('', '_blank');
+    if (!w){ alert('瀏覽器封鎖了快顯視窗，無法開啟列印畫面。請允許本網站的快顯視窗後再試一次。'); if (onDone) onDone(); return; }
+    w.document.write('<html><head><meta charset="utf-8"><title>型態識別文件管制表</title><style>'+css+'</style></head><body>'+body
+        +'<scr'+'ipt>window.onload=function(){'
+        +'var onePageA4=(297-30)*96/25.4;'
+        +'if(document.body.scrollHeight>onePageA4*0.92){'
+        +'var st=document.createElement(\'style\');'
+        +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
+        +'document.head.appendChild(st);}'
+        +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+    w.document.close();
+    if (onDone) setTimeout(onDone, 500);
 }
 
 /* ---------- 列印全部搜尋結果（依目前篩選條件，逐筆各自開視窗列印；結果較多時先確認、自動分批排隊觸發，
@@ -1189,6 +1209,7 @@ $('#btnAsDoc').on('click', function(){
         if (!res.success) return;
         AS_DOCS = res.docs || [];
         loadAsDocCurrent();
+        loadStampTplOptions();
         openMask('asDocMask');
     });
 });
@@ -1202,6 +1223,26 @@ function openAsDocPicker(){
             }, 'json');
         }
     });
+}
+
+/* ---------- 製表人圖章模板設定（列印設定跳窗內） ---------- */
+function loadStampTplOptions(){
+    $.getJSON(API, {action:'stamp_tpl_options'}, function(res){
+        if (!res.success) return;
+        var $s = $('#ticStampTpl').html('<option value="0">（用系統預設印章）</option>');
+        (res.tpls||[]).forEach(function(t){
+            $s.append('<option value="'+t.id+'">'+esc(t.tpl_name)+(t.type_name?'（'+esc(t.type_name)+'）':'')+'</option>');
+        });
+        $s.val(String(parseInt(res.tpl_id||0)||0));
+        if ($s.val()===null) $s.val('0');
+    });
+}
+function saveStampTpl(){
+    var tplId = parseInt($('#ticStampTpl').val()||0) || 0;
+    $.post(API, {action:'stamp_tpl_save', tpl_id:tplId}, function(res){
+        if (!res.success){ alert(res.message||'儲存失敗'); return; }
+        alert('已儲存圖章模板設定');
+    }, 'json');
 }
 
 /* ---------- 廠內圖面標籤設定 ---------- */
