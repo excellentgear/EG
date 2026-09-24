@@ -189,6 +189,38 @@ function cqa_period_expr(string $col, string $qBasis, int $cutoff): array
     return ['yr' => $yr, 'qt' => "FLOOR((($mo) - 1) / 3) + 1"];
 }
 
+/**
+ * 出貨性質篩選——與 Shipping_Analysis_new.php 主查詢區的「出貨性質」篩選同一套規則。
+ *
+ * 使用者在頁面上方把出貨性質篩到只剩幾種，本頁其他統計都只算那幾種；
+ * 客戶季度分析原本自己刻一份「排除 is_count=0」，跟上面選的完全無關——
+ * 上面篩掉的性質，這裡照樣算進去，兩處數字對不起來也看不出原因。
+ *
+ * $saleTypes：null 或空陣列＝沒有明確篩選（对應主查詢區「沒有 GET 參數」的狀態），
+ *             退回預設＝排除 is_count=0 的「不統計」項目；
+ *             非空陣列＝值為 'NULL'（比對 isl.sale_type IS NULL）或 sale_type_id 數字字串，
+ *             只計入這些性質（即使其中有標記 is_count=0 的，使用者既然明確勾選就照算，
+ *             跟主查詢區 $sql_sale_type_condition 的語意完全一致）。
+ * 只影響「出貨」；訂單／退貨沒有出貨性質欄位，不受此篩選影響。
+ */
+function cqa_sale_type_sql(?array $saleTypes): string
+{
+    if (empty($saleTypes)) {
+        return "(ist.is_count IS NULL OR ist.is_count = 1)";
+    }
+    $ids = []; $includeNull = false;
+    foreach ($saleTypes as $v) {
+        $v = trim((string)$v);
+        if ($v === 'NULL') $includeNull = true;
+        elseif ($v !== '' && ctype_digit($v)) $ids[] = (int)$v;
+    }
+    $parts = [];
+    if ($ids)         $parts[] = 'isl.sale_type IN (' . implode(',', $ids) . ')';
+    if ($includeNull) $parts[] = 'isl.sale_type IS NULL';
+    // 傳進來的值全部不合法時不要整批查不到（理論上不會發生，呼叫端已用白名單擋過一次）
+    return $parts ? '(' . implode(' OR ', $parts) . ')' : "(ist.is_count IS NULL OR ist.is_count = 1)";
+}
+
 /** 由季視窗組出「日期落在其中任一視窗」的 SQL 條件與參數 */
 function cqa_window_sql(string $col, array $windows): array
 {
@@ -207,7 +239,7 @@ function cqa_window_sql(string $col, array $windows): array
  * 逐客戶、逐季的訂單／出貨／退貨彙總
  *
  * @param array $opt year_from, year_to, order_basis(delivery|order), q_basis(billing|calendar),
- *                   cap_days(null=整季 / N=每季只算前 N 天)
+ *                   cap_days(null=整季 / N=每季只算前 N 天), sale_types(見 cqa_sale_type_sql())
  */
 function cqa_quarter_rows(PDO $db, array $opt = []): array
 {
@@ -217,6 +249,8 @@ function cqa_quarter_rows(PDO $db, array $opt = []): array
     $qb    = isset($opt['q_basis'])     && isset(cqa_q_bases()[$opt['q_basis']])         ? $opt['q_basis']     : 'billing';
     $cut   = ($qb === 'billing') ? cqa_cutoff_day($db) : 0;
     $cap   = isset($opt['cap_days']) && $opt['cap_days'] !== null ? max(1, intval($opt['cap_days'])) : null;
+    $saleTypes = (isset($opt['sale_types']) && is_array($opt['sale_types']) && $opt['sale_types']) ? $opt['sale_types'] : null;
+    $stCond    = cqa_sale_type_sql($saleTypes);
 
     $quarters = [];
     for ($y = $yFrom; $y <= $yTo; $y++) for ($q = 1; $q <= 4; $q++) $quarters[] = cqa_qkey($y, $q);
@@ -277,7 +311,7 @@ function cqa_quarter_rows(PDO $db, array $opt = []): array
                   LEFT JOIN is_sale_type ist ON isl.sale_type = ist.sale_type_id
                   LEFT JOIN d_setting ds     ON ds.d_id = isl.d_setting_id
                   WHERE $wSql
-                    AND (ist.is_count IS NULL OR ist.is_count = 1)) t
+                    AND $stCond) t
             GROUP BY t.yr, t.qt, t.cid, t.cname";
     $st = $db->prepare($sql); $st->execute($wArgs);
     $merge($st->fetchAll(PDO::FETCH_ASSOC), 'ship');
@@ -326,7 +360,8 @@ function cqa_quarter_rows(PDO $db, array $opt = []): array
             'windows' => $windows,
             'order_quality' => cqa_order_quality($db, $quarters, $dateCol, $qb, $cut, $windows),
             'meta' => ['year_from' => $yFrom, 'year_to' => $yTo, 'order_basis' => $ob,
-                       'q_basis' => $qb, 'cutoff' => $cut, 'cap_days' => $cap]];
+                       'q_basis' => $qb, 'cutoff' => $cut, 'cap_days' => $cap,
+                       'sale_type_filtered' => $saleTypes !== null]];
 }
 
 /**
@@ -392,6 +427,7 @@ function cqa_growth(PDO $db, array $opt = []): array
     $ob      = $opt['order_basis'] ?? 'delivery';
     $qb      = isset($opt['q_basis']) && isset(cqa_q_bases()[$opt['q_basis']]) ? $opt['q_basis'] : 'billing';
     $cut     = ($qb === 'billing') ? cqa_cutoff_day($db) : 0;
+    $saleTypes = (isset($opt['sale_types']) && is_array($opt['sale_types']) && $opt['sale_types']) ? $opt['sale_types'] : null;
 
     [$by, $bq] = ($compare === 'qoq') ? cqa_qprev($year, $q) : [$year - 1, $q];
 
@@ -402,7 +438,7 @@ function cqa_growth(PDO $db, array $opt = []): array
     // 往前多抓一年：streak（連續下滑幾季）要看更早的季
     $data = cqa_quarter_rows($db, [
         'year_from' => min($by, $year) - 1, 'year_to' => $year,
-        'order_basis' => $ob, 'q_basis' => $qb, 'cap_days' => $cap,
+        'order_basis' => $ob, 'q_basis' => $qb, 'cap_days' => $cap, 'sale_types' => $saleTypes,
     ]);
 
     $cqk = cqa_qkey($year, $q);
