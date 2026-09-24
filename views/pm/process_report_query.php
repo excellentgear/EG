@@ -135,6 +135,46 @@ function prq_time_range($start, $end) {
     if (!$s && !$e) return '';
     return $s . '~' . $e;
 }
+/**
+ * 補開品質異常單：把勾選的 report_id 陣列解析成 站別(bom_ing_fid) id 陣列＋合法性檢查。
+ * 補開預覽（qab_backfill_preview）與正式補開（qab_backfill_open）都要先做這一步，抽出來共用
+ * 才不會兩邊各驗一套上限/格式（鐵律4）。失敗時直接印錯誤 JSON 並 exit。
+ */
+function prq_qab_resolve_fids($pdo) {
+    $ids = json_decode((string)($_POST['report_ids'] ?? '[]'), true);
+    if (!is_array($ids)) $ids = [];
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids), function ($v) { return $v > 0; })));
+    if (!$ids) { echo json_encode(['success' => false, 'message' => '請至少選擇一筆報工紀錄']); exit; }
+    if (count($ids) > 200) { echo json_encode(['success' => false, 'message' => '一次最多補開 200 筆']); exit; }
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $stFid = $pdo->prepare("SELECT DISTINCT bom_ing_fid FROM pm_process_daily_report WHERE report_id IN ($ph) AND bom_ing_fid IS NOT NULL");
+    $stFid->execute($ids);
+    return array_map('intval', $stFid->fetchAll(PDO::FETCH_COLUMN));
+}
+/**
+ * 異常單欄要顯示狀態——2026-09-24 使用者交辦：只分「處理中」跟「已結案（結果）」兩種，不要把
+ * qab_status_map() 回傳的等待回覆／待決策／待總經理裁示／扣款確認中這些中間狀態逐一列出來，
+ * 那些細節本來就該去異常單那邊看，這裡只要讓人一眼看出「還在處理」還是「已經結案、結果是什麼」。
+ * 「結果」＝ qab_final()（總經理裁示優先於主管處置方式）的選項名稱，扣款是另一個獨立欄位
+ * （gm_deduct），不在 qa_option 選項清單裡，所以這裡自然不會印出「扣款」字樣。
+ * 唯一實作，list 與 get_print 若都要顯示就都呼叫這支，不要各自組一次（鐵律4）。
+ */
+function prq_apply_qab_status($pdo, array $rows) {
+    $ids = [];
+    foreach ($rows as $r) { if (!empty($r['abnormal_order_id'])) $ids[] = (int)$r['abnormal_order_id']; }
+    $ids = array_values(array_unique($ids));
+    if (!$ids) return $rows;
+    $map = qab_status_map($pdo, $ids);
+    foreach ($rows as &$r) {
+        $oid = (int)($r['abnormal_order_id'] ?? 0);
+        if ($oid && isset($map[$oid])) {
+            $r['abn_closed'] = (int)$map[$oid]['is_closed'];
+            $r['abn_final_label'] = $map[$oid]['final_label'];
+        }
+    }
+    unset($r);
+    return $rows;
+}
 
 $PRQ_FROM = "FROM pm_process_daily_report pdr
     LEFT JOIN machine_list m ON pdr.machine_id = m.machine_id
@@ -144,7 +184,7 @@ $PRQ_FROM = "FROM pm_process_daily_report pdr
     LEFT JOIN process_no pn ON pdr.process_no = pn.ProcessNo
     LEFT JOIN bom_ing bi ON pdr.bom_ing_fid = bi.bom_ing_fid
     LEFT JOIN bom b ON bi.bom = b.bom
-    LEFT JOIN qa_abnormal_order qao ON qao.id = pdr.abnormal_order_id";
+    LEFT JOIN qa_abnormal_order qao ON qao.id = pdr.abnormal_order_id AND qao.deleted_at IS NULL";
 
 $PRQ_COLS = "pdr.report_id, pdr.bom_ing_fid, pdr.report_date, pdr.report_source, pdr.remark, pdr.produced_qty, pdr.is_finished,
     pdr.process_face, pdr.source_reason,
@@ -219,6 +259,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
             $rows = eg_machine_label_apply($stmt->fetchAll(PDO::FETCH_ASSOC), $PRQ_MLBL);
+            $rows = prq_apply_qab_status($pdo, $rows);
 
             echo json_encode(['success' => true, 'total' => $total, 'page' => $page, 'page_size' => $page_size, 'rows' => $rows]);
         } elseif ($action === 'get_print') {
@@ -306,6 +347,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 給 eg_asdoc_picker.js 用：可綁定文件清單＋目前綁定；can_bind 決定前端要不要顯示「變更綁定」鈕
             echo json_encode(['success' => true, 'docs' => eg_asdoc_list($pdo),
                 'cur' => eg_asdoc_get($pdo, PRQ_ASDOC_MODULE), 'can_bind' => $prq_can_bind]);
+        } elseif ($action === 'qab_backfill_preview') {
+            // 補開前的預覽——單筆補開跳窗、批次補開跳窗共用同一支，讓管理員先看到累積期間/數量，
+            // 再決定開立日期。回傳的 min_date 是跨站取較晚的 period_to（開立日期不可早於它）。
+            if (!$prq_can_qab_open) { echo json_encode(['success' => false, 'message' => '需要品質異常單管理員權限才能補開']); exit; }
+            $fids = prq_qab_resolve_fids($pdo);
+            $preview = qab_backfill_preview_stations($pdo, $fids);
+            if (!$preview['stations']) { echo json_encode(['success' => false, 'message' => '選取的報工目前都沒有尚未歸入異常單的NG（可能已被開過單）']); exit; }
+            echo json_encode(['success' => true] + $preview);
         } elseif ($action === 'qab_backfill_open') {
             // 單筆／批次「補開品質異常單」——供現場漏開或舊資料回溯用，與 process_schedule.php 完工當下
             // 自動觸發共用同一支 qab_auto_open_from_bom_ing()（鐵律4：不要再刻一套建單邏輯）。
@@ -313,22 +362,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 屬於哪一站（bom_ing_fid），**同一站只呼叫一次**，該次會把那一站目前所有尚未歸入的NG
             // （不只選到的那幾筆）一次加總開單，所以呼叫端一定要把這件事講清楚，不然管理員會以為
             // 「開出來的量怎麼比我選的還多」。後端同規則再擋一次權限（鐵律8）。
+            // 三次更正：新增 fill_date（開立日期），管理員可在「這批最後一次NG日期～今天」的工作日
+            // 範圍內指定；不合法（早於NG日期/晚於今天/非工作日）由 qab_auto_open_from_bom_ing() 逐站
+            // 丟例外，各站各自成功或失敗，不會因為某一站日期不合法就讓整批全部失敗。
             if (!$prq_can_qab_open) { echo json_encode(['success' => false, 'message' => '需要品質異常單管理員權限才能補開']); exit; }
-            $ids = json_decode((string)($_POST['report_ids'] ?? '[]'), true);
-            if (!is_array($ids)) $ids = [];
-            $ids = array_values(array_unique(array_filter(array_map('intval', $ids), function ($v) { return $v > 0; })));
-            if (!$ids) { echo json_encode(['success' => false, 'message' => '請至少選擇一筆報工紀錄']); exit; }
-            if (count($ids) > 200) { echo json_encode(['success' => false, 'message' => '一次最多補開 200 筆']); exit; }
-
-            $ph = implode(',', array_fill(0, count($ids), '?'));
-            $stFid = $pdo->prepare("SELECT DISTINCT bom_ing_fid FROM pm_process_daily_report WHERE report_id IN ($ph) AND bom_ing_fid IS NOT NULL");
-            $stFid->execute($ids);
-            $fids = array_map('intval', $stFid->fetchAll(PDO::FETCH_COLUMN));
+            $fillDate = trim((string)($_POST['fill_date'] ?? ''));
+            if ($fillDate !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $fillDate)) { echo json_encode(['success' => false, 'message' => '開立日期格式不正確']); exit; }
+            $fids = prq_qab_resolve_fids($pdo);
 
             $created = 0; $skipped = 0; $failed = []; $opened = [];
             foreach ($fids as $fid) {
                 try {
-                    $r = qab_auto_open_from_bom_ing($pdo, $fid);
+                    $r = qab_auto_open_from_bom_ing($pdo, $fid, null, $fillDate !== '' ? $fillDate : null);
                     if ($r === null) { $skipped++; continue; }   // 這一站目前沒有尚未歸入的NG，跳過
                     $created++;
                     $opened[] = ['bom_ing_fid' => $fid, 'no' => $r['no'], 'qty' => $r['qty'],
@@ -543,6 +588,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     </div>
 </div></div>
 
+<!-- ══ 補開品質異常單：選擇開立日期 Modal ══ -->
+<?php if ($prq_can_qab_open): ?>
+<div class="prq-mask" id="qabDateMask"><div class="prq-modal">
+    <div class="m-head"><span><i class="fa fa-file-text-o"></i> 補開品質異常單</span><span class="m-close" onclick="document.getElementById('qabDateMask').style.display='none'">✕</span></div>
+    <div class="m-body">
+        <p style="font-size:13px;color:#5b3a1e;margin:0 0 10px;">
+            系統會依這些報工所屬的站別分組，同一站只開一張單，把該站目前累積、尚未歸入任何異常單的NG全部加總（可能不只您勾選的這幾筆）；開單人會依報工人員所屬部門自動解析現場主管。
+        </p>
+        <div id="qabDateList" style="border:1px solid #E8D5B5;border-radius:6px;background:#FDF8EF;padding:6px 10px;font-size:12px;color:#5b3a1e;max-height:180px;overflow-y:auto;"></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:12px;">
+            <label style="font-size:13px;color:#5b3a1e;margin:0;white-space:nowrap;">開立日期</label>
+            <input type="date" id="qabDateInput" style="height:30px;border:1px solid #D8BE93;border-radius:4px;padding:0 8px;">
+        </div>
+        <div style="font-size:12px;color:#8a6d45;margin-top:4px;">可選範圍：這批NG最後一次報工日期（含當天）～今天，且僅能選工作日；若跨多個站別，以日期較晚的那個站別為下限。例如最早 8/1 NG、最晚 8/10 NG、今天是 9/1，開立日期可選 8/10～9/1 之間的工作日。</div>
+        <div id="qabDateErr" style="color:#DD5138;font-size:12px;min-height:16px;margin-top:6px;"></div>
+    </div>
+    <div class="m-foot">
+        <button id="qabDateConfirmBtn"><i class="fa fa-check"></i> 確定補開</button>
+    </div>
+</div></div>
+<?php endif; ?>
+
 <div class="prq-mask" id="helpUseMask"><div class="prq-modal">
     <div class="m-head"><span><i class="fa fa-question-circle"></i> 報工紀錄查詢列印 使用說明</span><span class="m-close" onclick="document.getElementById('helpUseMask').style.display='none'">✕</span></div>
     <div class="m-body help-doc">
@@ -560,6 +627,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <li>列印前可先確認右側「列印AS文件」顯示的綁定文件；具修改權限者按「變更綁定」即可用文件編號或名稱關鍵字搜尋、改綁其他 AS 文件。</li>
             <li><b>機台顯示設定</b>（工具列右下）：可決定「機台」欄要顯示<b>機台設備一覽表</b>裡的哪些欄位——機台名稱／現場編號／財產編號／機型／機台種類／製造商／規格，
                 可勾多個並用 ↑↓ 排先後、自訂分隔字元，跳窗內有即時預覽。例如勾「現場編號」＋「機台名稱」就會顯示成 <code>EG-049_CNC內外徑複合磨床</code>。</li>
+            <li><b>補開異常單</b>（限品質異常單管理員）：NG大於0且尚未歸入任何異常單的報工列會出現「補開」鈕，也可勾選多筆按工具列「批次補開異常單」；系統會依這些報工所屬的站別分組，<b>同一站只開一張單，把該站目前累積、尚未歸入任何異常單的NG全部加總</b>（可能不只您選到的這幾筆）。按下後會先跳窗預覽各站累積的期間與數量，再選擇<b>開立日期</b>——可選範圍是「這批最後一次NG報工日期（含當天）～今天」的工作日，<b>不可早於NG日期</b>，跨站時取日期較晚的那一站當下限。</li>
+            <li><b>異常單欄</b>：已開單者顯示單號＋狀態，只分「處理中」與「已結案（括號內是最終結果，如：報廢／重工／特採，總經理裁示優先於主管處置方式）」兩種，細節請點單號進去看；<b>異常單若被刪除，這一欄會自動退回「補開」，該站的NG會重新變成未歸入狀態，可以重新補開或等下次完工自動累積開單</b>。</li>
         </ul>
         <h4>重要行為/常見疑問</h4>
         <div class="tip">若篩選結果筆數較多（超過3000筆），列印/匯出前會先跳出確認提示，避免不小心產生過大的列印工作。</div>
@@ -653,10 +722,14 @@ function rowToTr(r){
         ckHtml = '<input type="checkbox" class="qab-ck" data-rid="' + rid + '"' + checked + '>';
     }
 
-    // 異常單狀態：已開單顯示單號連結；NG>0未開單顯示「補開」鈕；NG=0不顯示
+    // 異常單狀態：已開單顯示單號連結＋狀態（只分「處理中」／「已結案(結果)」兩種，2026-09-24 使用者交辦，
+    // 細節狀態請到異常單本身看）；NG>0未開單顯示「補開」鈕；NG=0不顯示。異常單被刪除後 abnormal_order_id
+    // 會被後端清空（見 QaAbnormal_API.php order_delete），這裡就會自動退回「補開」而不是繼續連著死連結。
     var abnHtml = '';
     if (r.abnormal_order_id) {
-        abnHtml = '<a href="../QA/qa_abnormal_form.php?id=' + r.abnormal_order_id + '" target="_blank">' + esc(r.abnormal_order_no || ('#' + r.abnormal_order_id)) + '</a>';
+        var abnStatusTxt = r.abn_closed ? ('已結案' + (r.abn_final_label ? '(' + esc(r.abn_final_label) + ')' : '')) : '處理中';
+        abnHtml = '<a href="../QA/qa_abnormal_form.php?id=' + r.abnormal_order_id + '" target="_blank">' + esc(r.abnormal_order_no || ('#' + r.abnormal_order_id)) + '</a>'
+                + ' <span style="font-size:11px;color:' + (r.abn_closed ? '#8A5A2B' : '#b5762a') + ';">' + abnStatusTxt + '</span>';
     } else if (ngQty > 0 && PRQ_CAN_QAB) {
         abnHtml = '<button class="btn-warm qab-open-one" data-rid="' + rid + '" style="height:22px;padding:0 8px;font-size:12px;">補開</button>';
     } else if (ngQty > 0) {
@@ -929,12 +1002,62 @@ if (PRQ_CAN_QAB) {
         qabUpdateSelCount();
     });
 
-    function qabOpenReportIds(ids, btn){
+    // 補開前先跳窗預覽（單筆／批次共用）：向後端要每一站的累積期間/數量，
+    // 再讓管理員在「這批最後一次NG日期～今天」的範圍內挑一個開立日期（2026-09-24 使用者交辦）。
+    var qabPendingIds = [];
+    function qabOpenDateModal(ids){
         if (!ids.length) return;
-        if (btn) btn.prop('disabled', true);
-        $.post('', {action: 'qab_backfill_open', report_ids: JSON.stringify(ids)}, function(res){
-            if (btn) btn.prop('disabled', false);
-            if (!res.success) { alert(res.message || '補開失敗'); return; }
+        qabPendingIds = ids;
+        $('#qabDateErr').text('');
+        $('#qabDateList').html('<span style="color:#8a6d45;"><i class="fa fa-spinner fa-spin"></i> 載入中...</span>');
+        $('#qabDateMask').css('display', 'block');
+        $.post('', {action: 'qab_backfill_preview', report_ids: JSON.stringify(ids)}, function(res){
+            if (!res.success){
+                $('#qabDateList').html('<span style="color:#DD5138;">' + esc(res.message || '查無可補開的累積NG') + '</span>');
+                $('#qabDateConfirmBtn').prop('disabled', true);
+                return;
+            }
+            $('#qabDateConfirmBtn').prop('disabled', false);
+            $('#qabDateList').html(res.stations.map(function(s){
+                var pTxt = s.period_from === s.period_to ? s.period_from : (s.period_from + '～' + s.period_to);
+                return '<div style="padding:2px 0;">' + esc(s.bom_no) + '：累積 ' + pTxt + ' 共 ' + s.qty + ' 件NG</div>';
+            }).join(''));
+            var $d = $('#qabDateInput');
+            $d.attr('min', res.min_date).attr('max', res.max_date);
+            // 預設抓「不早於下限」的今天；下限本身一定落在今天以前或當天（最後一次NG不會晚於今天）
+            $d.val(res.max_date < res.min_date ? res.min_date : res.max_date);
+        }, 'json').fail(function(){
+            $('#qabDateList').html('<span style="color:#DD5138;">連線失敗，請稍後再試</span>');
+            $('#qabDateConfirmBtn').prop('disabled', true);
+        });
+    }
+
+    $(document).on('click', '.qab-open-one', function(){
+        var rid = parseInt($(this).data('rid'), 10);
+        qabOpenDateModal([rid]);
+    });
+
+    $('#btnQabBatch').on('click', function(){
+        var ids = [];
+        for (var k in qabSelected) if (qabSelected[k]) ids.push(parseInt(k, 10));
+        if (!ids.length) return;
+        qabOpenDateModal(ids);
+    });
+
+    $('#qabDateConfirmBtn').on('click', function(){
+        var d = $('#qabDateInput').val();
+        if (!d) { $('#qabDateErr').text('請選擇開立日期'); return; }
+        var $confirmBtn = $(this).prop('disabled', true);
+        $('#qabDateErr').text('');
+        $.post('', {action: 'qab_backfill_open', report_ids: JSON.stringify(qabPendingIds), fill_date: d}, function(res){
+            $confirmBtn.prop('disabled', false);
+            if (!res.success) { $('#qabDateErr').text(res.message || '補開失敗'); return; }
+            if (res.created === 0 && res.failed && res.failed.length) {
+                // 全部失敗（多半是開立日期不合法：早於NG日期/晚於今天/非工作日），留在跳窗讓管理員改日期重試
+                $('#qabDateErr').text(res.failed.map(function(f){ return f.message; }).join('；'));
+                return;
+            }
+            $('#qabDateMask').css('display', 'none');
             var msg = '已開立 ' + res.created + ' 張';
             if (res.opened && res.opened.length) {
                 msg += '：\n' + res.opened.map(function(o){
@@ -946,26 +1069,12 @@ if (PRQ_CAN_QAB) {
             if (res.failed && res.failed.length) msg += '\n' + res.failed.length + ' 站失敗：' + res.failed.map(function(f){ return 'bom_ing_fid=' + f.bom_ing_fid + '(' + f.message + ')'; }).join('；');
             alert(msg);
             qabSelected = {};
+            qabPendingIds = [];
             loadList(curPage); // 點開即刷新：補開後這一頁的異常單欄一定要重新反映最新狀態
         }, 'json').fail(function(){
-            if (btn) btn.prop('disabled', false);
-            alert('連線失敗，請稍後再試');
+            $confirmBtn.prop('disabled', false);
+            $('#qabDateErr').text('連線失敗，請稍後再試');
         });
-    }
-
-    $(document).on('click', '.qab-open-one', function(){
-        var rid = parseInt($(this).data('rid'), 10);
-        if (!confirm('這會把這一站（不只這一筆）目前累積、尚未歸入任何異常單的NG全部加總開成一張單，確定要補開嗎？')) return;
-        qabOpenReportIds([rid], $(this));
-    });
-
-    $('#btnQabBatch').on('click', function(){
-        var ids = [];
-        for (var k in qabSelected) if (qabSelected[k]) ids.push(parseInt(k, 10));
-        if (!ids.length) return;
-        if (!confirm('確定要補開嗎？系統會依這些報工所屬的站別（bom_ing_fid）分組，同一站只開一張單，' +
-            '把該站目前累積、尚未歸入任何異常單的NG全部加總（可能不只您勾選的這幾筆）；開單人會依報工人員所屬部門自動解析現場主管。')) return;
-        qabOpenReportIds(ids, $(this));
     });
 }
 

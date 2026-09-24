@@ -753,6 +753,28 @@ function qab_create_order(PDO $db, array $data): array
     $pmReportId = $intOrNull($data['pm_report_id'] ?? null);
     $phenomenon = $strOrNull($data['abnormal_phenomenon'] ?? null, 2000);
 
+    /* 責任單位（製程＋廠商）在建單當下就一併帶出——2026-09-24 使用者回報：自動開立已經選好製程，
+       但廠商欄卻是空的，要現場再手動選一次。同一張製令、同一個製程站在 bom_ing 上本來就已經記著
+       是哪個廠商加工（外包廠商或廠內加工廠商皆同一欄位），這裡直接查那一站即可，不必等使用者
+       進表單再選一次；查不到（製程未指定/純廠內無登記廠商）時維持空白，交由使用者或管理員填。 */
+    $respVendorId = null; $respIsInternal = 0; $respUnit = null;
+    if ($respProcessNo !== null && $bomNo !== null) {
+        $stv = $db->prepare("SELECT i.maker_id_no, ml.maker_id AS vendor_name, ml.internal
+                              FROM bom_ing i LEFT JOIN maker_list ml ON ml.maker_id_no = i.maker_id_no
+                              WHERE i.bom = ? AND i.process_no = ? ORDER BY i.bom_sn ASC LIMIT 1");
+        $stv->execute([$bomNo, $respProcessNo]);
+        $vrow = $stv->fetch(PDO::FETCH_ASSOC);
+        $vendorNameForUnit = '';
+        if ($vrow && $vrow['maker_id_no'] !== null && $vrow['maker_id_no'] !== '') {
+            $respVendorId = mb_substr((string)$vrow['maker_id_no'], 0, 11);
+            $respIsInternal = (int)($vrow['internal'] ?? 0) === 1 ? 1 : 0;
+            $vendorNameForUnit = (string)$vrow['vendor_name'];
+        }
+        $procName = (string)$db->query("SELECT ProcessName FROM process_no WHERE ProcessNo=" . (int)$respProcessNo)->fetchColumn();
+        $respUnit = trim(implode(' / ', array_filter([$procName, $vendorNameForUnit])));
+        $respUnit = $respUnit !== '' ? mb_substr($respUnit, 0, 50) : null;
+    }
+
     $db->beginTransaction();
     try {
         $no = qab_next_order_no($db, $fillDate);
@@ -760,12 +782,14 @@ function qab_create_order(PDO $db, array $data): array
             (abnormal_order_no, source_type, source_id, occurrence_date, fill_date, found_unit,
              ir_id, ir_no, bom_no, client_id, client_name, part_no, part_d_id, batch_qty, insp_qty, ng_qty,
              abnormal_phenomenon, created_by, created_at, surcharge_rate,
-             resp_process_no, auto_opened, auto_open_note, pm_report_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?,?,?,?)")
+             resp_process_no, responsible_vendor_id, resp_is_internal, responsible_unit,
+             auto_opened, auto_open_note, pm_report_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?,?,?,?,?,?,?)")
            ->execute([$no, ($kind === 'ir' ? 'IR' : 'BOM'), (int)($irId ?: 0), $fillDate, $fillDate,
                       ($kind === 'ir' ? '客退' : '廠內'), $irId, $irNo, $bomNo, $cli['id'], $client, $partNo, $partDid, $batch,
                       $inspQty, $ngQty, $phenomenon, $uid, qab_default_rate($db),
-                      $respProcessNo, $autoOpened, $autoNote, $pmReportId]);
+                      $respProcessNo, $respVendorId, $respIsInternal, $respUnit,
+                      $autoOpened, $autoNote, $pmReportId]);
         $id = (int)$db->lastInsertId();
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
@@ -818,6 +842,39 @@ function qab_pm_uncovered_reports(PDO $db, int $bomIngFid): array
 }
 
 /**
+ * 補開品質異常單前的「預覽」——給 `process_report_query.php` 的單筆／批次補開跳窗用，讓管理員
+ * 在真的送出前先看到：這幾個站各自累積了多少NG、期間到哪一天，以及這次可以選的開立日期範圍。
+ * 2026-09-24 使用者交辦：開立日期不可早於（批次跨多站時，取各站中較晚的）最後一次NG報工日期。
+ * 唯一實作，不要在 view 檔案裡再組一次同樣的邏輯（鐵律4）。
+ * @param int[] $bomIngFids 要預覽的站別（呼叫端已從勾選的 report_id 反查出來）
+ * @return array ['stations'=>[['bom_ing_fid'=>,'bom_no'=>,'period_from'=>,'period_to'=>,'qty'=>],...],
+ *   'min_date'=>跨站取較晚的 period_to（開立日期下限，含當天）,'max_date'=>今天（開立日期上限）]；
+ *   全部站目前都沒有未歸入NG時 stations 為空陣列、min_date/max_date 仍會回傳今天供畫面顯示。
+ */
+function qab_backfill_preview_stations(PDO $db, array $bomIngFids): array
+{
+    $stations = [];
+    $minDate = '';
+    foreach (array_unique(array_map('intval', $bomIngFids)) as $fid) {
+        if ($fid <= 0) continue;
+        $uncovered = qab_pm_uncovered_reports($db, $fid);
+        if (!$uncovered) continue;
+        $st = $db->prepare("SELECT bom FROM bom_ing WHERE bom_ing_fid=?");
+        $st->execute([$fid]);
+        $bomNo = (string)$st->fetchColumn();
+        $totalNg = 0;
+        foreach ($uncovered as $r) $totalNg += (int)$r['ng_qty'];
+        $periodFrom = (string)$uncovered[0]['report_date'];
+        $periodTo   = (string)end($uncovered)['report_date'];
+        if ($periodTo > $minDate) $minDate = $periodTo;
+        $stations[] = ['bom_ing_fid' => $fid, 'bom_no' => $bomNo,
+            'period_from' => $periodFrom, 'period_to' => $periodTo, 'qty' => $totalNg];
+    }
+    $today = date('Y-m-d');
+    return ['stations' => $stations, 'min_date' => $minDate !== '' ? $minDate : $today, 'max_date' => $today];
+}
+
+/**
  * 由「一站（bom_ing_fid）累積至今尚未歸入的所有NG」自動（或管理員補開）建立**一張**品質異常單
  * ——2026-09-24 使用者更正：不是每筆報工各開一張，是加總到完工當下一次開；持續性生產（一直不完工）
  * 則由 `qab_pm_suggest_check()` 每兩週提醒一次是否要先開一張累積單。
@@ -835,13 +892,19 @@ function qab_pm_uncovered_reports(PDO $db, int $bomIngFid): array
  * @param int $bomIngFid 要累積的那一站
  * @param ?int $triggerReportId 這次是被哪一筆報工觸發的（完工那一筆／使用者按「先開立」當下最新一筆）；
  *   缺省時取未歸入清單裡最新的一筆
+ * @param ?string $fillDate 開立日期（業務日期），僅供「補開」（`process_report_query.php` 管理員手動觸發）
+ *   指定；不給或傳空字串一律用今天（自動觸發／「先開立」按鈕維持原行為）。2026-09-24 使用者交辦：
+ *   補開時允許選日期，但**不可早於這批NG裡最後一次報工日期（$periodTo）**、不可晚於今天、且必須是
+ *   工作日，三者任一不符直接丟例外（訊息寫明原因，呼叫端 `qab_backfill_open` 逐站 try/catch 收集到
+ *   failed[] 顯示給管理員，不會讓整批補開因一站日期不合法就全部失敗）。
  * @return array|null 成功回傳 ['id'=>,'no'=>,'opener'=>,'qty'=>,'period_from'=>,'period_to'=>,
  *   'report_ids'=>[...]]；這一站目前沒有任何未歸入的NG（不該被呼叫，防呆）回傳 null。
  * 呼叫端（尤其是報工存檔的路徑）務必自己包 try/catch——**這支失敗絕不可以讓報工存不進去**。
  */
-function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReportId = null): ?array
+function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReportId = null, ?string $fillDate = null): ?array
 {
     require_once __DIR__ . '/unit_supervisor_lib.php';
+    require_once __DIR__ . '/leave_lib.php'; // 補開時驗證開立日期是不是工作日要用 eg_leave_is_workday()
     qab_ensure_schema($db);
 
     $uncovered = qab_pm_uncovered_reports($db, $bomIngFid);
@@ -863,6 +926,20 @@ function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReport
     $periodFrom = (string)$uncovered[0]['report_date'];
     $periodTo   = (string)end($uncovered)['report_date'];
 
+    // 開立日期：預設今天（自動觸發／先開立走這條，行為不變）；補開可指定，但一定要落在
+    // 「這批最後一次NG報工日（含）～今天」的工作日區間（使用者拍板：不可早於NG日期）。
+    $today = date('Y-m-d');
+    $fillDate = trim((string)$fillDate);
+    if ($fillDate !== '') {
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $fillDate)) throw new Exception('開立日期格式不正確');
+        if ($fillDate < $periodTo) throw new Exception('開立日期（' . $fillDate . '）不可早於這批NG最後一次報工日期（' . $periodTo . '）');
+        if ($fillDate > $today) throw new Exception('開立日期不可晚於今天（' . $today . '）');
+        if (!eg_leave_is_workday($db, $fillDate)) throw new Exception('開立日期（' . $fillDate . '）不是工作日，請改選其他日期');
+        $openDate = $fillDate;
+    } else {
+        $openDate = $today;
+    }
+
     $triggerDate = (string)$trigger['report_date'];
     $prodUserId  = (int)($trigger['production_user_id'] ?: $trigger['Created_By']);
     $opener = eg_unit_supervisor_available($db, $prodUserId, null, $triggerDate);
@@ -881,11 +958,13 @@ function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReport
     $data = [
         'kind' => 'bom',
         'bom_no' => (string)$bi['bom'],
-        'fill_date' => date('Y-m-d'),   // 開單當下的業務日期；累積的實際期間寫在 abnormal_phenomenon 與 auto_open_note
+        'fill_date' => $openDate,   // 開單的業務日期（預設今天，補開可指定）；累積的實際期間寫在 abnormal_phenomenon 與 auto_open_note
         'batch_qty' => $totalProduced + $totalNg,
         'insp_qty' => $totalProduced + $totalNg,   // 報工是逐件自檢，不是抽樣，檢驗數＝全數
         'ng_qty' => $totalNg,
-        'abnormal_phenomenon' => '報工累積發現不良，自動開立（' . $periodFrom . ($periodFrom !== $periodTo ? '～' . $periodTo : '') . '，共 ' . count($uncovered) . ' 筆報工累積，原始數量請於原因分類補充說明）',
+        // 累積期間、筆數等細節已經寫在 $autoNote（auto_open_note，管理員可追溯），畫面上的異常現象
+        // 只要一句話講清楚是怎麼發現的就好（2026-09-24 使用者交辦：拿掉一大串期間統計文字）
+        'abnormal_phenomenon' => '報工發現不良',
         'created_by' => (int)$opener['id'],
         'resp_process_no' => (int)$bi['process_no'],
         'auto_opened' => 1,

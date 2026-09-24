@@ -493,6 +493,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                 <li>已結案的單一律不可修改，要改請管理員先「取消結案」；<b>取消結案不會收回已配發的報廢單號</b>（號碼可能已被其他單據引用）。</li>
                 <li>所有選項（原因分類／處置方式／總經理裁示）都<b>存 id 不存文字</b>，管理員改名不會讓舊單失去連動。</li>
                 <li>本單的狀態與內容會自動出現在<b>不合格品管制記錄表</b>（2-QA-01-03），那一頁只顯示、不可修改。</li>
+                <li><b>自動開立（報工累積NG）的單，幾個欄位一律鎖定，畫面上會反灰並標明</b>：<b>製令編號</b>任何人都不可改（連管理員也不行）；<b>責任單位</b>（製程／廠商／部門人員，開單時已自動帶入該製令該站登記的廠商）只有<b>異常單管理員</b>可以改；<b>批量／檢驗數／不良數</b>任何人都不可改，是報工累積直接加總出來的（批量＝良品＋NG、檢驗數＝同批量、不良數＝NG總數）。其餘欄位（異常現象、原因分類、處置、裁示、扣款…）不受影響，一樣正常填寫。</li>
             </ul>
             <h4>設定入口</h4>
             <ul>
@@ -594,6 +595,10 @@ function buildStaticOpts(){
 /* ───────── 畫面 ───────── */
 function render(){
     var o = D.order, p = D.perms, canEdit = D.can_edit && !o.is_closed;
+    // 自動開立（報工NG累積）的單，責任單位只有異常單管理員可以改——RESP_LOCKED 要在 renderRespChips()
+    // 之前就設好，drawResp() 才會照這個值決定要不要出現「×」移除鈕。
+    var isAuto = !!Number(o.auto_opened);
+    RESP_LOCKED = isAuto && !p.canAdmin;
     $('#noTag').text(o.abnormal_order_no || '');
     document.title = '品質異常處理單 ' + (o.abnormal_order_no || '');
 
@@ -674,7 +679,36 @@ function render(){
     $('#secHead').toggleClass('locked', !canEdit);
     $('#secHead input,#secHead textarea,#secHead select').prop('disabled', !canEdit);
     if (bound) $('#f_client').prop('readonly', true);
-    $('#btnSaveHead,#btnAddResp').toggle(canEdit);
+    $('#btnSaveHead').toggle(canEdit);
+
+    /* 自動開立（報工NG累積）的單，幾個欄位一律鎖定——2026-09-24 使用者拍板：
+       ①製令編號：任何人都不可改（連管理員也不行）②責任單位（製程／廠商／部門人員）：只有異常單
+       管理員可以改（RESP_LOCKED 已在本函式開頭設好，drawResp() 也讀同一個值）③批量／檢驗數／
+       不良數：任何人都不可改（是報工累積直接算出來的）。
+       後端 QaAbnormal_API.php 的 save_head 同規則再擋一次（鐵律8），這裡只是讓畫面看得出來、
+       不用送出才知道存不進去。 */
+    $('#f_bom').prop('disabled', $('#f_bom').prop('disabled') || isAuto);
+    $('#f_batch,#f_insp,#f_ng').prop('disabled', function(i, v){ return v || isAuto; });
+    $('#f_proc,#f_proc_pick,#f_vendor').prop('disabled', function(i, v){ return v || RESP_LOCKED; });
+    $('#f_resp_dept,#f_resp_user').prop('disabled', function(i, v){ return v || RESP_LOCKED; });
+    $('#btnAddResp').toggle(canEdit && !RESP_LOCKED);
+    $('#bomFixedNote').remove();
+    if (isAuto) {
+        $('#f_bom').closest('.fld').append(
+            '<div id="bomFixedNote" class="muted-help" style="margin-top:2px;">（自動開立時鎖定，不可修改）</div>');
+    }
+    $('#respFixedNote').remove();
+    if (isAuto) {
+        $('#f_vendor').closest('.fld').parent().append('<div id="respFixedNote" class="muted-help" style="margin-top:2px;">'
+            + (p.canAdmin ? '（自動開立時已帶入製令該站的製程與廠商，異常單管理員仍可修改）'
+                          : '（自動開立時已帶入製令該站的製程與廠商並鎖定，只有異常單管理員可以修改）')
+            + '</div>');
+    }
+    $('#batchFixedNote').remove();
+    if (isAuto) {
+        $('#f_ng').closest('.fld').append(
+            '<div id="batchFixedNote" class="muted-help" style="margin-top:2px;">（自動＝報工累積的良品＋NG／不良數＝NG總數，鎖定不可修改）</div>');
+    }
 
     // ② 原因分類
     CAUSE_SEL = (o.cause_ids || []).slice();
@@ -1049,8 +1083,8 @@ function saveCause(){
     post('save_cause', { id:OID, cause_ids: JSON.stringify(CAUSE_SEL) }, function(){ savedAt('#savedCause'); }, true);
 }
 
-/* 責任單位：部門／人員 */
-var RESP = [];
+/* 責任單位：部門／人員（自動開立時鎖定，只有異常單管理員可以改，RESP_LOCKED 由 render() 設定） */
+var RESP = [], RESP_LOCKED = false;
 function renderRespChips(){
     RESP = (D.order.resp_people || []).map(function(r){
         return { dept_id:Number(r.dept_id), user_id: r.user_id ? Number(r.user_id) : 0,
@@ -1059,11 +1093,12 @@ function renderRespChips(){
     drawResp();
 }
 function drawResp(){
+    var removable = D.can_edit && !D.order.is_closed && !RESP_LOCKED;
     $('#respChips').html(RESP.length ? RESP.map(function(r, i){
-        return '<span class="chip">' + esc(r.label) + (D.can_edit && !D.order.is_closed ? ' <span class="x" data-resp="' + i + '">×</span>' : '') + '</span>';
+        return '<span class="chip">' + esc(r.label) + (removable ? ' <span class="x" data-resp="' + i + '">×</span>' : '') + '</span>';
     }).join('') : '<span class="muted-help">未指定（非必填）</span>');
 }
-$(document).on('click', '[data-resp]', function(){ RESP.splice(parseInt($(this).data('resp'), 10), 1); drawResp(); });
+$(document).on('click', '[data-resp]', function(){ if (RESP_LOCKED) return; RESP.splice(parseInt($(this).data('resp'), 10), 1); drawResp(); });
 $('#f_resp_dept').on('change', function(){
     var d = $(this).val();
     $('#f_resp_user').html('<option value="">整個部門</option>');

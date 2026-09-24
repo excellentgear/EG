@@ -147,20 +147,30 @@ case 'save_head': {
     if (!qab_can_edit_form($db, $perms, $o)) jerr('沒有修改這張異常單的權限');
     $id = (int)$o['id'];
 
+    /* 自動開立（報工NG累積）的單，幾個欄位一律鎖定——2026-09-24 使用者拍板：
+       ①製令編號：任何人都不可改（連管理員也不行，那是開單當下就決定的來源）
+       ②責任單位（製程／廠商／廠內部門人員）：只有異常單管理員可以改，其餘人不行
+       ③批量／檢驗數／不良數：任何人都不可改（是報工累積直接算出來的，改了會跟原始報工對不起來）
+       前端已依這些規則把欄位停用，這裡是最後一道防線（鐵律8）。 */
+    $isAutoOpened = !empty($o['auto_opened']);
+    $isAdmin = !empty($perms['canAdmin']);
+    $respLocked = $isAutoOpened && !$isAdmin;
+
     $fill = trim((string)($_POST['fill_date'] ?? ''));
     if ($fill !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $fill)) jerr('填寫日期格式不正確');
     $occ = trim((string)($_POST['occurrence_date'] ?? ''));
     if ($occ !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $occ)) jerr('異常發生日期格式不正確');
 
     // 責任單位：製程＋廠商；廠商若為「廠內加工廠商」才可再選部門與人員（非必填）
-    $procNo = $intOrNull($_POST['resp_process_no'] ?? '');
-    if ($procNo !== null) {
+    // 鎖定中（自動開立且非管理員）一律不採用這次送來的值，維持原狀，也不做下面的驗證與寫入
+    $procNo = $respLocked ? null : $intOrNull($_POST['resp_process_no'] ?? '');
+    if (!$respLocked && $procNo !== null) {
         $c = $db->prepare("SELECT 1 FROM process_no WHERE ProcessNo=?"); $c->execute([$procNo]);
         if (!$c->fetchColumn()) jerr('選擇的製程不存在');
     }
-    $vendorId = $strOrNull($_POST['responsible_vendor_id'] ?? '', 11);
+    $vendorId = $respLocked ? null : $strOrNull($_POST['responsible_vendor_id'] ?? '', 11);
     $isInternal = 0; $vendorName = '';
-    if ($vendorId !== null) {
+    if (!$respLocked && $vendorId !== null) {
         $c = $db->prepare("SELECT maker_id, internal FROM maker_list WHERE maker_id_no=?"); $c->execute([$vendorId]);
         $v = $c->fetch(PDO::FETCH_ASSOC);
         if (!$v) jerr('選擇的廠商不存在');
@@ -168,7 +178,7 @@ case 'save_head': {
         $vendorName = (string)$v['maker_id'];
     }
     // 責任單位顯示字串：製程＋廠商（清單、不合格品記錄表都讀這一欄）
-    $respUnit = trim(implode(' / ', array_filter([
+    $respUnit = $respLocked ? '' : trim(implode(' / ', array_filter([
         $procNo !== null ? (string)$db->query("SELECT ProcessName FROM process_no WHERE ProcessNo=" . (int)$procNo)->fetchColumn() : '',
         $vendorName,
     ])));
@@ -181,9 +191,11 @@ case 'save_head': {
     if ($fill !== '') $put('fill_date', $fill);
     if ($occ !== '')  $put('occurrence_date', $occ);
     /* 製令編號／客退單號只要有填，就一定要是「從清單選到的那一張」（使用者要求）。
-       只打字不綁定的話，客戶、料號、扣款金額全部帶不出來，而且畫面上看不出哪裡不對。 */
-    $bomAfter = array_key_exists('bom_no', $_POST) ? $strOrNull($_POST['bom_no'], 30) : ($o['bom_no'] ?: null);
-    if (array_key_exists('bom_no', $_POST) && $bomAfter !== null) {
+       只打字不綁定的話，客戶、料號、扣款金額全部帶不出來，而且畫面上看不出哪裡不對。
+       自動開立的製令編號一律鎖定，這裡直接用原值、不採信送來的值（連管理員都不行）。 */
+    $bomAfter = $isAutoOpened ? ($o['bom_no'] ?: null)
+        : (array_key_exists('bom_no', $_POST) ? $strOrNull($_POST['bom_no'], 30) : ($o['bom_no'] ?: null));
+    if (!$isAutoOpened && array_key_exists('bom_no', $_POST) && $bomAfter !== null) {
         $c = $db->prepare("SELECT 1 FROM bom WHERE bom=?");
         $c->execute([$bomAfter]);
         if (!$c->fetchColumn()) jerr('製令編號「' . $bomAfter . '」不存在，請從清單中選擇既有的製令（或清空這一欄）', 'BOM_NOT_BOUND');
@@ -224,17 +236,18 @@ case 'save_head': {
             $put('part_d_id', null);
         }
     }
-    if (array_key_exists('bom_no', $_POST))      $put('bom_no', $strOrNull($_POST['bom_no'], 30));
-    if (array_key_exists('batch_qty', $_POST))   $put('batch_qty', $intOrNull($_POST['batch_qty']));
-    if (array_key_exists('insp_qty', $_POST))    $put('insp_qty', $intOrNull($_POST['insp_qty']));
-    if (array_key_exists('ng_qty', $_POST)) { $put('ng_qty', $intOrNull($_POST['ng_qty'])); $put('sqty', $intOrNull($_POST['ng_qty'])); }
+    if (!$isAutoOpened && array_key_exists('bom_no', $_POST))      $put('bom_no', $strOrNull($_POST['bom_no'], 30));
+    // 自動開立的批量／檢驗數／不良數是報工累積直接算出來的，一律鎖定不給改（連管理員都不行）
+    if (!$isAutoOpened && array_key_exists('batch_qty', $_POST))   $put('batch_qty', $intOrNull($_POST['batch_qty']));
+    if (!$isAutoOpened && array_key_exists('insp_qty', $_POST))    $put('insp_qty', $intOrNull($_POST['insp_qty']));
+    if (!$isAutoOpened && array_key_exists('ng_qty', $_POST)) { $put('ng_qty', $intOrNull($_POST['ng_qty'])); $put('sqty', $intOrNull($_POST['ng_qty'])); }
     if (array_key_exists('abnormal_phenomenon', $_POST)) $put('abnormal_phenomenon', $strOrNull($_POST['abnormal_phenomenon'], 2000));
     if (array_key_exists('defect_detail', $_POST))       $put('defect_detail', $strOrNull($_POST['defect_detail'], 2000));
     if (array_key_exists('qa_ps', $_POST))               $put('qa_ps', $strOrNull($_POST['qa_ps'], 2000));
     if (array_key_exists('decider_cfg_id', $_POST))      $put('decider_cfg_id', $intOrNull($_POST['decider_cfg_id']));
     if (array_key_exists('decider_user_id', $_POST))     $put('decider_user_id', $intOrNull($_POST['decider_user_id']));
-    // 責任單位是一組（製程＋廠商＋顯示字串＋廠內旗標），只要其中一個有送就整組一起寫
-    $respTouched = array_key_exists('resp_process_no', $_POST) || array_key_exists('responsible_vendor_id', $_POST);
+    // 責任單位是一組（製程＋廠商＋顯示字串＋廠內旗標），只要其中一個有送就整組一起寫；鎖定中視同沒有異動
+    $respTouched = !$respLocked && (array_key_exists('resp_process_no', $_POST) || array_key_exists('responsible_vendor_id', $_POST));
     if ($respTouched) {
         $put('resp_process_no', $procNo);
         $put('responsible_vendor_id', $vendorId);
@@ -1031,16 +1044,30 @@ case 'order_delete': {
     if ($o['deleted_at']) jerr('這張單已經是刪除狀態');
     $reason = trim((string)($_POST['reason'] ?? ''));
     if ($reason === '') jerr('請填寫刪除原因（刪除一定要留紀錄）');
+    // 這張單累積歸入的報工（pm_process_daily_report.abnormal_order_id 指到它的那幾筆）刪除時一併
+    // 解除連結，這批NG才會重新變成「尚未歸入」，回到補開/自動開立可以重新處理的狀態——2026-09-24
+    // 使用者交辦：異常單被刪除，報工紀錄查詢頁的「異常單」欄也要跟著移除，不能繼續連著一張已刪除的單。
+    // report_id 清單寫進 snapshot，還原時只把「目前仍未被其他單認領」的那幾筆接回來（鐵律8精神：
+    // 不搶已經被新單累積走的資料）。
+    $stRep = $db->prepare("SELECT report_id FROM pm_process_daily_report WHERE abnormal_order_id=?");
+    $stRep->execute([$id]);
+    $affectedReportIds = array_map('intval', $stRep->fetchAll(PDO::FETCH_COLUMN));
     $snap = json_encode([
         'no' => $o['abnormal_order_no'], 'fill_date' => $o['fill_date'], 'client' => $o['client_name'],
         'part_no' => $o['part_no'], 'bom_no' => $o['bom_no'], 'ir_no' => $o['ir_no'],
         'phenomenon' => mb_substr((string)$o['abnormal_phenomenon'], 0, 500),
         'is_closed' => (int)$o['is_closed'], 'scrap_no' => $o['scrap_no'],
+        'report_ids' => $affectedReportIds,
     ], JSON_UNESCAPED_UNICODE);
     $db->beginTransaction();
     try {
         $db->prepare("UPDATE qa_abnormal_order SET deleted_at=NOW(), deleted_by=?, updated_by=?, updated_at=NOW() WHERE id=?")
            ->execute([$uid, $uid, $id]);
+        if ($affectedReportIds) {
+            $ph = implode(',', array_fill(0, count($affectedReportIds), '?'));
+            $db->prepare("UPDATE pm_process_daily_report SET abnormal_order_id=NULL WHERE report_id IN ($ph)")
+               ->execute($affectedReportIds);
+        }
         $db->prepare("INSERT INTO qa_abnormal_del_log (order_id,abnormal_order_no,act,reason,snapshot,acted_by,acted_name)
                       VALUES (?,?,'delete',?,?,?,?)")
            ->execute([$id, $o['abnormal_order_no'], mb_substr($reason, 0, 255), $snap, $uid, $perms['name']]);
@@ -1058,10 +1085,22 @@ case 'order_restore': {
     if (!$o) jerr('找不到這張異常單');
     if (!$o['deleted_at']) jerr('這張單不是刪除狀態');
     $reason = trim((string)($_POST['reason'] ?? ''));
+    // 把刪除當下記在 snapshot 裡的報工接回來——只接「目前仍未被其他單認領」的那幾筆，
+    // 已經被別張單（刪除期間新累積開立的）拿走的不搶回來。
+    $stSnap = $db->prepare("SELECT snapshot FROM qa_abnormal_del_log WHERE order_id=? AND act='delete' ORDER BY id DESC LIMIT 1");
+    $stSnap->execute([$id]);
+    $snapJson = $stSnap->fetchColumn();
+    $reportIds = [];
+    if ($snapJson) { $snapArr = json_decode((string)$snapJson, true) ?: []; $reportIds = array_map('intval', $snapArr['report_ids'] ?? []); }
     $db->beginTransaction();
     try {
         $db->prepare("UPDATE qa_abnormal_order SET deleted_at=NULL, deleted_by=NULL, updated_by=?, updated_at=NOW() WHERE id=?")
            ->execute([$uid, $id]);
+        if ($reportIds) {
+            $ph = implode(',', array_fill(0, count($reportIds), '?'));
+            $db->prepare("UPDATE pm_process_daily_report SET abnormal_order_id=? WHERE report_id IN ($ph) AND abnormal_order_id IS NULL")
+               ->execute(array_merge([$id], $reportIds));
+        }
         $db->prepare("INSERT INTO qa_abnormal_del_log (order_id,abnormal_order_no,act,reason,acted_by,acted_name)
                       VALUES (?,?,'restore',?,?,?)")
            ->execute([$id, $o['abnormal_order_no'], mb_substr($reason, 0, 255), $uid, $perms['name']]);
