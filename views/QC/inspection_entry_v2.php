@@ -1395,6 +1395,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                                 <input type="text" id="search-kw" class="form-control" placeholder="輸入部分料號 / BOM / 客戶後按搜尋">
                                 <span class="input-group-btn"><button class="btn btn-warm" id="btn-search">搜尋</button></span>
                             </div>
+                            <?php if ($isAdmin || $hasF('qc_backfill_data')): ?>
+                            <label class="muted-help" style="display:block;margin-top:4px;cursor:pointer;" title="BOM 結案時常有站別根本沒走過發包/移轉流程，永遠不會出現在正常待驗清單裡；勾選後改列該 BOM 全部還沒有檢驗紀錄的站，不受目前狀態限制（僅補資料/管理員可用）">
+                                <input type="checkbox" id="chk-include-closed"> 包含已結案 BOM（補建檢驗表用）
+                            </label>
+                            <?php endif; ?>
                             <div id="search-results" style="border:1px solid #E4D3BC; margin-top:4px; max-height:220px; overflow:auto;"></div>
                         </div>
                     </div>
@@ -4174,6 +4179,11 @@ $(function(){
                     '<span style="background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;border-radius:3px;padding:0 6px;font-weight:bold;">拆批：第'+esc(ctx.batch_label)+'批</span>'+
                     '；資料為真實內容，儲存會寫入正式檢驗表。');
             }
+            // 已結案 BOM：提醒這是在為結案資料補建檢驗表，不是正常生產流程中的待驗
+            if(ctx.bom_closed){
+                var closedNote = '<i class="fa fa-archive"></i> 這筆 BOM 已結案'+(ctx.bom_closed_at?'（結案日 '+esc(ctx.bom_closed_at)+'）':'')+'，正在補建這一站的檢驗表。';
+                $('#mode-banner').html($('#mode-banner').html() ? ($('#mode-banner').html()+'<br>'+closedNote) : closedNote);
+            }
             if(res.tools && res.tools.length) TOOLS = res.tools;
             state.is_supervisor = !!res.is_supervisor;
             state.can_fill = res.can_fill !== false;
@@ -4440,21 +4450,32 @@ $(function(){
     });
 
     // ---------- 待驗搜尋（示範模式） ----------
+    // processing_state 代碼→中文，僅供「包含已結案 BOM」搜尋結果顯示用（與 shipping_lib.php 的
+    // sq_proc_state_text() 同一套說法，但這裡多一個 'skip'；純顯示不影響任何判定邏輯）
+    var QC_STATE_LABEL = {N:'未發包', ing:'加工中', Q:'QC待驗', P:'生管待移轉', E:'已移轉', skip:'已標記跳過'};
     function doSearch(){
         var kw=$('#search-kw').val().trim();
+        var includeClosed = $('#chk-include-closed').is(':checked');
         $('#search-results').html('<div class="search-result-item muted-help">搜尋中…</div>');
-        $.post(API,{action:'search_pending',keyword:kw},function(res){
+        $.post(API,{action:'search_pending',keyword:kw,include_closed:includeClosed?1:0},function(res){
             if(!res.success){ $('#search-results').html('<div class="search-result-item text-danger">搜尋失敗：'+esc(res.message||'')+'</div>'); return; }
             var d=res.data||[];
             if(!d.length){ $('#search-results').html('<div class="search-result-item muted-help">查無待驗項目</div>'); return; }
             $('#search-results').html(d.map(function(r){
                 // 拆批標籤：同一製程可能同時有好幾批待驗，不標出來會分不清是哪一批
                 var batchTag = r.batch_label ? ' <span style="background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;border-radius:3px;padding:0 4px;font-size:11px;">第'+esc(r.batch_label)+'批</span>' : '';
-                return '<div class="search-result-item" data-fid="'+r.bom_ing_fid+'"><b>'+esc(r.bom)+'</b>'+batchTag+' ／ 料號 '+esc(r.part_no||'')+' ／ '+esc(r.client||'')+
-                       ' <span class="muted-help">'+esc(r.process||'')+' · 數量'+(r.sqty||0)+'</span></div>';
+                // 已結案 BOM 模式：標「已結案」徽章＋目前狀態，讓人知道這是在補歷史紀錄
+                var closedTag = '', stateTag = '';
+                if (res.include_closed) {
+                    closedTag = ' <span style="background:#F7E0BD;border:1px solid #E0B378;color:#8A5A2B;border-radius:3px;padding:0 4px;font-size:11px;">已結案'+(r.bom_closed_at?' '+esc(r.bom_closed_at):'')+'</span>';
+                    stateTag = ' <span style="color:#a0521f;">['+esc(QC_STATE_LABEL[r.processing_state]||r.processing_state||'')+']</span>';
+                }
+                return '<div class="search-result-item" data-fid="'+r.bom_ing_fid+'"><b>'+esc(r.bom)+'</b>'+batchTag+closedTag+' ／ 料號 '+esc(r.part_no||'')+' ／ '+esc(r.client||'')+
+                       ' <span class="muted-help">'+esc(r.process||'')+' · 數量'+(r.sqty||0)+'</span>'+stateTag+'</div>';
             }).join(''));
         },'json').fail(function(){ $('#search-results').html('<div class="search-result-item text-danger">搜尋錯誤</div>'); });
     }
+    $('#chk-include-closed').on('change', function(){ if ($('#search-kw').val().trim()) doSearch(); });
     $('#btn-search').on('click', doSearch);
     $('#search-kw').on('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); doSearch(); } });
     $('#search-results').on('click','.search-result-item[data-fid]', function(){

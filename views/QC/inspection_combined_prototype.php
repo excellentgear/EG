@@ -177,7 +177,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sql = "SELECT bi.bom_ing_fid, bi.bom, bi.sqty, bi.bom_sn, bi.process_no, bi.batch_label,
                            b.d_id AS part_no, b.Client_Name,
                            d.d_id AS d_setting_pk, d.D_Setting_Id, d.Revision,
-                           pn.ProcessName
+                           pn.ProcessName,
+                           (b.processing_state = '1') AS bom_closed,
+                           DATE_FORMAT(b.closed_at,'%Y-%m-%d') AS bom_closed_at
                     FROM bom_ing bi
                     LEFT JOIN bom b ON bi.bom = b.bom
                     LEFT JOIN d_setting d ON b.d_id = d.D_Setting_Id
@@ -302,6 +304,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'version_id'  => $version_id,
                     'form_type_id'=> $form_type_id,
                     'sample_qty'  => $sample_qty,
+                    'bom_closed'    => !empty($ctx['bom_closed']),
+                    'bom_closed_at' => $ctx['bom_closed_at'],
                 ],
                 'items'   => $items,
                 'tools'   => $tools,
@@ -328,17 +332,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 包裝製程不列入（已獨立成自己的檢驗流程，見 packing_process_lib.php）
             $packingNosSp = pk_packing_process_nos($pdo);
             $packingExclSp = $packingNosSp ? (' AND bi.process_no NOT IN (' . implode(',', array_map('intval', $packingNosSp)) . ')') : '';
-            $sql = "SELECT bi.bom_ing_fid, bi.bom, b.d_id AS part_no, b.Client_Name AS client, pn.ProcessName AS process, bi.sqty, bi.batch_label
-                    FROM bom_ing bi
-                    LEFT JOIN bom b ON bi.bom = b.bom
-                    LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
-                    WHERE bi.processing_state IN ('Q','P') AND bi.qc_completed = 0
-                      AND (bi.bom LIKE :kw OR b.d_id LIKE :kw OR b.Client_Name LIKE :kw)
-                      $packingExclSp
-                    ORDER BY bi.outsource_date DESC LIMIT 30";
+
+            // 「包含已結案 BOM」（2026-09-24 使用者交辦）：BOM 被人工結案時，現場常有站別根本
+            // 沒走過正常的發包/移轉流程（processing_state 卡在 N），永遠不會落在 ('Q','P') 裡，
+            // QC 因此永遠搜不到待驗項目、也就永遠補不了檢驗表。這裡刻意做成獨立分頁而不是
+            // 混進平常搜尋結果——限「補資料」或管理員權限才能開，避免一般填表人誤把舊資料
+            // 的檢驗表重複建一次。
+            $featsSp = loadUserFeatures($pdo, $user_id);
+            $includeClosed = !empty($_POST['include_closed'])
+                && (hasFeature($featsSp, 'all') || hasFeature($featsSp, 'qc_backfill_data'));
+
+            if ($includeClosed) {
+                // 已結案 BOM：不受 processing_state 限制（N/ing/Q/P/E 都列），只要這一關
+                // 還沒有任何檢驗紀錄、也沒被標記跳過，就讓管理員/補資料人員補建檢驗表。
+                $sql = "SELECT bi.bom_ing_fid, bi.bom, b.d_id AS part_no, b.Client_Name AS client,
+                               pn.ProcessName AS process, bi.sqty, bi.batch_label, bi.processing_state,
+                               DATE_FORMAT(b.closed_at,'%Y-%m-%d') AS bom_closed_at
+                        FROM bom_ing bi
+                        LEFT JOIN bom b ON bi.bom = b.bom
+                        LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
+                        WHERE b.processing_state = '1' AND bi.qc_completed = 0
+                          AND bi.processing_state <> 'skip'
+                          AND (bi.bom LIKE :kw OR b.d_id LIKE :kw OR b.Client_Name LIKE :kw)
+                          $packingExclSp
+                        ORDER BY b.closed_at DESC, bi.bom DESC, CAST(bi.bom_sn AS UNSIGNED) ASC LIMIT 30";
+            } else {
+                $sql = "SELECT bi.bom_ing_fid, bi.bom, b.d_id AS part_no, b.Client_Name AS client,
+                               pn.ProcessName AS process, bi.sqty, bi.batch_label, bi.processing_state,
+                               NULL AS bom_closed_at
+                        FROM bom_ing bi
+                        LEFT JOIN bom b ON bi.bom = b.bom
+                        LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
+                        WHERE bi.processing_state IN ('Q','P') AND bi.qc_completed = 0
+                          AND (bi.bom LIKE :kw OR b.d_id LIKE :kw OR b.Client_Name LIKE :kw)
+                          $packingExclSp
+                        ORDER BY bi.outsource_date DESC LIMIT 30";
+            }
             $st = $pdo->prepare($sql);
             $st->execute([':kw' => "%$kw%"]);
-            echo json_encode(['success'=>true, 'data'=>$st->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            echo json_encode(['success'=>true, 'data'=>$st->fetchAll(PDO::FETCH_ASSOC), 'include_closed'=>$includeClosed], JSON_UNESCAPED_UNICODE);
             exit;
         }
 
