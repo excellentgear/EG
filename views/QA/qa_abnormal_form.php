@@ -78,6 +78,9 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
             width:100%; border:1px solid var(--line); border-radius:4px; padding:3px 6px; font-size:13px; background:#fff; }
         .fld textarea { resize:vertical; }
         .fld input[readonly], .fld textarea[readonly] { background:#F5F0E8; color:#5b4a36; }
+        /* 鎖定欄位一律靠這條規則變灰，不要靠整區 opacity——那樣連「這個人這格其實能填」的欄位也會一起變淡看不出來 */
+        .fld input:disabled, .fld select:disabled, .fld textarea:disabled { background:#EFE9DC; color:#a89a86; cursor:not-allowed; }
+        .fld textarea.qc-editable:not(:disabled) { border-color:var(--amber-d); background:#FFFDF5; box-shadow:0 0 0 1px var(--amber-d) inset; }
         .ro-note { font-size:12px; color:#8a7560; }
         .muted-help { font-size:12px; color:#8a7560; }
         .note-box { font-size:12px; color:var(--ink2); background:var(--cream); border:1px solid var(--line);
@@ -740,12 +743,16 @@ function render(){
     $('#btnOwnerSign').toggle(canEdit && !o.owner_sign_at).prop('disabled', false);
     $('#btnOwnerClear').toggle(canEdit && !!o.owner_sign_at);
 
-    $('#secHead').toggleClass('locked', !canEdit);
-    $('#secHead input,#secHead textarea,#secHead select').prop('disabled', !canEdit);
-    if (bound) $('#f_client').prop('readonly', true);
     // 品管通知名單成員：一般編輯權限之外，仍可在自動開立、未結案的單上補充異常現象說明
     var qcNoteEdit = isAuto && !o.is_closed && !!p.canQcNotify;
+    $('#secHead').toggleClass('locked', !canEdit && !qcNoteEdit);
+    $('#secHead input,#secHead textarea,#secHead select').prop('disabled', !canEdit);
+    if (bound) $('#f_client').prop('readonly', true);
     if (qcNoteEdit) $('#f_phe').prop('disabled', false);
+    /* 整區沒有 canEdit 時（.locked 拿掉了）鎖定欄位改靠上面新增的 :disabled 樣式單獨變灰，
+       不然這裡完全不鎖住的話，使用者會看不出「只有異常現象這一格能填、其他都還是鎖住的」。
+       f_phe 額外套一個提示樣式，區分「能填」跟「一般唯讀」。 */
+    $('#f_phe').toggleClass('qc-editable', qcNoteEdit && !canEdit);
     $('#btnSaveHead').toggle(canEdit || qcNoteEdit);
 
     /* 自動開立（報工NG累積）的單，幾個欄位一律鎖定——2026-09-24 使用者拍板：
