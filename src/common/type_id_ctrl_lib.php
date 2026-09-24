@@ -660,13 +660,39 @@ function type_id_ctrl_find_missing_parts(PDO $db): array {
                             AND " . $catCond('a.category_ids', 'a.category_id') . "
                           GROUP BY qi.d_setting_d_id")->fetchAll(PDO::FETCH_ASSOC));
 
-        $add($db->query("SELECT ds.d_id AS d_id, COUNT(*) c
+        // 2026-09-24：原本用 JOIN d_setting ON JSON_CONTAINS(...) 讓 MySQL 對 740 筆附件×24000 筆
+        // 料號主檔逐一配對比對（約 1770 萬次、每次還要解析 JSON），實測會卡 15~17 分鐘且拖慢全站
+        // 其他人的查詢（慢查詢日誌 2026-09-22、2026-09-24 各記錄兩次）。改成：先把「有連結料號」的
+        // 附件（本來就只有數百筆）在 PHP 端解開 linked_parts 陣列，彙總成「料號文字→命中次數」，
+        // 再用單一 IN(...) 對 d_setting.D_Setting_Id（有索引 idx_dsid）查回 d_id，不掃全表。
+        // 同一個料號文字掛在多筆主檔（重複料號）時，比照原本 JOIN 的語意——每一筆主檔都要算到。
+        $linkRows = $db->query("SELECT a.linked_parts
                           FROM quotation_attachments a
-                          JOIN d_setting ds ON JSON_CONTAINS(a.linked_parts, JSON_QUOTE(ds.D_Setting_Id))
                           WHERE a.status='active' AND a.linked_parts IS NOT NULL
                             AND EXISTS (SELECT 1 FROM quotation_list qlp WHERE qlp.quote_no=a.quote_no AND qlp.pending_review=0)
                             AND " . $catCond('a.category_ids', 'a.category_id') . "
-                          GROUP BY ds.d_id")->fetchAll(PDO::FETCH_ASSOC));
+                          ")->fetchAll(PDO::FETCH_ASSOC);
+        $partNoHits = [];
+        foreach ($linkRows as $r) {
+            $arr = json_decode((string)$r['linked_parts'], true);
+            if (!is_array($arr)) continue;
+            foreach ($arr as $pn) {
+                $pn = trim((string)$pn);
+                if ($pn === '') continue;
+                $partNoHits[$pn] = ($partNoHits[$pn] ?? 0) + 1;
+            }
+        }
+        if ($partNoHits) {
+            $partNos = array_keys($partNoHits);
+            $ph = implode(',', array_fill(0, count($partNos), '?'));
+            $st = $db->prepare("SELECT d_id, D_Setting_Id FROM d_setting WHERE D_Setting_Id IN ($ph)");
+            $st->execute($partNos);
+            $linkedRows2 = [];
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $linkedRows2[] = ['d_id' => $r['d_id'], 'c' => $partNoHits[$r['D_Setting_Id']] ?? 0];
+            }
+            $add($linkedRows2);
+        }
     }
 
     // ── 來源二：PFMEA 已建檔的料號（可能完全沒有附件，照樣要列進建議名單）──────
