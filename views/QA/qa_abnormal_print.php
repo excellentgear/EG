@@ -228,6 +228,19 @@ svg.eg-stamp-tpl { height:auto !important; }
     <div class="tt"><?= h($formName) ?></div>
 </div>
 
+<?php if ($o['split_parent']): ?>
+<div class="note" style="text-align:center;margin-bottom:3px;">
+    本單為 <b><?= h($o['split_parent']['no']) ?></b> 依決策拆分出的子單，異常現象／原因分類／相關單位意見請見原始單。
+</div>
+<?php elseif ($o['split_children']): ?>
+<div class="note" style="text-align:center;margin-bottom:3px;">
+    本單已依決策拆分為 <?= count($o['split_children']) ?> 張子單：<?= h(implode('、', array_map(
+        function ($c) { return $c['no'] . '（' . $c['name'] . ' ' . $c['ng_qty'] . 'pcs' . ($c['deduct_qty'] !== null ? '，扣款' . $c['deduct_qty'] . 'pcs' : '') . '）'; },
+        $o['split_children']
+    ))) ?>　各子單獨立結案，隨本單一併列印。
+</div>
+<?php endif; ?>
+
 <!-- 表頭 -->
 <table class="f">
     <colgroup><col style="width:13%"><col style="width:22%"><col style="width:13%"><col style="width:19%"><col style="width:13%"><col style="width:20%"></colgroup>
@@ -440,6 +453,7 @@ svg.eg-stamp-tpl { height:auto !important; }
 window.__ownCompany = <?= json_encode($company, JSON_UNESCAPED_UNICODE) ?>;
 var STAMP_TPL     = <?= json_encode($stampTpl['schema'] ?? null, JSON_UNESCAPED_UNICODE) ?>;
 var STAMP_TPL_ASK = <?= json_encode($stampTplAsk['schema'] ?? ($stampTpl['schema'] ?? null), JSON_UNESCAPED_UNICODE) ?>;
+var SPLIT_CHILDREN = <?= json_encode($o['split_children'], JSON_UNESCAPED_UNICODE) ?>;
 </script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_stamp.js') ?>"></script>
 <!-- 有指定圖章模板時這一支一定要一起載，漏載會靜默退回預設章（ai-rules/18 第11條） -->
@@ -492,6 +506,17 @@ var STAMP_TPL_ASK = <?= json_encode($stampTplAsk['schema'] ?? ($stampTpl['schema
         if (location.search.indexOf('auto=1') >= 0) {
             var go = function () { setTimeout(function () { window.print(); }, 250); };
             if (document.readyState === 'complete') go(); else window.addEventListener('load', go);
+        }
+        /* 這張是「已拆分」的母單：自動一併列印子單（子單本身仍可用自己的 id 獨立列印，
+           子單沒有 SPLIT_CHILDREN 所以不會再往下鏈）——逐張各自開視窗排隊，錯開 700ms
+           避免被彈出視窗封鎖擋掉（同 ai-rules/16 第三之五節既有批次列印做法）。
+           帶 nocascade=1 進來的（子單自己被批次帶出來印時）不要再觸發一次。 */
+        if (SPLIT_CHILDREN.length && location.search.indexOf('nocascade=1') < 0) {
+            SPLIT_CHILDREN.forEach(function (c, i) {
+                setTimeout(function () {
+                    window.open('qa_abnormal_print.php?id=' + c.id + '&auto=1&nocascade=1', '_blank');
+                }, (i + 1) * 700);
+            });
         }
     }
     // 掃描實體章對照表是非同步載入的，沒等它就會印成預設章、跟畫面上看到的不一樣

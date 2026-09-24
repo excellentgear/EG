@@ -2578,7 +2578,7 @@ function qab_list(PDO $db, array $f = []): array
                    o.part_no, o.bom_no, o.ir_no, o.responsible_unit, o.ng_qty, o.sqty, o.is_closed, o.closed_at,
                    o.scrap_no, o.gm_deduct, o.abnormal_phenomenon, o.created_by, cu.user_cname AS created_name,
                    o.deleted_at, o.deleted_by, dl.user_cname AS deleted_name, o.auto_opened, o.qc_review_by,
-                   o.decider_cfg_id, o.decider_user_id,
+                   o.decider_cfg_id, o.decider_user_id, o.escalate_gm, o.parent_order_id, o.insp_qty,
                    pn.ProcessName AS resp_process_name, ml.maker_id AS resp_vendor_name
             FROM qa_abnormal_order o
             LEFT JOIN `user` cu ON cu.id=o.created_by
@@ -2592,7 +2592,7 @@ function qab_list(PDO $db, array $f = []): array
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
     if (!$rows) return [];
 
-    // 狀態要看「有沒有還沒回覆的輪次／有沒有處置／有沒有裁示」，一次撈完再組（避免逐筆查）
+    // 狀態要看「有沒有還沒回覆的輪次／有沒有處置／有沒有裁示／有沒有被拆分」，一次撈完再組（避免逐筆查）
     $ids = array_column($rows, 'id');
     $in  = implode(',', array_fill(0, count($ids), '?'));
     $pend = [];
@@ -2604,6 +2604,10 @@ function qab_list(PDO $db, array $f = []): array
     $st = $db->prepare("SELECT order_id, kind, opt_id FROM qa_abnormal_opt WHERE order_id IN ($in)");
     $st->execute($ids);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $opts[(int)$r['order_id']][$r['kind']][] = (int)$r['opt_id'];
+    $childCnt = [];
+    $st = $db->prepare("SELECT parent_order_id, COUNT(*) c FROM qa_abnormal_order WHERE parent_order_id IN ($in) GROUP BY parent_order_id");
+    $st->execute($ids);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $childCnt[(int)$r['parent_order_id']] = (int)$r['c'];
     $optMap = qab_option_map($db);
 
     foreach ($rows as &$r) {
@@ -2612,13 +2616,15 @@ function qab_list(PDO $db, array $f = []): array
         $r['gm_ids']   = $opts[$id]['gm'] ?? [];
         $r['rounds']   = [];
         $r['pending']  = $pend[$id] ?? 0;
+        $r['split_children_count'] = $childCnt[$id] ?? 0;
         $r['final']    = qab_final($db, $r, $optMap);
         $r['need_gm']  = qab_need_gm($db, $r, $optMap);
-        if (!empty($r['is_closed']))      $r['status'] = ['code' => 'closed', 'label' => '已結案'];
+        if ($r['split_children_count'] > 0) $r['status'] = ['code' => 'split', 'label' => '已拆分為 ' . $r['split_children_count'] . ' 張'];
+        elseif (!empty($r['is_closed']))  $r['status'] = ['code' => 'closed', 'label' => '已結案'];
         elseif (!empty($r['auto_opened']) && empty($r['qc_review_by'])) $r['status'] = ['code' => 'qcreview', 'label' => '待品管確認說明'];
         elseif ($r['pending'] > 0)        $r['status'] = ['code' => 'reply', 'label' => '等待單位回覆'];
+        elseif (!empty($r['need_gm']) && !$r['gm_ids']) $r['status'] = ['code' => 'gm', 'label' => '待總經理裁示'];
         elseif (!$r['disp_ids'] && !$r['gm_ids']) $r['status'] = ['code' => 'decide', 'label' => '待決策'];
-        elseif ($r['need_gm'])            $r['status'] = ['code' => 'gm', 'label' => '待總經理裁示'];
         elseif (($r['gm_deduct'] || $r['final']['is_scrap'])) $r['status'] = ['code' => 'deduct', 'label' => '扣款確認中'];
         else                              $r['status'] = ['code' => 'ready', 'label' => '可結案'];
         // 「待決策」在清單上也附上決策者部門與姓名（不併進 label，理由同 qab_order()）
@@ -2639,12 +2645,13 @@ function qab_status_map(PDO $db, array $orderIds): array
     if (!$orderIds) return [];
     $in = implode(',', array_fill(0, count($orderIds), '?'));
     $out = [];
-    $st = $db->prepare("SELECT id, is_closed, gm_deduct, scrap_no, capa_order_no, auto_opened, qc_review_by FROM qa_abnormal_order WHERE id IN ($in)");
+    $st = $db->prepare("SELECT id, is_closed, gm_deduct, scrap_no, capa_order_no, auto_opened, qc_review_by, escalate_gm FROM qa_abnormal_order WHERE id IN ($in)");
     $st->execute($orderIds);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $out[(int)$r['id']] = ['is_closed' => (int)$r['is_closed'], 'gm_deduct' => (int)$r['gm_deduct'],
                                'scrap_no' => (string)($r['scrap_no'] ?? ''), 'capa_order_no' => (string)($r['capa_order_no'] ?? ''),
                                'auto_opened' => (int)$r['auto_opened'], 'qc_review_by' => $r['qc_review_by'],
+                               'escalate_gm' => (int)$r['escalate_gm'],
                                'disp_ids' => [], 'gm_ids' => [], 'pending' => 0];
     }
     $st = $db->prepare("SELECT order_id, kind, opt_id FROM qa_abnormal_opt WHERE order_id IN ($in)");
@@ -2671,8 +2678,8 @@ function qab_status_map(PDO $db, array $orderIds): array
         if ($v['is_closed'])            $v['status'] = '已結案';
         elseif ($v['auto_opened'] && !$v['qc_review_by']) $v['status'] = '待品管確認說明';
         elseif ($v['pending'] > 0)      $v['status'] = '等待單位回覆';
-        elseif (!$v['disp_ids'] && !$v['gm_ids']) $v['status'] = '待決策';
         elseif ($v['need_gm'])          $v['status'] = '待總經理裁示';
+        elseif (!$v['disp_ids'] && !$v['gm_ids']) $v['status'] = '待決策';
         elseif ($v['gm_deduct'] || $v['final']['is_scrap']) $v['status'] = '扣款確認中';
         else                            $v['status'] = '可結案';
         $v['final_label'] = implode('、', $v['final']['names']);

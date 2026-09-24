@@ -1029,14 +1029,18 @@ function slotResultHtml(k){
         return '<div class="sg-res">' + (D.disp_opts || []).map(function(op){
                 return '<label><input type="checkbox" class="sg-disp" value="' + op.opt_id + '"'
                      + ((o.disp_ids || []).indexOf(Number(op.opt_id)) >= 0 ? ' checked' : '') + '> ' + esc(op.name) + '</label>'; }).join('')
-             + '</div><textarea class="sg-dispnote" rows="2" placeholder="處置說明">' + esc(o.disposition_note || '') + '</textarea>';
+             + '</div><div class="sg-qtybox" style="display:none;margin:4px 0;"></div>'
+             + '<textarea class="sg-dispnote" rows="2" placeholder="處置說明">' + esc(o.disposition_note || '') + '</textarea>'
+             + '<div class="muted-help" style="font-size:11px;">勾選超過一項＝依數量拆成好幾張子單，跟上面④區同一套規則</div>';
     }
     if (k === 'gm') {
         return '<div class="sg-res">' + (D.gm_opts || []).map(function(op){
                 return '<label><input type="checkbox" class="sg-gm" value="' + op.opt_id + '"'
                      + ((o.gm_ids || []).indexOf(Number(op.opt_id)) >= 0 ? ' checked' : '') + '> ' + esc(op.name) + '</label>'; }).join('')
              + '<label style="margin-left:6px;"><input type="checkbox" class="sg-gmded"' + (Number(o.gm_deduct) ? ' checked' : '') + '> 需扣款</label>'
-             + '</div><textarea class="sg-gmnote" rows="2" placeholder="裁示說明">' + esc(o.gm_note || '') + '</textarea>';
+             + '</div><div class="sg-qtybox" style="display:none;margin:4px 0;"></div>'
+             + '<textarea class="sg-gmnote" rows="2" placeholder="裁示說明">' + esc(o.gm_note || '') + '</textarea>'
+             + '<div class="muted-help" style="font-size:11px;">勾選超過一項＝依數量拆成好幾張子單，跟上面⑤區同一套規則</div>';
     }
     return '<span class="muted-help">（這一格只有簽章）</span>';
 }
@@ -1126,6 +1130,51 @@ $(document).on('change', '.sg-date', function(){
     fillSlotPeople($tr.find('.sg-who'), $tr.data('slot'), this.value, $tr.find('.sg-who').val(),
                    $tr.find('.sg-scope'), $tr.hasClass('sg-ask') ? Number($tr.data('askdept')) : 0);
 });
+
+/* 補登簽章表的處置／裁示格也支援依數量拆單（使用者要求跟上面④⑤區一樣）——這裡是獨立的一小套
+   （scope 限定在該 <tr> 內，跟主決策區的 #dispQtyBox 等各自獨立，不會互相干擾）。 */
+function sgRebuildQty($tr, which){
+    var cls = which === 'disp' ? 'sg-disp' : 'sg-gm';
+    var ids = $tr.find('.' + cls + ':checked').map(function(){ return this.value; }).get();
+    var $box = $tr.find('.sg-qtybox');
+    if (ids.length <= 1) { $box.hide().empty(); return; }
+    var optMap = decOptMap(which);
+    $box.html(ids.map(function(oid){
+        var op = optMap[oid] || {};
+        return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;font-size:12px;">'
+             + '<span style="min-width:56px;">' + esc(op.name || '') + '</span>'
+             + '數量 <input type="number" class="sg-qty" data-opt="' + oid + '" min="1" style="width:64px;">'
+             + (Number(op.is_scrap) === 1 ? ' <span style="color:var(--coral);">扣款 <input type="number" class="sg-ded" data-opt="'
+               + oid + '" min="0" style="width:64px;"></span>' : '')
+             + '</div>';
+    }).join(''));
+    $box.show();
+}
+function sgCollectItems($tr, which){
+    var cls = which === 'disp' ? 'sg-disp' : 'sg-gm';
+    var items = [];
+    $tr.find('.' + cls + ':checked').each(function(){
+        var oid = this.value, it = { opt_id: parseInt(oid, 10) };
+        var $q = $tr.find('.sg-qty[data-opt="' + oid + '"]');
+        if ($q.length && $q.val() !== '') it.qty = Number($q.val());
+        var $d = $tr.find('.sg-ded[data-opt="' + oid + '"]');
+        if ($d.length && $d.val() !== '') it.deduct_qty = Number($d.val());
+        items.push(it);
+    });
+    return items;
+}
+function sgItemsValid(items){
+    if (items.length <= 1) return true;
+    var ngQty = Number((D.order && D.order.ng_qty) || 0), sum = 0, ok = true;
+    items.forEach(function(it){
+        if (!(it.qty > 0)) ok = false;
+        sum += (it.qty || 0);
+        if (it.deduct_qty != null && it.deduct_qty > it.qty) ok = false;
+    });
+    return ok && sum === ngQty;
+}
+$(document).on('change', '.sg-disp', function(){ sgRebuildQty($(this).closest('tr'), 'disp'); });
+$(document).on('change', '.sg-gm', function(){ sgRebuildQty($(this).closest('tr'), 'gm'); });
 /* 日期、人員、結果任何一個改了就自動存（補登不必按鈕） */
 function saveSignRow($tr){
     var date = $tr.find('.sg-date').val(), who = $tr.find('.sg-who').val();
@@ -1141,18 +1190,28 @@ function saveSignRow($tr){
     }
     var slot = $tr.data('slot');
     if (slot === 'disp') {
-        var ids = $tr.find('.sg-disp:checked').map(function(){ return Number(this.value); }).get();
-        post('save_disposition', { id:OID, opt_ids:JSON.stringify(ids), disposition_note:$tr.find('.sg-dispnote').val(),
+        var items = sgCollectItems($tr, 'disp');
+        if (!items.length) return;
+        if (!sgItemsValid(items)) return;    // 勾超過一項時數量還沒填齊加總相符，先不送出
+        post('save_disposition', { id:OID, items:JSON.stringify(items), disposition_note:$tr.find('.sg-dispnote').val(),
                                    sign_date:date, sign_by:who || '' },
-            function(){ savedAt('#savedSign'); }, true);
+            function(res){
+                savedAt('#savedSign');
+                if (items.length > 1) render();   // 拆分後這張單已結案，補登區要整個重畫成拆分結果
+            }, items.length > 1 ? false : true);
         return;
     }
     if (slot === 'gm') {
-        var gids = $tr.find('.sg-gm:checked').map(function(){ return Number(this.value); }).get();
-        post('save_gm', { id:OID, opt_ids:JSON.stringify(gids), gm_note:$tr.find('.sg-gmnote').val(),
+        var gitems = sgCollectItems($tr, 'gm');
+        if (!gitems.length) return;
+        if (!sgItemsValid(gitems)) return;
+        post('save_gm', { id:OID, items:JSON.stringify(gitems), gm_note:$tr.find('.sg-gmnote').val(),
                           gm_deduct:$tr.find('.sg-gmded').prop('checked') ? 1 : '',
                           sign_date:date, sign_by:who || '' },
-            function(){ savedAt('#savedSign'); }, true);
+            function(res){
+                savedAt('#savedSign');
+                if (gitems.length > 1) render();
+            }, gitems.length > 1 ? false : true);
         return;
     }
     if (!who) return;                    // 其他格只有簽章，沒選人就先不存
@@ -1168,7 +1227,7 @@ $(document).on('change', '#signTb .sg-date, #signTb .sg-who, #signTb .sg-disp, #
     var $tr = $(this).closest('tr');
     autoSave(signKey($tr), function(){ saveSignRow($tr); });
 });
-$(document).on('input', '#signTb .sg-dispnote, #signTb .sg-gmnote, #signTb .sg-asktext, #signTb .sg-qcnote', function(){
+$(document).on('input', '#signTb .sg-dispnote, #signTb .sg-gmnote, #signTb .sg-asktext, #signTb .sg-qcnote, #signTb .sg-qty, #signTb .sg-ded', function(){
     var $tr = $(this).closest('tr');
     autoSave(signKey($tr), function(){ saveSignRow($tr); }, 1200);
 });
