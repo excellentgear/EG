@@ -603,7 +603,14 @@ function needsUpdateBadge(r){
     if (r.has_changed) parts.push('內容變更 '+r.changed_count+' 筆');
     return ' <span class="ic-updbadge" title="'+esc(parts.join('、'))+'"><i class="fa fa-exclamation-triangle"></i> 需要更新</span>';
 }
+/* 是否可以列印：待確認/需重新確認一律不可，已確認但有新檔案/內容變更（需要更新）也不可——
+   跟後端 print_get 的擋下規則完全一致（鐵律8：前端擋一次，後端同規則再擋一次） */
+function canPrintRow(r){ return r.review_status === 'confirmed' && !r.has_new && !r.has_changed; }
 function rowHtml(r){
+    var printable = canPrintRow(r);
+    var printIcon = printable
+        ? '<span class="ic-op" title="列印" onclick="printDoc('+r.id+')"><i class="fa fa-print"></i></span>'
+        : '<span class="ic-op" style="opacity:.35;cursor:not-allowed;" title="'+(r.review_status!=='confirmed' ? '尚未確認，不可列印' : '已確認但有新檔案／內容變更待更新，不可列印')+'"><i class="fa fa-print"></i></span>';
     return '<tr>'
         + '<td style="'+(CAN_CHECK_ROW?'':'display:none;')+'"><input type="checkbox" class="ck-row" data-id="'+r.id+'" data-eg-skip="1"></td>'
         + '<td>'+esc(r.doc_no)+'</td>'
@@ -617,7 +624,7 @@ function rowHtml(r){
         + '<td>'+(r.last_printed_at?fmtDate(r.last_printed_at.substring(0,10))+' '+r.last_printed_at.substring(11,16):'<span style="color:#b09a78;font-size:12px;">尚未列印</span>')+'</td>'
         + '<td>'
         + '<span class="ic-op" title="'+(CAN_EDIT?'編輯':'檢視')+'" onclick="openEdit('+r.id+')"><i class="fa fa-'+(CAN_EDIT?'pencil':'eye')+'"></i></span>'
-        + '<span class="ic-op" title="列印" onclick="printDoc('+r.id+')"><i class="fa fa-print"></i></span>'
+        + printIcon
         + (CAN_ADMIN ? '<span class="ic-op" title="刪除" onclick="delDoc('+r.id+')"><i class="fa fa-trash"></i></span>' : '')
         + '</td></tr>';
 }
@@ -964,14 +971,9 @@ function openEdit(id){
         ITEMS = res.items || [];
         renderItems();
         openMask('editMask');
-        // 點開編輯畫面時系統自動加入新檔案／偵測到內容變更（2026-09-24 使用者要求）：
-        // 這是「打開當下才發生」的事，晚一點才彈提示會讓人以為是自己不小心點到，故緊接著跳窗告知
-        if ((res.auto_added_count||0) > 0 || (res.auto_changed_count||0) > 0) {
-            var msg = [];
-            if (res.auto_added_count > 0) msg.push('自動加入 '+res.auto_added_count+' 筆新檔案');
-            if (res.auto_changed_count > 0) msg.push('偵測到 '+res.auto_changed_count+' 筆既有項目內容有變動');
-            alert('系統'+msg.join('、')+'，狀態已改為「需重新確認」，請確認清單內容後按「重新確認」。');
-        }
+        // 點開編輯畫面時系統自動加入新檔案／偵測到內容變更（2026-09-24 使用者要求過要提示，
+        // 2026-09-24 稍後改為使用者要求不要跳出確認窗）：狀態徽章與項目清單已即時反映最新結果
+        // （新加入/內容變更的項目在清單上另有徽章標示，見 renderItems() 的 changedBadge），不再彈窗打斷操作。
     });
 }
 window.btnAddClick = function(){ openEdit(0); };
@@ -1270,14 +1272,18 @@ function buildTypeIdCtrlPrintWindow(res, onDone){
    不合併成單一份文件，所以「每份文件自己一份頁次、只有一頁不顯示頁次」直接沿用單筆列印既有邏輯） ---------- */
 var PRINT_ALL_BATCH_THRESHOLD = 15;
 $('#btnPrintAll').on('click', function(){
-    var ids = CUR_LIST_ROWS.map(function(r){ return r.id; });
-    if (!ids.length){ alert('目前沒有搜尋結果可列印'); return; }
+    // 待確認/需重新確認/已確認但需要更新的文件一律不列入「列印全部」（跟單筆列印同一套擋下規則）
+    var printableRows = CUR_LIST_ROWS.filter(canPrintRow);
+    var skipped = CUR_LIST_ROWS.length - printableRows.length;
+    var ids = printableRows.map(function(r){ return r.id; });
+    if (!ids.length){ alert(skipped ? ('目前搜尋結果共 '+skipped+' 筆，皆為待確認／需重新確認／已確認但需要更新，沒有可列印的文件。') : '目前沒有搜尋結果可列印'); return; }
+    var skipMsg = skipped ? ('（其中 '+skipped+' 筆待確認／需重新確認／已確認但需要更新，已略過不列印）') : '';
     if (ids.length > PRINT_ALL_BATCH_THRESHOLD) {
-        if (!confirm('目前搜尋結果共 '+ids.length+' 筆，數量較多，一次列印可能造成瀏覽器負擔。\n是否改為自動分批列印（依序逐筆觸發，不需手動操作）？\n（若瀏覽器跳出「已封鎖快顯視窗」提示，請允許本頁彈出視窗）')) return;
+        if (!confirm('可列印的搜尋結果共 '+ids.length+' 筆'+skipMsg+'，數量較多，一次列印可能造成瀏覽器負擔。\n是否改為自動分批列印（依序逐筆觸發，不需手動操作）？\n（若瀏覽器跳出「已封鎖快顯視窗」提示，請允許本頁彈出視窗）')) return;
     }
     var idx = 0;
     function next(){
-        if (idx >= ids.length){ alert('已完成列印 '+ids.length+' 筆。'); return; }
+        if (idx >= ids.length){ alert('已完成列印 '+ids.length+' 筆。'+skipMsg); return; }
         var cur = ids[idx++];
         printDoc(cur, next);
     }

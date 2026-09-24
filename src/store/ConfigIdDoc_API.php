@@ -611,6 +611,18 @@ case 'print_get':
     $st->execute([$id]);
     $doc = $st->fetch(PDO::FETCH_ASSOC);
     if (!$doc) jout(['success'=>false,'message'=>'找不到該筆']);
+    // 待確認/需重新確認者一律不可列印（2026-09-24 使用者要求）：尚未經人確認過的內容不該當成正式文件印出。
+    // 已確認但有新檔案/內容變更（needs_update）者同樣擋下——確認當下的清單與目前來源已經不同，
+    // 印出來的內容跟「已確認」的狀態對不起來，一律要先重新確認過才能列印。
+    if ($doc['review_status'] !== 'confirmed') {
+        jout(['success'=>false,'message'=>'此文件尚未確認（目前狀態：'.(REVIEW_LABELS[$doc['review_status']] ?? $doc['review_status']).'），請先完成確認後再列印。']);
+    }
+    if ($doc['part_d_id']) {
+        $diffChk = type_id_ctrl_source_diff($db, (int)$doc['id'], (int)$doc['part_d_id']);
+        if (count($diffChk['new']) > 0 || count($diffChk['changed']) > 0) {
+            jout(['success'=>false,'message'=>'此文件已確認，但偵測到新檔案或內容變更尚待更新，請先「更新狀態」重新確認後再列印。']);
+        }
+    }
     $st = $db->prepare("SELECT * FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 ORDER BY seq");
     $st->execute([$id]);
     $items = array_map(function($it) use ($db) { return buildItemView($db, $it); }, $st->fetchAll(PDO::FETCH_ASSOC));
