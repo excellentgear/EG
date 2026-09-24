@@ -1081,7 +1081,13 @@ function saveAll(confirm){
         action: 'save_all', id: CUR_ID, customer_id: $('#fCustomerId').val(), part_d_id: partDId,
         items: JSON.stringify(items), confirm: confirm ? 1 : 0
     }, function(res){
-        if (!res.success){ alert(res.message||'儲存失敗'); return; }
+        if (!res.success){
+            if (res.dup_id){
+                if (confirm((res.message||'此料號已經有一份型態識別文件管制表')+'\n\n要改為開啟該份嗎？')) openEdit(res.dup_id);
+                return;
+            }
+            alert(res.message||'儲存失敗'); return;
+        }
         closeMask('editMask'); loadList();
     }, 'json');
 }

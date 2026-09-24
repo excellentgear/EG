@@ -175,6 +175,18 @@ case 'save_all':
     $itemsRaw = json_decode((string)($_POST['items'] ?? '[]'), true);
     if (!is_array($itemsRaw)) $itemsRaw = [];
 
+    // 每個料號只能有一份型態識別文件管制表（本模組 2026-08-12 拍板改版的初衷：原本一個料號×一種製程
+    // 各開一份，造成同一張共用圖面在多份管制表重複出現）。sync_part（自動建立）本來就有這道檢查，
+    // 但這裡（畫面「新增」手動存檔）漏了同一道，新增或把既有一筆的料號改成別筆已經在用的都會擋下
+    // （2026-09-24 使用者實測抓到：同一料號建出兩份 20260924001／20260924002）。
+    $dupSt = $db->prepare("SELECT id, doc_no FROM type_id_ctrl_doc WHERE part_d_id=? AND is_deleted=0"
+                          .($id ? " AND id<>?" : "")." LIMIT 1");
+    $dupSt->execute($id ? [$partDId, $id] : [$partDId]);
+    if ($dup = $dupSt->fetch(PDO::FETCH_ASSOC)) {
+        jout(['success'=>false, 'message'=>'此料號已經有一份型態識別文件管制表（文件編號 '.$dup['doc_no'].'），一個料號只能有一份，請直接開啟編輯該份，不要另外建立。',
+              'dup_id'=>(int)$dup['id'], 'dup_doc_no'=>$dup['doc_no']]);
+    }
+
     $db->beginTransaction();
     try {
         if ($id) {
