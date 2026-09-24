@@ -1967,31 +1967,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
         $pdo->commit();
 
-        // 5. 報工NG自動開立品質異常單（2026-09-24 使用者交辦）——刻意放在 commit() 之後、
-        // 用獨立的 try/catch 包住：報工存檔是現場的主要動作，絕對不可以因為異常單開不成
-        // 就讓報工存檔跟著失敗（也不可以讓它的例外掉進上面那個 catch 去 rollBack 一個已經
+        // 5. 報工NG自動開立品質異常單（2026-09-24 使用者交辦，09-24 二次更正累積邏輯）——刻意放在
+        // commit() 之後、用獨立的 try/catch 包住：報工存檔是現場的主要動作，絕對不可以因為異常單
+        // 開不成就讓報工存檔跟著失敗（也不可以讓它的例外掉進上面那個 catch 去 rollBack 一個已經
         // commit 過的交易，那會再炸出「There is no active transaction」）。
+        // 完工＝把這一站累積至今尚未歸入的NG一次加總開一張單（不是每筆報工各開一張）；
+        // 未完工（持續性生產）＝每兩週檢查一次是否該跳提醒，不是每天存檔都問。
         $auto_abnormal = null;
+        $suggest_open = null;
         try {
-            $stNgSum = $pdo->prepare("SELECT COALESCE(SUM(ng_qty),0) FROM pm_process_daily_ng WHERE report_id=?");
-            $stNgSum->execute([$report_id]);
-            $ngTotal = (int)$stNgSum->fetchColumn();
-            if ($ngTotal > 0) {
+            if (!empty($fid)) {
                 require_once __DIR__ . '/../../src/common/qa_abnormal_lib.php';
-                $r = qab_auto_open_from_pm_ng($pdo, (int)$report_id);
-                if ($r && empty($r['skipped'])) {
-                    $auto_abnormal = ['no' => $r['no'], 'opener' => $r['opener']];
+                if ((int)$is_finished === 1) {
+                    $r = qab_auto_open_from_bom_ing($pdo, (int)$fid, (int)$report_id);
+                    if ($r) $auto_abnormal = ['no' => $r['no'], 'opener' => $r['opener'], 'qty' => $r['qty'],
+                                               'period_from' => $r['period_from'], 'period_to' => $r['period_to']];
+                } else {
+                    $s = qab_pm_suggest_check($pdo, (int)$fid);
+                    if ($s) $suggest_open = $s + ['bom_ing_fid' => (int)$fid];
                 }
             }
         } catch (Throwable $eAuto) {
-            error_log('[qab_auto_open_from_pm_ng] report_id=' . $report_id . ' ' . $eAuto->getMessage());
+            error_log('[qab_auto_open_from_bom_ing] bom_ing_fid=' . ($fid ?? '') . ' ' . $eAuto->getMessage());
         }
 
-        echo json_encode(['success' => true, 'message' => '資料已更新', 'auto_abnormal' => $auto_abnormal]);
+        echo json_encode(['success' => true, 'message' => '資料已更新', 'auto_abnormal' => $auto_abnormal, 'suggest_open' => $suggest_open]);
     } catch (Exception $e) {
         $pdo->rollBack();
         $error_msg = $e->getMessage();
         echo json_encode(['success' => false, 'message' => '更新失敗: ' . $error_msg]);
+    }
+    exit;
+}
+
+// =================================================================================
+// 後端邏輯：持續性生產兩週提醒跳窗按下「先開立」——把這一站目前累積的NG一次開單
+// （與完工自動觸發共用同一支 qab_auto_open_from_bom_ing()，鐵律4）
+// =================================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'qab_suggest_accept') {
+    header('Content-Type: application/json');
+    try {
+        $fidAccept = (int)($_POST['bom_ing_fid'] ?? 0);
+        if ($fidAccept <= 0) throw new Exception('缺少 bom_ing_fid');
+        require_once __DIR__ . '/../../src/common/qa_abnormal_lib.php';
+        $r = qab_auto_open_from_bom_ing($pdo, $fidAccept);
+        if (!$r) { echo json_encode(['success' => false, 'message' => '這一站目前沒有累積中的NG，不需要開單']); exit; }
+        echo json_encode(['success' => true, 'no' => $r['no'], 'opener' => $r['opener'], 'qty' => $r['qty'],
+            'period_from' => $r['period_from'], 'period_to' => $r['period_to']]);
+    } catch (Throwable $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
     exit;
 }
@@ -6674,6 +6698,27 @@ function get_state_badge($state)
                     });
 
                     // --- 儲存處理函式 (分流邏輯) ---
+                    // 持續性生產每兩週提醒一次：累積 NG 是否要先開一張異常單（2026-09-24 使用者交辦）。
+                    // 這是「建議」不是強制，使用者可以選先開立或暫不開立；不論選哪個，
+                    // 兩週的冷卻已經在後端 qab_pm_suggest_check() 當下就記過了，下一次要再等兩週才會再問。
+                    function qabHandleSuggestOpen(s, doneCb) {
+                        var periodTxt = s.period_from === s.period_to ? s.period_from : (s.period_from + '～' + s.period_to);
+                        var msg = '這一站自 ' + periodTxt + ' 起累積 ' + s.qty + ' 件NG尚未開立品質異常單，是否現在開立？\n\n（不開立也沒關係，系統會在下次完工時自動累積開單，或兩週後再提醒一次）';
+                        if (!confirm(msg)) { if (doneCb) doneCb(); return; }
+                        $.post('process_schedule.php', { action: 'qab_suggest_accept', bom_ing_fid: s.bom_ing_fid }, function (res) {
+                            if (res.success) {
+                                var pTxt = res.period_from === res.period_to ? res.period_from : (res.period_from + '～' + res.period_to);
+                                showToast('已開立異常單', '單號 ' + res.no + '（累積 ' + pTxt + ' 共 ' + res.qty + ' 件NG，開單人：' + res.opener + '），已轉品管判定', true);
+                            } else {
+                                showToast('錯誤', res.message || '開立失敗', false);
+                            }
+                            if (doneCb) doneCb();
+                        }, 'json').fail(function () {
+                            showToast('錯誤', '連線失敗，請稍後再試', false);
+                            if (doneCb) doneCb();
+                        });
+                    }
+
                     function handleSaveReport() {
                         try {
                             // 若為生管模式 (C)，只更新備註
@@ -6983,12 +7028,21 @@ function get_state_badge($state)
                                     $('#quickReportModal').modal('hide');
                                     showToast('成功', response.message, true);
                                     if (response.auto_abnormal && response.auto_abnormal.no) {
-                                        showToast('已自動開立異常單', '單號 ' + response.auto_abnormal.no + '（開單人：' + response.auto_abnormal.opener + '），已轉品管判定', true);
+                                        var pd = response.auto_abnormal;
+                                        var periodTxt = pd.period_from === pd.period_to ? pd.period_from : (pd.period_from + '～' + pd.period_to);
+                                        showToast('已自動開立異常單', '單號 ' + pd.no + '（累積 ' + periodTxt + ' 共 ' + pd.qty + ' 件NG，開單人：' + pd.opener + '），已轉品管判定', true);
                                     }
-                                    // 延遲 3 秒後重新整理，讓使用者看清楚提示
-                                    setTimeout(function() {
-                                        location.reload();
-                                    }, 3000);
+                                    // 持續性生產（未完工）每兩週提醒一次：累積 report_id 尚未開單時，跳出詢問是否先開一張累積單
+                                    if (response.suggest_open) {
+                                        qabHandleSuggestOpen(response.suggest_open, function () {
+                                            setTimeout(function () { location.reload(); }, 800);
+                                        });
+                                    } else {
+                                        // 延遲 3 秒後重新整理，讓使用者看清楚提示
+                                        setTimeout(function() {
+                                            location.reload();
+                                        }, 3000);
+                                    }
                                 } else {
                                     showToast('錯誤', response.message, false);
                                 }
