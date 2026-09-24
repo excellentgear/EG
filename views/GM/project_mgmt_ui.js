@@ -3153,18 +3153,24 @@ function renderCheck(res) {
             var ph = phase[k] || 'any', rev = r[k + '_rev'] || '';
             /* SOP／SIP 才有「綁定文件」：其餘四項是一個料號一份表單，沒有「挑哪幾份」的問題 */
             var bnd = (k === 'sop' || k === 'sip') ? ssBindCell(r, k, res) : '';
+            /* 使用者 2026-09-24：「應該顯示清楚已綁定的文件名稱就好，不要多餘文字」——
+               rev 這行摘要（製程 X/Y、本專案綁定 N 份（標題…））跟 ssBindCell 底下逐份列出的
+               清單本來就是同一件事的兩種說法，兩個都印會變成「本專案綁定 1 份（KX500 上下工件）」
+               後面又接一行「・KX500 上下工件 Ver.1」。已經有逐份清單時，這一行摘要就不必印。 */
+            var bindList = (r.ss_bind && r.ss_bind[k]) || [];
+            var showRev = rev && !((k === 'sop' || k === 'sip') && bindList.length);
             if (num(r[k])) {
                 /* 已建立的也可以點——點下去開對應頁面並帶料號過去查（SOP／SIP 會自動開在該分頁上） */
                 h += '<td><span class="chk-y chk-go" data-go="' + esc(d[1]) + '" data-kw="' + esc(r.part_no) + '"'
                   + ' title="開啟' + esc(d[0]) + '">✓ 已建立</span>'
-                  + (rev ? '<br><span class="pj-hint">' + esc(rev) + '</span>' : '') + bnd + '</td>';
+                  + (showRev ? '<br><span class="pj-hint">' + esc(rev) + '</span>' : '') + bnd + '</td>';
             } else if (ph === 'after' && !passed) {
                 h += '<td><span class="pj-hint" title="首件通過後才需要建立">－ 首件通過後</span></td>';
             } else {
                 h += '<td><span class="chk-n" data-go="' + esc(d[1]) + '" data-kw="' + esc(r.part_no) + '"'
                   + ' data-doc="' + esc(k) + '" data-ds="' + num(r.ds_pk) + '">✗ 未建立</span>'
                   /* 缺件也要講得出差在哪裡：製程 SOP 只涵蓋一部分時後端會把 n/m 與缺的製程帶回來 */
-                  + (rev ? '<br><span class="pj-hint">' + esc(rev) + '</span>' : '')
+                  + (showRev ? '<br><span class="pj-hint">' + esc(rev) + '</span>' : '')
                   + (ph === 'before' ? '<br><span class="chk-before">送首件前應備</span>' : '') + bnd + '</td>';
             }
         });
