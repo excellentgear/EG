@@ -736,7 +736,7 @@ function buildProcessFullBlock(p, idx){
             out += '<div class="muted-help" style="margin:2px 0 8px;">此批次尚無實測項目</div>';
             return;
         }
-        var body='<table class="pm-items"><thead><tr><th class="c-no">項次</th><th>檢驗項目</th><th>標準</th><th class="c-tol">上差</th><th class="c-tol">下差</th>'+pcsHead+'<th>判定</th></tr></thead><tbody>';
+        var body='<table class="pm-items"><thead><tr><th class="c-no">項次</th><th>檢驗項目</th><th>標準</th><th class="c-tol">公差</th>'+pcsHead+'<th>判定</th></tr></thead><tbody>';
         d.items.forEach(function(it,i2){
             var code=String.fromCharCode(65+(i2%26));
             var cells=''; (it.samples||[]).forEach(function(sv){
@@ -747,9 +747,11 @@ function buildProcessFullBlock(p, idx){
             // 不然照舊印 it.std/it.up/it.lo 會是空的（RANGE 模式根本沒有這三個值）
             var isRange = it.mode==='RANGE';
             var stdTd = isRange ? (trimNum(it.min)+' ~ '+trimNum(it.max)) : (it.std||'');
-            var upTd = isRange ? '' : (it.up||''), loTd = isRange ? '' : (it.lo||'');
+            // 公差上下差同一欄，上差在上、下差另起一行（2026-09-24 使用者要求比照單製程檢驗記錄表
+            // 的寫法，.c-tol .lo 靠下面 CSS display:block 換行，不是兩個獨立欄位）
+            var tolTd = isRange ? '' : (esc(it.up||'')+(it.lo?('<span class="lo">'+esc(it.lo)+'</span>'):''));
             body+='<tr><td>'+code+'</td><td class="tl">'+esc(it.name)+'</td><td>'+esc(stdTd)+'</td>'
-                + '<td>'+esc(upTd)+'</td><td>'+esc(loTd)+'</td>'
+                + '<td class="c-tol">'+tolTd+'</td>'
                 + cells + '<td>'+(it.verdict==='NG'?'<span class="pm-ng">NG</span>':(it.verdict==='AOD'?'特採':'OK'))+'</td></tr>';
         });
         body+='</tbody></table>';
@@ -857,6 +859,7 @@ function doPrintImpl(mode, paper, orient){
         + 'table.pm-items thead th{background:#eee;}'
         + 'table.pm-items thead{display:table-header-group;}'
         + 'table.pm-items td.tl{text-align:left;}'
+        + 'table.pm-items th.c-tol{width:56px;} table.pm-items .c-tol .lo{display:block;}'
         + '.pm-ng-cell{color:#000;font-weight:bold;text-decoration:underline;}'
         + '.pm-pack-tag{display:inline-block;margin-left:6px;background:#F0A24B;color:#4A3524;border-radius:8px;padding:0 6px;font-size:9px;font-weight:bold;vertical-align:middle;}'
         + '@page{size:'+paper+' '+orient+';margin:12mm 10mm 18mm;}';
