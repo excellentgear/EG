@@ -789,10 +789,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             exit;
         }
 
-        // 10. 已結案清單（分頁＋篩選：BOM／料號關鍵字，日期區間預設本月，不限定年份）
+        // 10. 已結案清單（分頁＋篩選：BOM／料號合併成單一關鍵字欄位，日期區間預設本月，不限定年份）
         if ($action === 'list_closed') {
-            $bomKw = trim($_POST['bom'] ?? '');
-            $partKw = trim($_POST['part_no'] ?? '');
+            $kwFilter = trim($_POST['kw'] ?? '');
             $dateFrom = trim($_POST['date_from'] ?? '');
             $dateTo = trim($_POST['date_to'] ?? '');
             $judgeFilter = trim($_POST['judgement'] ?? '');
@@ -802,8 +801,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $where = ["qpi.status = 'closed'"];
             $params = [];
-            if ($bomKw !== '') { $where[] = 'qpi.bom LIKE ?'; $params[] = '%' . $bomKw . '%'; }
-            if ($partKw !== '') { $where[] = 'qpi.part_no LIKE ?'; $params[] = '%' . $partKw . '%'; }
+            if ($kwFilter !== '') {
+                $where[] = '(qpi.bom LIKE ? OR qpi.part_no LIKE ?)';
+                $likeKw = '%' . $kwFilter . '%';
+                array_push($params, $likeKw, $likeKw);
+            }
             if ($dateFrom !== '') { $where[] = 'qpi.inspection_date >= ?'; $params[] = $dateFrom; }
             if ($dateTo !== '') { $where[] = 'qpi.inspection_date <= ?'; $params[] = $dateTo; }
             $whereSqlNoJudge = implode(' AND ', $where);   // 給判定結果卡片計數用：不含判定篩選本身，才能同時看到各判定的筆數
@@ -847,15 +849,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         // 10a. 已結案清單：不分頁，全部符合條件的資料（列印用，鐵律「要看過全部資料才能算出結果」）
         if ($action === 'list_closed_all') {
-            $bomKw = trim($_POST['bom'] ?? '');
-            $partKw = trim($_POST['part_no'] ?? '');
+            $kwFilter = trim($_POST['kw'] ?? '');
             $dateFrom = trim($_POST['date_from'] ?? '');
             $dateTo = trim($_POST['date_to'] ?? '');
             $judgeFilter = trim($_POST['judgement'] ?? '');
             $where = ["qpi.status = 'closed'"];
             $params = [];
-            if ($bomKw !== '') { $where[] = 'qpi.bom LIKE ?'; $params[] = '%' . $bomKw . '%'; }
-            if ($partKw !== '') { $where[] = 'qpi.part_no LIKE ?'; $params[] = '%' . $partKw . '%'; }
+            if ($kwFilter !== '') {
+                $where[] = '(qpi.bom LIKE ? OR qpi.part_no LIKE ?)';
+                $likeKw = '%' . $kwFilter . '%';
+                array_push($params, $likeKw, $likeKw);
+            }
             if ($dateFrom !== '') { $where[] = 'qpi.inspection_date >= ?'; $params[] = $dateFrom; }
             if ($dateTo !== '') { $where[] = 'qpi.inspection_date <= ?'; $params[] = $dateTo; }
             if ($judgeFilter !== '' && in_array($judgeFilter, ['PASS', 'FAIL', 'PENDING'], true)) {
@@ -1131,11 +1135,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                         <div class="pk-judge-card jc-pending" data-judge="PENDING"><span class="n" id="jc-n-pending">0</span><span class="t">待判定</span></div>
                                     </div>
                                     <div class="row" style="margin-bottom:10px;">
-                                        <div class="col-md-2">
-                                            <input type="text" id="cl-f-bom" class="form-control input-sm" placeholder="BOM 關鍵字">
-                                        </div>
-                                        <div class="col-md-2">
-                                            <input type="text" id="cl-f-part" class="form-control input-sm" placeholder="料號關鍵字">
+                                        <div class="col-md-3">
+                                            <input type="text" id="cl-f-kw" class="form-control input-sm" placeholder="BOM／料號關鍵字（輸入即自動查詢）">
                                         </div>
                                         <div class="col-md-2">
                                             <input type="date" id="cl-f-from" class="form-control input-sm">
@@ -1143,14 +1144,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                         <div class="col-md-2">
                                             <input type="date" id="cl-f-to" class="form-control input-sm">
                                         </div>
-                                        <div class="col-md-4 text-right">
-                                            <button class="btn btn-default btn-sm" id="btn-cl-search"><i class="fa fa-search"></i> 查詢</button>
+                                        <div class="col-md-5 text-right">
                                             <button class="btn btn-default btn-sm" id="btn-cl-reset">清除篩選(本月)</button>
                                             <button class="btn btn-default btn-sm" id="btn-cl-print"><i class="fa fa-print"></i> 列印已包裝明細</button>
                                         </div>
                                     </div>
                                     <p class="text-muted" style="margin-bottom:10px;">
-                                        <i class="fa fa-info-circle"></i> 預設顯示本月資料；篩選 BOM／料號不限定年月份。
+                                        <i class="fa fa-info-circle"></i> 預設顯示本月資料；篩選 BOM／料號（同一欄，符合任一即列出）不限定年月份。
                                         已結案紀錄鎖定不可修改，<?= $PK_CAN_ADMIN ? '管理員可點列表右側「解鎖修改」以操作確認密碼開鎖。' : '如需修改請洽管理員以操作確認密碼開鎖。' ?>
                                         <span class="pk-count-badge pull-right" id="cl-count"></span>
                                     </p>
@@ -2343,7 +2343,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             clPage = page || 1;
             var params = {
                 action: 'list_closed', page: clPage, per: 20,
-                bom: $('#cl-f-bom').val(), part_no: $('#cl-f-part').val(),
+                kw: $('#cl-f-kw').val(),
                 date_from: $('#cl-f-from').val(), date_to: $('#cl-f-to').val(),
                 judgement: clJudgeFilter
             };
@@ -2395,8 +2395,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }, 'json');
         }
         $(document).on('click', '.cl-page', function () { loadClosedList($(this).data('p')); });
-        $('#btn-cl-search').click(function () { loadClosedList(1); });
-        $('#btn-cl-reset').click(function () { $('#cl-f-bom, #cl-f-part').val(''); clDefaultRange(); loadClosedList(1); });
+        // 關鍵字改即時查詢（350ms 防抖），不再需要按「查詢」鈕；日期區間一改也直接重新查
+        var clKwTimer = null;
+        $('#cl-f-kw').on('input', function () {
+            clearTimeout(clKwTimer);
+            clKwTimer = setTimeout(function () { loadClosedList(1); }, 350);
+        });
+        $('#cl-f-from, #cl-f-to').on('change', function () { loadClosedList(1); });
+        $('#btn-cl-reset').click(function () { $('#cl-f-kw').val(''); clDefaultRange(); loadClosedList(1); });
         $(document).on('click', '.cl-view', function () { openClosedRecord($(this).data('id'), false); });
         $(document).on('click', '.cl-unlock', function () { openClosedRecord($(this).data('id'), true); });
         $(document).on('click', '.pk-judge-card', function () {
@@ -2407,7 +2413,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         });
 
         $('#btn-cl-print').click(function () {
-            var params = { action: 'list_closed_all', bom: $('#cl-f-bom').val(), part_no: $('#cl-f-part').val(), date_from: $('#cl-f-from').val(), date_to: $('#cl-f-to').val(), judgement: clJudgeFilter };
+            var params = { action: 'list_closed_all', kw: $('#cl-f-kw').val(), date_from: $('#cl-f-from').val(), date_to: $('#cl-f-to').val(), judgement: clJudgeFilter };
             $.post(API, params, function (res) {
                 if (!res.success) { alert('取得資料失敗'); return; }
                 printClosedList(res.data, params);
@@ -2417,8 +2423,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             var win = window.open('', '_blank');
             var rangeTxt = (params.date_from || '（不限）') + ' ~ ' + (params.date_to || '（不限）');
             var filterTxt = [];
-            if (params.bom) filterTxt.push('BOM: ' + params.bom);
-            if (params.part_no) filterTxt.push('料號: ' + params.part_no);
+            if (params.kw) filterTxt.push('BOM／料號: ' + params.kw);
             var judgeName = { PASS: '合格', FAIL: '不合格', PENDING: '待判定' };
             if (params.judgement) filterTxt.push('判定: ' + (judgeName[params.judgement] || params.judgement));
             var body = '<h3>已包裝明細</h3><div>期間：' + rangeTxt + (filterTxt.length ? '　篩選：' + filterTxt.join('、') : '') + '　共 ' + rows.length + ' 筆</div>' +
@@ -2456,8 +2461,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             return r.bom + '/' + (r.part_no || '') + '(' + (judgeName[r.judgement] || r.judgement) + ')';
                         }).join('、') + '），已為您切換到「已結案清單」並篩選出來。');
                         $('#backfillModal').modal('hide');
-                        $('#cl-f-bom').val('');
-                        $('#cl-f-part').val(kw);
+                        $('#cl-f-kw').val(kw);
                         clJudgeFilter = '';
                         $('.pk-judge-card').removeClass('active');
                         $('.pk-judge-card[data-judge=""]').addClass('active');
