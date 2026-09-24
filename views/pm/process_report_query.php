@@ -34,6 +34,8 @@ $pdo = $db->getPDO();
 require_once '../../src/common/asdoc_lib.php';
 // 機台顯示名稱（現場編號／機型／多欄位複合…）：唯一實作在共用庫，設定只存一份，禁止本頁自己拼欄位（鐵律4）
 require_once '../../src/common/machine_label_lib.php';
+// 報工NG補開品質異常單：唯一實作在共用庫（qab_auto_open_from_pm_ng／qab_perms），禁止本頁自己再刻一套建單邏輯
+require_once '../../src/common/qa_abnormal_lib.php';
 define('PRQ_ASDOC_MODULE', 'process_report_query');
 // 料號建議清單上限：料號數以百計，全部塞進 datalist 只會拖慢且沒人捲得完；超過的仍可自行打字查（LIKE 模糊比對不受此限）
 define('PRQ_PART_FACET_LIMIT', 500);
@@ -96,6 +98,10 @@ if (is_null($permission_code)) {
 
 // 誰可以改「列印要綁哪一份 AS 文件」：具修改(U)或全權(A)者；其餘人只看得到目前綁定內容
 $prq_can_bind = (strpos($permission_code, 'A') !== false || strpos($permission_code, 'U') !== false);
+// 誰可以「補開／批次補開」品質異常單：限品質異常單模組的管理員（不是這頁自己的權限），
+// 因為代開牽涉到「現場主管解析出來就直接建單」，本頁只是提供入口，把關規則交給該模組（鐵律4）
+$qab_perms_prq = qab_perms($pdo, $id);
+$prq_can_qab_open = !empty($qab_perms_prq['canAdmin']);
 
 // ================= 共用：組出篩選條件（list / get_print / export_csv / get_facets 共用，避免各自重寫一份） =================
 // $exclude：計算某個篩選欄位自己的可選清單(facet)時，要排除該欄位自己的條件，只套用「其餘」條件
@@ -137,7 +143,8 @@ $PRQ_FROM = "FROM pm_process_daily_report pdr
     LEFT JOIN user u2 ON pdr.production_user_id = u2.id
     LEFT JOIN process_no pn ON pdr.process_no = pn.ProcessNo
     LEFT JOIN bom_ing bi ON pdr.bom_ing_fid = bi.bom_ing_fid
-    LEFT JOIN bom b ON bi.bom = b.bom";
+    LEFT JOIN bom b ON bi.bom = b.bom
+    LEFT JOIN qa_abnormal_order qao ON qao.id = pdr.abnormal_order_id";
 
 $PRQ_COLS = "pdr.report_id, pdr.report_date, pdr.report_source, pdr.remark, pdr.produced_qty, pdr.is_finished,
     pdr.process_face, pdr.source_reason,
@@ -145,7 +152,8 @@ $PRQ_COLS = "pdr.report_id, pdr.report_date, pdr.report_source, pdr.remark, pdr.
     " . eg_machine_label_sql('m', 'mpt') . ",
     u1.user_cname AS setup_user, u2.user_cname AS prod_user, pn.ProcessName,
     bi.bom, b.d_id, b.Client_Name,
-    (SELECT COALESCE(SUM(ng_qty),0) FROM pm_process_daily_ng WHERE report_id = pdr.report_id) AS ng_qty";
+    (SELECT COALESCE(SUM(ng_qty),0) FROM pm_process_daily_ng WHERE report_id = pdr.report_id) AS ng_qty,
+    pdr.abnormal_order_id, qao.abnormal_order_no";
 
 $PRQ_MLBL = eg_machine_label_cfg($pdo);
 
@@ -298,6 +306,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 給 eg_asdoc_picker.js 用：可綁定文件清單＋目前綁定；can_bind 決定前端要不要顯示「變更綁定」鈕
             echo json_encode(['success' => true, 'docs' => eg_asdoc_list($pdo),
                 'cur' => eg_asdoc_get($pdo, PRQ_ASDOC_MODULE), 'can_bind' => $prq_can_bind]);
+        } elseif ($action === 'qab_backfill_open') {
+            // 單筆／批次「補開品質異常單」——供現場漏開或舊資料回溯用，與 process_schedule.php 存檔當下
+            // 自動觸發共用同一支 qab_auto_open_from_pm_ng()（鐵律4：不要再刻一套建單邏輯）。
+            // 後端同規則再擋一次權限（鐵律8）：前端只有管理員看得到按鈕，這裡不管前端擋不擋都再驗一次。
+            if (!$prq_can_qab_open) { echo json_encode(['success' => false, 'message' => '需要品質異常單管理員權限才能補開']); exit; }
+            $ids = json_decode((string)($_POST['report_ids'] ?? '[]'), true);
+            if (!is_array($ids)) $ids = [];
+            $ids = array_values(array_unique(array_filter(array_map('intval', $ids), function ($v) { return $v > 0; })));
+            if (!$ids) { echo json_encode(['success' => false, 'message' => '請至少選擇一筆報工紀錄']); exit; }
+            if (count($ids) > 200) { echo json_encode(['success' => false, 'message' => '一次最多補開 200 筆']); exit; }
+            $created = 0; $skipped = 0; $failed = [];
+            foreach ($ids as $rid) {
+                try {
+                    $r = qab_auto_open_from_pm_ng($pdo, $rid);
+                    if ($r === null) { $skipped++; continue; }             // 這筆其實沒有 NG，跳過
+                    if (!empty($r['skipped'])) { $skipped++; continue; }   // 已經開過單
+                    $created++;
+                } catch (Throwable $e) {
+                    $failed[] = ['report_id' => $rid, 'message' => $e->getMessage()];
+                }
+            }
+            echo json_encode(['success' => true, 'created' => $created, 'skipped' => $skipped, 'failed' => $failed]);
         } elseif ($action === 'asdoc_save') {
             // 前端已依 can_bind 隱藏按鈕，後端仍再擋一次（鐵律8：不可只做前端擋）
             if (!$prq_can_bind) { echo json_encode(['success' => false, 'message' => '無權限修改 AS 文件綁定']); exit; }
@@ -419,7 +449,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <input type="text" id="fRemark" placeholder="關鍵字" style="width:120px;">
                 <button class="btn-warm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
                 <button id="btnClear"><i class="fa fa-eraser"></i> 清除篩選(查全部)</button>
-                <button id="btnPrint" style="margin-left:auto;"><i class="fa fa-print"></i> 列印</button>
+                <?php if ($prq_can_qab_open): ?>
+                <button id="btnQabBatch" class="btn-warm" style="margin-left:auto;" disabled><i class="fa fa-file-text-o"></i> 批次補開異常單(<span id="qabSelCount">0</span>)</button>
+                <?php endif; ?>
+                <button id="btnPrint"<?php if (!$prq_can_qab_open) echo ' style="margin-left:auto;"'; ?>><i class="fa fa-print"></i> 列印</button>
                 <button id="btnExportCsv"><i class="fa fa-file-excel-o"></i> 匯出CSV</button>
             </div>
             <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%;margin-top:6px;padding-top:6px;border-top:1px dashed #EADFC8;">
@@ -459,10 +492,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <div class="prq-table-wrap">
             <table class="prq-table" id="prqTable">
                 <thead><tr>
+                    <th class="prq-ck-col"<?php if (!$prq_can_qab_open) echo ' style="display:none"'; ?>><input type="checkbox" id="ckAll"></th>
                     <th>日期</th><th>製程</th><th>機台</th><th class="t-left">工單</th><th class="t-left">料號</th><th>客戶</th>
                     <th>架機人員</th><th>架機時間</th><th>生產人員</th><th>生產時間</th><th>良品</th><th>NG</th><th>加工總數</th><th>完工</th><th>加工面</th><th class="t-left">備註</th>
+                    <th>異常單</th>
                 </tr></thead>
-                <tbody id="prqTbody"><tr><td colspan="16" class="prq-empty">請設定篩選條件後查詢</td></tr></tbody>
+                <tbody id="prqTbody"><tr><td colspan="18" class="prq-empty">請設定篩選條件後查詢</td></tr></tbody>
             </table>
         </div>
         <div class="prq-pager" id="prqPager"></div>
@@ -555,6 +590,8 @@ var COMPANY = '';
 var lastTotal = 0;
 var curPage = 1;
 var curProcess = ''; // 製程改用「製程大類」頁籤按鈕，不再是逐一製程 <select>，用全域變數記目前選中的 process_type_id
+var PRQ_CAN_QAB = <?= $prq_can_qab_open ? 'true' : 'false' ?>; // 是否看得到「補開異常單」勾選欄與批次鈕
+var qabSelected = {}; // report_id => true，跨頁換頁仍保留（比照鐵律6 點開即刷新的精神：勾選的是資料不是DOM狀態）
 
 function esc(s){ return $('<div>').text(s==null?'':String(s)).html(); }
 
@@ -595,7 +632,27 @@ function rowToTr(r){
     var custTxt = isTemp ? esc(r.source_reason || '') : esc(r.Client_Name);
     var okQty = parseInt(r.produced_qty, 10) || 0;
     var ngQty = parseInt(r.ng_qty, 10) || 0;
+    var rid = parseInt(r.report_id, 10) || 0;
+
+    // 勾選欄：只有 NG>0 且尚未開單的列才給勾（沒有 NG 的列勾了也沒意義；已開單的列不該重複補開）
+    var ckHtml = '';
+    if (ngQty > 0 && !r.abnormal_order_id) {
+        var checked = qabSelected[rid] ? ' checked' : '';
+        ckHtml = '<input type="checkbox" class="qab-ck" data-rid="' + rid + '"' + checked + '>';
+    }
+
+    // 異常單狀態：已開單顯示單號連結；NG>0未開單顯示「補開」鈕；NG=0不顯示
+    var abnHtml = '';
+    if (r.abnormal_order_id) {
+        abnHtml = '<a href="../QA/qa_abnormal_form.php?id=' + r.abnormal_order_id + '" target="_blank">' + esc(r.abnormal_order_no || ('#' + r.abnormal_order_id)) + '</a>';
+    } else if (ngQty > 0 && PRQ_CAN_QAB) {
+        abnHtml = '<button class="btn-warm qab-open-one" data-rid="' + rid + '" style="height:22px;padding:0 8px;font-size:12px;">補開</button>';
+    } else if (ngQty > 0) {
+        abnHtml = '<span class="text-muted" style="font-size:12px;">尚未開單</span>';
+    }
+
     return '<tr>'
+        + '<td class="prq-ck-col"' + (PRQ_CAN_QAB ? '' : ' style="display:none"') + '>' + ckHtml + '</td>'
         + '<td>' + esc(egFmtDate(r.report_date)) + '</td>'
         + '<td>' + esc(r.ProcessName) + '</td>'
         + '<td>' + esc(r.machine_label || r.machine) + '</td>'
@@ -612,7 +669,15 @@ function rowToTr(r){
         + '<td>' + (r.is_finished ? '是' : '否') + '</td>'
         + '<td>' + esc(r.process_face || '-') + '</td>'
         + '<td class="t-left">' + esc(r.remark || '') + '</td>'
+        + '<td>' + abnHtml + '</td>'
         + '</tr>';
+}
+
+function qabUpdateSelCount(){
+    var n = 0;
+    for (var k in qabSelected) if (qabSelected[k]) n++;
+    $('#qabSelCount').text(n);
+    $('#btnQabBatch').prop('disabled', n === 0);
 }
 
 function renderPager(total, page, pageSize){
@@ -640,16 +705,18 @@ function loadList(page){
     f.action = 'list';
     f.page = page;
     f.page_size = $('#pageSizeSel').val();
-    $('#prqTbody').html('<tr><td colspan="16" class="prq-empty"><i class="fa fa-spinner fa-spin"></i> 載入中...</td></tr>');
+    $('#prqTbody').html('<tr><td colspan="18" class="prq-empty"><i class="fa fa-spinner fa-spin"></i> 載入中...</td></tr>');
     $.post('', f, function(res){
-        if (!res.success){ $('#prqTbody').html('<tr><td colspan="16" class="prq-empty">' + esc(res.message||'查詢失敗') + '</td></tr>'); return; }
+        if (!res.success){ $('#prqTbody').html('<tr><td colspan="18" class="prq-empty">' + esc(res.message||'查詢失敗') + '</td></tr>'); return; }
         lastTotal = res.total;
         $('#statTotal').text(res.total);
         if (!res.rows.length){
-            $('#prqTbody').html('<tr><td colspan="16" class="prq-empty">查無符合條件的報工紀錄</td></tr>');
+            $('#prqTbody').html('<tr><td colspan="18" class="prq-empty">查無符合條件的報工紀錄</td></tr>');
         } else {
             $('#prqTbody').html(res.rows.map(rowToTr).join(''));
         }
+        $('#ckAll').prop('checked', false);
+        qabUpdateSelCount();
         renderPager(res.total, res.page, res.page_size);
     }, 'json');
 }
@@ -812,6 +879,53 @@ $('#btnExportCsv').on('click', function(){
     $form[0].submit();
     $form.remove();
 });
+
+// ── 報工NG補開品質異常單：勾選（跨頁保留，存的是 report_id 不是 DOM 狀態）＋單筆/批次補開 ──
+if (PRQ_CAN_QAB) {
+    $(document).on('change', '.qab-ck', function(){
+        var rid = parseInt($(this).data('rid'), 10);
+        qabSelected[rid] = $(this).is(':checked');
+        qabUpdateSelCount();
+    });
+    $('#ckAll').on('change', function(){
+        var on = $(this).is(':checked');
+        $('.qab-ck').prop('checked', on).each(function(){
+            qabSelected[parseInt($(this).data('rid'), 10)] = on;
+        });
+        qabUpdateSelCount();
+    });
+
+    function qabOpenReportIds(ids, btn){
+        if (!ids.length) return;
+        if (btn) btn.prop('disabled', true);
+        $.post('', {action: 'qab_backfill_open', report_ids: JSON.stringify(ids)}, function(res){
+            if (btn) btn.prop('disabled', false);
+            if (!res.success) { alert(res.message || '補開失敗'); return; }
+            var msg = '已開立 ' + res.created + ' 張';
+            if (res.skipped) msg += '，' + res.skipped + ' 筆略過（無NG或已開過單）';
+            if (res.failed && res.failed.length) msg += '，' + res.failed.length + ' 筆失敗：' + res.failed.map(function(f){ return 'report_id=' + f.report_id + '(' + f.message + ')'; }).join('；');
+            alert(msg);
+            qabSelected = {};
+            loadList(curPage); // 點開即刷新：補開後這一頁的異常單欄一定要重新反映最新狀態
+        }, 'json').fail(function(){
+            if (btn) btn.prop('disabled', false);
+            alert('連線失敗，請稍後再試');
+        });
+    }
+
+    $(document).on('click', '.qab-open-one', function(){
+        var rid = parseInt($(this).data('rid'), 10);
+        qabOpenReportIds([rid], $(this));
+    });
+
+    $('#btnQabBatch').on('click', function(){
+        var ids = [];
+        for (var k in qabSelected) if (qabSelected[k]) ids.push(parseInt(k, 10));
+        if (!ids.length) return;
+        if (!confirm('確定要為這 ' + ids.length + ' 筆報工紀錄補開品質異常單嗎？（會依報工人員所屬部門自動解析現場主管當開單人）')) return;
+        qabOpenReportIds(ids, $(this));
+    });
+}
 
 // ── AS 文件編號綁定：UI 一律走共用 eg_asdoc_picker.js（打編號即時篩選＋清單），禁止自刻下拉（ai-rules/16 第一之三節）──
 var AS_DOCS = [], AS_CUR = null;
