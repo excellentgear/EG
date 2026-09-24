@@ -222,6 +222,9 @@ function qab_ensure_schema(PDO $db): void
         'deleted_by'       => "ADD COLUMN deleted_by INT NULL",
         'resp_vendor_manual'  => "ADD COLUMN resp_vendor_manual TINYINT(1) NOT NULL DEFAULT 0 COMMENT '責任廠商是人工改的（不是由製令製程自動帶），畫面與列印要標示'",
         'resp_process_manual' => "ADD COLUMN resp_process_manual TINYINT(1) NOT NULL DEFAULT 0 COMMENT '責任製程是人工改的（不是從製令製程挑的）'",
+        'auto_opened'      => "ADD COLUMN auto_opened TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=系統自動開立（報工NG觸發），非人工手動建立'",
+        'auto_open_note'   => "ADD COLUMN auto_open_note VARCHAR(255) NULL COMMENT '自動開立的現場主管解析軌跡（誰不在職、最後選到誰），供追溯'",
+        'pm_report_id'     => "ADD COLUMN pm_report_id INT NULL COMMENT '來源報工紀錄 pm_process_daily_report.report_id（報廢扣減下游數量要靠它回推是哪一站發現的）'",
     ];
     foreach ($need as $c => $sql) if (!in_array($c, $cols, true)) $add[] = rtrim($sql, ',');
     if ($add) $db->exec("ALTER TABLE qa_abnormal_order " . implode(', ', $add));
@@ -258,6 +261,14 @@ function qab_ensure_schema(PDO $db): void
     ];
     foreach ($fneed as $c => $sql) if (!in_array($c, $fcols, true)) $fadd[] = $sql;
     if ($fadd) $db->exec("ALTER TABLE qa_abnormal_order_flow " . implode(', ', $fadd));
+
+    // 報工NG自動開單：一筆報工最多對到一張異常單，靠這欄防重複建立
+    try {
+        $pcols = $db->query("SHOW COLUMNS FROM pm_process_daily_report")->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('abnormal_order_id', $pcols, true)) {
+            $db->exec("ALTER TABLE pm_process_daily_report ADD COLUMN abnormal_order_id INT NULL COMMENT '報工NG自動/補開的品質異常單 qa_abnormal_order.id；NULL=尚未開單'");
+        }
+    } catch (Throwable $e) {}
 
     qab_seed_defaults($db);
 }
@@ -653,6 +664,109 @@ function qab_person_asof(PDO $db, int $uid, string $date): array
 }
 
 /**
+ * 新增一張品質異常單——唯一寫入路徑（2026-09-24 從 QaAbnormal_API.php 的 case 'create' 抽出）。
+ * 人工開單（`QaAbnormal_API.php`）與「報工NG自動開單／管理員批次補開」（`qab_auto_open_from_pm_ng()`）
+ * 共用這一支，不要再各刻一份——`created_by` 一律由呼叫端明確傳入（不可在這裡讀 $_SESSION），
+ * 因為自動開單時「開單人」是解析出來的現場主管，不是操作當下按存檔的那個人。
+ *
+ * $data 可用鍵：kind('ir'|'bom')、fill_date、ir_id、bom_no、client_name、part_no、batch_qty、
+ *              insp_qty、ng_qty、abnormal_phenomenon、created_by（必填）、
+ *              resp_process_no（責任製程，選填；自動開單會直接帶，人工開單留給之後在「責任單位」段填）、
+ *              auto_opened、auto_open_note、pm_report_id（報工NG自動/補開才會有）。
+ * 回傳 ['id'=>int, 'no'=>string]，失敗一律丟例外（呼叫端自行決定要不要 catch）。
+ */
+function qab_create_order(PDO $db, array $data): array
+{
+    $uid = (int)($data['created_by'] ?? 0);
+    if ($uid <= 0) throw new Exception('qab_create_order 缺少 created_by');
+    $kind = ($data['kind'] ?? '') === 'ir' ? 'ir' : 'bom';
+    $fillDate = trim((string)($data['fill_date'] ?? '')) ?: date('Y-m-d');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $fillDate)) throw new Exception('填寫日期格式不正確');
+
+    $strOrNull = function ($v, $max) {
+        if ($v === null) return null;
+        $v = trim((string)$v);
+        return $v === '' ? null : mb_substr($v, 0, $max);
+    };
+    $intOrNull = function ($v) {
+        if ($v === null || $v === '') return null;
+        return (int)$v;
+    };
+
+    $irId = null; $irNo = null;
+    $bomNo = $strOrNull($data['bom_no'] ?? null, 30);
+    $client = $strOrNull($data['client_name'] ?? null, 60);
+    $partNo = $strOrNull($data['part_no'] ?? null, 60);
+    $batch = $intOrNull($data['batch_qty'] ?? null);
+
+    if ($kind === 'ir') {
+        $irId = (int)($data['ir_id'] ?? 0);
+        if ($irId <= 0) throw new Exception('客退來源請先選擇客退單（IR）');
+        $st = $db->prepare("SELECT IR_id, IR_no, Client_name, d_id, Qty FROM ir_track WHERE IR_id=?");
+        $st->execute([$irId]);
+        $ir = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$ir) throw new Exception('找不到這張客退單');
+        $irNo = (string)$ir['IR_no'];
+        if ($partNo === null) $partNo = $ir['d_id'] !== '' ? mb_substr((string)$ir['d_id'], 0, 60) : null;
+        if ($batch === null)  $batch  = $ir['Qty'] !== null ? (int)$ir['Qty'] : null;
+    } else {
+        if ($bomNo === null) throw new Exception('製程來源請先選擇製令編號');
+        $st = $db->prepare("SELECT bom, d_id, Client_Name, sqty FROM bom WHERE bom=?");
+        $st->execute([$bomNo]);
+        $b = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$b) throw new Exception('找不到這張製令');
+        if ($partNo === null) $partNo = $b['d_id'] !== '' ? mb_substr((string)$b['d_id'], 0, 60) : null;
+        if ($batch === null)  $batch  = $b['sqty'] !== null ? (int)$b['sqty'] : null;
+    }
+    if ($kind === 'ir' && $bomNo !== null) {
+        $chk = $db->prepare("SELECT 1 FROM bom WHERE bom=?");
+        $chk->execute([$bomNo]);
+        if (!$chk->fetchColumn()) throw new Exception('要綁定的製令編號不存在');
+    }
+
+    // 客戶與料號一律由來源綁定，不採信呼叫端傳來的文字（與人工開單同一規則）
+    $srcInfo = qab_resolve_source($db, $bomNo, $irId);
+    $cli = $srcInfo['client'];
+    $partDid = null;
+    if ($srcInfo['src'] !== '') {
+        $client  = $cli['name'];
+        $partNo  = $srcInfo['part_no'];
+        $partDid = $srcInfo['part_d_id'];
+        if ($batch === null) $batch = $srcInfo['batch'];
+    }
+
+    $ngQty = $intOrNull($data['ng_qty'] ?? null);
+    $inspQty = $intOrNull($data['insp_qty'] ?? null);
+    if ($inspQty === null && $batch && function_exists('qc_suggest_sample_qty')) {
+        $inspQty = qc_suggest_sample_qty($db, (int)$batch);
+    }
+    $respProcessNo = $intOrNull($data['resp_process_no'] ?? null);
+    $autoOpened = !empty($data['auto_opened']) ? 1 : 0;
+    $autoNote = $strOrNull($data['auto_open_note'] ?? null, 255);
+    $pmReportId = $intOrNull($data['pm_report_id'] ?? null);
+    $phenomenon = $strOrNull($data['abnormal_phenomenon'] ?? null, 2000);
+
+    $db->beginTransaction();
+    try {
+        $no = qab_next_order_no($db, $fillDate);
+        $db->prepare("INSERT INTO qa_abnormal_order
+            (abnormal_order_no, source_type, source_id, occurrence_date, fill_date, found_unit,
+             ir_id, ir_no, bom_no, client_id, client_name, part_no, part_d_id, batch_qty, insp_qty, ng_qty,
+             abnormal_phenomenon, created_by, created_at, surcharge_rate,
+             resp_process_no, auto_opened, auto_open_note, pm_report_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?,?,?,?)")
+           ->execute([$no, ($kind === 'ir' ? 'IR' : 'BOM'), (int)($irId ?: 0), $fillDate, $fillDate,
+                      ($kind === 'ir' ? '客退' : '廠內'), $irId, $irNo, $bomNo, $cli['id'], $client, $partNo, $partDid, $batch,
+                      $inspQty, $ngQty, $phenomenon, $uid, qab_default_rate($db),
+                      $respProcessNo, $autoOpened, $autoNote, $pmReportId]);
+        $id = (int)$db->lastInsertId();
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    qab_sync_ir_flag($db, $irId);
+    return ['id' => $id, 'no' => $no];
+}
+
+/**
  * 客退單上的「已開立異常單」旗標（`ir_track.has_ncr`）。
  * 退貨單追蹤頁是靠它決定要顯示「開立」還是單號，本模組開單後沒同步就會一直顯示「開立」（使用者回報）。
  * **清成 0 之前要確認舊模組（qa_ir_ncr）也沒有紀錄**——那張表也會把同一個旗標設成 1，
@@ -674,6 +788,82 @@ function qab_sync_ir_flag(PDO $db, ?int $irId): void
         }
         $db->prepare("UPDATE ir_track SET has_ncr=? WHERE IR_id=?")->execute([$n > 0 ? 1 : 0, $irId]);
     } catch (Throwable $e) { /* 舊模組的表不在時就只看本模組 */ }
+}
+
+/**
+ * 由一筆「報工紀錄」自動（或管理員補開）建立一張品質異常單——2026-09-24 使用者交辦。
+ * 唯一呼叫時機：①`process_schedule.php`/`process_schedule_NOW.php` 存檔報工當下 NG>0 時自動觸發，
+ * ②`process_report_query.php` 管理員對舊報工「補開」或「批次補開」時手動觸發（傳入的是該筆報工的
+ * `report_date`，不是今天——現場主管要依當時日期回推是誰、是不是請假，見 ai-rules/22 的精神）。
+ *
+ * 開單人＝現場主管：報工人員（`production_user_id`，缺值退回 `Created_By`）所屬部門的單位主管，
+ * 若當天不在職/請假則逐層往上找、最後保底找到全站最高決策者（`eg_unit_supervisor_available()`）。
+ * 這支**只負責找人與建單，不做任何權限檢查**——它本來就是系統代表「現場主管」這個角色自動執行的
+ * 動作，不是某個登入者在操作。
+ *
+ * @return array|null 成功回傳 ['id'=>,'no'=>,'opener'=>...]；
+ *   已經開過單（`abnormal_order_id` 有值）回傳 ['skipped'=>true,'id'=>既有id,'no'=>既有單號]；
+ *   這筆報工本身沒有NG（不該被呼叫，防呆）回傳 null。
+ * 呼叫端（尤其是報工存檔的路徑）務必自己包 try/catch——**這支失敗絕不可以讓報工存不進去**。
+ */
+function qab_auto_open_from_pm_ng(PDO $db, int $reportId): ?array
+{
+    require_once __DIR__ . '/unit_supervisor_lib.php';
+    qab_ensure_schema($db);
+
+    $st = $db->prepare("SELECT pdr.report_id, pdr.bom_ing_fid, pdr.report_date, pdr.produced_qty,
+                                pdr.production_user_id, pdr.Created_By, pdr.abnormal_order_id,
+                                bi.bom, bi.process_no
+                         FROM pm_process_daily_report pdr
+                         JOIN bom_ing bi ON bi.bom_ing_fid = pdr.bom_ing_fid
+                         WHERE pdr.report_id = ?");
+    $st->execute([$reportId]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$r) return null;
+    if (!empty($r['abnormal_order_id'])) {
+        $st2 = $db->prepare("SELECT abnormal_order_no FROM qa_abnormal_order WHERE id=?");
+        $st2->execute([(int)$r['abnormal_order_id']]);
+        return ['skipped' => true, 'id' => (int)$r['abnormal_order_id'], 'no' => (string)$st2->fetchColumn()];
+    }
+
+    $stNg = $db->prepare("SELECT COALESCE(SUM(ng_qty),0) FROM pm_process_daily_ng WHERE report_id=?");
+    $stNg->execute([$reportId]);
+    $ngQty = (int)$stNg->fetchColumn();
+    if ($ngQty <= 0) return null; // 沒有 NG，這支不該被呼叫（呼叫端應自行先判斷）
+
+    $reportDate = (string)$r['report_date'];
+    $prodUserId = (int)($r['production_user_id'] ?: $r['Created_By']);
+    $opener = eg_unit_supervisor_available($db, $prodUserId, null, $reportDate);
+    if (empty($opener['id'])) {
+        // 連最高決策者都沒綁定——這是組織設定缺口，不是這支的錯，留下明確原因讓管理員去 process_report_query.php 補開
+        throw new Exception('找不到可以自動開單的現場主管（含最高決策者皆未綁定），請至 org_role_setting 設定「最高核准人員」後再補開');
+    }
+
+    $noteParts = [];
+    if ($opener['source'] === 'top_approver') $noteParts[] = '逐層往上皆無可用主管，改由全站最高決策者開立';
+    if (!empty($opener['trail'])) $noteParts[] = '略過：' . implode('、', $opener['trail']);
+    $noteParts[] = '報工人員：' . $prodUserId . '；製程：' . (string)$r['process_no'];
+    $autoNote = mb_substr(implode('；', $noteParts), 0, 255);
+
+    $produced = (int)($r['produced_qty'] ?? 0);
+    $data = [
+        'kind' => 'bom',
+        'bom_no' => (string)$r['bom'],
+        'fill_date' => $reportDate,
+        'batch_qty' => $produced + $ngQty,
+        'insp_qty' => $produced + $ngQty,   // 報工是逐件自檢，不是抽樣，檢驗數＝全數
+        'ng_qty' => $ngQty,
+        'abnormal_phenomenon' => '報工發現不良，自動開立（原始數量請於原因分類補充說明）',
+        'created_by' => (int)$opener['id'],
+        'resp_process_no' => (int)$r['process_no'],
+        'auto_opened' => 1,
+        'auto_open_note' => $autoNote,
+        'pm_report_id' => $reportId,
+    ];
+    $created = qab_create_order($db, $data);
+    $db->prepare("UPDATE pm_process_daily_report SET abnormal_order_id=? WHERE report_id=?")
+       ->execute([$created['id'], $reportId]);
+    return ['id' => $created['id'], 'no' => $created['no'], 'opener' => $opener['name'], 'skipped' => false];
 }
 
 /** 清單的年度下拉：只列「真的有資料」的年度（使用者要求，免得列出一堆空年度） */
@@ -1289,6 +1479,51 @@ function qab_scrap_alloc(PDO $db, ?string $ymd = null): string
     }
     $roc = (int)date('Y', $ts) - 1911;
     return 'F' . str_pad((string)$roc, 3, '0', STR_PAD_LEFT) . date('md', $ts) . str_pad((string)$next, 3, '0', STR_PAD_LEFT);
+}
+
+/**
+ * 這張 BOM 已經「結案配發報廐單號」的確認報廐數量——待包裝／BOM總覽／檢驗表的「良品數」、
+ * 快速出貨的可出量，一律呼叫這支，不要各自寫一份加總（鐵律4）。
+ *
+ * 只算 is_closed=1 AND scrap_no IS NOT NULL（=使用者拍板「異常單結案配號時才正式扣」，
+ * 沒有另外存一個「已確認」狀態，這兩個條件本身就是唯一真相）；同一張單的 ng_qty 整筆都算報廐
+ * （本模組的處置決策是整張單一次裁決，沒有做「這張單一部分報廐一部分特採」的切分，與 qab_final() 同一個粒度）。
+ *
+ * $uptoBomSn：
+ *   null（預設）＝整張 BOM 的總確認報廐量，不分站——給包裝、BOM 總覽這種「整批」畫面用。
+ *   帶入數字＝只算「發現時所在站別 bom_sn ≤ 這個值」的報廐量——給某一站自己的檢驗表算「這一站的良品數」用
+ *   （使用者拍板：報廐只影響「該站之後（含該站）」，該站之前已經發生的事實不動）。
+ *
+ * 找「哪一站發現的」：優先用 pm_report_id（報工NG自動/補開一定會填，直接回推 bom_ing_fid 最準）；
+ * 沒有就退回 resp_process_no（人工開單填的責任製程，同一 bom 同 process_no 取最早一站，較保守）；
+ * 兩者都沒有（人工開單、還沒填責任製程）就視為第 0 站＝不管 $uptoBomSn 是多少都照算，
+ * 寧可讓還沒查清楚來源的報廐多扣一點，也不要在攔阻出貨的數字上漏算。
+ */
+function qab_bom_scrap_qty(PDO $db, string $bom, ?int $uptoBomSn = null): int
+{
+    $bom = trim($bom);
+    if ($bom === '') return 0;
+    $st = $db->prepare("SELECT o.ng_qty, o.pm_report_id, o.resp_process_no,
+                                pr.bom_ing_fid AS pm_bom_ing_fid,
+                                (SELECT MIN(bi2.bom_sn) FROM bom_ing bi2
+                                  WHERE bi2.bom=o.bom_no AND bi2.process_no=o.resp_process_no) AS resp_bom_sn,
+                                bi_pm.bom_sn AS pm_bom_sn
+                         FROM qa_abnormal_order o
+                         LEFT JOIN pm_process_daily_report pr ON pr.report_id=o.pm_report_id
+                         LEFT JOIN bom_ing bi_pm ON bi_pm.bom_ing_fid=pr.bom_ing_fid
+                         WHERE o.bom_no=? AND o.is_closed=1 AND o.scrap_no IS NOT NULL AND o.deleted_at IS NULL");
+    $st->execute([$bom]);
+    $sum = 0;
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        if ($uptoBomSn !== null) {
+            $originSn = null;
+            if ($r['pm_report_id']) $originSn = $r['pm_bom_sn'] !== null ? (int)$r['pm_bom_sn'] : null;
+            if ($originSn === null && $r['resp_process_no']) $originSn = $r['resp_bom_sn'] !== null ? (int)$r['resp_bom_sn'] : null;
+            if ($originSn !== null && $originSn > $uptoBomSn) continue; // 發現於這一站之後，還不影響這一站
+        }
+        $sum += (int)($r['ng_qty'] ?? 0);
+    }
+    return $sum;
 }
 
 /* ─────────────────────────────────────────────────────────────
