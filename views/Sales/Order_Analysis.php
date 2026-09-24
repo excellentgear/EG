@@ -646,6 +646,19 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 </div>
 <?php endif; ?>
 
+<!-- 客戶唯讀檢視：不開新視窗（window.open 在目前瀏覽器下其實是一個可移動/有網址列的
+     正常視窗，一點都不像原本編輯客戶那種固定對話框），改用同一套 .m-mask/.m-win 疊一層，
+     裡面塞 master_data_management.php 的極簡唯讀片段（?view_customer=&embed=1）。
+     iframe 高度由裡面用 postMessage 回報，長多高就給多高，不會出現內部捲軸。 -->
+<div class="m-mask" id="custViewMask">
+  <div class="m-win" id="custViewWin" style="width:760px;">
+    <div class="m-head" id="custViewTitle">檢視客戶基本資料 <span class="x" onclick="closeCustView()">✕</span></div>
+    <div class="m-body" style="padding:0;overflow:hidden;">
+      <iframe id="custViewFrame" src="about:blank" style="display:block;width:100%;height:420px;border:0;"></iframe>
+    </div>
+  </div>
+</div>
+
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/fastclick.js"></script>
@@ -680,19 +693,29 @@ function oaOpenDrawing(pid, pno){
     'width=' + pw + ',height=' + ph + ',left=' + Math.round((w - pw) / 2) + ',top=' + Math.round((h - ph) / 2)
     + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no');
 }
-/* 點客戶名稱 → 開客戶主檔唯讀檢視（新跳窗，master_data_management.php 的客戶分頁，
-   基本資料／結帳付款…分頁可切換，但只能看不能改）。未建主檔（cid 空或未帶）不給點。
-   帶 ?view_customer= 那一頁會把側欄／頂欄／清單整個藏起來，只露出跳窗本身，
-   所以視窗不必再另外留側欄的寬度。 */
+/* 點客戶名稱 → 開客戶主檔唯讀檢視。不用 window.open：新版瀏覽器下 window.open 開出來的
+   其實是一個可移動、有網址列的正常視窗，一點都不像原本編輯客戶那種固定對話框——改成用本頁
+   既有的 .m-mask/.m-win 疊一層，裡面塞 master_data_management.php 的極簡唯讀片段
+   （?view_customer=&embed=1，只有分頁與唯讀欄位，不帶側欄/頂欄/清單），
+   高度由裡面用 postMessage 回報多高就給多高，不會有內部捲軸。未建主檔（cid 空）不給點。 */
 function oaOpenCustomerView(cid){
   cid = String(cid||'').trim();
   if(!cid || cid==='0'){ return; }
-  var w = screen.availWidth, h = screen.availHeight;
-  var pw = Math.min(980, Math.round(w * 0.6)), ph = Math.min(860, Math.round(h * 0.9));
-  window.open('../pages/master_data_management.php?view_customer=' + encodeURIComponent(cid),
-    'custview_' + cid, 'width=' + pw + ',height=' + ph + ',left=' + Math.round((w - pw) / 2) + ',top=' + Math.round((h - ph) / 2)
-    + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no');
+  document.getElementById('custViewFrame').src = '../pages/master_data_management.php?view_customer=' + encodeURIComponent(cid) + '&embed=1';
+  openMask('custViewMask');
 }
+function closeCustView(){
+  closeMask('custViewMask');
+  document.getElementById('custViewFrame').src = 'about:blank';
+}
+$('#custViewMask').on('click', function(e){ if(e.target===this) closeCustView(); });
+window.addEventListener('message', function(e){
+  if (!e.data || e.data.type !== 'cv-resize') return;
+  var f = document.getElementById('custViewFrame');
+  if (!f) return;
+  var h = Math.max(200, Math.min(parseInt(e.data.height,10)||200, Math.round(window.innerHeight*0.85)));
+  f.style.height = h + 'px';
+});
 /* 料號儲存格：有綁主檔才可點 */
 function pnoCell(p){
   var t = esc(p.pno);

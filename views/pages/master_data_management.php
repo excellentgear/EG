@@ -149,6 +149,200 @@ if (isset($_GET['drawing'])) {
     <?php exit;
 }
 
+// ── 客戶唯讀檢視／內嵌片段模式（?view_customer=<客戶代碼>&embed=1）─────────
+// 使用者回報：window.open 開出來的「跳窗」在目前瀏覽器下其實是一個可移動/可縮放、
+// 有網址列的正常視窗（新版 Chrome 早就不理會 toolbar/location=no 這些舊參數），
+// 完全不像原本編輯客戶那種固定不可移動的對話框；改法是**不開新視窗**，改讓呼叫端
+// （如訂單分析）用自己頁面既有的 .m-mask/.m-win 蓋一層，裡面塞一個 iframe 指到這裡。
+// 這裡刻意只輸出「純資料顯示」的極簡獨立頁面（比照 ?drawing= 同一種做法）：
+// 不載整套主檔管理的 JS／CSS／清單，欄位直接後端查好印成唯讀文字，不必等 AJAX 再回填，
+// 也不會有可以點的編輯功能；分頁純前端切換，並用 postMessage 回報高度，
+// 讓外層 iframe 自動長高／縮短到剛好放得下，不出現內部捲軸。
+if (isset($_GET['view_customer']) && isset($_GET['embed'])) {
+    header('Cache-Control: no-store, must-revalidate');
+    $cid3 = trim($_GET['view_customer']);
+    $db3  = new DBConnection(); $pdo3 = $db3->getPDO();
+    $cst  = $pdo3->prepare("SELECT * FROM customer_list WHERE customer_id=?");
+    $cst->execute([$cid3]);
+    $cv = $cst->fetch(PDO::FETCH_ASSOC);
+    if (!$cv) {
+        http_response_code(404);
+        echo '<!DOCTYPE html><html><body style="margin:0;padding:24px;font-family:\'Microsoft JhengHei\',Arial,sans-serif;color:#999;font-size:13px;">找不到客戶「'.safe_html($cid3).'」</body></html>';
+        exit;
+    }
+    $cvContacts = []; $cvIndustries = []; $cvSubs = []; $cvSales = [];
+    try {
+        $q = $pdo3->prepare("SELECT * FROM customer_contacts WHERE customer_id=? ORDER BY sort_order, contact_id");
+        $q->execute([$cid3]); $cvContacts = $q->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {}
+    try {
+        $q = $pdo3->prepare("SELECT m.industry_id, d.industry_name, m.note AS industry_note FROM customer_industry_mapping m JOIN dict_industry_type d ON d.industry_id=m.industry_id WHERE m.customer_id=?");
+        $q->execute([$cid3]); $cvIndustries = $q->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {}
+    try {
+        $q = $pdo3->prepare("SELECT m.sub_id, m.note AS sub_note, s.sub_name FROM customer_industry_sub_mapping m JOIN dict_industry_sub_type s ON s.sub_id=m.sub_id WHERE m.customer_id=?");
+        $q->execute([$cid3]); $cvSubs = $q->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {}
+    try {
+        $q = $pdo3->prepare("SELECT cs.role, u.realname AS user_name FROM customer_sales cs LEFT JOIN user u ON u.id=cs.user_id WHERE cs.customer_id=? AND cs.is_active=1");
+        $q->execute([$cid3]); foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $s) { $cvSales[$s['role']] = $s['user_name']; }
+    } catch (Throwable $e) {}
+
+    function cv_field($label, $value, $wide = false) {
+        $value = trim((string)($value ?? ''));
+        $cls = $wide ? 'cv-field wide' : 'cv-field';
+        $vHtml = $value !== '' ? nl2br(safe_html($value)) : '<span style="color:#bbb;">（未填寫）</span>';
+        echo '<div class="'.$cls.'"><div class="cv-label">'.safe_html($label).'</div><div class="cv-value">'.$vHtml.'</div></div>';
+    }
+    $cvGradeMap = ['S'=>'S 級（最高）','A'=>'A 級（優）','B'=>'B 級（良）','C'=>'C 級（普通）','D'=>'D 級（觀察）'];
+    $cvSettleMap = ['FIXED'=>'固定日','EOM'=>'月底','VARIABLE'=>'不固定'];
+    ?><!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">
+    <title>檢視客戶基本資料</title>
+    <style>
+    *{box-sizing:border-box;}
+    body{margin:0;font-family:"Microsoft JhengHei","Segoe UI",Arial,sans-serif;font-size:13px;color:#333;background:#fff;}
+    .cv-tabs{display:flex;gap:2px;padding:0 14px;border-bottom:1px solid #e5e5e5;background:#f8f9fb;}
+    .cv-tab{padding:9px 14px;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;color:#777;user-select:none;}
+    .cv-tab.active{color:#2A3F54;font-weight:700;border-bottom-color:#2A3F54;}
+    .cv-pane{display:none;padding:14px 16px;}
+    .cv-pane.active{display:block;}
+    .cv-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;}
+    .cv-field{flex:1 1 150px;min-width:120px;}
+    .cv-field.wide{flex:1 1 100%;}
+    .cv-label{font-size:11px;color:#999;margin-bottom:3px;}
+    .cv-value{font-size:13px;color:#333;padding:6px 9px;background:#f7f7f7;border:1px solid #e6e6e6;border-radius:4px;min-height:15px;word-break:break-all;line-height:1.5;}
+    .cv-sec{font-size:12px;font-weight:700;color:#1ABB9C;margin:4px 0 8px;padding-bottom:5px;border-bottom:1px solid #eef2f1;}
+    .cv-badges{margin-bottom:10px;}
+    .cv-badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600;margin-right:6px;background:#fdecea;color:#c0392b;}
+    .cv-badge.own{background:#fff3cd;color:#8a6d1a;}
+    .cv-chip{display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;background:#eef1f5;color:#555;margin:0 5px 5px 0;}
+    .cv-sub{font-size:11px;color:#888;margin:2px 0 8px 2px;}
+    table.cv-tbl{width:100%;border-collapse:collapse;font-size:12px;}
+    table.cv-tbl th{background:#f7f9fb;color:#888;font-weight:700;font-size:11px;padding:6px 8px;border-bottom:1px solid #eee;text-align:left;white-space:nowrap;}
+    table.cv-tbl td{padding:6px 8px;border-bottom:1px solid #f2f2f2;vertical-align:top;}
+    .cv-empty{color:#bbb;text-align:center;padding:16px 0;font-size:12px;}
+    </style></head>
+    <body>
+    <div class="cv-tabs">
+        <div class="cv-tab active" data-tab="basic" onclick="cvShowTab('basic')">基本資訊</div>
+        <div class="cv-tab" data-tab="payment" onclick="cvShowTab('payment')">結帳 / 付款</div>
+        <div class="cv-tab" data-tab="contacts" onclick="cvShowTab('contacts')">聯絡人</div>
+        <div class="cv-tab" data-tab="notes" onclick="cvShowTab('notes')">備註</div>
+    </div>
+
+    <div class="cv-pane active" id="cv-basic">
+        <?php if (!empty($cv['is_inactive']) || !empty($cv['is_own_company'])): ?>
+        <div class="cv-badges">
+            <?php if (!empty($cv['is_inactive'])): ?><span class="cv-badge">停用</span><?php endif; ?>
+            <?php if (!empty($cv['is_own_company'])): ?><span class="cv-badge own">本公司</span><?php endif; ?>
+        </div>
+        <?php endif; ?>
+        <div class="cv-row">
+            <?php cv_field('客戶代碼', $cv['customer_id']); cv_field('客戶簡稱', $cv['customer']); cv_field('統一編號', $cv['tax_id']); cv_field('客戶等級', $cvGradeMap[$cv['customer_grade']] ?? '— 未設定 —'); ?>
+        </div>
+        <div class="cv-row">
+            <?php cv_field('電話', $cv['customer_tel']); cv_field('傳真', $cv['customer_fax']); ?>
+        </div>
+        <div class="cv-row">
+            <?php cv_field('客戶全名（發票用）', $cv['customer_full'], true); ?>
+        </div>
+        <div class="cv-row">
+            <?php cv_field('客戶英文全名', $cv['customer_full_en'], true); ?>
+        </div>
+        <div class="cv-row">
+            <?php cv_field('地址', $cv['customer_address'], true); ?>
+        </div>
+        <div class="cv-sec">產業別</div>
+        <?php if ($cvIndustries): foreach ($cvIndustries as $ind): ?>
+            <span class="cv-chip"><?=safe_html($ind['industry_name'])?></span>
+        <?php endforeach; else: ?><div class="cv-sub">未設定</div><?php endif; ?>
+        <?php foreach ($cvIndustries as $ind): if (trim((string)($ind['industry_note'] ?? '')) !== ''): ?>
+            <div class="cv-sub"><?=safe_html($ind['industry_name'])?>備註：<?=safe_html($ind['industry_note'])?></div>
+        <?php endif; endforeach; ?>
+        <?php foreach ($cvSubs as $sub): ?>
+            <div class="cv-sub">－ <?=safe_html($sub['sub_name'])?><?php if (trim((string)($sub['sub_note'] ?? '')) !== ''): ?>（<?=safe_html($sub['sub_note'])?>）<?php endif; ?></div>
+        <?php endforeach; ?>
+        <div class="cv-sec" style="margin-top:12px;">負責業務</div>
+        <div class="cv-row">
+            <?php cv_field('主要業務', $cvSales['primary'] ?? ''); cv_field('代理業務', $cvSales['deputy'] ?? ''); ?>
+        </div>
+    </div>
+
+    <div class="cv-pane" id="cv-payment">
+        <div class="cv-sec">結帳設定</div>
+        <div class="cv-row">
+            <?php cv_field('結帳模式', $cvSettleMap[$cv['settlement_mode']] ?? $cv['settlement_mode']);
+                  cv_field('固定結帳日', $cv['settlement_day']);
+                  cv_field('月結天數', $cv['net_days']);
+                  cv_field('接受扣%', !empty($cv['allow_deduct']) ? '是' : '否'); ?>
+        </div>
+        <div class="cv-row">
+            <?php cv_field('已確認此結帳日', !empty($cv['confirmed_settlement']) ? '是' : '否'); ?>
+        </div>
+        <div class="cv-sec">報價 / 收款方式</div>
+        <div class="cv-row">
+            <?php cv_field('報價方式', $cv['quote_method']); cv_field('收款方式', $cv['payment_method']); ?>
+        </div>
+        <div class="cv-row">
+            <?php cv_field('已確認付款條件', !empty($cv['confirmed_payment']) ? '是' : '否'); ?>
+        </div>
+        <div class="cv-sec">銀行帳戶</div>
+        <div class="cv-row">
+            <?php cv_field('銀行名稱', $cv['bank_name']); cv_field('分行', $cv['bank_branch']); cv_field('帳號', $cv['bank_account']); ?>
+        </div>
+    </div>
+
+    <div class="cv-pane" id="cv-contacts">
+        <?php if ($cvContacts): ?>
+        <table class="cv-tbl"><thead><tr><th>主要</th><th>姓名</th><th>部門</th><th>職稱</th><th>分機</th><th>手機</th><th>Email</th><th>備註</th></tr></thead><tbody>
+        <?php foreach ($cvContacts as $c): ?>
+            <tr>
+                <td><?= !empty($c['is_primary']) ? '★' : '' ?></td>
+                <td><?=safe_html($c['name'])?></td>
+                <td><?=safe_html($c['department'])?></td>
+                <td><?=safe_html($c['title'])?></td>
+                <td><?=safe_html($c['phone_ext'])?></td>
+                <td><?=safe_html($c['mobile'])?></td>
+                <td><?=safe_html($c['email'])?></td>
+                <td><?=safe_html($c['note'])?></td>
+            </tr>
+        <?php endforeach; ?>
+        </tbody></table>
+        <?php else: ?><div class="cv-empty">尚無聯絡人資料</div><?php endif; ?>
+    </div>
+
+    <div class="cv-pane" id="cv-notes">
+        <div class="cv-row"><?php cv_field('出貨要求', $cv['shipping_req'], true); ?></div>
+        <div class="cv-row"><?php cv_field('電子發票 Email', $cv['invoice_email'], true); ?></div>
+        <div class="cv-row"><?php cv_field('帳務備註', $cv['billing_note'], true); ?></div>
+        <div class="cv-row"><?php cv_field('一般備註', $cv['general_note'], true); ?></div>
+    </div>
+
+    <script>
+    function cvShowTab(name){
+        document.querySelectorAll('.cv-tab').forEach(function(t){ t.classList.toggle('active', t.dataset.tab===name); });
+        document.querySelectorAll('.cv-pane').forEach(function(p){ p.classList.toggle('active', p.id==='cv-'+name); });
+    }
+    function cvReportHeight(){
+        var h = document.body.scrollHeight;
+        try { parent.postMessage({ type:'cv-resize', height:h }, '*'); } catch(e){}
+    }
+    // 用 ResizeObserver 持續盯著內容高度（切分頁／字型換載入都會觸發），
+    // 不用猜「等多久才量得準」——只用 setTimeout 量一次，字型還沒套用就量到，
+    // 外層 iframe 會先給錯的高度、內容跑出來一小截變成要捲動（使用者明確要求不能有捲軸）。
+    if (window.ResizeObserver) {
+        new ResizeObserver(cvReportHeight).observe(document.body);
+    } else {
+        window.addEventListener('load', cvReportHeight);
+        setTimeout(cvReportHeight, 60);
+        setTimeout(cvReportHeight, 300);
+    }
+    cvReportHeight();
+    </script>
+    </body></html>
+    <?php exit;
+}
+
 $db  = new DBConnection();
 $pdo = $db->getPDO();
 
@@ -6857,7 +7051,6 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 #customerModal.view-readonly #cf-add-contact-btn,
 #customerModal.view-readonly .contact-row button,
 #customerModal.view-readonly #cust-design-note-wrap .btn-danger { display:none !important; }
-#customerModal.view-readonly #custModal-title { color:#8a5a2b; }
 /* 料號表單 廠商/專用料號/專用機台 自動完成下拉 */
 .pf-ac-dropdown { position:absolute; z-index:1060; left:0; right:0; background:#fff; border:1px solid #ddd; border-top:none; max-height:200px; overflow-y:auto; border-radius:0 0 6px 6px; box-shadow:0 4px 12px rgba(0,0,0,.12); }
 .pf-ac-dropdown .pf-ac-opt:hover { background:#f0f4ff; }
