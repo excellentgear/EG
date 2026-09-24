@@ -14,6 +14,7 @@
 
 require_once __DIR__ . '/gear_spec_lib.php';   // 齒輪規格（與報價單/訂單追蹤同一份實作）
 require_once __DIR__ . '/date_fmt_lib.php';  // 顯示用日期 YYYY.MM.DD（ai-rules/20 唯一實作）
+require_once __DIR__ . '/qa_abnormal_lib.php'; // 報廐扣減唯一實作 qab_bom_scrap_rows()（2026-09-24）
 
 if (!defined('SQ_MODULE')) define('SQ_MODULE', 'shipping');
 /** AS 文件編號綁定用的模組代碼（見 ai-rules/16 第一之三節） */
@@ -136,11 +137,19 @@ function sq_bom_avail_map(PDO $db, ?array $boms = null): array
     $st = $db->prepare($sql);
     $st->execute($params);
 
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    // 完工量要扣掉「已結案配發報廐單號」的確認報廐量（2026-09-24 使用者交辦）——不扣的話待包裝／
+    // BOM總覽都已經顯示良品數變少了，快速出貨這裡卻還能出到報廐前的滿額，兩邊會對不起來。
+    // 整張 BOM 口徑不分站（可出量本來就是整批的概念）；一次批次查完，不逐列各查一次（鐵律8效能考量）。
+    $scrapMap = qab_bom_scrap_rows($db, array_column($rows, 'bom'));
+
     $map = [];
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+    foreach ($rows as $r) {
         $done    = (int)$r['done_qty'];
         $shipped = (int)$r['shipped_qty'];
         if ($boms === null && $done <= 0) continue;   // 全域查詢時略過未完工，減少記憶體
+        $scrap   = qab_bom_scrap_sum_rows($scrapMap[$r['bom']] ?? [], null);
+        $done    = max(0, $done - $scrap);
         $map[$r['bom']] = [
             'done'    => $done,
             'shipped' => $shipped,
