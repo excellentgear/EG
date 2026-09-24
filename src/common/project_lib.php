@@ -3147,6 +3147,15 @@ function prj_data_readiness(PDO $db, int $projectId): array
     $bomList = array_keys($boms);
     $ph = $bomList ? implode(',', array_fill(0, count($bomList), '?')) : '';
 
+    // 這張製令是否已結案（決定「開啟哪一頁查」：BOM 總表只列未完工的製令，已完工的要連
+    // 「已完工BOM查詢列印」，即使只帶 BOM 編號在 BOM 總表也是 0 列——同 data_audit.php 的既有作法）
+    $closedOf = [];
+    try {
+        $st = $db->prepare("SELECT bom, closed_at FROM bom WHERE bom IN ($ph)");
+        $st->execute($bomList);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $x) $closedOf[(string)$x['bom']] = !empty($x['closed_at']);
+    } catch (Throwable $e) {}
+
     // 出貨單：精準綁定（is_bom_map）優先，查無精準綁定才退回料號在完工日之後有沒有出貨
     $shipExact = [];
     try {
@@ -3193,11 +3202,11 @@ function prj_data_readiness(PDO $db, int $projectId): array
             if ($d && $d > $finishDate) $finishDate = $d;
             if ($s['is_pack']) {
                 $ok = !empty($packFidOf[$fid]) || !empty($packBomOf[$bom]);
-                $stepRows[] = ['name' => $s['process_name'], 'kind' => 'pack', 'ok' => $ok ? 1 : 0];
+                $stepRows[] = ['fid' => $fid, 'name' => $s['process_name'], 'kind' => 'pack', 'ok' => $ok ? 1 : 0];
                 if (!$ok) $missing[] = $s['process_name'] . '（包裝檢驗）';
             } else {
                 $ok = !empty($inspOf[$fid]);
-                $stepRows[] = ['name' => $s['process_name'], 'kind' => 'insp', 'ok' => $ok ? 1 : 0];
+                $stepRows[] = ['fid' => $fid, 'name' => $s['process_name'], 'kind' => 'insp', 'ok' => $ok ? 1 : 0];
                 if (!$ok) $missing[] = $s['process_name'] . '（線上檢驗）';
             }
             if (!empty($faiOf[$fid])) $hasFai = true;
@@ -3216,6 +3225,7 @@ function prj_data_readiness(PDO $db, int $projectId): array
 
         $out[] = [
             'bom' => $bom, 'part_no' => $b['part_no'], 'ds_pk' => $b['ds_pk'],
+            'closed' => !empty($closedOf[$bom]) ? 1 : 0,
             'steps' => $stepRows, 'fai' => $hasFai ? 1 : 0, 'work' => $hasWork ? 1 : 0,
             'ship' => $shipMode !== '' ? 1 : 0, 'ship_mode' => $shipMode,
             'missing' => $missing, 'missing_cnt' => count($missing),

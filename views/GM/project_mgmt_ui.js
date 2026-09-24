@@ -399,6 +399,14 @@ $(document).on('click', '[data-viewbom]', function () {
     var b = String($(this).data('viewbom') || '');
     window.open('/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php?b=' + encodeURIComponent(b), '_blank');
 });
+/* 資料完整度分頁的製令連結：**已完工的製令 BOM 總表查不到**（那一頁只列未完工的），
+   一律照後端算好的 closed 旗標挑對頁面——同 data_audit.php 既有的做法，不必等點了才發現查無資料。 */
+$(document).on('click', '[data-rdbom]', function () {
+    var b = String($(this).data('rdbom') || ''), closed = num($(this).data('closed'));
+    var url = closed ? '/EGsystem/views/pm/OreadyReply_completed_query.php?kw=' + encodeURIComponent(b)
+                      : '/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php?b=' + encodeURIComponent(b);
+    window.open(url, '_blank');
+});
 /* 出貨單號 → 出貨紀錄分析，自動篩出這張單號 */
 $(document).on('click', '[data-viewship]', function () {
     var no = String($(this).data('viewship') || ''), pn = String($(this).data('partno') || '');
@@ -3214,7 +3222,9 @@ function renderReady(res) {
           + '<th style="width:96px;">出貨單</th><th>異常單／矯正單</th><th style="width:64px;">缺件</th>'
           + '</tr></thead><tbody>';
     $.each(rows, function (i, r) {
-        h += '<tr><td class="l"><span class="chk-go" data-viewbom="' + esc(r.bom) + '">' + esc(r.bom) + '</span></td>'
+        h += '<tr><td class="l"><span class="chk-go" data-rdbom="' + esc(r.bom) + '" data-closed="' + num(r.closed)
+          + '" title="開啟' + (num(r.closed) ? '已完工BOM查詢列印' : 'BOM 總表') + '">' + esc(r.bom)
+          + (num(r.closed) ? '<br><span class="pj-hint">已完工</span>' : '') + '</span></td>'
           + '<td class="l">' + esc(r.part_no || '') + '</td><td class="l">';
         $.each(r.steps || [], function (j, s) {
             var url = s.kind === 'pack' ? '/EGsystem/views/QC/packaging_inspection_entry.php'
