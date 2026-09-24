@@ -200,7 +200,7 @@ $backfillDays = qab_backfill_days($db);
                 <colgroup>
                     <col style="width:108px"><col style="width:76px"><col style="width:96px"><col style="width:120px">
                     <col style="width:118px"><col><col style="width:130px"><col style="width:120px">
-                    <col style="width:104px"><col style="width:96px">
+                    <col style="width:150px"><col style="width:96px">
                 </colgroup>
                 <thead><tr>
                     <th>異常單號</th><th>日期</th><th>客戶</th><th>料號</th>
@@ -422,7 +422,7 @@ $backfillDays = qab_backfill_days($db);
                 <li><b>待品管確認說明</b>：只有自動開立（報工累積NG觸發）的單才會有這個狀態——決策者已自動帶入品管主管，
                     但要等「品管通知名單」裡的任何一位補充異常現象說明並按「確認完成」，才能往下送決策；<b>不會自動送決策</b>。</li>
                 <li><b>等待單位回覆</b>：已送出徵詢、對方還沒回。<b>待決策</b>：還沒勾處置方式也沒有裁示——
-                    如果這張單有指定決策者（表頭「決策者」欄），狀態後面括號會顯示決策者的部門與姓名；
+                    如果這張單有指定決策者（表頭「決策者」欄），狀態徽章下方會另起一行小字顯示決策者的部門與姓名；
                     <b>單子一送到這個狀態（自動開立單品管確認完成、或人工開單指定/換了決策者）系統會自動通知該決策者</b>，
                     沒指定決策者時不會加註也不會發通知。</li>
                 <li><b>待總經理裁示</b>：處置方式勾了「轉總經理裁示」但還沒裁示。<b>扣款確認中</b>：要扣款但還沒核准。<b>可結案</b>：該做的都做完了。</li>
@@ -533,7 +533,9 @@ function load(){
                 + '<td>' + esc((r.abnormal_phenomenon || '').substring(0, 60)) + '</td>'
                 + '<td>' + esc(r.responsible_unit) + '</td>'
                 + '<td>' + esc(r.final_label) + (r.scrap_no ? '<br><span class="st st-gm">報廢單 ' + esc(r.scrap_no) + '</span>' : '') + '</td>'
-                + '<td class="c"><span class="st st-' + r.status.code + '">' + esc(r.status.label) + '</span></td>'
+                + '<td class="c"><span class="st st-' + r.status.code + '">' + esc(r.status.label) + '</span>'
+                    + (r.status.decider ? '<br><span class="muted-help" style="font-size:10.5px;white-space:normal;">' + esc(r.status.decider.label) + '</span>' : '')
+                + '</td>'
                 + '<td class="c">'
                 + (r.deleted_at
                     ? ('<span class="muted-help">' + esc(dispDate(r.deleted_at)) + ' 由 ' + esc(r.deleted_name || '') + ' 刪除</span>'

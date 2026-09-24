@@ -2149,12 +2149,12 @@ function qab_order(PDO $db, int $id): ?array
     $o['status']  = qab_status($o);
     // 「待決策」時附上決策者部門與姓名——2026-09-24 使用者要求：不然畫面上只看得到一句「待決策」，
     // 不知道要去催誰。沒指定決策者（或範圍內查無在職人員）時維持原樣不加註。
+    // 刻意不併進 status.label 一起印——清單頁那個狀態欄是固定寬度的 table-layout:fixed 儲存格，
+    // 徽章又是 white-space:nowrap，併成一長串會直接把「操作」欄擠爆（使用者實測回報過），
+    // 交給前端另起一行印小字。
     if (($o['status']['code'] ?? '') === 'decide') {
         $dd = qab_decider_display($db, $o);
-        if ($dd) {
-            $o['status']['decider'] = $dd;
-            $o['status']['label'] .= '（' . $dd['label'] . '）';
-        }
+        if ($dd) $o['status']['decider'] = $dd;
     }
 
     // 最終決策者（畫面與通知都讀這一份；來源是全站統一綁定）
@@ -2342,13 +2342,10 @@ function qab_list(PDO $db, array $f = []): array
         elseif ($r['need_gm'])            $r['status'] = ['code' => 'gm', 'label' => '待總經理裁示'];
         elseif (($r['gm_deduct'] || $r['final']['is_scrap'])) $r['status'] = ['code' => 'deduct', 'label' => '扣款確認中'];
         else                              $r['status'] = ['code' => 'ready', 'label' => '可結案'];
-        // 「待決策」在清單上也附上決策者部門與姓名，理由同 qab_order()（2026-09-24 使用者要求）
+        // 「待決策」在清單上也附上決策者部門與姓名（不併進 label，理由同 qab_order()）
         if ($r['status']['code'] === 'decide') {
             $dd = qab_decider_display($db, $r);
-            if ($dd) {
-                $r['status']['decider'] = $dd;
-                $r['status']['label'] .= '（' . $dd['label'] . '）';
-            }
+            if ($dd) $r['status']['decider'] = $dd;
         }
         $r['final_label'] = implode('、', $r['final']['names']);
     }
