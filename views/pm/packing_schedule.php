@@ -675,6 +675,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $okQty = $orderQty - $ngQty;
             if ($okQty < 0) throw new Exception('NG數量不可大於數量');
 
+            // 容器數量必填（僅結案當下擋，暫存不受限制；前端 checkContainerQty() 已擋一次，
+            // 這裡同規則再擋一次＝鐵律8，避免繞過前端直打 API 存進沒有數量的容器就結案）
+            if ($complete) {
+                $pkgRows = (is_array($packagingData) && is_array($packagingData['rows'] ?? null)) ? $packagingData['rows'] : [];
+                if (!$pkgRows) throw new Exception('請至少新增一筆容器並填寫數量才能完成包裝');
+                foreach ($pkgRows as $pr) {
+                    $prQty = is_array($pr) ? ($pr['qty'] ?? '') : '';
+                    if ($prQty === '' || $prQty === null || !is_numeric($prQty) || (float)$prQty <= 0) {
+                        throw new Exception('容器的數量為必填，請填寫每一筆容器的數量');
+                    }
+                }
+            }
+
             // 直接出貨／成品入庫方式檢核（前端已擋一次，這裡同規則再擋一次＝鐵律8）
             if ($isFullShip) {
                 if ($shipNowQty <= 0) throw new Exception('請輸入本次出貨數量');
@@ -1163,14 +1176,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $items = $pdo->query("SELECT id AS item_id, item_name, standard_text FROM pm_packing_appearance_template ORDER BY sort_order ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
             }
 
-            // 訂單綁定（供列印表頭印訂單號碼／交期，多筆時全部列出）
-            $ob = $pdo->prepare("SELECT ot.Order_oo, ot.C_order, ot.Delivery_date, bopm.allocated_qty
-                                  FROM bom_order_process_map bopm
-                                  JOIN order_track ot ON ot.Order_id = bopm.order_id
-                                  WHERE bopm.bom = ? ORDER BY ot.Delivery_date ASC");
-            $ob->execute([$row['bom']]);
-            $orderBind = $ob->fetchAll(PDO::FETCH_ASSOC);
-
             $bizDate = substr((string)$row['inspection_date'], 0, 10);
             $docId   = eg_asdoc_id($pdo, PACKING_INSP_ASDOC_MODULE);
             $doc     = eg_asdoc_get($pdo, PACKING_INSP_ASDOC_MODULE);
@@ -1200,7 +1205,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => true,
                 'row'        => $row,
                 'items'      => $items,
-                'order_bind' => $orderBind,
                 'company'    => pk_company_name($pdo),
                 'doc'        => $doc ? ['id' => (int)$doc['id'], 'doc_no' => $doc['doc_no'], 'doc_name' => $doc['doc_name']] : null,
                 'doc_no_print' => eg_asdoc_no_asof_id($pdo, $docId, $bizDate),
@@ -1705,6 +1709,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <div class="pk-section-title">3. 容器與出貨</div>
             <div id="pkg-rows-container"></div>
             <button class="btn btn-default btn-sm" id="btn-add-pkg-row"><i class="fa fa-plus"></i> 新增容器</button>
+            <div id="pkg-container-hint" class="text-danger small" style="margin-top:4px;"></div>
             <div class="row" style="margin-top:10px;">
                 <div class="col-md-6">
                     <label>包裝說明：</label>
@@ -1843,7 +1848,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <p><strong>操作步驟：</strong></p>
                 <ol>
                     <li>點擊清單中任一列開啟填寫視窗。</li>
-                    <li>填寫外觀檢驗項目、防護與容器資訊。</li>
+                    <li>填寫外觀檢驗項目、防護與容器資訊。<strong>容器的數量為必填</strong>，未填寫時暫存不受影響，但按「完成包裝」結案會被擋下並提醒。</li>
                     <li>若本批數量有一部分要<strong>直接出貨</strong>，勾選「直接出貨」並填入本次出貨數量；若還有剩餘數量，需再選擇成品入庫方式。可一併填入「來料不良退回數」「加工不良數」細分NG組成，兩者相加不可大於NG總數（＝原總數與良品數的差額，加上外觀檢驗這次新發現的異常數量）。</li>
                     <li>若「判定結果」不手動勾選，存檔時系統會自動判定：良品數＝BOM總數（全數完成且零NG）才自動判為<strong>合格</strong>，其餘一律列為<strong>待判定</strong>，需人工確認後手動改成合格或不合格。</li>
                     <li>尚未填完可按「<strong>暫存</strong>」，資料會保留、BOM 仍留在待包裝清單（標示「暫存中」），可稍後回來繼續填寫。</li>
@@ -2104,6 +2109,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     fillFromRecord(res.draft, false);
                 } else {
                     calcActualQty();
+                    checkContainerQty();
                 }
                 renderStatusBadges();
                 showWindow();
@@ -2338,6 +2344,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $('#f-unlock-fields').show();
             }
             calcActualQty();
+            checkContainerQty();
             renderStatusBadges();
         }
 
@@ -2523,15 +2530,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 '<label class="radio-inline"><input type="radio" name="' + name + '" value="customer" ' + (owner === 'customer' ? 'checked' : '') + '> 客供</label> ' +
                 '<label class="radio-inline"><input type="radio" name="' + name + '" value="internal" ' + (owner === 'internal' ? 'checked' : '') + '> 超正</label> ' +
                 '<label class="radio-inline"><input type="radio" name="' + name + '" value="noprint" ' + (owner === 'noprint' ? 'checked' : '') + '> 無印刷</label> ' +
-                '<label style="margin-left:10px;">數量:</label> ' +
+                '<label style="margin-left:10px;">數量:<span class="text-danger">*</span></label> ' +
                 '<input type="number" class="form-control input-sm pkg-qty" value="' + qty + '" style="width:80px;"> ' +
                 '<i class="fa fa-times pkg-remove"></i>' +
                 '</div>';
             $('#pkg-rows-container').append(html);
         }
-        $('#btn-add-pkg-row').click(function () { addPkgRow(); });
-        $(document).on('click', '.pkg-remove', function () { $(this).closest('.pkg-row').remove(); });
-        $(document).on('input', '.pkg-qty', calcActualQty);
+        $('#btn-add-pkg-row').click(function () { addPkgRow(); checkContainerQty(); });
+        $(document).on('click', '.pkg-remove', function () { $(this).closest('.pkg-row').remove(); checkContainerQty(); });
+        $(document).on('input', '.pkg-qty', function () { calcActualQty(); checkContainerQty(); });
         $(document).on('change', '.pkg-type', function () {
             if ($(this).val() === '其他') {
                 if ($(this).next('.pkg-type-other').length === 0)
@@ -2540,6 +2547,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $(this).next('.pkg-type-other').remove();
             }
         });
+
+        // 容器數量為必填（結案前一定要填，使用者回報「數量沒填不可結案」）：即時偵測並標紅，
+        // 與 checkNgBreakdown() 同一套模式（ai-rules/08 第零節：錯誤即時偵測並顯示原因）。
+        // 暫存不受此限制，只有完成包裝（結案）當下才擋（見 doSave 的 complete 分支）。
+        function checkContainerQty() {
+            var $rows = $('#pkg-rows-container .pkg-row');
+            var ok = true;
+            $rows.each(function () {
+                var $qty = $(this).find('.pkg-qty');
+                var valid = ($qty.val() !== '' && $qty.val() !== null && parseFloat($qty.val()) > 0);
+                // 純檢視模式（唯讀，已結案的舊紀錄可能是這條規則上線前存的）不標紅，只當作提示邏輯的
+                // 判斷依據仍照算，但不干擾檢視畫面觀感
+                if (currentMode !== 'view') $qty.toggleClass('has-error-border', !valid);
+                if (!valid) ok = false;
+            });
+            var $hint = $('#pkg-container-hint');
+            if (currentMode === 'view') { $hint.text(''); return ok; }
+            if (!$rows.length) { $hint.text('請至少新增一筆容器並填寫數量'); return false; }
+            if (!ok) { $hint.text('容器的數量為必填，請填寫每一筆容器的數量'); return false; }
+            $hint.text('');
+            return true;
+        }
 
         // ---------- 視窗顯示/移動 ----------
         function showWindow() {
@@ -2640,6 +2669,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (isNaN(warehouseQty)) warehouseQty = 0;
 
             // 前端先擋一次（後端 save_result 同規則再擋一次＝鐵律8）
+            // 容器數量必填只在「完成包裝」（結案）當下擋，暫存不受限制
+            if (complete && !checkContainerQty()) {
+                alert($('#pkg-container-hint').text() || '容器的數量為必填，請填寫後再完成包裝');
+                var $badQty = $('#pkg-rows-container .pkg-qty.has-error-border').first();
+                if ($badQty.length) $badQty.focus(); else $('#btn-add-pkg-row').focus();
+                return;
+            }
             if (isFullShip) {
                 if (!shipNowQty || shipNowQty <= 0) { alert('請輸入本次出貨數量'); $('#pkg-ship-now-qty').focus(); return; }
                 if (shipNowQty > okQty) { alert('本次出貨數量不可大於可出/入庫數量(' + okQty + ')'); $('#pkg-ship-now-qty').focus(); return; }
@@ -3093,18 +3129,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             var pd = {};
             try { pd = row.packaging_data ? JSON.parse(row.packaging_data) : {}; } catch (e) { pd = {}; }
 
-            var orderNos = (data.order_bind || []).map(function (o) { return o.Order_oo || o.C_order || ''; }).filter(Boolean).join('、');
-
+            // 使用者拍板拿掉版次／訂單號碼兩欄（2026-09-24 實際列印後回報不需要），
+            // 「訂單數量」正名為「待包裝數量」——這欄存的是這一批實際待包裝的良品數，不是客戶訂單量。
             var metaTbl = '<table class="p-meta"><colgroup><col style="width:16%"><col style="width:18%"><col style="width:16%"><col style="width:18%"><col style="width:14%"><col style="width:18%"></colgroup>' +
                 '<tr><th>料號</th><td>' + pkEsc(row.part_no || hdr.part_no || '') + '</td>' +
-                '<th>版次</th><td>' + pkEsc(hdr.Revision || '') + '</td>' +
+                '<th>客戶名稱</th><td>' + pkEsc(row.customer_name || '') + '</td>' +
                 '<th>檢驗日期</th><td>' + bizDate + '</td></tr>' +
-                '<tr><th>客戶名稱</th><td>' + pkEsc(row.customer_name || '') + '</td>' +
-                '<th>製令號碼</th><td>' + pkEsc(row.bom || '') + '</td>' +
-                '<th>檢驗製程</th><td>' + pkEsc(hdr.ProcessName || '') + '</td></tr>' +
-                '<tr><th>訂單號碼</th><td colspan="3">' + pkEsc(orderNos) + '</td>' +
+                '<tr><th>製令號碼</th><td>' + pkEsc(row.bom || '') + '</td>' +
+                '<th>檢驗製程</th><td>' + pkEsc(hdr.ProcessName || '') + '</td>' +
                 '<th>判定結果</th><td>' + pkiCheckMark(row.judgement === 'PASS') + '合格　' + pkiCheckMark(row.judgement === 'FAIL') + '不合格　' + pkiCheckMark(row.judgement === 'PENDING') + '待判</td></tr>' +
-                '<tr><th>訂單數量</th><td>' + fmtNum(row.order_qty) + '</td>' +
+                '<tr><th>待包裝數量</th><td>' + fmtNum(row.order_qty) + '</td>' +
                 '<th>合格數量</th><td>' + fmtNum(row.ok_qty) + '</td>' +
                 '<th>NG數量</th><td class="' + (parseFloat(row.ng_qty) > 0 ? 'p-ng' : '') + '">' + fmtNum(row.ng_qty) + '</td></tr>' +
                 '</table>';
