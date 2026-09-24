@@ -10988,13 +10988,19 @@ foreach($dCounts as $c) {
         function ocEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
         function ocToast(m){ if(typeof showToast==='function') showToast(m); else alert(m); }
         // 共用 AJAX（FormData）
+        // 2026-09-24 修正：這支底下十幾個呼叫端，大多數都沒有自己補 .catch()（原本就是各寫各的、
+        // 漏掉幾處），一旦網路失敗或回應不是合法 JSON，就會變成主控台的 Uncaught (in promise)。
+        // 每個呼叫端本來就已經在自己的 .then() 裡先判斷 if(!res.success){...return;}，
+        // 所以在這裡統一把失敗「正常化」成同一種 {success:false} 物件回傳（不是 reject），
+        // 呼叫端既有的判斷邏輯一行都不必改，就自動接住了。
         function ocApi(action, params, isFile){
             var fd;
             if (isFile) { fd = params; fd.append('action', action); }
             else { fd = new FormData(); fd.append('action', action); for (var k in params){ var v=params[k];
                 if (Array.isArray(v)) v.forEach(function(x){ fd.append(k+'[]', x); }); else fd.append(k, v==null?'':v); } }
             return fetch(OC_API, {method:'POST', body:fd, credentials:'same-origin'})
-                .then(function(r){ return r.json(); });
+                .then(function(r){ return r.json(); })
+                .catch(function(e){ console.error('ocApi/'+action+' 失敗', e); return {success:false, message:'連線失敗，請稍後再試'}; });
         }
 
         // 快取（供明細查詢）
