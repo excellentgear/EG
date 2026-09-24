@@ -100,6 +100,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .tc-disp { font-size:11px; color:#8a6d45; }
         .tc-disp-pick label { display:inline-block; font-weight:normal; margin:0 8px 2px 0; white-space:nowrap; }
         .tc-disp-prev { font-size:11px; color:#8A5A2B; }
+        /* 類別排序把手（2026-09-24）：只放在最左邊那一格，不可以整列都能拖——
+           這張表其餘欄位都是勾選框/下拉，唯獨「其他頁面顯示」那欄有輸入框，
+           整列可拖會讓在那欄裡點選文字變成拖列（SOP/SIP 已踩過同一個坑）。 */
+        #catTable td.cat-drag { cursor:grab; user-select:none; -webkit-user-select:none; width:26px; text-align:center; }
+        #catTable td.cat-drag:active { cursor:grabbing; }
+        #catTable td.cat-drag::before { content:'\2630'; color:#C9B79C; font-size:13px; }
+        #catTable tr.tc-cat-ghost { opacity:.45; background:#FFF3E2; }
         input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
         input[type=number] { -moz-appearance:textfield; }
         /* modal */
@@ -538,7 +545,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             量具編號本身看不出是什麼——<code>QC-001</code> 現場叫它「TTi 齒輪量測機」、<code>K-555-P</code> 現場講的是
             「100-125mm」，所以逐類別各自設一次，<b>設定入口只有這裡一個，改完全站一起跟著改</b>
             （標準檢驗指導書的「挑檢具編號」就是吃這份設定）。重複或互相包含的欄位會自動合併，
-            右邊的「→」就是套到這個類別實際的量具上會長什麼樣子。
+            右邊的「→」就是套到這個類別實際的量具上會長什麼樣子。<br>
+            <b>排序</b>（2026-09-24 新增，使用者要求）：按住最左邊「☰」上下拖曳，就是量具被挑選時（例如線上檢驗
+            「選擇本單使用的量具」跳窗①先點類型那一排按鈕）看到的順序，也是清單上方分頁排列的順序；拖完要按下方
+            「儲存」才會真的存下去。
         </div>
         <div style="border:1px solid #EADFC8;border-radius:6px;padding:8px 10px;margin-bottom:8px;background:#FDF8EF;">
             <div style="font-size:12px;color:#5b3a1e;margin-bottom:6px;">
@@ -553,6 +563,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div style="max-height:42vh;overflow-y:auto;">
         <table class="hist" id="catTable">
             <thead><tr>
+                <th style="width:26px;"></th>
                 <th style="text-align:left;">類別</th><th>量具數</th>
                 <th>需校驗<br><label class="ck-all-lab"><input type="checkbox" class="ck-all" data-col="req"> 全選</label></th>
                 <th>可設定量具編號<br><label class="ck-all-lab"><input type="checkbox" class="ck-all" data-col="hasno"> 全選</label></th>
@@ -871,6 +882,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/Sortable.min.js?v=<?= @filemtime(__DIR__.'/../../resource/js/Sortable.min.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
@@ -1398,12 +1410,13 @@ $('#setCat').on('change', function(){
     loadSpecPick(setTool ? setTool.Tool_id : 0);
 });
 /* ---------- 類別設定（管理員；校驗屬性旗標＋自訂合併分頁） ---------- */
-/** 讀取 modal 目前畫面上的勾選狀態（新增/刪除分頁後重繪時保留未存的編輯） */
+/** 讀取 modal 目前畫面上的勾選狀態（新增/刪除分頁後重繪時保留未存的編輯，含拖曳排序） */
 function collectCatUI(){
-    var st = {};
+    var st = {}, order = [];
     $('#catBody tr[data-id]').each(function(){
-        var $tr = $(this);
-        st[String($tr.attr('data-id'))] = {
+        var $tr = $(this), id = String($tr.attr('data-id'));
+        order.push(id);
+        st[id] = {
             req:  $tr.find('.ck-req').prop('checked') ? 1 : 0,
             hasNo:$tr.find('.ck-hasno').prop('checked') ? 1 : 0,
             tab:  $tr.find('.ck-tab').prop('checked') ? 1 : 0,
@@ -1412,6 +1425,7 @@ function collectCatUI(){
             dispSep: $tr.find('.in-disp-sep').val() || ' '
         };
     });
+    st.__order = order;   // 目前的拖曳順序；key 用底線前綴避免跟真實類別 id 撞名
     return st;
 }
 function grpOptions(sel){
@@ -1421,8 +1435,21 @@ function grpOptions(sel){
     });
     return h;
 }
+/** 拿目前拖曳出來的順序套到 CATS 上（沒拖過／新加入的排最後，即維持伺服器原本的 sort_order 順序）。
+    只是排序不改內容，所以不影響 collectCatUI() 讀到的其餘欄位。 */
+function orderedCats(state){
+    var order = state && state.__order;
+    if (!order || !order.length) return CATS;
+    var pos = {};
+    order.forEach(function(id, i){ pos[id] = i; });
+    return CATS.slice().sort(function(a, b){
+        var pa = pos.hasOwnProperty(String(a.QC_Tool_List_id)) ? pos[String(a.QC_Tool_List_id)] : 9999;
+        var pb = pos.hasOwnProperty(String(b.QC_Tool_List_id)) ? pos[String(b.QC_Tool_List_id)] : 9999;
+        return pa - pb;
+    });
+}
 function renderCatBody(state){
-    var h = CATS.map(function(c){
+    var h = orderedCats(state).map(function(c){
         var id = String(c.QC_Tool_List_id), s = state && state[id];
         var req   = s ? s.req===1   : c.calib_required===1;
         var hasNo = s ? s.hasNo===1 : c.has_tool_no===1;
@@ -1430,6 +1457,7 @@ function renderCatBody(state){
         var grp   = s ? s.grp : (c.calib_tab_group || '');
         if (grp && !TABS_DEF.some(function(t){ return String(t.tab_id)===String(grp); })) grp = '';   // 分頁已被刪除
         return '<tr data-id="'+id+'">'
+            + '<td class="cat-drag" title="按住上下拖曳排序"></td>'
             + '<td style="text-align:left;white-space:nowrap;">'+esc(c.QC_Tool)
             + ' <i class="fa fa-pencil cat-edit" title="更名" style="color:#b5762a;cursor:pointer;"></i>'
             + ' <i class="fa fa-trash cat-del" title="刪除" style="color:#b5762a;cursor:pointer;"></i></td>'
@@ -1441,9 +1469,22 @@ function renderCatBody(state){
             + '<td style="text-align:left;">'+dispCell(c, s)+'</td>'
             + '</tr>';
     }).join('');
-    $('#catBody').html(h || '<tr><td colspan="7" style="color:#8a6d45;padding:12px;">尚無量具類別</td></tr>');
+    $('#catBody').html(h || '<tr><td colspan="8" style="color:#8a6d45;padding:12px;">尚無量具類別</td></tr>');
     syncCkAll();
     $('#catBody tr[data-id]').each(function(){ dispPreview($(this)); });
+    initCatSortable();
+}
+/** 類別拖曳排序（管理員限定，見開啟 cfgMask 的條件）。順序本身就是設定值，
+    拖完不必即時重畫任何序號，按下方「儲存」時會依 DOM 順序寫回 sort_order。 */
+var catSortable = null;
+function initCatSortable(){
+    var tb = document.getElementById('catBody');
+    if (!tb) return;
+    if (catSortable) { try { catSortable.destroy(); } catch (e) {} catSortable = null; }
+    if (typeof Sortable === 'undefined') return;   // 共用檔沒載到就只是不能拖，其他照常
+    catSortable = Sortable.create(tb, {
+        animation: 140, draggable: 'tr[data-id]', handle: 'td.cat-drag', ghostClass: 'tc-cat-ghost'
+    });
 }
 
 /* ── 其他頁面顯示欄位（ai-rules/25：量具在別的頁面長什麼樣子，只在這裡設定一次） ──

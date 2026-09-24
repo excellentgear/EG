@@ -912,11 +912,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             && (bool)$pdo->query("SHOW TABLES LIKE 'purchase_spec'")->fetchColumn();
                 if ($hasSpecJoin) $hasBrandCol = (bool)$pdo->query("SHOW COLUMNS FROM purchase_spec LIKE 'brand'")->fetchColumn();
             } catch (Throwable $e) {}
+            // 排序改依「類型排序→編號」（2026-09-24）：原本只用 t.Tool_No ASC 排，
+            // 會讓依這份清單第一次出現的類型順序（例如量具挑選跳窗①先點類型）變成偶然值，
+            // 不是管理員在「量測儀器校驗管理－類別設定」拖曳排好的順序。
             $tools = $pdo->query("SELECT t.*"
                      . ($hasSpecJoin ? ", ps.spec_text" . ($hasBrandCol ? ", ps.brand AS spec_brand" : "") : "") . "
-                      FROM qc_tool t"
+                      FROM qc_tool t
+                      LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id = t.QC_Tool_List_id"
                      . ($hasSpecJoin ? " LEFT JOIN purchase_spec ps ON ps.spec_id=t.purchase_spec_id" : "") . "
-                      ORDER BY t.Tool_No ASC")->fetchAll(PDO::FETCH_ASSOC);
+                      ORDER BY l.sort_order ASC, l.QC_Tool_List_id ASC, t.Tool_No ASC")->fetchAll(PDO::FETCH_ASSOC);
             // 量具顯示名稱（label）統一走 qc_tool_disp_label()（ai-rules/25）：
             // 各頁挑量具（本頁「選擇本單使用的量具」／sop_sip.php「量具」）都要顯示同一種格式，
             // 不可以各自拼字串（同一支量具在不同頁面叫不同名字，現場會以為是兩支量具）。

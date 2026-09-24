@@ -425,10 +425,15 @@ case 'save_categories': {
     $disp = [];
     try {
         $db->beginTransaction();
-        $up = $db->prepare("UPDATE qc_tool_list SET calib_required=?, has_tool_no=?, calib_tab=?, calib_tab_group=? WHERE QC_Tool_List_id=?");
+        /* 排序（2026-09-24 使用者要求：可拖曳設定量具類型在選單上的順序）——
+           前端已經照畫面上（拖曳過後）的 DOM 順序把 items 排好送過來，
+           這裡直接拿陣列位置當 sort_order，不再另外收一個欄位，才不會有「兩邊各算一套順序」的疑慮。 */
+        $up = $db->prepare("UPDATE qc_tool_list SET calib_required=?, has_tool_no=?, calib_tab=?, calib_tab_group=?, sort_order=? WHERE QC_Tool_List_id=?");
+        $ord = 0;
         foreach ($items as $it) {
             $id = (int)($it['id'] ?? 0);
             if (!$id) continue;
+            $ord++;
             /* 這個類別的量具在其他頁面要顯示哪幾個欄位（ai-rules/25，唯一實作 qc_tool_display_lib）。
                **一定要收 array_key_exists**：沒送＝舊的呼叫端，設定原樣不動；
                送空陣列才是「這個類別只印編號」，兩者是不同的意思。 */
@@ -444,7 +449,7 @@ case 'save_categories': {
             $grp = (int)($it['calib_tab_group'] ?? 0);
             // 未列入分頁 or 指到不存在的分頁 → 一律歸零成「自成一頁」
             $grp = ($tab === 1 && $grp > 0 && in_array($grp, $validTabs, true)) ? $grp : null;
-            $up->execute([$req, $hasNo, $tab, $grp, $id]);
+            $up->execute([$req, $hasNo, $tab, $grp, $ord, $id]);
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
