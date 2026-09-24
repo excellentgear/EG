@@ -683,12 +683,28 @@ function si_insights(PDO $db, array $res, ?array $kpiAlert = null, ?array $ma = 
     }
     $newC = array_values(array_filter($res['clients'], function ($c) { return $c['flag'] === 'new'; }));
     $retC = array_values(array_filter($res['clients'], function ($c) { return $c['flag'] === 'return'; }));
-    if ($newC) $add('good', '新客戶：' . count($newC) . ' 家', '系統裡本期才第一次出現的客戶——'
-        . implode('、', array_map(function ($c) { return $c['name']; }, array_slice($newC, 0, 5)))
-        . (count($newC) > 5 ? ' 等' : '') . '。', count($newC) . ' 家');
-    if ($retC) $add('info', '回流客戶：' . count($retC) . ' 家', '以前就有往來、只是' . $cl . '剛好沒下單，這期又回來——'
-        . implode('、', array_map(function ($c) { return $c['name']; }, array_slice($retC, 0, 5)))
-        . (count($retC) > 5 ? ' 等' : '') . '（不是新開發的客源，要問的是「之前為什麼停了」）。', count($retC) . ' 家');
+    // 新客戶／回流客戶：附完整名單供前端展開點選，amount 一律用**本期出貨金額**
+    // （這兩種客戶本期都有實際出貨，跟流失客戶「本期沒有、要看基期」剛好相反）。
+    $mkCliList = function (array $rows) {
+        usort($rows, function ($a, $b) { return $b['cur']['ship_amount'] <=> $a['cur']['ship_amount']; });
+        return array_map(function ($c) {
+            return ['cid' => (string)$c['cid'], 'name' => $c['name'], 'amount' => round((float)$c['cur']['ship_amount']), 'bad' => !empty($c['bad'])];
+        }, $rows);
+    };
+    if ($newC) {
+        $sum = 0.0; foreach ($newC as $c) $sum += (float)$c['cur']['ship_amount'];
+        $add('good', '新客戶：' . count($newC) . ' 家', '系統裡本期才第一次出現的客戶，本期合計出貨金額 ' . $fmt($sum) . ' 元——'
+            . implode('、', array_map(function ($c) { return $c['name']; }, array_slice($newC, 0, 5)))
+            . (count($newC) > 5 ? ' 等' : '') . '。', count($newC) . ' 家',
+            ['clients' => $mkCliList($newC), 'unit' => '元', 'cmp_label' => '本期']);
+    }
+    if ($retC) {
+        $sum = 0.0; foreach ($retC as $c) $sum += (float)$c['cur']['ship_amount'];
+        $add('info', '回流客戶：' . count($retC) . ' 家', '以前就有往來、只是' . $cl . '剛好沒下單，這期又回來，本期合計出貨金額 ' . $fmt($sum) . ' 元——'
+            . implode('、', array_map(function ($c) { return $c['name']; }, array_slice($retC, 0, 5)))
+            . (count($retC) > 5 ? ' 等' : '') . '（不是新開發的客源，要問的是「之前為什麼停了」）。', count($retC) . ' 家',
+            ['clients' => $mkCliList($retC), 'unit' => '元', 'cmp_label' => '本期']);
+    }
 
     /* ⑤ 退貨異常增加 */
     $retRate = $cur['ship_amount'] > 0 ? round($cur['ret_amount'] * 100 / $cur['ship_amount'], 1) : 0;
@@ -722,10 +738,16 @@ function si_insights(PDO $db, array $res, ?array $kpiAlert = null, ?array $ma = 
              $ma['streak'] . ' 個月');
     }
 
-    /* ⑨ 未歸戶提醒 */
-    if (!empty($m['warn']['no_client'])) {
-        $add('info', '有出貨對不到客戶主檔', '本期 ' . $m['warn']['no_client'] . ' 筆出貨的客戶名稱對不到客戶主檔（已自成一組並標「未建主檔」）。',
-             $m['warn']['no_client'] . ' 筆');
+    /* ⑨ 未歸戶提醒——附完整名單（依名稱各自成一組），本期出貨金額方便判斷影響大小 */
+    $badCli = array_values(array_filter($res['clients'], function ($c) { return !empty($c['bad']) && (float)$c['cur']['ship_rows'] > 0; }));
+    if ($badCli) {
+        usort($badCli, function ($a, $b) { return $b['cur']['ship_amount'] <=> $a['cur']['ship_amount']; });
+        $sum = 0.0; foreach ($badCli as $c) $sum += (float)$c['cur']['ship_amount'];
+        $names = array_slice(array_map(function ($c) { return $c['name']; }, $badCli), 0, 6);
+        $add('warn', '有 ' . count($badCli) . ' 個客戶名稱對不到客戶主檔', '本期合計出貨金額 ' . $fmt($sum) . ' 元（共 '
+             . $m['warn']['no_client'] . ' 筆出貨）——' . implode('、', $names) . (count($badCli) > 6 ? ' 等' : '')
+             . '，這些出貨被各自當成獨立客戶處理，請到會計的對帳作業建別名歸戶。', count($badCli) . ' 個',
+             ['clients' => $mkCliList($badCli), 'unit' => '元', 'cmp_label' => '本期']);
     }
 
     if (!$out) $add('info', '本期沒有需要特別指出的變化', '各項指標與' . $cl . '相比沒有明顯異常波動。');

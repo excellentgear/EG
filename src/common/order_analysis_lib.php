@@ -1247,6 +1247,50 @@ function oa_insights(PDO $db, array $res, ?array $kpiAlert = null, ?array $ma = 
              ['clients' => $lostList, 'unit' => $useAmt ? '元' : '支', 'cmp_label' => $cl]);
     }
 
+    /* ④a／④b 新客戶／回流客戶——同樣附完整名單供前端展開點選；amount 一律用**本期**數字
+     * （這兩種客戶本期都有實際下單，跟流失客戶「本期沒有、要看基期」剛好相反）。 */
+    $newCli = array_values(array_filter($res['clients'], function ($c) { return $c['flag'] === 'new'; }));
+    $retCli = array_values(array_filter($res['clients'], function ($c) { return $c['flag'] === 'return'; }));
+    $mkClientList = function (array $rows) use ($mk) {
+        usort($rows, function ($a, $b) use ($mk) { return $b['cur'][$mk] <=> $a['cur'][$mk]; });
+        return array_map(function ($c) use ($mk) {
+            return ['cid' => (string)$c['cid'], 'name' => $c['name'], 'amount' => (float)$c['cur'][$mk], 'bad' => !empty($c['bad'])];
+        }, $rows);
+    };
+    if ($newCli) {
+        $sum = 0.0; foreach ($newCli as $c) $sum += (float)$c['cur'][$mk];
+        $names = array_slice(array_map(function ($c) { return $c['name']; }, $newCli), 0, 6);
+        $add('good', '本期新增 ' . count($newCli) . ' 家新客戶',
+             '系統裡本期才第一次出現，合計' . ($useAmt ? '金額' : '數量') . ' ' . $fmt($sum) . ($useAmt ? ' 元' : ' 支') . '，'
+             . implode('、', $names) . (count($newCli) > 6 ? ' 等' : '') . '。',
+             count($newCli) . ' 家',
+             ['clients' => $mkClientList($newCli), 'unit' => $useAmt ? '元' : '支', 'cmp_label' => '本期']);
+    }
+    if ($retCli) {
+        $sum = 0.0; foreach ($retCli as $c) $sum += (float)$c['cur'][$mk];
+        $names = array_slice(array_map(function ($c) { return $c['name']; }, $retCli), 0, 6);
+        $add('info', '本期 ' . count($retCli) . ' 家回流客戶',
+             '以前就有往來，只是' . $cl . '剛好沒下單、這期又回來，合計' . ($useAmt ? '金額' : '數量') . ' ' . $fmt($sum)
+             . ($useAmt ? ' 元' : ' 支') . '，' . implode('、', $names) . (count($retCli) > 6 ? ' 等' : '')
+             . '（不是新開發的客源，要問的是「之前為什麼停了」）。',
+             count($retCli) . ' 家',
+             ['clients' => $mkClientList($retCli), 'unit' => $useAmt ? '元' : '支', 'cmp_label' => '本期']);
+    }
+
+    /* ④c 客戶對不到客戶主檔——本期實際還在下單、但名稱在客戶主檔比不到的那幾家，
+     * 附本期金額方便判斷影響大小，同樣可展開點名單（未建主檔者不給開唯讀檢視）。 */
+    $badCli = array_values(array_filter($res['clients'], function ($c) { return !empty($c['bad']) && (float)$c['cur']['orders'] > 0; }));
+    if ($badCli) {
+        usort($badCli, function ($a, $b) use ($mk) { return $b['cur'][$mk] <=> $a['cur'][$mk]; });
+        $sum = 0.0; foreach ($badCli as $c) $sum += (float)$c['cur'][$mk];
+        $names = array_slice(array_map(function ($c) { return $c['name']; }, $badCli), 0, 6);
+        $add('warn', '有 ' . count($badCli) . ' 個客戶名稱對不到客戶主檔',
+             '本期合計' . ($useAmt ? '金額' : '數量') . ' ' . $fmt($sum) . ($useAmt ? ' 元' : ' 支') . '，'
+             . implode('、', $names) . (count($badCli) > 6 ? ' 等' : '') . '——這些訂單被各自當成獨立客戶處理，'
+             . '請到會計的對帳作業建別名歸戶。', count($badCli) . ' 個',
+             ['clients' => $mkClientList($badCli), 'unit' => $useAmt ? '元' : '支', 'cmp_label' => '本期']);
+    }
+
     /* ⑤ 新料號貢獻 */
     if ($cur['parts'] > 0) {
         $np = round($cur['new_parts'] * 100 / $cur['parts'], 1);
