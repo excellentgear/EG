@@ -86,6 +86,9 @@ $thisYear = (int)date('Y');
                   border-radius:3px; padding:1px 4px; min-height:18px; }
         .closed-yes { color:#2c7a3f; font-weight:700; }
         .closed-no  { color:var(--coral); font-weight:700; }
+        /* 報廢單號徽章：比照 qa_abnormal_list.php 的 .st.st-gm，底色＋外框，顯示在「處理方式」欄下方 */
+        .scrap-badge { display:inline-block; font-size:11px; background:var(--coral); color:#fff;
+                       border:1px solid #a83a26; border-radius:10px; padding:1px 8px; margin-top:2px; }
         .aero-tag { font-size:10px; background:var(--coral); color:#fff; border-radius:8px; padding:0 5px; }
         .m-mask { position:fixed; inset:0; background:rgba(74,53,36,.45); z-index:10300; display:none; }
         .m-box { position:absolute; left:50%; top:5vh; transform:translateX(-50%); background:#fff;
@@ -110,7 +113,9 @@ $thisYear = (int)date('Y');
     <h3><i class="fa fa-ban" style="color:var(--coral);"></i> 不合格品管制記錄表
       <span class="as-tag" id="asTag">2-QA-01-03</span>
       <span class="role-tag">目前身分：<?= htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8') ?></span>
-      <button id="btnPageHelp" class="page-help-btn" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
+      <a href="qa_abnormal_list.php" class="btn btn-default btn-sm" style="margin-left:auto;"
+         title="切換到品質異常處理單"><i class="fa fa-exchange"></i> 品質異常處理單</a>
+      <button id="btnPageHelp" class="page-help-btn"><i class="fa fa-question-circle"></i> 使用說明</button>
     </h3>
   </div>
 
@@ -162,15 +167,15 @@ $thisYear = (int)date('Y');
     <div class="ncr-scroll">
       <table class="ncr-tb" id="ncrTable">
         <colgroup>
-          <col style="width:3%"><col style="width:7%"><col style="width:7%"><col style="width:8%">
-          <col style="width:11%"><col style="width:9%"><col style="width:5%"><col style="width:10%">
-          <col style="width:15%"><col style="width:8%"><col style="width:10%"><col style="width:7%">
+          <col style="width:3%"><col style="width:8%"><col style="width:8%"><col style="width:10%">
+          <col style="width:9%"><col style="width:12%"><col style="width:5%"><col style="width:16%">
+          <col style="width:9%"><col style="width:12%"><col style="width:8%">
         </colgroup>
         <thead><tr>
-          <th>#</th><th>來源</th><th>檢驗日期</th><th>客戶</th><th>工件名稱</th><th>圖號/件號</th>
-          <th>數量</th><th>異常單編號</th><th>原因</th><th>責任單位</th><th>處理方式</th><th>結案</th>
+          <th>#</th><th>來源</th><th>單據日期</th><th>異常單編號</th><th>客戶</th><th>料號</th>
+          <th>數量</th><th>原因</th><th>責任單位</th><th>處理方式</th><th>結案</th>
         </tr></thead>
-        <tbody id="ncrBody"><tr><td colspan="12" style="padding:20px;color:#999;">載入中…</td></tr></tbody>
+        <tbody id="ncrBody"><tr><td colspan="11" style="padding:20px;color:#999;">載入中…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -197,8 +202,9 @@ $thisYear = (int)date('Y');
       </ul>
       <h4>哪些自動、哪些要人補</h4>
       <ul>
-        <li><b>自動帶入</b>：檢驗日期、客戶、工件名稱、圖號、數量、異常單編號，以及來源單本身有填的原因／責任單位／處理方式／結案狀態。</li>
-        <li><b>要人補</b>：來源單沒有的「原因／責任單位／處理方式」，以及<b>報廢單號</b>（程序書 6.5.1：報廢要把報廢單號填在本表內）、
+        <li><b>自動帶入</b>：單據日期、異常單編號、客戶、料號、數量，以及來源單本身有填的原因／責任單位／處理方式／結案狀態；
+            品質異常處理單來源的<b>報廢單號</b>也是自動帶（結案配發時系統直接寫入，顯示在「處理方式」欄下方）。</li>
+        <li><b>要人補</b>：來源單沒有的「原因／責任單位／處理方式」（其他來源的報廢單號請自行填在處理方式補充欄），以及
             <b>航太類標記</b>（6.5.3：航太類不良品要記錄於本表並貼紅色吊卡）、結案。</li>
         <li>點任何一格就可以直接改，<b>離開欄位就自動存檔</b>。人改過的值會以淺黃底標示，
             並且<b>優先於系統帶入的值</b>；把它清空就回到系統帶的值。</li>
@@ -214,10 +220,10 @@ $thisYear = (int)date('Y');
       <ol>
         <li>選年度（或自訂日期區間），按「查詢」。</li>
         <li>用上方的來源徽章、結案狀態、航太類、關鍵字縮小範圍。</li>
-        <li>逐列補上原因／責任單位／處理方式；處理方式選「報廢」時記得在補充欄填報廢單號。</li>
+        <li>逐列補上原因／責任單位／處理方式；非品質異常處理單來源選「報廢」時記得在補充欄填報廢單號。</li>
         <li>處理完的勾「結案」（沒填結案日期會自動補當天）。</li>
         <li>紙本上有、系統裡卻沒有來源單的，用「紙本補登」自己加一列。</li>
-        <li>按「列印」產生正式表單（A4 橫式，含公司全名與 AS 文件編號、製表與主管審核簽章格）。</li>
+        <li>按「列印」直接產生這個期間的登錄簿列印版（A4 橫式，含公司全名與 AS 文件編號，不含日期與簽章格——這只是一本紀錄表）。</li>
       </ol>
       <h4>權限</h4>
       <ul>
@@ -239,16 +245,13 @@ $thisYear = (int)date('Y');
     <div class="m-body">
       <div class="note-box">紙本上有、系統裡卻沒有對應來源單的不合格品事件，用這裡補登。
         <b>補登的列可以刪除</b>；由來源自動帶進來的列不行（那會讓紀錄憑空消失）。</div>
-      <div class="fg"><label>檢驗日期 <span style="color:var(--coral);">*</span></label>
+      <div class="fg"><label>單據日期 <span style="color:var(--coral);">*</span></label>
         <input type="date" id="mDate" class="form-control input-sm" style="width:170px;"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <div class="fg" style="flex:1;min-width:150px;"><label>客戶</label><input type="text" id="mClient" class="form-control input-sm"></div>
-        <div class="fg" style="flex:1;min-width:150px;"><label>工件名稱</label><input type="text" id="mPart" class="form-control input-sm"></div>
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <div class="fg" style="flex:1;min-width:120px;"><label>圖號/件號</label><input type="text" id="mDraw" class="form-control input-sm"></div>
-        <div class="fg" style="width:100px;"><label>數量</label><input type="text" id="mQty" class="form-control input-sm"></div>
         <div class="fg" style="flex:1;min-width:130px;"><label>異常單編號</label><input type="text" id="mNo" class="form-control input-sm"></div>
+        <div class="fg" style="flex:1;min-width:150px;"><label>客戶</label><input type="text" id="mClient" class="form-control input-sm"></div>
+        <div class="fg" style="flex:1;min-width:150px;"><label>料號</label><input type="text" id="mPart" class="form-control input-sm"></div>
+        <div class="fg" style="width:100px;"><label>數量</label><input type="text" id="mQty" class="form-control input-sm"></div>
       </div>
       <div class="fg"><label>原因</label><input type="text" id="mCause" class="form-control input-sm"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -279,15 +282,10 @@ $thisYear = (int)date('Y');
           <button class="btn btn-sm btn-default" onclick="ncrClearDoc()"><i class="fa fa-times"></i> 取消</button>
         </div>
       </div>
-      <div class="fg" style="margin-bottom:16px;">
+      <div class="fg">
         <label>要彙整哪些來源</label>
         <div class="muted-help" style="margin-bottom:4px;">至少要保留一個，否則這張表會永遠是空的。</div>
         <div id="setSources"></div>
-      </div>
-      <div class="fg">
-        <label>製表／主管審核圖章模板</label>
-        <div class="muted-help" style="margin-bottom:4px;">模板在「圖章管理 → 線上圖章設計」建立；未指定則用系統預設回墨印。列印一律用模板設計的實際尺寸，不會被縮小。</div>
-        <select id="setStampTpl" class="form-control input-sm" style="max-width:400px;"><option value="0">（用系統預設印章）</option></select>
       </div>
     </div>
     <div class="m-foot">
@@ -303,8 +301,6 @@ $thisYear = (int)date('Y');
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
-<script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
-<script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
@@ -342,7 +338,7 @@ $('#btnReload').on('click', load);
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 
 function load(){
-    $('#ncrBody').html('<tr><td colspan="12" style="padding:20px;color:#999;">查詢中…</td></tr>');
+    $('#ncrBody').html('<tr><td colspan="11" style="padding:20px;color:#999;">查詢中…</td></tr>');
     var p = {action:'list', closed:$('#fClosed').val(), kw:$('#fKw').val(),
              aero:$('#fAero').is(':checked')?1:0};
     if($('#fFrom').val() && $('#fTo').val()){ p.from=$('#fFrom').val(); p.to=$('#fTo').val(); }
@@ -393,32 +389,32 @@ function txtCell(i, k, val, srcVal, ro){
          + (CAN_ADMIN?'':'readonly')+' title="'+(srcVal?('系統帶入：'+esc(srcVal)):'系統沒有這個值，請補填')+'">';
 }
 function renderRows(){
-    if(!ST.rows.length){ $('#ncrBody').html('<tr><td colspan="12" style="padding:20px;color:#999;">這個期間沒有不合格品紀錄</td></tr>'); return; }
+    if(!ST.rows.length){ $('#ncrBody').html('<tr><td colspan="11" style="padding:20px;color:#999;">這個期間沒有不合格品紀錄</td></tr>'); return; }
     var dopt='<option value=""></option>';
     ST.disp.forEach(function(d){ dopt+='<option value="'+esc(d)+'">'+esc(d)+'</option>'; });
     var h='';
     ST.rows.forEach(function(r,i){
+        var dispHtml = r.src_readonly
+            ? '<div class="ro-src">'+(esc(r.disposition)||'<span class="muted-help">－</span>')+'</div>'
+              +'<div class="muted-help" style="font-size:10px;">由來源單決定，請到來源單修改</div>'
+            : '<select class="f-in" data-i="'+i+'" data-k="disposition" '+(CAN_ADMIN?'':'disabled')+'>'+dopt+'</select>'
+              + txtCell(i,'disposition_note',r.disposition_note,'')
+              + '<div class="muted-help" style="font-size:10px;">報廢請填報廢單號</div>';
+        // 報廢單號獨立標成徽章放在處理方式下方（比照 qa_abnormal_list.php），不再混在來源小字說明裡
+        if (r.scrap_no) dispHtml += '<div><span class="scrap-badge">'+esc(r.scrap_no)+'</span></div>';
         h+='<tr>'
           +'<td>'+(i+1)+'</td>'
           +'<td><span class="src-badge src-'+esc(r.source)+'">'+esc(r.source_name)+'</span>'
           + (r.src_extra?'<div class="muted-help" style="font-size:10px;">'+esc(r.src_extra)+'</div>':'')
           + (r.is_aero?'<div><span class="aero-tag">航太</span></div>':'')+'</td>'
           +'<td>'+esc(dispDate(r.insp_date))+'</td>'
+          +'<td class="tl">'+esc(r.order_no)+'</td>'
           +'<td class="tl">'+esc(r.client_name)+'</td>'
           +'<td class="tl">'+esc(r.part_name)+'</td>'
-          +'<td class="tl">'+esc(r.drawing_no)+'</td>'
           +'<td>'+esc(r.qty)+'</td>'
-          +'<td class="tl">'+esc(r.order_no)+'</td>'
           +'<td class="tl">'+txtCell(i,'cause',r.cause,r.src_cause,r.src_readonly)+'</td>'
           +'<td class="tl">'+txtCell(i,'resp_unit',r.resp_unit,r.src_resp,r.src_readonly)+'</td>'
-          +'<td class="tl">'
-          + (r.src_readonly
-              ? '<div class="ro-src">'+(esc(r.disposition)||'<span class="muted-help">－</span>')+'</div>'
-                +'<div class="muted-help" style="font-size:10px;">由來源單決定，請到來源單修改</div>'
-              : '<select class="f-in" data-i="'+i+'" data-k="disposition" '+(CAN_ADMIN?'':'disabled')+'>'+dopt+'</select>'
-                + txtCell(i,'disposition_note',r.disposition_note,'')
-                + '<div class="muted-help" style="font-size:10px;">報廢請填報廢單號</div>')
-          +'</td>'
+          +'<td class="tl">'+dispHtml+'</td>'
           +'<td>'
           + (CAN_ADMIN && !r.src_readonly
               ? '<label style="font-weight:normal;font-size:11px;margin:0;"><input type="checkbox" class="f-ck" data-i="'+i+'" data-k="is_closed"'+(r.is_closed?' checked':'')+(r.src_closed?' disabled title="來源單已結案"':'')+'> 結案</label>'
@@ -461,19 +457,19 @@ $('#btnManual').on('click', function(){
     var o='<option value=""></option>';
     ST.disp.forEach(function(d){ o+='<option value="'+esc(d)+'">'+esc(d)+'</option>'; });
     $('#mDisp').html(o);
-    $('#mDate,#mClient,#mPart,#mDraw,#mQty,#mNo,#mCause,#mResp').val('');
+    $('#mDate,#mClient,#mPart,#mQty,#mNo,#mCause,#mResp').val('');
     $('#mErr').text('');
     openMask('manMask');
 });
 $('#btnManSave').on('click', function(){
     // 前端即時驗證＋紅字說明原因（UI 規則第三總則）；後端同規則再擋一次
     var d=$('#mDate').val();
-    if(!d){ $('#mErr').text('請填檢驗日期——這是這張表排序與歸屬期間的依據，不能留白。'); $('#mDate').focus(); return; }
+    if(!d){ $('#mErr').text('請填單據日期——這是這張表排序與歸屬期間的依據，不能留白。'); $('#mDate').focus(); return; }
     var q=$('#mQty').val().trim();
     if(q!=='' && isNaN(parseFloat(q))){ $('#mErr').text('數量請填數字。'); $('#mQty').focus(); return; }
     $('#mErr').text('');
     ajxPost({action:'manual_add', insp_date:d, client_name:$('#mClient').val(), part_name:$('#mPart').val(),
-             drawing_no:$('#mDraw').val(), qty:q, order_no:$('#mNo').val(), cause:$('#mCause').val(),
+             qty:q, order_no:$('#mNo').val(), cause:$('#mCause').val(),
              resp_unit:$('#mResp').val(), disposition:$('#mDisp').val()},
         function(r){ if(r.ok){ closeMask('manMask'); load(); } });
 });
@@ -491,11 +487,6 @@ $('#btnSetting').on('click', function(){
               +esc(r.sources[k])+'</label>';
         });
         $('#setSources').html(h);
-        var s=$('#setStampTpl').html('<option value="0">（用系統預設印章）</option>');
-        (r.stamp_tpls||[]).forEach(function(t){
-            s.append('<option value="'+t.id+'">'+esc(t.tpl_name)+(t.type_name?'（'+esc(t.type_name)+'）':'')+'</option>');
-        });
-        s.val(String(parseInt(r.stamp_tpl_id||0)||0));
         openMask('setMask');
     });
 });
@@ -516,8 +507,7 @@ $('#btnSetSave').on('click', function(){
     var srcs=[];
     $('.set-src:checked').each(function(){ srcs.push($(this).val()); });
     if(!srcs.length){ alert('至少要保留一個來源，否則這張表會永遠是空的'); return; }
-    ajxPost({action:'setting_save', sources:JSON.stringify(srcs),
-             stamp_tpl_id:parseInt($('#setStampTpl').val()||0)||0},
+    ajxPost({action:'setting_save', sources:JSON.stringify(srcs)},
         function(r){ if(r.ok){ closeMask('setMask'); ST.srcSel=null; load(); } });
 });
 <?php endif; ?>
@@ -527,44 +517,44 @@ $('#btnPrint').on('click', function(){
     if(!ST.rows.length){ alert('目前條件下沒有資料可以列印'); return; }
     ajxGet({action:'print_meta', from:ST.from, to:ST.to}, function(m){
         if(!m.ok) return;
-        window.__ownCompany = m.company||'';   // eg_stamp.js 畫預設回墨印要用（ai-rules/18 鐵則2）
-        // 掃描實體章對照表是非同步載入的，沒等它會把有實體章的人印成預設 SVG 章
-        if(window.EGStamp&&EGStamp.whenReady) EGStamp.whenReady(function(){ doPrint(m); });
-        else doPrint(m);
+        doPrint(m);
     });
 });
+/* 這只是一本登錄簿的期間彙整紀錄表，不需要日期欄、也不需要製表／審核簽章
+   （使用者 2026-09-24 明確要求：本表單就是一個紀錄表而已） */
 function doPrint(m){
     var title=(m.doc&&m.doc.doc_name)?m.doc.doc_name:'不合格品管制記錄表';
     var asTxt=String(m.doc_no_print||'').replace(/['\\]/g,'');
-    var meta='<table class="p-meta"><colgroup><col style="width:9%"><col style="width:33%"><col style="width:9%"><col style="width:22%"><col style="width:9%"><col style="width:18%"></colgroup>'
+    var meta='<table class="p-meta"><colgroup><col style="width:12%"><col style="width:46%"><col style="width:12%"><col style="width:30%"></colgroup>'
         +'<tr><th>統計期間</th><td>'+esc(dispDate(ST.from))+' ~ '+esc(dispDate(ST.to))+'</td>'
-        +'<th>筆數</th><td>'+ST.rows.length+' 筆</td>'
-        +'<th>日期</th><td>'+esc(dispDate(m.biz_date))+'</td></tr></table>';
+        +'<th>筆數</th><td>'+ST.rows.length+' 筆</td></tr></table>';
     var tb='';
     ST.rows.forEach(function(r,i){
         var disp=[r.disposition||'', r.disposition_note||''].filter(Boolean).join(' ');
+        if(r.scrap_no) disp=(disp?disp+' ':'')+'（報廢單 '+r.scrap_no+'）';
+        // 結案欄要跟前端畫面上的顯示方式相同（使用者要求），不是印「是」，而是「已結案／未結案」
+        var closedTxt = r.is_closed
+            ? '<span class="p-closed-yes">已結案</span>'+(r.closed_date?'<br>'+esc(dispDate(r.closed_date)):'')
+            : '<span class="p-closed-no">未結案</span>';
         tb+='<tr>'
           +'<td>'+(i+1)+'</td>'
-          +'<td class="tl">'+esc(r.client_name)+'</td>'
-          +'<td class="tl">'+esc(r.part_name)+(r.is_aero?'<br>（航太）':'')+'</td>'
-          +'<td class="tl">'+esc(r.drawing_no)+'</td>'
-          +'<td>'+esc(r.qty)+'</td>'
           +'<td class="tl">'+esc(r.order_no)+'</td>'
           +'<td>'+esc(dispDate(r.insp_date))+'</td>'
+          +'<td class="tl">'+esc(r.client_name)+'</td>'
+          +'<td class="tl">'+esc(r.part_name)+(r.is_aero?'<br>（航太）':'')+'</td>'
+          +'<td>'+esc(r.qty)+'</td>'
           +'<td class="tl">'+esc(r.cause)+'</td>'
           +'<td class="tl">'+esc(r.resp_unit)+'</td>'
           +'<td class="tl">'+esc(disp)+'</td>'
-          +'<td>'+(r.is_closed?('是'+(r.closed_date?'<br>'+esc(dispDate(r.closed_date)):'')):'')+'</td>'
+          +'<td>'+closedTxt+'</td>'
           +'</tr>';
     });
-    var tbl='<table class="p-tb"><colgroup><col style="width:4%"><col style="width:9%"><col style="width:12%"><col style="width:9%">'
-        +'<col style="width:5%"><col style="width:11%"><col style="width:8%"><col style="width:17%"><col style="width:8%">'
-        +'<col style="width:11%"><col style="width:6%"></colgroup>'
-        +'<thead><tr><th>#</th><th>客戶</th><th>工件名稱</th><th>圖號/件號</th><th>數量</th><th>異常單編號</th>'
-        +'<th>檢驗日期</th><th>原因</th><th>責任單位</th><th>處理方式</th><th>結案</th></tr></thead>'
+    var tbl='<table class="p-tb"><colgroup><col style="width:4%"><col style="width:11%"><col style="width:9%"><col style="width:10%">'
+        +'<col style="width:13%"><col style="width:5%"><col style="width:18%"><col style="width:9%">'
+        +'<col style="width:13%"><col style="width:8%"></colgroup>'
+        +'<thead><tr><th>#</th><th>異常單編號</th><th>單據日期</th><th>客戶</th><th>料號</th><th>數量</th>'
+        +'<th>原因</th><th>責任單位</th><th>處理方式</th><th>結案</th></tr></thead>'
         +'<tbody>'+tb+'</tbody></table>';
-    var sign='<div class="p-sign"><div class="box"><div class="cap">主管審核</div></div>'
-           +'<div class="box"><div class="cap">製表</div>'+makerStamp(m, dispDate(m.biz_date))+'</div></div>';
     var css='body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;margin:0;padding:0 4mm;color:#222;'
         +'-webkit-print-color-adjust:exact;print-color-adjust:exact;}*{box-sizing:border-box;}'
         +'.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:2px;}'
@@ -577,18 +567,12 @@ function doPrint(m){
         +'table.p-tb th,table.p-tb td{border:1px solid #666;padding:2px 4px;text-align:center;overflow-wrap:break-word;word-break:break-word;}'
         +'table.p-tb thead th{background:#f3ead6;}table.p-tb td.tl{text-align:left;}'
         +'table.p-tb tr{break-inside:avoid;page-break-inside:avoid;}'
-        +'.p-sign{margin-top:8px;display:flex;gap:10px;justify-content:flex-end;}'
-        +'.p-sign .box{border:1px solid #666;min-width:150px;min-height:58px;padding:2px 6px;text-align:center;}'
-        +'.p-sign .box .cap{font-size:10px;color:#555;border-bottom:1px solid #ccc;padding-bottom:1px;margin-bottom:2px;}'
-        +'.stamp-wrap{display:inline-block;text-align:center;margin:2px 0;}'
-        +'.stamp-wrap .stamp-title{display:block;font-size:11px;color:#999;}'
-        +'.stamp-wrap svg{-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-        +'.stamp-wrap svg.car-stamp{width:91px;height:91px;}'
-        +'.stamp-wrap.stamp-fill{height:auto !important;display:inline-block;}'
+        +'.p-closed-yes{color:#2c7a3f;font-weight:700;}'
+        +'.p-closed-no{color:#DD5138;font-weight:700;}'
         +'@page{size:A4 landscape;margin:12mm 8mm 16mm;'
         +(asTxt?" @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }":'')
         +'}';
-    var body='<div class="p-comp">'+esc(m.company||'')+'</div><div class="p-title">'+esc(title)+'</div>'+meta+tbl+sign;
+    var body='<div class="p-comp">'+esc(m.company||'')+'</div><div class="p-title">'+esc(title)+'</div>'+meta+tbl;
     try{ if(window.EGPrintLog) EGPrintLog.record({source:'qa_ncr_log', doc_name:title+' '+ST.from+'~'+ST.to, doc_kind:'form'}); }catch(e){}
     var w=window.open('','_blank');
     if(!w){ alert('請允許彈出視窗以列印'); return; }
@@ -601,20 +585,13 @@ function doPrint(m){
         +'document.head.appendChild(st);}setTimeout(function(){window.print();},250);};</scr'+'ipt></body></html>');
     w.document.close(); w.focus();
 }
-function makerStamp(m, dateStr){
-    var nm=(m&&m.maker_name)||'';
-    if(!nm||!window.EGStamp) return esc(nm);
-    var schema=(m&&m.stamp_tpl&&m.stamp_tpl.schema)?m.stamp_tpl.schema:null;
-    var who=(m&&m.maker)||{};
-    try{ return EGStamp.stamp(nm, dateStr, false, schema, who.dept||'', who.position||''); }catch(e){ return esc(nm); }
-}
 
 /* ══ CSV ══ */
 $('#btnCsv').on('click', function(){
     if(!ST.rows.length){ alert('目前條件下沒有資料'); return; }
-    var head=['#','來源','檢驗日期','客戶','工件名稱','圖號/件號','數量','異常單編號','原因','責任單位','處理方式','處理補充','航太','結案','結案日期','備註'];
-    var rows=ST.rows.map(function(r,i){ return [i+1,r.source_name,r.insp_date,r.client_name,r.part_name,
-        r.drawing_no,r.qty,r.order_no,r.cause,r.resp_unit,r.disposition,r.disposition_note,
+    var head=['#','來源','單據日期','異常單編號','客戶','料號','數量','原因','責任單位','處理方式','處理補充','報廢單號','航太','結案','結案日期','備註'];
+    var rows=ST.rows.map(function(r,i){ return [i+1,r.source_name,r.insp_date,r.order_no,r.client_name,r.part_name,
+        r.qty,r.cause,r.resp_unit,r.disposition,r.disposition_note,r.scrap_no,
         r.is_aero?'是':'',r.is_closed?'是':'',r.closed_date,r.remark]; });
     var q=function(v){ v=(v===null||v===undefined)?'':String(v); return '"'+v.replace(/"/g,'""')+'"'; };
     var csv=head.map(q).join(',')+'\r\n'+rows.map(function(r){ return r.map(q).join(','); }).join('\r\n');
