@@ -677,6 +677,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             $pdo->prepare("DELETE FROM qc_inspection_edit_log WHERE qc_form_id=?")->execute([$qid]);
             $pdo->prepare("DELETE FROM qc_sample_change_log WHERE qc_form_id=?")->execute([$qid]);
             $pdo->prepare("DELETE FROM qc_check_form WHERE qc_form_id=?")->execute([$qid]);
+            // 刪掉中間那一筆之後，同批次後面幾筆的次數要跟著往前移一格，不然畫面會一直卡在
+            // 「第2次、第3次…」缺了第1次，看起來像資料被漏掉（使用者 2026-09-24 回報）。
+            // 臨時檢驗單/出貨檢驗（bom_ing_fid=0）一律 batch_no=round_no=1、從不會有 round_no>1，
+            // 這段對它們形同不執行；仍多帶 d_id 條件防止萬一同批 bom_ing_fid=0 誤傷到別的料號。
+            $renumSql = "UPDATE qc_check_form SET round_no = round_no - 1 WHERE bom_ing_fid=? AND batch_no=? AND round_no > ?";
+            $renumParams = [(int)$form['bom_ing_fid'], (int)$form['batch_no'], (int)$form['round_no']];
+            if ((int)$form['bom_ing_fid'] === 0) { $renumSql .= " AND d_id=?"; $renumParams[] = (int)$form['d_id']; }
+            $pdo->prepare($renumSql)->execute($renumParams);
             // 稽核：刪掉的內容整包留存，事後查得到誰刪了什麼
             try {
                 $pdo->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
@@ -2720,6 +2728,8 @@ $(function(){
     var MODEL = { items:[], pcs:[], tools:[] };   // tools＝本單使用量具（Tool_id 字串陣列）
     var TOOLS = ['卡尺','分厘卡','投影機','三次元','針規','目視'];
     var TOOL_INSTANCES = [];                                  // [{id,no,cat}]
+    var TOOL_CATS_ORDER = [];   // 量具類型在選單上的順序＝qc_tool_list.sort_order（量測儀器校驗管理「類別設定」可拖曳），
+                                 // 唯一來源；不可以自己用「哪個類型第一支編號比較小」猜順序
     var view      = localStorage.getItem('qc2_view')   || 'ITEM';   // ITEM / PCS / GRID
     var keypadOn  = localStorage.getItem('qc2_keypad') === '1';
     var codeMode  = localStorage.getItem('qc_item_code_mode') || 'ALPHA';
@@ -2851,7 +2861,8 @@ $(function(){
     function loadToolInstances(){
         $.post(API, { action:'get_tool_manage_data' }, function(res){
             if(!res || !res.success) return;
-            var cats={}; (res.categories||[]).forEach(function(c){ cats[c.QC_Tool_List_id]=c.QC_Tool; });
+            var cats={}; TOOL_CATS_ORDER=[];
+            (res.categories||[]).forEach(function(c){ cats[c.QC_Tool_List_id]=c.QC_Tool; TOOL_CATS_ORDER.push(c.QC_Tool); });
             TOOL_INSTANCES = (res.tools||[]).map(function(t){
                 var sp=((t.spec_brand||'')+' '+(t.spec_text||'')).replace(/\s+/g,' ').trim();
                 return { id:String(t.Tool_id), no:t.Tool_No, cat:cats[t.QC_Tool_List_id]||'', spec:sp,
@@ -3527,14 +3538,19 @@ $(function(){
     }
     function tpSelCount(){ var c=0; for(var k in tpSel){ if(tpSel[k]) c++; } return c; }
     // ① 類型：一格一個類型，順便標「這個類型已經選了幾支」，換類型時不必來回確認
+    // 順序一律依 TOOL_CATS_ORDER（量測儀器校驗管理「類別設定」可拖曳的排序），
+    // 2026-09-24 使用者回報這裡的排列跟設定頁不一致，才發現舊版是「哪個類型第一支量具編號較小」
+    // 這種偶然順序，不是管理員排好的順序。
     function tpRenderCats(){
-        var cats=[], cnt={}, sel={};
+        var cnt={}, sel={};
         TOOL_INSTANCES.forEach(function(t){
             var c=t.cat||'（未分類）';
-            if(cnt[c]===undefined){ cnt[c]=0; sel[c]=0; cats.push(c); }
+            if(cnt[c]===undefined){ cnt[c]=0; sel[c]=0; }
             cnt[c]++;
             if(tpSel[String(t.id)]) sel[c]++;
         });
+        var cats=TOOL_CATS_ORDER.filter(function(c){ return cnt[c]; });
+        Object.keys(cnt).forEach(function(c){ if(cats.indexOf(c)<0) cats.push(c); });   // 未分類/例外一律排最後
         $('#tp-cats').html(cats.length ? cats.map(function(c){
             return '<button type="button" class="tp-cat'+(sel[c]?' has-sel':'')+'" data-c="'+esc(c)+'">'+esc(c)+
                    '<small>'+cnt[c]+' 支'+(sel[c]?('　已選 '+sel[c]):'')+'</small></button>';
@@ -4304,13 +4320,22 @@ $(function(){
     });
 
     // 同 BOM 同製程（同一 bom_ing_fid）多批到貨、多張檢驗表時，「訂單數」不再只印固定值，
-    // 改自動算出「還沒送驗的量」：訂單數（bi.sqty）扣掉每個批次已登記的送驗數（取該批次最新一次的 incoming_qty，
-    // 同一批的複驗/重做不重複累計）——使用者 2026-09-24 要求。
+    // 改自動算出「還沒送驗的量」：訂單數（bi.sqty）扣掉每個批次已登記的送驗數——使用者 2026-09-24 要求。
+    // 「已送驗」的算法分兩種次數性質，不能一律只取批次最後一筆：
+    //  ①首件/末件＝各自獨立抽出來的樣本（例：先驗1件首件，剩下的才進入一般批次），逐筆全部累加；
+    //  ②一般（複驗/重做）＝同一批東西反覆驗，只認最後一次登記的量，不然退回重做一次就多算一次。
+    // 若只取「批次最後一筆」（改版前的舊算法），會漏算首件已經吃掉的量，一般批次的預設值就會
+    // 少扣那幾件，變成「首件驗1件、剩下69件卻還是帶入70件」（使用者 2026-09-24 實測回報）。
     function pendingSummary(){
         var order=ctx.order_qty||0, used=0;
         (state.batches||[]).forEach(function(b){
             if(!b.rounds || !b.rounds.length) return;
-            used += (b.rounds[b.rounds.length-1].incoming_qty||0);
+            var lastNormal=null;
+            b.rounds.forEach(function(r){
+                if(r.insp_kind==='FIRST' || r.insp_kind==='LAST') used += (r.incoming_qty||0);
+                else lastNormal=r;
+            });
+            if(lastNormal) used += (lastNormal.incoming_qty||0);
         });
         return { left:Math.max(0, order-used), order:order, used:used };
     }
@@ -4560,14 +4585,13 @@ $(function(){
         var ps=pendingSummary();
         $el.attr('title','訂單數 '+ps.order+' 件，已送驗 '+ps.used+' 件').text(ps.left+' / '+ps.order+'pcs');
     }
-    // 切到「還沒有任何檢驗紀錄」的批次（新到貨批次剛建立、或本來就是第一批）時，
-    // 「本批送驗數」自動帶入「尚未檢驗」的剩餘量，不必自己心算訂單數減掉已送驗的量
-    // （使用者 2026-09-24 回報：批次2應該帶入69卻沒有）。已有紀錄的批次不動這個欄位
-    // ——那是要給「修改」用的，改由 openEditRecord() 帶回原本存檔的值。
+    // 準備填寫「下一次」檢驗時，「本批送驗數」自動帶入「尚未檢驗」的剩餘量，不必自己心算
+    // 訂單數減掉已送驗的量——不論這是批次的第一次、還是同一批次接著再驗一次（例：首件驗完
+    // 1件、接著驗剩下69件），都要重算，否則欄位會停在上一輪殘留的值或訂單總量
+    // （使用者 2026-09-24 回報：批次1驗完首件1件後，下一次仍帶入70而不是69）。
+    // 只有「正在修改某一筆既有紀錄」時才不動這個欄位——那是 openEditRecord() 帶回原本存檔的值。
     function applyPendingQtyDefault(){
         if(ctx.adhoc || state.editFormId) return;
-        var b=state.batches[state.curBatch];
-        if(b && b.rounds && b.rounds.length) return;
         $('#inp-qty').val(pendingSummary().left);
     }
     $('#btn-toggle-batch').on('click', function(e){
@@ -4605,7 +4629,10 @@ $(function(){
                 else if(state.can_fill || state.is_supervisor) ncr='<button class="btn btn-xs btn-coral act-open-ncr" data-id="'+r.qc_form_id+'"><i class="fa fa-file-text-o"></i> 開異常單</button>';
                 else ncr='<span class="label label-default">未開單</span>';
             }
-            return '<tr class="history-row"><td>第'+(r.round_no||(i+1))+'次'+inspKindBadge(r.insp_kind)+'</td><td>'+esc(r.date)+insp+appr+edited+'</td><td>'+statusLabel(r.status)+
+            // 次數固定顯示「排在第幾筆」(i+1)，不直接印資料庫存的 round_no——
+            // 中間刪掉一筆之後舊資料的 round_no 可能還沒補齊(2026-09-24 前建立的)，
+            // 用位置編號永遠是連續的 1,2,3…，不會出現看起來像漏資料的缺口。
+            return '<tr class="history-row"><td>第'+(i+1)+'次'+inspKindBadge(r.insp_kind)+'</td><td>'+esc(r.date)+insp+appr+edited+'</td><td>'+statusLabel(r.status)+
                    '</td><td>'+(r.incoming_qty||0)+' / '+(r.ng_qty||0)+'</td><td>'+ncr+'</td><td>'+act+'</td></tr>';
         }).join('');
         $('#batch-history').html(
