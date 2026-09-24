@@ -287,13 +287,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'creator' => $nameMap[$creatorOf($f)] ?? '',
                 ];
             }
-            // last_form 只給封面總覽表用（判定＋檢驗人），使用者 2026-09-24 回報「上面製程列表不顯示
+            // last_form 只給封面總覽表用（判定＋檢驗人＋日期），使用者 2026-09-24 回報「上面製程列表不顯示
             // 檢驗人欄位」——原本直接回傳原始 SQL 列（created_by 是數字 id、也沒有解析過姓名），
-            // 這裡另外整理成乾淨欄位，不可再回傳原始列。
+            // 這裡另外整理成乾淨欄位，不可再回傳原始列。date 供前端算「最後檢驗日」（確認日期預設值）用。
             $lastF = $forms ? end($forms) : null;
             $lastFormOut = $lastF ? [
                 'check_result' => $lastF['check_result'], 'insp_kind' => $lastF['insp_kind'] ?: 'NORMAL',
                 'creator' => $nameMap[$creatorOf($lastF)] ?? '',
+                'date' => substr((string)($lastF['check_date'] ?: $lastF['created_at']), 0, 10),
             ] : null;
             return [
                 'bom_ing_fid' => $fid, 'bom_sn' => $label['sn'], 'process_name' => $label['name'],
@@ -331,7 +332,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'vendor_missing' => (trim((string)$effectiveMaker) === ''),
                 'packing_open' => $last ? ($last['status'] !== 'closed') : false,
                 'batches' => array_values($batches),
-                'last_form' => $last ? ['check_result' => $judgeToResult($last['judgement']), 'creator' => $last['packer'] ?: ''] : null,
+                // date 供前端算「最後檢驗日」（確認日期預設值）用，比照製程 last_form 一併帶出
+                'last_form' => $last ? ['check_result' => $judgeToResult($last['judgement']), 'creator' => $last['packer'] ?: '',
+                    'date' => substr((string)$last['inspection_date'], 0, 10)] : null,
                 'detail' => $pkRows ? ['sample_n' => 0, 'items' => [], 'packing_rows' => array_map(function ($pr) {
                     return [
                         'date' => substr((string)$pr['inspection_date'], 0, 10),
@@ -441,6 +444,14 @@ body{ background:#F6F1EA; }
                 <label class="radio-inline"><input type="radio" name="orient" value="portrait" checked> 直式</label>
                 <label class="radio-inline"><input type="radio" name="orient" value="landscape"> 橫式</label>
             </div>
+        </div>
+        <!-- 確認日期：預設帶最後檢驗日期，全部製程（含包裝）都已完成檢驗才可以自行改成更晚的日期（2026-09-24 使用者交辦） -->
+        <div class="form-inline" style="margin-bottom:10px;">
+            <div class="form-group">
+                <label>確認日期</label>
+                <input type="date" class="form-control input-sm" id="inp-confirm-date" style="width:150px;">
+            </div>
+            <span class="muted-help" id="confirm-date-hint" style="margin-left:10px;"></span>
         </div>
         <div id="drawing-pick-wrap" style="display:none;margin-bottom:10px;">
             <label>圖面（將印在封面上）：</label>
@@ -558,12 +569,15 @@ function trimNum(v){ // 小數尾 0 省略（3.50→3.5），比照全站慣例
     var s=String(v); if(s.indexOf('.')<0) return s;
     s=s.replace(/0+$/,'').replace(/\.$/,''); return s===''||s==='-' ? '0' : s;
 }
-// 圖章日期：這是「這次列印」當下的確認，不是任何一筆檢驗自己的業務日期（多製程彙總報告沒有單一
-// 業務日期可用），一律用列印當天，YYYY.MM.DD（ai-rules/20）。
-function printTodayStr(){
+// 圖章／封面確認日期：2026-09-24 使用者交辦改成預設「最後檢驗日期」（本張BOM所有製程含包裝
+// 最新的一筆檢驗日）——多製程彙總報告過去因為「沒有單一業務日期可用」一律用列印當天，但那等於
+// 每次列印都自動蓋成今天，跟實際檢驗完成的時間點對不起來；只有全部製程（含包裝）都已完成檢驗、
+// 資料確定不會再變動時，列印者才可以自行改成比最後檢驗日更晚的日期（見 computeCoverage/renderConfirmDate）。
+function todayIsoStr(){
     var n=new Date(), p=function(x){ return ('0'+x).slice(-2); };
-    return n.getFullYear()+'.'+p(n.getMonth()+1)+'.'+p(n.getDate());
+    return n.getFullYear()+'-'+p(n.getMonth()+1)+'-'+p(n.getDate());
 }
+function dotDate(s){ return s ? String(s).replace(/-/g,'.') : ''; }
 var DATA=null;
 
 function loadData(mode, drawing, cb){
@@ -576,6 +590,7 @@ function loadData(mode, drawing, cb){
         renderInfoBar();
         renderVendorWarn();
         renderDrawingPicker();
+        renderConfirmDate();
         $('#info-area').show();
         if(cb) cb();
     }, 'json').fail(function(){ alert('伺服器錯誤，請稍後再試'); });
@@ -583,6 +598,33 @@ function loadData(mode, drawing, cb){
 // 出貨檢驗(SHIP)不是真正的 bom_ing 製程，用固定 sentinel bom_ing_fid=-1 識別，
 // 統計「製程是否齊全」與封面上的免檢/尚無紀錄提示都要把它排除在外。
 function isShipRow(p){ return p.bom_ing_fid===-1; }
+// 最後檢驗日期＋資料是否完整：「完整」的定義比照 renderInfoBar 既有的「尚未檢驗」統計口徑——
+// 免檢與出貨檢驗(SHIP)不算在內，其餘每一個製程（含包裝）都要有至少一筆檢驗紀錄才算完整。
+// 日期取全部製程（含出貨檢驗，只要有紀錄就一起比）裡最新的那一天。
+function computeCoverage(){
+    var lastDate=null, complete=true;
+    (DATA.processes||[]).forEach(function(p){
+        if(p.last_form && p.last_form.date && (!lastDate || p.last_form.date>lastDate)) lastDate=p.last_form.date;
+        if(!isShipRow(p) && !p.exempt && !p.last_form) complete=false;
+    });
+    return { lastDate: lastDate || todayIsoStr(), complete: complete };
+}
+// 確認日期欄位：只在使用者還沒填過值時（新查詢／第一次載入）套用預設值，避免切換詳細度／
+// 更換圖面觸發的重新查詢把使用者已經改過的日期洗掉；每次資料回來都重新夾範圍與鎖定狀態。
+function renderConfirmDate(){
+    var cov=computeCoverage(), today=todayIsoStr(), $inp=$('#inp-confirm-date');
+    if(!$inp.val()) $inp.val(cov.lastDate);
+    $inp.attr('min', cov.lastDate);
+    if(cov.complete){
+        $inp.prop('disabled', false).attr('max', today);
+        if($inp.val() < cov.lastDate) $inp.val(cov.lastDate);
+        if($inp.val() > today) $inp.val(today);
+        $('#confirm-date-hint').html('預設為最後檢驗日期 '+dotDate(cov.lastDate)+'；全部製程（含包裝）皆已完成檢驗，可自行更改為更晚的日期。');
+    } else {
+        $inp.val(cov.lastDate).prop('disabled', true).removeAttr('max');
+        $('#confirm-date-hint').html('<span class="text-danger">尚有製程（含包裝）未完成檢驗，確認日期鎖定為最後檢驗日期 '+dotDate(cov.lastDate)+'；全部完成後才能自行更改為更晚的日期。</span>');
+    }
+}
 // 廠商必填檢查（2026-09-24 使用者交辦「有無廠商名稱時要跳通知，要求補齊才能列印」）：
 // 出貨檢驗不是真正的製程沒有廠商概念，後端 vendor_missing 已排除；包裝製程若管理員設了
 // 固定顯示名稱，後端也已經套用過，這裡只是單純把仍缺廠商的那幾筆挑出來。
@@ -638,7 +680,7 @@ function currentDrawingParam(){
     if(d.chosen) return d.chosen;
     return d.candidates.length ? '__NONE__' : '';
 }
-$('#btn-load').on('click', function(){ loadData('summary',''); });
+$('#btn-load').on('click', function(){ $('#inp-confirm-date').val(''); loadData('summary',''); });
 $(document).on('keydown', '#inp-bom', function(e){ if(e.which===13){ e.preventDefault(); $('#btn-load').click(); } });
 $(document).on('change', '#sel-drawing', function(){
     var mode=$('input[name=mode]:checked').val();
@@ -764,9 +806,10 @@ $('#btn-print').on('click', function(){
     var mode=$('input[name=mode]:checked').val();
     var paper=$('input[name=paper]:checked').val();
     var orient=$('input[name=orient]:checked').val();
-    loadData(mode, currentDrawingParam(), function(){ doPrint(mode, paper, orient); });
+    var confirmDate=$('#inp-confirm-date').val();
+    loadData(mode, currentDrawingParam(), function(){ doPrint(mode, paper, orient, confirmDate); });
 });
-function doPrint(mode, paper, orient){
+function doPrint(mode, paper, orient, confirmDate){
     orient = (orient==='landscape') ? 'landscape' : 'portrait';
     // 有製程沒有登記廠商名稱一律擋下列印（2026-09-24 使用者交辦），不是只提醒——這是正式的
     // 品質紀錄，缺廠商就直接印出去會讓紙本永遠少這一欄；擋下的說明與畫面上的 #vendor-warn 同一套。
@@ -783,18 +826,26 @@ function doPrint(mode, paper, orient){
         alert('提醒：以下包裝檢驗紀錄尚未結案（內容之後可能還會變動），仍會依目前內容列印：\n'
             + openPacking.map(function(p){ return '・'+p.process_name; }).join('\n'));
     }
+    // 確認日期後端不落地，這裡對剛重新載入的 DATA 再夾一次範圍（鐵律8：前端擋一次、這裡同規則
+    // 再擋一次）——資料未完整時一律強制退回最後檢驗日期，避免畫面 disabled 屬性被繞過（如重新
+    // 載入資料後恰好從完整變不完整，卻沿用了先前已改晚的日期）。
+    var cov=computeCoverage();
+    if(!confirmDate || confirmDate<cov.lastDate) confirmDate=cov.lastDate;
+    if(!cov.complete && confirmDate>cov.lastDate) confirmDate=cov.lastDate;
     // 圖章要等掃描實體章對照表載完才產生，不然沒對照到的人會被存成預設 SVG 章、跟畫面上看到的不一樣
     // （eg_stamp.js 頂部註解的既有坑；這裡輸出到全新的彈出視窗，寫進去之後不會再自動升級）。
-    EGStamp.whenReady(function(){ doPrintImpl(mode, paper, orient); });
+    EGStamp.whenReady(function(){ doPrintImpl(mode, paper, orient, confirmDate); });
 }
-function doPrintImpl(mode, paper, orient){
+function doPrintImpl(mode, paper, orient, confirmDate){
     var d=DATA.drawing;
     var drawingHtml = d.url ? '<img class="pm-drawing-img" src="'+esc(d.url)+'">' : '<div class="pm-no-drawing">（無圖面）</div>';
+    var confirmDateStr = dotDate(confirmDate);
 
     var head = '<div class="pm-co">'+esc(DATA.company)+'</div>'
         + '<div class="pm-title">'+esc(DATA.doc_name)+'　封面</div>'
         + '<table class="pm-meta"><tr><td class="k">料號</td><td>'+esc(DATA.d_id)+'</td><td class="k">客戶</td><td>'+esc(DATA.client)+'</td>'
-        + '<td class="k">BOM</td><td>'+esc(DATA.bom)+'</td><td class="k">總數</td><td>'+DATA.total_qty+'</td></tr></table>';
+        + '<td class="k">BOM</td><td>'+esc(DATA.bom)+'</td><td class="k">總數</td><td>'+DATA.total_qty+'</td>'
+        + '<td class="k">確認日期</td><td>'+esc(confirmDateStr)+'</td></tr></table>';
 
     // ===== 封面頁：A4 直式，上半是圖面（可由使用者從候選圖面挑選）、下半是本 BOM 全部製程的檢驗狀態總覽 =====
     // 無檢驗紀錄的製程不會印出明細，但一定要在這裡列出來，讓看的人知道「這個製程還沒驗」不是系統漏印。
@@ -802,9 +853,10 @@ function doPrintImpl(mode, paper, orient){
     DATA.processes.forEach(function(p,idx){ sumTable += buildProcessSummaryRow(p, idx); });
     sumTable += '</tbody></table>';
     // 主管確認圖章（使用者 2026-09-24 要求，右下角）：沿用「主管自動核可設定」，沒開啟或沒指定人時不印，
-    // 空白留給現場手簽，不可硬造一個假的確認人（ai-rules/18）。
+    // 空白留給現場手簽，不可硬造一個假的確認人（ai-rules/18）；日期改用上方的「確認日期」（預設最後
+    // 檢驗日期，資料完整才可改晚），不再固定用列印當天。
     var signBlock = (APPROVER.auto && APPROVER.name)
-        ? '<div class="pm-sign">'+EGStamp.stamp(APPROVER.name, printTodayStr(), APPROVER.deputy)+'<div class="pm-sign-lbl">主管確認 Approved</div></div>'
+        ? '<div class="pm-sign">'+EGStamp.stamp(APPROVER.name, confirmDateStr, APPROVER.deputy)+'<div class="pm-sign-lbl">主管確認 Approved</div></div>'
         : '';
     var cover = '<div class="pm-cover'+(mode==='full'?' pm-cover-break':'')+'">'
         + head
