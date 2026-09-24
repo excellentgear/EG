@@ -63,6 +63,12 @@ function type_id_ctrl_item_view(PDO $db, array $it): array {
         // 有發行章日期時改印「發行章 YYYY.MM.DD」，見上方 $printDocNo 的計算
         'print_doc_no' => $printDocNo,
         'file_url' => $linked ? $linked['file_url'] : null,
+        // 2026-09-24 使用者要求：已確認過的連結項目，來源內容事後被改了要偵測得出來——
+        // 拿「上次確認時存的快照」跟「現在即時解析出的值」比對，不同就是內容已變更。
+        // 快照是 NULL 的情況（從沒被確認過、或手動輸入列）一律不算變更。
+        'confirmed_ref_snapshot' => $it['confirmed_ref_snapshot'] ?? null,
+        'content_changed' => ($linked !== null && !empty($it['confirmed_ref_snapshot'])
+                              && (string)$it['confirmed_ref_snapshot'] !== (string)$linked['doc_name']),
     ];
 }
 
@@ -130,11 +136,17 @@ function type_id_ctrl_ensure_schema(PDO $db): void {
         // NAS 檔案沒有 id，另用檔名當識別鍵（同一料號同一標籤只會帶最新一份，故檔名足以識別）。
         "ALTER TABLE type_id_ctrl_item ADD COLUMN ref_file_name VARCHAR(255) NULL COMMENT '連結NAS檔案時的檔名(ref_source=bomfile專用，其餘來源為NULL)' AFTER ref_ds_pk",
         "ALTER TABLE type_id_ctrl_item ADD COLUMN ref_bom_tag VARCHAR(30) NULL COMMENT 'ERP/資材報告檔名標籤後綴(ref_source=bomfile專用)；同一標籤永遠只有一列，檔案換新版時原地更新不另開列' AFTER ref_file_name",
+        // 2026-09-24 使用者要求：已確認的連結項目，來源內容（版別/文件編號）事後變了要偵測得到。
+        // 存的是「上次確認當下」即時解析出來的 doc_no_text 快照，只在存檔/批次確認/批次更新時
+        // 寫入（type_id_ctrl_snapshot_confirm），平時查詢一律拿它跟「現在」即時解析的值比對，
+        // 不一致就是「內容已變更」。只對有連結來源的列有意義，手動輸入的列永遠是 NULL。
+        "ALTER TABLE type_id_ctrl_item ADD COLUMN confirmed_ref_snapshot VARCHAR(255) NULL COMMENT '上次確認時，該連結來源即時解析出的版別/文件編號快照，供事後比對內容是否變更' AFTER ref_bom_tag",
     ] as $alter) {
         try { $db->exec($alter); } catch (Throwable $e) {}
     }
 
-    foreach ([['type_id_ctrl_view','型態文件檢閱'],['type_id_ctrl_edit','型態文件登錄'],['type_id_ctrl_admin','型態文件管理員']] as $r) {
+    foreach ([['type_id_ctrl_view','型態文件檢閱'],['type_id_ctrl_edit','型態文件登錄'],['type_id_ctrl_admin','型態文件管理員'],
+              ['type_id_ctrl_batch_update','批次更新權限（管理員自行指派給需要的角色/人員）']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='type_id_ctrl' LIMIT 1");
         $st->execute([$r[0]]);
         if (!$st->fetchColumn()) {
@@ -167,7 +179,7 @@ function type_id_ctrl_has_role(PDO $db, int $uid, array $codes): bool {
 }
 
 function type_id_ctrl_perms(PDO $db, ?array $u): array {
-    if (!$u) return ['isAdmin'=>false,'canAdmin'=>false,'canEdit'=>false,'canView'=>false];
+    if (!$u) return ['isAdmin'=>false,'canAdmin'=>false,'canEdit'=>false,'canView'=>false,'canBatchUpdate'=>false];
     $uid = (int)$u['id'];
     $isAdmin = in_array((int)$u['user_status'], [9, 90], true) || $uid === 1;
     if (!$isAdmin) {
@@ -179,7 +191,10 @@ function type_id_ctrl_perms(PDO $db, ?array $u): array {
     $canAdmin = $isAdmin || type_id_ctrl_has_role($db, $uid, ['type_id_ctrl_admin']);
     $canEdit  = $canAdmin || type_id_ctrl_has_role($db, $uid, ['type_id_ctrl_edit']);
     $canView  = $canEdit  || type_id_ctrl_has_role($db, $uid, ['type_id_ctrl_view']);
-    return ['isAdmin'=>$isAdmin,'canAdmin'=>$canAdmin,'canEdit'=>$canEdit,'canView'=>$canView];
+    // 批次更新是獨立授權，不是 canEdit 的自然延伸——管理員自行指派給需要的人（2026-09-24 使用者要求
+    // 「管理員可以設定哪些角色有此功能」），canAdmin 一律涵蓋（管理員本來就什麼都能做）。
+    $canBatchUpdate = $canAdmin || type_id_ctrl_has_role($db, $uid, ['type_id_ctrl_batch_update']);
+    return ['isAdmin'=>$isAdmin,'canAdmin'=>$canAdmin,'canEdit'=>$canEdit,'canView'=>$canView,'canBatchUpdate'=>$canBatchUpdate];
 }
 
 /** 本公司名稱（列印大標題統一來源：customer_list.is_own_company=1，見 ai-rules/16） */
@@ -705,16 +720,10 @@ function type_id_ctrl_sopsip_table_exists(PDO $db): bool {
 
 /** SOP／SIP 各版面對應的型態項目名稱：優先取該版面綁定的 AS 文件名稱，沒綁定才用版面預設名稱 */
 function type_id_ctrl_sopsip_kind_item_name(PDO $db, string $kind): string {
-    static $cache = [];
-    if (isset($cache[$kind])) return $cache[$kind];
-    $def = ss_kinds()[$kind] ?? null;
-    $default = $def['label'] ?? $kind;
-    $name = '';
-    if ($def && function_exists('eg_asdoc_get')) {
-        $doc = eg_asdoc_get($db, $def['module']);
-        $name = trim((string)($doc['doc_name'] ?? ''));
-    }
-    return $cache[$kind] = ($name !== '' ? $name : $default);
+    // 2026-09-24 使用者更正：SOP 的型態項目名稱就是「SOP」、SIP 就是「SIP」，不要跟其他
+    // 來源一樣去查綁定的 AS 文件全名（製造製程說明書／標準檢驗指導書）——兩種寫法混在一起
+    // 反而讓同一批項目列看起來像是不同種類的文件。$db 參數保留供未來擴充，目前不使用。
+    return ['process' => 'SOP', 'sip' => 'SIP'][$kind] ?? strtoupper($kind);
 }
 
 /** 組出「版別／文件編號」欄要顯示的字串：SOP/SIP＋通用/專用＋文件名稱＋版別（使用者指定的顯示格式） */
@@ -1177,16 +1186,7 @@ function type_id_ctrl_sync_part(PDO $db, int $dsPk): array {
         $key = $er['source'] . '|' . $er['attach_id'] . '|' . $er['ds_pk'];
         if ($er['source'] !== 'bomfile' && isset($existingKeys[$key])) continue;
         $seq++;
-        // force_type：表單類(其他文件)與 ERP/資材報告(各標籤自己的設定)由來源直接指定型態類別，
-        // 只有附件類才需要用類別名稱猜
-        $itemType = !empty($er['force_type']) ? $er['force_type'] : type_id_ctrl_guess_type($er['categories'] ?? []);
-        $itemName = !empty($er['categories']) ? $er['categories'][0] : $er['doc_name'];
-        $originProcess = $er['origin_process'] ?? null;
-        $needProcessHint = !empty($er['need_process']) ? 1 : 0;
-        $st = $db->prepare("INSERT INTO type_id_ctrl_item (doc_id, seq, item_name, item_type, process_tag, need_process_hint, ref_source, ref_attach_id, ref_ds_pk, ref_file_name, ref_bom_tag)
-                             VALUES (?,?,?,?,?,?,?,?,?,?,?)");
-        $st->execute([$docId, $seq, $itemName, $itemType, ($originProcess !== '' ? $originProcess : null), $needProcessHint,
-                      $er['source'], $er['attach_id'], $er['ds_pk'], $er['file_name'] ?? null, $er['bom_tag'] ?? null]);
+        type_id_ctrl_insert_item_from_source($db, $docId, $seq, $er);
         $addedCount++;
     }
 
@@ -1194,4 +1194,118 @@ function type_id_ctrl_sync_part(PDO $db, int $dsPk): array {
         $db->prepare("UPDATE type_id_ctrl_doc SET review_status='needs_recheck' WHERE id=?")->execute([$docId]);
     }
     return ['doc_id'=>$docId, 'is_new'=>$isNew, 'added_count'=>$addedCount, 'updated_count'=>$updatedCount];
+}
+
+/**
+ * 從一筆自動偵測來源列插入一筆新項目列，回傳新項目 id。
+ * 唯一實作——sync_part()／type_id_ctrl_apply_diff()（點開自動加入、批次更新）共用同一段插入邏輯，
+ * 不要各寫一份（鐵律4：INSERT 的欄位對應只要漏改一處，兩邊資料長相就會慢慢對不起來）。
+ */
+function type_id_ctrl_insert_item_from_source(PDO $db, int $docId, int $seq, array $er): int {
+    // force_type：表單類(其他文件)與 ERP/資材報告(各標籤自己的設定)由來源直接指定型態類別，
+    // 只有附件類才需要用類別名稱猜
+    $itemType = !empty($er['force_type']) ? $er['force_type'] : type_id_ctrl_guess_type($er['categories'] ?? []);
+    $itemName = !empty($er['categories']) ? $er['categories'][0] : $er['doc_name'];
+    $originProcess = $er['origin_process'] ?? null;
+    $needProcessHint = !empty($er['need_process']) ? 1 : 0;
+    $st = $db->prepare("INSERT INTO type_id_ctrl_item (doc_id, seq, item_name, item_type, process_tag, need_process_hint, ref_source, ref_attach_id, ref_ds_pk, ref_file_name, ref_bom_tag)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?)");
+    $st->execute([$docId, $seq, $itemName, $itemType, ($originProcess !== '' ? $originProcess : null), $needProcessHint,
+                  $er['source'], $er['attach_id'], $er['ds_pk'], $er['file_name'] ?? null, $er['bom_tag'] ?? null]);
+    return (int)$db->lastInsertId();
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * 已確認後的內容變動偵測與批次更新（2026-09-24 使用者要求，涵蓋全部五種來源）
+ *   ①新檔案：目前符合的來源列，還沒變成這份文件的項目列（跟 sync_part 判「要不要加入」同一把鍵）。
+ *   ②內容變更：既有已連結項目，即時解析出的「版別／文件編號」跟上次確認時存的快照不同
+ *     （例：SOP／SIP 改版、料號附件重新填了版次、PFMEA 表單日期改了重編編號…）。
+ *   兩者只在文件「已確認」時才有意義去偵測——待確認／需重新確認本來就還沒審過，不必疊加提示。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+/** 來源列的識別鍵——sync_part／新檔案比對／內容變更比對共用同一套規則（bomfile 用標籤，其餘用 attach_id） */
+function type_id_ctrl_ref_key(string $source, int $attachId, int $dsPk, ?string $bomTag): string {
+    return $source === 'bomfile' ? ('bomfile|' . (string)$bomTag) : ($source . '|' . $attachId . '|' . $dsPk);
+}
+
+/**
+ * 比對「目前符合的來源」與「既有項目」，回傳新檔案／內容變更兩組差異。
+ * 只有 part_d_id 存在時才有意義（本模組的項目一律掛在料號底下）。
+ * 唯一實作——清單提示、點開編輯畫面自動加入、批次更新三處共用同一套判斷。
+ */
+function type_id_ctrl_source_diff(PDO $db, int $docId, int $dsPk): array {
+    if (!$dsPk) return ['new' => [], 'changed' => []];
+    $fresh = type_id_ctrl_fetch_ext_docs_for_part($db, $dsPk);
+    $freshByKey = [];
+    foreach ($fresh as $f) {
+        $freshByKey[type_id_ctrl_ref_key($f['source'], (int)$f['attach_id'], (int)$f['ds_pk'], $f['bom_tag'] ?? null)] = $f;
+    }
+
+    $st = $db->prepare("SELECT id, ref_source, ref_attach_id, ref_ds_pk, ref_bom_tag, confirmed_ref_snapshot
+                          FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 AND ref_source IS NOT NULL");
+    $st->execute([$docId]);
+    $existingByKey = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $it) {
+        $k = type_id_ctrl_ref_key($it['ref_source'], (int)$it['ref_attach_id'], (int)$it['ref_ds_pk'], $it['ref_bom_tag']);
+        $existingByKey[$k] = $it;
+    }
+
+    $new = []; $changed = [];
+    foreach ($freshByKey as $k => $f) {
+        if (!isset($existingByKey[$k])) { $new[] = $f; continue; }
+        $it = $existingByKey[$k];
+        $snap = $it['confirmed_ref_snapshot'];
+        if ($snap !== null && (string)$snap !== (string)$f['doc_name']) {
+            $changed[] = ['item_id' => (int)$it['id'], 'fresh' => $f, 'old_snapshot' => $snap];
+        }
+    }
+    return ['new' => $new, 'changed' => $changed];
+}
+
+/** 把這份文件目前所有已連結項目的「版別／文件編號」即時解析值存成確認快照（唯一寫入點） */
+function type_id_ctrl_snapshot_confirm(PDO $db, int $docId): void {
+    $st = $db->prepare("SELECT id, ref_source, ref_attach_id, ref_ds_pk, ref_file_name
+                          FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 AND ref_source IS NOT NULL");
+    $st->execute([$docId]);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $it) {
+        $linked = type_id_ctrl_resolve_ref($db, $it['ref_source'], (int)$it['ref_attach_id'], (int)$it['ref_ds_pk'], $it['ref_file_name']);
+        $snap = $linked ? $linked['doc_name'] : null;
+        $db->prepare("UPDATE type_id_ctrl_item SET confirmed_ref_snapshot=? WHERE id=?")->execute([$snap, $it['id']]);
+    }
+}
+
+/**
+ * 套用一份文件的新檔案／內容變更差異：新檔案一律插入為新項目列；內容變更不動欄位本身
+ * （反正即時解析，畫面自然顯示最新值），只影響要不要把狀態打回「需重新確認」。
+ * $confirmAfter：使用者在批次更新時的選擇——true＝更新後直接視為已確認（重新寫入確認快照，
+ * 不需要再人工確認一次）；false＝更新後改為「需重新確認」，仍要人工按確認清單（預設、較保守）。
+ * 只有原本就是「已確認」的文件套用後才會變更狀態，非確認狀態的文件本來就還沒審過，不動它。
+ */
+function type_id_ctrl_apply_diff(PDO $db, int $docId, array $diff, bool $confirmAfter, int $uid, string $uname): array {
+    $addedCount = 0;
+    if ($diff['new']) {
+        $st = $db->prepare("SELECT COALESCE(MAX(seq),0) FROM type_id_ctrl_item WHERE doc_id=?");
+        $st->execute([$docId]);
+        $seq = (int)$st->fetchColumn();
+        foreach ($diff['new'] as $er) {
+            $seq++;
+            type_id_ctrl_insert_item_from_source($db, $docId, $seq, $er);
+            $addedCount++;
+        }
+    }
+    $changedCount = count($diff['changed']);
+
+    $st = $db->prepare("SELECT review_status FROM type_id_ctrl_doc WHERE id=?");
+    $st->execute([$docId]);
+    $wasConfirmed = $st->fetchColumn() === 'confirmed';
+    if ($wasConfirmed && ($addedCount > 0 || $changedCount > 0)) {
+        if ($confirmAfter) {
+            $db->prepare("UPDATE type_id_ctrl_doc SET review_status='confirmed', confirmed_by=?, confirmed_by_name=?, confirmed_at=NOW() WHERE id=?")
+               ->execute([$uid, $uname, $docId]);
+            type_id_ctrl_snapshot_confirm($db, $docId);
+        } else {
+            $db->prepare("UPDATE type_id_ctrl_doc SET review_status='needs_recheck' WHERE id=?")->execute([$docId]);
+        }
+    }
+    return ['added_count' => $addedCount, 'changed_count' => $changedCount, 'was_confirmed' => $wasConfirmed];
 }

@@ -133,6 +133,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         .ic-status.st-pending { background:#F7E0BD; color:#7a5217; }
         .ic-status.st-recheck { background:#DD5138; color:#fff; }
         .ic-status.st-confirmed { background:#F0A24B; color:#fff; }
+        .ic-updbadge { display:inline-block; font-size:11px; border-radius:10px; padding:2px 8px; white-space:nowrap;
+            background:#ffe1de; color:#DD5138; margin-left:4px; border:1px solid #f0c4bd; }
         td.drg { width:22px; text-align:center; color:#b0a390; cursor:grab; }
         td.drg:active { cursor:grabbing; }
         table.ic-item-table tr.ic-excluded { opacity:.5; background:#f3ede0 !important; }
@@ -182,6 +184,17 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
                 <option value="yes">PFMEA 已建立</option>
                 <option value="no">PFMEA 未建立</option>
             </select>
+            <label>更新狀態</label>
+            <select id="needsUpdateFilter" title="只對「已確認」的文件檢查：來源新增了還沒收進來的檔案，或既有連結內容（版別/文件編號）跟確認當時不一樣">
+                <option value="">全部</option>
+                <option value="yes">需要更新</option>
+            </select>
+            <label>列印狀態</label>
+            <select id="printedFilter">
+                <option value="">全部</option>
+                <option value="no">尚未列印過</option>
+                <option value="yes">已列印過</option>
+            </select>
             <button class="btn-warm" id="btnAdd" style="<?= $perms['canEdit']?'':'display:none;' ?>"><i class="fa fa-plus"></i> 新增</button>
             <span style="border-left:1px solid #D8BE93;height:20px;"></span>
             <button class="btn-warm" id="btnScanMissing" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="掃描「外來文件清單有附件」或「PFMEA 已建檔」、但還沒建立型態識別文件管制表的料號"><i class="fa fa-search"></i> 掃描待建立料號</button>
@@ -190,8 +203,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <button id="btnAsDoc" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-link"></i> AS文件綁定</button>
             <button id="btnOwnDrawCats" style="<?= $perms['canAdmin']?'':'display:none;' ?>" title="設定哪些廠內「自家出的圖」標籤也要納入本模組的自動同步來源"><i class="fa fa-picture-o"></i> 廠內圖面標籤設定</button>
             <button id="btnBomTags" style="<?= $perms['canAdmin']?'':'display:none;' ?>" title="設定料號圖面查閱(part_viewer)的 ERP/資材報告 檔名標籤要不要列入本模組，以及各標籤對應的型態項目名稱與型態類別"><i class="fa fa-tags"></i> BOM檔案標籤設定</button>
-            <span style="border-left:1px solid #D8BE93;height:20px;<?= $perms['canAdmin']?'':'display:none;' ?>"></span>
+            <span style="border-left:1px solid #D8BE93;height:20px;<?= ($perms['canAdmin']||$perms['canBatchUpdate'])?'':'display:none;' ?>"></span>
             <button id="btnBatchConfirm" style="<?= $perms['canAdmin']?'':'display:none;' ?>" title="批次確認勾選的清單，確認者自動記為目前登入者"><i class="fa fa-check-square-o"></i> 批次確認清單</button>
+            <button id="btnBatchUpdate" style="<?= $perms['canBatchUpdate']?'':'display:none;' ?>" title="對勾選的已確認文件，套用目前偵測到的新檔案／內容變更"><i class="fa fa-refresh"></i> 批次更新</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button id="btnPrintAll" title="依目前篩選條件，逐筆列印所有搜尋結果"><i class="fa fa-print"></i> 列印全部搜尋結果</button>
             <span class="ic-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
@@ -214,11 +228,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         <div class="ic-table-wrap">
             <table class="ic-table" id="icTable">
                 <thead><tr>
-                    <th style="<?= $perms['canAdmin']?'':'display:none;' ?>"><input type="checkbox" id="ckAll" data-eg-skip="1" title="全選/取消全選"></th>
+                    <th style="<?= ($perms['canAdmin']||$perms['canBatchUpdate'])?'':'display:none;' ?>"><input type="checkbox" id="ckAll" data-eg-skip="1" title="全選/取消全選"></th>
                     <th>文件編號</th><th>客戶</th><th>產品編號(料號)</th><th>內容項次</th><th>PFMEA</th><th>確認狀態</th>
-                    <th>建立人</th><th>建立時間</th><th>操作</th>
+                    <th>建立人</th><th>建立時間</th><th>最後列印時間</th><th>操作</th>
                 </tr></thead>
-                <tbody id="icBody"><tr><td colspan="10" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="icBody"><tr><td colspan="11" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
 <?php endif; ?>
@@ -392,6 +406,23 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('asDocMask')">關閉</button></div>
 </div></div>
 
+<!-- 批次更新（2026-09-24 使用者要求，獨立授權；只對勾選中「已確認」且有新檔案/內容變更的文件生效） -->
+<div class="ic-mask" id="batchUpdMask"><div class="ic-modal">
+    <div class="m-head"><span>批次更新</span><span class="m-close" onclick="closeMask('batchUpdMask')">✕</span></div>
+    <div class="m-body">
+        <div id="batchUpdInfo" style="margin-bottom:10px;color:#5b3a1e;"></div>
+        <label style="font-weight:700;">更新後的狀態</label>
+        <div style="margin:6px 0;"><label class="ic-chk" style="display:block;margin-bottom:6px;">
+            <input type="radio" name="batchUpdMode" value="0" checked> 改為「需重新確認」，仍要人工逐份按「重新確認」（建議）</label>
+        <label class="ic-chk" style="display:block;">
+            <input type="radio" name="batchUpdMode" value="1"> 直接視為已確認，不需要再人工確認一次</label>
+        </div>
+        <div style="font-size:12px;color:#8a6d45;">沒有需要更新的文件會自動略過，不會被誤觸。</div>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('batchUpdMask')">取消</button>
+        <button class="b-ok" onclick="doBatchUpdate()">確定更新</button></div>
+</div></div>
+
 <!-- 廠內圖面標籤設定 -->
 <div class="ic-mask" id="ownDrawMask"><div class="ic-modal">
     <div class="m-head"><span>廠內圖面標籤設定</span><span class="m-close" onclick="closeMask('ownDrawMask')">✕</span></div>
@@ -464,13 +495,21 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <li>自動列出的項目預設「納入」（打勾）；若某份文件其實不該出現在此清單，把「納入」勾選框取消即可——會記為<b>已排除</b>，之後同步不會再自動加回來。</li>
             <li>逐項確認後按「確認清單」：記錄確認人與確認時間，狀態變成「已確認」；製表人／簽章日期即取這次確認人與清單上最新的文件日期。</li>
             <li>之後只要有新的外來文件同步進來，「已確認」會自動變回「需重新確認」，提醒重新逐項審視。清單上方「狀態」篩選可分別看「待確認／需重新確認／已確認」。</li>
+            <li><b>已確認的文件按了一般「儲存」會取消確認狀態</b>（不是按「重新確認」，是編輯畫面裡的儲存鈕）：已確認代表有人審過目前內容，既然又動手改存檔，那份審核就不成立了——系統會先把狀態改回「待確認」再存檔，並跳出提示告知，避免內容明明改過、畫面卻一直掛著「已確認」的樣子。</li>
             <li><b>批次確認清單</b>（僅型態文件管理員／管理員）：清單左側勾選要確認的多筆文件（表頭全選框可一次勾全部），按工具列「批次確認清單」；確認者一律自動記為目前登入者，不提供指定他人。簽章日期不受影響——一律是各文件自己項目列上最新的文件日期，跟誰按確認、何時按確認無關。</li>
+        </ul>
+        <h4>已確認後的內容變動偵測與批次更新（2026-09-24 新增，五種來源皆涵蓋）</h4>
+        <ul>
+            <li>只對「已確認」的文件檢查兩件事：①<b>新檔案</b>——目前符合條件、但還沒被收進項目列的來源（例如又新增了一份符合的 SOP／SIP、PFMEA 或外來文件附件）；②<b>內容變更</b>——既有已連結項目，即時解析出的「版別／文件編號」跟上次確認當下存的快照不一樣（例如 SOP／SIP 改版、料號附件補填了版次、PFMEA 表單日期改了重新編號…）。待確認／需重新確認的文件本來就還沒審過，不會疊加這個提示。</li>
+            <li>清單「確認狀態」欄會多出橘紅色「<i class="fa fa-exclamation-triangle"></i> 需要更新」小籤（滑鼠停留看幾筆新檔案、幾筆內容變更），並可用上方「更新狀態」篩選只看這些文件；「列印狀態」篩選可切換只看「尚未列印過／已列印過」，配合最右側「最後列印時間」欄與既有的「列印全部搜尋結果」，即可先篩出尚未列印的文件、一次全部列印。</li>
+            <li><b>點開編輯畫面時會自動加入偵測到的新檔案</b>（原本已確認的文件才會，待確認的不會）：加入後狀態自動改為「需重新確認」，並跳出提示告知加了幾筆新檔案、幾筆內容有變動；內容變更本身不會動任何欄位（反正版別／文件編號都是即時解析顯示最新值），只是把狀態打回需要重新確認，並在該項目列的版別／文件編號旁加「內容已變更」小籤（滑鼠停留看得到上次確認時的舊值）。一律要人親自按「重新確認」，系統不會自己把它變回已確認。</li>
+            <li><b>批次更新</b>（需要「批次更新權限」角色或管理員，設定入口見下方「設定入口」）：清單左側勾選多筆已確認的文件，按工具列「批次更新」，可選擇更新後要「改為需重新確認、仍要人工逐份確認」（建議）或「直接視為已確認」；沒有需要更新的文件會自動略過，不會被誤觸。這是主動一次處理很多份的入口，跟「點開編輯畫面自動加入」（單筆、被動觸發）互補。</li>
         </ul>
         <h4>篩選與列印全部</h4>
         <ul>
             <li>清單上方除「搜尋」（文件編號／料號／客戶模糊比對其一）外，另有獨立的「客戶」（可輸入客戶ID或客戶名稱模糊搜尋）與「料號」篩選欄，皆為即時搜尋（輸入後自動觸發，不需按 Enter）。篩選欄有值時<b>雙擊可清空並同時解除該欄篩選</b>（全站共用行為，見 eg_input_rules.js）。</li>
-            <li><b>列印全部搜尋結果</b>：依目前「搜尋／客戶／料號／狀態」篩選條件，把畫面上列出的所有結果逐筆各自開視窗列印（不會合併成一份文件，所以每份文件仍是各自獨立算頁次、只有一頁時不顯示頁碼，跟單筆列印完全一樣）。結果筆數較多（超過 15 筆）時會先跳出確認，選擇繼續即自動依序逐筆觸發列印，不需要每筆手動點；若瀏覽器跳出「已封鎖快顯視窗」提示，請允許本頁彈出視窗才能讓後續筆數繼續列印。</li>
-            <li>清單分頁顯示於表格右上角，預設每頁 10 筆（可改 5／20／50）；批次確認的「全選」、CSV 匯出、列印全部搜尋結果皆以目前篩選條件下的<b>全部</b>結果為準，不受目前停留在第幾頁影響。往下捲動導致看不到欄位標題列時，右下角會出現浮動的「回頂端」按鈕。</li>
+            <li><b>列印全部搜尋結果</b>：依目前「搜尋／客戶／料號／狀態／更新狀態／列印狀態」等篩選條件，把畫面上列出的所有結果逐筆各自開視窗列印（不會合併成一份文件，所以每份文件仍是各自獨立算頁次、只有一頁時不顯示頁碼，跟單筆列印完全一樣；每次列印都會留下紀錄，即為上方「最後列印時間」欄的來源）。結果筆數較多（超過 15 筆）時會先跳出確認，選擇繼續即自動依序逐筆觸發列印，不需要每筆手動點；若瀏覽器跳出「已封鎖快顯視窗」提示，請允許本頁彈出視窗才能讓後續筆數繼續列印。</li>
+            <li>清單分頁顯示於表格右上角，預設每頁 10 筆（可改 5／20／50）；CSV 匯出、列印全部搜尋結果皆以目前篩選條件下的<b>全部</b>結果為準，不受目前停留在第幾頁影響；<b>批次確認／批次更新的「全選」只影響目前這一頁</b>（勾選欄與表格內容同步分頁）。往下捲動導致看不到欄位標題列時，右下角會出現浮動的「回頂端」按鈕。</li>
         </ul>
         <h4>其他行為／常見疑問</h4>
         <ul>
@@ -482,9 +521,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號、製表人簽章走全站通用圖章（若本人有上傳掃描實體章會優先用掃描章）。管理員可到「列印設定」跳窗指定要套用哪個<b>圖章模板</b>（於「圖章管理→線上圖章設計」建立）；有指定模板時列印一律用該模板設計的實際尺寸顯示（不會被縮小），未指定則用系統預設回墨印章。</li>
         </ul>
         <h4>設定入口</h4>
-        <p><b>列印設定</b>（AS 文件編號綁定＋製表人圖章模板）：工具列「AS文件綁定」按鈕（僅管理員可見）開啟同一個跳窗，內含 AS 文件編號綁定與圖章模板下拉，選定模板後按「儲存圖章模板」即生效。外來文件標籤設定：<a href="../Sales/external_doc_list.php" target="_blank">外來文件清單</a>頁的類別設定。<b>廠內圖面標籤</b>（哪些「自家出的圖」類別也要納入自動同步）：工具列「廠內圖面標籤設定」按鈕（僅管理員可見；類別本身要先在主檔管理→附件類別標籤設定勾選「自家出的圖」）。同一跳窗每個類別還可設定：<b>顯示名稱</b>（留空沿用類別原名；同步進本模組後即成為項目列的「型態項目名稱」，與外來文件清單共用同一顯示名稱欄位）與<b>需要顯示製程</b>（勾選後，該類別同步出的項目列若「所屬製程」留空，欄位會加提示色塊，僅供提醒不強制填寫）；改了設定不會回頭改到之前已同步的舊資料，跳窗內「更新已同步項目名稱」按鈕會把最新設定覆蓋回所有目前仍連結有效附件的既有項目列（不必整批刪除重轉；手動輸入的項目不受影響；已確認的清單若被更新會改回「需重新確認」）。<b>BOM檔案標籤設定</b>（ERP/資材報告檔案要不要列入本模組）：工具列「BOM檔案標籤設定」按鈕（僅管理員可見）。標籤本身（後綴→標籤名稱）請到<a href="../pm/part_viewer.php" target="_blank">料號圖面查閱</a>的「設定標籤」維護，本頁只設定<b>逐標籤</b>的「列入／型態項目名稱／型態類別」與掃描資料夾；改完可按跳窗內「更新已同步項目」把新設定覆蓋回既有項目列。<b>角色指派</b>（誰可以檢閱／登錄／管理本頁）：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「型態識別文件管制表」區塊。</p>
+        <p><b>列印設定</b>（AS 文件編號綁定＋製表人圖章模板）：工具列「AS文件綁定」按鈕（僅管理員可見）開啟同一個跳窗，內含 AS 文件編號綁定與圖章模板下拉，選定模板後按「儲存圖章模板」即生效。外來文件標籤設定：<a href="../Sales/external_doc_list.php" target="_blank">外來文件清單</a>頁的類別設定。<b>廠內圖面標籤</b>（哪些「自家出的圖」類別也要納入自動同步）：工具列「廠內圖面標籤設定」按鈕（僅管理員可見；類別本身要先在主檔管理→附件類別標籤設定勾選「自家出的圖」）。同一跳窗每個類別還可設定：<b>顯示名稱</b>（留空沿用類別原名；同步進本模組後即成為項目列的「型態項目名稱」，與外來文件清單共用同一顯示名稱欄位）與<b>需要顯示製程</b>（勾選後，該類別同步出的項目列若「所屬製程」留空，欄位會加提示色塊，僅供提醒不強制填寫）；改了設定不會回頭改到之前已同步的舊資料，跳窗內「更新已同步項目名稱」按鈕會把最新設定覆蓋回所有目前仍連結有效附件的既有項目列（不必整批刪除重轉；手動輸入的項目不受影響；已確認的清單若被更新會改回「需重新確認」）。<b>BOM檔案標籤設定</b>（ERP/資材報告檔案要不要列入本模組）：工具列「BOM檔案標籤設定」按鈕（僅管理員可見）。標籤本身（後綴→標籤名稱）請到<a href="../pm/part_viewer.php" target="_blank">料號圖面查閱</a>的「設定標籤」維護，本頁只設定<b>逐標籤</b>的「列入／型態項目名稱／型態類別」與掃描資料夾；改完可按跳窗內「更新已同步項目」把新設定覆蓋回既有項目列。<b>角色指派</b>（誰可以檢閱／登錄／管理本頁，含「批次更新權限」）：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「型態識別文件管制表」區塊。</p>
         <h4>權限角色</h4>
-        <p>型態文件檢閱／登錄／管理員（管理者固定擁有全部權限）；點頁面右上角「目前角色」旁的 <i class="fa fa-question-circle"></i> 可看各角色的權限說明。</p>
+        <p>型態文件檢閱／登錄／管理員（管理者固定擁有全部權限）；另有獨立的<b>「批次更新權限」</b>——不是登錄或管理員就自動擁有，要由管理員在「使用者權限設定」頁另外指派給需要的人／角色，才能使用工具列的「批次更新」。點頁面右上角「目前角色」旁的 <i class="fa fa-question-circle"></i> 可看各角色的權限說明。</p>
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">我知道了</button></div>
 </div></div>
@@ -507,6 +546,8 @@ var PART_API = '../../src/store/PartPicker_API.php';
 var VIEWER_URL = '../pm/bom_viewer.php'; // 三分頁合併(圖面/報價/其他)唯讀檢視，比照報價單頁的作法（部分料號在 part_viewer.php 查無圖檔）
 var CAN_EDIT = <?= $perms['canEdit'] ? 'true' : 'false' ?>;
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
+var CAN_BATCH_UPDATE = <?= $perms['canBatchUpdate'] ? 'true' : 'false' ?>;
+var CAN_CHECK_ROW = CAN_ADMIN || CAN_BATCH_UPDATE;   // 勾選欄：批次確認(管理員)／批次更新(批次更新權限或管理員)共用同一欄
 var TYPE_OPTS = [['drawing','圖面'],['jig','治夾具'],['report','報告'],['other','其他文件']];
 var CUR_ID = 0, ITEMS = [], AS_DOCS = [], AS_DOC = null;
 
@@ -541,7 +582,8 @@ function curFilterParams(){
     return {
         kw: $('#kwInput').val()||'', status: $('#statusFilter').val()||'',
         customer: $('#filterCustomer').val()||'', part_no: $('#filterPartNo').val()||'',
-        pfmea: $('#pfmeaFilter').val()||''
+        pfmea: $('#pfmeaFilter').val()||'',
+        needs_update: $('#needsUpdateFilter').val()||'', printed: $('#printedFilter').val()||''
     };
 }
 function loadList(){
@@ -552,17 +594,27 @@ function loadList(){
         renderTablePage();
     });
 }
+/* 需要更新小籤：只在「已確認」時才有意義（後端也只對已確認的文件計算 has_new/has_changed），
+   滑鼠停留顯示新檔案/內容變更各幾筆 */
+function needsUpdateBadge(r){
+    if (!r.has_new && !r.has_changed) return '';
+    var parts = [];
+    if (r.has_new) parts.push('新檔案 '+r.new_count+' 筆');
+    if (r.has_changed) parts.push('內容變更 '+r.changed_count+' 筆');
+    return ' <span class="ic-updbadge" title="'+esc(parts.join('、'))+'"><i class="fa fa-exclamation-triangle"></i> 需要更新</span>';
+}
 function rowHtml(r){
     return '<tr>'
-        + '<td style="'+(CAN_ADMIN?'':'display:none;')+'"><input type="checkbox" class="ck-row" data-id="'+r.id+'" data-eg-skip="1"></td>'
+        + '<td style="'+(CAN_CHECK_ROW?'':'display:none;')+'"><input type="checkbox" class="ck-row" data-id="'+r.id+'" data-eg-skip="1"></td>'
         + '<td>'+esc(r.doc_no)+'</td>'
         + '<td>'+esc(r.customer_name||r.customer_id||'')+'</td>'
         + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL, null, r.part_d_id):esc(r.part_no))+'</td>'
         + '<td>'+itemCountCell(r)+'</td>'
         + '<td>'+pfmeaBadge(r)+'</td>'
-        + '<td>'+statusBadge(r.review_status, r.review_status_label)+'</td>'
+        + '<td>'+statusBadge(r.review_status, r.review_status_label)+needsUpdateBadge(r)+'</td>'
         + '<td>'+esc(r.created_by_name||'')+'</td>'
         + '<td>'+fmtDate((r.created_at||'').substring(0,10))+'</td>'
+        + '<td>'+(r.last_printed_at?fmtDate(r.last_printed_at.substring(0,10))+' '+r.last_printed_at.substring(11,16):'<span style="color:#b09a78;font-size:12px;">尚未列印</span>')+'</td>'
         + '<td>'
         + '<span class="ic-op" title="'+(CAN_EDIT?'編輯':'檢視')+'" onclick="openEdit('+r.id+')"><i class="fa fa-'+(CAN_EDIT?'pencil':'eye')+'"></i></span>'
         + '<span class="ic-op" title="列印" onclick="printDoc('+r.id+')"><i class="fa fa-print"></i></span>'
@@ -599,6 +651,8 @@ var partT=null;
 $('#filterPartNo').on('input', function(){ clearTimeout(partT); partT=setTimeout(loadList, 300); });
 $('#statusFilter').on('change', loadList);
 $('#pfmeaFilter').on('change', loadList);
+$('#needsUpdateFilter').on('change', loadList);
+$('#printedFilter').on('change', loadList);
 $('#ckAll').on('change', function(){ $('#icBody .ck-row').prop('checked', this.checked); });
 
 /* ---------- 批次確認清單（型態文件管理員／管理員；確認者自動記為目前登入者。簽章日期不受影響——
@@ -614,12 +668,34 @@ $('#btnBatchConfirm').on('click', function(){
     }, 'json');
 });
 
+/* ---------- 批次更新（2026-09-24 使用者要求）：只對勾選中「已確認」且有新檔案／內容變更的文件生效，
+   其餘勾選的自動略過不算失敗。更新後要改「需重新確認」還是直接視為「已確認」由使用者當下選擇。 ---------- */
+var BATCH_UPD_IDS = [];
+$('#btnBatchUpdate').on('click', function(){
+    BATCH_UPD_IDS = $('#icBody .ck-row:checked').map(function(){ return parseInt($(this).data('id'),10); }).get();
+    if (!BATCH_UPD_IDS.length){ alert('請先在清單左側勾選要更新的項目'); return; }
+    $('#batchUpdInfo').text('已勾選 '+BATCH_UPD_IDS.length+' 筆；其中不是「已確認」狀態、或目前沒有偵測到新檔案／內容變更的會自動略過。');
+    $('input[name=batchUpdMode][value=0]').prop('checked', true);
+    openMask('batchUpdMask');
+});
+function doBatchUpdate(){
+    var confirmAfter = $('input[name=batchUpdMode]:checked').val()==='1' ? 1 : 0;
+    $.post(API, {action:'batch_update', ids: JSON.stringify(BATCH_UPD_IDS), confirm_after: confirmAfter}, function(res){
+        if (!res.success){ alert(res.message||'批次更新失敗'); return; }
+        closeMask('batchUpdMask');
+        alert('已更新 '+res.updated_count+' 筆（新增 '+res.added_total+' 筆項目、內容變更 '+res.changed_total+' 筆），略過 '+res.skipped_count+' 筆（非已確認或無需更新）。'
+              +(res.confirm_after ? '更新後已直接視為已確認。' : '更新後已改為「需重新確認」，請逐份按「重新確認」。'));
+        loadList();
+    }, 'json');
+}
+
 $('#btnCsv').on('click', function(){
     $.getJSON(API, $.extend({action:'list'}, curFilterParams()), function(res){
         if (!res.success) return;
-        var lines = ['文件編號,客戶,產品編號,內容項次,PFMEA,確認狀態,建立人,建立時間'];
+        var lines = ['文件編號,客戶,產品編號,內容項次,PFMEA,確認狀態,需要更新,建立人,建立時間,最後列印時間'];
         res.rows.forEach(function(r){
-            lines.push([r.doc_no, r.customer_name||r.customer_id||'', r.part_no||'', (r.item_filled_count||0), (r.has_pfmea?'PFMEA已建立':'未建立'), r.review_status_label||'', r.created_by_name||'', (r.created_at||'').substring(0,10)]
+            lines.push([r.doc_no, r.customer_name||r.customer_id||'', r.part_no||'', (r.item_filled_count||0), (r.has_pfmea?'PFMEA已建立':'未建立'), r.review_status_label||'',
+                        ((r.has_new||r.has_changed)?'是':''), r.created_by_name||'', (r.created_at||'').substring(0,10), (r.last_printed_at||'')]
                 .map(function(v){ return '"'+String(v).replace(/"/g,'""')+'"'; }).join(','));
         });
         var blob = new Blob(["\uFEFF"+lines.join("\n")], {type:'text/csv;charset=utf-8;'});
@@ -888,6 +964,14 @@ function openEdit(id){
         ITEMS = res.items || [];
         renderItems();
         openMask('editMask');
+        // 點開編輯畫面時系統自動加入新檔案／偵測到內容變更（2026-09-24 使用者要求）：
+        // 這是「打開當下才發生」的事，晚一點才彈提示會讓人以為是自己不小心點到，故緊接著跳窗告知
+        if ((res.auto_added_count||0) > 0 || (res.auto_changed_count||0) > 0) {
+            var msg = [];
+            if (res.auto_added_count > 0) msg.push('自動加入 '+res.auto_added_count+' 筆新檔案');
+            if (res.auto_changed_count > 0) msg.push('偵測到 '+res.auto_changed_count+' 筆既有項目內容有變動');
+            alert('系統'+msg.join('、')+'，狀態已改為「需重新確認」，請確認清單內容後按「重新確認」。');
+        }
     });
 }
 window.btnAddClick = function(){ openEdit(0); };
@@ -945,6 +1029,8 @@ function itemRowHtml(it, idx){
     var typeOpts = TYPE_OPTS.map(function(t){ return '<option value="'+t[0]+'"'+(it.item_type===t[0]?' selected':'')+'>'+t[1]+'</option>'; }).join('');
     var srcLabel = it.ref_source_label || '外來文件';
     var linkBadge = linked ? '<span class="ic-link-badge"><i class="fa fa-link"></i> '+esc(srcLabel)+'</span>' : (it.ref_broken ? '<span class="ic-broken-badge">來源已消失</span>' : '');
+    // 已確認過的連結項目，來源內容（版別/文件編號）事後變了：小籤提醒，即時值仍以畫面上顯示的為準
+    var changedBadge = it.content_changed ? '<span class="ic-broken-badge" title="上次確認時是「'+esc(it.confirmed_ref_snapshot||'')+'」，目前已不同"><i class="fa fa-exclamation-triangle"></i> 內容已變更</span>' : '';
     var docNoCell = '<div class="ic-part-box"><input type="text" class="f-docno" value="'+esc(it.doc_no_text||'')+'"'+(linked?' disabled':'')+' placeholder="版別／文件編號">'
         + (linked && it.file_url ? ' <a href="'+esc(it.file_url)+'" target="_blank" class="ic-row-btn" title="點開附件確認內容"><i class="fa fa-eye"></i></a>' : '')
         + '</div>';
@@ -961,7 +1047,7 @@ function itemRowHtml(it, idx){
         + '<td><input type="date" class="f-date" value="'+esc(it.effective_date||'')+'"'+(linked?' disabled':'')+'></td>'
         + '<td><select class="f-type">'+typeOpts+'</select></td>'
         + '<td>'+procCell+'</td>'
-        + '<td>'+docNoCell+' '+linkBadge+'</td>'
+        + '<td>'+docNoCell+' '+linkBadge+changedBadge+'</td>'
         + '<td class="op">'+opCell+'</td>'
         + '</tr>';
 }
@@ -1097,6 +1183,9 @@ function saveAll(confirm){
             }
             alert(res.message||'儲存失敗'); return;
         }
+        // 已確認的文件按了一般「儲存」（不是確認清單/重新確認）：狀態已被後端先改回「待確認」，
+        // 一定要講清楚，不然使用者只看到存檔成功、不會知道確認狀態悄悄不見了（2026-09-24 使用者要求）
+        if (res.review_reset) alert('此文件原本是「已確認」狀態，因為剛剛做了儲存，已確認狀態已被取消（改為「待確認」），請重新確認清單內容。');
         closeMask('editMask'); loadList();
     }, 'json');
 }

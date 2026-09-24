@@ -12,6 +12,7 @@ include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
 include_once $document_root . '/EGsystem/src/common/type_id_ctrl_lib.php';
+require_once $document_root . '/EGsystem/src/common/print_log_lib.php';   // 列印紀錄（ai-rules/23）
 
 if (!isset($_SESSION['userName'])) {
     http_response_code(403);
@@ -20,6 +21,7 @@ if (!isset($_SESSION['userName'])) {
 
 $db = (new DBConnection())->getPDO();
 type_id_ctrl_ensure_schema($db);
+eg_print_log_ensure_schema($db);   // list 動作直接查 print_log（最後列印時間/列印狀態篩選），要先確保表存在
 $me    = type_id_ctrl_current_user($db);
 $perms = type_id_ctrl_perms($db, $me);
 $uid   = $me ? (int)$me['id'] : 0;
@@ -29,6 +31,7 @@ function jout($arr) { echo json_encode($arr, JSON_UNESCAPED_UNICODE); exit; }
 function needView(array $perms) { if (!$perms['canView']) jout(['success'=>false,'message'=>'無檢閱權限']); }
 function needEdit(array $perms) { if (!$perms['canEdit']) jout(['success'=>false,'message'=>'無登錄權限']); }
 function needAdmin(array $perms) { if (!$perms['canAdmin']) jout(['success'=>false,'message'=>'無管理權限']); }
+function needBatchUpdate(array $perms) { if (empty($perms['canBatchUpdate'])) jout(['success'=>false,'message'=>'無批次更新權限，請洽管理者指派「批次更新權限」角色']); }
 
 /* 型態類別與連結來源的顯示標籤：唯一登記處已移到 src/common/type_id_ctrl_lib.php
    （2026-09-22 內部稽核的「產品型態稽核表」也要照同一份標籤把管制表的項目列帶進查檢表，
@@ -79,11 +82,15 @@ case 'list':
                             OR (ti.manual_doc_no IS NOT NULL AND ti.manual_doc_no<>'')
                             OR ti.manual_effective_date IS NOT NULL ))";
     $itemTotal  = "(SELECT COUNT(*) $itemBase)";
+    // 最後列印時間（ai-rules/23，2026-09-24 使用者要求）：直接讀共用 print_log，不另存一份；
+    // ref_table/ref_id 已補了索引（print_log_lib.php），MAX() 對單一 ref 是索引查找不是整表掃。
+    $printedSel = "(SELECT MAX(printed_at) FROM print_log WHERE source='type_id_ctrl' AND ref_table='type_id_ctrl_doc' AND ref_id=h.id)";
     $sql = "SELECT h.id, h.doc_no, h.customer_id, COALESCE(cl.customer,'') AS customer_name,
                    h.part_d_id, COALESCE(ds.D_Setting_Id,'') AS part_no,
                    h.review_status, h.confirmed_by_name, h.confirmed_at,
                    h.created_by_name, h.created_at, $pfSel AS pfmea_count,
-                   $itemFilled AS item_filled_count, $itemTotal AS item_total_count
+                   $itemFilled AS item_filled_count, $itemTotal AS item_total_count,
+                   $printedSel AS last_printed_at
             FROM type_id_ctrl_doc h
             LEFT JOIN customer_list cl ON cl.customer_id = h.customer_id
             LEFT JOIN d_setting ds ON ds.d_id = h.part_d_id
@@ -105,17 +112,32 @@ case 'list':
     $pfFilter = trim((string)($_GET['pfmea'] ?? ''));
     if ($hasPf && $pfFilter === 'yes')     $sql .= " AND EXISTS ($pfWhere)";
     else if ($hasPf && $pfFilter === 'no') $sql .= " AND NOT EXISTS ($pfWhere)";
+    $printedFilter = trim((string)($_GET['printed'] ?? ''));
+    if ($printedFilter === 'no')       $sql .= " AND NOT EXISTS (SELECT 1 FROM print_log pl WHERE pl.source='type_id_ctrl' AND pl.ref_table='type_id_ctrl_doc' AND pl.ref_id=h.id)";
+    else if ($printedFilter === 'yes') $sql .= " AND EXISTS (SELECT 1 FROM print_log pl WHERE pl.source='type_id_ctrl' AND pl.ref_table='type_id_ctrl_doc' AND pl.ref_id=h.id)";
     $sql .= " ORDER BY h.created_at DESC";
     $st = $db->prepare($sql); $st->execute($args);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    // 需要更新（新檔案／內容變更，2026-09-24 使用者要求，五種來源皆涵蓋）：只對「已確認」的文件檢查——
+    // 待確認／需重新確認本來就還沒審過，疊加這個提示沒有意義。已確認的文件數量天生就遠小於全部文件
+    // （要人工按過確認才會進到這個集合），所以逐筆呼叫 type_id_ctrl_source_diff() 也不會是效能問題；
+    // 千萬不要對全部文件都這樣掃一輪——那正是 CLAUDE.md 記過的「全料號跑一次子查詢」效能坑。
+    $needsUpdateFilter = trim((string)($_GET['needs_update'] ?? ''));
     foreach ($rows as &$r) {
         $r['review_status_label'] = REVIEW_LABELS[$r['review_status']] ?? $r['review_status'];
         $r['pfmea_count'] = (int)$r['pfmea_count'];
         $r['has_pfmea']   = $r['pfmea_count'] > 0;
         $r['item_filled_count'] = (int)$r['item_filled_count'];
         $r['item_total_count']  = (int)$r['item_total_count'];
+        $r['has_new'] = false; $r['has_changed'] = false; $r['new_count'] = 0; $r['changed_count'] = 0;
+        if ($r['review_status'] === 'confirmed' && $r['part_d_id']) {
+            $diff = type_id_ctrl_source_diff($db, (int)$r['id'], (int)$r['part_d_id']);
+            $r['new_count'] = count($diff['new']); $r['changed_count'] = count($diff['changed']);
+            $r['has_new'] = $r['new_count'] > 0; $r['has_changed'] = $r['changed_count'] > 0;
+        }
     }
     unset($r);
+    if ($needsUpdateFilter === 'yes') $rows = array_values(array_filter($rows, fn($r) => $r['has_new'] || $r['has_changed']));
     jout(['success'=>true,'rows'=>$rows]);
 
 case 'get':
@@ -130,12 +152,35 @@ case 'get':
     $st->execute([$id]);
     $doc = $st->fetch(PDO::FETCH_ASSOC);
     if (!$doc) jout(['success'=>false,'message'=>'找不到該筆']);
+    // 點開編輯畫面時自動加入新檔案／偵測內容變更（2026-09-24 使用者要求）：只有「已確認」的文件才做，
+    // 且只有登錄以上權限才會觸發寫入（純檢視權限的人打開來看不應該連帶改到資料）。加入後一律改回
+    // 「需重新確認」——不直接視為已確認，要由人親自按「重新確認」，見 type_id_ctrl_apply_diff()。
+    $autoAdded = 0; $autoChanged = 0;
+    if ($perms['canEdit'] && $doc['review_status'] === 'confirmed' && $doc['part_d_id']) {
+        $diff = type_id_ctrl_source_diff($db, $id, (int)$doc['part_d_id']);
+        if ($diff['new'] || $diff['changed']) {
+            $r = type_id_ctrl_apply_diff($db, $id, $diff, false, $uid, $uname);
+            $autoAdded = $r['added_count']; $autoChanged = $r['changed_count'];
+            if ($autoAdded > 0 || $autoChanged > 0) {
+                $st = $db->prepare("SELECT h.*, COALESCE(cl.customer,'') AS customer_name,
+                                            COALESCE(ds.D_Setting_Id,'') AS part_no
+                                     FROM type_id_ctrl_doc h
+                                     LEFT JOIN customer_list cl ON cl.customer_id = h.customer_id
+                                     LEFT JOIN d_setting ds ON ds.d_id = h.part_d_id
+                                     WHERE h.id=?");
+                $st->execute([$id]);
+                $doc = $st->fetch(PDO::FETCH_ASSOC);
+            }
+        }
+    }
     $doc['review_status_label'] = REVIEW_LABELS[$doc['review_status']] ?? $doc['review_status'];
     $st = $db->prepare("SELECT * FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 ORDER BY seq");
     $st->execute([$id]);
     $items = array_map(function($it) use ($db) { return buildItemView($db, $it); }, $st->fetchAll(PDO::FETCH_ASSOC));
     $dates = computeDocDates($items);
-    jout(['success'=>true,'doc'=>$doc,'items'=>$items,'doc_date_earliest'=>$dates['earliest'],'sign_date_latest'=>$dates['latest'],'process_summary'=>type_id_ctrl_process_header_summary($db,(int)$doc['part_d_id'])]);
+    jout(['success'=>true,'doc'=>$doc,'items'=>$items,'doc_date_earliest'=>$dates['earliest'],'sign_date_latest'=>$dates['latest'],
+          'process_summary'=>type_id_ctrl_process_header_summary($db,(int)$doc['part_d_id']),
+          'auto_added_count'=>$autoAdded, 'auto_changed_count'=>$autoChanged]);
 
 case 'delete_header':
     needAdmin($perms);
@@ -159,6 +204,8 @@ case 'batch_confirm':
                              WHERE id IN ($in) AND is_deleted=0");
         $st->execute(array_merge([$uid, $uname], $ids));
         $n = $st->rowCount();
+        // 確認當下把每一筆已連結項目的「版別／文件編號」存成快照，供之後偵測內容是否變更（2026-09-24）
+        foreach ($ids as $confirmedId) { type_id_ctrl_snapshot_confirm($db, $confirmedId); }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'批次確認失敗：'.$e->getMessage()]); }
     jout(['success'=>true,'confirmed_count'=>$n]);
@@ -187,6 +234,17 @@ case 'save_all':
               'dup_id'=>(int)$dup['id'], 'dup_doc_no'=>$dup['doc_no']]);
     }
 
+    // 已確認後按「儲存」（非確認清單/重新確認）要先取消已確認狀態並提醒（2026-09-24 使用者要求）：
+    // 已確認代表有人審過目前內容，既然又動手改存檔，那份審核已經不成立了，不可以讓它安靜地繼續掛著
+    // 「已確認」的樣子。降回「待確認」——這是使用者主動編輯，不是被動偵測到來源變了，跟 sync_part／
+    // type_id_ctrl_apply_diff() 用「需重新確認」是不同情境，故意用不同的狀態值分開兩種原因。
+    $reviewReset = false;
+    if ($id && !$confirm) {
+        $st = $db->prepare("SELECT review_status FROM type_id_ctrl_doc WHERE id=? AND is_deleted=0");
+        $st->execute([$id]);
+        $reviewReset = ($st->fetchColumn() === 'confirmed');
+    }
+
     $db->beginTransaction();
     try {
         if ($id) {
@@ -194,7 +252,8 @@ case 'save_all':
             $st->execute([$id]);
             if (!$st->fetchColumn()) throw new Exception('找不到該筆或已刪除');
             $st = $db->prepare("UPDATE type_id_ctrl_doc SET customer_id=?, part_d_id=?,
-                                 updated_at=NOW(), updated_by=?, updated_by_name=? WHERE id=?");
+                                 updated_at=NOW(), updated_by=?, updated_by_name=? " . ($reviewReset ? ", review_status='pending'" : "") . "
+                                 WHERE id=?");
             $st->execute([$customerId ?: null, $partDId, $uid, $uname, $id]);
         } else {
             $docNo = type_id_ctrl_next_doc_no($db);
@@ -267,10 +326,12 @@ case 'save_all':
         if ($confirm) {
             $db->prepare("UPDATE type_id_ctrl_doc SET review_status='confirmed', confirmed_by=?, confirmed_by_name=?, confirmed_at=NOW() WHERE id=?")
                ->execute([$uid, $uname, $id]);
+            // 確認當下把每一筆已連結項目的「版別／文件編號」存成快照，供之後偵測內容是否變更（2026-09-24）
+            type_id_ctrl_snapshot_confirm($db, $id);
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'儲存失敗：'.$e->getMessage()]); }
-    jout(['success'=>true,'id'=>$id]);
+    jout(['success'=>true,'id'=>$id,'review_reset'=>$reviewReset]);
 
 // ── 連結外來文件清單（即時查詢，不落地快照；含 is_external_doc + 廠內自家出圖已勾選類別）──
 case 'search_ext_doc':
@@ -335,6 +396,38 @@ case 'sync_part':
     $r = type_id_ctrl_sync_part($db, $dsPk);
     if (!$r['doc_id']) jout(['success'=>false,'message'=>'找不到此料號']);
     jout(['success'=>true,'doc_id'=>$r['doc_id'],'is_new'=>$r['is_new'],'added_count'=>$r['added_count']]);
+
+// ── 批次更新（2026-09-24 使用者要求，獨立授權：需要「批次更新權限」角色或管理員）──────
+// 對勾選的多筆「已確認」文件，一次套用目前偵測到的新檔案／內容變更差異。
+// confirm_after：使用者的選擇——1＝更新後直接視為已確認（重新寫入確認快照，不必再人工確認一次）；
+//                0（預設）＝更新後改為「需重新確認」，仍要人工逐份按「重新確認」（較保守）。
+// 沒有 part_d_id、或本來就不是「已確認」、或掃出來根本沒有差異的一律跳過，不視為失敗。
+case 'batch_update':
+    needBatchUpdate($perms);
+    $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+    if (!is_array($ids)) $ids = [];
+    $ids = array_values(array_filter(array_map('intval', $ids)));
+    if (!$ids) jout(['success'=>false,'message'=>'請先勾選要更新的項目']);
+    $confirmAfter = !empty($_POST['confirm_after']);
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    $st = $db->prepare("SELECT id, part_d_id, review_status FROM type_id_ctrl_doc WHERE id IN ($in) AND is_deleted=0");
+    $st->execute($ids);
+    $docs = $st->fetchAll(PDO::FETCH_ASSOC);
+    $updatedCount = 0; $skippedCount = 0; $addedTotal = 0; $changedTotal = 0;
+    foreach ($docs as $d) {
+        $docId = (int)$d['id'];
+        if ($d['review_status'] !== 'confirmed' || !$d['part_d_id']) { $skippedCount++; continue; }
+        $diff = type_id_ctrl_source_diff($db, $docId, (int)$d['part_d_id']);
+        if (!$diff['new'] && !$diff['changed']) { $skippedCount++; continue; }
+        $db->beginTransaction();
+        try {
+            $r = type_id_ctrl_apply_diff($db, $docId, $diff, $confirmAfter, $uid, $uname);
+            $db->commit();
+            $updatedCount++; $addedTotal += $r['added_count']; $changedTotal += $r['changed_count'];
+        } catch (Throwable $e) { $db->rollBack(); $skippedCount++; }
+    }
+    jout(['success'=>true, 'updated_count'=>$updatedCount, 'skipped_count'=>$skippedCount,
+          'added_total'=>$addedTotal, 'changed_total'=>$changedTotal, 'confirm_after'=>$confirmAfter]);
 
 // ── 上傳後把附件的建立日期改成使用者填的「文件日期」（2026-08-19 使用者要求）─────
 // 料號附件沒有獨立的文件日期欄位，本模組的「型態生效日期」＝發行章日期，沒填才退回上傳日
@@ -525,6 +618,14 @@ case 'print_get':
     $asDoc = eg_asdoc_get($db, 'type_id_ctrl');
     // 版次依業務日期回推：業務日期優先用「建立日期(最早外來文件日期)」，沒有則退回DB建立時間（ai-rules/16第三之四節）
     $bizDate = $dates['earliest'] ?: substr((string)$doc['created_at'], 0, 10);
+    // 列印紀錄（ai-rules/23）：記的是「按下列印」這個動作，不是「印出來了」；「列印全部搜尋結果」
+    // 逐筆各自呼叫這個動作，本來就一份文件各記一筆，不會有一次列印被記成好幾筆的問題。
+    eg_print_log_add($db, [
+        'source' => 'type_id_ctrl', 'doc_kind' => 'form',
+        'ref_table' => 'type_id_ctrl_doc', 'ref_id' => (string)$id,
+        'doc_name' => '型態識別文件管制表 ' . (string)$doc['doc_no'],
+        'part_no' => (string)($doc['part_no'] ?? ''),
+    ]);
     jout([
         'success'=>true, 'doc'=>$doc, 'items'=>$items,
         'doc_date_earliest'=>$dates['earliest'], 'sign_date_latest'=>$dates['latest'],

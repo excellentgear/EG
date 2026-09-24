@@ -42,6 +42,14 @@ if (!function_exists('eg_print_log_ensure_schema')) {
                 KEY idx_pl_src (source, printed_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='列印紀錄（全站共用，見 ai-rules/23）'");
         } catch (Throwable $e) {}
+        // 2026-09-24 新增：查「某份文件最後一次列印時間」的頁面（型態識別文件管制表清單）愈來愈多，
+        // 補一個 ref_table+ref_id 的索引，MAX(printed_at) 才不用整表掃。
+        // MySQL 的 ADD INDEX 不支援 IF NOT EXISTS（那只有 DROP INDEX／ADD COLUMN 有），
+        // 一律先 SHOW INDEX 確認不存在才下 ALTER，避免每次請求都撞語法或重覆索引錯誤。
+        try {
+            $has = $pdo->query("SHOW INDEX FROM print_log WHERE Key_name='idx_pl_ref'")->fetch(PDO::FETCH_ASSOC);
+            if (!$has) $pdo->exec("ALTER TABLE print_log ADD INDEX idx_pl_ref (ref_table, ref_id, printed_at)");
+        } catch (Throwable $e) {}
         // IP→電腦名稱的快取沿用既有的 ip_hostname_cache（audit_log_report.php 在用同一張），
         // 不另建第二張（鐵律4：同一件事只能有一個資料來源）。這裡只確保它存在。
         try {
@@ -226,6 +234,7 @@ if (!function_exists('eg_print_sources')) {
             'project_mgmt'   => ['label' => '專案管理－執行規劃表／專案管理卡', 'page' => 'views/GM/project_mgmt.php',            'kind' => 'form'],
             'stamp_list'     => ['label' => '圖章管理記錄表',                 'page' => 'views/ADM/stamp_management.php',          'kind' => 'form'],
             'order_analysis' => ['label' => '訂單分析報告',                   'page' => 'views/Sales/Order_Analysis.php',          'kind' => 'form'],
+            'type_id_ctrl'   => ['label' => '型態識別文件管制表',             'page' => 'views/TD/type_id_ctrl_doc.php',           'kind' => 'form'],
         ];
     }
 }
