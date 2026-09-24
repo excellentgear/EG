@@ -2776,6 +2776,68 @@ $(document).on('change', '#ciDate', function () {
 });
 
 /* ══════════════════════════ 關聯資料（訂單／料號／製程） ══════════════════════════ */
+/* ── 報工紀錄的架機／加工時間彙整（使用者 2026-09-24 要求） ──
+   一張製令同一道製程常常分好幾天陸續報工，原本一列一筆會洗版；改成依 bom_ing_fid 合併成一列，
+   同一列裡把「架機」與「加工」各自整理成一行時間區間：
+   ①只有一筆＝直接印日期時間~時間 ②同一天且筆數不多＝合併成一個時間區間 ③跨日或筆數太多＝
+   只印日期區間＋共幾筆，不逐筆列時間（否則欄位會被塞爆）；人數同理，多人只印幾人不逐一列名。 */
+function pjTimeOf(dt) { return dt ? String(dt).substr(11, 5) : ''; }
+function pjDateOf(dt) { return dt ? String(dt).substr(0, 10) : ''; }
+
+/* 單一筆的日期時間顯示：同一天只印一次日期，跨日（含結束時間隔天）兩邊都要各自印出日期 */
+function pjFmtDTRange(t1, t2, fallbackDate) {
+    var d1 = pjDateOf(t1) || fallbackDate || '', d2 = pjDateOf(t2) || d1;
+    var tm1 = pjTimeOf(t1), tm2 = pjTimeOf(t2);
+    if (!d1) return '';
+    if (!tm1 && !tm2) return dispDate(d1);
+    if (d2 && d1 !== d2) return dispDate(d1) + ' ' + tm1 + ' ~ ' + dispDate(d2) + ' ' + tm2;
+    var mid = tm1 + (tm2 ? '~' + tm2 : '');
+    return dispDate(d1) + (mid ? ' ' + mid : '');
+}
+
+/* entries: [{t1,t2,rdate}]；opts.unit 用於「太多筆」時的單位字（如「報工」）*/
+function pjSummarizeTimeGroup(entries, opts) {
+    opts = opts || {};
+    entries = $.grep(entries, function (e) { return e.t1 || e.t2 || e.rdate; });
+    if (!entries.length) return null;
+    if (entries.length === 1) return pjFmtDTRange(entries[0].t1, entries[0].t2, entries[0].rdate);
+    var dates = [];
+    $.each(entries, function (i, e) {
+        var d = pjDateOf(e.t1) || e.rdate || '';
+        if (d && $.inArray(d, dates) < 0) dates.push(d);
+    });
+    dates.sort();
+    if (dates.length <= 1 && entries.length <= 3) {
+        var starts = [], ends = [];
+        $.each(entries, function (i, e) { if (e.t1) starts.push(e.t1); if (e.t2) ends.push(e.t2); });
+        starts.sort(); ends.sort();
+        return pjFmtDTRange(starts[0] || '', ends[ends.length - 1] || '', dates[0] || '');
+    }
+    var rangeTxt = (dates.length > 1) ? (dispDate(dates[0]) + '~' + dispDate(dates[dates.length - 1])) : dispDate(dates[0] || '');
+    return rangeTxt + '　共 ' + entries.length + ' 筆' + (opts.unit || '');
+}
+
+/* 原始報工（一筆一列）依 bom_ing_fid 合併成一列；委外轉出入沒有架機/加工的概念，維持逐筆。
+   wr 本來就已依日期由新到舊排好，先出現的那一筆決定分組在陣列中的位置，分組順序因此
+   自然等於「該製令最近一次報工」由新到舊，不必另外排序。 */
+function pjGroupWorkReports(wr) {
+    var groups = [], byFid = {};
+    $.each(wr, function (i, r) {
+        if (r.kind !== 'in') { groups.push({ kind: 'out', rows: [r] }); return; }
+        var fid = num(r.bom_ing_fid);
+        var g = byFid[fid];
+        if (!g) { g = { kind: 'in', fid: fid, rows: [] }; byFid[fid] = g; groups.push(g); }
+        g.rows.push(r);
+    });
+    return groups;
+}
+
+function pjDistinctNonEmpty(rows, field) {
+    var out = [];
+    $.each(rows, function (i, r) { var v = r[field]; if (v && $.inArray(v, out) < 0) out.push(v); });
+    return out;
+}
+
 function renderRel(res) {
     var p = res.project;
     if (!num(p.project_id)) { $('#paneRel').html('<div class="pj-hint" style="padding:14px;">請先儲存專案。</div>'); return; }
@@ -2915,40 +2977,77 @@ function renderRel(res) {
            + '<b>廠內製程</b>的紀錄來自每日製程報工（機台、上機／生產人員、產出數）；'
            + '<b>委外製程</b>沒有廠內報工，實績看的是轉出入紀錄（轉出入日期、數量、損耗）。</div>';
     } else {
+        var wg = pjGroupWorkReports(wr);
         h += '<div style="overflow-x:auto;max-height:340px;overflow-y:auto;"><table class="sub-tbl"><thead><tr>'
-          + '<th style="width:88px;">日期</th><th style="width:56px;">類型</th>'
+          + '<th style="width:170px;">架機／加工時間</th><th style="width:56px;">類型</th>'
           + '<th style="width:110px;">製令單</th><th style="width:46px;">順序</th><th>製程</th>'
-          + '<th style="width:110px;">機台／廠商</th><th style="width:150px;">人員／轉出入</th>'
+          + '<th style="width:110px;">機台／廠商</th><th style="width:120px;">人員／轉出入</th>'
           + '<th style="width:64px;">數量</th><th style="width:56px;">狀態</th><th>備註</th></tr></thead><tbody>';
-        $.each(wr, function (i, r) {
-            var isIn = (r.kind === 'in');
-            h += '<tr><td>' + dispDate(r.rdate) + '</td>'
-              + '<td>' + (isIn ? '<span class="st st-approved">廠內</span>' : '<span class="st st-submitted">委外</span>') + '</td>'
-              /* 製令單號可點：開報工紀錄查詢（使用者要求） */
-              + '<td>' + (r.bom ? '<span class="pj-op" data-viewwork="' + esc(r.bom) + '" title="開啟報工紀錄查詢">' + esc(r.bom) + '</span>' : '')
-              + '</td><td>' + num(r.bom_sn) + '</td>'
-              + '<td>' + esc(r.process_name || ('製程' + num(r.process_no))) + '</td>'
-              + '<td>' + esc(isIn ? (r.machine_name || '－') : (r.maker_to_name || r.maker_from_name || '－'))
-                    + (isIn && num(r.machine_mismatch) ? ' <span class="fa fa-exclamation-triangle" style="color:#DD5138;" '
-                        + 'title="機台登記的製程種類跟這筆報工的製程對不起來，請確認機台是否填錯"></span>' : '') + '</td>'
-              + '<td>' + esc(isIn
-                    ? ((r.setup_user ? '上機 ' + r.setup_user + '　' : '') + (r.prod_user ? '生產 ' + r.prod_user : '') || '－')
-                    : ((r.maker_from_name || '?') + ' → ' + (r.maker_to_name || '?'))) + '</td>'
-              + '<td>' + num(r.qty)
-                    + (isIn && num(r.ng_qty) ? '<br><span class="rd-bad">NG ' + num(r.ng_qty) + '</span>' : '')
-                    + (num(r.loss_qty) ? '<br><span class="pj-hint">損耗 ' + num(r.loss_qty) + '</span>' : '') + '</td>'
-              + '<td>' + (isIn ? (num(r.is_finished) ? '<span class="st st-approved">完工</span>' : '進行中') : '－') + '</td>'
-              /* 備註：有歸入異常單的一律先標出來（使用者要求），可點開新視窗看那一張異常單 */
-              + '<td>' + (r.abnormal_order_no
-                    ? '<span class="pj-op" data-openabn="' + num(r.abnormal_order_id) + '" title="開啟異常單">'
-                      + '<i class="fa fa-external-link"></i> 異常單 ' + esc(r.abnormal_order_no) + '</span>'
-                      + (r.note ? '<br>' + esc(r.note) : '')
-                    : esc(r.note || '')) + '</td></tr>';
+        $.each(wg, function (i, g) {
+            var isIn = (g.kind === 'in'), rows = g.rows, first = rows[0];
+            var dateCell;
+            if (isIn) {
+                var setupRows = $.grep(rows, function (r) { return r.su_t1 || r.setup_user; });
+                var prodRows  = $.grep(rows, function (r) { return r.t1 || r.t2 || num(r.qty) > 0; });
+                var setupLine = pjSummarizeTimeGroup($.map(setupRows, function (r) { return { t1: r.su_t1, t2: r.su_t2, rdate: r.rdate }; }));
+                var prodLine  = pjSummarizeTimeGroup($.map(prodRows,  function (r) { return { t1: r.t1,    t2: r.t2,    rdate: r.rdate }; }), { unit: '報工' });
+                dateCell = (setupLine ? '架　' + esc(setupLine) : '')
+                         + (setupLine && prodLine ? '<br>' : '')
+                         + (prodLine ? '加　' + esc(prodLine) : '');
+                if (!dateCell) dateCell = dispDate(first.rdate);
+                var setupNames = pjDistinctNonEmpty(setupRows, 'setup_user');
+                var prodNames  = pjDistinctNonEmpty(prodRows, 'prod_user');
+                var peopleParts = [];
+                if (setupNames.length) peopleParts.push('上機 ' + (setupNames.length === 1 ? setupNames[0] : (setupNames.length + ' 人')));
+                if (prodNames.length)  peopleParts.push('生產 ' + (prodNames.length === 1 ? prodNames[0] : (prodNames.length + ' 人')));
+                var peopleCell = peopleParts.length ? esc(peopleParts.join('　')) : '－';
+                var qtySum = 0, ngSum = 0, finished = false, abnList = [], noteList = [];
+                $.each(rows, function (j, r) {
+                    qtySum += num(r.qty); ngSum += num(r.ng_qty);
+                    if (num(r.is_finished)) finished = true;
+                    if (r.abnormal_order_no && $.inArray(r.abnormal_order_no, $.map(abnList, function (a) { return a.no; })) < 0) {
+                        abnList.push({ id: r.abnormal_order_id, no: r.abnormal_order_no });
+                    }
+                    if (r.note && $.inArray(r.note, noteList) < 0) noteList.push(r.note);
+                });
+                var machineCell = esc(first.machine_name || '－')
+                    + ($.grep(rows, function (r) { return num(r.machine_mismatch); }).length
+                        ? ' <span class="fa fa-exclamation-triangle" style="color:#DD5138;" '
+                          + 'title="機台登記的製程種類跟這筆報工的製程對不起來，請確認機台是否填錯"></span>' : '');
+                var noteCell = $.map(abnList, function (a) {
+                        return '<span class="pj-op" data-openabn="' + num(a.id) + '" title="開啟異常單">'
+                             + '<i class="fa fa-external-link"></i> 異常單 ' + esc(a.no) + '</span>';
+                    }).join('<br>')
+                    + (abnList.length && noteList.length ? '<br>' : '')
+                    + esc(noteList.join('、'));
+                h += '<tr><td>' + dateCell + '</td>'
+                  + '<td><span class="st st-approved">廠內</span></td>'
+                  + '<td>' + (first.bom ? '<span class="pj-op" data-viewwork="' + esc(first.bom) + '" title="開啟報工紀錄查詢">' + esc(first.bom) + '</span>' : '')
+                  + '</td><td>' + num(first.bom_sn) + '</td>'
+                  + '<td>' + esc(first.process_name || ('製程' + num(first.process_no))) + '</td>'
+                  + '<td>' + machineCell + '</td>'
+                  + '<td>' + peopleCell + '</td>'
+                  + '<td>' + qtySum + (ngSum ? '<br><span class="rd-bad">NG ' + ngSum + '</span>' : '') + '</td>'
+                  + '<td>' + (finished ? '<span class="st st-approved">完工</span>' : '進行中') + '</td>'
+                  + '<td>' + noteCell + '</td></tr>';
+            } else {
+                var r = first;
+                h += '<tr><td>' + dispDate(r.rdate) + '</td>'
+                  + '<td><span class="st st-submitted">委外</span></td>'
+                  + '<td>' + (r.bom ? '<span class="pj-op" data-viewwork="' + esc(r.bom) + '" title="開啟報工紀錄查詢">' + esc(r.bom) + '</span>' : '')
+                  + '</td><td>' + num(r.bom_sn) + '</td>'
+                  + '<td>' + esc(r.process_name || ('製程' + num(r.process_no))) + '</td>'
+                  + '<td>' + esc(r.maker_to_name || r.maker_from_name || '－') + '</td>'
+                  + '<td>' + esc((r.maker_from_name || '?') + ' → ' + (r.maker_to_name || '?')) + '</td>'
+                  + '<td>' + num(r.qty) + (num(r.loss_qty) ? '<br><span class="pj-hint">損耗 ' + num(r.loss_qty) + '</span>' : '') + '</td>'
+                  + '<td>－</td>'
+                  + '<td>' + esc(r.note || '') + '</td></tr>';
+            }
         });
         var totGood = 0, totNg = 0;
         $.each(wr, function (i, r) { if (r.kind === 'in') { totGood += num(r.qty); totNg += num(r.ng_qty); } });
         h += '</tbody></table></div>'
-          + '<p class="pj-hint">共 ' + wr.length + ' 筆（廠內報工總數 ' + (totGood + totNg)
+          + '<p class="pj-hint">共 ' + wg.length + ' 列（合併同一製令/製程的多筆報工；原始報工共 ' + wr.length + ' 筆，廠內報工總數 ' + (totGood + totNg)
           + '　良品 ' + totGood + '　NG ' + totNg + '），依日期由新到舊。這些是生產現場登打的原始紀錄，本頁只顯示不修改。</p>';
     }
     h += '</div>';

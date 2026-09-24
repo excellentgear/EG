@@ -1978,6 +1978,16 @@ function prj_task_evidence(PDO $db, int $projectId, ?array $prj = null): array
                          . ($r['setup_user'] ? '（' . $r['setup_user'] . '）' : ''),
                 'ref'   => 'wr:' . (int)$r['id'],
                 'owner_id' => (int)($r['setup_user_id'] ?? 0), 'owner_name' => (string)($r['setup_user'] ?? '')];
+            /* 首件檢驗的建議日期＝架機時間的**結束**日期（使用者 2026-09-24 要求）：
+               架機結束才有東西可以送首件，比 rdate（報工回報當天，可能是隔天才補登）更準確；
+               沒有結束時間才退回開始時間、再退回報工日期。這只是「建議」，真正的首件佐證仍是
+               ⑤a 的線上檢驗（ref 開頭 qc:），下面的 note 判斷只認 qc: 開頭，不會被這裡混淆。 */
+            $faiD = substr((string)($r['su_t2'] ?? ''), 0, 10) ?: (substr((string)($r['su_t1'] ?? ''), 0, 10) ?: $d);
+            $out['fai']['options'][] = ['date' => $faiD,
+                'label' => $r['bom'] . '　' . $pn . '　架機結束' . ($tRange !== '' ? '　' . $tRange : '')
+                         . '　（依架機結束時間建議）' . ($r['setup_user'] ? '（' . $r['setup_user'] . '）' : ''),
+                'ref'   => 'wrsetup:' . (int)$r['id'],
+                'owner_id' => (int)($r['setup_user_id'] ?? 0), 'owner_name' => (string)($r['setup_user'] ?? '')];
             // 架機人數通常只有一兩位，用「架機次數」決定建議誰（使用者：架機與修砂／FAI 抓架機人員）
             if ((int)($r['setup_user_id'] ?? 0) > 0) {
                 $setupCnt[(int)$r['setup_user_id']] = ($setupCnt[(int)$r['setup_user_id']] ?? 0) + 1;
