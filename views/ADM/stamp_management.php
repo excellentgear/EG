@@ -388,13 +388,13 @@ try {
     <p id="issueCheckSum" class="text-muted" style="font-size:12px;font-weight:bold;color:#7a4e17;"></p>
     <div style="max-height:360px;overflow-y:auto;border:1px solid #e8d9b8;">
       <table class="list"><thead><tr>
-        <th style="width:36px;"><input type="checkbox" checked disabled title="預設全選，逐筆的建議日期各不相同"></th>
-        <th>持有人</th><th style="width:100px;">種類</th><th style="width:100px;">目前核發日期</th><th style="width:130px;">建議日期（最早實際使用）</th><th style="width:110px;"></th>
+        <th style="width:36px;"><input type="checkbox" id="icChkAll" checked title="全選/全不選"></th>
+        <th>持有人</th><th style="width:100px;">種類</th><th style="width:100px;">目前核發日期</th><th style="width:150px;">要改成（可手動調整）</th><th style="width:110px;"></th>
       </tr></thead><tbody id="issueCheckBody"></tbody></table>
     </div>
     <div style="text-align:right;margin-top:10px;">
       <button class="btn btn-default btn-sm" id="btnIssueCheckRefresh" onclick="openIssueCheck()"><i class="fa fa-refresh"></i> 重新檢查</button>
-      <button class="btn btn-warning btn-sm" id="btnIssueCheckApplyAll" style="display:none;"><i class="fa fa-check"></i> 套用勾選項目的建議日期</button>
+      <button class="btn btn-warning btn-sm" id="btnIssueCheckApplyAll" style="display:none;"><i class="fa fa-check"></i> 套用勾選項目的日期</button>
     </div>
   </div>
 </div></div></div>
@@ -415,7 +415,7 @@ try {
       <li><b>停用／繳回</b>：該列按「停用」，填停用日期。章不會被刪掉，清冊上會保留並標示為已停用。</li>
       <li><b>報廢</b>：報廢就是停用 — 填上繳回日期後，列印的記錄表該列會自動打在「作廢」欄。</li>
       <li><b>批次改核發日期</b>：清冊表格最左欄勾選要改的登記（可跨多筆，僅限目前這一頁），上方「批次改核發日期」列選好新日期後按「套用到勾選的登記」，會一次把勾選的登記全部改成同一個日期，只動核發日期、不影響種類/模板/備註。</li>
-      <li><b>核發日期健檢</b>：右上按「核發日期健檢」，系統會自動比對每顆章持有人在全站簽核紀錄裡<b>第一次實際核准</b>的日期，抓出「核發日期比人第一次用章還晚」的不合理登記，每筆都附建議日期（＝該人最早實際使用的那天），可逐筆按「改成此日期」，也可以勾選多筆一次「套用勾選項目的建議日期」（每筆各自套用各自的建議值，不是同一個日期）。</li>
+      <li><b>核發日期健檢</b>：右上按「核發日期健檢」，系統會自動比對每顆章持有人在全站簽核紀錄裡<b>第一次實際核准</b>的日期，抓出「核發日期比人第一次用章還晚」的不合理登記。每筆會預先帶入建議日期（＝該人最早實際使用的那天），<b>可直接在日期欄手動改成別的日期</b>（不一定要用建議值），勾選框左上角可「全選/全不選」，逐筆按「套用此列」或勾選多筆一次「套用勾選項目的日期」（套用的是每列<b>目前欄位裡實際顯示</b>的日期，不是固定的建議值）。</li>
       <li><b>列印</b>：右上「列印/PDF」印出目前篩選條件下的全部資料（不是只有這一頁）。</li>
     </ol>
 
@@ -744,18 +744,20 @@ function openIssueCheck(){
     ISSUE_FLAGS=r.rows||[];
     $('#issueCheckSum').show().text(`已核對 ${r.checked} 筆有明確持有人的登記，其中 ${ISSUE_FLAGS.length} 筆核發日期晚於該持有人最早一次實際核准的日期（僅比對走 approval_record 共用簽核紀錄留痕的操作，舊式自建簽核表可能查不到）。`);
     if(!ISSUE_FLAGS.length){ $('#issueCheckBody').html('<tr><td colspan="6" class="text-muted">沒有發現不合理的核發日期。</td></tr>'); return; }
-    $('#btnIssueCheckApplyAll').show();
+    $('#btnIssueCheckApplyAll').show(); $('#icChkAll').prop('checked',true);
     $('#issueCheckBody').html(ISSUE_FLAGS.map(x=>`<tr>
       <td style="text-align:center;"><input type="checkbox" class="ic-chk" checked value="${x.id}"></td>
       <td>${esc(x.holder_name)}</td>
       <td>${x.type_name?esc(x.type_name):'<span class="text-muted">（未分類）</span>'}</td>
       <td>${esc(x.issue_date)}</td>
-      <td style="color:#c0392b;font-weight:bold;">${esc(x.suggest_date)}<div class="text-muted" style="font-size:11px;font-weight:normal;">早了 ${x.diff_days} 天使用</div></td>
-      <td><button class="btn btn-warning btn-xs ic-apply-one" data-id="${x.id}" data-date="${x.suggest_date}"><i class="fa fa-check"></i> 改成此日期</button></td>
+      <td><input type="date" class="form-control input-sm ic-date" data-id="${x.id}" value="${esc(x.suggest_date)}" max="9999-12-31">
+        <div class="text-muted" style="font-size:11px;">建議：${esc(x.suggest_date)}（早了 ${x.diff_days} 天使用）</div></td>
+      <td><button class="btn btn-warning btn-xs ic-apply-one" data-id="${x.id}"><i class="fa fa-check"></i> 套用此列</button></td>
     </tr>`).join(''));
   });
 }
 $('#btnCheckIssueDate').on('click',openIssueCheck);
+$('#icChkAll').on('change',function(){ $('.ic-chk').prop('checked', this.checked); });
 function applyIssueDates(items){
   if(!items.length) return;
   $.post(API+'?action=batch_update_date',{items:JSON.stringify(items)},r=>{
@@ -764,14 +766,18 @@ function applyIssueDates(items){
   },'json');
 }
 $('#issueCheckBody').on('click','.ic-apply-one',function(){
-  const id=+$(this).data('id'), d=$(this).data('date');
-  if(!confirm(`確定把這筆核發日期改成建議值 ${d}？`)) return;
+  const id=+$(this).data('id'), d=$(this).closest('tr').find('.ic-date').val();
+  if(!d){alert('請先選擇日期');return;}
+  if(!confirm(`確定把這筆核發日期改成 ${d}？`)) return;
   applyIssueDates([{id,issue_date:d}]);
 });
 $('#btnIssueCheckApplyAll').on('click',function(){
-  const items=$('.ic-chk:checked').map(function(){ const id=+this.value; const row=ISSUE_FLAGS.find(x=>x.id===id); return row?{id:row.id,issue_date:row.suggest_date}:null; }).get().filter(Boolean);
-  if(!items.length){ alert('請至少勾選一筆'); return; }
-  if(!confirm(`確定把勾選的 ${items.length} 筆，核發日期各自改成建議值（各筆日期不同）？`)) return;
+  const items=$('.ic-chk:checked').map(function(){
+    const id=+this.value, d=$(this).closest('tr').find('.ic-date').val();
+    return d?{id,issue_date:d}:null;
+  }).get().filter(Boolean);
+  if(!items.length){ alert('請至少勾選一筆，且該列要有日期'); return; }
+  if(!confirm(`確定把勾選的 ${items.length} 筆核發日期改成各自欄位裡目前顯示的日期？`)) return;
   applyIssueDates(items);
 });
 
