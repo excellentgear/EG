@@ -245,6 +245,38 @@ case 'list': {
           'canManage'=>$canManage]);
 }
 
+// ── 核發日期健檢：登記的核發日期是否晚於持有人「最早一次實際簽核」的日期（不合理：人簽核當下這顆章還沒核發）──
+// 資料源＝全站共用 approval_record（ai-rules/23，只有走共用簽核的模組留得下痕跡，自建簽核表的舊模組查不到，僅供參考不代表窮盡）；
+// 只查得到 holder_kind='user'／'user_dept'（有明確 user_id 的登記），dept／position 章沒有固定的人可比對，一律略過不列入。
+case 'check_issue_date': {
+    needManage($canManage);
+    $earliest = $db->query("SELECT approver_id, MIN(decided_at) AS earliest
+                             FROM approval_record
+                             WHERE status='approved' AND approver_id IS NOT NULL AND decided_at IS NOT NULL
+                             GROUP BY approver_id")->fetchAll(PDO::FETCH_KEY_PAIR);
+    $st = $db->query("SELECT r.id, r.user_id, r.dept_id, r.issue_date, r.status, u.user_cname, d.name AS dept_name, t.type_name,
+                              CASE WHEN r.dept_id IS NOT NULL THEN CONCAT(u.user_cname,'（',d.name,'）') ELSE u.user_cname END AS holder_name
+                       FROM stamp_register r
+                       JOIN user u ON u.id = r.user_id
+                       LEFT JOIN department d ON d.id = r.dept_id
+                       LEFT JOIN stamp_type t ON t.id = r.type_id
+                       ORDER BY r.issue_date DESC");
+    $checked = 0; $flags = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $checked++;
+        $uidHolder = (int)$r['user_id'];
+        if (!isset($earliest[$uidHolder])) continue;
+        $earliestDate = substr((string)$earliest[$uidHolder], 0, 10);
+        if ($earliestDate < $r['issue_date']) {
+            $flags[] = ['id'=>(int)$r['id'], 'holder_name'=>$r['holder_name'], 'type_name'=>$r['type_name'],
+                        'issue_date'=>$r['issue_date'], 'status'=>$r['status'], 'suggest_date'=>$earliestDate,
+                        'diff_days'=>(int)((strtotime($r['issue_date']) - strtotime($earliestDate)) / 86400)];
+        }
+    }
+    usort($flags, fn($a,$b)=>$b['diff_days'] <=> $a['diff_days']);
+    jout(['ok'=>true, 'rows'=>$flags, 'checked'=>$checked]);
+}
+
 // ── 新增登記 ──
 // holder_kind：'user'（個人）｜'dept'（部門）｜'position'（職稱＝該部門的該職稱，dept_id+position_id併用）
 //            ｜'user_dept'（部門所屬人員＝該部門下的某個人，dept_id+user_id併用；種類同時綁定個人+課室時的組合登記）
@@ -331,6 +363,28 @@ case 'update': {
     $st = $db->prepare("UPDATE stamp_register SET type_id=?, issue_date=?, note=?, modified_by=?, modified_at=NOW()$clearTplSql WHERE id=?");
     $st->execute([$typeId, $issue, $note, $cname, $id]);
     jout(['ok'=>true]);
+}
+
+// ── 批次改核發日期（只動 issue_date，不碰種類/模板/備註，避免半套 update 洗掉其他欄位）──
+// items：JSON 陣列 [{id,issue_date}]；同一批可以每筆各自不同日期（供「核發日期健檢」逐筆套用各自建議值），
+// 也可以全部填同一個日期（供清冊勾選後統一改期）。權限與單筆修改同一層級（圖章管理員即可，不必超級管理員）。
+case 'batch_update_date': {
+    needManage($canManage);
+    $items = json_decode((string)($_POST['items'] ?? '[]'), true);
+    if (!is_array($items) || !$items) jerr('請至少勾選一筆');
+    if (count($items) > 500) jerr('單次批次上限 500 筆，請分批處理');
+    $upd = $db->prepare("UPDATE stamp_register SET issue_date=?, modified_by=?, modified_at=NOW() WHERE id=?");
+    $updated = 0; $skipped = 0;
+    $db->beginTransaction();
+    foreach ($items as $it) {
+        $id    = (int)($it['id'] ?? 0);
+        $issue = trim((string)($it['issue_date'] ?? ''));
+        if ($id <= 0 || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $issue)) { $skipped++; continue; }
+        $upd->execute([$issue, $cname, $id]);
+        if ($upd->rowCount() > 0) $updated++; else $skipped++;
+    }
+    $db->commit();
+    jout(['ok'=>true, 'updated'=>$updated, 'skipped'=>$skipped]);
 }
 
 // ── 停用/繳回 ──

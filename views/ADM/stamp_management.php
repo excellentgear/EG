@@ -71,6 +71,7 @@ try {
   <h4><i class="fa fa-certificate"></i> 圖章管理
     <span id="roleBadge">
       <button class="btn btn-info btn-xs" id="btnBatchAdd" style="display:none;" title="多選部門全選成員，可跨模板一次建立多種章"><i class="fa fa-object-group"></i> 批次建立</button>
+      <button class="btn btn-default btn-xs" id="btnCheckIssueDate" style="display:none;" title="比對持有人最早一次實際核准的日期，找出登記得不合理的核發日期"><i class="fa fa-stethoscope"></i> 核發日期健檢</button>
       <button class="btn btn-default btn-xs" id="btnSettings" style="display:none;" data-toggle="modal" data-target="#settingsModal"><i class="fa fa-cog"></i> 設定</button>
       <button class="btn btn-default btn-xs page-help-btn" id="btnPageHelp"><i class="fa fa-book"></i> 使用說明</button>
       　目前角色：<strong id="myRole">…</strong>　<i class="fa fa-question-circle" data-toggle="modal" data-target="#permModal" title="權限說明"></i></span>
@@ -104,6 +105,14 @@ try {
     <button class="btn btn-primary btn-sm" id="btnAdd"><i class="fa fa-plus"></i> 登記核發</button>
     <div class="text-muted" style="font-size:12px;margin-top:4px;">同一持有對象＋同一「模板」，同時只能有一筆「使用中」；同種類不同模板可同時持有。各種類可綁定的持有對象請按右上「設定」維護。</div>
   </div>
+  <div id="batchDateBar" style="display:none;margin-bottom:10px;padding:8px;background:#fdf6ea;border:1px solid #e8d9b8;border-radius:4px;">
+    <strong style="color:#7a4e17;"><i class="fa fa-calendar"></i> 批次改核發日期：</strong>
+    已勾選 <span id="batchDateCnt">0</span> 筆（僅本頁，勾選框在最左欄）
+    新核發日期 <input type="date" id="batchDateVal" class="form-control input-sm" style="width:150px;display:inline-block;" max="9999-12-31">
+    <button class="btn btn-warning btn-sm" id="btnBatchDateApply" disabled><i class="fa fa-check"></i> 套用到勾選的登記</button>
+    <button class="btn btn-default btn-sm" id="btnBatchDateClear"><i class="fa fa-times"></i> 取消勾選</button>
+    <div class="text-muted" style="font-size:11.5px;margin-top:4px;">會直接覆蓋這幾筆登記的核發日期（清冊上顯示與印章的日期戳都會跟著換），請先確認勾對筆數再套用。</div>
+  </div>
   <div class="pager">
     <span style="font-size:12.5px;">
       篩選：<input type="text" id="fltName" class="form-control input-sm" style="width:120px;display:inline-block;" placeholder="持有人姓名">
@@ -123,6 +132,7 @@ try {
   </div>
   </div><!-- /stickyBar -->
   <table class="list"><thead><tr>
+    <th class="reg-chk-col" style="width:26px;display:none;"><input type="checkbox" id="regChkAll" title="全選本頁"></th>
     <th style="width:90px;">印模</th><th style="width:100px;">持有人</th><th style="width:100px;">種類</th><th style="width:95px;">核發日期</th>
     <th style="width:100px;">停用/繳回日</th><th style="width:75px;">狀態</th><th>備註</th>
     <th style="width:85px;">掃描實體章</th><th style="width:190px;">操作</th>
@@ -368,6 +378,27 @@ try {
   </div>
 </div></div></div>
 
+<!-- 核發日期健檢 Modal -->
+<div class="modal fade" id="issueCheckModal" tabindex="-1"><div class="modal-dialog" style="width:760px;"><div class="modal-content">
+  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+    <h4 class="modal-title"><i class="fa fa-stethoscope"></i> 核發日期健檢</h4></div>
+  <div class="modal-body">
+    <p class="text-muted" style="font-size:12px;">比對每顆章「登記的核發日期」與持有人在全站共用簽核紀錄（approval_record）<strong>第一次實際核准</strong>的日期——核發日期比那次還晚，代表登記時這顆章明明還沒核發，人卻已經拿去簽核了，屬於不合理的登記資料。
+      <strong>只查得到走共用簽核紀錄留痕的操作</strong>，較舊、各自另存一套簽核表的模組可能查不到，此健檢只能抓出「查得到證據」的那一部分，不代表沒列出的就一定正確；「課室章／職稱章」沒有固定對應到單一個人，本健檢不涵蓋。</p>
+    <p id="issueCheckSum" class="text-muted" style="font-size:12px;font-weight:bold;color:#7a4e17;"></p>
+    <div style="max-height:360px;overflow-y:auto;border:1px solid #e8d9b8;">
+      <table class="list"><thead><tr>
+        <th style="width:36px;"><input type="checkbox" checked disabled title="預設全選，逐筆的建議日期各不相同"></th>
+        <th>持有人</th><th style="width:100px;">種類</th><th style="width:100px;">目前核發日期</th><th style="width:130px;">建議日期（最早實際使用）</th><th style="width:110px;"></th>
+      </tr></thead><tbody id="issueCheckBody"></tbody></table>
+    </div>
+    <div style="text-align:right;margin-top:10px;">
+      <button class="btn btn-default btn-sm" id="btnIssueCheckRefresh" onclick="openIssueCheck()"><i class="fa fa-refresh"></i> 重新檢查</button>
+      <button class="btn btn-warning btn-sm" id="btnIssueCheckApplyAll" style="display:none;"><i class="fa fa-check"></i> 套用勾選項目的建議日期</button>
+    </div>
+  </div>
+</div></div></div>
+
 <!-- 使用說明 Modal（鐵律7）-->
 <div class="modal fade" id="helpUseMask" tabindex="-1"><div class="modal-dialog" style="width:720px;"><div class="modal-content">
   <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
@@ -383,6 +414,8 @@ try {
       <li><b>核發一顆章</b>：上方「新增登記」選模板（種類自動帶入）→ 選對象別與對象 → 填核發日期 → 新增。</li>
       <li><b>停用／繳回</b>：該列按「停用」，填停用日期。章不會被刪掉，清冊上會保留並標示為已停用。</li>
       <li><b>報廢</b>：報廢就是停用 — 填上繳回日期後，列印的記錄表該列會自動打在「作廢」欄。</li>
+      <li><b>批次改核發日期</b>：清冊表格最左欄勾選要改的登記（可跨多筆，僅限目前這一頁），上方「批次改核發日期」列選好新日期後按「套用到勾選的登記」，會一次把勾選的登記全部改成同一個日期，只動核發日期、不影響種類/模板/備註。</li>
+      <li><b>核發日期健檢</b>：右上按「核發日期健檢」，系統會自動比對每顆章持有人在全站簽核紀錄裡<b>第一次實際核准</b>的日期，抓出「核發日期比人第一次用章還晚」的不合理登記，每筆都附建議日期（＝該人最早實際使用的那天），可逐筆按「改成此日期」，也可以勾選多筆一次「套用勾選項目的建議日期」（每筆各自套用各自的建議值，不是同一個日期）。</li>
       <li><b>列印</b>：右上「列印/PDF」印出目前篩選條件下的全部資料（不是只有這一頁）。</li>
     </ol>
 
@@ -455,7 +488,7 @@ try {
 <script src="../../resource/js/eg_print_log.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_print_log.js'); ?>"></script>
 <script>
 const API='../../src/store/store_Stamp_API.php';
-let canManage=false, isAdmin=false, USERS=[], page=1, per=10, total=0, curScanUid=0, curScanName='', curAsset=null, curEditId=0;
+let canManage=false, isAdmin=false, USERS=[], page=1, per=10, total=0, curScanUid=0, curScanName='', curAsset=null, curEditId=0, ISSUE_FLAGS=[];
 let AS_DOCS=[], AS_DOC=null;                 // 列印文件綁定（ai-rules/16）
 const SYS_NOTE_BATCH='批次建立';             // 系統自動寫入的備註，列印版一律不印（清冊是要給外部稽核看的正式文件，不該出現內部作業痕跡）
 function esc(s){return $('<div>').text(s==null?'':s).html();}
@@ -569,7 +602,7 @@ function loadMeta(){
     }
     if(isAdmin){ $('#stabBase').show(); $('#baseDir').val(m.base||''); baseState(m.base,m.base_ok); }
     AS_DOCS=m.as_docs||[]; AS_DOC=m.as_doc||null; renderAsDoc();
-    if(canManage){ $('#btnSettings').show(); $('#btnTplNew').show(); }
+    if(canManage){ $('#btnSettings').show(); $('#btnTplNew').show(); $('.reg-chk-col').show(); $('#batchDateBar').show(); $('#btnCheckIssueDate').show(); }
     if(m.canBatch){ $('#btnBatchAdd').show(); }
     loadTpls(()=>loadList(1));   // 清冊印模預覽要用模板資料(TPLS)渲染，等模板載完再載清冊，避免競速下第一次顯示退回舊版簡易章
   });
@@ -646,6 +679,7 @@ function loadList(p){
         :x.holder_kind==='user_dept'?' <span class="status-chip" style="background:#f0dfc3;color:#4a3a20;">部門人員章</span>'
         :x.holder_kind==='dept'?' <span class="status-chip" style="background:#e8dcc3;color:#4a3a20;">課室章</span>':'';
       return `<tr>
+      ${canManage?`<td style="text-align:center;"><input type="checkbox" class="reg-chk" value="${x.id}"></td>`:''}
       <td style="text-align:center;">${stampHtml}</td>
       <td>${esc(x.holder_name)}${kindBadge}</td>
       <td>${x.type_name?esc(x.type_name):'<span class="text-muted">（未分類）</span>'}${x.tpl_name?'<br><span class="text-muted" style="font-size:11px;">模板：'+esc(x.tpl_name)+'</span>':''}</td>
@@ -659,7 +693,8 @@ function loadList(p){
         <button class="btn btn-default btn-xs edit-btn" data-id="${x.id}" data-name="${esc(x.holder_name)}" data-date="${x.issue_date}" data-note="${esc(x.note||'')}" data-type="${x.type_id||''}"><i class="fa fa-pencil"></i></button>
         ${x.status==='active'?`<button class="btn btn-warning btn-xs rev-btn" data-id="${x.id}" data-name="${esc(x.holder_name)}"><i class="fa fa-ban"></i> 停用</button>`:''}
         <button class="btn btn-danger btn-xs del-btn" data-id="${x.id}" data-name="${esc(x.holder_name)}"><i class="fa fa-trash"></i></button>`:'<span class="text-muted">—</span>'}
-      </td></tr>`;}).join('')||'<tr><td colspan="9" class="text-muted">尚無登記資料。</td></tr>');
+      </td></tr>`;}).join('')||`<tr><td colspan="${canManage?10:9}" class="text-muted">尚無登記資料。</td></tr>`);
+    $('#regChkAll').prop('checked',false); updateBatchDateBar();
     renderPager();
   });
 }
@@ -676,6 +711,69 @@ $('#pageBtns').on('click','.pg-btn',function(){ loadList(+$(this).data('p')); })
 $('#perSel').on('change',function(){ per=+this.value; loadList(1); });
 $('#fltName').on('input',function(){ clearTimeout(this._t); this._t=setTimeout(()=>loadList(1),400); });
 $('#fltStatus,#fltType').on('change',()=>loadList(1));
+
+// ── 批次改核發日期（清冊勾選，僅本頁）──
+function checkedRegIds(){ return $('.reg-chk:checked').map(function(){return +this.value;}).get(); }
+function updateBatchDateBar(){
+  const n=checkedRegIds().length;
+  $('#batchDateCnt').text(n);
+  $('#btnBatchDateApply').prop('disabled', n===0 || !$('#batchDateVal').val());
+}
+$('#regBody').on('change','.reg-chk',updateBatchDateBar);
+$('#regChkAll').on('change',function(){ $('.reg-chk').prop('checked', this.checked); updateBatchDateBar(); });
+$('#batchDateVal').on('change input',updateBatchDateBar);
+$('#btnBatchDateClear').on('click',function(){ $('.reg-chk,#regChkAll').prop('checked',false); updateBatchDateBar(); });
+$('#btnBatchDateApply').on('click',function(){
+  const ids=checkedRegIds(), d=$('#batchDateVal').val();
+  if(!ids.length||!d) return;
+  if(!confirm(`確定要把勾選的 ${ids.length} 筆登記，核發日期一律改成 ${d}？此動作會直接覆蓋，請先確認勾對筆數。`)) return;
+  $.post(API+'?action=batch_update_date',{items:JSON.stringify(ids.map(id=>({id,issue_date:d})))},r=>{
+    if(!r.ok){alert(r.error||'套用失敗');return;}
+    alert(`已更新 ${r.updated} 筆${r.skipped?'，略過 '+r.skipped+' 筆':''}`);
+    $('#batchDateVal').val(''); loadList();
+  },'json');
+});
+
+// ── 核發日期健檢：比對持有人在 approval_record 最早一次實際核准的日期，早於核發日期＝登記資料可能有誤 ──
+function openIssueCheck(){
+  $('#issueCheckModal').modal('show');
+  $('#issueCheckBody').html('<tr><td colspan="6" class="text-muted">檢查中…</td></tr>');
+  $('#issueCheckSum,#btnIssueCheckApplyAll').hide();
+  $.getJSON(API,{action:'check_issue_date'},r=>{
+    if(!r.ok){$('#issueCheckBody').html(`<tr><td colspan="6" class="text-muted">${esc(r.error||'檢查失敗')}</td></tr>`);return;}
+    ISSUE_FLAGS=r.rows||[];
+    $('#issueCheckSum').show().text(`已核對 ${r.checked} 筆有明確持有人的登記，其中 ${ISSUE_FLAGS.length} 筆核發日期晚於該持有人最早一次實際核准的日期（僅比對走 approval_record 共用簽核紀錄留痕的操作，舊式自建簽核表可能查不到）。`);
+    if(!ISSUE_FLAGS.length){ $('#issueCheckBody').html('<tr><td colspan="6" class="text-muted">沒有發現不合理的核發日期。</td></tr>'); return; }
+    $('#btnIssueCheckApplyAll').show();
+    $('#issueCheckBody').html(ISSUE_FLAGS.map(x=>`<tr>
+      <td style="text-align:center;"><input type="checkbox" class="ic-chk" checked value="${x.id}"></td>
+      <td>${esc(x.holder_name)}</td>
+      <td>${x.type_name?esc(x.type_name):'<span class="text-muted">（未分類）</span>'}</td>
+      <td>${esc(x.issue_date)}</td>
+      <td style="color:#c0392b;font-weight:bold;">${esc(x.suggest_date)}<div class="text-muted" style="font-size:11px;font-weight:normal;">早了 ${x.diff_days} 天使用</div></td>
+      <td><button class="btn btn-warning btn-xs ic-apply-one" data-id="${x.id}" data-date="${x.suggest_date}"><i class="fa fa-check"></i> 改成此日期</button></td>
+    </tr>`).join(''));
+  });
+}
+$('#btnCheckIssueDate').on('click',openIssueCheck);
+function applyIssueDates(items){
+  if(!items.length) return;
+  $.post(API+'?action=batch_update_date',{items:JSON.stringify(items)},r=>{
+    if(!r.ok){alert(r.error||'套用失敗');return;}
+    loadList(); openIssueCheck();
+  },'json');
+}
+$('#issueCheckBody').on('click','.ic-apply-one',function(){
+  const id=+$(this).data('id'), d=$(this).data('date');
+  if(!confirm(`確定把這筆核發日期改成建議值 ${d}？`)) return;
+  applyIssueDates([{id,issue_date:d}]);
+});
+$('#btnIssueCheckApplyAll').on('click',function(){
+  const items=$('.ic-chk:checked').map(function(){ const id=+this.value; const row=ISSUE_FLAGS.find(x=>x.id===id); return row?{id:row.id,issue_date:row.suggest_date}:null; }).get().filter(Boolean);
+  if(!items.length){ alert('請至少勾選一筆'); return; }
+  if(!confirm(`確定把勾選的 ${items.length} 筆，核發日期各自改成建議值（各筆日期不同）？`)) return;
+  applyIssueDates(items);
+});
 
 // ── 新增/編輯/停用/刪除 ──
 $('#btnAdd').on('click',function(){
