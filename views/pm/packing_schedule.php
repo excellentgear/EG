@@ -8,6 +8,7 @@ require_once __DIR__ . '/../../src/common/confirm_password_lib.php';
 require_once __DIR__ . '/../../src/common/packing_notify.php';
 require_once __DIR__ . '/../../src/common/people_lib.php';
 require_once __DIR__ . '/../../src/common/org_role_lib.php';
+require_once __DIR__ . '/../../src/common/qa_abnormal_lib.php'; // 報廐扣減唯一實作 qab_bom_scrap_qty()（2026-09-24）
 
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
@@ -292,6 +293,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         bi.bom_ing_fid,
                         bi.bom,
                         bi.process_no,
+                        bi.bom_sn,
                         bi.sqty,
                         pn.ProcessName,
                         b.d_id,
@@ -340,6 +342,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     ? $r['pack_priority'] : $r['bom_priority'];
                 $r['is_overdue'] = (!empty($r['delivery_date']) && strtotime($r['delivery_date']) < $today) ? 1 : 0;
                 $r['has_draft'] = !empty($r['draft_id']) ? 1 : 0;
+                // 良品數＝BOM總數扣掉「這一站（含）之前已結案配發報廐單號」的確認報廐量（2026-09-24 使用者交辦），
+                // 唯一計算 qab_bom_scrap_qty()；沒有報廐時等於原本的 bom_total_qty
+                $totalQty = $r['bom_total_qty'] !== null ? (int)$r['bom_total_qty'] : (int)$r['sqty'];
+                $r['good_qty'] = $totalQty;
+                try {
+                    $r['good_qty'] = max(0, $totalQty - qab_bom_scrap_qty($pdo, (string)$r['bom'], (int)$r['bom_sn']));
+                } catch (Throwable $e) { /* 算不出來就先當作沒有報廐，不擋畫面 */ }
             }
             unset($r);
 
@@ -384,6 +393,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $dId = $bomRow ? ($bomRow['d_id'] ? (int)$bomRow['d_id'] : null) : null;
             $bomTotalQty = $bomRow ? (int)$bomRow['bom_total_qty'] : null;
 
+            // 良品數＝BOM總數扣掉「這一站（含）之前已結案配發報廐單號」的確認報廐量（2026-09-24 使用者交辦），
+            // 唯一計算 qab_bom_scrap_qty()；沒有報廐時等於 bomTotalQty
+            $goodQty = $bomTotalQty;
+            if ($bomTotalQty !== null && $bomIngFid) {
+                $stSn = $pdo->prepare("SELECT bom_sn FROM bom_ing WHERE bom_ing_fid=?");
+                $stSn->execute([$bomIngFid]);
+                $bomSn = (int)$stSn->fetchColumn();
+                try {
+                    $goodQty = max(0, $bomTotalQty - qab_bom_scrap_qty($pdo, (string)$bom, $bomSn));
+                } catch (Throwable $e) { /* 算不出來就先當作沒有報廐，不擋畫面 */ }
+            }
+
             $items = [];
             $source = 'none'; // custom=料號專用 / template=預設模板 / none=皆無
             if ($dId) {
@@ -421,7 +442,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
 
             echo json_encode(['success' => true, 'items' => $items, 'source' => $source, 'd_id' => $dId,
-                'bom_total_qty' => $bomTotalQty, 'order_bind' => $orderBind, 'draft' => $draft]);
+                'bom_total_qty' => $bomTotalQty, 'good_qty' => $goodQty, 'order_bind' => $orderBind, 'draft' => $draft]);
             exit;
         }
 
@@ -1224,9 +1245,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <div class="row" style="margin-top:6px;">
                     <div class="col-md-3"><strong>製程：</strong><span id="f-proc"></span></div>
                     <div class="col-md-3">
-                        <strong>BOM總數：</strong>
-                        <input type="number" id="f-order-qty" class="form-control input-sm" style="display:inline-block;width:100px;">
-                        <span class="text-muted small">（因BOM可能分批送包裝，此為整張BOM的總數，非本次數量）</span>
+                        <strong>良品數：</strong>
+                        <input type="number" id="f-order-qty" class="form-control input-sm" readonly
+                            style="display:inline-block;width:100px;background:#F3ECDF;color:#8a6d45;cursor:default;"
+                            title="自動帶入＝BOM總數扣掉已結案配發報廐單號的確認報廐量，反灰不可手改（避免不小心蓋掉報廐扣減）">
+                        <span class="text-muted small">原總數 <span id="f-order-qty-total">-</span>（因BOM可能分批送包裝，此為整張BOM的總數，非本次數量）</span>
                     </div>
                     <div class="col-md-3"><strong>系統交期：</strong><span id="f-delivery"></span></div>
                 </div>
@@ -1556,7 +1579,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         '<td>' + (r.Client_Name || '') + '</td>' +
                         '<td><span class="bom-code">' + r.bom + '</span></td>' +
                         '<td>' + (r.part_no || '') + ' ' + rev + '</td>' +
-                        '<td class="text-right"><strong>' + fmtNum(r.bom_total_qty != null ? r.bom_total_qty : r.sqty) + '</strong></td>' +
+                        '<td class="text-right"><strong>' + (function(){
+                            var total = r.bom_total_qty != null ? r.bom_total_qty : r.sqty;
+                            var good = r.good_qty != null ? r.good_qty : total;
+                            // 沒有報廐（良品數＝總數）時只印一個數字，免得每一列都多印一次一樣的東西；
+                            // 有報廐才印「良品 / 原總數」讓現場一眼看出這批已經少了幾件
+                            return good == total ? fmtNum(total) : (fmtNum(good) + ' <span class="text-muted small">/ ' + fmtNum(total) + '</span>');
+                        })() + '</strong></td>' +
                         '</tr>';
                 });
                 $('#bom-list').html(html);
@@ -1630,7 +1659,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $('#f-client').text(r.Client_Name || '');
             $('#f-proc').text(r.ProcessName || ('製程' + r.process_no));
             $('#f-delivery').text(r.delivery_date || '無');
-            $('#f-order-qty').val((r.bom_total_qty != null ? r.bom_total_qty : r.sqty) || 0);
+            var rTotalQty0 = (r.bom_total_qty != null ? r.bom_total_qty : r.sqty) || 0;
+            $('#f-order-qty').val(r.good_qty != null ? r.good_qty : rTotalQty0);
+            $('#f-order-qty-total').text(fmtNum(rTotalQty0));
             $('#pk-win-sub').text('- ' + r.bom);
             currentBomTotalQty = (r.bom_total_qty != null) ? parseFloat(r.bom_total_qty) : (r.sqty != null ? parseFloat(r.sqty) : null);
 
@@ -1668,7 +1699,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 renderAppearance();
                 renderOrderBind(res.order_bind || []);
                 if (res.bom_total_qty != null && res.bom_total_qty !== '') {
-                    $('#f-order-qty').val(res.bom_total_qty);
+                    $('#f-order-qty').val(res.good_qty != null ? res.good_qty : res.bom_total_qty);
+                    $('#f-order-qty-total').text(fmtNum(res.bom_total_qty));
                     currentBomTotalQty = parseFloat(res.bom_total_qty);
                 }
                 addPkgRow();
