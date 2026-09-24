@@ -60,7 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $ph = implode(',', array_fill(0, count($fids), '?'));
             $fs = $pdo->prepare("
                 SELECT qc_form_id, bom_ing_fid, batch_no, round_no, incoming_qty, sample_qty, ng_qty,
-                       check_result, main_remark, check_date, created_by, created_at
+                       check_result, main_remark, check_date, created_by, inspector_by, insp_kind, created_at
                 FROM qc_check_form
                 WHERE bom_ing_fid IN ($ph) AND status <> 'DRAFT'
                 ORDER BY bom_ing_fid ASC, batch_no ASC, round_no ASC
@@ -76,7 +76,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         // 下面同一套「批次/完整明細」組裝邏輯，不必另外複製一份 ──
         $SHIP_FID = -1;
         $shipForm = $pdo->prepare("SELECT qc_form_id, bom_ing_fid, batch_no, round_no, incoming_qty, sample_qty, ng_qty,
-                                    check_result, main_remark, check_date, created_by, created_at
+                                    check_result, main_remark, check_date, created_by, inspector_by, insp_kind, created_at
                                    FROM qc_check_form WHERE ship_bom=? AND insp_kind='SHIP' AND status<>'DRAFT'
                                    ORDER BY qc_form_id DESC LIMIT 1");
         $shipForm->execute([$bom]);
@@ -86,8 +86,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
 
         // 檢驗人姓名一次查完（people_lib 只列在職會篩掉離職者名字，這裡單純顯示歷史紀錄的人名，不做在職判定）
+        // 使用者 2026-09-24 回報「同料號歷次檢驗」的檢驗人顯示錯誤，這裡同一個坑：優先取 inspector_by
+        // （補資料指定的實際檢驗人），沒有才退回 created_by（存檔者），不可只看 created_by。
+        $creatorOf = function ($f) { return $f['inspector_by'] ?: $f['created_by']; };
         $uidSet = [];
-        foreach ($formsByFid as $rows) foreach ($rows as $r) if (!empty($r['created_by'])) $uidSet[$r['created_by']] = true;
+        foreach ($formsByFid as $rows) foreach ($rows as $r) if (!empty($creatorOf($r))) $uidSet[$creatorOf($r)] = true;
         $nameMap = [];
         if ($uidSet) {
             $ph2 = implode(',', array_fill(0, count($uidSet), '?'));
@@ -137,10 +140,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         if ($pos >= 0 && $pos < $sampleN) $byItem[$iid]['samples'][$pos] = ['v' => $r['measured_value'], 'r' => $r['result']];
                     }
                     // 使用量具：整張檢驗單綁一次（2026-09-16），不再逐項顯示
+                    // 使用者 2026-09-24 回報「每張檢驗表都要顯示檢驗人員」——原本這裡完全沒有帶
+                    // creator，逐批明細區塊印不出是誰驗的；insp_kind 一併帶出供正確標示首件/末件。
                     $itemsByFid[$fid][] = [
                         'batch_no' => (int)$formRow['batch_no'], 'round_no' => (int)$formRow['round_no'],
+                        'insp_kind' => $formRow['insp_kind'] ?: 'NORMAL',
                         'date' => substr((string)($formRow['check_date'] ?: $formRow['created_at']), 0, 10),
                         'check_result' => $formRow['check_result'],
+                        'creator' => $nameMap[$creatorOf($formRow)] ?? '',
                         'sample_n' => $sampleN, 'items' => array_values($byItem),
                         'tools' => qc_form_tools_label(qc_form_tools_rows($pdo, $qid)),
                     ];
@@ -212,7 +219,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
         // 逐一組出「一個製程一筆」的資料結構；出貨檢驗(SHIP)是額外插入的一筆(不是真正的 bom_ing 製程)，
         // 沿用同一套 batches/detail 組裝寫法但要素材源不同，抽成小函式兩處共用，避免複製兩份邏輯。
-        $buildProcEntry = function ($fid, $label, $procQty, $makerId, $isExempt) use ($formsByFid, $itemsByFid, $nameMap) {
+        $buildProcEntry = function ($fid, $label, $procQty, $makerId, $isExempt) use ($formsByFid, $itemsByFid, $nameMap, $creatorOf) {
             $forms = $formsByFid[$fid] ?? [];
             $batches = [];
             foreach ($forms as $f) {
@@ -220,15 +227,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 if (!isset($batches[$bn])) $batches[$bn] = ['batch_no' => $bn, 'rounds' => []];
                 $batches[$bn]['rounds'][] = [
                     'round_no' => (int)$f['round_no'], 'check_result' => $f['check_result'],
+                    'insp_kind' => $f['insp_kind'] ?: 'NORMAL',
                     'ng_qty' => (int)$f['ng_qty'], 'date' => substr((string)($f['check_date'] ?: $f['created_at']), 0, 10),
-                    'creator' => $nameMap[$f['created_by']] ?? '',
+                    'creator' => $nameMap[$creatorOf($f)] ?? '',
                 ];
             }
+            // last_form 只給封面總覽表用（判定＋檢驗人），使用者 2026-09-24 回報「上面製程列表不顯示
+            // 檢驗人欄位」——原本直接回傳原始 SQL 列（created_by 是數字 id、也沒有解析過姓名），
+            // 這裡另外整理成乾淨欄位，不可再回傳原始列。
+            $lastF = $forms ? end($forms) : null;
+            $lastFormOut = $lastF ? [
+                'check_result' => $lastF['check_result'], 'insp_kind' => $lastF['insp_kind'] ?: 'NORMAL',
+                'creator' => $nameMap[$creatorOf($lastF)] ?? '',
+            ] : null;
             return [
                 'bom_ing_fid' => $fid, 'bom_sn' => $label['sn'], 'process_name' => $label['name'],
                 'proc_qty' => $procQty, 'maker_id' => $makerId, 'exempt' => $isExempt, 'is_packing' => false,
                 'batches' => array_values($batches),
-                'last_form' => $forms ? end($forms) : null,
+                'last_form' => $lastFormOut,
                 // 完整模式：每一批每一輪各自一份明細（使用者 2026-09-24 回報只印最後一輪不夠，
                 // 多批/複驗的紀錄都要各自印出），摘要模式或沒有紀錄時為空陣列。
                 'details' => $itemsByFid[$fid] ?? [],
@@ -362,12 +378,31 @@ body{ background:#F6F1EA; }
     </div>
 </div>
 <script src="../../resource/js/jquery.min.js"></script>
+<script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script>
 var esc=function(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); };
+// 封面右下角「主管確認」圖章（使用者 2026-09-24 要求）：沿用線上檢驗單張列印同一套
+// 主管自動核可設定（qc_auto_approve／qc_auto_approve_user，含代理解析），不另開一套判定——
+// 直接呼叫同目錄 inspection_entry_v2.php 既有的 print_cfg_get（唯一實作，ai-rules/18）。
+var APPROVER={ auto:0, name:'', deputy:0 };
+function loadApprover(cb){
+    $.post('inspection_entry_v2.php', { v2action:'print_cfg_get' }, function(res){
+        if(res && res.success){
+            APPROVER = { auto: !!res.auto_approve, name:(res.approver&&res.approver.name)||'', deputy: !!(res.approver&&res.approver.deputy) };
+        }
+        if(cb) cb();
+    }, 'json').fail(function(){ if(cb) cb(); });
+}
 function trimNum(v){ // 小數尾 0 省略（3.50→3.5），比照全站慣例
     if(v===''||v==null) return '';
     var s=String(v); if(s.indexOf('.')<0) return s;
     s=s.replace(/0+$/,'').replace(/\.$/,''); return s===''||s==='-' ? '0' : s;
+}
+// 圖章日期：這是「這次列印」當下的確認，不是任何一筆檢驗自己的業務日期（多製程彙總報告沒有單一
+// 業務日期可用），一律用列印當天，YYYY.MM.DD（ai-rules/20）。
+function printTodayStr(){
+    var n=new Date(), p=function(x){ return ('0'+x).slice(-2); };
+    return n.getFullYear()+'.'+p(n.getMonth()+1)+'.'+p(n.getDate());
 }
 var DATA=null;
 
@@ -377,6 +412,7 @@ function loadData(mode, drawing, cb){
     $.post('', { action:'get_data', bom:bom, mode:(mode||'summary'), drawing:(drawing||'') }, function(res){
         if(!res.success){ alert(res.message||'查詢失敗'); return; }
         DATA=res;
+        window.__ownCompany = res.company || '';   // eg_stamp.js 的印章公司名靠這個全域變數
         renderInfoBar();
         renderDrawingPicker();
         $('#info-area').show();
@@ -437,19 +473,29 @@ $(document).on('change', 'input[name=mode]', function(){
     if(!DATA) return;
     loadData($(this).val(), currentDrawingParam());
 });
+$(function(){ loadApprover(); });
 <?php if ($bomParam !== ''): ?>
 $(function(){ loadData('summary',''); });
 <?php endif; ?>
 
 // ===================== 組列印 HTML（沿用 external_doc_list.php 的作法：開新視窗寫入，交瀏覽器原生分頁）=====================
+// 使用者 2026-09-24 回報：同一批次第二筆（次數>1）原本一律標「重驗」，但那一筆若是首件/末件，
+// 或前一筆根本不是不良（沒有 NG、沒有重工重送），標成「重驗」等於暗示有不良發生，是錯的；
+// 首件/末件一律照 insp_kind 顯示，只有「前一筆判定是不良」時才算真正的重驗。
+function roundTag(b, r, ri){
+    if(r.insp_kind==='FIRST') return '首件';
+    if(r.insp_kind==='LAST') return '末件';
+    if(ri===0) return '第'+b.batch_no+'批';
+    var prev = b.rounds[ri-1];
+    return (prev && prev.check_result==='NG') ? '重驗' : ('第'+b.batch_no+'批續驗');
+}
 function batchTrailHtml(p){
     if(!p.batches.length) return '<span class="muted-help">'+(p.exempt?'（免檢）':'尚未檢驗')+'</span>';
     return p.batches.map(function(b){
         return b.rounds.map(function(r,ri){
             var cls=(r.check_result==='NG')?'pm-ng':'pm-ok';
             var lbl=(r.check_result==='NG')?'不良':(r.check_result==='HOLD'?'審核中':'合格');
-            var tag = ri===0 ? ('第'+b.batch_no+'批') : '重驗';
-            return '<span class="pm-chip '+cls+'">'+tag+' '+esc(r.date)+' '+lbl+'</span>';
+            return '<span class="pm-chip '+cls+'">'+roundTag(b,r,ri)+' '+esc(r.date)+' '+lbl+'</span>';
         }).join('<span class="pm-arrow">→</span>');
     }).join('　');
 }
@@ -496,11 +542,18 @@ function buildProcessFullBlock(p, idx){
         return head + '<div class="muted-help" style="margin:4px 0 14px;">尚無實測資料</div>';
     }
     var out='';
-    blocks.forEach(function(d){
+    blocks.forEach(function(d, bi){
         var n=d.sample_n;
         var pcsHead=''; for(var i=1;i<=n;i++) pcsHead+='<th>'+i+'</th>';
-        var roundTag = '第'+d.batch_no+'批'+(d.round_no>1?('　重驗'+(d.round_no-1)):'')+
-            '　'+esc(d.date||'')+'　'+(d.check_result==='NG'?'<span class="pm-ng">不良</span>':'合格');
+        // 同一批次內、緊接在前一筆的才算「同批次的上一輪」；tag 邏輯跟封面總覽同一套規則，
+        // 不再看 round_no>1 就一律標「重驗」（使用者 2026-09-24 回報：首件接正式批不該叫重驗）。
+        var prevInBatch = (bi>0 && blocks[bi-1].batch_no===d.batch_no) ? blocks[bi-1] : null;
+        var tag = d.insp_kind==='FIRST' ? '首件' : d.insp_kind==='LAST' ? '末件'
+            : !prevInBatch ? ('第'+d.batch_no+'批')
+            : (prevInBatch.check_result==='NG' ? '重驗' : ('第'+d.batch_no+'批續驗'));
+        // 使用者 2026-09-24 回報「每張檢驗表都要顯示檢驗人員」
+        var roundTag = tag+'　'+esc(d.date||'')+'　'+(d.check_result==='NG'?'<span class="pm-ng">不良</span>':'合格')+
+            '　<b>檢驗人：</b>'+esc(d.creator||'—');
         // 使用量具改成整個批次區塊印一行（量具是綁在整張檢驗單上，不是逐項）
         var toolLine = d.tools ? ('　<b>使用量具：</b>'+esc(d.tools)) : '';
         out += '<div class="pm-round-tag">'+roundTag+toolLine+'</div>';
@@ -545,6 +598,11 @@ function doPrint(mode, paper, orient){
         alert('提醒：以下包裝檢驗紀錄尚未結案（內容之後可能還會變動），仍會依目前內容列印：\n'
             + openPacking.map(function(p){ return '・'+p.process_name; }).join('\n'));
     }
+    // 圖章要等掃描實體章對照表載完才產生，不然沒對照到的人會被存成預設 SVG 章、跟畫面上看到的不一樣
+    // （eg_stamp.js 頂部註解的既有坑；這裡輸出到全新的彈出視窗，寫進去之後不會再自動升級）。
+    EGStamp.whenReady(function(){ doPrintImpl(mode, paper, orient); });
+}
+function doPrintImpl(mode, paper, orient){
     var d=DATA.drawing;
     var drawingHtml = d.url ? '<img class="pm-drawing-img" src="'+esc(d.url)+'">' : '<div class="pm-no-drawing">（無圖面）</div>';
 
@@ -558,10 +616,16 @@ function doPrint(mode, paper, orient){
     var sumTable = '<table class="pm-sumtable"><thead><tr><th>#</th><th>製程</th><th>數量</th><th>廠商</th><th>批次/重驗歷程</th><th>檢驗狀態</th><th>檢驗人</th></tr></thead><tbody>';
     DATA.processes.forEach(function(p,idx){ sumTable += buildProcessSummaryRow(p, idx); });
     sumTable += '</tbody></table>';
+    // 主管確認圖章（使用者 2026-09-24 要求，右下角）：沿用「主管自動核可設定」，沒開啟或沒指定人時不印，
+    // 空白留給現場手簽，不可硬造一個假的確認人（ai-rules/18）。
+    var signBlock = (APPROVER.auto && APPROVER.name)
+        ? '<div class="pm-sign">'+EGStamp.stamp(APPROVER.name, printTodayStr(), APPROVER.deputy)+'<div class="pm-sign-lbl">主管確認 Approved</div></div>'
+        : '';
     var cover = '<div class="pm-cover'+(mode==='full'?' pm-cover-break':'')+'">'
         + head
         + '<div class="pm-cover-top"><div class="pm-drawing">'+drawingHtml+'</div></div>'
         + '<div class="pm-cover-bottom">'+sumTable+'</div>'
+        + signBlock
         + '</div>';
 
     // ===== 明細頁：只印「已經有送出的檢驗紀錄」的製程／出貨檢驗，沒有紀錄的一律不印（使用者明確要求） =====
@@ -587,6 +651,9 @@ function doPrint(mode, paper, orient){
         + '.pm-cover-top .pm-drawing-img{max-width:100%;max-height:130mm;}'
         + '.pm-no-drawing{color:#999;border:1px dashed #ccc;padding:20px;text-align:center;}'
         + '.pm-cover-bottom{flex:1 1 auto;}'
+        + '.pm-sign{margin-top:6mm;text-align:right;}'
+        + '.pm-sign svg.car-stamp{width:91px !important;height:91px !important;}'   // 圖章一律不縮小（ai-rules/18）
+        + '.pm-sign-lbl{font-size:10px;color:#555;margin-top:2px;}'
         + '.pm-ship-row td{background:#FFF3E2;}'
         + 'table.pm-sumtable{width:100%;border-collapse:collapse;margin-top:6px;}'
         + 'table.pm-sumtable th,table.pm-sumtable td{border:1px solid #666;padding:4px 6px;text-align:center;}'
