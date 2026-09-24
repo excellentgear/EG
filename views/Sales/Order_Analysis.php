@@ -134,10 +134,6 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 .help-doc li { margin-bottom:4px; line-height:1.7; }
 .rm-in { width:100%; border:1px solid var(--line); border-radius:4px; padding:2px 6px; font-size:12px; }
 .err-txt { color:var(--coral); font-size:12px; margin-top:6px; white-space:pre-line; }
-.nav-jump { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
-.nav-jump a { font-size:12px; border:1px solid var(--line); background:#fff; color:#6B4423;
-              border-radius:14px; padding:3px 12px; text-decoration:none; }
-.nav-jump a:hover { background:var(--sand); }
 /* 自動分析卡片 */
 .ins-list { display:flex; flex-direction:column; gap:6px; }
 .ins { display:flex; gap:10px; align-items:flex-start; border:1px solid var(--line); border-left-width:4px;
@@ -167,14 +163,32 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 /* 可點的料號（開圖面檢視） */
 .pno-link { color:#8a5a2b; border-bottom:1px dotted #8a5a2b; cursor:pointer; }
 .pno-link:hover { color:var(--coral); border-bottom-color:var(--coral); }
-/* 右下角回訂單追蹤 */
-.go-home { position:fixed; right:18px; bottom:18px; z-index:9000; width:52px; height:52px; border-radius:50%;
-           background:linear-gradient(135deg,#8a5a2b,#F0A24B); color:#fff; border:none; box-shadow:0 4px 14px rgba(0,0,0,.25);
-           display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer;
-           font-size:10px; font-weight:600; line-height:1.1; text-decoration:none; }
-.go-home:hover,.go-home:focus { color:#fff; text-decoration:none; filter:brightness(1.08); }
-.go-home i { font-size:17px; margin-bottom:1px; }
-@media print { .go-home { display:none !important; } }
+/* 右側懸浮工具列：回訂單追蹤／回頂端／快速導覽（使用者要求，注意透明度避免遮蔽圖表） */
+.float-tools { position:fixed; right:18px; bottom:18px; z-index:9000;
+               display:flex; flex-direction:column-reverse; align-items:flex-end; gap:10px; }
+@media print { .float-tools { display:none !important; } }
+.float-btn { width:52px; height:52px; border-radius:50%; border:none; cursor:pointer; text-decoration:none;
+             display:flex; flex-direction:column; align-items:center; justify-content:center;
+             color:#fff; font-size:10px; font-weight:600; line-height:1.1;
+             background:linear-gradient(135deg,#8a5a2b,#F0A24B); box-shadow:0 4px 14px rgba(0,0,0,.22);
+             opacity:.55; transition:opacity .15s,filter .15s; }
+.float-btn i { font-size:17px; margin-bottom:1px; }
+.float-btn:hover, .float-btn:focus { color:#fff; text-decoration:none; opacity:1; filter:brightness(1.08); }
+.float-btn.totop { width:44px; height:44px; display:none; }
+.float-btn.totop i { font-size:16px; margin-bottom:0; }
+/* 快速導覽：縮成圖示，滑鼠移過才展開清單 */
+.qnav { position:relative; }
+.qnav-fab { width:44px; height:44px; border-radius:50%; border:1px solid var(--line); cursor:pointer;
+            background:#fff; color:#8a5a2b; box-shadow:0 4px 12px rgba(0,0,0,.18); font-size:16px;
+            opacity:.55; transition:opacity .15s; display:flex; align-items:center; justify-content:center; }
+.qnav:hover .qnav-fab, .qnav-fab:focus { opacity:1; }
+.qnav-panel { position:absolute; right:52px; bottom:0; min-width:150px;
+              background:rgba(255,253,250,.97); border:1px solid var(--line); border-radius:10px;
+              box-shadow:0 6px 18px rgba(0,0,0,.2); padding:8px; display:flex; flex-direction:column; gap:3px;
+              opacity:0; pointer-events:none; transform:translateX(6px); transition:opacity .15s,transform .15s; }
+.qnav:hover .qnav-panel, .qnav-panel:hover { opacity:1; pointer-events:auto; transform:translateX(0); }
+.qnav-panel a { font-size:12px; color:#6B4423; padding:5px 10px; border-radius:6px; text-decoration:none; white-space:nowrap; }
+.qnav-panel a:hover { background:var(--sand); }
 </style>
 </head>
 <!-- 側欄載入時維持收合（全站慣例 nav-sm） -->
@@ -257,11 +271,6 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 
   <div id="noteBar"></div>
   <div id="kpiAlertBar"></div>
-  <div class="nav-jump">
-    <a href="#secInsight">自動分析</a><a href="#secTrend">訂單趨勢</a><a href="#secNew">新訂單（新料號）</a><a href="#secProc">全製／單製</a>
-    <a href="#secBand">數量區間</a><a href="#secClient">客戶比較</a><a href="#secRank">客戶增減排名</a>
-    <a href="#secMa">訂單量監控</a><a href="#secPart">受訂料號排名</a>
-  </div>
 
   <div id="kpiRow" class="kpi-row"></div>
 
@@ -440,8 +449,26 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 </div><!-- /right_col -->
 </div></div>
 
-<!-- 右下角回訂單追蹤（使用者要求；列印時隱藏） -->
-<a href="NewOrder_Track.php" class="go-home" title="回訂單追蹤"><i class="fa fa-arrow-left"></i>訂單</a>
+<!-- 右側懸浮工具列：回訂單追蹤／回頂端／快速導覽（使用者要求；列印時隱藏） -->
+<div class="float-tools">
+  <a href="NewOrder_Track.php" class="float-btn" title="回訂單追蹤"><i class="fa fa-arrow-left"></i>訂單</a>
+  <button type="button" class="float-btn totop" id="btnToTop" title="回頂端"
+          onclick="window.scrollTo({top:0,behavior:'smooth'});"><i class="fa fa-arrow-up"></i>頂端</button>
+  <div class="qnav">
+    <button type="button" class="qnav-fab" title="快速導覽（各區塊）"><i class="fa fa-compass"></i></button>
+    <div class="qnav-panel">
+      <a href="#secInsight">自動分析</a>
+      <a href="#secTrend">訂單趨勢</a>
+      <a href="#secNew">新訂單（新料號）</a>
+      <a href="#secProc">全製／單製</a>
+      <a href="#secBand">數量區間</a>
+      <a href="#secClient">客戶比較</a>
+      <a href="#secRank">客戶增減排名</a>
+      <a href="#secMa">訂單量監控</a>
+      <a href="#secPart">受訂料號排名</a>
+    </div>
+  </div>
+</div>
 
 <!-- ── 使用說明（鐵律7）──────────────────────────────── -->
 <div class="m-mask" id="helpUseMask">
@@ -676,6 +703,9 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 <script>
 /* 側欄：CSS 先藏、這裡再顯示（鐵律6，兩者必須成對） */
 $(document).ready(function(){ $('#sidebar-menu').css('visibility','visible'); });
+
+/* 回頂端：捲到底下時才出現，按下捲回最上面（露出頁面標題「訂單分析」） */
+$(window).on('scroll', function(){ $('#btnToTop').toggle($(window).scrollTop() > 200); });
 
 var OA_API  = '../../src/store/OrderAnalysis_API.php';
 var OA_CSRF = '<?= oaEsc($CSRF) ?>';
