@@ -530,8 +530,8 @@ function doPrint(m){
         +'<th>筆數</th><td>'+ST.rows.length+' 筆</td></tr></table>';
     var tb='';
     ST.rows.forEach(function(r,i){
-        var disp=[r.disposition||'', r.disposition_note||''].filter(Boolean).join(' ');
-        if(r.scrap_no) disp=(disp?disp+' ':'')+'（報廢單 '+r.scrap_no+'）';
+        var disp=esc([r.disposition||'', r.disposition_note||''].filter(Boolean).join(' '));
+        if(r.scrap_no) disp=(disp?disp+'<br>':'')+esc(r.scrap_no);   // 報廢單號自己一行，不要再包「（報廢單…）」文字
         // 結案欄要跟前端畫面上的顯示方式相同（使用者要求），不是印「是」，而是「已結案／未結案」
         var closedTxt = r.is_closed
             ? '<span class="p-closed-yes">已結案</span>'+(r.closed_date?'<br>'+esc(dispDate(r.closed_date)):'')
@@ -545,7 +545,7 @@ function doPrint(m){
           +'<td>'+esc(r.qty)+'</td>'
           +'<td class="tl">'+esc(r.cause)+'</td>'
           +'<td class="tl">'+esc(r.resp_unit)+'</td>'
-          +'<td class="tl">'+esc(disp)+'</td>'
+          +'<td class="tl">'+disp+'</td>'
           +'<td>'+closedTxt+'</td>'
           +'</tr>';
     });
