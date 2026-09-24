@@ -21,6 +21,7 @@ require_once __DIR__ . '/../common/qa_notify.php';
 require_once __DIR__ . '/../common/people_lib.php';
 require_once __DIR__ . '/../common/org_role_lib.php';
 require_once __DIR__ . '/../common/qc_inspection_lib.php';   // 抽樣規則（檢驗數的建議值）唯一實作
+require_once __DIR__ . '/../common/confirm_password_lib.php'; // 管理員代填品管確認（自動開立單、非真正補資料）要驗操作確認密碼
 
 function jout($ok, $data = []) { echo json_encode(array_merge(['success' => $ok], is_array($data) ? $data : ['message' => $data]), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code = '') { jout(false, ['message' => $msg, 'code' => $code]); }
@@ -144,9 +145,6 @@ case 'get': {
 /* ═══════════ 填寫區（表頭、現象、原因分類、量測值） ═══════════ */
 case 'save_head': {
     $o = $mustOrder((int)($_POST['id'] ?? 0));
-    if (!qab_can_edit_form($db, $perms, $o)) jerr('沒有修改這張異常單的權限');
-    $id = (int)$o['id'];
-
     /* 自動開立（報工NG累積）的單，幾個欄位一律鎖定——2026-09-24 使用者拍板：
        ①製令編號：任何人都不可改（連管理員也不行，那是開單當下就決定的來源）
        ②責任單位（製程／廠商／廠內部門人員）：只有異常單管理員可以改，其餘人不行
@@ -155,6 +153,11 @@ case 'save_head': {
     $isAutoOpened = !empty($o['auto_opened']);
     $isAdmin = !empty($perms['canAdmin']);
     $respLocked = $isAutoOpened && !$isAdmin;
+    // 品管通知名單成員（管理員設定「自動開立異常單要通知哪幾位品管部門人員」）：即使不在一般編輯權限
+    // 範圍內，對「未結案的自動開立單」也可以進來補充異常現象說明（其餘鎖定欄位仍受上面 $respLocked 等規則保護）。
+    $qcNoteEdit = $isAutoOpened && empty($o['is_closed']) && !empty($perms['canQcNotify']);
+    if (!qab_can_edit_form($db, $perms, $o) && !$qcNoteEdit) jerr('沒有修改這張異常單的權限');
+    $id = (int)$o['id'];
 
     $fill = trim((string)($_POST['fill_date'] ?? ''));
     if ($fill !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $fill)) jerr('填寫日期格式不正確');
@@ -241,7 +244,12 @@ case 'save_head': {
     if (!$isAutoOpened && array_key_exists('batch_qty', $_POST))   $put('batch_qty', $intOrNull($_POST['batch_qty']));
     if (!$isAutoOpened && array_key_exists('insp_qty', $_POST))    $put('insp_qty', $intOrNull($_POST['insp_qty']));
     if (!$isAutoOpened && array_key_exists('ng_qty', $_POST)) { $put('ng_qty', $intOrNull($_POST['ng_qty'])); $put('sqty', $intOrNull($_POST['ng_qty'])); }
-    if (array_key_exists('abnormal_phenomenon', $_POST)) $put('abnormal_phenomenon', $strOrNull($_POST['abnormal_phenomenon'], 2000));
+    if (array_key_exists('abnormal_phenomenon', $_POST)) {
+        $newPhe = $strOrNull($_POST['abnormal_phenomenon'], 2000);
+        // 自動開立時寫入的異常現象底稿不可被移除，只能在後面補充——2026-09-24 使用者拍板
+        qab_phenomenon_check_base((string)$newPhe, $o['auto_phenomenon_base'] ?? null);
+        $put('abnormal_phenomenon', $newPhe);
+    }
     if (array_key_exists('defect_detail', $_POST))       $put('defect_detail', $strOrNull($_POST['defect_detail'], 2000));
     if (array_key_exists('qa_ps', $_POST))               $put('qa_ps', $strOrNull($_POST['qa_ps'], 2000));
     if (array_key_exists('decider_cfg_id', $_POST))      $put('decider_cfg_id', $intOrNull($_POST['decider_cfg_id']));
@@ -491,6 +499,11 @@ case 'round_cancel': {
 /* ═══════════ 決策：異常處置方式（業務／品管主管） ═══════════ */
 case 'save_disposition': {
     $o = $mustOrder((int)($_POST['id'] ?? 0));
+    // 自動開立的單，品管部門要先確認說明完成才能送決策——2026-09-24 使用者拍板：不可自動送決策，
+    // 一律要有人（品管通知名單成員或異常單管理員）按過「確認完成」（qc_review_by 才有值）才放行。
+    if (!empty($o['auto_opened']) && empty($o['qc_review_by'])) {
+        jerr('品管部門尚未完成確認說明，無法送出決策；請先在上方「品管確認說明」按下確認完成（或由異常單管理員代為完成）');
+    }
     /* 補資料的單（填寫日期在今日往前 N 天以前）由「異常單管理員」在補登簽章區一次補完結果與簽章，
        不必再跑一次正常的決策流程——使用者要求「補登簽章內就可以直接補結果跟內容」。 */
     $bfMode = !empty($o['is_backfill']) && $perms['canBackfill'] && trim((string)($_POST['sign_date'] ?? '')) !== '';
@@ -980,12 +993,63 @@ case 'decider_people': {   // 設定畫面上即時顯示「這一列目前涵�
     jout(true, ['rows' => []]);
 }
 
-/* ═══════════ 補資料：逐格指定簽章人員與印章日期 ═══════════ */
+/* ═══════════ 管理員設定：自動開立異常單要通知哪幾位品管部門人員 ═══════════ */
+case 'qc_notify_meta': {   // 讀取用：候選人（品管部門在職成員）＋目前已選名單，設定頁與一般畫面皆可用
+    jout(true, ['candidates' => array_map(function ($p) {
+        return ['id' => (int)$p['id'], 'name' => $p['user_cname'], 'dept_name' => $p['dept_name'], 'position_name' => $p['position_name']];
+    }, qab_auto_qc_notify_candidates($db)), 'selected' => qab_auto_qc_notify_list($db)]);
+}
+case 'qc_notify_save': {
+    if (!$perms['canAdmin']) jerr('只有管理員可以設定自動開立異常單的品管通知名單');
+    $ids = array_values(array_unique(array_map('intval', json_decode((string)($_POST['user_ids'] ?? '[]'), true) ?: [])));
+    $rows = qab_auto_qc_notify_save($db, $ids);
+    jout(true, ['selected' => $rows]);
+}
+
+/* ═══════════ 品管確認說明（自動開立單的關卡；名單成員或管理員皆可） ═══════════ */
+case 'qc_review_complete': {
+    $o = $mustOrder((int)($_POST['id'] ?? 0));
+    if (empty($o['auto_opened'])) jerr('只有自動開立的單需要這一步');
+    if (!empty($o['qc_review_by'])) jerr('這張單已經確認過了，請重新整理頁面');
+    if (empty($perms['canQcNotify'])) jerr('您不在品管通知名單內（由管理員在設定加入），無法標記確認');
+    $db->prepare("UPDATE qa_abnormal_order SET qc_review_by=?, qc_review_at=NOW(), updated_by=?, updated_at=NOW() WHERE id=?")
+       ->execute([$uid, $uid, (int)$o['id']]);
+    $log((int)$o['id'], 'qc_review', '', '品管確認說明完成');
+    jout(true, ['order' => qab_order($db, (int)$o['id'])]);
+}
+case 'qc_review_clear': {   // 管理員：確認錯了要重來，或要重新指定簽章者
+    $o = $mustOrder((int)($_POST['id'] ?? 0));
+    if (!$perms['canAdmin']) jerr('只有異常單管理員可以清除品管確認');
+    $db->prepare("UPDATE qa_abnormal_order SET qc_review_by=NULL, qc_review_at=NULL, updated_by=?, updated_at=NOW() WHERE id=?")
+       ->execute([$uid, (int)$o['id']]);
+    $log((int)$o['id'], 'qc_review', '（清除）', '');
+    jout(true, ['order' => qab_order($db, (int)$o['id'])]);
+}
+
+/* ═══════════ 管理員「代填代簽」解鎖：驗一次操作確認密碼，接下來 30 分鐘可連續代填這張單 ═══════════ */
+case 'qab_admin_unlock': {
+    $o = $mustOrder((int)($_POST['id'] ?? 0));
+    if (!$perms['canBackfill']) jerr('只有「異常單管理員」可以代填代簽');
+    $pwChk = eg_confirm_password_verify_scoped($db, $uid, (string)($_POST['confirm_password'] ?? ''), 'qab_admin_auto_sign');
+    if (empty($pwChk['ok'])) jerr($pwChk['msg'] ?? '操作確認密碼錯誤', 403);
+    qab_admin_unlock_mark($uid, (int)$o['id']);
+    jout(true, ['unlocked' => 1, 'ttl' => QAB_ADMIN_UNLOCK_TTL]);
+}
+
+/* ═══════════ 補資料：逐格指定簽章人員與印章日期（2026-09-24 起也開放自動開立的單） ═══════════ */
 case 'sign_set': {
     $o = $mustOrder((int)($_POST['id'] ?? 0));
     if (!$perms['canBackfill']) jerr('只有「異常單管理員」可以補登簽章');
-    if (empty($o['is_backfill'])) {
-        jerr('這張單的日期在最近 ' . qab_backfill_days($db) . ' 天內，不算補資料；請由各關卡的人自己按簽章鈕');
+    $genuineBackfill = !empty($o['is_backfill']);
+    if (!$genuineBackfill && empty($o['auto_opened'])) {
+        jerr('這張單的日期在最近 ' . qab_backfill_days($db) . ' 天內、也不是自動開立，不算補資料；請由各關卡的人自己按簽章鈕');
+    }
+    /* 真正的補資料（舊紙本）沿用既有規則不必密碼；但「自動開立、非補資料」是管理員代替現行、當下的
+       流程蓋章，使用者拍板要多一道操作確認密碼把關，避免順手就把系統自動走的簽核繞過去。
+       密碼驗證改成「先解鎖」（qab_admin_unlock，30分鐘內有效），不必每存一格就再輸入一次密碼，
+       才符合使用者說的「一次代為全部填寫與自動簽核」。 */
+    if (!$genuineBackfill && !qab_admin_unlock_valid($uid, (int)$o['id'])) {
+        jerr('請先輸入操作確認密碼解鎖後再代填代簽', 'NEED_UNLOCK');
     }
     $slots = qab_sign_slots();
     $slot  = (string)($_POST['slot'] ?? '');
@@ -1006,10 +1070,30 @@ case 'sign_set': {
     // ai-rules/22：補歷史單據一律以「單據當時」判定在職，當時在職、現已離職的人也要選得到
     if (!qab_user_asof_ok($db, $who, $date)) jerr('選擇的人員在 ' . $date . ' 並不在職，請改選當時在職的人');
 
+    // qcreview 格可以在同一次順便補上異常現象的補充說明（管理員代填內容＋簽核一次完成）
+    $pheSet = false; $phenomenonNew = null;
+    if ($slot === 'qcreview' && array_key_exists('phenomenon_note', $_POST)) {
+        $note = trim((string)$_POST['phenomenon_note']);
+        if ($note !== '') {
+            $phenomenonNew = trim(((string)($o['abnormal_phenomenon'] ?? '')) . '；' . $note);
+            qab_phenomenon_check_base($phenomenonNew, $o['auto_phenomenon_base'] ?? null);
+            $pheSet = true;
+        }
+    }
+
     $ts = qab_backfill_time($db, $o, $date);
-    $db->prepare("UPDATE qa_abnormal_order SET {$col['by']}=?, {$col['at']}=?, updated_by=?, updated_at=NOW() WHERE id=?")
-       ->execute([$who, $ts, $uid, (int)$o['id']]);
-    $log((int)$o['id'], 'sign_' . $slot, '', $date . ' #' . $who);
+    $db->beginTransaction();
+    try {
+        if ($pheSet) {
+            $db->prepare("UPDATE qa_abnormal_order SET {$col['by']}=?, {$col['at']}=?, abnormal_phenomenon=?, updated_by=?, updated_at=NOW() WHERE id=?")
+               ->execute([$who, $ts, mb_substr($phenomenonNew, 0, 2000), $uid, (int)$o['id']]);
+        } else {
+            $db->prepare("UPDATE qa_abnormal_order SET {$col['by']}=?, {$col['at']}=?, updated_by=?, updated_at=NOW() WHERE id=?")
+               ->execute([$who, $ts, $uid, (int)$o['id']]);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    $log((int)$o['id'], 'sign_' . $slot, '', $date . ' #' . $who . ($pheSet ? '（含補充異常現象說明）' : ''));
     jout(true, ['order' => qab_order($db, (int)$o['id'])]);
 }
 

@@ -34,6 +34,7 @@ if (!function_exists('qab_ensure_schema')) {
 
 define('QAB_PARAM_GROUP', 'QA_ABN');
 define('QAB_ASDOC_MODULE', 'qa_abnormal');   // AS 綁定（2-QA-01-01），版次依業務日期回推
+define('QAB_ADMIN_UNLOCK_TTL', 1800);        // 管理員代填代簽「解鎖」有效秒數（30分鐘，與 order_track 的客戶解鎖同一個時長慣例）
 
 /* ─────────────────────────────────────────────────────────────
    Schema
@@ -277,6 +278,25 @@ function qab_ensure_schema(PDO $db): void
         updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) DEFAULT CHARSET=utf8mb4 COMMENT='報工NG累積兩週提醒：每個bom_ing_fid最後一次跳提醒的日期'");
 
+    // 自動開立的單新增：異常現象的「不可移除底稿」＋品管確認關卡（2026-09-24 使用者交辦）
+    $cols2 = $db->query("SHOW COLUMNS FROM qa_abnormal_order")->fetchAll(PDO::FETCH_COLUMN);
+    $add2 = [];
+    $need2 = [
+        'auto_phenomenon_base' => "ADD COLUMN auto_phenomenon_base VARCHAR(255) NULL COMMENT '自動開立時寫入的異常現象底稿（如「報工發現不良」），save_head 只准在後面補充、不可移除這段文字'",
+        'qc_review_by'         => "ADD COLUMN qc_review_by INT NULL COMMENT '品管部門完成確認說明的人（自動開立單才會用到；有值即代表已確認可送決策）'",
+        'qc_review_at'         => "ADD COLUMN qc_review_at DATETIME NULL",
+    ];
+    foreach ($need2 as $c => $sql) if (!in_array($c, $cols2, true)) $add2[] = $sql;
+    if ($add2) $db->exec("ALTER TABLE qa_abnormal_order " . implode(', ', $add2));
+
+    // 管理員設定：自動開立異常單要通知哪幾位品管部門人員（全站共用一份，不是逐單各自設定）
+    $db->exec("CREATE TABLE IF NOT EXISTS qab_auto_qc_notify_cfg (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        UNIQUE KEY uk_user (user_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='自動開立異常單要通知確認的品管部門人員名單（管理員維護）'");
+
     qab_seed_defaults($db);
 }
 
@@ -489,6 +509,7 @@ function qab_gm_person(PDO $db, array $ctx = []): array
 function qab_sign_slots(): array
 {
     return [
+        'qcreview' => ['label' => '(品管) 確認說明完成', 'by' => 'qc_review_by', 'at' => 'qc_review_at', 'perm' => 'canQcNotify', 'ord' => 0],
         'owner' => ['label' => '(業務/品管) 承辦', 'by' => 'owner_sign_by',  'at' => 'owner_sign_at',  'perm' => 'canCreate',        'ord' => 1],
         'disp'  => ['label' => '(業務/品管) 主管', 'by' => 'disp_decided_by', 'at' => 'disp_decided_at', 'perm' => 'canDecide',       'ord' => 2],
         'gm'    => ['label' => '總經理 裁示',      'by' => 'gm_decided_by',   'at' => 'gm_decided_at',   'perm' => 'canGm',           'ord' => 3],
@@ -541,6 +562,7 @@ function qab_user_asof_ok(PDO $db, int $uid, string $date): bool
 function qab_slot_dept_keys(string $slot): array
 {
     switch ($slot) {
+        case 'qcreview': return ['qc_dept'];                   // (品管) 確認說明完成
         case 'owner': return ['sales_dept', 'qc_dept'];        // (業務/品管) 承辦
         case 'disp':  return ['sales_dept', 'qc_dept'];        // (業務/品管) 主管
         case 'gm':    return [];                               // 總經理裁示
@@ -752,6 +774,9 @@ function qab_create_order(PDO $db, array $data): array
     $autoNote = $strOrNull($data['auto_open_note'] ?? null, 255);
     $pmReportId = $intOrNull($data['pm_report_id'] ?? null);
     $phenomenon = $strOrNull($data['abnormal_phenomenon'] ?? null, 2000);
+    $deciderCfgId = $intOrNull($data['decider_cfg_id'] ?? null);
+    // 自動開立時寫入的異常現象底稿——save_head 之後只准補充、不可移除（2026-09-24 使用者交辦）
+    $phenomenonBase = $autoOpened ? $strOrNull($data['auto_phenomenon_base'] ?? $phenomenon, 255) : null;
 
     /* 責任單位（製程＋廠商）在建單當下就一併帶出——2026-09-24 使用者回報：自動開立已經選好製程，
        但廠商欄卻是空的，要現場再手動選一次。同一張製令、同一個製程站在 bom_ing 上本來就已經記著
@@ -783,13 +808,13 @@ function qab_create_order(PDO $db, array $data): array
              ir_id, ir_no, bom_no, client_id, client_name, part_no, part_d_id, batch_qty, insp_qty, ng_qty,
              abnormal_phenomenon, created_by, created_at, surcharge_rate,
              resp_process_no, responsible_vendor_id, resp_is_internal, responsible_unit,
-             auto_opened, auto_open_note, pm_report_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?,?,?,?,?,?,?)")
+             auto_opened, auto_open_note, pm_report_id, decider_cfg_id, auto_phenomenon_base)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?,?,?,?,?,?,?,?,?)")
            ->execute([$no, ($kind === 'ir' ? 'IR' : 'BOM'), (int)($irId ?: 0), $fillDate, $fillDate,
                       ($kind === 'ir' ? '客退' : '廠內'), $irId, $irNo, $bomNo, $cli['id'], $client, $partNo, $partDid, $batch,
                       $inspQty, $ngQty, $phenomenon, $uid, qab_default_rate($db),
                       $respProcessNo, $respVendorId, $respIsInternal, $respUnit,
-                      $autoOpened, $autoNote, $pmReportId]);
+                      $autoOpened, $autoNote, $pmReportId, $deciderCfgId, $phenomenonBase]);
         $id = (int)$db->lastInsertId();
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
@@ -970,6 +995,9 @@ function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReport
         'auto_opened' => 1,
         'auto_open_note' => $autoNote,
         'pm_report_id' => (int)$trigger['report_id'],
+        // 決策者自動＝品管主管（2026-09-24 使用者拍板）：沿用管理員在「設定→決策者」已經設好的
+        // 品管部門那一列（qa_decider_cfg），換人由品管課職務調動自然反映，不必另外解析出特定人選。
+        'decider_cfg_id' => qab_decider_cfg_id_for_dept($db, 'qc_dept'),
     ];
     $created = qab_create_order($db, $data);
     $ph = implode(',', array_fill(0, count($reportIds), '?'));
@@ -977,8 +1005,34 @@ function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReport
        ->execute(array_merge([$created['id']], $reportIds));
     // 這一站的累積已經清空，兩週提醒的計時器一併歸零，下一批NG從頭起算
     $db->prepare("DELETE FROM qab_pm_suggest_state WHERE bom_ing_fid=?")->execute([$bomIngFid]);
+    // 通知管理員設定的品管部門人員來補充說明並確認——品管完整填寫後才送主管決策，不會自動送決策
+    // （2026-09-24 使用者拍板）；沒設定名單時這一步就先略過，單子仍停在「待品管確認說明」等管理員處理。
+    try { qab_notify_qc_review($db, $created['id'], (string)$bi['bom'], $totalNg); } catch (Throwable $e) {}
     return ['id' => $created['id'], 'no' => $created['no'], 'opener' => $opener['name'],
             'qty' => $totalNg, 'period_from' => $periodFrom, 'period_to' => $periodTo, 'report_ids' => $reportIds];
+}
+
+/**
+ * 通知管理員設定的品管部門人員：這張自動開立的異常單需要他們補充說明後才能送決策。
+ * 一律走 `qa_notify.php` 既有的 `eg_qa_insert_event()`（唯一通知入口，站內＋Web Push＋Telegram
+ * 一次到位，不另外自己組 live_event／live_event_target，鐵律4）；名單為空時安靜不發，不是錯誤。
+ */
+function qab_notify_qc_review(PDO $db, int $orderId, string $bomNo, int $ngQty): void
+{
+    $people = qab_auto_qc_notify_list($db);
+    if (!$people) return;
+    require_once __DIR__ . '/qa_notify.php';
+    $st = $db->prepare("SELECT abnormal_order_no FROM qa_abnormal_order WHERE id=?");
+    $st->execute([$orderId]);
+    $no = (string)$st->fetchColumn();
+    $title = '品質異常單待品管確認：' . $no;
+    $content = '製令 ' . $bomNo . ' 報工累積發現 ' . $ngQty . ' 件NG，系統已自動開立異常單 ' . $no
+             . '，請補充異常現象說明後按「確認完成」送出主管決策。';
+    $targets = array_map(function ($p) { return ['type' => 'user', 'id' => (int)$p['id'], 'mode' => 'read']; }, $people);
+    eg_qa_insert_event($db, $orderId, $title, $content, $targets, null, 0, [
+        'ref_type' => 'QA_QC_REVIEW',
+        'url' => '/EGsystem/views/QA/qa_abnormal_form.php?id=' . $orderId,
+    ]);
 }
 
 /**
@@ -1458,6 +1512,115 @@ function qab_user_in_decider(PDO $db, int $uid, string $kind): bool
     return false;
 }
 
+/**
+ * 自動開立異常單時，決策者要自動設成「品管主管」——找出 `qa_decider_cfg`（kind=decider）裡
+ * 部門落在 org_role_lib 的 $deptKey（例如 'qc_dept'）底下的那一列，直接沿用管理員已經設定好的
+ * 範圍（不自己另外解析出一個特定人選）：換人由品管課的職務調動自然反映，不必回來改這裡。
+ * 找不到符合的設定時回傳 null（自動開單就不預設決策者，維持「未指定」讓人工去補）。
+ */
+function qab_decider_cfg_id_for_dept(PDO $db, string $deptKey): ?int
+{
+    require_once __DIR__ . '/org_role_lib.php';
+    $deptIds = array_map('intval', eg_org_dept_ids($db, $deptKey));
+    if (!$deptIds) return null;
+    foreach (qab_decider_cfgs($db, 'decider') as $cfg) {
+        if (in_array((int)$cfg['dept_id'], $deptIds, true)) return (int)$cfg['cfg_id'];
+    }
+    return null;
+}
+
+/**
+ * 管理員設定：自動開立異常單要通知哪幾位品管部門人員確認說明——2026-09-24 使用者交辦。
+ * 全站共用一份（不是逐單各自設定），候選池＝目前在職的品管部門人員（org_role_lib 的 'qc_dept'）。
+ * 唯一維護入口，設定頁與自動開單通知都讀這一份，不要另存一套名單（鐵律4）。
+ */
+function qab_auto_qc_notify_candidates(PDO $db): array
+{
+    require_once __DIR__ . '/org_role_lib.php';
+    require_once __DIR__ . '/people_lib.php';
+    $deptIds = array_map('intval', eg_org_dept_ids($db, 'qc_dept'));
+    if (!$deptIds) return [];
+    return eg_people_list($db, ['dept_ids' => $deptIds, 'all_posts' => true]);
+}
+
+/** 目前設定的通知名單（含姓名/部門/職稱，供設定頁與通知內容顯示） */
+function qab_auto_qc_notify_list(PDO $db): array
+{
+    $st = $db->query("SELECT c.user_id, u.user_cname, u.state
+                       FROM qab_auto_qc_notify_cfg c LEFT JOIN `user` u ON u.id=c.user_id
+                       ORDER BY c.sort_order, c.id");
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($rows as $r) {
+        if ((int)($r['state'] ?? 0) !== 1) continue; // 已離職者不再通知，但設定列本身保留給管理員自己清
+        $out[] = ['id' => (int)$r['user_id'], 'name' => (string)$r['user_cname']];
+    }
+    return $out;
+}
+
+/** 這個人是否在管理員設定的「自動開立異常單通知名單」內 */
+function qab_in_auto_qc_notify(PDO $db, int $uid): bool
+{
+    if ($uid <= 0) return false;
+    foreach (qab_auto_qc_notify_list($db) as $p) if ((int)$p['id'] === $uid) return true;
+    return false;
+}
+
+/** 管理員儲存通知名單（整批覆蓋，人員必須是目前的品管部門在職成員） */
+function qab_auto_qc_notify_save(PDO $db, array $userIds): array
+{
+    $valid = [];
+    foreach (qab_auto_qc_notify_candidates($db) as $p) $valid[(int)$p['id']] = 1;
+    $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds), function ($v) use ($valid) {
+        return $v > 0 && isset($valid[$v]);
+    })));
+    $db->beginTransaction();
+    try {
+        $db->exec("DELETE FROM qab_auto_qc_notify_cfg");
+        if ($userIds) {
+            $ins = $db->prepare("INSERT INTO qab_auto_qc_notify_cfg (user_id, sort_order) VALUES (?,?)");
+            foreach ($userIds as $i => $uid) $ins->execute([$uid, $i]);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    return qab_auto_qc_notify_list($db);
+}
+
+/**
+ * 異常現象文字的「不可移除底稿」規則（2026-09-24 使用者交辦）：自動開立時寫入的那句話
+ * （如「報工發現不良」）只能在後面補充說明，不可以被整段換掉或刪掉。
+ * @param string $newText 準備要存進去的新文字
+ * @param ?string $base 該單的 auto_phenomenon_base；null／空字串＝沒有這個限制（人工開單或舊資料）
+ * @throws Exception 新文字沒有包含底稿時
+ */
+function qab_phenomenon_check_base(string $newText, ?string $base): void
+{
+    $base = trim((string)$base);
+    if ($base === '') return;
+    if (mb_strpos($newText, $base) === false) {
+        throw new Exception('自動產生的異常現象文字「' . $base . '」不可移除，請用新增文字的方式補充說明');
+    }
+}
+
+/**
+ * 管理員「代填代簽」解鎖——2026-09-24 使用者拍板：驗一次操作確認密碼之後，一段時間內
+ * 可以連續代填/代簽這張單的多個項目，不必每個動作都再輸入一次密碼（與 order_track 的
+ * 客戶欄解鎖 `ot_client_unlock_*` 同一套做法、同樣 30 分鐘）。逐張單各自解鎖，不是全站一次解鎖。
+ */
+function qab_admin_unlock_mark(int $uid, int $orderId): void
+{
+    if (!isset($_SESSION['qab_admin_unlock']) || !is_array($_SESSION['qab_admin_unlock'])) $_SESSION['qab_admin_unlock'] = [];
+    $_SESSION['qab_admin_unlock'][$uid . ':' . $orderId] = time();
+}
+function qab_admin_unlock_valid(int $uid, int $orderId): bool
+{
+    $k = $uid . ':' . $orderId;
+    $t = $_SESSION['qab_admin_unlock'][$k] ?? 0;
+    if (!$t) return false;
+    if (time() - (int)$t > QAB_ADMIN_UNLOCK_TTL) { unset($_SESSION['qab_admin_unlock'][$k]); return false; }
+    return true;
+}
+
 /* ─────────────────────────────────────────────────────────────
    權限
    使用者拍板（2026-09-18）：扣款的填寫與核准＝「部門綁定＋角色並用」。
@@ -1508,7 +1671,8 @@ function qab_perms(PDO $db, int $uid): array
 {
     $none = ['uid' => 0, 'name' => '', 'isAdmin' => false, 'canView' => false, 'canCreate' => false,
              'canAdmin' => false, 'canDecide' => false, 'canGm' => false,
-             'canDeductFill' => false, 'canDeductApprove' => false, 'canQcSign' => false];
+             'canDeductFill' => false, 'canDeductApprove' => false, 'canQcSign' => false, 'canQcNotify' => false,
+             'canBackfill' => false];
     if ($uid <= 0) return $none;
     $st = $db->prepare("SELECT id, user_cname, user_uname, state, user_status FROM `user` WHERE id=?");
     $st->execute([$uid]);
@@ -1538,13 +1702,17 @@ function qab_perms(PDO $db, int $uid): array
                      || qab_in_org_dept($db, $uid, 'pm_dept') || qab_in_org_dept($db, $uid, 'sales_dept');
     $canDeductApprove = $canAdmin || $has(['qab_deduct_approve']) || qab_in_org_dept($db, $uid, 'acc_dept');
     $canQcSign = $canAdmin || $has(['qab_fill', 'qc_manage_settings', 'qc_fill_inspection']) || qab_in_org_dept($db, $uid, 'qc_dept');
-    $canView = $canCreate || $canDecide || $canGm || $canDeductFill || $canDeductApprove
+    // 自動開立異常單的通知名單成員——這是管理員逐人指定的名單（不是整個品管部門），
+    // 在原異常現象加註說明、標記「已確認」讓單子可以送決策，用的就是這個權限（與 canQcSign 是不同用途）
+    $canQcNotify = $canAdmin || qab_in_auto_qc_notify($db, $uid);
+    $canView = $canCreate || $canDecide || $canGm || $canDeductFill || $canDeductApprove || $canQcNotify
                || $has(['qab_view', 'qc_view_readonly', 'ncr_view', 'ncr_admin']);
 
     return ['uid' => $uid, 'name' => (string)($u['user_cname'] ?: $u['user_uname']),
             'isAdmin' => $isAdmin, 'canAdmin' => $canAdmin, 'canView' => $canView, 'canCreate' => $canCreate,
             'canDecide' => $canDecide, 'canGm' => $canGm,
             'canDeductFill' => $canDeductFill, 'canDeductApprove' => $canDeductApprove, 'canQcSign' => $canQcSign,
+            'canQcNotify' => $canQcNotify,
             // 補資料（指定補章人員與印章日期）刻意只給「異常單管理員」——使用者定調：這個功能只有異常單有
             'canBackfill' => $canAdmin];
 }
@@ -2001,6 +2169,9 @@ function qab_final(PDO $db, array $o, ?array $optMap = null): array
 function qab_status(array $o): array
 {
     if (!empty($o['is_closed'])) return ['code' => 'closed', 'label' => '已結案'];
+    // 自動開立的單，品管部門還沒確認說明前不算「待決策」——2026-09-24 使用者拍板：
+    // 品管填寫完整後才送主管決策，不可以自動送決策。
+    if (!empty($o['auto_opened']) && empty($o['qc_review_by'])) return ['code' => 'qcreview', 'label' => '待品管確認說明'];
     foreach ($o['rounds'] ?? [] as $r) {
         if (($r['status'] ?? '') !== 'Returned') {
             $who = trim((string)($r['user_cname'] ?: $r['department_name']));
@@ -2044,7 +2215,7 @@ function qab_list(PDO $db, array $f = []): array
     $sql = "SELECT o.id, o.abnormal_order_no, o.source_type, o.fill_date, o.occurrence_date, o.client_name,
                    o.part_no, o.bom_no, o.ir_no, o.responsible_unit, o.ng_qty, o.sqty, o.is_closed, o.closed_at,
                    o.scrap_no, o.gm_deduct, o.abnormal_phenomenon, o.created_by, cu.user_cname AS created_name,
-                   o.deleted_at, o.deleted_by, dl.user_cname AS deleted_name,
+                   o.deleted_at, o.deleted_by, dl.user_cname AS deleted_name, o.auto_opened, o.qc_review_by,
                    pn.ProcessName AS resp_process_name, ml.maker_id AS resp_vendor_name
             FROM qa_abnormal_order o
             LEFT JOIN `user` cu ON cu.id=o.created_by
@@ -2081,6 +2252,7 @@ function qab_list(PDO $db, array $f = []): array
         $r['final']    = qab_final($db, $r, $optMap);
         $r['need_gm']  = qab_need_gm($db, $r, $optMap);
         if (!empty($r['is_closed']))      $r['status'] = ['code' => 'closed', 'label' => '已結案'];
+        elseif (!empty($r['auto_opened']) && empty($r['qc_review_by'])) $r['status'] = ['code' => 'qcreview', 'label' => '待品管確認說明'];
         elseif ($r['pending'] > 0)        $r['status'] = ['code' => 'reply', 'label' => '等待單位回覆'];
         elseif (!$r['disp_ids'] && !$r['gm_ids']) $r['status'] = ['code' => 'decide', 'label' => '待決策'];
         elseif ($r['need_gm'])            $r['status'] = ['code' => 'gm', 'label' => '待總經理裁示'];
@@ -2099,11 +2271,12 @@ function qab_status_map(PDO $db, array $orderIds): array
     if (!$orderIds) return [];
     $in = implode(',', array_fill(0, count($orderIds), '?'));
     $out = [];
-    $st = $db->prepare("SELECT id, is_closed, gm_deduct, scrap_no, capa_order_no FROM qa_abnormal_order WHERE id IN ($in)");
+    $st = $db->prepare("SELECT id, is_closed, gm_deduct, scrap_no, capa_order_no, auto_opened, qc_review_by FROM qa_abnormal_order WHERE id IN ($in)");
     $st->execute($orderIds);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $out[(int)$r['id']] = ['is_closed' => (int)$r['is_closed'], 'gm_deduct' => (int)$r['gm_deduct'],
                                'scrap_no' => (string)($r['scrap_no'] ?? ''), 'capa_order_no' => (string)($r['capa_order_no'] ?? ''),
+                               'auto_opened' => (int)$r['auto_opened'], 'qc_review_by' => $r['qc_review_by'],
                                'disp_ids' => [], 'gm_ids' => [], 'pending' => 0];
     }
     $st = $db->prepare("SELECT order_id, kind, opt_id FROM qa_abnormal_opt WHERE order_id IN ($in)");
@@ -2128,6 +2301,7 @@ function qab_status_map(PDO $db, array $orderIds): array
         $v['final'] = qab_final($db, $v, $optMap);
         $v['need_gm'] = qab_need_gm($db, $v, $optMap);
         if ($v['is_closed'])            $v['status'] = '已結案';
+        elseif ($v['auto_opened'] && !$v['qc_review_by']) $v['status'] = '待品管確認說明';
         elseif ($v['pending'] > 0)      $v['status'] = '等待單位回覆';
         elseif (!$v['disp_ids'] && !$v['gm_ids']) $v['status'] = '待決策';
         elseif ($v['need_gm'])          $v['status'] = '待總經理裁示';

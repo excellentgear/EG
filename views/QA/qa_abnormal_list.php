@@ -266,6 +266,7 @@ $backfillDays = qab_backfill_days($db);
                 <button data-tab="disp">異常處置方式</button>
                 <button data-tab="gm">總經理裁示</button>
                 <button data-tab="dec">決策者</button>
+                <button data-tab="qc">品管通知名單</button>
                 <button data-tab="ask">相關單位意見</button>
                 <button data-tab="etc">其他設定</button>
             </div>
@@ -320,6 +321,16 @@ $backfillDays = qab_backfill_days($db);
                     <button class="btn btn-warm btn-sm" data-saveall="decider"><i class="fa fa-save"></i> 一鍵存檔（本頁全部）</button>
                 </div>
                 <div id="decPeople" class="muted-help" style="margin-top:6px;"></div>
+            </div>
+
+            <div class="tabp" id="tab-qc" style="display:none;">
+                <div class="note-box">報工NG累積自動開立異常單時，<b>決策者自動帶入品管主管</b>（沿用「決策者」分頁裡品管課那一列，不必在這裡另外設定）；
+                    這裡設定的是<b>要通知哪幾位品管部門人員補充異常現象說明</b>——系統開單後會通知勾選的人，
+                    <b>其中任何一位</b>補充說明並按「確認完成」，這張單才能送出主管決策（品管沒填完不會自動送決策）。
+                    候選名單＝目前在職的品管部門人員；沒有勾選任何人時，單子會停在「待品管確認說明」，只能由異常單管理員在單張裡代為完成。</div>
+                <div id="qcNotifyList" class="muted-help">載入中…</div>
+                <div style="margin-top:10px;"><button class="btn btn-warm btn-sm" id="btnQcNotifySave"><i class="fa fa-save"></i> 儲存通知名單</button>
+                    <span id="qcNotifySaved" class="muted-help" style="margin-left:8px;"></span></div>
             </div>
 
             <div class="tabp" id="tab-ask" style="display:none;">
@@ -408,6 +419,8 @@ $backfillDays = qab_backfill_days($db);
             </ul>
             <h4>狀態怎麼判讀</h4>
             <ul>
+                <li><b>待品管確認說明</b>：只有自動開立（報工累積NG觸發）的單才會有這個狀態——決策者已自動帶入品管主管，
+                    但要等「品管通知名單」裡的任何一位補充異常現象說明並按「確認完成」，才能往下送決策；<b>不會自動送決策</b>。</li>
                 <li><b>等待單位回覆</b>：已送出徵詢、對方還沒回。<b>待決策</b>：還沒勾處置方式也沒有裁示。</li>
                 <li><b>待總經理裁示</b>：處置方式勾了「轉總經理裁示」但還沒裁示。<b>扣款確認中</b>：要扣款但還沒核准。<b>可結案</b>：該做的都做完了。</li>
             </ul>
@@ -422,6 +435,8 @@ $backfillDays = qab_backfill_days($db);
                 <li><b>決策者</b>：設定可以做處置判定的「部門＋職稱」範圍。
                     <b>最高決策者（總經理裁示）不在這裡設定</b>——自動套用全站「組織角色綁定 → 最高核准人員」，
                     要換人請到<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>改一次，全站表單一起跟著換。</li>
+                <li><b>品管通知名單</b>：勾選要通知的品管部門人員，報工NG累積自動開立異常單時會通知他們補充異常現象說明；
+                    <b>任何一位</b>完成確認即可送決策，不必每個人都確認。決策者自動＝品管主管沿用「決策者」分頁裡品管課那一列，不必另外設定。</li>
                 <li><b>其他設定</b>：扣款加成預設值、<b>補資料天數</b>、AS 文件綁定。</li>
                 <li>每個設定分頁右下角都有<b>「一鍵存檔（本頁全部）」</b>，不必一列一列按「存」；
                     有任何一列填錯會整批不儲存並告訴你是第幾列（不會只存一半）。
@@ -761,7 +776,30 @@ function loadCfg(){
     if (!DEPTS.length) $.get(API, { action:'depts' }, function(res){ if (res && res.success) { DEPTS = res.rows; renderDec(); renderAsk(); } }, 'json');
     // 職稱清單要先載好，否則已存的那幾列會顯示成「不限職稱」（看起來像設定不見了）
     if (!POSITIONS.length) $.get(API, { action:'positions' }, function(res){ if (res && res.success) { POSITIONS = res.rows; renderDec(); } }, 'json');
+    loadQcNotify();
 }
+
+/* ───────── 品管通知名單（自動開立異常單要通知哪幾位品管部門人員） ───────── */
+function loadQcNotify(){
+    $.get(API, { action:'qc_notify_meta' }, function(res){
+        if (!res || !res.success) { $('#qcNotifyList').text('載入失敗'); return; }
+        var selected = {};
+        (res.selected || []).forEach(function(p){ selected[p.id] = 1; });
+        var rows = res.candidates || [];
+        $('#qcNotifyList').html(rows.length
+            ? ('<div class="ask-pos">' + rows.map(function(p){
+                return '<label><input type="checkbox" class="qc-notify-ck" value="' + p.id + '"'
+                     + (selected[p.id] ? ' checked' : '') + '> '
+                     + esc(p.name + (p.position_name ? '（' + p.dept_name + ' ' + p.position_name + '）' : '（' + p.dept_name + '）')) + '</label>'; }).join('') + '</div>')
+            : '<span class="muted-help">目前品管部門沒有在職人員（先到「組織角色綁定」確認品管部門設定）</span>');
+    }, 'json');
+}
+$('#btnQcNotifySave').on('click', function(){
+    var ids = $('.qc-notify-ck:checked').map(function(){ return Number(this.value); }).get();
+    post('qc_notify_save', { user_ids:JSON.stringify(ids) }, function(){
+        $('#qcNotifySaved').text('已儲存（' + ids.length + ' 人）');
+    });
+});
 function flatCause(){
     var out = [];
     (function walk(ns, lv){ (ns || []).forEach(function(n){ n._lv = lv; out.push(n); walk(n.children, lv + 1); }); })(CFG.causes, 1);

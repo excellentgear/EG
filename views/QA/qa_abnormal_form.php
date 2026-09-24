@@ -206,6 +206,11 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                         人員清單依你填的<b>印章日期</b>只列<b>該格該簽的部門、當天在職、而且當天沒有請整天假或整天外出</b>的人；
                         找不到人時可以勾「顯示全部人員」放寬。印章日期不可以是未來；同一天有多格時系統會把時間依序錯開，
                         不會出現「核准早於承辦」這種順序。<b>改完就自動存檔，不必按存檔鈕。</b></div>
+                    <div id="qabSignUnlockBox" style="display:none;padding:8px 10px;margin-bottom:8px;border:1px solid var(--coral);border-radius:6px;background:#FFF0EC;">
+                        <b><i class="fa fa-lock"></i> 此單為自動開立（非傳統補資料）</b>，代填代簽前請先輸入操作確認密碼解鎖（解鎖後 30 分鐘內可連續代填多個項目）。
+                        <button class="btn btn-warm btn-xs" id="btnQabSignUnlock" style="margin-left:6px;"><i class="fa fa-unlock"></i> 輸入密碼解鎖</button>
+                    </div>
+                    <div id="qabSignHint" class="muted-help" style="display:none;margin-bottom:6px;"></div>
                     <label style="font-weight:normal;font-size:12px;"><input type="checkbox" id="sgAll"> 顯示全部人員（不限該格的部門）</label>
                     <table class="dtb" id="signTb">
                         <thead><tr><th style="width:150px;">簽章格</th><th style="width:150px;">目前</th>
@@ -299,6 +304,16 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
 
                     <div class="fgrid" style="margin-top:10px;grid-template-columns:1fr;">
                         <div class="fld"><label>異常現象</label><textarea id="f_phe" rows="3"></textarea>
+                            <div id="qcBaseNote" class="muted-help" style="display:none;margin-top:2px;"></div>
+                            <div id="qcReviewBox" style="display:none;margin-top:6px;padding:8px 10px;border:1px solid var(--amber-d);border-radius:6px;background:#FFF6E8;">
+                                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                    <b><i class="fa fa-flag-checkered"></i> 品管確認說明</b>
+                                    <span id="qcReviewWho" class="muted-help"></span>
+                                    <button class="btn btn-warm btn-xs" id="btnQcReviewDone"><i class="fa fa-check"></i> 確認完成，可送決策</button>
+                                    <button class="btn btn-warm-o btn-xs" id="btnQcReviewClear" style="display:none;">清除確認</button>
+                                </div>
+                                <div class="muted-help" style="margin-top:4px;">品管部門通知名單成員在上方異常現象補充說明後按此確認；確認完成前這張單不能送出主管決策。</div>
+                            </div>
                             <div class="ro-note" style="display:flex;align-items:center;gap:8px;margin-top:4px;">
                                 <b>(業務/品管) 承辦 簽章</b>
                                 <span id="ownerWho" class="muted-help">（未簽）</span>
@@ -462,6 +477,23 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
     </div>
 </div>
 
+<!-- 管理員代填代簽解鎖（自動開立單，非傳統補資料） -->
+<div class="m-mask" id="qabUnlockMask">
+    <div class="m-box" style="width:440px;">
+        <div class="m-hd"><i class="fa fa-lock"></i> 輸入操作確認密碼解鎖<span class="x" data-close="qabUnlockMask">&times;</span></div>
+        <div class="m-bd">
+            <div class="note-box">解鎖後 30 分鐘內可以連續代填代簽這張單的多個項目（簽章者、日期、內容皆可指定）。</div>
+            <div class="fld"><label>操作確認密碼 <span style="color:var(--coral)">*</span></label>
+                <input type="password" id="qabUnlockPw" autocomplete="off"></div>
+            <div class="err" id="qabUnlockErr"></div>
+        </div>
+        <div class="m-ft">
+            <button class="btn btn-default btn-sm" data-close="qabUnlockMask">取消</button>
+            <button class="btn btn-warm btn-sm" id="btnQabUnlockGo"><i class="fa fa-unlock"></i> 解鎖</button>
+        </div>
+    </div>
+</div>
+
 <!-- 使用說明（鐵律7） -->
 <div class="m-mask" id="helpUseMask">
     <div class="m-box" style="width:820px;">
@@ -494,6 +526,8 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                 <li>所有選項（原因分類／處置方式／總經理裁示）都<b>存 id 不存文字</b>，管理員改名不會讓舊單失去連動。</li>
                 <li>本單的狀態與內容會自動出現在<b>不合格品管制記錄表</b>（2-QA-01-03），那一頁只顯示、不可修改。</li>
                 <li><b>自動開立（報工累積NG）的單，幾個欄位一律鎖定，畫面上會反灰並標明</b>：<b>製令編號</b>任何人都不可改（連管理員也不行）；<b>責任單位</b>（製程／廠商／部門人員，開單時已自動帶入該製令該站登記的廠商）只有<b>異常單管理員</b>可以改；<b>批量／檢驗數／不良數</b>任何人都不可改，是報工累積直接加總出來的（批量＝良品＋NG、檢驗數＝同批量、不良數＝NG總數）。其餘欄位（異常現象、原因分類、處置、裁示、扣款…）不受影響，一樣正常填寫。</li>
+                <li><b>自動開立的單，決策者自動帶入品管主管</b>（沿用清單頁「設定→決策者」品管課那一列）。異常現象下方會出現<b>「品管確認說明」</b>區塊：<b>管理員設定的品管通知名單成員</b>可以在上方異常現象欄補充說明（<b>系統自動填入的底稿文字不可整段移除，只能在後面加字</b>），補完按「確認完成」；<b>沒有確認完成之前這張單不能送出主管決策（不會自動送決策，連異常單管理員直接送決策也會被擋）</b>。</li>
+                <li><b>管理員代填代簽</b>：異常單管理員可在「補登簽章」區代填代簽自動開立的單（不限傳統補資料），<b>簽章者、日期、內容（僅品管確認那一格）都可以指定</b>；第一次代填前要<b>輸入操作確認密碼解鎖</b>，解鎖後 30 分鐘內可連續代填多個項目，不必每項都重新輸入密碼。</li>
             </ul>
             <h4>設定入口</h4>
             <ul>
@@ -525,6 +559,8 @@ var API  = '../../src/store/QaAbnormal_API.php';
 var CSRF = '<?= $CSRF ?>';
 var OID  = <?= (int)$oid ?>;
 var D = null;          // 後端回來的整包（order / perms / 代碼表）
+var QAB_SIGN_MERGE_ASK = false;  // 補登簽章表是否併入「相關單位意見」——只有真正補資料(is_backfill)才併，自動開立單不併
+var QAB_UNLOCKED = false;        // 自動開立單的代填代簽是否已通過操作確認密碼解鎖（每次載入頁面歸零）
 var CAUSE_SEL = [];    // 目前勾選的原因分類 id
 var DEDUCT_ROWS = [];  // 畫面上的扣款列
 var RPL_FLOW = 0;
@@ -649,6 +685,29 @@ function render(){
     $('#f_decider').val(o.decider_cfg_id || '');
     loadDeciderUsers(o.decider_user_id || '');
     $('#f_phe').val(o.abnormal_phenomenon || '');
+    // 自動開立的底稿說明＋品管確認說明（2026-09-24 使用者拍板）
+    if (o.auto_phenomenon_base) {
+        $('#qcBaseNote').show().text('系統自動填入「' + o.auto_phenomenon_base + '」，可在後面補充說明，但這段文字不可整段移除。');
+    } else {
+        $('#qcBaseNote').hide().text('');
+    }
+    var qcReviewShow = isAuto && !o.is_closed;
+    $('#qcReviewBox').toggle(qcReviewShow);
+    if (qcReviewShow) {
+        var qs = o.signs && o.signs.qcreview ? o.signs.qcreview : {};
+        if (qs.user_id) {
+            $('#qcReviewWho').text('已由 ' + (qs.name || '') + '　' + dispDate(qs.at) + ' 確認');
+            $('#btnQcReviewDone').hide();
+            $('#btnQcReviewClear').toggle(!!p.canAdmin);
+        } else {
+            $('#qcReviewWho').text('（尚未確認，送決策前必須先完成）');
+            $('#btnQcReviewDone').toggle(!!p.canQcNotify);
+            $('#btnQcReviewClear').hide();
+        }
+        if (!p.canQcNotify && !qs.user_id) {
+            $('#qcReviewWho').text('（尚未確認——您不在品管通知名單內，請聯絡管理員設定，或由管理員代為完成）');
+        }
+    }
     $('#f_detail').val(o.defect_detail || '');
     $('#f_qaps').val(o.qa_ps || '');
     (o.measures || []).forEach(function(m){
@@ -663,8 +722,13 @@ function render(){
          + ' 已超過 ' + o.backfill_days + ' 天，'
          + (p.canBackfill ? '可以在下方「補登簽章」逐格指定當時是誰簽的、蓋哪一天；相關單位意見也改成直接補登（不發通知）。'
                           : '只有「異常單管理員」可以補登簽章與補登單位意見。')));
-    $('#secSign').toggle(bf && !!p.canBackfill && !o.is_closed);
-    if (bf && p.canBackfill) renderSignTable();
+    /* 自動開立、但不算真正補資料的單（業務日期就是今天），也開放管理員在這張表代填代簽——
+       2026-09-24 使用者拍板；差別是**不合併相關單位意見**（那一段仍走下面 ③ 正常的逐輪徵詢，
+       自動開立不預設勾選任何部門），且改動時要先用操作確認密碼解鎖（見 qabEnsureUnlock）。 */
+    var adminFillMode = !!p.canBackfill && !o.is_closed && (bf || isAuto);
+    QAB_SIGN_MERGE_ASK = bf;   // 只有真正補資料才把「相關單位意見」併進這張表
+    $('#secSign').toggle(adminFillMode);
+    if (adminFillMode) renderSignTable();
 
     renderBoms();
     renderProcPick();
@@ -679,7 +743,10 @@ function render(){
     $('#secHead').toggleClass('locked', !canEdit);
     $('#secHead input,#secHead textarea,#secHead select').prop('disabled', !canEdit);
     if (bound) $('#f_client').prop('readonly', true);
-    $('#btnSaveHead').toggle(canEdit);
+    // 品管通知名單成員：一般編輯權限之外，仍可在自動開立、未結案的單上補充異常現象說明
+    var qcNoteEdit = isAuto && !o.is_closed && !!p.canQcNotify;
+    if (qcNoteEdit) $('#f_phe').prop('disabled', false);
+    $('#btnSaveHead').toggle(canEdit || qcNoteEdit);
 
     /* 自動開立（報工NG累積）的單，幾個欄位一律鎖定——2026-09-24 使用者拍板：
        ①製令編號：任何人都不可改（連管理員也不行）②責任單位（製程／廠商／部門人員）：只有異常單
@@ -892,6 +959,10 @@ function fillSlotPeople($sel, slot, date, sel, $note, deptId){
 /* 這一格要不要多出「結果與內容」（使用者要求：補登時不要再跑到下面的決策區填一次） */
 function slotResultHtml(k){
     var o = D.order;
+    if (k === 'qcreview') {
+        return '<textarea class="sg-qcnote" rows="2" placeholder="補充異常現象說明（會接在後面，不可整段替換底稿）"></textarea>'
+             + (o.auto_phenomenon_base ? '<div class="muted-help" style="font-size:11px;">底稿：' + esc(o.auto_phenomenon_base) + '</div>' : '');
+    }
     if (k === 'disp') {
         return '<div class="sg-res">' + (D.disp_opts || []).map(function(op){
                 return '<label><input type="checkbox" class="sg-disp" value="' + op.opt_id + '"'
@@ -909,6 +980,11 @@ function slotResultHtml(k){
 }
 function renderSignTable(){
     var o = D.order, biz = o.fill_date || '';
+    var isAutoNotBf = !!Number(o.auto_opened) && Number(o.is_backfill) !== 1;
+    var needUnlock = isAutoNotBf && !QAB_UNLOCKED;
+    $('#qabSignUnlockBox').toggle(needUnlock);
+    $('#qabSignHint').toggle(isAutoNotBf && !needUnlock)
+        .text('此單為自動開立（非傳統補資料），已解鎖，30 分鐘內可繼續代填代簽。');
     var h = '';
     Object.keys(o.signs || {}).forEach(function(k){
         var sg = o.signs[k];
@@ -917,35 +993,39 @@ function renderSignTable(){
            + '<td>' + esc(sg.label) + '</td>'
            + '<td>' + (sg.name ? (esc(sg.name) + '<br><span class="muted-help">' + dispDate(sg.at) + '</span>')
                               : '<span class="muted-help">（未簽）</span>') + '</td>'
-           + '<td><input type="date" class="sg-date" value="' + esc(d) + '"></td>'
-           + '<td><select class="sg-who" data-eg-skip><option value="">載入中…</option></select>'
+           + '<td><input type="date" class="sg-date" value="' + esc(d) + '"' + (needUnlock ? ' disabled' : '') + '></td>'
+           + '<td><select class="sg-who" data-eg-skip' + (needUnlock ? ' disabled' : '') + '><option value="">載入中…</option></select>'
            + '<div class="muted-help sg-scope" style="font-size:11px;"></div></td>'
            + '<td>' + slotResultHtml(k) + '</td>'
-           + '<td class="c">' + (sg.user_id ? '<button class="btn btn-warm-o btn-xs sg-clear">清除</button>' : '<span class="muted-help">自動存</span>') + '</td></tr>';
+           + '<td class="c">' + (sg.user_id ? '<button class="btn btn-warm-o btn-xs sg-clear"' + (needUnlock ? ' disabled' : '') + '>清除</button>' : '<span class="muted-help">自動存</span>') + '</td></tr>';
     });
-    /* 相關單位意見也併進這張表（使用者要求：補資料要填的東西全部在這裡，不要分兩邊）。
+    /* 相關單位意見只有「真正補資料」才併進這張表（使用者要求：補資料要填的東西全部在這裡，不要分兩邊）；
+       自動開立但非補資料的單刻意不併——那一段仍走下面③正常的逐輪徵詢，不預設勾選任何部門。
        右邊的人員清單只會出現「那一天在職、沒請整天假、而且屬於這個部門」的人。 */
-    var cfg = D.ask_cfg || {}, seen = {}, order = [];
-    Object.keys(cfg).forEach(function(d){ if (!seen[d]) { seen[d] = 1; order.push(Number(d)); } });
-    (o.rounds || []).forEach(function(r){ if (!seen[r.dept_id]) { seen[r.dept_id] = 1; order.push(Number(r.dept_id)); } });
-    (ASK_EXTRA || []).forEach(function(d){ if (!seen[d]) { seen[d] = 1; order.push(Number(d)); } });
-    order.forEach(function(deptId){
-        var r = (o.rounds || []).filter(function(x){ return Number(x.dept_id) === deptId; }).slice(-1)[0];
-        var done = r && r.status === 'Returned';
-        var dt = done ? String(r.return_date || '').substring(0, 10) : biz;
-        h += '<tr class="sg-ask" data-askdept="' + deptId + '"' + (r ? (' data-flow="' + r.flow_id + '"') : '') + '>'
-           + '<td>相關單位意見<br><b>' + esc(askDeptName(deptId)) + '</b>' + askSlotNote(deptId) + '</td>'
-           + '<td>' + (done ? (esc(r.replied_name || '') + '<br><span class="muted-help">' + dispDate(r.return_date) + '</span>')
-                            : '<span class="muted-help">（未補登）</span>') + '</td>'
-           + '<td><input type="date" class="sg-date" value="' + esc(dt) + '"' + (done ? ' disabled' : '') + '></td>'
-           + '<td><select class="sg-who" data-eg-skip' + (done ? ' disabled' : '') + '><option value="">載入中…</option></select>'
-           + '<div class="muted-help sg-scope" style="font-size:11px;"></div></td>'
-           + '<td><textarea class="sg-asktext" rows="3" placeholder="當時這個單位回了什麼"' + (done ? ' disabled' : '') + '>'
-           + esc(done ? (r.reply_content || '') : '') + '</textarea></td>'
-           + '<td class="c">' + (done ? '<button class="btn btn-warm-o btn-xs sg-askdel">清除</button>' : '<span class="muted-help">自動存</span>') + '</td></tr>';
-    });
+    if (QAB_SIGN_MERGE_ASK) {
+        var cfg = D.ask_cfg || {}, seen = {}, order = [];
+        Object.keys(cfg).forEach(function(d){ if (!seen[d]) { seen[d] = 1; order.push(Number(d)); } });
+        (o.rounds || []).forEach(function(r){ if (!seen[r.dept_id]) { seen[r.dept_id] = 1; order.push(Number(r.dept_id)); } });
+        (ASK_EXTRA || []).forEach(function(d){ if (!seen[d]) { seen[d] = 1; order.push(Number(d)); } });
+        order.forEach(function(deptId){
+            var r = (o.rounds || []).filter(function(x){ return Number(x.dept_id) === deptId; }).slice(-1)[0];
+            var done = r && r.status === 'Returned';
+            var dt = done ? String(r.return_date || '').substring(0, 10) : biz;
+            h += '<tr class="sg-ask" data-askdept="' + deptId + '"' + (r ? (' data-flow="' + r.flow_id + '"') : '') + '>'
+               + '<td>相關單位意見<br><b>' + esc(askDeptName(deptId)) + '</b>' + askSlotNote(deptId) + '</td>'
+               + '<td>' + (done ? (esc(r.replied_name || '') + '<br><span class="muted-help">' + dispDate(r.return_date) + '</span>')
+                                : '<span class="muted-help">（未補登）</span>') + '</td>'
+               + '<td><input type="date" class="sg-date" value="' + esc(dt) + '"' + (done ? ' disabled' : '') + '></td>'
+               + '<td><select class="sg-who" data-eg-skip' + (done ? ' disabled' : '') + '><option value="">載入中…</option></select>'
+               + '<div class="muted-help sg-scope" style="font-size:11px;"></div></td>'
+               + '<td><textarea class="sg-asktext" rows="3" placeholder="當時這個單位回了什麼"' + (done ? ' disabled' : '') + '>'
+               + esc(done ? (r.reply_content || '') : '') + '</textarea></td>'
+               + '<td class="c">' + (done ? '<button class="btn btn-warm-o btn-xs sg-askdel">清除</button>' : '<span class="muted-help">自動存</span>') + '</td></tr>';
+        });
+    }
 
     $('#signTb tbody').html(h);
+    if (needUnlock) return;   // 未解鎖：欄位都停用，不必浪費請求去載人員清單
     $('#signTb tbody tr').each(function(){
         var $tr = $(this);
         if ($tr.hasClass('sg-ask')) {
@@ -959,10 +1039,22 @@ function renderSignTable(){
         fillSlotPeople($tr.find('.sg-who'), k, $tr.find('.sg-date').val() || biz,
                        (D.order.signs[k] || {}).user_id, $tr.find('.sg-scope'));
     });
-    /* 這張表已經涵蓋相關單位意見，下面那一區在補資料模式就不再顯示（避免兩邊填同一件事） */
-    $('#secRound').toggle(!(Number(o.is_backfill) === 1 && !!D.perms.canBackfill));
+    /* 這張表已經涵蓋相關單位意見（僅真正補資料時），這種情況下面那一區就不再顯示（避免兩邊填同一件事） */
+    $('#secRound').toggle(!QAB_SIGN_MERGE_ASK);
 }
 $(document).on('change', '#sgAll', function(){ renderSignTable(); });
+$('#btnQabSignUnlock').on('click', function(){ $('#qabUnlockPw').val(''); $('#qabUnlockErr').text(''); openMask('qabUnlockMask'); });
+$('#btnQabUnlockGo').on('click', function(){
+    var pw = $('#qabUnlockPw').val();
+    if (!pw) { $('#qabUnlockErr').text('請輸入操作確認密碼'); return; }
+    $.post(API, { action:'qab_admin_unlock', id:OID, csrf:CSRF, confirm_password:pw }, function(res){
+        if (!res || !res.success) { $('#qabUnlockErr').text((res && res.message) || '解鎖失敗'); return; }
+        QAB_UNLOCKED = true;
+        closeMask('qabUnlockMask');
+        toast('已解鎖，可以開始代填代簽');
+        renderSignTable();
+    }, 'json').fail(function(){ $('#qabUnlockErr').text('連線失敗，請稍後再試'); });
+});
 $(document).on('change', '.sg-date', function(){
     var $tr = $(this).closest('tr');
     if (!this.value) return;
@@ -999,14 +1091,19 @@ function saveSignRow($tr){
         return;
     }
     if (!who) return;                    // 其他格只有簽章，沒選人就先不存
-    post('sign_set', { id:OID, slot:slot, date:date, user_id:who }, function(){ savedAt('#savedSign'); }, true);
+    var extra = { id:OID, slot:slot, date:date, user_id:who };
+    if (slot === 'qcreview') {
+        var note = $tr.find('.sg-qcnote').val();
+        if (note && note.trim()) extra.phenomenon_note = note.trim();
+    }
+    post('sign_set', extra, function(){ savedAt('#savedSign'); }, true);
 }
 function signKey($tr){ return 'sign' + ($tr.data('slot') || ('ask' + $tr.data('askdept'))); }
 $(document).on('change', '#signTb .sg-date, #signTb .sg-who, #signTb .sg-disp, #signTb .sg-gm, #signTb .sg-gmded', function(){
     var $tr = $(this).closest('tr');
     autoSave(signKey($tr), function(){ saveSignRow($tr); });
 });
-$(document).on('input', '#signTb .sg-dispnote, #signTb .sg-gmnote, #signTb .sg-asktext', function(){
+$(document).on('input', '#signTb .sg-dispnote, #signTb .sg-gmnote, #signTb .sg-asktext, #signTb .sg-qcnote', function(){
     var $tr = $(this).closest('tr');
     autoSave(signKey($tr), function(){ saveSignRow($tr); }, 1200);
 });
@@ -1178,6 +1275,14 @@ $('#btnOwnerSign').on('click', function(){ post('owner_sign', { id:OID }, functi
 $('#btnOwnerClear').on('click', function(){
     if (!confirm('取消承辦簽章？')) return;
     post('owner_sign', { id:OID, clear:1 }, function(){ toast('已取消簽章'); });
+});
+$('#btnQcReviewDone').on('click', function(){
+    if (!confirm('確認異常現象說明已補充完整，可以送出主管決策？')) return;
+    post('qc_review_complete', { id:OID }, function(){ toast('已確認，可以送決策'); });
+});
+$('#btnQcReviewClear').on('click', function(){
+    if (!confirm('清除品管確認？清除後要重新確認才能送決策。')) return;
+    post('qc_review_clear', { id:OID }, function(){ toast('已清除'); });
 });
 /* 欄位改完（離開欄位或改選）就自動存——使用者要求不要再有「忘記按存檔」這種事。
    打字中的欄位用 input 事件延後久一點再存，免得每打一個字就送一次。 */
