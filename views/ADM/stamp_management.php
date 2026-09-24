@@ -383,13 +383,13 @@ try {
   <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
     <h4 class="modal-title"><i class="fa fa-stethoscope"></i> 核發日期健檢</h4></div>
   <div class="modal-body">
-    <p class="text-muted" style="font-size:12px;">比對每顆章「登記的核發日期」與持有人在全站共用簽核紀錄（approval_record）<strong>第一次實際核准</strong>的日期——核發日期比那次還晚，代表登記時這顆章明明還沒核發，人卻已經拿去簽核了，屬於不合理的登記資料。
-      <strong>只查得到走共用簽核紀錄留痕的操作</strong>，較舊、各自另存一套簽核表的模組可能查不到，此健檢只能抓出「查得到證據」的那一部分，不代表沒列出的就一定正確；「課室章／職稱章」沒有固定對應到單一個人，本健檢不涵蓋。</p>
+    <p class="text-muted" style="font-size:12px;">自動核對兩種不合理的核發日期：<strong>①個人章核發日期早於這個人的到職日期</strong>（人還沒入職就核發了章）；<strong>②核發日期晚於持有人在全站共用簽核紀錄（approval_record）第一次實際核准的日期</strong>（人還沒領到章就先簽核了）。
+      ②<strong>只查得到走共用簽核紀錄留痕的操作</strong>，較舊、各自另存一套簽核表的模組可能查不到；「課室章／職稱章」沒有固定對應到單一個人，兩種檢查都不涵蓋。</p>
     <p id="issueCheckSum" class="text-muted" style="font-size:12px;font-weight:bold;color:#7a4e17;"></p>
     <div style="max-height:360px;overflow-y:auto;border:1px solid #e8d9b8;">
       <table class="list"><thead><tr>
         <th style="width:36px;"><input type="checkbox" id="icChkAll" checked title="全選/全不選"></th>
-        <th>持有人</th><th style="width:100px;">種類</th><th style="width:100px;">目前核發日期</th><th style="width:150px;">要改成（可手動調整）</th><th style="width:110px;"></th>
+        <th>持有人</th><th style="width:80px;">種類</th><th>不合理原因</th><th style="width:95px;">目前核發日期</th><th style="width:140px;">要改成（可手動調整）</th><th style="width:100px;"></th>
       </tr></thead><tbody id="issueCheckBody"></tbody></table>
     </div>
     <div style="text-align:right;margin-top:10px;">
@@ -415,7 +415,7 @@ try {
       <li><b>停用／繳回</b>：該列按「停用」，填停用日期。章不會被刪掉，清冊上會保留並標示為已停用。</li>
       <li><b>報廢</b>：報廢就是停用 — 填上繳回日期後，列印的記錄表該列會自動打在「作廢」欄。</li>
       <li><b>批次改核發日期</b>：清冊表格最左欄勾選要改的登記（可跨多筆，僅限目前這一頁），上方「批次改核發日期」列選好新日期後按「套用到勾選的登記」，會一次把勾選的登記全部改成同一個日期，只動核發日期、不影響種類/模板/備註。</li>
-      <li><b>核發日期健檢</b>：右上按「核發日期健檢」，系統會自動比對每顆章持有人在全站簽核紀錄裡<b>第一次實際核准</b>的日期，抓出「核發日期比人第一次用章還晚」的不合理登記。每筆會預先帶入建議日期（＝該人最早實際使用的那天），<b>可直接在日期欄手動改成別的日期</b>（不一定要用建議值），勾選框左上角可「全選/全不選」，逐筆按「套用此列」或勾選多筆一次「套用勾選項目的日期」（套用的是每列<b>目前欄位裡實際顯示</b>的日期，不是固定的建議值）。</li>
+      <li><b>核發日期健檢</b>：右上按「核發日期健檢」，系統會自動核對兩種不合理登記：<b>①核發日期早於這個人的到職日期</b>（人還沒入職就核發了章）、<b>②核發日期晚於持有人在全站簽核紀錄裡第一次實際核准</b>的日期（人還沒領到章就先簽核了）。每筆會預先帶入建議日期（①用到職日期、②用最早實際使用的那天），<b>可直接在日期欄手動改成別的日期</b>（不一定要用建議值），勾選框左上角可「全選/全不選」，逐筆按「套用此列」或勾選多筆一次「套用勾選項目的日期」（套用的是每列<b>目前欄位裡實際顯示</b>的日期，不是固定的建議值）。</li>
       <li><b>列印</b>：右上「列印/PDF」印出目前篩選條件下的全部資料（不是只有這一頁）。</li>
     </ol>
 
@@ -737,21 +737,23 @@ $('#btnBatchDateApply').on('click',function(){
 // ── 核發日期健檢：比對持有人在 approval_record 最早一次實際核准的日期，早於核發日期＝登記資料可能有誤 ──
 function openIssueCheck(){
   $('#issueCheckModal').modal('show');
-  $('#issueCheckBody').html('<tr><td colspan="6" class="text-muted">檢查中…</td></tr>');
+  $('#issueCheckBody').html('<tr><td colspan="7" class="text-muted">檢查中…</td></tr>');
   $('#issueCheckSum,#btnIssueCheckApplyAll').hide();
   $.getJSON(API,{action:'check_issue_date'},r=>{
-    if(!r.ok){$('#issueCheckBody').html(`<tr><td colspan="6" class="text-muted">${esc(r.error||'檢查失敗')}</td></tr>`);return;}
+    if(!r.ok){$('#issueCheckBody').html(`<tr><td colspan="7" class="text-muted">${esc(r.error||'檢查失敗')}</td></tr>`);return;}
     ISSUE_FLAGS=r.rows||[];
-    $('#issueCheckSum').show().text(`已核對 ${r.checked} 筆有明確持有人的登記，其中 ${ISSUE_FLAGS.length} 筆核發日期晚於該持有人最早一次實際核准的日期（僅比對走 approval_record 共用簽核紀錄留痕的操作，舊式自建簽核表可能查不到）。`);
-    if(!ISSUE_FLAGS.length){ $('#issueCheckBody').html('<tr><td colspan="6" class="text-muted">沒有發現不合理的核發日期。</td></tr>'); return; }
+    const nHire=ISSUE_FLAGS.filter(x=>x.reason==='before_hire').length, nUse=ISSUE_FLAGS.length-nHire;
+    $('#issueCheckSum').show().text(`已核對 ${r.checked} 筆有明確持有人的登記，其中 ${ISSUE_FLAGS.length} 筆核發日期不合理（早於到職日期 ${nHire} 筆／晚於最早實際核准 ${nUse} 筆）。`);
+    if(!ISSUE_FLAGS.length){ $('#issueCheckBody').html('<tr><td colspan="7" class="text-muted">沒有發現不合理的核發日期。</td></tr>'); return; }
     $('#btnIssueCheckApplyAll').show(); $('#icChkAll').prop('checked',true);
     $('#issueCheckBody').html(ISSUE_FLAGS.map(x=>`<tr>
       <td style="text-align:center;"><input type="checkbox" class="ic-chk" checked value="${x.id}"></td>
       <td>${esc(x.holder_name)}</td>
       <td>${x.type_name?esc(x.type_name):'<span class="text-muted">（未分類）</span>'}</td>
+      <td style="color:${x.reason==='before_hire'?'#c0392b':'#dd5138'};font-size:12px;">${esc(x.reason_text)}</td>
       <td>${esc(x.issue_date)}</td>
       <td><input type="date" class="form-control input-sm ic-date" data-id="${x.id}" value="${esc(x.suggest_date)}" max="9999-12-31">
-        <div class="text-muted" style="font-size:11px;">建議：${esc(x.suggest_date)}（早了 ${x.diff_days} 天使用）</div></td>
+        <div class="text-muted" style="font-size:11px;">建議：${esc(x.suggest_date)}</div></td>
       <td><button class="btn btn-warning btn-xs ic-apply-one" data-id="${x.id}"><i class="fa fa-check"></i> 套用此列</button></td>
     </tr>`).join(''));
   });

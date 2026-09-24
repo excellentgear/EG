@@ -245,16 +245,19 @@ case 'list': {
           'canManage'=>$canManage]);
 }
 
-// ── 核發日期健檢：登記的核發日期是否晚於持有人「最早一次實際簽核」的日期（不合理：人簽核當下這顆章還沒核發）──
-// 資料源＝全站共用 approval_record（ai-rules/23，只有走共用簽核的模組留得下痕跡，自建簽核表的舊模組查不到，僅供參考不代表窮盡）；
-// 只查得到 holder_kind='user'／'user_dept'（有明確 user_id 的登記），dept／position 章沒有固定的人可比對，一律略過不列入。
+// ── 核發日期健檢：兩種不合理情形 ──
+// ①核發日期早於「到職日期」（user.hire_date）：個人章不可能在這個人還沒入職前就核發給他。
+// ②核發日期晚於持有人「最早一次實際簽核」的日期（不合理：人簽核當下這顆章還沒核發）；
+//   資料源＝全站共用 approval_record（ai-rules/23，只有走共用簽核的模組留得下痕跡，自建簽核表的舊模組查不到，僅供參考不代表窮盡）。
+// 兩者只查得到 holder_kind='user'／'user_dept'（有明確 user_id 的登記），dept／position 章沒有固定的人可比對，一律略過不列入；
+// 同一筆若同時符合①②（正常資料不會同時發生），優先回報①，因為「還沒入職」比「早了幾天簽核」更明確、更嚴重。
 case 'check_issue_date': {
     needManage($canManage);
     $earliest = $db->query("SELECT approver_id, MIN(decided_at) AS earliest
                              FROM approval_record
                              WHERE status='approved' AND approver_id IS NOT NULL AND decided_at IS NOT NULL
                              GROUP BY approver_id")->fetchAll(PDO::FETCH_KEY_PAIR);
-    $st = $db->query("SELECT r.id, r.user_id, r.dept_id, r.issue_date, r.status, u.user_cname, d.name AS dept_name, t.type_name,
+    $st = $db->query("SELECT r.id, r.user_id, r.dept_id, r.issue_date, r.status, u.user_cname, u.hire_date, d.name AS dept_name, t.type_name,
                               CASE WHEN r.dept_id IS NOT NULL THEN CONCAT(u.user_cname,'（',d.name,'）') ELSE u.user_cname END AS holder_name
                        FROM stamp_register r
                        JOIN user u ON u.id = r.user_id
@@ -265,12 +268,21 @@ case 'check_issue_date': {
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $checked++;
         $uidHolder = (int)$r['user_id'];
+        $hire = $r['hire_date'];
+        if ($hire && $hire > $r['issue_date']) {
+            $d = (int)((strtotime($hire) - strtotime($r['issue_date'])) / 86400);
+            $flags[] = ['id'=>(int)$r['id'], 'holder_name'=>$r['holder_name'], 'type_name'=>$r['type_name'],
+                        'issue_date'=>$r['issue_date'], 'status'=>$r['status'], 'suggest_date'=>$hire, 'diff_days'=>$d,
+                        'reason'=>'before_hire', 'reason_text'=>"核發日期早於到職日期 {$hire}（早了 {$d} 天，人還沒入職就核發了章）"];
+            continue;
+        }
         if (!isset($earliest[$uidHolder])) continue;
         $earliestDate = substr((string)$earliest[$uidHolder], 0, 10);
         if ($earliestDate < $r['issue_date']) {
+            $d = (int)((strtotime($r['issue_date']) - strtotime($earliestDate)) / 86400);
             $flags[] = ['id'=>(int)$r['id'], 'holder_name'=>$r['holder_name'], 'type_name'=>$r['type_name'],
-                        'issue_date'=>$r['issue_date'], 'status'=>$r['status'], 'suggest_date'=>$earliestDate,
-                        'diff_days'=>(int)((strtotime($r['issue_date']) - strtotime($earliestDate)) / 86400)];
+                        'issue_date'=>$r['issue_date'], 'status'=>$r['status'], 'suggest_date'=>$earliestDate, 'diff_days'=>$d,
+                        'reason'=>'used_before_issued', 'reason_text'=>"核發日期晚於最早一次實際核准 {$earliestDate}（晚了 {$d} 天，人還沒領到章就先簽核了）"];
         }
     }
     usort($flags, fn($a,$b)=>$b['diff_days'] <=> $a['diff_days']);
