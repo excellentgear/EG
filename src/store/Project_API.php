@@ -1189,10 +1189,16 @@ case 'process_dates':
     if (!$P['canAdmin']) jerr('無權限（需「專案管理員」角色）', 403);
     $fid = (int)($_POST['bom_ing_fid'] ?? 0);
     if ($fid <= 0) jerr('缺少製程列');
+    $ackWarning = !empty($_POST['ack_warning']);
     try {
-        $r = prj_bom_dates_admin_update($db, $pid, $fid, $_POST['outsource_date'] ?? null, $_POST['return_date'] ?? null, $u);
+        $r = prj_bom_dates_admin_update($db, $pid, $fid, $_POST['outsource_date'] ?? null, $_POST['return_date'] ?? null, $u, $ackWarning);
     } catch (Throwable $e) { jerr($e->getMessage()); }
-    jout(['message' => '已儲存', 'row' => $r, 'processes' => prj_processes($db, $pid, prj_get($db, $pid))]);
+    if (empty($r['ok'])) {
+        if (!empty($r['blocked'])) jerr($r['blocked'], 409);
+        // 只是提醒（品管/包裝檢驗日期），前端要 confirm 後帶 ack_warning=1 重送一次
+        jerr($r['warning'] ?? '無法儲存', 409, ['need_ack' => true]);
+    }
+    jout(['message' => '已儲存', 'row' => $r['row'], 'processes' => prj_processes($db, $pid, prj_get($db, $pid))]);
 
 /* ══════════════════════════ 文件檢核 ══════════════════════════ */
 case 'doc_check':

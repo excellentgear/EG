@@ -3109,15 +3109,26 @@ $(document).on('change', '#paneRel .p-ms, #paneRel .p-note', function () {
 });
 /* 管理員手動修改發包日／回廠日（使用者明確要求，含不在本專案範圍的列）——
    這是本頁唯一會真的改到 BOM 原始資料的動作，限管理員，且會留稽核紀錄。 */
-$(document).on('change', '#paneRel .p-outdate, #paneRel .p-retdate', function () {
-    var $tr = $(this).closest('tr'), fid = num($tr.data('fid'));
+function pmSaveProcessDates($tr, ackWarning) {
+    var fid = num($tr.data('fid'));
     if (!fid) { alert('這一列還沒有製令資料'); return; }
     api('process_dates', {
         project_id: CUR.project.project_id, bom_ing_fid: fid,
-        outsource_date: $tr.find('.p-outdate').val(), return_date: $tr.find('.p-retdate').val()
+        outsource_date: $tr.find('.p-outdate').val(), return_date: $tr.find('.p-retdate').val(),
+        ack_warning: ackWarning ? 1 : 0
     }, 'POST').fail(function (xhr) {
-        alert((xhr.responseJSON && xhr.responseJSON.error) || '儲存失敗');
+        var j = xhr.responseJSON || {};
+        // 品管/包裝檢驗日期只是提醒（重工/重新發包屬正常例外），確認後可略過直接存
+        if (j.need_ack && confirm((j.error || '') + '\n\n確定要照這個日期儲存嗎？')) {
+            pmSaveProcessDates($tr, true);
+            return;
+        }
+        alert(j.error || '儲存失敗');
+        openProject(num(CUR.project.project_id));
     });
+}
+$(document).on('change', '#paneRel .p-outdate, #paneRel .p-retdate', function () {
+    pmSaveProcessDates($(this).closest('tr'), false);
 });
 $(document).on('click', '#btnRelAddOrder', function () { openO2P('append'); });
 

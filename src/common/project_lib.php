@@ -3242,39 +3242,34 @@ function prj_data_readiness(PDO $db, int $projectId): array
  * 的說明），這裡刻意獨立成一支、限定管理員呼叫，方便日後追查誰動過原始生產資料。
  * 同時把 project_process 的鏡像欄位一起更新，不然「同步 BOM」或變更偵測下一次跑就會把
  * 剛改的值蓋掉，或誤判成「BOM 被外部改過」而跳提示。
+ *
+ * 2026-09-24：實際的驗證與寫入規則（移轉憑單日期硬擋／品管包裝檢驗日期提醒／狀態自動推導）
+ * 已抽成 bom_process_date_lib.php 的 bomp_admin_set_dates()（唯一實作，與
+ * views/pm/OreadyReply_completed_query.php 的管理員修正共用同一套，不在這裡另寫一份）；
+ * 這裡只保留「這道製程屬不屬於本專案」的守門與 project_process 鏡射。
+ * 回傳值改為透傳 bomp_admin_set_dates() 的結果（ok/blocked/warning/row），
+ * 呼叫端（Project_API.php）要依此分辨「硬擋」與「只是提醒、可確認後重送」兩種情況。
  */
-function prj_bom_dates_admin_update(PDO $db, int $projectId, int $bomIngFid, $outsourceDate, $returnDate, array $user): array
+function prj_bom_dates_admin_update(PDO $db, int $projectId, int $bomIngFid, $outsourceDate, $returnDate, array $user, bool $ackWarning = false): array
 {
-    $st = $db->prepare("SELECT pp.id, pp.bom_ing_fid, pp.outsource_date AS old_out, pp.return_date AS old_ret
-                        FROM project_process pp WHERE pp.project_id=? AND pp.bom_ing_fid=? LIMIT 1");
+    require_once __DIR__ . '/bom_process_date_lib.php';
+    $st = $db->prepare("SELECT pp.id FROM project_process pp WHERE pp.project_id=? AND pp.bom_ing_fid=? LIMIT 1");
     $st->execute([$projectId, $bomIngFid]);
     $row = $st->fetch(PDO::FETCH_ASSOC);
     if (!$row) throw new RuntimeException('這道製程不屬於本專案，或尚未同步 BOM');
 
-    $norm = static function ($v) {
-        $v = trim((string)($v ?? ''));
-        if ($v === '') return null;
-        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) throw new RuntimeException('日期格式不正確');
-        return $v;
-    };
-    $out = $norm($outsourceDate);
-    $ret = $norm($returnDate);
-
-    $db->beginTransaction();
-    try {
-        $u1 = $db->prepare("UPDATE bom_ing SET outsource_date=?, return_date=?, Modified_At=NOW(), Modified_By=? WHERE bom_ing_fid=?");
-        $u1->execute([$out, $ret, (string)($user['id'] ?? ''), $bomIngFid]);
-        $u2 = $db->prepare("UPDATE project_process SET outsource_date=?, return_date=? WHERE id=?");
-        $u2->execute([$out, $ret, $row['id']]);
+    $r = bomp_admin_set_dates($db, $bomIngFid, $outsourceDate, $returnDate, $user, $ackWarning);
+    if (!empty($r['ok'])) {
+        $db->prepare("UPDATE project_process SET outsource_date=?, return_date=? WHERE id=?")
+           ->execute([$r['row']['outsource_date'], $r['row']['return_date'], $row['id']]);
         $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
                      VALUES ('update','project_bom_date',?,?,?,?,?,NOW())")
            ->execute([(string)$bomIngFid, '專案#' . $projectId . ' 製令列#' . $bomIngFid,
-                      json_encode(['outsource_date' => [$row['old_out'], $out], 'return_date' => [$row['old_ret'], $ret]], JSON_UNESCAPED_UNICODE),
+                      json_encode(['outsource_date' => $r['row']['outsource_date'], 'return_date' => $r['row']['return_date'],
+                                   'processing_state' => [$r['row']['prev_state'], $r['row']['processing_state']]], JSON_UNESCAPED_UNICODE),
                       (int)($user['id'] ?? 0), (string)($user['user_cname'] ?? 'system')]);
-        $db->commit();
-    } catch (Throwable $e) { $db->rollBack(); throw $e; }
-
-    return ['bom_ing_fid' => $bomIngFid, 'outsource_date' => $out, 'return_date' => $ret];
+    }
+    return $r;
 }
 
 /**
