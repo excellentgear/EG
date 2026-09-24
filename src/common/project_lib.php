@@ -3118,6 +3118,46 @@ function prj_process_manual_remove(PDO $db, int $projectId, int $id): void
     $db->prepare("DELETE FROM project_process WHERE id=? AND project_id=? AND source='manual'")->execute([$id, $projectId]);
 }
 
+/**
+ * 跨專案文件備齊總覽（使用者 2026-09-23 要求：比照 internal_audit.php 總覽的做法，
+ * 一次看到所有專案的文件備齊狀況，不必逐專案點開「文件檢核」分頁才看得到）。
+ * 直接重用單一專案本來就有的 prj_doc_check()（唯一判定邏輯，鐵律4——不能為了跨專案
+ * 另外寫一套判定，那樣兩處遲早對不起來），逐專案呼叫後攤平成「專案×料號」一列，
+ * 並附上專案代號/名稱方便畫面直接顯示與導向，不必前端再拿 id 去 LIST 裡找一次。
+ */
+function prj_doc_check_overview(PDO $db, bool $includeClosed = false): array
+{
+    $w = ['is_deleted=0'];
+    if (!$includeClosed) $w[] = "status NOT IN ('closed','terminated','rejected')";
+    $st = $db->query("SELECT project_id, project_no, project_name, customer_name, owner_name, status
+                      FROM project WHERE " . implode(' AND ', $w) . " ORDER BY project_no DESC");
+    $projects = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    $rows = [];
+    $sum  = ['project_cnt' => 0, 'part_cnt' => 0, 'complete_cnt' => 0, 'missing_cnt' => 0,
+             'missing_by_kind' => array_fill_keys(array_keys(PRJ_DOC_CHECKS), 0)];
+    foreach ($projects as $p) {
+        $pid = (int)$p['project_id'];
+        $check = prj_doc_check($db, $pid);
+        if (!$check) continue;      // 這個專案還沒有綁定任何料號，無從檢核
+        $sum['project_cnt']++;
+        foreach ($check as $r) {
+            $sum['part_cnt']++;
+            if ((int)$r['missing'] === 0) $sum['complete_cnt']++; else $sum['missing_cnt']++;
+            foreach (array_keys(PRJ_DOC_CHECKS) as $k) {
+                if (empty($r[$k])) $sum['missing_by_kind'][$k]++;
+            }
+            $rows[] = array_merge($r, [
+                'project_id' => $pid, 'project_no' => $p['project_no'], 'project_name' => $p['project_name'],
+                'project_status' => $p['status'], 'project_owner_name' => $p['owner_name'],
+            ]);
+        }
+    }
+    // 缺件數由多到少排，最需要處理的排最前面
+    usort($rows, static fn($a, $b) => (int)$b['missing'] <=> (int)$a['missing']);
+    return ['rows' => $rows, 'summary' => $sum];
+}
+
 /** 未知悉的 BOM 變更提示（專案清單的紅色徽章與詳情頁的提示條都用這支） */
 function prj_bom_alerts(PDO $db, int $projectId, bool $unackedOnly = true): array
 {

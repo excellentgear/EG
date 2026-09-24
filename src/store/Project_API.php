@@ -1199,6 +1199,12 @@ case 'doc_check':
     prj_need($db, $P, $pid);
     jout(['rows' => prj_doc_check($db, $pid), 'defs' => PRJ_DOC_CHECKS]);
 
+/** 跨專案文件備齊總覽（使用者 2026-09-23 要求，比照 internal_audit.php 總覽） */
+case 'doc_check_overview':
+    if (!$P['canView']) jerr('無權限', 403);
+    $r = prj_doc_check_overview($db, !empty($_GET['include_closed']));
+    jout(['rows' => $r['rows'], 'summary' => $r['summary'], 'defs' => PRJ_DOC_CHECKS]);
+
 /**
  * 可以綁的 SOP／SIP 候選文件（通用的、綁到這個料號的、這個料號用到的製程那幾份）。
  * 使用者 2026-09-23：「要可以選定是否綁定通用的 SOP/SIP，各種都不限定綁定一項」。

@@ -4865,11 +4865,23 @@ function buildCardHtml(res, m) {
 }
 
 /* ══════════════════════════ 跨專案總覽（內部用，不是 AS 表單） ══════════════════════════ */
+var OV_MODE = 'progress';   // progress=進度總覽（既有）／doc=文件備齊總覽（使用者 2026-09-23 要求）
+function ovTogBar() {
+    return '<div style="margin-bottom:8px;">'
+      + '<button class="pj-ovtog' + (OV_MODE === 'progress' ? ' on' : '') + '" data-ovtog="progress">進度總覽</button>'
+      + ' <button class="pj-ovtog' + (OV_MODE === 'doc' ? ' on' : '') + '" data-ovtog="doc">文件備齊總覽</button>'
+      + '</div>';
+}
 function openOverview() {
-    var h = '<p class="pj-hint">內部管理用的橫向檢視：一次看到目前所有進行中的專案與各自的進度、缺件與 BOM 提示。'
+    if (OV_MODE === 'doc') { renderOvDoc(); return; }
+    renderOvProgress();
+}
+function renderOvProgress() {
+    var h = ovTogBar()
+          + '<p class="pj-hint">內部管理用的橫向檢視：一次看到目前所有進行中的專案與各自的進度、缺件與 BOM 提示。'
           + '<b>這不是 AS 表單，列印時不會印 AS 文件編號。</b>正式的 2-GM-02-03 專案管理卡請在各專案內開立。</p>';
     var rows = $.grep(LIST, function (r) { return r.status !== 'closed' && r.status !== 'terminated'; });
-    if (!rows.length) { h += '<div class="pj-hint">目前沒有進行中的專案。</div>'; $('#ovBody').html(h); openMask('ovMask'); return; }
+    if (!rows.length) { h += '<div class="pj-hint">目前沒有進行中的專案。</div>'; $('#ovBody').html(h); $('#btnOvPrint').show(); openMask('ovMask'); return; }
     h += '<div class="pj-table-wrap"><table class="pj-table" id="ovTable"><thead><tr>'
       + '<th style="width:80px;">專案代號</th><th>專案名稱</th><th style="width:110px;">客戶</th>'
       + '<th style="width:80px;">負責人</th><th style="width:58px;">階段</th><th style="width:70px;">狀態</th>'
@@ -4887,8 +4899,60 @@ function openOverview() {
     });
     h += '</tbody></table></div>';
     $('#ovBody').html(h);
+    $('#btnOvPrint').show();
     openMask('ovMask');
 }
+/* 文件備齊總覽（使用者 2026-09-23 要求，比照 internal_audit.php 總覽：KPI 卡片＋逐專案/料號一覽表）。
+   直接向後端要 prj_doc_check_overview() 的結果，判定邏輯與各專案自己的「文件檢核」分頁同一套
+   （鐵律4），這裡只是把全部專案攤平顯示，不重算。 */
+function renderOvDoc() {
+    $('#ovBody').html(ovTogBar() + '<div class="pj-hint" style="padding:14px;">載入中…</div>');
+    $('#btnOvPrint').hide();
+    openMask('ovMask');
+    api('doc_check_overview', {}).done(function (res) {
+        OV_DOC = res;
+        var s = res.summary || {}, defs = res.defs || {};
+        var h = ovTogBar()
+          + '<p class="pj-hint">每個專案綁定的每一個料號各一列，逐項核對六種文件是否已建立（判定與各專案自己的「文件檢核」分頁完全相同）。'
+          + '已結案／已終止／已退回的專案預設不計入。</p>';
+        h += '<div class="pj-kpi-row">'
+          + '<div class="pj-kpi"><div class="n">' + num(s.project_cnt) + '</div><div class="l">進行中專案</div></div>'
+          + '<div class="pj-kpi"><div class="n">' + num(s.part_cnt) + '</div><div class="l">應檢核料號數</div></div>'
+          + '<div class="pj-kpi"><div class="n" style="color:#4a9c5d;">' + num(s.complete_cnt) + '</div><div class="l">已齊全</div></div>'
+          + '<div class="pj-kpi"><div class="n" style="color:#DD5138;">' + num(s.missing_cnt) + '</div><div class="l">缺件中</div></div>'
+          + '</div>';
+        h += '<div class="pj-hint" style="margin:6px 0;">各文件類型缺件數：' + $.map(defs, function (v, k) {
+            return esc(v[0]) + ' ' + num((s.missing_by_kind || {})[k]) + ' 筆';
+        }).join('　｜　') + '</div>';
+        if (!(res.rows || []).length) {
+            h += '<div class="pj-hint">目前沒有需要檢核的專案（進行中的專案都還沒綁定料號）。</div>';
+        } else {
+            h += '<div class="pj-table-wrap"><table class="pj-table" id="ovDocTable"><thead><tr>'
+              + '<th style="width:80px;">專案代號</th><th>專案名稱</th><th style="width:100px;">客戶</th>'
+              + '<th style="width:90px;">料號</th>'
+              + $.map(defs, function (v) { return '<th style="width:60px;">' + esc(v[0]) + '</th>'; }).join('')
+              + '<th style="width:56px;">缺件數</th><th style="width:56px;"></th></tr></thead><tbody>';
+            $.each(res.rows, function (i, r) {
+                h += '<tr' + (num(r.missing) ? ' style="background:#FFF7EC;"' : '') + '>'
+                  + '<td><b>' + esc(r.project_no) + '</b></td><td class="l">' + esc(r.project_name) + '</td>'
+                  + '<td class="l">' + esc(r.customer_name || '') + '</td><td>' + esc(r.part_no || '') + '</td>'
+                  + $.map(Object.keys(defs), function (k) {
+                        return '<td>' + (r[k] ? '<span style="color:#4a9c5d;">✓</span>' : '<span style="color:#DD5138;">✗</span>') + '</td>';
+                    }).join('')
+                  + '<td>' + (num(r.missing) ? '<b style="color:#DD5138;">' + num(r.missing) + '</b>' : '0') + '</td>'
+                  + '<td><span class="pj-op" data-ovopen="' + num(r.project_id) + '">開啟</span></td></tr>';
+            });
+            h += '</tbody></table></div>';
+        }
+        $('#ovBody').html(h);
+    });
+}
+var OV_DOC = null;
+$(document).on('click', '[data-ovtog]', function () { OV_MODE = String($(this).data('ovtog')); openOverview(); });
+$(document).on('click', '[data-ovopen]', function () {
+    closeMask('ovMask');
+    openProject(num($(this).data('ovopen')), function () { $('.pj-tab[data-pane="paneChk"]').click(); });
+});
 $(document).on('click', '#btnOvPrint', function () {
     var rows = $.grep(LIST, function (r) { return r.status !== 'closed' && r.status !== 'terminated'; });
     var company = ((META.asdoc || {}).plan || {}).company || '';

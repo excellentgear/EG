@@ -72,6 +72,14 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         .pj-toolbar .btn-warm:hover { background:#d98a33; }
         .pj-role-badge { margin-left:auto; font-size:13px; color:#5b3a1e; background:#F7E0BD; border-radius:12px; padding:4px 12px; }
 
+        /* ── 跨專案總覽：進度／文件備齊 切換鈕＋KPI 卡片（比照 internal_audit.php 總覽風格） ── */
+        .pj-ovtog { height:30px; padding:0 14px; border:1px solid #D8BE93; border-radius:4px; background:#fff; color:#5b3a1e; cursor:pointer; }
+        .pj-ovtog.on { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        .pj-kpi-row { display:flex; flex-wrap:wrap; gap:10px; margin:8px 0 10px; }
+        .pj-kpi { flex:1; min-width:110px; border:1px solid #EADFC8; border-radius:6px; background:#FFFDF8; padding:10px 12px; text-align:center; }
+        .pj-kpi .n { font-size:24px; font-weight:bold; color:#8A5A2B; }
+        .pj-kpi .l { font-size:12px; color:#8a6d45; margin-top:2px; }
+
         /* ── 標籤（自訂，可按標籤篩選）── */
         .pj-tagbar { display:flex; flex-wrap:wrap; gap:5px; align-items:center; margin:0 0 10px; }
         .pj-tag { display:inline-block; padding:2px 10px; border-radius:11px; font-size:12px; cursor:pointer;
