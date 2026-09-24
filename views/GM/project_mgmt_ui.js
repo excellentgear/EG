@@ -886,7 +886,7 @@ $(document).on('click', '#btnSaveBase', function () {
 });
 /** 管理卡編輯區有開著、而且被動過才一起存（沒開就什麼都不做） */
 function saveCardIfDirty(cb) {
-    var cid = num($('#cardEditBox .sec').data('card'));
+    var cid = num($('#cardEditBox [data-cardbox]').data('cardbox'));
     if (!CARD_DIRTY || !cid || !$('#btnCardSave').length) { cb(false); return; }
     api('card_save', { card_id: cid, review_date: $('#ciDate').val(), items: JSON.stringify(collectCardItems()) }, 'POST')
         .done(function () { CARD_DIRTY = false; cb(true); })
@@ -2548,6 +2548,11 @@ $(document).on('click', '#btnCardNew', function () {
         setTimeout(function () { $('.pj-tab[data-pane="paneCard"]').click(); openCard(num(res.card_id)); }, 300);
     });
 });
+/* 注意：這支是「清單上那顆『開啟』」專用的委派，`data-card` 只可以掛在那顆可點的 span 上。
+   **絕對不要把 `data-card` 掛在包住整張卡的容器上**——容器一旦帶著這個屬性，卡片裡任何一次
+   點擊（勾選框、人員下拉、輸入框…）都會冒泡上來被這支攔截、整張卡重新抓一次重畫，
+   使用者看到的就是「勾完就跳掉」「下拉點開閃一下就不見」（2026-09-24 回報，真因就是這個；
+   展開卡的容器已改名為 `data-cardbox`）。 */
 $(document).on('click', '[data-card]', function () { openCard(num($(this).data('card'))); });
 $(document).on('click', '[data-carddel]', function () {
     if (!confirm('確定刪除這張管理卡？')) return;
@@ -2710,7 +2715,7 @@ function openCard(cardId) {
         var pns = $.map(res.parts || [], function (x) { return x.part_no || ''; }).join('、');
         /* 使用者 2026-09-24：「展開管理卡在右上角增加列印按鈕，避免按到上方列表的列印會按錯」——
            清單上每一列的「列印」跟「刪除」擠在一起，展開後就近提供第二個入口比較不會誤觸。 */
-        var h = '<div class="sec" data-card="' + c.card_id + '"><h5>管理卡 ' + esc(c.card_no || '')
+        var h = '<div class="sec" data-cardbox="' + c.card_id + '"><h5>管理卡 ' + esc(c.card_no || '')
           + '<span style="float:right;">'
           + '<span class="pj-op" id="btnCardPrintTop"><i class="fa fa-print"></i> 列印</span>'
           + ' <span class="pj-op" id="btnCardClose" style="font-weight:normal;">'
@@ -2793,12 +2798,12 @@ function collectCardItems() {
     return items;
 }
 $(document).on('click', '#btnCardSave', function () {
-    var cid = num($('#cardEditBox .sec').data('card'));
+    var cid = num($('#cardEditBox [data-cardbox]').data('cardbox'));
     api('card_save', { card_id: cid, review_date: $('#ciDate').val(), items: JSON.stringify(collectCardItems()) }, 'POST')
         .done(function (r) { CARD_DIRTY = false; alert(r.message); openCard(cid); });
 });
 $(document).on('click', '#btnCardSubmit', function () {
-    var cid = num($('#cardEditBox .sec').data('card'));
+    var cid = num($('#cardEditBox [data-cardbox]').data('cardbox'));
     /* 先存再送，避免使用者剛填的內容還沒寫進去就被判定「沒交代」 */
     api('card_save', { card_id: cid, review_date: $('#ciDate').val(), items: JSON.stringify(collectCardItems()) }, 'POST')
         .done(function () {
@@ -2810,7 +2815,7 @@ $(document).on('click', '#btnCardSubmit', function () {
         });
 });
 $(document).on('click', '#btnCardSubmitAdmin', function () {
-    var cid = num($('#cardEditBox .sec').data('card'));
+    var cid = num($('#cardEditBox [data-cardbox]').data('cardbox'));
     var payload = {
         card_id: cid,
         sign_date: $('#cardAdminDate').val() || '',
@@ -2830,11 +2835,11 @@ $(document).on('click', '#btnCardSubmitAdmin', function () {
         });
 });
 $(document).on('click', '#btnCardPrint, #btnCardPrintTop', function () {
-    api('card_get', { card_id: num($('#cardEditBox .sec').data('card')) }).done(function (res) { printCard(res); });
+    api('card_get', { card_id: num($('#cardEditBox [data-cardbox]').data('cardbox')) }).done(function (res) { printCard(res); });
 });
 /* 檢討日期改了就把自動列重算（推導欄位鐵則：來源一改就重算，不留舊值） */
 $(document).on('change', '#ciDate', function () {
-    var cid = num($('#cardEditBox .sec').data('card'));
+    var cid = num($('#cardEditBox [data-cardbox]').data('cardbox'));
     api('card_save', { card_id: cid, review_date: $(this).val(), items: JSON.stringify(collectCardItems()) }, 'POST')
         .done(function () { openCard(cid); });
 });
