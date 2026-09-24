@@ -487,7 +487,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
         <div class="m-bd">
             <div class="note-box">解鎖後 30 分鐘內可以連續代填代簽這張單的多個項目（簽章者、日期、內容皆可指定）。</div>
             <div class="fld"><label>操作確認密碼 <span style="color:var(--coral)">*</span></label>
-                <input type="password" id="qabUnlockPw" autocomplete="off"></div>
+                <input type="password" id="qabUnlockPw" autocomplete="off" data-eg-skip></div>
             <div class="err" id="qabUnlockErr"></div>
         </div>
         <div class="m-ft">
@@ -807,7 +807,14 @@ function render(){
     $('#dispNoPerm').toggle(!p.canDecide).text('您不在可決策的名單內（由管理員在清單頁「設定 → 決策者」指定部門與職稱）。');
     $('#dispWho').text(o.decided_name ? ('決策：' + o.decided_name + '　' + dispDate(o.disp_decided_at)) : '');
 
-    // ⑤ 總經理裁示
+    // ⑤ 總經理裁示：主管沒有勾「轉總經理裁示」就不出現（沒勾的話這區跟這張單無關，
+    // 一直顯示會讓人誤以為每張單都要填這裡；已經有裁示紀錄的舊單即使之後改掉也繼續看得到，不會憑空不見）
+    var escOptIds = (D.disp_opts || []).filter(function(op){ return Number(op.is_escalate) === 1; })
+                                        .map(function(op){ return Number(op.opt_id); });
+    var gmVisible = (o.disp_ids || []).some(function(id){ return escOptIds.indexOf(Number(id)) >= 0; })
+                     || !!(o.gm_ids && o.gm_ids.length) || !!o.gm_decided_at;
+    $('#secGm').toggle(gmVisible);
+
     $('.gchk').prop('checked', false);
     (o.gm_ids || []).forEach(function(id){ $('.gchk[value="' + id + '"]').prop('checked', true); });
     $('#g_deduct').prop('checked', Number(o.gm_deduct) === 1);
@@ -1053,6 +1060,9 @@ function renderSignTable(){
 }
 $(document).on('change', '#sgAll', function(){ renderSignTable(); });
 $('#btnQabSignUnlock').on('click', function(){ $('#qabUnlockPw').val(''); $('#qabUnlockErr').text(''); openMask('qabUnlockMask'); });
+$(document).on('keydown', '#qabUnlockPw', function(e){
+    if (e.which === 13 || e.keyCode === 13) { e.preventDefault(); $('#btnQabUnlockGo').click(); }
+});
 $('#btnQabUnlockGo').on('click', function(){
     var pw = $('#qabUnlockPw').val();
     if (!pw) { $('#qabUnlockErr').text('請輸入操作確認密碼'); return; }
