@@ -279,7 +279,7 @@ case 'get_order_process':
 case 'fetch_ext_for_part':
     needView($perms);
     $dsPk = (int)($_POST['part_d_id'] ?? $_GET['part_d_id'] ?? 0);
-    if (!$dsPk) jout(['success'=>true,'rows'=>[]]);
+    if (!$dsPk) jout(['success'=>true,'rows'=>[],'doc_date_earliest'=>null,'process_summary'=>'']);
     $ext = type_id_ctrl_fetch_ext_docs_for_part($db, $dsPk);
     $out = array_map(function($er){
         return [
@@ -295,7 +295,13 @@ case 'fetch_ext_for_part':
             'ref_broken'=>false, 'effective_date'=>$er['doc_date'], 'doc_no_text'=>$er['doc_name'], 'file_url'=>null,
         ];
     }, $ext);
-    jout(['success'=>true,'rows'=>$out]);
+    // 新增流程(尚未存檔)選定料號後，畫面上的「建立日期(最早外來文件日期)」與「製程」原本要存檔後
+    // 重新載入才看得到；這兩者只跟「這個料號」有關，選料號當下就算得出來，一併回傳讓前端即時顯示
+    // （2026-09-24 使用者回報「開啟全表填寫模式後才顯示」——其實是這裡沒有一起算、一起回）。
+    $dates = computeDocDates($out);
+    jout(['success'=>true,'rows'=>$out,
+          'doc_date_earliest'=>$dates['earliest'],
+          'process_summary'=>type_id_ctrl_process_header_summary($db, $dsPk)]);
 
 // ── 依料號自動產生/同步型態識別文件管制表(每料號一份，項目自標所屬製程)────
 case 'sync_part':

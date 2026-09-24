@@ -14,6 +14,7 @@
 // BOM/ERP 資料夾路徑、檔名編碼、檔名後綴標籤命中判定的唯一實作（本檔多處使用，
 // 放在檔案層級載入，不再散在各函式內 require——漏一處就是那支函式突然找不到函式）
 require_once __DIR__ . '/bom_dir_lib.php';
+require_once __DIR__ . '/date_fmt_lib.php';   // 顯示用日期一律 YYYY.MM.DD（ai-rules/20）
 
 /* 型態類別與連結來源的顯示標籤 —— 唯一登記處。
    原本寫在 src/store/ConfigIdDoc_API.php，但 2026-09-22 起內部稽核的「產品型態稽核表」
@@ -30,6 +31,12 @@ function type_id_ctrl_item_view(PDO $db, array $it): array {
     $hasRef = $it['ref_source'] && ($it['ref_attach_id'] || ($it['ref_source'] === 'bomfile' && !empty($it['ref_file_name'])));
     if ($hasRef) {
         $linked = type_id_ctrl_resolve_ref($db, $it['ref_source'], (int)$it['ref_attach_id'], (int)$it['ref_ds_pk'], $it['ref_file_name'] ?? null);
+    }
+    $printDocNo = ($linked && !empty($linked['doc_no_is_filename'])) ? '' : ($linked ? $linked['doc_name'] : $it['manual_doc_no']);
+    // 檔名退回顯示、列印本應空白的情況：若這份文件填了發行章日期（自家出的圖），改印
+    // 「發行章 YYYY.MM.DD」，總比整格空白看不出任何依據來得清楚。
+    if ($printDocNo === '' && $linked && !empty($linked['issue_stamp_date'])) {
+        $printDocNo = '發行章 ' . eg_fmt_date($linked['issue_stamp_date']);
     }
     return [
         'id' => (int)$it['id'],
@@ -51,8 +58,9 @@ function type_id_ctrl_item_view(PDO $db, array $it): array {
         'effective_date' => $linked ? $linked['doc_date'] : $it['manual_effective_date'],
         'doc_no_text' => $linked ? $linked['doc_name'] : $it['manual_doc_no'],
         // 列印版：連結列若沒有真正版次、退回顯示檔名時，檔名不算真正的「版別／文件編號」，
-        // 列印不印（畫面上仍用 doc_no_text 顯示檔名以利辨識；手動輸入列一律視為真實文件編號）
-        'print_doc_no' => ($linked && !empty($linked['doc_no_is_filename'])) ? '' : ($linked ? $linked['doc_name'] : $it['manual_doc_no']),
+        // 一般不印（畫面上仍用 doc_no_text 顯示檔名以利辨識；手動輸入列一律視為真實文件編號）；
+        // 有發行章日期時改印「發行章 YYYY.MM.DD」，見上方 $printDocNo 的計算
+        'print_doc_no' => $printDocNo,
         'file_url' => $linked ? $linked['file_url'] : null,
     ];
 }
@@ -245,6 +253,10 @@ function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $d
             'doc_name' => $hasRevision ? $r['revision'] : $r['doc_name'],
             'doc_no_is_filename' => !$hasRevision,
             'doc_date' => $r['issue_stamp_date'] ?: $r['doc_date'],
+            // 「自家出的圖」(如加工圖) 多半沒填版次，退回檔名充當畫面顯示，但列印時檔名不算真正的
+            // 版別/文件編號故印空白；有發行章日期時改印「發行章 YYYY.MM.DD」取代空白
+            // （2026-09-24 使用者要求：列印看不到任何依據，加工圖那一列整格空白）。
+            'issue_stamp_date' => ($r['issue_stamp_date'] !== null && $r['issue_stamp_date'] !== '') ? $r['issue_stamp_date'] : null,
             'file_url' => '../../src/store/Part_Attachment_API.php?action=download&id=' . $attachId,
         ];
     }

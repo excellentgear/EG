@@ -889,10 +889,15 @@ EGPartPicker.attach(document.getElementById('fPartNo'), {
     onSelect: function(row){
         $('#fPartDId').val(row.d_id);
         $('#fCustomerName').val(row.customer_name||row.customer_id||''); $('#fCustomerId').val(row.customer_id||'');
-        // 新增流程(尚未存檔)：選定料號後自動列出外來文件清單中此料號的資料到項目列
+        // 新增流程(尚未存檔)：選定料號後自動列出外來文件清單中此料號的資料到項目列，
+        // 並即時顯示「建立日期(最早外來文件日期)」與「製程」——不必等按下儲存才看得到
         if (!CUR_ID) {
             $.post(API, {action:'fetch_ext_for_part', part_d_id:row.d_id}, function(res){
-                if (res && res.success && res.rows.length){ ITEMS = res.rows; renderItems(); }
+                if (res && res.success){
+                    if (res.rows.length){ ITEMS = res.rows; renderItems(); }
+                    $('#fEarliestDate').val(res.doc_date_earliest ? fmtDate(res.doc_date_earliest) : '—');
+                    $('#fProcessSummary').val(res.process_summary ? res.process_summary : '—');
+                }
             }, 'json');
         }
     }
@@ -1129,6 +1134,7 @@ function printDoc(id, onDone){
             + (res.as_doc_no ? " @bottom-right{ content:'"+String(res.as_doc_no).replace(/['\\]/g,'')+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
             + '}';
         var w = window.open('', '_blank');
+        if (!w){ alert('瀏覽器封鎖了快顯視窗，無法開啟列印畫面。請允許本網站的快顯視窗後再試一次。'); if (onDone) onDone(); return; }
         w.document.write('<html><head><meta charset="utf-8"><title>型態識別文件管制表</title><style>'+css+'</style></head><body>'+body
             +'<scr'+'ipt>window.onload=function(){'
             +'var onePageA4=(297-30)*96/25.4;'
