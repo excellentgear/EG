@@ -241,7 +241,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $history = [];
             try {
                 $hq = "SELECT f.qc_form_id, f.batch_no, f.round_no, f.incoming_qty, f.sample_qty, f.ng_qty, f.check_result,
-                              f.check_date, f.created_at, f.created_by, f.main_remark,
+                              f.check_date, f.created_at, f.created_by, f.main_remark, f.insp_kind,
                               f.edit_unlocked, f.last_edited_by, f.last_edited_at,
                               f.inspector_by, f.approved_by, f.approved_at,
                               f.ncr_decision, f.ncr_skip_reason, f.abnormal_order_id, qa.abnormal_order_no,

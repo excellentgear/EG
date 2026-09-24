@@ -1233,6 +1233,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .batch-chip.active { background:var(--ink2); border-color:var(--ink2); color:#fff; }
     .st-ok { color:var(--amber-d); } .st-ng { color:var(--coral); } .st-redo { color:#a9772f; } .st-wait { color:#8a6a45; }
     .batch-chip.active .st-ok,.batch-chip.active .st-ng,.batch-chip.active .st-redo,.batch-chip.active .st-wait { color:#fff; }
+    /* 檢驗性質徽章（首件／末件，像按鈕般有底色；暖色調色盤既有色，禁用紅色避免跟不良/異常混淆） */
+    .insp-kind-badge { display:inline-block; margin-top:2px; padding:1px 7px; border-radius:10px; font-size:11px; font-weight:bold; line-height:16px; }
+    .insp-kind-badge.ikb-first { background:#F0A24B; color:#4E2C0B; }
+    .insp-kind-badge.ikb-last { background:#8A5A2B; color:#fff; }
     .search-result-item { cursor:pointer; padding:8px 10px; border-bottom:1px solid var(--line); }
     .search-result-item:hover { background:var(--cream); }
     .page-title .dropdown-menu { right:0 !important; left:auto !important; }
@@ -4486,6 +4490,7 @@ $(function(){
             state.batches=[{ no:1, status:(h.check_result==='NG'?'NG':'OK'), rounds:[{
                 date:String(h.check_date||'').substring(0,16), status:(h.check_result==='NG'?'NG':'OK'),
                 qc_form_id:h.qc_form_id, round_no:1, ng_qty:h.ng_qty||0, incoming_qty:h.incoming_qty||0,
+                insp_kind:(h.insp_kind||'NORMAL'),
                 inspector_name:h.creator_name||'', approved_name:h.approved_name||'', approved_at:h.approved_at||'',
                 edit_unlocked:h.edit_unlocked, self_grace:(res.self_grace?1:0), edit_log_count:0,
                 ncr_decision:h.ncr_decision, abnormal_order_id:h.abnormal_order_id, abnormal_order_no:h.abnormal_order_no
@@ -4506,6 +4511,14 @@ $(function(){
         return ({ OK:'<span class="st-ok">✔合格</span>', NG:'<span class="st-ng">✘不良</span>',
                   REDO:'<span class="st-redo">⟳重做中</span>', WAIT:'<span class="st-wait">…待驗</span>' })[s]||'';
     }
+    // 檢驗性質徽章（首件／末件才顯示，一般不特別標示）：像按鈕般有底色，兩者顏色不同，
+    // 依 ai-rules/10 只用暖色系（禁用紅色，避免跟不良/異常的珊瑚紅混淆）——
+    // 首件＝琥珀橘、末件＝暖棕，皆為調色盤既有色，不自創新色。
+    function inspKindBadge(kind){
+        if(kind==='FIRST') return '<br><span class="insp-kind-badge ikb-first">首件</span>';
+        if(kind==='LAST')  return '<br><span class="insp-kind-badge ikb-last">末件</span>';
+        return '';
+    }
     function buildBatchesFromHistory(history){
         state.batches=[]; var byBatch={};
         (history||[]).forEach(function(h){
@@ -4515,6 +4528,7 @@ $(function(){
                 date:(h.check_date||h.created_at||''), status:(h.check_result==='NG'?'NG':'OK'),
                 qc_form_id:h.qc_form_id, round_no:(h.round_no||1), ng_qty:(h.ng_qty||0),
                 incoming_qty:(parseInt(h.incoming_qty)||0), sample_qty:(parseInt(h.sample_qty)||0),
+                insp_kind:(h.insp_kind||'NORMAL'),
                 inspector_name:h.inspector_name||'', approved_name:h.approved_name||'', approved_at:h.approved_at||'',
                 edit_unlocked:(parseInt(h.edit_unlocked)||0), self_grace:(parseInt(h.self_grace)||0),
                 edit_log_count:(parseInt(h.edit_log_count)||0),
@@ -4538,12 +4552,23 @@ $(function(){
         $('#batch-summary').text('（目前批次'+(b?b.no:1)+'，已檢驗 '+(b?b.rounds.length:0)+' 次）');
         renderHistory();
         updatePendingBar();   // 批次/送驗數異動了，「尚未檢驗/訂單數」要跟著重算，不必整包重新載入
+        applyPendingQtyDefault();
     }
     function updatePendingBar(){
         var $el=$('#ctx-pending');
         if(!$el.length || ctx.adhoc) return;
         var ps=pendingSummary();
         $el.attr('title','訂單數 '+ps.order+' 件，已送驗 '+ps.used+' 件').text(ps.left+' / '+ps.order+'pcs');
+    }
+    // 切到「還沒有任何檢驗紀錄」的批次（新到貨批次剛建立、或本來就是第一批）時，
+    // 「本批送驗數」自動帶入「尚未檢驗」的剩餘量，不必自己心算訂單數減掉已送驗的量
+    // （使用者 2026-09-24 回報：批次2應該帶入69卻沒有）。已有紀錄的批次不動這個欄位
+    // ——那是要給「修改」用的，改由 openEditRecord() 帶回原本存檔的值。
+    function applyPendingQtyDefault(){
+        if(ctx.adhoc || state.editFormId) return;
+        var b=state.batches[state.curBatch];
+        if(b && b.rounds && b.rounds.length) return;
+        $('#inp-qty').val(pendingSummary().left);
     }
     $('#btn-toggle-batch').on('click', function(e){
         e.preventDefault();
@@ -4580,7 +4605,7 @@ $(function(){
                 else if(state.can_fill || state.is_supervisor) ncr='<button class="btn btn-xs btn-coral act-open-ncr" data-id="'+r.qc_form_id+'"><i class="fa fa-file-text-o"></i> 開異常單</button>';
                 else ncr='<span class="label label-default">未開單</span>';
             }
-            return '<tr class="history-row"><td>第'+(r.round_no||(i+1))+'次</td><td>'+esc(r.date)+insp+appr+edited+'</td><td>'+statusLabel(r.status)+
+            return '<tr class="history-row"><td>第'+(r.round_no||(i+1))+'次'+inspKindBadge(r.insp_kind)+'</td><td>'+esc(r.date)+insp+appr+edited+'</td><td>'+statusLabel(r.status)+
                    '</td><td>'+(r.incoming_qty||0)+' / '+(r.ng_qty||0)+'</td><td>'+ncr+'</td><td>'+act+'</td></tr>';
         }).join('');
         $('#batch-history').html(
@@ -5478,7 +5503,7 @@ $(function(){
                 state.bfStage=null; renderBfStageBanner();
                 flushSampleChanges(res.qc_form_id);
                 state.batches[0].rounds.push({ date:'剛剛', status:s.check_result, qc_form_id:res.qc_form_id, round_no:1, ng_qty:s.ng_qty,
-                                               incoming_qty:(parseInt($('#inp-qty').val())||0) });
+                                               incoming_qty:(parseInt($('#inp-qty').val())||0), insp_kind:state.inspKind });
                 state.batches[0].status=s.check_result;
                 renderBatches();
                 function done(){
@@ -5506,7 +5531,7 @@ $(function(){
             flushSampleChanges(res.qc_form_id);
             b.rounds.push({ date:'剛剛', status:(asRedo?'NG':s.check_result), qc_form_id:res.qc_form_id,
                             round_no:(b.rounds.length+1), ng_qty:s.ng_qty,
-                            incoming_qty:(parseInt($('#inp-qty').val())||0) });
+                            incoming_qty:(parseInt($('#inp-qty').val())||0), insp_kind:state.inspKind });
             b.status = asRedo ? 'REDO' : s.check_result;
             renderBatches();
             var hasOpener = window.opener && !window.opener.closed;
