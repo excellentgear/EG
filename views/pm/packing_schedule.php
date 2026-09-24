@@ -563,13 +563,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $okQty = $orderQty - $ngQty;
             if ($okQty < 0) throw new Exception('NG數量不可大於數量');
 
-            // 來料不良退回數＋加工不良數 不得大於 NG總數（前端已擋一次，這裡同規則再擋一次＝鐵律8）
-            $ngReturnMaterial = intval((is_array($packagingData) ? ($packagingData['ng_return_material'] ?? 0) : 0));
-            $ngProcessDefect = intval((is_array($packagingData) ? ($packagingData['ng_process_defect'] ?? 0) : 0));
-            if ($ngReturnMaterial + $ngProcessDefect > $ngQty) {
-                throw new Exception('來料不良退回數 + 加工不良數 不可大於 NG總數(' . $ngQty . ')');
-            }
-
             // 直接出貨／成品入庫方式檢核（前端已擋一次，這裡同規則再擋一次＝鐵律8）
             if ($isFullShip) {
                 if ($shipNowQty <= 0) throw new Exception('請輸入本次出貨數量');
@@ -592,6 +585,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $bi = $biStmt->fetch(PDO::FETCH_ASSOC);
             if (!$bi) throw new Exception('查無此製程資料');
             $bomTotalQty = $bi['bom_total_qty'] !== null ? (int)$bi['bom_total_qty'] : null;
+
+            // 來料不良退回數＋加工不良數 不得大於 NG總數（前端已擋一次，這裡同規則再擋一次＝鐵律8）。
+            // NG總數＝原始BOM總數(bomTotalQty)與良品數(orderQty，已扣除先前確認報廐量)之間的差額
+            // （這一批本來就已知的NG／報廐），再加上這次外觀檢驗新發現的異常數量($ngQty)——
+            // 使用者拍板：兩者合計才是這一批真正的NG總數，不是只看外觀檢驗這一段。
+            $ngReturnMaterial = intval((is_array($packagingData) ? ($packagingData['ng_return_material'] ?? 0) : 0));
+            $ngProcessDefect = intval((is_array($packagingData) ? ($packagingData['ng_process_defect'] ?? 0) : 0));
+            $preKnownNg = ($bomTotalQty !== null) ? max(0, $bomTotalQty - $orderQty) : 0;
+            $realNgTotal = $preKnownNg + $ngQty;
+            if ($ngReturnMaterial + $ngProcessDefect > $realNgTotal) {
+                throw new Exception('來料不良退回數 + 加工不良數 不可大於 NG總數(' . $realNgTotal . ')');
+            }
 
             // 判定結果（合格/不合格/待判定，擇一）：未手動勾選時，僅在「良品數＝BOM總數」（全數完成且零NG）
             // 才自動認定合格，其餘情況（有NG、尚未收齊整張BOM數量、查無BOM總數可比對）一律留待判定，
@@ -1288,7 +1293,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         <input type="number" id="f-order-qty" class="form-control input-sm" readonly
                             style="display:inline-block;width:100px;background:#F3ECDF;color:#8a6d45;cursor:default;"
                             title="自動帶入＝BOM總數扣掉已結案配發報廐單號的確認報廐量，反灰不可手改（避免不小心蓋掉報廐扣減）">
-                        <span class="text-muted small">原總數 <span id="f-order-qty-total">-</span>（因BOM可能分批送包裝，此為整張BOM的總數，非本次數量）</span>
+                        <div class="text-muted small" style="margin-top:4px;">原總數：<span id="f-order-qty-total">-</span>（因BOM可能分批送包裝，此為整張BOM的總數，非本次數量）</div>
                     </div>
                     <div class="col-md-3"><strong>系統交期：</strong><span id="f-delivery"></span></div>
                 </div>
@@ -1527,7 +1532,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <ol>
                     <li>點擊清單中任一列開啟填寫視窗。</li>
                     <li>填寫外觀檢驗項目、防護與容器資訊。</li>
-                    <li>若本批數量有一部分要<strong>直接出貨</strong>，勾選「直接出貨」並填入本次出貨數量；若還有剩餘數量，需再選擇成品入庫方式。可一併填入「來料不良退回數」「加工不良數」細分NG組成，兩者相加不可大於NG總數。</li>
+                    <li>若本批數量有一部分要<strong>直接出貨</strong>，勾選「直接出貨」並填入本次出貨數量；若還有剩餘數量，需再選擇成品入庫方式。可一併填入「來料不良退回數」「加工不良數」細分NG組成，兩者相加不可大於NG總數（＝原總數與良品數的差額，加上外觀檢驗這次新發現的異常數量）。</li>
                     <li>若「判定結果」不手動勾選，存檔時系統會自動判定：良品數＝BOM總數（全數完成且零NG）才自動判為<strong>合格</strong>，其餘一律列為<strong>待判定</strong>，需人工確認後手動改成合格或不合格。</li>
                     <li>尚未填完可按「<strong>暫存</strong>」，資料會保留、BOM 仍留在待包裝清單（標示「暫存中」），可稍後回來繼續填寫。</li>
                     <li>填完按「<strong>完成包裝</strong>」即結案：紀錄鎖定不可再修改、BOM 從待包裝清單移除並列入「已結案清單」、同時通知生管可安排出貨。</li>
@@ -1975,24 +1980,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             checkNgBreakdown(totalNg);
         }
 
-        // 來料不良退回數＋加工不良數 不得大於 NG總數（即時檢查，存檔前再擋一次＝鐵律8）
+        // 來料不良退回數＋加工不良數 不得大於 NG總數（即時檢查，存檔前再擋一次＝鐵律8）。
+        // NG總數＝原始BOM總數與良品數（已扣除先前確認報廐量）之間的差額（這批本來就已知的NG／報廐），
+        // 加上這次外觀檢驗新發現的異常數量——與後端 save_result 同一套公式（使用者拍板）。
         function ngBreakdownSum() {
             return (parseFloat($('#pkg-ng-return-material').val()) || 0) + (parseFloat($('#pkg-ng-process-defect').val()) || 0);
         }
-        function checkNgBreakdown(totalNg) {
-            if (totalNg == null) {
-                totalNg = 0;
-                $('.pkg-ng-qty').each(function () { totalNg += (parseFloat($(this).val()) || 0); });
+        function realNgTotal(appearanceNg) {
+            if (appearanceNg == null) {
+                appearanceNg = 0;
+                $('.pkg-ng-qty').each(function () { appearanceNg += (parseFloat($(this).val()) || 0); });
             }
+            var bomTotal = currentBomTotalQty;
+            var orderQty = parseFloat($('#f-order-qty').val()) || 0;
+            var preKnownNg = (bomTotal != null) ? Math.max(0, bomTotal - orderQty) : 0;
+            return { total: preKnownNg + appearanceNg, preKnownNg: preKnownNg, appearanceNg: appearanceNg, bomTotal: bomTotal, orderQty: orderQty };
+        }
+        function checkNgBreakdown(appearanceNg) {
+            var ng = realNgTotal(appearanceNg);
             var sum = ngBreakdownSum();
             var $hint = $('#pkg-ng-breakdown-hint');
             var $m = $('#pkg-ng-return-material'), $p = $('#pkg-ng-process-defect');
-            if (sum > totalNg) {
-                $hint.text('來料不良退回數 + 加工不良數 = ' + sum + '，不可大於 NG總數(' + totalNg + ')').addClass('text-danger');
+            // preKnownNg>0 才附上組成明細（原總數 vs 良品數的差額不是使用者當下看得到的數字，容易誤解成 0）；
+            // preKnownNg=0 時 NG總數就等於外觀檢驗表已經印出來的異常數量，不必重複解釋
+            var detail = ng.preKnownNg > 0
+                ? '（原總數' + ng.bomTotal + ' - 良品數' + ng.orderQty + ' = ' + ng.preKnownNg + '　+　外觀檢驗異常' + ng.appearanceNg + '）'
+                : '';
+            if (sum > ng.total) {
+                $hint.text('來料不良退回數 + 加工不良數 = ' + sum + '，不可大於 NG總數(' + ng.total + ')' + detail).addClass('text-danger');
                 $m.add($p).addClass('has-error-border');
                 return false;
             }
-            $hint.text('').removeClass('text-danger');
+            $hint.text(sum > 0 ? ('NG總數：' + ng.total + detail) : detail).removeClass('text-danger');
             $m.add($p).removeClass('has-error-border');
             return true;
         }
@@ -2142,7 +2161,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (shipNowQty > okQty) { alert('本次出貨數量不可大於可出/入庫數量(' + okQty + ')'); $('#pkg-ship-now-qty').focus(); return; }
                 if (warehouseQty > 0 && !storageMethod) { alert('尚有 ' + warehouseQty + ' 個需要入庫，請選擇成品入庫方式'); return; }
             }
-            if (!checkNgBreakdown(totalNg)) { alert('來料不良退回數 + 加工不良數 不可大於 NG總數(' + totalNg + ')'); $('#pkg-ng-return-material').focus(); return; }
+            if (!checkNgBreakdown(totalNg)) { alert('來料不良退回數 + 加工不良數 不可大於 NG總數(' + realNgTotal(totalNg).total + ')'); $('#pkg-ng-return-material').focus(); return; }
             if (currentMode === 'backfill') {
                 if (!$('#f-record-date').val()) { alert('請選擇補登日期'); $('#f-record-date').focus(); return; }
             }
