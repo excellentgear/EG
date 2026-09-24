@@ -1165,7 +1165,7 @@ function autoKindsOf(t) {
     if (has('PFMEA')) out.push('doc_pfmea');
     if (has('SOP')) out.push('doc_sop');
     if (has('SIP')) out.push('doc_sip');
-    if (has('客供') || has('進料')) out.push('incoming_qc');
+    if (has('進料')) out.push('incoming_qc');   // 只認「進料」不認「客供」，見後端 prj_auto_kinds_of() 註解
     if (has('架機') || has('修砂')) out.push('setup');
     if (has('整批') || has('完工')) out.push('mass_done');
     if (has('最終檢驗')) out.push('final_qc');
@@ -1470,12 +1470,14 @@ function taskState(t, asof) {
     if (ps && ps <= asof) return 'doing';
     return 'pending';
 }
+var STATE_LABEL_MAP = { done: ['已完成', 'st-approved'], overdue: ['逾期', 'st-rejected'],
+    doing: ['進行中', 'st-submitted'], pending: ['未開始', 'st-draft'], noplan: ['未排程', 'st-draft'] };
 function stateBadge(s) {
-    var m = { done: ['已完成', 'st-approved'], overdue: ['逾期', 'st-rejected'],
-              doing: ['進行中', 'st-submitted'], pending: ['未開始', 'st-draft'], noplan: ['未排程', 'st-draft'] };
-    var x = m[s] || m.pending;
+    var x = STATE_LABEL_MAP[s] || STATE_LABEL_MAP.pending;
     return '<span class="st ' + x[1] + '">' + x[0] + '</span>';
 }
+/** 純文字版（列印用，不需要彩色籤） */
+function stateText(s) { return (STATE_LABEL_MAP[s] || STATE_LABEL_MAP.pending)[0]; }
 
 function groupTasks(goals, tasks) {
     var out = [];
@@ -1989,10 +1991,46 @@ function planSeedFirstStart() {
     planRowRecalc($tr, 'ps');
 }
 
+/* 這個專案是不是多製程（使用者 2026-09-23：只有多製程才需要指定 FAI／最終檢驗對應哪一道，
+   單製程專案不必多此一舉，直接用全部候選即可）。 */
+function taskMultiProcess() {
+    var seen = {}; var n = 0;
+    $.each((CUR && CUR.processes) || [], function (i, x) { if (!seen[x.process_no]) { seen[x.process_no] = 1; n++; } });
+    return n > 1;
+}
+/* 讀這一列的「對應製程／製程大類」——選單沒畫出來（單製程專案）就沿用原值，不會因為
+   暫時看不到選單就把既有設定洗掉。 */
+function rowLinkProc($tr) { var $s = $tr.find('.t-linkproc'); return $s.length ? (num($s.val()) || null) : (num($tr.data('linkproc0')) || null); }
+function rowLinkType($tr) { var $s = $tr.find('.t-linktype'); return $s.length ? (num($s.val()) || null) : (num($tr.data('linktype0')) || null); }
+/* FAI 對應製程（單一道，精確比對）：候選為本專案目前的製程清單（BOM 帶入＋手動建立皆可選） */
+function taskProcessOptions(selected) {
+    var seen = {}, h = '<option value="">（未指定，全部候選都算）</option>';
+    $.each((CUR && CUR.processes) || [], function (i, x) {
+        var no = num(x.process_no);
+        if (!no || seen[no]) return;
+        seen[no] = 1;
+        h += '<option value="' + no + '"' + (num(selected) === no ? ' selected' : '') + '>'
+           + esc((x.process_name || ('製程' + no)) + (x.bom ? '（' + x.bom + '）' : '')) + '</option>';
+    });
+    return h;
+}
+/* 最終檢驗對應製程大類（一個大類可能好幾道製程都算） */
+function taskProcessTypeOptions(selected) {
+    var seen = {}, h = '<option value="">（未指定，全部候選都算）</option>';
+    $.each((CUR && CUR.processes) || [], function (i, x) {
+        var tid = num(x.process_type_id);
+        if (!tid || seen[tid]) return;
+        seen[tid] = 1;
+        h += '<option value="' + tid + '"' + (num(selected) === tid ? ' selected' : '') + '>'
+           + esc(x.process_type_name || ('大類' + tid)) + '</option>';
+    });
+    return h;
+}
 function planRowHtml(t, i) {
     t = t || {};
     var kind  = String(t.task_kind || '');
     var isFai = (kind === 'fai');
+    var isFinalQc = /最終檢驗/.test(String(t.task_name || ''));
     var isSys = (kind !== '');           // fai/rca/delta_fai 都是系統環節，名稱不可改、不可刪
     var did = num(t.owner_dept_id) || guessOwnerDept(num(t.owner_id));
     var dOpt = taskDeptOptions(did), pOpt = taskOwnerOptions(did, num(t.owner_id), true);
@@ -2002,11 +2040,20 @@ function planRowHtml(t, i) {
     /* 新列預設跟著自動；既有列看資料庫存的（沒有這個欄位的舊資料視同自動） */
     var pgAuto = (t.progress_auto === undefined || t.progress_auto === null) ? true : !!num(t.progress_auto);
     return '<tr data-task="' + num(t.task_id) + '" data-kind="' + esc(kind) + '"'
+      + ' data-linkproc0="' + num(t.link_process_no) + '" data-linktype0="' + num(t.link_process_type_id) + '"'
       + ' data-pe0="' + esc(t.plan_end || '') + '" data-ps0="' + esc(t.plan_start || '') + '">'
       + '<td>' + (i + 1) + '</td>'
       + '<td><input type="text" class="t-name' + (isSys ? ' ro-auto' : '') + '" value="'
       + esc(t.task_name || '') + '"' + (isSys ? ' readonly title="系統環節，名稱不可修改"' : '') + '>'
       + (isFai ? '<div style="margin-top:3px;">' + faiBadgeHtml() + '</div>' : '')
+      /* 多製程時 FAI／最終檢驗要指定對應到哪一道（或哪個大類），否則好幾道製程的紀錄會混在一起
+         讓人挑錯（使用者 2026-09-23 明確要求）。單製程專案不顯示，維持原本簡潔。 */
+      + ((isFai && taskMultiProcess())
+            ? '<div style="margin-top:3px;"><label style="font-size:11px;color:#8a6d45;">對應製程</label>'
+              + '<select class="t-linkproc" style="font-size:12px;">' + taskProcessOptions(t.link_process_no) + '</select></div>' : '')
+      + ((isFinalQc && taskMultiProcess())
+            ? '<div style="margin-top:3px;"><label style="font-size:11px;color:#8a6d45;">認列製程大類</label>'
+              + '<select class="t-linktype" style="font-size:12px;">' + taskProcessTypeOptions(t.link_process_type_id) + '</select></div>' : '')
       + (kind === 'rca' ? '<div style="margin-top:3px;">' + carLinkHtml() + '</div>' : '')
       + (kind === 'delta_fai' ? '<div class="pj-hint" style="margin-top:3px;">矯正後只驗有變動的特性</div>' : '')
       /* 核准前不畫「實際開始／實際完成」兩欄（反正也不能填），版面讓給「主要任務」；
@@ -2351,6 +2398,7 @@ function planSyncToCur() {
                 progress_auto: $r.find('.t-pgauto').is(':checked') ? 1 : 0,
                 is_milestone: $r.find('.t-ms').is(':checked') ? 1 : 0,
                 dep_mode: depModeOf($r, ti),
+                link_process_no: rowLinkProc($r), link_process_type_id: rowLinkType($r),
                 sort_order: ti
             });
         });
@@ -2404,7 +2452,8 @@ function savePlan(pid, cb) {
                 progress: $(this).find('.t-pg').val(),
                 progress_auto: $(this).find('.t-pgauto').is(':checked') ? 1 : 0,
                 is_milestone: $(this).find('.t-ms').is(':checked') ? 1 : 0,
-                dep_mode: depModeOf($(this), $(this).index())
+                dep_mode: depModeOf($(this), $(this).index()),
+                link_process_no: rowLinkProc($(this)), link_process_type_id: rowLinkType($(this))
             });
         });
     });
@@ -2492,6 +2541,9 @@ $(document).on('click', '[data-carddel]', function () {
 $(document).on('click', '[data-cardprint]', function () {
     api('card_get', { card_id: num($(this).data('cardprint')) }).done(function (res) { printCard(res); });
 });
+/* 使用者 2026-09-23：「管理卡通常會陸續建立多筆，所以要可以合起與點選展開，避免畫面過度混亂」——
+   openCard() 本來就是一次只展開一張（換開別張會蓋掉），這裡補的是「收合回列表」的出口。 */
+$(document).on('click', '#btnCardClose', function () { $('#cardEditBox').empty(); });
 
 /* ── 管理卡表身：階段（可展開收合）＋ 底下的核心作業項目 ──
    欄位依使用者指定：項次／專案階段與核心作業項目／主辦·承辦人／預計完成日／實際完成日／
@@ -2501,6 +2553,11 @@ $(document).on('click', '[data-cardprint]', function () {
 function cardItemsHtml(res, ro) {
     var tasks = res.tasks || [], items = (res.card || {}).items || [];
     var stMap = res.task_status || META.task_status || {};
+    /* 使用者 2026-09-23：「依照檢討日期顯示日期內完成之項目，起始日期超過檢討日期者一律在此
+       管制卡上顯示未開始」——管理卡是某一天的存照，不是即時現況；判定一律改用這張卡自己的
+       檢討日期當基準（taskState 的 asof 參數本來就會把 plan_start 晚於基準日的項目判成
+       pending／未開始，換成檢討日期即符合要求），不可以用 META.today（今天）。 */
+    var revDate = (res.card || {}).review_date || META.today;
     var h = '<div style="overflow-x:auto;"><table class="sub-tbl" id="cardItems"><thead><tr>'
       + '<th style="width:46px;">項次</th><th>專案階段與核心作業項目</th>'
       + '<th style="width:130px;">主辦／承辦人</th><th style="width:96px;">預計完成日</th>'
@@ -2511,12 +2568,12 @@ function cardItemsHtml(res, ro) {
     $.each(items, function (i, it) {
         var gid = num(it.goal_id);
         var gt = $.grep(tasks, function (t) { return num(t.goal_id) === gid; });
-        var done = gt.length ? $.grep(gt, function (t) { return taskState(t, META.today) === 'done'; }).length : 0;
+        var done = gt.length ? $.grep(gt, function (t) { return taskState(t, revDate) === 'done'; }).length : 0;
         var allDone = gt.length > 0 && done >= gt.length;
         var open = allDone;                       // 已完成的展開、未完成的收合
         var pct = gt.length ? Math.round(done * 100 / gt.length) : 0;
 
-        h += '<tr class="cd-goal" data-cg="' + gid + '"><td class="c">' + (i + 1) + '</td>'
+        h += '<tr class="cd-goal" data-cg="' + gid + '" data-open="' + (open ? 1 : 0) + '"><td class="c">' + (i + 1) + '</td>'
           + '<td class="l"><span class="cd-tog" data-cgtog="' + gid + '">'
           + '<i class="fa fa-caret-' + (open ? 'down' : 'right') + '"></i></span> <b>' + esc(it.goal_name || '') + '</b>'
           + '<span class="pj-hint">　' + done + '/' + gt.length + ' 項完成（' + pct + '%）</span></td>'
@@ -2531,7 +2588,7 @@ function cardItemsHtml(res, ro) {
         $.each(gt, function (ti, t) {
             var ev = parseEvidence(t.evidence_json);
             var deliver = $.map(ev, function (e) { return String(e.label || '').replace(/<[^>]*>/g, ''); });
-            var stt = taskState(t, META.today);
+            var stt = taskState(t, revDate);
             h += '<tr class="cd-task cd-of-' + gid + '"' + (open ? '' : ' style="display:none;"') + '>'
               + '<td class="c">' + (i + 1) + '.' + (ti + 1) + '</td>'
               + '<td class="l" style="padding-left:22px;">' + esc(t.task_name)
@@ -2539,13 +2596,11 @@ function cardItemsHtml(res, ro) {
               + '<td>' + esc(t.owner_dept_name || '') + '<br><span class="pj-hint">'
               + esc(t.owner_name || '排班人員') + '</span></td>'
               + '<td class="c">' + dispDate(t.plan_end) + '</td>'
-              + '<td class="c">' + dispDate(t.act_end) + '</td>'
-              + '<td class="l">' + (deliver.length
+              + '<td class="c">' + (stt === 'done' ? dispDate(t.act_end) : '－') + '</td>'
+              + '<td class="l">' + (stt === 'done' && deliver.length
                     ? esc(deliver.join('；'))
-                    : '<span class="pj-hint">' + (t.act_end ? '（未登錄佐證）' : '－') + '</span>') + '</td>'
-              + '<td class="c">' + stateBadge(stt)
-              + (t.reported_by_name ? '<br><span class="pj-hint">' + esc(t.reported_by_name) + '</span>' : '')
-              + '</td></tr>';
+                    : '<span class="pj-hint">' + (stt === 'done' ? '（未登錄佐證）' : '－') + '</span>') + '</td>'
+              + '<td class="c">' + stateBadge(stt) + cardSignerHtml(t) + '</td></tr>';
         });
 
         /* 這個階段的管理卡填寫欄（問題／後續辦法／備註）跟著階段一起收合 */
@@ -2572,6 +2627,15 @@ function cardItemsHtml(res, ro) {
     });
     return h + '</tbody></table></div>';
 }
+/* 管理卡「狀態／簽核」欄要印的簽核人（使用者 2026-09-23 要求：一律是承辦人或其單位主管，
+   不可以顯示成補歷史資料時實際按下儲存的那個人——`reported_by_name` 記的正是「誰按的」，
+   補資料時十之八九是管理員或專案負責人代填，印出來變成他們在幫每一項工作簽核，完全不對）。
+   這裡刻意只用 `owner_name`（該步驟的承辦人，本來就是另一份可靠來源），沒指派負責人的
+   步驟就不印名字（寧可留白也不要印錯人；要印單位主管需要後端查組織圖，屬於下一步）。 */
+function cardSignerHtml(t) {
+    return t.owner_name ? ('<br><small>' + esc(t.owner_name) + '</small>') : '';
+}
+
 /** 一個階段的預計／實際完成日＝底下任務的最晚那一天（全部做完才算這個階段完成） */
 function cardGoalDate(tasks, field, last) {
     var v = '';
@@ -2582,11 +2646,17 @@ function cardGoalDate(tasks, field, last) {
     });
     return v;
 }
+/* 展開狀態一律用 tr.cd-goal 自己的 data-open 記，不要用 jQuery :visible 判斷目前是不是展開——
+   :visible 是看「實際算出來的呈現」（連祖先元素有沒有被藏起來都算），管理卡剛畫出來時若祖先容器
+   還在轉場（跳窗淡入、分頁切換）中，:visible 會誤判整批都是「目前是收合」，點下去算出的 show 值
+   就會跟畫面上的箭頭方向對不起來，變成「點開又立刻算成要收合」（使用者 2026-09-23 回報第三階段
+   點展開會跳一下又收起來）。改成直接讀/寫這一列自己存的狀態，不受祖先顯示狀態影響。 */
 $(document).on('click', '[data-cgtog]', function () {
+    var $hdr = $(this).closest('tr.cd-goal');
     var gid = num($(this).data('cgtog'));
-    var $rows = $('.cd-of-' + gid);
-    var show = !$rows.first().is(':visible');
-    $rows.toggle(show);
+    var show = num($hdr.data('open')) !== 1;
+    $hdr.data('open', show ? 1 : 0).attr('data-open', show ? 1 : 0);
+    $('.cd-of-' + gid).toggle(show);
     $(this).find('i').attr('class', 'fa fa-caret-' + (show ? 'down' : 'right'));
 });
 
@@ -2597,7 +2667,9 @@ function openCard(cardId) {
            看的人要知道是哪一家的哪一個料號，專案名稱在管理卡編號裡已經隱含了。 */
         var pj = res.project || {};
         var pns = $.map(res.parts || [], function (x) { return x.part_no || ''; }).join('、');
-        var h = '<div class="sec" data-card="' + c.card_id + '"><h5>管理卡 ' + esc(c.card_no || '') + '</h5>'
+        var h = '<div class="sec" data-card="' + c.card_id + '"><h5>管理卡 ' + esc(c.card_no || '')
+          + ' <span class="pj-op" id="btnCardClose" style="float:right;font-weight:normal;">'
+          + '<i class="fa fa-times"></i> 收合</span></h5>'
           + '<div class="grid3" style="margin-bottom:8px;">'
           + '<div><label>客戶</label><input type="text" class="ro-auto" readonly value="' + esc(pj.customer_name || '－') + '"></div>'
           + '<div><label>料號</label><input type="text" class="ro-auto" readonly value="' + esc(pns || '－') + '"></div>'
@@ -2732,9 +2804,19 @@ function renderRel(res) {
     h += '</div>';
 
     /* 製程（BOM） */
+    var hasBomProc = $.grep(res.processes || [], function (x) { return x.source !== 'manual'; }).length > 0;
     h += '<div class="sec"><h5>製程（由已開立的 BOM 製令自動帶入）'
       + (res.can_edit ? ' <button id="btnBomSync" style="float:right;height:26px;padding:0 10px;border:1px solid #d98a33;border-radius:4px;background:#F0A24B;color:#fff;cursor:pointer;font-size:12px;">同步 BOM</button>' : '')
       + '</h5>';
+    /* 還沒開 BOM 的新專案，讓負責人先手動排一份預計製程順序（使用者 2026-09-23 要求）——
+       這樣執行規劃表的 FAI／最終檢驗才有「對應製程」可以選，不必等到真的開了 BOM。
+       BOM 一旦真的同步進來也不會自動把手動列蓋掉，兩者並存，要不要清掉手動列由使用者自己決定。 */
+    if (partsCanEdit) {
+        h += '<div style="display:flex;gap:6px;margin-bottom:8px;align-items:flex-end;">'
+          + '<div style="flex:1;"><label>' + (hasBomProc ? '（如需另外補一道尚未開 BOM 的製程也可以在這裡加）' : '尚未開立 BOM：先手動建立預計製程順序')
+          + '</label><input type="text" id="procKw" placeholder="輸入製程編號或名稱關鍵字後按 Enter"></div></div>'
+          + '<div id="procFound"></div>';
+    }
     if (!(res.processes || []).length) {
         h += '<div class="pj-hint">這些訂單還沒有開立 BOM 製令，或 BOM 沒有對應到本專案的訂單。BOM 一開立就會自動帶進來。</div>';
     } else {
@@ -2743,30 +2825,34 @@ function renderRel(res) {
           + '<th style="width:110px;">廠商</th><th style="width:60px;">發包數</th>'
           + '<th style="width:' + (PERM.canAdmin ? '118' : '88') + 'px;">發包日</th>'
           + '<th style="width:' + (PERM.canAdmin ? '118' : '88') + 'px;">回廠日</th>'
-          + '<th style="width:64px;">檢驗</th><th style="width:44px;">里程碑</th><th>專案註記</th></tr></thead><tbody>';
+          + '<th style="width:64px;">檢驗</th><th style="width:44px;">里程碑</th><th>專案註記</th>'
+          + (partsCanEdit ? '<th style="width:50px;"></th>' : '') + '</tr></thead><tbody>';
         var lastBom = '', outCnt = 0;
         $.each(res.processes, function (i, x) {
-            var show = (x.bom !== lastBom); lastBom = x.bom;
+            var isManual = (x.source === 'manual');
+            var show = isManual || (x.bom !== lastBom); lastBom = x.bom;
             var out = !num(x.in_scope);            // 專案有綁定製程、而這一道不在範圍內
             if (out) outCnt++;
             h += '<tr data-proc="' + x.id + '" data-fid="' + num(x.bom_ing_fid) + '"' + (out ? ' style="opacity:.55;"' : '') + '>'
-              /* 製令單號可點：開 BOM 總表（使用者要求） */
-              + '<td>' + (show ? '<span class="pj-op" data-viewbom="' + esc(x.bom) + '" title="開啟 BOM 總表"><b>'
-                    + esc(x.bom) + '</b></span>' : '') + '</td>'
-              + '<td>' + esc(x.part_no || '') + '</td><td>' + num(x.bom_sn) + '</td>'
+              /* 製令單號可點：開 BOM 總表（使用者要求）；手動列沒有製令，印「（手動）」 */
+              + '<td>' + (isManual ? '<span class="pj-hint">（手動）</span>'
+                    : (show ? '<span class="pj-op" data-viewbom="' + esc(x.bom) + '" title="開啟 BOM 總表"><b>' + esc(x.bom) + '</b></span>' : '')) + '</td>'
+              + '<td>' + esc(x.part_no || '') + '</td><td>' + (isManual ? '－' : num(x.bom_sn)) + '</td>'
               + '<td>' + esc(x.process_name || ('製程' + num(x.process_no)))
               + (out ? ' <span class="pj-hint">（不在本專案範圍）</span>' : '') + '</td>'
               + '<td>' + esc(x.maker_name || '－') + '</td><td>' + num(x.sqty) + '</td>'
-              + '<td>' + (PERM.canAdmin
+              + '<td>' + (isManual ? '－' : (PERM.canAdmin
                     ? '<input type="date" class="p-outdate" value="' + esc(x.outsource_date || '') + '" style="width:112px;">'
-                    : dispDate(x.outsource_date)) + '</td>'
-              + '<td>' + (PERM.canAdmin
+                    : dispDate(x.outsource_date))) + '</td>'
+              + '<td>' + (isManual ? '－' : (PERM.canAdmin
                     ? '<input type="date" class="p-retdate" value="' + esc(x.return_date || '') + '" style="width:112px;">'
-                    : dispDate(x.return_date)) + '</td>'
-              + '<td>' + qcLabel(x.qc_check) + '</td>'
+                    : dispDate(x.return_date))) + '</td>'
+              + '<td>' + (isManual ? '－' : qcLabel(x.qc_check)) + '</td>'
               + '<td><input type="checkbox" class="p-ms" data-eg-skip="1"' + (num(x.is_milestone) ? ' checked' : '')
               + (res.can_edit ? '' : ' disabled') + '></td>'
               + '<td><input type="text" class="p-note" value="' + esc(x.note || '') + '"' + (res.can_edit ? '' : ' readonly') + '></td>'
+              + (partsCanEdit ? '<td>' + (isManual
+                    ? '<span class="pj-op" data-procdel="' + num(x.id) + '" style="color:#DD5138;">移除</span>' : '') + '</td>' : '')
               + '</tr>';
         });
         h += '</tbody></table></div>'
@@ -2952,6 +3038,31 @@ $(document).on('keydown', '#partKw', function (e) {
 });
 $(document).on('click', '[data-partadd]', function () {
     api('part_add', { project_id: CUR.project.project_id, ds_pk: num($(this).data('partadd')) }, 'POST')
+        .done(function (r) { alert(r.message); openProject(num(CUR.project.project_id)); });
+});
+$(document).on('keydown', '#procKw', function (e) {
+    if (e.which !== 13) return;
+    e.preventDefault();
+    var kw = $.trim($(this).val());
+    if (!kw) return;
+    api('process_search', { project_id: CUR.project.project_id, kw: kw }).done(function (res) {
+        if (!(res.rows || []).length) { $('#procFound').html('<div class="pj-hint">找不到符合的製程</div>'); return; }
+        var h = '<table class="sub-tbl"><thead><tr><th style="width:70px;">編號</th><th>名稱</th><th style="width:100px;">製程大類</th><th style="width:60px;"></th></tr></thead><tbody>';
+        $.each(res.rows, function (i, x) {
+            h += '<tr><td>' + num(x.process_no) + '</td><td>' + esc(x.process_name || '') + '</td>'
+              + '<td>' + esc(x.process_type || '') + '</td>'
+              + '<td><span class="pj-op" data-procadd="' + num(x.process_no) + '">加入</span></td></tr>';
+        });
+        $('#procFound').html(h + '</tbody></table>');
+    });
+});
+$(document).on('click', '[data-procadd]', function () {
+    api('process_manual_add', { project_id: CUR.project.project_id, process_no: num($(this).data('procadd')) }, 'POST')
+        .done(function (r) { alert(r.message); openProject(num(CUR.project.project_id)); });
+});
+$(document).on('click', '[data-procdel]', function () {
+    if (!confirm('移除這道手動建立的製程？')) return;
+    api('process_manual_remove', { project_id: CUR.project.project_id, id: num($(this).data('procdel')) }, 'POST')
         .done(function (r) { alert(r.message); openProject(num(CUR.project.project_id)); });
 });
 $(document).on('click', '#btnBomSync', function () {
@@ -3951,6 +4062,8 @@ function openSetting() {
             $('#' + boxId).html(hh);
         });
 
+        $('#setReqReport').prop('checked', num(s.require_report_evidence) === 1);
+
         /* 專案負責人資格（部門×職稱） */
         var odOpt = '<option value="">（請選擇部門）</option>';
         $.each(META.depts || [], function (i, x) { odOpt += '<option value="' + x.id + '">' + esc(x.name) + '</option>'; });
@@ -4171,6 +4284,7 @@ $(document).on('click', '#btnSetSave', function () {
         o2p_attach_cats: $('#setO2pCats .pj-tag.on').map(function () { return num($(this).data('o2pcat')); }).get().join(','),
         doc_sop_scopes: $('#setSopScopes .pj-tag.on').map(function () { return String($(this).data('scp')); }).get().join(','),
         doc_sip_scopes: $('#setSipScopes .pj-tag.on').map(function () { return String($(this).data('scp')); }).get().join(','),
+        require_report_evidence: $('#setReqReport').is(':checked') ? '1' : '0',
         task_owner_depts: pickedTaskDepts().join(','),
         seed_template: JSON.stringify(collectSeedTpl()),
         owner_scope: JSON.stringify($.map(OWN_SCOPE, function (r) { return { d: num(r.d), p: num(r.p) }; })),
@@ -4301,7 +4415,10 @@ function printBaseCss(opt) {
         +  'tr { page-break-inside:avoid; }\n'
         /* 階段之間的粗分隔線（使用者指定）：整張表都是細線時分不出階段在哪裡斷開。
            規劃表與管理卡都用得到，所以放在共用的 base 裡不要各寫一份。 */
-        +  'tr.gsep > td { border-top:0.8mm solid #000; }\n';
+        +  'tr.gsep > td { border-top:0.8mm solid #000; background:#f7f0e2; }\n'
+        +  '.gsep-no { color:#8a6d45; }\n'
+        +  '.gsep-title { font-size:13pt; }\n'
+        +  '.gsep-meta { font-size:8pt; font-weight:normal; color:#5b3a1e; }\n';
     return css;
 }
 
@@ -4652,6 +4769,9 @@ function printCard(res) {
 function buildCardHtml(res, m) {
     var c = res.card, p = res.project;
     var items = c.items || [];
+    // 管理卡是某一天的存照，狀態判定一律以這張卡的檢討日期為準，不是印出來那一刻的今天
+    // （使用者 2026-09-23：起始日期超過檢討日期者一律顯示未開始）。
+    var revDate = c.review_date || META.today;
     var css = printBaseCss({ landscape: true, docNo: m.meta.doc_no })
       + '.sign td { border:1px solid #000; height:22mm; vertical-align:middle; text-align:center; }\n'
       + '.sign .lb { width:8%; background:#f2f2f2; font-weight:bold; }\n'
@@ -4682,30 +4802,37 @@ function buildCardHtml(res, m) {
     $.each(items, function (i, it) {
         var gid = num(it.goal_id);
         var gt = $.grep(tasks, function (t) { return num(t.goal_id) === gid; });
-        var doneN = $.grep(gt, function (t) { return taskState(t, META.today) === 'done'; }).length;
+        var doneN = $.grep(gt, function (t) { return taskState(t, revDate) === 'done'; }).length;
         var allDone = gt.length > 0 && doneN >= gt.length;
-        h += '<tr class="gsep"><td class="c">' + (i + 1) + '</td>'
-          + '<td><b>' + esc(it.goal_name || '') + '</b></td>'
-          + '<td class="c">' + esc(it.dept_name || '') + (it.owner_name ? '<br>' + esc(it.owner_name) : '') + '</td>'
-          + '<td class="c">' + dispDate(cardGoalDate(gt, 'plan_end', true)) + '</td>'
-          + '<td class="c">' + (allDone ? dispDate(cardGoalDate(gt, 'act_end', true)) : '') + '</td>'
-          + '<td>' + (num(it.on_track) && !$.trim(it.issue_text || '')
-                      ? '依計畫進行' : esc(it.issue_text || '').replace(/\n/g, '<br>')) + '</td>'
-          + '<td class="c">' + (allDone ? '已完成' : doneN + '/' + gt.length) + '</td></tr>';
+        /* 使用者 2026-09-23：「階段大標題請整列往右到底合併顯示，並將標題文字放大」——
+           原本切成 7 個窄欄，「階段 N：xxx」被擠在第二欄（28% 寬），紙本上很不顯眼。
+           改成單一 colspan 橫幅，原本各欄的資訊（主辦單位／日期／狀態／問題）摺進同一格的次要文字。 */
+        var goalMeta = [];
+        if (it.dept_name || it.owner_name) goalMeta.push('主辦：' + esc(it.dept_name || '') + (it.owner_name ? '　' + esc(it.owner_name) : ''));
+        var pe = cardGoalDate(gt, 'plan_end', true); if (pe) goalMeta.push('預計完成：' + dispDate(pe));
+        if (allDone) { var ae = cardGoalDate(gt, 'act_end', true); if (ae) goalMeta.push('實際完成：' + dispDate(ae)); }
+        goalMeta.push('狀態：' + (allDone ? '已完成' : doneN + '/' + gt.length));
+        var issueTxt = (num(it.on_track) && !$.trim(it.issue_text || '')) ? '' : esc(it.issue_text || '').replace(/\n/g, '<br>');
+        h += '<tr class="gsep"><td colspan="7" class="gsep-cell">'
+          + '<span class="gsep-no">' + (i + 1) + '</span>　'
+          + '<b class="gsep-title">' + esc(it.goal_name || '') + '</b>'
+          + '<span class="gsep-meta">　' + goalMeta.join('　｜　') + '</span>'
+          + (issueTxt ? '<br><span class="gsep-meta">問題：' + issueTxt + '</span>' : '')
+          + '</td></tr>';
         $.each(gt, function (ti, t) {
             var deliver = $.map(parseEvidence(t.evidence_json), function (e) {
                 return String(e.label || '').replace(/<[^>]*>/g, '');
             });
+            var stt = taskState(t, revDate);
             h += '<tr><td class="c">' + (i + 1) + '.' + (ti + 1) + '</td>'
               + '<td style="padding-left:4mm;">' + esc(t.task_name)
               + (num(t.is_milestone) ? ' ◆' : '') + '</td>'
               + '<td class="c">' + esc(t.owner_dept_name || '')
               + '<br>' + esc(t.owner_name || '排班人員') + '</td>'
               + '<td class="c">' + dispDate(t.plan_end) + '</td>'
-              + '<td class="c">' + dispDate(t.act_end) + '</td>'
-              + '<td>' + esc(deliver.join('；')) + '</td>'
-              + '<td class="c">' + esc(taskStateLabel(t))
-              + (t.reported_by_name ? '<br>' + esc(t.reported_by_name) : '') + '</td></tr>';
+              + '<td class="c">' + (stt === 'done' ? dispDate(t.act_end) : '') + '</td>'
+              + '<td>' + (stt === 'done' ? esc(deliver.join('；')) : '') + '</td>'
+              + '<td class="c">' + stateText(stt) + cardSignerHtml(t) + '</td></tr>';
         });
         /* 後續辦理方法／備註有填才印一列，沒填不要浪費紙面 */
         var extra = $.trim(String(it.follow_text || '')) + ($.trim(String(it.note || '')) ? '　【備註】' + it.note : '');

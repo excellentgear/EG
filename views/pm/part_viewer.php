@@ -38,7 +38,22 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_file_tags_setting') {
 if (isset($_POST['action']) && $_POST['action'] === 'save_file_tags_setting') {
     header('Content-Type: application/json');
     include_once '../../src/common/DBConnection.php';
-    $tags_config = $_POST['tags_config'] ?? '[]';
+    $raw = json_decode((string)($_POST['tags_config'] ?? '[]'), true);
+    /* 2026-09-23 使用者要求：標籤要能標「是否為（檢驗機／外部廠商）報告」與「屬於哪個製程大類」，
+       給專案管理模組挑選佐證用。後端在這裡再正規化一次（鐵律8），不採信前端送來的怪型別。 */
+    $clean = [];
+    if (is_array($raw)) {
+        foreach ($raw as $row) {
+            if (!is_array($row) || empty($row['suffix']) || empty($row['label'])) continue;
+            $clean[] = [
+                'suffix' => (string)$row['suffix'], 'label' => (string)$row['label'],
+                'color'  => (string)($row['color'] ?? '#777777'),
+                'is_report' => !empty($row['is_report']) ? 1 : 0,
+                'process_type_id' => (int)($row['process_type_id'] ?? 0) ?: null,
+            ];
+        }
+    }
+    $tags_config = json_encode($clean, JSON_UNESCAPED_UNICODE);
     $user = $_SESSION['id'] ?? 'system';
     try {
         $pdo_t = (new DBConnection())->getPDO();
@@ -48,6 +63,20 @@ if (isset($_POST['action']) && $_POST['action'] === 'save_file_tags_setting') {
         $st = $pdo_t->prepare($sql);
         $st->execute([':val' => $tags_config, ':user' => $user, ':val_upd' => $tags_config, ':user_upd' => $user]);
         echo json_encode(['success' => true]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── AJAX：製程大類清單（標籤設定挑選用） ─────────────────────────────────
+if (isset($_POST['action']) && $_POST['action'] === 'get_process_types') {
+    header('Content-Type: application/json');
+    include_once '../../src/common/DBConnection.php';
+    try {
+        $pdo_t = (new DBConnection())->getPDO();
+        $rows = $pdo_t->query("SELECT process_type_id AS id, process_type AS name FROM process_type ORDER BY process_type")->fetchAll(PDO::FETCH_ASSOC);
+        echo json_encode(['success' => true, 'rows' => $rows]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
@@ -448,12 +477,19 @@ $bom_safe = htmlspecialchars($bom,  ENT_QUOTES, 'UTF-8');
                     例如設了 <code>-H</code>＝熱處理，<code>B-xxx-H2.jpg</code> 會自動標成「熱處理2」、<code>-H3</code>＝「熱處理3」。<br>
                     後綴後面接<b>英文字母</b>則不算命中（<code>-M</code> 不會誤中 <code>-MR</code>），要用請各自新增一列。
                 </div>
+                <div class="alert alert-info" style="padding:8px 12px;font-size:12px;margin-bottom:10px;">
+                    <b>「報告」與「製程大類」給專案管理模組的檢驗佐證用</b>：勾了「報告」的標籤，
+                    才會被專案管理的 FAI／最終檢驗步驟視為可以佐證的報告（檢驗機或外部廠商出的報告，
+                    跟系統裡的 QC 線上檢驗紀錄不同）；製程大類決定這份報告要出現在哪一道製程的候選裡。
+                </div>
                 <table class="table table-bordered table-condensed" id="tagsSettingTable">
                     <thead>
                         <tr>
                             <th>檔名後綴 (例: -T)</th>
                             <th>標籤名稱 (例: 叫料)</th>
                             <th>顏色</th>
+                            <th width="70">報告</th>
+                            <th width="140">製程大類</th>
                             <th width="50">操作</th>
                         </tr>
                     </thead>
@@ -908,26 +944,44 @@ $.post('', { action: 'get_files_by_did', d_id: _d_id, bom: _bom }, function(res)
 // ── 設定標籤 ──────────────────────────────────────────────────────────────
 var _colorMap = { 'default':'#777777','primary':'#337ab7','success':'#5cb85c','info':'#5bc0de','warning':'#f0ad4e','danger':'#d9534f' };
 
+var _processTypes = null;   // 只查一次，開好幾次跳窗不必重打
 function openFileTagsSetting() {
-    $.post('', { action: 'get_file_tags_setting' }, function(res) {
-        if (res.success) {
-            $('#tagsSettingTable tbody').empty();
-            if (res.config && res.config.length > 0) {
-                res.config.forEach(function(item) { addTagRow(item.suffix, item.label, item.color); });
+    var go = function () {
+        $.post('', { action: 'get_file_tags_setting' }, function(res) {
+            if (res.success) {
+                $('#tagsSettingTable tbody').empty();
+                if (res.config && res.config.length > 0) {
+                    res.config.forEach(function(item) { addTagRow(item.suffix, item.label, item.color, item.is_report, item.process_type_id); });
+                }
+                $('#fileTagsSettingModal').modal('show');
+            } else {
+                alert('載入設定失敗: ' + (res.message || '未知錯誤'));
             }
-            $('#fileTagsSettingModal').modal('show');
-        } else {
-            alert('載入設定失敗: ' + (res.message || '未知錯誤'));
-        }
+        }, 'json');
+    };
+    if (_processTypes) { go(); return; }
+    $.post('', { action: 'get_process_types' }, function (res) {
+        _processTypes = (res.success && res.rows) ? res.rows : [];
+        go();
     }, 'json');
 }
 
-function addTagRow(suffix, label, color) {
+function procTypeOptHtml(selected) {
+    var h = '<option value="">（不限）</option>';
+    (_processTypes || []).forEach(function (t) {
+        h += '<option value="' + t.id + '"' + (String(selected||'') === String(t.id) ? ' selected' : '') + '>' + escapeHtml(t.name) + '</option>';
+    });
+    return h;
+}
+
+function addTagRow(suffix, label, color, isReport, processTypeId) {
     var c = _colorMap[color] || (color && color.startsWith('#') ? color : '#777777');
     var row = '<tr>'
         + '<td><input type="text" class="form-control input-sm tag-suffix" value="' + escapeHtml(suffix||'') + '" placeholder="-T"></td>'
         + '<td><input type="text" class="form-control input-sm tag-label" value="' + escapeHtml(label||'') + '" placeholder="叫料"></td>'
         + '<td><input type="color" class="form-control input-sm tag-color" value="' + escapeHtml(c) + '"></td>'
+        + '<td style="text-align:center;"><input type="checkbox" class="tag-isreport"' + (isReport ? ' checked' : '') + '></td>'
+        + '<td><select class="form-control input-sm tag-proctype">' + procTypeOptHtml(processTypeId) + '</select></td>'
         + '<td><button type="button" class="btn btn-danger btn-xs" onclick="$(this).closest(\'tr\').remove()"><i class="fa fa-trash"></i></button></td>'
         + '</tr>';
     $('#tagsSettingTable tbody').append(row);
@@ -939,7 +993,9 @@ function saveFileTagsSetting() {
         var suffix = $(this).find('.tag-suffix').val().trim();
         var label  = $(this).find('.tag-label').val().trim();
         var color  = $(this).find('.tag-color').val();
-        if (suffix && label) config.push({ suffix: suffix, label: label, color: color });
+        var isReport = $(this).find('.tag-isreport').is(':checked') ? 1 : 0;
+        var processTypeId = $(this).find('.tag-proctype').val() || '';
+        if (suffix && label) config.push({ suffix: suffix, label: label, color: color, is_report: isReport, process_type_id: processTypeId });
     });
     $.post('', { action: 'save_file_tags_setting', tags_config: JSON.stringify(config) }, function(res) {
         if (res.success) {

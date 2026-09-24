@@ -560,6 +560,14 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <p class="pj-hint" id="ownScopeCount" style="margin-top:6px;"></p>
         </div>
         <div class="sec">
+            <h5>FAI／最終檢驗報告佐證</h5>
+            <p class="pj-hint">FAI（首件檢驗）與最終檢驗步驟一律會自動帶入線上檢驗（inspection_entry_v2.php）的紀錄；
+                <b>報告</b>是另外一種佐證——檢驗機或外部廠商出的報告（跟系統裡的 QC 線上檢驗紀錄不同），
+                來源是 <b>part_viewer.php「設定標籤」</b>裡勾選「報告」的檔名標籤。<b>非必需也一樣可以連結</b>，
+                下面只是決定「結案前有沒有強制要求」。</p>
+            <label style="display:inline;"><input type="checkbox" id="setReqReport" data-eg-skip="1"> 結案前必須至少附一份報告佐證</label>
+        </div>
+        <div class="sec">
             <h5>專案負責人預設部門與順序</h5>
             <p class="pj-hint">選一個<b>預設部門</b>，下拉／訂單轉專案跳窗的專案負責人清單會把這個部門的人排在最前面，
                 並依這裡設定的<b>順序</b>顯示（不影響「資格」，只影響排序；資格仍由上面的「專案負責人資格」決定）。

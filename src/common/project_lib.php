@@ -32,6 +32,7 @@ require_once __DIR__ . '/people_lib.php';
 require_once __DIR__ . '/date_fmt_lib.php';
 require_once __DIR__ . '/position_history_lib.php';
 require_once __DIR__ . '/car_lib.php';   // 工作日行事曆唯一來源：car_holiday_sets()／car_working_days_between()
+require_once __DIR__ . '/bom_dir_lib.php';   // ERP/資材報告檔名標籤與報告檔案掃描（eg_bom_report_files_for_part 等）
 
 /** AS 文件綁定模組代碼（一表一碼，值只存 id，見 ai-rules/16 第一之三節） */
 const PRJ_ASDOC_PLAN = 'project_plan';   // 2-GM-02-02 專案執行規劃表
@@ -568,6 +569,16 @@ function prj_ensure_schema(PDO $db): void
        par＝與上一列**同時**開始（同一個平行群組，下一個 seq 步驟要等整組都做完才開始）。 */
     prj_ensure_col($db, 'project_task', 'dep_mode', "VARCHAR(4) NOT NULL DEFAULT 'seq' COMMENT 'seq=順序執行 / par=與上一列同時進行' AFTER sort_order");
     prj_ensure_col($db, 'project_task', 'evidence_json', "TEXT NULL COMMENT '採用的自動佐證清單 [{kind,date,label,ref}]' AFTER reported_at");
+    // 使用者 2026-09-23 要求：多製程專案時，FAI／最終檢驗要能指定對應到哪一道製程；
+    // FAI 是精確的一道製程（首件檢驗紀錄表按製程各建一張），最終檢驗則是比對「製程大類」
+    // （process_type，一個大類底下可能好幾道製程都算），兩種語意不同所以分開存兩欄。
+    prj_ensure_col($db, 'project_task', 'link_process_no', "INT NULL COMMENT 'FAI 對應到 process_no.ProcessNo 哪一道製程（多製程專案才需要指定）' AFTER task_kind");
+    prj_ensure_col($db, 'project_task', 'link_process_type_id', "INT NULL COMMENT '最終檢驗認列的製程大類 process_type.process_type_id' AFTER link_process_no");
+    // 還沒開 BOM 的新專案，負責人可以先手動建立預計製程順序（使用者 2026-09-23 要求）；
+    // 手動列 bom='MANUAL'、bom_ing_fid 用遞減負數避免撞到 uq_item(project_id,bom,bom_ing_fid)。
+    // BOM 一旦真的同步進來，manual 列不會自動被取代或刪除——那是負責人自己排的預計順序，
+    // 交給人自己決定要不要留著對照或手動移除。
+    prj_ensure_col($db, 'project_process', 'source', "VARCHAR(10) NOT NULL DEFAULT 'bom' COMMENT 'bom=BOM同步帶入 / manual=負責人手動建立（尚未開BOM）' AFTER note");
     // 專案涵蓋的製程（2026-09-22 使用者要求）：空＝整張 BOM 的所有製程，有值＝只算這幾道
     prj_ensure_col($db, 'project', 'scope_process_no', "VARCHAR(255) NULL COMMENT '專案涵蓋的製程 process_no.ProcessNo 逗號串；空＝整張BOM所有製程' AFTER dept_name");
     // 執行規劃表的檢視方式（甘特／清單）：列印要跟著走，所以存在專案上不是只存在瀏覽器
@@ -1707,7 +1718,9 @@ function prj_auto_kinds_of(string $taskName, string $taskKind = ''): array
     if (mb_strpos($n, 'PFMEA') !== false)     $out[] = 'doc_pfmea';
     if (mb_strpos($n, 'SOP') !== false)       $out[] = 'doc_sop';
     if (mb_strpos($n, 'SIP') !== false)       $out[] = 'doc_sip';
-    if (mb_strpos($n, '客供') !== false || mb_strpos($n, '進料') !== false) $out[] = 'incoming_qc';
+    /* 只認「進料」，不認「客供」（使用者 2026-09-23 指正）——「客供品料號核對／流程卡綁定」
+       這個步驟本身只是核對料號，不該被歸到客供料進料檢驗的佐證，且該步驟明確要求不顯示任何自動佐證。 */
+    if (mb_strpos($n, '進料') !== false) $out[] = 'incoming_qc';
     if (mb_strpos($n, '架機') !== false || mb_strpos($n, '修砂') !== false) $out[] = 'setup';
     if (mb_strpos($n, '整批') !== false || mb_strpos($n, '完工') !== false) $out[] = 'mass_done';
     if (mb_strpos($n, '最終檢驗') !== false)  $out[] = 'final_qc';
@@ -1893,7 +1906,8 @@ function prj_task_evidence(PDO $db, int $projectId, ?array $prj = null): array
         if (!$out[$k]['options']) $out[$k]['note'] = '這些料號還沒有建立 ' . $lbl . '（或建了但沒有填日期）。';
     }
 
-    /* ④ 客供料進料：本專案 BOM 上「客供料」那一道製程的回廠日／檢驗日 */
+    /* ④ 客供料進料：BOM 上「客供料」那一道製程的回廠日／發包日，當查無線上檢驗紀錄時的退路
+       （見下方 ⑤a，那裡查得到線上檢驗會優先採用、且會把這裡的舊選項一併保留在候選裡）。 */
     foreach ($procs as $r) {
         $nm = (string)($r['process_name'] ?? '');
         if (mb_strpos($nm, '客供') === false) continue;
@@ -1903,20 +1917,64 @@ function prj_task_evidence(PDO $db, int $projectId, ?array $prj = null): array
             'label' => $r['bom'] . '　' . $nm . '　' . ($r['return_date'] ? '回廠' : '發包') . '日',
             'ref'   => (string)$r['bom']];
     }
-    if (!$out['incoming_qc']['options']) $out['incoming_qc']['note'] = 'BOM 上找不到「客供料」製程，或那一道還沒有回廠日。';
 
-    /* ⑤⑥⑦ 架機／首件／整批完工：都來自報工紀錄（廠內每日報工） */
+    /* ⑤a 首件檢驗／進料檢驗／最終檢驗：直接讀線上檢驗（inspection_entry_v2.php／qc_check_form），
+       使用者 2026-09-23 明確要求三者都要「顯示檢驗日期、項目數與結果」，取代掉舊的粗略文字。
+       同一張表分流到哪一種佐證：FIRST＝首件；NORMAL 且製程名稱含「客供」＝進料檢驗；
+       NORMAL 其餘＝最終檢驗（一般製程檢驗）。項目數＝該張檢驗單量測過幾個相異項目（qc_measurement
+       依 item_id 去重計數）。每筆候選都帶 process_no，供 report_get 依 task.link_process_no／
+       link_process_type_id 篩到對應那一道（或那個大類）；pass=1 才是「合格」，NG 的一樣列出來讓人
+       看見，但不建議直接採用。 */
+    $procNoOfFid = [];
+    foreach ($procs as $r) { $fid = (int)($r['bom_ing_fid'] ?? 0); if ($fid > 0) $procNoOfFid[$fid] = (int)($r['process_no'] ?? 0); }
+    if ($procNoOfFid) {
+        try {
+            $inFid = implode(',', array_keys($procNoOfFid));
+            $st = $db->prepare("SELECT f.qc_form_id, f.bom_ing_fid, f.insp_kind, f.check_result, f.status,
+                                       COALESCE(f.check_date, DATE(f.created_at)) AS d, f.process_name,
+                                       (SELECT COUNT(DISTINCT m.item_id) FROM qc_measurement m WHERE m.qc_form_id=f.qc_form_id) AS item_cnt
+                                FROM qc_check_form f
+                                WHERE f.bom_ing_fid IN ($inFid) AND f.insp_kind IN ('FIRST','NORMAL')
+                                  AND f.status IN ('SUBMITTED','LOCKED')");
+            $st->execute();
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $fid = (int)$r['bom_ing_fid']; $no = $procNoOfFid[$fid] ?? 0;
+                if (!$no || !$inScope(['process_no' => $no])) continue;
+                $pass = ((string)$r['check_result'] === 'OK');
+                $nm = (string)($r['process_name'] ?: ('製程' . $no));
+                if ((string)$r['insp_kind'] === 'FIRST') { $k = 'fai'; }
+                elseif (mb_strpos($nm, '客供') !== false) { $k = 'incoming_qc'; }
+                else { $k = 'final_qc'; }
+                $out[$k]['options'][] = [
+                    'date' => (string)$r['d'],
+                    'label' => ($pass ? '✓ ' : '✗ NG　') . $nm . '　共 ' . (int)$r['item_cnt'] . ' 項'
+                             . '　線上檢驗 #' . (int)$r['qc_form_id'] . ($pass ? '（合格）' : '（不合格，請確認是否可採用）'),
+                    'ref' => 'qc:' . (int)$r['qc_form_id'],
+                    'process_no' => $no, 'pass' => $pass ? 1 : 0,
+                ];
+            }
+        } catch (Throwable $e) {}
+    }
+
+    /* ⑤⑥⑦ 架機／整批完工：都來自報工紀錄（廠內每日報工）。
+       使用者 2026-09-23 兩點要求：①架機要顯示報工架機的**日期時間**（不是只有日期）
+       ②整批完工要顯示報工的**整體時間區間**與**良品／NG品數**，不是一筆一筆各自的「報工回報完工」。
+       首件（fai）不再從報工紀錄猜——那本來就是粗略代理值，⑤a 的線上檢驗才是真正的首件佐證，
+       混在一起只會讓人選錯。 */
     $setupCnt = $setupNm = $prodQty = $prodNm = [];
     $wr = prj_work_reports($db, $projectId);
+    $massAgg = [];   // bom_ing_fid => ['bom','pn','d0'(最早日期),'t0'(最早開始),'t1'(最晚結束),'qty','ng']
     foreach ($wr as $r) {
         if (($r['kind'] ?? '') !== 'in') continue;                 // 委外轉出入沒有架機/完工的語意
         if (!$inScope($r)) continue;                               // 專案有綁定製程時只認範圍內的
         $d  = (string)($r['rdate'] ?? '');
         if ($d === '') continue;
         $pn = (string)($r['process_name'] ?? '');
-        if (!empty($r['t1']) || !empty($r['setup_user'])) {
+        if (!empty($r['su_t1']) || !empty($r['setup_user'])) {
+            $tRange = trim(substr((string)($r['su_t1'] ?? ''), 11, 5) . '~' . substr((string)($r['su_t2'] ?? ''), 11, 5), '~');
             $out['setup']['options'][] = ['date' => $d,
-                'label' => $r['bom'] . '　' . $pn . '　報工架機' . ($r['setup_user'] ? '（' . $r['setup_user'] . '）' : ''),
+                'label' => $r['bom'] . '　' . $pn . '　架機' . ($tRange !== '' ? '　' . $tRange : '')
+                         . ($r['setup_user'] ? '（' . $r['setup_user'] . '）' : ''),
                 'ref'   => 'wr:' . (int)$r['id'],
                 'owner_id' => (int)($r['setup_user_id'] ?? 0), 'owner_name' => (string)($r['setup_user'] ?? '')];
             // 架機人數通常只有一兩位，用「架機次數」決定建議誰（使用者：架機與修砂／FAI 抓架機人員）
@@ -1925,17 +1983,51 @@ function prj_task_evidence(PDO $db, int $projectId, ?array $prj = null): array
                 $setupNm[(int)$r['setup_user_id']]  = (string)($r['setup_user'] ?? '');
             }
         }
-        $out['fai']['options'][] = ['date' => $d,
-            'label' => $r['bom'] . '　' . $pn . '　報工 ' . (int)$r['qty'] . ' 件', 'ref' => 'wr:' . (int)$r['id']];
-        if (!empty($r['is_finished'])) {
-            $out['mass_done']['options'][] = ['date' => $d,
-                'label' => $r['bom'] . '　' . $pn . '　報工回報<b>完工</b>', 'ref' => 'wr:' . (int)$r['id'],
-                'owner_id' => (int)($r['production_user_id'] ?? 0), 'owner_name' => (string)($r['prod_user'] ?? '')];
+        // 整批完工：同一張製令同一道製程的所有報工彙總成一筆（不是每筆各自一列），
+        // 時間區間取最早開始～最晚結束，數量加總；NG／良品數之後併入 qc_check_form 的驗收結果。
+        $fid = (int)($r['bom_ing_fid'] ?? 0);
+        if ($fid > 0) {
+            if (!isset($massAgg[$fid])) $massAgg[$fid] = ['bom' => $r['bom'], 'pn' => $pn, 'd0' => $d, 'd1' => $d,
+                't0' => (string)($r['t1'] ?? ''), 't1' => (string)($r['t2'] ?? ''), 'qty' => 0, 'finished' => false,
+                'owner_id' => 0, 'owner_name' => '', 'ref' => 'wr:' . (int)$r['id']];
+            $agg = &$massAgg[$fid];
+            if ($d < $agg['d0']) $agg['d0'] = $d;
+            if ($d > $agg['d1']) $agg['d1'] = $d;
+            if (!empty($r['t1']) && ($agg['t0'] === '' || (string)$r['t1'] < $agg['t0'])) $agg['t0'] = (string)$r['t1'];
+            if (!empty($r['t2']) && (string)$r['t2'] > $agg['t1']) $agg['t1'] = (string)$r['t2'];
+            $agg['qty'] += (int)$r['qty'];
+            if (!empty($r['is_finished'])) {
+                $agg['finished'] = true;
+                $agg['owner_id'] = (int)($r['production_user_id'] ?? 0);
+                $agg['owner_name'] = (string)($r['prod_user'] ?? '');
+            }
+            unset($agg);
         }
         // 整批加工的建議負責人＝**加工數量最多**的那一位（使用者指定），不是報工筆數最多的
         if ((int)($r['production_user_id'] ?? 0) > 0) {
             $prodQty[(int)$r['production_user_id']] = ($prodQty[(int)$r['production_user_id']] ?? 0) + (int)$r['qty'];
             $prodNm[(int)$r['production_user_id']]  = (string)($r['prod_user'] ?? '');
+        }
+    }
+    // 這個製令有沒有 NG（拿同一個 bom_ing_fid 的線上檢驗 ng_qty，查不到就不印 NG 那一段，不可以猜成 0）
+    if ($massAgg) {
+        try {
+            $inFid2 = implode(',', array_map('intval', array_keys($massAgg)));
+            $ngOf = [];
+            foreach ($db->query("SELECT bom_ing_fid, SUM(ng_qty) ng FROM qc_check_form
+                                 WHERE bom_ing_fid IN ($inFid2) GROUP BY bom_ing_fid")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $ngOf[(int)$r['bom_ing_fid']] = (int)$r['ng'];
+            }
+        } catch (Throwable $e) { $ngOf = []; }
+        foreach ($massAgg as $fid => $agg) {
+            if (!$agg['finished']) continue;   // 只有整批報完工的才算「整批加工完成」佐證
+            $tr = ($agg['t0'] !== '' || $agg['t1'] !== '')
+                ? '　' . substr($agg['t0'], 11, 5) . '~' . substr($agg['t1'], 11, 5) : '';
+            $range = ($agg['d0'] === $agg['d1']) ? $agg['d0'] : ($agg['d0'] . '~' . $agg['d1']);
+            $ngTxt = isset($ngOf[$fid]) ? ('　良品 ' . max(0, $agg['qty'] - $ngOf[$fid]) . '／NG ' . $ngOf[$fid]) : '　共 ' . $agg['qty'] . ' 件';
+            $out['mass_done']['options'][] = ['date' => $agg['d1'],
+                'label' => $agg['bom'] . '　' . $agg['pn'] . '　整批完工　' . $range . $tr . $ngTxt,
+                'ref' => $agg['ref'], 'owner_id' => $agg['owner_id'], 'owner_name' => $agg['owner_name']];
         }
     }
     /* 建議負責人（只建議；要不要真的指派由 prj_auto_fill_tasks 判斷「目前沒指定人」才套用） */
@@ -1951,14 +2043,41 @@ function prj_task_evidence(PDO $db, int $projectId, ?array $prj = null): array
         $out['mass_done']['owner'] = ['id' => $uid, 'name' => $prodNm[$uid] ?? '',
                                       'why' => '報工紀錄中加工數量最多者（' . (int)$prodQty[$uid] . ' 件）'];
     }
-    foreach (['setup' => '架機', 'fai' => '報工', 'mass_done' => '完工'] as $k => $lbl) {
+    foreach (['setup' => '架機', 'mass_done' => '完工'] as $k => $lbl) {
         // 報工是由新到舊排的，佐證清單改成由舊到新（第一筆＝建議值）
         usort($out[$k]['options'], static fn($a, $b) => strcmp($a['date'], $b['date']));
         if (!$out[$k]['options']) $out[$k]['note'] = '這些製令還沒有' . $lbl . '的報工紀錄。';
     }
-    $out['fai']['note'] = ($out['fai']['options'] ? '' : '這些製令還沒有報工紀錄。')
-        . '首件檢驗目前沒有電子化，判定結果與日期請由品管自行填寫並上傳附件佐證。';
-    $out['final_qc']['note'] = '最終檢驗目前沒有電子化，請由品管填寫日期並上傳附件佐證。';
+    usort($out['fai']['options'], static fn($a, $b) => strcmp($a['date'], $b['date']));
+    /* ⑤b 資材報告（檢驗機或外部廠商出的報告，跟系統裡的 QC 線上檢驗紀錄不同——使用者 2026-09-23
+       特別強調兩者不是同一種東西）：part_viewer.php「設定標籤」勾選 is_report 的檔名標籤，
+       只給最終檢驗用（依製程大類篩選才有意義，FAI 是比對單一精確製程，報告沒有製程編號可比對）。 */
+    if ($pks) {
+        foreach ($pks as $pk) {
+            foreach (eg_bom_report_files_for_part($db, $pk) as $f) {
+                $out['final_qc']['options'][] = [
+                    'date' => $f['date'], 'label' => '報告：' . $f['label'] . '　' . $f['file_name'],
+                    'ref' => 'rptfile:' . $pk . ':' . $f['file_name'],
+                    'process_type_id' => $f['process_type_id'],   // null＝標籤沒設定大類，不限
+                ];
+            }
+        }
+    }
+
+    // 使用者 2026-09-23：首件／最終檢驗已改認線上檢驗（qc_check_form），這裡只在真的查不到時才提示，
+    // 且列印/勾選一律要看真正的 qc:xxx 紀錄，報工紀錄的「報工 N 件」只是輔助猜測、不是判定依據。
+    if (!array_filter($out['fai']['options'], static fn($o) => strpos((string)($o['ref'] ?? ''), 'qc:') === 0)) {
+        $out['fai']['note'] = '這些製程還沒有線上首件檢驗紀錄（inspection_entry_v2.php 的「首件」），'
+            . '請到線上檢驗建立，或直接填日期並上傳附件佐證。';
+    }
+    if (!$out['final_qc']['options']) {
+        $out['final_qc']['note'] = '這些製程還沒有線上檢驗紀錄，請到線上檢驗建立，或直接填日期並上傳附件佐證。';
+    }
+    usort($out['incoming_qc']['options'], static fn($a, $b) => strcmp($a['date'], $b['date']));
+    if (!array_filter($out['incoming_qc']['options'], static fn($o) => strpos((string)($o['ref'] ?? ''), 'qc:') === 0)
+        && !$out['incoming_qc']['options']) {
+        $out['incoming_qc']['note'] = 'BOM 上找不到「客供料」製程、線上檢驗紀錄，或還沒有回廠日。';
+    }
 
     // 同一天同來源的重複項收掉（報工一天常有好幾筆）
     foreach ($out as $k => $v) {
@@ -2684,7 +2803,8 @@ function prj_work_reports(PDO $db, int $projectId): array
                        us.user_cname AS setup_user, up.user_cname AS prod_user,
                        r.setup_user_id, r.production_user_id,
                        r.produced_qty AS qty, r.is_finished, r.remark AS note,
-                       r.production_start_time AS t1, r.production_end_time AS t2
+                       r.production_start_time AS t1, r.production_end_time AS t2,
+                       r.setup_start_time AS su_t1, r.setup_end_time AS su_t2, r.bom_ing_fid
                   FROM pm_process_daily_report r
                   JOIN bom_ing bi ON bi.bom_ing_fid = r.bom_ing_fid
                   JOIN ($src) srcA ON srcA.bom = bi.bom
@@ -2880,9 +3000,14 @@ function prj_bom_diff_text(array $prev, array $now): string
 
 function prj_processes(PDO $db, int $projectId, ?array $prj = null): array
 {
-    $st = $db->prepare("SELECT pp.*, COALESCE(ds.D_Setting_Id, '') AS part_no
+    // process_type_id/name 一併帶出：多製程專案要能依「製程大類」設定最終檢驗認列範圍
+    // （使用者 2026-09-23 要求），不在前端另外現查一次。
+    $st = $db->prepare("SELECT pp.*, COALESCE(ds.D_Setting_Id, '') AS part_no,
+                               pn.process_type_id, pt.process_type AS process_type_name
                         FROM project_process pp
                         LEFT JOIN d_setting ds ON ds.d_id=pp.ds_pk
+                        LEFT JOIN process_no pn ON pn.ProcessNo=pp.process_no
+                        LEFT JOIN process_type pt ON pt.process_type_id=pn.process_type_id
                         WHERE pp.project_id=?
                         ORDER BY pp.bom, pp.bom_sn, pp.id");
     $st->execute([$projectId]);
@@ -2934,6 +3059,32 @@ function prj_bom_dates_admin_update(PDO $db, int $projectId, int $bomIngFid, $ou
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
 
     return ['bom_ing_fid' => $bomIngFid, 'outsource_date' => $out, 'return_date' => $ret];
+}
+
+/**
+ * 尚未開 BOM 的新專案，負責人先手動建立預計製程順序（使用者 2026-09-23 要求）。
+ * 製程本身查 process_no 主檔（ss_proc_row，共用 sopsip_lib 的唯一實作，不另外寫一份），
+ * 不存在的製程編號一律擋下。
+ */
+function prj_process_manual_add(PDO $db, int $projectId, int $processNo, string $by): array
+{
+    require_once __DIR__ . '/sopsip_lib.php';
+    $row = ss_proc_row($db, $processNo);
+    if (!$row) throw new RuntimeException('查無此製程編號');
+    $st = $db->prepare("SELECT MIN(bom_ing_fid) FROM project_process WHERE project_id=? AND source='manual'");
+    $st->execute([$projectId]);
+    $next = (int)($st->fetchColumn() ?: 0);
+    $next = ($next >= 0) ? -1 : ($next - 1);
+    $sn = (int)$db->query("SELECT COALESCE(MAX(bom_sn),0)+10 FROM project_process WHERE project_id=" . (int)$projectId)->fetchColumn();
+    $db->prepare("INSERT INTO project_process (project_id, bom, bom_ing_fid, bom_sn, process_no, process_name, source, synced_at)
+                 VALUES (?, 'MANUAL', ?, ?, ?, ?, 'manual', NOW())")
+       ->execute([$projectId, $next, $sn, $processNo, (string)($row['process_name'] ?? '')]);
+    return ['id' => (int)$db->lastInsertId(), 'process_no' => $processNo, 'process_name' => $row['process_name']];
+}
+
+function prj_process_manual_remove(PDO $db, int $projectId, int $id): void
+{
+    $db->prepare("DELETE FROM project_process WHERE id=? AND project_id=? AND source='manual'")->execute([$id, $projectId]);
 }
 
 /** 未知悉的 BOM 變更提示（專案清單的紅色徽章與詳情頁的提示條都用這支） */

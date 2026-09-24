@@ -174,6 +174,81 @@ function eg_bom_tag_label(string $label, int $seq): string {
 }
 
 /**
+ * ERP/資材報告檔名標籤設定（part_viewer.php 的「設定標籤」跳窗維護，唯一來源）。
+ * 2026-09-23 使用者要求新增兩個欄位：is_report（這個標籤算不算「報告」，供專案管理模組挑選
+ * 佐證用；使用者明確指出這裡的報告是檢驗機或外部廠商出的報告，跟系統裡的 QC 線上檢驗紀錄不同）、
+ * process_type_id（這份報告屬於哪個製程大類，供依製程篩選候選用）。
+ */
+function eg_bom_file_tags_all(PDO $db): array {
+    try {
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='BOM_FILE_TAGS' AND param_key='tags_config' LIMIT 1");
+        $st->execute();
+        $arr = json_decode((string)$st->fetchColumn(), true);
+    } catch (Throwable $e) { $arr = null; }
+    if (!is_array($arr)) return [];
+    $out = [];
+    foreach ($arr as $t) {
+        $suffix = trim((string)($t['suffix'] ?? ''));
+        if ($suffix === '') continue;
+        $out[] = ['suffix' => $suffix, 'label' => trim((string)($t['label'] ?? '')), 'color' => (string)($t['color'] ?? ''),
+                  'is_report' => !empty($t['is_report']), 'process_type_id' => (int)($t['process_type_id'] ?? 0) ?: null];
+    }
+    return $out;
+}
+
+/**
+ * 這個料號、依「報告」標籤篩出的 ERP/資材報告檔案（給專案管理模組的 FAI／最終檢驗步驟當候選
+ * 佐證用；$processTypeId 給了就只留該製程大類的標籤，不給就不限）。同一個標籤只留最新一份，
+ * 判定與 type_id_ctrl_fetch_bom_files_for_part() 同一套（eg_bom_tag_seq），只是這裡篩的是
+ * is_report=1 的標籤而非該模組自己勾選列入的標籤——兩套認列範圍本來就不同，不可以共用同一份設定。
+ */
+function eg_bom_report_files_for_part(PDO $db, int $dsPk, ?int $processTypeId = null): array {
+    if (!$dsPk) return [];
+    $tags = array_values(array_filter(eg_bom_file_tags_all($db), static function ($t) use ($processTypeId) {
+        if (empty($t['is_report'])) return false;
+        if ($processTypeId !== null && (int)($t['process_type_id'] ?? 0) !== $processTypeId) return false;
+        return true;
+    }));
+    if (!$tags) return [];
+
+    try {
+        $st = $db->prepare("SELECT DISTINCT bom FROM bom WHERE d_setting_id=? AND bom<>''");
+        $st->execute([$dsPk]);
+        $boms = $st->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Throwable $e) { return []; }
+    if (!$boms) return [];
+
+    $dirFs = eg_bom_erp_scan_dir_auto();
+    if (!is_dir($dirFs)) return [];
+
+    $best = [];
+    foreach ($boms as $bom) {
+        $bom = trim((string)$bom);
+        if ($bom === '') continue;
+        foreach (glob($dirFs . $bom . '*') ?: [] as $full) {
+            if (!is_file($full)) continue;
+            $nameUtf8 = eg_bom_name_utf8(basename($full));
+            foreach ($tags as $t) {
+                $n = eg_bom_tag_seq($nameUtf8, $bom . $t['suffix']);
+                if ($n === null) continue;
+                $key = $t['suffix'] . ($n > 1 ? $n : '');
+                $mtime = (int)@filemtime($full);
+                if (!isset($best[$key]) || $mtime > $best[$key]['mtime']) {
+                    $best[$key] = ['mtime' => $mtime, 'name' => $nameUtf8, 'label' => eg_bom_tag_label($t['label'], $n),
+                                   'process_type_id' => $t['process_type_id']];
+                }
+            }
+        }
+    }
+    $out = [];
+    foreach ($best as $b) {
+        $out[] = ['file_name' => $b['name'], 'label' => $b['label'], 'date' => date('Y-m-d', $b['mtime']),
+                  'process_type_id' => $b['process_type_id']];
+    }
+    return $out;
+}
+
+/**
  * 設定頁用的連線測試：回報這個路徑讀不讀得到、有幾個檔、實際用了哪種編碼。
  * 「先確認讀得到才替換」就是靠這支——不要等使用者發現圖面消失才知道設錯。
  * 只做一次目錄列舉、不對檔案做 stat（那個資料夾有上萬個檔）。

@@ -581,6 +581,36 @@ case 'report_get':
     $kinds = prj_auto_kinds_of((string)$task['task_name'], (string)$task['task_kind']);
     // 佐證是整個專案共用的（同一批 BOM／料號），一次算好再依 kind 取用
     $ev = prj_task_evidence($db, $pid, $prj);
+    // 多製程專案：這個步驟指定了對應的製程（FAI）或製程大類（最終檢驗）時，候選只留符合的那幾筆，
+    // 避免好幾道製程的首件檢驗混在一起挑錯（使用者 2026-09-23 明確要求）。
+    // 篩到一筆都不剩時仍然把全部列出來（比讓人以為「完全沒有資料」安全，畫面上原本就看得到日期與製程名）。
+    $linkProc = (int)($task['link_process_no'] ?? 0);
+    $linkType = (int)($task['link_process_type_id'] ?? 0);
+    if ($linkProc > 0 && !empty($ev['fai']['options'])) {
+        $filtered = array_values(array_filter($ev['fai']['options'], static fn($o) => (int)($o['process_no'] ?? 0) === $linkProc));
+        if ($filtered) $ev['fai']['options'] = $filtered;
+    }
+    if ($linkType > 0 && !empty($ev['final_qc']['options'])) {
+        $nos = array_values(array_unique(array_map(static fn($o) => (int)($o['process_no'] ?? 0), $ev['final_qc']['options'])));
+        $typeIdOf = [];
+        if ($nos) {
+            $inList = implode(',', array_map('intval', $nos));
+            try {
+                foreach ($db->query("SELECT ProcessNo, process_type_id FROM process_no WHERE ProcessNo IN ($inList)")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    $typeIdOf[(int)$r['ProcessNo']] = (int)$r['process_type_id'];
+                }
+            } catch (Throwable $e) {}
+        }
+        $filtered = array_values(array_filter($ev['final_qc']['options'], static function ($o) use ($typeIdOf, $linkType) {
+            // 報告類佐證（rptfile:）本身就帶著自己的製程大類；沒設定大類的報告視為不限、一律放行
+            if (strpos((string)($o['ref'] ?? ''), 'rptfile:') === 0) {
+                $t = $o['process_type_id'] ?? null;
+                return $t === null || (int)$t === $linkType;
+            }
+            return ($typeIdOf[(int)($o['process_no'] ?? 0)] ?? 0) === $linkType;
+        }));
+        if ($filtered) $ev['final_qc']['options'] = $filtered;
+    }
     $pick = [];
     foreach ($kinds as $k) $pick[$k] = ['label' => PRJ_AUTO_KINDS[$k] ?? $k] + $ev[$k];
     jout(['task' => $task, 'kinds' => $pick, 'attaches' => prj_task_attaches($db, $tid),
@@ -632,6 +662,19 @@ case 'report_save':
             if (isset($okSet[$sig])) $keep[] = $okSet[$sig];
         }
         if ($keep) $evJson = json_encode($keep, JSON_UNESCAPED_UNICODE);
+    }
+
+    // 管理員設定「結案前必須附報告佐證」時，FAI／最終檢驗步驟結案要至少有一筆 rptfile: 佐證
+    // （使用者 2026-09-23：非必需也一樣可以連結，這裡只在管理員開了這個開關時才強制）。
+    if ($sc === 'done' && prj_setting_get($db, 'require_report_evidence', '0') === '1') {
+        $kk = prj_auto_kinds_of((string)$task['task_name'], (string)$task['task_kind']);
+        if (array_intersect($kk, ['fai', 'final_qc'])) {
+            $hasReport = false;
+            foreach (json_decode((string)$evJson, true) ?: [] as $e) {
+                if (strpos((string)($e['ref'] ?? ''), 'rptfile:') === 0) { $hasReport = true; break; }
+            }
+            if (!$hasReport) jerr('這個步驟要結案前，管理員設定必須至少勾選一筆「報告」佐證（見上方自動偵測到的佐證清單）');
+        }
     }
 
     $db->prepare("UPDATE project_task SET act_start=?, act_end=?, progress=?, progress_auto=?, status_code=?,
@@ -924,6 +967,20 @@ case 'plan_save':
             $pAuto = array_key_exists('progress_auto', $t) ? (!empty($t['progress_auto']) ? 1 : 0) : 1;
             $pVal  = $pAuto ? prj_task_progress_auto(['act_end' => $actE])
                             : max(0, min(100, (int)($t['progress'] ?? 0)));
+            // 多製程專案指定 FAI 對應製程／最終檢驗對應製程大類（使用者 2026-09-23 要求）；
+            // 不存在的製程編號／大類一律當沒填，避免存進一個查無此製程的髒值。
+            $linkProc = (int)($t['link_process_no'] ?? 0);
+            if ($linkProc > 0) {
+                $chk = $db->prepare("SELECT 1 FROM project_process WHERE project_id=? AND process_no=? LIMIT 1");
+                $chk->execute([$pid, $linkProc]);
+                if (!$chk->fetchColumn()) $linkProc = 0;
+            }
+            $linkType = (int)($t['link_process_type_id'] ?? 0);
+            if ($linkType > 0) {
+                $chk2 = $db->prepare("SELECT 1 FROM process_type WHERE process_type_id=? LIMIT 1");
+                $chk2->execute([$linkType]);
+                if (!$chk2->fetchColumn()) $linkType = 0;
+            }
             $args = [
                 (int)($t['goal_id'] ?? 0) ?: null, $name,
                 trim((string)($t['plan_start'] ?? '')) ?: null, trim((string)($t['plan_end'] ?? '')) ?: null,
@@ -936,18 +993,20 @@ case 'plan_save':
                 trim((string)($t['note'] ?? '')), $j,
                 /* 流程相依：只收 par／seq 兩種，第一列一律 seq（沒有「上一列」可以並行） */
                 ($j > 0 && (string)($t['dep_mode'] ?? '') === 'par') ? 'par' : 'seq',
+                $linkProc ?: null, $linkType ?: null,
             ];
             if ($tid) {
                 $db->prepare("UPDATE project_task SET goal_id=?, task_name=?, plan_start=?, plan_end=?, act_start=?,
                                     act_end=?, owner_id=?, owner_name=?, owner_dept_id=?, progress=?, progress_auto=?,
-                                    is_milestone=?, status_code=?, tag_ids=?, note=?, sort_order=?, dep_mode=?
+                                    is_milestone=?, status_code=?, tag_ids=?, note=?, sort_order=?, dep_mode=?,
+                                    link_process_no=?, link_process_type_id=?
                               WHERE task_id=? AND project_id=?")
                    ->execute(array_merge($args, [$tid, $pid]));
             } else {
                 $db->prepare("INSERT INTO project_task (goal_id, task_name, plan_start, plan_end, act_start, act_end,
                                     owner_id, owner_name, owner_dept_id, progress, progress_auto, is_milestone,
-                                    status_code, tag_ids, note, sort_order, dep_mode, project_id)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                                    status_code, tag_ids, note, sort_order, dep_mode, link_process_no, link_process_type_id, project_id)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                    ->execute(array_merge($args, [$pid]));
                 $tid = (int)$db->lastInsertId();
             }
@@ -1090,6 +1149,28 @@ case 'bom_alert_ack':
            ->execute([$uname, $NOW['dt'], $pid]);
     }
     jout(['message' => '已標記知悉', 'alerts' => prj_bom_alerts($db, $pid)]);
+
+/** 還沒開 BOM 的新專案，負責人先手動建立預計製程順序（使用者 2026-09-23 要求）。
+ *  製程查詢直接用打字模糊搜尋（依編號或名稱），不做成一個攤開的下拉（209 筆）。 */
+case 'process_search':
+    $pid = (int)($_GET['project_id'] ?? 0);
+    prj_need($db, $P, $pid);
+    require_once __DIR__ . '/../common/sopsip_lib.php';
+    jout(['rows' => ss_search_process($db, (string)($_GET['kw'] ?? ''), 40)]);
+
+case 'process_manual_add':
+    $pid = (int)($_POST['project_id'] ?? 0);
+    prj_need($db, $P, $pid, true);
+    try {
+        $r = prj_process_manual_add($db, $pid, (int)($_POST['process_no'] ?? 0), $uname);
+    } catch (Throwable $e) { jerr($e->getMessage()); }
+    jout(['message' => '已加入製程 ' . $r['process_name'], 'processes' => prj_processes($db, $pid, prj_get($db, $pid))]);
+
+case 'process_manual_remove':
+    $pid = (int)($_POST['project_id'] ?? 0);
+    prj_need($db, $P, $pid, true);
+    prj_process_manual_remove($db, $pid, (int)($_POST['id'] ?? 0));
+    jout(['message' => '已移除', 'processes' => prj_processes($db, $pid, prj_get($db, $pid))]);
 
 case 'process_note':
     $pid = (int)($_POST['project_id'] ?? 0);
@@ -1594,6 +1675,8 @@ case 'setting_get':
         'doc_sip_scopes'          => prj_setting_get($db, 'doc_sip_scopes', 'part,process'),
         'owner_default_dept_id'   => (string)prj_owner_default_dept($db),
         'owner_order'             => implode(',', prj_owner_order($db)),
+        // FAI／最終檢驗是否必須附上報告佐證才能結案（使用者 2026-09-23：非必需也一樣可以連結）
+        'require_report_evidence' => prj_setting_get($db, 'require_report_evidence', '0'),
     ], 'owner_scope_rows' => prj_owner_scope_labeled($db),
      'attach_cats' => (function (PDO $db) {
          try {
@@ -1612,7 +1695,8 @@ case 'setting_save':
               'plan_stamp_tpl_id' => '執行規劃表圖章模板', 'card_stamp_tpl_id' => '管理卡圖章模板',
               'drawing_attach_cats' => '算「加工圖面」的附件標籤',
               'o2p_attach_cats' => '訂單轉專案「料號附件」認的標籤',
-              'doc_sop_scopes' => '文件檢核 SOP 認列來源', 'doc_sip_scopes' => '文件檢核 SIP 認列來源'] as $k => $desc) {
+              'doc_sop_scopes' => '文件檢核 SOP 認列來源', 'doc_sip_scopes' => '文件檢核 SIP 認列來源',
+              'require_report_evidence' => 'FAI／最終檢驗是否必須附報告佐證才能結案'] as $k => $desc) {
         if (!array_key_exists($k, $_POST)) continue;
         prj_setting_save($db, $k, trim((string)$_POST[$k]), $desc, $uname);
     }
