@@ -113,6 +113,7 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 .tbl-wrap { max-height:420px; overflow:auto; border:1px solid var(--line); border-radius:6px; }
 .tbl-wrap table.oa-t th { position:sticky; top:0; z-index:2; }
 .badge-new  { background:var(--coral); color:#fff; border-radius:9px; padding:1px 7px; font-size:10px; line-height:16px; display:inline-block; }
+.badge-return { background:var(--amber); color:#4E2C0B; border-radius:9px; padding:1px 7px; font-size:10px; line-height:16px; display:inline-block; }
 .badge-lost { background:#7A4A34; color:#fff; border-radius:9px; padding:1px 7px; font-size:10px; line-height:16px; display:inline-block; }
 .badge-warn { background:var(--sand); color:#6B4423; border-radius:9px; padding:1px 7px; font-size:10px; line-height:16px; display:inline-block; }
 /* 客戶 chips */
@@ -467,6 +468,9 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
             規則與每條規則命中幾筆都列在「全製／單製分析」區塊，判得不對請到「設定」調整關鍵字。</li>
         <li><b>客戶會自動歸戶</b>：ERP 寫「高鋒工業」、主檔是「高鋒」會算成同一家（含別名）。
             對不到客戶主檔的會標「未建主檔」，請到會計的對帳作業建別名。</li>
+        <li><b>「新客戶」與「回流客戶」是兩件不同的事</b>：「新客戶」＝這家客戶在系統整段歷史裡（出貨／訂單／退貨）
+            第一次出現就落在本期；「回流客戶」＝以前就下過單，只是比較的那一期剛好沒下、這期又回來——
+            <b>回流客戶不是新開發的客源</b>，不要混為一談。</li>
       </ul>
 
       <h4>設定入口</h4>
@@ -1160,7 +1164,8 @@ function renderClient(){
   keys.forEach(function(k){
     var c = byKey[k]; if(!c) return;
     h += '<tr><td>'+esc(c.name)+(c.bad?' <span class="badge-warn">未建主檔</span>':'')
-       + (c.flag==='new'?' <span class="badge-new">新客戶</span>':'')+'</td>'
+       + (c.flag==='new'?' <span class="badge-new">新客戶</span>':'')
+       + (c.flag==='return'?' <span class="badge-return">回流客戶</span>':'')+'</td>'
        + '<td class="n">'+nf(c.cur.orders)+'</td><td class="n">'+nf(c.cur.qty)+'</td>'
        + '<td class="n">'+money(c.cur.amount)+'</td><td class="n">'+nf(c.parts)+'</td>'
        + '<td class="n">'+nf(c.new_parts)+'</td><td class="n">'+nf(c.cur.full)+'</td><td class="n">'+nf(c.cur.single)+'</td>'
@@ -1214,6 +1219,7 @@ function renderRank(){
     arr.forEach(function(c){
       h += '<tr><td>'+esc(c.name)
          + (c.flag==='new'?' <span class="badge-new">新客戶</span>':'')
+         + (c.flag==='return'?' <span class="badge-return">回流客戶</span>':'')
          + (c.flag==='lost'?' <span class="badge-lost">本期掛零</span>':'')
          + (c.bad?' <span class="badge-warn">未建主檔</span>':'')+'</td>'
          + '<td class="n">'+fmt(c.cur[m.rank_metric])+'</td>'
@@ -1230,7 +1236,8 @@ function renderRank(){
         + esc(lost.map(function(c){return c.name;}).slice(0,40).join('、')) + (lost.length>40?' …':'') + '</td></tr>';
   }
   $('#tblRankDown').find('tbody').html(dh||'<tr><td colspan="4" style="text-align:center;color:#a08a6f;">沒有衰退的客戶</td></tr>');
-  $('#rankHint').text('依「較'+m.cmp_label+'的增減'+metLabel(m.rank_metric)+'」排序（不是依百分比——只看 % 的話小客戶會永遠排在大客戶前面）');
+  $('#rankHint').text('依「較'+m.cmp_label+'的增減'+metLabel(m.rank_metric)+'」排序（不是依百分比——只看 % 的話小客戶會永遠排在大客戶前面）。'
+    + '「新客戶」＝系統裡本期才第一次出現；「回流客戶」＝以前下過單，只是'+m.cmp_label+'剛好沒下、這期又回來——兩者處理方式不同，不要混為一談。');
 }
 $('#rankTop').on('change', function(){ if(DATA) renderRank(); });
 
@@ -1306,7 +1313,7 @@ $('#btnCsv').on('click', function(){
   (DATA.clients||[]).forEach(function(c){
     row('', c.name, c.cid, c.cur.orders, c.cur.qty, Math.round(c.cur.amount),
         c.cmp.orders, c.cmp.qty, Math.round(c.cmp.amount), c.parts, c.new_parts, c.cur.full, c.cur.single,
-        (c.flag==='new'?'新客戶':(c.flag==='lost'?'本期掛零':''))+(c.bad?' 未建主檔':''));
+        (c.flag==='new'?'新客戶':(c.flag==='return'?'回流客戶':(c.flag==='lost'?'本期掛零':'')))+(c.bad?' 未建主檔':''));
   });
   row('');
   row('【受訂料號排名】','#','料號','客戶','本期筆數','本期數量','本期金額','基期金額','是否新料號','第一次出現','來源');
@@ -1394,7 +1401,7 @@ function oaPrintHtml(){
     'tr:nth-child(even) td{background:#FDFBF8;}'+
     '.tr{text-align:right;} .tc{text-align:center;}'+
     '.pr-badge{font-size:7.5pt;border-radius:2.5mm;padding:0.2mm 1.6mm;color:#fff;}'+
-    '.pr-badge.new{background:#DD5138;} .pr-badge.lost{background:#7A4A34;} .pr-badge.warn{background:#F7E0BD;color:#6B4423;}'+
+    '.pr-badge.new{background:#DD5138;} .pr-badge.return{background:#F0A24B;color:#4E2C0B;} .pr-badge.lost{background:#7A4A34;} .pr-badge.warn{background:#F7E0BD;color:#6B4423;}'+
     '.pr-note{font-size:8pt;color:#6B4423;background:#faf6f0;border-left:1mm solid #F0A24B;padding:2mm 3mm;margin-bottom:3mm;line-height:1.6;}'+
     '.pr-footer{margin-top:3mm;padding-top:2mm;border-top:0.2mm solid #E4D3BC;font-size:7.5pt;color:#a08a6f;text-align:center;}';
 
@@ -1477,7 +1484,7 @@ function oaPrintHtml(){
   var ups = (DATA.rank_clients||[]).filter(function(c){return c[mk]>0;}).slice(0,10);
   var downs = (DATA.rank_clients||[]).filter(function(c){return c[mk]<0;}).sort(function(a,b){return a[mk]-b[mk];}).slice(0,10);
   function rankRows(list){ var s=''; list.forEach(function(c){
-    s += '<tr><td>'+esc(c.name)+(c.flag==='new'?' <span class="pr-badge new">新</span>':'')+(c.flag==='lost'?' <span class="pr-badge lost">掛零</span>':'')+'</td>'+
+    s += '<tr><td>'+esc(c.name)+(c.flag==='new'?' <span class="pr-badge new">新</span>':'')+(c.flag==='return'?' <span class="pr-badge return">回流</span>':'')+(c.flag==='lost'?' <span class="pr-badge lost">掛零</span>':'')+'</td>'+
       '<td class="tr">'+fmt(c.cur[m.rank_metric])+'</td><td class="tr">'+fmt(c.cmp[m.rank_metric])+'</td>'+
       '<td class="tr">'+(c[mk]>=0?'+':'')+fmt(c[mk])+'</td></tr>'; });
     return s || '<tr><td colspan="4" class="tc">無</td></tr>'; }

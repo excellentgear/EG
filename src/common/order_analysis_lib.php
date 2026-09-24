@@ -414,6 +414,59 @@ function oa_source_labels(): array
     return ['ship' => '出貨', 'order' => '訂單', 'bom' => '製令', 'ir' => '退貨'];
 }
 
+/**
+ * 客戶「第一次出現」的日期（真正的新客戶判定唯一依據，2026-09-24 新增）。
+ *
+ * 背景：原本客戶比較表把「基期 0、本期有」直接標成「新客戶」，但那只是跟**比較基期**比，
+ * 不是跟客戶在系統裡的完整歷史比——實測 2026 Q3 有 41 家被標新客戶，其中只有 10 家是真的
+ * 系統裡第一次出現，另外 31 家（如倉佑 2024-01-04、錡夆 2024-02-27 就下過單）只是**去年同期
+ * 剛好沒下單、這期又回來**，那應該叫「回流客戶」不是「新客戶」，兩者對業務的意義完全不同
+ * （新客戶要問「怎麼開發到的」，回流客戶要問「之前為什麼停了、現在為什麼又回來」）。
+ *
+ * 來源刻意只取**出貨／訂單／退貨**三個——客戶關係的起點一定是報價或下單，不會是製令
+ * （製令的客戶還要透過料號或訂單反推，作為「這家客戶何時開始往來」的依據不夠直接，
+ * 且 bom_client_lib.php 已經記過料號文字辨識客戶本身就不可靠，不重複踩那個坑）。
+ */
+function oa_client_first_seen(PDO $db): array
+{
+    static $cache = null;
+    if ($cache !== null) return $cache;
+
+    $resolve = cqa_client_resolver($db);
+    $map = [];   // ckey => ['d'=>'YYYY-MM-DD', 's'=>來源代碼]
+    $put = function ($cid, $name, $d, $s) use (&$map, $resolve) {
+        $d = substr((string)$d, 0, 10);
+        if ($d === '' || $d < '1990-01-01' || $d > '2100-12-31') return;
+        $c = $resolve($cid, $name);
+        $k = $c['key'];
+        if (!isset($map[$k]) || $d < $map[$k]['d']) $map[$k] = ['d' => $d, 's' => $s];
+    };
+
+    try {
+        foreach ($db->query("SELECT Client_id, Client_name, MIN(DATE(Order_date)) d FROM is_list
+                             GROUP BY Client_id, Client_name") as $r) {
+            $put($r['Client_id'], $r['Client_name'], $r['d'], 'ship');
+        }
+    } catch (Throwable $e) {}
+
+    try {
+        foreach ($db->query("SELECT Client_name_ID, Client_name, MIN(Order_date) d FROM order_track
+                             GROUP BY Client_name_ID, Client_name") as $r) {
+            $put($r['Client_name_ID'], $r['Client_name'], $r['d'], 'order');
+        }
+    } catch (Throwable $e) {}
+
+    try {
+        // ir_track 沒有客戶編號欄位（見 client_quarter_lib.php 的說明），只能傳名稱
+        foreach ($db->query("SELECT Client_name, MIN(IR_date) d FROM ir_track GROUP BY Client_name") as $r) {
+            $put('', $r['Client_name'], $r['d'], 'ir');
+        }
+    } catch (Throwable $e) {}
+
+    $cache = $map;
+    return $cache;
+}
+
 /* ══════════════════════════════════════════════════════════════════
  * 取訂單並正規化（客戶歸戶、料號歸戶、金額、全製／單製）
  * ══════════════════════════════════════════════════════════════════ */
@@ -523,6 +576,7 @@ function oa_analyze(PDO $db, array $opt = []): array
     $rules    = oa_proc_rules($db);
     $fallback = oa_proc_fallback($db);
     $fs       = oa_first_seen($db);
+    $clFirst  = oa_client_first_seen($db);
 
     $cur   = oa_period_pick($year, $gran, $idx);
     $cmpP  = oa_compare_period($year, $gran, $idx, $cmpK);
@@ -658,8 +712,19 @@ function oa_analyze(PDO $db, array $opt = []): array
         $c['d_amount'] = $c['cur']['amount'] - $c['cmp']['amount'];
         $c['d_orders'] = $c['cur']['orders'] - $c['cmp']['orders'];
         $c['d_qty']    = $c['cur']['qty']    - $c['cmp']['qty'];
-        $c['flag']     = ($c['cmp']['orders'] == 0 && $c['cur']['orders'] > 0) ? 'new'
-                       : (($c['cur']['orders'] == 0 && $c['cmp']['orders'] > 0) ? 'lost' : '');
+        // 「新客戶」＝這家客戶在系統整段歷史裡第一次出現就落在本期；
+        // 基期 0、本期有，但系統裡早就查得到更早的出貨/訂單/退貨 → 是「回流客戶」不是新客戶
+        // （2026-09-24 修正：原本只跟比較基期比，41 家裡有 31 家其實以前就下過單）。
+        $cf = $clFirst[$k] ?? null;
+        $c['first'] = $cf ? $cf['d'] : '';
+        $c['fsrc']  = $cf ? $cf['s'] : '';
+        if ($c['cmp']['orders'] == 0 && $c['cur']['orders'] > 0) {
+            $c['flag'] = ($cf && $cf['d'] >= $curE['start'] && $cf['d'] <= $curE['end']) ? 'new' : 'return';
+        } elseif ($c['cur']['orders'] == 0 && $c['cmp']['orders'] > 0) {
+            $c['flag'] = 'lost';
+        } else {
+            $c['flag'] = '';
+        }
         $clientRows[] = $c;
     }
 
