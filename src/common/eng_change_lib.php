@@ -1665,6 +1665,16 @@ function ec_bulk_proxy_sign(PDO $db, int $ecId, array $picks, string $date, int 
     if ($date < (string)$row['apply_date']) throw new Exception('簽章日期不可早於申請單日期');
     if ($date > ec_db_now($db)['d']) throw new Exception('簽章日期不可晚於今天');
 
+    // ★使用者要求 2026-09-23（二次）：補舊資料時不必先按「送出」，直接從草稿一次代簽到底。
+    //   草稿階段還沒驗過表頭必填（客戶／料號／申請單位／申請人／變更方式），
+    //   正常送出時是 ec_submit() 裡的 ec_validate() 在把關，這裡也要補驗一次，
+    //   否則會簽出一張連客戶、料號都還沒填的申請單。
+    $wasDraft = ((string)$row['status'] === 'DRAFT');
+    if ($wasDraft) {
+        $err = ec_validate($db, $row);
+        if ($err) throw new Exception('表頭還有必填欄位沒填完，請先在申請單填完再代簽：' . implode('、', array_values($err)));
+    }
+
     // ★單一製程要不要略過倉管，ec_sign_slots() 是看「目前 DB 裡」的 single_process 決定的——
     //   如果這次代簽正是要**順便勾選**單一製程（技術課欄位跟簽核一次做完），這個值這時候
     //   還沒寫進去，倉管那一格就會被誤判成還要簽（實測踩到）。先把這個值寫進去，
@@ -1751,6 +1761,14 @@ function ec_bulk_proxy_sign(PDO $db, int $ecId, array $picks, string $date, int 
         $row = ec_row($db, $ecId);
         if ($t['slot']['kind'] === 'applicant') {
             ec_stamp_applicant($db, $ecId, $t['pick'], $at, (int)$t['cand']['dept_id'], $uid, $uname);
+            if ($wasDraft) {
+                // 比照 ec_submit()：文件編號在這裡正式鎖定（草稿號碼只是預覽，可能跟別張草稿
+                // 同一天挑到同一號），狀態推進到下一關，並補上「送出」時間——這格簽完
+                // 這張單就正式成立了，後面的 SUP/WH/... 各關卡照原本的迴圈邏輯繼續往下簽。
+                ec_lock_doc_no_on_submit($db, $ecId);
+                $db->prepare("UPDATE eng_change SET status='SUP', submitted_at=?, updated_by=?, updated_at=NOW()
+                              WHERE ec_id=?")->execute([$at, $uid ?: null, $ecId]);
+            }
         } elseif ($t['slot']['kind'] === 'review') {
             ec_stamp_review($db, $ecId, (string)$t['slot']['unit_key'], $t['pick'], $at,
                             (int)$t['cand']['dept_id'], $uid, $uname);

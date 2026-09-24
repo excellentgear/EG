@@ -658,6 +658,9 @@ $openId = (int)($_GET['id'] ?? 0);
                 <b>章仍然蓋原本該簽的那個人</b>，這一關有好幾位合格簽核人時會先問要代誰簽；
                 下一關的「送出人員」也記成他。實際是管理員按的這件事<b>只在本單的簽核紀錄顯示</b>（橘色小籤），
                 <b>列印版不會印出來</b>。</li>
+            <li><b>「一次代簽全部」不必先按送出</b>：補舊資料（單據日期早於今天）時，管理員可以直接在草稿階段
+                按「一次代簽全部」，一次把「申請人」到「管制員」全部關卡挑好簽核人並簽完——
+                不必先按「送出」再回頭代簽一次。</li>
         </ul>
 
         <h4>刪除</h4>
@@ -986,9 +989,13 @@ function applyStageUI(d, signers){
     $('#btnEcDel').toggle(+d.can_delete === 1)
                   .html('<i class="fa fa-trash"></i> ' + (d.status === 'DRAFT' ? '刪除這張草稿' : '刪除'));
     $('#btnEcPrintAtt').toggle(CUR_ATT.length > 0).html('<i class="fa fa-paperclip"></i> 列印所有附件（' + CUR_ATT.length + '）');
-    // 一次代簽全部：管理員限定，且要先送出（DRAFT 的申請人那一格是由「送出」蓋的），還有沒簽的格子才出現
+    // 一次代簽全部：管理員限定，還有沒簽的格子才出現。
+    // 使用者要求 2026-09-23（二次）：補舊資料（單據日期早於今天）時，不必先按「送出」，
+    // 管理員可以直接從草稿一次簽到底——「申請人」那一格改由後端 ec_bulk_proxy_sign()
+    // 在代簽當下順便補蓋（比照送出的邏輯：鎖定文件編號、狀態推進到下一關），
+    // 所以這裡不再限制 st !== 'DRAFT'。
     var pending = (CUR_SLOTS || []).filter(function(s){ return !s.signed; }).length;
-    $('#btnEcBulk').toggle(!!(PERMS && PERMS.canAdmin) && st !== 'DRAFT' && pending > 0)
+    $('#btnEcBulk').toggle(!!(PERMS && PERMS.canAdmin) && pending > 0)
                    .html('<i class="fa fa-pencil-square-o"></i> 一次代簽全部（' + pending + '）');
 
     // 「目前等待」要印出**部門與職稱**，而且多人可簽的關卡要把人全部列出來（使用者要求 2026-09-23）
@@ -2036,6 +2043,10 @@ function buildSettings(){
     });
     $('.set-sign').each(function(){ togglePick($(this).data('k'), this.value); });
     $('#set_auto').prop('checked', +SETTINGS.ec_auto_from_dwg === 1);
+    // 使用者回報 2026-09-23（二次）：勾了「加印簽核紀錄」存檔後勾選又不見、列印也還是沒印——
+    // 根因是這裡從來沒有把 SETTINGS 讀回這顆勾選框（下面 btnSetSave 也從來沒有把它送出去，
+    // 兩邊都漏了，等於這顆勾選框從頭到尾沒有真的存進過 DB）。
+    $('#set_print_sign_log').prop('checked', +SETTINGS.ec_print_sign_log === 1);
     buildAttachSettings();
     showAsDoc();
     loadStampTemplates();
@@ -2160,6 +2171,7 @@ $('#btnClearAsDoc').on('click', function(){
 });
 $('#btnSetSave').on('click', function(){
     var p = {action:'save_setting', ec_auto_from_dwg: $('#set_auto').is(':checked') ? 1 : 0,
+             ec_print_sign_log: $('#set_print_sign_log').is(':checked') ? 1 : 0,
              ec_stamp_tpl_id: $('#set_stamp').val() || '', ec_review_stamp_tpl_id: $('#set_rv_stamp').val() || '',
              ec_attach_hint_apply: $('#set_hint_apply').val() || '',
              ec_attach_hint_design: $('#set_hint_design').val() || ''};
@@ -2318,8 +2330,10 @@ function printHtml(res){
         + '.rvsig{width:34mm;height:9mm;text-align:center;padding:0.5mm;}'
         + '.op{display:block;margin-top:0.6mm;}'
         /* 流程註記改放頁尾附註**上方**、橫排一整行（使用者要求 2026-09-23：
-           原本放在申請單位表格右下角，改成顯示在「※此表單底稿由技術課存查…」上方）。 */
-        + '.flowline{font-size:8pt;text-align:center;letter-spacing:0.5px;margin-top:1.5mm;}'
+           原本放在申請單位表格右下角，改成顯示在「※此表單底稿由技術課存查…」上方）。
+           使用者再要求 2026-09-23（二次）：靠左對齊、箭頭方向改成往右（原本用「↓」是抄紙本由上而下
+           分區的順序，這裡是橫排一整行，用「↓」看起來像跳行，改「→」才符合橫向排列的視覺）。 */
+        + '.flowline{font-size:8pt;text-align:left;letter-spacing:0.5px;margin-top:1.5mm;}'
         + '.ft{font-size:8pt;margin-top:0.8mm;}'
         /* 頁尾附註下方的簽核紀錄（可設定是否列印） */
         + 'table.siglog{margin-top:1.5mm;}'
@@ -2414,7 +2428,7 @@ function printHtml(res){
         +     '<td class="lbs">管制員</td><td class="sig">' + sg('ctrl') + '</td></tr>'
         + '</table>'
 
-        + '<div class="flowline">流程：申請單位↓倉管↓技術↓其他單位(僅需會審者)↓技術</div>'
+        + '<div class="flowline">流程：申請單位→倉管→技術→其他單位(僅需會審者)→技術</div>'
         + '<div class="ft">※此表單底稿由技術課存查　※文件編號以西元年月日加流水號，例如：20220101001</div>'
         /* 簽核紀錄（管理員可設定是否列印）。
            ★這一塊**絕對不可以出現「管理員○○○代簽」字樣**（使用者明確要求）——
