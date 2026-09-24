@@ -210,6 +210,17 @@ function ocq_build_filter($p, $exclude = []) {
             WHERE bi_v.bom = b.bom AND (ml_v.maker_id LIKE ? OR bi_v.maker_id_no LIKE ?))";
         $like = '%' . $p['vendor'] . '%'; $params[] = $like; $params[] = $like;
     }
+    // 指定 BOM 清單（2026-09-24）：由訂單追蹤「BOM開立」圖示帶入——該訂單綁定的 BOM 已經完工、
+    // 在 BOM總覽查不到時就改開這一頁。這裡刻意是**完全相同**的比對（不是 LIKE），而且支援多張，
+    // 因為一張訂單可能綁好幾張 BOM（實測 101 張訂單綁 2~6 張）；用關鍵字欄位帶不了多張——
+    // 那個欄位的多個關鍵字是 AND 條件，兩張 BOM 一起丟進去會一筆都查不到。
+    if (!in_array('bom_list', $exclude, true) && !empty($p['bom_list'])) {
+        $bl = array_values(array_filter(array_map('trim', explode(',', (string)$p['bom_list']))));
+        if ($bl) {
+            $where[] = 'b.bom IN (' . implode(',', array_fill(0, count($bl), '?')) . ')';
+            foreach ($bl as $_b) $params[] = $_b;
+        }
+    }
     if (!in_array('bom', $exclude, true) && !empty($p['bom'])) {
         $where[] = '(b.bom LIKE ? OR b.d_id LIKE ?)';
         $like = '%' . $p['bom'] . '%'; $params[] = $like; $params[] = $like;
@@ -2447,8 +2458,12 @@ $('#yearBar .ocq-ybtn[data-range]').on('click', function(){
 // 預設近1年（原本是近30天；使用者拍板改為近1年，跨年時才不會1月1日一開就只剩幾天的資料）
 (function(){ var r = yRange1y(); $('#fDateFrom').val(r[0]); $('#fDateTo').val(r[1]); })();
 
+// 由訂單追蹤「BOM開立」圖示帶進來的指定 BOM 清單（?boms=B-xxx,B-yyy）。
+// 這是「只看這張訂單綁定的那幾張已完工BOM」，所以不受畫面上其他篩選影響，一律跟著每次查詢送出。
+var OCQ_FORCE_BOMS = '';
 function curFilters(){
     return {
+        bom_list: OCQ_FORCE_BOMS,
         date_from: $('#fDateFrom').val(),
         date_to: $('#fDateTo').val(),
         process_type: curProcess,
@@ -4267,6 +4282,38 @@ $('#btnSummary').on('click', function(){
     html += '&nbsp;<button class="ocq-ybtn" id="kwGoAll" style="height:22px;font-size:12px;padding:0 9px;">改看全部年份</button>';
     $('<div class="ocq-carry"></div>').html(html).insertBefore('.ocq-stat:first');
     $('#kwGoAll').on('click', function(){ ySetDates('', ''); renderYearBar(); applyFilters(); });
+})();
+
+// 由訂單追蹤「BOM開立」圖示帶進來的指定 BOM（?boms=B-xxx,B-yyy&oo=訂單編號）。
+// 那顆圖示原本一律連到 BOM總覽，但 BOM總覽只列「還沒完工」的，所以訂單一旦做完就會點進去一片空白；
+// 改成：已完工的直接帶到這一頁並鎖定那幾張 BOM。
+// **日期一定要放到全部年份**——本頁預設只看近1年，結案久一點的 BOM 會查不到，那就跟原本的空白一樣沒用。
+(function(){
+    var qs = window.location.search || '';
+    function qp(k){
+        try { return (new URLSearchParams(qs)).get(k) || ''; }
+        catch (e) { var m = new RegExp('[?&]'+k+'=([^&]*)').exec(qs); return m ? decodeURIComponent(m[1].replace(/\+/g,' ')) : ''; }
+    }
+    var boms = $.trim(qp('boms'));
+    if (!boms) return;
+    OCQ_FORCE_BOMS = boms;
+    ySetDates('', '');                       // 不限年份，否則舊的結案資料會被預設的近1年擋掉
+    var list = boms.split(',').filter(function(s){ return $.trim(s) !== ''; });
+    var oo = $.trim(qp('oo'));
+    var html = '<i class="fa fa-info-circle"></i>&nbsp;此訂單' + (oo ? '（<b>' + esc(oo) + '</b>）' : '')
+        + '綁定的 BOM <b>' + esc(list.join('、')) + '</b> 已完工，BOM總覽不會列出已完工的資料，'
+        + '所以改由這裡顯示（已自動<b>不限年份</b>）。'
+        + '&nbsp;<button class="ocq-ybtn" id="bomsClear" style="height:22px;font-size:12px;padding:0 9px;">顯示全部已完工資料</button>';
+    $('<div class="ocq-carry"></div>').html(html).insertBefore('.ocq-stat:first');
+    $('#bomsClear').on('click', function(){
+        OCQ_FORCE_BOMS = '';
+        $(this).closest('.ocq-carry').remove();
+        // 解除鎖定時要把日期收回本頁預設的近1年——不收回的話變成「不限年份又沒有任何條件」，
+        // 全站已結案上萬筆會直接撞到本頁 5000 筆的查詢上限，畫面只會跳出「請縮小範圍」而看不到資料。
+        var r = yRange1y(); ySetDates(r[0], r[1]);
+        renderYearBar();
+        applyFilters();
+    });
 })();
 
 renderYearBar();

@@ -2339,17 +2339,27 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         }
 
         // 批次查詢本頁訂單的BOM綁定狀態（bom_order_process_map：多BOM對多訂單，依allocated_qty加總判斷全/部分綁定）
-        $bomBindMap = []; // Order_id => ['sum'=>N, 'boms'=>[bom1,bom2,...]]
+        $bomBindMap = []; // Order_id => ['sum'=>N, 'boms'=>[bom1,...], 'open_boms'=>[...], 'done_boms'=>[...]]
         if (!empty($orderIds)) {
             try {
                 $phBom = implode(',', array_fill(0, count($orderIds), '?'));
-                $stmtBom = $pdo->prepare("SELECT order_id, bom, allocated_qty FROM bom_order_process_map WHERE order_id IN ($phBom)");
+                // 2026-09-24：一併帶回這張 BOM 完工了沒（bom.processing_state='1' ＝ 已結案，
+                // 與 views/pm/OreadyReply_completed_query.php 同一個口徑）。
+                // 為什麼要分開：BOM總覽（OreadyReply_ForPm_BaseOfTime.php）只列「還沒完工」的 BOM，
+                // 所以訂單一旦做完，點「BOM開立」圖示進去會是一片空白；已完工的要改開已完工查詢頁。
+                $stmtBom = $pdo->prepare(
+                    "SELECT m.order_id, m.bom, m.allocated_qty, b.processing_state
+                       FROM bom_order_process_map m
+                       LEFT JOIN bom b ON b.bom = m.bom
+                      WHERE m.order_id IN ($phBom)");
                 $stmtBom->execute($orderIds);
                 foreach ($stmtBom->fetchAll(PDO::FETCH_ASSOC) as $br) {
                     $oid = (int)$br['order_id'];
-                    if (!isset($bomBindMap[$oid])) { $bomBindMap[$oid] = ['sum' => 0, 'boms' => []]; }
+                    if (!isset($bomBindMap[$oid])) { $bomBindMap[$oid] = ['sum' => 0, 'boms' => [], 'open_boms' => [], 'done_boms' => []]; }
                     $bomBindMap[$oid]['sum'] += (int)$br['allocated_qty'];
                     $bomBindMap[$oid]['boms'][] = $br['bom'];
+                    if ((string)($br['processing_state'] ?? '') === '1') $bomBindMap[$oid]['done_boms'][] = $br['bom'];
+                    else                                                 $bomBindMap[$oid]['open_boms'][] = $br['bom'];
                 }
             } catch (Exception $e) {}
         }
@@ -2837,8 +2847,24 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                 $_bomFullRow  = ($_bomSumRow >= $_bomQtyRow);
                 $_bomColorRow = $_bomFullRow ? '#1ABB9C' : '#F0A24B';
                 $_bomIconRow  = $_bomFullRow ? 'fa-check-circle' : 'fa-exclamation-triangle';
-                $_bomTitleRow = ($_bomFullRow ? '生管已開立BOM（全部綁定 ' : '生管已開立BOM（部分綁定 ') . $_bomSumRow . '/' . $_bomQtyRow . '），點擊查看BOM';
-                $_bomIconHtml = ' <a href="../pm/OreadyReply_ForPm_BaseOfTime.php?order_id_filter=' . intval($order['Order_id']) . '" target="_blank" title="' . safe_html($_bomTitleRow) . '" style="text-decoration:none;">'
+                $_bomTitleRow = ($_bomFullRow ? '生管已開立BOM（全部綁定 ' : '生管已開立BOM（部分綁定 ') . $_bomSumRow . '/' . $_bomQtyRow . '）';
+                // 2026-09-24 使用者交辦：BOM總覽只列「還沒完工」的 BOM，所以綁定的 BOM 全部都完工之後，
+                // 點這顆圖示進去會是一片空白。這種情況改開「已完工BOM查詢」並直接鎖定那幾張 BOM 編號
+                // （不限年份，否則本頁預設的近1年會把舊的結案資料擋掉）。
+                // 還有沒完工的就維持原本連到 BOM總覽（那邊才看得到進度）。
+                $_bomOpen = $_bomBindRow['open_boms'] ?? [];
+                $_bomDone = $_bomBindRow['done_boms'] ?? [];
+                if (empty($_bomOpen) && !empty($_bomDone)) {
+                    $_bomHref = '../pm/OreadyReply_completed_query.php?boms=' . rawurlencode(implode(',', $_bomDone))
+                              . '&oo=' . rawurlencode((string)($order['Order_oo'] ?? ''));
+                    $_bomTitleRow .= '，此BOM已完工，點擊查看已完工BOM資料：' . implode('、', $_bomDone);
+                    $_bomColorRow = '#8e44ad';   // 已完工用紫色，與未完工的綠/橘區分
+                    $_bomIconRow  = 'fa-check-square-o';
+                } else {
+                    $_bomHref = '../pm/OreadyReply_ForPm_BaseOfTime.php?order_id_filter=' . intval($order['Order_id']);
+                    $_bomTitleRow .= '，點擊查看BOM';
+                }
+                $_bomIconHtml = ' <a href="' . safe_html($_bomHref) . '" target="_blank" title="' . safe_html($_bomTitleRow) . '" style="text-decoration:none;">'
                                . '<i class="fa ' . $_bomIconRow . '" style="color:' . $_bomColorRow . ';font-size:12px;margin-left:4px;"></i></a>';
             }
 ?>
@@ -4604,7 +4630,12 @@ foreach($dCounts as $c) {
                         <span style="color:#a0522d;">※ 客戶一經更動，原本的料號綁定會自動清除，必須重新選定料號才能存檔。</span>
                     </div>
                     <label style="font-size:12px;font-weight:600;">請輸入<span style="color:#DD5138;">您本人的登入密碼</span></label>
-                    <input type="password" id="cu-password" class="form-control input-sm" autocomplete="new-password" data-lpignore="true" data-form-type="other" data-eg-skip placeholder="本人登入密碼">
+                    <?php /* 2026-09-24：密碼欄一定要用自己的 <form> 包起來，理由同 sideAndTopBarMenu.html 的 #sp-pw——
+                             沒被 form 包住的密碼欄會讓 Chrome 把整頁當成一張登入表單，然後自己挑一個文字欄位
+                             （實際被挑中的是客戶搜尋欄）跳出已儲存的帳密清單。onsubmit 擋掉預設送出，行為不變。 */ ?>
+                    <form onsubmit="return false;" autocomplete="off" style="margin:0;">
+                        <input type="password" id="cu-password" class="form-control input-sm" autocomplete="current-password" data-eg-skip placeholder="本人登入密碼">
+                    </form>
                     <div id="cu-msg" style="display:none;margin-top:6px;font-size:11.5px;color:#DD5138;"></div>
                 </div>
                 <div class="modal-footer" style="padding:8px 14px;">

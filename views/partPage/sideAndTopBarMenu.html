@@ -437,7 +437,16 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             </div>
             <div class="modal-body">
                 <p style="margin-bottom:10px;">這則通知是給 <b id="sp-name"></b> 的。<br>請<b>由本人</b>輸入自己的密碼以確認：</p>
-                <input type="password" id="sp-pw" class="form-control" placeholder="本人密碼" autocomplete="off">
+                <!-- 2026-09-24：密碼欄一定要用自己的 <form> 包起來（onsubmit 擋掉預設送出）。
+                     原因：沒有被 form 包住的欄位，Chrome 會把「整頁所有欄位」當成同一張表單解析，
+                     只要頁面上有任何一個 type=password，它就會自己去挑一個文字欄位當「帳號欄」，
+                     然後在那個欄位跳出已儲存的帳密清單（客戶搜尋欄就是這樣被挑中的）。
+                     這個側欄是全站每一頁都會載入的，所以那個誤判會發生在任何一頁。
+                     包進自己的 form 之後，Chrome 的解析範圍就侷限在這張 form 內，不會再外溢。
+                     ※ 欄位仍用 id 取值，JS 一行都不必改；onsubmit="return false" 保留原本 Enter 的行為。 -->
+                <form onsubmit="return false;" autocomplete="off" style="margin:0;">
+                    <input type="password" id="sp-pw" class="form-control" placeholder="本人密碼" autocomplete="current-password">
+                </form>
                 <div id="sp-err" class="eg-sp-err" style="display:none;"></div>
             </div>
             <div class="modal-footer">
