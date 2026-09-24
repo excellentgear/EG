@@ -564,7 +564,7 @@ function kpi_as_registry(): array {
             'name' => '成品出貨不良率(出貨檢驗)',
             'page' => '出貨檢驗 qc_packing_inspection',
             'tables' => ['qc_packing_inspection'],
-            'links' => [['label'=>'包裝檢驗表（全檢數／NG數）','url'=>'/EGsystem/views/QC/packaging_inspection_entry.php']],
+            'links' => [['label'=>'包裝檢驗表（全檢數／NG數）','url'=>'/EGsystem/views/pm/packing_schedule.php']],
             'desc' => '分子=ΣNG總數；分母=Σ實際全檢數量',
             'params' => []],
         'calibration_ontime' => [

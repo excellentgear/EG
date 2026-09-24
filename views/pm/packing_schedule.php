@@ -10,6 +10,9 @@ require_once __DIR__ . '/../../src/common/people_lib.php';
 require_once __DIR__ . '/../../src/common/org_role_lib.php';
 require_once __DIR__ . '/../../src/common/qa_abnormal_lib.php'; // 報廐扣減唯一實作 qab_bom_scrap_qty()（2026-09-24）
 require_once __DIR__ . '/../../src/common/packing_process_lib.php'; // 「是不是包裝製程」的唯一實作 pk_packing_process_nos()（2026-09-24）
+require_once __DIR__ . '/../../src/common/asdoc_lib.php'; // 已結案檢驗表列印：AS 文件編號綁定（ai-rules/16 一之三，2026-09-24）
+require_once __DIR__ . '/../../src/common/print_log_lib.php'; // 列印紀錄（ai-rules/23）
+require_once __DIR__ . '/../../src/common/position_history_lib.php'; // 圖章部門/職稱依業務日期回推（ai-rules/22）
 
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
@@ -225,6 +228,54 @@ function pk_default_inspector_info(PDO $pdo): ?array
     $du->execute([$defId]);
     $dr = $du->fetch(PDO::FETCH_ASSOC);
     return $dr ? ['id' => (int)$dr['id'], 'name' => $dr['user_cname']] : null;
+}
+
+// =============================================================================
+// 已結案檢驗表列印（2026-09-24 使用者交辦）：AS 文件編號綁定走全站共用 asdoc_lib（ai-rules/16 一之三），
+// 一次列印工作只對應一張檢驗表，可安全用 @page @bottom-right（ai-rules/16 三之三）；批次列印依目前篩選
+// 結果逐筆各自開視窗排隊（三之五）；版次依該筆紀錄自己的「檢驗日期」回推（三之四）。
+// =============================================================================
+define('PACKING_INSP_ASDOC_MODULE', 'packing_insp');
+
+/** 首次啟用時預設綁定 3-SM-01-01（使用者指定），僅在「這個模組代碼完全還沒有任何設定值」時才寫入一次；
+ *  管理員之後在「檢驗表列印設定」改過（含改成 0＝解除綁定），system_parameters 就已經有列，不會再被蓋回來。
+ *  用 doc_no 查找而非寫死 id：AS 文件的 id 不保證每套環境相同，doc_no 才是使用者實際認得的編號。 */
+function pk_asdoc_ensure_default(PDO $pdo): void {
+    try {
+        $st = $pdo->prepare("SELECT id FROM system_parameters WHERE param_group='AS_DOC_BIND' AND param_key=? LIMIT 1");
+        $st->execute([PACKING_INSP_ASDOC_MODULE]);
+        if ($st->fetchColumn()) return; // 已有設定值（含使用者主動清空為未綁定），不覆蓋
+        $d = $pdo->prepare("SELECT id FROM as_document WHERE doc_no=? AND is_deleted=0 ORDER BY id DESC LIMIT 1");
+        $d->execute(['3-SM-01-01']);
+        $defId = (int)($d->fetchColumn() ?: 0);
+        if ($defId) eg_asdoc_save($pdo, PACKING_INSP_ASDOC_MODULE, $defId, 'system');
+    } catch (Throwable $e) { /* 綁定失敗不擋頁面，僅列印時抬頭/編號留白 */ }
+}
+pk_asdoc_ensure_default($pdo);
+
+/** 列印大標題＝本公司公司全名（發票用），唯一來源 customer_list.is_own_company=1，禁寫死（ai-rules/16 第一節） */
+function pk_company_name(PDO $pdo): string {
+    try {
+        $r = $pdo->query("SELECT customer_full, customer FROM customer_list WHERE is_own_company=1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        if ($r) return trim((string)($r['customer_full'] ?: $r['customer']));
+    } catch (Throwable $e) {}
+    return '';
+}
+
+/** 圖章上的部門／職稱：依「業務日期」回推當時職務（ai-rules/22；沒補登過異動的人＝現況），查無回空字串。 */
+function pk_person_asof(PDO $pdo, int $userId, ?string $date): array {
+    $out = ['dept' => '', 'position' => ''];
+    if (!$userId) return $out;
+    try {
+        $snap = eg_position_snapshot_at($pdo, $userId, $date ?: date('Y-m-d'));
+        if (!$snap) return $out;
+        $row = null;
+        foreach ($snap as $r) { if (!empty($r['is_main'])) { $row = $r; break; } }
+        if (!$row) $row = $snap[0];
+        $out['dept'] = (string)($row['department_name'] ?? '');
+        $out['position'] = (string)($row['position_name'] ?? '');
+        return $out;
+    } catch (Throwable $e) { return $out; }
 }
 
 // =============================================================================
@@ -1008,7 +1059,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $params[] = $judgeFilter;
             }
             $whereSql = implode(' AND ', $where);
-            $sql = "SELECT qpi.bom, qpi.part_no, qpi.customer_name, qpi.inspection_date, qpi.order_qty, qpi.bom_total_qty,
+            $sql = "SELECT qpi.packing_inspection_id, qpi.bom, qpi.part_no, qpi.customer_name, qpi.inspection_date, qpi.order_qty, qpi.bom_total_qty,
                            qpi.ok_qty, qpi.ng_qty, qpi.judgement, qpi.ship_now_qty, qpi.warehouse_qty, qpi.packer, qpi.remark
                     FROM qc_packing_inspection qpi
                     WHERE $whereSql
@@ -1041,6 +1092,121 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $row['header'] = $hdr->fetch(PDO::FETCH_ASSOC) ?: null;
 
             echo json_encode(['success' => true, 'row' => $row, 'can_edit' => (bool)$PK_CAN_ADMIN]);
+            exit;
+        }
+
+        // 12. 已結案檢驗表列印設定：讀取（不卡管理員，ai-rules/18 鐵則9：卡了一般人列印永遠拿不到綁定資訊）
+        if ($action === 'print_setting_get') {
+            echo json_encode(['success' => true,
+                'as_docs'   => eg_asdoc_list($pdo),
+                'as_doc_id' => eg_asdoc_id($pdo, PACKING_INSP_ASDOC_MODULE),
+                'as_doc'    => eg_asdoc_get($pdo, PACKING_INSP_ASDOC_MODULE),
+            ]);
+            exit;
+        }
+
+        // 12a. 已結案檢驗表列印設定：儲存（僅管理員；鐵律8 後端再驗一次文件存在性）
+        if ($action === 'print_setting_save') {
+            if (!$PK_CAN_ADMIN) throw new Exception('無權限，僅管理員可設定');
+            $docId = (int)($_POST['as_doc_id'] ?? 0);
+            if ($docId) {
+                $chk = $pdo->prepare("SELECT id FROM as_document WHERE id=? AND is_deleted=0");
+                $chk->execute([$docId]);
+                if (!$chk->fetchColumn()) throw new Exception('選擇的 AS 文件不存在或已刪除');
+            }
+            eg_asdoc_save($pdo, PACKING_INSP_ASDOC_MODULE, $docId, $user_cname);
+            echo json_encode(['success' => true]);
+            exit;
+        }
+
+        // 13. 已結案檢驗表：正式列印用中繼資料（一份文件的完整內容＋公司全名／AS 編號版次／檢驗人員圖章職稱）
+        //     ai-rules/16：大標題＝公司全名、表頭＝綁定 AS 文件的 doc_name、頁尾右下＝doc_no（依這張紀錄自己的
+        //     「檢驗日期」回推當時版次，三之四）；簽章依 ai-rules/18，日期一律用檢驗日期不是列印當下。
+        if ($action === 'get_print_data') {
+            $id = (int)($_POST['id'] ?? 0);
+            $st = $pdo->prepare("SELECT * FROM qc_packing_inspection WHERE packing_inspection_id = ?");
+            $st->execute([$id]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$row) { echo json_encode(['success' => false, 'message' => '查無此紀錄']); exit; }
+            $dj = $pdo->prepare("SELECT data_json FROM qc_packing_inspection_data WHERE packing_inspection_id = ? ORDER BY data_id DESC LIMIT 1");
+            $dj->execute([$id]);
+            $row['packaging_data'] = $dj->fetchColumn() ?: null;
+
+            $hdr = $pdo->prepare("SELECT bi.process_no, pn.ProcessName, b.d_id, COALESCE(d.D_Setting_Id, b.d_id) AS part_no, d.Revision
+                                  FROM bom_ing bi
+                                  LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
+                                  LEFT JOIN bom b ON bi.bom = b.bom
+                                  LEFT JOIN d_setting d ON b.d_setting_id = d.d_id
+                                  WHERE bi.bom_ing_fid = ? LIMIT 1");
+            $hdr->execute([(int)$row['bom_ing_fid']]);
+            $row['header'] = $hdr->fetch(PDO::FETCH_ASSOC) ?: null;
+
+            // 料號版本 d_id 不可直接沿用上面 header 查詢的 b.d_id——那欄存的是料號「文字」不是
+            // d_setting 的主鍵（既有既知混淆，見記憶 bom_d_setting_id_mostly_null），拿它去比對
+            // pm_packing_appearance_item.d_id（主鍵）永遠比不中，會讓有專用項目的料號印出錯誤的
+            // 項目名稱與異常數量對不起來。一律比照 get_form 同一套解析（唯一正確來源）。
+            $dIdSt = $pdo->prepare("SELECT COALESCE(NULLIF(b.d_setting_id, 0),
+                                          (SELECT MAX(d.d_id) FROM d_setting d WHERE d.D_Setting_Id = b.d_id)) AS d_id
+                                    FROM bom b WHERE b.bom = ? LIMIT 1");
+            $dIdSt->execute([$row['bom']]);
+            $dId = (int)($dIdSt->fetchColumn() ?: 0) ?: null;
+
+            // 外觀檢驗項目：與填寫時同一套來源判定（料號專用優先、否則預設模板），項目名稱一律用「現在」
+            // 設定的名稱——與填寫視窗看到的邏輯一致（本頁的既有作法，非本次新增行為）
+            $items = [];
+            if ($dId) {
+                $it = $pdo->prepare("SELECT id AS item_id, item_name, standard_text FROM pm_packing_appearance_item WHERE d_id = ? ORDER BY sort_order ASC, id ASC");
+                $it->execute([$dId]);
+                $items = $it->fetchAll(PDO::FETCH_ASSOC);
+            }
+            if (!$items) {
+                $items = $pdo->query("SELECT id AS item_id, item_name, standard_text FROM pm_packing_appearance_template ORDER BY sort_order ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
+            }
+
+            // 訂單綁定（供列印表頭印訂單號碼／交期，多筆時全部列出）
+            $ob = $pdo->prepare("SELECT ot.Order_oo, ot.C_order, ot.Delivery_date, bopm.allocated_qty
+                                  FROM bom_order_process_map bopm
+                                  JOIN order_track ot ON ot.Order_id = bopm.order_id
+                                  WHERE bopm.bom = ? ORDER BY ot.Delivery_date ASC");
+            $ob->execute([$row['bom']]);
+            $orderBind = $ob->fetchAll(PDO::FETCH_ASSOC);
+
+            $bizDate = substr((string)$row['inspection_date'], 0, 10);
+            $docId   = eg_asdoc_id($pdo, PACKING_INSP_ASDOC_MODULE);
+            $doc     = eg_asdoc_get($pdo, PACKING_INSP_ASDOC_MODULE);
+
+            // 品檢／包裝人員圖章：姓名一律以 *_id 回查 user.user_cname 為準（inspector/packer 文字欄位是快照，
+            // 舊資料可能只有文字沒有 id，這種情況圖章退回純文字不畫章——沒有 user_id 就回推不出部門職稱，
+            // 印一顆查無此人的章反而失真，比照 ai-rules/18 鐵則5「查無簽核人一律留白給紙本手簽」的精神）
+            $inspectorName = (string)($row['inspector'] ?? '');
+            $inspectorAsof = ['dept' => '', 'position' => ''];
+            if (!empty($row['inspector_id'])) {
+                $iu = $pdo->prepare("SELECT user_cname FROM `user` WHERE id=?");
+                $iu->execute([(int)$row['inspector_id']]);
+                $nm = $iu->fetchColumn();
+                if ($nm) $inspectorName = (string)$nm;
+                $inspectorAsof = pk_person_asof($pdo, (int)$row['inspector_id'], $bizDate);
+            }
+            $packerName = (string)($row['packer'] ?? '');
+            $packerAsof = ['dept' => '', 'position' => ''];
+            if (!empty($row['packer_id'])) {
+                $pu = $pdo->prepare("SELECT user_cname FROM `user` WHERE id=?");
+                $pu->execute([(int)$row['packer_id']]);
+                $nm = $pu->fetchColumn();
+                if ($nm) $packerName = (string)$nm;
+                $packerAsof = pk_person_asof($pdo, (int)$row['packer_id'], $bizDate);
+            }
+
+            echo json_encode(['success' => true,
+                'row'        => $row,
+                'items'      => $items,
+                'order_bind' => $orderBind,
+                'company'    => pk_company_name($pdo),
+                'doc'        => $doc ? ['id' => (int)$doc['id'], 'doc_no' => $doc['doc_no'], 'doc_name' => $doc['doc_name']] : null,
+                'doc_no_print' => eg_asdoc_no_asof_id($pdo, $docId, $bizDate),
+                'inspector_name' => $inspectorName, 'inspector_asof' => $inspectorAsof,
+                'packer_name'    => $packerName,    'packer_asof'    => $packerAsof,
+            ]);
             exit;
         }
 
@@ -1293,11 +1459,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                         <div class="col-md-5 text-right">
                                             <button class="btn btn-default btn-sm" id="btn-cl-reset">清除篩選(本月)</button>
                                             <button class="btn btn-default btn-sm" id="btn-cl-print"><i class="fa fa-print"></i> 列印已包裝明細</button>
+                                            <button class="btn btn-default btn-sm" id="btn-cl-print-batch"><i class="fa fa-files-o"></i> 批次列印檢驗表</button>
+                                            <?php if ($PK_CAN_ADMIN): ?><button class="btn btn-default btn-sm" id="btn-print-setting"><i class="fa fa-cog"></i> 檢驗表列印設定</button><?php endif; ?>
                                         </div>
                                     </div>
                                     <p class="text-muted" style="margin-bottom:10px;">
                                         <i class="fa fa-info-circle"></i> 預設顯示本月資料；篩選 BOM／料號（同一欄，符合任一即列出）不限定年月份。
                                         已結案紀錄鎖定不可修改，<?= $PK_CAN_ADMIN ? '管理員可點列表右側「解鎖修改」以操作確認密碼開鎖。' : '如需修改請洽管理員以操作確認密碼開鎖。' ?>
+                                        「列印已包裝明細」是清單彙總表；每一列右側 <i class="fa fa-print"></i> 或「批次列印檢驗表」印的是正式的成品包裝及出貨檢驗表（依目前篩選結果逐筆各自列印）。
                                         <span class="pk-count-badge pull-right" id="cl-count"></span>
                                     </p>
                                     <table class="table pk-table">
@@ -1646,6 +1815,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     </div></div></div>
     <?php endif; ?>
 
+    <?php if ($PK_CAN_ADMIN): ?>
+    <!-- 已結案檢驗表列印設定：AS 文件編號綁定（ai-rules/16 一之三，僅管理員可改） -->
+    <div class="modal fade" id="printSetModal" tabindex="-1" role="dialog"><div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title"><i class="fa fa-print"></i> 已結案檢驗表 — 列印設定</h4></div>
+        <div class="modal-body">
+            <p class="text-muted" style="font-size:12px;">綁定的 AS 文件決定正式列印版的表頭名稱與頁尾右下角編號（版次依每筆紀錄自己的檢驗日期回推）。預設已綁定 <strong>3-SM-01-01 成品包裝及出貨檢驗表</strong>，可依實際使用的表單改綁其他文件。</p>
+            <label>目前綁定：</label>
+            <div style="margin:6px 0 10px;"><span id="pki-asdoc-label" style="font-weight:600;"></span></div>
+            <button type="button" class="btn btn-default btn-sm" id="pki-asdoc-pick"><i class="fa fa-search"></i> 選擇 AS 文件</button>
+            <button type="button" class="btn btn-link btn-sm" id="pki-asdoc-clear">解除綁定</button>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-primary" id="btn-save-print-setting">儲存</button>
+        </div>
+    </div></div></div>
+    <?php endif; ?>
+
     <!-- 使用說明 -->
     <div class="modal fade" id="helpUseMask" tabindex="-1" role="dialog">
         <div class="modal-dialog" role="document"><div class="modal-content">
@@ -1668,9 +1856,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     <li>「判定結果」分合格／不合格／待判定三種，擇一：不合格一律要人工手動勾選，系統不會自動判不合格；「已結案清單」上方的卡片可依判定結果快速篩選（全部／合格／不合格／待判定），數字是該篩選條件下符合的筆數。</li>
                     <li>已結案的紀錄無法直接修改，需由管理員在「已結案清單」點「解鎖修改」並輸入操作確認密碼。</li>
                     <?php if ($PK_CAN_BACKFILL): ?><li>「補登包裝紀錄」僅能用於<strong>完全沒有包裝紀錄</strong>的舊 BOM，已有紀錄的請改用「已結案清單」解鎖修改。<?= $PK_CAN_BACKFILL_PACKER ? '你目前有權限可指定其他人為包裝人員；管理員可在「包裝製程設定」限制可挑選的部門範圍（含子部門），未設定則全公司在職人員皆可選。' : '你目前只能以自己的身分補登，如需指定他人請洽管理員授權。' ?>由補登建立的紀錄若先按「暫存」，之後不論用點列或已結案清單解鎖再打開，補登日期與包裝人員欄位一樣看得到、改得動，不會消失。</li><?php endif; ?>
+                    <li>「已結案清單」每一列右側 <i class="fa fa-print"></i> 可列印這一筆的正式<strong>成品包裝及出貨檢驗表</strong>（依該筆紀錄的檢驗日期回推版次，品檢／包裝人員蓋帶日期的圖章）；「批次列印檢驗表」依目前的篩選結果（關鍵字／日期區間／判定卡片）一次逐筆各自開視窗列印，不會合併成一份文件，筆數較多時會先提醒可能出現瀏覽器快顯封鎖。</li>
                 </ul>
-                <p><strong>設定入口：</strong>包裝製程設定／外觀檢驗模板（頁首按鈕）；補登可指定包裝人員的部門範圍在「包裝製程設定」跳窗內（僅管理員看得到）。</p>
-                <p><strong>權限角色：</strong>一般包裝填寫（暫存/完成包裝、勾選判定結果）全體登入者皆可使用；「補登舊資料」與「指定補登包裝人員」「解鎖修改已結案紀錄／角色與功能設定」「設定包裝人員部門範圍」由管理員於本頁「角色與功能設定」指派角色，再到人員權限設定指派給人員。</p>
+                <p><strong>設定入口：</strong>包裝製程設定／外觀檢驗模板（頁首按鈕）；補登可指定包裝人員的部門範圍在「包裝製程設定」跳窗內（僅管理員看得到）；已結案清單的「檢驗表列印設定」（僅管理員看得到）可改綁列印用的 AS 文件編號，預設綁定 3-SM-01-01。</p>
+                <p><strong>權限角色：</strong>一般包裝填寫（暫存/完成包裝、勾選判定結果）與檢驗表列印全體登入者皆可使用；「補登舊資料」與「指定補登包裝人員」「解鎖修改已結案紀錄／角色與功能設定」「設定包裝人員部門範圍」「檢驗表列印設定」由管理員於本頁「角色與功能設定」指派角色，再到人員權限設定指派給人員。</p>
             </div>
         </div></div>
     </div>
@@ -1684,6 +1873,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     <script src="../../resource/js/select2.min.js"></script>
     <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
     <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
+    <!-- 已結案檢驗表正式列印（2026-09-24）：ai-rules/16（AS文件綁定＋版次回推）／18（圖章）／23（列印紀錄） -->
+    <script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
+    <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+    <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
+    <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
     <script>
     $(function () {
         var API = 'packing_schedule.php';
@@ -2792,6 +2986,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         '<td>' + (r.is_backfill * 1 === 1 ? '<span class="label label-warning">補登</span>' : '') + '</td>' +
                         '<td class="text-right">' +
                             '<button class="btn btn-xs btn-default cl-view" data-id="' + r.packing_inspection_id + '" title="檢視"><i class="fa fa-eye"></i></button> ' +
+                            '<button class="btn btn-xs btn-default cl-print" data-id="' + r.packing_inspection_id + '" title="列印檢驗表"><i class="fa fa-print"></i></button> ' +
                             (PK_CAN_ADMIN ? '<button class="btn btn-xs btn-warning cl-unlock" data-id="' + r.packing_inspection_id + '" title="解鎖修改"><i class="fa fa-unlock"></i></button>' : '') +
                         '</td>' +
                         '</tr>';
@@ -2853,6 +3048,214 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 '<script>window.onload=function(){window.print();};<' + '/script></body></html>');
             win.document.close();
         }
+
+        // ══════════════════════════════════════════════════════════════════
+        // ── 已結案檢驗表「正式列印」（2026-09-24 使用者交辦）─────────────────
+        //    版面依 ai-rules/16：大標題＝公司全名、表頭＝綁定 AS 文件的 doc_name、
+        //    頁碼左下（多頁才印）、AS 編號右下（依這筆紀錄的檢驗日期回推版次）；
+        //    簽章依 ai-rules/18：品檢／包裝人員走 eg_stamp.js，日期一律用檢驗日期。
+        //    一次列印工作只對應一份文件，可安全用 @page @bottom-right（三之三）。
+        // ══════════════════════════════════════════════════════════════════
+        var PKI_JUDGE_LABEL = { PASS: '合格', FAIL: '不合格', PENDING: '待判定' };
+
+        function pkiDispDate(v) {
+            var d = String(v || '').substr(0, 10);
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return '';
+            return (window.egFmtDate ? egFmtDate(d) : d);
+        }
+
+        // 品檢／包裝圖章：沒有 user_id（只有舊快照文字）就不畫章，直接印文字，避免印出對不上部門職稱的假章
+        function pkiStampHtml(name, dateStr, asof) {
+            if (!name) return '';
+            if (!asof || (!asof.dept && !asof.position)) return pkEsc(name);
+            return EGStamp.stamp(name, dateStr, false, null, asof.dept || '', asof.position || '');
+        }
+
+        function pkiCheckMark(checked) { return checked ? '☑' : '☐'; }
+
+        // id 省略＝無作用（本頁列印一律針對已結案的單一筆紀錄呼叫）；onDone＝批次列印排隊用（ai-rules/16 三之五）
+        function printPackingInsp(id, onDone) {
+            $.post(API, { action: 'get_print_data', id: id }, function (res) {
+                if (!res.success) { alert(res.message || '載入列印資料失敗'); if (onDone) onDone(); return; }
+                if (window.EGStamp && EGStamp.whenReady) EGStamp.whenReady(function () { pkiBuildPrintWindow(res, onDone); });
+                else pkiBuildPrintWindow(res, onDone);
+            }, 'json').fail(function () { alert('連線失敗'); if (onDone) onDone(); });
+        }
+
+        function pkiBuildPrintWindow(data, onDone) {
+            var row = data.row || {}, hdr = row.header || {};
+            var company = data.company || '';
+            window.__ownCompany = company; // eg_stamp.js 畫預設回墨印時要用（ai-rules/18 鐵則2）
+            var title = (data.doc && data.doc.doc_name) ? data.doc.doc_name : '成品包裝及出貨檢驗表';
+            var asTxt = String(data.doc_no_print || '').replace(/['\\]/g, '');
+            var bizDate = pkiDispDate(row.inspection_date);
+
+            var pd = {};
+            try { pd = row.packaging_data ? JSON.parse(row.packaging_data) : {}; } catch (e) { pd = {}; }
+
+            var orderNos = (data.order_bind || []).map(function (o) { return o.Order_oo || o.C_order || ''; }).filter(Boolean).join('、');
+
+            var metaTbl = '<table class="p-meta"><colgroup><col style="width:16%"><col style="width:18%"><col style="width:16%"><col style="width:18%"><col style="width:14%"><col style="width:18%"></colgroup>' +
+                '<tr><th>料號</th><td>' + pkEsc(row.part_no || hdr.part_no || '') + '</td>' +
+                '<th>版次</th><td>' + pkEsc(hdr.Revision || '') + '</td>' +
+                '<th>檢驗日期</th><td>' + bizDate + '</td></tr>' +
+                '<tr><th>客戶名稱</th><td>' + pkEsc(row.customer_name || '') + '</td>' +
+                '<th>製令號碼</th><td>' + pkEsc(row.bom || '') + '</td>' +
+                '<th>檢驗製程</th><td>' + pkEsc(hdr.ProcessName || '') + '</td></tr>' +
+                '<tr><th>訂單號碼</th><td colspan="3">' + pkEsc(orderNos) + '</td>' +
+                '<th>判定結果</th><td>' + pkiCheckMark(row.judgement === 'PASS') + '合格　' + pkiCheckMark(row.judgement === 'FAIL') + '不合格　' + pkiCheckMark(row.judgement === 'PENDING') + '待判</td></tr>' +
+                '<tr><th>訂單數量</th><td>' + fmtNum(row.order_qty) + '</td>' +
+                '<th>合格數量</th><td>' + fmtNum(row.ok_qty) + '</td>' +
+                '<th>NG數量</th><td class="' + (parseFloat(row.ng_qty) > 0 ? 'p-ng' : '') + '">' + fmtNum(row.ng_qty) + '</td></tr>' +
+                '</table>';
+
+            var apTbody = '';
+            (data.items || []).forEach(function (it) {
+                var a = (pd.appearance && pd.appearance[it.item_id]) ? pd.appearance[it.item_id] : {};
+                var disp = (a.disposition || []).join('、') + (a.other_text ? ('　' + a.other_text) : '');
+                apTbody += '<tr><td class="tl">' + pkEsc(it.item_name) + '</td><td>' + pkEsc(it.standard_text || '目視') + '</td>' +
+                    '<td>' + (a.ng_qty ? fmtNum(a.ng_qty) : '0') + '</td><td class="tl">' + pkEsc(disp) + '</td></tr>';
+            });
+            if (!apTbody) apTbody = '<tr><td colspan="4" style="padding:8px;color:#888;">無檢驗項目</td></tr>';
+            var apTbl = '<table class="p-tb"><colgroup><col style="width:24%"><col style="width:20%"><col style="width:14%"><col style="width:42%"></colgroup>' +
+                '<thead><tr><th>外觀檢驗項目</th><th>方式/工具</th><th>異常數量</th><th>處置狀況／備註</th></tr></thead><tbody>' + apTbody + '</tbody></table>';
+
+            var rustTxt = (pd.rust || []).join('、') + (pd.rust_other ? ('　其他：' + pd.rust_other) : '');
+            var collisionTxt = (pd.collision || []).join('、') + (pd.collision_detail_1 || pd.collision_detail_2 ? ('（泡殼 ' + (pd.collision_detail_1 || 0) + ' 入 x ' + (pd.collision_detail_2 || 0) + ' 個）') : '') + (pd.collision_other ? ('　其他：' + pd.collision_other) : '');
+            var protTbl = '<table class="p-meta"><colgroup><col style="width:16%"><col style="width:84%"></colgroup>' +
+                '<tr><th>加強防銹</th><td class="tl">' + (rustTxt ? pkEsc(rustTxt) : '（無）') + '</td></tr>' +
+                '<tr><th>確認防撞</th><td class="tl">' + (collisionTxt ? pkEsc(collisionTxt) : '（無）') + '</td></tr>' +
+                '<tr><th>治具/模具/量具歸還</th><td class="tl">' + (pd.return_jig ? fmtNum(pd.return_jig) + ' 個' : '（無）') +
+                    '　　樣品歸還：' + (pd.return_sample ? fmtNum(pd.return_sample) + ' 個' : '（無）') +
+                    '　　架機件歸還：' + (pd.return_fixture ? fmtNum(pd.return_fixture) + ' 個' : '（無）') + '</td></tr>' +
+                '</table>';
+
+            var ctTbody = '';
+            (pd.rows || []).forEach(function (r) {
+                var ownerName = { customer: '客供', internal: '超正', noprint: '無印刷' }[r.owner] || (r.owner || '');
+                ctTbody += '<tr><td>' + pkEsc(r.type || '') + '</td><td>' + pkEsc(ownerName) + '</td><td>' + fmtNum(r.qty) + '</td></tr>';
+            });
+            if (!ctTbody) ctTbody = '<tr><td colspan="3" style="padding:6px;color:#888;">無容器明細</td></tr>';
+            var ctTbl = '<table class="p-tb"><colgroup><col style="width:34%"><col style="width:33%"><col style="width:33%"></colgroup>' +
+                '<thead><tr><th>容器</th><th>來源</th><th>數量</th></tr></thead><tbody>' + ctTbody + '</tbody></table>';
+
+            var shipTxt = (row.is_full_shipment * 1 === 1)
+                ? ('直接出貨 ' + fmtNum(row.ship_now_qty) + (parseFloat(row.warehouse_qty) > 0 ? '，另入庫 ' + fmtNum(row.warehouse_qty) : '（全數出貨）'))
+                : ('入庫 ' + fmtNum(row.warehouse_qty) + (row.storage_method === 'pallet' ? '（棧板+膠膜 ' + fmtNum(row.pallet_qty || 0) + ' 板）' : ''));
+            var ngBreak = [];
+            if (pd.ng_return_material) ngBreak.push('來料不良退回 ' + fmtNum(pd.ng_return_material));
+            if (pd.ng_process_defect) ngBreak.push('加工不良 ' + fmtNum(pd.ng_process_defect));
+            var shipTbl = '<table class="p-meta"><colgroup><col style="width:16%"><col style="width:84%"></colgroup>' +
+                '<tr><th>出貨/入庫</th><td class="tl">' + pkEsc(shipTxt) + (pd.shipment_desc ? '　包裝說明：' + pkEsc(pd.shipment_desc) : '') + '</td></tr>' +
+                (ngBreak.length ? ('<tr><th>NG組成</th><td class="tl">' + pkEsc(ngBreak.join('、')) + '</td></tr>') : '') +
+                (row.remark ? ('<tr><th>備註</th><td class="tl">' + pkEsc(row.remark) + '</td></tr>') : '') +
+                '</table>';
+
+            var signTbl = '<table class="p-sign-tb"><tr>' +
+                '<td class="p-sign-box"><div class="cap">品檢人員</div>' + pkiStampHtml(data.inspector_name, bizDate, data.inspector_asof) + '</td>' +
+                '<td class="p-sign-box"><div class="cap">包裝人員</div>' + pkiStampHtml(data.packer_name, bizDate, data.packer_asof) + '</td>' +
+                '</tr></table>';
+
+            var body = '<div class="p-comp">' + pkEsc(company) + '</div>' +
+                '<div class="p-title">' + pkEsc(title) + '</div>' +
+                metaTbl + apTbl + protTbl + ctTbl + shipTbl + signTbl;
+
+            var css = 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;margin:0;padding:0 4mm;color:#222;' +
+                '-webkit-print-color-adjust:exact;print-color-adjust:exact;}' +
+                '*{box-sizing:border-box;}' +
+                '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:2px;}' +
+                '.p-title{font-size:16px;font-weight:bold;text-align:center;letter-spacing:5px;margin-bottom:8px;}' +
+                'table{width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse;margin-bottom:6px;}' +
+                'table.p-meta{font-size:11px;}' +
+                'table.p-meta th,table.p-meta td{border:1px solid #666;padding:3px 6px;text-align:left;overflow-wrap:break-word;word-break:break-word;}' +
+                'table.p-meta th{background:#f3ead6;white-space:nowrap;}' +
+                'table.p-meta td.tl{text-align:left;}' +
+                'table.p-meta td.p-ng{color:#DD5138;font-weight:700;}' +
+                'table.p-tb{font-size:11px;}' +
+                'table.p-tb thead{display:table-header-group;}' +
+                'table.p-tb th,table.p-tb td{border:1px solid #666;padding:3px 6px;text-align:center;overflow-wrap:break-word;word-break:break-word;}' +
+                'table.p-tb thead th{background:#f3ead6;}' +
+                'table.p-tb td.tl{text-align:left;}' +
+                'table.p-sign-tb{margin-top:10px;}' +
+                'table.p-sign-tb td.p-sign-box{border:1px solid #666;width:50%;height:110px;text-align:center;vertical-align:middle;padding:4px;}' +
+                'table.p-sign-tb .cap{font-size:11px;color:#555;margin-bottom:4px;}' +
+                '.stamp-wrap{display:inline-block;text-align:center;margin:2px 0;}' +
+                '.stamp-wrap .stamp-title{display:block;font-size:11px;color:#999;}' +
+                '.stamp-wrap svg{-webkit-print-color-adjust:exact;print-color-adjust:exact;}' +
+                '.stamp-wrap svg.car-stamp{width:91px;height:91px;}' +
+                '.stamp-wrap.stamp-fill{height:auto !important;display:inline-block;}' +
+                '@page{size:A4 portrait;margin:12mm 8mm 16mm;' +
+                (asTxt ? " @bottom-right{ content:'" + asTxt + "'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '') +
+                '}';
+
+            var w = window.open('', '_blank');
+            if (!w) { alert('請允許彈出視窗以列印'); if (onDone) onDone(); return; }
+            var pageTitle = pkEsc(title) + ' ' + pkEsc(row.bom || '');
+            w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + pageTitle + '</title>' +
+                '<style>' + css + '</style></head><body>' + body +
+                '<scr' + 'ipt>window.onload=function(){' +
+                'var onePage=(297-28)*96/25.4;' +
+                'if(document.body.scrollHeight>onePage*0.92){' +
+                'var st=document.createElement(\'style\');' +
+                'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";' +
+                'document.head.appendChild(st);}' +
+                'setTimeout(function(){window.print();},250);};</scr' + 'ipt></body></html>');
+            w.document.close(); w.focus();
+            if (window.EGPrintLog) EGPrintLog.record({ source: 'packing_insp', doc_name: title + ' ' + (row.bom || ''), doc_kind: 'form', ref_table: 'qc_packing_inspection', ref_id: row.packing_inspection_id, part_no: row.part_no || hdr.part_no || '' });
+            if (onDone) setTimeout(onDone, 500);
+        }
+
+        $(document).on('click', '.cl-print', function () { printPackingInsp($(this).data('id')); });
+
+        // ── 批次列印：依目前篩選結果逐筆各自開視窗排隊（ai-rules/16 三之五，不做內容合併）─────
+        var PKI_PRINT_BATCH_THRESHOLD = 15;
+        $('#btn-cl-print-batch').click(function () {
+            var params = { action: 'list_closed_all', kw: $('#cl-f-kw').val(), date_from: $('#cl-f-from').val(), date_to: $('#cl-f-to').val(), judgement: clJudgeFilter };
+            $.post(API, params, function (res) {
+                if (!res.success) { alert(res.message || '取得資料失敗，無法列印'); return; }
+                var ids = (res.data || []).map(function (r) { return r.packing_inspection_id; });
+                if (!ids.length) { alert('目前篩選條件下沒有已結案紀錄'); return; }
+                if (ids.length > PKI_PRINT_BATCH_THRESHOLD &&
+                    !confirm('共 ' + ids.length + ' 筆已結案紀錄，會逐筆各自開一個列印視窗，瀏覽器可能跳出快顯封鎖提示。確定要繼續嗎？')) return;
+                var i = 0;
+                (function next() {
+                    if (i >= ids.length) return;
+                    printPackingInsp(ids[i++], next);
+                })();
+            }, 'json');
+        });
+
+        // ── 檢驗表列印設定（AS 文件編號綁定）：限管理員 ─────────────────────
+        <?php if ($PK_CAN_ADMIN): ?>
+        var PKI_PRINT_SET = { docs: [], docId: 0, doc: null };
+        $('#btn-print-setting').click(function () {
+            $.post(API, { action: 'print_setting_get' }, function (r) {
+                if (!r.success) { alert(r.message || '載入設定失敗'); return; }
+                PKI_PRINT_SET.docs = r.as_docs || [];
+                PKI_PRINT_SET.docId = parseInt(r.as_doc_id || 0) || 0;
+                PKI_PRINT_SET.doc = r.as_doc || null;
+                pkiRenderAsDocLabel();
+                $('#printSetModal').modal('show');
+            }, 'json');
+        });
+        function pkiRenderAsDocLabel() {
+            var txt = (window.EGAsDoc && EGAsDoc.label) ? EGAsDoc.label(PKI_PRINT_SET.doc) : (PKI_PRINT_SET.doc ? PKI_PRINT_SET.doc.doc_no : '尚未綁定');
+            $('#pki-asdoc-label').text(txt);
+        }
+        $('#pki-asdoc-pick').click(function () {
+            EGAsDoc.open({
+                docs: PKI_PRINT_SET.docs, current: PKI_PRINT_SET.docId, title: '已結案檢驗表－AS 文件編號綁定',
+                onSave: function (id, doc) { PKI_PRINT_SET.docId = parseInt(id) || 0; PKI_PRINT_SET.doc = doc || null; pkiRenderAsDocLabel(); }
+            });
+        });
+        $('#pki-asdoc-clear').click(function () { PKI_PRINT_SET.docId = 0; PKI_PRINT_SET.doc = null; pkiRenderAsDocLabel(); });
+        $('#btn-save-print-setting').click(function () {
+            $.post(API, { action: 'print_setting_save', as_doc_id: PKI_PRINT_SET.docId }, function (r) {
+                if (!r.success) { alert(r.message || '儲存失敗'); return; }
+                $('#printSetModal').modal('hide');
+            }, 'json');
+        });
+        <?php endif; ?>
 
         // ---------- 補登包裝紀錄 ----------
         <?php if ($PK_CAN_BACKFILL): ?>

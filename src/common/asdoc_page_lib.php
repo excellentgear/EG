@@ -47,7 +47,9 @@ function eg_asdoc_linked_modules(): array {
         'car'                  => ['name' => '異常矯正處理單(CAR)',   'url' => 'QA/correction_order.php'],
         'qa_abnormal'          => ['name' => '品質異常處理單',        'url' => 'QA/qa_abnormal_view.php'],
         'dwg_change'           => ['name' => '圖面變更紀錄',          'url' => 'QC/drawing_change_log.php'],
-        'packaging_inspection' => ['name' => '包裝出貨檢驗表',        'url' => 'QC/packaging_inspection_entry.php'],
+        // 2026-09-24：實際在用的電子化頁面是包裝製程排程（pm/packing_schedule.php，含正式檢驗表列印），
+        // QC/packaging_inspection_entry.php 是更早的雛型頁、已無人使用，改指向真正在用的頁面
+        'packaging_inspection' => ['name' => '包裝出貨檢驗表',        'url' => 'pm/packing_schedule.php'],
         'purchase_order'       => ['name' => '申請採購 · 廠商採購單', 'url' => 'pages/purchase_request.php'],
         'purchase_request'     => ['name' => '申請採購 · 請購單',     'url' => 'pages/purchase_request.php'],
         'purchase_inquiry'     => ['name' => '申請採購 · 詢價單',     'url' => 'pages/purchase_request.php'],

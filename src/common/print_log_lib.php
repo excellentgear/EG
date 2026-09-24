@@ -235,6 +235,7 @@ if (!function_exists('eg_print_sources')) {
             'stamp_list'     => ['label' => '圖章管理記錄表',                 'page' => 'views/ADM/stamp_management.php',          'kind' => 'form'],
             'order_analysis' => ['label' => '訂單分析報告',                   'page' => 'views/Sales/Order_Analysis.php',          'kind' => 'form'],
             'type_id_ctrl'   => ['label' => '型態識別文件管制表',             'page' => 'views/TD/type_id_ctrl_doc.php',           'kind' => 'form'],
+            'packing_insp'   => ['label' => '包裝檢驗回報－已結案檢驗紀錄表', 'page' => 'views/pm/packing_schedule.php',           'kind' => 'form'],
         ];
     }
 }
