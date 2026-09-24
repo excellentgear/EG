@@ -1970,7 +1970,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
 
         $pdo->commit();
-        echo json_encode(['success' => true, 'message' => '資料已更新']);
+
+        // 5. 報工NG自動開立品質異常單（2026-09-24 使用者交辦）——刻意放在 commit() 之後、
+        // 用獨立的 try/catch 包住：報工存檔是現場的主要動作，絕對不可以因為異常單開不成
+        // 就讓報工存檔跟著失敗（也不可以讓它的例外掉進上面那個 catch 去 rollBack 一個已經
+        // commit 過的交易，那會再炸出「There is no active transaction」）。
+        $auto_abnormal = null;
+        try {
+            $stNgSum = $pdo->prepare("SELECT COALESCE(SUM(ng_qty),0) FROM pm_process_daily_ng WHERE report_id=?");
+            $stNgSum->execute([$report_id]);
+            $ngTotal = (int)$stNgSum->fetchColumn();
+            if ($ngTotal > 0) {
+                require_once __DIR__ . '/../../src/common/qa_abnormal_lib.php';
+                $r = qab_auto_open_from_pm_ng($pdo, (int)$report_id);
+                if ($r && empty($r['skipped'])) {
+                    $auto_abnormal = ['no' => $r['no'], 'opener' => $r['opener']];
+                }
+            }
+        } catch (Throwable $eAuto) {
+            error_log('[qab_auto_open_from_pm_ng] report_id=' . $report_id . ' ' . $eAuto->getMessage());
+        }
+
+        echo json_encode(['success' => true, 'message' => '資料已更新', 'auto_abnormal' => $auto_abnormal]);
     } catch (Exception $e) {
         $pdo->rollBack();
         $error_msg = $e->getMessage();
@@ -6967,6 +6988,9 @@ function get_state_badge($state)
                                 if (response.success) {
                                     $('#quickReportModal').modal('hide');
                                     showToast('成功', response.message, true);
+                                    if (response.auto_abnormal && response.auto_abnormal.no) {
+                                        showToast('已自動開立異常單', '單號 ' + response.auto_abnormal.no + '（開單人：' + response.auto_abnormal.opener + '），已轉品管判定', true);
+                                    }
                                     // 延遲 3 秒後重新整理，讓使用者看清楚提示
                                     setTimeout(function() {
                                         location.reload();
