@@ -96,72 +96,25 @@ case 'list': {
 /* ═══════════ 開單 ═══════════ */
 case 'create': {
     if (!$perms['canCreate']) jerr('沒有開立品質異常單的權限');
-    $kind = ($_POST['kind'] ?? '') === 'ir' ? 'ir' : 'bom';
-    $fillDate = trim((string)($_POST['fill_date'] ?? '')) ?: date('Y-m-d');
-    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $fillDate)) jerr('填寫日期格式不正確');
-
-    $irId = null; $irNo = null; $bomNo = $strOrNull($_POST['bom_no'] ?? '', 30);
-    $client = $strOrNull($_POST['client_name'] ?? '', 60);
-    $partNo = $strOrNull($_POST['part_no'] ?? '', 60);
-    $batch  = $intOrNull($_POST['batch_qty'] ?? '');
-
-    if ($kind === 'ir') {
-        $irId = (int)($_POST['ir_id'] ?? 0);
-        if ($irId <= 0) jerr('客退來源請先選擇客退單（IR）');
-        $st = $db->prepare("SELECT IR_id, IR_no, Client_name, d_id, Qty FROM ir_track WHERE IR_id=?");
-        $st->execute([$irId]);
-        $ir = $st->fetch(PDO::FETCH_ASSOC);
-        if (!$ir) jerr('找不到這張客退單');
-        $irNo = (string)$ir['IR_no'];
-        if ($partNo === null) $partNo = $ir['d_id'] !== '' ? mb_substr((string)$ir['d_id'], 0, 60) : null;
-        if ($batch === null)  $batch  = $ir['Qty'] !== null ? (int)$ir['Qty'] : null;
-    } else {
-        if ($bomNo === null) jerr('製程來源請先選擇製令編號');
-        $st = $db->prepare("SELECT bom, d_id, Client_Name, sqty FROM bom WHERE bom=?");
-        $st->execute([$bomNo]);
-        $b = $st->fetch(PDO::FETCH_ASSOC);
-        if (!$b) jerr('找不到這張製令');
-        if ($partNo === null) $partNo = $b['d_id'] !== '' ? mb_substr((string)$b['d_id'], 0, 60) : null;
-        if ($batch === null)  $batch  = $b['sqty'] !== null ? (int)$b['sqty'] : null;
-    }
-    // 客退來源也可以另外綁製令（使用者要求：亦可不選）
-    if ($kind === 'ir' && $bomNo !== null) {
-        $chk = $db->prepare("SELECT 1 FROM bom WHERE bom=?");
-        $chk->execute([$bomNo]);
-        if (!$chk->fetchColumn()) jerr('要綁定的製令編號不存在');
-    }
-
-    /* 客戶與料號一律由來源綁定（使用者要求）：綁了製令或客退單就以來源為準，不採信前端送來的文字。
-       料號連主檔 id 一起存——同一個料號文字在 d_setting 常分屬多家客戶，只留文字之後一定對不回去。 */
-    $srcInfo = qab_resolve_source($db, $bomNo, $irId);
-    $cli = $srcInfo['client'];
-    $partDid = null;
-    if ($srcInfo['src'] !== '') {
-        $client  = $cli['name'];
-        $partNo  = $srcInfo['part_no'];
-        $partDid = $srcInfo['part_d_id'];
-        if ($batch === null) $batch = $srcInfo['batch'];
-    }
-
-    $db->beginTransaction();
+    // 寫入邏輯（客戶/料號來源綁定、配號、IR旗標同步）已抽到 qab_create_order()——
+    // 報工NG自動開單／管理員批次補開共用同一支，這裡只負責把 $_POST 轉成參數與擋權限（鐵律4）。
     try {
-        $no = qab_next_order_no($db, $fillDate);
-        $db->prepare("INSERT INTO qa_abnormal_order
-            (abnormal_order_no, source_type, source_id, occurrence_date, fill_date, found_unit,
-             ir_id, ir_no, bom_no, client_id, client_name, part_no, part_d_id, batch_qty, insp_qty, ng_qty,
-             abnormal_phenomenon, created_by, created_at, surcharge_rate)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?)")
-           ->execute([$no, ($kind === 'ir' ? 'IR' : 'BOM'), (int)($irId ?: 0), $fillDate, $fillDate,
-                      ($kind === 'ir' ? '客退' : '廠內'), $irId, $irNo, $bomNo, $cli['id'], $client, $partNo, $partDid, $batch,
-                      ($intOrNull($_POST['insp_qty'] ?? '') ?? ($batch ? qc_suggest_sample_qty($db, (int)$batch) : null)),
-                      $intOrNull($_POST['ng_qty'] ?? ''),
-                      $strOrNull($_POST['abnormal_phenomenon'] ?? '', 2000), $uid, qab_default_rate($db)]);
-        $id = (int)$db->lastInsertId();
-        $db->commit();
-    } catch (Throwable $e) { $db->rollBack(); throw $e; }
-    qab_sync_ir_flag($db, $irId);      // 退貨單追蹤頁的「已開立異常單」要跟著亮起來
-    $log($id, 'create', '', $no);
-    jout(true, ['id' => $id, 'no' => $no]);
+        $r = qab_create_order($db, [
+            'kind' => $_POST['kind'] ?? '',
+            'fill_date' => $_POST['fill_date'] ?? '',
+            'ir_id' => $_POST['ir_id'] ?? '',
+            'bom_no' => $_POST['bom_no'] ?? '',
+            'client_name' => $_POST['client_name'] ?? '',
+            'part_no' => $_POST['part_no'] ?? '',
+            'batch_qty' => $_POST['batch_qty'] ?? '',
+            'insp_qty' => $_POST['insp_qty'] ?? '',
+            'ng_qty' => $_POST['ng_qty'] ?? '',
+            'abnormal_phenomenon' => $_POST['abnormal_phenomenon'] ?? '',
+            'created_by' => $uid,
+        ]);
+    } catch (Throwable $e) { jerr($e->getMessage()); }
+    $log($r['id'], 'create', '', $r['no']);
+    jout(true, ['id' => $r['id'], 'no' => $r['no']]);
 }
 
 /* ═══════════ 讀一張單（表單頁與列印共用） ═══════════ */
