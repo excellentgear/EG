@@ -3222,7 +3222,7 @@ function renderReady(res) {
           + '<th style="width:96px;">出貨單</th><th>異常單／矯正單</th><th style="width:64px;">缺件</th>'
           + '</tr></thead><tbody>';
     $.each(rows, function (i, r) {
-        h += '<tr><td class="l"><span class="chk-go" data-rdbom="' + esc(r.bom) + '" data-closed="' + num(r.closed)
+        h += '<tr><td class="l"><span class="rd-link" data-rdbom="' + esc(r.bom) + '" data-closed="' + num(r.closed)
           + '" title="開啟' + (num(r.closed) ? '已完工BOM查詢列印' : 'BOM 總表') + '">' + esc(r.bom)
           + (num(r.closed) ? '<br><span class="pj-hint">已完工</span>' : '') + '</span></td>'
           + '<td class="l">' + esc(r.part_no || '') + '</td><td class="l">';
@@ -3235,11 +3235,11 @@ function renderReady(res) {
               + (s.kind === 'pack' ? '（包裝）' : '') + '</a></span> ';
         });
         h += '</td>'
-          + '<td>' + (num(r.fai) ? '<span class="chk-y">✓ 已有</span>' : '<span class="chk-n">✗ 未建立</span>') + '</td>'
-          + '<td>' + (num(r.work) ? '<span class="chk-y chk-go" data-viewwork="' + esc(r.bom) + '" data-partno="'
-                      + esc(r.part_no || '') + '">✓ 已有</span>' : '<span class="chk-n">✗ 未回報</span>') + '</td>'
+          + '<td>' + (num(r.fai) ? '<span class="chk-y">✓ 已有</span>' : '<span class="rd-bad">✗ 未建立</span>') + '</td>'
+          + '<td>' + (num(r.work) ? '<span class="chk-y rd-link" data-viewwork="' + esc(r.bom) + '" data-partno="'
+                      + esc(r.part_no || '') + '">✓ 已有</span>' : '<span class="rd-bad">✗ 未回報</span>') + '</td>'
           + '<td>' + (num(r.ship) ? '<span class="chk-y">✓ ' + (r.ship_mode === 'exact' ? '精確' : '推測') + '</span>'
-                      : '<span class="chk-n">✗ 未出貨</span>') + '</td>'
+                      : '<span class="rd-bad">✗ 未出貨</span>') + '</td>'
           + '<td class="l">' + rdEvidenceList(r.abnormal, '異常單') + rdEvidenceList(r.car, '矯正單')
           + (!(r.abnormal || []).length && !(r.car || []).length ? '<span class="pj-hint">（無，正常）</span>' : '') + '</td>'
           + '<td>' + (num(r.missing_cnt) ? '<span class="pj-miss-badge">' + num(r.missing_cnt) + '</span>'

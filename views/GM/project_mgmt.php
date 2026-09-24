@@ -223,7 +223,13 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         .chk-n { color:#DD5138; font-weight:bold; cursor:pointer; text-decoration:underline; }
         .chk-go { cursor:pointer; text-decoration:underline; }
 
-        /* ── 資料完整度（以製令為單位） ── */
+        /* ── 資料完整度（以製令為單位） ──
+           連結一律用 .rd-link（不可借用 .chk-go）：.chk-go 是 class 選擇器的全域點擊委派
+           （讀 data-go/data-kw 開窗），這裡的連結各自有自己的 data-rdbom/data-viewwork 屬性
+           委派，兩個 class 疊在同一個元素上會被同時觸發、多開一個 kw=undefined 的視窗
+           （使用者 2026-09-24 實測回報）。非可點的紅字狀態同理不可借用 .chk-n，改用 .rd-bad。 */
+        .rd-link { cursor:pointer; text-decoration:underline; }
+        .rd-bad { color:#DD5138; font-weight:bold; }
         .rd-step { display:inline-block; padding:1px 6px; margin:1px 3px 1px 0; border-radius:3px; font-size:11px; }
         .rd-step a { text-decoration:none; }
         .rd-ok { background:#EAF3EC; color:#2F7D4F; }
