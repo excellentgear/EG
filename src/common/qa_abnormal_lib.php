@@ -289,6 +289,27 @@ function qab_ensure_schema(PDO $db): void
     foreach ($need2 as $c => $sql) if (!in_array($c, $cols2, true)) $add2[] = $sql;
     if ($add2) $db->exec("ALTER TABLE qa_abnormal_order " . implode(', ', $add2));
 
+    /* 2026-09-24：同一批NG可能拆分成好幾種處置（特採x2、重工x5、報廐x3），使用者拍板不是把
+       「轉總經理裁示」跟特採/重工/報廐混在同一份選項清單裡，改成獨立開關（escalate_gm）；
+       且整批同進退（不支援一部分主管自決、一部分轉呈——要嘛整批主管自己拆，要嘛整批轉總經理拆）。
+       parent_order_id：拆分出來的子單指向原始單；原始單本身不會有這欄。子單就是完整一列
+       qa_abnormal_order（含自己的 ng_qty=分配到的數量），這樣既有的 qab_bom_scrap_rows() 等下游
+       完全不必改——它們本來就是「逐列查 is_closed+scrap_no+ng_qty」，子單天生就是對的一列。 */
+    $cols3 = $db->query("SHOW COLUMNS FROM qa_abnormal_order")->fetchAll(PDO::FETCH_COLUMN);
+    $add3 = [];
+    $need3 = [
+        'parent_order_id' => "ADD COLUMN parent_order_id INT NULL COMMENT '這張是拆分出來的子單時，指向原始單 id；原始單本身為 NULL'",
+        'escalate_gm'      => "ADD COLUMN escalate_gm TINYINT(1) NOT NULL DEFAULT 0 COMMENT '主管把整批NG轉呈總經理裁示（獨立開關，不是處置方式清單裡的一個選項；勾了disp區的處置就不生效，改由總經理裁示區決定）'",
+    ];
+    foreach ($need3 as $c => $sql) if (!in_array($c, $cols3, true)) $add3[] = $sql;
+    if ($add3) $db->exec("ALTER TABLE qa_abnormal_order " . implode(', ', $add3));
+    if (!in_array('parent_order_id', $cols3, true)) {
+        try { $db->exec("ALTER TABLE qa_abnormal_order ADD KEY idx_parent (parent_order_id)"); } catch (Throwable $e) {}
+    }
+    // 舊資料相容：「轉總經理裁示」原本是 qa_option(kind='disp') 裡的一個選項，現在改用獨立開關，
+    // 停用它讓處置清單不再出現這個選項（is_active=0，歷史單的選取紀錄與判定仍完整保留，見 qab_need_gm()）
+    try { $db->exec("UPDATE qa_option SET is_active=0 WHERE kind='disp' AND is_escalate=1 AND is_active=1"); } catch (Throwable $e) {}
+
     // 管理員設定：自動開立異常單要通知哪幾位品管部門人員（全站共用一份，不是逐單各自設定）
     $db->exec("CREATE TABLE IF NOT EXISTS qab_auto_qc_notify_cfg (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -637,10 +658,25 @@ function qab_sign_candidates(PDO $db, string $slot, string $date, bool $all = fa
 /**
  * 補登模式下，「這一格是誰簽的、蓋哪一天」要由補登者指定（使用者要求：補登簽章區直接補結果與內容）。
  * 回傳 [signer_id, 'Y-m-d H:i:s']；不是補登模式或沒指定就回 [0, '']，呼叫端照原本的「現在、我」處理。
+ *
+ * $uid 是呼叫者本人 id，用來檢查「自動開立、非真正補資料」單是否已經 qab_admin_unlock 解鎖——
+ * 這裡原本只認 is_backfill，導致 2026-09-24 起開放的「自動開立單也能代填代簽」對 disp/gm 這兩格
+ * 完全沒生效：代簽人選了品管主管，因為這裡不認帳直接回 [0,'']，呼叫端就退回「$uid（目前登入者）」，
+ * 於是印出來的簽章永遠是操作當下登入的那個人（多半是管理員），不是實際指定的那位。
+ * sign_set 那條路已經有正確的「未解鎖就明確擋下」邏輯，這裡補齊同一套規則，不可以再默默退回登入者。
  */
-function qab_backfill_sign_args(PDO $db, array $order, array $perms, array $post): array
+function qab_backfill_sign_args(PDO $db, array $order, array $perms, array $post, int $uid = 0): array
 {
-    if (empty($order['is_backfill']) || empty($perms['canBackfill'])) return [0, ''];
+    if (empty($perms['canBackfill'])) return [0, ''];
+    $genuineBackfill = !empty($order['is_backfill']);
+    if (!$genuineBackfill) {
+        if (empty($order['auto_opened'])) return [0, ''];   // 不是補資料也不是自動開立，不支援代簽
+        if (!qab_admin_unlock_valid($uid, (int)$order['id'])) {
+            // 已經送了指定的代簽人卻還沒解鎖：一律明確擋下，絕不可以默默改用目前登入者頂替
+            if ((int)($post['sign_by'] ?? 0) > 0) throw new RuntimeException('請先輸入操作確認密碼解鎖後再代填代簽');
+            return [0, ''];
+        }
+    }
     $date = trim((string)($post['sign_date'] ?? ''));
     if (!preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $date)) return [0, ''];
     if ($date > date('Y-m-d')) throw new RuntimeException('印章日期不可以是未來');
@@ -1877,6 +1913,203 @@ function qab_scrap_alloc(PDO $db, ?string $ymd = null): string
 }
 
 /**
+ * 取消結案後修改決策，若最終決策不再是報廢，就正式收回「暫時保留」的報廢單號（2026-09-24 使用者拍板）。
+ * 只有已經配過號（scrap_no 有值）且目前最終決策已經不含報廢才動作；還是報廢就不動——
+ * 號碼一直保留是刻意的（配出去後可能已經被別的單據引用，改口徑又改回去不該讓號碼一直換）。
+ * 只有 save_disposition／save_gm 這兩個會改變「最終決策」的動作才需要呼叫，其餘動作不影響最終決策。
+ * @return string 被收回的單號；沒有動作則回傳空字串（方便呼叫端判斷要不要寫紀錄）
+ */
+function qab_scrap_no_sync(PDO $db, int $id): string
+{
+    $o = qab_order($db, $id);
+    if (!$o) return '';
+    $scrapNo = (string)($o['scrap_no'] ?? '');
+    if ($scrapNo === '' || !empty($o['final']['is_scrap'])) return '';
+    $db->prepare("UPDATE qa_abnormal_order SET scrap_no=NULL, scrap_no_at=NULL WHERE id=?")->execute([$id]);
+    return $scrapNo;
+}
+
+/**
+ * 結案的唯一寫入邏輯（原本只有 QaAbnormal_API.php 的 case 'close' 一份；2026-09-24 拆分決策
+ * 需要在同一個交易脈絡裡把母單與每張子單各自結案一次，抽出來共用，不要再各刻一份，否則
+ * 「結案當下才配發報廐單號」這條規則遲早在某條路徑走鐘）。
+ * $skipChecks=true 專供拆分流程使用——母單/子單在拆分當下就已經確定齊全（原因分類與相關單位意見
+ * 都是拆分之前就完成的），不必再跑一次一般結案才需要的前置檢查。
+ * 已經結案的單直接回傳現況，不重複動作（拆分時母單與子單都可能各自被呼叫到，需要是幂等的）。
+ * @return ['scrap_no'=>string] 失敗一律丟例外，呼叫端自行決定要不要 catch
+ */
+function qab_close_order(PDO $db, int $id, int $uid, bool $skipChecks = false): array
+{
+    $o = qab_order($db, $id);
+    if (!$o) throw new Exception('找不到這張異常單');
+    if (!empty($o['is_closed'])) return ['scrap_no' => (string)($o['scrap_no'] ?? '')];
+    if (!$skipChecks) {
+        if (!$o['cause_ids']) throw new Exception('結案前請先勾選「異常原因分類」');
+        if (!$o['disp_ids'] && !$o['gm_ids']) throw new Exception('結案前請先完成「異常處置方式」或「總經理裁示」');
+        if (!empty($o['need_gm'])) throw new Exception('處置方式勾了「轉總經理裁示」，要等最終裁示完成才能結案');
+        foreach ($o['rounds'] as $r) if (($r['status'] ?? '') !== 'Returned') throw new Exception('還有單位尚未回覆，請等回覆或先取消該輪徵詢');
+    }
+    $own = !$db->inTransaction();
+    if ($own) $db->beginTransaction();
+    try {
+        $scrapNo = (string)($o['scrap_no'] ?? '');
+        if ($o['final']['is_scrap'] && $scrapNo === '') {
+            $scrapNo = qab_scrap_alloc($db, (string)($o['fill_date'] ?: date('Y-m-d')));
+            $db->prepare("UPDATE qa_abnormal_order SET scrap_no=?, scrap_no_at=NOW() WHERE id=?")->execute([$scrapNo, $id]);
+        }
+        $db->prepare("UPDATE qa_abnormal_order SET is_closed=1, closed_at=NOW(), closed_by=?, updated_by=?, updated_at=NOW() WHERE id=?")
+           ->execute([$uid, $uid, $id]);
+        if ($own) $db->commit();
+    } catch (Throwable $e) { if ($own && $db->inTransaction()) $db->rollBack(); throw $e; }
+    return ['scrap_no' => $scrapNo];
+}
+
+/**
+ * 依決策數量拆單時，子單的建立方式——複製母單的表頭／責任單位等欄位，唯一實作，不要再另外拼一次 INSERT。
+ * ng_qty 直接填分配到的數量（不是母單整批的量），這也是子單能天生套用既有報廐數量統計
+ * （qab_bom_scrap_rows() 等）而不必改任何下游程式的關鍵。
+ */
+function qab_clone_for_split(PDO $db, array $parent, string $childNo, int $qty): int
+{
+    $db->prepare("INSERT INTO qa_abnormal_order
+        (abnormal_order_no, source_type, source_id, occurrence_date, fill_date, found_unit,
+         ir_id, ir_no, bom_no, client_id, client_name, part_no, part_d_id, batch_qty, insp_qty, ng_qty,
+         abnormal_phenomenon, defect_detail, qa_ps, created_by, created_at, surcharge_rate,
+         resp_process_no, responsible_vendor_id, resp_is_internal, responsible_unit,
+         resp_vendor_manual, resp_process_manual, pm_report_id, decider_cfg_id, parent_order_id)
+        SELECT ?, source_type, source_id, occurrence_date, fill_date, found_unit,
+               ir_id, ir_no, bom_no, client_id, client_name, part_no, part_d_id, batch_qty, insp_qty, ?,
+               abnormal_phenomenon, defect_detail, qa_ps, created_by, NOW(), surcharge_rate,
+               resp_process_no, responsible_vendor_id, resp_is_internal, responsible_unit,
+               resp_vendor_manual, resp_process_manual, pm_report_id, decider_cfg_id, id
+        FROM qa_abnormal_order WHERE id=?")
+        ->execute([$childNo, $qty, (int)$parent['id']]);
+    $cid = (int)$db->lastInsertId();
+    $db->prepare("INSERT INTO qa_abnormal_resp (order_id, dept_id, user_id)
+                  SELECT ?, dept_id, user_id FROM qa_abnormal_resp WHERE order_id=?")
+       ->execute([$cid, (int)$parent['id']]);
+    return $cid;
+}
+
+/**
+ * 決策存檔（主管處置或總經理裁示）的唯一寫入路徑——取代原本 save_disposition／save_gm 直接 UPDATE。
+ * $items 只有一筆＝完全比照拆分之前的行為，就地更新這張單，不拆分（絕大多數單都走這條）。
+ * $items 超過一筆＝依數量拆成好幾張子單（唯一觸發拆分的地方，2026-09-24 使用者交辦）：
+ *   - 各項數量加總必須等於 ng_qty，否則不准存
+ *   - 報廐（is_scrap）選項可以另外帶 deduct_qty（其中要扣款的數量，≤該項的數量），
+ *     直接帶進子單「扣款確認」的數量欄，不必開子單再手動填一次
+ *   - 拆分出來的子單建立當下直接自動結案（含報廐子單當場配發報廐單號）；母單同時清空自己的
+ *     決策並跟著一起結案——母單不再自己背「最終決策」，改由子單各自承擔（qab_final() 對母單
+ *     自然回傳 is_scrap=false，不會被 qab_bom_scrap_rows() 重複算進報廐量）
+ *   - 「轉總經理裁示」是整批同進退（escalate_gm 開關），不支援部分轉呈——disp 與 gm 兩層
+ *     只會有其中一層在做「這批NG最終怎麼處置」的拆分，另一層維持空白
+ * $extra 只在 which='gm' 時用得到：gm_deduct（扣款勾選）、capa_order_no（矯正單號）、gm_by_deputy（代簽）
+ * @return ['order'=>更新後的母單, 'children'=>[新建子單id...], 'released_scrap_no'=>string]
+ */
+function qab_save_decision(PDO $db, int $id, string $which, array $items, string $note, int $signBy, string $signAt,
+                            int $actorUid, array $extra = []): array
+{
+    if (!in_array($which, ['disp', 'gm'], true)) throw new Exception('不支援的決策類型');
+    $o = qab_order($db, $id);
+    if (!$o) throw new Exception('找不到這張異常單');
+    if (!empty($o['is_closed'])) throw new Exception('已結案，不可再修改');
+    $optMap = qab_option_map($db);
+    $items = array_values($items);
+    if (!$items) throw new Exception('請至少勾選一項');
+    $seen = [];
+    foreach ($items as $it) {
+        $oi = (int)($it['opt_id'] ?? 0);
+        if (!isset($optMap[$oi]) || $optMap[$oi]['kind'] !== $which) throw new Exception('選到的選項不存在，請重新整理頁面');
+        if (isset($seen[$oi])) throw new Exception('同一個選項不可以重複勾選');
+        $seen[$oi] = 1;
+    }
+    $noteCol = $which === 'disp' ? 'disposition_note' : 'gm_note';
+    $byCol   = $which === 'disp' ? 'disp_decided_by'  : 'gm_decided_by';
+    $atCol   = $which === 'disp' ? 'disp_decided_at'  : 'gm_decided_at';
+    $noteVal = trim($note) !== '' ? mb_substr($note, 0, 2000) : null;
+    $byVal   = $signBy ?: $actorUid;
+    $atVal   = $signAt !== '' ? $signAt : date('Y-m-d H:i:s');
+
+    // 只選一項＝不拆分，就地更新
+    if (count($items) === 1) {
+        $oi = (int)$items[0]['opt_id'];
+        $db->beginTransaction();
+        try {
+            $db->prepare("DELETE FROM qa_abnormal_opt WHERE order_id=? AND kind=?")->execute([$id, $which]);
+            $db->prepare("INSERT IGNORE INTO qa_abnormal_opt (order_id,kind,opt_id) VALUES (?,?,?)")->execute([$id, $which, $oi]);
+            $sql = "UPDATE qa_abnormal_order SET $noteCol=?, $byCol=?, $atCol=?, updated_by=?, updated_at=NOW()";
+            $params = [$noteVal, $byVal, $atVal, $actorUid];
+            if ($which === 'gm') {
+                $sql .= ", gm_deduct=?, capa_order_no=?, gm_by_deputy=?";
+                $params[] = !empty($extra['gm_deduct']) ? 1 : 0;
+                $params[] = trim((string)($extra['capa_order_no'] ?? '')) !== '' ? mb_substr((string)$extra['capa_order_no'], 0, 20) : null;
+                $params[] = !empty($extra['gm_by_deputy']) ? 1 : 0;
+            }
+            $sql .= " WHERE id=?"; $params[] = $id;
+            $db->prepare($sql)->execute($params);
+            $db->commit();
+        } catch (Throwable $e) { $db->rollBack(); throw $e; }
+        $released = qab_scrap_no_sync($db, $id);
+        return ['order' => qab_order($db, $id), 'children' => [], 'released_scrap_no' => $released];
+    }
+
+    // 選了多項＝拆分：先驗證數量
+    $ngQty = (int)($o['ng_qty'] ?? 0);
+    if ($ngQty <= 0) throw new Exception('要拆分之前請先填好不良數');
+    $sum = 0; $normItems = [];
+    foreach ($items as $it) {
+        $oi = (int)$it['opt_id'];
+        $qty = (int)($it['qty'] ?? 0);
+        if ($qty <= 0) throw new Exception('勾選超過一項時，每一項都要填數量');
+        $ded = null;
+        if (!empty($optMap[$oi]['is_scrap']) && isset($it['deduct_qty']) && $it['deduct_qty'] !== '' && $it['deduct_qty'] !== null) {
+            $ded = (float)$it['deduct_qty'];
+            if ($ded < 0 || $ded > $qty) throw new Exception('報廐項目的扣款數量不可以大於該項的數量');
+        }
+        $sum += $qty;
+        $normItems[] = ['opt_id' => $oi, 'qty' => $qty, 'deduct_qty' => $ded];
+    }
+    if ($sum !== $ngQty) throw new Exception("各項數量加總（{$sum}）必須等於不良數（{$ngQty}）");
+    if (!$o['cause_ids']) throw new Exception('拆分之前請先勾選「異常原因分類」');
+    foreach ($o['rounds'] as $r) if (($r['status'] ?? '') !== 'Returned') throw new Exception('還有單位尚未回覆，請等回覆或先取消該輪徵詢');
+
+    $children = [];
+    $db->beginTransaction();
+    try {
+        $seq = 1;
+        foreach ($normItems as $it) {
+            $childNo = $o['abnormal_order_no'] . '-' . $seq;
+            $cid = qab_clone_for_split($db, $o, $childNo, $it['qty']);
+            $db->prepare("INSERT IGNORE INTO qa_abnormal_opt (order_id,kind,opt_id) VALUES (?,?,?)")->execute([$cid, $which, $it['opt_id']]);
+            foreach ($o['cause_ids'] as $catId) {
+                $db->prepare("INSERT IGNORE INTO qa_abnormal_cause (order_id,cat_id) VALUES (?,?)")->execute([$cid, $catId]);
+            }
+            $csql = "UPDATE qa_abnormal_order SET $noteCol=?, $byCol=?, $atCol=?, updated_by=?, updated_at=NOW()";
+            $cparams = [$noteVal, $byVal, $atVal, $actorUid];
+            if ($it['deduct_qty'] !== null) { $csql .= ", deduct_qty=?"; $cparams[] = $it['deduct_qty']; }
+            if ($which === 'gm') {
+                $csql .= ", gm_deduct=?, capa_order_no=?, gm_by_deputy=?";
+                $cparams[] = !empty($extra['gm_deduct']) ? 1 : 0;
+                $cparams[] = trim((string)($extra['capa_order_no'] ?? '')) !== '' ? mb_substr((string)$extra['capa_order_no'], 0, 20) : null;
+                $cparams[] = !empty($extra['gm_by_deputy']) ? 1 : 0;
+            }
+            $csql .= " WHERE id=?"; $cparams[] = $cid;
+            $db->prepare($csql)->execute($cparams);
+            qab_close_order($db, $cid, $actorUid, true);   // 子單建立當下直接自動結案（含報廐配號）
+            $children[] = $cid;
+            $seq++;
+        }
+        // 母單清空自己的決策（改由子單各自承擔），但仍記下是誰、什麼時候做的這次拆分決策，供追溯
+        $db->prepare("DELETE FROM qa_abnormal_opt WHERE order_id=? AND kind IN ('disp','gm')")->execute([$id]);
+        $db->prepare("UPDATE qa_abnormal_order SET $noteCol=?, $byCol=?, $atCol=?, updated_by=?, updated_at=NOW() WHERE id=?")
+           ->execute([$noteVal, $byVal, $atVal, $actorUid, $id]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    qab_close_order($db, $id, $actorUid, true);   // 母單也一起結案（自己已無決策可待，不會配到報廐單號）
+    return ['order' => qab_order($db, $id), 'children' => $children, 'released_scrap_no' => ''];
+}
+
+/**
  * 這張 BOM 已經「結案配發報廐單號」的確認報廐數量——待包裝／BOM總覽／檢驗表的「良品數」、
  * 快速出貨的可出量，一律呼叫這支，不要各自寫一份加總（鐵律4）。
  *
@@ -2144,6 +2377,17 @@ function qab_order(PDO $db, int $id): ?array
     }
     unset($r);
 
+    // 拆分子單／原始單互相連結（見 qab_save_decision()）——要放在 final/need_gm/status 之前，
+    // 那幾個判斷要用「有沒有被拆分」短路掉母單自己的決策狀態
+    $o['split_children'] = qab_split_children($db, $id);
+    $o['split_parent'] = null;
+    if (!empty($o['parent_order_id'])) {
+        $stp = $db->prepare("SELECT id, abnormal_order_no FROM qa_abnormal_order WHERE id=?");
+        $stp->execute([(int)$o['parent_order_id']]);
+        $pr = $stp->fetch(PDO::FETCH_ASSOC);
+        if ($pr) $o['split_parent'] = ['id' => (int)$pr['id'], 'no' => (string)$pr['abnormal_order_no']];
+    }
+
     $o['final']   = qab_final($db, $o, $optMap);
     $o['need_gm'] = qab_need_gm($db, $o, $optMap);
     $o['status']  = qab_status($o);
@@ -2229,6 +2473,27 @@ function qab_order(PDO $db, int $id): ?array
 }
 
 /**
+ * 這張單被拆成了哪幾張子單（原始單專用；子單本身回空陣列）。
+ * @return array [['id','no','ng_qty','name'（決策名稱）,'is_scrap','scrap_no','deduct_qty'], ...]
+ */
+function qab_split_children(PDO $db, int $id): array
+{
+    $optMap = qab_option_map($db);
+    $st = $db->prepare("SELECT c.id, c.abnormal_order_no, c.ng_qty, c.scrap_no, c.deduct_qty,
+                                (SELECT opt_id FROM qa_abnormal_opt WHERE order_id=c.id LIMIT 1) AS opt_id
+                         FROM qa_abnormal_order c WHERE c.parent_order_id=? ORDER BY c.id");
+    $st->execute([$id]);
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $optId = (int)$r['opt_id'];
+        $out[] = ['id' => (int)$r['id'], 'no' => (string)$r['abnormal_order_no'], 'ng_qty' => (int)$r['ng_qty'],
+                  'name' => $optMap[$optId]['name'] ?? '', 'is_scrap' => !empty($optMap[$optId]['is_scrap']),
+                  'scrap_no' => $r['scrap_no'], 'deduct_qty' => $r['deduct_qty'] === null ? null : (float)$r['deduct_qty']];
+    }
+    return $out;
+}
+
+/**
  * 最終處置：總經理裁示優先（使用者定調）；沒有裁示才看主管的處置方式。
  * 回傳 ['from'=>'gm|disp|none','ids'=>[],'names'=>[],'is_scrap'=>bool,'need_capa'=>bool]
  */
@@ -2251,6 +2516,8 @@ function qab_final(PDO $db, array $o, ?array $optMap = null): array
 /** 這張單現在卡在哪一關（由資料推導，不另存狀態欄，避免兩份狀態對不起來） */
 function qab_status(array $o): array
 {
+    // 已拆分成好幾張子單的原始單——本身不再需要決策，優先顯示（比「已結案」更講得清楚這張單的狀態）
+    if (!empty($o['split_children'])) return ['code' => 'split', 'label' => '已拆分為 ' . count($o['split_children']) . ' 張'];
     if (!empty($o['is_closed'])) return ['code' => 'closed', 'label' => '已結案'];
     // 自動開立的單，品管部門還沒確認說明前不算「待決策」——2026-09-24 使用者拍板：
     // 品管填寫完整後才送主管決策，不可以自動送決策。
@@ -2269,9 +2536,17 @@ function qab_status(array $o): array
     return ['code' => 'ready', 'label' => '可結案'];
 }
 
-/** 這張單是不是還在等總經理裁示（處置方式勾了「轉總經理裁示」但還沒裁示） */
+/**
+ * 這張單是不是還在等總經理裁示。2026-09-24 起「轉總經理裁示」改成獨立開關 escalate_gm（新資料一律
+ * 看這個），舊資料則仍相容看 disp_ids 裡有沒有那個已停用的 is_escalate 選項（qab_option_map() 沒有
+ * is_active 過濾，所以舊選取紀錄照樣查得到）——兩條規則同時存在，新單完全不會再命中第二條。
+ */
 function qab_need_gm(PDO $db, array $o, ?array $optMap = null): bool
 {
+    // 已拆分的原始單自己不會有 gm_ids（決策已經分散到各子單），escalate_gm 不能再拿來判斷，
+    // 不然母單會永遠卡在「待總經理裁示」——用 split_children 短路掉
+    if (!empty($o['split_children'])) return false;
+    if (!empty($o['escalate_gm'])) return empty($o['gm_ids']);
     if ($optMap === null) $optMap = qab_option_map($db);
     foreach ($o['disp_ids'] ?? [] as $i) if (!empty($optMap[$i]['is_escalate'])) return empty($o['gm_ids']);
     return false;
@@ -2292,8 +2567,9 @@ function qab_list(PDO $db, array $f = []): array
     if (!empty($f['kw'])) {
         $kw = '%' . $f['kw'] . '%';
         $w[] = "(o.abnormal_order_no LIKE ? OR o.bom_no LIKE ? OR o.ir_no LIKE ? OR o.part_no LIKE ?
-                 OR o.client_name LIKE ? OR o.abnormal_phenomenon LIKE ? OR o.responsible_unit LIKE ? OR o.scrap_no LIKE ?)";
-        array_push($p, $kw, $kw, $kw, $kw, $kw, $kw, $kw, $kw);
+                 OR o.client_name LIKE ? OR o.abnormal_phenomenon LIKE ? OR o.responsible_unit LIKE ? OR o.scrap_no LIKE ?
+                 OR cu.user_cname LIKE ?)";
+        array_push($p, $kw, $kw, $kw, $kw, $kw, $kw, $kw, $kw, $kw);
     }
     $sql = "SELECT o.id, o.abnormal_order_no, o.source_type, o.fill_date, o.occurrence_date, o.client_name,
                    o.part_no, o.bom_no, o.ir_no, o.responsible_unit, o.ng_qty, o.sqty, o.is_closed, o.closed_at,

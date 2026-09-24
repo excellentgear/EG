@@ -85,6 +85,7 @@ $backfillDays = qab_backfill_days($db);
         .st-gm     { background:var(--coral); color:#fff; }
         .st-deduct { background:#F0A24B; color:#3b2a18; }
         .st-ready  { background:#DDEBD6; color:#2c5c2c; }
+        .st-auto   { background:var(--sand); color:var(--ink2); }
         .src { font-size:10.5px; border-radius:8px; padding:0 6px; line-height:17px; display:inline-block; }
         .src-IR  { background:var(--coral); color:#fff; }
         .src-BOM { background:var(--sand); color:var(--ink2); }
@@ -180,7 +181,7 @@ $backfillDays = qab_backfill_days($db);
                 <div class="fg"><label>來源</label>
                     <select id="fSource"><option value="">全部</option>
                         <option value="IR">客退 (IR)</option><option value="BOM">製程 (製令)</option><option value="QC">檢驗單</option></select></div>
-                <div class="fg" style="flex:1;min-width:200px;"><label>關鍵字（單號／製令／客退單／料號／客戶／現象／責任單位／報廢單號）</label>
+                <div class="fg" style="flex:1;min-width:200px;"><label>關鍵字（單號／製令／客退單／料號／客戶／現象／責任單位／報廢單號／開單人員）</label>
                     <input type="text" id="fKw" style="width:100%;"></div>
                 <button class="btn btn-warm btn-sm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
                 <?php if ($perms['canCreate']): ?>
@@ -198,16 +199,16 @@ $backfillDays = qab_backfill_days($db);
         <div class="lst-wrap">
             <table class="lst">
                 <colgroup>
-                    <col style="width:108px"><col style="width:76px"><col style="width:96px"><col style="width:120px">
+                    <col style="width:108px"><col style="width:76px"><col style="width:92px"><col style="width:96px"><col style="width:120px">
                     <col style="width:118px"><col><col style="width:130px"><col style="width:120px">
                     <col style="width:150px"><col style="width:96px">
                 </colgroup>
                 <thead><tr>
-                    <th>異常單號</th><th>日期</th><th>客戶</th><th>料號</th>
+                    <th>異常單號</th><th>日期</th><th>開單人員</th><th>客戶</th><th>料號</th>
                     <th>製令／客退單</th><th>異常現象</th><th>責任單位</th><th>最終處置</th>
                     <th>狀態</th><th>操作</th>
                 </tr></thead>
-                <tbody id="lstBody"><tr><td colspan="10" class="c">載入中…</td></tr></tbody>
+                <tbody id="lstBody"><tr><td colspan="11" class="c">載入中…</td></tr></tbody>
             </table>
         </div>
         <?php endif; ?>
@@ -507,11 +508,11 @@ function post(action, data, cb, errCb){
 
 /* ───────── 清單 ───────── */
 function load(){
-    $('#lstBody').html('<tr><td colspan="10" class="c">載入中…</td></tr>');
+    $('#lstBody').html('<tr><td colspan="11" class="c">載入中…</td></tr>');
     $.get(API, { action:'list', year:$('#fYear').val(), month:$('#fMonth').val(),
                  closed:$('#fClosed').val(), source:$('#fSource').val(), kw:$('#fKw').val(),
                  deleted:$('#fDeleted').prop('checked') ? 1 : '' }, function(res){
-        if (!res || !res.success) { $('#lstBody').html('<tr><td colspan="10" class="c">' + esc((res && res.message) || '載入失敗') + '</td></tr>'); return; }
+        if (!res || !res.success) { $('#lstBody').html('<tr><td colspan="11" class="c">' + esc((res && res.message) || '載入失敗') + '</td></tr>'); return; }
         var rows = res.rows || [];
         syncYears(res.years);
         var del = $('#fDeleted').prop('checked');
@@ -520,13 +521,14 @@ function load(){
         $('#sumBox').html(del
             ? ('已刪除 <b>' + rows.length + '</b> 張（資料仍留著，可還原）')
             : ('共 <b>' + rows.length + '</b> 張　未結案 <b>' + open + '</b> 張　已配發報廢單號 <b>' + scrap + '</b> 張'));
-        if (!rows.length) { $('#lstBody').html('<tr><td colspan="10" class="c">沒有符合條件的異常單</td></tr>'); return; }
+        if (!rows.length) { $('#lstBody').html('<tr><td colspan="11" class="c">沒有符合條件的異常單</td></tr>'); return; }
         $('#lstBody').html(rows.map(function(r){
             var bomIr = (r.bom_no ? esc(r.bom_no) : '') + (r.ir_no ? ((r.bom_no ? '<br>' : '') + esc(r.ir_no)) : '');
             return '<tr>'
                 + '<td class="c"><b>' + esc(r.abnormal_order_no) + '</b><br><span class="src src-' + esc(r.source_type) + '">'
                     + (r.source_type === 'IR' ? '客退' : (r.source_type === 'BOM' ? '製程' : '檢驗')) + '</span></td>'
                 + '<td class="c">' + esc(dispDate(r.fill_date || r.occurrence_date)) + '</td>'
+                + '<td>' + esc(r.created_name || '') + (Number(r.auto_opened) === 1 ? '<br><span class="st st-auto">系統自動</span>' : '') + '</td>'
                 + '<td>' + esc(r.client_name) + '</td>'
                 + '<td>' + esc(r.part_no) + '</td>'
                 + '<td>' + bomIr + '</td>'
@@ -545,7 +547,7 @@ function load(){
                        + (CAN_ADMIN ? ' <button class="btn btn-warm-o btn-xs act-del" data-id="' + r.id + '" data-no="' + esc(r.abnormal_order_no) + '"><i class="fa fa-trash-o"></i></button>' : '')))
                 + '</td></tr>';
         }).join(''));
-    }, 'json').fail(function(){ $('#lstBody').html('<tr><td colspan="10" class="c">連線失敗</td></tr>'); });
+    }, 'json').fail(function(){ $('#lstBody').html('<tr><td colspan="11" class="c">連線失敗</td></tr>'); });
 }
 /* 年度下拉只列真的有資料的年度；後端每次都回最新的一份，這裡只在內容不同時重畫 */
 function syncYears(years){
