@@ -75,22 +75,44 @@ if ($err === '') {
        所以正文第一頁就是「1 / 正文總頁數」。 */
     $total = count($conts);
     $pv    = adt_page_versions($ctx['versions'], count($conts), $ctx['version']);
+
+    /* 「第 X 頁／共 Y 頁」＋AS編號版次：改用 PHP 直接算好印成一般 HTML，
+       不再靠 CSS 具名頁（page:revlog + @page revlog）去關掉——那招在真實瀏覽器的
+       列印預覽裡沒有作用（Chrome 對 `page` 屬性/具名 @page 選取器的支援本來就
+       不完整，只有無頭 Chrome 產 PDF 那條路徑恰好吃得到，真人打開列印對話框
+       看到的仍是沒關掉的版本，使用者 2026-09-24 實測回報「你沒有改好」）。
+       這裡的「頁」＝一張 <section class="adt-page">，這份文件本來就是「編輯器上
+       看到一頁＝印出一頁」設計（每頁高度先算好、強制分頁），所以用 PHP 算出來的
+       張數與瀏覽器實際印出的張數一致；跟內文表格自己的「頁次」欄位（adt_header_html）
+       本來就是同一種「一個區塊算一頁」的算法，兩者現在也一致了。 */
+    $sheetTotal = count($sys) + count($conts);
+    $sheetNo    = 0;
+    $sheetFoot  = function (bool $suppress) use (&$sheetNo, $sheetTotal, $footRight): string {
+        $sheetNo++;
+        if ($suppress) return '';
+        $left = $sheetTotal > 1 ? ('第 ' . $sheetNo . ' 頁／共 ' . $sheetTotal . ' 頁') : '';
+        return '<div class="adt-pgno"><span>' . htmlspecialchars($left, ENT_QUOTES) . '</span>'
+             . '<span>' . htmlspecialchars($footRight, ENT_QUOTES) . '</span></div>';
+    };
+
     $no    = 0;
     foreach ($sys as $s) {
         // 系統頁不印頁首（它們自己就是完整版面），也不計入頁次。
-        // 頁尾（頁碼＋AS編號版次）原則上照印，但「文件制修訂紀錄書」自己的
-        // 表格已經印了文件編號／版次（使用者 2026-09-23 指定），再印一次頁尾是重複。
-        $ftr = ($s['key'] === 'revlog') ? '' : adt_footer_html($ctx);
+        // 頁尾（自訂文字＋AS編號）原則上照印，但「文件制修訂紀錄書」自己的
+        // 表格已經印了文件編號／版次（使用者 2026-09-23 指定），再印一次頁尾／
+        // 頁碼列都是重複，兩個都關掉。
+        $isRevlog = ($s['key'] === 'revlog');
+        $ftr = $isRevlog ? '' : adt_footer_html($ctx);
         $pagesHtml[] = '<section class="adt-page adt-page-' . $s['key'] . '">'
                      . '<div class="adt-body eg-docbody">' . $s['html'] . '</div>'
-                     . $ftr . '</section>';
+                     . $ftr . $sheetFoot($isRevlog) . '</section>';
     }
     foreach ($conts as $i => $one) {
         $no++;
         $pagesHtml[] = '<section class="adt-page">'
                      . adt_header_html($ctx, $no, $total, $pv[$i] ?? $ctx['version'])
                      . '<div class="adt-body eg-docbody">' . $one . '</div>'
-                     . adt_footer_html($ctx) . '</section>';
+                     . adt_footer_html($ctx) . $sheetFoot(false) . '</section>';
     }
 }
 ?>
@@ -108,26 +130,14 @@ if ($err === '') {
 <style>
 @page {
     size: <?= $pageSize ?> <?= $orient ?>;
-    margin: 16mm 15mm 18mm;   /* 下緣要多留：頁碼與 AS 編號印在下方頁邊區 */
-    @bottom-left  { content: "第 " counter(page) " 頁／共 " counter(pages) " 頁"; font-size: 9pt; color: #333; }
-    @bottom-right { content: "<?= htmlspecialchars($footRight, ENT_QUOTES) ?>"; font-size: 9pt; color: #333; }
+    margin: 16mm 15mm 18mm;   /* 下緣要多留：頁碼與 AS 編號改印在內容區最下面一行 */
 }
-/* 「文件制修訂紀錄書」自己的表格已經印了文件編號／版次，頁碼與 AS 編號右下角
-   這兩件事在這一頁不用再印一次（使用者 2026-09-23 指定）。CSS 分頁媒體的
-   @bottom-left/@bottom-right 是綁在 @page 規則上、不是綁在單一元素上，
-   一般 @page 沒辦法只對某一頁關掉這兩格——要用「具名頁」：.adt-page-revlog
-   請求 page:revlog，那幾頁改吃下面這份 @page 規則。
-   ⚠ 實測過（無頭 Chrome）：具名頁沒有覆寫到的邊界框，Chrome 會直接沿用
-   最上面那個沒有名字的 @page 規則，不是「沒寫＝空白」——兩格margin box
-   一定要明寫 `content:""` 才是真的關掉，只是不寫 @bottom-left/@bottom-right
-   完全沒有作用（這裡曾經只宣告 size/margin、頁碼照樣印出來）。 */
-@page revlog {
-    size: <?= $pageSize ?> <?= $orient ?>;
-    margin: 16mm 15mm 18mm;
-    @bottom-left  { content: ""; }
-    @bottom-right { content: ""; }
-}
-.adt-page-revlog { page: revlog; }
+/* 「第 X 頁／共 Y 頁」＋AS編號版次改成一般 HTML（見上方 $sheetFoot），不再用
+   CSS 具名頁（page:revlog + @page revlog）去關：具名頁選取器在真實瀏覽器的
+   列印預覽裡對 @bottom-left/@bottom-right 沒有作用（只有無頭 Chrome 產 PDF
+   那條路徑吃得到，真人打開列印對話框看到的仍是沒關掉的版本——2026-09-24
+   使用者實測回報過），故全面棄用，改由 PHP 直接算好要不要印、印什麼。 */
+.adt-pgno { display: flex; justify-content: space-between; font-size: 9pt; color: #333; margin-top: 2mm; }
 /* 留白一律交給 @page，body 不再自己加 padding——兩邊各留一次會把內容擠到中間又切邊 */
 html, body { margin: 0; padding: 0; }
 body { font-family: "微軟正黑體","Microsoft JhengHei",sans-serif; font-size: 12pt; color: #000; line-height: 1.6; }

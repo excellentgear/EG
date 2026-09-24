@@ -81,6 +81,10 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
 
         .ad-bar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:9px; clear:both; }
         .ad-bar .btn { font-size:13px; }
+        /* 存檔按鈕＋「上次存檔」時間分兩行（使用者 2026-09-24 交辦：時間要顯示在
+           按鈕下方，不要跟按鈕擠在同一列） */
+        .ad-savebox { display:flex; flex-direction:column; align-items:flex-start; gap:2px; }
+        .ad-save-sub { font-size:11.5px; line-height:1.4; display:flex; align-items:center; gap:6px; }
         .ad-dirty { color:#DD5138; font-size:12px; font-weight:bold; display:none; }
         .ad-dirty.on { display:inline; }
         .ad-saved { color:#7A9A4A; font-size:12px; }
@@ -123,10 +127,24 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
         .ad-report li { font-size:12.5px; line-height:1.75; color:#5a4326; }
         .ad-report li.must { color:#A34E2A; }
         .ad-report li.must b { color:#DD5138; }
-        .ad-report .ad-rp-ok li { color:#4a6b33; }
         .ad-report .ad-rp-x { float:right; cursor:pointer; color:#b08a57; }
+        /* 「已經轉進來的」與一般說明改成一排小標籤，不要每一項各自一整行
+           （使用者 2026-09-24 回報：這一塊內容太多很混亂） */
+        .ad-rp-chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:2px; }
+        .ad-rp-chip { display:inline-flex; align-items:center; gap:4px; font-size:11.5px; line-height:20px;
+            padding:0 8px; border-radius:10px; white-space:nowrap; }
+        .ad-rp-chip.ok   { background:#E4F2D9; color:#3E6B2E; }
+        .ad-rp-chip.info { background:#F2EDE2; color:#7a6a52; }
 
         .ad-noperm { border:1px solid #e4d3ba; background:#faf6f0; border-radius:5px; padding:26px; text-align:center; color:#6B471A; }
+
+        /* 回頂端（編輯區塊右下角，內容一多捲下去就看不到上方工具列，比照
+           td_dev_eval.php 既有寫法，使用者 2026-09-24 交辦） */
+        .ad-back-top { position:fixed; right:22px; bottom:22px; width:38px; height:38px; border-radius:50%;
+            background:#F0A24B; color:#fff; text-align:center; line-height:38px; font-size:16px;
+            box-shadow:0 2px 8px rgba(0,0,0,.25); cursor:pointer; display:none; z-index:120; }
+        .ad-back-top:hover { background:#d98a33; }
+        .ad-back-top.show { display:block; }
 
         /* 跳窗（沿用全站慣例；寬度一律固定像素，不可用 vw——vw 相對整個瀏覽器視窗會蓋過側選單） */
         .m-mask { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:10300; display:none; }
@@ -232,28 +250,9 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
             <?php if ((int)$V['current_version_id'] !== (int)$V['version_id']): ?>
               <span class="ad-badge draft" title="這不是目前生效的版次，是歷史版本">歷史版本</span>
             <?php endif; ?>
-            <span style="margin-left:auto">
-              <a class="btn btn-default btn-sm" href="as_document_management.php"><i class="fa fa-arrow-left"></i> 回 AS 文件管理</a>
-            </span>
-        </div>
 
-        <div class="ad-bar">
-          <?php if ($P['edit']): ?>
-            <button class="btn btn-warning btn-sm" id="btnSave"><i class="fa fa-save"></i> 存檔 <small>(Ctrl+S)</small></button>
-            <span class="ad-dirty" id="adDirty"><i class="fa fa-exclamation-circle"></i> 有未存檔的變更</span>
-            <span id="adLayout" style="display:none;font-size:12px;color:#8A5A2B">
-              <i class="fa fa-spinner fa-spin"></i> 排版中…</span>
-            <span class="ad-saved" id="adSaved"></span>
-            <span style="width:10px"></span>
-            <button class="btn btn-default btn-sm" id="btnImport" title="用 LibreOffice 把這個版次掛的 Word 原始檔轉成線上內容">
-              <i class="fa fa-file-word-o"></i> 從 Word 匯入</button>
-            <button class="btn btn-default btn-sm" id="btnFork" title="把同一份文件其他版次的線上內容複製過來（含圖片與流程圖）">
-              <i class="fa fa-copy"></i> 從其他版次複製</button>
-            <button class="btn btn-default btn-sm" id="btnTpl" title="設定發行單位、頁尾左下文字、一階封面英文與目錄">
-              <i class="fa fa-sliders"></i> 版面設定</button>
-            <span style="width:10px"></span>
-          <?php endif; ?>
-
+            <!-- 送審狀態放在「線上版草稿／正本」徽章右側（使用者 2026-09-24 交辦），
+                 跟工具列的動作按鈕分開，一眼就看得到目前簽到哪一關 -->
             <span class="ad-sign-box">
               <span class="ad-badge none" id="adSignBadge">尚未送簽</span>
               <?php if ($P['edit']): ?>
@@ -274,6 +273,32 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
                   <i class="fa fa-cog"></i> 簽核設定</button>
               <?php endif; ?>
             </span>
+
+            <span style="margin-left:auto">
+              <a class="btn btn-default btn-sm" href="as_document_management.php"><i class="fa fa-arrow-left"></i> 回 AS 文件管理</a>
+            </span>
+        </div>
+
+        <div class="ad-bar">
+          <?php if ($P['edit']): ?>
+            <span class="ad-savebox">
+              <button class="btn btn-warning btn-sm" id="btnSave"><i class="fa fa-save"></i> 存檔 <small>(Ctrl+S)</small></button>
+              <span class="ad-save-sub">
+                <span class="ad-dirty" id="adDirty"><i class="fa fa-exclamation-circle"></i> 有未存檔的變更</span>
+                <span id="adLayout" style="display:none;font-size:12px;color:#8A5A2B">
+                  <i class="fa fa-spinner fa-spin"></i> 排版中…</span>
+                <span class="ad-saved" id="adSaved"></span>
+              </span>
+            </span>
+            <span style="width:10px"></span>
+            <button class="btn btn-default btn-sm" id="btnImport" title="用 LibreOffice 把這個版次掛的 Word 原始檔轉成線上內容">
+              <i class="fa fa-file-word-o"></i> 從 Word 匯入</button>
+            <button class="btn btn-default btn-sm" id="btnFork" title="把同一份文件其他版次的線上內容複製過來（含圖片與流程圖）">
+              <i class="fa fa-copy"></i> 從其他版次複製</button>
+            <button class="btn btn-default btn-sm" id="btnTpl" title="設定發行單位、頁尾左下文字、一階封面英文與目錄">
+              <i class="fa fa-sliders"></i> 版面設定</button>
+            <span style="width:10px"></span>
+          <?php endif; ?>
 
           <?php if ($P['edit']): ?>
             <span style="width:10px"></span>
@@ -316,6 +341,7 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
 
         <div id="adEditorHost"></div>
         <div id="adReadonly" style="display:none" class="egrt-wrap"></div>
+        <div class="ad-back-top" id="btnBackTop" title="回到頂端"><i class="fa fa-arrow-up"></i></div>
 <?php endif; ?>
     </div>
 </div>
@@ -733,6 +759,10 @@ function closeMask(id) { document.getElementById(id).classList.remove('open'); }
 $(document).on('click', '[data-close]', function(){ closeMask($(this).data('close')); });
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 $('#adReportX').on('click', function(){ $('#adReport').hide(); });
+
+/* 回到頂端：內容一多捲下去就看不到上方工具列與存檔鈕（使用者 2026-09-24 交辦） */
+$(window).on('scroll', function(){ $('#btnBackTop').toggleClass('show', $(window).scrollTop() > 300); });
+$('#btnBackTop').on('click', function(){ $('html,body').animate({ scrollTop: 0 }, 200); });
 // 單頁／雙頁並排的選擇記下來，下次開同一頁不必再切
 $(document).on('click', '#adEditorHost .egrt-btn[data-view]', function(){
     try { localStorage.setItem('adc_view_mode', $(this).attr('data-view')); } catch(e) {}
@@ -1019,28 +1049,24 @@ function paintPrimaryBadge(c) {
     else              $b.attr('class','ad-badge draft').text('線上版草稿（尚未設為正本）');
 }
 
-/** 未轉換清單：使用者明確要求「轉不動的要列出來」，所以待補項目一律醒目顯示 */
+/** 未轉換清單：使用者明確要求「轉不動的要列出來」，所以待補項目一律醒目顯示；
+    「已經轉進來的」跟一般說明只是參考資訊，改成一排小標籤而不是逐項一整行
+   （使用者 2026-09-24 回報：這一塊內容太多很混亂）。 */
 function paintReport(rep) {
     if (!rep) { $('#adReport').hide(); return; }
     var h = '';
     var must = (rep.todo || []).filter(function(t){ return t.level === 'must'; });
     var info = (rep.todo || []).filter(function(t){ return t.level !== 'must'; });
     if (must.length) {
-        h += '<div><b style="color:#DD5138">還要人工補這些（' + must.length + ' 項）</b><ul>';
+        h += '<div><b style="color:#DD5138"><i class="fa fa-exclamation-triangle"></i> 還要人工補這些（' + must.length + ' 項）</b><ul>';
         must.forEach(function(t){ h += '<li class="must">' + esc(t.note) + '</li>'; });
         h += '</ul></div>';
     }
-    if ((rep.done || []).length) {
-        h += '<div class="ad-rp-ok"><b style="color:#4a6b33">已經轉進來的</b><ul>';
-        rep.done.forEach(function(t){ h += '<li>' + esc(t.note) + '</li>'; });
-        h += '</ul></div>';
-    }
-    if (info.length) {
-        h += '<div><ul>';
-        info.forEach(function(t){ h += '<li style="color:#7a6a52">' + esc(t.note) + '</li>'; });
-        h += '</ul></div>';
-    }
-    h += '<div style="font-size:11.5px;color:#a08a6f;margin-top:4px">來源：' + esc(rep.src || '')
+    var chips = [];
+    (rep.done || []).forEach(function(t){ chips.push('<span class="ad-rp-chip ok"><i class="fa fa-check"></i> ' + esc(t.note) + '</span>'); });
+    info.forEach(function(t){ chips.push('<span class="ad-rp-chip info">' + esc(t.note) + '</span>'); });
+    if (chips.length) h += '<div class="ad-rp-chips">' + chips.join('') + '</div>';
+    h += '<div style="font-size:11.5px;color:#a08a6f;margin-top:6px">來源：' + esc(rep.src || '')
        + (rep.at ? '　匯入於 ' + esc(rep.at) : '') + '</div>';
     $('#adReportBody').html(h);
     $('#adReport').show();
