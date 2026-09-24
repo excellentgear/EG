@@ -1395,11 +1395,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                                 <input type="text" id="search-kw" class="form-control" placeholder="輸入部分料號 / BOM / 客戶後按搜尋">
                                 <span class="input-group-btn"><button class="btn btn-warm" id="btn-search">搜尋</button></span>
                             </div>
-                            <?php if ($isAdmin || $hasF('qc_backfill_data')): ?>
-                            <label class="muted-help" style="display:block;margin-top:4px;cursor:pointer;" title="BOM 結案時常有站別根本沒走過發包/移轉流程，永遠不會出現在正常待驗清單裡；勾選後改列該 BOM 全部還沒有檢驗紀錄的站，不受目前狀態限制（僅補資料/管理員可用）">
+                            <label class="muted-help backfill-menu-item" style="display:none;margin-top:4px;cursor:pointer;" title="BOM 結案時常有站別根本沒走過發包/移轉流程，永遠不會出現在正常待驗清單裡；勾選後改列該 BOM 全部還沒有檢驗紀錄的站，不受目前狀態限制（僅補資料/管理員可用）">
                                 <input type="checkbox" id="chk-include-closed"> 包含已結案 BOM（補建檢驗表用）
                             </label>
-                            <?php endif; ?>
                             <div id="search-results" style="border:1px solid #E4D3BC; margin-top:4px; max-height:220px; overflow:auto;"></div>
                         </div>
                     </div>
@@ -5039,7 +5037,10 @@ $(function(){
     $('#btn-save-draft').on('click', function(){ saveDraftNow(true); });
     function refreshSaveDraftBtn(){ $('#btn-save-draft').toggle(draftEligible()); }
     // 補資料設定鈕：純看權限，新建/修改模式都可能用得到（不像草稿只有正常製程新建才適用）
-    function refreshBackfillBtn(){ $('#btn-backfill').toggle(!!state.canBackfill); }
+    function refreshBackfillBtn(){
+        $('#btn-backfill').toggle(!!state.canBackfill);
+        $('.backfill-menu-item').css('display', state.canBackfill ? 'block' : 'none');
+    }
     function maybeOfferDraft(draftId){
         if(!draftId || state.editFormId){ $('#draft-banner').remove(); return; }
         state.draftFormId=draftId;
