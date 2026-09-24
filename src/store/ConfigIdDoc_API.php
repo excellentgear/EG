@@ -224,7 +224,9 @@ case 'save_all':
             $refFileName = trim((string)($it['ref_file_name'] ?? ''));
             $refBomTag = trim((string)($it['ref_bom_tag'] ?? ''));
             // bomfile（ERP/資材報告）沒有 attach_id，識別鍵是檔名
-            $isLinked = (in_array($refSource, ['part','quote','dev_eval','pfmea'], true) && $refAttachId)
+            // 2026-09-24 補上 sopsip（SOP／SIP，ref_attach_id 存 ss_doc.doc_id）——漏掉的話用
+            // 「選外來文件」手動連結 SOP/SIP 後存檔，這裡會判成沒連結，把剛選好的連結整個洗空
+            $isLinked = (in_array($refSource, ['part','quote','dev_eval','pfmea','sopsip'], true) && $refAttachId)
                         || ($refSource === 'bomfile' && $refFileName !== '');
             $isExcluded = $isLinked && !empty($it['is_excluded']) ? 1 : 0;
             $manualDate = trim((string)($it['manual_effective_date'] ?? ''));
@@ -275,7 +277,17 @@ case 'search_ext_doc':
     needView($perms);
     $dsPk = (int)($_POST['ds_pk'] ?? $_GET['ds_pk'] ?? 0);
     if (!$dsPk) jout(['success'=>true,'rows'=>[]]);
-    jout(['success'=>true,'rows'=>type_id_ctrl_fetch_ext_docs_for_part($db, $dsPk)]);
+    $extRows = type_id_ctrl_fetch_ext_docs_for_part($db, $dsPk);
+    // 手動連結候選額外併入「完全通用」的 SOP/SIP（使用者：「若無綁訂此料號之SOP/SIP 則可指定
+    // 通用的SOP/SIP列入」）——那種不會被自動同步收進去（見 type_id_ctrl_fetch_sopsip_for_part 說明），
+    // 只在這個手動挑選的候選清單裡補上；已經因「專用／通用限定客戶」出現過的不重複列出。
+    $seenSopsip = [];
+    foreach ($extRows as $er) { if (($er['source'] ?? '') === 'sopsip') $seenSopsip[(int)$er['attach_id']] = true; }
+    foreach (type_id_ctrl_fetch_sopsip_generic($db, $dsPk) as $g) {
+        if (isset($seenSopsip[(int)$g['attach_id']])) continue;
+        $extRows[] = $g;
+    }
+    jout(['success'=>true,'rows'=>$extRows]);
 
 // ── 從此料號的訂單+報價單帶入製程（type_id_ctrl_process_candidates，2026-08-12 加入報價單來源）──
 case 'get_order_process':

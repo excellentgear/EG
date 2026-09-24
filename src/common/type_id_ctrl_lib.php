@@ -15,6 +15,7 @@
 // 放在檔案層級載入，不再散在各函式內 require——漏一處就是那支函式突然找不到函式）
 require_once __DIR__ . '/bom_dir_lib.php';
 require_once __DIR__ . '/date_fmt_lib.php';   // 顯示用日期一律 YYYY.MM.DD（ai-rules/20）
+require_once __DIR__ . '/sopsip_lib.php';     // ss_doc/ss_ver 存取：SOP／SIP 型態識別文件來源（2026-09-24）
 
 /* 型態類別與連結來源的顯示標籤 —— 唯一登記處。
    原本寫在 src/store/ConfigIdDoc_API.php，但 2026-09-22 起內部稽核的「產品型態稽核表」
@@ -22,7 +23,7 @@ require_once __DIR__ . '/date_fmt_lib.php';   // 顯示用日期一律 YYYY.MM.D
    ConfigIdDoc_API 原本的 TYPE_LABELS／SOURCE_LABELS 改成指向這裡，既有呼叫端一行都不必改。 */
 const TIC_TYPE_LABELS   = ['drawing' => '圖面', 'jig' => '治夾具', 'report' => '報告', 'other' => '其他文件'];
 const TIC_SOURCE_LABELS = ['part' => '外來文件', 'quote' => '外來文件', 'dev_eval' => '產品開發評估表',
-                           'pfmea' => 'PFMEA', 'bomfile' => 'ERP/資材報告'];
+                           'pfmea' => 'PFMEA', 'bomfile' => 'ERP/資材報告', 'sopsip' => 'SOP／SIP'];
 
 /** 組出單筆項目列的顯示資料（即時解析連結，不快照）。原 ConfigIdDoc_API::buildItemView() */
 function type_id_ctrl_item_view(PDO $db, array $it): array {
@@ -270,6 +271,22 @@ function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $d
             'file_url' => $def['page'] . '?kw=' . rawurlencode((string)$r['doc_no']),
         ];
     }
+    // SOP／SIP（views/QA/sop_sip.php，2026-09-24 使用者要求）：「版別／文件編號」欄一律組成
+    // 「SOP/SIP＋通用/專用＋文件名稱＋版別」（使用者指定格式），是真正的文件識別內容，
+    // doc_no_is_filename=false（列印會印出來）。ref_attach_id 存的是 ss_doc.doc_id，
+    // 版次即時解析現行版（ss_current_ver），文件事後改版／改綁定客戶會自動跟著變，不快照。
+    if ($source === 'sopsip') {
+        $doc = ss_doc_get($db, $attachId);
+        if (!$doc) return null;
+        $ver = ss_current_ver($db, $attachId);
+        $tab = ss_kinds()[$doc['kind']]['tab'] ?? 'sop';
+        return [
+            'doc_name' => type_id_ctrl_sopsip_disp_name($doc, $ver),
+            'doc_no_is_filename' => false,
+            'doc_date' => $ver['form_date'] ?? null,
+            'file_url' => '../QA/sop_sip.php?tab=' . $tab . '&kw=' . rawurlencode((string)$doc['title']),
+        ];
+    }
     if ($source === 'bomfile') {
         $fileName = trim((string)$fileName);
         if ($fileName === '') return null;
@@ -335,7 +352,8 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
     // 跟附件類別設定無關，所以就算一個類別都沒設定也不能整支早退回空陣列。
     if (!$catRows) {
         return array_merge(type_id_ctrl_fetch_form_docs_for_part($db, $dsPk),
-                           type_id_ctrl_fetch_bom_files_for_part($db, $dsPk));
+                           type_id_ctrl_fetch_bom_files_for_part($db, $dsPk),
+                           type_id_ctrl_fetch_sopsip_for_part($db, $dsPk));
     }
     $cats = [];
     foreach ($catRows as $cr) { $cats[(int)$cr['id']] = ['disp'=>$cr['disp'], 'need_process'=>(bool)$cr['need_process']]; }
@@ -413,10 +431,12 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
     }
     unset($r);
 
-    // 本系統內建立的表單（產品開發評估表／PFMEA）與 NAS 的 ERP/資材報告檔案（2026-08-20 使用者要求）
+    // 本系統內建立的表單（產品開發評估表／PFMEA）、NAS 的 ERP/資材報告檔案（2026-08-20 使用者要求）、
+    // SOP／SIP 專用與通用限定客戶（2026-09-24 使用者要求，完全通用的另由 search_ext_doc 動作補入候選）
     return array_merge($rows,
                        type_id_ctrl_fetch_form_docs_for_part($db, $dsPk),
-                       type_id_ctrl_fetch_bom_files_for_part($db, $dsPk));
+                       type_id_ctrl_fetch_bom_files_for_part($db, $dsPk),
+                       type_id_ctrl_fetch_sopsip_for_part($db, $dsPk));
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -654,6 +674,121 @@ function type_id_ctrl_fetch_bom_files_for_part(PDO $db, int $dsPk): array {
             'origin_process' => null,
             'force_type'  => $b['cfg']['item_type'],
             'bom_tag'     => $tagKey,
+        ];
+    }
+    return $out;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * 自動偵測來源四：SOP／SIP（views/QA/sop_sip.php，2026-09-24 使用者要求）
+ *   只認 SOP(kind=process)／SIP(kind=sip) 兩種版面——設備操作說明書(kind=equip) 是機台手冊，
+ *   內容不隨料號改變，不算「定義這個料號目前狀態」的文件，故不列入。
+ *   自動列入只有兩種：①專用——文件綁定此料號(scope=part AND part_d_id=此料號)
+ *                     ②通用限定客戶——文件是通用但指定了客戶、且客戶等於此料號的客戶
+ *                       (scope=general AND customer_id=此料號的客戶)，
+ *   使用者原話：「綁訂此料號之客戶的應該要自動列入」。
+ *   完全不限客戶的「通用」文件**不自動列入**，只能透過「選外來文件」手動挑選連結
+ *   （使用者原話：「若無綁訂此料號之SOP/SIP 則可指定通用的SOP/SIP列入」）——
+ *   見 type_id_ctrl_fetch_sopsip_generic()，由 ConfigIdDoc_API.php 的 search_ext_doc
+ *   動作額外併入候選清單，不進自動同步（避免每個料號都被灌入全部通用 SOP/SIP）。
+ *   「版別／文件編號」欄由 type_id_ctrl_sopsip_disp_name() 組出使用者指定的顯示格式。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+/** SOP／SIP 模組是否已建表（未安裝時本來源一律當沒有，不可讓查詢整個失敗） */
+function type_id_ctrl_sopsip_table_exists(PDO $db): bool {
+    static $ok = null;
+    if ($ok !== null) return $ok;
+    try { $db->query("SELECT 1 FROM ss_doc LIMIT 1"); $ok = true; }
+    catch (Throwable $e) { $ok = false; }
+    return $ok;
+}
+
+/** SOP／SIP 各版面對應的型態項目名稱：優先取該版面綁定的 AS 文件名稱，沒綁定才用版面預設名稱 */
+function type_id_ctrl_sopsip_kind_item_name(PDO $db, string $kind): string {
+    static $cache = [];
+    if (isset($cache[$kind])) return $cache[$kind];
+    $def = ss_kinds()[$kind] ?? null;
+    $default = $def['label'] ?? $kind;
+    $name = '';
+    if ($def && function_exists('eg_asdoc_get')) {
+        $doc = eg_asdoc_get($db, $def['module']);
+        $name = trim((string)($doc['doc_name'] ?? ''));
+    }
+    return $cache[$kind] = ($name !== '' ? $name : $default);
+}
+
+/** 組出「版別／文件編號」欄要顯示的字串：SOP/SIP＋通用/專用＋文件名稱＋版別（使用者指定的顯示格式） */
+function type_id_ctrl_sopsip_disp_name(array $doc, ?array $ver): string {
+    $kindShort = ['process' => 'SOP', 'sip' => 'SIP'][$doc['kind']] ?? strtoupper((string)$doc['kind']);
+    $scopeLabel = ((string)$doc['scope'] === 'part') ? '專用' : '通用';
+    $verNo = $ver ? trim((string)$ver['ver_no']) : '';
+    $parts = [$kindShort, $scopeLabel, trim((string)$doc['title'])];
+    if ($verNo !== '') $parts[] = $verNo . '版';
+    return implode(' ', array_filter($parts, function ($p) { return $p !== ''; }));
+}
+
+/**
+ * 此料號自動符合的 SOP／SIP（專用＋通用限定此客戶），組成與外來文件附件相同格式的列，
+ * 供自動同步（type_id_ctrl_sync_part）與「選外來文件」手動連結（search_ext_doc）共用。
+ */
+function type_id_ctrl_fetch_sopsip_for_part(PDO $db, int $dsPk): array {
+    if (!$dsPk || !type_id_ctrl_sopsip_table_exists($db)) return [];
+    $st = $db->prepare("SELECT Customer_Id FROM d_setting WHERE d_id=?");
+    $st->execute([$dsPk]);
+    $customerId = trim((string)$st->fetchColumn());
+
+    $cond = "d.scope='part' AND d.part_d_id=?";
+    $params = [$dsPk];
+    if ($customerId !== '') {
+        $cond .= " OR (d.scope='general' AND d.customer_id=?)";
+        $params[] = $customerId;
+    }
+    $sql = "SELECT d.doc_id, d.kind, d.scope, d.title, d.proc_name
+             FROM ss_doc d WHERE d.is_deleted=0 AND d.kind IN ('process','sip') AND ($cond)";
+    $st = $db->prepare($sql); $st->execute($params);
+
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $ver = ss_current_ver($db, (int)$r['doc_id']);
+        $out[] = [
+            'source'         => 'sopsip',
+            'attach_id'      => (int)$r['doc_id'],
+            'ds_pk'          => $dsPk,
+            'file_name'      => null,
+            'doc_name'       => type_id_ctrl_sopsip_disp_name($r, $ver),
+            'doc_date'       => $ver['form_date'] ?? null,
+            'categories'     => [type_id_ctrl_sopsip_kind_item_name($db, $r['kind'])],
+            'need_process'   => false,
+            'origin_process' => $r['proc_name'] ?: null,
+            'force_type'     => 'other',
+        ];
+    }
+    return $out;
+}
+
+/**
+ * 全部「通用」SOP／SIP（不限客戶），只用於手動挑選（不進自動同步，見本節開頭說明）。
+ * $dsPk 只用來把回傳列的 ds_pk 填成目前正在編輯的料號，方便挑選後與其他來源用同一套鍵值比對。
+ */
+function type_id_ctrl_fetch_sopsip_generic(PDO $db, int $dsPk): array {
+    if (!type_id_ctrl_sopsip_table_exists($db)) return [];
+    $rows = $db->query("SELECT doc_id, kind, scope, title, proc_name
+                         FROM ss_doc WHERE is_deleted=0 AND kind IN ('process','sip') AND scope='general'
+                         ORDER BY title")->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($rows as $r) {
+        $ver = ss_current_ver($db, (int)$r['doc_id']);
+        $out[] = [
+            'source'         => 'sopsip',
+            'attach_id'      => (int)$r['doc_id'],
+            'ds_pk'          => $dsPk,
+            'file_name'      => null,
+            'doc_name'       => type_id_ctrl_sopsip_disp_name($r, $ver),
+            'doc_date'       => $ver['form_date'] ?? null,
+            'categories'     => [type_id_ctrl_sopsip_kind_item_name($db, $r['kind'])],
+            'need_process'   => false,
+            'origin_process' => $r['proc_name'] ?: null,
+            'force_type'     => 'other',
         ];
     }
     return $out;
