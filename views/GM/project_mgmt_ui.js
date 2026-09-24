@@ -2560,10 +2560,10 @@ function cardItemsHtml(res, ro) {
     var revDate = (res.card || {}).review_date || META.today;
     var h = '<div style="overflow-x:auto;"><table class="sub-tbl" id="cardItems"><thead><tr>'
       + '<th style="width:46px;">項次</th><th>專案階段與核心作業項目</th>'
-      + '<th style="width:130px;">主辦／承辦人</th><th style="width:96px;">預計完成日</th>'
-      + '<th style="width:96px;">實際完成日</th><th style="width:210px;">交付成果／單號</th>'
+      + '<th style="width:130px;">主辦／承辦人</th><th style="width:150px;">預計完成日～實際完成日</th>'
+      + '<th style="width:210px;">交付成果／單號</th>'
       + '<th style="width:110px;">狀態／簽核</th></tr></thead><tbody>';
-    if (!items.length) h += '<tr><td colspan="7" style="padding:12px;color:#8a6d45;">（這張管理卡沒有項次）</td></tr>';
+    if (!items.length) h += '<tr><td colspan="6" style="padding:12px;color:#8a6d45;">（這張管理卡沒有項次）</td></tr>';
 
     $.each(items, function (i, it) {
         var gid = num(it.goal_id);
@@ -2573,13 +2573,14 @@ function cardItemsHtml(res, ro) {
         var open = allDone;                       // 已完成的展開、未完成的收合
         var pct = gt.length ? Math.round(done * 100 / gt.length) : 0;
 
-        h += '<tr class="cd-goal" data-cg="' + gid + '" data-open="' + (open ? 1 : 0) + '"><td class="c">' + (i + 1) + '</td>'
+        /* 使用者 2026-09-24：「階段大標題左側不需要顯示1、2、3」——goal_name 本身已經是
+           「階段 N：xxx」，項次欄再印一次數字是重複；這一格留空，作業項目仍照舊編 i.ti。 */
+        h += '<tr class="cd-goal" data-cg="' + gid + '" data-open="' + (open ? 1 : 0) + '"><td class="c"></td>'
           + '<td class="l"><span class="cd-tog" data-cgtog="' + gid + '">'
           + '<i class="fa fa-caret-' + (open ? 'down' : 'right') + '"></i></span> <b>' + esc(it.goal_name || '') + '</b>'
           + '<span class="pj-hint">　' + done + '/' + gt.length + ' 項完成（' + pct + '%）</span></td>'
           + '<td>' + esc(it.dept_name || '') + (it.owner_name ? '<br><span class="pj-hint">' + esc(it.owner_name) + '</span>' : '') + '</td>'
-          + '<td class="c">' + dispDate(cardGoalDate(gt, 'plan_end', true)) + '</td>'
-          + '<td class="c">' + (allDone ? dispDate(cardGoalDate(gt, 'act_end', true)) : '－') + '</td>'
+          + '<td class="c">' + goalRangeText(gt, allDone) + '</td>'
           + '<td class="l"><span class="pj-hint">' + (allDone ? '本階段已完成' : '尚在進行') + '</span></td>'
           + '<td class="c">' + (allDone ? '<span class="st st-approved">已完成</span>'
                                         : '<span class="st st-submitted">進行中</span>') + '</td></tr>';
@@ -2595,17 +2596,16 @@ function cardItemsHtml(res, ro) {
               + (num(t.is_milestone) ? ' <span style="color:#8A5A2B;">◆</span>' : '') + '</td>'
               + '<td>' + esc(t.owner_dept_name || '') + '<br><span class="pj-hint">'
               + esc(t.owner_name || '排班人員') + '</span></td>'
-              + '<td class="c">' + dispDate(t.plan_end) + '</td>'
-              + '<td class="c">' + (stt === 'done' ? dispDate(t.act_end) : '－') + '</td>'
+              + '<td class="c">' + planActRangeText(t.plan_end, stt === 'done' ? t.act_end : '') + '</td>'
               + '<td class="l">' + (stt === 'done' && deliver.length
                     ? esc(deliver.join('；'))
                     : '<span class="pj-hint">' + (stt === 'done' ? '（未登錄佐證）' : '－') + '</span>') + '</td>'
-              + '<td class="c">' + stateBadge(stt) + cardSignerHtml(t) + '</td></tr>';
+              + '<td class="c">' + stateBadge(stt) + cardSignerHtml(t, stt) + '</td></tr>';
         });
 
         /* 這個階段的管理卡填寫欄（問題／後續辦法／備註）跟著階段一起收合 */
         h += '<tr class="cd-edit cd-of-' + gid + '"' + (open ? '' : ' style="display:none;"')
-          + ' data-item="' + it.item_id + '"><td></td><td colspan="6">'
+          + ' data-item="' + it.item_id + '"><td></td><td colspan="5">'
           + '<div class="grid3">'
           + '<div><label>目前應達成基準</label><textarea class="i-base" rows="2"' + ro + '>' + esc(it.baseline || '') + '</textarea>'
           + '<label style="font-size:11px;display:block;margin-top:2px;">'
@@ -2632,7 +2632,10 @@ function cardItemsHtml(res, ro) {
    補資料時十之八九是管理員或專案負責人代填，印出來變成他們在幫每一項工作簽核，完全不對）。
    這裡刻意只用 `owner_name`（該步驟的承辦人，本來就是另一份可靠來源），沒指派負責人的
    步驟就不印名字（寧可留白也不要印錯人；要印單位主管需要後端查組織圖，屬於下一步）。 */
-function cardSignerHtml(t) {
+function cardSignerHtml(t, stt) {
+    // 使用者 2026-09-24：「未開始就不需要顯示人名」——還沒開始做的項目，這一欄只需要顯示狀態，
+    // 掛名字反而像是在要求還沒輪到的人先簽核。
+    if (stt === 'pending' || stt === 'noplan') return '';
     if (t.owner_name) return '<br><small>' + esc(t.owner_name) + '</small>';
     // 沒指派承辦人時，退回這個步驟所屬部門的單位主管（後端 prj_tasks_attach_supervisor 查好帶下來，
     // 走全站唯一的 eg_unit_supervisor()，不在前端猜）。
@@ -2649,6 +2652,16 @@ function cardGoalDate(tasks, field, last) {
         if (!v || (last ? d > v : d < v)) v = d;
     });
     return v;
+}
+/* 使用者 2026-09-24：「預計完成日／實際完成日」兩欄合併顯示成「預計完成日～實際完成日」——
+   還沒完成只印預計日，完成了才接上實際日；管理卡與其列印版共用同一份格式。 */
+function planActRangeText(plan, act) {
+    var p = dispDate(plan), a = act ? dispDate(act) : '';
+    if (!p && !a) return '';
+    return a ? (p + ' ～ ' + a) : p;
+}
+function goalRangeText(gt, allDone) {
+    return planActRangeText(cardGoalDate(gt, 'plan_end', true), allDone ? cardGoalDate(gt, 'act_end', true) : '');
 }
 /* 展開狀態一律用 tr.cd-goal 自己的 data-open 記，不要用 jQuery :visible 判斷目前是不是展開——
    :visible 是看「實際算出來的呈現」（連祖先元素有沒有被藏起來都算），管理卡剛畫出來時若祖先容器
@@ -2671,9 +2684,13 @@ function openCard(cardId) {
            看的人要知道是哪一家的哪一個料號，專案名稱在管理卡編號裡已經隱含了。 */
         var pj = res.project || {};
         var pns = $.map(res.parts || [], function (x) { return x.part_no || ''; }).join('、');
+        /* 使用者 2026-09-24：「展開管理卡在右上角增加列印按鈕，避免按到上方列表的列印會按錯」——
+           清單上每一列的「列印」跟「刪除」擠在一起，展開後就近提供第二個入口比較不會誤觸。 */
         var h = '<div class="sec" data-card="' + c.card_id + '"><h5>管理卡 ' + esc(c.card_no || '')
-          + ' <span class="pj-op" id="btnCardClose" style="float:right;font-weight:normal;">'
-          + '<i class="fa fa-times"></i> 收合</span></h5>'
+          + '<span style="float:right;">'
+          + '<span class="pj-op" id="btnCardPrintTop"><i class="fa fa-print"></i> 列印</span>'
+          + ' <span class="pj-op" id="btnCardClose" style="font-weight:normal;">'
+          + '<i class="fa fa-times"></i> 收合</span></span></h5>'
           + '<div class="grid3" style="margin-bottom:8px;">'
           + '<div><label>客戶</label><input type="text" class="ro-auto" readonly value="' + esc(pj.customer_name || '－') + '"></div>'
           + '<div><label>料號</label><input type="text" class="ro-auto" readonly value="' + esc(pns || '－') + '"></div>'
@@ -2732,7 +2749,7 @@ $(document).on('click', '#btnCardSubmit', function () {
             });
         });
 });
-$(document).on('click', '#btnCardPrint', function () {
+$(document).on('click', '#btnCardPrint, #btnCardPrintTop', function () {
     api('card_get', { card_id: num($('#cardEditBox .sec').data('card')) }).done(function (res) { printCard(res); });
 });
 /* 檢討日期改了就把自動列重算（推導欄位鐵則：來源一改就重算，不留舊值） */
@@ -4798,11 +4815,11 @@ function buildCardHtml(res, m) {
     /* 表身依使用者指定的欄位：項次／專案階段與核心作業項目／主辦·承辦人／預計完成日／
        實際完成日／交付成果·單號／狀態·簽核。階段一列，底下接它的作業項目。 */
     var tasks = res.tasks || [];
-    h += '<table><colgroup><col style="width:5%"><col style="width:28%"><col style="width:12%">'
-      + '<col style="width:9%"><col style="width:9%"><col style="width:22%"><col style="width:15%"></colgroup>'
+    h += '<table><colgroup><col style="width:5%"><col style="width:26%"><col style="width:12%">'
+      + '<col style="width:16%"><col style="width:24%"><col style="width:17%"></colgroup>'
       + '<thead><tr><th>項次</th><th>專案階段與核心作業項目</th><th>主辦／承辦人</th>'
-      + '<th>預計完成日</th><th>實際完成日</th><th>交付成果／單號</th><th>狀態／簽核</th></tr></thead><tbody>';
-    if (!items.length) h += '<tr><td colspan="7" class="c">（無項次）</td></tr>';
+      + '<th>預計完成日～實際完成日</th><th>交付成果／單號</th><th>狀態／簽核</th></tr></thead><tbody>';
+    if (!items.length) h += '<tr><td colspan="6" class="c">（無項次）</td></tr>';
     $.each(items, function (i, it) {
         var gid = num(it.goal_id);
         var gt = $.grep(tasks, function (t) { return num(t.goal_id) === gid; });
@@ -4810,17 +4827,21 @@ function buildCardHtml(res, m) {
         var allDone = gt.length > 0 && doneN >= gt.length;
         /* 使用者 2026-09-23：「階段大標題請整列往右到底合併顯示，並將標題文字放大」——
            原本切成 7 個窄欄，「階段 N：xxx」被擠在第二欄（28% 寬），紙本上很不顯眼。
-           改成單一 colspan 橫幅，原本各欄的資訊（主辦單位／日期／狀態／問題）摺進同一格的次要文字。 */
+           改成單一 colspan 橫幅，原本各欄的資訊（主辦單位／日期／狀態／問題）摺進同一格的次要文字。
+           使用者 2026-09-24：標題後面不要再印「主辦／預計完成／實際完成／狀態」這一整串——
+           主辦與狀態已有各自的欄位／作業項目可看，這裡只留「預計區間」，完成了才加「實際區間」；
+           標題本身已經是「階段 N：xxx」，前面不再重複印數字。 */
         var goalMeta = [];
-        if (it.dept_name || it.owner_name) goalMeta.push('主辦：' + esc(it.dept_name || '') + (it.owner_name ? '　' + esc(it.owner_name) : ''));
-        var pe = cardGoalDate(gt, 'plan_end', true); if (pe) goalMeta.push('預計完成：' + dispDate(pe));
-        if (allDone) { var ae = cardGoalDate(gt, 'act_end', true); if (ae) goalMeta.push('實際完成：' + dispDate(ae)); }
-        goalMeta.push('狀態：' + (allDone ? '已完成' : doneN + '/' + gt.length));
+        var ps = cardGoalDate(gt, 'plan_start', false), pe = cardGoalDate(gt, 'plan_end', true);
+        if (ps || pe) goalMeta.push('預計區間：' + dispDate(ps) + ' ～ ' + dispDate(pe));
+        if (allDone) {
+            var as_ = cardGoalDate(gt, 'act_start', false), ae = cardGoalDate(gt, 'act_end', true);
+            if (as_ || ae) goalMeta.push('實際區間：' + dispDate(as_) + ' ～ ' + dispDate(ae));
+        }
         var issueTxt = (num(it.on_track) && !$.trim(it.issue_text || '')) ? '' : esc(it.issue_text || '').replace(/\n/g, '<br>');
-        h += '<tr class="gsep"><td colspan="7" class="gsep-cell">'
-          + '<span class="gsep-no">' + (i + 1) + '</span>　'
+        h += '<tr class="gsep"><td colspan="6" class="gsep-cell">'
           + '<b class="gsep-title">' + esc(it.goal_name || '') + '</b>'
-          + '<span class="gsep-meta">　' + goalMeta.join('　｜　') + '</span>'
+          + (goalMeta.length ? '<span class="gsep-meta">　' + goalMeta.join('　｜　') + '</span>' : '')
           + (issueTxt ? '<br><span class="gsep-meta">問題：' + issueTxt + '</span>' : '')
           + '</td></tr>';
         $.each(gt, function (ti, t) {
@@ -4833,15 +4854,14 @@ function buildCardHtml(res, m) {
               + (num(t.is_milestone) ? ' ◆' : '') + '</td>'
               + '<td class="c">' + esc(t.owner_dept_name || '')
               + '<br>' + esc(t.owner_name || '排班人員') + '</td>'
-              + '<td class="c">' + dispDate(t.plan_end) + '</td>'
-              + '<td class="c">' + (stt === 'done' ? dispDate(t.act_end) : '') + '</td>'
+              + '<td class="c">' + planActRangeText(t.plan_end, stt === 'done' ? t.act_end : '') + '</td>'
               + '<td>' + (stt === 'done' ? esc(deliver.join('；')) : '') + '</td>'
-              + '<td class="c">' + stateText(stt) + cardSignerHtml(t) + '</td></tr>';
+              + '<td class="c">' + stateText(stt) + cardSignerHtml(t, stt) + '</td></tr>';
         });
         /* 後續辦理方法／備註有填才印一列，沒填不要浪費紙面 */
         var extra = $.trim(String(it.follow_text || '')) + ($.trim(String(it.note || '')) ? '　【備註】' + it.note : '');
         if ($.trim(extra)) {
-            h += '<tr><td></td><td colspan="6" style="padding-left:4mm;"><b>後續辦理：</b>'
+            h += '<tr><td></td><td colspan="5" style="padding-left:4mm;"><b>後續辦理：</b>'
               + esc(extra).replace(/\n/g, '<br>') + '</td></tr>';
         }
     });
