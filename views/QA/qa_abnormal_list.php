@@ -156,7 +156,9 @@ $backfillDays = qab_backfill_days($db);
             <h3><i class="fa fa-exclamation-triangle" style="color:var(--coral);"></i> 品質異常處理單
                 <span class="as-tag"><?= htmlspecialchars($asNo) ?></span>
                 <span class="role-tag">目前身分：<?= htmlspecialchars($roleLabel) ?></span>
-                <button id="btnPageHelp" class="page-help-btn" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
+                <a href="ncr_control_log.php" class="btn btn-default btn-sm" style="margin-left:auto;"
+                   title="切換到不合格品管制記錄表"><i class="fa fa-exchange"></i> 不合格品管制記錄表</a>
+                <button id="btnPageHelp" class="page-help-btn"><i class="fa fa-question-circle"></i> 使用說明</button>
             </h3>
         </div>
 
@@ -185,6 +187,7 @@ $backfillDays = qab_backfill_days($db);
                 <div class="fg" style="flex:1;min-width:200px;"><label>關鍵字（單號／製令／客退單／料號／客戶／現象／責任單位／報廢單號／開單人員）</label>
                     <input type="text" id="fKw" style="width:100%;"></div>
                 <button class="btn btn-warm btn-sm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
+                <button class="btn btn-warm-o btn-sm" id="btnMonthPrint"><i class="fa fa-print"></i> 批次月報列印</button>
                 <?php if ($perms['canCreate']): ?>
                 <button class="btn btn-warm btn-sm" id="btnNew"><i class="fa fa-plus"></i> 開立異常單</button>
                 <?php endif; ?>
@@ -371,6 +374,12 @@ $backfillDays = qab_backfill_days($db);
                         </div>
                     </div>
                 </div>
+                <div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:10px;">
+                    <div class="fld"><label>首頁批次月報列印標題（不綁 AS 文件，獨立設定）</label>
+                        <input type="text" id="cfgListPrintTitle" maxlength="60" placeholder="品質異常處理單彙總清單"></div>
+                    <div class="muted-help" style="margin-top:2px;">首頁「批次列印」依年月印出的彙總清單用這個標題，跟上面的 AS 文件綁定無關；
+                        列印出來的樣子是「大標題：本公司全名」→「YYYY.MM　這個標題」。</div>
+                </div>
                 <div style="margin-top:10px;"><button class="btn btn-warm btn-sm" id="btnSaveEtc"><i class="fa fa-save"></i> 儲存其他設定</button></div>
             </div>
         </div>
@@ -397,6 +406,32 @@ $backfillDays = qab_backfill_days($db);
     </div>
 </div>
 
+<!-- 批次月報列印（依年月，只有有資料的月份才給勾） -->
+<div class="m-mask" id="mpMask">
+    <div class="m-box" style="width:520px;">
+        <div class="m-hd"><i class="fa fa-print"></i> 批次月報列印<span class="x" data-close="mpMask">&times;</span></div>
+        <div class="m-bd">
+            <div class="note-box">選一個年度，只有<b>真的有資料的月份</b>才能勾選；可以一次勾好幾個月，
+                每個月各自印成一份獨立的彙總清單（排序最舊日期在最上面），逐份開視窗排隊列印。
+                這份列印<b>不綁定 AS 文件編號</b>，標題可在「設定 → 其他設定」自訂。</div>
+            <div class="fld"><label>年度</label>
+                <select id="mpYear" style="width:160px;">
+                    <?php foreach ($years as $y): ?>
+                    <option value="<?= $y ?>" <?= $y === $defYear ? 'selected' : '' ?>><?= $y ?></option>
+                    <?php endforeach; ?>
+                </select></div>
+            <div class="fld" style="margin-top:8px;"><label>月份（僅列出有資料的月份）</label>
+                <div id="mpMonths" class="muted-help">載入中…</div>
+            </div>
+            <div class="err" id="mpErr"></div>
+        </div>
+        <div class="m-ft">
+            <button class="btn btn-default btn-sm" data-close="mpMask">取消</button>
+            <button class="btn btn-warm btn-sm" id="btnMpGo"><i class="fa fa-print"></i> 開始列印</button>
+        </div>
+    </div>
+</div>
+
 <!-- 使用說明（鐵律7） -->
 <div class="m-mask" id="helpUseMask">
     <div class="m-box" style="width:820px;">
@@ -410,7 +445,12 @@ $backfillDays = qab_backfill_days($db);
                     <b>兩者都一定要從清單選到既有的單據</b>，只打字不選會被擋下（客戶、料號與扣款金額都是靠這個綁定帶出來的）；
                     客戶與料號會自動帶、不給手打，<b>檢驗數</b>則依線上檢驗的抽樣規則自動建議。建立後自動跳到處理頁填其餘內容。</li>
                 <li><b>進入處理</b>：點該列「處理」。填寫、徵詢相關單位意見、決策、總經理裁示、扣款確認、結案都在那一頁。</li>
-                <li><b>列印</b>：點「列印」開出照紙本版面的正式表單（公司全名、表單名稱、AS 編號與版次都自動帶）。</li>
+                <li><b>列印</b>：點「列印」開出照紙本版面的正式表單（公司全名、表單名稱、AS 編號與版次都自動帶）；
+                    <b>母單（已依決策拆成好幾張子單的原始單）列印時會自動一併開視窗列印每張子單</b>，子單本身也可以用自己的單號獨立列印。</li>
+                <li><b>批次月報列印</b>：工具列「批次月報列印」→ 選年度 → 勾選要印的月份（<b>只有真的有資料的月份才能勾</b>）→
+                    每個月各自印成一份獨立的彙總清單（<b>最舊日期在最上面</b>），逐份開視窗排隊列印。
+                    這份列印<b>不綁定 AS 文件編號</b>，標題在下方「設定 → 其他設定」自訂；隱藏開單人員，印出總筆數／總檢驗數／總不良數／整體不良率。</li>
+                <li>右上角<b>「不合格品管制記錄表」</b>按鈕可快速切換過去（該頁也有按鈕切回來）。</li>
             </ul>
             <h4>補舊資料</h4>
             <ul>
@@ -427,7 +467,11 @@ $backfillDays = qab_backfill_days($db);
                     如果這張單有指定決策者（表頭「決策者」欄），狀態徽章下方會另起一行小字顯示決策者的部門與姓名；
                     <b>單子一送到這個狀態（自動開立單品管確認完成、或人工開單指定/換了決策者）系統會自動通知該決策者</b>，
                     沒指定決策者時不會加註也不會發通知。</li>
-                <li><b>待總經理裁示</b>：處置方式勾了「轉總經理裁示」但還沒裁示。<b>扣款確認中</b>：要扣款但還沒核准。<b>可結案</b>：該做的都做完了。</li>
+                <li><b>待總經理裁示</b>：主管勾了「整批轉呈總經理裁示」（獨立開關，不是處置方式清單裡的選項）但還沒裁示。
+                    <b>扣款確認中</b>：要扣款但還沒核准。<b>可結案</b>：該做的都做完了。</li>
+                <li><b>已拆分為 N 張</b>：主管或總經理決策時勾選超過一項（例如同一批NG部分特採、部分重工、部分報廢），
+                    系統依填入的數量自動拆成 N 張子單，各自獨立結案（含報廢子單自動配發報廐單號）；
+                    原始單本身不再需要決策，點進去可以看到每張子單的連結。</li>
             </ul>
             <h4>設定（限管理員）</h4>
             <ul>
@@ -442,7 +486,7 @@ $backfillDays = qab_backfill_days($db);
                     要換人請到<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>改一次，全站表單一起跟著換。</li>
                 <li><b>品管通知名單</b>：勾選要通知的品管部門人員，報工NG累積自動開立異常單時會通知他們補充異常現象說明；
                     <b>任何一位</b>完成確認即可送決策，不必每個人都確認。決策者自動＝品管主管沿用「決策者」分頁裡品管課那一列，不必另外設定。</li>
-                <li><b>其他設定</b>：扣款加成預設值、<b>補資料天數</b>、AS 文件綁定。</li>
+                <li><b>其他設定</b>：扣款加成預設值、<b>補資料天數</b>、AS 文件綁定、<b>首頁批次月報列印標題</b>（供上面「批次月報列印」用，跟 AS 文件綁定無關）。</li>
                 <li>每個設定分頁右下角都有<b>「一鍵存檔（本頁全部）」</b>，不必一列一列按「存」；
                     有任何一列填錯會整批不儲存並告訴你是第幾列（不會只存一半）。
                     決策者的<b>顯示名稱是自動的</b>＝「部門＋職稱」，部門或職稱改名時跟著變，不會留舊名稱。</li>
@@ -646,6 +690,37 @@ function acSetup(inputSel, action, fmt, pick){
     $(window).on('scroll resize', function(){ if ($list.is(':visible')) place(); });
 }
 
+/* ───────── 批次月報列印（依年月，只列有資料的月份） ───────── */
+function mpLoadMonths(){
+    var y = $('#mpYear').val();
+    $('#mpMonths').text('載入中…');
+    $.get(API, { action:'year_months', year:y }, function(res){
+        if (!res || !res.success) { $('#mpMonths').text('載入失敗'); return; }
+        var h = '';
+        for (var m = 1; m <= 12; m++) {
+            var c = res.counts[m] || 0;
+            h += '<label style="display:inline-block;width:90px;font-weight:normal;' + (c ? '' : 'color:#bbb;') + '">'
+               + '<input type="checkbox" class="mpM" value="' + m + '"' + (c ? '' : ' disabled') + '> '
+               + m + '月' + (c ? '（' + c + '筆）' : '（無資料）') + '</label>';
+        }
+        $('#mpMonths').html(h);
+    }, 'json').fail(function(){ $('#mpMonths').text('連線失敗'); });
+}
+$('#btnMonthPrint').on('click', function(){ $('#mpErr').text(''); mpLoadMonths(); openMask('mpMask'); });
+$(document).on('change', '#mpYear', mpLoadMonths);
+$('#btnMpGo').on('click', function(){
+    var y = Number($('#mpYear').val());
+    var months = $('.mpM:checked').map(function(){ return Number(this.value); }).get();
+    if (!months.length) { $('#mpErr').text('請至少勾選一個有資料的月份'); return; }
+    $('#mpErr').text('');
+    months.forEach(function(m, i){
+        setTimeout(function(){
+            window.open('qa_abnormal_list_print.php?year=' + y + '&month=' + m + '&auto=1', '_blank');
+        }, i * 700);
+    });
+    closeMask('mpMask');
+});
+
 /* ───────── 設定 ───────── */
 <?php if ($perms['canAdmin']): ?>
 $('#btnCfg').on('click', function(){ loadCfg(); openMask('cfgMask'); });
@@ -773,6 +848,7 @@ function loadCfg(){
         CFG = res;
         $('#cfgRate').val(res.rate);
         $('#cfgBfDays').val(res.backfill_days);
+        $('#cfgListPrintTitle').val(res.list_print_title || '');
         $('#cfgStampTpl').html('<option value="0">系統預設（回墨印）</option>' + (res.stamp_tpls || []).map(function(t){
             return '<option value="' + t.id + '"' + (Number(t.id) === Number(res.stamp_tpl_id) ? ' selected' : '') + '>'
                  + esc(t.tpl_name) + '</option>'; }).join(''));
@@ -1046,7 +1122,8 @@ $(document).on('click', '[data-saveall]', function(){
 $('#btnSaveEtc').on('click', function(){
     post('setting_save', { surcharge_rate:$('#cfgRate').val(), backfill_days:$('#cfgBfDays').val(),
                            stamp_tpl_id:$('#cfgStampTpl').val(),
-                           stamp_tpl_ask_id:$('#cfgStampTplAsk').val() }, function(res){
+                           stamp_tpl_ask_id:$('#cfgStampTplAsk').val(),
+                           list_print_title:$('#cfgListPrintTitle').val() }, function(res){
         BF_DAYS = Number(res.backfill_days);
         alert('已儲存');
     });

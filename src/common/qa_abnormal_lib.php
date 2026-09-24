@@ -373,6 +373,13 @@ function qab_default_rate(PDO $db): float
     return $v > 0 ? $v : 1.0;
 }
 
+/** 首頁列表按年月批次列印時的清單標題（管理員可設；這份列印不綁 AS 文件，標題不能跟著 AS 文件名稱走） */
+function qab_list_print_title(PDO $db): string
+{
+    $v = trim((string)qab_setting_get($db, 'list_print_title', ''));
+    return $v !== '' ? $v : '品質異常處理單彙總清單';
+}
+
 /** 幾天以前的單算「補資料」（使用者定調：今日往前 10 天以前；做成可設定，預設 10） */
 function qab_backfill_days(PDO $db): int
 {

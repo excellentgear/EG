@@ -823,7 +823,22 @@ case 'settings_get': {
         'stamp_tpl_id'  => (int)qab_setting_get($db, 'stamp_tpl_id', 0),
         'stamp_tpl_ask_id' => (int)qab_setting_get($db, 'stamp_tpl_ask_id', 0),
         'stamp_tpls'    => $db->query("SELECT id, tpl_name FROM stamp_template WHERE is_active=1 ORDER BY id")->fetchAll(PDO::FETCH_ASSOC),
+        'list_print_title' => qab_list_print_title($db),
     ]);
+}
+
+/* ═══════════ 首頁列表批次月報列印：先問哪一年哪幾個月有資料 ═══════════ */
+case 'year_months': {
+    $year = (int)($_GET['year'] ?? $_POST['year'] ?? 0);
+    if ($year < 2000 || $year > 2100) jerr('年份不正確');
+    $st = $db->prepare("SELECT MONTH(COALESCE(fill_date,occurrence_date,DATE(created_at))) m, COUNT(*) c
+                         FROM qa_abnormal_order
+                         WHERE YEAR(COALESCE(fill_date,occurrence_date,DATE(created_at)))=? AND deleted_at IS NULL
+                         GROUP BY m");
+    $st->execute([$year]);
+    $counts = array_fill(1, 12, 0);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $counts[(int)$r['m']] = (int)$r['c'];
+    jout(true, ['year' => $year, 'counts' => $counts]);
 }
 
 case 'cause_save': {
@@ -1357,9 +1372,13 @@ case 'setting_save': {
         }
         qab_setting_set($db, $k, $t);
     }
+    if (array_key_exists('list_print_title', $_POST)) {
+        qab_setting_set($db, 'list_print_title', $strOrNull($_POST['list_print_title'], 60) ?? '');
+    }
     jout(true, ['rate' => $rate, 'backfill_days' => qab_backfill_days($db),
                 'stamp_tpl_id' => (int)qab_setting_get($db, 'stamp_tpl_id', 0),
-                'stamp_tpl_ask_id' => (int)qab_setting_get($db, 'stamp_tpl_ask_id', 0)]);
+                'stamp_tpl_ask_id' => (int)qab_setting_get($db, 'stamp_tpl_ask_id', 0),
+                'list_print_title' => qab_list_print_title($db)]);
 }
 
 default:
