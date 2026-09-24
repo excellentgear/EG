@@ -938,8 +938,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             requireSettingPerm($pdo, $user_id);
             $id = $_POST['id'] ?? ''; $name = trim($_POST['name'] ?? '');
             if ($name === '') throw new Exception('名稱必填');
+            /* 2026-09-24 補上與「量測儀器校驗管理－類別設定」（ToolCalib_API.php save_category）
+               同一條的重複名稱檢查——這裡原本完全沒檢查，兩個入口共用同一張 qc_tool_list，
+               在這邊打一個已經存在的名字會安靜地多長出一筆同名類別（實際發生過：「目視」曾經有兩筆，
+               id 13 是正確設定好的、id 21 是這裡沒擋下重複才多出來的，底下還掛了一支孤兒量具）。 */
+            $chk = $pdo->prepare("SELECT QC_Tool_List_id FROM qc_tool_list WHERE QC_Tool=? AND QC_Tool_List_id<>? LIMIT 1");
+            $chk->execute([$name, $id ?: 0]);
+            if ($chk->fetchColumn()) throw new Exception('類別名稱已存在：'.$name);
             if ($id) $pdo->prepare("UPDATE qc_tool_list SET QC_Tool=? WHERE QC_Tool_List_id=?")->execute([$name, $id]);
-            else $pdo->prepare("INSERT INTO qc_tool_list (QC_Tool) VALUES (?)")->execute([$name]);
+            else {
+                $so = (int)$pdo->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM qc_tool_list")->fetchColumn();
+                $pdo->prepare("INSERT INTO qc_tool_list (QC_Tool, sort_order) VALUES (?,?)")->execute([$name, $so]);
+            }
             echo json_encode(['success'=>true], JSON_UNESCAPED_UNICODE);
             exit;
         }

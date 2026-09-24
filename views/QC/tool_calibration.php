@@ -98,7 +98,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .tc-off-tag { display:inline-block; font-size:11px; line-height:16px; padding:0 6px; border-radius:9px;
                       background:#e6ddd0; color:#8a6d45; margin-left:4px; }
         .tc-disp { font-size:11px; color:#8a6d45; }
-        .tc-disp-pick label { display:inline-block; font-weight:normal; margin:0 8px 2px 0; white-space:nowrap; }
+        /* 使用者 2026-09-24 回報：8 個欄位一個一行整欄被撐得太長，改成固定 3 欄的格線排列（8 個欄位→3 列）。 */
+        .tc-disp-pick { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:1px 8px; }
+        .tc-disp-pick label { display:block; font-weight:normal; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .tc-disp-prev { font-size:11px; color:#8A5A2B; }
         /* 類別排序把手（2026-09-24）：只放在最左邊那一格，不可以整列都能拖——
            這張表其餘欄位都是勾選框/下拉，唯獨「其他頁面顯示」那欄有輸入框，
@@ -569,7 +571,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <th>可設定量具編號<br><label class="ck-all-lab"><input type="checkbox" class="ck-all" data-col="hasno"> 全選</label></th>
                 <th>列入分頁<br><label class="ck-all-lab"><input type="checkbox" class="ck-all" data-col="tab"> 全選</label></th>
                 <th>分頁名稱</th>
-                <th style="text-align:left;min-width:280px;">其他頁面顯示<br>
+                <th style="text-align:left;min-width:320px;">其他頁面顯示<br>
                     <span class="tc-disp" style="font-weight:normal;">這個類別的量具被別的頁面挑選時要印哪幾欄</span></th>
             </tr></thead>
             <tbody id="catBody"></tbody>
