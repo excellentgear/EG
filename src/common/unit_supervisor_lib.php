@@ -252,3 +252,88 @@ if (!function_exists('eg_unit_supervisor_id')) {
         return $r['id'] ?? null;
     }
 }
+
+if (!function_exists('eg_unit_dept_candidates')) {
+    /**
+     * 某單位「所有」夠格當主管的候選人，依 eg_unit_dept_head() 同一套排序由高到低整份列出
+     * （eg_unit_dept_head() 只回傳第一名；`eg_unit_supervisor_available()` 需要在第一名當天不在時
+     * 換下一位，所以要完整名單）。**不改 eg_unit_dept_head() 的既有簽章**，避免影響它原本的呼叫端。
+     */
+    function eg_unit_dept_candidates(PDO $db, int $deptId, string $asof = ''): array {
+        if ($deptId <= 0) return [];
+        $lvMap   = eg_unit_position_levels($db);
+        $primary = eg_unit_dept_primary_users($db)[$deptId] ?? [];
+        $rows = [];
+        foreach (eg_unit_posts($db, $asof) as $p) {
+            if ((int)($p['dept_id'] ?? 0) !== $deptId) continue;
+            $pid = (int)($p['position_id'] ?? 0);
+            if (!isset($lvMap[$pid])) continue;   // 沒有職級＝不是主管
+            $rows[] = [
+                'key' => [$lvMap[$pid], (int)($p['position_sort'] ?? 999),
+                          ((isset($primary[$pid]) && $primary[$pid] === (int)$p['id']) ? 0 : 1),
+                          ((int)($p['is_main'] ?? 0) === 1 ? 0 : 1), (int)$p['id']],
+                'cand' => ['id' => (int)$p['id'], 'name' => (string)$p['user_cname'],
+                           'dept_id' => $deptId, 'dept_name' => (string)($p['dept_name'] ?? ''),
+                           'position_id' => $pid, 'position_name' => (string)($p['position_name'] ?? ''),
+                           'level' => $lvMap[$pid]],
+            ];
+        }
+        usort($rows, function ($a, $b) { return $a['key'] <=> $b['key']; });
+        return array_map(function ($r) { return $r['cand']; }, $rows);
+    }
+}
+
+if (!function_exists('eg_unit_supervisor_available')) {
+    /**
+     * 「現場主管／當天實際可用的最高層級主管」解析——與 `eg_unit_supervisor()`（ai-rules/24）
+     * 是**不同用途的變體**，兩者刻意分開：
+     *   `eg_unit_supervisor()` 是給簽核關卡用的，卡在課級（避免課級以上共同上級同一張單簽兩格）；
+     *   這支是給「這件事需要立刻有人承接、找不到人也不能什麼都不做」用的（例：報工NG要自動開立
+     *   品質異常單），所以**不卡課級**，一路往上爬到最頂層部門，且每一階都先確認候選人
+     *   「當天真的在」（`da_user_on_leave_asof()`，doc_apply_lib.php 既有的 asof 版請假判定，
+     *   不是 delegate_lib 那支只認「今天」的版本）；不在就換同單位下一位，同單位沒人再往上一層；
+     *   全部爬完仍找不到人，最後退回全站「最高決策者」（org_role_setting 的 top_approver，
+     *   與 `qab_gm_person()` 解析總經理裁示同一個函式 `eg_org_user()`）。
+     * 若之後別的模組也需要「找一個當天真的在、逐層往上、最後保底一定找得到人」，一律呼叫這支
+     * （鐵律4：不要再各自寫一份請假判定＋爬部門樹）。
+     *
+     * @param int    $userId 觸發這件事的人（例：報工人員）；本人不會被選為自己的承接者
+     * @param ?int   $deptId 以哪個單位起算（缺省＝該人當天的主職單位）
+     * @param string $onDate 業務日期 YYYY-MM-DD（必填，不是「今天」——是這件事實際發生的那一天）
+     * @return array ['id'=>?int,'name'=>string,'dept_id'=>?int,'dept_name'=>string,'position_name'=>string,
+     *                'source'=>'dept'|'top_approver'|'', 'trail'=>string[]（依序被跳過的人與原因）]
+     *                連 top_approver 都沒綁定時 id=null（呼叫端自行決定要不要擋下）。
+     */
+    function eg_unit_supervisor_available(PDO $db, int $userId, ?int $deptId, string $onDate): array {
+        require_once __DIR__ . '/doc_apply_lib.php';
+        require_once __DIR__ . '/org_role_lib.php';
+        $depts  = eg_unit_dept_map($db);
+        $cursor = $deptId ? (int)$deptId : eg_unit_user_dept($db, $userId, $onDate);
+        $trail  = [];
+        $hop    = 0;
+        while ($cursor && isset($depts[$cursor]) && $hop < 10) {
+            foreach (eg_unit_dept_candidates($db, $cursor, $onDate) as $cand) {
+                if ($userId > 0 && $cand['id'] === $userId) continue; // 不開自己觸發的單
+                if (function_exists('da_user_on_leave_asof') && da_user_on_leave_asof($db, $cand['id'], $onDate)) {
+                    $trail[] = $cand['name'] . '（' . $onDate . ' 不在，略過）';
+                    continue;
+                }
+                return ['id' => $cand['id'], 'name' => $cand['name'], 'dept_id' => $cand['dept_id'],
+                        'dept_name' => $cand['dept_name'], 'position_name' => $cand['position_name'],
+                        'source' => 'dept', 'trail' => $trail];
+            }
+            $cursor = $depts[$cursor]['parent_id'] ?? null;
+            $hop++;
+        }
+        if (function_exists('eg_org_user')) {
+            $top = eg_org_user($db, 'top_approver');
+            if ($top && (int)($top['id'] ?? 0) > 0) {
+                return ['id' => (int)$top['id'], 'name' => (string)($top['user_cname'] ?? ''),
+                        'dept_id' => null, 'dept_name' => '', 'position_name' => '最高決策者',
+                        'source' => 'top_approver', 'trail' => $trail];
+            }
+        }
+        return ['id' => null, 'name' => '', 'dept_id' => null, 'dept_name' => '', 'position_name' => '',
+                'source' => '', 'trail' => $trail];
+    }
+}
