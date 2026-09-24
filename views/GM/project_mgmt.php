@@ -1089,6 +1089,13 @@ $(document).ajaxError(function(e, xhr){
 });
 
 function api(action, data, method){
+    /* 使用者回報：管理卡明明打得開，畫面卻一直掛著「專案不存在或已刪除」的粉紅提示條——
+       查證後那不是這次操作的錯誤，是很早之前某個已經失敗、使用者根本沒按 ✕ 關掉的舊訊息，
+       跳窗一直開著就一直留在畫面上，讓人誤以為「現在看到的這個」有問題。
+       提示條唯一的清除時機只有「顯示成功」4 秒後自動消（pjMsg 的 opt.ok），錯誤訊息本來就會一直留著，
+       所以每發起一次新的動作，先把舊的（不管新舊、成不成功）清掉——這次若真的又失敗，
+       ajaxError 馬上會補上一則新的，不會漏掉。 */
+    if (window.pjMsgClear) pjMsgClear();
     return $.ajax({ url: API + '?action=' + action, type: method || 'GET', data: data, dataType: 'json' });
 }
 </script>

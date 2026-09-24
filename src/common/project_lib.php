@@ -1171,6 +1171,19 @@ function prj_task_status_open(?array $prj): bool
     return in_array((string)($prj['status'] ?? ''), ['submitted', 'approved', 'closed', 'terminated'], true);
 }
 
+/**
+ * 「編排」（目標與主要任務的名稱／預計日程／負責人／增刪列）鎖不鎖＝專案是否已送簽
+ * （使用者拍板 2026-09-23，前端 planLocked() 同一套規則）。送出去的排程就是對外承諾的日程，
+ * 簽完再改等於簽的跟現在看到的不是同一份，所以送簽之後只有管理員能按「解鎖編排」暫時打開。
+ * 這支是後端同規則再擋一次（鐵律8）——前端只是把編輯器藏起來，plan_save 本身原本沒擋，
+ * 任何有編輯權的人直打 API 一樣能改到已送簽的排程，等於「解鎖編排」的管理員限制形同虛設。
+ */
+function prj_plan_locked(?array $prj): bool
+{
+    $st = (string)($prj['status'] ?? '');
+    return $st !== '' && $st !== 'draft' && $st !== 'rejected';
+}
+
 /* ══════════════════════ 首件檢驗（AS9102 FAI） ══════════════════════ */
 
 /** 這個專案的所有送件紀錄（第 1 次、第 2 次…；未通過可重送，全部留著） */
