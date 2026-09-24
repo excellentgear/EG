@@ -156,7 +156,9 @@ $backfillDays = qab_backfill_days($db);
             <h3><i class="fa fa-exclamation-triangle" style="color:var(--coral);"></i> 品質異常處理單
                 <span class="as-tag"><?= htmlspecialchars($asNo) ?></span>
                 <span class="role-tag">目前身分：<?= htmlspecialchars($roleLabel) ?></span>
-                <a href="ncr_control_log.php" class="btn btn-default btn-sm" style="margin-left:auto;"
+                <a href="qa_abnormal_analysis.php" class="btn btn-default btn-sm" style="margin-left:auto;"
+                   title="品質異常分析：柏拉圖／趨勢／COPQ／時效監控／重複發生偵測"><i class="fa fa-line-chart"></i> 品質異常分析</a>
+                <a href="ncr_control_log.php" class="btn btn-default btn-sm"
                    title="切換到不合格品管制記錄表"><i class="fa fa-exchange"></i> 不合格品管制記錄表</a>
                 <button id="btnPageHelp" class="page-help-btn"><i class="fa fa-question-circle"></i> 使用說明</button>
             </h3>
