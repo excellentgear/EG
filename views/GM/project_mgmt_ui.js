@@ -3022,12 +3022,9 @@ function renderRel(res) {
                   + '<td>' + qtySum + (ngSum ? '<br><span class="rd-bad">NG ' + ngSum + '</span>' : '') + '</td>'
                   + '<td>' + (finished ? '<span class="st st-approved">完工</span>' : '進行中') + '</td>'
                   + '<td>' + noteCell + '</td></tr>';
-                timeRows += '<tr><td>' + bomLink + '</td><td>' + num(first.bom_sn) + '</td>'
-                  + '<td>' + esc(first.process_name || ('製程' + num(first.process_no))) + '</td>'
-                  + '<td>' + (setupLine ? esc(setupLine) : '<span class="pj-hint">－</span>')
-                        + (setupPeople ? '<br><span class="pj-hint">' + esc(setupPeople) + '</span>' : '') + '</td>'
-                  + '<td>' + (prodLine ? esc(prodLine) : '<span class="pj-hint">－</span>')
-                        + (prodPeople ? '<br><span class="pj-hint">' + esc(prodPeople) + '</span>' : '') + '</td></tr>';
+                timeRows += '<tr>'
+                  + '<td>' + (setupLine ? esc(setupLine) + (setupPeople ? '　' + esc(setupPeople) : '') : '<span class="pj-hint">－</span>') + '</td>'
+                  + '<td>' + (prodLine ? esc(prodLine) + (prodPeople ? '　' + esc(prodPeople) : '') : '<span class="pj-hint">－</span>') + '</td></tr>';
             } else {
                 var r = first;
                 h += '<tr><td><span class="st st-submitted">委外</span></td>'
@@ -3045,9 +3042,9 @@ function renderRel(res) {
           + '<p class="pj-hint">共 ' + wg.length + ' 列（合併同一製令/製程的多筆報工；原始報工共 ' + wr.length + ' 筆，廠內報工總數 ' + (totGood + totNg)
           + '　良品 ' + totGood + '　NG ' + totNg + '），依日期由新到舊。這些是生產現場登打的原始紀錄，本頁只顯示不修改。</p>';
         if (timeRows) {
-            h += '<div style="margin-top:10px;"><b style="font-size:13px;">架機／加工時間（僅廠內，人員在時間下方）</b>'
+            h += '<div style="margin-top:10px;"><b style="font-size:13px;">架機／加工時間</b>'
+              + '<span class="pj-hint">（僅廠內，與上方表格同一順序逐列對應；人員接在時間右側）</span>'
               + '<div style="overflow-x:auto;max-height:260px;overflow-y:auto;margin-top:4px;"><table class="sub-tbl"><thead><tr>'
-              + '<th style="width:110px;">製令單</th><th style="width:46px;">順序</th><th style="width:110px;">製程</th>'
               + '<th>架機時間</th><th>加工時間</th></tr></thead><tbody>' + timeRows + '</tbody></table></div></div>';
         }
     }
