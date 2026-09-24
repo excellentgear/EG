@@ -174,7 +174,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 exit;
             }
 
-            $sql = "SELECT bi.bom_ing_fid, bi.bom, bi.sqty, bi.bom_sn, bi.process_no, bi.batch_label,
+            $sql = "SELECT bi.bom_ing_fid, bi.bom, bi.sqty, bi.bom_sn, bi.process_no, bi.batch_label, bi.maker_id,
                            b.d_id AS part_no, b.Client_Name,
                            d.d_id AS d_setting_pk, d.D_Setting_Id, d.Revision,
                            pn.ProcessName,
@@ -299,6 +299,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'order_qty'   => (int)$ctx['sqty'],
                     'good_qty'    => $good_qty,
                     'process'     => $process,
+                    'maker'       => trim((string)($ctx['maker_id'] ?? '')),  // 這一站登記的廠商（ai-rules 說明見下方 buildPrintHtml，2026-09-24）
                     'batch_label' => $ctx['batch_label'],  // 拆批時的批次代號，同製程有多批送驗要能分辨是哪一批
                     'd_id'        => $d_id,
                     'version_id'  => $version_id,
@@ -413,6 +414,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!$fid) throw new Exception('缺少 bom_ing_fid');
             // 此料件尚無料號設定(d_setting)：擋下並提示，不自動建立
             if ($d_id <= 0) throw new Exception('此料件尚未建立料號，請先到 基本設定 建立料號');
+            // 已結案 BOM 的補建檢驗表一律要求先設定補資料（檢驗日期／人員），否則會被寫成「今天」
+            // 驗的，混進正常生產紀錄裡分不出是事後補登——前端 validateBeforeSave() 已即時擋一次，
+            // 這裡鐵律8 再驗一次，不可只做半套（2026-09-24 使用者交辦）。
+            if ($bfCheckDate === null) {
+                $bcS = $pdo->prepare("SELECT (b.processing_state='1') FROM bom_ing bi LEFT JOIN bom b ON bi.bom=b.bom WHERE bi.bom_ing_fid=?");
+                $bcS->execute([$fid]);
+                if ((bool)$bcS->fetchColumn()) throw new Exception('這筆 BOM 已結案，請先按「補資料設定」設定檢驗日期／人員後再儲存');
+            }
 
             $version_id   = getDefaultVersionId($pdo, $d_id);
             $form_type_id = getDefaultFormTypeId($pdo);

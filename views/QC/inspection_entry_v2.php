@@ -352,7 +352,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             if (!$hasF('qc_fill_inspection')) throw new Exception('您沒有「填寫檢驗表單」權限');
             $bom = trim($_POST['bom'] ?? '');
             if ($bom === '') throw new Exception('缺少 BOM 號碼');
-            $base = $pdo->prepare("SELECT Client_Name, d_id, sqty FROM bom WHERE bom=? LIMIT 1");
+            // bom.d_id 存的是料號文字（同 d_setting.D_Setting_Id），不是主檔數字 PK——
+            // 這裡要join出真正的 d_setting.d_id 給下面 save_ship 的外鍵用，直接 (int) 轉型
+            // 料號文字一律得到 0（2026-09-24 測試才發現：出貨檢驗自 2026-09-24 上線以來
+            // save_ship 因此一筆都存不進去，qc_check_form 全庫 insp_kind='SHIP' 是 0 筆）。
+            $base = $pdo->prepare("SELECT b.Client_Name, b.sqty, d.d_id AS d_setting_pk
+                                   FROM bom b LEFT JOIN d_setting d ON d.D_Setting_Id = b.d_id
+                                   WHERE b.bom=? LIMIT 1");
             $base->execute([$bom]);
             $baseRow = $base->fetch(PDO::FETCH_ASSOC);
             if (!$baseRow) throw new Exception('查無此 BOM，請確認單號是否正確');
@@ -423,7 +429,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                                     WHERE ship_bom=? AND insp_kind='SHIP' AND status<>'DRAFT' ORDER BY qc_form_id DESC");
             $exist->execute([$bom]);
 
-            echo json_encode(['success' => true, 'bom' => $bom, 'client' => $baseRow['Client_Name'], 'd_id' => (int)$baseRow['d_id'],
+            echo json_encode(['success' => true, 'bom' => $bom, 'client' => $baseRow['Client_Name'], 'd_id' => (int)$baseRow['d_setting_pk'],
                 'total_qty' => (int)$baseRow['sqty'], 'ready' => $ready, 'processes' => $processes,
                 'existing' => $exist->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
             exit;
@@ -434,10 +440,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             if (!$hasF('qc_fill_inspection')) throw new Exception('您沒有「填寫檢驗表單」權限');
             $bom = trim($_POST['bom'] ?? '');
             if ($bom === '') throw new Exception('缺少 BOM 號碼');
-            $base = $pdo->prepare("SELECT d_id FROM bom WHERE bom=? LIMIT 1");
+            // bom.d_id 是料號文字不是主檔數字 PK，一律要 join d_setting 才拿得到真正的外鍵值——
+            // 沿用 (int)$base->fetchColumn() 直接轉型文字會恆為 0，是本頁上線以來 save_ship
+            // 從未真正寫入過的根因（見上面 ship_source 同一處修正的註解，2026-09-24）。
+            $base = $pdo->prepare("SELECT d.d_id AS d_setting_pk, (b.processing_state='1') AS is_closed
+                                   FROM bom b LEFT JOIN d_setting d ON d.D_Setting_Id = b.d_id
+                                   WHERE b.bom=? LIMIT 1");
             $base->execute([$bom]);
-            $d_id = (int)$base->fetchColumn();
-            if ($d_id <= 0) throw new Exception('查無此 BOM 對應的料號');
+            $baseRowS = $base->fetch(PDO::FETCH_ASSOC);
+            $d_id = (int)($baseRowS['d_setting_pk'] ?? 0);
+            if ($d_id <= 0) throw new Exception('查無此 BOM 對應的料號主檔，請先到 基本設定 建立料號');
 
             $incoming = (int)($_POST['incoming_qty'] ?? 0);
             $sample   = (int)($_POST['sample_qty'] ?? 0);
@@ -445,6 +457,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             $items    = json_decode($_POST['items'] ?? '[]', true); if (!is_array($items)) $items = [];
             $pcs      = json_decode($_POST['pcs_verdicts'] ?? '[]', true); if (!is_array($pcs)) $pcs = [];
             if (!$items) throw new Exception('請至少挑選一個要帶入出貨檢驗的項目');
+
+            // 補資料（管理員）：首次建立就能一併指定檢驗日期/檢驗人員/主管審核；已結案 BOM 一律
+            // 要求先設定，否則會被寫成「今天」驗的（前端 validateBeforeSave() 已即時擋一次，這裡
+            // 鐵律8 再驗一次，2026-09-24 使用者交辦）。
+            $canBackfillP = $isAdmin || $hasF('qc_backfill_data');
+            $todayP = (string)$pdo->query("SELECT CURDATE()")->fetchColumn();
+            [$bfCheckDate, $bfInspector, $bfApprovedBy, $bfApprovedAt] = qc_backfill_extract($pdo, $canBackfillP, $todayP);
+            if ($bfCheckDate === null && !empty($baseRowS['is_closed'])) {
+                throw new Exception('這筆 BOM 已結案，請先按「補資料設定」設定檢驗日期／人員後再儲存');
+            }
 
             $version_id = $v2Version($pdo, $d_id);
             $form_type_id = $v2FormType($pdo);
@@ -472,11 +494,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 }
                 $itemIds[$idx] = (int)$iid;
             }
-
-            // 補資料（管理員）：首次建立就能一併指定檢驗日期/檢驗人員/主管審核
-            $canBackfillP = $isAdmin || $hasF('qc_backfill_data');
-            $todayP = (string)$pdo->query("SELECT CURDATE()")->fetchColumn();
-            [$bfCheckDate, $bfInspector, $bfApprovedBy, $bfApprovedAt] = qc_backfill_extract($pdo, $canBackfillP, $todayP);
 
             $pdo->prepare("INSERT INTO qc_check_form
                  (bom_ing_fid, d_id, version_id, form_type_id, insp_kind, ship_bom, process_name, batch_no, round_no,
@@ -4171,17 +4188,20 @@ $(function(){
             $('#edit-mode-banner,#view-mode-banner').hide();
             setViewOnlyMode(false);
             ctx = res.context;
+            // 每次載入都重新組出完整訊息，不可以拿「目前 #mode-banner 現有內容」疊加——
+            // reloadContext() 存檔/退回重做/開放修改…都會再叫一次 loadContext()，若用疊加寫法，
+            // 同一句「這筆 BOM 已結案…」會一次比一次多印一行（2026-09-24 使用者回報畫面洗版）。
+            var modeMsg = '<i class="fa fa-link"></i> 來自待驗清單：bom_ing_fid = <b>'+esc(fid)+'</b>';
             // 拆批時的批次代號：同一製程可能有好幾批同時待驗，標籤讓檢驗人員看得出是哪一批（避免與其他批混淆）
             if(ctx.batch_label){
-                $('#mode-banner').html('<i class="fa fa-link"></i> 來自待驗清單：bom_ing_fid = <b>'+esc(fid)+'</b>　'+
-                    '<span style="background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;border-radius:3px;padding:0 6px;font-weight:bold;">拆批：第'+esc(ctx.batch_label)+'批</span>'+
-                    '；資料為真實內容，儲存會寫入正式檢驗表。');
+                modeMsg += '　<span style="background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;border-radius:3px;padding:0 6px;font-weight:bold;">拆批：第'+esc(ctx.batch_label)+'批</span>';
             }
+            modeMsg += '；資料為真實內容，儲存會寫入正式檢驗表。';
             // 已結案 BOM：提醒這是在為結案資料補建檢驗表，不是正常生產流程中的待驗
             if(ctx.bom_closed){
-                var closedNote = '<i class="fa fa-archive"></i> 這筆 BOM 已結案'+(ctx.bom_closed_at?'（結案日 '+esc(ctx.bom_closed_at)+'）':'')+'，正在補建這一站的檢驗表。';
-                $('#mode-banner').html($('#mode-banner').html() ? ($('#mode-banner').html()+'<br>'+closedNote) : closedNote);
+                modeMsg += '<br><i class="fa fa-archive"></i> 這筆 BOM 已結案'+(ctx.bom_closed_at?'（結案日 '+esc(ctx.bom_closed_at)+'）':'')+'，正在補建這一站的檢驗表。';
             }
+            $('#mode-banner').html(modeMsg);
             if(res.tools && res.tools.length) TOOLS = res.tools;
             state.is_supervisor = !!res.is_supervisor;
             state.can_fill = res.can_fill !== false;
@@ -5473,6 +5493,14 @@ $(function(){
             out.push({ i:-1, r:0, field:'formtool',
                        text:'<b>尚未選擇本單使用的量具</b>（品質紀錄需可追溯到這張檢驗單用了哪幾支量具）' });
         }
+        // 已結案 BOM 的補建檢驗表：一律要求先設定「補資料設定」（檢驗日期／檢驗人員／主管審核），
+        // 不可以直接用今天的日期存成正式紀錄——那會讓已結案的舊資料看起來是今天才驗的
+        // （2026-09-24 使用者交辦；只管新建的一筆，修改既有紀錄走「補資料設定」自己的即時存檔，
+        // 不受這裡影響，見 bfPayloadFields() 同一段註解）。
+        if(ctx && ctx.bom_closed && !state.editFormId && !state.bfStage){
+            out.push({ i:-1, r:0, field:'backfill',
+                       text:'<b>這筆 BOM 已結案，請先設定「補資料設定」</b>（檢驗日期／檢驗人員／主管審核），才能把這筆補建的檢驗表存成正式紀錄' });
+        }
         return out;
     }
     function showValidateModal(probs){
@@ -5497,6 +5525,9 @@ $(function(){
         $('#validateModal').modal('hide');
         // 量具是整張單的設定，不屬於任何一列 → 直接把量具挑選跳窗打開
         if(f==='formtool'){ openToolPicker(); return; }
+        // 補資料設定也不屬於任何一列 → 直接打開補資料設定跳窗（沒有補資料權限的人這顆鈕本來就不會顯示，
+        // 觸發後彈出的就是「無此權限」，等於指出要找誰才有辦法補建這張已結案 BOM 的檢驗表）
+        if(f==='backfill'){ $('#btn-backfill').trigger('click'); return; }
         view='GRID'; localStorage.setItem('qc2_view', view);
         if(f==='name' || f==='std' || f==='min') $('#chk-std-edit').prop('checked', true);
         render();
@@ -5791,7 +5822,7 @@ $(function(){
         var ngPcs=0;
         for(var s=0;s<state.sampleN;s++){ var p=MODEL.pcs[s]; if(p && (p.m? p.v==='NG' : pcsAutoNG(s))) ngPcs++; }
         return { part:(ctx&&ctx.part_no)||'', client:(ctx&&ctx.client)||'', bom:(ctx&&ctx.bom)||'',
-                 process:(ctx&&ctx.process)||'', incoming:parseInt($('#inp-qty').val())||0,
+                 process:(ctx&&ctx.process)||'', maker:(ctx&&ctx.maker)||'', incoming:parseInt($('#inp-qty').val())||0,
                  sample:parseInt($('#inp-sample').val())||0, remark:$('#inp-remark').val()||'',
                  judge:(MODEL.items.length && ngPcs>0)?'不良':'合格', ng:ngPcs };
     }
@@ -5813,7 +5844,7 @@ $(function(){
             '<div class="pr-title">'+esc((PRINTCFG.doc&&PRINTCFG.doc.name)||'檢驗記錄表')+esc(kindTag)+'</div>'+
             '<table class="pr-meta"><tr>'+
             '<td class="k">料號</td><td>'+esc(m.part)+'</td><td class="k">客戶</td><td>'+esc(m.client)+'</td><td class="k">日期</td><td>'+dateStr+'</td></tr>'+
-            '<tr><td class="k">製令/BOM</td><td>'+esc(m.bom)+'</td><td class="k">製程</td><td>'+esc(m.process)+'</td><td class="k">送驗數</td><td>'+m.incoming+'</td></tr>'+
+            '<tr><td class="k">製令/BOM</td><td>'+esc(m.bom)+'</td><td class="k">製程/廠商</td><td>'+esc(m.process+(m.maker?(' / '+m.maker):''))+'</td><td class="k">送驗數</td><td>'+m.incoming+'</td></tr>'+
             '<tr><td class="k">抽驗數</td><td>'+m.sample+'</td><td class="k">整體判定</td><td>'+m.judge+'（不良 '+m.ng+'）</td><td class="k">備註</td><td>'+esc(m.remark)+'</td></tr>'+
             // 使用量具：整張檢驗單一列印出全部（種類＋編號(規格)），不再逐項印量具欄
             '<tr><td class="k">使用量具</td><td colspan="5">'+esc(formToolsLabel()||'—')+'</td></tr></table>';

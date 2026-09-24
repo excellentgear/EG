@@ -19,15 +19,65 @@
 include_once '../../src/common/_config.php';
 if (empty($_SESSION['id'])) { http_response_code(403); exit('請先登入'); }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_data') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json; charset=utf-8');
     include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/rbac.php';
     include_once '../../src/common/qc_inspection_lib.php';   // 本單使用量具（qc_form_tool）共用查詢
     include_once '../../src/common/packing_process_lib.php'; // 包裝製程判定＋包裝檢驗紀錄（2026-09-24：合併列印仍要印出包裝檢驗結果）
     $pdo = (new DBConnection())->getPDO();
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $act = $_POST['action'];
+    $uid2 = (int)($_SESSION['id'] ?? 0);
+    $feats2 = rbac_user_features($pdo, $uid2);
+    $hasF2 = function ($c) use ($feats2) { return in_array('all', $feats2, true) || in_array($c, $feats2, true); };
 
     try {
+        // 包裝製程沒有登記廠商（ERP 不會替內部包裝站建發包資料），全製程合併列印卻要求每一站
+        // 都要有廠商名稱才能列印——這裡讓有「列印／主管審核設定」權限的人綁定一個廠商主檔
+        // （存 maker_id_no 不存文字，鐵律4：廠商改名不會失效），套用到所有沒登記廠商的包裝站，
+        // 與 inspection_entry_v2.php 的 print_cfg_save 共用同一種權限判定（qc_print_approve_setting）。
+        // 搜尋沿用 QaAbnormal_API.php 的 search_vendor 同一套規則，不另外發明一套廠商模糊搜尋。
+        if ($act === 'vendor_search') {
+            $kw = trim($_POST['kw'] ?? '');
+            $st = $pdo->prepare("SELECT maker_id_no, maker_id, internal FROM maker_list
+                                 WHERE (status IS NULL OR status<>'X') AND (? = '' OR maker_id LIKE ? OR maker_id_no LIKE ?)
+                                 ORDER BY internal DESC, maker_id_no LIMIT 30");
+            $st->execute([$kw, "%$kw%", "%$kw%"]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as &$r) $r['internal'] = (int)($r['internal'] ?? 0);
+            echo json_encode(['success' => true, 'rows' => $rows], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'pack_vendor_get') {
+            $id = trim((string)($pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='qc_packing_vendor_id' LIMIT 1")->fetchColumn() ?: ''));
+            $name = '';
+            if ($id !== '') {
+                $mv = $pdo->prepare("SELECT maker_id FROM maker_list WHERE maker_id_no=? LIMIT 1");
+                $mv->execute([$id]);
+                $name = trim((string)($mv->fetchColumn() ?: ''));
+            }
+            echo json_encode(['success' => true, 'id' => $id, 'name' => $name, 'can_edit' => $hasF2('qc_print_approve_setting')], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'pack_vendor_save') {
+            if (!$hasF2('qc_print_approve_setting')) throw new Exception('您沒有「列印／主管自動核可設定」權限，請洽管理員於 設定 → 權限設定開通');
+            $id = trim($_POST['id'] ?? '');
+            if ($id !== '') {
+                $mv = $pdo->prepare("SELECT maker_id, status FROM maker_list WHERE maker_id_no=? LIMIT 1");
+                $mv->execute([$id]);
+                $mr = $mv->fetch(PDO::FETCH_ASSOC);
+                if (!$mr) throw new Exception('查無此廠商代號，請重新從清單選取');
+                if (($mr['status'] ?? '') === 'X') throw new Exception('此廠商已停用，不可指定為包裝製程的固定廠商');
+            }
+            $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id) VALUES ('qc_packing_vendor_id',?,?)
+                           ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value), updated_by_id=VALUES(updated_by_id)")
+                ->execute([$id, $uid2]);
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act !== 'get_data') throw new Exception('不支援的操作');
+
         $bom = trim($_POST['bom'] ?? '');
         if (!preg_match('/^B-\d{10}$/', $bom)) throw new Exception('BOM 格式錯誤，應為 B- 後接10位數字');
         $mode = ($_POST['mode'] ?? 'summary') === 'full' ? 'full' : 'summary';
@@ -208,9 +258,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             if ($dn = $d->fetchColumn()) $docName = $dn;
         }
 
-        // 逐一組出「一個製程一筆」的資料結構；出貨檢驗(SHIP)是額外插入的一筆(不是真正的 bom_ing 製程)，
-        // 沿用同一套 batches/detail 組裝寫法但要素材源不同，抽成小函式兩處共用，避免複製兩份邏輯。
-        $buildProcEntry = function ($fid, $label, $procQty, $makerId, $isExempt) use ($formsByFid, $itemsByFid, $nameMap, $creatorOf) {
+        // 包裝製程沒有登記廠商（ERP 不會替內部包裝站建發包資料），全製程合併列印前端會要求
+        // 每一站都要有廠商名稱，這裡的固定值只補「製程＝包裝」那一列，其餘製程仍照實際登記的廠商
+        // （2026-09-24 使用者交辦；設定入口見上方 pack_vendor_get/pack_vendor_save）。存的是
+        // maker_id_no（廠商主檔 id），這裡即時反查目前的廠商名稱，改名或換廠商不必回頭補資料。
+        $packVendorId = trim((string)($pdo->query(
+            "SELECT setting_value FROM system_settings WHERE setting_key='qc_packing_vendor_id' LIMIT 1")->fetchColumn() ?: ''));
+        $packVendorSetting = '';
+        if ($packVendorId !== '') {
+            $pvn = $pdo->prepare("SELECT maker_id FROM maker_list WHERE maker_id_no=? LIMIT 1");
+            $pvn->execute([$packVendorId]);
+            $packVendorSetting = trim((string)($pvn->fetchColumn() ?: ''));
+        }
+
+        // 逐一組出「一個製程一筆」的資料結構；出貨檢驗(SHIP)是額外插入的一筆(不是真正的 bom_ing 製程，
+        // 沒有「廠商」這個概念，$isShip=true 時不列入廠商必填檢查)，沿用同一套 batches/detail 組裝寫法
+        // 但要素材源不同，抽成小函式兩處共用，避免複製兩份邏輯。
+        $buildProcEntry = function ($fid, $label, $procQty, $makerId, $isExempt, $isShip = false) use ($formsByFid, $itemsByFid, $nameMap, $creatorOf) {
             $forms = $formsByFid[$fid] ?? [];
             $batches = [];
             foreach ($forms as $f) {
@@ -234,6 +298,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             return [
                 'bom_ing_fid' => $fid, 'bom_sn' => $label['sn'], 'process_name' => $label['name'],
                 'proc_qty' => $procQty, 'maker_id' => $makerId, 'exempt' => $isExempt, 'is_packing' => false,
+                'vendor_missing' => (!$isShip && trim((string)$makerId) === ''),
                 'batches' => array_values($batches),
                 'last_form' => $lastFormOut,
                 // 完整模式：每一批每一輪各自一份明細（使用者 2026-09-24 回報只印最後一輪不夠，
@@ -245,7 +310,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         // 包裝製程一律不透過線上檢驗（qc_check_form）建立紀錄——已獨立成自己的檢驗流程
         // （qc_packing_inspection，見 views/pm/packing_schedule.php）——但合併列印仍要把包裝
         // 檢驗結果一併印出來，所以另外組一份、改讀 qc_packing_inspection（2026-09-24）。
-        $buildPackingEntry = function ($fid, $label, $procQty, $makerId) use ($pdo) {
+        $buildPackingEntry = function ($fid, $label, $procQty, $makerId) use ($pdo, $packVendorSetting) {
             $pkRows = pk_packing_rows_for_fid($pdo, $fid);
             $judgeToResult = function ($j) { return $j === 'FAIL' ? 'NG' : ($j === 'PASS' ? 'OK' : 'HOLD'); };
             $batches = [];
@@ -257,9 +322,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ]]];
             }
             $last = $pkRows ? end($pkRows) : null;
+            // 包裝原本沒有登記廠商是常態（ERP 不會替內部包裝站建發包資料），沒有值才套用管理員設定的
+            // 固定顯示名稱；真的有登記（少數包裝外包的情形）仍照實際資料顯示，不被設定值覆蓋。
+            $effectiveMaker = (trim((string)$makerId) !== '') ? $makerId : $packVendorSetting;
             return [
                 'bom_ing_fid' => $fid, 'bom_sn' => $label['sn'], 'process_name' => $label['name'],
-                'proc_qty' => $procQty, 'maker_id' => $makerId, 'exempt' => false, 'is_packing' => true,
+                'proc_qty' => $procQty, 'maker_id' => $effectiveMaker, 'exempt' => false, 'is_packing' => true,
+                'vendor_missing' => (trim((string)$effectiveMaker) === ''),
                 'packing_open' => $last ? ($last['status'] !== 'closed') : false,
                 'batches' => array_values($batches),
                 'last_form' => $last ? ['check_result' => $judgeToResult($last['judgement']), 'creator' => $last['packer'] ?: ''] : null,
@@ -286,7 +355,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             // 一律以「包裝製程設定」判定是不是包裝，不再用製程名稱猜（比對字串較不可靠）；
             // 找不到包裝製程就排在最後（迴圈結束後補插）
             if (!$shipInserted && $isPacking) {
-                $processes[] = $buildProcEntry($SHIP_FID, ['sn' => '', 'name' => '出貨檢驗'], null, null, false);
+                $processes[] = $buildProcEntry($SHIP_FID, ['sn' => '', 'name' => '出貨檢驗'], null, null, false, true);
                 $shipInserted = true;
             }
             $label = ['sn' => $p['bom_sn'], 'name' => $p['ProcessName'] ?: ('製程' . $p['process_no'])];
@@ -294,10 +363,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ? $buildPackingEntry($fid, $label, $p['proc_qty'], $p['maker_id'])
                 : $buildProcEntry($fid, $label, $p['proc_qty'], $p['maker_id'], (int)$p['is_exclude_qc'] === 1);
         }
-        if (!$shipInserted) $processes[] = $buildProcEntry($SHIP_FID, ['sn' => '', 'name' => '出貨檢驗'], null, null, false);
+        if (!$shipInserted) $processes[] = $buildProcEntry($SHIP_FID, ['sn' => '', 'name' => '出貨檢驗'], null, null, false, true);
 
         echo json_encode(['success' => true, 'bom' => $bom, 'client' => $baseRow['Client_Name'], 'd_id' => $baseRow['d_id'],
             'total_qty' => (int)$baseRow['sqty'], 'company' => $company, 'doc_name' => $docName,
+            'packing_vendor_id' => $packVendorId, 'packing_vendor_name' => $packVendorSetting,
             'drawing' => $drawing, 'processes' => $processes], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -324,11 +394,26 @@ body{ background:#F6F1EA; }
 .muted-help{ color:#8a6a45; font-size:12px; }
 .batch-chip{ display:inline-block; padding:4px 10px; margin:0 4px 4px 0; border-radius:14px; border:1px solid var(--line); background:#fff; font-size:12px; }
 .st-ok{ color:#3c763d; font-weight:bold; } .st-ng{ color:var(--coral); font-weight:bold; }
+/* 包裝廠商設定跳窗＋廠商模糊搜尋（照抄 qa_abnormal_form.php 的 m-mask/ac-list 寫法，不另發明一套） */
+.m-mask{ position:fixed; inset:0; background:rgba(74,53,36,.45); z-index:10300; display:none; }
+.m-box{ position:absolute; left:50%; top:10vh; transform:translateX(-50%); background:#fff; border-radius:8px;
+        box-shadow:0 10px 30px rgba(0,0,0,.3); width:380px; }
+.m-hd{ padding:10px 14px; border-bottom:1px solid var(--line); font-weight:bold; color:var(--ink); display:flex; align-items:center; gap:10px; }
+.m-hd .x{ margin-left:auto; cursor:pointer; color:#8a7560; }
+.m-bd{ padding:12px 14px; }
+.m-ft{ padding:9px 14px; border-top:1px solid var(--line); text-align:right; }
+.ac-wrap{ position:relative; }
+.ac-list{ position:fixed; z-index:10400; background:#fff; border:1px solid var(--line); border-radius:4px;
+          box-shadow:0 4px 14px rgba(120,90,50,.22); max-height:220px; overflow:auto; display:none; min-width:240px; }
+.ac-list div{ padding:5px 10px; font-size:13px; cursor:pointer; border-bottom:1px solid #F3EADC; }
+.ac-list div:hover{ background:var(--cream); }
+.ac-list .hit{ color:var(--amber-d); font-weight:bold; }
 </style>
 </head>
 <body>
 <div class="warm-panel">
-    <h3 style="margin-top:0;color:var(--ink);"><i class="fa fa-files-o"></i> 全製程合併列印</h3>
+    <h3 style="margin-top:0;color:var(--ink);"><i class="fa fa-files-o"></i> 全製程合併列印
+        <button class="btn btn-default btn-xs" id="btn-vendor-cfg" style="display:none;float:right;font-weight:normal;"><i class="fa fa-cog"></i> 設定</button></h3>
     <div class="muted-help" style="margin-bottom:10px;">依 BOM 號碼自動產生封面頁（上半圖面／下半各製程檢驗狀態總覽）；「封面＋完整實測數值」會接著印出每個<b>已經有檢驗紀錄</b>的製程明細，尚無紀錄的製程只會列在封面、不會印出空白明細。</div>
     <div class="form-inline" style="margin-bottom:10px;">
         <div class="form-group" style="margin-right:14px;">
@@ -339,6 +424,7 @@ body{ background:#F6F1EA; }
     </div>
     <div id="info-area" style="display:none;">
         <div id="info-bar" class="muted-help" style="margin-bottom:8px;"></div>
+        <div id="vendor-warn" class="text-danger" style="display:none;margin-bottom:8px;font-size:12px;"></div>
         <div class="form-inline" style="margin-bottom:10px;">
             <div class="form-group" style="margin-right:18px;">
                 <label>詳細度</label>
@@ -368,6 +454,23 @@ body{ background:#F6F1EA; }
         <button class="btn btn-warm" id="btn-print"><i class="fa fa-print"></i> 列印 / 產生 PDF</button>
     </div>
 </div>
+<!-- 包裝廠商設定：綁定廠商主檔（存 maker_id_no），套用到所有沒登記廠商的包裝製程 -->
+<div class="m-mask" id="vendorCfgMask">
+    <div class="m-box">
+        <div class="m-hd"><i class="fa fa-cog"></i> 包裝廠商設定<span class="x" id="vc-close">&times;</span></div>
+        <div class="m-bd">
+            <div class="muted-help" style="margin-bottom:8px;">包裝製程沒有登記廠商時，全製程合併列印固定顯示這裡指定的廠商（其餘製程仍照實際登記的廠商，不受影響）。</div>
+            <div class="ac-wrap">
+                <input type="text" class="form-control input-sm" id="vc-input" placeholder="輸入廠商代號或名稱搜尋…" autocomplete="off">
+            </div>
+            <div class="muted-help" style="margin-top:8px;" id="vc-current"></div>
+        </div>
+        <div class="m-ft">
+            <button class="btn btn-default btn-sm" id="vc-clear"><i class="fa fa-eraser"></i> 清除設定</button>
+            <button class="btn btn-default btn-sm" id="vc-close2">關閉</button>
+        </div>
+    </div>
+</div>
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script>
@@ -384,6 +487,72 @@ function loadApprover(cb){
         if(cb) cb();
     }, 'json').fail(function(){ if(cb) cb(); });
 }
+// 包裝製程沒有登記廠商是常態，管理員可在這裡綁定一個廠商主檔（存 maker_id_no，不存文字，
+// 廠商改名或換掉都不必回來補資料；2026-09-24 使用者交辦「利用模糊搜尋ID或名稱列表給我選」）；
+// 沒有「列印／主管審核設定」權限的人看不到這顆按鈕（後端 pack_vendor_save 同規則再擋一次）。
+var PACK_VENDOR_ID='', PACK_VENDOR_NAME='';
+function loadPackVendorCfg(){
+    $.post('', { action:'pack_vendor_get' }, function(res){
+        if(res && res.success){
+            PACK_VENDOR_ID = res.id||''; PACK_VENDOR_NAME = res.name||'';
+            $('#btn-vendor-cfg').toggle(!!res.can_edit);
+        }
+    }, 'json');
+}
+function renderVendorCfgCurrent(){
+    $('#vc-current').html(PACK_VENDOR_ID
+        ? ('目前綁定：<b>'+esc(PACK_VENDOR_ID)+'</b>　'+esc(PACK_VENDOR_NAME))
+        : '目前未綁定，包裝製程缺廠商時仍會擋下列印。');
+}
+$('#btn-vendor-cfg').on('click', function(){
+    $('#vc-input').val('');
+    renderVendorCfgCurrent();
+    $('#vendorCfgMask').show();
+});
+$('#vc-close,#vc-close2').on('click', function(){ $('#vendorCfgMask').hide(); });
+$('#vc-clear').on('click', function(){
+    $.post('', { action:'pack_vendor_save', id:'' }, function(res){
+        if(!res.success){ alert(res.message||'儲存失敗'); return; }
+        PACK_VENDOR_ID=''; PACK_VENDOR_NAME='';
+        renderVendorCfgCurrent();
+        if(DATA) loadData($('input[name=mode]:checked').val(), currentDrawingParam());
+    }, 'json').fail(function(){ alert('伺服器錯誤，請稍後再試'); });
+});
+function saveVendorCfg(id, name){
+    $.post('', { action:'pack_vendor_save', id:id }, function(res){
+        if(!res.success){ alert(res.message||'儲存失敗'); return; }
+        PACK_VENDOR_ID=id; PACK_VENDOR_NAME=name;
+        renderVendorCfgCurrent();
+        $('#vc-input').val('');
+        if(DATA) loadData($('input[name=mode]:checked').val(), currentDrawingParam());
+    }, 'json').fail(function(){ alert('伺服器錯誤，請稍後再試'); });
+}
+// 廠商模糊搜尋（照抄 QaAbnormal_API.php 的 search_vendor／qa_abnormal_form.php 的 acSetup 同一套寫法）
+(function(){
+    var $in=$('#vc-input'), tmr=null, $list=$('<div class="ac-list"></div>').appendTo('body');
+    function place(){ var r=$in[0].getBoundingClientRect(); $list.css({ left:r.left+'px', top:(r.bottom+2)+'px', width:Math.max(r.width,240)+'px' }); }
+    $in.on('input focus', function(){
+        var kw=$in.val().trim();
+        clearTimeout(tmr);
+        tmr=setTimeout(function(){
+            $.post('', { action:'vendor_search', kw:kw }, function(res){
+                if(!res||!res.success||!res.rows.length){ $list.hide(); return; }
+                $list.html(res.rows.map(function(r,i){
+                    return '<div data-i="'+i+'"><span class="hit">'+esc(r.maker_id_no)+'</span>　'+esc(r.maker_id)
+                        + (Number(r.internal)===1?' <span style="color:#C77C1A;">[廠內]</span>':'')+'</div>';
+                }).join(''));
+                $list.data('rows', res.rows); place(); $list.show();
+            }, 'json');
+        }, 220);
+    });
+    $list.on('mousedown', 'div', function(){
+        var rows=$list.data('rows')||[], r=rows[$(this).data('i')];
+        $list.hide();
+        if(r) saveVendorCfg(r.maker_id_no, r.maker_id);
+    });
+    $in.on('blur', function(){ setTimeout(function(){ $list.hide(); }, 180); });
+    $(window).on('scroll resize', function(){ if($list.is(':visible')) place(); });
+})();
 function trimNum(v){ // 小數尾 0 省略（3.50→3.5），比照全站慣例
     if(v===''||v==null) return '';
     var s=String(v); if(s.indexOf('.')<0) return s;
@@ -405,6 +574,7 @@ function loadData(mode, drawing, cb){
         DATA=res;
         window.__ownCompany = res.company || '';   // eg_stamp.js 的印章公司名靠這個全域變數
         renderInfoBar();
+        renderVendorWarn();
         renderDrawingPicker();
         $('#info-area').show();
         if(cb) cb();
@@ -413,6 +583,20 @@ function loadData(mode, drawing, cb){
 // 出貨檢驗(SHIP)不是真正的 bom_ing 製程，用固定 sentinel bom_ing_fid=-1 識別，
 // 統計「製程是否齊全」與封面上的免檢/尚無紀錄提示都要把它排除在外。
 function isShipRow(p){ return p.bom_ing_fid===-1; }
+// 廠商必填檢查（2026-09-24 使用者交辦「有無廠商名稱時要跳通知，要求補齊才能列印」）：
+// 出貨檢驗不是真正的製程沒有廠商概念，後端 vendor_missing 已排除；包裝製程若管理員設了
+// 固定顯示名稱，後端也已經套用過，這裡只是單純把仍缺廠商的那幾筆挑出來。
+function vendorMissingList(){
+    return (DATA.processes||[]).filter(function(p){ return p.vendor_missing; });
+}
+function renderVendorWarn(){
+    var miss = vendorMissingList();
+    if(!miss.length){ $('#vendor-warn').hide(); return; }
+    $('#vendor-warn').html('<i class="fa fa-exclamation-triangle"></i> 下列製程尚未登記廠商名稱，全製程合併列印前必須補齊，否則無法列印：<br>'
+        + miss.map(function(p){
+            return '・'+esc(p.process_name)+(p.is_packing ? '　（按右上角「設定」填一個固定顯示的包裝廠商名稱）' : '　（請至該製程的發包資料補登廠商）');
+        }).join('<br>')).show();
+}
 function renderInfoBar(){
     var okN=0, ngN=0, waitN=0, exemptN=0;
     DATA.processes.forEach(function(p){
@@ -464,7 +648,7 @@ $(document).on('change', 'input[name=mode]', function(){
     if(!DATA) return;
     loadData($(this).val(), currentDrawingParam());
 });
-$(function(){ loadApprover(); });
+$(function(){ loadApprover(); loadPackVendorCfg(); });
 <?php if ($bomParam !== ''): ?>
 $(function(){ loadData('summary',''); });
 <?php endif; ?>
@@ -582,6 +766,14 @@ $('#btn-print').on('click', function(){
 });
 function doPrint(mode, paper, orient){
     orient = (orient==='landscape') ? 'landscape' : 'portrait';
+    // 有製程沒有登記廠商名稱一律擋下列印（2026-09-24 使用者交辦），不是只提醒——這是正式的
+    // 品質紀錄，缺廠商就直接印出去會讓紙本永遠少這一欄；擋下的說明與畫面上的 #vendor-warn 同一套。
+    var vmiss = vendorMissingList();
+    if(vmiss.length){
+        alert('尚有製程未登記廠商名稱，無法列印，請先補齊：\n'
+            + vmiss.map(function(p){ return '・'+p.process_name+(p.is_packing?'（可到右上角「設定」填一個固定顯示的包裝廠商名稱）':''); }).join('\n'));
+        return;
+    }
     // 包裝檢驗尚未結案（可能還會再變動）時先提醒一次，但不阻擋列印——內容照現有資料照印
     // （使用者 2026-09-24 明確要求：先判定包裝檢驗紀錄是否結案，未結案跳提醒但不阻擋列印）。
     var openPacking=(DATA.processes||[]).filter(function(p){ return p.is_packing && p.packing_open; });
