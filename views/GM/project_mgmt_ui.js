@@ -2591,7 +2591,7 @@ function cardItemsHtml(res, ro) {
 
         /* 使用者 2026-09-24：「階段大標題左側不需要顯示1、2、3」——goal_name 本身已經是
            「階段 N：xxx」，項次欄再印一次數字是重複；這一格留空，作業項目仍照舊編 i.ti。 */
-        h += '<tr class="cd-goal" data-cg="' + gid + '" data-open="' + (open ? 1 : 0) + '"><td class="c"></td>'
+        h += '<tr class="cd-goal" data-cg="' + gid + '" data-expand="' + (open ? 1 : 0) + '"><td class="c"></td>'
           + '<td class="l"><span class="cd-tog" data-cgtog="' + gid + '">'
           + '<i class="fa fa-caret-' + (open ? 'down' : 'right') + '"></i></span> <b>' + esc(it.goal_name || '') + '</b>'
           + '<span class="pj-hint">　' + done + '/' + gt.length + ' 項完成（' + pct + '%）</span></td>'
@@ -2679,16 +2679,24 @@ function planActRangeText(plan, act) {
 function goalRangeText(gt, allDone) {
     return planActRangeText(cardGoalDate(gt, 'plan_end', true), allDone ? cardGoalDate(gt, 'act_end', true) : '');
 }
-/* 展開狀態一律用 tr.cd-goal 自己的 data-open 記，不要用 jQuery :visible 判斷目前是不是展開——
+/* 展開狀態一律用 tr.cd-goal 自己的 data-expand 記，不要用 jQuery :visible 判斷目前是不是展開——
    :visible 是看「實際算出來的呈現」（連祖先元素有沒有被藏起來都算），管理卡剛畫出來時若祖先容器
    還在轉場（跳窗淡入、分頁切換）中，:visible 會誤判整批都是「目前是收合」，點下去算出的 show 值
    就會跟畫面上的箭頭方向對不起來，變成「點開又立刻算成要收合」（使用者 2026-09-23 回報第三階段
-   點展開會跳一下又收起來）。改成直接讀/寫這一列自己存的狀態，不受祖先顯示狀態影響。 */
+   點展開會跳一下又收起來）。改成直接讀/寫這一列自己存的狀態，不受祖先顯示狀態影響。
+   使用者 2026-09-24 回報「名單點開就閃退了」「勾選依計畫進行也是一直閃一下就不見」——真因是
+   **這裡原本也叫 `data-open`，跟第 253 行「點列表列開專案」的全域委派 `[data-open]` 撞名**：
+   accordion 列（tr.cd-goal）帶著 `data-open="0/1"` 只是想記「這個階段目前展不展開」，但那個屬性
+   一出現在 DOM 上，任何點在這列（或其子孫，如這裡的展開三角形、甚至底下作業項目列）的點擊都會
+   冒泡被第 253 行的委派處理器攔截，把 0/1 當成**專案 id** 去開——`openProject(1)` 查無此案（或該案
+   剛好被刪）就印出「專案不存在或已刪除」；`openProject(0)` 更糟，會把整張跳窗清成空白新專案表單
+   （openProject 對 id=0 的特殊處理），使用者就會看到畫面「閃一下就不見」。改名成 `data-expand`
+   徹底避開撞名，不要再在別處重用 `data-open` 這個名字。 */
 $(document).on('click', '[data-cgtog]', function () {
     var $hdr = $(this).closest('tr.cd-goal');
     var gid = num($(this).data('cgtog'));
-    var show = num($hdr.data('open')) !== 1;
-    $hdr.data('open', show ? 1 : 0).attr('data-open', show ? 1 : 0);
+    var show = num($hdr.data('expand')) !== 1;
+    $hdr.data('expand', show ? 1 : 0).attr('data-expand', show ? 1 : 0);
     $('.cd-of-' + gid).toggle(show);
     $(this).find('i').attr('class', 'fa fa-caret-' + (show ? 'down' : 'right'));
 });
@@ -4826,12 +4834,16 @@ function buildPlanHtml(res, m) {
       + '.p-no { text-align:left; font-size:10pt; font-weight:bold; margin:0 0 1mm 0; }\n'
       + (isList ? '' :
           /* 周期格：預計與實際**畫在同一格**，靠線型區分（使用者指定）。
-             上下錯開一點點，兩條重疊時才不會被實線蓋掉虛線。 */
+             使用者 2026-09-24 回報「實際線跑到預計上面了，兩個應該是分開的」——原本兩條線是
+             同一層的普通區塊元素，只靠各自的 margin-top 錯開，兩個 margin 只差 0.4mm、又各帶
+             0.7mm 粗的邊框，正常瀏覽器算版時常常直接疊在一起（相鄰兄弟元素的 margin 可能收合，
+             算出來的間距比寫在 CSS 上的數字小很多）。改成 `position:absolute` 各自定住 `top`，
+             兩者用固定像素差距分開、不受 margin 收合影響，7mm 的格高分成上下兩段各佔一半。 */
           '.pd { width:' + (periods.length ? (40 / periods.length) : 40) + '%; }\n'
         + '.pcell { padding:0; height:7mm; position:relative; }\n'
-        + '.pbar { display:block; height:0; }\n'
-        + '.pbar.plan { border-top:0.7mm solid #000; margin-top:2mm; }\n'
-        + '.pbar.act  { border-top:0.7mm dashed #000; margin-top:1.6mm; }\n'
+        + '.pbar { display:block; position:absolute; left:0.3mm; right:0.3mm; height:0; }\n'
+        + '.pbar.plan { border-top:0.6mm solid #000; top:2mm; }\n'
+        + '.pbar.act  { border-top:0.6mm dashed #000; top:4.7mm; }\n'
         + '.gl { margin-top:2mm; font-size:9pt; }\n'
         + '.gl i { display:inline-block; width:14mm; vertical-align:middle; margin:0 2mm 0 6mm; }\n'
         + '.gl i.p { border-top:0.7mm solid #000; }\n'
