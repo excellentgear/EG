@@ -19,7 +19,6 @@ include_once $document_root . '/EGsystem/src/common/qa_ncr_lib.php';
 include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
 include_once $document_root . '/EGsystem/src/common/date_fmt_lib.php';
 include_once $document_root . '/EGsystem/src/common/print_log_lib.php';
-include_once $document_root . '/EGsystem/src/common/position_history_lib.php';
 
 function jout($a = []) { header('Content-Type: application/json; charset=utf-8'); echo json_encode(array_merge(['ok'=>true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code = 400, $extra = []) {
@@ -208,26 +207,16 @@ case 'row_delete': {
 
 /* ── 列印（ai-rules/16）──────────────────────────────── */
 case 'print_meta': {
+    // 這只是一本登錄簿的期間彙整表，不是要人簽的表單——使用者明確要求列印不要日期、
+    // 也不要製表／主管審核簽章（2026-09-24），這裡只回列印真正需要的：公司全名＋AS文件編號。
     list($from, $to) = ncrRange();
     $docId = eg_asdoc_id($db, NCR_ASDOC_MODULE);
     $doc   = eg_asdoc_get($db, NCR_ASDOC_MODULE);
-    // 業務日期＝期間最後一天（這是一份區間登錄簿，沒有單一單據日期）
+    // 業務日期＝期間最後一天（用來回推 AS 文件版次；這是一份區間登錄簿，沒有單一單據日期）
     $biz = $to;
-    $dept = ''; $pos = '';
-    try {
-        $snap = eg_position_snapshot_at($db, $uid, $biz);
-        if ($snap) {
-            $r = null;
-            foreach ($snap as $x) { if (!empty($x['is_main'])) { $r = $x; break; } }
-            if (!$r) $r = $snap[0];
-            $dept = (string)($r['department_name'] ?? ''); $pos = (string)($r['position_name'] ?? '');
-        }
-    } catch (Throwable $e) {}
     jout(['company'=>ncr_company_name($db),
           'doc'=>$doc ? ['id'=>(int)$doc['id'], 'doc_no'=>$doc['doc_no'], 'doc_name'=>$doc['doc_name']] : null,
-          'doc_no_print'=>eg_asdoc_no_asof_id($db, $docId, $biz),
-          'biz_date'=>$biz, 'stamp_tpl'=>ncr_stamp_tpl($db),
-          'maker_name'=>$uname, 'maker'=>['dept'=>$dept, 'position'=>$pos]]);
+          'doc_no_print'=>eg_asdoc_no_asof_id($db, $docId, $biz)]);
 }
 
 case 'print_log': {
@@ -241,8 +230,7 @@ case 'setting_get': {
     if (!$P['canAdmin']) jerr('需要管理員權限', 403);
     jout(['as_docs'=>eg_asdoc_list($db), 'doc_id'=>eg_asdoc_id($db, NCR_ASDOC_MODULE),
           'doc'=>eg_asdoc_get($db, NCR_ASDOC_MODULE),
-          'sources'=>ncr_sources(), 'enabled'=>ncr_enabled_sources($db),
-          'stamp_tpls'=>ncr_stamp_tpl_options($db), 'stamp_tpl_id'=>ncr_stamp_tpl_id($db)]);
+          'sources'=>ncr_sources(), 'enabled'=>ncr_enabled_sources($db)]);
 }
 
 case 'setting_save': {
@@ -252,14 +240,6 @@ case 'setting_save': {
         $srcs = array_values(array_intersect($want, array_keys(ncr_sources())));
         if (!$srcs) jerr('至少要保留一個來源，否則這張表會永遠是空的');
         ncr_param_save($db, 'sources', $srcs, $uname);
-    }
-    if (array_key_exists('stamp_tpl_id', $_POST)) {
-        $t = (int)$_POST['stamp_tpl_id'];
-        if ($t) {
-            $c = $db->prepare("SELECT id FROM stamp_template WHERE id=? AND is_active=1"); $c->execute([$t]);
-            if (!$c->fetchColumn()) jerr('選擇的圖章模板不存在或已停用');
-        }
-        ncr_param_save($db, 'stamp_tpl_id', $t, $uname);
     }
     jout();
 }
