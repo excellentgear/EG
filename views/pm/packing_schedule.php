@@ -627,6 +627,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $recordDate = null; // null=沿用既有值或今天
             $packerName = $user_cname;
             $packerId = null;
+            // 這筆既有紀錄本來就是補登建立的(is_backfill=1)，但這次存檔沒有重送補登資訊
+            // （例如沒有補登權限的人接續填寫其他欄位）——補登人員／日期要維持原樣，不能被
+            // 這次動作的人蓋掉，否則看起來就像是現在填的人做的（鐵律8：沒送的欄位不要動）
+            if ($cur && (int)($cur['is_backfill'] ?? 0) === 1 && !$isBackfill) {
+                $packerName = $cur['packer'];
+                $packerId = $cur['packer_id'] !== null ? (int)$cur['packer_id'] : null;
+            }
             if ($isBackfill) {
                 if (!$PK_CAN_BACKFILL) throw new Exception('無補登權限，請洽管理員於「角色與功能設定」授權');
                 if (!$cur) {
@@ -1543,7 +1550,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     <li>「訂單綁定交期與數量」列出這張 BOM 目前綁定的訂單資料；若查無綁定，會退回顯示系統交期。</li>
                     <li>「判定結果」分合格／不合格／待判定三種，擇一：不合格一律要人工手動勾選，系統不會自動判不合格；「已結案清單」上方的卡片可依判定結果快速篩選（全部／合格／不合格／待判定），數字是該篩選條件下符合的筆數。</li>
                     <li>已結案的紀錄無法直接修改，需由管理員在「已結案清單」點「解鎖修改」並輸入操作確認密碼。</li>
-                    <?php if ($PK_CAN_BACKFILL): ?><li>「補登包裝紀錄」僅能用於<strong>完全沒有包裝紀錄</strong>的舊 BOM，已有紀錄的請改用「已結案清單」解鎖修改。<?= $PK_CAN_BACKFILL_PACKER ? '你目前有權限可指定其他人為包裝人員；管理員可在「包裝製程設定」限制可挑選的部門範圍（含子部門），未設定則全公司在職人員皆可選。' : '你目前只能以自己的身分補登，如需指定他人請洽管理員授權。' ?></li><?php endif; ?>
+                    <?php if ($PK_CAN_BACKFILL): ?><li>「補登包裝紀錄」僅能用於<strong>完全沒有包裝紀錄</strong>的舊 BOM，已有紀錄的請改用「已結案清單」解鎖修改。<?= $PK_CAN_BACKFILL_PACKER ? '你目前有權限可指定其他人為包裝人員；管理員可在「包裝製程設定」限制可挑選的部門範圍（含子部門），未設定則全公司在職人員皆可選。' : '你目前只能以自己的身分補登，如需指定他人請洽管理員授權。' ?>由補登建立的紀錄若先按「暫存」，之後不論用點列或已結案清單解鎖再打開，補登日期與包裝人員欄位一樣看得到、改得動，不會消失。</li><?php endif; ?>
                 </ul>
                 <p><strong>設定入口：</strong>包裝製程設定／外觀檢驗模板（頁首按鈕）；補登可指定包裝人員的部門範圍在「包裝製程設定」跳窗內（僅管理員看得到）。</p>
                 <p><strong>權限角色：</strong>一般包裝填寫（暫存/完成包裝、勾選判定結果）全體登入者皆可使用；「補登舊資料」與「指定補登包裝人員」「解鎖修改已結案紀錄／角色與功能設定」「設定包裝人員部門範圍」由管理員於本頁「角色與功能設定」指派角色，再到人員權限設定指派給人員。</p>
@@ -1572,6 +1579,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         var currentPkgId = null;     // 續編/補登/解鎖修改中的 qc_packing_inspection.packing_inspection_id
         var currentBomTotalQty = null; // 這張 BOM 真正的總數量（來自 bom.sqty，非可手改的 f-order-qty），判定結果自動認定合格要比對這個
         var currentIsClosed = false; // 目前這筆是否為已結案（解鎖修改中）
+        // 目前這筆既有紀錄本身是不是「補登建立」的（is_backfill=1）——不等於 currentMode==='backfill'
+        // （currentMode==='backfill' 是「正在用補登流程新建一筆」；這個旗標是「續編/解鎖修改一筆本來就是
+        // 補登建立的既有紀錄」，讓管理員可以繼續調整補登日期／包裝人員，不因為用一般點列開啟就看不到）
+        var currentIsBackfillRecord = false;
 
         // 數字格式：小數點後皆為0則省略
         function fmtNum(v) {
@@ -1743,6 +1754,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $('#pkg-rows-container').empty();
             $('#f-confirm-password').val('');
             $('#f-unlock-fields').hide();
+            currentIsBackfillRecord = false;
             $('#f-backfill-fields').toggle(mode === 'backfill');
             setFormReadOnly(mode === 'view');
 
@@ -1850,6 +1862,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         function fillFromRecord(rec, isClosedEdit) {
             currentPkgId = rec.packing_inspection_id;
             currentIsClosed = (rec.status === 'closed');
+
+            // 這筆既有紀錄本來就是補登建立的（is_backfill=1）：不論這次是用「點列」（mode=normal）
+            // 或「已結案解鎖修改」開啟，只要目前使用者有補登權限，一律把補登欄位（補登日期／包裝人員）
+            // 秀出來並帶入既有值，讓管理員可以繼續調整——否則暫存後再打開會完全看不到這兩個欄位，
+            // 而且下面存檔若沒有補上 is_backfill=1，後端會把 packer 覆寫成目前操作者、把補登人員資訊洗掉。
+            currentIsBackfillRecord = !!(rec.is_backfill * 1) && PK_CAN_BACKFILL;
+            if (currentIsBackfillRecord) {
+                $('#f-backfill-fields').show();
+                $('#f-record-date').val(rec.inspection_date || todayStr()).attr('max', todayStr());
+                if (PK_CAN_BACKFILL_PACKER) {
+                    loadPackerOptions();
+                    var packerId = rec.packer_id;
+                    var waitPacker = setInterval(function () {
+                        var $sel = $('#f-packer-select');
+                        if (!$sel.data('loaded')) return;
+                        clearInterval(waitPacker);
+                        $sel.val(packerId || '');
+                    }, 80);
+                }
+            }
+
             if (rec.order_qty != null) $('#f-order-qty').val(rec.order_qty);
             if (rec.bom_total_qty != null) currentBomTotalQty = parseFloat(rec.bom_total_qty);
             // 既有紀錄的判定結果就照當時存的值勾選（不管當初是自動還是手動判定的），
@@ -2162,7 +2195,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (warehouseQty > 0 && !storageMethod) { alert('尚有 ' + warehouseQty + ' 個需要入庫，請選擇成品入庫方式'); return; }
             }
             if (!checkNgBreakdown(totalNg)) { alert('來料不良退回數 + 加工不良數 不可大於 NG總數(' + realNgTotal(totalNg).total + ')'); $('#pkg-ng-return-material').focus(); return; }
-            if (currentMode === 'backfill') {
+            // 正在用補登流程新建，或續編/解鎖修改一筆本來就是補登建立的既有紀錄，兩種情況都要照補登規則存檔
+            var isBackfillFlow = (currentMode === 'backfill' || currentIsBackfillRecord);
+            if (isBackfillFlow) {
                 if (!$('#f-record-date').val()) { alert('請選擇補登日期'); $('#f-record-date').focus(); return; }
             }
             if (currentIsClosed && !$('#f-confirm-password').val()) {
@@ -2208,7 +2243,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 complete: complete ? 1 : 0,
                 judgement: $('input[name="pkg-judgement"]:checked').val() || ''
             };
-            if (currentMode === 'backfill') {
+            if (isBackfillFlow) {
                 payload.is_backfill = 1;
                 payload.record_date = $('#f-record-date').val();
                 if (PK_CAN_BACKFILL_PACKER) payload.packer_id = $('#f-packer-select').val() || '';
