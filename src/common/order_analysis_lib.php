@@ -1160,8 +1160,8 @@ function oa_moving_avg(PDO $db, array $opt = []): array
 function oa_insights(PDO $db, array $res, ?array $kpiAlert = null, ?array $ma = null): array
 {
     $out = [];
-    $add = function ($level, $title, $detail, $metric = '') use (&$out) {
-        $out[] = ['level' => $level, 'title' => $title, 'detail' => $detail, 'metric' => $metric];
+    $add = function ($level, $title, $detail, $metric = '', $extra = []) use (&$out) {
+        $out[] = array_merge(['level' => $level, 'title' => $title, 'detail' => $detail, 'metric' => $metric], $extra);
     };
     $m   = $res['meta'];
     $cur = $res['kpi']['cur'];
@@ -1228,16 +1228,23 @@ function oa_insights(PDO $db, array $res, ?array $kpiAlert = null, ?array $ma = 
         }
     }
 
-    /* ④ 流失客戶（基期有下單、本期完全沒有） */
+    /* ④ 流失客戶（基期有下單、本期完全沒有）——附完整名單供前端展開點選，
+     * 點客戶名稱可另開新跳窗到 master_data_management.php 唯讀檢視該客戶主檔（基本資料／結帳付款…）。
+     * 未建主檔的客戶（bad=1）給不出 customer_id，前端一律不做成連結。 */
     $lost = array_values(array_filter($res['clients'], function ($c) { return $c['flag'] === 'lost'; }));
     if ($lost) {
         usort($lost, function ($a, $b) use ($mk) { return $b['cmp'][$mk] <=> $a['cmp'][$mk]; });
         $sum = 0.0; foreach ($lost as $c) $sum += (float)$c['cmp'][$mk];
         $names = array_slice(array_map(function ($c) { return $c['name']; }, $lost), 0, 6);
+        $lostList = array_map(function ($c) use ($mk) {
+            return ['cid' => (string)$c['cid'], 'name' => $c['name'], 'amount' => (float)$c['cmp'][$mk],
+                    'bad' => !empty($c['bad'])];
+        }, $lost);
         $add('bad', '有 ' . count($lost) . ' 家客戶本期完全沒有下單',
              $cl . '合計 ' . $fmt($sum) . ($useAmt ? ' 元' : ' 支') . '，'
              . implode('、', $names) . (count($lost) > 6 ? ' 等' : '') . '。建議業務逐一聯繫確認原因。',
-             count($lost) . ' 家');
+             count($lost) . ' 家',
+             ['clients' => $lostList, 'unit' => $useAmt ? '元' : '支', 'cmp_label' => $cl]);
     }
 
     /* ⑤ 新料號貢獻 */

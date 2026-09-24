@@ -6845,6 +6845,19 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 .settle-day-input { -moz-appearance:textfield; }
 .no-spin-input::-webkit-inner-spin-button,.no-spin-input::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
 .no-spin-input { -moz-appearance:textfield; }
+/* 客戶唯讀檢視（從訂單分析等其他頁面連結進來，只看不改；不吃 CAN_UPDATE 權限）
+   ── 分頁（#custModalTabs）在 .tab-content 之外，pointer-events:none 只鎖住 .tab-content
+      這一層本身，切分頁的能力完全不受影響。 */
+#customerModal.view-readonly .tab-content { pointer-events:none; }
+#customerModal.view-readonly .tab-content input,
+#customerModal.view-readonly .tab-content select,
+#customerModal.view-readonly .tab-content textarea { background:#f5f5f5 !important; color:#555; cursor:default; }
+#customerModal.view-readonly .modal-footer .btn-success,
+#customerModal.view-readonly #cf-exception-btn,
+#customerModal.view-readonly #cf-add-contact-btn,
+#customerModal.view-readonly .contact-row button,
+#customerModal.view-readonly #cust-design-note-wrap .btn-danger { display:none !important; }
+#customerModal.view-readonly #custModal-title { color:#8a5a2b; }
 /* 料號表單 廠商/專用料號/專用機台 自動完成下拉 */
 .pf-ac-dropdown { position:absolute; z-index:1060; left:0; right:0; background:#fff; border:1px solid #ddd; border-top:none; max-height:200px; overflow-y:auto; border-radius:0 0 6px 6px; box-shadow:0 4px 12px rgba(0,0,0,.12); }
 .pf-ac-dropdown .pf-ac-opt:hover { background:#f0f4ff; }
@@ -8242,7 +8255,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 <div class="tab-pane" id="cust-tab-contacts">
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
     <div class="form-section-title" style="margin:0;border:0;padding:0;"><i class="fa fa-user"></i> 聯絡人列表</div>
-    <button type="button" class="btn btn-sm btn-default" onclick="addContactRow()"><i class="fa fa-plus"></i> 新增聯絡人</button>
+    <button type="button" id="cf-add-contact-btn" class="btn btn-sm btn-default" onclick="addContactRow()"><i class="fa fa-plus"></i> 新增聯絡人</button>
 </div>
 <div id="cf-contacts-wrap">
     <!-- rows injected by JS -->
@@ -8289,7 +8302,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 <div class="modal-footer">
     <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
     <?php if ($can_create || $can_update): ?>
-    <button type="button" class="btn btn-success" onclick="submitCustomerForm()"><i class="fa fa-save"></i> 儲存</button>
+    <button type="button" id="cf-save-btn" class="btn btn-success" onclick="submitCustomerForm()"><i class="fa fa-save"></i> 儲存</button>
     <?php endif; ?>
 </div>
 </div>
@@ -16111,13 +16124,26 @@ function deleteSettlementEx(eid) {
     });
 }
 
-function openCustomerModal(customer_id) {
+// 客戶檢視／編輯 modal 的唯讀鎖：readonly=true 時鎖住 .tab-content 內所有欄位與按鈕，
+// 只留分頁（在 .tab-content 之外）可以切換。給外部頁面（如訂單分析）連進來唯讀檢視用，
+// 不吃 CAN_UPDATE 權限（只是「看」，不是「改」）。
+function _setCustModalReadonly(on) {
+    var modal = document.getElementById('customerModal');
+    if (!modal) return;
+    modal.classList.toggle('view-readonly', !!on);
+    modal.querySelectorAll('#customerForm input, #customerForm select, #customerForm textarea').forEach(function(el){
+        if (el.tagName === 'SELECT' || el.type === 'checkbox' || el.type === 'radio') el.disabled = !!on;
+        else el.readOnly = !!on;
+    });
+}
+function openCustomerModal(customer_id, readonly) {
+    readonly = !!readonly;
     if (customer_id) {
-        if (!CAN_UPDATE) { showToast('無修改權限','error'); return; }
+        if (!readonly && !CAN_UPDATE) { showToast('無修改權限','error'); return; }
         api({ action:'get_customer', customer_id:customer_id }).done(function(r) {
             if (!r.success) { showToast(r.message,'error'); return; }
             var d = r.data;
-            document.getElementById('custModal-title').textContent = '編輯客戶';
+            document.getElementById('custModal-title').textContent = readonly ? ('客戶檢視（唯讀）－'+(d.customer||d.customer_id)) : '編輯客戶';
             document.getElementById('cf-is_new').value = '0';
             var cidEl = document.getElementById('cf-customer_id');
             cidEl.value = d.customer_id; cidEl.readOnly = true; cidEl.style.background = '#f5f5f5';
@@ -16170,10 +16196,12 @@ function openCustomerModal(customer_id) {
             loadDesignNotes('customer', d.customer_id);
             // Reset to first tab
             switchCustTab('basic', document.querySelector('#custModalTabs li:first-child a'));
+            _setCustModalReadonly(readonly);
             $('#customerModal').modal('show');
         });
     } else {
         if (!CAN_CREATE) { showToast('無新增權限','error'); return; }
+        _setCustModalReadonly(false);
         document.getElementById('custModal-title').textContent = '新增客戶';
         document.getElementById('customerForm').reset();
         document.getElementById('cf-is_new').value = '1';
@@ -25421,6 +25449,15 @@ $(function() {
         if (autoId > 0) {
             // openPartModal 自有 AJAX，不需等 loadParts 完成
             setTimeout(function() { openPartModal(autoId); }, 500);
+        }
+
+        // ?view_customer=<客戶代碼>：切到客戶分頁並以唯讀方式開啟該客戶檢視畫面
+        // （給訂單分析等其他頁面用新跳窗連進來看，不吃 CAN_UPDATE 權限，只看不改）
+        var viewCustomer = (params.get('view_customer') || '').trim();
+        if (viewCustomer) {
+            var custTabBtn = document.querySelector('.master-tab-btn[onclick*="customers"]');
+            if (custTabBtn && typeof switchTab === 'function') switchTab('customers', custTabBtn);
+            setTimeout(function() { openCustomerModal(viewCustomer, true); }, 400);
         }
     })();
 
