@@ -1480,7 +1480,7 @@ case 'card_get':
        所以任務與料號一起帶下去；交付成果取回報時採用的佐證（evidence_json）。 */
     $pid2 = (int)$card['project_id'];
     jout(['card' => $card, 'project' => $prj, 'goals' => prj_goals($db, $pid2),
-          'tasks' => prj_tasks($db, $pid2), 'parts' => prj_parts($db, $pid2),
+          'tasks' => prj_tasks_attach_supervisor($db, prj_tasks($db, $pid2)), 'parts' => prj_parts($db, $pid2),
           'task_status' => PRJ_TASK_STATUS,
           'can_edit' => prj_can_edit_project($P, $prj) && (string)$card['status'] !== 'approved']);
 

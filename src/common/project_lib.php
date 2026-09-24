@@ -33,6 +33,7 @@ require_once __DIR__ . '/date_fmt_lib.php';
 require_once __DIR__ . '/position_history_lib.php';
 require_once __DIR__ . '/car_lib.php';   // 工作日行事曆唯一來源：car_holiday_sets()／car_working_days_between()
 require_once __DIR__ . '/bom_dir_lib.php';   // ERP/資材報告檔名標籤與報告檔案掃描（eg_bom_report_files_for_part 等）
+require_once __DIR__ . '/unit_supervisor_lib.php';   // 單位主管解析（管理卡簽核欄，見 prj_tasks_attach_supervisor）
 
 /** AS 文件綁定模組代碼（一表一碼，值只存 id，見 ai-rules/16 第一之三節） */
 const PRJ_ASDOC_PLAN = 'project_plan';   // 2-GM-02-02 專案執行規劃表
@@ -2654,6 +2655,36 @@ function prj_tasks(PDO $db, int $projectId): array
                         ORDER BY g.sort_order, t.goal_id, t.sort_order, t.task_id");
     $st->execute([$projectId]);
     return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * 管理卡「簽核」欄要印的名字（使用者 2026-09-23 要求：一律是承辦人或其單位主管，不可以是
+ * 補資料時實際按下儲存的人）。有指派負責人就印負責人（見前端 cardSignerHtml()）；沒指派時
+ * 這裡補上該任務所屬部門（owner_dept_id）的單位主管，走全站唯一實作 eg_unit_supervisor()
+ * （ai-rules/24），不自己猜人。同一個部門在同一批任務裡只查一次，避免 N+1。
+ */
+function prj_tasks_attach_supervisor(PDO $db, array $tasks): array
+{
+    $need = [];
+    foreach ($tasks as $t) {
+        if (empty($t['owner_id']) && !empty($t['owner_dept_id'])) $need[(int)$t['owner_dept_id']] = true;
+    }
+    if (!$need) return $tasks;
+    $sup = [];
+    foreach (array_keys($need) as $deptId) {
+        try {
+            $r = eg_unit_supervisor($db, 0, $deptId);
+            if (!empty($r['id'])) $sup[$deptId] = ['id' => (int)$r['id'], 'name' => (string)$r['name']];
+        } catch (Throwable $e) {}
+    }
+    foreach ($tasks as &$t) {
+        if (empty($t['owner_id']) && !empty($t['owner_dept_id']) && isset($sup[(int)$t['owner_dept_id']])) {
+            $t['owner_dept_supervisor_id']   = $sup[(int)$t['owner_dept_id']]['id'];
+            $t['owner_dept_supervisor_name'] = $sup[(int)$t['owner_dept_id']]['name'];
+        }
+    }
+    unset($t);
+    return $tasks;
 }
 
 /**

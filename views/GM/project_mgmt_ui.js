@@ -2633,7 +2633,11 @@ function cardItemsHtml(res, ro) {
    這裡刻意只用 `owner_name`（該步驟的承辦人，本來就是另一份可靠來源），沒指派負責人的
    步驟就不印名字（寧可留白也不要印錯人；要印單位主管需要後端查組織圖，屬於下一步）。 */
 function cardSignerHtml(t) {
-    return t.owner_name ? ('<br><small>' + esc(t.owner_name) + '</small>') : '';
+    if (t.owner_name) return '<br><small>' + esc(t.owner_name) + '</small>';
+    // 沒指派承辦人時，退回這個步驟所屬部門的單位主管（後端 prj_tasks_attach_supervisor 查好帶下來，
+    // 走全站唯一的 eg_unit_supervisor()，不在前端猜）。
+    if (t.owner_dept_supervisor_name) return '<br><small>' + esc(t.owner_dept_supervisor_name) + '（單位主管）</small>';
+    return '';
 }
 
 /** 一個階段的預計／實際完成日＝底下任務的最晚那一天（全部做完才算這個階段完成） */
