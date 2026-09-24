@@ -449,9 +449,8 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 </div><!-- /right_col -->
 </div></div>
 
-<!-- 右側懸浮工具列：回訂單追蹤／回頂端／快速導覽（使用者要求；列印時隱藏） -->
+<!-- 右側懸浮工具列：回頂端／快速導覽（使用者要求；列印時隱藏） -->
 <div class="float-tools">
-  <a href="NewOrder_Track.php" class="float-btn" title="回訂單追蹤"><i class="fa fa-arrow-left"></i>訂單</a>
   <button type="button" class="float-btn totop" id="btnToTop" title="回頂端"
           onclick="window.scrollTo({top:0,behavior:'smooth'});"><i class="fa fa-arrow-up"></i>頂端</button>
   <div class="qnav">
