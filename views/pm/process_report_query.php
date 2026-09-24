@@ -146,7 +146,7 @@ $PRQ_FROM = "FROM pm_process_daily_report pdr
     LEFT JOIN bom b ON bi.bom = b.bom
     LEFT JOIN qa_abnormal_order qao ON qao.id = pdr.abnormal_order_id";
 
-$PRQ_COLS = "pdr.report_id, pdr.report_date, pdr.report_source, pdr.remark, pdr.produced_qty, pdr.is_finished,
+$PRQ_COLS = "pdr.report_id, pdr.bom_ing_fid, pdr.report_date, pdr.report_source, pdr.remark, pdr.produced_qty, pdr.is_finished,
     pdr.process_face, pdr.source_reason,
     pdr.setup_start_time, pdr.setup_end_time, pdr.production_start_time, pdr.production_end_time,
     " . eg_machine_label_sql('m', 'mpt') . ",
@@ -307,27 +307,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => true, 'docs' => eg_asdoc_list($pdo),
                 'cur' => eg_asdoc_get($pdo, PRQ_ASDOC_MODULE), 'can_bind' => $prq_can_bind]);
         } elseif ($action === 'qab_backfill_open') {
-            // 單筆／批次「補開品質異常單」——供現場漏開或舊資料回溯用，與 process_schedule.php 存檔當下
-            // 自動觸發共用同一支 qab_auto_open_from_pm_ng()（鐵律4：不要再刻一套建單邏輯）。
-            // 後端同規則再擋一次權限（鐵律8）：前端只有管理員看得到按鈕，這裡不管前端擋不擋都再驗一次。
+            // 單筆／批次「補開品質異常單」——供現場漏開或舊資料回溯用，與 process_schedule.php 完工當下
+            // 自動觸發共用同一支 qab_auto_open_from_bom_ing()（鐵律4：不要再刻一套建單邏輯）。
+            // 2026-09-24 二次更正：改成「累積到站」不是「逐筆各開一張」——選到的 report_id 先反查各自
+            // 屬於哪一站（bom_ing_fid），**同一站只呼叫一次**，該次會把那一站目前所有尚未歸入的NG
+            // （不只選到的那幾筆）一次加總開單，所以呼叫端一定要把這件事講清楚，不然管理員會以為
+            // 「開出來的量怎麼比我選的還多」。後端同規則再擋一次權限（鐵律8）。
             if (!$prq_can_qab_open) { echo json_encode(['success' => false, 'message' => '需要品質異常單管理員權限才能補開']); exit; }
             $ids = json_decode((string)($_POST['report_ids'] ?? '[]'), true);
             if (!is_array($ids)) $ids = [];
             $ids = array_values(array_unique(array_filter(array_map('intval', $ids), function ($v) { return $v > 0; })));
             if (!$ids) { echo json_encode(['success' => false, 'message' => '請至少選擇一筆報工紀錄']); exit; }
             if (count($ids) > 200) { echo json_encode(['success' => false, 'message' => '一次最多補開 200 筆']); exit; }
-            $created = 0; $skipped = 0; $failed = [];
-            foreach ($ids as $rid) {
+
+            $ph = implode(',', array_fill(0, count($ids), '?'));
+            $stFid = $pdo->prepare("SELECT DISTINCT bom_ing_fid FROM pm_process_daily_report WHERE report_id IN ($ph) AND bom_ing_fid IS NOT NULL");
+            $stFid->execute($ids);
+            $fids = array_map('intval', $stFid->fetchAll(PDO::FETCH_COLUMN));
+
+            $created = 0; $skipped = 0; $failed = []; $opened = [];
+            foreach ($fids as $fid) {
                 try {
-                    $r = qab_auto_open_from_pm_ng($pdo, $rid);
-                    if ($r === null) { $skipped++; continue; }             // 這筆其實沒有 NG，跳過
-                    if (!empty($r['skipped'])) { $skipped++; continue; }   // 已經開過單
+                    $r = qab_auto_open_from_bom_ing($pdo, $fid);
+                    if ($r === null) { $skipped++; continue; }   // 這一站目前沒有尚未歸入的NG，跳過
                     $created++;
+                    $opened[] = ['bom_ing_fid' => $fid, 'no' => $r['no'], 'qty' => $r['qty'],
+                                  'period_from' => $r['period_from'], 'period_to' => $r['period_to']];
                 } catch (Throwable $e) {
-                    $failed[] = ['report_id' => $rid, 'message' => $e->getMessage()];
+                    $failed[] = ['bom_ing_fid' => $fid, 'message' => $e->getMessage()];
                 }
             }
-            echo json_encode(['success' => true, 'created' => $created, 'skipped' => $skipped, 'failed' => $failed]);
+            echo json_encode(['success' => true, 'created' => $created, 'skipped' => $skipped, 'failed' => $failed, 'opened' => $opened]);
         } elseif ($action === 'asdoc_save') {
             // 前端已依 can_bind 隱藏按鈕，後端仍再擋一次（鐵律8：不可只做前端擋）
             if (!$prq_can_bind) { echo json_encode(['success' => false, 'message' => '無權限修改 AS 文件綁定']); exit; }
@@ -902,8 +912,14 @@ if (PRQ_CAN_QAB) {
             if (btn) btn.prop('disabled', false);
             if (!res.success) { alert(res.message || '補開失敗'); return; }
             var msg = '已開立 ' + res.created + ' 張';
-            if (res.skipped) msg += '，' + res.skipped + ' 筆略過（無NG或已開過單）';
-            if (res.failed && res.failed.length) msg += '，' + res.failed.length + ' 筆失敗：' + res.failed.map(function(f){ return 'report_id=' + f.report_id + '(' + f.message + ')'; }).join('；');
+            if (res.opened && res.opened.length) {
+                msg += '：\n' + res.opened.map(function(o){
+                    var pTxt = o.period_from === o.period_to ? o.period_from : (o.period_from + '～' + o.period_to);
+                    return o.no + '（累積 ' + pTxt + ' 共 ' + o.qty + ' 件NG）';
+                }).join('\n');
+            }
+            if (res.skipped) msg += '\n' + res.skipped + ' 站略過（目前沒有尚未歸入的NG）';
+            if (res.failed && res.failed.length) msg += '\n' + res.failed.length + ' 站失敗：' + res.failed.map(function(f){ return 'bom_ing_fid=' + f.bom_ing_fid + '(' + f.message + ')'; }).join('；');
             alert(msg);
             qabSelected = {};
             loadList(curPage); // 點開即刷新：補開後這一頁的異常單欄一定要重新反映最新狀態
@@ -915,6 +931,7 @@ if (PRQ_CAN_QAB) {
 
     $(document).on('click', '.qab-open-one', function(){
         var rid = parseInt($(this).data('rid'), 10);
+        if (!confirm('這會把這一站（不只這一筆）目前累積、尚未歸入任何異常單的NG全部加總開成一張單，確定要補開嗎？')) return;
         qabOpenReportIds([rid], $(this));
     });
 
@@ -922,7 +939,8 @@ if (PRQ_CAN_QAB) {
         var ids = [];
         for (var k in qabSelected) if (qabSelected[k]) ids.push(parseInt(k, 10));
         if (!ids.length) return;
-        if (!confirm('確定要為這 ' + ids.length + ' 筆報工紀錄補開品質異常單嗎？（會依報工人員所屬部門自動解析現場主管當開單人）')) return;
+        if (!confirm('確定要補開嗎？系統會依這些報工所屬的站別（bom_ing_fid）分組，同一站只開一張單，' +
+            '把該站目前累積、尚未歸入任何異常單的NG全部加總（可能不只您勾選的這幾筆）；開單人會依報工人員所屬部門自動解析現場主管。')) return;
         qabOpenReportIds(ids, $(this));
     });
 }
