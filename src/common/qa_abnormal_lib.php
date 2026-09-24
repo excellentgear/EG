@@ -1499,31 +1499,53 @@ function qab_scrap_alloc(PDO $db, ?string $ymd = null): string
  * 兩者都沒有（人工開單、還沒填責任製程）就視為第 0 站＝不管 $uptoBomSn 是多少都照算，
  * 寧可讓還沒查清楚來源的報廐多扣一點，也不要在攔阻出貨的數字上漏算。
  */
-function qab_bom_scrap_qty(PDO $db, string $bom, ?int $uptoBomSn = null): int
+/**
+ * 批次版：一次抓「一批 BOM 各自的確認報廐明細」——OreadyReply_ForPm_BaseOfTime.php 這種一次列一整
+ * 頁很多 BOM 的畫面要用這支，不要對每一列各呼叫一次 qab_bom_scrap_qty()（那會變成 N+1 查詢）。
+ * 回傳 [bom_no => [ ['qty'=>int,'origin_sn'=>?int], ... ] ]，origin_sn=null 表示不知道是哪一站發現的
+ * （視同第 0 站，呼叫端算「這一站以前」時一律要算進去，見 qab_bom_scrap_qty() 同一條規則）。
+ */
+function qab_bom_scrap_rows(PDO $db, array $bomNos): array
 {
-    $bom = trim($bom);
-    if ($bom === '') return 0;
-    $st = $db->prepare("SELECT o.ng_qty, o.pm_report_id, o.resp_process_no,
-                                pr.bom_ing_fid AS pm_bom_ing_fid,
+    $bomNos = array_values(array_unique(array_filter(array_map('trim', $bomNos), function ($v) { return $v !== ''; })));
+    if (!$bomNos) return [];
+    $in = implode(',', array_fill(0, count($bomNos), '?'));
+    $st = $db->prepare("SELECT o.bom_no, o.ng_qty, o.pm_report_id, o.resp_process_no,
                                 (SELECT MIN(bi2.bom_sn) FROM bom_ing bi2
                                   WHERE bi2.bom=o.bom_no AND bi2.process_no=o.resp_process_no) AS resp_bom_sn,
                                 bi_pm.bom_sn AS pm_bom_sn
                          FROM qa_abnormal_order o
                          LEFT JOIN pm_process_daily_report pr ON pr.report_id=o.pm_report_id
                          LEFT JOIN bom_ing bi_pm ON bi_pm.bom_ing_fid=pr.bom_ing_fid
-                         WHERE o.bom_no=? AND o.is_closed=1 AND o.scrap_no IS NOT NULL AND o.deleted_at IS NULL");
-    $st->execute([$bom]);
-    $sum = 0;
+                         WHERE o.bom_no IN ($in) AND o.is_closed=1 AND o.scrap_no IS NOT NULL AND o.deleted_at IS NULL");
+    $st->execute($bomNos);
+    $out = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        if ($uptoBomSn !== null) {
-            $originSn = null;
-            if ($r['pm_report_id']) $originSn = $r['pm_bom_sn'] !== null ? (int)$r['pm_bom_sn'] : null;
-            if ($originSn === null && $r['resp_process_no']) $originSn = $r['resp_bom_sn'] !== null ? (int)$r['resp_bom_sn'] : null;
-            if ($originSn !== null && $originSn > $uptoBomSn) continue; // 發現於這一站之後，還不影響這一站
-        }
-        $sum += (int)($r['ng_qty'] ?? 0);
+        $originSn = null;
+        if ($r['pm_report_id']) $originSn = $r['pm_bom_sn'] !== null ? (int)$r['pm_bom_sn'] : null;
+        if ($originSn === null && $r['resp_process_no']) $originSn = $r['resp_bom_sn'] !== null ? (int)$r['resp_bom_sn'] : null;
+        $out[(string)$r['bom_no']][] = ['qty' => (int)($r['ng_qty'] ?? 0), 'origin_sn' => $originSn];
+    }
+    return $out;
+}
+
+/** 依 qab_bom_scrap_rows() 抓回來的明細，算出單一 BOM（可指定 $uptoBomSn 站別上限）的確認報廐總量 */
+function qab_bom_scrap_sum_rows(array $rows, ?int $uptoBomSn = null): int
+{
+    $sum = 0;
+    foreach ($rows as $r) {
+        if ($uptoBomSn !== null && $r['origin_sn'] !== null && $r['origin_sn'] > $uptoBomSn) continue;
+        $sum += (int)$r['qty'];
     }
     return $sum;
+}
+
+function qab_bom_scrap_qty(PDO $db, string $bom, ?int $uptoBomSn = null): int
+{
+    $bom = trim($bom);
+    if ($bom === '') return 0;
+    $map = qab_bom_scrap_rows($db, [$bom]);
+    return qab_bom_scrap_sum_rows($map[$bom] ?? [], $uptoBomSn);
 }
 
 /* ─────────────────────────────────────────────────────────────
