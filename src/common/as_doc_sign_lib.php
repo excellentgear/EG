@@ -406,7 +406,7 @@ function ads_run_auto(PDO $db, int $caseId, int $byUid): void
     foreach (ads_steps($db, $caseId) as $s) {
         if ($s['status'] !== 'wait') continue;
         if (empty($s['is_auto'])) break;             // 碰到要人簽的就停
-        $t += random_int(5, 30) * 60;
+        $t += random_int(5 * 60, 30 * 60);
         if (date('Y-m-d', $t) !== $date) $t = strtotime($date . ' 23:59:00');   // 不可跨日
         ads_mark($db, (int)$s['id'], 'ok', '系統自動簽核', $byUid, date('Y-m-d H:i:s', $t), $date, true);
     }

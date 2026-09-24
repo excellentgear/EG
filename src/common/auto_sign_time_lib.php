@@ -62,7 +62,9 @@ if (!function_exists('eg_auto_sign_next_ts')) {
         if ($remaining > 1) $maxStep = max(1, min($maxStep, intdiv($roomMin, $remaining)));
         if ($minStep > $maxStep) $minStep = $maxStep;
 
-        $t = $base + random_int($minStep, $maxStep) * 60;
+        // 分鐘範圍轉成秒再抽，讓時間帶有隨機秒數——只乘 60 的話每一格都精準落在
+        // 整分整秒，多蓋幾格章分鐘尾數很容易剛好相同，一看就知道是自動產生的。
+        $t = $base + random_int($minStep * 60, $maxStep * 60);
         if ($t > $endSec) $t = $endSec;
         // 窗口用完時靠秒數維持「同一份單據裡不會有兩個人時間完全相同」（時鐘上仍是 19:00）
         if ($prevSec !== null && $t <= $prevSec) $t = $prevSec + random_int(1, 20);

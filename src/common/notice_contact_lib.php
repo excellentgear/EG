@@ -663,7 +663,7 @@ function nc_backfill_time(PDO $db, int $eventId, string $date): string
         $last = (string)$st->fetchColumn();
         if ($last !== '') { $t = strtotime($last); if ($t > $base) $base = $t; }
     } catch (Throwable $e) {}
-    $ts  = $base + random_int(5, 180) * 60;
+    $ts  = $base + random_int(5 * 60, 180 * 60);
     $end = strtotime($date . ' 23:55:00');
     return date('Y-m-d H:i:s', min($ts, $end));
 }

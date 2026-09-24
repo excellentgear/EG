@@ -1613,9 +1613,11 @@ function ec_sign_time_series(int $n, string $date, string $after = '', string $n
     if ($base > $dayEnd) $base = $dayEnd;
     $room = $dayEnd - $base;
 
-    // 先抽 n 個 8~54 分鐘的間隔；空間不夠塞滿 8 分鐘門檻時改成平均分配（至少 1 分鐘一格）
+    // 先抽 n 個 8~54 分鐘的間隔（含隨機秒數，不可整分——否則每一格都精準落在 :00 秒，
+    // 使用者實測發現連續好幾格的分鐘尾數剛好相同，一看就知道是自動產生的）；
+    // 空間不夠塞滿 8 分鐘門檻時改成平均分配（至少 1 分鐘一格）
     $gaps = [];
-    for ($i = 0; $i < $n; $i++) $gaps[] = random_int(8, 54) * 60;
+    for ($i = 0; $i < $n; $i++) $gaps[] = random_int(8 * 60, 54 * 60);
     if (array_sum($gaps) > $room || $room < $n * 8 * 60) {
         $step = max(60, (int)floor($room / $n));
         $gaps = array_fill(0, $n, $step);

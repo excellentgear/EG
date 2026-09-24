@@ -2365,7 +2365,7 @@ function ia_auto_sign_on(PDO $db, string $what = 'plan'): bool
 function ia_auto_sign_at(string $baseAt, string $bizDate): string
 {
     $ts = strtotime($baseAt) ?: time();
-    $at = $ts + random_int(5, 180) * 60;
+    $at = $ts + random_int(5 * 60, 180 * 60);
     $endOfDay = strtotime(substr($baseAt, 0, 10) . ' 23:59:00');
     if ($at > $endOfDay) $at = $endOfDay;
     return date('Y-m-d H:i:s', $at);

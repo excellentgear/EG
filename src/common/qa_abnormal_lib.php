@@ -493,7 +493,7 @@ function qab_backfill_time(PDO $db, array $order, string $date): string
         $t = strtotime($at);
         if ($t > $base) $base = $t;
     }
-    $ts = $base + random_int(5, 180) * 60;
+    $ts = $base + random_int(5 * 60, 180 * 60);
     $end = strtotime($date . ' 23:59:00');
     return date('Y-m-d H:i:s', min($ts, $end));
 }

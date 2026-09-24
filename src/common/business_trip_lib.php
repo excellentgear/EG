@@ -296,7 +296,7 @@ function bt_resolve_approver(PDO $db, ?int $deptId, int $tripUserId, bool $autoS
 function bt_auto_sign_time(string $submittedAt): string
 {
     $base = strtotime($submittedAt);
-    $ts   = $base + random_int(5, 30) * 60;
+    $ts   = $base + random_int(5 * 60, 30 * 60);
     if (date('Y-m-d', $ts) !== date('Y-m-d', $base)) {
         $ts = strtotime(date('Y-m-d', $base) . ' 23:59:00');
     }

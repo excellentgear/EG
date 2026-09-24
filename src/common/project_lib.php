@@ -4154,7 +4154,7 @@ function prj_auto_sign_stamp(string $bizDate, string $baseDateTime): array
 {
     $base = strtotime($baseDateTime);
     if ($base === false) $base = strtotime($bizDate . ' 09:00:00');
-    $ts = $base + random_int(5, 30) * 60;
+    $ts = $base + random_int(5 * 60, 30 * 60);
     if (date('Y-m-d', $ts) !== date('Y-m-d', $base)) $ts = strtotime(date('Y-m-d', $base) . ' 23:50:00');
     return [$bizDate, date('Y-m-d H:i:s', $ts)];
 }

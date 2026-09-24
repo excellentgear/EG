@@ -785,7 +785,7 @@ function ss_refresh_cur_ver(PDO $db, int $docId): void
 function ss_auto_time(string $signDate, string $prev = ''): string
 {
     $base = ($prev !== '' && strpos($prev, $signDate) === 0) ? strtotime($prev) : strtotime($signDate . ' 08:30:00');
-    $t    = $base + random_int(5, 30) * 60;
+    $t    = $base + random_int(5 * 60, 30 * 60);
     $end  = strtotime($signDate . ' 23:59:00');
     if ($t > $end) $t = $end;
     return date('Y-m-d H:i:s', $t);

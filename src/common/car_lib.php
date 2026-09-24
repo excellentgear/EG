@@ -674,7 +674,7 @@ function car_bf_time(PDO $pdo, int $carId, array $o, string $slot, string $date)
     if ($upper <= $lower) {                       // 同一天章格已經排滿（時間擠在一起）→ 貼著下界放，不跨日
         return date('Y-m-d H:i:s', min($lower + 60, strtotime($date . ' 23:59:00')));
     }
-    $ts = $lower + random_int(5, 180) * 60;       // 5 分～3 小時隨機錯開（ai-rules/21）
+    $ts = $lower + random_int(5 * 60, 180 * 60);  // 5 分～3 小時隨機錯開（ai-rules/21）
     if ($ts >= $upper) $ts = $lower + (int)(($upper - $lower) / 2);
     if ($ts <= $lower) $ts = $lower + 60;
     return date('Y-m-d H:i:s', min($ts, $upper));
