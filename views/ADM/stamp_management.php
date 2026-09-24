@@ -419,13 +419,12 @@ try {
       <li><b>列印</b>：右上「列印/PDF」印出目前篩選條件下的全部資料（不是只有這一頁）。</li>
     </ol>
 
-    <h5>列印版的「新增／修訂／作廢」是怎麼判定的</h5>
-    <p>三個欄位<strong>不是另外填的，由資料自動推導</strong>（所以不會有「打勾跟實際狀態對不起來」的情形）：</p>
+    <h5>列印版的「新增／作廢」是怎麼判定的</h5>
+    <p>兩個欄位<strong>不是另外填的，由資料自動推導</strong>（所以不會有「打勾跟實際狀態對不起來」的情形）：</p>
     <table class="list">
       <tr><th style="width:80px;">欄位</th><th>什麼情況會打勾</th></tr>
-      <tr><td>作廢</td><td>已停用（有填停用／繳回日）— <b>優先判定</b></td></tr>
-      <tr><td>修訂</td><td>使用中，且這筆登記事後被編輯過（改過種類、核發日期或備註）</td></tr>
-      <tr><td>新增</td><td>使用中，且登記之後沒有再改過</td></tr>
+      <tr><td>作廢</td><td>已停用（有填停用／繳回日）</td></tr>
+      <tr><td>新增</td><td>使用中</td></tr>
     </table>
 
     <h5>列印版要印出正式的表單名稱與編號，必須先綁定 AS 文件</h5>
@@ -930,15 +929,14 @@ $('#btnPrint').on('click',function(){
     // 表頭＝綁定 AS 文件的表單名稱（ai-rules/16 第一之二節：禁寫死；未綁定才退回預設）
     const title  = m.doc_name || '圖章清冊';
     const asTxt  = String(m.doc_no||'').replace(/['\\]/g,'');
-    // 「新增／修訂／作廢」三個打勾欄（紙本 2-DC-05-02 C/D/E 欄）一律由資料推導，不另存旗標欄位（鐵律4）：
-    //   作廢＝已停用（status=revoked）／修訂＝登記內容被編輯過（modified_at 晚於 created_at）／其餘＝新增。
-    //   停用動作本身也會寫 modified_at，所以一定要先判作廢，否則停用的章會同時打到「修訂」。
+    // 「新增／作廢」兩個打勾欄一律由資料推導，不另存旗標欄位（鐵律4）：作廢＝已停用（status=revoked）／其餘＝新增。
+    // 2026-09-24 使用者要求取消「修訂」欄（原本 modified_at 只要被任何編輯動作動過就打勾，
+    // 連「核發日期健檢」批次修正日期都會算進去，跟紙本習慣的「新增/作廢」二分不合），已移除該欄與其判定。
     const tick=v=>v?'V':'';
     function rowHtml(x,i){
       // 備註：系統自動寫入的「批次建立」屬內部作業痕跡，正式清冊（外部稽核用）一律不印；人工填寫的備註照印
       const noteRaw=(String(x.note||'').trim()===SYS_NOTE_BATCH)?'':x.note;
       const isVoid = x.status==='revoked';
-      const isEdit = !isVoid && !!x.modified_at && String(x.modified_at)>String(x.created_at||'');
       // holder_kind==='user'＝這筆登記沒有綁定任何部門（圖章本身也沒印部門），保管部門一律印 NA、備註加註「個人保管」，
       // 不要退回該人主要部門顯示——退回單一部門看起來像是「這章歸屬那個部門」，但事實上這筆登記跟部門完全無關（2026-09-24 使用者更正）。
       const isNoDept = x.holder_kind==='user';
@@ -952,7 +950,7 @@ $('#btnPrint').on('click',function(){
       <td>${i+1}</td>
       <td>${esc(dot(x.issue_date))}</td>
       <td>${esc(x.revoke_date?dot(x.revoke_date):'—')}</td>
-      <td class="tk">${tick(!isVoid&&!isEdit)}</td><td class="tk">${tick(isEdit)}</td><td class="tk">${tick(isVoid)}</td>
+      <td class="tk">${tick(!isVoid)}</td><td class="tk">${tick(isVoid)}</td>
       <td class="tl">${x.type_name?esc(x.type_name):'（未分類）'}</td>
       <td class="tl">${x.tpl_name?esc(x.tpl_name):'—'}</td>
       <td class="pst">${renderRegStamp(x)}</td>
@@ -1004,11 +1002,11 @@ $('#btnPrint').on('click',function(){
     `;
     const colg=`<colgroup>
         <col style="width:34px"><col style="width:74px"><col style="width:74px">
-        <col style="width:38px"><col style="width:38px"><col style="width:38px">
+        <col style="width:38px"><col style="width:38px">
         <col style="width:9%"><col style="width:12%"><col style="width:96px">
         <col style="width:10%"><col style="width:9%"><col>
       </colgroup>`;
-    const thead=`<thead><tr><th>NO</th><th>核發日期</th><th>停用／繳回日</th><th>新增</th><th>修訂</th><th>作廢</th>
+    const thead=`<thead><tr><th>NO</th><th>核發日期</th><th>停用／<br>繳回日</th><th>新增</th><th>作廢</th>
       <th>類別</th><th>印章名稱</th><th>印章樣</th><th>保管部門</th><th>保管人</th><th>備註</th></tr></thead>`;
     // 每頁都重複大標題與表頭（清單型多頁文件，ai-rules/16 第四之五節）；統計那一行只印在第 1 頁
     const body=chunks.map(function(ck,pi){
@@ -1017,7 +1015,7 @@ $('#btnPrint').on('click',function(){
         <div class="p-title">${esc(title)}</div>
         <div class="p-sub">使用中 ${r.summary.active} 顆／已停用 ${r.summary.revoked} 顆，共 ${r.total} 筆　列印日期：${dot(today())}</div>
         <table>${colg}${thead}<tbody>${ck.rows.map(function(x,i){return rowHtml(x,ck.base+i);}).join('')
-          || '<tr><td colspan="12" style="padding:18px;color:#8a7455;">無符合條件的資料</td></tr>'}</tbody></table>
+          || '<tr><td colspan="11" style="padding:18px;color:#8a7455;">無符合條件的資料</td></tr>'}</tbody></table>
         <div class="pg-foot"><span>${totalPages>1?('第 '+(pi+1)+' 頁／共 '+totalPages+' 頁'):''}</span><span>${esc(asTxt)}</span></div>
       </div>`;
     }).join('');
