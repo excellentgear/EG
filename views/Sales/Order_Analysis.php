@@ -167,7 +167,7 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 /* 可點的料號（開圖面檢視） */
 .pno-link { color:#8a5a2b; border-bottom:1px dotted #8a5a2b; cursor:pointer; }
 .pno-link:hover { color:var(--coral); border-bottom-color:var(--coral); }
-/* 右下角回首頁 */
+/* 右下角回訂單追蹤 */
 .go-home { position:fixed; right:18px; bottom:18px; z-index:9000; width:52px; height:52px; border-radius:50%;
            background:linear-gradient(135deg,#8a5a2b,#F0A24B); color:#fff; border:none; box-shadow:0 4px 14px rgba(0,0,0,.25);
            display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer;
@@ -440,8 +440,8 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 </div><!-- /right_col -->
 </div></div>
 
-<!-- 右下角回首頁（使用者要求；列印時隱藏） -->
-<a href="../admin/dashboard.php" class="go-home" title="回首頁"><i class="fa fa-home"></i>首頁</a>
+<!-- 右下角回訂單追蹤（使用者要求；列印時隱藏） -->
+<a href="NewOrder_Track.php" class="go-home" title="回訂單追蹤"><i class="fa fa-arrow-left"></i>訂單</a>
 
 <!-- ── 使用說明（鐵律7）──────────────────────────────── -->
 <div class="m-mask" id="helpUseMask">
