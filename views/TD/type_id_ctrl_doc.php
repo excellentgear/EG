@@ -493,7 +493,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         <h4>人工確認（審查是否有文件不適用）</h4>
         <ul>
             <li>自動列出的項目預設「納入」（打勾）；若某份文件其實不該出現在此清單，把「納入」勾選框取消即可——會記為<b>已排除</b>，之後同步不會再自動加回來。</li>
-            <li>逐項確認後按「確認清單」：記錄確認人與確認時間，狀態變成「已確認」；製表人／簽章日期即取這次確認人與清單上最新的文件日期。</li>
+            <li>逐項確認後按「確認清單」：記錄確認人與確認時間，狀態變成「已確認」。<b>列印的「製表」圖章是這份文件的建立人</b>（2026-09-24 使用者更正，不是確認人）；簽章日期則取清單上最新的文件日期，跟誰按確認、何時按確認無關。</li>
             <li>之後只要有新的外來文件同步進來，「已確認」會自動變回「需重新確認」，提醒重新逐項審視。清單上方「狀態」篩選可分別看「待確認／需重新確認／已確認」。</li>
             <li><b>已確認的文件按了一般「儲存」會取消確認狀態</b>（不是按「重新確認」，是編輯畫面裡的儲存鈕）：已確認代表有人審過目前內容，既然又動手改存檔，那份審核就不成立了——系統會先把狀態改回「待確認」再存檔，並跳出提示告知，避免內容明明改過、畫面卻一直掛著「已確認」的樣子。</li>
             <li><b>批次確認清單</b>（僅型態文件管理員／管理員）：清單左側勾選要確認的多筆文件（表頭全選框可一次勾全部），按工具列「批次確認清單」；確認者一律自動記為目前登入者，不提供指定他人。簽章日期不受影響——一律是各文件自己項目列上最新的文件日期，跟誰按確認、何時按確認無關。</li>
@@ -1224,11 +1224,12 @@ function buildTypeIdCtrlPrintWindow(res, onDone){
         body += '<tr><td>'+(i+1)+'</td><td class="tl">'+esc(it.item_name)+'</td><td>'+fmtDate(it.effective_date)+'</td><td>'+(typeLabel[it.item_type]||'')+'</td><td>'+esc(it.process_tag||'共用')+'</td><td class="tl">'+esc(it.print_doc_no||'')+'</td></tr>';
     });
     body += '</tbody></table>';
-    var makerName = d.confirmed_by_name || '';
+    // 製表＝建立人（2026-09-24 使用者更正：原本印確認人，「製表要是建立人」）
+    var makerName = d.created_by_name || '';
     var makerDate = res.sign_date_latest ? fmtDate(res.sign_date_latest) : '';
     // 製表人圖章：模板由管理員在「列印設定」指定；未指定時退回系統預設回墨印並套 91px（ai-rules/18 鐵則6）
     var schema = (res.stamp_tpl && res.stamp_tpl.schema) ? res.stamp_tpl.schema : null;
-    var makerStamp = makerName ? EGStamp.stamp(makerName, makerDate, false, schema) : '<span style="color:#999;font-size:12px;">（尚未確認）</span>';
+    var makerStamp = makerName ? EGStamp.stamp(makerName, makerDate, false, schema) : '<span style="color:#999;font-size:12px;">（尚未建立）</span>';
     body += '<div style="margin-top:16px;display:flex;justify-content:flex-end;align-items:flex-end;gap:6px;">'
           + '<span style="font-size:12px;color:#777;margin-bottom:8px;">製表：</span>' + makerStamp + '</div>';
     var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
