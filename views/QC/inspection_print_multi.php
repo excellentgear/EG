@@ -356,8 +356,8 @@ body{ background:#F6F1EA; }
             </div>
             <div class="form-group" style="margin-right:18px;">
                 <label>紙張</label>
-                <label class="radio-inline"><input type="radio" name="paper" value="A4"> A4</label>
-                <label class="radio-inline"><input type="radio" name="paper" value="A3" checked> A3（建議，圖面較不會被縮太小）</label>
+                <label class="radio-inline"><input type="radio" name="paper" value="A4" checked> A4</label>
+                <label class="radio-inline"><input type="radio" name="paper" value="A3"> A3（圖面較不會被縮太小）</label>
             </div>
             <div class="form-group">
                 <label>方向</label>
@@ -508,11 +508,11 @@ function buildProcessSummaryRow(p, idx){
     if(p.is_packing && p.packing_open) judge += '<br><span class="pm-ng" style="font-size:9px;">（包裝尚未結案）</span>';
     var nameTxt = isShipRow(p) ? ('<b>'+esc(p.process_name)+'</b>') : esc(p.process_name);
     if(p.is_packing) nameTxt = esc(p.process_name)+'<span class="pm-pack-tag">包裝</span>';
+    // 使用者 2026-09-24 要求：封面總覽表不顯示檢驗人（明細頁的每批每輪仍會各自標示）
     return '<tr'+(isShipRow(p)?' class="pm-ship-row"':'')+'><td>'+(idx+1)+'</td><td class="tl">'+nameTxt+'</td>'
         + '<td>'+esc(p.proc_qty||'')+'</td><td>'+esc(p.maker_id||'')+'</td>'
         + '<td class="tl">'+batchTrailHtml(p)+'</td>'
-        + '<td>'+judge+'</td>'
-        + '<td>'+(last?esc(last.creator||''):'')+'</td></tr>';
+        + '<td>'+judge+'</td></tr>';
 }
 function buildProcessFullBlock(p, idx){
     var head='<div class="pm-proc-head">['+(idx+1)+'] '+esc(p.process_name)
@@ -613,7 +613,7 @@ function doPrintImpl(mode, paper, orient){
 
     // ===== 封面頁：A4 直式，上半是圖面（可由使用者從候選圖面挑選）、下半是本 BOM 全部製程的檢驗狀態總覽 =====
     // 無檢驗紀錄的製程不會印出明細，但一定要在這裡列出來，讓看的人知道「這個製程還沒驗」不是系統漏印。
-    var sumTable = '<table class="pm-sumtable"><thead><tr><th>#</th><th>製程</th><th>數量</th><th>廠商</th><th>批次/重驗歷程</th><th>檢驗狀態</th><th>檢驗人</th></tr></thead><tbody>';
+    var sumTable = '<table class="pm-sumtable"><thead><tr><th>#</th><th>製程</th><th>數量</th><th>廠商</th><th>批次/重驗歷程</th><th>檢驗狀態</th></tr></thead><tbody>';
     DATA.processes.forEach(function(p,idx){ sumTable += buildProcessSummaryRow(p, idx); });
     sumTable += '</tbody></table>';
     // 主管確認圖章（使用者 2026-09-24 要求，右下角）：沿用「主管自動核可設定」，沒開啟或沒指定人時不印，
@@ -652,7 +652,8 @@ function doPrintImpl(mode, paper, orient){
         + '.pm-no-drawing{color:#999;border:1px dashed #ccc;padding:20px;text-align:center;}'
         + '.pm-cover-bottom{flex:1 1 auto;}'
         + '.pm-sign{margin-top:6mm;text-align:right;}'
-        + '.pm-sign svg.car-stamp{width:91px !important;height:91px !important;}'   // 圖章一律不縮小（ai-rules/18）
+        // 圖章列印尺寸直接抄 ai-rules/18 第6條定案寫法，不自己重新推導、不加不必要的 !important
+        + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
         + '.pm-sign-lbl{font-size:10px;color:#555;margin-top:2px;}'
         + '.pm-ship-row td{background:#FFF3E2;}'
         + 'table.pm-sumtable{width:100%;border-collapse:collapse;margin-top:6px;}'
