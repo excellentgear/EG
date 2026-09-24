@@ -527,8 +527,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 'approved_id' => (int)($f['approved_by'] ?: 0),
                 'approved_name' => $nm($f['approved_by']),
                 'approved_date' => $approvedDate,
-                'inspector_people' => eg_people_list_asof($pdo, [], $checkDate),
-                'approver_people' => eg_people_list_asof($pdo, [], $approvedDate),
+                // 候選名單限「品管部門」：檢驗人員＝品管部門所有人員（含主管）、
+                // 審核人員＝品管部門主管（與「主管審核自動核可設定」的核可主管同一份名單）
+                'inspector_people' => qc_backfill_people($pdo, $checkDate, false),
+                'approver_people' => qc_backfill_people($pdo, $approvedDate, true),
             ], JSON_UNESCAPED_UNICODE);
             exit;
         }
@@ -537,7 +539,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             if (!$canBackfill) throw new Exception('您沒有「補資料」權限');
             $date = trim($_POST['date'] ?? '');
             if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) throw new Exception('日期格式錯誤');
-            echo json_encode(['success' => true, 'people' => eg_people_list_asof($pdo, [], $date)], JSON_UNESCAPED_UNICODE);
+            $mgrOnly = ($_POST['mgr'] ?? '0') === '1';
+            echo json_encode(['success' => true, 'people' => qc_backfill_people($pdo, $date, $mgrOnly)], JSON_UNESCAPED_UNICODE);
             exit;
         }
         if ($act === 'backfill_save') {
@@ -554,7 +557,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $checkDate)) throw new Exception('檢驗日期格式錯誤');
             if ($checkDate > $today) throw new Exception('檢驗日期不可以是未來日期');
             if (!$inspectorId) throw new Exception('請選擇檢驗人員');
-            $inspectorIds = array_column(eg_people_list_asof($pdo, [], $checkDate), 'id');
+            $inspectorIds = array_column(qc_backfill_people($pdo, $checkDate, false), 'id');
             if (!in_array($inspectorId, $inspectorIds, false)) {
                 throw new Exception('檢驗人員在檢驗日期當天不在職，請重新選擇');
             }
@@ -563,7 +566,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 if ($approvedDate > $today) throw new Exception('主管審核日期不可以是未來日期');
                 if ($approvedDate < $checkDate) throw new Exception('主管審核日期不可以早於檢驗日期');
                 if (!$approverId) throw new Exception('請選擇主管審核人員');
-                if (!in_array($approverId, array_column(eg_people_list_asof($pdo, [], $approvedDate), 'id'), false)) {
+                if (!in_array($approverId, array_column(qc_backfill_people($pdo, $approvedDate, true), 'id'), false)) {
                     throw new Exception('審核人員在審核日期當天不在職，請重新選擇');
                 }
             }
@@ -1475,7 +1478,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         <span class="stat warn" id="dk-warn" style="display:none;"></span>
         <span class="draft-note" id="draft-status"></span>
         <button class="btn btn-default btn-xs" id="btn-save-draft" title="立刻存一次草稿，不必等自動存檔的間隔"><i class="fa fa-clock-o"></i> 儲存草稿</button>
-        <button class="btn btn-default btn-xs" id="btn-backfill" style="display:none;" title="設定檢驗日期／檢驗人員／主管審核，補歷史紙本用；新建的單也可以先設定，存檔時一併套用"><i class="fa fa-calendar"></i> 補資料設定</button>
+        <button class="btn btn-warm-o btn-sm" id="btn-backfill" style="display:none;" title="設定檢驗日期／檢驗人員／主管審核，補歷史紙本用；新建的單也可以先設定，存檔時一併套用"><i class="fa fa-calendar"></i> 補資料設定</button>
         <span style="flex:1 1 auto;"></span>
         <button class="btn btn-default btn-sm" id="btn-dock-extra"><i class="fa fa-sliders"></i> 數量 / 處置備註</button>
         <button class="btn btn-default btn-sm" id="btn-cancel"><i class="fa fa-times"></i> 取消</button>
@@ -1794,7 +1797,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <li><b>抽樣規則管理</b>（主管固定可用）、<b>主管審核</b>相關動作另有各自的功能碼。</li>
                 <li><b>補資料</b>：管理員專用，底部工具列有<b>「補資料設定」</b>按鈕，可設定<b>檢驗日期／檢驗人員／主管審核人員與日期</b>，用於補登舊的紙本檢驗紀錄。
                     <b>新建的單也能先設定</b>：還沒存檔前按這顆鈕，設定會先暫存（畫面上會出現黃色提示列），等按「儲存檢驗結果」時才一起寫入，不必先存檔一次再打開修改——這是刻意的設計，避免補資料要做兩次事。
-                    <b>已存檔的紀錄</b>則是「修改模式」下按同一顆鈕，選好之後立刻存檔生效。設定過之後列印簽章會改用這裡設的人員與日期，不影響其他沒補過資料的紀錄。</li>
+                    <b>已存檔的紀錄</b>則是「修改模式」下按同一顆鈕，選好之後立刻存檔生效。設定過之後列印簽章會改用這裡設的人員與日期，不影響其他沒補過資料的紀錄。
+                    <b>人員候選限「品管部門」</b>：檢驗人員＝品管部門（含子部門）所有人員（含主管），審核人員＝品管部門主管，與「主管審核自動核可設定」的核可主管同一份名單；品管部門是哪一個部門取自「系統管理 → 組織角色設定」。</li>
                 <li>角色設定在「設定 → 權限設定（角色）」，或使用者權限設定頁。</li>
             </ul>
             <div class="tip">找不到某個按鈕多半是<b>權限沒開</b>——設定選單裡的項目會依角色自動隱藏，請洽管理員。</div>
@@ -1872,6 +1876,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             <div class="form-group">
                 <label>檢驗人員</label><br>
                 <select class="form-control input-sm" id="bf-inspector" data-eg-filter="輸入姓名篩選…" style="max-width:280px;"></select>
+                <p class="muted-help" style="margin-top:4px;">名單＝<b>品管部門（含子部門）底下所有人員</b>（含主管）；
+                   品管部門是哪一個部門取自 <a href="../admin/org_role_setting.php" target="_blank">系統管理 → 組織角色設定</a>。</p>
             </div>
             <hr>
             <div class="checkbox" style="margin-top:0;">
@@ -1885,6 +1891,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <div class="form-group">
                     <label>審核人員</label><br>
                     <select class="form-control input-sm" id="bf-approver" data-eg-filter="輸入姓名篩選…" style="max-width:280px;"></select>
+                    <p class="muted-help" style="margin-top:4px;">名單＝<b>品管部門（含子部門）底下所有主管</b>，與「主管審核自動核可設定」的核可主管同一份。</p>
                 </div>
             </div>
         </div>
@@ -2816,8 +2823,9 @@ $(function(){
     }
 
     // =====================================================================
-    // 量具（實例）：值＝Tool_id，顯示「類型 / 編號(規格)」，可追溯到實際那一支
-    // 規格來自校驗模組「量具料號對應」綁的採購料號（purchase_spec），沒綁就只顯示編號
+    // 量具（實例）：值＝Tool_id，顯示名稱一律用 label（後端 qc_tool_disp_label() 組出，
+    // ai-rules/25 全站唯一格式），與 sop_sip.php「量具」挑選器同一套說法——
+    // 同一支量具不可以在這一頁跟那一頁叫不同名字。
     // =====================================================================
     function loadToolInstances(){
         $.post(API, { action:'get_tool_manage_data' }, function(res){
@@ -2825,7 +2833,8 @@ $(function(){
             var cats={}; (res.categories||[]).forEach(function(c){ cats[c.QC_Tool_List_id]=c.QC_Tool; });
             TOOL_INSTANCES = (res.tools||[]).map(function(t){
                 var sp=((t.spec_brand||'')+' '+(t.spec_text||'')).replace(/\s+/g,' ').trim();
-                return { id:String(t.Tool_id), no:t.Tool_No, cat:cats[t.QC_Tool_List_id]||'', spec:sp };
+                return { id:String(t.Tool_id), no:t.Tool_No, cat:cats[t.QC_Tool_List_id]||'', spec:sp,
+                         label:t.disp_label||t.Tool_No };
             });
             render();
         }, 'json');
@@ -2849,16 +2858,16 @@ $(function(){
         if(allIn) return no;
         return no+'('+t.spec+')';
     }
-    // 本單使用量具的一行顯示字串（列印／CSV／歷程明細共用）：「類型 編號(規格)、類型 編號」
+    // 本單使用量具的一行顯示字串（列印／CSV／歷程明細共用），逐支以「、」串接顯示名稱（label）
     function formToolsLabel(ids){
         return (ids||MODEL.tools||[]).map(function(id){
             var t=toolInstById(id);
-            return t ? ((t.cat?t.cat+' ':'')+toolNoSpec(t)) : '';
+            return t ? (t.label||toolNoSpec(t)) : '';
         }).filter(function(s){ return s!==''; }).join('、');
     }
     function toolLabelById(id){
         if(!id) return '';
-        for(var i=0;i<TOOL_INSTANCES.length;i++){ if(TOOL_INSTANCES[i].id===String(id)) return (TOOL_INSTANCES[i].cat?TOOL_INSTANCES[i].cat+' / ':'')+toolNoSpec(TOOL_INSTANCES[i]); }
+        for(var i=0;i<TOOL_INSTANCES.length;i++){ if(TOOL_INSTANCES[i].id===String(id)) return TOOL_INSTANCES[i].label||toolNoSpec(TOOL_INSTANCES[i]); }
         return '';
     }
     function refreshToolSelects(){ render(); }   // 相容：量具設定存檔後重繪
@@ -3509,12 +3518,13 @@ $(function(){
         }).join('') : '<div class="text-muted">尚未建立任何量具，請至 設定 → 量具設定 新增。</div>');
     }
     // ② 編號：點一下加入、再點一下取消（選到的按鈕會變色）
+    // 大字＝編號、小字＝顯示名稱（label，ai-rules/25），與 sop_sip.php「量具」挑選器同一套格式
     function tpRenderNos(){
         var list=TOOL_INSTANCES.filter(function(t){ return (t.cat||'（未分類）')===tpCat; });
         $('#tp-nos').html(list.map(function(t){
             var on=!!tpSel[String(t.id)];
             return '<button type="button" class="tp-no'+(on?' on':'')+'" data-id="'+esc(String(t.id))+'">'+
-                   esc(toolNoSpec(t))+'<small>'+(on?'✔ 已選（再點一次取消）':esc(t.cat||''))+'</small></button>';
+                   esc(t.no)+'<small>'+(on?'✔ 已選（再點一次取消）':esc(t.label||t.cat||''))+'</small></button>';
         }).join('') || '<div class="text-muted">此類型底下還沒有量具編號</div>');
     }
     // 已選清單：兩個步驟都看得到，選到哪裡了一目瞭然
@@ -4652,9 +4662,11 @@ $(function(){
         var d=new Date(), p=function(n){return('0'+n).slice(-2);};
         return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
     }
-    function bfLoadPeopleFor($sel, date, curId){
+    // mgr=1（審核人員）只列品管部門主管，與「主管審核自動核可設定」的核可主管同一份名單；
+    // 檢驗人員（mgr 省略）列品管部門所有人員（含主管）——使用者 2026-09-24 要求。
+    function bfLoadPeopleFor($sel, date, curId, mgr){
         if(!date) return;
-        $.post(V2API, { v2action:'backfill_people', date:date }, function(res){
+        $.post(V2API, { v2action:'backfill_people', date:date, mgr:(mgr?'1':'0') }, function(res){
             if(!res.success) return;
             bfFillPeople($sel, res.people, curId);
         }, 'json');
@@ -4682,15 +4694,15 @@ $(function(){
             $('#bf-approved').prop('checked', !!stage.approved);
             $('#bf-approved-box').toggle(!!stage.approved);
             $('#bf-approved-date').val(apprDate);
-            bfLoadPeopleFor($('#bf-inspector'), checkDate, stage.inspector_id || state.currentUserId);
-            bfLoadPeopleFor($('#bf-approver'), apprDate, stage.approver_id || '');
+            bfLoadPeopleFor($('#bf-inspector'), checkDate, stage.inspector_id || state.currentUserId, false);
+            bfLoadPeopleFor($('#bf-approver'), apprDate, stage.approver_id || '', true);
             $('#backfillModal').modal('show');
         }
     });
     $('#bf-approved').on('change', function(){ $('#bf-approved-box').toggle(this.checked); });
     // 換日期即時重取「當時在職」的人員候選（不必整包重新載入）
-    $('#bf-check-date').on('change', function(){ bfLoadPeopleFor($('#bf-inspector'), $(this).val(), $('#bf-inspector').val()); });
-    $('#bf-approved-date').on('change', function(){ bfLoadPeopleFor($('#bf-approver'), $(this).val(), $('#bf-approver').val()); });
+    $('#bf-check-date').on('change', function(){ bfLoadPeopleFor($('#bf-inspector'), $(this).val(), $('#bf-inspector').val(), false); });
+    $('#bf-approved-date').on('change', function(){ bfLoadPeopleFor($('#bf-approver'), $(this).val(), $('#bf-approver').val(), true); });
     function bfStageLabel(stage){
         var t=esc(stage.check_date)+'／'+esc(stage.inspector_name||'');
         if(stage.approved) t+='　主管審核：'+esc(stage.approved_date)+'／'+esc(stage.approver_name||'');

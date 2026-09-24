@@ -14,6 +14,7 @@ include_once '../../src/common/_config.php';
 include_once '../../src/common/DBConnection.php';
 include_once '../../src/common/rbac.php'; // #1 fail-closed：共用 RBAC bootstrap 判定
 include_once '../../src/common/qc_inspection_lib.php'; // #3/#10/#12：後端重算/多量具/共用寫入
+include_once '../../src/common/qc_tool_display_lib.php'; // 量具顯示名稱統一格式（ai-rules/25，唯一實作）
 
 // 權限不足專用例外：讓 catch 統一回 HTTP 403（前端可據此禁用/提示）
 if (!class_exists('QcPermException')) { class QcPermException extends Exception {} }
@@ -867,6 +868,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                       FROM qc_tool t"
                      . ($hasSpecJoin ? " LEFT JOIN purchase_spec ps ON ps.spec_id=t.purchase_spec_id" : "") . "
                       ORDER BY t.Tool_No ASC")->fetchAll(PDO::FETCH_ASSOC);
+            // 量具顯示名稱（label）統一走 qc_tool_disp_label()（ai-rules/25）：
+            // 各頁挑量具（本頁「選擇本單使用的量具」／sop_sip.php「量具」）都要顯示同一種格式，
+            // 不可以各自拼字串（同一支量具在不同頁面叫不同名字，現場會以為是兩支量具）。
+            $catNameById = [];
+            foreach ($categories as $c) $catNameById[(string)$c['QC_Tool_List_id']] = (string)$c['QC_Tool'];
+            foreach ($tools as &$t) {
+                $t['QC_Tool'] = $catNameById[(string)($t['QC_Tool_List_id'] ?? '')] ?? '';
+                $t['disp_label'] = qc_tool_disp_label($pdo, $t);
+            }
+            unset($t);
             echo json_encode(['success'=>true, 'categories'=>$categories, 'tools'=>$tools], JSON_UNESCAPED_UNICODE);
             exit;
         }

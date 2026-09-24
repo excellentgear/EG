@@ -8,6 +8,8 @@
 // 抽成獨立檔以便單元測試與重用；以 function_exists 防重複定義。
 // =============================================================================
 
+require_once __DIR__ . '/qc_tool_display_lib.php'; // 量具顯示名稱統一格式（ai-rules/25，qc_form_tools_rows() 要用）
+
 if (!function_exists('qc_suggest_sample_qty')) {
     /**
      * 依抽樣規則（qc_sampling_rule，設定入口＝線上檢驗的「抽樣規則設定」）算出建議抽驗數。
@@ -52,8 +54,7 @@ if (!function_exists('qc_backfill_extract')) {
         if ($checkDate > $today) throw new Exception('補資料：檢驗日期不可以是未來日期');
         $inspectorId = (int)($_POST['bf_inspector_id'] ?? 0);
         if (!$inspectorId) throw new Exception('補資料：請選擇檢驗人員');
-        require_once __DIR__ . '/people_lib.php';
-        $ids = array_column(eg_people_list_asof($pdo, [], $checkDate), 'id');
+        $ids = array_column(qc_backfill_people($pdo, $checkDate, false), 'id');
         if (!in_array($inspectorId, $ids, false)) throw new Exception('補資料：檢驗人員在檢驗日期當天不在職，請重新選擇');
 
         $approvedBy = null; $approvedAt = null;
@@ -64,11 +65,46 @@ if (!function_exists('qc_backfill_extract')) {
             if ($approvedAt < $checkDate) throw new Exception('補資料：主管審核日期不可以早於檢驗日期');
             $approverId = (int)($_POST['bf_approver_id'] ?? 0);
             if (!$approverId) throw new Exception('補資料：請選擇主管審核人員');
-            $aids = array_column(eg_people_list_asof($pdo, [], $approvedAt), 'id');
+            $aids = array_column(qc_backfill_people($pdo, $approvedAt, true), 'id');
             if (!in_array($approverId, $aids, false)) throw new Exception('補資料：審核人員在審核日期當天不在職，請重新選擇');
             $approvedBy = $approverId;
         }
         return [$checkDate, $inspectorId, $approvedBy, $approvedAt];
+    }
+}
+
+if (!function_exists('qc_backfill_people')) {
+    /**
+     * 補資料「檢驗人員」／「審核人員」的候選名單：一律限「品管部門（含子部門）」，
+     * 不是全公司——原本沒有部門篩選，長清單裡混進了不相干部門的所有在職人員
+     * （使用者 2026-09-24 回報：畫面上的名單應該跟「主管審核自動核可設定」的核可主管
+     * 一樣是品管部門的人）。品管部門是哪一個部門一律取自 org_role_setting 的綁定
+     * （qc_dept，禁止寫死部門 id），與核可主管同一份設定來源。
+     * $mgrOnly=true 時只留品管部門底下的主管（職稱在 position_level 有登記職級者）——
+     * 「審核人員」代表主管審核，候選池比照「主管審核自動核可設定」的核可主管清單。
+     * 品管部門尚未設定時退回未過濾的全公司名單，不擋流程（相容尚未設定的環境）。
+     */
+    function qc_backfill_people(PDO $pdo, string $date, bool $mgrOnly = false): array {
+        require_once __DIR__ . '/org_role_lib.php';
+        require_once __DIR__ . '/people_lib.php';
+        $deptIds = eg_org_dept_ids($pdo, 'qc_dept');
+        $rows = eg_people_list_asof($pdo, $deptIds ? ['dept_ids' => $deptIds] : [], $date);
+        if ($mgrOnly && $deptIds) {
+            static $mgrPos = null;
+            if ($mgrPos === null) {
+                try {
+                    $mgrPos = array_map('intval', array_column(
+                        $pdo->query("SELECT DISTINCT position_id FROM position_level WHERE level IS NOT NULL")->fetchAll(PDO::FETCH_ASSOC),
+                        'position_id'));
+                } catch (Throwable $e) { $mgrPos = []; }
+            }
+            if ($mgrPos) {
+                $rows = array_values(array_filter($rows, function ($r) use ($mgrPos) {
+                    return in_array((int)($r['position_id'] ?? 0), $mgrPos, true);
+                }));
+            }
+        }
+        return $rows;
     }
 }
 
@@ -276,8 +312,10 @@ if (!function_exists('qc_form_tools_save')) {
 }
 
 if (!function_exists('qc_form_tools_rows')) {
-    // 取某張檢驗單的量具清單（含顯示用的種類／編號／規格）。
-    // 規格＝校驗模組「量具料號對應」綁的採購料號，沒綁就只有編號（同 get_tool_manage_data 口徑）。
+    // 取某張檢驗單的量具清單（含顯示用的種類／編號／規格／統一格式的顯示名稱）。
+    // label 一律走 qc_tool_disp_label()（ai-rules/25，唯一實作）——同一支量具在這裡跟
+    // sop_sip.php／tool_calibration.php 顯示成同一種格式，不要各自拼字串。
+    // 舊欄位 cat／spec 保留給既有呼叫端相容（未改用 label 的地方行為不變）。
     function qc_form_tools_rows($pdo, $qc_form_id) {
         $qc_form_id = (int)$qc_form_id;
         if ($qc_form_id <= 0) return [];
@@ -291,7 +329,9 @@ if (!function_exists('qc_form_tools_rows')) {
         }
         $sel  = $hasSpec ? (", ps.spec_text AS spec_text" . ($hasBrand ? ", ps.brand AS spec_brand" : "")) : "";
         $join = $hasSpec ? " LEFT JOIN purchase_spec ps ON ps.spec_id = t.purchase_spec_id" : "";
-        $st = $pdo->prepare("SELECT t.Tool_id, t.Tool_No, tl.QC_Tool AS cat_name$sel
+        // t.* 一併帶出 machine／spec_desc／manufacturer／position／note／state／disabled_date，
+        // qc_tool_disp_label() 才組得出跟其他頁面一致的顯示名稱。
+        $st = $pdo->prepare("SELECT t.*, tl.QC_Tool AS cat_name$sel
                              FROM qc_form_tool ft
                              JOIN qc_tool t ON t.Tool_id = ft.tool_id
                              LEFT JOIN qc_tool_list tl ON tl.QC_Tool_List_id = t.QC_Tool_List_id
@@ -301,7 +341,7 @@ if (!function_exists('qc_form_tools_rows')) {
         if (!$st->rowCount()) {
             // 退路：舊頁面（inspection_result_entry）自己寫 qc_measurement、沒有經過本庫，
             // 這種單子在 qc_form_tool 沒有資料 → 即時由讀值上的量具推回來，畫面才不會空白。
-            $st = $pdo->prepare("SELECT DISTINCT t.Tool_id, t.Tool_No, tl.QC_Tool AS cat_name$sel
+            $st = $pdo->prepare("SELECT DISTINCT t.*, tl.QC_Tool AS cat_name$sel
                                  FROM qc_measurement m
                                  JOIN qc_tool t ON t.Tool_id = m.tool_id
                                  LEFT JOIN qc_tool_list tl ON tl.QC_Tool_List_id = t.QC_Tool_List_id
@@ -312,18 +352,24 @@ if (!function_exists('qc_form_tools_rows')) {
         $out = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $spec = trim(preg_replace('/\s+/', ' ', ($r['spec_brand'] ?? '') . ' ' . ($r['spec_text'] ?? '')));
+            $r['QC_Tool'] = (string)($r['cat_name'] ?? '');
             $out[] = ['id' => (int)$r['Tool_id'], 'no' => (string)$r['Tool_No'],
-                      'cat' => (string)($r['cat_name'] ?? ''), 'spec' => $spec];
+                      'cat' => (string)($r['cat_name'] ?? ''), 'spec' => $spec,
+                      'label' => qc_tool_disp_label($pdo, $r)];
         }
         return $out;
     }
 }
 
 if (!function_exists('qc_form_tools_label')) {
-    // 顯示用一行字：「類型 編號(規格)、類型 編號」——列印與清單共用同一種寫法
+    // 顯示用一行字：逐支量具以「、」串接——列印與清單共用同一種寫法。
+    // 每支量具的顯示文字優先用 qc_form_tools_rows() 帶回的 label（qc_tool_disp_label()，ai-rules/25）；
+    // 沒有 label（呼叫端自己組的舊格式 rows）才退回「類型 編號(規格)」這套舊寫法。
     function qc_form_tools_label($rows) {
         $parts = [];
         foreach (($rows ?: []) as $t) {
+            $label = trim((string)($t['label'] ?? ''));
+            if ($label !== '') { $parts[] = $label; continue; }
             $no = trim((string)($t['no'] ?? ''));
             $spec = trim((string)($t['spec'] ?? ''));
             // 舊資料的規格常被人工寫進編號括號裡（例 A-002-Q (25-50mm)）→ 不要再重複附加。
