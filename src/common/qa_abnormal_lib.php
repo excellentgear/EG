@@ -262,13 +262,20 @@ function qab_ensure_schema(PDO $db): void
     foreach ($fneed as $c => $sql) if (!in_array($c, $fcols, true)) $fadd[] = $sql;
     if ($fadd) $db->exec("ALTER TABLE qa_abnormal_order_flow " . implode(', ', $fadd));
 
-    // 報工NG自動開單：一筆報工最多對到一張異常單，靠這欄防重複建立
+    // 報工NG自動開單：一筆報工最多對到一張異常單（累積開單時同一張單會蓋到好幾筆），靠這欄防止被重複歸入
     try {
         $pcols = $db->query("SHOW COLUMNS FROM pm_process_daily_report")->fetchAll(PDO::FETCH_COLUMN);
         if (!in_array('abnormal_order_id', $pcols, true)) {
-            $db->exec("ALTER TABLE pm_process_daily_report ADD COLUMN abnormal_order_id INT NULL COMMENT '報工NG自動/補開的品質異常單 qa_abnormal_order.id；NULL=尚未開單'");
+            $db->exec("ALTER TABLE pm_process_daily_report ADD COLUMN abnormal_order_id INT NULL COMMENT '報工NG自動/補開歸入的品質異常單 qa_abnormal_order.id；NULL=尚未歸入任何異常單'");
         }
     } catch (Throwable $e) {}
+
+    // 持續性生產每兩週提醒一次是否要先開累積異常單，記「上一次提醒是哪一天」，避免每天報工都跳提醒
+    $db->exec("CREATE TABLE IF NOT EXISTS qab_pm_suggest_state (
+        bom_ing_fid INT NOT NULL PRIMARY KEY,
+        last_suggested_at DATE NULL,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='報工NG累積兩週提醒：每個bom_ing_fid最後一次跳提醒的日期'");
 
     qab_seed_defaults($db);
 }
@@ -791,49 +798,74 @@ function qab_sync_ir_flag(PDO $db, ?int $irId): void
 }
 
 /**
- * 由一筆「報工紀錄」自動（或管理員補開）建立一張品質異常單——2026-09-24 使用者交辦。
- * 唯一呼叫時機：①`process_schedule.php`/`process_schedule_NOW.php` 存檔報工當下 NG>0 時自動觸發，
- * ②`process_report_query.php` 管理員對舊報工「補開」或「批次補開」時手動觸發（傳入的是該筆報工的
- * `report_date`，不是今天——現場主管要依當時日期回推是誰、是不是請假，見 ai-rules/22 的精神）。
+ * 這一站（bom_ing_fid）目前「尚未歸入任何異常單」的報工明細——2026-09-24 使用者交辦。
+ * 唯一查詢入口，`qab_auto_open_from_bom_ing()` 與 `qab_pm_suggest_check()` 都靠它算加總，
+ * 不要各自寫一份「找還沒開單的NG」SQL（鐵律4）。
+ * 回傳依 report_date、report_id 由舊到新排序的列，每列含 report_id/report_date/produced_qty/
+ * ng_qty/production_user_id/Created_By；沒有任何未歸入的 NG 時回傳空陣列。
+ */
+function qab_pm_uncovered_reports(PDO $db, int $bomIngFid): array
+{
+    $st = $db->prepare("SELECT pdr.report_id, pdr.report_date, pdr.produced_qty,
+                                pdr.production_user_id, pdr.Created_By,
+                                COALESCE((SELECT SUM(ng.ng_qty) FROM pm_process_daily_ng ng WHERE ng.report_id = pdr.report_id), 0) AS ng_qty
+                         FROM pm_process_daily_report pdr
+                         WHERE pdr.bom_ing_fid = ? AND pdr.abnormal_order_id IS NULL
+                         ORDER BY pdr.report_date ASC, pdr.report_id ASC");
+    $st->execute([$bomIngFid]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    return array_values(array_filter($rows, function ($r) { return (int)$r['ng_qty'] > 0; }));
+}
+
+/**
+ * 由「一站（bom_ing_fid）累積至今尚未歸入的所有NG」自動（或管理員補開）建立**一張**品質異常單
+ * ——2026-09-24 使用者更正：不是每筆報工各開一張，是加總到完工當下一次開；持續性生產（一直不完工）
+ * 則由 `qab_pm_suggest_check()` 每兩週提醒一次是否要先開一張累積單。
  *
- * 開單人＝現場主管：報工人員（`production_user_id`，缺值退回 `Created_By`）所屬部門的單位主管，
- * 若當天不在職/請假則逐層往上找、最後保底找到全站最高決策者（`eg_unit_supervisor_available()`）。
+ * 唯一呼叫時機：①`process_schedule.php`/`process_schedule_NOW.php` 存檔報工且 `is_finished=1`
+ * （完工）時自動觸發；②同一批檔案的「先開立」按鈕（使用者在兩週提醒跳窗選擇先開）；
+ * ③`process_report_query.php` 管理員對舊資料「補開」/「批次補開」時手動觸發。
+ *
+ * 開單人＝現場主管：以 $triggerReportId 指定的那筆報工（沒指定就用最新一筆未歸入報工）的
+ * 報工人員（`production_user_id`，缺值退回 `Created_By`）所屬部門單位主管，若當天不在職/請假則
+ * 逐層往上找、最後保底找到全站最高決策者（`eg_unit_supervisor_available()`）。
  * 這支**只負責找人與建單，不做任何權限檢查**——它本來就是系統代表「現場主管」這個角色自動執行的
  * 動作，不是某個登入者在操作。
  *
- * @return array|null 成功回傳 ['id'=>,'no'=>,'opener'=>...]；
- *   已經開過單（`abnormal_order_id` 有值）回傳 ['skipped'=>true,'id'=>既有id,'no'=>既有單號]；
- *   這筆報工本身沒有NG（不該被呼叫，防呆）回傳 null。
+ * @param int $bomIngFid 要累積的那一站
+ * @param ?int $triggerReportId 這次是被哪一筆報工觸發的（完工那一筆／使用者按「先開立」當下最新一筆）；
+ *   缺省時取未歸入清單裡最新的一筆
+ * @return array|null 成功回傳 ['id'=>,'no'=>,'opener'=>,'qty'=>,'period_from'=>,'period_to'=>,
+ *   'report_ids'=>[...]]；這一站目前沒有任何未歸入的NG（不該被呼叫，防呆）回傳 null。
  * 呼叫端（尤其是報工存檔的路徑）務必自己包 try/catch——**這支失敗絕不可以讓報工存不進去**。
  */
-function qab_auto_open_from_pm_ng(PDO $db, int $reportId): ?array
+function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReportId = null): ?array
 {
     require_once __DIR__ . '/unit_supervisor_lib.php';
     qab_ensure_schema($db);
 
-    $st = $db->prepare("SELECT pdr.report_id, pdr.bom_ing_fid, pdr.report_date, pdr.produced_qty,
-                                pdr.production_user_id, pdr.Created_By, pdr.abnormal_order_id,
-                                bi.bom, bi.process_no
-                         FROM pm_process_daily_report pdr
-                         JOIN bom_ing bi ON bi.bom_ing_fid = pdr.bom_ing_fid
-                         WHERE pdr.report_id = ?");
-    $st->execute([$reportId]);
-    $r = $st->fetch(PDO::FETCH_ASSOC);
-    if (!$r) return null;
-    if (!empty($r['abnormal_order_id'])) {
-        $st2 = $db->prepare("SELECT abnormal_order_no FROM qa_abnormal_order WHERE id=?");
-        $st2->execute([(int)$r['abnormal_order_id']]);
-        return ['skipped' => true, 'id' => (int)$r['abnormal_order_id'], 'no' => (string)$st2->fetchColumn()];
+    $uncovered = qab_pm_uncovered_reports($db, $bomIngFid);
+    if (!$uncovered) return null;
+
+    $st = $db->prepare("SELECT bom, process_no FROM bom_ing WHERE bom_ing_fid=?");
+    $st->execute([$bomIngFid]);
+    $bi = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$bi) return null;
+
+    $trigger = null;
+    if ($triggerReportId) {
+        foreach ($uncovered as $r) { if ((int)$r['report_id'] === $triggerReportId) { $trigger = $r; break; } }
     }
+    if (!$trigger) $trigger = end($uncovered); // 沒指定或指定的那筆已不在未歸入清單裡，退回最新一筆
 
-    $stNg = $db->prepare("SELECT COALESCE(SUM(ng_qty),0) FROM pm_process_daily_ng WHERE report_id=?");
-    $stNg->execute([$reportId]);
-    $ngQty = (int)$stNg->fetchColumn();
-    if ($ngQty <= 0) return null; // 沒有 NG，這支不該被呼叫（呼叫端應自行先判斷）
+    $totalNg = 0; $totalProduced = 0; $reportIds = [];
+    foreach ($uncovered as $r) { $totalNg += (int)$r['ng_qty']; $totalProduced += (int)$r['produced_qty']; $reportIds[] = (int)$r['report_id']; }
+    $periodFrom = (string)$uncovered[0]['report_date'];
+    $periodTo   = (string)end($uncovered)['report_date'];
 
-    $reportDate = (string)$r['report_date'];
-    $prodUserId = (int)($r['production_user_id'] ?: $r['Created_By']);
-    $opener = eg_unit_supervisor_available($db, $prodUserId, null, $reportDate);
+    $triggerDate = (string)$trigger['report_date'];
+    $prodUserId  = (int)($trigger['production_user_id'] ?: $trigger['Created_By']);
+    $opener = eg_unit_supervisor_available($db, $prodUserId, null, $triggerDate);
     if (empty($opener['id'])) {
         // 連最高決策者都沒綁定——這是組織設定缺口，不是這支的錯，留下明確原因讓管理員去 process_report_query.php 補開
         throw new Exception('找不到可以自動開單的現場主管（含最高決策者皆未綁定），請至 org_role_setting 設定「最高核准人員」後再補開');
@@ -842,28 +874,70 @@ function qab_auto_open_from_pm_ng(PDO $db, int $reportId): ?array
     $noteParts = [];
     if ($opener['source'] === 'top_approver') $noteParts[] = '逐層往上皆無可用主管，改由全站最高決策者開立';
     if (!empty($opener['trail'])) $noteParts[] = '略過：' . implode('、', $opener['trail']);
-    $noteParts[] = '報工人員：' . $prodUserId . '；製程：' . (string)$r['process_no'];
+    $noteParts[] = '累積期間：' . $periodFrom . ($periodFrom !== $periodTo ? '～' . $periodTo : '') . '（共 ' . count($uncovered) . ' 筆報工）';
+    $noteParts[] = '觸發報工人員：' . $prodUserId . '；製程：' . (string)$bi['process_no'];
     $autoNote = mb_substr(implode('；', $noteParts), 0, 255);
 
-    $produced = (int)($r['produced_qty'] ?? 0);
     $data = [
         'kind' => 'bom',
-        'bom_no' => (string)$r['bom'],
-        'fill_date' => $reportDate,
-        'batch_qty' => $produced + $ngQty,
-        'insp_qty' => $produced + $ngQty,   // 報工是逐件自檢，不是抽樣，檢驗數＝全數
-        'ng_qty' => $ngQty,
-        'abnormal_phenomenon' => '報工發現不良，自動開立（原始數量請於原因分類補充說明）',
+        'bom_no' => (string)$bi['bom'],
+        'fill_date' => date('Y-m-d'),   // 開單當下的業務日期；累積的實際期間寫在 abnormal_phenomenon 與 auto_open_note
+        'batch_qty' => $totalProduced + $totalNg,
+        'insp_qty' => $totalProduced + $totalNg,   // 報工是逐件自檢，不是抽樣，檢驗數＝全數
+        'ng_qty' => $totalNg,
+        'abnormal_phenomenon' => '報工累積發現不良，自動開立（' . $periodFrom . ($periodFrom !== $periodTo ? '～' . $periodTo : '') . '，共 ' . count($uncovered) . ' 筆報工累積，原始數量請於原因分類補充說明）',
         'created_by' => (int)$opener['id'],
-        'resp_process_no' => (int)$r['process_no'],
+        'resp_process_no' => (int)$bi['process_no'],
         'auto_opened' => 1,
         'auto_open_note' => $autoNote,
-        'pm_report_id' => $reportId,
+        'pm_report_id' => (int)$trigger['report_id'],
     ];
     $created = qab_create_order($db, $data);
-    $db->prepare("UPDATE pm_process_daily_report SET abnormal_order_id=? WHERE report_id=?")
-       ->execute([$created['id'], $reportId]);
-    return ['id' => $created['id'], 'no' => $created['no'], 'opener' => $opener['name'], 'skipped' => false];
+    $ph = implode(',', array_fill(0, count($reportIds), '?'));
+    $db->prepare("UPDATE pm_process_daily_report SET abnormal_order_id=? WHERE report_id IN ($ph)")
+       ->execute(array_merge([$created['id']], $reportIds));
+    // 這一站的累積已經清空，兩週提醒的計時器一併歸零，下一批NG從頭起算
+    $db->prepare("DELETE FROM qab_pm_suggest_state WHERE bom_ing_fid=?")->execute([$bomIngFid]);
+    return ['id' => $created['id'], 'no' => $created['no'], 'opener' => $opener['name'],
+            'qty' => $totalNg, 'period_from' => $periodFrom, 'period_to' => $periodTo, 'report_ids' => $reportIds];
+}
+
+/**
+ * 持續性生產（一直不完工）每兩週提醒一次是否要先開一張累積異常單——2026-09-24 使用者交辦。
+ * 唯一呼叫時機：`process_schedule.php`/`process_schedule_NOW.php` 存檔報工且**未完工**時，每次都問一次
+ * 「該不該跳提醒」，不是每天都跳——用 `qab_pm_suggest_state.last_suggested_at` 記上一次提醒是哪一天，
+ * 兩週週期**從「最早一筆尚未歸入的NG」那筆報工日期起算**（使用者拍板），之後每次提醒都以上一次
+ * 提醒日期為準再加兩週，避免使用者選「暫不開立」之後每天存檔都被打斷。
+ *
+ * @return array|null 該顯示提醒時回傳 ['qty'=>,'period_from'=>,'period_to'=>]（並把這次當作已提醒，
+ *   寫回 last_suggested_at＝$today）；還沒到兩週或沒有累積NG時回傳 null（不顯示）。
+ */
+function qab_pm_suggest_check(PDO $db, int $bomIngFid, string $today = ''): ?array
+{
+    qab_ensure_schema($db);
+    $today = $today !== '' ? $today : date('Y-m-d');
+
+    $uncovered = qab_pm_uncovered_reports($db, $bomIngFid);
+    if (!$uncovered) {
+        // 沒有累積中的NG了（可能剛被開單清空），計時器一併清掉，下次重新起算
+        $db->prepare("DELETE FROM qab_pm_suggest_state WHERE bom_ing_fid=?")->execute([$bomIngFid]);
+        return null;
+    }
+    $periodFrom = (string)$uncovered[0]['report_date'];
+    $periodTo   = (string)end($uncovered)['report_date'];
+    $totalNg = 0; foreach ($uncovered as $r) $totalNg += (int)$r['ng_qty'];
+
+    $st = $db->prepare("SELECT last_suggested_at FROM qab_pm_suggest_state WHERE bom_ing_fid=?");
+    $st->execute([$bomIngFid]);
+    $lastAt = $st->fetchColumn();
+    $baseDate = $lastAt !== false && $lastAt !== null ? (string)$lastAt : $periodFrom;
+    $eligible = date('Y-m-d', strtotime($baseDate . ' +14 days'));
+    if ($today < $eligible) return null; // 還沒到下一次提醒的時間
+
+    $db->prepare("INSERT INTO qab_pm_suggest_state (bom_ing_fid, last_suggested_at) VALUES (?,?)
+                  ON DUPLICATE KEY UPDATE last_suggested_at=VALUES(last_suggested_at)")
+       ->execute([$bomIngFid, $today]);
+    return ['qty' => $totalNg, 'period_from' => $periodFrom, 'period_to' => $periodTo];
 }
 
 /** 清單的年度下拉：只列「真的有資料」的年度（使用者要求，免得列出一堆空年度） */
