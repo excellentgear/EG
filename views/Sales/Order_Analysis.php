@@ -163,6 +163,10 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 /* 可點的料號（開圖面檢視） */
 .pno-link { color:#8a5a2b; border-bottom:1px dotted #8a5a2b; cursor:pointer; }
 .pno-link:hover { color:var(--coral); border-bottom-color:var(--coral); }
+.nav-jump { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+.nav-jump a { font-size:12px; border:1px solid var(--line); background:#fff; color:#6B4423;
+              padding:3px 10px; border-radius:12px; text-decoration:none; }
+.nav-jump a:hover { background:var(--sand); }
 /* 右側懸浮工具列：回訂單追蹤／回頂端／快速導覽（使用者要求，注意透明度避免遮蔽圖表） */
 .float-tools { position:fixed; right:18px; bottom:18px; z-index:9000;
                display:flex; flex-direction:column-reverse; align-items:flex-end; gap:10px; }
@@ -267,6 +271,12 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
       <button class="btn btn-xs btn-default" id="btnCliClear" style="display:none;">清除</button>
       <span class="chips" id="cliChips"><span style="font-size:12px;color:var(--muted);">未篩選＝全部客戶</span></span>
     </div>
+  </div>
+
+  <div class="nav-jump">
+    <a href="#secInsight">自動分析</a><a href="#secTrend">訂單趨勢</a><a href="#secNew">新訂單（新料號）</a><a href="#secProc">全製／單製</a>
+    <a href="#secBand">數量區間</a><a href="#secClient">客戶比較</a><a href="#secRank">客戶增減排名</a>
+    <a href="#secMa">訂單量監控</a><a href="#secPart">受訂料號排名</a>
   </div>
 
   <div id="noteBar"></div>

@@ -152,13 +152,37 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
 .ins-cli-amt { color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .pno-link { color:var(--blue-d); border-bottom:1px dotted var(--blue-d); cursor:pointer; }
 .pno-link:hover { color:var(--coral); border-bottom-color:var(--coral); }
-.go-home { position:fixed; right:18px; bottom:18px; z-index:9000; width:52px; height:52px; border-radius:50%;
-           background:linear-gradient(135deg,#1B5FA8,#2E7FD6); color:#fff; border:none; box-shadow:0 4px 14px rgba(0,0,0,.25);
-           display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer;
-           font-size:10px; font-weight:600; line-height:1.1; text-decoration:none; }
-.go-home:hover,.go-home:focus { color:#fff; text-decoration:none; filter:brightness(1.08); }
-.go-home i { font-size:17px; margin-bottom:1px; }
-@media print { .go-home { display:none !important; } }
+.nav-jump { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+.nav-jump a { font-size:12px; border:1px solid var(--line); background:#fff; color:#1B4F78;
+              padding:3px 10px; border-radius:12px; text-decoration:none; }
+.nav-jump a:hover { background:var(--sand); }
+/* 右側懸浮工具列：回頂端／快速導覽（比照 Order_Analysis.php 同一套；「回出貨紀錄分析」
+   已經在頁首有連結，不在這裡重複放一顆，注意透明度避免遮蔽圖表） */
+.float-tools { position:fixed; right:18px; bottom:18px; z-index:9000;
+               display:flex; flex-direction:column-reverse; align-items:flex-end; gap:10px; }
+@media print { .float-tools { display:none !important; } }
+.float-btn { width:52px; height:52px; border-radius:50%; border:none; cursor:pointer; text-decoration:none;
+             display:flex; flex-direction:column; align-items:center; justify-content:center;
+             color:#fff; font-size:10px; font-weight:600; line-height:1.1;
+             background:linear-gradient(135deg,#1B5FA8,#2E7FD6); box-shadow:0 4px 14px rgba(0,0,0,.22);
+             opacity:.55; transition:opacity .15s,filter .15s; }
+.float-btn i { font-size:17px; margin-bottom:1px; }
+.float-btn:hover, .float-btn:focus { color:#fff; text-decoration:none; opacity:1; filter:brightness(1.08); }
+.float-btn.totop { width:44px; height:44px; display:none; }
+.float-btn.totop i { font-size:16px; margin-bottom:0; }
+/* 快速導覽：縮成圖示，滑鼠移過才展開清單 */
+.qnav { position:relative; }
+.qnav-fab { width:44px; height:44px; border-radius:50%; border:1px solid var(--line); cursor:pointer;
+            background:#fff; color:var(--blue-d); box-shadow:0 4px 12px rgba(0,0,0,.18); font-size:16px;
+            opacity:.55; transition:opacity .15s; display:flex; align-items:center; justify-content:center; }
+.qnav:hover .qnav-fab, .qnav-fab:focus { opacity:1; }
+.qnav-panel { position:absolute; right:52px; bottom:0; min-width:150px;
+              background:rgba(250,253,255,.97); border:1px solid var(--line); border-radius:10px;
+              box-shadow:0 6px 18px rgba(0,0,0,.2); padding:8px; display:flex; flex-direction:column; gap:3px;
+              opacity:0; pointer-events:none; transform:translateX(6px); transition:opacity .15s,transform .15s; }
+.qnav:hover .qnav-panel, .qnav-panel:hover { opacity:1; pointer-events:auto; transform:translateX(0); }
+.qnav-panel a { font-size:12px; color:#1B4F78; padding:5px 10px; border-radius:6px; text-decoration:none; white-space:nowrap; }
+.qnav-panel a:hover { background:var(--sand); }
 /* 明細分頁（出貨明細/退貨單/訂單/客戶統計） */
 .list-tabs { display:flex; gap:4px; margin-bottom:8px; flex-wrap:wrap; }
 .list-tab-btn { background:#F3F9FE; border:1px solid var(--line); border-radius:6px 6px 0 0; padding:6px 14px;
@@ -481,7 +505,24 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
 </div><!-- /right_col -->
 </div></div>
 
-<a href="Shipping_Analysis_new.php" class="go-home" title="回出貨紀錄分析"><i class="fa fa-arrow-left"></i>出貨</a>
+<!-- 右側懸浮工具列：回頂端／快速導覽（比照 Order_Analysis.php；列印時隱藏） -->
+<div class="float-tools">
+  <button type="button" class="float-btn totop" id="btnToTop" title="回頂端"
+          onclick="window.scrollTo({top:0,behavior:'smooth'});"><i class="fa fa-arrow-up"></i>頂端</button>
+  <div class="qnav">
+    <button type="button" class="qnav-fab" title="快速導覽（各區塊）"><i class="fa fa-compass"></i></button>
+    <div class="qnav-panel">
+      <a href="#secInsight">自動分析</a>
+      <a href="#secTrend">相關金額趨勢</a>
+      <a href="#secSaleType">出貨性質分布</a>
+      <a href="#secClient">客戶比較</a>
+      <a href="#secRank">客戶增減排名</a>
+      <a href="#secMa">出貨淨額監控</a>
+      <a href="#secCq">客戶季度分析</a>
+      <a href="#secList">明細資料</a>
+    </div>
+  </div>
+</div>
 
 <!-- ── 使用說明（鐵律7）──────────────────────────────── -->
 <div class="m-mask" id="helpUseMask">
@@ -737,6 +778,9 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script>
 $(document).ready(function(){ $('#sidebar-menu').css('visibility','visible'); });
+
+/* 回頂端：捲到底下時才出現，按下捲回最上面（比照 Order_Analysis.php 同一套） */
+$(window).on('scroll', function(){ $('#btnToTop').toggle($(window).scrollTop() > 200); });
 
 var SI_API   = '../../src/store/ShippingInsight_API.php';
 var SI_CSRF  = '<?= siEsc($CSRF) ?>';
