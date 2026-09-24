@@ -4190,6 +4190,30 @@ function prj_approver_pool(PDO $db, int $submitterId): array
     return $pool;
 }
 
+/**
+ * 管理卡三格簽章的預設人選（製表／審查／核准），card_get 顯示用、card_submit 沒被管理員覆寫時也用這套。
+ * 製表＝按下送出的人、審查＝專案負責人、核准＝專案核准人池第一位——與 card_submit 原本的邏輯完全同一套，
+ * 抽出來是因為「管理員可以一次選訂每欄蓋章人員」（2026-09-24 使用者要求）要先讓畫面看得到目前會蓋誰，
+ * 兩處各寫一份規則遲早走鐘。
+ */
+function prj_card_sign_defaults(PDO $db, array $prj, int $submitterId, string $submitterName): array
+{
+    $nameOf = static function (PDO $db, int $id): string {
+        if ($id <= 0) return '';
+        $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
+        $st->execute([$id]);
+        return (string)$st->fetchColumn();
+    };
+    $ownerId = (int)($prj['owner_id'] ?? 0);
+    $pool = prj_approver_pool($db, $ownerId ?: $submitterId);
+    $apId = $pool[0] ?? 0;
+    return [
+        'maker'   => ['id' => $submitterId, 'name' => $submitterName],
+        'review'  => ['id' => $ownerId, 'name' => (string)($prj['owner_name'] ?? '') ?: $nameOf($db, $ownerId)],
+        'approve' => ['id' => $apId, 'name' => $nameOf($db, $apId)],
+    ];
+}
+
 /** 某部門及其所有子部門的 id（組織是樹狀，只比單一 id 會把子部門的人判成「不是該部門」） */
 function prj_dept_tree_ids(PDO $db, int $rootId): array
 {

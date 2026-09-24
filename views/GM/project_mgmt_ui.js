@@ -2725,10 +2725,46 @@ function openCard(cardId) {
               + ' <button id="btnCardPrint" style="height:30px;padding:0 14px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">列印</button>'
               + '</div>';
         }
+        /* 使用者 2026-09-24：「管制卡無法送出蓋章…送出蓋章也要管理員可以一次選訂每欄蓋章人員，
+           日期預設是管理卡當天」——補歷史紀錄時，每一項未必都有現況可寫，也不一定是自動算出來
+           的那個人簽的；管理員多一顆按鈕：可一次指定三格簽章人員＋簽核日期（預設檢討日期，不可未來），
+           並可一鍵把還沒交代的項次標記「依計畫進行」再送出。**只有管理員看得到**，一般人仍走上面
+           那顆「送出（蓋章）」、規則完全不變。 */
+        if (res.sign_defaults && c.status === 'draft') {
+            h += cardAdminSignBoxHtml(res, c);
+        }
         h += '</div>';
         $('#cardEditBox').html(h).data('card', res);
         CARD_DIRTY = false;
     });
+}
+
+/** 管理員送出蓋章：指定三格人員＋簽核日期的區塊（見 openCard 上方註解） */
+function cardAdminSignBoxHtml(res, c) {
+    var sp = res.sign_people || [], sd = res.sign_defaults || {};
+    var opts = function (curId) {
+        var h = '<option value="">（留白）</option>';
+        $.each(sp, function (i, p) {
+            h += '<option value="' + p.id + '"' + (num(p.id) === num(curId) ? ' selected' : '') + '>' + esc(peopleLabel(p)) + '</option>';
+        });
+        return h;
+    };
+    return '<div id="cardAdminSignBox" style="margin-top:10px;background:#FBF3E7;border:1px solid #E8C39E;border-radius:4px;padding:8px 10px;">'
+      + '<div style="font-weight:bold;color:#8A5A2B;margin-bottom:6px;"><i class="fa fa-user-secret"></i> 管理員：指定簽核人員與日期'
+      + '<span class="pj-hint" style="font-weight:normal;margin-left:6px;">（送出時才套用，不填就照自動規則；日期預設是管理卡的檢討日期）</span></div>'
+      + '<div class="pj-toolbar">'
+      + '<label>簽核日期</label><input type="date" id="cardAdminDate" value="' + esc(c.review_date) + '">'
+      + '<label>製表</label><select id="cardAdminMaker" data-eg-filter="輸入姓名篩選…">' + opts(sd.maker && sd.maker.id) + '</select>'
+      + '<label>審查</label><select id="cardAdminReview" data-eg-filter="輸入姓名篩選…">' + opts(sd.review && sd.review.id) + '</select>'
+      + '<label>核准</label><select id="cardAdminApprove" data-eg-filter="輸入姓名篩選…">' + opts(sd.approve && sd.approve.id) + '</select>'
+      + '</div>'
+      + '<label style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;cursor:pointer;">'
+      + '<input type="checkbox" id="cardAdminAutoMark" data-eg-skip="1" checked>'
+      + '未交代的項次自動標記「依計畫進行」再送出</label>'
+      + '<div style="margin-top:8px;text-align:right;">'
+      + '<button id="btnCardSubmitAdmin" style="height:30px;padding:0 14px;border:1px solid #C4442D;border-radius:4px;background:#DD5138;color:#fff;cursor:pointer;">'
+      + '管理員送出（蓋章）</button></div>'
+      + '</div>';
 }
 
 function collectCardItems() {
@@ -2759,6 +2795,26 @@ $(document).on('click', '#btnCardSubmit', function () {
     api('card_save', { card_id: cid, review_date: $('#ciDate').val(), items: JSON.stringify(collectCardItems()) }, 'POST')
         .done(function () {
             api('card_submit', { card_id: cid }, 'POST').done(function (r) {
+                alert(r.message);
+                openProject(num(CUR.project.project_id));
+                setTimeout(function () { $('.pj-tab[data-pane="paneCard"]').click(); openCard(cid); }, 300);
+            });
+        });
+});
+$(document).on('click', '#btnCardSubmitAdmin', function () {
+    var cid = num($('#cardEditBox .sec').data('card'));
+    var payload = {
+        card_id: cid,
+        sign_date: $('#cardAdminDate').val() || '',
+        maker_id: $('#cardAdminMaker').val() || 0,
+        review_id: $('#cardAdminReview').val() || 0,
+        approve_id: $('#cardAdminApprove').val() || 0,
+        auto_mark: $('#cardAdminAutoMark').is(':checked') ? 1 : 0
+    };
+    /* 先存再送（同 #btnCardSubmit），避免畫面上剛打的字還沒進 DB 就被判定「沒交代」 */
+    api('card_save', { card_id: cid, review_date: $('#ciDate').val(), items: JSON.stringify(collectCardItems()) }, 'POST')
+        .done(function () {
+            api('card_submit', payload, 'POST').done(function (r) {
                 alert(r.message);
                 openProject(num(CUR.project.project_id));
                 setTimeout(function () { $('.pj-tab[data-pane="paneCard"]').click(); openCard(cid); }, 300);

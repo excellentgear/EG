@@ -1498,10 +1498,18 @@ case 'card_get':
        項次／專案階段與核心作業項目／主辦·承辦人／預計完成日／實際完成日／交付成果·單號／狀態·簽核），
        所以任務與料號一起帶下去；交付成果取回報時採用的佐證（evidence_json）。 */
     $pid2 = (int)$card['project_id'];
-    jout(['card' => $card, 'project' => $prj, 'goals' => prj_goals($db, $pid2),
+    $out = ['card' => $card, 'project' => $prj, 'goals' => prj_goals($db, $pid2),
           'tasks' => prj_tasks_attach_supervisor($db, prj_tasks($db, $pid2)), 'parts' => prj_parts($db, $pid2),
           'task_status' => PRJ_TASK_STATUS,
-          'can_edit' => prj_can_edit_project($P, $prj) && (string)$card['status'] !== 'approved']);
+          'can_edit' => prj_can_edit_project($P, $prj) && (string)$card['status'] !== 'approved'];
+    // 管理員送出蓋章可以一次選訂每欄人員（2026-09-24 使用者要求）：先把目前的預設人選、
+    // 與可挑選的候選名單（依這張卡的檢討日期回推當時在職者＝ai-rules/22）一起帶回去，
+    // 只在草稿狀態、且看得到的人是管理員時才需要，省一次不必要的查詢。
+    if ($P['canAdmin'] && (string)$card['status'] === 'draft') {
+        $out['sign_defaults'] = prj_card_sign_defaults($db, $prj, $uid, $uname);
+        $out['sign_people'] = eg_people_annotate_posts($db, eg_people_list_asof($db, [], (string)$card['review_date']));
+    }
+    jout($out);
 
 case 'card_save':
     $cid = (int)($_POST['card_id'] ?? 0);
@@ -1545,32 +1553,66 @@ case 'card_submit':
     if (!$card) jerr('管理卡不存在', 404);
     $prj = prj_need($db, $P, (int)$card['project_id'], true);
     if ((string)$card['status'] !== 'draft') jerr('這張管理卡已經送出（請重新整理）', 409);
+    $rDate = (string)$card['review_date'];
+
+    /* 管理員可以一次選訂每欄蓋章人員與日期（2026-09-24 使用者要求：補歷史紀錄時，
+       製表／審查／核准三格照自動規則算出來的人不一定是實際該蓋章的人，日期也要能改成
+       管理卡當天以外的日子）——**只有管理員能覆寫**，非管理員送這些參數一律忽略、
+       完全比照原本自動規則（鐵律8：不是只靠前端不畫出來，後端同規則再擋一次）。 */
+    $isAdminOverride = $P['canAdmin'] && (
+        isset($_POST['maker_id']) || isset($_POST['review_id']) || isset($_POST['approve_id'])
+        || trim((string)($_POST['sign_date'] ?? '')) !== '' || !empty($_POST['auto_mark'])
+    );
+    if ($isAdminOverride && !empty($_POST['auto_mark'])) {
+        // 未交代的項次一鍵標「依計畫進行」（不是繞過規定，每一項還是留下了一個明確狀態）
+        $db->prepare("UPDATE project_card_item SET on_track=1
+                      WHERE card_id=? AND on_track=0 AND TRIM(COALESCE(issue_text,''))=''")
+           ->execute([$cid]);
+        $card = prj_card_get($db, $cid);
+    }
     // 每一列都要有交代：標了「依計畫進行」或填了現階段問題，兩者至少其一
     $bad = [];
     foreach ($card['items'] as $n => $it) {
         if ((int)$it['on_track']) continue;
         if (trim((string)$it['issue_text']) === '') $bad[] = '第 ' . ($n + 1) . ' 項';
     }
-    if ($bad) jerr('這些項次沒有交代現況：' . implode('、', $bad) . '（沒問題請勾「依計畫進行」）', 400);
+    if ($bad) jerr('這些項次沒有交代現況：' . implode('、', $bad) . '（沒問題請勾「依計畫進行」，或由管理員一鍵標記後送出）', 400);
 
-    $rDate = (string)$card['review_date'];
-    // 三格簽章：製表＝送出者、審查＝專案負責人、核准＝專案核准人（都可事後由管理員調整）
-    $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
-    $st->execute([(int)$prj['owner_id']]);
-    $ownerName = (string)$st->fetchColumn();
-    $pool = prj_approver_pool($db, (int)$prj['owner_id']);
-    $apId = $pool[0] ?? 0;
-    $apName = '';
-    if ($apId) { $st->execute([$apId]); $apName = (string)$st->fetchColumn(); }
+    // 簽核日期：管理員可改，預設仍是管理卡的檢討日期（不可以是未來）
+    $signDate = $rDate;
+    if ($isAdminOverride) {
+        $d0 = trim((string)($_POST['sign_date'] ?? ''));
+        if ($d0 !== '') {
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d0) || $d0 > $NOW['date']) jerr('簽核日期格式不對，或不可以是未來', 400);
+            $signDate = $d0;
+        }
+    }
+
+    // 三格簽章：製表＝送出者、審查＝專案負責人、核准＝專案核准人（管理員可逐格指定）
+    $defaults = prj_card_sign_defaults($db, $prj, $uid, $uname);
+    $pick = static function (string $key, array $default) use ($isAdminOverride, $db, $rDate): array {
+        if (!$isAdminOverride || !isset($_POST[$key . '_id'])) return $default;
+        $pid = (int)$_POST[$key . '_id'];
+        if ($pid <= 0) return ['id' => null, 'name' => ''];   // 管理員刻意留白
+        // 候選一律是「這張卡檢討日期當時在職」的人（ai-rules/22），不是隨便一個 user_id 都收
+        $cands = eg_people_list_asof($db, ['user_ids' => [$pid]], $rDate);
+        if (!$cands) jerr('指定的' . ['maker' => '製表', 'review' => '審查', 'approve' => '核准'][$key] . '人員不合法（不在檢討日期當時的在職名單）', 400);
+        return ['id' => $pid, 'name' => (string)$cands[0]['user_cname']];
+    };
+    $maker   = $pick('maker', $defaults['maker']);
+    $review  = $pick('review', $defaults['review']);
+    $approve = $pick('approve', $defaults['approve']);
 
     $db->prepare("UPDATE project_card SET status='submitted', submit_date=?, submitted_at=?,
                          sign_maker_id=?, sign_maker_name=?, sign_maker_date=?,
                          sign_review_id=?, sign_review_name=?, sign_review_date=?,
                          sign_approve_id=?, sign_approve_name=?, sign_approve_date=?,
-                         modified_by=?, modified_at=? WHERE card_id=?")
-       ->execute([$rDate, $NOW['dt'], $uid, $uname, $rDate,
-                  (int)$prj['owner_id'] ?: null, $ownerName, $rDate,
-                  $apId ?: null, $apName, $rDate, $uid, $NOW['dt'], $cid]);
+                         is_auto=?, modified_by=?, modified_at=? WHERE card_id=?")
+       ->execute([$signDate, $NOW['dt'],
+                  $maker['id'] ?: null, $maker['name'], $maker['id'] ? $signDate : null,
+                  $review['id'] ?: null, $review['name'], $review['id'] ? $signDate : null,
+                  $approve['id'] ?: null, $approve['name'], $approve['id'] ? $signDate : null,
+                  $isAdminOverride ? 1 : 0, $uid, $NOW['dt'], $cid]);
     jout(['message' => '已送出管理卡']);
 
 case 'card_delete':
