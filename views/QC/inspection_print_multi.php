@@ -33,6 +33,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (!preg_match('/^B-\d{10}$/', $bom)) throw new Exception('BOM 格式錯誤，應為 B- 後接10位數字');
         $mode = ($_POST['mode'] ?? 'summary') === 'full' ? 'full' : 'summary';
         $chosenDrawing = trim($_POST['drawing'] ?? '');
+        // 前端「不使用圖面」是使用者明確的選擇，要跟「還沒選過（沿用預設自動挑選）」分開，
+        // 兩者都會送出空字串就無法分辨——sentinel 值收到才視為明確不印圖面，不落入下面的自動挑選。
+        $explicitNoDrawing = ($chosenDrawing === '__NONE__');
+        if ($explicitNoDrawing) $chosenDrawing = '';
 
         $base = $pdo->prepare("SELECT Client_Name, d_id, sqty FROM bom WHERE bom=? LIMIT 1");
         $base->execute([$bom]);
@@ -92,46 +96,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             foreach ($un->fetchAll(PDO::FETCH_ASSOC) as $u) $nameMap[$u['id']] = $u['nm'];
         }
 
-        // ── 完整模式：每個製程取「最後一批、最後一輪」的完整實測明細 ──────
+        // ── 完整模式：每個製程「每一批、每一輪」都各自展開完整實測明細 ──────
+        // 使用者 2026-09-24 回報：齒研有兩批檢驗（第1批合格→重驗合格），列印卻只印出一批。
+        // 原本只取「最後一批、最後一輪」，多批/複驗的舊資料因此在列印上完全不見；
+        // 改成 $itemsByFid[$fid] 是一個陣列，每筆表單各自一份明細，前端逐筆各印一段。
         $itemsByFid = [];
         if ($mode === 'full') {
             $fmt = function ($v) { if ($v === null) return ''; $s = rtrim(rtrim((string)$v, '0'), '.'); return ($s === '' || $s === '-') ? '0' : $s; };
             foreach ($formsByFid as $fid => $rows) {
-                $last = end($rows);
-                $qid = (int)$last['qc_form_id'];
-                $sampleN = max(1, (int)$last['sample_qty']);
-                $mq = $pdo->prepare("
-                    SELECT m.item_id, m.sample_no, m.measured_value, m.result, m.item_verdict,
-                           m.measure_method, m.tool_id, t.Tool_No,
-                           i.item_name, i.standard_text, i.min_value, i.max_value, i.plus_tolerance, i.minus_tolerance, i.sort_order,
-                           (SELECT tl.QC_Tool FROM qc_inspection_item_tool_type itt JOIN qc_tool_list tl ON itt.QC_Tool_List_id=tl.QC_Tool_List_id WHERE itt.item_id=i.item_id ORDER BY itt.is_primary DESC LIMIT 1) AS tool_name
-                    FROM qc_measurement m JOIN qc_inspection_item i ON m.item_id=i.item_id
-                    LEFT JOIN qc_tool t ON m.tool_id=t.Tool_id
-                    WHERE m.qc_form_id=?
-                    ORDER BY i.sort_order ASC, m.item_id ASC, m.measurement_id ASC
-                ");
-                $mq->execute([$qid]);
-                $byItem = [];
-                foreach ($mq->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                    $iid = (int)$r['item_id'];
-                    if (!isset($byItem[$iid])) {
-                        // 公差輸入模式：DB 有 min_value/max_value 才算 RANGE(直接填絕對上下限)，否則 TOL(標準值±公差)
-                        $hasRange = $r['min_value'] !== null && $r['max_value'] !== null;
-                        $byItem[$iid] = [
-                            'name' => $r['item_name'], 'std' => $r['standard_text'],
-                            'mode' => $hasRange ? 'RANGE' : 'TOL', 'min' => $hasRange ? $fmt($r['min_value']) : '', 'max' => $hasRange ? $fmt($r['max_value']) : '',
-                            'up' => $fmt($r['plus_tolerance']), 'lo' => $fmt($r['minus_tolerance']),
-                            'tool' => $r['tool_name'] ?: ($r['measure_method'] ?: ''),
-                            'verdict' => $r['item_verdict'] ?: 'OK',
-                            'samples' => array_fill(0, $sampleN, ['v' => '', 'r' => 'OK']),
-                        ];
+                foreach ($rows as $formRow) {
+                    $qid = (int)$formRow['qc_form_id'];
+                    $sampleN = max(1, (int)$formRow['sample_qty']);
+                    $mq = $pdo->prepare("
+                        SELECT m.item_id, m.sample_no, m.measured_value, m.result, m.item_verdict,
+                               m.measure_method, m.tool_id, t.Tool_No,
+                               i.item_name, i.standard_text, i.min_value, i.max_value, i.plus_tolerance, i.minus_tolerance, i.sort_order,
+                               (SELECT tl.QC_Tool FROM qc_inspection_item_tool_type itt JOIN qc_tool_list tl ON itt.QC_Tool_List_id=tl.QC_Tool_List_id WHERE itt.item_id=i.item_id ORDER BY itt.is_primary DESC LIMIT 1) AS tool_name
+                        FROM qc_measurement m JOIN qc_inspection_item i ON m.item_id=i.item_id
+                        LEFT JOIN qc_tool t ON m.tool_id=t.Tool_id
+                        WHERE m.qc_form_id=?
+                        ORDER BY i.sort_order ASC, m.item_id ASC, m.measurement_id ASC
+                    ");
+                    $mq->execute([$qid]);
+                    $byItem = [];
+                    foreach ($mq->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                        $iid = (int)$r['item_id'];
+                        if (!isset($byItem[$iid])) {
+                            // 公差輸入模式：DB 有 min_value/max_value 才算 RANGE(直接填絕對上下限)，否則 TOL(標準值±公差)
+                            $hasRange = $r['min_value'] !== null && $r['max_value'] !== null;
+                            $byItem[$iid] = [
+                                'name' => $r['item_name'], 'std' => $r['standard_text'],
+                                'mode' => $hasRange ? 'RANGE' : 'TOL', 'min' => $hasRange ? $fmt($r['min_value']) : '', 'max' => $hasRange ? $fmt($r['max_value']) : '',
+                                'up' => $fmt($r['plus_tolerance']), 'lo' => $fmt($r['minus_tolerance']),
+                                'tool' => $r['tool_name'] ?: ($r['measure_method'] ?: ''),
+                                'verdict' => $r['item_verdict'] ?: 'OK',
+                                'samples' => array_fill(0, $sampleN, ['v' => '', 'r' => 'OK']),
+                            ];
+                        }
+                        $pos = (int)$r['sample_no'] - 1;
+                        if ($pos >= 0 && $pos < $sampleN) $byItem[$iid]['samples'][$pos] = ['v' => $r['measured_value'], 'r' => $r['result']];
                     }
-                    $pos = (int)$r['sample_no'] - 1;
-                    if ($pos >= 0 && $pos < $sampleN) $byItem[$iid]['samples'][$pos] = ['v' => $r['measured_value'], 'r' => $r['result']];
+                    // 使用量具：整張檢驗單綁一次（2026-09-16），不再逐項顯示
+                    $itemsByFid[$fid][] = [
+                        'batch_no' => (int)$formRow['batch_no'], 'round_no' => (int)$formRow['round_no'],
+                        'date' => substr((string)($formRow['check_date'] ?: $formRow['created_at']), 0, 10),
+                        'check_result' => $formRow['check_result'],
+                        'sample_n' => $sampleN, 'items' => array_values($byItem),
+                        'tools' => qc_form_tools_label(qc_form_tools_rows($pdo, $qid)),
+                    ];
                 }
-                // 使用量具：整張檢驗單綁一次（2026-09-16），不再逐項顯示
-                $itemsByFid[$fid] = ['sample_n' => $sampleN, 'items' => array_values($byItem),
-                                     'tools' => qc_form_tools_label(qc_form_tools_rows($pdo, $qid))];
             }
         }
 
@@ -156,9 +169,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             });
         }
         if ($chosenDrawing !== '' && !in_array($chosenDrawing, $candidates, true)) $chosenDrawing = '';
-        if ($chosenDrawing === '' && count($candidates) === 1) $chosenDrawing = $candidates[0];
+        // 使用者 2026-09-24 回報「沒有讓我選擇要使用在報告上的圖面」——原本有多張候選圖面時
+        // 一律留空、要使用者自己從下拉挑，沒挑就直接印「（無圖面）」，等於預設值是「什麼都不印」；
+        // 改成有候選圖面（不論一張或多張）一律先自動挑最新的那張（候選本來就已依「純BOM檔名優先、
+        // 其次依修改時間新到舊」排序），前端另外標示「已自動選用，可自行更換」＋縮圖預覽，
+        // 讓使用者一眼看得出印的是哪一張、要換再從下拉挑。
+        $autoPicked = false;
+        if ($chosenDrawing === '' && $candidates && !$explicitNoDrawing) { $chosenDrawing = $candidates[0]; $autoPicked = true; }
 
-        $drawing = ['url' => '', 'orient' => 'landscape', 'ambiguous' => count($candidates) > 1, 'candidates' => $candidates, 'chosen' => $chosenDrawing];
+        $drawing = ['url' => '', 'orient' => 'landscape', 'ambiguous' => count($candidates) > 1,
+            'candidates' => $candidates, 'chosen' => $chosenDrawing, 'auto_picked' => $autoPicked];
         if ($chosenDrawing !== '') {
             $drawing['url'] = $urlDir . rawurlencode($chosenDrawing);
             $size = @getimagesize($scanDir . $chosenDrawing);
@@ -209,7 +229,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 'proc_qty' => $procQty, 'maker_id' => $makerId, 'exempt' => $isExempt, 'is_packing' => false,
                 'batches' => array_values($batches),
                 'last_form' => $forms ? end($forms) : null,
-                'detail' => $itemsByFid[$fid] ?? null,
+                // 完整模式：每一批每一輪各自一份明細（使用者 2026-09-24 回報只印最後一輪不夠，
+                // 多批/複驗的紀錄都要各自印出），摘要模式或沒有紀錄時為空陣列。
+                'details' => $itemsByFid[$fid] ?? [],
             ];
         };
 
@@ -321,10 +343,19 @@ body{ background:#F6F1EA; }
                 <label class="radio-inline"><input type="radio" name="paper" value="A4"> A4</label>
                 <label class="radio-inline"><input type="radio" name="paper" value="A3" checked> A3（建議，圖面較不會被縮太小）</label>
             </div>
+            <div class="form-group">
+                <label>方向</label>
+                <label class="radio-inline"><input type="radio" name="orient" value="portrait" checked> 直式</label>
+                <label class="radio-inline"><input type="radio" name="orient" value="landscape"> 橫式</label>
+            </div>
         </div>
         <div id="drawing-pick-wrap" style="display:none;margin-bottom:10px;">
-            <label>找到多張候選圖面，請選擇要用哪一張：</label>
-            <select class="form-control input-sm" id="sel-drawing" style="max-width:320px;"></select>
+            <label>圖面（將印在封面上）：</label>
+            <select class="form-control input-sm" id="sel-drawing" style="max-width:320px;display:inline-block;"></select>
+            <span class="muted-help" id="drawing-auto-note" style="display:none;margin-left:6px;"><i class="fa fa-info-circle"></i> 已自動選用最新的一張，不是想要的那張請在上方更換</span>
+            <div id="drawing-preview-wrap" style="margin-top:8px;display:none;">
+                <img id="drawing-preview-img" style="max-width:260px;max-height:180px;border:1px solid #ccc;background:#fff;">
+            </div>
         </div>
         <div id="no-drawing-hint" class="text-muted" style="display:none;margin-bottom:10px;"><i class="fa fa-exclamation-circle"></i> 找不到此 BOM 的圖面檔（Z:/BOM/ 內無檔名以此 BOM 號碼開頭的圖片），列印版將不含圖面。</div>
         <button class="btn btn-warm" id="btn-print"><i class="fa fa-print"></i> 列印 / 產生 PDF</button>
@@ -367,17 +398,34 @@ function renderInfoBar(){
         +'　共 '+DATA.processes.length+' 個製程（<span class="st-ok">合格 '+okN+'</span>　<span class="st-ng">不良 '+ngN+'</span>　尚未檢驗 '+waitN
         +(exemptN?('　已設定免檢 '+exemptN):'')+'）');
 }
+// 使用者 2026-09-24 回報「沒有讓我選擇要使用在報告上的圖面」：原本只有候選圖面 >1 張時才顯示
+// 下拉、且沒有預設值時印出來就是「（無圖面）」——改成只要找得到候選圖面（含只有一張）就秀出
+// 下拉＋縮圖預覽，讓使用者一眼看到目前要印的是哪一張；自動選到的（沒有明確點過下拉）額外標註，
+// 並保留「不使用圖面」選項讓使用者可以明確選擇不印圖面（不是靠沒選到而已）。
 function renderDrawingPicker(){
     var d=DATA.drawing;
     $('#no-drawing-hint').toggle(!d.candidates.length);
-    if(d.ambiguous){
+    if(d.candidates.length){
         var $sel=$('#sel-drawing').empty();
-        d.candidates.forEach(function(fn){ $sel.append($('<option>').val(fn).text(fn+(fn===d.chosen?'（目前選用）':''))); });
-        if(d.chosen) $sel.val(d.chosen);
+        $sel.append($('<option>').val('__NONE__').text('（不使用圖面）'));
+        d.candidates.forEach(function(fn){ $sel.append($('<option>').val(fn).text(fn)); });
+        $sel.val(d.chosen||'__NONE__');
+        $('#drawing-auto-note').toggle(!!d.auto_picked);
+        if(d.url){ $('#drawing-preview-img').attr('src', d.url); $('#drawing-preview-wrap').show(); }
+        else { $('#drawing-preview-wrap').hide(); }
         $('#drawing-pick-wrap').show();
     } else {
         $('#drawing-pick-wrap').hide();
     }
+}
+// 已經查過一次之後，「圖面」欄位再送出要保留使用者的選擇（含明確選的「不使用圖面」）；
+// chosen==='' 且有候選圖面時一定是使用者選了「不使用圖面」（自動挑選一律會把 chosen 填上），
+// 要送 sentinel __NONE__ 讓後端不要又自動挑回去。
+function currentDrawingParam(){
+    if(!DATA) return '';
+    var d=DATA.drawing;
+    if(d.chosen) return d.chosen;
+    return d.candidates.length ? '__NONE__' : '';
 }
 $('#btn-load').on('click', function(){ loadData('summary',''); });
 $(document).on('keydown', '#inp-bom', function(e){ if(e.which===13){ e.preventDefault(); $('#btn-load').click(); } });
@@ -387,7 +435,7 @@ $(document).on('change', '#sel-drawing', function(){
 });
 $(document).on('change', 'input[name=mode]', function(){
     if(!DATA) return;
-    loadData($(this).val(), DATA.drawing.chosen);
+    loadData($(this).val(), currentDrawingParam());
 });
 <?php if ($bomParam !== ''): ?>
 $(function(){ loadData('summary',''); });
@@ -441,39 +489,55 @@ function buildProcessFullBlock(p, idx){
         pbody += '</tbody></table>';
         return head + pbody;
     }
-    if(!p.detail || !p.detail.items || !p.detail.items.length){
+    // 完整模式：每一批每一輪各自展開一份明細（使用者 2026-09-24 回報：齒研兩批檢驗只印出一批，
+    // 原本只取「最後一批最後一輪」，改成 p.details 是陣列，逐筆各印一段，各自標出第幾批/第幾輪）。
+    var blocks=p.details||[];
+    if(!blocks.length){
         return head + '<div class="muted-help" style="margin:4px 0 14px;">尚無實測資料</div>';
     }
-    var n=p.detail.sample_n;
-    var pcsHead=''; for(var i=1;i<=n;i++) pcsHead+='<th>'+i+'</th>';
-    // 使用量具改成整個製程區塊印一行（量具是綁在整張檢驗單上，不是逐項）
-    var toolLine = p.detail.tools ? ('<div class="pm-trail"><b>使用量具：</b>'+esc(p.detail.tools)+'</div>') : '';
-    var body='<table class="pm-items"><thead><tr><th class="c-no">項次</th><th>檢驗項目</th><th>標準</th><th class="c-tol">上差</th><th class="c-tol">下差</th>'+pcsHead+'<th>判定</th></tr></thead><tbody>';
-    p.detail.items.forEach(function(it,i2){
-        var code=String.fromCharCode(65+(i2%26));
-        var cells=''; (it.samples||[]).forEach(function(sv){
-            var v=(sv&&sv.v!=null&&sv.v!=='')?sv.v:'';
-            cells+='<td'+((sv&&sv.r==='NG'&&v!=='')?' class="pm-ng-cell"':'')+'>'+esc(v)+'</td>';
+    var out='';
+    blocks.forEach(function(d){
+        var n=d.sample_n;
+        var pcsHead=''; for(var i=1;i<=n;i++) pcsHead+='<th>'+i+'</th>';
+        var roundTag = '第'+d.batch_no+'批'+(d.round_no>1?('　重驗'+(d.round_no-1)):'')+
+            '　'+esc(d.date||'')+'　'+(d.check_result==='NG'?'<span class="pm-ng">不良</span>':'合格');
+        // 使用量具改成整個批次區塊印一行（量具是綁在整張檢驗單上，不是逐項）
+        var toolLine = d.tools ? ('　<b>使用量具：</b>'+esc(d.tools)) : '';
+        out += '<div class="pm-round-tag">'+roundTag+toolLine+'</div>';
+        if(!d.items || !d.items.length){
+            out += '<div class="muted-help" style="margin:2px 0 8px;">此批次尚無實測項目</div>';
+            return;
+        }
+        var body='<table class="pm-items"><thead><tr><th class="c-no">項次</th><th>檢驗項目</th><th>標準</th><th class="c-tol">上差</th><th class="c-tol">下差</th>'+pcsHead+'<th>判定</th></tr></thead><tbody>';
+        d.items.forEach(function(it,i2){
+            var code=String.fromCharCode(65+(i2%26));
+            var cells=''; (it.samples||[]).forEach(function(sv){
+                var v=(sv&&sv.v!=null&&sv.v!=='')?sv.v:'';
+                cells+='<td'+((sv&&sv.r==='NG'&&v!=='')?' class="pm-ng-cell"':'')+'>'+esc(v)+'</td>';
+            });
+            // 公差輸入模式=RANGE(直接填絕對上下限)：標準欄改印「下限~上限」，公差欄留空，
+            // 不然照舊印 it.std/it.up/it.lo 會是空的（RANGE 模式根本沒有這三個值）
+            var isRange = it.mode==='RANGE';
+            var stdTd = isRange ? (trimNum(it.min)+' ~ '+trimNum(it.max)) : (it.std||'');
+            var upTd = isRange ? '' : (it.up||''), loTd = isRange ? '' : (it.lo||'');
+            body+='<tr><td>'+code+'</td><td class="tl">'+esc(it.name)+'</td><td>'+esc(stdTd)+'</td>'
+                + '<td>'+esc(upTd)+'</td><td>'+esc(loTd)+'</td>'
+                + cells + '<td>'+(it.verdict==='NG'?'<span class="pm-ng">NG</span>':(it.verdict==='AOD'?'特採':'OK'))+'</td></tr>';
         });
-        // 公差輸入模式=RANGE(直接填絕對上下限)：標準欄改印「下限~上限」，公差欄留空，
-        // 不然照舊印 it.std/it.up/it.lo 會是空的（RANGE 模式根本沒有這三個值）
-        var isRange = it.mode==='RANGE';
-        var stdTd = isRange ? (trimNum(it.min)+' ~ '+trimNum(it.max)) : (it.std||'');
-        var upTd = isRange ? '' : (it.up||''), loTd = isRange ? '' : (it.lo||'');
-        body+='<tr><td>'+code+'</td><td class="tl">'+esc(it.name)+'</td><td>'+esc(stdTd)+'</td>'
-            + '<td>'+esc(upTd)+'</td><td>'+esc(loTd)+'</td>'
-            + cells + '<td>'+(it.verdict==='NG'?'<span class="pm-ng">NG</span>':(it.verdict==='AOD'?'特採':'OK'))+'</td></tr>';
+        body+='</tbody></table>';
+        out += body;
     });
-    body+='</tbody></table>';
-    return head+toolLine+body;
+    return head+out;
 }
 $('#btn-print').on('click', function(){
     if(!DATA){ alert('請先查詢'); return; }
     var mode=$('input[name=mode]:checked').val();
     var paper=$('input[name=paper]:checked').val();
-    loadData(mode, DATA.drawing.chosen, function(){ doPrint(mode, paper); });
+    var orient=$('input[name=orient]:checked').val();
+    loadData(mode, currentDrawingParam(), function(){ doPrint(mode, paper, orient); });
 });
-function doPrint(mode, paper){
+function doPrint(mode, paper, orient){
+    orient = (orient==='landscape') ? 'landscape' : 'portrait';
     // 包裝檢驗尚未結案（可能還會再變動）時先提醒一次，但不阻擋列印——內容照現有資料照印
     // （使用者 2026-09-24 明確要求：先判定包裝檢驗紀錄是否結案，未結案跳提醒但不阻擋列印）。
     var openPacking=(DATA.processes||[]).filter(function(p){ return p.is_packing && p.packing_open; });
@@ -533,6 +597,7 @@ function doPrint(mode, paper){
         + '.pm-proc-block{break-inside:avoid-page;margin-top:10px;}'
         + '.pm-proc-head{font-size:13px;font-weight:bold;border-left:4px solid #F0A24B;padding-left:6px;margin-bottom:2px;}'
         + '.pm-trail{margin-bottom:4px;}'
+        + '.pm-round-tag{font-size:11px;font-weight:bold;color:#4A3524;background:#FBF3E6;border-left:3px solid #E4D3BC;padding:2px 6px;margin:6px 0 2px;}'
         + '.pm-chip{display:inline-block;border:1px solid #ccc;border-radius:10px;padding:1px 8px;font-size:10px;margin-right:2px;}'
         + '.pm-arrow{margin:0 3px;color:#999;}'
         + '.pm-ok{color:#3c763d;font-weight:bold;} .pm-ng{color:#b9401f;font-weight:bold;}'
@@ -543,7 +608,7 @@ function doPrint(mode, paper){
         + 'table.pm-items td.tl{text-align:left;}'
         + '.pm-ng-cell{color:#000;font-weight:bold;text-decoration:underline;}'
         + '.pm-pack-tag{display:inline-block;margin-left:6px;background:#F0A24B;color:#4A3524;border-radius:8px;padding:0 6px;font-size:9px;font-weight:bold;vertical-align:middle;}'
-        + '@page{size:'+paper+' portrait;margin:12mm 10mm 18mm;'
+        + '@page{size:'+paper+' '+orient+';margin:12mm 10mm 18mm;'
         + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
         + '}';
 

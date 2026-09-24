@@ -6302,12 +6302,16 @@ $(function(){
             if(!rows.length){ $('#partHistList').html('<div class="text-muted">此料號尚無歷史檢驗紀錄。</div>'); return; }
             var h='<div class="text-muted" style="margin-bottom:6px;">料號 <b>'+esc(ctx.part_no||'')+'</b>　共 '+rows.length+' 筆（點「檢視」看逐項實測與同尺寸落點）</div>'+
               '<div style="max-height:230px;overflow:auto;"><table class="table table-condensed table-bordered"><thead><tr>'+
-              '<th>日期</th><th>製令</th><th>製程</th><th>批/複</th><th>判定</th><th>不良</th><th>檢驗人</th><th></th></tr></thead><tbody>';
+              '<th>日期</th><th>製令</th><th>製程</th><th>批/複</th><th>判定</th><th>不良</th><th>檢驗人</th><th>異常單</th><th></th></tr></thead><tbody>';
             rows.forEach(function(r){
                 var d=String(r.check_date||r.created_at||'').substring(0,16);
+                var ncrCell = r.abnormal_order_no
+                    ? '<a href="../QA/qa_abnormal_view.php?id='+r.abnormal_order_id+'" target="_blank">'+esc(r.abnormal_order_no)+'</a>'
+                    : '';
+                // 是否為首件/末件比照批次歷程同一顆 inspKindBadge()，跟在批/複次數後面
                 h+='<tr><td>'+esc(d)+'</td><td>'+esc(r.bom||'')+'</td><td>'+esc(r.process_name||'')+'</td>'+
-                   '<td>'+(r.batch_no||1)+'/'+(r.round_no||1)+'</td><td>'+statusLabel(r.check_result)+'</td>'+
-                   '<td>'+(r.ng_qty||0)+'</td><td>'+esc(r.user_cname||r.created_by||'')+'</td>'+
+                   '<td>'+(r.batch_no||1)+'/'+(r.round_no||1)+inspKindBadge(r.insp_kind)+'</td><td>'+statusLabel(r.check_result)+'</td>'+
+                   '<td>'+(r.ng_qty||0)+'</td><td>'+esc(r.user_cname||r.created_by||'')+'</td><td>'+ncrCell+'</td>'+
                    '<td><button class="btn btn-xs btn-primary ph-view" data-id="'+r.qc_form_id+'">檢視</button></td></tr>';
             });
             h+='</tbody></table></div>';
@@ -6326,16 +6330,24 @@ $(function(){
         var h=res.header, its=res.items||[];
         // 使用量具是整張檢驗單的資訊 → 印在最上面一行，表格內不再有量具欄（2026-09-16）
         var tls=(res.tools||[]).map(function(t){ return ((t.cat?t.cat+' ':'')+t.no+(t.spec && String(t.no).indexOf(t.spec)<0 ? '('+t.spec+')' : '')); }).join('、');
-        var out='<div class="well well-sm" style="margin-bottom:8px;"><b>逐項實測</b>（單號 '+h.qc_form_id+'；送驗 '+(h.incoming_qty||0)+'／抽驗 '+(h.sample_qty||0)+'；整體 '+(h.check_result==='NG'?'<span class="text-danger">不良</span>':'合格')+'）'+
-                '<div style="margin-top:4px;"><b>使用量具：</b>'+esc(tls||'—')+'</div></div>';
+        // 使用者 2026-09-24 回報：不需要顯示單號、有開異常單要顯示單號與連結
+        var ncrLine = h.abnormal_order_no
+            ? '<div style="margin-top:4px;"><b>異常單：</b><a href="../QA/qa_abnormal_view.php?id='+h.abnormal_order_id+'" target="_blank">'+esc(h.abnormal_order_no)+'</a></div>' : '';
+        var out='<div class="well well-sm" style="margin-bottom:8px;"><b>逐項實測</b>'+inspKindBadge(h.insp_kind)+'（送驗 '+(h.incoming_qty||0)+'／抽驗 '+(h.sample_qty||0)+'；整體 '+(h.check_result==='NG'?'<span class="text-danger">不良</span>':'合格')+'）'+
+                '<div style="margin-top:4px;"><b>使用量具：</b>'+esc(tls||'—')+'</div>'+ncrLine+'</div>';
         out+='<div style="max-height:300px;overflow:auto;"><table class="table table-condensed table-bordered"><thead><tr><th>項次</th><th>項目</th><th>標準</th><th>實測（各PCS）</th><th>判定</th></tr></thead><tbody>';
         its.forEach(function(it,idx){
             var readings=[{samples:it.samples}];
             (it.extra||[]).forEach(function(ex){ readings.push({samples:ex.samples}); });
+            // 標準欄比照全站共用說法：RANGE 模式(直接填絕對上下限)不印標準值，改印「下限~上限」，
+            // 也不再附加上下公差（那是 TOL 模式才有的東西）——原本一律印 it.std 在 RANGE 模式下是空的
+            // （使用者 2026-09-24 回報「標準為範圍的顯示也錯誤」）。
+            var isRange = it.mode==='RANGE' && it.type!=='OKNG';
+            var stdTxt = isRange ? specDisplayText(it) : ((it.std||'')+((it.up||it.lo)?(' ('+(it.up||'')+'/'+(it.lo||'')+')'):''));
             readings.forEach(function(rd,ri){
                 var vals=(rd.samples||[]).map(function(s){ return (s&&s.v!==''&&s.v!=null)?('<span class="'+((s.r==='NG')?'text-danger':'')+'">'+esc(s.v)+'</span>'):'·'; }).join('　');
                 out+='<tr>'+(ri===0
-                        ? ('<td>'+esc(codeLabel(idx))+'</td><td>'+esc(it.name)+'</td><td>'+esc(it.std||'')+((it.up||it.lo)?(' ('+esc(it.up||'')+'/'+esc(it.lo||'')+')'):'')+'</td>')
+                        ? ('<td>'+esc(codeLabel(idx))+'</td><td>'+esc(it.name)+'</td><td>'+esc(stdTxt)+'</td>')
                         : ('<td></td><td class="text-muted" style="font-size:12px">↳ 加量測 '+ri+'</td><td></td>'))+
                     '<td>'+vals+'</td>'+(ri===0?('<td rowspan="'+readings.length+'">'+(it.verdict==='NG'?'<span class="text-danger">NG</span>':(it.verdict==='AOD'?'特採':'OK'))+'</td>'):'')+'</tr>';
             });

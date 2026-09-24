@@ -1158,13 +1158,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             requireViewPerm($pdo, $user_id);
             $d_id = (int)($_POST['d_id'] ?? 0);
             if (!$d_id) throw new Exception('缺少料號 d_id');
+            // 使用者 2026-09-24 回報：檢驗人顯示錯誤、看不出首件/末件、也看不到已開立的異常單。
+            // 檢驗人一律優先取 inspector_by（補資料指定的實際檢驗人），沒有才退回 created_by（存檔者）
+            // ——這裡跟 get_history_record()／批次與檢驗歷程列表同一套認定，不可只看 created_by。
             $q = $pdo->prepare(
-                "SELECT f.qc_form_id, f.bom_ing_fid, f.batch_no, f.round_no, f.process_name,
+                "SELECT f.qc_form_id, f.bom_ing_fid, f.batch_no, f.round_no, f.process_name, f.insp_kind,
                         f.check_date, f.created_at, f.check_result, f.ng_qty, f.incoming_qty, f.sample_qty,
-                        f.created_by, u.user_cname, bi.bom
+                        f.created_by, f.inspector_by, u.user_cname, bi.bom,
+                        f.abnormal_order_id, qa.abnormal_order_no
                  FROM qc_check_form f
                  LEFT JOIN bom_ing bi ON bi.bom_ing_fid = f.bom_ing_fid
-                 LEFT JOIN user u ON TRIM(f.created_by) = u.id
+                 LEFT JOIN user u ON TRIM(COALESCE(f.inspector_by, f.created_by)) = u.id
+                 LEFT JOIN qa_abnormal_order qa ON qa.id = f.abnormal_order_id
                  WHERE f.d_id = ? AND f.status <> 'DRAFT'
                  ORDER BY f.qc_form_id DESC LIMIT 300");
             $q->execute([$d_id]);
