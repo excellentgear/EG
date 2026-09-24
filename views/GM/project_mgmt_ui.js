@@ -2978,29 +2978,24 @@ function renderRel(res) {
            + '<b>委外製程</b>沒有廠內報工，實績看的是轉出入紀錄（轉出入日期、數量、損耗）。</div>';
     } else {
         var wg = pjGroupWorkReports(wr);
+        var timeRows = '';   // 下方另一張「架機／加工時間」表格（使用者要求：太擠了，獨立出來自己一個表格）
         h += '<div style="overflow-x:auto;max-height:340px;overflow-y:auto;"><table class="sub-tbl"><thead><tr>'
-          + '<th style="width:170px;">架機／加工時間</th><th style="width:56px;">類型</th>'
+          + '<th style="width:56px;">類型</th>'
           + '<th style="width:110px;">製令單</th><th style="width:46px;">順序</th><th>製程</th>'
-          + '<th style="width:110px;">機台／廠商</th><th style="width:120px;">人員／轉出入</th>'
+          + '<th style="width:110px;">機台／廠商</th>'
           + '<th style="width:64px;">數量</th><th style="width:56px;">狀態</th><th>備註</th></tr></thead><tbody>';
         $.each(wg, function (i, g) {
             var isIn = (g.kind === 'in'), rows = g.rows, first = rows[0];
-            var dateCell;
+            var bomLink = (first.bom ? '<span class="pj-op" data-viewwork="' + esc(first.bom) + '" title="開啟報工紀錄查詢">' + esc(first.bom) + '</span>' : '');
             if (isIn) {
                 var setupRows = $.grep(rows, function (r) { return r.su_t1 || r.setup_user; });
                 var prodRows  = $.grep(rows, function (r) { return r.t1 || r.t2 || num(r.qty) > 0; });
                 var setupLine = pjSummarizeTimeGroup($.map(setupRows, function (r) { return { t1: r.su_t1, t2: r.su_t2, rdate: r.rdate }; }));
                 var prodLine  = pjSummarizeTimeGroup($.map(prodRows,  function (r) { return { t1: r.t1,    t2: r.t2,    rdate: r.rdate }; }), { unit: '報工' });
-                dateCell = (setupLine ? '架　' + esc(setupLine) : '')
-                         + (setupLine && prodLine ? '<br>' : '')
-                         + (prodLine ? '加　' + esc(prodLine) : '');
-                if (!dateCell) dateCell = dispDate(first.rdate);
                 var setupNames = pjDistinctNonEmpty(setupRows, 'setup_user');
                 var prodNames  = pjDistinctNonEmpty(prodRows, 'prod_user');
-                var peopleParts = [];
-                if (setupNames.length) peopleParts.push('上機 ' + (setupNames.length === 1 ? setupNames[0] : (setupNames.length + ' 人')));
-                if (prodNames.length)  peopleParts.push('生產 ' + (prodNames.length === 1 ? prodNames[0] : (prodNames.length + ' 人')));
-                var peopleCell = peopleParts.length ? esc(peopleParts.join('　')) : '－';
+                var setupPeople = setupNames.length ? (setupNames.length === 1 ? setupNames[0] : (setupNames.length + ' 人')) : '';
+                var prodPeople  = prodNames.length  ? (prodNames.length === 1 ? prodNames[0] : (prodNames.length + ' 人'))  : '';
                 var qtySum = 0, ngSum = 0, finished = false, abnList = [], noteList = [];
                 $.each(rows, function (j, r) {
                     qtySum += num(r.qty); ngSum += num(r.ng_qty);
@@ -3020,28 +3015,28 @@ function renderRel(res) {
                     }).join('<br>')
                     + (abnList.length && noteList.length ? '<br>' : '')
                     + esc(noteList.join('、'));
-                h += '<tr><td>' + dateCell + '</td>'
-                  + '<td><span class="st st-approved">廠內</span></td>'
-                  + '<td>' + (first.bom ? '<span class="pj-op" data-viewwork="' + esc(first.bom) + '" title="開啟報工紀錄查詢">' + esc(first.bom) + '</span>' : '')
-                  + '</td><td>' + num(first.bom_sn) + '</td>'
+                h += '<tr><td><span class="st st-approved">廠內</span></td>'
+                  + '<td>' + bomLink + '</td><td>' + num(first.bom_sn) + '</td>'
                   + '<td>' + esc(first.process_name || ('製程' + num(first.process_no))) + '</td>'
                   + '<td>' + machineCell + '</td>'
-                  + '<td>' + peopleCell + '</td>'
                   + '<td>' + qtySum + (ngSum ? '<br><span class="rd-bad">NG ' + ngSum + '</span>' : '') + '</td>'
                   + '<td>' + (finished ? '<span class="st st-approved">完工</span>' : '進行中') + '</td>'
                   + '<td>' + noteCell + '</td></tr>';
+                timeRows += '<tr><td>' + bomLink + '</td><td>' + num(first.bom_sn) + '</td>'
+                  + '<td>' + esc(first.process_name || ('製程' + num(first.process_no))) + '</td>'
+                  + '<td>' + (setupLine ? esc(setupLine) : '<span class="pj-hint">－</span>')
+                        + (setupPeople ? '<br><span class="pj-hint">' + esc(setupPeople) + '</span>' : '') + '</td>'
+                  + '<td>' + (prodLine ? esc(prodLine) : '<span class="pj-hint">－</span>')
+                        + (prodPeople ? '<br><span class="pj-hint">' + esc(prodPeople) + '</span>' : '') + '</td></tr>';
             } else {
                 var r = first;
-                h += '<tr><td>' + dispDate(r.rdate) + '</td>'
-                  + '<td><span class="st st-submitted">委外</span></td>'
-                  + '<td>' + (r.bom ? '<span class="pj-op" data-viewwork="' + esc(r.bom) + '" title="開啟報工紀錄查詢">' + esc(r.bom) + '</span>' : '')
-                  + '</td><td>' + num(r.bom_sn) + '</td>'
+                h += '<tr><td><span class="st st-submitted">委外</span></td>'
+                  + '<td>' + bomLink + '</td><td>' + num(r.bom_sn) + '</td>'
                   + '<td>' + esc(r.process_name || ('製程' + num(r.process_no))) + '</td>'
                   + '<td>' + esc(r.maker_to_name || r.maker_from_name || '－') + '</td>'
-                  + '<td>' + esc((r.maker_from_name || '?') + ' → ' + (r.maker_to_name || '?')) + '</td>'
                   + '<td>' + num(r.qty) + (num(r.loss_qty) ? '<br><span class="pj-hint">損耗 ' + num(r.loss_qty) + '</span>' : '') + '</td>'
                   + '<td>－</td>'
-                  + '<td>' + esc(r.note || '') + '</td></tr>';
+                  + '<td>' + esc((r.maker_from_name || '?') + ' → ' + (r.maker_to_name || '?')) + (r.note ? '<br>' + esc(r.note) : '') + '</td></tr>';
             }
         });
         var totGood = 0, totNg = 0;
@@ -3049,6 +3044,12 @@ function renderRel(res) {
         h += '</tbody></table></div>'
           + '<p class="pj-hint">共 ' + wg.length + ' 列（合併同一製令/製程的多筆報工；原始報工共 ' + wr.length + ' 筆，廠內報工總數 ' + (totGood + totNg)
           + '　良品 ' + totGood + '　NG ' + totNg + '），依日期由新到舊。這些是生產現場登打的原始紀錄，本頁只顯示不修改。</p>';
+        if (timeRows) {
+            h += '<div style="margin-top:10px;"><b style="font-size:13px;">架機／加工時間（僅廠內，人員在時間下方）</b>'
+              + '<div style="overflow-x:auto;max-height:260px;overflow-y:auto;margin-top:4px;"><table class="sub-tbl"><thead><tr>'
+              + '<th style="width:110px;">製令單</th><th style="width:46px;">順序</th><th style="width:110px;">製程</th>'
+              + '<th>架機時間</th><th>加工時間</th></tr></thead><tbody>' + timeRows + '</tbody></table></div></div>';
+        }
     }
     h += '</div>';
 
