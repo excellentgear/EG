@@ -771,7 +771,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sql .= " ORDER BY bi.bom DESC LIMIT 50";
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
-            echo json_encode(['success' => true, 'data' => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // 搜尋結果為空時，順便查一下關鍵字是不是命中「已經有包裝紀錄」的舊資料——
+            // 使用者常常是拿已補登過的 BOM／料號再查一次，直接告知並附上可跳轉的紀錄，不要只回「查無符合」讓人誤以為系統沒資料
+            $existing = [];
+            if (!$rows && $kw !== '') {
+                $exSql = "SELECT packing_inspection_id, bom, part_no, customer_name, inspection_date, judgement, status
+                          FROM qc_packing_inspection
+                          WHERE bom LIKE ? OR part_no LIKE ? OR customer_name LIKE ?
+                          ORDER BY inspection_date DESC LIMIT 20";
+                $exStmt = $pdo->prepare($exSql);
+                $exStmt->execute([$like, $like, $like]);
+                $existing = $exStmt->fetchAll(PDO::FETCH_ASSOC);
+            }
+            echo json_encode(['success' => true, 'data' => $rows, 'existing' => $existing]);
             exit;
         }
 
@@ -2430,9 +2444,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $('#backfillModal').modal('show');
         });
         function bfSearch() {
-            $.post(API, { action: 'backfill_search', kw: $('#bf-kw').val() }, function (res) {
+            var kw = $('#bf-kw').val();
+            $.post(API, { action: 'backfill_search', kw: kw }, function (res) {
                 if (!res.success) { $('#bf-result').html('<tr><td colspan="6" class="text-danger">' + (res.message || '搜尋失敗') + '</td></tr>'); return; }
-                if (!res.data.length) { $('#bf-result').html('<tr><td colspan="6" class="text-center text-muted">查無符合的 BOM（或已有包裝紀錄）</td></tr>'); return; }
+                if (!res.data.length) {
+                    var ex = res.existing || [];
+                    if (ex.length) {
+                        // 查無「尚未有包裝紀錄」的候選，但關鍵字命中了已補登/已結案的舊紀錄——直接帶去已結案清單篩選出來，不要只回一句查無資料
+                        var judgeName = { PASS: '合格', FAIL: '不合格', PENDING: '待判定' };
+                        alert('「' + kw + '」已經有包裝紀錄了（共 ' + ex.length + ' 筆，' + ex.map(function (r) {
+                            return r.bom + '/' + (r.part_no || '') + '(' + (judgeName[r.judgement] || r.judgement) + ')';
+                        }).join('、') + '），已為您切換到「已結案清單」並篩選出來。');
+                        $('#backfillModal').modal('hide');
+                        $('#cl-f-bom').val('');
+                        $('#cl-f-part').val(kw);
+                        clJudgeFilter = '';
+                        $('.pk-judge-card').removeClass('active');
+                        $('.pk-judge-card[data-judge=""]').addClass('active');
+                        $('#pk-main-tabs li').removeClass('active');
+                        $('#pk-main-tabs li[data-tab="closed"]').addClass('active');
+                        $('#pk-tab-pending').hide();
+                        $('#pk-tab-closed').show();
+                        loadClosedList(1);
+                    } else {
+                        $('#bf-result').html('<tr><td colspan="6" class="text-center text-muted">查無符合的 BOM</td></tr>');
+                    }
+                    return;
+                }
                 var html = '';
                 res.data.forEach(function (r, i) {
                     html += '<tr><td>' + r.bom + '</td><td>' + (r.ProcessName || ('製程' + r.process_no)) + '</td><td>' +
