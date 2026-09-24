@@ -4327,7 +4327,9 @@ $(function(){
     // 若只取「批次最後一筆」（改版前的舊算法），會漏算首件已經吃掉的量，一般批次的預設值就會
     // 少扣那幾件，變成「首件驗1件、剩下69件卻還是帶入70件」（使用者 2026-09-24 實測回報）。
     function pendingSummary(){
-        var order=ctx.order_qty||0, used=0;
+        // good：良品數＝BOM總數扣掉「這一站（含）之前已結案配發報廐單號」的確認報廐量（2026-09-24 使用者交辦），
+        // 沒有報廐時 good===order；「尚未檢驗」是拿良品數當上限，不是拿 BOM 總數，報廐掉的量本來就不會再送驗。
+        var order=ctx.order_qty||0, good=(ctx.good_qty!=null ? ctx.good_qty : order), used=0;
         (state.batches||[]).forEach(function(b){
             if(!b.rounds || !b.rounds.length) return;
             var lastNormal=null;
@@ -4337,7 +4339,7 @@ $(function(){
             });
             if(lastNormal) used += (lastNormal.incoming_qty||0);
         });
-        return { left:Math.max(0, order-used), order:order, used:used };
+        return { left:Math.max(0, good-used), order:order, good:good, used:used };
     }
     function renderCtxBar(){
         var partCell = ctx.part_no
@@ -4354,7 +4356,7 @@ $(function(){
             +'</span></div>'+
             (ctx.adhoc
                 ? '<div><b>送驗數</b><span class="cv">'+(ctx.order_qty||0)+'</span></div>'
-                : '<div><b>尚未檢驗 / 訂單數</b><span class="cv" id="ctx-pending" title="訂單數 '+ps.order+' 件，已送驗 '+ps.used+' 件">'+ps.left+' / '+ps.order+'pcs</span></div>')+
+                : '<div><b>尚未檢驗 / 良品數 / BOM總數</b><span class="cv" id="ctx-pending" title="BOM總數 '+ps.order+' 件'+(ps.good<ps.order?'，已扣報廐後良品數 '+ps.good+' 件':'')+'，已送驗 '+ps.used+' 件">'+ps.left+' / '+ps.good+' / '+ps.order+'pcs</span></div>')+
             '<div><b>'+(ctx.adhoc?'抽驗數':'建議抽驗')+'</b><span class="cv">'+(ctx.sample_qty||0)+' 件</span></div>'+
             (ctx.ship ? '' : '<div id="kind-box"><b>檢驗性質</b><span class="cv"><span class="ki-btns">'+
                 ['NORMAL','FIRST','LAST'].map(function(k){
@@ -4583,7 +4585,8 @@ $(function(){
         var $el=$('#ctx-pending');
         if(!$el.length || ctx.adhoc) return;
         var ps=pendingSummary();
-        $el.attr('title','訂單數 '+ps.order+' 件，已送驗 '+ps.used+' 件').text(ps.left+' / '+ps.order+'pcs');
+        $el.attr('title','BOM總數 '+ps.order+' 件'+(ps.good<ps.order?'，已扣報廐後良品數 '+ps.good+' 件':'')+'，已送驗 '+ps.used+' 件')
+           .text(ps.left+' / '+ps.good+' / '+ps.order+'pcs');
     }
     // 準備填寫「下一次」檢驗時，「本批送驗數」自動帶入「尚未檢驗」的剩餘量，不必自己心算
     // 訂單數減掉已送驗的量——不論這是批次的第一次、還是同一批次接著再驗一次（例：首件驗完

@@ -15,6 +15,7 @@ include_once '../../src/common/DBConnection.php';
 include_once '../../src/common/rbac.php'; // #1 fail-closed：共用 RBAC bootstrap 判定
 include_once '../../src/common/qc_inspection_lib.php'; // #3/#10/#12：後端重算/多量具/共用寫入
 include_once '../../src/common/qc_tool_display_lib.php'; // 量具顯示名稱統一格式（ai-rules/25，唯一實作）
+include_once '../../src/common/qa_abnormal_lib.php'; // 報廢扣減唯一實作 qab_bom_scrap_qty()（2026-09-24）
 
 // 權限不足專用例外：讓 catch 統一回 HTTP 403（前端可據此禁用/提示）
 if (!class_exists('QcPermException')) { class QcPermException extends Exception {} }
@@ -172,7 +173,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 exit;
             }
 
-            $sql = "SELECT bi.bom_ing_fid, bi.bom, bi.sqty, bi.process_no, bi.batch_label,
+            $sql = "SELECT bi.bom_ing_fid, bi.bom, bi.sqty, bi.bom_sn, bi.process_no, bi.batch_label,
                            b.d_id AS part_no, b.Client_Name,
                            d.d_id AS d_setting_pk, d.D_Setting_Id, d.Revision,
                            pn.ProcessName
@@ -234,6 +235,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 品質異常處理單的「檢驗數」也呼叫同一支，兩邊不會算出不同的建議值
             $sample_qty = qc_suggest_sample_qty($pdo, (int)$ctx['sqty']);
 
+            // 良品數＝訂單數扣掉「這一站（含）之前已結案配發報廐單號」的確認報廐量（2026-09-24 使用者交辦）；
+            // 沒有任何確認報廐時就等於訂單數，唯一實作 qab_bom_scrap_qty() 不在這裡另算一份
+            $good_qty = (int)$ctx['sqty'];
+            try {
+                $good_qty = max(0, (int)$ctx['sqty'] - qab_bom_scrap_qty($pdo, (string)$ctx['bom'], (int)$ctx['bom_sn']));
+            } catch (Throwable $e) { /* 算不出來就先當作沒有報廢，不擋畫面 */ }
+
             // 既有檢驗歷程（批次/複驗，含異常單決定）
             // 使用者 2026-09-24 回報：「批次與檢驗歷程」看不到檢驗數、也看不到是誰驗的/誰審的——
             // 一併帶回檢驗人員（inspector_by，沒填才退回 created_by）、審核人員與審核日期（approved_by/approved_at），
@@ -278,6 +286,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'part_no'     => $ctx['part_no'],
                     'client'      => $ctx['Client_Name'],
                     'order_qty'   => (int)$ctx['sqty'],
+                    'good_qty'    => $good_qty,
                     'process'     => $process,
                     'batch_label' => $ctx['batch_label'],  // 拆批時的批次代號，同製程有多批送驗要能分辨是哪一批
                     'd_id'        => $d_id,
