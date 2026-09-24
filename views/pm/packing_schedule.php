@@ -201,9 +201,10 @@ function get_packing_packer_allowed_dept_ids(PDO $pdo): array
     return array_values(array_unique(array_map('intval', $out)));
 }
 
-// 管理員設定的「補登預設檢驗人員」（user.id），未設定回 null。
-// 補登時嚴禁自動把正在操作補登的人記成檢驗人員（使用者明確要求），故補登新建紀錄若未明確指定
-// 一律改用這個設定值，設定值也沒有就直接擋下要求補齊——見 save_result 的 $isBackfill 分支。
+// 管理員設定的「預設檢驗人員」（user.id），未設定回 null。
+// 一般填寫與補登都會優先帶入這個人（使用者可在表單上改選其他人）；補登時嚴禁自動把正在
+// 操作補登的人記成檢驗人員，故補登新建紀錄若未明確指定又沒有這個設定值，直接擋下要求補齊
+// ——見 save_result 的 $isBackfill 分支；一般填寫沒有設定值時才退回預設本人。
 function pk_default_inspector_id(PDO $pdo): ?int
 {
     $st = $pdo->prepare("SELECT param_value FROM system_parameters WHERE param_group='PACKING_SCHEDULE' AND param_key='default_inspector_id' LIMIT 1");
@@ -212,6 +213,18 @@ function pk_default_inspector_id(PDO $pdo): ?int
     if ($v === false) return null;
     $id = (int)json_decode($v, true);
     return $id > 0 ? $id : null;
+}
+
+// 「預設檢驗人員」設定值的完整資料（id＋姓名），查不到人回 null——與 pk_default_inspector_id()
+// 分開是因為多處要用到姓名（存檔快照、settings 讀取），只放一處查詢避免規則走鐘
+function pk_default_inspector_info(PDO $pdo): ?array
+{
+    $defId = pk_default_inspector_id($pdo);
+    if (!$defId) return null;
+    $du = $pdo->prepare("SELECT id, user_cname FROM `user` WHERE id = ? LIMIT 1");
+    $du->execute([$defId]);
+    $dr = $du->fetch(PDO::FETCH_ASSOC);
+    return $dr ? ['id' => (int)$dr['id'], 'name' => $dr['user_cname']] : null;
 }
 
 // =============================================================================
@@ -740,19 +753,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 // 補登新建且沒有明確指定檢驗人員：嚴禁自動變成正在操作補登的人（補登多半是管理員代填，
                 // 不代表他就是當時實際檢驗的人）——改用管理員設定的「預設檢驗人員」，沒設定就直接擋下
                 // 要求補齊，不可以安靜地把正在操作的人記成檢驗人員（使用者明確要求）。
-                $defId = pk_default_inspector_id($pdo);
-                if ($defId) {
-                    $du = $pdo->prepare("SELECT id, user_cname FROM `user` WHERE id = ? LIMIT 1");
-                    $du->execute([$defId]);
-                    $dr = $du->fetch(PDO::FETCH_ASSOC);
-                    if ($dr) { $inspectorId = (int)$dr['id']; $inspectorName = $dr['user_cname']; }
-                }
+                $defInfo = pk_default_inspector_info($pdo);
+                if ($defInfo) { $inspectorId = $defInfo['id']; $inspectorName = $defInfo['name']; }
                 if ($inspectorId === null) {
                     throw new Exception('補登請選擇檢驗人員（尚未設定預設檢驗人員，可於「包裝製程設定」設定，或直接在表單上選擇）');
                 }
             } else {
-                // 一般填寫且沒有明確送出（正常情況下前端一律會送，這裡只是防呆）：預設為本人
-                $inspectorId = $pk_uid;
+                // 一般填寫且沒有明確送出（正常情況下前端一律會送，這裡只是防呆）：
+                // 優先套用管理員設定的預設檢驗人員，沒設定才退回本人
+                $defInfo = pk_default_inspector_info($pdo);
+                if ($defInfo) { $inspectorId = $defInfo['id']; $inspectorName = $defInfo['name']; }
+                else { $inspectorId = $pk_uid; }
             }
 
             // 已結案紀錄要改：僅管理員可操作，且要輸入操作確認密碼才算解鎖（鐵律8：不可只靠前端擋）
@@ -1335,7 +1346,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     <p class="text-muted">可指定的「包裝人員／檢驗人員」範圍（僅管理員可設定，兩者共用同一份範圍）：選擇部門，可多選，<strong>各部門一律含底下所有子部門</strong>；不選任何部門＝不限制，全公司在職人員皆可挑選。填寫檢驗表單時挑選檢驗人員、補登舊資料時挑選包裝人員，都只能從這裡設定的部門範圍中選擇（本人不受此限制，一律可選自己）。</p>
                     <select id="setting-packer-dept" class="form-control" multiple style="width:100%;"></select>
                     <hr>
-                    <p class="text-muted">補登預設檢驗人員（僅管理員可設定）：補登舊資料時，檢驗人員一律預設帶入這個人，<strong>不會自動變成正在操作補登的人</strong>；使用者仍可在表單上改選其他人。未設定時，補登會要求先在表單上手動選一次才能存檔。</p>
+                    <p class="text-muted">預設檢驗人員（僅管理員可設定）：<strong>不論一般填寫或補登舊資料</strong>，檢驗人員一律優先預設帶入這個人；使用者仍可在表單上改選其他人。未設定時，一般填寫預設為本人，補登則<strong>不會自動變成正在操作補登的人</strong>，會要求先在表單上手動選一次才能存檔。</p>
                     <select id="setting-default-inspector" class="form-control" data-eg-filter="輸入姓名篩選..." style="width:100%;"></select>
                     <?php endif; ?>
                 </div>
@@ -2003,12 +2014,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }, 'json');
         }
 
-        // 檢驗人員下拉的預設值：一般填寫預設為本人；補登**嚴禁自動變成正在操作補登的人**（使用者明確要求，
-        // 補登多半是管理員代填、不代表他就是當時實際檢驗的人），改用管理員設定的預設檢驗人員，
-        // 沒設定就留空白（doSave 存檔前會擋下要求先選一次）
+        // 檢驗人員下拉的預設值：一般填寫與補登都優先帶入管理員設定的「預設檢驗人員」（使用者可在
+        // 表單上改選其他人）；沒有設定值時，一般填寫退回本人，補登**嚴禁自動變成正在操作補登的人**
+        // （使用者明確要求，補登多半是管理員代填、不代表他就是當時實際檢驗的人），改留空白
+        // （doSave 存檔前會擋下要求先選一次）
         function applyInspectorDefault(isBackfillMode) {
             var $sel = $('#f-inspector-select');
-            if (!isBackfillMode) { $sel.val(String(PK_CUR_UID)); return; }
             loadDefaultInspectorSetting(function (def) {
                 if (def && def.id) {
                     var val = String(def.id);
@@ -2016,12 +2027,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         $sel.prepend('<option value="' + val + '">' + pkEsc(def.name || ('#' + val)) + '</option>');
                     }
                     $sel.val(val);
-                } else {
-                    if (!$sel.find('option[value=""]').length) {
-                        $sel.prepend('<option value="">－請選擇檢驗人員－</option>');
-                    }
-                    $sel.val('');
+                    return;
                 }
+                if (!isBackfillMode) { $sel.val(String(PK_CUR_UID)); return; }
+                if (!$sel.find('option[value=""]').length) {
+                    $sel.prepend('<option value="">－請選擇檢驗人員－</option>');
+                }
+                $sel.val('');
             });
         }
 
