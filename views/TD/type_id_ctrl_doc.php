@@ -1136,6 +1136,7 @@ function printDoc(id, onDone){
             + 'table.p-tb thead th{background:#f3ead6;} table.p-tb td.tl{text-align:left;}'
             + 'table.p-tb tr{break-inside:avoid;}'
             + '.stamp-wrap{display:inline-block;text-align:center;margin:2px 10px 2px 0;}'
+            + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '@page{margin:12mm 10mm 18mm;'
             + (res.as_doc_no ? " @bottom-right{ content:'"+String(res.as_doc_no).replace(/['\\]/g,'')+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
             + '}';
