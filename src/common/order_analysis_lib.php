@@ -818,6 +818,27 @@ function oa_settings_default(): array
         'ma_notify_users'  => [],
     ];
 }
+/**
+ * 上下限夾範圍——oa_settings()（讀）與 oa_settings_save()（存）都呼叫這一支，
+ * 不各自處理一次：兩邊各寫一次上下限，遲早會夾出不一樣的結果而且看不出誰對。
+ * 一定要「就地正規化傳入的陣列」，不可以在存檔那邊重新去讀資料庫再合併——
+ * 那樣做等於用「存檔前的舊值」蓋掉「這次要存的新值」（本次就是這樣踩到的）。
+ */
+function oa_settings_clamp(array $out): array
+{
+    $d = oa_settings_default();
+    foreach ($d as $k => $v) if (!array_key_exists($k, $out)) $out[$k] = $v;
+    $out['kpi_alert_months']   = max(1, min(12, (int)$out['kpi_alert_months']));
+    $out['ma_months']          = max(2, min(12, (int)$out['ma_months']));
+    $out['ma_consecutive']     = max(1, min(6,  (int)$out['ma_consecutive']));
+    $out['ma_min_coverage']    = max(0, min(100, (int)$out['ma_min_coverage']));
+    $out['ma_threshold_value'] = max(0, (int)$out['ma_threshold_value']);
+    $out['ma_enabled']         = !empty($out['ma_enabled']) ? 1 : 0;
+    $out['kpi_indicator_id']   = max(0, (int)$out['kpi_indicator_id']);
+    if (!in_array($out['ma_threshold_mode'], ['kpi', 'manual'], true)) $out['ma_threshold_mode'] = 'kpi';
+    $out['ma_notify_users'] = array_values(array_unique(array_map('intval', (array)$out['ma_notify_users'])));
+    return $out;
+}
 function oa_settings(PDO $db): array
 {
     $d = oa_settings_default();
@@ -830,32 +851,26 @@ function oa_settings(PDO $db): array
         elseif (is_int($v)) $out[$k] = (int)$s[$k];
         else $out[$k] = (string)$s[$k];
     }
-    $out['kpi_alert_months']  = max(1, min(12, (int)$out['kpi_alert_months']));
-    $out['ma_months']         = max(2, min(12, (int)$out['ma_months']));
-    $out['ma_consecutive']    = max(1, min(6,  (int)$out['ma_consecutive']));
-    $out['ma_min_coverage']   = max(0, min(100, (int)$out['ma_min_coverage']));
-    $out['ma_threshold_value'] = max(0, (int)$out['ma_threshold_value']);
-    if (!in_array($out['ma_threshold_mode'], ['kpi', 'manual'], true)) $out['ma_threshold_mode'] = 'kpi';
-    return $out;
+    return oa_settings_clamp($out);
 }
 function oa_settings_save(PDO $db, array $in, string $by): array
 {
     $cur = oa_settings($db);
-    $err = [];
     foreach (oa_settings_default() as $k => $v) {
         if (!array_key_exists($k, $in)) continue;
         if (is_array($v))      $cur[$k] = array_values(array_unique(array_map('intval', (array)$in[$k])));
         elseif (is_int($v))    $cur[$k] = (int)$in[$k];
         else                   $cur[$k] = (string)$in[$k];
     }
-    if (!in_array($cur['ma_threshold_mode'], ['kpi', 'manual'], true)) $err[] = '安全水平的來源只能是「訂單 KPI 月目標」或「自訂金額」';
+    $cur = oa_settings_clamp($cur);
+
+    $err = [];
     if ($cur['ma_threshold_mode'] === 'manual' && (int)$cur['ma_threshold_value'] <= 0) $err[] = '選「自訂金額」時，安全水平金額必須大於 0';
     if (!empty($cur['ma_enabled']) && !$cur['ma_notify_users']) $err[] = '啟用移動平均監控時，一定要指定至少一位收通知的人員（不然算出來沒有人會知道）';
     if ($err) return ['ok' => false, 'errors' => $err];
-    $cur = oa_settings($db) + $cur;                       // 先過一次正規化的上下限
-    foreach (oa_settings_default() as $k => $v) { if (!array_key_exists($k, $cur)) $cur[$k] = $v; }
+
     oa_param_save($db, 'alert_settings', $cur, $by);
-    return ['ok' => true, 'settings' => oa_settings($db)];
+    return ['ok' => true, 'settings' => $cur];
 }
 
 /** 訂單 KPI 的指標與該年度設定（找不到回 null；畫面要據此說明「沒有設定就不會有提醒」） */

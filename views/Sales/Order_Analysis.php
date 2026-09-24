@@ -519,7 +519,7 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 <?php if ($canView && $canSet): ?>
 <!-- ── 設定 ─────────────────────────────────────────── -->
 <div class="m-mask" id="setMask">
-  <div class="m-win" style="width:820px;">
+  <div class="m-win" style="width:900px;">
     <div class="m-head">訂單分析設定 <span class="x" data-close="setMask">✕</span></div>
     <div class="m-body" style="max-height:72vh;">
       <h4 style="font-size:15px;color:var(--amber-d);margin:0 0 6px;">數量區間</h4>
@@ -683,6 +683,16 @@ function money(n){ return nf(Math.round(Number(n)||0)); }
 function wan(n){ return Math.round((Number(n)||0)/10000*10)/10; }   /* 萬元，小數一位 */
 function dispDate(s){ return (typeof egFmtDate==='function') ? egFmtDate(s) : (s||''); }
 function pct(a,b){ b=Number(b)||0; if(!b) return '—'; return (Math.round((Number(a)||0)/b*1000)/10)+'%'; }
+/* 本頁沒有專用提醒元件，補一支極簡的（不阻擋、自動消失）不影響列印流程 */
+function showToast(msg, kind){
+  var c = kind==='error' ? '#DD5138' : (kind==='info' ? '#8a5a2b' : '#4F8A4F');
+  var $t = $('<div>').text(msg).css({
+    position:'fixed', left:'50%', bottom:'26px', transform:'translateX(-50%)', zIndex:10500,
+    background:c, color:'#fff', padding:'8px 18px', borderRadius:'20px', fontSize:'13px',
+    boxShadow:'0 3px 10px rgba(0,0,0,.25)', opacity:0
+  }).appendTo('body');
+  $t.animate({opacity:1}, 150).delay(2200).animate({opacity:0}, 300, function(){ $t.remove(); });
+}
 function deltaHtml(cur, prev, fmt){
   fmt = fmt || nf;
   var p = Number(prev)||0, d = (Number(cur)||0) - p;
@@ -1318,17 +1328,327 @@ $('#btnCsv').on('click', function(){
   setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 500);
 });
 
+/* ══════════════════════════════════════════════════════════════════
+ * 列印報告（使用者要求：固定 A3 橫式、排版要美觀）
+ *
+ * 固定 A3、不做「A4 放不下自動升 A3」：CSS 宣告的紙張尺寸是網頁單方面說的，
+ * 印表機紙匣裡實際放什麼才是設備決定的——放 A4 卻宣告 A3，Chrome 會把 A3 版面
+ * 硬套到 A4 紙上、右邊被裁掉（project_mgmt_ui.js 已踩過這個坑並拿掉自動升級）。
+ * 使用者這次是明講「固定用 A3 橫式」，所以直接宣告 A3，並在按下列印時提醒
+ * 「列印對話框請把紙張選成 A3」。
+ *
+ * 版面規則沿用 ai-rules/16：字型統一、表頭跨頁重複、資料列不被切開、
+ * 多頁才印左下角頁碼（量寬度用列印實際寬度，不是視窗寬度）；本報表不是
+ * 正式 AS9100 文件（沒有綁定表單編號），所以只印公司全名不印 AS 編號。
+ * 圖表一律用 Highcharts 既有實例的 getSVG() 轉成向量圖嵌進列印版，
+ * 不重新畫一次——畫面看到的圖跟列印看到的圖才會是同一份數據。
+ * ══════════════════════════════════════════════════════════════════ */
+var PR_MG = 14, PR_PAD = 5;                 // mm，跟 project_mgmt_ui.js 同一組數字
+var PR_W_MM = 420, PR_H_MM = 297;           // A3 橫式
+function prChartSvg(id, w, h){
+  try {
+    var c = CHARTS[id];
+    if(!c) return '';
+    return c.getSVG({ chart:{ width:w, height:h } });
+  } catch(e){ return ''; }
+}
+function prBadgeTxt(lv){ return lv==='bad'?'要處理':(lv==='warn'?'要注意':(lv==='good'?'正面':'說明')); }
+function oaPrintHtml(){
+  var m = DATA.meta, k = DATA.kpi, useAmt = (m.px_cov_cur>=30 && m.px_cov_cmp>=30);
+  var printTime = new Date().toLocaleString('zh-TW');
+
+  var css =
+    '*{box-sizing:border-box;margin:0;padding:0;}'+
+    'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#222;font-size:10.5pt;padding:'+PR_PAD+'mm;}'+
+    '@page{size:'+PR_W_MM+'mm '+PR_H_MM+'mm;margin:'+PR_MG+'mm;}'+
+    '@media print{*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}thead{display:table-header-group;}tr{page-break-inside:avoid;}'+
+    '.pr-sec{page-break-inside:avoid;}}'+
+    '.pr-head{background:#8a5a2b;color:#fff;padding:6mm 8mm;border-radius:2mm;margin-bottom:4mm;}'+
+    '.pr-co{font-size:17pt;font-weight:700;letter-spacing:2px;text-align:center;}'+
+    '.pr-tt{font-size:13pt;text-align:center;margin-top:1mm;opacity:.95;}'+
+    '.pr-sub{font-size:9pt;text-align:center;margin-top:2mm;opacity:.85;}'+
+    '.pr-alert{background:#FDF2EE;border:1px solid #DD5138;border-left:4mm solid #DD5138;border-radius:2mm;'+
+    'padding:4mm 6mm;margin-bottom:4mm;font-size:10pt;line-height:1.7;}'+
+    '.pr-alert b.tt{display:block;color:#DD5138;font-size:12pt;margin-bottom:1.5mm;}'+
+    '.pr-kpi{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:2.5mm;margin-bottom:4mm;}'+
+    '.pr-kc{background:#faf6f0;border:1px solid #E4D3BC;border-top:1mm solid #F0A24B;border-radius:1.5mm;padding:2.5mm 2mm;}'+
+    '.pr-kc.warn{border-top-color:#DD5138;}'+
+    '.pr-kc .lb{font-size:8pt;color:#a08a6f;}'+
+    '.pr-kc .vl{font-size:12.5pt;font-weight:700;color:#4A3524;line-height:1.25;word-break:break-all;}'+
+    '.pr-kc .sb{font-size:7.5pt;color:#a08a6f;margin-top:0.5mm;}'+
+    '.pr-sec{margin-bottom:4mm;}'+
+    '.pr-sec-title{font-size:12pt;font-weight:700;color:#4A3524;border-left:1.2mm solid #F0A24B;padding-left:2mm;margin-bottom:2mm;}'+
+    '.pr-two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:5mm;}'+
+    '.pr-three{display:grid;grid-template-columns:minmax(0,34fr) minmax(0,33fr) minmax(0,33fr);gap:5mm;}'+
+    '.pr-chart{text-align:center;}'+
+    '.pr-chart svg{max-width:100%;height:auto;}'+
+    '.pr-ins{display:flex;gap:2.5mm;align-items:flex-start;border:1px solid #E4D3BC;border-left:1.2mm solid #B9A78C;'+
+    'border-radius:1.2mm;padding:1.8mm 3mm;margin-bottom:1.5mm;font-size:9pt;line-height:1.55;}'+
+    '.pr-ins.bad{border-left-color:#DD5138;} .pr-ins.warn{border-left-color:#F0A24B;} .pr-ins.good{border-left-color:#4F8A4F;}'+
+    '.pr-ins .tag{flex:0 0 auto;font-size:7.5pt;font-weight:700;color:#fff;background:#B9A78C;border-radius:3mm;padding:0.3mm 2mm;}'+
+    '.pr-ins.bad .tag{background:#DD5138;} .pr-ins.warn .tag{background:#F0A24B;color:#4E2C0B;} .pr-ins.good .tag{background:#4F8A4F;}'+
+    '.pr-ins .bd{flex:1 1 auto;} .pr-ins .bd b{color:#4A3524;}'+
+    'table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:8.8pt;}'+
+    'th{background:#8a5a2b;color:#fff;padding:1.3mm 2mm;font-weight:700;white-space:nowrap;}'+
+    'td{padding:1.1mm 2mm;border-bottom:0.2mm solid #E4D3BC;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'+
+    'tr:nth-child(even) td{background:#FDFBF8;}'+
+    '.tr{text-align:right;} .tc{text-align:center;}'+
+    '.pr-badge{font-size:7.5pt;border-radius:2.5mm;padding:0.2mm 1.6mm;color:#fff;}'+
+    '.pr-badge.new{background:#DD5138;} .pr-badge.lost{background:#7A4A34;} .pr-badge.warn{background:#F7E0BD;color:#6B4423;}'+
+    '.pr-note{font-size:8pt;color:#6B4423;background:#faf6f0;border-left:1mm solid #F0A24B;padding:2mm 3mm;margin-bottom:3mm;line-height:1.6;}'+
+    '.pr-footer{margin-top:3mm;padding-top:2mm;border-top:0.2mm solid #E4D3BC;font-size:7.5pt;color:#a08a6f;text-align:center;}';
+
+  var h = '<div class="pr-head"><div class="pr-co">'+esc(COMPANY||'')+'</div>'+
+    '<div class="pr-tt">訂单分析報告</div>'+
+    '<div class="pr-sub">期間：'+esc(m.period.label)+'（'+dispDate(m.period_eff.start)+'～'+dispDate(m.period_eff.end)+'）'+
+    '　日期基準：'+esc(m.basis_label)+'　比較基準：'+esc(m.cmp_label)+
+    '（'+esc(m.cmp_period.label)+'）　列印時間：'+esc(printTime)+'</div></div>';
+
+  // 就衴2026-09-22這一批自己的紀錄一樣，金額只算得出有填單價的訂单，每張列印都要講清楚覆蓋率
+  h += '<div class="pr-note">※訂单金額只算得出「有填單價」的訂单：本期 '+
+    nf(k.cur.px_orders)+'/'+nf(k.cur.orders)+' 張有單價（'+m.px_cov_cur+'%），'+esc(m.cmp_label)+' '+
+    nf(k.cmp.px_orders)+'/'+nf(k.cmp.orders)+' 張（'+m.px_cov_cmp+'%）。' +
+    (useAmt?'':'比例過低无法比較金額，以下報告已改以數量筆數為主。') +
+    '　「新料號」=在系統現有資料裡第一次出現，不等於公司從來沒做過。</div>';
+
+  if(DATA.kpi_alert && DATA.kpi_alert.below){
+    var a = DATA.kpi_alert;
+    h += '<div class="pr-alert"><b class="tt">⚠ 本月要衝刺：最近 '+a.n+' 個月有 '+a.bad_count+' 個月「'+esc(a.indicator)+'」未達標</b>'+
+      '未達標月份：<b>'+esc(a.bad_list.join('、'))+'</b>。'+
+      (a.month_gap===null ? '本年度未設定每月受訂目標金額，無法推算本月還差多少。'
+        : ('本月目標 '+money(a.month_target)+' 元，已接 '+money(a.month_got)+' 元'+
+           (a.month_gap>0 ? ('，還差 <b>'+money(a.month_gap)+'</b> 元，剩 '+a.days_left+' 天。') : '，已達標。'))) +
+      '</div>';
+  }
+
+  function kc(lab, val, sub, warn){ return '<div class="pr-kc'+(warn?' warn':'')+'"><div class="lb">'+lab+'</div><div class="vl">'+val+'</div><div class="sb">'+sub+'</div></div>'; }
+  h += '<div class="pr-kpi">'+
+    kc('訂单筆数', nf(k.cur.orders), '較'+esc(m.cmp_label)+' '+(k.cur.orders-k.cmp.orders>=0?'+':'')+nf(k.cur.orders-k.cmp.orders)) +
+    kc('訂单數量', nf(k.cur.qty), '較'+esc(m.cmp_label)+' '+(k.cur.qty-k.cmp.qty>=0?'+':'')+nf(k.cur.qty-k.cmp.qty)) +
+    kc('訂单金額', money(k.cur.amount), '有單價 '+k.cur.px_orders+'/'+k.cur.orders) +
+    kc('下单客戶數', nf(k.cur.clients), '較'+esc(m.cmp_label)+' '+(k.cur.clients-k.cmp.clients>=0?'+':'')+nf(k.cur.clients-k.cmp.clients)) +
+    kc('受訂料號數', nf(k.cur.parts), '較'+esc(m.cmp_label)+' '+(k.cur.parts-k.cmp.parts>=0?'+':'')+nf(k.cur.parts-k.cmp.parts)) +
+    kc('新料號', nf(k.cur.new_parts), '佔本期料號 '+pct(k.cur.new_parts,k.cur.parts)) +
+    kc('新料號訂单', nf(k.cur.new_orders), '金額 '+money(k.cur.new_amount)) +
+    kc('全製佔比', k.cur.orders?Math.round(k.cur.full*1000/k.cur.orders)/10:0, '全製 '+nf(k.cur.full)+' / 單製 '+nf(k.cur.single), (k.cur.orders-k.cur.px_orders)>k.cur.orders*0.3) +
+    '</div>';
+
+  // 自動分析
+  h += '<div class="pr-sec"><div class="pr-sec-title">自動分析</div>';
+  var order = {bad:0,warn:1,good:2,info:3};
+  var ins = (DATA.insights||[]).slice().sort(function(x,y){ return (order[x.level]||9)-(order[y.level]||9); });
+  if(!ins.length) h += '<div style="font-size:9pt;color:#a08a6f;">本期沒有需要特別指出的變化。</div>';
+  ins.forEach(function(x){
+    h += '<div class="pr-ins '+esc(x.level)+'"><span class="tag">'+esc(prBadgeTxt(x.level))+'</span>'+
+      '<div class="bd"><b>'+esc(x.title)+(x.metric?'（'+esc(x.metric)+'）':'')+'</b>　'+esc(x.detail)+'</div></div>';
+  });
+  h += '</div>';
+
+  // 訂单趨勢
+  var trendSvg = prChartSvg('chTrend', 1180, 300);
+  if(trendSvg) h += '<div class="pr-sec"><div class="pr-sec-title">訂单趨勢</div><div class="pr-chart">'+trendSvg+'</div></div>';
+
+  // 數量區間 + 全製/單製
+  var bandSvg = prChartSvg('chBand', 700, 260);
+  var procSvg = prChartSvg('chProcPie', 420, 260);
+  var bandRows = ''; (DATA.bands||[]).forEach(function(b){
+    bandRows += '<tr><td>'+esc(b.label)+'</td><td class="tr">'+nf(b.orders)+'</td><td class="tr">'+b.pct_orders+'%</td>'+
+      '<td class="tr">'+money(b.amount)+'</td></tr>';
+  });
+  var ruleRows = ''; (DATA.proc.rule_hits||[]).forEach(function(r){
+    ruleRows += '<tr><td>'+esc(r.label)+'</td><td class="tc">'+(r.cls==='full'?'全製':'單製')+'</td><td class="tr">'+nf(r.orders)+'</td></tr>';
+  });
+  h += '<div class="pr-sec"><div class="pr-two">'+
+    '<div><div class="pr-sec-title">數量區間分析</div>'+
+      (bandSvg?'<div class="pr-chart">'+bandSvg+'</div>':'')+
+      '<table><colgroup><col style="width:34%"><col style="width:20%"><col style="width:20%"><col style="width:26%"></colgroup>'+
+      '<thead><tr><th>區間</th><th class="tr">筆數</th><th class="tr">佔比</th><th class="tr">金額</th></tr></thead><tbody>'+bandRows+'</tbody></table></div>'+
+    '<div><div class="pr-sec-title">全製／單製分析</div>'+
+      (procSvg?'<div class="pr-chart">'+procSvg+'</div>':'')+
+      '<table><colgroup><col style="width:44%"><col style="width:24%"><col style="width:32%"></colgroup>'+
+      '<thead><tr><th>規則</th><th class="tc">判定</th><th class="tr">命中筆數</th></tr></thead><tbody>'+ruleRows+'</tbody></table></div>'+
+    '</div></div>';
+
+  // 客戶增減排名
+  var rankSvg = prChartSvg('chRank', 1180, Math.min(420, document.getElementById('chRank').offsetHeight||300));
+  if(rankSvg) h += '<div class="pr-sec"><div class="pr-sec-title">期間內客戶增減排名</div><div class="pr-chart">'+rankSvg+'</div></div>';
+
+  var mk = 'd_'+m.rank_metric, fmt = (m.rank_metric==='amount')? money : nf;
+  var ups = (DATA.rank_clients||[]).filter(function(c){return c[mk]>0;}).slice(0,10);
+  var downs = (DATA.rank_clients||[]).filter(function(c){return c[mk]<0;}).sort(function(a,b){return a[mk]-b[mk];}).slice(0,10);
+  function rankRows(list){ var s=''; list.forEach(function(c){
+    s += '<tr><td>'+esc(c.name)+(c.flag==='new'?' <span class="pr-badge new">新</span>':'')+(c.flag==='lost'?' <span class="pr-badge lost">掛零</span>':'')+'</td>'+
+      '<td class="tr">'+fmt(c.cur[m.rank_metric])+'</td><td class="tr">'+fmt(c.cmp[m.rank_metric])+'</td>'+
+      '<td class="tr">'+(c[mk]>=0?'+':'')+fmt(c[mk])+'</td></tr>'; });
+    return s || '<tr><td colspan="4" class="tc">無</td></tr>'; }
+  h += '<div class="pr-sec"><div class="pr-two">'+
+    '<div><div class="pr-sec-title" style="border-left-color:#4F8A4F;">成長客戶（前 '+ups.length+' 家）</div>'+
+      '<table><colgroup><col style="width:38%"><col style="width:20%"><col style="width:20%"><col style="width:22%"></colgroup>'+
+      '<thead><tr><th>客戶</th><th class="tr">本期</th><th class="tr">基期</th><th class="tr">增減</th></tr></thead><tbody>'+rankRows(ups)+'</tbody></table></div>'+
+    '<div><div class="pr-sec-title" style="border-left-color:#DD5138;">衰退客戶（前 '+downs.length+' 家）</div>'+
+      '<table><colgroup><col style="width:38%"><col style="width:20%"><col style="width:20%"><col style="width:22%"></colgroup>'+
+      '<thead><tr><th>客戶</th><th class="tr">本期</th><th class="tr">基期</th><th class="tr">增減</th></tr></thead><tbody>'+rankRows(downs)+'</tbody></table></div>'+
+    '</div></div>';
+
+  // 訂单量監控（移動平均）
+  var maSvg = prChartSvg('chMa', 1180, 280);
+  if(maSvg && DATA.ma && DATA.ma.series && DATA.ma.series.length){
+    var maRows = ''; (DATA.ma.series||[]).slice(-8).forEach(function(s){
+      var judge = s.unreliable ? '資料不足' : (s.below ? '<b style="color:#DD5138;">低於安全水平</b>' : '正常');
+      maRows += '<tr><td>'+esc(s.ym)+'</td><td class="tr">'+money(s.amount)+'</td><td class="tr">'+money(s.avg)+'</td>'+
+        '<td class="tr">'+(s.threshold===null?'未設定':money(s.threshold))+'</td><td>'+judge+'</td></tr>';
+    });
+    h += '<div class="pr-sec"><div class="pr-sec-title">訂单量監控（金額移動平均，前 '+DATA.ma.months+' 月）</div>'+
+      '<div class="pr-chart">'+maSvg+'</div>'+
+      '<table><colgroup><col style="width:14%"><col style="width:22%"><col style="width:22%"><col style="width:22%"><col style="width:20%"></colgroup>'+
+      '<thead><tr><th>月份</th><th class="tr">當月金額</th><th class="tr">移動平均</th><th class="tr">安全水平</th><th>判定</th></tr></thead>'+
+      '<tbody>'+maRows+'</tbody></table></div>';
+  }
+
+  // 受訂料號排名（前10）
+  var partRows = ''; (DATA.rank_parts||[]).slice(0,10).forEach(function(p,i){
+    partRows += '<tr><td class="tc">'+(i+1)+'</td><td>'+esc(p.pno)+'</td><td>'+esc(p.cname)+'</td>'+
+      '<td class="tr">'+nf(p.cur.orders)+'</td><td class="tr">'+nf(p.cur.qty)+'</td><td class="tr">'+money(p.cur.amount)+'</td>'+
+      '<td class="tc">'+(p.is_new?'<span class="pr-badge new">新</span>':'')+'</td></tr>';
+  });
+  h += '<div class="pr-sec"><div class="pr-sec-title">受訂料號排名（前 10）</div>'+
+    '<table><colgroup><col style="width:5%"><col style="width:22%"><col style="width:16%"><col style="width:14%"><col style="width:14%"><col style="width:19%"><col style="width:10%"></colgroup>'+
+    '<thead><tr><th>#</th><th>料號</th><th>客戶</th><th class="tr">筆數</th><th class="tr">數量</th><th class="tr">金額</th><th class="tc">新料號</th></tr></thead>'+
+    '<tbody>'+(partRows||'<tr><td colspan="7" class="tc">無</td></tr>')+'</tbody></table></div>';
+
+  h += '<div class="pr-footer">本報告由 EGsystem 訂单分析自動產生｜列印時間：'+esc(printTime)+'</div>';
+
+  return '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>訂单分析報告 '+esc(m.period.label)+'</title>'+
+    '<style>'+css+'</style></head><body>'+h+'</body></html>';
+}
+/** 量列印實際寬度下內容有没有超過一頁——一定要先把 body 縮到列印實際寬度再量，
+ *  否則用視窗寬度（視緣徕不到）量出來的高度跟列印實際完全不一樣
+ *（Shipping_Analysis_new.php 已踩過：1280px 量 753px 判多頁、實際列印只有 1 頁）。 */
+function prNeedPageCounter(win){
+  try {
+    var wPx = (PR_W_MM - PR_MG*2) * 96/25.4, hPx = (PR_H_MM - PR_MG*2 - PR_PAD*2) * 96/25.4;
+    var body = win.document.body, old = body.style.width;
+    body.style.width = Math.round(wPx) + 'px';
+    var h = body.scrollHeight;
+    body.style.width = old;
+    return h > hPx;
+  } catch(e){ return false; }
+}
+function prAddPageCounter(win){
+  try {
+    var st = win.document.createElement('style');
+    st.textContent = "@page{ @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:9pt; color:#555; } }";
+    win.document.head.appendChild(st);
+  } catch(e){}
+}
+$('#btnPrint').on('click', function(){
+  if(!DATA){ alert('請先計算'); return; }
+  var w = window.open('', '_blank', 'width=1280,height=900,scrollbars=yes,resizable=yes');
+  if(!w){ alert('瀏覽器擋掩了彈出視窗，請允許本站彈出後再試'); return; }
+  w.document.write(oaPrintHtml()); w.document.close(); w.focus();
+  try {
+    if(window.EGPrintLog) EGPrintLog.record({ source:'order_analysis', doc_name:'訂单分析報告 '+DATA.meta.period.label, doc_kind:'form' });
+  } catch(e){}
+  setTimeout(function(){
+    if(prNeedPageCounter(w)) prAddPageCounter(w);
+    showToast('列印对話框請把紙張選成 A3，方向選横向', 'info');
+    w.print();
+  }, 700);
+});
+
+
 <?php if ($canView && $canSet): ?>
 /* ── 設定 ───────────────────────────────────────────── */
-var SET = { bands:[], rules:[], fallback:'single', defaults:null };
-$('#btnSetting').on('click', function(){
+var SET = { bands:[], rules:[], fallback:'single', alert:null, defaults:null };
+var MA_USERS = [];   // 人員候選清單（settings_get 不帶，另呼叫 action=users 載入一次即快取）
+function openSetMask(){
   $.get(OA_API, {action:'settings_get'}, function(r){
     if(!r||!r.ok){ alert((r&&r.error)||'設定載入失敗'); return; }
-    SET.bands = r.bands||[]; SET.rules = r.rules||[]; SET.fallback = r.fallback||'single'; SET.defaults = r.defaults;
+    SET.bands = r.bands||[]; SET.rules = r.rules||[]; SET.fallback = r.fallback||'single';
+    SET.alert = r.alert || {}; SET.defaults = r.defaults;
     if(r.csrf) OA_CSRF = r.csrf;
     $('#setFallback').val(SET.fallback); $('#setErr').text('');
-    renderSetBand(); renderSetRule(); openMask('setMask');
+    if(r.kpi_info){
+      $('#setKpiName').text(r.kpi_info.name||'月份受訂目標達成金額'); $('#setKpiWarn').text('');
+    } else {
+      $('#setKpiName').text('月份受訂目標達成金額');
+      $('#setKpiWarn').text('（本年度找不到這項 KPI 的設定，未達標提醒會一直顯示「沒有資料」，請先到 KPI 關鍵績效指標頁設定）');
+    }
+    renderSetBand(); renderSetRule(); renderAlertSet();
+    if(!MA_USERS.length){
+      $.get(OA_API, {action:'users'}, function(ur){
+        if(ur && ur.ok){ MA_USERS = ur.users||[]; fillMaUserPick(); }
+      }, 'json');
+    } else fillMaUserPick();
+    openMask('setMask');
   }, 'json');
+}
+$('#btnSetting').on('click', openSetMask);
+$('#btnMaSetting').on('click', openSetMask);
+function renderAlertSet(){
+  var a = SET.alert;
+  $('#setKpiMonths').val(a.kpi_alert_months);
+  $('#setMaEnabled').prop('checked', !!a.ma_enabled);
+  $('#setMaMonths').val(a.ma_months);
+  $('#setMaCons').val(a.ma_consecutive);
+  $('#setMaMode').val(a.ma_threshold_mode);
+  $('#setMaValue').val(a.ma_threshold_value||0).prop('disabled', a.ma_threshold_mode!=='manual');
+  $('#setMaCov').val(a.ma_min_coverage);
+  renderMaUserChips();
+}
+function fillMaUserPick(){
+  var picked = {}; (SET.alert.ma_notify_users||[]).forEach(function(id){ picked[id]=1; });
+  var h = '<option value="">請選擇人員…</option>';
+  MA_USERS.forEach(function(u){
+    if(picked[u.id]) return;   // 已加入的不再出現在候選裡，避免選了又疊一次
+    h += '<option value="'+u.id+'">'+esc(u.dept)+'　'+esc(u.post)+'　'+esc(u.name)
+       + (u.note? '（'+esc(u.note)+'）':'') + '</option>';
+  });
+  $('#setMaUserPick').html(h);
+}
+function renderMaUserChips(){
+  var byId = {}; MA_USERS.forEach(function(u){ byId[u.id]=u; });
+  var ids = SET.alert.ma_notify_users || [];
+  var h = ids.length ? '' : '<span style="font-size:12px;color:var(--muted);">尚未指定任何人員——啟用自動通知前必須先加至少一位</span>';
+  ids.forEach(function(id){
+    var u = byId[id];
+    h += '<span class="chip">'+(u?esc(u.name):('#'+id))+'<i class="fa fa-times" data-id="'+id+'"></i></span>';
+  });
+  $('#setMaUsers').html(h);
+}
+$('#setMaUserAdd').on('click', function(){
+  var id = parseInt($('#setMaUserPick').val(),10);
+  if(!id) return;
+  SET.alert.ma_notify_users = SET.alert.ma_notify_users || [];
+  if(SET.alert.ma_notify_users.indexOf(id) < 0) SET.alert.ma_notify_users.push(id);
+  fillMaUserPick(); renderMaUserChips(); validateSet();
+});
+$(document).on('click', '#setMaUsers .fa-times', function(){
+  var id = parseInt($(this).data('id'),10);
+  SET.alert.ma_notify_users = (SET.alert.ma_notify_users||[]).filter(function(x){ return x!==id; });
+  fillMaUserPick(); renderMaUserChips(); validateSet();
+});
+$('#setKpiMonths').on('input change', function(){ SET.alert.kpi_alert_months = parseInt($(this).val(),10)||3; });
+$('#setMaEnabled').on('change', function(){ SET.alert.ma_enabled = $(this).is(':checked')?1:0; validateSet(); });
+$('#setMaMonths').on('input change', function(){ SET.alert.ma_months = parseInt($(this).val(),10)||3; validateSet(); });
+$('#setMaCons').on('input change', function(){ SET.alert.ma_consecutive = parseInt($(this).val(),10)||2; validateSet(); });
+$('#setMaMode').on('change', function(){
+  SET.alert.ma_threshold_mode = $(this).val();
+  $('#setMaValue').prop('disabled', SET.alert.ma_threshold_mode!=='manual');
+  validateSet();
+});
+$('#setMaValue').on('input change', function(){ SET.alert.ma_threshold_value = parseFloat($(this).val())||0; validateSet(); });
+$('#setMaCov').on('input change', function(){ SET.alert.ma_min_coverage = parseInt($(this).val(),10)||60; });
+$('#btnMaPreview').on('click', function(){
+  $('#maPreviewOut').text('試算中…');
+  $.get(OA_API, {action:'ma_preview', months:SET.alert.ma_months, consecutive:SET.alert.ma_consecutive,
+                 min_coverage:SET.alert.ma_min_coverage}, function(r){
+    if(!r||!r.ok){ $('#maPreviewOut').text((r&&r.error)||'試算失敗'); return; }
+    var ma = r.ma, last6 = (ma.series||[]).slice(-6);
+    var txt = '連續 '+ma.streak+' 個月低於安全水平（'+(ma.hit?'達到':'未達到')+'通知條件，需連續 '+ma.need+' 個月）。最近幾期：'
+      + last6.map(function(s){ return s.ym+'＝'+(s.unreliable?'資料不足':(s.below?'低於':'正常')); }).join('、');
+    $('#maPreviewOut').html(esc(txt));
+  }, 'json').fail(function(){ $('#maPreviewOut').text('試算失敗'); });
 });
 function renderSetBand(){
   var h='';
@@ -1391,6 +1711,11 @@ function validateSet(){
   });
   if(!bs.length) e.push('至少要有一個數量區間');
   if(!SET.rules.filter(function(r){ return String(r.kw||'').trim()!==''; }).length) e.push('至少要有一條關鍵字規則');
+  if(SET.alert){
+    var a = SET.alert;
+    if(a.ma_threshold_mode==='manual' && !(parseFloat(a.ma_threshold_value)>0)) e.push('安全水平選「自訂金額」時，金額必須大於 0');
+    if(a.ma_enabled && !(a.ma_notify_users && a.ma_notify_users.length)) e.push('啟用自動通知時，一定要指定至少一位收通知的人員');
+  }
   $('#setErr').text(e.join('\n'));
   $('#btnSetSave').prop('disabled', e.length>0);
   return e.length===0;
@@ -1398,7 +1723,8 @@ function validateSet(){
 $('#btnSetSave').on('click', function(){
   if(!validateSet()) return;
   $.post(OA_API, {action:'settings_save', csrf:OA_CSRF, fallback:SET.fallback,
-                  bands:JSON.stringify(SET.bands), rules:JSON.stringify(SET.rules)}, function(r){
+                  bands:JSON.stringify(SET.bands), rules:JSON.stringify(SET.rules),
+                  alert:JSON.stringify(SET.alert||{})}, function(r){
     if(!r||!r.ok){ $('#setErr').text((r&&r.error)||'儲存失敗'); return; }
     closeMask('setMask'); load();
   }, 'json').fail(function(x){
