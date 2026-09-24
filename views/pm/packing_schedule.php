@@ -120,6 +120,7 @@ pk_ensure_column($pdo, 'qc_packing_inspection', 'is_full_shipment', "is_full_shi
 pk_ensure_column($pdo, 'qc_packing_inspection', 'storage_method', "storage_method VARCHAR(20) NULL COMMENT '成品入庫方式:direct/pallet，全部直接出貨(無剩餘入庫量)時可空白' AFTER is_full_shipment");
 pk_ensure_column($pdo, 'qc_packing_inspection', 'pallet_qty',    "pallet_qty INT NULL COMMENT '棧板數（storage_method=pallet時）' AFTER storage_method");
 pk_ensure_column($pdo, 'qc_packing_inspection', 'packer_id',     "packer_id INT NULL COMMENT '包裝人員 user.id（補登用；一般填寫仍以packer文字快照為準）' AFTER packer");
+pk_ensure_column($pdo, 'qc_packing_inspection', 'inspector_id',  "inspector_id INT NULL COMMENT '檢驗人員 user.id（一般填寫與補登皆可指定；inspector文字為快照）' AFTER inspector");
 pk_ensure_column($pdo, 'qc_packing_inspection', 'is_backfill',   "is_backfill TINYINT(1) NOT NULL DEFAULT 0 COMMENT '管理員補登舊資料=1' AFTER remark");
 pk_ensure_column($pdo, 'qc_packing_inspection', 'backfill_by',   "backfill_by INT NULL COMMENT '補登操作人 user.id' AFTER is_backfill");
 pk_ensure_column($pdo, 'qc_packing_inspection', 'backfill_at',   "backfill_at DATETIME NULL COMMENT '補登操作時間' AFTER backfill_by");
@@ -181,14 +182,16 @@ function get_packing_process_nos(PDO $pdo): array
     return pk_packing_process_nos($pdo);
 }
 
-// 目前設定的「可選包裝人員」部門（未展開子部門，設定畫面用）
+// 目前設定的「可選包裝人員／檢驗人員」部門（未展開子部門，設定畫面用）
+// 同一份範圍同時管兩個角色：包裝人員(packer_id) 與 檢驗人員(inspector_id)，
+// 不另開第二份設定（鐵律4：兩份範圍遲早對不起來）
 function get_packing_packer_dept_ids(PDO $pdo): array
 {
     $rows = $pdo->query("SELECT dept_id FROM pm_packing_packer_dept_setting ORDER BY dept_id")->fetchAll(PDO::FETCH_COLUMN);
     return array_map('intval', $rows);
 }
 
-// 展開含子部門後、實際可選為包裝人員的部門 id（空陣列＝未設定限制，全公司皆可選）
+// 展開含子部門後、實際可選為包裝人員／檢驗人員的部門 id（空陣列＝未設定限制，全公司皆可選）
 function get_packing_packer_allowed_dept_ids(PDO $pdo): array
 {
     $depts = get_packing_packer_dept_ids($pdo);
@@ -196,6 +199,19 @@ function get_packing_packer_allowed_dept_ids(PDO $pdo): array
     $out = [];
     foreach ($depts as $d) $out = array_merge($out, eg_dept_subtree_ids($pdo, $d));
     return array_values(array_unique(array_map('intval', $out)));
+}
+
+// 管理員設定的「補登預設檢驗人員」（user.id），未設定回 null。
+// 補登時嚴禁自動把正在操作補登的人記成檢驗人員（使用者明確要求），故補登新建紀錄若未明確指定
+// 一律改用這個設定值，設定值也沒有就直接擋下要求補齊——見 save_result 的 $isBackfill 分支。
+function pk_default_inspector_id(PDO $pdo): ?int
+{
+    $st = $pdo->prepare("SELECT param_value FROM system_parameters WHERE param_group='PACKING_SCHEDULE' AND param_key='default_inspector_id' LIMIT 1");
+    $st->execute();
+    $v = $st->fetchColumn();
+    if ($v === false) return null;
+    $id = (int)json_decode($v, true);
+    return $id > 0 ? $id : null;
 }
 
 // =============================================================================
@@ -277,6 +293,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             }
             $pdo->commit();
+            echo json_encode(['success' => true]);
+            exit;
+        }
+
+        // 3d. 取得「補登預設檢驗人員」設定（讀取不卡管理員：補登表單要即時帶出這個人是誰，
+        //    卡了一般補登人員就永遠看不到預設值＝ai-rules/18 鐵則9 同一種道理）
+        if ($action === 'get_default_inspector_setting') {
+            $defId = pk_default_inspector_id($pdo);
+            $defName = null;
+            if ($defId) {
+                $du = $pdo->prepare("SELECT user_cname FROM `user` WHERE id = ? LIMIT 1");
+                $du->execute([$defId]);
+                $defName = $du->fetchColumn() ?: null;
+            }
+            echo json_encode(['success' => true, 'id' => $defId, 'name' => $defName]);
+            exit;
+        }
+
+        // 3e. 儲存「補登預設檢驗人員」設定（僅管理員可設；補登時嚴禁自動變成正在操作補登的人，
+        //    這個設定值就是取代方案——見 save_result 的 $isBackfill 分支）
+        if ($action === 'save_default_inspector_setting') {
+            if (!$PK_CAN_ADMIN) throw new Exception('無權限，僅管理員可設定');
+            $defId = intval($_POST['inspector_id'] ?? 0);
+            if ($defId) {
+                $du = $pdo->prepare("SELECT id FROM `user` WHERE id = ? LIMIT 1");
+                $du->execute([$defId]);
+                if (!$du->fetchColumn()) throw new Exception('指定的人員不存在');
+            }
+            $upd = $pdo->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by)
+                                   VALUES ('PACKING_SCHEDULE', 'default_inspector_id', ?, '包裝檢驗：補登預設檢驗人員', ?)
+                                   ON DUPLICATE KEY UPDATE param_value = VALUES(param_value), updated_by = VALUES(updated_by)");
+            $upd->execute([json_encode($defId), $user_id]);
             echo json_encode(['success' => true]);
             exit;
         }
@@ -660,6 +708,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             }
 
+            // 檢驗人員：一般填寫與補登皆可指定（使用者要求），不像包裝人員只能在補登流程且需額外
+            // 權限才能指定——填表當下就是要記下「實際是誰檢驗的」，全體登入者皆可挑選。
+            // 候選名單只能從「包裝製程設定」內設定的部門範圍選（與包裝人員共用同一份範圍），
+            // 自己則不受此限制、一律可選自己；後端依同一份候選名單再驗一次（鐵律8）。
+            $inspectorName = $user_cname;
+            $inspectorId = null;
+            $inspIdRaw = trim((string)($_POST['inspector_id'] ?? ''));
+            if ($inspIdRaw !== '') {
+                $inspId = intval($inspIdRaw);
+                if ($inspId === $pk_uid) {
+                    $inspectorId = $pk_uid;
+                    $inspectorName = $user_cname;
+                } else {
+                    $allowDeptIds = get_packing_packer_allowed_dept_ids($pdo);
+                    $candRows = eg_people_list($pdo, $allowDeptIds ? ['dept_ids' => $allowDeptIds] : []);
+                    $candName = null;
+                    foreach ($candRows as $cr) {
+                        if ((int)$cr['id'] === $inspId) { $candName = $cr['user_cname']; break; }
+                    }
+                    if ($candName === null) throw new Exception('指定的檢驗人員不在可選範圍內，請重新選擇');
+                    $inspectorId = $inspId;
+                    $inspectorName = $candName;
+                }
+            } elseif ($cur && $cur['inspector'] !== null && trim((string)$cur['inspector']) !== '') {
+                // 沒有明確指定（例如續編舊紀錄、前端仍顯示「本人」但實際保存的是既有快照）：
+                // 延續既有紀錄的檢驗人員，不因這次存檔的人不同而被默默改掉
+                $inspectorName = $cur['inspector'];
+                $inspectorId = $cur['inspector_id'] !== null ? (int)$cur['inspector_id'] : null;
+            } elseif ($isBackfill) {
+                // 補登新建且沒有明確指定檢驗人員：嚴禁自動變成正在操作補登的人（補登多半是管理員代填，
+                // 不代表他就是當時實際檢驗的人）——改用管理員設定的「預設檢驗人員」，沒設定就直接擋下
+                // 要求補齊，不可以安靜地把正在操作的人記成檢驗人員（使用者明確要求）。
+                $defId = pk_default_inspector_id($pdo);
+                if ($defId) {
+                    $du = $pdo->prepare("SELECT id, user_cname FROM `user` WHERE id = ? LIMIT 1");
+                    $du->execute([$defId]);
+                    $dr = $du->fetch(PDO::FETCH_ASSOC);
+                    if ($dr) { $inspectorId = (int)$dr['id']; $inspectorName = $dr['user_cname']; }
+                }
+                if ($inspectorId === null) {
+                    throw new Exception('補登請選擇檢驗人員（尚未設定預設檢驗人員，可於「包裝製程設定」設定，或直接在表單上選擇）');
+                }
+            } else {
+                // 一般填寫且沒有明確送出（正常情況下前端一律會送，這裡只是防呆）：預設為本人
+                $inspectorId = $pk_uid;
+            }
+
             // 已結案紀錄要改：僅管理員可操作，且要輸入操作確認密碼才算解鎖（鐵律8：不可只靠前端擋）
             $needPasswordNote = false;
             if ($cur && $cur['status'] === 'closed') {
@@ -682,7 +777,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             inspection_date = ?, bom = ?, part_no = ?, customer_name = ?,
                             order_qty = ?, bom_total_qty = ?, inspected_qty = ?, ok_qty = ?, ng_qty = ?,
                             ship_now_qty = ?, warehouse_qty = ?, is_full_shipment = ?, storage_method = ?, pallet_qty = ?,
-                            judgement = ?, inspector = ?, packer = ?, packer_id = ?, remark = ?, status = ?,
+                            judgement = ?, inspector = ?, inspector_id = ?, packer = ?, packer_id = ?, remark = ?, status = ?,
                             is_backfill = GREATEST(is_backfill, ?), backfill_by = COALESCE(backfill_by, ?), backfill_at = COALESCE(backfill_at, ?),
                             closed_by = " . ($complete ? "COALESCE(closed_by, ?)" : "closed_by") . ",
                             closed_at = " . ($complete ? "COALESCE(closed_at, ?)" : "closed_at") . ",
@@ -692,7 +787,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $insDate, $bi['bom'], $bi['part_no'], $bi['Client_Name'],
                     $orderQty, $bomTotalQty, $orderQty, $okQty, $ngQty,
                     $shipNowQty, $warehouseQty, $isFullShip, ($storageMethod ?: null), $palletQty,
-                    $judgement, $user_cname, $packerName, $packerId, $remark, $newStatus,
+                    $judgement, $inspectorName, $inspectorId, $packerName, $packerId, $remark, $newStatus,
                     $isBackfill, ($isBackfill ? $pk_uid : null), ($isBackfill ? $now : null),
                 ];
                 if ($complete) $params[] = $pk_uid;
@@ -705,13 +800,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $sql = "INSERT INTO qc_packing_inspection
                         (bom_ing_fid, bom, part_no, inspection_date, customer_name, order_qty, bom_total_qty,
                          inspected_qty, ok_qty, ng_qty, ship_now_qty, warehouse_qty, is_full_shipment, storage_method, pallet_qty,
-                         judgement, inspector, packer, packer_id, remark, status,
+                         judgement, inspector, inspector_id, packer, packer_id, remark, status,
                          is_backfill, backfill_by, backfill_at, closed_by, closed_at, updated_by)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
                 $pdo->prepare($sql)->execute([
                     $bomIngFid, $bi['bom'], $bi['part_no'], $insDate, $bi['Client_Name'], $orderQty, $bomTotalQty,
                     $orderQty, $okQty, $ngQty, $shipNowQty, $warehouseQty, $isFullShip, ($storageMethod ?: null), $palletQty,
-                    $judgement, $user_cname, $packerName, $packerId, $remark, $newStatus,
+                    $judgement, $inspectorName, $inspectorId, $packerName, $packerId, $remark, $newStatus,
                     $isBackfill, ($isBackfill ? $pk_uid : null), ($isBackfill ? $now : null),
                     ($complete ? $pk_uid : null), ($complete ? $now : null), $pk_uid,
                 ]);
@@ -765,9 +860,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             exit;
         }
 
-        // 8a. 補登可指定包裝人員時，供挑選的在職人員清單（人員列表鐵則：走共用 eg_people_list，不自寫SQL）
+        // 8a. 挑選包裝人員／檢驗人員時的候選在職人員清單（人員列表鐵則：走共用 eg_people_list，不自寫SQL）。
+        //    檢驗人員在一般填寫時全體登入者皆可挑選，故此處不設補登權限門檻，僅需登入（頁首已檢查）；
+        //    包裝人員仍只在補登流程且具 pk_backfill_change_packer 權限時才會呼叫本動作。
         if ($action === 'people_list') {
-            if (!$PK_CAN_BACKFILL) { echo json_encode(['success' => false, 'message' => '無補登權限']); exit; }
             $allowDeptIds = get_packing_packer_allowed_dept_ids($pdo);
             $rows = eg_people_list($pdo, $allowDeptIds ? ['dept_ids' => $allowDeptIds] : []);
             $out = array_map(function ($r) {
@@ -956,7 +1052,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     <link href="../../resource/css/bootstrap.css" rel="stylesheet">
     <link href="../../resource/css/font-awesome.css" rel="stylesheet">
     <link href="../../resource/css/custom.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/select2@4.0.13/dist/css/select2.min.css" rel="stylesheet">
+    <link href="../../resource/css/select2.min.css" rel="stylesheet">
     <style>
         /* 隱藏數字輸入框上下箭頭 */
         input[type=number]::-webkit-inner-spin-button,
@@ -1003,6 +1099,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         .sortable-chosen td { background: #fffbe6 !important; }
 
         .pk-count-badge { font-size: 13px; color:#888; font-weight: normal; }
+        .pk-part-link { color:#337ab7; cursor:pointer; text-decoration:underline dotted; }
+        .pk-part-link:hover { color:#23527c; text-decoration:underline; }
+        .pk-part-link:empty { cursor:default; text-decoration:none; }
 
         /* 可移動視窗 */
         .pk-float-window {
@@ -1233,8 +1332,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     <select id="setting-process" class="form-control" multiple style="width:100%;"></select>
                     <?php if ($PK_CAN_ADMIN): ?>
                     <hr>
-                    <p class="text-muted">補登舊資料時可指定的「包裝人員」範圍（僅管理員可設定）：選擇部門，可多選，<strong>各部門一律含底下所有子部門</strong>；不選任何部門＝不限制，全公司在職人員皆可挑選。</p>
+                    <p class="text-muted">可指定的「包裝人員／檢驗人員」範圍（僅管理員可設定，兩者共用同一份範圍）：選擇部門，可多選，<strong>各部門一律含底下所有子部門</strong>；不選任何部門＝不限制，全公司在職人員皆可挑選。填寫檢驗表單時挑選檢驗人員、補登舊資料時挑選包裝人員，都只能從這裡設定的部門範圍中選擇（本人不受此限制，一律可選自己）。</p>
                     <select id="setting-packer-dept" class="form-control" multiple style="width:100%;"></select>
+                    <hr>
+                    <p class="text-muted">補登預設檢驗人員（僅管理員可設定）：補登舊資料時，檢驗人員一律預設帶入這個人，<strong>不會自動變成正在操作補登的人</strong>；使用者仍可在表單上改選其他人。未設定時，補登會要求先在表單上手動選一次才能存檔。</p>
+                    <select id="setting-default-inspector" class="form-control" data-eg-filter="輸入姓名篩選..." style="width:100%;"></select>
                     <?php endif; ?>
                 </div>
                 <div class="modal-footer">
@@ -1289,7 +1391,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <div id="f-status-badges" style="margin-bottom:6px;"></div>
                 <div class="row">
                     <div class="col-md-3"><strong>BOM：</strong><span id="f-bom"></span></div>
-                    <div class="col-md-3"><strong>料號：</strong><span id="f-part"></span></div>
+                    <div class="col-md-3"><strong>料號：</strong><span id="f-part" class="pk-part-link" title="點擊查看圖面"></span></div>
                     <div class="col-md-3"><strong>版次：</strong><span id="f-rev"></span></div>
                     <div class="col-md-3"><strong>客戶：</strong><span id="f-client"></span></div>
                 </div>
@@ -1303,6 +1405,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         <div class="text-muted small" style="margin-top:4px;">原總數：<span id="f-order-qty-total">-</span>（因BOM可能分批送包裝，此為整張BOM的總數，非本次數量）</div>
                     </div>
                     <div class="col-md-3"><strong>系統交期：</strong><span id="f-delivery"></span></div>
+                    <div class="col-md-3">
+                        <strong>檢驗人員：</strong>
+                        <select id="f-inspector-select" class="form-control input-sm" data-eg-filter="輸入姓名篩選..." title="填寫或補登皆可指定實際檢驗的人員，候選名單依「包裝製程設定」的部門範圍"></select>
+                    </div>
                 </div>
                 <div class="row" id="f-order-bind-wrap" style="margin-top:8px;">
                     <div class="col-md-12">
@@ -1561,9 +1667,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     <script src="../../resource/js/jquery.min.js"></script>
     <script src="../../resource/js/bootstrap.min.js"></script>
     <script src="../../resource/js/custom.min.js"></script>
-    <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/select2@4.0.13/dist/js/select2.min.js"></script>
+    <!-- 站內網路連不到外部 CDN（已知限制，見 CLAUDE.md）：可移動視窗改走站上既有的原生拖曳寫法，
+         不再引用 jQuery UI；拖曳排序與多選下拉改走本機既有的 Sortable.min.js／select2.min.js -->
+    <script src="../../resource/js/Sortable.min.js"></script>
+    <script src="../../resource/js/select2.min.js"></script>
     <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
     <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
     <script>
@@ -1583,6 +1690,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // （currentMode==='backfill' 是「正在用補登流程新建一筆」；這個旗標是「續編/解鎖修改一筆本來就是
         // 補登建立的既有紀錄」，讓管理員可以繼續調整補登日期／包裝人員，不因為用一般點列開啟就看不到）
         var currentIsBackfillRecord = false;
+
+        function pkEsc(s) {
+            return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
 
         // 數字格式：小數點後皆為0則省略
         function fmtNum(v) {
@@ -1711,6 +1822,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         var PK_CAN_BACKFILL = <?= $PK_CAN_BACKFILL ? 'true' : 'false' ?>;
         var PK_CAN_BACKFILL_PACKER = <?= $PK_CAN_BACKFILL_PACKER ? 'true' : 'false' ?>;
         var PK_CAN_ADMIN = <?= $PK_CAN_ADMIN ? 'true' : 'false' ?>;
+        var PK_CUR_UID = <?= (int)$user_id ?>;
+        var PK_CUR_UNAME = <?= json_encode($user_cname, JSON_UNESCAPED_UNICODE) ?>;
 
         function todayStr() {
             var d = new Date();
@@ -1757,6 +1870,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             currentIsBackfillRecord = false;
             $('#f-backfill-fields').toggle(mode === 'backfill');
             setFormReadOnly(mode === 'view');
+            // 檢驗人員：先套用預設值（一般填寫＝本人／補登＝管理員設定的預設檢驗人員，嚴禁自動變成
+            // 正在操作補登的人），若這筆製程已有既有紀錄（暫存續編／已結案解鎖修改）稍後由
+            // fillFromRecord() 依既有紀錄覆蓋
+            loadInspectorOptions(function () { applyInspectorDefault(mode === 'backfill'); });
 
             if (mode === 'backfill') {
                 $('#f-record-date').val(todayStr()).attr('max', todayStr());
@@ -1858,10 +1975,94 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }, 'json');
         }
 
+        // 檢驗人員：一般填寫與補登皆可挑選，候選名單依「包裝製程設定」內設定的部門範圍
+        // （與包裝人員共用同一份範圍，本人不受此限制），全體登入者皆可用，不像包裝人員限補登權限
+        function loadInspectorOptions(cb) {
+            var $sel = $('#f-inspector-select');
+            if ($sel.data('loaded')) { if (cb) cb(); return; }
+            $.post(API, { action: 'people_list' }, function (res) {
+                var rows = (res && res.success) ? res.data : [];
+                var h = '<option value="' + PK_CUR_UID + '">（本人）' + (PK_CUR_UNAME ? ' ' + pkEsc(PK_CUR_UNAME) : '') + '</option>';
+                rows.forEach(function (u) {
+                    if (parseInt(u.id, 10) === PK_CUR_UID) return; // 本人已是預設選項，不重複列出
+                    h += '<option value="' + u.id + '">' + (u.dept_name ? (pkEsc(u.dept_name) + ' ') : '') +
+                        (u.position_name ? (pkEsc(u.position_name) + ' ') : '') + pkEsc(u.name) + '</option>';
+                });
+                $sel.html(h).data('loaded', 1);
+                if (cb) cb();
+            }, 'json');
+        }
+
+        // 補登預設檢驗人員（管理員設定），null=尚未查詢過，false=已查過但未設定，物件=已設定
+        var PK_DEFAULT_INSPECTOR = null;
+        function loadDefaultInspectorSetting(cb) {
+            if (PK_DEFAULT_INSPECTOR !== null) { cb(PK_DEFAULT_INSPECTOR); return; }
+            $.post(API, { action: 'get_default_inspector_setting' }, function (res) {
+                PK_DEFAULT_INSPECTOR = (res && res.success && res.id) ? { id: res.id, name: res.name || '' } : false;
+                cb(PK_DEFAULT_INSPECTOR);
+            }, 'json');
+        }
+
+        // 檢驗人員下拉的預設值：一般填寫預設為本人；補登**嚴禁自動變成正在操作補登的人**（使用者明確要求，
+        // 補登多半是管理員代填、不代表他就是當時實際檢驗的人），改用管理員設定的預設檢驗人員，
+        // 沒設定就留空白（doSave 存檔前會擋下要求先選一次）
+        function applyInspectorDefault(isBackfillMode) {
+            var $sel = $('#f-inspector-select');
+            if (!isBackfillMode) { $sel.val(String(PK_CUR_UID)); return; }
+            loadDefaultInspectorSetting(function (def) {
+                if (def && def.id) {
+                    var val = String(def.id);
+                    if (!$sel.find('option[value="' + val + '"]').length) {
+                        $sel.prepend('<option value="' + val + '">' + pkEsc(def.name || ('#' + val)) + '</option>');
+                    }
+                    $sel.val(val);
+                } else {
+                    if (!$sel.find('option[value=""]').length) {
+                        $sel.prepend('<option value="">－請選擇檢驗人員－</option>');
+                    }
+                    $sel.val('');
+                }
+            });
+        }
+
+        // 把檢驗人員下拉設定成「這筆既有紀錄目前存的是誰」，查不到候選清單內時另外插入一個
+        // 對應既有快照姓名的選項（畫面上仍看得到目前實際存的是誰，不會被誤導成已經改選了本人）
+        function setInspectorSelectFor(rec, isBackfillMode) {
+            loadInspectorOptions(function () {
+                var $sel = $('#f-inspector-select');
+                var hasId = rec && rec.inspector_id != null && rec.inspector_id !== '';
+                if (hasId) {
+                    var val = String(rec.inspector_id);
+                    if (!$sel.find('option[value="' + val + '"]').length) {
+                        $sel.prepend('<option value="' + val + '">' + pkEsc(rec.inspector || ('#' + val)) + '</option>');
+                    }
+                    $sel.val(val);
+                    return;
+                }
+                // 舊資料沒有記錄 id、只有檢驗人員的文字快照：加一個「沿用既有」選項並選中它，
+                // 不強制改成目前登入者（鐵律8：沒有明確指定就不要動既有紀錄）
+                if (rec && rec.inspector) {
+                    if (!$sel.find('option[value=""]').length) {
+                        $sel.prepend('<option value="">（沿用既有紀錄：' + pkEsc(rec.inspector) + '）</option>');
+                    } else {
+                        $sel.find('option[value=""]').text('（沿用既有紀錄：' + rec.inspector + '）');
+                    }
+                    $sel.val('');
+                    return;
+                }
+                // 完全沒有既有快照（少見）：套用與開新視窗相同的預設規則
+                applyInspectorDefault(isBackfillMode);
+            });
+        }
+
         // 把既有紀錄（暫存續編／補登草稿續編／已結案解鎖修改／檢視）填回表單
         function fillFromRecord(rec, isClosedEdit) {
             currentPkgId = rec.packing_inspection_id;
             currentIsClosed = (rec.status === 'closed');
+
+            // 檢驗人員：不論這筆是不是補登建立，一律依既有紀錄回填目前選的是誰；完全沒有既有快照時
+            // 才會用到的保底預設，要看這筆紀錄本來是不是補登建立的（is_backfill），不是看目前開啟模式
+            setInspectorSelectFor(rec, !!(rec.is_backfill * 1));
 
             // 這筆既有紀錄本來就是補登建立的（is_backfill=1）：不論這次是用「點列」（mode=normal）
             // 或「已結案解鎖修改」開啟，只要目前使用者有補登權限，一律把補登欄位（補登日期／包裝人員）
@@ -2145,8 +2346,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
         $('#pkWindowClose, #pkWindowCancel').click(hideWindow);
         $('#pk-window-overlay').click(hideWindow);
-        // 使視窗可拖曳移動
-        $('#pkWindow').draggable({ handle: '#pkWindowHeader', cancel: '.close' });
+        // 使視窗可拖曳移動：站內網路連不到 jQuery UI 的 CDN，改走站上既有的原生拖曳寫法
+        // （與 views/Sales/_gear_tool_ui.php 的 initDrag() 同一套做法）
+        (function () {
+            var win = document.getElementById('pkWindow');
+            var hdr = document.getElementById('pkWindowHeader');
+            if (!win || !hdr) return;
+            var startX, startY, startL, startT;
+            hdr.addEventListener('mousedown', function (e) {
+                if (e.target.closest && e.target.closest('.close')) return;
+                startX = e.clientX; startY = e.clientY;
+                startL = parseInt(win.style.left) || win.getBoundingClientRect().left;
+                startT = parseInt(win.style.top) || win.getBoundingClientRect().top;
+                win.style.transform = 'none';
+                win.style.left = startL + 'px';
+                win.style.top = startT + 'px';
+                document.addEventListener('mousemove', onDrag);
+                document.addEventListener('mouseup', onDrop);
+                e.preventDefault();
+            });
+            function onDrag(e) {
+                win.style.left = (startL + e.clientX - startX) + 'px';
+                win.style.top = (startT + e.clientY - startY) + 'px';
+            }
+            function onDrop() {
+                document.removeEventListener('mousemove', onDrag);
+                document.removeEventListener('mouseup', onDrop);
+            }
+        })();
+
+        // ---------- 點選料號開圖面查閱（可移動與縮小的獨立瀏覽器視窗，方便比對圖面與產品）----------
+        // 走既有頁面（part_viewer.php）同一套開法（與 views/QC/inspection_entry_v2.php 一致），本身就是
+        // 原生瀏覽器視窗，天生可移動可縮放，不必另刻一份可拖曳的內嵌跳窗。
+        // only_drawing=1：包裝頁面只需要比對圖面，使用者要求只看得到「BOM 圖檔」，
+        // ERP/資材報告與料號附件（含報價等其他資訊）一律不顯示（part_viewer.php 端同時前後端一併把關）。
+        $('#f-part').on('click', function () {
+            if (!currentRow) return;
+            var partText = (currentRow.part_no || '').trim();
+            if (!partText && !currentDId) return;
+            var url = '../pm/part_viewer.php?only_drawing=1';
+            url += currentDId ? ('&pk=' + encodeURIComponent(currentDId)) : ('&d_id=' + encodeURIComponent(partText));
+            if (currentRow.bom) url += '&bom=' + encodeURIComponent(currentRow.bom);
+            var w = screen.availWidth, h = screen.availHeight;
+            var pw = Math.min(1400, Math.round(w * 0.85)), ph = Math.min(900, Math.round(h * 0.88));
+            window.open(url, 'pk_drawing_' + (currentDId || partText),
+                'width=' + pw + ',height=' + ph + ',left=' + Math.round((w - pw) / 2) + ',top=' + Math.round((h - ph) / 2) + ',resizable=yes,scrollbars=yes');
+        });
 
         // ---------- 儲存 ----------
         function doSave(complete) {
@@ -2199,6 +2444,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             var isBackfillFlow = (currentMode === 'backfill' || currentIsBackfillRecord);
             if (isBackfillFlow) {
                 if (!$('#f-record-date').val()) { alert('請選擇補登日期'); $('#f-record-date').focus(); return; }
+                if (!$('#f-inspector-select').val()) { alert('請選擇檢驗人員'); $('#f-inspector-select').focus(); return; }
             }
             if (currentIsClosed && !$('#f-confirm-password').val()) {
                 alert('此紀錄已結案鎖定，請輸入操作確認密碼才能存檔');
@@ -2241,7 +2487,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 packaging_data: packagingData,
                 remark: $('#pkg-remark').val(),
                 complete: complete ? 1 : 0,
-                judgement: $('input[name="pkg-judgement"]:checked').val() || ''
+                judgement: $('input[name="pkg-judgement"]:checked').val() || '',
+                inspector_id: $('#f-inspector-select').val() || ''
             };
             if (isBackfillFlow) {
                 payload.is_backfill = 1;
@@ -2290,7 +2537,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             $.post(API, { action: 'get_packer_dept_setting' }, function (dr2) {
                                 $dsel.val((dr2.dept_ids || []).map(String));
                                 $dsel.select2({ dropdownParent: $('#settingModal'), placeholder: '不限制（全公司皆可選）', width: '100%' });
-                                $('#settingModal').modal('show');
+                                loadDefaultInspectorPicker(function () {
+                                    $('#settingModal').modal('show');
+                                });
                             }, 'json');
                         }, 'json');
                     } else {
@@ -2307,13 +2556,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     var deptVals = $('#setting-packer-dept').val() || [];
                     $.post(API, { action: 'save_packer_dept_setting', dept_ids: deptVals }, function (dres) {
                         if (!dres.success) { alert('包裝人員部門設定儲存失敗: ' + dres.message); return; }
-                        $('#settingModal').modal('hide'); loadList();
+                        var defVal = $('#setting-default-inspector').val() || '';
+                        $.post(API, { action: 'save_default_inspector_setting', inspector_id: defVal }, function (ires) {
+                            if (!ires.success) { alert('補登預設檢驗人員儲存失敗: ' + ires.message); return; }
+                            PK_DEFAULT_INSPECTOR = null; // 設定可能已改變，下次補登開視窗時重新查
+                            $('#settingModal').modal('hide'); loadList();
+                        }, 'json');
                     }, 'json');
                 } else {
                     $('#settingModal').modal('hide'); loadList();
                 }
             }, 'json');
         });
+
+        // 設定跳窗內「補登預設檢驗人員」下拉：候選名單與 loadInspectorOptions() 共用同一份（部門範圍），
+        // 額外補一個「未設定」選項並帶入目前設定值
+        function loadDefaultInspectorPicker(cb) {
+            var $sel = $('#setting-default-inspector');
+            if (!$sel.length) { if (cb) cb(); return; }
+            $.post(API, { action: 'people_list' }, function (res) {
+                var rows = (res && res.success) ? res.data : [];
+                var h = '<option value="">（未設定）</option>';
+                rows.forEach(function (u) {
+                    h += '<option value="' + u.id + '">' + (u.dept_name ? (pkEsc(u.dept_name) + ' ') : '') +
+                        (u.position_name ? (pkEsc(u.position_name) + ' ') : '') + pkEsc(u.name) + '</option>';
+                });
+                $sel.html(h);
+                $.post(API, { action: 'get_default_inspector_setting' }, function (dres) {
+                    $sel.val(dres && dres.id ? String(dres.id) : '');
+                    if (cb) cb();
+                }, 'json');
+            }, 'json');
+        }
 
         // ---------- 外觀檢驗項目編輯（模板 / 專用）----------
         function openItemEditor(mode) {

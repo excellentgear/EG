@@ -90,6 +90,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
         $did = trim($_POST['d_id'] ?? '');
         $bom = trim($_POST['bom'] ?? '');   // ★ 指定的單一 BOM 名稱（只抓此 BOM）
         if ($bom === '') throw new Exception('缺少 BOM 名稱');
+        // 只看 BOM 圖檔（例：包裝頁面點開比對圖面用），ERP/資材報告一律不掃、不回傳（前後端一併把關）
+        $onlyDrawing = !empty($_GET['only_drawing']);
 
         include_once '../../src/common/DBConnection.php';
         $pdo2 = (new DBConnection())->getPDO();
@@ -129,15 +131,18 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
             });
         }
 
-        // ── ERP/資材報告：只抓「此 BOM 名稱」開頭的檔，並套用後綴標籤 ──
+        // ── ERP/資材報告：只抓「此 BOM 名稱」開頭的檔，並套用後綴標籤（only_drawing 時不掃、不回傳）──
         $erp_files = [];
-        require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
-        // 路徑編碼（UNC 中文路徑在 Windows 可能要 Big5）與檔名轉回 UTF-8 一律交給 bom_dir_lib，
-        // 呼叫端絕對不可以自己再 mb_convert_encoding 一次：
-        // eg_bom_erp_scan_dir_auto() 回傳的已經是「檔案系統吃得到」的路徑，再轉一次就轉壞了，
-        // is_dir() 直接 false→整個 ERP/資材區塊安靜消失（連同它的檔名標籤）且不會報錯。
-        // eg_bom_scan() 另已做好「先依檔名過濾再 stat」，這個資料夾有 6 千個檔且在網路磁碟上。
-        $erp_scan_files = eg_bom_scan(eg_bom_erp_scan_dir_auto(), [], $bom);
+        $erp_scan_files = [];
+        if (!$onlyDrawing) {
+            require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+            // 路徑編碼（UNC 中文路徑在 Windows 可能要 Big5）與檔名轉回 UTF-8 一律交給 bom_dir_lib，
+            // 呼叫端絕對不可以自己再 mb_convert_encoding 一次：
+            // eg_bom_erp_scan_dir_auto() 回傳的已經是「檔案系統吃得到」的路徑，再轉一次就轉壞了，
+            // is_dir() 直接 false→整個 ERP/資材區塊安靜消失（連同它的檔名標籤）且不會報錯。
+            // eg_bom_scan() 另已做好「先依檔名過濾再 stat」，這個資料夾有 6 千個檔且在網路磁碟上。
+            $erp_scan_files = eg_bom_scan(eg_bom_erp_scan_dir_auto(), [], $bom);
+        }
         if ($erp_scan_files) {
             foreach ($erp_scan_files as $ef) {
                 $f_utf8 = $ef['name'];
@@ -182,6 +187,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
 // ── AJAX：取得料號附件列表（依料號上傳，與 BOM 無關，保留）──────────────────
 if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
     header('Content-Type: application/json');
+    // 只看 BOM 圖檔（例：包裝頁面點開比對圖面用）：料號附件（含優選附件／報價相關資訊）一律不查、不回傳，
+    // 與前端「only_drawing 時根本不呼叫這支」互為前後端雙重把關（鐵律8）
+    if (!empty($_GET['only_drawing'])) {
+        echo json_encode(['success' => true, 'attachments' => [], 'albums' => [], 'pref_attachments' => []]);
+        exit;
+    }
     try {
         // 歸戶鍵＝d_setting.d_id（整數 PK）。用料號文字會把同名的別家主檔（不同客戶／版次）
         // 一起撈進來＝附件混在一起，這是使用者 2026-08-28 回報的問題。
@@ -285,6 +296,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
 $d_id = trim($_GET['d_id'] ?? '');
 $bom  = trim($_GET['bom']  ?? '');
 $pk   = (int)($_GET['pk'] ?? 0);   // d_setting.d_id（整數 PK）＝精確指名要看哪一筆料號主檔
+// 只看 BOM 圖檔（例：包裝頁面點開比對圖面用）：隱藏 ERP/資材報告與料號附件區塊，只留最單純的圖面清單
+$onlyDrawing = !empty($_GET['only_drawing']);
 if ($d_id === '' && $pk <= 0) {
     die('缺少 d_id 參數');
 }
@@ -422,7 +435,9 @@ $bom_safe = htmlspecialchars($bom,  ENT_QUOTES, 'UTF-8');
             <button id="btn-paint"      class="btn btn-info    btn-xs" style="display:none;" title="用小畫家開啟（需一次性安裝）"><i class="fa fa-paint-brush"></i> 小畫家</button>
             <button id="btn-save"       class="btn btn-success btn-xs" style="display:none;" title="儲存檔案"><i class="fa fa-floppy-o"></i> 儲存</button>
             <button id="btn-print"      class="btn btn-default btn-xs" style="display:none;" title="列印"><i class="fa fa-print"></i> 列印</button>
+            <?php if (!$onlyDrawing): ?>
             <button id="btn-tags-setting" class="btn btn-info btn-xs" onclick="openFileTagsSetting()" title="設定檔名標籤"><i class="fa fa-tags"></i> 設定標籤</button>
+            <?php endif; ?>
         </div>
         <!-- 小畫家提示列（每次點擊都顯示，讓使用者可視需要重新安裝） -->
         <div id="paint-install-hint" style="display:none; background:#fff3cd; color:#856404; padding:7px 12px; font-size:12px; border-bottom:2px solid #ffc107; flex-shrink:0;">
@@ -514,6 +529,7 @@ $bom_safe = htmlspecialchars($bom,  ENT_QUOTES, 'UTF-8');
 var _bom        = <?= json_encode($bom) ?>;    // 指定的單一 BOM 名稱
 var _mode       = 'did';
 var _d_id       = <?= json_encode($d_id) ?>;   // 料號文字（僅供顯示）
+var ONLY_DRAWING = <?= $onlyDrawing ? 'true' : 'false' ?>;   // 只看 BOM 圖檔：不查ERP/資材報告、不查料號附件
 // 料號主檔歸戶：_pk 才是真正的歸戶鍵（d_setting.d_id）；_partCands 是同名料號的其他主檔
 var _pk         = <?= (int)($partScope['pk'] ?? 0) ?>;
 var _partCands  = <?php
@@ -873,8 +889,8 @@ $.post('', { action: 'get_files_by_did', d_id: _d_id, bom: _bom }, function(res)
         $('#viewer-placeholder').text('無相關圖檔').show();
     }
 
-    // ── 料號附件區塊（依料號上傳，與 BOM 無關）─────────────────────────────
-    if (_d_id) {
+    // ── 料號附件區塊（依料號上傳，與 BOM 無關；only_drawing 時只看圖面，不查此區塊）──────
+    if (_d_id && !ONLY_DRAWING) {
         $.post('', { action: 'get_attachments_by_did', d_id: _d_id, pk: _pk }, function(attRes) {
             if (!attRes.success) return;
             renderPrefAttach(attRes.pref_attachments || []);
