@@ -171,7 +171,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             header('Content-Disposition: attachment; filename="process_report_' . date('YmdHis') . '.csv"');
             echo "\xEF\xBB\xBF"; // Excel 判讀 UTF-8 BOM
             $out = fopen('php://output', 'w');
-            fputcsv($out, ['日期', '製程', '機台', '工單', '料號', '客戶', '架機人員', '架機時間', '生產人員', '生產時間', '良品', 'NG', '加工總數', '完工', '加工面', '備註']);
+            fputcsv($out, ['日期', '製程', '機台', '製令', '料號', '客戶', '架機人員', '架機時間', '生產人員', '生產時間', '良品', 'NG', '加工總數', '完工', '加工面', '備註']);
             while ($r = $stmt->fetch(PDO::FETCH_ASSOC)) {
                 $isTemp = $r['report_source'] === 'TEMP';
                 $ngQty = (int)($r['ng_qty'] ?? 0);
@@ -410,6 +410,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         table.prq-table tbody tr:nth-child(even) { background: #FBF6EC; }
         table.prq-table tbody tr:hover { background: #FBF0DD; }
         table.prq-table td.t-left { text-align: left; white-space: normal; }
+        table.prq-table td.bom-cell[data-bom], table.prq-table td.part-cell[data-did] { cursor: pointer; }
+        table.prq-table td.bom-cell[data-bom]:hover, table.prq-table td.part-cell[data-did]:hover { background: #F7E0BD; text-decoration: underline; }
         .prq-pager { display: flex; justify-content: flex-end; align-items: center; gap: 5px; margin: 10px 2px 4px; flex-wrap: wrap; }
         .prq-pager .pg-info { font-size: 12px; color: #8a6d45; margin-right: auto; }
         .prq-pager button { min-width: 30px; height: 28px; padding: 0 9px; border: 1px solid #D8BE93; background: #fff; color: #5b3a1e; border-radius: 4px; cursor: pointer; font-size: 12px; }
@@ -457,7 +459,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 </select>
                 <label>備註</label>
                 <input type="text" id="fRemark" placeholder="關鍵字" style="width:90px;">
-                <button class="btn-warm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
                 <button id="btnClear"><i class="fa fa-eraser"></i> 清除篩選(查全部)</button>
                 <?php if ($prq_can_qab_open): ?>
                 <button id="btnQabBatch" class="btn-warm" style="margin-left:auto;" disabled><i class="fa fa-file-text-o"></i> 批次補開異常單(<span id="qabSelCount">0</span>)</button>
@@ -503,7 +504,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <table class="prq-table" id="prqTable">
                 <thead><tr>
                     <th class="prq-ck-col"<?php if (!$prq_can_qab_open) echo ' style="display:none"'; ?>><input type="checkbox" id="ckAll"></th>
-                    <th>日期</th><th>製程</th><th>機台</th><th class="t-left">工單</th><th class="t-left">料號</th><th>客戶</th>
+                    <th>日期</th><th>製程</th><th class="t-left">機台</th><th class="t-left">製令</th><th class="t-left">料號</th><th>客戶</th>
                     <th>架機人員</th><th>架機時間</th><th>生產人員</th><th>生產時間</th><th>良品</th><th>NG</th><th>加工總數</th><th>完工</th><th>加工面</th><th class="t-left">備註</th>
                     <th>異常單</th>
                 </tr></thead>
@@ -549,7 +550,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <p>逐筆列出「加工排程看板」每一筆報工紀錄（含臨時加工），供查找特定日期/人員/製程/機台的報工內容並列印或匯出，與看板上「查詢已報工工單」跳窗（依工單彙總、用於恢復任務/改綁BOM）用途不同、互不影響。</p>
         <h4>操作步驟</h4>
         <ul>
-            <li>上方篩選可組合使用：製程大類（頁籤按鈕，比照排程看板「查詢已報工工單」的分類方式）、日期區間、機台、工單(BOM)號碼、料號、人員（同時比對架機/生產人員）、備註關鍵字。</li>
+            <li>上方篩選可組合使用：製程大類（頁籤按鈕，比照排程看板「查詢已報工工單」的分類方式）、日期區間、機台、工單(BOM)號碼、料號、人員（同時比對架機/生產人員）、備註關鍵字；<b>文字類篩選框輸入內容即時篩選，不需要另外按查詢鈕</b>，日期/機台則選定當下立即查詢。</li>
             <li>製程大類、機台、工單、料號、人員的可選清單會依「目前其餘篩選條件」動態連動——只列真的有資料的選項，選了製程大類會連動縮小機台/工單/料號/人員清單，反之亦然。</li>
             <li><b>工單(BOM)號碼</b>可直接打字（部分字元即可），也可從建議清單挑選；<b>臨時加工（無綁定工單）沒有工單號碼，只要有指定工單篩選，臨時加工的紀錄就不會出現在結果中</b>。</li>
             <li><b>料號</b>可直接打字（部分字元即可，例如打 <code>RC016</code> 就找得到 <code>RC016011-02</code>），也可從輸入框的建議清單挑選；建議清單只列目前篩選條件下真的有報工紀錄的料號、最多 500 筆，超過的部分仍可自行打字查得到。</li>
@@ -563,7 +564,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <h4>重要行為/常見疑問</h4>
         <div class="tip">若篩選結果筆數較多（超過3000筆），列印/匯出前會先跳出確認提示，避免不小心產生過大的列印工作。</div>
         <ul>
-            <li>臨時加工（無綁定工單）的「工單」欄會顯示「臨時加工」、「料號」欄留空，客戶欄改顯示加工原因；<b>因為沒有料號，只要有指定料號篩選，臨時加工的紀錄就不會出現在結果中</b>。</li>
+            <li>臨時加工（無綁定工單）的「製令」欄會顯示「臨時加工」、「料號」欄留空，客戶欄改顯示加工原因；<b>因為沒有料號，只要有指定料號篩選，臨時加工的紀錄就不會出現在結果中</b>。</li>
+            <li><b>雙擊「製令」或「料號」欄的內容</b>可直接把該筆的值帶入上方對應的篩選框並立即查詢，不必自己打字或從建議清單挑選；臨時加工的空白格不可雙擊帶入。</li>
             <li>「架機人員」＝原「設置人員」正名；架機/生產時間欄留空代表該筆報工未填該項時間。</li>
             <li><b>良品／NG／加工總數</b>：「良品」是該筆報工填寫的完成數量，「NG」取自該筆報工登記的 NG 明細加總（可能有多筆不同 NG 原因），「加工總數」＝良品＋NG，列表、列印、匯出CSV 三處口徑一致；NG 大於 0 時列表上會以紅字標示提醒。</li>
             <li><b>列印版的 AS 文件編號</b>：綁定後，列印時大標題下方那一行會自動改印該 AS 文件的<b>表單名稱</b>，頁尾<b>右下角每一頁</b>都會印出<b>文件編號</b>（四階文件會自動附加版次，例 2-PM-01-01A）。未綁定時表頭退回顯示「報工紀錄查詢列印」、右下角不印編號。</li>
@@ -665,9 +667,9 @@ function rowToTr(r){
         + '<td class="prq-ck-col"' + (PRQ_CAN_QAB ? '' : ' style="display:none"') + '>' + ckHtml + '</td>'
         + '<td>' + esc(egFmtDate(r.report_date)) + '</td>'
         + '<td>' + esc(r.ProcessName) + '</td>'
-        + '<td>' + esc(r.machine_label || r.machine) + '</td>'
-        + '<td class="t-left">' + bomTxt + '</td>'
-        + '<td class="t-left">' + didTxt + '</td>'
+        + '<td class="t-left">' + esc(r.machine_label || r.machine) + '</td>'
+        + '<td class="t-left bom-cell"' + (isTemp ? '' : ' data-bom="' + esc(r.bom || '') + '"') + '>' + bomTxt + '</td>'
+        + '<td class="t-left part-cell"' + (isTemp ? '' : ' data-did="' + esc(r.d_id || '') + '"') + '>' + didTxt + '</td>'
         + '<td>' + custTxt + '</td>'
         + '<td>' + esc(r.setup_user) + '</td>'
         + '<td>' + esc(timeRange(r.setup_start_time, r.setup_end_time)) + '</td>'
@@ -790,14 +792,36 @@ function refreshFacets(cb){
 
 function applyFilters(){ refreshFacets(function(){ loadList(1); }); }
 
-$('#btnSearch').on('click', applyFilters);
+// 篩選框輸入內容即時篩選（不需要另外按查詢），文字輸入框加短暫防抖避免每敲一鍵就打一次 API
+var applyFiltersTimer = null;
+function applyFiltersDebounced(){
+    clearTimeout(applyFiltersTimer);
+    applyFiltersTimer = setTimeout(applyFilters, 350);
+}
 ['#fDateFrom','#fDateTo','#fMachine'].forEach(function(sel){
     $(sel).on('change', applyFilters);
 });
 ['#fBomNo','#fPartNo','#fPerson','#fRemark'].forEach(function(sel){
-    $(sel).on('keyup', function(e){ if (e.key==='Enter') applyFilters(); });
+    $(sel).on('input', applyFiltersDebounced);
+    $(sel).on('keyup', function(e){ if (e.key==='Enter'){ clearTimeout(applyFiltersTimer); applyFilters(); } });
 });
 $('#pageSizeSel').on('change', function(){ loadList(1); });
+
+// 雙擊「製令」或「料號」欄的內容：帶入上方對應篩選框並立即查詢（臨時加工沒有值不會有 data 屬性，雙擊無作用）
+$('#prqTbody').on('dblclick', 'td.bom-cell', function(){
+    var v = $(this).attr('data-bom');
+    if (!v) return;
+    clearTimeout(applyFiltersTimer);
+    $('#fBomNo').val(v);
+    applyFilters();
+});
+$('#prqTbody').on('dblclick', 'td.part-cell', function(){
+    var v = $(this).attr('data-did');
+    if (!v) return;
+    clearTimeout(applyFiltersTimer);
+    $('#fPartNo').val(v);
+    applyFilters();
+});
 
 $('#btnClear').on('click', function(){
     $('#fDateFrom, #fDateTo, #fBomNo, #fPartNo, #fPerson, #fRemark').val('');
@@ -832,7 +856,7 @@ $('#btnPrint').on('click', function(){
         var body = '<div class="p-comp">' + esc(res.company_name||'') + '</div>'
                  + '<div class="p-title">' + esc(docTitle) + '</div>'
                  + '<div class="p-sub">' + esc(sub) + '</div>';
-        body += '<table class="p-tb"><thead><tr><th>日期</th><th>製程</th><th>機台</th><th>工單</th><th>料號</th><th>客戶</th>'
+        body += '<table class="p-tb"><thead><tr><th>日期</th><th>製程</th><th>機台</th><th>製令</th><th>料號</th><th>客戶</th>'
               + '<th>架機人員</th><th>架機時間</th><th>生產人員</th><th>生產時間</th><th>良品</th><th>NG</th><th>加工總數</th><th>完工</th><th>備註</th></tr></thead><tbody>';
         res.rows.forEach(function(r){
             var isTemp = r.report_source === 'TEMP';
@@ -841,7 +865,7 @@ $('#btnPrint').on('click', function(){
             var custTxt = isTemp ? esc(r.source_reason||'') : esc(r.Client_Name);
             var okQty = parseInt(r.produced_qty, 10) || 0;
             var ngQty = parseInt(r.ng_qty, 10) || 0;
-            body += '<tr><td>'+esc(egFmtDate(r.report_date))+'</td><td>'+esc(r.ProcessName)+'</td><td>'+esc(r.machine_label||r.machine)+'</td>'
+            body += '<tr><td>'+esc(egFmtDate(r.report_date))+'</td><td>'+esc(r.ProcessName)+'</td><td class="tl">'+esc(r.machine_label||r.machine)+'</td>'
                   + '<td class="tl">'+bomTxt+'</td><td class="tl">'+didTxt+'</td><td>'+custTxt+'</td>'
                   + '<td>'+esc(r.setup_user)+'</td><td>'+esc(timeRange(r.setup_start_time, r.setup_end_time))+'</td>'
                   + '<td>'+esc(r.prod_user)+'</td><td>'+esc(timeRange(r.production_start_time, r.production_end_time))+'</td>'
