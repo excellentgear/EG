@@ -2833,7 +2833,14 @@ function prj_work_reports(PDO $db, int $projectId): array
                        r.machine_id, ml.machine_type_id AS machine_proc_type_id, pn.process_type_id AS proc_type_id,
                        us.user_cname AS setup_user, up.user_cname AS prod_user,
                        r.setup_user_id, r.production_user_id,
-                       r.produced_qty AS qty, r.is_finished, r.remark AS note,
+                       r.produced_qty AS qty,
+                       /* NG數與是否已歸入異常單（使用者 2026-09-24 要求：報工紀錄要看得出良品/NG，
+                          且備註要能點出這筆報工歸入哪一張異常單，見 qab_pm_uncovered_reports()
+                          同一張 pm_process_daily_ng 表，不另開一份查詢） */
+                       COALESCE((SELECT SUM(ng.ng_qty) FROM pm_process_daily_ng ng
+                                  WHERE ng.report_id = r.report_id), 0) AS ng_qty,
+                       r.abnormal_order_id, qao.abnormal_order_no,
+                       r.is_finished, r.remark AS note,
                        r.production_start_time AS t1, r.production_end_time AS t2,
                        r.setup_start_time AS su_t1, r.setup_end_time AS su_t2, r.bom_ing_fid
                   FROM pm_process_daily_report r
@@ -2843,6 +2850,7 @@ function prj_work_reports(PDO $db, int $projectId): array
                   LEFT JOIN machine_list ml ON ml.machine_id = r.machine_id
                   LEFT JOIN `user` us ON us.id = r.setup_user_id
                   LEFT JOIN `user` up ON up.id = r.production_user_id
+                  LEFT JOIN qa_abnormal_order qao ON qao.id = r.abnormal_order_id AND qao.deleted_at IS NULL
                  ORDER BY r.report_date DESC, r.report_id DESC";
         $st = $db->prepare($sql);
         $st->execute([$projectId, $projectId]);
@@ -3078,6 +3086,11 @@ function prj_processes(PDO $db, int $projectId, ?array $prj = null): array
  *     是推測還是精準綁定，讓人分得出可信度。
  *   ⑥異常單／矯正單：**只顯示不列入缺件**（使用者原話：「有資料才顯示，因為是異常紀錄
  *     所以平常不需要有」）。
+ *   ⑦BOM總數／NG總數（2026-09-24 追加交辦）：BOM總數＝`bom.sqty`（欄位註解本來就寫「總數」，
+ *     跟 bom_ing.sqty 每站固定投入量是兩件事）；NG總數＝逐站加總 pm_process_daily_ng
+ *     （與 qab_pm_uncovered_reports() 同一張表，不分有沒有已歸入異常單，這裡要的是累積事實）。
+ *     使用者拍板「只要有NG一定要有報廢單」——NG總數>0卻沒有任一張異常單配過報廢單號
+ *     （qa_abnormal_order.scrap_no）就列為缺件，跟⑥不同：這條**要**算進 missing_cnt。
  * 已結案很久的製令一樣要檢核（不濾 bom.closed_at，同 prj_bom_rows()/prj_processes() 的既有決定）。
  *
  * 已知未涵蓋、需要使用者進一步定案的項目（2026-09-24 對話中一併提到，尚未有足夠依據判定）：
@@ -3149,11 +3162,43 @@ function prj_data_readiness(PDO $db, int $projectId): array
 
     // 這張製令是否已結案（決定「開啟哪一頁查」：BOM 總表只列未完工的製令，已完工的要連
     // 「已完工BOM查詢列印」，即使只帶 BOM 編號在 BOM 總表也是 0 列——同 data_audit.php 的既有作法）
-    $closedOf = [];
+    // bom.sqty 就是這張製令的「總數」（欄位註解寫的就是「總數」），與 bom_ing.sqty
+    // 每一站的固定投入量是兩件事，這裡要的是使用者要看的 BOM 總數（2026-09-24 交辦）。
+    $closedOf = []; $bomQtyOf = [];
     try {
-        $st = $db->prepare("SELECT bom, closed_at FROM bom WHERE bom IN ($ph)");
+        $st = $db->prepare("SELECT bom, closed_at, sqty FROM bom WHERE bom IN ($ph)");
         $st->execute($bomList);
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $x) $closedOf[(string)$x['bom']] = !empty($x['closed_at']);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $x) {
+            $closedOf[(string)$x['bom']] = !empty($x['closed_at']);
+            $bomQtyOf[(string)$x['bom']] = (int)($x['sqty'] ?? 0);
+        }
+    } catch (Throwable $e) {}
+
+    // NG 總數：逐站加總 pm_process_daily_ng（與 qab_pm_uncovered_reports() 同一張表，
+    // 這裡要的是這張製令目前為止全部報工累積出來的 NG，不分有沒有已歸入異常單）。
+    $ngOfFid = [];
+    if ($fids) {
+        try {
+            $inF = implode(',', array_map('intval', $fids));
+            foreach ($db->query("SELECT pdr.bom_ing_fid, COALESCE(SUM(ng.ng_qty),0) AS ng_qty
+                                  FROM pm_process_daily_report pdr
+                                  LEFT JOIN pm_process_daily_ng ng ON ng.report_id = pdr.report_id
+                                  WHERE pdr.bom_ing_fid IN ($inF)
+                                  GROUP BY pdr.bom_ing_fid")->fetchAll(PDO::FETCH_ASSOC) as $x) {
+                $ngOfFid[(int)$x['bom_ing_fid']] = (int)$x['ng_qty'];
+            }
+        } catch (Throwable $e) {}
+    }
+
+    // 有沒有報廢單：使用者拍板「只要有NG一定要有報廢單」——只認結案配號的（scrap_no 有值），
+    // 判定寫入異常單／矯正單同一段之後，這裡先只要「有沒有」。
+    $scrapOf = [];
+    try {
+        $st = $db->prepare("SELECT DISTINCT bom_no FROM qa_abnormal_order
+                             WHERE bom_no IN ($ph) AND deleted_at IS NULL
+                               AND scrap_no IS NOT NULL AND scrap_no <> ''");
+        $st->execute($bomList);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $b) $scrapOf[(string)$b] = 1;
     } catch (Throwable $e) {}
 
     // 出貨單：精準綁定（is_bom_map）優先，查無精準綁定才退回料號在完工日之後有沒有出貨
@@ -3196,8 +3241,10 @@ function prj_data_readiness(PDO $db, int $projectId): array
         $stepRows = [];
         $hasFai = false; $hasWork = false;
         $finishDate = '';
+        $ngTotal = 0;
         foreach ($steps as $s) {
             $fid = $s['fid'];
+            $ngTotal += $ngOfFid[$fid] ?? 0;
             $d = $s['return_date'] ?: $s['outsource_date'];
             if ($d && $d > $finishDate) $finishDate = $d;
             if ($s['is_pack']) {
@@ -3223,9 +3270,15 @@ function prj_data_readiness(PDO $db, int $projectId): array
         }
         if ($shipMode === '') $missing[] = '出貨單';
 
+        // 使用者拍板：只要這張製令累積出來的 NG 總數 > 0，就一定要有報廢單（scrap_no），
+        // 沒有的話列為缺件，不是「異常單／矯正單」那種只顯示不列缺件的性質。
+        $hasScrap = !empty($scrapOf[$bom]);
+        if ($ngTotal > 0 && !$hasScrap) $missing[] = '報廢單（NG ' . $ngTotal . '）';
+
         $out[] = [
             'bom' => $bom, 'part_no' => $b['part_no'], 'ds_pk' => $b['ds_pk'],
             'closed' => !empty($closedOf[$bom]) ? 1 : 0,
+            'bom_qty' => $bomQtyOf[$bom] ?? 0, 'ng_total' => $ngTotal, 'has_scrap' => $hasScrap ? 1 : 0,
             'steps' => $stepRows, 'fai' => $hasFai ? 1 : 0, 'work' => $hasWork ? 1 : 0,
             'ship' => $shipMode !== '' ? 1 : 0, 'ship_mode' => $shipMode,
             'missing' => $missing, 'missing_cnt' => count($missing),

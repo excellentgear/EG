@@ -421,6 +421,13 @@ $(document).on('click', '[data-viewwork]', function () {
         '/EGsystem/views/pm/process_report_query.php?bom=' + encodeURIComponent(b)
         + '&part=' + encodeURIComponent(pn));
 });
+/* 報工紀錄備註列出的異常單號 → 新視窗開啟該筆異常單的檢視畫面（使用者要求）。
+   異常單處理頁是獨立完整頁面（含自己的簽核/列印），比照製令連結（[data-viewbom]）
+   一律用 window.open 開真正的新分頁，不嵌成跳窗。 */
+$(document).on('click', '[data-openabn]', function () {
+    var id = num($(this).data('openabn'));
+    if (id > 0) window.open('/EGsystem/views/QA/qa_abnormal_form.php?id=' + id, '_blank');
+});
 
 function newProjectShell() {
     return {
@@ -2927,12 +2934,22 @@ function renderRel(res) {
               + '<td>' + esc(isIn
                     ? ((r.setup_user ? '上機 ' + r.setup_user + '　' : '') + (r.prod_user ? '生產 ' + r.prod_user : '') || '－')
                     : ((r.maker_from_name || '?') + ' → ' + (r.maker_to_name || '?'))) + '</td>'
-              + '<td>' + num(r.qty) + (num(r.loss_qty) ? '<br><span class="pj-hint">損耗 ' + num(r.loss_qty) + '</span>' : '') + '</td>'
+              + '<td>' + num(r.qty)
+                    + (isIn && num(r.ng_qty) ? '<br><span class="rd-bad">NG ' + num(r.ng_qty) + '</span>' : '')
+                    + (num(r.loss_qty) ? '<br><span class="pj-hint">損耗 ' + num(r.loss_qty) + '</span>' : '') + '</td>'
               + '<td>' + (isIn ? (num(r.is_finished) ? '<span class="st st-approved">完工</span>' : '進行中') : '－') + '</td>'
-              + '<td>' + esc(r.note || '') + '</td></tr>';
+              /* 備註：有歸入異常單的一律先標出來（使用者要求），可點開新視窗看那一張異常單 */
+              + '<td>' + (r.abnormal_order_no
+                    ? '<span class="pj-op" data-openabn="' + num(r.abnormal_order_id) + '" title="開啟異常單">'
+                      + '<i class="fa fa-external-link"></i> 異常單 ' + esc(r.abnormal_order_no) + '</span>'
+                      + (r.note ? '<br>' + esc(r.note) : '')
+                    : esc(r.note || '')) + '</td></tr>';
         });
+        var totGood = 0, totNg = 0;
+        $.each(wr, function (i, r) { if (r.kind === 'in') { totGood += num(r.qty); totNg += num(r.ng_qty); } });
         h += '</tbody></table></div>'
-          + '<p class="pj-hint">共 ' + wr.length + ' 筆，依日期由新到舊。這些是生產現場登打的原始紀錄，本頁只顯示不修改。</p>';
+          + '<p class="pj-hint">共 ' + wr.length + ' 筆（廠內報工總數 ' + (totGood + totNg)
+          + '　良品 ' + totGood + '　NG ' + totNg + '），依日期由新到舊。這些是生產現場登打的原始紀錄，本頁只顯示不修改。</p>';
     }
     h += '</div>';
 
@@ -3246,9 +3263,12 @@ function renderReady(res) {
           + '整條製程鏈（含客供料、包裝）全部都要檢核到。<br>'
           + '<b>出貨單</b>標「精確」的是已建立分配對照（追溯對照）的那幾張；沒有分配對照時，'
           + '改用「這個料號在完工日之後有沒有出貨」推測，標「推測」並提醒僅供參考。<br>'
-          + '<b>異常單／矯正單</b>只是把有紀錄的列出來給你確認，<b>平常沒有是正常的，不算缺件</b>。</p>'
+          + '<b>異常單／矯正單</b>只是把有紀錄的列出來給你確認，<b>平常沒有是正常的，不算缺件</b>。<br>'
+          + '<b>NG</b>是這張製令累積出來的不良總數（各站報工紀錄加總）；<b>只要有 NG 就一定要有報廢單</b>'
+          + '（異常單結案配發的報廢單號），沒有的話會列為缺件。</p>'
           + '<div class="pj-table-wrap"><table class="pj-table"><thead><tr>'
           + '<th style="width:120px;">製令</th><th style="width:110px;">料號</th>'
+          + '<th style="width:60px;">BOM總數</th><th style="width:60px;">NG總數</th>'
           + '<th>各製程線上檢驗（含客供料／包裝）</th>'
           + '<th style="width:80px;">FAI首件</th><th style="width:80px;">報工紀錄</th>'
           + '<th style="width:96px;">出貨單</th><th>異常單／矯正單</th><th style="width:64px;">缺件</th>'
@@ -3257,7 +3277,10 @@ function renderReady(res) {
         h += '<tr><td class="l"><span class="rd-link" data-rdbom="' + esc(r.bom) + '" data-closed="' + num(r.closed)
           + '" title="開啟' + (num(r.closed) ? '已完工BOM查詢列印' : 'BOM 總表') + '">' + esc(r.bom)
           + (num(r.closed) ? '<br><span class="pj-hint">已完工</span>' : '') + '</span></td>'
-          + '<td class="l">' + esc(r.part_no || '') + '</td><td class="l">';
+          + '<td class="l">' + esc(r.part_no || '') + '</td>'
+          + '<td>' + (num(r.bom_qty) || '<span class="pj-hint">－</span>') + '</td>'
+          + '<td>' + (num(r.ng_total) ? '<span class="rd-bad">' + num(r.ng_total) + '</span>' : '0') + '</td>'
+          + '<td class="l">';
         $.each(r.steps || [], function (j, s) {
             var url = s.kind === 'pack' ? '/EGsystem/views/QC/packaging_inspection_entry.php'
                                          : '/EGsystem/views/QC/inspection_entry_v2.php?bom_ing_fid=' + num(s.fid);
