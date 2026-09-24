@@ -418,7 +418,7 @@ function newProjectShell() {
     return {
         project: { project_id: 0, project_type: 'C', phase: 'initiating', status: 'draft', progress: 0 },
         goals: [], tasks: [], orders: [], parts: [], processes: [], shipments: [], cards: [], cosigns: [],
-        alerts: [], doc_check: [], can_edit: true, can_approve: false
+        alerts: [], doc_check: [], data_ready: [], can_edit: true, can_approve: false
     };
 }
 
@@ -437,6 +437,7 @@ function renderDetail(res) {
     renderCards(res);
     renderRel(res);
     renderCheck(res);
+    renderReady(res);
     renderSign(res);
     renderFoot(res);
     $('.pj-tab').first().click();
@@ -3180,6 +3181,69 @@ function renderCheck(res) {
     $('#paneChk').html(h);
 }
 /* ── 專案自己綁定 SOP／SIP（使用者 2026-09-23：要能綁「通用」的，而且各種都不限一項） ── */
+
+/* ══════════════════════════ 資料完整度（以製令為單位） ══════════════════════════
+   使用者 2026-09-24 交辦：文件檢核只管六份技術文件，還要能檢核 BOM 底下實際生產資料是否齊全
+   （BOM 各製程線上檢驗／包裝檢驗／報工紀錄／出貨單），另開一個分頁、不併進文件檢核那張表。
+   判定邏輯全部在後端 prj_data_readiness()（src/common/project_lib.php），這裡只負責畫。 */
+function renderReady(res) {
+    var rows = res.data_ready || [];
+    var totalMiss = 0;
+    $.each(rows, function (i, r) { totalMiss += num(r.missing_cnt); });
+    $('#readyBadge').html(totalMiss > 0 ? '<span class="pj-miss-badge">' + totalMiss + '</span>' : '');
+
+    if (!rows.length) {
+        $('#paneReady').html('<div class="pj-hint" style="padding:14px;">'
+            + '這個專案還沒有同步到任何製令（BOM），或製令底下還沒有任何製程列。'
+            + '請先到「關聯資料」按「同步 BOM」。</div>');
+        return;
+    }
+    var h = '<p class="pj-hint">以<b>製令（BOM）</b>為單位，逐道製程檢核有沒有線上檢驗紀錄'
+          + '（<a href="/EGsystem/views/QC/inspection_entry_v2.php" target="_blank">線上檢驗</a>）；'
+          + '<b>包裝</b>那一道不走線上檢驗，改查'
+          + '<a href="/EGsystem/views/QC/packaging_inspection_entry.php" target="_blank">包裝出貨檢驗表</a>。'
+          + '這裡刻意<b>不受「製程範圍」設定影響</b>——不管專案的製程範圍選了哪幾道，'
+          + '整條製程鏈（含客供料、包裝）全部都要檢核到。<br>'
+          + '<b>出貨單</b>標「精確」的是已建立分配對照（追溯對照）的那幾張；沒有分配對照時，'
+          + '改用「這個料號在完工日之後有沒有出貨」推測，標「推測」並提醒僅供參考。<br>'
+          + '<b>異常單／矯正單</b>只是把有紀錄的列出來給你確認，<b>平常沒有是正常的，不算缺件</b>。</p>'
+          + '<div class="pj-table-wrap"><table class="pj-table"><thead><tr>'
+          + '<th style="width:120px;">製令</th><th style="width:110px;">料號</th>'
+          + '<th>各製程線上檢驗（含客供料／包裝）</th>'
+          + '<th style="width:80px;">FAI首件</th><th style="width:80px;">報工紀錄</th>'
+          + '<th style="width:96px;">出貨單</th><th>異常單／矯正單</th><th style="width:64px;">缺件</th>'
+          + '</tr></thead><tbody>';
+    $.each(rows, function (i, r) {
+        h += '<tr><td class="l"><span class="chk-go" data-viewbom="' + esc(r.bom) + '">' + esc(r.bom) + '</span></td>'
+          + '<td class="l">' + esc(r.part_no || '') + '</td><td class="l">';
+        $.each(r.steps || [], function (j, s) {
+            var url = s.kind === 'pack' ? '/EGsystem/views/QC/packaging_inspection_entry.php'
+                                         : '/EGsystem/views/QC/inspection_entry_v2.php?bom_ing_fid=' + num(s.fid);
+            h += '<span class="rd-step ' + (num(s.ok) ? 'rd-ok' : 'rd-no') + '" title="'
+              + (num(s.ok) ? '已有線上檢驗紀錄' : (s.kind === 'pack' ? '尚未建立包裝檢驗' : '尚未建立線上檢驗')) + '">'
+              + '<a href="' + esc(url) + '" target="_blank">' + (num(s.ok) ? '✓ ' : '✗ ') + esc(s.name)
+              + (s.kind === 'pack' ? '（包裝）' : '') + '</a></span> ';
+        });
+        h += '</td>'
+          + '<td>' + (num(r.fai) ? '<span class="chk-y">✓ 已有</span>' : '<span class="chk-n">✗ 未建立</span>') + '</td>'
+          + '<td>' + (num(r.work) ? '<span class="chk-y chk-go" data-viewwork="' + esc(r.bom) + '" data-partno="'
+                      + esc(r.part_no || '') + '">✓ 已有</span>' : '<span class="chk-n">✗ 未回報</span>') + '</td>'
+          + '<td>' + (num(r.ship) ? '<span class="chk-y">✓ ' + (r.ship_mode === 'exact' ? '精確' : '推測') + '</span>'
+                      : '<span class="chk-n">✗ 未出貨</span>') + '</td>'
+          + '<td class="l">' + rdEvidenceList(r.abnormal, '異常單') + rdEvidenceList(r.car, '矯正單')
+          + (!(r.abnormal || []).length && !(r.car || []).length ? '<span class="pj-hint">（無，正常）</span>' : '') + '</td>'
+          + '<td>' + (num(r.missing_cnt) ? '<span class="pj-miss-badge">' + num(r.missing_cnt) + '</span>'
+                      + '<br><span class="pj-hint" title="' + esc((r.missing || []).join('、')) + '">缺：'
+                      + esc((r.missing || []).slice(0, 2).join('、')) + ((r.missing || []).length > 2 ? ' 等' : '') + '</span>'
+                      : '<span class="pj-ok-badge">齊全</span>') + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+    $('#paneReady').html(h);
+}
+function rdEvidenceList(list, label) {
+    if (!list || !list.length) return '';
+    return '<div class="pj-hint">' + esc(label) + '：' + $.map(list, esc).join('、') + '</div>';
+}
 
 /** 欄位裡那一小塊：已綁的逐份列出來（看得到綁的是哪一份），可編輯時再給一顆「綁定文件」 */
 function ssBindCell(r, kind, res) {

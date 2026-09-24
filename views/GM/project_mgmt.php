@@ -222,6 +222,14 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         .chk-after  { color:#8A5A2B; font-size:11px; font-weight:bold; }
         .chk-n { color:#DD5138; font-weight:bold; cursor:pointer; text-decoration:underline; }
         .chk-go { cursor:pointer; text-decoration:underline; }
+
+        /* ── 資料完整度（以製令為單位） ── */
+        .rd-step { display:inline-block; padding:1px 6px; margin:1px 3px 1px 0; border-radius:3px; font-size:11px; }
+        .rd-step a { text-decoration:none; }
+        .rd-ok { background:#EAF3EC; color:#2F7D4F; }
+        .rd-ok a { color:#2F7D4F; }
+        .rd-no { background:#FBEAE5; color:#C4442D; }
+        .rd-no a { color:#C4442D; }
         .pj-alertbar { border:1.5px solid #F0A24B; background:#FDF3E4; border-radius:6px; padding:8px 12px;
             margin-bottom:10px; font-size:13px; color:#5b3a1e; }
         .pj-alertbar .it { display:block; padding:2px 0; border-bottom:1px dashed #EADFC8; }
@@ -389,6 +397,7 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <button class="pj-tab" data-pane="paneCard"><i class="fa fa-id-card-o"></i> 專案管理卡</button>
             <button class="pj-tab" data-pane="paneRel"><i class="fa fa-link"></i> 關聯資料</button>
             <button class="pj-tab" data-pane="paneChk"><i class="fa fa-check-square-o"></i> 文件檢核 <span id="chkBadge"></span></button>
+            <button class="pj-tab" data-pane="paneReady"><i class="fa fa-tasks"></i> 資料完整度 <span id="readyBadge"></span></button>
             <button class="pj-tab" data-pane="paneSign"><i class="fa fa-pencil-square-o"></i> 會簽／核准</button>
         </div>
         <div class="pj-pane active" id="paneBase"></div>
@@ -396,6 +405,7 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         <div class="pj-pane" id="paneCard"></div>
         <div class="pj-pane" id="paneRel"></div>
         <div class="pj-pane" id="paneChk"></div>
+        <div class="pj-pane" id="paneReady"></div>
         <div class="pj-pane" id="paneSign"></div>
     </div>
     <div class="m-foot" id="prjFoot"></div>

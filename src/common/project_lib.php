@@ -3052,6 +3052,181 @@ function prj_processes(PDO $db, int $projectId, ?array $prj = null): array
 }
 
 /**
+ * 專案的「資料完整度」（使用者 2026-09-24 交辦：文件備齊總覽／文件檢核只管六份技術文件，
+ * 還要能檢核 BOM 底下實際生產資料是否齊全——BOM／包裝檢驗／報工紀錄／出貨單）。
+ * 使用者拍板：**以製令（BOM）為單位**逐項檢核（不是料號）——這幾項天生掛在訂單或製令上，
+ * 不像 PFMEA/SOP 那樣一個料號一份；另外開一個區塊，不併進文件檢核那張表。
+ *
+ * 判定規則（使用者拍板，2026-09-24 對話）：
+ *   ①BOM 製程鏈上每一道製程（排除 state='skip'、排除 source='manual' 尚未真正開立的預排列）
+ *     都要有線上檢驗紀錄（qc_check_form，SUBMITTED／LOCKED 任一筆即算）。刻意**不**套用
+ *     專案的「製程範圍」narrowing——使用者原話：「這邊選定只有納入齒研製程，但其實前面
+ *     客供料跟最後包裝的檢驗全部都要有」，範圍只影響 SOP/SIP 覆蓋判定（prj_doc_sopsip_map），
+ *     不影響這裡的完整度檢核。
+ *   ②其中製程名稱含「包裝」的那一道不會有 qc_check_form（使用者原話：「包裝是不會有QC
+ *     檢驗紀錄表，是另外在待包裝頁面有包裝檢驗紀錄表」），改查 qc_packing_inspection
+ *     （bom_ing_fid 對得到才算精準；沒填 fid 的舊資料退回比對 bom 整張）。
+ *   ③報工紀錄：這道製程有沒有被報工過，沿用既有 prj_work_reports()（廠內／委外轉出入
+ *     兩種來源都算），不另寫一份查詢。
+ *   ④首件檢驗（FAI）：這張製令底下任一道製程有 qc_check_form insp_kind='FIRST' 的
+ *     SUBMITTED／LOCKED 紀錄即算——這是全站唯一線上首件檢驗來源（inspection_entry_v2.php），
+ *     不分道別（首件本來就整批只驗一次）。
+ *   ⑤出貨單：優先看 is_bom_map（出貨↔製令的精準分配表，trace_chain_lib 用的那張）；
+ *     **這張表目前全站仍是 0 筆**（2026-09-03 才新增，舊資料還沒人綁過），只認它會讓每一張
+ *     BOM 都顯示「缺出貨單」而失真，所以查無精準綁定時退回「這個料號在此製令完工日之後
+ *     有沒有出貨」（is_list，比照 prj_order_readiness() 同一種「after」判斷法），並標明
+ *     是推測還是精準綁定，讓人分得出可信度。
+ *   ⑥異常單／矯正單：**只顯示不列入缺件**（使用者原話：「有資料才顯示，因為是異常紀錄
+ *     所以平常不需要有」）。
+ * 已結案很久的製令一樣要檢核（不濾 bom.closed_at，同 prj_bom_rows()/prj_processes() 的既有決定）。
+ *
+ * 已知未涵蓋、需要使用者進一步定案的項目（2026-09-24 對話中一併提到，尚未有足夠依據判定）：
+ *   ・「出貨報告」——站上目前查無這個名稱對應的既有模組，需要使用者指出是哪一份文件／頁面。
+ *   ・「單一製程」旗標——使用者提到要在基本資料加一個「是否為單一製程」勾選讓負責人自己標，
+ *     用來讓單一製程的專案不必要求出貨檢驗紀錄；本次尚未加這個欄位，也還沒把它套進這裡的判定。
+ */
+function prj_data_readiness(PDO $db, int $projectId): array
+{
+    $procs = prj_processes($db, $projectId);
+    $boms = [];
+    foreach ($procs as $r) {
+        if ((string)($r['source'] ?? 'bom') === 'manual') continue;   // 手動預排的還不是真的製令
+        $bom = (string)$r['bom'];
+        if ($bom === '') continue;
+        if ((string)($r['state'] ?? '') === 'skip') continue;
+        $fid = (int)$r['bom_ing_fid'];
+        if ($fid <= 0) continue;
+        if (!isset($boms[$bom])) {
+            $boms[$bom] = ['bom' => $bom, 'part_no' => (string)($r['part_no'] ?? ''),
+                           'ds_pk' => (int)($r['ds_pk'] ?? 0), 'steps' => []];
+        }
+        $nm = (string)($r['process_name'] ?? '');
+        $boms[$bom]['steps'][] = [
+            'fid' => $fid, 'bom_sn' => (int)$r['bom_sn'], 'process_no' => (int)$r['process_no'],
+            'process_name' => $nm, 'is_pack' => (mb_strpos($nm, '包裝') !== false),
+            'return_date' => (string)($r['return_date'] ?? ''), 'outsource_date' => (string)($r['outsource_date'] ?? ''),
+        ];
+    }
+    if (!$boms) return [];
+
+    $fids = [];
+    foreach ($boms as $b) foreach ($b['steps'] as $s) $fids[] = $s['fid'];
+    $fids = array_values(array_unique($fids));
+
+    // 各製程線上檢驗（qc_check_form）：任一 SUBMITTED/LOCKED 紀錄即算；FIRST 另外標成首件佐證
+    $inspOf = []; $faiOf = [];
+    if ($fids) {
+        $in = implode(',', array_map('intval', $fids));
+        try {
+            foreach ($db->query("SELECT bom_ing_fid, insp_kind FROM qc_check_form
+                                  WHERE bom_ing_fid IN ($in) AND status IN ('SUBMITTED','LOCKED')")
+                        ->fetchAll(PDO::FETCH_ASSOC) as $x) {
+                $fid = (int)$x['bom_ing_fid'];
+                $inspOf[$fid] = 1;
+                if ((string)$x['insp_kind'] === 'FIRST') $faiOf[$fid] = 1;
+            }
+        } catch (Throwable $e) {}
+    }
+
+    // 包裝檢驗（qc_packing_inspection）：bom_ing_fid 對得到才算精準，否則退回比對整張 bom
+    $packFidOf = []; $packBomOf = [];
+    try {
+        foreach ($db->query("SELECT bom_ing_fid, bom FROM qc_packing_inspection")->fetchAll(PDO::FETCH_ASSOC) as $x) {
+            if ((int)$x['bom_ing_fid'] > 0) $packFidOf[(int)$x['bom_ing_fid']] = 1;
+            if ((string)$x['bom'] !== '') $packBomOf[(string)$x['bom']] = 1;
+        }
+    } catch (Throwable $e) {}
+
+    // 報工：沿用 prj_work_reports()，依 bom_ing_fid（廠內）與 bom#bom_sn（委外轉出入）分別索引
+    $workFidOf = []; $workBomSnOf = [];
+    foreach (prj_work_reports($db, $projectId) as $r) {
+        if (($r['kind'] ?? '') === 'in' && (int)($r['bom_ing_fid'] ?? 0) > 0) $workFidOf[(int)$r['bom_ing_fid']] = 1;
+        elseif (($r['kind'] ?? '') === 'out') $workBomSnOf[(string)$r['bom'] . '#' . (int)$r['bom_sn']] = 1;
+    }
+
+    $bomList = array_keys($boms);
+    $ph = $bomList ? implode(',', array_fill(0, count($bomList), '?')) : '';
+
+    // 出貨單：精準綁定（is_bom_map）優先，查無精準綁定才退回料號在完工日之後有沒有出貨
+    $shipExact = [];
+    try {
+        $st = $db->prepare("SELECT DISTINCT bom FROM is_bom_map WHERE bom IN ($ph)");
+        $st->execute($bomList);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $b) $shipExact[(string)$b] = 1;
+    } catch (Throwable $e) {}
+    $shipByPart = [];   // ds_pk => 最晚出貨日
+    $pks = array_values(array_unique(array_filter(array_map(static fn($b) => (int)$b['ds_pk'], $boms))));
+    if ($pks) {
+        try {
+            $inP = implode(',', array_map('intval', $pks));
+            foreach ($db->query("SELECT d_setting_id pk, MAX(Order_date) dmax FROM is_list
+                                  WHERE d_setting_id IN ($inP) GROUP BY d_setting_id")->fetchAll(PDO::FETCH_ASSOC) as $x) {
+                $shipByPart[(int)$x['pk']] = (string)$x['dmax'];
+            }
+        } catch (Throwable $e) {}
+    }
+
+    // 異常單／矯正單（只顯示，不算缺件）
+    $abnOf = []; $carOf = [];
+    try {
+        $st = $db->prepare("SELECT bom_no, abnormal_order_no FROM qa_abnormal_order WHERE bom_no IN ($ph) AND deleted_at IS NULL");
+        $st->execute($bomList);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $x) $abnOf[(string)$x['bom_no']][] = (string)$x['abnormal_order_no'];
+    } catch (Throwable $e) {}
+    try {
+        $st = $db->prepare("SELECT bom_no, car_no FROM car_order WHERE bom_no IN ($ph)");
+        $st->execute($bomList);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $x) $carOf[(string)$x['bom_no']][] = (string)$x['car_no'];
+    } catch (Throwable $e) {}
+
+    $out = [];
+    foreach ($boms as $bom => $b) {
+        $steps = $b['steps'];
+        usort($steps, static fn($a, $c) => $a['bom_sn'] <=> $c['bom_sn']);
+        $missing = [];
+        $stepRows = [];
+        $hasFai = false; $hasWork = false;
+        $finishDate = '';
+        foreach ($steps as $s) {
+            $fid = $s['fid'];
+            $d = $s['return_date'] ?: $s['outsource_date'];
+            if ($d && $d > $finishDate) $finishDate = $d;
+            if ($s['is_pack']) {
+                $ok = !empty($packFidOf[$fid]) || !empty($packBomOf[$bom]);
+                $stepRows[] = ['name' => $s['process_name'], 'kind' => 'pack', 'ok' => $ok ? 1 : 0];
+                if (!$ok) $missing[] = $s['process_name'] . '（包裝檢驗）';
+            } else {
+                $ok = !empty($inspOf[$fid]);
+                $stepRows[] = ['name' => $s['process_name'], 'kind' => 'insp', 'ok' => $ok ? 1 : 0];
+                if (!$ok) $missing[] = $s['process_name'] . '（線上檢驗）';
+            }
+            if (!empty($faiOf[$fid])) $hasFai = true;
+            if (!empty($workFidOf[$fid]) || !empty($workBomSnOf[$bom . '#' . $s['bom_sn']])) $hasWork = true;
+        }
+        if (!$hasFai) $missing[] = 'FAI 首件檢驗';
+        if (!$hasWork) $missing[] = '報工紀錄';
+
+        $shipMode = '';
+        if (!empty($shipExact[$bom])) { $shipMode = 'exact'; }
+        else {
+            $lastShip = $shipByPart[(int)$b['ds_pk']] ?? '';
+            if ($lastShip !== '' && ($finishDate === '' || $lastShip >= $finishDate)) $shipMode = 'guess';
+        }
+        if ($shipMode === '') $missing[] = '出貨單';
+
+        $out[] = [
+            'bom' => $bom, 'part_no' => $b['part_no'], 'ds_pk' => $b['ds_pk'],
+            'steps' => $stepRows, 'fai' => $hasFai ? 1 : 0, 'work' => $hasWork ? 1 : 0,
+            'ship' => $shipMode !== '' ? 1 : 0, 'ship_mode' => $shipMode,
+            'missing' => $missing, 'missing_cnt' => count($missing),
+            'abnormal' => $abnOf[$bom] ?? [], 'car' => $carOf[$bom] ?? [],
+        ];
+    }
+    usort($out, static fn($a, $c) => strcmp((string)$a['bom'], (string)$c['bom']));
+    return $out;
+}
+
+/**
  * 管理員手動修改發包日／回廠日（使用者明確要求，含「不在本專案範圍」的製程列也要能改）。
  * 這是本模組唯一破例會寫回 bom_ing 的地方——別處一律唯讀（見 prj_bom_rows()/prj_work_reports()
  * 的說明），這裡刻意獨立成一支、限定管理員呼叫，方便日後追查誰動過原始生產資料。

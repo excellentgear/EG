@@ -230,6 +230,7 @@ case 'get':
         'cosigns'   => prj_cosigns($db, $pid),
         'alerts'    => prj_bom_alerts($db, $pid),
         'doc_check' => prj_doc_check($db, $pid),
+        'data_ready' => prj_data_readiness($db, $pid),
         'can_edit'  => prj_can_edit_project($P, $prj),
         // 實際開始／實際完成＝立案核准後才可填（使用者拍板）；前端反灰，後端 plan_save 同規則再擋一次
         'act_open'  => prj_act_dates_open($prj),
