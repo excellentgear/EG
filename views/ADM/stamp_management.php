@@ -134,7 +134,7 @@ try {
   <table class="list"><thead><tr>
     <th class="reg-chk-col" style="width:26px;display:none;"><input type="checkbox" id="regChkAll" title="全選本頁"></th>
     <th style="width:90px;">印模</th><th style="width:100px;">持有人</th><th style="width:100px;">種類</th><th style="width:95px;">核發日期</th>
-    <th style="width:100px;">停用/繳回日</th><th style="width:75px;">狀態</th><th>備註</th>
+    <th style="width:100px;">停用/繳回日</th><th style="width:75px;">狀態</th><th style="width:120px;">備註</th>
     <th style="width:85px;">掃描實體章</th><th style="width:190px;">操作</th>
   </tr></thead><tbody id="regBody"></tbody></table>
   </div><!-- /tab-reg -->
@@ -441,6 +441,7 @@ try {
       <li>備註欄若是系統自動寫入的「批次建立」，列印時不印（清冊是給外部稽核看的正式文件，不放內部作業痕跡）。</li>
       <li>按下「列印/PDF」會留下一筆<b>列印紀錄</b>（列印時間、列印人、登入電腦），可在「列印與簽核紀錄」頁查到。</li>
       <li>課室章／職稱章沒有特定個人，保管人欄會印職稱或「（部門保管）」。</li>
+      <li>個人章沒有綁定部門（登記時只選人員、未選部門）時，保管部門欄印「NA」、備註欄加註「個人保管」——不會退回這個人目前的主要部門，因為這筆登記本來就跟部門無關。</li>
     </ul>
 
     <h5>設定入口</h5>
@@ -678,10 +679,14 @@ function loadList(p){
       const kindBadge=x.holder_kind==='position'?' <span class="status-chip" style="background:#dcd0e8;color:#3a2c4a;">職稱章</span>'
         :x.holder_kind==='user_dept'?' <span class="status-chip" style="background:#f0dfc3;color:#4a3a20;">部門人員章</span>'
         :x.holder_kind==='dept'?' <span class="status-chip" style="background:#e8dcc3;color:#4a3a20;">課室章</span>':'';
+      // 持有人欄：部門人員章原本「姓名（部門）」擠在同一行會讓欄位變寬，改成部門自動換列顯示在姓名下方
+      const holderHtml = x.holder_kind==='user_dept'
+        ? `${esc(x.user_cname||'')}<br><span class="text-muted" style="font-size:11px;">${esc(x.dept_name||'')}</span>`
+        : esc(x.holder_name);
       return `<tr>
       ${canManage?`<td style="text-align:center;"><input type="checkbox" class="reg-chk" value="${x.id}"></td>`:''}
       <td style="text-align:center;">${stampHtml}</td>
-      <td>${esc(x.holder_name)}${kindBadge}</td>
+      <td>${holderHtml}${kindBadge}</td>
       <td>${x.type_name?esc(x.type_name):'<span class="text-muted">（未分類）</span>'}${x.tpl_name?'<br><span class="text-muted" style="font-size:11px;">模板：'+esc(x.tpl_name)+'</span>':''}</td>
       <td>${esc(x.issue_date||'')}</td>
       <td>${esc(x.revoke_date||'—')}</td>
@@ -931,15 +936,18 @@ $('#btnPrint').on('click',function(){
     const tick=v=>v?'V':'';
     function rowHtml(x,i){
       // 備註：系統自動寫入的「批次建立」屬內部作業痕跡，正式清冊（外部稽核用）一律不印；人工填寫的備註照印
-      const note=(String(x.note||'').trim()===SYS_NOTE_BATCH)?'':x.note;
+      const noteRaw=(String(x.note||'').trim()===SYS_NOTE_BATCH)?'':x.note;
       const isVoid = x.status==='revoked';
       const isEdit = !isVoid && !!x.modified_at && String(x.modified_at)>String(x.created_at||'');
-      // 保管部門：課室章／職稱章本身就掛在部門上；個人章取該人主要部門
-      const keepDept = x.dept_name || x.user_main_dept_name || '';
+      // holder_kind==='user'＝這筆登記沒有綁定任何部門（圖章本身也沒印部門），保管部門一律印 NA、備註加註「個人保管」，
+      // 不要退回該人主要部門顯示——退回單一部門看起來像是「這章歸屬那個部門」，但事實上這筆登記跟部門完全無關（2026-09-24 使用者更正）。
+      const isNoDept = x.holder_kind==='user';
+      const keepDept = isNoDept ? 'NA' : (x.dept_name || x.user_main_dept_name || '');
       // 保管人：職稱章與課室章沒有特定個人，印職稱或「（部門保管）」，不可留白讓人以為漏填
       const keepWho  = x.holder_kind==='position' ? (x.position_name||'')
                      : x.holder_kind==='dept'     ? '（部門保管）'
                      : (x.user_cname||'');
+      const note = isNoDept ? ['個人保管', noteRaw].filter(Boolean).join('／') : noteRaw;
       return `<tr>
       <td>${i+1}</td>
       <td>${esc(dot(x.issue_date))}</td>
