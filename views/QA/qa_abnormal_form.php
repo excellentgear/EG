@@ -372,6 +372,11 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                 </div>
             </div>
 
+            <!-- 已拆分／子單來源提示 -->
+            <div class="sec" id="secSplitInfo" style="display:none;border-color:var(--amber-d);background:#FFF6E8;">
+                <div class="sec-body" id="splitInfoBody"></div>
+            </div>
+
             <!-- ④ 決策 -->
             <div class="sec" id="secDisp">
                 <h4><i class="fa fa-gavel"></i> 異常處置方式
@@ -381,8 +386,21 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                 </h4>
                 <div class="sec-body">
                     <div id="dispNoPerm" class="note-box" style="display:none;color:var(--coral);"></div>
-                    <div class="opts" id="dispOpts"></div>
-                    <div class="fld" style="margin-top:8px;"><label>處置說明</label><textarea id="f_disp_note" rows="2"></textarea></div>
+                    <label style="font-weight:normal;display:flex;align-items:center;gap:6px;margin-bottom:8px;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:#fff;">
+                        <input type="checkbox" id="f_escalate_gm">
+                        <b>整批轉呈總經理裁示</b>
+                        <span class="muted-help">主管無法決定時勾選——這批NG不由主管自行判定，直接由總經理決定怎麼處置（含要不要拆分）</span>
+                    </label>
+                    <div id="dispOptsWrap">
+                        <div class="opts" id="dispOpts"></div>
+                        <div id="dispQtyBox" style="display:none;margin-top:8px;padding:8px 10px;border:1px dashed var(--line);border-radius:6px;">
+                            <div class="muted-help" style="margin-bottom:4px;">勾選超過一項時，這批NG會依數量拆成好幾張子單——請分別填入各項數量，加總要等於不良數。</div>
+                            <div id="dispQtyRows"></div>
+                            <div class="ro-note" id="dispQtySum"></div>
+                            <button class="btn btn-warm btn-xs" id="btnDispSplitSave" style="margin-top:6px;" disabled><i class="fa fa-random"></i> 確認數量，依決策拆單</button>
+                        </div>
+                        <div class="fld" style="margin-top:8px;"><label>處置說明</label><textarea id="f_disp_note" rows="2"></textarea></div>
+                    </div>
                     <div class="ro-note" id="dispWho"></div>
                 </div>
             </div>
@@ -393,12 +411,17 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     <span class="sub">有裁示時以裁示為最終決策</span>
                     <span class="spacer"></span>
                     <span class="saved" id="savedGm"></span>
-                    <button class="btn btn-warm-o btn-xs" id="btnSaveGm" style="display:none;"></button>
                 </h4>
                 <div class="sec-body">
                     <div id="gmWho2" class="note-box"></div>
                     <div id="gmNoPerm" class="note-box" style="display:none;color:var(--coral);"></div>
                     <div class="opts" id="gmOpts"></div>
+                    <div id="gmQtyBox" style="display:none;margin-top:8px;padding:8px 10px;border:1px dashed var(--line);border-radius:6px;">
+                        <div class="muted-help" style="margin-bottom:4px;">勾選超過一項時，這批NG會依數量拆成好幾張子單——請分別填入各項數量，加總要等於不良數。</div>
+                        <div id="gmQtyRows"></div>
+                        <div class="ro-note" id="gmQtySum"></div>
+                        <button class="btn btn-warm btn-xs" id="btnGmSplitSave" style="margin-top:6px;" disabled><i class="fa fa-random"></i> 確認數量，依裁示拆單</button>
+                    </div>
                     <div class="fgrid" style="margin-top:8px;grid-template-columns:1fr 240px;">
                         <div class="fld"><label>裁示說明</label><textarea id="f_gm_note" rows="2"></textarea></div>
                         <div class="fld"><label>矯正單號</label><input type="text" id="f_capa"></div>
@@ -796,24 +819,47 @@ function render(){
     // ③ 相關單位意見
     renderRounds();
 
+    // 已拆分／子單來源提示：這張是原始單、已經拆成好幾張子單了，或這張本身就是拆分出來的子單——
+    // 兩種情況都不需要（也不該再）顯示決策區塊，改用這個提示區塊取代
+    var isSplitParent = !!(o.split_children && o.split_children.length);
+    var isSplitChild = !!o.split_parent;
+    $('#secSplitInfo').toggle(isSplitParent || isSplitChild);
+    if (isSplitParent) {
+        var rows = o.split_children.map(function(c){
+            return '<li><a href="?id=' + c.id + '" target="_blank">' + esc(c.no) + '</a>　'
+                 + esc(c.name) + ' ' + c.ng_qty + ' pcs'
+                 + (c.is_scrap && c.scrap_no ? '　報廢單號 ' + esc(c.scrap_no) : '')
+                 + (c.deduct_qty != null ? '　其中 ' + c.deduct_qty + ' pcs 需扣款' : '') + '</li>';
+        }).join('');
+        $('#splitInfoBody').html('<b><i class="fa fa-random"></i> 這張單已經依決策拆分為 ' + o.split_children.length + ' 張子單</b>'
+            + '（原始的異常現象、原因分類、相關單位意見都留在這張單上，決策與後續結案各自在子單完成）：'
+            + '<ul style="margin:6px 0 0 18px;">' + rows + '</ul>');
+    } else if (isSplitChild) {
+        $('#splitInfoBody').html('<b><i class="fa fa-random"></i> 這張單是分割單</b>，源自 '
+            + '<a href="?id=' + o.split_parent.id + '" target="_blank">' + esc(o.split_parent.no) + '</a>'
+            + '——異常現象、原因分類、相關單位意見請看原始單；這張單只承擔「' + (o.disp_names.concat(o.gm_names).join('、') || '（決策）')
+            + '　' + o.ng_qty + ' pcs」這一份處置的結案與扣款。');
+    }
+    $('#secDisp,#secGm').toggle(!isSplitParent && !isSplitChild);
+
     // ④ 決策
+    $('#f_escalate_gm').prop('checked', Number(o.escalate_gm) === 1);
     $('.dchk').prop('checked', false);
     (o.disp_ids || []).forEach(function(id){ $('.dchk[value="' + id + '"]').prop('checked', true); });
     syncOptStyle();
     $('#f_disp_note').val(o.disposition_note || '');
     var canDisp = p.canDecide && !o.is_closed;
-    $('#dispOpts input,#f_disp_note').prop('disabled', !canDisp);
-    $('#btnSaveDisp').toggle(canDisp);
+    $('#f_escalate_gm,#dispOpts input,.dec-qty,.dec-ded,#f_disp_note').prop('disabled', !canDisp);
+    var escalating = Number(o.escalate_gm) === 1;
+    $('#dispOptsWrap').toggle(!escalating);
     $('#dispNoPerm').toggle(!p.canDecide).text('您不在可決策的名單內（由管理員在清單頁「設定 → 決策者」指定部門與職稱）。');
     $('#dispWho').text(o.decided_name ? ('決策：' + o.decided_name + '　' + dispDate(o.disp_decided_at)) : '');
+    refreshDecQty('disp');
 
-    // ⑤ 總經理裁示：主管沒有勾「轉總經理裁示」就不出現（沒勾的話這區跟這張單無關，
-    // 一直顯示會讓人誤以為每張單都要填這裡；已經有裁示紀錄的舊單即使之後改掉也繼續看得到，不會憑空不見）
-    var escOptIds = (D.disp_opts || []).filter(function(op){ return Number(op.is_escalate) === 1; })
-                                        .map(function(op){ return Number(op.opt_id); });
-    var gmVisible = (o.disp_ids || []).some(function(id){ return escOptIds.indexOf(Number(id)) >= 0; })
-                     || !!(o.gm_ids && o.gm_ids.length) || !!o.gm_decided_at;
-    $('#secGm').toggle(gmVisible);
+    // ⑤ 總經理裁示：主管勾了「整批轉呈總經理裁示」，或已經有裁示紀錄的舊單，才出現——
+    // 沒勾的話這區跟這張單無關，一直顯示會讓人誤以為每張單都要填這裡。
+    var gmVisible = escalating || !!(o.gm_ids && o.gm_ids.length) || !!o.gm_decided_at;
+    $('#secGm').toggle(gmVisible && !isSplitParent && !isSplitChild);
 
     $('.gchk').prop('checked', false);
     (o.gm_ids || []).forEach(function(id){ $('.gchk[value="' + id + '"]').prop('checked', true); });
@@ -822,8 +868,8 @@ function render(){
     $('#f_gm_note').val(o.gm_note || '');
     $('#f_capa').val(o.capa_order_no || '');
     var canGm = p.canGm && !o.is_closed;
-    $('#gmOpts input,#f_gm_note,#f_capa').prop('disabled', !canGm);
-    $('#btnSaveGm').toggle(canGm);
+    $('#gmOpts input,.dec-qty,.dec-ded,#f_gm_note,#f_capa').prop('disabled', !canGm);
+    refreshDecQty('gm');
     var gp = o.gm_person || D.gm_person || {};
     $('#gmWho2').html(!gp.bound
         ? '<span style="color:var(--coral);">全站的「組織角色綁定 → 最高核准人員」還沒設定，所以現在沒有人可以做最終裁示。</span>'
@@ -1171,6 +1217,72 @@ function syncOptStyle(){
 }
 $(document).on('change', '.opts input', syncOptStyle);
 
+/* 決策／裁示勾選超過一項＝依數量拆單：只有這裡會觸發拆分，見 qab_save_decision()。
+   結構（勾了哪些項目）改變才重畫輸入框（rebuildDecRows），單純打字只重算加總與按鈕狀態
+   （recalcDecSum，不動 DOM），否則每打一個字輸入框就被整組換掉、游標焦點會被踢掉。 */
+function decOptMap(which){
+    var m = {};
+    (which === 'disp' ? (D.disp_opts || []) : (D.gm_opts || [])).forEach(function(o){ m[o.opt_id] = o; });
+    return m;
+}
+function rebuildDecRows(which){
+    var cls = which === 'disp' ? 'dchk' : 'gchk';
+    var boxId = which === 'disp' ? '#dispQtyBox' : '#gmQtyBox';
+    var rowsId = which === 'disp' ? '#dispQtyRows' : '#gmQtyRows';
+    var ids = $('.' + cls + ':checked').map(function(){ return this.value; }).get();
+    if (ids.length <= 1) { $(boxId).hide(); $(rowsId).empty(); return; }
+    var optMap = decOptMap(which);
+    $(rowsId).html(ids.map(function(oid){
+        var op = optMap[oid] || {};
+        return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
+             + '<span style="min-width:64px;">' + esc(op.name || '') + '</span>'
+             + '數量 <input type="number" class="dec-qty" data-which="' + which + '" data-opt="' + oid + '" min="1" style="width:80px;">'
+             + (Number(op.is_scrap) === 1 ? ' <span style="color:var(--coral);">其中扣款 <input type="number" class="dec-ded" data-which="'
+               + which + '" data-opt="' + oid + '" min="0" style="width:80px;"> pcs</span>' : '')
+             + '</div>';
+    }).join(''));
+    $(boxId).show();
+    recalcDecSum(which);
+}
+function recalcDecSum(which){
+    var cls = which === 'disp' ? 'dchk' : 'gchk';
+    var n = $('.' + cls + ':checked').length;
+    if (n <= 1) return;
+    var sumId = which === 'disp' ? '#dispQtySum' : '#gmQtySum';
+    var btnId = which === 'disp' ? '#btnDispSplitSave' : '#btnGmSplitSave';
+    var ngQty = Number((D.order && D.order.ng_qty) || 0);
+    var sum = 0, ok = true;
+    $('.dec-qty[data-which="' + which + '"]').each(function(){
+        var q = Number($(this).val() || 0);
+        if (!(q > 0)) ok = false;
+        sum += q;
+    });
+    $('.dec-ded[data-which="' + which + '"]').each(function(){
+        var oid = $(this).data('opt');
+        var q = Number($('.dec-qty[data-which="' + which + '"][data-opt="' + oid + '"]').val() || 0);
+        var dv = $(this).val();
+        if (dv !== '' && Number(dv) > q) ok = false;
+    });
+    if (sum !== ngQty) ok = false;
+    $(sumId).html('已分配 <b>' + sum + '</b> / 不良數 ' + ngQty
+        + (sum === ngQty ? '　<span style="color:var(--amber-d);">✓ 加總相符</span>' : '　<span style="color:var(--coral);">尚未分配完成</span>'));
+    $(btnId).prop('disabled', !ok);
+}
+function refreshDecQty(which){ rebuildDecRows(which); }
+function collectDecItems(which){
+    var cls = which === 'disp' ? 'dchk' : 'gchk';
+    var items = [];
+    $('.' + cls + ':checked').each(function(){
+        var oid = this.value, it = { opt_id: parseInt(oid, 10) };
+        var $q = $('.dec-qty[data-which="' + which + '"][data-opt="' + oid + '"]');
+        if ($q.length && $q.val() !== '') it.qty = Number($q.val());
+        var $d = $('.dec-ded[data-which="' + which + '"][data-opt="' + oid + '"]');
+        if ($d.length && $d.val() !== '') it.deduct_qty = Number($d.val());
+        items.push(it);
+    });
+    return items;
+}
+
 /* 原因分類：逐層挑選（先第一層 → 第二層 → 第三層），全站共用 eg_cause_picker.js */
 var CAUSE_CAN_EDIT = false;
 function causePath(id){ return EGCausePicker.pathOf(D.causes || [], id) || ('#' + id); }
@@ -1460,24 +1572,58 @@ $(document).on('click', '[data-cancel]', function(){
     post('round_cancel', { id:OID, flow_id:$(this).data('cancel') }, function(){ toast('已取消'); });
 });
 
-/* ④⑤ 決策／裁示 */
+/* ④⑤ 決策／裁示：只勾一項＝比照原本行為直接存檔；勾超過一項＝要先把每項數量填到加總等於
+   不良數、按下「確認數量，依決策拆單」才會存檔（見 qab_save_decision()，唯一觸發拆分的地方）。 */
 function saveDisp(){
-    var ids = $('.dchk:checked').map(function(){ return parseInt(this.value, 10); }).get();
-    post('save_disposition', { id:OID, opt_ids: JSON.stringify(ids), disposition_note: $('#f_disp_note').val() },
-        function(){ savedAt('#savedDisp'); }, true);
+    if ($('#f_escalate_gm').prop('checked')) {
+        post('save_disposition', { id:OID, escalate_gm:1, disposition_note: $('#f_disp_note').val() },
+            function(){ savedAt('#savedDisp'); });
+        return;
+    }
+    var items = collectDecItems('disp');
+    if (!items.length) return;                         // 還沒勾任何一項，維持「待決策」不送出
+    if (items.length > 1) { recalcDecSum('disp'); if ($('#btnDispSplitSave').prop('disabled')) return; }
+    post('save_disposition', { id:OID, items: JSON.stringify(items), disposition_note: $('#f_disp_note').val() },
+        function(res){
+            savedAt('#savedDisp');
+            if (res.order && res.order.split_children && res.order.split_children.length) {
+                toast('已依決策拆分為 ' + res.order.split_children.length + ' 張子單');
+            }
+        });
 }
 function saveGm(){
-    var ids = $('.gchk:checked').map(function(){ return parseInt(this.value, 10); }).get();
-    post('save_gm', { id:OID, opt_ids: JSON.stringify(ids), gm_note: $('#f_gm_note').val(),
+    var items = collectDecItems('gm');
+    if (!items.length) return;
+    if (items.length > 1) { recalcDecSum('gm'); if ($('#btnGmSplitSave').prop('disabled')) return; }
+    post('save_gm', { id:OID, items: JSON.stringify(items), gm_note: $('#f_gm_note').val(),
                       capa_order_no: $('#f_capa').val(), gm_deduct: $('#g_deduct').prop('checked') ? 1 : '' },
-        function(){ savedAt('#savedGm'); renderDeduct(); }, true);
+        function(res){
+            savedAt('#savedGm'); renderDeduct();
+            if (res.order && res.order.split_children && res.order.split_children.length) {
+                toast('已依裁示拆分為 ' + res.order.split_children.length + ' 張子單');
+            }
+        });
 }
-$('#btnSaveDisp').on('click', saveDisp);
-$('#btnSaveGm').on('click', saveGm);
-$(document).on('change', '.dchk', function(){ autoSave('disp', saveDisp, 400); });
-$(document).on('input', '#f_disp_note', function(){ autoSave('disp', saveDisp, 1500); });
-$(document).on('change', '.gchk, #g_deduct', function(){ autoSave('gm', saveGm, 400); });
-$(document).on('input', '#f_gm_note, #f_capa', function(){ autoSave('gm', saveGm, 1500); });
+$('#btnDispSplitSave').on('click', saveDisp);
+$('#btnGmSplitSave').on('click', saveGm);
+$(document).on('change', '#f_escalate_gm', function(){
+    if (this.checked) {
+        post('save_disposition', { id:OID, escalate_gm:1, disposition_note: $('#f_disp_note').val() }, function(){ savedAt('#savedDisp'); });
+    } else {
+        $('#dispOptsWrap').show();   // 取消轉呈：等使用者勾好決策項目存檔後，escalate_gm 才會一併改回 0
+    }
+});
+$(document).on('change', '.dchk', function(){
+    refreshDecQty('disp');
+    if ($('.dchk:checked').length === 1) autoSave('disp', saveDisp, 400);
+});
+$(document).on('input', '#f_disp_note', function(){ if ($('.dchk:checked').length <= 1) autoSave('disp', saveDisp, 1500); });
+$(document).on('change', '.gchk, #g_deduct', function(){
+    refreshDecQty('gm');
+    if ($('.gchk:checked').length === 1) autoSave('gm', saveGm, 400);
+});
+$(document).on('input', '#f_gm_note, #f_capa', function(){ if ($('.gchk:checked').length <= 1) autoSave('gm', saveGm, 1500); });
+$(document).on('input', '.dec-qty,.dec-ded', function(){ recalcDecSum($(this).data('which')); });
 
 /* ⑥ 扣款 */
 function renderDeduct(){

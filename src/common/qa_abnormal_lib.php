@@ -2528,8 +2528,11 @@ function qab_status(array $o): array
             return ['code' => 'reply', 'label' => '等待回覆' . ($who !== '' ? '（' . $who . '）' : '')];
         }
     }
-    if (empty($o['disp_ids']) && empty($o['gm_ids'])) return ['code' => 'decide', 'label' => '待決策'];
+    // 「轉總經理裁示」現在是獨立開關，勾了之後 disp_ids／gm_ids 兩邊都是空的（不像舊資料那樣
+    // 靠 disp_ids 裡塞一個 is_escalate 選項），所以這條要排在「兩邊都空＝待決策」判斷之前，
+    // 不然畫面會錯誤顯示「待決策」而不是「待總經理裁示」。
     if (!empty($o['need_gm']) && empty($o['gm_ids'])) return ['code' => 'gm', 'label' => '待總經理裁示'];
+    if (empty($o['disp_ids']) && empty($o['gm_ids'])) return ['code' => 'decide', 'label' => '待決策'];
     if (!empty($o['gm_deduct']) || (!empty($o['final']['is_scrap']))) {
         if (empty($o['deduct_appr_at'])) return ['code' => 'deduct', 'label' => '扣款確認中'];
     }

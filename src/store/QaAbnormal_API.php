@@ -508,7 +508,10 @@ case 'round_cancel': {
     jout(true, ['order' => qab_order($db, (int)$o['id'])]);
 }
 
-/* ═══════════ 決策：異常處置方式（業務／品管主管） ═══════════ */
+/* ═══════════ 決策：異常處置方式（業務／品管主管） ═══════════
+   2026-09-24 使用者拍板：同一批NG可以依決策拆成好幾張子單（見 qab_save_decision()）；
+   「轉總經理裁示」改成獨立開關 escalate_gm，不再混在處置方式選項清單裡，而且是整批同進退
+   （不支援部分主管自決、部分轉呈）——勾了就整批不做處置判定，直接轉給總經理決定怎麼拆。 */
 case 'save_disposition': {
     $o = $mustOrder((int)($_POST['id'] ?? 0));
     // 自動開立的單，品管部門要先確認說明完成才能送決策——2026-09-24 使用者拍板：不可自動送決策，
@@ -521,26 +524,14 @@ case 'save_disposition': {
     $bfMode = !empty($o['is_backfill']) && $perms['canBackfill'] && trim((string)($_POST['sign_date'] ?? '')) !== '';
     if (!$perms['canDecide'] && !$bfMode) jerr('您不在可決策的名單內（由管理員在「決策者設定」指定部門與職稱）');
     $id = (int)$o['id'];
-    [$signBy, $signAt] = qab_backfill_sign_args($db, $o, $perms, $_POST);
-    $ids = array_values(array_unique(array_map('intval', json_decode((string)($_POST['opt_ids'] ?? '[]'), true) ?: [])));
-    $optMap = qab_option_map($db);
-    foreach ($ids as $i) {
-        if (!isset($optMap[$i]) || $optMap[$i]['kind'] !== 'disp') jerr('選到的處置方式不存在，請重新整理頁面');
-    }
-    $db->beginTransaction();
-    try {
-        $db->prepare("DELETE FROM qa_abnormal_opt WHERE order_id=? AND kind='disp'")->execute([$id]);
-        $ins = $db->prepare("INSERT IGNORE INTO qa_abnormal_opt (order_id,kind,opt_id) VALUES (?, 'disp', ?)");
-        foreach ($ids as $i) $ins->execute([$id, $i]);
-        $db->prepare("UPDATE qa_abnormal_order SET disposition_note=?, disp_decided_by=?, disp_decided_at=?, updated_by=?, updated_at=NOW() WHERE id=?")
-           ->execute([$strOrNull($_POST['disposition_note'] ?? '', 2000), $signBy ?: $uid, $signAt ?: date('Y-m-d H:i:s'), $uid, $id]);
-        $db->commit();
-    } catch (Throwable $e) { $db->rollBack(); throw $e; }
-    // 勾了「轉總經理裁示」就通知最終決策者（補登舊資料不發通知，幾年前的事再通知一次只會吵到人）
-    $escalate = false;
-    if ($bfMode) $escalate = false; else
-    foreach ($ids as $i) if ($optMap[$i]['is_escalate']) $escalate = true;
+    [$signBy, $signAt] = qab_backfill_sign_args($db, $o, $perms, $_POST, $uid);
+    $dispNote = $strOrNull($_POST['disposition_note'] ?? '', 2000);
+    $escalate = ($bfMode ? false : !empty($_POST['escalate_gm']));   // 補資料不支援轉呈（舊紙本早就決定完了）
+
     if ($escalate) {
+        $db->prepare("DELETE FROM qa_abnormal_opt WHERE order_id=? AND kind='disp'")->execute([$id]);
+        $db->prepare("UPDATE qa_abnormal_order SET escalate_gm=1, disposition_note=?, disp_decided_by=?, disp_decided_at=?, updated_by=?, updated_at=NOW() WHERE id=?")
+           ->execute([$dispNote, $signBy ?: $uid, $signAt ?: date('Y-m-d H:i:s'), $uid, $id]);
         try {
             // 收件人＝全站統一綁定的最高核准人員；本人請假時 qab_gm_person() 會解析成代理人
             $gm = qab_gm_person($db, ['log' => true]);
@@ -549,13 +540,25 @@ case 'save_disposition': {
             if ($gm['is_delegated'] && $gm['base_id'] > 0) $targets[] = ['type' => 'user', 'id' => (int)$gm['base_id'], 'mode' => 'read'];
             if ($targets) {
                 eg_qa_insert_event($db, $id, '【品質異常單 ' . $o['abnormal_order_no'] . '】待總經理裁示',
-                    "異常單號：{$o['abnormal_order_no']}\n主管處置：" . implode('、', array_map(function ($i) use ($optMap) { return $optMap[$i]['name']; }, $ids)) . "\n請進入異常單做最終裁示。",
+                    "異常單號：{$o['abnormal_order_no']}\n主管：整批轉呈總經理裁示\n請進入異常單做最終裁示。",
                     $targets, null, $uid, ['url' => '/EGsystem/views/QA/qa_abnormal_form.php?id=' . $id]);
             }
         } catch (Throwable $e) {}
+        $log($id, 'disposition', implode('、', $o['disp_names']), '（轉總經理裁示）');
+        jout(true, ['order' => qab_order($db, $id)]);
     }
-    $log($id, 'disposition', implode('、', $o['disp_names']), implode('、', array_map(function ($i) use ($optMap) { return $optMap[$i]['name']; }, $ids)));
-    jout(true, ['order' => qab_order($db, $id)]);
+
+    $itemsIn = json_decode((string)($_POST['items'] ?? '[]'), true);
+    if (!is_array($itemsIn) || !$itemsIn) jerr('請至少勾選一項處置方式');
+    $db->prepare("UPDATE qa_abnormal_order SET escalate_gm=0 WHERE id=?")->execute([$id]);
+    try {
+        $res = qab_save_decision($db, $id, 'disp', $itemsIn, (string)$dispNote, $signBy, $signAt, $uid);
+    } catch (Throwable $e) { jerr($e->getMessage()); }
+    if ($res['released_scrap_no']) $log($id, 'scrap_no_release', $res['released_scrap_no'], '（處置方式改為非報廢，收回暫時保留的報廢單號）');
+    $optMap = qab_option_map($db);
+    $itemNames = array_map(function ($it) use ($optMap) { return $optMap[(int)$it['opt_id']]['name'] ?? ''; }, $itemsIn);
+    $log($id, 'disposition', implode('、', $o['disp_names']), implode('、', $itemNames) . ($res['children'] ? '（拆分為 ' . count($res['children']) . ' 張子單）' : ''));
+    jout(true, ['order' => $res['order']]);
 }
 
 /* ═══════════ 總經理裁示 ═══════════ */
@@ -564,27 +567,23 @@ case 'save_gm': {
     $bfMode = !empty($o['is_backfill']) && $perms['canBackfill'] && trim((string)($_POST['sign_date'] ?? '')) !== '';
     if (!$perms['canGm'] && !$bfMode) jerr('您不是最終決策者（由管理員在「決策者設定」指定，或設定組織角色的最高核准人員）');
     $id = (int)$o['id'];
-    [$signBy, $signAt] = qab_backfill_sign_args($db, $o, $perms, $_POST);
-    $ids = array_values(array_unique(array_map('intval', json_decode((string)($_POST['opt_ids'] ?? '[]'), true) ?: [])));
-    $optMap = qab_option_map($db);
-    foreach ($ids as $i) if (!isset($optMap[$i]) || $optMap[$i]['kind'] !== 'gm') jerr('選到的裁示選項不存在，請重新整理頁面');
-    $deduct = !empty($_POST['gm_deduct']) ? 1 : 0;
-    $db->beginTransaction();
+    [$signBy, $signAt] = qab_backfill_sign_args($db, $o, $perms, $_POST, $uid);
+    $itemsIn = json_decode((string)($_POST['items'] ?? '[]'), true);
+    if (!is_array($itemsIn) || !$itemsIn) jerr('請至少勾選一項裁示');
+    // 代理人代簽時要留下來：列印的圖章右下角要加「代」字（ai-rules/18）
+    $gmP = qab_gm_person($db);
+    $byDeputy = ($gmP['base_id'] > 0 && $gmP['base_id'] !== $uid && $gmP['id'] === $uid) ? 1 : 0;
+    if ($signBy) $byDeputy = 0;   // 補登的是「當時那個人自己簽的」，不是代簽
     try {
-        $db->prepare("DELETE FROM qa_abnormal_opt WHERE order_id=? AND kind='gm'")->execute([$id]);
-        $ins = $db->prepare("INSERT IGNORE INTO qa_abnormal_opt (order_id,kind,opt_id) VALUES (?, 'gm', ?)");
-        foreach ($ids as $i) $ins->execute([$id, $i]);
-        // 代理人代簽時要留下來：列印的圖章右下角要加「代」字（ai-rules/18）
-        $gmP = qab_gm_person($db);
-        $byDeputy = ($gmP['base_id'] > 0 && $gmP['base_id'] !== $uid && $gmP['id'] === $uid) ? 1 : 0;
-        if ($signBy) $byDeputy = 0;   // 補登的是「當時那個人自己簽的」，不是代簽
-        $db->prepare("UPDATE qa_abnormal_order SET gm_note=?, gm_deduct=?, capa_order_no=?, gm_decided_by=?, gm_decided_at=?, gm_by_deputy=?, updated_by=?, updated_at=NOW() WHERE id=?")
-           ->execute([$strOrNull($_POST['gm_note'] ?? '', 2000), $deduct, $strOrNull($_POST['capa_order_no'] ?? '', 20),
-                      $signBy ?: $uid, $signAt ?: date('Y-m-d H:i:s'), $byDeputy, $uid, $id]);
-        $db->commit();
-    } catch (Throwable $e) { $db->rollBack(); throw $e; }
-    $log($id, 'gm', implode('、', $o['gm_names']), implode('、', array_map(function ($i) use ($optMap) { return $optMap[$i]['name']; }, $ids)) . ($deduct ? '（扣款）' : ''));
-    jout(true, ['order' => qab_order($db, $id)]);
+        $res = qab_save_decision($db, $id, 'gm', $itemsIn, (string)($_POST['gm_note'] ?? ''), $signBy, $signAt, $uid, [
+            'gm_deduct' => !empty($_POST['gm_deduct']), 'capa_order_no' => (string)($_POST['capa_order_no'] ?? ''), 'gm_by_deputy' => $byDeputy,
+        ]);
+    } catch (Throwable $e) { jerr($e->getMessage()); }
+    if ($res['released_scrap_no']) $log($id, 'scrap_no_release', $res['released_scrap_no'], '（總經理裁示改為非報廢，收回暫時保留的報廢單號）');
+    $optMap = qab_option_map($db);
+    $itemNames = array_map(function ($it) use ($optMap) { return $optMap[(int)$it['opt_id']]['name'] ?? ''; }, $itemsIn);
+    $log($id, 'gm', implode('、', $o['gm_names']), implode('、', $itemNames) . ($res['children'] ? '（拆分為 ' . count($res['children']) . ' 張子單）' : '') . (!empty($_POST['gm_deduct']) ? '（扣款）' : ''));
+    jout(true, ['order' => $res['order']]);
 }
 
 /* ═══════════ 扣款確認 ═══════════ */
