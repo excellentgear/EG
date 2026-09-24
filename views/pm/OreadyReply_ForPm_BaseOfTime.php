@@ -616,6 +616,17 @@ $bom_ps_list_max = 0;
 $all_boms = array_column($OreadyReply_list_base, 'bom');
 $all_boms = array_filter(array_unique($all_boms));
 
+// 「發單日」欄 BOM 總數（Qty）要扣掉已結案配發報廐單號的確認報廐量（2026-09-24 使用者交辦）——
+// 一次查完整批 BOM 的報廐明細（不逐列各查一次），Qty 本身保留原值（filter/其他判定仍要用原始總數），
+// 另外加一個 scrap_qty 欄給前端「70x」渲染那一段自己決定要不要顯示成「良品/總數 x」。
+// 整張 BOM 口徑（不分站）：本頁是總覽性質，報廐扣減不必細分到是哪一站發現的。
+require_once __DIR__ . '/../../src/common/qa_abnormal_lib.php';
+$oready_scrap_map = qab_bom_scrap_rows($conn->getPDO(), $all_boms);
+foreach ($OreadyReply_list_base as &$oready_row_ref) {
+    $oready_row_ref['scrap_qty'] = qab_bom_scrap_sum_rows($oready_scrap_map[(string)$oready_row_ref['bom']] ?? [], null);
+}
+unset($oready_row_ref);
+
 if (!empty($all_boms)) {
     // 1. Fetch all bom_ing records for the active BOMs only
     $placeholders_ps = implode(',', array_fill(0, count($all_boms), '?'));
@@ -5572,12 +5583,16 @@ echo "</script>\n";
             tdOutsourceDate.style.lineHeight = '1.2';
             tdOutsourceDate.style.fontSize = '12px';
 
-            // BOM 總數標頭
+            // BOM 總數標頭——有確認報廐（scrap_qty，2026-09-24 使用者交辦）時改印「良品/總數」，沒有就維持原樣只印總數
             var _qtyHdr = document.createElement('div');
             _qtyHdr.style.cssText = 'margin:0;padding:0;line-height:1.2;';
             // line-height:1.2 是為了蓋掉全站規則 `td span{line-height:28px}`（custom.css），
             // 不蓋的話光這個數量標頭就佔 28px，整欄看起來行距很鬆
-            _qtyHdr.innerHTML = '<span style="font-size:1.2em;font-weight:bold;color:#006400;line-height:1.2;">' + escapeHtml(String(row.Qty || '')) + '</span>x';
+            var _qtyTotal = parseInt(row.Qty, 10) || 0;
+            var _qtyScrap = parseInt(row.scrap_qty, 10) || 0;
+            var _qtyGood = Math.max(0, _qtyTotal - _qtyScrap);
+            var _qtyText = _qtyScrap > 0 ? (escapeHtml(String(_qtyGood)) + ' / ' + escapeHtml(String(_qtyTotal))) : escapeHtml(String(row.Qty || ''));
+            _qtyHdr.innerHTML = '<span style="font-size:1.2em;font-weight:bold;color:#006400;line-height:1.2;">' + _qtyText + '</span>x';
             tdOutsourceDate.appendChild(_qtyHdr);
 
             // 取本 BOM 的所有進行中製程（ingActiveMap 由 PHP 及 AJAX 刷新後建立）
