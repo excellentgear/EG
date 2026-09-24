@@ -199,6 +199,12 @@ function eg_asdoc_can_with(array $features, bool $isRoleAdmin, string $pagePerm,
     if ($what === 'upload_record')
         return in_array('asdoc_upload_record', $features, true)
             || eg_asdoc_can_with($features, $isRoleAdmin, $pagePerm, 'create');
+    // 新增電子文件（asdoc_create_online，2026-09-24 新增）：一顆按鈕就是「建立無附件的
+    // 全新一階/二階文件、直接進線上版編輯器打字」，一次涵蓋「新增文件」與「編輯線上內容」
+    // 兩件事——分開設定的話，管理員要授權三個功能碼（含免附件）這顆按鈕才真的動得了，
+    // 使用者體驗上等於沒授權。
+    if (($what === 'create' || $what === 'edit_content') && in_array('asdoc_create_online', $features, true))
+        return true;
     return in_array('asdoc_' . $what, $features, true);
 }
 

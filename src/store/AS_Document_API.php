@@ -56,6 +56,11 @@ $asPagePerm = $currentUserId ? asPagePerm($db, $currentUserId) : '';
 // 免附件補登（asdoc_no_attach）：僅認「明確勾選的功能碼」，管理員不自動豁免——
 // 避免正式運作時「改版必附申請單」管控被默默弱化；補舊資料時把角色勾給自己，用完移除。
 $asNoAttach = in_array('asdoc_no_attach', $asFeatures, true);
+// 新增電子文件（asdoc_create_online，2026-09-24 新增）：AS9100文件管理頁的「新增電子文件」
+// 按鈕，一次建立完全沒有紙本/檔案的一階或二階文件，直接進線上版編輯器。跟 asdoc_no_attach
+// 不同的是：這是 AS_FEATURES 裡本來就會走 admin 自動豁免的一般能力（見 eg_asdoc_can_with），
+// 不是「補舊資料才臨時勾給自己」那種例外，管理員預設就用得到，一般角色要另外授權。
+$asCreateOnline = $asIsRoleAdmin || in_array('asdoc_create_online', $asFeatures, true);
 
 /** 能力判斷：view/create/update/delete 走「頁面ACRUD OR 角色功能碼」；settings/edit_online 只認 A 或對應功能碼 */
 function asCan(string $what): bool {
@@ -856,8 +861,11 @@ case 'create_document':
     if ($dup->fetchColumn() > 0) jout(['status'=>'error','message'=>"文件編號 {$doc_no} 已存在"]);
     if ($pErr = asValidateParent($db, $parent)) jout(['status'=>'error','message'=>$pErr]);
     $hasFile = isset($_FILES['file']) && $_FILES['file']['error']===UPLOAD_ERR_OK;
-    if (!$hasFile && !$asNoAttach)
-        jout(['status'=>'error','message'=>'請上傳文件檔（如需補登舊資料免附件，請先取得「補登免附件」角色）']);
+    // create_document 這個動作有兩種「本來就沒有檔案」的合法情境：補舊資料(asdoc_no_attach)、
+    // 與全新建立的電子文件(asdoc_create_online，2026-09-24 新增，只在「首次建立」放寬，
+    // 「改版」(add_version) 仍然只認 asdoc_no_attach，維持既有的「改版必附」管控不變）。
+    if (!$hasFile && !$asNoAttach && !$asCreateOnline)
+        jout(['status'=>'error','message'=>'請上傳文件檔（如需補登舊資料免附件，請先取得「補登免附件」角色；或使用「新增電子文件」）']);
     $ext = null;
     if ($hasFile) {
         $ext = asSafeExt($_FILES['file']['name']);
@@ -907,7 +915,9 @@ case 'create_document':
             foreach ($tagIds as $tid) $ins->execute([$docId,$tid]);
         }
         $db->commit();
-        jout(['status'=>'success','id'=>$docId]);
+        // version_id 一併回傳：「新增電子文件」要靠它直接開 as_doc_editor.php，
+        // 純加一個欄位，既有呼叫端不受影響。
+        jout(['status'=>'success','id'=>$docId,'version_id'=>$verId]);
     } catch (Exception $e) {
         $db->rollBack();
         jout(['status'=>'error','message'=>$e->getMessage()]);

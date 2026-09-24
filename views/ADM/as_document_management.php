@@ -68,6 +68,10 @@ $asCaps = [
     'delete'   => $asIsRoleAdmin || strpos($pp,'A')!==false || strpos($pp,'D')!==false || in_array('asdoc_delete', $asFeatures, true),
     'settings' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_settings', $asFeatures, true),
     'edit_online' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_edit_online', $asFeatures, true),
+    // 新增電子文件（2026-09-24 新增）：完全沒有任何紙本/檔案紀錄的一階/二階文件，
+    // 一顆按鈕直接建立＋打開線上版編輯器。刻意不吃頁面 ACRUD 的 'C'（那是給一般「新增文件」
+    // 用的既有權限），要另外勾選功能碼，管理員才配置得出「這顆按鈕只給哪些角色用」。
+    'create_online' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_create_online', $asFeatures, true),
     // 編輯線上內容（程序書電子版）：與「線上開檔」是兩件事——那個是用本機 Word 開檔案，
     // 這個是在網頁上直接編輯整份文件的內容（views/ADM/as_doc_editor.php）
     'edit_content' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_edit_content', $asFeatures, true),
@@ -177,6 +181,11 @@ if ($deptPerm === 'R') {
                   <?php if ($asCaps['create']): ?>
                   <button class="btn btn-primary btn-sm" id="btnAddDoc"><i class="fa fa-plus"></i> 新增文件</button>
                   <button class="btn btn-info btn-sm" id="btnBatchAdd"><i class="fa fa-files-o"></i> 批次上傳</button>
+                  <?php endif; ?>
+                  <?php if ($asCaps['create_online']): ?>
+                  <button class="btn btn-warning btn-sm" id="btnAddDocOnline"
+                          title="完全沒有任何舊紀錄的一階/二階文件：不必先準備 Word/PDF，建立完直接進線上版編輯器打字">
+                    <i class="fa fa-file-text-o"></i> 新增電子文件</button>
                   <?php endif; ?>
                   <?php if ($asCaps['admin']): ?>
                   <button class="btn btn-success btn-sm" id="btnFullCreate" title="一次建立程序書＋全部歷史版本＋底下表單（前期補件用，免申請單）"><i class="fa fa-magic"></i> 程序書快速建檔</button>
@@ -1462,6 +1471,7 @@ $(function(){
   let META = {departments:[],positions:[],tags:[],users:[]};
   let DOCS = [], FILTERED = [], activeTagId = 0, curPage = 1, activeParentId = 0, activeParentNo = '';
   let editOrigNo = '', editOrigDept = '', editChildCount = 0; // 編輯時的原編號/原部門/子文件數（換編號連動用）
+  let creatingOnline = false; // 「新增電子文件」模式：送出成功後直接開 as_doc_editor.php，不是一般新增文件
 
   function esc(t){ if(t===null||t===undefined) return ''; return String(t).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
 
@@ -3069,6 +3079,7 @@ $(function(){
 
   // ── 新增文件 ──
   $('#btnAddDoc').on('click', function(){
+    creatingOnline = false;
     $('#docForm')[0].reset(); $('#doc_id').val(''); $('#doc_tag_ids').val('');
     $('#docModalTitle').text('新增文件'); $('#firstVersionBlock').show();
     $('#firstVersionTitle').text('首版資訊' + (canNA ? '（你有補登免附件權限，文件檔可不附）' : ''));
@@ -3083,8 +3094,33 @@ $(function(){
     $('#docModal').modal('show');
   });
 
+  // ── 新增電子文件（完全沒有任何舊紀錄，2026-09-24 新增）：跟「新增文件」共用同一張
+  //     表單與同一支 create_document，差別只在「不必附檔」＋送出成功後直接開線上版編輯器
+  //     （鐵律4：欄位、驗證、編號建議都是同一套，不另外刻一份跳窗）。 ──
+  $('#btnAddDocOnline').on('click', function(){
+    creatingOnline = true;
+    $('#docForm')[0].reset(); $('#doc_id').val(''); $('#doc_tag_ids').val('');
+    $('#docModalTitle').text('新增電子文件（無附件，直接建立線上版）');
+    $('#firstVersionBlock').show();
+    $('#firstVersionTitle').text('首版資訊');
+    $('#firstVersionFiles').hide();          // 這個模式的重點就是不附檔，連文件檔輸入框都不出現
+    $('#doc_file').prop('required', false);
+    $('#doc_version').val('0.0').prop('required', true);
+    $('#doc_change_status').val('制訂');
+    $('#doc_revised_date').val(new Date().toISOString().slice(0,10));
+    renderDocTagPicker([]);
+    fillParentSelect(0, '');
+    $('#doc_code_sel').hide().empty();
+    setDeptOptions($('#doc_department_id'), null);
+    $('#doc_level').val('二階');
+    syncLevelFromType($('#doc_type'), $('#doc_level'));
+    syncParentByType($('#doc_type'), $('#doc_parent_id'), $('#doc_department_id'));
+    $('#docModal').modal('show');
+  });
+
   // ── 編輯文件 ──
   $('#docTableBody').on('click','.op-edit', function(){
+    creatingOnline = false;
     const id=$(this).data('id');
     $.getJSON(API+'?action=get_document',{id:id}, r=>{
       if(r.status!=='success'){ alert(r.message); return; }
@@ -3141,6 +3177,7 @@ $(function(){
         }
       }
     }
+    const wasOnline = creatingOnline;
     NProgress.start();
     $.ajax({url:url, type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
      .done(r=>{
@@ -3148,6 +3185,11 @@ $(function(){
           $('#docModal').modal('hide');
           if(r.cascade_renumbered>0) showToast(`已連動更新 ${r.cascade_renumbered} 份子文件編號`);
           loadMeta(()=>loadDocs(true));
+          // 新增電子文件：建立完直接開線上版編輯器分頁，不必再回列表找歷史版本點進去
+          if(wasOnline && r.version_id){
+            creatingOnline = false;
+            window.open('as_doc_editor.php?version_id='+r.version_id, '_blank');
+          }
         } else alert(r.message||'失敗');
      })
      .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
@@ -4351,6 +4393,7 @@ $(function(){
   const AS_FEATURES = [
     {code:'asdoc_view',        label:'檢閱/預覽'},
     {code:'asdoc_create',      label:'新增文件'},
+    {code:'asdoc_create_online', label:'新增電子文件（無附件，直接建立線上版）'},
     {code:'asdoc_update',      label:'改版/編輯'},
     {code:'asdoc_download',    label:'下載原檔'},
     {code:'asdoc_delete',      label:'刪除/還原'},
