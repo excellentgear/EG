@@ -448,15 +448,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <div class="prq-toolbar">
             <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%;">
                 <label>日期</label>
-                <input type="date" id="fDateFrom" max="9999-12-31">
+                <input type="date" id="fDateFrom" max="9999-12-31" style="width:132px;">
                 <span>～</span>
-                <input type="date" id="fDateTo" max="9999-12-31">
+                <input type="date" id="fDateTo" max="9999-12-31" style="width:132px;">
                 <label>機台</label>
-                <select id="fMachine" data-eg-filter="輸入機台名稱篩選…" style="min-width:150px;">
+                <select id="fMachine" data-eg-filter="輸入機台名稱篩選…" style="min-width:100px;width:100px;">
                     <option value="">（全部）</option>
                 </select>
                 <label>備註</label>
-                <input type="text" id="fRemark" placeholder="關鍵字" style="width:120px;">
+                <input type="text" id="fRemark" placeholder="關鍵字" style="width:90px;">
                 <button class="btn-warm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
                 <button id="btnClear"><i class="fa fa-eraser"></i> 清除篩選(查全部)</button>
                 <?php if ($prq_can_qab_open): ?>
