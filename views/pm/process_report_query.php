@@ -4,9 +4,9 @@
  * 逐筆列出 pm_process_daily_report 每一筆報工紀錄（含臨時加工），供查找/列印用；
  * 與 process_schedule.php 的「查詢已報工工單」跳窗不同——那支是依工單(bom_ing_fid)彙總、
  * 用來恢復任務/改綁BOM等操作，這支是純瀏覽/列印每一筆報工紀錄，兩者並存不互相取代。
- * 篩選：日期區間(預設近30天，清空=不限日期查全部)、製程、機台、料號、人員(架機/生產人員合併比對)、備註。
+ * 篩選：日期區間(預設近30天，清空=不限日期查全部)、製程、機台、工單(BOM)號碼、料號、人員(架機/生產人員合併比對)、備註。
  * 分頁走後端(不一次撈全部)；列印/CSV匯出走後端依目前篩選條件抓「全部」符合筆數(不受分頁限制)。
- * 製程/機台/料號/人員四個篩選皆為「動態連動清單」（get_facets action）：只列目前其餘篩選條件下仍有資料的選項，
+ * 製程/機台/工單/料號/人員五個篩選皆為「動態連動清單」（get_facets action）：只列目前其餘篩選條件下仍有資料的選項，
  * 選了製程會連動縮小機台/人員清單，反之亦然，比照 pivot table 的 facet filter 做法，避免選出兜不出資料的組合。
  */
 include_once '../../src/common/_config.php';
@@ -108,6 +108,8 @@ function prq_build_filter($p, $exclude = []) {
     if (!in_array('machine_id', $exclude, true) && !empty($p['machine_id'])) { $where[] = 'pdr.machine_id = ?'; $params[] = intval($p['machine_id']); }
     // 料號＝工單所屬 BOM 的料號；臨時加工(無綁工單)沒有料號，故一旦指定料號就不會出現在結果中
     if (!in_array('d_id', $exclude, true) && !empty($p['d_id'])) { $where[] = 'b.d_id LIKE ?'; $params[] = '%' . $p['d_id'] . '%'; }
+    // BOM(製令)單號；臨時加工沒有 bi.bom，同料號一旦指定就不會出現在結果中
+    if (!in_array('bom', $exclude, true) && !empty($p['bom'])) { $where[] = 'bi.bom LIKE ?'; $params[] = '%' . $p['bom'] . '%'; }
     if (!in_array('person', $exclude, true) && !empty($p['person'])) {
         $where[] = '(CONVERT(u1.user_cname USING utf8mb4) LIKE ? OR CONVERT(u2.user_cname USING utf8mb4) LIKE ?)';
         $like = '%' . $p['person'] . '%';
@@ -255,8 +257,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmtU->execute(array_merge($paramsU, $paramsU));
             $people = $stmtU->fetchAll(PDO::FETCH_COLUMN);
 
+            // BOM(製令)單號候選：只列目前其餘條件下真的有報工紀錄的單號
+            list($whereB, $paramsB) = prq_build_filter($_POST, ['bom']);
+            $whereB = prq_append_where($whereB, "bi.bom IS NOT NULL AND bi.bom<>''");
+            $stmtB = $pdo->prepare("SELECT DISTINCT bi.bom $PRQ_FROM $whereB ORDER BY bi.bom LIMIT " . PRQ_PART_FACET_LIMIT);
+            $stmtB->execute($paramsB);
+            $boms = $stmtB->fetchAll(PDO::FETCH_COLUMN);
+
             echo json_encode(['success' => true, 'processes' => $processes, 'machines' => $machines,
-                'parts' => $parts, 'people' => $people]);
+                'parts' => $parts, 'people' => $people, 'boms' => $boms]);
         } elseif ($action === 'machine_fmt_meta') {
             // 顯示格式設定：欄位白名單、目前設定、以及一筆「填得最完整」的機台當即時預覽樣本
             $fields = [];
@@ -408,7 +417,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <button id="btnExportCsv"><i class="fa fa-file-excel-o"></i> 匯出CSV</button>
             </div>
             <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%;margin-top:6px;padding-top:6px;border-top:1px dashed #EADFC8;">
-                <label style="margin-left:0;">料號</label>
+                <label style="margin-left:0;">工單(BOM)號碼</label>
+                <input type="text" id="fBomNo" list="prqBomList" placeholder="工單號碼（可輸入部分字元）" style="width:150px;">
+                <datalist id="prqBomList"></datalist>
+                <label>料號</label>
                 <input type="text" id="fPartNo" list="prqPartList" placeholder="料號關鍵字（可輸入部分字元）" style="width:180px;">
                 <datalist id="prqPartList"></datalist>
                 <label>人員</label>
@@ -486,8 +498,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <p>逐筆列出「加工排程看板」每一筆報工紀錄（含臨時加工），供查找特定日期/人員/製程/機台的報工內容並列印或匯出，與看板上「查詢已報工工單」跳窗（依工單彙總、用於恢復任務/改綁BOM）用途不同、互不影響。</p>
         <h4>操作步驟</h4>
         <ul>
-            <li>上方篩選可組合使用：製程大類（頁籤按鈕，比照排程看板「查詢已報工工單」的分類方式）、日期區間、機台、料號、人員（同時比對架機/生產人員）、備註關鍵字。</li>
-            <li>製程大類、機台、料號、人員的可選清單會依「目前其餘篩選條件」動態連動——只列真的有資料的選項，選了製程大類會連動縮小機台/料號/人員清單，反之亦然。</li>
+            <li>上方篩選可組合使用：製程大類（頁籤按鈕，比照排程看板「查詢已報工工單」的分類方式）、日期區間、機台、工單(BOM)號碼、料號、人員（同時比對架機/生產人員）、備註關鍵字。</li>
+            <li>製程大類、機台、工單、料號、人員的可選清單會依「目前其餘篩選條件」動態連動——只列真的有資料的選項，選了製程大類會連動縮小機台/工單/料號/人員清單，反之亦然。</li>
+            <li><b>工單(BOM)號碼</b>可直接打字（部分字元即可），也可從建議清單挑選；<b>臨時加工（無綁定工單）沒有工單號碼，只要有指定工單篩選，臨時加工的紀錄就不會出現在結果中</b>。</li>
             <li><b>料號</b>可直接打字（部分字元即可，例如打 <code>RC016</code> 就找得到 <code>RC016011-02</code>），也可從輸入框的建議清單挑選；建議清單只列目前篩選條件下真的有報工紀錄的料號、最多 500 筆，超過的部分仍可自行打字查得到。</li>
             <li>日期區間預設近30天；按「清除篩選(查全部)」可清空所有條件、改查全部歷史資料。</li>
             <li>列表分頁顯示（避免一次載入全部拖慢速度），可調整每頁筆數。</li>
@@ -561,6 +574,7 @@ function curFilters(){
         date_to: $('#fDateTo').val(),
         process_type_id: curProcess,
         machine_id: $('#fMachine').val(),
+        bom: $.trim($('#fBomNo').val()),
         d_id: $.trim($('#fPartNo').val()),
         person: $.trim($('#fPerson').val()),
         remark: $.trim($('#fRemark').val())
@@ -664,6 +678,9 @@ function renderMachineOptions(list){
 function renderPartDatalist(list){
     $('#prqPartList').html(list.map(function(d){ return '<option value="' + esc(d) + '">'; }).join(''));
 }
+function renderBomDatalist(list){
+    $('#prqBomList').html(list.map(function(d){ return '<option value="' + esc(d) + '">'; }).join(''));
+}
 function renderPeopleDatalist(list){
     $('#prqPeopleList').html(list.map(function(nm){ return '<option value="' + esc(nm) + '">'; }).join(''));
 }
@@ -677,6 +694,7 @@ function refreshFacets(cb){
             renderMachineOptions(res.machines || []);
             renderPartDatalist(res.parts || []);
             renderPeopleDatalist(res.people || []);
+            renderBomDatalist(res.boms || []);
         }
         if (cb) cb();
     }, 'json');
@@ -688,13 +706,13 @@ $('#btnSearch').on('click', applyFilters);
 ['#fDateFrom','#fDateTo','#fMachine'].forEach(function(sel){
     $(sel).on('change', applyFilters);
 });
-['#fPartNo','#fPerson','#fRemark'].forEach(function(sel){
+['#fBomNo','#fPartNo','#fPerson','#fRemark'].forEach(function(sel){
     $(sel).on('keyup', function(e){ if (e.key==='Enter') applyFilters(); });
 });
 $('#pageSizeSel').on('change', function(){ loadList(1); });
 
 $('#btnClear').on('click', function(){
-    $('#fDateFrom, #fDateTo, #fPartNo, #fPerson, #fRemark').val('');
+    $('#fDateFrom, #fDateTo, #fBomNo, #fPartNo, #fPerson, #fRemark').val('');
     curProcess = '';
     var sel = document.getElementById('fMachine');
     var box = sel.previousElementSibling;
@@ -897,7 +915,7 @@ loadAsDoc();
     var part = (p.get('part') || '').trim();
     var bom  = (p.get('bom')  || '').trim();
     if (part) $('#fPartNo').val(part);
-    if (bom)  $('#fRemark').val(bom);   // 製令單號沒有專屬篩選欄，用關鍵字欄（它會掃備註與單號）
+    if (bom)  $('#fBomNo').val(bom);
 })();
 applyFilters();
 </script>
