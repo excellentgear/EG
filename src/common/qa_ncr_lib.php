@@ -118,6 +118,11 @@ function ncr_rows(PDO $db, string $from, string $to, array $opt = []): array {
             // 報廢單號在結案時配發），所以狀態與處置一律由 qab_status_map() 解析，**不要在這裡再判一次**。
             require_once __DIR__ . '/qa_abnormal_lib.php';
             qab_ensure_schema($db);
+            // deleted_at IS NULL：已刪除的異常單不可以再出現在這本登錄簿（2026-09-24 使用者回報，
+            // 刪除的單一度連同尚未結案的舊測試資料一起被算了進來）。
+            // NOT EXISTS(...)：同一批NG被拆分成好幾張子單時，子單才是真正承擔處置的那幾張，
+            // 母單自己已無決策（qab_save_decision 拆分時會清空母單的處置），故母單不再列出——
+            // 子單有列入，母單不需要再重複列一次（使用者 2026-09-24 交辦）。
             $st = $db->prepare("SELECT a.id, a.abnormal_order_no, a.occurrence_date, a.fill_date, a.sqty, a.ng_qty,
                                        a.abnormal_phenomenon, a.defect_detail, a.responsible_unit,
                                        a.is_closed, a.closed_at, a.bom_no, a.ir_no, a.capa_order_no,
@@ -125,16 +130,19 @@ function ncr_rows(PDO $db, string $from, string $to, array $opt = []): array {
                                        b.d_id, b.Client_Name, b.specification
                                 FROM qa_abnormal_order a
                                 LEFT JOIN bom b ON b.bom = a.bom_no
-                                WHERE DATE(COALESCE(a.fill_date, a.occurrence_date)) BETWEEN ? AND ?");
+                                WHERE a.deleted_at IS NULL
+                                  AND DATE(COALESCE(a.fill_date, a.occurrence_date)) BETWEEN ? AND ?
+                                  AND NOT EXISTS (SELECT 1 FROM qa_abnormal_order c
+                                                  WHERE c.parent_order_id = a.id AND c.deleted_at IS NULL)");
             $st->execute([$from, $to]);
             $qaRows = $st->fetchAll(PDO::FETCH_ASSOC);
             $qaStat = qab_status_map($db, array_column($qaRows, 'id'));
             foreach ($qaRows as $r) {
                 $s = $qaStat[(int)$r['id']] ?? [];
                 $extra = [];
-                if (!empty($s['status']))    $extra[] = '狀態：' . $s['status'];
+                // 已結案時「結案」欄本身就講得清楚了，這裡不再重複印「狀態：已結案」（使用者 2026-09-24 回報）
+                if (!empty($s['status']) && $s['status'] !== '已結案') $extra[] = '狀態：' . $s['status'];
                 if (!empty($r['capa_order_no'])) $extra[] = '矯正單 ' . $r['capa_order_no'];
-                if (!empty($s['scrap_no']))  $extra[] = '報廢單 ' . $s['scrap_no'];
                 if (!empty($s['gm_deduct'])) $extra[] = '需扣款';
                 $rows[] = [
                     'source' => 'qa', 'source_key' => (string)$r['id'],
@@ -150,6 +158,9 @@ function ncr_rows(PDO $db, string $from, string $to, array $opt = []): array {
                                     : trim((string)($r['abnormal_phenomenon'] ?: $r['defect_detail'])),
                     'src_resp'   => (string)($r['responsible_unit'] ?? ''),
                     'src_disp'   => (string)($s['final_label'] ?? ''),
+                    // 報廢單號獨立一格傳出去，讓畫面把它印在「處理方式」欄下方、加底色外框標出來
+                    // （比照 qa_abnormal_list.php 的顯示方式），不要再混在來源徽章下的小字說明裡。
+                    'src_scrap_no' => (string)($s['scrap_no'] ?? ''),
                     'src_closed' => (int)($r['is_closed'] ?? 0),
                     'src_closed_date' => substr((string)($r['closed_at'] ?? ''), 0, 10),
                     'src_link'   => '../QA/qa_abnormal_form.php',
@@ -169,14 +180,17 @@ function ncr_rows(PDO $db, string $from, string $to, array $opt = []): array {
             // 順帶修掉既有問題：原本直接印 enum 代碼（'rework'），現在印中文。
             require_once __DIR__ . '/car_lib.php';
             car_ensure_cause_cols($db);
+            // c.d_id 存的是 d_setting 主檔的整數 PK（不是料號文字，跟 ir_track/bom 的 d_id 意義不同！
+            // 直接印會顯示成「5993」這種數字，要 JOIN d_setting 換成 D_Setting_Id 才是真正的料號）
             $st = $db->prepare("SELECT c.id, c.car_no, c.fill_date, c.found_date, c.qty, c.d_id, c.drawing_no,
                                        c.abnormal_desc, c.cause_detail, c.resp_display,
                                        c.disposition, c.disposition_other, c.disposition_opt_id,
                                        c.close_date, c.status, c.counterparty_type, c.customer_id, c.maker_id_no,
-                                       cl.customer AS cname, m.maker_id AS mname
+                                       cl.customer AS cname, m.maker_id AS mname, ds.D_Setting_Id AS part_text
                                 FROM car_order c
                                 LEFT JOIN customer_list cl ON cl.customer_id = c.customer_id
                                 LEFT JOIN maker_list m ON m.maker_id_no = c.maker_id_no
+                                LEFT JOIN d_setting ds ON ds.d_id = c.d_id
                                 WHERE DATE(COALESCE(c.found_date, c.fill_date)) BETWEEN ? AND ?");
             $st->execute([$from, $to]);
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -185,7 +199,7 @@ function ncr_rows(PDO $db, string $from, string $to, array $opt = []): array {
                     'source' => 'car', 'source_key' => (string)$r['id'],
                     'src_date'   => substr((string)($r['found_date'] ?: $r['fill_date']), 0, 10),
                     'src_client' => $who,
-                    'src_part'   => (string)($r['d_id'] ?? ''),
+                    'src_part'   => (string)($r['part_text'] ?? ''),
                     'src_draw'   => (string)($r['drawing_no'] ?? ''),
                     'src_qty'    => $r['qty'],
                     'src_no'     => (string)$r['car_no'],
@@ -333,6 +347,7 @@ function ncr_merge(array $r, $s): array {
         'resp_unit'   => $pick($s['resp_unit'] ?? null, $r['src_resp']),
         'disposition' => $pick($s['disposition'] ?? null, $r['src_disp']),
         'disposition_note' => (string)($s['disposition_note'] ?? ''),
+        'scrap_no'    => (string)($r['src_scrap_no'] ?? ''),
         'is_aero'     => (int)($s['is_aero'] ?? 0),
         'is_closed'   => $closed,
         'closed_date' => $pick($s['closed_date'] ?? null, $r['src_closed_date']),
