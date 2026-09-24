@@ -154,7 +154,11 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 /* 自動分析：可展開的客戶名單（如「流失客戶」）*/
 .ins-toggle { margin-left:8px; font-size:11px; font-weight:600; color:var(--amber-d); cursor:pointer; white-space:nowrap; }
 .ins-toggle:hover { color:var(--coral); }
-.ins-cli-grid { display:grid; gap:3px 14px; margin-top:6px; padding-top:6px; border-top:1px dashed var(--line); }
+.ins-cli-wrap { margin-top:6px; padding-top:6px; border-top:1px dashed var(--line); }
+.ins-cli-grid { display:grid; gap:3px 14px; }
+.ins-cli-head { margin-bottom:3px; }
+.ins-cli-hcell { display:flex; justify-content:space-between; gap:8px; font-size:10px; font-weight:700; color:var(--muted);
+                 text-transform:uppercase; letter-spacing:.3px; padding-bottom:3px; border-bottom:1px solid var(--line); }
 .ins-cli-cell { display:flex; justify-content:space-between; gap:8px; font-size:12px; padding:2px 0; }
 .ins-cli-name { color:#6B4423; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ins-cli-name a { color:#8a5a2b; border-bottom:1px dotted #8a5a2b; cursor:pointer; }
@@ -677,12 +681,14 @@ function oaOpenDrawing(pid, pno){
     + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no');
 }
 /* 點客戶名稱 → 開客戶主檔唯讀檢視（新跳窗，master_data_management.php 的客戶分頁，
-   基本資料／結帳付款…分頁可切換，但只能看不能改）。未建主檔（cid 空或未帶）不給點。 */
+   基本資料／結帳付款…分頁可切換，但只能看不能改）。未建主檔（cid 空或未帶）不給點。
+   帶 ?view_customer= 那一頁會把側欄／頂欄／清單整個藏起來，只露出跳窗本身，
+   所以視窗不必再另外留側欄的寬度。 */
 function oaOpenCustomerView(cid){
   cid = String(cid||'').trim();
   if(!cid || cid==='0'){ return; }
   var w = screen.availWidth, h = screen.availHeight;
-  var pw = Math.min(940, Math.round(w * 0.8)), ph = Math.min(760, Math.round(h * 0.85));
+  var pw = Math.min(980, Math.round(w * 0.6)), ph = Math.min(860, Math.round(h * 0.9));
   window.open('../pages/master_data_management.php?view_customer=' + encodeURIComponent(cid),
     'custview_' + cid, 'width=' + pw + ',height=' + ph + ',left=' + Math.round((w - pw) / 2) + ',top=' + Math.round((h - ph) / 2)
     + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no');
@@ -926,10 +932,17 @@ function renderInsights(){
   $('#insightList').html(h);
 }
 /* 自動分析裡「有 N 家客戶完全沒有下單」這類結論的展開名單：
-   左＝客戶名稱（可點開唯讀檢視，未建主檔者不給點）、右＝上一期（比較基期）金額或數量，3～4 欄排版。 */
+   左＝客戶名稱（可點開唯讀檢視，未建主檔者不給點）、右＝上一期（比較基期）金額或數量，3～4 欄排版。
+   標頭跟本體用同一組 grid-template-columns，逐欄對齊。 */
 function oaRenderInsClientGrid(x, listId){
   var cols = (x.clients.length > 18) ? 4 : 3;
   var unit = x.unit === '元' ? ' 元' : ' 支';
+  var amtLabel = esc(x.cmp_label||'上期') + (x.unit === '元' ? '金額' : '數量');
+  var colStyle = 'grid-template-columns:repeat('+cols+',1fr);';
+  var head = '';
+  for (var i = 0; i < cols; i++) {
+    head += '<div class="ins-cli-hcell"><span>客戶名稱</span><span>'+amtLabel+'</span></div>';
+  }
   var cells = x.clients.map(function(c){
     var amt = nf(c.amount) + unit;
     var nameHtml = (c.cid && c.cid !== '0' && !c.bad)
@@ -937,13 +950,16 @@ function oaRenderInsClientGrid(x, listId){
         : '<span title="未建客戶主檔，無法開啟檢視">'+esc(c.name)+'</span>';
     return '<div class="ins-cli-cell"><span class="ins-cli-name">'+nameHtml+'</span><span class="ins-cli-amt">'+amt+'</span></div>';
   }).join('');
-  return '<div class="ins-cli-grid" id="'+listId+'" style="display:none;grid-template-columns:repeat('+cols+',1fr);">'+cells+'</div>';
+  return '<div class="ins-cli-wrap" id="'+listId+'" style="display:none;">'
+       + '<div class="ins-cli-grid ins-cli-head" style="'+colStyle+'">'+head+'</div>'
+       + '<div class="ins-cli-grid" style="'+colStyle+'">'+cells+'</div>'
+       + '</div>';
 }
 function oaToggleInsList(id, el){
   var box = document.getElementById(id);
   if(!box) return;
   var show = box.style.display === 'none';
-  box.style.display = show ? 'grid' : 'none';
+  box.style.display = show ? 'block' : 'none';
   $(el).html(show ? '收合名單 <i class="fa fa-caret-up"></i>' : '展開名單 <i class="fa fa-caret-down"></i>');
 }
 

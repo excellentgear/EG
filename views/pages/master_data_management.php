@@ -7132,6 +7132,15 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 #pav-3d-viewer{width:100%;height:100%;}
 </style>
 <link rel="stylesheet" href="../../resource/js/o3dv.min.css">
+<?php if (!empty($_GET['view_customer'])): ?>
+<!-- ?view_customer=<客戶代碼> 唯讀檢視：從其他頁面（如訂單分析）連進來只是要看一張客戶主檔，
+     不需要整頁的側欄／頂欄／料號客戶廠商清單，直接在 <head> 用 CSS 藏起來（一開始就藏，不是
+     渲染完再藏，才不會先閃一下整頁再收起來）；只留 customerModal 這個跳窗露出。 -->
+<style>
+.left_col, .top_nav, .right_col { display:none !important; }
+body { background:#F6F1EA; }
+</style>
+<?php endif; ?>
 </head>
 
 <body class="nav-sm">
@@ -16143,7 +16152,7 @@ function openCustomerModal(customer_id, readonly) {
         api({ action:'get_customer', customer_id:customer_id }).done(function(r) {
             if (!r.success) { showToast(r.message,'error'); return; }
             var d = r.data;
-            document.getElementById('custModal-title').textContent = readonly ? ('客戶檢視（唯讀）－'+(d.customer||d.customer_id)) : '編輯客戶';
+            document.getElementById('custModal-title').textContent = readonly ? ('檢視客戶基本資料－'+(d.customer||d.customer_id)) : '編輯客戶';
             document.getElementById('cf-is_new').value = '0';
             var cidEl = document.getElementById('cf-customer_id');
             cidEl.value = d.customer_id; cidEl.readOnly = true; cidEl.style.background = '#f5f5f5';
@@ -25451,13 +25460,12 @@ $(function() {
             setTimeout(function() { openPartModal(autoId); }, 500);
         }
 
-        // ?view_customer=<客戶代碼>：切到客戶分頁並以唯讀方式開啟該客戶檢視畫面
-        // （給訂單分析等其他頁面用新跳窗連進來看，不吃 CAN_UPDATE 權限，只看不改）
+        // ?view_customer=<客戶代碼>：以唯讀方式直接開啟該客戶檢視跳窗
+        // （給訂單分析等其他頁面用新跳窗連進來看，不吃 CAN_UPDATE 權限，只看不改；
+        //   側欄／頂欄／清單已經在 <head> 用 CSS 藏起來，這裡不需要再切分頁）
         var viewCustomer = (params.get('view_customer') || '').trim();
         if (viewCustomer) {
-            var custTabBtn = document.querySelector('.master-tab-btn[onclick*="customers"]');
-            if (custTabBtn && typeof switchTab === 'function') switchTab('customers', custTabBtn);
-            setTimeout(function() { openCustomerModal(viewCustomer, true); }, 400);
+            setTimeout(function() { openCustomerModal(viewCustomer, true); }, 300);
         }
     })();
 
