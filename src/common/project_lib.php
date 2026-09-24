@@ -3260,8 +3260,9 @@ function prj_bom_dates_admin_update(PDO $db, int $projectId, int $bomIngFid, $ou
 
     $r = bomp_admin_set_dates($db, $bomIngFid, $outsourceDate, $returnDate, $user, $ackWarning);
     if (!empty($r['ok'])) {
-        $db->prepare("UPDATE project_process SET outsource_date=?, return_date=? WHERE id=?")
-           ->execute([$r['row']['outsource_date'], $r['row']['return_date'], $row['id']]);
+        // state 鏡射也要一併同步，不然改完日期後這裡顯示的還是舊狀態，要等下一次「同步BOM」才會更新
+        $db->prepare("UPDATE project_process SET outsource_date=?, return_date=?, state=? WHERE id=?")
+           ->execute([$r['row']['outsource_date'], $r['row']['return_date'], $r['row']['processing_state'], $row['id']]);
         $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
                      VALUES ('update','project_bom_date',?,?,?,?,?,NOW())")
            ->execute([(string)$bomIngFid, '專案#' . $projectId . ' 製令列#' . $bomIngFid,

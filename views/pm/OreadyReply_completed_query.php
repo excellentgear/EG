@@ -1822,33 +1822,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => true, 'message' => '已儲存', 'row' => $r['row']]);
 
         } elseif ($action === 'admin_bom_activity') {
-            // 這筆 BOM 的報工／出貨相關紀錄，供管理員核對要不要修正發包/回廠日與狀態
-            // （使用者原話：「方便確認修改的發包與回廠日期以及狀態」）。
+            // 這筆 BOM 的報工／委外轉出入／出貨相關紀錄，供管理員核對要不要修正發包/回廠日與狀態
+            // （使用者原話：「方便確認修改的發包與回廠日期以及狀態」，且要看得到機台與操作人員）。
             if (!$ocq_is_admin) { echo json_encode(['success' => false, 'message' => '需要管理員權限']); exit; }
             if (!ocq_admin_unlocked()) { echo json_encode(['success' => false, 'message' => '請先輸入操作確認密碼解鎖', 'need_unlock' => true]); exit; }
             $bom = trim($_POST['bom'] ?? '');
             if ($bom === '') { echo json_encode(['success' => false, 'message' => '缺少 BOM 編號']); exit; }
 
-            $rp = $pdo->prepare("SELECT r.report_id, r.bom_ing_fid, r.process_no, pn.ProcessName, r.report_date,
+            // 報工紀錄：機台一律優先印現場編號（machine_list.field_no），沒有才退回機台名稱
+            // （記憶 machine_field_no_display）；操作人員分架機/生產兩欄，比照 project_lib.php
+            // 的 prj_work_reports() 同一套 JOIN（本頁沒有「專案」概念，直接以 bom 為範圍，不透過
+            // project_order 那層）。
+            $rp = $pdo->prepare("SELECT r.report_id, r.bom_ing_fid, bi.bom_sn, r.process_no, pn.ProcessName,
+                    r.report_date,
+                    COALESCE(NULLIF(ml.field_no,''), ml.machine) AS machine_name,
+                    us.user_cname AS setup_user, up.user_cname AS prod_user,
                     r.setup_start_time, r.setup_end_time, r.production_start_time, r.production_end_time,
                     r.produced_qty, r.is_finished, r.remark
                 FROM pm_process_daily_report r
+                JOIN bom_ing bi ON bi.bom_ing_fid = r.bom_ing_fid
                 LEFT JOIN process_no pn ON pn.ProcessNo = r.process_no
-                WHERE r.bom_ing_fid IN (SELECT bom_ing_fid FROM bom_ing WHERE bom = ?)
+                LEFT JOIN machine_list ml ON ml.machine_id = r.machine_id
+                LEFT JOIN `user` us ON us.id = r.setup_user_id
+                LEFT JOIN `user` up ON up.id = r.production_user_id
+                WHERE bi.bom = ?
                 ORDER BY r.report_date DESC, r.report_id DESC LIMIT 100");
             $rp->execute([$bom]);
             $reports = $rp->fetchAll(PDO::FETCH_ASSOC);
 
-            $sp = $pdo->prepare("SELECT il.IS_id, il.IS_number, il.Order_date, il.Client_name, il.Product_id, il.Qty,
-                    m.shipped_qty
-                FROM is_bom_map m
-                JOIN is_list il ON il.IS_id = m.IS_id
-                WHERE m.bom = ?
-                ORDER BY il.Order_date DESC, il.IS_id DESC LIMIT 100");
-            $sp->execute([$bom]);
-            $shipments = $sp->fetchAll(PDO::FETCH_ASSOC);
+            // 委外轉出入：委外製程沒有廠內報工，實績要看轉出入紀錄——這也正是規則①拿來當硬擋
+            // 依據的同一張表，直接列出來給管理員對照，不必再切去 Transfer_Log_Analysis.php 查。
+            $tp = $pdo->prepare("SELECT tl.transfer_id, tl.bom_sn, pn.ProcessName, tl.transfer_no, tl.transfer_date,
+                    mf.maker_id AS maker_from_name, mt.maker_id AS maker_to_name, tl.transfer_qty, tl.loss_qty
+                FROM bom_ing_transfer_log tl
+                LEFT JOIN bom_ing bi ON bi.bom = tl.bom AND bi.bom_sn = tl.bom_sn
+                LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                LEFT JOIN maker_list mf ON mf.maker_id_no = tl.maker_from
+                LEFT JOIN maker_list mt ON mt.maker_id_no = tl.maker_to
+                WHERE tl.bom = ?
+                ORDER BY tl.transfer_date DESC, tl.transfer_id DESC LIMIT 100");
+            $tp->execute([$bom]);
+            $transfers = $tp->fetchAll(PDO::FETCH_ASSOC);
 
-            echo json_encode(['success' => true, 'reports' => $reports, 'shipments' => $shipments]);
+            // 出貨紀錄：is_bom_map 全站幾乎沒有人用（0筆起跳），不可以拿它當唯一來源——
+            // 一律查「這個 BOM 的料號主檔」與「這個 BOM 已綁定的訂單」，跟本頁自己的
+            // 快速綁定用同一套 ocq_bind_state()（鐵律4，不再另外猜一次料號/訂單）。
+            $bindState = ocq_bind_state($pdo, $bom);
+            $dsPk = (int)($bindState['d_setting_id'] ?? 0);
+            $orderIds = [];
+            foreach (($bindState['bound_orders'] ?? []) as $o) { $orderIds[] = (int)$o['order_id']; }
+            if (ctype_digit((string)($bindState['o_order_id'] ?? ''))) { $orderIds[] = (int)$bindState['o_order_id']; }
+            $orderIds = array_values(array_unique(array_filter($orderIds)));
+
+            $shipments = [];
+            if ($dsPk > 0 || $orderIds) {
+                $where = []; $params = [];
+                if ($dsPk > 0) { $where[] = 's.d_setting_id = ?'; $params[] = $dsPk; }
+                if ($orderIds) { $where[] = 's.Order_id IN (' . implode(',', array_fill(0, count($orderIds), '?')) . ')'; $params = array_merge($params, $orderIds); }
+                $sp = $pdo->prepare("SELECT s.IS_id, s.IS_number, s.Order_date, s.Client_name, s.Product_id, s.Qty, s.Unit_price, s.Order_id
+                    FROM is_list s WHERE (" . implode(' OR ', $where) . ")
+                    ORDER BY s.Order_date DESC, s.IS_id DESC LIMIT 100");
+                $sp->execute($params);
+                $shipments = $sp->fetchAll(PDO::FETCH_ASSOC);
+            }
+
+            echo json_encode(['success' => true, 'reports' => $reports, 'transfers' => $transfers, 'shipments' => $shipments]);
 
         } else {
             echo json_encode(['success' => false, 'message' => '未知操作']);
@@ -1992,9 +2030,11 @@ try {
         .ocq-bind-meta { background: #FFF7E8; border: 1px dashed #F0A24B; border-radius: 6px; padding: 6px 10px; margin-bottom: 10px; line-height: 1.8; }
         .ocq-bind-meta b { color: #8A5A2B; }
         .ocq-hint { color: #a0a0a0; font-size: 12.5px; }
+        .ocq-act-cell { background: #FFFBF2; border-top: 2px solid #F0A24B; padding: 8px 12px !important; }
+        .ocq-act-wrap { max-height: 320px; overflow-y: auto; }
         .ocq-act-tb { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 8px; }
         .ocq-act-tb th, .ocq-act-tb td { border: 1px solid #EADFC8; padding: 4px 6px; text-align: left; }
-        .ocq-act-tb th { background: #FBF5EA; color: #5b3a1e; }
+        .ocq-act-tb th { background: #FBF5EA; color: #5b3a1e; position: sticky; top: 0; }
         table.ocq-pick { width: 100%; border-collapse: collapse; font-size: 12.5px; }
         table.ocq-pick th, table.ocq-pick td { border: 1px solid #EADFC8; padding: 4px 7px; text-align: center; }
         table.ocq-pick thead th { background: #F7E0BD; position: sticky; top: 0; }
@@ -2435,15 +2475,6 @@ try {
     </div>
 </div>
 
-<!-- 管理員模式：這筆 BOM 的報工/出貨紀錄，核對修正發包/回廠日與狀態用 -->
-<div class="ocq-mask" id="ocqActMask" style="display:none;position:fixed;inset:0;background:rgba(60,40,20,.45);z-index:1060;">
-    <div class="ocq-bind-box" style="width:760px;">
-        <div class="ocq-bind-hd"><span><i class="fa fa-history"></i> <span id="ocqActTitle">報工／出貨紀錄</span></span>
-            <span style="cursor:pointer;color:#b5762a;" id="ocqActClose">✕</span></div>
-        <div class="ocq-bind-bd" id="ocqActBody" style="max-height:70vh;"></div>
-        <div class="ocq-bind-ft"><button type="button" id="ocqActCancel" style="height:30px;padding:0 14px;border-radius:4px;font-size:13px;border:1px solid #D8BE93;background:#fff;color:#5b3a1e;cursor:pointer;">關閉</button></div>
-    </div>
-</div>
 <?php endif; ?>
 
 <!-- 快速建立料號主檔並綁定：主檔查無、或同名主檔客戶對不上時用；可一次處理勾選的多筆 -->
@@ -2511,6 +2542,7 @@ var OCQ_BASE_COLS = OCQ_CAN_BIND ? 7 : 6;
 // 管理員模式（2026-09-24）：isAdmin 由後端權限碼算好；unlocked 是「這一頁有沒有輸入過操作確認密碼」，
 // 純前端旗標只決定要不要畫編輯欄位——真正的守門在後端每個寫入/查詢動作都會再驗一次 session 解鎖狀態與 CSRF。
 var OCQ_ADMIN = { isAdmin: <?= $ocq_is_admin ? 'true' : 'false' ?>, unlocked: false };
+var QC_STATE_LABEL_OCQ = {N:'未發包', ing:'加工中', Q:'QC待驗', P:'生管待移轉', E:'已移轉', skip:'已標記跳過'};
 
 function esc(s){ return $('<div>').text(s==null?'':String(s)).html(); }
 function todayStr(){ var d=new Date(); return d.toISOString().substr(0,10); }
@@ -2690,9 +2722,10 @@ function rowToTr(item, maxProc, priceMap){
     var bomText = item.has_file === false
         ? '<span class="ocq-nowrap" title="NAS 上找不到這個 BOM 的 .xlsm 檔">'+esc(item.bom)+'</span>'
         : '<a class="ocq-nowrap ocq-bom-link" href="ms-excel:ofe|u|'+OCQ_NAS_BASE+encodeURIComponent(item.bom)+'.xlsm" target="_blank" title="點擊以 Excel 開啟此 BOM 檔">'+esc(item.bom)+'</a>';
-    // 管理員模式：BOM 編號旁加一顆「報工/出貨紀錄」按鈕，點了才向後端要（已解鎖才顯示，未解鎖的人整頁不長這顆鈕）
+    // 管理員模式：BOM 編號旁加一顆「報工/出貨」按鈕，點了才向後端要、在這筆下方展開（已解鎖才顯示，
+    // 未解鎖的人整頁不長這顆鈕）；不用跳窗——跳窗會擋住畫面，沒辦法邊看紀錄邊在上面改日期。
     var actBtn = (OCQ_ADMIN.isAdmin && OCQ_ADMIN.unlocked)
-        ? ' <button type="button" class="ocq-act-btn" data-bom="'+esc(item.bom)+'" title="查看這筆BOM的報工/出貨紀錄，核對發包/回廠日" style="border:1px solid #D8BE93;background:#fff;color:#a0521f;border-radius:3px;font-size:11px;padding:0 4px;cursor:pointer;"><i class="fa fa-history"></i></button>'
+        ? ' <button type="button" class="ocq-act-btn" data-bom="'+esc(item.bom)+'" title="展開/收合這筆BOM的報工/出貨紀錄，核對發包/回廠日" style="border:1px solid #D8BE93;background:#fff;color:#a0521f;border-radius:3px;font-size:11px;padding:0 4px;cursor:pointer;"><i class="fa fa-history"></i> 報工/出貨</button>'
         : '';
     var bomTd = '<td class="t-left ocq-fillable" data-field="bom" data-val="'+encodeURIComponent(item.bom||'')+'" title="雙擊帶入BOM/料號篩選"><figure class="'+cc+'"></figure>'+bomText+actBtn+closedInfo+'</td>';
     // 料號文字本身＝點一下開圖面查閱（bom_viewer）；文字以外的空白處維持雙擊帶入篩選
@@ -2711,15 +2744,24 @@ function rowToTr(item, maxProc, priceMap){
         if (!p) { tds += '<td></td>'; continue; }
         var pi = bomPrices[String(p.bom_sn)] || null;
         var pv = pi ? (parseFloat(pi.modified_unit_price) || parseFloat(pi.price) || 0) : 0;
-        var cell = '<div>'+esc((p.process_no||'')+(p.ProcessName?' '+p.ProcessName:''))+'</div>';
+        var cell;
         if (OCQ_ADMIN.isAdmin && OCQ_ADMIN.unlocked && p.bom_ing_fid) {
             // 管理員模式：發包日/回廠日改成可直接編輯，改了離開欄位就存（與 project_mgmt.php 同一套後端規則：
-            // 移轉憑單日期硬擋、品管/包裝檢驗日期只提醒、存檔後狀態自動推導）
-            cell += '<input type="date" class="ocq-p-out" data-fid="'+p.bom_ing_fid+'" value="'+esc(p.outsource_date||'')+'" style="width:112px;font-size:11px;">';
-            if (p.maker_id) cell += '<small style="color:#888;"> '+esc(p.maker_id)+'</small>';
-            cell += '<br><input type="date" class="ocq-p-ret" data-fid="'+p.bom_ing_fid+'" value="'+esc(p.return_date||'')+'" style="width:112px;font-size:11px;margin-top:2px;">';
-            cell += '<div class="ocq-p-state" style="font-size:10px;color:#888;">狀態：'+esc(p.processing_state||'')+'</div>';
+            // 移轉憑單日期硬擋、品管/包裝檢驗日期只提醒、存檔後狀態自動推導）。
+            // 廠商名稱移到製程名稱這一列（使用者要求），日期輸入框旁各自標「發：」「回：」避免混淆。
+            cell = '<div>'+esc((p.process_no||'')+(p.ProcessName?' '+p.ProcessName:''))
+                 + (p.maker_id ? '&emsp;<span style="color:#888;font-size:11px;">'+esc(p.maker_id)+'</span>' : '') + '</div>';
+            cell += '<div style="white-space:nowrap;"><span style="color:#a0521f;font-size:10px;">發：</span>'
+                  + '<input type="date" class="ocq-p-out" data-fid="'+p.bom_ing_fid+'" value="'+esc(p.outsource_date||'')+'" style="width:104px;font-size:11px;"></div>';
+            cell += '<div style="white-space:nowrap;margin-top:2px;"><span style="color:#a0521f;font-size:10px;">回：</span>'
+                  + '<input type="date" class="ocq-p-ret" data-fid="'+p.bom_ing_fid+'" value="'+esc(p.return_date||'')+'" style="width:104px;font-size:11px;"></div>';
+            // 狀態是依日期自動推導出來的，不能直接改——但日期沒變時瀏覽器不會觸發 change、狀態就一直停在
+            // 存檔當下的值（使用者實測 B-1150826016 就是這種情況）；補一顆「重新整理狀態」，
+            // 用目前畫面上的日期原值再送一次存檔，強制依當下規則重新推導一次。
+            cell += '<div class="ocq-p-state" style="font-size:10px;color:#888;">狀態：<b>'+esc(QC_STATE_LABEL_OCQ[p.processing_state]||p.processing_state||'')
+                  + '</b> <a href="javascript:void(0)" class="ocq-p-recalc" data-fid="'+p.bom_ing_fid+'" title="依目前的發包日/回廠日重新推算狀態（日期沒有實際變更時，瀏覽器不會自動觸發存檔）">重新整理</a></div>';
         } else {
+            cell = '<div>'+esc((p.process_no||'')+(p.ProcessName?' '+p.ProcessName:''))+'</div>';
             if (p.outsource_date || p.maker_id) cell += '<small style="color:#888;">'+esc((p.outsource_date?egFmtDate(p.outsource_date):'')+(p.maker_id?' '+p.maker_id:''))+'</small>';
             // 回廠日依使用者指定寫成「日期 回」（日期在前），不是「回廠:日期」
             if (p.return_date) cell += '<div style="color:#2a7ae2;font-weight:bold;">'+esc(egFmtDate(p.return_date))+' 回</div>';
@@ -2727,30 +2769,46 @@ function rowToTr(item, maxProc, priceMap){
         if (pv > 0) cell += '<div style="color:#0a6;font-size:10px;">$'+fmtPrice(pv)+'</div>';
         tds += '<td class="t-left">'+cell+'</td>';
     }
-    return '<tr>'+tds+'</tr>';
+    var totalCols = OCQ_BASE_COLS + maxProc;
+    var mainTr = '<tr>'+tds+'</tr>';
+    // 報工/出貨紀錄改成顯示在該筆 BOM「下方」的同一張表格內（不用跳窗）：管理員模式時緊接著多一列，
+    // 平常收合、點「報工/出貨」才展開並向後端要資料，這樣才能一邊看紀錄一邊在上面改日期。
+    var actTr = '';
+    if (OCQ_ADMIN.isAdmin && OCQ_ADMIN.unlocked) {
+        actTr = '<tr class="ocq-act-row" data-bom="'+esc(item.bom)+'" style="display:none;">'
+              + '<td colspan="'+totalCols+'" class="ocq-act-cell"></td></tr>';
+    }
+    return mainTr + actTr;
 }
 
 /* ══════════════════════ 管理員模式：解鎖／改發包回廠日／報工出貨紀錄 ══════════════════════
    2026-09-24 使用者交辦：跟 project_mgmt.php 共用同一套後端規則（bom_process_date_lib.php），
    這裡只負責「輸入一次操作確認密碼解鎖 15 分鐘」與「改日期存檔」兩件前端的事。 */
-function ocqSaveProcessDates($input, ackWarning){
-    var fid = parseInt($input.data('fid'), 10) || 0;
-    var $tr = $input.closest('tr');
+function ocqSaveProcessDates($tr, ackWarning){
     var out = $tr.find('.ocq-p-out').val();
     var ret = $tr.find('.ocq-p-ret').val();
+    var fid = parseInt($tr.find('.ocq-p-out').data('fid'), 10) || 0;
     if (!fid) return;
     $.post('', { action:'admin_set_dates', bom_ing_fid: fid, outsource_date: out, return_date: ret,
         ack_warning: ackWarning ? 1 : 0, csrf: OCQ_BIND.csrf }, function(res){
         if (!res.success) {
-            if (res.need_ack && confirm((res.message||'')+'\n\n確定要照這個日期儲存嗎？')) { ocqSaveProcessDates($input, true); return; }
+            if (res.need_ack && confirm((res.message||'')+'\n\n確定要照這個日期儲存嗎？')) { ocqSaveProcessDates($tr, true); return; }
             alert(res.message || '儲存失敗');
             loadList(curPage);
             return;
         }
-        $tr.find('.ocq-p-state').text('狀態：'+(res.row.processing_state||''));
+        $tr.find('.ocq-p-state').html('狀態：<b>'+esc(QC_STATE_LABEL_OCQ[res.row.processing_state]||res.row.processing_state||'')
+            +'</b> <a href="javascript:void(0)" class="ocq-p-recalc" data-fid="'+fid+'" title="依目前的發包日/回廠日重新推算狀態（日期沒有實際變更時，瀏覽器不會自動觸發存檔）">重新整理</a>');
     }, 'json').fail(function(){ alert('伺服器通訊失敗'); });
 }
-$(document).on('change', '.ocq-p-out, .ocq-p-ret', function(){ ocqSaveProcessDates($(this), false); });
+$(document).on('change', '.ocq-p-out, .ocq-p-ret', function(){ ocqSaveProcessDates($(this).closest('tr'), false); });
+// 「重新整理」：日期本身沒改變時瀏覽器不會觸發 change（使用者實測 B-1150826016 就卡在這裡——
+// 存了發包/回廠日但當時沒有一起改到「值真的不同」的那一刻，狀態就沒有機會被重新推算），
+// 用目前畫面上的日期原值再送一次同一支存檔動作，強制依當下規則（含最新的檢驗紀錄）重新推導。
+$(document).on('click', '.ocq-p-recalc', function(e){
+    e.preventDefault();
+    ocqSaveProcessDates($(this).closest('tr'), false);
+});
 
 $('#btnAdminUnlock').on('click', function(){
     $('#ocqAdminPw').val(''); $('#ocqAdminMsg').text(''); $('#ocqAdminMask').show();
@@ -2767,39 +2825,58 @@ $('#ocqAdminSubmit').on('click', function(){
     }, 'json').fail(function(){ $('#ocqAdminMsg').text('伺服器通訊失敗'); });
 });
 
+// 報工/出貨紀錄：展開在該筆 BOM「下方」同一張表格內（不用跳窗，才能邊看紀錄邊在上面改日期）；
+// 收合起來的內容留著不清掉，再點開不用重打一次 API。
 $(document).on('click', '.ocq-act-btn', function(){
+    var $tr = $(this).closest('tr');
+    var $actRow = $tr.next('.ocq-act-row');
+    var $cell = $actRow.find('.ocq-act-cell');
+    if ($actRow.is(':visible')) { $actRow.hide(); return; }
+    $actRow.show();
+    if ($cell.data('loaded')) return;
     var bom = $(this).data('bom');
-    $('#ocqActTitle').text('報工／出貨紀錄 － '+bom);
-    $('#ocqActBody').html('<p style="text-align:center;color:#a0521f;"><i class="fa fa-spinner fa-spin"></i> 載入中…</p>');
-    $('#ocqActMask').show();
+    $cell.html('<p style="text-align:center;color:#a0521f;padding:8px;"><i class="fa fa-spinner fa-spin"></i> 載入中…</p>');
     $.post('', { action:'admin_bom_activity', bom: bom }, function(res){
-        if (!res.success) { $('#ocqActBody').html('<p style="color:#c0392b;">'+esc(res.message||'載入失敗')+'</p>'); return; }
-        var h = '<h4 style="margin:0 0 6px;color:#8A5A2B;">報工紀錄（最新100筆）</h4>';
+        if (!res.success) { $cell.html('<p style="color:#c0392b;padding:8px;">'+esc(res.message||'載入失敗')+'</p>'); return; }
+        var h = '<div class="ocq-act-wrap">';
+        h += '<h4 style="margin:0 0 6px;color:#8A5A2B;">報工紀錄（最新100筆）</h4>';
         if (!res.reports.length) { h += '<p class="ocq-hint">（無資料）</p>'; }
         else {
-            h += '<table class="ocq-act-tb"><thead><tr><th>製程</th><th>報工日</th><th>機台架機</th><th>生產時段</th><th>產量</th><th>完工</th><th>備註</th></tr></thead><tbody>';
+            h += '<table class="ocq-act-tb"><thead><tr><th>製程</th><th>報工日</th><th>機台</th><th>架機人員</th><th>生產人員</th><th>生產時段</th><th>產量</th><th>完工</th><th>備註</th></tr></thead><tbody>';
             res.reports.forEach(function(r){
                 h += '<tr><td>'+esc((r.process_no||'')+' '+(r.ProcessName||''))+'</td><td>'+esc(egFmtDate(r.report_date))+'</td>'
-                   + '<td>'+esc(r.setup_start_time||'')+'~'+esc(r.setup_end_time||'')+'</td>'
+                   + '<td>'+esc(r.machine_name||'')+'</td><td>'+esc(r.setup_user||'')+'</td><td>'+esc(r.prod_user||'')+'</td>'
                    + '<td>'+esc(r.production_start_time||'')+'~'+esc(r.production_end_time||'')+'</td>'
                    + '<td>'+esc(r.produced_qty||0)+'</td><td>'+(parseInt(r.is_finished,10)?'是':'否')+'</td><td>'+esc(r.remark||'')+'</td></tr>';
             });
             h += '</tbody></table>';
         }
-        h += '<h4 style="margin:14px 0 6px;color:#8A5A2B;">出貨紀錄（最新100筆）</h4>';
-        if (!res.shipments.length) { h += '<p class="ocq-hint">（無資料）</p>'; }
+        h += '<h4 style="margin:10px 0 6px;color:#8A5A2B;">委外轉出入紀錄（最新100筆）</h4>';
+        if (!res.transfers || !res.transfers.length) { h += '<p class="ocq-hint">（無資料）</p>'; }
         else {
-            h += '<table class="ocq-act-tb"><thead><tr><th>出貨單號</th><th>出貨日期</th><th>客戶</th><th>料號</th><th>出貨數量</th><th>本製令分配量</th></tr></thead><tbody>';
-            res.shipments.forEach(function(s){
-                h += '<tr><td>'+esc(s.IS_number||'')+'</td><td>'+esc(egFmtDate(s.Order_date))+'</td><td>'+esc(s.Client_name||'')+'</td>'
-                   + '<td>'+esc(s.Product_id||'')+'</td><td>'+esc(s.Qty||0)+'</td><td>'+esc(s.shipped_qty||0)+'</td></tr>';
+            h += '<table class="ocq-act-tb"><thead><tr><th>製程</th><th>移轉單號</th><th>轉出日期</th><th>從</th><th>到</th><th>數量</th><th>損耗</th></tr></thead><tbody>';
+            res.transfers.forEach(function(t){
+                h += '<tr><td>'+esc(t.ProcessName||'')+'</td><td>'+esc(t.transfer_no||'')+'</td><td>'+esc(egFmtDate(t.transfer_date))+'</td>'
+                   + '<td>'+esc(t.maker_from_name||'')+'</td><td>'+esc(t.maker_to_name||'')+'</td>'
+                   + '<td>'+esc(t.transfer_qty||0)+'</td><td>'+esc(t.loss_qty||0)+'</td></tr>';
             });
             h += '</tbody></table>';
         }
-        $('#ocqActBody').html(h);
-    }, 'json').fail(function(){ $('#ocqActBody').html('<p style="color:#c0392b;">伺服器通訊失敗</p>'); });
+        h += '<h4 style="margin:10px 0 6px;color:#8A5A2B;">出貨紀錄（最新100筆）</h4>';
+        if (!res.shipments.length) { h += '<p class="ocq-hint">（無資料）</p>'; }
+        else {
+            h += '<table class="ocq-act-tb"><thead><tr><th>出貨單號</th><th>出貨日期</th><th>客戶</th><th>料號</th><th>數量</th><th>單價</th></tr></thead><tbody>';
+            res.shipments.forEach(function(s){
+                h += '<tr><td>'+esc(s.IS_number||'')+'</td><td>'+esc(egFmtDate(s.Order_date))+'</td><td>'+esc(s.Client_name||'')+'</td>'
+                   + '<td>'+esc(s.Product_id||'')+'</td><td>'+esc(s.Qty||0)+'</td><td>'+esc(s.Unit_price||0)+'</td></tr>';
+            });
+            h += '</tbody></table>';
+        }
+        h += '</div>';
+        $cell.html(h);
+        $cell.data('loaded', true);
+    }, 'json').fail(function(){ $cell.html('<p style="color:#c0392b;padding:8px;">伺服器通訊失敗</p>'); });
 });
-$('#ocqActClose, #ocqActCancel').on('click', function(){ $('#ocqActMask').hide(); });
 
 function renderPager(total, page, pageSize){
     var pages = Math.max(1, Math.ceil(total / pageSize));

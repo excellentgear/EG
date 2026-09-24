@@ -2855,6 +2855,7 @@ function renderRel(res) {
           + '<th style="width:110px;">廠商</th><th style="width:60px;">發包數</th>'
           + '<th style="width:' + (PERM.canAdmin ? '118' : '88') + 'px;">發包日</th>'
           + '<th style="width:' + (PERM.canAdmin ? '118' : '88') + 'px;">回廠日</th>'
+          + (PERM.canAdmin ? '<th style="width:112px;">狀態</th>' : '')
           + '<th style="width:64px;">檢驗</th><th style="width:44px;">里程碑</th><th>專案註記</th>'
           + (partsCanEdit ? '<th style="width:50px;"></th>' : '') + '</tr></thead><tbody>';
         var lastBom = '', outCnt = 0;
@@ -2877,6 +2878,7 @@ function renderRel(res) {
               + '<td>' + (isManual ? '－' : (PERM.canAdmin
                     ? '<input type="date" class="p-retdate" value="' + esc(x.return_date || '') + '" style="width:112px;">'
                     : dispDate(x.return_date))) + '</td>'
+              + (PERM.canAdmin ? '<td>' + stateCell(x) + '</td>' : '')
               + '<td>' + (isManual ? '－' : qcLabel(x.qc_check)) + '</td>'
               + '<td><input type="checkbox" class="p-ms" data-eg-skip="1"' + (num(x.is_milestone) ? ' checked' : '')
               + (res.can_edit ? '' : ' disabled') + '></td>'
@@ -3034,6 +3036,16 @@ $(document).on('keydown', '#shipKw', function (e) {
     });
 });
 
+// 移轉狀態是依「發包日/回廠日/有無檢驗紀錄」自動推導出來的（bom_process_date_lib.php），不能直接改；
+// 日期沒有實際變更時瀏覽器不會觸發 change、狀態就不會被重新推算，補一顆「重新整理」用目前的日期原值
+// 再送一次同一支存檔動作，強制依當下規則（含最新的檢驗紀錄）重新推導一次（2026-09-24 使用者實測要求）。
+var PJ_STATE_LABEL = {N:'未發包', ing:'加工中', Q:'QC待驗', P:'生管待移轉', E:'已移轉', skip:'已標記跳過'};
+function stateCell(x) {
+    if (x.source === 'manual') return '－';
+    return '<span class="pj-state">' + esc(PJ_STATE_LABEL[x.state] || x.state || '') + '</span> '
+         + '<a href="javascript:void(0)" class="pj-state-recalc" data-fid="' + num(x.bom_ing_fid) + '" '
+         + 'title="依目前的發包日/回廠日重新推算狀態（日期沒有實際變更時，瀏覽器不會自動觸發存檔）">重新整理</a>';
+}
 function qcLabel(q) {
     var m = { ok: '允收', ng: '驗退', QQ: '異常', AOD: '特採' };
     if (!q) return '－';
@@ -3116,7 +3128,10 @@ function pmSaveProcessDates($tr, ackWarning) {
         project_id: CUR.project.project_id, bom_ing_fid: fid,
         outsource_date: $tr.find('.p-outdate').val(), return_date: $tr.find('.p-retdate').val(),
         ack_warning: ackWarning ? 1 : 0
-    }, 'POST').fail(function (xhr) {
+    }, 'POST').done(function (res) {
+        var st = res && res.row ? res.row.processing_state : null;
+        if (st != null) $tr.find('.pj-state').text(PJ_STATE_LABEL[st] || st);
+    }).fail(function (xhr) {
         var j = xhr.responseJSON || {};
         // 品管/包裝檢驗日期只是提醒（重工/重新發包屬正常例外），確認後可略過直接存
         if (j.need_ack && confirm((j.error || '') + '\n\n確定要照這個日期儲存嗎？')) {
@@ -3128,6 +3143,12 @@ function pmSaveProcessDates($tr, ackWarning) {
     });
 }
 $(document).on('change', '#paneRel .p-outdate, #paneRel .p-retdate', function () {
+    pmSaveProcessDates($(this).closest('tr'), false);
+});
+// 「重新整理」：日期本身沒改變時瀏覽器不會觸發 change，用目前畫面上的日期原值再送一次同一支存檔
+// 動作，強制依當下規則重新推導狀態（使用者實測 B-1150826016 就卡在這裡——存了發包/回廠日但
+// 沒有一起改到「值真的不同」的那一刻，狀態就沒有機會被重新推算）。
+$(document).on('click', '#paneRel .pj-state-recalc', function () {
     pmSaveProcessDates($(this).closest('tr'), false);
 });
 $(document).on('click', '#btnRelAddOrder', function () { openO2P('append'); });
