@@ -1201,6 +1201,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     body.popup-mode #dock { left:0; }
     @media (max-width:991px){ #dock { left:0; } }
     #dock .dockrow { display:flex; flex-wrap:wrap; align-items:center; gap:8px 18px; }
+    #dock .dockrow + .dockrow { margin-top:8px; padding-top:8px; border-top:1px dashed var(--line); }
+    /* 動作鈕列：一律靠右、強制單列不換行（寬度真的不夠時改橫向捲動，不再讓「儲存檢驗結果」被擠到下一行） */
+    #dock .dockrow-actions { flex-wrap:nowrap; justify-content:flex-end; overflow-x:auto; }
+    #dock .dockrow-actions .btn { flex:0 0 auto; }
     #dock .stat { font-size:13px; color:var(--ink2); }
     #dock .stat b { font-size:18px; color:var(--ink); }
     #dock .stat.bad b { color:var(--coral); }
@@ -1469,6 +1473,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
 </div>
 
 <!-- ===================== 底部固定摘要 / 動作列 ===================== -->
+<!-- 使用者 2026-09-24 回報：原本狀態列與動作鈕擠在同一列，寬度不夠時「儲存檢驗結果」會被擠到
+     自動換行的第二列、且孤零零貼在最左邊。拆成兩列：上列狀態（可自由換行，不影響操作）、
+     下列固定放四顆動作鈕並靠右對齊、強制不換行（寬度足夠時一律一列，極窄時改橫向捲動）。 -->
 <div id="dock" style="display:none;">
     <div class="dockrow">
         <span class="stat"><i class="fa fa-user"></i> 檢驗人員 <b><?php echo htmlspecialchars($CURRENT_CNAME !== '' ? $CURRENT_CNAME : '（未取得使用者名稱）', ENT_QUOTES, 'UTF-8'); ?></b></span>
@@ -1477,9 +1484,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         <span class="stat">整體判定 <b id="dk-judge">—</b></span>
         <span class="stat warn" id="dk-warn" style="display:none;"></span>
         <span class="draft-note" id="draft-status"></span>
+        <span style="flex:1 1 auto;"></span>
         <button class="btn btn-default btn-xs" id="btn-save-draft" title="立刻存一次草稿，不必等自動存檔的間隔"><i class="fa fa-clock-o"></i> 儲存草稿</button>
         <button class="btn btn-warm-o btn-sm" id="btn-backfill" style="display:none;" title="設定檢驗日期／檢驗人員／主管審核，補歷史紙本用；新建的單也可以先設定，存檔時一併套用"><i class="fa fa-calendar"></i> 補資料設定</button>
-        <span style="flex:1 1 auto;"></span>
+    </div>
+    <div class="dockrow dockrow-actions">
         <button class="btn btn-default btn-sm" id="btn-dock-extra"><i class="fa fa-sliders"></i> 數量 / 處置備註</button>
         <button class="btn btn-default btn-sm" id="btn-cancel"><i class="fa fa-times"></i> 取消</button>
         <button class="btn btn-coral btn-sm" id="btn-redo"><i class="fa fa-undo"></i> 退回重做</button>
@@ -4290,10 +4299,22 @@ $(function(){
         }, 'json');
     });
 
+    // 同 BOM 同製程（同一 bom_ing_fid）多批到貨、多張檢驗表時，「訂單數」不再只印固定值，
+    // 改自動算出「還沒送驗的量」：訂單數（bi.sqty）扣掉每個批次已登記的送驗數（取該批次最新一次的 incoming_qty，
+    // 同一批的複驗/重做不重複累計）——使用者 2026-09-24 要求。
+    function pendingSummary(){
+        var order=ctx.order_qty||0, used=0;
+        (state.batches||[]).forEach(function(b){
+            if(!b.rounds || !b.rounds.length) return;
+            used += (b.rounds[b.rounds.length-1].incoming_qty||0);
+        });
+        return { left:Math.max(0, order-used), order:order, used:used };
+    }
     function renderCtxBar(){
         var partCell = ctx.part_no
             ? '<a href="javascript:void(0)" class="cv" id="lnk-part-drawing" title="點擊開啟圖檔預覽">'+esc(ctx.part_no)+' <i class="fa fa-picture-o"></i></a>'
             : '<span class="cv">—</span>';
+        var ps=pendingSummary();
         $('#ctx-bar').show().html(
             '<div><b>料號</b>'+partCell+'</div>'+
             (ctx.adhoc ? '' : '<div><b>客戶</b><span class="cv">'+esc(ctx.client||'—')+'</span></div>')+
@@ -4302,7 +4323,9 @@ $(function(){
                 (ctx.adhoc ? esc(ctx.process||'—')
                     : '<select id="sel-switch-process" class="form-control input-sm" style="display:inline-block;width:auto;min-width:170px;font-weight:bold;"><option value="">'+esc(ctx.process||'載入中…')+'</option></select>')
             +'</span></div>'+
-            '<div><b>'+(ctx.adhoc?'送驗數':'訂單數')+'</b><span class="cv">'+(ctx.order_qty||0)+'</span></div>'+
+            (ctx.adhoc
+                ? '<div><b>送驗數</b><span class="cv">'+(ctx.order_qty||0)+'</span></div>'
+                : '<div><b>尚未檢驗 / 訂單數</b><span class="cv" id="ctx-pending" title="訂單數 '+ps.order+' 件，已送驗 '+ps.used+' 件">'+ps.left+' / '+ps.order+'pcs</span></div>')+
             '<div><b>'+(ctx.adhoc?'抽驗數':'建議抽驗')+'</b><span class="cv">'+(ctx.sample_qty||0)+' 件</span></div>'+
             (ctx.ship ? '' : '<div id="kind-box"><b>檢驗性質</b><span class="cv"><span class="ki-btns">'+
                 ['NORMAL','FIRST','LAST'].map(function(k){
@@ -4462,7 +4485,8 @@ $(function(){
             state.demo=false; state.sampleN=h.sample_qty||3;
             state.batches=[{ no:1, status:(h.check_result==='NG'?'NG':'OK'), rounds:[{
                 date:String(h.check_date||'').substring(0,16), status:(h.check_result==='NG'?'NG':'OK'),
-                qc_form_id:h.qc_form_id, round_no:1, ng_qty:h.ng_qty||0,
+                qc_form_id:h.qc_form_id, round_no:1, ng_qty:h.ng_qty||0, incoming_qty:h.incoming_qty||0,
+                inspector_name:h.creator_name||'', approved_name:h.approved_name||'', approved_at:h.approved_at||'',
                 edit_unlocked:h.edit_unlocked, self_grace:(res.self_grace?1:0), edit_log_count:0,
                 ncr_decision:h.ncr_decision, abnormal_order_id:h.abnormal_order_id, abnormal_order_no:h.abnormal_order_no
             }] }]; state.curBatch=0;
@@ -4490,9 +4514,11 @@ $(function(){
             byBatch[b].rounds.push({
                 date:(h.check_date||h.created_at||''), status:(h.check_result==='NG'?'NG':'OK'),
                 qc_form_id:h.qc_form_id, round_no:(h.round_no||1), ng_qty:(h.ng_qty||0),
+                incoming_qty:(parseInt(h.incoming_qty)||0), sample_qty:(parseInt(h.sample_qty)||0),
+                inspector_name:h.inspector_name||'', approved_name:h.approved_name||'', approved_at:h.approved_at||'',
                 edit_unlocked:(parseInt(h.edit_unlocked)||0), self_grace:(parseInt(h.self_grace)||0),
                 edit_log_count:(parseInt(h.edit_log_count)||0),
-                last_edited_by:h.last_edited_by, last_edited_at:h.last_edited_at,
+                last_edited_by:(h.last_edited_name||h.last_edited_by), last_edited_at:h.last_edited_at,
                 ncr_decision:h.ncr_decision, ncr_skip_reason:h.ncr_skip_reason,
                 abnormal_order_id:h.abnormal_order_id, abnormal_order_no:h.abnormal_order_no
             });
@@ -4511,6 +4537,13 @@ $(function(){
         var b=state.batches[state.curBatch];
         $('#batch-summary').text('（目前批次'+(b?b.no:1)+'，已檢驗 '+(b?b.rounds.length:0)+' 次）');
         renderHistory();
+        updatePendingBar();   // 批次/送驗數異動了，「尚未檢驗/訂單數」要跟著重算，不必整包重新載入
+    }
+    function updatePendingBar(){
+        var $el=$('#ctx-pending');
+        if(!$el.length || ctx.adhoc) return;
+        var ps=pendingSummary();
+        $el.attr('title','訂單數 '+ps.order+' 件，已送驗 '+ps.used+' 件').text(ps.left+' / '+ps.order+'pcs');
     }
     $('#btn-toggle-batch').on('click', function(e){
         e.preventDefault();
@@ -4536,6 +4569,9 @@ $(function(){
                 if(r.edit_log_count>0) act+='<button class="btn btn-xs btn-default act-log" data-id="'+r.qc_form_id+'"><i class="fa fa-history"></i> 紀錄</button> ';
                 if(IS_SUPER) act+='<button class="btn btn-xs act-del-rec" data-id="'+r.qc_form_id+'" title="完全刪除此筆檢驗紀錄（測試用，需密碼）" style="background:#8F3016;color:#fff;border:0;"><i class="fa fa-trash"></i></button>';
             }
+            // 使用者 2026-09-24 回報：看不到檢驗數、也看不到誰驗的/誰審的——都補進日期欄下方
+            var insp='<br><small class="muted-help">檢驗：'+esc(r.inspector_name||'—')+'</small>';
+            var appr=r.approved_name ? ('<br><small class="muted-help">審核：'+esc(r.approved_name)+' '+esc(String(r.approved_at||'').substring(0,10))+'</small>') : '';
             var edited=r.last_edited_at ? ('<br><small class="muted-help">最後修改：'+esc(r.last_edited_by||'')+' '+esc(r.last_edited_at)+'</small>') : '';
             var ncr='';
             if(r.status==='NG' && r.qc_form_id){
@@ -4544,12 +4580,12 @@ $(function(){
                 else if(state.can_fill || state.is_supervisor) ncr='<button class="btn btn-xs btn-coral act-open-ncr" data-id="'+r.qc_form_id+'"><i class="fa fa-file-text-o"></i> 開異常單</button>';
                 else ncr='<span class="label label-default">未開單</span>';
             }
-            return '<tr class="history-row"><td>第'+(r.round_no||(i+1))+'次</td><td>'+esc(r.date)+edited+'</td><td>'+statusLabel(r.status)+
-                   '</td><td>不良 '+(r.ng_qty||0)+'</td><td>'+ncr+'</td><td>'+act+'</td></tr>';
+            return '<tr class="history-row"><td>第'+(r.round_no||(i+1))+'次</td><td>'+esc(r.date)+insp+appr+edited+'</td><td>'+statusLabel(r.status)+
+                   '</td><td>'+(r.incoming_qty||0)+' / '+(r.ng_qty||0)+'</td><td>'+ncr+'</td><td>'+act+'</td></tr>';
         }).join('');
         $('#batch-history').html(
             '<table class="table table-condensed table-bordered" style="background:#fff;"><thead>'+
-            '<tr><th width="70">次數</th><th width="180">日期</th><th width="90">結果</th><th width="80">不良</th><th width="110">異常單</th><th width="230">操作</th></tr>'+
+            '<tr><th width="70">次數</th><th width="230">日期</th><th width="90">結果</th><th width="110">檢驗數/不良數</th><th width="110">異常單</th><th width="230">操作</th></tr>'+
             '</thead><tbody>'+rows+'</tbody></table>');
     }
     $('#batch-history').on('click','.act-unlock', function(){
@@ -5416,7 +5452,8 @@ $(function(){
                 var s=res.summary;
                 state.bfStage=null; renderBfStageBanner();
                 flushSampleChanges(res.qc_form_id);
-                state.batches[0].rounds.push({ date:'剛剛', status:s.check_result, qc_form_id:res.qc_form_id, round_no:1, ng_qty:s.ng_qty });
+                state.batches[0].rounds.push({ date:'剛剛', status:s.check_result, qc_form_id:res.qc_form_id, round_no:1, ng_qty:s.ng_qty,
+                                               incoming_qty:(parseInt($('#inp-qty').val())||0) });
                 state.batches[0].status=s.check_result;
                 renderBatches();
                 function done(){
@@ -5440,7 +5477,8 @@ $(function(){
                 var s=res.summary;
                 state.bfStage=null; renderBfStageBanner();
                 flushSampleChanges(res.qc_form_id);
-                state.batches[0].rounds.push({ date:'剛剛', status:s.check_result, qc_form_id:res.qc_form_id, round_no:1, ng_qty:s.ng_qty });
+                state.batches[0].rounds.push({ date:'剛剛', status:s.check_result, qc_form_id:res.qc_form_id, round_no:1, ng_qty:s.ng_qty,
+                                               incoming_qty:(parseInt($('#inp-qty').val())||0) });
                 state.batches[0].status=s.check_result;
                 renderBatches();
                 function done(){
@@ -5467,7 +5505,8 @@ $(function(){
             state.bfStage=null; renderBfStageBanner();
             flushSampleChanges(res.qc_form_id);
             b.rounds.push({ date:'剛剛', status:(asRedo?'NG':s.check_result), qc_form_id:res.qc_form_id,
-                            round_no:(b.rounds.length+1), ng_qty:s.ng_qty });
+                            round_no:(b.rounds.length+1), ng_qty:s.ng_qty,
+                            incoming_qty:(parseInt($('#inp-qty').val())||0) });
             b.status = asRedo ? 'REDO' : s.check_result;
             renderBatches();
             var hasOpener = window.opener && !window.opener.closed;

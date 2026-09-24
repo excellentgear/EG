@@ -235,15 +235,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sample_qty = qc_suggest_sample_qty($pdo, (int)$ctx['sqty']);
 
             // 既有檢驗歷程（批次/複驗，含異常單決定）
+            // 使用者 2026-09-24 回報：「批次與檢驗歷程」看不到檢驗數、也看不到是誰驗的/誰審的——
+            // 一併帶回檢驗人員（inspector_by，沒填才退回 created_by）、審核人員與審核日期（approved_by/approved_at），
+            // 以及「最後修改」欄一併解析成姓名（last_edited_by 存的是 user id，原本直接印數字，同一個坑）。
             $history = [];
             try {
                 $hq = "SELECT f.qc_form_id, f.batch_no, f.round_no, f.incoming_qty, f.sample_qty, f.ng_qty, f.check_result,
                               f.check_date, f.created_at, f.created_by, f.main_remark,
                               f.edit_unlocked, f.last_edited_by, f.last_edited_at,
+                              f.inspector_by, f.approved_by, f.approved_at,
                               f.ncr_decision, f.ncr_skip_reason, f.abnormal_order_id, qa.abnormal_order_no,
+                              COALESCE(NULLIF(ui.user_cname,''), ui.user_uname) AS inspector_name,
+                              COALESCE(NULLIF(ua.user_cname,''), ua.user_uname) AS approved_name,
+                              COALESCE(NULLIF(ue.user_cname,''), ue.user_uname) AS last_edited_name,
                               (SELECT COUNT(*) FROM qc_inspection_edit_log el WHERE el.qc_form_id = f.qc_form_id) AS edit_log_count
                        FROM qc_check_form f
                        LEFT JOIN qa_abnormal_order qa ON qa.id = f.abnormal_order_id
+                       LEFT JOIN user ui ON ui.id = COALESCE(f.inspector_by, f.created_by)
+                       LEFT JOIN user ua ON ua.id = f.approved_by
+                       LEFT JOIN user ue ON ue.id = f.last_edited_by
                        WHERE f.bom_ing_fid=? AND f.status <> 'DRAFT' ORDER BY f.batch_no ASC, f.round_no ASC, f.qc_form_id ASC";
                 $hs = $pdo->prepare($hq); $hs->execute([$fid]);
                 $history = $hs->fetchAll(PDO::FETCH_ASSOC);
