@@ -17,7 +17,6 @@
 // 完整模式在此之外，展開最後一批最後一輪的完整實測表格。
 // =============================================================================
 include_once '../../src/common/_config.php';
-include_once '../../src/common/asdoc_lib.php';
 if (empty($_SESSION['id'])) { http_response_code(403); exit('請先登入'); }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_data') {
@@ -193,6 +192,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
 
         // ── 公司全名／綁定 AS 文件名稱（與單製程列印同一組設定，表頭一致）──
+        // 這是「總覽報告」不是單一份 AS 品質紀錄，故只借用文件名稱當標題，
+        // 不印 AS 文件編號（編號只在單一製程列印時才印，見 inspection_entry_v2.php；
+        // 2026-09-24 使用者明確要求本頁不顯示編號）。
         $company = '';
         $r = $pdo->query("SELECT customer_full, customer FROM customer_list WHERE is_own_company=1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
         if ($r) $company = trim((string)($r['customer_full'] ?: $r['customer']));
@@ -200,18 +202,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $s = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key='qc_inspection_as_doc_id' LIMIT 1");
         $s->execute();
         $docId = (int)($s->fetchColumn() ?: 0);
-        $asDocNo = '';
         if ($docId) {
-            // 本頁合併多製程、每製程各自的檢驗日期不同，版次以「這批合印資料中最新一筆檢驗日期」回推
-            // （ai-rules/16 第三之二節；單一製程列印才用該筆自己的檢驗日期，見 inspection_entry_v2.php）
-            $latestCheckDate = null;
-            foreach ($formsByFid as $rows) foreach ($rows as $fr) {
-                if (!empty($fr['check_date'])) {
-                    $cd = substr((string)$fr['check_date'], 0, 10);
-                    if ($latestCheckDate === null || $cd > $latestCheckDate) $latestCheckDate = $cd;
-                }
-            }
-            $asDocNo = eg_asdoc_no_asof_id($pdo, $docId, $latestCheckDate);
             $d = $pdo->prepare("SELECT doc_name FROM as_document WHERE id=?");
             $d->execute([$docId]);
             if ($dn = $d->fetchColumn()) $docName = $dn;
@@ -306,7 +297,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (!$shipInserted) $processes[] = $buildProcEntry($SHIP_FID, ['sn' => '', 'name' => '出貨檢驗'], null, null, false);
 
         echo json_encode(['success' => true, 'bom' => $bom, 'client' => $baseRow['Client_Name'], 'd_id' => $baseRow['d_id'],
-            'total_qty' => (int)$baseRow['sqty'], 'company' => $company, 'doc_name' => $docName, 'as_doc_no' => $asDocNo,
+            'total_qty' => (int)$baseRow['sqty'], 'company' => $company, 'doc_name' => $docName,
             'drawing' => $drawing, 'processes' => $processes], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -637,7 +628,7 @@ function doPrintImpl(mode, paper, orient){
         });
     }
 
-    var asTxt = DATA.as_doc_no ? String(DATA.as_doc_no).replace(/['\\]/g,'') : '';
+    // 這是合併總覽報告不是單一份 AS 品質紀錄，故不印 AS 文件編號（2026-09-24 使用者明確要求）。
     var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;font-size:11px;line-height:1.2;}'
         + '.pm-co{font-size:20px;font-weight:bold;text-align:center;}'
         + '.pm-title{font-size:15px;font-weight:bold;text-align:center;margin:2px 0 6px;}'
@@ -676,9 +667,7 @@ function doPrintImpl(mode, paper, orient){
         + 'table.pm-items td.tl{text-align:left;}'
         + '.pm-ng-cell{color:#000;font-weight:bold;text-decoration:underline;}'
         + '.pm-pack-tag{display:inline-block;margin-left:6px;background:#F0A24B;color:#4A3524;border-radius:8px;padding:0 6px;font-size:9px;font-weight:bold;vertical-align:middle;}'
-        + '@page{size:'+paper+' '+orient+';margin:12mm 10mm 18mm;'
-        + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
-        + '}';
+        + '@page{size:'+paper+' '+orient+';margin:12mm 10mm 18mm;}';
 
     var w=window.open('','_blank');
     w.document.write('<html><head><meta charset="utf-8"><title>全製程合併列印 - '+esc(DATA.bom)+'</title><style>'+css+'</style></head><body>'
