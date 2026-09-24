@@ -282,6 +282,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         // 4. 取得包裝排程清單
+        //    2026-09-24 使用者回報：補登暫存的紀錄（is_backfill=1, status=open）沒有列在待包裝清單上——
+        //    根因是 `b.processing_state<>1`（ERP結案）這條排除掉了「ERP已結案但包裝站別仍在ing」的
+        //    BOM（此類 BOM 只能靠「補登包裝紀錄」搜尋找到、無法從一般清單開啟；暫存後卻又被同一條排除）。
+        //    修法：只要這個 bom_ing_fid 已有暫存中(open)的包裝紀錄，一律強制列入，不受 ERP結案狀態影響。
+        //    另補上 ship_date：若此 BOM 已有實際出貨紀錄(is_bom_map→is_list)，交期欄改顯示出貨單日期，
+        //    不受判斷方式或站別影響（is_list.Order_date 全站都是拿來當出貨日用，見 shipping_lib.php）。
         if ($action === 'list_boms') {
             $procNos = get_packing_process_nos($pdo);
             if (empty($procNos)) {
@@ -308,7 +314,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         d.Revision,
                         pp.priority_type       AS pack_priority,
                         pp.sort_seq,
-                        qpi_open.packing_inspection_id AS draft_id
+                        qpi_open.packing_inspection_id AS draft_id,
+                        ship_agg.last_ship_date AS ship_date
                     FROM bom_ing bi
                     JOIN bom b               ON bi.bom = b.bom
                     LEFT JOIN order_list ol  ON b.o_order_id = ol.Order_id
@@ -323,9 +330,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     ) bopm_agg ON bopm_agg.bom = bi.bom
                     LEFT JOIN qc_packing_inspection qpi_open
                            ON qpi_open.bom_ing_fid = bi.bom_ing_fid AND qpi_open.status = 'open'
+                    LEFT JOIN (
+                        SELECT ibm.bom, MAX(il.Order_date) AS last_ship_date
+                        FROM is_bom_map ibm
+                        JOIN is_list il ON il.IS_id = ibm.IS_id
+                        GROUP BY ibm.bom
+                    ) ship_agg ON ship_agg.bom = bi.bom
                     WHERE bi.process_no IN ($inQuery)
-                      AND bi.processing_state = 'ing'
-                      AND (b.processing_state <> 1 OR b.processing_state IS NULL)
+                      AND (
+                            (bi.processing_state = 'ing' AND (b.processing_state <> 1 OR b.processing_state IS NULL))
+                            OR qpi_open.packing_inspection_id IS NOT NULL
+                          )
                       AND NOT EXISTS (
                           SELECT 1 FROM qc_packing_inspection qpi
                           WHERE qpi.bom_ing_fid = bi.bom_ing_fid AND qpi.status = 'closed'
@@ -547,6 +562,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $okQty = $orderQty - $ngQty;
             if ($okQty < 0) throw new Exception('NG數量不可大於數量');
+
+            // 來料不良退回數＋加工不良數 不得大於 NG總數（前端已擋一次，這裡同規則再擋一次＝鐵律8）
+            $ngReturnMaterial = intval((is_array($packagingData) ? ($packagingData['ng_return_material'] ?? 0) : 0));
+            $ngProcessDefect = intval((is_array($packagingData) ? ($packagingData['ng_process_defect'] ?? 0) : 0));
+            if ($ngReturnMaterial + $ngProcessDefect > $ngQty) {
+                throw new Exception('來料不良退回數 + 加工不良數 不可大於 NG總數(' . $ngQty . ')');
+            }
 
             // 直接出貨／成品入庫方式檢核（前端已擋一次，這裡同規則再擋一次＝鐵律8）
             if ($isFullShip) {
@@ -958,6 +980,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         .due-soon    { background: #fff4e5; color: #e8920c; }
         .due-ok      { background: #eafaf1; color: #27ae60; }
         .due-none    { color: #aaa; font-style: italic; }
+        .due-shipped { background: #eef3fb; color: #3a6ea5; }
 
         .bom-code { font-weight: 700; color: #2c3e50; }
         .rev-badge { display:inline-block; background:#eef1f4; color:#667; border-radius:4px; padding:0 5px; font-size:11px; margin-left:4px; }
@@ -1012,6 +1035,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         .pkg-row { margin-bottom: 5px; }
         .pkg-remove { color: #d9534f; cursor: pointer; margin-left: 5px; }
         .ng-value { background-color: #f2dede !important; color: #a94442; font-weight: bold; }
+        .has-error-border { border-color: #a94442 !important; box-shadow: inset 0 1px 1px rgba(0,0,0,.075), 0 0 4px rgba(169,68,66,.6); }
         #pk-window-overlay {
             position: fixed; top:0; left:0; right:0; bottom:0;
             background: rgba(0,0,0,0.25); z-index: 10055; display:none;
@@ -1370,6 +1394,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         <span class="input-group-addon">個</span>
                     </div>
                 </div>
+                <div class="col-md-4">
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-addon">架機件 歸還</span>
+                        <input type="number" id="pkg-return-fixture" class="form-control" placeholder="數量">
+                        <span class="input-group-addon">個</span>
+                    </div>
+                </div>
             </div>
 
             <!-- 3. 容器與出貨 -->
@@ -1386,6 +1417,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             <label>本次出貨數量：</label>
                             <input type="number" id="pkg-ship-now-qty" class="form-control input-sm" style="width:100px;" min="1">
                         </div>
+                        <div class="form-inline" style="margin-top:6px;">
+                            <label>來料不良退回數：</label>
+                            <input type="number" id="pkg-ng-return-material" class="form-control input-sm" style="width:80px;" min="0" placeholder="0">
+                            <label style="margin-left:12px;">加工不良數：</label>
+                            <input type="number" id="pkg-ng-process-defect" class="form-control input-sm" style="width:80px;" min="0" placeholder="0">
+                        </div>
+                        <div class="text-muted small" id="pkg-ng-breakdown-hint" style="margin-top:4px;"></div>
                     </div>
                 </div>
                 <div class="col-md-6">
@@ -1489,7 +1527,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <ol>
                     <li>點擊清單中任一列開啟填寫視窗。</li>
                     <li>填寫外觀檢驗項目、防護與容器資訊。</li>
-                    <li>若本批數量有一部分要<strong>直接出貨</strong>，勾選「直接出貨」並填入本次出貨數量；若還有剩餘數量，需再選擇成品入庫方式。</li>
+                    <li>若本批數量有一部分要<strong>直接出貨</strong>，勾選「直接出貨」並填入本次出貨數量；若還有剩餘數量，需再選擇成品入庫方式。可一併填入「來料不良退回數」「加工不良數」細分NG組成，兩者相加不可大於NG總數。</li>
                     <li>若「判定結果」不手動勾選，存檔時系統會自動判定：良品數＝BOM總數（全數完成且零NG）才自動判為<strong>合格</strong>，其餘一律列為<strong>待判定</strong>，需人工確認後手動改成合格或不合格。</li>
                     <li>尚未填完可按「<strong>暫存</strong>」，資料會保留、BOM 仍留在待包裝清單（標示「暫存中」），可稍後回來繼續填寫。</li>
                     <li>填完按「<strong>完成包裝</strong>」即結案：紀錄鎖定不可再修改、BOM 從待包裝清單移除並列入「已結案清單」、同時通知生管可安排出貨。</li>
@@ -1543,8 +1581,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (p === 'U') return 'row-pri-U';
             return 'row-pri-normal';
         }
-        // 交期欄位 HTML（含逾期/倒數天數）
-        function dueCell(dateStr) {
+        // 交期欄位 HTML（含逾期/倒數天數）；若此 BOM 已有實際出貨紀錄，改顯示出貨單日期（不再顯示交期倒數，
+        // 已經出貨的批次再提醒逾期沒有意義，也避免使用者誤以為還沒出貨）
+        function dueCell(dateStr, shipDate) {
+            if (shipDate) return '<span class="due-date">' + shipDate + '</span><span class="due-tag due-shipped">已出貨</span>';
             if (!dateStr) return '<span class="due-none">無交期</span>';
             var d = new Date(dateStr + 'T00:00:00');
             var today = new Date(); today.setHours(0, 0, 0, 0);
@@ -1582,7 +1622,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     var draftTag = r.has_draft ? ' <span class="label label-info">暫存中</span>' : '';
                     html += '<tr class="pk-row ' + rowPriClass(r.eff_priority) + '" data-fid="' + r.bom_ing_fid + '">' +
                         '<td class="text-center"><i class="fa fa-bars pk-drag-handle" title="拖曳調整順序"></i></td>' +
-                        '<td>' + dueCell(r.delivery_date) + (r.order_cnt ? ' <span class="text-muted small">(綁定' + r.order_cnt + '張訂單)</span>' : '') + '</td>' +
+                        '<td>' + dueCell(r.delivery_date, r.ship_date) + (r.order_cnt ? ' <span class="text-muted small">(綁定' + r.order_cnt + '張訂單)</span>' : '') + '</td>' +
                         '<td>' +
                           '<select class="form-control input-sm pk-pri-select" onclick="event.stopPropagation();">' +
                             '<option value="" ' + (r.eff_priority !== 'E' && r.eff_priority !== 'U' ? 'selected' : '') + '>一般</option>' +
@@ -1687,7 +1727,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $('#pkg-judge-hint').text('');
             $('.pkg-rust, .pkg-collision').prop('checked', false).closest('label').removeClass('active');
             $('.pkg-rust-other, .pkg-collision-other, .pkg-collision-detail, .pkg-collision-detail-2').val('').hide();
-            $('#pkg-return-jig, #pkg-return-sample, #pkg-shipment-desc, #pkg-pallet-qty, #pkg-actual-qty, #pkg-remark').val('');
+            $('#pkg-return-jig, #pkg-return-sample, #pkg-return-fixture, #pkg-shipment-desc, #pkg-pallet-qty, #pkg-actual-qty, #pkg-remark').val('');
+            $('#pkg-ng-return-material, #pkg-ng-process-defect').val('');
+            $('#pkg-ng-breakdown-hint').text('').removeClass('text-danger');
             $('input[name="pkg-storage-method"][value="direct"]').prop('checked', true);
             $('#pkg-direct-ship').prop('checked', false);
             $('#pkg-ship-now-wrap').hide();
@@ -1830,6 +1872,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $('.pkg-collision-detail-2').val(pd.collision_detail_2 || '');
             $('#pkg-return-jig').val(pd.return_jig || '');
             $('#pkg-return-sample').val(pd.return_sample || '');
+            $('#pkg-return-fixture').val(pd.return_fixture || '');
+            $('#pkg-ng-return-material').val(pd.ng_return_material || '');
+            $('#pkg-ng-process-defect').val(pd.ng_process_defect || '');
             $('#pkg-shipment-desc').val(pd.shipment_desc || '');
 
             $('#pkg-rows-container').empty();
@@ -1927,7 +1972,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 '<span class="text-success">小計(OK): ' + okQty + '</span></td></tr>'
             );
             updateJudgeHint(okQty);
+            checkNgBreakdown(totalNg);
         }
+
+        // 來料不良退回數＋加工不良數 不得大於 NG總數（即時檢查，存檔前再擋一次＝鐵律8）
+        function ngBreakdownSum() {
+            return (parseFloat($('#pkg-ng-return-material').val()) || 0) + (parseFloat($('#pkg-ng-process-defect').val()) || 0);
+        }
+        function checkNgBreakdown(totalNg) {
+            if (totalNg == null) {
+                totalNg = 0;
+                $('.pkg-ng-qty').each(function () { totalNg += (parseFloat($(this).val()) || 0); });
+            }
+            var sum = ngBreakdownSum();
+            var $hint = $('#pkg-ng-breakdown-hint');
+            var $m = $('#pkg-ng-return-material'), $p = $('#pkg-ng-process-defect');
+            if (sum > totalNg) {
+                $hint.text('來料不良退回數 + 加工不良數 = ' + sum + '，不可大於 NG總數(' + totalNg + ')').addClass('text-danger');
+                $m.add($p).addClass('has-error-border');
+                return false;
+            }
+            $hint.text('').removeClass('text-danger');
+            $m.add($p).removeClass('has-error-border');
+            return true;
+        }
+        $(document).on('input', '#pkg-ng-return-material, #pkg-ng-process-defect', function () { checkNgBreakdown(); });
 
         // 判定結果自動判定的即時提示：跟著「良品數」「BOM總數」變動更新，讓填表人知道沒手動勾選時會存成什麼
         function updateJudgeHint(okQty) {
@@ -2073,6 +2142,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (shipNowQty > okQty) { alert('本次出貨數量不可大於可出/入庫數量(' + okQty + ')'); $('#pkg-ship-now-qty').focus(); return; }
                 if (warehouseQty > 0 && !storageMethod) { alert('尚有 ' + warehouseQty + ' 個需要入庫，請選擇成品入庫方式'); return; }
             }
+            if (!checkNgBreakdown(totalNg)) { alert('來料不良退回數 + 加工不良數 不可大於 NG總數(' + totalNg + ')'); $('#pkg-ng-return-material').focus(); return; }
             if (currentMode === 'backfill') {
                 if (!$('#f-record-date').val()) { alert('請選擇補登日期'); $('#f-record-date').focus(); return; }
             }
@@ -2093,6 +2163,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 collision_other: $('.pkg-collision-other').val(),
                 return_jig: $('#pkg-return-jig').val(),
                 return_sample: $('#pkg-return-sample').val(),
+                return_fixture: $('#pkg-return-fixture').val(),
+                ng_return_material: $('#pkg-ng-return-material').val(),
+                ng_process_defect: $('#pkg-ng-process-defect').val(),
                 shipment_desc: $('#pkg-shipment-desc').val(),
                 storage_method: storageMethod,
                 pallet_qty: $('#pkg-pallet-qty').val(),
