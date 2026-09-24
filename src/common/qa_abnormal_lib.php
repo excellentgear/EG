@@ -1502,6 +1502,80 @@ function qab_decider_people(PDO $db, array $cfg): array
     return $out;
 }
 
+/**
+ * 這張單目前設定的決策者，要顯示在「待決策」狀態旁的部門與姓名（畫面與通知共用同一份，鐵律4）。
+ * ①指定了特定人（decider_user_id）：直接印他目前的部門職稱＋姓名。
+ * ②只設了範圍（decider_cfg_id，任一人皆可）：把範圍內目前真的在職的人姓名都列出來——
+ *   只印「部門／職稱」看不出實際是誰要處理，範圍內一個人都沒有時才退回純文字並註明。
+ * ③兩個都沒設：回傳 null（畫面不加註、通知也不會發，那是還沒指定決策者的正常狀態）。
+ */
+function qab_decider_display(PDO $db, array $o): ?array
+{
+    $uid = (int)($o['decider_user_id'] ?? 0);
+    if ($uid > 0) {
+        $st = $db->prepare("SELECT user_cname FROM `user` WHERE id=?");
+        $st->execute([$uid]);
+        $name = trim((string)$st->fetchColumn());
+        if ($name === '') return null;
+        $pi = qab_person_asof($db, $uid, date('Y-m-d'));
+        $dept = trim($pi['dept'] . ($pi['position'] !== '' ? ' ' . $pi['position'] : ''));
+        return ['dept' => $dept, 'names' => [$name], 'label' => trim($dept . ' ' . $name)];
+    }
+    $cfgId = (int)($o['decider_cfg_id'] ?? 0);
+    if ($cfgId <= 0) return null;
+    $cfg = null;
+    foreach (qab_decider_cfgs($db, 'decider', false) as $c) {
+        if ((int)$c['cfg_id'] === $cfgId) { $cfg = $c; break; }
+    }
+    if (!$cfg) return null;
+    $names = [];
+    foreach (qab_decider_people($db, $cfg) as $p) {
+        $n = trim((string)($p['user_cname'] ?? ''));
+        if ($n !== '') $names[] = $n;
+    }
+    $dept = (string)$cfg['dept_name'];
+    $label = $names ? ($dept . '　' . implode('、', $names)) : ((string)$cfg['show_name'] . '（目前查無在職人員）');
+    return ['dept' => $dept, 'names' => $names, 'label' => $label];
+}
+
+/**
+ * 通知這張單目前設定的決策者：可以送出決策了——2026-09-24 使用者回報：自動開立單品管確認完成
+ * 送決策後，設定的決策主管完全沒收到通知，只能靠自己回來翻清單才會發現。一律走 `qa_notify.php`
+ * 既有的 `eg_qa_insert_event()`（唯一通知入口，鐵律4），沒有指定決策者、或範圍內查無在職人員時
+ * 安靜不發，不是錯誤——那種情況本來就要靠人工回來補指定決策者。
+ */
+function qab_notify_decider(PDO $db, int $orderId, array $o): void
+{
+    $dd = qab_decider_display($db, $o);
+    if (!$dd || !$dd['names']) return;
+    $uid = (int)($o['decider_user_id'] ?? 0);
+    $targetIds = [];
+    if ($uid > 0) {
+        $targetIds = [$uid];
+    } else {
+        $cfgId = (int)($o['decider_cfg_id'] ?? 0);
+        foreach (qab_decider_cfgs($db, 'decider', false) as $c) {
+            if ((int)$c['cfg_id'] === $cfgId) {
+                foreach (qab_decider_people($db, $c) as $p) $targetIds[] = (int)$p['id'];
+                break;
+            }
+        }
+    }
+    $targetIds = array_values(array_unique(array_filter($targetIds)));
+    if (!$targetIds) return;
+    require_once __DIR__ . '/qa_notify.php';
+    $no = (string)($o['abnormal_order_no'] ?? '');
+    $title = '品質異常單待決策：' . $no;
+    $content = ($o['client_name'] ? '客戶 ' . $o['client_name'] . '，' : '')
+             . ($o['part_no'] ? '料號 ' . $o['part_no'] . '，' : '')
+             . '異常單 ' . $no . ' 已可送出處置方式決策，請前往確認並填寫。';
+    $targets = array_map(function ($id) { return ['type' => 'user', 'id' => $id, 'mode' => 'read']; }, $targetIds);
+    eg_qa_insert_event($db, $orderId, $title, $content, $targets, null, 0, [
+        'ref_type' => 'QA_DECIDE',
+        'url' => '/EGsystem/views/QA/qa_abnormal_form.php?id=' . $orderId,
+    ]);
+}
+
 /** 這個人是否落在某一類決策者範圍內（decider / top） */
 function qab_user_in_decider(PDO $db, int $uid, string $kind): bool
 {
@@ -2073,6 +2147,15 @@ function qab_order(PDO $db, int $id): ?array
     $o['final']   = qab_final($db, $o, $optMap);
     $o['need_gm'] = qab_need_gm($db, $o, $optMap);
     $o['status']  = qab_status($o);
+    // 「待決策」時附上決策者部門與姓名——2026-09-24 使用者要求：不然畫面上只看得到一句「待決策」，
+    // 不知道要去催誰。沒指定決策者（或範圍內查無在職人員）時維持原樣不加註。
+    if (($o['status']['code'] ?? '') === 'decide') {
+        $dd = qab_decider_display($db, $o);
+        if ($dd) {
+            $o['status']['decider'] = $dd;
+            $o['status']['label'] .= '（' . $dd['label'] . '）';
+        }
+    }
 
     // 最終決策者（畫面與通知都讀這一份；來源是全站統一綁定）
     $o['gm_person'] = qab_gm_person($db);
@@ -2216,6 +2299,7 @@ function qab_list(PDO $db, array $f = []): array
                    o.part_no, o.bom_no, o.ir_no, o.responsible_unit, o.ng_qty, o.sqty, o.is_closed, o.closed_at,
                    o.scrap_no, o.gm_deduct, o.abnormal_phenomenon, o.created_by, cu.user_cname AS created_name,
                    o.deleted_at, o.deleted_by, dl.user_cname AS deleted_name, o.auto_opened, o.qc_review_by,
+                   o.decider_cfg_id, o.decider_user_id,
                    pn.ProcessName AS resp_process_name, ml.maker_id AS resp_vendor_name
             FROM qa_abnormal_order o
             LEFT JOIN `user` cu ON cu.id=o.created_by
@@ -2258,6 +2342,14 @@ function qab_list(PDO $db, array $f = []): array
         elseif ($r['need_gm'])            $r['status'] = ['code' => 'gm', 'label' => '待總經理裁示'];
         elseif (($r['gm_deduct'] || $r['final']['is_scrap'])) $r['status'] = ['code' => 'deduct', 'label' => '扣款確認中'];
         else                              $r['status'] = ['code' => 'ready', 'label' => '可結案'];
+        // 「待決策」在清單上也附上決策者部門與姓名，理由同 qab_order()（2026-09-24 使用者要求）
+        if ($r['status']['code'] === 'decide') {
+            $dd = qab_decider_display($db, $r);
+            if ($dd) {
+                $r['status']['decider'] = $dd;
+                $r['status']['label'] .= '（' . $dd['label'] . '）';
+            }
+        }
         $r['final_label'] = implode('、', $r['final']['names']);
     }
     unset($r);

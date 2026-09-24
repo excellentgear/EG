@@ -252,8 +252,14 @@ case 'save_head': {
     }
     if (array_key_exists('defect_detail', $_POST))       $put('defect_detail', $strOrNull($_POST['defect_detail'], 2000));
     if (array_key_exists('qa_ps', $_POST))               $put('qa_ps', $strOrNull($_POST['qa_ps'], 2000));
-    if (array_key_exists('decider_cfg_id', $_POST))      $put('decider_cfg_id', $intOrNull($_POST['decider_cfg_id']));
-    if (array_key_exists('decider_user_id', $_POST))     $put('decider_user_id', $intOrNull($_POST['decider_user_id']));
+    // 決策者是不是這次才被指定/換人——決定要不要通知新的決策者送出決策（下面存檔完之後才判斷）
+    $oldDeciderCfg  = $o['decider_cfg_id']  !== null ? (int)$o['decider_cfg_id']  : null;
+    $oldDeciderUser = $o['decider_user_id'] !== null ? (int)$o['decider_user_id'] : null;
+    $newDeciderCfg  = array_key_exists('decider_cfg_id', $_POST)  ? $intOrNull($_POST['decider_cfg_id'])  : $oldDeciderCfg;
+    $newDeciderUser = array_key_exists('decider_user_id', $_POST) ? $intOrNull($_POST['decider_user_id']) : $oldDeciderUser;
+    $deciderChanged = ($newDeciderCfg !== $oldDeciderCfg) || ($newDeciderUser !== $oldDeciderUser);
+    if (array_key_exists('decider_cfg_id', $_POST))      $put('decider_cfg_id', $newDeciderCfg);
+    if (array_key_exists('decider_user_id', $_POST))     $put('decider_user_id', $newDeciderUser);
     // 責任單位是一組（製程＋廠商＋顯示字串＋廠內旗標），只要其中一個有送就整組一起寫；鎖定中視同沒有異動
     $respTouched = !$respLocked && (array_key_exists('resp_process_no', $_POST) || array_key_exists('responsible_vendor_id', $_POST));
     if ($respTouched) {
@@ -312,7 +318,13 @@ case 'save_head': {
     if ((int)($o['ir_id'] ?? 0) !== (int)$irAfter) qab_sync_ir_flag($db, (int)($o['ir_id'] ?? 0));
     qab_sync_ir_flag($db, (int)$irAfter);
     $log($id, 'head', '', '已更新填寫內容', trim((string)($_POST['reason'] ?? '')));
-    jout(true, ['order' => qab_order($db, $id)]);
+    $fresh = qab_order($db, $id);
+    // 這次才指定/換了決策者，且這張單現在剛好就是「待決策」——通知新指定的決策者去送決策，
+    // 不然只有自動開立單走 qc_review_complete 那條路會通知，人工開單指定決策者卻永遠不會通知到。
+    if ($deciderChanged && (($newDeciderCfg ?? 0) > 0 || ($newDeciderUser ?? 0) > 0) && ($fresh['status']['code'] ?? '') === 'decide') {
+        try { qab_notify_decider($db, $id, $fresh); } catch (Throwable $e) {}
+    }
+    jout(true, ['order' => $fresh]);
 }
 
 /* ═══════════ 異常原因分類（結案前可改；填表人或有權限者） ═══════════ */
@@ -1015,7 +1027,13 @@ case 'qc_review_complete': {
     $db->prepare("UPDATE qa_abnormal_order SET qc_review_by=?, qc_review_at=NOW(), updated_by=?, updated_at=NOW() WHERE id=?")
        ->execute([$uid, $uid, (int)$o['id']]);
     $log((int)$o['id'], 'qc_review', '', '品管確認說明完成');
-    jout(true, ['order' => qab_order($db, (int)$o['id'])]);
+    $fresh = qab_order($db, (int)$o['id']);
+    // 品管確認完成後這張單多半立刻變成「待決策」——2026-09-24 使用者回報：原本這一步之後設定的
+    // 決策主管完全收不到通知，只能靠自己回來翻清單才會發現；沒有輪次卡著、也還沒有處置/裁示時才通知。
+    if (($fresh['status']['code'] ?? '') === 'decide') {
+        try { qab_notify_decider($db, (int)$o['id'], $fresh); } catch (Throwable $e) {}
+    }
+    jout(true, ['order' => $fresh]);
 }
 case 'qc_review_clear': {   // 管理員：確認錯了要重來，或要重新指定簽章者
     $o = $mustOrder((int)($_POST['id'] ?? 0));
