@@ -193,6 +193,38 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
         .sg-pick .sg-h { font-size:13px; color:#4E2C0B; font-weight:bold; margin-bottom:4px; }
         .sg-pick .sg-f { font-size:12px; color:#8A5A2B; }
 
+        /* 固定標題範本設定（2026-09-24 新增） */
+        .ht-lvl { margin:8px 0 10px; font-size:13px; color:#6B471A; }
+        .ht-cols { display:flex; gap:14px; }
+        .ht-col { flex:1 1 50%; min-width:0; }
+        .ht-col-h { font-size:13px; font-weight:bold; color:#6B471A; margin-bottom:5px; }
+        .ht-hint { font-size:11.5px; color:#8A5A2B; line-height:1.6; margin-bottom:6px; }
+        .ht-tree { border:1px solid #e4d3ba; border-radius:4px; padding:6px; min-height:80px;
+            max-height:420px; overflow:auto; margin-bottom:7px; background:#fff; }
+        .ht-top { border:1px solid #EADCC4; border-radius:4px; padding:6px 7px; margin-bottom:6px; background:#FFF9F0; }
+        .ht-top-row { display:flex; align-items:center; gap:5px; }
+        .ht-top-row input { flex:1 1 auto; }
+        .ht-sub-list { margin:6px 0 4px 20px; }
+        .ht-sub-row { display:flex; align-items:center; gap:5px; margin-bottom:4px; }
+        .ht-sub-row input { flex:1 1 auto; }
+        .ht-sub-row:before { content:"—"; color:#b08a57; font-size:11px; }
+        .ht-mini { border:1px solid #d8c7b0; background:#faf6f0; color:#6B471A; font-size:11px;
+            line-height:20px; height:22px; width:22px; padding:0; border-radius:3px; text-align:center; }
+        .ht-mini:hover { background:#f2e6d4; }
+        .ht-mini.danger { color:#A34E2A; }
+        .ht-addsub { font-size:11.5px; padding:0 6px; height:22px; line-height:20px; margin-top:2px; }
+        .ht-doclist { border:1px solid #e4d3ba; border-radius:4px; max-height:120px; overflow:auto;
+            background:#fff; margin:5px 0 8px; }
+        .ht-doc-it { padding:5px 8px; font-size:12.5px; color:#4A3524; border-bottom:1px solid #f2ede2; cursor:pointer; }
+        .ht-doc-it:hover { background:#FFF9F0; }
+        .ht-doc-it:last-child { border-bottom:0; }
+        .ht-doc-it b { color:#8A5A2B; }
+        .ht-harvest { border:1px solid #e4d3ba; border-radius:4px; max-height:260px; overflow:auto;
+            background:#fff; padding:4px; margin-bottom:7px; }
+        .ht-hti { display:flex; align-items:flex-start; gap:6px; padding:3px 4px; font-size:12.5px; color:#4A3524; }
+        .ht-hti.h2 { margin-left:20px; color:#7a6a52; }
+        .ht-hti input[type=checkbox] { margin-top:3px; }
+
         .tpl-row { margin-bottom:13px; }
         .tpl-row > label:first-child { display:block; font-size:13px; color:#6B471A; font-weight:bold; margin-bottom:3px; }
         .tpl-hint { font-size:12px; color:#8A5A2B; line-height:1.6; margin-top:3px; }
@@ -297,6 +329,10 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
               <i class="fa fa-copy"></i> 從其他版次複製</button>
             <button class="btn btn-default btn-sm" id="btnTpl" title="設定發行單位、頁尾左下文字、一階封面英文與目錄">
               <i class="fa fa-sliders"></i> 版面設定</button>
+            <?php if ($P['admin']): ?>
+              <button class="btn btn-default btn-sm" id="btnHeadTpl" title="設定新建文件時自動帶入的固定大標題／小標題">
+                <i class="fa fa-list-alt"></i> 標題範本設定</button>
+            <?php endif; ?>
             <span style="width:10px"></span>
           <?php endif; ?>
 
@@ -438,6 +474,48 @@ elseif ((int)$V['is_obsolete'] === 1 && !$P['admin']) $blocked = '這份文件�
   <div class="m-foot">
     <button class="btn btn-default btn-sm" data-close="mFork">取消</button>
     <button class="btn btn-warning btn-sm" id="btnForkDo"><i class="fa fa-copy"></i> 複製過來</button>
+  </div>
+</div></div>
+
+<!-- 固定標題範本設定（管理員）：新建文件沒有舊版可複製時自動帶入 -->
+<div class="m-mask" id="mHeadTpl"><div class="m-win wide">
+  <div class="m-head">固定標題範本設定 <span class="m-x" data-close="mHeadTpl">&times;</span></div>
+  <div class="m-body">
+    <div class="m-note">
+      這裡設定的大標題／小標題，會在<b>某一階文件第一次建立、完全沒有任何舊版內容可以複製</b>時
+      自動帶進編輯器（帶入後仍是草稿，要按「存檔」才會真的存進去，不喜歡也可以直接刪改）。<br>
+      每一階（一階／二階／三階／四階）各自一份範本。小標題掛在大標題底下，
+      <b>選了某個小標題要帶入，上面那個大標題也會自動一起帶入</b>（沒有大標題的小標題沒有意義）。
+    </div>
+    <div class="ht-lvl">
+      套用階別：
+      <select id="htLevel" class="form-control input-sm" style="width:auto;display:inline-block"></select>
+    </div>
+    <div class="ht-cols">
+      <div class="ht-col">
+        <div class="ht-col-h">目前範本（<span id="htCount">0</span> 個大標題）</div>
+        <div id="htTree" class="ht-tree"></div>
+        <button class="btn btn-default btn-sm" id="htAddTop"><i class="fa fa-plus"></i> 新增大標題</button>
+      </div>
+      <div class="ht-col">
+        <div class="ht-col-h">從既有文件挑選標題</div>
+        <div class="ht-hint">只認編輯器裡真正用「標題1／標題2」格式標記過的段落——
+          文字比對用猜的容易把整段內文誤判成標題，所以刻意不猜。
+          要挑的文件如果還沒有標題格式，請先進去那份文件的編輯器，
+          把要當範本的那幾行用工具列的「段落階層」改成「標題1」或「標題2」再存檔。</div>
+        <input type="text" id="htDocKw" class="form-control input-sm" placeholder="輸入文件編號或名稱搜尋…">
+        <div id="htDocList" class="ht-doclist"></div>
+        <div id="htHarvestBox" style="display:none">
+          <div class="ht-col-h" style="margin-top:8px">挑選要帶入的段落</div>
+          <div id="htHarvestList" class="ht-harvest"></div>
+          <button class="btn btn-warning btn-sm" id="htHarvestApply"><i class="fa fa-arrow-left"></i> 加入左邊的範本</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="m-foot">
+    <button class="btn btn-default btn-sm" data-close="mHeadTpl">關閉</button>
+    <button class="btn btn-warning btn-sm" id="htSave"><i class="fa fa-save"></i> 儲存這一階的範本</button>
   </div>
 </div></div>
 
@@ -743,6 +821,8 @@ var API = '../../src/store/AsDocContent_API.php';
 var VID = <?= (int)$versionId ?>;
 var CSRF = '<?= htmlspecialchars($_SESSION['adc_csrf'], ENT_QUOTES) ?>';
 var CAN_EDIT = <?= $P['edit'] ? 'true' : 'false' ?>;
+var CAN_ADMIN = <?= $P['admin'] ? 'true' : 'false' ?>;
+var DOC_LEVEL = <?= json_encode((string)$V['doc_level'], JSON_UNESCAPED_UNICODE) ?>;
 var ED = null;                 // 富文字編輯器實例
 var ASSET_KIND = {};           // 資產編號 → image/flow（決定圖片浮動列要不要出現「編輯流程圖」）
 var DIRTY = false;
@@ -805,6 +885,29 @@ function waitLayout(cb) {
 }
 
 /* ── 載入 ─────────────────────────────────────────────────────────────── */
+/** 把一段 HTML 塞進編輯器並接手後續（版面樣板／分頁等穩＋存檔按鈕開放）。
+ *  seeded=true＝這段內容是自動帶入的固定標題骨架，不是資料庫存過的東西，
+ *  所以標成「有未存檔的變更」、也不要顯示「上次存檔」（根本還沒存過）。 */
+function applyEditorHtml(html, c, seeded) {
+    if (!ED) ED = mkEditor();
+    ED.set(html);
+    loadChrome();              // 版面樣板（封面/制修訂紀錄書/目錄/頁首頁尾）
+    setDirty(!!seeded);
+    // 自動分頁是非同步的（字型載入、圖片載入、350ms 防抖動都會再排一次），
+    // 所以等「頁數連續幾次都不再變」才算排版完成、才開放存檔
+    if (AUTO_INDENT_AFTER_LOAD) {
+        AUTO_INDENT_AFTER_LOAD = false;
+        // 縮排要等分頁真的穩定下來才做（提早做的話，量到的頁數還在跑，
+        // 縮排造成的換行又會再引發一次重排，兩件事疊在一起會亂套）；
+        // 縮排完馬上存檔——不然畫面上看到的是縮排後的新分頁，
+        // 資料庫裡存的、列印會印出來的卻還是縮排前的舊分頁，兩邊對不起來。
+        waitLayout(function(){ ED.autoNumIndent(); save(); });
+    } else {
+        waitLayout();
+    }
+    if (!seeded && c && c.updated_at) $('#adSaved').text('上次存檔 ' + fmt(c.updated_at));
+}
+
 function load() {
     setEditorReady(false);
     $.getJSON(API, { action:'get', version_id: VID }, function(r){
@@ -824,23 +927,23 @@ function load() {
 
         var html = (c && c.html) || '';
         if (CAN_EDIT) {
-            if (!ED) ED = mkEditor();
-            ED.set(html);
-            loadChrome();              // 版面樣板（封面/制修訂紀錄書/目錄/頁首頁尾）
-            setDirty(false);
-            // 自動分頁是非同步的（字型載入、圖片載入、350ms 防抖動都會再排一次），
-            // 所以等「頁數連續幾次都不再變」才算排版完成、才開放存檔
-            if (AUTO_INDENT_AFTER_LOAD) {
-                AUTO_INDENT_AFTER_LOAD = false;
-                // 縮排要等分頁真的穩定下來才做（提早做的話，量到的頁數還在跑，
-                // 縮排造成的換行又會再引發一次重排，兩件事疊在一起會亂套）；
-                // 縮排完馬上存檔——不然畫面上看到的是縮排後的新分頁，
-                // 資料庫裡存的、列印會印出來的卻還是縮排前的舊分頁，兩邊對不起來。
-                waitLayout(function(){ ED.autoNumIndent(); save(); });
+            // 這份文件目前完全沒有線上內容、也沒有其他版次可以複製（即「開立一份全新
+            // 文件，底下沒有現成程序書」的情況），才自動帶入這一階的固定標題骨架——
+            // 有內容或有得複製時絕不覆蓋，避免把已經打好的字洗掉（使用者 2026-09-24 交辦）。
+            var canSeed = !html && DOC_LEVEL && !VERSIONS.some(function(v){
+                return String(v.id) !== String(VID) && Number(v.has_online) > 0;
+            });
+            if (canSeed) {
+                $.getJSON(API, { action:'heading_tpl_get', doc_level: DOC_LEVEL }, function(hr){
+                    var sk = (hr && hr.success && hr.skeleton_html) || '';
+                    applyEditorHtml(sk, c, !!sk);
+                    if (sk) alert('這份文件目前還沒有任何內容，已自動帶入「' + DOC_LEVEL
+                        + '」設定好的固定標題（' + (hr.count || 0) + ' 個大標題），請直接在裡面填寫內容；\n'
+                        + '不需要的標題可以直接刪掉。記得填完要按「存檔」才會真的存進去。');
+                }).fail(function(){ applyEditorHtml(html, c, false); });
             } else {
-                waitLayout();
+                applyEditorHtml(html, c, false);
             }
-            if (c && c.updated_at) $('#adSaved').text('上次存檔 ' + fmt(c.updated_at));
         } else {
             // 沒有編輯權：唯讀顯示（清洗後才輸出，鐵律8 的第二道防線）
             // 一樣依分頁標記切成一頁一頁，跟有編輯權看到的版面一致
@@ -1756,6 +1859,166 @@ $('#btnForkDo').on('click', function(){
         alert(r.message);
         load();
     }, 'json');
+});
+
+/* ── 固定標題範本設定（管理員；2026-09-24 新增）───────────────────────────
+   #htTree 底下的 DOM 就是唯一資料來源，不另外維護一份 JS 陣列跟著同步——
+   逐鍵輸入若要即時同步陣列，整層重畫一次就會讓輸入框失焦、游標跳掉；
+   存檔當下才去讀 DOM 組 JSON，上／下／刪除／新增小標題直接搬動 DOM 節點即可。 */
+function htBuildTopEl(text) {
+    var $t = $('<div class="ht-top">'
+        + '<div class="ht-top-row">'
+        + '<input type="text" class="form-control input-sm ht-top-in" placeholder="大標題，例如：目的">'
+        + '<button type="button" class="ht-mini ht-top-up" title="上移"><i class="fa fa-arrow-up"></i></button>'
+        + '<button type="button" class="ht-mini ht-top-down" title="下移"><i class="fa fa-arrow-down"></i></button>'
+        + '<button type="button" class="ht-mini danger ht-top-del" title="刪除"><i class="fa fa-trash"></i></button>'
+        + '</div>'
+        + '<div class="ht-sub-list"></div>'
+        + '<button type="button" class="btn btn-default btn-xs ht-addsub"><i class="fa fa-plus"></i> 小標題</button>'
+        + '</div>');
+    $t.find('.ht-top-in').val(text || '');
+    return $t;
+}
+function htBuildSubEl(text) {
+    var $s = $('<div class="ht-sub-row">'
+        + '<input type="text" class="form-control input-sm ht-sub-in" placeholder="小標題">'
+        + '<button type="button" class="ht-mini ht-sub-up" title="上移"><i class="fa fa-arrow-up"></i></button>'
+        + '<button type="button" class="ht-mini ht-sub-down" title="下移"><i class="fa fa-arrow-down"></i></button>'
+        + '<button type="button" class="ht-mini danger ht-sub-del" title="刪除"><i class="fa fa-trash"></i></button>'
+        + '</div>');
+    $s.find('.ht-sub-in').val(text || '');
+    return $s;
+}
+function htUpdateCount() { $('#htCount').text($('#htTree > .ht-top').length); }
+function htRenderTree(tree) {
+    var $tree = $('#htTree').empty();
+    (tree || []).forEach(function(t){
+        var $t = htBuildTopEl(t.heading_text);
+        (t.children || []).forEach(function(c){ $t.find('.ht-sub-list').append(htBuildSubEl(c.heading_text)); });
+        $tree.append($t);
+    });
+    htUpdateCount();
+}
+function htLoadLevel(level) {
+    $.getJSON(API, { action:'heading_tpl_get', doc_level: level }, function(hr){
+        if (!hr || !hr.success) { alert((hr||{}).message || '讀取失敗'); return; }
+        if (!$('#htLevel option').length) {
+            $('#htLevel').html((hr.levels || []).map(function(lv){ return '<option value="'+esc(lv)+'">'+esc(lv)+'</option>'; }).join(''));
+        }
+        $('#htLevel').val(level);
+        htRenderTree(hr.tree);
+    });
+}
+$('#btnHeadTpl').on('click', function(){
+    $('#htDocKw').val(''); $('#htDocList').empty(); $('#htHarvestBox').hide(); $('#htHarvestList').empty();
+    htLoadLevel(DOC_LEVEL || '二階');
+    openMask('mHeadTpl');
+});
+$('#htLevel').on('change', function(){ htLoadLevel($(this).val()); });
+$('#htAddTop').on('click', function(){
+    var $t = htBuildTopEl('');
+    $('#htTree').append($t);
+    htUpdateCount();
+    $t.find('.ht-top-in').focus();
+});
+// 事件委派：新增/刪除小標題都會讓節點重新產生，用委派才不必每次重綁
+$('#htTree').on('click', '.ht-addsub', function(){
+    var $s = htBuildSubEl('');
+    $(this).siblings('.ht-sub-list').append($s);
+    $s.find('.ht-sub-in').focus();
+});
+$('#htTree').on('click', '.ht-top-del', function(){ $(this).closest('.ht-top').remove(); htUpdateCount(); });
+$('#htTree').on('click', '.ht-sub-del', function(){ $(this).closest('.ht-sub-row').remove(); });
+$('#htTree').on('click', '.ht-top-up', function(){
+    var $t = $(this).closest('.ht-top'); var $p = $t.prev('.ht-top'); if ($p.length) $t.insertBefore($p);
+});
+$('#htTree').on('click', '.ht-top-down', function(){
+    var $t = $(this).closest('.ht-top'); var $n = $t.next('.ht-top'); if ($n.length) $t.insertAfter($n);
+});
+$('#htTree').on('click', '.ht-sub-up', function(){
+    var $s = $(this).closest('.ht-sub-row'); var $p = $s.prev('.ht-sub-row'); if ($p.length) $s.insertBefore($p);
+});
+$('#htTree').on('click', '.ht-sub-down', function(){
+    var $s = $(this).closest('.ht-sub-row'); var $n = $s.next('.ht-sub-row'); if ($n.length) $s.insertAfter($n);
+});
+$('#htSave').on('click', function(){
+    var tree = [];
+    $('#htTree > .ht-top').each(function(){
+        var text = $(this).find('> .ht-top-row .ht-top-in').val();
+        var children = [];
+        $(this).find('.ht-sub-row .ht-sub-in').each(function(){ children.push({ text: $(this).val() }); });
+        tree.push({ text: text, children: children });
+    });
+    $.post(API, { action:'heading_tpl_save', csrf:CSRF, doc_level:$('#htLevel').val(), tree: JSON.stringify(tree) }, function(r){
+        if (!r.success) { alert(r.message || '儲存失敗'); return; }
+        alert(r.message);
+        htLoadLevel($('#htLevel').val());
+    }, 'json');
+});
+
+/* 從既有文件挑選標題（只認真正的 <h1>/<h2>，理由見 mHeadTpl 的說明文字） */
+var HT_DOC_KW_TIMER = null;
+$('#htDocKw').on('input', function(){
+    clearTimeout(HT_DOC_KW_TIMER);
+    var kw = $(this).val();
+    HT_DOC_KW_TIMER = setTimeout(function(){
+        $.getJSON(API, { action:'heading_doc_search', kw: kw }, function(r){
+            var rows = (r && r.rows) || [];
+            $('#htDocList').html(rows.length ? rows.map(function(d){
+                return '<div class="ht-doc-it" data-vid="' + d.version_id + '">'
+                     + '<b>' + esc(d.doc_no) + '</b>　' + esc(d.doc_name)
+                     + '　<span style="color:#8a6d45">' + esc(d.doc_level) + ' · ' + esc(d.version) + '版</span></div>';
+            }).join('') : '<div class="ht-doc-it" style="color:#a08a6f;cursor:default">沒有符合的文件</div>');
+        });
+    }, 300);
+});
+$('#htDocList').on('click', '.ht-doc-it[data-vid]', function(){
+    var vid = $(this).data('vid');
+    $.getJSON(API, { action:'heading_extract', version_id: vid }, function(r){
+        var items = (r && r.items) || [];
+        var $list = $('#htHarvestList').empty();
+        if (!items.length) {
+            $list.html('<div style="padding:6px;color:#a08a6f;font-size:12px">'
+                + '這份文件裡沒有用「標題1／標題2」格式標記過的段落，沒東西可以挑。</div>');
+        } else {
+            // 用 .data('text',…) 存原始文字，不靠事後從 DOM 摳掉 checkbox 反推文字
+            // （那種寫法一遇到文字裡剛好有空白或特殊字元就容易出錯）
+            items.forEach(function(it){
+                var $row = $('<label class="ht-hti"></label>').addClass(it.tag)
+                    .attr('data-tag', it.tag).data('text', it.text);
+                $row.append('<input type="checkbox">').append(document.createTextNode(it.text));
+                $list.append($row);
+            });
+        }
+        $('#htHarvestBox').show();
+    });
+});
+$('#htHarvestList').on('change', '.ht-hti input[type=checkbox]', function(){
+    if (!this.checked) return;
+    var $row = $(this).closest('.ht-hti');
+    if ($row.data('tag') !== 'h2') return;
+    // 小標題勾了，往上找最近一個標題1一起勾起來（沒有大標題的小標題沒有意義）
+    var $prev = $row.prevAll('.ht-hti[data-tag="h1"]').first();
+    if ($prev.length) $prev.find('input[type=checkbox]').prop('checked', true);
+});
+$('#htHarvestApply').on('click', function(){
+    var curTop = null, added = 0;
+    $('#htHarvestList .ht-hti').each(function(){
+        var $row = $(this);
+        if (!$row.find('input[type=checkbox]').prop('checked')) return;
+        var text = $row.data('text') || '';
+        if ($row.data('tag') === 'h1') {
+            curTop = htBuildTopEl(text);
+            $('#htTree').append(curTop);
+        } else {
+            if (!curTop) { curTop = htBuildTopEl('（未命名大標題）'); $('#htTree').append(curTop); }
+            curTop.find('.ht-sub-list').append(htBuildSubEl(text));
+        }
+        added++;
+    });
+    htUpdateCount();
+    if (!added) { alert('請先勾選要帶入的段落。'); return; }
+    alert('已加入 ' + added + ' 項到左邊的範本，別忘了按下方「儲存這一階的範本」才會真的存起來。');
 });
 
 /* ── 列印 ─────────────────────────────────────────────────────────────── */

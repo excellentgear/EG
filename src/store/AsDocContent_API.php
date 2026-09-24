@@ -17,6 +17,7 @@ require_once __DIR__ . '/../common/_config.php';
 require_once __DIR__ . '/../common/DBConnection.php';
 require_once __DIR__ . '/../common/as_doc_content_lib.php';
 require_once __DIR__ . '/../common/as_doc_import_lib.php';
+require_once __DIR__ . '/../common/as_doc_heading_lib.php';
 require_once __DIR__ . '/../common/attach_lib.php';
 
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
@@ -448,6 +449,51 @@ case 'fork': {
     $r = adc_version_fork($db, $from, $to, $uid);
     if (empty($r['ok'])) jerr($r['msg']);
     jout(true, ['message' => '已複製 ' . $fv['version'] . ' 版的內容（含 ' . $r['assets'] . ' 張圖）', 'assets' => $r['assets']]);
+}
+
+/* ══════════════ 固定標題範本（新建文件沒有舊版可複製時，自動帶入一階/二階
+   固定大標題與小標題；規則一律在 as_doc_heading_lib.php）══════════════ */
+
+/** 取某一階的範本（設定跳窗編輯用），順便帶回組好的骨架 HTML（編輯器新開空白版次
+ *  要自動塞內容時用得到，兩邊共用同一份「範本→內容」的組法，不在 JS 再組一次） */
+case 'heading_tpl_get': {
+    $level = (string)($_GET['doc_level'] ?? '');
+    $tree = adh_tree($db, $level);
+    jout(true, [
+        'levels' => adh_levels(),
+        'doc_level' => $level,
+        'tree' => $tree,
+        'count' => count($tree),
+        'skeleton_html' => $tree ? adh_skeleton_html($tree) : '',
+    ]);
+}
+
+/** 整層存檔（管理員）：新增/改名/刪除/搬移順序一次到位 */
+case 'heading_tpl_save': {
+    needAdmin($P);
+    $level = (string)($_POST['doc_level'] ?? '');
+    $tops = json_decode((string)($_POST['tree'] ?? '[]'), true);
+    if (!is_array($tops)) jerr('範本內容格式不正確');
+    $r = adh_save_tree($db, $level, $tops, $uid);
+    if (empty($r['ok'])) jerr($r['msg']);
+    jout(true, ['message' => '已儲存（' . $level . ' 共 ' . $r['count'] . ' 個大標題）', 'count' => $r['count']]);
+}
+
+/** 從某個版次的內容挑出真正標記過「標題1/標題2」的段落，給「從既有文件挑選標題」用 */
+case 'heading_extract': {
+    needAdmin($P);
+    $vid = (int)($_GET['version_id'] ?? 0);
+    needVersion($db, $P, $vid);
+    $c = adc_content_by_version($db, $vid);
+    $items = $c ? adh_extract_headings((string)$c['content_html']) : [];
+    jout(true, ['items' => $items]);
+}
+
+/** 搜尋「已經有線上內容」的文件版次，給挑選來源用 */
+case 'heading_doc_search': {
+    needAdmin($P);
+    $kw = (string)($_GET['kw'] ?? '');
+    jout(true, ['rows' => adh_doc_search($db, $kw, 30)]);
 }
 
 /* ══════════════ 內文引用的文件編號：待處理／預覽／套用／略過 ══════════════
