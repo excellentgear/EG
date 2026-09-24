@@ -33,6 +33,7 @@ if (!function_exists('eg_user_leave_tick')) {
             clearstatcache(true, $stateFile);
 
             require_once __DIR__ . '/user_active_lib.php';
+            require_once __DIR__ . '/stamp_lib.php';   // 離職連動：自動作廢此人名下的使用中圖章（2026-09-24）
 
             // 還沒被標成離職/留停，但預定離職日已經過了的人
             $rows = $pdo->query(
@@ -54,9 +55,12 @@ if (!function_exists('eg_user_leave_tick')) {
                     $pdo->beginTransaction();
                     $upd->execute([$r['id']]);
                     $hist->execute([$r['id'], $r['leave_date']]);
+                    // 離職連動：此人名下所有「使用中」圖章一併作廢，作廢日＝離職日（與狀態變更同一交易，要撤就一起撤）
+                    $stampRevoked = eg_stamp_auto_revoke_for_leave($pdo, (int)$r['id'], (string)$r['leave_date'], 'system');
                     $log->execute([(string)$r['id'], (string)$r['user_cname'],
                         json_encode(['leave_date' => $r['leave_date'], 'state' => '→0(離職)',
-                                     'note' => '預定離職日已過，自動轉離職；權限設定未自動刪除，需人事於員工管理頁按「清除權限設定」'],
+                                     'note' => '預定離職日已過，自動轉離職；權限設定未自動刪除，需人事於員工管理頁按「清除權限設定」',
+                                     'stamp_revoked' => $stampRevoked],
                                     JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE)]);
                     $pdo->commit();
                 } catch (\Throwable $e) {

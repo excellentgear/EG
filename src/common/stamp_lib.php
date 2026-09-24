@@ -97,4 +97,45 @@ if (!function_exists('eg_stamp_base')) {
         } catch (Exception $e) {}
         return $out;
     }
+
+    // 員工離職（實際離職日已確定）→ 此人名下所有「使用中」的圖章登記自動作廢，作廢日＝離職日。
+    // 只動 user_id＝此人的登記（個人章／部門人員章）；課室章／職稱章不掛在特定人身上，不受影響。
+    // 呼叫時機：①src/common/user_leave_tick.php 順路觸發（預定離職日到期自動轉離職）
+    //          ②src/store/_employee_api.php 人事於員工管理頁手動把在職狀態改成離職。
+    // 2026-09-24 使用者要求：人員離職日後自動將所有此人員之圖章改為作廢。
+    function eg_stamp_auto_revoke_for_leave(PDO $pdo, int $userId, string $revokeDate, string $operator = 'system'): int {
+        if ($userId <= 0) return 0;
+        try {
+            $st = $pdo->prepare("SELECT id FROM stamp_register WHERE user_id = ? AND status = 'active'");
+            $st->execute([$userId]);
+            $ids = $st->fetchAll(PDO::FETCH_COLUMN);
+            if (!$ids) return 0;
+            $upd = $pdo->prepare("UPDATE stamp_register SET status='revoked', revoke_date=?, modified_by=?, modified_at=NOW() WHERE id=?");
+            foreach ($ids as $rid) $upd->execute([$revokeDate, $operator, $rid]);
+            return count($ids);
+        } catch (Exception $e) {
+            error_log('[stamp] auto revoke on leave failed for uid=' . $userId . ': ' . $e->getMessage());
+            return 0;
+        }
+    }
+
+    // 帳號狀態限制：「特殊帳號」「最高權限帳號」（employee_management.php 在職狀態下拉 state=90/99）不可為其登記圖章。
+    // 2026-09-24 使用者要求。只擋「建立新登記」；既有登記（理論上不該發生，目前查證全庫 0 筆）仍可修改／停用，不回溯處理。
+    if (!defined('EG_STAMP_BLOCKED_HOLDER_STATES')) {
+        define('EG_STAMP_BLOCKED_HOLDER_STATES', [90, 99]);
+    }
+    function eg_stamp_holder_blocked(PDO $db, int $userId): ?array {
+        if ($userId <= 0) return null;
+        try {
+            $st = $db->prepare("SELECT state, user_cname FROM user WHERE id = ?");
+            $st->execute([$userId]);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+            if ($r && $r['state'] !== null && in_array((int)$r['state'], EG_STAMP_BLOCKED_HOLDER_STATES, true)) {
+                require_once __DIR__ . '/user_active_lib.php';
+                return ['state' => (int)$r['state'], 'name' => (string)$r['user_cname'],
+                        'label' => eg_user_state_label($r['state'])];
+            }
+        } catch (Exception $e) {}
+        return null;
+    }
 }

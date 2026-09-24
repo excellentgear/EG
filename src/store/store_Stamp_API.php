@@ -89,10 +89,11 @@ case 'meta': {
     $users = [];
     if ($canManage) {
         // dept_id = 該員主要部門（is_main 優先，供前端「部門→篩選人員」cascading 選單使用；同部門+人員綁定用）
+        // 排除離職(0)＋特殊帳號/最高權限帳號(90/99)——後者不可為其登記圖章（2026-09-24，見 stamp_lib.php eg_stamp_holder_blocked）
         $users = $db->query("SELECT u.id, u.user_cname,
                                     (SELECT m.department_id FROM user_department_position_map m
                                      WHERE m.user_id = u.id ORDER BY m.is_main DESC, m.id LIMIT 1) AS dept_id
-                             FROM user u WHERE (u.state IS NULL OR u.state <> 0)
+                             FROM user u WHERE (u.state IS NULL OR u.state NOT IN (0,90,99))
                              ORDER BY CONVERT(u.user_cname USING utf8mb4) COLLATE utf8mb4_unicode_ci")->fetchAll(PDO::FETCH_ASSOC);
     }
     $types = $db->query("SELECT id, type_name, bind_targets, sort_order, is_active FROM stamp_type ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
@@ -306,6 +307,11 @@ case 'add': {
     if ($kind === 'user'      && $tuid === null) jerr('請選擇人員');
     if ($kind === 'dept'      && $deptId === null) jerr('請選擇部門');
     if ($kind === 'position'  && ($deptId === null || $posId === null)) jerr('請選擇部門與職稱');
+    // 特殊帳號／最高權限帳號不可登記圖章（2026-09-24 使用者要求，見 stamp_lib.php eg_stamp_holder_blocked）
+    if ($tuid !== null) {
+        $blocked = eg_stamp_holder_blocked($db, $tuid);
+        if ($blocked) jerr('「' . $blocked['name'] . '」目前帳號狀態為「' . $blocked['label'] . '」，不可為其登記圖章');
+    }
     if ($kind === 'user_dept' && ($deptId === null || $tuid === null)) jerr('請選擇部門與人員');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $issue)) jerr('核發日期格式錯誤');
     if ($tplId !== null) {
@@ -711,11 +717,12 @@ case 'batch_members': {
     $ids = array_values(array_filter(array_map('intval', explode(',', (string)($_GET['dept_ids'] ?? '')))));
     if (!$ids) jout(['ok'=>true, 'rows'=>[]]);
     $in = implode(',', array_fill(0, count($ids), '?'));
+    // 排除離職(0)＋特殊帳號/最高權限帳號(90/99)——後者不可為其登記圖章（2026-09-24）
     $st = $db->prepare("SELECT m.user_id, u.user_cname, m.department_id, d.name AS dept_name, m.is_main
                         FROM user_department_position_map m
                         JOIN user u ON u.id = m.user_id
                         JOIN department d ON d.id = m.department_id
-                        WHERE m.department_id IN ($in) AND (u.state IS NULL OR u.state <> 0)
+                        WHERE m.department_id IN ($in) AND (u.state IS NULL OR u.state NOT IN (0,90,99))
                         ORDER BY d.sort_order, m.is_main DESC, CONVERT(u.user_cname USING utf8mb4) COLLATE utf8mb4_unicode_ci");
     $st->execute($ids);
     jout(['ok'=>true, 'rows'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
@@ -740,6 +747,8 @@ case 'batch_add': {
         $tplId  = (int)($it['template_id'] ?? 0) ?: null;
         $typeId = (int)($it['type_id'] ?? 0) ?: null;
         if (!in_array($kind, ['user', 'user_dept'], true) || $tuid === null || ($kind === 'user_dept' && $deptId === null)) { $skipped++; continue; }
+        // 特殊帳號／最高權限帳號不可登記圖章（2026-09-24；候選清單 batch_members 已先排除，這裡再擋一次防繞過）
+        if (eg_stamp_holder_blocked($db, $tuid)) { $skipped++; continue; }
         if ($tplId !== null) {
             $st = $db->prepare("SELECT type_id FROM stamp_template WHERE id=? AND is_active=1");
             $st->execute([$tplId]);

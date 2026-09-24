@@ -708,6 +708,14 @@ if ($hrUserPerm === 'R') {
                             <li><b>「刪除」按鈕只留給誤建帳號。</b>按下時系統會先掃描此人在全系統的紀錄，<b>只要查到任何一筆就擋下</b>並列出是哪幾類——因為帳號一旦被實體刪除，那些紀錄上的人員就變成查不出是誰的孤兒資料，而且不會有任何錯誤訊息。離職請一律改用「在職狀態」，不要用刪除。</li>
                         </ul>
 
+                        <h4>與圖章管理的連動</h4>
+                        <ul>
+                            <li><b>離職自動作廢圖章</b>：一旦離職日成立（人事直接把狀態改成「離職」，或預定離職日到期由系統自動轉離職），此人名下所有「使用中」的圖章登記會<b>自動改為作廢</b>、作廢日＝離職日，並在存檔後的訊息裡告知作廢了幾筆。課室章／職稱章沒有掛在特定人身上，不受影響。</li>
+                            <li><b>部門／職位異動</b>：若此人原本掛在某個部門下的圖章（部門人員章），因為這次異動不再屬於那個部門，存檔後會跳出提示列出是哪幾筆，並可直接開啟「圖章管理」頁處理（改綁新部門或直接停用）——<b>系統不會自動改動或停用</b>，換部門不代表一定要換章，由人判斷比較保險。</li>
+                            <li><b>新進人員</b>：新增員工存檔成功後，會提示是否要順手開啟「圖章管理」頁為此人登記所需圖章。</li>
+                            <li><b>特殊帳號、最高權限帳號不可登記圖章</b>（在職狀態選「特殊帳號」或「最高權限帳號」者）：這兩種帳號不代表一個實際會在單據上簽章的人，圖章管理頁會直接擋下為其新增登記。</li>
+                        </ul>
+
                         <h4>連線狀態與強制登出</h4>
                         <ul>
                             <li><b>連線欄</b>顯示該員工目前是否有登入中的連線，以及大約的最後活動時間。</li>
@@ -1434,6 +1442,10 @@ $(document).ready(function() {
         // 離職只收回「權利」，不動任何要留存的歷史資料（使用者定調）
         lines.push('', '● 行事曆、通知／公告、請假、簽核紀錄、教育訓練、職務／在職異動與稽核紀錄',
                        '　一律完整保留，離職不會刪除也不會清空。');
+        // 圖章連動（2026-09-24 使用者要求）：離職當下已自動把此人名下使用中的圖章全部作廢，這裡只是告知結果
+        if (n.stamp_revoked) {
+            lines.push('', '● 已同步把此人名下 ' + n.stamp_revoked + ' 筆使用中的圖章登記改為作廢（作廢日＝離職日）。');
+        }
         if (n.count > 0) {
             lines.push('', '要現在清除這些權限設定嗎？（只清權限，不影響上述紀錄；清除前會完整寫入稽核紀錄備查）');
             if (!confirm(lines.join('\n'))) return;
@@ -1445,14 +1457,43 @@ $(document).ready(function() {
         }
     }
 
+    // 圖章連動（2026-09-24 使用者要求）：連結一律開到圖章清冊頁，並以 ?q= 帶入姓名直接篩出這個人
+    var STAMP_MGMT_URL = 'stamp_management.php';
+    function stampLinkFor(name) {
+        return STAMP_MGMT_URL + '?q=' + encodeURIComponent(name || '');
+    }
+
+    // ①部門/職位異動：原掛在「已被移除的部門」下的部門人員章已經不合時宜，提示是否需要改綁或作廢
+    function notifyStampDeptChange(n) {
+        var lines = ['「' + n.name + '」的部門/職位異動，下列圖章登記可能需要更新或作廢：', ''];
+        (n.items || []).forEach(function(it) {
+            lines.push('　- ' + (it.dept_name || '（未分類部門）') + '／' + (it.type_name || '（未分類種類）')
+                     + '（核發日期：' + (it.issue_date || '') + '）');
+        });
+        lines.push('', '系統不會自動改動或停用這些圖章（換部門不代表一定要換章，由人判斷比較保險）。',
+                       '要現在開啟「圖章管理」頁處理嗎？（可改綁新部門，或直接停用）');
+        if (confirm(lines.join('\n'))) window.open(stampLinkFor(n.name), '_blank');
+    }
+
+    // ②新進人員：提醒順手去登記所需圖章
+    function notifyStampSetup(n) {
+        if (confirm('「' + n.name + '」已建立完成。\n\n是否現在開啟「圖章管理」頁為此人登記所需圖章？')) {
+            window.open(stampLinkFor(n.name), '_blank');
+        }
+    }
+
     function submitEmployee(action, data, confirmed) {
         var payload = data + (confirmed ? '&confirm_delegate=1' : '');
         callApi(action, 'POST', payload, function(response) {
             if (response.status === 'success') {
                 $('#employeeModal').modal('hide');
                 loadEmployees();
-                // 改成離職/留停：權限已自動失效，順便問要不要把殘留設定也清掉
+                // 改成離職/留停：權限已自動失效，順便問要不要把殘留設定也清掉（離職圖章已自動作廢，訊息內含筆數）
                 if (response.permission_notice) askRevokePermissions(response.permission_notice);
+                // 部門/職位異動影響到既有圖章：提示是否要去處理
+                if (response.stamp_dept_notice) notifyStampDeptChange(response.stamp_dept_notice);
+                // 新進人員：提醒去登記圖章
+                if (response.stamp_setup_notice) notifyStampSetup(response.stamp_setup_notice);
             } else if (response.status === 'need_confirm') {
                 if (confirm(buildDelegateImpactMsg(response.affected))) {
                     submitEmployee(action, data, true); // 確認後帶旗標重送

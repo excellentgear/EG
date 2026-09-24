@@ -13,6 +13,8 @@ require_once $document_root . '/EGsystem/src/common/annual_leave_lib.php';
 require_once $document_root . '/EGsystem/src/common/user_active_lib.php';
 // 職務調動紀錄（ai-rules/14 P1：異動快照、依日期解析、補登）
 require_once $document_root . '/EGsystem/src/common/position_history_lib.php';
+// 圖章連動（2026-09-24）：離職自動作廢名下圖章、部門異動提示、狀態限制檢查
+require_once $document_root . '/EGsystem/src/common/stamp_lib.php';
 
 $db_connection = new DBConnection();
 $db = $db_connection->getPDO();
@@ -441,6 +443,7 @@ function addOrUpdateEmployee($mode) {
         }
 
         // 4. 在職狀態歷程（user_status_history）
+        $stampRevokedCount = 0;   // 本次若觸發離職，順帶作廢的圖章筆數（存進 permission_notice 供前端提示）
         if ($mode === 'update') {
             $newSt = (int)$state;
             $oldSt = ($old_state === false) ? null : (int)$old_state;
@@ -460,8 +463,11 @@ function addOrUpdateEmployee($mode) {
                 }
             } elseif ($oldSt !== null && $oldSt !== $newSt && $newSt === 0) {
                 // 人事手動設為離職也留一筆（原本只有「預定離職日到期系統自動轉離職」會寫）
+                $resignDate = $final_leave_date ?: date('Y-m-d');
                 $db->prepare("INSERT INTO user_status_history (user_id, status, start_date, end_date, remark) VALUES (?, 0, ?, NULL, '人事設定離職')")
-                   ->execute([$id, $final_leave_date ?: date('Y-m-d')]);
+                   ->execute([$id, $resignDate]);
+                // 離職連動（2026-09-24 使用者要求）：此人名下所有「使用中」圖章一併作廢，作廢日＝離職日，與狀態變更同一交易
+                $stampRevokedCount = eg_stamp_auto_revoke_for_leave($db, (int)$id, $resignDate, (string)($_SESSION['user_cname'] ?? 'system'));
             } elseif ($oldSt !== null && in_array($oldSt, [0, 2, 3], true) && $newSt === 1) {
                 // 復職／恢復在職也留一筆，時間軸才接得起來（日後補歷史資料要靠它）
                 $db->prepare("INSERT INTO user_status_history (user_id, status, start_date, end_date, remark) VALUES (?, 1, ?, NULL, ?)")
@@ -482,12 +488,41 @@ function addOrUpdateEmployee($mode) {
                    + count($snap['user_module_permissions']) + count($snap['page_operator_acl'])
                    + count($snap['user_delegate']);
             $resp['permission_notice'] = [
-                'user_id'  => (int)$id,
-                'state'    => (int)$state,
-                'label'    => eg_user_state_label($state),
-                'count'    => $count,
-                'warnings' => eg_user_permission_warnings($db, (int)$id),
+                'user_id'       => (int)$id,
+                'state'         => (int)$state,
+                'label'         => eg_user_state_label($state),
+                'count'         => $count,
+                'warnings'      => eg_user_permission_warnings($db, (int)$id),
+                'stamp_revoked' => $stampRevokedCount,   // 因本次離職一併作廢的圖章筆數（2026-09-24）
             ];
+        }
+
+        // === 圖章連動（2026-09-24 使用者要求）===
+        // ①部門異動：此人原本掛在「已被移除的部門」下的部門人員章（holder_kind=user_dept）已經不合時宜，
+        //   提醒人事去圖章管理頁確認要改綁新部門還是直接作廢——不自動改／不自動廢，因為換部門不等於一定要換章。
+        if ($mode === 'update' && !empty($removed)) {
+            $removedDeptIds = array_values(array_unique(array_map(
+                function ($k) { return (int)explode(':', $k)[0]; }, array_keys($removed)
+            )));
+            if ($removedDeptIds) {
+                $in = implode(',', array_fill(0, count($removedDeptIds), '?'));
+                $st = $db->prepare("SELECT r.id, d.name AS dept_name, t.type_name, r.issue_date
+                                     FROM stamp_register r
+                                     LEFT JOIN department d ON d.id = r.dept_id
+                                     LEFT JOIN stamp_type t ON t.id = r.type_id
+                                     WHERE r.user_id = ? AND r.dept_id IN ($in) AND r.status = 'active'
+                                     ORDER BY r.issue_date DESC");
+                $st->execute(array_merge([(int)$id], $removedDeptIds));
+                $deptStamps = $st->fetchAll(PDO::FETCH_ASSOC);
+                if ($deptStamps) {
+                    $resp['stamp_dept_notice'] = ['user_id' => (int)$id, 'name' => $user_cname, 'items' => $deptStamps];
+                }
+            }
+        }
+        // ②新進人員：提醒人事順手到圖章管理頁登記所需圖章（沒有硬性檢查，只是不要漏做）；
+        //   特殊帳號／最高權限帳號本來就不可設定圖章（見下方 EG_STAMP_BLOCKED_HOLDER_STATES），不提醒。
+        if ($mode === 'add' && !in_array((int)$state, EG_STAMP_BLOCKED_HOLDER_STATES, true)) {
+            $resp['stamp_setup_notice'] = ['user_id' => (int)$id, 'name' => $user_cname];
         }
         echo json_encode($resp, JSON_UNESCAPED_UNICODE);
 
