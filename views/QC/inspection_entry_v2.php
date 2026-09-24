@@ -1745,7 +1745,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             <h4>二、本單使用量具（整張檢驗單選一次就好）</h4>
             <ul>
                 <li><b>量具是綁在整張檢驗單上，不必逐個檢驗項目指定</b>（2026-09-16 改）。檢驗項目那幾個檢視裡<b>已經沒有量具欄</b>，改看檢視切換列下方的「<b>本單使用量具</b>」。</li>
-                <li>怎麼選：按<b>「選擇量具」</b> → ① 先點量具<b>類型</b> → ② 再點量具<b>編號</b>；同一個類型可以<b>連續點好幾支</b>（再點一次＝取消），選完還能按「← 換一個類型」<b>繼續加別的類型</b>，最後按「確定」。</li>
+                <li>怎麼選：按<b>「選擇量具」</b> → ① 先點量具<b>類型</b> → ② 再點量具<b>編號</b>；同一個類型可以<b>連續點好幾支</b>（再點一次＝取消），選完還能按「← 換一個類型」<b>繼續加別的類型</b>，最後按「確定」。<b>也可以直接在上方輸入框打字</b>，輸入部分量具編號或名稱關鍵字就會<b>跨全部類型模糊比對</b>找出符合的量具，不必先選類型；清空輸入框回到分類挑選。</li>
                 <li>已選的量具會<b>全部列在畫面上</b>（種類＋編號，含規格），每一支旁邊的 <b>×</b> 可以單獨移除；跳窗左下角的「清除全部」＝一次清掉重選。</li>
                 <li>只要表內有<b>數值型</b>量測，<b>至少要選一支量具</b>才存得了檔；目視／功能檢查（OK/NG 型）的單子不強制。</li>
                 <li><b>追溯口徑</b>：由量具查得到「這支用在<b>哪幾張檢驗單</b>」（量具校驗頁的「使用紀錄」），不細到是哪一個檢驗項目。</li>
@@ -1817,8 +1817,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         <div class="modal-body">
             <div class="muted-help" style="margin-bottom:6px;">
                 量具是綁在<b>整張檢驗單</b>上（不必逐個檢驗項目指定）：先點<b>類型</b>、再點<b>編號</b>，
-                一個類型可以連續點好幾支，選完還能<b>換一個類型繼續加</b>。</div>
+                一個類型可以連續點好幾支，選完還能<b>換一個類型繼續加</b>；也可以直接<b>打字搜尋</b>，不必先選類型。</div>
             <div class="tp-picked" id="tp-picked"></div>
+            <div class="form-group" style="margin-bottom:8px;">
+                <input type="text" class="form-control input-sm" id="tp-kw" style="max-width:340px;"
+                       placeholder="輸入部分量具編號或名稱關鍵字搜尋（模糊比對全部類型）">
+            </div>
             <div id="tp-step1">
                 <div class="muted-help" style="margin-bottom:6px;">① 先點量具<b>類型</b></div>
                 <div class="tpick-grid" id="tp-cats"></div>
@@ -1827,6 +1831,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <div class="muted-help" style="margin-bottom:6px;">
                     ② 再點量具<b>編號</b>（可連續點多支；<b>再點一次＝取消</b>）　<a href="#" id="tp-back">← 換一個類型</a></div>
                 <div class="tpick-grid" id="tp-nos"></div>
+            </div>
+            <div id="tp-step3" style="display:none;">
+                <div class="muted-help" style="margin-bottom:6px;" id="tp-search-hint"></div>
+                <div class="tpick-grid" id="tp-search-res"></div>
             </div>
         </div>
         <div class="modal-footer">
@@ -3462,6 +3470,7 @@ $(function(){
     var tpSel={};        // 已選集合：key = Tool_id 字串
     var tpOrder=[];      // 已選順序（先點的排前面，chips 才不會每次重排）
     var tpCat='';        // 目前展開的量具類型
+    var tpKw='';         // 目前的搜尋關鍵字（非空＝跨全部類型模糊比對，取代兩層挑選）
 
     $(document).on('click', '#btn-form-tools', function(e){ e.preventDefault(); openToolPicker(); });
     $(document).on('click', '#form-tool-chips .ft-x', function(){
@@ -3488,7 +3497,7 @@ $(function(){
 
     function openToolPicker(){
         if(!TOOL_INSTANCES.length){ alert('尚未建立任何量具，請至 設定 → 量具設定 新增。'); return; }
-        tpSel={}; tpOrder=[]; tpCat='';
+        tpSel={}; tpOrder=[]; tpCat=''; tpKw=''; $('#tp-kw').val('');
         (MODEL.tools||[]).forEach(function(id){
             var k=String(id);
             if(!tpSel[k]){ tpSel[k]=1; tpOrder.push(k); }
@@ -3501,6 +3510,7 @@ $(function(){
     function tpStep(n){
         $('#tp-step1').toggle(n===1);
         $('#tp-step2').toggle(n===2);
+        $('#tp-step3').toggle(n===3);
     }
     function tpSelCount(){ var c=0; for(var k in tpSel){ if(tpSel[k]) c++; } return c; }
     // ① 類型：一格一個類型，順便標「這個類型已經選了幾支」，換類型時不必來回確認
@@ -3527,6 +3537,22 @@ $(function(){
                    esc(t.no)+'<small>'+(on?'✔ 已選（再點一次取消）':esc(t.label||t.cat||''))+'</small></button>';
         }).join('') || '<div class="text-muted">此類型底下還沒有量具編號</div>');
     }
+    // ③ 打字搜尋：跨全部類型模糊比對（編號／顯示名稱／類型都比得到，多關鍵字空白分隔要全部命中）
+    function tpMatch(t, words){
+        var hay=((t.no||'')+' '+(t.label||'')+' '+(t.cat||'')).toLowerCase();
+        for(var i=0;i<words.length;i++){ if(hay.indexOf(words[i])<0) return false; }
+        return true;
+    }
+    function tpRenderSearch(){
+        var words=tpKw.toLowerCase().split(/\s+/).filter(function(w){ return w!==''; });
+        var list=TOOL_INSTANCES.filter(function(t){ return tpMatch(t, words); });
+        $('#tp-search-hint').html('符合「'+esc(tpKw)+'」共 <b>'+list.length+'</b> 項（清空搜尋列可回到分類挑選）');
+        $('#tp-search-res').html(list.length ? list.map(function(t){
+            var on=!!tpSel[String(t.id)];
+            return '<button type="button" class="tp-no'+(on?' on':'')+'" data-id="'+esc(String(t.id))+'">'+
+                   esc(t.no)+'<small>'+(on?'✔ 已選（再點一次取消）':esc(t.label||t.cat||''))+'</small></button>';
+        }).join('') : '<div class="text-muted">查無符合「'+esc(tpKw)+'」的量具。</div>');
+    }
     // 已選清單：兩個步驟都看得到，選到哪裡了一目瞭然
     function tpRenderPicked(){
         var h=tpOrder.filter(function(k){ return tpSel[k]; }).map(function(k){
@@ -3549,19 +3575,29 @@ $(function(){
         tpRenderNos(); tpStep(2);
     });
     $(document).on('click', '#tp-back', function(e){ e.preventDefault(); tpRenderCats(); tpStep(1); });
-    $(document).on('click', '#tp-nos .tp-no', function(){
+    $(document).on('click', '#tp-nos .tp-no, #tp-search-res .tp-no', function(){
         var id=String($(this).attr('data-id'));
         tpPick(id, !tpSel[id]);
-        tpRenderNos();
+        if(tpKw) tpRenderSearch(); else tpRenderNos();
+    });
+    // 打字即時篩選：輸入時跨全部類型模糊比對；清空搜尋列則回到原本的分類畫面
+    // （有展開過的類型回該類型的編號畫面，沒展開過才回①選類型）
+    $(document).on('input', '#tp-kw', function(){
+        tpKw=$(this).val().trim();
+        if(tpKw){ tpRenderSearch(); tpStep(3); }
+        else if(tpCat){ tpRenderNos(); tpStep(2); }
+        else { tpRenderCats(); tpStep(1); }
     });
     $(document).on('click', '#tp-picked .tp-unpick', function(){
         tpPick(String($(this).attr('data-id')), false);
-        if($('#tp-step2').is(':visible')) tpRenderNos();
+        if(tpKw) tpRenderSearch();
+        else if($('#tp-step2').is(':visible')) tpRenderNos();
     });
     $('#tp-clear').on('click', function(){
         tpSel={}; tpOrder=[];
         tpRenderPicked(); tpRenderCats();
-        if($('#tp-step2').is(':visible')) tpRenderNos();
+        if(tpKw) tpRenderSearch();
+        else if($('#tp-step2').is(':visible')) tpRenderNos();
     });
     $('#tp-apply').on('click', function(){
         MODEL.tools=tpOrder.filter(function(k){ return tpSel[k]; });
