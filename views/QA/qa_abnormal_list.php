@@ -86,6 +86,7 @@ $backfillDays = qab_backfill_days($db);
         .st-deduct { background:#F0A24B; color:#3b2a18; }
         .st-ready  { background:#DDEBD6; color:#2c5c2c; }
         .st-auto   { background:var(--sand); color:var(--ink2); }
+        .st-split  { background:#EFD9BF; color:#7a4a1e; }
         .src { font-size:10.5px; border-radius:8px; padding:0 6px; line-height:17px; display:inline-block; }
         .src-IR  { background:var(--coral); color:#fff; }
         .src-BOM { background:var(--sand); color:var(--ink2); }
