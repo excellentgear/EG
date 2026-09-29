@@ -455,12 +455,22 @@ function kpi_as_log(PDO $db, ?int $iid, ?int $year, ?int $month, string $action,
 function kpi_as_registry(): array {
     return [
         'complaint_rate' => [
-            'name' => '客訴頻率(客退單/出貨單)',
+            'name' => '客訴頻率／客訴件數(客退單)',
             'page' => '退貨單管理 views/Sales/ir.php ＋ 出貨 is_list',
             'tables' => ['is_list','ir_track'],
             'links' => [['label'=>'退貨追蹤（客退單）','url'=>'/EGsystem/views/Sales/IR_Track.php'], ['label'=>'快速出貨(新版)（出貨單）','url'=>'/EGsystem/views/Sales/Shipping_Quick.php']],
-            'desc' => '分子=當月客戶退貨單筆數(ir_track)；分母=當月出貨單筆數(is_list)',
+            'desc' => '「統計方式」決定是算比率還是算件數：頻率＝當月客退明細筆數÷當月出貨單筆數；'
+                    . '件數＝一張退貨單算一件（或逐筆明細各算一件）。'
+                    . '注意：系統裡的客退單並不等於客訴，要只算真正的客訴請用「只計入這些退貨性質」'
+                    . '（退貨性質在退貨追蹤頁設定），或在明細逐筆排除不是客訴的那幾張',
             'params' => [
+                ['key'=>'metric','label'=>'統計方式','type'=>'choice','fe'=>0,
+                 'opts'=>[
+                    'rate'      => '客訴頻率｜客退明細筆數 ÷ 當月出貨單筆數（%）',
+                    'count_no'  => '客訴件數｜一張退貨單算一件（同一張單號的多筆明細算一件）',
+                    'count_row' => '客訴件數｜逐筆退貨明細各算一件',
+                 ]],
+                ['key'=>'only_return_types','label'=>'只計入這些退貨性質id(留空=全部都算)','type'=>'intlist','fe'=>1],
                 ['key'=>'exclude_return_types','label'=>'排除退貨性質id(逗號分隔)','type'=>'intlist','fe'=>1],
             ]],
         'order_target_amount' => [
@@ -890,6 +900,9 @@ function kpi_as_calc_source(?string $calc): array {
         case 'training_completion':
             return ['from'=>'training_session ts', 'date'=>'', 'year_col'=>'ts.year',
                     'cols'=>['unit'=>['ts.org_unit', '']]];
+        case 'complaint_rate':
+            return ['from'=>'ir_track t', 'date'=>'t.IR_date',
+                    'cols'=>['client'=>['t.Client_name', ''], 'part'=>['t.d_id', '']]];
         case 'project_fai_pass':
             // 製程候選只列「這個專案剛好只綁一道製程」的那些（與 kpi_as_fai_rows() 的 dims 同一個口徑）；
             // 綁多道製程的專案本來就比不中單一製程的規則，列出來只會讓人以為排除了卻沒作用。
@@ -982,6 +995,7 @@ function kpi_as_calc_dims(?string $calc): array {
         case 'capacity_rate':
         case 'process_ng_rate':    return ['client','part','proc','machine'];
         case 'training_completion': return ['unit'];
+        case 'complaint_rate':     return ['client','part'];
         case 'project_fai_pass':   return ['client','part','proc'];
     }
     return [];
@@ -1448,6 +1462,79 @@ function kpi_as_vendor_rows(PDO $db, int $year, int $month, array $params): arra
 }
 
 /* ============================================================
+ * 客訴（客退單）— 明細列（compute 與明細共用同一支）
+ * ------------------------------------------------------------
+ * 一列＝計數的一個單位：
+ *   metric=count_no  → 一張退貨單（同一個 IR_no 的多筆明細合成一列）
+ *   metric=count_row → 一筆退貨明細
+ *   metric=rate      → 一筆退貨明細（與舊版 COUNT(*) 完全相同，數字不會變）
+ * 「客退單不等於客訴」：退貨可能只是多出貨、客戶改單。要只算真正的客訴，
+ * 用 only_return_types（退貨性質）篩，或在明細逐筆排除（不動任何真實資料）。
+ * ============================================================ */
+function kpi_as_complaint_rows(PDO $db, int $year, int $month, array $params): array {
+    $ym = sprintf('%04d-%02d', $year, $month);
+    $metric = (string)kpi_as_pv($params, 'metric', 'rate');
+    if (!in_array($metric, ['rate', 'count_no', 'count_row'], true)) $metric = 'rate';
+    $excl = array_values(array_filter(array_map('intval', kpi_as_list(kpi_as_pv($params, 'exclude_return_types', [])))));
+    $only = array_values(array_filter(array_map('intval', kpi_as_list(kpi_as_pv($params, 'only_return_types', [])))));
+
+    $sql = "SELECT t.IR_id, t.IR_no, t.IR_date, t.Client_name, t.d_id, t.d_setting_id,
+                   t.Qty, t.Specification, t.IR_ps, t.return_type_id, rt.type_name
+            FROM ir_track t
+            LEFT JOIN ir_return_type rt ON rt.type_id = t.return_type_id
+            WHERE DATE_FORMAT(t.IR_date,'%Y-%m') = ?";
+    $bind = [$ym];
+    if ($excl) {
+        $sql .= " AND (t.return_type_id IS NULL OR t.return_type_id NOT IN ("
+              . implode(',', array_fill(0, count($excl), '?')) . '))';
+        $bind = array_merge($bind, $excl);
+    }
+    if ($only) {   // 只計入指定的退貨性質＝沒有性質的一律不算（那才是「只算客訴」的語意）
+        $sql .= " AND t.return_type_id IN (" . implode(',', array_fill(0, count($only), '?')) . ')';
+        $bind = array_merge($bind, $only);
+    }
+    $sql .= " ORDER BY t.IR_no, t.IR_id";
+    try {
+        $st = $db->prepare($sql);
+        $st->execute($bind);
+        $raw = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+
+    $cmap = kpi_as_client_id_map($db);
+    $mk = function (array $r, string $key, int $nRows, array $parts, float $qty) use ($cmap) {
+        $client = trim((string)$r['Client_name']);
+        $partTxt = $parts ? implode('、', array_slice($parts, 0, 5)) . (count($parts) > 5 ? ('…等 ' . count($parts) . ' 項') : '') : '';
+        return ['key' => $key, 'ir_no' => (string)$r['IR_no'], 'ir_date' => (string)($r['IR_date'] ?: ''),
+                'client' => $client, 'part_txt' => $partTxt, 'qty' => $qty, 'n_rows' => $nRows,
+                'rtype' => trim((string)($r['type_name'] ?? '')), 'note' => trim((string)($r['IR_ps'] ?? '')),
+                'dims' => ['client' => $client, 'part' => (count($parts) === 1 ? $parts[0] : '')],
+                'dim_ids' => ['client' => ($cmap[$client] ?? ''), 'part' => '']];
+    };
+
+    $rows = [];
+    if ($metric === 'count_no') {
+        // 一張退貨單算一件：同一個單號的明細合成一列（單號空白的各自算一件，否則會被併成一大坨）
+        $grp = [];
+        foreach ($raw as $r) {
+            $no = trim((string)$r['IR_no']);
+            $k  = $no !== '' ? ('no:' . $no) : ('id:' . (int)$r['IR_id']);
+            if (!isset($grp[$k])) $grp[$k] = ['first' => $r, 'n' => 0, 'parts' => [], 'qty' => 0.0];
+            $grp[$k]['n']++;
+            $grp[$k]['qty'] += (float)$r['Qty'];
+            $p = trim((string)$r['d_id']);
+            if ($p !== '' && !in_array($p, $grp[$k]['parts'], true)) $grp[$k]['parts'][] = $p;
+        }
+        foreach ($grp as $k => $g) $rows[] = $mk($g['first'], $k, $g['n'], $g['parts'], $g['qty']);
+    } else {
+        foreach ($raw as $r) {
+            $p = trim((string)$r['d_id']);
+            $rows[] = $mk($r, 'id:' . (int)$r['IR_id'], 1, ($p !== '' ? [$p] : []), (float)$r['Qty']);
+        }
+    }
+    return $rows;
+}
+
+/* ============================================================
  * 專案首樣送樣過件率（AS9102 FAI）— 期間切法與明細列
  * ------------------------------------------------------------
  * 來源＝專案管理（views/GM/project_mgmt.php）的「首件檢驗（AS9102）」區塊，
@@ -1608,19 +1695,25 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
     switch ($key) {
 
         case 'complaint_rate': {
+            $metric = (string)kpi_as_pv($params, 'metric', 'rate');
+            if (!in_array($metric, ['rate', 'count_no', 'count_row'], true)) $metric = 'rate';
+            // 分子（＝件數）與明細共用 kpi_as_complaint_rows()：rate 模式下一列就是一筆明細，
+            // 數字與舊版的 COUNT(*) 完全相同（已逐月比對 2025+2026 全部 24 格）
+            $rows  = kpi_as_complaint_rows($db, $year, $month, $params);
+            $exIds = array_values(array_filter(array_map('strval', $exclRows), 'strlen'));
+            $num = 0;
+            foreach ($rows as $r) {
+                if (in_array((string)$r['key'], $exIds, true)) continue;      // 逐筆排除（不是客訴的那幾張）
+                if (kpi_as_dims_hit($r['dims'], $rules) !== '') continue;     // 命中排除規則（客戶／料號）
+                $num++;
+            }
+            if ($metric !== 'rate') {
+                // 件數型：值就是件數本身，分母留空（不然「分子/分母」會被讀成比率）
+                return ['num'=>$num, 'den'=>null, 'value'=>(float)$num];
+            }
             $st = $db->prepare("SELECT COUNT(*) FROM is_list WHERE DATE_FORMAT(Order_date,'%Y-%m')=?");
             $st->execute([$ym]);
             $den = (int)$st->fetchColumn();
-            $excl = array_map('intval', kpi_as_list(kpi_as_pv($params, 'exclude_return_types', [])));
-            $sql = "SELECT COUNT(*) FROM ir_track WHERE DATE_FORMAT(IR_date,'%Y-%m')=?";
-            $bind = [$ym];
-            if ($excl) {
-                $sql .= " AND (return_type_id IS NULL OR return_type_id NOT IN (" . implode(',', array_fill(0, count($excl), '?')) . "))";
-                $bind = array_merge($bind, $excl);
-            }
-            $st = $db->prepare($sql);
-            $st->execute($bind);
-            $num = (int)$st->fetchColumn();
             return ['num'=>$num, 'den'=>$den, 'value'=>$den > 0 ? $num / $den * 100 : null];
         }
 
@@ -2338,7 +2431,8 @@ function kpi_as_detail_supported(?string $calc): bool {
                                     // 2026-09-17 使用者要求補做（即使來源資料不開放直接改，也要看得到明細）
                                     'quote_to_order', 'shipping_target_amount', 'order_target_amount',
                                     'capacity_rate', 'process_ng_rate',
-                                    'project_fai_pass'], true);
+                                    // 2026-09-29：客訴改看件數之後，要能逐筆確認「這張退貨到底是不是客訴」
+                                    'complaint_rate', 'project_fai_pass'], true);
 }
 
 /** 某一格已排除的來源列（完整資料，內部畫面用） */
@@ -2730,6 +2824,46 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
             $out['note_print'] = '本表為本月計畫、尚未完成之教育訓練場次明細。';
             $out['note'] = '達成率＝當月已完成場次 ÷ 當月計畫場次'
                          . ($inc ? '（取消的場次有列入分母）' : '（取消的場次不列入分母）') . '。';
+            return $out;
+        }
+
+        case 'complaint_rate': {
+            $metric = (string)kpi_as_pv($params, 'metric', 'rate');
+            if (!in_array($metric, ['rate', 'count_no', 'count_row'], true)) $metric = 'rate';
+            $only = array_values(array_filter(array_map('intval', kpi_as_list(kpi_as_pv($params, 'only_return_types', [])))));
+            $rows = kpi_as_complaint_rows($db, $year, $month, $params);
+            $isNo = ($metric === 'count_no');
+            $out['cols'] = [['k'=>'no','t'=>'退貨單號'], ['k'=>'d','t'=>'退貨日'], ['k'=>'client','t'=>'客戶'],
+                            ['k'=>'part','t'=>'料號'], ['k'=>'qty','t'=>'退貨數量'],
+                            ['k'=>'nrow','t'=>'明細筆數'], ['k'=>'rtype','t'=>'退貨性質'], ['k'=>'note','t'=>'備註']];
+            $unit = $isNo ? '一張退貨單算一件' : ($metric === 'count_row' ? '逐筆明細各算一件' : '逐筆明細各算一筆');
+            foreach ($rows as $r) {
+                $out['rows'][] = [
+                    'key'  => (string)$r['key'],
+                    'vals' => ['no'=>($r['ir_no'] !== '' ? $r['ir_no'] : '（無單號）'),
+                               'd'=>eg_fmt_date($r['ir_date']), 'client'=>$r['client'],
+                               'part'=>($r['part_txt'] !== '' ? $r['part_txt'] : '（未填料號）'),
+                               'qty'=>(string)(0 + $r['qty']), 'nrow'=>(string)$r['n_rows'],
+                               'rtype'=>($r['rtype'] !== '' ? $r['rtype'] : '（未設定）'),
+                               'note'=>$r['note']],
+                    'dims' => $r['dims'], 'dim_ids' => $r['dim_ids'], 'kind' => 'bad',
+                    'why'  => '這一' . ($isNo ? '張退貨單' : '筆退貨明細') . '計入本月客訴（' . $unit . '）。',
+                    'fix'  => '客退單不等於客訴——如果這一筆其實是多出貨、客戶改單或我方協助退換，'
+                            . '請按「排除這一筆」並填原因（只影響 KPI，不會動到退貨單本身）；'
+                            . '要一次把某一類退貨都排除在外，請到退貨追蹤頁把「退貨性質」建好並在單上選，'
+                            . '再到 KPI 設定頁的「只計入這些退貨性質」指定哪幾種才算客訴。',
+                ];
+            }
+            $out['note_print'] = '本表為 ' . $year . ' 年 ' . $month . ' 月客戶退貨明細。';
+            $out['note'] = ($metric === 'rate'
+                    ? '客訴頻率＝當月客退明細筆數 ÷ 當月出貨單筆數。'
+                    : '客訴件數＝當月客退件數（' . $unit . '）。')
+                . '目前本月列出 ' . count($rows) . ' 件。'
+                . '客退單不等於客訴：退貨也可能是多出貨或客戶改單，系統無法自己分辨，'
+                . '所以要嘛在這裡逐筆排除、要嘛把「退貨性質」建好再用「只計入這些退貨性質」篩。'
+                . ($only ? ('目前只計入退貨性質 id：' . implode(',', $only) . '（沒有填性質的單一律不算）。')
+                         : '目前沒有限定退貨性質，所有客退單都算。')
+                . '另外：客退單上的「製程」欄位全庫都是空的，所以這個指標目前無法按製程拆開看。';
             return $out;
         }
 
