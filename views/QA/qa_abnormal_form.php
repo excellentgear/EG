@@ -25,6 +25,9 @@ $db = (new DBConnection())->getPDO();
 qab_ensure_schema($db);
 $uid   = (int)$_SESSION['id'];
 $perms = qab_perms($db, $uid);
+/* 最終裁示者的稱呼（管理員可在「設定 → 其他設定」指定部門，未指定時是「總經理」）——
+   畫面上凡是提到裁示者的字一律用這個變數，不要再寫死「總經理」（2026-09-29 使用者交辦）。 */
+$gmLabel = qab_gm_label($db);
 if (empty($_SESSION['qab_csrf'])) $_SESSION['qab_csrf'] = bin2hex(random_bytes(16));
 $CSRF = $_SESSION['qab_csrf'];
 $oid  = (int)($_GET['id'] ?? 0);
@@ -234,6 +237,10 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                 </h4>
                 <div class="sec-body">
                     <div class="fgrid">
+                        <div class="fld"><label>分類 <span style="color:var(--coral)">*</span>
+                                <span class="muted-help" id="catHint"></span></label>
+                            <select id="f_cat"><option value="">請選擇…</option></select>
+                            <div class="err" id="catErr" style="display:none;"></div></div>
                         <div class="fld"><label>填寫日期</label><input type="date" id="f_fill_date"></div>
                         <div class="fld"><label>異常發生日期</label><input type="date" id="f_occ_date"></div>
                         <div class="fld"><label>客戶 <span class="muted-help" id="clientSrc"></span></label>
@@ -289,7 +296,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     </div>
 
                     <div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px;">
-                        <div class="muted-help" style="margin-bottom:4px;"><b>決策者</b>：這張單要送給誰做處置判定（業務主管／品管主管）；可選的範圍由管理員在清單頁的「設定」維護。主管無法決定時，在決策區勾「轉總經理裁示」即送最終決策者。</div>
+                        <div class="muted-help" style="margin-bottom:4px;"><b>決策者</b>：這張單要送給誰做處置判定（業務主管／品管主管）；可選的範圍由管理員在清單頁的「設定」維護。主管無法決定時，在決策區勾「轉<?= htmlspecialchars($gmLabel) ?>裁示」即送最終裁示者。</div>
                         <div class="fgrid">
                             <div class="fld"><label>決策者（部門／職稱）</label><select id="f_decider"><option value="">未指定</option></select></div>
                             <div class="fld"><label>指定人員（選填）</label><select id="f_decider_user"><option value="">該範圍任一人皆可</option></select></div>
@@ -346,6 +353,9 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                         <span class="muted-help" style="margin-left:6px;">先點第一層 → 第二層 → 第三層，逐層往下選；可以選好幾個</span>
                     </div>
                     <div class="chips" id="causeChips"></div>
+                    <div class="fld" style="margin-top:8px;"><label>簡易說明 <span class="muted-help">（備註，選填；會印在紙本的「異常原因分類」欄底下）</span></label>
+                        <textarea id="f_cause_note" rows="2" maxlength="255" placeholder="例：CNC 程式 G54 補正值輸入錯誤"></textarea>
+                        <div class="muted-help" id="causeNoteCnt" style="text-align:right;"></div></div>
                 </div>
             </div>
 
@@ -388,8 +398,8 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     <div id="dispNoPerm" class="note-box" style="display:none;color:var(--coral);"></div>
                     <label style="font-weight:normal;display:flex;align-items:center;gap:6px;margin-bottom:8px;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:#fff;">
                         <input type="checkbox" id="f_escalate_gm">
-                        <b>整批轉呈總經理裁示</b>
-                        <span class="muted-help">主管無法決定時勾選——這批NG不由主管自行判定，直接由總經理決定怎麼處置（含要不要拆分）</span>
+                        <b>整批轉呈<?= htmlspecialchars($gmLabel) ?>裁示</b>
+                        <span class="muted-help">主管無法決定時勾選——這批NG不由主管自行判定，直接由<?= htmlspecialchars($gmLabel) ?>決定怎麼處置（含要不要拆分）</span>
                     </label>
                     <div id="dispOptsWrap">
                         <div class="opts" id="dispOpts"></div>
@@ -405,9 +415,9 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                 </div>
             </div>
 
-            <!-- ⑤ 總經理裁示 -->
+            <!-- ⑤ 最終裁示（總經理／管理員指定的○○主管） -->
             <div class="sec" id="secGm">
-                <h4><i class="fa fa-university"></i> 總經理裁示
+                <h4><i class="fa fa-university"></i> <?= htmlspecialchars($gmLabel) ?>裁示
                     <span class="sub">有裁示時以裁示為最終決策</span>
                     <span class="spacer"></span>
                     <span class="saved" id="savedGm"></span>
@@ -433,7 +443,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
             <!-- ⑥ 扣款確認 -->
             <div class="sec" id="secDeduct">
                 <h4><i class="fa fa-calculator"></i> 扣款確認
-                    <span class="sub">判定報廢、或總經理裁示勾了「扣款」時才要填</span>
+                    <span class="sub">判定報廢、或<?= htmlspecialchars($gmLabel) ?>裁示勾了「扣款」時才要填</span>
                     <span class="spacer"></span>
                     <button class="btn btn-warm-o btn-xs" id="btnAutoPreview"><i class="fa fa-search"></i> 看自動帶入哪些金額</button>
                     <button class="btn btn-warm-o btn-xs" id="btnAutoFill"><i class="fa fa-download"></i> 自動帶入製程金額</button>
@@ -526,18 +536,24 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
         <div class="m-hd"><i class="fa fa-question-circle"></i> 使用說明－品質異常處理單<span class="x" data-close="helpUseMask">&times;</span></div>
         <div class="m-bd help-doc">
             <h4>這一頁在做什麼</h4>
-            <p>紙本 <b>2-QA-01-01 品質異常處理單</b> 的線上版。一張單從開立、徵詢相關單位意見、主管決策、總經理裁示、扣款確認到結案都在這一頁完成，列印版與紙本欄位一致。</p>
+            <p>紙本 <b>2-QA-01-01 品質異常處理單</b> 的線上版。一張單從開立、徵詢相關單位意見、主管決策、<?= htmlspecialchars($gmLabel) ?>裁示、扣款確認到結案都在這一頁完成，列印版與紙本欄位一致。</p>
             <h4>操作步驟</h4>
             <ul>
                 <li><b>① 基本資料</b>：填表頭、責任單位（先製程再廠商；廠商是「廠內加工廠商」時才可再指定部門與人員）、量測值與異常現象，按「儲存填寫內容」。</li>
-                <li><b>② 異常原因分類</b>：勾選分類（可複選、可到第三層）。<b>結案前都能改</b>，一開始判斷錯了可以回來修正。</li>
+                <li><b>① 分類</b>（必填）：這張單算「製程中」「客訴」還是其他——<b>清單會依分類分開顯示</b>，
+                    分類還可以由管理員設定一個<b>單號後綴詞</b>（例 -IR），設了之後這一類的單號會長成 <code>Q1150929001-IR</code>。
+                    <b>換分類時單號的後綴會自動跟著換</b>（本體與流水號不變；已結案的單不動）。
+                    報工NG累積自動開立的單一律歸到管理員勾了「報工NG自動開立」的那一類（預設＝製程中）。</li>
+                <li><b>② 異常原因分類</b>：勾選分類（可複選、可到第三層），底下可以再填一段<b>簡易說明</b>（備註，會印在紙本的原因分類欄底下）。<b>結案前都能改</b>，一開始判斷錯了可以回來修正。</li>
                 <li><b>③ 相關單位意見</b>：按「送出徵詢」選一個部門（可指定職稱或某一位）→ 對方收到通知後到這一頁回覆 → 再決定下一個問誰，或直接進決策。<b>同一時間只會有一個未回覆的徵詢。</b></li>
-                <li><b>④ 異常處置方式</b>：由決策者（業務／品管主管）勾選。主管無法決定時勾最上方<b>「整批轉呈總經理裁示」</b>
-                    （獨立開關，勾了這區處置方式就不用填，直接由總經理決定），系統會通知最終決策者。
+                <li><b>④ 異常處置方式</b>：由決策者（業務／品管主管）勾選。主管無法決定時勾最上方<b>「整批轉呈<?= htmlspecialchars($gmLabel) ?>裁示」</b>
+                    （獨立開關，勾了這區處置方式就不用填，直接由<?= htmlspecialchars($gmLabel) ?>決定），系統會通知最終裁示者。
                     <b>同一批NG可以部分特採、部分重工、部分報廢</b>——勾超過一個選項時會出現數量欄，逐項填數量（加總要等於不良數，
                     報廐項目可另填「其中扣款」的數量），按「確認數量，依決策拆單」後<b>系統自動拆成好幾張子單</b>，各自獨立結案；
                     只勾一項就跟原本一樣直接存檔、不會拆單。</li>
-                <li><b>⑤ 總經理裁示</b>：只有勾了「整批轉呈總經理裁示」才會出現。有裁示時<b>以裁示為最終決策</b>；同樣支援勾選超過一項時依數量拆單。
+                <li><b>⑤ <?= htmlspecialchars($gmLabel) ?>裁示</b>：只有勾了「整批轉呈<?= htmlspecialchars($gmLabel) ?>裁示」才會出現。有裁示時<b>以裁示為最終決策</b>；同樣支援勾選超過一項時依數量拆單。
+                    <b>誰可以裁示</b>由管理員在清單頁的「設定 → 其他設定 → 最終裁示者」指定一個<b>部門＋職級門檻</b>，
+                    該部門（含下轄）裡職級不低於門檻的主管<b>任何一位都可以裁示與簽章</b>；沒有指定部門時則是全站「組織角色綁定 → 最高核准人員」（總經理）。
                     裁示區的「扣款」勾了就可以填左下角的扣款確認，與報廢與否無關。</li>
                 <li><b>⑥ 扣款確認</b>：有綁製令時按「自動帶入製程金額」，可先按「看自動帶入哪些金額」確認來源；每一列都能改金額或取消計入，下方加成（例 1.1＝×110%）只作用在製程小計。「其他」列由生管或業務自行填金額與說明，合計自動加總。</li>
                 <li>拆單後的<b>子單</b>沒有決策區塊，改顯示「這張單源自 ○○」的提示（異常現象、原因分類、相關單位意見請看原始單）；
@@ -556,7 +572,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     填了不良數會即時算出<b>不良率</b>。</li>
                 <li><b>客戶與料號不給手打</b>：綁了製令或客退單，兩者都由來源的<b>料號主檔</b>自動帶（同一個料號文字在主檔常分屬好幾家客戶，手打一定會歪）；兩者都沒綁才可以自行填。</li>
                 <li>已結案的單一律不可修改，要改請管理員先「取消結案」；<b>取消結案不會收回已配發的報廢單號</b>（號碼可能已被其他單據引用）。</li>
-                <li>所有選項（原因分類／處置方式／總經理裁示）都<b>存 id 不存文字</b>，管理員改名不會讓舊單失去連動。</li>
+                <li>所有選項（異常單分類／原因分類／處置方式／<?= htmlspecialchars($gmLabel) ?>裁示）都<b>存 id 不存文字</b>，管理員改名不會讓舊單失去連動。</li>
                 <li>本單的狀態與內容會自動出現在<b>不合格品管制記錄表</b>（2-QA-01-03），那一頁只顯示、不可修改。</li>
                 <li><b>自動開立（報工累積NG）的單，幾個欄位一律鎖定，畫面上會反灰並標明</b>：<b>製令編號</b>任何人都不可改（連管理員也不行）；<b>責任單位</b>（製程／廠商／部門人員，開單時已自動帶入該製令該站登記的廠商）只有<b>異常單管理員</b>可以改；<b>批量／檢驗數／不良數</b>任何人都不可改，是報工累積直接加總出來的（批量＝良品＋NG、檢驗數＝同批量、不良數＝NG總數）。其餘欄位（異常現象、原因分類、處置、裁示、扣款…）不受影響，一樣正常填寫。</li>
                 <li><b>自動開立的單，決策者自動帶入品管主管</b>（沿用清單頁「設定→決策者」品管課那一列）。異常現象下方會出現<b>「品管確認說明」</b>區塊：<b>管理員設定的品管通知名單成員</b>可以在上方異常現象欄補充說明（<b>系統自動填入的底稿文字不可整段移除，只能在後面加字</b>），補完按「確認完成」；<b>沒有確認完成之前這張單不能送出主管決策（不會自動送決策，連異常單管理員直接送決策也會被擋）</b>。</li>
@@ -565,7 +581,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
             </ul>
             <h4>設定入口</h4>
             <ul>
-                <li>清單頁右上「設定」（限管理員）：異常原因分類三層、異常處置方式、總經理裁示選項、決策者可選的部門與職稱、扣款加成預設值、AS 文件綁定。</li>
+                <li>清單頁右上「設定」（限管理員）：<b>異常單分類</b>（名稱、單號後綴詞、報工NG自動歸哪一類）、異常原因分類三層、異常處置方式、<?= htmlspecialchars($gmLabel) ?>裁示選項、決策者可選的部門與職稱、<b>最終裁示者的部門與職級門檻</b>、扣款加成預設值、AS 文件綁定。</li>
                 <li>廠商是否為「廠內加工廠商」＝主檔管理 → 廠商編輯 → 勾選「廠內加工廠商」。</li>
             </ul>
             <h4>權限角色</h4>
@@ -596,6 +612,7 @@ var D = null;          // 後端回來的整包（order / perms / 代碼表）
 var QAB_SIGN_MERGE_ASK = false;  // 補登簽章表是否併入「相關單位意見」——只有真正補資料(is_backfill)才併，自動開立單不併
 var QAB_UNLOCKED = false;        // 自動開立單的代填代簽是否已通過操作確認密碼解鎖（每次載入頁面歸零）
 var CAUSE_SEL = [];    // 目前勾選的原因分類 id
+var GM_LABEL = <?= json_encode($gmLabel, JSON_UNESCAPED_UNICODE) ?>;   // 最終裁示者的稱呼（管理員可設定）
 var DEDUCT_ROWS = [];  // 畫面上的扣款列
 var RPL_FLOW = 0;
 var BOM_OK = false;                    // 製令欄位現在的值是不是「從清單選到的」
@@ -676,12 +693,26 @@ function render(){
     $('#stBox').html('<span class="st st-' + st.code + '">' + esc(st.label) + '</span>'
         + (st.decider ? ' <span class="st" style="background:#fff;border:1px solid var(--amber-d);color:var(--amber-d);">決策者：' + esc(st.decider.label) + '</span>' : '')
         + (o.final && o.final.names.length ? ' <span class="st">最終處置：' + esc(o.final.names.join('、'))
-            + (o.final.from === 'gm' ? '（總經理裁示）' : '（主管處置）') + '</span>' : ''));
+            + (o.final.from === 'gm' ? '（' + esc(GM_LABEL) + '裁示）' : '（主管處置）') + '</span>' : ''));
     $('#scrapBox').html(o.scrap_no ? '<span class="st" style="background:var(--coral);color:#fff;">報廢單號 ' + esc(o.scrap_no) + '</span>' : '');
     $('#btnClose2').toggle(!o.is_closed);
     $('#btnReopen').toggle(!!o.is_closed && !!p.canAdmin);
 
-    // ① 表頭
+    // ① 表頭：分類（必填；含停用的也要列出來，否則舊單指到停用分類時下拉會變空白）
+    (function(){
+        var cats = D.cats || [], cur = Number(o.cat_id || 0);
+        var h = '<option value="">請選擇…</option>';
+        cats.forEach(function(c){
+            if (!Number(c.is_active) && Number(c.cat_id) !== cur) return;   // 停用的只留「目前這一張正在用」的那個
+            h += '<option value="' + c.cat_id + '"' + (Number(c.cat_id) === cur ? ' selected' : '') + '>'
+               + esc(c.name) + (c.suffix ? '（單號後綴 ' + esc(c.suffix) + '）' : '')
+               + (Number(c.is_active) ? '' : '（已停用）') + '</option>';
+        });
+        $('#f_cat').html(h).val(cur ? String(cur) : '');
+        var cr = cats.filter(function(c){ return Number(c.cat_id) === cur; })[0];
+        $('#catHint').text(cr && cr.suffix ? '（本類單號後綴：' + cr.suffix + '）' : '');
+        $('#catErr').toggle(!cur && canEdit).text(cur ? '' : '這張單還沒有分類，請選一個（清單是依分類分開顯示的）');
+    })();
     $('#f_fill_date').val(o.fill_date || '');
     $('#f_occ_date').val(o.occurrence_date || '');
     $('#f_client').val(o.client_name || '');
@@ -820,6 +851,8 @@ function render(){
     CAUSE_SEL = (o.cause_ids || []).slice();
     CAUSE_CAN_EDIT = (canEdit || (p.canDecide && !o.is_closed));
     $('#btnPickCause').toggle(CAUSE_CAN_EDIT && (D.causes || []).length > 0);
+    $('#f_cause_note').val(o.cause_note || '').prop('readonly', !CAUSE_CAN_EDIT);
+    causeNoteCnt();
     renderCauseChips();
     $('#btnSaveCause').toggle(!o.is_closed && (D.can_edit || p.canDecide));
 
@@ -863,7 +896,7 @@ function render(){
     $('#dispWho').text(o.decided_name ? ('決策：' + o.decided_name + '　' + dispDate(o.disp_decided_at)) : '');
     refreshDecQty('disp');
 
-    // ⑤ 總經理裁示：主管勾了「整批轉呈總經理裁示」，或已經有裁示紀錄的舊單，才出現——
+    // ⑤ 最終裁示：主管勾了「整批轉呈○○裁示」，或已經有裁示紀錄的舊單，才出現——
     // 沒勾的話這區跟這張單無關，一直顯示會讓人誤以為每張單都要填這裡。
     var gmVisible = escalating || !!(o.gm_ids && o.gm_ids.length) || !!o.gm_decided_at;
     $('#secGm').toggle(gmVisible && !isSplitParent && !isSplitChild);
@@ -878,12 +911,26 @@ function render(){
     $('#gmOpts input,.dec-qty,.dec-ded,#f_gm_note,#f_capa').prop('disabled', !canGm);
     refreshDecQty('gm');
     var gp = o.gm_person || D.gm_person || {};
+    /* 誰可以做最終裁示：管理員指定了部門時是「該部門（含下轄）職級不低於門檻的主管，任一位皆可」，
+       沒指定時仍是全站「組織角色綁定 → 最高核准人員」（總經理）。兩種都把「現在實際上是誰」列出來——
+       只印一個職稱看不出到底誰要處理（與決策者那一格同一個判斷）。 */
+    var gpPool = (gp.pool || []).map(function(x){ return x.name + (x.position_name ? '（' + x.position_name + '）' : ''); });
     $('#gmWho2').html(!gp.bound
-        ? '<span style="color:var(--coral);">全站的「組織角色綁定 → 最高核准人員」還沒設定，所以現在沒有人可以做最終裁示。</span>'
-        : ('最終決策者：<b>' + esc(gp.name || '') + '</b>'
+        ? ('<span style="color:var(--coral);">'
+           + (gp.mode === 'dept'
+               ? ('設定的裁示部門目前查不到符合職級門檻的在職主管，所以現在沒有人可以做最終裁示（請到清單頁「設定 → 其他設定 → 最終裁示者」確認）。')
+               : ('全站的「組織角色綁定 → 最高核准人員」還沒設定，所以現在沒有人可以做最終裁示。'))
+           + '</span>')
+        : (esc(GM_LABEL) + '：<b>' + esc(gp.name || '') + '</b>'
            + (gp.is_delegated ? '（' + esc(gp.base_name || '') + ' 目前不在，由代理人簽，圖章會加「代」字）' : '')
-           + '　<span class="muted-help">取自全站統一的「組織角色綁定 → 最高核准人員」，要換人請到那一頁改，本模組不另外設定。</span>'));
-    $('#gmNoPerm').toggle(!p.canGm).text('您不是最終決策者（最終決策者＝全站「組織角色綁定」的最高核准人員，或其代理人）。');
+           + (gp.mode === 'dept'
+               ? ('　<span class="muted-help">' + (gpPool.length > 1
+                     ? ('這個範圍內的主管任何一位都可以裁示與簽章：' + esc(gpPool.join('、')))
+                     : '由管理員在「設定 → 其他設定 → 最終裁示者」指定的部門與職級門檻決定')
+                  + '</span>')
+               : '　<span class="muted-help">取自全站統一的「組織角色綁定 → 最高核准人員」，要換人請到那一頁改。</span>')));
+    $('#gmNoPerm').toggle(!p.canGm).text('您不是' + GM_LABEL
+        + '（可裁示的人由管理員在「設定 → 其他設定 → 最終裁示者」指定的部門與職級門檻決定；未指定時為組織角色綁定的最高核准人員）。');
     $('#gmWho').text(o.gm_name ? ('裁示：' + o.gm_name + '　' + dispDate(o.gm_decided_at)) : '');
 
     // ⑥ 扣款
@@ -1374,8 +1421,15 @@ $(document).on('click', '#causeChips .egcp-chip-x', function(){
     causeChanged();
 });
 function saveCause(){
-    post('save_cause', { id:OID, cause_ids: JSON.stringify(CAUSE_SEL) }, function(){ savedAt('#savedCause'); }, true);
+    post('save_cause', { id:OID, cause_ids: JSON.stringify(CAUSE_SEL),
+                         cause_note: $('#f_cause_note').val() },
+        function(){ savedAt('#savedCause'); }, true);
 }
+function causeNoteCnt(){
+    var n = ($('#f_cause_note').val() || '').length;
+    $('#causeNoteCnt').text(n ? (n + ' / 255 字') : '');
+}
+$(document).on('input', '#f_cause_note', function(){ causeNoteCnt(); autoSave('cause', saveCause, 1200); });
 
 /* 責任單位：部門／人員（自動開立時鎖定，只有異常單管理員可以改，RESP_LOCKED 由 render() 設定） */
 var RESP = [], RESP_LOCKED = false;
@@ -1448,6 +1502,13 @@ $(document).on('blur', '#f_bom, #f_ir', function(){ checkBind(); });
 
 function saveHead(silent){
     if (!checkBind()) { if (!silent) alert('製令編號或客退單號要從清單中選擇綁定'); return; }
+    // 分類是必填（後端 save_head 同規則再擋一次）——沒選就不送出，免得把其他欄位存進去卻被整批退回
+    if (!$('#f_cat').val()) {
+        $('#catErr').show().text('請選擇分類（必填）');
+        if (!silent) { alert('請先選擇異常單分類'); $('#f_cat').focus(); }
+        return;
+    }
+    $('#catErr').hide();
     var ms = [];
     for (var r = 0; r < 3; r++){
         var vals = [];
@@ -1455,7 +1516,7 @@ function saveHead(silent){
         ms.push({ dim_name: $('.m-dim[data-r="' + r + '"]').val() || '', vals: vals });
     }
     post('save_head', {
-        id:OID,
+        id:OID, cat_id: $('#f_cat').val(),
         fill_date: $('#f_fill_date').val(), occurrence_date: $('#f_occ_date').val(),
         client_name: $('#f_client').val(), part_no: $('#f_part').val(),
         bom_no: $('#f_bom').val(), ir_id: $('#f_ir_id').val(),
@@ -1697,9 +1758,9 @@ function renderDeduct(){
     var canFill = p.canDeductFill && !o.is_closed;
     var need = Number(o.gm_deduct) === 1 || (o.final && o.final.is_scrap);
     $('#deductHint').html(need
-        ? '這張單<b>需要填扣款確認</b>（' + (o.final && o.final.is_scrap ? '最終決策含報廢' : '') + (Number(o.gm_deduct) === 1 ? (o.final && o.final.is_scrap ? '，且' : '') + '總經理裁示勾了扣款' : '') + '）。'
+        ? '這張單<b>需要填扣款確認</b>（' + (o.final && o.final.is_scrap ? '最終決策含報廢' : '') + (Number(o.gm_deduct) === 1 ? (o.final && o.final.is_scrap ? '，且' : '') + GM_LABEL + '裁示勾了扣款' : '') + '）。'
           + (o.bom_no ? '' : '<br><span style="color:var(--coral);">這張單沒有綁製令，製程金額無法自動帶入，請在上方基本資料補上製令編號。</span>')
-        : '目前不需要扣款確認（總經理裁示沒有勾「扣款」，最終決策也不是報廢）。仍可先填，結案不會被擋。');
+        : ('目前不需要扣款確認（' + GM_LABEL + '裁示沒有勾「扣款」，最終決策也不是報廢）。仍可先填，結案不會被擋。'));
 
     var h = '';
     DEDUCT_ROWS.forEach(function(r, i){

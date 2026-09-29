@@ -70,7 +70,7 @@ function qaa_settings_default(): array
         'aging_days'           => [
             'decide'   => 3,   // 待決策
             'reply'    => 5,   // 等待單位回覆
-            'gm'       => 5,   // 待總經理裁示
+            'gm'       => 5,   // 待最終裁示（總經理／管理員指定的○○主管）
             'deduct'   => 7,   // 扣款確認中
             'qcreview' => 3,   // 待品管確認說明
         ],
@@ -551,9 +551,10 @@ function qaa_insights(array $ctx): array
                   'detail' => "目前有 {$aging} 張異常單已超過設定的時效門檻仍未結案，建議在品質會議上逐一追討。"];
     }
 
-    // 待總經理裁示卡關
+    // 待最終裁示卡關（裁示者的稱呼由管理員設定，見 qab_gm_label()）
     if (($k['pending_gm'] ?? 0) > 0) {
-        $out[] = ['level' => 'warn', 'title' => '待總經理裁示',
+        $gmL = $ctx['gm_label'] ?? '總經理';
+        $out[] = ['level' => 'warn', 'title' => '待' . $gmL . '裁示',
                   'detail' => "目前有 {$k['pending_gm']} 張已轉呈、尚未裁示，MRB（材料審查）判定尚未完成。"];
     }
 

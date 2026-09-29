@@ -5,9 +5,9 @@
  *
  * 版面完全照 Excel 的區塊順序與欄位：
  *   表頭(單號/客戶/填寫日期 → 製令/客退單號/責任單位 → 料號/批量/檢驗數/不良數/不良率)
- *   → 量測尺寸與實測值 1~12（三列）→ 異常原因分類 → 異常現象＋(業務/品管)承辦
+ *   → 量測尺寸與實測值 1~12（三列）→ 異常現象＋(業務/品管)承辦 → 異常原因分類（＋簡易說明）
  *   → 異常處置方式＋(業務/品管)主管 → 處置說明 → 相關單位意見(僅勾選者需回覆)
- *   → 總經理裁示＋矯正單號 → 扣款確認(製程/其他/合計、核准扣款金額、報廢單號、三格簽章)
+ *   → 最終裁示（總經理／管理員指定的○○主管）＋矯正單號 → 扣款確認(製程/其他/合計、核准扣款金額、報廢單號、三格簽章)
  *
  * 依 ai-rules/16：公司全名動態取（禁寫死）、表頭取綁定 AS 文件的 doc_name、
  *                 AS 編號右下角且版次依業務日期(填寫日期)回推、頁碼左下且多頁才印。
@@ -56,6 +56,7 @@ try {
     ]);
 } catch (Throwable $e) {}
 
+$gmLabel     = qab_gm_label($db);             // 最終裁示者的稱呼（總經理／管理員指定的○○主管）
 $stampTpl    = qab_stamp_tpl($db);            // 一般簽章用的圖章模板（設定 → 其他設定）
 $stampTplAsk = qab_stamp_tpl($db, 'ask');     // 相關單位意見那五格可以另外指定（例：長方章）
 $causeMap  = qab_cause_map($db);
@@ -288,20 +289,11 @@ svg.eg-stamp-tpl { height:auto !important; }
     <?php endfor; ?>
 </table>
 
-<!-- 異常原因分類＋異常現象，右邊一個合併的承辦簽章欄（比照紙本 M17:O21） -->
+<!-- 異常現象＋異常原因分類，右邊一個合併的承辦簽章欄（比照紙本 M17:O21）
+     2026-09-29 使用者交辦：原因分類移到「異 常 現 象」的下方（原本在上方），
+     並在原因分類底下多印一段「簡易說明」（cause_note）。 -->
 <table class="f">
     <colgroup><col style="width:16%"><col><col style="width:22%"></colgroup>
-    <tr>
-        <td class="lb">異常原因分類</td>
-        <td class="optrow">
-            <?php foreach ($lv1 as $c) echo cb($c['name'], isset($selRoots[$c['cat_id']])); ?>
-            <?php if ($deepPaths): ?><div class="small" style="margin-top:2px;">選定：<?= h(implode('；', $deepPaths)) ?></div><?php endif; ?>
-        </td>
-        <td class="sig" rowspan="2">
-            <div class="cap"><b>(業務/品管)</b><b>承辦：</b></div>
-            <div class="sigbox" data-stamp="<?= h($o['owner_sign_name']) ?>" data-dept="<?= h($o['signs']['owner']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['owner']['position'] ?? '') ?>" data-date="<?= h(d($o['owner_sign_at'] ?: $o['fill_date'])) ?>"></div>
-        </td>
-    </tr>
     <tr>
         <td class="lb">異 常 現 象</td>
         <td class="t" style="height:16mm;"><?= nl2br(h($o['abnormal_phenomenon'])) ?>
@@ -312,6 +304,20 @@ svg.eg-stamp-tpl { height:auto !important; }
             <div class="small" style="margin-top:4px;">品管備註：<?= nl2br(h($o['qa_ps'])) ?></div>
             <?php endif; ?>
         </td>
+        <td class="sig" rowspan="2">
+            <div class="cap"><b>(業務/品管)</b><b>承辦：</b></div>
+            <div class="sigbox" data-stamp="<?= h($o['owner_sign_name']) ?>" data-dept="<?= h($o['signs']['owner']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['owner']['position'] ?? '') ?>" data-date="<?= h(d($o['owner_sign_at'] ?: $o['fill_date'])) ?>"></div>
+        </td>
+    </tr>
+    <tr>
+        <td class="lb">異常原因分類</td>
+        <td class="optrow">
+            <?php foreach ($lv1 as $c) echo cb($c['name'], isset($selRoots[$c['cat_id']])); ?>
+            <?php if ($deepPaths): ?><div class="small" style="margin-top:2px;">選定：<?= h(implode('；', $deepPaths)) ?></div><?php endif; ?>
+            <?php if (trim((string)($o['cause_note'] ?? '')) !== ''): ?>
+            <div class="small" style="margin-top:2px;">說明：<?= nl2br(h($o['cause_note'])) ?></div>
+            <?php endif; ?>
+        </td>
     </tr>
 </table>
 
@@ -320,7 +326,15 @@ svg.eg-stamp-tpl { height:auto !important; }
     <colgroup><col style="width:16%"><col><col style="width:22%"></colgroup>
     <tr>
         <td class="lb">異常處置方式</td>
-        <td class="optrow"><?php foreach ($dispOpts as $op) echo cb($op['name'], in_array($op['opt_id'], $o['disp_ids'], true)); ?></td>
+        <td class="optrow"><?php foreach ($dispOpts as $op) {
+            /* 「轉呈裁示」那一格：**標題與勾選都不看選項名稱**。
+               ①標題用管理員設定的裁示者稱呼（qab_gm_label()），管理員把部門改掉時紙本會跟著變；
+               ②2026-09-24 起轉呈改成獨立開關 escalate_gm（不再往 disp_ids 塞一個選項），
+                 只看 disp_ids 的話新資料轉呈了紙本卻是空格——兩種來源都要認。 */
+            if (!empty($op['is_escalate'])) echo cb('轉' . $gmLabel . '裁示',
+                !empty($o['escalate_gm']) || in_array($op['opt_id'], $o['disp_ids'], true));
+            else echo cb($op['name'], in_array($op['opt_id'], $o['disp_ids'], true));
+        } ?></td>
         <td class="sig" rowspan="2">
             <div class="cap"><b>(業務/品管)</b><b>主管：</b></div>
             <div class="sigbox" data-stamp="<?= h($o['decided_name']) ?>" data-dept="<?= h($o['signs']['disp']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['disp']['position'] ?? '') ?>" data-date="<?= h(d($o['disp_decided_at'])) ?>"></div>
@@ -363,17 +377,17 @@ svg.eg-stamp-tpl { height:auto !important; }
     </tr>
 </table>
 
-<!-- 總經理裁示 -->
+<!-- 最終裁示（總經理／管理員指定的○○主管，見 qab_gm_label()） -->
 <table class="f">
     <colgroup><col style="width:16%"><col><col style="width:26%"></colgroup>
     <tr>
-        <td class="lb" rowspan="3">總經理 裁示</td>
+        <td class="lb" rowspan="3"><?= h($gmLabel) ?> 裁示</td>
         <td><?php
             foreach ($gmOpts as $op) echo cb($op['name'], in_array($op['opt_id'], $o['gm_ids'], true));
             echo cb('扣款', !empty($o['gm_deduct']));
         ?></td>
         <td class="sig" rowspan="3">
-            <div class="cap"><b>總經理</b><b>簽章：</b></div>
+            <div class="cap"><b>簽章：</b></div>
             <div class="sigbox" data-stamp="<?= h($o['gm_name']) ?>" data-dept="<?= h($o['signs']['gm']['dept'] ?? '') ?>" data-pos="<?= h($o['signs']['gm']['position'] ?? '') ?>" data-date="<?= h(d($o['gm_decided_at'])) ?>"
                  data-deputy="<?= !empty($o['gm_by_deputy']) ? 1 : '' ?>"></div>
         </td>

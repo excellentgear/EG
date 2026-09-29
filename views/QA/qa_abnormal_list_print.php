@@ -102,18 +102,18 @@ table.f tfoot td { font-weight:bold; background:#FAFAFA; }
         <col style="width:4%"><col style="width:11%"><col style="width:7%"><col style="width:11%">
         <col style="width:11%"><col style="width:11%"><col style="width:11%">
         <col style="width:6%"><col style="width:6%"><col style="width:7%">
-        <col style="width:9%"><col style="width:6%">
+        <col style="width:9%"><col style="width:6%"><col style="width:6%">
     </colgroup>
     <thead>
         <tr>
-            <th>序號</th><th>異常單號</th><th>填寫日期</th><th>客戶</th><th>料號</th>
+            <th>序號</th><th>異常單號</th><th>分類</th><th>填寫日期</th><th>客戶</th><th>料號</th>
             <th>製令／客退單</th><th>責任單位</th><th>檢驗數</th><th>不良數</th><th>不良率</th>
             <th>最終處置</th><th>狀態</th>
         </tr>
     </thead>
     <tbody>
     <?php if (!$rows): ?>
-        <tr><td colspan="12">這個月份沒有資料</td></tr>
+        <tr><td colspan="13">這個月份沒有資料</td></tr>
     <?php else: foreach ($rows as $i => $r):
         $iq = (int)($r['insp_qty'] ?? 0); $ng = (int)($r['ng_qty'] ?? 0);
         $rate = $iq > 0 ? number_format($ng / $iq * 100, 2) . '%' : '－';
@@ -121,6 +121,7 @@ table.f tfoot td { font-weight:bold; background:#FAFAFA; }
         <tr>
             <td><?= $i + 1 ?></td>
             <td class="tl"><?= h($r['abnormal_order_no']) ?></td>
+            <td><?= h($r['cat_name'] ?: '－') ?></td>
             <td><?= h(d($r['fill_date'] ?: $r['occurrence_date'])) ?></td>
             <td class="tl"><?= h($r['client_name']) ?></td>
             <td class="tl"><?= h($r['part_no']) ?></td>
@@ -137,7 +138,7 @@ table.f tfoot td { font-weight:bold; background:#FAFAFA; }
     <?php if ($rows): ?>
     <tfoot>
         <tr>
-            <td colspan="7">合計　總筆數 <?= count($rows) ?> 筆</td>
+            <td colspan="8">合計　總筆數 <?= count($rows) ?> 筆</td>
             <td><?= $totalInsp ?: '' ?></td>
             <td><?= $totalNg ?: '' ?></td>
             <td><?= h($overallRate) ?></td>

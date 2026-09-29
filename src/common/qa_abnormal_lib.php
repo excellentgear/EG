@@ -318,6 +318,46 @@ function qab_ensure_schema(PDO $db): void
         UNIQUE KEY uk_user (user_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='自動開立異常單要通知確認的品管部門人員名單（管理員維護）'");
 
+    /* ── 2026-09-29 使用者交辦：異常單分類 ───────────────────────────────
+       ①清單要依分類分開顯示 ②分類可以帶一個「異常單號後綴詞」（例 -IR）
+       ③**分類是必填**，報工NG自動開立的單一律歸到 is_pm_auto=1 的那一類。
+       **判定一律看旗標不比對名稱**（管理員把「製程中」改名就會失效）——
+       與 qa_option 的 is_scrap／is_escalate 同一條規則，見檔頭與 CLAUDE.md 鐵律4。 */
+    $db->exec("CREATE TABLE IF NOT EXISTS qa_abnormal_cat (
+        cat_id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(40) NOT NULL,
+        suffix VARCHAR(10) NULL COMMENT '異常單號後綴詞（例 -IR）；留空＝不加後綴',
+        is_pm_auto TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=報工NG累積自動開立的單歸入這一類（全站只有一列會是1）',
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='品質異常單分類（管理員維護；決定清單分組與單號後綴）'");
+
+    $cols4 = $db->query("SHOW COLUMNS FROM qa_abnormal_order")->fetchAll(PDO::FETCH_COLUMN);
+    $add4 = [];
+    $need4 = [
+        'cat_id'     => "ADD COLUMN cat_id INT NULL COMMENT '異常單分類 qa_abnormal_cat.cat_id（新單必填；2026-09-29 之前的舊單可能是 NULL）'",
+        'cause_note' => "ADD COLUMN cause_note VARCHAR(255) NULL COMMENT '異常原因分類的簡易說明（備註），列印時印在原因分類欄底下'",
+    ];
+    foreach ($need4 as $c => $sql) if (!in_array($c, $cols4, true)) $add4[] = $sql;
+    if ($add4) $db->exec("ALTER TABLE qa_abnormal_order " . implode(', ', $add4));
+    if (!in_array('cat_id', $cols4, true)) {
+        try { $db->exec("ALTER TABLE qa_abnormal_order ADD KEY idx_cat (cat_id)"); } catch (Throwable $e) {}
+    }
+    /* 單號要放得下後綴：原本 varchar(20) 剛好只夠 Q+3+4+3=11 碼的本體，
+       加上最長 10 碼的後綴會被 MySQL 截斷（而且截斷之後還可能撞 UNIQUE）。 */
+    try {
+        $t = $db->query("SHOW COLUMNS FROM qa_abnormal_order LIKE 'abnormal_order_no'")->fetch(PDO::FETCH_ASSOC);
+        if ($t && stripos((string)$t['Type'], 'varchar(20)') !== false) {
+            $db->exec("ALTER TABLE qa_abnormal_order MODIFY COLUMN abnormal_order_no VARCHAR(32) NOT NULL COMMENT '異常單號＝Q+民國年3碼+MMDD+流水3碼，後面可再接分類後綴詞'");
+        }
+        $t = $db->query("SHOW COLUMNS FROM qa_abnormal_del_log LIKE 'abnormal_order_no'")->fetch(PDO::FETCH_ASSOC);
+        if ($t && stripos((string)$t['Type'], 'varchar(20)') !== false) {
+            $db->exec("ALTER TABLE qa_abnormal_del_log MODIFY COLUMN abnormal_order_no VARCHAR(32) NULL");
+        }
+    } catch (Throwable $e) {}
+
     qab_seed_defaults($db);
 }
 
@@ -341,6 +381,15 @@ function qab_seed_defaults(PDO $db): void
         $ins->execute(['gm', '報廢', 1, 0, 0, 20]);
         $ins->execute(['gm', '重工', 0, 0, 0, 30]);
         $ins->execute(['gm', '需矯正', 0, 0, 1, 40]);
+    }
+    /* 異常單分類（2026-09-29 使用者指定的三個預設值）——**後綴詞刻意留空**，
+       使用者原話「後綴先不用預設」，要用再由管理員到設定頁逐一補。
+       「製程中」帶 is_pm_auto=1＝報工NG累積自動開立的單歸到這一類。 */
+    if ((int)$db->query("SELECT COUNT(*) FROM qa_abnormal_cat")->fetchColumn() === 0) {
+        $ins = $db->prepare("INSERT INTO qa_abnormal_cat (name,suffix,is_pm_auto,sort_order) VALUES (?,?,?,?)");
+        $ins->execute(['製程中', null, 1, 10]);
+        $ins->execute(['客訴',   null, 0, 20]);
+        $ins->execute(['其他',   null, 0, 30]);
     }
 }
 
@@ -495,23 +544,44 @@ function qab_resolve_client(PDO $db, ?string $bomNo, ?int $irId): array
 }
 
 /**
- * 最終決策者（總經理裁示）＝**全站統一的組織角色綁定「最高核准人員」**（`org_role_lib` 的 top_approver，
- * 設定入口 views/admin/org_role_setting.php）。使用者定調：這一格不在本模組另外設定，
- * 改人只在那一頁改一次，全站表單一起跟著變——本模組刻意不留第二份設定，否則兩邊遲早對不起來。
- * 再過一次 delegate_lib 的代理解析（ai-rules/11）：本人請假時由代理人簽，並標記成代簽。
+ * 最終裁示者。**兩種模式**（2026-09-29 使用者交辦改的）：
+ *
+ *   ①（預設）管理員在設定頁指定一個**部門＋職級門檻**——那個部門（含下轄）裡
+ *      職級不低於門檻的主管**任何一位都可以裁示與簽章**，畫面與紙本上的文字一律
+ *      顯示成「○○主管」（例：技術課主管），不再寫死「總經理」。
+ *   ②沒有設定部門時**維持原本的行為**＝全站統一的組織角色綁定「最高核准人員」
+ *      （org_role_lib 的 top_approver，設定入口 views/admin/org_role_setting.php），
+ *      顯示文字退回「總經理」。既有資料與流程完全不受影響。
+ *
+ * 兩種模式都再過一次 delegate_lib 的代理解析（ai-rules/11）：本人請假時由代理人簽，
+ * 並標記成代簽（列印時圖章右下角會加「代」字）。
  *
  * @param array $ctx 傳 ['log'=>true] 才寫代理事件紀錄；純顯示用一律不要寫（每次開畫面都寫會洗版）
- * @return array ['id','name','base_id','base_name','is_delegated','bound'] bound=false 表示那一頁還沒設定
+ * @return array ['id','name','base_id','base_name','is_delegated','bound','mode','label','pool']
+ *               bound=false 表示兩種設定都還沒做好（畫面要提示去設定）
  */
 function qab_gm_person(PDO $db, array $ctx = []): array
 {
-    require_once __DIR__ . '/org_role_lib.php';
-    $out = ['id' => 0, 'name' => '', 'base_id' => 0, 'base_name' => '', 'is_delegated' => false, 'bound' => false];
-    $u = eg_org_user($db, 'top_approver');
-    if (!$u) return $out;
-    $out['bound'] = true;
-    $out['base_id'] = (int)$u['id'];
-    $out['base_name'] = (string)($u['user_cname'] ?: $u['user_uname']);
+    $cfg = qab_gm_cfg($db);
+    $out = ['id' => 0, 'name' => '', 'base_id' => 0, 'base_name' => '', 'is_delegated' => false,
+            'bound' => false, 'mode' => $cfg['dept_id'] > 0 ? 'dept' : 'top',
+            'label' => qab_gm_label($db), 'pool' => []];
+
+    if ($cfg['dept_id'] > 0) {
+        $pool = qab_gm_people($db);
+        $out['pool'] = $pool;
+        if (!$pool) return $out;                 // 設了部門卻一個合格主管都沒有＝畫面要講出來
+        $out['bound'] = true;
+        $out['base_id'] = (int)$pool[0]['id'];   // 代表人＝職級最高那一位（誰簽都算數，見 qab_gm_can()）
+        $out['base_name'] = (string)$pool[0]['name'];
+    } else {
+        require_once __DIR__ . '/org_role_lib.php';
+        $u = eg_org_user($db, 'top_approver');
+        if (!$u) return $out;
+        $out['bound'] = true;
+        $out['base_id'] = (int)$u['id'];
+        $out['base_name'] = (string)($u['user_cname'] ?: $u['user_uname']);
+    }
     $out['id'] = $out['base_id'];
     $out['name'] = $out['base_name'];
     try {
@@ -531,16 +601,105 @@ function qab_gm_person(PDO $db, array $ctx = []): array
 }
 
 /**
+ * 最終裁示的部門設定：dept_id ＝哪一個部門，pos_level ＝職級門檻
+ * （`position_level.level`：0＝最高決策者、1/2/3＝一~三階主管、NULL＝非主管，
+ *   **數字越小越高**，所以門檻是「level ≦ 這個數字的人都算主管」，預設 3＝三階主管以上）。
+ * dept_id=0 ＝沒設定，退回全站「最高核准人員」（見 qab_gm_person()）。
+ */
+function qab_gm_cfg(PDO $db): array
+{
+    $lv = (int)qab_setting_get($db, 'gm_pos_level', 3);
+    if ($lv < 0) $lv = 0;
+    if ($lv > 3) $lv = 3;
+    return ['dept_id' => (int)qab_setting_get($db, 'gm_dept_id', 0), 'pos_level' => $lv];
+}
+
+/**
+ * 畫面與紙本上要印的文字：設了部門就是「○○主管」（部門名稱即時查，不存一份文字＝鐵律4，
+ * 部門改名會自動跟著變），沒設定就退回原本的「總經理」。
+ */
+function qab_gm_label(PDO $db): string
+{
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $deptId = (int)qab_setting_get($db, 'gm_dept_id', 0);
+    if ($deptId <= 0) return $cache = '總經理';
+    $st = $db->prepare("SELECT name FROM department WHERE id=?");
+    $st->execute([$deptId]);
+    $n = trim((string)$st->fetchColumn());
+    return $cache = ($n === '' ? '總經理' : $n . '主管');
+}
+
+/** position_id => level（NULL＝非主管）；一個 request 只查一次 */
+function qab_pos_levels(PDO $db): array
+{
+    static $m = null;
+    if ($m !== null) return $m;
+    $m = [];
+    foreach ($db->query("SELECT position_id, level FROM position_level")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $m[(int)$r['position_id']] = $r['level'] === null ? null : (int)$r['level'];
+    }
+    return $m;
+}
+
+/**
+ * 設定的那個部門（**含下轄**，組織是樹狀的，只比單一 id 會把組別的主管判成不是該部門的人）
+ * 裡面，職級不低於門檻的在職主管——**任何一位都可以裁示**（使用者拍板）。
+ * 依職級高→低排序，第一位當「代表人」顯示用。
+ */
+function qab_gm_people(PDO $db): array
+{
+    $cfg = qab_gm_cfg($db);
+    if ($cfg['dept_id'] <= 0) return [];
+    require_once __DIR__ . '/people_lib.php';
+    require_once __DIR__ . '/org_role_lib.php';
+    $deptIds = array_map('intval', eg_dept_subtree_ids($db, $cfg['dept_id']));
+    if (!$deptIds) $deptIds = [$cfg['dept_id']];
+    $lvMap = qab_pos_levels($db);
+    $out = [];
+    foreach (eg_people_list($db, ['dept_ids' => $deptIds, 'all_posts' => true]) as $r) {
+        if (!in_array((int)$r['dept_id'], $deptIds, true)) continue;
+        $pid = (int)($r['position_id'] ?? 0);
+        $lv = $pid > 0 && array_key_exists($pid, $lvMap) ? $lvMap[$pid] : null;
+        if ($lv === null || $lv > $cfg['pos_level']) continue;      // 非主管、或職級低於門檻
+        $out[] = ['id' => (int)$r['id'], 'name' => (string)$r['user_cname'],
+                  'dept_name' => (string)$r['dept_name'], 'position_name' => (string)$r['position_name'],
+                  'level' => $lv, 'pos_sort' => (int)($r['position_sort'] ?? 9999),
+                  'leave_note' => (string)($r['leave_note'] ?? '')];
+    }
+    usort($out, function ($a, $b) {
+        return [$a['level'], $a['pos_sort'], $a['id']] <=> [$b['level'], $b['pos_sort'], $b['id']];
+    });
+    // 同一個人可能同時掛好幾個合格職務，只留職級最高的那一筆
+    $seen = []; $uniq = [];
+    foreach ($out as $r) { if (isset($seen[$r['id']])) continue; $seen[$r['id']] = 1; $uniq[] = $r; }
+    return $uniq;
+}
+
+/** 這個人是不是「可以做最終裁示」的人（含代理人） */
+function qab_gm_can(PDO $db, int $uid): bool
+{
+    if ($uid <= 0) return false;
+    $gm = qab_gm_person($db);
+    if ($gm['base_id'] === $uid || $gm['id'] === $uid) return true;
+    foreach ($gm['pool'] as $p) if ((int)$p['id'] === $uid) return true;
+    return false;
+}
+
+/**
  * 簽章格登記表（唯一來源）：補登時要能逐格指定人員與日期，畫面、API、列印都讀這一份。
  * perm＝平常誰能簽；補資料模式下一律由「異常單管理員」代為補登。
  */
-function qab_sign_slots(): array
+function qab_sign_slots(?PDO $db = null): array
 {
+    // 「總經理 裁示」那一格的文字現在是管理員可設定的（見 qab_gm_label()）——
+    // 有傳 $db 就即時查，沒傳（舊呼叫端）維持原本的字，不會壞。
+    $gmLabel = $db ? qab_gm_label($db) : '總經理';
     return [
         'qcreview' => ['label' => '(品管) 確認說明完成', 'by' => 'qc_review_by', 'at' => 'qc_review_at', 'perm' => 'canQcNotify', 'ord' => 0],
         'owner' => ['label' => '(業務/品管) 承辦', 'by' => 'owner_sign_by',  'at' => 'owner_sign_at',  'perm' => 'canCreate',        'ord' => 1],
         'disp'  => ['label' => '(業務/品管) 主管', 'by' => 'disp_decided_by', 'at' => 'disp_decided_at', 'perm' => 'canDecide',       'ord' => 2],
-        'gm'    => ['label' => '總經理 裁示',      'by' => 'gm_decided_by',   'at' => 'gm_decided_at',   'perm' => 'canGm',           'ord' => 3],
+        'gm'    => ['label' => $gmLabel . ' 裁示',  'by' => 'gm_decided_by',   'at' => 'gm_decided_at',   'perm' => 'canGm',           'ord' => 3],
         'pm'    => ['label' => '(生管) 簽章',      'by' => 'deduct_pm_by',    'at' => 'deduct_pm_at',    'perm' => 'canDeductFill',   'ord' => 4],
         'qc'    => ['label' => '(品管) 簽章',      'by' => 'deduct_qc_by',    'at' => 'deduct_qc_at',    'perm' => 'canQcSign',       'ord' => 5],
         'appr'  => ['label' => '核准 (管理課 會計/主管)', 'by' => 'deduct_appr_by', 'at' => 'deduct_appr_at', 'perm' => 'canDeductApprove', 'ord' => 6],
@@ -554,7 +713,7 @@ function qab_sign_slots(): array
 function qab_backfill_time(PDO $db, array $order, string $date): string
 {
     $base = strtotime($date . ' 09:00:00');
-    foreach (qab_sign_slots() as $s) {
+    foreach (qab_sign_slots($db) as $s) {
         $at = trim((string)($order[$s['at']] ?? ''));
         if ($at === '' || substr($at, 0, 10) !== $date) continue;
         $t = strtotime($at);
@@ -741,7 +900,7 @@ function qab_person_asof(PDO $db, int $uid, string $date): array
  * 共用這一支，不要再各刻一份——`created_by` 一律由呼叫端明確傳入（不可在這裡讀 $_SESSION），
  * 因為自動開單時「開單人」是解析出來的現場主管，不是操作當下按存檔的那個人。
  *
- * $data 可用鍵：kind('ir'|'bom')、fill_date、ir_id、bom_no、client_name、part_no、batch_qty、
+ * $data 可用鍵：kind('ir'|'bom')、cat_id（**必填**，異常單分類）、fill_date、ir_id、bom_no、client_name、part_no、batch_qty、
  *              insp_qty、ng_qty、abnormal_phenomenon、created_by（必填）、
  *              resp_process_no（責任製程，選填；自動開單會直接帶，人工開單留給之後在「責任單位」段填）、
  *              auto_opened、auto_open_note、pm_report_id（報工NG自動/補開才會有）。
@@ -754,6 +913,13 @@ function qab_create_order(PDO $db, array $data): array
     $kind = ($data['kind'] ?? '') === 'ir' ? 'ir' : 'bom';
     $fillDate = trim((string)($data['fill_date'] ?? '')) ?: date('Y-m-d');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $fillDate)) throw new Exception('填寫日期格式不正確');
+    /* 異常單分類：使用者指定為**必填**（決定清單分組與單號後綴詞）。
+       自動開單由呼叫端帶 qab_cat_auto_pm()；人工開單由畫面上的下拉選。 */
+    $catId = (int)($data['cat_id'] ?? 0);
+    if ($catId <= 0) throw new Exception('請選擇異常單分類');
+    $catMap = qab_cat_map($db);
+    if (!isset($catMap[$catId])) throw new Exception('選到的異常單分類不存在，請重新整理頁面後再試');
+    if (!$catMap[$catId]['is_active']) throw new Exception('這個異常單分類已停用，請改選其他分類');
 
     $strOrNull = function ($v, $max) {
         if ($v === null) return null;
@@ -845,15 +1011,15 @@ function qab_create_order(PDO $db, array $data): array
 
     $db->beginTransaction();
     try {
-        $no = qab_next_order_no($db, $fillDate);
+        $no = qab_next_order_no($db, $fillDate, (string)$catMap[$catId]['suffix']);
         $db->prepare("INSERT INTO qa_abnormal_order
-            (abnormal_order_no, source_type, source_id, occurrence_date, fill_date, found_unit,
+            (cat_id, abnormal_order_no, source_type, source_id, occurrence_date, fill_date, found_unit,
              ir_id, ir_no, bom_no, client_id, client_name, part_no, part_d_id, batch_qty, insp_qty, ng_qty,
              abnormal_phenomenon, created_by, created_at, surcharge_rate,
              resp_process_no, responsible_vendor_id, resp_is_internal, responsible_unit,
              auto_opened, auto_open_note, pm_report_id, decider_cfg_id, auto_phenomenon_base)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?,?,?,?,?,?,?,?,?)")
-           ->execute([$no, ($kind === 'ir' ? 'IR' : 'BOM'), (int)($irId ?: 0), $fillDate, $fillDate,
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?,?,?,?,?,?,?,?,?)")
+           ->execute([$catId, $no, ($kind === 'ir' ? 'IR' : 'BOM'), (int)($irId ?: 0), $fillDate, $fillDate,
                       ($kind === 'ir' ? '客退' : '廠內'), $irId, $irNo, $bomNo, $cli['id'], $client, $partNo, $partDid, $batch,
                       $inspQty, $ngQty, $phenomenon, $uid, qab_default_rate($db),
                       $respProcessNo, $respVendorId, $respIsInternal, $respUnit,
@@ -1041,7 +1207,13 @@ function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReport
         // 決策者自動＝品管主管（2026-09-24 使用者拍板）：沿用管理員在「設定→決策者」已經設好的
         // 品管部門那一列（qa_decider_cfg），換人由品管課職務調動自然反映，不必另外解析出特定人選。
         'decider_cfg_id' => qab_decider_cfg_id_for_dept($db, 'qc_dept'),
+        /* 分類：一律歸到管理員勾了「報工NG自動開立」旗標的那一類（預設＝製程中）。
+           **不可以比對名稱**——管理員把分類改名，自動開單就會整個開不出來（鐵律4）。 */
+        'cat_id' => qab_cat_auto_pm($db),
     ];
+    if (!$data['cat_id']) {
+        throw new Exception('尚未設定「報工NG自動開立」要歸入哪一個異常單分類，請先到清單頁的「設定 → 異常單分類」勾選一個分類');
+    }
     $created = qab_create_order($db, $data);
     $ph = implode(',', array_fill(0, count($reportIds), '?'));
     $db->prepare("UPDATE pm_process_daily_report SET abnormal_order_id=? WHERE report_id IN ($ph)")
@@ -1811,10 +1983,9 @@ function qab_perms(PDO $db, int $uid): array
     // qab_gm 角色只是給特殊情況補授權用，本模組**不再**自己設定一份最高決策者名單
     // 刻意**不含** canAdmin：異常單管理員不等於總經理，讓模組管理員也能蓋最終裁示，
     // 等於把「最高決策者由全站統一綁定」這件事整個架空。管理員要補的是歷史單，那條路走 canBackfill。
-    $gm = qab_gm_person($db);
-    $canGm = $isAdmin || $has(['qab_gm'])
-             || ($gm['base_id'] > 0 && $gm['base_id'] === $uid)
-             || ($gm['id'] > 0 && $gm['id'] === $uid);
+    // 2026-09-29：最終裁示改成「管理員指定的部門＋職級門檻，該範圍內的主管任何一位都可以簽」，
+    // 沒設定部門時仍是原本的全站最高核准人員——兩種都由 qab_gm_can() 一處判定（鐵律4）。
+    $canGm = $isAdmin || $has(['qab_gm']) || qab_gm_can($db, $uid);
     $canDeductFill = $canAdmin || $has(['qab_deduct_fill'])
                      || qab_in_org_dept($db, $uid, 'pm_dept') || qab_in_org_dept($db, $uid, 'sales_dept');
     $canDeductApprove = $canAdmin || $has(['qab_deduct_approve']) || qab_in_org_dept($db, $uid, 'acc_dept');
@@ -1880,18 +2051,104 @@ function qab_can_edit_form(PDO $db, array $perms, array $order): bool
 }
 
 /* ─────────────────────────────────────────────────────────────
+   異常單分類（製程中／客訴／其他…；管理員維護）
+   清單依分類分開顯示，分類還可以帶一個「異常單號後綴詞」（例 -IR）。
+   **不要用名稱判定任何行為**：報工NG自動開立歸哪一類看 is_pm_auto 旗標，
+   管理員把分類改名時行為才不會整個失效（鐵律4，與 qa_option 同一條規則）。
+   ───────────────────────────────────────────────────────────── */
+/** 分類清單；$activeOnly=false 時連停用的一起回（設定頁與舊單顯示用） */
+function qab_cats(PDO $db, bool $activeOnly = true): array
+{
+    $sql = "SELECT cat_id, name, suffix, is_pm_auto, sort_order, is_active FROM qa_abnormal_cat";
+    if ($activeOnly) $sql .= " WHERE is_active=1";
+    $sql .= " ORDER BY sort_order, cat_id";
+    $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        $r['cat_id']     = (int)$r['cat_id'];
+        $r['suffix']     = (string)($r['suffix'] ?? '');
+        $r['is_pm_auto'] = (int)$r['is_pm_auto'];
+        $r['sort_order'] = (int)$r['sort_order'];
+        $r['is_active']  = (int)$r['is_active'];
+    }
+    unset($r);
+    return $rows;
+}
+
+/** cat_id => 該列（含停用；舊單指到已停用的分類時畫面才不會變空白） */
+function qab_cat_map(PDO $db): array
+{
+    $out = [];
+    foreach (qab_cats($db, false) as $r) $out[$r['cat_id']] = $r;
+    return $out;
+}
+
+/** 報工NG累積自動開立的單要歸到哪一類（旗標判定，查不到回 null＝維持未分類） */
+function qab_cat_auto_pm(PDO $db): ?int
+{
+    foreach (qab_cats($db, true) as $r) if ($r['is_pm_auto']) return $r['cat_id'];
+    return null;
+}
+
+/** 這個分類的單號後綴詞（沒有分類或沒設定後綴一律回空字串） */
+function qab_cat_suffix(PDO $db, ?int $catId): string
+{
+    $catId = (int)$catId;
+    if ($catId <= 0) return '';
+    $map = qab_cat_map($db);
+    return isset($map[$catId]) ? (string)$map[$catId]['suffix'] : '';
+}
+
+/**
+ * 把單號的後綴切掉，只留本體 Q+民國年3碼+MMDD+流水3碼（11 碼）。
+ * 換分類時要換後綴，**本體（含流水號）一律不變**——單號會被印在紙本上、
+ * 也會被別的單據拿去對帳，重新配一個流水號等於換成另一張單。
+ */
+function qab_order_no_base(string $no): string
+{
+    return preg_match('/^(Q\d{3}\d{4}\d{3})/', $no, $m) ? $m[1] : $no;
+}
+
+/* ─────────────────────────────────────────────────────────────
    編號
    ───────────────────────────────────────────────────────────── */
-function qab_next_order_no(PDO $db, ?string $ymd = null): string
+/**
+ * 配一個新的異常單號。流水號**全日共用一組**（不分分類），分類的後綴詞直接接在後面，
+ * 所以同一天不會出現兩張本體相同的單，加不加後綴都分得出是哪一張。
+ * 取流水號時**不可以用 substr(-3)**：有後綴之後最後三碼是後綴不是流水號。
+ */
+function qab_next_order_no(PDO $db, ?string $ymd = null, string $suffix = ''): string
 {
     $ts = $ymd ? strtotime($ymd) : time();
     $roc = (int)date('Y', $ts) - 1911;
     $prefix = 'Q' . str_pad((string)$roc, 3, '0', STR_PAD_LEFT) . date('md', $ts);
-    $st = $db->prepare("SELECT abnormal_order_no FROM qa_abnormal_order WHERE abnormal_order_no LIKE ? ORDER BY abnormal_order_no DESC LIMIT 1");
+    $pos = strlen($prefix) + 1;                 // 本體長度固定，直接取 prefix 後面那三碼
+    $st = $db->prepare("SELECT MAX(CAST(SUBSTRING(abnormal_order_no, $pos, 3) AS UNSIGNED))
+                          FROM qa_abnormal_order WHERE abnormal_order_no LIKE ?");
     $st->execute([$prefix . '%']);
-    $last = $st->fetchColumn();
-    $seq = $last ? ((int)substr((string)$last, -3) + 1) : 1;
-    return $prefix . str_pad((string)$seq, 3, '0', STR_PAD_LEFT);
+    $seq = (int)$st->fetchColumn() + 1;
+    return $prefix . str_pad((string)$seq, 3, '0', STR_PAD_LEFT) . $suffix;
+}
+
+/**
+ * 分類改了之後同步單號的後綴詞（本體不動）。
+ * **已結案的單不改**——那張紙已經印出去了，事後換號碼只會對不起來。
+ * 回傳新的單號；沒有變動時回 null。
+ */
+function qab_order_no_sync_suffix(PDO $db, int $orderId, ?int $catId): ?string
+{
+    $st = $db->prepare("SELECT abnormal_order_no, is_closed FROM qa_abnormal_order WHERE id=?");
+    $st->execute([$orderId]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row || (int)$row['is_closed'] === 1) return null;
+    $cur = (string)$row['abnormal_order_no'];
+    $new = qab_order_no_base($cur) . qab_cat_suffix($db, $catId);
+    if ($new === $cur) return null;
+    // 理論上不會撞（本體是唯一的），真的撞到就維持原號不動，不要讓存檔整個失敗
+    $c = $db->prepare("SELECT 1 FROM qa_abnormal_order WHERE abnormal_order_no=? AND id<>?");
+    $c->execute([$new, $orderId]);
+    if ($c->fetchColumn()) return null;
+    $db->prepare("UPDATE qa_abnormal_order SET abnormal_order_no=? WHERE id=?")->execute([$new, $orderId]);
+    return $new;
 }
 
 /**
@@ -1952,8 +2209,9 @@ function qab_close_order(PDO $db, int $id, int $uid, bool $skipChecks = false): 
     if (!empty($o['is_closed'])) return ['scrap_no' => (string)($o['scrap_no'] ?? '')];
     if (!$skipChecks) {
         if (!$o['cause_ids']) throw new Exception('結案前請先勾選「異常原因分類」');
-        if (!$o['disp_ids'] && !$o['gm_ids']) throw new Exception('結案前請先完成「異常處置方式」或「總經理裁示」');
-        if (!empty($o['need_gm'])) throw new Exception('處置方式勾了「轉總經理裁示」，要等最終裁示完成才能結案');
+        $gmL = qab_gm_label($db);
+        if (!$o['disp_ids'] && !$o['gm_ids']) throw new Exception('結案前請先完成「異常處置方式」或「' . $gmL . '裁示」');
+        if (!empty($o['need_gm'])) throw new Exception('已勾「整批轉呈' . $gmL . '裁示」，要等最終裁示完成才能結案');
         foreach ($o['rounds'] as $r) if (($r['status'] ?? '') !== 'Returned') throw new Exception('還有單位尚未回覆，請等回覆或先取消該輪徵詢');
     }
     $own = !$db->inTransaction();
@@ -1983,12 +2241,12 @@ function qab_clone_for_split(PDO $db, array $parent, string $childNo, int $qty):
          ir_id, ir_no, bom_no, client_id, client_name, part_no, part_d_id, batch_qty, insp_qty, ng_qty,
          abnormal_phenomenon, defect_detail, qa_ps, created_by, created_at, surcharge_rate,
          resp_process_no, responsible_vendor_id, resp_is_internal, responsible_unit,
-         resp_vendor_manual, resp_process_manual, pm_report_id, decider_cfg_id, parent_order_id)
+         resp_vendor_manual, resp_process_manual, pm_report_id, decider_cfg_id, cat_id, cause_note, parent_order_id)
         SELECT ?, source_type, source_id, occurrence_date, fill_date, found_unit,
                ir_id, ir_no, bom_no, client_id, client_name, part_no, part_d_id, batch_qty, insp_qty, ?,
                abnormal_phenomenon, defect_detail, qa_ps, created_by, NOW(), surcharge_rate,
                resp_process_no, responsible_vendor_id, resp_is_internal, responsible_unit,
-               resp_vendor_manual, resp_process_manual, pm_report_id, decider_cfg_id, id
+               resp_vendor_manual, resp_process_manual, pm_report_id, decider_cfg_id, cat_id, cause_note, id
         FROM qa_abnormal_order WHERE id=?")
         ->execute([$childNo, $qty, (int)$parent['id']]);
     $cid = (int)$db->lastInsertId();
@@ -2410,6 +2668,15 @@ function qab_order(PDO $db, int $id): ?array
 
     // 最終決策者（畫面與通知都讀這一份；來源是全站統一綁定）
     $o['gm_person'] = qab_gm_person($db);
+    // 最終裁示的顯示文字（「總經理」或管理員設定的「○○主管」）——畫面、狀態與列印共用同一份
+    $o['gm_label'] = qab_gm_label($db);
+    // 異常單分類（含停用的也要查得到，否則舊單會顯示空白看起來像資料不見了）
+    $o['cat_id'] = $o['cat_id'] === null ? null : (int)$o['cat_id'];
+    $catMap = qab_cat_map($db);
+    $catRow = ($o['cat_id'] && isset($catMap[$o['cat_id']])) ? $catMap[$o['cat_id']] : null;
+    $o['cat_name']   = $catRow ? $catRow['name'] : '';
+    $o['cat_suffix'] = $catRow ? $catRow['suffix'] : '';
+    $o['cat_off']    = $catRow ? ($catRow['is_active'] ? 0 : 1) : 0;
     /* 客戶／料號是不是「真的由來源帶得出來」——畫面要據此決定鎖不鎖。
        只看「有沒有綁來源」是不夠的：手建的客退單常常沒綁料號主檔、Client_name 也是空的，
        那時鎖起來就變成「欄位空白又不給填」，使用者只看得到一片空白（實際踩過）。 */
@@ -2454,7 +2721,7 @@ function qab_order(PDO $db, int $id): ?array
     $o['backfill_days']  = qab_backfill_days($db);
     // 各簽章格目前是誰、哪一天（補登介面與列印共用同一份登記表）
     $o['signs'] = [];
-    foreach (qab_sign_slots() as $k => $sl) {
+    foreach (qab_sign_slots($db) as $k => $sl) {
         $o['signs'][$k] = ['label' => $sl['label'], 'perm' => $sl['perm'],
                            'user_id' => $o[$sl['by']] === null ? null : (int)$o[$sl['by']],
                            'at' => (string)($o[$sl['at']] ?? ''),
@@ -2538,7 +2805,7 @@ function qab_status(array $o): array
     // 「轉總經理裁示」現在是獨立開關，勾了之後 disp_ids／gm_ids 兩邊都是空的（不像舊資料那樣
     // 靠 disp_ids 裡塞一個 is_escalate 選項），所以這條要排在「兩邊都空＝待決策」判斷之前，
     // 不然畫面會錯誤顯示「待決策」而不是「待總經理裁示」。
-    if (!empty($o['need_gm']) && empty($o['gm_ids'])) return ['code' => 'gm', 'label' => '待總經理裁示'];
+    if (!empty($o['need_gm']) && empty($o['gm_ids'])) return ['code' => 'gm', 'label' => '待' . ((string)($o['gm_label'] ?? '總經理')) . '裁示'];
     if (empty($o['disp_ids']) && empty($o['gm_ids'])) return ['code' => 'decide', 'label' => '待決策'];
     if (!empty($o['gm_deduct']) || (!empty($o['final']['is_scrap']))) {
         if (empty($o['deduct_appr_at'])) return ['code' => 'deduct', 'label' => '扣款確認中'];
@@ -2574,6 +2841,11 @@ function qab_list(PDO $db, array $f = []): array
     if (!empty($f['month']))  { $w[] = "MONTH(COALESCE(o.fill_date,o.occurrence_date,DATE(o.created_at)))=?"; $p[] = (int)$f['month']; }
     if (isset($f['closed']) && $f['closed'] !== '') { $w[] = "o.is_closed=?"; $p[] = (int)$f['closed']; }
     if (!empty($f['source'])) { $w[] = "o.source_type=?"; $p[] = $f['source']; }
+    // 分類篩選：cat=數字＝該分類；cat='none'＝還沒指定分類的舊單（清單上獨立一區）
+    if (isset($f['cat']) && $f['cat'] !== '') {
+        if ($f['cat'] === 'none') { $w[] = "o.cat_id IS NULL"; }
+        else { $w[] = "o.cat_id=?"; $p[] = (int)$f['cat']; }
+    }
     if (!empty($f['kw'])) {
         $kw = '%' . $f['kw'] . '%';
         $w[] = "(o.abnormal_order_no LIKE ? OR o.bom_no LIKE ? OR o.ir_no LIKE ? OR o.part_no LIKE ?
@@ -2586,8 +2858,10 @@ function qab_list(PDO $db, array $f = []): array
                    o.scrap_no, o.gm_deduct, o.abnormal_phenomenon, o.created_by, cu.user_cname AS created_name,
                    o.deleted_at, o.deleted_by, dl.user_cname AS deleted_name, o.auto_opened, o.qc_review_by,
                    o.decider_cfg_id, o.decider_user_id, o.escalate_gm, o.parent_order_id, o.insp_qty,
+                   o.cat_id, ct.name AS cat_name, ct.is_active AS cat_active,
                    pn.ProcessName AS resp_process_name, ml.maker_id AS resp_vendor_name
             FROM qa_abnormal_order o
+            LEFT JOIN qa_abnormal_cat ct ON ct.cat_id=o.cat_id
             LEFT JOIN `user` cu ON cu.id=o.created_by
             LEFT JOIN `user` dl ON dl.id=o.deleted_by
             LEFT JOIN process_no pn ON pn.ProcessNo=o.resp_process_no
@@ -2616,9 +2890,13 @@ function qab_list(PDO $db, array $f = []): array
     $st->execute($ids);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $childCnt[(int)$r['parent_order_id']] = (int)$r['c'];
     $optMap = qab_option_map($db);
+    $gmLabel = qab_gm_label($db);
 
     foreach ($rows as &$r) {
         $id = (int)$r['id'];
+        $r['cat_id']   = $r['cat_id'] === null ? null : (int)$r['cat_id'];
+        $r['cat_name'] = (string)($r['cat_name'] ?? '');
+        $r['gm_label'] = $gmLabel;
         $r['disp_ids'] = $opts[$id]['disp'] ?? [];
         $r['gm_ids']   = $opts[$id]['gm'] ?? [];
         $r['rounds']   = [];
@@ -2630,7 +2908,7 @@ function qab_list(PDO $db, array $f = []): array
         elseif (!empty($r['is_closed']))  $r['status'] = ['code' => 'closed', 'label' => '已結案'];
         elseif (!empty($r['auto_opened']) && empty($r['qc_review_by'])) $r['status'] = ['code' => 'qcreview', 'label' => '待品管確認說明'];
         elseif ($r['pending'] > 0)        $r['status'] = ['code' => 'reply', 'label' => '等待單位回覆'];
-        elseif (!empty($r['need_gm']) && !$r['gm_ids']) $r['status'] = ['code' => 'gm', 'label' => '待總經理裁示'];
+        elseif (!empty($r['need_gm']) && !$r['gm_ids']) $r['status'] = ['code' => 'gm', 'label' => '待' . $gmLabel . '裁示'];
         elseif (!$r['disp_ids'] && !$r['gm_ids']) $r['status'] = ['code' => 'decide', 'label' => '待決策'];
         elseif (($r['gm_deduct'] || $r['final']['is_scrap'])) $r['status'] = ['code' => 'deduct', 'label' => '扣款確認中'];
         else                              $r['status'] = ['code' => 'ready', 'label' => '可結案'];
@@ -2685,7 +2963,7 @@ function qab_status_map(PDO $db, array $orderIds): array
         if ($v['is_closed'])            $v['status'] = '已結案';
         elseif ($v['auto_opened'] && !$v['qc_review_by']) $v['status'] = '待品管確認說明';
         elseif ($v['pending'] > 0)      $v['status'] = '等待單位回覆';
-        elseif ($v['need_gm'])          $v['status'] = '待總經理裁示';
+        elseif ($v['need_gm'])          $v['status'] = '待' . qab_gm_label($db) . '裁示';
         elseif (!$v['disp_ids'] && !$v['gm_ids']) $v['status'] = '待決策';
         elseif ($v['gm_deduct'] || $v['final']['is_scrap']) $v['status'] = '扣款確認中';
         else                            $v['status'] = '可結案';

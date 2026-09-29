@@ -108,6 +108,8 @@ switch ($action) {
             'aging_over_count' => count($agingOver),
             'recurrence_count' => count($recurrence),
             'recurrence_months' => $settings['recurrence_months'],
+            // 最終裁示者的稱呼（管理員可設定）——自動分析的文字要跟畫面一致
+            'gm_label' => qab_gm_label($db),
         ]);
 
         qaaOut([
@@ -117,6 +119,7 @@ switch ($action) {
                 'company' => eg_company_full_name($db),
                 'print_time' => date('Y-m-d H:i:s'),
                 'settings' => $settings,
+                'gm_label' => qab_gm_label($db),
             ],
             'kpi' => ['cur' => $kCur, 'cmp' => $kCmp],
             'trend' => $trend,

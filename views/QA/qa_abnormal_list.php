@@ -26,7 +26,7 @@ $CSRF = $_SESSION['qab_csrf'];
 $asDoc = eg_asdoc_get($db, QAB_ASDOC_MODULE);
 $asNo  = $asDoc ? eg_asdoc_no($asDoc) : '2-QA-01-01';
 $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異常單管理員'
-            : ($perms['canGm'] ? '最終決策者' : ($perms['canDecide'] ? '決策主管'
+            : ($perms['canGm'] ? ($gmLabel . '（最終裁示）') : ($perms['canDecide'] ? '決策主管'
             : ($perms['canCreate'] ? '開單／填寫' : ($perms['canView'] ? '檢閱' : '無權限')))));
 $thisYear = (int)date('Y');
 $years = qab_years($db);               // 年度下拉只列真的有資料的年度（由新到舊）
@@ -35,6 +35,10 @@ $years = qab_years($db);               // 年度下拉只列真的有資料的�
 $defYear = $years ? (int)$years[0] : $thisYear;
 if (!in_array($thisYear, $years, true)) array_unshift($years, $thisYear);
 $backfillDays = qab_backfill_days($db);
+/* 最終裁示者的稱呼（管理員可在「設定 → 其他設定」指定部門；未指定時是「總經理」）——
+   畫面上凡是提到裁示者一律用這個變數，不要再寫死（2026-09-29 使用者交辦）。 */
+$gmLabel = qab_gm_label($db);
+$cats    = qab_cats($db, true);        // 工具列的分類篩選只列啟用中的
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -87,6 +91,13 @@ $backfillDays = qab_backfill_days($db);
         .st-ready  { background:#DDEBD6; color:#2c5c2c; }
         .st-auto   { background:var(--sand); color:var(--ink2); }
         .st-split  { background:#EFD9BF; color:#7a4a1e; }
+        /* 清單依分類分區顯示：每一區一條標題列（使用者交辦「清單也要依照不同分類分開顯示」） */
+        table.lst tr.grp td { background:var(--sand); color:var(--ink2); font-weight:bold; padding:5px 8px;
+                              position:sticky; top:26px; z-index:1; border-top:2px solid var(--amber-d); }
+        table.lst tr.grp .gn { font-size:13.5px; }
+        table.lst tr.grp .gx { font-weight:normal; font-size:11.5px; color:#8a7560; margin-left:8px; }
+        .cat-tag { font-size:10.5px; border-radius:8px; padding:0 6px; line-height:17px; display:inline-block;
+                   background:#EFE3CF; color:var(--ink2); }
         .src { font-size:10.5px; border-radius:8px; padding:0 6px; line-height:17px; display:inline-block; }
         .src-IR  { background:var(--coral); color:#fff; }
         .src-BOM { background:var(--sand); color:var(--ink2); }
@@ -186,6 +197,13 @@ $backfillDays = qab_backfill_days($db);
                 <div class="fg"><label>來源</label>
                     <select id="fSource"><option value="">全部</option>
                         <option value="IR">客退 (IR)</option><option value="BOM">製程 (製令)</option><option value="QC">檢驗單</option></select></div>
+                <div class="fg"><label>分類</label>
+                    <select id="fCat"><option value="">全部（依分類分區顯示）</option>
+                        <?php foreach ($cats as $c): ?>
+                        <option value="<?= (int)$c['cat_id'] ?>"><?= htmlspecialchars($c['name']) ?><?= $c['suffix'] !== '' ? '（' . htmlspecialchars($c['suffix']) . '）' : '' ?></option>
+                        <?php endforeach; ?>
+                        <option value="none">未指定分類</option>
+                    </select></div>
                 <div class="fg" style="flex:1;min-width:200px;"><label>關鍵字（單號／製令／客退單／料號／客戶／現象／責任單位／報廢單號／開單人員）</label>
                     <input type="text" id="fKw" style="width:100%;"></div>
                 <button class="btn btn-warm btn-sm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
@@ -235,6 +253,13 @@ $backfillDays = qab_backfill_days($db);
                 <label style="font-weight:normal;"><input type="radio" name="nkind" value="ir"> 客退（IR 單）</label>
             </div>
             <div class="fgrid">
+                <div class="fld"><label>分類 <span style="color:var(--coral)">*</span>
+                        <span class="muted-help">（清單依分類分區；可帶單號後綴詞）</span></label>
+                    <select id="n_cat"><option value="">請選擇…</option>
+                        <?php foreach ($cats as $c): ?>
+                        <option value="<?= (int)$c['cat_id'] ?>"><?= htmlspecialchars($c['name']) ?><?= $c['suffix'] !== '' ? '（單號後綴 ' . htmlspecialchars($c['suffix']) . '）' : '' ?></option>
+                        <?php endforeach; ?>
+                    </select></div>
                 <div class="fld"><label>填寫日期</label><input type="date" id="n_date"></div>
                 <div class="fld" id="nIrBox" style="display:none;"><label>客退單號 (IR) <span style="color:var(--coral)">*</span></label>
                     <input type="text" id="n_ir" autocomplete="off" placeholder="輸入單號／客戶／料號搜尋">
@@ -269,16 +294,36 @@ $backfillDays = qab_backfill_days($db);
         <div class="m-hd"><i class="fa fa-cog"></i> 品質異常處理單 設定<span class="x" data-close="cfgMask">&times;</span></div>
         <div class="m-bd">
             <div class="tabs">
-                <button data-tab="cause" class="on">異常原因分類</button>
+                <button data-tab="abcat" class="on">異常單分類</button>
+                <button data-tab="cause">異常原因分類</button>
                 <button data-tab="disp">異常處置方式</button>
-                <button data-tab="gm">總經理裁示</button>
+                <button data-tab="gm"><?= htmlspecialchars($gmLabel) ?>裁示</button>
                 <button data-tab="dec">決策者</button>
                 <button data-tab="qc">品管通知名單</button>
                 <button data-tab="ask">相關單位意見</button>
                 <button data-tab="etc">其他設定</button>
             </div>
 
-            <div class="tabp" id="tab-cause">
+            <div class="tabp" id="tab-abcat">
+                <div class="note-box">開單時<b>必填</b>的分類（預設：製程中／客訴／其他），<b>清單會依分類分區顯示</b>。<br>
+                    <b>單號後綴詞</b>：填了之後這一類的單號會長成 <code>Q1150929001-IR</code>（只能用英文、數字與 <code>- _ .</code>，最多 10 字元；留空＝不加後綴）。
+                    <b>單號本體與流水號全日共用一組、不分分類</b>，所以換分類時只會換後綴、流水號不變，
+                    而且<b>已結案的單不會被改號</b>（紙本已經印出去了）。<br>
+                    <b>報工NG自動開立</b>：勾起來的那一類就是報工累積NG自動開單時要歸入的分類（<b>只能勾一個</b>，勾了別列會自動取消；
+                    <b>判定看的是這個勾選不是名稱</b>，所以分類改名不會讓自動開單失效）。<br>
+                    <b>已經有單在用的分類不可刪除</b>，請改成取消「啟用」——既有的單仍看得到，新單不再出現這個選項。</div>
+                <table class="cfg"><thead><tr><th style="width:28px"></th><th style="width:34%">名稱</th>
+                    <th style="width:20%">單號後綴詞</th><th style="width:14%">報工NG自動開立</th>
+                    <th style="width:9%">啟用</th><th style="width:11%">操作</th></tr></thead>
+                    <tbody id="cfgAbCat" data-sortgrp="abcat"></tbody></table>
+                <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+                    <button class="btn btn-warm-o btn-sm" id="btnAbCatAdd"><i class="fa fa-plus"></i> 新增一個分類</button>
+                    <span style="margin-left:auto;"></span>
+                    <button class="btn btn-warm btn-sm" data-saveall="cat"><i class="fa fa-save"></i> 一鍵存檔（本頁全部）</button>
+                </div>
+            </div>
+
+            <div class="tabp" id="tab-cause" style="display:none;">
                 <div class="note-box">最多三層（例：<b>人 → 方法 → 程式</b>）。這一欄會延伸到之後的異常分析與報告，所以<b>沒有「其他」這個選項</b>。<br>
                     新增／修改／停用／排序／刪除<b>全部在「維護分類」裡面做</b>，操作方式與各表單挑選分類時<b>完全一樣</b>（逐層大方塊）：
                     點方塊進去下一層、<b>右上角的 ✎ 改這一個</b>、刪除在 ✎ 裡面。
@@ -292,9 +337,9 @@ $backfillDays = qab_backfill_days($db);
             </div>
 
             <div class="tabp" id="tab-disp" style="display:none;">
-                <div class="note-box">紙本的「異常處置方式」勾選框。<b>「是報廢」「轉總經理」不是比對名稱而是這兩個旗標</b>——改名不會讓判定失效，但旗標一定要勾對：
-                    勾「是報廢」的選項會讓這張單在結案時配發報廢單號；勾「轉總經理」的選項會在存檔時通知最終決策者。</div>
-                <table class="cfg"><thead><tr><th style="width:28px"></th><th style="width:36%">名稱</th><th>是報廢</th><th>轉總經理</th><th>需矯正</th>
+                <div class="note-box">紙本的「異常處置方式」勾選框。<b>「是報廢」「轉呈裁示」不是比對名稱而是這兩個旗標</b>——改名不會讓判定失效，但旗標一定要勾對：
+                    勾「是報廢」的選項會讓這張單在結案時配發報廢單號；勾「轉呈裁示」的選項會在存檔時通知最終裁示者（<?= htmlspecialchars($gmLabel) ?>）。</div>
+                <table class="cfg"><thead><tr><th style="width:28px"></th><th style="width:36%">名稱</th><th>是報廢</th><th>轉呈裁示</th><th>需矯正</th>
                     <th style="width:9%">啟用</th><th style="width:11%">操作</th></tr></thead>
                     <tbody id="cfgDisp" data-sortgrp="disp"></tbody></table>
                 <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
@@ -305,8 +350,9 @@ $backfillDays = qab_backfill_days($db);
             </div>
 
             <div class="tabp" id="tab-gm" style="display:none;">
-                <div class="note-box">紙本的「總經理裁示」勾選框。<b>有裁示時以裁示為最終決策</b>（優先於主管的處置方式）。</div>
-                <table class="cfg"><thead><tr><th style="width:28px"></th><th style="width:36%">名稱</th><th>是報廢</th><th>轉總經理</th><th>需矯正</th>
+                <div class="note-box">紙本最下方那一格「<?= htmlspecialchars($gmLabel) ?>裁示」的勾選框。<b>有裁示時以裁示為最終決策</b>（優先於主管的處置方式）。<br>
+                    <b>誰可以裁示</b>在「其他設定 → 最終裁示者」指定。</div>
+                <table class="cfg"><thead><tr><th style="width:28px"></th><th style="width:36%">名稱</th><th>是報廢</th><th>轉呈裁示</th><th>需矯正</th>
                     <th style="width:9%">啟用</th><th style="width:11%">操作</th></tr></thead>
                     <tbody id="cfgGm" data-sortgrp="gm"></tbody></table>
                 <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
@@ -368,6 +414,26 @@ $backfillDays = qab_backfill_days($db);
                     「相關單位意見」那五格格子最矮，可以再單獨指定一個更扁的模板。<br>
                     補資料天數：填寫日期在「今天往前這麼多天」以前的單，會多出「補登簽章」區，
                     由<b>異常單管理員</b>指定當時的簽章人員與印章日期（預設 10 天）。</div>
+                <div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:10px;">
+                    <div class="note-box" style="margin-bottom:8px;"><b>最終裁示者</b>（原本固定是「總經理」）：
+                        指定一個<b>部門</b>與<b>職級門檻</b>，該部門（<b>含下轄</b>）裡職級不低於門檻的主管
+                        <b>任何一位都可以做最終裁示與簽章</b>，畫面與列印上的文字會自動變成「<b>○○主管</b>」
+                        （例：技術課 → <b>技術課主管</b>），紙本簽章欄只印「簽章：」。<br>
+                        <b>部門留空＝維持原本的做法</b>：裁示者是全站「組織角色綁定 → 最高核准人員」（總經理），文字也印「總經理」。<br>
+                        部門名稱是<b>即時查</b>的，部門改名或主管換人都會自動跟著變，不必回來改這裡。</div>
+                    <div class="fgrid">
+                        <div class="fld"><label>裁示部門</label>
+                            <select id="cfgGmDept" data-eg-filter="輸入部門名稱篩選…"><option value="0">（不指定＝用全站最高核准人員「總經理」）</option></select></div>
+                        <div class="fld"><label>職級門檻（含以上皆可簽）</label>
+                            <select id="cfgGmLevel" data-eg-skip>
+                                <option value="0">0 階（最高決策者）</option>
+                                <option value="1">1 階主管以上</option>
+                                <option value="2">2 階主管以上</option>
+                                <option value="3">3 階主管以上</option>
+                            </select></div>
+                    </div>
+                    <div class="muted-help" id="cfgGmPool" style="margin-top:4px;"></div>
+                </div>
                 <div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:10px;">
                     <div class="fld"><label>AS 文件綁定（表頭表單名稱與頁尾編號由此推導）</label>
                         <div style="display:flex;gap:8px;align-items:center;">
@@ -446,7 +512,10 @@ $backfillDays = qab_backfill_days($db);
                 <li><b>開立異常單</b>：選來源——<b>客退</b>（選 IR 單）或<b>製程中</b>（選製令）。
                     <b>兩者都一定要從清單選到既有的單據</b>，只打字不選會被擋下（客戶、料號與扣款金額都是靠這個綁定帶出來的）；
                     客戶與料號會自動帶、不給手打，<b>檢驗數</b>則依線上檢驗的抽樣規則自動建議。建立後自動跳到處理頁填其餘內容。</li>
-                <li><b>進入處理</b>：點該列「處理」。填寫、徵詢相關單位意見、決策、總經理裁示、扣款確認、結案都在那一頁。</li>
+                <li><b>進入處理</b>：點該列「處理」。填寫、徵詢相關單位意見、決策、<?= htmlspecialchars($gmLabel) ?>裁示、扣款確認、結案都在那一頁。</li>
+                <li><b>清單依分類分區顯示</b>（製程中／客訴／其他…）：每一區上方有一條標題列，寫著這一類幾張、未結案幾張、單號後綴詞是什麼。
+                    分區順序照管理員在「設定 → 異常單分類」排的順序；<b>分類功能上線前建立的舊單</b>會集中在最後的「未指定分類」區，請進單張處理頁補選。
+                    上方的「分類」篩選可以只看某一類。</li>
                 <li><b>列印</b>：點「列印」開出照紙本版面的正式表單（公司全名、表單名稱、AS 編號與版次都自動帶）；
                     <b>母單（已依決策拆成好幾張子單的原始單）列印時會自動一併開視窗列印每張子單</b>，子單本身也可以用自己的單號獨立列印。</li>
                 <li><b>批次月報列印</b>：工具列「批次月報列印」→ 選年度 → 勾選要印的月份（<b>只有真的有資料的月份才能勾</b>）→
@@ -469,9 +538,9 @@ $backfillDays = qab_backfill_days($db);
                     如果這張單有指定決策者（表頭「決策者」欄），狀態徽章下方會另起一行小字顯示決策者的部門與姓名；
                     <b>單子一送到這個狀態（自動開立單品管確認完成、或人工開單指定/換了決策者）系統會自動通知該決策者</b>，
                     沒指定決策者時不會加註也不會發通知。</li>
-                <li><b>待總經理裁示</b>：主管勾了「整批轉呈總經理裁示」（獨立開關，不是處置方式清單裡的選項）但還沒裁示。
+                <li><b>待<?= htmlspecialchars($gmLabel) ?>裁示</b>：主管勾了「整批轉呈<?= htmlspecialchars($gmLabel) ?>裁示」（獨立開關，不是處置方式清單裡的選項）但還沒裁示。
                     <b>扣款確認中</b>：要扣款但還沒核准。<b>可結案</b>：該做的都做完了。</li>
-                <li><b>已拆分為 N 張</b>：主管或總經理決策時勾選超過一項（例如同一批NG部分特採、部分重工、部分報廢），
+                <li><b>已拆分為 N 張</b>：主管或<?= htmlspecialchars($gmLabel) ?>決策時勾選超過一項（例如同一批NG部分特採、部分重工、部分報廢），
                     系統依填入的數量自動拆成 N 張子單，各自獨立結案（含報廢子單自動配發報廐單號）；
                     原始單本身不再需要決策，點進去可以看到每張子單的連結。</li>
             </ul>
@@ -482,13 +551,18 @@ $backfillDays = qab_backfill_days($db);
                     改名／刪除前會自動查「有沒有異常單、矯正單已經選了它」並列出單號；
                     要刪除有單據在用的分類時，會請你選一個移轉對象，按下去就<b>把那些單據全部自動移轉</b>再刪除。
                     只是想讓它不再出現在新單上，請用<b>停用</b>（既有單仍看得到）。</li>
-                <li><b>異常處置方式／總經理裁示</b>：選項可增修；「是報廢」旗標決定結案時要不要配發報廢單號，「轉總經理」旗標決定要不要通知最終決策者。</li>
+                <li><b>異常單分類</b>：開單時必填的分類（預設製程中／客訴／其他）。可以設<b>單號後綴詞</b>（例 -IR，這一類的單號會變成 <code>Q1150929001-IR</code>），
+                    並指定<b>哪一類是報工NG自動開立要歸入的</b>（只能勾一個；判定看旗標不看名稱，所以改名不會讓自動開單失效）。
+                    <b>已經有單在用的分類不可刪除</b>，請改成取消「啟用」。</li>
+                <li><b>異常處置方式／<?= htmlspecialchars($gmLabel) ?>裁示</b>：選項可增修；「是報廢」旗標決定結案時要不要配發報廢單號，「轉呈裁示」旗標決定要不要通知最終裁示者。</li>
                 <li><b>決策者</b>：設定可以做處置判定的「部門＋職稱」範圍。
-                    <b>最高決策者（總經理裁示）不在這裡設定</b>——自動套用全站「組織角色綁定 → 最高核准人員」，
+                    <b>最終裁示者不在這裡設定</b>，在「其他設定 → 最終裁示者」——指定一個<b>部門＋職級門檻</b>，
+                    該部門（含下轄）裡職級不低於門檻的主管<b>任何一位都可以裁示與簽章</b>，畫面與紙本的文字會自動變成「○○主管」。
+                    部門留空時則自動套用全站「組織角色綁定 → 最高核准人員」（總經理），
                     要換人請到<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>改一次，全站表單一起跟著換。</li>
                 <li><b>品管通知名單</b>：勾選要通知的品管部門人員，報工NG累積自動開立異常單時會通知他們補充異常現象說明；
                     <b>任何一位</b>完成確認即可送決策，不必每個人都確認。決策者自動＝品管主管沿用「決策者」分頁裡品管課那一列，不必另外設定。</li>
-                <li><b>其他設定</b>：扣款加成預設值、<b>補資料天數</b>、AS 文件綁定、<b>首頁批次月報列印標題</b>（供上面「批次月報列印」用，跟 AS 文件綁定無關）。</li>
+                <li><b>其他設定</b>：<b>最終裁示者（部門＋職級門檻）</b>、扣款加成預設值、<b>補資料天數</b>、AS 文件綁定、<b>首頁批次月報列印標題</b>（供上面「批次月報列印」用，跟 AS 文件綁定無關）。</li>
                 <li>每個設定分頁右下角都有<b>「一鍵存檔（本頁全部）」</b>，不必一列一列按「存」；
                     有任何一列填錯會整批不儲存並告訴你是第幾列（不會只存一半）。
                     決策者的<b>顯示名稱是自動的</b>＝「部門＋職稱」，部門或職稱改名時跟著變，不會留舊名稱。</li>
@@ -496,7 +570,7 @@ $backfillDays = qab_backfill_days($db);
             <h4>權限角色</h4>
             <ul>
                 <li><b>開單／填寫</b>：品管或業務部門成員，或指派 <code>qab_fill</code>。<b>檢閱</b>：<code>qab_view</code>。</li>
-                <li><b>決策主管</b>：落在設定的決策者範圍內，或 <code>qab_decide</code>。<b>最終決策者</b>：最高核准人員／設定範圍／<code>qab_gm</code>。</li>
+                <li><b>決策主管</b>：落在設定的決策者範圍內，或 <code>qab_decide</code>。<b>最終裁示者（<?= htmlspecialchars($gmLabel) ?>）</b>：「其他設定 → 最終裁示者」指定的部門＋職級門檻範圍內的主管（未指定時為全站最高核准人員）／<code>qab_gm</code>。</li>
                 <li><b>扣款填寫</b>：生管或業務部門，或 <code>qab_deduct_fill</code>；<b>扣款核准</b>：會計部門，或 <code>qab_deduct_approve</code>。</li>
                 <li><b>管理員</b>：<code>qab_admin</code>（代碼表與設定）。管理者固定擁有全部權限。</li>
             </ul>
@@ -534,6 +608,8 @@ function nSuggestSample(){
 $(document).on('change', '#n_batch', nSuggestSample);
 $(document).on('input', '#n_bom', function(){ N_BOM_OK = false; });
 var CFG = null, DEPTS = [], POSITIONS = [];
+var CATS = <?= json_encode(qab_cats($db, false), JSON_UNESCAPED_UNICODE) ?>;   // 異常單分類（含停用，舊單指到停用分類時標題才不會空白）
+var GM_LABEL = <?= json_encode($gmLabel, JSON_UNESCAPED_UNICODE) ?>;
 
 function esc(s){ return $('<div>').text(s == null ? '' : s).html(); }
 function dispDate(s){ try { return window.egFmtDate ? egFmtDate(s) : (s || ''); } catch(e){ return s || ''; } }
@@ -557,7 +633,8 @@ function post(action, data, cb, errCb){
 function load(){
     $('#lstBody').html('<tr><td colspan="11" class="c">載入中…</td></tr>');
     $.get(API, { action:'list', year:$('#fYear').val(), month:$('#fMonth').val(),
-                 closed:$('#fClosed').val(), source:$('#fSource').val(), kw:$('#fKw').val(),
+                 closed:$('#fClosed').val(), source:$('#fSource').val(), cat:$('#fCat').val(),
+                 kw:$('#fKw').val(),
                  deleted:$('#fDeleted').prop('checked') ? 1 : '' }, function(res){
         if (!res || !res.success) { $('#lstBody').html('<tr><td colspan="11" class="c">' + esc((res && res.message) || '載入失敗') + '</td></tr>'); return; }
         var rows = res.rows || [];
@@ -569,11 +646,13 @@ function load(){
             ? ('已刪除 <b>' + rows.length + '</b> 張（資料仍留著，可還原）')
             : ('共 <b>' + rows.length + '</b> 張　未結案 <b>' + open + '</b> 張　已配發報廢單號 <b>' + scrap + '</b> 張'));
         if (!rows.length) { $('#lstBody').html('<tr><td colspan="11" class="c">沒有符合條件的異常單</td></tr>'); return; }
-        $('#lstBody').html(rows.map(function(r){
+        CATS = res.cats || CATS;
+        $('#lstBody').html(groupByCat(rows, function(r){
             var bomIr = (r.bom_no ? esc(r.bom_no) : '') + (r.ir_no ? ((r.bom_no ? '<br>' : '') + esc(r.ir_no)) : '');
             return '<tr>'
                 + '<td class="c"><b>' + esc(r.abnormal_order_no) + '</b><br><span class="src src-' + esc(r.source_type) + '">'
-                    + (r.source_type === 'IR' ? '客退' : (r.source_type === 'BOM' ? '製程' : '檢驗')) + '</span></td>'
+                    + (r.source_type === 'IR' ? '客退' : (r.source_type === 'BOM' ? '製程' : '檢驗')) + '</span>'
+                    + (r.cat_name ? ' <span class="cat-tag">' + esc(r.cat_name) + '</span>' : '') + '</td>'
                 + '<td class="c">' + esc(dispDate(r.fill_date || r.occurrence_date)) + '</td>'
                 + '<td>' + esc(r.created_name || '') + (Number(r.auto_opened) === 1 ? '<br><span class="st st-auto">系統自動</span>' : '') + '</td>'
                 + '<td>' + esc(r.client_name) + '</td>'
@@ -593,8 +672,43 @@ function load(){
                        + '<a href="qa_abnormal_print.php?id=' + r.id + '&auto=1" target="_blank" class="btn btn-warm-o btn-xs" title="開啟列印預覽"><i class="fa fa-print"></i></a>'
                        + (CAN_ADMIN ? ' <button class="btn btn-warm-o btn-xs act-del" data-id="' + r.id + '" data-no="' + esc(r.abnormal_order_no) + '"><i class="fa fa-trash-o"></i></button>' : '')))
                 + '</td></tr>';
-        }).join(''));
+        }));
     }, 'json').fail(function(){ $('#lstBody').html('<tr><td colspan="11" class="c">連線失敗</td></tr>'); });
+}
+/* 依分類分區：每一區一條標題列（分類名稱＋張數＋未結案數＋單號後綴詞）。
+   分區順序照管理員設定的排序，沒有分類的舊單一律排在最後獨立一區——
+   **不要把它們混進某一類**，那會讓使用者以為它們已經分好類了。 */
+function groupByCat(rows, rowHtml){
+    var order = (CATS || []).map(function(c){ return Number(c.cat_id); });
+    var buckets = {}, seen = [];
+    rows.forEach(function(r){
+        var k = Number(r.cat_id) || 0;
+        if (!buckets[k]) { buckets[k] = []; seen.push(k); }
+        buckets[k].push(r);
+    });
+    seen.sort(function(a, b){
+        if (a === 0) return 1;            // 未指定分類永遠排最後
+        if (b === 0) return -1;
+        var ia = order.indexOf(a), ib = order.indexOf(b);
+        return (ia < 0 ? 9999 : ia) - (ib < 0 ? 9999 : ib);
+    });
+    var h = '';
+    seen.forEach(function(k){
+        var list = buckets[k];
+        var cr = (CATS || []).filter(function(c){ return Number(c.cat_id) === k; })[0];
+        var nm = k === 0 ? '未指定分類' : (cr ? cr.name : (list[0].cat_name || ('分類 #' + k)));
+        var open = list.filter(function(r){ return !Number(r.is_closed); }).length;
+        h += '<tr class="grp"><td colspan="11">'
+           + '<span class="gn">' + esc(nm) + '</span>'
+           + '<span class="gx">' + list.length + ' 張'
+           + (open ? ('　未結案 ' + open + ' 張') : '')
+           + (cr && cr.suffix ? ('　單號後綴 ' + esc(cr.suffix)) : '')
+           + (cr && !Number(cr.is_active) ? '　（此分類已停用）' : '')
+           + (k === 0 ? '　這些單是分類功能上線前建立的，請進單張處理頁補選分類' : '')
+           + '</span></td></tr>';
+        h += list.map(rowHtml).join('');
+    });
+    return h;
 }
 /* 年度下拉只列真的有資料的年度；後端每次都回最新的一份，這裡只在內容不同時重畫 */
 function syncYears(years){
@@ -606,7 +720,7 @@ function syncYears(years){
         return '<option value="' + y + '"' + (String(y) === String(cur) ? ' selected' : '') + '>' + y + '</option>'; }).join(''));
 }
 $('#btnSearch').on('click', load);
-$('#fYear,#fMonth,#fClosed,#fSource,#fDeleted').on('change', load);
+$('#fYear,#fMonth,#fClosed,#fSource,#fCat,#fDeleted').on('change', load);
 
 /* ───────── 刪除／還原（軟刪除，一律留紀錄） ───────── */
 var DEL = { id:0, act:'delete' };
@@ -650,7 +764,7 @@ $('#btnNew').on('click', function(){
     $('#newErr').text('');
     $('#n_date').val(new Date().toISOString().slice(0, 10));
     $('#newBf').hide();
-    $('#n_ir,#n_ir_id,#n_bom,#n_client,#n_part,#n_batch,#n_insp,#n_ng,#n_phe').val('');
+    $('#n_ir,#n_ir_id,#n_bom,#n_client,#n_part,#n_batch,#n_insp,#n_ng,#n_phe,#n_cat').val('');
     $('#nSampleHint').text('');
     N_BOM_OK = false;
     openMask('newMask');
@@ -662,10 +776,11 @@ $(document).on('change', 'input[name=nkind]', function(){
 });
 $('#btnNewGo').on('click', function(){
     var kind = $('input[name=nkind]:checked').val();
+    if (!$('#n_cat').val()) { $('#newErr').text('請選擇分類（必填）——清單是依分類分開顯示的，分類還會決定單號的後綴詞'); return; }
     if (kind === 'ir' && !$('#n_ir_id').val()) { $('#newErr').text('請從清單中選擇客退單(IR)——同一個單號可能有好幾筆，一定要選到是哪一筆'); return; }
     if (kind === 'bom' && !$('#n_bom').val().trim()) { $('#newErr').text('請選擇製令編號'); return; }
     if (kind === 'bom' && !N_BOM_OK) { $('#newErr').text('製令編號請從清單中選擇（只打字不選，客戶、料號與扣款金額都帶不出來）'); return; }
-    post('create', { kind:kind, fill_date:$('#n_date').val(), ir_id:$('#n_ir_id').val(), bom_no:$('#n_bom').val(),
+    post('create', { kind:kind, cat_id:$('#n_cat').val(), fill_date:$('#n_date').val(), ir_id:$('#n_ir_id').val(), bom_no:$('#n_bom').val(),
                      client_name:$('#n_client').val(), part_no:$('#n_part').val(), batch_qty:$('#n_batch').val(),
                      insp_qty:$('#n_insp').val(), ng_qty:$('#n_ng').val(), abnormal_phenomenon:$('#n_phe').val() },
         function(res){ location.href = 'qa_abnormal_form.php?id=' + res.id; });
@@ -770,18 +885,22 @@ $(document).on('drop', '.cfg tbody tr', function(e){
     renumberAndSave(grp, $tb);
 });
 function renumberAndSave(grp, $tb){
-    var sortCls = grp === 'cause' ? '.c-sort' : (grp === 'decider' ? '.d-sort' : '.o-sort');
+    var sortCls = grp === 'cause' ? '.c-sort' : (grp === 'decider' ? '.d-sort' : (grp === 'abcat' ? '.k-sort' : '.o-sort'));
     var seen = {};
     $tb.find('tr').each(function(){
         var key = grp === 'cause' ? String($(this).data('parent') || 0) : 'x';
         seen[key] = (seen[key] || 0) + 10;
         $(this).find(sortCls).val(seen[key]);
     });
-    post('cfg_save_all', { what:grp, rows:JSON.stringify(collectCfgRows(grp)) }, function(res){
+    post('cfg_save_all', { what:(grp === 'abcat' ? 'cat' : grp), rows:JSON.stringify(collectCfgRows(grp)) }, function(res){
         if (res.causes) CFG.causes = res.causes;
+        if (res.cats) { CFG.cats = res.cats; CATS = res.cats; }
         if (res.disp_opts) { CFG.disp_opts = res.disp_opts; CFG.gm_opts = res.gm_opts; }
         if (res.deciders) CFG.deciders = res.deciders;
-        if (grp === 'cause') renderCause(); else if (grp === 'decider') renderDec(); else renderOpts();
+        if (grp === 'cause') renderCause();
+        else if (grp === 'abcat') renderAbCat();
+        else if (grp === 'decider') renderDec();
+        else renderOpts();
         savedTick();
     });
 }
@@ -857,9 +976,9 @@ function loadCfg(){
         $('#cfgStampTplAsk').html('<option value="0">同「一般簽章」</option>' + (res.stamp_tpls || []).map(function(t){
             return '<option value="' + t.id + '"' + (Number(t.id) === Number(res.stamp_tpl_ask_id) ? ' selected' : '') + '>'
                  + esc(t.tpl_name) + '</option>'; }).join(''));
-        renderCause(); renderOpts(); renderDec(); renderAsk();
+        renderCause(); renderAbCat(); renderOpts(); renderDec(); renderAsk(); renderGmCfg();
     }, 'json');
-    if (!DEPTS.length) $.get(API, { action:'depts' }, function(res){ if (res && res.success) { DEPTS = res.rows; renderDec(); renderAsk(); } }, 'json');
+    if (!DEPTS.length) $.get(API, { action:'depts' }, function(res){ if (res && res.success) { DEPTS = res.rows; renderDec(); renderAsk(); renderGmCfg(); } }, 'json');
     // 職稱清單要先載好，否則已存的那幾列會顯示成「不限職稱」（看起來像設定不見了）
     if (!POSITIONS.length) $.get(API, { action:'positions' }, function(res){ if (res && res.success) { POSITIONS = res.rows; renderDec(); } }, 'json');
     loadQcNotify();
@@ -886,6 +1005,28 @@ $('#btnQcNotifySave').on('click', function(){
         $('#qcNotifySaved').text('已儲存（' + ids.length + ' 人）');
     });
 });
+/* ───────── 最終裁示者：部門＋職級門檻（該範圍內的主管任一位皆可裁示） ───────── */
+function renderGmCfg(){
+    if (!CFG || !DEPTS.length) return;
+    var cur = Number(CFG.gm_dept_id || 0);
+    $('#cfgGmDept').html('<option value="0">（不指定＝用全站最高核准人員「總經理」）</option>'
+        + DEPTS.map(function(d){
+            return '<option value="' + d.id + '"' + (Number(d.id) === cur ? ' selected' : '') + '>'
+                 + esc(d.department_name) + '</option>'; }).join(''));
+    $('#cfgGmLevel').val(String(CFG.gm_pos_level == null ? 3 : CFG.gm_pos_level));
+    gmPoolHint(CFG.gm_label, CFG.gm_pool);
+}
+function gmPoolHint(label, pool){
+    pool = pool || [];
+    $('#cfgGmPool').html('目前顯示的文字：<b>' + esc(label || '總經理') + '</b>　'
+        + (Number($('#cfgGmDept').val()) > 0
+            ? (pool.length
+                ? ('可裁示與簽章的人（' + pool.length + ' 位，任一位皆可）：'
+                   + esc(pool.map(function(x){ return x.name + (x.position_name ? '（' + x.position_name + '）' : ''); }).join('、')))
+                : '<span style="color:var(--coral);">這個部門目前查不到符合職級門檻的在職主管——維持這樣設定的話沒有人能做最終裁示，請改部門或放寬職級門檻。</span>')
+            : '裁示者＝全站「組織角色綁定 → 最高核准人員」及其代理人。'));
+}
+
 function flatCause(){
     var out = [];
     (function walk(ns, lv){ (ns || []).forEach(function(n){ n._lv = lv; out.push(n); walk(n.children, lv + 1); }); })(CFG.causes, 1);
@@ -949,6 +1090,66 @@ function nextSort(list, parentId){
 }
 /* 新增分類已收進維護畫面（EGCausePicker 維護模式的「＋ 在○○底下新增」），本頁不再各留一份 */
 
+/* ───────── 異常單分類（名稱／單號後綴詞／報工NG自動歸類／啟用／拖曳排序） ───────── */
+function abCatRow(c){
+    return '<tr data-abcat="' + c.cat_id + '">'
+        + '<td class="drag" draggable="true" title="按住拖曳可以調整順序（清單分區也照這個順序）">&#x2822;</td>'
+        + '<td><input type="text" class="k-name" maxlength="40" value="' + esc(c.name) + '"></td>'
+        + '<td><input type="text" class="k-suffix" maxlength="10" placeholder="例：-IR（留空＝不加）" value="' + esc(c.suffix || '') + '">'
+        + '<div class="muted-help k-prev"></div></td>'
+        + '<td class="c"><input type="radio" name="abcatauto" class="k-auto" ' + (Number(c.is_pm_auto) ? 'checked' : '') + '></td>'
+        + '<td class="c"><input type="checkbox" class="k-act" ' + (Number(c.is_active) ? 'checked' : '') + '></td>'
+        + '<td class="c"><input type="hidden" class="k-sort" value="' + (c.sort_order || 0) + '">'
+        + '<button class="btn btn-warm-o btn-xs k-del">刪</button></td></tr>';
+}
+function renderAbCat(){
+    var rows = (CFG && CFG.cats) || CATS || [];
+    $('#cfgAbCat').html(rows.length ? rows.map(abCatRow).join('')
+        : '<tr><td colspan="6" class="c">尚未建立任何分類（開單時分類是必填的，請至少留一個）</td></tr>');
+    abCatPreview();
+}
+/* 後綴詞打進去當下就讓使用者看到單號長什麼樣子——只看一個「-IR」很難想像整串的結果 */
+function abCatPreview(){
+    var t = new Date(), roc = String(t.getFullYear() - 1911);
+    var base = 'Q' + ('00' + roc).slice(-3)
+             + ('0' + (t.getMonth() + 1)).slice(-2) + ('0' + t.getDate()).slice(-2) + '001';
+    $('#cfgAbCat tr[data-abcat]').each(function(){
+        var sfx = ($(this).find('.k-suffix').val() || '').trim();
+        $(this).find('.k-prev').text(base + sfx);
+    });
+}
+$(document).on('click', '#btnAbCatAdd', function(){
+    var $tb = $('#cfgAbCat');
+    if ($tb.find('td[colspan]').length) $tb.empty();
+    $tb.append(abCatRow({ cat_id:0, name:'', suffix:'', is_pm_auto:0, is_active:1,
+                          sort_order:nextSort((CFG && CFG.cats) || CATS) }));
+    $tb.find('tr:last .k-name').focus();
+});
+function saveAbCatRow($tr, silent){
+    if (!$tr.find('.k-name').val().trim()) return;
+    post('cat_save', { cat_id:$tr.data('abcat'), name:$tr.find('.k-name').val(),
+                       suffix:$tr.find('.k-suffix').val(),
+                       is_pm_auto:$tr.find('.k-auto').prop('checked') ? 1 : '',
+                       sort_order:$tr.find('.k-sort').val(),
+                       is_active:$tr.find('.k-act').prop('checked') ? 1 : '' },
+        function(res){
+            CFG.cats = res.cats; CATS = res.cats;
+            if (!silent || !$tr.data('abcat')) renderAbCat();
+            savedTick();
+        },
+        function(msg){ alert(msg); renderAbCat(); });
+}
+$(document).on('change', '#cfgAbCat input', function(){ saveAbCatRow($(this).closest('tr'), true); });
+$(document).on('input', '#cfgAbCat .k-suffix', abCatPreview);
+$(document).on('click', '.k-del', function(){
+    var $tr = $(this).closest('tr');
+    if (!$tr.data('abcat')) { $tr.remove(); return; }
+    if (!confirm('刪除這個分類？（已經有單在用的不會讓你刪，請改成取消「啟用」）')) return;
+    post('cat_del', { cat_id:$tr.data('abcat') }, function(res){
+        CFG.cats = res.cats; CATS = res.cats; renderAbCat();
+    });
+});
+
 function optRow(o, kind){
     return '<tr data-opt="' + o.opt_id + '" data-kind="' + kind + '">'
         + '<td class="drag" draggable="true" title="按住拖曳可以調整順序">&#x2822;</td>'
@@ -1011,13 +1212,19 @@ function renderDec(){
     var all = (CFG.deciders || []);
     $('#cfgDec').html(all.length ? all.map(decRow).join('') : '<tr><td colspan="8" class="c">尚未設定（沒設定時由 qab_decide 角色判定）</td></tr>');
     var g = CFG.gm_person || {};
-    $('#cfgGmBox').html('<b>最高決策者（總經理裁示）</b>：'
+    var gPool = (g.pool || []).map(function(x){ return x.name + (x.position_name ? '（' + x.position_name + '）' : ''); });
+    $('#cfgGmBox').html('<b>最終裁示者（' + esc(CFG.gm_label || GM_LABEL) + '裁示）</b>：'
         + (g.bound ? ('<b>' + esc(g.name || '') + '</b>'
               + (g.is_delegated ? '（' + esc(g.base_name || '') + ' 目前不在，由代理人簽）' : ''))
             : '<span style="color:var(--coral);">尚未設定</span>')
-        + '　—　<b>自動套用全站統一設定</b>，本模組不另外設定。要換人請到 '
-        + '<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>'
-        + ' 改「最高核准人員」，全站表單會一起跟著換。');
+        + '　—　'
+        + (g.mode === 'dept'
+            ? ('在<b>「其他設定 → 最終裁示者」</b>指定的部門與職級門檻決定，'
+               + (gPool.length > 1 ? ('這個範圍內的主管<b>任何一位都可以裁示與簽章</b>：' + esc(gPool.join('、'))) : '本分頁不設定。'))
+            : ('<b>自動套用全站統一設定</b>。要換人請到 '
+               + '<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>'
+               + ' 改「最高核准人員」，全站表單會一起跟著換；'
+               + '或到<b>「其他設定 → 最終裁示者」</b>改成指定某個部門的主管。')));
 }
 $(document).on('click', '[data-decadd]', function(){
     var kind = $(this).data('decadd');
@@ -1079,7 +1286,16 @@ $(document).on('click', '.d-who', function(){
    任何一列不合法就整批不寫入並指出是第幾列——存一半會讓畫面與資料庫對不起來。 */
 function collectCfgRows(what){
     var rows = [];
-    if (what === 'cause') {
+    if (what === 'cat' || what === 'abcat') {
+        $('#cfgAbCat tr[data-abcat]').each(function(){
+            var $tr = $(this);
+            rows.push({ cat_id:Number($tr.data('abcat')), name:$tr.find('.k-name').val(),
+                        suffix:$tr.find('.k-suffix').val(),
+                        is_pm_auto:$tr.find('.k-auto').prop('checked') ? 1 : 0,
+                        sort_order:$tr.find('.k-sort').val(),
+                        is_active:$tr.find('.k-act').prop('checked') ? 1 : 0 });
+        });
+    } else if (what === 'cause') {
         var flat = flatCause();
         $('#cfgCause tr[data-cat]').each(function(){
             var $tr = $(this), id = Number($tr.data('cat'));
@@ -1116,7 +1332,8 @@ $(document).on('click', '[data-saveall]', function(){
     post('cfg_save_all', { what:what, rows:JSON.stringify(rows) }, function(res){
         CFG.causes = res.causes; CFG.disp_opts = res.disp_opts; CFG.gm_opts = res.gm_opts;
         CFG.deciders = res.deciders; CFG.gm_person = res.gm_person;
-        renderCause(); renderOpts(); renderDec();
+        if (res.cats) { CFG.cats = res.cats; CATS = res.cats; }
+        renderCause(); renderAbCat(); renderOpts(); renderDec();
         alert('已儲存 ' + res.saved + ' 列');
     });
 });
@@ -1125,8 +1342,20 @@ $('#btnSaveEtc').on('click', function(){
     post('setting_save', { surcharge_rate:$('#cfgRate').val(), backfill_days:$('#cfgBfDays').val(),
                            stamp_tpl_id:$('#cfgStampTpl').val(),
                            stamp_tpl_ask_id:$('#cfgStampTplAsk').val(),
-                           list_print_title:$('#cfgListPrintTitle').val() }, function(res){
+                           list_print_title:$('#cfgListPrintTitle').val(),
+                           gm_dept_id:$('#cfgGmDept').val(), gm_pos_level:$('#cfgGmLevel').val() }, function(res){
         BF_DAYS = Number(res.backfill_days);
+        CFG.gm_dept_id = res.gm_dept_id; CFG.gm_pos_level = res.gm_pos_level;
+        CFG.gm_label = res.gm_label; CFG.gm_pool = res.gm_pool;
+        gmPoolHint(res.gm_label, res.gm_pool);
+        /* 裁示者的稱呼會出現在清單、處理頁與列印版好幾個地方（分頁標題、勾選框、紙本欄位名稱），
+           那些字是頁面載入時由 PHP 印出來的——改了之後一定要重新整理才會全部一致，
+           只改這個跳窗裡的字會變成「有些地方新、有些地方舊」，比沒改還難懂。 */
+        if (String(res.gm_label) !== String(GM_LABEL)) {
+            alert('已儲存。最終裁示者的稱呼改成「' + res.gm_label + '」，頁面會重新整理讓各處文字一致。');
+            location.reload();
+            return;
+        }
         alert('已儲存');
     });
 });
