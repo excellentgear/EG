@@ -25,6 +25,8 @@ $uid   = (int)($_SESSION['id'] ?? 0);
 $perms = qaa_perms($db, $uid);
 if (empty($_SESSION['qaa_csrf'])) $_SESSION['qaa_csrf'] = bin2hex(random_bytes(16));
 $CSRF = $_SESSION['qaa_csrf'];
+/* 最終裁示者的稱呼（品質異常處理單的「設定 → 其他設定」可指定部門；未指定時是「總經理」） */
+$gmLabel = qab_gm_label($db);
 $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAAdmin'] ? '分析設定管理員'
             : ($perms['canAView'] ? '分析檢視' : '無權限'));
 ?>
@@ -123,7 +125,9 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 .err-txt { color:var(--coral); font-size:12px; margin-top:6px; white-space:pre-line; }
 </style>
 </head>
-<body class="nav-md">
+<!-- nav-sm＝側欄預設收合成窄版圖示（使用者要求：載入時不要一直是展開寬版）；
+     全站其他頁面仍是 nav-md（本頁單獨設定，不動共用檔），使用者仍可用左上角摺疊鈕自行展開 -->
+<body class="nav-sm">
 <div class="container body">
 <div class="main_container">
     <?php include '../partPage/sideAndTopBarMenu.html' ?>
@@ -265,7 +269,7 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
             <ul>
                 <li><b>柏拉圖依料號／依原因分類／依發生源頭</b>：依選定期間內的異常單計數，長條由高到低排列；依原因分類可能加總大於單數，因為一張單可同時勾選多個原因。</li>
                 <li><b>COPQ（不良品質成本）</b>：加總「扣款確認明細」裡已勾選採用的金額，是系統裡唯一已經人工確認過的不良成本數字。</li>
-                <li><b>時效監控</b>：目前未結案的單依「建立時間到現在」的天數排序，超過設定門檻的標紅並顯示「逾期」徽章；門檻依目前卡在哪一關分別設定（待決策／等待單位回覆／待總經理裁示／扣款確認中／待品管確認說明），也有一個不分階段的整體門檻。</li>
+                <li><b>時效監控</b>：目前未結案的單依「建立時間到現在」的天數排序，超過設定門檻的標紅並顯示「逾期」徽章；門檻依目前卡在哪一關分別設定（待決策／等待單位回覆／待<?= htmlspecialchars($gmLabel) ?>裁示／扣款確認中／待品管確認說明），也有一個不分階段的整體門檻。</li>
                 <li><b>重複發生警示</b>：同一支料號＋同一個異常原因分類，在設定的月數窗口內累計出現達到門檻次數就列出來，點單號可開啟該張異常單。<b>這裡只做提示，不會強制擋下結案或要求開矯正單</b>——是否連動到單張處理頁的結案流程，留給後續視需要再決定。</li>
                 <li>統計只計「邏輯上的葉列」：一張異常單如果之後被拆分成好幾張子單，只算子單、不重複算原始母單。</li>
             </ul>
@@ -303,7 +307,7 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
             <div class="st-fgrid">
                 <div><label>待決策</label><input type="number" id="s_age_decide" min="1" max="180"></div>
                 <div><label>等待單位回覆</label><input type="number" id="s_age_reply" min="1" max="180"></div>
-                <div><label>待總經理裁示</label><input type="number" id="s_age_gm" min="1" max="180"></div>
+                <div><label>待<?= htmlspecialchars($gmLabel) ?>裁示</label><input type="number" id="s_age_gm" min="1" max="180"></div>
                 <div><label>扣款確認中</label><input type="number" id="s_age_deduct" min="1" max="180"></div>
                 <div><label>待品管確認說明</label><input type="number" id="s_age_qcreview" min="1" max="180"></div>
                 <div><label>整體未結案（不分階段）</label><input type="number" id="s_age_overall" min="1" max="365"></div>
@@ -337,6 +341,7 @@ var QAA_API = '../../src/store/QaAbnormalAnalysis_API.php';
 var CSRF = <?= json_encode($CSRF) ?>;
 var CAN_ADMIN = <?= $perms['canAAdmin'] ? 'true' : 'false' ?>;
 var DATA = null, SETTINGS = null;
+var GM_LABEL = <?= json_encode($gmLabel, JSON_UNESCAPED_UNICODE) ?>;   // 最終裁示者的稱呼（管理員可設定）
 
 function esc(s){ return $('<div>').text(s==null?'':s).html(); }
 function nf(n){ n=Number(n)||0; return n.toLocaleString('en-US'); }
@@ -466,7 +471,7 @@ function renderKpi(){
   h += kc('報廢件數', nf(k.scrap_count), '佔比 '+pct(k.scrap_count, k.total), k.total>0 && (k.scrap_count/k.total)>=0.2);
   h += kc('COPQ 金額', money(k.copq)+' 元', c ? '較基期 '+deltaHtml(k.copq, c.copq, money) : '', SETTINGS.copq_alert_amount!==null && k.copq>SETTINGS.copq_alert_amount);
   h += kc('平均結案天數', k.avg_cycle_days===null?'—':k.avg_cycle_days, '樣本 '+nf(k.cycle_sample)+' 張（排除補登紙本）');
-  h += kc('待總經理裁示', nf(k.pending_gm), 'MRB 判定尚未完成', k.pending_gm>0);
+  h += kc('待' + GM_LABEL + '裁示', nf(k.pending_gm), 'MRB 判定尚未完成', k.pending_gm>0);
   h += kc('逾期未結案', nf(DATA.aging_over_count), '現況，不受期間篩選影響', DATA.aging_over_count>0);
   $('#kpiRow').html(h);
 }
@@ -689,7 +694,7 @@ function qaaPrintHtml(){
     kc('報廢件數', nf(k.scrap_count), '佔比 '+pct(k.scrap_count,k.total)) +
     kc('COPQ金額', money(k.copq)+'元', c?('較基期 '+(k.copq-c.copq>=0?'+':'')+money(k.copq-c.copq)+'元'):'', SETTINGS.copq_alert_amount!==null && k.copq>SETTINGS.copq_alert_amount) +
     kc('平均結案天數', k.avg_cycle_days===null?'—':k.avg_cycle_days, '樣本 '+nf(k.cycle_sample)+' 張') +
-    kc('待總經理裁示', nf(k.pending_gm), 'MRB尚未完成', k.pending_gm>0) +
+    kc('待' + GM_LABEL + '裁示', nf(k.pending_gm), 'MRB尚未完成', k.pending_gm>0) +
     kc('逾期未結案', nf(DATA.aging_over_count), '現況', DATA.aging_over_count>0) +
     '</div>';
 
