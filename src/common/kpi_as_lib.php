@@ -457,8 +457,10 @@ function kpi_as_registry(): array {
         'complaint_rate' => [
             'name' => '客訴頻率／客訴件數(客退單)',
             'page' => '退貨單管理 views/Sales/ir.php ＋ 出貨 is_list',
-            'tables' => ['is_list','ir_track'],
-            'links' => [['label'=>'退貨追蹤（客退單）','url'=>'/EGsystem/views/Sales/IR_Track.php'], ['label'=>'快速出貨(新版)（出貨單）','url'=>'/EGsystem/views/Sales/Shipping_Quick.php']],
+            // 過期偵測刻意不含 order_track：件數本身不看訂單（只有畫面上的「訂單製程」看），
+            // 而 order_track 每天都有新訂單，列進來會讓這個指標的快照天天被判過期、每次開頁都重算
+            'tables' => ['is_list','ir_track','qa_abnormal_order','return_order_map'],
+            'links' => [['label'=>'退貨追蹤（客退單）','url'=>'/EGsystem/views/Sales/IR_Track.php'], ['label'=>'快速出貨(新版)（出貨單／追溯對照：退貨單綁訂單就在這裡）','url'=>'/EGsystem/views/Sales/Shipping_Quick.php'], ['label'=>'品質異常處理單（責任製程）','url'=>'/EGsystem/views/QA/qa_abnormal_list.php']],
             'desc' => '「統計方式」決定是算比率還是算件數：頻率＝當月客退明細筆數÷當月出貨單筆數；'
                     . '件數＝一張退貨單算一件（或逐筆明細各算一件）。'
                     . '注意：系統裡的客退單並不等於客訴，要只算真正的客訴請用「只計入這些退貨性質」'
@@ -819,6 +821,8 @@ function kpi_as_dim_lookup(PDO $db, string $dim, string $q, int $limit = 50): ar
         'machine'  => ['machine_list',  'machine',     'machine_id'],
         'part'     => ['d_setting',     'D_Setting_Id', null],
         'designer' => ['user',          'user_cname',  'id'],
+        // 訂單的「製程」欄位是手打自由文字（2026 年 470 種寫法），主檔就是 order_track 自己
+        'oproc'    => ['order_track',   'Processing_items', null],
     ];
     if (!isset($map[$dim])) return [];
     list($tbl, $nameCol, $idCol) = $map[$dim];
@@ -901,8 +905,18 @@ function kpi_as_calc_source(?string $calc): array {
             return ['from'=>'training_session ts', 'date'=>'', 'year_col'=>'ts.year',
                     'cols'=>['unit'=>['ts.org_unit', '']]];
         case 'complaint_rate':
-            return ['from'=>'ir_track t', 'date'=>'t.IR_date',
-                    'cols'=>['client'=>['t.Client_name', ''], 'part'=>['t.d_id', '']]];
+            // 製程候選＝異常單的責任製程；訂單製程候選＝綁定訂單的加工型態原文
+            // （與 kpi_as_complaint_proc_map() 同一條解析路徑，兩邊對不起來的話候選挑得到卻比不中）
+            return ['from'=>"ir_track t
+                             LEFT JOIN qa_abnormal_order q ON q.source_type='IR' AND q.ir_id=t.IR_id
+                                  AND q.deleted_at IS NULL AND q.resp_process_no>0
+                             LEFT JOIN process_no pn ON pn.ProcessNo=q.resp_process_no
+                             LEFT JOIN return_order_map rm ON rm.IR_id=t.IR_id
+                             LEFT JOIN order_track ot ON ot.Order_id=rm.Order_id",
+                    'date'=>'t.IR_date',
+                    'cols'=>['client'=>['t.Client_name', ''], 'part'=>['t.d_id', ''],
+                             'proc'=>["COALESCE(NULLIF(pn.ProcessName,''), q.resp_process_no)", 'q.resp_process_no'],
+                             'oproc'=>['ot.Processing_items', '']]];
         case 'project_fai_pass':
             // 製程候選只列「這個專案剛好只綁一道製程」的那些（與 kpi_as_fai_rows() 的 dims 同一個口徑）；
             // 綁多道製程的專案本來就比不中單一製程的規則，列出來只會讓人以為排除了卻沒作用。
@@ -979,7 +993,9 @@ function kpi_as_excl_rules_all(PDO $db, int $year): array {
 /** 維度代號 → 顯示名稱 */
 function kpi_as_dim_labels(): array {
     return ['client'=>'客戶', 'part'=>'料號', 'proc'=>'製程', 'maker'=>'廠商',
-            'machine'=>'機台', 'designer'=>'設計者', 'unit'=>'受訓單位'];
+            'machine'=>'機台', 'designer'=>'設計者', 'unit'=>'受訓單位',
+            // 訂單那一欄的「製程」其實記的是加工型態（代料成品／工繳／全製…），與製程站別是兩回事
+            'oproc'=>'訂單製程(加工型態)'];
 }
 
 /** 這個計算模組的明細列會帶哪些維度（後端驗證白名單） */
@@ -995,7 +1011,7 @@ function kpi_as_calc_dims(?string $calc): array {
         case 'capacity_rate':
         case 'process_ng_rate':    return ['client','part','proc','machine'];
         case 'training_completion': return ['unit'];
-        case 'complaint_rate':     return ['client','part'];
+        case 'complaint_rate':     return ['client','part','proc','oproc'];
         case 'project_fai_pass':   return ['client','part','proc'];
     }
     return [];
@@ -1462,6 +1478,113 @@ function kpi_as_vendor_rows(PDO $db, int $year, int $month, array $params): arra
 }
 
 /* ============================================================
+ * 退貨單 → 製程 的解析（使用者指定兩條路，2026-09-29）
+ * ------------------------------------------------------------
+ * ① 異常單的責任製程（優先）
+ *    `qa_abnormal_order`（source_type='IR'、ir_id=這張退貨、未刪除）的 `resp_process_no`。
+ *    這是全站唯一真的在講「是哪一站出問題」的結構化欄位，所以排第一順位。
+ * ② 綁定的訂單 → 訂單的「製程」欄位
+ *    `return_order_map`（IR_id→Order_id；只綁到出貨單時再用出貨單的訂單綁定回推，
+ *    出貨↔訂單一律走唯一實作 ship_order_bind_lib）→ `order_track.Processing_items`。
+ *    **這一欄記的是「加工型態」（代料成品／工繳／全製／代料抽孔…2026 年 470 種手打寫法），
+ *    不是齒研／滾齒這種製程站別**，所以刻意獨立成另一個維度 oproc，不跟 ① 混在同一欄
+ *    ——混在一起的話「只算齒研」會把「代料成品」一起篩進來，篩出來的數字沒有意義。
+ *
+ * 一張退貨單可能對到好幾個製程（實例：ir_id=786 開了兩張異常單，責任製程分別是 1 與 2）。
+ * 這種情況畫面上把全部列出來，但**不給它當排除規則的值**（與專案首樣過件率同一套做法）：
+ * 串成一個字串永遠比不中規則，硬取第一筆又會安靜地排錯。
+ * ============================================================ */
+function kpi_as_complaint_proc_map(PDO $db, array $irIds): array
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $irIds))));
+    if (!$ids) return [];
+    $ph  = implode(',', array_fill(0, count($ids), '?'));
+    $out = [];
+    $ini = function (&$o, int $ir) { if (!isset($o[$ir])) $o[$ir] = ['proc'=>[], 'proc_ids'=>[], 'oproc'=>[], 'orders'=>[], 'src'=>'']; };
+
+    // 製程代號 → 名稱
+    $pnames = [];
+    try {
+        foreach ($db->query("SELECT ProcessNo, ProcessName FROM process_no") as $r)
+            $pnames[(int)$r['ProcessNo']] = trim((string)$r['ProcessName']);
+    } catch (Throwable $e) {}
+
+    /* ① 異常單的責任製程 */
+    try {
+        $st = $db->prepare("SELECT ir_id, resp_process_no FROM qa_abnormal_order
+                            WHERE source_type='IR' AND deleted_at IS NULL
+                              AND resp_process_no IS NOT NULL AND resp_process_no>0
+                              AND ir_id IN ($ph)");
+        $st->execute($ids);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $ir = (int)$r['ir_id']; $pno = (int)$r['resp_process_no'];
+            $ini($out, $ir);
+            if (!in_array($pno, $out[$ir]['proc_ids'], true)) {
+                $out[$ir]['proc_ids'][] = $pno;
+                $out[$ir]['proc'][]     = $pnames[$pno] ?? ('製程' . $pno);
+            }
+            $out[$ir]['src'] = 'ncr';
+        }
+    } catch (Throwable $e) {}
+
+    /* ② 綁定的訂單（直接綁訂單，或只綁出貨單時由出貨單回推訂單） */
+    $ordOf = [];    // IR_id => [Order_id...]
+    $needShip = []; // IS_id => [IR_id...]
+    try {
+        $st = $db->prepare("SELECT IR_id, Order_id, IS_id FROM return_order_map WHERE IR_id IN ($ph)");
+        $st->execute($ids);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $ir = (int)$r['IR_id']; $oid = (int)$r['Order_id']; $isid = (int)$r['IS_id'];
+            if ($oid > 0) $ordOf[$ir][] = $oid;
+            // 綁到出貨單時一律再往出貨單的訂單綁定查一次：return_order_map 只存得下一個
+            // Order_id（tc_link 帶的是該出貨單的「主要訂單」），一張出貨拆給好幾張訂單時
+            // 其餘那幾張只查得到這裡。兩邊的結果取聯集後去重。
+            if ($isid > 0) $needShip[$isid][] = $ir;
+        }
+    } catch (Throwable $e) {}
+    if ($needShip) {
+        $f = __DIR__ . '/ship_order_bind_lib.php';
+        if (is_file($f)) {
+            require_once $f;
+            try {
+                foreach (sob_ship_bindings($db, array_keys($needShip)) as $isid => $binds) {
+                    foreach (($needShip[(int)$isid] ?? []) as $ir) {
+                        foreach ($binds as $b) {
+                            $oid = (int)($b['order_id'] ?? 0);
+                            if ($oid > 0) $ordOf[$ir][] = $oid;
+                        }
+                    }
+                }
+            } catch (Throwable $e) {}
+        }
+    }
+    $allOrd = [];
+    foreach ($ordOf as $l) foreach ($l as $o) $allOrd[$o] = 1;
+    if ($allOrd) {
+        $oids = array_keys($allOrd);
+        $ph2  = implode(',', array_fill(0, count($oids), '?'));
+        $omap = [];
+        try {
+            $st = $db->prepare("SELECT Order_id, Order_oo, Processing_items FROM order_track WHERE Order_id IN ($ph2)");
+            $st->execute($oids);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $omap[(int)$r['Order_id']] = $r;
+        } catch (Throwable $e) {}
+        foreach ($ordOf as $ir => $l) {
+            foreach (array_unique($l) as $oid) {
+                if (!isset($omap[$oid])) continue;
+                $ini($out, $ir);
+                $oo = trim((string)($omap[$oid]['Order_oo'] ?? ''));
+                $pi = trim((string)($omap[$oid]['Processing_items'] ?? ''));
+                if ($oo !== '' && !in_array($oo, $out[$ir]['orders'], true)) $out[$ir]['orders'][] = $oo;
+                if ($pi !== '' && !in_array($pi, $out[$ir]['oproc'], true)) $out[$ir]['oproc'][] = $pi;
+                if ($out[$ir]['src'] === '') $out[$ir]['src'] = 'order';
+            }
+        }
+    }
+    return $out;
+}
+
+/* ============================================================
  * 客訴（客退單）— 明細列（compute 與明細共用同一支）
  * ------------------------------------------------------------
  * 一列＝計數的一個單位：
@@ -1501,14 +1624,39 @@ function kpi_as_complaint_rows(PDO $db, int $year, int $month, array $params): a
     } catch (Throwable $e) { return []; }
 
     $cmap = kpi_as_client_id_map($db);
-    $mk = function (array $r, string $key, int $nRows, array $parts, float $qty) use ($cmap) {
+    // 製程一次解析（異常單的責任製程／綁定訂單的加工型態），不要逐列各查一次
+    $pmap = kpi_as_complaint_proc_map($db, array_map(static fn($r) => (int)$r['IR_id'], $raw));
+
+    $mk = function (array $r, string $key, int $nRows, array $parts, float $qty, array $irIds) use ($cmap, $pmap) {
         $client = trim((string)$r['Client_name']);
         $partTxt = $parts ? implode('、', array_slice($parts, 0, 5)) . (count($parts) > 5 ? ('…等 ' . count($parts) . ' 項') : '') : '';
+        // 這一列（可能含同一張單號的好幾筆明細）涵蓋到的製程／訂單加工型態
+        $proc = []; $procIds = []; $oproc = []; $orders = []; $src = '';
+        foreach ($irIds as $ir) {
+            $p = $pmap[(int)$ir] ?? null;
+            if (!$p) continue;
+            foreach ($p['proc'] as $i => $v) {
+                if (!in_array($v, $proc, true)) { $proc[] = $v; $procIds[] = $p['proc_ids'][$i]; }
+            }
+            foreach ($p['oproc'] as $v)  if (!in_array($v, $oproc, true))  $oproc[]  = $v;
+            foreach ($p['orders'] as $v) if (!in_array($v, $orders, true)) $orders[] = $v;
+            if ($src === '' || ($src === 'order' && $p['src'] === 'ncr')) $src = $p['src'];
+        }
         return ['key' => $key, 'ir_no' => (string)$r['IR_no'], 'ir_date' => (string)($r['IR_date'] ?: ''),
                 'client' => $client, 'part_txt' => $partTxt, 'qty' => $qty, 'n_rows' => $nRows,
                 'rtype' => trim((string)($r['type_name'] ?? '')), 'note' => trim((string)($r['IR_ps'] ?? '')),
-                'dims' => ['client' => $client, 'part' => (count($parts) === 1 ? $parts[0] : '')],
-                'dim_ids' => ['client' => ($cmap[$client] ?? ''), 'part' => '']];
+                'proc_txt'  => ($proc  ? implode('、', $proc)  : ''),
+                'oproc_txt' => ($oproc ? implode('、', $oproc) : ''),
+                'order_txt' => ($orders ? implode('、', $orders) : ''),
+                'proc_src'  => $src,
+                // 只綁一個值時才給它當排除規則的值（多個值串起來永遠比不中規則）
+                'dims' => ['client' => $client,
+                           'part'   => (count($parts) === 1 ? $parts[0] : ''),
+                           'proc'   => (count($proc) === 1 ? $proc[0] : ''),
+                           'oproc'  => (count($oproc) === 1 ? $oproc[0] : '')],
+                'dim_ids' => ['client' => ($cmap[$client] ?? ''), 'part' => '',
+                              'proc'   => (count($procIds) === 1 ? (string)$procIds[0] : ''),
+                              'oproc'  => '']];
     };
 
     $rows = [];
@@ -1518,17 +1666,18 @@ function kpi_as_complaint_rows(PDO $db, int $year, int $month, array $params): a
         foreach ($raw as $r) {
             $no = trim((string)$r['IR_no']);
             $k  = $no !== '' ? ('no:' . $no) : ('id:' . (int)$r['IR_id']);
-            if (!isset($grp[$k])) $grp[$k] = ['first' => $r, 'n' => 0, 'parts' => [], 'qty' => 0.0];
+            if (!isset($grp[$k])) $grp[$k] = ['first' => $r, 'n' => 0, 'parts' => [], 'qty' => 0.0, 'irs' => []];
             $grp[$k]['n']++;
             $grp[$k]['qty'] += (float)$r['Qty'];
+            $grp[$k]['irs'][] = (int)$r['IR_id'];
             $p = trim((string)$r['d_id']);
             if ($p !== '' && !in_array($p, $grp[$k]['parts'], true)) $grp[$k]['parts'][] = $p;
         }
-        foreach ($grp as $k => $g) $rows[] = $mk($g['first'], $k, $g['n'], $g['parts'], $g['qty']);
+        foreach ($grp as $k => $g) $rows[] = $mk($g['first'], $k, $g['n'], $g['parts'], $g['qty'], $g['irs']);
     } else {
         foreach ($raw as $r) {
             $p = trim((string)$r['d_id']);
-            $rows[] = $mk($r, 'id:' . (int)$r['IR_id'], 1, ($p !== '' ? [$p] : []), (float)$r['Qty']);
+            $rows[] = $mk($r, 'id:' . (int)$r['IR_id'], 1, ($p !== '' ? [$p] : []), (float)$r['Qty'], [(int)$r['IR_id']]);
         }
     }
     return $rows;
@@ -2835,7 +2984,9 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
             $isNo = ($metric === 'count_no');
             $out['cols'] = [['k'=>'no','t'=>'退貨單號'], ['k'=>'d','t'=>'退貨日'], ['k'=>'client','t'=>'客戶'],
                             ['k'=>'part','t'=>'料號'], ['k'=>'qty','t'=>'退貨數量'],
-                            ['k'=>'nrow','t'=>'明細筆數'], ['k'=>'rtype','t'=>'退貨性質'], ['k'=>'note','t'=>'備註']];
+                            ['k'=>'nrow','t'=>'明細筆數'], ['k'=>'proc','t'=>'責任製程'],
+                            ['k'=>'ordno','t'=>'綁定訂單'], ['k'=>'oproc','t'=>'訂單製程'],
+                            ['k'=>'rtype','t'=>'退貨性質'], ['k'=>'note','t'=>'備註']];
             $unit = $isNo ? '一張退貨單算一件' : ($metric === 'count_row' ? '逐筆明細各算一件' : '逐筆明細各算一筆');
             foreach ($rows as $r) {
                 $out['rows'][] = [
@@ -2844,6 +2995,9 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                'd'=>eg_fmt_date($r['ir_date']), 'client'=>$r['client'],
                                'part'=>($r['part_txt'] !== '' ? $r['part_txt'] : '（未填料號）'),
                                'qty'=>(string)(0 + $r['qty']), 'nrow'=>(string)$r['n_rows'],
+                               'proc'=>($r['proc_txt'] !== '' ? $r['proc_txt'] : '（沒開異常單）'),
+                               'ordno'=>($r['order_txt'] !== '' ? $r['order_txt'] : '（未綁訂單）'),
+                               'oproc'=>($r['oproc_txt'] !== '' ? $r['oproc_txt'] : '—'),
                                'rtype'=>($r['rtype'] !== '' ? $r['rtype'] : '（未設定）'),
                                'note'=>$r['note']],
                     'dims' => $r['dims'], 'dim_ids' => $r['dim_ids'], 'kind' => 'bad',
@@ -2863,7 +3017,13 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                 . '所以要嘛在這裡逐筆排除、要嘛把「退貨性質」建好再用「只計入這些退貨性質」篩。'
                 . ($only ? ('目前只計入退貨性質 id：' . implode(',', $only) . '（沒有填性質的單一律不算）。')
                          : '目前沒有限定退貨性質，所有客退單都算。')
-                . '另外：客退單上的「製程」欄位全庫都是空的，所以這個指標目前無法按製程拆開看。';
+                . '製程怎麼來（兩條路，優先序如下）：①「責任製程」＝這張退貨開出來的品質異常單上選的責任製程'
+                . '（唯一真的在講哪一站出問題的欄位）；②「訂單製程」＝退貨綁到的訂單（在快速出貨的「追溯對照」綁，'
+                . '只綁出貨單時會自動由出貨單的訂單綁定回推）那一欄的原文，'
+                . '但那一欄記的是加工型態（代料成品／工繳／全製…）不是齒研／滾齒這種站別，所以獨立成另一個維度，'
+                . '不跟責任製程混在一起（混在一起「只算齒研」會把「代料成品」一起篩進來）。'
+                . '客退單自己的「製程」欄位全庫都是空的，所以不採用。'
+                . '一張退貨對到好幾個製程時畫面會全部列出來，但不給它當排除規則的值（串起來永遠比不中規則）。';
             return $out;
         }
 
