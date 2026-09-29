@@ -394,6 +394,13 @@ case 'get_detail': {
     $m['notice_can_print']  = meeting_notice_can_print($uid, $perms, $m);
     $m['notice_dept_names'] = meeting_notice_dept_names($db, $m);
     $m['notice_missing']    = meeting_notice_missing($db, $m);
+    // 通知日期：目前值、建議值（新建/補開時的預設）、目前值有沒有問題（存進去之後主席換人或那天補登了假單）
+    $m['notice_date_suggest'] = meeting_notice_suggest_date($db, $m);
+    $m['notice_date_errors']  = trim((string)($m['notice_date'] ?? '')) !== ''
+        ? meeting_notice_date_check($db, $m, substr((string)$m['notice_date'], 0, 10))['errors'] : [];
+    $m['notice_stamp_date']   = meeting_notice_stamp_date($m);
+    // 這場會議有沒有任何要項／宣布事項＝會議紀錄本體有沒有開始寫（通知單畫面據此顯示「建立會議紀錄」）
+    $m['has_record_items']    = count($items) > 0;
     $m['as_doc_notice_no']  = eg_asdoc_no_asof($db, 'meeting_notice', (string)$m['meeting_date']);
     jout(['meeting'=>$m, 'items'=>$items, 'attendees'=>meeting_attendees($db, $id), 'attaches'=>$attaches]);
 }
@@ -1362,9 +1369,18 @@ case 'notice_save': {
         $st->execute($rawIds);
         $depts = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
     }
+    /* 通知日期：空白＝還沒決定（草稿可以先留白，送出時會被必填檢查擋下）；
+       有填就一定要通過同一份檢查（早於會議日期／工作日／兩位簽章者當天都有上班），
+       **不合法一律不寫入**——存下去之後圖章就會印出那一天，比當場擋下難補救得多（鐵律8）。 */
+    $nd = trim((string)($_POST['notice_date'] ?? ''));
+    if ($nd !== '') {
+        $chk = meeting_notice_date_check($db, $m, $nd);
+        if (!$chk['ok']) jerr('通知日期不可用：' . implode('；', $chk['errors']));
+    }
     $newState = meeting_notice_state($m) === 'none' ? 'draft' : meeting_notice_state($m);
-    $db->prepare("UPDATE meeting_record SET notice_status=?, notice_items=?, notice_depts=?, updated_at=NOW() WHERE meeting_id=?")
-       ->execute([$newState, ($items !== '' ? mb_substr($items, 0, 5000) : null), ($depts ? implode(',', $depts) : null), $id]);
+    $db->prepare("UPDATE meeting_record SET notice_status=?, notice_items=?, notice_depts=?, notice_date=?, updated_at=NOW() WHERE meeting_id=?")
+       ->execute([$newState, ($items !== '' ? mb_substr($items, 0, 5000) : null),
+                  ($depts ? implode(',', $depts) : null), ($nd !== '' ? $nd : null), $id]);
     $m2 = meeting_load($db, $id);
     jout(['notice_state'=>meeting_notice_state($m2), 'notice_missing'=>meeting_notice_missing($db, $m2)]);
 }
@@ -1379,6 +1395,9 @@ case 'notice_submit': {
     if (!in_array($state, ['draft', 'rejected'], true)) jerr('此通知單目前不是草稿／已退回狀態，無法送出（請先重新整理畫面）');
     $miss = meeting_notice_missing($db, $m);
     if ($miss) jerr('尚未填寫：' . implode('、', $miss));
+    // 存檔到送出之間，主席可能被換掉、那一天也可能補登了假單／公出，所以送出當下要再驗一次
+    $chk = meeting_notice_date_check($db, $m, substr((string)$m['notice_date'], 0, 10));
+    if (!$chk['ok']) jerr('通知日期不可用：' . implode('；', $chk['errors']) . '。請重新選一個通知日期後再送出');
     $signer = meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name']);
     if (!$signer || !$signer['id']) jerr('解析不到主席，請先在會議紀錄的出席人員內指定主席');
     try {
@@ -1473,6 +1492,15 @@ case 'notice_auto_sign': {
            ->execute(["meeting_id={$id}, 簽章日期={$date}, 主席={$signer['name']}(#{$signer['id']}), 發出通知={$sent}人", $uname]);
     } catch (Throwable $e) {}
     jout(['notice_state'=>'done', 'sent'=>$sent]);
+}
+
+/* 通知日期即時檢查（前端選完日期當下就告訴使用者可不可用，與存檔走同一支 meeting_notice_date_check） */
+case 'notice_date_check': {
+    $m = meeting_load($db, (int)($_GET['meeting_id'] ?? 0));
+    $d = trim((string)($_GET['date'] ?? ''));
+    if ($d === '') jout(['valid'=>false, 'errors'=>['請選擇通知日期']]);
+    $chk = meeting_notice_date_check($db, $m, $d);
+    jout(['valid'=>$chk['ok'], 'errors'=>$chk['errors']]);
 }
 
 /* 通知單的 AS 文件綁定（2-GM-05-03）與「應出席單位」設定（僅管理員） */

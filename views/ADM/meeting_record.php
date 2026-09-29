@@ -226,6 +226,10 @@ foreach ($roleRows as $rr) {
         .item-notify-status { font-size:10.5px; color:#8a6d45; margin-top:3px; }
         /* 會議通知單（2-GM-05-03）：狀態籤配色沿用 ai-rules/10 的暖色盤，語意與會議記錄那組一致
            （灰＝還沒開始、琥珀＝等人處理、綠＝完成、急件紅＝被退回要處理） */
+        /* 狀態籤＋入口按鈕同一行：這一欄不可以讓列變高（.nt-pill 自己指定 line-height，
+           否則會繼承 Gentelella 全站 td span{line-height:28px} 把整列撐高，已是本專案第 N 次） */
+        .nt-cell { white-space:nowrap; }
+        .nt-cell .mt-op { margin-left:6px; line-height:1.6; }
         .nt-pill { display:inline-block; font-size:11px; border-radius:10px; padding:1px 8px; line-height:1.6; white-space:nowrap; }
         .nt-none { background:#EFEAE1; color:#7a7166; }
         .nt-draft { background:#F7E0BD; color:#5b3a1e; }
@@ -273,7 +277,8 @@ foreach ($roleRows as $rr) {
             <label>狀態（可複選篩選）</label>
             <div class="stat-filter" id="statFilter"></div>
             <button id="btnMtSetting" style="display:none;margin-left:auto;"><i class="fa fa-cog"></i> 模組設定</button>
-            <button class="btn-warm" id="btnAdd" style="display:none;"><i class="fa fa-plus"></i> 新增會議紀錄</button>
+            <button class="btn-warm" id="btnAddNotice" style="display:none;"><i class="fa fa-bullhorn"></i> 新增會議通知單</button>
+            <button id="btnAdd" style="display:none;"><i class="fa fa-plus"></i> 新增會議紀錄</button>
         </div>
         <div class="mt-table-wrap">
             <table class="mt-table">
@@ -332,7 +337,7 @@ foreach ($roleRows as $rr) {
             </div>
         </div>
 
-        <div class="mt-sec">
+        <div class="mt-sec" id="edSecAnnounce">
             <div class="mt-sec-title">宣布事項</div>
             <table class="itm-tbl">
                 <thead><tr><th style="width:30px;">NO</th><th>內容</th><th style="width:160px;">備註</th><th style="width:24px;"></th></tr></thead>
@@ -340,7 +345,7 @@ foreach ($roleRows as $rr) {
             </table>
             <button type="button" class="b-att wt" onclick="itemAdd('announce')"><i class="fa fa-plus"></i> 新增宣布事項</button>
         </div>
-        <div class="mt-sec">
+        <div class="mt-sec" id="edSecDirective">
             <div class="mt-sec-title">上級指示要項</div>
             <table class="itm-tbl">
                 <thead><tr><th style="width:30px;">NO</th><th>報告要點及決議事項</th><th style="width:96px;">應完成日期</th>
@@ -349,7 +354,7 @@ foreach ($roleRows as $rr) {
             </table>
             <button type="button" class="b-att wt" onclick="itemAdd('directive')"><i class="fa fa-plus"></i> 新增上級指示項目</button>
         </div>
-        <div class="mt-sec">
+        <div class="mt-sec" id="edSecGeneral">
             <div class="mt-sec-title">會議要項</div>
             <table class="itm-tbl">
                 <thead><tr><th style="width:30px;">NO</th><th>報告要點及決議事項</th><th style="width:96px;">應完成日期</th>
@@ -359,12 +364,12 @@ foreach ($roleRows as $rr) {
             <button type="button" class="b-att wt" onclick="itemAdd('general')"><i class="fa fa-plus"></i> 新增會議要項</button>
         </div>
 
-        <div class="mt-sec">
+        <div class="mt-sec" id="edSecKpi">
             <div class="mt-sec-title">出貨目標達成率（產銷會議可插入本月數據佐證，非必要可略過）</div>
             <div id="kpiBox"></div>
         </div>
 
-        <div class="mt-sec">
+        <div class="mt-sec" id="edSecAttach">
             <div class="mt-sec-title">附件</div>
             <div id="edAttachList" style="font-size:12px;"></div>
             <div style="margin-top:5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
@@ -376,11 +381,15 @@ foreach ($roleRows as $rr) {
         </div>
     </div>
     <div class="m-foot">
-        <div style="text-align:left;font-size:11.5px;color:#8a6d45;line-height:1.6;margin-bottom:6px;">
+        <div id="edNoticeHint" style="display:none;text-align:left;font-size:11.5px;color:#8a6d45;line-height:1.6;margin-bottom:6px;">
+            開會<b>前</b>發的通知單：這裡只要填<b>會議基本資料與出席人員</b>（宣布事項、上級指示要項、會議要項等開完會才有的內容先不用填）。
+            按下右邊按鈕會建立這場會議並直接開啟<b>通知單</b>填寫畫面；開完會之後，再從通知單或清單的「編輯」把會議記錄內容補上即可，<b>不必重打一次基本資料</b>。
+        </div>
+        <div id="edFootHint" style="text-align:left;font-size:11.5px;color:#8a6d45;line-height:1.6;margin-bottom:6px;">
             <b style="color:#8A5A2B;">存草稿</b>＝可隨時再修改；出席人員全部簽到且負責部門/指定人員全部確認回簽後，右下角按鈕才會變成<b style="color:#8A5A2B;">送出</b>並鎖定內容通知主席確認簽章（之後需退回才能再改）；負責人尚未確認完成前，按鈕是<b style="color:#8A5A2B;">存檔並通知</b>，只發通知不會送交主席。
         </div>
         <button class="b-cancel" onclick="closeMask('edMask')">取消</button>
-        <button class="b-ok" style="background:#fff;color:#8A5A2B;" onclick="saveDraft(false)">存草稿</button>
+        <button class="b-ok" id="btnEdSaveDraft" style="background:#fff;color:#8A5A2B;" onclick="saveDraft(false)">存草稿</button>
         <button class="b-ok" id="btnEdSubmit" onclick="saveDraft(true)"><i class="fa fa-paper-plane"></i> 存檔並送出</button>
     </div>
 </div></div>
@@ -617,6 +626,19 @@ foreach ($roleRows as $rr) {
     <div class="m-body">
         <div class="nt-ro" id="ntHeadBox"></div>
         <div class="mt-sec">
+            <div class="mt-sec-title">通知日期 *</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <input type="date" id="ntDate" max="9999-12-31" style="width:170px;" onchange="ntDateCheck()">
+                <button type="button" class="b-att wt" onclick="ntDateUseSuggest()" title="自動挑一個符合規定的日期"><i class="fa fa-magic"></i> 自動帶入可用日期</button>
+                <span id="ntDateOk" style="font-size:12px;color:#4E8A5A;"></span>
+            </div>
+            <div class="errmsg" id="errNtDate"></div>
+            <div style="font-size:11.5px;color:#8a6d45;margin-top:4px;line-height:1.7;">
+                這一天就是紙本上的發文日，<b>主席確認與製表兩格圖章都印它</b>。必須<b>早於會議日期</b>、是<b>工作日</b>，
+                且<b>主席與製表人當天都要有上班</b>（整天請假、整天公出、當天不在職者都不行）。補以前的紙本時請直接選當時那一天。
+            </div>
+        </div>
+        <div class="mt-sec">
             <div class="mt-sec-title">會議要項</div>
             <textarea id="ntItems" rows="4" maxlength="5000"
                 data-eg-hint="開會前要請大家準備什麼、先讀哪一份程序書。可分行，一行一件；紙本上就是這一格多行文字"></textarea>
@@ -637,6 +659,7 @@ foreach ($roleRows as $rr) {
     <div class="m-foot">
         <div id="ntFootHint" style="text-align:left;font-size:11.5px;color:#8a6d45;line-height:1.6;margin-bottom:6px;"></div>
         <button class="b-cancel" onclick="closeMask('noticeMask')">關閉</button>
+        <button class="b-cancel" id="btnNtToRecord" style="display:none;" onclick="noticeToRecord()"><i class="fa fa-file-text-o"></i> 建立會議紀錄</button>
         <button class="b-cancel" id="btnNtPrint" style="display:none;" onclick="printNotice()"><i class="fa fa-print"></i> 列印通知單</button>
         <button class="b-ok" id="btnNtSave" style="display:none;background:#fff;color:#8A5A2B;" onclick="noticeSave(false)">存草稿</button>
         <button class="b-ok" id="btnNtSubmit" style="display:none;" onclick="noticeSave(true)"><i class="fa fa-paper-plane"></i> 存檔並送出</button>
@@ -677,8 +700,10 @@ foreach ($roleRows as $rr) {
         兩種模式下，負責人（部門或指定人員）本次沒有人出席、或現場代表尚未來得及簽名時，「存檔並通知」都會改發通知（該部門本次所有出席人員＋部門主管，或指定人員本人）請對方回覆確認，回覆內容會顯示在項目下方。<b>完成的條件兩種模式不一樣</b>：<b>選部門</b>＝<b>該部門任一人</b>回覆即完成該部門那一格；<b>指定人員</b>＝<b>每一位被指名的人都要各自回簽</b>（一人一格簽名，不是任一人回覆就好），回覆內容可自行決定寫不寫，直接按通知上的<b>「僅回簽（不留言）」</b>也算完成。整項全部到齊後那則通知才會自動關閉，其他人之後開啟只會看到唯讀狀態。<br>
         　－<b>為什麼只有某些人有「密碼回簽」欄</b>：現場輸入密碼簽名只開放給<b>本次有出席</b>的人（沒出席的人不在現場，不可能當場輸入自己的密碼）；沒出席的負責人一律走通知回簽，畫面上會標明「本次未出席，已發通知請本人在系統內回簽」。兩種方式完成的效力完全相同。<br>
         　－<b>確認簽名一多時怎麼顯示</b>：畫面上每一項<b>預設只顯示前 3 顆簽名章</b>，其餘收起來按「還有 N 位，展開」才出現（尚未回簽、還要輸入密碼的欄位一律不收，以免找不到地方簽）。<b>列印</b>時該欄放得下 1 顆章，超過就改印<b>「已確認 N 位（詳見附表）」</b>，全部簽名章移到最後面的<b>「確認簽名附表」</b>逐項列出——原本超出的章會被<b>安靜裁掉、紙上完全看不出少了人</b>，這在管制文件上不可接受，故一律改走附表。只有 1 位確認的項目維持直接蓋在表內，不會多印附表那一頁。<br>
-        <b>⑥會議通知單（2-GM-05-03，開會前發的那一張）</b>：清單的「會議通知單」欄按<b>「建立」</b>（已建立則是「開啟」）。<br>
-        　－<b>表頭是唯讀的</b>：主題／日期／時間／地點／主席／記錄／出席人員與會議記錄<b>是同一筆資料</b>，要改請回清單按「編輯」改（改完通知單跟著變，不必重做）。通知單這裡只填兩塊：<b>會議要項</b>（開會前請大家準備什麼、先讀哪一份程序書，可多行）與<b>應出席單位</b>（紙本上那一排勾選欄）。<br>
+        <b>⑥會議通知單（2-GM-05-03，開會前發的那一張）</b><br>
+        　－<b>正常順序是「先通知單、後會議記錄」</b>，所以工具列第一顆就是<b>「新增會議通知單」</b>：按下去只要填<b>會議基本資料與出席人員</b>（宣布事項／上級指示要項／會議要項那幾段會先收起來，那是開完會才有的），存檔後直接進通知單填寫畫面。開完會之後，在通知單上按<b>「建立會議紀錄」</b>（或清單的「編輯」）就能接著補記錄內容，<b>基本資料完全不必重打</b>——因為通知單與會議記錄本來就是同一筆資料。已經有一場會議了，也可以從清單「會議通知單」欄按<b>「建立」</b>補一張通知單（已建立則是「開啟」）。<br>
+        　－<b>表頭是唯讀的</b>：主題／日期／時間／地點／主席／記錄／出席人員與會議記錄<b>是同一筆資料</b>，要改請回清單按「編輯」改（改完通知單跟著變，不必重做）。通知單這裡只填三塊：<b>通知日期</b>、<b>會議要項</b>（開會前請大家準備什麼、先讀哪一份程序書，可多行）與<b>應出席單位</b>（紙本上那一排勾選欄）。<br>
+        　－<b>通知日期（發文日）＝本單的業務日期，主席確認與製表兩格圖章都印它</b>。系統會自動帶一個可用的日期，也可以自己選，選完當場檢查三件事：<b>①必須早於會議日期</b>（開會前才叫通知）<b>②必須是工作日</b>（走請假系統同一套假日／補班設定）<b>③主席與製表人（記錄）當天都要有上班</b>——<b>整天請假、整天公出在外、當天還沒到職或已離職</b>都不行，會直接紅字寫出是哪一位、為什麼。<b>半天假、下午才出去的人不擋</b>（那天他還是有到班）；外訓目前只當提示不擋。不合法的日期<b>存不進去</b>（後端會再擋一次），按「自動帶入可用日期」可讓系統往前找第一個符合的工作日。<b>補以前的紙本</b>時直接選當時那一天即可，系統一樣會用上面三條檢查。<br>
         　－<b>應出席單位</b>可按<b>「依出席人員自動勾選」</b>由目前出席名單的所屬部門（含兼任）自動帶；<b>刻意做成按一下才套用而不是自動連動</b>——有些單位是「要求它派人來」但名單還沒指定到人，自動重算會把手動勾的洗掉。要增減這裡列出哪些單位，管理員到<b>模組設定 → 會議通知單</b>調整（預設＝紙本上那幾個單位；單位名稱與排列順序一律取自部門主檔）。<br>
         　－<b>流程</b>：存草稿 →<b>存檔並送出</b>（通知主席確認簽章，此時<b>還不會</b>吵到其他人）→ 主席按<b>「確認簽章並發出通知」</b>→ <b>這一刻</b>系統才把會議通知發給出席名單上的每一位（站內通知＋推播，內容含日期時間地點主席記錄應出席單位與會議要項）。主席可<b>退回</b>（必填原因），記錄人改完重新送出，所以不會出現「兩個版本的通知都發出去過」。送出後若發現送早了／送錯了，記錄人可<b>撤回</b>改回草稿。<br>
         　－<b>已確認後</b>出席名單有增減、或有人反映沒收到，可按<b>「重新發送會議通知給出席人員」</b>；同一場會議只保留最新一則通知，鈴鐺上不會累積好幾則。<br>
@@ -699,7 +724,7 @@ foreach ($roleRows as $rr) {
         <h4>權限角色</h4>
         會議記錄檢閱＝看（草稿仍僅本人）；會議記錄登錄＝新增/編輯/送出；會議記錄管理員＝＋檢視全部人員記錄、刪除、修改他人已送出記錄、維護常用設定；管理者全權。<br>
         ・<b>超級管理員（帳號e）專屬</b>：檢視畫面內出席簽到／項目確認簽名旁會多出「[改日期/補簽]」連結，可個別或用「一鍵補齊全部簽章日期」批次補齊漏簽/校正日期，尚未簽核的部分會視同已完成一併補簽；主席／總經理若該場會議從未送出過，也會自動送審＋自動核准（總經理階段會先確保主席已核准），不會卡在「查無紀錄無法補」。操作前需輸入超級管理員密碼，且會留下 page_change_log 紀錄可追溯。另在「主席／記錄」那一列的記錄人員右方有「[更換記錄人]」，補舊資料時可把記錄人員改成紙本上的那一位——<b>不限狀態，已完成核准的也改得動</b>（不必把整張退回重簽），人員清單依<b>會議日期當時</b>的在職狀態與職稱列出（當時在職、現已離職的人也挑得到），更換後列印版的「製表」圖章會跟著換。<br>
-        ・<b>超級管理員自動簽章（會議通知單）</b>：通知單畫面下方有「超級管理員工具 — 自動簽章」，<b>不必等主席實際操作</b>就能把通知單簽成已確認，並可<b>指定簽章日期</b>（補歷史紙本時跟紙上那一天對得起來）。蓋出來的仍是<b>主席本人的章</b>——紙本上那一格本來就是主席的章，改蓋超管的章會讓文件對不上紙本。是否同時發出會議通知可勾選：<b>會議日期還沒到</b>時預設會發，<b>日期已過</b>（研判是補歷史資料）預設<b>不</b>發，避免事後再吵人。需輸入超級管理員密碼，並留下 page_change_log 紀錄可追溯。<br>
+        ・<b>超級管理員自動簽章（會議通知單）</b>：通知單畫面下方有「超級管理員工具 — 自動簽章」，<b>不必等主席實際操作</b>就能把通知單簽成已確認，並可<b>指定通知日期</b>（補歷史紙本時跟紙上那一天對得起來；那裡填的就是通知日期，兩格章都印它，一樣要通過「早於會議日期／工作日／簽章者當天有上班」三條檢查）。蓋出來的仍是<b>主席本人的章</b>——紙本上那一格本來就是主席的章，改蓋超管的章會讓文件對不上紙本。是否同時發出會議通知可勾選：<b>會議日期還沒到</b>時預設會發，<b>日期已過</b>（研判是補歷史資料）預設<b>不</b>發，避免事後再吵人。需輸入超級管理員密碼，並留下 page_change_log 紀錄可追溯。<br>
         ・<b>列印紀錄</b>：本頁四種列印（會議記錄／空白簽到表／已簽署簽到表／出貨目標達成率）與<b>會議通知單</b>，按下列印都會留下列印時間、列印人、登入電腦與文件名稱，可在<a href="../admin/print_sign_log.php" target="_blank">列印與簽核紀錄</a>查詢（ai-rules/23）。<br>
         ・<b>任何動作都會即時更新畫面</b>：補簽、更換記錄人、回簽確認等操作完成後，檢視視窗與背後的清單／狀態篩選筆數會一起重抓，所以「一次補齊全部簽章」之後清單上的狀態會直接變成<b>已完成</b>，不需要重新整理整頁。
     </div>
@@ -785,7 +810,7 @@ function loadMeta(cb){
         $y.val(m.cur_year);
         var $ad = $('#attDept').empty().append('<option value="">選部門載入人員…</option>');
         DEPTS.forEach(function(d){ $ad.append('<option value="'+d.id+'">'+esc(d.name)+'</option>'); });
-        if (m.perms.canEdit) $('#btnAdd').show();
+        if (m.perms.canEdit) $('#btnAdd,#btnAddNotice').show();
         if (m.perms.canAdmin) { $('#btnPresetMgr').show(); $('#btnMtSetting').show(); }
         $('#mtHeaderDocNo').text(m.as_doc_record && m.as_doc_record.doc_no ? (m.as_doc_record.doc_no+' ') : '');
         // 通知單的編號也一律取自綁定（禁寫死，ai-rules/16）：改綁別份文件時標題會跟著變
@@ -820,7 +845,9 @@ $('#edPreset').on('change', function(){
     $(this).val('');
 });
 $('#yearSel').on('change', function(){ loadList(); });
-$('#btnAdd').on('click', openCreate);
+$('#btnAdd').on('click', function(){ openCreate(false); });
+// 通知單優先的入口（使用者指定：實務上先發通知單、開完會才有會議記錄）
+$('#btnAddNotice').on('click', function(){ openCreate(true); });
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 
 function loadList(){
@@ -857,10 +884,11 @@ function renderList(){
         h += '<tr><td>'+dispDate(m.meeting_date)+'</td><td class="t-left">'+esc(m.subject)+'</td>'
            + '<td>'+esc(m.chair_name||'—')+'</td><td>'+esc(m.recorder_name||'')+'</td>'
            + '<td><span class="st-pill st-'+m.approval_status+'">'+(STATUS_LABEL[m.approval_status]||m.approval_status)+'</span></td>'
-           // 會議通知單（2-GM-05-03）：與會議記錄的狀態各自獨立（通知單簽完了、記錄本身還是草稿是正常的）
-           + '<td><span class="nt-pill nt-'+m.notice_state+'">'+(NOTICE_LABEL[m.notice_state]||m.notice_state)+'</span>'
-           + '<div><span class="mt-op" onclick="openNotice('+m.meeting_id+')"><i class="fa fa-bullhorn"></i> '
-           + (m.notice_state==='none' ? '建立' : '開啟') + '</span></div></td>'
+           // 會議通知單（2-GM-05-03）：與會議記錄的狀態各自獨立（通知單簽完了、記錄本身還是草稿是正常的）。
+           // 狀態籤與入口按鈕**排在同一行**（2026-09-29 使用者回報：上下兩行會把整列撐高不好閱讀）
+           + '<td class="nt-cell"><span class="nt-pill nt-'+m.notice_state+'">'+(NOTICE_LABEL[m.notice_state]||m.notice_state)+'</span>'
+           + '<span class="mt-op" onclick="openNotice('+m.meeting_id+')">'
+           + (m.notice_state==='none' ? '建立' : '開啟') + '</span></td>'
            + '<td><div class="mt-op-wrap">'
            + '<span class="mt-op" onclick="openView('+m.meeting_id+')"><i class="fa fa-search-plus"></i> 檢視</span>';
         var isDraftLike = m.approval_status==='draft' || m.approval_status==='rejected' || m.approval_status==='ready';
@@ -875,14 +903,28 @@ function renderList(){
 
 /* ---------- 建立/編輯 ---------- */
 var EDIT_ID = 0, ATT = [], ITEMS_D = [], ITEMS_G = [], ITEMS_A = [], KPI_SNAP = null, EDIT_ATTACHES = [], TEMP_ATTACH_IDS = [];
-function openCreate(){
+/* 「通知單優先」模式（2026-09-29 使用者指定：實務上一定是先發通知單、開完會才有會議記錄）。
+   開的是**同一個編輯跳窗**，只是把「開會後才會有」的那幾段（宣布事項／上級指示要項／會議要項／
+   出貨目標達成率／附件）先收起來——刻意不另刻一套表頭編輯器，那會變成同一批欄位有兩個寫入點
+   （鐵律4），而且兩邊的驗證遲早走鐘。存好之後直接把通知單畫面接著打開。 */
+var ED_NOTICE_MODE = false;
+function edApplyNoticeMode(on){
+    ED_NOTICE_MODE = !!on;
+    $('#edSecAnnounce,#edSecDirective,#edSecGeneral,#edSecKpi,#edSecAttach').toggle(!on);
+    $('#edNoticeHint').toggle(on);
+    $('#edFootHint').toggle(!on);
+    $('#btnEdSaveDraft').toggle(!on);
+    $('#btnEdSubmit').html(on ? '<i class="fa fa-bullhorn"></i> 建立並填寫通知單' : '<i class="fa fa-paper-plane"></i> 存檔並送出');
+}
+function openCreate(noticeMode){
     EDIT_ID = 0; ATT = []; ITEMS_D = []; ITEMS_G = []; ITEMS_A = []; KPI_SNAP = null; EDIT_ATTACHES = []; TEMP_ATTACH_IDS = [];
-    $('#edTitle').text('新增會議紀錄');
+    $('#edTitle').text(noticeMode ? '新增會議通知單 — 先填會議基本資料' : '新增會議紀錄');
     $('#edSubject').val(''); $('#edDate').val(META.today); $('#edStart').val(''); $('#edEnd').val('');
     $('#edLoc').val(''); $('#edRecorder').val(META.uname);
     renderAtt(); renderItems('directive'); renderItems('general'); renderItems('announce'); renderChairSel(); renderKpiBox(); renderEdAttach();
     $('#attDept').val(''); $('#attPeopleBox').html('<span class="empty">選部門載入人員</span>');
     loadCalendarMeetings();
+    edApplyNoticeMode(noticeMode);
     openMask('edMask');
 }
 /* 從行事曆挑選「今天」的會議類別事件，自動帶入日期/時間/主題/出席人員（使用者明確要求限當天；只在新增時提供，編輯既有記錄不覆蓋） */
@@ -949,6 +991,7 @@ function openEdit(id){
             return;
         }
         EDIT_ID = m.meeting_id;
+        edApplyNoticeMode(false);          // 編輯既有會議一律是完整的會議記錄畫面（通知單模式只用在新建）
         mtSyncYear(m.meeting_date);        // 補舊年度的會議：清單年度要跟著切，關掉跳窗才找得到
         $('#edTitle').text('編輯會議紀錄');
         $('#edSubject').val(m.subject); $('#edDate').val(fmtDate(m.meeting_date));
@@ -1611,8 +1654,23 @@ function saveDraft(thenSubmit){
     if (!$('#edDate').val()){ setErr($('#edDate'),'errEdDate','請選擇會議日期'); return; }
     setErr($('#edDate'),'errEdDate','');
     if (!edTimeValidate()){ alert('時間欄位有誤，請先修正'); return; }
-    if (thenSubmit && !$('#edChair').val()){ alert('送出前請先指定主席'); return; }
-    if (thenSubmit && !ATT.length){ alert('送出前請先加入出席人員'); return; }
+    if (thenSubmit && !$('#edChair').val()){ alert(ED_NOTICE_MODE ? '通知單一定要有主席（主席確認那一格的章），請先在出席人員內指定' : '送出前請先指定主席'); return; }
+    if (thenSubmit && !ATT.length){ alert(ED_NOTICE_MODE ? '請先加入出席人員（通知單要印出席人員，也要靠這份名單發通知）' : '送出前請先加入出席人員'); return; }
+    /* 通知單模式：存好會議基本資料就好，**不要**走「送出主席簽核」那條路（那是會議記錄的簽核，
+       開會前根本還沒有記錄內容可簽）；存完直接把通知單畫面接著打開讓使用者填通知日期與要項。 */
+    if (ED_NOTICE_MODE) {
+        var nMiss = [];
+        if (!$('#edStart').val()) nMiss.push('開始時間');
+        if (!$('#edEnd').val()) nMiss.push('結束時間');
+        if (!$.trim($('#edLoc').val())) nMiss.push('會議地點');
+        if (nMiss.length){ alert('通知單上要印出這幾欄，請先補齊：' + nMiss.join('、')); return; }
+        $.post(API, gatherPayload(), function(res){
+            if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+            closeMask('edMask'); loadList();
+            openNotice(res.meeting_id);          // 接著開通知單畫面（通知日期會自動帶建議值）
+        }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+        return;
+    }
     // 沒指定負責人／負責部門的項目不可送出(2026-09-16 使用者回報)：那種項目不會通知任何人、也不會有人
     // 簽名，卻能一路送到主席簽核，紙本上就是一格空白。後端 meeting_items_missing_owner() 會再擋一次。
     // 日期／開始時間／結束時間／地點是送出前的必填欄位（2026-09-16 使用者明確要求）：
@@ -2467,9 +2525,34 @@ function openNotice(id){
         $('#ntTitle').text('會議通知單　'+esc(m.subject));
         NT_UNITS = String(m.notice_depts||'').split(',').filter(function(x){ return x!==''; }).map(Number);
         $('#ntItems').val(m.notice_items||'');
+        // 通知日期：已填就用既有值；還沒填（新建／補開）就帶後端算好的建議日期，使用者仍可自行改
+        $('#ntDate').val(fmtDate(m.notice_date) || fmtDate(m.notice_date_suggest));
+        ntShowDateErrors(m.notice_date ? (m.notice_date_errors||[]) : []);
         renderNotice();
         openMask('noticeMask');
     });
+}
+/* 通知日期的即時檢查（與後端 meeting_notice_date_check() 同一支，不在前端另寫一套判定：
+   工作日與「某人那天在不在」都要查資料庫，前端算不出來也不該猜） */
+function ntShowDateErrors(errs){
+    var bad = (errs||[]).length > 0;
+    $('#ntDate').toggleClass('inv', bad);
+    $('#errNtDate').html(bad ? errs.map(esc).join('<br>') : '');
+    $('#ntDateOk').text(!bad && $('#ntDate').val() ? '✓ 這一天可用' : '');
+}
+function ntDateCheck(cb){
+    var d = $('#ntDate').val();
+    if (!d){ ntShowDateErrors(['請選擇通知日期']); if (cb) cb(false); return; }
+    $.getJSON(API, {action:'notice_date_check', meeting_id:NOTICE.meeting.meeting_id, date:d}, function(res){
+        if (!res.ok){ ntShowDateErrors([res.error||'檢查失敗']); if (cb) cb(false); return; }
+        ntShowDateErrors(res.errors||[]);
+        if (cb) cb(!!res.valid);
+    });
+}
+function ntDateUseSuggest(){
+    var s = fmtDate(NOTICE.meeting.notice_date_suggest);
+    if (!s){ alert('找不到可用的通知日期：會議日期之前 90 天內，沒有任何一天同時滿足「工作日」且「主席與製表人都有上班」。\n請確認主席／記錄人是否正確，或改由管理員調整。'); return; }
+    $('#ntDate').val(s); ntDateCheck();
 }
 /* 通知單畫面重繪：唯讀表頭、單位勾選、簽章區、底部按鈕顯示與否，全部由 notice_state 與後端給的
    notice_can_edit/notice_can_print 決定（前端只是照著畫，真正的守門在 API 那一層＝鐵律8）。 */
@@ -2500,6 +2583,7 @@ function renderNotice(){
     });
     $('#ntUnitBox').html(h || '<span style="font-size:12px;color:#DD5138;">尚未設定要列出哪些單位，請到「模組設定 → 會議通知單」設定。</span>');
     $('#ntItems').prop('readonly', !canEdit).toggleClass('ro-auto', !canEdit);
+    $('#ntDate').prop('disabled', !canEdit).toggleClass('ro-auto', !canEdit);
     ntUnitsCount();
 
     // ── 簽章區：主席確認／製表兩格（紙本上就是這兩格），外加主席的核准/退回與超管自動簽章
@@ -2507,11 +2591,11 @@ function renderNotice(){
     var chairSigned = app && app.status==='approved' && app.approver_name;
     var sg = '<div class="mt-sec-title">簽章</div><div class="nt-sign">'
         + '<div class="nt-slot"><div class="nt-slot-t">主席確認</div>'
-        + (chairSigned ? ntStamp(app.approver_name, app.decided_at, String(app.approver_id)!==String(m.chair_user_id))
+        + (chairSigned ? ntStamp(app.approver_name, ntStampDate(m), String(app.approver_id)!==String(m.chair_user_id))
             : '<span style="font-size:12px;color:#8a6d45;">'+(st==='submitted'?'待主席確認簽章':(st==='rejected'?'已退回，修改後重新送出':'尚未送出'))+'</span>')
         + '</div>'
         + '<div class="nt-slot"><div class="nt-slot-t">製表</div>'
-        + (st!=='none' ? ntStamp(m.recorder_name, ntPrepDate(m), false) : '<span style="font-size:12px;color:#8a6d45;">存草稿後產生</span>')
+        + (st!=='none' && ntStampDate(m) ? ntStamp(m.recorder_name, ntStampDate(m), false) : '<span style="font-size:12px;color:#8a6d45;">填好通知日期後產生</span>')
         + '</div></div>';
     if (app && app.status==='rejected' && app.note)
         sg += '<div class="mt-hint" style="color:#DD5138;border-color:#DD5138;"><b>主席退回原因：</b>'+esc(app.note)+'</div>';
@@ -2541,12 +2625,15 @@ function renderNotice(){
     // 超級管理員自動簽章（使用者明確要求）：不必等主席實際操作，且可指定簽章日期（補歷史紙本用）
     if (META.is_superadmin && st!=='none' && st!=='done') {
         var futureMeeting = String(m.meeting_date) >= String(META.today);
+        var asDefault = fmtDate(m.notice_date) || fmtDate(m.notice_date_suggest);
         sg += '<div style="margin-top:12px;padding:8px;border:1px dashed #c9a06a;font-size:12px;">'
             + '<b>超級管理員工具 — 自動簽章</b>'
             + '<div style="color:#8a6d45;margin:3px 0 6px;">直接把通知單簽成「已確認」，不必等主席實際操作。'
-            + '蓋出來的仍是<b>主席（'+esc(m.chair_name||'—')+'）本人的章</b>——紙本上那一格本來就是主席的章。</div>'
+            + '蓋出來的仍是<b>主席（'+esc(m.chair_name||'—')+'）本人的章</b>——紙本上那一格本來就是主席的章。'
+            + '下面填的<b>就是通知日期</b>（兩格章都印它），補以前的紙本請直接選當時那一天；'
+            + '一樣要早於會議日期、是工作日、且主席與製表人當天都有上班。</div>'
             + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
-            + '<span>簽章日期</span><input type="date" id="ntAsDate" style="width:150px;" value="'+esc(fmtDate(m.meeting_date))+'" max="9999-12-31">'
+            + '<span>通知日期</span><input type="date" id="ntAsDate" style="width:150px;" value="'+esc(asDefault)+'" max="9999-12-31">'
             + '<label style="margin:0;display:flex;align-items:center;gap:4px;font-size:12px;"><input type="checkbox" id="ntAsNotify" data-eg-skip'
             + (futureMeeting?' checked':'')+' style="margin:0;"> 同時發出會議通知</label>'
             + '<span>超管密碼</span><input type="password" id="ntAsPw" autocomplete="new-password" style="width:140px;" data-eg-skip>'
@@ -2564,6 +2651,12 @@ function renderNotice(){
     $('#btnNtSubmit').toggle(canEdit).html(st==='rejected'
         ? '<i class="fa fa-paper-plane"></i> 存檔並重新送出' : '<i class="fa fa-paper-plane"></i> 存檔並送出');
     $('#btnNtPrint').toggle(!!m.notice_can_print);
+    /* 「建立會議紀錄」（使用者指定的另一半流程：通知單先、會議記錄後）。
+       基本資料已經在這一筆上了，按下去直接開編輯畫面補要項即可，不必重打一次——就是
+       「從行事曆建立會議」那種帶入感。已經寫過要項的就改標「編輯會議紀錄」，不誤導成還沒建立。 */
+    $('#btnNtToRecord').toggle(!!m.can_edit)
+        .html(m.has_record_items ? '<i class="fa fa-pencil"></i> 編輯會議紀錄'
+                                 : '<i class="fa fa-file-text-o"></i> 建立會議紀錄');
     var miss = noticeMissing();
     $('#ntFootHint').html(canEdit
         ? (miss.length
@@ -2579,9 +2672,13 @@ function ntStamp(name, dateStr, isDeputy){
     if (!name) return '';
     return (window.EGStamp&&EGStamp.stamp) ? EGStamp.stamp(name, dispDate(dateStr), !!isDeputy, mApprovalStampSchema()) : esc(name);
 }
-/* 製表日期＝通知單送出那一天（通知單是開會前做的，用會議日期會變成「還沒發生就蓋章」）；
-   還沒送出過就退回會議日期。 */
-function ntPrepDate(m){ return m.notice_submitted_at ? String(m.notice_submitted_at).substr(0,10) : m.meeting_date; }
+/* 兩格圖章的日期一律用**通知日期**（本單的業務日期，ai-rules/18）：紙本上這張單就只有那一天，
+   主席確認與製表各印一個不同日期只會讓人對不起來；「實際按下確認的時刻」另外存在 decided_at
+   供稽核（ai-rules/21 業務日期與精確時間戳分離）。舊資料沒有通知日期時退回送出日／會議日期。 */
+function ntStampDate(m){
+    return m.notice_stamp_date || (m.notice_date ? fmtDate(m.notice_date)
+         : (m.notice_submitted_at ? String(m.notice_submitted_at).substr(0,10) : m.meeting_date));
+}
 
 function ntUnitsSync(){
     NT_UNITS = $('#ntUnitBox .nt-u:checked').map(function(){ return +this.value; }).get();
@@ -2629,6 +2726,7 @@ function noticeMissing(){
     if (!+m.chair_user_id) miss.push('主席');
     if (!(NOTICE.attendees||[]).length) miss.push('出席人員');
     if (!NT_UNITS.length) miss.push('應出席單位');
+    if (!$('#ntDate').val()) miss.push('通知日期');
     return miss;
 }
 function noticeSave(thenSubmit){
@@ -2637,19 +2735,25 @@ function noticeSave(thenSubmit){
         var miss = noticeMissing();
         if (miss.length){
             if (!NT_UNITS.length) $('#errNtUnits').text('請至少勾選一個應出席單位');
+            if (!$('#ntDate').val()) ntShowDateErrors(['請選擇通知日期']);
             alert('尚未填寫：'+miss.join('、')+'。\n（主題／日期／時間／地點／主席／出席人員請回清單按「編輯」補上）');
             return;
         }
     }
-    $.post(API, {action:'notice_save', meeting_id:m.meeting_id, notice_items:$('#ntItems').val(), notice_depts:NT_UNITS.join(',')}, function(res){
-        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
-        if (!thenSubmit){ alert('已儲存通知單草稿。'); refreshNotice(); loadList(); return; }
-        $.post(API, {action:'notice_submit', meeting_id:m.meeting_id}, function(r2){
-            if (!r2.ok){ alert(r2.error||'送出失敗'); refreshNotice(); return; }
-            alert('已送出，待主席（'+(r2.chair_name||'')+'）確認簽章。\n主席確認後系統才會把會議通知發給應出席人員。');
-            closeMask('noticeMask'); loadList();
+    // 通知日期不合法時當場擋下並把原因寫在欄位旁（後端存檔會用同一支再擋一次＝鐵律8）
+    ntDateCheck(function(dateOk){
+        if (!dateOk && $('#ntDate').val()){ alert('通知日期不可用，請看欄位下方的紅字原因。'); return; }
+        $.post(API, {action:'notice_save', meeting_id:m.meeting_id, notice_items:$('#ntItems').val(),
+                     notice_depts:NT_UNITS.join(','), notice_date:$('#ntDate').val()||''}, function(res){
+            if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+            if (!thenSubmit){ alert('已儲存通知單草稿。'); refreshNotice(); loadList(); return; }
+            $.post(API, {action:'notice_submit', meeting_id:m.meeting_id}, function(r2){
+                if (!r2.ok){ alert(r2.error||'送出失敗'); refreshNotice(); return; }
+                alert('已送出，待主席（'+(r2.chair_name||'')+'）確認簽章。\n主席確認後系統才會把會議通知發給應出席人員。');
+                closeMask('noticeMask'); loadList();
+            }, 'json');
         }, 'json');
-    }, 'json');
+    });
 }
 function noticeDecide(decision){
     var m = NOTICE.meeting, note = $.trim($('#ntNote').val()||'');
@@ -2677,16 +2781,23 @@ function noticeResend(){
 }
 function noticeAutoSign(){
     var m = NOTICE.meeting, d = $('#ntAsDate').val(), pw = $('#ntAsPw').val()||'';
-    if (!d){ alert('請選擇簽章日期'); return; }
+    if (!d){ alert('請選擇通知日期'); return; }
     if (!pw){ alert('請輸入超級管理員密碼'); $('#ntAsPw').focus(); return; }
     var notify = $('#ntAsNotify').prop('checked') ? '1' : '0';
-    if (!confirm('要把「'+m.subject+'」的會議通知單直接簽成已確認（簽章日期 '+dispDate(d)+'，蓋主席 '+(m.chair_name||'')+' 的章）'
+    if (!confirm('要把「'+m.subject+'」的會議通知單直接簽成已確認（通知日期 '+dispDate(d)+'，蓋主席 '+(m.chair_name||'')+' 的章）'
         + (notify==='1' ? '，並發出會議通知給出席人員' : '，不發通知') + '嗎？')) return;
     $.post(API, {action:'notice_auto_sign', meeting_id:m.meeting_id, date:d, password:pw, notify:notify}, function(res){
         if (!res.ok){ alert(res.error||'自動簽章失敗'); return; }
         alert('已自動簽章完成。'+(res.sent>0?('會議通知已發給 '+res.sent+' 位人員。'):'（未發出通知）'));
         refreshNotice(); loadList();
     }, 'json');
+}
+/* 由通知單接著建立／編輯會議紀錄：同一筆資料，所以只要把編輯畫面打開就好，
+   主題／日期／時間／地點／主席／出席人員全部已經帶好，使用者只要補開完會才有的內容。 */
+function noticeToRecord(){
+    var id = NOTICE.meeting.meeting_id;
+    closeMask('noticeMask');
+    openEdit(id);
 }
 /* 重新抓一次後端最新狀態再重畫（點開即刷新的同一個原則：不要拿畫面上的舊快取繼續操作） */
 function refreshNotice(){
@@ -2723,8 +2834,8 @@ function ntCss(){
 function noticePageHtml(m, res){
     var app = m.notice_approval;
     var chairStamp = (app && app.status==='approved' && app.approver_name)
-        ? ntStamp(app.approver_name, app.decided_at, String(app.approver_id)!==String(m.chair_user_id)) : '';
-    var madeStamp  = ntStamp(m.recorder_name, ntPrepDate(m), false);
+        ? ntStamp(app.approver_name, ntStampDate(m), String(app.approver_id)!==String(m.chair_user_id)) : '';
+    var madeStamp  = ntStamp(m.recorder_name, ntStampDate(m), false);
     var noticeTitle = (META.as_doc_notice && META.as_doc_notice.doc_name) ? META.as_doc_notice.doc_name : '會議通知單';
     var attendeeNames = (res.attendees||[]).map(function(a){ return esc(a.user_name); }).join('、') || '—';
     // 應出席單位：欄位名稱一律即時取自部門主檔（後端 notice_dept_names 也是同一份來源），

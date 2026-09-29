@@ -202,6 +202,7 @@ function meeting_ensure_schema(PDO $db): void {
        status 完全獨立**——通知單簽完了，會議記錄本身還是草稿，這是正常狀態不是矛盾。 */
     foreach ([
         ['notice_status',       "VARCHAR(15) NULL COMMENT '會議通知單狀態：NULL/空=尚未建立, draft, submitted(待主席確認), done(主席已確認), rejected'"],
+        ['notice_date',         "DATE NULL COMMENT '通知日期(發文日)＝本單的業務日期，兩格圖章都印這一天。必須早於會議日期、是工作日、且主席與製表人當天都有上班'"],
         ['notice_items',        "TEXT NULL COMMENT '通知單的「會議要項」(自由文字，紙本是一格多行，例：請先詳讀 2-GM-05 管理審查管理程序)'"],
         ['notice_depts',        "VARCHAR(200) NULL COMMENT '通知單的「應出席單位」department.id 逗號分隔(只存id，名稱一律即時查主檔)'"],
         ['notice_submitted_at', "DATETIME NULL COMMENT '通知單送出(待主席確認)的時間'"],
@@ -1229,7 +1230,116 @@ function meeting_notice_missing(PDO $db, array $m): array {
         if ((int)$st->fetchColumn() === 0) $miss[] = '出席人員（請到會議紀錄編輯畫面加入）';
     } catch (Throwable $e) {}
     if (trim((string)($m['notice_depts'] ?? '')) === '') $miss[] = '應出席單位';
+    if (trim((string)($m['notice_date'] ?? '')) === '')  $miss[] = '通知日期';
     return $miss;
+}
+
+
+/* ============================================================
+ * 通知日期（notice_date）＝會議通知單的業務日期，兩格圖章都印這一天（ai-rules/18）。
+ * 三條規則都是使用者 2026-09-29 明確指定的：
+ *   ①一定要比會議日期早（開會前才叫「通知」，同一天或之後發等於沒有通知到）
+ *   ②不可以是假日（沒有人上班，蓋不出那天的章）
+ *   ③簽章者當天都要有上班——不可整天休假、不可整天公出、更不可以那天根本還沒到職或已離職
+ * 簽章者＝主席（主席確認）與記錄人（製表），也就是紙本上那兩格章的人。
+ * ============================================================ */
+
+/** 這張通知單的兩位簽章者（主席／製表）：回傳 [['uid'=>,'name'=>,'role'=>], ...]，沒指定的略過 */
+function meeting_notice_signers(array $m): array {
+    $out = [];
+    if ((int)($m['chair_user_id'] ?? 0) > 0)
+        $out[] = ['uid'=>(int)$m['chair_user_id'], 'name'=>(string)($m['chair_name'] ?? ''), 'role'=>'主席'];
+    if ((int)($m['recorder_user_id'] ?? 0) > 0)
+        $out[] = ['uid'=>(int)$m['recorder_user_id'], 'name'=>(string)($m['recorder_name'] ?? ''), 'role'=>'製表'];
+    return $out;
+}
+
+/**
+ * 某一天某個人「整天不在」的原因（空字串＝這天有上班，可以蓋章）。
+ * 行程一律走共用的 person_schedule_lib（請假／公出／教育訓練／其他會議同一套判定），不自己查表。
+ * **只有「整天」才算不在**：請半天假、下午公出的人當天還是有到班，章蓋得出來（使用者原話是
+ * 「不可外出整天、整天休假」），所以部分時段的行程不擋。
+ */
+function meeting_notice_absent_reason(PDO $db, int $uid, string $date): string {
+    // ① 那天在不在職（還沒到職／已離職）。用共用庫的 asof 判定，不自己解讀 state 欄位。
+    $inService = eg_people_list_asof($db, ['user_ids'=>[$uid], 'states'=>[1,2,3]], $date);
+    if (!$inService) return '該日不在職（尚未到職或已離職）';
+    // ② 整天休假／整天公出
+    try {
+        require_once __DIR__ . '/person_schedule_lib.php';
+        $sched = eg_psched_for_users($db, [$uid], $date);   // 不帶時段＝以整天為比對範圍
+        foreach ($sched[$uid] ?? [] as $it) {
+            $src = (string)($it['source'] ?? '');
+            if ($src !== 'leave' && $src !== 'trip') continue;   // 使用者指定只擋這兩種（外訓等只是提示，不擋）
+            if (!meeting_notice_is_allday($it)) continue;        // 半天假、下午才出去的人上午還在，章蓋得出來
+            return $src === 'leave' ? ('該日整天請假（' . (string)$it['text'] . '）')
+                                    : ('該日整天公出在外（' . (string)$it['text'] . '）');
+        }
+    } catch (Throwable $e) { /* 行程查不到就不擋，寧可放行也不要因為查詢失敗讓人存不了檔 */ }
+    return '';
+}
+
+/** 這筆行程算不算「整天不在」。
+ *  `eg_psched_for_users()` 的 allday 只有「跨日的假」「完全沒填時間的公出」才會是 1，
+ *  但實測公出單多半填 08:30~17:30 ——那就是外出整天，只看 allday 會整批漏掉（2026-09-29 實測）。
+ *  故另外判「有沒有橫跨整個上班核心時段」：涵蓋 09:00~16:00 就視為整天不在；
+ *  請半天假、下午才出去的人不符合，仍算有上班（使用者原話是「不可外出整天、整天休假」）。 */
+const MEETING_NOTICE_CORE_START = '09:00';
+const MEETING_NOTICE_CORE_END   = '16:00';
+function meeting_notice_is_allday(array $item): bool {
+    if (!empty($item['allday'])) return true;
+    $t = (string)($item['time'] ?? '');
+    if (!preg_match('/^(\d{2}:\d{2})~(\d{2}:\d{2})$/', $t, $mm)) return false;
+    return $mm[1] <= MEETING_NOTICE_CORE_START && $mm[2] >= MEETING_NOTICE_CORE_END;
+}
+
+/**
+ * 檢查一個通知日期合不合法。回傳 ['ok'=>bool, 'errors'=>[中文原因...]]。
+ * 前端即時檢查與後端存檔各呼叫一次，**同一份規則**（鐵律8：只擋前端＝直打 API 就繞過去了）。
+ */
+function meeting_notice_date_check(PDO $db, array $m, string $date): array {
+    $err = [];
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) return ['ok'=>false, 'errors'=>['通知日期格式不正確']];
+    $mDate = substr((string)($m['meeting_date'] ?? ''), 0, 10);
+    if ($mDate !== '' && $date >= $mDate) {
+        $err[] = '通知日期必須早於會議日期（' . eg_fmt_date($mDate) . '），開會前才叫通知';
+    }
+    try {
+        require_once __DIR__ . '/leave_lib.php';
+        if (!eg_leave_is_workday($db, $date)) $err[] = '通知日期 ' . eg_fmt_date($date) . ' 不是工作日（假日沒有人上班）';
+    } catch (Throwable $e) {}
+    foreach (meeting_notice_signers($m) as $s) {
+        $why = meeting_notice_absent_reason($db, $s['uid'], $date);
+        if ($why !== '') $err[] = $s['role'] . '「' . $s['name'] . '」' . $why . '，無法在這一天蓋章';
+    }
+    return ['ok'=>!$err, 'errors'=>$err];
+}
+
+/**
+ * 建議一個可用的通知日期：從「今天」與「會議日期前一天」取較早者往前找，
+ * 第一個通過 meeting_notice_date_check() 的就是它（最多往前找 90 天，找不到回空字串）。
+ * 用途：①新建通知單時的預設值 ②補歷史紙本時，會議日期早就過了，預設要落在那場會議之前
+ * 而不是今天（今天填下去一定違反「通知日期要比會議早」）。
+ */
+function meeting_notice_suggest_date(PDO $db, array $m): string {
+    $mDate = substr((string)($m['meeting_date'] ?? ''), 0, 10);
+    if ($mDate === '') return '';
+    $today = date('Y-m-d');
+    $start = ($today < $mDate) ? $today : date('Y-m-d', strtotime($mDate . ' -1 day'));
+    for ($i = 0; $i < 90; $i++) {
+        $d = date('Y-m-d', strtotime($start . ' -' . $i . ' day'));
+        if ($d >= $mDate) continue;
+        if (meeting_notice_date_check($db, $m, $d)['ok']) return $d;
+    }
+    return '';
+}
+
+/** 圖章上要印的日期：一律用通知日期（本單的業務日期）；舊資料沒填過就退回送出日／會議日期 */
+function meeting_notice_stamp_date(array $m): string {
+    $d = substr((string)($m['notice_date'] ?? ''), 0, 10);
+    if ($d !== '') return $d;
+    $d = substr((string)($m['notice_submitted_at'] ?? ''), 0, 10);
+    return $d !== '' ? $d : substr((string)($m['meeting_date'] ?? ''), 0, 10);
 }
 
 /** 通知單的「應出席單位」名稱（依部門主檔即時查，不存冗餘名稱；查不到的 id 直接略過） */
@@ -1244,7 +1354,8 @@ function meeting_notice_dept_names(PDO $db, array $m): array {
 
 /** 通知單內容摘要（待簽通知與會議通知共用同一份措辭，兩邊不會走鐘＝ai-rules/17 要求內容看得完整） */
 function meeting_notice_summary(PDO $db, array $m): string {
-    return '會議主題：' . (string)$m['subject'] . "\n"
+    return '通知日期：' . eg_fmt_date(meeting_notice_stamp_date($m)) . "\n"
+         . '會議主題：' . (string)$m['subject'] . "\n"
          . '日期時間：' . eg_fmt_date((string)$m['meeting_date']) . ' '
            . (string)($m['start_time'] ?? '') . ((string)($m['end_time'] ?? '') !== '' ? '~' . (string)$m['end_time'] : '') . "\n"
          . '地點：' . ((string)($m['location'] ?? '') ?: '—') . "\n"
@@ -1338,6 +1449,12 @@ function meeting_notice_auto_sign(PDO $db, array $m, string $date, bool $notify,
     $id = (int)$m['meeting_id'];
     if (meeting_notice_state($m) === 'none') return ['ok'=>false, 'msg'=>'這筆會議還沒有建立通知單，請先建立並存檔', 'sent'=>0];
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) return ['ok'=>false, 'msg'=>'日期格式不正確', 'sent'=>0];
+    /* 這裡帶進來的 $date 就是**通知日期**（＝本單業務日期，兩格圖章都印它），不是另一個獨立的
+       「簽章日期」——補歷史紙本時使用者要的正是「指定那一天」，兩個日期分開只會讓紙上出現
+       兩種日期而且對不起來。所以先套用它，再跑與人工送出完全相同的那一份檢查。 */
+    $m['notice_date'] = $date;
+    $chk = meeting_notice_date_check($db, $m, $date);
+    if (!$chk['ok']) return ['ok'=>false, 'msg'=>'通知日期不可用：' . implode('；', $chk['errors']), 'sent'=>0];
     $miss = meeting_notice_missing($db, $m);
     if ($miss) return ['ok'=>false, 'msg'=>'尚未填寫：' . implode('、', $miss), 'sent'=>0];
     $signer = meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name']);
@@ -1357,9 +1474,9 @@ function meeting_notice_auto_sign(PDO $db, array $m, string $date, bool $notify,
         if (!$rec || $rec['status'] !== 'approved') throw new RuntimeException('簽核紀錄狀態異常，無法自動簽章');
         $db->prepare("UPDATE approval_record SET decided_at=CONCAT(?,' ',TIME(COALESCE(decided_at,NOW()))) WHERE id=?")
            ->execute([$date, (int)$rec['id']]);
-        $db->prepare("UPDATE meeting_record SET notice_status='done',
+        $db->prepare("UPDATE meeting_record SET notice_status='done', notice_date=?,
                         notice_submitted_at=COALESCE(notice_submitted_at, CONCAT(?,' ',TIME(NOW()))), updated_at=NOW()
-                      WHERE meeting_id=?")->execute([$date, $id]);
+                      WHERE meeting_id=?")->execute([$date, $date, $id]);
         $db->commit();
     } catch (Throwable $e) {
         if ($db->inTransaction()) $db->rollBack();
