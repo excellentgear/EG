@@ -372,7 +372,7 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
             </table>
         </div>
         <div class="kpi-legend" style="font-size:11px;color:#8a6d45;margin-top:4px;">
-            說明：<span class="kpi-preview">橘色斜體</span>=當月即時試算(未定案)；<span class="kpi-below">紅字</span>=未達標；
+            說明：<span class="kpi-preview">橘色斜體</span>=進行中期間的即時試算(未定案；月指標＝本月，季/半年指標＝這一季/這半年目前累計)；<span class="kpi-below">紅字</span>=未達標；
             <span class="kpi-ov-mark">✱</span>=手動覆寫；<span class="kpi-attach-badge"><i class="fa fa-paperclip"></i>n</span>=佐證附件；<span class="kpi-stale-mark"></span>=格子右上角小三角，快照過期已自動重算（滑鼠移上去看原值）；?=無資料；NA=未到期；－=本期已填在其他月份。
             點儲存格可操作（明細/附件/填寫/覆寫/重算）；每季/每半年/每年的手動指標一期只能擇一月份填寫，如需改填其他月份請先清除。
         </div>
@@ -733,7 +733,7 @@ function renderTable(){
             else if (c.v === null) { txt = '<span class="kpi-none">?</span>'; }
             else {
                 var f = fmtVal(c.v, r.value_type);
-                if (c.src === 'preview') txt = '<span class="kpi-preview" title="當月即時試算，未定案">'+f+'</span>';
+                if (c.src === 'preview') txt = '<span class="kpi-preview" title="這一期還沒結束，數字是即時試算、未定案（季/半年指標＝這一季/這半年目前的累計）">'+f+'</span>';
                 else if (c.below) txt = '<span class="kpi-below">'+f+'</span>';
                 else txt = f;
                 if (c.src === 'override') txt += '<span class="kpi-ov-mark" title="手動覆寫：'+esc(c.ov_reason||'')+'">✱</span>';
@@ -825,7 +825,7 @@ function showDetail(ri, m){
     h += srcLinksHtml(si, '要調整數值請到');
     h += '擔當者：'+esc(r.owner||'-')+'　｜　頻率：'+freqName(r.freq)+'<br>';
     h += '<hr style="border-color:#EADFC8;margin:6px 0;">';
-    h += '顯示值：<b>'+(c.v===null?'?':fmtVal(c.v, r.value_type))+'</b>（來源：'+({auto:'自動計算(快照)',manual:'手動填寫',override:'手動覆寫',preview:'當月即時試算',none:'無資料'}[c.src]||c.src)+'）<br>';
+    h += '顯示值：<b>'+(c.v===null?'?':fmtVal(c.v, r.value_type))+'</b>（來源：'+({auto:'自動計算(快照)',manual:'手動填寫',override:'手動覆寫',preview:'進行中期間即時試算(未定案)',none:'無資料'}[c.src]||c.src)+'）<br>';
     if (c.num !== null || c.den !== null) {
         h += '分子／分母：'+(c.num===null?'-':(+c.num))+' ／ '+(c.den===null?'-':(+c.den));
         if (c.den !== null && +c.den !== 0 && (r.value_type==='percent'||r.value_type==='rate')) {

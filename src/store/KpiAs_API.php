@@ -176,13 +176,20 @@ case 'matrix': {
                 elseif ($mv['manual_value'] !== null) $src = 'manual';
                 elseif ($mv['auto_value'] !== null) $src = 'auto';
             }
-            // 當月(未結束)：auto 給即時試算值，不入快照
-            if ($year === $curY && !kpi_month_ended($year, $m) && $m <= $curM
+            /* 非月頻率的「自動」指標：一格代表的是整個期間（季／半年／年），bucket 月份是期間的
+               **結束**月。原本一律拿 bucket 月份跟當月比，於是 9 月看 2026 下半年(bucket=12)會被
+               判成「未來期間」，明明 7~9 月已經有資料卻整格空白、也按不了即時試算。
+               改成用期間的**起始**月份判斷：期間已經開始＝進行中，就給即時試算值（不入快照）。
+               手動填寫指標刻意維持原本逐月判斷（它的有效月份是 1~12，用期間起始月會讓
+               整個期間的每一格都提前開放填寫）。 */
+            $pStart = ($iy['source_mode'] === 'auto') ? kpi_as_period_group($iy['freq'], $m)[0] : $m;
+            // 進行中期間(尚未結束)：auto 給即時試算值，不入快照
+            if ($year === $curY && !kpi_month_ended($year, $m) && $pStart <= $curM
                 && $iy['source_mode'] === 'auto' && $src !== 'override' && $src !== 'manual') {
                 $res = kpi_as_compute_iy($db, $iy, $year, $m, $params);
                 if ($res !== null) { $val = $res['value']; $src = $val === null ? 'none' : 'preview'; $preview = true; }
             }
-            $future = ($year === $curY && $m > $curM) || $year > $curY;
+            $future = ($year === $curY && $pStart > $curM) || $year > $curY;
             $lockedMonth = null;
             if ($iy['source_mode'] === 'manual') {
                 $gkey = kpi_as_period_group($iy['freq'], $m)[0];
@@ -363,7 +370,9 @@ case 'preview': {
     }
     $out = [];
     foreach (kpi_as_months($iy['freq']) as $m) {
-        if (($year === $curY && $m > $curM) || $year > $curY) { $out[$m] = null; continue; }
+        // 與 matrix 同一個口徑：季／半年／年看的是「期間有沒有開始」，不是 bucket 月份到了沒
+        $pStart = kpi_as_period_group($iy['freq'], $m)[0];
+        if (($year === $curY && $pStart > $curM) || $year > $curY) { $out[$m] = null; continue; }
         $res = kpi_as_compute_iy($db, $iy, $year, $m, $params);
         $out[$m] = ($res && $res['value'] !== null)
             ? ['v'=>round($res['value'], 2), 'num'=>$res['num'], 'den'=>$res['den']] : null;

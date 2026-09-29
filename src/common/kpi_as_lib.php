@@ -592,6 +592,27 @@ function kpi_as_registry(): array {
             'links' => [['label'=>'供應商稽核（稽核對象／稽核日）','url'=>'/EGsystem/views/pm/vendor_audit.php']],
             'desc' => '半年批次(6=上半年/12=下半年)：分母=該期稽核對象數(排除停用廠商)；分子=其中已完成稽核(有稽核日)者',
             'params' => []],
+        'project_fai_pass' => [
+            'name' => '專案首樣送樣過件率(專案管理的首件檢驗 AS9102)',
+            'page' => '專案管理 views/GM/project_mgmt.php 的「首件檢驗（AS9102）」區塊',
+            'tables' => ['project_fai','project','project_part'],
+            'links' => [['label'=>'專案管理（首件檢驗送件日／判定結果）','url'=>'/EGsystem/views/GM/project_mgmt.php']],
+            'desc' => '半年批次(6=上半年/12=下半年，與廠商稽核按時執行率同一套切法)：分母=該半年內已判定的首樣送件；'
+                    . '分子=判定為通過者。尚未判定的一律不列入分母（會在明細列出來當參考，不會把過件率壓低）',
+            'params' => [
+                ['key'=>'pass_basis','label'=>'計算基準','type'=>'choice','fe'=>0,
+                 'opts'=>[
+                    'first'  => '一次過件率｜一個專案算一筆，看第1次送樣的判定結果（重送不再列入，最能反映送樣前準備品質）',
+                    'submit' => '逐次送樣通過率｜每一次送樣各算一筆（重送3次才過＝1/3）',
+                    'final'  => '最終過件率｜一個專案算一筆，以該半年內最後一次判定為準',
+                 ]],
+                ['key'=>'attr_date','label'=>'期間歸屬依哪個日期','type'=>'choice','fe'=>0,
+                 'opts'=>[
+                    'result' => '判定日（預設；沒填判定日的退回用送件日）',
+                    'send'   => '送件日',
+                 ]],
+                ['key'=>'include_aod','label'=>'特採通過算不算過件(1=算，與專案管理頁一致)','type'=>'bool','fe'=>1],
+            ]],
     ];
 }
 
@@ -869,6 +890,19 @@ function kpi_as_calc_source(?string $calc): array {
         case 'training_completion':
             return ['from'=>'training_session ts', 'date'=>'', 'year_col'=>'ts.year',
                     'cols'=>['unit'=>['ts.org_unit', '']]];
+        case 'project_fai_pass':
+            // 製程候選只列「這個專案剛好只綁一道製程」的那些（與 kpi_as_fai_rows() 的 dims 同一個口徑）；
+            // 綁多道製程的專案本來就比不中單一製程的規則，列出來只會讓人以為排除了卻沒作用。
+            return ['from'=>"project_fai f
+                             JOIN project p ON p.project_id=f.project_id
+                                  AND (p.is_deleted IS NULL OR p.is_deleted=0)
+                             LEFT JOIN process_no pn ON p.scope_process_no REGEXP '^[0-9]+$'
+                                  AND pn.ProcessNo=p.scope_process_no",
+                    'date'=>'COALESCE(f.result_date, f.send_date)',
+                    'cols'=>['client'=>['p.customer_name', 'p.customer_id'],
+                             'proc'=>["CASE WHEN p.scope_process_no REGEXP '^[0-9]+$'
+                                            THEN COALESCE(NULLIF(pn.ProcessName,''), p.scope_process_no) END",
+                                      "CASE WHEN p.scope_process_no REGEXP '^[0-9]+$' THEN p.scope_process_no END"]]];
     }
     return [];
 }
@@ -948,6 +982,7 @@ function kpi_as_calc_dims(?string $calc): array {
         case 'capacity_rate':
         case 'process_ng_rate':    return ['client','part','proc','machine'];
         case 'training_completion': return ['unit'];
+        case 'project_fai_pass':   return ['client','part','proc'];
     }
     return [];
 }
@@ -1413,6 +1448,143 @@ function kpi_as_vendor_rows(PDO $db, int $year, int $month, array $params): arra
 }
 
 /* ============================================================
+ * 專案首樣送樣過件率（AS9102 FAI）— 期間切法與明細列
+ * ------------------------------------------------------------
+ * 來源＝專案管理（views/GM/project_mgmt.php）的「首件檢驗（AS9102）」區塊，
+ * 也就是 project_fai：一個專案一次送件一列，未通過可重送（seq 遞增）。
+ *
+ * 分子分母與明細**一律由 kpi_as_fai_rows() 這一支算出來**（鐵律4）：
+ * 出圖準時率就踩過兩邊各寫一次 SQL、「明細筆數與 den−num 對不起來」的坑。
+ * ============================================================ */
+/**
+ * 半年期間（6=上半年 1~6 月／12=下半年 7~12 月）。
+ * 與「廠商稽核按時執行率」同一套切法；這個指標的頻率就是設計成半年一次，
+ * 若在設定頁改成月／季，期間仍然會以半年計算（畫面說明列會講明）。
+ */
+function kpi_as_fai_period(int $year, int $month): array {
+    return $month <= 6
+        ? [sprintf('%04d-01-01', $year), sprintf('%04d-06-30', $year), $year . ' 上半年']
+        : [sprintf('%04d-07-01', $year), sprintf('%04d-12-31', $year), $year . ' 下半年'];
+}
+
+/**
+ * 這個半年期間要納入的首樣送件列（一列＝分母裡的一筆）。
+ * 每列：pass=1 算進分子；judged=0＝尚未判定（不列入分母，只在明細當參考列出來）。
+ * dims 供排除規則比對——**料號與製程只有「這個專案剛好只綁一筆」時才給值**：
+ * 一個專案可以綁好幾個料號／好幾道製程，把它們串成一個字串會永遠比不中規則，
+ * 硬取第一筆又會安靜地排錯人，兩種都比「這一列不給用製程規則」更糟。
+ */
+function kpi_as_fai_rows(PDO $db, int $year, int $month, array $params): array {
+    list($ps, $pe) = kpi_as_fai_period($year, $month);
+    $basis = (string)kpi_as_pv($params, 'pass_basis', 'first');
+    if (!in_array($basis, ['first', 'submit', 'final'], true)) $basis = 'first';
+    $attr  = ((string)kpi_as_pv($params, 'attr_date', 'result')) === 'send' ? 'send' : 'result';
+    $aod   = ((int)kpi_as_pv($params, 'include_aod', 1) === 1);
+
+    // 判定日沒填的退回送件日（專案端「當天送、當天判」時 fai_save 本來就是這樣寫的）
+    $dexpr = $attr === 'send' ? 'f.send_date' : 'COALESCE(f.result_date, f.send_date)';
+    try {
+        $st = $db->prepare("SELECT f.fai_id, f.project_id, f.seq, f.send_date, f.result, f.result_date, f.note,
+                                   $dexpr AS attr_d,
+                                   p.project_no, p.project_name, p.customer_name, p.scope_process_no
+                            FROM project_fai f
+                            JOIN project p ON p.project_id = f.project_id
+                            WHERE (p.is_deleted IS NULL OR p.is_deleted = 0)
+                              AND $dexpr BETWEEN ? AND ?
+                            ORDER BY p.project_no, f.seq");
+        $st->execute([$ps, $pe]);
+        $raw = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    if (!$raw) return [];
+
+    // 計算基準決定「一個專案在這個期間算幾筆」
+    if ($basis === 'first') {
+        $raw = array_values(array_filter($raw, static fn($r) => (int)$r['seq'] === 1));
+    } elseif ($basis === 'final') {
+        $keep = [];
+        foreach ($raw as $r) {
+            $pid = (int)$r['project_id'];
+            if (!isset($keep[$pid]) || (int)$r['seq'] > (int)$keep[$pid]['seq']) $keep[$pid] = $r;
+        }
+        $raw = array_values($keep);
+    }
+
+    // 專案綁的料號（一個專案可能好幾筆）與製程名稱
+    $pids = array_values(array_unique(array_map(static fn($r) => (int)$r['project_id'], $raw)));
+    $parts = [];
+    if ($pids) {
+        $in = implode(',', array_fill(0, count($pids), '?'));
+        try {
+            $st = $db->prepare("SELECT project_id, part_no FROM project_part WHERE project_id IN ($in) ORDER BY id");
+            $st->execute($pids);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $pn = trim((string)$r['part_no']);
+                if ($pn !== '') $parts[(int)$r['project_id']][] = $pn;
+            }
+        } catch (Throwable $e) {}
+    }
+    $pnames = [];
+    try {
+        foreach ($db->query("SELECT ProcessNo, ProcessName FROM process_no") as $r)
+            $pnames[(int)$r['ProcessNo']] = trim((string)$r['ProcessName']);
+    } catch (Throwable $e) {}
+
+    // 判定結果的中文一律取專案模組的唯一登記處，不在這裡抄第二份（改名時兩邊才不會走鐘）
+    if (!defined('PRJ_FAI_RESULTS')) {
+        $f = __DIR__ . '/project_lib.php';
+        if (is_file($f)) require_once $f;
+    }
+    $rmap = defined('PRJ_FAI_RESULTS') ? PRJ_FAI_RESULTS : ['pass'=>'通過', 'aod'=>'特採通過', 'fail'=>'未通過'];
+
+    $cmap = kpi_as_client_id_map($db);
+    $rows = [];
+    foreach ($raw as $r) {
+        $pid    = (int)$r['project_id'];
+        $res    = (string)$r['result'];
+        $judged = ($res !== '');
+        $pass   = ($res === 'pass') || ($aod && $res === 'aod');
+
+        $procIds = [];
+        foreach (explode(',', (string)$r['scope_process_no']) as $v) {
+            $v = (int)trim($v);
+            if ($v > 0) $procIds[] = $v;
+        }
+        $procIds = array_values(array_unique($procIds));
+        $procTxt = $procIds
+            ? implode('、', array_map(static fn($n) => ($pnames[$n] ?? ('製程' . $n)), $procIds))
+            : '（未限定，整張BOM）';
+        $pl = $parts[$pid] ?? [];
+
+        $client = trim((string)$r['customer_name']);
+        $rows[] = [
+            'fai_id'  => (int)$r['fai_id'],
+            'pid'     => $pid,
+            'seq'     => (int)$r['seq'],
+            'pno'     => (string)$r['project_no'],
+            'pname'   => (string)$r['project_name'],
+            'client'  => $client,
+            'part_txt'=> $pl ? implode('、', $pl) : '',
+            'proc_txt'=> $procTxt,
+            'send'    => (string)($r['send_date'] ?: ''),
+            'rdate'   => (string)($r['result_date'] ?: ''),
+            'attr_d'  => (string)($r['attr_d'] ?: ''),
+            'result'  => $res,
+            'res_txt' => $judged ? ($rmap[$res] ?? $res) : '尚未判定',
+            'note'    => (string)($r['note'] ?? ''),
+            'judged'  => $judged ? 1 : 0,
+            'pass'    => $pass ? 1 : 0,
+            'dims'    => ['client' => $client,
+                          'part'   => (count($pl) === 1 ? $pl[0] : ''),
+                          'proc'   => (count($procIds) === 1 ? ($pnames[$procIds[0]] ?? ('製程' . $procIds[0])) : '')],
+            'dim_ids' => ['client' => ($cmap[$client] ?? ''),
+                          'part'   => '',
+                          'proc'   => (count($procIds) === 1 ? (string)$procIds[0] : '')],
+        ];
+    }
+    return $rows;
+}
+
+/* ============================================================
  * 計算模組（回傳 ['num'=>分子,'den'=>分母,'value'=>值] 或 null=無法計算）
  * ============================================================ */
 /**
@@ -1762,6 +1934,21 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
         case 'vendor_audit_ontime': {
             require_once __DIR__ . '/vendor_audit_lib.php';
             return vendor_audit_kpi_compute($db, $year, $month, $params);
+        }
+
+        case 'project_fai_pass': {
+            // 分子分母與明細共用 kpi_as_fai_rows()，兩邊不會走鐘
+            $rows  = kpi_as_fai_rows($db, $year, $month, $params);
+            $exIds = array_map('strval', array_values(array_filter(array_map('intval', $exclRows))));
+            $num = 0; $den = 0;
+            foreach ($rows as $r) {
+                if (!$r['judged']) continue;                                    // 尚未判定＝還沒有結果，不列入分母
+                if (in_array((string)$r['fai_id'], $exIds, true)) continue;      // 逐筆排除
+                if (kpi_as_dims_hit($r['dims'], $rules) !== '') continue;        // 命中排除規則(客戶／料號／製程)
+                $den++;
+                if ($r['pass']) $num++;
+            }
+            return ['num'=>$num, 'den'=>$den, 'value'=>$den > 0 ? $num / $den * 100 : null];
         }
     }
     return null;
@@ -2117,6 +2304,8 @@ function kpi_as_edit_mode_suggest(?string $calc): array {
             return ['allow', '報工的完成數與生產起訖時間可在報工紀錄查詢頁修正，不影響帳務'];
         case 'process_ng_rate':
             return ['allow', '報工的 NG 數與不良原因可在報工紀錄查詢頁修正，不影響帳務'];
+        case 'project_fai_pass':
+            return ['deny', '首件判定結果與後續的 RCA／差異首件是 AS9102 可追溯紀錄，只能在專案管理頁由品管改'];
         case 'packing_ng_rate':
         case 'calibration_ontime':
             return ['na', '目前來源尚未連動，實務上以手動覆寫填值'];
@@ -2148,7 +2337,8 @@ function kpi_as_detail_supported(?string $calc): bool {
                                     'training_completion', 'drawing_ontime', 'incoming_ng_rate',
                                     // 2026-09-17 使用者要求補做（即使來源資料不開放直接改，也要看得到明細）
                                     'quote_to_order', 'shipping_target_amount', 'order_target_amount',
-                                    'capacity_rate', 'process_ng_rate'], true);
+                                    'capacity_rate', 'process_ng_rate',
+                                    'project_fai_pass'], true);
 }
 
 /** 某一格已排除的來源列（完整資料，內部畫面用） */
@@ -2540,6 +2730,67 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
             $out['note_print'] = '本表為本月計畫、尚未完成之教育訓練場次明細。';
             $out['note'] = '達成率＝當月已完成場次 ÷ 當月計畫場次'
                          . ($inc ? '（取消的場次有列入分母）' : '（取消的場次不列入分母）') . '。';
+            return $out;
+        }
+
+        case 'project_fai_pass': {
+            list($ps, $pe, $plabel) = kpi_as_fai_period($year, $month);
+            $basis = (string)kpi_as_pv($params, 'pass_basis', 'first');
+            if (!in_array($basis, ['first', 'submit', 'final'], true)) $basis = 'first';
+            $attr  = ((string)kpi_as_pv($params, 'attr_date', 'result')) === 'send' ? 'send' : 'result';
+            $aod   = ((int)kpi_as_pv($params, 'include_aod', 1) === 1);
+            $rows  = kpi_as_fai_rows($db, $year, $month, $params);
+
+            $out['cols'] = [['k'=>'pno','t'=>'專案編號'], ['k'=>'pname','t'=>'專案名稱'],
+                            ['k'=>'client','t'=>'客戶'], ['k'=>'part','t'=>'料號'],
+                            ['k'=>'proc','t'=>'製程'], ['k'=>'seq','t'=>'第幾次送樣'],
+                            ['k'=>'send','t'=>'送件日'], ['k'=>'rdate','t'=>'判定日'],
+                            ['k'=>'res','t'=>'判定結果'], ['k'=>'note','t'=>'未通過原因／特採條件']];
+            $bn = ['first'=>'一次過件率', 'submit'=>'逐次送樣通過率', 'final'=>'最終過件率'];
+            $nPass = 0; $nJudged = 0; $nOpen = 0;
+            foreach ($rows as $r) {
+                if (!$r['judged']) $nOpen++; else { $nJudged++; if ($r['pass']) $nPass++; }
+                // 未通過＝拉低過件率的那幾筆(bad)；已通過與尚未判定都只是參考列
+                $kind = !$r['judged'] ? 'warn' : ($r['pass'] ? 'info' : 'bad');
+                if (!$r['judged']) {
+                    $why = '這一期有送樣但還沒有判定結果，不列入分母（不會把過件率壓低）。';
+                    $fix = '請品管到專案管理頁的「首件檢驗（AS9102）」把判定結果與判定日填上；'
+                         . '填了之後這一筆才會列入這一期的過件率。';
+                } elseif ($r['pass']) {
+                    $why = '已通過，列入分子。';
+                    $fix = '';
+                } else {
+                    $why = '第 ' . $r['seq'] . ' 次送樣判定未通過'
+                         . ($r['note'] !== '' ? ('：' . $r['note']) : '')
+                         . '，列入分母但不列入分子。';
+                    $fix = '首件未通過時系統已自動補上「根本原因分析與矯正措施」與「差異首件檢驗」兩個環節，'
+                         . '請在專案管理頁完成後重送。判定結果屬 AS9102 可追溯紀錄，不在 KPI 頁修改；'
+                         . '若這一筆確定不該列入本期計算（例如客戶端原因、樣品已取消），請用「排除這一筆」並填原因。';
+                }
+                $out['rows'][] = [
+                    'key'  => (string)$r['fai_id'],
+                    'vals' => ['pno'=>$r['pno'], 'pname'=>$r['pname'], 'client'=>$r['client'],
+                               'part'=>($r['part_txt'] !== '' ? $r['part_txt'] : '（未掛料號）'),
+                               'proc'=>$r['proc_txt'], 'seq'=>('第 ' . $r['seq'] . ' 次'),
+                               'send'=>eg_fmt_date($r['send']), 'rdate'=>eg_fmt_date($r['rdate']),
+                               'res'=>$r['res_txt'], 'note'=>$r['note']],
+                    'dims' => $r['dims'], 'dim_ids' => $r['dim_ids'], 'kind' => $kind,
+                    'why'  => $why, 'fix' => $fix,
+                ];
+            }
+            $out['note_print'] = '本表為 ' . $plabel . '（' . eg_fmt_date($ps) . '～' . eg_fmt_date($pe)
+                               . '）專案首樣送樣與判定結果明細。';
+            $out['note'] = '過件率＝判定通過件數 ÷ 已判定件數（' . $plabel . '：'
+                         . eg_fmt_date($ps) . '～' . eg_fmt_date($pe) . '）；'
+                         . '計算基準＝' . ($bn[$basis] ?? $basis)
+                         . '，期間歸屬依' . ($attr === 'send' ? '送件日' : '判定日（沒填判定日的用送件日）')
+                         . '，特採通過' . ($aod ? '算' : '不算') . '過件。'
+                         . '本期已判定 ' . $nJudged . ' 件、其中通過 ' . $nPass . ' 件'
+                         . ($nOpen > 0 ? ('；另有 ' . $nOpen . ' 件送樣後尚未判定，不列入分母。') : '。')
+                         . '資料來源＝專案管理頁的「首件檢驗（AS9102）」，已刪除的專案不列入。'
+                         . '料號與製程欄只有在該專案剛好只綁一筆時才能用來設排除規則'
+                         . '（綁多筆的專案比不中單一值的規則，硬比會排錯）。'
+                         . '頻率固定以半年計算（6=上半年／12=下半年），與廠商稽核按時執行率同一套切法。';
             return $out;
         }
 
