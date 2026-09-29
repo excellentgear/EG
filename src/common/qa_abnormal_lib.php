@@ -622,12 +622,38 @@ function qab_gm_label(PDO $db): string
 {
     static $cache = null;
     if ($cache !== null) return $cache;
-    $deptId = (int)qab_setting_get($db, 'gm_dept_id', 0);
-    if ($deptId <= 0) return $cache = '總經理';
+    return $cache = qab_gm_label_for($db, (int)qab_setting_get($db, 'gm_dept_id', 0));
+}
+
+/** 指定部門會顯示成什麼稱呼（設定畫面要即時預覽「改成別的部門長什麼樣子」，不能只看已存檔的值） */
+function qab_gm_label_for(PDO $db, int $deptId): string
+{
+    if ($deptId <= 0) return '總經理';
     $st = $db->prepare("SELECT name FROM department WHERE id=?");
     $st->execute([$deptId]);
     $n = trim((string)$st->fetchColumn());
-    return $cache = ($n === '' ? '總經理' : $n . '主管');
+    return $n === '' ? '總經理' : $n . '主管';
+}
+
+/**
+ * 職級階梯：level => [職稱…]（依 position.sort_order 排）。
+ * 設定畫面上只寫「3 階主管以上」看不出到底是哪些職稱（使用者回報），
+ * 這一支就是拿來把階梯列出來的；level 由 `position_level` 維護（員工管理 → 職級設定）。
+ * $maxLevel 之外的（例如 99＝超級管理員這種不是真的職務的）一律不列，列了只會讓人以為他也能簽。
+ */
+function qab_pos_level_names(PDO $db, int $maxLevel = 3): array
+{
+    $st = $db->prepare("SELECT pl.level, p.id, p.name
+                          FROM position_level pl JOIN position p ON p.id = pl.position_id
+                         WHERE pl.level IS NOT NULL AND pl.level <= ?
+                         ORDER BY pl.level, p.sort_order, p.id");
+    $st->execute([$maxLevel]);
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[(int)$r['level']][] = ['id' => (int)$r['id'], 'name' => (string)$r['name']];
+    }
+    ksort($out);
+    return $out;
 }
 
 /** position_id => level（NULL＝非主管）；一個 request 只查一次 */
@@ -647,9 +673,12 @@ function qab_pos_levels(PDO $db): array
  * 裡面，職級不低於門檻的在職主管——**任何一位都可以裁示**（使用者拍板）。
  * 依職級高→低排序，第一位當「代表人」顯示用。
  */
-function qab_gm_people(PDO $db): array
+function qab_gm_people(PDO $db, ?int $deptIdOv = null, ?int $lvOv = null): array
 {
+    // 帶參數＝設定畫面的「改了還沒存檔，先看看會是誰」預覽；不帶＝用目前存起來的設定
     $cfg = qab_gm_cfg($db);
+    if ($deptIdOv !== null) $cfg['dept_id'] = $deptIdOv;
+    if ($lvOv !== null) $cfg['pos_level'] = max(0, min(3, $lvOv));
     if ($cfg['dept_id'] <= 0) return [];
     require_once __DIR__ . '/people_lib.php';
     require_once __DIR__ . '/org_role_lib.php';

@@ -98,6 +98,16 @@ $cats    = qab_cats($db, true);        // 工具列的分類篩選只列啟用�
         table.lst tr.grp .gx { font-weight:normal; font-size:11.5px; color:#8a7560; margin-left:8px; }
         .cat-tag { font-size:10.5px; border-radius:8px; padding:0 6px; line-height:17px; display:inline-block;
                    background:#EFE3CF; color:var(--ink2); }
+        /* 最終裁示者的職級階梯：哪幾階被門檻涵蓋要一眼看得出來（使用者回報「只寫 3 階看不出是哪些職稱」） */
+        .lvl-lad { margin-top:6px; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+        .lvl-row { display:flex; align-items:flex-start; gap:8px; padding:4px 8px; font-size:12.5px; line-height:20px;
+                   border-top:1px solid var(--line); }
+        .lvl-row:first-child { border-top:0; }
+        .lvl-row.on  { background:#FFF6E8; color:var(--ink2); }
+        .lvl-row.off { background:#FAF7F2; color:#a2937f; }
+        .lvl-k { flex:0 0 118px; font-weight:bold; }
+        .lvl-v { flex:1; }
+        .lvl-chk { flex:0 0 46px; text-align:right; font-size:11.5px; }
         .src { font-size:10.5px; border-radius:8px; padding:0 6px; line-height:17px; display:inline-block; }
         .src-IR  { background:var(--coral); color:#fff; }
         .src-BOM { background:var(--sand); color:var(--ink2); }
@@ -420,19 +430,19 @@ $cats    = qab_cats($db, true);        // 工具列的分類篩選只列啟用�
                         <b>任何一位都可以做最終裁示與簽章</b>，畫面與列印上的文字會自動變成「<b>○○主管</b>」
                         （例：技術課 → <b>技術課主管</b>），紙本簽章欄只印「簽章：」。<br>
                         <b>部門留空＝維持原本的做法</b>：裁示者是全站「組織角色綁定 → 最高核准人員」（總經理），文字也印「總經理」。<br>
-                        部門名稱是<b>即時查</b>的，部門改名或主管換人都會自動跟著變，不必回來改這裡。</div>
+                        部門名稱是<b>即時查</b>的，部門改名或主管換人都會自動跟著變，不必回來改這裡。<br>
+                        <b>「N 階主管」是哪些職稱</b>由「員工管理 → 職級設定」維護，下方階梯會即時列出來；
+                        改了部門或門檻<b>不必先存檔</b>，底下就會直接算出目前符合的人是誰。</div>
                     <div class="fgrid">
                         <div class="fld"><label>裁示部門</label>
                             <select id="cfgGmDept" data-eg-filter="輸入部門名稱篩選…"><option value="0">（不指定＝用全站最高核准人員「總經理」）</option></select></div>
                         <div class="fld"><label>職級門檻（含以上皆可簽）</label>
-                            <select id="cfgGmLevel" data-eg-skip>
-                                <option value="0">0 階（最高決策者）</option>
-                                <option value="1">1 階主管以上</option>
-                                <option value="2">2 階主管以上</option>
-                                <option value="3">3 階主管以上</option>
-                            </select></div>
+                            <!-- 選項由 renderGmCfg() 即時組出（要把每一階有哪些職稱寫進選項文字），
+                                 這裡不放寫死的清單，免得跟職級設定對不起來 -->
+                            <select id="cfgGmLevel" data-eg-skip></select></div>
                     </div>
-                    <div class="muted-help" id="cfgGmPool" style="margin-top:4px;"></div>
+                    <div class="lvl-lad" id="cfgGmLadder"></div>
+                    <div class="muted-help" id="cfgGmPool" style="margin-top:6px;"></div>
                 </div>
                 <div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:10px;">
                     <div class="fld"><label>AS 文件綁定（表頭表單名稱與頁尾編號由此推導）</label>
@@ -610,6 +620,7 @@ $(document).on('input', '#n_bom', function(){ N_BOM_OK = false; });
 var CFG = null, DEPTS = [], POSITIONS = [];
 var CATS = <?= json_encode(qab_cats($db, false), JSON_UNESCAPED_UNICODE) ?>;   // 異常單分類（含停用，舊單指到停用分類時標題才不會空白）
 var GM_LABEL = <?= json_encode($gmLabel, JSON_UNESCAPED_UNICODE) ?>;
+var POS_LEVELS = <?= json_encode(qab_pos_level_names($db), JSON_UNESCAPED_UNICODE) ?>;   // 職級階梯：哪些職稱算第幾階
 
 function esc(s){ return $('<div>').text(s == null ? '' : s).html(); }
 function dispDate(s){ try { return window.egFmtDate ? egFmtDate(s) : (s || ''); } catch(e){ return s || ''; } }
@@ -1013,19 +1024,63 @@ function renderGmCfg(){
         + DEPTS.map(function(d){
             return '<option value="' + d.id + '"' + (Number(d.id) === cur ? ' selected' : '') + '>'
                  + esc(d.department_name) + '</option>'; }).join(''));
+    /* 職級門檻的選項直接把該階有哪些職稱寫進去——只寫「3 階主管以上」沒有人知道是誰（使用者回報）。
+       職稱是由「員工管理 → 職級設定」(position_level) 維護的，這裡一律即時查，不寫死一份對照表。 */
+    var lv = (CFG.pos_levels || POS_LEVELS || {});
+    $('#cfgGmLevel').html([0, 1, 2, 3].map(function(n){
+        var names = (lv[n] || []).map(function(x){ return x.name; });
+        return '<option value="' + n + '">' + (n === 0 ? '0 階（最高決策者）' : (n + ' 階主管以上'))
+             + (names.length ? '：' + esc(names.join('、')) : '：（這一階目前沒有職稱）') + '</option>';
+    }).join(''));
     $('#cfgGmLevel').val(String(CFG.gm_pos_level == null ? 3 : CFG.gm_pos_level));
+    renderGmLadder(lv, Number($('#cfgGmLevel').val()));
     gmPoolHint(CFG.gm_label, CFG.gm_pool);
+}
+/* 階梯：0~3 階各有哪些職稱、門檻涵蓋到哪裡（涵蓋的亮底打勾、沒涵蓋的灰掉），
+   這樣「3 階主管以上」到底包含誰一眼就看得出來。 */
+function renderGmLadder(lv, threshold){
+    lv = lv || {};
+    var h = [0, 1, 2, 3].map(function(n){
+        var names = (lv[n] || []).map(function(x){ return x.name; });
+        var on = n <= threshold;
+        return '<div class="lvl-row ' + (on ? 'on' : 'off') + '">'
+             + '<span class="lvl-k">' + (n === 0 ? '0 階 最高決策者' : (n + ' 階主管')) + '</span>'
+             + '<span class="lvl-v">' + (names.length ? esc(names.join('、')) : '（無）') + '</span>'
+             + '<span class="lvl-chk">' + (on ? '✔ 可簽' : '不可簽') + '</span></div>';
+    }).join('');
+    var all = [];
+    for (var n = 0; n <= threshold; n++) (lv[n] || []).forEach(function(x){ all.push(x.name); });
+    h += '<div class="lvl-row on" style="border-top:1px dashed var(--amber-d);">'
+       + '<span class="lvl-k">合計</span><span class="lvl-v">門檻「' + threshold + ' 階主管以上」共涵蓋 '
+       + all.length + ' 個職稱：' + esc(all.join('、')) + '</span></div>';
+    $('#cfgGmLadder').html(h);
 }
 function gmPoolHint(label, pool){
     pool = pool || [];
     $('#cfgGmPool').html('目前顯示的文字：<b>' + esc(label || '總經理') + '</b>　'
         + (Number($('#cfgGmDept').val()) > 0
             ? (pool.length
-                ? ('可裁示與簽章的人（' + pool.length + ' 位，任一位皆可）：'
+                ? ('這個部門（含下轄）符合門檻的在職主管共 ' + pool.length + ' 位，<b>任何一位都可以裁示與簽章</b>：'
                    + esc(pool.map(function(x){ return x.name + (x.position_name ? '（' + x.position_name + '）' : ''); }).join('、')))
                 : '<span style="color:var(--coral);">這個部門目前查不到符合職級門檻的在職主管——維持這樣設定的話沒有人能做最終裁示，請改部門或放寬職級門檻。</span>')
             : '裁示者＝全站「組織角色綁定 → 最高核准人員」及其代理人。'));
 }
+/* 改了部門或門檻：**還沒按儲存就先算給他看**是誰能簽（不然要存下去才知道設錯了） */
+var GM_PV_TMR = null;
+$(document).on('change', '#cfgGmDept, #cfgGmLevel', function(){
+    renderGmLadder((CFG && CFG.pos_levels) || POS_LEVELS, Number($('#cfgGmLevel').val()));
+    $('#cfgGmPool').html('<span class="muted-help">計算中…</span>');
+    clearTimeout(GM_PV_TMR);
+    GM_PV_TMR = setTimeout(function(){
+        $.get(API, { action:'gm_preview', gm_dept_id:$('#cfgGmDept').val(), gm_pos_level:$('#cfgGmLevel').val() },
+            function(res){
+                if (!res || !res.success) { $('#cfgGmPool').html('<span style="color:var(--coral);">預覽失敗</span>'); return; }
+                if (res.pos_levels) { if (CFG) CFG.pos_levels = res.pos_levels; POS_LEVELS = res.pos_levels; }
+                gmPoolHint(res.gm_label, res.gm_pool);
+                $('#cfgGmPool').append('<span class="muted-help">　（尚未儲存，按下方「儲存其他設定」才生效）</span>');
+            }, 'json').fail(function(){ $('#cfgGmPool').html('<span style="color:var(--coral);">連線失敗</span>'); });
+    }, 250);
+});
 
 function flatCause(){
     var out = [];
@@ -1347,6 +1402,7 @@ $('#btnSaveEtc').on('click', function(){
         BF_DAYS = Number(res.backfill_days);
         CFG.gm_dept_id = res.gm_dept_id; CFG.gm_pos_level = res.gm_pos_level;
         CFG.gm_label = res.gm_label; CFG.gm_pool = res.gm_pool;
+        renderGmLadder((CFG && CFG.pos_levels) || POS_LEVELS, Number($('#cfgGmLevel').val()));
         gmPoolHint(res.gm_label, res.gm_pool);
         /* 裁示者的稱呼會出現在清單、處理頁與列印版好幾個地方（分頁標題、勾選框、紙本欄位名稱），
            那些字是頁面載入時由 PHP 印出來的——改了之後一定要重新整理才會全部一致，

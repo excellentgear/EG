@@ -852,6 +852,7 @@ case 'settings_get': {
         'gm_pos_level' => $gmCfg['pos_level'],
         'gm_label'     => qab_gm_label($db),
         'gm_pool'      => qab_gm_people($db),
+        'pos_levels'   => qab_pos_level_names($db),   // 職級階梯：哪些職稱算第幾階（設定畫面要列出來）
         'disp_opts' => qab_options($db, 'disp', false),
         'gm_opts'   => qab_options($db, 'gm', false),
         'deciders'  => qab_decider_cfgs($db, 'decider', false),
@@ -884,6 +885,19 @@ case 'year_months': {
 }
 
 /* ═══════════ 異常單分類（管理員維護：名稱／單號後綴詞／報工NG自動歸類／啟用／排序） ═══════════ */
+/* 最終裁示者：改了部門或職級門檻，**還沒存檔就先看會是誰**（使用者回報：只寫「3 階主管以上」
+   看不出是哪些職稱、也看不出實際上誰簽得了）。純讀取、不寫入任何設定。 */
+case 'gm_preview': {
+    if (!$perms['canAdmin']) jerr('只有管理員可以檢視最終裁示者設定');
+    $d = (int)($_POST['gm_dept_id'] ?? $_GET['gm_dept_id'] ?? 0);
+    $l = (int)($_POST['gm_pos_level'] ?? $_GET['gm_pos_level'] ?? 3);
+    if ($l < 0 || $l > 3) $l = 3;
+    jout(true, ['gm_dept_id' => $d, 'gm_pos_level' => $l,
+                'gm_label' => qab_gm_label_for($db, $d),
+                'gm_pool'  => qab_gm_people($db, $d, $l),
+                'pos_levels' => qab_pos_level_names($db)]);
+}
+
 case 'cat_save': {
     if (!$perms['canAdmin']) jerr('只有管理員可以維護異常單分類');
     $e = qabSaveCat($db, $_POST);
