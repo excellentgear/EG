@@ -224,6 +224,24 @@ foreach ($roleRows as $rr) {
         .item-confirm-box { display:flex; gap:3px; align-items:center; flex-wrap:wrap; justify-content:center; }
         .item-confirm-box select, .item-confirm-box input, .item-confirm-box button { font-size:11.5px; }
         .item-notify-status { font-size:10.5px; color:#8a6d45; margin-top:3px; }
+        /* 會議通知單（2-GM-05-03）：狀態籤配色沿用 ai-rules/10 的暖色盤，語意與會議記錄那組一致
+           （灰＝還沒開始、琥珀＝等人處理、綠＝完成、急件紅＝被退回要處理） */
+        .nt-pill { display:inline-block; font-size:11px; border-radius:10px; padding:1px 8px; line-height:1.6; white-space:nowrap; }
+        .nt-none { background:#EFEAE1; color:#7a7166; }
+        .nt-draft { background:#F7E0BD; color:#5b3a1e; }
+        .nt-submitted { background:#F0A24B; color:#fff; }
+        .nt-done { background:#4E8A5A; color:#fff; }
+        .nt-rejected { background:#DD5138; color:#fff; }
+        .nt-units { display:grid; grid-template-columns:repeat(auto-fill, minmax(118px, 1fr)); gap:3px 8px;
+            border:1px solid #EADFC8; border-radius:6px; padding:7px 9px; max-height:190px; overflow-y:auto; }
+        .nt-units label { display:flex; align-items:baseline; gap:5px; margin:0; font-size:12px; color:#5b3a1e;
+            font-weight:normal; cursor:pointer; line-height:1.6; }
+        .nt-ro { border:1px solid #EADFC8; border-radius:6px; background:#FDF8EF; padding:8px 10px; font-size:12.5px;
+            color:#5b3a1e; line-height:1.9; }
+        .nt-ro b { color:#8A5A2B; }
+        .nt-sign { display:flex; gap:14px; flex-wrap:wrap; align-items:center; }
+        .nt-sign .nt-slot { border:1px solid #EADFC8; border-radius:6px; padding:6px 10px; min-width:170px; background:#fff; }
+        .nt-sign .nt-slot .nt-slot-t { font-size:11.5px; color:#8a6d45; margin-bottom:2px; }
         .mt-noperm { margin:40px auto; max-width:520px; text-align:center; border:1.5px solid #E8D5B5; border-radius:10px;
             padding:30px; background:#FDF8EF; color:#5b3a1e; }
         @media print {
@@ -239,7 +257,7 @@ foreach ($roleRows as $rr) {
     <div class="right_col" role="main">
         <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
             <h2 style="margin:6px 0;">會議紀錄管理
-                <small style="color:#8a6d45;"><span id="mtHeaderDocNo"></span>會議記錄／2-GM-05-03 會議通知單</small></h2>
+                <small style="color:#8a6d45;"><span id="mtHeaderDocNo"></span>會議記錄／<span id="mtHeaderNoticeDocNo"></span>會議通知單</small></h2>
             <button class="page-help-btn" id="btnPageHelp" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
         </div>
         <div class="clearfix"></div>
@@ -259,8 +277,9 @@ foreach ($roleRows as $rr) {
         </div>
         <div class="mt-table-wrap">
             <table class="mt-table">
-                <thead><tr><th style="width:100px;">日期</th><th style="width:34%;">主題</th><th style="width:90px;">主席</th>
-                    <th style="width:90px;">記錄</th><th style="width:100px;">狀態</th><th style="width:200px;">操作</th></tr></thead>
+                <thead><tr><th style="width:100px;">日期</th><th style="width:30%;">主題</th><th style="width:90px;">主席</th>
+                    <th style="width:90px;">記錄</th><th style="width:100px;">狀態</th>
+                    <th style="width:120px;">會議通知單</th><th style="width:200px;">操作</th></tr></thead>
                 <tbody id="listBody"></tbody>
             </table>
         </div>
@@ -424,6 +443,7 @@ foreach ($roleRows as $rr) {
         <div class="va-tabs" style="display:flex;gap:4px;margin-bottom:10px;border-bottom:2px solid #E8D5B5;">
             <button type="button" class="set-tab active" data-tab="role" onclick="setTabSwitch('role')">角色設定</button>
             <button type="button" class="set-tab" data-tab="attach" onclick="setTabSwitch('attach')">附件與簽到表AS文件綁定</button>
+            <button type="button" class="set-tab" data-tab="notice" onclick="setTabSwitch('notice')">會議通知單</button>
         </div>
         <div id="setPaneRole">
             <p style="font-size:12px;color:#8a6d45;margin:0 0 8px;">左邊選或新增角色 → 右邊改名稱、勾這個角色能看到什麼／能做什麼。權限由上而下包含：勾了「會議記錄管理員」自動含登錄與檢閱。「誰擁有這個角色」在<a href="../user/user_permissions.php" target="_blank">人員權限設定頁</a>設定，這裡只定義角色內容。</p>
@@ -516,6 +536,29 @@ foreach ($roleRows as $rr) {
                 <p class="text-muted" style="font-size:11.5px;margin:4px 0 0;">此設定與 KPI 設定頁（AS9100 關鍵績效指標）共用同一組設定，兩邊改其中一處即可，出貨目標達成率週報頁面(Shipping_Analysis_new.php)存廢不影響。</p>
             </div>
         </div>
+        <!-- 會議通知單（2-GM-05-03）設定 -->
+        <div id="setPaneNotice" style="display:none;">
+            <div style="margin-bottom:16px;">
+                <label>會議通知單 AS 文件編號綁定</label>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <span id="noticeDocLabel" style="flex:1;padding:6px 8px;border:1px solid #D8BE93;border-radius:4px;background:#FFF7E8;">（尚未綁定）</span>
+                    <button type="button" class="b-att" onclick="openNoticeDocPicker()">選擇</button>
+                </div>
+                <p class="text-muted" style="font-size:11.5px;margin:4px 0 0;">綁定後，通知單列印版的表頭會用該文件的<b>表單名稱</b>、頁尾右下角印<b>文件編號</b>，版次一律依<b>會議日期</b>回推當時生效的那一版（ai-rules/16）。</p>
+            </div>
+            <div>
+                <label>通知單上要列出哪些「應出席單位」</label>
+                <p class="text-muted" style="font-size:11.5px;margin:0 0 6px;">
+                    這裡決定<b>紙本上那一排勾選欄有哪幾格</b>；實際某一場會議要求哪些單位出席，是在通知單畫面逐張勾選。<br>
+                    單位名稱與排列順序一律取自<b>部門主檔</b>（依主檔的排序值），改名或調整順序請到
+                    <a href="../pages/department_job_title_settings.php" target="_blank">部門職稱設定</a>，這裡只決定「列不列出來」。
+                    全部不勾＝列出主檔所有部門。
+                </p>
+                <div class="nt-units" id="setNoticeUnits" style="max-height:230px;"></div>
+                <button type="button" class="b-att" style="margin-top:6px;" onclick="submitNoticeUnits()"><i class="fa fa-save"></i> 儲存應出席單位</button>
+                <span id="setNoticeUnitsMsg" style="font-size:11.5px;color:#8a6d45;margin-left:8px;"></span>
+            </div>
+        </div>
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('mtSetMask')">關閉</button></div>
 </div></div>
@@ -567,13 +610,49 @@ foreach ($roleRows as $rr) {
         <button class="b-ok" onclick="pickConfirm()">確定</button></div>
 </div></div>
 
+<!-- 會議通知單（2-GM-05-03，2026-09-29 使用者交辦）：與會議記錄同一筆資料，表頭共用故此處唯讀，
+     只填「會議要項」與「應出席單位」；簽章一格主席確認、一格製表（＝記錄人）。 -->
+<div class="mt-mask" id="noticeMask"><div class="mt-modal wide">
+    <div class="m-head"><span id="ntTitle">會議通知單</span><span class="m-close" onclick="closeMask('noticeMask')">✕</span></div>
+    <div class="m-body">
+        <div class="nt-ro" id="ntHeadBox"></div>
+        <div class="mt-sec">
+            <div class="mt-sec-title">會議要項</div>
+            <textarea id="ntItems" rows="4" maxlength="5000"
+                data-eg-hint="開會前要請大家準備什麼、先讀哪一份程序書。可分行，一行一件；紙本上就是這一格多行文字"></textarea>
+        </div>
+        <div class="mt-sec">
+            <div class="mt-sec-title">應出席單位 * <small id="ntUnitCount" style="color:#8a6d45;font-weight:normal;"></small></div>
+            <div class="nt-units" id="ntUnitBox"></div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:5px;">
+                <button type="button" class="b-att" onclick="ntUnitsFromAttendees()" title="依目前出席人員名單所屬的部門自動勾選"><i class="fa fa-magic"></i> 依出席人員自動勾選</button>
+                <button type="button" class="b-att wt" onclick="ntUnitsSet(true)">全選</button>
+                <button type="button" class="b-att wt" onclick="ntUnitsSet(false)">全部取消</button>
+                <span style="font-size:11px;color:#8a6d45;">要增減這裡列出的單位，請到「模組設定 → 會議通知單」調整。</span>
+            </div>
+            <div class="errmsg" id="errNtUnits"></div>
+        </div>
+        <div class="mt-sec" id="ntSignBox"></div>
+    </div>
+    <div class="m-foot">
+        <div id="ntFootHint" style="text-align:left;font-size:11.5px;color:#8a6d45;line-height:1.6;margin-bottom:6px;"></div>
+        <button class="b-cancel" onclick="closeMask('noticeMask')">關閉</button>
+        <button class="b-cancel" id="btnNtPrint" style="display:none;" onclick="printNotice()"><i class="fa fa-print"></i> 列印通知單</button>
+        <button class="b-ok" id="btnNtSave" style="display:none;background:#fff;color:#8A5A2B;" onclick="noticeSave(false)">存草稿</button>
+        <button class="b-ok" id="btnNtSubmit" style="display:none;" onclick="noticeSave(true)"><i class="fa fa-paper-plane"></i> 存檔並送出</button>
+    </div>
+</div></div>
+
 <!-- 使用說明 modal（鐵律7） -->
 <div class="mt-mask" id="helpUseMask"><div class="mt-modal wide">
     <div class="m-head"><span>使用說明 — 會議紀錄管理</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
     <div class="m-body help-doc" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
         <h4>功能說明</h4>
         會議記錄（2-GM-05-01）線上化：建立會議基本資料與出席名單、現場密碼簽到、上級指示要項／會議要項雙表格、
-        主席與總經理雙層簽核、產銷會議可自動插入本月出貨目標達成率佐證。
+        主席與總經理雙層簽核、產銷會議可自動插入本月出貨目標達成率佐證。<br>
+        <b>會議通知單（2-GM-05-03）</b>：開會<b>前</b>發的通知單也在這一頁，與會議記錄<b>共用同一筆資料</b>（同一場會議＝清單上同一列），
+        所以主題／日期／時間／地點／主席／記錄／出席人員只要輸入一次；通知單自己只要填「會議要項」與勾「應出席單位」，
+        經主席確認簽章後系統自動把會議通知發給應出席人員。
         <h4>操作步驟</h4>
         <b>①新增</b>：填主題/日期/時間/地點（主題、地點可打字自由輸入，也可從曾用過的建議清單挑；有設定「常用設定」時可一鍵套用主題+地點+時間，套用後仍可自行修改）。<b>會議主題、會議日期、開始時間、結束時間、地點都是必填</b>——主題存草稿就要有，<b>日期／開始時間／結束時間／地點則是「送出前」必填</b>（草稿可以先空著慢慢補，按下送出時系統會逐欄標紅告訴你缺哪一欄；後端同樣會擋）。接著加入出席人員（依部門挑選，或套用已存的<b>公開/私人群組</b>——把常開會的一批人存成群組，下次直接套用，也可另存新群組），指定主席。日期時間存檔前後端都會檢查合理性（結束不可早於或等於開始）。「記錄」欄固定為目前登入者，不可修改。<br>
         　－<b>開始／結束時間欄位本身永遠是空的</b>（不再印灰色的 09:00、17:00 當提示，避免被誤會成「已經填好時間了」）；<b>點一下欄位才會浮出格式提示</b>。輸入採 24 小時制，可直接打 <b>0900</b>／<b>900</b>／<b>9</b>，離開欄位自動轉成 <b>09:00</b>；小時或分鐘不合理會當場紅字說明原因。<br>
@@ -598,7 +677,13 @@ foreach ($roleRows as $rr) {
         兩種模式下，負責人（部門或指定人員）本次沒有人出席、或現場代表尚未來得及簽名時，「存檔並通知」都會改發通知（該部門本次所有出席人員＋部門主管，或指定人員本人）請對方回覆確認，回覆內容會顯示在項目下方。<b>完成的條件兩種模式不一樣</b>：<b>選部門</b>＝<b>該部門任一人</b>回覆即完成該部門那一格；<b>指定人員</b>＝<b>每一位被指名的人都要各自回簽</b>（一人一格簽名，不是任一人回覆就好），回覆內容可自行決定寫不寫，直接按通知上的<b>「僅回簽（不留言）」</b>也算完成。整項全部到齊後那則通知才會自動關閉，其他人之後開啟只會看到唯讀狀態。<br>
         　－<b>為什麼只有某些人有「密碼回簽」欄</b>：現場輸入密碼簽名只開放給<b>本次有出席</b>的人（沒出席的人不在現場，不可能當場輸入自己的密碼）；沒出席的負責人一律走通知回簽，畫面上會標明「本次未出席，已發通知請本人在系統內回簽」。兩種方式完成的效力完全相同。<br>
         　－<b>確認簽名一多時怎麼顯示</b>：畫面上每一項<b>預設只顯示前 3 顆簽名章</b>，其餘收起來按「還有 N 位，展開」才出現（尚未回簽、還要輸入密碼的欄位一律不收，以免找不到地方簽）。<b>列印</b>時該欄放得下 1 顆章，超過就改印<b>「已確認 N 位（詳見附表）」</b>，全部簽名章移到最後面的<b>「確認簽名附表」</b>逐項列出——原本超出的章會被<b>安靜裁掉、紙上完全看不出少了人</b>，這在管制文件上不可接受，故一律改走附表。只有 1 位確認的項目維持直接蓋在表內，不會多印附表那一頁。<br>
-        <b>⑥插入出貨目標達成率</b>：草稿階段可按「插入本月數據」，系統會先確認出貨資料已更新至前一個工作天，未達標會提示還差幾天，不會插入不完整的數字；插入後的數字是<b>當下的快照</b>，之後不會再變動。已完成核准的會議記錄在「檢視」畫面也能再插入/更新：一般人插入後會<b>清空目前簽核紀錄改回草稿</b>，需重新送出取得主席／總經理簽章；<b>超級管理員</b>插入後<b>維持已核准狀態</b>，不需重新送審。
+        <b>⑥會議通知單（2-GM-05-03，開會前發的那一張）</b>：清單的「會議通知單」欄按<b>「建立」</b>（已建立則是「開啟」）。<br>
+        　－<b>表頭是唯讀的</b>：主題／日期／時間／地點／主席／記錄／出席人員與會議記錄<b>是同一筆資料</b>，要改請回清單按「編輯」改（改完通知單跟著變，不必重做）。通知單這裡只填兩塊：<b>會議要項</b>（開會前請大家準備什麼、先讀哪一份程序書，可多行）與<b>應出席單位</b>（紙本上那一排勾選欄）。<br>
+        　－<b>應出席單位</b>可按<b>「依出席人員自動勾選」</b>由目前出席名單的所屬部門（含兼任）自動帶；<b>刻意做成按一下才套用而不是自動連動</b>——有些單位是「要求它派人來」但名單還沒指定到人，自動重算會把手動勾的洗掉。要增減這裡列出哪些單位，管理員到<b>模組設定 → 會議通知單</b>調整（預設＝紙本上那幾個單位；單位名稱與排列順序一律取自部門主檔）。<br>
+        　－<b>流程</b>：存草稿 →<b>存檔並送出</b>（通知主席確認簽章，此時<b>還不會</b>吵到其他人）→ 主席按<b>「確認簽章並發出通知」</b>→ <b>這一刻</b>系統才把會議通知發給出席名單上的每一位（站內通知＋推播，內容含日期時間地點主席記錄應出席單位與會議要項）。主席可<b>退回</b>（必填原因），記錄人改完重新送出，所以不會出現「兩個版本的通知都發出去過」。送出後若發現送早了／送錯了，記錄人可<b>撤回</b>改回草稿。<br>
+        　－<b>已確認後</b>出席名單有增減、或有人反映沒收到，可按<b>「重新發送會議通知給出席人員」</b>；同一場會議只保留最新一則通知，鈴鐺上不會累積好幾則。<br>
+        　－通知單的狀態（未建立／草稿／待主席確認／已確認／已退回）與會議記錄的狀態<b>各自獨立</b>——<b>「通知單已確認、會議記錄還是草稿」是正常的</b>（通知單開會前發、記錄開完會才填），不是資料錯誤。<br>
+        <b>⑦插入出貨目標達成率</b>：草稿階段可按「插入本月數據」，系統會先確認出貨資料已更新至前一個工作天，未達標會提示還差幾天，不會插入不完整的數字；插入後的數字是<b>當下的快照</b>，之後不會再變動。已完成核准的會議記錄在「檢視」畫面也能再插入/更新：一般人插入後會<b>清空目前簽核紀錄改回草稿</b>，需重新送出取得主席／總經理簽章；<b>超級管理員</b>插入後<b>維持已核准狀態</b>，不需重新送審。
         <h4>重要行為</h4>
         ・草稿（未完成）除記錄人本人／管理員外，<b>出席人員／主席／總經理／項目負責部門或指定人員（需簽名的人）</b>也自動有唯讀權限可以檢視；一般「檢視全部」角色僅適用<b>已送出</b>的會議記錄，不含草稿。<br>
         ・<b>列印權限比檢視更嚴格</b>：不論是否看得到，只有<b>記錄人本人／管理員／已完成核准（狀態＝已完成）</b>的會議記錄才能列印，其餘人檢視他人尚未完成的會議記錄時看不到任何列印按鈕，避免印出還在簽核中、之後可能被退回或修改的內容。<br>
@@ -609,10 +694,13 @@ foreach ($roleRows as $rr) {
         ・「存檔並通知」發出的回簽通知，<b>公告者一律記這份會議記錄的「記錄」人</b>（即使是管理員代為按下按鈕），收到的人才看得出這是誰的會議、要找誰問。<br>
         ・<b>宣布事項</b>在檢視畫面與列印版都會獨立列在最前面一張表（欄位只有序號／宣布事項／備註），不需要應完成日期、負責人與確認簽名。
         <h4>設定入口</h4>
-        「常用設定」（主題旁的齒輪連結，僅管理員看得到）：維護主題+地點+時間的組合，供新增會議時一鍵套用（套用後仍可自行修改，不會鎖死）。
+        「常用設定」（主題旁的齒輪連結，僅管理員看得到）：維護主題+地點+時間的組合，供新增會議時一鍵套用（套用後仍可自行修改，不會鎖死）。<br>
+        「模組設定 → <b>會議通知單</b>」（僅管理員）：①<b>AS 文件編號綁定</b>（2-GM-05-03；綁定後列印版表頭用該文件的表單名稱、右下角印文件編號，版次依<b>會議日期</b>回推當時生效的那一版）②<b>通知單上要列出哪些「應出席單位」</b>。
         <h4>權限角色</h4>
         會議記錄檢閱＝看（草稿仍僅本人）；會議記錄登錄＝新增/編輯/送出；會議記錄管理員＝＋檢視全部人員記錄、刪除、修改他人已送出記錄、維護常用設定；管理者全權。<br>
         ・<b>超級管理員（帳號e）專屬</b>：檢視畫面內出席簽到／項目確認簽名旁會多出「[改日期/補簽]」連結，可個別或用「一鍵補齊全部簽章日期」批次補齊漏簽/校正日期，尚未簽核的部分會視同已完成一併補簽；主席／總經理若該場會議從未送出過，也會自動送審＋自動核准（總經理階段會先確保主席已核准），不會卡在「查無紀錄無法補」。操作前需輸入超級管理員密碼，且會留下 page_change_log 紀錄可追溯。另在「主席／記錄」那一列的記錄人員右方有「[更換記錄人]」，補舊資料時可把記錄人員改成紙本上的那一位——<b>不限狀態，已完成核准的也改得動</b>（不必把整張退回重簽），人員清單依<b>會議日期當時</b>的在職狀態與職稱列出（當時在職、現已離職的人也挑得到），更換後列印版的「製表」圖章會跟著換。<br>
+        ・<b>超級管理員自動簽章（會議通知單）</b>：通知單畫面下方有「超級管理員工具 — 自動簽章」，<b>不必等主席實際操作</b>就能把通知單簽成已確認，並可<b>指定簽章日期</b>（補歷史紙本時跟紙上那一天對得起來）。蓋出來的仍是<b>主席本人的章</b>——紙本上那一格本來就是主席的章，改蓋超管的章會讓文件對不上紙本。是否同時發出會議通知可勾選：<b>會議日期還沒到</b>時預設會發，<b>日期已過</b>（研判是補歷史資料）預設<b>不</b>發，避免事後再吵人。需輸入超級管理員密碼，並留下 page_change_log 紀錄可追溯。<br>
+        ・<b>列印紀錄</b>：本頁四種列印（會議記錄／空白簽到表／已簽署簽到表／出貨目標達成率）與<b>會議通知單</b>，按下列印都會留下列印時間、列印人、登入電腦與文件名稱，可在<a href="../admin/print_sign_log.php" target="_blank">列印與簽核紀錄</a>查詢（ai-rules/23）。<br>
         ・<b>任何動作都會即時更新畫面</b>：補簽、更換記錄人、回簽確認等操作完成後，檢視視窗與背後的清單／狀態篩選筆數會一起重抓，所以「一次補齊全部簽章」之後清單上的狀態會直接變成<b>已完成</b>，不需要重新整理整頁。
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">關閉</button></div>
@@ -626,6 +714,7 @@ foreach ($roleRows as $rr) {
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
+<script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script>
 $(document).ready(function(){
     var $am = $('#sidebar-menu .nav.side-menu > li.active');
@@ -637,6 +726,9 @@ var API = '../../src/store/Meeting_API.php';
 var META = null, PERMS = null, DEPTS = [], ALL_PEOPLE = [];
 var MEETINGS = [];
 var STATUS_LABEL = {draft:'草稿', notifying:'回簽中', ready:'待送簽核', submitted:'待主席簽章', chair_done:'待總經理簽章', done:'已完成', rejected:'已退回'};
+/* 會議通知單（2-GM-05-03）狀態。與上面那組**完全獨立**：通知單是開會前發的，會議記錄是開完會才填的，
+   所以「通知單已確認、會議記錄還是草稿」是正常狀態不是資料錯誤。 */
+var NOTICE_LABEL = {none:'未建立', draft:'草稿', submitted:'待主席確認', done:'已確認', rejected:'已退回'};
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function fmtDate(d){ return d ? String(d).substr(0,10) : ''; }
@@ -696,6 +788,8 @@ function loadMeta(cb){
         if (m.perms.canEdit) $('#btnAdd').show();
         if (m.perms.canAdmin) { $('#btnPresetMgr').show(); $('#btnMtSetting').show(); }
         $('#mtHeaderDocNo').text(m.as_doc_record && m.as_doc_record.doc_no ? (m.as_doc_record.doc_no+' ') : '');
+        // 通知單的編號也一律取自綁定（禁寫死，ai-rules/16）：改綁別份文件時標題會跟著變
+        $('#mtHeaderNoticeDocNo').text(m.as_doc_notice && m.as_doc_notice.doc_no ? (m.as_doc_notice.doc_no+' ') : '');
         renderPresetUI();
         loadGroups();
         $.getJSON(API, {action:'people_all'}, function(r){ if (r.ok) ALL_PEOPLE = r.people||[]; });
@@ -763,6 +857,10 @@ function renderList(){
         h += '<tr><td>'+dispDate(m.meeting_date)+'</td><td class="t-left">'+esc(m.subject)+'</td>'
            + '<td>'+esc(m.chair_name||'—')+'</td><td>'+esc(m.recorder_name||'')+'</td>'
            + '<td><span class="st-pill st-'+m.approval_status+'">'+(STATUS_LABEL[m.approval_status]||m.approval_status)+'</span></td>'
+           // 會議通知單（2-GM-05-03）：與會議記錄的狀態各自獨立（通知單簽完了、記錄本身還是草稿是正常的）
+           + '<td><span class="nt-pill nt-'+m.notice_state+'">'+(NOTICE_LABEL[m.notice_state]||m.notice_state)+'</span>'
+           + '<div><span class="mt-op" onclick="openNotice('+m.meeting_id+')"><i class="fa fa-bullhorn"></i> '
+           + (m.notice_state==='none' ? '建立' : '開啟') + '</span></div></td>'
            + '<td><div class="mt-op-wrap">'
            + '<span class="mt-op" onclick="openView('+m.meeting_id+')"><i class="fa fa-search-plus"></i> 檢視</span>';
         var isDraftLike = m.approval_status==='draft' || m.approval_status==='rejected' || m.approval_status==='ready';
@@ -772,7 +870,7 @@ function renderList(){
             h += '<span class="mt-op" style="color:#DD5138;" onclick="deleteMeeting('+m.meeting_id+')"><i class="fa fa-trash"></i> 刪除</span>';
         h += '</div></td></tr>';
     });
-    $('#listBody').html(h || '<tr><td colspan="6" style="color:#8a6d45;padding:14px;">本年度尚無會議記錄</td></tr>');
+    $('#listBody').html(h || '<tr><td colspan="7" style="color:#8a6d45;padding:14px;">本年度尚無會議記錄</td></tr>');
 }
 
 /* ---------- 建立/編輯 ---------- */
@@ -2313,33 +2411,401 @@ function resolvePreparerThenPrint(cb){
    直接讓「每個列印按鈕＝剛好一份文件」——會議記錄、簽到表(空白/已簽署)、出貨目標達成率各自獨立成單一列印工作，
    不再有「一次列印多份文件」的按鈕，AS編號全部用 position:fixed 就能保證正確，不必再判斷內文/fixed兩種模式。
    使用者需要看多份文件時分別點對應按鈕列印即可(原「列印完整紀錄」按鈕已移除)。 */
+/* 列印紀錄（ai-rules/23：會列印的頁面一律留下列印時間／列印人／登入電腦／文件名稱）。
+   本頁原本完全沒有留紀錄（既有缺口），2026-09-29 做會議通知單時一併補上四種列印全部涵蓋。
+   送出即忘、不等回應——紀錄寫不進去也不可以影響使用者列印。 */
+function mtPrintLog(docName, meetingId){
+    if (window.EGPrintLog) EGPrintLog.record({
+        source:'meeting', doc_kind:'form', doc_name:docName,
+        ref_table:'meeting_record', ref_id:meetingId
+    });
+}
 function printMeetingRecord(){
     if (!VIEW) return;
     var m = VIEW.meeting, res = VIEW;
+    mtPrintLog('會議記錄 '+(m.subject||'')+' '+dispDate(m.meeting_date), m.meeting_id);
     egPrintWindow('會議記錄', meetingRecordPageHtml(m, res, 'fixed') + confirmAppendixPageHtml(m, res, 'fixed'), mrCss(), '', true, true);
 }
 function printBlankSignSheet(){
     if (!VIEW) return;
+    mtPrintLog('會議簽到表(空白) '+(VIEW.meeting.subject||'')+' '+dispDate(VIEW.meeting.meeting_date), VIEW.meeting.meeting_id);
     egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, false, 'fixed'), mrCss(), '', false, true);
 }
 /* 簽到表(已簽署版)：出席人員電子簽到全部完成才會顯示按鈕(openView時判斷)，含真圖章。 */
 function printSignedSignSheet(){
     if (!VIEW) return;
+    mtPrintLog('會議簽到表 '+(VIEW.meeting.subject||'')+' '+dispDate(VIEW.meeting.meeting_date), VIEW.meeting.meeting_id);
     egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, true, 'fixed'), mrCss(), '', false, true);
 }
 /* 出貨目標達成率獨立列印(openView時依 kpi_snapshot_json 是否存在決定按鈕顯示)：本身沒有綁定AS編號，不受上述問題影響。 */
 function printKpiOnly(){
     if (!VIEW || !VIEW.meeting.kpi_snapshot_json) return;
     resolvePreparerThenPrint(function(preparerName){
+        mtPrintLog('出貨目標達成率 '+dispDate(VIEW.meeting.meeting_date), VIEW.meeting.meeting_id);
         egPrintWindow('出貨目標達成率', kpiPageHtml(VIEW.meeting, preparerName), mrCss(), '', true, true);
     });
 }
 
+/* ============================================================
+ * 會議通知單（2-GM-05-03，2026-09-29 使用者交辦）
+ *
+ * 與會議記錄是**同一筆資料**：表頭（主題／日期／時間／地點／主席／記錄／出席人員）共用，
+ * 所以這裡一律唯讀顯示並指路回「編輯」去改；通知單自己只有「會議要項」與「應出席單位」兩塊
+ * 可填，加上主席確認／製表兩格簽章。狀態機見 NOTICE_LABEL。
+ * 流程（使用者拍板）：存草稿 → 送出（通知主席） → 主席確認簽章 → **這一刻**才把會議通知
+ * 發給應出席人員。所以送出當下不會吵到全體，退回改完重送也不會發出兩次不同版本的通知。
+ * ============================================================ */
+var NOTICE = null;          // 目前開著的通知單（get_detail 整包，欄位與 VIEW 相同）
+var NT_UNITS = [];          // 目前勾選的單位 department.id（數字陣列）
+
+function openNotice(id){
+    $.getJSON(API, {action:'get_detail', meeting_id:id}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        NOTICE = res;
+        mtSyncYear(res.meeting.meeting_date);
+        var m = res.meeting;
+        $('#ntTitle').text('會議通知單　'+esc(m.subject));
+        NT_UNITS = String(m.notice_depts||'').split(',').filter(function(x){ return x!==''; }).map(Number);
+        $('#ntItems').val(m.notice_items||'');
+        renderNotice();
+        openMask('noticeMask');
+    });
+}
+/* 通知單畫面重繪：唯讀表頭、單位勾選、簽章區、底部按鈕顯示與否，全部由 notice_state 與後端給的
+   notice_can_edit/notice_can_print 決定（前端只是照著畫，真正的守門在 API 那一層＝鐵律8）。 */
+function renderNotice(){
+    var m = NOTICE.meeting, st = m.notice_state, canEdit = !!m.notice_can_edit;
+
+    // ── 唯讀表頭（要改請回會議紀錄編輯；同一筆資料不開第二個寫入點＝鐵律4）
+    var atts = (NOTICE.attendees||[]);
+    var names = atts.map(function(a){ return esc(a.user_name); }).join('、') || '<span style="color:#DD5138;">（尚未加入出席人員）</span>';
+    $('#ntHeadBox').html(
+        '<div><b>會議主題：</b>'+esc(m.subject)+'　<b>會議日期：</b>'+dispDate(m.meeting_date)
+          + '　<b>會議時間：</b>'+(m.start_time?esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):''):'<span style="color:#DD5138;">（未填）</span>')+'</div>'
+      + '<div><b>會議地點：</b>'+(m.location?esc(m.location):'<span style="color:#DD5138;">（未填）</span>')
+          + '　<b>主席：</b>'+(m.chair_name?esc(m.chair_name):'<span style="color:#DD5138;">（未指定）</span>')
+          + '　<b>記錄（製表）：</b>'+esc(m.recorder_name||'')+'</div>'
+      + '<div><b>出席人員：</b>'+names+'</div>'
+      + '<div style="font-size:11.5px;color:#8a6d45;margin-top:4px;">以上欄位與會議記錄共用同一筆資料，要修改請回清單按「編輯」'
+      + '（改完這裡會跟著變，通知單不必重做）。</div>'
+    );
+
+    // ── 應出席單位勾選（清單由「模組設定 → 會議通知單」決定，預設＝紙本上那幾個單位）
+    var units = META.notice_units||[];
+    var h = '';
+    units.forEach(function(u){
+        h += '<label><input type="checkbox" class="nt-u" value="'+u.id+'"'
+           + (NT_UNITS.indexOf(+u.id)>=0?' checked':'') + (canEdit?'':' disabled')
+           + ' data-eg-skip onchange="ntUnitsSync()"><span>'+esc(u.name)+'</span></label>';
+    });
+    $('#ntUnitBox').html(h || '<span style="font-size:12px;color:#DD5138;">尚未設定要列出哪些單位，請到「模組設定 → 會議通知單」設定。</span>');
+    $('#ntItems').prop('readonly', !canEdit).toggleClass('ro-auto', !canEdit);
+    ntUnitsCount();
+
+    // ── 簽章區：主席確認／製表兩格（紙本上就是這兩格），外加主席的核准/退回與超管自動簽章
+    var app = m.notice_approval;
+    var chairSigned = app && app.status==='approved' && app.approver_name;
+    var sg = '<div class="mt-sec-title">簽章</div><div class="nt-sign">'
+        + '<div class="nt-slot"><div class="nt-slot-t">主席確認</div>'
+        + (chairSigned ? ntStamp(app.approver_name, app.decided_at, String(app.approver_id)!==String(m.chair_user_id))
+            : '<span style="font-size:12px;color:#8a6d45;">'+(st==='submitted'?'待主席確認簽章':(st==='rejected'?'已退回，修改後重新送出':'尚未送出'))+'</span>')
+        + '</div>'
+        + '<div class="nt-slot"><div class="nt-slot-t">製表</div>'
+        + (st!=='none' ? ntStamp(m.recorder_name, ntPrepDate(m), false) : '<span style="font-size:12px;color:#8a6d45;">存草稿後產生</span>')
+        + '</div></div>';
+    if (app && app.status==='rejected' && app.note)
+        sg += '<div class="mt-hint" style="color:#DD5138;border-color:#DD5138;"><b>主席退回原因：</b>'+esc(app.note)+'</div>';
+    if (st==='done' && m.notice_sent_at)
+        sg += '<div class="mt-hint">已於 <b>'+esc(String(m.notice_sent_at).substr(0,16))+'</b> 把會議通知發給出席人員（共 '+atts.length+' 位）。</div>';
+
+    // 主席（或管理員）的確認/退回
+    if (st==='submitted' && (+m.chair_signer_id===META.uid || PERMS.canAdmin)) {
+        sg += '<div class="mt-sec" style="margin-top:10px;"><div class="mt-sec-title">主席確認簽章</div>'
+            + '<div style="font-size:11.5px;color:#8a6d45;margin-bottom:4px;">按下「確認簽章」後，系統會立刻把會議通知發給上方 '+atts.length+' 位出席人員。</div>'
+            + '<textarea id="ntNote" rows="2" placeholder="意見／退回原因（退回必填）"></textarea>'
+            + '<div style="margin-top:6px;">'
+            + '<button type="button" class="b-att" style="background:#F0A24B;color:#fff;border-color:#d98a33;" onclick="noticeDecide(\'approved\')"><i class="fa fa-check"></i> 確認簽章並發出通知</button> '
+            + '<button type="button" class="b-att" style="color:#DD5138;border-color:#DD5138;" onclick="noticeDecide(\'rejected\')"><i class="fa fa-times"></i> 退回</button>'
+            + '</div></div>';
+    }
+    // 撤回（送早了/送錯了）
+    if (st==='submitted' && (+m.recorder_user_id===META.uid || PERMS.canAdmin)) {
+        sg += '<div style="margin-top:10px;"><button type="button" class="b-att wt" style="color:#DD5138;border-color:#DD5138;" onclick="noticeWithdraw()">'
+            + '<i class="fa fa-reply"></i> 撤回（改回草稿繼續修改）</button></div>';
+    }
+    // 重新發送（出席名單事後有增減，或有人說沒收到）
+    if (st==='done' && (+m.recorder_user_id===META.uid || PERMS.canAdmin)) {
+        sg += '<div style="margin-top:10px;"><button type="button" class="b-att" onclick="noticeResend()"><i class="fa fa-bullhorn"></i> 重新發送會議通知給出席人員</button>'
+            + '<span style="font-size:11px;color:#8a6d45;margin-left:6px;">同一場會議只會保留最新一則通知，不會重複累積。</span></div>';
+    }
+    // 超級管理員自動簽章（使用者明確要求）：不必等主席實際操作，且可指定簽章日期（補歷史紙本用）
+    if (META.is_superadmin && st!=='none' && st!=='done') {
+        var futureMeeting = String(m.meeting_date) >= String(META.today);
+        sg += '<div style="margin-top:12px;padding:8px;border:1px dashed #c9a06a;font-size:12px;">'
+            + '<b>超級管理員工具 — 自動簽章</b>'
+            + '<div style="color:#8a6d45;margin:3px 0 6px;">直接把通知單簽成「已確認」，不必等主席實際操作。'
+            + '蓋出來的仍是<b>主席（'+esc(m.chair_name||'—')+'）本人的章</b>——紙本上那一格本來就是主席的章。</div>'
+            + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
+            + '<span>簽章日期</span><input type="date" id="ntAsDate" style="width:150px;" value="'+esc(fmtDate(m.meeting_date))+'" max="9999-12-31">'
+            + '<label style="margin:0;display:flex;align-items:center;gap:4px;font-size:12px;"><input type="checkbox" id="ntAsNotify" data-eg-skip'
+            + (futureMeeting?' checked':'')+' style="margin:0;"> 同時發出會議通知</label>'
+            + '<span>超管密碼</span><input type="password" id="ntAsPw" autocomplete="new-password" style="width:140px;" data-eg-skip>'
+            + '<button type="button" class="b-att" onclick="noticeAutoSign()"><i class="fa fa-magic"></i> 自動簽章</button>'
+            + '</div>'
+            + '<div style="color:#8a6d45;margin-top:4px;">'+(futureMeeting
+                ? '這場會議還沒到，預設會一併發出會議通知。'
+                : '這場會議日期已過（研判是補歷史紙本），預設<b>不</b>發通知，避免事後再吵人；需要時可自行勾選。')+'</div>'
+            + '</div>';
+    }
+    $('#ntSignBox').html(sg);
+
+    // ── 底部按鈕與提示
+    $('#btnNtSave').toggle(canEdit);
+    $('#btnNtSubmit').toggle(canEdit).html(st==='rejected'
+        ? '<i class="fa fa-paper-plane"></i> 存檔並重新送出' : '<i class="fa fa-paper-plane"></i> 存檔並送出');
+    $('#btnNtPrint').toggle(!!m.notice_can_print);
+    var miss = noticeMissing();
+    $('#ntFootHint').html(canEdit
+        ? (miss.length
+            ? '<span style="color:#DD5138;">尚未填寫：<b>'+miss.map(esc).join('、')+'</b>，補齊後才能送出（存草稿不受限制）。</span>'
+            : '<b style="color:#8A5A2B;">存檔並送出</b>＝通知主席確認簽章；主席確認後系統才會把會議通知發給應出席人員。')
+        : (st==='submitted' ? '已送出，等待主席確認簽章。'
+          : st==='done' ? '主席已確認簽章，本通知單已定案（要再修改請洽管理員）。' : ''));
+    $('#errNtUnits').text('');
+}
+/* 通知單上的圖章：與會議記錄的簽核欄同一個模板（模組設定的「主席／總經理／製表 簽核欄圖章樣式」），
+   兩份文件上同一個人的章才會長得一樣。 */
+function ntStamp(name, dateStr, isDeputy){
+    if (!name) return '';
+    return (window.EGStamp&&EGStamp.stamp) ? EGStamp.stamp(name, dispDate(dateStr), !!isDeputy, mApprovalStampSchema()) : esc(name);
+}
+/* 製表日期＝通知單送出那一天（通知單是開會前做的，用會議日期會變成「還沒發生就蓋章」）；
+   還沒送出過就退回會議日期。 */
+function ntPrepDate(m){ return m.notice_submitted_at ? String(m.notice_submitted_at).substr(0,10) : m.meeting_date; }
+
+function ntUnitsSync(){
+    NT_UNITS = $('#ntUnitBox .nt-u:checked').map(function(){ return +this.value; }).get();
+    ntUnitsCount();
+}
+function ntUnitsCount(){
+    var tot = (META.notice_units||[]).length;
+    $('#ntUnitCount').text('（已勾選 '+NT_UNITS.length+' / '+tot+' 個單位）');
+}
+function ntUnitsSet(on){
+    if (!NOTICE.meeting.notice_can_edit) return;
+    $('#ntUnitBox .nt-u').prop('checked', !!on); ntUnitsSync();
+}
+/* 依出席人員自動勾選：拿出席名單上每個人的所屬部門（含兼任）去比對可勾選的單位清單。
+   刻意做成「按一下才套用」而不是自動連動——有些單位是「要求它派人來」但名單還沒指定到人，
+   自動重算會把記錄人手動勾的那幾個洗掉。 */
+function ntUnitsFromAttendees(){
+    if (!NOTICE.meeting.notice_can_edit) return;
+    var allow = {}; (META.notice_units||[]).forEach(function(u){ allow[+u.id] = true; });
+    var hit = {};
+    (NOTICE.attendees||[]).forEach(function(a){
+        var ids = [];
+        var p = personById(a.user_id);
+        // 一個人可能同時掛主職與兼任（posts 是一筆職務一列），兩邊的部門都算「這個單位有人來」
+        if (p && p.posts) p.posts.forEach(function(q){ if (q.dept_id) ids.push(+q.dept_id); });
+        // 退路：ALL_PEOPLE 還沒載完、或名單是別的模組帶進來的，就用出席名單上存的部門名稱反查主檔
+        if (!ids.length && a.dept_name) {
+            (META.departments||[]).forEach(function(d){ if (d.name===a.dept_name) ids.push(+d.id); });
+        }
+        ids.forEach(function(x){ if (allow[+x]) hit[+x] = true; });
+    });
+    var got = Object.keys(hit).map(Number);
+    if (!got.length){ alert('出席人員的所屬部門都不在「應出席單位」清單內，請手動勾選，或到「模組設定 → 會議通知單」把該單位加進清單。'); return; }
+    NT_UNITS = got;
+    $('#ntUnitBox .nt-u').each(function(){ this.checked = got.indexOf(+this.value)>=0; });
+    ntUnitsCount();
+}
+/* 送出前必填檢查（與後端 meeting_notice_missing() 同一套規則與措辭，兩邊不會走鐘） */
+function noticeMissing(){
+    var m = NOTICE.meeting, miss = [];
+    if (!$.trim(m.subject||'')) miss.push('會議主題');
+    if (!$.trim(m.meeting_date||'')) miss.push('會議日期');
+    if (!$.trim(m.start_time||'')) miss.push('會議時間');
+    if (!$.trim(m.location||'')) miss.push('會議地點');
+    if (!+m.chair_user_id) miss.push('主席');
+    if (!(NOTICE.attendees||[]).length) miss.push('出席人員');
+    if (!NT_UNITS.length) miss.push('應出席單位');
+    return miss;
+}
+function noticeSave(thenSubmit){
+    var m = NOTICE.meeting;
+    if (thenSubmit){
+        var miss = noticeMissing();
+        if (miss.length){
+            if (!NT_UNITS.length) $('#errNtUnits').text('請至少勾選一個應出席單位');
+            alert('尚未填寫：'+miss.join('、')+'。\n（主題／日期／時間／地點／主席／出席人員請回清單按「編輯」補上）');
+            return;
+        }
+    }
+    $.post(API, {action:'notice_save', meeting_id:m.meeting_id, notice_items:$('#ntItems').val(), notice_depts:NT_UNITS.join(',')}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        if (!thenSubmit){ alert('已儲存通知單草稿。'); refreshNotice(); loadList(); return; }
+        $.post(API, {action:'notice_submit', meeting_id:m.meeting_id}, function(r2){
+            if (!r2.ok){ alert(r2.error||'送出失敗'); refreshNotice(); return; }
+            alert('已送出，待主席（'+(r2.chair_name||'')+'）確認簽章。\n主席確認後系統才會把會議通知發給應出席人員。');
+            closeMask('noticeMask'); loadList();
+        }, 'json');
+    }, 'json');
+}
+function noticeDecide(decision){
+    var m = NOTICE.meeting, note = $.trim($('#ntNote').val()||'');
+    if (decision==='rejected' && !note){ alert('退回必須填寫原因'); $('#ntNote').focus(); return; }
+    if (decision==='approved' && !confirm('確認簽章後會立刻把會議通知發給 '+(NOTICE.attendees||[]).length+' 位出席人員，確定嗎？')) return;
+    $.post(API, {action:'notice_decide', meeting_id:m.meeting_id, decision:decision, note:note}, function(res){
+        if (!res.ok){ alert(res.error||'處理失敗'); refreshNotice(); return; }
+        alert(decision==='approved' ? ('已確認簽章，會議通知已發給 '+res.sent+' 位出席人員。') : '已退回，記錄人會收到通知。');
+        closeMask('noticeMask'); loadList();
+    }, 'json');
+}
+function noticeWithdraw(){
+    if (!confirm('撤回後通知單改回草稿可繼續修改，主席那則待簽通知會一併關閉。確定撤回？')) return;
+    $.post(API, {action:'notice_withdraw', meeting_id:NOTICE.meeting.meeting_id}, function(res){
+        if (!res.ok){ alert(res.error||'撤回失敗'); refreshNotice(); return; }
+        alert('已撤回，改回草稿狀態。'); refreshNotice(); loadList();
+    }, 'json');
+}
+function noticeResend(){
+    if (!confirm('重新把會議通知發給目前出席名單上的 '+(NOTICE.attendees||[]).length+' 位人員？')) return;
+    $.post(API, {action:'notice_resend', meeting_id:NOTICE.meeting.meeting_id}, function(res){
+        if (!res.ok){ alert(res.error||'發送失敗'); return; }
+        alert('已重新發送給 '+res.sent+' 位人員。'); refreshNotice();
+    }, 'json');
+}
+function noticeAutoSign(){
+    var m = NOTICE.meeting, d = $('#ntAsDate').val(), pw = $('#ntAsPw').val()||'';
+    if (!d){ alert('請選擇簽章日期'); return; }
+    if (!pw){ alert('請輸入超級管理員密碼'); $('#ntAsPw').focus(); return; }
+    var notify = $('#ntAsNotify').prop('checked') ? '1' : '0';
+    if (!confirm('要把「'+m.subject+'」的會議通知單直接簽成已確認（簽章日期 '+dispDate(d)+'，蓋主席 '+(m.chair_name||'')+' 的章）'
+        + (notify==='1' ? '，並發出會議通知給出席人員' : '，不發通知') + '嗎？')) return;
+    $.post(API, {action:'notice_auto_sign', meeting_id:m.meeting_id, date:d, password:pw, notify:notify}, function(res){
+        if (!res.ok){ alert(res.error||'自動簽章失敗'); return; }
+        alert('已自動簽章完成。'+(res.sent>0?('會議通知已發給 '+res.sent+' 位人員。'):'（未發出通知）'));
+        refreshNotice(); loadList();
+    }, 'json');
+}
+/* 重新抓一次後端最新狀態再重畫（點開即刷新的同一個原則：不要拿畫面上的舊快取繼續操作） */
+function refreshNotice(){
+    var id = NOTICE.meeting.meeting_id;
+    $.getJSON(API, {action:'get_detail', meeting_id:id}, function(res){
+        if (!res.ok) return;
+        NOTICE = res;
+        NT_UNITS = String(res.meeting.notice_depts||'').split(',').filter(function(x){ return x!==''; }).map(Number);
+        $('#ntItems').val(res.meeting.notice_items||'');
+        renderNotice();
+    });
+}
+
+/* ---------- 會議通知單列印（A4 橫式，版面照紙本 2-GM-05-03） ---------- */
+function ntCss(){
+    return 'table.nt-head{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;}'
+        + 'table.nt-head th{background:#fff;font-weight:bold;border:1px solid #333;padding:6px;width:74px;text-align:center;}'
+        + 'table.nt-head td{border:1px solid #333;padding:6px 8px;text-align:left;}'
+        + 'table.nt-body{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;table-layout:fixed;}'
+        + 'table.nt-body th{background:#fff;font-weight:bold;border:1px solid #333;padding:6px;width:74px;text-align:center;vertical-align:middle;}'
+        + 'table.nt-body td{border:1px solid #333;padding:8px;text-align:left;vertical-align:top;}'
+        + 'table.nt-body td.nt-items{height:42mm;white-space:pre-wrap;line-height:1.9;}'
+        + 'table.nt-units-p{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px;table-layout:fixed;}'
+        + 'table.nt-units-p th{border:1px solid #333;padding:6px 2px;text-align:center;background:#fff;font-weight:bold;}'
+        + 'table.nt-units-p th.nt-ul{width:88px;text-align:left;padding-left:8px;}'
+        + 'table.nt-units-p td{border:1px solid #333;padding:7px 2px;text-align:center;height:12mm;}'
+        // 勾選框用 CSS 畫，不依賴 ☑/□ 這種字型不一定有的字元（列印時最容易變成豆腐方塊）
+        + '.nt-cb{display:inline-block;width:13px;height:13px;border:1.2px solid #333;line-height:11px;font-size:12px;font-weight:bold;text-align:center;}'
+        + 'table.nt-foot{width:100%;margin-top:18px;font-size:13px;margin-top:auto;}'
+        + 'table.nt-foot td{padding:10px 6px;width:50%;}'
+        + 'table.nt-foot td.nt-foot-prep{text-align:right;}'
+        + '.nt-foot .stamp-wrap svg,.nt-foot svg.car-stamp{width:91px !important;height:91px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
+}
+function noticePageHtml(m, res){
+    var app = m.notice_approval;
+    var chairStamp = (app && app.status==='approved' && app.approver_name)
+        ? ntStamp(app.approver_name, app.decided_at, String(app.approver_id)!==String(m.chair_user_id)) : '';
+    var madeStamp  = ntStamp(m.recorder_name, ntPrepDate(m), false);
+    var noticeTitle = (META.as_doc_notice && META.as_doc_notice.doc_name) ? META.as_doc_notice.doc_name : '會議通知單';
+    var attendeeNames = (res.attendees||[]).map(function(a){ return esc(a.user_name); }).join('、') || '—';
+    // 應出席單位：欄位名稱一律即時取自部門主檔（後端 notice_dept_names 也是同一份來源），
+    // 列出的是「模組設定挑好的那幾個單位」，勾的是這一張通知單實際要求出席的單位。
+    var units = META.notice_units||[];
+    var picked = {}; String(m.notice_depts||'').split(',').forEach(function(x){ if (x!=='') picked[+x]=true; });
+    var uHead = '<th class="nt-ul">應出席單位</th>', uBody = '<td></td>';
+    units.forEach(function(u){
+        uHead += '<th>'+esc(u.name)+'</th>';
+        uBody += '<td><span class="nt-cb">'+(picked[+u.id]?'✔':'&nbsp;')+'</span></td>';
+    });
+    return '<div class="mr-page">'
+        + '<div class="mr-title">'+esc(META.company_name||'')+'-'+esc(noticeTitle)+'</div>'
+        + '<table class="nt-head">'
+        + '<tr><th>會議主題</th><td>'+esc(m.subject)+'</td><th>會議日期</th><td>'+dispDate(m.meeting_date)+'</td>'
+        +     '<th>主席</th><td>'+esc(m.chair_name||'')+'</td></tr>'
+        + '<tr><th>會議地點</th><td>'+esc(m.location||'')+'</td>'
+        +     '<th>會議時間</th><td>'+(m.start_time?(esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')+'</td>'
+        +     '<th>記錄</th><td>'+esc(m.recorder_name||'')+'</td></tr>'
+        + '</table>'
+        + '<table class="nt-body">'
+        + '<tr><th>出席人員</th><td>'+attendeeNames+'</td></tr>'
+        + '<tr><th>會議要項</th><td class="nt-items">'+esc(m.notice_items||'')+'</td></tr>'
+        + '</table>'
+        + (units.length ? '<table class="nt-units-p"><tr>'+uHead+'</tr><tr>'+uBody+'</tr></table>' : '')
+        + '<table class="nt-foot"><tr><td>主 席 確 認：'+chairStamp+'</td>'
+        +     '<td class="nt-foot-prep">製 表：'+madeStamp+'</td></tr></table>'
+        + (m.as_doc_notice_no ? '<div class="as-doc-fixed">'+esc(m.as_doc_notice_no)+'</div>' : '')
+        + '</div>';
+}
+function printNotice(){
+    if (!NOTICE) return;
+    var m = NOTICE.meeting;
+    mtPrintLog('會議通知單 '+(m.subject||'')+' '+dispDate(m.meeting_date), m.meeting_id);
+    egPrintWindow('會議通知單', noticePageHtml(m, NOTICE), mrCss()+ntCss(), '', true, true);
+}
+
 /* ---------- 模組設定：角色設定(仿 training_record.php) + 附件路徑/簽到表AS綁定 ---------- */
-$('#btnMtSetting').on('click', function(){ setTabSwitch('role'); loadRoles(); $('#setNasDir').val(META.attach_nas_dir||''); $('#setAutoSubmit').prop('checked', !!META.auto_submit); renderSignsheetLabel(); loadStampTplOptions(); loadKpiTargetUI(); renderSchedSrc(); openMask('mtSetMask'); });
+$('#btnMtSetting').on('click', function(){ setTabSwitch('role'); loadRoles(); $('#setNasDir').val(META.attach_nas_dir||''); $('#setAutoSubmit').prop('checked', !!META.auto_submit); renderSignsheetLabel(); loadStampTplOptions(); loadKpiTargetUI(); renderSchedSrc(); renderNoticeSetting(); openMask('mtSetMask'); });
 function setTabSwitch(tab){
     $('.set-tab').removeClass('active'); $('.set-tab[data-tab="'+tab+'"]').addClass('active');
-    $('#setPaneRole').toggle(tab==='role'); $('#setPaneAttach').toggle(tab==='attach');
+    $('#setPaneRole').toggle(tab==='role'); $('#setPaneAttach').toggle(tab==='attach'); $('#setPaneNotice').toggle(tab==='notice');
+}
+/* ---------- 模組設定：會議通知單（AS 綁定＋通知單上要列出哪些應出席單位） ---------- */
+function renderNoticeSetting(){
+    $('#noticeDocLabel').text(EGAsDoc.label(META.as_doc_notice));
+    var on = {}; (META.notice_unit_ids||[]).forEach(function(x){ on[+x]=true; });
+    // 全部不勾＝列出主檔所有部門，所以沒有設定值時這裡一律預設全勾（畫面與實際行為一致）
+    var none = !(META.notice_unit_ids||[]).length;
+    var h = '';
+    (META.departments||[]).forEach(function(d){
+        h += '<label><input type="checkbox" class="set-nu" value="'+d.id+'"'+((none||on[+d.id])?' checked':'')
+           + ' data-eg-skip><span>'+esc(d.name)+'</span></label>';
+    });
+    $('#setNoticeUnits').html(h);
+    $('#setNoticeUnitsMsg').text('');
+}
+function submitNoticeUnits(){
+    var ids = $('#setNoticeUnits .set-nu:checked').map(function(){ return this.value; }).get();
+    if (!ids.length){ alert('請至少勾選一個單位（全部不勾會變成列出主檔所有部門）'); return; }
+    $.post(API, {action:'notice_units_save', dept_ids:ids.join(',')}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        META.notice_units = res.notice_units||[];
+        META.notice_unit_ids = META.notice_units.map(function(u){ return +u.id; });
+        $('#setNoticeUnitsMsg').text('已儲存（'+META.notice_units.length+' 個單位）');
+    }, 'json');
+}
+function openNoticeDocPicker(){
+    $.getJSON(API, {action:'asdoc_list'}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        EGAsDoc.open({
+            docs: res.docs||[], current: META.as_doc_notice ? META.as_doc_notice.id : 0,
+            title: '會議通知單 AS 文件綁定',
+            onSave: function(id, doc){
+                $.post(API, {action:'as_doc_notice_save', doc_id:id}, function(r){
+                    if (!r.ok){ alert(r.error||'儲存失敗'); return; }
+                    META.as_doc_notice = r.as_doc_notice; renderNoticeSetting();
+                }, 'json');
+            }
+        });
+    });
 }
 var RAPI = '../../src/store/Roles_API.php';
 var ROLES = [], CURROLE = 0;
@@ -2552,8 +3018,16 @@ var URL_OPEN_ID = (function(){
     var m = String(location.search||'').match(/[?&]id=(\d+)/);
     return m ? parseInt(m[1], 10) : 0;
 })();
+/* ?notice=meeting_id：會議通知單的兩種通知都導到這裡（見 sideAndTopBarMenu.html 的
+   MEETING_NOTICE＝主席待確認簽章、MEETING_NOTICE_INFO＝發給應出席人員的會議通知），
+   載入後直接開那一筆的通知單畫面。 */
+var URL_NOTICE_ID = (function(){
+    var m = String(location.search||'').match(/[?&]notice=(\d+)/);
+    return m ? parseInt(m[1], 10) : 0;
+})();
 loadMeta(function(){
     loadList();
+    if (URL_NOTICE_ID) { openNotice(URL_NOTICE_ID); return; }
     if (!URL_SIGN_ID && URL_OPEN_ID) { openEdit(URL_OPEN_ID); return; }
     if (URL_SIGN_ID) {
         openView(URL_SIGN_ID);

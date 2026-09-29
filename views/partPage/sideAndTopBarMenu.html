@@ -562,6 +562,23 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 }
                 return;
             }
+            if (refType === 'MEETING_NOTICE') {
+                // 會議通知單(2-GM-05-03)待主席確認簽章：開會議紀錄頁並帶 notice=meeting_id，頁面會自動開啟該筆的通知單畫面。
+                // 刻意與 MEETING_APPROVAL(會議記錄簽核)分開——兩者可能同時在等同一位主席處理，
+                // 共用同一個 ref_type 會讓其中一則被另一則的「關掉舊通知」誤關。
+                // 比照 MEETING_APPROVAL：真正核可/退回完成前不從置頂欄未讀清單移除。
+                window.open('../ADM/meeting_record.php?notice=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                if (parseInt($(this).data('needmode'), 10) <= 1) {
+                    nmMarkRead(nmRemoveFromList);
+                }
+                return;
+            }
+            if (refType === 'MEETING_NOTICE_INFO') {
+                // 會議通知(告知應出席人員何時何地開會)：純資訊型，開通知單畫面看完整內容後直接標記已讀移除
+                window.open('../ADM/meeting_record.php?notice=' + ($(this).data('refid') || 0));
+                nmMarkRead(nmRemoveFromList);
+                return;
+            }
             if (refType === 'LEAVE_APPROVAL') {
                 // 請假單待簽核：開請假系統的「待我簽核」分頁並直接展開該單的簽核面板。
                 // mode=sign → 真正核准/退回完成前不從置頂欄未讀清單移除（比照報價單）。

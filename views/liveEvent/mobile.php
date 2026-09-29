@@ -219,6 +219,10 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             if (e.ref_type === 'VENDOR_AUDIT_PLAN_RESULT'){ location.href = '../pm/vendor_audit.php?plan_year=' + (e.ref_id || 0); return; }
             // 領料單通知：直接導到庫存頁並展開該筆
             if (e.ref_type === 'STOCK_REQ'){ location.href = '../pages/stock.php?req=' + (e.ref_id || 0); return; }
+            // 會議通知單(2-GM-05-03)待主席確認簽章：一定要導到專屬頁面讓它呼叫 Meeting_API 的 notice_decide，
+            // 走這裡的通用「回簽」只會把通知標成已回簽、通知單其實沒有被簽掉（比照 MEETING_APPROVAL 的既有判斷）。
+            // 純資訊型的會議通知(MEETING_NOTICE_INFO)不必導頁，內容本身已含時間地點與會議要項，在這裡看完即可。
+            if (e.ref_type === 'MEETING_NOTICE'){ location.href = '../ADM/meeting_record.php?notice=' + (e.ref_id || 0) + '&event=' + e.id; return; }
             // 通知方式＝「開啟通知自動認定已閱」(autoread)：點開當下就標已閱，不必再按「確認已閱」。
             // 判定用這裡剛取回的 res.my_mode（清單上的 mode 可能是舊的）；共用帳號代收排除(ai-rules/13)。
             if (res.my_mode === 'autoread' && !nmForUidCur && !(res.my_status && res.my_status.read_at)){

@@ -137,6 +137,11 @@ case 'meta': {
           'auto_submit'=>meeting_auto_submit_enabled($db),
           'as_doc_signsheet'=>($asSign = eg_asdoc_get($db, 'meeting_signsheet')), 'as_doc_signsheet_no'=>eg_asdoc_no($asSign),
           'as_doc_record'=>($asRec = eg_asdoc_get($db, 'meeting_record')), 'as_doc_record_no'=>eg_asdoc_no($asRec),
+          // 會議通知單（2-GM-05-03）：綁定的 AS 文件、通知單上要列出哪些「應出席單位」，
+          // 以及管理員設定畫面要用的部門全清單（勾選用，順序一律照部門主檔 sort_order）
+          'as_doc_notice'=>($asNot = eg_asdoc_get($db, 'meeting_notice')), 'as_doc_notice_no'=>eg_asdoc_no($asNot),
+          'notice_units'=>meeting_notice_units($db),
+          'notice_unit_ids'=>array_values(array_filter(array_map('intval', explode(',', meeting_setting_get($db, 'meeting_notice_units', ''))))),
           'stamp_template'=>$stTpl, 'approval_stamp_template'=>$apTpl,
           // 挑出席人員時要提示哪些行程來源（全站共用設定，定義與現值都由共用庫給，前端不寫死＝鐵律4）
           'sched_sources'=>eg_psched_sources(), 'sched_on'=>eg_psched_setting_get($db)]);
@@ -203,6 +208,8 @@ case 'list': {
         $m['notifying'] = $m['approval_status'] === 'notifying';
         $m['is_mine'] = (int)$m['recorder_user_id'] === $uid;
         $m['can_print'] = meeting_can_print($uid, $perms, $m);
+        // 會議通知單（2-GM-05-03）：清單上獨立一欄顯示狀態並提供入口，與會議記錄的狀態各自獨立
+        $m['notice_state'] = meeting_notice_state($m);
         $out[] = $m;
     }
     jout(['meetings'=>$out]);
@@ -380,6 +387,14 @@ case 'get_detail': {
     // （ai-rules/16 第三之二節；例：A 版 2025.01.01 生效、B 版 2025.12.09 生效，列印 2025.09.08 的會議紀錄要印 A 版）
     $m['as_doc_record_no'] = eg_asdoc_no_asof($db, 'meeting_record', (string)$m['meeting_date']);
     $m['as_doc_signsheet_no'] = eg_asdoc_no_asof($db, 'meeting_signsheet', (string)$m['meeting_date']);
+    // 會議通知單（2-GM-05-03）：狀態、簽核紀錄、可否編輯/列印、應出席單位名稱與 AS 編號（版次同樣依會議日期回推）
+    $m['notice_state']      = meeting_notice_state($m);
+    $m['notice_approval']   = eg_approval_latest($db, 'meeting', $id, 'notice');
+    $m['notice_can_edit']   = meeting_notice_can_edit($uid, $perms, $m);
+    $m['notice_can_print']  = meeting_notice_can_print($uid, $perms, $m);
+    $m['notice_dept_names'] = meeting_notice_dept_names($db, $m);
+    $m['notice_missing']    = meeting_notice_missing($db, $m);
+    $m['as_doc_notice_no']  = eg_asdoc_no_asof($db, 'meeting_notice', (string)$m['meeting_date']);
     jout(['meeting'=>$m, 'items'=>$items, 'attendees'=>meeting_attendees($db, $id), 'attaches'=>$attaches]);
 }
 
@@ -1321,6 +1336,155 @@ case 'set_recorder': {
     } catch (Throwable $e) {}
     $ap = meeting_approval_status($db, $id);
     jout(['recorder_user_id'=>$new, 'recorder_name'=>(string)$hit['user_cname'], 'status'=>$ap['status']]);
+}
+
+/* ============================================================
+ * 會議通知單（2-GM-05-03，2026-09-29 使用者交辦）
+ * 掛在同一筆 meeting_record 上（見 meeting_lib.php 的說明），有自己的狀態與簽核關卡
+ * （approval_record level='notice'），與會議記錄的 status 互不影響。
+ * ============================================================ */
+
+/* 建立/編輯通知單草稿（notice_status 空＝這一筆還沒有通知單，存下去就建立）。
+   表頭（主題/日期/時間/地點/主席/出席人員）刻意不在這裡收——那些是會議記錄的欄位，
+   兩個入口都能寫同一批欄位遲早走鐘，通知單畫面一律唯讀顯示並提示去會議紀錄改（鐵律4）。 */
+case 'notice_save': {
+    if (!$perms['canEdit']) jerr('無編輯權限', 403);
+    $id = (int)($_POST['meeting_id'] ?? 0);
+    $m  = meeting_load($db, $id);
+    if (!meeting_notice_can_edit($uid, $perms, $m)) jerr('此通知單目前不可編輯（已送出待主席確認／已確認完成，或您不是記錄人本人）', 403);
+    $items = trim((string)($_POST['notice_items'] ?? ''));
+    // 應出席單位：一律過部門主檔驗證，不採信前端送來的 id（鐵律8）
+    $rawIds = array_values(array_filter(array_map('intval', explode(',', (string)($_POST['notice_depts'] ?? '')))));
+    $depts  = [];
+    if ($rawIds) {
+        $in = implode(',', array_fill(0, count($rawIds), '?'));
+        $st = $db->prepare("SELECT id FROM department WHERE id IN ($in) ORDER BY sort_order, id");
+        $st->execute($rawIds);
+        $depts = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    }
+    $newState = meeting_notice_state($m) === 'none' ? 'draft' : meeting_notice_state($m);
+    $db->prepare("UPDATE meeting_record SET notice_status=?, notice_items=?, notice_depts=?, updated_at=NOW() WHERE meeting_id=?")
+       ->execute([$newState, ($items !== '' ? mb_substr($items, 0, 5000) : null), ($depts ? implode(',', $depts) : null), $id]);
+    $m2 = meeting_load($db, $id);
+    jout(['notice_state'=>meeting_notice_state($m2), 'notice_missing'=>meeting_notice_missing($db, $m2)]);
+}
+
+/* 送出通知單 → 待主席確認簽章。使用者拍板：**主席確認之後**才把會議通知發給應出席人員，
+   所以這一步只通知主席，不動應出席人員（見 notice_decide 的 approved 分支）。 */
+case 'notice_submit': {
+    $id = (int)($_POST['meeting_id'] ?? 0);
+    $m  = meeting_load($db, $id);
+    if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可送出通知單', 403);
+    $state = meeting_notice_state($m);
+    if (!in_array($state, ['draft', 'rejected'], true)) jerr('此通知單目前不是草稿／已退回狀態，無法送出（請先重新整理畫面）');
+    $miss = meeting_notice_missing($db, $m);
+    if ($miss) jerr('尚未填寫：' . implode('、', $miss));
+    $signer = meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name']);
+    if (!$signer || !$signer['id']) jerr('解析不到主席，請先在會議紀錄的出席人員內指定主席');
+    try {
+        $db->beginTransaction();
+        $aid = eg_approval_submit($db, 'meeting', $id, 'notice', $uid, $uname);
+        $db->prepare("UPDATE meeting_record SET notice_status='submitted', notice_submitted_at=NOW(), updated_at=NOW() WHERE meeting_id=?")
+           ->execute([$id]);
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('送出失敗：'.$e->getMessage(), 500); }
+    $ev = meeting_notice_notify_chair($db, $m, (int)$signer['id'], $uid, $state === 'rejected');
+    if ($ev) { try { eg_approval_set_live_event($db, $aid, $ev); } catch (Throwable $e) {} }
+    jout(['notice_state'=>'submitted', 'chair_name'=>(string)$signer['name']]);
+}
+
+/* 主席確認簽章／退回。核准的那一刻才發會議通知給應出席人員（使用者拍板的時機）。 */
+case 'notice_decide': {
+    $id = (int)($_POST['meeting_id'] ?? 0);
+    $decision = (string)($_POST['decision'] ?? '');
+    $note = trim((string)($_POST['note'] ?? ''));
+    if (!in_array($decision, ['approved','rejected'], true)) jerr('決定值不正確');
+    if ($decision === 'rejected' && $note === '') jerr('退回必須填寫原因');
+    $m = meeting_load($db, $id);
+    $rec = eg_approval_latest($db, 'meeting', $id, 'notice');
+    if (!$rec || $rec['status'] !== 'pending') jerr('此會議通知單目前沒有待您處理的簽核項目');
+    $signer = meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name']);
+    if (!$perms['canAdmin'] && (!$signer || (int)$signer['id'] !== $uid)) jerr('您不是本通知單的簽核人（主席）', 403);
+    $r = eg_approval_decide($db, (int)$rec['id'], $uid, $uname, $decision, $note ?: null);
+    if (!$r['success']) jerr($r['message']);
+    meeting_notice_close_chair_notice($db, $id);
+
+    if ($decision === 'rejected') {
+        $db->prepare("UPDATE meeting_record SET notice_status='rejected', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
+        meeting_notify_result($db, $id, (int)$m['recorder_user_id'], '「'.$m['subject'].'」會議通知單被退回',
+            $uname.'（主席）退回「'.$m['subject'].'」會議通知單。退回原因：'.$note, $uid);
+        jout(['notice_state'=>'rejected']);
+    }
+    $db->prepare("UPDATE meeting_record SET notice_status='done', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
+    $m = meeting_load($db, $id);
+    $sent = meeting_notice_send_to_attendees($db, $m, $uid);
+    meeting_notify_result($db, $id, (int)$m['recorder_user_id'], '「'.$m['subject'].'」會議通知單已確認簽章',
+        $uname.'（主席）已確認「'.$m['subject'].'」會議通知單，系統已將會議通知發給 '.$sent.' 位應出席人員。'
+        .($note ? '意見：'.$note : ''), $uid);
+    jout(['notice_state'=>'done', 'sent'=>$sent]);
+}
+
+/* 撤回通知單（送早了／送錯了）：submitted → draft，並關掉主席那則待簽通知。 */
+case 'notice_withdraw': {
+    $id = (int)($_POST['meeting_id'] ?? 0);
+    $m  = meeting_load($db, $id);
+    if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可撤回', 403);
+    if (meeting_notice_state($m) !== 'submitted') jerr('只有「待主席確認」狀態可以撤回（請先重新整理畫面）');
+    $rec = eg_approval_latest($db, 'meeting', $id, 'notice');
+    if ($rec && $rec['status'] !== 'pending') jerr('主席已經處理過了，無法撤回（請重新整理畫面看最新狀態）');
+    // 待簽那一列直接刪掉（與會議記錄的 withdraw 同一種做法，不引入 approval_record 沒有的狀態值）
+    if ($rec) $db->prepare("DELETE FROM approval_record WHERE id=?")->execute([(int)$rec['id']]);
+    meeting_notice_close_chair_notice($db, $id);
+    $db->prepare("UPDATE meeting_record SET notice_status='draft', notice_submitted_at=NULL, updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
+    jout(['notice_state'=>'draft']);
+}
+
+/* 重新發送會議通知給應出席人員（已確認簽章之後才可用）：出席名單事後有增減、
+   或有人反映沒收到時用；同一場會議只留最新一則通知（見 meeting_notice_send_to_attendees）。 */
+case 'notice_resend': {
+    $id = (int)($_POST['meeting_id'] ?? 0);
+    $m  = meeting_load($db, $id);
+    if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可重新發送', 403);
+    if (meeting_notice_state($m) !== 'done') jerr('通知單尚未經主席確認簽章，還不能發送會議通知');
+    jout(['sent'=>meeting_notice_send_to_attendees($db, $m, $uid)]);
+}
+
+/* 超級管理員自動簽章（使用者明確要求）：不必等主席實際操作，直接把通知單簽成已確認，
+   並可指定簽章日期（補歷史紙本時要跟紙上那一天對得起來，比照 admin_backfill 的做法）。
+   蓋出來的章仍是**主席本人**的章（approval_record 的 approver 寫主席，不是操作的超管）——
+   紙本上那一格本來就是主席的章，改成蓋超管的章會讓文件對不上紙本。
+   是否同時發會議通知由前端勾選帶進來（補過去的會議不該再吵人，未來的會議通常要發）。 */
+case 'notice_auto_sign': {
+    if (!meeting_is_superadmin($db, $uid)) jerr('僅超級管理員可使用此功能', 403);
+    $v = meeting_verify_superadmin_password($db, (string)($_POST['password'] ?? ''));
+    if (!$v['ok']) jerr($v['msg']);
+    $id = (int)($_POST['meeting_id'] ?? 0);
+    $m  = meeting_load($db, $id);
+    if (meeting_notice_state($m) === 'none') jerr('這筆會議還沒有建立通知單，請先建立並存檔');
+    $date = trim((string)($_POST['date'] ?? '')) ?: (string)$m['meeting_date'];
+    // 實際動作與驗證全部收斂在 meeting_notice_auto_sign()（唯一實作），這裡只負責驗密碼與回報
+    $r = meeting_notice_auto_sign($db, $m, $date, (string)($_POST['notify'] ?? '') === '1', $uid);
+    if (!$r['ok']) jerr($r['msg']);
+    $sent = (int)$r['sent'];
+    $signer = meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name']);
+    try {
+        $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by)
+                      VALUES ('views/ADM/meeting_record.php', '超級管理員自動簽章會議通知單', ?, NOW(), ?)")
+           ->execute(["meeting_id={$id}, 簽章日期={$date}, 主席={$signer['name']}(#{$signer['id']}), 發出通知={$sent}人", $uname]);
+    } catch (Throwable $e) {}
+    jout(['notice_state'=>'done', 'sent'=>$sent]);
+}
+
+/* 通知單的 AS 文件綁定（2-GM-05-03）與「應出席單位」設定（僅管理員） */
+case 'as_doc_notice_save': {
+    if (!$perms['canAdmin']) jerr('僅管理員可設定', 403);
+    eg_asdoc_save($db, 'meeting_notice', (int)($_POST['doc_id'] ?? 0), $uname);
+    jout(['as_doc_notice'=>eg_asdoc_get($db, 'meeting_notice')]);
+}
+case 'notice_units_save': {
+    if (!$perms['canAdmin']) jerr('僅管理員可設定', 403);
+    meeting_notice_units_save($db, array_map('intval', explode(',', (string)($_POST['dept_ids'] ?? ''))));
+    jout(['notice_units'=>meeting_notice_units($db)]);
 }
 
 default: jerr('未知的操作：'.$action);

@@ -12,6 +12,7 @@ include_once __DIR__ . '/attach_lib.php';
 include_once __DIR__ . '/asdoc_lib.php';
 include_once __DIR__ . '/kpi_lib.php';
 include_once __DIR__ . '/people_lib.php';
+include_once __DIR__ . '/date_fmt_lib.php';   // 通知內文的日期顯示一律 YYYY.MM.DD（ai-rules/20）
 
 const MEETING_FEATURES = [
     ['code'=>'meeting_view',      'group'=>'view', 'label'=>'檢閱會議記錄列表（沒勾也看得到自己的草稿、有簽核/出席到的會議）'],
@@ -191,6 +192,56 @@ function meeting_ensure_schema(PDO $db): void {
         created_by INT NULL,
         created_at DATETIME NULL
     ) DEFAULT CHARSET=utf8mb4 COMMENT='會議常用設定(主題/地點/時間組合)，套用後仍可自行修改'");
+
+    /* ── 會議通知單（2-GM-05-03，2026-09-29 使用者交辦）──────────────────────────────
+       刻意**不另開一張表**，而是掛在同一筆 meeting_record 上：通知單與會議記錄的表頭
+       （主題／日期／時間／地點／主席／記錄／出席人員）在紙本上是一模一樣的六欄，另建一張表
+       就等於要使用者把同一場會議的表頭輸入兩次，而且兩邊改了之後一定會對不起來（鐵律4）。
+       實務順序也剛好吻合：開會前先發通知單 → 開完會在同一筆補記錄內容，一路走完不必重打。
+       通知單有自己的狀態與簽核關卡（approval_record level='notice'），**與會議記錄的
+       status 完全獨立**——通知單簽完了，會議記錄本身還是草稿，這是正常狀態不是矛盾。 */
+    foreach ([
+        ['notice_status',       "VARCHAR(15) NULL COMMENT '會議通知單狀態：NULL/空=尚未建立, draft, submitted(待主席確認), done(主席已確認), rejected'"],
+        ['notice_items',        "TEXT NULL COMMENT '通知單的「會議要項」(自由文字，紙本是一格多行，例：請先詳讀 2-GM-05 管理審查管理程序)'"],
+        ['notice_depts',        "VARCHAR(200) NULL COMMENT '通知單的「應出席單位」department.id 逗號分隔(只存id，名稱一律即時查主檔)'"],
+        ['notice_submitted_at', "DATETIME NULL COMMENT '通知單送出(待主席確認)的時間'"],
+        ['notice_sent_at',      "DATETIME NULL COMMENT '最後一次把「會議通知」發給應出席人員的時間'"],
+    ] as [$col, $ddl]) {
+        try {
+            $c = (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='meeting_record' AND COLUMN_NAME='{$col}'")->fetchColumn();
+            if ($c === 0) $db->exec("ALTER TABLE meeting_record ADD COLUMN {$col} {$ddl}");
+        } catch (Throwable $e) {}
+    }
+    /* 通知單「應出席單位」預設值只種一次（使用者拍板：管理員可設定，預設＝紙本上那 9 個單位）。
+       一律以**部門主檔的名稱**查 id，不寫死 id（鐵律4）；紙本的「品保課」現在主檔叫「品管課」，
+       兩種寫法都認。種過之後管理員自己增減就是真的增減，不會被這段再蓋回去。 */
+    try {
+        $seededU = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='meeting_notice_units_seeded'")->fetchColumn();
+        if (!$seededU) {
+            $want = ['總經理室', '管理課', '業務課', '技術課', '品管課', '品保課', '生產課', '生管組', '採購組', '倉管組'];
+            $in = implode(',', array_fill(0, count($want), '?'));
+            $q = $db->prepare("SELECT id FROM department WHERE name IN ($in) ORDER BY sort_order, id");
+            $q->execute($want);
+            $ids = array_map('intval', $q->fetchAll(PDO::FETCH_COLUMN));
+            if ($ids) meeting_setting_save($db, 'meeting_notice_units', implode(',', $ids));
+            $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('meeting_notice_units_seeded','1')
+                          ON DUPLICATE KEY UPDATE setting_value='1'")->execute();
+        }
+    } catch (Throwable $e) {}
+    /* AS 文件綁定的初始值：通知單就是 2-GM-05-03，沒有第二種可能（頁面標題上本來就印著這個編號），
+       所以第一次啟用時直接綁好，省掉管理員一定會做的那一步；已經綁過(含刻意解除)就不再動它。 */
+    try {
+        if (!eg_asdoc_get($db, 'meeting_notice')) {
+            $seededD = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='meeting_notice_asdoc_seeded'")->fetchColumn();
+            if (!$seededD) {
+                $did = (int)$db->query("SELECT id FROM as_document WHERE doc_no='2-GM-05-03' LIMIT 1")->fetchColumn();
+                if ($did) eg_asdoc_save($db, 'meeting_notice', $did, 'system');
+                $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('meeting_notice_asdoc_seeded','1')
+                              ON DUPLICATE KEY UPDATE setting_value='1'")->execute();
+            }
+        }
+    } catch (Throwable $e) {}
 
     // 內建 3 個角色只在模組第一次啟用時種一次（比照 training_roles_seeded 的做法：種過之後管理員刪除就是真的刪除）
     try {
@@ -1096,4 +1147,233 @@ function meeting_preparer_candidates(PDO $db, int $meetingId): array {
     $out = [];
     foreach ($rows as $r) if ((int)$r['best_level'] === $maxLevel) $out[] = ['id'=>(int)$r['user_id'], 'name'=>$r['user_name']];
     return $out;
+}
+
+/* ============================================================
+ * 會議通知單（2-GM-05-03）
+ *
+ * 與會議記錄的關係：**同一筆 meeting_record**，只是多了 notice_* 幾個欄位與自己的簽核關卡
+ * （approval_record module='meeting' level='notice'）。表頭（主題／日期／時間／地點／主席／
+ * 記錄／出席人員）完全共用，所以要改表頭一律回會議記錄的編輯畫面改，通知單這邊唯讀顯示。
+ *
+ * 狀態機（notice_status，與 meeting_record.status 各走各的）：
+ *   NULL/''   尚未建立
+ *   draft     草稿（可改）
+ *   submitted 已送出，待主席確認簽章
+ *   rejected  主席退回（可改後重送）
+ *   done      主席已確認 → 這一刻才把「會議通知」發給應出席人員（使用者拍板的時機）
+ * ============================================================ */
+
+/** 通知單上要列出哪些「應出席單位」（管理員設定；留空＝部門主檔全部）。順序一律以部門主檔 sort_order 為準。 */
+function meeting_notice_units(PDO $db): array {
+    $ids = array_values(array_filter(array_map('intval', explode(',', meeting_setting_get($db, 'meeting_notice_units', '')))));
+    if ($ids) {
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $st = $db->prepare("SELECT id, name FROM department WHERE id IN ($in) ORDER BY sort_order, id");
+        $st->execute($ids);
+    } else {
+        $st = $db->query("SELECT id, name FROM department ORDER BY sort_order, id");
+    }
+    return array_map(fn($r) => ['id'=>(int)$r['id'], 'name'=>(string)$r['name']], $st->fetchAll(PDO::FETCH_ASSOC));
+}
+
+/** 儲存「應出席單位」設定：一律過部門主檔驗證，不存不存在的 id（鐵律8，前端擋一次這裡再擋一次）。 */
+function meeting_notice_units_save(PDO $db, array $ids): void {
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+    $ok = [];
+    if ($ids) {
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $st = $db->prepare("SELECT id FROM department WHERE id IN ($in) ORDER BY sort_order, id");
+        $st->execute($ids);
+        $ok = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    }
+    meeting_setting_save($db, 'meeting_notice_units', implode(',', $ok));
+}
+
+/** 這筆會議的通知單目前狀態（空值一律正規化成 'none'，前端只要判一種寫法） */
+function meeting_notice_state(array $m): string {
+    $s = trim((string)($m['notice_status'] ?? ''));
+    return $s === '' ? 'none' : $s;
+}
+
+/** 通知單是否可列印：建立人／管理員／已由主席確認(done) 才可印，比照 meeting_can_print 的理由——
+ *  草稿或待簽階段的內容還會變，印出去當正式通知會害現場依舊版時間地點赴會。 */
+function meeting_notice_can_print(int $uid, array $perms, array $m): bool {
+    if (meeting_notice_state($m) === 'none') return false;
+    if (!empty($perms['canAdmin'])) return true;
+    if ((int)$m['recorder_user_id'] === $uid) return true;
+    return meeting_notice_state($m) === 'done';
+}
+
+/** 通知單可不可以編輯（草稿／退回階段，記錄人本人或管理員）。**刻意不看 meeting_record.status**：
+ *  會議記錄早就簽核完成的舊場次，也要能補一張通知單上去（補歷史紙本）。 */
+function meeting_notice_can_edit(int $uid, array $perms, array $m): bool {
+    if (!in_array(meeting_notice_state($m), ['none', 'draft', 'rejected'], true)) return false;
+    return (int)$m['recorder_user_id'] === $uid || !empty($perms['canAdmin']);
+}
+
+/**
+ * 送出前的必填檢查（前端同一份規則先擋一次，這裡是鐵律8 的第二道）。
+ * 回傳缺少的欄位中文名陣列，空陣列＝可以送出。
+ */
+function meeting_notice_missing(PDO $db, array $m): array {
+    $miss = [];
+    if (trim((string)$m['subject']) === '')            $miss[] = '會議主題';
+    if (trim((string)$m['meeting_date']) === '')       $miss[] = '會議日期';
+    if (trim((string)($m['start_time'] ?? '')) === '') $miss[] = '會議時間';
+    if (trim((string)($m['location'] ?? '')) === '')   $miss[] = '會議地點';
+    if (!(int)($m['chair_user_id'] ?? 0))              $miss[] = '主席（請到會議紀錄編輯畫面的出席人員內指定）';
+    try {
+        $st = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=?");
+        $st->execute([(int)$m['meeting_id']]);
+        if ((int)$st->fetchColumn() === 0) $miss[] = '出席人員（請到會議紀錄編輯畫面加入）';
+    } catch (Throwable $e) {}
+    if (trim((string)($m['notice_depts'] ?? '')) === '') $miss[] = '應出席單位';
+    return $miss;
+}
+
+/** 通知單的「應出席單位」名稱（依部門主檔即時查，不存冗餘名稱；查不到的 id 直接略過） */
+function meeting_notice_dept_names(PDO $db, array $m): array {
+    $ids = array_values(array_filter(array_map('intval', explode(',', (string)($m['notice_depts'] ?? '')))));
+    if (!$ids) return [];
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    $st = $db->prepare("SELECT name FROM department WHERE id IN ($in) ORDER BY sort_order, id");
+    $st->execute($ids);
+    return array_map('strval', $st->fetchAll(PDO::FETCH_COLUMN));
+}
+
+/** 通知單內容摘要（待簽通知與會議通知共用同一份措辭，兩邊不會走鐘＝ai-rules/17 要求內容看得完整） */
+function meeting_notice_summary(PDO $db, array $m): string {
+    return '會議主題：' . (string)$m['subject'] . "\n"
+         . '日期時間：' . eg_fmt_date((string)$m['meeting_date']) . ' '
+           . (string)($m['start_time'] ?? '') . ((string)($m['end_time'] ?? '') !== '' ? '~' . (string)$m['end_time'] : '') . "\n"
+         . '地點：' . ((string)($m['location'] ?? '') ?: '—') . "\n"
+         . '主席：' . ((string)($m['chair_name'] ?? '') ?: '—') . '　記錄：' . ((string)($m['recorder_name'] ?? '') ?: '—') . "\n"
+         . '應出席單位：' . (implode('、', meeting_notice_dept_names($db, $m)) ?: '—') . "\n"
+         . '會議要項：' . (trim((string)($m['notice_items'] ?? '')) !== '' ? (string)$m['notice_items'] : '—');
+}
+
+/** 通知單待主席確認的通知（ref_type 刻意與會議記錄的 MEETING_APPROVAL 分開）：
+ *  兩者可能同時在等主席處理，共用同一個 ref_type 的話 meeting_notify() 的「關掉舊通知」
+ *  會把會議記錄那一則一起關掉，主席就永遠收不到其中一則。 */
+function meeting_notice_notify_chair(PDO $db, array $m, int $toUid, int $fromUid, bool $isResend = false): int {
+    if (!$toUid) return 0;
+    $mid = (int)$m['meeting_id'];
+    $title = '「' . (string)$m['subject'] . '」會議通知單待主席確認簽章';
+    $body  = ($isResend ? '（修改後重新送出）' : '')
+           . '會議通知單已送出，請確認內容並簽章。' . "\n"
+           . '※ 確認簽章後，系統才會把會議通知發給應出席人員。' . "\n\n"
+           . meeting_notice_summary($db, $m);
+    try {
+        meeting_notice_close_chair_notice($db, $mid);
+        $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                      VALUES (CURDATE(), NULL, ?, ?, 0, ?, '會議通知單簽核', 1, 'MEETING_NOTICE', ?)")
+           ->execute([$title, $body, $fromUid, $mid]);
+        $eid = (int)$db->lastInsertId();
+        $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'sign')")
+           ->execute([$eid, $toUid]);
+        try {
+            require_once __DIR__ . '/../push/push_send.php';
+            eg_push_send_to_users($db, eg_push_event_recipients($db, $eid), ['title'=>$title, 'body'=>mb_substr($body, 0, 480)]);
+        } catch (Throwable $e) {}
+        return $eid;
+    } catch (Throwable $e) { return 0; }
+}
+
+/** 關掉這筆會議「通知單待主席確認」還生效中的通知（換階段／撤回／已簽完都要關） */
+function meeting_notice_close_chair_notice(PDO $db, int $meetingId): void {
+    try {
+        $db->prepare("UPDATE live_event SET enddate=DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                      WHERE ref_type='MEETING_NOTICE' AND ref_id=? AND (enddate IS NULL OR enddate>=CURDATE())")
+           ->execute([$meetingId]);
+    } catch (Throwable $e) {}
+}
+
+/**
+ * 發「會議通知」給應出席人員（使用者拍板：**主席確認簽章之後**才發，不是送出當下）。
+ * 對象＝本次出席名單上的人——「應出席單位」只是紙本上的勾選欄，部門底下實際要來的是誰，
+ * 由記錄人在出席名單上指定，所以通知得到的一律是名單上的具體人員。
+ * 純資訊型通知（mode='read'）；內容要看得完整（ai-rules/17）。回傳通知到的人數。
+ */
+function meeting_notice_send_to_attendees(PDO $db, array $m, int $fromUid): int {
+    $mid = (int)$m['meeting_id'];
+    try {
+        $st = $db->prepare("SELECT user_id FROM meeting_attendee WHERE meeting_id=?");
+        $st->execute([$mid]);
+        $uids = array_values(array_unique(array_filter(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN)))));
+        if (!$uids) return 0;
+        $title = '【會議通知】' . eg_fmt_date((string)$m['meeting_date']) . ' ' . (string)$m['subject'];
+        $body  = '請於下列時間出席會議：' . "\n\n" . meeting_notice_summary($db, $m);
+        // 重新發送時先關掉上一則，否則鈴鐺上會累積好幾則同一場會議的通知
+        $db->prepare("UPDATE live_event SET enddate=DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                      WHERE ref_type='MEETING_NOTICE_INFO' AND ref_id=? AND (enddate IS NULL OR enddate>=CURDATE())")
+           ->execute([$mid]);
+        // 有效期到會議當天為止（會議過了還掛在鈴鐺上只是雜訊）；補歷史資料時會議日期已過，就只留今天
+        $end = ((string)$m['meeting_date'] >= date('Y-m-d')) ? (string)$m['meeting_date'] : date('Y-m-d');
+        $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                      VALUES (CURDATE(), ?, ?, ?, 0, ?, '會議通知單', 1, 'MEETING_NOTICE_INFO', ?)")
+           ->execute([$end, $title, $body, $fromUid, $mid]);
+        $eid = (int)$db->lastInsertId();
+        $ins = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'read')");
+        foreach ($uids as $u) $ins->execute([$eid, $u]);
+        try {
+            require_once __DIR__ . '/../push/push_send.php';
+            eg_push_send_to_users($db, eg_push_event_recipients($db, $eid), ['title'=>$title, 'body'=>mb_substr($body, 0, 480)]);
+        } catch (Throwable $e) {}
+        $db->prepare("UPDATE meeting_record SET notice_sent_at=NOW() WHERE meeting_id=?")->execute([$mid]);
+        return count($uids);
+    } catch (Throwable $e) { return 0; }
+}
+
+/**
+ * 超級管理員自動簽章的實際動作（密碼驗證留在 API 那一層，這裡只做事）。
+ * 抽成函式的理由有兩個：①API 那一格只剩「驗密碼 → 呼叫這支」，規則只有一份
+ * ②密碼是使用者自己設定的、測試時不該去動它，抽出來才能直接對真實資料驗證這段邏輯。
+ *
+ * 蓋出來的章一律是**主席本人**的（紙本上那一格就是主席的章，蓋超管的章會對不上紙本）；
+ * 簽章日期用指定的業務日期、時分秒沿用原值（ai-rules/21：業務日期與精確時間戳分離）。
+ * 回傳 ['ok'=>bool, 'msg'=>string, 'sent'=>int]。
+ */
+function meeting_notice_auto_sign(PDO $db, array $m, string $date, bool $notify, int $byUid): array {
+    $id = (int)$m['meeting_id'];
+    if (meeting_notice_state($m) === 'none') return ['ok'=>false, 'msg'=>'這筆會議還沒有建立通知單，請先建立並存檔', 'sent'=>0];
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) return ['ok'=>false, 'msg'=>'日期格式不正確', 'sent'=>0];
+    $miss = meeting_notice_missing($db, $m);
+    if ($miss) return ['ok'=>false, 'msg'=>'尚未填寫：' . implode('、', $miss), 'sent'=>0];
+    $signer = meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name']);
+    if (!$signer || !$signer['id']) return ['ok'=>false, 'msg'=>'解析不到主席，請先在會議紀錄的出席人員內指定主席', 'sent'=>0];
+    try {
+        $db->beginTransaction();
+        $rec = eg_approval_latest($db, 'meeting', $id, 'notice');
+        if (!$rec) {
+            eg_approval_submit($db, 'meeting', $id, 'notice', (int)$m['recorder_user_id'], (string)$m['recorder_name']);
+            $rec = eg_approval_latest($db, 'meeting', $id, 'notice');
+        }
+        if ($rec && $rec['status'] === 'pending') {
+            $r = eg_approval_decide($db, (int)$rec['id'], (int)$signer['id'], (string)$signer['name'], 'approved', null);
+            if (!$r['success']) throw new RuntimeException($r['message']);
+            $rec = eg_approval_latest($db, 'meeting', $id, 'notice');
+        }
+        if (!$rec || $rec['status'] !== 'approved') throw new RuntimeException('簽核紀錄狀態異常，無法自動簽章');
+        $db->prepare("UPDATE approval_record SET decided_at=CONCAT(?,' ',TIME(COALESCE(decided_at,NOW()))) WHERE id=?")
+           ->execute([$date, (int)$rec['id']]);
+        $db->prepare("UPDATE meeting_record SET notice_status='done',
+                        notice_submitted_at=COALESCE(notice_submitted_at, CONCAT(?,' ',TIME(NOW()))), updated_at=NOW()
+                      WHERE meeting_id=?")->execute([$date, $id]);
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['ok'=>false, 'msg'=>'自動簽章失敗：' . $e->getMessage(), 'sent'=>0];
+    }
+    meeting_notice_close_chair_notice($db, $id);
+    $sent = $notify ? meeting_notice_send_to_attendees($db, meeting_load_row($db, $id) ?: $m, $byUid) : 0;
+    return ['ok'=>true, 'msg'=>'', 'sent'=>$sent];
+}
+
+/** 讀一筆會議記錄表頭（查無回 null）。meeting_load() 在 API 內查無會直接 404 結束請求，
+ *  共用庫不可以那樣做（CLI 或其他呼叫端會被整個中斷），故另備這支不中斷的版本。 */
+function meeting_load_row(PDO $db, int $id): ?array {
+    $st = $db->prepare("SELECT * FROM meeting_record WHERE meeting_id=?");
+    $st->execute([$id]);
+    return $st->fetch(PDO::FETCH_ASSOC) ?: null;
 }
