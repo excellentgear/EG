@@ -150,10 +150,8 @@ function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
         case 'user':
             $uid = (int)($signer['user_id'] ?? 0);
             if (!$uid) return null;
-            $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
-            $st->execute([$uid]);
-            $r = $st->fetch(PDO::FETCH_ASSOC);
-            return $r ? ['id'=>(int)$r['id'], 'user_cname'=>$r['user_cname']] : null;
+            // 樣板指定的簽核人可能在補歷史文件的今天已經離職——當年他在職，這一關不可因此解析不到人
+            return fsd_filler_user($db, $uid, $bizDate);
         case 'dept_auto_manager':
             $deptId = (int)($signer['dept_id'] ?? 0);
             // 未指定部門→用填表人在「業務日期當時」所屬的部門（未選填表人才退回申請人）
@@ -193,21 +191,20 @@ function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
             if (!$supId && $mode === 'filler_supervisor' && !fsd_allow_resigned_at($bizDate))
                 $supId = fsd_upper_dept_manager($db, $baseUid);
             if (!$supId && $mode === 'filler_supervisor') {
-                $self = fsd_filler_user($db, $baseUid);
+                $self = fsd_filler_user($db, $baseUid, $bizDate);
                 return $self ? $self + ['self_top'=>true] : null;
             }
             if (!$supId) return null;
             // 補歷史文件時當年的主管可能已離職，仍要解析得到（fsd_usable_uids_at 已依業務日期決定放不放行）
-            return fsd_allow_resigned_at($bizDate) ? fsd_user_any($db, $supId) : fsd_filler_user($db, $supId);
+            return fsd_allow_resigned_at($bizDate) ? fsd_user_any($db, $supId) : fsd_filler_user($db, $supId, $bizDate);
         case 'top_approver':
             $u = eg_org_user($db, 'top_approver');
             return $u ? ['id'=>(int)$u['id'], 'user_cname'=>$u['user_cname']] : null;
         case 'filler':
             if (!$fillerUid) return null;
-            $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
-            $st->execute([$fillerUid]);
-            $r = $st->fetch(PDO::FETCH_ASSOC);
-            return $r ? ['id'=>(int)$r['id'], 'user_cname'=>$r['user_cname']] : ($fillerName !== '' ? ['id'=>$fillerUid, 'user_cname'=>$fillerName] : null);
+            // 補歷史文件時填表人可能已離職（當年在職）；真的查不到才退回案件存下來的姓名
+            $fu = fsd_filler_user($db, $fillerUid, $bizDate);
+            return $fu ?: ($fillerName !== '' ? ['id'=>$fillerUid, 'user_cname'=>$fillerName] : null);
         default:
             return null;
     }
@@ -1212,10 +1209,17 @@ function fsd_case_people_entries(PDO $db, int $uid, string $name, string $date,
     return $out;
 }
 
-/** 填表人候選：在職者（離職/特殊帳號不列）。回傳 ['id','user_cname'] 或 null。 */
-function fsd_filler_user(PDO $db, int $uid): ?array {
+/**
+ * 依 id 取人（填表人/指定簽核人），回傳 ['id','user_cname'] 或 null。
+ * **一定要帶業務日期**（ai-rules/22 第5坑）：補歷史文件時「當年在職、現已離職」的人也要取得到，
+ * 判定與前端候選清單（people_at → fsd_allow_resigned_at）完全同一套，否則會變成「下拉挑得到、
+ * 按儲存卻回『找不到此使用者或該使用者已離職』」——2026-09-29 使用者實測回報（葉卿雅 2026-09-15
+ * 離職，補她在職期間的舊表單被擋下）。$bizDate 留空＝今日口徑（離職者不可選），舊呼叫端行為不變。
+ */
+function fsd_filler_user(PDO $db, int $uid, string $bizDate = ''): ?array {
     if ($uid <= 0) return null;
-    $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
+    $excl = fsd_allow_resigned_at($bizDate) ? '(90)' : '(0,90)';
+    $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN $excl");
     $st->execute([$uid]);
     $r = $st->fetch(PDO::FETCH_ASSOC);
     return $r ? ['id'=>(int)$r['id'], 'user_cname'=>(string)$r['user_cname']] : null;
@@ -1293,8 +1297,9 @@ function fsd_case_set_filler(PDO $db, int $caseId, int $byUid, int $newFillerId,
     } elseif ($byUid !== 1) {
         return ['ok'=>false, 'msg'=>'案件已送出，僅超級管理員可回改填表人'];
     }
-    $u = fsd_filler_user($db, $newFillerId);
-    if (!$u) return ['ok'=>false, 'msg'=>'找不到此使用者或該使用者已離職'];
+    // 依「案件業務日期」判定，補歷史文件時當年在職、現已離職的人也設得進去（ai-rules/22 第5坑）
+    $u = fsd_filler_user($db, $newFillerId, (string)($case['business_date'] ?? ''));
+    if (!$u) return ['ok'=>false, 'msg'=>'找不到此使用者，或該使用者在本案件業務日期當時已不在職'];
     if ((int)($case['filler_id'] ?? 0) === (int)$u['id'] && (int)($case['filler_dept_id'] ?? 0) === $newFillerDeptId)
         return ['ok'=>true, 'filler_id'=>(int)$u['id'], 'filler_name'=>$u['user_cname'],
                 'filler_dept_id'=>$newFillerDeptId, 'stamps_changed'=>0];
@@ -1396,7 +1401,7 @@ function fsd_case_create_draft_doc(PDO $db, int $templateId, int $uid, string $u
     $bizDate = $bizDate ?: date('Y-m-d');
     // 填表人預設「未選定」（2026-08-19 使用者明確要求）：以前一律自動帶成建立者，管理員代建案件時
     // 填表人圖章就會印成管理員。未選定時存 NULL，要送出前才強制補選（有填表人圖章欄位的案件）。
-    $filler = $fillerId > 0 ? fsd_filler_user($db, $fillerId) : null;
+    $filler = $fillerId > 0 ? fsd_filler_user($db, $fillerId, $bizDate) : null;
     $db->beginTransaction();
     try {
         // 樣板沒開放連結 AS 文件就一律不存（避免前端亂送；開關是管理員在樣板設定的）
