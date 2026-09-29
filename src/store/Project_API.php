@@ -1840,8 +1840,12 @@ case 'print_meta':
         $signers[$sid]['main_dept'] = (string)($one[0]['main_dept_name'] ?? '');
         $signers[$sid]['main_post'] = (string)($one[0]['main_position_name'] ?? '');
     }
+    /* 圖章模板要把 schema 一起帶下去，不能只給 id——前端 EGStamp.stamp() 吃的是 schema。
+       使用者 2026-09-29 回報「印章大小沒有符合模板」，真因就是這裡只回 id、前端也沒拿去用，
+       管理員在「列印設定」挑的模板等於從來沒生效過，一律印成 eg_stamp.js 內建的 76px 預設章。 */
+    $tplId = (int)prj_setting_get($db, $module === PRJ_ASDOC_CARD ? 'card_stamp_tpl_id' : 'plan_stamp_tpl_id', '0');
     jout(['meta' => $meta, 'signers' => $signers,
-          'stamp_tpl_id' => (int)prj_setting_get($db, $module === PRJ_ASDOC_CARD ? 'card_stamp_tpl_id' : 'plan_stamp_tpl_id', '0')]);
+          'stamp_tpl_id' => $tplId, 'stamp_tpl' => prj_stamp_tpl($db, $tplId)]);
 
 /** CSV：條件送後端，對全部符合條件的資料組檔（不可只用前端這一頁算＝ai-rules/08） */
 case 'export_csv':

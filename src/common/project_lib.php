@@ -4214,6 +4214,27 @@ function prj_card_sign_defaults(PDO $db, array $prj, int $submitterId, string $s
     ];
 }
 
+/**
+ * 列印用的圖章模板（管理員在「列印設定」指定的那一份）。
+ * 只回 is_active=1 的；沒指定或已停用一律回 null＝退回系統預設回墨印（ai-rules/18 鐵則6 的 91px）。
+ * **讀取不卡管理員**（ai-rules/18 鐵則9）：卡了的話一般人列印永遠拿不到模板、只會拿到預設章，
+ * 而且畫面上完全看不出是這個原因。
+ */
+function prj_stamp_tpl(PDO $db, int $tplId): ?array
+{
+    if ($tplId <= 0) return null;
+    try {
+        $st = $db->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");
+        $st->execute([$tplId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) return null;
+        return ['id' => (int)$r['id'], 'tpl_name' => (string)$r['tpl_name'],
+                'schema' => json_decode((string)$r['schema_json'], true)];
+    } catch (Throwable $e) {
+        return null;
+    }
+}
+
 /** 某部門及其所有子部門的 id（組織是樹狀，只比單一 id 會把子部門的人判成「不是該部門」） */
 function prj_dept_tree_ids(PDO $db, int $rootId): array
 {

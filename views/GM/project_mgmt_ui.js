@@ -4679,14 +4679,20 @@ $(document).on('click', '#btnAsCard', function () { pickAsDoc('project_card', '#
      margin box 另加 vertical-align:middle 讓它落在留白帶中央（約 7mm），不要貼邊。
    ══════════════════════════════════════════════════════════════ */
 
-/* 圖章 HTML（掃描實體章是非同步載入的，要等 whenReady 才拿得到正確的章） */
-function stampHtml(name, date, isDeputy, dept, post) {
+/* 圖章 HTML（掃描實體章是非同步載入的，要等 whenReady 才拿得到正確的章）
+   `schema`＝管理員在「列印設定」指定的圖章模板（print_meta 的 stamp_tpl.schema）。
+   **不可以寫死 null**——寫死就等於模板永遠不生效、一律印 eg_stamp.js 內建的 76px 預設章，
+   使用者 2026-09-29 回報的「印章大小沒有符合模板」就是這個原因。
+   章的長相由 eg_stamp.js 決定（掃描實體章 > 模板章 > 預設回墨印），列印尺寸則看 svg 自己的
+   class（car-stamp／eg-stamp-tpl），不能用「有沒有傳模板」判斷——有實體章的人即使指定了模板，
+   回來的仍然是 car-stamp（stock.php 已驗證過的作法）。 */
+function stampHtml(name, date, isDeputy, dept, post, schema) {
     if (!name) return '';
     /* 圖章上的日期也要走 dispDate()（ai-rules/20：顯示一律 YYYY.MM.DD）——
        這裡很容易漏，漏了就會印成 2026-09-15，其他地方卻是 2026.09.15（既有模組踩過同一個坑） */
     var d = date ? dispDate(date) : '';
     try {
-        if (window.EGStamp && EGStamp.stamp) return EGStamp.stamp(name, d, !!isDeputy, null, dept || '', post || '');
+        if (window.EGStamp && EGStamp.stamp) return EGStamp.stamp(name, d, !!isDeputy, schema || null, dept || '', post || '');
     } catch (e) { /* 落到下面的純文字備援 */ }
     return '<div style="text-align:center;">' + esc(name) + '<br><span style="font-size:10px;">' + d + '</span></div>';
 }
@@ -4740,7 +4746,19 @@ function printBaseCss(opt) {
         +  'tr.gsep > td { border-top:0.8mm solid #000; background:#f7f0e2; }\n'
         +  '.gsep-no { color:#8a6d45; }\n'
         +  '.gsep-title { font-size:13pt; }\n'
-        +  '.gsep-meta { font-size:8pt; font-weight:normal; color:#5b3a1e; }\n';
+        +  '.gsep-meta { font-size:8pt; font-weight:normal; color:#5b3a1e; }\n'
+        /* 圖章尺寸（ai-rules/18 鐵則6）——**列印新視窗拿不到 eg_stamp.js 注入到原頁面的 CSS**，
+           所以這裡一定要自己寫齊，不能假設章會長得跟畫面上一樣（stock.php 記過的坑）。
+           規則看 svg 自己的 class，不是看「有沒有傳模板」：
+             ①掃描實體章／系統預設回墨印＝`car-stamp`，一律 91px（內建屬性是 76px，不蓋掉就會偏小）
+             ②模板章＝`eg-stamp-tpl`，用模板設計的實際尺寸，另用 height:auto 蓋掉 fillRatio 的
+               百分比高度（簽章格不是密集逐列表格，章不可以被壓縮） */
+        +  '.stamp-wrap { display:inline-block; text-align:center; margin:2px 0; }\n'
+        +  '.stamp-wrap .stamp-title { display:block; font-size:11px; color:#999; }\n'
+        +  '.stamp-wrap svg, .stamp-wrap img { -webkit-print-color-adjust:exact; print-color-adjust:exact; }\n'
+        +  '.stamp-wrap svg.car-stamp { width:91px; height:91px; }\n'
+        +  '.stamp-wrap.stamp-fill { height:auto !important; display:inline-block; }\n'
+        +  '.stamp-wrap.stamp-fill svg, .stamp-wrap.stamp-fill img { height:auto; width:auto; }\n';
     return css;
 }
 
@@ -5098,8 +5116,14 @@ function buildCardHtml(res, m) {
     // 管理卡是某一天的存照，狀態判定一律以這張卡的檢討日期為準，不是印出來那一刻的今天
     // （使用者 2026-09-23：起始日期超過檢討日期者一律顯示未開始）。
     var revDate = c.review_date || META.today;
+    /* 圖章面上的公司名稱來源（ai-rules/18 鐵則2）——**一定要在畫任何一顆章之前設定**。
+       使用者 2026-09-29 回報「公司名稱不見了」就是因為本頁從來沒設過這個全域變數：
+       eg_stamp.js 畫預設回墨印時取的是 `window.__ownCompany || ''`，沒設就是印出一顆沒有
+       外圈公司名的空章，畫面上完全看不出是漏設變數。與列印大標題同一個來源，不可寫死。 */
+    window.__ownCompany = m.meta.company || '';
     var css = printBaseCss({ landscape: true, docNo: m.meta.doc_no })
-      + '.sign td { border:1px solid #000; height:22mm; vertical-align:middle; text-align:center; }\n'
+      /* 簽章格要留得下整顆章（ai-rules/18 鐵則7：≥95px≈25mm），原本 22mm 會把章壓扁／撐破表格 */
+      + '.sign td { border:1px solid #000; height:26mm; vertical-align:middle; text-align:center; }\n'
       + '.sign .lb { width:8%; background:#f2f2f2; font-weight:bold; }\n'
       + '.meta { border:none; margin-bottom:2mm; font-size:10pt; }\n'
       + '.meta td { border:none; padding:0 2mm 1mm 0; }\n';
@@ -5175,7 +5199,7 @@ function buildCardHtml(res, m) {
     function sg(id, name, date) {
         if (!num(id) || !name) return '';
         var s = m.signers[id] || {};
-        return stampHtml(name, date, false, s.dept, s.post);
+        return stampHtml(name, date, false, s.dept, s.post, (m.stamp_tpl && m.stamp_tpl.schema) || null);
     }
     h += '<table class="sign" style="margin-top:3mm;"><tr>'
       + '<td class="lb">核准</td><td>' + sg(c.sign_approve_id, c.sign_approve_name, c.sign_approve_date) + '</td>'
