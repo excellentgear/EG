@@ -776,7 +776,13 @@ $('#btnPrint').on('click', function(){
   }, 700);
 });
 
-$(document).ready(function(){
+/* 側欄要等「共用選單那支 window.load 收合子選單」的邏輯先跑完才能顯示，不可以在 document.ready
+   就先顯示——document.ready（DOM 解析完）通常比 window.load（連圖片等資源都載完）早，本頁又載了
+   Highcharts 等較重的資源，兩個事件間的落差被拉長，會讓使用者看到「子選單還是展開的」那個中間畫面
+   （沒有側欄本身消失或閃爍，是「測試功能」那個子選單一度是展開的）。改成也掛在 window.load，
+   且本頁這段程式碼在 DOM 順序上排在 sideAndTopBarMenu.html 之後，同一個事件的多個監聽者按註冊
+   順序觸發，保證共用邏輯的收合動作一定先跑完，這裡才會顯示。 */
+$(window).on('load', function(){
     $('#sidebar-menu').css('visibility', 'visible');
 });
 </script>
