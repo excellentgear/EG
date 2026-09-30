@@ -269,6 +269,47 @@ $reqYear = isset($_GET['year']) ? max(2015, min($curYear + 3, (int)$_GET['year']
     </div>
 </div></div>
 
+<!-- ══════════ 更新頻率 / 負責課室（就地設定，寫入打 AS_Document_API 的 save_doc_freq）══════════ -->
+<div class="m-mask" id="freqMask"><div class="m-box" style="width:640px;">
+    <div class="m-head">更新頻率 / 負責課室<span class="x" onclick="closeMask('freqMask')"><i class="fa fa-times"></i></span></div>
+    <div class="m-body">
+        <div class="m-help" id="fqDocInfo"></div>
+        <div class="m-row"><label>更新頻率</label>
+            <select id="fqType" style="width:150px;">
+                <option value="">— 未設定 —</option>
+                <option value="irregular">不定時</option>
+                <option value="day">每 N 天</option>
+                <option value="week">每 N 週</option>
+                <option value="month">每 N 個月</option>
+                <option value="quarter">每 N 季</option>
+                <option value="year">每 N 年</option>
+            </select>
+            <input type="number" id="fqN" min="1" max="255" value="1" style="width:80px;" placeholder="數量">
+            <span class="as-mini" id="fqNHint"></span>
+        </div>
+        <div class="m-row" id="fqMonthRow"><label>起始月份</label>
+            <select id="fqMonth" style="width:110px;"><option value="">不指定</option></select>
+            <span class="as-mini" id="fqMonthHint"></span>
+        </div>
+        <div class="m-err" id="fqMonthErr" style="display:none;"></div>
+        <div class="m-row" id="fqNoteRow"><label>頻率備註</label>
+            <textarea id="fqNote" rows="2" style="width:400px;" placeholder="選「不定時」時必填：什麼情況下會更新"></textarea></div>
+        <div class="m-err" id="fqNoteErr" style="display:none;"></div>
+        <div style="margin:10px 0 4px;font-size:13px;color:#8A5A2B;font-weight:bold;">
+            負責課室（可複選）<span class="as-mini" style="font-weight:normal;">　決定提醒發給誰，也是年度排程表的分列依據</span></div>
+        <div class="chk-grid" id="fqDeptBox"></div>
+        <div class="m-help" style="margin-top:10px;">
+            <b>起始月份</b>只要選一個，系統會依頻率自動算出整年度的排程月份（例：每 6 個月選 1 月＝1 月與 7 月）。<br>
+            不指定月份時，系統會用<b>過去實際完成的月份</b>推估，畫面上會標「推估」；推不出來就顯示「月份未定」。<br>
+            <b>這裡改的就是 AS 文件管理「更新頻率 / 負責課室」的同一份設定</b>，兩邊改任一處都會立刻反映在排程上。
+        </div>
+    </div>
+    <div class="m-foot">
+        <button onclick="closeMask('freqMask')">取消</button>
+        <button class="b-ok" id="btnFreqSave">儲存</button>
+    </div>
+</div></div>
+
 <!-- ══════════ 提醒設定 ══════════ -->
 <div class="m-mask" id="setMask"><div class="m-box" style="width:560px;">
     <div class="m-head">提醒設定<span class="x" onclick="closeMask('setMask')"><i class="fa fa-times"></i></span></div>
@@ -346,7 +387,8 @@ $reqYear = isset($_GET['year']) ? max(2015, min($curYear + 3, (int)$_GET['year']
         <h4>三個一定要知道的判定規則</h4>
         <ul>
             <li><b>月份標「推估」的意思</b>：那份文件只登記了「一年一次」卻沒指定月份，系統是拿
-                <b>過去實際完成的月份</b>推出來的。要固定下來請到 AS 文件管理指定月份，標示就會變成「指定」。</li>
+                <b>過去實際完成的月份</b>推出來的。<b>點那個「推估 ✎」標籤就能當場指定固定月份</b>，
+                標示會變成不再有「推估」字樣（也可以到 AS 文件管理的「更新頻率 / 負責課室」改，兩邊是同一份設定）。</li>
             <li><b>「無法判定」不等於沒做</b>：系統查不到這份文件的任何完成紀錄（沒有對應模組、沒有紙本上傳、
                 沒有人工登記）。這種<b>一律不算逾期、也不發提醒</b>——系統不知道不代表沒做，硬報逾期只會讓提醒變成雜訊。
                 請用該列的「登記完成」把事實補進來。</li>
@@ -363,6 +405,22 @@ $reqYear = isset($_GET['year']) ? max(2015, min($curYear + 3, (int)$_GET['year']
             <li>該文件有對應的系統頁面時，跳窗裡會有「<b>開啟該模組</b>」直接跳過去做。</li>
             <li><b>列印年度排程表</b>：A3 橫式，給稽核時看的正式版面（不印篩選鈕與內部提示）。</li>
         </ul>
+
+        <h4>在這一頁直接設定更新頻率 / 負責課室</h4>
+        <p>排程算不算得出來，全看那份文件的「更新頻率」與「負責課室」有沒有設好。
+           以下三個地方都可以<b>當場點開設定</b>，不必換頁到 AS 文件管理：</p>
+        <ul>
+            <li>明細表「本期應完成」欄的「<b>推估 ✎</b>」或「<b>月份未定 ✎</b>」標籤</li>
+            <li>明細表「負責課室」欄的「<b>未設定 ✎</b>」標籤、以及操作欄的「<b>頻率設定</b>」</li>
+            <li>下方「設定缺口」區裡「沒設更新頻率」與「沒設負責課室」的每一份文件</li>
+        </ul>
+        <div class="tip"><b>起始月份只要選一個就好</b>——系統會依頻率自動算出整年度的排程月份
+            （例：每 6 個月選 1 月＝1 月與 7 月；每季選 2 月＝2、5、8、11 月），所以不會選出不合法的組合。
+            不指定月份時才會走「由過去完成紀錄推估」。</div>
+        <p><b>這裡改的就是 AS 文件管理「更新頻率 / 負責課室」的同一份設定</b>（同一個寫入點），
+           兩邊改任一處都會立刻反映在排程上，不會出現兩邊對不起來的情況。
+           權限也與那邊相同：<b>只有 AS 文件管理員</b>看得到這些入口（其他人連按鈕都不會出現，
+           就算直接呼叫也會被後端擋下）。</p>
 
         <h4>誰能登記完成</h4>
         <ul>
@@ -421,6 +479,9 @@ var COMPANY  = <?= json_encode($companyName) ?>;
 var CUR_YEAR = <?= (int)$reqYear ?>;
 var THIS_YEAR= <?= (int)$curYear ?>;
 var DATA = null, NTF = null, CUR_DONE = null;
+/* 能不能改「更新頻率／負責課室」——由後端用與 save_doc_freq 完全相同的判定回傳
+   （eg_asdoc_is_admin），不在前端自己猜，否則會出現「按鈕在、按下去被擋」 */
+var CAN_EDIT_FREQ = false;
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -453,6 +514,7 @@ function load(){
     $.getJSON(API, {action:'plan', year: CUR_YEAR, dept_ids: dept}, function(res){
         if (!res || !res.ok) return;
         DATA = res;
+        CAN_EDIT_FREQ = !!(res.perm && res.perm.edit_freq);
         buildDeptSel(res);
         renderKpis(); renderNote(); renderGrid(); renderTable(); renderRoutine(); renderGaps();
     });
@@ -579,13 +641,21 @@ function renderTable(){
           + '<th>本期應完成</th><th>上次完成</th><th>完成紀錄來源</th><th>操作</th></tr></thead><tbody>';
     rows.forEach(function(r){
         var due = r.due_date ? dispDate(r.due_date) : '<span class="as-mini">月份未定</span>';
-        if (r.due_date && r.month_src === 'infer') due += ' <span class="as-badge b-est">推估</span>';
+        // 「推估」與「月份未定」都是可以當場解決的——標成可點，直接開設定跳窗指定固定月份
+        if (r.due_date && r.month_src === 'infer')
+            due += CAN_EDIT_FREQ
+                 ? ' <span class="as-badge b-est b-freq" data-doc="'+r.doc_id+'" style="cursor:pointer;" title="點此指定固定月份">推估 ✎</span>'
+                 : ' <span class="as-badge b-est">推估</span>';
+        else if (!r.due_date && CAN_EDIT_FREQ)
+            due = '<span class="as-badge b-unknown b-freq" data-doc="'+r.doc_id+'" style="cursor:pointer;" title="點此設定月份">月份未定 ✎</span>';
         h += '<tr>'
           +  '<td><span class="as-badge b-'+r.state+'">'+esc(r.state_text)+'</span></td>'
           +  '<td style="white-space:nowrap;">'+esc(r.doc_no)+'</td>'
           +  '<td>'+esc(r.doc_name)+'</td>'
           +  '<td>'+((r.depts||[]).length ? esc(r.depts.map(function(d){return d.name;}).join('、'))
-                     : '<span class="as-badge b-unknown">未設定</span>')+'</td>'
+                     : (CAN_EDIT_FREQ
+                        ? '<span class="as-badge b-unknown b-freq" data-doc="'+r.doc_id+'" style="cursor:pointer;" title="點此設定負責課室">未設定 ✎</span>'
+                        : '<span class="as-badge b-unknown">未設定</span>'))+'</td>'
           +  '<td style="white-space:nowrap;">'+esc(r.freq_label)+'</td>'
           +  '<td style="white-space:nowrap;">'+due+'</td>'
           +  '<td style="white-space:nowrap;">'+(r.last_done ? dispDate(r.last_done) : '<span class="as-mini">查無紀錄</span>')+'</td>'
@@ -597,6 +667,7 @@ function renderTable(){
           +        'background:'+(r.done?'#E7F0E2':'#fff')+';color:#5b3a1e;cursor:pointer;">'
           +        (r.done ? '已登記' : '登記完成') + '</button>' : '')
           +    (r.page_url ? ' <a href="'+esc(r.page_url)+'" target="_blank" rel="noopener" class="as-mini">開啟模組</a>' : '')
+          +    (CAN_EDIT_FREQ ? ' <a href="javascript:void(0)" class="b-freq as-mini" data-doc="'+r.doc_id+'">頻率設定</a>' : '')
           +  '</td></tr>';
     });
     $('#tblBox').html(h + '</tbody></table>');
@@ -620,11 +691,14 @@ function renderRoutine(){
 
 function renderGaps(){
     var g = DATA.gaps || {};
+    // 前兩項是「在這裡就改得掉」的（改的是 AS 文件管理的同一份設定），直接讓每一列可點
     var defs = [
-        ['no_freq',  '沒設更新頻率',     '這些文件完全不會出現在排程裡。請到 AS 文件管理 → 該文件的 ⚙ →「更新頻率」設定。'],
-        ['no_dept',  '沒設負責課室',     '排程算得出來，但不知道要發給誰，所以不會發提醒。'],
-        ['no_source','系統查不到完成紀錄','需要人工登記完成，或請系統管理員把該模組接進來源登記表。'],
-        ['no_notify','課室沒設通知對象', '會退回該單位最高主管。建議在「通知對象」明確指定職位或人員。']
+        ['no_freq',  '沒設更新頻率',     CAN_EDIT_FREQ ? '這些文件完全不會出現在排程裡。點文件即可設定頻率。'
+                                                       : '這些文件完全不會出現在排程裡。請 AS 文件管理員到該文件的 ⚙ →「更新頻率」設定。', 1],
+        ['no_dept',  '沒設負責課室',     CAN_EDIT_FREQ ? '排程算得出來，但不知道要發給誰，所以不會發提醒。點文件即可設定。'
+                                                       : '排程算得出來，但不知道要發給誰，所以不會發提醒。', 1],
+        ['no_source','系統查不到完成紀錄','需要人工登記完成，或請系統管理員把該模組接進來源登記表。', 0],
+        ['no_notify','課室沒設通知對象', '會退回該單位最高主管。建議在「通知對象」明確指定職位或人員。', 0]
     ];
     var h = '', any = false;
     defs.forEach(function(d){
@@ -634,7 +708,10 @@ function renderGaps(){
         h += '<div class="as-gap"><h5>'+d[1]+'（'+list.length+'）</h5>'
           +  '<div class="as-mini" style="margin-bottom:4px;">'+d[2]+'</div><ul>';
         list.forEach(function(x){
-            h += '<li>'+esc(x.doc_no ? (x.doc_no + ' ' + x.doc_name) : x.dept_name)+'</li>';
+            var tx = esc(x.doc_no ? (x.doc_no + ' ' + x.doc_name) : x.dept_name);
+            h += '<li>' + (d[3] && CAN_EDIT_FREQ && x.doc_id
+                 ? '<a href="javascript:void(0)" class="b-freq" data-doc="'+x.doc_id+'" style="color:#b5762a;">'+tx+' ✎</a>'
+                 : tx) + '</li>';
         });
         h += '</ul></div>';
     });
@@ -670,6 +747,9 @@ function openDone(docId, pk){
 
 $(document).on('click', '.as-chip', function(){ openDone($(this).data('doc'), $(this).data('pk')); });
 $(document).on('click', '.b-mark',  function(){ openDone($(this).data('doc'), $(this).data('pk')); });
+// 頻率設定的入口有好幾處（推估籤／月份未定／未設負責課室／缺口清單／操作欄），
+// 一律走事件委派＝重繪後的列也涵蓋，不必逐處綁定
+$(document).on('click', '.b-freq', function(e){ e.stopPropagation(); openFreq($(this).data('doc')); });
 
 $('#btnDoneSave').on('click', function(){
     if (!CUR_DONE) return;
@@ -691,6 +771,114 @@ $('#btnUnmark').on('click', function(){
     if (!confirm('確定要取消「'+CUR_DONE.doc_no+'」這一期的完成登記嗎？\n取消後這一期會重新依到期日判定是否逾期。')) return;
     $.post(API, {action:'unmark_done', csrf:CSRF, doc_id:CUR_DONE.doc_id, period_key:CUR_DONE.period_key},
       function(res){ if (res && res.ok) { closeMask('doneMask'); toast(res.msg||'已取消登記'); load(); } }, 'json');
+});
+
+/* ────────────────── 更新頻率 / 負責課室（就地設定） ──────────────────
+   寫入打的是 AS_Document_API 的 save_doc_freq（唯一寫入點），本頁不自己存。 */
+var FQ_DOC = null, FQ_DEPTS = [];
+
+/** 這個頻率一年要排幾個月、彼此間隔幾個月。
+ *  ★與後端 asFreqMonthPlan()（asdoc_lib.php，唯一實作）是同一套規則。
+ *  本頁刻意做成「只選起始月份、其餘自動補齊」而不是自由複選——算出來的組合一定合法，
+ *  使用者不可能選出「每 6 個月卻挑了 3、8 月」這種要被擋下的組合。 */
+function fqMonthPlan(type, n){
+    n = parseInt(n,10) || 1; if (n < 1) n = 1;
+    if (type === 'year')    return {slots:1, interval:12*n};
+    var m;
+    if (type === 'quarter') m = n*3;
+    else if (type === 'month') m = n;
+    else return null;                      // 天／週／不定時／未設定：沒有月份可談
+    if (m <= 1)  return null;              // 每月＝每個月都要做
+    if (m >= 12) return {slots:1, interval:m};
+    if (12 % m === 0) return {slots:12/m, interval:m};
+    return {slots:1, interval:m};
+}
+/** 由起始月份補齊整年度的排程月份 */
+function fqMonthsFrom(type, n, start){
+    var plan = fqMonthPlan(type, n);
+    start = parseInt(start,10);
+    if (!plan || !start) return [];
+    var out = [start];
+    for (var i=1; i<plan.slots; i++) out.push(((start - 1 + plan.interval*i) % 12) + 1);
+    out.sort(function(a,b){ return a-b; });
+    return out;
+}
+function fqSyncUI(){
+    var t = $('#fqType').val(), n = $('#fqN').val();
+    var isIrr = (t === 'irregular'), none = (t === '');
+    $('#fqN').prop('disabled', isIrr || none).closest('.m-row').find('#fqNHint')
+        .text(none ? '' : (isIrr ? '（不定時沒有數量）' : ''));
+    var plan = fqMonthPlan(t, n);
+    $('#fqMonthRow').toggle(!!plan);
+    $('#fqNoteRow').find('label').html(isIrr ? '頻率備註 <span style="color:#DD5138;">*</span>' : '頻率備註');
+    if (plan) {
+        var ms = fqMonthsFrom(t, n, $('#fqMonth').val());
+        $('#fqMonthHint').text(ms.length
+            ? ('本年度排程月份：' + ms.map(function(m){ return m + ' 月'; }).join('、')
+               + (plan.slots > 1 ? ('（每 ' + plan.interval + ' 個月一次）') : ''))
+            : '不指定＝由過去實際完成的月份推估');
+    }
+}
+
+function openFreq(docId){
+    $.getJSON(API, {action:'doc_freq_get', doc_id:docId}, function(res){
+        if (!res || !res.ok) return;
+        if (!res.can_edit) { toast('只有 AS 文件管理員可以設定更新頻率與負責課室', true); return; }
+        FQ_DOC = res.doc; FQ_DEPTS = res.depts || [];
+        $('#fqDocInfo').html('<b>' + esc(res.doc.doc_no) + ' ' + esc(res.doc.doc_name) + '</b>');
+        $('#fqType').val(res.doc.freq_type || '');
+        $('#fqN').val(res.doc.freq_n || 1);
+        $('#fqNote').val(res.doc.freq_note || '');
+        // 月份下拉
+        var mh = '<option value="">不指定</option>';
+        for (var m=1; m<=12; m++) mh += '<option value="'+m+'">'+m+' 月</option>';
+        $('#fqMonth').html(mh);
+        var cur = String(res.doc.freq_months || '').split(',').map(function(v){ return parseInt(v,10); })
+                      .filter(function(v){ return v>=1 && v<=12; }).sort(function(a,b){ return a-b; });
+        $('#fqMonth').val(cur.length ? cur[0] : '');
+        // 負責課室
+        var own = res.owner_dept_ids || [];
+        var dh = '';
+        FQ_DEPTS.forEach(function(d){
+            dh += '<label><input type="checkbox" class="fq-dept" value="'+d.id+'"'
+               +  (own.indexOf(d.id) >= 0 ? ' checked' : '')+'> '+esc(d.name)+'</label>';
+        });
+        $('#fqDeptBox').html(dh || '<div class="as-mini">沒有部門資料</div>');
+        $('#fqMonthErr,#fqNoteErr').hide();
+        fqSyncUI();
+        openMask('freqMask');
+    });
+}
+$('#fqType,#fqN,#fqMonth').on('change input', fqSyncUI);
+
+$('#btnFreqSave').on('click', function(){
+    if (!FQ_DOC) return;
+    var t = $('#fqType').val(), n = $('#fqN').val() || '1';
+    // 前端即時驗證（後端 asFreqValidate() 有同一套規則再擋一次＝鐵律8）
+    if (t === 'irregular' && !$('#fqNote').val().trim()) {
+        $('#fqNoteErr').text('選「不定時」時，頻率備註為必填（請說明什麼情況下會更新）').show(); return;
+    }
+    $('#fqNoteErr').hide();
+    if (t !== '' && t !== 'irregular' && (parseInt(n,10) < 1 || parseInt(n,10) > 255)) {
+        $('#fqMonthErr').text('更新頻率的數量請填 1~255 的整數').show(); return;
+    }
+    $('#fqMonthErr').hide();
+    var ms = fqMonthsFrom(t, n, $('#fqMonth').val());
+    var depts = $('#fqDeptBox .fq-dept:checked').map(function(){ return this.value; }).get();
+    // ★寫入打 AS_Document_API 的 save_doc_freq（唯一寫入點），不是本頁的 API
+    $.post('../../src/store/AS_Document_API.php?action=save_doc_freq', {
+        ids: FQ_DOC.id,
+        freq_type: t,
+        freq_n: (t === '' || t === 'irregular') ? '' : n,
+        freq_months: ms.join(','),
+        freq_note: $('#fqNote').val() || '',
+        owner_dept_ids: depts.join(',')
+    }, function(r){
+        if (!r || r.status !== 'success') { toast((r && r.message) || '儲存失敗', true); return; }
+        closeMask('freqMask');
+        toast('已更新「' + FQ_DOC.doc_no + '」的更新頻率 / 負責課室');
+        load();
+    }, 'json');
 });
 
 /* ────────────────── 提醒設定 ────────────────── */

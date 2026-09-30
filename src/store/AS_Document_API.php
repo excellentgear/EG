@@ -72,9 +72,12 @@ function asCan(string $what): bool {
 function jout($arr){ echo json_encode($arr, JSON_UNESCAPED_UNICODE); exit; }
 
 /** 管理員（as_doc 管理者角色或頁面 A 權）——廢止文件的操作與檔案存取都以這個為界 */
+/* 判定規則收斂進 asdoc_lib.php 的 eg_asdoc_is_admin_with()（唯一實作，2026-09-30）——
+   AS 文件排程頁要判同一件事（誰能改更新頻率），兩邊各寫一次會出現
+   「前端顯示按鈕、後端擋下」（違反鐵律8）。這裡仍用 request 內已算好的全域變數，不多查 DB。 */
 function asIsAdmin(): bool {
     global $asIsRoleAdmin, $asPagePerm;
-    return $asIsRoleAdmin || strpos($asPagePerm, 'A') !== false;
+    return eg_asdoc_is_admin_with((bool)$asIsRoleAdmin, (string)$asPagePerm);
 }
 /**
  * 版本檔案「雙版本」解析（使用者要求 2026-08-19）：
@@ -1164,7 +1167,14 @@ case 'save_doc_freq':
         jout(['status'=>'error','message'=>'指定月份只能填 1~12 的月份數字']);
     if ($fqErr = asFreqValidate($fqType, $fqN, $fqNote, $fqMonths)) jout(['status'=>'error','message'=>$fqErr]);
 
-    $ownerDs = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)($_POST['owner_dept_ids'] ?? ''))), fn($v)=>$v>0)));
+    /* 負責課室：**「沒送這個欄位」與「送了空字串」是兩回事**（本專案反覆踩過的坑）。
+       送空字串＝使用者在畫面上刻意取消全部負責課室（AS 文件管理的 confirm 訊息寫著
+       「不指定（清空）」），要照做；**沒送＝呼叫端只想改更新頻率，不可以把負責課室洗掉**。
+       原本一律當成空陣列，AS 文件排程頁只改月份就會把負責課室整個清空而且不報錯。 */
+    $ownerGiven = array_key_exists('owner_dept_ids', $_POST);
+    $ownerDs = $ownerGiven
+        ? array_values(array_unique(array_filter(array_map('intval', explode(',', (string)$_POST['owner_dept_ids'])), fn($v)=>$v>0)))
+        : [];
 
     // 只認真實存在的文件，避免直打 API 塞不存在的 id
     $ph = implode(',', array_fill(0, count($ids), '?'));
@@ -1183,7 +1193,7 @@ case 'save_doc_freq':
         $up = $db->prepare("UPDATE as_document SET freq_type=?, freq_n=?, freq_note=?, freq_months=?, updated_at=NOW() WHERE id=?");
         foreach ($ids as $did) {
             $up->execute([$t, $n, $s, $mo, $did]);
-            asSaveOwnerDepts($db, $did, $ownerDs);
+            if ($ownerGiven) asSaveOwnerDepts($db, $did, $ownerDs);   // 沒送就不動（見上方說明）
         }
         $db->commit();
     } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }

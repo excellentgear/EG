@@ -208,6 +208,25 @@ function eg_asdoc_can_with(array $features, bool $isRoleAdmin, string $pagePerm,
     return in_array('asdoc_' . $what, $features, true);
 }
 
+/**
+ * 「AS 文件管理員」判定的唯一實作（＝A 級權限或角色管理員）。
+ * AS_Document_API.php 的 asIsAdmin() 轉呼叫這一支，別的模組要判同一件事請用下面的
+ * eg_asdoc_is_admin()——兩邊各寫一次的話，會出現「前端顯示按鈕、後端擋下」（違反鐵律8）。
+ * 更新頻率／負責課室（save_doc_freq）與文件備註都是用這條判定。
+ */
+function eg_asdoc_is_admin_with(bool $isRoleAdmin, string $pagePerm): bool {
+    return $isRoleAdmin || strpos($pagePerm, 'A') !== false;
+}
+
+/** 由 user id 判斷是不是 AS 文件管理員（給 AS 文件管理以外的模組用，例如 AS 文件排程） */
+function eg_asdoc_is_admin(PDO $db, int $uid): bool {
+    if ($uid <= 0) return false;
+    require_once __DIR__ . '/role_features_helper.php';
+    try { $features = rf_load_user_features_override($db, $uid, 'as_doc'); }
+    catch (Throwable $e) { $features = []; }
+    return eg_asdoc_is_admin_with(in_array('all', $features, true), eg_asdoc_page_perm($db, $uid));
+}
+
 /** 由 user id 直接判斷 AS 文件管理的某項能力（view/create/update/delete/settings/…）。 */
 function eg_asdoc_user_can(PDO $db, int $uid, string $what): bool {
     if ($uid <= 0) return false;

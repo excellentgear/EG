@@ -100,7 +100,11 @@ try {
             'summary' => asched_summary($plan),
             'gaps'    => asched_gaps($db, $year, $plan),
             'settings'=> $plan['settings'],
-            'perm'    => ['admin'=>$P['canAdmin'], 'view'=>$P['canView'], 'label'=>asched_role_label($P)],
+            /* edit_freq＝能不能改「更新頻率／負責課室」。**一定要用與 save_doc_freq 完全相同的
+               判定**（eg_asdoc_is_admin，唯一實作），否則會出現「前端顯示按鈕、後端擋下」。
+               那是 AS 文件管理的權責，不因為是 AS 排程管理員就放寬。 */
+            'perm'    => ['admin'=>$P['canAdmin'], 'view'=>$P['canView'], 'label'=>asched_role_label($P),
+                          'edit_freq'=>eg_asdoc_is_admin($db, $uid)],
         ]);
     }
 
@@ -176,6 +180,41 @@ try {
         }
         asched_unmark_done($db, $docId, $pk);
         jout(['msg' => '已取消登記']);
+    }
+
+    /* ─────────────── 更新頻率／負責課室（在排程頁就地設定）───────────────
+       使用者回報：排程頁指出「月份是推估的」「沒設頻率」，卻要換頁到 AS 文件管理才能改。
+       ★這裡**只負責讀**與提供候選清單；**寫入一律打 AS_Document_API 的 save_doc_freq**
+         （那是唯一寫入點，驗證走 asFreqValidate）。在這裡另寫一支存檔＝兩個寫入點，
+         規則遲早走鐘（鐵律4）。 */
+    case 'doc_freq_get': {
+        $docId = (int)($_GET['doc_id'] ?? 0);
+        if ($docId <= 0) jerr('請指定文件');
+        $st = $db->prepare("SELECT id, doc_no, doc_name, freq_type, freq_n, freq_note, freq_months
+                            FROM as_document WHERE id=? AND is_deleted=0");
+        $st->execute([$docId]);
+        $doc = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$doc) jerr('文件不存在', 404);
+
+        $own = [];
+        try {
+            $q = $db->prepare("SELECT department_id FROM as_doc_owner_dept WHERE doc_id=?");
+            $q->execute([$docId]);
+            $own = array_map('intval', $q->fetchAll(PDO::FETCH_COLUMN));
+        } catch (Throwable $e) {}
+
+        // 負責課室的候選＝全部部門（與 AS 文件管理那個跳窗一致，不是只有「有週期文件」的）
+        $depts = [];
+        try {
+            foreach ($db->query("SELECT id, name, level FROM department ORDER BY sort_order, level, id")
+                        ->fetchAll(PDO::FETCH_ASSOC) as $d) {
+                $depts[] = ['id'=>(int)$d['id'], 'name'=>(string)$d['name'], 'level'=>(int)$d['level']];
+            }
+        } catch (Throwable $e) {}
+
+        jout(['doc'=>$doc, 'owner_dept_ids'=>$own, 'depts'=>$depts,
+              'can_edit'=>eg_asdoc_is_admin($db, $uid),
+              'save_url'=>'../../src/store/AS_Document_API.php?action=save_doc_freq']);
     }
 
     /* ─────────────── 設定 ─────────────── */

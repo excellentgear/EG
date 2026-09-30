@@ -545,11 +545,13 @@ function asched_gaps(PDO $db, int $year, ?array $plan = null): array {
     asched_ensure($db);
     $out = ['no_freq' => [], 'no_dept' => [], 'no_source' => [], 'no_notify' => []];
 
+    // doc_id 一定要帶：缺口清單上的文件要能直接點開「更新頻率／負責課室」就地設定
     foreach (asched_docs($db, true) as $d) {
         $t = (string)($d['freq_type'] ?? '');
-        if ($t === '') { $out['no_freq'][] = ['doc_no' => $d['doc_no'], 'doc_name' => $d['doc_name']]; continue; }
+        $ref = ['doc_id' => (int)$d['id'], 'doc_no' => $d['doc_no'], 'doc_name' => $d['doc_name']];
+        if ($t === '') { $out['no_freq'][] = $ref; continue; }
         if (!asched_is_calendar_freq($t)) continue;
-        if (!$d['depts']) $out['no_dept'][] = ['doc_no' => $d['doc_no'], 'doc_name' => $d['doc_name']];
+        if (!$d['depts']) $out['no_dept'][] = $ref;
     }
 
     if ($plan === null) $plan = asched_plan($db, $year);
@@ -557,7 +559,7 @@ function asched_gaps(PDO $db, int $year, ?array $plan = null): array {
     foreach ($plan['rows'] as $r) {
         if ($r['src_kind'] === 'none' && !isset($seen[$r['doc_no']])) {
             $seen[$r['doc_no']] = 1;
-            $out['no_source'][] = ['doc_no' => $r['doc_no'], 'doc_name' => $r['doc_name']];
+            $out['no_source'][] = ['doc_id' => (int)$r['doc_id'], 'doc_no' => $r['doc_no'], 'doc_name' => $r['doc_name']];
         }
     }
 
