@@ -78,6 +78,40 @@ function ss_scope_has_machines(string $scope): bool
 }
 
 /**
+ * 版式（唯一登記處）。**與「版面 kind」是兩回事**：kind 決定這是哪一份 AS 文件，
+ * 版式只決定同一份 AS 文件要印成哪一種版型。
+ *   std ＝ 既有的「項次／參考圖示／操作步驟／說明」逐步驟版型
+ *   gsop＝ 紙本「標 準 作 業 流 程 S O P」：左邊圖面＋檢驗項目、右邊軟體步驟＋硬體步驟
+ * 使用者 2026-09-30 拍板併進製造製程說明書（3-TD-02-02）底下，不另開第四種版面
+ * ——AS 文件編號本來就涵蓋得了，另開一種還要新建四階文件、新角色碼、新權限區塊。
+ */
+function ss_layouts(): array
+{
+    return ['std' => '一般版式', 'gsop' => '標準作業流程 SOP'];
+}
+
+/** 這個版面允許哪些版式（唯一判定處，前端與後端都吃它） */
+function ss_layout_allowed(string $kind): array
+{
+    return $kind === 'process' ? ['std', 'gsop'] : ['std'];
+}
+
+/** 這份文件實際用哪一種版式（不合法或舊資料一律回 std，既有文件因此完全不受影響） */
+function ss_layout_of(array $doc): string
+{
+    $l = trim((string)($doc['layout'] ?? ''));
+    $kind = (string)($doc['kind'] ?? '');
+    if (!isset(ss_layouts()[$l])) return 'std';
+    return in_array($l, ss_layout_allowed($kind), true) ? $l : 'std';
+}
+
+/** 步驟分段（唯一登記處）。空字串＝既有的一般步驟，不在這份清單裡。 */
+function ss_sects(): array
+{
+    return ['soft' => '軟體步驟', 'hard' => '硬體步驟'];
+}
+
+/**
  * 簽核關卡（唯一登記處）。陣列順序就是必須依序完成的順序。
  * maker＝製表（填表人本人，送出當下即成立），review＝審核，approve＝核准。
  */
@@ -304,6 +338,38 @@ function ss_ensure_schema(PDO $db): void
         ss_ensure_col($db, 'ss_item_tpl', 'input_kind', "VARCHAR(16) NULL COMMENT '品質特性輸入方式'");
         // 同一個料號＋製程＋機台底下可以再分「型式」（有隆齒／無隆齒…），使用者 2026-09-23 指定最多三種
         ss_ensure_col($db, 'ss_doc', 'variant', "VARCHAR(60) NULL COMMENT '型式（同料號同製程同機台底下的分版，最多三種）'");
+
+        /* ── 2026-09-30：標準作業流程 SOP（紙本 as-sop 那一批 xlsx）──
+           使用者拍板併進「製造製程說明書 3-TD-02-02」底下當成一種版式，不另開第四種版面，
+           所以既有 14 份製程說明書一行都不必動（layout 預設 'std' 就是它們現在的樣子）。 */
+        ss_ensure_col($db, 'ss_doc', 'layout',
+            "VARCHAR(10) NOT NULL DEFAULT 'std' COMMENT '版式 std=一般／gsop=標準作業流程SOP（見 ss_layouts）'");
+        /* 步驟分成「軟體步驟」與「硬體步驟」兩段（紙本右半邊就是這兩塊）。
+           空字串＝既有的一般操作步驟，所以舊資料不受影響。 */
+        ss_ensure_col($db, 'ss_step', 'sect',
+            "VARCHAR(8) NOT NULL DEFAULT '' COMMENT '空=一般步驟／soft=軟體步驟／hard=硬體步驟'");
+        /* 軟體步驟的「要點」在紙本上是一格一格的參數（模數 4.5／螺旋角 0／跨齒厚 …），
+           一列最多三組，所以存成 [[[k,v],[k,v],[k,v]], …]。硬體步驟不用這一欄，走 step_text。 */
+        ss_ensure_col($db, 'ss_step', 'kv_json',
+            "TEXT NULL COMMENT '軟體步驟的參數格 [[[鍵,值],…],…]，一列最多三組'");
+
+        /* 機種步驟範本：硬體步驟與軟體步驟的項目**本來就隨機種不同**
+           （更換砂輪的要點 KX500 與 LHG-3040 完全不一樣；KAPP 的軟體步驟連項目名稱都不同），
+           所以逐機種維護一套範本，建立文件選了機台就自動帶入、之後仍可逐份修改。
+           **鍵是「機種型號」不是「機台」**——臥式A 3040 與臥式B 3040 同型號本來就共用同一套。 */
+        if (empty($have['ss_msop_tpl'])) $db->exec("CREATE TABLE ss_msop_tpl (
+            tpl_id INT AUTO_INCREMENT PRIMARY KEY,
+            machine_model VARCHAR(120) NOT NULL COMMENT '機種型號，對 machine_list.machine_model',
+            sect VARCHAR(8) NOT NULL COMMENT 'soft／hard',
+            seq INT NOT NULL DEFAULT 1,
+            step_name VARCHAR(120) NOT NULL DEFAULT '' COMMENT '項目名稱，例 工件規格／更換砂輪',
+            kv_json TEXT NULL COMMENT 'soft：參數格的鍵（值留空給現場填）',
+            step_text TEXT NULL COMMENT 'hard：要點',
+            note TEXT NULL COMMENT '備註',
+            is_active TINYINT NOT NULL DEFAULT 1,
+            modified_at DATETIME NULL, modified_by INT NULL,
+            INDEX idx_model (machine_model, sect, seq)
+        ) DEFAULT CHARSET=utf8mb4 COMMENT='標準作業流程SOP 的機種步驟範本'");
     } catch (Throwable $e) { /* 交給呼叫端失敗得明確一點 */ }
 }
 
@@ -690,7 +756,10 @@ function ss_ver_full(PDO $db, int $verId): ?array
     if (!$d) return null;
     $kind  = (string)$d['kind'];
     $docId = (int)$d['doc_id'];
-    $items = $kind === 'sip' ? ss_item_rows($db, $verId) : [];
+    /* 標準作業流程SOP（gsop）的紙本左半邊就是檢驗項目表，所以它也要算 items
+       ——只認 kind==='sip' 的話那張表會整片空白而且不報錯。 */
+    $layout = ss_layout_of($d);
+    $items = ($kind === 'sip' || $layout === 'gsop') ? ss_item_rows($db, $verId) : [];
     // 擔當者顯示文字一律由部門 id 重算（管理員改了別名，既有文件跟著改，不會留著舊字）
     foreach ($items as &$it) {
         $it['owner_label'] = ss_owner_label($db, (int)($it['owner_dept_id'] ?? 0), (string)($it['owner'] ?? ''));
@@ -708,7 +777,12 @@ function ss_ver_full(PDO $db, int $verId): ?array
         'doc'   => $d,
         'ver'   => $v,
         'kind'  => $kind,
+        'layout' => $layout,
         'steps' => $kind === 'sip' ? [] : ss_step_rows($db, $verId),
+        // gsop 的軟／硬體步驟；一般版式用不到，但一律算好，畫面與列印才不必各自再分一次
+        'sects' => $layout === 'gsop' ? ss_steps_by_sect($db, $verId) : null,
+        // 發行日期一律即時由所選圖面的發行章日期推導（ai-rules/15），不存第二份
+        'issue' => ss_issue_date($db, $v),
         'items' => $items,
         'signs' => ss_sign_map($db, $verId),
         'files' => ss_file_rows($db, $docId, $verId),
@@ -991,6 +1065,13 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
              : trim((string)($old['variant'] ?? ''));
     if (mb_strlen($variant) > 30) throw new RuntimeException('型式請在 30 字以內');
 
+    /* 版式：沒送＝舊的呼叫端，維持原值（新文件預設 std，所以既有行為完全不變）。
+       這個版面不支援的版式一律退回 std（鐵律8：前端擋過了，這裡用同一支再判一次）。 */
+    $layout = array_key_exists('layout', $in)
+            ? trim((string)$in['layout'])
+            : trim((string)($old['layout'] ?? 'std'));
+    if (!in_array($layout, ss_layout_allowed($kind), true)) $layout = 'std';
+
     // 文件名稱自動產生，但使用者自己打過就以他打的為準
     $title = trim((string)($in['title'] ?? ''));
     if ($title === '') {
@@ -1050,18 +1131,18 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
     if ($docId > 0) {
         if (!$old) throw new RuntimeException('找不到這份文件');
         $st = $db->prepare("UPDATE ss_doc SET scope=?, machine_id=?, machine_model=?, tool_id=?, part_d_id=?, part_no_text=?,
-                                title=?, process_no=?, proc_name=?, customer_id=?, customer_name=?, variant=?,
+                                title=?, process_no=?, proc_name=?, customer_id=?, customer_name=?, variant=?, layout=?,
                                 modified_at=NOW(), modified_by=? WHERE doc_id=?");
         $st->execute([$scope, $machineId ?: null, $model ?: null, $toolId ?: null, $partDId ?: null, $partNo, $title,
-                      $procNo ?: null, $procNm, $cusId, $cusNm, $variant !== '' ? $variant : null, $uid, $docId]);
+                      $procNo ?: null, $procNm, $cusId, $cusNm, $variant !== '' ? $variant : null, $layout, $uid, $docId]);
         if (ss_scope_has_machines($scope) && array_key_exists('machine_ids', $in)) ss_doc_machines_set($db, $docId, $machineIds, $asof);
         return $docId;
     }
     $st = $db->prepare("INSERT INTO ss_doc (kind, scope, machine_id, machine_model, tool_id, part_d_id, part_no_text, title,
-                            process_no, proc_name, customer_id, customer_name, variant, created_at, created_by, created_by_name)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?)");
+                            process_no, proc_name, customer_id, customer_name, variant, layout, created_at, created_by, created_by_name)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?)");
     $st->execute([$kind, $scope, $machineId ?: null, $model ?: null, $toolId ?: null, $partDId ?: null, $partNo, $title,
-                  $procNo ?: null, $procNm, $cusId, $cusNm, $variant !== '' ? $variant : null, $uid, $uname]);
+                  $procNo ?: null, $procNm, $cusId, $cusNm, $variant !== '' ? $variant : null, $layout, $uid, $uname]);
     $newId = (int)$db->lastInsertId();
     if (ss_scope_has_machines($scope)) ss_doc_machines_set($db, $newId, $machineIds, $asof);
     return $newId;
@@ -1169,8 +1250,11 @@ function ss_ver_clone(PDO $db, int $fromVerId, array $in, int $uid): int
     $newId = (int)$db->lastInsertId();
 
     foreach (ss_step_rows($db, $fromVerId) as $s) {
-        $db->prepare("INSERT INTO ss_step (ver_id, seq, step_name, img_file_id, step_text, note) VALUES (?,?,?,?,?,?)")
-           ->execute([$newId, (int)$s['seq'], $s['step_name'], $s['img_file_id'], $s['step_text'], $s['note']]);
+        // sect／kv_json 一定要一起複製，否則改版之後 gsop 的軟／硬體步驟會整段不見
+        $db->prepare("INSERT INTO ss_step (ver_id, seq, sect, step_name, img_file_id, step_text, note, kv_json)
+                      VALUES (?,?,?,?,?,?,?,?)")
+           ->execute([$newId, (int)$s['seq'], (string)($s['sect'] ?? ''), $s['step_name'], $s['img_file_id'],
+                      $s['step_text'], $s['note'], $s['kv_json'] ?? null]);
     }
     foreach (ss_item_rows($db, $fromVerId) as $i) {
         // 新版次要連「檢具綁定」與「鎖定／可填空樣板」一起帶過去，
@@ -1278,19 +1362,28 @@ function ss_asdoc_expand(PDO $db, string $text): string
 }
 
 /** 覆寫某一版的步驟明細（整批取代；呼叫端已在交易中） */
-function ss_steps_replace(PDO $db, int $verId, array $rows): void
+function ss_steps_replace(PDO $db, int $verId, array $rows, string $sect = ''): void
 {
-    $db->prepare("DELETE FROM ss_step WHERE ver_id=?")->execute([$verId]);
+    /* $sect 留空＝覆寫「一般步驟」那一段（既有呼叫端的行為完全不變，
+       因為 gsop 的軟／硬體步驟是存在 sect='soft'/'hard'，不會被這一句掃到）。 */
+    $sect = isset(ss_sects()[$sect]) ? $sect : '';
+    $db->prepare("DELETE FROM ss_step WHERE ver_id=? AND sect=?")->execute([$verId, $sect]);
     $seq = 0;
     foreach ($rows as $r) {
         // 項次編號一律由系統重編（鐵律8：前端編過了，這裡仍然用同一支再編一次）
         $txt = ss_renumber_lines((string)($r['step_text'] ?? ''));
         $nm  = trim((string)($r['step_name'] ?? ''));
-        if ($txt === '' && $nm === '') continue;           // 整列空白的不存（可增列表格的末列）
+        $nt  = trim((string)($r['note'] ?? ''));
+        /* 軟體步驟的內容在參數格裡（step_text 常常整個空白），所以「這一列是不是空的」
+           一定要連 kv 與備註一起看——只看 step_name/step_text 會把填好參數的那一列安靜丟掉。 */
+        $kv  = $sect === 'soft' ? ss_kv_decode($r['kv'] ?? ($r['kv_json'] ?? '')) : [];
+        if ($txt === '' && $nm === '' && $nt === '' && !$kv) continue;   // 整列空白的不存
         $seq++;
-        $db->prepare("INSERT INTO ss_step (ver_id, seq, step_name, img_file_id, step_text, note) VALUES (?,?,?,?,?,?)")
-           ->execute([$verId, $seq, $nm ?: null, (int)($r['img_file_id'] ?? 0) ?: null, $txt ?: null,
-                      trim((string)($r['note'] ?? '')) ?: null]);
+        $db->prepare("INSERT INTO ss_step (ver_id, seq, sect, step_name, img_file_id, step_text, note, kv_json)
+                      VALUES (?,?,?,?,?,?,?,?)")
+           ->execute([$verId, $seq, $sect, $nm ?: null, (int)($r['img_file_id'] ?? 0) ?: null,
+                      $txt ?: null, $nt ?: null,
+                      $kv ? json_encode($kv, JSON_UNESCAPED_UNICODE) : null]);
     }
 }
 
@@ -1652,9 +1745,14 @@ function ss_part_draw_candidates(PDO $db, int $partDId): array
             $cid = (int)$cid;
             if ($cid > 0 && isset($cats[$cid])) $tags[] = $cats[$cid];
         }
+        /* 發行章日期一定要跟著回去（ai-rules/15 的判準就是它，也是 SOP 表頭「發行日期」的來源）。
+           原本 SQL 有撈卻沒有回傳，所以畫面上挑圖面時完全看不出哪一張登錄過發行日。 */
+        $isd = (string)($r['issue_stamp_date'] ?? '');
+        if (strpos($isd, '0000') === 0) $isd = '';
         $out[] = ['id' => (int)$r['id'], 'name' => $name, 'tags' => $tags,
                   'revision' => (string)($r['revision'] ?? ''),
                   'uploaded_on' => (string)($r['uploaded_on'] ?? ''),
+                  'issue_date' => substr($isd, 0, 10),
                   'is_image' => ss_is_image($name) ? 1 : 0];
     }
     return $out;
@@ -3007,6 +3105,10 @@ function ss_paper(PDO $db, array $doc, array $ver = []): array
 
     $kind  = (string)($doc['kind'] ?? '');
     $scope = (string)($doc['scope'] ?? '');
+    /* 標準作業流程SOP 紙本就是 A3 橫式（左邊圖面＋檢驗項目、右邊軟／硬體步驟，A4 塞不下），
+       所以只要版式是 gsop 就一律 A3 橫式，不受「綁機台一律 A4 直式」那條的影響。
+       逐份文件仍可用 ss_ver.paper／orient 覆寫（上面第一段已經先判掉了）。 */
+    if (ss_layout_of($doc) === 'gsop') return ['size' => 'A3', 'orient' => 'landscape'];
     $cfg   = ss_setting_get($db, 'paper_' . $kind, null);
     if (is_array($cfg) && isset(ss_papers()[strtoupper((string)($cfg['size'] ?? ''))])
         && isset(ss_orients()[strtolower((string)($cfg['orient'] ?? ''))])) {
@@ -3187,4 +3289,210 @@ function ss_unsubmit(PDO $db, int $verId, int $uid): void
     $db->prepare("UPDATE ss_ver SET status='draft', modified_at=NOW(), modified_by=? WHERE ver_id=?")
        ->execute([$uid, $verId]);
     ss_refresh_cur_ver($db, (int)$v['doc_id']);
+}
+
+/* ════════════ 標準作業流程 SOP（gsop 版式）：參數格／發行日期／機種步驟範本 ════════════
+   2026-09-30 使用者交辦：把紙本 as-sop 那一批 xlsx 做成系統 SOP。
+   四項指定：①工件參數改稱「工件規格」②取消數量欄、版次之外另外顯示發行日期
+   ③發行日期自動帶入所選圖面的發行日 ④硬體步驟依機種不同。 */
+
+/**
+ * 軟體步驟的參數格：一律正規化成「列 → 每列 1~3 組 [鍵,值]」。
+ * 紙本上就是這個形狀（模數 4.5｜螺旋角 0｜跨齒厚 132.722-132.684 一列三組），
+ * 只有一組的那一列（例：粗修砂＝單趟0.03mm/8次/轉速100rpm）值會自己佔滿整列。
+ */
+function ss_kv_max_cols(): int { return 3; }
+
+function ss_kv_decode($json): array
+{
+    if (is_array($json)) { $raw = $json; }
+    else {
+        $s = trim((string)$json);
+        if ($s === '') return [];
+        $raw = json_decode($s, true);
+        if (!is_array($raw)) return [];
+    }
+    $out = [];
+    foreach ($raw as $row) {
+        if (!is_array($row)) continue;
+        $pairs = [];
+        foreach ($row as $p) {
+            if (is_array($p)) {
+                // 收 ['k'=>,'v'=>] 與 [鍵, 值] 兩種寫法（前端送物件、匯入送陣列）
+                $k = array_key_exists('k', $p) ? $p['k'] : ($p[0] ?? '');
+                $v = array_key_exists('v', $p) ? $p['v'] : ($p[1] ?? '');
+            } else { $k = (string)$p; $v = ''; }
+            $k = trim((string)$k); $v = trim((string)$v);
+            if ($k === '' && $v === '') continue;
+            $pairs[] = ['k' => mb_substr($k, 0, 60), 'v' => mb_substr($v, 0, 160)];
+            if (count($pairs) >= ss_kv_max_cols()) break;
+        }
+        if ($pairs) $out[] = $pairs;
+        if (count($out) >= 20) break;   // 一個步驟最多 20 列，防前端亂送
+    }
+    return $out;
+}
+
+function ss_kv_encode(array $rows): string
+{
+    $n = ss_kv_decode($rows);
+    return $n ? json_encode($n, JSON_UNESCAPED_UNICODE) : '';
+}
+
+/** 參數格有沒有填過任何東西（判斷這一列步驟是不是空的用） */
+function ss_kv_has(array $rows): bool
+{
+    foreach ($rows as $r) foreach ($r as $p) {
+        if (trim((string)($p['k'] ?? '')) !== '' || trim((string)($p['v'] ?? '')) !== '') return true;
+    }
+    return false;
+}
+
+/**
+ * 發行日期＝這一版**所選圖面**那張料號附件的「發行章日期」。
+ * 一律即時查 part_attachments.issue_stamp_date（ai-rules/15 的判準就是發行章日期），
+ * **不另存一份**——存下來的話，之後在料號附件補登或更正發行章日期，
+ * SOP 上會繼續顯示舊的而且不報錯（鐵律4）。
+ *
+ * 取不到時一律留白並回報原因，**不可以退回用附件上傳日或製表日湊一個出來**：
+ * 發行日期是拿去對「圖面是哪一版」的，湊出來的日期比沒有更糟（使用者 2026-09-30 拍板留白）。
+ * 回傳 ['date'=>'YYYY-MM-DD'|'', 'why'=>留白原因, 'attach_id'=>int]
+ */
+function ss_issue_date(PDO $db, array $ver): array
+{
+    $out = ['date' => '', 'why' => '', 'attach_id' => 0];
+    $fid = (int)($ver['draw_file_id'] ?? 0);
+    if ($fid <= 0) { $out['why'] = '尚未選定圖面'; return $out; }
+    try {
+        $st = $db->prepare("SELECT src, part_attach_id FROM ss_file WHERE file_id=?");
+        $st->execute([$fid]);
+        $f = $st->fetch(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { $f = null; }
+    if (!$f) { $out['why'] = '所選圖面已不存在'; return $out; }
+    $aid = (int)($f['part_attach_id'] ?? 0);
+    if ((string)$f['src'] !== 'part' || $aid <= 0) {
+        // 例：從 xlsx 抽出來的內嵌圖，它不是料號附件，本來就沒有發行章日期可查
+        $out['why'] = '所選圖面不是料號附件，沒有發行章日期可查';
+        return $out;
+    }
+    $out['attach_id'] = $aid;
+    try {
+        $st = $db->prepare("SELECT issue_stamp_date FROM part_attachments WHERE id=? AND deleted_at IS NULL");
+        $st->execute([$aid]);
+        $d = (string)($st->fetchColumn() ?: '');
+    } catch (Throwable $e) { $d = ''; }
+    if ($d === '' || strpos($d, '0000') === 0) { $out['why'] = '該圖面尚未登錄發行章日期'; return $out; }
+    $out['date'] = substr($d, 0, 10);
+    return $out;
+}
+
+/* ──────────────── 機種步驟範本 ──────────────── */
+
+/** 這份文件要吃哪幾個機種型號的範本（ss_doc.machine_model 可能是「A、B」多型號） */
+function ss_msop_models_of(array $doc): array
+{
+    return ss_models_split((string)($doc['machine_model'] ?? ''));
+}
+
+/** 已經建過範本的機種型號清單 */
+function ss_msop_models(PDO $db): array
+{
+    try {
+        return $db->query("SELECT machine_model, SUM(sect='soft') soft_n, SUM(sect='hard') hard_n
+                           FROM ss_msop_tpl WHERE is_active=1
+                           GROUP BY machine_model ORDER BY machine_model")
+                  ->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+
+/** 某機種的步驟範本（$sect 留空＝兩段都回） */
+function ss_msop_tpl_rows(PDO $db, string $model, string $sect = ''): array
+{
+    $model = trim($model);
+    if ($model === '') return [];
+    $sql = "SELECT * FROM ss_msop_tpl WHERE machine_model=? AND is_active=1";
+    $p = [$model];
+    if ($sect !== '' && isset(ss_sects()[$sect])) { $sql .= " AND sect=?"; $p[] = $sect; }
+    $sql .= " ORDER BY FIELD(sect,'soft','hard'), seq, tpl_id";
+    try { $st = $db->prepare($sql); $st->execute($p); $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: []; }
+    catch (Throwable $e) { return []; }
+    foreach ($rows as &$r) $r['kv'] = ss_kv_decode($r['kv_json'] ?? '');
+    unset($r);
+    return $rows;
+}
+
+/**
+ * 覆寫某機種某一段的範本。**改範本不會動到已經建立的文件**（使用者 2026-09-30 指定）：
+ * 範本只在「建立文件／按下帶入」那一刻複製過去，之後兩邊各自獨立。
+ */
+function ss_msop_tpl_replace(PDO $db, string $model, string $sect, array $rows, int $uid): int
+{
+    $model = trim($model);
+    if ($model === '') throw new InvalidArgumentException('請先選機種型號');
+    if (!isset(ss_sects()[$sect])) throw new InvalidArgumentException('步驟分段不正確');
+    $db->prepare("DELETE FROM ss_msop_tpl WHERE machine_model=? AND sect=?")->execute([$model, $sect]);
+    $seq = 0;
+    foreach ($rows as $r) {
+        $nm  = trim((string)($r['step_name'] ?? ''));
+        $kv  = ss_kv_decode($r['kv'] ?? ($r['kv_json'] ?? ''));
+        $txt = trim((string)($r['step_text'] ?? ''));
+        $nt  = trim((string)($r['note'] ?? ''));
+        if ($nm === '' && !$kv && $txt === '' && $nt === '') continue;   // 整列空白的不存
+        $seq++;
+        $db->prepare("INSERT INTO ss_msop_tpl
+                      (machine_model, sect, seq, step_name, kv_json, step_text, note, is_active, modified_at, modified_by)
+                      VALUES (?,?,?,?,?,?,?,1,NOW(),?)")
+           ->execute([$model, $sect, $seq, mb_substr($nm, 0, 120),
+                      $kv ? json_encode($kv, JSON_UNESCAPED_UNICODE) : null,
+                      $txt !== '' ? $txt : null, $nt !== '' ? $nt : null, $uid]);
+    }
+    return $seq;
+}
+
+/**
+ * 把機種範本帶進某一版的步驟。
+ * $mode='fill' ＝只在該段目前**完全沒有內容**時才帶（建立文件時自動帶用這個，
+ *                不會把人家已經填好的洗掉）；'replace' ＝該段整段換掉（畫面上按「重新帶入」用）。
+ * 軟體步驟帶入時**只帶鍵不帶值**（值是這個料號自己的參數，範本給的是欄位長相）。
+ */
+function ss_msop_apply(PDO $db, int $verId, array $models, string $sect, string $mode = 'fill'): int
+{
+    if (!isset(ss_sects()[$sect])) return 0;
+    $cur = [];
+    foreach (ss_step_rows($db, $verId) as $s) $cur[(string)($s['sect'] ?? '')][] = $s;
+    if ($mode === 'fill' && !empty($cur[$sect])) return 0;
+
+    $tpl = [];
+    foreach ($models as $m) foreach (ss_msop_tpl_rows($db, (string)$m, $sect) as $t) $tpl[] = $t;
+    if (!$tpl) return 0;
+
+    $db->prepare("DELETE FROM ss_step WHERE ver_id=? AND sect=?")->execute([$verId, $sect]);
+    $seq = 0;
+    foreach ($tpl as $t) {
+        $seq++;
+        $kv = $t['kv'] ?? [];
+        if ($sect === 'soft') {                       // 只留鍵，值留白給現場填
+            foreach ($kv as &$row) { foreach ($row as &$p) { $p['v'] = ''; } unset($p); }
+            unset($row);
+        }
+        $db->prepare("INSERT INTO ss_step (ver_id, seq, sect, step_name, kv_json, step_text, note)
+                      VALUES (?,?,?,?,?,?,?)")
+           ->execute([$verId, $seq, $sect, (string)$t['step_name'],
+                      $kv ? json_encode($kv, JSON_UNESCAPED_UNICODE) : null,
+                      $t['step_text'] ?: null, $t['note'] ?: null]);
+    }
+    return $seq;
+}
+
+/** 某一版的步驟依分段整理好（gsop 版式的畫面與列印共用同一份） */
+function ss_steps_by_sect(PDO $db, int $verId): array
+{
+    $out = ['' => [], 'soft' => [], 'hard' => []];
+    foreach (ss_step_rows($db, $verId) as $s) {
+        $k = (string)($s['sect'] ?? '');
+        if (!isset($out[$k])) $k = '';
+        $s['kv'] = ss_kv_decode($s['kv_json'] ?? '');
+        $out[$k][] = $s;
+    }
+    return $out;
 }
