@@ -43,6 +43,10 @@ $STATUSES = ss_statuses();
 // 每個版面允許哪些適用範圍，一律由 ss_kind_scopes() 決定；前端不要再寫死一份
 $KIND_SCOPES = [];
 foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
+/* 每個「版面×適用範圍」可以用哪幾種版式——前端的文件種類卡就是照這份現算出來的，
+   不要在 JS 裡另外寫死一份（鐵律4：兩份遲早對不起來）。 */
+$LAYOUT_ALLOWED = [];
+foreach ($KIND_SCOPES as $k => $ss) foreach ($ss as $sc) $LAYOUT_ALLOWED[$k . '|' . $sc] = ss_layout_allowed($k, $sc);
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -155,6 +159,31 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
         table.grid td.dragh:active { cursor:grabbing; }
         table.grid td.dragh::before { content:'\2630'; color:#C9B79C; margin-right:3px; font-size:11px; }
         table.grid tr.ss-ghost { opacity:.45; background:#FFF3E2; }
+        /* ── 新增文件的「文件種類」卡（使用者 2026-09-30：三種 SOP 的建立模板要分開）── */
+        .ntype-wrap { margin-bottom:12px; }
+        .ntype-lab { font-size:13px; color:var(--ink2); font-weight:bold; margin-bottom:6px; }
+        .ntype-box { display:grid; grid-template-columns:repeat(auto-fill,minmax(228px,1fr)); gap:8px; }
+        .ntype { border:1px solid var(--line); border-radius:6px; padding:8px 10px; cursor:pointer;
+                 background:#fff; line-height:1.5; }
+        .ntype:hover { border-color:var(--amber); background:var(--cream); }
+        .ntype.on { border-color:var(--amber-d); background:var(--sand); box-shadow:inset 0 0 0 1px var(--amber-d); }
+        .ntype .t { font-size:13px; font-weight:bold; color:var(--ink); }
+        .ntype .d { font-size:11.5px; color:var(--ink2); margin-top:2px; }
+        .ntype .as { font-size:11px; color:#8A6A45; margin-top:2px; letter-spacing:.5px; }
+        /* ── 標準作業流程SOP 的參數格（軟體步驟的「要點」）──
+           照紙本做成「參數名稱｜數值」一列最多三組，現場只要填數值那一格。 */
+        table.grid td.g-kvcell { padding:2px 3px; }
+        table.kvgrid { width:100%; border-collapse:collapse; table-layout:fixed; }
+        table.kvgrid td { border:1px solid var(--line); padding:1px 2px; }
+        table.kvgrid td.kvk { width:13%; background:var(--cream); }
+        table.kvgrid td.kvv { width:20.3%; }
+        table.kvgrid td.kvx { width:4%; border:0; text-align:center; }
+        table.kvgrid input { width:100%; border:1px solid transparent; background:transparent;
+                             font-size:12.5px; padding:2px 3px; }
+        table.kvgrid td.kvk input { color:var(--ink2); }
+        table.kvgrid input:focus { border-color:var(--amber-d); background:#fff; }
+        /* 兩段步驟各自一張表，標題列用不同底色，一眼分得出哪一段（使用者 2026-09-30 回報） */
+        .gsop-sec > h5 { border-left:4px solid var(--amber); padding-left:6px; }
         /* 右下角小提示（自動刪除空殼文件之類的，不用按確定的那種） */
         #ssToast { position:fixed; right:18px; bottom:18px; z-index:10600; background:rgba(74,53,36,.94); color:#fff;
                    padding:9px 14px; border-radius:6px; font-size:13px; max-width:420px; line-height:1.6;
@@ -342,9 +371,17 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
 <div class="ss-mask" id="maskNew"><div class="ss-modal" style="width:760px;">
     <div class="m-head">新增文件<span class="as-tag" id="nTabTag"></span><button class="x" data-close="maskNew">&times;</button></div>
     <div class="m-body">
+        <!-- 文件種類：版面×適用範圍一次選定。原本是「表單版面」與「適用範圍」兩個下拉，
+             使用者 2026-09-30 回報「三種 SOP 的建立模板應該分開，避免混用反而很難用」——
+             分兩個下拉要自己在腦中組合，選錯也看不出來；改成一張一張明確的種類卡。
+             卡片內容是由 SS_KINDS × SS_KIND_SCOPES 現算出來的，不是另外寫死一份清單。 -->
+        <div class="ntype-wrap">
+            <div class="ntype-lab">要建立哪一種文件？</div>
+            <div id="nTypeBox" class="ntype-box"></div>
+        </div>
         <div class="frm">
-            <label>表單版面 *</label><div class="wide"><select id="nKind"></select></div>
-            <label>適用範圍 *</label><div class="wide"><select id="nScope"></select></div>
+            <label class="krow">表單版面 *</label><div class="wide krow"><select id="nKind"></select></div>
+            <label class="krow">適用範圍 *</label><div class="wide krow"><select id="nScope"></select></div>
 
             <!-- 機台：綁的是型號（同型號好幾台共用一份 SOP），底下勾要涵蓋哪幾台。
                  型號與量具一律走兩層挑選器（先點製程／量具種類，再點項目），與線上檢驗挑量具同一套 -->
@@ -748,6 +785,9 @@ var SS_SLOTS = <?= json_encode($SLOTS, JSON_UNESCAPED_UNICODE) ?>;
 var SS_SLOTS_D = <?= json_encode(ss_slots_display(), JSON_UNESCAPED_UNICODE) ?>;
 var SS_STATUSES = <?= json_encode($STATUSES, JSON_UNESCAPED_UNICODE) ?>;
 var SS_KIND_SCOPES = <?= json_encode($KIND_SCOPES, JSON_UNESCAPED_UNICODE) ?>;
+/* 版式（一般版式／標準作業流程SOP）：哪一種版面＋適用範圍可以用哪幾種，一律由後端 ss_layout_allowed() 決定 */
+var SS_LAYOUTS = <?= json_encode(ss_layouts(), JSON_UNESCAPED_UNICODE) ?>;
+var SS_LAYOUT_ALLOWED = <?= json_encode($LAYOUT_ALLOWED, JSON_UNESCAPED_UNICODE) ?>;
 var SS_TODAY = '<?= date('Y-m-d') ?>';
 /* 型式的建議選項（管理員可在設定頁維護；只是建議，仍可自行輸入） */
 var SS_VARIANTS = <?= json_encode(ss_variant_options($db), JSON_UNESCAPED_UNICODE) ?>;

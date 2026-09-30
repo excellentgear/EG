@@ -238,7 +238,23 @@ case 'detail': {
     $full['tool_types']  = ss_tool_types($db);
     $full['variant_options'] = ss_variant_options($db);
     $full['variant_max']     = ss_variant_max($db);
-    if ($kind === 'sip') {
+    /* 標準作業流程SOP 的左半邊就是檢驗項目表，所以編輯時要跟 SIP 拿同一批輔助資料
+       （擔當者／檢驗方法／檢具類型／頻率／符號／齒輪等級），少給的話那張表就編不了。 */
+    $isGsop = (string)($full['layout'] ?? 'std') === 'gsop';
+    if ($isGsop) {
+        // 這份文件綁的機種有沒有步驟範本，以及範本長什麼樣（畫面上「帶入機種範本」要用）
+        $models = ss_msop_models_of($full['doc']);
+        $tpl = [];
+        foreach (ss_sects() as $sk => $_l) {
+            $tpl[$sk] = [];
+            foreach ($models as $m) foreach (ss_msop_tpl_rows($db, (string)$m, $sk) as $t) $tpl[$sk][] = $t;
+        }
+        $full['msop_models'] = $models;
+        $full['msop_tpl']    = $tpl;
+        $full['sects']       = $full['sects'] ?: ss_steps_by_sect($db, $verId);
+        $full['sect_labels'] = ss_sects();
+    }
+    if ($kind === 'sip' || $isGsop) {
         $pno = (int)($full['doc']['process_no'] ?? 0);
         $full['proc_cfg']  = ss_proc_cfg($db, $pno);
         $full['tpl_count'] = count(ss_tpl_rows($db, 'proc', $pno)) + count(ss_tpl_rows($db, 'std'));
@@ -344,6 +360,11 @@ case 'ver_save': {
     try {
         ss_ver_save($db, $verId, $_POST, $uid);
         if (array_key_exists('steps', $_POST)) ss_steps_replace($db, $verId, $rows('steps'));
+        /* 標準作業流程SOP 的兩段步驟各自存各自的（沒送的那一段一律不動——
+           本專案已踩過好幾次「沒送的欄位被一起寫成 NULL」）。 */
+        foreach (ss_sects() as $sk => $_lbl) {
+            if (array_key_exists('steps_' . $sk, $_POST)) ss_steps_replace($db, $verId, $rows('steps_' . $sk), $sk);
+        }
         if (array_key_exists('items', $_POST)) ss_items_replace($db, $verId, $rows('items'));
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
@@ -575,6 +596,54 @@ case 'file_rotate': {
     $rot = ss_rot_norm((int)($f['rot'] ?? 0) + $step);
     $db->prepare("UPDATE ss_file SET rot=? WHERE file_id=?")->execute([$rot, $fid]);
     jout(true, ['rot' => $rot]);
+}
+
+/* ─────────────── 機種步驟範本（標準作業流程SOP 專用，管理員維護） ───────────────
+   硬體步驟與軟體步驟的項目本來就隨機種不同（同一顆「更換砂輪」，KX500 與 LHG-3040
+   的要點完全不一樣），所以逐機種維護一套，建立文件時帶入、之後兩邊各自獨立。 */
+
+case 'msop_get': {
+    $model = trim((string)($_GET['model'] ?? ''));
+    jout(true, [
+        'models'   => ss_msop_models($db),
+        'sects'    => ss_sects(),
+        'model'    => $model,
+        'rows'     => $model === '' ? [] : ss_msop_tpl_rows($db, $model),
+        'all_models' => ss_machine_models($db, '', 200),
+        'max_cols' => ss_kv_max_cols(),
+    ]);
+}
+
+case 'msop_save': {
+    $needAdmin();
+    $model = trim((string)($_POST['model'] ?? ''));
+    $sect  = (string)($_POST['sect'] ?? '');
+    if ($model === '') jerr('請先選機種型號');
+    if (!isset(ss_sects()[$sect])) jerr('步驟分段不正確');
+    $db->beginTransaction();
+    try {
+        $n = ss_msop_tpl_replace($db, $model, $sect, $rows('rows'), $uid);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
+    jout(true, ['saved' => $n]);
+}
+
+/** 把機種範本帶進這一版（畫面上按「帶入機種範本」）。replace＝該段整段換掉。 */
+case 'msop_apply': {
+    $verId = (int)($_POST['ver_id'] ?? 0);
+    [$kind, $v, $d] = $kindOfVer($verId);
+    $needEdit($kind);
+    if ((string)$v['status'] !== 'draft') jerr('只有草稿可以帶入範本');
+    $sect = (string)($_POST['sect'] ?? '');
+    if (!isset(ss_sects()[$sect])) jerr('步驟分段不正確');
+    $mode = (string)($_POST['mode'] ?? 'replace') === 'fill' ? 'fill' : 'replace';
+    $db->beginTransaction();
+    try {
+        $n = ss_msop_apply($db, $verId, ss_msop_models_of($d), $sect, $mode);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
+    if ($n === 0) jerr('這個機種還沒有建立' . ss_sects()[$sect] . '範本（可到「設定→機種步驟範本」建立）');
+    jout(true, ['applied' => $n, 'steps' => ss_steps_by_sect($db, $verId)[$sect] ?? []]);
 }
 
 /* ─────────────── 檢驗項目預設值（管理員） ─────────────── */

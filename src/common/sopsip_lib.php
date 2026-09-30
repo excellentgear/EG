@@ -90,19 +90,26 @@ function ss_layouts(): array
     return ['std' => '一般版式', 'gsop' => '標準作業流程 SOP'];
 }
 
-/** 這個版面允許哪些版式（唯一判定處，前端與後端都吃它） */
-function ss_layout_allowed(string $kind): array
+/**
+ * 這個版面／適用範圍允許哪些版式（唯一判定處，前端與後端都吃它）。
+ * **gsop 只給「製造製程說明書＋特定料號」**：紙本的表頭第一欄就是產品料號，
+ * 通用或綁機台的文件根本填不出那一格；不限制的話就會變成使用者說的
+ * 「三種 SOP 混用反而很難用」（2026-09-30 回報）。
+ */
+function ss_layout_allowed(string $kind, string $scope = ''): array
 {
-    return $kind === 'process' ? ['std', 'gsop'] : ['std'];
+    if ($kind !== 'process') return ['std'];
+    if ($scope === '' || $scope === 'part') return ['std', 'gsop'];
+    return ['std'];
 }
 
 /** 這份文件實際用哪一種版式（不合法或舊資料一律回 std，既有文件因此完全不受影響） */
 function ss_layout_of(array $doc): string
 {
     $l = trim((string)($doc['layout'] ?? ''));
-    $kind = (string)($doc['kind'] ?? '');
     if (!isset(ss_layouts()[$l])) return 'std';
-    return in_array($l, ss_layout_allowed($kind), true) ? $l : 'std';
+    return in_array($l, ss_layout_allowed((string)($doc['kind'] ?? ''), (string)($doc['scope'] ?? '')), true)
+         ? $l : 'std';
 }
 
 /** 步驟分段（唯一登記處）。空字串＝既有的一般步驟，不在這份清單裡。 */
@@ -1018,6 +1025,19 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
         $machineIds = $in['machine_ids'] ?? [];
         if (is_string($machineIds)) { $mj = json_decode($machineIds, true); $machineIds = is_array($mj) ? $mj : []; }
         $machineIds = array_values(array_unique(array_filter(array_map('intval', (array)$machineIds))));
+        /* 綁料號時的「機台型號」由挑到的機台回推（標準作業流程SOP 的表頭第一欄「加工機種」
+           印的就是它，機種步驟範本也是以型號為鍵）。**不讓人另外打一次**——打的字跟機台主檔
+           對不起來時，範本會永遠比不中而且完全不報錯。沒挑機台就維持原值不動。 */
+        if ($machineIds) {
+            $in2 = implode(',', array_fill(0, count($machineIds), '?'));
+            $st = $db->prepare("SELECT DISTINCT machine_model FROM machine_list
+                                WHERE machine_id IN ($in2) AND machine_model IS NOT NULL AND machine_model<>''");
+            $st->execute($machineIds);
+            $ms = $st->fetchAll(PDO::FETCH_COLUMN) ?: [];
+            if ($ms) $model = ss_models_join($ms);
+        } elseif ($old) {
+            $model = (string)($old['machine_model'] ?? '') ?: null;
+        }
     }
 
     /* 製程＝紙本上的「工程名稱」（同一件事，只留一欄）。存編號，名稱只是顯示用快取。
@@ -1070,7 +1090,7 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
     $layout = array_key_exists('layout', $in)
             ? trim((string)$in['layout'])
             : trim((string)($old['layout'] ?? 'std'));
-    if (!in_array($layout, ss_layout_allowed($kind), true)) $layout = 'std';
+    if (!in_array($layout, ss_layout_allowed($kind, $scope), true)) $layout = 'std';
 
     // 文件名稱自動產生，但使用者自己打過就以他打的為準
     $title = trim((string)($in['title'] ?? ''));

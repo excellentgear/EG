@@ -43,6 +43,7 @@ $formDate = (string)($ver['form_date'] ?? '');
    **不可以退回印製表日期**，也不可以把「尚未登錄發行章日期」這種內部提示印到紙上
    （列印版是給稽核看的正式紀錄，ai-rules/23 的口徑）。 */
 $issueDate = (string)($F['issue']['date'] ?? '');
+
 $company  = ss_company_name($db);
 $asNo     = ss_as_no($db, $kind, (int)($ver['as_doc_id'] ?? 0), $formDate);
 $formName = ss_as_title($db, $kind, (int)($ver['as_doc_id'] ?? 0));
@@ -65,6 +66,29 @@ if (isset(ss_papers()[$qs]))  $paper['size']   = $qs;
 if (isset(ss_orients()[$qo])) $paper['orient'] = $qo;
 [$sheetW, $sheetH] = ss_paper_mm($paper);
 $pageCss = strtolower($paper['size']) . ' ' . $paper['orient'];
+
+/* ── gsop 的欄寬（使用者 2026-09-30 指定的對齊）──
+   「要點」的右緣要和表頭「版次」欄的右緣切齊。兩張表一樣寬，所以**只要讓右半邊的
+   備註欄寬度等於表頭的「發行日期＋製表日期」兩格**，兩條線自然對齊，不必去算左欄寬度。 */
+$gsContentW = $sheetW - 24;        // .sheet 左右各 12mm 白邊
+$gsLeftW  = $paper['orient'] === 'landscape' ? 150 : 96;   // 左半邊（圖面＋檢驗項目）
+$gsTtlW   = 40;    // 表頭最左邊「標準作業流程SOP」那一格
+$gsVerW   = 16;    // 版次
+$gsIssueW = 26;    // 發行日期
+$gsDateW  = 26;    // 製表日期
+$gsNoteW  = $gsIssueW + $gsDateW;   // 右半邊「備註」欄＝上面那兩格加起來
+$gsNameW  = 12;    // 軟體/硬體步驟那一欄（使用者指定縮成一半，原本 24mm）
+/* 表頭中間四欄（加工機種／客戶名稱／產品料號／工程名稱）分掉剩下的寬度。
+   **每一欄都要給明確寬度、而且加總剛好等於表寬**——只要留一欄 auto，
+   table-layout:fixed 就會自己去分配剩餘寬度，指定的 mm 會被拉大，
+   兩張表的欄位線就對不起來（實測 26mm 被畫成 27.13mm，兩邊差了 6.4mm）。 */
+$gsMidTotal = $gsContentW - $gsTtlW - $gsVerW - $gsIssueW - $gsDateW;
+$gsMidW = [];
+$gsMidRatio = [7, 6.5, 12, 10.5];   // 機種／客戶／料號／工程
+$gsMidSum = array_sum($gsMidRatio);
+foreach ($gsMidRatio as $r) $gsMidW[] = round($gsMidTotal * $r / $gsMidSum, 2);
+$gsMidW[3] = round($gsMidTotal - $gsMidW[0] - $gsMidW[1] - $gsMidW[2], 2);   // 尾差補在最後一欄
+$gsPointW = round($gsContentW - $gsLeftW - $gsNameW - $gsNoteW, 2);          // 右半邊「要點」
 
 try {
     eg_print_log_add($db, [
@@ -205,16 +229,24 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
                     vertical-align:middle; background:#F7F7F7; }
     .gs-head td.v { text-align:center; height:8mm; vertical-align:middle; }
     .gs-main { table-layout:fixed; margin-top:2.5mm; }
-    .gs-main > tbody > tr > td { padding:0; border:1px solid #000; vertical-align:top; }
-    .gs-left { width:<?= $paper['orient'] === 'landscape' ? 150 : 96 ?>mm; }
+    .gs-main > tbody > tr > td { padding:0; border:0; vertical-align:top; }
+    /* 右半邊**不給外框**：右邊的內容（步驟＋更改記錄＋簽章）本來就比左邊的圖面矮，
+       給了外框，簽章底下那段空白就會變成一個看起來很奇怪的大空盒子
+       （使用者 2026-09-30 回報「簽核欄位底下不要有奇怪的空白」）。
+       裡面三張表各自有自己的框線，該有的格線一條都不會少。 */
+    .gs-main > tbody > tr > td.gs-left { border:1px solid #000; }
+    .gs-left { width:<?= $gsLeftW ?>mm; }   /* 唯一來源＝上面算好的 $gsLeftW */
     .gs-draw { text-align:center; padding:1.5mm; border-bottom:1px solid #000; }
     .gs-draw img { max-width:100%; max-height:<?= $paper['orient'] === 'landscape' ? 150 : 104 ?>mm; }
     .gs-draw .none { color:#888; font-size:9pt; padding:16mm 0; }
     .gs-sec { text-align:center; font-weight:bold; letter-spacing:3px; background:#EFEFEF; }
     .gs-step { table-layout:fixed; }
     .gs-step th, .gs-step td { font-size:9.5pt; }
-    .gs-step .gname { width:24mm; text-align:center; font-weight:bold; vertical-align:middle; }
-    .gs-step .gnote { width:44mm; font-size:9pt; }
+    /* 軟體步驟／硬體步驟那一欄縮成一半（使用者 2026-09-30：欄位都縮小一半）；
+       備註欄對齊表頭「發行日期＋製表日期」那兩格，所以「要點」的右緣剛好落在版次欄右側。 */
+    .gs-step .gname { width:<?= $gsNameW ?>mm; text-align:center; font-weight:bold; vertical-align:middle;
+                      word-break:break-all; line-height:1.35; }
+    .gs-step .gnote { width:<?= $gsNoteW ?>mm; font-size:9pt; }
     .gs-step td.gkv { padding:0; }
     /* 參數格：紙本上就是「鍵｜值」一列最多三組，值可以橫跨剩下的格子 */
     table.kv { table-layout:fixed; width:100%; border:0; }
@@ -275,14 +307,21 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
         };
     ?>
     <table class="gs-head">
+        <colgroup>
+            <col style="width:<?= $gsTtlW ?>mm;">
+            <?php foreach ($gsMidW as $w): ?><col style="width:<?= $w ?>mm;"><?php endforeach; ?>
+            <col style="width:<?= $gsVerW ?>mm;">
+            <col style="width:<?= $gsIssueW ?>mm;">
+            <col style="width:<?= $gsDateW ?>mm;">
+        </colgroup>
         <tr>
-            <td class="ttl" rowspan="2" style="width:40mm;">標 準 作 業 流 程 S O P</td>
+            <td class="ttl" rowspan="2">標 準 作 業 流 程 S O P</td>
             <td class="lab">加工機種</td><td class="lab">客戶名稱</td><td class="lab">產 品 料 號</td>
             <td class="lab">工 程 名 稱</td>
             <!-- 使用者 2026-09-30 指定：**取消數量欄**，版次之外另外印發行日期 -->
-            <td class="lab" style="width:16mm;">版次</td>
-            <td class="lab" style="width:26mm;">發行日期</td>
-            <td class="lab" style="width:26mm;">製表日期</td>
+            <td class="lab">版次</td>
+            <td class="lab">發行日期</td>
+            <td class="lab">製表日期</td>
         </tr>
         <tr>
             <td class="v"><?= h($mText ?: '—') ?></td>
@@ -295,7 +334,9 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
         </tr>
     </table>
 
-    <table class="gs-main"><tbody><tr>
+    <table class="gs-main">
+        <colgroup><col style="width:<?= $gsLeftW ?>mm;"><col style="width:<?= round($gsContentW - $gsLeftW, 2) ?>mm;"></colgroup>
+        <tbody><tr>
         <!-- 左半邊：圖面＋檢驗項目 -->
         <td class="gs-left">
             <div class="gs-draw">
@@ -345,6 +386,14 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
         <!-- 右半邊：作業標準（軟體步驟／硬體步驟）＋更改記錄＋簽章 -->
         <td>
             <table class="gs-step">
+                <?php /* table-layout:fixed 的欄寬是看**第一列**決定的，而第一列是 colspan=3 的
+                         「作業標準」——不給 colgroup 的話三欄會被平均分成各三分之一，
+                         CSS 上寫的 12mm／52mm 完全不會生效（實測量到 71.9mm）。 */ ?>
+                <colgroup>
+                    <col style="width:<?= $gsNameW ?>mm;">
+                    <col style="width:<?= $gsPointW ?>mm;">
+                    <col style="width:<?= $gsNoteW ?>mm;">
+                </colgroup>
                 <tr><td class="gs-sec" colspan="3">作 業 標 準</td></tr>
                 <tr><th class="gname">軟 體 步 驟</th><th>要　點</th><th class="gnote">備註</th></tr>
                 <?php foreach ($soft as $s): ?>
@@ -379,13 +428,17 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
                 <thead><tr><th colspan="3">更改記錄</th></tr>
                 <tr><th style="width:16mm;">版次</th><th style="width:26mm;">日期</th><th>說明</th></tr></thead>
                 <tbody>
-                <?php foreach (array_reverse($vers) as $v): ?>
+                <?php $chgN = 0; foreach (array_reverse($vers) as $v): $chgN++; ?>
                     <tr>
                         <td class="mid"><?= h($v['ver_no']) ?></td>
                         <td class="mid"><?= h(eg_fmt_date($v['form_date'])) ?></td>
                         <td><?php foreach (lines($v['rev_text'] ?? $v['rev_note']) as $l): ?><div><?= h($l) ?></div><?php endforeach; ?></td>
                     </tr>
                 <?php endforeach; ?>
+                <?php /* 至少留三列空白給現場手寫（使用者 2026-09-30 指定），比照紙本 */ ?>
+                <?php for ($i = $chgN; $i < 3; $i++): ?>
+                    <tr><td class="mid">&nbsp;</td><td class="mid">&nbsp;</td><td>&nbsp;</td></tr>
+                <?php endfor; ?>
                 </tbody>
             </table>
 

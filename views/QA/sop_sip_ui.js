@@ -449,6 +449,11 @@ $('#btnNew').on('click', function () {
     $('#nApplyTpl').prop('checked', true);
     $('#nMachines').html('先選機台型號（可以多選）。').addClass('muted-help');
     syncScope();
+    /* 文件種類卡：預設選第一種，兩個原始下拉收起來（要手動改組合時才展開）。
+       使用者 2026-09-30：三種 SOP 的建立模板要分開，不要混在同一組欄位裡。 */
+    var _types = nTypeRender(null);
+    if (_types.length) nTypePick(_types[0].kind, _types[0].scope, _types[0].layout);
+    else $('.krow').show();
     openMask('maskNew');
 });
 /* 型式改了要重問一次重複——它是判定鍵的一部分，不重問就會「畫面說重複、其實不重複」 */
@@ -709,6 +714,7 @@ $('#nSave').on('click', function () {
 
     post('doc_save', {
         kind: kind, scope: s,
+        layout: (NEW && NEW.layout) || 'std',
         machine_model: s === 'machine' ? $('#nModelVal').val() : '',
         machine_ids: JSON.stringify(ids),
         tool_id: s === 'tool' ? num($('#nToolId').val()) : 0,
@@ -886,13 +892,16 @@ function headHtml() {
            跟不需要預計工時」）——上面的量具編號就是它用的設備，而量具的操作說明書
            講的是「怎麼用這支量具」，沒有工時可言。
            列印時的「使用設備」那一格改由綁定的機器編號直接帶出，所以紙本不會因此變空白。 */
-        if (d.scope !== 'machine' && d.scope !== 'tool') {
+        /* 標準作業流程SOP 一樣不開這兩欄（使用者 2026-09-30 回報「表頭已經有設定使用機台，
+           為什麼下方又要有使用設備，整個讓人搞不清楚要填甚麼」）——它的加工機種就是上面
+           綁的機台，紙本上也沒有預計工時這一格。 */
+        if (d.scope !== 'machine' && d.scope !== 'tool' && !ssIsGsop()) {
             h += '<label>使用設備</label><div class="wide"><input id="f_use_equip" value="' + esc(v.use_equip || '') + '"' + ro + '>'
                + (CUR.can_edit ? '<div class="muted-help" style="margin-top:3px;">'
                    + '<button class="btn btn-xs btn-warm-o" id="btnPickEquip">從機台挑（可複選機器編號）</button>'
                    + '　也可以直接打字。</div>' : '') + '</div>';
         }
-        if (d.scope !== 'tool') {
+        if (d.scope !== 'tool' && !ssIsGsop()) {
             h += '<label>預計工時</label><div><input id="f_est_hours" value="' + esc(v.est_hours || '') + '"' + ro + '></div>';
         }
     }
@@ -1283,6 +1292,25 @@ $(document).on('click', '#btnApplyTpl', function () {
 /** SIP 的圖面與注意事項 */
 function sipExtraHtml() {
     var v = CUR.ver;
+    var h = drawBoxHtml();
+    h += secBox('f_notice', 'notice', '注意事項', v.notice, '一行一條；留空就印設定裡那份固定的注意事項');
+    /* 注意事項可以存成範本再點開帶入（使用者 2026-09-23），範本可以綁客戶。
+       綁到這份文件客戶的排在最前面並標出來——建立文件時本來就會自動帶第一筆。 */
+    if (CUR.can_edit && (CUR.notice_tpls || []).length) {
+        var nh = '<div class="muted-help" style="margin:-8px 0 10px;">帶入範本：';
+        $.each(CUR.notice_tpls, function (i, t) {
+            nh += '<button class="btn btn-xs btn-warm-o nt-go" data-i="' + i + '" style="margin:0 4px 4px 0;">'
+                + esc(t.name) + (num(t.for_customer) ? '（本客戶）' : '') + '</button>';
+        });
+        nh += '　<span>點一下接在現有內容後面；要整段換掉請先清空欄位。</span></div>';
+        h += nh;
+    }
+    return h;
+}
+
+/** 圖面那一塊（SIP 與標準作業流程SOP 共用同一份，不要各刻一次） */
+function drawBoxHtml() {
+    var v = CUR.ver;
     var draw = num(v.draw_file_id);
     var h = '<div class="sec"><h5>圖面'
           + '<span class="muted-help">從這個料號的料號附件挑一個帶入（只建立關聯，不複製檔案）</span></h5>';
@@ -1301,19 +1329,21 @@ function sipExtraHtml() {
            + '<input type="file" id="fileDraw" accept="image/*,.pdf" style="display:none;">'
            + '<span class="muted-help">　旋轉只會影響這份文件的畫面與列印，不會動到料號附件那張原圖。</span></div>';
     }
-    h += '</div>';
-    h += secBox('f_notice', 'notice', '注意事項', v.notice, '一行一條；留空就印設定裡那份固定的注意事項');
-    /* 注意事項可以存成範本再點開帶入（使用者 2026-09-23），範本可以綁客戶。
-       綁到這份文件客戶的排在最前面並標出來——建立文件時本來就會自動帶第一筆。 */
-    if (CUR.can_edit && (CUR.notice_tpls || []).length) {
-        var nh = '<div class="muted-help" style="margin:-8px 0 10px;">帶入範本：';
-        $.each(CUR.notice_tpls, function (i, t) {
-            nh += '<button class="btn btn-xs btn-warm-o nt-go" data-i="' + i + '" style="margin:0 4px 4px 0;">'
-                + esc(t.name) + (num(t.for_customer) ? '（本客戶）' : '') + '</button>';
-        });
-        nh += '　<span>點一下接在現有內容後面；要整段換掉請先清空欄位。</span></div>';
-        h += nh;
+    /* 發行日期：**自動由所選圖面的發行章日期帶入，不給手填**（使用者 2026-09-30 指定）。
+       取不到就留白並寫清楚為什麼——留白是刻意的，湊一個日期出來比沒有更糟。 */
+    if (ssIsGsop()) {
+        var iss = CUR.issue || {};
+        h += '<div class="frm" style="margin-top:8px;"><label>發行日期</label><div class="wide">'
+           + (iss.date ? '<b>' + esc(egFmtDate(iss.date)) + '</b>'
+                       : '<span style="color:#B4560A;">（留白）</span>')
+           + '<div class="muted-help">'
+           + (iss.date ? '自動取自所選圖面的發行章日期，改選別張圖面就會跟著變。'
+                       : '取不到發行章日期：' + esc(iss.why || '') + '。'
+                         + '請到料號主檔的附件補登該張圖面的發行章日期，或改選已登錄過的圖面；'
+                         + '在那之前列印出來的發行日期欄會是「—」。')
+           + '</div></div></div>';
     }
+    h += '</div>';
     return h;
 }
 $(document).on('click', '.nt-go', function () {
@@ -1475,13 +1505,19 @@ function renderDoc() {
     $('#docStatus').attr('class', 'st st-' + v.status).text(SS_STATUSES[v.status] || v.status);
 
     var body = headHtml();
-    if (CUR.kind === 'equip') body += equipHtml();
+    /* 標準作業流程SOP 走自己那一套（圖面＋軟體步驟＋硬體步驟＋檢驗項目），
+       **不可以退回用通用的操作步驟表**——兩段步驟會照 seq 交錯排在一起，分不出哪列屬於哪段
+       （使用者 2026-09-30 回報「根本無法填寫，不知道哪邊是哪邊」）。 */
+    if (ssIsGsop()) body += gsopHtml() + itemsHtml();
+    else if (CUR.kind === 'equip') body += equipHtml();
     else if (CUR.kind === 'process') body += stepsHtml();
     else body += sipExtraHtml() + itemsHtml();
     body += asRefHtml() + signHtml() + versHtml() + filesHtml();
     $('#docBody').html(body);
     /* 明細表格的拖曳排序（唯讀的版次沒有把手，ssSortable 會自己不啟用） */
     ssSortable('#tblSteps');
+    ssSortable('#tblSoft');
+    ssSortable('#tblHard');
     ssSortable('#tblItems');
     DIRTY = false;              // 每次重畫（含存檔後重新開啟）都重新起算
     // 打字挑的那兩欄：先把「目前畫面上的字」記成已挑過的值，否則使用者一動就被判成改過而解除綁定
@@ -1796,6 +1832,11 @@ function saveDoc(cb) {
             $.each(['m_maker', 'm_name', 'm_spec', 'm_range', 'op_method', 'cautions', 'maintain'], function (i, k) {
                 p[k] = $('#f_' + k).val() || '';
             });
+        } else if (ssIsGsop()) {
+            // 兩段步驟各送各的（沒送的那一段後端不會動它）；檢驗項目就是紙本左下那張表
+            p.steps_soft = JSON.stringify(collectSoft());
+            p.steps_hard = JSON.stringify(collectHard());
+            p.items = JSON.stringify(collectItems());
         } else if (CUR.kind === 'process') {
             // 綁機台時畫面上沒有這個欄位，**就不要送**——送空字串會把既有的使用設備洗成空的
             // （ss_ver_save 是用 array_key_exists 判「有沒有送這個欄位」）
@@ -2604,6 +2645,7 @@ $('#btnSetting').on('click', function () {
               + '<div class="ss-tab on" data-set="base">簽核與圖章</div>'
               + '<div class="ss-tab" data-set="owner">擔當者與檢驗方法</div>'
               + '<div class="ss-tab" data-set="tpl">檢驗項目預設值</div>'
+              + '<div class="ss-tab" data-set="msop">機種步驟範本</div>'
               + '<div class="ss-tab" data-set="list">頻率／型式／注意事項</div></div>'
               + '<div id="setPane"></div>';
         $('#setBody').html(h);
@@ -2620,6 +2662,7 @@ function setPane(which) {
     if (which === 'base') return setPaneBase();
     if (which === 'owner') return setPaneOwner();
     if (which === 'list') return setPaneList();
+    if (which === 'msop') return setPaneMsop('');
     return setPaneTpl(0);
 }
 
@@ -3161,3 +3204,432 @@ $(function () {
     load();
 });
 $('#btnPageHelp').on('click', function () { openMask('helpUseMask'); });
+
+/* ══════════════════ 標準作業流程 SOP（gsop 版式）的編輯畫面 ══════════════════
+   2026-09-30 使用者回報「這樣根本無法填寫，不知道哪邊是哪邊」——原本沿用通用的
+   「操作步驟」一張表，軟體步驟與硬體步驟兩段的項目照 seq 交錯排在一起（工件規格、
+   更換砂輪、齒型/導程修整、更換C軸底座…），根本分不出哪一列屬於哪一段。
+   改成兩段各一張表、各自標題、各自增刪列，並照紙本把參數做成「鍵｜值」的格子。
+   同一批也把「沒有讓我選擇左上角的圖面」補上（gsop 原本沒有輸出圖面那一塊）。 */
+
+function ssIsGsop() { return !!(CUR && String(CUR.layout || '') === 'gsop'); }
+function ssSectRows(sect) { return (CUR && CUR.sects && CUR.sects[sect]) ? CUR.sects[sect] : []; }
+function ssKvMaxCols() { return 3; }
+
+/** 參數格：一列最多三組「鍵＝值」，照紙本的樣子排 */
+function kvRowHtml(pairs, ro, dis) {
+    var n = ssKvMaxCols(), h = '<tr class="kvr">';
+    for (var i = 0; i < n; i++) {
+        var p = pairs[i] || { k: '', v: '' };
+        h += '<td class="kvk"><input class="kv-k" value="' + esc(p.k || '') + '" data-eg-hint="參數名稱"' + ro + '></td>'
+           + '<td class="kvv"><input class="kv-v" value="' + esc(p.v || '') + '" data-eg-hint="數值"' + ro + '></td>';
+    }
+    h += (CUR.can_edit ? '<td class="kvx"><button class="btn btn-xs kv-del" title="刪除這一列參數"' + dis + '>×</button></td>' : '')
+       + '</tr>';
+    return h;
+}
+
+function kvTableHtml(kv, ro, dis) {
+    var h = '<table class="kvgrid"><tbody>';
+    var rows = (kv && kv.length) ? kv : (CUR.can_edit ? [[]] : []);
+    $.each(rows, function (i, r) { h += kvRowHtml(r || [], ro, dis); });
+    h += '</tbody></table>';
+    if (CUR.can_edit) h += '<button class="btn btn-xs btn-warm-o kv-add" style="margin-top:3px;">＋參數列</button>';
+    return h;
+}
+
+/** 軟體步驟的一列（名稱＋參數格＋備註） */
+function softRowHtml(i, s, ro, dis) {
+    s = s || {};
+    return '<tr>'
+        + dragCell(i, !!CUR.can_edit)
+        + '<td><input class="g-name" value="' + esc(s.step_name || '') + '" data-eg-hint="例如 工件規格"' + ro + '></td>'
+        + '<td class="g-kvcell">' + kvTableHtml(s.kv || [], ro, dis) + '</td>'
+        + '<td><textarea class="g-note" rows="3"' + ro + '>' + esc(s.note || '') + '</textarea></td>'
+        + (CUR.can_edit ? '<td class="c"><button class="btn btn-xs g-del"' + dis + '>×</button></td>' : '')
+        + '</tr>';
+}
+
+/** 硬體步驟的一列（名稱＋要點＋備註） */
+function hardRowHtml(i, s, ro, dis) {
+    s = s || {};
+    return '<tr>'
+        + dragCell(i, !!CUR.can_edit)
+        + '<td><input class="g-name" value="' + esc(s.step_name || '') + '" data-eg-hint="例如 更換砂輪"' + ro + '></td>'
+        + '<td><textarea class="g-text" rows="3"' + ro + '>' + esc(s.step_text || '') + '</textarea></td>'
+        + '<td><textarea class="g-note" rows="3"' + ro + '>' + esc(s.note || '') + '</textarea></td>'
+        + (CUR.can_edit ? '<td class="c"><button class="btn btn-xs g-del"' + dis + '>×</button></td>' : '')
+        + '</tr>';
+}
+
+function gsopSectHtml(sect) {
+    var ro = CUR.can_edit ? '' : ' readonly', dis = CUR.can_edit ? '' : ' disabled';
+    var soft = sect === 'soft';
+    var lbl  = soft ? '軟體步驟' : '硬體步驟';
+    var hint = soft ? '機台畫面上要設定的參數（工件規格、砂輪參數、研磨參數…），一格參數名稱一格數值'
+                    : '現場的實體動作（更換砂輪、更換C軸底座…），要點一行一個動作';
+    var tplN = (CUR.msop_tpl && CUR.msop_tpl[sect]) ? CUR.msop_tpl[sect].length : 0;
+    var models = (CUR.msop_models || []).join('、');
+
+    var h = '<div class="sec gsop-sec" data-sect="' + sect + '"><h5>' + lbl
+          + '<span class="muted-help">' + hint + '</span>';
+    if (CUR.can_edit) {
+        h += ' <button class="btn btn-xs btn-warm-o g-tpl" data-sect="' + sect + '"'
+           + (tplN ? '' : ' disabled') + ' title="'
+           + (tplN ? '整段換成「' + esc(models) + '」的機種範本' : '這個機種還沒有建立範本') + '">'
+           + '帶入機種範本' + (tplN ? '（' + tplN + ' 項）' : '（無）') + '</button>';
+    }
+    h += '</h5>';
+    h += '<div class="muted-help" style="margin:-4px 0 6px;">最後一列按 ↓ 自動加一列；沒填東西的末列按 ↑ 自動移除'
+       + (CUR.can_edit ? '；<b>按住最左邊的「☰ 項次」上下拖曳可以調整順序</b>' : '') + '</div>';
+    h += '<table class="grid gsop-grid" id="tbl' + (soft ? 'Soft' : 'Hard') + '"><thead><tr>'
+       + '<th style="width:52px;">項次</th><th style="width:130px;">' + lbl + '</th>'
+       + '<th>要　點</th><th style="width:210px;">備註</th>'
+       + (CUR.can_edit ? '<th style="width:38px;"></th>' : '') + '</tr></thead>'
+       + '<tbody data-eg-row-add="' + (soft ? 'softAdd' : 'hardAdd') + '" data-eg-row-del="'
+       + (soft ? 'softDel' : 'hardDel') + '">';
+    var rows = ssSectRows(sect);
+    if (!rows.length && CUR.can_edit) rows = [{}];
+    $.each(rows, function (i, s) { h += soft ? softRowHtml(i, s, ro, dis) : hardRowHtml(i, s, ro, dis); });
+    h += '</tbody></table></div>';
+    return h;
+}
+
+/** 整個 gsop 的編輯區：圖面（含發行日期）→ 軟體步驟 → 硬體步驟（檢驗項目由 itemsHtml 接在後面） */
+function gsopHtml() {
+    return '<div class="note-box">這一份是<b>標準作業流程 SOP</b>（特定料號 × 機台）。'
+         + '列印時<b>左半邊</b>是下面挑的<b>圖面</b>與<b>檢驗項目</b>，<b>右半邊</b>是<b>軟體步驟</b>與<b>硬體步驟</b>；'
+         + '表頭的加工機種就是上面綁定的機台，所以這裡不再另外填使用設備與預計工時。</div>'
+         + drawBoxHtml() + gsopSectHtml('soft') + gsopSectHtml('hard');
+}
+
+/* ── 增刪列（共用檔 eg_input_rules.js 是**不帶參數**呼叫的，一律做成自己找表／自己取末列） ──
+   ★ 這兩張表裡面還**巢狀**一張參數格小表（table.kvgrid），所以選擇器一律要寫成
+     `#tblSoft > tbody > tr`。寫成 `#tblSoft tbody` 會連 10 個參數格的 tbody 一起選到，
+     按一次 ↓ 就把步驟列塞進每一個參數格裡（實測踩到）。 */
+
+/** 把「游標所在的那一列」正規化成步驟列——游標可能在參數格的小表裡 */
+function gsopOwnRow(sel, $tr) {
+    if (!$tr || !$tr.length) return $();
+    var $own = $tr.closest(sel + ' > tbody > tr');
+    return $own.length ? $own : $tr.parents(sel + ' > tbody > tr').first();
+}
+function gsopAdd(sel, soft, $tbody) {
+    var $tb = $(sel + ' > tbody');
+    if (!$tb.length || !CUR || !CUR.can_edit) return;
+    $tb.append(soft ? softRowHtml($tb.children('tr').length, {}, '', '')
+                    : hardRowHtml($tb.children('tr').length, {}, '', ''));
+    renumber($tb);
+}
+function gsopDel(sel, $tr) {
+    var $tb = $(sel + ' > tbody');
+    if (!$tb.length) return;
+    $tr = gsopOwnRow(sel, $tr);
+    if (!$tr.length) $tr = $tb.children('tr').last();           // 不帶參數＝移除最後一列
+    if ($tb.children('tr').length <= 1) return;
+    $tr.remove(); renumber($tb);
+}
+function softAdd($tbody) { gsopAdd('#tblSoft', true, $tbody); }
+function softDel($tr)    { gsopDel('#tblSoft', $tr); }
+function hardAdd($tbody) { gsopAdd('#tblHard', false, $tbody); }
+function hardDel($tr)    { gsopDel('#tblHard', $tr); }
+
+$(document).on('click', '.gsop-grid .g-del', function () {
+    gsopDel('#' + $(this).closest('table.gsop-grid').attr('id'), $(this).closest('tr'));
+});
+$(document).on('click', '.kv-add', function () {
+    var $box = $(this).prev('.kvgrid');
+    $box.find('tbody').append(kvRowHtml([], '', ''));
+    $box.find('tbody tr').last().find('input').first().focus();
+});
+$(document).on('click', '.kv-del', function () {
+    var $tb = $(this).closest('tbody');
+    if ($tb.children('tr').length <= 1) { $tb.find('input').val(''); return; }
+    $(this).closest('tr').remove();
+});
+
+/* 帶入機種範本：整段換掉，所以一定要先問一句（現場可能已經填了一半） */
+$(document).on('click', '.g-tpl', function () {
+    if (!CUR || !CUR.can_edit) return;
+    var sect = $(this).data('sect');
+    var lbl = sect === 'soft' ? '軟體步驟' : '硬體步驟';
+    if (!confirm('要把「' + lbl + '」整段換成「' + (CUR.msop_models || []).join('、') + '」的機種範本嗎？\n\n'
+               + '目前這一段已經填的內容會被取代（軟體步驟只會帶入參數名稱，數值留空給你填）。')) return;
+    post('msop_apply', { ver_id: num(CUR.ver.ver_id), sect: sect, mode: 'replace' }, function (res) {
+        if (!CUR.sects) CUR.sects = {};
+        CUR.sects[sect] = res.steps || [];
+        renderDoc();
+        ssToast('已帶入 ' + num(res.applied) + ' 項' + lbl + '。');
+    });
+});
+
+/* ── 收集 ── */
+function collectKv($cell) {
+    var out = [];
+    $cell.find('.kvgrid tbody tr').each(function () {
+        var row = [];
+        var $ks = $(this).find('.kv-k'), $vs = $(this).find('.kv-v');
+        for (var i = 0; i < $ks.length; i++) {
+            var k = $($ks[i]).val() || '', v = $($vs[i]).val() || '';
+            if (!$.trim(k) && !$.trim(v)) continue;
+            row.push({ k: k, v: v });
+        }
+        if (row.length) out.push(row);
+    });
+    return out;
+}
+function collectSoft() {
+    var out = [];
+    $('#tblSoft > tbody > tr').each(function () {
+        var $t = $(this);
+        out.push({ step_name: $t.find('.g-name').val() || '',
+                   kv: collectKv($t.find('.g-kvcell')),
+                   note: $t.find('.g-note').val() || '' });
+    });
+    return out;
+}
+function collectHard() {
+    var out = [];
+    $('#tblHard > tbody > tr').each(function () {
+        var $t = $(this);
+        out.push({ step_name: $t.find('.g-name').val() || '',
+                   step_text: $t.find('.g-text').val() || '',
+                   note: $t.find('.g-note').val() || '' });
+    });
+    return out;
+}
+
+/* ══════════════ 新增文件的「文件種類」卡 ══════════════
+   2026-09-30 使用者回報：原本「表單版面」＋「適用範圍」兩個下拉要自己在腦中組合，
+   而且三種 SOP 混在同一組欄位裡，選錯也看不出來（「混用反而很難用」）。
+   改成一張一張明確的種類卡，點一下就把版面／適用範圍／版式三件事一起設定好。
+   **卡片是由 SS_KINDS × SS_KIND_SCOPES × SS_LAYOUT_ALLOWED 現算出來的**，
+   不是另外寫死一份清單——後端加一種版面或版式，這裡自動長出來（鐵律4）。 */
+
+/** 這一張卡要顯示的說明；沒登記的組合一律回空字串（不編一個說明出來） */
+function nTypeDesc(kind, scope, layout) {
+    if (layout === 'gsop') return '紙本「標準作業流程 SOP」：左邊圖面＋檢驗項目，右邊軟體步驟＋硬體步驟。';
+    if (kind === 'equip')   return scope === 'tool' ? '這一支量具怎麼操作。' : '這一台（型號）機器怎麼操作。';
+    if (kind === 'process') {
+        if (scope === 'machine') return '這個製程在這一型機台上怎麼做（不分料號）。';
+        if (scope === 'tool')    return '這個製程要用到這一支量具時怎麼做。';
+        if (scope === 'part')    return '這個料號的製程說明（逐步驟＋參考圖示）。';
+        return '這個製程的通用做法，不分機台也不分料號。';
+    }
+    if (scope === 'part') return '這個料號要檢驗什麼、用什麼檢具、標準是多少。';
+    return '不分料號的通用檢驗指導書。';
+}
+
+/** 卡片標題：版面名稱（適用範圍）；gsop 直接用它自己的名字，不要再掛「製造製程說明書」 */
+function nTypeTitle(kind, scope, layout) {
+    if (layout === 'gsop') return (SS_LAYOUTS && SS_LAYOUTS.gsop ? SS_LAYOUTS.gsop : '標準作業流程 SOP')
+                                + '（特定料號 × 機台）';
+    return (SS_KINDS[kind] ? SS_KINDS[kind].label : kind) + '（' + (SS_SCOPES[scope] || scope) + '）';
+}
+
+/** 這個版面在不在目前的分頁、而且有沒有填寫權限（與 kindOptions() 同一套判斷） */
+function nTypeUsable(kind) {
+    var d = SS_KINDS[kind];
+    if (!d || d.tab !== TAB) return false;
+    return d.tab === 'sip' ? !!SS_PERMS.canEditSip : !!SS_PERMS.canEditSop;
+}
+
+function nTypeList() {
+    var out = [];
+    $.each(SS_KINDS, function (kind, def) {
+        if (!nTypeUsable(kind)) return;            // 不在這個分頁、或沒有填寫權限就不列出來
+        var scopes = (window.SS_KIND_SCOPES && SS_KIND_SCOPES[kind]) || ['machine', 'tool', 'general', 'part'];
+        $.each(scopes, function (i, scope) {
+            var lays = (window.SS_LAYOUT_ALLOWED && SS_LAYOUT_ALLOWED[kind + '|' + scope]) || ['std'];
+            $.each(lays, function (j, layout) {
+                out.push({ kind: kind, scope: scope, layout: layout,
+                           title: nTypeTitle(kind, scope, layout),
+                           desc: nTypeDesc(kind, scope, layout),
+                           as_no: def.as_no || '' });
+            });
+        });
+    });
+    return out;
+}
+
+function nTypeRender(sel) {
+    var list = nTypeList(), h = '';
+    $.each(list, function (i, t) {
+        var on = sel && sel.kind === t.kind && sel.scope === t.scope && sel.layout === t.layout;
+        h += '<div class="ntype' + (on ? ' on' : '') + '" data-kind="' + esc(t.kind) + '" data-scope="'
+           + esc(t.scope) + '" data-layout="' + esc(t.layout) + '">'
+           + '<div class="t">' + esc(t.title) + '</div>'
+           + '<div class="d">' + esc(t.desc) + '</div>'
+           + '<div class="as">' + esc(t.as_no) + '</div></div>';
+    });
+    $('#nTypeBox').html(h || '<div class="muted-help">目前沒有任何可以建立的文件種類（權限不足）。</div>');
+    return list;
+}
+
+/** 選定一種文件種類：把兩個下拉一起設好，欄位顯示規則仍然走既有的 syncScope() */
+function nTypePick(kind, scope, layout) {
+    NEW = NEW || {};
+    NEW.layout = layout || 'std';
+    $('#nKind').val(kind);
+    syncScope();                 // 會重建適用範圍下拉
+    $('#nScope').val(scope);
+    syncScopeFields();
+    nTypeRender({ kind: kind, scope: scope, layout: NEW.layout });
+    /* 兩個下拉留著但收起來——選錯種類時還是要有地方看得出「現在選的是什麼」，
+       而且管理員偶爾需要手動改成清單以外的組合。 */
+    $('.krow').toggle(!!(window.SS_SHOW_RAW_KIND));
+}
+
+$(document).on('click', '.ntype', function () {
+    nTypePick($(this).data('kind'), $(this).data('scope'), String($(this).data('layout') || 'std'));
+});
+/* 手動改下拉時，卡片的選取狀態要跟著走，不然畫面會自相矛盾 */
+$(document).on('change', '#nKind, #nScope', function () {
+    var kind = $('#nKind').val(), scope = $('#nScope').val();
+    var lays = (window.SS_LAYOUT_ALLOWED && SS_LAYOUT_ALLOWED[kind + '|' + scope]) || ['std'];
+    if (lays.indexOf(NEW && NEW.layout) < 0) NEW.layout = lays[0] || 'std';
+    nTypeRender({ kind: kind, scope: scope, layout: NEW.layout });
+});
+
+/* ══════════════ 設定 → 機種步驟範本 ══════════════
+   硬體步驟與軟體步驟的項目本來就隨機種不同（同一顆「更換砂輪」，KX500 是
+   「調整→更換序列→…」、LHG-3040 是「手輪→刀把進退→…」），所以逐機種維護一套。
+   **改範本不會動到已經建立的文件**——範本只在建立文件或按「帶入機種範本」時複製過去。 */
+
+var MSOP = { model: '', rows: { soft: [], hard: [] } };
+
+function setPaneMsop(model) {
+    api('msop_get', { model: model || '' }, function (res) {
+        MSOP.model = res.model || '';
+        MSOP.rows = { soft: [], hard: [] };
+        $.each(res.rows || [], function (i, r) {
+            (MSOP.rows[r.sect] || (MSOP.rows[r.sect] = [])).push(r);
+        });
+        var h = '<div class="note-box">這裡維護的是<b>標準作業流程 SOP</b>（料號 × 機台）的步驟範本。'
+              + '建立文件時會依綁定的機台型號自動帶入，之後在文件裡改不會回頭影響範本，'
+              + '<b>改這裡也不會動到已經建立的文件</b>。'
+              + '軟體步驟只需要填「參數名稱」，數值留給現場在各自的文件裡填。</div>';
+        h += '<div class="frm" style="margin-bottom:10px;"><label>機種型號</label><div class="wide">'
+           + '<select id="msModel" data-eg-filter="輸入型號篩選…"><option value="">（請選機種型號）</option>';
+        var seen = {};
+        $.each(res.models || [], function (i, m) {
+            seen[m.machine_model] = 1;
+            h += '<option value="' + esc(m.machine_model) + '"' + (m.machine_model === MSOP.model ? ' selected' : '') + '>'
+               + esc(m.machine_model) + '（軟 ' + num(m.soft_n) + '／硬 ' + num(m.hard_n) + '）</option>';
+        });
+        // 還沒建過範本的型號也要列得出來，不然新機種永遠建不了第一筆
+        $.each(res.all_models || [], function (i, m) {
+            var v = m.model || m.machine_model || m.value || '';
+            if (!v || seen[v]) return;
+            h += '<option value="' + esc(v) + '"' + (v === MSOP.model ? ' selected' : '') + '>'
+               + esc(v) + '（尚未建立）</option>';
+        });
+        h += '</select></div></div>';
+        h += '<div id="msBox"></div>';
+        $('#setPane').html(h);
+        msRender();
+    });
+}
+
+function msSectHtml(sect) {
+    var soft = sect === 'soft';
+    var lbl = soft ? '軟體步驟' : '硬體步驟';
+    var rows = MSOP.rows[sect] || [];
+    var h = '<div class="sec"><h5>' + lbl
+          + '<span class="muted-help">' + (soft ? '只填參數名稱（模數／螺旋角／跨齒厚…），一列最多三個'
+                                                : '要點與備註會整段帶進文件') + '</span>'
+          + ' <button class="btn btn-xs btn-warm-o ms-add" data-sect="' + sect + '">新增一項</button></h5>';
+    if (!rows.length) h += '<div class="muted-help">這個機種還沒有' + lbl + '範本。</div>';
+    $.each(rows, function (i, r) {
+        h += '<div class="ms-row" data-sect="' + sect + '" data-i="' + i + '" style="border:1px solid var(--line);'
+           + 'border-radius:4px;padding:6px 8px;margin-bottom:6px;">'
+           + '<div style="display:flex;gap:6px;align-items:center;">'
+           + '<input class="ms-name" value="' + esc(r.step_name || '') + '" data-eg-hint="項目名稱，例如 工件規格" style="width:200px;">'
+           + '<span class="sp" style="flex:1;"></span>'
+           + '<button class="btn btn-xs ms-up">↑</button> <button class="btn btn-xs ms-dn">↓</button> '
+           + '<button class="btn btn-xs ms-rm">刪除</button></div>';
+        if (soft) {
+            h += '<div class="muted-help" style="margin:4px 0 2px;">參數名稱（一行一列，同一列用「、」分隔最多三個）：</div>'
+               + '<textarea class="ms-keys" style="width:100%;min-height:56px;border:1px solid var(--line);'
+               + 'border-radius:4px;padding:4px 6px;font-size:12.5px;line-height:1.7;">'
+               + esc(msKeysText(r.kv || [])) + '</textarea>';
+        } else {
+            h += '<textarea class="ms-text" style="width:100%;min-height:56px;border:1px solid var(--line);'
+               + 'border-radius:4px;padding:4px 6px;font-size:12.5px;line-height:1.7;" '
+               + 'data-eg-hint="要點，一行一個動作">' + esc(r.step_text || '') + '</textarea>';
+        }
+        h += '<textarea class="ms-note" style="width:100%;min-height:40px;margin-top:4px;border:1px solid var(--line);'
+           + 'border-radius:4px;padding:4px 6px;font-size:12px;line-height:1.7;" '
+           + 'data-eg-hint="備註（選填）">' + esc(r.note || '') + '</textarea></div>';
+    });
+    h += '<button class="btn btn-sm btn-warm ms-save" data-sect="' + sect + '">儲存' + lbl + '範本</button></div>';
+    return h;
+}
+
+/** 參數名稱 ⇄ 文字：一行一列，同一列以「、」分隔（現場就是這樣念的） */
+function msKeysText(kv) {
+    var lines = [];
+    $.each(kv || [], function (i, row) {
+        var ks = [];
+        $.each(row || [], function (j, p) { if (p && p.k) ks.push(p.k); });
+        if (ks.length) lines.push(ks.join('、'));
+    });
+    return lines.join('\n');
+}
+function msTextKeys(t) {
+    var out = [];
+    $.each(String(t || '').split(/\r?\n/), function (i, line) {
+        var row = [];
+        $.each(line.split(/[、,，]/), function (j, k) {
+            k = $.trim(k);
+            if (k && row.length < 3) row.push({ k: k, v: '' });
+        });
+        if (row.length) out.push(row);
+    });
+    return out;
+}
+
+function msRender() {
+    if (!MSOP.model) { $('#msBox').html('<div class="muted-help">請先在上面選一個機種型號。</div>'); return; }
+    $('#msBox').html(msSectHtml('soft') + msSectHtml('hard'));
+}
+function msCollect(sect) {
+    var out = [];
+    $('.ms-row[data-sect="' + sect + '"]').each(function () {
+        var $r = $(this);
+        out.push({ step_name: $r.find('.ms-name').val() || '',
+                   kv: sect === 'soft' ? msTextKeys($r.find('.ms-keys').val()) : [],
+                   step_text: sect === 'hard' ? ($r.find('.ms-text').val() || '') : '',
+                   note: $r.find('.ms-note').val() || '' });
+    });
+    return out;
+}
+function msSync() { $.each(['soft', 'hard'], function (i, s) { if ($('.ms-row[data-sect="' + s + '"]').length) MSOP.rows[s] = msCollect(s); }); }
+
+$(document).on('change', '#msModel', function () { setPaneMsop($(this).val()); });
+$(document).on('click', '.ms-add', function () {
+    var s = $(this).data('sect'); msSync();
+    (MSOP.rows[s] || (MSOP.rows[s] = [])).push({ step_name: '', kv: [], step_text: '', note: '' });
+    msRender();
+});
+$(document).on('click', '.ms-rm', function () {
+    var $r = $(this).closest('.ms-row'), s = $r.data('sect'), i = num($r.attr('data-i'));
+    msSync(); MSOP.rows[s].splice(i, 1); msRender();
+});
+$(document).on('click', '.ms-up, .ms-dn', function () {
+    var $r = $(this).closest('.ms-row'), s = $r.data('sect'), i = num($r.attr('data-i'));
+    var j = $(this).hasClass('ms-up') ? i - 1 : i + 1;
+    msSync();
+    if (j < 0 || j >= MSOP.rows[s].length) return;
+    var t = MSOP.rows[s][i]; MSOP.rows[s][i] = MSOP.rows[s][j]; MSOP.rows[s][j] = t;
+    msRender();
+});
+$(document).on('click', '.ms-save', function () {
+    var s = $(this).data('sect');
+    if (!MSOP.model) { alert('請先選機種型號。'); return; }
+    post('msop_save', { model: MSOP.model, sect: s, rows: JSON.stringify(msCollect(s)) }, function (res) {
+        ssToast('已儲存 ' + num(res.saved) + ' 項' + (s === 'soft' ? '軟體步驟' : '硬體步驟') + '範本。'
+              + '（已建立的文件不受影響）');
+        setPaneMsop(MSOP.model);
+    });
+});
