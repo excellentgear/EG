@@ -527,8 +527,11 @@ function saveRow(i, silent){
     };
     $.post(API, mpost, function(mr){
         if (!mr.ok) { if (!silent) alert('第 '+r.item_no+' 項主檔儲存失敗：'+(mr.error||'')); d.reject(); return; }
+        if (mr.warn && !silent) alert(mr.warn);   // 改了數值型態：舊年度的數字會換單位顯示
         $.post(API, post, function(res){
             if (!res.ok) { if (!silent) alert('第 '+r.item_no+' 項儲存失敗：'+(res.error||'')); d.reject(); return; }
+            // 改了統計方式／資料來源：這個年度既有的覆寫值是舊口徑的，會蓋掉重新算出來的值
+            if (res.warn && !silent) alert(res.warn);
             // 就地更新 DATA（不 reload，避免清掉其他列未存的編輯 / 兼任擔當者被重新推斷）
             r.freq = freq; r.value_type = vt;
             r.source_mode = post.source_mode; r.calculator_key = post.calculator_key;
@@ -779,6 +782,7 @@ function saveIndicator(){
     else { post.action = 'add_indicator'; post.item_no = $('#iItemNo').val() || 0; post.year = YEAR; }
     $.post(API, post, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        if (res.warn) alert(res.warn);
         $('#iMask').hide(); loadAll();
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }

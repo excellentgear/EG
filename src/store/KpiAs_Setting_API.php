@@ -157,7 +157,32 @@ case 'save_iy': {
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
-    jout([]);
+
+    /* 改了統計方式／資料來源之後，這個年度既有的「手動值／覆寫值」是**舊口徑**的數字，
+       而畫面的顯示優先序是 覆寫 > 手動 > 自動，所以那幾格會繼續蓋掉重新算出來的值。
+       2026-09-30 實際踩到：客訴由「頻率(%)」改成「件數」後，1~6 月仍顯示改制前填的
+       3.8／4.85 這種百分比數字，看起來就像「算件數怎麼會有小數」。這裡主動提醒。 */
+    $warn = '';
+    $om = kpi_as_pv(kpi_as_params($old['params_json']), 'metric', null);
+    $nm = kpi_as_pv(kpi_as_params($paramsJson), 'metric', null);
+    if ((string)$old['calculator_key'] !== (string)$calc
+        || (string)$old['source_mode'] !== (string)$sourceMode
+        || (string)$om !== (string)$nm) {
+        try {
+            $st = $db->prepare("SELECT COUNT(*) FROM kpi_as_monthly_value
+                                WHERE indicator_id=? AND year=?
+                                  AND (override_value IS NOT NULL OR manual_value IS NOT NULL)");
+            $st->execute([$iid, $year]);
+            $n = (int)$st->fetchColumn();
+            if ($n > 0) {
+                $warn = '注意：' . $year . ' 年度已經有 ' . $n . ' 個月填了手動值或覆寫值，'
+                      . '那是改統計方式之前填的數字（單位可能已經不一樣）。'
+                      . '畫面的顯示優先序是「覆寫 > 手動 > 自動」，所以那幾格會繼續蓋掉重新算出來的值。'
+                      . '請到 KPI 總覽點那一格 →「清除覆寫」，或確認那些數字在新的統計方式下仍然正確。';
+            }
+        } catch (Throwable $e) {}
+    }
+    jout($warn !== '' ? ['warn' => $warn] : []);
 }
 
 /* ---------- 指標主檔 ---------- */
@@ -186,7 +211,28 @@ case 'save_indicator': {
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
-    jout([]);
+
+    /* 數值型態是**跨年度共用**的（percent/count/分數…），改了它，舊年度已經填好的數字
+       會原封不動地換一個單位顯示（例：2025 填的 1.2% 在改成「件數」之後就變成 1.2 件）。
+       這裡把有值的年度列出來提醒，不擋下——要不要改是使用者的決定。 */
+    $warn = '';
+    if ((string)$old['value_type'] !== (string)$vt) {
+        try {
+            $st = $db->prepare("SELECT year, COUNT(*) c FROM kpi_as_monthly_value
+                                WHERE indicator_id=? AND (auto_value IS NOT NULL
+                                      OR manual_value IS NOT NULL OR override_value IS NOT NULL)
+                                GROUP BY year ORDER BY year");
+            $st->execute([$iid]);
+            $ys = [];
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $ys[] = $r['year'] . ' 年(' . (int)$r['c'] . ' 個月)';
+            if ($ys) {
+                $warn = '注意：「數值型態」是所有年度共用的，改成新的型態之後，'
+                      . implode('、', $ys) . ' 已經有數字的那些格子會直接換成新單位顯示，'
+                      . '數字本身不會跟著換算。舊年度如果是用舊的統計方式算的，請確認這樣顯示沒有問題。';
+            }
+        } catch (Throwable $e) {}
+    }
+    jout($warn !== '' ? ['warn' => $warn] : []);
 }
 
 case 'add_indicator': {
