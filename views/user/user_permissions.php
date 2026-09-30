@@ -371,6 +371,7 @@ $EG_ROLE_MODULES = [
     'print_sign_log'      => ['prefix'=>'psl',     'label'=>'列印與簽核紀錄',      'page'=>'print_sign_log.php'],
     'internal_audit'      => ['prefix'=>'ia',      'label'=>'內部稽核',            'page'=>'internal_audit.php'],
     'comm_mgmt'           => ['prefix'=>'cm',      'label'=>'溝通管理',            'page'=>'communication_mgmt.php'],
+    'as_schedule'         => ['prefix'=>'asched',  'label'=>'AS文件排程',          'page'=>'as_schedule.php'],
     'cust_satis'          => ['prefix'=>'cs',      'label'=>'客戶滿意度',          'page'=>'customer_satisfaction.php'],
     'qa_ncr'              => ['prefix'=>'ncr',     'label'=>'不合格品管制記錄表',  'page'=>'ncr_control_log.php'],
     'qa_abnormal'         => ['prefix'=>'qab',     'label'=>'品質異常處理單',      'page'=>'qa_abnormal_list.php'],

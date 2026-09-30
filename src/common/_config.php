@@ -136,6 +136,17 @@ try {
     error_log('[order_ma] tick hook failed: ' . $e->getMessage());
 }
 
+// === AS 文件排程提醒 順路觸發（2026-09-30 新增；做法同上，免工作排程器）===
+// 距上次檢查超過 3600 秒才背景啟動；掃描本年度到期/逾期的 AS 週期文件並通知負責課室
+// （站內通知＋Web Push＋Telegram）。刻意不對「系統查不到完成紀錄」的文件發提醒——
+// 系統不知道≠沒做，那會變成每月吵一件可能早就做完的事，見 asdoc_schedule_notify.php。
+try {
+    require_once __DIR__ . '/asdoc_schedule_tick.php';
+    eg_asched_tick();
+} catch (Throwable $e) {
+    error_log('[asched] tick hook failed: ' . $e->getMessage());
+}
+
 // === 移機快速備份 順路觸發（2026-07-24 新增；做法同上，免工作排程器）===
 // 距上次檢查超過 3600 秒才背景啟動；是否執行由工人依 migbk_interval_days 判斷(0=未啟用)
 try {
