@@ -3502,8 +3502,12 @@ function renderReady(res) {
           + '<b>NG</b>是這張製令累積出來的不良總數（各站報工紀錄加總）；<b>只要有 NG 就一定要有報廢單</b>'
           + '（異常單結案配發的報廢單號），沒有的話會列為缺件。<br>'
           + '<b>製程報告</b>＝檢驗機或外部廠商出的報告（跟系統裡的 QC 線上檢驗紀錄是兩回事），'
-          + '哪個製程大類要對到哪份報告由管理員在<a href="/EGsystem/views/pm/part_viewer.php" target="_blank">'
-          + '料號圖面查閱</a>的「設定標籤」勾選；<b>只有被綁了報告的製程大類才會列出來要求</b>，'
+          + '哪個製程大類要對到哪份報告由管理員在料號圖面查閱的'
+          /* part_viewer.php 沒帶 d_id/pk 會直接「缺少 d_id 參數」死掉——這裡不是要看特定料號，
+             借本專案第一張製令的料號當入口即可；順手帶 tags_setting=1 讓它開好就自動點開
+             「設定標籤」跳窗，管理員不必自己再找按鈕（使用者 2026-09-30 回報連結會死掉）。 */
+          + '<a href="' + esc(rdTagsSettingUrl(rows)) + '" target="_blank">「設定標籤」</a>勾選；'
+          + '<b>只有被綁了報告的製程大類才會列出來要求</b>，'
           + '沒綁的大類不強求。點一下會開啟像料號圖面查閱那樣的檔案畫面，找到的話直接開那一份。</p>'
           + '<div class="pj-table-wrap"><table class="pj-table"><thead><tr>'
           + '<th style="width:120px;">製令</th><th style="width:110px;">料號</th>'
@@ -3548,6 +3552,16 @@ function renderReady(res) {
 function rdEvidenceList(list, label) {
     if (!list || !list.length) return '';
     return '<div class="pj-hint">' + esc(label) + '：' + $.map(list, esc).join('、') + '</div>';
+}
+
+/** 資料完整度說明列的「設定標籤」連結網址：part_viewer.php 沒帶 d_id/pk 會直接死給你看
+ *  （「缺少 d_id 參數」），這個連結的用意是去改**全站共用**的標籤設定、不是要看特定料號，
+ *  所以借本專案第一張製令的料號當入口，帶 tags_setting=1 讓它開好就自動點開設定跳窗。 */
+function rdTagsSettingUrl(rows) {
+    var r = (rows || [])[0];
+    if (!r) return '/EGsystem/views/pm/part_viewer.php';
+    return '/EGsystem/views/pm/part_viewer.php?pk=' + num(r.ds_pk) + '&d_id=' + encodeURIComponent(r.part_no || '')
+         + '&bom=' + encodeURIComponent(r.bom || '') + '&tags_setting=1';
 }
 
 /** 「製程報告」欄：哪個製程大類被管理員綁了報告標籤（part_viewer.php「設定標籤」）就列一顆籤，

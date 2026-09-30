@@ -301,6 +301,10 @@ $onlyDrawing = !empty($_GET['only_drawing']);
 // 指定要直接開啟的檔名（ERP/資材報告清單裡的原始檔名）：由專案管理「資料完整度」點某一份報告
 // 深連結過來用，只是「開了之後預設選哪一個檔」，找不到時安靜退回原本的預設行為（禁止影響既有呼叫端）。
 $openFile = trim($_GET['open'] ?? '');
+// 深連結直接開啟「設定標籤」跳窗（例如「資料完整度」的製程報告說明列連過來，讓管理員不用自己找按鈕）。
+// 這個跳窗本身是全站共用設定、跟哪個料號無關，所以還是要挾帶一個合法的 d_id/pk 讓本頁能載入，
+// 只是載入後多做「自動點開這顆按鈕」這件事。
+$tagsSetting = !empty($_GET['tags_setting']);
 if ($d_id === '' && $pk <= 0) {
     die('缺少 d_id 參數');
 }
@@ -534,6 +538,7 @@ var _mode       = 'did';
 var _d_id       = <?= json_encode($d_id) ?>;   // 料號文字（僅供顯示）
 var ONLY_DRAWING = <?= $onlyDrawing ? 'true' : 'false' ?>;   // 只看 BOM 圖檔：不查ERP/資材報告、不查料號附件
 var _openFile   = <?= json_encode($openFile) ?>;   // 深連結指定要開啟的 ERP/資材報告檔名（沒帶或找不到就走原本預設）
+var _tagsSetting = <?= $tagsSetting ? 'true' : 'false' ?>;   // 深連結直接開啟「設定標籤」跳窗
 // 料號主檔歸戶：_pk 才是真正的歸戶鍵（d_setting.d_id）；_partCands 是同名料號的其他主檔
 var _pk         = <?= (int)($partScope['pk'] ?? 0) ?>;
 var _partCands  = <?php
@@ -808,6 +813,9 @@ function renderPartScopeBar() {
     });
 }
 renderPartScopeBar();
+
+// 深連結直接開啟「設定標籤」跳窗（openFileTagsSetting 定義在下面，函式宣告會被提升，這裡呼叫沒問題）
+if (_tagsSetting) openFileTagsSetting();
 
 /* ── 優選附件（2026-09-01 使用者要求）────────────────────────────────────
    在「附件類別標籤設定」勾了「優選顯示在 BOM 總覽的料號查閱畫面」的標籤，
