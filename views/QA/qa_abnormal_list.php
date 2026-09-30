@@ -454,7 +454,8 @@ $cats    = qab_cats($db, true);        // 工具列的分類篩選只列啟用�
                 </div>
                 <div style="margin-top:12px;border-top:1px dashed var(--line);padding-top:10px;">
                     <div class="fld"><label>首頁批次月報列印標題（不綁 AS 文件，獨立設定）</label>
-                        <input type="text" id="cfgListPrintTitle" maxlength="60" placeholder="品質異常處理單彙總清單"></div>
+                        <input type="text" id="cfgListPrintTitle" maxlength="60">
+                        <div class="muted-help">留空＝用預設標題「品質異常處理單彙總清單」</div></div>
                     <div class="muted-help" style="margin-top:2px;">首頁「批次列印」依年月印出的彙總清單用這個標題，跟上面的 AS 文件綁定無關；
                         列印出來的樣子是「大標題：本公司全名」→「YYYY.MM　這個標題」。</div>
                 </div>
@@ -474,7 +475,8 @@ $cats    = qab_cats($db, true);        // 工具列的分類篩選只列啟用�
         <div class="m-bd">
             <div class="note-box" id="delNote"></div>
             <div class="fld"><label>原因 <span style="color:var(--coral)" id="delReq">*</span></label>
-                <textarea id="delReason" rows="3" placeholder="例：重複開單／料號填錯，已重開一張"></textarea></div>
+                <textarea id="delReason" rows="3"></textarea>
+                <div class="muted-help">例：重複開單／料號填錯，已重開一張</div></div>
             <div class="err" id="delErr"></div>
         </div>
         <div class="m-ft">
@@ -1150,7 +1152,7 @@ function abCatRow(c){
     return '<tr data-abcat="' + c.cat_id + '">'
         + '<td class="drag" draggable="true" title="按住拖曳可以調整順序（清單分區也照這個順序）">&#x2822;</td>'
         + '<td><input type="text" class="k-name" maxlength="40" value="' + esc(c.name) + '"></td>'
-        + '<td><input type="text" class="k-suffix" maxlength="10" placeholder="例：-IR（留空＝不加）" value="' + esc(c.suffix || '') + '">'
+        + '<td><input type="text" class="k-suffix" maxlength="10" value="' + esc(c.suffix || '') + '">'
         + '<div class="muted-help k-prev"></div></td>'
         + '<td class="c"><input type="radio" name="abcatauto" class="k-auto" ' + (Number(c.is_pm_auto) ? 'checked' : '') + '></td>'
         + '<td class="c"><input type="checkbox" class="k-act" ' + (Number(c.is_active) ? 'checked' : '') + '></td>'
@@ -1163,14 +1165,18 @@ function renderAbCat(){
         : '<tr><td colspan="6" class="c">尚未建立任何分類（開單時分類是必填的，請至少留一個）</td></tr>');
     abCatPreview();
 }
-/* 後綴詞打進去當下就讓使用者看到單號長什麼樣子——只看一個「-IR」很難想像整串的結果 */
+/* 後綴詞打進去當下就讓使用者看到單號長什麼樣子——只看一個「-IR」很難想像整串的結果。
+   **說明一律放在欄位「下方」不可以放 placeholder**（使用者回報：放在欄位裡會被當成已經填好的值，
+   ai-rules/08 第一之三節本來就規定提示唸起來像合法的值就不能當 placeholder）。 */
 function abCatPreview(){
     var t = new Date(), roc = String(t.getFullYear() - 1911);
     var base = 'Q' + ('00' + roc).slice(-3)
              + ('0' + (t.getMonth() + 1)).slice(-2) + ('0' + t.getDate()).slice(-2) + '001';
     $('#cfgAbCat tr[data-abcat]').each(function(){
         var sfx = ($(this).find('.k-suffix').val() || '').trim();
-        $(this).find('.k-prev').text(base + sfx);
+        $(this).find('.k-prev').html(sfx
+            ? ('這一類的單號會是 <b>' + esc(base + sfx) + '</b>')
+            : ('留空＝不加後綴（<b>' + esc(base) + '</b>）；<br>填 <b>-IR</b> 就會變成 ' + esc(base) + '-IR'));
     });
 }
 $(document).on('click', '#btnAbCatAdd', function(){

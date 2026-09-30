@@ -4,7 +4,7 @@
  * 建立：2026-09-18
  *
  * 版面完全照 Excel 的區塊順序與欄位：
- *   表頭(單號/客戶/填寫日期 → 製令/客退單號/責任單位 → 料號/批量/檢驗數/不良數/不良率)
+ *   表頭(單號＋分類/客戶/填寫日期 → 製令/客退單號/責任單位 → 料號/批量/檢驗數/不良數/不良率)
  *   → 量測尺寸與實測值 1~12（三列）→ 異常現象＋(業務/品管)承辦 → 異常原因分類（＋簡易說明）
  *   → 異常處置方式＋(業務/品管)主管 → 處置說明 → 相關單位意見(僅勾選者需回覆)
  *   → 最終裁示（總經理／管理員指定的○○主管）＋矯正單號 → 扣款確認(製程/其他/合計、核准扣款金額、報廢單號、三格簽章)
@@ -246,7 +246,11 @@ svg.eg-stamp-tpl { height:auto !important; }
 <table class="f">
     <colgroup><col style="width:13%"><col style="width:22%"><col style="width:13%"><col style="width:19%"><col style="width:13%"><col style="width:20%"></colgroup>
     <tr>
-        <td class="lb">異常單號</td><td class="c"><?= h($o['abnormal_order_no']) ?></td>
+        <td class="lb">異常單號</td>
+        <td class="c"><?= h($o['abnormal_order_no']) ?>
+            <?php /* 分類一律印出來（使用者回報看不到）——分類上線前的舊單還沒有分類，
+                     那就印一個空的「分類：」讓紙本上可以手寫，不要整行不見。 */ ?>
+            <div class="small">分類：<?= h($o['cat_name']) ?></div></td>
         <td class="lb">客戶</td><td class="c"><?= h($o['client_name']) ?></td>
         <td class="lb">填寫日期</td><td class="c"><?= h(d($o['fill_date'])) ?></td>
     </tr>

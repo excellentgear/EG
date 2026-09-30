@@ -354,8 +354,10 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     </div>
                     <div class="chips" id="causeChips"></div>
                     <div class="fld" style="margin-top:8px;"><label>簡易說明 <span class="muted-help">（備註，選填；會印在紙本的「異常原因分類」欄底下）</span></label>
-                        <textarea id="f_cause_note" rows="2" maxlength="255" placeholder="例：CNC 程式 G54 補正值輸入錯誤"></textarea>
-                        <div class="muted-help" id="causeNoteCnt" style="text-align:right;"></div></div>
+                        <textarea id="f_cause_note" rows="2" maxlength="255"></textarea>
+                        <div class="muted-help" style="display:flex;gap:8px;">
+                            <span>例：CNC 程式 G54 補正值輸入錯誤</span>
+                            <span id="causeNoteCnt" style="margin-left:auto;"></span></div></div>
                 </div>
             </div>
 
