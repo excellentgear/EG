@@ -1174,9 +1174,8 @@ function abCatPreview(){
              + ('0' + (t.getMonth() + 1)).slice(-2) + ('0' + t.getDate()).slice(-2) + '001';
     $('#cfgAbCat tr[data-abcat]').each(function(){
         var sfx = ($(this).find('.k-suffix').val() || '').trim();
-        $(this).find('.k-prev').html(sfx
-            ? ('這一類的單號會是 <b>' + esc(base + sfx) + '</b>')
-            : ('留空＝不加後綴（<b>' + esc(base) + '</b>）；<br>填 <b>-IR</b> 就會變成 ' + esc(base) + '-IR'));
+        // 一行就好，不要囉嗦（使用者回報字太多）：沒填給個例子，填了就直接把單號長相顯示出來
+        $(this).find('.k-prev').html(sfx ? ('<b>' + esc(base + sfx) + '</b>') : '例：-IR（留空＝不加）');
     });
 }
 $(document).on('click', '#btnAbCatAdd', function(){
