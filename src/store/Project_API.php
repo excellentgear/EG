@@ -206,6 +206,14 @@ case 'get':
        不需另外填回報進度」，所以在開專案的當下就把該補的完成日與負責人補上，
        畫面看到的與資料庫存的才是同一份（只填空的，人工填過的一律不動）。 */
     try { prj_auto_fill_tasks($db, $pid, $prj); } catch (Throwable $e) {}
+    /* 預計日期：**還沒送簽**時順路把空白的排好（唯一實作 prj_plan_autofill）——
+       已存在之案例用偵測到的佐證日期帶入，第一次下訂的案子由專案起日＋範本天數往後接（跨階段連續）。
+       只填空白、不覆蓋任何已經排好的日期；送簽之後編排已鎖定，一律不動（使用者要按「解鎖編排」再重排）。
+       evidence 這一份接下來輸出時也要用，算一次傳進去就好，不必算兩遍。 */
+    $evAll = prj_task_evidence($db, $pid, $prj);
+    if (!prj_plan_locked($prj)) {
+        try { prj_plan_autofill($db, $pid, $prj, 'empty', $evAll); } catch (Throwable $e) {}
+    }
     jout([
         'project'   => $prj,
         'goals'     => prj_goals($db, $pid),
@@ -217,7 +225,7 @@ case 'get':
         'attach_counts'    => prj_task_attach_counts($db, $pid),
         // 自動偵測到的完成日佐證（實測 40ms）。放進 get 是為了讓畫面**直接看得到**偵測結果，
         // 不必先點開回報跳窗才知道系統有沒有抓到——使用者回報「這些功能有做嗎」就是因為看不到。
-        'evidence'         => prj_task_evidence($db, $pid, $prj),
+        'evidence'         => $evAll,
         'auto_kinds'       => PRJ_AUTO_KINDS,
         'auto_sign_range'  => prj_auto_sign_range($db, $prj, $NOW['date']),
         'shipments' => prj_shipments($db, $pid),
@@ -1042,6 +1050,31 @@ case 'plan_save':
         foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $cid) prj_card_refresh_baseline($db, (int)$cid);
     } catch (Throwable $e) {}
     jout(['message' => '已儲存執行規劃表', 'goals' => prj_goals($db, $pid), 'tasks' => prj_tasks($db, $pid)]);
+
+/* 預計日期自動排（工具列「自動帶日期」）。唯一實作 prj_plan_autofill()，與開啟專案時的順路觸發
+   同一支函式，兩邊排出來的日程不會走鐘。mode=all＝整份重排（前端已 confirm 過會覆蓋）。 */
+case 'plan_autofill':
+    $pid = (int)($_POST['project_id'] ?? 0);
+    $prjAF = prj_need($db, $P, $pid, true);
+    // 送簽之後編排鎖定，只有管理員能重排（與 plan_save 同一條規則＝鐵律8）
+    if (prj_plan_locked($prjAF) && !$P['canAdmin']) {
+        jerr('這份規劃表已經送簽，編排已鎖定；只有管理員可以重排（請在「執行規劃表」按「解鎖編排」）', 403);
+    }
+    $afMode = ((string)($_POST['mode'] ?? 'empty') === 'all') ? 'all' : 'empty';
+    $af = prj_plan_autofill($db, $pid, $prjAF, $afMode);
+    if ($af['note'] !== '') jerr($af['note'], 400);
+    // 日程改了，仍為自動的管理卡基準要跟著重算（與 plan_save 同一段處理）
+    try {
+        $st = $db->prepare("SELECT card_id FROM project_card WHERE project_id=? AND is_deleted=0 AND status='draft'");
+        $st->execute([$pid]);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $cid) prj_card_refresh_baseline($db, (int)$cid);
+    } catch (Throwable $e) {}
+    $afMsg = $af['total'] === 0
+        ? ($afMode === 'all' ? '重排後的日期與原本完全相同，沒有需要變更的步驟' : '每一個步驟都已經有日期了，沒有需要補的（要整份重排請選「全部重排」）')
+        : ('已排好 ' . $af['total'] . ' 個步驟的預計日期（' . $af['ev'] . ' 個由系統偵測到的佐證帶入、'
+           . $af['calc'] . ' 個由預設工作天數往後推算）');
+    jout(['message' => $afMsg, 'stat' => $af,
+          'goals' => prj_goals($db, $pid), 'tasks' => prj_tasks($db, $pid)]);
 
 /* ══════════════════════════ 首件檢驗（AS9102 FAI） ══════════════════════════ */
 case 'fai_save':

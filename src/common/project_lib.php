@@ -1091,6 +1091,28 @@ function prj_plan_days(PDO $db, string $start, string $end): int
     return car_working_days_between($db, $s, $e) + 1;   // 開始日本身算 1 天
 }
 
+/**
+ * 這一天之後的第一個工作日（＝「順序」步驟的下一步從哪天開始）。
+ * 「順序」的語意是「前面那一步做完之後才開始」，而工作天數是**開始日當天算第 1 天**，
+ * 所以前一步的完成日那一整天是被它佔住的，下一步只能從再下一個工作日起算
+ * （前端 planNextWorkday() 是同一套規則的即時版）。
+ */
+function prj_plan_next_workday(PDO $db, string $date): string
+{
+    $cur = strtotime(substr($date, 0, 10));
+    if ($cur === false) return substr($date, 0, 10);
+    $sets = car_holiday_sets($db);
+    $guard = 0;
+    while ($guard++ < 400) {
+        $cur = strtotime('+1 day', $cur);
+        $key = date('Y-m-d', $cur);
+        $dow = (int)date('w', $cur);
+        $isWeekend = ($dow === 0 || $dow === 6);
+        if (isset($sets['makeups'][$key]) || (!$isWeekend && !isset($sets['holidays'][$key]))) break;
+    }
+    return date('Y-m-d', $cur);
+}
+
 /** 給前端即時計算用的行事曆（休假日／補班日；資料量只有幾十筆，隨 meta 帶下去即可） */
 function prj_workday_sets(PDO $db): array
 {
@@ -1301,7 +1323,7 @@ function prj_seed_template_default(): array
  * （＝內建這份是預設值不是第二份對照表，改設定不會有兩邊走鐘的問題＝鐵律4）。
  *
  * 資料形狀（存成 JSON）：
- *   [ ['goal'=>階段名稱, 'dept_id'=>主辦單位, 'tasks'=>[ ['name'=>步驟, 'kind'=>'', 'dept_id'=>預設負責部門, 'owner_id'=>預設負責人] … ] ] … ]
+ *   [ ['goal'=>階段名稱, 'dept_id'=>主辦單位, 'tasks'=>[ ['name'=>步驟, 'kind'=>'', 'dept_id'=>預設負責部門, 'owner_id'=>預設負責人, 'days'=>預設工作天數] … ] ] … ]
  * 內建預設也一律轉成同一種形狀，呼叫端只要認得這一種。
  */
 function prj_seed_template(?PDO $db = null): array
@@ -1314,7 +1336,8 @@ function prj_seed_template(?PDO $db = null): array
     foreach (prj_seed_template_default() as $goal => $tasks) {
         $ts = [];
         foreach ($tasks as $t) {
-            $ts[] = ['name' => $t['name'], 'kind' => (string)($t['kind'] ?? ''), 'dept_id' => 0, 'owner_id' => 0];
+            $ts[] = ['name' => $t['name'], 'kind' => (string)($t['kind'] ?? ''), 'dept_id' => 0, 'owner_id' => 0,
+                     'days' => (int)($t['days'] ?? 0)];
         }
         $out[] = ['goal' => $goal, 'dept_id' => 0, 'tasks' => $ts];
     }
@@ -1350,8 +1373,11 @@ function prj_seed_template_normalize(array $arr): array
             $kind = (string)($t['kind'] ?? '');
             if (!in_array($kind, ['fai', 'rca', 'delta_fai'], true)) $kind = '';
             if ($kind === 'fai') { if ($faiUsed) $kind = ''; else $faiUsed = true; }
+            /* 預設工作天數（使用者 2026-09-30 拍板：每一步預設幾天由管理員在範本逐步設定）。
+               0＝沒設定，帶入時一律視同 1 天；上限比照規劃表的天數欄（999）。 */
             $tasks[] = ['name' => mb_substr($tname, 0, 120), 'kind' => $kind,
-                        'dept_id' => (int)($t['dept_id'] ?? 0), 'owner_id' => (int)($t['owner_id'] ?? 0)];
+                        'dept_id' => (int)($t['dept_id'] ?? 0), 'owner_id' => (int)($t['owner_id'] ?? 0),
+                        'days' => max(0, min(999, (int)($t['days'] ?? 0)))];
         }
         if (!$tasks) continue;
         $out[] = ['goal' => mb_substr($gname, 0, 120), 'dept_id' => (int)($g['dept_id'] ?? 0), 'tasks' => $tasks];
@@ -1400,6 +1426,16 @@ function prj_seed_apply(PDO $db, int $projectId): array
     $st->execute([$projectId]);
     $gsort = (int)$st->fetchColumn();
 
+    /* 帶入的同時就把預計日程排好（使用者 2026-09-30：第一次下訂的案子系統沒有任何紀錄可以帶，
+       至少要能自動算出後續日期，而且**換階段也要接著算**）。
+       起算點：這個專案原本已經排到的最後一天（沒有就用專案起日）；每一步的天數取範本設定，
+       沒設就算 1 天；下一步從前一步完成日的**次一個工作日**開始（＝prj_plan_next_workday）。 */
+    $prj0    = prj_get($db, $projectId);
+    $projSt  = trim((string)($prj0['start_date'] ?? ''));
+    $st = $db->prepare("SELECT MAX(plan_end) FROM project_task WHERE project_id=?");
+    $st->execute([$projectId]);
+    $cursor = (string)($st->fetchColumn() ?: '');
+
     foreach (prj_seed_template($db) as $g) {
         $goalName = (string)$g['goal'];
         $tasks    = $g['tasks'];
@@ -1412,29 +1448,38 @@ function prj_seed_apply(PDO $db, int $projectId): array
         $tsort = 0;
         foreach ($tasks as $t) {
             $kind = (string)($t['kind'] ?? '');
+            /* 這一步的預計起迄（範本天數；跨階段一路接下去，$cursor 不會因為換階段而歸零） */
+            $days = max(1, (int)($t['days'] ?? 0));
+            $pStart = ($cursor === '') ? $projSt : prj_plan_next_workday($db, $cursor);
+            $pEnd   = ($pStart !== '') ? prj_plan_end_by_days($db, $pStart, $days) : '';
+            if ($pEnd !== '' && $pEnd > (string)$cursor) $cursor = $pEnd;
             if ($kind === 'fai') {
                 // 首件那一列是系統固定環節：已經存在就搬過來改名，不要變成兩列
                 $q = $db->prepare("SELECT task_id FROM project_task WHERE project_id=? AND task_kind='fai' LIMIT 1");
                 $q->execute([$projectId]);
                 $tid = (int)$q->fetchColumn();
                 if ($tid) {
-                    // 順便補上範本指定的預設負責人（只補空的，不覆蓋已經指派好的人）
+                    // 順便補上範本指定的預設負責人與預計日程（只補空的，不覆蓋已經指派好的人與排好的日期）
                     [$fD, , $fU, $fN] = prj_seed_owner($db, (int)($t['dept_id'] ?? 0), (int)($t['owner_id'] ?? 0));
                     $db->prepare("UPDATE project_task SET goal_id=?, task_name=?, sort_order=?,
                                         owner_dept_id=COALESCE(owner_dept_id,?),
                                         owner_id=COALESCE(owner_id,?),
-                                        owner_name=CASE WHEN owner_id IS NULL THEN ? ELSE owner_name END
+                                        owner_name=CASE WHEN owner_id IS NULL THEN ? ELSE owner_name END,
+                                        plan_start=COALESCE(plan_start,?), plan_end=COALESCE(plan_end,?)
                                   WHERE task_id=?")
-                       ->execute([$gid, $t['name'], $tsort++, $fD, $fU, $fN, $tid]);
+                       ->execute([$gid, $t['name'], $tsort++, $fD, $fU, $fN,
+                                  $pStart !== '' ? $pStart : null, $pEnd !== '' ? $pEnd : null, $tid]);
                     continue;
                 }
             }
             // 預設負責部門／負責人（管理員在模組設定的範本裡指定；沒指定就留空給填表人選）
             [$oDeptId, , $oUserId, $oUserName] = prj_seed_owner($db, (int)($t['dept_id'] ?? 0), (int)($t['owner_id'] ?? 0));
             $db->prepare("INSERT INTO project_task (project_id, goal_id, task_name, task_kind, status_code,
-                                owner_id, owner_name, owner_dept_id, progress, progress_auto, sort_order)
-                          VALUES (?,?,?,?,'',?,?,?,0,1,?)")
-               ->execute([$projectId, $gid, $t['name'], $kind, $oUserId, $oUserName, $oDeptId, $tsort++]);
+                                owner_id, owner_name, owner_dept_id, progress, progress_auto, sort_order,
+                                plan_start, plan_end)
+                          VALUES (?,?,?,?,'',?,?,?,0,1,?,?,?)")
+               ->execute([$projectId, $gid, $t['name'], $kind, $oUserId, $oUserName, $oDeptId, $tsort++,
+                          $pStart !== '' ? $pStart : null, $pEnd !== '' ? $pEnd : null]);
             $addT++;
         }
     }
@@ -2257,6 +2302,111 @@ function prj_auto_fill_tasks(PDO $db, int $projectId, ?array $prj = null): int
         return $n;
     }
     return $n;
+}
+
+/* ── 預計日期自動排（使用者 2026-09-30 交辦的兩件事，同一支函式解決）─────────────
+   使用者原話：「執行規劃表 內若是已存在之案例，無法自動帶入日期／另外不存在之案例應該也要
+   可以自動計算後續日期（跨階段要接著算）」。
+
+   兩種案子在這裡是**同一條規則的兩端**，所以刻意不分兩支函式（分兩支就會長出兩套排法）：
+     ・**已存在之案例**（不是第一次下訂，料號的圖面／PFMEA／SOP／SIP／製令／報工／檢驗都已經有了）
+       ── 那些日期系統本來就偵測得到（prj_task_evidence()），直接拿來當該步驟的預計開始日，
+          不必叫人一列一列打。原本只有 prj_auto_fill_tasks() 會用它，而那一支卡在
+          prj_act_dates_open()＝**只有核准之後才跑**，所以草稿階段（正是在編排規劃表的時候）
+          一個日期都不會帶進來——這就是使用者說「無法自動帶入日期」的原因。
+     ・**不存在之案例**（第一次下訂，系統裡什麼紀錄都還沒有）
+       ── 沒有東西可以帶，就從專案起日往後依「範本設定的預設工作天數」一路排下去。
+
+   三條界線：
+   ① **只填空白**（$mode='empty'）是預設，順路觸發用；$mode='all' 才整份重排，那是使用者按鈕
+      並確認過的動作。已經填好的日期不可以被順路觸發偷偷改掉。
+   ② **佐證日期夾在專案起日之後**：沿用舊文件的步驟（SOP/SIP/圖面）佐證日常常是好幾年前
+      （實測抓到 2022-07-05），拿它當本專案的預計開始會讓時間軸拉出一條莫名的長條。
+   ③ **換階段要接著算**：$cursor 走完一個階段不歸零，所以階段 2 的第一步接階段 1 的最後一步。
+      「同時」（dep_mode=par）那幾列共用同一個群組開始日，下一個「順序」步驟等整組做完。 */
+
+/** 範本上「步驟名稱 → 預設工作天數」（給既有任務重排時查；範本沒設回 0＝算 1 天） */
+function prj_seed_days_map(PDO $db): array
+{
+    $out = [];
+    foreach (prj_seed_template($db) as $g) {
+        foreach ((array)($g['tasks'] ?? []) as $t) {
+            $n = trim((string)($t['name'] ?? ''));
+            if ($n !== '') $out[$n] = max(0, (int)($t['days'] ?? 0));
+        }
+    }
+    return $out;
+}
+
+/**
+ * 把預計開始／預計完成排好。
+ * @param string $mode 'empty'＝只填空白的（順路觸發用）；'all'＝整份重排（覆蓋既有日期）
+ * @param array|null $ev 已經算好的佐證清單（呼叫端同一個請求裡本來就要算一次，傳進來免得算兩遍）
+ * @return array ['ev'=>由佐證帶入幾列, 'calc'=>由天數推算幾列, 'total'=>共異動幾列, 'note'=>算不出來的原因]
+ */
+function prj_plan_autofill(PDO $db, int $projectId, ?array $prj = null, string $mode = 'empty', ?array $ev = null): array
+{
+    $out = ['ev' => 0, 'calc' => 0, 'total' => 0, 'note' => ''];
+    try {
+        $prj = $prj ?: prj_get($db, $projectId);
+        if (!$prj) { $out['note'] = '找不到這個專案'; return $out; }
+        $projSt = trim((string)($prj['start_date'] ?? ''));
+        if ($projSt === '') { $out['note'] = '這個專案還沒有填「專案起日」，排不出日程'; return $out; }
+
+        $tasks = prj_tasks($db, $projectId);
+        if (!$tasks) { $out['note'] = '這份規劃表還沒有任何步驟'; return $out; }
+
+        $ev      = $ev ?: prj_task_evidence($db, $projectId, $prj);
+        $daysMap = prj_seed_days_map($db);
+        $upd     = $db->prepare("UPDATE project_task SET plan_start=?, plan_end=? WHERE task_id=? AND project_id=?");
+
+        $cursor = ''; $groupStart = ''; $curGoal = null; $idxInGoal = 0;
+        foreach ($tasks as $t) {
+            $gid = (int)($t['goal_id'] ?? 0);
+            if ($curGoal === null || $gid !== $curGoal) { $curGoal = $gid; $idxInGoal = 0; }
+            $dep = ($idxInGoal > 0 && (string)($t['dep_mode'] ?? 'seq') === 'par') ? 'par' : 'seq';
+            $idxInGoal++;
+
+            $ps = trim((string)($t['plan_start'] ?? ''));
+            $pe = trim((string)($t['plan_end'] ?? ''));
+
+            // 這一步要算幾天：已經排過的用它自己的天數，沒排過的用範本設定，都沒有就 1 天
+            $days = ($ps !== '' && $pe !== '') ? prj_plan_days($db, $ps, $pe) : 0;
+            if ($days <= 0) $days = (int)($daysMap[trim((string)$t['task_name'])] ?? 0);
+            if ($days <= 0) $days = 1;
+
+            // 這一步有沒有現成的佐證日期（好幾種佐證時取最晚的那一天＝全部到齊才算做到）
+            $evDate = '';
+            foreach (prj_auto_kinds_of((string)$t['task_name'], (string)($t['task_kind'] ?? '')) as $k) {
+                $d = (string)($ev[$k]['options'][0]['date'] ?? '');
+                if ($d !== '' && $d > $evDate) $evDate = $d;
+            }
+            if ($evDate !== '' && $evDate < $projSt) $evDate = $projSt;   // ②
+
+            // 照鏈排的話這一步該從哪天開始
+            $want = ($dep === 'par' && $groupStart !== '')
+                  ? $groupStart
+                  : (($cursor === '') ? $projSt : prj_plan_next_workday($db, $cursor));
+
+            $keep = ($mode !== 'all' && $ps !== '' && $pe !== '');       // ①
+            if ($keep) {
+                $start = $ps; $end = $pe;
+            } else {
+                $start = ($mode === 'all' || $ps === '') ? ($evDate !== '' ? $evDate : $want) : $ps;
+                $end   = prj_plan_end_by_days($db, $start, $days);
+                if ($start !== $ps || $end !== $pe) {
+                    $upd->execute([$start, $end, (int)$t['task_id'], $projectId]);
+                    $out['total']++;
+                    if ($evDate !== '' && $start === $evDate) $out['ev']++; else $out['calc']++;
+                }
+            }
+            if ($dep !== 'par' || $groupStart === '') $groupStart = $start;
+            if ($end !== '' && $end > $cursor) $cursor = $end;           // ③
+        }
+    } catch (Throwable $e) {
+        $out['note'] = '排程時發生錯誤：' . $e->getMessage();
+    }
+    return $out;
 }
 
 /* ══════════════════════════ 訂單轉專案：第一次下訂偵測與資料完整度 ══════════════════════════

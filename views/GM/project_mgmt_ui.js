@@ -925,6 +925,7 @@ function renderPlan(res) {
       + '<input type="checkbox" id="gHideDone" data-eg-skip="1"' + (HIDE_DONE ? ' checked' : '') + '>隱藏已完成的步驟</label>'
       + (res.can_edit && !planLocked(res)
             ? '<button id="btnSeed" title="帶入 AS9100 標準流程（三個階段與各步驟）"><i class="fa fa-magic"></i> 帶入標準流程</button>'
+              + '<button id="btnPlanAuto" title="沒填日期的步驟自動排好：系統偵測得到的（製令、圖面、PFMEA／SOP／SIP、報工、檢驗）用實際那一天，其餘由專案起日＋範本的預設工作天數往後接，換階段也接著算"><i class="fa fa-calendar"></i> 自動帶日期</button>'
               + '<button id="btnGoalAdd"><i class="fa fa-plus"></i> 新增目標</button>'
               + '<button class="btn-warm" id="btnPlanSave"><i class="fa fa-save"></i> 儲存規劃表</button>' : '')
       /* 送簽之後編排鎖定，但管理員要留一條救援路徑——排錯了卻改不了、又不想退回重簽時用 */
@@ -1564,6 +1565,14 @@ function planEndByDays(start, days) {
     }
     return ymd(dt);
 }
+/** 這一天之後的第一個工作日（＝「順序」步驟的下一步從哪天開始；後端同規則 prj_plan_next_workday） */
+function planNextWorkday(start) {
+    var dt = parseYmd(start);
+    if (!dt) return '';
+    var guard = 0;
+    do { dt.setDate(dt.getDate() + 1); } while (!isWorkday(dt) && guard++ < 400);
+    return ymd(dt);
+}
 /** 預計開始～預計完成 → 工作天數（同一天＝1；完成早於開始＝0，代表算不出來） */
 function planDaysBetween(start, end) {
     var a = parseYmd(start), b = parseYmd(end);
@@ -1936,10 +1945,16 @@ function drawPlanEditor(res) {
       + '部門清單由管理員在「模組設定 → 執行規劃表負責人部門」設定。<br>'
       + '<b>工作天數</b>與<b>預計完成</b>兩邊同動：填了開始日就自動帶出當天完成（＝1 天），'
       + '改天數會重算完成日、直接改完成日也會反算天數。天數只算工作日（週末與行事曆上的休假日不算、補班日要算）。'
-      + '<b>接續</b>：預設「順序」＝接在前面那些步驟都做完之後才開始；改成「<b>同時</b>」就與上一列<b>一起開始</b>'
+      + '<b>接續</b>：預設「順序」＝接在前面那些步驟都做完之後才開始（開始日＝前一步完成日的<b>次一個工作日</b>）；'
+      + '改成「<b>同時</b>」就與上一列<b>一起開始</b>'
       + '（例如 PFMEA／SOP／SIP／開立製令 可以並行，但「確認加工圖面 → PFMEA」一定要照順序）。'
       + '同時進行的幾列算成一個群組，<b>下一個「順序」的步驟要等整組都做完才開始</b>。'
+      + '<b>換階段也是接著算</b>——階段 2 的第一步接階段 1 的最後一步，不會每換一個階段就重新起算。'
       + '你自己改過的開始日不會被蓋掉。<br>'
+      + '<b>日期不必一列一列打</b>：開啟專案時系統就會把空白的排好，也可以隨時按工具列的「<b>自動帶日期</b>」——'
+      + '已經做過的料號用系統偵測到的實際日期（製令／圖面／PFMEA／SOP／SIP／報工／檢驗），'
+      + '第一次下訂的案子則由專案起日＋範本的預設工作天數往後推算。'
+      + '<b>由佐證帶入的那幾列不會被接續往後推</b>（那是實際發生的日期，不是推算值），與「你自己改過的日期」同一種處理。<br>'
       /* 使用者 2026-09-22 直接問「進度% 跟里程碑的勾選是甚麼？」——原本只寫在 th 的 title 裡，
          滑鼠移過去才看得到，等於沒寫。 */
       + '<b>進度%</b>＝這一步完成到幾成，底下的「<b>自動</b>」勾起來時<b>不用自己填</b>：'
@@ -1995,16 +2010,26 @@ function drawPlanEditor(res) {
 
 /**
  * 第一個目標的第一列「預計開始」沒填時，自動帶入專案開始日（使用者要求 2026-08-27）。
- * 只在空白時帶，不覆蓋已經排好的日期；後面的列本來就會由
- * 「上一列預計完成 → 下一列預計開始」自動串下去，所以整條日程會一起長出來。
+ * 只在空白時帶，不覆蓋已經排好的日期；後面的列（**含後面的階段**）會由 planChainAll()
+ * 一路串下去，所以整條日程會一起長出來。
+ * ※ 正常情況下後端開啟專案時就已經把空白的日期排好了（prj_plan_autofill），
+ *   這裡是「畫面上自己加出來的新目標／新列」那條路的即時版。
  */
 function planSeedFirstStart() {
     var $tr = $('#planEditBox .sec[data-goal]').first().find('.t-body tr').first();
-    if (!$tr.length || $.trim($tr.find('.t-ps').val())) return;
-    var sd = $.trim((CUR && CUR.project ? CUR.project.start_date : '') || '');
-    if (!sd) return;
-    $tr.find('.t-ps').val(sd);
-    planRowRecalc($tr, 'ps');
+    if (!$tr.length) return;
+    if (!$.trim($tr.find('.t-ps').val())) {
+        var sd = $.trim((CUR && CUR.project ? CUR.project.start_date : '') || '');
+        if (!sd) return;
+        $tr.find('.t-ps').val(sd);
+        planRowRecalc($tr, 'ps');
+        return;
+    }
+    /* 第一列本來就有日期，但後面可能有整個階段是空白的（例如剛按了「新增目標」）
+       ——照鏈補上去，空白的才會跟著長出日期。已經排好的一律不動（planChainAll 自己會判斷）。 */
+    var blank = false;
+    $('#planEditBox .t-body tr').each(function () { if (!$.trim($(this).find('.t-ps').val())) blank = true; });
+    if (blank) planChainAll();
 }
 
 /* 這個專案是不是多製程（使用者 2026-09-23：只有多製程才需要指定 FAI／最終檢驗對應哪一道，
@@ -2198,40 +2223,54 @@ function depModeOf($tr, i) {
 }
 
 /**
- * 整個目標的日期重排（取代原本「只往下推一列」的 planChainFrom）。
- * 逐列走一次：
- *   par 且不是第一列 → 開始日＝目前這個平行群組的開始日
- *   seq              → 開始日＝到目前為止所有列裡最晚的完成日（cursor）
+ * 整份規劃表的日期重排（**跨階段連續**，取代原本一個階段各算一次的 planChainGoal）。
+ * 逐列走一次（依畫面順序走完階段 1 才進階段 2，cursor 不歸零）：
+ *   par 且不是該階段的第一列 → 開始日＝目前這個平行群組的開始日
+ *   seq                      → 開始日＝到目前為止最晚的完成日的**次一個工作日**
  * 每一列算完就把 cursor 往後推到 max(cursor, 這一列的完成日)。
+ *
+ * 兩個規則的由來（使用者 2026-09-30 拍板）：
+ *   ・**換階段要接著算**：原本 cursor 只在同一個 tbody 裡累積，所以階段 2、3 的第一列永遠是空白、
+ *     也不會接階段 1 的最後一步（實測舊資料出現「階段 2 第一步比階段 1 最後一步的完成日還早」）。
+ *   ・**下一步從次一個工作日開始**：工作天數是「開始日當天算第 1 天」，前一步的完成日那一整天
+ *     是它佔著的，所以「順序」的下一步只能從再下一個工作日起算（原本是同一天，13 個步驟會全部
+ *     擠在同一天）。要兩步同一天開始請把「接續」改成「同時」。
+ *
  * **使用者自己改過的開始日不覆蓋**：判定方式沿用原本的 data-ps0（上一次由系統寫進去的值），
  * 目前欄位值與它不同就表示是人改的。
  */
-function planChainGoal($tbody) {
-    var $rows = $tbody.find('tr');
+function planChainAll() {
+    /* 全部列依畫面順序收成一份（ti＝它在自己那個階段裡的序號，「接續」欄的語意要用它） */
+    var rows = [];
+    $('#planEditBox .sec[data-goal]').each(function () {
+        $(this).find('.t-body tr').each(function (ti) { rows.push({ $tr: $(this), ti: ti }); });
+    });
+    if (!rows.length) return;
     /* 第一段：先用「這一輪開始前的值」（data-ps0／data-pe0）算一次鏈，得到每一列
        「照鏈排的話應該是哪一天」。第二段才真的寫值，而且**只寫「使用者從來沒有偏離過鏈」的那幾列**
        ——不這樣分兩段的話，任何一次改動都會把手調過的日程整批蓋掉。 */
     var seedWant = [], cur0 = '', grp0 = '';
-    $rows.each(function (i) {
-        var $tr = $(this);
+    $.each(rows, function (i, r) {
+        var $tr = r.$tr;
         var ps0 = String($tr.attr('data-ps0') || '');
         var pe0 = String($tr.attr('data-pe0') || '');
-        var dep = depModeOf($tr, i);
-        var want = (i === 0) ? ps0 : ((dep === 'par' && grp0) ? grp0 : cur0);
+        var dep = depModeOf($tr, r.ti);
+        var want = (i === 0) ? ps0
+                 : ((dep === 'par' && grp0) ? grp0 : (cur0 ? planNextWorkday(cur0) : ''));
         seedWant.push(want);
         if (dep !== 'par' || !grp0) grp0 = ps0 || want;
         if (pe0 && (!cur0 || pe0 > cur0)) cur0 = pe0;
     });
 
     var cursor = '', groupStart = '';
-    $rows.each(function (i) {
-        var $tr = $(this);
+    $.each(rows, function (i, r) {
+        var $tr = r.$tr;
         var $ps = $tr.find('.t-ps'), $dy = $tr.find('.t-days'), $pe = $tr.find('.t-pe');
-        var dep = depModeOf($tr, i);
-        var want = (dep === 'par' && groupStart) ? groupStart : cursor;
+        var dep = depModeOf($tr, r.ti);
+        var want = (dep === 'par' && groupStart) ? groupStart : (cursor ? planNextWorkday(cursor) : '');
         var cur  = $.trim($ps.val());
         if (i === 0) {
-            want = cur;                                   // 第一列的開始日永遠由使用者（或專案起日）決定
+            want = cur;                                   // 整份規劃表的第一列由使用者（或專案起日）決定
         } else if (want && (cur === '' || cur === seedWant[i])) {
             $ps.val(want);
             cur = want;
@@ -2251,9 +2290,9 @@ function planChainGoal($tbody) {
         if (pe && (!cursor || pe > cursor)) cursor = pe;
     });
 }
-/** 相容舊呼叫端：改一列就把整個目標重排一次 */
-function planChainFrom($tr) { planChainGoal($tr.closest('.t-body')); }
-$(document).on('change', '#planEditBox .t-dep', function () { planChainGoal($(this).closest('.t-body')); });
+/** 相容舊呼叫端：改一列就把整份規劃表重排一次（跨階段） */
+function planChainFrom($tr) { planChainAll(); }
+$(document).on('change', '#planEditBox .t-dep', function () { planChainAll(); });
 $(document).on('change', '#planEditBox .t-ps', function () { planRowRecalc($(this).closest('tr'), 'ps'); });
 /* 專案起日一改，規劃表上每一列都要重驗一次（本來合法的可能就變成早於專案起日了） */
 $(document).on('change', '#eStart', function () {
@@ -2295,11 +2334,11 @@ function planRowAdd() {
     if (!$tbody.length) return false;
     $tbody.append(planRowHtml({}, $tbody.find('tr').length));
     renumberPlan($tbody);
-    /* 新列的預計開始＝上一列的預計完成（使用者要求的接續），天數留空＝當天來回。
+    /* 新列的預計開始＝上一列預計完成的**次一個工作日**（順序執行＝前一步做完才開始），天數留空＝當天來回。
        這裡只寫值不發事件，所以共用檔仍然認得「這列是剛加出來、還沒動過」，按 ↑ 一樣收得回去。 */
     var $new = $tbody.find('tr').last(), $prev = $new.prev('tr');
     var prevEnd = $prev.length ? $.trim($prev.find('.t-pe').val()) : '';
-    if (prevEnd) { $new.find('.t-ps').val(prevEnd); planRowRecalc($new, 'ps'); }
+    if (prevEnd) { $new.find('.t-ps').val(planNextWorkday(prevEnd)); planRowRecalc($new, 'ps'); }
     return true;
 }
 function planRowDel() {
@@ -2368,6 +2407,36 @@ $(document).on('click', '#btnSeed', function () {
         openProject(num(CUR.project.project_id), function () { pjMsg(r.message, { ok: true }); });
     });
 });
+/* ── 自動帶日期（工具列）──────────────────────────────────────────────
+   後端 prj_plan_autofill() 是唯一實作，與「開啟專案時順路把空白的排好」同一支函式。
+   預設只補空白的；真的一列都不用補時才問要不要整份重排（那會覆蓋已經排好的日期，所以一定要問）。
+   ※ 這支是直接對「資料庫裡已儲存的內容」重排，所以畫面上有未存的變更時先擋下來，
+     否則存檔前的編輯會被重載洗掉，使用者會以為自己打的字不見了。 */
+function planAutoFill(mode) {
+    api('plan_autofill', { project_id: num(CUR.project.project_id), mode: mode }, 'POST').done(function (res) {
+        var total = num((res.stat || {}).total);
+        PLAN_DIRTY = false;
+        loadList();
+        openProject(num(CUR.project.project_id), function () {
+            pjMsg(res.message || '已排好預計日期', { ok: total > 0 });
+            if (mode !== 'all' && total === 0
+                && confirm('每一個步驟都已經有日期了。\n\n要「整份重排」嗎？\n'
+                         + '（會用系統偵測到的佐證日期，與範本設定的預設工作天數，覆蓋你目前排好的預計日期）')) {
+                planAutoFill('all');
+            }
+        });
+    });
+}
+$(document).on('click', '#btnPlanAuto', function () {
+    if (!CUR || !num(CUR.project.project_id)) return;
+    if (PLAN_DIRTY) {
+        alert('規劃表上還有沒儲存的變更。\n\n請先按「儲存規劃表」，再按「自動帶日期」'
+            + '——自動帶日期是直接對已儲存的內容重排，沒存的變更會被覆蓋掉。');
+        return;
+    }
+    planAutoFill('empty');
+});
+
 $(document).on('click', '#btnGoalAdd', function () {
     var dirty = PLAN_DIRTY;
     planSyncToCur();                       // 先保住畫面上填到一半的內容（不然會被重繪洗掉）
@@ -4131,6 +4200,7 @@ function renderSeedTpl() {
           + '<button class="sg-del" style="height:30px;padding:0 12px;border:1px solid #C4442D;border-radius:4px;background:#DD5138;color:#fff;cursor:pointer;">刪除階段</button>'
           + '</div>'
           + '<table class="sub-tbl"><thead><tr><th style="width:34px;">#</th><th>步驟</th>'
+          + '<th style="width:74px;" title="帶入標準流程時這一步預設排幾個工作日（開始日當天算第 1 天）；留空＝1 天">預設天數</th>'
           + '<th style="width:170px;">預設負責部門</th><th style="width:190px;">預設負責人</th>'
           + '<th style="width:56px;">操作</th></tr></thead><tbody>';
         $.each(g.tasks || [], function (ti, t) {
@@ -4143,6 +4213,10 @@ function renderSeedTpl() {
               + (sys ? '<span class="pj-hint" style="margin-left:6px;">🔒 '
                        + (sys === 'fai' ? '首件' : (sys === 'rca' ? 'RCA' : '差異首件')) + '（系統固定環節）</span>' : '')
               + '</td>'
+              /* 提示走 data-eg-hint（點了才浮出）不可用 placeholder＝「1」本身就是合法值，
+                 放 placeholder 會被當成「已經填好 1 天」（CLAUDE.md 欄位提示鐵則） */
+              + '<td><input type="number" class="st-days" min="1" max="999" data-eg-hint="留空＝1 天（開始日當天算第 1 天，只算工作日）" value="'
+              + (num(t.days) > 0 ? num(t.days) : '') + '"></td>'
               + '<td><select class="st-dept"' + filterAttr(dOpt, '輸入部門名稱篩選…') + '>' + dOpt + '</select></td>'
               + '<td><select class="st-owner"' + filterAttr(pOpt, '輸入姓名篩選…') + '>' + pOpt + '</select></td>'
               + '<td>' + (sys ? '<span style="color:#b59b74;" title="系統固定環節，不可刪除">🔒</span>'
@@ -4171,6 +4245,7 @@ function seedSyncFromDom() {
         $(this).find('tbody tr').each(function () {
             var ot = (old.tasks || [])[num($(this).data('st'))] || {};
             tasks.push({ name: $.trim($(this).find('.st-name').val()), kind: String(ot.kind || ''),
+                         days: num($(this).find('.st-days').val()),
                          dept_id: num($(this).find('.st-dept').val()),
                          owner_id: num($(this).find('.st-owner').val()) });
         });
@@ -4198,7 +4273,7 @@ $(document).on('change', '#setSeedBox .st-dept', function () {
 });
 $(document).on('click', '#btnSeedGoalAdd', function () {
     seedSyncFromDom();
-    SEED_TPL.push({ goal: '', dept_id: 0, tasks: [{ name: '', kind: '', dept_id: 0, owner_id: 0 }] });
+    SEED_TPL.push({ goal: '', dept_id: 0, tasks: [{ name: '', kind: '', days: 0, dept_id: 0, owner_id: 0 }] });
     renderSeedTpl();
 });
 $(document).on('click', '#setSeedBox .sg-del', function () {
@@ -4211,14 +4286,14 @@ $(document).on('click', '#setSeedBox .sg-del', function () {
 $(document).on('click', '#setSeedBox .st-add', function () {
     var gi = num($(this).closest('.sec[data-sg]').data('sg'));
     seedSyncFromDom();
-    SEED_TPL[gi].tasks = (SEED_TPL[gi].tasks || []).concat([{ name: '', kind: '', dept_id: 0, owner_id: 0 }]);
+    SEED_TPL[gi].tasks = (SEED_TPL[gi].tasks || []).concat([{ name: '', kind: '', days: 0, dept_id: 0, owner_id: 0 }]);
     renderSeedTpl();
 });
 $(document).on('click', '#setSeedBox .st-del', function () {
     var gi = num($(this).closest('.sec[data-sg]').data('sg')), ti = num($(this).closest('tr').data('st'));
     seedSyncFromDom();
     SEED_TPL[gi].tasks.splice(ti, 1);
-    if (!SEED_TPL[gi].tasks.length) SEED_TPL[gi].tasks = [{ name: '', kind: '', dept_id: 0, owner_id: 0 }];
+    if (!SEED_TPL[gi].tasks.length) SEED_TPL[gi].tasks = [{ name: '', kind: '', days: 0, dept_id: 0, owner_id: 0 }];
     renderSeedTpl();
 });
 /* ── 拖曳排序 ─────────────────────────────────────────────────────────
