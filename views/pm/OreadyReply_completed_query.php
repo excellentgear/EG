@@ -3049,6 +3049,10 @@ $('#ocqTbody').on('dblclick', '.ocq-bom-link', function(e){ e.preventDefault(); 
 // 開啟圖面查閱視窗（同一料號重複點沿用同一個視窗，不會開一堆）
 // pk＝d_setting.d_id（整數 PK）：同名料號可能有多筆主檔（不同客戶／版次），不指名會混在一起
 function openPartDrawing(pid, pk){
+    // pk 可能是 data 屬性帶回來的**字串** "0"（bom.d_setting_id 還沒綁料號主檔時就是 0）——
+    // 字串 "0" 在 JS 是真值，不轉成數字就會組出 ?pk=0 送過去，bom_viewer 判 pk>0 不成立、
+    // d_id 又沒帶，於是死在「缺少 BOM 或 d_id 參數」。沒綁主檔的一律退回用料號文字查。
+    pk = parseInt(pk, 10) || 0;
     if (!pid && !pk) return;
     var w = screen.availWidth, h = screen.availHeight;
     var pw = Math.min(1400, Math.round(w * 0.85));
