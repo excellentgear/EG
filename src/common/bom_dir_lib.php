@@ -201,8 +201,13 @@ function eg_bom_file_tags_all(PDO $db): array {
  * 佐證用；$processTypeId 給了就只留該製程大類的標籤，不給就不限）。同一個標籤只留最新一份，
  * 判定與 type_id_ctrl_fetch_bom_files_for_part() 同一套（eg_bom_tag_seq），只是這裡篩的是
  * is_report=1 的標籤而非該模組自己勾選列入的標籤——兩套認列範圍本來就不同，不可以共用同一份設定。
+ *
+ * $onlyBom 給了（2026-09-30 專案管理「資料完整度」新增）只掃**這一張製令**自己的檔名前綴，
+ * 不像不給時那樣跨這個料號名下全部製令找「有沒有任一張」——同一料號常有好幾張製令（重複下單、
+ * 分批），逐製令核對報告齊不齊時，别張舊製令的報告不該讓這張看起來「已經有了」。
+ * 不給（null，原本唯一的呼叫端 prj_task_evidence 的 FAI／最終檢驗佐證）維持舊行為不受影響。
  */
-function eg_bom_report_files_for_part(PDO $db, int $dsPk, ?int $processTypeId = null): array {
+function eg_bom_report_files_for_part(PDO $db, int $dsPk, ?int $processTypeId = null, ?string $onlyBom = null): array {
     if (!$dsPk) return [];
     $tags = array_values(array_filter(eg_bom_file_tags_all($db), static function ($t) use ($processTypeId) {
         if (empty($t['is_report'])) return false;
@@ -211,11 +216,16 @@ function eg_bom_report_files_for_part(PDO $db, int $dsPk, ?int $processTypeId = 
     }));
     if (!$tags) return [];
 
-    try {
-        $st = $db->prepare("SELECT DISTINCT bom FROM bom WHERE d_setting_id=? AND bom<>''");
-        $st->execute([$dsPk]);
-        $boms = $st->fetchAll(PDO::FETCH_COLUMN);
-    } catch (Throwable $e) { return []; }
+    $onlyBom = trim((string)$onlyBom);
+    if ($onlyBom !== '') {
+        $boms = [$onlyBom];
+    } else {
+        try {
+            $st = $db->prepare("SELECT DISTINCT bom FROM bom WHERE d_setting_id=? AND bom<>''");
+            $st->execute([$dsPk]);
+            $boms = $st->fetchAll(PDO::FETCH_COLUMN);
+        } catch (Throwable $e) { return []; }
+    }
     if (!$boms) return [];
 
     $dirFs = eg_bom_erp_scan_dir_auto();

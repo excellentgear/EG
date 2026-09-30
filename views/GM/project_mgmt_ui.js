@@ -3500,11 +3500,15 @@ function renderReady(res) {
           + '改用「這個料號在完工日之後有沒有出貨」推測，標「推測」並提醒僅供參考。<br>'
           + '<b>異常單／矯正單</b>只是把有紀錄的列出來給你確認，<b>平常沒有是正常的，不算缺件</b>。<br>'
           + '<b>NG</b>是這張製令累積出來的不良總數（各站報工紀錄加總）；<b>只要有 NG 就一定要有報廢單</b>'
-          + '（異常單結案配發的報廢單號），沒有的話會列為缺件。</p>'
+          + '（異常單結案配發的報廢單號），沒有的話會列為缺件。<br>'
+          + '<b>製程報告</b>＝檢驗機或外部廠商出的報告（跟系統裡的 QC 線上檢驗紀錄是兩回事），'
+          + '哪個製程大類要對到哪份報告由管理員在<a href="/EGsystem/views/pm/part_viewer.php" target="_blank">'
+          + '料號圖面查閱</a>的「設定標籤」勾選；<b>只有被綁了報告的製程大類才會列出來要求</b>，'
+          + '沒綁的大類不強求。點一下會開啟像料號圖面查閱那樣的檔案畫面，找到的話直接開那一份。</p>'
           + '<div class="pj-table-wrap"><table class="pj-table"><thead><tr>'
           + '<th style="width:120px;">製令</th><th style="width:110px;">料號</th>'
           + '<th style="width:60px;">BOM總數</th><th style="width:60px;">NG總數</th>'
-          + '<th>各製程線上檢驗（含客供料／包裝）</th>'
+          + '<th>各製程線上檢驗（含客供料／包裝）</th><th>製程報告</th>'
           + '<th style="width:80px;">FAI首件</th><th style="width:80px;">報工紀錄</th>'
           + '<th style="width:96px;">出貨單</th><th>異常單／矯正單</th><th style="width:64px;">缺件</th>'
           + '</tr></thead><tbody>';
@@ -3525,6 +3529,7 @@ function renderReady(res) {
               + (s.kind === 'pack' ? '（包裝）' : '') + '</a></span> ';
         });
         h += '</td>'
+          + '<td class="l rd-report-cell">' + rdReportCell(r) + '</td>'
           + '<td>' + (num(r.fai) ? '<span class="chk-y">✓ 已有</span>' : '<span class="rd-bad">✗ 未建立</span>') + '</td>'
           + '<td>' + (num(r.work) ? '<span class="chk-y rd-link" data-viewwork="' + esc(r.bom) + '" data-partno="'
                       + esc(r.part_no || '') + '">✓ 已有</span>' : '<span class="rd-bad">✗ 未回報</span>') + '</td>'
@@ -3543,6 +3548,26 @@ function renderReady(res) {
 function rdEvidenceList(list, label) {
     if (!list || !list.length) return '';
     return '<div class="pj-hint">' + esc(label) + '：' + $.map(list, esc).join('、') + '</div>';
+}
+
+/** 「製程報告」欄：哪個製程大類被管理員綁了報告標籤（part_viewer.php「設定標籤」）就列一顆籤，
+ *  沒有任何大類被綁報告標籤時整欄留白（不強求）。點一下開跟料號圖面查閱一樣的檔案畫面——
+ *  有找到就直接帶開那一份（?open=檔名），沒找到就開去讓人看看／確認真的沒有。 */
+function rdReportCell(r) {
+    var list = r.reports || [];
+    if (!list.length) return '<span class="pj-hint">（此製令沒有製程需要報告）</span>';
+    var h = '';
+    $.each(list, function (i, rp) {
+        var url = '/EGsystem/views/pm/part_viewer.php?pk=' + num(r.ds_pk) + '&d_id=' + encodeURIComponent(r.part_no || '')
+                 + '&bom=' + encodeURIComponent(r.bom || '')
+                 + (num(rp.ok) && rp.file_name ? '&open=' + encodeURIComponent(rp.file_name) : '');
+        var tip = num(rp.ok)
+            ? ('報告：' + (rp.file_label || '') + '　' + (rp.file_name || '') + (rp.file_date ? '　' + rp.file_date : ''))
+            : ('這個製令的「' + (rp.type_name || '') + '」還沒有對應的報告，點一下開料號圖面查閱確認');
+        h += '<span class="rd-step ' + (num(rp.ok) ? 'rd-ok' : 'rd-no') + '" title="' + esc(tip) + '">'
+           + '<a href="' + esc(url) + '" target="_blank">' + (num(rp.ok) ? '✓ ' : '✗ ') + esc(rp.type_name || '') + '</a></span> ';
+    });
+    return h;
 }
 
 /** 欄位裡那一小塊：已綁的逐份列出來（看得到綁的是哪一份），可編輯時再給一顆「綁定文件」 */

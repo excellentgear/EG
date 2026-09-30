@@ -298,6 +298,9 @@ $bom  = trim($_GET['bom']  ?? '');
 $pk   = (int)($_GET['pk'] ?? 0);   // d_setting.d_id（整數 PK）＝精確指名要看哪一筆料號主檔
 // 只看 BOM 圖檔（例：包裝頁面點開比對圖面用）：隱藏 ERP/資材報告與料號附件區塊，只留最單純的圖面清單
 $onlyDrawing = !empty($_GET['only_drawing']);
+// 指定要直接開啟的檔名（ERP/資材報告清單裡的原始檔名）：由專案管理「資料完整度」點某一份報告
+// 深連結過來用，只是「開了之後預設選哪一個檔」，找不到時安靜退回原本的預設行為（禁止影響既有呼叫端）。
+$openFile = trim($_GET['open'] ?? '');
 if ($d_id === '' && $pk <= 0) {
     die('缺少 d_id 參數');
 }
@@ -530,6 +533,7 @@ var _bom        = <?= json_encode($bom) ?>;    // 指定的單一 BOM 名稱
 var _mode       = 'did';
 var _d_id       = <?= json_encode($d_id) ?>;   // 料號文字（僅供顯示）
 var ONLY_DRAWING = <?= $onlyDrawing ? 'true' : 'false' ?>;   // 只看 BOM 圖檔：不查ERP/資材報告、不查料號附件
+var _openFile   = <?= json_encode($openFile) ?>;   // 深連結指定要開啟的 ERP/資材報告檔名（沒帶或找不到就走原本預設）
 // 料號主檔歸戶：_pk 才是真正的歸戶鍵（d_setting.d_id）；_partCands 是同名料號的其他主檔
 var _pk         = <?= (int)($partScope['pk'] ?? 0) ?>;
 var _partCands  = <?php
@@ -868,22 +872,37 @@ $.post('', { action: 'get_files_by_did', d_id: _d_id, bom: _bom }, function(res)
             +'<p class="list-group-item-text">'+label+escapeHtml(f.name)+'</p></a>';
     }
 
+    // 深連結指定要開啟的檔（_openFile）：只在 ERP/資材報告清單裡精確比對檔名，
+    // 找得到才蓋掉原本「第一張圖面／第一份報告」的預設 active，找不到就完全不影響原本行為。
+    var openHit = false;
+    if (_openFile && res && res.success && res.erp_files) {
+        res.erp_files.forEach(function(f) { if (f.name === _openFile) openHit = true; });
+    }
+
     if (res && res.success) {
         if (res.files && res.files.length > 0) {
             hasFiles = true;
             listHtml += '<li class="list-group-item list-group-item-info"><strong>BOM 圖檔</strong></li>';
-            res.files.forEach(function(f, i) { listHtml += makeItem(f, i === 0); });
+            res.files.forEach(function(f, i) { listHtml += makeItem(f, !openHit && i === 0); });
         }
         if (res.erp_files && res.erp_files.length > 0) {
             hasFiles = true;
             listHtml += '<li class="list-group-item list-group-item-warning" style="margin-top:6px;"><strong>ERP/資材報告</strong></li>';
-            res.erp_files.forEach(function(f, i) { listHtml += makeItem(f, !res.files.length && i === 0); });
+            res.erp_files.forEach(function(f, i) {
+                var active = openHit ? (f.name === _openFile) : (!res.files.length && i === 0);
+                listHtml += makeItem(f, active);
+            });
         }
     }
 
     if (hasFiles && listHtml) {
         $('#bom-file-list').html(listHtml);
         if (firstItem) showFile(firstItem.path, firstItem.type, firstItem.name);
+        // 深連結開啟的報告常常排在 ERP/資材報告那一段、清單上面還有一堆圖面，捲過去才看得到
+        if (openHit) {
+            var $act = $('#bom-file-list .bom-file-item.active');
+            if ($act.length && $act[0].scrollIntoView) $act[0].scrollIntoView({ block: 'center' });
+        }
     } else {
         $('#bom-file-list').html('<div class="alert alert-warning" style="margin:10px;">無相關圖檔</div>');
         $('#viewer-placeholder').text('無相關圖檔').show();

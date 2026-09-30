@@ -3264,6 +3264,14 @@ function prj_processes(PDO $db, int $projectId, ?array $prj = null): array
  *     （與 qab_pm_uncovered_reports() 同一張表，不分有沒有已歸入異常單，這裡要的是累積事實）。
  *     使用者拍板「只要有NG一定要有報廢單」——NG總數>0卻沒有任一張異常單配過報廢單號
  *     （qa_abnormal_order.scrap_no）就列為缺件，跟⑥不同：這條**要**算進 missing_cnt。
+ *   ⑧製程報告（2026-09-30 交辦）：`views/pm/part_viewer.php`「設定標籤」讓管理員把 ERP/資材報告
+ *     檔名標籤（例「-T」齒研）勾成「報告」並綁定「屬於哪個製程大類」（`is_report`／`process_type_id`，
+ *     唯一來源仍是 `system_parameters('BOM_FILE_TAGS','tags_config')`，本函式不另存一份）。
+ *     這裡逐製令、逐道製程比對它的**製程大類**有沒有被綁報告標籤——有綁才要求、沒綁的製程大類
+ *     不強求（不是每個製程都要有外部報告）；同一張製令同一個大類出現好幾道製程時只查一次。
+ *     **刻意限定只查這一張製令自己的檔**（`eg_bom_report_files_for_part()` 的 `$onlyBom`）——
+ *     同一料號常有好幾張製令（重複下單、分批），不限定的話會拿別張製令的舊報告誤判成「已齊全」。
+ *     缺件時算進 missing_cnt（與線上檢驗同等級，因為它跟②③一樣是「這道製程做完了沒有證明文件」）。
  * 已結案很久的製令一樣要檢核（不濾 bom.closed_at，同 prj_bom_rows()/prj_processes() 的既有決定）。
  *
  * 已知未涵蓋、需要使用者進一步定案的項目（2026-09-24 對話中一併提到，尚未有足夠依據判定）：
@@ -3291,6 +3299,10 @@ function prj_data_readiness(PDO $db, int $projectId): array
             'fid' => $fid, 'bom_sn' => (int)$r['bom_sn'], 'process_no' => (int)$r['process_no'],
             'process_name' => $nm, 'is_pack' => (mb_strpos($nm, '包裝') !== false),
             'return_date' => (string)($r['return_date'] ?? ''), 'outsource_date' => (string)($r['outsource_date'] ?? ''),
+            // 製程大類：判斷這一道要不要對到「報告」用（part_viewer.php「設定標籤」勾選 is_report
+            // 且綁定 process_type_id 的檔名標籤），見下方⑧
+            'process_type_id' => (int)($r['process_type_id'] ?? 0) ?: null,
+            'process_type_name' => (string)($r['process_type_name'] ?? ''),
         ];
     }
     if (!$boms) return [];
@@ -3406,6 +3418,15 @@ function prj_data_readiness(PDO $db, int $projectId): array
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $x) $carOf[(string)$x['bom_no']][] = (string)$x['car_no'];
     } catch (Throwable $e) {}
 
+    // 製程報告（⑧）：哪些製程大類被管理員綁了「報告」標籤，決定要不要對這一道製程要求報告
+    // （唯一來源 eg_bom_file_tags_all()，part_viewer.php「設定標籤」維護，本函式不另存一份）
+    $reportTypeIds = [];
+    try {
+        foreach (eg_bom_file_tags_all($db) as $t) {
+            if (!empty($t['is_report']) && !empty($t['process_type_id'])) $reportTypeIds[(int)$t['process_type_id']] = true;
+        }
+    } catch (Throwable $e) {}
+
     $out = [];
     foreach ($boms as $bom => $b) {
         $steps = $b['steps'];
@@ -3435,6 +3456,22 @@ function prj_data_readiness(PDO $db, int $projectId): array
         if (!$hasFai) $missing[] = 'FAI 首件檢驗';
         if (!$hasWork) $missing[] = '報工紀錄';
 
+        // ⑧製程報告：這張製令涵蓋的製程大類裡，哪幾個被管理員綁了「報告」標籤就要查（同一大類只查一次）
+        $reportRows = []; $seenType = [];
+        foreach ($steps as $s) {
+            $tid = (int)($s['process_type_id'] ?? 0);
+            if ($tid <= 0 || empty($reportTypeIds[$tid]) || isset($seenType[$tid])) continue;
+            $seenType[$tid] = 1;
+            $files = eg_bom_report_files_for_part($db, (int)$b['ds_pk'], $tid, $bom);
+            $f = $files[0] ?? null;   // 一個大類理論上只會設一個標籤；真的設了好幾個就取第一份
+            $reportRows[] = [
+                'type_id' => $tid, 'type_name' => $s['process_type_name'] ?: $s['process_name'],
+                'ok' => $f ? 1 : 0,
+                'file_name' => $f['file_name'] ?? null, 'file_label' => $f['label'] ?? null, 'file_date' => $f['date'] ?? null,
+            ];
+            if (!$f) $missing[] = ($s['process_type_name'] ?: $s['process_name']) . '（報告）';
+        }
+
         $shipMode = '';
         if (!empty($shipExact[$bom])) { $shipMode = 'exact'; }
         else {
@@ -3454,6 +3491,7 @@ function prj_data_readiness(PDO $db, int $projectId): array
             'bom_qty' => $bomQtyOf[$bom] ?? 0, 'ng_total' => $ngTotal, 'has_scrap' => $hasScrap ? 1 : 0,
             'steps' => $stepRows, 'fai' => $hasFai ? 1 : 0, 'work' => $hasWork ? 1 : 0,
             'ship' => $shipMode !== '' ? 1 : 0, 'ship_mode' => $shipMode,
+            'reports' => $reportRows,
             'missing' => $missing, 'missing_cnt' => count($missing),
             'abnormal' => $abnOf[$bom] ?? [], 'car' => $carOf[$bom] ?? [],
         ];
