@@ -279,9 +279,26 @@ $(document).on('click', '.ss-tab', function () {
     kindOptions('#fKind', true);
     load();
 });
-$('#btnSearch').on('click', load);
+/* 關鍵字改成**打字即時篩選**（使用者 2026-09-30：不需要查詢按鈕）。
+   350ms 防抖，跟報工紀錄查詢同一個節奏；**只要值真的變了才送**，
+   否則游標移進移出也會重打一次查詢。
+   欄位裡有字時**雙擊清空並解除篩選**——清空是共用檔 eg_input_rules.js 規則1 做的，
+   它清完會補送 input 事件，所以這裡掛 input 就順便涵蓋了，不必另外綁 dblclick。 */
+var KW_T = null, KW_LAST = null;
+function kwSchedule() {
+    var v = $('#fKw').val() || '';
+    if (v === KW_LAST) return;
+    KW_LAST = v;
+    clearTimeout(KW_T);
+    KW_T = setTimeout(function () { load(); }, 350);
+}
 $('#fKind,#fScope,#fStatus,#fYear').on('change', load);
-$('#fKw').on('keydown', function (e) { if (e.which === 13) { e.preventDefault(); load(); } });
+$('#fKw').on('input', kwSchedule);
+// Enter 立刻查（不等防抖）
+$('#fKw').on('keydown', function (e) {
+    if (e.which !== 13) return;
+    e.preventDefault(); clearTimeout(KW_T); KW_LAST = $('#fKw').val() || ''; load();
+});
 $(document).on('click', '#tblList tbody tr', function (e) {
     var $t = $(e.target);
     if ($t.hasClass('act-print')) { doPrint(num($(this).data('ver'))); return; }
@@ -835,10 +852,29 @@ function headHtml() {
        **綁量具的也不綁製程**（使用者 2026-09-23：「量具也不需要製程欄位」）——
        量具的操作說明書講的是「這支量具怎麼用」，跟走到哪一關製程無關。 */
     if (CUR.kind !== 'equip' && d.scope !== 'tool') {
+        if (ssIsGsop()) {
+            /* 使用者 2026-09-30：製程要顯示 BOM 製程提供選擇（此料號所有 BOM 出現過的製程）。
+               查不到 BOM 時仍退回原本的打字搜尋，不然新料號會變成選不到製程。 */
+            var bp = CUR.part_processes || [];
+            h += '<label>製程</label><div class="wide">';
+            if (bp.length) {
+                h += bomProcSelHtml(bp, num(d.process_no))
+                   + '<input type="hidden" id="fProcNo" value="' + num(d.process_no) + '">'
+                   + '<input type="hidden" id="fProc" value="' + esc(d.proc_name || '') + '">'
+                   + '<div class="muted-help">清單就是這個料號的製令上實際跑過的製程（括號是幾張製令）。</div>';
+            } else {
+                h += '<span class="ac-wrap"><input id="fProc" value="' + esc(d.proc_name || '') + '"' + ro
+                   + ' data-eg-hint="打製程名稱或編號"></span>'
+                   + '<input type="hidden" id="fProcNo" value="' + num(d.process_no) + '">'
+                   + '<div class="muted-help">這個料號目前查不到任何製令，所以改用打字搜尋全部製程。</div>';
+            }
+            h += '</div>';
+        } else {
         h += '<label>製程</label><div class="bindline"><span class="ac-wrap"><input id="fProc" value="'
            + esc(d.proc_name || '') + '"' + ro + ' data-eg-hint="打製程名稱或編號"></span>'
            + '<input type="hidden" id="fProcNo" value="' + num(d.process_no) + '">'
            + '<span id="btProc"></span></div>';
+        }
     }
     /* 型式（使用者 2026-09-23）：同一個料號＋製程＋機台＋客戶底下可以再分最多三種型式，
        例如有隆齒／無隆齒，或同一台機器的上下料／架機／偏擺確認。
@@ -1084,6 +1120,9 @@ function itemsHtml() {
           + (CUR.can_edit ? '；<b>按住最左邊的「☰ #」上下拖曳可以調整順序</b>' : '') + '</span>'
           + (CUR.can_edit
               ? '<button class="btn btn-xs btn-warm-o" id="btnApplyTpl" style="margin-left:8px;">代入預設項目</button>'
+              : '')
+          + (CUR.can_edit && ssIsGsop()
+              ? ' <button class="btn btn-xs btn-warm-o" id="btnResetTpl">整段換成製程預設項目</button>'
               : '')
           + '</h5>';
     if (CUR.can_edit) {
@@ -1519,6 +1558,7 @@ function renderDoc() {
     ssSortable('#tblSoft');
     ssSortable('#tblHard');
     ssSortable('#tblItems');
+    ssGsopItemTweak();      // 標準作業流程SOP：擔當者固定生產、隱藏檢驗頻率欄
     DIRTY = false;              // 每次重畫（含存檔後重新開啟）都重新起算
     // 打字挑的那兩欄：先把「目前畫面上的字」記成已挑過的值，否則使用者一動就被判成改過而解除綁定
     $('#fProc').data('picked', $('#fProc').val() || '');
@@ -2921,8 +2961,16 @@ function setPaneOwner() {
 }
 
 /** 檢驗項目預設值：標準項目（全站）＋ 逐製程的專屬項目 */
+/* 檢驗項目預設值分成兩套：SIP 用與標準作業流程SOP 用（使用者 2026-09-30 指定要分開）。
+   實際存的 tpl_kind 由後端 ss_tpl_kinds() 決定（proc/std 與 gproc/gstd），前端只送用途代碼。 */
+var TPL_USE = 'sip';
+function tplKindOf(pno) {
+    var fam = (window.SS_TPL_KINDS || {})[TPL_USE] || { proc: 'proc', std: 'std' };
+    return pno ? fam.proc : fam.std;
+}
 function setPaneTpl(pno) {
-    api('tpl_get', { tpl_kind: pno ? 'proc' : 'std', process_no: pno }, function (res) {
+    api('tpl_get', { tpl_kind: tplKindOf(pno), process_no: pno, tpl_use: TPL_USE }, function (res) {
+        if (res.tpl_kinds) window.SS_TPL_KINDS = res.tpl_kinds;
         TPLCTX = { owner_depts: res.owner_depts || [], methods: res.methods || [], tool_types: res.tool_types || [],
                    input_kinds: res.input_kinds || { '': '自由文字' } };
         // 頻率下拉與符號面板：設定頁的表格也要用，所以先掛到 CUR 上（tplRow 會暫時把 CUR 換成 TPLCTX）
@@ -2944,6 +2992,18 @@ function setPaneTpl(pno) {
               + '固定印「跨珠Ø」、後面那一格由現場填（{ } 裡面可以寫提示字，不會印出來）。'
               + '<br><b>順序＝代入之後的排列順序</b>：按住最左邊的「☰ #」上下拖曳就可以調整，'
               + '最後一列按 ↓ 自動加一列，改完記得按下面的「儲存這一組」。</div>';
+        var fams = window.SS_TPL_KINDS || { sip: { label: '標準檢驗指導書 SIP' }, gsop: { label: '標準作業流程 SOP' } };
+        h += '<div class="note-box" style="background:#FFF8E1;border-color:#E6C34A;">'
+           + '<b>這一組預設值是給哪一種文件用的？</b>　'
+           + '標準檢驗指導書與標準作業流程 SOP 的檢驗項目<b>本來就不一樣，兩套各自獨立維護</b>'
+           + '（使用者 2026-09-30 指定）——在這裡改一套，不會動到另一套。</div>';
+        h += '<div class="frm" style="margin-bottom:8px;">'
+           + '<label>用途</label><div class="wide">';
+        $.each(fams, function (k, f) {
+            h += '<button class="btn btn-xs ' + (TPL_USE === k ? 'btn-warm' : 'btn-warm-o')
+               + ' tpl-use" data-use="' + esc(k) + '" style="margin-right:6px;">' + esc(f.label) + '</button>';
+        });
+        h += '</div></div>';
         h += '<div class="frm" style="margin-bottom:8px;">'
            + '<label>要編哪一組</label><div class="wide">'
            + '<button class="btn btn-xs ' + (pno ? 'btn-warm-o' : 'btn-warm') + ' tpl-std">標準項目（全站共用）</button>　'
@@ -3070,7 +3130,7 @@ function tplDel($tr) {
 $(document).on('click', '.tpl-rm', function () { tplDel($(this).closest('tr')); });
 $(document).on('click', '#tplSuggest', function () {
     var pno = num($('#tplProcNo').val());
-    api('tpl_suggest', { tpl_kind: pno ? 'proc' : 'std', process_no: pno }, function (res) {
+    api('tpl_suggest', { tpl_kind: tplKindOf(pno), process_no: pno }, function (res) {
         var rows = res.rows || [];
         if (!rows.length) { alert('既有文件裡找不到重複出現兩次以上的項目。'); return; }
         var $tb = $('#tblTpl tbody');
@@ -3114,7 +3174,7 @@ $(document).on('click', '#tplSave', function () {
                     note: $t.find('.i-note').val() || '' });
     });
     post('tpl_save', {
-        tpl_kind: pno ? 'proc' : 'std', process_no: pno, rows: JSON.stringify(rows),
+        tpl_kind: tplKindOf(pno), process_no: pno, rows: JSON.stringify(rows),
         auto_apply: $('#tplAuto').is(':checked') ? 1 : 0,
         with_std: $('#tplStd').length ? ($('#tplStd').is(':checked') ? 1 : 0) : 0
     }, function () { alert('已儲存'); setPaneTpl(pno); });
@@ -3217,24 +3277,56 @@ function ssSectRows(sect) { return (CUR && CUR.sects && CUR.sects[sect]) ? CUR.s
 function ssKvMaxCols() { return 3; }
 
 /** 參數格：一列最多三組「鍵＝值」，照紙本的樣子排 */
-function kvRowHtml(pairs, ro, dis) {
-    var n = ssKvMaxCols(), h = '<tr class="kvr">';
-    for (var i = 0; i < n; i++) {
-        var p = pairs[i] || { k: '', v: '' };
-        h += '<td class="kvk"><input class="kv-k" value="' + esc(p.k || '') + '" data-eg-hint="參數名稱"' + ro + '></td>'
-           + '<td class="kvv"><input class="kv-v" value="' + esc(p.v || '') + '" data-eg-hint="數值"' + ro + '></td>';
+/** 值樣板 → 固定文字與空格交錯的 HTML（「單趟{}mm/{}次/轉速{}rpm」只開放 {} 那三格） */
+function kvSlotHtml(p, ro) {
+    var pat = String(p.p || ''), parts = [], hints = [], buf = '';
+    for (var i = 0; i < pat.length; i++) {
+        var ch = pat.charAt(i);
+        if (ch === '{') {
+            var e = pat.indexOf('}', i);
+            if (e < 0) { buf += ch; continue; }
+            parts.push(buf); buf = ''; hints.push($.trim(pat.substring(i + 1, e))); i = e;
+        } else buf += ch;
     }
+    parts.push(buf);
+    if (!hints.length) return null;                       // 樣板裡沒有 {}＝當自由文字
+    var slots = p.slots || [], h = '<span class="kvslot">';
+    for (var j = 0; j < parts.length; j++) {
+        if (parts[j] !== '') h += '<span class="kvfix">' + esc(parts[j]) + '</span>';
+        if (j < hints.length) {
+            h += '<input class="kv-s" value="' + esc(slots[j] || '') + '"'
+               + (hints[j] ? ' data-eg-hint="' + esc(hints[j]) + '"' : '') + ro + '>';
+        }
+    }
+    return h + '</span>';
+}
+
+function kvCellHtml(p, ro, keyRo) {
+    p = p || { k: '', v: '', p: '', slots: [] };
+    var slotH = kvSlotHtml(p, ro);
+    var h = '<td class="kvk"><input class="kv-k" value="' + esc(p.k || '') + '" data-eg-hint="參數名稱"'
+          + (keyRo || ro ? ' readonly' : '') + (keyRo ? ' title="標題由範本帶入；要改請按右上角的鎖頭"' : '') + '>'
+          + '<input type="hidden" class="kv-p" value="' + esc(p.p || '') + '"></td>';
+    h += '<td class="kvv">' + (slotH !== null
+            ? slotH
+            : '<input class="kv-v" value="' + esc(p.v || '') + '" data-eg-hint="數值"' + ro + '>') + '</td>';
+    return h;
+}
+
+function kvRowHtml(pairs, ro, dis, keyRo) {
+    var n = ssKvMaxCols(), h = '<tr class="kvr">';
+    for (var i = 0; i < n; i++) h += kvCellHtml(pairs[i], ro, keyRo);
     h += (CUR.can_edit ? '<td class="kvx"><button class="btn btn-xs kv-del" title="刪除這一列參數"' + dis + '>×</button></td>' : '')
        + '</tr>';
     return h;
 }
 
-function kvTableHtml(kv, ro, dis) {
+function kvTableHtml(kv, ro, dis, keyRo) {
     var h = '<table class="kvgrid"><tbody>';
     var rows = (kv && kv.length) ? kv : (CUR.can_edit ? [[]] : []);
-    $.each(rows, function (i, r) { h += kvRowHtml(r || [], ro, dis); });
+    $.each(rows, function (i, r) { h += kvRowHtml(r || [], ro, dis, keyRo); });
     h += '</tbody></table>';
-    if (CUR.can_edit) h += '<button class="btn btn-xs btn-warm-o kv-add" style="margin-top:3px;">＋參數列</button>';
+    if (CUR.can_edit && !keyRo) h += '<button class="btn btn-xs btn-warm-o kv-add" style="margin-top:3px;">＋參數列</button>';
     return h;
 }
 
@@ -3243,8 +3335,9 @@ function softRowHtml(i, s, ro, dis) {
     s = s || {};
     return '<tr>'
         + dragCell(i, !!CUR.can_edit)
-        + '<td><input class="g-name" value="' + esc(s.step_name || '') + '" data-eg-hint="例如 工件規格"' + ro + '></td>'
-        + '<td class="g-kvcell">' + kvTableHtml(s.kv || [], ro, dis) + '</td>'
+        + '<td><input class="g-name" value="' + esc(s.step_name || '') + '" data-eg-hint="例如 工件規格"'
+        + (ssKeyLocked() ? ' readonly title="標題由範本帶入；要改請按右上角的鎖頭"' : ro) + '></td>'
+        + '<td class="g-kvcell">' + kvTableHtml(s.kv || [], ro, dis, ssKeyLocked()) + '</td>'
         + '<td><textarea class="g-note" rows="3"' + ro + '>' + esc(s.note || '') + '</textarea></td>'
         + (CUR.can_edit ? '<td class="c"><button class="btn btn-xs g-del"' + dis + '>×</button></td>' : '')
         + '</tr>';
@@ -3255,8 +3348,11 @@ function hardRowHtml(i, s, ro, dis) {
     s = s || {};
     return '<tr>'
         + dragCell(i, !!CUR.can_edit)
-        + '<td><input class="g-name" value="' + esc(s.step_name || '') + '" data-eg-hint="例如 更換砂輪"' + ro + '></td>'
-        + '<td><textarea class="g-text" rows="3"' + ro + '>' + esc(s.step_text || '') + '</textarea></td>'
+        + '<td><input class="g-name" value="' + esc(s.step_name || '') + '" data-eg-hint="例如 更換砂輪"'
+        + (ssKeyLocked() ? ' readonly title="標題由範本帶入；要改請按右上角的鎖頭"' : ro) + '></td>'
+        + '<td><textarea class="g-text" rows="3"'
+        + (ssKeyLocked() ? ' readonly title="要點由範本帶入；要改請按右上角的鎖頭"' : ro) + '>'
+        + esc(s.step_text || '') + '</textarea></td>'
         + '<td><textarea class="g-note" rows="3"' + ro + '>' + esc(s.note || '') + '</textarea></td>'
         + (CUR.can_edit ? '<td class="c"><button class="btn btn-xs g-del"' + dis + '>×</button></td>' : '')
         + '</tr>';
@@ -3278,6 +3374,13 @@ function gsopSectHtml(sect) {
            + (tplN ? '' : ' disabled') + ' title="'
            + (tplN ? '整段換成「' + esc(models) + '」的機種範本' : '這個機種還沒有建立範本') + '">'
            + '帶入機種範本' + (tplN ? '（' + tplN + ' 項）' : '（無）') + '</button>';
+    }
+    if (CUR.can_edit) {
+        /* 標題（參數名稱／硬體步驟的名稱與要點）是範本帶進來的，平常唯讀避免不小心改到；
+           要改先按鎖頭驗本人密碼（改了只影響這一份文件，不會動到範本）。 */
+        h += ' <button class="btn btn-xs ' + (ssKeyLocked() ? 'btn-warm-o' : 'btn-warm') + ' g-lock" '
+           + 'title="' + (ssKeyLocked() ? '標題目前鎖住，點一下輸入本人密碼才能修改' : '標題已解鎖，點一下重新鎖上') + '">'
+           + (ssKeyLocked() ? '🔒 標題鎖定' : '🔓 標題可改') + '</button>';
     }
     h += '</h5>';
     h += '<div class="muted-help" style="margin:-4px 0 6px;">最後一列按 ↓ 自動加一列；沒填東西的末列按 ↑ 自動移除'
@@ -3366,14 +3469,16 @@ $(document).on('click', '.g-tpl', function () {
 /* ── 收集 ── */
 function collectKv($cell) {
     var out = [];
-    $cell.find('.kvgrid tbody tr').each(function () {
+    $cell.find('.kvgrid > tbody > tr').each(function () {
         var row = [];
-        var $ks = $(this).find('.kv-k'), $vs = $(this).find('.kv-v');
-        for (var i = 0; i < $ks.length; i++) {
-            var k = $($ks[i]).val() || '', v = $($vs[i]).val() || '';
-            if (!$.trim(k) && !$.trim(v)) continue;
-            row.push({ k: k, v: v });
-        }
+        $(this).children('td.kvk').each(function () {
+            var $k = $(this), $v = $k.next('td.kvv');
+            var k = $k.find('.kv-k').val() || '', pat = $k.find('.kv-p').val() || '';
+            var slots = $v.find('.kv-s').map(function () { return $(this).val() || ''; }).get();
+            var v = slots.length ? '' : ($v.find('.kv-v').val() || '');
+            if (!$.trim(k) && !$.trim(v) && !slots.join('')) return;
+            row.push({ k: k, p: pat, v: v, slots: slots });
+        });
         if (row.length) out.push(row);
     });
     return out;
@@ -3438,13 +3543,18 @@ function nTypeList() {
     var out = [];
     $.each(SS_KINDS, function (kind, def) {
         if (!nTypeUsable(kind)) return;            // 不在這個分頁、或沒有填寫權限就不列出來
-        var scopes = (window.SS_KIND_SCOPES && SS_KIND_SCOPES[kind]) || ['machine', 'tool', 'general', 'part'];
+        // 新增只列 ss_kind_scopes_new() 放行的那幾種（既有文件仍可維持原本的適用範圍）
+        var scopes = (window.SS_KIND_SCOPES_NEW && SS_KIND_SCOPES_NEW[kind])
+                  || (window.SS_KIND_SCOPES && SS_KIND_SCOPES[kind]) || ['machine', 'tool', 'general', 'part'];
         $.each(scopes, function (i, scope) {
             var lays = (window.SS_LAYOUT_ALLOWED && SS_LAYOUT_ALLOWED[kind + '|' + scope]) || ['std'];
             $.each(lays, function (j, layout) {
+                var nt = (window.SS_SCOPE_NOTE || {})[kind + '|' + scope] || null;
                 out.push({ kind: kind, scope: scope, layout: layout,
                            title: nTypeTitle(kind, scope, layout),
                            desc: nTypeDesc(kind, scope, layout),
+                           flag: (layout === 'std' && nt) ? nt.flag : '',
+                           flagNote: (layout === 'std' && nt) ? nt.note : '',
                            as_no: def.as_no || '' });
             });
         });
@@ -3456,10 +3566,12 @@ function nTypeRender(sel) {
     var list = nTypeList(), h = '';
     $.each(list, function (i, t) {
         var on = sel && sel.kind === t.kind && sel.scope === t.scope && sel.layout === t.layout;
-        h += '<div class="ntype' + (on ? ' on' : '') + '" data-kind="' + esc(t.kind) + '" data-scope="'
+        h += '<div class="ntype' + (on ? ' on' : '') + (t.flag === 'warn' ? ' warn' : '')
+           + '" data-kind="' + esc(t.kind) + '" data-scope="'
            + esc(t.scope) + '" data-layout="' + esc(t.layout) + '">'
            + '<div class="t">' + esc(t.title) + '</div>'
            + '<div class="d">' + esc(t.desc) + '</div>'
+           + (t.flagNote ? '<div class="wn">⚠ ' + esc(t.flagNote) + '</div>' : '')
            + '<div class="as">' + esc(t.as_no) + '</div></div>';
     });
     $('#nTypeBox').html(h || '<div class="muted-help">目前沒有任何可以建立的文件種類（權限不足）。</div>');
@@ -3549,7 +3661,9 @@ function msSectHtml(sect) {
            + '<button class="btn btn-xs ms-up">↑</button> <button class="btn btn-xs ms-dn">↓</button> '
            + '<button class="btn btn-xs ms-rm">刪除</button></div>';
         if (soft) {
-            h += '<div class="muted-help" style="margin:4px 0 2px;">參數名稱（一行一列，同一列用「、」分隔最多三個）：</div>'
+            h += '<div class="muted-help" style="margin:4px 0 2px;">參數名稱（一行一列，同一列用「、」分隔最多三個）；'
+               + '要固定格式就寫「名稱=樣板」、用 <b>{}</b> 標出開放填的地方（例 <code>粗修砂=單趟{}mm/{}次/轉速{}rpm</code>）；'
+               + '寫「名稱=值」則是這台機器的<b>預設值</b>，綁定機台時自動帶入、仍可手動改。</div>'
                + '<textarea class="ms-keys" style="width:100%;min-height:56px;border:1px solid var(--line);'
                + 'border-radius:4px;padding:4px 6px;font-size:12.5px;line-height:1.7;">'
                + esc(msKeysText(r.kv || [])) + '</textarea>';
@@ -3571,18 +3685,32 @@ function msKeysText(kv) {
     var lines = [];
     $.each(kv || [], function (i, row) {
         var ks = [];
-        $.each(row || [], function (j, p) { if (p && p.k) ks.push(p.k); });
+        $.each(row || [], function (j, p) {
+            if (!p) return;
+            var k = p.k || '', pat = p.p || '', v = p.v || '';
+            if (!k && !pat && !v) return;
+            ks.push(k + (pat ? '=' + pat : (v ? '=' + v : '')));
+        });
         if (ks.length) lines.push(ks.join('、'));
     });
-    return lines.join('\n');
+    return lines.join(String.fromCharCode(10));
 }
+/* 每一格可以寫「名稱」「名稱=值樣板」或「名稱=預設值」：
+   樣板用 {} 標出開放填的地方（例 粗修砂=單趟{}mm/{}次/轉速{}rpm），固定文字在文件上不給改；
+   沒有 {} 就當成這台機器的預設值，綁定機台時自動帶入、仍可手動改（使用者 2026-09-30）。
+   名稱可留空（只寫 =樣板），用在「磨削參數II 要並排兩個填入欄位」那種情況。 */
 function msTextKeys(t) {
     var out = [];
     $.each(String(t || '').split(/\r?\n/), function (i, line) {
         var row = [];
-        $.each(line.split(/[、,，]/), function (j, k) {
-            k = $.trim(k);
-            if (k && row.length < 3) row.push({ k: k, v: '' });
+        $.each(line.split(/[、,，]/), function (j, cell) {
+            cell = $.trim(cell);
+            if (!cell || row.length >= 3) return;
+            var eq = cell.indexOf('=');
+            var k = eq >= 0 ? $.trim(cell.substring(0, eq)) : cell;
+            var rest = eq >= 0 ? $.trim(cell.substring(eq + 1)) : '';
+            if (rest && rest.indexOf('{') >= 0) row.push({ k: k, p: rest, v: '' });
+            else row.push({ k: k, p: '', v: rest });
         });
         if (row.length) out.push(row);
     });
@@ -3633,3 +3761,163 @@ $(document).on('click', '.ms-save', function () {
         setPaneMsop(MSOP.model);
     });
 });
+
+/* ══════════════ 標題鎖 ＋ 檢驗項目固定擔當者 ＋ BOM 製程挑選 ══════════════
+   2026-09-30 使用者交辦：
+   ①「要點」上面那一排是標題（砂輪外徑、螺旋角…），由範本帶入，**平常不給改**；
+     要改按「要點」右側的鎖頭、輸入本人密碼才解鎖，改了只影響這一份文件、不動範本。
+   ② 硬體步驟同樣要鎖。
+   ③ SOP 特定料號的檢驗項目擔當者固定「生產」、隱藏檢驗頻率欄。
+   ④ 製程改成從「這個料號的 BOM 上出現過的製程」挑。 */
+
+/** 目前這一版的標題有沒有鎖住（解鎖 30 分鐘，由後端 ss_unlock_valid 認定） */
+function ssKeyLocked() { return !(CUR && num(CUR.key_unlocked) === 1); }
+
+$(document).on('click', '.g-lock', function () {
+    if (!CUR || !CUR.can_edit) return;
+    if (!ssKeyLocked()) {                       // 已解鎖 → 點一下立刻鎖回去（不必再驗密碼）
+        CUR.key_unlocked = 0; renderDoc();
+        ssToast('標題已重新鎖上。');
+        return;
+    }
+    var pw = prompt('要修改「標題」（參數名稱／硬體步驟的名稱與要點）請輸入您本人的登入密碼。\n\n'
+                  + '解鎖後 30 分鐘內都可以改；改的內容只會影響這一份文件，不會動到機種範本。');
+    if (pw === null || $.trim(pw) === '') return;
+    post('ss_unlock', { ver_id: num(CUR.ver.ver_id), password: pw }, function (res) {
+        CUR.key_unlocked = 1; renderDoc();
+        ssToast('已解鎖，' + num(res.minutes) + ' 分鐘內可以修改標題。');
+    });
+});
+
+/* ── 檢驗項目：gsop 的擔當者固定、頻率欄隱藏 ── */
+$(document).on('ss:items-rendered', function () { ssGsopItemTweak(); });
+
+/**
+ * 把檢驗項目表調成標準作業流程SOP 的樣子。
+ * **用 CSS 隱藏而不是把欄位拿掉**（使用者：請隱藏，避免後續需要）——欄位與資料都還在，
+ * 之後要恢復只要把這一段拿掉即可。
+ */
+function ssGsopItemTweak() {
+    if (!ssIsGsop()) return;
+    var $t = $('#tblItems');
+    if (!$t.length) return;
+    // 找出「檢驗頻率」是第幾欄，整欄（表頭＋每一列）隱藏
+    var idx = -1;
+    $t.find('thead th').each(function (i) { if ($.trim($(this).text()) === '檢驗頻率') idx = i; });
+    if (idx >= 0) {
+        $t.find('thead tr').each(function () { $(this).children().eq(idx).hide(); });
+        $t.find('tbody tr').each(function () { $(this).children().eq(idx).hide(); });
+    }
+    // 擔當者固定「生產」：下拉選好、停用，並附一個 hidden 讓 collectItems 仍讀得到值
+    var own = num(CUR.fixed_owner_dept);
+    if (own > 0) {
+        $t.find('tbody tr').each(function () {
+            var $s = $(this).find('.i-own');
+            if (!$s.length) return;
+            $s.val(String(own));
+            if (!$s.prop('disabled')) {
+                $s.prop('disabled', true).attr('title', '標準作業流程 SOP 的擔當者固定為「生產」');
+                // disabled 的 select 在 collectItems 仍讀得到 val()，所以不必另外補 hidden
+            }
+        });
+    }
+}
+
+/* ── 製程：從這個料號的 BOM 挑 ── */
+
+/** 把 BOM 製程做成下拉（沒有 BOM 紀錄時退回原本的打字搜尋，不要讓人選不到） */
+function bomProcSelHtml(list, cur) {
+    var h = '<select id="fProcSel" data-eg-filter="輸入製程名稱或編號篩選…" style="width:100%;">'
+          + '<option value="">（未指定）</option>';
+    var hit = false;
+    $.each(list || [], function (i, p) {
+        var on = num(p.process_no) === num(cur);
+        if (on) hit = true;
+        h += '<option value="' + num(p.process_no) + '"' + (on ? ' selected' : '') + '>'
+           + esc(p.name) + '　#' + num(p.process_no) + '（' + num(p.bom_n) + ' 張製令）</option>';
+    });
+    // 目前綁的製程如果不在 BOM 清單裡（例如製令還沒建），仍然要看得到、不可以被洗掉
+    if (!hit && num(cur) > 0) {
+        h += '<option value="' + num(cur) + '" selected>' + esc(CUR.doc.proc_name || ('製程 ' + num(cur)))
+           + '　#' + num(cur) + '（不在這個料號的 BOM 上）</option>';
+    }
+    return h + '</select>';
+}
+
+$(document).on('change', '#fProcSel', function () {
+    var v = $(this).val() || '';
+    $('#fProcNo').val(v);
+    $('#fProc').val(v ? $.trim($(this).find('option:selected').text().split('　')[0]) : '');
+});
+
+/* 標準作業流程SOP：把檢驗項目整段換成「這個料號製程」的預設項目（使用者 2026-09-30）。
+   **整段取代所以一定要先問一句**——匯進來的那幾份裡有從紙本抓到的實際上下限。 */
+var NLNL = String.fromCharCode(10) + String.fromCharCode(10);
+$(document).on('click', '#btnResetTpl', function () {
+    if (!CUR || !CUR.can_edit) return;
+    if (!confirm('要把「檢驗項目」整段換成製程「' + (CUR.doc.proc_name || '') + '」的預設項目嗎？' + NLNL
+               + '目前表上已經填的內容（含上下限）會被取代，這個動作無法復原。')) return;
+    post('items_default_apply', { ver_id: num(CUR.ver.ver_id) }, function (res) {
+        ssToast('已帶入 ' + num(res.applied) + ' 個檢驗項目。');
+        openDoc(num(CUR.ver.ver_id));
+    });
+});
+
+/* 切換「這一組預設值給哪一種文件用」——兩套各自獨立，切過去看到的是另一套的內容 */
+$(document).on('click', '.tpl-use', function () {
+    var u = $(this).data('use');
+    if (u === TPL_USE) return;
+    TPL_USE = u;
+    setPaneTpl(num($('#tplProcNo').val()));
+});
+
+/* ══════════════ 參數格的 Enter：**直向**跳格 ══════════════
+   使用者 2026-09-30：「軟體步驟 輸入欄位按下 ENTER 時應該自動往下跳到下面的欄位，
+   都跳完才往右側同項次第一格跳。」
+   共用檔 eg_input_rules.js 的規則 3 是照 DOM 順序（橫向：模數→螺旋角→跨齒厚）跳，
+   但參數格是一欄一個參數、一列一組，現場是**照著同一欄由上往下填**的。
+   所以這裡在**捕獲階段**先接手（共用檔掛在 document 的冒泡階段），
+   只在參數格裡改成直向；跳到最後一格就不攔，交回共用規則往下一個欄位走。 */
+
+/** 這張參數格裡的所有輸入框，依「先同一欄由上往下、再換下一欄」排好 */
+function kvColumnOrder($grid) {
+    var rows = $grid.children('tbody').children('tr').get();
+    var maxCol = 0;
+    var cells = [];        // cells[col][row] = [input, input…]
+    $.each(rows, function (ri, tr) {
+        var $vs = $(tr).children('td.kvv');
+        if ($vs.length > maxCol) maxCol = $vs.length;
+        $vs.each(function (ci) {
+            var list = $(this).find('input.kv-s, input.kv-v').get();
+            if (!list.length) return;
+            cells[ci] = cells[ci] || [];
+            cells[ci][ri] = list;
+        });
+    });
+    var out = [];
+    for (var c = 0; c < maxCol; c++) {
+        var col = cells[c] || [];
+        for (var r = 0; r < col.length; r++) {
+            if (!col[r]) continue;
+            for (var k = 0; k < col[r].length; k++) out.push(col[r][k]);
+        }
+    }
+    return out;
+}
+
+document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.keyCode !== 13) return;
+    var el = e.target;
+    if (!el || !el.classList) return;
+    if (!el.classList.contains('kv-s') && !el.classList.contains('kv-v')) return;
+    var $g = $(el).closest('table.kvgrid');
+    if (!$g.length) return;
+    var order = kvColumnOrder($g);
+    var i = order.indexOf(el);
+    if (i < 0 || i + 1 >= order.length) return;    // 最後一格：不攔，讓共用規則帶去下一個欄位
+    e.preventDefault();
+    e.stopPropagation();
+    var nx = order[i + 1];
+    nx.focus();
+    try { nx.select(); } catch (err) {}
+}, true);

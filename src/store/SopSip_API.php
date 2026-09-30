@@ -171,7 +171,8 @@ case 'bind_probe': {
 case 'default_items': {
     $pno = (int)($_GET['process_no'] ?? 0);
     $std = array_key_exists('with_std', $_GET) ? ((int)$_GET['with_std'] === 1) : null;
-    jout(true, ['rows' => ss_default_items($db, $pno, $std), 'cfg' => ss_proc_cfg($db, $pno)]);
+    $use = (string)($_GET['tpl_use'] ?? 'sip');
+    jout(true, ['rows' => ss_default_items($db, $pno, $std, $use), 'cfg' => ss_proc_cfg($db, $pno)]);
 }
 
 case 'list': {
@@ -242,6 +243,10 @@ case 'detail': {
        （擔當者／檢驗方法／檢具類型／頻率／符號／齒輪等級），少給的話那張表就編不了。 */
     $isGsop = (string)($full['layout'] ?? 'std') === 'gsop';
     if ($isGsop) {
+        $full['key_unlocked'] = ss_unlock_valid($uid, $verId) ? 1 : 0;
+        $full['fixed_owner_dept'] = ss_gsop_owner_dept($db);
+        $full['part_processes'] = ss_part_processes($db, (int)($full['doc']['part_d_id'] ?? 0));
+
         // 這份文件綁的機種有沒有步驟範本，以及範本長什麼樣（畫面上「帶入機種範本」要用）
         $models = ss_msop_models_of($full['doc']);
         $tpl = [];
@@ -362,10 +367,47 @@ case 'ver_save': {
         if (array_key_exists('steps', $_POST)) ss_steps_replace($db, $verId, $rows('steps'));
         /* 標準作業流程SOP 的兩段步驟各自存各自的（沒送的那一段一律不動——
            本專案已踩過好幾次「沒送的欄位被一起寫成 NULL」）。 */
+        $unlocked = ss_unlock_valid($uid, $verId);
+        $cur = ss_steps_by_sect($db, $verId);
         foreach (ss_sects() as $sk => $_lbl) {
-            if (array_key_exists('steps_' . $sk, $_POST)) ss_steps_replace($db, $verId, $rows('steps_' . $sk), $sk);
+            if (!array_key_exists('steps_' . $sk, $_POST)) continue;
+            $in = $rows('steps_' . $sk);
+            /* 「標題」沒解鎖就一律沿用原值（鐵律8：畫面上已經是唯讀，這裡用同一條規則再擋一次，
+               不然繞過畫面直接送就能把範本帶進來的參數名稱／要點改掉）。
+               **只保護原本就存在的那幾列**——新加的列本來就要讓人命名。 */
+            if (!$unlocked) {
+                $old = $cur[$sk] ?? [];
+                foreach ($in as $i => $r) {
+                    if (!isset($old[$i])) continue;                     // 新增的列不管
+                    if ($sk === 'soft') {
+                        $in[$i]['step_name'] = (string)($old[$i]['step_name'] ?? '');
+                        $ok = $old[$i]['kv'] ?? [];
+                        $nk = ss_kv_decode($r['kv'] ?? []);
+                        // 值可以改、名稱與樣板沿用原本的
+                        foreach ($nk as $ri => $row) {
+                            foreach ($row as $ci => $pp) {
+                                $nk[$ri][$ci]['k'] = (string)($ok[$ri][$ci]['k'] ?? $pp['k']);
+                                $nk[$ri][$ci]['p'] = (string)($ok[$ri][$ci]['p'] ?? $pp['p']);
+                            }
+                        }
+                        $in[$i]['kv'] = $nk;
+                    } else {
+                        $in[$i]['step_name'] = (string)($old[$i]['step_name'] ?? '');
+                        $in[$i]['step_text'] = (string)($old[$i]['step_text'] ?? '');
+                    }
+                }
+            }
+            ss_steps_replace($db, $verId, $in, $sk);
         }
-        if (array_key_exists('items', $_POST)) ss_items_replace($db, $verId, $rows('items'));
+        if (array_key_exists('items', $_POST)) {
+            $its = $rows('items');
+            // 標準作業流程SOP 的擔當者固定「生產」（使用者 2026-09-30），後端一律重寫不採信前端
+            if (ss_layout_of($d) === 'gsop' && ($own = ss_gsop_owner_dept($db)) > 0) {
+                foreach ($its as &$r) { $r['owner_dept_id'] = $own; }
+                unset($r);
+            }
+            ss_items_replace($db, $verId, $its);
+        }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
     jout(true, ['ver_id' => $verId]);
@@ -602,6 +644,62 @@ case 'file_rotate': {
    硬體步驟與軟體步驟的項目本來就隨機種不同（同一顆「更換砂輪」，KX500 與 LHG-3040
    的要點完全不一樣），所以逐機種維護一套，建立文件時帶入、之後兩邊各自獨立。 */
 
+/* ─────────────── 標準作業流程SOP 的三支輔助端點 ─────────────── */
+
+/** 這個料號的 BOM 上出現過的製程（使用者 2026-09-30：製程要從 BOM 製程挑） */
+case 'part_processes': {
+    jout(true, ['rows' => ss_part_processes($db, (int)($_GET['part_d_id'] ?? 0))]);
+}
+
+/**
+ * 解鎖「標題」（軟體步驟的參數名稱／硬體步驟的名稱與要點）。
+ * 這些欄位是範本帶進來的，改了不影響範本，但很容易不小心改掉，所以要驗**本人登入密碼**。
+ * 密碼驗證直接用訂單追蹤那一支既有的 ot_verify_own_password()（鐵律4，不另寫一份）。
+ */
+case 'ss_unlock': {
+    $verId = (int)($_POST['ver_id'] ?? 0);
+    [$kind, $v, $d] = $kindOfVer($verId);
+    $needEdit($kind);
+    if ((string)$v['status'] !== 'draft') jerr('只有草稿可以修改');
+    require_once __DIR__ . '/../common/order_track_perm_lib.php';
+    if (function_exists('ot_client_unlock_fail_wait')) {
+        $wait = ot_client_unlock_fail_wait();
+        if ($wait > 0) jerr('密碼連續錯誤太多次，請 ' . $wait . ' 秒後再試');
+    }
+    $r = ot_verify_own_password($db, $uid, (string)($_POST['password'] ?? ''));
+    if (empty($r['ok'])) {
+        if (function_exists('ot_client_unlock_fail_add')) ot_client_unlock_fail_add();
+        jerr((string)($r['msg'] ?? '密碼錯誤'));
+    }
+    if (function_exists('ot_client_unlock_fail_clear')) ot_client_unlock_fail_clear();
+    ss_unlock_mark($uid, $verId);
+    jout(true, ['unlocked' => 1, 'minutes' => SS_UNLOCK_MIN]);
+}
+
+/** 把「這個製程的檢驗項目預設值」帶進這一版（整段取代，畫面上按下去才會跑） */
+case 'items_default_apply': {
+    $verId = (int)($_POST['ver_id'] ?? 0);
+    [$kind, $v, $d] = $kindOfVer($verId);
+    $needEdit($kind);
+    if ((string)$v['status'] !== 'draft') jerr('只有草稿可以帶入預設項目');
+    $pno = (int)($d['process_no'] ?? 0);
+    if ($pno <= 0) jerr('這份文件還沒有綁製程，無法帶入製程預設項目');
+    $isG = ss_layout_of($d) === 'gsop';
+    $rows = ss_default_items($db, $pno, null, $isG ? 'gsop' : 'sip');
+    if (!$rows) jerr('製程「' . (string)$d['proc_name'] . '」還沒有設定'
+        . ss_tpl_family($isG ? 'gsop' : 'sip')['label'] . '用的檢驗項目預設值'
+        . '（設定→檢驗項目預設值，記得先切到對的用途）');
+    // 標準作業流程SOP 的擔當者一律固定（使用者 2026-09-30）
+    if (ss_layout_of($d) === 'gsop' && ($own = ss_gsop_owner_dept($db)) > 0) {
+        foreach ($rows as &$r) { $r['owner_dept_id'] = $own; $r['owner'] = '生產'; }
+        unset($r);
+    }
+    $db->beginTransaction();
+    try { ss_items_replace($db, $verId, $rows); $db->commit(); }
+    catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
+    jout(true, ['applied' => count($rows), 'items' => ss_item_rows($db, $verId)]);
+}
+
 case 'msop_get': {
     $model = trim((string)($_GET['model'] ?? ''));
     jout(true, [
@@ -652,6 +750,7 @@ case 'tpl_get': {
     $k   = (string)($_GET['tpl_kind'] ?? 'std');
     $pno = (int)($_GET['process_no'] ?? 0);
     jout(true, [
+        'tpl_kinds' => ss_tpl_kinds(),
         'rows'      => ss_tpl_rows($db, $k, $pno),
         'processes' => ss_tpl_processes($db),
         'cfg'       => ss_proc_cfg($db, $pno),

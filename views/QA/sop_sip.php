@@ -47,6 +47,15 @@ foreach (array_keys($KINDS) as $k) $KIND_SCOPES[$k] = ss_kind_scopes($k);
    不要在 JS 裡另外寫死一份（鐵律4：兩份遲早對不起來）。 */
 $LAYOUT_ALLOWED = [];
 foreach ($KIND_SCOPES as $k => $ss) foreach ($ss as $sc) $LAYOUT_ALLOWED[$k . '|' . $sc] = ss_layout_allowed($k, $sc);
+/* 新增文件的「文件種類卡」只列得出這幾種（既有文件不受限制，見 ss_kind_scopes_new 的註解） */
+$KIND_SCOPES_NEW = [];
+foreach (array_keys($KINDS) as $k) $KIND_SCOPES_NEW[$k] = ss_kind_scopes_new($k);
+/* 哪幾種要在卡片上標「待確認是否移除」（唯一登記處＝ss_kind_scope_note） */
+$SCOPE_NOTE = [];
+foreach ($KIND_SCOPES_NEW as $k => $ss) foreach ($ss as $sc) {
+    $n = ss_kind_scope_note($k, $sc);
+    if ($n) $SCOPE_NOTE[$k . '|' . $sc] = $n;
+}
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -170,6 +179,19 @@ foreach ($KIND_SCOPES as $k => $ss) foreach ($ss as $sc) $LAYOUT_ALLOWED[$k . '|
         .ntype .t { font-size:13px; font-weight:bold; color:var(--ink); }
         .ntype .d { font-size:11.5px; color:var(--ink2); margin-top:2px; }
         .ntype .as { font-size:11px; color:#8A6A45; margin-top:2px; letter-spacing:.5px; }
+        /* 待確認是否移除的種類：黃底＋小字提醒（使用者 2026-09-30，仍可建立） */
+        .ntype.warn { background:#FFF8E1; border-color:#E6C34A; }
+        .ntype.warn:hover { background:#FFF3CD; }
+        .ntype.warn.on { background:#FFECB3; border-color:#C99A0E; box-shadow:inset 0 0 0 1px #C99A0E; }
+        .ntype .wn { font-size:11px; color:#8A6300; margin-top:3px; }
+        /* 參數格的「值樣板」：固定文字不給改，只有 {} 那幾格是輸入框 */
+        .kvslot { display:flex; align-items:center; flex-wrap:wrap; gap:1px; }
+        .kvslot .kvfix { color:#7A6A55; font-size:12px; white-space:nowrap; }
+        .kvslot input.kv-s { width:52px; min-width:38px; flex:0 1 52px; text-align:center;
+                             border:1px solid var(--line); background:#fff; border-radius:3px;
+                             font-size:12.5px; padding:1px 2px; }
+        .kvslot input.kv-s:focus { border-color:var(--amber-d); }
+        table.kvgrid td.kvk input[readonly] { background:#F6F1E8; color:#6B4423; cursor:default; }
         /* ── 標準作業流程SOP 的參數格（軟體步驟的「要點」）──
            照紙本做成「參數名稱｜數值」一列最多三組，現場只要填數值那一格。 */
         table.grid td.g-kvcell { padding:2px 3px; }
@@ -327,9 +349,8 @@ foreach ($KIND_SCOPES as $k => $ss) foreach ($ss as $sc) $LAYOUT_ALLOWED[$k . '|
                     <select id="fYear"><option value="">全部</option>
                         <?php foreach ($years as $y): ?><option value="<?= $y ?>"><?= $y ?></option><?php endforeach; ?>
                     </select></div>
-                <div class="fg" style="flex:1 1 220px;"><label>關鍵字（料號／機器編號／名稱／製程／客戶）</label>
+                <div class="fg" style="flex:1 1 220px;"><label>關鍵字（料號／機器編號／名稱／製程／客戶）<span class="muted-help" style="font-weight:normal;">　打字即時篩選；欄位裡有字時<b>雙擊</b>清空並解除篩選</span></label>
                     <input type="text" id="fKw" style="width:100%;"></div>
-                <div class="fg"><label>&nbsp;</label><button id="btnSearch" class="btn btn-sm btn-warm-o">查詢</button></div>
                 <div class="fg"><label>&nbsp;</label><button id="btnNew" class="btn btn-sm btn-warm"><i class="fa fa-plus"></i> 新增</button></div>
             </div>
         </div>
@@ -785,6 +806,8 @@ var SS_SLOTS = <?= json_encode($SLOTS, JSON_UNESCAPED_UNICODE) ?>;
 var SS_SLOTS_D = <?= json_encode(ss_slots_display(), JSON_UNESCAPED_UNICODE) ?>;
 var SS_STATUSES = <?= json_encode($STATUSES, JSON_UNESCAPED_UNICODE) ?>;
 var SS_KIND_SCOPES = <?= json_encode($KIND_SCOPES, JSON_UNESCAPED_UNICODE) ?>;
+var SS_KIND_SCOPES_NEW = <?= json_encode($KIND_SCOPES_NEW, JSON_UNESCAPED_UNICODE) ?>;
+var SS_SCOPE_NOTE = <?= json_encode($SCOPE_NOTE, JSON_UNESCAPED_UNICODE) ?>;
 /* 版式（一般版式／標準作業流程SOP）：哪一種版面＋適用範圍可以用哪幾種，一律由後端 ss_layout_allowed() 決定 */
 var SS_LAYOUTS = <?= json_encode(ss_layouts(), JSON_UNESCAPED_UNICODE) ?>;
 var SS_LAYOUT_ALLOWED = <?= json_encode($LAYOUT_ALLOWED, JSON_UNESCAPED_UNICODE) ?>;

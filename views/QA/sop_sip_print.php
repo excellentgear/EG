@@ -225,16 +225,22 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
     /* ── 標準作業流程 SOP（gsop）：照紙本 as-sop 那一批 xlsx 的版面 ──
        左半邊＝圖面＋檢驗項目，右半邊＝作業標準（軟體步驟／硬體步驟）＋更改記錄＋簽章。 */
     .gs-head { table-layout:fixed; }
-    .gs-head .ttl { text-align:center; font-weight:bold; font-size:12pt; letter-spacing:2px;
-                    vertical-align:middle; background:#F7F7F7; }
-    .gs-head td.v { text-align:center; height:8mm; vertical-align:middle; }
+    /* 使用者 2026-09-30：「標 準 作 業 流 程 S O P」右側的文字大一點，包含標題也是加大 */
+    .gs-head .ttl { text-align:center; font-weight:bold; font-size:15pt; letter-spacing:3px;
+                    vertical-align:middle; background:#F7F7F7; line-height:1.5; }
+    .gs-head td { font-size:12pt; }
+    .gs-head td.lab { font-weight:bold; }
+    .gs-head td.v { text-align:center; height:10mm; vertical-align:middle;
+                    font-size:13pt; font-weight:bold; }
     .gs-main { table-layout:fixed; margin-top:2.5mm; }
-    .gs-main > tbody > tr > td { padding:0; border:0; vertical-align:top; }
-    /* 右半邊**不給外框**：右邊的內容（步驟＋更改記錄＋簽章）本來就比左邊的圖面矮，
-       給了外框，簽章底下那段空白就會變成一個看起來很奇怪的大空盒子
-       （使用者 2026-09-30 回報「簽核欄位底下不要有奇怪的空白」）。
-       裡面三張表各自有自己的框線，該有的格線一條都不會少。 */
-    .gs-main > tbody > tr > td.gs-left { border:1px solid #000; }
+    /* 左右兩半**外框一樣**（使用者 2026-09-30：列印外框大小要一致）。
+       右半邊的內容本來就比左邊的圖面矮，之前為了不要出現「簽章底下一個大空盒子」
+       把右邊的框拿掉，結果變成兩邊外框不一樣——正解是**框留著，用彈性空白把
+       更改記錄與簽章壓到最下面**，空白落在步驟與更改記錄之間（紙本上本來就是留白給人續寫）。 */
+    .gs-main > tbody > tr > td { padding:0; border:1px solid #000; vertical-align:top; height:100%; }
+    .gs-main { height:1px; }                 /* 讓內層的 height:100% 有依據（table-cell 的老做法） */
+    .gs-rcol { display:flex; flex-direction:column; min-height:100%; }
+    .gs-rcol .gs-grow { flex:1 1 auto; }     /* 把下面兩張表推到底 */
     .gs-left { width:<?= $gsLeftW ?>mm; }   /* 唯一來源＝上面算好的 $gsLeftW */
     .gs-draw { text-align:center; padding:1.5mm; border-bottom:1px solid #000; }
     .gs-draw img { max-width:100%; max-height:<?= $paper['orient'] === 'landscape' ? 150 : 104 ?>mm; }
@@ -385,6 +391,7 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
 
         <!-- 右半邊：作業標準（軟體步驟／硬體步驟）＋更改記錄＋簽章 -->
         <td>
+          <div class="gs-rcol">
             <table class="gs-step">
                 <?php /* table-layout:fixed 的欄寬是看**第一列**決定的，而第一列是 colspan=3 的
                          「作業標準」——不給 colgroup 的話三欄會被平均分成各三分之一，
@@ -424,6 +431,7 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
                 <?php if (!$hard): ?><tr><td colspan="3" class="mid" style="color:#888;padding:4mm;">（尚未填寫硬體步驟）</td></tr><?php endif; ?>
             </table>
 
+            <div class="gs-grow"></div>
             <table class="gs-chg">
                 <thead><tr><th colspan="3">更改記錄</th></tr>
                 <tr><th style="width:16mm;">版次</th><th style="width:26mm;">日期</th><th>說明</th></tr></thead>
@@ -457,6 +465,7 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
                     <?php endforeach; ?>
                 </tr></tbody>
             </table>
+          </div>
         </td>
     </tr></tbody></table>
 

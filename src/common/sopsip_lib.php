@@ -67,6 +67,142 @@ function ss_kind_scopes(string $kind): array
 }
 
 /**
+ * **新增文件**時可以挑哪些適用範圍（與上面那支刻意分開，唯一登記處）。
+ * 使用者 2026-09-30：「新增文件畫面太複雜，設備操作說明書不需要有對應到特定料號的，
+ * 應該也不需要通用的；製造製程說明書應該不需要通用的。」
+ *
+ * **只限制「能不能新建」，不限制「能不能存在」**——`ss_kind_scopes()` 維持四種全開，
+ * 所以既有文件（實測：製造製程說明書＋通用 有 10 份，如 KAPP 心軸上下工件、TTi 自我診斷 SOP）
+ * 照常開得起來、改得動、也仍然可以維持原本的適用範圍；只是不會再有人新建同一種。
+ * 真的要再開放，把那一列加回來就好。
+ */
+function ss_kind_scopes_new(string $kind): array
+{
+    // 設備操作說明書的「特定料號」與「通用」實測 0 份，直接不再開放新建
+    if ($kind === 'equip')   return ['machine', 'tool'];
+    /* 製造製程說明書的「通用」**目前還有 10 份在用**（KAPP 心軸上下工件、TTi 自我診斷 SOP…），
+       使用者 2026-09-30：「那先不要移除，請改黃底並增加小字 待確認是否移除」。
+       所以照樣列出來、只是標成待確認（見 ss_kind_scope_note()）。 */
+    if ($kind === 'process') return ['machine', 'tool', 'general', 'part'];
+    return array_keys(ss_scopes());                                   // sip 維持原樣
+}
+
+/**
+ * 某一種「版面×適用範圍」要不要在新增畫面上標註（唯一登記處）。
+ * 回 ['flag'=>'warn','note'=>'…'] 或 null。**只是標註，不影響能不能建**。
+ */
+function ss_kind_scope_note(string $kind, string $scope): ?array
+{
+    if ($kind === 'process' && $scope === 'general') {
+        return ['flag' => 'warn', 'note' => '待確認是否移除（目前仍有既有文件在用）'];
+    }
+    return null;
+}
+
+/**
+ * 這個料號的 BOM 上實際出現過的製程（使用者 2026-09-30：製程要顯示 BOM 製程提供選擇）。
+ * **料號歸戶一律兩段式**：先用主鍵 `bom.d_setting_id`，再用「料號文字＋客戶」補
+ * ——`bom.d_setting_id` 實測八成是 NULL（記憶 bom_d_setting_id_mostly_null），
+ * 只比主鍵會查出一片空白而且完全不報錯。
+ * 依出現次數多的排前面（現場最常做的那幾關先看到）。
+ */
+function ss_part_processes(PDO $db, int $partDId): array
+{
+    if ($partDId <= 0) return [];
+    try {
+        $st = $db->prepare("SELECT d_id, D_Setting_Id, Customer_Id FROM d_setting WHERE d_id=?");
+        $st->execute([$partDId]);
+        $part = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$part) return [];
+        $ptext = (string)$part['D_Setting_Id'];
+        /* 同一個料號文字在 d_setting 常常有好幾筆、分屬不同客戶。
+           **只有一筆時**才可以放心只比料號文字（沒有別家可以混進來）；
+           有好幾筆時一定要再比客戶，否則會把別家同名料號的製程一起列出來。
+           `bom.Client_Name` 是文字快取、與客戶主檔的寫法常常不同（記憶 bom_client_name_cache），
+           所以比對走會計模組含別名的 acc_customer_by_name()，不要用字串完全相等。 */
+        $q = $db->prepare("SELECT COUNT(*) FROM d_setting WHERE D_Setting_Id=?");
+        $q->execute([$ptext]);
+        $sameText = (int)$q->fetchColumn();
+
+        $sql = "SELECT bi.process_no, p.ProcessName, COUNT(DISTINCT b.bom) bom_n, MAX(b.Created_At) last_at,
+                       GROUP_CONCAT(DISTINCT b.Client_Name) cli
+                FROM bom b
+                JOIN bom_ing bi ON bi.bom = b.bom AND bi.process_no IS NOT NULL AND bi.process_no > 0
+                LEFT JOIN process_no p ON p.ProcessNo = bi.process_no
+                WHERE b.d_setting_id = ? OR b.d_id = ?";
+        $par = [$partDId, $ptext];
+        $sql .= " GROUP BY bi.process_no, p.ProcessName ORDER BY bom_n DESC, bi.process_no";
+        $st = $db->prepare($sql);
+        $st->execute($par);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+    // 同名料號有好幾筆時才過濾客戶（只有一筆就沒有混到別家的風險）
+    $wantCus = '';
+    if ($sameText > 1 && trim((string)$part['Customer_Id']) !== '') $wantCus = trim((string)$part['Customer_Id']);
+    if ($wantCus !== '') {
+        require_once __DIR__ . '/acc_lib.php';
+        /* acc_customer_by_name() 回的是**整張「名稱→客戶」對照表**（含別名），
+           不是查單一筆——第二個參數是 $reload 不是名稱，傳名稱進去會被當成 true 重載整張表。 */
+        $cmap = function_exists('acc_customer_by_name') ? acc_customer_by_name($db) : [];
+        $keep = [];
+        foreach ($rows as $r) {
+            $ok = false;
+            foreach (explode(',', (string)($r['cli'] ?? '')) as $nm) {
+                $nm = trim($nm);
+                if ($nm === '') continue;
+                $c = $cmap[$nm] ?? null;
+                if ($c && (string)($c['customer_id'] ?? '') === $wantCus) { $ok = true; break; }
+            }
+            if ($ok) $keep[] = $r;
+        }
+        $rows = $keep;
+    }
+    $out = [];
+    foreach ($rows as $r) {
+        $no = (int)$r['process_no'];
+        $out[] = ['process_no' => $no,
+                  'name' => (string)($r['ProcessName'] ?? '') ?: ('製程 ' . $no),
+                  'bom_n' => (int)$r['bom_n'],
+                  'known' => $r['ProcessName'] !== null ? 1 : 0];
+    }
+    return $out;
+}
+
+/* ── 標題鎖（使用者 2026-09-30：參數名稱與硬體步驟要點由範本帶入，改要先驗本人密碼）── */
+const SS_UNLOCK_MIN = 30;   // 解鎖有效期，與訂單追蹤客戶欄解鎖同一個數字
+
+function ss_unlock_key(int $uid, int $verId): string { return $uid . ':' . $verId; }
+
+/** 這個人對這一版有沒有在有效期內解過鎖 */
+function ss_unlock_valid(int $uid, int $verId): bool
+{
+    $t = (int)($_SESSION['ss_key_unlock'][ss_unlock_key($uid, $verId)] ?? 0);
+    if ($t <= 0) return false;
+    if (time() - $t > SS_UNLOCK_MIN * 60) { unset($_SESSION['ss_key_unlock'][ss_unlock_key($uid, $verId)]); return false; }
+    return true;
+}
+
+function ss_unlock_mark(int $uid, int $verId): void
+{
+    if (!isset($_SESSION['ss_key_unlock']) || !is_array($_SESSION['ss_key_unlock'])) $_SESSION['ss_key_unlock'] = [];
+    $_SESSION['ss_key_unlock'][ss_unlock_key($uid, $verId)] = time();
+}
+
+/**
+ * 標準作業流程SOP 的檢驗項目擔當者一律固定（使用者 2026-09-30：固定顯示為「生產」）。
+ * **不寫死部門 id**：由 `ss_owner_depts()` 依管理員設定的顯示名稱找，改了名稱這裡跟著走。
+ * 找不到就回 0，呼叫端維持原值不動（寧可不改，也不要指到錯的部門）。
+ */
+function ss_gsop_owner_dept(PDO $db): int
+{
+    foreach (ss_owner_depts($db) as $d) {
+        if (empty($d['on'])) continue;
+        if (trim((string)($d['label'] ?? '')) === '生產') return (int)$d['dept_id'];
+    }
+    return 0;
+}
+
+/**
  * 這個適用範圍要不要挑機台（可複選）。
  * machine＝綁的就是機台型號；**part＝綁料號時也可以再指定用哪幾台機器**
  * （使用者 2026-09-22：「SOP 必定是此料號在特定機台上的規範」）——料號是主鍵，機台是附帶條件，
@@ -549,6 +685,21 @@ function ss_work_window(PDO $db): array
  *
  * @return array user_id => 原因文字（沒請整天假的人不會出現在回傳裡）
  */
+/**
+ * 上班「核心時段」＝上班時段各往內縮一小時（08:00~17:00 → 09:00~16:00）。
+ * 用來判定「這個人那一天整天不在」——見 ss_leave_allday_map() 裡的說明。
+ */
+function ss_core_window(string $ws, string $we): array
+{
+    $shift = function (string $hhmm, int $min): string {
+        if (!preg_match('/^(\d{1,2}):(\d{2})$/', $hhmm, $m)) return $hhmm;
+        $t = ((int)$m[1] * 60 + (int)$m[2]) + $min;
+        $t = max(0, min(24 * 60 - 1, $t));
+        return sprintf('%02d:%02d', intdiv($t, 60), $t % 60);
+    };
+    return [$shift($ws, 60), $shift($we, -60)];
+}
+
 function ss_leave_allday_map(PDO $db, array $userIds, string $date): array
 {
     $out = [];
@@ -561,11 +712,25 @@ function ss_leave_allday_map(PDO $db, array $userIds, string $date): array
     } catch (Throwable $e) { return $out; }
     foreach ($map as $uid => $items) {
         foreach ($items as $it) {
-            if (($it['source'] ?? '') !== 'leave') continue;
-            $txt = (string)($it['text'] ?? '請假');
+            /* **請假與公出都算「那天不在」**（使用者 2026-09-30：自動簽核要注意
+               簽核人員當天是否在職與是否有請假、公出之類的）。原本只看 'leave'，
+               所以一整天在外面跑的人照樣會被蓋章。
+               ★ 公出**不能只看 allday 旗標**：實測公出單多半填 08:30~17:30、旗標是 0，
+                 但那就是整天在外面——所以下面那段「有沒有橫跨上班核心時段」的判斷才是關鍵
+                 （會議通知單那次踩過同一個坑，寫在 CLAUDE.md 2026-09-29）。 */
+            $src = (string)($it['source'] ?? '');
+            if ($src !== 'leave' && $src !== 'trip') continue;
+            $txt = (string)($it['text'] ?? ($src === 'trip' ? '公出' : '請假'));
             if (!empty($it['allday'])) { $out[(int)$uid] = $txt; break; }
+            /* 判「整天不在」**不可以要求完全涵蓋整個上班時段**：
+               實測公出單多半填 08:30~17:30，而上班時段是 08:00~17:00，
+               嚴格比對就永遠不成立（08:30 > 08:00），一整天在外面的人照樣會被蓋章。
+               改成看有沒有橫跨**核心時段**（上班時段各往內縮一小時，＝09:00~16:00），
+               與會議通知單那一支 meeting_notice_is_allday() 同一個判準。
+               半天假（08:00~12:00）不會涵蓋核心時段，所以仍然不擋——那是刻意的。 */
+            [$cs, $ce] = ss_core_window($ws, $we);
             if (preg_match('/^(\d{2}:\d{2})~(\d{2}:\d{2})/', (string)($it['time'] ?? ''), $m)
-                && $m[1] <= $ws && $m[2] >= $we) {
+                && $m[1] <= $cs && $m[2] >= $ce) {
                 $out[(int)$uid] = $txt;
                 break;
             }
@@ -583,7 +748,7 @@ function ss_person_day_ok(PDO $db, int $uid, string $date): array
     if ($uid <= 0) return [false, '未指定人員'];
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) return [true, ''];   // 沒有日期就不判定
     $m = ss_leave_allday_map($db, [$uid], $date);
-    if (isset($m[$uid])) return [false, $date . ' 請整天假（' . $m[$uid] . '）'];
+    if (isset($m[$uid])) return [false, $date . ' 整天不在（' . $m[$uid] . '）'];
     return [true, ''];
 }
 
@@ -1230,13 +1395,21 @@ function ss_ver_create(PDO $db, int $docId, array $in, int $uid): int
         if ($auto !== '') $db->prepare("UPDATE ss_ver SET notice=? WHERE ver_id=?")->execute([$auto, $verId]);
     }
 
-    // 標準檢驗指導書：綁到的製程有設「自動代入」時，檢驗項目直接帶一份進來（代入後仍可逐列刪）
-    if ($doc && (string)$doc['kind'] === 'sip' && empty($in['_no_default_items'])) {
+    /* 綁到的製程有設「自動代入」時，檢驗項目直接帶一份進來（代入後仍可逐列刪）。
+       **標準檢驗指導書與標準作業流程SOP 都要**——後者的紙本左下角就是這張檢驗項目表
+       （使用者 2026-09-30：檢驗項目請自動設定為該料號製程的預設項目）。 */
+    $isGsop = $doc && ss_layout_of($doc) === 'gsop';
+    if ($doc && ((string)$doc['kind'] === 'sip' || $isGsop) && empty($in['_no_default_items'])) {
         $pno = (int)($doc['process_no'] ?? 0);
         $cfg = ss_proc_cfg($db, $pno);
         $want = array_key_exists('apply_default', $in) ? (int)$in['apply_default'] : (int)$cfg['auto_apply'];
         if ($want === 1) {
-            $rows = ss_default_items($db, $pno, null);
+            $rows = ss_default_items($db, $pno, null, $isGsop ? 'gsop' : 'sip');
+            // 標準作業流程SOP 的擔當者固定「生產」（使用者 2026-09-30）
+            if ($isGsop && $rows && ($own = ss_gsop_owner_dept($db)) > 0) {
+                foreach ($rows as &$r) { $r['owner_dept_id'] = $own; $r['owner'] = '生產'; }
+                unset($r);
+            }
             if ($rows) ss_items_replace($db, $verId, $rows);
         }
     }
@@ -2655,15 +2828,42 @@ function ss_eng_symbols(): array
 /* ─────────────────── 檢驗項目的預設值（兩層） ─────────────────── */
 
 /** 樣板列（tpl_kind=std 全站標準項目／proc 某個製程專屬） */
+/**
+ * tpl_kind 正規化（唯一判定處）。
+ * **不可以寫成「不是 proc 就當成 std」**——那會讓打錯或新加的 kind 安靜地落到全站共用那一組上。
+ * 2026-09-30 實測踩過：用 'gproc' 呼叫 ss_tpl_replace()，被當成 'std'，
+ * 直接把全站共用的標準項目整組覆蓋掉（而且完全不報錯，是事後查 DB 才發現的）。
+ * 認不得的 kind 一律丟例外，讓呼叫端當場知道。
+ */
+function ss_tpl_kind_norm(string $kind): string
+{
+    $ok = [];
+    foreach (ss_tpl_kinds() as $f) { $ok[$f['proc']] = 1; $ok[$f['std']] = 1; }
+    if (!isset($ok[$kind])) {
+        throw new InvalidArgumentException('不認得的檢驗項目預設值分組：' . $kind
+            . '（可用的有 ' . implode('／', array_keys($ok)) . '）');
+    }
+    return $kind;
+}
+
+/** 這個 kind 是不是「逐製程」那一種（要帶 process_no） */
+function ss_tpl_kind_is_proc(string $kind): bool
+{
+    foreach (ss_tpl_kinds() as $f) if ($f['proc'] === $kind) return true;
+    return false;
+}
+
 function ss_tpl_rows(PDO $db, string $kind, int $processNo = 0): array
 {
-    $kind = $kind === 'proc' ? 'proc' : 'std';
+    try { $kind = ss_tpl_kind_norm($kind); } catch (Throwable $e) { return []; }
+    $isProc = ss_tpl_kind_is_proc($kind);
     try {
-        if ($kind === 'proc') {
-            $st = $db->prepare("SELECT * FROM ss_item_tpl WHERE tpl_kind='proc' AND process_no=? ORDER BY seq, tpl_id");
-            $st->execute([$processNo]);
+        if ($isProc) {
+            $st = $db->prepare("SELECT * FROM ss_item_tpl WHERE tpl_kind=? AND process_no=? ORDER BY seq, tpl_id");
+            $st->execute([$kind, $processNo]);
         } else {
-            $st = $db->query("SELECT * FROM ss_item_tpl WHERE tpl_kind='std' ORDER BY seq, tpl_id");
+            $st = $db->prepare("SELECT * FROM ss_item_tpl WHERE tpl_kind=? ORDER BY seq, tpl_id");
+            $st->execute([$kind]);
         }
         $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
         foreach ($rows as &$r) {
@@ -2692,12 +2892,13 @@ function ss_tpl_one(PDO $db, int $tplId): ?array
 /** 覆寫一組樣板（整批取代，唯一寫入點） */
 function ss_tpl_replace(PDO $db, string $kind, int $processNo, array $rows, int $uid): void
 {
-    $kind = $kind === 'proc' ? 'proc' : 'std';
-    if ($kind === 'proc' && $processNo <= 0) throw new RuntimeException('請先選製程');
-    if ($kind === 'proc' && !ss_proc_row($db, $processNo)) throw new RuntimeException('找不到這個製程');
+    $kind = ss_tpl_kind_norm($kind);          // 認不得的 kind 直接丟例外，不可以安靜落到 std
+    $isProc = ss_tpl_kind_is_proc($kind);
+    if ($isProc && $processNo <= 0) throw new RuntimeException('請先選製程');
+    if ($isProc && !ss_proc_row($db, $processNo)) throw new RuntimeException('找不到這個製程');
 
-    if ($kind === 'proc') $db->prepare("DELETE FROM ss_item_tpl WHERE tpl_kind='proc' AND process_no=?")->execute([$processNo]);
-    else                  $db->prepare("DELETE FROM ss_item_tpl WHERE tpl_kind='std'")->execute();
+    if ($isProc) $db->prepare("DELETE FROM ss_item_tpl WHERE tpl_kind=? AND process_no=?")->execute([$kind, $processNo]);
+    else         $db->prepare("DELETE FROM ss_item_tpl WHERE tpl_kind=?")->execute([$kind]);
 
     $f = function ($k, $r) { $s = trim((string)($r[$k] ?? '')); return $s !== '' ? $s : null; };
     $seq = 0;
@@ -2716,14 +2917,15 @@ function ss_tpl_replace(PDO $db, string $kind, int $processNo, array $rows, int 
                           owner_dept_id, owner, method, tool_type_id, tool_id, tool_no, freq, note,
                           lock_ctrl, lock_q, input_kind, is_active, modified_at, modified_by)
                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,NOW(),?)")
-           ->execute([$kind, $kind === 'proc' ? $processNo : null, $seq,
+           ->execute([$kind, $isProc ? $processNo : null, $seq,
                       $f('ctrl_point', $r), $f('q_char', $r), $f('up_limit', $r), $f('lo_limit', $r),
                       $deptId ?: null, $deptId > 0 ? ss_owner_label($db, $deptId) : $f('owner', $r),
                       $f('method', $r), $toolTt, $toolId ?: null, $toolNo,
                       $f('freq', $r), $f('note', $r),
                       (int)($r['lock_ctrl'] ?? 1) === 1 ? 1 : 0, (int)($r['lock_q'] ?? 1) === 1 ? 1 : 0,
                       // 輸入方式一律過白名單（ss_input_kinds），前端亂送的代碼不寫進去
-                      isset(ss_input_kinds()[(string)($r['input_kind'] ?? '')]) ? ((string)$r['input_kind'] ?: null) : null,
+                      isset(ss_input_kinds()[(string)($r['input_kind'] ?? '')])
+                          ? ((string)($r['input_kind'] ?? '') ?: null) : null,
                       $uid]);
     }
 }
@@ -2777,10 +2979,33 @@ function ss_tpl_processes(PDO $db): array
  * $withStd = null 時照該製程的設定（使用者要求：製程設定專屬項目後，也可預設是否代入標準項目）。
  * 代入之後使用者仍然可以逐列刪掉不要的，所以這裡只負責「給一份建議」。
  */
-function ss_default_items(PDO $db, int $processNo, ?bool $withStd = null): array
+/**
+ * 檢驗項目預設值分成兩套（使用者 2026-09-30：「綁定機台的特定料號SOP 的檢驗項目預設
+ * 跟 SIP 的檢驗項目不同，請注意要分開」）。唯一登記處。
+ *   proc／std   ＝ 標準檢驗指導書 SIP 用
+ *   gproc／gstd ＝ 標準作業流程 SOP（gsop）用
+ * 兩套各自獨立維護，互不影響。
+ */
+function ss_tpl_kinds(): array
 {
+    return [
+        'sip'  => ['proc' => 'proc',  'std' => 'std',  'label' => '標準檢驗指導書 SIP'],
+        'gsop' => ['proc' => 'gproc', 'std' => 'gstd', 'label' => '標準作業流程 SOP'],
+    ];
+}
+
+/** 由用途代碼取那一套的 tpl_kind（不認得的一律回 SIP 那一套＝既有行為） */
+function ss_tpl_family(string $use = 'sip'): array
+{
+    $k = ss_tpl_kinds();
+    return $k[$use] ?? $k['sip'];
+}
+
+function ss_default_items(PDO $db, int $processNo, ?bool $withStd = null, string $use = 'sip'): array
+{
+    $fam  = ss_tpl_family($use);
     $cfg  = ss_proc_cfg($db, $processNo);
-    $proc = ss_tpl_rows($db, 'proc', $processNo);
+    $proc = ss_tpl_rows($db, $fam['proc'], $processNo);
 
     /* 使用者 2026-09-23：「有製程預設的檢驗項目預設值要優先帶入，沒有才帶入全站共用。」
        原本是「製程專屬 ＋ 全站共用」一律兩份都帶，所以綁齒研時會同時帶進齒研與全站兩套，
@@ -2788,8 +3013,8 @@ function ss_default_items(PDO $db, int $processNo, ?bool $withStd = null): array
        真的兩套都要的才在該製程的設定勾「另外再帶全站共用項目」（預設不勾）。 */
     $std = $withStd === null ? ((int)$cfg['with_std'] === 1) : $withStd;
     $rows = $proc;
-    if (!$proc)      foreach (ss_tpl_rows($db, 'std') as $r) $rows[] = $r;   // 製程沒設 → 退回全站共用
-    elseif ($std)    foreach (ss_tpl_rows($db, 'std') as $r) $rows[] = $r;   // 製程有設、又明講要一起帶
+    if (!$proc)      foreach (ss_tpl_rows($db, $fam['std']) as $r) $rows[] = $r;   // 製程沒設 → 退回全站共用
+    elseif ($std)    foreach (ss_tpl_rows($db, $fam['std']) as $r) $rows[] = $r;   // 製程有設、又明講要一起帶
 
     $out = [];
     foreach ($rows as $r) {
@@ -3337,20 +3562,58 @@ function ss_kv_decode($json): array
         if (!is_array($row)) continue;
         $pairs = [];
         foreach ($row as $p) {
+            $pat = ''; $slots = null;
             if (is_array($p)) {
                 // 收 ['k'=>,'v'=>] 與 [鍵, 值] 兩種寫法（前端送物件、匯入送陣列）
                 $k = array_key_exists('k', $p) ? $p['k'] : ($p[0] ?? '');
                 $v = array_key_exists('v', $p) ? $p['v'] : ($p[1] ?? '');
+                $pat = trim((string)($p['p'] ?? ''));
+                if (isset($p['slots']) && is_array($p['slots'])) $slots = $p['slots'];
             } else { $k = (string)$p; $v = ''; }
             $k = trim((string)$k); $v = trim((string)$v);
-            if ($k === '' && $v === '') continue;
-            $pairs[] = ['k' => mb_substr($k, 0, 60), 'v' => mb_substr($v, 0, 160)];
+            /* 值樣板（例「單趟{}mm/{}次/轉速{}rpm」）：只有 {} 那幾格開放填。
+               **完整字串一律由後端用同一支 ss_slot_compose() 再組一次**（鐵律8）——
+               前端已經組過，但只信前端的話，繞過畫面直接送就能把固定文字改掉。
+               樣板與既有檢驗項目的 ctrl_pat／q_pat 走完全同一套（鐵律4，不另造一種填空語法）。 */
+            if ($pat !== '' && ss_slot_has($pat) && is_array($slots)) {
+                $v = ss_slot_compose($pat, array_map(fn($x) => (string)$x, $slots));
+            }
+            if ($k === '' && $v === '' && $pat === '') continue;
+            $pairs[] = ['k' => mb_substr($k, 0, 60), 'v' => mb_substr($v, 0, 160),
+                        'p' => mb_substr($pat, 0, 160)];
             if (count($pairs) >= ss_kv_max_cols()) break;
         }
         if ($pairs) $out[] = $pairs;
         if (count($out) >= 20) break;   // 一個步驟最多 20 列，防前端亂送
     }
     return $out;
+}
+
+/**
+ * 把參數格補上「這一格的空格目前填了什麼」（重新打開文件時要把值放回各個輸入格）。
+ * 樣板對不起來時 slots 回空陣列並標 `free=1`，呼叫端就當自由文字處理
+ * ——**不可以硬拆**，會把使用者原本打的字切爛（ss_slot_extract 的既有約定）。
+ */
+function ss_kv_fill_slots(array $rows): array
+{
+    foreach ($rows as &$row) {
+        foreach ($row as &$p) {
+            $pat = (string)($p['p'] ?? '');
+            $p['slots'] = []; $p['free'] = 0;
+            if ($pat === '' || !ss_slot_has($pat)) { $p['free'] = 1; continue; }
+            $ex = ss_slot_extract($pat, (string)($p['v'] ?? ''));
+            if ($ex === null) {
+                // 值是在樣板還沒設定之前填的（或樣板後來改過），保留原文字不硬拆
+                $p['free'] = ((string)($p['v'] ?? '') !== '') ? 1 : 0;
+                $p['slots'] = array_fill(0, ss_slot_parse($pat)['n'], '');
+            } else {
+                $p['slots'] = $ex;
+            }
+        }
+        unset($p);
+    }
+    unset($row);
+    return $rows;
 }
 
 function ss_kv_encode(array $rows): string
@@ -3436,7 +3699,7 @@ function ss_msop_tpl_rows(PDO $db, string $model, string $sect = ''): array
     $sql .= " ORDER BY FIELD(sect,'soft','hard'), seq, tpl_id";
     try { $st = $db->prepare($sql); $st->execute($p); $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: []; }
     catch (Throwable $e) { return []; }
-    foreach ($rows as &$r) $r['kv'] = ss_kv_decode($r['kv_json'] ?? '');
+    foreach ($rows as &$r) $r['kv'] = ss_kv_fill_slots(ss_kv_decode($r['kv_json'] ?? ''));
     unset($r);
     return $rows;
 }
@@ -3490,11 +3753,9 @@ function ss_msop_apply(PDO $db, int $verId, array $models, string $sect, string 
     $seq = 0;
     foreach ($tpl as $t) {
         $seq++;
+        /* 軟體步驟**連範本裡的預設值一起帶**（使用者 2026-09-30：機台預設值在綁定機台後
+           自動帶入、但可手動修改）。原本刻意只帶鍵不帶值，那是還沒有機台預設值時的做法。 */
         $kv = $t['kv'] ?? [];
-        if ($sect === 'soft') {                       // 只留鍵，值留白給現場填
-            foreach ($kv as &$row) { foreach ($row as &$p) { $p['v'] = ''; } unset($p); }
-            unset($row);
-        }
         $db->prepare("INSERT INTO ss_step (ver_id, seq, sect, step_name, kv_json, step_text, note)
                       VALUES (?,?,?,?,?,?,?)")
            ->execute([$verId, $seq, $sect, (string)$t['step_name'],
@@ -3511,7 +3772,7 @@ function ss_steps_by_sect(PDO $db, int $verId): array
     foreach (ss_step_rows($db, $verId) as $s) {
         $k = (string)($s['sect'] ?? '');
         if (!isset($out[$k])) $k = '';
-        $s['kv'] = ss_kv_decode($s['kv_json'] ?? '');
+        $s['kv'] = ss_kv_fill_slots(ss_kv_decode($s['kv_json'] ?? ''));
         $out[$k][] = $s;
     }
     return $out;
