@@ -162,6 +162,9 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
                 <div><label>開單來源</label>
                     <select id="fSource"><option value="">全部</option>
                         <option value="IR">客退(IR)</option><option value="QC">QC檢驗單</option><option value="BOM">製程中(製令)</option></select></div>
+                <div><label>分類</label>
+                    <?php /* 選項由 JS 依目前實際有哪些分類填（不寫死，管理員增修分類自動跟著變） */ ?>
+                    <select id="fCat"><option value="">全部</option></select></div>
                 <div style="flex:1;min-width:160px;"><label>關鍵字（料號／客戶／單號）</label><input type="text" id="fKw" style="width:100%;"></div>
                 <button class="btn btn-warm btn-sm" id="btnReload"><i class="fa fa-search"></i> 查詢</button>
                 <button class="btn btn-warm-o btn-sm" id="btnPrint"><i class="fa fa-print"></i> 列印報告</button>
@@ -184,6 +187,21 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
         <div class="sec">
             <h4><i class="fa fa-area-chart"></i> 異常單趨勢 <span class="hint">筆數／不良數量（左軸）與 COPQ 金額（右軸）</span></h4>
             <div id="chTrend" class="chart-box tall"></div>
+        </div>
+
+        <div class="sec">
+            <h4><i class="fa fa-tags"></i> 異常單分類 <span class="hint" id="catHint">依分類看張數、不良數、報廢、COPQ 與平均結案天數</span></h4>
+            <div class="two-col">
+                <div><div id="chCatPie" class="chart-box"></div></div>
+                <div>
+                    <table class="oa-t">
+                        <colgroup><col><col style="width:14%"><col style="width:12%"><col style="width:13%"><col style="width:13%"><col style="width:16%"><col style="width:14%"></colgroup>
+                        <thead><tr><th>分類</th><th>張數</th><th>佔比</th><th>未結案</th><th>不良數</th><th>COPQ(元)</th><th>平均結案天</th></tr></thead>
+                        <tbody id="tblCat"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div id="chCatTrend" class="chart-box tall" style="margin-top:10px;"></div>
         </div>
 
         <div class="two-col">
@@ -263,6 +281,10 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
             <h4>篩選與期間</h4>
             <ul>
                 <li>期間粒度可選<b>月／季／半年／整年</b>，「期別」隨粒度變化；比較基準可選<b>去年同期</b>或<b>上一期</b>，也可以不比較。</li>
+                <li><b>分類</b>篩選（製程中／客訴／其他…，含「未指定分類」）會套用到整頁每一個區塊；
+                    分類本身的統計看「異常單分類」區塊：各類的張數、佔比、未結案、不良數、COPQ 與平均結案天數，
+                    右下的堆疊長條是<b>逐期的分類結構變化</b>（看得出哪一類在變多）。
+                    <b>「未指定分類」獨立一列不併進任何一類</b>，不然會看不出還有多少單沒歸類。</li>
                 <li>KPI 卡片、自動分析、各柏拉圖與分布圖都<b>依這裡的期間篩選</b>計算；<b>時效監控與重複發生偵測是現況（不受期間篩選影響）</b>，因為它們問的是「現在有哪些單卡住了／重複了」。</li>
             </ul>
             <h4>各項分析的口徑</h4>
@@ -422,14 +444,15 @@ function sizeBox(id, px){ var e=document.getElementById(id); if(e) e.style.heigh
 function load(){
   var req = {
     action:'analyze', year:$('#fYear').val(), gran:$('#fGran').val(), idx:$('#fIdx').val(),
-    cmp:$('#fCmp').val(), source:$('#fSource').val(), kw:$('#fKw').val()
+    cmp:$('#fCmp').val(), source:$('#fSource').val(), cat:$('#fCat').val(), kw:$('#fKw').val()
   };
   $('#noteBar').html('<div class="oa-note"><i class="fa fa-spinner fa-spin"></i> 計算中…</div>');
   $.get(QAA_API, req, function(r){
     if(!r || !r.ok){ $('#noteBar').html('<div class="oa-note oa-warn">'+esc((r&&r.error)||'載入失敗')+'</div>'); return; }
     DATA = r; SETTINGS = r.meta.settings;
+    syncCatFilter();
     renderNote(); renderAlert(); renderKpi(); renderInsights();
-    renderTrend(); renderParetoPart(); renderParetoCause();
+    renderTrend(); renderCat(); renderParetoPart(); renderParetoCause();
     renderParetoSource(); renderDisposition(); renderSourceType(); renderCopqDisp();
     renderAging(); renderRecur();
   }, 'json').fail(function(x){
@@ -438,7 +461,7 @@ function load(){
   });
 }
 $('#btnReload').on('click', load);
-$('#fSource, #fCmp').on('change', load);
+$('#fSource, #fCmp, #fCat').on('change', load);
 $('#fKw').on('keydown', function(e){ if(e.which===13) load(); });
 
 function renderNote(){
@@ -552,6 +575,60 @@ function renderDisposition(){
     tooltip:{ pointFormat:'<b>{point.y}</b> 筆（{point.percentage:.1f}%）' },
     series: [{ type:'pie', name:'筆數', data:d.map(function(x,i){return {name:x.label,y:x.count,color:PAL[i%PAL.length]};}),
                dataLabels:{style:{fontSize:'11px',color:'#4A3524',textOutline:'none'}} }]
+  });
+}
+
+/* ── 異常單分類：分布（圓餅＋表格）與逐期趨勢（堆疊長條） ──
+   分類是最上層的分群（製程中／客訴／其他），所以放在柏拉圖之前；
+   「未指定分類」獨立一列不併進任何一類，不然會看不出還有多少單沒歸類。 */
+function syncCatFilter(){
+  var cats = DATA.cats || [], cur = $('#fCat').val();
+  var h = '<option value="">全部</option>'
+        + cats.map(function(c){ return '<option value="'+c.cat_id+'">'+esc(c.name)
+              + (Number(c.is_active)?'':'（已停用）')+'</option>'; }).join('')
+        + '<option value="none">未指定分類</option>';
+  if ($('#fCat').html() !== h) { $('#fCat').html(h).val(cur || ''); }
+}
+function renderCat(){
+  var d = DATA.cat_dist || [];
+  chart('chCatPie', {
+    tooltip:{ pointFormat:'<b>{point.y}</b> 張（{point.percentage:.1f}%）' },
+    series: [{ type:'pie', name:'張數',
+               data:d.map(function(x,i){ return {name:x.label, y:x.count,
+                     color: x.cat_id===null ? '#BFB0A0' : PAL[i%PAL.length]}; }),
+               dataLabels:{style:{fontSize:'11px',color:'#4A3524',textOutline:'none'}} }]
+  });
+  var h = '', tot={c:0,o:0,ng:0,q:0};
+  d.forEach(function(x){
+    tot.c+=x.count; tot.o+=x.open; tot.ng+=x.ng_qty; tot.q+=Number(x.copq)||0;
+    h += '<tr'+(x.cat_id===null?' style="color:#8a7560;"':'')+'>'
+       + '<td>'+esc(x.label)+(x.scrap?' <span class="hint">報廢 '+x.scrap+'</span>':'')+'</td>'
+       + '<td class="n">'+nf(x.count)+'</td><td class="n">'+x.pct+'%</td>'
+       + '<td class="n">'+nf(x.open)+'</td><td class="n">'+nf(x.ng_qty)+'</td>'
+       + '<td class="n">'+nf(Math.round(x.copq))+'</td>'
+       + '<td class="n">'+(x.avg_close_days===null?'－':x.avg_close_days)+'</td></tr>';
+  });
+  if (h) h += '<tr style="font-weight:700;background:#faf6f0;"><td>合計</td><td class="n">'+nf(tot.c)+'</td>'
+            + '<td class="n">100%</td><td class="n">'+nf(tot.o)+'</td><td class="n">'+nf(tot.ng)+'</td>'
+            + '<td class="n">'+nf(Math.round(tot.q))+'</td><td class="n">－</td></tr>';
+  $('#tblCat').html(h || '<tr><td colspan="7" style="text-align:center;color:var(--muted);">這個期間沒有資料</td></tr>');
+  $('#catHint').text('依分類看張數、不良數、報廢、COPQ 與平均結案天數（共 '+d.length+' 類）');
+
+  // 逐期趨勢：每一期各分類的張數，堆疊起來看結構變化
+  var t = DATA.trend || [];
+  var keys = [], kmap = {};
+  d.forEach(function(x){ var k = x.cat_id===null?'none':String(x.cat_id); keys.push(k); kmap[k]=x.label; });
+  chart('chCatTrend', {
+    chart:{ type:'column' },
+    xAxis:{ categories: t.map(function(x){return x.label;}) },
+    yAxis:{ title:{text:'張數',style:{color:'#6B4423',fontSize:'11px'}}, stackLabels:{enabled:true, style:{color:'#6B4423',fontWeight:'normal'}} },
+    plotOptions:{ column:{ stacking:'normal' } },
+    legend:{ enabled:true },
+    tooltip:{ shared:true },
+    series: keys.map(function(k,i){
+      return { name: kmap[k], color: k==='none' ? '#BFB0A0' : PAL[i%PAL.length],
+               data: t.map(function(x){ return ((x.by_cat||{})[k])||0; }) };
+    })
   });
 }
 
@@ -710,6 +787,33 @@ function qaaPrintHtml(){
 
   var trendSvg = prChartSvg('chTrend', 780, 220);
   if(trendSvg) h += '<div class="pr-sec"><div class="pr-sec-title">異常單趨勢</div><div class="pr-chart">'+trendSvg+'</div></div>';
+
+  /* 異常單分類：圖表一律用畫面上既有的 Highcharts 實例 getSVG()，不重新畫一次
+     ——這樣紙本看到的圖跟畫面看到的保證是同一份數據（本頁既有做法）。 */
+  var catSvg = prChartSvg('chCatPie', 360, 200), catTrSvg = prChartSvg('chCatTrend', 400, 200);
+  var cd = DATA.cat_dist || [];
+  if (cd.length) {
+    var ct = '<table><thead><tr><th>分類</th><th>張數</th><th>佔比</th><th>未結案</th>'
+           + '<th>不良數</th><th>COPQ(元)</th><th>平均結案天</th></tr></thead><tbody>';
+    var tc=0,to=0,tn=0,tq=0;
+    cd.forEach(function(x){
+      tc+=x.count; to+=x.open; tn+=x.ng_qty; tq+=Number(x.copq)||0;
+      ct += '<tr><td>'+esc(x.label)+'</td><td class="tr">'+nf(x.count)+'</td><td class="tr">'+x.pct+'%</td>'
+          + '<td class="tr">'+nf(x.open)+'</td><td class="tr">'+nf(x.ng_qty)+'</td>'
+          + '<td class="tr">'+nf(Math.round(x.copq))+'</td>'
+          + '<td class="tr">'+(x.avg_close_days===null?'－':x.avg_close_days)+'</td></tr>';
+    });
+    ct += '<tr><td><b>合計</b></td><td class="tr"><b>'+nf(tc)+'</b></td><td class="tr">100%</td>'
+        + '<td class="tr">'+nf(to)+'</td><td class="tr">'+nf(tn)+'</td><td class="tr">'+nf(Math.round(tq))+'</td>'
+        + '<td class="tr">－</td></tr></tbody></table>';
+    h += '<div class="pr-sec"><div class="pr-sec-title">異常單分類</div>'
+       + '<div class="pr-two">'
+       + '<div>'+(catSvg?'<div class="pr-chart">'+catSvg+'</div>':'')+'</div>'
+       + '<div>'+ct+'</div>'
+       + '</div>'
+       + (catTrSvg?'<div class="pr-chart" style="margin-top:6px;">'+catTrSvg+'</div>':'')
+       + '</div>';
+  }
 
   var ppSvg = prChartSvg('chParetoPart', 380, 200), pcSvg = prChartSvg('chParetoCause', 380, 200);
   h += '<div class="pr-sec"><div class="pr-two">'+

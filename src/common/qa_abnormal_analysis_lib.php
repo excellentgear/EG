@@ -129,6 +129,12 @@ function qaa_base_where(array $period, array $f = []): array
           "o.id NOT IN (SELECT DISTINCT parent_order_id FROM qa_abnormal_order WHERE parent_order_id IS NOT NULL AND deleted_at IS NULL)"];
     $p = [$period['start'], $period['end']];
     if (!empty($f['source']) && in_array($f['source'], ['IR', 'QC', 'BOM'], true)) { $w[] = "o.source_type=?"; $p[] = $f['source']; }
+    /* 異常單分類（製程中／客訴／其他…）：cat='none' ＝分類功能上線前、還沒指定分類的舊單。
+       這個篩選跟來源(source)是兩回事——來源是「從哪一張單開出來的」，分類是人為歸類。 */
+    if (isset($f['cat']) && $f['cat'] !== '') {
+        if ($f['cat'] === 'none') { $w[] = "o.cat_id IS NULL"; }
+        else { $w[] = "o.cat_id=?"; $p[] = (int)$f['cat']; }
+    }
     if (!empty($f['kw'])) {
         $kw = '%' . $f['kw'] . '%';
         $w[] = "(o.part_no LIKE ? OR o.client_name LIKE ? OR o.abnormal_order_no LIKE ?)";
@@ -147,8 +153,10 @@ function qaa_load_rows(PDO $db, array $period, array $f = []): array
                    o.resp_process_no, o.responsible_vendor_id, o.resp_is_internal,
                    o.disp_decided_at, o.gm_decided_at, o.deduct_appr_at, o.deduct_appr_by,
                    o.auto_opened, o.qc_review_by, o.escalate_gm, o.parent_order_id,
+                   o.cat_id, ct.name AS cat_name,
                    pn.ProcessName AS resp_process_name, ml.maker_id AS resp_vendor_name
             FROM qa_abnormal_order o
+            LEFT JOIN qa_abnormal_cat ct ON ct.cat_id=o.cat_id
             LEFT JOIN process_no pn ON pn.ProcessNo=o.resp_process_no
             LEFT JOIN maker_list ml ON ml.maker_id_no=o.responsible_vendor_id
             WHERE " . implode(' AND ', $w) . "
@@ -248,8 +256,17 @@ function qaa_trend(PDO $db, int $year, string $gran, array $f = []): array
     foreach ($buckets as $b) {
         $rows = qaa_load_rows($db, $b, $f);
         $k = qaa_kpi_one($rows);
+        /* 分類細分順便在這裡算——趨勢本來就已經把每一期的資料撈出來了，
+           另外再跑一輪 qaa_load_rows() 只是把查詢次數變兩倍。 */
+        $byCat = [];
+        foreach ($rows as $r2) {
+            $key = $r2['cat_id'] === null ? 'none' : (string)(int)$r2['cat_id'];
+            if (!isset($byCat[$key])) $byCat[$key] = 0;
+            $byCat[$key]++;
+        }
         $out[] = ['idx' => $b['idx'], 'label' => $b['label'], 'count' => $k['total'], 'ng_qty' => $k['ng_qty'],
-                  'copq' => $k['copq'], 'closed' => $k['closed'], 'scrap' => $k['scrap_count']];
+                  'copq' => $k['copq'], 'closed' => $k['closed'], 'scrap' => $k['scrap_count'],
+                  'by_cat' => $byCat];
     }
     return $out;
 }
@@ -383,6 +400,57 @@ function qaa_copq_by_disposition(array $rows): array
 /* ═══════════════════════════════════════════════════════════════
    開單來源分布（IR客退／QC檢驗／BOM製程，並標出 BOM 來源中有多少是系統自動開立）
    ═══════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════
+   依「異常單分類」彙總（製程中／客訴／其他…）
+   ═══════════════════════════════════════════════════════════════ */
+/**
+ * 每一個分類的單數／不良數／報廢／未結案／COPQ／平均結案天數。
+ * **分類上線前的舊單（cat_id 是 NULL）獨立成一列「未指定分類」排在最後**——
+ * 併進任何一類都會讓那一類的數字失真，而且看不出還有多少單沒歸類。
+ * 排序照管理員設定的分類順序（$catOrder），這樣跟清單頁的分區順序對得起來。
+ */
+function qaa_cat_dist(array $rows, array $catOrder = []): array
+{
+    $g = [];
+    foreach ($rows as $r) {
+        $key = $r['cat_id'] === null ? 'none' : (string)(int)$r['cat_id'];
+        if (!isset($g[$key])) {
+            $g[$key] = ['cat_id' => $r['cat_id'] === null ? null : (int)$r['cat_id'],
+                        'label'  => $r['cat_id'] === null ? '未指定分類' : (string)($r['cat_name'] ?: ('分類#' . (int)$r['cat_id'])),
+                        'count' => 0, 'closed' => 0, 'open' => 0, 'ng_qty' => 0, 'scrap' => 0,
+                        'copq' => 0.0, 'cycle' => []];
+        }
+        $g[$key]['count']++;
+        if (!empty($r['is_closed'])) $g[$key]['closed']++; else $g[$key]['open']++;
+        $g[$key]['ng_qty'] += (int)$r['ng_qty'];
+        if (!empty($r['scrap_no'])) $g[$key]['scrap']++;
+        $g[$key]['copq'] += (float)$r['copq_amount'];
+        if (!empty($r['is_closed']) && !empty($r['closed_at'])) {
+            $d = (strtotime(substr((string)$r['closed_at'], 0, 10)) - strtotime($r['busdate'])) / 86400;
+            if ($d >= 0) $g[$key]['cycle'][] = $d;
+        }
+    }
+    $pos = [];
+    foreach ($catOrder as $i => $c) $pos[(string)(int)$c['cat_id']] = $i;
+    $out = array_values($g);
+    usort($out, function ($a, $b) use ($pos) {
+        $ka = $a['cat_id'] === null ? 'none' : (string)$a['cat_id'];
+        $kb = $b['cat_id'] === null ? 'none' : (string)$b['cat_id'];
+        $ia = $ka === 'none' ? 99999 : ($pos[$ka] ?? 9999);
+        $ib = $kb === 'none' ? 99999 : ($pos[$kb] ?? 9999);
+        return $ia <=> $ib;
+    });
+    $total = count($rows);
+    foreach ($out as &$o) {
+        $o['pct'] = $total > 0 ? round($o['count'] / $total * 100, 1) : 0;
+        $o['avg_close_days'] = $o['cycle'] ? round(array_sum($o['cycle']) / count($o['cycle']), 1) : null;
+        $o['copq'] = round($o['copq'], 2);
+        unset($o['cycle']);
+    }
+    unset($o);
+    return $out;
+}
+
 function qaa_source_type_dist(array $rows): array
 {
     $label = ['IR' => '客退單(IR)', 'QC' => 'QC檢驗單', 'BOM' => '製程中(製令)'];
@@ -556,6 +624,32 @@ function qaa_insights(array $ctx): array
         $gmL = $ctx['gm_label'] ?? '總經理';
         $out[] = ['level' => 'warn', 'title' => '待' . $gmL . '裁示',
                   'detail' => "目前有 {$k['pending_gm']} 張已轉呈、尚未裁示，MRB（材料審查）判定尚未完成。"];
+    }
+
+    /* 分類：哪一類佔最多、有沒有還沒歸類的單。
+       這一條刻意講「幾張、佔幾%」而不是只說「客訴比較多」——沒有數字的結論不敢拿去做決定。 */
+    $catDist = $ctx['cat_dist'] ?? [];
+    if ($catDist) {
+        $tot = 0;
+        foreach ($catDist as $c) $tot += (int)$c['count'];
+        $named = array_values(array_filter($catDist, function ($c) { return $c['cat_id'] !== null; }));
+        if ($tot > 0 && $named) {
+            usort($named, function ($a, $b) { return $b['count'] <=> $a['count']; });
+            $top = $named[0];
+            $parts = [];
+            foreach ($catDist as $c) $parts[] = $c['label'] . ' ' . $c['count'] . ' 張（' . $c['pct'] . '%）';
+            $lv = ($top['pct'] >= 60 && count($named) > 1) ? 'warn' : 'info';
+            $out[] = ['level' => $lv, 'title' => '分類以「' . $top['label'] . '」為主',
+                      'detail' => implode('、', $parts) . '。'
+                        . ($lv === 'warn' ? '單一分類佔比超過六成，建議針對這一類的共通原因專案處理。' : '')];
+        }
+        foreach ($catDist as $c) {
+            if ($c['cat_id'] === null && (int)$c['count'] > 0) {
+                $out[] = ['level' => 'warn', 'title' => '還有未指定分類的單',
+                          'detail' => '期間內有 ' . $c['count'] . ' 張異常單還沒有指定分類（多半是分類功能上線前建立的舊單），'
+                                    . '請到單張處理頁的表頭補選，否則依分類做的統計會少算這幾張。'];
+            }
+        }
     }
 
     // 重複發生

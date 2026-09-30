@@ -77,6 +77,9 @@ switch ($action) {
         $filters = [];
         if (!empty($_REQUEST['source']) && in_array($_REQUEST['source'], ['IR', 'QC', 'BOM'], true)) $filters['source'] = $_REQUEST['source'];
         if (!empty($_REQUEST['kw'])) $filters['kw'] = trim((string)$_REQUEST['kw']);
+        // 異常單分類篩選：數字＝該分類；'none'＝還沒指定分類的舊單
+        $catF = trim((string)($_REQUEST['cat'] ?? ''));
+        if ($catF !== '') $filters['cat'] = ($catF === 'none') ? 'none' : (int)$catF;
 
         $settings = qaa_settings_get($db);
         $rows = qaa_load_rows($db, $period, $filters);
@@ -94,6 +97,8 @@ switch ($action) {
         $disposition = qaa_disposition_dist($rows);
         $copqDisp    = qaa_copq_by_disposition($rows);
         $srcType     = qaa_source_type_dist($rows);
+        $catsAll     = qab_cats($db, false);                 // 含停用：舊單可能指到已停用的分類
+        $catDist     = qaa_cat_dist($rows, $catsAll);
         $agingAll    = qaa_aging_list($db, $settings);
         $agingOver   = array_values(array_filter($agingAll, function ($a) { return !empty($a['over']); }));
         $recurrence  = qaa_recurrence($db, $settings);
@@ -110,6 +115,7 @@ switch ($action) {
             'recurrence_months' => $settings['recurrence_months'],
             // 最終裁示者的稱呼（管理員可設定）——自動分析的文字要跟畫面一致
             'gm_label' => qab_gm_label($db),
+            'cat_dist' => $catDist,
         ]);
 
         qaaOut([
@@ -129,6 +135,8 @@ switch ($action) {
             'disposition' => $disposition,
             'copq_by_disposition' => $copqDisp,
             'source_type' => $srcType,
+            'cat_dist' => $catDist,
+            'cats' => $catsAll,
             'aging' => $agingAll,
             'aging_over_count' => count($agingOver),
             'recurrence' => $recurrence,
