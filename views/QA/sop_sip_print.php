@@ -37,7 +37,12 @@ if (!$F) { exit('找不到這個版次'); }
 if (!ss_perm_for_kind($P, $F['kind'], 'view')) { http_response_code(403); exit('沒有檢視權限'); }
 
 $doc = $F['doc']; $ver = $F['ver']; $kind = $F['kind'];
+$layout = (string)($F['layout'] ?? 'std');
 $formDate = (string)($ver['form_date'] ?? '');
+/* 發行日期＝所選圖面那張料號附件的發行章日期（ai-rules/15）。取不到就印「—」，
+   **不可以退回印製表日期**，也不可以把「尚未登錄發行章日期」這種內部提示印到紙上
+   （列印版是給稽核看的正式紀錄，ai-rules/23 的口徑）。 */
+$issueDate = (string)($F['issue']['date'] ?? '');
 $company  = ss_company_name($db);
 $asNo     = ss_as_no($db, $kind, (int)($ver['as_doc_id'] ?? 0), $formDate);
 $formName = ss_as_title($db, $kind, (int)($ver['as_doc_id'] ?? 0));
@@ -193,6 +198,36 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
     /* 品質特性的文字（跨珠Ø7.3152 這種）印在上下限上方，比照紙本 */
     .qc { font-weight:bold; margin-bottom:0.4mm; }
 
+    /* ── 標準作業流程 SOP（gsop）：照紙本 as-sop 那一批 xlsx 的版面 ──
+       左半邊＝圖面＋檢驗項目，右半邊＝作業標準（軟體步驟／硬體步驟）＋更改記錄＋簽章。 */
+    .gs-head { table-layout:fixed; }
+    .gs-head .ttl { text-align:center; font-weight:bold; font-size:12pt; letter-spacing:2px;
+                    vertical-align:middle; background:#F7F7F7; }
+    .gs-head td.v { text-align:center; height:8mm; vertical-align:middle; }
+    .gs-main { table-layout:fixed; margin-top:2.5mm; }
+    .gs-main > tbody > tr > td { padding:0; border:1px solid #000; vertical-align:top; }
+    .gs-left { width:<?= $paper['orient'] === 'landscape' ? 150 : 96 ?>mm; }
+    .gs-draw { text-align:center; padding:1.5mm; border-bottom:1px solid #000; }
+    .gs-draw img { max-width:100%; max-height:<?= $paper['orient'] === 'landscape' ? 150 : 104 ?>mm; }
+    .gs-draw .none { color:#888; font-size:9pt; padding:16mm 0; }
+    .gs-sec { text-align:center; font-weight:bold; letter-spacing:3px; background:#EFEFEF; }
+    .gs-step { table-layout:fixed; }
+    .gs-step th, .gs-step td { font-size:9.5pt; }
+    .gs-step .gname { width:24mm; text-align:center; font-weight:bold; vertical-align:middle; }
+    .gs-step .gnote { width:44mm; font-size:9pt; }
+    .gs-step td.gkv { padding:0; }
+    /* 參數格：紙本上就是「鍵｜值」一列最多三組，值可以橫跨剩下的格子 */
+    table.kv { table-layout:fixed; width:100%; border:0; }
+    table.kv td { border:0; border-bottom:1px solid #D9D9D9; border-right:1px solid #D9D9D9;
+                  padding:1mm 1.4mm; font-size:9.5pt; }
+    table.kv tr:last-child td { border-bottom:0; }
+    table.kv td.k { background:#FAFAFA; text-align:center; color:#333; }
+    table.kv td.v { word-break:break-all; }
+    .gs-chg { margin-top:0; }
+    .gs-chg th, .gs-chg td { font-size:9pt; }
+    /* 簽章列（照紙本在右半邊最下方） */
+    .gs-sign { table-layout:fixed; }
+
     /* 圖章一律不縮小（ai-rules/18）；列印新視窗拿不到 eg_stamp.js 注入的 CSS，樣式要自己寫齊 */
     .sg { height:24mm; text-align:center; vertical-align:middle; }
     .sg .eg-stamp, .sg svg { display:inline-block; }
@@ -219,7 +254,160 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
     <h1 class="co"><?= h($company) ?></h1>
     <h2 class="fm"><?= h($formName) ?></h2>
 
-<?php if ($kind === 'equip'): ?>
+<?php if ($layout === 'gsop'): /* ═══════ 標準作業流程 SOP（照紙本 as-sop） ═══════ */ ?>
+    <?php
+        $soft = $F['sects']['soft'] ?? [];
+        $hard = $F['sects']['hard'] ?? [];
+        /* 加工機種：以綁定的機台型號為準（機台主檔才是正本），沒綁才退回文件上的型號文字 */
+        $mModels = ss_models_split((string)($doc['machine_model'] ?? ''));
+        $mText   = $mModels ? implode('、', $mModels) : '';
+        /** 一列參數格：n 組鍵值攤成 6 格，最後一個值把剩下的格子吃掉（照紙本的合併方式） */
+        $kvRow = function (array $pairs): string {
+            $n = max(1, count($pairs));
+            $out = '';
+            foreach ($pairs as $i => $p) {
+                $last = ($i === count($pairs) - 1);
+                $span = $last ? max(1, 7 - 2 * $n) : 1;
+                $out .= '<td class="k">' . h($p['k']) . '</td>';
+                $out .= '<td class="v"' . ($span > 1 ? ' colspan="' . $span . '"' : '') . '>' . h($p['v']) . '</td>';
+            }
+            return $out;
+        };
+    ?>
+    <table class="gs-head">
+        <tr>
+            <td class="ttl" rowspan="2" style="width:40mm;">標 準 作 業 流 程 S O P</td>
+            <td class="lab">加工機種</td><td class="lab">客戶名稱</td><td class="lab">產 品 料 號</td>
+            <td class="lab">工 程 名 稱</td>
+            <!-- 使用者 2026-09-30 指定：**取消數量欄**，版次之外另外印發行日期 -->
+            <td class="lab" style="width:16mm;">版次</td>
+            <td class="lab" style="width:26mm;">發行日期</td>
+            <td class="lab" style="width:26mm;">製表日期</td>
+        </tr>
+        <tr>
+            <td class="v"><?= h($mText ?: '—') ?></td>
+            <td class="v"><?= h($doc['customer_name'] ?: ($ver['customer_name'] ?? '')) ?></td>
+            <td class="v"><?= h($doc['part_no_text'] ?: '—') ?></td>
+            <td class="v"><?= h($doc['proc_name'] ?: $doc['title']) ?></td>
+            <td class="v"><?= h($ver['ver_no']) ?></td>
+            <td class="v"><?= $issueDate !== '' ? h(eg_fmt_date($issueDate)) : '—' ?></td>
+            <td class="v"><?= h(eg_fmt_date($formDate)) ?></td>
+        </tr>
+    </table>
+
+    <table class="gs-main"><tbody><tr>
+        <!-- 左半邊：圖面＋檢驗項目 -->
+        <td class="gs-left">
+            <div class="gs-draw">
+                <?php if ((int)$ver['draw_file_id']): ?>
+                    <img src="<?= pf((int)$ver['draw_file_id']) ?>">
+                <?php else: ?><div class="none">（尚未帶入圖面）</div><?php endif; ?>
+            </div>
+            <table class="items">
+                <thead><tr>
+                    <th style="width:26mm;">管理重點</th><th style="width:30mm;">品質特性</th>
+                    <th style="width:15mm;">擔當</th><th style="width:24mm;">檢驗方法</th>
+                    <th style="width:20mm;">檢具編號</th><th>備註</th>
+                </tr></thead>
+                <tbody>
+                <?php foreach ($F['items'] as $it): ?>
+                    <?php
+                        $up = trim((string)$it['up_limit']); $lo = trim((string)$it['lo_limit']);
+                        $hasLim = ($up !== '' || $lo !== '');
+                        $qc = trim((string)$it['q_char']);
+                        /* 檢具那一欄紙本上逐檔不同（有的印檢具編號、有的印檢驗頻率），
+                           兩個都有就一起印，不要挑一個而讓另一個安靜消失。 */
+                        $tool = trim((string)($it['tool_label'] ?: $it['tool_no']));
+                        $fq   = trim((string)$it['freq']);
+                    ?>
+                    <tr>
+                        <td><?= h($it['ctrl_point']) ?></td>
+                        <td>
+                            <?php if ($qc !== ''): ?><div class="qc"><?= h($qc) ?></div><?php endif; ?>
+                            <?php if ($hasLim): ?>
+                                <div class="lim ul"><span class="k">上限</span><span class="v"><?= h($up) ?></span></div>
+                                <div class="lim"><span class="k">下限</span><span class="v"><?= h($lo) ?></span></div>
+                            <?php endif; ?>
+                        </td>
+                        <td class="mid"><?= h($it['owner_label'] ?? $it['owner']) ?></td>
+                        <td><?= h($it['method']) ?></td>
+                        <td class="mid"><?= h($tool !== '' && $fq !== '' ? $tool . '／' . $fq : ($tool ?: $fq)) ?></td>
+                        <td><?= h($it['note']) ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                <?php if (!$F['items']): ?>
+                    <tr><td colspan="6" class="mid" style="color:#888;padding:6mm;">（尚未填寫檢驗項目）</td></tr>
+                <?php endif; ?>
+                </tbody>
+            </table>
+        </td>
+
+        <!-- 右半邊：作業標準（軟體步驟／硬體步驟）＋更改記錄＋簽章 -->
+        <td>
+            <table class="gs-step">
+                <tr><td class="gs-sec" colspan="3">作 業 標 準</td></tr>
+                <tr><th class="gname">軟 體 步 驟</th><th>要　點</th><th class="gnote">備註</th></tr>
+                <?php foreach ($soft as $s): ?>
+                    <tr>
+                        <td class="gname"><?= h($s['step_name']) ?></td>
+                        <td class="gkv">
+                            <?php if (!empty($s['kv'])): ?>
+                                <table class="kv"><?php foreach ($s['kv'] as $row): ?>
+                                    <tr><?= $kvRow($row) ?></tr>
+                                <?php endforeach; ?></table>
+                            <?php else: ?>
+                                <?php foreach (lines($s['step_text']) as $l): ?><div style="padding:1mm 1.4mm;"><?= h($l) ?></div><?php endforeach; ?>
+                            <?php endif; ?>
+                        </td>
+                        <td class="gnote"><?php foreach (lines($s['note']) as $l): ?><div><?= h($l) ?></div><?php endforeach; ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                <?php if (!$soft): ?><tr><td colspan="3" class="mid" style="color:#888;padding:4mm;">（尚未填寫軟體步驟）</td></tr><?php endif; ?>
+
+                <tr><th class="gname">硬 體 步 驟</th><th>要　點</th><th class="gnote">備註</th></tr>
+                <?php foreach ($hard as $s): ?>
+                    <tr>
+                        <td class="gname"><?= h($s['step_name']) ?></td>
+                        <td><?php foreach (lines($s['step_text']) as $l): ?><div><?= h($l) ?></div><?php endforeach; ?></td>
+                        <td class="gnote"><?php foreach (lines($s['note']) as $l): ?><div><?= h($l) ?></div><?php endforeach; ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                <?php if (!$hard): ?><tr><td colspan="3" class="mid" style="color:#888;padding:4mm;">（尚未填寫硬體步驟）</td></tr><?php endif; ?>
+            </table>
+
+            <table class="gs-chg">
+                <thead><tr><th colspan="3">更改記錄</th></tr>
+                <tr><th style="width:16mm;">版次</th><th style="width:26mm;">日期</th><th>說明</th></tr></thead>
+                <tbody>
+                <?php foreach (array_reverse($vers) as $v): ?>
+                    <tr>
+                        <td class="mid"><?= h($v['ver_no']) ?></td>
+                        <td class="mid"><?= h(eg_fmt_date($v['form_date'])) ?></td>
+                        <td><?php foreach (lines($v['rev_text'] ?? $v['rev_note']) as $l): ?><div><?= h($l) ?></div><?php endforeach; ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+
+            <table class="gs-sign">
+                <thead><tr>
+                    <?php foreach ($SLOTS_D as $k => $def): ?><th style="width:<?= number_format(100 / max(1, count($SLOTS_D)), 1) ?>%;"><?= h($def['label']) ?></th><?php endforeach; ?>
+                </tr></thead>
+                <tbody><tr>
+                    <?php foreach ($SLOTS_D as $k => $def): $s = $F['signs'][$k] ?? null; ?>
+                        <td class="sg" data-slot="<?= h($k) ?>"
+                            data-name="<?= h($s['user_name'] ?? '') ?>"
+                            data-date="<?= h($s['sign_date'] ?? '') ?>"
+                            data-dept="<?= h($s['dept_name'] ?? '') ?>"
+                            data-pos="<?= h($s['position_name'] ?? '') ?>"
+                            data-deputy="<?= (int)($s['by_deputy'] ?? 0) ? 1 : 0 ?>"></td>
+                    <?php endforeach; ?>
+                </tr></tbody>
+            </table>
+        </td>
+    </tr></tbody></table>
+
+<?php elseif ($kind === 'equip'): ?>
     <table>
         <tr>
             <td class="lab" style="width:26mm;"><?= $doc['scope'] === 'tool' ? '量具編號' : '機器編號' ?></td>
@@ -374,7 +562,8 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
     <!-- 修訂履歷／修改記錄：不另外手打，由各版次組出來。
          標準檢驗指導書照紙本只有三欄（修改版次／修改日期／說明），使用者 2026-09-22 指定；
          SOP 那兩份維持原本的五欄（多印製表人與狀態，內部用得到）。 -->
-<?php if ($kind === 'sip'): ?>
+<?php if ($layout === 'gsop'): /* gsop 的更改記錄與簽章照紙本排在右半邊，上面已經印過，這裡不重複 */ ?>
+<?php elseif ($kind === 'sip'): ?>
     <table class="blk">
         <thead><tr><th colspan="3">修改記錄</th></tr>
         <tr><th style="width:22mm;">修改版次</th><th style="width:32mm;">修改日期</th><th>說明</th></tr></thead>
@@ -410,6 +599,7 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
 
     <!-- 簽章：簽的順序是製表→審核→核准，但**印出來由左到右是核准→審核→製表**
          （使用者 2026-09-22 指定，職位高的在左，比照紙本；順序唯一登記處＝ss_slots_display()） -->
+<?php if ($layout !== 'gsop'): ?>
     <table class="blk">
         <thead><tr>
             <?php foreach ($SLOTS_D as $k => $def): ?><th style="width:<?= number_format(100 / max(1, count($SLOTS_D)), 1) ?>%;"><?= h($def['label']) ?></th><?php endforeach; ?>
@@ -425,6 +615,7 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
             <?php endforeach; ?>
         </tr></tbody>
     </table>
+<?php endif; ?>
 
     <!-- 頁尾：Chrome 不支援 @page 的 margin box，所以用 fixed（每一頁都會印到） -->
     <div class="pfoot">
