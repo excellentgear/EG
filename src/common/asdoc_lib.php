@@ -429,13 +429,24 @@ function eg_asdoc_nochange_ensure(PDO $db): void {
             version_id INT NULL COMMENT '這次變更掛在哪一筆改版 as_document_version.id（制修申請單靠它對回來）',
             old_doc_no VARCHAR(40) NOT NULL COMMENT '變更前的文件編號',
             new_doc_no VARCHAR(40) NOT NULL COMMENT '變更後的文件編號',
+            old_doc_name VARCHAR(200) NULL COMMENT '變更前的文件名稱（2026-10-01 起改版可一併改名）',
+            new_doc_name VARCHAR(200) NULL COMMENT '變更後的文件名稱',
             old_department_id INT NULL, new_department_id INT NULL,
             old_parent_doc_id INT NULL, new_parent_doc_id INT NULL,
             cascade_count INT NOT NULL DEFAULT 0 COMMENT '連帶改掉幾份子文件的編號',
             changed_by_id INT NULL, changed_by VARCHAR(60) NULL,
             changed_at DATETIME NOT NULL,
             INDEX idx_doc (doc_id), INDEX idx_ver (version_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AS 文件編號／所屬部門變更紀錄'");
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AS 文件編號／名稱／所屬部門變更紀錄'");
+    } catch (Throwable $e) {}
+    // 舊資料庫補欄位（MySQL 的 ADD COLUMN 不支援 IF NOT EXISTS，一律先查再加）
+    try {
+        foreach (['old_doc_name', 'new_doc_name'] as $col) {
+            $has = $db->prepare("SELECT 1 FROM information_schema.COLUMNS
+                                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='as_doc_no_change' AND COLUMN_NAME=?");
+            $has->execute([$col]);
+            if (!$has->fetchColumn()) $db->exec("ALTER TABLE as_doc_no_change ADD COLUMN {$col} VARCHAR(200) NULL");
+        }
     } catch (Throwable $e) {}
 }
 
@@ -443,12 +454,14 @@ function eg_asdoc_nochange_ensure(PDO $db): void {
 function eg_asdoc_nochange_add(PDO $db, array $d): void {
     eg_asdoc_nochange_ensure($db);
     $db->prepare("INSERT INTO as_doc_no_change
-        (doc_id, version_id, old_doc_no, new_doc_no, old_department_id, new_department_id,
+        (doc_id, version_id, old_doc_no, new_doc_no, old_doc_name, new_doc_name,
+         old_department_id, new_department_id,
          old_parent_doc_id, new_parent_doc_id, cascade_count, changed_by_id, changed_by, changed_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())")
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
        ->execute([
            (int)$d['doc_id'], ($d['version_id'] ?? null) ?: null,
            (string)$d['old_doc_no'], (string)$d['new_doc_no'],
+           ($d['old_doc_name'] ?? null) ?: null, ($d['new_doc_name'] ?? null) ?: null,
            ($d['old_department_id'] ?? null) ?: null, ($d['new_department_id'] ?? null) ?: null,
            ($d['old_parent_doc_id'] ?? null) ?: null, ($d['new_parent_doc_id'] ?? null) ?: null,
            (int)($d['cascade_count'] ?? 0), ($d['changed_by_id'] ?? null) ?: null,
@@ -467,6 +480,7 @@ function eg_asdoc_nochange_by_versions(PDO $db, array $versionIds): array {
     try {
         $in = implode(',', array_fill(0, count($ids), '?'));
         $st = $db->prepare("SELECT c.version_id, c.old_doc_no, c.new_doc_no,
+                                   c.old_doc_name, c.new_doc_name,
                                    do_.name AS old_dept, dn.name AS new_dept
                             FROM as_doc_no_change c
                             LEFT JOIN department do_ ON do_.id = c.old_department_id
@@ -624,5 +638,117 @@ function asDeptSubtreeIds(PDO $db, int $deptId): array {
         foreach ($kids[$cur] ?? [] as $k) $stack[] = $k;
     }
     return array_keys($out);
+}
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 版本號判定（唯一實作）—— AS 文件管理「改版」與文件制修申請單共用同一套規則
+ *
+ * 為什麼放這裡：AS_Document_API.php 頂層有 session 與權限判定，不能被 include，
+ * 規則留在那裡就只能在 doc_apply_lib.php 再抄一份（鐵律4）。原本 asVersionCmp()
+ * 已改為轉呼叫 eg_asdoc_ver_cmp()，行為一字未改。
+ *
+ * 2026-10-01 新增跳版判定（使用者回報：doc_apply 把 2-PH-01-02 由 B 直接填成 D，
+ * 三道關卡沒有任何一道擋得住——前端只在欄位空白時才自動帶建議版次，
+ * da_validate() 只檢查必填，asValidateVersionOrder() 只擋倒退與重複，D 比 B 新就放行）。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+if (!function_exists('eg_asdoc_ver_cmp')) {
+/**
+ * 版本號大小比較：回 -1（$a 舊於 $b）／0（相同）／1（$a 新於 $b）；型式不同或無法比較回 null。
+ * 數字型：各段依數值比較（1.10 > 1.2）；字母型：先比字母長度再字典序，同字母再比修訂號
+ * （順序：A < A-1 < A-2 < B < B-1 < … < Z < AA）。
+ */
+function eg_asdoc_ver_cmp(string $a, string $b): ?int {
+    $a = trim($a); $b = trim($b);
+    if ($a === '' || $b === '') return null;
+    $numRe = '/^\d+(\.\d+)*$/'; $alphaRe = '/^([A-Za-z]+)(?:-(\d+))?$/';
+    if (preg_match($numRe, $a) && preg_match($numRe, $b)) {
+        $x = array_map('intval', explode('.', $a));
+        $y = array_map('intval', explode('.', $b));
+        for ($i = 0; $i < max(count($x), count($y)); $i++) {
+            $c = ($x[$i] ?? 0) <=> ($y[$i] ?? 0);
+            if ($c !== 0) return $c;
+        }
+        return 0;
+    }
+    if (preg_match($alphaRe, $a, $ma) && preg_match($alphaRe, $b, $mb)) {
+        $la = strtoupper($ma[1]); $lb = strtoupper($mb[1]);
+        $cmp = (strlen($la) !== strlen($lb)) ? (strlen($la) <=> strlen($lb)) : strcmp($la, $lb);
+        if ($cmp === 0) $cmp = ((int)($ma[2] ?? 0)) <=> ((int)($mb[2] ?? 0));
+        return $cmp <=> 0;
+    }
+    return null;
+}
+}
+
+if (!function_exists('eg_asdoc_ver_next_letter')) {
+    /** A→B、Z→AA（與 doc_apply_lib 的 da_next_version 同一套進位規則） */
+    function eg_asdoc_ver_next_letter(string $base): string {
+        $chars = str_split(strtoupper($base));
+        $i = count($chars) - 1;
+        while ($i >= 0) {
+            if ($chars[$i] !== 'Z') { $chars[$i] = chr(ord($chars[$i]) + 1); return implode('', $chars); }
+            $chars[$i] = 'A'; $i--;
+        }
+        return 'A' . implode('', $chars);
+    }
+}
+
+if (!function_exists('eg_asdoc_ver_next_list')) {
+/**
+ * 目前版本的「下一版合法選項」。回空陣列＝無法判定（例如目前還沒有版本、或是看不懂的型式），
+ * 呼叫端一律視為不檢查——**寧可不擋，也不要擋下系統看不懂但其實正確的版次**。
+ *
+ * 字母型 B      → ['C', 'B-1']        （下一個字母，或加修訂號）
+ * 字母型 A-1    → ['A-2', 'B']
+ * 數字型 1.2    → ['1.3', '2.0', '2'] （最後一段+1，或主版本+1）
+ * 數字型 3      → ['4']
+ */
+function eg_asdoc_ver_next_list(string $current): array {
+    $cur = trim($current);
+    if ($cur === '') return [];
+    if (preg_match('/^([A-Za-z]+)(?:-(\d+))?$/', $cur, $m)) {
+        $base = strtoupper($m[1]);
+        $rev  = isset($m[2]) && $m[2] !== '' ? (int)$m[2] : null;
+        return $rev === null
+            ? [eg_asdoc_ver_next_letter($base), $base . '-1']
+            : [$base . '-' . ($rev + 1), eg_asdoc_ver_next_letter($base)];
+    }
+    if (preg_match('/^\d+(\.\d+)*$/', $cur)) {
+        $segs = array_map('intval', explode('.', $cur));
+        $out  = [];
+        $tail = $segs; $tail[count($tail) - 1]++;           // 1.2 → 1.3
+        $out[] = implode('.', $tail);
+        if (count($segs) > 1) {                              // 1.2 → 2.0（主版本推進）
+            $major = array_fill(0, count($segs), 0); $major[0] = $segs[0] + 1;
+            $out[] = implode('.', $major);
+            $out[] = (string)($segs[0] + 1);                  // 也接受單純寫 2
+        }
+        return array_values(array_unique($out));
+    }
+    return [];
+}
+}
+
+if (!function_exists('eg_asdoc_ver_gap')) {
+/**
+ * 跳版判定：合法（連續、或無法判定）回 null；中間跳過版次回「可以直接顯示給使用者看」的說明字串。
+ *
+ * 刻意只判「跳過」這一種：倒退與重複由 asValidateVersionOrder()／重複檢查負責，
+ * 型式不一致由 asValidateVersionStyle() 負責，三者各管一段不互相覆蓋。
+ */
+function eg_asdoc_ver_gap(string $current, string $newVersion): ?string {
+    $cur = trim($current); $new = trim($newVersion);
+    if ($cur === '' || $new === '') return null;
+    $allow = eg_asdoc_ver_next_list($cur);
+    if (!$allow) return null;                                   // 看不懂的型式＝不擋
+    $up = strtoupper($new);
+    foreach ($allow as $a) if (strtoupper($a) === $up) return null;
+    $cmp = eg_asdoc_ver_cmp($new, $cur);
+    if ($cmp === null || $cmp <= 0) return null;                // 型式不同／倒退／相同＝交給別的檢查
+    return "目前版本是 {$cur}，下一版應該是 " . $allow[0]
+         . (count($allow) > 1 ? '（或 ' . implode('、', array_slice($allow, 1)) . '）' : '')
+         . "，這次填的是 {$new}，中間跳過了版次。";
 }
 }

@@ -345,6 +345,24 @@ case 'save': {
     }
     $changeDate = $r['apply_date'];         // 版本變更日期＝本次申請日
 
+    /* ── 版次跳號把關（2026-10-01 使用者回報：2-PH-01-02 由 B 直接被填成 D）──
+       判定走 asdoc_lib 的 eg_asdoc_ver_gap()，與 AS 文件管理「改版」同一套規則（鐵律4）。
+       擋下不是為了不給存，而是要他**看到**中間少了一版：確定要跳就輸入本人登入密碼強制儲存。
+       刻意不放進 da_validate()：submit／auto_sign 也呼叫它，塞進去會變成「存好的舊單再也送不出去」。 */
+    if ($gap = da_version_gap($db, $r)) {
+        $force = trim((string)($_POST['force_version'] ?? '')) === '1';
+        if (!$force) jerr($gap, 400, ['code' => 'VER_GAP', 'gap' => $gap]);
+        require_once $document_root . '/EGsystem/src/common/confirm_password_lib.php';
+        $g = eg_own_password_gate($db, $uid, (string)($_POST['force_password'] ?? ''), 'doc_apply_ver_gap');
+        if (!$g['ok']) jerr($g['msg'], 400, ['code' => 'VER_GAP_PWD', 'gap' => $gap]);
+        try {
+            $db->prepare("INSERT INTO audit_log (user_id, user_name, action, target_type, target_id, detail, created_at)
+                          VALUES (?,?,?,?,?,?,NOW())")
+               ->execute([$uid, $uname, 'doc_apply_version_gap', 'doc_apply', $id,
+                          '版次跳號強制儲存：' . $r['doc_no'] . '　' . $gap]);
+        } catch (Throwable $e) {}
+    }
+
     $now = da_db_now($db);
     $db->beginTransaction();
     if ($id > 0) {
@@ -564,14 +582,30 @@ case 'decide': {
     }
     $db->commit();
     da_link_asdoc($db, $id);
+    // 核准＝AS 文件真的改版了 → 同步建立版本履歷，歷史版本才看得到這張單（2026-10-01 使用者拍板）
+    $sync = ($dec === 'approved') ? da_sync_asdoc_version($db, $id, $uname) : null;
 
     $fresh = da_row($db, $id);
     da_notify_result($db, $fresh, (int)$fresh['applicant_id'],
         $uname . ($dec === 'approved' ? ' 已核准您的文件制修申請單。' : ' 已退回您的文件制修申請單。原因：') . $note, $uid);
-    jout([]);
+    jout($sync ? ['version_sync' => $sync] : []);
 }
 
 /* ══════════════════ 管理員自動簽核（需操作確認密碼） ══════════════════ */
+/* ══════════════════ 已核准 → 退回「尚未送出」（超級管理員＋操作確認密碼） ══════════════════
+   2026-10-01 使用者交辦。核准之後原本是終點，核錯／版次填錯只能刪掉重開一張，
+   單號會缺號、歷程也斷掉。實作收斂在 da_reopen()（連帶處理本單自動建立的版本履歷）。 */
+case 'reopen': {
+    if (!$P['isAdmin']) jerr('只有系統管理者可以把已核准的單退回未送出', 403);
+    $id = (int)($_POST['apply_id'] ?? 0);
+    if ($id <= 0) jerr('請指定申請單');
+    $vr = eg_confirm_password_verify_scoped($db, $uid, (string)($_POST['confirm_password'] ?? ''), 'doc_apply_reopen');
+    if (empty($vr['ok'])) jerr($vr['msg'] ?? '操作確認密碼錯誤', 403, ['code' => 'PWD']);
+    $res = da_reopen($db, $id, $uid, $uname);
+    if (empty($res['ok'])) jerr((string)$res['msg']);
+    jout($res);
+}
+
 case 'auto_sign': {
     if (!$P['canAdmin']) jerr('無自動簽核權限', 403);
     $ids  = array_values(array_filter(array_map('intval', da_json_arr('apply_ids'))));
@@ -585,7 +619,7 @@ case 'auto_sign': {
     $ovUser = (int)($_POST['override_applicant_id'] ?? 0);
     $ovDate = trim((string)($_POST['override_date'] ?? ''));
 
-    $done = 0; $skip = [];
+    $done = 0; $skip = []; $synced = [];
     foreach ($ids as $id) {
         $r = da_row($db, $id);
         if (!$r) { $skip[] = "#$id 查無資料"; continue; }
@@ -649,9 +683,12 @@ case 'auto_sign': {
         }
         $db->commit();
         da_link_asdoc($db, $id);
+        // 自動簽核等同核准 → 同樣要在 AS 文件管理留下版本履歷（與 decide 走同一支）
+        $sy = da_sync_asdoc_version($db, $id, $uname);
+        if (!empty($sy['created'])) $synced[] = ($r['apply_no'] ?: "#$id") . '：' . $sy['msg'];
         $done++;
     }
-    jout(['done' => $done, 'skipped' => $skip]);
+    jout(['done' => $done, 'skipped' => $skip, 'synced' => $synced]);
 }
 
 /* ══════════════════ 刪除（單筆／批次） ══════════════════ */

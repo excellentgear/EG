@@ -1292,3 +1292,259 @@ function da_user_identity_asof(PDO $db, int $uid, string $date, int $preferDeptI
             'dept_name'     => (string)$pick['dept_name'],
             'position_name' => (string)$pick['position_name']];
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 2026-10-01 使用者交辦三件（皆與 AS 文件管理連動）
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/** as_document_version 的「這一版是哪一張線上申請單核准後自動建的」欄位（可重複執行） */
+function da_ensure_version_link(PDO $db): void
+{
+    static $done = false;
+    if ($done) return;
+    try {
+        if ($db->inTransaction()) return;   // DDL 會造成隱式 commit，交易中一律不建（下次非交易時再建）
+        $has = $db->prepare("SELECT 1 FROM information_schema.COLUMNS
+                             WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='as_document_version' AND COLUMN_NAME='src_apply_id'");
+        $has->execute();
+        if (!$has->fetchColumn()) {
+            $db->exec("ALTER TABLE as_document_version ADD COLUMN src_apply_id INT NULL COMMENT '由哪一張線上文件制修申請單核准後自動建立（doc_apply.apply_id）；人工改版為 NULL'");
+            $db->exec("ALTER TABLE as_document_version ADD INDEX idx_src_apply (src_apply_id)");
+        }
+        $done = true;
+    } catch (Throwable $e) {}
+}
+
+/** 制修訂內容 → 版本履歷的「修訂頁次 / 修訂摘要」兩欄文字 */
+function da_change_digest(array $changes): array
+{
+    $pages = []; $sum = [];
+    foreach ($changes as $c) {
+        $p = trim((string)($c['page_no'] ?? ''));
+        if ($p !== '' && !in_array($p, $pages, true)) $pages[] = $p;
+        $item = trim((string)($c['item'] ?? ''));
+        $bef  = trim((string)($c['before_txt'] ?? ''));
+        $aft  = trim((string)($c['after_txt'] ?? ''));
+        if ($item === '' && $bef === '' && $aft === '') continue;
+        $line = $item !== '' ? $item : '（未填項目）';
+        if ($bef !== '' || $aft !== '') $line .= '：' . ($bef !== '' ? $bef : '（無）') . ' → ' . ($aft !== '' ? $aft : '（刪除）');
+        $sum[] = $line;
+    }
+    $txt = implode('；', $sum);
+    if (mb_strlen($txt, 'UTF-8') > 500) $txt = mb_substr($txt, 0, 497, 'UTF-8') . '…';
+    return ['pages' => implode('、', $pages), 'summary' => $txt];
+}
+
+/**
+ * 核准後把這張申請單同步成 AS 文件的一筆版本履歷（使用者 2026-10-01 拍板「核准時自動建版列」）。
+ *
+ * 為什麼要有這支：`da_link_asdoc()` 是**唯讀對號**——只去 as_document_version 找「有沒有一筆
+ * version 等於申請單填的版次」，找不到就把 as_version_id 留成 NULL。而 AS 文件管理歷史版本的
+ * 「申請單」欄是以 version_id 反查的，所以在 doc_apply 開的改版單核准之後，**永遠不會出現在
+ * 歷史版本上**（使用者實際回報的症狀）。
+ *
+ * 刻意的設計：
+ *  - 新建的版本列 file_name 是空的（申請單上本來就沒有新版文件檔），歷史版本會顯示「無檔（補登）」
+ *    並給「補檔」按鈕——這是 AS 文件管理本來就有的狀態，不是新發明的。
+ *  - 只處理「制訂／修正」。廢止有自己的 doc_obsolete 流程、增發補發不是改版，一律不碰。
+ *  - 版次已經存在就只連結不重建（人工先在 AS 文件管理改版、再補申請單的既有流程完全不受影響）。
+ *  - current_version 只在新版次「確實比現況新」時才推進，避免補歷史單把現行版次改回舊的。
+ *
+ * @return array ['created'=>bool,'version_id'=>int,'doc_id'=>int,'bumped'=>bool,'msg'=>string]
+ */
+function da_sync_asdoc_version(PDO $db, int $applyId, string $byName = ''): array
+{
+    $out = ['created'=>false, 'version_id'=>0, 'doc_id'=>0, 'bumped'=>false, 'msg'=>''];
+    da_ensure_version_link($db);
+    $r = da_row($db, $applyId);
+    if (!$r) { $out['msg'] = '查無此申請單'; return $out; }
+    if ((string)$r['status'] !== 'approved') { $out['msg'] = '尚未核准，不建立版本履歷'; return $out; }
+    $stat = (string)$r['doc_status'];
+    if (!in_array($stat, ['制訂', '修正'], true)) { $out['msg'] = $stat . '不走版本履歷'; return $out; }
+
+    // 文件：優先用單上綁定的，沒綁就用文件編碼回查
+    $docId = (int)($r['as_doc_id'] ?? 0);
+    if (!$docId && trim((string)$r['doc_no']) !== '') {
+        try {
+            $st = $db->prepare("SELECT id FROM as_document WHERE doc_no=? AND is_deleted=0 LIMIT 1");
+            $st->execute([trim((string)$r['doc_no'])]);
+            $docId = (int)$st->fetchColumn();
+        } catch (Throwable $e) {}
+    }
+    if (!$docId) { $out['msg'] = '這張單還沒有對應的 AS 文件，無法建立版本履歷'; return $out; }
+    $out['doc_id'] = $docId;
+
+    try {
+        $ds = $db->prepare("SELECT doc_level, department_id, current_version, current_version_id
+                            FROM as_document WHERE id=? AND is_deleted=0");
+        $ds->execute([$docId]);
+        $doc = $ds->fetch(PDO::FETCH_ASSOC);
+        if (!$doc) { $out['msg'] = 'AS 文件不存在或已刪除'; return $out; }
+
+        $ver = trim((string)$r['version']);
+        // 已經有這一版（人工先改版過）→ 只連結，不重建
+        if ($ver !== '') {
+            $q = $db->prepare("SELECT id FROM as_document_version WHERE doc_id=? AND version=? ORDER BY id DESC LIMIT 1");
+            $q->execute([$docId, $ver]);
+        } else {
+            $q = $db->prepare("SELECT id FROM as_document_version WHERE doc_id=? AND COALESCE(version,'')='' ORDER BY revised_date ASC, id ASC LIMIT 1");
+            $q->execute([$docId]);
+        }
+        $verId = (int)$q->fetchColumn();
+
+        $own = !$db->inTransaction();
+        if ($own) $db->beginTransaction();
+
+        if (!$verId) {
+            $dg    = da_change_digest($r['changes'] ?? []);
+            $rdate = trim((string)($r['change_date'] ?? '')) ?: trim((string)$r['apply_date']);
+            $db->prepare("INSERT INTO as_document_version
+                    (doc_id, version, change_status, revised_date, revised_pages, revised_summary,
+                     doc_level_snapshot, department_id_snapshot, src_apply_id, uploaded_by, uploaded_at)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,NOW())")
+               ->execute([$docId, $ver, $stat, ($rdate ?: null),
+                          ($dg['pages'] !== '' ? $dg['pages'] : null),
+                          ($dg['summary'] !== '' ? $dg['summary'] : null),
+                          $doc['doc_level'], $doc['department_id'], $applyId,
+                          ($byName !== '' ? $byName : (string)$r['applicant_name'])]);
+            $verId = (int)$db->lastInsertId();
+            $out['created'] = true;
+        }
+
+        // 現行版次只在「確實比較新」時才推進（補歷史單不可以把現行版次改回舊的）
+        $cur  = trim((string)($doc['current_version'] ?? ''));
+        $bump = ($ver !== '') && ($cur === '' || (eg_asdoc_ver_cmp($ver, $cur) ?? 0) > 0);
+        if (!$bump && $ver === '' && $cur === '' && !(int)($doc['current_version_id'] ?? 0)) $bump = true;
+        if ($bump) {
+            $db->prepare("UPDATE as_document SET current_version=?, current_version_id=?, updated_at=NOW() WHERE id=?")
+               ->execute([$ver, $verId, $docId]);
+            $out['bumped'] = true;
+        }
+
+        $db->prepare("UPDATE doc_apply SET as_doc_id=?, as_version_id=?, updated_at=NOW() WHERE apply_id=?")
+           ->execute([$docId, $verId, $applyId]);
+
+        if ($own) $db->commit();
+        $out['version_id'] = $verId;
+        $out['msg'] = $out['created']
+            ? ('已在 AS 文件管理建立版本履歷' . ($ver !== '' ? '（版次 ' . $ver . '）' : '（制訂）') . '，文件檔待補上傳')
+            : '已連結到既有的版本履歷';
+        return $out;
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) { try { $db->rollBack(); } catch (Throwable $e2) {} }
+        $out['msg'] = '版本履歷同步失敗：' . $e->getMessage();
+        return $out;
+    }
+}
+
+/**
+ * 版次跳號檢查（唯一判定走 asdoc_lib 的 eg_asdoc_ver_gap()，與 AS 文件管理「改版」同一套規則）。
+ * 合法回 null；跳號回「可直接顯示給使用者」的說明字串。
+ * 只對「指到既有 AS 文件、而且有填版次」的案子檢查；制訂案沒有前一版可比。
+ */
+function da_version_gap(PDO $db, array $r): ?string
+{
+    $ver = trim((string)($r['version'] ?? ''));
+    if ($ver === '' || (string)($r['doc_status'] ?? '') === '制訂') return null;
+    $docId = (int)($r['as_doc_id'] ?? 0);
+    if (!$docId) return null;
+    try {
+        $st = $db->prepare("SELECT current_version FROM as_document WHERE id=? AND is_deleted=0");
+        $st->execute([$docId]);
+        $cur = (string)$st->fetchColumn();
+    } catch (Throwable $e) { return null; }
+    return eg_asdoc_ver_gap($cur, $ver);
+}
+
+/**
+ * 超級管理員把「已核准」的單退回到「尚未送出（草稿）」（使用者 2026-10-01 交辦）。
+ *
+ * 使用者拍板：**清掉四格簽章，保留會簽單位已經表示的意見**——退回未送出卻留著核准章，
+ * 等於紙上出現「還沒核准卻已經蓋章」；而會簽意見是別人真的表示過的，清掉只會害他們再簽一次。
+ *
+ * 一併處理 da_sync_asdoc_version() 自動建出來的那一筆版本履歷：**只有確定是這張單建的、
+ * 而且三種檔案都還沒補上傳**才刪得掉（有人補過檔案就代表那一版已經在用了，一律保留並回報），
+ * 刪除後把 as_document 的現行版次退回剩下版本中最新的那一筆——不退的話這張單重新送審核准時
+ * 會變成「版次已存在」而卡住。
+ *
+ * @return array ['ok'=>bool,'msg'=>string,'version_removed'=>bool,'version_note'=>string]
+ */
+function da_reopen(PDO $db, int $applyId, int $byId, string $byName): array
+{
+    $r = da_row($db, $applyId);
+    if (!$r) return ['ok'=>false, 'msg'=>'查無此申請單'];
+    if ((string)$r['status'] !== 'approved') return ['ok'=>false, 'msg'=>'只有「已核准」的單可以退回未送出（目前狀態：' . $r['status'] . '）'];
+
+    da_ensure_version_link($db);
+    $verNote = ''; $verRemoved = false;
+    $verId = (int)($r['as_version_id'] ?? 0);
+    $docId = (int)($r['as_doc_id'] ?? 0);
+
+    try {
+        $db->beginTransaction();
+
+        if ($verId && $docId) {
+            $vs = $db->prepare("SELECT id, version, src_apply_id, file_name, view_file_name, apply_form_file_name
+                                FROM as_document_version WHERE id=? AND doc_id=?");
+            $vs->execute([$verId, $docId]);
+            $v = $vs->fetch(PDO::FETCH_ASSOC);
+            if ($v) {
+                $isMine   = (int)($v['src_apply_id'] ?? 0) === $applyId;
+                $hasFiles = trim((string)($v['file_name'] ?? '')) !== ''
+                         || trim((string)($v['view_file_name'] ?? '')) !== ''
+                         || trim((string)($v['apply_form_file_name'] ?? '')) !== '';
+                if ($isMine && !$hasFiles) {
+                    $db->prepare("DELETE FROM as_document_version WHERE id=?")->execute([$verId]);
+                    $verRemoved = true;
+                    // 現行版次退回剩下版本中最新的那一筆（依版次新舊，不是依日期）
+                    $rest = $db->prepare("SELECT id, version FROM as_document_version WHERE doc_id=?");
+                    $rest->execute([$docId]);
+                    $best = null;
+                    foreach ($rest->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                        if ($best === null) { $best = $row; continue; }
+                        $c = eg_asdoc_ver_cmp((string)$row['version'], (string)$best['version']);
+                        if ($c === null) { if ((int)$row['id'] > (int)$best['id']) $best = $row; }
+                        elseif ($c > 0) $best = $row;
+                    }
+                    $db->prepare("UPDATE as_document SET current_version=?, current_version_id=?, updated_at=NOW() WHERE id=?")
+                       ->execute([(string)($best['version'] ?? ''), ($best['id'] ?? null), $docId]);
+                    $verNote = '已一併移除本單自動建立的版本履歷'
+                             . (trim((string)$v['version']) !== '' ? '（版次 ' . $v['version'] . '）' : '（制訂）')
+                             . '，現行版次退回 ' . (trim((string)($best['version'] ?? '')) !== '' ? $best['version'] : '（無版次）') . '。';
+                } elseif ($isMine && $hasFiles) {
+                    $verNote = '注意：本單自動建立的版本履歷' . (trim((string)$v['version']) !== '' ? '（版次 ' . $v['version'] . '）' : '')
+                             . '已經補上傳過檔案，為避免誤刪已在使用的版本，版本履歷保留未刪除，請自行到 AS 文件管理確認。';
+                } else {
+                    $verNote = '本單連結的版本履歷是在 AS 文件管理人工建立的，未更動。';
+                }
+            }
+        }
+
+        $db->prepare("UPDATE doc_apply SET status='draft',
+                        submit_date=NULL, submitted_at=NULL,
+                        approved_date=NULL, approved_at=NULL, decide_note=NULL,
+                        is_auto=0, auto_note=NULL,
+                        sign_approve_id=NULL,   sign_approve_name=NULL,   sign_approve_date=NULL,   sign_approve_dep=0,
+                        sign_mgmt_id=NULL,      sign_mgmt_name=NULL,      sign_mgmt_date=NULL,      sign_mgmt_dep=0,
+                        sign_sup_id=NULL,       sign_sup_name=NULL,       sign_sup_date=NULL,       sign_sup_dep=0,
+                        sign_applicant_id=NULL, sign_applicant_name=NULL, sign_applicant_date=NULL, sign_applicant_dep=0,
+                        as_version_id=?, updated_at=NOW()
+                      WHERE apply_id=?")
+           ->execute([($verRemoved ? null : ($verId ?: null)), $applyId]);
+
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) { try { $db->rollBack(); } catch (Throwable $e2) {} }
+        return ['ok'=>false, 'msg'=>'退回失敗：' . $e->getMessage()];
+    }
+
+    try {
+        $db->prepare("INSERT INTO audit_log (user_id, user_name, action, target_type, target_id, detail, created_at)
+                      VALUES (?,?,?,?,?,?,NOW())")
+           ->execute([$byId, $byName, 'doc_apply_reopen', 'doc_apply', $applyId,
+                      '已核准的「' . $r['apply_no'] . '」退回未送出（簽章已清除，會簽意見保留）。' . $verNote]);
+    } catch (Throwable $e) {}
+
+    return ['ok'=>true, 'msg'=>'已退回「尚未送出」，四格簽章已清除；會簽單位的意見保留。',
+            'version_removed'=>$verRemoved, 'version_note'=>$verNote];
+}

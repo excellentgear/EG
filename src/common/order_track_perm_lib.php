@@ -108,19 +108,10 @@ if (!function_exists('ot_can_change_client')) {
 // 驗證本人登入密碼（比照 src/store/Login.php：user.user_password 明碼比對）
 if (!function_exists('ot_verify_own_password')) {
     function ot_verify_own_password(PDO $pdo, int $uid, string $password): array {
-        if ($password === '') return ['ok' => false, 'msg' => '請輸入本人密碼'];
-        try {
-            $st = $pdo->prepare("SELECT user_password FROM `user` WHERE id = ? LIMIT 1");
-            $st->execute([$uid]);
-            $real = $st->fetchColumn();
-            if ($real === false) return ['ok' => false, 'msg' => '查無登入帳號，請重新登入後再試'];
-            if (!hash_equals((string)$real, $password)) {
-                return ['ok' => false, 'msg' => '密碼錯誤，請輸入您自己的登入密碼'];
-            }
-            return ['ok' => true, 'msg' => ''];
-        } catch (Exception $e) {
-            return ['ok' => false, 'msg' => '密碼驗證失敗，請稍後再試'];
-        }
+        // 2026-10-01：實作搬進 confirm_password_lib.php 的 eg_verify_own_password()（唯一實作），
+        // AS 文件改版／制修申請單的「版次跳號強制儲存」也要用同一套（鐵律4）。行為一字未改。
+        require_once __DIR__ . '/confirm_password_lib.php';
+        return eg_verify_own_password($pdo, $uid, $password);
     }
 }
 

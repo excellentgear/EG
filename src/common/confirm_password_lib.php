@@ -222,3 +222,79 @@ if (!function_exists('eg_confirm_password_lockout_list')) {
         } catch (Throwable $e) { return []; }
     }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 本人登入密碼驗證（唯一實作）
+ *
+ * 與上面的「操作確認密碼」是**兩種不同用途**，不要混用：
+ *   操作確認密碼 → 只有超級管理員與被授權的管理員才有，用於「原本只有超管能做」的特例操作
+ *                （永久刪除、資料急救台、補資料代簽…）。
+ *   本人登入密碼 → 用於「任何人都可能遇到、但要他親自再確認一次」的動作。
+ *                 這種動作如果要求操作確認密碼，沒有被授權的一般使用者會**永遠做不到**。
+ *
+ * 目前使用端：
+ *   - 訂單追蹤「解鎖客戶欄」（order_track_perm_lib.php 的 ot_verify_own_password 轉呼叫本函式）
+ *   - AS 文件改版／文件制修申請單「版次跳號強制儲存」（2026-10-01，使用者拍板用本人登入密碼：
+ *     制修申請單任何人都能開，用操作確認密碼會讓一般人連擋都解不開）
+ *
+ * 密碼在本專案是明碼存放於 user.user_password（既有設計），故用 hash_equals 做定時比較。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+if (!function_exists('eg_verify_own_password')) {
+    /** @return array ['ok'=>bool, 'msg'=>string] */
+    function eg_verify_own_password(PDO $db, int $uid, string $password): array {
+        if ($uid <= 0)        return ['ok' => false, 'msg' => '查無登入帳號，請重新登入後再試'];
+        if ($password === '') return ['ok' => false, 'msg' => '請輸入本人登入密碼'];
+        try {
+            $st = $db->prepare("SELECT user_password FROM `user` WHERE id = ? LIMIT 1");
+            $st->execute([$uid]);
+            $real = $st->fetchColumn();
+            if ($real === false) return ['ok' => false, 'msg' => '查無登入帳號，請重新登入後再試'];
+            if (!hash_equals((string)$real, $password)) {
+                return ['ok' => false, 'msg' => '密碼錯誤，請輸入您自己的登入密碼'];
+            }
+            return ['ok' => true, 'msg' => ''];
+        } catch (Throwable $e) {
+            return ['ok' => false, 'msg' => '密碼驗證失敗，請稍後再試'];
+        }
+    }
+}
+
+if (!function_exists('eg_own_password_fail_wait')) {
+    /**
+     * 連錯鎖定（session 內計數，成功即歸零）。回「還要等幾秒」，0＝現在可以試。
+     * 不做成資料表：這是「防止在畫面上亂試」的節流，不是帳號鎖定（帳號鎖定在登入那一關）。
+     */
+    function eg_own_password_fail_wait(string $scope): int {
+        $f = $_SESSION['eg_ownpw_fail'][$scope] ?? null;
+        if (!is_array($f) || (int)($f['count'] ?? 0) < 5) return 0;
+        $left = (int)($f['at'] ?? 0) + 120 - time();
+        if ($left <= 0) { unset($_SESSION['eg_ownpw_fail'][$scope]); return 0; }
+        return $left;
+    }
+}
+if (!function_exists('eg_own_password_fail_add')) {
+    function eg_own_password_fail_add(string $scope): void {
+        $f = $_SESSION['eg_ownpw_fail'][$scope] ?? ['count' => 0, 'at' => 0];
+        $f['count'] = (int)($f['count'] ?? 0) + 1; $f['at'] = time();
+        $_SESSION['eg_ownpw_fail'][$scope] = $f;
+    }
+}
+if (!function_exists('eg_own_password_fail_clear')) {
+    function eg_own_password_fail_clear(string $scope): void { unset($_SESSION['eg_ownpw_fail'][$scope]); }
+}
+
+if (!function_exists('eg_own_password_gate')) {
+    /**
+     * 一次做完「節流 → 驗密碼 → 計數」。回 ['ok'=>bool,'msg'=>string]。
+     * 呼叫端只要：$g = eg_own_password_gate($db,$uid,$pw,'版次跳號'); if(!$g['ok']) jerr($g['msg']);
+     */
+    function eg_own_password_gate(PDO $db, int $uid, string $password, string $scope): array {
+        $wait = eg_own_password_fail_wait($scope);
+        if ($wait > 0) return ['ok' => false, 'msg' => "密碼連續輸入錯誤，請於 {$wait} 秒後再試"];
+        $chk = eg_verify_own_password($db, $uid, $password);
+        if (!$chk['ok']) { eg_own_password_fail_add($scope); return $chk; }
+        eg_own_password_fail_clear($scope);
+        return ['ok' => true, 'msg' => ''];
+    }
+}

@@ -242,7 +242,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div class="grid3" style="margin-top:8px;">
                 <div id="w_version"><label>版本 <span id="verReq" style="color:#DD5138;">*</span></label>
                     <input type="text" id="e_version" maxlength="30"><div class="da-err"></div>
-                    <div class="da-hint" id="verHint"></div></div>
+                    <div class="da-hint" id="verHint"></div>
+                    <div id="verGap" style="display:none;margin-top:3px;font-size:12px;color:#B5651D;"></div></div>
                 <div id="w_first_issue_date"><label>首次發行日期</label>
                     <input type="date" id="e_first_issue_date" class="ro-auto" readonly data-eg-skip max="9999-12-31"><div class="da-err"></div>
                     <div class="da-hint">「修正」時自動由 AS 文件的版本履歷帶入</div></div>
@@ -366,6 +367,27 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     </div>
     <div class="m-foot"><button onclick="closeMask('autoMask')">取消</button>
         <button class="b-ok" id="btnAutoOk"><i class="fa fa-bolt"></i> 執行自動簽核</button></div>
+</div></div>
+
+<!-- ══════════ 退回未送出（已核准 → 草稿；僅系統管理者＋操作確認密碼，2026-10-01） ══════════
+     密碼刻意用獨立跳窗不用 prompt()：prompt 會把密碼明碼顯示在畫面上。 -->
+<div class="da-mask" id="reopenMask" style="z-index:9100;"><div class="da-modal narrow" data-eg-form data-eg-submit="#btnReopenOk">
+    <div class="m-head"><span>退回「尚未送出」</span><span class="m-close" onclick="closeMask('reopenMask')">✕</span></div>
+    <div class="m-body">
+        <div id="reopenInfo" class="da-hint" style="margin-bottom:10px;"></div>
+        <div class="da-hint" style="margin-bottom:10px;">
+            退回後這張單會變回<b>草稿</b>可以重新編輯再送審：<br>
+            ・<b>四格簽章（核准／管理代表／單位主管／申請人）與核准日期一律清除</b>——還沒核准卻留著章，紙上會對不起來。<br>
+            ・<b>會簽單位已經表示的意見保留</b>，重新送出時不必再請他們簽一次。<br>
+            ・本單核准時<b>自動建立的 AS 版本履歷</b>，若還沒有人補上傳檔案會一併移除、現行版次退回上一版；
+              已經補過檔案就保留不動並提示你自行確認。
+        </div>
+        <label>操作確認密碼 *</label>
+        <input type="password" id="reopenPw" style="width:100%;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;">
+        <div class="da-err" id="err_reopen"></div>
+    </div>
+    <div class="m-foot"><button onclick="closeMask('reopenMask')">取消</button>
+        <button class="b-ok" id="btnReopenOk"><i class="fa fa-undo"></i> 退回未送出</button></div>
 </div></div>
 
 <!-- ══════════ 建議建立 ══════════ -->
@@ -533,6 +555,19 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <h4>重要行為／常見疑問</h4>
         <ul>
             <li><b>版本規則</b>：手冊／程序／標準書<b>一律必填版本</b>；<b>表單「制訂」時沒有版本</b>（欄位反灰不可填），之後依 A、B、C… 遞增，改版時系統自動建議下一碼。</li>
+            <li><b>版次不可以跳號</b>（2026-10-01 起）：填的版次與「目前版次的下一版」不同時，欄位下方會<b>當場說明</b>
+                （例：目前是 B 版，下一版應該是 C，填了 D 就是中間少了一版），儲存時再擋一次，
+                <b>確定要跳就輸入「您自己的登入密碼」強制儲存</b>並留下稽核紀錄。
+                刻意用登入密碼不是操作確認密碼——申請單任何人都能開，用操作確認密碼會讓一般人連擋都解不開。
+                同一套規則在「AS 文件管理 → 改版」也會擋。</li>
+            <li><b>核准＝AS 文件真的改版了</b>（2026-10-01 起）：核准（含管理員自動簽核）當下會自動在
+                「AS 文件管理 → 歷史版本」<b>建立對應的版本履歷</b>並推進現行版次，所以這張申請單馬上會出現在該版的「申請單」欄。
+                新建的那一版<b>文件檔是空的</b>，歷史版本會顯示「無檔（補登）」，請用該列的<b>「補檔」</b>把新版文件檔補上去。
+                若該版次在 AS 文件管理已經人工建立過，就只做連結不重複建。<b>廢止／增發／補發不走版本履歷</b>。</li>
+            <li><b>核錯了可以退回</b>（2026-10-01 起，限系統管理者）：已核准的單在清單上有<b>「退回未送出」</b>，
+                輸入<b>操作確認密碼</b>後變回草稿可重新編輯再送審——不必刪掉重開一張（刪了單號會缺號、歷程也斷掉）。
+                退回時<b>四格簽章與核准日期一律清除</b>、<b>會簽意見保留</b>；本單自動建立的版本履歷若還沒補過檔案會一併移除、
+                現行版次退回上一版，已補過檔案則保留不動並提示你自行確認。</li>
             <li><b>不可填的欄位一律反灰</b>；送出前前端與後端<b>各驗一次</b>，直接打 API 也繞不過去。</li>
             <li><b>核准後需同時更改</b>「文件管制總覽表」或「品質記錄一覽表」是紙本上的勾選項，請據實勾選。</li>
             <li><b>回收記錄</b>：簽收者＝<b>填寫單位</b>的主管（不是申請人），回收者<b>固定為文管中心負責人</b>，由系統帶入。</li>
@@ -612,6 +647,19 @@ var META  = null, ASDOCS = null;
 var DA_EMBED = <?= $daEmbed ? 'true' : 'false' ?>;   /* 被 iframe 嵌入時只跑檢視跳窗 */
 var page = 1, pageSize = 10, listRows = [], curEditId = 0, curViewId = 0, curCosId = 0;
 var cosSel = [], cdSel = [], sugRows = [], autoIds = [];
+// 選定 AS 文件後記下它目前的版次與建議下一版，供版次欄位即時提示（真正的把關在後端 da_version_gap）
+var VER_CUR = '', VER_NEXT = '';
+/** 填的版次與建議值不同時當場說明原因，不要等按下儲存才講（ai-rules/08 錯誤即時偵測） */
+function verGapHint(){
+    var v = ($('#e_version').val() || '').trim().toUpperCase();
+    var $g = $('#verGap');
+    if (!v || !VER_CUR || $('#e_doc_status').val() === '制訂') { $g.hide().text(''); return; }
+    if (v === String(VER_NEXT || '').toUpperCase()) {
+        $g.hide().text(''); return;
+    }
+    $g.show().text('⚠ 這份文件目前是 ' + VER_CUR + ' 版，下一版通常是 ' + (VER_NEXT || '－')
+        + '。填其他版次並非不行，但儲存時會要求輸入您的登入密碼確認。');
+}
 
 function esc(s){ return $('<div>').text(s == null ? '' : s).html(); }
 /* 顯示用日期一律 YYYY.MM.DD（ai-rules/20；egFmtDate 由 eg_date_fmt.js 提供） */
@@ -710,6 +758,9 @@ function loadList(){
                 ops += '<span class="da-op" onclick="openEdit(' + d.apply_id + ')"><i class="fa fa-pencil"></i> 編輯</span>';
             if (PERMS.canAdmin && d.status === 'submitted')
                 ops += '<span class="da-op" onclick="openDecide(' + d.apply_id + ')"><i class="fa fa-gavel"></i> 核准</span>';
+            // 核錯／版次填錯時不必刪掉重開一張（刪了單號會缺號、歷程也斷掉）
+            if (PERMS.isAdmin && d.status === 'approved')
+                ops += '<span class="da-op" onclick="openReopen(' + d.apply_id + ')" title="退回成尚未送出，可重新編輯再送審"><i class="fa fa-undo"></i> 退回未送出</span>';
             ops += '<span class="da-op" onclick="doPrint([' + d.apply_id + '])"><i class="fa fa-print"></i> 列印</span>';
             b.append('<tr>'
                 + '<td><input type="checkbox" class="chkRow" value="' + d.apply_id + '"></td>'
@@ -772,6 +823,7 @@ function openEdit(id){
     curEditId = id; clearErr();
     $('#editTitle').text(id ? '編輯文件制、修申請單' : '新增文件制、修申請單');
     $('#chgBody').empty(); $('#distBody').empty(); cosSel = [];
+    VER_CUR = ''; VER_NEXT = ''; $('#verGap').hide().text('');
     if (!id) {
         $('#e_apply_date').val(META.today); $('#e_change_date').val(META.today);
         $('#e_doc_status').val('制訂'); $('#e_doc_type').val('表單');
@@ -978,7 +1030,7 @@ $('#btnPickDoc').on('click', function(){
         EGAsDoc.open({docs:docs, current:+$('#e_asdoc_label').data('id') || 0, title:'選擇要處理的 AS 文件',
             onSave:function(id, doc){
                 $('#e_asdoc_label').data('id', id).val(id ? (doc.doc_no + '　' + doc.doc_name) : '');
-                if (id) pullAsDoc(id); else { $('#e_first_issue_date').val(''); }
+                if (id) pullAsDoc(id); else { $('#e_first_issue_date').val(''); VER_CUR = ''; VER_NEXT = ''; verGapHint(); }
             }});
     });
 });
@@ -994,9 +1046,12 @@ function pullAsDoc(id){
         $('#e_doc_no').val(d.doc_no || '');
         if (!$('#e_doc_name').val()) $('#e_doc_name').val(d.doc_name || '');
         $('#e_first_issue_date').val(d.first_issue_date || '');
+        VER_CUR  = d.current_version || '';
+        VER_NEXT = d.next_version || '';
         if ($('#e_doc_type').val() === '表單' && $('#e_doc_status').val() !== '制訂' && !$('#e_version').val()) {
             $('#e_version').val(d.next_version || 'A');
         }
+        verGapHint();
         var cd = d.cosign_default || {};
         $('#e_need_cosign').prop('checked', !!parseInt(cd.need_cosign));
         if ((cd.dept_ids || []).length) {
@@ -1100,13 +1155,24 @@ function frontValidate(p){
     if (+p.need_cosign === 1 && !JSON.parse(p.cosign_dept_ids).length) e.cosign = '已勾選「需會簽」，請至少指定一個會簽單位';
     return e;
 }
+$('#e_version').on('input', verGapHint);
 $('#btnSave').on('click', function(){ doSave(false); });
 $('#btnSubmit').on('click', function(){ doSave(true); });
 function doSave(submit){
     var p = collectForm();
     if (submit) { var e = frontValidate(p); if (Object.keys(e).length) { showErrs(e); return; } }
     clearErr();
-    $.post(API, p, function(r){
+    sendSave(p, submit, false, '');
+}
+/**
+ * 版次跳號（2026-10-01）：後端回 VER_GAP 就當場說明中間少了哪一版，
+ * 確定要跳＝輸入本人登入密碼重送一次（force_version=1）。
+ * 判定規則只留後端一份（鐵律4），前端那條只是即時提示，不自己算一套擋下。
+ */
+function sendSave(p, submit, force, pwd){
+    var d = $.extend({}, p);
+    if (force) { d.force_version = '1'; d.force_password = pwd || ''; }
+    $.post(API, d, function(r){
         if (!r.ok) return;
         if (!submit) { closeMask('editMask'); loadList(); alert('已儲存草稿'); return; }
         $.post(API, {action:'submit', apply_id:r.apply_id}, function(r2){
@@ -1117,7 +1183,20 @@ function doSave(submit){
             var j = xhr.responseJSON || {};
             if (j.fields) showErrs(j.fields);
         });
-    }, 'json');
+    }, 'json').fail(function(xhr){
+        var j = xhr.responseJSON || {};
+        if (j.code === 'VER_GAP' || j.code === 'VER_GAP_PWD') {
+            var pw = prompt((j.code === 'VER_GAP_PWD' ? ('※ ' + (j.error || '密碼錯誤') + '\n\n') : '')
+                + '【版次跳號】\n' + (j.gap || j.error || '')
+                + '\n\n版次中間跳號之後，之前印出去的紙本與 AS 文件管理的版本履歷會對不起來。\n'
+                + '確定要用這個版次，請輸入您自己的登入密碼強制儲存；要改回正確版次請按取消。');
+            if (pw === null) return;
+            sendSave(p, submit, true, pw);
+            return;
+        }
+        if (j.fields) showErrs(j.fields);
+        else if (j.error) alert(j.error);
+    });
 }
 
 /* ══════════════════ 檢視／會簽／核准 ══════════════════ */
@@ -1286,6 +1365,30 @@ $('#btnAutoOk').on('click', function(){
         closeMask('autoMask'); loadList();
         alert('已自動簽核 ' + r.done + ' 張' + ((r.skipped || []).length ? ('\n略過：\n・' + r.skipped.join('\n・')) : ''));
     }, 'json');
+});
+
+/* ══════════════════ 退回「尚未送出」（已核准 → 草稿） ══════════════════ */
+var reopenId = 0;
+function openReopen(id){
+    reopenId = id;
+    var d = listRows.filter(function(x){ return +x.apply_id === +id; })[0] || {};
+    $('#reopenInfo').html('將把 <b>' + esc(d.apply_no || ('#' + id)) + '</b>　'
+        + esc(d.doc_no || '') + '　' + esc(d.doc_name || '')
+        + (d.version ? ('　版本 ' + esc(d.version)) : '') + ' 退回「尚未送出」。');
+    $('#reopenPw').val(''); $('#err_reopen').hide().text('');
+    openMask('reopenMask');
+}
+$('#btnReopenOk').on('click', function(){
+    if (!$('#reopenPw').val()) { $('#err_reopen').text('請輸入操作確認密碼').show(); return; }
+    $.post(API, {action:'reopen', apply_id:reopenId, confirm_password:$('#reopenPw').val()}, function(r){
+        if (!r.ok) return;
+        closeMask('reopenMask'); loadList();
+        alert(r.msg + (r.version_note ? ('\n\n' + r.version_note) : ''));
+    }, 'json').fail(function(xhr){
+        var j = xhr.responseJSON || {};
+        $('#err_reopen').text(j.error || '退回失敗').show();
+        if (j.code === 'PWD') $('#reopenPw').val('').focus();
+    });
 });
 
 /* ══════════════════ 建議建立 ══════════════════ */

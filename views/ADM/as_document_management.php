@@ -1088,21 +1088,34 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
             <div class="form-group col-md-4"><label>文件制修申請單（附件一）* <span class="req-note">改版必附</span></label><input type="file" name="apply_form" id="ver_apply_form" required></div>
           </div>
 <?php if ($asCaps['admin']): ?>
-          <!-- ═══ 變更文件編號與所屬部門（僅管理員，2026-09-22 使用者交辦） ═══
-               綁在改版裡是刻意的：改編號在文件管制上就是一次文件異動，要留版次紀錄、要開制修申請單。
-               階層欄位唯讀＝使用者明確要求「階層自動帶入原有階層，不可修改」。 -->
+          <!-- ═══ 變更文件編號／名稱與所屬部門（僅管理員，2026-09-22 使用者交辦） ═══
+               綁在改版裡是刻意的：改編號／改名在文件管制上就是一次文件異動，要留版次紀錄、要開制修申請單。
+               階層欄位唯讀＝使用者明確要求「階層自動帶入原有階層，不可修改」。
+               2026-10-01 加入「文件名稱」：原本改名只能走「編輯資料」就地改，不產生版本也不留歷程，
+               現場只好刪掉文件重建（2-PH-01-02 就因此留下兩筆同編號文件）。 -->
           <div class="renum-box">
             <label class="renum-head">
               <input type="checkbox" id="ver_renum_on" name="renumber" value="1">
-              <b>同時變更文件編號與所屬部門</b>
-              <span class="text-muted" style="font-weight:normal;">（僅管理員，需輸入管理員操作確認密碼）</span>
+              <b>同時變更文件編號／名稱與所屬部門</b>
+              <span class="text-muted" style="font-weight:normal;">（僅管理員，需輸入管理員操作確認密碼；編號與名稱可只改其中一項）</span>
             </label>
             <div id="ver_renum_body" style="display:none;">
               <div class="renum-cur">
-                目前：<b id="rn_cur_no"></b>　<span id="rn_cur_dept"></span>　<span id="rn_cur_level"></span>
+                目前：<b id="rn_cur_no"></b>　<b id="rn_cur_name"></b>　<span id="rn_cur_dept"></span>　<span id="rn_cur_level"></span>
                 <span id="rn_cur_parent" class="text-muted"></span>
               </div>
               <div class="row">
+                <div class="form-group col-md-8"><label>新文件名稱</label>
+                  <input type="text" class="form-control" name="new_doc_name" id="rn_name" maxlength="100">
+                  <span class="text-muted" style="font-size:11px;">不改名稱就維持原樣即可；改了名稱會一併記進變更歷程，列印的表單名稱隨之改變。</span></div>
+                <div class="form-group col-md-4"><label>只改名稱？</label>
+                  <div class="checkbox" style="margin-top:4px;">
+                    <label style="font-weight:normal;"><input type="checkbox" id="rn_name_only">
+                      只改名稱，<b>編號與部門維持不變</b></label>
+                  </div>
+                  <span class="text-muted" style="font-size:11px;">勾起來就不必重選部門與編號。</span></div>
+              </div>
+              <div class="row" id="rn_no_rows">
                 <div class="form-group col-md-3"><label>新所屬部門 *</label>
                   <select class="form-control" name="new_department_id" id="rn_dept"></select></div>
                 <div class="form-group col-md-2"><label>文件代碼 *</label>
@@ -1117,13 +1130,12 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
                   <span class="text-muted" style="font-size:11px;">新編號的前段就是它（例：掛在 2-SM-01 底下 → 2-SM-01-○○）</span></div>
               </div>
               <div class="row">
-                <div class="form-group col-md-4"><label>新文件編號 *</label>
+                <div class="form-group col-md-4" id="rn_no_wrap"><label>新文件編號 *</label>
                   <div style="display:flex;gap:6px;">
                     <input type="text" class="form-control" name="new_doc_no" id="rn_no" placeholder="例：2-SM-01-06">
                     <button type="button" class="btn btn-default" id="rn_resuggest" title="重新取一次建議編號">建議</button>
                   </div>
-                  <span class="text-muted" style="font-size:11px;">自動帶「該範圍最後一號＋1」，最後一段可自行修改</span>
-                  <div id="rn_no_err" class="renum-err"></div></div>
+                  <span class="text-muted" style="font-size:11px;">自動帶「該範圍最後一號＋1」，最後一段可自行修改</span></div>
                 <div class="form-group col-md-4" id="rn_cascade_wrap" style="display:none;">
                   <label>子文件連動</label>
                   <div class="checkbox" style="margin-top:4px;">
@@ -1135,10 +1147,11 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
                   <input type="password" class="form-control" name="confirm_password" id="rn_pwd" autocomplete="new-password">
                   <span class="text-muted" style="font-size:11px;" id="rn_pwd_hint">與「資料急救台／永久刪除」用的是同一組操作確認密碼。</span></div>
               </div>
+              <div id="rn_no_err" class="renum-err"></div>
               <div class="renum-note">
-                <i class="fa fa-info-circle"></i> 送出後：文件編號與所屬部門立即變更並記錄一筆變更歷程；
-                <b>已印出去的紙本是舊編號</b>，重新列印一律印新編號。
-                這一次改版會出現在「文件制修申請單 → 建議建立」清單裡並標示編號變更，記得補開一張申請單。
+                <i class="fa fa-info-circle"></i> 送出後：文件編號／名稱與所屬部門立即變更並記錄一筆變更歷程；
+                <b>已印出去的紙本是舊編號／舊名稱</b>，重新列印一律印新的。
+                這一次改版會出現在「文件制修申請單 → 建議建立」清單裡並標示變更內容，記得補開一張申請單。
               </div>
             </div>
           </div>
@@ -3273,14 +3286,38 @@ $(function(){
     });
   }
   /** 前端即時檢查：格式、與原編號相同、母文件前綴。後端 add_version 會用同一組規則再擋一次。 */
+  /** 這次到底要改什麼：編號、名稱，或兩者（只改名稱時整段編號欄位會隱藏） */
+  function rnWant(){
+    const nameOnly = $('#rn_name_only').is(':checked');
+    const curNo   = RN ? String(RN.doc.doc_no||'').toUpperCase() : '';
+    const curName = RN ? String(RN.doc.doc_name||'') : '';
+    const no   = ($('#rn_no').val()||'').trim().toUpperCase();
+    const name = ($('#rn_name').val()||'').trim();
+    return { nameOnly:nameOnly,
+             no:   !nameOnly && !!no   && no   !== curNo,
+             name: !!name && name !== curName };
+  }
+  function rnToggleNoFields(){
+    const on = !$('#rn_name_only').is(':checked');
+    $('#rn_no_rows, #rn_no_wrap').toggle(on);
+    $('#rn_cascade_wrap').toggle(on && !!RN && RN.child_count > 0);
+  }
   function rnValidate(){
     if(!$('#ver_renum_on').is(':checked')) { $('#rn_no_err').text(''); return true; }
+    const w = rnWant();
+    const name = ($('#rn_name').val()||'').trim();
+    if(name.length > 100){ $('#rn_no_err').text('文件名稱過長（上限 100 字）'); return false; }
+    if(!w.no && !w.name){
+      $('#rn_no_err').text(w.nameOnly
+        ? '勾了「只改名稱」就請填一個與目前不同的文件名稱'
+        : '編號與名稱都沒有變更；不需要改就請取消上方勾選');
+      return false;
+    }
+    if(!w.no){ $('#rn_no_err').text(''); return true; }   // 只改名稱 → 以下編號檢查全部跳過
     const no = ($('#rn_no').val()||'').trim().toUpperCase();
     if(!no){ $('#rn_no_err').text('請填寫新的文件編號'); return false; }
     if(!/^\d-[A-Z]{2,4}(-\d{2,3})+$/.test(no)){
       $('#rn_no_err').text('格式應為「數字-部門代碼-序號」，例如 2-SM-01-06'); return false; }
-    if(RN && no === String(RN.doc.doc_no||'').toUpperCase()){
-      $('#rn_no_err').text('新編號與目前編號相同；不需要改編號請取消上方勾選'); return false; }
     const code = no.split('-')[1] || '';
     if($('#rn_code').val() && code !== $('#rn_code').val()){
       $('#rn_no_err').text('編號第二段「'+code+'」與所選文件代碼「'+$('#rn_code').val()+'」不一致'); return false; }
@@ -3298,6 +3335,9 @@ $(function(){
       if(!r || r.status!=='success'){ alert(r && r.message || '無法載入'); $('#ver_renum_on').prop('checked',false).change(); return; }
       RN = r;
       $('#rn_cur_no').text(r.doc.doc_no);
+      $('#rn_cur_name').text(r.doc.doc_name || '');
+      $('#rn_name').val(r.doc.doc_name || '');     // 先帶目前名稱，使用者直接在上面改
+      $('#rn_name_only').prop('checked', false);
       $('#rn_cur_dept').text(r.doc.dept_name || '（未設部門）');
       $('#rn_cur_level').text(r.doc.doc_level || '');
       $('#rn_cur_parent').text(r.doc.parent_doc_no ? ('　母文件：'+r.doc.parent_doc_no+' '+r.doc.parent_doc_name) : '');
@@ -3306,8 +3346,9 @@ $(function(){
       // 預設停在目前部門，使用者才看得出「現在在哪、要改去哪」
       if((r.depts||[]).some(d => String(d.id)===String(r.doc.department_id))) $('#rn_dept').val(r.doc.department_id);
       rnFillCodes();
-      if(r.child_count > 0){ $('#rn_child_cnt').text(r.child_count); $('#rn_cascade_wrap').show(); $('#rn_cascade').prop('checked', true); }
-      else { $('#rn_cascade_wrap').hide(); $('#rn_cascade').prop('checked', false); }
+      if(r.child_count > 0){ $('#rn_child_cnt').text(r.child_count); $('#rn_cascade').prop('checked', true); }
+      else { $('#rn_cascade').prop('checked', false); }
+      rnToggleNoFields();
       // 還沒設定操作確認密碼的話先講清楚，不要讓人填完整張表才在送出時被擋
       if(!r.pw_allowed) $('#rn_pwd_hint').html('<span style="color:#DD5138;">你還沒有操作確認密碼的使用權限，請先洽超級管理員開通，否則送出會被擋下。</span>');
       if(r.pw_locked) $('#rn_pwd_hint').html('<span style="color:#DD5138;">此功能的密碼已被鎖定至 '+esc(String(r.pw_locked).substr(0,16))+'，請洽超級管理員解鎖。</span>');
@@ -3319,6 +3360,8 @@ $(function(){
   $('#rn_parent').on('change', function(){ rnSuggest(true); });
   $('#rn_resuggest').on('click', function(){ rnSuggest(true); });
   $('#rn_no').on('input', function(){ rnValidate(); });
+  $('#rn_name').on('input', function(){ rnValidate(); });
+  $('#rn_name_only').on('change', function(){ rnToggleNoFields(); rnValidate(); });
 
   $('#dlTplBtn').on('click', function(e){ e.preventDefault(); window.location = API+'?action=download_template'; });
   // 選了導入來源就鎖住「檢視版」上傳欄（後端同樣二擇一，不做只擋前端的半套）；下載版不受影響仍需自行上傳
@@ -3333,41 +3376,71 @@ $(function(){
       alert('檢視版請擇一：上傳檔案，或由表單簽核案件導入。'); return;
     }
     if($('#ver_renum_on').is(':checked')){
-      if(!rnValidate()){ $('#rn_no').focus(); return; }
+      if(!rnValidate()){ ($('#rn_name_only').is(':checked') ? $('#rn_name') : $('#rn_no')).focus(); return; }
       if(!($('#rn_pwd').val()||'').length){ $('#rn_no_err').text('請輸入管理員操作確認密碼'); $('#rn_pwd').focus(); return; }
-      const oldNo = RN ? RN.doc.doc_no : '', newNo = ($('#rn_no').val()||'').trim().toUpperCase();
-      const cas = $('#rn_cascade').is(':checked') && $('#rn_cascade_wrap').is(':visible')
-                  ? ('\n底下 '+$('#rn_child_cnt').text()+' 份子文件的編號會一併換成新前綴。') : '';
-      if(!confirm('【變更文件編號】\n'+oldNo+'　→　'+newNo
-                  +'\n所屬部門改為：'+$('#rn_dept option:selected').text()+cas
-                  +'\n\n舊編號之後不會再出現在任何列印上（已印出去的紙本仍是舊編號）。\n確定要一併變更嗎？')) return;
+      const w = rnWant();
+      const lines = ['【本次一併變更】'];
+      if(w.no){
+        const cas = $('#rn_cascade').is(':checked') && $('#rn_cascade_wrap').is(':visible')
+                    ? ('\n　底下 '+$('#rn_child_cnt').text()+' 份子文件的編號會一併換成新前綴。') : '';
+        lines.push('文件編號：'+(RN?RN.doc.doc_no:'')+'　→　'+($('#rn_no').val()||'').trim().toUpperCase()
+                   +'\n所屬部門改為：'+$('#rn_dept option:selected').text()+cas);
+      }
+      if(w.name) lines.push('文件名稱：'+(RN?RN.doc.doc_name:'')+'　→　'+($('#rn_name').val()||'').trim());
+      lines.push('\n舊的編號／名稱之後不會再出現在任何列印上（已印出去的紙本仍是舊的）。\n確定要一併變更嗎？');
+      if(!confirm(lines.join('\n'))) return;
     }
-    const fd = new FormData(this);
-    // 沒勾「變更文件編號」時，把那一區的欄位整批拿掉——不拿掉的話空的部門/母文件會被送到後端，
-    // 雖然後端看 renumber 旗標不會處理，但留著只會讓之後查問題的人以為有送出改編號
-    if(!$('#ver_renum_on').is(':checked')){
-      ['renumber','new_doc_no','new_department_id','new_dept_code','new_parent_doc_id','cascade_children','confirm_password']
-        .forEach(k => fd.delete(k));
-    } else {
-      fd.set('new_doc_no', ($('#rn_no').val()||'').trim().toUpperCase());
-    }
-    NProgress.start();
-    $.ajax({url:API+'?action=add_version', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
-     .done(r=>{
-       if(r.status!=='success'){
-         // 密碼相關的錯誤留在原地讓人重打，不要把整張表關掉（檔案都選好了，關掉要重來）
-         if(r.code==='PWD'){ $('#rn_no_err').text(r.message||'操作確認密碼驗證失敗'); $('#rn_pwd').val('').focus(); }
-         else alert(r.message||'失敗');
-         return;
-       }
-       $('#versionModal').modal('hide'); loadDocs(true);
-       if(r.renumber){
-         alert('改版完成，文件編號已變更：\n'+r.renumber.old_doc_no+'　→　'+r.renumber.new_doc_no
-               +(r.renumber.cascade ? ('\n連帶更新 '+r.renumber.cascade+' 份子文件的編號。') : '')
-               +'\n\n請到「文件制修申請單 → 建議建立」補開一張申請單（清單上會標示編號變更）。');
-       }
-     })
-     .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
+    const build = () => {
+      const fd = new FormData(document.getElementById('versionForm'));
+      // 沒勾「一併變更」時，把那一區的欄位整批拿掉——不拿掉的話空的部門/母文件會被送到後端，
+      // 雖然後端看 renumber 旗標不會處理，但留著只會讓之後查問題的人以為有送出改編號
+      if(!$('#ver_renum_on').is(':checked')){
+        ['renumber','new_doc_no','new_doc_name','new_department_id','new_dept_code','new_parent_doc_id','cascade_children','confirm_password']
+          .forEach(k => fd.delete(k));
+      } else if($('#rn_name_only').is(':checked')){
+        // 只改名稱：編號相關欄位一律不送，後端會沿用現有部門與母文件
+        ['new_doc_no','new_department_id','new_dept_code','new_parent_doc_id','cascade_children'].forEach(k => fd.delete(k));
+      } else {
+        fd.set('new_doc_no', ($('#rn_no').val()||'').trim().toUpperCase());
+      }
+      return fd;
+    };
+    /* 版次跳號：後端回 VER_GAP 時當場說明「少了哪一版」，確定要跳就輸入本人登入密碼重送一次。
+       刻意不先在前端算一次——規則只留後端一份（鐵律4），前端算一套遲早跟後端對不起來。 */
+    const send = (force, pwd) => {
+      const fd = build();
+      if(force){ fd.set('force_version','1'); fd.set('force_password', pwd||''); }
+      NProgress.start();
+      $.ajax({url:API+'?action=add_version', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
+       .done(r=>{
+         if(r.status!=='success'){
+           // 密碼相關的錯誤留在原地讓人重打，不要把整張表關掉（檔案都選好了，關掉要重來）
+           if(r.code==='PWD'){ $('#rn_no_err').text(r.message||'操作確認密碼驗證失敗'); $('#rn_pwd').val('').focus(); return; }
+           if(r.code==='VER_GAP' || r.code==='VER_GAP_PWD'){
+             const p = prompt((r.code==='VER_GAP_PWD' ? ('※ '+(r.message||'密碼錯誤')+'\n\n') : '')
+               + '【版次跳號】\n' + (r.gap||r.message||'')
+               + '\n\n版次中間跳號之後，之前印出去的紙本與版本履歷會對不起來。\n'
+               + '確定要用這個版次，請輸入您自己的登入密碼強制儲存；要改回正確版次請按取消。');
+             if(p === null) return;
+             send(true, p);
+             return;
+           }
+           alert(r.message||'失敗');
+           return;
+         }
+         $('#versionModal').modal('hide'); loadDocs(true);
+         if(r.renumber){
+           const rn = r.renumber, msg = ['改版完成。'];
+           if(rn.changed_no)   msg.push('文件編號：'+rn.old_doc_no+'　→　'+rn.new_doc_no
+                                        +(rn.cascade ? ('（連帶更新 '+rn.cascade+' 份子文件）') : ''));
+           if(rn.changed_name) msg.push('文件名稱：'+rn.old_doc_name+'　→　'+rn.new_doc_name);
+           msg.push('\n請到「文件制修申請單 → 建議建立」補開一張申請單（清單上會標示變更內容）。');
+           alert(msg.join('\n'));
+         }
+       })
+       .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
+    };
+    send(false, '');
   });
 
   // （⚙ 下拉的定位處理只留上面那一份，這裡原本有一份一模一樣的，兩份規則遲早走鐘）

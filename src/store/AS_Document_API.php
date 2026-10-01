@@ -326,28 +326,12 @@ function asValidateVersionStyle(PDO $db, int $docId, string $newVersion, int $ex
  * 版本號大小比較：回 -1（$a 舊於 $b）／0（相同）／1（$a 新於 $b）；型式不同或無法比較回 null。
  * 數字型：各段依數值比較（1.10 > 1.2）；字母型：先比字母長度再字典序，同字母再比修訂號
  * （順序：A < A-1 < A-2 < B < B-1 < … < Z < AA）。改版檢查與「補舊版次」共用這支，避免兩套規則。
+ *
+ * 2026-10-01：實作搬進 asdoc_lib.php 的 eg_asdoc_ver_cmp()（唯一實作），本檔頂層有 session
+ * 與權限判定不能被 include，規則留在這裡就只能在 doc_apply_lib.php 再抄一份（鐵律4）。
+ * 內容一字未改，本函式保留為薄包裝供既有呼叫端沿用。
  */
-function asVersionCmp(string $a, string $b): ?int {
-    $a = trim($a); $b = trim($b);
-    if ($a === '' || $b === '') return null;
-    $numRe = '/^\d+(\.\d+)*$/'; $alphaRe = '/^([A-Za-z]+)(?:-(\d+))?$/';
-    if (preg_match($numRe, $a) && preg_match($numRe, $b)) {
-        $x = array_map('intval', explode('.', $a));
-        $y = array_map('intval', explode('.', $b));
-        for ($i = 0; $i < max(count($x), count($y)); $i++) {
-            $c = ($x[$i] ?? 0) <=> ($y[$i] ?? 0);
-            if ($c !== 0) return $c;
-        }
-        return 0;
-    }
-    if (preg_match($alphaRe, $a, $ma) && preg_match($alphaRe, $b, $mb)) {
-        $la = strtoupper($ma[1]); $lb = strtoupper($mb[1]);
-        $cmp = (strlen($la) !== strlen($lb)) ? (strlen($la) <=> strlen($lb)) : strcmp($la, $lb);
-        if ($cmp === 0) $cmp = ((int)($ma[2] ?? 0)) <=> ((int)($mb[2] ?? 0));
-        return $cmp <=> 0;
-    }
-    return null;
-}
+function asVersionCmp(string $a, string $b): ?int { return eg_asdoc_ver_cmp($a, $b); }
 
 /**
  * 版本號新舊比較：改版的新版本號必須「大於」此文件現行版本（B 版之後不可改成 A 版、1.2 之後不可改成 0.3）。
@@ -832,15 +816,34 @@ case 'add_version':
     if ($vErr = asValidateVersionStyle($db, $docId, $version)) jout(['status'=>'error','message'=>$vErr]);
     // 改版版本號必須比目前版本新（不可倒退）
     if ($vErr = asValidateVersionOrder((string)($doc['current_version'] ?? ''), $version)) jout(['status'=>'error','message'=>$vErr]);
+    /* ── 版次跳號（2026-10-01 使用者交辦）──
+       asValidateVersionOrder() 只擋倒退與重複，B→D 比 B 新就放行，所以中間少一版完全不會被發現。
+       判定走 eg_asdoc_ver_gap()（與文件制修申請單同一支，鐵律4）；確定要跳＝輸入本人登入密碼強制。
+       註：補歷史版次請走 add_old_versions_batch，那支本來就不比現行版次，不受這條影響。 */
+    if ($vGap = eg_asdoc_ver_gap((string)($doc['current_version'] ?? ''), $version)) {
+        require_once __DIR__ . '/../common/confirm_password_lib.php';
+        if ((string)($_POST['force_version'] ?? '') !== '1')
+            jout(['status'=>'error','code'=>'VER_GAP','gap'=>$vGap,'message'=>$vGap]);
+        $vg = eg_own_password_gate($db, (int)$currentUserId, (string)($_POST['force_password'] ?? ''), 'asdoc_ver_gap');
+        if (!$vg['ok']) jout(['status'=>'error','code'=>'VER_GAP_PWD','gap'=>$vGap,'message'=>$vg['msg']]);
+    }
 
-    /* ── 一併變更文件編號與所屬部門（2026-09-22 使用者交辦，僅管理員＋操作確認密碼）──
+    /* ── 一併變更文件編號／名稱／所屬部門（2026-09-22 使用者交辦，僅管理員＋操作確認密碼）──
        鐵律8：前端擋過的每一條這裡一律再擋一次；密碼、權限、編號重複、母文件歸屬全部在進 transaction
-       之前先驗完，錯了就不要動到任何檔案。 */
+       之前先驗完，錯了就不要動到任何檔案。
+
+       2026-10-01 加入「文件名稱」（使用者回報：改名無法走改版，只能用「編輯資料」就地改——
+       那條路不產生版本、不留任何歷程，於是現場只好刪掉文件重建，2-PH-01-02 就留下了
+       id=78（已刪）與 id=184 兩筆同編號文件）。名稱與編號各自獨立可改，至少改一項即可：
+       只改名稱時沿用現有部門與母文件，不強迫重選。 */
     $doRenum   = ((string)($_POST['renumber'] ?? '') === '1');
     $newNo     = strtoupper(trim($_POST['new_doc_no'] ?? ''));
+    $newName   = trim($_POST['new_doc_name'] ?? '');
     $newDept   = (int)($_POST['new_department_id'] ?? 0);
     $newParent = (int)($_POST['new_parent_doc_id'] ?? 0);
     $doCascade = ((string)($_POST['cascade_children'] ?? '') === '1');
+    $wantNo    = false;
+    $wantName  = false;
     if ($doRenum) {
         if (!asIsAdmin()) jout(['status'=>'error','message'=>'只有 AS 文件管理員可以變更文件編號']);
         // 變更歷程表一定要在**進 transaction 之前**建好：CREATE TABLE 會造成 MySQL 隱式 commit，
@@ -852,41 +855,53 @@ case 'add_version':
                     (string)($_POST['confirm_password'] ?? ''), 'asdoc_renumber');
         if (empty($pwChk['ok'])) jout(['status'=>'error','message'=>$pwChk['msg'] ?? '操作確認密碼驗證失敗','code'=>'PWD']);
 
-        if ($newNo === '') jout(['status'=>'error','message'=>'請填寫新的文件編號']);
-        if (!preg_match('/^\d-[A-Z]{2,4}(?:-\d{2,3})+$/', $newNo))
-            jout(['status'=>'error','message'=>"文件編號格式不正確（應為「數字-部門代碼-序號」，如 2-SM-01-06），目前填的是「{$newNo}」"]);
-        if ($newNo === (string)$doc['doc_no']) jout(['status'=>'error','message'=>'新編號與目前編號相同，若不需要改編號請取消勾選']);
-        $dup = $db->prepare("SELECT doc_name FROM as_document WHERE doc_no=? AND is_deleted=0 AND id<>?");
-        $dup->execute([$newNo, $docId]);
-        if ($dupName = $dup->fetchColumn()) jout(['status'=>'error','message'=>"編號 {$newNo} 已被「{$dupName}」使用"]);
+        $wantNo   = ($newNo   !== '' && $newNo   !== (string)$doc['doc_no']);
+        $wantName = ($newName !== '' && $newName !== (string)$doc['doc_name']);
+        if (!$wantNo && !$wantName)
+            jout(['status'=>'error','message'=>'請至少變更「文件編號」或「文件名稱」其中一項；兩項都與目前相同時請取消勾選']);
+        if ($wantName && mb_strlen($newName, 'UTF-8') > 100)
+            jout(['status'=>'error','message'=>'文件名稱過長（上限 100 字）']);
 
-        if ($newDept <= 0) jout(['status'=>'error','message'=>'請選擇新的所屬部門']);
-        // 新編號的第二段必須真的是該部門登記的文件代碼——不擋的話會出現「部門選業務課、編號卻是 TD」
-        $seg  = explode('-', $newNo);
-        $code = $seg[1] ?? '';
-        $ck = $db->prepare("SELECT COUNT(*) FROM as_dept_code WHERE department_id=? AND code=?");
-        $ck->execute([$newDept, $code]);
-        if (!$ck->fetchColumn())
-            jout(['status'=>'error','message'=>"編號中的部門代碼「{$code}」不屬於所選部門，請用「重新建議編號」重取"]);
-
-        // 文件階層一律沿用原有階層（使用者明確要求不可修改），所以這裡不收 doc_level 參數。
-        // 四階／下階文件必須掛在母文件底下，且新編號要以母文件編號為前綴，
-        // 否則會出現「編號寫 2-SM-01-06、實際卻掛在 2-TD-01 底下」這種只有印出來才會發現的錯。
-        $isChild = !in_array((string)$doc['doc_level'], ['一階','二階'], true);
-        if ($isChild) {
-            if ($newParent <= 0) jout(['status'=>'error','message'=>'請選擇這份文件要掛在哪一份母文件底下']);
-            $ps = $db->prepare("SELECT doc_no, doc_level, department_id FROM as_document WHERE id=? AND is_deleted=0");
-            $ps->execute([$newParent]);
-            $par = $ps->fetch(PDO::FETCH_ASSOC);
-            if (!$par) jout(['status'=>'error','message'=>'母文件不存在']);
-            if ($newParent === $docId) jout(['status'=>'error','message'=>'不可以把文件掛在自己底下']);
-            if ((int)$par['department_id'] !== $newDept)
-                jout(['status'=>'error','message'=>"母文件「{$par['doc_no']}」不屬於所選部門，請重新選擇"]);
-            if (strpos($newNo, (string)$par['doc_no'] . '-') !== 0)
-                jout(['status'=>'error','message'=>"新編號必須以母文件編號「{$par['doc_no']}-」開頭（目前填的是「{$newNo}」）"]);
+        // 只改名稱時沿用現有部門與母文件，不要求重選，也不做子文件編號連動
+        if (!$wantNo) {
+            $newDept   = (int)$doc['department_id'];
+            $newParent = (int)($doc['parent_doc_id'] ?? 0);
+            $doCascade = false;
         } else {
-            $newParent = 0;   // 上階文件沒有母文件
-        }
+            if (!preg_match('/^\d-[A-Z]{2,4}(?:-\d{2,3})+$/', $newNo))
+                jout(['status'=>'error','message'=>"文件編號格式不正確（應為「數字-部門代碼-序號」，如 2-SM-01-06），目前填的是「{$newNo}」"]);
+            $dup = $db->prepare("SELECT doc_name FROM as_document WHERE doc_no=? AND is_deleted=0 AND id<>?");
+            $dup->execute([$newNo, $docId]);
+            if ($dupName = $dup->fetchColumn()) jout(['status'=>'error','message'=>"編號 {$newNo} 已被「{$dupName}」使用"]);
+
+            if ($newDept <= 0) jout(['status'=>'error','message'=>'請選擇新的所屬部門']);
+            // 新編號的第二段必須真的是該部門登記的文件代碼——不擋的話會出現「部門選業務課、編號卻是 TD」
+            $seg  = explode('-', $newNo);
+            $code = $seg[1] ?? '';
+            $ck = $db->prepare("SELECT COUNT(*) FROM as_dept_code WHERE department_id=? AND code=?");
+            $ck->execute([$newDept, $code]);
+            if (!$ck->fetchColumn())
+                jout(['status'=>'error','message'=>"編號中的部門代碼「{$code}」不屬於所選部門，請用「重新建議編號」重取"]);
+
+            // 文件階層一律沿用原有階層（使用者明確要求不可修改），所以這裡不收 doc_level 參數。
+            // 四階／下階文件必須掛在母文件底下，且新編號要以母文件編號為前綴，
+            // 否則會出現「編號寫 2-SM-01-06、實際卻掛在 2-TD-01 底下」這種只有印出來才會發現的錯。
+            $isChild = !in_array((string)$doc['doc_level'], ['一階','二階'], true);
+            if ($isChild) {
+                if ($newParent <= 0) jout(['status'=>'error','message'=>'請選擇這份文件要掛在哪一份母文件底下']);
+                $ps = $db->prepare("SELECT doc_no, doc_level, department_id FROM as_document WHERE id=? AND is_deleted=0");
+                $ps->execute([$newParent]);
+                $par = $ps->fetch(PDO::FETCH_ASSOC);
+                if (!$par) jout(['status'=>'error','message'=>'母文件不存在']);
+                if ($newParent === $docId) jout(['status'=>'error','message'=>'不可以把文件掛在自己底下']);
+                if ((int)$par['department_id'] !== $newDept)
+                    jout(['status'=>'error','message'=>"母文件「{$par['doc_no']}」不屬於所選部門，請重新選擇"]);
+                if (strpos($newNo, (string)$par['doc_no'] . '-') !== 0)
+                    jout(['status'=>'error','message'=>"新編號必須以母文件編號「{$par['doc_no']}-」開頭（目前填的是「{$newNo}」）"]);
+            } else {
+                $newParent = 0;   // 上階文件沒有母文件
+            }
+        }   // end if ($wantNo)
     }
 
     // 檢視版可改用「由表單簽核案件導入」取代上傳（同一份文件不用上傳兩次）；下載版一律自行上傳
@@ -964,24 +979,30 @@ case 'add_version':
            分兩次寫會出現「編號改好了、版次沒建起來」這種修不回去的中間狀態。 */
         $renumResult = null;
         if ($doRenum) {
-            $oldNo = (string)$doc['doc_no'];
-            $db->prepare("UPDATE as_document SET doc_no=?, department_id=?, parent_doc_id=?, updated_at=NOW() WHERE id=?")
-               ->execute([$newNo, $newDept, ($newParent ?: null), $docId]);
+            $oldNo   = (string)$doc['doc_no'];
+            $oldName = (string)$doc['doc_name'];
+            $setNo   = $wantNo   ? $newNo   : $oldNo;
+            $setName = $wantName ? $newName : $oldName;
+            $db->prepare("UPDATE as_document SET doc_no=?, doc_name=?, department_id=?, parent_doc_id=?, updated_at=NOW() WHERE id=?")
+               ->execute([$setNo, $setName, $newDept, ($newParent ?: null), $docId]);
 
             // 子文件編號連動（2-SM-01 → 2-BB-02 時，底下 2-SM-01-01… 一起換前綴）；
-            // 沒勾就維持原編號，之後由使用者自己逐份處理
+            // 沒勾就維持原編號，之後由使用者自己逐份處理。只改名稱時沒有編號可連動。
             $cascadeCnt = 0;
-            if ($doCascade) $cascadeCnt = asCascadeRenumber($db, $docId, $oldNo, $newNo, $newDept);
+            if ($wantNo && $doCascade) $cascadeCnt = asCascadeRenumber($db, $docId, $oldNo, $setNo, $newDept);
 
             eg_asdoc_nochange_add($db, [
                 'doc_id' => $docId, 'version_id' => $verId,
-                'old_doc_no' => $oldNo, 'new_doc_no' => $newNo,
+                'old_doc_no' => $oldNo, 'new_doc_no' => $setNo,
+                'old_doc_name' => $oldName, 'new_doc_name' => $setName,
                 'old_department_id' => (int)$doc['department_id'], 'new_department_id' => $newDept,
                 'old_parent_doc_id' => (int)($doc['parent_doc_id'] ?? 0), 'new_parent_doc_id' => $newParent,
                 'cascade_count' => $cascadeCnt,
                 'changed_by_id' => (int)$currentUserId, 'changed_by' => (string)$GLOBALS['currentCname'],
             ]);
-            $renumResult = ['old_doc_no'=>$oldNo, 'new_doc_no'=>$newNo, 'cascade'=>$cascadeCnt];
+            $renumResult = ['old_doc_no'=>$oldNo, 'new_doc_no'=>$setNo,
+                            'old_doc_name'=>$oldName, 'new_doc_name'=>$setName,
+                            'changed_no'=>$wantNo, 'changed_name'=>$wantName, 'cascade'=>$cascadeCnt];
         }
 
         $db->commit();
@@ -990,7 +1011,7 @@ case 'add_version':
            掃描放 commit 之後、整段包 try——掃描失敗絕不可以把「已經改版成功」變成失敗。
            這裡只建立「待確認」列，不直接動別人的文件：要改到哪幾處、改完要不要重送，
            由那份文件的人在線上版編輯器裡逐處確認（使用者要求「重送之前明顯標示修改處」）。 */
-        if ($renumResult) {
+        if ($renumResult && !empty($renumResult['changed_no'])) {
             try {
                 require_once __DIR__ . '/../common/as_doc_ref_lib.php';
                 $renumResult['ref_scan'] = adr_scan_on_change($db, [
