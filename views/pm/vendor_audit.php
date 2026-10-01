@@ -40,6 +40,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
            : ($perms['canAdmin'] ? '稽核管理員'
            : ($perms['canEdit'] ? '稽核登錄'
            : ($perms['canView'] ? '稽核檢閱' : '無權限')));
+/* 已廢止表單（稽核批次／供應商稽核計劃，2-PH-01-03／2-PH-01-06）預設整個分頁不輸出；
+ * 管理員可用「供應商評鑑」工具列的「已廢止表單」開啟以查閱舊資料（vendor_audit_legacy_enabled）。 */
+$vaLegacy = vendor_audit_legacy_enabled($db);
+$vaLegacyDocs = $vaLegacy ? [] : vendor_audit_legacy_docs($db);
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -81,6 +85,24 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .va-tab { border:1px solid #E8D5B5; border-bottom:none; background:#FBF3E5; color:#8a6d45; cursor:pointer;
             padding:7px 16px; font-size:14px; border-radius:6px 6px 0 0; margin-bottom:-2px; }
         .va-tab.active { background:#fff; color:#5b3a1e; font-weight:bold; border-bottom:2px solid #fff; }
+        /* 已廢止表單（2-PH-01-03／2-PH-01-06）的標記；line-height 要自己指定，
+           否則會繼承 Gentelella 全站 td span{line-height:28px} 把分頁鈕撐高 */
+        .va-void-tag { display:inline-block; background:#DD5138; color:#fff; border-radius:3px;
+            font-size:10px; font-weight:bold; line-height:14px; padding:0 4px; vertical-align:middle; }
+        .va-void-banner { background:#FDECE7; border:1.5px solid #DD5138; border-radius:6px; color:#9c3418;
+            padding:7px 12px; font-size:12px; line-height:1.6; margin-bottom:8px; }
+        .va-void-banner b { color:#DD5138; }
+        /* 合格供應商清冊：依評核等級分頁 */
+        .rs-gtabs { display:flex; gap:5px; flex-wrap:wrap; margin:4px 0 6px; }
+        .rs-gtab { border:1px solid #E8D5B5; background:#FBF3E5; color:#8a6d45; cursor:pointer; border-radius:14px;
+            padding:3px 12px; font-size:12px; line-height:18px; }
+        .rs-gtab.active { background:#F0A24B; border-color:#D9873B; color:#fff; font-weight:bold; }
+        .rs-gtab .n { font-size:11px; opacity:.85; }
+        .rs-ghead { display:flex; align-items:flex-end; gap:10px; border-bottom:1.5px solid #E8D5B5;
+            padding:0 2px 4px; margin-bottom:5px; }
+        .rs-ghead .g-main { font-size:13px; color:#5b3a1e; }
+        .rs-ghead .g-right { margin-left:auto; text-align:right; font-size:13px; color:#8A5A2B; font-weight:bold; }
+        .rs-ghead .g-right small { display:block; font-weight:normal; font-size:11px; color:#8a6d45; }
         .va-scope-switch { display:flex; gap:0; margin-bottom:10px; }
         .va-scope-btn { border:1px solid #DD8A38; background:#fff; color:#B5762A; cursor:pointer;
             padding:7px 20px; font-size:14px; font-weight:bold; }
@@ -258,30 +280,33 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <button class="va-scope-btn" data-scope="purchase" onclick="setScope('purchase')"><i class="fa fa-shopping-cart"></i> 採購</button>
         </div>
         <div class="va-tabs">
-            <button class="va-tab active" data-tab="audit"><i class="fa fa-check-square-o"></i> 稽核批次</button>
-            <button class="va-tab" data-tab="newvendor"><i class="fa fa-plus-circle"></i> 新供應商評鑑</button>
+<?php if ($vaLegacy): ?>
+            <button class="va-tab" data-tab="audit"><i class="fa fa-check-square-o"></i> 稽核批次 <span class="va-void-tag">已廢止</span></button>
+<?php endif; ?>
+            <button class="va-tab active" data-tab="newvendor"><i class="fa fa-plus-circle"></i> 供應商評鑑
+                <small style="display:block;font-weight:normal;font-size:10px;line-height:1.2;">新／重大不良／定期評鑑連續 D×2</small></button>
             <button class="va-tab" data-tab="eval"><i class="fa fa-line-chart"></i> 定期評核（月不良/遲交率）</button>
             <button class="va-tab" data-tab="roster"><i class="fa fa-list-alt"></i> 合格供應商清冊</button>
-            <button class="va-tab" data-tab="plan"><i class="fa fa-calendar"></i> 供應商稽核計劃</button>
+<?php if ($vaLegacy): ?>
+            <button class="va-tab" data-tab="plan"><i class="fa fa-calendar"></i> 供應商稽核計劃 <span class="va-void-tag">已廢止</span></button>
+<?php endif; ?>
         </div>
-        <div id="tabAudit">
+<?php if ($vaLegacy): ?>
+        <div id="tabAudit" style="display:none;">
+        <div class="va-void-banner"><i class="fa fa-exclamation-triangle"></i>
+            這個分頁對應的表單<b>已經廢止</b>（<span id="voidDocsAudit"></span>），程序書中已剔除此表單之使用。
+            這裡只保留給管理員<b>查閱／維護舊資料</b>，不要再登錄新的稽核批次；新的供應商評鑑請改用「供應商評鑑」分頁。
+        </div>
         <div class="va-toolbar">
             <label>年度</label>
             <select id="yearSel"></select>
             <label>期別</label>
             <select id="halfSel"><option value="1">上半年(1-6月)</option><option value="2">下半年(7-12月)</option></select>
             <button class="btn-warm" id="btnPick" style="display:none;"><i class="fa fa-plus"></i> 加入稽核對象</button>
-            <button id="btnAuditor" style="display:none;"><i class="fa fa-user-circle-o"></i> 稽核員設定</button>
-            <button id="btnCycle" style="display:none;"><i class="fa fa-refresh"></i> 週期設定</button>
-            <button id="btnAttachSet" style="display:none;"><i class="fa fa-folder-open-o"></i> 附件路徑</button>
-            <button id="btnAsDoc" style="display:none;"><i class="fa fa-link"></i> AS文件綁定</button>
             <button id="btnChecklist" style="display:none;"><i class="fa fa-list-ol"></i> 查核表設定</button>
-            <button id="btnSignSetting" style="display:none;"><i class="fa fa-pencil-square-o"></i> 簽核設定</button>
             <button id="btnBlank"><i class="fa fa-file-o"></i> 列印空白表單</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button onclick="window.print()"><i class="fa fa-print"></i> 列印清單</button>
-            <span class="va-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b><span id="scopeVerBadge" style="display:none;"></span>
-                <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
         </div>
 
         <div class="va-stat" id="statBar">
@@ -307,17 +332,28 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             KPI 執行率＝已完成 ÷ 本期對象數（<span class="st-pill st-dis">停用</span>廠商不列入）。
         </div>
         </div><!-- /tabAudit -->
+<?php endif; ?>
 
-        <div id="tabNewVendor" style="display:none;">
+        <div id="tabNewVendor">
         <div class="va-toolbar">
             <label>年度</label>
             <select id="adYearSel"></select>
             <label>期別</label>
             <select id="adHalfSel"><option value="1">上半年(1-6月)</option><option value="2">下半年(7-12月)</option></select>
-            <button class="btn-warm" id="btnPickAdhoc" style="display:none;" title="新增供應商的評鑑，不受年度計畫鎖定限制，也不列入年度計畫表"><i class="fa fa-plus-circle"></i> 新增供應商評鑑</button>
-            <button id="btnNvChecklist" style="display:none;" title="新供應商評鑑專用查核表（與稽核批次的題庫各自獨立）"><i class="fa fa-list-ol"></i> 查核表設定</button>
+            <button class="btn-warm" id="btnPickAdhoc" style="display:none;" title="新增一筆供應商評鑑對象，不受年度計畫鎖定限制"><i class="fa fa-plus-circle"></i> 新增供應商評鑑</button>
+            <button id="btnNvChecklist" style="display:none;" title="供應商評鑑專用查核表"><i class="fa fa-list-ol"></i> 查核表設定</button>
+            <button id="btnNvBlank"><i class="fa fa-file-o"></i> 列印空白表單</button>
+            <!-- 下面這幾顆原本在「稽核批次」工具列，該分頁已廢止隱藏，但這些設定本分頁與定期評核／清冊都要用，故移到這裡 -->
+            <button id="btnAuditor" style="display:none;"><i class="fa fa-user-circle-o"></i> 稽核員設定</button>
+            <button id="btnCycle" style="display:none;"><i class="fa fa-refresh"></i> 週期設定</button>
+            <button id="btnAttachSet" style="display:none;"><i class="fa fa-folder-open-o"></i> 附件路徑</button>
+            <button id="btnAsDoc" style="display:none;"><i class="fa fa-link"></i> AS文件綁定</button>
+            <button id="btnSignSetting" style="display:none;"><i class="fa fa-pencil-square-o"></i> 簽核設定</button>
+            <button id="btnLegacy" style="display:none;"><i class="fa fa-archive"></i> 已廢止表單</button>
             <button id="adBtnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button onclick="window.print()"><i class="fa fa-print"></i> 列印清單</button>
+            <span class="va-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b><span id="scopeVerBadge" style="display:none;"></span>
+                <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
         </div>
 
         <div class="va-stat" id="adStatBar">
@@ -331,15 +367,17 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div class="va-table-wrap">
             <table class="va-table" id="adTable">
                 <thead><tr>
-                    <th>廠商編號</th><th>廠商名稱</th><th>加工項目</th><th>新增日期</th><th>稽核狀態</th>
-                    <th>稽核日</th><th>綜合合格率</th><th>判定</th><th>稽核員</th><th>操作</th>
+                    <th>廠商編號</th><th>廠商名稱</th><th>加工項目</th><th>新增日期</th><th>評鑑狀態</th>
+                    <th>評鑑日期</th><th>綜合合格率</th><th>判定</th><th>稽核員</th><th>操作</th>
                 </tr></thead>
                 <tbody id="adBody"><tr><td colspan="10" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
         <div class="va-remind" style="font-size:11px;color:#8a6d45;margin-top:4px;">
-            用於全新廠商的首次評鑑等臨時性稽核需求：按「新增供應商評鑑」挑選廠商後直接加入本期（不受年度計畫鎖定限制、不設預定稽核月份），不會出現在「供應商稽核計劃」年度計畫表，也<b>不計入 KPI 廠商稽核按時執行率</b>；其餘登錄、簽核、記錄表、列印流程與「稽核批次」完全相同。若廠商尚未建檔，請先至主檔管理新增該廠商。<br>
-            登錄用的查核表是<b>本分頁專用的另一份題庫</b>（預設 4 類 8 項、單項滿分 10 分、總分 80 分），管理員可按工具列「查核表設定」調整，與「稽核批次」的 15 項題庫各自獨立、互不影響。
+            依 2-PH-01 程序書 6.3.4：<b>新供應商</b>、發生<b>重大異常</b>、或<b>定期評核連續兩次 D 級</b>者，須由稽核員進行<b>實地／限定評鑑</b>並製作「供應商評鑑表」(2-PH-01-02) 評分。<br>
+            按「新增供應商評鑑」挑選廠商後直接加入本期（不受年度計畫鎖定限制、不設預定評鑑月份）。若廠商尚未建檔，請先至主檔管理新增該廠商。
+            登錄用的查核表是<b>本分頁專用的題庫</b>（預設 4 類 8 項、單項滿分 10 分、總分 80 分），管理員可按工具列「查核表設定」調整。
+            <b>建議評鑑結果由綜合評鑑分數自動判定</b>（門檻＝查核表設定的合格分數）。
         </div>
         </div><!-- /tabNewVendor -->
 
@@ -355,6 +393,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <button id="evGo"><i class="fa fa-search"></i> 查詢</button>
                 <span style="color:#c9bda9;">｜</span>
                 <label id="evFailBox" style="display:none;"><input type="checkbox" id="evFailOnly"> 只看不合格</label>
+                <button id="evSvcBtn" style="display:none;" title="服務分數(20%)由人工評分，未評分者視同滿分"><i class="fa fa-handshake-o"></i> 服務分數</button>
                 <button id="evSet" style="display:none;"><i class="fa fa-cog"></i> 門檻設定</button>
                 <button id="evCsv" style="display:none;"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
                 <button id="evPrint"><i class="fa fa-print"></i> 列印</button>
@@ -368,11 +407,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                             <th rowspan="2">月份</th>
                             <th rowspan="2" title="數量(PCS)；同月取「被檢驗量」與「回廠量」較大者，品質與交期共用同一分母">進貨數<br><span style="font-weight:normal;font-size:11px;">(PCS)</span></th>
                             <th colspan="3">品質（進料檢驗）</th>
-                            <th colspan="2">交期</th>
+                            <th colspan="2">交貨</th>
+                            <th rowspan="2" title="供應商之相關服務分數，由人工評分(0~100)換算；未評分者視同滿分">服務分<br><span style="font-weight:normal;font-size:11px;">(<span class="ev-smax">20</span>)</span></th>
                             <th rowspan="2">判定</th>
                         </tr><tr>
-                            <th>不良數</th><th>特採數</th><th>品質分<span style="font-weight:normal;">(60)</span></th>
-                            <th>遲交數</th><th>交期分<span style="font-weight:normal;">(40)</span></th>
+                            <th>不良數</th><th>特採數</th><th>品質分<span style="font-weight:normal;">(<span class="ev-qmax">50</span>)</span></th>
+                            <th>遲交數</th><th>交期分<span style="font-weight:normal;">(<span class="ev-dmax">30</span>)</span></th>
                         </tr></thead>
                         <tbody id="evBody"></tbody>
                     </table>
@@ -383,7 +423,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div id="evEmpty" style="padding:18px;color:#8a6d45;">按「全部納管廠商」列出所有納管廠商評核，或選單一廠商查詢。（自動略過整年無資料廠商）</div>
             <div class="va-remind" style="font-size:11px;color:#8a6d45;margin-top:4px;">
                 資料自 ERP（bom_ing）自動計算，單位一律<b>數量 PCS</b>：<b>進貨數＝該月「被檢驗量」與「回廠量」取較大者</b>（同一批的檢驗日與回廠日常跨月，取大者讓品質與交期共用同一分母）；不良＝判定 ng、特採＝判定 AOD（顆數優先取該批異常數量，抓不到才算整批）；交期＝發包日＋約定工作天為應交日，遲交＝回廠日晚於應交（遲交量＝該批數量）。
-                分數＝品質分 60×(1−(不良數＋特採數)÷進貨數) ＋ 交期分 40×(1−遲交數÷進貨數)（半年加總後計算、無條件捨去）；半年判定與總判定依等級門檻（管理員可設），總判定＝上、下半年總分平均。
+                <br><b>計分依 2-PH-01 程序書 6.3.1</b>：品質分 <span class="ev-qmax">50</span>×(1−(不良數＋特採數)÷進貨數) ＋ 交貨分 <span class="ev-dmax">30</span>×(1−遲交數÷進貨數) ＋ 服務分 <span class="ev-smax">20</span>×(服務分數÷100)，<b>上下半年各統計一次</b>（半年加總後計算、無條件捨去）；總判定＝上、下半年總分平均。三個比例可由管理員在「門檻設定」調整。
+                <b>服務分數</b>系統算不出來，由生管／採購在工具列「服務分數」人工登錄 0~100；<b>未登錄者一律視同滿分</b>（不會因為沒評分被扣分），畫面會標「未評」。
             </div>
         </div><!-- /tabEval -->
 
@@ -394,11 +435,14 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <button class="btn-warm" id="rsAdd" style="display:none;"><i class="fa fa-plus"></i> 加入清冊廠商</button>
                 <button id="rsBatchGrade" style="display:none;"><i class="fa fa-pencil"></i> 批次設定等級</button>
                 <button id="rsClearGrade" style="display:none;"><i class="fa fa-eraser"></i> 清除採用改回建議</button>
-                <button id="rsStaleBtn" style="display:none;"><i class="fa fa-exclamation-triangle"></i> 檢查兩年未交易外包廠</button>
+                <button id="rsStaleBtn" style="display:none;"><i class="fa fa-exclamation-triangle"></i> 檢查三年未交易外包廠</button>
                 <button id="rsCsvBtn"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
                 <button id="rsPrintBtn"><i class="fa fa-print"></i> 列印清冊</button>
             </div>
             <div class="va-remind" id="rsRemind"></div>
+            <!-- 依採用等級分頁（使用者2026-10-01要求）：一個等級一頁，右上角標明本頁是哪一個等級與它的意義 -->
+            <div class="rs-gtabs" id="rsGradeTabs"></div>
+            <div class="rs-ghead" id="rsGradeHead" style="display:none;"></div>
             <div class="va-table-wrap">
                 <table class="va-table" id="rosterTable">
                     <thead><tr>
@@ -417,7 +461,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             </div>
         </div><!-- /tabRoster -->
 
+<?php if ($vaLegacy): ?>
         <div id="tabPlan" style="display:none;">
+        <div class="va-void-banner"><i class="fa fa-exclamation-triangle"></i>
+            「供應商稽核計劃」(2-PH-01-06) <b>已經廢止</b>（<span id="voidDocsPlan"></span>），程序書中已剔除此表單之使用。
+            這裡只保留給管理員<b>查閱舊年度計畫</b>，<b>不能再送出新的年度計畫</b>（後端也會擋）。
+        </div>
             <div class="va-toolbar">
                 <label>年度</label>
                 <select id="planYear"></select>
@@ -435,7 +484,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 依「加入稽核對象」時設定的預定稽核月份彙總全年度計畫（不分上下半年）；送出計畫後將鎖定該年度不可再增列對象。
             </div>
         </div><!-- /tabPlan -->
-<?php endif; ?>
+<?php endif; /* $vaLegacy */ ?>
+<?php endif; /* $perms['canView'] */ ?>
     </div>
     <?php include '../partPage/footer.html' ?>
 </div>
@@ -447,7 +497,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-head"><span id="pkTitle">加入稽核對象</span><span class="m-close" onclick="closeMask('pkMask')">✕</span></div>
     <div class="m-body">
         <div id="pkAdhocNote" style="display:none;background:#FFF7E8;border:1px solid #E8D5B5;border-radius:6px;padding:6px 10px;color:#8A5A2B;margin-bottom:8px;">
-            <b>新增供應商評鑑</b>：本次新增的稽核對象會加入「新供應商評鑑」獨立分頁，<b>不受年度計畫鎖定限制、不會列入「供應商稽核計劃」年度計畫表，也不計入 KPI「廠商稽核按時執行率」</b>，其餘登錄、簽核、記錄表、列印皆與一般稽核對象完全相同。若廠商不在清單中，請先至主檔管理新增該廠商。
+            <b>新增供應商評鑑</b>：本次新增的對象會加入「供應商評鑑」分頁（2-PH-01-02），<b>不受年度計畫鎖定限制</b>。適用時機依程序書 6.3.4＝新供應商／重大異常／定期評核連續兩次 D 級。若廠商不在清單中，請先至主檔管理新增該廠商。
         </div>
         <div class="pk-filter">
             <label style="margin:0;font-size:12px;color:#5b3a1e;">大類</label>
@@ -488,9 +538,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div id="recStatusBox" style="display:none;margin-bottom:8px;"></div>
         <div class="af-head">
             <div><label>預定稽核月份</label><select id="recPlanMonth"></select></div>
-            <div><label>稽核日期（留空=尚未稽核，月內完成即準時）</label><input type="date" id="recDate"></div>
-            <div><label>稽核狀況</label><select id="recMode">
-                <option value="first">首次稽核</option><option value="again">次稽核</option><option value="self">自我評量</option>
+            <div><label>評鑑日期（留空=尚未評鑑）</label><input type="date" id="recDate"></div>
+            <div><label>評鑑狀況</label><select id="recMode">
+                <option value="first">首次評核</option><option value="again">次評核</option>
             </select></div>
             <div><label>稽核員 <span id="recScopeHint" style="font-size:11px;color:#b5762a;"></span></label>
                 <select id="recAuditor"><option value="">—</option></select></div>
@@ -498,10 +548,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>報告編號 <span style="font-size:11px;color:#8a6d45;">(稽核報告文件編號,選填)</span></label><input type="text" id="recReport" maxlength="50"></div>
         </div>
         <div style="margin:8px 0;">
-            <label>審查類別（必選一項）</label>
-            <label style="display:inline-block;margin:0 14px 0 0;font-weight:normal;"><input type="radio" name="recReviewType" value="site"> 人員實地審查</label>
-            <label style="display:inline-block;margin:0 14px 0 0;font-weight:normal;"><input type="radio" name="recReviewType" value="self"> 供應商自主評核</label>
-            <label style="display:inline-block;font-weight:normal;"><input type="radio" name="recReviewType" value="abnormal"> 異常檢核（僅需稽核分）</label>
+            <label>評鑑類別（必選一項）</label>
+            <label style="display:inline-block;margin:0 14px 0 0;font-weight:normal;"><input type="radio" name="recReviewType" value="site"> 實地評鑑</label>
+            <label style="display:inline-block;font-weight:normal;"><input type="radio" name="recReviewType" value="limited"> 限定評鑑</label>
+            <span id="recReviewLegacy" style="display:none;font-size:11px;color:#c0762c;margin-left:10px;"></span>
         </div>
         <div class="af-attach" id="afAttachBox">
             <div style="font-weight:bold;color:#5b3a1e;margin:10px 0 4px;"><i class="fa fa-paperclip"></i> 佐證附件（供應商自評表等）</div>
@@ -514,13 +564,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             </div>
         </div>
         <div style="font-size:11px;color:#8a6d45;margin:6px 0;">
-            每項依單項滿分評自評/稽核分（0＝最差）；綜合合格率＝自評率×自評權重＋稽核率×稽核權重，達門檻才判合格。
+            每項依單項滿分評自評分／評鑑分數（0＝最差）；綜合合格率＝自評率×自評權重＋評鑑率×評鑑權重，達合格分數才判合格。
         </div>
         <div class="af-quickfill" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:6px;font-size:12px;color:#5b3a1e;">
             <span>自評快速套用：<input type="number" id="qfSelf" min="0" style="width:56px;">
                 <button type="button" class="b-att2" onclick="quickFillScore('self')">套用全部</button>
                 <button type="button" class="b-att2" style="color:#DD5138;" onclick="quickClearScore('self')">清空</button></span>
-            <span>稽核快速套用：<input type="number" id="qfAudit" min="0" style="width:56px;">
+            <span>評鑑分數快速套用：<input type="number" id="qfAudit" min="0" style="width:56px;">
                 <button type="button" class="b-att2" onclick="quickFillScore('audit')">套用全部</button>
                 <button type="button" class="b-att2" style="color:#DD5138;" onclick="quickClearScore('audit')">清空</button></span>
             <span style="color:#b0a390;">(套用後仍可個別修改)</span>
@@ -530,13 +580,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         </div>
         <div class="af-summary" id="afSummary"></div>
         <div class="grid2" style="margin-top:8px;">
-            <div><label>建議評鑑結果（結論）</label><select id="recConclusion">
-                <option value="">—</option>
-                <option value="合格">合格供應商</option>
-                <option value="回覆改善後合格">回覆稽核改善對策後合格</option>
-                <option value="需重新稽核">有嚴重缺失，改善後需重新稽核</option>
-                <option value="其他">其他</option>
-            </select></div>
+            <div><label>建議評鑑結果（結論）<span style="font-size:11px;font-weight:normal;color:#8a6d45;">系統依綜合評鑑分數自動判定</span></label>
+                <div id="recConclusion" class="ro-auto" style="border:1px solid #D8BE93;border-radius:4px;background:#F4EEE2;
+                     padding:5px 8px;min-height:30px;font-size:13px;color:#5b3a1e;">—</div></div>
             <div><label>備註</label><input type="text" id="recNote" maxlength="200"></div>
         </div>
     </div>
@@ -566,9 +612,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     </div>
 </div></div>
 
-<!-- 兩年未交易外包廠 modal -->
+<!-- 三年未交易外包廠 modal（2-PH-01 6.3.5：3年內未有交易記錄須從合格供應商清冊剔除） -->
 <div class="va-mask" id="staleMask"><div class="va-modal wide">
-    <div class="m-head"><span>兩年未交易外包廠（建議移除）</span><span class="m-close" onclick="closeMask('staleMask')">✕</span></div>
+    <div class="m-head"><span>三年未交易外包廠（建議移除）</span><span class="m-close" onclick="closeMask('staleMask')">✕</span></div>
     <div class="m-body">
         <div id="staleHint" style="font-size:12px;color:#8a6d45;margin-bottom:6px;"></div>
         <div class="va-table-wrap"><table class="va-table"><thead><tr>
@@ -703,14 +749,16 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <b>已完成評分的稽核紀錄會凍結當時的查核表內容，之後在此調整不會影響舊紀錄。</b>
         </div>
         <div id="clNvNote" style="display:none;background:#FFF7E8;border:1px solid #E8D5B5;border-radius:6px;padding:6px 10px;color:#8A5A2B;margin-bottom:8px;font-size:12px;">
-            這份是<b>「新供應商評鑑」分頁專用</b>的查核表（預設 4 類 8 項、單項滿分 10 分、總分 80 分），與「稽核批次」的題庫<b>各自獨立</b>，在這裡調整<b>不會影響稽核批次</b>的查核表，反之亦然。
+            這份是<b>「供應商評鑑」分頁專用</b>的查核表（預設 4 類 8 項、單項滿分 10 分、總分 80 分），與已廢止的「稽核批次」題庫<b>各自獨立</b>，在這裡調整<b>不會影響稽核批次</b>的查核表，反之亦然。
+            下面的<b>合格分數</b>就是「建議評鑑結果」自動判定的門檻。
         </div>
         <div id="clCatsBox"></div>
         <button type="button" class="b-att2" onclick="clAddCat()"><i class="fa fa-plus"></i> 新增類別</button>
         <div style="margin-top:14px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
             <label>自評權重 <input type="number" id="clSelfW" step="0.05" min="0" max="1" style="width:70px;"></label>
             <label>稽核權重 <input type="number" id="clAuditW" step="0.05" min="0" max="1" style="width:70px;"></label>
-            <label>合格率門檻% <input type="number" id="clPassRate" step="0.5" min="0" max="100" style="width:70px;"></label>
+            <label>合格分數（%）<input type="number" id="clPassRate" step="0.5" min="0" max="100" style="width:70px;"></label>
+            <span style="font-size:11px;color:#8a6d45;">綜合評鑑分數達這個分數＝合格；<b>「建議評鑑結果」就是用這個門檻自動判定的</b></span>
             <span>總分滿分：<b id="clTotalMax">0</b>（系統自動計算）</span>
         </div>
     </div>
@@ -808,6 +856,19 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <div class="va-mask" id="evSetMask"><div class="va-modal">
     <div class="m-head"><span>定期評核門檻設定</span><span class="m-close" onclick="closeMask('evSetMask')">✕</span></div>
     <div class="m-body">
+        <div style="border:1px solid #E8D5B5;border-radius:6px;background:#FFF7E8;padding:8px 10px;margin-bottom:10px;">
+            <div style="font-weight:bold;color:#5b3a1e;margin-bottom:4px;">計分比例（2-PH-01 程序書 6.3.1）</div>
+            <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+                <label style="margin:0;">品質 <input type="number" id="stWQ" step="1" min="0" max="100" style="width:66px;"> %</label>
+                <label style="margin:0;">交貨 <input type="number" id="stWD" step="1" min="0" max="100" style="width:66px;"> %</label>
+                <label style="margin:0;">服務 <input type="number" id="stWS" step="1" min="0" max="100" style="width:66px;"> %</label>
+                <span id="stWSum" style="font-size:12px;"></span>
+            </div>
+            <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
+                品質＝(1−(不良數＋特採數)÷進貨總數)×比例、交貨＝(1−遲交數÷進貨總數)×比例、服務＝(服務分數÷100)×比例。
+                <b>三個比例相加必須等於 100</b>（總分才會是 0~100，與下面的等級門檻同一個尺度）。
+            </div>
+        </div>
         <div class="grid2">
             <div><label>不良率上限（%）</label><input type="number" id="stNgMax" step="0.1" min="0"></div>
             <div><label>遲交率上限（%）</label><input type="number" id="stLateMax" step="0.1" min="0"></div>
@@ -823,15 +884,78 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div id="stLeadRows" style="border:1px solid #EADFC8;border-radius:6px;padding:6px 8px;max-height:200px;overflow:auto;"></div>
         <div style="margin:4px 0 12px;"><button type="button" class="b-att2" onclick="leadAddRow('','')"><i class="fa fa-plus"></i> 新增廠商</button>
             <span style="font-size:11px;color:#8a6d45;">熱處理／表面處理等交期本來就較長的廠商可個別設定（例 14 天）；<b>刪除該列＝恢復用預設</b>。設定後遲交判定與交期分數會依該廠商的天數重算。</span></div>
-        <label>評核等級門檻（分數 ≥ 該值即為該等級，由高到低）</label>
+        <label>評核等級門檻與各等級代表的意義（分數 ≥ 該值即為該等級，由高到低）</label>
         <div id="stGrades" style="border:1px solid #EADFC8;border-radius:6px;padding:6px 8px;"></div>
-        <div style="margin:4px 0 4px;"><button type="button" class="b-att2" onclick="gradeAddRow('',0,0)"><i class="fa fa-plus"></i> 新增等級</button>
-            <span style="font-size:11px;color:#8a6d45;">總分0~100；例：A≥95、B≥85、C≥0，並把 C 勾「視為不合格」＝落到 C 就是不合格。可勾多級。</span></div>
+        <div style="margin:4px 0 4px;"><button type="button" class="b-att2" onclick="gradeAddRow('',0,0,'')"><i class="fa fa-plus"></i> 新增等級</button>
+            <span style="font-size:11px;color:#8a6d45;">總分0~100。依程序書 6.3.2：A≥90 合格廠商（優先採用）、B≥80 合格廠商、C≥70 要求改善之廠商、D≥0 不合格廠商——
+            只有 D 勾「視為不合格」（C 是要求改善，不是不合格）。<b>「等級意義」會顯示在清冊的等級分頁、列印版右上角與評核畫面</b>，請用程序書上的文字。</span></div>
         <div style="font-size:11px;color:#8a6d45;">AS 文件綁定（含定期評核表）已移至「稽核批次」工具列的「AS文件綁定」設定。</div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('evSetMask')">取消</button>
         <button class="b-ok" onclick="submitEvSet()">儲存</button>
+    </div>
+</div></div>
+
+<!-- 服務分數設定 modal（定期評核 服務20%；逐廠商×年度×半年，未登錄＝視同滿分） -->
+<div class="va-mask" id="evSvcMask"><div class="va-modal wide">
+    <div class="m-head"><span id="evSvcTitle">服務分數設定</span><span class="m-close" onclick="closeMask('evSvcMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;">
+            依 2-PH-01 程序書 6.3.1，定期評核的<b>服務（<span id="evSvcW">20</span>%）＝供應商之相關服務分數</b>，系統算不出來，要由生管／採購人工評分。
+            這裡填 <b>0~100 分</b>，系統會換算成總分裡的服務分（例：填 80 → <span id="evSvcEg">16</span> 分）。
+            <b>沒有填的廠商一律視同滿分</b>（不會因為沒評分就被扣分），畫面上會標示「未評」。<b>清空</b>該格＝回到未評，不是 0 分。
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+            <label style="margin:0;">年度</label><select id="evSvcYear" style="width:90px;"></select>
+            <label style="margin:0;">期別</label><select id="evSvcHalf" style="width:130px;">
+                <option value="1">上半年(1-6月)</option><option value="2">下半年(7-12月)</option></select>
+            <input type="text" id="evSvcKw" placeholder="篩選廠商名稱／編號" style="width:160px;">
+            <span style="color:#c9bda9;">｜</span>
+            <label style="margin:0;">批次設為</label>
+            <input type="number" id="evSvcBatch" min="0" max="100" step="1" style="width:70px;">
+            <button type="button" class="b-att2" onclick="evSvcApplyBatch()"><i class="fa fa-check-square-o"></i> 套用到勾選的廠商</button>
+            <button type="button" class="b-att2" style="color:#DD5138;" onclick="evSvcApplyBatch(true)"><i class="fa fa-eraser"></i> 清空勾選（回未評）</button>
+        </div>
+        <div class="va-table-wrap" style="max-height:48vh;overflow:auto;">
+            <table class="va-table" id="evSvcTable">
+                <thead><tr><th style="width:32px;"><input type="checkbox" id="evSvcAll"></th>
+                    <th style="text-align:left;">項目</th><th>廠商</th><th>類型</th><th style="width:150px;">服務分數(0~100)</th></tr></thead>
+                <tbody id="evSvcBody"><tr><td colspan="5" style="padding:16px;color:#8a6d45;">載入中…</td></tr></tbody>
+            </table>
+        </div>
+        <div style="font-size:11px;color:#8a6d45;margin-top:5px;">勾選多家廠商→填上分數→按「套用到勾選的廠商」即可一次設定；最後要按右下角「儲存」才會寫入。</div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('evSvcMask')">取消</button>
+        <button class="b-ok" onclick="submitEvSvc()">儲存</button>
+    </div>
+</div></div>
+
+<!-- 已廢止表單 modal（稽核批次／供應商稽核計劃的顯示開關） -->
+<div class="va-mask" id="legacyMask"><div class="va-modal">
+    <div class="m-head"><span>已廢止表單</span><span class="m-close" onclick="closeMask('legacyMask')">✕</span></div>
+    <div class="m-body">
+        <div class="va-void-banner" id="legacyDocList">載入中…</div>
+        <div style="font-size:12px;color:#8a6d45;line-height:1.8;">
+            2-PH-01 供應商管理程序改版後，程序書中已剔除這幾張表單的使用，因此下列功能<b>預設整個隱藏</b>：
+            <ul style="padding-left:20px;margin:4px 0;">
+                <li><b>稽核批次</b>分頁（含它的「供應商稽核計畫實施結果」清單列印、15 項查核表設定）</li>
+                <li><b>供應商稽核計劃</b>分頁（年度計畫表、送出鎖定與核准）</li>
+                <li>KPI「2-GM-04-01 #6 廠商稽核按時執行率」<b>停止計算並標示無資料</b>（來源表單已廢止，不留一個看起來是「都沒做」的假數字）</li>
+            </ul>
+            舊資料<b>完全保留沒有刪除</b>。要查閱或維護舊紀錄時可在這裡暫時開啟；開啟後分頁上方會以紅字標明該表單已廢止。
+            <b>即使開啟，也不建議再登錄新的稽核批次</b>——新的供應商評鑑請用「供應商評鑑」分頁（2-PH-01-02 供應商評鑑表）。
+        </div>
+        <div style="margin-top:10px;padding:8px 10px;background:#FFF7E8;border:1px solid #E8D5B5;border-radius:6px;">
+            <label style="font-weight:bold;color:#5b3a1e;margin:0;">
+                <input type="checkbox" id="legacyOn"> 顯示已廢止的「稽核批次」與「供應商稽核計劃」分頁（並恢復 KPI #6 計算）</label>
+            <div style="font-size:11px;color:#8a6d45;margin-top:4px;">存檔後本頁會重新載入。這是全站共用設定（外包加工／採購兩個範疇一起生效）。</div>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('legacyMask')">取消</button>
+        <button class="b-ok" onclick="submitLegacy()">儲存</button>
     </div>
 </div></div>
 
@@ -861,7 +985,17 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <div class="va-mask" id="helpUseMask"><div class="va-modal xwide">
     <div class="m-head"><span><i class="fa fa-question-circle"></i> 供應商稽核管理 使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
     <div class="m-body help-doc">
-        <p>本頁為 KPI「2-GM-04-01 #6 廠商稽核按時執行率」的來源頁，並整合供應商評鑑相關 AS 表單。分三個分頁：<b>稽核批次</b>、<b>定期評核</b>、<b>合格供應商清冊</b>。</p>
+        <p>本頁整合 2-PH-01 供應商管理程序的相關 AS 表單，分三個分頁：<b>供應商評鑑</b>（2-PH-01-02）、<b>定期評核</b>（2-PH-01-05）、<b>合格供應商清冊</b>（2-PH-01-04）。</p>
+        <div style="background:#FDECE7;border:1.5px solid #DD5138;border-radius:6px;padding:7px 12px;color:#9c3418;line-height:1.8;">
+            <b>2026-10-01 程序書改版後的變動（重要）</b><br>
+            ① <b>稽核批次</b>與<b>供應商稽核計劃</b>兩個分頁對應的表單（2-PH-01-03 供應商品質系統評鑑記錄表、2-PH-01-06 供應商稽核計劃）
+            <b>已廢止</b>，程序書中已剔除此表單之使用，因此兩個分頁<b>預設整個隱藏</b>，連「供應商稽核計畫實施結果」清單列印也一併隱藏。
+            舊資料完全保留，管理員要查舊紀錄可在「供應商評鑑」工具列按<b>「已廢止表單」</b>暫時開啟。<br>
+            ② 因為來源表單已廢止，KPI「2-GM-04-01 #6 廠商稽核按時執行率」<b>停止計算並標示無資料</b>（不留一個看起來像「都沒做」的假數字）。<br>
+            ③ <b>定期評核的計分改成 品質50%＋交貨30%＋服務20%</b>（原為品質60＋交期40），三個比例可由管理員在「門檻設定」調整。<br>
+            ④ <b>評核等級</b>：A≥90 合格廠商（優先採用）、B≥80 合格廠商、C≥70 要求改善之廠商、D≤69 不合格廠商（只有 D 算不合格）。<br>
+            ⑤ 合格清冊的「<b>三年</b>未交易剔除」依 6.3.5（原為兩年）。
+        </div>
 
         <h4>○、範疇切換（外包加工／採購）</h4>
         <ul>
@@ -871,23 +1005,34 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <li><b>稽核管理員也依人員部門分成「採購」與「生管」兩種</b>（2026-08-17）：您<b>只會看到、也只能操作自己那一份分頁</b>，切換鈕不會出現對方的範疇，年度計畫核准／代簽／移除已稽核對象／查核表與門檻設定等動作也一律只能對自己範疇做，避免兩邊互相改到對方的資料。範疇怎麼判定：<b>①</b>「稽核員資格設定」裡登記的管理範圍優先（登記「通用」＝兩邊都能管）；<b>②</b>沒登記過就依<b>系統設定→組織角色綁定</b>的<b>生管部門／採購部門</b>推導（含子部門，也含兼任部門）；<b>③</b>兩者都判不出來＝不具任何一邊的管理設定權限，請洽系統管理員登記。<b>系統管理者</b>不受此限，兩邊都看得到。</li>
         </ul>
 
-        <h4>一、稽核批次（實地稽核，半年一期）</h4>
+        <h4>一、稽核批次（已廢止，預設隱藏）</h4>
         <ul>
-            <li><b>模型</b>：每期（上半年 1–6 月／下半年 7–12 月）挑一批廠商稽核。KPI 執行率＝已完成 ÷ 本期對象數。</li>
+            <li>對應的 2-PH-01-03／2-PH-01-06 已廢止，<b>此分頁預設不顯示</b>；只有管理員按「已廢止表單」開啟後才看得到，開啟時分頁上方會有紅字標示。<b>開啟也不建議再登錄新的稽核批次</b>，新的評鑑一律走「供應商評鑑」分頁。</li>
+            <li><b>模型</b>：每期（上半年 1–6 月／下半年 7–12 月）挑一批廠商稽核。</li>
             <li><b>加入稽核對象</b>：依大類／加工項目篩選後多選加入，或隨機抽 N 家（自納管廠商）；可指定「預定稽核月份」。</li>
-            <li><b>登錄</b>：填「供應商評鑑稽核表」簡版 15 項，每項自評分＋稽核分各 0~7；系統自動算各類與綜合合格率（自評×0.3＋稽核×0.7），<b>≥75% 判合格</b>。</li>
+            <li><b>登錄</b>：填「供應商評鑑稽核表」簡版 15 項，每項自評分＋評鑑分數各 0~7；系統自動算各類與綜合評鑑分數（自評×0.3＋評鑑×0.7），<b>達合格分數（預設 75%）判合格</b>。</li>
             <li><b>記錄表</b>（已稽核者）：由 15 項換算 5 大類合格率，含<b>雷達圖</b>；可「列印記錄表」或「一次印全部文件」（查核表＋記錄表為不同文件，各自跳出一個列印視窗；記錄表若有上傳佐證附件會一併接續印出，圖片與 PDF 可直接預覽，其他類型僅顯示檔名）；可上傳供應商簽名回傳掃描檔。</li>
             <li><b>停用廠商</b>（master_data 客戶/廠商設為停用者）：灰底、不可加入、不列入 KPI。</li>
         </ul>
 
-        <h4>一之一、新供應商評鑑（獨立分頁）</h4>
+        <h4>一之一、供應商評鑑（主要分頁，2-PH-01-02）</h4>
         <ul>
-            <li>與「稽核批次」是<b>完全獨立的分頁</b>，用於<b>全新廠商的首次評鑑</b>等臨時性稽核需求，一樣以<b>年度／上半年／下半年</b>瀏覽，但資料與計畫對象分開存放、分開顯示（不會混在稽核批次的主表格裡）。</li>
+            <li><b>什麼時候要做</b>（程序書 6.3.4）：<b>新供應商</b>、發生<b>重大異常</b>、或<b>定期評核連續兩次評核等級為 D</b> 者，須由稽核員進行<b>實地／限定評鑑</b>並製作「供應商評鑑表」評分。重大異常者除重新評鑑外，還要依「矯正與預防措施管理程序」開立「異常矯正處理單」或建議事項通知供應商改善；通知後查無改善者，除客戶指定或獨占市場之供應商外，一律由合格供應商清冊剔除。</li>
+            <li><b>欄位（2026-10-01 改）</b>：<b>評鑑類別</b>＝實地評鑑／限定評鑑（舊的「供應商自主評核」「異常檢核」已取消）；<b>評鑑狀況</b>＝首次評核／次評核（舊的「自我評量」已取消）；<b>評鑑日期</b>（原稱稽核日期）；分數表單右欄是<b>評鑑分數</b>（原稱稽核分）。</li>
+            <li><b>建議評鑑結果（結論）改為系統自動判定</b>：綜合評鑑分數 ≥「查核表設定」裡的<b>合格分數</b>＝合格供應商，低於＝不合格（改善後需重新評鑑）。這一欄不給手動挑選，避免出現「分數不合格、結論卻挑合格」這種自相矛盾的紀錄；要補充說明請寫在「備註」。</li>
+            <li>資料與「稽核批次」分開存放、分開顯示，一樣以<b>年度／上半年／下半年</b>瀏覽。</li>
             <li>按「新增供應商評鑑」挑選廠商（大類／加工項目篩選後多選，或打字搜尋）後直接加入本期，<b>不受年度計畫鎖定限制</b>（即使該年度／範疇的計畫已送出鎖定仍可新增）、<b>一律不設預定稽核月份</b>，因此<b>不會出現在「供應商稽核計劃」年度計畫表，也不計入 KPI「廠商稽核按時執行率」</b>。若廠商尚未建檔，請先至主檔管理新增該廠商。</li>
             <li>加入之後的<b>登錄、簽核、記錄表、列印</b>等操作與「稽核批次」完全相同（共用同一套稽核評鑑表單與流程），本分頁上方的完成度只供自行追蹤參考，不是官方 KPI 指標。</li>
-            <li><b>文件右上角會加一個外框標記「新供應商評鑑」</b>：查核表（2-PH-01-02，含自評版與審查版）、評鑑記錄表（2-PH-01-03）、以及「一次印全部文件」印出來的每一份都會有，記錄表畫面上也看得到，方便與一般稽核批次的文件一眼區分。<b>稽核狀況</b>（首次稽核／次稽核／自我評量）與一般稽核批次用法相同、不另外改寫；<b>預定稽核月份</b>欄位則不顯示（本分頁不列入年度計畫）。</li>
+            <li><b>文件右上角會加一個外框標記「新供應商評鑑」</b>：查核表（2-PH-01-02，含給供應商填的空白自評版與稽核員的評鑑版）、評鑑記錄表、以及「一次印全部文件」印出來的每一份都會有，記錄表畫面上也看得到。<b>預定評鑑月份</b>欄位不顯示（本分頁不列入年度計畫）。</li>
             <li><b>查核表是本分頁專用的另一份題庫</b>（工具列「查核表設定」，標題為「查核表設定（○○-新供應商）」）：系統已自動建立預設內容<b>4 類 8 項、單項滿分 10 分、總分 80 分</b>——A.管理（認證／品質手冊與內部稽核）、B.品質（產品追溯／檢驗能力／儀器校驗／不良品隔離）、C.交期（出車收送貨）、D.出貨（待驗品·合格品·廢品隔離與標籤）。管理員可自行增刪、改文字與改單項滿分，與「稽核批次」的 15 項題庫<b>各自獨立、互不影響</b>，也<b>依範疇（外包加工／採購）各自一份</b>。</li>
             <li>自評/稽核權重與合格率門檻同樣在該設定畫面調整（初始值沿用與稽核批次相同的 自評×0.3＋稽核×0.7、≥75% 判合格，使用者未指定故取此為預設，可自行改）。<b>已完成評分的紀錄會凍結當時的題庫內容</b>，之後調整不影響舊紀錄。</li>
+        </ul>
+
+        <h4>一之二、服務分數（定期評核的 服務20%）</h4>
+        <ul>
+            <li>服務分數是「供應商之相關服務分數」，<b>系統算不出來</b>，要由生管／採購人工評分：在「定期評核」工具列按<b>「服務分數」</b>，選年度與期別（<b>上／下半年各一次</b>，與定期評核同一個口徑），填 <b>0~100 分</b>，系統再換算成總分裡的服務分（服務比例 20 時，填 80 → 16 分）。</li>
+            <li><b>沒有填的廠商一律視同滿分</b>，不會因為還沒評分就被扣分；畫面上會標「未評」讓你看得出來哪幾家還沒評。把格子<b>清空</b>＝回到未評（不是 0 分）。</li>
+            <li>可<b>勾選多家廠商→填分數→按「套用到勾選的廠商」</b>一次設定，最後按「儲存」才會寫入。有稽核登錄權限者即可登錄。</li>
         </ul>
 
         <h4>二、定期評核（月不良／遲交率，ERP 自動算）</h4>
@@ -907,7 +1052,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <li><b>組成</b>：清冊＝<b>納管廠商</b>（固定要稽核）∪ <b>手動列入</b>（不需納管但認定合格者，靠定期評核績效監控）。清單<b>每頁 10 家</b>、下方可翻頁；匯出 CSV／列印清冊皆為全部廠商，不受翻頁影響。</li>
             <li><b>評核等級</b>：建議等級來自定期評核全年成績；可勾選<b>批次設定採用等級</b>覆寫建議，或清除改回建議。</li>
             <li><b>備註（老闆指定／客戶指定）</b>：等級<b>未達標</b>（＝等級設定中<b>最低的那一階</b>，目前設 A/B/C 三級時就是 <b>C</b>；若改成 A/B/C/D 四級就是 D；含當年度無資料而<b>無等級</b>者）一律<b>預設顯示「老闆指定」</b>，說明它為何仍留在合格清冊；可自行改選「客戶指定」或清成（無）。達標者預設空白。改選即存，CSV 與列印清冊都會帶出這欄（原本的「廠商備註」欄已取消）。</li>
-            <li><b>檢查兩年未交易外包廠</b>：列出納管/在冊、有發包史但最後發包超過兩年的外包廠（顯示最後發包日）；<b>需你勾選確認</b>後才移除（取消納管＋移出清冊＋刪未稽核對象），不會自動靜默移除。</li>
+            <li><b>檢查三年未交易外包廠</b>（2-PH-01 6.3.5）：列出納管/在冊、有發包史但最後發包超過<b>三年</b>的外包廠（顯示最後發包日）；<b>需你勾選確認</b>後才移除（取消納管＋移出清冊＋刪未稽核對象），不會自動靜默移除。</li>
         </ul>
 
         <div class="tip">
@@ -935,7 +1080,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 
         <h4>六、權限角色</h4>
         <ul>
-            <li><b>稽核檢閱</b>：檢視/歷史/統計/匯出；<b>稽核登錄</b>：＋加入/移除對象、登錄稽核、上傳附件、清冊維護；<b>稽核管理員</b>：＋稽核員/週期/附件/AS綁定/門檻設定、兩年未交易移除；<b>管理者</b>固定全權。</li>
+            <li><b>稽核檢閱</b>：檢視/歷史/統計/匯出；<b>稽核登錄</b>：＋加入/移除對象、登錄評鑑、上傳附件、清冊維護、<b>服務分數登錄</b>；<b>稽核管理員</b>：＋稽核員/週期/附件/AS綁定、門檻設定（含計分比例與等級意義）、三年未交易移除、已廢止表單開關；<b>管理者</b>固定全權。</li>
             <li><b>稽核登錄／稽核管理員都會依範疇收斂</b>：只有角色、卻沒被登記成該範疇的稽核員（管理員則另可由生管／採購部門綁定推導），就不能操作那一邊；詳見上方「○、範疇切換」。週期設定、附件路徑、AS 文件綁定是兩邊共用的基礎設定，不隨範疇收斂。</li>
         </ul>
         <div style="font-size:11px;color:#8a6d45;margin-top:8px;">列印文件標頭一律取「本公司」（master_data 客戶分頁設為本公司之客戶全名/發票用）。</div>
@@ -983,7 +1128,7 @@ function setScope(s){
     loadMeta(function(){ reloadCurrentTab(); });
 }
 function reloadCurrentTab(){
-    var t = $('.va-tab.active').data('tab');
+    var t = $('.va-tab.active').data('tab') || 'newvendor';
     if (t === 'audit') loadRound();
     else if (t === 'newvendor') loadAdRound();
     else if (t === 'eval') { loadEvVendors($('#evKw').val()||''); $('#evSingle,#evCards,#evPager').hide(); $('#evEmpty').hide(); }
@@ -1049,7 +1194,13 @@ function loadMeta(cb){
         // 全部依範疇收斂，改用 canAdminScope，避免顯示了按鈕但點下去被後端擋。用 toggle 而非 show，
         // 因為現在切換範疇後這些權限可能從有變沒有，需要能連帶隱藏回去。
         $('#btnCycle,#btnAttachSet,#btnAsDoc').toggle(!!m.perms.canAdmin);
-        $('#btnAuditor,#btnChecklist,#btnNvChecklist,#btnSignSetting,#pkManageGrp,#evSet').toggle(!!m.perms.canAdminScope);
+        $('#btnAuditor,#btnChecklist,#btnNvChecklist,#btnSignSetting,#pkManageGrp,#evSet,#btnLegacy').toggle(!!m.perms.canAdminScope);
+        $('#evSvcBtn').toggle(!!m.perms.canEdit);
+        // 已廢止表單（2-PH-01-03／2-PH-01-06）：分頁上方紅字橫幅直接列出廢止日期與理由（取自 as_document）
+        var vd = (m.legacy_docs||[]).map(function(d){
+            return esc(d.doc_no)+' '+esc(d.doc_name)+(d.obsolete_date?('，'+fmtDate(d.obsolete_date)+' 廢止'):'');
+        }).join('；');
+        $('#voidDocsAudit,#voidDocsPlan').html(vd||'已廢止');
         var $ey = $('#evYear').empty(), $ry = $('#rsYear').empty(), $py = $('#planYear').empty();
         for (var yy=m.cur_year; yy>=m.cur_year-5; yy--){ $ey.append('<option value="'+yy+'">'+yy+'</option>'); $ry.append('<option value="'+yy+'">'+yy+'</option>'); $py.append('<option value="'+yy+'">'+yy+'</option>'); }
         $ey.val(m.cur_year); $ry.val(m.cur_year); $py.val(m.cur_year);
@@ -1135,14 +1286,14 @@ function loadAdRound(){
 }
 function renderAdPrintHead(year, half){
     $('#adListPrintHead').html('<div class="co">'+esc(META.company_name||'')+'</div>'
-        + '<div class="tt">新供應商評鑑清單</div>'
+        + '<div class="tt">供應商評鑑清單</div>'
         + '<div class="sub">'+year+' 年　'+(half===1?'上半年':'下半年')+'（'+scopeLabel(CUR_SCOPE)+'）</div>');
 }
 function renderAdStat(res){
     var lab = res.year+' '+(res.half===1?'上半年':'下半年');
     $('#adDen').text(res.stat.den); $('#adNum').text(res.stat.num);
     var $r = $('#adRate');
-    if (res.stat.value === null){ $r.text('—'); $('#adHint').text(lab+(res.round_exists?'：尚無新供應商評鑑對象':'：本期尚未建立')); }
+    if (res.stat.value === null){ $r.text('—'); $('#adHint').text(lab+(res.round_exists?'：尚無供應商評鑑對象':'：本期尚未建立')); }
     else { var v = Math.round(res.stat.value*10)/10; $r.text(v+'%'); $('#adHint').text(lab+'：'+res.stat.num+' / '+res.stat.den+' 已完成'); }
 }
 function renderAdTargets(){
@@ -1169,7 +1320,7 @@ function renderAdTargets(){
         if (PERMS.canEdit) html += '<span class="va-op" style="color:#DD5138;" onclick="removeTarget('+t.target_id+')"><i class="fa fa-times"></i>移除</span>';
         html += '</td></tr>';
     });
-    $('#adBody').html(html || '<tr><td colspan="10" style="padding:16px;color:#8a6d45;">本期尚無新供應商評鑑對象，請按「新增供應商評鑑」挑選</td></tr>');
+    $('#adBody').html(html || '<tr><td colspan="10" style="padding:16px;color:#8a6d45;">本期尚無供應商評鑑對象，請按「新增供應商評鑑」挑選</td></tr>');
 }
 $('#adBtnCsv').on('click', function(){
     var rows = [['廠商編號','廠商名稱','加工項目','新增日期','稽核狀態','稽核日','綜合合格率','判定','稽核員','報告編號','備註']];
@@ -1184,7 +1335,7 @@ $('#adBtnCsv').on('click', function(){
     }).join('\r\n');
     var a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8;'}));
-    a.download = '新供應商評鑑_'+$('#adYearSel').val()+'_H'+$('#adHalfSel').val()+'.csv';
+    a.download = '供應商評鑑_'+$('#adYearSel').val()+'_H'+$('#adHalfSel').val()+'.csv';
     a.click();
 });
 
@@ -1323,7 +1474,7 @@ function openRec(tid){
             : {items:META.items, total_max:META.total_max, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate});
         CUR_PROD_TYPE = t.prod_type || null;
         CUR_REC = t;
-        $('#recTitle').text((nvRec?'新供應商評鑑表單：':'稽核評鑑表單：')+t.maker_id+'（'+t.maker_id_no+'）');
+        $('#recTitle').text('供應商評鑑表單：'+t.maker_id+'（'+t.maker_id_no+'）');
         // 新供應商評鑑不列入年度計畫，預定稽核月份欄位沒有意義(後端也一律寫 NULL)，直接隱藏避免誤填
         $('#recPlanMonth').closest('div').toggle(!nvRec);
         $('#recPlanMonth').val(t.plan_month||'');
@@ -1340,9 +1491,13 @@ function openRec(tid){
         $au.val(t.auditor||'');
         $('#recScopeHint').text('本供應商屬「'+(t.scope_label||'')+'」'+((res.auditors||[]).length?'':'—尚未設定稽核員，請先按工具列「稽核員設定」'));
         $('#recSelfEval').val(t.self_evaluator||''); $('#recReport').val(t.report_no||'');
-        $('#recConclusion').val(t.conclusion||''); $('#recNote').val(t.note||'');
+        $('#recNote').val(t.note||'');
         $('input[name=recReviewType]').prop('checked', false);
-        if (t.review_type) $('input[name=recReviewType][value="'+t.review_type+'"]').prop('checked', true);
+        // 已停用的舊類別(供應商自主評核/異常檢核)不在可選清單裡，只把它寫成提示文字，不會因為存檔被偷偷改掉
+        var rtLegacy = (t.review_type && !(META.review_types||{})[t.review_type])
+            ? ((META.legacy_labels||{})[t.review_type] || t.review_type) : '';
+        $('#recReviewLegacy').text(rtLegacy ? ('原紀錄類別：'+rtLegacy+'（此類別已停用，請改選上面兩種）') : '').toggle(!!rtLegacy);
+        if (t.review_type && !rtLegacy) $('input[name=recReviewType][value="'+t.review_type+'"]').prop('checked', true);
         renderAttach(t.target_id, res.attaches||[]);
         renderForm(t.scores||{});
         renderRecStatus(t);
@@ -1411,7 +1566,7 @@ function renderForm(scores){
     var html='';
     var cfg = CUR_CFG || {items:META.items};
     cfg.items.forEach(function(cat){
-        html+='<tr class="af-cat"><td class="af-q">'+esc(cat[1])+'</td><td class="af-sc af-self-col">自評</td><td class="af-sc af-audit-col">稽核</td></tr>';
+        html+='<tr class="af-cat"><td class="af-q">'+esc(cat[1])+'</td><td class="af-sc af-self-col">自評</td><td class="af-sc af-audit-col">評鑑分數</td></tr>';
         cat[2].forEach(function(it){
             var iid=it[0], no=it[1], q=it[2], mx=it[3], s=scores[iid]||{};
             html+='<tr data-iid="'+iid+'">';
@@ -1425,14 +1580,9 @@ function renderForm(scores){
     applyReviewTypeCols();
     recompute();
 }
-/** 異常檢核只需稽核分：切換審查類別時隱藏/顯示自評欄（僅畫面隱藏，資料仍在，切回其他類別會還原）；
- *  供應商自主評核對應的稽核狀況固定是「自我評量」，選到此審查類別時自動帶入。 */
-function applyReviewTypeCols(){
-    var rt = $('input[name=recReviewType]:checked').val();
-    $('#afTable').toggleClass('va-abnormal', rt==='abnormal');
-    if (rt === 'self') $('#recMode').val('self');
-}
-$(document).on('change', 'input[name=recReviewType]', applyReviewTypeCols);
+/** 評鑑類別（實地評鑑／限定評鑑）兩種都要填自評分與評鑑分數；
+ *  舊的「異常檢核（僅需稽核分）」與「供應商自主評核」2026-10-01 已取消，故不再有欄位隱藏/連動。 */
+function applyReviewTypeCols(){ /* 保留函式名供既有呼叫端使用，目前無須特別處理 */ }
 function collectScores(){
     var scores={};
     $('#afBody tr[data-iid]').each(function(){
@@ -1454,14 +1604,14 @@ function quickFillScore(kind){
     recompute();
 }
 function quickClearScore(kind){
-    if (!confirm((kind==='self'?'自評分':'稽核分')+'全部清空？（清空後仍可個別重新填寫）')) return;
+    if (!confirm((kind==='self'?'自評分':'評鑑分數')+'全部清空？（清空後仍可個別重新填寫）')) return;
     $('#afBody .af-'+kind).each(function(){ $(this).val(''); scoreCheck(this); });
     recompute();
 }
 function recompute(){
     var cfg = CUR_CFG || {items:META.items, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
     var pass=cfg.pass_rate, sw=cfg.self_w, aw=cfg.audit_w, scores=collectScores();
-    var rows='<table><tr><th>分類</th><th>滿分</th><th>自評分</th><th>稽核分</th><th>自評率</th><th>稽核率</th></tr>';
+    var rows='<table><tr><th>分類</th><th>滿分</th><th>自評分</th><th>評鑑分數</th><th>自評率</th><th>評鑑率</th></tr>';
     var tSelf=0,tAudit=0,tMax=0;
     cfg.items.forEach(function(cat){
         var items=cat[2], cMax=0, cSelf=0, cAudit=0;
@@ -1473,9 +1623,44 @@ function recompute(){
     var selfR=tMax?Math.round(tSelf/tMax*1000)/10:0, auditR=tMax?Math.round(tAudit/tMax*1000)/10:0;
     var overall=Math.round((selfR*sw+auditR*aw)*10)/10, ok=overall>=pass;
     rows+='<tr class="af-total"><td>總成績</td><td>'+tMax+'</td><td>'+tSelf+'</td><td>'+tAudit+'</td><td>'+selfR+'%</td><td>'+auditR+'%</td></tr></table>';
-    rows+='<div style="margin-top:6px;">綜合合格率（自評×'+sw+'＋稽核×'+aw+'）：<b style="font-size:15px;">'+overall+'%</b>　判定：'
+    rows+='<div style="margin-top:6px;">綜合評鑑分數（自評×'+sw+'＋評鑑×'+aw+'）：<b style="font-size:15px;">'+overall+'%</b>　判定：'
         +(ok?'<span class="af-judge-pass">合格 (≥'+pass+'%)</span>':'<span class="af-judge-fail">不合格 (<'+pass+'%)</span>')+'</div>';
     $('#afSummary').html(rows);
+    renderAutoConclusion(tMax ? overall : null, pass);
+}
+/** 建議評鑑結果＝由綜合評鑑分數自動判定（門檻＝查核表設定的「合格分數」）。
+ *  判定規則與後端 vendor_audit_auto_conclusion() 完全相同，實際存進資料庫的值一律由後端自己算
+ *  （這裡只是讓使用者當下就看到結果，前端不送 conclusion 給後端）。 */
+var CUR_CONCLUSION = '';
+/* 評鑑狀況／評鑑類別／建議結論的顯示文字一律查後端帶來的對照表（META.audit_modes/review_types/
+   legacy_labels/conclusions），**不要在前端再寫一份寫死的對照表**——那份會在後端改了之後繼續顯示舊名稱
+   而且不報錯（鐵律4）。查不到就原樣顯示，舊資料不會變空白。 */
+function vaModeLabel(v){
+    if (!v) return '—';
+    var m = (META&&META.audit_modes)||{}, l = (META&&META.legacy_labels)||{};
+    return m[v] || l[v] || v;
+}
+function vaReviewLabel(v){
+    if (!v) return '—';
+    var m = (META&&META.review_types)||{}, l = (META&&META.legacy_labels)||{};
+    return m[v] || l[v] || v;
+}
+function vaConcLabel(v){
+    if (!v) return '';
+    var m = (META&&META.conclusions)||{};
+    return m[v] || v;
+}
+function renderAutoConclusion(overall, pass){
+    var map = (META && META.conclusions) || {};
+    if (overall === null || overall === undefined || !$('#afBody tr[data-iid]').length){
+        CUR_CONCLUSION = '';
+        $('#recConclusion').html('<span style="color:#8a6d45;">—（填完評鑑分數後自動判定）</span>');
+        return;
+    }
+    CUR_CONCLUSION = (overall >= pass) ? '合格' : '不合格';
+    var lab = map[CUR_CONCLUSION] || CUR_CONCLUSION;
+    $('#recConclusion').html('<b style="color:'+(CUR_CONCLUSION==='合格'?'#2f7d32':'#DD5138')+';">'+esc(lab)+'</b>'
+        + '<span style="font-size:11px;color:#8a6d45;">（綜合 '+overall+'% '+(overall>=pass?'≥':'<')+' 合格分數 '+pass+'%）</span>');
 }
 function submitRec(){
     // 儲存(草稿)：只做基本檢查，不檢查評分內容/結果——完整性檢查留給「完成」按鈕
@@ -1487,31 +1672,30 @@ function submitRec(){
     $.post(API, {action:'record_target', target_id:recTid, audit_date:$('#recDate').val(), plan_month:$('#recPlanMonth').val(),
         audit_mode:$('#recMode').val(), auditor:$('#recAuditor').val(), review_type:$('input[name=recReviewType]:checked').val()||'',
         self_evaluator:$('#recSelfEval').val(), report_no:$('#recReport').val(),
-        conclusion:$('#recConclusion').val(), note:$('#recNote').val(), scores:JSON.stringify(scores)},
+        note:$('#recNote').val(), scores:JSON.stringify(scores)},
     function(res){
         if(!res.ok){ alert(res.error||'儲存失敗'); return; }
         closeMask('recMask'); loadRound();
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
-/** 完成前的完整性檢查：稽核員/建議結論/所有項次自評稽核分皆需填寫且在單項滿分內，回傳缺漏說明陣列(空=通過) */
+/** 完成前的完整性檢查：稽核員/評鑑日期/評鑑類別/所有項次自評分與評鑑分數皆需填寫且在單項滿分內，回傳缺漏說明陣列(空=通過)
+ *  建議評鑑結果已改為自動判定，不再是必填項目 */
 function recCompleteErrors(){
     var errs=[];
     if (!$('#recAuditor').val()) errs.push('請填寫稽核員');
-    if (!$('#recDate').val()) errs.push('請先填寫稽核日期');
-    if (!$('#recConclusion').val()) errs.push('請選擇建議評鑑結果');
-    if (!$('input[name=recReviewType]:checked').length) errs.push('請選擇審查類別（人員實地審查／供應商自主評核／異常檢核）');
-    var reviewType = $('input[name=recReviewType]:checked').val();
+    if (!$('#recDate').val()) errs.push('請先填寫評鑑日期');
+    if (!$('input[name=recReviewType]:checked').length) errs.push('請選擇評鑑類別（實地評鑑／限定評鑑）');
     var scores=collectScores(), badSelf=0, badAudit=0;
     (CUR_CFG&&CUR_CFG.items||[]).forEach(function(cat){
         cat[2].forEach(function(it){
             var iid=it[0], mx=it[3], s=scores[iid]||{};
             var ok=function(v){ return v!=null && v!=='' && /^\d+$/.test(String(v)) && +v>=0 && +v<=mx; };
-            if(reviewType!=='abnormal' && !ok(s.self)) badSelf++;
+            if(!ok(s.self)) badSelf++;
             if(!ok(s.audit)) badAudit++;
         });
     });
     if (badSelf) errs.push('尚有 '+badSelf+' 項自評分未填寫或超出範圍');
-    if (badAudit) errs.push('尚有 '+badAudit+' 項稽核分未填寫或超出範圍');
+    if (badAudit) errs.push('尚有 '+badAudit+' 項評鑑分數未填寫或超出範圍');
     return errs;
 }
 function completeRec(){
@@ -1521,7 +1705,7 @@ function completeRec(){
     $.post(API, {action:'complete_target', target_id:recTid, audit_date:$('#recDate').val(), plan_month:$('#recPlanMonth').val(),
         audit_mode:$('#recMode').val(), auditor:$('#recAuditor').val(), review_type:$('input[name=recReviewType]:checked').val()||'',
         self_evaluator:$('#recSelfEval').val(), report_no:$('#recReport').val(),
-        conclusion:$('#recConclusion').val(), note:$('#recNote').val(), scores:JSON.stringify(scores)},
+        note:$('#recNote').val(), scores:JSON.stringify(scores)},
     function(res){
         if(!res.ok){ alert(res.error||'完成失敗'); return; }
         alert(res.status==='approved' ? '已完成並自動核可' : '已完成，已自動通知主管簽核');
@@ -1544,8 +1728,7 @@ function openSignMask(tid){
         var t = res.target, cfg = t.checklist_cfg, c = computeCats(t.scores||{}, cfg);
         SIGN_TID = tid;
         $('#signTitle').text('供應商稽核簽核：'+t.maker_id+'（'+t.maker_id_no+'）');
-        var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'—';
-        $('#signInfo').html('稽核日期：'+(fmtDate(t.audit_date)||'—')+'　稽核狀況：'+modeL+'　稽核員：'+esc(t.auditor||'—')+'　建議結論：'+esc(t.conclusion||'—'));
+        $('#signInfo').html('評鑑日期：'+(fmtDate(t.audit_date)||'—')+'　評鑑狀況：'+vaModeLabel(t.audit_mode)+'　稽核員：'+esc(t.auditor||'—')+'　建議結論：'+esc(vaConcLabel(t.conclusion)||'—'));
         var rows='';
         c.cats.forEach(function(k){ rows+='<tr><td class="af-q">'+esc(k.name)+'</td><td class="af-sc">'+k.max+'</td><td class="af-sc">'+k.self_rate+'%</td><td class="af-sc">'+k.audit_rate+'%</td></tr>'; });
         $('#signCatBody').html(rows);
@@ -1656,30 +1839,32 @@ function vaNvBadgeHtml(isNv){
     return '<div style="position:absolute;right:0;top:0;border:2px solid #000;border-radius:4px;'
          + 'padding:4px 12px;font-size:15px;font-weight:bold;letter-spacing:2px;line-height:1.2;white-space:nowrap;">新供應商評鑑</div>';
 }
-/** 查核表單一版本(mode='self'=供應商自主評核版,全部留白；mode='site'=人員實地審查版,顯示分數) */
+/** 查核表單一版本(mode='self'=給供應商自行填寫的空白自評版；mode='site'=稽核員評鑑版,顯示評鑑分數)
+ *  注意：這個 mode 只是「印哪一個版本的表」，與紀錄上的「評鑑類別」(o.reviewType) 是兩回事 */
 function auditFormOneVersion(o, mode){
     var cfg = o.cfg || CUR_CFG || {items:META.items, total_max:META.total_max, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
     var docName = (META.as_doc && META.as_doc.doc_name) || '供應商評鑑稽核查表';
     var head = '<div style="position:relative;text-align:center;">' + vaNvBadgeHtml(o.isNv)
         + '<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
         + '<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
-    var reviewMap = {site:'人員實地審查', self:'供應商自主評核', abnormal:'異常檢核'};
-    var reviewBoxes = ['site','self','abnormal'].map(function(k){ return (mode===k?'☑':'□')+reviewMap[k]; }).join('　');
+    // 評鑑類別（實地評鑑／限定評鑑）是「這一筆紀錄」的屬性，兩個版本(自評版/評鑑版)都印同一個勾選結果，
+    // 不再拿「印的是哪個版本」當評鑑類別（舊版的 self/abnormal 類別已於 2026-10-01 取消）
+    var reviewMap = (META&&META.review_types)||{site:'實地評鑑', limited:'限定評鑑'};
+    var reviewBoxes = Object.keys(reviewMap).map(function(k){ return ((o.reviewType===k)?'☑':'□')+reviewMap[k]; }).join('　')
+        + (o.reviewType && !reviewMap[o.reviewType] ? '　☑'+vaReviewLabel(o.reviewType) : '');
     var prodMap = {raw:'原料', outsource:'委外加工件', packaging:'包材'};
     var prodBoxes = ['raw','outsource','packaging'].map(function(k){ return (o.prodType===k?'☑':'□')+prodMap[k]; }).join('　');
-    var modeMap = {first:'首次稽核', again:'次稽核', self:'自我評量'};
-    // 供應商自主評核版(mode==='self')本來就只有「自我評量」這一種可能，固定勾選；
-    // 人員實地審查/異常檢核版依該筆紀錄真實的稽核狀況(o.mode)顯示（可能是首次或次稽核）
-    var modeForBoxes = (mode === 'self') ? 'self' : o.mode;
-    var modeBoxes = ['first','again','self'].map(function(k){ return (modeForBoxes===k?'☑':'□')+modeMap[k]; }).join('　');
+    var modeMap = (META&&META.audit_modes)||{first:'首次評核', again:'次評核'};
+    var modeBoxes = Object.keys(modeMap).map(function(k){ return ((o.mode===k)?'☑':'□')+modeMap[k]; }).join('　')
+        + (o.mode && !modeMap[o.mode] ? '　☑'+vaModeLabel(o.mode) : '');
     var info = '<table class="pf-info"><tr>'
         + '<td>供應商：'+(o.maker?esc(o.maker):'________________')+'</td>'
         + '<td>日期：'+(o.dateStr?esc(o.dateStr):'____ / ____ / ____')+'</td></tr>'
-        + '<tr><td colspan="2">審查類別：'+reviewBoxes+'</td></tr>'
+        + '<tr><td colspan="2">評鑑類別：'+reviewBoxes+'</td></tr>'
         + '<tr><td colspan="2">生產類別：'+prodBoxes+'</td></tr>'
-        + '<tr><td colspan="2">稽核狀況：'+modeBoxes+'</td></tr></table>';
+        + '<tr><td colspan="2">評鑑狀況：'+modeBoxes+'</td></tr></table>';
     var showScores = (mode === 'site');
-    var scoreLabel = mode==='site' ? '稽核分' : '自評分';
+    var scoreLabel = mode==='site' ? '評鑑分數' : '自評分';
     var tSelf = 0, tAudit = 0;
     var rows = '<table class="pf" style="table-layout:fixed;"><colgroup><col style="width:60px;"><col style="width:34px;"><col>'
         + '<col style="width:70px;"><col style="width:100px;"></colgroup>'
@@ -1709,7 +1894,7 @@ function auditFormOneVersion(o, mode){
         + '<td style="width:50%;">製表：'+madeCell+'</td></tr></table>';
     return head + info + rows + sign;
 }
-/** 查核表列印一律一次印兩個版本：供應商自主評核版(全空白給供應商填)＋人員實地審查版(顯示分數,製表=稽核員) */
+/** 查核表列印一律一次印兩個版本：空白自評版(給供應商自己填)＋評鑑版(顯示評鑑分數,製表=稽核員) */
 function auditFormHTML(o){
     o = o || {};
     return '<div style="page-break-after:always;">'+auditFormOneVersion(o,'self')+'</div>'+auditFormOneVersion(o,'site');
@@ -1719,7 +1904,10 @@ function auditFormHTML(o){
 /** extraCss：額外CSS，供混合橫直式列印用「具名頁」覆蓋(比照 meeting_record.php 的 egPrintWindow/doPrintFullRecord，
  *  同一份列印工作內用 @page 具名規則(如 @page va-landscape{size:A4 landscape;...})+對應元素套 page:va-landscape
  *  達成同一次列印混排直式/橫式，實測穩定可行，不需要拆成多個列印視窗)。 */
-function writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount, extraCss){
+/* selfTab＝把列印版面寫進「本分頁自己」而不是新視窗（深連結 ?blank_form=1 用，見檔尾說明）。
+   差別只有列印的觸發時機：寫進別的視窗時那份文件才剛開始載入，所以等它的 window.onload；
+   寫進本分頁時 load 早就跑完了，**不可以再靠 onload**（等不到就靜默不列印），改用 setTimeout。 */
+function writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount, extraCss, selfTab){
     var asTxt = String(docNo||'').replace(/['\\]/g,'');
     var css = 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;padding:14px;}'
         + 'table.pf{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}'
@@ -1740,41 +1928,51 @@ function writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount, ext
         + '}'
         + '@page va-attach{size:A4 portrait;margin:12mm 8mm 16mm; @bottom-right{ content:""; } @bottom-left{ content:""; }}'
         + (extraCss||'') + '}';
-    w.document.open();
-    w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
-        + bodyHtml
-        + '<scr'+'ipt>window.onload=function(){'
-        + (noPageCount ? '' :
+    var trig = (noPageCount ? '' :
           'var onePageA4=(297-28)*96/25.4;'
         + 'if(document.body.scrollHeight>onePageA4*0.92){'
         + 'var st=document.createElement(\'style\');'
         + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
         + 'document.head.appendChild(st);}')
-        + 'setTimeout(function(){window.print();},150);};</scr'+'ipt></body></html>');
+        + 'setTimeout(function(){window.print();},150);';
+    w.document.open();
+    w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
+        + bodyHtml
+        + '<scr'+'ipt>'
+        + (selfTab ? 'setTimeout(function(){'+trig+'},250);' : 'window.onload=function(){'+trig+'};')
+        + '</scr'+'ipt></body></html>');
     w.document.close();
 }
+/* VA_SELF_PRINT：深連結「空白表單列印」模式。**這一頁是別頁的連結開出來的新分頁，沒有使用者手勢，
+   window.open() 會被瀏覽器的彈出視窗封鎖直接擋掉而且靜默失敗**（使用者只看到「按了沒反應」），
+   所以這種模式一律就地寫進本分頁。版面產生器完全沿用同一支，列印出來與頁面上那顆按鈕一模一樣（鐵律4）。 */
+var VA_SELF_PRINT = false;
 function openPrintWindow(bodyHtml, title, docNo, landscape, noPageCount, extraCss){
-    var w = window.open('', '_blank');
+    var w = VA_SELF_PRINT ? window : window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗以列印'); return null; }
-    writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount, extraCss);
+    writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount, extraCss, VA_SELF_PRINT);
     return w;
 }
-function printBlankForm(){
-    var cfg = {items:META.items, total_max:META.total_max, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
-    openPrintWindow(auditFormHTML({cfg:cfg}), '供應商評鑑稽核查表', (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', false, true);
+function printBlankForm(nv){
+    // nv=true＝「供應商評鑑」分頁專用題庫(META.nv)；不帶參數＝稽核批次的 15 項題庫(既有呼叫端與 ?blank_form=1 深連結不變)
+    var src = (nv && META.nv) ? META.nv : META;
+    var cfg = {items:src.items, total_max:src.total_max, self_w:src.self_w, audit_w:src.audit_w, pass_rate:src.pass_rate};
+    openPrintWindow(auditFormHTML({cfg:cfg}), '供應商評鑑表', (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', false, true);
 }
 function printCurrentForm(){
     openPrintWindow(auditFormHTML({
-        maker: $('#recTitle').text().replace('稽核評鑑表單：','').replace('新供應商評鑑表單：',''),
+        maker: $('#recTitle').text().replace('供應商評鑑表單：',''),
         isNv: !!(CUR_REC && CUR_REC.is_adhoc),
         dateStr: fmtDate($('#recDate').val()), scores: collectScores(), mode: $('#recMode').val(),
+        reviewType: $('input[name=recReviewType]:checked').val() || (CUR_REC && CUR_REC.review_type) || '',
         prodType: CUR_PROD_TYPE, auditorName: $('#recAuditor').val(),
         mgrApproved: !!(CUR_REC && CUR_REC.status==='approved' && CUR_REC.signed_by_name),
         mgrName: CUR_REC && CUR_REC.signed_by_name, mgrDate: fmtDate($('#recDate').val()),
         mgrIsDeputy: CUR_REC && !!CUR_REC.signed_is_deputy
     }), '供應商評鑑稽核查表', (CUR_REC&&CUR_REC.as_doc_no)||(META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', false, true);
 }
-$('#btnBlank').on('click', printBlankForm);
+$('#btnBlank').on('click', function(){ printBlankForm(false); });
+$('#btnNvBlank').on('click', function(){ printBlankForm(true); });
 
 /* ---------- 評鑑記錄表（2-PH-01-03，雷達圖）---------- */
 var RS = null, rsChart = null;
@@ -1798,10 +1996,10 @@ function openRecordSheet(tid){
         RS={tid:tid, t:t, c:c, cfg:cfg, attaches:res.attaches||[]};
         var doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
         $('#rsTitle').text(docName+'：'+t.maker_id+'（'+t.maker_id_no+'）');
-        var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'—';
+        var modeL=vaModeLabel(t.audit_mode);
         $('#rsInfo').html((t.is_adhoc ? '<span style="float:right;border:2px solid #8A5A2B;border-radius:4px;padding:2px 10px;'
                 + 'font-weight:bold;letter-spacing:2px;color:#8A5A2B;">新供應商評鑑</span>' : '')
-            + '供應商：<b>'+esc(t.maker_id)+'</b>（'+esc(t.maker_id_no)+'）　稽核日期：'+(fmtDate(t.audit_date)||'—')+'　稽核狀況：'+modeL+'　稽核員：'+esc(t.auditor||'—'));
+            + '供應商：<b>'+esc(t.maker_id)+'</b>（'+esc(t.maker_id_no)+'）　評鑑日期：'+(fmtDate(t.audit_date)||'—')+'　評鑑狀況：'+esc(modeL)+'　評鑑類別：'+esc(vaReviewLabel(t.review_type))+'　稽核員：'+esc(t.auditor||'—'));
         var rows='';
         c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*cfg.self_w+k.audit_rate*cfg.audit_w)*10)/10;
             rows+='<tr><td class="af-q">'+esc(k.name)+'</td><td class="af-sc">'+k.max+'</td><td class="af-sc">'+k.self_rate+'%</td><td class="af-sc">'+k.audit_rate+'%</td><td class="af-sc">'+comb+'%</td></tr>'; });
@@ -1883,11 +2081,11 @@ function vaJudgeBadgeHtml(pass){
 function recordSheetHTML(){
     if (!RS) return '';
     var t=RS.t, c=RS.c, cfg=RS.cfg, doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
-    var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'____';
+    var modeL=t.audit_mode?vaModeLabel(t.audit_mode):'____';
     var head='<div style="position:relative;text-align:center;">' + vaNvBadgeHtml(!!t.is_adhoc)
         +'<div style="font-size:25px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
         +'<div style="font-size:19px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
-    var info='<table class="pf-info"><tr><td>供應商：'+esc(t.maker_id)+'（'+esc(t.maker_id_no)+'）</td><td>加工項目：'+esc(t.main_cat_name||'—')+'</td><td>稽核日期：'+(fmtDate(t.audit_date)||'____')+'</td><td>稽核狀況：'+esc(modeL)+'</td></tr></table>';
+    var info='<table class="pf-info"><tr><td>供應商：'+esc(t.maker_id)+'（'+esc(t.maker_id_no)+'）</td><td>加工項目：'+esc(t.main_cat_name||'—')+'</td><td>評鑑日期：'+(fmtDate(t.audit_date)||'____')+'</td><td>評鑑狀況：'+esc(modeL)+'</td></tr></table>';
     var rows='<table class="pf rs-table" style="table-layout:fixed;"><colgroup><col style="width:38%;"><col style="width:14%;"><col style="width:16%;"><col style="width:16%;"><col style="width:16%;"></colgroup>'
         +'<thead><tr><th>評鑑項目</th><th>單項滿分</th><th>自評合格率</th><th>稽核合格率</th><th>綜合合格率</th></tr></thead><tbody>';
     c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*cfg.self_w+k.audit_rate*cfg.audit_w)*10)/10;
@@ -2012,7 +2210,7 @@ async function vaBuildAttachPrintHTML(attaches){
 async function printAllDocs(){
     if (!RS) { alert('無資料'); return; }
     var docNo1 = (RS.t&&RS.t.as_doc_no)||(META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', docNo2 = (RS.t&&RS.t.record_as_doc_no)||(META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
-    var page1 = auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', isNv:!!RS.t.is_adhoc, dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode, cfg:RS.cfg, prodType:RS.t.prod_type, auditorName:RS.t.auditor,
+    var page1 = auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', isNv:!!RS.t.is_adhoc, dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode, reviewType:RS.t.review_type, cfg:RS.cfg, prodType:RS.t.prod_type, auditorName:RS.t.auditor,
         mgrApproved: !!(RS.t.status==='approved' && RS.t.signed_by_name), mgrName:RS.t.signed_by_name, mgrDate:fmtDate(RS.t.audit_date), mgrIsDeputy:!!RS.t.signed_is_deputy});
 
     var attachHtml = '';
@@ -2049,11 +2247,13 @@ $('#btnCsv').on('click', function(){
 });
 
 /* ---------- 分頁切換 ---------- */
+var VA_LEGACY = <?= $vaLegacy ? 'true' : 'false' ?>;   // 稽核批次／供應商稽核計劃兩個已廢止分頁有沒有被管理員開啟
 $('.va-tab').on('click', function(){
     $('.va-tab').removeClass('active'); $(this).addClass('active');
     var t=$(this).data('tab');
     $('#tabAudit').toggle(t==='audit'); $('#tabNewVendor').toggle(t==='newvendor');
     $('#tabEval').toggle(t==='eval'); $('#tabRoster').toggle(t==='roster'); $('#tabPlan').toggle(t==='plan');
+    if (t==='audit') loadRound();
     if (t==='newvendor') loadAdRound();
     if (t==='eval') loadEvVendors($('#evKw').val()||'');   // 切入時重抓納管廠商(納管可能剛變動)
     if (t==='roster') loadRoster();
@@ -2078,8 +2278,20 @@ function rate(v){ return v==null?'—':v+'%'; }
 /* 哪些等級被設為不合格（合格判定唯一依據，率上限只做標紅提醒） */
 function failGradeText(s){
     var f=((s&&s.grades)||[]).filter(function(g){ return g.fail; }).map(function(g){ return g.label; });
-    return f.length?('　<span style="color:#DD5138;">不合格等級：'+esc(f.join('／'))+'</span>')
-                   :'　<span style="color:#c0762c;">尚未設定哪個等級算不合格</span>';
+    return (f.length?('　<span style="color:#DD5138;">不合格等級：'+esc(f.join('／'))+'</span>')
+                   :'　<span style="color:#c0762c;">尚未設定哪個等級算不合格</span>')
+           + gradeLegendText(s);
+}
+/** 評核等級劃分與各等級代表的意義（2-PH-01 6.3.2），一律由門檻設定帶出 */
+function gradeLegendText(s){
+    var g=((s&&s.grades)||(META&&META.eval_settings&&META.eval_settings.grades)||[]);
+    if (!g.length) return '';
+    var li=g.map(function(x){
+        return '<span style="display:inline-block;margin-right:12px;"><b style="color:#8A5A2B;">'+esc(x.label)+'級</b> '
+             + '≥'+(x.min==null?0:x.min)+' 分'+(x.desc?('：'+esc(x.desc)):'')
+             + (x.fail?' <span style="color:#DD5138;">(不合格)</span>':'')+'</span>';
+    }).join('');
+    return '<div style="font-size:11px;color:#8a6d45;margin-top:3px;line-height:1.8;">評核等級劃分：'+li+'</div>';
 }
 /* 數量顯示：0 一律顯示 0（不顯示破折號，使用者要求「有進貨沒不良就是 0%」的同一原則） */
 function qty(v){ return (v==null)?'—':Number(v).toLocaleString(); }
@@ -2114,8 +2326,10 @@ function loadEval(){
         var sc=function(hf,lab){ if(!hf||hf.score==null) return '<div><span class="s-lab">'+lab+'</span> <span class="s-num" style="font-size:16px;">—</span></div>';
             return '<div><span class="s-lab">'+lab+'</span> <span class="s-num" style="font-size:18px;">'+hf.score+'</span>'
                 +'<span class="s-lab"> 分</span> <b style="font-size:16px;color:'+(hf.judge==='fail'?'#DD5138':'#8A5A2B')+';">'+(hf.grade||'—')+'</b></div>'; };
+        evApplyWeightLabels(s);
         $('#evScoreTop').html(sc(res.halves[1],'上半年')+sc(res.halves[2],'下半年')+sc(res.full,'全年(總判定)')
-            +'<div class="s-lab" style="margin-left:auto;">品質分＝'+(s.q_max||60)+'×(1−(不良＋特採)÷進貨數)、交期分＝'+(s.d_max||40)+'×(1−遲交÷進貨數)；總判定＝上下半年平均分</div>');
+            +'<div class="s-lab" style="margin-left:auto;">品質分＝'+evW(s,'q')+'×(1−(不良＋特採)÷進貨數)、交貨分＝'+evW(s,'d')+'×(1−遲交÷進貨數)、服務分＝'+evW(s,'s')+'×(服務分數÷100)；總判定＝上下半年平均分</div>'
+            +evSvcNote(res.service, s));
         var h='';
         for(var m=1;m<=12;m++){
             var d=res.months[m];
@@ -2125,14 +2339,14 @@ function loadEval(){
             h+=qtyCell(d.special, d.special_rate, ovSp(d.special_rate,s));
             h+='<td class="ev-sc">—</td>';                       // 分數只在半年/全年列計算
             h+=qtyCell(d.late, d.late_rate, ovLt(d.late_rate,s));
-            h+='<td class="ev-sc">—</td><td>—</td></tr>';
+            h+='<td class="ev-sc">—</td><td class="ev-sc">—</td><td>—</td></tr>';
             if(m===6) h+=halfRow(res.halves[1],'上半年',s);
             if(m===12) h+=halfRow(res.halves[2],'下半年',s)+halfRow(res.full,'全年（總判定）',s,true);
         }
         $('#evBody').html(h);
     }).fail(function(x){ NProgress.done(); alert('查詢失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
-/* 半年/全年彙總列：品質分(60)＋交期分(40)＋判定(等級 + 門檻合格與否) */
+/* 半年/全年彙總列：品質分＋交貨分＋服務分＋判定(等級 + 門檻合格與否)；三個權重由管理員設定 */
 function halfRow(hf,label,s,isFull){
     if(!hf) return '';
     var judge=hf.judge?(hf.judge==='pass'?'<span class="af-judge-pass">合格</span>':'<span class="af-judge-fail">不合格</span>'):'—';
@@ -2143,6 +2357,7 @@ function halfRow(hf,label,s,isFull){
         +qtyCell(hf.ng, hf.ng_rate, ovNg(hf.ng_rate,s))+qtyCell(hf.special, hf.special_rate, ovSp(hf.special_rate,s))
         +'<td class="ev-sc">'+num(hf.q_score)+'</td>'
         +qtyCell(hf.late, hf.late_rate, ovLt(hf.late_rate,s))+'<td class="ev-sc">'+num(hf.d_score)+'</td>'
+        +'<td class="ev-sc">'+num(hf.s_score)+(hf.score!=null&&!hf.svc_set?'<div style="font-weight:normal;font-size:10px;color:#c0762c;">未評</div>':'')+'</td>'
         +'<td>'+grade+'　'+judge+'</td></tr>';
 }
 
@@ -2155,6 +2370,7 @@ $('#evAll').on('click', function(){
         if(!res.ok){ alert(res.error||'載入失敗'); return; }
         EVAL_ALL=res; EVAL=null;
         var s=res.settings;
+        evApplyWeightLabels(s);
         $('#evThresh').html(res.year+' 年　全部納管廠商（'+res.vendors.length+' 家有資料，已略過無資料者）　提醒門檻：不良率≤'+s.ng_max+'%、遲交率≤'+s.late_max+'%'
             +(s.special_max<100?('、特採率≤'+s.special_max+'%'):'（特採率不判定）')+'　約定工作天 '+s.default_days+' 天（部分廠商可個別設定）'+failGradeText(s));
         $('#evSingle').hide(); $('#evEmpty').hide(); $('#evCsv').hide(); $('#evFailBox').show(); $('#evCards').css('display','grid');
@@ -2196,7 +2412,7 @@ function renderEvalCards(){
         html+='<div class="ev-card"><div class="h"><span>'+esc(v.maker_name)+'（'+esc(v.maker_id_no)+'）</span><span>'+g+'</span></div>';
         html+='<table class="ev-mini"><thead>'
             +'<tr><th rowspan="2">月</th><th rowspan="2" title="數量(PCS)：同月取被檢驗量與回廠量較大者">進貨數</th>'
-            +'<th colspan="3">品質（進料檢驗）</th><th colspan="2">交期</th><th rowspan="2">判定</th></tr>'
+            +'<th colspan="3">品質（進料檢驗）</th><th colspan="2">交貨</th><th rowspan="2">服務分</th><th rowspan="2">判定</th></tr>'
             +'<tr><th>不良數</th><th>特採數</th><th>品質分</th><th>遲交數</th><th>交期分</th></tr></thead><tbody>';
         for(var m=1;m<=12;m++){ var d=v.months[m];
             html+='<tr><td>'+m+'</td><td'+inTip(d)+'>'+qty(d.in_qty)+'</td>'
@@ -2204,7 +2420,7 @@ function renderEvalCards(){
                 +qtyCell(d.special, d.special_rate, ovSp(d.special_rate,s), 'over')
                 +'<td class="ev-sc">—</td>'
                 +qtyCell(d.late, d.late_rate, ovLt(d.late_rate,s), 'over')
-                +'<td class="ev-sc">—</td><td>—</td></tr>';
+                +'<td class="ev-sc">—</td><td class="ev-sc">—</td><td>—</td></tr>';
             if(m===6) html+=miniHalf(v.halves[1],'上半年');
             if(m===12) html+=miniHalf(v.halves[2],'下半年')+miniHalf(v.full,'全年',true);
         }
@@ -2218,7 +2434,8 @@ function miniHalf(hf,label,isFull){
     var g=(hf.score==null)?'—':('<b style="color:'+(hf.judge==='fail'?'#DD5138':'#8A5A2B')+';">'+esc(hf.grade||'—')+'</b> '+hf.score+'分');
     return '<tr class="'+(isFull?'full':'half')+'"><td>'+label+'</td><td'+inTip(hf)+'>'+qty(hf.in_qty)+'</td>'
         +qtyCell(hf.ng, hf.ng_rate, false)+qtyCell(hf.special, hf.special_rate, false)+'<td class="ev-sc">'+num(hf.q_score)+'</td>'
-        +qtyCell(hf.late, hf.late_rate, false)+'<td class="ev-sc">'+num(hf.d_score)+'</td><td>'+g+'</td></tr>';
+        +qtyCell(hf.late, hf.late_rate, false)+'<td class="ev-sc">'+num(hf.d_score)+'</td>'
+        +'<td class="ev-sc">'+num(hf.s_score)+'</td><td>'+g+'</td></tr>';
 }
 /* 全部評核 橫式列印：一頁6間(3欄×2列)，頁首公司名+文件名，右上頁碼，右下AS編號 */
 function evCardPrintHTML(v){
@@ -2230,17 +2447,18 @@ function evCardPrintHTML(v){
         var jj=hf.judge?(hf.judge==='pass'?'合格':'不合格'):'—';
         var g=(hf.score==null)?'—':((hf.grade||'—')+' '+hf.score+'分');
         return '<tr class="'+cls+'"><td>'+label+'</td><td>'+qty(hf.in_qty)+'</td><td>'+qty(hf.ng)+'</td><td>'+qty(hf.special)+'</td><td>'+num(hf.q_score)+'</td>'
-            +'<td>'+qty(hf.late)+'</td><td>'+num(hf.d_score)+'</td><td>'+g+' '+jj+'</td></tr>';
+            +'<td>'+qty(hf.late)+'</td><td>'+num(hf.d_score)+'</td><td>'+num(hf.s_score)+'</td><td>'+g+' '+jj+'</td></tr>';
     };
     var h='<div class="pc"><div class="pc-h">'+esc(v.maker_name)+'（'+esc(v.maker_id_no)+'）'
         +(v.fail?'<span class="jf">不合格</span>':'<span class="jp">合格</span>')+'</div>'
         +'<table class="pm"><thead>'
-        +'<tr><th rowspan="2">月</th><th rowspan="2">進貨數</th><th colspan="3">品質</th><th colspan="2">交期</th><th rowspan="2">判定</th></tr>'
+        +'<tr><th rowspan="2">月</th><th rowspan="2">進貨數</th><th colspan="3">品質</th><th colspan="2">交貨</th><th rowspan="2">服務分</th><th rowspan="2">判定</th></tr>'
         +'<tr><th>不良數</th><th>特採數</th><th>品質分</th><th>遲交數</th><th>交期分</th></tr></thead><tbody>';
     for(var m=1;m<=12;m++){ var d=v.months[m];
         h+='<tr><td>'+m+'</td><td>'+qty(d.in_qty)+'</td>'
             +'<td'+oNg(d.ng_rate)+'>'+qty(d.ng)+'</td><td'+oSp(d.special_rate)+'>'+qty(d.special)+'</td><td>—</td>'
-            +'<td'+oLt(d.late_rate)+'>'+qty(d.late)+'</td><td>—</td></tr>';
+            // 月列不算分數也不判定；9 欄要全部給齊（原本少印最後一欄「判定」，列印出來最右邊會空一格）
+            +'<td'+oLt(d.late_rate)+'>'+qty(d.late)+'</td><td>—</td><td>—</td><td>—</td></tr>';
         if(m===6)  h+=sumRow(v.halves[1],'上半','ph');
         if(m===12) h+=sumRow(v.halves[2],'下半','ph')+sumRow(v.full,'總判定','pf');
     }
@@ -2279,10 +2497,14 @@ function printEvalAll(){
     w.document.close();
 }
 $('#evPrint').on('click', function(){ if(EVAL_ALL) printEvalAll(); else window.print(); });
-function gradeAddRow(label, min, fail){
-    $('#stGrades').append('<div class="gr-row" style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">'
+function gradeAddRow(label, min, fail, desc){
+    $('#stGrades').append('<div class="gr-row" style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap;">'
         +'等級 <input type="text" class="gr-label" maxlength="6" value="'+esc(label||'')+'" style="width:60px;">'
         +' 分數 ≥ <input type="number" class="gr-min" step="1" min="0" max="100" value="'+(min==null?'':min)+'" style="width:70px;">'
+        // 本頁不在 eg_input_rules.js 覆蓋範圍內（見 input_rules_baseline.txt），所以不可以掛 data-eg-hint（會是死屬性）；
+        // placeholder 只放「欄位標籤」性質的字，不放長得像合法值的範例（範例寫在下面的靜態說明文字裡）
+        +' 意義 <input type="text" class="gr-desc" maxlength="60" value="'+esc(desc||'')+'" style="flex:1;min-width:220px;"'
+        +' placeholder="等級代表的意義">'
         +' <label style="margin:0;font-weight:normal;color:#DD5138;white-space:nowrap;"><input type="checkbox" class="gr-fail"'+(fail?' checked':'')+'> 視為不合格</label>'
         +' <span class="af-del" style="color:#DD5138;cursor:pointer;" onclick="$(this).closest(\'.gr-row\').remove()"><i class="fa fa-times"></i></span></div>');
 }
@@ -2333,14 +2555,164 @@ $('#evSet').on('click', function(){
     var s=(EVAL&&EVAL.settings)||META.eval_settings||{ng_max:5,late_max:30,special_max:100,default_days:7};
     $('#stLeadKw').val(''); leadLoadRows();
     $('#stNgMax').val(s.ng_max); $('#stLateMax').val(s.late_max); $('#stSpMax').val(s.special_max); $('#stDays').val(s.default_days);
-    $('#stGrades').empty(); ((s.grades&&s.grades.length)?s.grades:[{min:90,label:'A'},{min:80,label:'B'},{min:70,label:'C'},{min:0,label:'D',fail:1}]).forEach(function(g){ gradeAddRow(g.label,g.min,g.fail); });
+    $('#stWQ').val(evW(s,'q')); $('#stWD').val(evW(s,'d')); $('#stWS').val(evW(s,'s')); evWeightSum();
+    $('#stGrades').empty(); ((s.grades&&s.grades.length)?s.grades:[
+        {min:90,label:'A',desc:'合格廠商，列為優先採用之廠商'},{min:80,label:'B',desc:'合格廠商'},
+        {min:70,label:'C',desc:'要求改善之廠商'},{min:0,label:'D',fail:1,desc:'不合格廠商'}
+    ]).forEach(function(g){ gradeAddRow(g.label,g.min,g.fail,g.desc); });
     // 定期評核門檻依範疇各自獨立，標題標示目前正在編輯哪一份
     $('#evSetMask .m-head span:first').text('定期評核門檻設定（'+scopeLabel(CUR_SCOPE)+'）');
     openMask('evSetMask');
 });
+/* ---- 計分權重（品質/交貨/服務，管理員可設；畫面上的數字一律由設定帶出不寫死） ---- */
+function evW(s, k){
+    var d = {q:50, d:30, s:20}[k];
+    var v = s ? s[k+'_max'] : null;
+    v = (v===null || v===undefined || v==='') ? d : +v;
+    return (Math.round(v*10)/10);
+}
+function evApplyWeightLabels(s){
+    $('.ev-qmax').text(evW(s,'q')); $('.ev-dmax').text(evW(s,'d')); $('.ev-smax').text(evW(s,'s'));
+}
+/** 單一廠商：這一年的服務分數登錄狀況（讓使用者一眼知道是真的評過，還是「未評＝自動給滿分」） */
+function evSvcNote(svc, s){
+    svc = svc || {};
+    var f = function(h){
+        var v = svc[h];
+        return (v===null||v===undefined||v==='') ? '未評（視同滿分 '+evW(s,'s')+' 分）' : (v+' 分');
+    };
+    return '<div class="s-lab" style="flex-basis:100%;margin-top:3px;">服務分數（0~100，人工登錄）：上半年 <b>'+f(1)+'</b>　下半年 <b>'+f(2)+'</b>'
+         + (PERMS&&PERMS.canEdit ? '　<a href="javascript:void(0)" onclick="$(\'#evSvcBtn\').click()" style="color:#c0762c;">去設定服務分數</a>' : '')+'</div>';
+}
+/** 等級意義（2-PH-01 6.3.2，管理員在門檻設定逐級自行輸入）：顯示成「A級 — 合格廠商，列為優先採用之廠商」 */
+function evGradeDesc(label, settings){
+    var g = ((settings||(META&&META.eval_settings)||{}).grades)||[];
+    for (var i=0;i<g.length;i++) if (String(g[i].label)===String(label)) return String(g[i].desc||'');
+    return '';
+}
+function evGradeFull(label, settings){
+    if (!label) return '—';
+    var d = evGradeDesc(label, settings);
+    return esc(label) + (d ? '　<span style="font-weight:normal;font-size:11px;color:#8a6d45;">'+esc(d)+'</span>' : '');
+}
+
+/* ---------- 服務分數（定期評核 服務20%，逐廠商×年度×半年人工登錄） ---------- */
+var EVSVC = null;
+$('#evSvcBtn').on('click', function(){
+    var sm = (EVAL&&EVAL.settings)||META.eval_settings||{}, sw = sm.s_max==null?20:sm.s_max;
+    $('#evSvcW').text(sw); $('#evSvcEg').text(Math.floor(sw*0.8));
+    var $y=$('#evSvcYear').empty(), cy=META.cur_year;
+    for (var y=cy; y>=cy-5; y--) $y.append('<option value="'+y+'">'+y+'</option>');
+    $y.val($('#evYear').val()||cy);
+    $('#evSvcHalf').val(META.cur_half); $('#evSvcKw').val('');
+    $('#evSvcTitle').text('服務分數設定（'+scopeLabel(CUR_SCOPE)+'）');
+    loadEvSvc(); openMask('evSvcMask');
+});
+$('#evSvcYear,#evSvcHalf').on('change', loadEvSvc);
+var evSvcKwT=null;
+$('#evSvcKw').on('input', function(){ clearTimeout(evSvcKwT); evSvcKwT=setTimeout(renderEvSvc, 250); });
+function loadEvSvc(){
+    $('#evSvcBody').html('<tr><td colspan="5" style="padding:16px;color:#8a6d45;">載入中…</td></tr>');
+    $.getJSON(API, {action:'eval_service_list', year:$('#evSvcYear').val(), half:$('#evSvcHalf').val()}, function(res){
+        if(!res.ok){ alert(res.error||'載入失敗'); return; }
+        EVSVC = res; renderEvSvc();
+    }).fail(function(x){ alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function renderEvSvc(){
+    if (!EVSVC) return;
+    var kw = $.trim($('#evSvcKw').val()).toLowerCase();
+    var rows = (EVSVC.rows||[]).filter(function(r){
+        if (!kw) return true;
+        return String(r.maker_id||'').toLowerCase().indexOf(kw)>=0 || String(r.maker_id_no||'').toLowerCase().indexOf(kw)>=0;
+    });
+    var ro = !EVSVC.can_edit, h='';
+    rows.forEach(function(r){
+        h += '<tr><td><input type="checkbox" class="svc-ck" value="'+esc(r.maker_id_no)+'"'+(ro?' disabled':'')+'></td>'
+           + '<td class="t-left">'+esc(r.main_cat_name||'—')+'</td>'
+           + '<td class="t-left"><b>'+esc(r.maker_id||'')+'</b><div style="font-size:11px;color:#8a6d45;">'+esc(r.maker_id_no)+'</div></td>'
+           + '<td>'+(r.is_managed?'<span class="st-pill st-done">納管</span>':'<span class="st-pill st-todo">手動列入</span>')+'</td>'
+           + '<td><input type="number" class="svc-sc" data-mid="'+esc(r.maker_id_no)+'" min="0" max="100" step="1" style="width:70px;text-align:center;"'
+           + ' value="'+(r.score==null?'':r.score)+'"'+(ro?' disabled':'')+'>'
+           + '<span class="svc-hint" style="font-size:11px;color:#c0762c;margin-left:5px;">'+(r.score==null?'未評＝滿分':'')+'</span></td></tr>';
+    });
+    $('#evSvcBody').html(h||'<tr><td colspan="5" style="padding:16px;color:#8a6d45;">沒有符合的廠商（清冊＝納管＋手動列入）</td></tr>');
+    $('#evSvcAll').prop('checked', false);
+}
+$('#evSvcAll').on('change', function(){ $('#evSvcBody input.svc-ck:not(:disabled)').prop('checked', this.checked); });
+/* 輸入當下就即時檢查與提示：空白＝未評(滿分)、超出 0~100 當場標紅（鐵律8，後端存檔時同規則再擋一次） */
+$('#evSvcBody').on('input', 'input.svc-sc', function(){
+    var v=$(this).val(), bad=(v!=='' && (!/^\d+$/.test(v) || +v<0 || +v>100));
+    $(this).toggleClass('af-invalid', bad);
+    $(this).closest('td').find('.svc-hint').text(bad ? '0~100 的整數' : (v===''?'未評＝滿分':''));
+});
+function evSvcApplyBatch(clear){
+    var $ck = $('#evSvcBody input.svc-ck:checked');
+    if (!$ck.length){ alert('請先勾選要設定的廠商'); return; }
+    var v = clear ? '' : $.trim($('#evSvcBatch').val());
+    if (!clear){
+        if (v===''){ alert('請先填要套用的分數（0~100）'); return; }
+        if (!/^\d+$/.test(v) || +v<0 || +v>100){ alert('分數必須是 0~100 的整數'); return; }
+    }
+    $ck.each(function(){
+        var mid=$(this).val();
+        $('#evSvcBody input.svc-sc[data-mid="'+mid+'"]').val(v).trigger('input');
+    });
+}
+function submitEvSvc(){
+    if (!EVSVC) return;
+    if (!EVSVC.can_edit){ alert('您沒有本範疇的稽核登錄權限，無法修改服務分數'); return; }
+    var rows=[], bad=0;
+    // 只送「目前畫面上列出來」的那幾列；被關鍵字篩掉的沒有重畫，不在 DOM 裡也就不會被誤清空
+    $('#evSvcBody input.svc-sc').each(function(){
+        var v=$.trim($(this).val());
+        if (v!=='' && (!/^\d+$/.test(v) || +v<0 || +v>100)){ bad++; return; }
+        rows.push({maker_id_no:$(this).data('mid'), score:v});
+    });
+    if (bad){ alert('有 '+bad+' 筆分數不是 0~100 的整數（已標紅），請修正後再儲存'); return; }
+    $.post(API, {action:'eval_service_save', year:$('#evSvcYear').val(), half:$('#evSvcHalf').val(),
+        rows:JSON.stringify(rows)}, function(res){
+        if(!res.ok){ alert(res.error||'儲存失敗'); return; }
+        alert('已儲存：登錄 '+res.saved+' 家、回復未評 '+res.cleared+' 家');
+        closeMask('evSvcMask');
+        if (EVAL_ALL) $('#evAll').click(); else if ($('#evVendor').val()) loadEval();
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+
+/* ---------- 已廢止表單顯示開關 ---------- */
+$('#btnLegacy').on('click', function(){
+    var h = (META.legacy_docs||[]).map(function(d){
+        return '<div><b>'+esc(d.doc_no)+' '+esc(d.doc_name)+'</b>'
+             + (d.obsolete_date?('　廢止日：'+fmtDate(d.obsolete_date)):'')
+             + (d.obsolete_reason?('　理由：'+esc(d.obsolete_reason)):'')+'</div>';
+    }).join('');
+    $('#legacyDocList').html(h||'（AS 文件管理裡目前查不到已廢止的 2-PH-01 系列表單）');
+    $('#legacyOn').prop('checked', !!META.legacy_enabled);
+    openMask('legacyMask');
+});
+function submitLegacy(){
+    var on = $('#legacyOn').is(':checked') ? 1 : 0;
+    if (on === (META.legacy_enabled?1:0)) { closeMask('legacyMask'); return; }
+    $.post(API, {action:'legacy_save', on:on}, function(res){
+        if(!res.ok){ alert(res.error||'儲存失敗'); return; }
+        alert(on ? '已開啟已廢止分頁，頁面將重新載入' : '已隱藏已廢止分頁，頁面將重新載入');
+        location.reload();
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+
+function evWeightSum(){
+    var q=+$('#stWQ').val()||0, d=+$('#stWD').val()||0, sv=+$('#stWS').val()||0, t=Math.round((q+d+sv)*10)/10;
+    var ok=(t===100);
+    $('#stWSum').html('合計 <b style="color:'+(ok?'#2f7d32':'#DD5138')+';">'+t+'</b> %'
+        + (ok?' <span style="color:#2f7d32;">✓</span>':' <span style="color:#DD5138;">← 必須等於 100 才能儲存</span>'));
+    $('#stWQ,#stWD,#stWS').toggleClass('af-invalid', !ok);
+    return ok;
+}
+$('#stWQ,#stWD,#stWS').on('input', evWeightSum);
 function submitEvSet(){
+    if (!evWeightSum()){ alert('品質＋交貨＋服務三個比例相加必須等於 100'); return; }
     var grades=[]; $('#stGrades .gr-row').each(function(){ var l=$.trim($(this).find('.gr-label').val()), mn=$(this).find('.gr-min').val();
-        if(l!=='') grades.push({label:l, min:mn===''?0:+mn, fail:$(this).find('.gr-fail').is(':checked')?1:0}); });
+        if(l!=='') grades.push({label:l, min:mn===''?0:+mn, fail:$(this).find('.gr-fail').is(':checked')?1:0,
+                                desc:$.trim($(this).find('.gr-desc').val())}); });
     if(grades.length && !grades.some(function(g){return g.fail;})
        && !confirm('沒有勾選任何「視為不合格」的等級，所有廠商都會判合格。確定要這樣存？')) return;
     // 廠商專屬工作天：前端先驗（選了廠商就一定要填天數、同一廠商不可重複），後端 API 再驗一次
@@ -2355,9 +2727,11 @@ function submitEvSet(){
     });
     if(bad){ alert(bad); return; }
     $.post(API, {action:'save_eval_settings', ng_max:$('#stNgMax').val(), late_max:$('#stLateMax').val(),
-        special_max:$('#stSpMax').val(), default_days:$('#stDays').val(), grades:JSON.stringify(grades)}, function(res){
+        special_max:$('#stSpMax').val(), default_days:$('#stDays').val(), grades:JSON.stringify(grades),
+        w_quality:$('#stWQ').val(), w_delivery:$('#stWD').val(), w_service:$('#stWS').val()}, function(res){
         if(!res.ok){ alert(res.error||'儲存失敗'); return; }
         META.eval_settings=res.settings;
+        evApplyWeightLabels(res.settings);
         $.post(API, {action:'eval_lead_days_save', rows:JSON.stringify(leads)}, function(r2){
             if(!r2.ok){ alert('門檻已存，但廠商專屬工作天儲存失敗：'+(r2.error||'')); return; }
             closeMask('evSetMask');
@@ -2367,12 +2741,15 @@ function submitEvSet(){
 }
 $('#evCsv').on('click', function(){
     if(!EVAL) return;
-    var rows=[['月份','進貨數(PCS)','被檢驗量','回廠量','不良數','不良率','特採率','品質分(60)','遲交數','遲交率','交期分(40)','總分','等級','門檻判定']];
+    var es=EVAL.settings||{};
+    var rows=[['月份','進貨數(PCS)','被檢驗量','回廠量','不良數','不良率','特採率','品質分('+evW(es,'q')+')','遲交數','遲交率',
+               '交期分('+evW(es,'d')+')','服務分數(0~100)','服務分('+evW(es,'s')+')','總分','等級','門檻判定']];
     for(var m=1;m<=12;m++){ var d=EVAL.months[m];
-        rows.push([m+'月',d.in_qty,d.qc_qty,d.del_qty,d.ng,rate(d.ng_rate),rate(d.special_rate),'',d.late,rate(d.late_rate),'','','','']); }
+        rows.push([m+'月',d.in_qty,d.qc_qty,d.del_qty,d.ng,rate(d.ng_rate),rate(d.special_rate),'',d.late,rate(d.late_rate),'','','','','','']); }
     [['上半年',EVAL.halves[1]],['下半年',EVAL.halves[2]],['全年（總判定）',EVAL.full]].forEach(function(p){ var hf=p[1]; if(!hf) return;
         rows.push([p[0],hf.in_qty,hf.qc_qty,hf.del_qty,hf.ng,rate(hf.ng_rate),rate(hf.special_rate),(hf.q_score==null?'':hf.q_score),
                    hf.late,rate(hf.late_rate),(hf.d_score==null?'':hf.d_score),
+                   (hf.svc==null?'':(hf.svc_set?hf.svc:hf.svc+'(未評)')),(hf.s_score==null?'':hf.s_score),
                    (hf.score==null?'':hf.score),(hf.grade||''),(hf.judge?(hf.judge==='pass'?'合格':'不合格'):'')]); });
     var csv='﻿'+rows.map(function(l){return l.map(function(v){return '"'+String(v==null?'':v).replace(/"/g,'""')+'"';}).join(',');}).join('\r\n');
     var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'}));
@@ -2460,13 +2837,61 @@ function loadRoster(){
         NProgress.done();
         if(!res.ok){ alert(res.error||'載入失敗'); return; }
         ROSTER=res;
-        $('#rsRemind').html(res.year+' 年評核　共 <b>'+res.rows.length+'</b> 家（納管 '+res.rows.filter(function(r){return r.is_managed;}).length+' ＋ 手動列入 '+res.rows.filter(function(r){return !r.is_managed&&r.in_roster;}).length+'）　建議等級來自定期評核全年成績');
-        rsPage=1; renderRoster();
+        $('#rsRemind').html(res.year+' 年評核　共 <b>'+res.rows.length+'</b> 家（納管 '+res.rows.filter(function(r){return r.is_managed;}).length+' ＋ 手動列入 '+res.rows.filter(function(r){return !r.is_managed&&r.in_roster;}).length+'）　建議等級來自定期評核全年成績'
+            + gradeLegendText(res.settings));
+        rsPage=1; renderRosterGradeTabs(); renderRoster();
     }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
-var rsPage=1;
+var rsPage=1, RS_GRADE=null;   // RS_GRADE=目前看的等級；''＝未評等級；null＝還沒決定(取第一個有資料的)
+/** 依「採用等級」把清冊切成一個等級一頁（使用者2026-10-01要求）。
+ *  等級清單取自門檻設定（由高到低），再加一個「未評等級」收無資料／無等級的廠商——
+ *  那些廠商不可以消失不見，否則清冊會少人而且看不出來。 */
+function rsGradeBuckets(){
+    var rows=(ROSTER&&ROSTER.rows)||[], gs=((ROSTER&&ROSTER.settings&&ROSTER.settings.grades)||[]);
+    var out=[], seen={};
+    gs.forEach(function(g){
+        var lb=String(g.label||''); if(lb===''||seen[lb]) return; seen[lb]=1;
+        out.push({key:lb, label:lb+'級', desc:String(g.desc||''), fail:!!g.fail,
+                  rows:rows.filter(function(r){ return String(r.final_grade||'')===lb; })});
+    });
+    // 採用等級是已不存在的舊標籤時也要列得出來（不能讓那幾家憑空消失）
+    var known={}; out.forEach(function(b){ known[b.key]=1; });
+    var others={};
+    rows.forEach(function(r){ var g=String(r.final_grade||''); if(g!=='' && !known[g]) others[g]=1; });
+    Object.keys(others).forEach(function(g){
+        out.push({key:g, label:g+'（已不在等級設定內）', desc:'', fail:false,
+                  rows:rows.filter(function(r){ return String(r.final_grade||'')===g; })});
+    });
+    out.push({key:'', label:'未評等級', desc:'當年度查無進貨資料可評，或尚未指定採用等級', fail:false,
+              rows:rows.filter(function(r){ return String(r.final_grade||'')===''; })});
+    return out;
+}
+function renderRosterGradeTabs(){
+    var bk=rsGradeBuckets();
+    // 預設停在第一個有資料的等級（全部都沒資料才停在第一個）
+    if (RS_GRADE===null || !bk.some(function(b){ return b.key===RS_GRADE; })){
+        var f=bk.filter(function(b){ return b.rows.length; })[0] || bk[0];
+        RS_GRADE = f ? f.key : '';
+    }
+    var h=bk.map(function(b){
+        return '<button class="rs-gtab'+(b.key===RS_GRADE?' active':'')+'" data-g="'+esc(b.key)+'">'
+             + esc(b.label)+' <span class="n">'+b.rows.length+' 家</span></button>';
+    }).join('');
+    $('#rsGradeTabs').html(h);
+}
+$('#rsGradeTabs').on('click','button.rs-gtab',function(){
+    RS_GRADE=String($(this).attr('data-g')); rsPage=1;
+    renderRosterGradeTabs(); renderRoster();
+});
 function renderRoster(){
-    var all=ROSTER.rows;
+    var bk=rsGradeBuckets();
+    var cur=bk.filter(function(b){ return b.key===RS_GRADE; })[0] || {key:RS_GRADE, label:'—', desc:'', rows:[]};
+    // 右上角寫明「本頁的分類等級」是什麼（使用者2026-10-01要求）
+    $('#rsGradeHead').html('<div class="g-main">'+(ROSTER.year||'')+' 年　本頁共 <b>'+cur.rows.length+'</b> 家'
+        + '　<span style="font-size:11px;color:#8a6d45;">（清冊全部 '+((ROSTER.rows||[]).length)+' 家，依採用等級分頁）</span></div>'
+        + '<div class="g-right">本頁分類等級：'+esc(cur.label)+(cur.fail?'（不合格）':'')
+        + (cur.desc?'<small>'+esc(cur.desc)+'</small>':'')+'</div>').show();
+    var all=cur.rows;
     rsPage=vaBuildPager('#rsPager', all.length, rsPage, function(p){ rsPage=p; renderRoster(); var el=document.getElementById('rosterTable'); if(el) el.scrollIntoView({behavior:'smooth',block:'start'}); });
     var rows=all.slice((rsPage-1)*VA_PER, rsPage*VA_PER);
     var h='';
@@ -2476,12 +2901,13 @@ function renderRoster(){
         h+='<td class="t-left">'+esc(r.main_cat_name||'—')+'</td>';
         h+='<td class="t-left"><b>'+esc(r.maker_id||'')+'</b><div style="font-size:11px;color:#8a6d45;">'+esc(r.maker_id_no)+'</div></td>';
         h+='<td>'+(r.suggest_grade?r.suggest_grade+'（'+(r.suggest_score==null?'—':r.suggest_score)+'）':'—')+'</td>';
-        h+='<td><b style="color:#8A5A2B;">'+esc(r.final_grade||'—')+'</b>'+(over?' <span style="font-size:10px;color:#c0762c;">手動</span>':'')+'</td>';
+        h+='<td><b style="color:#8A5A2B;" title="'+esc(evGradeDesc(r.final_grade, ROSTER.settings))+'">'+esc(r.final_grade||'—')+'</b>'+(over?' <span style="font-size:10px;color:#c0762c;">手動</span>':'')+'</td>';
         h+='<td>'+rsNoteCell(r)+'</td>';
         h+='<td>'+(r.is_managed?'<span class="st-pill st-done">納管</span>':'<span class="st-pill st-todo">手動列入</span>')+'</td>';
         h+='<td>'+((!r.is_managed&&r.in_roster&&PERMS.canEdit)?'<span class="va-op" style="color:#DD5138;" onclick="rsRemove(\''+esc(r.maker_id_no)+'\')"><i class="fa fa-times"></i>移出</span>':'—')+'</td></tr>';
     });
-    $('#rosterBody').html(h||'<tr><td colspan="8" style="padding:16px;color:#8a6d45;">清冊尚無廠商，請設定納管或「加入清冊廠商」</td></tr>');
+    $('#rosterBody').html(h||'<tr><td colspan="8" style="padding:16px;color:#8a6d45;">'
+        + ((ROSTER.rows||[]).length ? '本等級目前沒有廠商（請用上方的等級分頁切換）' : '清冊尚無廠商，請設定納管或「加入清冊廠商」')+'</td></tr>');
     $('#rsAllCk').prop('checked',false);
 }
 /* 清冊備註：未達標(等級A/B/C以外或無等級)預設「老闆指定」，可改「客戶指定」；無權限者只顯示文字 */
@@ -2539,8 +2965,8 @@ function rsAddSelected(){
 }
 $('#rsCsvBtn').on('click', function(){
     if(!ROSTER) return;
-    var rows=[['項目','廠商ID','廠商名稱','建議等級','採用等級','備註','類型']];
-    ROSTER.rows.forEach(function(r){ rows.push([r.main_cat_name||'',r.maker_id_no,r.maker_id||'',(r.suggest_grade||'')+(r.suggest_score==null?'':'('+r.suggest_score+')'),r.final_grade||'',rsNoteText(r.note),r.is_managed?'納管':'手動列入']); });
+    var rows=[['項目','廠商ID','廠商名稱','建議等級','採用等級','等級意義','備註','類型']];
+    ROSTER.rows.forEach(function(r){ rows.push([r.main_cat_name||'',r.maker_id_no,r.maker_id||'',(r.suggest_grade||'')+(r.suggest_score==null?'':'('+r.suggest_score+')'),r.final_grade||'',evGradeDesc(r.final_grade, ROSTER.settings),rsNoteText(r.note),r.is_managed?'納管':'手動列入']); });
     var csv='﻿'+rows.map(function(l){return l.map(function(v){return '"'+String(v==null?'':v).replace(/"/g,'""')+'"';}).join(',');}).join('\r\n');
     var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'})); a.download='合格供應商清冊_'+ROSTER.year+'_'+scopeLabel(CUR_SCOPE)+'.csv'; a.click();
 });
@@ -2561,23 +2987,34 @@ $('#rsPrintBtn').on('click', function(){
         var reviewStamp = reviewName ? vaStampHtml(reviewName, dateStr) : '__________________';
         var approveStamp = res.approver_name ? vaStampHtml(res.approver_name, dateStr) : '__________________';
         var doc=META.roster_as_doc, docName=(doc&&doc.doc_name)||'合格供應商清冊', docNo=(doc&&doc.doc_no)||'2-PH-01-04';
-        var head='<div style="text-align:center;">'
-            +'<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
-            +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>'
-            +'<div style="text-align:left;font-size:14px;font-weight:bold;margin-top:8px;">'+(ROSTER.year||new Date().getFullYear())+' 年（'+scopeLabel(CUR_SCOPE)+'）</div>';
-        var rows='<table class="pf" style="table-layout:fixed;margin-top:2px;"><colgroup><col style="width:5%;"><col style="width:39%;">'
-            +'<col style="width:24%;"><col style="width:14%;"><col style="width:18%;"></colgroup>'
-            +'<thead><tr><th>序</th><th style="text-align:left;">項目</th><th>廠商</th><th>評核等級</th><th>備註</th></tr></thead><tbody>';
-        ROSTER.rows.forEach(function(r,i){ rows+='<tr><td>'+(i+1)+'</td><td class="q">'+esc(r.main_cat_name||'')+'</td>'
-            +'<td class="q"><b>'+esc(r.maker_id||'')+'</b><div style="font-size:11px;color:#555;">'+esc(r.maker_id_no)+'</div></td>'
-            +'<td>'+esc(r.final_grade||'—')+'</td><td>'+esc(rsNoteText(r.note))+'</td></tr>'; });
-        rows+='</tbody></table>';
         var sign='<table class="pf-sign" style="page-break-inside:avoid;"><tr>'
             +'<td style="width:33%;"><div style="font-size:11px;color:#555;">製表</div><div style="margin-top:2px;min-height:91px;">'+makeStamp+'</div></td>'
             +'<td style="width:34%;"><div style="font-size:11px;color:#555;">審核</div><div style="margin-top:2px;min-height:91px;">'+reviewStamp+'</div></td>'
             +'<td style="width:33%;"><div style="font-size:11px;color:#555;">核准</div><div style="margin-top:2px;min-height:91px;">'+approveStamp+'</div></td>'
             +'</tr></table>';
-        openPrintWindow(head+rows+sign, '合格供應商清冊', docNo);
+        /* 依評核等級一個等級一頁（使用者2026-10-01要求），每一頁右上角印出本頁的分類等級與它代表的意義；
+           沒有廠商的等級不印（不要印出一疊空白頁）。每一頁都有自己的表頭與三欄簽章，單獨抽出來看也完整。 */
+        var bks = rsGradeBuckets().filter(function(b){ return b.rows.length; });
+        var body = bks.map(function(b, bi){
+            var head='<div style="position:relative;text-align:center;">'
+                +'<div style="position:absolute;right:0;top:0;border:2px solid #000;border-radius:4px;padding:3px 10px;'
+                +'font-size:14px;font-weight:bold;line-height:1.3;text-align:center;max-width:46%;">'+esc(b.label)
+                +(b.desc?'<div style="font-size:10px;font-weight:normal;">'+esc(b.desc)+'</div>':'')+'</div>'
+                +'<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
+                +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>'
+                +'<div style="text-align:left;font-size:14px;font-weight:bold;margin-top:8px;">'+(ROSTER.year||new Date().getFullYear())+' 年（'+scopeLabel(CUR_SCOPE)+'）　'
+                +esc(b.label)+'　共 '+b.rows.length+' 家</div>';
+            var rows='<table class="pf" style="table-layout:fixed;margin-top:2px;"><colgroup><col style="width:5%;"><col style="width:39%;">'
+                +'<col style="width:24%;"><col style="width:14%;"><col style="width:18%;"></colgroup>'
+                +'<thead><tr><th>序</th><th style="text-align:left;">項目</th><th>廠商</th><th>評核等級</th><th>備註</th></tr></thead><tbody>';
+            b.rows.forEach(function(r,i){ rows+='<tr><td>'+(i+1)+'</td><td class="q">'+esc(r.main_cat_name||'')+'</td>'
+                +'<td class="q"><b>'+esc(r.maker_id||'')+'</b><div style="font-size:11px;color:#555;">'+esc(r.maker_id_no)+'</div></td>'
+                +'<td>'+esc(r.final_grade||'—')+'</td><td>'+esc(rsNoteText(r.note))+'</td></tr>'; });
+            rows+='</tbody></table>';
+            return '<div'+(bi<bks.length-1?' style="page-break-after:always;"':'')+'>'+head+rows+sign+'</div>';
+        }).join('');
+        if (!body){ alert('清冊無資料'); return; }
+        openPrintWindow(body, '合格供應商清冊', docNo);
     });
 });
 
@@ -2882,7 +3319,8 @@ function submitSignSetting(){
 $('#rsStaleBtn').on('click', function(){
     $.getJSON(API, {action:'stale_vendors'}, function(res){
         if(!res.ok){ alert(res.error||'查詢失敗'); return; }
-        $('#staleHint').html('最後發包日早於 <b>'+res.cutoff+'</b>（兩年前）的納管／在冊外包廠共 <b>'+res.rows.length+'</b> 家，請確認後移除：');
+        $('#staleHint').html('依 2-PH-01 程序書 6.3.5「若供應商 '+(res.years||3)+' 年內未有交易記錄，須從合格供應商清冊剔除」：'
+            +'最後發包日早於 <b>'+fmtDate(res.cutoff)+'</b>（'+(res.years||3)+' 年前）的納管／在冊外包廠共 <b>'+res.rows.length+'</b> 家，請確認後移除：');
         var h='';
         res.rows.forEach(function(r){
             h+='<tr><td><input type="checkbox" class="stale-ck" value="'+esc(r.maker_id_no)+'" checked></td>'
@@ -2890,7 +3328,7 @@ $('#rsStaleBtn').on('click', function(){
               +'<td style="color:#DD5138;">'+esc(r.last_date||'—')+'</td>'
               +'<td>'+(r.audit_managed?'納管':'')+(r.in_roster?(r.audit_managed?'+清冊':'手動列入'):'')+'</td></tr>';
         });
-        $('#staleBody').html(h||'<tr><td colspan="6" style="padding:14px;color:#8a6d45;">無兩年未交易外包廠，清冊乾淨</td></tr>');
+        $('#staleBody').html(h||'<tr><td colspan="6" style="padding:14px;color:#8a6d45;">無三年未交易外包廠，清冊乾淨</td></tr>');
         $('#staleAll').prop('checked', res.rows.length>0);
         openMask('staleMask');
     });
@@ -2920,15 +3358,30 @@ $(window).on('scroll', function(){ $('#vaToTop').toggle($(window).scrollTop()>20
     $('.va-scope-btn').removeClass('active').filter('[data-scope="'+CUR_SCOPE+'"]').addClass('active');
 })();
 if (canView) loadMeta(function(){
-    loadRound();
+    /* 深連結「空白表單列印」(?blank_form=1)：AS 文件管理的「檢視」鈕會開這個網址，
+       目的就是直接看到這份 AS 表單的空白列印畫面。整頁會被就地換成列印版面，
+       所以**一定要在其他載入動作之前處理並 return**——後面那些 AJAX 回來要寫的 DOM 已經不存在了。
+       查核表內容依目前範疇(CUR_SCOPE)，與頁面上那顆「列印空白表單」完全相同；要指定範疇可加 &scope=。 */
+    /* 印不出來時一定要「照常顯示這一頁」而不是留一片空白——printBlankForm()／META.items 是
+       「稽核批次／查核表設定」那一區的東西，那一區正在被整理（已廢止表單改成預設不輸出），
+       哪天真的被移掉時，使用者按「檢視」至少還是會看到這一頁，不會變成白畫面也不會靜默失敗。
+       AS 文件管理那邊對「沒有空白表單列印的模組」本來就是退回開模組頁面，退路一致。 */
+    if (/[?&]blank_form=1/.test(location.search)
+        && typeof printBlankForm === 'function' && META && META.items) {
+        VA_SELF_PRINT = true; printBlankForm(); return;
+    }
+    // 預設分頁＝「供應商評鑑」；稽核批次已廢止，只有管理員把它開啟時才存在、也不預設開在那裡
+    loadAdRound();
     var m = /[?&]sign=(\d+)/.exec(location.search);
     if (m) openSignMask(+m[1]);
     // 供應商稽核計劃通知深連結：從通知點進來直接切到「供應商稽核計劃」分頁＋對應年度，
     // 待核准且本人有權核准時自動跳出核准/退回跳窗，不要求使用者自己找分頁點（ai-rules/17）。
     var pa = /[?&]plan_approve=(\d+)/.exec(location.search), py = /[?&]plan_year=(\d+)/.exec(location.search);
     if (pa || py) {
+        // 計劃分頁已廢止：沒開啟時沒有這個分頁可切，提示管理員去開啟而不是靜默什麼都不做
+        if (!VA_LEGACY) { alert('「供應商稽核計劃」(2-PH-01-06) 已廢止，分頁預設不顯示。\n要查閱舊年度計畫請由管理員在「供應商評鑑」工具列按「已廢止表單」開啟。'); return; }
         $('.va-tab').removeClass('active'); $('.va-tab[data-tab="plan"]').addClass('active');
-        $('#tabAudit,#tabEval,#tabRoster').hide(); $('#tabPlan').show();
+        $('#tabAudit,#tabNewVendor,#tabEval,#tabRoster').hide(); $('#tabPlan').show();
         $('#planYear').val(+((pa||py)[1]));
         loadPlan(pa ? function(res){
             if (res.lock && res.lock.status==='pending' && res.can_decide) openPlanDecideMask();

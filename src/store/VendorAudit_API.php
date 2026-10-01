@@ -125,6 +125,14 @@ case 'meta': {
           'plan_approver_names'=>$canAdminScope ? array_column(vendor_audit_plan_approver_pool($db, $uid, $scope), 'user_cname') : [],
           'confirm_pw_allowed'=>eg_confirm_password_allowed($db, $uid),
           'eval_settings'=>vendor_eval_settings($db, $scope),
+          // 已廢止表單（稽核批次／供應商稽核計劃）的顯示開關＋廢止資訊（直接取自 as_document，不另存說明文字）
+          'legacy_enabled'=>vendor_audit_legacy_enabled($db) ? 1 : 0,
+          'legacy_docs'=>vendor_audit_legacy_docs($db),
+          // 評鑑類別／評鑑狀況／建議評鑑結果的標籤，一律由後端唯一登記處帶出（前端不自己寫一份對照表）
+          'review_types'=>vendor_audit_review_types(),
+          'audit_modes'=>vendor_audit_modes(),
+          'legacy_labels'=>vendor_audit_legacy_labels(),
+          'conclusions'=>vendor_audit_conclusions(),
           'scope'=>$scope, 'scopes'=>[['v'=>'outsource','l'=>'外包加工(生管)'],['v'=>'purchase','l'=>'採購']],
           'visible_scopes'=>$visibleScopes,
           'nv'=>vendor_audit_nv_checklist_config($db, $scope),
@@ -175,6 +183,7 @@ case 'periodic_eval': {
     $res = vendor_periodic_eval($db, $mid, $year, $set);
     jout(['maker_id_no'=>$mid, 'maker_name'=>$name, 'year'=>$year, 'settings'=>$set,
           'months'=>$res['months'], 'halves'=>$res['halves'], 'full'=>$res['full'],
+          'service'=>$res['service'],   // 服務分數(0~100)登錄狀況，畫面要標示哪一半年還「未評＝視同滿分」
           'lead_days'=>$res['lead_days'], 'lead_days_custom'=>$res['lead_days_custom']]);
 }
 
@@ -296,7 +305,9 @@ case 'roster_sign_info': {
     jout(['reviewer_name' => $reviewerName, 'approver_name' => $approver['user_cname'] ?? null]);
 }
 
-/* 兩年未交易外包廠（有 bom_ing 發包史但最後發包 >2 年）：納管或在冊者，供確認後移除 */
+/* 三年未交易外包廠（有 bom_ing 發包史但最後發包 >3 年）：納管或在冊者，供確認後移除。
+ * 年限依 2-PH-01 程序書 6.3.5「若供應商3年內未有交易記錄，須從合格供應商清冊剔除」
+ * （2026-10-01 程序書改版，原本寫死 2 年）。 */
 case 'stale_vendors': {
     $st = $db->query("SELECT m.maker_id_no, m.maker_id, m.audit_managed, m.in_roster, sc.sub_cat_names AS main_cat_name,
                              MAX(bi.outsource_date) AS last_date
@@ -307,11 +318,12 @@ case 'stale_vendors': {
                         AND (m.audit_managed=1 OR m.in_roster=1)
                         AND " . vendor_audit_scope_sql_cond($scope) . "
                       GROUP BY m.maker_id_no, m.maker_id, m.audit_managed, m.in_roster, sc.sub_cat_names
-                      HAVING MAX(bi.outsource_date) < DATE_SUB(CURDATE(), INTERVAL 2 YEAR)
+                      HAVING MAX(bi.outsource_date) < DATE_SUB(CURDATE(), INTERVAL " . VENDOR_AUDIT_STALE_YEARS . " YEAR)
                       ORDER BY last_date");
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
     foreach ($rows as &$r) { $r['audit_managed']=(int)$r['audit_managed']; $r['in_roster']=(int)$r['in_roster']; $r['last_date']=substr((string)$r['last_date'],0,10); }
-    jout(['rows'=>$rows, 'cutoff'=>date('Y-m-d', strtotime('-2 years'))]);
+    jout(['rows'=>$rows, 'years'=>VENDOR_AUDIT_STALE_YEARS,
+          'cutoff'=>date('Y-m-d', strtotime('-'.VENDOR_AUDIT_STALE_YEARS.' years'))]);
 }
 /* 確認移除：取消納管+移出清冊，並刪未稽核之稽核對象(已稽核者保留可追溯) */
 case 'stale_remove': {
@@ -334,6 +346,11 @@ case 'stale_remove': {
 /* 定期評核門檻設定（管理員，依 scope 各自獨立） */
 case 'save_eval_settings': {
     if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
+    // 品質/交貨/服務三個權重（2-PH-01 6.3.1，預設 50/30/20）：相加必須＝100，前端擋一次後端同規則再擋一次
+    if (array_key_exists('w_quality', $_POST) || array_key_exists('w_delivery', $_POST) || array_key_exists('w_service', $_POST)) {
+        $err = vendor_eval_save_weights($db, $_POST['w_quality'] ?? '', $_POST['w_delivery'] ?? '', $_POST['w_service'] ?? '', $scope);
+        if ($err !== null) jerr($err);
+    }
     vendor_eval_save_settings($db, [
         'vendor_eval_ng_max'      => max(0, (float)($_POST['ng_max'] ?? 5)),
         'vendor_eval_special_max' => max(0, (float)($_POST['special_max'] ?? 100)),
@@ -380,6 +397,71 @@ case 'eval_lead_days_save': {
         $db->commit();
     } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     jout(['saved'=>count($keep)]);
+}
+
+/* ---- 定期評核「服務分數」(2-PH-01 6.3.1 服務20%)：逐廠商×年度×半年人工登錄 ----
+ * 清單一律列出本範疇的納管＋在冊廠商（評核的對象就是清冊上的這些），已登錄的帶出分數；
+ * 未登錄者分數留空＝視同滿分（畫面會標示），不是 0 分。 */
+case 'eval_service_list': {
+    $year = (int)($_GET['year'] ?? date('Y'));
+    $half = (int)($_GET['half'] ?? ((int)date('n') <= 6 ? 1 : 2));
+    if ($half !== 1 && $half !== 2) jerr('期別只能是上半年或下半年');
+    $kw = trim((string)($_GET['kw'] ?? ''));
+    $args = [];
+    $sql = "SELECT m.maker_id_no, m.maker_id, m.audit_managed, m.in_roster, sc.sub_cat_names AS main_cat_name
+            FROM maker_list m " . vendor_audit_subcat_join() . "
+            WHERE (m.status IS NULL OR m.status<>'" . VENDOR_AUDIT_DISABLED . "')
+              AND (m.audit_managed=1 OR m.in_roster=1)
+              AND " . vendor_audit_scope_sql_cond($scope);
+    if ($kw !== '') { $sql .= " AND (m.maker_id LIKE ? OR m.maker_id_no LIKE ?)"; $args[] = "%$kw%"; $args[] = "%$kw%"; }
+    $sql .= " ORDER BY m.main_category_id IS NULL, m.main_category_id, m.maker_id";
+    $st = $db->prepare($sql); $st->execute($args);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $map = vendor_eval_service_map($db, $year);
+    $out = [];
+    foreach ($rows as $r) {
+        $mid = (string)$r['maker_id_no'];
+        $out[] = ['maker_id_no'=>$mid, 'maker_id'=>$r['maker_id'], 'main_cat_name'=>$r['main_cat_name'],
+                  'is_managed'=>(int)$r['audit_managed'],
+                  'score'=>isset($map[$mid][$half]) ? (float)$map[$mid][$half] : null];
+    }
+    $set = vendor_eval_settings($db, $scope);
+    jout(['year'=>$year, 'half'=>$half, 'rows'=>$out, 's_max'=>$set['s_max'],
+          'can_edit'=>vendor_audit_can_edit_scope($db, $perms, $uid, $scope) ? 1 : 0]);
+}
+case 'eval_service_save': {
+    if (!vendor_audit_can_edit_scope($db, $perms, $uid, $scope))
+        jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核登錄權限，請洽管理員於「稽核員資格設定」指派', 403);
+    $year = (int)($_POST['year'] ?? 0);
+    $half = (int)($_POST['half'] ?? 0);
+    $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
+    if (!is_array($rows)) jerr('資料格式不正確');
+    // 只准改本範疇、且真的在清冊/納管內的廠商（前端已過濾，後端同規則再擋一次＝鐵律8）
+    $okIds = [];
+    $st = $db->query("SELECT m.maker_id_no FROM maker_list m
+                      WHERE (m.status IS NULL OR m.status<>'" . VENDOR_AUDIT_DISABLED . "')
+                        AND (m.audit_managed=1 OR m.in_roster=1)
+                        AND " . vendor_audit_scope_sql_cond($scope));
+    foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $v) $okIds[(string)$v] = 1;
+    $use = [];
+    foreach ($rows as $r) {
+        $mid = trim((string)($r['maker_id_no'] ?? ''));
+        if ($mid === '' || !isset($okIds[$mid])) continue;
+        $use[] = $r;
+    }
+    try {
+        $db->beginTransaction();
+        $res = vendor_eval_service_save($db, $use, $year, $half, $uid, (string)($u['user_cname'] ?? ''));
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('儲存失敗：'.$e->getMessage()); }
+    jout($res);
+}
+
+/* ---- 已廢止表單（稽核批次／供應商稽核計劃）的顯示開關 ---- */
+case 'legacy_save': {
+    if (!$canAdminScope) jerr('只有稽核管理員可以開關已廢止的表單功能', 403);
+    vendor_audit_legacy_save($db, (string)($_POST['on'] ?? '0') === '1');
+    jout(['legacy_enabled'=>vendor_audit_legacy_enabled($db) ? 1 : 0]);
 }
 
 /* 某大類下的加工項目(小類) */
@@ -768,11 +850,10 @@ case 'record_target': {
     if (!$clear && $auditor === null) jerr('請填寫稽核員');
     $reportNo = trim((string)($_POST['report_no'] ?? '')) ?: null;
     $note = trim((string)($_POST['note'] ?? '')) ?: null;
-    $auditMode = in_array($_POST['audit_mode'] ?? '', ['first','again','self'], true) ? $_POST['audit_mode'] : null;
+    $auditMode = array_key_exists((string)($_POST['audit_mode'] ?? ''), vendor_audit_modes()) ? (string)$_POST['audit_mode'] : null;
     $selfEval = trim((string)($_POST['self_evaluator'] ?? '')) ?: null;
     $supplierRep = trim((string)($_POST['supplier_rep'] ?? '')) ?: null;
-    $conclusion = trim((string)($_POST['conclusion'] ?? '')) ?: null;
-    $reviewType = in_array($_POST['review_type'] ?? '', ['site','self','abnormal'], true) ? $_POST['review_type'] : null;
+    $reviewType = array_key_exists((string)($_POST['review_type'] ?? ''), vendor_audit_review_types()) ? (string)$_POST['review_type'] : null;
     // 新供應商評鑑一律不設預定稽核月份(不列入年度計畫表)，不採信前端送來的值，整個生命週期(建立/登錄/完成)都要守同一條規則
     $pm = (int)($_POST['plan_month'] ?? 0); $pm = ($pm >= 1 && $pm <= 12) ? $pm : null;
     if ($isAdhoc) $pm = null;
@@ -786,6 +867,8 @@ case 'record_target': {
     $rates = vendor_audit_compute_rates($scores, $cfg);
     $hasScore = false;
     foreach ($scores as $s) { if (is_array($s) && ((isset($s['self']) && $s['self'] !== '') || (isset($s['audit']) && $s['audit'] !== ''))) { $hasScore = true; break; } }
+    // 建議評鑑結果＝由綜合評鑑分數自動判定（2026-10-01 改制），不再由使用者自己挑、也不採信前端送來的值
+    $conclusion = $hasScore ? vendor_audit_auto_conclusion($rates['total']['overall_rate'], $cfg) : null;
     // 首次登錄分數時凍結當時查核表內容(類別/項次/滿分/權重/合格率)，之後管理員再調整查核表都不影響本筆
     $snapshotToSave = $cur['checklist_snapshot'] ?: ($hasScore ? json_encode($cfg, JSON_UNESCAPED_UNICODE) : null);
 
@@ -796,7 +879,7 @@ case 'record_target': {
             $db->prepare("UPDATE vendor_audit_target SET audit_date=NULL, scores_json=NULL, self_rate=NULL, audit_rate=NULL,
                           overall_rate=NULL, judge=NULL, plan_month=?, audit_mode=?, self_evaluator=?, supplier_rep=?, conclusion=?,
                           auditor=?, report_no=?, note=?, review_type=?, status='draft', checklist_snapshot=NULL WHERE target_id=?")
-               ->execute([$pm,$auditMode,$selfEval,$supplierRep,$conclusion,$auditor,$reportNo,$note,$reviewType,$tid]);
+               ->execute([$pm,$auditMode,$selfEval,$supplierRep,null,$auditor,$reportNo,$note,$reviewType,$tid]);
             $db->commit();
         } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
         jout(['cleared'=>true]);
@@ -827,11 +910,10 @@ case 'complete_target': {
     $auditor = trim((string)($_POST['auditor'] ?? '')) ?: null;
     $reportNo = trim((string)($_POST['report_no'] ?? '')) ?: null;
     $note = trim((string)($_POST['note'] ?? '')) ?: null;
-    $auditMode = in_array($_POST['audit_mode'] ?? '', ['first','again','self'], true) ? $_POST['audit_mode'] : null;
+    $auditMode = array_key_exists((string)($_POST['audit_mode'] ?? ''), vendor_audit_modes()) ? (string)$_POST['audit_mode'] : null;
     $selfEval = trim((string)($_POST['self_evaluator'] ?? '')) ?: null;
     $supplierRep = trim((string)($_POST['supplier_rep'] ?? '')) ?: null;
-    $conclusion = trim((string)($_POST['conclusion'] ?? '')) ?: null;
-    $reviewType = in_array($_POST['review_type'] ?? '', ['site','self','abnormal'], true) ? $_POST['review_type'] : null;
+    $reviewType = array_key_exists((string)($_POST['review_type'] ?? ''), vendor_audit_review_types()) ? (string)$_POST['review_type'] : null;
     $pm = (int)($_POST['plan_month'] ?? 0); $pm = ($pm >= 1 && $pm <= 12) ? $pm : null;
     $scores = json_decode((string)($_POST['scores'] ?? ''), true);
     if (!is_array($scores)) $scores = [];
@@ -853,11 +935,13 @@ case 'complete_target': {
         $cfg = $isAdhoc
             ? vendor_audit_nv_resolve_cfg($db, $cur['checklist_snapshot'], $targetScope)
             : vendor_audit_resolve_cfg($db, $cur['checklist_snapshot'], $targetScope);
-        $errs = vendor_audit_validate_complete(['auditor'=>$auditor, 'conclusion'=>$conclusion, 'review_type'=>$reviewType, 'scores'=>$scores], $cfg);
+        $errs = vendor_audit_validate_complete(['auditor'=>$auditor, 'review_type'=>$reviewType, 'scores'=>$scores], $cfg);
         if ($errs) { $db->rollBack(); jerr(implode('；', $errs)); }
 
         $rates = vendor_audit_compute_rates($scores, $cfg);
         $tt = $rates['total'];
+        // 建議評鑑結果＝由綜合評鑑分數自動判定（門檻＝查核表設定的合格分數），不採信前端送來的值
+        $conclusion = vendor_audit_auto_conclusion($tt['overall_rate'], $cfg);
         $snapshotToSave = $cur['checklist_snapshot'] ?: json_encode($cfg, JSON_UNESCAPED_UNICODE);
 
         $set = vendor_audit_sign_setting($db, $targetScope);
@@ -1097,6 +1181,8 @@ case 'plan_data': {
           'company_name'=>vendor_audit_company_name($db)]);
 }
 case 'plan_submit': {
+    // 2-PH-01-06 供應商稽核計劃已廢止：功能關閉時連後端也不准再送出新的年度計畫（只准查舊資料）
+    if (!vendor_audit_legacy_enabled($db)) jerr('「供應商稽核計劃」(2-PH-01-06) 已廢止，無法送出新的年度計畫。管理員可在「供應商評鑑」工具列的「已廢止表單」暫時開啟以查閱或維護舊資料。', 403);
     if (!vendor_audit_can_edit_scope($db, $perms, $uid, $scope)) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核登錄權限，請洽管理員於「稽核員資格設定」指派', 403);
     $year = (int)($_POST['year'] ?? 0);
     if ($year < 2000) jerr('年度不正確');

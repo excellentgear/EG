@@ -147,6 +147,22 @@ function vendor_audit_ensure_schema(PDO $db): void {
 
     // 供應商稽核計劃(2-PH-01-06,年度版)：送出後鎖定當年度不可再增列稽核對象
     // scope(外包加工/採購)各自獨立一份年度計畫、各自送簽核准，互不干涉(2026-08-17使用者明確要求)
+    /* 定期評核「服務分數」(2026-10-01 程序書改版新增 服務20%)：
+     * 一家廠商每個年度的上／下半年各一個分數（使用者2026-10-01拍板），輸入 0~100 再依服務權重換算成分數。
+     * 這一欄系統算不出來（是生管/採購對供應商配合度的主觀評分），只能人工登錄；
+     * **未登錄＝自動認定滿分**（使用者明確要求），否則全部廠商會因為沒評服務分被整批壓到 B 級以下。 */
+    $db->exec("CREATE TABLE IF NOT EXISTS vendor_eval_service (
+        maker_id_no VARCHAR(11) NOT NULL,
+        year INT NOT NULL,
+        half TINYINT NOT NULL COMMENT '1=上半年 2=下半年',
+        score DECIMAL(5,1) NOT NULL COMMENT '服務分數 0~100(再乘服務權重換算成總分裡的服務分)',
+        note VARCHAR(200) NULL,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        updated_by INT NULL,
+        updated_by_name VARCHAR(50) NULL,
+        PRIMARY KEY (maker_id_no, year, half)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='供應商定期評核-服務分數(逐廠商×年度×半年,未登錄視同滿分)'");
+
     $db->exec("CREATE TABLE IF NOT EXISTS vendor_audit_plan_lock (
         year INT NOT NULL,
         scope VARCHAR(10) NOT NULL DEFAULT 'outsource' COMMENT 'outsource=外包加工(生管) purchase=採購',
@@ -629,12 +645,40 @@ function vendor_audit_checklist_save(PDO $db, array $cats, string $scope = 'outs
 }
 
 /** 逐項驗證「完成」前的完整性：稽核員/建議結論必填,所有生效項次自評/稽核分皆需在 0~單項滿分內的整數 */
+/* ---- 評鑑類別／評鑑狀況／建議評鑑結果（2026-10-01 程序書改版，唯一登記處）----
+ * 評鑑類別：2-PH-01 6.3.4「需由稽核員進行實地/限地評鑑」＝只有這兩種；
+ *   舊的「供應商自主評核」「異常檢核（僅需稽核分）」使用者2026-10-01要求取消（隱藏）。
+ *   舊資料若存著已停用的值，label 查不到就原樣顯示，不會變成空白。
+ * 評鑑狀況：首次評核／次評核（舊的「自我評量」隨自主評核一併取消）。
+ * 建議評鑑結果：改為**由綜合評鑑分數自動判定**（門檻＝查核表設定的合格分數 pass_rate），
+ *   不再讓人自己挑，避免「分數不合格、結論卻挑合格」這種自相矛盾的紀錄。 */
+function vendor_audit_review_types(): array { return ['site' => '實地評鑑', 'limited' => '限定評鑑']; }
+function vendor_audit_modes(): array { return ['first' => '首次評核', 'again' => '次評核']; }
+/** 已停用但舊資料可能還存著的值，只供顯示用（不再出現在可選清單） */
+function vendor_audit_legacy_labels(): array {
+    return ['self' => '供應商自主評核（已停用）', 'abnormal' => '異常檢核（已停用）', '' => ''];
+}
+/** 建議評鑑結果：綜合評鑑分數 ≥ 合格分數→合格，否則不合格（唯一實作，前後端與列印共用同一套判定） */
+function vendor_audit_conclusions(): array {
+    return ['合格' => '合格供應商',
+            '不合格' => '不合格（改善後需重新評鑑）',
+            // 舊資料用過的選項，只保留顯示用
+            '回覆改善後合格' => '回覆稽核改善對策後合格',
+            '需重新稽核' => '有嚴重缺失，改善後需重新稽核',
+            '其他' => '其他'];
+}
+function vendor_audit_auto_conclusion($overallRate, array $cfg): string {
+    if ($overallRate === null || $overallRate === '') return '';
+    $pass = (float)($cfg['pass_rate'] ?? VENDOR_AUDIT_PASS_RATE);
+    return ((float)$overallRate >= $pass) ? '合格' : '不合格';
+}
+
 function vendor_audit_validate_complete(array $post, array $cfg): array {
     $errs = [];
     if (trim((string)($post['auditor'] ?? '')) === '') $errs[] = '請填寫稽核員';
-    if (trim((string)($post['conclusion'] ?? '')) === '') $errs[] = '請選擇建議評鑑結果';
     $reviewType = $post['review_type'] ?? '';
-    if (!in_array($reviewType, ['site','self','abnormal'], true)) $errs[] = '請選擇審查類別（人員實地審查／供應商自主評核／異常檢核）';
+    if (!array_key_exists($reviewType, vendor_audit_review_types()))
+        $errs[] = '請選擇評鑑類別（'.implode('／', vendor_audit_review_types()).'）';
     $scores = is_array($post['scores'] ?? null) ? $post['scores'] : [];
     $badSelf = 0; $badAudit = 0;
     foreach (($cfg['items'] ?? []) as $cat) {
@@ -647,12 +691,12 @@ function vendor_audit_validate_complete(array $post, array $cfg): array {
             $ok = function($v) use ($iMax) {
                 return $v !== null && $v !== '' && is_numeric($v) && (float)$v >= 0 && (float)$v <= $iMax && (float)$v == (int)$v;
             };
-            if ($reviewType !== 'abnormal' && !$ok($sv)) $badSelf++;
+            if (!$ok($sv)) $badSelf++;
             if (!$ok($av)) $badAudit++;
         }
     }
     if ($badSelf)  $errs[] = "尚有 {$badSelf} 項自評分未填寫或超出範圍";
-    if ($badAudit) $errs[] = "尚有 {$badAudit} 項稽核分未填寫或超出範圍";
+    if ($badAudit) $errs[] = "尚有 {$badAudit} 項評鑑分數未填寫或超出範圍";
     return $errs;
 }
 
@@ -950,6 +994,36 @@ function vendor_audit_visible_scopes(PDO $db, array $perms, int $uid): array {
 /* ============================================================
  * 全域設定（system_settings）
  * ============================================================ */
+/** 多久沒有交易就要從合格供應商清冊剔除：2-PH-01 6.3.5「3年內未有交易記錄」
+ *  （2026-10-01 程序書改版，原為 2 年）。畫面文字一律由這個常數帶出，不要再各處寫死年數。 */
+const VENDOR_AUDIT_STALE_YEARS = 3;
+
+/* ---- 已廢止表單的功能開關（2026-10-01）----
+ * 2-PH-01 程序書改版後，「供應商稽核計劃(2-PH-01-06)」與「供應商品質系統評鑑記錄表(2-PH-01-03)」
+ * 已在 as_document 標記廢止（理由：程序書中已剔除此表單之使用），連帶「稽核批次」分頁與它的
+ * 「供應商稽核計畫實施結果」清單列印一律預設隱藏（使用者2026-10-01要求）。
+ * 舊資料不刪、不搬家——管理員要查舊紀錄時把這個開關打開，分頁就會回來並在上方標示已廢止。
+ * 預設關閉；全站一份（不逐 scope 設定，兩個範疇的這兩張表單是同時廢止的）。 */
+function vendor_audit_legacy_enabled(PDO $db): bool {
+    return (string)vendor_eval_setting($db, 'vendor_audit_legacy_enabled', '0') === '1';
+}
+function vendor_audit_legacy_save(PDO $db, bool $on): void {
+    $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('vendor_audit_legacy_enabled', ?)
+                        ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+    $st->execute([$on ? '1' : '0']);
+}
+/** 這兩張已廢止表單的廢止資訊（直接讀 as_document，不另存一份說明文字＝鐵律4）：
+ *  [['doc_no'=>'2-PH-01-06','doc_name'=>..,'obsolete_date'=>..,'obsolete_reason'=>..], ...] */
+function vendor_audit_legacy_docs(PDO $db): array {
+    try {
+        $st = $db->query("SELECT doc_no, doc_name, obsolete_date, obsolete_reason
+                          FROM as_document
+                          WHERE is_obsolete=1 AND IFNULL(is_deleted,0)=0 AND doc_no LIKE '2-PH-01%'
+                          ORDER BY doc_no");
+        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+
 function vendor_audit_cycle_months(PDO $db): int {
     try {
         $st = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key='vendor_audit_cycle_months' LIMIT 1");
@@ -978,14 +1052,16 @@ function vendor_eval_setting(PDO $db, string $key, $default) {
 function vendor_eval_settings(PDO $db, string $scope = 'outsource'): array {
     $scope = vendor_audit_norm_scope($scope);
     $sfx = '_'.$scope;
+    $w = vendor_eval_weights($db, $scope);
     return [
         'ng_max'       => (float)vendor_eval_setting($db, 'vendor_eval_ng_max'.$sfx, vendor_eval_setting($db, 'vendor_eval_ng_max', 5)),        // 不良率上限%
         'special_max'  => (float)vendor_eval_setting($db, 'vendor_eval_special_max'.$sfx, vendor_eval_setting($db, 'vendor_eval_special_max', 100)), // 特採率上限%(100=不判定)
         'late_max'     => (float)vendor_eval_setting($db, 'vendor_eval_late_max'.$sfx, vendor_eval_setting($db, 'vendor_eval_late_max', 30)),     // 遲交率上限%
         'default_days' => (int)vendor_eval_setting($db, 'vendor_eval_default_days'.$sfx, vendor_eval_setting($db, 'vendor_eval_default_days', 7)),    // 約定工作天(算應交日)
         'grades'       => vendor_eval_grades($db, $scope),                                          // 評核等級門檻
-        'q_max'        => VENDOR_EVAL_Q_MAX,                                                        // 品質分滿分(供前端顯示用)
-        'd_max'        => VENDOR_EVAL_D_MAX,                                                        // 交期分滿分
+        'q_max'        => $w['q'],                                                                  // 品質分滿分(權重,管理員可設)
+        'd_max'        => $w['d'],                                                                   // 交期分滿分
+        's_max'        => $w['s'],                                                                   // 服務分滿分
     ];
 }
 function vendor_eval_save_settings(PDO $db, array $vals, string $scope = 'outsource'): void {
@@ -1013,8 +1089,17 @@ function vendor_eval_grades(PDO $db, string $scope = 'outsource'): array {
     $last = count($g) - 1;
     foreach ($g as $i => $x) {
         $g[$i]['fail'] = $hasKey ? (!empty($x['fail']) ? 1 : 0) : (($i === $last) ? 1 : 0);
+        // desc＝該等級代表的意義（2-PH-01 6.3.2，如「合格廠商，列為優先採用之廠商」）。
+        // 由管理員在門檻設定畫面逐級自行輸入，**不在這裡按 A/B/C/D 寫死對照表**（標籤本身可改名，鐵律4）。
+        $g[$i]['desc'] = trim((string)($x['desc'] ?? ''));
     }
     return $g;
+}
+/** 某個等級標籤代表的意義（查不到回空字串） */
+function vendor_eval_grade_desc(?string $label, array $grades): string {
+    if ($label === null || $label === '') return '';
+    foreach ($grades as $g) if ((string)($g['label'] ?? '') === $label) return (string)($g['desc'] ?? '');
+    return '';
 }
 /** 分數落在哪一級（回傳整筆設定，含 fail 旗標）；無分數回 null */
 function vendor_eval_grade_entry($score, array $grades): ?array {
@@ -1027,7 +1112,8 @@ function vendor_eval_save_grades(PDO $db, array $grades, string $scope = 'outsou
     $clean = [];
     foreach ($grades as $g) {
         $label = trim((string)($g['label'] ?? '')); if ($label==='') continue;
-        $clean[] = ['min'=>max(0,(float)($g['min'] ?? 0)), 'label'=>$label, 'fail'=>!empty($g['fail']) ? 1 : 0];
+        $clean[] = ['min'=>max(0,(float)($g['min'] ?? 0)), 'label'=>$label, 'fail'=>!empty($g['fail']) ? 1 : 0,
+                    'desc'=>mb_substr(trim((string)($g['desc'] ?? '')), 0, 60)];
     }
     if (!$clean) return;
     $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
@@ -1058,39 +1144,129 @@ function vendor_eval_grade_of($score, array $grades): ?string {
     foreach ($grades as $g) if ($score >= (float)($g['min'] ?? 0)) return (string)($g['label'] ?? '');
     return null;
 }
-/* 計分滿分配置（使用者2026-08-17定案，比照紙本 2-PH-01-05 Excel）：品質60＋交期40 */
-const VENDOR_EVAL_Q_MAX = 60;   // 品質分滿分
-const VENDOR_EVAL_D_MAX = 40;   // 交期分滿分
+/* 計分配置預設值（2-PH-01 程序書 2026-10-01 改版 6.3.1：品質50%＋交貨30%＋服務20%；
+ * 原為品質60＋交期40，服務分是這次新增的）。
+ * 這三個比例使用者要求**可由管理員設定**，故常數只是「沒設定過時的預設值」，
+ * 一律以 vendor_eval_weights() 讀出來的值計算，不要在別處直接拿常數去算（鐵律4）。 */
+const VENDOR_EVAL_Q_MAX = 50;   // 品質分滿分(預設)
+const VENDOR_EVAL_D_MAX = 30;   // 交期分滿分(預設)
+const VENDOR_EVAL_S_MAX = 20;   // 服務分滿分(預設)
 
-/** 彙總一段期間：回傳率/判定/分數(品質60+交期40,無條件捨去)/等級
+/** 品質／交貨／服務三個權重（依 scope 各自獨立；未設定過回退預設 50/30/20）。
+ *  三者相加必須＝100（存檔時 vendor_eval_save_weights() 會擋），總分才會是 0~100 與等級門檻同一個尺度。 */
+function vendor_eval_weights(PDO $db, string $scope = 'outsource'): array {
+    $scope = vendor_audit_norm_scope($scope);
+    $q = (float)vendor_eval_setting($db, 'vendor_eval_w_quality_'.$scope, VENDOR_EVAL_Q_MAX);
+    $d = (float)vendor_eval_setting($db, 'vendor_eval_w_delivery_'.$scope, VENDOR_EVAL_D_MAX);
+    $s = (float)vendor_eval_setting($db, 'vendor_eval_w_service_'.$scope,  VENDOR_EVAL_S_MAX);
+    foreach ([$q, $d, $s] as $v) if ($v < 0 || $v > 100) { $q = VENDOR_EVAL_Q_MAX; $d = VENDOR_EVAL_D_MAX; $s = VENDOR_EVAL_S_MAX; break; }
+    if (round($q + $d + $s, 1) != 100) { $q = VENDOR_EVAL_Q_MAX; $d = VENDOR_EVAL_D_MAX; $s = VENDOR_EVAL_S_MAX; }
+    return ['q' => $q, 'd' => $d, 's' => $s];
+}
+/** 存三個權重；相加不等於 100 一律擋下（回傳錯誤字串，null＝成功）。前端也會先擋一次（鐵律8）。 */
+function vendor_eval_save_weights(PDO $db, $q, $d, $s, string $scope = 'outsource'): ?string {
+    $scope = vendor_audit_norm_scope($scope);
+    foreach (['品質'=>$q, '交貨'=>$d, '服務'=>$s] as $lab => $v) {
+        if ($v === '' || $v === null || !is_numeric($v)) return $lab.'權重請填數字';
+        if ((float)$v < 0 || (float)$v > 100) return $lab.'權重必須在 0~100 之間';
+    }
+    if (round((float)$q + (float)$d + (float)$s, 1) != 100)
+        return '品質＋交貨＋服務三個權重相加必須等於 100（目前 '.rtrim(rtrim(number_format((float)$q + (float)$d + (float)$s, 1, '.', ''), '0'), '.').'）';
+    $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
+                        ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+    $up->execute(['vendor_eval_w_quality_'.$scope,  (string)(float)$q]);
+    $up->execute(['vendor_eval_w_delivery_'.$scope, (string)(float)$d]);
+    $up->execute(['vendor_eval_w_service_'.$scope,  (string)(float)$s]);
+    return null;
+}
+
+/* ---- 定期評核「服務分數」（人工登錄，逐廠商×年度×半年；未登錄＝滿分） ---- */
+/** 整個年度全部廠商的服務分數：[maker_id_no][half] = 0~100。
+ *  periodic_eval_all／roster_list 會逐廠商算評核，一家一家查會變 N+1，故一次撈完並以請求內 static 快取。 */
+function vendor_eval_service_map(PDO $db, int $year): array {
+    static $cache = [];
+    if (isset($cache[$year])) return $cache[$year];
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT maker_id_no, half, score FROM vendor_eval_service WHERE year=?");
+        $st->execute([$year]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $h = (int)$r['half']; if ($h !== 1 && $h !== 2) continue;
+            $out[(string)$r['maker_id_no']][$h] = (float)$r['score'];
+        }
+    } catch (Throwable $e) { /* 資料表尚未建立：全部視同未登錄＝滿分 */ }
+    $cache[$year] = $out;
+    return $out;
+}
+/** 單一廠商該年度兩個半年的服務分數（沒登錄的那一半回 null） */
+function vendor_eval_service_of(PDO $db, string $mid, int $year): array {
+    $m = vendor_eval_service_map($db, $year)[$mid] ?? [];
+    return [1 => $m[1] ?? null, 2 => $m[2] ?? null];
+}
+/** 批次寫入服務分數：$rows = [['maker_id_no'=>..,'score'=>0~100 或 ''(清除)], ...]
+ *  score 送空字串＝刪除該筆（回到「未登錄＝滿分」），不是存 0 分——兩者意思完全不同。 */
+function vendor_eval_service_save(PDO $db, array $rows, int $year, int $half, int $uid, string $uname): array {
+    if ($year < 2000 || $year > 2100) throw new RuntimeException('年度不正確');
+    if ($half !== 1 && $half !== 2) throw new RuntimeException('期別只能是上半年或下半年');
+    $saved = 0; $cleared = 0;
+    $up = $db->prepare("INSERT INTO vendor_eval_service (maker_id_no, year, half, score, note, updated_by, updated_by_name)
+                        VALUES (?,?,?,?,?,?,?)
+                        ON DUPLICATE KEY UPDATE score=VALUES(score), note=VALUES(note),
+                            updated_by=VALUES(updated_by), updated_by_name=VALUES(updated_by_name)");
+    $del = $db->prepare("DELETE FROM vendor_eval_service WHERE maker_id_no=? AND year=? AND half=?");
+    foreach ($rows as $r) {
+        $mid = trim((string)($r['maker_id_no'] ?? ''));
+        if ($mid === '') continue;
+        $sc = $r['score'] ?? '';
+        if ($sc === '' || $sc === null) { $del->execute([$mid, $year, $half]); $cleared++; continue; }
+        if (!is_numeric($sc)) throw new RuntimeException('廠商 '.$mid.' 的服務分數不是數字');
+        $sc = (float)$sc;
+        if ($sc < 0 || $sc > 100) throw new RuntimeException('廠商 '.$mid.' 的服務分數必須在 0~100 之間');
+        $up->execute([$mid, $year, $half, $sc, (string)($r['note'] ?? ''), $uid ?: null, $uname]);
+        $saved++;
+    }
+    return ['saved' => $saved, 'cleared' => $cleared];
+}
+
+/** 彙總一段期間：回傳率/判定/分數/等級
+ *  計分口徑依 2-PH-01 程序書 6.3.1（2026-10-01 改版，權重由管理員設定，預設 50/30/20）：
+ *    品質(50%) = 權重×(1-(不良數+特採數)/進貨總數)   ← 特採與不良同權重(使用者2026-08-17決定)
+ *    交貨(30%) = 權重×(1-遲交數/進貨總數)
+ *    服務(20%) = 權重×(服務分數/100)                  ← 人工登錄的 0~100 分，**未登錄＝視同 100 滿分**
  *  單位一律 PCS 數量（使用者2026-08-17改：原為批數）。
  *  進貨數 = max(該期間被檢驗的數量, 該期間回廠的數量)——品質與交期共用同一個分母（使用者明確要求
  *  「兩邊進貨數要相等，取較大的那邊」；同一批的檢驗日與回廠日常跨月，分開算會出現一邊 0 一邊有量的怪象）。
- *  品質分 = 60×(1-(不良數+特採數)/進貨數)   ← 特採與不良同權重(使用者2026-08-17決定)
- *  交期分 = 40×(1-遲交數/進貨數)
- *  捨去方式比照紙本 Excel 的 ROUNDDOWN；整段期間完全無進貨(分母0)才視同無缺失給滿分。
+ *  捨去方式比照紙本 Excel 的 ROUNDDOWN；整段期間完全無進貨(分母0)＝整期沒有交易，不給分也不判等級。
  *  $qcQty/$delQty 只是原始兩邊數量，供畫面提示用，不參與計算。
+ *  $svc100：該期間的服務分數(0~100)，null＝未登錄(視同滿分，並回 svc_set=0 讓畫面標示出來)。
  */
-function vendor_eval_summ(int $inq, int $ng, int $sp, int $lt, array $set, array $grades, int $qcQty = 0, int $delQty = 0): array {
+function vendor_eval_summ(int $inq, int $ng, int $sp, int $lt, array $set, array $grades, int $qcQty = 0, int $delQty = 0, $svc100 = null): array {
     $ngR = $inq ? round($ng/$inq*100,1) : null;
     $spR = $inq ? round($sp/$inq*100,1) : null;
     $ltR = $inq ? round($lt/$inq*100,1) : null;
-    $judge = null; $qScore = null; $dScore = null; $score = null; $grade = null; $over = 0;
+    $judge = null; $qScore = null; $dScore = null; $sScore = null; $score = null; $grade = null; $over = 0;
+    $qMax = (float)($set['q_max'] ?? VENDOR_EVAL_Q_MAX);
+    $dMax = (float)($set['d_max'] ?? VENDOR_EVAL_D_MAX);
+    $sMax = (float)($set['s_max'] ?? VENDOR_EVAL_S_MAX);
+    $svcSet = ($svc100 !== null && $svc100 !== '');
+    $svcUse = $svcSet ? max(0.0, min(100.0, (float)$svc100)) : 100.0;   // 未登錄＝滿分(使用者2026-10-01拍板)
     if ($inq > 0) {
         // 率上限只做「超標提醒」，不再決定合格與否（使用者2026-08-17定案：合格只看等級）
         if ($ngR!==null && $ngR>$set['ng_max']) $over=1;
         if ($ltR!==null && $ltR>$set['late_max']) $over=1;
         if ($set['special_max']<100 && $spR!==null && $spR>$set['special_max']) $over=1;
-        $qScore = (int)floor(VENDOR_EVAL_Q_MAX*(1-min(1,($ng+$sp)/$inq)));
-        $dScore = (int)floor(VENDOR_EVAL_D_MAX*(1-min(1,$lt/$inq)));
-        $score = $qScore + $dScore;                          // 總分(0~100)
+        $qScore = (int)floor($qMax*(1-min(1,($ng+$sp)/$inq)));
+        $dScore = (int)floor($dMax*(1-min(1,$lt/$inq)));
+        $sScore = (int)floor($sMax*($svcUse/100));
+        $score = $qScore + $dScore + $sScore;                // 總分(0~100)
         $ge = vendor_eval_grade_entry($score, $grades);
         $grade = $ge ? (string)($ge['label'] ?? '') : null;
         $judge = ($ge && !empty($ge['fail'])) ? 'fail' : 'pass';   // 合格＝該等級沒被標為不合格
     }
     return ['in_qty'=>$inq,'qc_qty'=>$qcQty,'del_qty'=>$delQty,'ng'=>$ng,'special'=>$sp,'late'=>$lt,
             'ng_rate'=>$ngR,'special_rate'=>$spR,'late_rate'=>$ltR,'judge'=>$judge,'over_threshold'=>$over,
-            'q_score'=>$qScore,'d_score'=>$dScore,'score'=>$score,'grade'=>$grade];
+            'q_score'=>$qScore,'d_score'=>$dScore,'s_score'=>$sScore,'score'=>$score,'grade'=>$grade,
+            'svc'=>($inq>0 ? $svcUse : ($svcSet ? $svcUse : null)), 'svc_set'=>$svcSet ? 1 : 0];
 }
 
 /* ============================================================
@@ -1199,15 +1375,19 @@ function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): arra
     $grades = $set['grades'] ?? vendor_eval_grades($db);
     // 半年進貨數＝各月「取大者」之加總（讓半年列等於畫面上該欄 6 個月相加，不會對不起來）
     $halves = [];
+    $svc = vendor_eval_service_of($db, $mid, $year);     // 服務分數(人工登錄,逐半年;null=未登錄視同滿分)
     $fin=0;$fqc=0;$fdi=0;$fng=0;$fsp=0;$flt=0;
     foreach ([1=>[1,6], 2=>[7,12]] as $h => $rg) {
         $in=0;$qc=0;$di=0;$ng=0;$sp=0;$lt=0;
         for ($m=$rg[0]; $m<=$rg[1]; $m++){ $in+=$mon[$m]['in_qty']; $qc+=$mon[$m]['qc_qty']; $di+=$mon[$m]['del_qty'];
                                            $ng+=$mon[$m]['ng']; $sp+=$mon[$m]['special']; $lt+=$mon[$m]['late']; }
-        $halves[$h] = vendor_eval_summ($in,$ng,$sp,$lt,$set,$grades,$qc,$di);
+        $halves[$h] = vendor_eval_summ($in,$ng,$sp,$lt,$set,$grades,$qc,$di,$svc[$h]);
         $fin+=$in;$fqc+=$qc;$fdi+=$di;$fng+=$ng;$fsp+=$sp;$flt+=$lt;
     }
-    $full = vendor_eval_summ($fin,$fng,$fsp,$flt,$set,$grades,$fqc,$fdi);
+    // 全年列的服務分數：兩個半年都登錄過才平均，只登錄一個就用那一個，都沒登錄＝未登錄(滿分)
+    $svcVals = array_values(array_filter([$svc[1], $svc[2]], function($v){ return $v !== null; }));
+    $fullSvc = $svcVals ? array_sum($svcVals)/count($svcVals) : null;
+    $full = vendor_eval_summ($fin,$fng,$fsp,$flt,$set,$grades,$fqc,$fdi,$fullSvc);
     // 總判定(全年等級)＝上、下半年總分的平均，不是拿全年數量重算一次(使用者2026-08-17定案)。
     // 只有一個半年有資料時就用該半年；平均比照分數規則無條件捨去。率/筆數仍維持全年加總值。
     $hs = [];
@@ -1216,12 +1396,13 @@ function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): arra
         $n = count($hs);
         $full['q_score'] = (int)floor(array_sum(array_column($hs,'q_score'))/$n);
         $full['d_score'] = (int)floor(array_sum(array_column($hs,'d_score'))/$n);
+        $full['s_score'] = (int)floor(array_sum(array_column($hs,'s_score'))/$n);
         $full['score']   = (int)floor(array_sum(array_column($hs,'score'))/$n);
         $ge = vendor_eval_grade_entry($full['score'], $grades);
         $full['grade']   = $ge ? (string)($ge['label'] ?? '') : null;
         $full['judge']   = ($ge && !empty($ge['fail'])) ? 'fail' : 'pass';   // 總判定的合格也只看等級
     }
-    return ['months'=>$rows, 'halves'=>$halves, 'full'=>$full,
+    return ['months'=>$rows, 'halves'=>$halves, 'full'=>$full, 'service'=>[1=>$svc[1], 2=>$svc[2]],
             'lead_days'=>$days, 'lead_days_custom'=>($days !== max(0,(int)$set['default_days'])) ? 1 : 0];
 }
 
@@ -1245,6 +1426,10 @@ function vendor_audit_round_id(PDO $db, int $year, int $half, bool $create = fal
  * is_adhoc=1(新供應商評鑑，獨立分頁瀏覽、不受年度計畫鎖定限制)一律不計入官方KPI統計範圍。
  * ============================================================ */
 function vendor_audit_kpi_compute(PDO $db, int $year, int $month, array $params): ?array {
+    // 來源表單「供應商稽核計劃(2-PH-01-06)」2026-10-01 已廢止，稽核批次分頁預設隱藏＝不再有人登錄稽核對象。
+    // 這一格一律回「無資料」而不是算出 0%——來源沒了就不該留一個看起來是「都沒做」的假數字
+    // （使用者2026-10-01拍板：該 KPI 停止計算並標示無資料）。管理員把廢止功能打開＝恢復計算。
+    if (!vendor_audit_legacy_enabled($db)) return null;
     try {
         if (!$db->query("SHOW TABLES LIKE 'vendor_audit_target'")->fetchColumn())
             return ['num'=>0, 'den'=>0, 'value'=>null];
