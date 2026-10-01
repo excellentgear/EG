@@ -1731,10 +1731,15 @@ function writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount, ext
         + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
         + '.rs-chart-wrap{margin:0 auto;}.rs-chart-wrap svg{width:auto !important;height:230px !important;max-width:100% !important;}'
         + 'table.pf.rs-table{font-size:15px;}table.pf.rs-table th,table.pf.rs-table td{padding:6px 8px;height:28px;}'
-        + '.attach-page{page-break-before:always;}'
+        // 佐證附件(掃描件/照片)自成一個具名頁 va-attach：附件本身不是那張 AS 表單，右下角不可以跟著蓋
+        // 表單的 AS 編號(使用者 2026-10-01 回報)。AS 編號是用 @page 的 @bottom-right 印的，而通用 @page
+        // 的宣告會一路套用到具名頁，所以這裡要明確把 content 清掉才蓋得住；頁面方向固定直式(掃描件多為直式)。
+        + '.attach-page{page-break-before:always;page:va-attach;}'
         + '@media print{@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:12mm 8mm 16mm;'
         + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; }" : '')
-        + '}' + (extraCss||'') + '}';
+        + '}'
+        + '@page va-attach{size:A4 portrait;margin:12mm 8mm 16mm; @bottom-right{ content:""; } @bottom-left{ content:""; }}'
+        + (extraCss||'') + '}';
     w.document.open();
     w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
         + bodyHtml
@@ -1903,8 +1908,9 @@ function recordSheetHTML(){
         +'</tr></table>';
     return head+info+body+conc+sign;
 }
-/** 記錄表本身橫式，但附件一律直式（圖面/掃描件多為直式拍攝，橫式反而縮得更小），
- *  用具名頁 va-portrait 覆蓋回直式，比照 printAllDocs() 混排橫直式的既有做法。 */
+/** 記錄表本身橫式，但附件一律直式（圖面/掃描件多為直式拍攝，橫式反而縮得更小）——
+ *  附件的方向與「右下角不印 AS 編號」都由共用的具名頁 va-attach 處理(見 writePrintWindow)，
+ *  這裡不必再自己定義一個具名頁；附件不是那張 AS 表單，不可以蓋表單編號。 */
 async function printRecordSheet(){
     if (!RS) { alert('無資料'); return; }
     var docNo = (RS.t&&RS.t.record_as_doc_no)||(META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
@@ -1913,15 +1919,8 @@ async function printRecordSheet(){
         try { attachHtml = await vaBuildAttachPrintHTML(RS.attaches); }
         catch (e) { attachHtml = '<div style="color:#c00;">附件載入發生錯誤，部分附件可能未列印，請至系統個別下載查看。</div>'; }
     }
-    var extraCss = '';
-    if (attachHtml) {
-        var asTxt = String(docNo||'').replace(/['\\]/g,'');
-        extraCss = '@page va-portrait{size:A4 portrait;margin:12mm 8mm 16mm;'
-            + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; }" : '')
-            + '} .va-portrait-page{page:va-portrait;}';
-    }
-    var body = recordSheetHTML() + (attachHtml ? '<div class="va-portrait-page">' + attachHtml + '</div>' : '');
-    openPrintWindow(body, '供應商品質系統評鑑記錄表', docNo, true, true, extraCss);
+    var body = recordSheetHTML() + attachHtml;
+    openPrintWindow(body, '供應商品質系統評鑑記錄表', docNo, true, true);
 }
 
 /* ---------- 記錄表列印附加佐證附件（圖片直接嵌入／PDF 用 pdf.js 轉圖，其餘類型不支援預覽） ---------- */
@@ -2025,8 +2024,8 @@ async function printAllDocs(){
     var extraCss = '@page va-landscape{size:A4 landscape;margin:12mm 8mm 16mm;'
         + (asTxt2 ? " @bottom-right{ content:'"+asTxt2+"'; font-size:9pt; color:#333; }" : '')
         + '} .va-landscape-page{page:va-landscape;}';
-    // 附件不放進 .va-landscape-page：查核表本來就是預設頁(直式)，附件跟著沿用預設頁直式，
-    // 不會被記錄表的橫式具名頁帶偏(每份附件各自的 .attach-page 已強制分頁)。
+    // 附件不放進 .va-landscape-page：附件自己有具名頁 va-attach(直式、右下角不印 AS 編號，見
+    // writePrintWindow)，不會被記錄表的橫式具名頁帶偏(每份附件各自的 .attach-page 已強制分頁)。
     var body = page1 + '<div class="va-landscape-page" style="page-break-before:always;">' + recordSheetHTML() + '</div>' + attachHtml;
     openPrintWindow(body, '供應商稽核文件', docNo1, false, true, extraCss);
 }
