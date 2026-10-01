@@ -133,6 +133,27 @@ function type_id_ctrl_ensure_schema(PDO $db): void {
         KEY idx_doc (doc_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='型態識別文件管制表-項目列'");
 
+    // 修訂履歷（2026-10-01 使用者要求）：每一個項目列各自有「每次的修訂日期＋修訂後版別」。
+    // 一列一次修訂，筆數不固定（原圖可能 0 次、加工圖 3 次），所以獨立成子表而不是在項目列上
+    // 開固定幾組欄位（紙本那種「修訂1/2/3」的橫式欄位，超過就印不出來、大半還是空格）。
+    // auto_key：由來源自動推導出來的那幾筆（料號附件的發行章日期＋版次、SOP／SIP 的 ss_ver）
+    // 帶一個穩定識別鍵，重跑同步時才不會重複長出同一筆；人工自己加的列 auto_key 為 NULL。
+    // 使用者刪掉自動帶入的那一筆時一律軟刪除並保留 auto_key，否則下次合併又會被加回來。
+    $db->exec("CREATE TABLE IF NOT EXISTS type_id_ctrl_item_rev (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        item_id INT NOT NULL COMMENT 'FK type_id_ctrl_item.id',
+        seq INT NOT NULL DEFAULT 1 COMMENT '顯示排序(依修訂日期由舊到新)',
+        rev_date DATE NULL COMMENT '修訂日期',
+        rev_version VARCHAR(50) NULL COMMENT '修訂後版別',
+        note VARCHAR(200) NULL COMMENT '修訂說明(選填)',
+        auto_key VARCHAR(120) NULL COMMENT '由來源自動帶入時的識別鍵；人工新增為NULL',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NULL,
+        is_deleted TINYINT(1) NOT NULL DEFAULT 0,
+        KEY idx_item (item_id),
+        KEY idx_auto (item_id, auto_key)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='型態識別文件管制表-項目列修訂履歷'");
+
     // 確認流程欄位（2026-08-12 新增：外來文件清單自動同步 + 人工確認機制，使用者明確要求）
     foreach ([
         "ALTER TABLE type_id_ctrl_doc ADD COLUMN review_status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending=待確認 confirmed=已確認 needs_recheck=需重新確認' AFTER process_desc",
@@ -1337,4 +1358,255 @@ function type_id_ctrl_apply_diff(PDO $db, int $docId, array $diff, bool $confirm
         }
     }
     return ['added_count' => $addedCount, 'changed_count' => $changedCount, 'was_confirmed' => $wasConfirmed];
+}
+
+/* ============================================================================
+ * 修訂履歷（2026-10-01 使用者要求：每一個項目列都要有「每次的修訂日期＋修訂後版別」）
+ * --------------------------------------------------------------------------
+ * 版面刻意維持 A4 直式、修訂履歷獨立成一欄（使用者拍板）：修訂次數每一列都不一樣，
+ * 紙本那種固定開「修訂1/2/3」欄位的橫式表，超過次數就印不出來、大半格子還是空的。
+ *
+ * 資料來源＝「自動帶入＋可手動增修」（使用者拍板）。自動只做「來源本身真的查得到版次履歷」
+ * 的兩種，查不到的一律留白讓人自己補，不猜：
+ *   ① sopsip ── ss_ver 就是這份 SOP／SIP 的版次履歷（ver_no + form_date），最準。
+ *   ② part   ── 同一個料號、同一組附件類別底下，發行章日期比「本列自己的日期」更新的那幾份，
+ *               視為這份文件之後的改版（判定依據＝發行章日期，見 ai-rules/15；版次欄多半沒填，
+ *               那就只有修訂日期沒有修訂後版別，仍然是有效的管制資訊）。
+ * 其餘來源（quote 報價附件／bomfile ERP報告／dev_eval／pfmea）來源端沒有版次欄位可查，不自動帶。
+ * ========================================================================== */
+
+/** 自動推導出的修訂履歷；回傳 [['auto_key','rev_date','rev_version','note'], ...]（由舊到新） */
+function type_id_ctrl_auto_revisions(PDO $db, array $it): array {
+    $source   = (string)($it['ref_source'] ?? '');
+    $attachId = (int)($it['ref_attach_id'] ?? 0);
+    $dsPk     = (int)($it['ref_ds_pk'] ?? 0);
+    $out = [];
+
+    if ($source === 'sopsip' && $attachId) {
+        try {
+            $st = $db->prepare("SELECT ver_id, ver_no, form_date, rev_note FROM ss_ver WHERE doc_id=? ORDER BY form_date, ver_id");
+            $st->execute([$attachId]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) { $rows = []; }
+        // 第一版是「制定」不是「修訂」，所以從第二版起才列入履歷
+        foreach (array_slice($rows, 1) as $r) {
+            $out[] = [
+                'auto_key'    => 'sopsip:' . (int)$r['ver_id'],
+                'rev_date'    => $r['form_date'] ?: null,
+                'rev_version' => (string)($r['ver_no'] ?? ''),
+                'note'        => trim((string)($r['rev_note'] ?? '')),
+            ];
+        }
+        return $out;
+    }
+
+    if ($source === 'part' && $attachId && $dsPk) {
+        $st = $db->prepare("SELECT category_ids, revision, issue_stamp_date, DATE(uploaded_at) AS up_date
+                             FROM part_attachments WHERE id=? AND d_id=? AND deleted_at IS NULL LIMIT 1");
+        $st->execute([$attachId, $dsPk]);
+        $self = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$self) return [];
+        $selfDate = $self['issue_stamp_date'] ?: $self['up_date'];
+        $catIds = array_values(array_filter(array_map('intval', explode(',', str_replace(' ', '', (string)$self['category_ids'])))));
+        if (!$catIds) return [];
+        // 同料號、類別有交集、且有發行章日期或版次可辨識版本的其他附件
+        $catCond = implode(' OR ', array_map(fn($c) => "FIND_IN_SET($c, REPLACE(COALESCE(pa.category_ids,''),' ',''))", $catIds));
+        $st = $db->prepare("SELECT pa.id, pa.revision, pa.issue_stamp_date, DATE(pa.uploaded_at) AS up_date, pa.filename
+                             FROM part_attachments pa
+                             WHERE pa.d_id=? AND pa.id<>? AND pa.deleted_at IS NULL
+                               AND (COALESCE(pa.revision,'')<>'' OR pa.issue_stamp_date IS NOT NULL)
+                               AND ($catCond)
+                             ORDER BY COALESCE(pa.issue_stamp_date, DATE(pa.uploaded_at)), pa.id");
+        $st->execute([$dsPk, $attachId]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        // 批圖工作檔與暫存輸出圖不是正式文件（imgedit_visibility.php，2026-08-25）
+        require_once __DIR__ . '/imgedit_visibility.php';
+        $rows = imgedit_strip_workfiles($rows, $db);
+        foreach ($rows as $r) {
+            $d = $r['issue_stamp_date'] ?: $r['up_date'];
+            if ($selfDate && $d && $d <= $selfDate) continue;   // 只列「比本列更新」的才算之後的改版
+            $out[] = [
+                'auto_key'    => 'part:' . (int)$r['id'],
+                'rev_date'    => $d ?: null,
+                'rev_version' => (string)($r['revision'] ?? ''),
+                'note'        => '',
+            ];
+        }
+    }
+    return $out;
+}
+
+/**
+ * 某一個項目列目前該顯示的修訂履歷＝已存的列 ＋ 來源新偵測到、還沒存過的自動列。
+ * 合併規則：auto_key 已經存在（含被人工刪掉的軟刪除列）就不再加回來，所以人工把自動列刪掉
+ * 之後不會每次開畫面又冒出來；人工改過的內容也不會被自動值蓋掉。
+ */
+function type_id_ctrl_item_revs(PDO $db, int $itemId, array $it): array {
+    $saved = [];
+    if ($itemId) {
+        $st = $db->prepare("SELECT id, seq, rev_date, rev_version, note, auto_key, is_deleted
+                             FROM type_id_ctrl_item_rev WHERE item_id=? ORDER BY seq, id");
+        $st->execute([$itemId]);
+        $saved = $st->fetchAll(PDO::FETCH_ASSOC);
+    }
+    $seenAuto = [];
+    foreach ($saved as $r) { if ($r['auto_key'] !== null && $r['auto_key'] !== '') $seenAuto[$r['auto_key']] = true; }
+
+    $rows = [];
+    foreach ($saved as $r) {
+        if ((int)$r['is_deleted'] === 1) continue;   // 軟刪除只是用來擋自動列被加回來，不顯示
+        $rows[] = [
+            'id'          => (int)$r['id'],
+            'rev_date'    => $r['rev_date'],
+            'rev_version' => (string)($r['rev_version'] ?? ''),
+            'note'        => (string)($r['note'] ?? ''),
+            'auto_key'    => $r['auto_key'],
+            'is_auto'     => ($r['auto_key'] !== null && $r['auto_key'] !== ''),
+            'is_new'      => false,
+        ];
+    }
+    foreach (type_id_ctrl_auto_revisions($db, $it) as $a) {
+        if (isset($seenAuto[$a['auto_key']])) continue;
+        $rows[] = [
+            'id' => 0, 'rev_date' => $a['rev_date'], 'rev_version' => $a['rev_version'],
+            'note' => $a['note'], 'auto_key' => $a['auto_key'], 'is_auto' => true, 'is_new' => true,
+        ];
+    }
+    usort($rows, function ($x, $y) {
+        $a = (string)($x['rev_date'] ?? ''); $b = (string)($y['rev_date'] ?? '');
+        if ($a === $b) return 0;
+        if ($a === '') return 1;        // 沒填日期的排最後
+        if ($b === '') return -1;
+        return strcmp($a, $b);
+    });
+    return $rows;
+}
+
+/**
+ * 儲存某個項目列的修訂履歷（整批覆寫）。
+ * 前端送來的列若帶 id 就更新、沒帶就新增；原本有、這次沒送到的一律軟刪除並保留 auto_key
+ * （保留才擋得住「人工刪掉的自動列下次又被合併加回來」）。
+ */
+function type_id_ctrl_revs_save(PDO $db, int $itemId, array $rows): void {
+    if (!$itemId) return;
+    $st = $db->prepare("SELECT id FROM type_id_ctrl_item_rev WHERE item_id=? AND is_deleted=0");
+    $st->execute([$itemId]);
+    $existing = array_flip(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN)));
+
+    $seq = 0;
+    foreach ($rows as $r) {
+        if (!is_array($r)) continue;
+        $date = trim((string)($r['rev_date'] ?? ''));
+        $ver  = trim((string)($r['rev_version'] ?? ''));
+        $note = trim((string)($r['note'] ?? ''));
+        if ($date === '' && $ver === '' && $note === '') continue;   // 整列空白不存（比照可增列表格鐵則）
+        if ($date !== '' && !preg_match('~^\d{4}-\d{2}-\d{2}$~', $date)) $date = '';
+        $autoKey = trim((string)($r['auto_key'] ?? ''));
+        $seq++;
+        $rid = (int)($r['id'] ?? 0);
+        if ($rid && isset($existing[$rid])) {
+            $db->prepare("UPDATE type_id_ctrl_item_rev SET seq=?, rev_date=?, rev_version=?, note=?, updated_at=NOW() WHERE id=?")
+               ->execute([$seq, $date ?: null, $ver !== '' ? $ver : null, $note !== '' ? $note : null, $rid]);
+            unset($existing[$rid]);
+        } else {
+            $db->prepare("INSERT INTO type_id_ctrl_item_rev (item_id, seq, rev_date, rev_version, note, auto_key)
+                           VALUES (?,?,?,?,?,?)")
+               ->execute([$itemId, $seq, $date ?: null, $ver !== '' ? $ver : null, $note !== '' ? $note : null,
+                          $autoKey !== '' ? $autoKey : null]);
+        }
+    }
+    if ($existing) {
+        $ids = array_keys($existing);
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $db->prepare("UPDATE type_id_ctrl_item_rev SET is_deleted=1, updated_at=NOW() WHERE id IN ($in)")->execute($ids);
+    }
+}
+
+/* ============================================================================
+ * 專案連動（2026-10-01 使用者要求）
+ * --------------------------------------------------------------------------
+ * ①清單要看得出「這個料號有沒有專案」並且可以篩選。
+ * ②專案相關的資料要由管理員設定哪幾種自動列入項目列。
+ * 專案料號的對應表是 project_part（ds_pk ↔ d_setting.d_id），不另外存一份對照。
+ * ========================================================================== */
+
+/**
+ * 可設定自動列入的「專案相關資料」登記表（唯一登記處；加一列就多一種可勾選的來源）。
+ *   ready=false 代表專案模組那邊的資料表還沒好，畫面上照樣列得出來但標示「尚未提供」，
+ *   等專案頁完成後把 ready 改成 true 並補上 fetch 函式即可自動生效（鐵律4：不另存對照表）。
+ */
+function type_id_ctrl_project_sources(): array {
+    return [
+        'fai_confirm' => [
+            'label' => '客戶首件確認書',
+            'desc'  => '專案首件檢驗(FAI)經客戶確認回簽的確認書；專案頁面建置中，完成後自動生效。',
+            'ready' => false,
+        ],
+    ];
+}
+
+/** 目前勾選要自動列入的專案資料來源代碼（預設全部不列入，管理員自己開） */
+function type_id_ctrl_project_src_cfg(PDO $db): array {
+    try {
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='TYPE_ID_CTRL' AND param_key='project_sources' LIMIT 1");
+        $st->execute();
+        $arr = json_decode((string)$st->fetchColumn(), true);
+    } catch (Throwable $e) { $arr = null; }
+    if (!is_array($arr)) $arr = [];
+    $out = [];
+    foreach (type_id_ctrl_project_sources() as $code => $def) {
+        $cfg = is_array($arr[$code] ?? null) ? $arr[$code] : [];
+        $out[$code] = [
+            'enabled'   => !empty($cfg['enabled']),
+            'item_name' => trim((string)($cfg['item_name'] ?? '')) ?: $def['label'],
+        ];
+    }
+    return $out;
+}
+
+/** 儲存專案資料來源設定（只認登記表裡有的代碼，其餘一律忽略） */
+function type_id_ctrl_project_src_save(PDO $db, array $rows, string $byUser): void {
+    $defs = type_id_ctrl_project_sources();
+    $clean = [];
+    foreach ($rows as $code => $cfg) {
+        $code = trim((string)$code);
+        if (!isset($defs[$code]) || !is_array($cfg)) continue;
+        $name = trim((string)($cfg['item_name'] ?? ''));
+        $clean[$code] = ['enabled' => !empty($cfg['enabled']) ? 1 : 0,
+                         'item_name' => $name !== '' ? $name : $defs[$code]['label']];
+    }
+    type_id_ctrl_param_save($db, 'project_sources', json_encode($clean, JSON_UNESCAPED_UNICODE),
+                            '型態識別文件管制表：哪些專案相關資料要自動列入項目列', $byUser);
+}
+
+/**
+ * 這些料號各自有哪些專案（ds_pk => [['project_id','project_no','name','status'], ...]）。
+ * 一次查一批，清單頁才不會逐列各打一次（N+1）。project_part 查不到就是沒有專案。
+ */
+function type_id_ctrl_part_projects(PDO $db, array $dsPks): array {
+    $dsPks = array_values(array_unique(array_filter(array_map('intval', $dsPks))));
+    if (!$dsPks) return [];
+    $in = implode(',', array_fill(0, count($dsPks), '?'));
+    try {
+        $st = $db->prepare("SELECT pp.ds_pk, p.project_id, COALESCE(p.project_no,'') AS project_no,
+                                   COALESCE(p.project_name,'') AS project_name,
+                                   COALESCE(p.status,'') AS status, COALESCE(p.phase,'') AS phase
+                             FROM project_part pp
+                             JOIN project p ON p.project_id = pp.project_id AND COALESCE(p.is_deleted,0)=0
+                             WHERE pp.ds_pk IN ($in)
+                             ORDER BY p.project_id DESC");
+        $st->execute($dsPks);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }   // 專案模組尚未建表時一律當成沒有專案，不讓本頁壞掉
+    // 狀態／階段顯示文字一律在這裡轉（專案模組自己的對照表 PRJ_PHASES 只有階段，
+    // 狀態的中文散在專案頁的下拉選項裡；本頁只是要顯示得懂，故在此集中一處轉換）
+    $stLabel = ['draft'=>'草稿','submitted'=>'已送簽','approved'=>'已核准','rejected'=>'已退回','closed'=>'已結案'];
+    $phLabel = ['planning'=>'規劃','executing'=>'執行','controlling'=>'控制','closing'=>'結案'];
+    $map = [];
+    foreach ($rows as $r) {
+        $r['status_label'] = $stLabel[$r['status']] ?? (string)$r['status'];
+        $r['phase_label']  = $phLabel[$r['phase']]  ?? (string)$r['phase'];
+        $map[(int)$r['ds_pk']][] = $r;
+    }
+    return $map;
 }

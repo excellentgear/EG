@@ -28,6 +28,18 @@ $uid   = $me ? (int)$me['id'] : 0;
 $uname = $me ? (string)$me['user_cname'] : '';
 
 function jout($arr) { echo json_encode($arr, JSON_UNESCAPED_UNICODE); exit; }
+
+/** 這個料號的專案組成一行顯示文字（2026-10-01 使用者要求：表頭「製程」取消，改顯示有沒有專案） */
+function projectInfoText(PDO $db, int $dsPk): string {
+    if (!$dsPk) return '';
+    $rows = type_id_ctrl_part_projects($db, [$dsPk])[$dsPk] ?? [];
+    if (!$rows) return '';
+    $parts = [];
+    foreach ($rows as $r) {
+        $parts[] = trim($r['project_no'] . ' ' . $r['project_name']) . '（' . $r['status_label'] . '）';
+    }
+    return implode('；', $parts);
+}
 function needView(array $perms) { if (!$perms['canView']) jout(['success'=>false,'message'=>'無檢閱權限']); }
 function needEdit(array $perms) { if (!$perms['canEdit']) jout(['success'=>false,'message'=>'無登錄權限']); }
 function needAdmin(array $perms) { if (!$perms['canAdmin']) jout(['success'=>false,'message'=>'無管理權限']); }
@@ -40,7 +52,14 @@ const TYPE_LABELS   = TIC_TYPE_LABELS;
 const SOURCE_LABELS = TIC_SOURCE_LABELS;
 
 /** 組出單筆項目列的顯示資料（即時解析連結，不快照）——實作在共用庫，這裡只是薄包裝 */
-function buildItemView(PDO $db, array $it): array { return type_id_ctrl_item_view($db, $it); }
+function buildItemView(PDO $db, array $it): array {
+    $v = type_id_ctrl_item_view($db, $it);
+    // 修訂履歷（2026-10-01 使用者要求）：已存的列 ＋ 來源新偵測到還沒存過的自動列。
+    // 刻意只加在本頁自己的 view（不動共用庫的 type_id_ctrl_item_view），產品型態稽核表那邊
+    // 不需要這一欄，也不必為了它多跑每列一次查詢。
+    $v['revisions'] = type_id_ctrl_item_revs($db, (int)($it['id'] ?? 0), $it);
+    return $v;
+}
 
 const REVIEW_LABELS = ['pending'=>'待確認','confirmed'=>'已確認','needs_recheck'=>'需重新確認'];
 
@@ -138,6 +157,17 @@ case 'list':
     }
     unset($r);
     if ($needsUpdateFilter === 'yes') $rows = array_values(array_filter($rows, fn($r) => $r['has_new'] || $r['has_changed']));
+    // 這個料號有沒有專案（2026-10-01 使用者要求：清單要看得出來、也要能單獨篩選）。
+    // 一次查一批（type_id_ctrl_part_projects），不逐列各打一次＝避免 N+1。
+    $prjMap = type_id_ctrl_part_projects($db, array_column($rows, 'part_d_id'));
+    foreach ($rows as &$r) {
+        $r['projects']    = $prjMap[(int)$r['part_d_id']] ?? [];
+        $r['has_project'] = !empty($r['projects']);
+    }
+    unset($r);
+    $prjFilter = trim((string)($_GET['project'] ?? ''));
+    if ($prjFilter === 'yes')     $rows = array_values(array_filter($rows, fn($r) => $r['has_project']));
+    else if ($prjFilter === 'no') $rows = array_values(array_filter($rows, fn($r) => !$r['has_project']));
     jout(['success'=>true,'rows'=>$rows]);
 
 case 'get':
@@ -179,7 +209,7 @@ case 'get':
     $items = array_map(function($it) use ($db) { return buildItemView($db, $it); }, $st->fetchAll(PDO::FETCH_ASSOC));
     $dates = computeDocDates($items);
     jout(['success'=>true,'doc'=>$doc,'items'=>$items,'doc_date_earliest'=>$dates['earliest'],'sign_date_latest'=>$dates['latest'],
-          'process_summary'=>type_id_ctrl_process_header_summary($db,(int)$doc['part_d_id']),
+          'project_info'=>projectInfoText($db,(int)$doc['part_d_id']),
           'auto_added_count'=>$autoAdded, 'auto_changed_count'=>$autoChanged]);
 
 case 'delete_header':
@@ -305,6 +335,7 @@ case 'save_all':
                     $rowId,
                 ]);
                 unset($existing[$rowId]);
+                type_id_ctrl_revs_save($db, $rowId, is_array($it['revisions'] ?? null) ? $it['revisions'] : []);
             } else {
                 $st = $db->prepare("INSERT INTO type_id_ctrl_item
                     (doc_id, seq, item_name, item_type, process_tag, need_process_hint, ref_source, ref_attach_id, ref_ds_pk, ref_file_name, ref_bom_tag, is_excluded, manual_effective_date, manual_doc_no)
@@ -315,6 +346,7 @@ case 'save_all':
                     $isLinked && $refFileName !== '' ? $refFileName : null, $isLinked && $refBomTag !== '' ? $refBomTag : null, $isExcluded,
                     $isLinked ? null : ($manualDate ?: null), $isLinked ? null : ($manualDocNo ?: null),
                 ]);
+                type_id_ctrl_revs_save($db, (int)$db->lastInsertId(), is_array($it['revisions'] ?? null) ? $it['revisions'] : []);
             }
         }
         // 前端已移除的列：軟刪除
@@ -322,6 +354,8 @@ case 'save_all':
             $delIds = array_keys($existing);
             $in = implode(',', array_fill(0, count($delIds), '?'));
             $db->prepare("UPDATE type_id_ctrl_item SET is_deleted=1 WHERE id IN ($in)")->execute($delIds);
+            // 項目列刪掉時，它底下的修訂履歷一併軟刪除，否則之後同一個 id 不會再出現、履歷變成孤兒
+            $db->prepare("UPDATE type_id_ctrl_item_rev SET is_deleted=1, updated_at=NOW() WHERE item_id IN ($in)")->execute($delIds);
         }
         if ($confirm) {
             $db->prepare("UPDATE type_id_ctrl_doc SET review_status='confirmed', confirmed_by=?, confirmed_by_name=?, confirmed_at=NOW() WHERE id=?")
@@ -359,21 +393,11 @@ case 'search_ext_doc':
     unset($er);
     jout(['success'=>true,'rows'=>$extRows]);
 
-// ── 從此料號的訂單+報價單帶入製程（type_id_ctrl_process_candidates，2026-08-12 加入報價單來源）──
-case 'get_order_process':
-    needView($perms);
-    $partDId = (int)($_POST['part_d_id'] ?? 0);
-    if (!$partDId) jout(['success'=>false,'message'=>'缺少料號']);
-    $rows = array_map(function($p){
-        return ['process'=>$p['process'], 'order_oo'=>($p['ref_kind'].' '.$p['ref_no']), 'order_date'=>$p['ref_date']];
-    }, type_id_ctrl_process_candidates($db, $partDId));
-    jout(['success'=>true,'rows'=>array_slice($rows, 0, 10)]);
-
 // ── 選定料號後自動列出此料號目前所有外來文件清單附件（供「新增」跳窗預先帶入項目列）──
 case 'fetch_ext_for_part':
     needView($perms);
     $dsPk = (int)($_POST['part_d_id'] ?? $_GET['part_d_id'] ?? 0);
-    if (!$dsPk) jout(['success'=>true,'rows'=>[],'doc_date_earliest'=>null,'process_summary'=>'']);
+    if (!$dsPk) jout(['success'=>true,'rows'=>[],'doc_date_earliest'=>null,'project_info'=>'']);
     $ext = type_id_ctrl_fetch_ext_docs_for_part($db, $dsPk);
     $out = array_map(function($er){
         return [
@@ -395,7 +419,7 @@ case 'fetch_ext_for_part':
     $dates = computeDocDates($out);
     jout(['success'=>true,'rows'=>$out,
           'doc_date_earliest'=>$dates['earliest'],
-          'process_summary'=>type_id_ctrl_process_header_summary($db, $dsPk)]);
+          'project_info'=>projectInfoText($db, $dsPk)]);
 
 // ── 依料號自動產生/同步型態識別文件管制表(每料號一份，項目自標所屬製程)────
 case 'sync_part':
@@ -650,12 +674,31 @@ case 'print_get':
     jout([
         'success'=>true, 'doc'=>$doc, 'items'=>$items,
         'doc_date_earliest'=>$dates['earliest'], 'sign_date_latest'=>$dates['latest'],
-        'process_summary'=>type_id_ctrl_process_header_summary($db,(int)$doc['part_d_id']),
+        'project_info'=>projectInfoText($db,(int)$doc['part_d_id']),
         'company_name'=>type_id_ctrl_company_name($db),
         'as_doc_no'=>eg_asdoc_no_asof($db, 'type_id_ctrl', $bizDate),
         'as_doc_name'=>$asDoc['doc_name'] ?? '型態識別文件管制表',
         'stamp_tpl'=>type_id_ctrl_stamp_tpl($db, type_id_ctrl_stamp_tpl_id($db)),
     ]);
+
+// ── 專案相關資料自動列入設定（2026-10-01 使用者要求：由管理員決定哪幾種要自動列入項目列）──
+case 'project_src_get':
+    needView($perms);
+    $defs = type_id_ctrl_project_sources();
+    $cfg  = type_id_ctrl_project_src_cfg($db);
+    $rows = [];
+    foreach ($defs as $code => $d) {
+        $rows[] = ['code'=>$code, 'label'=>$d['label'], 'desc'=>$d['desc'], 'ready'=>!empty($d['ready']),
+                   'enabled'=>$cfg[$code]['enabled'], 'item_name'=>$cfg[$code]['item_name']];
+    }
+    jout(['success'=>true, 'rows'=>$rows, 'can_edit'=>$perms['canAdmin']]);
+
+case 'project_src_save':
+    needAdmin($perms);
+    $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
+    if (!is_array($rows)) $rows = [];
+    type_id_ctrl_project_src_save($db, $rows, $uname);
+    jout(['success'=>true]);
 
 default:
     jout(['success'=>false,'message'=>'未知動作']);
