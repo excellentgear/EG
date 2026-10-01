@@ -463,16 +463,20 @@ case 'pool': {
     jout(['pool'=>$rows, 'capped'=>$capped]);
 }
 
-/* 多選加入本期對象 */
+/* 多選加入本期對象
+ * adhoc=1：新增供應商評鑑（如全新廠商的首次稽核），不受年度計畫鎖定限制、也一律不設預定稽核月份，
+ *          因此不會出現在「供應商稽核計劃」年度計畫表；除此之外(登錄/簽核/列印/KPI計入)與一般對象完全相同。 */
 case 'add_targets': {
     if (!vendor_audit_can_edit_scope($db, $perms, $uid, $scope)) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核登錄權限，請洽管理員於「稽核員資格設定」指派', 403);
     $year = (int)($_POST['year'] ?? 0);
     $half = (int)($_POST['half'] ?? 0);
     if ($year < 2000 || ($half !== 1 && $half !== 2)) jerr('期別不正確');
-    if (vendor_audit_plan_locked($db, $year, $scope)) jerr($year.' 年度稽核計劃（'.vendor_audit_scope_label($scope).'）已送出鎖定，不可再增列對象');
+    $adhoc = (int)($_POST['adhoc'] ?? 0) === 1;
+    if (!$adhoc && vendor_audit_plan_locked($db, $year, $scope)) jerr($year.' 年度稽核計劃（'.vendor_audit_scope_label($scope).'）已送出鎖定，不可再增列對象');
     $ids = va_ids($_POST['maker_ids'] ?? '');
     if (!$ids) jerr('請選擇廠商');
-    $pm = (int)($_POST['plan_month'] ?? 0); $pm = ($pm >= 1 && $pm <= 12) ? $pm : null;
+    $pm = $adhoc ? null : (int)($_POST['plan_month'] ?? 0);
+    $pm = ($pm !== null && $pm >= 1 && $pm <= 12) ? $pm : null;
     try {
         $db->beginTransaction();
         $rid = vendor_audit_round_id($db, $year, $half, true, $u);

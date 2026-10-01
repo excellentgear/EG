@@ -270,6 +270,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <label>期別</label>
             <select id="halfSel"><option value="1">上半年(1-6月)</option><option value="2">下半年(7-12月)</option></select>
             <button class="btn-warm" id="btnPick" style="display:none;"><i class="fa fa-plus"></i> 加入稽核對象</button>
+            <button id="btnPickAdhoc" style="display:none;" title="新增供應商的評鑑，不受年度計畫鎖定限制，也不列入年度計畫表"><i class="fa fa-plus-circle"></i> 新增供應商評鑑</button>
             <button id="btnAuditor" style="display:none;"><i class="fa fa-user-circle-o"></i> 稽核員設定</button>
             <button id="btnCycle" style="display:none;"><i class="fa fa-refresh"></i> 週期設定</button>
             <button id="btnAttachSet" style="display:none;"><i class="fa fa-folder-open-o"></i> 附件路徑</button>
@@ -410,6 +411,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <div class="va-mask" id="pkMask"><div class="va-modal pkwide">
     <div class="m-head"><span id="pkTitle">加入稽核對象</span><span class="m-close" onclick="closeMask('pkMask')">✕</span></div>
     <div class="m-body">
+        <div id="pkAdhocNote" style="display:none;background:#FFF7E8;border:1px solid #E8D5B5;border-radius:6px;padding:6px 10px;color:#8A5A2B;margin-bottom:8px;">
+            <b>新增供應商評鑑</b>：本次新增的稽核對象<b>不受年度計畫鎖定限制、也不會列入「供應商稽核計劃」年度計畫表</b>，其餘登錄、簽核、記錄表、列印皆與一般稽核對象完全相同。若廠商不在清單中，請先至主檔管理新增該廠商。
+        </div>
         <div class="pk-filter">
             <label style="margin:0;font-size:12px;color:#5b3a1e;">大類</label>
             <select id="pkMain"><option value="">全部</option></select>
@@ -426,9 +430,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         </div>
         <div class="pk-grid" id="pkBody"><div class="empty">請設定條件後查詢</div></div>
         <div class="pk-actions">
-            <div class="grp">預定稽核月份 <select id="pkMonth" style="height:28px;border:1px solid #D8BE93;border-radius:4px;"></select></div>
+            <div class="grp" id="pkMonthGrp">預定稽核月份 <select id="pkMonth" style="height:28px;border:1px solid #D8BE93;border-radius:4px;"></select></div>
             <div class="grp"><button class="b-add" onclick="addSelected()"><i class="fa fa-check"></i> 加入選取</button></div>
-            <div class="grp">隨機抽 <input type="number" id="pkRandN" min="1" step="1" value="5"> 家：
+            <div class="grp" id="pkRandGrp">隨機抽 <input type="number" id="pkRandN" min="1" step="1" value="5"> 家：
                 <button class="b-add" onclick="randomDraw()"><i class="fa fa-random"></i> 抽取加入</button>
                 <span style="font-size:11px;color:#8a6d45;">(自納管廠商)</span></div>
             <div class="grp" id="pkManageGrp" style="display:none;margin-left:auto;">
@@ -833,6 +837,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <ul>
             <li><b>模型</b>：每期（上半年 1–6 月／下半年 7–12 月）挑一批廠商稽核。KPI 執行率＝已完成 ÷ 本期對象數。</li>
             <li><b>加入稽核對象</b>：依大類／加工項目篩選後多選加入，或隨機抽 N 家（自納管廠商）；可指定「預定稽核月份」。</li>
+            <li><b>新增供應商評鑑</b>（工具列另一顆按鈕）：用於<b>全新廠商的首次評鑑</b>等臨時性稽核需求——挑選後直接加入本期對象，<b>不受年度計畫鎖定限制（即使該年度計畫已送出鎖定仍可新增）、也不設預定稽核月份、不會出現在「供應商稽核計劃」年度計畫表</b>；加入之後的登錄、簽核、記錄表、列印、KPI 計入等流程與一般稽核對象完全相同。若廠商尚未建檔，請先至主檔管理新增該廠商。</li>
             <li><b>登錄</b>：填「供應商評鑑稽核表」簡版 15 項，每項自評分＋稽核分各 0~7；系統自動算各類與綜合合格率（自評×0.3＋稽核×0.7），<b>≥75% 判合格</b>。</li>
             <li><b>記錄表</b>（已稽核者）：由 15 項換算 5 大類合格率，含<b>雷達圖</b>；可「列印記錄表」或「一次印全部文件」（查核表＋記錄表為不同文件，各自跳出一個列印視窗；記錄表若有上傳佐證附件會一併接續印出，圖片與 PDF 可直接預覽，其他類型僅顯示檔名）；可上傳供應商簽名回傳掃描檔。</li>
             <li><b>停用廠商</b>（master_data 客戶/廠商設為停用者）：灰底、不可加入、不列入 KPI。</li>
@@ -990,7 +995,7 @@ function loadMeta(cb){
         for (var mi=1; mi<=12; mi++) mo += '<option value="'+mi+'">'+mi+'月</option>';
         $('#pkMonth').html(mo).val(m.cur_month);
         $('#recPlanMonth').html(mo);
-        $('#btnPick').toggle(!!m.perms.canEdit);
+        $('#btnPick,#btnPickAdhoc').toggle(!!m.perms.canEdit);
         // 週期設定/附件路徑/AS文件綁定是共用infra，不隨scope收斂(使用者2026-08-17明確選擇暫時兩邊共用)，
         // 仍用原本的 canAdmin；查核表設定/簽核設定/稽核員設定/納管切換/定期評核門檻/兩年未交易檢查
         // 全部依範疇收斂，改用 canAdminScope，避免顯示了按鈕但點下去被後端擋。用 toggle 而非 show，
@@ -1073,8 +1078,22 @@ function renderTargets(){
 $('#yearSel,#halfSel').on('change', loadRound);
 
 /* ---------- 廠商池挑選 ---------- */
+var PK_ADHOC = false; // true＝「新增供應商評鑑」模式：不受年度計畫鎖定限制、強制不設預定月份、不列入年度計畫表
 $('#btnPick').on('click', function(){
+    PK_ADHOC = false;
     $('#pkTitle').text('加入稽核對象（'+$('#yearSel').val()+' '+($('#halfSel').val()==1?'上半年':'下半年')+'）');
+    $('#pkAdhocNote').hide();
+    $('#pkMonthGrp,#pkRandGrp').show();
+    $('#pkBody').html('<tr><td colspan="5" style="padding:14px;color:#8a6d45;">請設定條件後查詢</td></tr>');
+    $('#pkCount').text(''); $('#pkAll').prop('checked', false);
+    openMask('pkMask');
+    loadPool();
+});
+$('#btnPickAdhoc').on('click', function(){
+    PK_ADHOC = true;
+    $('#pkTitle').text('新增供應商評鑑（不列入年度計畫）');
+    $('#pkAdhocNote').show();
+    $('#pkMonthGrp,#pkRandGrp').hide();
     $('#pkBody').html('<tr><td colspan="5" style="padding:14px;color:#8a6d45;">請設定條件後查詢</td></tr>');
     $('#pkCount').text(''); $('#pkAll').prop('checked', false);
     openMask('pkMask');
@@ -1119,10 +1138,11 @@ function pkChecked(){ return $('#pkBody input.pk-ck:checked').map(function(){ re
 function addSelected(){
     var ids = pkChecked();
     if (!ids.length){ alert('請勾選要加入的廠商'); return; }
-    $.post(API, {action:'add_targets', year:$('#yearSel').val(), half:$('#halfSel').val(), maker_ids:ids.join(','), plan_month:$('#pkMonth').val()},
+    $.post(API, {action:'add_targets', year:$('#yearSel').val(), half:$('#halfSel').val(), maker_ids:ids.join(','),
+        plan_month: PK_ADHOC ? '' : $('#pkMonth').val(), adhoc: PK_ADHOC?1:0},
     function(res){
         if (!res.ok){ alert(res.error||'加入失敗'); return; }
-        alert('已加入 '+res.added+' 家'); loadPool(); loadRound();
+        alert('已加入 '+res.added+' 家'+(PK_ADHOC?'（新供應商評鑑，不列入年度計畫）':'')); loadPool(); loadRound();
     }, 'json').fail(function(x){ alert('加入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 function randomDraw(){
