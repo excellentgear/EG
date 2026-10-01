@@ -127,6 +127,7 @@ case 'meta': {
           'eval_settings'=>vendor_eval_settings($db, $scope),
           'scope'=>$scope, 'scopes'=>[['v'=>'outsource','l'=>'外包加工(生管)'],['v'=>'purchase','l'=>'採購']],
           'visible_scopes'=>$visibleScopes,
+          'nv'=>vendor_audit_nv_checklist_config($db, $scope),
         ], vendor_audit_checklist_config($db, $scope)));
 }
 
@@ -571,8 +572,12 @@ case 'get_form': {
     $scores = json_decode((string)($t['scores_json'] ?? ''), true);
     // 這裡的 scope 一律以該供應商主檔實際歸屬為準(而非請求帶的 scope 參數)，因為同一期(round)可能同時有兩種 scope 的對象
     $targetScope = vendor_audit_scope_of($t['main_category_id'] !== null ? (int)$t['main_category_id'] : null);
+    $isAdhoc = (int)($t['is_adhoc'] ?? 0) === 1;
     $auditors = vendor_audit_auditors($db, $targetScope);
-    $cfg = vendor_audit_resolve_cfg($db, $t['checklist_snapshot'], $targetScope);
+    // 新供應商評鑑(is_adhoc=1)改用「查核表設定(○○-新供應商)」那份題庫，不是稽核批次15項題庫
+    $cfg = $isAdhoc
+        ? vendor_audit_nv_resolve_cfg($db, $t['checklist_snapshot'], $targetScope)
+        : vendor_audit_resolve_cfg($db, $t['checklist_snapshot'], $targetScope);
     // 附件
     $at = $db->prepare("SELECT attach_id, original_name, note, created_by_name, created_at, file_name, year
                         FROM vendor_audit_attach WHERE target_id=? ORDER BY attach_id");
@@ -594,6 +599,7 @@ case 'get_form': {
     $recordDoc = vendor_audit_bound_asdoc($db, 'vendor_record_as_doc_id', $bizDate);
     jout(['target'=>[
         'target_id'=>(int)$t['target_id'], 'maker_id_no'=>$t['maker_id_no'], 'maker_id'=>$t['maker_id'],
+        'is_adhoc'=>$isAdhoc ? 1 : 0,
         'main_cat_name'=>$t['main_cat_name'], 'scope'=>$targetScope, 'scope_label'=>vendor_audit_scope_label($targetScope),
         'audit_date'=>$t['audit_date'], 'auditor'=>$t['auditor'],
         'report_no'=>$t['report_no'], 'note'=>$t['note'], 'audit_mode'=>$t['audit_mode'], 'plan_month'=>$t['plan_month'],
@@ -746,12 +752,13 @@ case 'attach_open': {
 case 'record_target': {
     if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $tid = (int)($_POST['target_id'] ?? 0);
-    $st = $db->prepare("SELECT t.status, t.checklist_snapshot, m.main_category_id
+    $st = $db->prepare("SELECT t.status, t.checklist_snapshot, t.is_adhoc, m.main_category_id
                         FROM vendor_audit_target t JOIN maker_list m ON m.maker_id_no=t.maker_id_no WHERE t.target_id=?");
     $st->execute([$tid]);
     $cur = $st->fetch(PDO::FETCH_ASSOC);
     if (!$cur) jerr('找不到對象');
     $targetScope = vendor_audit_scope_of($cur['main_category_id'] !== null ? (int)$cur['main_category_id'] : null);
+    $isAdhoc = (int)($cur['is_adhoc'] ?? 0) === 1;
     if (!vendor_audit_can_edit_scope($db, $perms, $uid, $targetScope)) jerr('您沒有本廠商所屬範疇（'.vendor_audit_scope_label($targetScope).'）的稽核登錄權限', 403);
     if (in_array($cur['status'], ['pending','approved'], true)) jerr('此筆已送審核/已核准，請先重新整理確認狀態，如需修改請聯絡管理員');
     $auditDate = trim((string)($_POST['audit_date'] ?? ''));
@@ -761,17 +768,21 @@ case 'record_target': {
     if (!$clear && $auditor === null) jerr('請填寫稽核員');
     $reportNo = trim((string)($_POST['report_no'] ?? '')) ?: null;
     $note = trim((string)($_POST['note'] ?? '')) ?: null;
-    $auditMode = in_array($_POST['audit_mode'] ?? '', ['first','again','self'], true) ? $_POST['audit_mode'] : null;
+    $auditMode = in_array($_POST['audit_mode'] ?? '', ['first','again','self','newvendor'], true) ? $_POST['audit_mode'] : null;
     $selfEval = trim((string)($_POST['self_evaluator'] ?? '')) ?: null;
     $supplierRep = trim((string)($_POST['supplier_rep'] ?? '')) ?: null;
     $conclusion = trim((string)($_POST['conclusion'] ?? '')) ?: null;
     $reviewType = in_array($_POST['review_type'] ?? '', ['site','self','abnormal'], true) ? $_POST['review_type'] : null;
+    // 新供應商評鑑一律不設預定稽核月份(不列入年度計畫表)，不採信前端送來的值，整個生命週期(建立/登錄/完成)都要守同一條規則
     $pm = (int)($_POST['plan_month'] ?? 0); $pm = ($pm >= 1 && $pm <= 12) ? $pm : null;
+    if ($isAdhoc) $pm = null;
 
-    // scores：{item_id:{self,audit,note}}
+    // scores：一般對象 {item_id:{self,audit,note}}；新供應商評鑑的題庫雖獨立一份，計分形狀仍相同
     $scores = json_decode((string)($_POST['scores'] ?? ''), true);
     if (!is_array($scores)) $scores = [];
-    $cfg = vendor_audit_resolve_cfg($db, $cur['checklist_snapshot'], $targetScope);
+    $cfg = $isAdhoc
+        ? vendor_audit_nv_resolve_cfg($db, $cur['checklist_snapshot'], $targetScope)
+        : vendor_audit_resolve_cfg($db, $cur['checklist_snapshot'], $targetScope);
     $rates = vendor_audit_compute_rates($scores, $cfg);
     $hasScore = false;
     foreach ($scores as $s) { if (is_array($s) && ((isset($s['self']) && $s['self'] !== '') || (isset($s['audit']) && $s['audit'] !== ''))) { $hasScore = true; break; } }
@@ -816,7 +827,7 @@ case 'complete_target': {
     $auditor = trim((string)($_POST['auditor'] ?? '')) ?: null;
     $reportNo = trim((string)($_POST['report_no'] ?? '')) ?: null;
     $note = trim((string)($_POST['note'] ?? '')) ?: null;
-    $auditMode = in_array($_POST['audit_mode'] ?? '', ['first','again','self'], true) ? $_POST['audit_mode'] : null;
+    $auditMode = in_array($_POST['audit_mode'] ?? '', ['first','again','self','newvendor'], true) ? $_POST['audit_mode'] : null;
     $selfEval = trim((string)($_POST['self_evaluator'] ?? '')) ?: null;
     $supplierRep = trim((string)($_POST['supplier_rep'] ?? '')) ?: null;
     $conclusion = trim((string)($_POST['conclusion'] ?? '')) ?: null;
@@ -827,7 +838,7 @@ case 'complete_target': {
 
     try {
         $db->beginTransaction();
-        $st = $db->prepare("SELECT t.status, t.checklist_snapshot, m.main_category_id
+        $st = $db->prepare("SELECT t.status, t.checklist_snapshot, t.is_adhoc, m.main_category_id
                             FROM vendor_audit_target t JOIN maker_list m ON m.maker_id_no=t.maker_id_no WHERE t.target_id=? FOR UPDATE");
         $st->execute([$tid]);
         $cur = $st->fetch(PDO::FETCH_ASSOC);
@@ -836,8 +847,12 @@ case 'complete_target': {
             $db->rollBack(); jerr('此筆狀態已變更(可能已完成/送審核)，請重新整理後再試');
         }
         $targetScope = vendor_audit_scope_of($cur['main_category_id'] !== null ? (int)$cur['main_category_id'] : null);
+        $isAdhoc = (int)($cur['is_adhoc'] ?? 0) === 1;
+        if ($isAdhoc) $pm = null; // 新供應商評鑑一律不設預定稽核月份(不列入年度計畫表)
         if (!vendor_audit_can_edit_scope($db, $perms, $uid, $targetScope)) { $db->rollBack(); jerr('您沒有本廠商所屬範疇（'.vendor_audit_scope_label($targetScope).'）的稽核登錄權限', 403); }
-        $cfg = vendor_audit_resolve_cfg($db, $cur['checklist_snapshot'], $targetScope);
+        $cfg = $isAdhoc
+            ? vendor_audit_nv_resolve_cfg($db, $cur['checklist_snapshot'], $targetScope)
+            : vendor_audit_resolve_cfg($db, $cur['checklist_snapshot'], $targetScope);
         $errs = vendor_audit_validate_complete(['auditor'=>$auditor, 'conclusion'=>$conclusion, 'review_type'=>$reviewType, 'scores'=>$scores], $cfg);
         if ($errs) { $db->rollBack(); jerr(implode('；', $errs)); }
 
@@ -969,6 +984,28 @@ case 'save_checklist': {
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     jout(vendor_audit_checklist_config($db, $scope));
+}
+
+/* 查核表設定（○○-新供應商）：新供應商評鑑(is_adhoc=1)專用題庫，與稽核批次15項題庫各自獨立一份，
+ * 一樣依 scope(外包加工/採購)各自獨立；首次讀取會自動建立預設內容(4類8項、單項滿分10分、總分80分) */
+case 'get_nv_checklist': {
+    if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
+    jout(vendor_audit_nv_checklist_config($db, $scope));
+}
+case 'save_nv_checklist': {
+    if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
+    $cats = json_decode((string)($_POST['cats'] ?? ''), true);
+    if (!is_array($cats) || !$cats) jerr('查核表內容不可為空');
+    $selfW = (float)($_POST['self_w'] ?? VENDOR_AUDIT_SELF_W);
+    $auditW = (float)($_POST['audit_w'] ?? VENDOR_AUDIT_AUDIT_W);
+    $passRate = (float)($_POST['pass_rate'] ?? VENDOR_AUDIT_PASS_RATE);
+    try {
+        $db->beginTransaction();
+        vendor_audit_nv_checklist_save($db, $cats, $scope);
+        vendor_audit_nv_save_weights($db, $selfW, $auditW, $passRate, $scope);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
+    jout(vendor_audit_nv_checklist_config($db, $scope));
 }
 
 /* 設定廠商是否納入稽核管理（管理員；支援批次；只能動自己範疇(或all)的廠商） */

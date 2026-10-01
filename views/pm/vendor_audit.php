@@ -315,6 +315,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <label>期別</label>
             <select id="adHalfSel"><option value="1">上半年(1-6月)</option><option value="2">下半年(7-12月)</option></select>
             <button class="btn-warm" id="btnPickAdhoc" style="display:none;" title="新增供應商的評鑑，不受年度計畫鎖定限制，也不列入年度計畫表"><i class="fa fa-plus-circle"></i> 新增供應商評鑑</button>
+            <button id="btnNvChecklist" style="display:none;" title="新供應商評鑑專用查核表（與稽核批次的題庫各自獨立）"><i class="fa fa-list-ol"></i> 查核表設定</button>
             <button id="adBtnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button onclick="window.print()"><i class="fa fa-print"></i> 列印清單</button>
         </div>
@@ -337,7 +338,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             </table>
         </div>
         <div class="va-remind" style="font-size:11px;color:#8a6d45;margin-top:4px;">
-            用於全新廠商的首次評鑑等臨時性稽核需求：按「新增供應商評鑑」挑選廠商後直接加入本期（不受年度計畫鎖定限制、不設預定稽核月份），不會出現在「供應商稽核計劃」年度計畫表，也<b>不計入 KPI 廠商稽核按時執行率</b>；其餘登錄、簽核、記錄表、列印流程與「稽核批次」完全相同。若廠商尚未建檔，請先至主檔管理新增該廠商。
+            用於全新廠商的首次評鑑等臨時性稽核需求：按「新增供應商評鑑」挑選廠商後直接加入本期（不受年度計畫鎖定限制、不設預定稽核月份），不會出現在「供應商稽核計劃」年度計畫表，也<b>不計入 KPI 廠商稽核按時執行率</b>；其餘登錄、簽核、記錄表、列印流程與「稽核批次」完全相同。若廠商尚未建檔，請先至主檔管理新增該廠商。<br>
+            登錄用的查核表是<b>本分頁專用的另一份題庫</b>（預設 4 類 8 項、單項滿分 10 分、總分 80 分），管理員可按工具列「查核表設定」調整，與「稽核批次」的 15 項題庫各自獨立、互不影響。
         </div>
         </div><!-- /tabNewVendor -->
 
@@ -489,6 +491,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>稽核日期（留空=尚未稽核，月內完成即準時）</label><input type="date" id="recDate"></div>
             <div><label>稽核狀況</label><select id="recMode">
                 <option value="first">首次稽核</option><option value="again">次稽核</option><option value="self">自我評量</option>
+                <option value="newvendor">新供應商稽核</option>
             </select></div>
             <div><label>稽核員 <span id="recScopeHint" style="font-size:11px;color:#b5762a;"></span></label>
                 <select id="recAuditor"><option value="">—</option></select></div>
@@ -700,6 +703,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             可調整每個類別/項次的文字與單項滿分；總分滿分由系統依所有項次滿分加總自動計算。<br>
             <b>已完成評分的稽核紀錄會凍結當時的查核表內容，之後在此調整不會影響舊紀錄。</b>
         </div>
+        <div id="clNvNote" style="display:none;background:#FFF7E8;border:1px solid #E8D5B5;border-radius:6px;padding:6px 10px;color:#8A5A2B;margin-bottom:8px;font-size:12px;">
+            這份是<b>「新供應商評鑑」分頁專用</b>的查核表（預設 4 類 8 項、單項滿分 10 分、總分 80 分），與「稽核批次」的題庫<b>各自獨立</b>，在這裡調整<b>不會影響稽核批次</b>的查核表，反之亦然。
+        </div>
         <div id="clCatsBox"></div>
         <button type="button" class="b-att2" onclick="clAddCat()"><i class="fa fa-plus"></i> 新增類別</button>
         <div style="margin-top:14px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
@@ -880,6 +886,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <li>與「稽核批次」是<b>完全獨立的分頁</b>，用於<b>全新廠商的首次評鑑</b>等臨時性稽核需求，一樣以<b>年度／上半年／下半年</b>瀏覽，但資料與計畫對象分開存放、分開顯示（不會混在稽核批次的主表格裡）。</li>
             <li>按「新增供應商評鑑」挑選廠商（大類／加工項目篩選後多選，或打字搜尋）後直接加入本期，<b>不受年度計畫鎖定限制</b>（即使該年度／範疇的計畫已送出鎖定仍可新增）、<b>一律不設預定稽核月份</b>，因此<b>不會出現在「供應商稽核計劃」年度計畫表，也不計入 KPI「廠商稽核按時執行率」</b>。若廠商尚未建檔，請先至主檔管理新增該廠商。</li>
             <li>加入之後的<b>登錄、簽核、記錄表、列印</b>等操作與「稽核批次」完全相同（共用同一套稽核評鑑表單與流程），本分頁上方的完成度只供自行追蹤參考，不是官方 KPI 指標。</li>
+            <li>登錄畫面的<b>「稽核狀況」自動帶入並固定為「新供應商稽核」</b>（首次稽核／次稽核／自我評量是稽核批次的用語，這裡不會出現，列印版的勾選格也只印「☑新供應商稽核」）；<b>預定稽核月份</b>欄位也不顯示（本分頁不列入年度計畫）。</li>
+            <li><b>查核表是本分頁專用的另一份題庫</b>（工具列「查核表設定」，標題為「查核表設定（○○-新供應商）」）：系統已自動建立預設內容<b>4 類 8 項、單項滿分 10 分、總分 80 分</b>——A.管理（認證／品質手冊與內部稽核）、B.品質（產品追溯／檢驗能力／儀器校驗／不良品隔離）、C.交期（出車收送貨）、D.出貨（待驗品·合格品·廢品隔離與標籤）。管理員可自行增刪、改文字與改單項滿分，與「稽核批次」的 15 項題庫<b>各自獨立、互不影響</b>，也<b>依範疇（外包加工／採購）各自一份</b>。</li>
+            <li>自評/稽核權重與合格率門檻同樣在該設定畫面調整（初始值沿用與稽核批次相同的 自評×0.3＋稽核×0.7、≥75% 判合格，使用者未指定故取此為預設，可自行改）。<b>已完成評分的紀錄會凍結當時的題庫內容</b>，之後調整不影響舊紀錄。</li>
         </ul>
 
         <h4>二、定期評核（月不良／遲交率，ERP 自動算）</h4>
@@ -1041,7 +1050,7 @@ function loadMeta(cb){
         // 全部依範疇收斂，改用 canAdminScope，避免顯示了按鈕但點下去被後端擋。用 toggle 而非 show，
         // 因為現在切換範疇後這些權限可能從有變沒有，需要能連帶隱藏回去。
         $('#btnCycle,#btnAttachSet,#btnAsDoc').toggle(!!m.perms.canAdmin);
-        $('#btnAuditor,#btnChecklist,#btnSignSetting,#pkManageGrp,#evSet').toggle(!!m.perms.canAdminScope);
+        $('#btnAuditor,#btnChecklist,#btnNvChecklist,#btnSignSetting,#pkManageGrp,#evSet').toggle(!!m.perms.canAdminScope);
         var $ey = $('#evYear').empty(), $ry = $('#rsYear').empty(), $py = $('#planYear').empty();
         for (var yy=m.cur_year; yy>=m.cur_year-5; yy--){ $ey.append('<option value="'+yy+'">'+yy+'</option>'); $ry.append('<option value="'+yy+'">'+yy+'</option>'); $py.append('<option value="'+yy+'">'+yy+'</option>'); }
         $ey.val(m.cur_year); $ry.val(m.cur_year); $py.val(m.cur_year);
@@ -1307,13 +1316,24 @@ function openRec(tid){
     $.getJSON(API, {action:'get_form', target_id:tid}, function(res){
         if(!res.ok){ alert(res.error||'載入失敗'); return; }
         var t = res.target;
-        CUR_CFG = t.checklist_cfg || {items:META.items, total_max:META.total_max, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
+        // 新供應商評鑑(is_adhoc=1)用的是「查核表設定（○○-新供應商）」那份題庫(後端已解析好帶在 checklist_cfg)，
+        // 這裡的 fallback 也要跟著分流，不可一律退回稽核批次的 META.items
+        var nvRec = !!t.is_adhoc;
+        CUR_CFG = t.checklist_cfg || (nvRec && META.nv
+            ? {items:META.nv.items, total_max:META.nv.total_max, self_w:META.nv.self_w, audit_w:META.nv.audit_w, pass_rate:META.nv.pass_rate}
+            : {items:META.items, total_max:META.total_max, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate});
         CUR_PROD_TYPE = t.prod_type || null;
         CUR_REC = t;
-        $('#recTitle').text('稽核評鑑表單：'+t.maker_id+'（'+t.maker_id_no+'）');
+        $('#recTitle').text((nvRec?'新供應商評鑑表單：':'稽核評鑑表單：')+t.maker_id+'（'+t.maker_id_no+'）');
+        // 新供應商評鑑不列入年度計畫，預定稽核月份欄位沒有意義(後端也一律寫 NULL)，直接隱藏避免誤填
+        $('#recPlanMonth').closest('div').toggle(!nvRec);
+        // 稽核狀況：新供應商評鑑一律是「新供應商稽核」，自動帶入且只留這個選項(首次/次稽核/自我評量是稽核批次的用語)；
+        // 一般稽核批次則反過來不顯示「新供應商稽核」這個選項
+        $('#recMode option[value="newvendor"]').prop('hidden', !nvRec).prop('disabled', !nvRec);
+        $('#recMode option').not('[value="newvendor"]').prop('hidden', nvRec).prop('disabled', nvRec);
         $('#recPlanMonth').val(t.plan_month||'');
         $('#recDate').val((t.audit_date?String(t.audit_date).substr(0,10):'')||META.today);
-        $('#recMode').val(t.audit_mode||'first');
+        $('#recMode').val(nvRec ? 'newvendor' : (t.audit_mode||'first'));
         // 稽核員下拉：只列該供應商 scope(外包加工/採購)＋通用 的有資格者
         var $au = $('#recAuditor').html('<option value="">—</option>');
         (res.auditors||[]).forEach(function(a){
@@ -1415,7 +1435,9 @@ function renderForm(scores){
 function applyReviewTypeCols(){
     var rt = $('input[name=recReviewType]:checked').val();
     $('#afTable').toggleClass('va-abnormal', rt==='abnormal');
-    if (rt === 'self') $('#recMode').val('self');
+    // 新供應商評鑑的稽核狀況固定是「新供應商稽核」，不可被「供應商自主評核」這個審查類別改寫掉
+    var nvRec = !!(CUR_REC && CUR_REC.is_adhoc);
+    if (rt === 'self' && !nvRec) $('#recMode').val('self');
 }
 $(document).on('change', 'input[name=recReviewType]', applyReviewTypeCols);
 function collectScores(){
@@ -1529,7 +1551,7 @@ function openSignMask(tid){
         var t = res.target, cfg = t.checklist_cfg, c = computeCats(t.scores||{}, cfg);
         SIGN_TID = tid;
         $('#signTitle').text('供應商稽核簽核：'+t.maker_id+'（'+t.maker_id_no+'）');
-        var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'—';
+        var modeL={first:'首次稽核',again:'次稽核',self:'自我評量',newvendor:'新供應商稽核'}[t.audit_mode]||'—';
         $('#signInfo').html('稽核日期：'+(fmtDate(t.audit_date)||'—')+'　稽核狀況：'+modeL+'　稽核員：'+esc(t.auditor||'—')+'　建議結論：'+esc(t.conclusion||'—'));
         var rows='';
         c.cats.forEach(function(k){ rows+='<tr><td class="af-q">'+esc(k.name)+'</td><td class="af-sc">'+k.max+'</td><td class="af-sc">'+k.self_rate+'%</td><td class="af-sc">'+k.audit_rate+'%</td></tr>'; });
@@ -1645,11 +1667,13 @@ function auditFormOneVersion(o, mode){
     var reviewBoxes = ['site','self','abnormal'].map(function(k){ return (mode===k?'☑':'□')+reviewMap[k]; }).join('　');
     var prodMap = {raw:'原料', outsource:'委外加工件', packaging:'包材'};
     var prodBoxes = ['raw','outsource','packaging'].map(function(k){ return (o.prodType===k?'☑':'□')+prodMap[k]; }).join('　');
-    var modeMap = {first:'首次稽核', again:'次稽核', self:'自我評量'};
+    var modeMap = {first:'首次稽核', again:'次稽核', self:'自我評量', newvendor:'新供應商稽核'};
     // 供應商自主評核版(mode==='self')本來就只有「自我評量」這一種可能，固定勾選；
     // 人員實地審查/異常檢核版依該筆紀錄真實的稽核狀況(o.mode)顯示（可能是首次或次稽核）
     var modeForBoxes = (mode === 'self') ? 'self' : o.mode;
-    var modeBoxes = ['first','again','self'].map(function(k){ return (modeForBoxes===k?'☑':'□')+modeMap[k]; }).join('　');
+    // 新供應商評鑑的稽核狀況只有「新供應商稽核」一種，紙本就不要再印首次/次稽核/自我評量那三格
+    var modeKeys = (modeForBoxes==='newvendor') ? ['newvendor'] : ['first','again','self'];
+    var modeBoxes = modeKeys.map(function(k){ return (modeForBoxes===k?'☑':'□')+modeMap[k]; }).join('　');
     var info = '<table class="pf-info"><tr>'
         + '<td>供應商：'+(o.maker?esc(o.maker):'________________')+'</td>'
         + '<td>日期：'+(o.dateStr?esc(o.dateStr):'____ / ____ / ____')+'</td></tr>'
@@ -1770,7 +1794,7 @@ function openRecordSheet(tid){
         RS={tid:tid, t:t, c:c, cfg:cfg, attaches:res.attaches||[]};
         var doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
         $('#rsTitle').text(docName+'：'+t.maker_id+'（'+t.maker_id_no+'）');
-        var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'—';
+        var modeL={first:'首次稽核',again:'次稽核',self:'自我評量',newvendor:'新供應商稽核'}[t.audit_mode]||'—';
         $('#rsInfo').html('供應商：<b>'+esc(t.maker_id)+'</b>（'+esc(t.maker_id_no)+'）　稽核日期：'+(fmtDate(t.audit_date)||'—')+'　稽核狀況：'+modeL+'　稽核員：'+esc(t.auditor||'—'));
         var rows='';
         c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*cfg.self_w+k.audit_rate*cfg.audit_w)*10)/10;
@@ -1787,11 +1811,22 @@ function openRecordSheet(tid){
 }
 function drawRadar(){
     if(!RS||typeof Highcharts==='undefined') return;
+    var radarCats = RS.c.cats.map(function(k){return k.name;});
     rsChart = Highcharts.chart('rsChart', {
         chart:{polar:true, type:'line', backgroundColor:'transparent'},
         title:{text:null}, credits:{enabled:false},
         pane:{size:'80%'},
-        xAxis:{categories:RS.c.cats.map(function(k){return k.name;}), tickmarkPlacement:'on', lineWidth:0},
+        // 雷達圖的角度範圍必須是 0~類別數(不是類別數-1)才繞得回起點，所以 Highcharts 會在「最後一格之後」
+        // 多畫一個收尾刻度(位置=類別數)——它跟第一軸是同一個方向，但沒有對應的類別名稱，預設就把位置數字
+        // 本身印出來(4類印「4」、5類印「5」)，正好疊在第一個類別名稱上，看起來像多一條軸/標錯字。
+        // 這裡用 formatter 讓超出類別範圍的收尾刻度不印字(幾何不動，只是不顯示重複標籤)。
+        // 注意：類別軸的 formatter 裡 this.value 是「類別名稱字串」不是索引，要用 this.pos 才拿得到位置，
+        // 用 this.value 當索引會把每一個標籤都算成 undefined，變成四個軸全部沒有名稱。
+        xAxis:{categories:radarCats, tickmarkPlacement:'on', lineWidth:0,
+               labels:{formatter:function(){
+                   var i = (this.pos !== undefined && this.pos !== null) ? this.pos : this.value;
+                   return radarCats[i] || '';
+               }}},
         yAxis:{gridLineInterpolation:'polygon', min:0, max:100, tickInterval:20},
         tooltip:{shared:true, valueSuffix:'%'},
         series:[{name:'自評', data:RS.c.cats.map(function(k){return k.self_rate;}), color:'#E8C170', pointPlacement:'on'},
@@ -1842,7 +1877,7 @@ function vaJudgeBadgeHtml(pass){
 function recordSheetHTML(){
     if (!RS) return '';
     var t=RS.t, c=RS.c, cfg=RS.cfg, doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
-    var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'____';
+    var modeL={first:'首次稽核',again:'次稽核',self:'自我評量',newvendor:'新供應商稽核'}[t.audit_mode]||'____';
     var head='<div style="text-align:center;"><div style="font-size:25px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
         +'<div style="font-size:19px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
     var info='<table class="pf-info"><tr><td>供應商：'+esc(t.maker_id)+'（'+esc(t.maker_id_no)+'）</td><td>加工項目：'+esc(t.main_cat_name||'—')+'</td><td>稽核日期：'+(fmtDate(t.audit_date)||'____')+'</td><td>稽核狀況：'+esc(modeL)+'</td></tr></table>';
@@ -2707,21 +2742,34 @@ $('#planPrintBtn').on('click', function(){
     openPrintWindow(body, '供應商稽核計劃', docNo, true);
 });
 
-/* ---------- 查核表設定(管理員) ---------- */
-var CL_CATS = [];
-$('#btnChecklist').on('click', function(){
-    $.getJSON(API, {action:'get_checklist'}, function(res){
+/* ---------- 查核表設定(管理員) ----------
+ * 同一個跳窗管兩份各自獨立的題庫（用 CL_MODE 區分，不另刻第二套設定畫面）：
+ *   CL_MODE='audit'    → 稽核批次 15 項題庫（查核表設定（外包加工）／（採購））
+ *   CL_MODE='newvendor'→ 新供應商評鑑題庫（查核表設定（外包加工-新供應商）），單項滿分預設 10 分
+ * 兩份都是依範疇(外包加工/採購)各自獨立，標題一律標明正在編輯哪一份，避免誤改到另一份。 */
+var CL_CATS = [], CL_MODE = 'audit';
+function clDefaultItemMax(){ return CL_MODE === 'newvendor' ? 10 : 7; }
+function clModeTitle(){
+    return CL_MODE === 'newvendor'
+        ? '查核表設定（'+scopeLabel(CUR_SCOPE)+'-新供應商）'
+        : '查核表設定（'+scopeLabel(CUR_SCOPE)+'）';
+}
+function openChecklistSetting(mode){
+    CL_MODE = (mode === 'newvendor') ? 'newvendor' : 'audit';
+    $.getJSON(API, {action: CL_MODE==='newvendor' ? 'get_nv_checklist' : 'get_checklist'}, function(res){
         if(!res.ok){ alert(res.error||'載入失敗'); return; }
         CL_CATS = (res.items||[]).map(function(cat){
             return {code:cat[0], name:cat[1], items:cat[2].map(function(it){ return {item_id:+it[0], item_no:it[1], question:it[2], item_max:it[3]}; })};
         });
         $('#clSelfW').val(res.self_w); $('#clAuditW').val(res.audit_w); $('#clPassRate').val(res.pass_rate);
-        // 查核表依範疇(外包加工/採購)各自獨立一份，標題標示目前正在編輯哪一份，避免誤改成對方的題庫
-        $('#checklistMask .m-head span:first').text('查核表設定（'+scopeLabel(CUR_SCOPE)+'）');
+        $('#checklistMask .m-head span:first').text(clModeTitle());
+        $('#clNvNote').toggle(CL_MODE==='newvendor');
         clRenderCats();
         openMask('checklistMask');
     });
-});
+}
+$('#btnChecklist').on('click', function(){ openChecklistSetting('audit'); });
+$('#btnNvChecklist').on('click', function(){ openChecklistSetting('newvendor'); });
 function clRenderCats(){
     var html='';
     CL_CATS.forEach(function(cat, ci){
@@ -2755,9 +2803,9 @@ function clRecalcTotal(){
     var t=0; CL_CATS.forEach(function(cat){ cat.items.forEach(function(it){ t+=(+it.item_max||0); }); });
     $('#clTotalMax').text(t);
 }
-function clAddCat(){ CL_CATS.push({code:'', name:'新類別', items:[{item_id:0,item_no:'1',question:'',item_max:7}]}); clRenderCats(); }
+function clAddCat(){ CL_CATS.push({code:'', name:'新類別', items:[{item_id:0,item_no:'1',question:'',item_max:clDefaultItemMax()}]}); clRenderCats(); }
 function clDelCat(ci){ if(CL_CATS.length<=1){alert('至少要保留一個類別');return;} CL_CATS.splice(ci,1); clRenderCats(); }
-function clAddItem(ci){ CL_CATS[ci].items.push({item_id:0, item_no:String(CL_CATS[ci].items.length+1), question:'', item_max:7}); clRenderCats(); }
+function clAddItem(ci){ CL_CATS[ci].items.push({item_id:0, item_no:String(CL_CATS[ci].items.length+1), question:'', item_max:clDefaultItemMax()}); clRenderCats(); }
 function clDelItem(ci,ii){ if(CL_CATS[ci].items.length<=1){alert('該類別至少要保留一個項次');return;} CL_CATS[ci].items.splice(ii,1); clRenderCats(); }
 function submitChecklist(){
     for (var i=0;i<CL_CATS.length;i++){
@@ -2767,10 +2815,12 @@ function submitChecklist(){
             if (!(+CL_CATS[i].items[j].item_max>0)){ alert('單項滿分需大於0'); return; }
         }
     }
-    $.post(API, {action:'save_checklist', cats:JSON.stringify(CL_CATS),
+    var nv = (CL_MODE === 'newvendor');
+    $.post(API, {action: nv ? 'save_nv_checklist' : 'save_checklist', cats:JSON.stringify(CL_CATS),
         self_w:$('#clSelfW').val(), audit_w:$('#clAuditW').val(), pass_rate:$('#clPassRate').val()}, function(res){
         if(!res.ok){ alert(res.error||'儲存失敗'); return; }
-        META.items=res.items; META.total_max=res.total_max; META.self_w=res.self_w; META.audit_w=res.audit_w; META.pass_rate=res.pass_rate;
+        if (nv) META.nv = res;
+        else { META.items=res.items; META.total_max=res.total_max; META.self_w=res.self_w; META.audit_w=res.audit_w; META.pass_rate=res.pass_rate; }
         closeMask('checklistMask');
         alert('已儲存（已完成評分的紀錄不受影響）');
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });

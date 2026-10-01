@@ -169,6 +169,16 @@ function vendor_audit_ensure_schema(PDO $db): void {
     // 查核表題庫 scope 化(2026-08-17)：生管(外包加工)/採購各自獨立一份題庫，互不干涉；既有題庫沿用為 outsource 預設
     try { $db->exec("ALTER TABLE vendor_audit_checklist_cat ADD COLUMN scope VARCHAR(10) NOT NULL DEFAULT 'outsource'
                      COMMENT 'outsource=外包加工(生管) purchase=採購' AFTER cat_id"); } catch (Throwable $e) {}
+    // 2026-10-01：新供應商評鑑題庫以 outsource_newvendor／purchase_newvendor 當 scope 鍵，原 VARCHAR(10) 裝不下
+    // (實測 1406 Data too long)；只有還是 10 的舊站台才下 ALTER，不每次請求都動 schema
+    try {
+        $len = $db->query("SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS
+                           WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='vendor_audit_checklist_cat' AND COLUMN_NAME='scope'")->fetchColumn();
+        if ($len !== false && (int)$len < 30) {
+            $db->exec("ALTER TABLE vendor_audit_checklist_cat MODIFY COLUMN scope VARCHAR(30) NOT NULL DEFAULT 'outsource'
+                       COMMENT 'outsource=外包加工(生管) purchase=採購；加 _newvendor 尾碼=該範疇的新供應商評鑑題庫'");
+        }
+    } catch (Throwable $e) {}
 
     foreach ([['vendor_audit_view','稽核檢閱'],['vendor_audit_edit','稽核登錄'],['vendor_audit_admin','稽核管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='vendor_audit' LIMIT 1");
@@ -264,6 +274,160 @@ const VENDOR_AUDIT_TOTAL_MAX = 105;
 const VENDOR_AUDIT_PASS_RATE = 75.0;   // 綜合合格率 ≥75% 判合格
 const VENDOR_AUDIT_SELF_W    = 0.3;
 const VENDOR_AUDIT_AUDIT_W   = 0.7;
+
+/* 新供應商評鑑（is_adhoc=1，2026-10-01新增）查核表題庫：單項滿分10分，4類8項，總分80分。
+ * 使用者明確要求這份題庫是「查核表設定（外包加工-新供應商）」——跟稽核批次15項題庫一樣逐 scope 各自
+ * 一份（外包加工/採購），不是跨兩種範疇共用同一份；內容只先給了外包加工這份，採購的新供應商查核表
+ * 留空由管理員之後自己建（首次存取會自動用同一份預設內容補種子，管理員再視採購需求調整）。
+ * 借用同一組資料表(vendor_audit_checklist_cat/_item)，以 scope 字串加上 _newvendor 尾碼區分
+ * (例：outsource_newvendor／purchase_newvendor)——先正規化成合法 outsource/purchase 再加尾碼，
+ * 不會跟既有 outsource/purchase 兩個鍵撞在一起；同一套自評/稽核雙欄計分與合格率公式
+ * (vendor_audit_compute_rates)、同一套登錄/簽核/記錄表/列印流程——只是換一組題庫內容與權重設定，
+ * 不是另一套計分模型，禁止重新發明。 */
+const VENDOR_AUDIT_NV_ITEM_MAX = 10;
+function vendor_audit_nv_scope_key(string $scope = 'outsource'): string {
+    return vendor_audit_norm_scope($scope) . '_newvendor';
+}
+function vendor_audit_nv_default_items(): array {
+    return [
+        ['A', 'A.管理', [
+            [1, '是否取得 ISO 9001 / AS9100 / Nadcap 認證？（附證書影本）'],
+            [2, '是否建立品質手冊與內部稽核機制？'],
+        ]],
+        ['B', 'B.品質', [
+            [3, '是否有產品追溯？'],
+            [4, '是否具備加工項目檢驗能力？'],
+            [5, '儀器是否定期校驗？'],
+            [6, '是否具備不良品隔離程序？'],
+        ]],
+        ['C', 'C.交期', [
+            [7, '是否可配合出車收送貨？'],
+        ]],
+        ['D', 'D.出貨', [
+            [8, '待驗品、合格品、廢品是否有實體隔離與明確標籤？'],
+        ]],
+    ];
+}
+function vendor_audit_nv_checklist_ensure_seed(PDO $db, string $scope = 'outsource'): void {
+    $key = vendor_audit_nv_scope_key($scope);
+    $st = $db->prepare("SELECT COUNT(*) FROM vendor_audit_checklist_cat WHERE scope=?");
+    $st->execute([$key]);
+    if ((int)$st->fetchColumn() > 0) return;
+    $sort = 0;
+    foreach (vendor_audit_nv_default_items() as $cat) {
+        [$code, $name, $items] = $cat;
+        $sort += 10;
+        $db->prepare("INSERT INTO vendor_audit_checklist_cat (scope, code, name, sort_order, is_active) VALUES (?,?,?,?,1)")
+           ->execute([$key, $code, $name, $sort]);
+        $catId = (int)$db->lastInsertId();
+        $isort = 0;
+        foreach ($items as $it) {
+            $isort += 10;
+            $db->prepare("INSERT INTO vendor_audit_checklist_item (cat_id, item_no, question, item_max, sort_order, is_active) VALUES (?,?,?,?,?,1)")
+               ->execute([$catId, (string)$it[0], $it[1], VENDOR_AUDIT_NV_ITEM_MAX, $isort]);
+        }
+    }
+}
+/** 自評/稽核權重與合格率門檻(可由管理員調整，依 scope 各自獨立；預設沿用與稽核批次相同的
+ *  0.3/0.7/75%，使用者未指定新供應商評鑑的門檻故取此為初始值) */
+function vendor_audit_nv_weights(PDO $db, string $scope = 'outsource'): array {
+    $key = vendor_audit_nv_scope_key($scope);
+    return [
+        'self_w'    => (float)vendor_eval_setting($db, 'vendor_audit_self_w_'.$key, VENDOR_AUDIT_SELF_W),
+        'audit_w'   => (float)vendor_eval_setting($db, 'vendor_audit_audit_w_'.$key, VENDOR_AUDIT_AUDIT_W),
+        'pass_rate' => (float)vendor_eval_setting($db, 'vendor_audit_pass_rate_'.$key, VENDOR_AUDIT_PASS_RATE),
+    ];
+}
+function vendor_audit_nv_save_weights(PDO $db, float $selfW, float $auditW, float $passRate, string $scope = 'outsource'): void {
+    $key = vendor_audit_nv_scope_key($scope);
+    $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
+                        ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+    $up->execute(['vendor_audit_self_w_'.$key, (string)$selfW]);
+    $up->execute(['vendor_audit_audit_w_'.$key, (string)$auditW]);
+    $up->execute(['vendor_audit_pass_rate_'.$key, (string)$passRate]);
+}
+/** 目前生效中的新供應商評鑑查核表(依 scope 各自獨立一份)：[[code,name,[[item_id,item_no,question,item_max],...]],...] */
+function vendor_audit_nv_checklist_live(PDO $db, string $scope = 'outsource'): array {
+    vendor_audit_nv_checklist_ensure_seed($db, $scope);
+    $key = vendor_audit_nv_scope_key($scope);
+    $st = $db->prepare("SELECT cat_id, code, name FROM vendor_audit_checklist_cat WHERE scope=? AND is_active=1 ORDER BY sort_order, cat_id");
+    $st->execute([$key]);
+    $cats = $st->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    $ist = $db->prepare("SELECT item_id, item_no, question, item_max FROM vendor_audit_checklist_item WHERE cat_id=? AND is_active=1 ORDER BY sort_order, item_id");
+    foreach ($cats as $c) {
+        $ist->execute([$c['cat_id']]);
+        $items = [];
+        foreach ($ist->fetchAll(PDO::FETCH_ASSOC) as $it) {
+            $items[] = [(string)$it['item_id'], (string)$it['item_no'], $it['question'], (float)$it['item_max']];
+        }
+        if ($items) $out[] = [$c['code'], $c['name'], $items];
+    }
+    return $out;
+}
+/** 目前生效中的新供應商評鑑完整查核表設定(給新草稿使用；已凍結快照的目標請用 vendor_audit_nv_resolve_cfg) */
+function vendor_audit_nv_checklist_config(PDO $db, string $scope = 'outsource'): array {
+    $scope = vendor_audit_norm_scope($scope);
+    $items = vendor_audit_nv_checklist_live($db, $scope);
+    $w = vendor_audit_nv_weights($db, $scope);
+    $total = 0;
+    foreach ($items as $cat) foreach ($cat[2] as $it) $total += $it[3];
+    return ['items'=>$items, 'total_max'=>$total, 'self_w'=>$w['self_w'], 'audit_w'=>$w['audit_w'], 'pass_rate'=>$w['pass_rate'], 'scope'=>vendor_audit_nv_scope_key($scope)];
+}
+/** 解析新供應商評鑑對象「當時應採用」的查核表設定：已有快照就回放凍結內容，否則採用該 scope 目前生效版本 */
+function vendor_audit_nv_resolve_cfg(PDO $db, ?string $snapshotJson, string $scope = 'outsource'): array {
+    if ($snapshotJson) {
+        $d = json_decode($snapshotJson, true);
+        if (is_array($d) && !empty($d['items'])) return $d;
+    }
+    return vendor_audit_nv_checklist_config($db, $scope);
+}
+/** 管理員儲存新供應商評鑑查核表(類別/項次/單項滿分)：整批覆蓋該 scope 現行生效版本；
+ *  不影響稽核批次(outsource/purchase)、另一 scope 的新供應商查核表，與已凍結快照的舊紀錄 */
+function vendor_audit_nv_checklist_save(PDO $db, array $cats, string $scope = 'outsource'): void {
+    $key = vendor_audit_nv_scope_key($scope);
+    vendor_audit_nv_checklist_ensure_seed($db, $scope);
+    $db->prepare("UPDATE vendor_audit_checklist_cat SET is_active=0 WHERE scope=?")->execute([$key]);
+    $db->prepare("UPDATE vendor_audit_checklist_item SET is_active=0 WHERE cat_id IN (SELECT cat_id FROM vendor_audit_checklist_cat WHERE scope=?)")->execute([$key]);
+    $sort = 0;
+    foreach ($cats as $cat) {
+        $code = trim((string)($cat['code'] ?? ''));
+        $name = trim((string)($cat['name'] ?? ''));
+        if ($name === '') continue;
+        $sort += 10;
+        $catId = (int)($cat['cat_id'] ?? 0);
+        $hit = false;
+        if ($catId > 0) {
+            $up = $db->prepare("UPDATE vendor_audit_checklist_cat SET code=?, name=?, sort_order=?, is_active=1 WHERE cat_id=? AND scope=?");
+            $up->execute([$code, $name, $sort, $catId, $key]);
+            $hit = $up->rowCount() > 0;
+        }
+        if (!$hit) {
+            $db->prepare("INSERT INTO vendor_audit_checklist_cat (scope, code, name, sort_order, is_active) VALUES (?,?,?,?,1)")
+               ->execute([$key, $code, $name, $sort]);
+            $catId = (int)$db->lastInsertId();
+        }
+        $isort = 0;
+        foreach (($cat['items'] ?? []) as $it) {
+            $q = trim((string)($it['question'] ?? ''));
+            if ($q === '') continue;
+            $max = max(1, (float)($it['item_max'] ?? VENDOR_AUDIT_NV_ITEM_MAX));
+            $isort += 10;
+            $itemNo = trim((string)($it['item_no'] ?? '')) ?: (string)$isort;
+            $itemId = (int)($it['item_id'] ?? 0);
+            $ihit = false;
+            if ($itemId > 0) {
+                $up = $db->prepare("UPDATE vendor_audit_checklist_item SET item_no=?, question=?, item_max=?, sort_order=?, is_active=1 WHERE item_id=? AND cat_id=?");
+                $up->execute([$itemNo, $q, $max, $isort, $itemId, $catId]);
+                $ihit = $up->rowCount() > 0;
+            }
+            if (!$ihit) {
+                $db->prepare("INSERT INTO vendor_audit_checklist_item (cat_id, item_no, question, item_max, sort_order, is_active) VALUES (?,?,?,?,?,1)")
+                   ->execute([$catId, $itemNo, $q, $max, $isort]);
+            }
+        }
+    }
+}
 
 function vendor_audit_items(): array {
     return [
