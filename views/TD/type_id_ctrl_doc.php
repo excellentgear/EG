@@ -111,6 +111,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         table.ic-item-table td.op { width:100px; white-space:nowrap; text-align:center; }
         .ic-link-badge { font-size:10px; color:#8A5A2B; background:#F7E0BD; border-radius:8px; padding:0 6px; margin-left:2px; white-space:nowrap; }
         .ic-broken-badge { font-size:10px; color:#DD5138; background:#ffe1de; border-radius:8px; padding:0 6px; margin-left:2px; }
+        /* 「從外來文件清單選取」彈窗的分組標題列／通用版本提示列（2026-10-01 使用者回報清單太亂分組） */
+        table.ic-item-table tr.ext-grp-row td { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:4px 6px; border-top:2px solid #D8BE93; }
+        table.ic-item-table tr.ext-grp-sub td { background:#FFF7E8; color:#8a6d45; font-size:11px; font-style:italic; padding:2px 6px; }
         .ic-row-btn { border:1px solid #D8BE93; background:#fff; color:#5b3a1e; border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer; }
         .ic-row-btn:hover { background:#F7E0BD; }
         .ic-row-btn.del { color:#DD5138; border-color:#f0c4bd; }
@@ -302,12 +305,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
 </div></div>
 
 <!-- 從外來文件清單選取 -->
-<div class="ic-mask" id="extMask" style="z-index:1200;"><div class="ic-modal">
+<div class="ic-mask" id="extMask" style="z-index:1200;"><div class="ic-modal xwide">
     <div class="m-head"><span>從外來文件清單選取</span><span class="m-close" onclick="closeMask('extMask')">✕</span></div>
     <div class="m-body">
         <div id="extEmpty" style="color:#8a6d45;padding:10px;">載入中…</div>
+        <div class="tip" style="margin-bottom:6px;">依文件種類分組列出；SOP／SIP 兩組內 <i class="fa fa-star" style="color:#F0A24B;"></i> 標示的是已自動比對此料號（專用或通用限定此客戶）的建議選項，排在最前面。</div>
         <table class="ic-item-table" id="extTable" style="display:none;">
-            <thead><tr><th>檔名</th><th style="width:100px;">日期</th><th style="width:60px;">來源</th><th style="width:50px;"></th></tr></thead>
+            <thead><tr><th>檔名／文件</th><th style="width:100px;">日期</th><th style="width:50px;"></th></tr></thead>
             <tbody id="extBody"></tbody>
         </table>
     </div>
@@ -1100,6 +1104,8 @@ window.icDelRow = function(){
     return true;
 };
 
+// 分組顯示順序：固定來源依序排列，SOP/SIP 永遠各自獨立成一組（2026-10-01 使用者要求「SOP 跟 SIP 要分開」）
+var EXT_GROUP_ORDER = ['料號附件','報價附件','產品開發評估表','PFMEA','ERP/資材報告','SOP','SIP'];
 function pickExtDoc(btn){
     var dsPk = $('#fPartDId').val();
     if (!dsPk || dsPk === '0'){ alert('請先選擇料號'); return; }
@@ -1109,14 +1115,36 @@ function pickExtDoc(btn){
     $.post(API, {action:'search_ext_doc', ds_pk: dsPk}, function(res){
         if (!res.success || !res.rows.length){ $('#extEmpty').show().text('外來文件清單中查無此料號的附件'); $('#extTable').hide(); return; }
         $('#extEmpty').hide(); $('#extTable').show();
-        var html = '';
-        res.rows.forEach(function(r, i){
-            var srcTxt = {part:'料號附件', quote:'報價附件', dev_eval:'產品開發評估表', pfmea:'PFMEA', bomfile:'ERP/資材報告', sopsip:'SOP／SIP'}[r.source] || r.source;
-            html += '<tr><td class="t-left">'+esc(r.doc_name)+'</td><td>'+fmtDate(r.doc_date)+'</td><td>'+esc(srcTxt)+'</td>'
-                + '<td><button type="button" class="ic-row-btn" onclick="applyExtDoc('+i+')">選取</button></td></tr>';
+        // 依後端回傳的 group 分組（料號附件/報價附件/產品開發評估表/PFMEA/ERP資材報告/SOP/SIP），
+        // 不再把所有來源混成一條長清單（使用者回報「外來文件選單好亂」）。SOP／SIP 兩組內，
+        // 已自動比對此料號(專用或通用限定此客戶)的 bound=true 排最前面並標星號，完全不限客戶的
+        // 通用版本排在後面且加一行提示，方便先看跟這個料號真正有關的那幾份。
+        var groups = {};
+        res.rows.forEach(function(r){ (groups[r.group] = groups[r.group] || []).push(r); });
+        Object.keys(groups).forEach(function(g){
+            groups[g].sort(function(a,b){ return (b.bound?1:0) - (a.bound?1:0); });
+        });
+        var order = EXT_GROUP_ORDER.concat(Object.keys(groups).filter(function(g){ return EXT_GROUP_ORDER.indexOf(g) < 0; }));
+        var html = '', flat = [];
+        order.forEach(function(g){
+            var rows = groups[g];
+            if (!rows || !rows.length) return;
+            html += '<tr class="ext-grp-row"><td colspan="3">'+esc(g)+'</td></tr>';
+            var shownGenericNote = false;
+            rows.forEach(function(r){
+                if (!r.bound && (g === 'SOP' || g === 'SIP') && !shownGenericNote){
+                    html += '<tr class="ext-grp-sub"><td colspan="3">以下為不限定客戶的通用版本，與此料號無直接關聯</td></tr>';
+                    shownGenericNote = true;
+                }
+                var i = flat.length; flat.push(r);
+                var star = (r.bound && (g === 'SOP' || g === 'SIP'))
+                    ? '<i class="fa fa-star" style="color:#F0A24B;" title="已自動比對：此料號專用或通用限定此客戶"></i> ' : '';
+                html += '<tr><td class="t-left">'+star+esc(r.doc_name)+'</td><td>'+fmtDate(r.doc_date)+'</td>'
+                    + '<td><button type="button" class="ic-row-btn" onclick="applyExtDoc('+i+')">選取</button></td></tr>';
+            });
         });
         $('#extBody').html(html);
-        window._extRows = res.rows; window._extTarget = $tr;
+        window._extRows = flat; window._extTarget = $tr;
     }, 'json');
 }
 window.applyExtDoc = function(i){
@@ -1127,10 +1155,20 @@ window.applyExtDoc = function(i){
     ITEMS[idx] = collectRow($tr);
     ITEMS[idx].is_linked = true; ITEMS[idx].ref_source = r.source; ITEMS[idx].ref_attach_id = r.attach_id; ITEMS[idx].ref_ds_pk = r.ds_pk;
     ITEMS[idx].ref_file_name = r.file_name||null; ITEMS[idx].ref_bom_tag = r.bom_tag||null;
-    ITEMS[idx].ref_source_label = {part:'外來文件', quote:'外來文件', dev_eval:'產品開發評估表', pfmea:'PFMEA', bomfile:'ERP/資材報告', sopsip:'SOP／SIP'}[r.source] || '自動帶入';
+    // sopsip 依 kind 細分 SOP／SIP，不要籠統顯示「SOP／SIP」（與後端 type_id_ctrl_ref_source_label 同一套規則）
+    ITEMS[idx].ref_source_label = (r.source === 'sopsip')
+        ? (r.kind === 'sip' ? 'SIP' : 'SOP')
+        : ({part:'外來文件', quote:'外來文件', dev_eval:'產品開發評估表', pfmea:'PFMEA', bomfile:'ERP/資材報告'}[r.source] || '自動帶入');
     ITEMS[idx].doc_no_text = r.doc_name; ITEMS[idx].effective_date = r.doc_date;
+    // 型態項目名稱：與後端 fetch_ext_for_part 同一套規則，categories 第一項優先、否則退回文件名
+    // （2026-10-01 使用者回報：選 SIP 後型態項目名稱沒有自動帶出——這行原本漏掉）
+    ITEMS[idx].item_name = (r.categories && r.categories.length) ? r.categories[0] : r.doc_name;
     if (r.force_type) ITEMS[idx].item_type = r.force_type;
     ITEMS[idx].need_process_hint = !!r.need_process;
+    // 選入後一律視為「納入」：舊列在套用連結前通常還沒有 .f-included 勾選框（未連結的列按鈕是
+    // 「選外來文件」，collectRow 會因為找不到勾選框而把它誤判成已勾消排除）；2026-10-01 使用者
+    // 要求「選入後要自動設定為納入」，直接覆寫成 false，不必再手動勾一次。
+    ITEMS[idx].is_excluded = false;
     $tr.replaceWith(itemRowHtml(ITEMS[idx], idx));
     closeMask('extMask');
 };

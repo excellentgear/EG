@@ -25,6 +25,30 @@ const TIC_TYPE_LABELS   = ['drawing' => '圖面', 'jig' => '治夾具', 'report'
 const TIC_SOURCE_LABELS = ['part' => '外來文件', 'quote' => '外來文件', 'dev_eval' => '產品開發評估表',
                            'pfmea' => 'PFMEA', 'bomfile' => 'ERP/資材報告', 'sopsip' => 'SOP／SIP'];
 
+/**
+ * 連結來源標籤——sopsip 一律依 kind 細分成「SOP」／「SIP」，不要籠統顯示「SOP／SIP」
+ * （2026-10-01 使用者要求：SOP 跟 SIP 要分開，混在同一個字樣會分不出連結到的到底是哪一種）。
+ * 唯一登記處：畫面徽章(type_id_ctrl_item_view)、「選外來文件」彈窗分組(type_id_ctrl_candidate_group)
+ * 與 fetch_ext_for_part 一律呼叫這裡，不各自寫一份判斷。
+ */
+function type_id_ctrl_ref_source_label(string $source, ?string $kind = null): string {
+    if ($source === 'sopsip') return ($kind === 'sip') ? 'SIP' : 'SOP';
+    return TIC_SOURCE_LABELS[$source] ?? '自動帶入';
+}
+
+/**
+ * 「選外來文件」彈窗的分組標題——刻意不沿用 TIC_SOURCE_LABELS：那份是「已連結之後」要顯示的
+ * 徽章文字，part/quote 兩種故意都寫成籠統的「外來文件」；但在挑選階段使用者要先分得出「這是料號
+ * 本身的附件、還是報價單上的附件」才挑得準（2026-10-01 使用者回報「外來文件選單好亂」），
+ * 所以這裡另外給一份更細的分組名稱，SOP／SIP 仍與 ref_source_label 用同一套 kind 判斷規則。
+ */
+function type_id_ctrl_candidate_group(string $source, ?string $kind = null): string {
+    if ($source === 'sopsip') return ($kind === 'sip') ? 'SIP' : 'SOP';
+    $map = ['part' => '料號附件', 'quote' => '報價附件', 'dev_eval' => '產品開發評估表',
+            'pfmea' => 'PFMEA', 'bomfile' => 'ERP/資材報告'];
+    return $map[$source] ?? $source;
+}
+
 /** 組出單筆項目列的顯示資料（即時解析連結，不快照）。原 ConfigIdDoc_API::buildItemView() */
 function type_id_ctrl_item_view(PDO $db, array $it): array {
     $linked = null;
@@ -50,7 +74,7 @@ function type_id_ctrl_item_view(PDO $db, array $it): array {
         'is_linked' => $linked !== null,
         'is_excluded' => !empty($it['is_excluded']),
         'ref_source' => $it['ref_source'],
-        'ref_source_label' => $it['ref_source'] ? (TIC_SOURCE_LABELS[$it['ref_source']] ?? '自動帶入') : '',
+        'ref_source_label' => $it['ref_source'] ? type_id_ctrl_ref_source_label($it['ref_source'], $linked['kind'] ?? null) : '',
         'ref_attach_id' => $it['ref_attach_id'] ? (int)$it['ref_attach_id'] : null,
         'ref_ds_pk' => $it['ref_ds_pk'] ? (int)$it['ref_ds_pk'] : null,
         'ref_file_name' => $it['ref_file_name'] ?? null,
@@ -299,6 +323,7 @@ function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $d
             'doc_name' => type_id_ctrl_sopsip_disp_name($doc, $ver),
             'doc_no_is_filename' => false,
             'doc_date' => $ver['form_date'] ?? null,
+            'kind' => $doc['kind'],   // 'process'(SOP)／'sip'(SIP)，供 ref_source_label 細分顯示用
             'file_url' => '../QA/sop_sip.php?tab=' . $tab . '&kw=' . rawurlencode((string)$doc['title']),
         ];
     }
@@ -770,6 +795,8 @@ function type_id_ctrl_fetch_sopsip_for_part(PDO $db, int $dsPk): array {
             'need_process'   => false,
             'origin_process' => $r['proc_name'] ?: null,
             'force_type'     => 'other',
+            'kind'           => $r['kind'],   // 'process'(SOP)／'sip'(SIP)：供選取彈窗分組
+            'bound'          => true,         // 自動命中此料號(專用或通用限定此客戶)，彈窗內優先顯示
         ];
     }
     return $out;
@@ -798,6 +825,8 @@ function type_id_ctrl_fetch_sopsip_generic(PDO $db, int $dsPk): array {
             'need_process'   => false,
             'origin_process' => $r['proc_name'] ?: null,
             'force_type'     => 'other',
+            'kind'           => $r['kind'],   // 'process'(SOP)／'sip'(SIP)：供選取彈窗分組
+            'bound'          => false,        // 完全不限客戶，彈窗內排在「已自動比對」的候選之後
         ];
     }
     return $out;

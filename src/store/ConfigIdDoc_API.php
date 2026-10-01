@@ -348,6 +348,15 @@ case 'search_ext_doc':
         if (isset($seenSopsip[(int)$g['attach_id']])) continue;
         $extRows[] = $g;
     }
+    // 彈窗分組顯示用（2026-10-01 使用者回報「外來文件選單好亂」）：group＝分組標題
+    // （SOP／SIP 各自獨立，不再混在「SOP／SIP」同一個字樣下），bound＝是否為此料號自動命中的候選
+    // ——除了 sopsip 的兩個來源各自已標好 bound，其餘來源(part/quote/dev_eval/pfmea/bomfile)
+    // 本來就是逐料號查出來的，一律視為 bound，前端才知道哪些該排在「已自動比對」前面。
+    foreach ($extRows as &$er) {
+        $er['group'] = type_id_ctrl_candidate_group($er['source'], $er['kind'] ?? null);
+        if (!array_key_exists('bound', $er)) $er['bound'] = true;
+    }
+    unset($er);
     jout(['success'=>true,'rows'=>$extRows]);
 
 // ── 從此料號的訂單+報價單帶入製程（type_id_ctrl_process_candidates，2026-08-12 加入報價單來源）──
@@ -375,7 +384,7 @@ case 'fetch_ext_for_part':
             'need_process_hint'=> !empty($er['need_process']),
             'is_linked'=>true, 'is_excluded'=>false,
             'ref_source'=>$er['source'], 'ref_attach_id'=>(int)$er['attach_id'], 'ref_ds_pk'=>(int)$er['ds_pk'],
-            'ref_source_label'=>SOURCE_LABELS[$er['source']] ?? '自動帶入',
+            'ref_source_label'=>type_id_ctrl_ref_source_label($er['source'], $er['kind'] ?? null),
             'ref_file_name'=>$er['file_name'] ?? null, 'ref_bom_tag'=>$er['bom_tag'] ?? null,
             'ref_broken'=>false, 'effective_date'=>$er['doc_date'], 'doc_no_text'=>$er['doc_name'], 'file_url'=>null,
         ];
