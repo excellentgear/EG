@@ -347,7 +347,7 @@ $db  = new DBConnection();
 $pdo = $db->getPDO();
 
 // ── Migration 版本鎖：版本符合時跳過所有 ALTER/CREATE，只跑一次 ──────────
-define('MDM_MIGRATION_VERSION', '20260922_01');   // 2026-09-22 客戶新增「英文全名」欄位（customer_full_en）
+define('MDM_MIGRATION_VERSION', '20261001_01');   // 2026-10-01 廠商加工項目新增「不列入定期評核評鑑等級」欄位（maker_sub_category_mapping.eval_excluded）
 $_mdm_skip_migration = false;
 try {
     // system_settings 可能尚不存在（第一次執行），用 try 保護
@@ -873,6 +873,8 @@ try {
             try { $pdo->exec("DROP TABLE _msm_backup"); } catch(Exception $e3) {}
         }
     } catch(Exception $e){}
+    // 廠商×加工項目：是否不列入定期評核評鑑等級（2026-10-01 新增，僅對有綁定製程大類的加工項目有實際計算效果）
+    try { $pdo->exec("ALTER TABLE maker_sub_category_mapping ADD COLUMN eval_excluded TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=此加工項目不列入定期評核評鑑等級計算'"); } catch(Exception $e){}
     // ── 一次性同步 process_type → dict_maker_sub_category（初始化用，有即跳過） ──
     try {
         $pdo->exec("INSERT IGNORE INTO dict_maker_sub_category (sub_cat_id, sub_cat_name, sub_cat_group, ref_process_type_id, is_active, sort_order)
@@ -3693,7 +3695,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 讀取已選小類（maker_sub_category_mapping 用 varchar maker_id_no）
             try {
                 $sq = $pdo->prepare("
-                    SELECT m.sub_cat_id, s.sub_cat_name, s.sub_cat_group
+                    SELECT m.sub_cat_id, s.sub_cat_name, s.sub_cat_group, m.eval_excluded
                     FROM maker_sub_category_mapping m
                     JOIN dict_maker_sub_category s ON s.sub_cat_id = m.sub_cat_id
                     WHERE m.maker_id_no = ? AND s.is_active = 1
@@ -3814,6 +3816,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sub_cat_ids  = array_values(array_filter(array_map('intval',
                 json_decode($sub_cats_raw, true) ?: []
             )));
+            // 解析「不列入定期評核評鑑等級」的加工項目清單，僅對仍有勾選的項目生效
+            $sub_cats_excl_raw = trim($_POST['sub_cats_eval_excl'] ?? '[]');
+            $sub_cat_excl_ids  = array_values(array_intersect(array_filter(array_map('intval',
+                json_decode($sub_cats_excl_raw, true) ?: []
+            )), $sub_cat_ids));
 
             $pdo->beginTransaction();
 
@@ -3835,9 +3842,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 同步小類映射：Delete-then-Insert（使用 varchar maker_id_no）
             $pdo->prepare("DELETE FROM maker_sub_category_mapping WHERE maker_id_no=?")->execute([$mid]);
             if (!empty($sub_cat_ids)) {
-                $ins_sub = $pdo->prepare("INSERT IGNORE INTO maker_sub_category_mapping (maker_id_no, sub_cat_id) VALUES (?,?)");
+                $ins_sub = $pdo->prepare("INSERT IGNORE INTO maker_sub_category_mapping (maker_id_no, sub_cat_id, eval_excluded) VALUES (?,?,?)");
                 foreach ($sub_cat_ids as $sid) {
-                    $ins_sub->execute([$mid, $sid]);
+                    $ins_sub->execute([$mid, $sid, in_array($sid, $sub_cat_excl_ids, true) ? 1 : 0]);
                 }
             }
 
@@ -8707,12 +8714,14 @@ body { background:#F6F1EA; }
 </div>
 <div class="form-group">
     <label>加工項目
-        <span style="font-size:11px;color:#aaa;font-weight:normal;margin-left:6px;">點擊標籤勾選／取消</span>
+        <span style="font-size:11px;color:#aaa;font-weight:normal;margin-left:6px;">點擊標籤勾選／取消；已勾選項目右側的圖示可切換「是否列入定期評核評鑑等級」</span>
     </label>
     <div id="mf-sub-cat-wrap" style="border-radius:6px;border:1px solid #e4e8ed;background:#fafbfc;padding:8px;min-height:40px;">
         <span class="text-muted" style="font-size:12px;">請先選擇廠商大類</span>
     </div>
+    <p class="help-block" style="color:#aaa;font-size:11px;margin-top:3px;">灰底標示的加工項目＝此廠商的「定期評核」月度計分會排除該項目對應的外包加工紀錄（僅對有綁定製程大類的加工項目有效；自由新增、未綁定製程大類的項目設定後不會有實際計算效果）。</p>
     <input type="hidden" id="mf-sub_cats" name="sub_cats" value="[]">
+    <input type="hidden" id="mf-sub_cats_eval_excl" name="sub_cats_eval_excl" value="[]">
     <input type="hidden" id="mf-main_cat_process_tags" name="main_cat_process_tags" value="[]">
 </div>
 <div class="form-group">
@@ -16957,12 +16966,14 @@ function getMainCatColorById(main_cat_id) {
     return _mainCatPalette[idx % _mainCatPalette.length];
 }
 
-function loadMakerCatUI(selectedMainIds, selectedSubIds, existingProcessTags) {
+function loadMakerCatUI(selectedMainIds, selectedSubIds, existingProcessTags, evalExclIds) {
     // selectedMainIds:    array of int (e.g. [2, 5])
     // selectedSubIds:     array of int (e.g. [3, 7, 12])
     // existingProcessTags: array of {main_cat_id, ref_type, ref_id}
+    // evalExclIds:        array of int，已勾選加工項目中「不列入定期評核評鑑等級」的 sub_cat_id
     _makerProcTagsInitial = existingProcessTags || [];
     _makerAllSelSubIds = (selectedSubIds || []).slice(); // 初始化持久選取清單
+    _makerSubCatEvalExcl = (evalExclIds || []).slice();
     var wrap = document.getElementById('mf-main-cat-chips-wrap');
     if (wrap) wrap.innerHTML = '<span style="color:#aaa;font-size:12px;"><i class="fa fa-spinner fa-spin"></i> 載入中…</span>';
     // 建立初始製程標籤對應表
@@ -16987,6 +16998,7 @@ function loadMakerCatUI(selectedMainIds, selectedSubIds, existingProcessTags) {
 }
 var _makerProcTagsInitial = [];
 var _makerMainCatProcessConfig = null;
+var _makerSubCatEvalExcl = []; // 已勾選加工項目中，被標記「不列入定期評核評鑑等級」的 sub_cat_id
 
 function renderMainCatChips(selectedMainIds) {
     var wrap = document.getElementById('mf-main-cat-chips-wrap');
@@ -17064,9 +17076,19 @@ function renderGroupedSubCats(selectedMainIds, selectedSubIds, procTagMap) {
         html += '<div style="display:flex;flex-wrap:wrap;gap:5px;padding:7px 8px;border-radius:0 8px 8px 8px;border:1.5px solid '+pal.sel+'33;background:'+pal.bg+';">';
         if (hasSubs) {
             cat.sub_cats.forEach(function(s) {
-                var sel = selectedSubIds.indexOf(parseInt(s.sub_cat_id)) >= 0;
-                html += '<label class="sub-cat-tag" style="display:inline-flex;align-items:center;gap:3px;background:'+(sel?pal.sel:pal.bg)+';color:'+(sel?'#fff':pal.fg)+';border:1.5px solid '+(sel?pal.sel:pal.fg+'44')+';border-radius:12px;padding:2px 10px;cursor:pointer;font-weight:'+(sel?'700':'normal')+';font-size:12px;transition:all .15s;" onclick="toggleSubCatTag(this,'+s.sub_cat_id+','+catIdx+')">'
-                    + '<input type="checkbox" '+(sel?'checked':'')+' style="display:none;" value="'+s.sub_cat_id+'">'+escHtml(s.sub_cat_name)+'</label>';
+                var sid = parseInt(s.sub_cat_id);
+                var sel = selectedSubIds.indexOf(sid) >= 0;
+                var excl = sel && _makerSubCatEvalExcl.indexOf(sid) >= 0;
+                var tagBg = excl ? '#9e9e9e' : (sel ? pal.sel : pal.bg);
+                var tagFg = (excl || sel) ? '#fff' : pal.fg;
+                var tagBd = excl ? '#757575' : (sel ? pal.sel : pal.fg+'44');
+                var nameHtml = excl ? ('<span style="text-decoration:line-through;">'+escHtml(s.sub_cat_name)+'</span>') : escHtml(s.sub_cat_name);
+                var exclIconHtml = sel ? (
+                    '<i class="fa '+(excl?'fa-ban':'fa-circle-o')+'" data-sub-id="'+sid+'" title="'+(excl?'不列入定期評核評鑑等級（點擊取消）':'點擊設為不列入定期評核評鑑等級')+'"'
+                    + ' style="margin-left:5px;font-size:10px;cursor:pointer;opacity:'+(excl?'1':'.5')+';" onclick="event.stopPropagation();toggleSubCatEvalExcl('+sid+')"></i>'
+                ) : '';
+                html += '<label class="sub-cat-tag" style="display:inline-flex;align-items:center;gap:3px;background:'+tagBg+';color:'+tagFg+';border:1.5px solid '+tagBd+';border-radius:12px;padding:2px 10px;cursor:pointer;font-weight:'+(sel?'700':'normal')+';font-size:12px;transition:all .15s;" onclick="toggleSubCatTag(this,'+sid+','+catIdx+')">'
+                    + '<input type="checkbox" '+(sel?'checked':'')+' style="display:none;" value="'+sid+'">'+nameHtml+exclIconHtml+'</label>';
             });
         }
         // 製程標籤（額外）
@@ -17103,17 +17125,42 @@ function renderGroupedSubCats(selectedMainIds, selectedSubIds, procTagMap) {
 
 function toggleSubCatTag(el, id, catIdx) {
     var cb = el.querySelector('input');
-    var pal = getMainCatColor(catIdx);
     cb.checked = !cb.checked;
-    el.style.background  = cb.checked ? pal.sel : pal.bg;
-    el.style.color       = cb.checked ? '#fff'  : pal.fg;
-    el.style.borderColor = cb.checked ? pal.sel : pal.fg+'44';
-    el.style.fontWeight  = cb.checked ? '700'   : 'normal';
     // 同步更新持久清單
     var idx = _makerAllSelSubIds.indexOf(id);
     if (cb.checked && idx < 0) _makerAllSelSubIds.push(id);
-    if (!cb.checked && idx >= 0) _makerAllSelSubIds.splice(idx, 1);
-    syncSubCatHidden();
+    if (!cb.checked && idx >= 0) {
+        _makerAllSelSubIds.splice(idx, 1);
+        // 取消勾選該加工項目時，「不列入評鑑」標記一併清除（不再是這廠商的加工項目，標記留著沒有意義）
+        var exIdx = _makerSubCatEvalExcl.indexOf(id);
+        if (exIdx >= 0) _makerSubCatEvalExcl.splice(exIdx, 1);
+    }
+    // 重繪整個子分類區塊，確保已勾選/不列入標記的樣式與「不列入」圖示即時反映
+    var selMain = [];
+    document.querySelectorAll('#mf-main-cat-chips-wrap .main-cat-chip[data-active="1"]').forEach(function(c){ selMain.push(parseInt(c.dataset.id)); });
+    var tagMap = {};
+    document.querySelectorAll('#mf-sub-cat-wrap .mf-proc-tag-cb:checked').forEach(function(cb2){
+        var mcid = String(cb2.dataset.mcid);
+        if (!tagMap[mcid]) tagMap[mcid]={};
+        tagMap[mcid][cb2.dataset.refType+':'+cb2.dataset.refId]=true;
+    });
+    renderGroupedSubCats(selMain, _makerAllSelSubIds.slice(), tagMap);
+}
+
+/** 切換「不列入定期評核評鑑等級」標記（僅作用在已勾選的加工項目上） */
+function toggleSubCatEvalExcl(sid) {
+    sid = parseInt(sid);
+    var idx = _makerSubCatEvalExcl.indexOf(sid);
+    if (idx >= 0) _makerSubCatEvalExcl.splice(idx, 1); else _makerSubCatEvalExcl.push(sid);
+    var selMain = [];
+    document.querySelectorAll('#mf-main-cat-chips-wrap .main-cat-chip[data-active="1"]').forEach(function(c){ selMain.push(parseInt(c.dataset.id)); });
+    var tagMap = {};
+    document.querySelectorAll('#mf-sub-cat-wrap .mf-proc-tag-cb:checked').forEach(function(cb){
+        var mcid = String(cb.dataset.mcid);
+        if (!tagMap[mcid]) tagMap[mcid]={};
+        tagMap[mcid][cb.dataset.refType+':'+cb.dataset.refId]=true;
+    });
+    renderGroupedSubCats(selMain, _makerAllSelSubIds.slice(), tagMap);
 }
 
 function toggleMakerProcTag(el) {
@@ -17148,6 +17195,10 @@ function syncSubCatHidden() {
         if (cb.checked) ids.push(parseInt(cb.value));
     });
     document.getElementById('mf-sub_cats').value = JSON.stringify(ids);
+    // 只保留「目前仍勾選中」的不列入評鑑標記（取消勾選的加工項目不應留下殘留標記）
+    _makerSubCatEvalExcl = _makerSubCatEvalExcl.filter(function(id){ return _makerAllSelSubIds.indexOf(id) >= 0; });
+    var exEl = document.getElementById('mf-sub_cats_eval_excl');
+    if (exEl) exEl.value = JSON.stringify(_makerSubCatEvalExcl);
 }
 
 function openMakerModal(maker_id_no) {
@@ -17169,7 +17220,8 @@ function openMakerModal(maker_id_no) {
             // 已選大類 IDs（後端回傳 selected_main_cat_ids 陣列）
             var selMainIds = (d.selected_main_cat_ids||[]).map(Number);
             var selSubIds  = (d.sub_cats||[]).map(function(s){ return parseInt(s.sub_cat_id); });
-            loadMakerCatUI(selMainIds, selSubIds, d.main_cat_process_tags || []);
+            var evalExclIds = (d.sub_cats||[]).filter(function(s){ return parseInt(s.eval_excluded)===1; }).map(function(s){ return parseInt(s.sub_cat_id); });
+            loadMakerCatUI(selMainIds, selSubIds, d.main_cat_process_tags || [], evalExclIds);
             // 付款設定
             var mMode = d.settlement_mode || 'FIXED';
             var mDay  = d.settlement_day  || '';
@@ -17211,6 +17263,7 @@ function openMakerModal(maker_id_no) {
         midEl.readOnly = false; midEl.style.background = '';
         document.getElementById('mf-main_category_id').value = '';
         document.getElementById('mf-sub_cats').value = '[]';
+        document.getElementById('mf-sub_cats_eval_excl').value = '[]';
         loadMakerCatUI([], []);
         // 新增：預填預設付款條件
         document.getElementById('mf-settlement_mode').value  = SYS_VENDOR_DEFAULT_SETTLEMENT_MODE || 'FIXED';
@@ -17621,6 +17674,7 @@ function submitMakerForm() {
     });
     // sub_cats: 從持久清單取值（包含所有大類的勾選，即使某大類被切換隱藏也不遺失）
     data.sub_cats = JSON.stringify(_makerAllSelSubIds);
+    data.sub_cats_eval_excl = JSON.stringify(_makerSubCatEvalExcl);
 
     // main_category_id: 取第一個選中的大類（存入 maker_list 欄位）
     var firstChip = document.querySelector('#mf-main-cat-chips-wrap .main-cat-chip[data-active="1"]');

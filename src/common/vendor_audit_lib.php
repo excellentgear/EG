@@ -936,6 +936,21 @@ function vendor_eval_summ(int $inq, int $ng, int $sp, int $lt, array $set, array
  *  交期：應交日=outsource_date+約定工作天(沿用#7)；依回廠日歸月；回廠量/遲交量都用 sqty
  *  進貨數：同月取 max(檢驗量, 回廠量) 當品質與交期共用分母（使用者要求兩邊必須相等）
  * ============================================================ */
+/**
+ * 該廠商「不列入定期評核評鑑等級」的製程大類清單（master_data_management.php 廠商編輯畫面
+ * 「加工類別設定」逐項設定，2026-10-01 新增）。只有綁定了製程大類（ref_process_type_id）的加工
+ * 項目才查得到對應的實際外包紀錄可排除，自由新增、未綁定製程大類的項目設定了也不會有效果。
+ */
+function vendor_eval_excluded_process_type_ids(PDO $db, string $mid): array {
+    try {
+        $st = $db->prepare("SELECT DISTINCT s.ref_process_type_id
+                            FROM maker_sub_category_mapping m
+                            JOIN dict_maker_sub_category s ON s.sub_cat_id = m.sub_cat_id
+                            WHERE m.maker_id_no=? AND m.eval_excluded=1 AND s.ref_process_type_id IS NOT NULL");
+        $st->execute([$mid]);
+        return array_values(array_unique(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN))));
+    } catch (Throwable $e) { return []; }
+}
 /** 該廠商實際採用的約定工作天：廠商專屬設定優先，沒設才用全域預設（使用者2026-08-17：有些廠商本來就比較久） */
 function vendor_eval_lead_days(PDO $db, string $mid, array $set): int {
     try {
@@ -952,13 +967,22 @@ function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): arra
     for ($m = 1; $m <= 12; $m++) $mon[$m] = ['qc_qty'=>0,'del_qty'=>0,'in_qty'=>0,'ng'=>0,'special'=>0,'late'=>0];
     $from = sprintf('%04d-01-01',$year); $to = sprintf('%04d-01-01',$year+1);
 
+    // 不列入評鑑的製程大類：該廠商在這些製程大類下的外包紀錄，品質與交期都排除不計入計分
+    $exclTypeIds = vendor_eval_excluded_process_type_ids($db, $mid);
+    $exclCond = '';
+    if ($exclTypeIds) {
+        $ph = implode(',', array_fill(0, count($exclTypeIds), '?'));
+        $exclCond = " AND NOT EXISTS (SELECT 1 FROM process_no pnx WHERE pnx.ProcessNo={{ALIAS}}.process_no AND pnx.process_type_id IN ($ph))";
+    }
+
     // 品質：依 QC_check_date 月份，數量用 sqty；不良/特採顆數優先用該批異常數量(逐筆取 min 以免超出整批數)
     $st = $db->prepare("SELECT MONTH(b.QC_check_date) m, b.QC_check, IFNULL(b.sqty,0) sqty, IFNULL(q.qq,0) qq
                         FROM bom_ing b
                         LEFT JOIN (SELECT bom_ing_fid_ref, SUM(IFNULL(QC_QQ_sqty,0)) qq FROM qc_check GROUP BY bom_ing_fid_ref) q
                                ON q.bom_ing_fid_ref = b.bom_ing_fid
-                        WHERE b.maker_id_no=? AND b.QC_check_date>=? AND b.QC_check_date<? AND b.QC_check IS NOT NULL AND b.QC_check<>''");
-    $st->execute([$mid, $from, $to]);
+                        WHERE b.maker_id_no=? AND b.QC_check_date>=? AND b.QC_check_date<? AND b.QC_check IS NOT NULL AND b.QC_check<>''"
+                        . str_replace('{{ALIAS}}', 'b', $exclCond));
+    $st->execute(array_merge([$mid, $from, $to], $exclTypeIds));
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $m = (int)$r['m']; if ($m<1||$m>12) continue;
         $sqty = (int)$r['sqty'];
@@ -970,9 +994,10 @@ function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): arra
 
     // 交期：回廠量=實際回廠(有 return_date)批的 sqty，依回廠日歸月；遲交=回廠日晚於應交日(發包+約定工作天)
     $days = vendor_eval_lead_days($db, $mid, $set);   // 廠商專屬工作天優先
-    $st = $db->prepare("SELECT outsource_date, return_date, IFNULL(sqty,0) sqty FROM bom_ing
-                        WHERE maker_id_no=? AND return_date IS NOT NULL AND return_date>=? AND return_date<?");
-    $st->execute([$mid, $from, $to]);
+    $st = $db->prepare("SELECT outsource_date, return_date, IFNULL(sqty,0) sqty FROM bom_ing bi
+                        WHERE bi.maker_id_no=? AND bi.return_date IS NOT NULL AND bi.return_date>=? AND bi.return_date<?"
+                        . str_replace('{{ALIAS}}', 'bi', $exclCond));
+    $st->execute(array_merge([$mid, $from, $to], $exclTypeIds));
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $ret = substr((string)$r['return_date'],0,10);
         $m = (int)substr($ret,5,2); if ($m<1||$m>12) continue;
