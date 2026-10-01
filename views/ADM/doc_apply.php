@@ -564,6 +564,21 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 「AS 文件管理 → 歷史版本」<b>建立對應的版本履歷</b>並推進現行版次，所以這張申請單馬上會出現在該版的「申請單」欄。
                 新建的那一版<b>文件檔是空的</b>，歷史版本會顯示「無檔（補登）」，請用該列的<b>「補檔」</b>把新版文件檔補上去。
                 若該版次在 AS 文件管理已經人工建立過，就只做連結不重複建。<b>廢止／增發／補發不走版本履歷</b>。</li>
+            <li><b>開會不會被代理</b>（2026-10-01 起）：四格簽章只有在<b>本人當天真的請假／休假</b>時才會轉給代理人；
+                行事曆上的會議、公出等行程<b>不算「不在」</b>——開會的人還在公司、簽得了這張單。
+                （原本只要行事曆上有任何行程就判定「不在」，結果同一場整天會議裡，沒設代理人的照常蓋自己的章、
+                有設代理人的卻被換成代理人並蓋「代」字。）</li>
+            <li><b>代理人必須是同一個單位的人</b>（2026-10-01 起）：代理只會從<b>該簽核身分所屬單位</b>
+                （該單位、其下轄、或其上層主管鏈）裡找。兼任多個職務的人若只設了「不分身分」的代理，
+                系統<b>不會</b>拿別的單位的人來代理這一關——例如「資材課 副理」那一格不會由業務課的組員代簽。
+                此時會<b>以本人名義簽章並在檢視畫面與核准後跳出提示</b>，請到
+                <b>「HR 設定 → 使用者代理設定」</b>為該職務身分（「適用職務身分」欄）指定代理人；
+                <b>人資明確指定過該身分的代理，一律照用</b>。本人請假又完全沒設代理人時也會出現同樣的提示。
+                若你不是人資，請通知人資處理。</li>
+            <li><b>廢止也會出現在「建議建立」</b>（2026-10-01 起）：在 AS 文件管理把文件改成廢止之後，
+                建議建立會列出「已廢止但還沒開廢止申請單」的文件（建議狀況＝廢止，版本帶廢止當時的版次、
+                制修訂內容自動帶入廢止原因）。原本廢止只在文件上設旗標、不產生版本履歷，而建議建立是掃版本履歷的，
+                所以廢止一直掃不到。</li>
             <li><b>核錯了可以退回</b>（2026-10-01 起，限系統管理者）：已核准的單在清單上有<b>「退回未送出」</b>，
                 輸入<b>操作確認密碼</b>後變回草稿可重新編輯再送審——不必刪掉重開一張（刪了單號會缺號、歷程也斷掉）。
                 退回時<b>四格簽章與核准日期一律清除</b>、<b>會簽意見保留</b>；本單自動建立的版本履歷若還沒補過檔案會一併移除、
@@ -1258,7 +1273,14 @@ function openView(id){
            + '<td>' + sigCell(d, 'mgmt') + '</td>'
            + '<td>' + sigCell(d, 'sup') + '</td>'
            + '<td>' + sigCell(d, 'applicant') + '</td>'
-           + '</tr></tbody></table></div>';
+           + '</tr></tbody></table>'
+           // 代理設定不足：在核准之前就要看得見，不然核完才知道章蓋在本人身上（2026-10-01）
+           + (((d.signer_preview || {})._warn || []).map(function(w){
+                 return '<div style="margin-top:6px;padding:6px 8px;border:1px solid #E0A96D;background:#FDF4E7;'
+                      + 'border-radius:4px;color:#8a5a2b;font-size:12px;">⚠【' + esc(w.label) + '】' + esc(w.msg)
+                      + '　<a href="hr_settings.php#user-delegate-section" target="_blank" rel="noopener">前往 HR 設定 → 使用者代理設定</a></div>';
+             }).join(''))
+           + '</div>';
 
         if ((d.dists || []).length) {
             h += '<div class="sec"><h5>文件／核發、回收記錄欄</h5><table class="sub-tbl"><thead><tr>'
@@ -1337,7 +1359,12 @@ $('#btnDecideOk').on('click', function(){
     var dec = $('#decideSel').val(), note = $('#decideNote').val();
     if (dec === 'rejected' && !note.trim()) { $('#err_decide').text('退回必須填寫原因').show(); return; }
     $.post(API, {action:'decide', apply_id:curViewId, decision:dec, note:note, approved_date:$('#decideDate').val()}, function(r){
-        if (r.ok) { closeMask('decideMask'); closeMask('viewMask'); loadList(); }
+        if (!r.ok) return;
+        closeMask('decideMask'); closeMask('viewMask'); loadList();
+        var msg = [];
+        if (r.version_sync && r.version_sync.created) msg.push('※ ' + r.version_sync.msg);
+        (r.sign_warn || []).forEach(function(w){ msg.push('※【' + w.label + '】' + w.msg); });
+        if (msg.length) alert(msg.join('\n\n'));
     }, 'json');
 });
 

@@ -26,6 +26,8 @@ const DA_ASDOC_MODULE = 'doc_apply';
 /** 文件類別 → 文件階級（編碼首碼）；表單走母文件遞增，其餘走 階級+部門代碼 */
 const DA_TYPE_LEVEL = ['手冊'=>'一階', '程序'=>'二階', '標準書'=>'三階', '表單'=>'四階'];
 const DA_DOC_STATUS = ['制訂', '修正', '廢止', '增發', '補發'];
+/** 四格簽章的顯示名稱（代理設定不足的提示要講清楚是哪一格） */
+const DA_SIGN_SLOT_LABEL = ['approve'=>'核准', 'mgmt'=>'管理代表', 'sup'=>'單位主管', 'applicant'=>'申請人'];
 
 const DA_SETTING_KEYS = ['da_stamp_tpl_id', 'da_cosign_stamp_tpl_id', 'da_dist_stamp_tpl_id',
                          'da_sign_approve', 'da_sign_mgmt', 'da_sign_sup', 'da_sign_applicant',
@@ -470,21 +472,39 @@ function da_user_name(PDO $db, ?int $uid): string
  */
 function da_resolve_signer_src(PDO $db, string $src, array $row): array
 {
-    $none = ['id'=>null, 'name'=>''];
+    $none = ['id'=>null, 'name'=>'', 'scope_dept_id'=>null, 'scope_position_id'=>null];
     // 業務日期＝本單申請日期：部門主管一律回推「當時」是誰（使用者要求：表單要注意日期與當時職務與在職人員）
     $asof  = (string)($row['apply_date'] ?? '');
+    // 這一格的人是「以哪個職務身分」在簽：代理解析要用它當 scope，不是用申請單的部門
+    // （2026-10-01 使用者回報：用申請人的部門當 scope，會讓「業務課組員」代理到「資材課副理」那一格）
+    $scopeOf = function (?int $uid) use ($db, $asof) {
+        if (!$uid) return [null, null];
+        foreach (eg_people_posts_asof($db, [], $asof ?: date('Y-m-d')) as $p) {
+            if ((int)$p['id'] !== (int)$uid) continue;
+            if ((int)($p['is_main'] ?? 0) === 1) return [(int)$p['dept_id'], (int)$p['position_id']];
+        }
+        foreach (eg_people_posts_asof($db, [], $asof ?: date('Y-m-d')) as $p)
+            if ((int)$p['id'] === (int)$uid) return [(int)$p['dept_id'], (int)$p['position_id']];
+        return [null, null];
+    };
     $byMgr = function ($deptIds) use ($db, $none, $asof) {
         if (!$deptIds) return $none;
         $m = da_dept_manager_asof($db, (array)$deptIds, $asof);
-        return $m ? ['id'=>(int)$m['id'], 'name'=>(string)$m['user_cname']] : $none;
+        return $m ? ['id'=>(int)$m['id'], 'name'=>(string)$m['user_cname'],
+                     'scope_dept_id'=>(int)($m['dept_id'] ?? 0) ?: null,
+                     'scope_position_id'=>(int)($m['position_id'] ?? 0) ?: null] : $none;
     };
     switch ($src) {
         case 'top':
             $t = eg_org_user($db, 'top_approver');
-            return $t ? ['id'=>(int)$t['id'], 'name'=>(string)$t['user_cname']] : $none;
+            if (!$t) return $none;
+            [$sd, $sp] = $scopeOf((int)$t['id']);
+            return ['id'=>(int)$t['id'], 'name'=>(string)$t['user_cname'], 'scope_dept_id'=>$sd, 'scope_position_id'=>$sp];
         case 'mgmt_rep':
             $t = eg_org_user($db, 'mgmt_rep');
-            return $t ? ['id'=>(int)$t['id'], 'name'=>(string)$t['user_cname']] : $none;
+            if (!$t) return $none;
+            [$sd, $sp] = $scopeOf((int)$t['id']);
+            return ['id'=>(int)$t['id'], 'name'=>(string)$t['user_cname'], 'scope_dept_id'=>$sd, 'scope_position_id'=>$sp];
         case 'hr_dept_mgr':
             return $byMgr(eg_org_dept_ids($db, 'hr_dept'));
         case 'doc_dept_mgr':
@@ -498,13 +518,19 @@ function da_resolve_signer_src(PDO $db, string $src, array $row): array
             $did = $row['dept_id'] !== null ? (int)$row['dept_id'] : null;
             if (!$aid) return $none;
             $sup = eg_unit_supervisor($db, $aid, $did, $asof);
-            if (!empty($sup['id'])) return ['id'=>(int)$sup['id'], 'name'=>(string)$sup['name']];
+            if (!empty($sup['id'])) return ['id'=>(int)$sup['id'], 'name'=>(string)$sup['name'],
+                                            // 單位主管是「以那個單位的主管身分」在簽，代理也只能從那個單位找
+                                            'scope_dept_id'=>(int)($sup['dept_id'] ?? 0) ?: null,
+                                            'scope_position_id'=>(int)($sup['position_id'] ?? 0) ?: null];
             // 從缺（申請人就是課級單位的最高主管，上面只剩全公司共同上級）→ 依使用者定調由申請人自己簽，
             // 不往課級以上追溯、也不留白（紙本上這一格本來就是申請單位自己蓋）。
-            return ['id'=>$aid, 'name'=>(string)($row['applicant_name'] ?? da_user_name($db, $aid))];
+            return ['id'=>$aid, 'name'=>(string)($row['applicant_name'] ?? da_user_name($db, $aid)),
+                    'scope_dept_id'=>$did, 'scope_position_id'=>null];
         case 'applicant':
             return ['id'=>$row['applicant_id'] ? (int)$row['applicant_id'] : null,
-                    'name'=>(string)($row['applicant_name'] ?? '')];
+                    'name'=>(string)($row['applicant_name'] ?? ''),
+                    'scope_dept_id'=>$row['dept_id'] !== null ? (int)$row['dept_id'] : null,
+                    'scope_position_id'=>null];
     }
     return $none;
 }
@@ -519,7 +545,7 @@ function da_resolve_signers(PDO $db, array $row, bool $autoSign = false): array
 {
     $set = da_settings($db);
     $map = ['approve'=>'da_sign_approve', 'mgmt'=>'da_sign_mgmt', 'sup'=>'da_sign_sup', 'applicant'=>'da_sign_applicant'];
-    $out = [];
+    $out = ['_warn' => []];     // 代理設定不足時的提示（呼叫端顯示，見 eg_resolve_signer 的 need_setup）
     foreach ($map as $slot => $key) {
         $base = da_resolve_signer_src($db, (string)$set[$key], $row);
         $out[$slot] = ['id'=>$base['id'], 'name'=>$base['name'], 'is_delegated'=>0, 'src'=>(string)$set[$key]];
@@ -534,9 +560,14 @@ function da_resolve_signers(PDO $db, array $row, bool $autoSign = false): array
         // 不進代理/權責迴避流程（使用者明確要求：不須迴避）
         if ((int)$base['id'] === (int)($row['applicant_id'] ?? 0)) continue;
         try {
+            /* scope 一律用「這一格的人自己的簽核身分」，不是申請單的部門（2026-10-01 使用者回報）：
+               用申請人的部門當 scope 時，吳佳靜「資材課 副理」那一格會比對不到任何精準身分的代理，
+               退回她不分身分的全域代理 → 把業務課組員拿來代理資材課副理的簽核。 */
             $rs = eg_resolve_signer($db, (int)$base['id'], [
                 'applicant_id'        => (int)($row['applicant_id'] ?? 0),
-                'scope_department_id' => $row['dept_id'] !== null ? (int)$row['dept_id'] : null,
+                'scope_department_id' => isset($base['scope_dept_id']) && $base['scope_dept_id'] ? (int)$base['scope_dept_id'] : null,
+                'scope_position_id'   => isset($base['scope_position_id']) && $base['scope_position_id'] ? (int)$base['scope_position_id'] : null,
+                'scope_is_signer'     => true,     // 上面的 scope 是這一格簽核人自己的身分 → 要做代理人合格性檢查
                 'flow_key'            => 'doc_apply',
                 'auto_sign'           => $autoSign,
             ]);
@@ -544,6 +575,11 @@ function da_resolve_signers(PDO $db, array $row, bool $autoSign = false): array
                 $out[$slot]['id']           = (int)$rs['signer_id'];
                 $out[$slot]['name']         = da_user_name($db, (int)$rs['signer_id']);
                 $out[$slot]['is_delegated'] = 1;
+            }
+            // 本人請假卻沒有可用的代理人 → 不硬塞別人的章，改提示去 HR 設定（使用者 2026-10-01 要求）
+            if (!empty($rs['need_setup'])) {
+                $out['_warn'][] = ['slot' => $slot, 'label' => DA_SIGN_SLOT_LABEL[$slot] ?? $slot,
+                                   'msg' => (string)($rs['setup_msg'] ?? '')];
             }
         } catch (Throwable $e) {}
     }
@@ -874,6 +910,61 @@ function da_suggest_scan(PDO $db, string $sinceDate = '', int $limit = 500): arr
                                 ? trim((string)$c['old_dept']) . '→' . trim((string)$c['new_dept']) : '';
         unset($r['first_ver_id'], $r['first_date'], $r['apply_form_file_name']);
     }
+    unset($r);
+
+    /* 廢止（2026-10-01 使用者回報：在 AS 文件管理改成廢止的文件沒有出現在建議建立上）。
+       廢止走的是 `doc_obsolete`，**只在 as_document 上設 is_obsolete／obsolete_date，不會建立任何
+       as_document_version 列**，而上面那段是掃版本列的，所以廢止永遠掃不到。
+       這裡另外掃一輪「已廢止、但還沒有一張『廢止』申請單」的文件，併進同一份清單。
+       version_id 用 **負的 doc_id** 當識別鍵（前端勾選與 suggest_create 都以 version_id 定位），
+       負數＝這一列不是真的版本列，建單時 as_version_id 留空。 */
+    try {
+        $ow = "d.is_deleted=0 AND d.is_obsolete=1
+               AND NOT EXISTS (SELECT 1 FROM doc_apply a
+                               WHERE a.as_doc_id=d.id AND a.doc_status='廢止' AND COALESCE(a.is_deleted,0)=0)";
+        $oargs = [];
+        if ($sinceDate !== '') { $ow .= " AND d.obsolete_date >= ?"; $oargs[] = $sinceDate; }
+        $ost = $db->prepare("SELECT d.id AS doc_id, d.doc_no, d.doc_name, d.doc_type, d.doc_level,
+                                    d.department_id, dp.name AS dept_name, d.current_version,
+                                    d.obsolete_date, d.obsolete_reason, d.obsolete_by,
+                                    (SELECT MIN(v2.revised_date) FROM as_document_version v2 WHERE v2.doc_id=d.id) AS first_date
+                             FROM as_document d
+                             LEFT JOIN department dp ON dp.id=d.department_id
+                             WHERE $ow
+                             ORDER BY d.obsolete_date DESC, d.id DESC
+                             LIMIT " . max(1, min(2000, $limit)));
+        $ost->execute($oargs);
+        foreach ($ost->fetchAll(PDO::FETCH_ASSOC) as $o) {
+            $rows[] = [
+                'version_id'      => -(int)$o['doc_id'],
+                'doc_id'          => (int)$o['doc_id'],
+                'version'         => (string)($o['current_version'] ?? ''),
+                'revised_date'    => (string)($o['obsolete_date'] ?? ''),
+                'revised_pages'   => '',
+                'revised_summary' => trim((string)($o['obsolete_reason'] ?? '')) !== ''
+                                     ? ('廢止原因：' . $o['obsolete_reason']) : '文件廢止',
+                'change_status'   => '廢止',
+                'uploaded_by'     => (string)($o['obsolete_by'] ?? ''),
+                'doc_no'          => (string)$o['doc_no'],
+                'doc_name'        => (string)$o['doc_name'],
+                'doc_type'        => (string)$o['doc_type'],
+                'doc_level'       => (string)$o['doc_level'],
+                'department_id'   => (int)$o['department_id'],
+                'dept_name'       => (string)($o['dept_name'] ?? ''),
+                'is_first'        => 0,
+                'suggest_status'  => '廢止',
+                'first_issue_date'=> (string)($o['first_date'] ?? ''),
+                'has_paper'       => 0,
+                'renumber_from'   => '', 'renumber_to' => '', 'renumber_dept' => '',
+            ];
+        }
+    } catch (Throwable $e) { /* 廢止那一輪失敗不影響既有的版次掃描 */ }
+
+    // 兩種來源合併後依日期由新到舊（廢止是接在後面 append 進來的）
+    usort($rows, function ($a, $b) {
+        $c = strcmp((string)$b['revised_date'], (string)$a['revised_date']);
+        return $c !== 0 ? $c : ((int)$b['version_id'] <=> (int)$a['version_id']);
+    });
     return $rows;
 }
 
@@ -938,7 +1029,8 @@ function da_create_from_version(PDO $db, array $v, int $createdBy, string $creat
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft','suggest',?,?,?)")
            ->execute([da_next_no($db, $applyDate), $applyDate, $status, $docType,
                       (string)($v['doc_name'] ?? ''), (string)($v['doc_no'] ?? ''),
-                      (int)$v['doc_id'] ?: null, (int)$v['version_id'] ?: null, $version,
+                      // version_id 是負數＝廢止那種「沒有版本列」的建議（見 da_suggest_scan），as_version_id 留空
+                      (int)$v['doc_id'] ?: null, ((int)$v['version_id'] > 0 ? (int)$v['version_id'] : null), $version,
                       ($v['first_issue_date'] ?? '') ?: null, $applyDate,
                       $deptId ?: null, $deptName, $applicantId ?: null, (string)$ident['user_name'],
                       1, $def['need_cosign'], $createdBy ?: null, $now['dt'], $now['dt']]);
@@ -1247,7 +1339,8 @@ function da_dept_manager_asof(PDO $db, array $deptIds, string $date): ?array
     if (!$deptIds) return null;
     if ($date === '') {
         $m = eg_org_dept_manager($db, $deptIds);
-        return $m ? ['id'=>(int)$m['id'], 'user_cname'=>(string)$m['user_cname']] : null;
+        return $m ? ['id'=>(int)$m['id'], 'user_cname'=>(string)$m['user_cname'],
+                     'dept_id'=>(int)($m['department_id'] ?? 0), 'position_id'=>(int)($m['position_id'] ?? 0)] : null;
     }
     $levels = [];
     try {
@@ -1262,10 +1355,12 @@ function da_dept_manager_asof(PDO $db, array $deptIds, string $date): ?array
         $lv = $levels[(int)$p['position_id']] ?? null;
         if ($lv === null) continue;
         if ($best === null || $lv < $best['level']) {
-            $best = ['id'=>(int)$p['id'], 'user_cname'=>(string)$p['user_cname'], 'level'=>$lv];
+            $best = ['id'=>(int)$p['id'], 'user_cname'=>(string)$p['user_cname'], 'level'=>$lv,
+                     'dept_id'=>(int)$p['dept_id'], 'position_id'=>(int)$p['position_id']];
         }
     }
-    return $best ? ['id'=>$best['id'], 'user_cname'=>$best['user_cname']] : null;
+    return $best ? ['id'=>$best['id'], 'user_cname'=>$best['user_cname'],
+                    'dept_id'=>$best['dept_id'], 'position_id'=>$best['position_id']] : null;
 }
 
 /**

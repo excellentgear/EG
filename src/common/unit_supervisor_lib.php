@@ -197,7 +197,7 @@ if (!function_exists('eg_unit_supervisor')) {
         $depts    = eg_unit_dept_map($db);
         $start    = $deptId ? (int)$deptId : eg_unit_user_dept($db, $userId, $asof);
 
-        $out = ['id' => null, 'name' => '', 'dept_id' => null, 'dept_name' => '', 'position_name' => '',
+        $out = ['id' => null, 'name' => '', 'dept_id' => null, 'dept_name' => '', 'position_id' => null, 'position_name' => '',
                 'level' => null, 'vacant' => true, 'is_top' => false, 'base_dept_id' => $start ?: null,
                 'stop_dept_id' => null, 'stop_dept_name' => '', 'hops' => 0, 'reason' => ''];
 
@@ -214,7 +214,8 @@ if (!function_exists('eg_unit_supervisor')) {
                 // 本人不是這個單位的最高主管 → 由這個單位的最高主管當單位主管
                 return ['id' => $head['id'], 'name' => $head['name'],
                         'dept_id' => $head['dept_id'], 'dept_name' => $head['dept_name'],
-                        'position_name' => $head['position_name'], 'level' => $head['level'],
+                        'position_id' => $head['position_id'], 'position_name' => $head['position_name'],
+                        'level' => $head['level'],
                         'vacant' => false, 'is_top' => false,
                         'base_dept_id' => $start, 'stop_dept_id' => $cursor,
                         'stop_dept_name' => $depts[$cursor]['name'] ?? '', 'hops' => $hop,

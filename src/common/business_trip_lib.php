@@ -272,7 +272,16 @@ function bt_resolve_approver(PDO $db, ?int $deptId, int $tripUserId, bool $autoS
     if (!$base) return null;
     $signerId = $base; $delegated = false; $reason = $why;
     try {
-        $rs = eg_resolve_signer($db, $base, ['applicant_id'=>$tripUserId, 'scope_department_id'=>$deptId,
+        /* scope 一律用「核准人自己的簽核身分」，不是公出人的部門（2026-10-01，與 doc_apply 同一個修正）：
+           傳公出人的部門時，核准人若兼任多個單位，會退回他「不分身分」的全域代理，
+           把別的單位的人拿來代理這一關（使用者實例：業務課組員代理到資材課副理的簽核）。 */
+        $bid = ($base === (int)($sup['id'] ?? 0) && !empty($sup['dept_id']))
+             ? ['department_id'=>(int)$sup['dept_id'], 'position_id'=>(int)($sup['position_id'] ?? 0)]
+             : (eg_user_main_identity($db, $base) ?: ['department_id'=>0, 'position_id'=>0]);
+        $rs = eg_resolve_signer($db, $base, ['applicant_id'=>$tripUserId,
+                                             'scope_department_id'=>($bid['department_id'] ?: null),
+                                             'scope_position_id'=>($bid['position_id'] ?: null),
+                                             'scope_is_signer'=>true,
                                              'flow_key'=>'business_trip', 'auto_sign'=>$autoSign]);
         if (!empty($rs['signer_id'])) {
             $signerId  = (int)$rs['signer_id'];

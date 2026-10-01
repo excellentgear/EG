@@ -8,13 +8,15 @@
  *
  * 解析優先順序（見 §4）：
  *   1. 判定任務身分（主職 or 指定兼任 scope）
- *   2. 行程閘門：被代理人今日無行程 → 回本人（代理不啟用）；
- *      ctx['auto_sign']=true（系統當下直接數位蓋章，無需真人即時操作）時改成只看「今天是否請假/特休」，
- *      開會等一般行程不算——自動簽核不該因為被簽核人今天有會議就轉去找代理人
- *   3. BY_PERSON：user_delegate（依 scope + 日期 + active + priority）
+ *   2. 不在閘門：**只看被代理人今天有沒有請假／休假**（2026-10-01 使用者定調）——
+ *      行事曆上的會議、公出等行程不算「不在」，開會的人還在公司、簽得了單。
+ *      真的需要「人必須在場」的呼叫端自行傳 ctx['require_present']=true。
+ *   3. BY_PERSON：user_delegate（先「指定職務身分」再「不分身分」，依日期 + active + priority）
  *   4. BY_POSITION：position_delegate → department_position.primary_user_id 解析成人
- *   5. SoD：候選 == 申請人 → 跳過；候選本人今天也請假 → 跳過；全數被排除 → 直升上一級主管
- *   6. 寫 audit_log，回傳結果
+ *   5. 合格性（限 ctx['scope_is_signer']=true 的呼叫端）：「不分身分」的代理人必須落在
+ *      被代理人該簽核身分所屬單位的部門樹內，否則不採用並回 need_setup 請去 HR 設定
+ *   6. SoD：候選 == 申請人 → 跳過；候選本人今天也請假 → 跳過；全數被排除 → 直升上一級主管
+ *   7. 寫 audit_log，回傳結果
  *
  * 所有函式皆 fail-open（查詢失敗不擋流程，退回本人），並以 function_exists 包覆避免重複載入衝突。
  */
@@ -369,10 +371,12 @@ if (!function_exists('eg_resolve_signer')) {
      *    'flow_key'            => string// 'quotation'|'car'|'leave'|'as_form'|'qa'...
      *    'doc_id'              => mixed // 單據識別（稽核用，可省略）
      *    'log'                 => bool  // 是否寫 audit_log（預設 true）
-     *    'auto_sign'           => bool  // true=系統自動簽核(無需真人即時操作)，行程閘門只看今天是否請假，
-     *                                    //   忽略開會等一般行程；預設 false=沿用原本「今天有任何行程就轉代理」判定
+     *    'auto_sign'           => bool  // 保留供呼叫端標示用途；2026-10-01 起閘門一律只看請假，本旗標不再影響判定
+     *    'require_present'     => bool  // true=這一關真的需要「人在場」，才改用「今天有任何行程就轉代理」
+     *    'scope_is_signer'     => bool  // true=上面的 scope 是**被代理人自己的簽核身分**，才做代理人合格性檢查
      * ]
-     * @return array ['signer_id'=>int,'is_delegated'=>bool,'is_sod_escalated'=>bool,'reason'=>string]
+     * @return array ['signer_id'=>int,'is_delegated'=>bool,'is_sod_escalated'=>bool,'reason'=>string,
+     *                'need_setup'=>bool,'setup_msg'=>string]
      */
     function eg_resolve_signer(PDO $db, int $targetUserId, array $ctx = []): array {
         $applicantId = (int)($ctx['applicant_id'] ?? 0);
@@ -380,52 +384,201 @@ if (!function_exists('eg_resolve_signer')) {
         $scopePos    = isset($ctx['scope_position_id'])   ? ($ctx['scope_position_id'] === null   ? null : (int)$ctx['scope_position_id'])   : null;
         $flowKey     = (string)($ctx['flow_key'] ?? '');
         $doLog       = $ctx['log'] ?? true;
-        $autoSign    = !empty($ctx['auto_sign']);
+        /* scope_is_signer：呼叫端保證 scope_department_id/position_id 是「**被代理人自己的簽核身分**」
+           （不是申請人的部門）。只有這種呼叫端才做下面的代理人合格性檢查——
+           傳申請人部門的舊呼叫端若照做，會把本來正確的代理人誤判成不合格。
+           已檢視並開啟的：doc_apply 四格簽章、business_trip 核准人。 */
+        $scopeIsSigner = !empty($ctx['scope_is_signer']);
 
-        $ret = function (int $id, bool $del, bool $sod, string $reason) use ($db, $targetUserId, $flowKey, $ctx, $doLog) {
+        // $extra：need_setup / setup_msg（代理設定不足時由呼叫端提示去 HR 設定，2026-10-01）
+        $ret = function (int $id, bool $del, bool $sod, string $reason, array $extra = []) use ($db, $targetUserId, $flowKey, $ctx, $doLog) {
             if ($doLog && ($del || $sod)) {
                 eg_log_delegate_event($db, $sod ? 'SOD_ESCALATE' : 'DELEGATE', $targetUserId, $id, [
                     'reason' => $reason, 'flow_key' => $flowKey, 'doc_id' => $ctx['doc_id'] ?? null,
                 ]);
             }
-            return ['signer_id' => $id, 'is_delegated' => $del, 'is_sod_escalated' => $sod, 'reason' => $reason];
+            return array_merge(['signer_id' => $id, 'is_delegated' => $del, 'is_sod_escalated' => $sod,
+                                'reason' => $reason, 'need_setup' => false, 'setup_msg' => ''], $extra);
         };
 
-        // 2. 行程閘門：一般(人工簽核，需要真人即時點擊)看「今日有無任何行程(含開會)」；
-        //    自動簽核(ctx['auto_sign']=true，系統當下直接數位蓋章、不需要人在不在場)只看本人今天是否
-        //    真的請假/特休整天——開會不代表人整天不在，不該讓自動簽核也被轉去找代理人。
-        $unavailable = $autoSign ? eg_user_on_leave_today($db, $targetUserId) : !empty(eg_user_busy_today($db, $targetUserId));
+        /* 2. 不在閘門：**一律只看本人當天有沒有請假／休假**。
+              2026-10-01 使用者定調：行事曆上的會議等行程不算「不在」——開會的人還在公司、簽得了這張單。
+              實例：2026-10-01 整天的「AS稽核-復評」會議有 8 位出席，核准(陳俊宏)、管理代表(林雅婷)、
+              申請人(何沐桐) 都在名單上卻照常蓋自己的章（他們沒設代理人），只有設了代理人的
+              單位主管(吳佳靜)被判成「不在」而換成代理人並蓋「代」字——同一場會議兩種結果，自相矛盾。
+              真正決定要不要換人的其實是「有沒有設代理人」，不是「人在不在」。
+              需要「真人必須在場」的呼叫端請自行傳 ctx['require_present']=true（目前站上沒有）。 */
+        $requirePresent = !empty($ctx['require_present']);
+        $unavailable = $requirePresent ? !empty(eg_user_busy_today($db, $targetUserId))
+                                       : eg_user_on_leave_today($db, $targetUserId);
         if (!$unavailable) {
-            return $ret($targetUserId, false, false, $autoSign ? '本人今日未請假，由本人自動簽核' : '本人今日無行程，由本人簽核');
+            return $ret($targetUserId, false, false, $requirePresent ? '本人今日無行程，由本人簽核' : '本人今日未請假，由本人簽核');
         }
 
-        // 3. BY_PERSON → 4. BY_POSITION
-        $candidates = eg_person_delegates($db, $targetUserId, $scopeDep, $scopePos);
+        // 3. BY_PERSON（先精準身分、再不分身分）→ 4. BY_POSITION
+        $tiers  = eg_person_delegates_tiered($db, $targetUserId, $scopeDep, $scopePos);
         $source = 'BY_PERSON';
-        if (empty($candidates)) {
-            $candidates = eg_position_delegate_persons($db, $targetUserId, $scopeDep, $scopePos);
+        if (!$tiers['exact'] && !$tiers['global']) {
+            $tiers['global'] = eg_position_delegate_persons($db, $targetUserId, $scopeDep, $scopePos);
             $source = 'BY_POSITION';
         }
 
-        // 5. SoD 過濾：候選 == 申請人（或就是本人）→ 跳過；代理人本人今天也請假 → 一併跳過(不能找一個也不在的人代簽)
-        foreach ($candidates as $cand) {
-            if ($cand === $targetUserId) continue;
-            if ($applicantId && $cand === $applicantId) continue;
-            if (eg_user_on_leave_today($db, $cand)) continue;
-            return $ret($cand, true, false, "由代理人代簽（{$source}）");
+        /* 5. 候選過濾
+              ‧精準身分的代理（人資在 hr_settings「適用職務身分」明確指定給這個身分的）＝一律採信。
+              ‧不分身分的全域代理＝要再過一次**合格性**：代理人必須落在「被代理人這個簽核身分所屬單位」
+                的部門樹內（該單位本身、其下轄、或其上層主管鏈）。
+                2026-10-01 使用者回報：吳佳靜兼任「資材課 副理」與「業務課 課長」，她的兩筆代理設定都是
+                不分身分的全域規則，於是**業務課的組員鍾惠如被拿去代理「資材課副理」那一格的簽核**——
+                不同單位的組員代理副理的審核不合理（使用者原話「這太不合理了」）。
+              ‧SoD：候選是本人或申請人、或代理人自己當天也請假 → 跳過。 */
+        $unfit = [];
+        $pick  = null; $pickExact = false;
+        foreach ([['exact', true], ['global', false]] as [$k, $isExact]) {
+            foreach ($tiers[$k] as $cand) {
+                if ($cand === $targetUserId) continue;
+                if ($applicantId && $cand === $applicantId) continue;
+                if (eg_user_on_leave_today($db, $cand)) continue;
+                if (!$isExact && $scopeIsSigner && !eg_delegate_scope_fit($db, $cand, $scopeDep)) { $unfit[] = $cand; continue; }
+                $pick = $cand; $pickExact = $isExact; break 2;
+            }
+        }
+        if ($pick) return $ret($pick, true, false, '由代理人代簽（' . $source . ($pickExact ? '／已指定職務身分' : '') . '）');
+
+        /* 6. 有設代理人、但全部不合格（跨單位的全域代理）→ **不可以硬塞一個不相干的人去蓋章**。
+              回本人並標記 need_setup，請呼叫端提示去 HR 設定補一筆「指定職務身分」的代理。 */
+        if ($unfit) {
+            $names = [];
+            foreach (array_slice($unfit, 0, 3) as $u) $names[] = eg_delegate_user_label($db, $u);
+            $who  = eg_delegate_user_label($db, $targetUserId, $scopeDep);
+            return $ret($targetUserId, false, false, '代理人設定不適用本簽核身分，暫由本人處理', [
+                'need_setup' => true,
+                'setup_msg'  => $who . ' 當日請假，但目前設定的代理人（' . implode('、', $names) . '）'
+                              . '不屬於這個簽核身分所在的單位，無法代理這一關。'
+                              . '請至「HR 設定 → 使用者代理設定」為該職務身分（適用職務身分選' . eg_delegate_scope_label($db, $scopeDep) . '）指定代理人；'
+                              . '若你不是人資，請通知人資處理。',
+            ]);
         }
 
-        // 全部候選被排除（SoD 迴避或代理人本人也請假、或無候選）→ 直升上一級主管
-        if (!empty($candidates)) {
+        // 7. 有候選但全被 SoD／代理人也請假排除 → 直升上一級主管（既有行為）
+        if ($tiers['exact'] || $tiers['global']) {
             $sup = eg_resolve_supervisor($db, $targetUserId, $scopeDep);
             if ($sup && $sup !== $applicantId) {
                 return $ret($sup, false, true, '代理人皆無法代簽（權責迴避或本人也請假），簽核點直升上一級主管');
             }
-            // 上一級也等於申請人或無法解析 → 兜底回本人並標記
             return $ret($targetUserId, false, false, '代理人皆無法代簽且無法解析上一級，暫由本人/管理員處理');
         }
 
-        // 完全無代理設定 → 仍回本人（維持現狀，不強造代理）
-        return $ret($targetUserId, false, false, $autoSign ? '本人今日請假但未設定代理人，暫由本人自動簽核' : '本人今日有行程但未設定代理人，仍由本人簽核');
+        // 8. 完全沒有代理設定 → 仍回本人（不強造代理），但要提示去設定
+        return $ret($targetUserId, false, false, '本人今日請假但未設定代理人，暫由本人處理', [
+            'need_setup' => true,
+            'setup_msg'  => eg_delegate_user_label($db, $targetUserId, $scopeDep)
+                          . ' 當日請假，且尚未設定代理人。請至「HR 設定 → 使用者代理設定」指定代理人'
+                          . '（適用職務身分請選' . eg_delegate_scope_label($db, $scopeDep) . '）；若你不是人資，請通知人資處理。',
+        ]);
+    }
+}
+
+if (!function_exists('eg_person_delegates_tiered')) {
+    /**
+     * 個人代理分成兩層回傳（`eg_person_delegates()` 是「精準有就不回全域」的早退版本，
+     * 而合格性檢查只對全域那一層做，所以需要分得開）。
+     * @return array ['exact'=>int[], 'global'=>int[]]
+     */
+    function eg_person_delegates_tiered(PDO $db, int $targetUserId, ?int $scopeDep, ?int $scopePos): array {
+        $out = ['exact' => [], 'global' => []];
+        try {
+            if ($scopeDep !== null && $scopePos !== null) {
+                $st = $db->prepare("SELECT delegate_id FROM user_delegate
+                                    WHERE user_id = ? AND active = 1
+                                      AND start_date <= CURDATE() AND end_date >= CURDATE()
+                                      AND scope_department_id = ? AND scope_position_id = ?
+                                    ORDER BY priority ASC");
+                $st->execute([$targetUserId, $scopeDep, $scopePos]);
+                $out['exact'] = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+            }
+            $st = $db->prepare("SELECT delegate_id FROM user_delegate
+                                WHERE user_id = ? AND active = 1
+                                  AND start_date <= CURDATE() AND end_date >= CURDATE()
+                                  AND scope_department_id IS NULL AND scope_position_id IS NULL
+                                ORDER BY priority ASC");
+            $st->execute([$targetUserId]);
+            $out['global'] = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+        } catch (Throwable $e) {}
+        return $out;
+    }
+}
+
+if (!function_exists('eg_delegate_scope_depts')) {
+    /** 某單位的「合格代理範圍」＝該單位 + 所有下轄 + 整條上層主管鏈（請求內快取） */
+    function eg_delegate_scope_depts(PDO $db, int $deptId): array {
+        static $cache = [];
+        if ($deptId <= 0) return [];
+        if (isset($cache[$deptId])) return $cache[$deptId];
+        $parent = []; $kids = [];
+        try {
+            foreach ($db->query("SELECT id, parent_id FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d) {
+                $parent[(int)$d['id']] = $d['parent_id'] !== null ? (int)$d['parent_id'] : 0;
+                if ($d['parent_id'] !== null) $kids[(int)$d['parent_id']][] = (int)$d['id'];
+            }
+        } catch (Throwable $e) { return $cache[$deptId] = [$deptId]; }
+        $set = [$deptId => true];
+        for ($p = $parent[$deptId] ?? 0, $i = 0; $p && $i < 10; $p = $parent[$p] ?? 0, $i++) $set[$p] = true;  // 往上
+        $stack = [$deptId];                                                                                    // 往下
+        while ($stack) { $c = array_pop($stack); foreach ($kids[$c] ?? [] as $k) { if (!isset($set[$k])) { $set[$k] = true; $stack[] = $k; } } }
+        return $cache[$deptId] = array_keys($set);
+    }
+}
+
+if (!function_exists('eg_delegate_scope_fit')) {
+    /**
+     * 「不分身分」的代理人能不能代理這個簽核身分：代理人必須有一個職務落在該單位的部門樹內
+     * （該單位／其下轄／其上層主管鏈）。$scopeDep 沒給＝無從判斷，一律放行（維持舊行為）。
+     */
+    function eg_delegate_scope_fit(PDO $db, int $candUserId, ?int $scopeDep): bool {
+        if ($scopeDep === null || $scopeDep <= 0) return true;
+        $ok = eg_delegate_scope_depts($db, (int)$scopeDep);
+        if (!$ok) return true;
+        try {
+            $in = implode(',', array_fill(0, count($ok), '?'));
+            $st = $db->prepare("SELECT 1 FROM user_department_position_map
+                                WHERE user_id=? AND department_id IN ($in) LIMIT 1");
+            $st->execute(array_merge([$candUserId], $ok));
+            return (bool)$st->fetchColumn();
+        } catch (Throwable $e) { return true; }   // 查不到就不要擋流程
+    }
+}
+
+if (!function_exists('eg_delegate_user_label')) {
+    /** 「部門 職稱 姓名」供提示訊息用；$deptHint 有值時優先取該部門的那個職務 */
+    function eg_delegate_user_label(PDO $db, int $uid, ?int $deptHint = null): string {
+        try {
+            $st = $db->prepare("SELECT u.user_cname, d.name AS dept, p.name AS pos, m.department_id, m.is_main
+                                FROM `user` u
+                                LEFT JOIN user_department_position_map m ON m.user_id=u.id
+                                LEFT JOIN department d ON d.id=m.department_id
+                                LEFT JOIN position p ON p.id=m.position_id
+                                WHERE u.id=?");
+            $st->execute([$uid]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            if (!$rows) return '#' . $uid;
+            $pick = null;
+            if ($deptHint) foreach ($rows as $r) if ((int)$r['department_id'] === (int)$deptHint) { $pick = $r; break; }
+            if (!$pick) foreach ($rows as $r) if ((int)$r['is_main'] === 1) { $pick = $r; break; }
+            $pick = $pick ?: $rows[0];
+            return trim(($pick['dept'] ?? '') . ' ' . ($pick['pos'] ?? '') . ' ' . ($pick['user_cname'] ?? ''));
+        } catch (Throwable $e) { return '#' . $uid; }
+    }
+}
+
+if (!function_exists('eg_delegate_scope_label')) {
+    /** 提示訊息裡的「適用職務身分」要選哪一個部門 */
+    function eg_delegate_scope_label(PDO $db, ?int $deptId): string {
+        if (!$deptId) return '對應的職務身分';
+        try {
+            $st = $db->prepare("SELECT name FROM department WHERE id=?");
+            $st->execute([(int)$deptId]);
+            $n = (string)$st->fetchColumn();
+            return $n !== '' ? ('「' . $n . '」底下的那個職務') : '對應的職務身分';
+        } catch (Throwable $e) { return '對應的職務身分'; }
     }
 }

@@ -588,7 +588,11 @@ case 'decide': {
     $fresh = da_row($db, $id);
     da_notify_result($db, $fresh, (int)$fresh['applicant_id'],
         $uname . ($dec === 'approved' ? ' 已核准您的文件制修申請單。' : ' 已退回您的文件制修申請單。原因：') . $note, $uid);
-    jout($sync ? ['version_sync' => $sync] : []);
+    $out = [];
+    if ($sync) $out['version_sync'] = $sync;
+    // 代理設定不足（本人請假卻沒有可用代理人）→ 回報給畫面提示去 HR 設定（2026-10-01）
+    if ($dec === 'approved' && !empty($sg['_warn'])) $out['sign_warn'] = $sg['_warn'];
+    jout($out);
 }
 
 /* ══════════════════ 管理員自動簽核（需操作確認密碼） ══════════════════ */
