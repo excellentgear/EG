@@ -768,7 +768,7 @@ case 'record_target': {
     if (!$clear && $auditor === null) jerr('請填寫稽核員');
     $reportNo = trim((string)($_POST['report_no'] ?? '')) ?: null;
     $note = trim((string)($_POST['note'] ?? '')) ?: null;
-    $auditMode = in_array($_POST['audit_mode'] ?? '', ['first','again','self','newvendor'], true) ? $_POST['audit_mode'] : null;
+    $auditMode = in_array($_POST['audit_mode'] ?? '', ['first','again','self'], true) ? $_POST['audit_mode'] : null;
     $selfEval = trim((string)($_POST['self_evaluator'] ?? '')) ?: null;
     $supplierRep = trim((string)($_POST['supplier_rep'] ?? '')) ?: null;
     $conclusion = trim((string)($_POST['conclusion'] ?? '')) ?: null;
@@ -827,7 +827,7 @@ case 'complete_target': {
     $auditor = trim((string)($_POST['auditor'] ?? '')) ?: null;
     $reportNo = trim((string)($_POST['report_no'] ?? '')) ?: null;
     $note = trim((string)($_POST['note'] ?? '')) ?: null;
-    $auditMode = in_array($_POST['audit_mode'] ?? '', ['first','again','self','newvendor'], true) ? $_POST['audit_mode'] : null;
+    $auditMode = in_array($_POST['audit_mode'] ?? '', ['first','again','self'], true) ? $_POST['audit_mode'] : null;
     $selfEval = trim((string)($_POST['self_evaluator'] ?? '')) ?: null;
     $supplierRep = trim((string)($_POST['supplier_rep'] ?? '')) ?: null;
     $conclusion = trim((string)($_POST['conclusion'] ?? '')) ?: null;

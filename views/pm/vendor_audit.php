@@ -491,7 +491,6 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>稽核日期（留空=尚未稽核，月內完成即準時）</label><input type="date" id="recDate"></div>
             <div><label>稽核狀況</label><select id="recMode">
                 <option value="first">首次稽核</option><option value="again">次稽核</option><option value="self">自我評量</option>
-                <option value="newvendor">新供應商稽核</option>
             </select></div>
             <div><label>稽核員 <span id="recScopeHint" style="font-size:11px;color:#b5762a;"></span></label>
                 <select id="recAuditor"><option value="">—</option></select></div>
@@ -886,7 +885,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <li>與「稽核批次」是<b>完全獨立的分頁</b>，用於<b>全新廠商的首次評鑑</b>等臨時性稽核需求，一樣以<b>年度／上半年／下半年</b>瀏覽，但資料與計畫對象分開存放、分開顯示（不會混在稽核批次的主表格裡）。</li>
             <li>按「新增供應商評鑑」挑選廠商（大類／加工項目篩選後多選，或打字搜尋）後直接加入本期，<b>不受年度計畫鎖定限制</b>（即使該年度／範疇的計畫已送出鎖定仍可新增）、<b>一律不設預定稽核月份</b>，因此<b>不會出現在「供應商稽核計劃」年度計畫表，也不計入 KPI「廠商稽核按時執行率」</b>。若廠商尚未建檔，請先至主檔管理新增該廠商。</li>
             <li>加入之後的<b>登錄、簽核、記錄表、列印</b>等操作與「稽核批次」完全相同（共用同一套稽核評鑑表單與流程），本分頁上方的完成度只供自行追蹤參考，不是官方 KPI 指標。</li>
-            <li>登錄畫面的<b>「稽核狀況」自動帶入並固定為「新供應商稽核」</b>（首次稽核／次稽核／自我評量是稽核批次的用語，這裡不會出現，列印版的勾選格也只印「☑新供應商稽核」）；<b>預定稽核月份</b>欄位也不顯示（本分頁不列入年度計畫）。</li>
+            <li><b>文件右上角會加一個外框標記「新供應商評鑑」</b>：查核表（2-PH-01-02，含自評版與審查版）、評鑑記錄表（2-PH-01-03）、以及「一次印全部文件」印出來的每一份都會有，記錄表畫面上也看得到，方便與一般稽核批次的文件一眼區分。<b>稽核狀況</b>（首次稽核／次稽核／自我評量）與一般稽核批次用法相同、不另外改寫；<b>預定稽核月份</b>欄位則不顯示（本分頁不列入年度計畫）。</li>
             <li><b>查核表是本分頁專用的另一份題庫</b>（工具列「查核表設定」，標題為「查核表設定（○○-新供應商）」）：系統已自動建立預設內容<b>4 類 8 項、單項滿分 10 分、總分 80 分</b>——A.管理（認證／品質手冊與內部稽核）、B.品質（產品追溯／檢驗能力／儀器校驗／不良品隔離）、C.交期（出車收送貨）、D.出貨（待驗品·合格品·廢品隔離與標籤）。管理員可自行增刪、改文字與改單項滿分，與「稽核批次」的 15 項題庫<b>各自獨立、互不影響</b>，也<b>依範疇（外包加工／採購）各自一份</b>。</li>
             <li>自評/稽核權重與合格率門檻同樣在該設定畫面調整（初始值沿用與稽核批次相同的 自評×0.3＋稽核×0.7、≥75% 判合格，使用者未指定故取此為預設，可自行改）。<b>已完成評分的紀錄會凍結當時的題庫內容</b>，之後調整不影響舊紀錄。</li>
         </ul>
@@ -1327,13 +1326,9 @@ function openRec(tid){
         $('#recTitle').text((nvRec?'新供應商評鑑表單：':'稽核評鑑表單：')+t.maker_id+'（'+t.maker_id_no+'）');
         // 新供應商評鑑不列入年度計畫，預定稽核月份欄位沒有意義(後端也一律寫 NULL)，直接隱藏避免誤填
         $('#recPlanMonth').closest('div').toggle(!nvRec);
-        // 稽核狀況：新供應商評鑑一律是「新供應商稽核」，自動帶入且只留這個選項(首次/次稽核/自我評量是稽核批次的用語)；
-        // 一般稽核批次則反過來不顯示「新供應商稽核」這個選項
-        $('#recMode option[value="newvendor"]').prop('hidden', !nvRec).prop('disabled', !nvRec);
-        $('#recMode option').not('[value="newvendor"]').prop('hidden', nvRec).prop('disabled', nvRec);
         $('#recPlanMonth').val(t.plan_month||'');
         $('#recDate').val((t.audit_date?String(t.audit_date).substr(0,10):'')||META.today);
-        $('#recMode').val(nvRec ? 'newvendor' : (t.audit_mode||'first'));
+        $('#recMode').val(t.audit_mode||'first');
         // 稽核員下拉：只列該供應商 scope(外包加工/採購)＋通用 的有資格者
         var $au = $('#recAuditor').html('<option value="">—</option>');
         (res.auditors||[]).forEach(function(a){
@@ -1435,9 +1430,7 @@ function renderForm(scores){
 function applyReviewTypeCols(){
     var rt = $('input[name=recReviewType]:checked').val();
     $('#afTable').toggleClass('va-abnormal', rt==='abnormal');
-    // 新供應商評鑑的稽核狀況固定是「新供應商稽核」，不可被「供應商自主評核」這個審查類別改寫掉
-    var nvRec = !!(CUR_REC && CUR_REC.is_adhoc);
-    if (rt === 'self' && !nvRec) $('#recMode').val('self');
+    if (rt === 'self') $('#recMode').val('self');
 }
 $(document).on('change', 'input[name=recReviewType]', applyReviewTypeCols);
 function collectScores(){
@@ -1551,7 +1544,7 @@ function openSignMask(tid){
         var t = res.target, cfg = t.checklist_cfg, c = computeCats(t.scores||{}, cfg);
         SIGN_TID = tid;
         $('#signTitle').text('供應商稽核簽核：'+t.maker_id+'（'+t.maker_id_no+'）');
-        var modeL={first:'首次稽核',again:'次稽核',self:'自我評量',newvendor:'新供應商稽核'}[t.audit_mode]||'—';
+        var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'—';
         $('#signInfo').html('稽核日期：'+(fmtDate(t.audit_date)||'—')+'　稽核狀況：'+modeL+'　稽核員：'+esc(t.auditor||'—')+'　建議結論：'+esc(t.conclusion||'—'));
         var rows='';
         c.cats.forEach(function(k){ rows+='<tr><td class="af-q">'+esc(k.name)+'</td><td class="af-sc">'+k.max+'</td><td class="af-sc">'+k.self_rate+'%</td><td class="af-sc">'+k.audit_rate+'%</td></tr>'; });
@@ -1656,24 +1649,29 @@ function openHis(mid){
 }
 
 /* ---------- 列印評鑑表單 ---------- */
+/** 新供應商評鑑的文件右上角加一個外框標記（查核表/記錄表/一次印全部文件都用這一支，確保三份文件長得一樣）。
+ *  放在標題區(position:relative)內靠右上角，不佔標題的水平空間，所以公司名與表單名仍維持置中。 */
+function vaNvBadgeHtml(isNv){
+    if (!isNv) return '';
+    return '<div style="position:absolute;right:0;top:0;border:2px solid #000;border-radius:4px;'
+         + 'padding:4px 12px;font-size:15px;font-weight:bold;letter-spacing:2px;line-height:1.2;white-space:nowrap;">新供應商評鑑</div>';
+}
 /** 查核表單一版本(mode='self'=供應商自主評核版,全部留白；mode='site'=人員實地審查版,顯示分數) */
 function auditFormOneVersion(o, mode){
     var cfg = o.cfg || CUR_CFG || {items:META.items, total_max:META.total_max, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
     var docName = (META.as_doc && META.as_doc.doc_name) || '供應商評鑑稽核查表';
-    var head = '<div style="text-align:center;">'
+    var head = '<div style="position:relative;text-align:center;">' + vaNvBadgeHtml(o.isNv)
         + '<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
         + '<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
     var reviewMap = {site:'人員實地審查', self:'供應商自主評核', abnormal:'異常檢核'};
     var reviewBoxes = ['site','self','abnormal'].map(function(k){ return (mode===k?'☑':'□')+reviewMap[k]; }).join('　');
     var prodMap = {raw:'原料', outsource:'委外加工件', packaging:'包材'};
     var prodBoxes = ['raw','outsource','packaging'].map(function(k){ return (o.prodType===k?'☑':'□')+prodMap[k]; }).join('　');
-    var modeMap = {first:'首次稽核', again:'次稽核', self:'自我評量', newvendor:'新供應商稽核'};
+    var modeMap = {first:'首次稽核', again:'次稽核', self:'自我評量'};
     // 供應商自主評核版(mode==='self')本來就只有「自我評量」這一種可能，固定勾選；
     // 人員實地審查/異常檢核版依該筆紀錄真實的稽核狀況(o.mode)顯示（可能是首次或次稽核）
     var modeForBoxes = (mode === 'self') ? 'self' : o.mode;
-    // 新供應商評鑑的稽核狀況只有「新供應商稽核」一種，紙本就不要再印首次/次稽核/自我評量那三格
-    var modeKeys = (modeForBoxes==='newvendor') ? ['newvendor'] : ['first','again','self'];
-    var modeBoxes = modeKeys.map(function(k){ return (modeForBoxes===k?'☑':'□')+modeMap[k]; }).join('　');
+    var modeBoxes = ['first','again','self'].map(function(k){ return (modeForBoxes===k?'☑':'□')+modeMap[k]; }).join('　');
     var info = '<table class="pf-info"><tr>'
         + '<td>供應商：'+(o.maker?esc(o.maker):'________________')+'</td>'
         + '<td>日期：'+(o.dateStr?esc(o.dateStr):'____ / ____ / ____')+'</td></tr>'
@@ -1762,7 +1760,8 @@ function printBlankForm(){
 }
 function printCurrentForm(){
     openPrintWindow(auditFormHTML({
-        maker: $('#recTitle').text().replace('稽核評鑑表單：',''),
+        maker: $('#recTitle').text().replace('稽核評鑑表單：','').replace('新供應商評鑑表單：',''),
+        isNv: !!(CUR_REC && CUR_REC.is_adhoc),
         dateStr: fmtDate($('#recDate').val()), scores: collectScores(), mode: $('#recMode').val(),
         prodType: CUR_PROD_TYPE, auditorName: $('#recAuditor').val(),
         mgrApproved: !!(CUR_REC && CUR_REC.status==='approved' && CUR_REC.signed_by_name),
@@ -1794,8 +1793,10 @@ function openRecordSheet(tid){
         RS={tid:tid, t:t, c:c, cfg:cfg, attaches:res.attaches||[]};
         var doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
         $('#rsTitle').text(docName+'：'+t.maker_id+'（'+t.maker_id_no+'）');
-        var modeL={first:'首次稽核',again:'次稽核',self:'自我評量',newvendor:'新供應商稽核'}[t.audit_mode]||'—';
-        $('#rsInfo').html('供應商：<b>'+esc(t.maker_id)+'</b>（'+esc(t.maker_id_no)+'）　稽核日期：'+(fmtDate(t.audit_date)||'—')+'　稽核狀況：'+modeL+'　稽核員：'+esc(t.auditor||'—'));
+        var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'—';
+        $('#rsInfo').html((t.is_adhoc ? '<span style="float:right;border:2px solid #8A5A2B;border-radius:4px;padding:2px 10px;'
+                + 'font-weight:bold;letter-spacing:2px;color:#8A5A2B;">新供應商評鑑</span>' : '')
+            + '供應商：<b>'+esc(t.maker_id)+'</b>（'+esc(t.maker_id_no)+'）　稽核日期：'+(fmtDate(t.audit_date)||'—')+'　稽核狀況：'+modeL+'　稽核員：'+esc(t.auditor||'—'));
         var rows='';
         c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*cfg.self_w+k.audit_rate*cfg.audit_w)*10)/10;
             rows+='<tr><td class="af-q">'+esc(k.name)+'</td><td class="af-sc">'+k.max+'</td><td class="af-sc">'+k.self_rate+'%</td><td class="af-sc">'+k.audit_rate+'%</td><td class="af-sc">'+comb+'%</td></tr>'; });
@@ -1877,8 +1878,9 @@ function vaJudgeBadgeHtml(pass){
 function recordSheetHTML(){
     if (!RS) return '';
     var t=RS.t, c=RS.c, cfg=RS.cfg, doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
-    var modeL={first:'首次稽核',again:'次稽核',self:'自我評量',newvendor:'新供應商稽核'}[t.audit_mode]||'____';
-    var head='<div style="text-align:center;"><div style="font-size:25px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
+    var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'____';
+    var head='<div style="position:relative;text-align:center;">' + vaNvBadgeHtml(!!t.is_adhoc)
+        +'<div style="font-size:25px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
         +'<div style="font-size:19px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
     var info='<table class="pf-info"><tr><td>供應商：'+esc(t.maker_id)+'（'+esc(t.maker_id_no)+'）</td><td>加工項目：'+esc(t.main_cat_name||'—')+'</td><td>稽核日期：'+(fmtDate(t.audit_date)||'____')+'</td><td>稽核狀況：'+esc(modeL)+'</td></tr></table>';
     var rows='<table class="pf rs-table" style="table-layout:fixed;"><colgroup><col style="width:38%;"><col style="width:14%;"><col style="width:16%;"><col style="width:16%;"><col style="width:16%;"></colgroup>'
@@ -2011,7 +2013,7 @@ async function vaBuildAttachPrintHTML(attaches){
 async function printAllDocs(){
     if (!RS) { alert('無資料'); return; }
     var docNo1 = (RS.t&&RS.t.as_doc_no)||(META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', docNo2 = (RS.t&&RS.t.record_as_doc_no)||(META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
-    var page1 = auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode, cfg:RS.cfg, prodType:RS.t.prod_type, auditorName:RS.t.auditor,
+    var page1 = auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', isNv:!!RS.t.is_adhoc, dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode, cfg:RS.cfg, prodType:RS.t.prod_type, auditorName:RS.t.auditor,
         mgrApproved: !!(RS.t.status==='approved' && RS.t.signed_by_name), mgrName:RS.t.signed_by_name, mgrDate:fmtDate(RS.t.audit_date), mgrIsDeputy:!!RS.t.signed_is_deputy});
 
     var attachHtml = '';
