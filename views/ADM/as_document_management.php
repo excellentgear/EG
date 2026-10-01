@@ -699,6 +699,13 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
 .doc-web-on:hover { background:#F0A24B; color:#fff; }
 .doc-web-no { color:#aaa; }
 @media print { .doc-web, .doc-web-col { display:none !important; } }
+/* 「網頁版」小籤：已網頁化的表單沒有上傳檔案是正常的，取代原本會誤導人的「無檔」灰籤。
+   line-height 一定要自己指定——Gentelella 全站 `td span{line-height:28px}` 會把 10px 的字
+   撐成 28px 高，整列跟著變高（本專案已踩過多次）。列印不出現（畫面資訊，不是表單內容）。 */
+.doc-webver { font-size:10px; line-height:14px; padding:1px 4px; background:#F7E0BD; color:#8A5A2B;
+              border:1px solid #E8C07A; border-radius:3px; display:inline-block; vertical-align:middle; }
+.doc-name-web { text-decoration:none; }
+@media print { .doc-webver { display:none !important; } }
 .ob-tag { background:#DD5138; color:#fff; }
 /* 文件備註（管理員維護，接在文件名稱下方）：暖色系淡底＋左側粗邊，跟文件名稱明顯分層。
    內容是使用者自訂格式，所以底色/文字色一律讓內文的 inline style 自己決定，
@@ -1710,9 +1717,23 @@ $(function(){
       // 已廢止：管理員以外不給開啟／預覽／下載檔案（後端 download / open_online 同樣擋一次）
       const isOb = d.is_obsolete==1;
       const fileOk = !isOb || window.asPerm.admin;
+      /* 已網頁化（這份文件已經做成系統頁面）：名稱與「檢視」一律以線上版為主（2026-10-01 使用者交辦）。
+         判定來自後端 tree_web_pages（WEB_PAGES），沒權限開那一頁的人連網址都拿不到，
+         此時一律退回原本的檔案行為——看得到清單卻開不了東西才是最難解釋的狀況。
+         廢止文件比照既有檔案規則：管理員以外不給開正本，所以名稱不轉成線上版連結。 */
+      const wp = WEB_PAGES[String(d.id)];
+      const webOk = !!(wp && wp.can && wp.url && fileOk);
+      // 已網頁化者不可以標「無檔」——那等於一直要求上傳一份系統根本不需要的空白表單檔
+      const noFileMark = (!d.current_file_name && curVer)
+        ? (wp ? ` <span class="label doc-webver" title="已網頁化：${esc(wp.name)}｜這份表單的正本是系統頁面，不需要上傳空白表單檔">網頁版</span>`
+              : ' <span class="label label-default" title="補登資料，尚未上傳文件檔">無檔</span>')
+        : '';
       let nameCell = esc(d.doc_name);
-      if(!d.current_file_name && curVer) nameCell += ' <span class="label label-default" title="補登資料，尚未上傳文件檔">無檔</span>';
-      if(curVer && d.current_file_name && fileOk){
+      if(webOk){
+        nameCell = `<a href="${esc(wp.url)}" target="_blank" rel="noopener" class="doc-name-web"`
+                 + ` title="已網頁化：${esc(wp.name)}｜點擊開啟線上版頁面（另開新分頁）">${esc(d.doc_name)}`
+                 + ` <i class="fa fa-external-link text-muted" style="font-size:10px;"></i></a>`;
+      } else if(curVer && d.current_file_name && fileOk){
         if(canEO && isOffice){
           nameCell = `<a href="#" class="op-online" data-ver="${curVer}" title="下載工作副本，開啟後按「啟用編輯」即可打字/列印（不動正式版本檔）">${esc(d.doc_name)} <i class="fa fa-pencil text-muted" style="font-size:11px;"></i></a>`;
         } else {
@@ -1722,9 +1743,24 @@ $(function(){
       // 操作欄：固定欄位（每列同寬對齊）＋常用圖示鈕＋管理動作收進 ⚙ 下拉
       const hasFile = !!d.current_file_name;
       const slot = (html, w)=>`<span style="display:inline-block;min-width:${w}px;text-align:center;">${html||''}</span>`;
-      const sPrev = (curVer && hasFile && fileOk)
-        ? `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="線上預覽（PDF）"><i class="fa fa-eye"></i></a>`
-        : ((curVer && hasFile) ? '<span class="text-muted" title="此文件已廢止，僅管理員可開啟檔案"><i class="fa fa-ban"></i></span>' : '');
+      /* 「檢視」(眼睛)：已網頁化的表單一律改看線上版（2026-10-01 使用者交辦）。
+         ・該模組做過「列印空白表單」→ 直接開空白表單的列印畫面（深連結，見 asdoc_page_lib 的
+           eg_asdoc_blank_print_map()；目前只有供應商評鑑表／兩種簽到表／審核表單 4 份共 7 份有）
+         ・沒做過 → 退回開該模組頁面，並在提示裡講明原因（系統沒有通用的空白表單產生器，
+           連到一個印不出東西的網址比不連更難解釋）
+         原本上傳的那份檔案入口刻意保留在「下載」鈕與「歷史版本」跳窗（使用者拍板），這裡不再重複。 */
+      let sPrev;
+      if(webOk && wp.blank_url){
+        sPrev = `<a class="btn btn-xs btn-default" href="${esc(wp.blank_url)}" target="_blank" rel="noopener"`
+              + ` title="開啟「${esc(wp.name)}」線上版的空白表單列印畫面"><i class="fa fa-eye"></i></a>`;
+      } else if(webOk){
+        sPrev = `<a class="btn btn-xs btn-default" href="${esc(wp.url)}" target="_blank" rel="noopener"`
+              + ` title="已網頁化：${esc(wp.name)}｜此模組尚無「空白表單列印」，改為開啟線上版頁面（原檔仍可由下載鈕或歷史版本取得）"><i class="fa fa-eye"></i></a>`;
+      } else if(curVer && hasFile && fileOk){
+        sPrev = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="線上預覽（PDF）"><i class="fa fa-eye"></i></a>`;
+      } else {
+        sPrev = (curVer && hasFile) ? '<span class="text-muted" title="此文件已廢止，僅管理員可開啟檔案"><i class="fa fa-ban"></i></span>' : '';
+      }
       const sDl = (curVer && hasFile && canDL && fileOk)
         ? `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${curVer}" title="下載原檔"><i class="fa fa-download"></i></a>` : '';
       // 表單=「紀錄」（填寫後的表單）；其他文件=「附件」（無編號、僅留存的相關檔案）
@@ -1772,7 +1808,7 @@ $(function(){
         ${canU?`<td><input type="checkbox" class="doc-chk" value="${d.id}"></td>`:''}
         <td class="fq-col${window.asPerm.admin?' fq-editable':''}"${window.asPerm.admin?' title="雙擊設定更新頻率 / 負責課室"':''}>${freqCell(d)}</td>
         <td class="col-nw">${esc(d.doc_no)}${delMark}</td>
-        <td class="col-name">${nameCell}${docRemarkCell(d)}</td>
+        <td class="col-name">${nameCell}${noFileMark}${docRemarkCell(d)}</td>
         <td class="col-nw">${esc(d.doc_type)||'-'}</td>
         <td class="col-nw">${esc(d.doc_level)||'-'}</td>
         <td class="col-nw">${esc(d.dept_name)||'<span class="text-muted">跨部門</span>'}</td>
@@ -3229,10 +3265,17 @@ $(function(){
     });
     // 免附件補登權限：新版文件檔與申請單皆可不附（後端同樣豁免）
     $('#ver_view_file').prop('disabled', false);   // 上次選過導入來源會把它鎖起來，重開跳窗要放開
-    $('#ver_file').prop('required', !canNA);
+    /* 已網頁化的表單：正本就是系統頁面，不再要求上傳一份空白表單檔（2026-10-01 使用者交辦）。
+       **「文件制修申請單」仍然必附**（使用者明確要求）——那是改版的依據，與有沒有網頁化無關。
+       後端 add_version 同規則再豁免一次（鐵律8），不是只擋前端。 */
+    const verWeb = !!WEB_PAGES[String(vid)];
+    $('#ver_file').prop('required', !canNA && !verWeb);
     $('#ver_apply_form').prop('required', !canNA);
-    $('#naHint').remove();
+    $('#naHint,#webHint').remove();
     if(canNA) $('#versionModal .apply-alert').after('<div id="naHint" class="alert alert-info" style="padding:6px 10px;">你有「補登免附件」權限：補舊資料時，新版文件檔與申請單皆可暫不上傳。</div>');
+    if(verWeb) $('#versionModal .apply-alert').after('<div id="webHint" class="alert alert-info" style="padding:6px 10px;">'
+      + '這份表單<b>已網頁化</b>（' + esc(WEB_PAGES[String(vid)].name || '') + '），正本就是系統頁面，'
+      + '<b>新版文件檔可以不上傳</b>；<b>「文件制修申請單」仍然必附</b>。</div>');
     rnReset();   // 上一次開跳窗可能勾過「變更文件編號」，reset() 只清 value 不會把區塊收起來
     $('#versionModal').modal('show');
   });
@@ -4679,8 +4722,18 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
 <ul>
     <li>上方搜尋框可<b>即時搜尋</b>編號／名稱／附件標題／備註 #標籤；右側 <b>#</b> 鈕列出所有附件標籤，點一下就篩選。</li>
     <li>可依<b>階層</b>（一階手冊～四階表單）、<b>部門</b>、<b>標籤</b>篩選；勾「顯示已刪除」才看得到刪掉的。</li>
-    <li><b>網頁</b>欄：這份文件如果已經做成系統頁面，點一下就直接開那一頁（沒有權限的人看到灰字「無權限」，
-        <b>連網址都不會送到前端</b>）。這一欄是<b>自動判定</b>的——新模組只要照規定綁了 AS 編號就會自己長出來，不必回來登記。<b>列印時不會印這一欄。</b></li>
+    <li><b>網頁</b>鈕：這份文件如果已經做成系統頁面，點一下就直接開那一頁（沒有權限的人看到灰色禁止圖示，
+        <b>連網址都不會送到前端</b>）。這是<b>自動判定</b>的——新模組只要照規定綁了 AS 編號就會自己長出來，不必回來登記。<b>列印時不會印這些。</b></li>
+    <li><b>已網頁化的表單，點「文件名稱」直接開線上版頁面</b>（另開新分頁），不再開那份上傳的空白表單檔；
+        沒有開啟那一頁權限的人，名稱會退回原本的檔案預覽，不會變成按了沒反應。</li>
+    <li><b>「檢視」（眼睛）鈕</b>：已網頁化的表單改看線上版——
+        該模組如果做過「列印空白表單」，點一下就<b>直接跳出空白表單的列印畫面</b>（目前有：供應商評鑑表、教育訓練簽到表、
+        會議簽到表、四份審核表單）；<b>其餘模組還沒有空白表單列印</b>，會改成開啟該模組頁面並在提示裡講明原因
+        （系統沒有通用的空白表單產生器，每個模組的版面都在它自己頁面裡）。
+        <b>原本上傳的檔案仍然找得到</b>：操作欄的「下載」鈕，以及 ⚙ →「版本紀錄」裡每一版都可預覽／下載。</li>
+    <li><b>已網頁化的表單不會再被要求上傳檔案</b>：清單上標<span class="label doc-webver" style="display:inline-block;">網頁版</span>而不是「無檔」
+        （正本就是系統頁面），「改版」時<b>新版文件檔可以不上傳</b>；
+        但<b>「文件制修申請單」仍然必附</b>——那是改版的依據，與有沒有網頁化無關。</li>
     <li>每一列右側的 <b>⚙</b> 有：編輯資料、版本紀錄、<b>填寫紀錄</b>、作業項目、廢止、刪除等。</li>
 </ul>
 

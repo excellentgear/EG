@@ -2241,7 +2241,10 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount, s
             + '.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}'
             + '.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
             + (extraCss||'');
-    var w = window.open('', '_blank');
+    /* MR_SELF_PRINT：深連結「空白簽到表列印」模式（?blank_signsheet=1，由 AS 文件管理的「檢視」開進來）。
+       **這一頁是別頁的連結開出來的新分頁，沒有使用者手勢，window.open() 會被彈出視窗封鎖直接擋掉
+       而且靜默失敗**（使用者只看到「按了沒反應」），所以那種模式一律就地寫進本分頁。 */
+    var w = MR_SELF_PRINT ? window : window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return; }
     var onloadJs = (pageCount && showPageCounter)
         ? ('var onePageA4=('+(landscape?'210':'297')+'-30)*96/25.4;'   // 30＝上下頁邊 14+16mm，跟上面的 @page 一組
@@ -2250,9 +2253,15 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount, s
           +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
           +'document.head.appendChild(st);}')
         : '';
+    // 列印觸發：寫進新視窗時那份文件才剛開始載入，等它的 window.onload；寫進本分頁時 load 早就跑完了，
+    // **不可以再靠 onload**（等不到就靜默不列印），改用 setTimeout 自己叫。
+    var trigJs = onloadJs + 'setTimeout(function(){window.print();},200);';
+    w.document.open();
     w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
         + bodyHtml
-        + '<scr'+'ipt>window.onload=function(){'+onloadJs+'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+        + '<scr'+'ipt>'
+        + (MR_SELF_PRINT ? 'setTimeout(function(){'+trigJs+'},250);' : 'window.onload=function(){'+trigJs+'};')
+        + '</scr'+'ipt></body></html>');
     w.document.close();
 }
 /* 會議記錄/簽到表 列印共用版面：完全比照公司實體表單附件(2-GM-05-01)，橫式列印。
@@ -2488,6 +2497,22 @@ function printBlankSignSheet(){
     if (!VIEW) return;
     mtPrintLog('會議簽到表(空白) '+(VIEW.meeting.subject||'')+' '+dispDate(VIEW.meeting.meeting_date), VIEW.meeting.meeting_id);
     egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, false, 'fixed'), mrCss(), '', false, true);
+}
+var MR_SELF_PRINT = false;   // 深連結「空白簽到表列印」模式，見 egPrintWindow 內說明
+/* 不綁任何一場會議的空白簽到表（深連結 ?blank_signsheet=1 專用）。
+   上面那支 printBlankSignSheet() 印的是「某一場會議的名單，簽名欄留白」，所以非得先選到會議；
+   這一支是給 AS 文件管理的「檢視」看這份 AS 表單（2-MM-01-11 簽到表）**本身的空白樣式**用的，
+   表頭留白、名單改成 MR_BLANK_ROWS 列空白列供現場手寫。
+   版面產生器刻意沿用同一支 signSheetPageHtml()——另寫一份版面遲早跟實際印出來的簽到表走鐘（鐵律4）。
+   AS 編號取 META.as_doc_signsheet_no（目前生效版次；空白表單是今天要印的，不必回推版次）。 */
+var MR_BLANK_ROWS = 16;
+function printBlankSignSheetStandalone(){
+    var rows = [];
+    for (var i = 0; i < MR_BLANK_ROWS; i++) rows.push({});
+    var m = {as_doc_signsheet_no: META.as_doc_signsheet_no || ''};
+    mtPrintLog('會議簽到表(空白表單) '+(META.as_doc_signsheet_no||''), null);
+    MR_SELF_PRINT = true;
+    egPrintWindow('會議簽到表', signSheetPageHtml(m, rows, false, 'fixed'), mrCss(), '', false, true);
 }
 /* 簽到表(已簽署版)：出席人員電子簽到全部完成才會顯示按鈕(openView時判斷)，含真圖章。 */
 function printSignedSignSheet(){
@@ -3137,6 +3162,11 @@ var URL_NOTICE_ID = (function(){
     return m ? parseInt(m[1], 10) : 0;
 })();
 loadMeta(function(){
+    /* 深連結「空白簽到表列印」(?blank_signsheet=1)：AS 文件管理的「檢視」鈕會開這個網址，
+       目的就是直接看到這份 AS 表單（2-MM-01-11 簽到表）的空白列印畫面，不必先挑一場會議。
+       整頁會被就地換成列印版面，所以**一定要在 loadList() 等其他載入動作之前處理並 return**
+       ——後面那些 AJAX 回來要寫的 DOM 已經不存在了。 */
+    if (/[?&]blank_signsheet=1/.test(location.search)) { printBlankSignSheetStandalone(); return; }
     loadList();
     if (URL_NOTICE_ID) { openNotice(URL_NOTICE_ID); return; }
     if (!URL_SIGN_ID && URL_OPEN_ID) { openEdit(URL_OPEN_ID); return; }

@@ -238,6 +238,59 @@ function eg_asdoc_page_map(PDO $db, array $opt = []): array {
 }
 
 /**
+ * 這份 AS 文件有沒有「已網頁化」（＝做成系統頁面）—— 供各頁快速判斷用。
+ * 與 eg_asdoc_page_map() 同一份判定（含排除 form_signer：使用者拍板那只是紙本簽好再補送、不算電子化）。
+ */
+function eg_asdoc_is_webized(PDO $db, int $docId): bool {
+    if ($docId <= 0) { return false; }
+    static $map = null;
+    if ($map === null) { $map = eg_asdoc_page_map($db, ['skip_sources' => ['form_signer']]); }
+    return isset($map[$docId]);
+}
+
+/**
+ * 「空白表單列印」登記表 —— **唯一實作**（2026-10-01 使用者交辦）
+ *
+ * 已網頁化的表單按「檢視」要看到的是**線上版自己印出來的空白表單**，而不是另外上傳的那份檔案。
+ * 問題是：每個模組的列印版面都寫在它自己的頁面 JS 裡，**系統沒有通用的空白表單產生器**，
+ * 所以只有「本來就做過『列印空白表單』功能」的模組登記得進來；其餘一律回不到網址，
+ * 由呼叫端退回「開啟該模組頁面」（寧可不給，也不要連到一個印不出東西的網址）。
+ *
+ * 深連結的語意與本專案既有做法完全一致（見 part_viewer 的 ?tags_setting=1、?open=檔名）：
+ * **「頁面照常載入之後多做一件事」**，不負責「不帶參數也要活著」，頁面本身的守門一律不動。
+ *
+ * ⚠ 這些深連結一律「在本分頁就地渲染並列印」，**目標頁面不可以用 window.open()**——
+ *   目標頁是由別頁的連結開起來的新分頁，**沒有使用者手勢，彈出視窗封鎖會直接擋掉而且靜默失敗**
+ *   （使用者只會看到「按了沒反應」）。要新增一份時請比照既有三支的 selfTab 寫法。
+ *
+ * 要再加一份：①該模組先有「不必選到任何資料就印得出空白表單」的函式 ②加一個深連結參數自動觸發它
+ * ③在這裡登記一列。鍵＝eg_asdoc_page_map() 回傳的 module（AS_DOC_BIND 的 param_key／舊式設定鍵）。
+ *
+ * @param array|null $pageMap 已經取得的 eg_asdoc_page_map() 結果（避免重複掃描）
+ * @return array [as_document.id => 空白表單列印的站內網址]
+ */
+function eg_asdoc_blank_print_map(PDO $db, ?array $pageMap = null): array {
+    if ($pageMap === null) { $pageMap = eg_asdoc_page_map($db, ['skip_sources' => ['form_signer']]); }
+    $U = function (string $rel) { return EG_ASDOC_PAGE_BASE . $rel; };
+    // 固定對照：模組鍵 => 空白表單列印的深連結
+    $FIXED = [
+        'vendor_audit_as_doc_id'    => 'pm/vendor_audit.php?blank_form=1',          // 2-PH-01-02 供應商評鑑表
+        'training_as_doc_signsheet' => 'ADM/training_record.php?blank_signsheet=1', // 2-MM-01-02 教育訓練簽到表
+        'meeting_signsheet'         => 'ADM/meeting_record.php?blank_signsheet=1',  // 2-MM-01-11 會議簽到表
+    ];
+    $out = [];
+    foreach ($pageMap as $docId => $m) {
+        $key = (string)($m['module'] ?? '');
+        if (isset($FIXED[$key])) { $out[(int)$docId] = $U($FIXED[$key]); continue; }
+        // 審核表單是「一個模板一組編號」的通用引擎，本來就有試填預覽可直接列印（＝空白樣式）
+        if (preg_match('/^review_form_tpl_(\d+)$/', $key, $mm)) {
+            $out[(int)$docId] = $U('ADM/review_form.php?preview=1&tpl_id=' . (int)$mm[1]);
+        }
+    }
+    return $out;
+}
+
+/**
  * 這個使用者有沒有權限開這一頁（判定與左側選單 sideAndTopBarMenu.html 同一套：
  * user_module_permissions 有 page scope 或所屬群組的 group scope 任一列即可，
  * 或走新版角色機制 roles/user_roles 取得該群組模組角色）。

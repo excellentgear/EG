@@ -911,7 +911,16 @@ case 'add_version':
     $hasApply = isset($_FILES['apply_form']) && $_FILES['apply_form']['error']===UPLOAD_ERR_OK;
     if ($fsdCaseId > 0 && $hasView)
         jout(['status'=>'error','message'=>'檢視版請擇一：上傳檔案，或由表單簽核案件導入']);
-    if (!$hasFile && !$asNoAttach)
+    /* 已網頁化的表單不要求上傳文件檔（2026-10-01 使用者交辦）：那份表單的正本就是系統頁面，
+       硬要上傳一份空白表單檔只是多一份會跟程式對不起來的東西。判定走 eg_asdoc_is_webized()
+       （與清單「網頁」欄同一份判定，鐵律4），前端擋一次、這裡同規則再擋一次（鐵律8）。
+       ⚠「文件制修申請單」**仍然必附**（使用者明確要求）——那是改版的依據，與有沒有網頁化無關。 */
+    $asWebized = false;
+    try {
+        require_once __DIR__ . '/../common/asdoc_page_lib.php';
+        $asWebized = eg_asdoc_is_webized($db, $docId);
+    } catch (Throwable $e) { error_log('add_version webized: '.$e->getMessage()); }
+    if (!$hasFile && !$asNoAttach && !$asWebized)
         jout(['status'=>'error','message'=>'請上傳新版文件檔（下載版）']);
     // 改版一律需附「文件制修申請單(附件一)」；「補登免附件」角色豁免（補舊資料用）
     if (!$hasApply && !$asNoAttach)
@@ -1651,6 +1660,9 @@ case 'tree_web_pages':
     require_once __DIR__ . '/../common/asdoc_page_lib.php';
     require_once __DIR__ . '/../common/role_features_helper.php';
     $pmap = eg_asdoc_page_map($db, ['skip_sources' => ['form_signer']]);
+    /* 空白表單列印的深連結（只有做過「列印空白表單」的模組才有，見 eg_asdoc_blank_print_map 註解）。
+       清單的「檢視」鈕拿它當第一順位：有就開空白表單列印，沒有就退回開模組頁面。 */
+    $bmap = eg_asdoc_blank_print_map($db, $pmap);
     $outp = [];
     foreach ($pmap as $did => $m) {
         // 權限看 perm_url（連結目標沒登記進選單時才會有），否則看連結本身
@@ -1658,8 +1670,10 @@ case 'tree_web_pages':
         $can = eg_asdoc_page_registered($db, $ptarget)
              ? eg_asdoc_page_can_open($db, $currentUserId, $ptarget)
              : asCan('view');
+        // 沒權限開那一頁的人連網址都不回（含空白列印的深連結——它進去的是同一頁）
         $outp[(string)$did] = ['name' => $m['name'], 'can' => $can ? 1 : 0]
-                            + ($can ? ['url' => $m['url']] : []);
+                            + ($can ? ['url' => $m['url']] : [])
+                            + ($can && isset($bmap[(int)$did]) ? ['blank_url' => $bmap[(int)$did]] : []);
     }
     jout(['status'=>'success','pages'=>$outp]);
 

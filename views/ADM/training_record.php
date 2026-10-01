@@ -1181,6 +1181,14 @@ function loadMeta(cb){
         if (m.perms.canApply) $('#btnReqAdd').show();
         // 角色設定（改名/勾功能）實際寫入 Roles_API 要求「系統管理者」，訓練管理員(canAdmin)看得到模組設定但這個分頁只給真正的系統管理者
         if (m.perms.isAdmin) $('#setTab4').show();
+        /* 深連結「空白簽到表列印」(?blank_signsheet=1)：AS 文件管理的「檢視」鈕會開這個網址，
+           目的就是直接看到這份 AS 表單（2-MM-01-02 教育訓練簽到表）的空白列印畫面。
+           不必選到任何場次——printSignSheet(true) 在沒有 EXROW 時會印成「課程名稱／日期／地點」留白、
+           16 列空白簽名列的版本，與頁面上那顆「列印空白簽到表」完全同一支版面（鐵律4）。
+           整頁會被就地換成列印版面，所以**一定要在其他載入動作之前處理並 return**。 */
+        if (/[?&]blank_signsheet=1/.test(location.search) && typeof printSignSheet === 'function') {
+            TR_SELF_PRINT = true; printSignSheet(true); return;   // 印不出來時照常顯示本頁，不要留白畫面
+        }
         applyUrlParams();
         loadRequests();   // 背景先載一次，讓「需求申請」分頁標籤上的待轉計畫數字一開頁就看得到
         if (cb) cb();
@@ -3047,6 +3055,7 @@ function printSignSheet(blankOnly, src){
    只有一頁的表單不印「第X頁/共Y頁」。頁數在列印當下才由瀏覽器排版決定，CSS 無法預先得知，
    改用 onload 後量測 document.body.scrollHeight 是否超過單頁可用高度，超過（會分頁）才動態插入 @bottom-left 頁碼 CSS；
    不傳（undefined）＝預設開啟此判斷；不需要頁碼判斷的情境可明確傳 false 整個關掉。 */
+var TR_SELF_PRINT = false;   // 深連結「空白簽到表列印」模式，見下方 egPrintWindow 內說明
 function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount, showPageCounter){
     if (showPageCounter === undefined) showPageCounter = true;
     var asCss = String(docNo||'').replace(/['\\]/g,'');   // 塞進 CSS content 字串用
@@ -3077,7 +3086,11 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount, s
             + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;}'
             + '.pt-foot{position:fixed;right:8mm;bottom:5mm;font-size:9pt;color:#333;}'
             + (extraCss||'');
-    var w = window.open('', '_blank');
+    /* TR_SELF_PRINT：深連結「空白簽到表列印」模式（?blank_signsheet=1，由 AS 文件管理的「檢視」開進來）。
+       **這一頁是別頁的連結開出來的新分頁，沒有使用者手勢，window.open() 會被彈出視窗封鎖直接擋掉
+       而且靜默失敗**（使用者只看到「按了沒反應」），所以那種模式一律就地寫進本分頁。
+       版面完全沿用同一支，列印出來與頁面上那顆「列印空白簽到表」一模一樣（鐵律4）。 */
+    var w = TR_SELF_PRINT ? window : window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return; }
     var onloadJs = (pageCount && showPageCounter)
         ? ('var onePageA4=('+(landscape?'210':'297')+'-28)*96/25.4;'
@@ -3088,9 +3101,15 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount, s
         : '';
     // <!DOCTYPE html> 不可省略：少了它視窗會落入 Quirks Mode，<body> 在內容不滿版時會被撐滿整個視窗高度
     // （document.body.scrollHeight 量出來永遠接近視窗高度而非實際內容高度），showPageCounter 的單頁判斷會失準。
+    // 列印觸發：寫進新視窗時那份文件才剛開始載入，等它的 window.onload；寫進本分頁時 load 早就跑完了，
+    // **不可以再靠 onload**（等不到就靜默不列印），改用 setTimeout 自己叫。
+    var trigJs = onloadJs + 'setTimeout(function(){window.print();},200);';
+    w.document.open();
     w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
         + bodyHtml + (!pageCount && asHtml ? '<div class="pt-foot">'+asHtml+'</div>' : '')
-        + '<scr'+'ipt>window.onload=function(){'+onloadJs+'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+        + '<scr'+'ipt>'
+        + (TR_SELF_PRINT ? 'setTimeout(function(){'+trigJs+'},250);' : 'window.onload=function(){'+trigJs+'};')
+        + '</scr'+'ipt></body></html>');
     w.document.close();
     return w;   // 批次列印（員工教育訓練紀錄卡）要靠這個判斷視窗何時關閉才能接著開下一份，其餘既有呼叫端沿用舊行為(忽略回傳值)不受影響
 }
