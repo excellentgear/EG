@@ -518,7 +518,9 @@ function syncScopeFields() {
     $('.mrow').toggle(s === 'machine');
     $('.trow').toggle(s === 'tool');
     $('.prow').toggle(s === 'part');
-    $('.pmrow').toggle(s === 'part');     // 綁料號時可以再挑「用哪幾台機器」（選填）
+    /* 標準檢驗指導書**不綁機台**（使用者 2026-10-01：那是 QC 的檢驗指導書，
+       本來就不需要綁機台）；判定與後端 ss_scope_has_machines() 同一條。 */
+    $('.pmrow').toggle(s === 'part' && kind !== 'sip');
     $('.srow').toggle(kind === 'sip');
     // 客戶：綁料號時由料號主檔帶入，欄位唯讀；通用型才可以自己挑
     var byPart = (s === 'part');
@@ -649,6 +651,10 @@ function probe() {
                 $('#nCus').val(res.customer.name || '');
                 $('#nCusId').val(res.customer.id || '');
             }
+            /* 綁料號時製程改從「這個料號的 BOM 上出現過的製程」挑
+               ——使用者 2026-10-01 回報標準檢驗指導書新建時沒有這個挑選。
+               查不到製令就維持原本的打字搜尋，不然新料號會變成選不到製程。 */
+            if (s === 'part') nProcPick(res.part_processes || []);
             if (kind === 'sip') {
                 var n = (res.default_items || []).length;
                 var cfg = res.proc_cfg || {};
@@ -729,6 +735,9 @@ $('#nSave').on('click', function () {
         if (s === 'machine' && !ids.length) { $('#nErr').text('至少要勾一台機器編號。'); return; }
     }
 
+    if ($('#nDate').length && !ssDateHint($('#nDate'), 'nDateHint')) {
+        $('#nErr').text('表單日期超過可接受的範圍，請先修正。'); $('#nDate').focus(); return;
+    }
     post('doc_save', {
         kind: kind, scope: s,
         layout: (NEW && NEW.layout) || 'std',
@@ -852,7 +861,7 @@ function headHtml() {
        **綁量具的也不綁製程**（使用者 2026-09-23：「量具也不需要製程欄位」）——
        量具的操作說明書講的是「這支量具怎麼用」，跟走到哪一關製程無關。 */
     if (CUR.kind !== 'equip' && d.scope !== 'tool') {
-        if (ssIsGsop()) {
+        if ((CUR.part_processes || []).length || (ssIsGsop() && d.scope === 'part')) {
             /* 使用者 2026-09-30：製程要顯示 BOM 製程提供選擇（此料號所有 BOM 出現過的製程）。
                查不到 BOM 時仍退回原本的打字搜尋，不然新料號會變成選不到製程。 */
             var bp = CUR.part_processes || [];
@@ -1559,6 +1568,9 @@ function renderDoc() {
     ssSortable('#tblHard');
     ssSortable('#tblItems');
     ssGsopItemTweak();      // 標準作業流程SOP：擔當者固定生產、隱藏檢驗頻率欄
+    // 表單日期防呆：上限由後端算（依行事曆的工作天），開文件時先畫一次提示
+    if (CUR.date_check && CUR.date_check.limit) SS_DATE_LIMIT = CUR.date_check.limit;
+    if ($('#fDate').length) ssDateHint($('#fDate'), 'fDateHint');
     DIRTY = false;              // 每次重畫（含存檔後重新開啟）都重新起算
     // 打字挑的那兩欄：先把「目前畫面上的字」記成已挑過的值，否則使用者一動就被判成改過而解除綁定
     $('#fProc').data('picked', $('#fProc').val() || '');
@@ -1843,6 +1855,11 @@ function collectItems() {
 
 function saveDoc(cb) {
     if (!CUR || !CUR.can_edit) return;
+    // 表單日期超過上限就不要送出去（後端也會再擋一次）
+    if ($('#fDate').length && !ssDateHint($('#fDate'), 'fDateHint')) {
+        alert('表單日期超過可接受的範圍，請先修正再存檔。');
+        $('#fDate').focus(); return;
+    }
     var d = CUR.doc;
     if ($('#fProc').length && $('#fProc').val().trim() && !num($('#fProcNo').val())) {
         alert('製程打了字卻沒有從清單挑，請重新挑一次。'); return;
@@ -3921,3 +3938,72 @@ document.addEventListener('keydown', function (e) {
     nx.focus();
     try { nx.select(); } catch (err) {}
 }, true);
+
+/* ══════════ 表單日期防呆（使用者 2026-10-01）══════════
+   · 比今天晚 → 黃字提醒，仍然存得進去（現場會先把明天要用的建好）
+   · 超過「今天 + 5 個工作天」→ 紅字並擋下存檔（多半是年份打錯）
+   · 今天或更早 → 不囉嗦（補歷史紙本是正常作業）
+   工作天的上限由後端 ss_form_date_check() 算（依行事曆的假日與補班日），
+   前端只拿它回來的 limit 做即時比對，**存檔時後端會用同一支再擋一次**（鐵律8）。 */
+var SS_DATE_LIMIT = (window.SS_DATE_LIMIT_INIT || '');   // 開文件時會再以該文件回傳的為準
+function ssDateState(v) {
+    v = $.trim(v || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return { level: '', msg: '' };
+    var today = (window.SS_TODAY || '');
+    if (!today || v <= today) return { level: '', msg: '' };
+    if (SS_DATE_LIMIT && v > SS_DATE_LIMIT) {
+        return { level: 'error', msg: '表單日期不可以超過今天往後 5 個工作天（'
+               + (window.egFmtDate ? egFmtDate(SS_DATE_LIMIT) : SS_DATE_LIMIT) + '）。請確認年份月份有沒有打錯。' };
+    }
+    return { level: 'warn', msg: '這是未來日期（今天 '
+           + (window.egFmtDate ? egFmtDate(today) : today) + '），確定要先建起來就繼續，打錯請改掉。' };
+}
+/** 把提示畫在日期欄下面；回傳 true＝可以存檔 */
+function ssDateHint($input, boxId) {
+    var st = ssDateState($input.val());
+    var $b = $('#' + boxId);
+    if (!$b.length) { $b = $('<div id="' + boxId + '" style="margin-top:3px;font-size:12px;"></div>'); $input.after($b); }
+    if (!st.level) { $b.text('').hide(); $input.css('border-color', ''); return true; }
+    $b.text((st.level === 'error' ? '✘ ' : '⚠ ') + st.msg)
+      .css('color', st.level === 'error' ? 'var(--coral)' : '#B4560A').show();
+    $input.css('border-color', st.level === 'error' ? 'var(--coral)' : '#E6A23C');
+    return st.level !== 'error';
+}
+$(document).on('input change', '#fDate', function () { ssDateHint($(this), 'fDateHint'); });
+$(document).on('input change', '#nDate', function () { ssDateHint($(this), 'nDateHint'); });
+
+/* ══════════ 新增跳窗：從 BOM 製程挑 ══════════ */
+function nProcPick(list) {
+    var $wrap = $('#nProc').closest('.ac-wrap');
+    if (!$wrap.length) return;
+    var cur = num($('#nProcNo').val());
+    if (!list.length) {                       // 查不到製令 → 還原成打字搜尋
+        $('#nProcBom').remove();
+        $wrap.show();
+        $('#nProcBomHint').remove();
+        return;
+    }
+    $wrap.hide();                             // 有 BOM 製程就不給自由打字（打錯對不到製程主檔）
+    var h = '<select id="nProcBom" data-eg-filter="輸入製程名稱或編號篩選…" style="width:100%;">'
+          + '<option value="">（未指定）</option>';
+    var hit = false;
+    $.each(list, function (i, p) {
+        var on = num(p.process_no) === cur; if (on) hit = true;
+        h += '<option value="' + num(p.process_no) + '" data-nm="' + esc(p.name) + '"' + (on ? ' selected' : '')
+           + '>' + esc(p.name) + '　#' + num(p.process_no) + '（' + num(p.bom_n) + ' 張製令）</option>';
+    });
+    h += '</select>';
+    if ($('#nProcBom').length) $('#nProcBom').replaceWith(h);
+    else $wrap.after(h);
+    if (!$('#nProcBomHint').length) {
+        $('#nProcBom').after('<div id="nProcBomHint" class="muted-help">'
+            + '清單就是這個料號的製令上實際跑過的製程（括號是幾張製令）。</div>');
+    }
+    if (!hit) { $('#nProcNo').val(''); $('#nProc').val(''); }
+}
+$(document).on('change', '#nProcBom', function () {
+    var $o = $(this).find('option:selected');
+    $('#nProcNo').val($(this).val() || '');
+    $('#nProc').val($(this).val() ? ($o.data('nm') || '') : '');
+    probe();
+});

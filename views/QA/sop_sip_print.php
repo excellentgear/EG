@@ -74,8 +74,10 @@ $gsContentW = $sheetW - 24;        // .sheet 左右各 12mm 白邊
 $gsLeftW  = $paper['orient'] === 'landscape' ? 150 : 96;   // 左半邊（圖面＋檢驗項目）
 $gsTtlW   = 40;    // 表頭最左邊「標準作業流程SOP」那一格
 $gsVerW   = 16;    // 版次
-$gsIssueW = 26;    // 發行日期
-$gsDateW  = 26;    // 製表日期
+/* 日期欄要放得下「2026.08.25」**不可以換行**（使用者 2026-10-01 回報兩格都被折成兩行）。
+   13pt 粗體下量到約 30mm，留 34mm 才不會因為字型差異又折行；寬度從中間四欄勻出來。 */
+$gsIssueW = 34;    // 發行日期
+$gsDateW  = 34;    // 製表日期
 $gsNoteW  = $gsIssueW + $gsDateW;   // 右半邊「備註」欄＝上面那兩格加起來
 $gsNameW  = 12;    // 軟體/硬體步驟那一欄（使用者指定縮成一半，原本 24mm）
 /* 表頭中間四欄（加工機種／客戶名稱／產品料號／工程名稱）分掉剩下的寬度。
@@ -89,6 +91,7 @@ $gsMidSum = array_sum($gsMidRatio);
 foreach ($gsMidRatio as $r) $gsMidW[] = round($gsMidTotal * $r / $gsMidSum, 2);
 $gsMidW[3] = round($gsMidTotal - $gsMidW[0] - $gsMidW[1] - $gsMidW[2], 2);   // 尾差補在最後一欄
 $gsPointW = round($gsContentW - $gsLeftW - $gsNameW - $gsNoteW, 2);          // 右半邊「要點」
+$gsDrawH  = $paper['orient'] === 'landscape' ? 150 : 104;                   // 圖面框固定高度
 
 try {
     eg_print_log_add($db, [
@@ -98,6 +101,15 @@ try {
         'note'     => 'ver_id=' . $verId . ' ' . $paper['size'] . '/' . $paper['orient'],
     ]);
 } catch (Throwable $e) {}
+
+/** 表單名稱排成紙本那種疏排（標準作業流程 SOP → 標 準 作 業 流 程 S O P） */
+function ss_sp_title(string $s): string
+{
+    $s = preg_replace('/\s+/u', '', $s);
+    $out = [];
+    foreach (preg_split('//u', $s, -1, PREG_SPLIT_NO_EMPTY) as $ch) $out[] = $ch;
+    return implode(' ', $out);
+}
 
 /** 圖面／步驟圖的網址（列印視窗載得到，權限與主頁同一套） */
 function pf(int $id): string { return 'sopsip_file.php?id=' . $id; }
@@ -232,6 +244,8 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
     .gs-head td.lab { font-weight:bold; }
     .gs-head td.v { text-align:center; height:10mm; vertical-align:middle;
                     font-size:13pt; font-weight:bold; }
+    /* 日期那兩格一律不換行（寬度已經留夠，萬一字型更寬也寧可稍微擠一點也不要折行） */
+    .gs-head td.v.nw { white-space:nowrap; }
     .gs-main { table-layout:fixed; margin-top:2.5mm; }
     /* 左右兩半**外框一樣**（使用者 2026-09-30：列印外框大小要一致）。
        右半邊的內容本來就比左邊的圖面矮，之前為了不要出現「簽章底下一個大空盒子」
@@ -242,9 +256,14 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
     .gs-rcol { display:flex; flex-direction:column; min-height:100%; }
     .gs-rcol .gs-grow { flex:1 1 auto; }     /* 把下面兩張表推到底 */
     .gs-left { width:<?= $gsLeftW ?>mm; }   /* 唯一來源＝上面算好的 $gsLeftW */
-    .gs-draw { text-align:center; padding:1.5mm; border-bottom:1px solid #000; }
-    .gs-draw img { max-width:100%; max-height:<?= $paper['orient'] === 'landscape' ? 150 : 104 ?>mm; }
-    .gs-draw .none { color:#888; font-size:9pt; padding:16mm 0; }
+    /* 圖面框**高度固定**（使用者 2026-10-01）：不固定的話，直式圖與橫式圖會把底下的
+       檢驗項目表推到不同高度，每一份印出來的版面都不一樣。
+       用 flex 置中，圖片以 contain 的方式縮到框內——直式、橫式都放得下且不變形。 */
+    .gs-draw { height:<?= $gsDrawH ?>mm; box-sizing:border-box; padding:1.5mm;
+               border-bottom:1px solid #000; display:flex; align-items:center; justify-content:center;
+               overflow:hidden; }
+    .gs-draw img { max-width:100%; max-height:100%; object-fit:contain; }
+    .gs-draw .none { color:#888; font-size:9pt; }
     .gs-sec { text-align:center; font-weight:bold; letter-spacing:3px; background:#EFEFEF; }
     .gs-step { table-layout:fixed; }
     .gs-step th, .gs-step td { font-size:9.5pt; }
@@ -290,7 +309,10 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
 
 <div class="sheet">
     <h1 class="co"><?= h($company) ?></h1>
-    <h2 class="fm"><?= h($formName) ?></h2>
+    <?php /* 標準作業流程SOP 的表單名稱就印在底下表格左上角那一格（照紙本），
+             這裡再印一次會變成「製造製程說明書 SOP」與「標準作業流程 SOP」兩個名字打架
+             （使用者 2026-10-01：「到底是哪一個?」）。AS 文件編號仍然印在右下角，追溯不受影響。 */ ?>
+    <?php if ($layout !== 'gsop'): ?><h2 class="fm"><?= h($formName) ?></h2><?php endif; ?>
 
 <?php if ($layout === 'gsop'): /* ═══════ 標準作業流程 SOP（照紙本 as-sop） ═══════ */ ?>
     <?php
@@ -321,7 +343,8 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
             <col style="width:<?= $gsDateW ?>mm;">
         </colgroup>
         <tr>
-            <td class="ttl" rowspan="2">標 準 作 業 流 程 S O P</td>
+            <?php /* 表單名稱取自版式登記表 ss_layouts()，不寫死在這裡（ai-rules/16） */ ?>
+            <td class="ttl" rowspan="2"><?= h(ss_sp_title(ss_layouts()['gsop'] ?? '標準作業流程 SOP')) ?></td>
             <td class="lab">加工機種</td><td class="lab">客戶名稱</td><td class="lab">產 品 料 號</td>
             <td class="lab">工 程 名 稱</td>
             <!-- 使用者 2026-09-30 指定：**取消數量欄**，版次之外另外印發行日期 -->
@@ -335,8 +358,8 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
             <td class="v"><?= h($doc['part_no_text'] ?: '—') ?></td>
             <td class="v"><?= h($doc['proc_name'] ?: $doc['title']) ?></td>
             <td class="v"><?= h($ver['ver_no']) ?></td>
-            <td class="v"><?= $issueDate !== '' ? h(eg_fmt_date($issueDate)) : '—' ?></td>
-            <td class="v"><?= h(eg_fmt_date($formDate)) ?></td>
+            <td class="v nw"><?= $issueDate !== '' ? h(eg_fmt_date($issueDate)) : '—' ?></td>
+            <td class="v nw"><?= h(eg_fmt_date($formDate)) ?></td>
         </tr>
     </table>
 

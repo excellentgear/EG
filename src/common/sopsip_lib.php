@@ -84,7 +84,9 @@ function ss_kind_scopes_new(string $kind): array
        使用者 2026-09-30：「那先不要移除，請改黃底並增加小字 待確認是否移除」。
        所以照樣列出來、只是標成待確認（見 ss_kind_scope_note()）。 */
     if ($kind === 'process') return ['machine', 'tool', 'general', 'part'];
-    return array_keys(ss_scopes());                                   // sip 維持原樣
+    // 標準檢驗指導書不綁機台（也不綁量具——它本來就是「這個料號要怎麼檢驗」）
+    if ($kind === 'sip') return ['general', 'part'];
+    return array_keys(ss_scopes());
 }
 
 /**
@@ -168,6 +170,47 @@ function ss_part_processes(PDO $db, int $partDId): array
     return $out;
 }
 
+/**
+ * 表單日期防呆（使用者 2026-10-01 指定，唯一實作；前端即時提示、後端存檔時再擋一次＝鐵律8）。
+ *   · 比今天晚 → **提醒**（還是存得進去：現場常常先把明天要用的 SOP 建好）
+ *   · 超過「今天 + N 個工作天」→ **擋下**（預設 5 天，打錯年份最常見，例如 2027 年）
+ *   · 今天或更早 → 完全不囉嗦（補歷史紙本是正常作業）
+ * 工作天一律走請假系統那一套 `eg_leave_is_workday()`（依行事曆的假日與補班日算），
+ * **不要自己數日曆天**——連假前後會差好幾天。
+ * 回傳 ['ok'=>bool, 'level'=>''|'warn'|'error', 'msg'=>string, 'limit'=>'YYYY-MM-DD']
+ */
+function ss_form_date_check(PDO $db, string $date, int $days = 5): array
+{
+    $out = ['ok' => true, 'level' => '', 'msg' => '', 'limit' => ''];
+    $date = trim($date);
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+        return ['ok' => false, 'level' => 'error', 'msg' => '表單日期格式不正確', 'limit' => ''];
+    }
+    $today = date('Y-m-d');
+    // 往後數 N 個工作天（當天不算）
+    $limit = $today;
+    $n = 0; $guard = 0;
+    require_once __DIR__ . '/leave_lib.php';
+    require_once __DIR__ . '/date_fmt_lib.php';   // 訊息裡要用 eg_fmt_date()，不 require 會 fatal
+    while ($n < $days && $guard < 90) {
+        $guard++;
+        $limit = date('Y-m-d', strtotime($limit . ' +1 day'));
+        $isWork = true;
+        try { $isWork = (bool)eg_leave_is_workday($db, $limit); } catch (Throwable $e) { $isWork = true; }
+        if ($isWork) $n++;
+    }
+    $out['limit'] = $limit;
+    if ($date <= $today) return $out;
+    if ($date > $limit) {
+        return ['ok' => false, 'level' => 'error', 'limit' => $limit,
+                'msg' => '表單日期不可以超過今天往後 ' . $days . ' 個工作天（' . eg_fmt_date($limit)
+                       . '）。填 ' . eg_fmt_date($date) . ' 多半是年份或月份打錯了。'];
+    }
+    return ['ok' => true, 'level' => 'warn', 'limit' => $limit,
+            'msg' => '表單日期是未來日期（' . eg_fmt_date($date) . '，今天是 ' . eg_fmt_date($today)
+                   . '）。確定要先建起來就按存檔，打錯請改掉。'];
+}
+
 /* ── 標題鎖（使用者 2026-09-30：參數名稱與硬體步驟要點由範本帶入，改要先驗本人密碼）── */
 const SS_UNLOCK_MIN = 30;   // 解鎖有效期，與訂單追蹤客戶欄解鎖同一個數字
 
@@ -208,8 +251,11 @@ function ss_gsop_owner_dept(PDO $db): int
  * （使用者 2026-09-22：「SOP 必定是此料號在特定機台上的規範」）——料號是主鍵，機台是附帶條件，
  * 所以重複判定仍然只看料號＋製程，不會因為多綁了機台就變成另一份文件。
  */
-function ss_scope_has_machines(string $scope): bool
+function ss_scope_has_machines(string $scope, string $kind = ''): bool
 {
+    /* **標準檢驗指導書一律不綁機台**（使用者 2026-10-01：那是 QC 的檢驗指導書，
+       本來就不該跟哪一台機器綁在一起）。既有資料不刪，只是畫面與判定不再用它。 */
+    if ($kind === 'sip') return false;
     return $scope === 'machine' || $scope === 'part';
 }
 
@@ -960,7 +1006,7 @@ function ss_ver_full(PDO $db, int $verId): ?array
         'files' => ss_file_rows($db, $docId, $verId),
         'machine'  => ss_machine_row($db, (int)($d['machine_id'] ?? 0)),
         // 綁料號時也可能綁了機台（使用者 2026-09-22），所以依「適用範圍」判斷不是依版面
-        'machines' => ss_scope_has_machines((string)($d['scope'] ?? '')) ? ss_doc_machines($db, $docId) : [],
+        'machines' => ss_scope_has_machines((string)($d['scope'] ?? ''), $kind) ? ss_doc_machines($db, $docId) : [],
         'machine_missing' => (string)($d['scope'] ?? '') === 'machine' ? ss_doc_machines_missing($db, $d) : [],
         'machine_meta'    => $meta,
         'sections'      => ss_sections($kind),
@@ -1320,7 +1366,7 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
                                 modified_at=NOW(), modified_by=? WHERE doc_id=?");
         $st->execute([$scope, $machineId ?: null, $model ?: null, $toolId ?: null, $partDId ?: null, $partNo, $title,
                       $procNo ?: null, $procNm, $cusId, $cusNm, $variant !== '' ? $variant : null, $layout, $uid, $docId]);
-        if (ss_scope_has_machines($scope) && array_key_exists('machine_ids', $in)) ss_doc_machines_set($db, $docId, $machineIds, $asof);
+        if (ss_scope_has_machines($scope, $kind) && array_key_exists('machine_ids', $in)) ss_doc_machines_set($db, $docId, $machineIds, $asof);
         return $docId;
     }
     $st = $db->prepare("INSERT INTO ss_doc (kind, scope, machine_id, machine_model, tool_id, part_d_id, part_no_text, title,
@@ -1329,7 +1375,7 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
     $st->execute([$kind, $scope, $machineId ?: null, $model ?: null, $toolId ?: null, $partDId ?: null, $partNo, $title,
                   $procNo ?: null, $procNm, $cusId, $cusNm, $variant !== '' ? $variant : null, $layout, $uid, $uname]);
     $newId = (int)$db->lastInsertId();
-    if (ss_scope_has_machines($scope)) ss_doc_machines_set($db, $newId, $machineIds, $asof);
+    if (ss_scope_has_machines($scope, $kind)) ss_doc_machines_set($db, $newId, $machineIds, $asof);
     return $newId;
 }
 
@@ -3562,8 +3608,17 @@ function ss_kv_decode($json): array
         if (!is_array($row)) continue;
         $pairs = [];
         foreach ($row as $p) {
-            $pat = ''; $slots = null;
+            $pat = ''; $slots = null; $ext = [];
             if (is_array($p)) {
+                /* 工件規格那一列的特殊格子（使用者 2026-10-01）：
+                     st ＝ 量測型式 w=跨齒厚／p=跨銷徑（點一下切換，跨銷徑前面自動帶不可刪的 Ø）
+                     sn ＝ 跨幾齒 或 銷徑
+                     vm ＝ 值的寫法 lim=上下限／rng=範圍（點一下切換）
+                     v2 ＝ 第二個數字（下限 或 範圍迄）
+                   都只是「這一格怎麼填、怎麼印」的設定，不影響既有沒有這些欄位的資料。 */
+                foreach (['st', 'sn', 'vm', 'v2'] as $ek) {
+                    if (array_key_exists($ek, $p)) $ext[$ek] = trim((string)$p[$ek]);
+                }
                 // 收 ['k'=>,'v'=>] 與 [鍵, 值] 兩種寫法（前端送物件、匯入送陣列）
                 $k = array_key_exists('k', $p) ? $p['k'] : ($p[0] ?? '');
                 $v = array_key_exists('v', $p) ? $p['v'] : ($p[1] ?? '');
@@ -3578,9 +3633,19 @@ function ss_kv_decode($json): array
             if ($pat !== '' && ss_slot_has($pat) && is_array($slots)) {
                 $v = ss_slot_compose($pat, array_map(fn($x) => (string)$x, $slots));
             }
-            if ($k === '' && $v === '' && $pat === '') continue;
-            $pairs[] = ['k' => mb_substr($k, 0, 60), 'v' => mb_substr($v, 0, 160),
-                        'p' => mb_substr($pat, 0, 160)];
+            // 上下限／範圍那一種，第二個數字有值也算「這一格有東西」
+            $hasExt = trim((string)($ext['v2'] ?? '')) !== '' || trim((string)($ext['sn'] ?? '')) !== '';
+            if ($k === '' && $v === '' && $pat === '' && !$hasExt) continue;
+            $one = ['k' => mb_substr($k, 0, 60), 'v' => mb_substr($v, 0, 160),
+                    'p' => mb_substr($pat, 0, 160)];
+            foreach ($ext as $ek => $ev) {
+                if ($ev === '') continue;
+                $one[$ek] = mb_substr($ev, 0, ($ek === 'v2' ? 160 : 30));
+            }
+            // 量測型式只收 w／p，值的寫法只收 lim／rng（前端亂送的一律不採信）
+            if (isset($one['st']) && !in_array($one['st'], ['w', 'p'], true)) unset($one['st']);
+            if (isset($one['vm']) && !in_array($one['vm'], ['lim', 'rng'], true)) unset($one['vm']);
+            $pairs[] = $one;
             if (count($pairs) >= ss_kv_max_cols()) break;
         }
         if ($pairs) $out[] = $pairs;

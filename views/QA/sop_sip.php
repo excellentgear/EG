@@ -808,6 +808,8 @@ var SS_STATUSES = <?= json_encode($STATUSES, JSON_UNESCAPED_UNICODE) ?>;
 var SS_KIND_SCOPES = <?= json_encode($KIND_SCOPES, JSON_UNESCAPED_UNICODE) ?>;
 var SS_KIND_SCOPES_NEW = <?= json_encode($KIND_SCOPES_NEW, JSON_UNESCAPED_UNICODE) ?>;
 var SS_SCOPE_NOTE = <?= json_encode($SCOPE_NOTE, JSON_UNESCAPED_UNICODE) ?>;
+/* 表單日期可接受的最晚日期＝今天往後 5 個工作天（唯一算法在 ss_form_date_check） */
+var SS_DATE_LIMIT_INIT = <?= json_encode(ss_form_date_check($db, date('Y-m-d'))['limit'] ?? '') ?>;
 /* 版式（一般版式／標準作業流程SOP）：哪一種版面＋適用範圍可以用哪幾種，一律由後端 ss_layout_allowed() 決定 */
 var SS_LAYOUTS = <?= json_encode(ss_layouts(), JSON_UNESCAPED_UNICODE) ?>;
 var SS_LAYOUT_ALLOWED = <?= json_encode($LAYOUT_ALLOWED, JSON_UNESCAPED_UNICODE) ?>;

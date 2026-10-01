@@ -147,6 +147,8 @@ case 'bind_probe': {
         $c = ss_customer_of_part($db, $in['part_d_id']);
         $in['customer_id'] = (string)($c['id'] ?? '');
         $out['customer']   = $c;
+        // 這個料號的 BOM 上出現過的製程（新增畫面的製程改從這裡挑）
+        $out['part_processes'] = ss_part_processes($db, (int)$in['part_d_id']);
     }
     $scan = ss_dup_scan($db, $kind, $scope, $in, (int)($_GET['doc_id'] ?? 0));
     $out['dups']     = array_values(array_filter($scan, fn($r) => !empty($r['is_dup'])));
@@ -242,10 +244,16 @@ case 'detail': {
     /* 標準作業流程SOP 的左半邊就是檢驗項目表，所以編輯時要跟 SIP 拿同一批輔助資料
        （擔當者／檢驗方法／檢具類型／頻率／符號／齒輪等級），少給的話那張表就編不了。 */
     $isGsop = (string)($full['layout'] ?? 'std') === 'gsop';
+    /* 綁料號的文件（不分版面）都要能「從這個料號的 BOM 製程挑」
+       ——使用者 2026-10-01 回報標準檢驗指導書新建時沒有出現這個挑選。 */
+    if ((string)($full['doc']['scope'] ?? '') === 'part') {
+        $full['part_processes'] = ss_part_processes($db, (int)($full['doc']['part_d_id'] ?? 0));
+    }
+    // 表單日期防呆的上限（前端即時提示用；存檔時後端會用同一支再擋一次）
+    $full['date_check'] = ss_form_date_check($db, (string)($full['ver']['form_date'] ?? date('Y-m-d')));
     if ($isGsop) {
         $full['key_unlocked'] = ss_unlock_valid($uid, $verId) ? 1 : 0;
         $full['fixed_owner_dept'] = ss_gsop_owner_dept($db);
-        $full['part_processes'] = ss_part_processes($db, (int)($full['doc']['part_d_id'] ?? 0));
 
         // 這份文件綁的機種有沒有步驟範本，以及範本長什麼樣（畫面上「帶入機種範本」要用）
         $models = ss_msop_models_of($full['doc']);
@@ -346,6 +354,11 @@ case 'doc_save': {
     $in = $_POST;
     $in['_dup_ok'] = (!empty($P['canAdmin']) && !empty($_POST['dup_ok'])) ? 1 : 0;
 
+    // 表單日期防呆（前端已經提示過，這裡用同一支再擋一次＝鐵律8）
+    if (array_key_exists('form_date', $_POST)) {
+        $dc = ss_form_date_check($db, (string)$_POST['form_date']);
+        if (empty($dc['ok'])) jerr($dc['msg'], 'FORM_DATE');
+    }
     $db->beginTransaction();
     try {
         $newDoc = $docId <= 0;
@@ -361,6 +374,11 @@ case 'ver_save': {
     $verId = (int)($_POST['ver_id'] ?? 0);
     [$kind, $v, $d] = $kindOfVer($verId);
     $needEdit($kind);
+    // 表單日期防呆（前端已經提示過，這裡用同一支再擋一次＝鐵律8）
+    if (array_key_exists('form_date', $_POST)) {
+        $dc = ss_form_date_check($db, (string)$_POST['form_date']);
+        if (empty($dc['ok'])) jerr($dc['msg'], 'FORM_DATE');
+    }
     $db->beginTransaction();
     try {
         ss_ver_save($db, $verId, $_POST, $uid);
