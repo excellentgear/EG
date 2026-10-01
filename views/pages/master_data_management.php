@@ -347,7 +347,7 @@ $db  = new DBConnection();
 $pdo = $db->getPDO();
 
 // ── Migration 版本鎖：版本符合時跳過所有 ALTER/CREATE，只跑一次 ──────────
-define('MDM_MIGRATION_VERSION', '20261001_03');   // 2026-10-01 加工大類/小類字典新增「不列入定期評核評鑑等級」欄位（dict_maker_main_category/dict_maker_sub_category.eval_excluded；因使用者同時在線上操作本頁，_02 版號在編輯過程中被提早標記為已執行，故再跳一版重跑）
+define('MDM_MIGRATION_VERSION', '20261001_04');   // 2026-10-01 廠商/客戶新增「認定新廠商/新客戶日期」欄位 est_date（maker_list/customer_list）
 $_mdm_skip_migration = false;
 try {
     // system_settings 可能尚不存在（第一次執行），用 try 保護
@@ -636,6 +636,12 @@ try {
     // 若小類本身未標記但所屬大類被標記，仍然排除（見 vendor_eval_excluded_process_type_ids()）。
     try { $pdo->exec("ALTER TABLE dict_maker_main_category ADD COLUMN eval_excluded TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=此大類（含底下小類）不列入定期評核評鑑等級計算'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE dict_maker_sub_category  ADD COLUMN eval_excluded TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=此小類不列入定期評核評鑑等級計算'"); } catch(Exception $e){}
+    // 廠商/客戶「認定新廠商/新客戶的日期」：預設建檔當日，可回填較舊日期（2026-10-01 使用者明確要求）
+    try { $pdo->exec("ALTER TABLE maker_list    ADD COLUMN est_date DATE NULL COMMENT '認定為新廠商的日期，預設建檔當日，可回填較舊日期'"); } catch(Exception $e){}
+    try { $pdo->exec("ALTER TABLE customer_list ADD COLUMN est_date DATE NULL COMMENT '認定為新客戶的日期，預設建檔當日，可回填較舊日期'"); } catch(Exception $e){}
+    // 既有資料回填：沒填過的一律先用建檔日期當預設值，管理員可再手動改回更早的日期
+    try { $pdo->exec("UPDATE maker_list    SET est_date=DATE(Created_At) WHERE est_date IS NULL"); } catch(Exception $e){}
+    try { $pdo->exec("UPDATE customer_list SET est_date=DATE(Created_At) WHERE est_date IS NULL"); } catch(Exception $e){}
     // ── customer_industry_mapping.customer_id 型態修正：INT → CHAR(11) ──
     try {
         $col = $pdo->query("SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
@@ -3144,6 +3150,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $confirmed_settlement = intval($_POST['confirmed_settlement'] ?? 0);
             $confirmed_payment    = intval($_POST['confirmed_payment'] ?? 0);
             $is_own_company       = intval($_POST['is_own_company'] ?? 0);
+            // 認定新客戶日期：新增時預設今天；修改時若未送合法日期一律保留原值，不要安靜清空
+            $est_date = trim($_POST['est_date'] ?? '');
+            if ($est_date !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $est_date)) $est_date = '';
+            if ($est_date === '') {
+                if ($is_new) { $est_date = date('Y-m-d'); }
+                else {
+                    $oldEstQ = $pdo->prepare("SELECT est_date FROM customer_list WHERE customer_id=?");
+                    $oldEstQ->execute([$customer_id]);
+                    $est_date = $oldEstQ->fetchColumn() ?: date('Y-m-d');
+                }
+            }
 
             if (empty($customer_id)) throw new Exception('客戶代碼不可為空');
             if (empty($customer))    throw new Exception('客戶名稱不可為空');
@@ -3180,23 +3197,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     (customer_id,customer,customer_full,customer_full_en,customer_tel,customer_fax,customer_address,is_inactive,customer_grade,
                      settlement_mode,settlement_day,tax_id,quote_method,payment_method,net_days,allow_deduct,
                      bank_name,bank_branch,bank_account,billing_contact,shipping_req,invoice_email,billing_note,general_note,
-                     confirmed_settlement,confirmed_payment,is_own_company,Created_By,Created_At)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+                     confirmed_settlement,confirmed_payment,is_own_company,est_date,Created_By,Created_At)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
                     ->execute([$customer_id,$customer,$customer_full,$customer_full_en,$customer_tel,$customer_fax,$customer_address,$is_inactive,$customer_grade,
                                $settlement_mode,$settlement_day,$tax_id,$quote_method,$payment_method,$net_days,$allow_deduct,
                                $bank_name,$bank_branch,$bank_account,$billing_contact,$shipping_req,$invoice_email,$billing_note,$general_note,
-                               $confirmed_settlement,$confirmed_payment,$is_own_company,$uid]);
+                               $confirmed_settlement,$confirmed_payment,$is_own_company,$est_date,$uid]);
             } else {
                 if (!$can_update) throw new Exception('無修改權限');
                 $pdo->prepare("UPDATE customer_list SET
                     customer=?,customer_full=?,customer_full_en=?,customer_tel=?,customer_fax=?,customer_address=?,is_inactive=?,customer_grade=?,
                     settlement_mode=?,settlement_day=?,tax_id=?,quote_method=?,payment_method=?,net_days=?,allow_deduct=?,
                     bank_name=?,bank_branch=?,bank_account=?,billing_contact=?,shipping_req=?,invoice_email=?,billing_note=?,general_note=?,
-                    confirmed_settlement=?,confirmed_payment=?,is_own_company=?,Modified_By=?,Modified_At=NOW() WHERE customer_id=?")
+                    confirmed_settlement=?,confirmed_payment=?,is_own_company=?,est_date=?,Modified_By=?,Modified_At=NOW() WHERE customer_id=?")
                     ->execute([$customer,$customer_full,$customer_full_en,$customer_tel,$customer_fax,$customer_address,$is_inactive,$customer_grade,
                                $settlement_mode,$settlement_day,$tax_id,$quote_method,$payment_method,$net_days,$allow_deduct,
                                $bank_name,$bank_branch,$bank_account,$billing_contact,$shipping_req,$invoice_email,$billing_note,$general_note,
-                               $confirmed_settlement,$confirmed_payment,$is_own_company,$uid,$customer_id]);
+                               $confirmed_settlement,$confirmed_payment,$is_own_company,$est_date,$uid,$customer_id]);
             }
             // 產業別小類 Delete-then-Insert
             $industry_subs = json_decode($_POST['industry_subs'] ?? '[]', true) ?: [];
@@ -3791,6 +3808,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $main_category_id= trim($_POST['main_category_id'] ?? '') !== '' ? intval($_POST['main_category_id']) : null;
             $quality_rating  = trim($_POST['quality_rating'] ?? '');
             $is_qualified    = intval($_POST['is_qualified'] ?? 0);
+            // 認定新廠商日期：新增時預設今天；修改時若未送合法日期一律保留原值，不要安靜清空
+            $est_date = trim($_POST['est_date'] ?? '');
+            if ($est_date !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $est_date)) $est_date = '';
+            if ($est_date === '') {
+                if ($is_new) { $est_date = date('Y-m-d'); }
+                else {
+                    $oldEstQ = $pdo->prepare("SELECT est_date FROM maker_list WHERE maker_id_no=?");
+                    $oldEstQ->execute([$mid]);
+                    $est_date = $oldEstQ->fetchColumn() ?: date('Y-m-d');
+                }
+            }
 
             if (empty($mid))      throw new Exception('廠商編號不可為空');
             if (empty($maker_id)) throw new Exception('廠商簡稱不可為空');
@@ -3815,8 +3843,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $limit_dia_max = trim($_POST['limit_dia_max'] ?? ''); $limit_dia_max = $limit_dia_max!=='' ? floatval($limit_dia_max) : null;
             $limit_len_min = trim($_POST['limit_len_min'] ?? ''); $limit_len_min = $limit_len_min!=='' ? floatval($limit_len_min) : null;
             $limit_len_max = trim($_POST['limit_len_max'] ?? ''); $limit_len_max = $limit_len_max!=='' ? floatval($limit_len_max) : null;
-            $fields = "maker_id,maker_id_all,m_tel,m_tel2,m_fax,invoice_address,factory_address,billing_address,postal_code,tax_id,contact_person,contact_title,email,m_category,m_process_items,limit_dia,limit_len,limit_dia_min,limit_dia_max,limit_len_min,limit_len_max,m_note,status,internal,main_category_id,settlement_mode,settlement_day,payment_method,net_days,confirmed_settlement,confirmed_payment,quality_rating,is_qualified";
-            $vals   = [$maker_id,$maker_all,$m_tel,$m_tel2,$m_fax,$invoice_address,$factory_address,$billing_address,$postal_code,$tax_id,$contact_person,$contact_title,$email,$m_category,$m_process_items,$limit_dia,$limit_len,$limit_dia_min,$limit_dia_max,$limit_len_min,$limit_len_max,$m_note,$status,$internal,$main_category_id,$m_settlement_mode,$m_settlement_day,$m_payment_method,$m_net_days,$m_confirmed_settlement,$m_confirmed_payment,$quality_rating,$is_qualified];
+            $fields = "maker_id,maker_id_all,m_tel,m_tel2,m_fax,invoice_address,factory_address,billing_address,postal_code,tax_id,contact_person,contact_title,email,m_category,m_process_items,limit_dia,limit_len,limit_dia_min,limit_dia_max,limit_len_min,limit_len_max,m_note,status,internal,main_category_id,settlement_mode,settlement_day,payment_method,net_days,confirmed_settlement,confirmed_payment,quality_rating,is_qualified,est_date";
+            $vals   = [$maker_id,$maker_all,$m_tel,$m_tel2,$m_fax,$invoice_address,$factory_address,$billing_address,$postal_code,$tax_id,$contact_person,$contact_title,$email,$m_category,$m_process_items,$limit_dia,$limit_len,$limit_dia_min,$limit_dia_max,$limit_len_min,$limit_len_max,$m_note,$status,$internal,$main_category_id,$m_settlement_mode,$m_settlement_day,$m_payment_method,$m_net_days,$m_confirmed_settlement,$m_confirmed_payment,$quality_rating,$is_qualified,$est_date];
 
             // 解析前端傳來的 sub_cats JSON（格式: [1,3,5] 整數陣列）
             $sub_cats_raw = trim($_POST['sub_cats'] ?? '[]');
@@ -8300,6 +8328,15 @@ body { background:#F6F1EA; }
         </div>
     </div>
 </div>
+<div class="row">
+    <div class="col-md-3">
+        <div class="form-group">
+            <label>認定新客戶日期</label>
+            <input type="date" class="form-control" id="cf-est_date" name="est_date">
+            <p class="help-block" style="color:#aaa;font-size:11px;margin-top:3px;">預設為建檔當日，可回填較舊日期供新/舊客戶判定使用</p>
+        </div>
+    </div>
+</div>
 <div class="form-group">
     <label>客戶全名（發票用）</label>
     <input type="text" class="form-control" id="cf-customer_full" name="customer_full" placeholder="正式公司全名，用於開立發票" maxlength="100">
@@ -8632,6 +8669,15 @@ body { background:#F6F1EA; }
                 <option value="">正常</option>
                 <option value="X">X — 停用</option>
             </select>
+        </div>
+    </div>
+</div>
+<div class="row">
+    <div class="col-md-3">
+        <div class="form-group">
+            <label>認定新廠商日期</label>
+            <input type="date" class="form-control" id="mf-est_date" name="est_date">
+            <p class="help-block" style="color:#aaa;font-size:11px;margin-top:3px;">預設為建檔當日，可回填較舊日期供新/舊廠商判定使用</p>
         </div>
     </div>
 </div>
@@ -16349,6 +16395,13 @@ function _setCustModalReadonly(on) {
         else el.readOnly = !!on;
     });
 }
+/** 本地時區的今天日期字串 YYYY-MM-DD（不可用 toISOString，那是 UTC，跨時區會差一天） */
+function _mdmTodayStr() {
+    var d = new Date();
+    var p = function(n){ return (n<10?'0':'')+n; };
+    return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
+}
+
 function openCustomerModal(customer_id, readonly) {
     readonly = !!readonly;
     if (customer_id) {
@@ -16373,6 +16426,7 @@ function openCustomerModal(customer_id, readonly) {
             });
             document.getElementById('cf-is_inactive').checked    = (d.is_inactive=='1');
             document.getElementById('cf-is_own_company').checked = (d.is_own_company=='1' || d.is_own_company===1);
+            document.getElementById('cf-est_date').value = d.est_date || _mdmTodayStr();
             var ad = document.getElementById('cf-allow_deduct');
             if (ad) ad.checked = (d.allow_deduct==1||d.allow_deduct=='1');
             // Grade
@@ -16432,6 +16486,7 @@ function openCustomerModal(customer_id, readonly) {
         if (ad) ad.checked = false;
         var gsel = document.getElementById('cf-customer_grade');
         if (gsel) gsel.value = '';
+        document.getElementById('cf-est_date').value = _mdmTodayStr();
         populateSalesSelects('','');
         loadContactRows([]);
         var mainNotesWrap = document.getElementById('cf-industry-main-notes-wrap');
@@ -16484,7 +16539,8 @@ function submitCustomerForm() {
         deputy_user_id:       gv('cf-deputy_user_id'),
         confirmed_settlement: gc('cf-confirmed_settlement'),
         confirmed_payment:    gc('cf-confirmed_payment'),
-        is_own_company:       gc('cf-is_own_company')
+        is_own_company:       gc('cf-is_own_company'),
+        est_date:             gv('cf-est_date')
     };
     if (!data.customer_id) { showToast('客戶代碼不可為空','error'); return; }
     if (!data.customer)    { showToast('客戶名稱不可為空','error'); return; }
@@ -17177,6 +17233,7 @@ function openMakerModal(maker_id_no) {
             document.getElementById('mf-internal').checked      = (d.internal==1);
             document.getElementById('mf-quality_rating').value  = d.quality_rating||'';
             document.getElementById('mf-is_qualified').checked  = (d.is_qualified==1);
+            document.getElementById('mf-est_date').value = d.est_date || _mdmTodayStr();
             // 已選大類 IDs（後端回傳 selected_main_cat_ids 陣列）
             var selMainIds = (d.selected_main_cat_ids||[]).map(Number);
             var selSubIds  = (d.sub_cats||[]).map(function(s){ return parseInt(s.sub_cat_id); });
@@ -17222,6 +17279,7 @@ function openMakerModal(maker_id_no) {
         midEl.readOnly = false; midEl.style.background = '';
         document.getElementById('mf-main_category_id').value = '';
         document.getElementById('mf-sub_cats').value = '[]';
+        document.getElementById('mf-est_date').value = _mdmTodayStr();
         loadMakerCatUI([], []);
         // 新增：預填預設付款條件
         document.getElementById('mf-settlement_mode').value  = SYS_VENDOR_DEFAULT_SETTLEMENT_MODE || 'FIXED';
