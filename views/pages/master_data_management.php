@@ -347,7 +347,7 @@ $db  = new DBConnection();
 $pdo = $db->getPDO();
 
 // ── Migration 版本鎖：版本符合時跳過所有 ALTER/CREATE，只跑一次 ──────────
-define('MDM_MIGRATION_VERSION', '20261001_01');   // 2026-10-01 廠商加工項目新增「不列入定期評核評鑑等級」欄位（maker_sub_category_mapping.eval_excluded）
+define('MDM_MIGRATION_VERSION', '20261001_03');   // 2026-10-01 加工大類/小類字典新增「不列入定期評核評鑑等級」欄位（dict_maker_main_category/dict_maker_sub_category.eval_excluded；因使用者同時在線上操作本頁，_02 版號在編輯過程中被提早標記為已執行，故再跳一版重跑）
 $_mdm_skip_migration = false;
 try {
     // system_settings 可能尚不存在（第一次執行），用 try 保護
@@ -630,6 +630,12 @@ try {
     try { $pdo->exec("ALTER TABLE dict_maker_sub_category  ADD COLUMN sort_order INT NOT NULL DEFAULT 0"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE dict_maker_sub_category  ADD COLUMN ref_process_type_id INT NULL"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE dict_maker_sub_category  ADD COLUMN sub_cat_group ENUM('PROCESS','CONSUMABLE','TOOL','OTHER') NOT NULL DEFAULT 'PROCESS'"); } catch(Exception $e){}
+    // 「不列入定期評核評鑑等級」：2026-10-01 改為字典層級（大類/小類）一次性設定，不逐廠商設定
+    // （使用者明確要求：不應該只能在編輯廠商畫面內針對廠商已選取的部分設定）。
+    // 小類若已綁定製程大類（ref_process_type_id 有值），比對 bom_ing 的外包紀錄時直接用這個小類的旗標；
+    // 若小類本身未標記但所屬大類被標記，仍然排除（見 vendor_eval_excluded_process_type_ids()）。
+    try { $pdo->exec("ALTER TABLE dict_maker_main_category ADD COLUMN eval_excluded TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=此大類（含底下小類）不列入定期評核評鑑等級計算'"); } catch(Exception $e){}
+    try { $pdo->exec("ALTER TABLE dict_maker_sub_category  ADD COLUMN eval_excluded TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=此小類不列入定期評核評鑑等級計算'"); } catch(Exception $e){}
     // ── customer_industry_mapping.customer_id 型態修正：INT → CHAR(11) ──
     try {
         $col = $pdo->query("SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
@@ -873,8 +879,9 @@ try {
             try { $pdo->exec("DROP TABLE _msm_backup"); } catch(Exception $e3) {}
         }
     } catch(Exception $e){}
-    // 廠商×加工項目：是否不列入定期評核評鑑等級（2026-10-01 新增，僅對有綁定製程大類的加工項目有實際計算效果）
-    try { $pdo->exec("ALTER TABLE maker_sub_category_mapping ADD COLUMN eval_excluded TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=此加工項目不列入定期評核評鑑等級計算'"); } catch(Exception $e){}
+    // 2026-10-01：「不列入定期評核評鑑等級」改為加工大類/小類字典層級設定（見下方），
+    // 曾短暫加在 maker_sub_category_mapping 的同名欄位已改放棄（使用者明確要求不要做成逐廠商設定），此處收掉。
+    try { $pdo->exec("ALTER TABLE maker_sub_category_mapping DROP COLUMN eval_excluded"); } catch(Exception $e){}
     // ── 一次性同步 process_type → dict_maker_sub_category（初始化用，有即跳過） ──
     try {
         $pdo->exec("INSERT IGNORE INTO dict_maker_sub_category (sub_cat_id, sub_cat_name, sub_cat_group, ref_process_type_id, is_active, sort_order)
@@ -3695,7 +3702,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 讀取已選小類（maker_sub_category_mapping 用 varchar maker_id_no）
             try {
                 $sq = $pdo->prepare("
-                    SELECT m.sub_cat_id, s.sub_cat_name, s.sub_cat_group, m.eval_excluded
+                    SELECT m.sub_cat_id, s.sub_cat_name, s.sub_cat_group
                     FROM maker_sub_category_mapping m
                     JOIN dict_maker_sub_category s ON s.sub_cat_id = m.sub_cat_id
                     WHERE m.maker_id_no = ? AND s.is_active = 1
@@ -3816,11 +3823,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sub_cat_ids  = array_values(array_filter(array_map('intval',
                 json_decode($sub_cats_raw, true) ?: []
             )));
-            // 解析「不列入定期評核評鑑等級」的加工項目清單，僅對仍有勾選的項目生效
-            $sub_cats_excl_raw = trim($_POST['sub_cats_eval_excl'] ?? '[]');
-            $sub_cat_excl_ids  = array_values(array_intersect(array_filter(array_map('intval',
-                json_decode($sub_cats_excl_raw, true) ?: []
-            )), $sub_cat_ids));
 
             $pdo->beginTransaction();
 
@@ -3842,9 +3844,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 同步小類映射：Delete-then-Insert（使用 varchar maker_id_no）
             $pdo->prepare("DELETE FROM maker_sub_category_mapping WHERE maker_id_no=?")->execute([$mid]);
             if (!empty($sub_cat_ids)) {
-                $ins_sub = $pdo->prepare("INSERT IGNORE INTO maker_sub_category_mapping (maker_id_no, sub_cat_id, eval_excluded) VALUES (?,?,?)");
+                $ins_sub = $pdo->prepare("INSERT IGNORE INTO maker_sub_category_mapping (maker_id_no, sub_cat_id) VALUES (?,?)");
                 foreach ($sub_cat_ids as $sid) {
-                    $ins_sub->execute([$mid, $sid, in_array($sid, $sub_cat_excl_ids, true) ? 1 : 0]);
+                    $ins_sub->execute([$mid, $sid]);
                 }
             }
 
@@ -5104,7 +5106,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $op = $_POST['op'];
             if ($op === 'list') {
                 // 每個大類同時帶出已綁定的小類清單
-                $rows = $pdo->query("SELECT main_cat_id, main_cat_name, is_active, sort_order FROM dict_maker_main_category WHERE is_active=1 ORDER BY sort_order, main_cat_id")->fetchAll(PDO::FETCH_ASSOC);
+                $rows = $pdo->query("SELECT main_cat_id, main_cat_name, is_active, sort_order, eval_excluded FROM dict_maker_main_category WHERE is_active=1 ORDER BY sort_order, main_cat_id")->fetchAll(PDO::FETCH_ASSOC);
                 foreach ($rows as &$row) {
                     $sb = $pdo->prepare("SELECT s.sub_cat_id, s.sub_cat_name, s.sub_cat_group, h.sort_order AS bind_order
                         FROM maker_category_hierarchy h
@@ -5124,14 +5126,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $dup = $pdo->prepare("SELECT COUNT(*) FROM dict_maker_main_category WHERE LOWER(main_cat_name)=LOWER(?) AND is_active=1 AND main_cat_id<>?");
                 $dup->execute([$name, $id]);
                 if ((int)$dup->fetchColumn() > 0) throw new Exception("已存在相同名稱「{$name}」的廠商大類");
+                $eval_excluded = intval($_POST['eval_excluded'] ?? 0) ? 1 : 0;
                 $uid = $_SESSION['user_id']??null; $op_name = _get_operator($pdo,$uid);
                 if ($id) {
-                    $old_mc = $pdo->prepare("SELECT main_cat_name FROM dict_maker_main_category WHERE main_cat_id=?"); $old_mc->execute([$id]); $old_mc_row = $old_mc->fetch(PDO::FETCH_ASSOC);
-                    $pdo->prepare("UPDATE dict_maker_main_category SET main_cat_name=? WHERE main_cat_id=?")->execute([$name, $id]);
-                    $ch=_diff_rows($old_mc_row??[],['main_cat_name'=>$name],['main_cat_name']); if(!empty($ch)) _log_audit($pdo,'update','dict','maker-main:'.$id,$name,$ch,$uid,$op_name);
+                    $old_mc = $pdo->prepare("SELECT main_cat_name, eval_excluded FROM dict_maker_main_category WHERE main_cat_id=?"); $old_mc->execute([$id]); $old_mc_row = $old_mc->fetch(PDO::FETCH_ASSOC);
+                    $pdo->prepare("UPDATE dict_maker_main_category SET main_cat_name=?, eval_excluded=? WHERE main_cat_id=?")->execute([$name, $eval_excluded, $id]);
+                    $ch=_diff_rows($old_mc_row??[],['main_cat_name'=>$name,'eval_excluded'=>$eval_excluded],['main_cat_name','eval_excluded']); if(!empty($ch)) _log_audit($pdo,'update','dict','maker-main:'.$id,$name,$ch,$uid,$op_name);
                 } else {
                     $max = $pdo->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM dict_maker_main_category")->fetchColumn();
-                    $pdo->prepare("INSERT INTO dict_maker_main_category (main_cat_name, sort_order) VALUES (?,?)")->execute([$name, $max]);
+                    $pdo->prepare("INSERT INTO dict_maker_main_category (main_cat_name, sort_order, eval_excluded) VALUES (?,?,?)")->execute([$name, $max, $eval_excluded]);
                     $id = (int)$pdo->lastInsertId();
                     _log_audit($pdo,'insert','dict','maker-main:'.$id,$name,null,$uid,$op_name);
                 }
@@ -5188,14 +5191,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $params = [];
                 if ($kw !== '') { $where .= ' AND s.sub_cat_name LIKE ?'; $params[] = "%$kw%"; }
                 if ($grp !== '') { $where .= ' AND s.sub_cat_group=?'; $params[] = $grp; }
-                $sql = "SELECT s.sub_cat_id, s.sub_cat_name, s.sub_cat_group, s.ref_process_type_id, s.sort_order, s.is_active,
+                $sql = "SELECT s.sub_cat_id, s.sub_cat_name, s.sub_cat_group, s.ref_process_type_id, s.sort_order, s.is_active, s.eval_excluded,
                                GROUP_CONCAT(m.main_cat_name ORDER BY m.main_cat_name SEPARATOR ', ') AS main_cat_names,
                                GROUP_CONCAT(CAST(h.main_cat_id AS CHAR) ORDER BY m.main_cat_name) AS main_cat_ids
                         FROM dict_maker_sub_category s
                         LEFT JOIN maker_category_hierarchy h ON s.sub_cat_id = h.sub_cat_id
                         LEFT JOIN dict_maker_main_category m ON h.main_cat_id = m.main_cat_id AND m.is_active=1
                         WHERE $where
-                        GROUP BY s.sub_cat_id, s.sub_cat_name, s.sub_cat_group, s.ref_process_type_id, s.sort_order, s.is_active
+                        GROUP BY s.sub_cat_id, s.sub_cat_name, s.sub_cat_group, s.ref_process_type_id, s.sort_order, s.is_active, s.eval_excluded
                         ORDER BY s.sort_order, s.sub_cat_id";
                 $stmt = $pdo->prepare($sql);
                 $stmt->execute($params);
@@ -5219,6 +5222,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
                 $main_ids_raw = trim($_POST['main_cat_ids'] ?? '');
                 $main_ids = array_values(array_filter(array_map('intval', explode(',', $main_ids_raw))));
+                $eval_excluded = intval($_POST['eval_excluded'] ?? 0) ? 1 : 0;
                 if (empty($name)) throw new Exception('小類名稱不可為空');
                 // Duplicate check (skip sync items with ref_process_type_id)
                 if (!$ref_pt) {
@@ -5229,14 +5233,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $uid = $_SESSION['user_id']??null; $op_name = _get_operator($pdo,$uid);
                 $pdo->beginTransaction();
                 if ($id) {
-                    $old_sc = $pdo->prepare("SELECT sub_cat_name,sub_cat_group FROM dict_maker_sub_category WHERE sub_cat_id=?"); $old_sc->execute([$id]); $old_sc_row = $old_sc->fetch(PDO::FETCH_ASSOC);
-                    $pdo->prepare("UPDATE dict_maker_sub_category SET sub_cat_name=?,sub_cat_group=?,ref_process_type_id=? WHERE sub_cat_id=?")
-                        ->execute([$name,$group,$ref_pt,$id]);
-                    $ch=_diff_rows($old_sc_row??[],['sub_cat_name'=>$name,'sub_cat_group'=>$group],['sub_cat_name','sub_cat_group']); if(!empty($ch)) _log_audit($pdo,'update','dict','maker-sub:'.$id,$name,$ch,$uid,$op_name);
+                    $old_sc = $pdo->prepare("SELECT sub_cat_name,sub_cat_group,eval_excluded FROM dict_maker_sub_category WHERE sub_cat_id=?"); $old_sc->execute([$id]); $old_sc_row = $old_sc->fetch(PDO::FETCH_ASSOC);
+                    $pdo->prepare("UPDATE dict_maker_sub_category SET sub_cat_name=?,sub_cat_group=?,ref_process_type_id=?,eval_excluded=? WHERE sub_cat_id=?")
+                        ->execute([$name,$group,$ref_pt,$eval_excluded,$id]);
+                    $ch=_diff_rows($old_sc_row??[],['sub_cat_name'=>$name,'sub_cat_group'=>$group,'eval_excluded'=>$eval_excluded],['sub_cat_name','sub_cat_group','eval_excluded']); if(!empty($ch)) _log_audit($pdo,'update','dict','maker-sub:'.$id,$name,$ch,$uid,$op_name);
                 } else {
                     $max = $pdo->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM dict_maker_sub_category")->fetchColumn();
-                    $pdo->prepare("INSERT INTO dict_maker_sub_category (sub_cat_name,sub_cat_group,ref_process_type_id,sort_order) VALUES (?,?,?,?)")
-                        ->execute([$name,$group,$ref_pt,$max]);
+                    $pdo->prepare("INSERT INTO dict_maker_sub_category (sub_cat_name,sub_cat_group,ref_process_type_id,sort_order,eval_excluded) VALUES (?,?,?,?,?)")
+                        ->execute([$name,$group,$ref_pt,$max,$eval_excluded]);
                     $id = (int)$pdo->lastInsertId();
                     _log_audit($pdo,'insert','dict','maker-sub:'.$id,$name,null,$uid,$op_name);
                 }
@@ -8714,14 +8718,12 @@ body { background:#F6F1EA; }
 </div>
 <div class="form-group">
     <label>加工項目
-        <span style="font-size:11px;color:#aaa;font-weight:normal;margin-left:6px;">點擊標籤勾選／取消；已勾選項目右側的圖示可切換「是否列入定期評核評鑑等級」</span>
+        <span style="font-size:11px;color:#aaa;font-weight:normal;margin-left:6px;">點擊標籤勾選／取消</span>
     </label>
     <div id="mf-sub-cat-wrap" style="border-radius:6px;border:1px solid #e4e8ed;background:#fafbfc;padding:8px;min-height:40px;">
         <span class="text-muted" style="font-size:12px;">請先選擇廠商大類</span>
     </div>
-    <p class="help-block" style="color:#aaa;font-size:11px;margin-top:3px;">灰底標示的加工項目＝此廠商的「定期評核」月度計分會排除該項目對應的外包加工紀錄（僅對有綁定製程大類的加工項目有效；自由新增、未綁定製程大類的項目設定後不會有實際計算效果）。</p>
     <input type="hidden" id="mf-sub_cats" name="sub_cats" value="[]">
-    <input type="hidden" id="mf-sub_cats_eval_excl" name="sub_cats_eval_excl" value="[]">
     <input type="hidden" id="mf-main_cat_process_tags" name="main_cat_process_tags" value="[]">
 </div>
 <div class="form-group">
@@ -16966,14 +16968,12 @@ function getMainCatColorById(main_cat_id) {
     return _mainCatPalette[idx % _mainCatPalette.length];
 }
 
-function loadMakerCatUI(selectedMainIds, selectedSubIds, existingProcessTags, evalExclIds) {
+function loadMakerCatUI(selectedMainIds, selectedSubIds, existingProcessTags) {
     // selectedMainIds:    array of int (e.g. [2, 5])
     // selectedSubIds:     array of int (e.g. [3, 7, 12])
     // existingProcessTags: array of {main_cat_id, ref_type, ref_id}
-    // evalExclIds:        array of int，已勾選加工項目中「不列入定期評核評鑑等級」的 sub_cat_id
     _makerProcTagsInitial = existingProcessTags || [];
     _makerAllSelSubIds = (selectedSubIds || []).slice(); // 初始化持久選取清單
-    _makerSubCatEvalExcl = (evalExclIds || []).slice();
     var wrap = document.getElementById('mf-main-cat-chips-wrap');
     if (wrap) wrap.innerHTML = '<span style="color:#aaa;font-size:12px;"><i class="fa fa-spinner fa-spin"></i> 載入中…</span>';
     // 建立初始製程標籤對應表
@@ -16998,7 +16998,6 @@ function loadMakerCatUI(selectedMainIds, selectedSubIds, existingProcessTags, ev
 }
 var _makerProcTagsInitial = [];
 var _makerMainCatProcessConfig = null;
-var _makerSubCatEvalExcl = []; // 已勾選加工項目中，被標記「不列入定期評核評鑑等級」的 sub_cat_id
 
 function renderMainCatChips(selectedMainIds) {
     var wrap = document.getElementById('mf-main-cat-chips-wrap');
@@ -17076,19 +17075,9 @@ function renderGroupedSubCats(selectedMainIds, selectedSubIds, procTagMap) {
         html += '<div style="display:flex;flex-wrap:wrap;gap:5px;padding:7px 8px;border-radius:0 8px 8px 8px;border:1.5px solid '+pal.sel+'33;background:'+pal.bg+';">';
         if (hasSubs) {
             cat.sub_cats.forEach(function(s) {
-                var sid = parseInt(s.sub_cat_id);
-                var sel = selectedSubIds.indexOf(sid) >= 0;
-                var excl = sel && _makerSubCatEvalExcl.indexOf(sid) >= 0;
-                var tagBg = excl ? '#9e9e9e' : (sel ? pal.sel : pal.bg);
-                var tagFg = (excl || sel) ? '#fff' : pal.fg;
-                var tagBd = excl ? '#757575' : (sel ? pal.sel : pal.fg+'44');
-                var nameHtml = excl ? ('<span style="text-decoration:line-through;">'+escHtml(s.sub_cat_name)+'</span>') : escHtml(s.sub_cat_name);
-                var exclIconHtml = sel ? (
-                    '<i class="fa '+(excl?'fa-ban':'fa-circle-o')+'" data-sub-id="'+sid+'" title="'+(excl?'不列入定期評核評鑑等級（點擊取消）':'點擊設為不列入定期評核評鑑等級')+'"'
-                    + ' style="margin-left:5px;font-size:10px;cursor:pointer;opacity:'+(excl?'1':'.5')+';" onclick="event.stopPropagation();toggleSubCatEvalExcl('+sid+')"></i>'
-                ) : '';
-                html += '<label class="sub-cat-tag" style="display:inline-flex;align-items:center;gap:3px;background:'+tagBg+';color:'+tagFg+';border:1.5px solid '+tagBd+';border-radius:12px;padding:2px 10px;cursor:pointer;font-weight:'+(sel?'700':'normal')+';font-size:12px;transition:all .15s;" onclick="toggleSubCatTag(this,'+sid+','+catIdx+')">'
-                    + '<input type="checkbox" '+(sel?'checked':'')+' style="display:none;" value="'+sid+'">'+nameHtml+exclIconHtml+'</label>';
+                var sel = selectedSubIds.indexOf(parseInt(s.sub_cat_id)) >= 0;
+                html += '<label class="sub-cat-tag" style="display:inline-flex;align-items:center;gap:3px;background:'+(sel?pal.sel:pal.bg)+';color:'+(sel?'#fff':pal.fg)+';border:1.5px solid '+(sel?pal.sel:pal.fg+'44')+';border-radius:12px;padding:2px 10px;cursor:pointer;font-weight:'+(sel?'700':'normal')+';font-size:12px;transition:all .15s;" onclick="toggleSubCatTag(this,'+s.sub_cat_id+','+catIdx+')">'
+                    + '<input type="checkbox" '+(sel?'checked':'')+' style="display:none;" value="'+s.sub_cat_id+'">'+escHtml(s.sub_cat_name)+'</label>';
             });
         }
         // 製程標籤（額外）
@@ -17125,42 +17114,17 @@ function renderGroupedSubCats(selectedMainIds, selectedSubIds, procTagMap) {
 
 function toggleSubCatTag(el, id, catIdx) {
     var cb = el.querySelector('input');
+    var pal = getMainCatColor(catIdx);
     cb.checked = !cb.checked;
+    el.style.background  = cb.checked ? pal.sel : pal.bg;
+    el.style.color       = cb.checked ? '#fff'  : pal.fg;
+    el.style.borderColor = cb.checked ? pal.sel : pal.fg+'44';
+    el.style.fontWeight  = cb.checked ? '700'   : 'normal';
     // 同步更新持久清單
     var idx = _makerAllSelSubIds.indexOf(id);
     if (cb.checked && idx < 0) _makerAllSelSubIds.push(id);
-    if (!cb.checked && idx >= 0) {
-        _makerAllSelSubIds.splice(idx, 1);
-        // 取消勾選該加工項目時，「不列入評鑑」標記一併清除（不再是這廠商的加工項目，標記留著沒有意義）
-        var exIdx = _makerSubCatEvalExcl.indexOf(id);
-        if (exIdx >= 0) _makerSubCatEvalExcl.splice(exIdx, 1);
-    }
-    // 重繪整個子分類區塊，確保已勾選/不列入標記的樣式與「不列入」圖示即時反映
-    var selMain = [];
-    document.querySelectorAll('#mf-main-cat-chips-wrap .main-cat-chip[data-active="1"]').forEach(function(c){ selMain.push(parseInt(c.dataset.id)); });
-    var tagMap = {};
-    document.querySelectorAll('#mf-sub-cat-wrap .mf-proc-tag-cb:checked').forEach(function(cb2){
-        var mcid = String(cb2.dataset.mcid);
-        if (!tagMap[mcid]) tagMap[mcid]={};
-        tagMap[mcid][cb2.dataset.refType+':'+cb2.dataset.refId]=true;
-    });
-    renderGroupedSubCats(selMain, _makerAllSelSubIds.slice(), tagMap);
-}
-
-/** 切換「不列入定期評核評鑑等級」標記（僅作用在已勾選的加工項目上） */
-function toggleSubCatEvalExcl(sid) {
-    sid = parseInt(sid);
-    var idx = _makerSubCatEvalExcl.indexOf(sid);
-    if (idx >= 0) _makerSubCatEvalExcl.splice(idx, 1); else _makerSubCatEvalExcl.push(sid);
-    var selMain = [];
-    document.querySelectorAll('#mf-main-cat-chips-wrap .main-cat-chip[data-active="1"]').forEach(function(c){ selMain.push(parseInt(c.dataset.id)); });
-    var tagMap = {};
-    document.querySelectorAll('#mf-sub-cat-wrap .mf-proc-tag-cb:checked').forEach(function(cb){
-        var mcid = String(cb.dataset.mcid);
-        if (!tagMap[mcid]) tagMap[mcid]={};
-        tagMap[mcid][cb.dataset.refType+':'+cb.dataset.refId]=true;
-    });
-    renderGroupedSubCats(selMain, _makerAllSelSubIds.slice(), tagMap);
+    if (!cb.checked && idx >= 0) _makerAllSelSubIds.splice(idx, 1);
+    syncSubCatHidden();
 }
 
 function toggleMakerProcTag(el) {
@@ -17195,10 +17159,6 @@ function syncSubCatHidden() {
         if (cb.checked) ids.push(parseInt(cb.value));
     });
     document.getElementById('mf-sub_cats').value = JSON.stringify(ids);
-    // 只保留「目前仍勾選中」的不列入評鑑標記（取消勾選的加工項目不應留下殘留標記）
-    _makerSubCatEvalExcl = _makerSubCatEvalExcl.filter(function(id){ return _makerAllSelSubIds.indexOf(id) >= 0; });
-    var exEl = document.getElementById('mf-sub_cats_eval_excl');
-    if (exEl) exEl.value = JSON.stringify(_makerSubCatEvalExcl);
 }
 
 function openMakerModal(maker_id_no) {
@@ -17220,8 +17180,7 @@ function openMakerModal(maker_id_no) {
             // 已選大類 IDs（後端回傳 selected_main_cat_ids 陣列）
             var selMainIds = (d.selected_main_cat_ids||[]).map(Number);
             var selSubIds  = (d.sub_cats||[]).map(function(s){ return parseInt(s.sub_cat_id); });
-            var evalExclIds = (d.sub_cats||[]).filter(function(s){ return parseInt(s.eval_excluded)===1; }).map(function(s){ return parseInt(s.sub_cat_id); });
-            loadMakerCatUI(selMainIds, selSubIds, d.main_cat_process_tags || [], evalExclIds);
+            loadMakerCatUI(selMainIds, selSubIds, d.main_cat_process_tags || []);
             // 付款設定
             var mMode = d.settlement_mode || 'FIXED';
             var mDay  = d.settlement_day  || '';
@@ -17263,7 +17222,6 @@ function openMakerModal(maker_id_no) {
         midEl.readOnly = false; midEl.style.background = '';
         document.getElementById('mf-main_category_id').value = '';
         document.getElementById('mf-sub_cats').value = '[]';
-        document.getElementById('mf-sub_cats_eval_excl').value = '[]';
         loadMakerCatUI([], []);
         // 新增：預填預設付款條件
         document.getElementById('mf-settlement_mode').value  = SYS_VENDOR_DEFAULT_SETTLEMENT_MODE || 'FIXED';
@@ -17674,7 +17632,6 @@ function submitMakerForm() {
     });
     // sub_cats: 從持久清單取值（包含所有大類的勾選，即使某大類被切換隱藏也不遺失）
     data.sub_cats = JSON.stringify(_makerAllSelSubIds);
-    data.sub_cats_eval_excl = JSON.stringify(_makerSubCatEvalExcl);
 
     // main_category_id: 取第一個選中的大類（存入 maker_list 欄位）
     var firstChip = document.querySelector('#mf-main-cat-chips-wrap .main-cat-chip[data-active="1"]');
@@ -18268,14 +18225,19 @@ var dictConfig = {
                     return '<span class="sub-tag-chip sub-group-'+s.sub_cat_group+'">'+escHtml(s.sub_cat_name)+'</span>';
                   }).join('')
                 : '<span style="color:#ccc;font-size:11px;">尚未綁定小類</span>';
-            return '<strong style="color:#5856d6;">'+escHtml(d.main_cat_name)+'</strong>'
+            var exclBadge = (parseInt(d.eval_excluded)===1)
+                ? ' <span style="font-size:10px;background:#9e9e9e;color:#fff;border-radius:3px;padding:1px 6px;" title="此大類（含底下小類）不列入定期評核評鑑等級計算">不列入評鑑</span>'
+                : '';
+            return '<strong style="color:#5856d6;">'+escHtml(d.main_cat_name)+'</strong>'+exclBadge
                 + '<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:3px;">'+sub+'</div>';
         },
         renderForm: function() {
             var html = '<div style="width:100%;">';
-            html += '<div style="display:flex;gap:8px;margin-bottom:10px;">';
+            html += '<div style="display:flex;gap:8px;margin-bottom:10px;align-items:flex-end;">';
             html += '<div style="flex:1;"><label style="font-size:11px;color:#888;margin-bottom:3px;">大類名稱 <span style="color:red;">*</span></label>';
             html += '<input type="text" id="dict-f-name" class="form-control input-sm" placeholder="例：外協加工、原物料、工具" maxlength="50"></div>';
+            html += '<label style="font-weight:normal;cursor:pointer;white-space:nowrap;padding-bottom:7px;" title="勾選後，此大類底下全部小類的外包紀錄都不計入定期評核評鑑等級，適用於本來就不屬於製造委外的廠商大類（例：廠務相關）">';
+            html += '<input type="checkbox" id="dict-f-eval-excl" style="margin-right:4px;">不列入定期評核評鑑等級</label>';
             html += dictSaveBtn();
             html += '</div>';
             // Sub-binding section
@@ -18310,6 +18272,7 @@ var dictConfig = {
         },
         fillForm: function(d) {
             $('#dict-f-name').val(d.main_cat_name);
+            $('#dict-f-eval-excl').prop('checked', parseInt(d.eval_excluded)===1);
             var selIds = (d.sub_cats||[]).map(function(s){ return parseInt(s.sub_cat_id); });
             setTimeout(function(){ loadSubPool(selIds); }, 300);
         },
@@ -18321,7 +18284,8 @@ var dictConfig = {
             document.querySelectorAll('#sub-selected-list .sub-sel-chip').forEach(function(el){
                 subIds.push(el.dataset.subId);
             });
-            return { action:'manage_maker_main_cats', op:'save', main_cat_id:id, main_cat_name:name, sub_cat_ids:subIds.join(',') };
+            var evalExcl = $('#dict-f-eval-excl').is(':checked') ? 1 : 0;
+            return { action:'manage_maker_main_cats', op:'save', main_cat_id:id, main_cat_name:name, sub_cat_ids:subIds.join(','), eval_excluded:evalExcl };
         },
         getDeleteId: function(d){ return d.main_cat_id; }
     },
@@ -18386,7 +18350,10 @@ var dictConfig = {
                     return '<span style="font-size:10px;background:#eef2ff;color:#5856d6;padding:1px 5px;border-radius:3px;">'+escHtml(n)+'</span>';
                   }).join(' ')
                 : '<span style="color:#ccc;font-size:11px;">未綁定</span>';
-            return grpBadge + syncBadge + escHtml(d.sub_cat_name) + '<div style="margin-top:3px;">'+cats+'</div>';
+            var exclBadge = (parseInt(d.eval_excluded)===1)
+                ? ' <span style="font-size:10px;background:#9e9e9e;color:#fff;border-radius:3px;padding:1px 6px;" title="此小類不列入定期評核評鑑等級計算">不列入評鑑</span>'
+                : '';
+            return grpBadge + syncBadge + escHtml(d.sub_cat_name) + exclBadge + '<div style="margin-top:3px;">'+cats+'</div>';
         },
         renderForm: function() {
             var html = '<div style="width:100%;">';
@@ -18400,6 +18367,9 @@ var dictConfig = {
             html += '<option value="TOOL">🔩 工具類 (TOOL)</option>';
             html += '<option value="OTHER">📦 其他 (OTHER)</option>';
             html += '</select></div>';
+            html += '<div><label style="font-size:11px;color:#888;margin-bottom:3px;display:block;">&nbsp;</label>';
+            html += '<label style="font-weight:normal;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;height:30px;" title="勾選後，此小類（若有綁定製程大類）對應的外包紀錄不計入任何廠商的定期評核評鑑等級">';
+            html += '<input type="checkbox" id="dict-f-eval-excl" style="margin-right:4px;">不列入定期評核評鑑等級</label></div>';
             html += dictSaveBtn();
             html += '</div>';
             html += '<label style="font-size:11px;color:#888;margin-bottom:4px;display:block;">綁定大類（可多選）</label>';
@@ -18425,6 +18395,8 @@ var dictConfig = {
             var isSync = d.ref_process_type_id && d.ref_process_type_id != '0' && d.ref_process_type_id !== '';
             var nameEl = document.getElementById('dict-f-name');
             var groupEl = document.getElementById('dict-f-group');
+            var exclEl = document.getElementById('dict-f-eval-excl');
+            if (exclEl) exclEl.checked = (parseInt(d.eval_excluded)===1);
             if (nameEl) {
                 nameEl.value = d.sub_cat_name;
                 nameEl.readOnly = isSync;
@@ -18467,7 +18439,8 @@ var dictConfig = {
             var ids = [];
             document.querySelectorAll('#dict-sub-main-checkboxes input[type=checkbox]').forEach(function(cb){ if(cb.checked) ids.push(cb.value); });
             var id = $('#dict-edit-id').val();
-            return { action:'manage_maker_sub_cats', op:'save', sub_cat_id:id, sub_cat_name:name, sub_cat_group:group, main_cat_ids:ids.join(',') };
+            var evalExcl = $('#dict-f-eval-excl').is(':checked') ? 1 : 0;
+            return { action:'manage_maker_sub_cats', op:'save', sub_cat_id:id, sub_cat_name:name, sub_cat_group:group, main_cat_ids:ids.join(','), eval_excluded:evalExcl };
         },
         getDeleteId: function(d){ return d.sub_cat_id; }
     },
