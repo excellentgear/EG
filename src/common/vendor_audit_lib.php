@@ -139,6 +139,8 @@ function vendor_audit_ensure_schema(PDO $db): void {
         "ALTER TABLE vendor_audit_target ADD COLUMN completed_by INT NULL COMMENT '按下完成的使用者id'",
         "ALTER TABLE vendor_audit_target ADD COLUMN completed_by_name VARCHAR(50) NULL",
         "ALTER TABLE vendor_audit_target ADD COLUMN review_type VARCHAR(10) NULL COMMENT 'site=人員實地審查 self=供應商主自評核 abnormal=異常檢核'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN is_adhoc TINYINT(1) NOT NULL DEFAULT 0
+            COMMENT '1=新供應商評鑑(臨時性稽核，獨立分頁瀏覽；不受年度計畫鎖定限制、不列入年度計畫表、不計入KPI廠商稽核按時執行率)'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
     }
@@ -937,19 +939,27 @@ function vendor_eval_summ(int $inq, int $ng, int $sp, int $lt, array $set, array
  *  進貨數：同月取 max(檢驗量, 回廠量) 當品質與交期共用分母（使用者要求兩邊必須相等）
  * ============================================================ */
 /**
- * 該廠商「不列入定期評核評鑑等級」的製程大類清單（master_data_management.php 廠商編輯畫面
- * 「加工類別設定」逐項設定，2026-10-01 新增）。只有綁定了製程大類（ref_process_type_id）的加工
- * 項目才查得到對應的實際外包紀錄可排除，自由新增、未綁定製程大類的項目設定了也不會有效果。
+ * 全站「不列入定期評核評鑑等級」的製程大類清單（2026-10-01 新增）。
+ * 設定點在 master_data_management.php 的「廠商大類」／「廠商小類」字典維護畫面（dict_maker_main_category／
+ * dict_maker_sub_category 各自的 eval_excluded 旗標），是字典層級的一次性設定、不逐廠商設定——
+ * 使用者明確要求不要做成「只能在編輯廠商畫面內針對已勾選的部分設定」。
+ * 一個小類若本身被標記，或它所屬的任一大類被標記，都算不列入；只有綁定了製程大類（ref_process_type_id）
+ * 的小類才查得到對應的實際外包紀錄可排除，自由新增、未綁定製程大類的小類標記了也不會有實際計算效果。
+ * 這是全域設定（與個別廠商無關），一個請求內用 static 快取，避免 periodic_eval_all 逐廠商重查。
  */
-function vendor_eval_excluded_process_type_ids(PDO $db, string $mid): array {
+function vendor_eval_excluded_process_type_ids(PDO $db): array {
+    static $cache = null;
+    if ($cache !== null) return $cache;
     try {
-        $st = $db->prepare("SELECT DISTINCT s.ref_process_type_id
-                            FROM maker_sub_category_mapping m
-                            JOIN dict_maker_sub_category s ON s.sub_cat_id = m.sub_cat_id
-                            WHERE m.maker_id_no=? AND m.eval_excluded=1 AND s.ref_process_type_id IS NOT NULL");
-        $st->execute([$mid]);
-        return array_values(array_unique(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN))));
-    } catch (Throwable $e) { return []; }
+        $rows = $db->query("SELECT DISTINCT s.ref_process_type_id
+                            FROM dict_maker_sub_category s
+                            LEFT JOIN maker_category_hierarchy h ON h.sub_cat_id = s.sub_cat_id
+                            LEFT JOIN dict_maker_main_category m ON m.main_cat_id = h.main_cat_id
+                            WHERE s.ref_process_type_id IS NOT NULL
+                              AND (s.eval_excluded=1 OR IFNULL(m.eval_excluded,0)=1)")->fetchAll(PDO::FETCH_COLUMN);
+        $cache = array_values(array_unique(array_map('intval', $rows)));
+    } catch (Throwable $e) { $cache = []; }
+    return $cache;
 }
 /** 該廠商實際採用的約定工作天：廠商專屬設定優先，沒設才用全域預設（使用者2026-08-17：有些廠商本來就比較久） */
 function vendor_eval_lead_days(PDO $db, string $mid, array $set): int {
@@ -968,7 +978,7 @@ function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): arra
     $from = sprintf('%04d-01-01',$year); $to = sprintf('%04d-01-01',$year+1);
 
     // 不列入評鑑的製程大類：該廠商在這些製程大類下的外包紀錄，品質與交期都排除不計入計分
-    $exclTypeIds = vendor_eval_excluded_process_type_ids($db, $mid);
+    $exclTypeIds = vendor_eval_excluded_process_type_ids($db);
     $exclCond = '';
     if ($exclTypeIds) {
         $ph = implode(',', array_fill(0, count($exclTypeIds), '?'));
@@ -1067,7 +1077,8 @@ function vendor_audit_round_id(PDO $db, int $year, int $half, bool $create = fal
 
 /* ============================================================
  * KPI 第6項計算：廠商稽核按時執行率（半年批次，供 kpi_as_lib compute 呼叫）
- * month≤6→上半年、否則下半年；den=該期對象(排除停用)，num=已稽核
+ * month≤6→上半年、否則下半年；den=該期對象(排除停用、排除is_adhoc新供應商評鑑)，num=已稽核
+ * is_adhoc=1(新供應商評鑑，獨立分頁瀏覽、不受年度計畫鎖定限制)一律不計入官方KPI統計範圍。
  * ============================================================ */
 function vendor_audit_kpi_compute(PDO $db, int $year, int $month, array $params): ?array {
     try {
@@ -1082,7 +1093,7 @@ function vendor_audit_kpi_compute(PDO $db, int $year, int $month, array $params)
     $st = $db->prepare("SELECT COUNT(*) den, SUM(t.audit_date IS NOT NULL) num
                         FROM vendor_audit_target t
                         JOIN maker_list mk ON mk.maker_id_no=t.maker_id_no
-                        WHERE t.round_id=? AND (mk.status IS NULL OR mk.status<>?)");
+                        WHERE t.round_id=? AND t.is_adhoc=0 AND (mk.status IS NULL OR mk.status<>?)");
     $st->execute([$rid, VENDOR_AUDIT_DISABLED]);
     $r = $st->fetch(PDO::FETCH_ASSOC);
     $den = (int)($r['den'] ?? 0);

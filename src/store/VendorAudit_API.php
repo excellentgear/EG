@@ -393,38 +393,49 @@ case 'subcats': {
     jout(['subcats'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
 }
 
-/* 本期對象 + 統計 + 提醒 */
+/* 本期對象 + 統計 + 提醒
+ * adhoc=1：改讀「新供應商評鑑」獨立分頁的臨時對象(is_adhoc=1)，與一般計畫對象(is_adhoc=0)完全分開顯示，
+ *          互不混合；其完成度只供自行參考，不是官方KPI「廠商稽核按時執行率」（該KPI一律只算is_adhoc=0）。 */
 case 'round': {
     $year = (int)($_GET['year'] ?? date('Y'));
     $half = (int)($_GET['half'] ?? ((int)date('n') <= 6 ? 1 : 2));
     if ($half !== 1 && $half !== 2) $half = 1;
+    $adhoc = (int)($_GET['adhoc'] ?? 0) === 1;
     $rid = vendor_audit_round_id($db, $year, $half, false);
 
     $targets = [];
     if ($rid !== null) {
         $st = $db->prepare("SELECT t.target_id, t.maker_id_no, t.audit_date, t.auditor, t.plan_month,
-                                   t.report_no, t.note, t.added_by_name,
+                                   t.report_no, t.note, t.added_by_name, t.added_at,
                                    t.overall_rate, t.self_rate, t.audit_rate, t.judge, t.audit_mode, t.conclusion,
                                    t.status AS sign_status, t.signed_by_name, t.signed_at, t.signed_is_deputy,
                                    m.maker_id, m.status, sc.sub_cat_names AS main_cat_name
                             FROM vendor_audit_target t
                             JOIN maker_list m ON m.maker_id_no=t.maker_id_no
                             " . vendor_audit_subcat_join() . "
-                            WHERE t.round_id=? AND " . vendor_audit_scope_sql_cond($scope) . "
+                            WHERE t.round_id=? AND t.is_adhoc=? AND " . vendor_audit_scope_sql_cond($scope) . "
                             ORDER BY t.audit_date IS NOT NULL, m.maker_id");
-        $st->execute([$rid]);
+        $st->execute([$rid, $adhoc ? 1 : 0]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $r['disabled'] = ($r['status'] === VENDOR_AUDIT_DISABLED);
             $targets[] = $r;
         }
     }
-    $stat = vendor_audit_kpi_compute($db, $year, $half === 1 ? 6 : 12, []);
+
+    if ($adhoc) {
+        // 新供應商評鑑屬臨時性稽核，不是官方KPI統計範圍，只給簡單完成度，不套用KPI「目標≥70%」語意
+        $validN = 0; $doneN = 0;
+        foreach ($targets as $r) { if (!$r['disabled']) { $validN++; if ($r['audit_date']) $doneN++; } }
+        $stat = ['num'=>$doneN, 'den'=>$validN, 'value'=>$validN > 0 ? $doneN / $validN * 100 : null];
+    } else {
+        $stat = vendor_audit_kpi_compute($db, $year, $half === 1 ? 6 : 12, []);
+    }
 
     // 提醒：最近一期 + 週期
     $cyc = vendor_audit_cycle_months($db);
     $lastRow = $db->query("SELECT year, half FROM vendor_audit_round ORDER BY year DESC, half DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
 
-    jout(['year'=>$year, 'half'=>$half, 'round_exists'=>$rid !== null,
+    jout(['year'=>$year, 'half'=>$half, 'adhoc'=>$adhoc ? 1 : 0, 'round_exists'=>$rid !== null,
           'targets'=>$targets, 'stat'=>$stat, 'perms'=>$scopedPerms,
           'cycle_months'=>$cyc, 'last_round'=>$lastRow ?: null]);
 }
@@ -464,8 +475,10 @@ case 'pool': {
 }
 
 /* 多選加入本期對象
- * adhoc=1：新增供應商評鑑（如全新廠商的首次稽核），不受年度計畫鎖定限制、也一律不設預定稽核月份，
- *          因此不會出現在「供應商稽核計劃」年度計畫表；除此之外(登錄/簽核/列印/KPI計入)與一般對象完全相同。 */
+ * adhoc=1：新增供應商評鑑（如全新廠商的首次稽核），寫入 is_adhoc=1——獨立於「新供應商評鑑」分頁瀏覽，
+ *          不受年度計畫鎖定限制、也一律不設預定稽核月份，因此不會出現在「供應商稽核計劃」年度計畫表，
+ *          也不計入 KPI「廠商稽核按時執行率」（vendor_audit_kpi_compute 一律排除 is_adhoc=1）；
+ *          除此之外(登錄/簽核/記錄表/列印流程)與一般對象完全相同。 */
 case 'add_targets': {
     if (!vendor_audit_can_edit_scope($db, $perms, $uid, $scope)) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核登錄權限，請洽管理員於「稽核員資格設定」指派', 403);
     $year = (int)($_POST['year'] ?? 0);
@@ -480,11 +493,12 @@ case 'add_targets': {
     try {
         $db->beginTransaction();
         $rid = vendor_audit_round_id($db, $year, $half, true, $u);
-        $ins = $db->prepare("INSERT IGNORE INTO vendor_audit_target (round_id, maker_id_no, plan_month, added_by, added_by_name)
-                             SELECT ?, m.maker_id_no, ?, ?, ? FROM maker_list m
+        $ins = $db->prepare("INSERT IGNORE INTO vendor_audit_target (round_id, maker_id_no, plan_month, is_adhoc, added_by, added_by_name)
+                             SELECT ?, m.maker_id_no, ?, ?, ?, ? FROM maker_list m
                              WHERE m.maker_id_no=? AND (m.status IS NULL OR m.status<>?) AND " . vendor_audit_scope_sql_cond($scope));
         $n = 0;
-        foreach ($ids as $mid) { $ins->execute([$rid, $pm, $uid, $uname, $mid, VENDOR_AUDIT_DISABLED]); $n += $ins->rowCount(); }
+        $isAdhocVal = $adhoc ? 1 : 0;
+        foreach ($ids as $mid) { $ins->execute([$rid, $pm, $isAdhocVal, $uid, $uname, $mid, VENDOR_AUDIT_DISABLED]); $n += $ins->rowCount(); }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('加入失敗：'.$e->getMessage(), 500); }
     jout(['added'=>$n]);

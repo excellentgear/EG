@@ -228,10 +228,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             /* 非目前分頁與任何遮罩即使被遺留在DOM中也強制不印，避免多出空白頁 */
             #tabEval, #tabRoster, #tabPlan, .va-mask, .va-totop { display:none !important; }
             body, .right_col, .container.body, .main_container { min-height:0 !important; height:auto !important; }
-            #vaListPrintHead { display:block !important; text-align:center; margin-bottom:8px; }
-            #vaListPrintHead .co { font-size:22px; font-weight:bold; letter-spacing:1px; }
-            #vaListPrintHead .tt { font-size:16px; font-weight:bold; margin-top:3px; }
-            #vaListPrintHead .sub { font-size:11px; color:#444; margin-top:2px; }
+            #vaListPrintHead, #adListPrintHead { display:block !important; text-align:center; margin-bottom:8px; }
+            #vaListPrintHead .co, #adListPrintHead .co { font-size:22px; font-weight:bold; letter-spacing:1px; }
+            #vaListPrintHead .tt, #adListPrintHead .tt { font-size:16px; font-weight:bold; margin-top:3px; }
+            #vaListPrintHead .sub, #adListPrintHead .sub { font-size:11px; color:#444; margin-top:2px; }
         }
     </style>
 </head>
@@ -259,6 +259,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         </div>
         <div class="va-tabs">
             <button class="va-tab active" data-tab="audit"><i class="fa fa-check-square-o"></i> 稽核批次</button>
+            <button class="va-tab" data-tab="newvendor"><i class="fa fa-plus-circle"></i> 新供應商評鑑</button>
             <button class="va-tab" data-tab="eval"><i class="fa fa-line-chart"></i> 定期評核（月不良/遲交率）</button>
             <button class="va-tab" data-tab="roster"><i class="fa fa-list-alt"></i> 合格供應商清冊</button>
             <button class="va-tab" data-tab="plan"><i class="fa fa-calendar"></i> 供應商稽核計劃</button>
@@ -270,7 +271,6 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <label>期別</label>
             <select id="halfSel"><option value="1">上半年(1-6月)</option><option value="2">下半年(7-12月)</option></select>
             <button class="btn-warm" id="btnPick" style="display:none;"><i class="fa fa-plus"></i> 加入稽核對象</button>
-            <button id="btnPickAdhoc" style="display:none;" title="新增供應商的評鑑，不受年度計畫鎖定限制，也不列入年度計畫表"><i class="fa fa-plus-circle"></i> 新增供應商評鑑</button>
             <button id="btnAuditor" style="display:none;"><i class="fa fa-user-circle-o"></i> 稽核員設定</button>
             <button id="btnCycle" style="display:none;"><i class="fa fa-refresh"></i> 週期設定</button>
             <button id="btnAttachSet" style="display:none;"><i class="fa fa-folder-open-o"></i> 附件路徑</button>
@@ -307,6 +307,39 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             KPI 執行率＝已完成 ÷ 本期對象數（<span class="st-pill st-dis">停用</span>廠商不列入）。
         </div>
         </div><!-- /tabAudit -->
+
+        <div id="tabNewVendor" style="display:none;">
+        <div class="va-toolbar">
+            <label>年度</label>
+            <select id="adYearSel"></select>
+            <label>期別</label>
+            <select id="adHalfSel"><option value="1">上半年(1-6月)</option><option value="2">下半年(7-12月)</option></select>
+            <button class="btn-warm" id="btnPickAdhoc" style="display:none;" title="新增供應商的評鑑，不受年度計畫鎖定限制，也不列入年度計畫表"><i class="fa fa-plus-circle"></i> 新增供應商評鑑</button>
+            <button id="adBtnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
+            <button onclick="window.print()"><i class="fa fa-print"></i> 列印清單</button>
+        </div>
+
+        <div class="va-stat" id="adStatBar">
+            <div><span class="s-num" id="adDen">—</span> <span class="s-lab">本期新增（對象）</span></div>
+            <div><span class="s-num" id="adNum">—</span> <span class="s-lab">已完成</span></div>
+            <div><span class="s-num s-rate" id="adRate">—</span> <span class="s-lab">完成度（僅供參考，不計入KPI）</span></div>
+            <div class="s-lab" id="adHint" style="margin-left:auto;"></div>
+        </div>
+
+        <div id="adListPrintHead" style="display:none;"></div>
+        <div class="va-table-wrap">
+            <table class="va-table" id="adTable">
+                <thead><tr>
+                    <th>廠商編號</th><th>廠商名稱</th><th>加工項目</th><th>新增日期</th><th>稽核狀態</th>
+                    <th>稽核日</th><th>綜合合格率</th><th>判定</th><th>稽核員</th><th>操作</th>
+                </tr></thead>
+                <tbody id="adBody"><tr><td colspan="10" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+            </table>
+        </div>
+        <div class="va-remind" style="font-size:11px;color:#8a6d45;margin-top:4px;">
+            用於全新廠商的首次評鑑等臨時性稽核需求：按「新增供應商評鑑」挑選廠商後直接加入本期（不受年度計畫鎖定限制、不設預定稽核月份），不會出現在「供應商稽核計劃」年度計畫表，也<b>不計入 KPI 廠商稽核按時執行率</b>；其餘登錄、簽核、記錄表、列印流程與「稽核批次」完全相同。若廠商尚未建檔，請先至主檔管理新增該廠商。
+        </div>
+        </div><!-- /tabNewVendor -->
 
         <div id="tabEval" style="display:none;">
             <div class="va-toolbar">
@@ -412,7 +445,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-head"><span id="pkTitle">加入稽核對象</span><span class="m-close" onclick="closeMask('pkMask')">✕</span></div>
     <div class="m-body">
         <div id="pkAdhocNote" style="display:none;background:#FFF7E8;border:1px solid #E8D5B5;border-radius:6px;padding:6px 10px;color:#8A5A2B;margin-bottom:8px;">
-            <b>新增供應商評鑑</b>：本次新增的稽核對象<b>不受年度計畫鎖定限制、也不會列入「供應商稽核計劃」年度計畫表</b>，其餘登錄、簽核、記錄表、列印皆與一般稽核對象完全相同。若廠商不在清單中，請先至主檔管理新增該廠商。
+            <b>新增供應商評鑑</b>：本次新增的稽核對象會加入「新供應商評鑑」獨立分頁，<b>不受年度計畫鎖定限制、不會列入「供應商稽核計劃」年度計畫表，也不計入 KPI「廠商稽核按時執行率」</b>，其餘登錄、簽核、記錄表、列印皆與一般稽核對象完全相同。若廠商不在清單中，請先至主檔管理新增該廠商。
         </div>
         <div class="pk-filter">
             <label style="margin:0;font-size:12px;color:#5b3a1e;">大類</label>
@@ -837,10 +870,16 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <ul>
             <li><b>模型</b>：每期（上半年 1–6 月／下半年 7–12 月）挑一批廠商稽核。KPI 執行率＝已完成 ÷ 本期對象數。</li>
             <li><b>加入稽核對象</b>：依大類／加工項目篩選後多選加入，或隨機抽 N 家（自納管廠商）；可指定「預定稽核月份」。</li>
-            <li><b>新增供應商評鑑</b>（工具列另一顆按鈕）：用於<b>全新廠商的首次評鑑</b>等臨時性稽核需求——挑選後直接加入本期對象，<b>不受年度計畫鎖定限制（即使該年度計畫已送出鎖定仍可新增）、也不設預定稽核月份、不會出現在「供應商稽核計劃」年度計畫表</b>；加入之後的登錄、簽核、記錄表、列印、KPI 計入等流程與一般稽核對象完全相同。若廠商尚未建檔，請先至主檔管理新增該廠商。</li>
             <li><b>登錄</b>：填「供應商評鑑稽核表」簡版 15 項，每項自評分＋稽核分各 0~7；系統自動算各類與綜合合格率（自評×0.3＋稽核×0.7），<b>≥75% 判合格</b>。</li>
             <li><b>記錄表</b>（已稽核者）：由 15 項換算 5 大類合格率，含<b>雷達圖</b>；可「列印記錄表」或「一次印全部文件」（查核表＋記錄表為不同文件，各自跳出一個列印視窗；記錄表若有上傳佐證附件會一併接續印出，圖片與 PDF 可直接預覽，其他類型僅顯示檔名）；可上傳供應商簽名回傳掃描檔。</li>
             <li><b>停用廠商</b>（master_data 客戶/廠商設為停用者）：灰底、不可加入、不列入 KPI。</li>
+        </ul>
+
+        <h4>一之一、新供應商評鑑（獨立分頁）</h4>
+        <ul>
+            <li>與「稽核批次」是<b>完全獨立的分頁</b>，用於<b>全新廠商的首次評鑑</b>等臨時性稽核需求，一樣以<b>年度／上半年／下半年</b>瀏覽，但資料與計畫對象分開存放、分開顯示（不會混在稽核批次的主表格裡）。</li>
+            <li>按「新增供應商評鑑」挑選廠商（大類／加工項目篩選後多選，或打字搜尋）後直接加入本期，<b>不受年度計畫鎖定限制</b>（即使該年度／範疇的計畫已送出鎖定仍可新增）、<b>一律不設預定稽核月份</b>，因此<b>不會出現在「供應商稽核計劃」年度計畫表，也不計入 KPI「廠商稽核按時執行率」</b>。若廠商尚未建檔，請先至主檔管理新增該廠商。</li>
+            <li>加入之後的<b>登錄、簽核、記錄表、列印</b>等操作與「稽核批次」完全相同（共用同一套稽核評鑑表單與流程），本分頁上方的完成度只供自行追蹤參考，不是官方 KPI 指標。</li>
         </ul>
 
         <h4>二、定期評核（月不良／遲交率，ERP 自動算）</h4>
@@ -912,7 +951,7 @@ $(document).ready(function(){
 });
 
 var API = '../../src/store/VendorAudit_API.php';
-var META = null, TARGETS = [], PERMS = null, POOL = [], ROUND_YEAR = null, CUR_CFG = null, CUR_PROD_TYPE = null, CUR_REC = null;
+var META = null, TARGETS = [], AD_TARGETS = [], PERMS = null, POOL = [], ROUND_YEAR = null, CUR_CFG = null, CUR_PROD_TYPE = null, CUR_REC = null;
 /** 目前操作範疇(外包加工/採購)：生管/採購同頁面共用，資料各自獨立(2026-08-17)。
  *  一律用 ajaxPrefilter 幫本頁所有 API 請求自動帶上 scope，不必逐一改每個 $.getJSON/$.post 呼叫點。 */
 var CUR_SCOPE = localStorage.getItem('va_cur_scope') === 'purchase' ? 'purchase' : 'outsource';
@@ -938,6 +977,7 @@ function setScope(s){
 function reloadCurrentTab(){
     var t = $('.va-tab.active').data('tab');
     if (t === 'audit') loadRound();
+    else if (t === 'newvendor') loadAdRound();
     else if (t === 'eval') { loadEvVendors($('#evKw').val()||''); $('#evSingle,#evCards,#evPager').hide(); $('#evEmpty').hide(); }
     else if (t === 'roster') loadRoster();
     else if (t === 'plan') loadPlan();
@@ -984,10 +1024,10 @@ function loadMeta(cb){
         }
         META = m; PERMS = m.perms;
         window.__ownCompany = m.company_name;
-        var $y = $('#yearSel').empty(), cy = m.cur_year;
-        for (var y=cy; y>=cy-5; y--) $y.append('<option value="'+y+'">'+y+'</option>');
-        $y.val(cy);
-        $('#halfSel').val(m.cur_half);
+        var $y = $('#yearSel').empty(), $ay = $('#adYearSel').empty(), cy = m.cur_year;
+        for (var y=cy; y>=cy-5; y--) { $y.append('<option value="'+y+'">'+y+'</option>'); $ay.append('<option value="'+y+'">'+y+'</option>'); }
+        $y.val(cy); $ay.val(cy);
+        $('#halfSel').val(m.cur_half); $('#adHalfSel').val(m.cur_half);
         var opt = '<option value="">全部</option>';
         m.main_categories.forEach(function(c){ opt += '<option value="'+c.main_cat_id+'">'+esc(c.main_cat_name)+'</option>'; });
         $('#pkMain').html(opt);
@@ -1075,13 +1115,81 @@ function renderTargets(){
     $('#vaBody').html(html || '<tr><td colspan="10" style="padding:16px;color:#8a6d45;">本期尚無稽核對象，請按「加入稽核對象」挑選</td></tr>');
 }
 
+/* ---------- 新供應商評鑑（獨立分頁，is_adhoc=1，不受計畫鎖定、不列入年度計畫表、不計入KPI） ---------- */
+function loadAdRound(){
+    NProgress.start();
+    $.getJSON(API, {action:'round', year:$('#adYearSel').val(), half:$('#adHalfSel').val(), adhoc:1}, function(res){
+        NProgress.done();
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        AD_TARGETS = res.targets; PERMS = res.perms;
+        renderAdStat(res); renderAdTargets(); renderAdPrintHead(res.year, res.half);
+    }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function renderAdPrintHead(year, half){
+    $('#adListPrintHead').html('<div class="co">'+esc(META.company_name||'')+'</div>'
+        + '<div class="tt">新供應商評鑑清單</div>'
+        + '<div class="sub">'+year+' 年　'+(half===1?'上半年':'下半年')+'（'+scopeLabel(CUR_SCOPE)+'）</div>');
+}
+function renderAdStat(res){
+    var lab = res.year+' '+(res.half===1?'上半年':'下半年');
+    $('#adDen').text(res.stat.den); $('#adNum').text(res.stat.num);
+    var $r = $('#adRate');
+    if (res.stat.value === null){ $r.text('—'); $('#adHint').text(lab+(res.round_exists?'：尚無新供應商評鑑對象':'：本期尚未建立')); }
+    else { var v = Math.round(res.stat.value*10)/10; $r.text(v+'%'); $('#adHint').text(lab+'：'+res.stat.num+' / '+res.stat.den+' 已完成'); }
+}
+function renderAdTargets(){
+    var html = '';
+    AD_TARGETS.forEach(function(t){
+        var done = !!t.audit_date;
+        var stat = t.disabled ? '<span class="st-pill st-dis">停用</span>'
+                 : (done ? signStatusPill(t.sign_status) : '<span class="st-pill st-todo">未稽核</span>');
+        html += '<tr'+(t.disabled?' class="dis"':'')+'>';
+        html += '<td>'+esc(t.maker_id_no)+'</td>';
+        html += '<td class="t-left"><b>'+esc(t.maker_id||'')+'</b></td>';
+        html += '<td class="t-left">'+esc(t.main_cat_name||'—')+'</td>';
+        html += '<td>'+(fmtDate(t.added_at)||'—')+'</td>';
+        html += '<td>'+stat+'</td>';
+        html += '<td>'+(fmtDate(t.audit_date)||'—')+'</td>';
+        html += '<td>'+(t.overall_rate==null?'—':t.overall_rate+'%')+'</td>';
+        html += '<td>'+(t.judge?(t.judge==='pass'?'<span class="af-judge-pass">合格</span>':'<span class="af-judge-fail">不合格</span>'):'—')+'</td>';
+        html += '<td>'+esc(t.auditor||'—')+'</td>';
+        html += '<td>';
+        if (PERMS.canEdit) html += '<span class="va-op" onclick="openRec('+t.target_id+')"><i class="fa fa-pencil"></i>登錄</span>';
+        if (t.sign_status==='pending') html += '<span class="va-op" style="color:#DD8A38;" onclick="openSignMask('+t.target_id+')"><i class="fa fa-check-square-o"></i>簽核</span>';
+        if (t.audit_date && t.sign_status!=='draft') html += '<span class="va-op" onclick="openRecordSheet('+t.target_id+')"><i class="fa fa-file-text-o"></i>記錄表</span>';
+        html += '<span class="va-op" onclick="openHis(\''+esc(t.maker_id_no)+'\')"><i class="fa fa-history"></i>歷史</span>';
+        if (PERMS.canEdit) html += '<span class="va-op" style="color:#DD5138;" onclick="removeTarget('+t.target_id+')"><i class="fa fa-times"></i>移除</span>';
+        html += '</td></tr>';
+    });
+    $('#adBody').html(html || '<tr><td colspan="10" style="padding:16px;color:#8a6d45;">本期尚無新供應商評鑑對象，請按「新增供應商評鑑」挑選</td></tr>');
+}
+$('#adBtnCsv').on('click', function(){
+    var rows = [['廠商編號','廠商名稱','加工項目','新增日期','稽核狀態','稽核日','綜合合格率','判定','稽核員','報告編號','備註']];
+    AD_TARGETS.forEach(function(t){
+        rows.push([t.maker_id_no, t.maker_id||'', t.main_cat_name||'', fmtDate(t.added_at),
+            t.disabled?'停用':(t.audit_date?'已完成':'未稽核'), fmtDate(t.audit_date),
+            t.overall_rate==null?'':t.overall_rate+'%', t.judge?(t.judge==='pass'?'合格':'不合格'):'',
+            t.auditor||'', t.report_no||'', t.note||'']);
+    });
+    var csv = '﻿' + rows.map(function(l){
+        return l.map(function(v){ return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'; }).join(',');
+    }).join('\r\n');
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8;'}));
+    a.download = '新供應商評鑑_'+$('#adYearSel').val()+'_H'+$('#adHalfSel').val()+'.csv';
+    a.click();
+});
+
 $('#yearSel,#halfSel').on('change', loadRound);
+$('#adYearSel,#adHalfSel').on('change', loadAdRound);
 
 /* ---------- 廠商池挑選 ---------- */
-var PK_ADHOC = false; // true＝「新增供應商評鑑」模式：不受年度計畫鎖定限制、強制不設預定月份、不列入年度計畫表
+var PK_ADHOC = false; // true＝「新增供應商評鑑」模式：不受年度計畫鎖定限制、強制不設預定月份、不列入年度計畫表(改讀/寫adYearSel／adHalfSel)
+function pkYear(){ return PK_ADHOC ? $('#adYearSel').val() : $('#yearSel').val(); }
+function pkHalf(){ return PK_ADHOC ? $('#adHalfSel').val() : $('#halfSel').val(); }
 $('#btnPick').on('click', function(){
     PK_ADHOC = false;
-    $('#pkTitle').text('加入稽核對象（'+$('#yearSel').val()+' '+($('#halfSel').val()==1?'上半年':'下半年')+'）');
+    $('#pkTitle').text('加入稽核對象（'+pkYear()+' '+(pkHalf()==1?'上半年':'下半年')+'）');
     $('#pkAdhocNote').hide();
     $('#pkMonthGrp,#pkRandGrp').show();
     $('#pkBody').html('<tr><td colspan="5" style="padding:14px;color:#8a6d45;">請設定條件後查詢</td></tr>');
@@ -1091,7 +1199,7 @@ $('#btnPick').on('click', function(){
 });
 $('#btnPickAdhoc').on('click', function(){
     PK_ADHOC = true;
-    $('#pkTitle').text('新增供應商評鑑（不列入年度計畫）');
+    $('#pkTitle').text('新增供應商評鑑（'+pkYear()+' '+(pkHalf()==1?'上半年':'下半年')+'，不列入年度計畫）');
     $('#pkAdhocNote').show();
     $('#pkMonthGrp,#pkRandGrp').hide();
     $('#pkBody').html('<tr><td colspan="5" style="padding:14px;color:#8a6d45;">請設定條件後查詢</td></tr>');
@@ -1113,7 +1221,7 @@ $('#pkAll').on('change', function(){ $('#pkBody input.pk-ck').prop('checked', th
 
 function loadPool(){
     NProgress.start();
-    $.getJSON(API, {action:'pool', year:$('#yearSel').val(), half:$('#halfSel').val(),
+    $.getJSON(API, {action:'pool', year:pkYear(), half:pkHalf(),
         main_cat_id:$('#pkMain').val()||0, sub_cat_id:$('#pkSub').val()||0,
         kw:$('#pkKw').val(), managed_only:$('#pkManagedOnly').is(':checked')?1:0}, function(res){
         NProgress.done();
@@ -1138,20 +1246,22 @@ function pkChecked(){ return $('#pkBody input.pk-ck:checked').map(function(){ re
 function addSelected(){
     var ids = pkChecked();
     if (!ids.length){ alert('請勾選要加入的廠商'); return; }
-    $.post(API, {action:'add_targets', year:$('#yearSel').val(), half:$('#halfSel').val(), maker_ids:ids.join(','),
+    $.post(API, {action:'add_targets', year:pkYear(), half:pkHalf(), maker_ids:ids.join(','),
         plan_month: PK_ADHOC ? '' : $('#pkMonth').val(), adhoc: PK_ADHOC?1:0},
     function(res){
         if (!res.ok){ alert(res.error||'加入失敗'); return; }
-        alert('已加入 '+res.added+' 家'+(PK_ADHOC?'（新供應商評鑑，不列入年度計畫）':'')); loadPool(); loadRound();
+        alert('已加入 '+res.added+' 家'+(PK_ADHOC?'（新供應商評鑑，不列入年度計畫）':'')); loadPool();
+        if (PK_ADHOC) loadAdRound(); else loadRound();
     }, 'json').fail(function(x){ alert('加入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 function randomDraw(){
     var n = parseInt($('#pkRandN').val(),10);
     if (!n || n<1){ alert('請輸入抽取家數'); return; }
-    $.post(API, {action:'random_targets', year:$('#yearSel').val(), half:$('#halfSel').val(), n:n,
+    $.post(API, {action:'random_targets', year:pkYear(), half:pkHalf(), n:n,
         main_cat_id:$('#pkMain').val()||0, sub_cat_id:$('#pkSub').val()||0, plan_month:$('#pkMonth').val()}, function(res){
         if (!res.ok){ alert(res.error||'抽取失敗'); return; }
-        alert('已隨機加入 '+res.added+' 家'+(res.note?'\n'+res.note:'')); loadPool(); loadRound();
+        alert('已隨機加入 '+res.added+' 家'+(res.note?'\n'+res.note:'')); loadPool();
+        if (PK_ADHOC) loadAdRound(); else loadRound();
     }, 'json').fail(function(x){ alert('抽取失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 function bulkManaged(v){
@@ -1906,7 +2016,9 @@ $('#btnCsv').on('click', function(){
 $('.va-tab').on('click', function(){
     $('.va-tab').removeClass('active'); $(this).addClass('active');
     var t=$(this).data('tab');
-    $('#tabAudit').toggle(t==='audit'); $('#tabEval').toggle(t==='eval'); $('#tabRoster').toggle(t==='roster'); $('#tabPlan').toggle(t==='plan');
+    $('#tabAudit').toggle(t==='audit'); $('#tabNewVendor').toggle(t==='newvendor');
+    $('#tabEval').toggle(t==='eval'); $('#tabRoster').toggle(t==='roster'); $('#tabPlan').toggle(t==='plan');
+    if (t==='newvendor') loadAdRound();
     if (t==='eval') loadEvVendors($('#evKw').val()||'');   // 切入時重抓納管廠商(納管可能剛變動)
     if (t==='roster') loadRoster();
     if (t==='plan') loadPlan();
