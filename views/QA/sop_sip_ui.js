@@ -2714,6 +2714,7 @@ $('#btnSetting').on('click', function () {
               + '<div class="ss-tab" data-set="owner">擔當者與檢驗方法</div>'
               + '<div class="ss-tab" data-set="tpl">檢驗項目預設值</div>'
               + '<div class="ss-tab" data-set="msop">機種步驟範本</div>'
+              + '<div class="ss-tab" data-set="kvopt">參數選單</div>'
               + '<div class="ss-tab" data-set="list">頻率／型式／注意事項</div></div>'
               + '<div id="setPane"></div>';
         $('#setBody').html(h);
@@ -2731,6 +2732,7 @@ function setPane(which) {
     if (which === 'owner') return setPaneOwner();
     if (which === 'list') return setPaneList();
     if (which === 'msop') return setPaneMsop('');
+    if (which === 'kvopt') return setPaneKvOpt(KVOPT.model || '');
     return setPaneTpl(0);
 }
 
@@ -3265,6 +3267,10 @@ $('#setSave').on('click', function () {
         }
         p.sip_notice_default = $('#sipNotice').val() || '';
     }
+    // 參數選單這一頁（一次只顯示一個機種，collect 會把其他機種原本的設定原樣帶回去）
+    if ($('#kvoptPane').length && KVOPT.model) {
+        p.kv_opt_cfg = JSON.stringify(kvOptCollect());
+    }
     // 頻率／型式／注意事項範本這一頁
     if ($('#stFreq').length) {
         ntCollect();
@@ -3343,31 +3349,34 @@ function kvSlotHtml(p, ro) {
     return h + '</span>';
 }
 
-function kvCellHtml(p, ro, keyRo) {
+function kvCellHtml(p, ro, keyRo, stepName) {
     p = p || { k: '', v: '', p: '', slots: [] };
     if (p.st) return kvSpanCell(p, ro);        // 跨齒厚／跨銷徑那一格走自己的樣子
     var slotH = kvSlotHtml(p, ro);
+    // 砂輪／修砂／研磨參數：數值旁給一顆「▾」挑同機種用過的常用值（仍可自己打）
+    var pick = (!ro && gsIsOptStep(stepName))
+        ? ' <button class="btn btn-xs btn-warm-o kv-pick" title="挑常用值（同機種用過的＋管理員設定的）">▾</button>' : '';
     var h = '<td class="kvk"><input class="kv-k" value="' + esc(p.k || '') + '" data-eg-hint="參數名稱"'
           + (keyRo || ro ? ' readonly' : '') + (keyRo ? ' title="標題由範本帶入；要改請按右上角的鎖頭"' : '') + '>'
           + '<input type="hidden" class="kv-p" value="' + esc(p.p || '') + '"></td>';
     h += '<td class="kvv">' + (slotH !== null
             ? slotH
-            : '<input class="kv-v" value="' + esc(p.v || '') + '" data-eg-hint="數值"' + ro + '>') + '</td>';
+            : '<input class="kv-v" value="' + esc(p.v || '') + '" data-eg-hint="數值"' + ro + '>') + pick + '</td>';
     return h;
 }
 
-function kvRowHtml(pairs, ro, dis, keyRo) {
+function kvRowHtml(pairs, ro, dis, keyRo, stepName) {
     var n = ssKvMaxCols(), h = '<tr class="kvr">';
-    for (var i = 0; i < n; i++) h += kvCellHtml(pairs[i], ro, keyRo);
+    for (var i = 0; i < n; i++) h += kvCellHtml(pairs[i], ro, keyRo, stepName);
     h += (CUR.can_edit ? '<td class="kvx"><button class="btn btn-xs kv-del" title="刪除這一列參數"' + dis + '>×</button></td>' : '')
        + '</tr>';
     return h;
 }
 
-function kvTableHtml(kv, ro, dis, keyRo) {
-    var h = '<table class="kvgrid"><tbody>';
+function kvTableHtml(kv, ro, dis, keyRo, stepName) {
+    var h = '<table class="kvgrid" data-step="' + esc(stepName || '') + '"><tbody>';
     var rows = (kv && kv.length) ? kv : (CUR.can_edit ? [[]] : []);
-    $.each(rows, function (i, r) { h += kvRowHtml(r || [], ro, dis, keyRo); });
+    $.each(rows, function (i, r) { h += kvRowHtml(r || [], ro, dis, keyRo, stepName); });
     h += '</tbody></table>';
     if (CUR.can_edit && !keyRo) h += '<button class="btn btn-xs btn-warm-o kv-add" style="margin-top:3px;">＋參數列</button>';
     return h;
@@ -3380,7 +3389,7 @@ function softRowHtml(i, s, ro, dis) {
         + dragCell(i, !!CUR.can_edit)
         + '<td><input class="g-name" value="' + esc(s.step_name || '') + '" data-eg-hint="例如 工件規格"'
         + (ssKeyLocked() ? ' readonly title="標題由範本帶入；要改請按右上角的鎖頭"' : ro) + '></td>'
-        + '<td class="g-kvcell">' + kvTableHtml(s.kv || [], ro, dis, ssKeyLocked()) + '</td>'
+        + '<td class="g-kvcell">' + kvTableHtml(s.kv || [], ro, dis, ssKeyLocked(), s.step_name || '') + '</td>'
         + '<td><textarea class="g-note" rows="3"' + ro + '>' + esc(s.note || '') + '</textarea></td>'
         + (CUR.can_edit ? '<td class="c"><button class="btn btn-xs g-del"' + dis + '>×</button></td>' : '')
         + '</tr>';
@@ -3485,7 +3494,7 @@ $(document).on('click', '.gsop-grid .g-del', function () {
 });
 $(document).on('click', '.kv-add', function () {
     var $box = $(this).prev('.kvgrid');
-    $box.find('tbody').append(kvRowHtml([], '', ''));
+    $box.find('tbody').append(kvRowHtml([], '', '', ssKeyLocked(), $box.find('table.kvgrid').data('step') || ''));
     $box.find('tbody tr').last().find('input').first().focus();
 });
 $(document).on('click', '.kv-del', function () {
@@ -3540,9 +3549,10 @@ function collectSoft() {
     var out = [];
     $('#tblSoft > tbody > tr').each(function () {
         var $t = $(this);
-        out.push({ step_name: $t.find('.g-name').val() || '',
-                   kv: collectKv($t.find('.g-kvcell')),
-                   note: $t.find('.g-note').val() || '' });
+        var nm = $t.find('.g-name').val() || '';
+        var kv = collectKv($t.find('.g-kvcell'));
+        if (gsIsNaStep(nm)) kv = gsKvFillNa(kv);     // 齒型/導程修整：沒填的一律帶 NA
+        out.push({ step_name: nm, kv: kv, note: $t.find('.g-note').val() || '' });
     });
     return out;
 }
@@ -3673,7 +3683,8 @@ function setPaneMsop(model) {
         var h = '<div class="note-box">這裡維護的是<b>標準作業流程 SOP</b>（料號 × 機台）的步驟範本。'
               + '建立文件時會依綁定的機台型號自動帶入，之後在文件裡改不會回頭影響範本，'
               + '<b>改這裡也不會動到已經建立的文件</b>。'
-              + '軟體步驟只需要填「參數名稱」，數值留給現場在各自的文件裡填。</div>';
+              + '軟體步驟的參數<b>可以連數值一起填＝這台機的預設值</b>，建立文件綁定機台時自動帶入，'
+              + '現場仍可逐份修改（使用者 2026-10-01）；不想給預設值就只填參數名稱。</div>';
         h += '<div class="frm" style="margin-bottom:10px;"><label>機種型號</label><div class="wide">'
            + '<select id="msModel" data-eg-filter="輸入型號篩選…"><option value="">（請選機種型號）</option>';
         var seen = {};
@@ -4393,3 +4404,184 @@ $(document).on('change', '#tblItems .i-mth', function () {
 });
 /* 軟體步驟的跨齒數／上下限改了也要同步過去（只補空的，不覆蓋手改過的） */
 $(document).on('change', '.kv-sn, .kv-v1, .kv-v2', function () { gsSpanSyncAll(0); });
+
+/* ══════════ 齒型/導程修整：沒填的自動帶 NA ══════════
+   使用者 2026-10-01。紙本上這一段不用調整時寫的就是 NA，留白會讓現場分不出
+   「不用做」還是「忘了填」。判定與後端 ss_is_na_step()／ss_kv_fill_na() 同一套規則。 */
+function gsIsNaStep(name) {
+    var x = $.trim(String(name || '')).replace(/／/g, '/').replace(/\s/g, '');
+    return x === '齒型/導程修整' || x === '齒型/導程修正';
+}
+/** 哪些參數名稱要補 NA＝這個機種的範本在這一段定義的那幾個（後端 ss_na_keys() 算好送來） */
+function gsNaKeys() { return (CUR && CUR.na_keys) || []; }
+function gsIsNaKey(k) { return $.inArray($.trim(String(k || '')), gsNaKeys()) >= 0; }
+function gsKvFillNa(kv) {
+    $.each(kv || [], function (ri, row) {
+        $.each(row || [], function (ci, p) {
+            if (!p || !$.trim(p.k || '') || p.st) return;
+            if (!gsIsNaKey(p.k)) return;      // 現場自己加的註記格留白就留白
+            if (p.slots && p.slots.length) {
+                for (var i = 0; i < p.slots.length; i++) if (!$.trim(p.slots[i] || '')) p.slots[i] = 'NA';
+                return;
+            }
+            if (!$.trim(p.v || '')) p.v = 'NA';
+        });
+    });
+    return kv;
+}
+/* 離開欄位當下就補上，使用者看得到（不是存檔後才默默變成 NA） */
+$(document).on('blur', '#tblSoft .kv-v, #tblSoft .kv-s', function () {
+    if (!CUR || !CUR.can_edit) return;
+    var $in = $(this), $tr = $in.closest('#tblSoft > tbody > tr');
+    if (!$tr.length || !gsIsNaStep($tr.find('.g-name').val())) return;
+    var $k = $in.closest('td.kvv').prev('td.kvk');
+    var kname = $.trim($k.find('.kv-k').val() || '');
+    if (kname === '' || !gsIsNaKey(kname)) return;   // 只補範本帶進來的那幾個參數
+    if (!$.trim($in.val() || '')) { $in.val('NA'); DIRTY = true; }
+});
+
+/* ══════════ 砂輪／修砂／研磨參數：常用值選單 ══════════
+   使用者 2026-10-01：「要自動把此機台設定過的都存成選單，管理員可以手動增加、
+   也可以設定自動收集的哪一項不顯示，亦可設定固定提供選擇的項目」。
+   **選項是後端即時從同機種既有文件算出來的**（不是存一份清單），所以別的文件存了新值，
+   這裡下次開就看得到；管理員的增刪在 設定 →「參數選單」。 */
+function gsIsOptStep(name) {
+    var list = (CUR && CUR.kv_opt_steps) || ['砂輪參數', '修砂參數', '研磨參數'];
+    return $.inArray($.trim(String(name || '')), list) >= 0;
+}
+function gsKvOptions(step, key) {
+    var o = (CUR && CUR.kv_options) || {};
+    return ((o[$.trim(step || '')] || {})[$.trim(key || '')]) || [];
+}
+$(document).on('click', '.kv-pick', function (e) {
+    e.preventDefault();
+    var $btn = $(this), $v = $btn.closest('td.kvv'), $k = $v.prev('td.kvk');
+    var step = $btn.closest('table.kvgrid').data('step') || '';
+    var $tr = $btn.closest('#tblSoft > tbody > tr');
+    if ($tr.length) step = $tr.find('.g-name').val() || step;    // 步驟改過名以畫面上的為準
+    var key = $k.find('.kv-k').val() || '';
+    var opts = gsKvOptions(step, key);
+    $('.kvopts').remove();
+    var h = '<div class="kvopts"><div class="kvopts-h">' + esc(step) + '　<b>' + esc(key || '（未命名）') + '</b></div>';
+    if (!opts.length) {
+        h += '<div class="kvopts-e">這個參數還沒有常用值。<br>同機種的文件存過之後會自動出現，'
+           + '也可以在「設定 →參數選單」自行新增。</div>';
+    } else {
+        $.each(opts, function (i, v) { h += '<div class="kvopt" data-v="' + esc(v) + '">' + esc(v) + '</div>'; });
+    }
+    h += '</div>';
+    var $box = $(h).appendTo('body');
+    var r = $btn[0].getBoundingClientRect();
+    var top = r.bottom + 4, left = Math.max(8, Math.min(r.left, $(window).width() - $box.outerWidth() - 8));
+    if (top + $box.outerHeight() > $(window).height() - 8) top = Math.max(8, r.top - $box.outerHeight() - 4);
+    $box.css({ top: top + 'px', left: left + 'px' }).data('cell', $v);
+});
+$(document).on('click', '.kvopt', function () {
+    var v = String($(this).data('v') || '');
+    var $v = $('.kvopts').data('cell');
+    if ($v && $v.length) {
+        var $slots = $v.find('.kv-s');
+        if ($slots.length) {
+            // 有填空樣板：把選到的完整字串依樣板拆回各空格（拆不開就整串放第一格）
+            var vals = slotExtract($v.prev('td.kvk').find('.kv-p').val() || '', v);
+            $slots.each(function (i) { $(this).val(vals && vals.length ? (vals[i] || '') : (i === 0 ? v : '')); });
+        } else {
+            $v.find('.kv-v').val(v);
+        }
+        DIRTY = true;
+    }
+    $('.kvopts').remove();
+});
+$(document).on('mousedown', function (e) {
+    if (!$(e.target).closest('.kvopts, .kv-pick').length) $('.kvopts').remove();
+});
+
+/* ══════════ 設定頁：參數選單 ══════════ */
+var KVOPT = { model: '', auto: {}, cfg: {} };
+function setPaneKvOpt(model) {
+    var models = SET.kv_opt_models || [];
+    var h = '<div class="note-box">砂輪參數／修砂參數／研磨參數的「數值」在填寫時會給常用值選單。'
+          + '<b>清單是即時從同機種既有文件算出來的</b>（別的文件存過的值這裡就會出現），'
+          + '這一頁只負責「哪幾項不要出現」與「額外固定提供哪幾項」。<br>'
+          + '機台<b>預設值</b>是另一件事——那是「機種步驟範本」裡填的值，建立文件綁定機台時會自動帶入。</div>';
+    h += '<div class="frm"><label>機種</label><div class="wide">'
+       + '<select id="kvoptModel" data-eg-filter="輸入機種篩選…"><option value="">（請選擇機種）</option>';
+    var seenM = {};
+    $.each(models, function (i, r) {
+        var m = (r && r.machine_model !== undefined) ? r.machine_model : r;   // ss_msop_models() 回的是列
+        if (!m || seenM[m]) return; seenM[m] = 1;
+        h += '<option value="' + esc(m) + '"' + (String(m) === String(model) ? ' selected' : '') + '>' + esc(m) + '</option>';
+    });
+    h += '</select></div></div><div id="kvoptPane"></div>';
+    $('#setPane').html(h);
+    if (model) kvOptLoad(model);
+}
+function kvOptLoad(model) {
+    api('kv_opt_auto', { model: model }, function (res) {
+        KVOPT = { model: model, auto: res.auto || {}, cfg: res.cfg || {} };
+        kvOptRender();
+    });
+}
+function kvOptRender() {
+    var steps = SET.kv_opt_steps || ['砂輪參數', '修砂參數', '研磨參數'];
+    var h = '';
+    $.each(steps, function (i, st) {
+        var keys = KVOPT.auto[st] || {};
+        var cfgS = KVOPT.cfg[st] || {};
+        // 自動收集不到、但管理員自己加過的參數名稱也要列出來（不然加了就再也找不到）
+        var names = [];
+        $.each(keys, function (k) { names.push(k); });
+        $.each(cfgS, function (k) { if ($.inArray(k, names) < 0) names.push(k); });
+        h += '<div class="sec"><h5>' + esc(st) + '</h5>';
+        if (!names.length) {
+            h += '<div class="muted-help">這個機種還沒有任何文件填過這一段的參數。</div></div>';
+            return;
+        }
+        h += '<table class="grid"><thead><tr><th style="width:140px;">參數名稱</th>'
+           + '<th>自動收集到的值（取消勾選＝不出現在選單）</th>'
+           + '<th style="width:260px;">固定提供的值（一行一個）</th></tr></thead><tbody>';
+        $.each(names, function (j, k) {
+            var vs = keys[k] || {}, one = cfgS[k] || {}, hide = one.hide || [], add = one.add || [];
+            h += '<tr data-st="' + esc(st) + '" data-k="' + esc(k) + '"><td>' + esc(k) + '</td><td><div class="pickbox" style="max-height:150px;">';
+            var n = 0;
+            $.each(vs, function (v, c) {
+                n++;
+                h += '<label><input type="checkbox" class="kvo-on" data-v="' + esc(v) + '"'
+                   + ($.inArray(String(v), hide.map(String)) < 0 ? ' checked' : '') + '> '
+                   + esc(v) + ' <span class="muted-help">用過 ' + num(c) + ' 次</span></label>';
+            });
+            if (!n) h += '<div class="muted-help">（沒有自動收集到的值）</div>';
+            h += '</div></td><td><textarea class="kvo-add" rows="3" data-eg-hint="一行一個，例如 單趟0.03mm/8次/轉速110rpm">'
+               + esc(add.join('\n')) + '</textarea></td></tr>';
+        });
+        h += '</tbody></table></div>';
+    });
+    $('#kvoptPane').html(h);
+}
+function kvOptCollect() {
+    var cfg = {}, model = KVOPT.model;
+    if (!model) return cfg;
+    $('#kvoptPane tr[data-k]').each(function () {
+        var $t = $(this), st = $t.data('st'), k = String($t.data('k'));
+        var hide = [], add = [];
+        $t.find('.kvo-on').each(function () {
+            if (!$(this).is(':checked')) hide.push(String($(this).data('v')));
+        });
+        $.each(($t.find('.kvo-add').val() || '').split('\n'), function (i, x) {
+            x = $.trim(x); if (x) add.push(x);
+        });
+        if (hide.length || add.length) {
+            cfg[model] = cfg[model] || {};
+            cfg[model][st] = cfg[model][st] || {};
+            cfg[model][st][k] = { hide: hide, add: add };
+        }
+    });
+    // 其他機種原本的設定不可以被這次存檔洗掉（這一頁一次只顯示一個機種）
+    $.each(SET.kv_opt_cfg || {}, function (m, v) { if (String(m) !== String(model)) cfg[m] = v; });
+    return cfg;
+}
+$(document).on('change', '#kvoptModel', function () {
+    var m = $(this).val() || '';
+    KVOPT = { model: m, auto: {}, cfg: {} };
+    if (m) kvOptLoad(m); else $('#kvoptPane').html('');
+});

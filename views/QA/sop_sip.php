@@ -207,6 +207,16 @@ foreach ($KIND_SCOPES_NEW as $k => $ss) foreach ($ss as $sc) {
             border-bottom:1px dashed var(--amber-d); align-self:flex-start; }
         button.kv-st:hover, button.kv-vm:hover { color:#B4560A; }
         button.kv-st[disabled], button.kv-vm[disabled] { cursor:default; border-bottom:0; color:var(--ink); }
+        /* 砂輪／修砂／研磨參數的「常用值」選單（用 fixed 定位，跳窗裡的捲動容器才裁不到它） */
+        button.kv-pick { padding:0 5px; line-height:1.5; margin-left:2px; }
+        .kvopts { position:fixed; z-index:11000; min-width:190px; max-width:340px; max-height:300px;
+            overflow:auto; background:#fff; border:1px solid var(--amber-d); border-radius:4px;
+            box-shadow:0 6px 18px rgba(0,0,0,.18); }
+        .kvopts-h { position:sticky; top:0; padding:4px 9px; background:var(--sand);
+            border-bottom:1px solid var(--line); font-size:12px; color:var(--ink); }
+        .kvopt { padding:5px 10px; font-size:12.5px; cursor:pointer; white-space:nowrap; }
+        .kvopt:hover { background:var(--amber); }
+        .kvopts-e { padding:8px 10px; font-size:12px; color:#8A6A45; line-height:1.6; }
         /* 根徑建議值（算得出來才出現；點一下才填，絕不自動覆蓋已經有的值） */
         .dfhint { font-size:11px; color:#8A6A45; margin-top:2px; }
         .dfhint b { color:#B4560A; cursor:pointer; text-decoration:underline; }
@@ -657,6 +667,20 @@ foreach ($KIND_SCOPES_NEW as $k => $ss) foreach ($ss as $sc) {
                 <b>工程符號</b>（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×，與批圖編輯器同一份）
                 ＋<b>幾何公差</b>（真圓度、圓柱度、平坦度…，直接取自線上檢驗的
                 「幾何公差與特殊項目設定」主檔），兩邊重複的只會出現一次。</li>
+        </ul>
+        <h4>標準作業流程 SOP 的軟體步驟（2026-10-01 新增）</h4>
+        <ul>
+            <li><b>砂輪參數／修砂參數／研磨參數的數值旁有一顆「▾」</b>：點一下列出<b>同機種既有文件填過的值</b>
+                ＋管理員設定的固定選項，點一下就填進去，<b>仍然可以自己打</b>。
+                清單是<b>即時算出來的</b>，別人的文件存了新值這裡下次開就會出現。
+                要把某些值藏起來、或固定提供某幾個，到<b>設定 →「參數選單」</b>（逐機種設定）。</li>
+            <li><b>機台預設值</b>：在<b>設定 →「機種步驟範本」</b>的軟體步驟把數值一起填好，
+                <b>建立文件綁定機台時就會自動帶入</b>（現場仍可逐份修改）；
+                改範本不會動到已經建立的文件。</li>
+            <li><b>「齒型/導程修整」沒填的格子會自動帶 NA</b>（離開欄位當下就補）——紙本上這一段不用調整時
+                寫的就是 NA。只補<b>機種範本帶進來的那幾個參數</b>，現場自己加的註記格留白就留白。</li>
+            <li><b>檢驗項目的「齒根徑」預設是「無要求」＋備註「不磨齒底」</b>（這台機不磨齒底）；
+                真的有要求時直接改寫那一列即可。</li>
         </ul>
         <h4>注意事項的範本</h4>
         <ul>

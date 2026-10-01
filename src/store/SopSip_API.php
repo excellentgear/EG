@@ -115,6 +115,14 @@ case 'tools_by_type':
     jout(true, ['rows' => ss_tools_by_type($db, (int)($_GET['type_id'] ?? 0), $asofParam()),
                 'types' => ss_tool_types($db)]);
 
+/** 某一機種的參數選單：自動收集到的值（含用過幾次）＋管理員的設定，供設定頁維護。 */
+case 'kv_opt_auto': {
+    $needAdmin();
+    $model = trim((string)($_GET['model'] ?? ''));
+    jout(true, ['steps' => ss_kv_opt_steps(), 'auto' => $model === '' ? [] : ss_kv_opt_auto($db, [$model]),
+                'cfg' => ss_kv_opt_cfg($db)[$model] ?? [], 'merged' => $model === '' ? [] : ss_kv_options($db, [$model])]);
+}
+
 /** 依量測值自動對應量具（量程涵蓋這個值、範圍最小的優先）。回全部候選讓畫面說明為什麼挑它。 */
 case 'tool_match': {
     $vRaw = trim((string)($_GET['value'] ?? ''));
@@ -272,6 +280,11 @@ case 'detail': {
         }
         $full['msop_models'] = $models;
         $full['msop_tpl']    = $tpl;
+        /* 砂輪／修砂／研磨參數的候選值（同機種既有文件用過的＋管理員設定的）。
+           使用者 2026-10-01：這三段的數值現場都是從幾組常用值裡挑，不該每次重打。 */
+        $full['na_keys']      = ss_na_keys($db, $models);
+        $full['kv_opt_steps'] = ss_kv_opt_steps();
+        $full['kv_options']   = ss_kv_options($db, $models);
         $full['sects']       = $full['sects'] ?: ss_steps_by_sect($db, $verId);
         $full['sect_labels'] = ss_sects();
     }
@@ -423,7 +436,10 @@ case 'ver_save': {
                     }
                 }
             }
-            ss_steps_replace($db, $verId, $in, $sk);
+            /* 軟體步驟：範本帶進來的參數沒填值時補 NA（使用者 2026-10-01，前端也會補一次）。
+               硬體步驟沒有參數格，傳空陣列＝不處理。 */
+            $naKeys = ($sk === 'soft') ? ss_na_keys($db, ss_msop_models_of($d)) : [];
+            ss_steps_replace($db, $verId, $in, $sk, $naKeys);
         }
         if (array_key_exists('items', $_POST)) {
             $its = $rows('items');
@@ -857,6 +873,10 @@ case 'settings_get': {
     $out['dept_positions'] = ss_dept_position_map($db);
     $out['methods']    = ss_method_options($db);
     $out['span_methods'] = ss_span_methods($db);
+    // 參數選單（砂輪／修砂／研磨）：機種清單與管理員設定，自動收集的值由 kv_opt_auto 逐機種取
+    $out['kv_opt_steps']  = ss_kv_opt_steps();
+    $out['kv_opt_models'] = ss_msop_models($db);
+    $out['kv_opt_cfg']    = ss_kv_opt_cfg($db);
     $out['tool_types'] = ss_tool_types($db);
     try {
         $out['positions'] = $db->query("SELECT id, name FROM position ORDER BY COALESCE(sort_order,999), id")
@@ -1052,6 +1072,12 @@ case 'settings_save': {
             $sm[$k] = ['tt' => $tt, 'text' => $tx];
         }
         ss_setting_set($db, 'span_methods', $sm);
+    }
+    /* 參數選單設定（使用者 2026-10-01）：只存「管理員額外加的」與「這幾個不要出現」，
+       自動收集到的值一律即時重算，不在這裡存一份快照。 */
+    if (array_key_exists('kv_opt_cfg', $_POST)) {
+        $cfg = json_decode((string)$_POST['kv_opt_cfg'], true);
+        ss_kv_opt_cfg_save($db, is_array($cfg) ? $cfg : []);
     }
     if (array_key_exists('method_extra', $_POST)) {
         $ex = [];

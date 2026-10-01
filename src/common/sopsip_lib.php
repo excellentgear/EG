@@ -1191,6 +1191,11 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
 
     $machineId = 0; $partDId = 0; $partNo = null; $model = null; $toolId = 0;
     $machineIds = [];
+    /* **這一行要在前面**：下面「沒挑機台就沿用原本的機台型號」那一段用得到它。
+       原本宣告在後面，`elseif ($old)` 永遠是未定義變數（只噴 notice 不報錯），
+       結果「更新時沒送 machine_ids」會把 machine_model 清成 NULL——而型號一不見，
+       機種步驟範本與參數選單就全部比不中，畫面上完全看不出原因。 */
+    $old = $docId > 0 ? ss_doc_get($db, $docId) : null;
     if ($scope === 'tool') {
         $toolId = (int)($in['tool_id'] ?? 0);
         if (!ss_tool_row($db, $toolId)) throw new RuntimeException('請選擇量具（在檢驗設備一覽表裡找不到這一支）');
@@ -1267,7 +1272,6 @@ function ss_doc_save(PDO $db, array $in, int $uid, string $uname): int
     /* 沒送的欄位一律不動（`array_key_exists` 判「有沒有送這個欄位」，送空字串才是清空）。
        本專案已經踩過好幾次：「調整機器編號」「改綁定對象」那兩支只送了一部分欄位，
        沒送的客戶／型式就被一起寫成 NULL，畫面上完全看不出是什麼時候不見的。 */
-    $old = $docId > 0 ? ss_doc_get($db, $docId) : null;
 
     // 客戶：綁料號就由料號主檔決定（使用者要求不給手打）；通用型才採用送進來的值
     $cusId = null; $cusNm = null;
@@ -1459,6 +1463,17 @@ function ss_ver_create(PDO $db, int $docId, array $in, int $uid): int
             if ($rows) ss_items_replace($db, $verId, $rows);
         }
     }
+    /* 標準作業流程SOP：建立當下就把「機種步驟範本」整套帶進來（含範本裡填好的**機台預設值**）。
+       使用者 2026-10-01：「修砂參數跟研磨參數要可以設定機台預設值，於建立時自動帶入」。
+       mode='fill' ＝只有那一段完全是空的才帶，所以不會蓋掉使用者自己已經填的內容；
+       範本沒建就什麼都不做（ss_msop_apply 自己會回 0）。 */
+    if ($isGsop) {
+        $models = ss_msop_models_of($doc ?: []);
+        if ($models) foreach (array_keys(ss_sects()) as $sk) {
+            if ($sk === '') continue;
+            try { ss_msop_apply($db, $verId, $models, $sk, 'fill'); } catch (Throwable $e) { /* 範本帶不進來不可以害建立失敗 */ }
+        }
+    }
     ss_refresh_cur_ver($db, $docId);
     return $verId;
 }
@@ -1601,7 +1616,7 @@ function ss_asdoc_expand(PDO $db, string $text): string
 }
 
 /** 覆寫某一版的步驟明細（整批取代；呼叫端已在交易中） */
-function ss_steps_replace(PDO $db, int $verId, array $rows, string $sect = ''): void
+function ss_steps_replace(PDO $db, int $verId, array $rows, string $sect = '', array $naKeys = []): void
 {
     /* $sect 留空＝覆寫「一般步驟」那一段（既有呼叫端的行為完全不變，
        因為 gsop 的軟／硬體步驟是存在 sect='soft'/'hard'，不會被這一句掃到）。 */
@@ -1616,6 +1631,10 @@ function ss_steps_replace(PDO $db, int $verId, array $rows, string $sect = ''): 
         /* 軟體步驟的內容在參數格裡（step_text 常常整個空白），所以「這一列是不是空的」
            一定要連 kv 與備註一起看——只看 step_name/step_text 會把填好參數的那一列安靜丟掉。 */
         $kv  = $sect === 'soft' ? ss_kv_decode($r['kv'] ?? ($r['kv_json'] ?? '')) : [];
+        /* 齒型/導程修整這類步驟：範本帶進來的參數沒填值的一律補 NA（使用者 2026-10-01）。
+           前端離開欄位時就補一次，這裡是後端用同一套規則再補一次（鐵律8）；
+           $naKeys 沒給（SIP 等其他呼叫端）就完全不處理。 */
+        if ($kv && $naKeys && ss_is_na_step($nm)) $kv = ss_kv_fill_na($kv, $naKeys);
         if ($txt === '' && $nm === '' && $nt === '' && !$kv) continue;   // 整列空白的不存
         $seq++;
         $db->prepare("INSERT INTO ss_step (ver_id, seq, sect, step_name, img_file_id, step_text, note, kv_json)
@@ -2634,6 +2653,196 @@ function ss_method_options(PDO $db): array
     $clean = [];
     foreach ($extra as $e) { $e = trim((string)$e); if ($e !== '') $clean[] = $e; }
     return ['tool_type_ids' => $ids, 'extra' => $clean, 'list' => $list];
+}
+
+/* ═══════════ 軟體步驟：未填自動帶「NA」的步驟 ═══════════
+   使用者 2026-10-01：「軟體步驟 的 齒型/導程修整 未填自動帶入 NA」。
+   紙本上這一段沒有要調整時就是寫 NA（不是留白），留白會讓現場不知道是「不用做」還是「忘了填」。
+   **只有這幾個步驟適用**，其餘步驟留白就是留白（別一律填 NA，那會把「還沒填」蓋掉）。 */
+function ss_na_steps(): array
+{
+    return ['齒型/導程修整', '齒型／導程修整', '齒型/導程修正'];
+}
+function ss_is_na_step(string $name): bool
+{
+    $n = trim($name);
+    foreach (ss_na_steps() as $t) if ($n === $t) return true;
+    // 寫法不一（全半形斜線、修整/修正）一律歸戶
+    $x = str_replace(['／', ' '], ['/', ''], $n);
+    return $x === '齒型/導程修整' || $x === '齒型/導程修正';
+}
+/**
+ * 這些機種的範本在「要填 NA 的步驟」裡定義了哪些參數名稱。
+ * **NA 只補範本帶進來的那幾格**——實測有文件把匯入 Excel 時的註記（「±一個模數」）
+ * 存成了參數名稱，那種格子補 NA 會印成「±一個模數 NA」，意思整個跑掉。
+ */
+function ss_na_keys(PDO $db, array $models): array
+{
+    $keys = [];
+    foreach ($models as $m) {
+        foreach (ss_msop_tpl_rows($db, trim((string)$m), 'soft') as $t) {
+            if (!ss_is_na_step((string)$t['step_name'])) continue;
+            foreach (($t['kv'] ?? []) as $row) foreach ($row as $p) {
+                $k = trim((string)($p['k'] ?? ''));
+                if ($k !== '' && !in_array($k, $keys, true)) $keys[] = $k;
+            }
+        }
+    }
+    return $keys;
+}
+
+/**
+ * 把該步驟參數格裡「有名稱卻沒有值」的格子填成 NA（已經有值的一律不動）。
+ * @param array $onlyKeys 只處理這幾個參數名稱（空陣列＝全部，僅供工具程式用）
+ */
+function ss_kv_fill_na(array $kv, array $onlyKeys = []): array
+{
+    foreach ($kv as $ri => $row) {
+        foreach ($row as $ci => $p) {
+            $kk = trim((string)($p['k'] ?? ''));
+            if ($kk === '') continue;
+            if ($onlyKeys && !in_array($kk, $onlyKeys, true)) continue;
+            if (!empty($p['st'])) continue;                      // 跨齒厚那種格子不填 NA
+            if (!empty($p['slots'])) {                           // 有填空樣板：每一格空的都填 NA
+                $any = false;
+                foreach ($p['slots'] as $i => $sv) {
+                    if (trim((string)$sv) === '') { $kv[$ri][$ci]['slots'][$i] = 'NA'; }
+                    else $any = true;
+                }
+                if (!$any) { /* 整組都空 → 已全部填成 NA */ }
+                continue;
+            }
+            if (trim((string)($p['v'] ?? '')) === '') $kv[$ri][$ci]['v'] = 'NA';
+        }
+    }
+    return $kv;
+}
+
+/* ═══════════ 砂輪／修砂／研磨參數：數值的候選選單 ═══════════
+   使用者 2026-10-01：「砂輪參數要自動把此機台設定過的都存成選單，管理員可以手動增加、
+   也可以設定自動收集到的哪一項不顯示，亦可設定固定提供選擇的項目；修砂參數與研磨參數一樣」。
+
+   **選項一律即時從既有文件算出來，不另外存一份清單**（存一份就會跟實際文件對不起來＝鐵律4）；
+   資料庫裡只存管理員的「加這幾個」與「這幾個不要出現」。
+   機台預設值是另一件事——那是「機種範本」（設定→機種範本）裡填的值，建立文件時自動帶入。 */
+
+/** 哪幾個步驟的數值要給選單（紙本上就這三段是反覆沿用同幾組參數的） */
+function ss_kv_opt_steps(): array
+{
+    return ['砂輪參數', '修砂參數', '研磨參數'];
+}
+function ss_is_kv_opt_step(string $name): bool
+{
+    return in_array(trim($name), ss_kv_opt_steps(), true);
+}
+
+/** 管理員設定：['機種']['步驟']['參數名稱'] => ['hide'=>[...], 'add'=>[...]] */
+function ss_kv_opt_cfg(PDO $db): array
+{
+    $v = ss_setting_get($db, 'kv_opt_cfg', []);
+    return is_array($v) ? $v : [];
+}
+function ss_kv_opt_cfg_save(PDO $db, array $cfg): void
+{
+    $out = [];
+    foreach ($cfg as $model => $steps) {
+        $model = trim((string)$model);
+        if ($model === '' || !is_array($steps)) continue;
+        foreach ($steps as $st => $keys) {
+            $st = trim((string)$st);
+            if (!ss_is_kv_opt_step($st) || !is_array($keys)) continue;
+            foreach ($keys as $k => $one) {
+                $k = trim((string)$k);
+                if ($k === '' || !is_array($one)) continue;
+                $hide = []; $add = [];
+                foreach ((array)($one['hide'] ?? []) as $x) {
+                    $x = trim((string)$x);
+                    if ($x !== '' && !in_array($x, $hide, true)) $hide[] = mb_substr($x, 0, 80);
+                }
+                foreach ((array)($one['add'] ?? []) as $x) {
+                    $x = trim((string)$x);
+                    if ($x !== '' && !in_array($x, $add, true)) $add[] = mb_substr($x, 0, 80);
+                }
+                if (!$hide && !$add) continue;
+                $out[$model][$st][$k] = ['hide' => $hide, 'add' => $add];
+            }
+        }
+    }
+    ss_setting_set($db, 'kv_opt_cfg', $out);
+}
+
+/**
+ * 自動收集：同機種既有文件（含已核准版）在這三個步驟裡真的填過的值。
+ * 回 ['步驟']['參數名稱'] => [值 => 用過幾次]，次數多的排前面。
+ */
+function ss_kv_opt_auto(PDO $db, array $models): array
+{
+    $models = array_values(array_unique(array_filter(array_map(fn($m) => trim((string)$m), $models))));
+    if (!$models) return [];
+    $in = implode(',', array_fill(0, count($models), '?'));
+    $sql = "SELECT s.step_name, s.kv_json
+              FROM ss_step s
+              JOIN ss_ver v ON v.ver_id = s.ver_id
+              JOIN ss_doc d ON d.doc_id = v.doc_id
+             WHERE d.layout='gsop' AND d.is_deleted=0 AND s.sect='soft'
+               AND d.machine_model IN ($in)";
+    $st = $db->prepare($sql);
+    $st->execute($models);
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $name = (string)$r['step_name'];
+        if (!ss_is_kv_opt_step($name)) continue;
+        foreach (ss_kv_decode($r['kv_json'] ?? '') as $row) {
+            foreach ($row as $p) {
+                $k = trim((string)($p['k'] ?? ''));
+                if ($k === '') continue;
+                // 有填空樣板時要把固定文字與空格組回完整的值（畫面上看到的就是那一串）
+                $v = (!empty($p['p']) && !empty($p['slots']))
+                   ? trim(ss_slot_compose((string)$p['p'], (array)$p['slots']))
+                   : trim((string)($p['v'] ?? ''));
+                if ($v === '' || $v === 'NA') continue;
+                $out[$name][$k][$v] = ($out[$name][$k][$v] ?? 0) + 1;
+            }
+        }
+    }
+    foreach ($out as $stn => $keys) foreach ($keys as $k => $vs) { arsort($vs); $out[$stn][$k] = $vs; }
+    return $out;
+}
+
+/**
+ * 畫面上要給的候選清單＝管理員固定提供的 ＋（自動收集 − 管理員隱藏的）。
+ * @return array ['步驟']['參數名稱'] => [值, …]
+ */
+function ss_kv_options(PDO $db, array $models): array
+{
+    $auto = ss_kv_opt_auto($db, $models);
+    $cfg  = ss_kv_opt_cfg($db);
+    $out  = [];
+    // 管理員固定提供的要出現在最前面（那是他希望大家優先選的）
+    foreach ($models as $m) {
+        $m = trim((string)$m);
+        foreach (($cfg[$m] ?? []) as $stn => $keys) {
+            foreach ($keys as $k => $one) {
+                foreach ((array)($one['add'] ?? []) as $v) {
+                    if (!in_array($v, $out[$stn][$k] ?? [], true)) $out[$stn][$k][] = $v;
+                }
+            }
+        }
+    }
+    foreach ($auto as $stn => $keys) {
+        foreach ($keys as $k => $vs) {
+            $hide = [];
+            foreach ($models as $m) {
+                $h = $cfg[trim((string)$m)][$stn][$k]['hide'] ?? [];
+                foreach ((array)$h as $x) $hide[$x] = 1;
+            }
+            foreach (array_keys($vs) as $v) {
+                if (isset($hide[$v])) continue;
+                if (!in_array($v, $out[$stn][$k] ?? [], true)) $out[$stn][$k][] = $v;
+            }
+        }
+    }
+    return $out;
 }
 
 /* ═══════════ 跨齒厚／跨銷徑：預設檢驗方法 ＋ 依量測值自動對應量具 ═══════════

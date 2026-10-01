@@ -36,8 +36,10 @@ if ($own <= 0) exit("找不到顯示名稱為「生產」的擔當者部門，�
 $ROWS = [
     ['ctrl_point' => '跨齒厚({}齒)', 'q_char' => '', 'lock_ctrl' => 1, 'lock_q' => 0,
      'method' => '盤式分厘卡', 'freq' => '', 'note' => ''],
-    ['ctrl_point' => '齒根徑', 'q_char' => '', 'lock_ctrl' => 1, 'lock_q' => 0,
-     'method' => '尖頭分厘卡', 'freq' => '', 'note' => ''],
+    /* 齒根徑：這台機不磨齒底，所以紙本上固定寫「無要求」＋備註「不磨齒底」
+       （使用者 2026-10-01 指定的預設值；真的有要求時現場仍可自行改寫）。 */
+    ['ctrl_point' => '齒根徑', 'q_char' => '無要求', 'lock_ctrl' => 1, 'lock_q' => 0,
+     'method' => '尖頭分厘卡', 'freq' => '', 'note' => '不磨齒底'],
     ['ctrl_point' => '齒型精度', 'q_char' => '依圖面', 'lock_ctrl' => 1, 'lock_q' => 0,
      'input_kind' => 'gear_grade_opt',          // 可按「挑等級」也可自己打（使用者 2026-10-01）
      'method' => '齒輪量測儀', 'freq' => '', 'note' => ''],
