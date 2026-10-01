@@ -212,17 +212,20 @@ $cmp_label = $cmp_bases[$cmp_basis] ?? $cmp_bases['prev'];
 $cmp_agg = ['count' => 0, 'qty' => 0.0, 'loss' => 0.0, 'amount' => 0.0, 'zero_price' => 0, 'high_loss' => 0, 'by_type' => [], 'by_maker' => [], 'by_part' => []];
 $new_makers = [];
 $insights = [];
+$maker_first_dates = [];   // 廠商 => 有史以來第一次加工紀錄日期（不受畫面篩選影響），答「哪邊看得到廠商第一次交易時間」
 if ($bm_perms['canView']) {
     [$cmp_start, $cmp_end] = tla_compare_range($start_date, $end_date, $cmp_basis);
     $cmp_rows = tla_fetch_rows_lite($conn->getPDO(), $cmp_start, $cmp_end, $pt_ids);
     $cmp_agg  = tla_aggregate($cmp_rows);
     $new_makers = tla_new_makers($conn->getPDO(), $start_date, $end_date, $pt_ids);
     $insights = tla_insights($agg, $cmp_agg, $new_makers, $cmp_label);
+    $maker_first_dates = tla_maker_first_dates($conn->getPDO());
 }
 
 $transfer_data_json = json_encode($rows);
 $trend_json  = json_encode($trend);
 $type_rank_json = json_encode(array_values($type_rank));
+$maker_first_dates_json = json_encode($maker_first_dates);
 
 /* ── 頁首資訊列 ───────────────────────────────────────────────
  * 1) 最新資料日期＝整張 bom_ing_transfer_log 的 MAX(transfer_date)（不受畫面日期區間影響）
@@ -765,9 +768,11 @@ try {
                         <div id="chMaker" class="chart-box tall"></div>
                         <div class="tbl-wrap" style="margin-top:10px;">
                             <table class="oa-t" id="tblMaker">
-                                <colgroup><col style="width:24%"><col style="width:12%"><col style="width:14%">
-                                          <col style="width:16%"><col style="width:12%"><col style="width:12%"><col style="width:10%"></colgroup>
-                                <thead><tr><th>廠商</th><th>筆數</th><th>數量</th><th>金額(萬)</th><th>佔金額</th><th>平均單價</th><th>NG數</th></tr></thead>
+                                <colgroup><col style="width:17%"><col style="width:9%"><col style="width:11%">
+                                          <col style="width:12%"><col style="width:9%"><col style="width:10%"><col style="width:8%">
+                                          <col style="width:12%"></colgroup>
+                                <thead><tr><th>廠商</th><th>筆數</th><th>數量</th><th>金額(萬)</th><th>佔金額</th><th>平均單價</th><th>NG數</th>
+                                           <th>第一次交易日期</th></tr></thead>
                                 <tbody id="top-makers-body"></tbody>
                             </table>
                         </div>
@@ -1019,6 +1024,9 @@ try {
                         <li><b>統計分析分頁</b>（2026-10-01 重做）：製程大項分析（表＋圓餅＋長條）、加工金額趨勢（依製程大項堆疊，可切換顯示金額或數量，
                             點柱子可把明細篩成該區間）、廠商分析（完整排行表＋長條圖，Top N 可調 10/15/20/30）、十大高加工成本料號；
                             以上全部都隨「移轉明細」目前的篩選（日期＋製程大項＋廠商多選＋逐欄文字篩選）即時重算，料號可點開查看對應的 BOM 圖檔。</li>
+                        <li><b>廠商第一次交易日期</b>（2026-10-01 新增）：「廠商分析」排行表最右一欄，是該廠商<b>有史以來第一次</b>
+                            出現在製程移轉紀錄裡的日期（取全表最早一筆，不受畫面上的日期區間或製程大項篩選影響），
+                            用來看「跟這家廠商合作多久了」；自動分析卡片的「新增加工廠商」也會附上日期。</li>
                         <li><b>異常偵測</b>：在「查詢條件」右上角，會針對目前資料檢查單價異常等狀況並列出報告。</li>
                     </ul>
 
@@ -1076,9 +1084,13 @@ try {
     <script src="../../code/modules/exporting.js"></script>
     <script src="../../code/modules/export-data.js"></script>
     <script src="../../code/modules/accessibility.js"></script>
+    <!-- 日期顯示一律走共用檔（ai-rules/20：YYYY.MM.DD） -->
+    <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_date_fmt.js') ?>"></script>
 
     <script>
         var transferData = <?= $transfer_data_json ?>;
+        // 每家廠商「有史以來第一次」出現在製程移轉紀錄裡的日期（不受畫面篩選影響）
+        var MAKER_FIRST_DATES = <?= $maker_first_dates_json ?: '{}' ?>;
         var chartGroupBy = '<?= $chart_group_by ?>';
         var currentChartFilter = null;
 
@@ -1670,12 +1682,14 @@ try {
             arr.forEach(function(it) {
                 var share = total > 0 ? (it.amount / total * 100) : 0;
                 var avgPrice = it.qty > 0 ? it.amount / it.qty : 0;
+                var firstDate = MAKER_FIRST_DATES[it.name];
+                var firstDateHtml = firstDate ? egFmtDate(firstDate) : '<span style="color:#bbb;">—</span>';
                 rowsHtml += '<tr><td>' + tlaEsc(it.name) + '</td><td class="n">' + numberFormat(it.count) + '</td>'
                     + '<td class="n">' + numberFormat(it.qty) + '</td><td class="n">$' + numberFormat(it.amount / 10000, 2) + '</td>'
                     + '<td class="n">' + share.toFixed(1) + '%</td><td class="n">$' + numberFormat(avgPrice, 2) + '</td>'
-                    + '<td class="n">' + numberFormat(it.loss) + '</td></tr>';
+                    + '<td class="n">' + numberFormat(it.loss) + '</td><td class="n">' + firstDateHtml + '</td></tr>';
             });
-            $('#top-makers-body').html(rowsHtml || '<tr><td colspan="7" style="text-align:center;color:#bbb;">目前篩選下沒有資料</td></tr>');
+            $('#top-makers-body').html(rowsHtml || '<tr><td colspan="8" style="text-align:center;color:#bbb;">目前篩選下沒有資料</td></tr>');
 
             tlaDestroyChart('chMaker');
             if (arr.length) {

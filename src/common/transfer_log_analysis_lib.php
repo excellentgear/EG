@@ -128,7 +128,10 @@ function tla_top_share(array $byX, int $n = 3): array
     return ['items' => $items, 'top' => $top, 'share' => $share, 'total' => $total];
 }
 
-/** 本期才第一次出現加工紀錄的廠商（比對全表最早一筆移轉日期是否落在本期） */
+/**
+ * 本期才第一次出現加工紀錄的廠商（比對全表最早一筆移轉日期是否落在本期）。
+ * 回傳 [['name'=>廠商名稱,'first_date'=>YYYY-MM-DD], ...]，供自動分析卡片附上日期用。
+ */
 function tla_new_makers(PDO $db, string $start, string $end, array $ptIds = []): array
 {
     $sql = "SELECT t.maker_from, MIN(t.transfer_date) AS first_date, MAX(m.maker_id) AS maker_name
@@ -149,7 +152,27 @@ function tla_new_makers(PDO $db, string $start, string $end, array $ptIds = []):
     $stmt->execute($params);
     $out = [];
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        $out[] = $r['maker_name'] ?: $r['maker_from'];
+        $out[] = ['name' => $r['maker_name'] ?: $r['maker_from'], 'first_date' => $r['first_date']];
+    }
+    return $out;
+}
+
+/**
+ * 每家廠商「有史以來第一次」出現在製程移轉紀錄裡的日期（不受畫面上的日期區間／製程大項篩選影響，
+ * 回答的是「這家廠商什麼時候開始跟我們有加工往來」這件事，與 tla_new_makers() 判定「本期才首次出現」
+ * 是不同用途）。回傳 [廠商顯示名稱 => YYYY-MM-DD]，同一個顯示名稱若對到好幾個廠商代號取最早的一筆。
+ */
+function tla_maker_first_dates(PDO $db): array
+{
+    $sql = "SELECT t.maker_from, MIN(t.transfer_date) AS first_date, MAX(m.maker_id) AS maker_name
+            FROM bom_ing_transfer_log t
+            LEFT JOIN maker_list m ON t.maker_from = m.maker_id_no
+            GROUP BY t.maker_from";
+    $out = [];
+    foreach ($db->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $name = trim((string)($r['maker_name'] ?: $r['maker_from']));
+        if ($name === '') continue;
+        if (!isset($out[$name]) || $r['first_date'] < $out[$name]) $out[$name] = $r['first_date'];
     }
     return $out;
 }
@@ -286,9 +309,13 @@ function tla_insights(array $cur, array $prev, array $newMakers, string $cmpLabe
             sprintf('本期有 %d 筆移轉的 NG 率超過 10%%，建議留意該站製程良率。', $cur['high_loss']));
     }
 
-    // 7. 新增加工廠商
+    // 7. 新增加工廠商（附第一次交易日期）
     if (!empty($newMakers)) {
-        $names = implode('、', array_slice($newMakers, 0, 5));
+        $labels = array_map(function ($m) {
+            $d = $m['first_date'] ? date('Y.m.d', strtotime($m['first_date'])) : '';
+            return $m['name'] . ($d ? '（' . $d . '）' : '');
+        }, array_slice($newMakers, 0, 5));
+        $names = implode('、', $labels);
         $more = count($newMakers) > 5 ? '等共 ' . count($newMakers) . ' 家' : '';
         $push('info', 'fa-handshake-o', '新增加工廠商',
             sprintf('本期首次出現加工紀錄的廠商：%s%s。', $names, $more));
