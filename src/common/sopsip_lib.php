@@ -2636,6 +2636,85 @@ function ss_method_options(PDO $db): array
     return ['tool_type_ids' => $ids, 'extra' => $clean, 'list' => $list];
 }
 
+/* ═══════════ 跨齒厚／跨銷徑：預設檢驗方法 ＋ 依量測值自動對應量具 ═══════════
+   使用者 2026-10-01：「檢驗方式可以提供管理員設定，選定跨齒厚自動顯示哪個、
+   選定跨銷自動顯示哪個嗎? 一樣要可以人工修改。這個量具編號也要可以自動對應出來，
+   因為量具都有設定規格——像 A-002-Q (25-50mm) 就是量測 25~50 之間」。 */
+
+/**
+ * 跨齒厚（w）／跨銷徑（p）各自預設用哪一種檢驗方法。
+ * **存的是量具類型 id 不是名稱**（類型改名這裡要跟著改，存名稱會繼續顯示舊名而且不報錯＝鐵律4）；
+ * 自建的文字項目才存文字。沒設定過就兩邊都留白（不猜，猜錯會讓每一份文件都填錯方法）。
+ *
+ * @return array ['w'=>['tt'=>int,'text'=>string], 'p'=>[...]]  text 已解析成目前的名稱
+ */
+function ss_span_methods(PDO $db): array
+{
+    $raw = ss_setting_get($db, 'span_methods', []);
+    $raw = is_array($raw) ? $raw : [];
+    $types = [];
+    foreach (ss_tool_types($db) as $t) $types[(int)$t['id']] = (string)$t['name'];
+    $out = [];
+    foreach (['w', 'p'] as $k) {
+        $r  = is_array($raw[$k] ?? null) ? $raw[$k] : [];
+        $tt = (int)($r['tt'] ?? 0);
+        $tx = trim((string)($r['text'] ?? ''));
+        if ($tt > 0) $tx = $types[$tt] ?? '';      // 類型被刪掉就自動失效（不留一個對不到的名字）
+        if ($tt > 0 && $tx === '') $tt = 0;
+        $out[$k] = ['tt' => $tt, 'text' => $tx];
+    }
+    return $out;
+}
+
+/**
+ * 從量具的編號／規格文字抓出「量測範圍」。
+ * 現場兩種寫法都有：範圍寫在編號裡（`A-002-Q (25-50mm)`）或寫在規格欄（`0-600mm`）。
+ *
+ * **一定要有 mm 這個單位才算數**——不要求單位的話，`M-001~041-Q`（圓棒的編號區間）
+ * 與 `G-001-Q~G-101-Q (1-100)`（塊規的件號）會被當成量測範圍，自動對應就會挑到完全不相干的東西。
+ *
+ * @return array|null [下限, 上限]；抓不到回 null（**不可以回 [0,0] 當成「什麼都量得到」**）
+ */
+function ss_tool_range(array $t): ?array
+{
+    foreach ([(string)($t['spec_desc'] ?? ''), (string)($t['tool_no'] ?? ''), (string)($t['label'] ?? '')] as $src) {
+        if ($src === '') continue;
+        // 定界字元**不可以用 ~**——樣式裡本來就有 ~（記憶 preg_slash_delimiter_trap 同一種坑）
+        if (preg_match('/(\d+(?:\.\d+)?)\s*[-~～至]\s*(\d+(?:\.\d+)?)\s*mm/iu', $src, $m)) {
+            $a = (float)$m[1]; $b = (float)$m[2];
+            if ($b < $a) [$a, $b] = [$b, $a];
+            return [$a, $b];
+        }
+    }
+    return null;
+}
+
+/**
+ * 依量測值挑量具：量測範圍涵蓋這個值的就是候選，**範圍最小的那一支優先**
+ * （量程愈小解析度愈好，現場本來就是這樣挑的）。
+ *
+ * @param float|null $v 量測值（公釐）；null＝不比範圍，只回清單
+ * @return array ['rows'=>[...每一支都帶 lo/hi/fit...], 'best'=>?array]
+ */
+function ss_tool_match(PDO $db, int $typeId, ?float $v, string $asof = ''): array
+{
+    $rows = ss_tools_by_type($db, $typeId, $asof);
+    $out = []; $best = null;
+    foreach ($rows as $r) {
+        $rg = ss_tool_range($r);
+        $r['lo'] = $rg[0] ?? null;
+        $r['hi'] = $rg[1] ?? null;
+        // 量不到的（停用）一律不自動挑，但仍回給前端顯示
+        $r['fit'] = ($v !== null && $rg && (int)$r['usable'] === 1 && $v >= $rg[0] && $v <= $rg[1]) ? 1 : 0;
+        $out[] = $r;
+        if ($r['fit'] === 1) {
+            $w = $rg[1] - $rg[0];
+            if ($best === null || $w < ($best['hi'] - $best['lo'])) $best = $r;
+        }
+    }
+    return ['rows' => $out, 'best' => $best];
+}
+
 /* ═══════════ 檢驗頻率選項／注意事項預設值／型式選項（管理員可維護） ═══════════ */
 
 /**
@@ -2856,8 +2935,12 @@ function ss_gear_grades(PDO $db): array
 function ss_input_kinds(): array
 {
     return [
-        ''           => '自由文字',
-        'gear_grade' => '齒輪精度等級（只能從對照表挑）',
+        ''               => '自由文字',
+        'gear_grade'     => '齒輪精度等級（只能從對照表挑）',
+        /* 使用者 2026-10-01：「品質特性可以使用相同方式填寫嗎? 像 SIP 精度等級 是可以用選的」
+           ——標準作業流程SOP 的齒型／導程／節距精度紙本上寫的是「依圖面」，
+           如果設成上面那種「只能挑」，依圖面就再也打不進去。所以多一種可挑也可打的。 */
+        'gear_grade_opt' => '齒輪精度等級（可挑也可自己打，例如 依圖面）',
     ];
 }
 

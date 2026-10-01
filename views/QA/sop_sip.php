@@ -192,6 +192,24 @@ foreach ($KIND_SCOPES_NEW as $k => $ss) foreach ($ss as $sc) {
                              font-size:12.5px; padding:1px 2px; }
         .kvslot input.kv-s:focus { border-color:var(--amber-d); }
         table.kvgrid td.kvk input[readonly] { background:#F6F1E8; color:#6B4423; cursor:default; }
+        /* ── 跨齒厚／跨銷徑那一格（使用者 2026-10-01 指定的樣子）──
+           標題在上面（點一下切換 跨齒厚／跨銷徑），輸入框在下面、右側寫「齒」；
+           值的部分直接給「上限／下限」兩個輸入框，不再把上下擠成一行。 */
+        table.kvgrid td.kvspan, table.kvgrid td.kvspanv { vertical-align:top; }
+        .spk, .spv { display:flex; flex-direction:column; gap:2px; }
+        .spk .spln, .spv .spln { display:flex; align-items:center; gap:3px; }
+        .spk .spfx, .spv .spfx { color:#7A6A55; font-size:12px; flex:0 0 auto; }
+        .spv .spln .lb { color:#7A6A55; font-size:11px; flex:0 0 26px; text-align:right; }
+        .spk input.kv-sn, .spv input.kv-v1, .spv input.kv-v2 { flex:1 1 auto; min-width:0; text-align:center; }
+        /* 標題看起來就是標題，不是一顆按鈕（點得下去才有虛線底） */
+        button.kv-st, button.kv-vm { border:0; background:none; padding:0 0 1px; font-size:12px;
+            color:var(--ink); font-weight:600; text-align:left; cursor:pointer;
+            border-bottom:1px dashed var(--amber-d); align-self:flex-start; }
+        button.kv-st:hover, button.kv-vm:hover { color:#B4560A; }
+        button.kv-st[disabled], button.kv-vm[disabled] { cursor:default; border-bottom:0; color:var(--ink); }
+        /* 根徑建議值（算得出來才出現；點一下才填，絕不自動覆蓋已經有的值） */
+        .dfhint { font-size:11px; color:#8A6A45; margin-top:2px; }
+        .dfhint b { color:#B4560A; cursor:pointer; text-decoration:underline; }
         /* ── 標準作業流程SOP 的參數格（軟體步驟的「要點」）──
            照紙本做成「參數名稱｜數值」一列最多三組，現場只要填數值那一格。 */
         table.grid td.g-kvcell { padding:2px 3px; }
@@ -792,6 +810,8 @@ foreach ($KIND_SCOPES_NEW as $k => $ss) foreach ($ss as $sc) {
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_date_fmt.js') ?>"></script>
+<?php /* 齒輪基礎幾何（根徑建議值）唯一實作，公式與齒輪計算工具同一份 */ ?>
+<script src="../../resource/js/eg_gear_calc.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_gear_calc.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <!-- 明細表格的拖曳排序（站上既有的共用檔，不要再引 CDN 版） -->
 <script src="../../resource/js/Sortable.min.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/Sortable.min.js') ?>"></script>

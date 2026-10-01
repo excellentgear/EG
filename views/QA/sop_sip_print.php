@@ -280,6 +280,8 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
     table.kv tr:last-child td { border-bottom:0; }
     table.kv td.k { background:#FAFAFA; text-align:center; color:#333; }
     table.kv td.v { word-break:break-all; }
+    /* 上下限印成上下兩行（紙本就是這樣寫的） */
+    table.kv td.v .lim2 { line-height:1.2; white-space:nowrap; }
     .gs-chg { margin-top:0; }
     .gs-chg th, .gs-chg td { font-size:9pt; }
     /* 簽章列（照紙本在右半邊最下方） */
@@ -322,14 +324,33 @@ if (!$noticeLines) $noticeLines = lines(ss_setting_get($db, 'sip_notice_default'
         $mModels = ss_models_split((string)($doc['machine_model'] ?? ''));
         $mText   = $mModels ? implode('、', $mModels) : '';
         /** 一列參數格：n 組鍵值攤成 6 格，最後一個值把剩下的格子吃掉（照紙本的合併方式） */
-        $kvRow = function (array $pairs): string {
+        /* 跨齒厚／跨銷徑那一格：名稱帶跨幾齒或 Ø銷徑；值依設定印成
+           **上下限上下兩行** 或 **範圍 ?～?**（使用者 2026-09-30 指定）。 */
+        $gsSpanK = function (array $p): string {
+            $st = (string)($p['st'] ?? 'w'); $sn = trim((string)($p['sn'] ?? ''));
+            if ($st === 'p') return '跨銷徑' . ($sn !== '' ? ' Ø' . $sn : '');
+            return '跨齒厚' . ($sn !== '' ? '(' . $sn . '齒)' : '');
+        };
+        $gsSpanV = function (array $p): string {
+            $v1 = trim((string)($p['v'] ?? '')); $v2 = trim((string)($p['v2'] ?? ''));
+            if ((string)($p['vm'] ?? 'lim') === 'rng') {
+                if ($v1 === '' && $v2 === '') return '';
+                return h($v1) . '～' . h($v2);
+            }
+            if ($v1 === '' && $v2 === '') return '';
+            if ($v2 === '') return h($v1);
+            return '<div class="lim2">' . h($v1) . '</div><div class="lim2">' . h($v2) . '</div>';
+        };
+        $kvRow = function (array $pairs) use ($gsSpanK, $gsSpanV): string {
             $n = max(1, count($pairs));
             $out = '';
             foreach ($pairs as $i => $p) {
                 $last = ($i === count($pairs) - 1);
                 $span = $last ? max(1, 7 - 2 * $n) : 1;
-                $out .= '<td class="k">' . h($p['k']) . '</td>';
-                $out .= '<td class="v"' . ($span > 1 ? ' colspan="' . $span . '"' : '') . '>' . h($p['v']) . '</td>';
+                $isSpan = !empty($p['st']);
+                $out .= '<td class="k">' . h($isSpan ? $gsSpanK($p) : $p['k']) . '</td>';
+                $out .= '<td class="v"' . ($span > 1 ? ' colspan="' . $span . '"' : '') . '>'
+                      . ($isSpan ? $gsSpanV($p) : h($p['v'])) . '</td>';
             }
             return $out;
         };

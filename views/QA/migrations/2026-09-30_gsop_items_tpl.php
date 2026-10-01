@@ -39,10 +39,13 @@ $ROWS = [
     ['ctrl_point' => '齒根徑', 'q_char' => '', 'lock_ctrl' => 1, 'lock_q' => 0,
      'method' => '尖頭分厘卡', 'freq' => '', 'note' => ''],
     ['ctrl_point' => '齒型精度', 'q_char' => '依圖面', 'lock_ctrl' => 1, 'lock_q' => 0,
+     'input_kind' => 'gear_grade_opt',          // 可按「挑等級」也可自己打（使用者 2026-10-01）
      'method' => '齒輪量測儀', 'freq' => '', 'note' => ''],
     ['ctrl_point' => '導程精度', 'q_char' => '依圖面', 'lock_ctrl' => 1, 'lock_q' => 0,
+     'input_kind' => 'gear_grade_opt',          // 可按「挑等級」也可自己打（使用者 2026-10-01）
      'method' => '齒輪量測儀', 'freq' => '', 'note' => ''],
     ['ctrl_point' => '節距精度', 'q_char' => '依圖面', 'lock_ctrl' => 1, 'lock_q' => 0,
+     'input_kind' => 'gear_grade_opt',          // 可按「挑等級」也可自己打（使用者 2026-10-01）
      'method' => '齒輪量測儀', 'freq' => '', 'note' => ''],
     ['ctrl_point' => '外觀', 'q_char' => '不可碰傷', 'lock_ctrl' => 1, 'lock_q' => 1,
      'method' => '目視', 'freq' => '', 'note' => ''],

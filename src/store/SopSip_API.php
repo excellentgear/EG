@@ -115,6 +115,13 @@ case 'tools_by_type':
     jout(true, ['rows' => ss_tools_by_type($db, (int)($_GET['type_id'] ?? 0), $asofParam()),
                 'types' => ss_tool_types($db)]);
 
+/** 依量測值自動對應量具（量程涵蓋這個值、範圍最小的優先）。回全部候選讓畫面說明為什麼挑它。 */
+case 'tool_match': {
+    $vRaw = trim((string)($_GET['value'] ?? ''));
+    $v = ($vRaw === '' || !is_numeric($vRaw)) ? null : (float)$vRaw;
+    jout(true, ss_tool_match($db, (int)($_GET['type_id'] ?? 0), $v, $asofParam()));
+}
+
 /** 綁了料號就由料號主檔決定客戶，前端只負責顯示 */
 case 'customer_of_part':
     jout(true, ss_customer_of_part($db, (int)($_GET['part_d_id'] ?? 0)));
@@ -238,6 +245,7 @@ case 'detail': {
     $full['del_why']    = $delWhy;
     $full['owner_depts'] = array_values(array_filter(ss_owner_depts($db), fn($d) => !empty($d['on'])));
     $full['methods']     = ss_method_options($db)['list'];
+    $full['span_methods'] = ss_span_methods($db);
     $full['tool_types']  = ss_tool_types($db);
     $full['variant_options'] = ss_variant_options($db);
     $full['variant_max']     = ss_variant_max($db);
@@ -848,6 +856,7 @@ case 'settings_get': {
     $out['departments']    = ss_dept_tree_rows($db);
     $out['dept_positions'] = ss_dept_position_map($db);
     $out['methods']    = ss_method_options($db);
+    $out['span_methods'] = ss_span_methods($db);
     $out['tool_types'] = ss_tool_types($db);
     try {
         $out['positions'] = $db->query("SELECT id, name FROM position ORDER BY COALESCE(sort_order,999), id")
@@ -1020,6 +1029,29 @@ case 'settings_save': {
             $nt[] = ['name' => $name, 'body' => $body, 'customer_id' => $cid, 'customer_name' => $cname];
         }
         ss_setting_set($db, 'notice_tpls', $nt);
+    }
+    /* 跨齒厚／跨銷徑各自的預設檢驗方法（使用者 2026-10-01）。
+       存量具類型 id；自建的文字項目一律要在「檢驗方法」的自建清單裡才收，
+       否則打錯一個字就是一個永遠對不到任何量具類型的方法。 */
+    if (array_key_exists('span_methods', $_POST)) {
+        $mo = ss_method_options($db);
+        $validTt = []; foreach ($mo['list'] as $m) if ((int)$m['tool_type_id'] > 0) $validTt[(int)$m['tool_type_id']] = 1;
+        $raw = json_decode((string)$_POST['span_methods'], true);
+        $raw = is_array($raw) ? $raw : [];
+        $sm = [];
+        foreach (['w', 'p'] as $k) {
+            $r  = is_array($raw[$k] ?? null) ? $raw[$k] : [];
+            $tt = (int)($r['tt'] ?? 0);
+            $tx = trim((string)($r['text'] ?? ''));
+            if ($tt > 0) {
+                if (empty($validTt[$tt])) jerr('檢驗方法的量具類型不在可選清單裡（id ' . $tt . '）');
+                $tx = '';
+            } elseif ($tx !== '' && !in_array($tx, $mo['extra'], true)) {
+                jerr('「' . $tx . '」不在檢驗方法的選項裡，請先在上面加進去');
+            }
+            $sm[$k] = ['tt' => $tt, 'text' => $tx];
+        }
+        ss_setting_set($db, 'span_methods', $sm);
     }
     if (array_key_exists('method_extra', $_POST)) {
         $ex = [];

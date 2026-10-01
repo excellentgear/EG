@@ -1249,6 +1249,15 @@ function qCharCell(r, ro) {
                         + '<button class="btn btn-xs btn-warm-o q-grade">挑等級</button>'
                         + ' <button class="btn btn-xs q-gradeclr" title="清空">清除</button></div>');
     }
+    if ((r.input_kind || '') === 'gear_grade_opt') {
+        /* 可挑也可打：挑等級填進去，也可以自己打「依圖面」這種圖面上寫的字 */
+        return '<input class="i-q" value="' + esc(r.q_char || '') + '"' + ro
+             + ' data-eg-hint="可按「挑等級」或自己打，例如 依圖面">'
+             + (ro ? '' : '<div style="margin-top:2px;">'
+                        + '<button class="btn btn-xs btn-warm-o q-grade">挑等級</button>'
+                        + ' <button class="btn btn-xs q-gradeclr" title="清空">清除</button>'
+                        + ' <button class="btn btn-xs btn-warm-o sym-open" title="插入符號">Ø±</button></div>');
+    }
     if (num(r.lock_q) === 1 && (r.q_pat || '') !== '') return lockedCell('i-q', r.q_pat, r.q_char, ro);
     return '<input class="i-q" value="' + esc(r.q_char || '') + '"' + ro + '>'
          + (ro ? '' : '<button class="btn btn-xs btn-warm-o sym-open" style="margin-top:2px;"'
@@ -1568,6 +1577,8 @@ function renderDoc() {
     ssSortable('#tblHard');
     ssSortable('#tblItems');
     ssGsopItemTweak();      // 標準作業流程SOP：擔當者固定生產、隱藏檢驗頻率欄
+    gsGearHintAll();        // 工件規格：算得出來就提示根徑／轉位係數建議值（不自動填）
+    gsSpanSyncAll(0);       // 工件規格的跨齒厚／跨銷徑帶到檢驗項目（開啟文件時不覆蓋已經填好的）
     // 表單日期防呆：上限由後端算（依行事曆的工作天），開文件時先畫一次提示
     if (CUR.date_check && CUR.date_check.limit) SS_DATE_LIMIT = CUR.date_check.limit;
     if ($('#fDate').length) ssDateHint($('#fDate'), 'fDateHint');
@@ -1828,7 +1839,7 @@ function collectItems() {
         var ik = $t.attr('data-ik') || '';
         // 齒輪等級是從對照表挑進來的完整字串（例「AGMA 11」），不走 {} 樣板那一套
         var lc = num($t.attr('data-lc')) === 1;
-        var lq = num($t.attr('data-lq')) === 1 && ik !== 'gear_grade';
+        var lq = num($t.attr('data-lq')) === 1 && ik !== 'gear_grade' && ik !== 'gear_grade_opt';
         var ctrlPat = $t.find('.i-ctrl-pat').val() || '', qPat = $t.find('.i-q-pat').val() || '';
         var ctrlSlots = $t.find('.i-ctrl-slot').map(function () { return $(this).val() || ''; }).get();
         var qSlots    = $t.find('.i-q-slot').map(function () { return $(this).val() || ''; }).get();
@@ -2967,6 +2978,17 @@ function setPaneOwner() {
     h += '<div class="frm" style="margin-top:8px;"><label>自建項目</label><div class="wide">'
        + '<textarea id="mtExtra" style="min-height:70px;">' + esc(((res.methods || {}).extra || []).join('\n')) + '</textarea>'
        + '<div class="muted-help">一行一個。</div></div></div>';
+    /* 跨齒厚／跨銷徑各自預設用哪一種檢驗方法（使用者 2026-10-01）。
+       標準作業流程SOP 的軟體步驟切到哪一種，檢驗項目那一列就自動換成對應的方法與量具，
+       **現場仍然可以自己改**。 */
+    var sm = res.span_methods || { w: {}, p: {} };
+    h += '<div class="note-box" style="margin-top:10px;">'
+       + '<b>跨齒厚／跨銷徑的預設檢驗方法</b>：標準作業流程SOP 的「工件規格」切換量測型式時，'
+       + '檢驗項目那一列的檢驗方法與檢具會自動跟著換（現場仍可自行修改）。'
+       + '選到的方法本身是一種量具時，系統會依量測值自動挑出量程涵蓋得到的那一支'
+       + '（例：量 34.75 → 盤式分厘卡 25-50mm 那一支）。</div>';
+    h += '<div class="frm"><label>跨齒厚</label><div class="wide">' + spanMethodSel('w', sm.w || {}, res) + '</div></div>'
+       + '<div class="frm"><label>跨銷徑</label><div class="wide">' + spanMethodSel('p', sm.p || {}, res) + '</div></div>';
     // 標準檢驗指導書左下角那塊固定的「注意事項」——每一份都一樣，所以設定一次就好
     h += '<div class="note-box" style="margin-top:10px;">'
        + '<b>標準檢驗指導書的「注意事項」</b>印在左下角圖面下方，每一份都一樣，所以在這裡設一次就好。'
@@ -3238,6 +3260,9 @@ $('#setSave').on('click', function () {
         $('.mt-chk:checked').each(function () { tt.push(num($(this).val())); });
         p.method_tool_types = JSON.stringify(tt);
         p.method_extra = JSON.stringify(($('#mtExtra').val() || '').split('\n'));
+        if ($('#spMth_w').length) {
+            p.span_methods = JSON.stringify({ w: spanMethodVal('w'), p: spanMethodVal('p') });
+        }
         p.sip_notice_default = $('#sipNotice').val() || '';
     }
     // 頻率／型式／注意事項範本這一頁
@@ -3320,6 +3345,7 @@ function kvSlotHtml(p, ro) {
 
 function kvCellHtml(p, ro, keyRo) {
     p = p || { k: '', v: '', p: '', slots: [] };
+    if (p.st) return kvSpanCell(p, ro);        // 跨齒厚／跨銷徑那一格走自己的樣子
     var slotH = kvSlotHtml(p, ro);
     var h = '<td class="kvk"><input class="kv-k" value="' + esc(p.k || '') + '" data-eg-hint="參數名稱"'
           + (keyRo || ro ? ' readonly' : '') + (keyRo ? ' title="標題由範本帶入；要改請按右上角的鎖頭"' : '') + '>'
@@ -3490,6 +3516,16 @@ function collectKv($cell) {
         var row = [];
         $(this).children('td.kvk').each(function () {
             var $k = $(this), $v = $k.next('td.kvv');
+            // 跨齒厚／跨銷徑那一格：型式、跨幾齒／銷徑、上下限或範圍
+            if ($k.hasClass('kvspan')) {
+                var st = $k.find('.kv-stv').val() || 'w';
+                var vm = $v.find('.kv-vmv').val() || 'lim';
+                row.push({ k: (st === 'p' ? '跨銷徑' : '跨齒厚'), p: '', st: st, vm: vm,
+                           sn: $k.find('.kv-sn').val() || '',
+                           v:  $v.find('.kv-v1').val() || '',
+                           v2: $v.find('.kv-v2').val() || '' });
+                return;
+            }
             var k = $k.find('.kv-k').val() || '', pat = $k.find('.kv-p').val() || '';
             var slots = $v.find('.kv-s').map(function () { return $(this).val() || ''; }).get();
             var v = slots.length ? '' : ($v.find('.kv-v').val() || '');
@@ -4007,3 +4043,353 @@ $(document).on('change', '#nProcBom', function () {
     $('#nProc').val($(this).val() ? ($o.data('nm') || '') : '');
     probe();
 });
+
+/* ══════════════ 跨齒厚 ⇄ 跨銷徑、上下限 ⇄ 範圍 ══════════════
+   使用者 2026-09-30／10-01：
+   · 跨齒厚欄位點一下切換 跨齒厚／跨銷徑，旁邊一個小欄位填跨幾齒或銷徑
+   · 切成跨銷徑時左邊自動帶**不可刪除**的 Ø（所以 Ø 是畫出來的文字、不在輸入框裡）
+   · 右邊的值有「上下限」與「範圍」兩種，一樣點一下切換
+   · 這幾個都是**這一份文件自己的資料，不必解鎖**（解鎖管的是範本帶進來的標題文字）
+   列印時：上下限上下兩行顯示、範圍用 ?~? 顯示（見 sop_sip_print.php 的 gsSpan()）。 */
+
+function kvSpanCell(p, ro) {
+    var st = (p.st === 'p') ? 'p' : 'w';
+    var vm = (p.vm === 'rng') ? 'rng' : 'lim';
+    var dis = ro ? ' disabled' : '';
+    // 標題在上、輸入框在下（使用者 2026-10-01：「跨齒厚(5齒)」擠成一行很難看）
+    var h = '<td class="kvk kvspan"><div class="spk">'
+          + '<button type="button" class="kv-st"' + dis + ' title="點一下切換 跨齒厚／跨銷徑">'
+          + (st === 'p' ? '跨銷徑' : '跨齒厚') + '</button>'
+          + '<div class="spln">'
+          + (st === 'p' ? '<span class="spfx">Ø</span>' : '')
+          + '<input class="kv-sn" value="' + esc(p.sn || '') + '"' + ro + '>'
+          + (st === 'p' ? '' : '<span class="spfx">齒</span>')
+          + '</div>'
+          + '<input type="hidden" class="kv-stv" value="' + st + '">'
+          + '</div></td>';
+    h += '<td class="kvv kvspanv"><div class="spv">'
+       + '<button type="button" class="kv-vm"' + dis + ' title="點一下切換 上下限／範圍">'
+       + (vm === 'rng' ? '範圍' : '上下限') + '</button>'
+       + (vm === 'rng'
+           ? ('<div class="spln"><input class="kv-v1" value="' + esc(p.v || '') + '"' + ro + '>'
+              + '<span class="spfx">~</span>'
+              + '<input class="kv-v2" value="' + esc(p.v2 || '') + '"' + ro + '></div>')
+           : ('<div class="spln"><span class="lb">上限</span>'
+              + '<input class="kv-v1" value="' + esc(p.v || '') + '"' + ro + '></div>'
+              + '<div class="spln"><span class="lb">下限</span>'
+              + '<input class="kv-v2" value="' + esc(p.v2 || '') + '"' + ro + '></div>'))
+       + '<input type="hidden" class="kv-vmv" value="' + vm + '">'
+       + '</div></td>';
+    return h;
+}
+
+/** 只重畫這一格（不要整頁重畫——使用者正在打字的其他欄位會被洗掉） */
+function kvSpanRedraw($kcell, patch) {
+    var $v = $kcell.next('td.kvv');
+    var cur = {
+        st: $kcell.find('.kv-stv').val() || 'w',
+        sn: $kcell.find('.kv-sn').val() || '',
+        vm: $v.find('.kv-vmv').val() || 'lim',
+        v:  $v.find('.kv-v1').val() || '',
+        v2: $v.find('.kv-v2').val() || ''
+    };
+    $.extend(cur, patch || {});
+    var ro = CUR && CUR.can_edit ? '' : ' readonly';
+    var $tmp = $('<tr>' + kvSpanCell(cur, ro) + '</tr>');
+    $kcell.replaceWith($tmp.children('td.kvk'));
+    $v.replaceWith($tmp.children('td.kvv'));
+}
+
+$(document).on('click', '.kv-st', function () {
+    if (!CUR || !CUR.can_edit) return;
+    var $k = $(this).closest('td.kvk');
+    var next = ($k.find('.kv-stv').val() === 'p') ? 'w' : 'p';
+    kvSpanRedraw($k, { st: next });
+    gsSpanSyncAll(1);                 // 換量測型式＝檢驗方法與檢具都要跟著換
+    DIRTY = true;
+});
+$(document).on('click', '.kv-vm', function () {
+    if (!CUR || !CUR.can_edit) return;
+    var $v = $(this).closest('td.kvv');
+    var next = ($v.find('.kv-vmv').val() === 'rng') ? 'lim' : 'rng';
+    kvSpanRedraw($v.prev('td.kvk'), { vm: next });
+    gsSpanSyncAll(1);
+    DIRTY = true;
+});
+
+/* ══════════════ 根徑（齒根徑）自動計算建議 ══════════════
+   使用者 2026-09-30：「軟體步驟可以仿照齒輪計算工具自動計算根徑嗎? 要增加轉位係數欄位」
+
+   **刻意只「建議」不自動填**：拿 8 份紙本實際驗算過，只有 2 份的根徑與公式算出來的
+   完全相同（KKYC58207901 x≈0.4667、NM4401-51 x=0.4），其餘 6 份都對不起來——
+   現場的根徑常常是依客戶圖面直接給的、或是用不同的齒根係數。
+   自動覆蓋等於把圖面上的正確值換成算出來的值，而且沒有人會發現。
+   所以：算得出來就在欄位底下顯示一行建議，**點了才填**，已經有值的要再確認一次。
+
+   公式一律呼叫共用庫 EGGear（resource/js/eg_gear_calc.js），不在這裡再抄一份。 */
+
+var GS_GK = {                      // 欄位名稱的別名（紙本上寫法不一）
+    mn:   ['模數', '法向模數', 'mn'],
+    z:    ['齒數', 'z'],
+    an:   ['壓力角', '法向壓力角'],
+    beta: ['螺旋角', '螺旋角度'],
+    x:    ['轉位係數', '轉位係'],
+    da:   ['外徑', '齒頂圓直徑', '齒頂圓'],
+    df:   ['根徑', '齒根徑', '齒根圓直徑']
+};
+
+/** 把一張參數格的每一格讀成 {k, $k, $v}（跨齒厚那種特別格沒有 kv-k，k 會是空字串） */
+function gsKvCells($grid) {
+    var out = [];
+    $grid.find('td.kvk').each(function () {
+        var $k = $(this);
+        out.push({ k: $.trim($k.find('.kv-k').val() || ''), $k: $k, $v: $k.next('td.kvv') });
+    });
+    return out;
+}
+function gsPick(cells, names) {
+    var i, j;
+    for (i = 0; i < cells.length; i++) for (j = 0; j < names.length; j++)
+        if (cells[i].k === names[j]) return cells[i];
+    for (i = 0; i < cells.length; i++) for (j = 0; j < names.length; j++)
+        if (cells[i].k && cells[i].k.indexOf(names[j]) >= 0) return cells[i];
+    return null;
+}
+/** 這一格目前的值（有填空樣板時把各小格串起來） */
+function gsCellVal(c) {
+    if (!c) return '';
+    var $s = c.$v.find('.kv-s');
+    if ($s.length) return $.trim($s.map(function () { return $(this).val() || ''; }).get().join(''));
+    return $.trim(c.$v.find('.kv-v').val() || '');
+}
+function gsCellInput(c) {
+    var $s = c.$v.find('.kv-s');
+    return $s.length ? $s.first() : c.$v.find('.kv-v').first();
+}
+function gsHintHtml(val, why) {
+    return '<div class="dfhint">建議 <b title="點一下填入">' + esc(String(val)) + '</b>'
+         + (why ? '<span class="muted-help">（' + esc(why) + '）</span>' : '') + '</div>';
+}
+
+/** 重算一張參數格的建議值 */
+function gsGearHint($grid) {
+    $grid.find('.dfhint').remove();
+    if (!window.EGGear || !CUR || !CUR.can_edit) return;
+    var cells = gsKvCells($grid);
+    var cMn = gsPick(cells, GS_GK.mn), cZ = gsPick(cells, GS_GK.z);
+    if (!cMn || !cZ) return;
+    var mn = gsCellVal(cMn), z = gsCellVal(cZ);
+    if (mn === '' || z === '') return;
+
+    var cAn = gsPick(cells, GS_GK.an), cB = gsPick(cells, GS_GK.beta);
+    var cX  = gsPick(cells, GS_GK.x),  cDa = gsPick(cells, GS_GK.da), cDf = gsPick(cells, GS_GK.df);
+    var an = cAn ? gsCellVal(cAn) : '', beta = cB ? gsCellVal(cB) : '';
+    var xs = cX ? gsCellVal(cX) : '',   da = cDa ? gsCellVal(cDa) : '';
+
+    // ── 轉位係數沒填、但圖面給了外徑 → 回推一個建議值 ──
+    var xUse = xs, why = '';
+    if (xs === '' && da !== '') {
+        var xr = EGGear.solveX({ mn: mn, z: z, beta: beta, da: da });
+        if (xr !== null) {
+            xUse = xr; why = '由外徑 ' + da + ' 回推';
+            if (cX) cX.$v.append(gsHintHtml(xr, '由外徑 ' + da + ' 回推'));
+        }
+    }
+    // ── 根徑 ──
+    if (!cDf) return;
+    var r = EGGear.basic({ mn: mn, z: z, alpha_n: an, beta: beta, x: xUse });
+    if (!r || r.df === null) return;
+    var df = EGGear.round(r.df, 3);
+    var cur = gsCellVal(cDf);
+    if (cur !== '' && Math.abs(parseFloat(cur) - df) < 0.0005) return;   // 已經相同就不囉嗦
+    cDf.$v.append(gsHintHtml(df, why || ('模數 ' + mn + '×齒數 ' + z + (xUse !== '' ? '，轉位 ' + xUse : ''))));
+}
+function gsGearHintAll() {
+    if (!ssIsGsop()) return;
+    $('#tblSoft > tbody > tr').each(function () {
+        $(this).find('table.kvgrid').each(function () { gsGearHint($(this)); });
+    });
+}
+
+/* 改了任何一格就重算（只重算那一張格，不動使用者正在打字的其他欄位） */
+$(document).on('input change', 'table.kvgrid input', function () {
+    var $g = $(this).closest('table.kvgrid');
+    if ($g.length) gsGearHint($g);
+});
+/* 點建議值才填——**絕不自動覆蓋**，已經有值的再問一次 */
+$(document).on('click', '.dfhint b', function () {
+    if (!CUR || !CUR.can_edit) return;
+    var $cell = $(this).closest('td.kvv');
+    var $in = $cell.find('.kv-s').first();
+    if (!$in.length) $in = $cell.find('.kv-v').first();
+    if (!$in.length) return;
+    var v = $.trim($(this).text());
+    if ($.trim($in.val() || '') !== '' && !confirm('這一格已經有值（' + $in.val() + '），要換成 ' + v + ' 嗎？')) return;
+    $in.val(v).trigger('change');
+    DIRTY = true;
+});
+
+/* ══════════ 設定頁：跨齒厚／跨銷徑的預設檢驗方法 ══════════ */
+function spanMethodSel(k, cur, res) {
+    var h = '<select id="spMth_' + k + '" data-eg-filter="輸入檢驗方法篩選…"><option value="">（不自動帶）</option>';
+    $.each(((res.methods || {}).list) || [], function (i, m) {
+        var v = num(m.tool_type_id) ? ('t:' + num(m.tool_type_id)) : ('x:' + m.text);
+        var sel = num(m.tool_type_id) ? (num(m.tool_type_id) === num(cur.tt))
+                                      : (!num(cur.tt) && String(m.text) === String(cur.text || ''));
+        h += '<option value="' + esc(v) + '"' + (sel ? ' selected' : '') + '>' + esc(m.text)
+           + (num(m.tool_type_id) ? '' : '（自建）') + '</option>';
+    });
+    return h + '</select>';
+}
+function spanMethodVal(k) {
+    var v = $('#spMth_' + k).val() || '';
+    if (v.indexOf('t:') === 0) return { tt: num(v.substring(2)), text: '' };
+    if (v.indexOf('x:') === 0) return { tt: 0, text: v.substring(2) };
+    return { tt: 0, text: '' };
+}
+
+/* ══════════ 軟體步驟的跨齒厚／跨銷徑 → 檢驗項目第一列 ══════════
+   使用者 2026-10-01：「SOP 綁定料號會有兩處都有跨齒跟跨銷相關資料，應該在軟體那輸入過後，
+   下方檢驗項目第一項自動帶入相關資料包含上下限或數值範圍…量具編號也要可以自動對應出來，
+   因為量具都有設定規格」。
+
+   **同一件事只在軟體步驟填一次**，檢驗項目那一列跟著走（兩邊各填一次遲早對不起來）。
+   仍然可以人工改：`force=0`（開啟文件、改數值）只補空的；`force=1`（**使用者自己按了切換鈕**）
+   才覆蓋——那是他明確表示「這一列換成另一種量測方式」。 */
+
+/** 讀軟體步驟裡那一格的跨齒厚／跨銷徑設定；沒有就回 null */
+function gsSpanRead() {
+    var out = null;
+    $('#tblSoft > tbody > tr').each(function () {
+        if (out) return;
+        var $k = $(this).find('td.kvspan').first();
+        if (!$k.length) return;
+        var $v = $k.next('td.kvv');
+        out = { st: $k.find('.kv-stv').val() || 'w', sn: $.trim($k.find('.kv-sn').val() || ''),
+                vm: $v.find('.kv-vmv').val() || 'lim',
+                v1: $.trim($v.find('.kv-v1').val() || ''), v2: $.trim($v.find('.kv-v2').val() || '') };
+    });
+    return out;
+}
+/** 檢驗項目裡哪一列是跨齒厚／跨銷徑那一列（管理重點開頭就認得出來） */
+function gsSpanItemRow() {
+    var $hit = null;
+    $('#tblItems tbody tr').each(function () {
+        if ($hit) return;
+        var $t = $(this);
+        var txt = ($t.find('.i-ctrl-pat').val() || '') + ' ' + ($t.find('.i-ctrl').val() || '')
+                + ' ' + $t.find('.lk-fix').map(function () { return $(this).text(); }).get().join('');
+        if (/跨齒|跨銷|跨珠|跨梢/.test(txt)) $hit = $t;
+    });
+    return $hit;
+}
+function gsSpanSyncAll(force) {
+    if (!ssIsGsop() || !CUR || !CUR.can_edit) return;
+    var sp = gsSpanRead(); if (!sp) return;
+    var $tr = gsSpanItemRow(); if (!$tr || !$tr.length) return;
+
+    /* ── 管理重點：跨齒厚(?齒) ⇄ 跨銷徑Ø? ── */
+    var pat = (sp.st === 'p') ? '跨銷徑Ø{銷徑}' : '跨齒厚({跨幾齒}齒)';
+    var $pat = $tr.find('.i-ctrl-pat');
+    if ($pat.length) {
+        /* **型式沒換就不要動原本的樣板**——預設項目寫的是「跨齒厚({}齒)」，
+           只因為提示字不一樣就重寫，會讓每一份文件都跟預設項目長得不一樣（而且看不出差在哪）。 */
+        var cp = $pat.val() || '';
+        var okNow = (sp.st === 'p') ? /^跨(銷|珠|梢)/.test(cp) : /^跨齒/.test(cp);
+        if (!okNow) {
+            // 型式換了就要整格重畫（固定文字是畫出來的，不是輸入框）
+            var ro = CUR.can_edit ? '' : ' readonly';
+            $tr.children('td').eq(1).html(lockedCell('i-ctrl', pat, '', ro));
+            $tr.attr('data-lc', 1);
+        }
+        var $slot = $tr.find('.i-ctrl-slot').first();
+        if ($slot.length && (force || $.trim($slot.val() || '') === '') && sp.sn !== '') $slot.val(sp.sn);
+    }
+    /* ── 上下限／範圍 ── */
+    var up = $tr.find('.i-up'), lo = $tr.find('.i-lo');
+    var a = sp.v1, b = sp.v2;                    // 上下限：v1＝上限、v2＝下限
+    if (sp.vm === 'rng') {                       // 範圍 起~迄：大的當上限、小的當下限
+        var na = parseFloat(sp.v1), nb = parseFloat(sp.v2);
+        if (isFinite(na) && isFinite(nb)) { a = String(Math.max(na, nb)); b = String(Math.min(na, nb)); }
+        else { a = sp.v2; b = sp.v1; }
+    }
+    if (up.length && (force || $.trim(up.val() || '') === '')) up.val(a);
+    if (lo.length && (force || $.trim(lo.val() || '') === '')) lo.val(b);
+
+    /* ── 檢驗方法（管理員設定的那一個） ── */
+    var sm = (CUR.span_methods || {})[sp.st] || {};
+    var $m = $tr.find('.i-mth');
+    if ($m.length && (sm.text || '')) {
+        var curM = $.trim($m.val() || '');
+        if (force || curM === '') {
+            $m.val(sm.text);
+            if (($m.val() || '') !== sm.text) {   // 清單裡沒有就補一個選項，不要安靜地選不到
+                $m.append('<option value="' + esc(sm.text) + '" data-tt="' + num(sm.tt) + '">' + esc(sm.text) + '</option>')
+                  .val(sm.text);
+            }
+            $tr.attr('data-tt', num(sm.tt) || num($m.find('option:selected').data('tt')));
+        }
+    }
+    /* **data-tt 一律跟著目前選到的方法重算**：舊文件存的 tool_type_id 是 0，
+       不重算的話量具永遠對應不出來，而且畫面上完全看不出為什麼（實測踩到）。 */
+    if ($m.length) {
+        var tt0 = num($m.find('option:selected').data('tt'));
+        if (tt0) $tr.attr('data-tt', tt0);
+    }
+    gsToolAuto($tr, force);
+}
+
+/** 依量測值自動對應量具（量程涵蓋得到、範圍最小的那一支） */
+function gsToolAuto($tr, force) {
+    var tt = num($tr.attr('data-tt'));
+    if (!tt) return;
+    /* 量測值＝品質特性那一格的數字（紙本上的標稱值，例 34.7521）。
+       沒填標稱值時改用上下限的中間值——紙本上有兩種寫法：
+       上下限直接寫絕對尺寸（21.836／21.812）或寫偏差（-0.005／-0.015）。
+       偏差那種算出來是負的，量程比對自然對不到任何一支，不會亂挑。 */
+    var q = $.trim($tr.find('.i-q').val() || ($tr.find('.i-q-slot').map(function () { return $(this).val() || ''; }).get().join('')));
+    var mv = (q.match(/-?\d+(\.\d+)?/) || [])[0];
+    if (mv === undefined) {
+        var hu = parseFloat($tr.find('.i-up').val()), hl = parseFloat($tr.find('.i-lo').val());
+        if (isFinite(hu) && isFinite(hl)) mv = String((hu + hl) / 2);
+        else if (isFinite(hu)) mv = String(hu);
+        else return;
+    }
+    var asof = $('#fDate').val() || (CUR.ver && CUR.ver.form_date) || '';
+    api('tool_match', { type_id: tt, value: mv, asof: asof }, function (res) {
+        var best = res.best;
+        $tr.find('.toolhint').remove();
+        if (!best) return;
+        var curId = num($tr.attr('data-tool'));
+        var auto  = num($tr.attr('data-toolauto')) === 1;
+        if (!curId || auto || force) {
+            $tr.attr('data-tool', num(best.id)).attr('data-toolauto', 1)
+               .find('.i-tool').val(best.label || best.tool_no);
+        } else if (curId !== num(best.id)) {
+            // 自己挑過的就不覆蓋，只提示（點一下才換）
+            $tr.find('.i-tool').after('<div class="dfhint toolhint">建議 <b data-id="' + num(best.id)
+                + '" title="點一下改用這一支">' + esc(best.label || best.tool_no) + '</b>'
+                + '<span class="muted-help">（量 ' + esc(mv) + ' 落在 ' + best.lo + '~' + best.hi + '）</span></div>');
+        }
+    });
+}
+/* 使用者自己按「挑檢具」挑過的，就不再被自動對應覆蓋 */
+$(document).on('click', '.tn-go', function () { if (TOOL_FOR) TOOL_FOR.attr('data-toolauto', 0); });
+$(document).on('click', '.toolhint b', function () {
+    var $tr = $(this).closest('tr');
+    $tr.attr('data-tool', num($(this).data('id'))).attr('data-toolauto', 0)
+       .find('.i-tool').val($.trim($(this).text()));
+    $tr.find('.toolhint').remove();
+    DIRTY = true;
+});
+/* 品質特性（標稱值）或檢驗方法改了，量具要重新對應 */
+$(document).on('change', '#tblItems .i-q, #tblItems .i-q-slot', function () {
+    gsToolAuto($(this).closest('tr'), 0);
+});
+$(document).on('change', '#tblItems .i-mth', function () {
+    var $tr = $(this).closest('tr');
+    $tr.attr('data-toolauto', 1);           // 換了方法＝原本那支量具多半不適用，讓它重新對應
+    gsToolAuto($tr, 1);
+});
+/* 軟體步驟的跨齒數／上下限改了也要同步過去（只補空的，不覆蓋手改過的） */
+$(document).on('change', '.kv-sn, .kv-v1, .kv-v2', function () { gsSpanSyncAll(0); });
