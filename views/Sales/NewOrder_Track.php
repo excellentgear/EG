@@ -9010,9 +9010,15 @@ foreach($dCounts as $c) {
                 .html('<i class="fa fa-check-square-o"></i> 套用本頁全部「建議標籤」');
         }
 
-        function astagBfOrders(page) {
+        /**
+         * @param keepMsg 真＝不要清掉 #bf-order-msg。
+         * 「套用到勾選的訂單」成功之後會馬上重查這一頁，若這裡無條件清訊息，
+         * 「已補設定 N 張」會在幾毫秒內被擦掉——畫面上就只看到清單換了一批、
+         * 沒有任何訊息，跟「按了完全沒反應」分不出來（2026-10-02 使用者回報的就是這個）。
+         */
+        function astagBfOrders(page, keepMsg) {
             ASTAGCFG.bfPage = Math.max(1, parseInt(page || 1, 10));
-            $('#bf-order-msg').text('');
+            if (!keepMsg) $('#bf-order-msg').text('');
             $('#bf-order-tbody').html('<tr><td colspan="8" class="text-center" style="color:#aaa;padding:16px;">查詢中…</td></tr>');
             var f = astagBfFilter();
             f.action = 'backfill_orders'; f.page = ASTAGCFG.bfPage; f.per = $('#bf-per').val() || 20;
@@ -9092,14 +9098,20 @@ foreach($dCounts as $c) {
                 if (!key) { $('#bf-order-msg').css('color', '#DD5138').text('請先在下拉選擇要設成哪一個標籤'); return; }
                 groups[key] = picked.map(function (p) { return p.id; });
             }
-            var keys = Object.keys(groups), applied = 0, f = astagBfFilter();
+            var keys = Object.keys(groups), applied = 0, fail = '', f = astagBfFilter();
             $('#bf-order-msg').css('color', '#888').text('套用中…');
             (function next() {
                 if (!keys.length) {
-                    $('#bf-order-msg').css('color', '#27ae60').text('已補設定 ' + astagNum(applied) + ' 張訂單'
-                        + (skipped ? '（其中 ' + skipped + ' 張沒有系統建議，已略過）' : ''));
+                    var msg = fail
+                        ? ('套用失敗：' + fail + (applied ? '（已完成 ' + astagNum(applied) + ' 張）' : ''))
+                        : ('已補設定 ' + astagNum(applied) + ' 張訂單'
+                           + (skipped ? '（其中 ' + skipped + ' 張沒有系統建議，已略過）' : '')
+                           + (applied ? '，已從下方清單移除' : '（這些訂單可能剛剛已經被設定過了）'));
+                    $('#bf-order-msg').css('color', fail ? '#DD5138' : '#27ae60').text(msg);
+                    // 再跳一個 toast：清單會馬上換一批，只靠一行小字很容易沒注意到
+                    if (typeof showToast === 'function') showToast(msg);
                     ASTAGCFG.bfDirty = true;
-                    astagBfOrders(ASTAGCFG.bfPage);   // 只重查這一頁的未設定清單，不動背後的主表格
+                    astagBfOrders(ASTAGCFG.bfPage, true);   // keepMsg：重查清單時不可以把上面那句話洗掉
                     return;
                 }
                 var k = keys.shift(), p = k.split(':');
@@ -9107,7 +9119,7 @@ foreach($dCounts as $c) {
                               order_ids: JSON.stringify(groups[k]),
                               year: f.year, kw: f.kw, include_cancelled: f.include_cancelled }, function (res) {
                     if (res.success) applied += parseInt(res.applied || 0, 10);
-                    else $('#bf-order-msg').css('color', '#DD5138').text(res.message || '套用失敗');
+                    else if (!fail) fail = (res.message || '未知錯誤');
                     next();
                 });
             })();
