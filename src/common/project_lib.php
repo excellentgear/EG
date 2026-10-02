@@ -248,6 +248,32 @@ const PRJ_TASK_STATUS = [
 const PRJ_FAI_RESULTS = ['pass' => '通過', 'aod' => '特採通過', 'fail' => '未通過'];
 function prj_fai_is_pass(?string $r): bool { return $r === 'pass' || $r === 'aod'; }
 
+/* ── 上傳檔案的副檔名規則（唯一實作；兩種政策共用同一份清單＝鐵律4）──────────────
+   ・可執行／腳本：一律擋（附件放在 NAS 上，點下去就執行了）
+   ・壓縮檔：只有「客戶首件確認書」擋。理由是那是要給稽核看的品質紀錄，
+     包成壓縮檔等於看不到裡面是什麼、也無法線上預覽；一般佐證附件維持原本行為不變
+     （既有資料裡本來就可能有壓縮檔，改成一律擋會讓舊流程突然存不進去）。 */
+const PRJ_EXT_EXEC    = ['php','phtml','php3','php4','php5','phps','exe','bat','cmd','com','scr',
+                         'js','vbs','vbe','wsf','wsh','ps1','psm1','jar','msi','msp','hta','cpl','dll','sh'];
+const PRJ_EXT_ARCHIVE = ['zip','rar','7z','tar','gz','tgz','bz2','tbz','tbz2','xz','txz','z','lzh','lha',
+                         'cab','arj','ace','iso','img','dmg'];
+
+/**
+ * 檔案副檔名可不可以收。回傳空字串＝可以，否則回傳「為什麼不行」的說明文字。
+ * $noArchive=true 時連壓縮檔一起擋（客戶首件確認書用）。
+ */
+function prj_upload_ext_reason(string $ext, bool $noArchive = false): string
+{
+    $ext = strtolower(ltrim(trim($ext), '.'));
+    if ($ext !== '' && in_array($ext, PRJ_EXT_EXEC, true)) {
+        return '不接受可執行檔或腳本檔（.' . $ext . '）';
+    }
+    if ($noArchive && $ext !== '' && in_array($ext, PRJ_EXT_ARCHIVE, true)) {
+        return '不接受壓縮檔（.' . $ext . '）；請直接上傳 PDF 或圖片等看得到內容的檔案';
+    }
+    return '';
+}
+
 const PRJ_SETTING_GROUP = 'PROJECT_MGMT';
 
 /* ══════════════════════════════ Schema ══════════════════════════════ */
@@ -604,6 +630,23 @@ function prj_ensure_schema(PDO $db): void
         UNIQUE KEY uq_seq (project_id, seq),
         KEY idx_prj (project_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='專案首件檢驗（AS9102 FAI）送件與結果，未通過可重送'");
+
+    /* 客戶首件確認書（2026-10-01 使用者要求）：首件判定通過／特採通過之後要收客戶的書面認可。
+       **掛在 fai_id 不是 project_id**——未通過可重送，每一次送件各自有自己的客戶確認書，
+       只掛專案的話第 2 次通過時會分不出那份確認書是哪一次的（AS9102 要求可追溯）。
+       紙本沒有制式格式，客戶直接在首件報告上簽名認可也算，所以不限定檔案型式、只擋可執行檔與壓縮檔。 */
+    $db->exec("CREATE TABLE IF NOT EXISTS project_fai_attach (
+        id          INT AUTO_INCREMENT PRIMARY KEY,
+        project_id  INT NOT NULL,
+        fai_id      INT NOT NULL COMMENT 'project_fai.fai_id＝這份確認書屬於第幾次送件',
+        filename    VARCHAR(255) NOT NULL COMMENT '落在 NAS 上的實體檔名（不存路徑＝鐵律5）',
+        orig_name   VARCHAR(255) NOT NULL COMMENT '使用者上傳當下的原始檔名',
+        file_size   INT NULL,
+        note        VARCHAR(200) NULL COMMENT '備註（例：客戶直接在首件報告上簽名認可）',
+        uploaded_by INT NULL, uploaded_by_name VARCHAR(60) NULL, uploaded_at DATETIME NULL,
+        deleted_at  DATETIME NULL, deleted_by VARCHAR(60) NULL,
+        KEY idx_fai (fai_id), KEY idx_prj (project_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='客戶首件確認書（AS9102 首件通過後的客戶書面認可）'");
 
     // 角色（比照 pfmea_lib 慣例自動建立；名稱之後可在角色管理改，這裡只保證存在）
     foreach ([['project_view', '專案檢閱'], ['project_edit', '專案登錄'], ['project_admin', '專案管理員']] as $r) {
@@ -1208,14 +1251,24 @@ function prj_plan_locked(?array $prj): bool
 
 /* ══════════════════════ 首件檢驗（AS9102 FAI） ══════════════════════ */
 
-/** 這個專案的所有送件紀錄（第 1 次、第 2 次…；未通過可重送，全部留著） */
-function prj_fai_list(PDO $db, int $projectId): array
+/**
+ * 這個專案的所有送件紀錄（第 1 次、第 2 次…；未通過可重送，全部留著）。
+ * $withAttach=true 會多帶每一次的客戶首件確認書清單（**只多一次查詢**，不是逐列各查一次）。
+ * 預設關閉是刻意的：prj_fai_pass_date() 這種只要日期的呼叫端不必為了附件多打一次 DB。
+ */
+function prj_fai_list(PDO $db, int $projectId, bool $withAttach = false): array
 {
     try {
         $st = $db->prepare("SELECT * FROM project_fai WHERE project_id=? ORDER BY seq");
         $st->execute([$projectId]);
-        return $st->fetchAll(PDO::FETCH_ASSOC);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) { return []; }
+    if ($withAttach && $rows) {
+        $map = prj_fai_attach_map($db, $projectId);
+        foreach ($rows as &$r) $r['attaches'] = $map[(int)$r['fai_id']] ?? [];
+        unset($r);
+    }
+    return $rows;
 }
 
 /** 首件通過日（最後一次判定為通過／特採通過的日期）；還沒通過回 null＝文件閘門用 */
@@ -1227,6 +1280,110 @@ function prj_fai_pass_date(PDO $db, int $projectId): ?string
         }
     }
     return null;
+}
+
+/* ── 客戶首件確認書（首件通過後的客戶書面認可）────────────────────────────────
+   使用者 2026-10-01 要求：首件檢驗判定「通過」或「特採通過」之後，要收客戶的首件確認書。
+   沒有制式格式——客戶直接在我們的首件報告上簽名認可也算，所以不限定檔案型式。
+   拍板的強制程度：**紅字提醒＋擋下專案結案**（不擋「判定為通過」，因為客戶的回覆
+   通常是判定之後幾天才到，連判定都擋會讓通過日期登錄不了、連帶卡住型態識別文件管制表的閘門）。 */
+
+/**
+ * 客戶首件確認書的實體資料夾（鐵律5：DB 只存檔名，路徑讀取當下才組）。
+ * 管理員沒有另外指定時＝與專案其他附件同一個資料夾，所以不設定也能正常運作。
+ */
+function prj_fai_attach_dir(PDO $db, bool $ensure = true): string
+{
+    require_once __DIR__ . '/attach_lib.php';
+    $dir = '';
+    try {
+        $st = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key='project_fai_attach_dir'");
+        $st->execute();
+        $v = $st->fetchColumn();
+        if ($v !== false && trim((string)$v) !== '') $dir = trim((string)$v);
+    } catch (Throwable $e) {}
+    if ($dir === '') return prj_attach_dir($db, $ensure);   // 沒指定＝沿用專案附件資料夾
+    if (!preg_match('#[/\\]$#', $dir)) $dir .= (strpos($dir, '\\') !== false ? '\\' : '/');
+    if ($ensure) eg_attach_ensure_dir($dir);
+    return $dir;
+}
+
+/**
+ * 模組設定畫面要顯示的附件資料夾狀態：目前「設定值」與「實際會存到哪」各一份。
+ * 一定要兩個都給——留空是合法的（代表用預設），只顯示設定值的話畫面上就是兩個空白欄位，
+ * 管理員完全不知道檔案到底落在哪裡。
+ */
+function prj_attach_dir_meta(PDO $db): array
+{
+    require_once __DIR__ . '/attach_lib.php';
+    $raw = ['project_attach_dir' => '', 'project_fai_attach_dir' => ''];
+    try {
+        $st = $db->query("SELECT setting_key, setting_value FROM system_settings
+                          WHERE setting_key IN ('project_attach_dir','project_fai_attach_dir')");
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $raw[(string)$r['setting_key']] = trim((string)$r['setting_value']);
+    } catch (Throwable $e) {}
+    return [
+        'task'          => $raw['project_attach_dir'],
+        'fai'           => $raw['project_fai_attach_dir'],
+        'task_effective'=> prj_attach_dir($db, false),
+        'fai_effective' => prj_fai_attach_dir($db, false),
+        'root'          => eg_attach_root($db),
+    ];
+}
+
+/** 某一次送件的客戶首件確認書清單 */
+function prj_fai_attaches(PDO $db, int $faiId): array
+{
+    try {
+        $st = $db->prepare("SELECT id, fai_id, filename, orig_name, file_size, note,
+                                   uploaded_by_name, uploaded_at
+                            FROM project_fai_attach WHERE fai_id=? AND deleted_at IS NULL ORDER BY id");
+        $st->execute([$faiId]);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+/** 整個專案的客戶首件確認書，依 fai_id 分組（一次查完，避免逐次送件各打一次 DB） */
+function prj_fai_attach_map(PDO $db, int $projectId): array
+{
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT id, fai_id, filename, orig_name, file_size, note,
+                                   uploaded_by_name, uploaded_at
+                            FROM project_fai_attach WHERE project_id=? AND deleted_at IS NULL ORDER BY id");
+        $st->execute([$projectId]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(int)$r['fai_id']][] = $r;
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/**
+ * 「首件通過了沒有？客戶確認書收到了沒有？」——畫面提示、結案閘門與列印都用這一支（唯一實作）。
+ *
+ * 回傳：
+ *   passed    已經有判定為通過／特採通過的送件
+ *   fai_id    那一次送件的 id（要把確認書掛上去的對象）
+ *   seq       第幾次送件        result 通過或特採通過
+ *   pass_date 通過日
+ *   count     已上傳幾份確認書
+ *   need      已通過但一份都還沒上傳＝要補件（結案閘門看的就是這一個）
+ */
+function prj_fai_confirm_status(PDO $db, int $projectId): array
+{
+    $out = ['passed' => false, 'fai_id' => 0, 'seq' => 0, 'result' => '',
+            'pass_date' => null, 'count' => 0, 'need' => false];
+    foreach (array_reverse(prj_fai_list($db, $projectId)) as $r) {
+        if (!prj_fai_is_pass((string)$r['result'])) continue;
+        $out['passed']    = true;
+        $out['fai_id']    = (int)$r['fai_id'];
+        $out['seq']       = (int)$r['seq'];
+        $out['result']    = (string)$r['result'];
+        $out['pass_date'] = (string)($r['result_date'] ?: $r['send_date']) ?: null;
+        $out['count']     = count(prj_fai_attaches($db, $out['fai_id']));
+        $out['need']      = ($out['count'] === 0);
+        break;
+    }
+    return $out;
 }
 
 /**
@@ -2603,12 +2760,14 @@ function prj_auto_sign_range(PDO $db, array $prj, string $today): array
     return ['min' => $min, 'max' => $max, 'default' => $min, 'bom_date' => $bomDate, 'note' => $note];
 }
 
-/** 專案附件的實體資料夾（鐵律5：走共用 attach_lib，預設在 AS9100 根目錄底下的「專案管理」） */
-function prj_attach_dir(PDO $db): string
+/** 專案附件的實體資料夾（鐵律5：走共用 attach_lib，預設在 AS9100 根目錄底下的「專案管理」）。
+ *  $ensure=false＝只算出路徑、不建資料夾（設定畫面要顯示「目前實際存放在哪」時用，
+ *  光是打開設定跳窗不應該在 NAS 上建出資料夾）。 */
+function prj_attach_dir(PDO $db, bool $ensure = true): string
 {
     require_once __DIR__ . '/attach_lib.php';
     $dir = eg_attach_dir($db, 'project_attach_dir', '專案管理');
-    eg_attach_ensure_dir($dir);
+    if ($ensure) eg_attach_ensure_dir($dir);
     return $dir;
 }
 

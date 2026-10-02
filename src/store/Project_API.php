@@ -180,6 +180,11 @@ case 'meta':
         'stamp_tpls' => $tpls,
         'today'      => $NOW['date'],
         'default_cosign_depts' => prj_setting_get($db, 'default_cosign_depts', ''),
+        // 附件存放資料夾（模組設定要顯示「設定值」與「實際會存到哪」兩份）
+        'attach_dirs' => prj_attach_dir_meta($db),
+        /* 上傳要擋哪些副檔名——**前端直接吃後端這一份**，不要在 JS 裡再抄一份清單（鐵律4）：
+           抄一份的話日後加一個副檔名就會變成「前端放行、後端擋下」。 */
+        'upload_reject' => ['exec' => PRJ_EXT_EXEC, 'archive' => PRJ_EXT_ARCHIVE],
         // 挑選器要的完整 AS 文件清單（eg_asdoc_picker 的 opt.docs；沒有它跳窗會是空的、打字永遠「符合 0 筆」）
         'as_docs'    => eg_asdoc_list($db),
         'asdoc'      => [
@@ -230,8 +235,10 @@ case 'get':
         'auto_sign_range'  => prj_auto_sign_range($db, $prj, $NOW['date']),
         'shipments' => prj_shipments($db, $pid),
         'work_reports' => prj_work_reports($db, $pid),
-        'fai'          => prj_fai_list($db, $pid),
+        'fai'          => prj_fai_list($db, $pid, true),
         'fai_pass_date'=> prj_fai_pass_date($db, $pid),
+        // 首件通過了沒有／客戶首件確認書收到了沒有（畫面紅字提示與結案閘門都看這一份）
+        'fai_confirm'  => prj_fai_confirm_status($db, $pid),
         'fai_results'  => PRJ_FAI_RESULTS,
         'doc_phase'    => PRJ_DOC_PHASE,
         'cards'     => prj_cards($db, $pid),
@@ -707,10 +714,12 @@ case 'report_upload':
     if (empty($_FILES['file']) || ($_FILES['file']['error'] ?? 9) !== UPLOAD_ERR_OK) jerr('請選擇檔案');
     $orig = (string)$_FILES['file']['name'];
     $ext  = strtolower((string)pathinfo($orig, PATHINFO_EXTENSION));
-    // 可執行／腳本副檔名一律擋（附件放在 NAS 上，點下去就執行了）
-    if (in_array($ext, ['php','phtml','exe','bat','cmd','com','scr','js','vbs','ps1','jar','msi','hta'], true)) {
-        jerr('不接受這種檔案類型（可執行或腳本檔）');
-    }
+    /* 可執行／腳本副檔名一律擋（附件放在 NAS 上，點下去就執行了）。
+       清單走唯一實作 prj_upload_ext_reason()，不在這裡自己留一份（鐵律4）。
+       第二個參數 false＝**壓縮檔照舊收**，一般佐證附件的行為與改版前完全相同；
+       只有客戶首件確認書那一支才傳 true 連壓縮檔一起擋。 */
+    $why = prj_upload_ext_reason($ext, false);
+    if ($why !== '') jerr($why);
     if (($_FILES['file']['size'] ?? 0) > 20 * 1024 * 1024) jerr('單檔上限 20MB');
     $dir  = prj_attach_dir($db);
     // 檔名時間戳一律取 DB 時間（本站 PHP 是 UTC、MySQL 是本地，混用會差 8 小時對不起來）
@@ -1135,8 +1144,88 @@ case 'fai_save':
               . ($added ? '；已自動加入 RCA 與差異首件檢驗兩個環節' : ''),
           'followup_added' => $added,
           'tasks' => prj_tasks($db, $pid), 'goals' => prj_goals($db, $pid),
-          'fai' => prj_fai_list($db, $pid), 'fai_pass_date' => prj_fai_pass_date($db, $pid),
+          'fai' => prj_fai_list($db, $pid, true), 'fai_pass_date' => prj_fai_pass_date($db, $pid),
+          'fai_confirm' => prj_fai_confirm_status($db, $pid),
           'doc_check' => prj_doc_check($db, $pid)]);
+
+/* ── 客戶首件確認書（首件通過後的客戶書面認可）────────────────────────────────
+   使用者 2026-10-01 要求。檔案不限型式（JPG／PDF／GIF／掃描檔都可以，客戶直接在首件
+   報告上簽名認可的那一份也算），只擋**可執行／腳本檔與壓縮檔**——判定走唯一實作
+   prj_upload_ext_reason()，前端擋一次、這裡再擋一次（鐵律8）。 */
+case 'fai_attach_upload':
+    $pid = (int)($_POST['project_id'] ?? 0);
+    prj_need($db, $P, $pid, true);
+    $fid = (int)($_POST['fai_id'] ?? 0);
+    $st = $db->prepare("SELECT project_id, result FROM project_fai WHERE fai_id=?");
+    $st->execute([$fid]);
+    $fr = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$fr || (int)$fr['project_id'] !== $pid) jerr('這筆首件紀錄不屬於本專案', 404);
+    // 「判定通過之後」才會有客戶確認書；還沒判定／未通過就收，紀錄本身說不通
+    if (!prj_fai_is_pass((string)$fr['result'])) {
+        jerr('這一次送件還沒有判定為通過或特採通過，先完成判定再上傳客戶首件確認書');
+    }
+    if (empty($_FILES['file']) || ($_FILES['file']['error'] ?? 9) !== UPLOAD_ERR_OK) jerr('請選擇檔案');
+    $orig = (string)$_FILES['file']['name'];
+    $ext  = strtolower((string)pathinfo($orig, PATHINFO_EXTENSION));
+    $why  = prj_upload_ext_reason($ext, true);           // true＝連壓縮檔一起擋
+    if ($why !== '') jerr($why);
+    if (($_FILES['file']['size'] ?? 0) > 20 * 1024 * 1024) jerr('單檔上限 20MB');
+    $dir = prj_fai_attach_dir($db);
+    // 檔名時間戳一律取 DB 時間（本站 PHP 是 UTC、MySQL 是本地，混用會差 8 小時對不起來）
+    $fn  = 'FAI' . $fid . '_P' . $pid . '_' . str_replace([' ', '-', ':'], '', $NOW['dt'])
+         . '_' . bin2hex(random_bytes(3)) . ($ext !== '' ? '.' . $ext : '');
+    if (!@move_uploaded_file($_FILES['file']['tmp_name'], rtrim($dir, '/\\') . DIRECTORY_SEPARATOR . $fn)) {
+        jerr('檔案寫入失敗，請確認「模組設定 → 附件存放資料夾」與 NAS 連線');
+    }
+    try {
+        $db->prepare("INSERT INTO project_fai_attach (project_id, fai_id, filename, orig_name, file_size,
+                             note, uploaded_by, uploaded_by_name, uploaded_at)
+                      VALUES (?,?,?,?,?,?,?,?,?)")
+           ->execute([$pid, $fid, $fn, mb_substr($orig, 0, 255), (int)$_FILES['file']['size'],
+                      mb_substr(trim((string)($_POST['note'] ?? '')), 0, 200), $uid, $uname, $NOW['dt']]);
+    } catch (Throwable $e) {
+        // 寫不進 DB 就把剛落地的實體檔收掉，不然 NAS 上會留一個沒人認得的孤兒檔
+        @unlink(rtrim($dir, '/\\') . DIRECTORY_SEPARATOR . $fn);
+        error_log('[Project_API] fai_attach_upload insert failed: ' . $e->getMessage());
+        jerr('附件資料寫入失敗（詳細原因已寫入伺服器錯誤紀錄）');
+    }
+    jout(['message' => '已上傳客戶首件確認書',
+          'fai' => prj_fai_list($db, $pid, true), 'fai_pass_date' => prj_fai_pass_date($db, $pid),
+          'fai_confirm' => prj_fai_confirm_status($db, $pid)]);
+
+case 'fai_attach_del':
+    $pid = (int)($_POST['project_id'] ?? 0);
+    prj_need($db, $P, $pid, true);
+    $aid = (int)($_POST['attach_id'] ?? 0);
+    $st = $db->prepare("SELECT fai_id FROM project_fai_attach WHERE id=? AND project_id=? AND deleted_at IS NULL");
+    $st->execute([$aid, $pid]);
+    if (!$st->fetchColumn()) jerr('找不到附件');
+    // 軟刪除：AS9102 要可追溯，實體檔與紀錄都留著，只是不再列出來
+    $db->prepare("UPDATE project_fai_attach SET deleted_at=?, deleted_by=? WHERE id=?")
+       ->execute([$NOW['dt'], $uname, $aid]);
+    jout(['message' => '已刪除',
+          'fai' => prj_fai_list($db, $pid, true), 'fai_pass_date' => prj_fai_pass_date($db, $pid),
+          'fai_confirm' => prj_fai_confirm_status($db, $pid)]);
+
+case 'fai_attach_dl':
+    $pid = (int)($_GET['project_id'] ?? 0);
+    prj_need($db, $P, $pid);
+    $aid = (int)($_GET['attach_id'] ?? 0);
+    $st = $db->prepare("SELECT filename, orig_name FROM project_fai_attach
+                        WHERE id=? AND project_id=? AND deleted_at IS NULL");
+    $st->execute([$aid, $pid]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row) { http_response_code(404); exit('not found'); }
+    // 只准單純檔名（DB 裡本來就只存檔名），擋掉 .. 與路徑分隔字元
+    $fn = basename((string)$row['filename']);
+    $fp = rtrim(prj_fai_attach_dir($db), '/\\') . DIRECTORY_SEPARATOR . $fn;
+    if ($fn === '' || !is_file($fp)) { http_response_code(404); exit('file missing'); }
+    require_once $document_root . '/EGsystem/src/common/attach_lib.php';
+    header('Content-Type: application/octet-stream');
+    header('Content-Length: ' . filesize($fp));
+    eg_attach_send_disposition((string)$row['orig_name']);
+    readfile($fp);
+    exit;
 
 case 'fai_delete':
     $pid = (int)($_POST['project_id'] ?? 0);
@@ -1149,8 +1238,9 @@ case 'fai_delete':
     foreach (prj_fai_list($db, $pid) as $r) {
         $db->prepare("UPDATE project_fai SET seq=? WHERE fai_id=?")->execute([$i++, (int)$r['fai_id']]);
     }
-    jout(['message' => '已刪除', 'fai' => prj_fai_list($db, $pid),
-          'fai_pass_date' => prj_fai_pass_date($db, $pid), 'doc_check' => prj_doc_check($db, $pid)]);
+    jout(['message' => '已刪除', 'fai' => prj_fai_list($db, $pid, true),
+          'fai_pass_date' => prj_fai_pass_date($db, $pid),
+          'fai_confirm' => prj_fai_confirm_status($db, $pid), 'doc_check' => prj_doc_check($db, $pid)]);
 
 case 'seed_template':
     $pid = (int)($_POST['project_id'] ?? 0);
@@ -1485,6 +1575,21 @@ case 'close':
     $prj = prj_need($db, $P, $pid, true);
     $summary = trim((string)($_POST['close_summary'] ?? ''));
     if ($summary === '') jerr('請填寫專案總結報告', 400, ['fields' => ['close_summary' => '請填寫專案總結報告']]);
+    /* 客戶首件確認書（2026-10-01 使用者拍板：紅字提醒＋擋下結案）。
+       首件已經判定通過／特採通過，卻一份客戶確認書都沒收到就不給結案。
+       與下面的文件檢核分開判斷、各自回報自己的原因——合在一起的話畫面只會說
+       「還有文件未建立」，使用者根本看不出來缺的其實是客戶那份確認書。
+       比照既有慣例：專案管理員可以帶 force 強制略過（紙本已簽收、掃描檔之後補）。 */
+    $fc = prj_fai_confirm_status($db, $pid);
+    if ($fc['need'] && empty($_POST['force'])) {
+        jerr('第 ' . $fc['seq'] . ' 次首件已於 ' . ($fc['pass_date'] ?: '—')
+             . ' 判定「' . (PRJ_FAI_RESULTS[$fc['result']] ?? $fc['result']) . '」，'
+             . '但還沒有上傳客戶首件確認書，不能結案。'
+             . "
+請到「執行規劃表 → 首件檢驗（AS9102）」上傳客戶的書面認可"
+             . '（客戶直接在首件報告上簽名認可的那一份也可以）。', 409,
+             ['need_force' => $P['canAdmin'], 'fai_confirm' => $fc]);
+    }
     // 階段推進強制檢核：缺件時擋下並列出缺什麼（可由管理員設定關閉）
     if (prj_setting_get($db, 'block_close_on_missing', '1') === '1') {
         $miss = [];
@@ -1778,6 +1883,8 @@ case 'setting_get':
                                 WHERE COALESCE(is_active,1)=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
          } catch (Throwable $e) { return []; }
      })($db),
+     // 附件存放資料夾：設定值＋實際生效路徑（留空是合法的，只給設定值畫面會是兩個空白欄）
+     'attach_dirs' => prj_attach_dir_meta($db),
      // 標準流程範本：目前實際生效的那一份（沒自訂過就是內建預設），設定畫面直接編輯它
      'seed_template' => prj_seed_template($db),
      'seed_is_custom' => prj_seed_template_rows($db) ? 1 : 0]);
@@ -1831,8 +1938,19 @@ case 'setting_save':
         foreach (explode(',', (string)($_POST['owner_order'] ?? '')) as $v) { $v = (int)trim($v); if ($v > 0) $ordIds[] = $v; }
         prj_owner_order_save($db, (int)($_POST['owner_order_dept'] ?? 0), $ordIds, $uname);
     }
+    /* 附件存放資料夾（鐵律5／ai-rules-07）：**存在 system_settings 不是 system_parameters**——
+       eg_attach_dir() 讀的就是那一張，寫錯地方的話畫面存得進去、實際檔案還是落在舊資料夾而且不報錯。
+       兩個都「留空＝用預設」：專案附件留空＝AS9100 根目錄\專案管理；
+       客戶首件確認書留空＝與專案附件同一個資料夾。 */
+    foreach (['project_attach_dir', 'project_fai_attach_dir'] as $k) {
+        if (!array_key_exists($k, $_POST)) continue;
+        $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?,?)
+                      ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)")
+           ->execute([$k, trim((string)$_POST[$k])]);
+    }
     // 回傳兩份：owner_people＝目前這位管理員實際可挑的人；owner_scope_all＝純「資格」命中的全公司名單（設定畫面預覽用）
     jout(['message' => '已儲存設定', 'owner_scope_rows' => prj_owner_scope_labeled($db),
+          'attach_dirs' => prj_attach_dir_meta($db),
           'seed_template' => prj_seed_template($db), 'seed_is_custom' => prj_seed_template_rows($db) ? 1 : 0,
           'task_owner_depts' => prj_task_owner_depts($db),
           'owner_default_dept_id' => prj_owner_default_dept($db), 'owner_order' => prj_owner_order($db),

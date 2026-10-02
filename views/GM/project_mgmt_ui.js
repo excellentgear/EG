@@ -1792,8 +1792,120 @@ function faiBoxHtml(res) {
         h += '<div class="pj-hint">首件已於 <b>' + dispDate(res.fai_pass_date) + '</b> 通過，'
           + '型態識別文件管制表現在可以建立了。</div>';
     }
+    return h + faiConfirmHtml(res) + '</div>';
+}
+
+/* ══ 客戶首件確認書（使用者 2026-10-01 要求）═══════════════════════════════
+   首件判定「通過」或「特採通過」之後要收客戶的書面認可。紙本沒有制式格式——
+   客戶直接在我們的首件報告上簽名認可也算，所以不限定檔案型式、只擋可執行檔與壓縮檔。
+   拍板的強制程度：**紅字提醒＋擋下專案結案**，不擋判定本身
+   （客戶的回覆通常是判定之後幾天才到，連判定都擋會讓通過日期登錄不了）。 */
+function faiConfirmHtml(res) {
+    var c = res.fai_confirm || {};
+    if (!c.passed) return '';            // 還沒通過＝還沒到要收確認書的時候
+    var list = [], ro = !res.can_edit;
+    $.each(res.fai || [], function (i, f) { if (num(f.fai_id) === num(c.fai_id)) list = f.attaches || []; });
+
+    var h = '<div style="margin-top:12px;border:1px solid #EADFC8;border-radius:6px;background:#fff;padding:10px;">'
+      + '<div style="font-weight:600;color:#5b3a1e;margin-bottom:6px;">客戶首件確認書'
+      + '<span class="pj-hint" style="font-weight:normal;margin-left:8px;">'
+      + '第 ' + num(c.seq) + ' 次送件於 <b>' + dispDate(c.pass_date) + '</b> 判定「'
+      + esc(faiResultLabel(c.result)) + '」</span></div>';
+
+    if (c.need) {
+        h += '<div style="border:2px solid #DD5138;background:#FCE4E4;color:#A32E1A;border-radius:6px;'
+          + 'padding:8px 12px;margin-bottom:8px;font-size:13px;">'
+          + '<b>首件已經判定通過，還缺客戶首件確認書。</b>'
+          + '<br><span style="font-weight:normal;">沒有上傳<b>不能結案</b>'
+          + '（專案管理員可在結案時強制略過）。首件判定與送件日照常可以登錄，不受影響。</span></div>';
+    } else {
+        h += '<div class="pj-hint" style="color:#2F6B46;margin-bottom:8px;">'
+          + '✓ 已收到 ' + list.length + ' 份客戶首件確認書。</div>';
+    }
+
+    if (list.length) {
+        h += '<table class="sub-tbl"><thead><tr><th>檔名／備註</th><th style="width:80px;">大小</th>'
+          + '<th style="width:150px;">上傳人員與時間</th><th style="width:100px;"></th></tr></thead><tbody>';
+        $.each(list, function (i, a) {
+            h += '<tr><td>' + esc(a.orig_name)
+              + (a.note ? '<br><span class="pj-hint">' + esc(a.note) + '</span>' : '') + '</td>'
+              + '<td>' + Math.round(num(a.file_size) / 1024) + ' KB</td>'
+              + '<td>' + esc(a.uploaded_by_name || '') + '<br><span class="pj-hint">'
+              + esc(String(a.uploaded_at || '').substring(0, 16)) + '</span></td>'
+              + '<td><span class="pj-op" data-faidl="' + num(a.id) + '">下載</span>'
+              + (ro ? '' : '<span class="pj-op" data-faidel="' + num(a.id) + '" style="color:#DD5138;">刪除</span>')
+              + '</td></tr>';
+        });
+        h += '</tbody></table>';
+    }
+
+    if (!ro) {
+        /* 原生可見的 file input（記憶 file_upload_change_event：change 事件在這台環境會被吞掉，
+           一律用可見的 input＋常駐的送出鈕，送出時直接讀 input.files） */
+        h += '<div style="margin-top:8px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">'
+          + '<div><label>選擇檔案</label><input type="file" id="faiFile" data-eg-skip="1"></div>'
+          + '<div style="flex:1;min-width:200px;"><label>備註（選填）</label>'
+          + '<input type="text" id="faiFileNote" data-eg-skip="1"'
+          + ' data-eg-hint="例：客戶直接在首件報告上簽名認可"></div>'
+          + '<button id="btnFaiUp" style="height:30px;padding:0 14px;border:1px solid #d98a33;border-radius:4px;'
+          + 'background:#F0A24B;color:#fff;cursor:pointer;">上傳</button></div>'
+          + '<div class="pj-err" id="faiUpErr" style="display:none;"></div>'
+          + '<div class="pj-hint"><b>沒有制式格式</b>：客戶的確認書、回簽單，或<b>客戶直接在我們的首件報告上簽名認可</b>'
+          + '的掃描檔都可以（請在備註寫明）。JPG／PNG／GIF／TIF／PDF／Office 檔都收，單檔 20MB 以內；'
+          + '<b>可執行檔與壓縮檔不收</b>（壓縮檔稽核時看不到裡面是什麼，也無法線上預覽）。</div>';
+    }
     return h + '</div>';
 }
+
+/** 前端先擋一次不合法的副檔名（清單來自後端 META.upload_reject，不在這裡另抄一份＝鐵律4）。
+ *  回傳空字串＝可以上傳，否則是不能上傳的原因。 */
+function faiExtReason(name) {
+    var rj = META.upload_reject || {}, p = String(name || '').split('.');
+    if (p.length < 2) return '';
+    var ext = p[p.length - 1].toLowerCase();
+    if ($.inArray(ext, rj.exec || []) >= 0) return '不接受可執行檔或腳本檔（.' + ext + '）';
+    if ($.inArray(ext, rj.archive || []) >= 0) {
+        return '不接受壓縮檔（.' + ext + '）；請直接上傳 PDF 或圖片等看得到內容的檔案';
+    }
+    return '';
+}
+/* 選檔當下就講清楚不行的原因，不要等按了上傳才被後端退回 */
+$(document).on('change', '#faiFile', function () {
+    var why = (this.files && this.files.length) ? faiExtReason(this.files[0].name) : '';
+    $('#faiUpErr').toggle(!!why).text(why);
+});
+$(document).on('click', '#btnFaiUp', function () {
+    var el = document.getElementById('faiFile');
+    if (!el || !el.files || !el.files.length) { $('#faiUpErr').show().text('請先選擇檔案'); return; }
+    var why = faiExtReason(el.files[0].name);        // 後端 fai_attach_upload 會用同一套規則再擋一次
+    if (why) { $('#faiUpErr').show().text(why); return; }
+    if (el.files[0].size > 20 * 1024 * 1024) { $('#faiUpErr').show().text('單檔上限 20MB'); return; }
+    $('#faiUpErr').hide();
+    var fd = new FormData();
+    fd.append('action', 'fai_attach_upload');
+    fd.append('project_id', CUR.project.project_id);
+    fd.append('fai_id', num((CUR.fai_confirm || {}).fai_id));
+    fd.append('note', $('#faiFileNote').val() || '');
+    fd.append('file', el.files[0]);
+    $(this).prop('disabled', true).text('上傳中…');
+    $.ajax({ url: API, type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' })
+        .done(function (r) {
+            if (!r || !r.ok) { $('#faiUpErr').show().text((r && r.error) || '上傳失敗'); return; }
+            faiApply(r);
+            pjMsg(r.message || '已上傳', { ok: true });
+        })
+        .fail(function (x) { $('#faiUpErr').show().text((x.responseJSON && x.responseJSON.error) || '上傳失敗'); })
+        .always(function () { $('#btnFaiUp').prop('disabled', false).text('上傳'); });
+});
+$(document).on('click', '[data-faidl]', function () {
+    window.open(API + '?action=fai_attach_dl&project_id=' + num(CUR.project.project_id)
+        + '&attach_id=' + num($(this).data('faidl')), '_blank');
+});
+$(document).on('click', '[data-faidel]', function () {
+    if (!confirm('刪除這份客戶首件確認書？\n刪除後若這一次送件一份都不剩，專案會因為缺件而不能結案。')) return;
+    api('fai_attach_del', { project_id: CUR.project.project_id, attach_id: num($(this).data('faidel')) }, 'POST')
+        .done(function (r) { faiApply(r); pjMsg(r.message || '已刪除', { ok: true }); });
+});
 $(document).on('click', '#btnFaiNew', function () {
     api('fai_save', { project_id: CUR.project.project_id, send_date: $('#faiNewDate').val() }, 'POST')
         .done(function (r) { faiApply(r); });
@@ -1811,6 +1923,7 @@ function faiApply(r) {
     if (!CUR) return;
     CUR.fai = r.fai || [];
     CUR.fai_pass_date = r.fai_pass_date || null;
+    if (r.fai_confirm) CUR.fai_confirm = r.fai_confirm;
     if (r.doc_check) CUR.doc_check = r.doc_check;
     var dirty = PLAN_DIRTY;
     planSyncToCur();
@@ -3432,6 +3545,9 @@ function renderCheck(res) {
           + '它記錄的是這批文件的版本組合。'
           + (passed ? '　目前狀態：<b>首件已通過（' + dispDate(CUR.fai_pass_date) + '）</b>。'
                     : '　目前狀態：<b>首件尚未通過</b>，［首件後］的文件先不列入缺件。') + '</p>'
+          /* 客戶首件確認書不在上面那張逐料號的表裡（它是**整個專案一份**、跟著那一次送件走，
+             不是逐料號各一份），所以另外列一條；缺的時候要講清楚會擋結案。 */
+          + faiConfirmCheckHtml()
           + '<div class="pj-table-wrap"><table class="pj-table"><thead><tr><th>料號</th><th style="width:110px;">客戶</th>';
     $.each(defs, function (k, d) {
         var ph = phase[k] || 'any';
@@ -4515,12 +4631,44 @@ function openSetting() {
         OWN_ORDER = String(s.owner_order || '').split(',').map(num).filter(function (x) { return x > 0; });
         loadOwnOrderCands();
 
+        /* 附件存放資料夾（鐵律5）：設定值與「實際會存到哪」兩份都要顯示——
+           留空是合法的（代表用預設），只顯示設定值的話畫面上是兩個空白欄，
+           管理員根本不知道檔案目前落在哪裡。 */
+        renderAttachDirs(res.attach_dirs);
+
         var plan = (META.asdoc || {}).plan || {}, card = (META.asdoc || {}).card || {};
         $('#asPlanTxt').val(plan.bound ? (plan.doc_no + '　' + plan.doc_name) : '（未綁定）');
         $('#asCardTxt').val(card.bound ? (card.doc_no + '　' + card.doc_name) : '（未綁定）');
         openMask('setMask');
     });
 }
+/** 文件檢核分頁上的「客戶首件確認書」狀態列（缺的時候要講明會擋結案） */
+function faiConfirmCheckHtml() {
+    var c = (CUR && CUR.fai_confirm) || {};
+    if (!c.passed) return '';
+    if (c.need) {
+        return '<div style="border:2px solid #DD5138;background:#FCE4E4;color:#A32E1A;border-radius:6px;'
+             + 'padding:8px 12px;margin-bottom:10px;font-size:13px;">'
+             + '<b>還缺客戶首件確認書</b>（第 ' + num(c.seq) + ' 次首件已於 '
+             + dispDate(c.pass_date) + ' 判定「' + esc(faiResultLabel(c.result)) + '」）。'
+             + '<span style="font-weight:normal;">沒有上傳<b>不能結案</b>；'
+             + '請到「執行規劃表 → 首件檢驗（AS9102）」上傳。</span></div>';
+    }
+    return '<p class="pj-hint" style="color:#2F6B46;">✓ 客戶首件確認書已收到 ' + num(c.count) + ' 份'
+         + '（第 ' + num(c.seq) + ' 次首件，' + dispDate(c.pass_date) + ' 通過）。</p>';
+}
+
+/** 附件存放資料夾：把設定值填進輸入框，並在下方印出「目前實際會存到哪」 */
+function renderAttachDirs(d) {
+    d = d || (META.attach_dirs || {});
+    $('#setAttDir').val(d.task || '');
+    $('#setFaiDir').val(d.fai || '');
+    $('#setAttDirEff').html('目前實際存放：<b>' + esc(d.task_effective || '—') + '</b>'
+        + (d.task ? '' : '　<span style="color:#8A5A2B;">（未指定，用預設）</span>'));
+    $('#setFaiDirEff').html('目前實際存放：<b>' + esc(d.fai_effective || '—') + '</b>'
+        + (d.fai ? '' : '　<span style="color:#8A5A2B;">（未指定，與專案佐證附件同一個資料夾）</span>'));
+}
+
 /* ── 專案負責人資格（部門×職稱）───────────────────────────────
    操作方式：選一個部門 → 在右邊點選要開放的職稱（可複選，「全部職稱」與個別職稱互斥）→ 按「加入」一次寫進去。
    清單以**部門為一列**顯示，右邊直接列出該部門選定的職稱，每列有「修改」（把該部門讀回上面繼續改）與「刪除」。
@@ -4725,8 +4873,11 @@ $(document).on('click', '#btnSetSave', function () {
         seed_template: JSON.stringify(collectSeedTpl()),
         owner_scope: JSON.stringify($.map(OWN_SCOPE, function (r) { return { d: num(r.d), p: num(r.p) }; })),
         owner_order_dept: $('#setOwnOrderDept').val() || '0',
-        owner_order: $.map(OWN_ORDER_PEOPLE, function (x) { return x.id; }).join(',')
+        owner_order: $.map(OWN_ORDER_PEOPLE, function (x) { return x.id; }).join(','),
+        project_attach_dir: $.trim($('#setAttDir').val() || ''),
+        project_fai_attach_dir: $.trim($('#setFaiDir').val() || '')
     }, 'POST').done(function (r) {
+        if (r.attach_dirs) { META.attach_dirs = r.attach_dirs; renderAttachDirs(r.attach_dirs); }
         alert(r.message);
         META.default_cosign_depts = cos.join(',');
         /* 部門設定改完馬上生效：規劃表的負責人部門下拉同步換掉，不必重新整理頁面 */
