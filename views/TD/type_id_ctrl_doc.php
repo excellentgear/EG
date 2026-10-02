@@ -1283,122 +1283,122 @@ window.applyExtDoc = function(i){
     $tr.replaceWith(itemRowHtml(ITEMS[idx], idx));
     closeMask('extMask');
 };
-/* ---------- 同一種文件出現好幾份：由使用者確認（2026-10-02 使用者要求）----------
-   判定範圍＝同一個「型態項目名稱」（使用者拍板，所以 BOSS圖／單製++圖 都叫「加工圖」也會被問到；
-   那本來就是兩種不同的圖，所以另外給「不是重複，各自保留」的出口，不然會被迫合併掉）。
-   每一組選一份現行版、另外勾選不列入，其餘自動成為舊版（收進現行版那一列的修訂履歷）。
-   尚未存檔的新管制表沒有 item id，一律以「ITEMS 的陣列索引」為準在畫面上先處理掉，
-   存檔時隨 items 一起送出（superseded_idx），後端拿到真正的 id 之後再回頭寫 superseded_by。 */
-function dupGroups(){
-    var byName = {};
-    ITEMS.forEach(function(it, idx){
-        if (it.is_excluded || it.dup_ignore) return;
-        if (it.superseded_idx !== undefined && it.superseded_idx !== null && it.superseded_idx >= 0) return;
-        var n = (it.item_name || '').trim();
-        if (!n) return;
-        (byName[n] = byName[n] || []).push(idx);
-    });
-    var out = [];
-    Object.keys(byName).forEach(function(n){ if (byName[n].length > 1) out.push({name:n, idxs:byName[n]}); });
-    return out;
-}
-function dupIdxSet(){
-    var s = {};
-    dupGroups().forEach(function(g){ g.idxs.forEach(function(i){ s[i] = g.name; }); });
-    return s;
-}
-function renderDupPanel(){
-    var gs = dupGroups();
-    if (!gs.length){
-        $('#dupBar').hide();
-        closeMask('dupMask');
-        return;
-    }
-    $('#dupBar').show().find('#dupBarText').text('偵測到 ' + gs.length + ' 種文件各有兩份以上，請確認哪一份是現行版');
-    var html = '';
-    gs.forEach(function(g, gi){
-        html += '<div class="dup-grp" data-gi="'+gi+'" data-name="'+esc(g.name)+'">'
-             +  '<div class="dup-grp-h"><b>'+esc(g.name)+'</b>　共 '+g.idxs.length+' 份'
-             +  '<button type="button" class="ic-row-btn" style="margin-left:auto;" onclick="dupIgnore('+gi+')" '
-             +  'title="這幾份本來就是不同的文件（例如 BOSS圖 與 單製++圖 都叫「加工圖」），各自保留一列，之後不再提示">'
-             +  '這幾份不是重複，各自保留</button></div>';
-        g.idxs.forEach(function(idx, k){
-            var it = ITEMS[idx];
-            html += '<label class="dup-row">'
-                 +  '<input type="radio" name="dupcur'+gi+'" class="dup-cur" value="'+idx+'"'+(k===0?' checked':'')+'> 現行版'
-                 +  '<label class="ic-chk" style="margin-left:10px;"><input type="checkbox" class="dup-ex" value="'+idx+'"> 不列入</label>'
-                 +  '<span class="dup-meta">'
-                 +  '<span class="ic-link-badge">'+esc(it.ref_source_label || '人工輸入')+'</span> '
-                 +  esc(it.effective_date || '(無日期)') + '　' + esc(it.doc_no_text || '')
-                 +  '</span></label>';
-        });
-        html += '<div class="dup-note">未被選為現行版、也沒有勾「不列入」的，會自動成為現行版的<b>舊版</b>並收進修訂履歷。</div></div>';
-    });
-    $('#dupList').html(html);
-}
-window.dupIgnore = function(gi){
-    var g = dupGroups()[gi];
-    if (!g) return;
-    if (CUR_ID){
-        $.post(API, {action:'dup_resolve', doc_id:CUR_ID, name:g.name, ignore:1}, function(res){
-            if (!res.success){ alert(res.message||'處理失敗'); return; }
-            reloadAfterDup();
-        }, 'json');
-        return;
-    }
-    g.idxs.forEach(function(i){ ITEMS[i].dup_ignore = 1; });
-    renderItems(); renderDupPanel();
-};
-window.dupApply = function(){
-    var gs = dupGroups();
-    if (!gs.length){ closeMask('dupMask'); return; }
-    var jobs = [];
-    $('#dupList .dup-grp').each(function(){
-        var $g = $(this), gi = parseInt($g.attr('data-gi'),10);
-        var cur = parseInt($g.find('.dup-cur:checked').val(), 10);
-        var ex = [];
-        $g.find('.dup-ex:checked').each(function(){ ex.push(parseInt(this.value,10)); });
-        if (isNaN(cur)){ alert('「'+$g.attr('data-name')+'」請先指定哪一份是現行版'); jobs = null; return false; }
-        if (ex.indexOf(cur) >= 0){ alert('「'+$g.attr('data-name')+'」現行版不可以同時勾「不列入」'); jobs = null; return false; }
-        jobs.push({name:$g.attr('data-name'), gi:gi, cur:cur, ex:ex, idxs:gs[gi].idxs});
-    });
-    if (!jobs) return;
-
-    if (CUR_ID){
-        // 已存檔：以 item id 走後端（後端會自己重算群組成員，不採信前端送的範圍）
-        var i = 0;
-        (function next(){
-            if (i >= jobs.length){ reloadAfterDup(); return; }
-            var j = jobs[i++];
-            $.post(API, {action:'dup_resolve', doc_id:CUR_ID, name:j.name,
-                         current_id: ITEMS[j.cur].id,
-                         exclude_ids: JSON.stringify(j.ex.map(function(x){ return ITEMS[x].id; }))},
-                function(res){
-                    if (!res.success){ alert(res.message||'處理失敗'); return; }
-                    next();
-                }, 'json');
-        })();
-        return;
-    }
-    // 尚未存檔：先在畫面上處理掉，存檔時一起送出
-    jobs.forEach(function(j){
-        j.idxs.forEach(function(idx){
-            if (idx === j.cur){ ITEMS[idx].superseded_idx = -1; ITEMS[idx].is_excluded = false; }
-            else if (j.ex.indexOf(idx) >= 0){ ITEMS[idx].superseded_idx = -1; ITEMS[idx].is_excluded = true; }
-            else { ITEMS[idx].superseded_idx = j.cur; ITEMS[idx].is_excluded = false; }
-        });
-    });
-    renderItems(); renderDupPanel();
-    closeMask('dupMask');
-};
-function reloadAfterDup(){
-    closeMask('dupMask');
-    var id = CUR_ID;
-    if (id) openEdit(id); else { renderItems(); renderDupPanel(); }
-}
+/* ---------- 同一種文件出現好幾份：由使用者確認（2026-10-02 使用者要求）----------
+   判定範圍＝同一個「型態項目名稱」（使用者拍板，所以 BOSS圖／單製++圖 都叫「加工圖」也會被問到；
+   那本來就是兩種不同的圖，所以另外給「不是重複，各自保留」的出口，不然會被迫合併掉）。
+   每一組選一份現行版、另外勾選不列入，其餘自動成為舊版（收進現行版那一列的修訂履歷）。
+   尚未存檔的新管制表沒有 item id，一律以「ITEMS 的陣列索引」為準在畫面上先處理掉，
+   存檔時隨 items 一起送出（superseded_idx），後端拿到真正的 id 之後再回頭寫 superseded_by。 */
+function dupGroups(){
+    var byName = {};
+    ITEMS.forEach(function(it, idx){
+        if (it.is_excluded || it.dup_ignore) return;
+        if (it.superseded_idx !== undefined && it.superseded_idx !== null && it.superseded_idx >= 0) return;
+        var n = (it.item_name || '').trim();
+        if (!n) return;
+        (byName[n] = byName[n] || []).push(idx);
+    });
+    var out = [];
+    Object.keys(byName).forEach(function(n){ if (byName[n].length > 1) out.push({name:n, idxs:byName[n]}); });
+    return out;
+}
+function dupIdxSet(){
+    var s = {};
+    dupGroups().forEach(function(g){ g.idxs.forEach(function(i){ s[i] = g.name; }); });
+    return s;
+}
+function renderDupPanel(){
+    var gs = dupGroups();
+    if (!gs.length){
+        $('#dupBar').hide();
+        closeMask('dupMask');
+        return;
+    }
+    $('#dupBar').show().find('#dupBarText').text('偵測到 ' + gs.length + ' 種文件各有兩份以上，請確認哪一份是現行版');
+    var html = '';
+    gs.forEach(function(g, gi){
+        html += '<div class="dup-grp" data-gi="'+gi+'" data-name="'+esc(g.name)+'">'
+             +  '<div class="dup-grp-h"><b>'+esc(g.name)+'</b>　共 '+g.idxs.length+' 份'
+             +  '<button type="button" class="ic-row-btn" style="margin-left:auto;" onclick="dupIgnore('+gi+')" '
+             +  'title="這幾份本來就是不同的文件（例如 BOSS圖 與 單製++圖 都叫「加工圖」），各自保留一列，之後不再提示">'
+             +  '這幾份不是重複，各自保留</button></div>';
+        g.idxs.forEach(function(idx, k){
+            var it = ITEMS[idx];
+            html += '<label class="dup-row">'
+                 +  '<input type="radio" name="dupcur'+gi+'" class="dup-cur" value="'+idx+'"'+(k===0?' checked':'')+'> 現行版'
+                 +  '<label class="ic-chk" style="margin-left:10px;"><input type="checkbox" class="dup-ex" value="'+idx+'"> 不列入</label>'
+                 +  '<span class="dup-meta">'
+                 +  '<span class="ic-link-badge">'+esc(it.ref_source_label || '人工輸入')+'</span> '
+                 +  esc(it.effective_date || '(無日期)') + '　' + esc(it.doc_no_text || '')
+                 +  '</span></label>';
+        });
+        html += '<div class="dup-note">未被選為現行版、也沒有勾「不列入」的，會自動成為現行版的<b>舊版</b>並收進修訂履歷。</div></div>';
+    });
+    $('#dupList').html(html);
+}
+window.dupIgnore = function(gi){
+    var g = dupGroups()[gi];
+    if (!g) return;
+    if (CUR_ID){
+        $.post(API, {action:'dup_resolve', doc_id:CUR_ID, name:g.name, ignore:1}, function(res){
+            if (!res.success){ alert(res.message||'處理失敗'); return; }
+            reloadAfterDup();
+        }, 'json');
+        return;
+    }
+    g.idxs.forEach(function(i){ ITEMS[i].dup_ignore = 1; });
+    renderItems(); renderDupPanel();
+};
+window.dupApply = function(){
+    var gs = dupGroups();
+    if (!gs.length){ closeMask('dupMask'); return; }
+    var jobs = [];
+    $('#dupList .dup-grp').each(function(){
+        var $g = $(this), gi = parseInt($g.attr('data-gi'),10);
+        var cur = parseInt($g.find('.dup-cur:checked').val(), 10);
+        var ex = [];
+        $g.find('.dup-ex:checked').each(function(){ ex.push(parseInt(this.value,10)); });
+        if (isNaN(cur)){ alert('「'+$g.attr('data-name')+'」請先指定哪一份是現行版'); jobs = null; return false; }
+        if (ex.indexOf(cur) >= 0){ alert('「'+$g.attr('data-name')+'」現行版不可以同時勾「不列入」'); jobs = null; return false; }
+        jobs.push({name:$g.attr('data-name'), gi:gi, cur:cur, ex:ex, idxs:gs[gi].idxs});
+    });
+    if (!jobs) return;
+
+    if (CUR_ID){
+        // 已存檔：以 item id 走後端（後端會自己重算群組成員，不採信前端送的範圍）
+        var i = 0;
+        (function next(){
+            if (i >= jobs.length){ reloadAfterDup(); return; }
+            var j = jobs[i++];
+            $.post(API, {action:'dup_resolve', doc_id:CUR_ID, name:j.name,
+                         current_id: ITEMS[j.cur].id,
+                         exclude_ids: JSON.stringify(j.ex.map(function(x){ return ITEMS[x].id; }))},
+                function(res){
+                    if (!res.success){ alert(res.message||'處理失敗'); return; }
+                    next();
+                }, 'json');
+        })();
+        return;
+    }
+    // 尚未存檔：先在畫面上處理掉，存檔時一起送出
+    jobs.forEach(function(j){
+        j.idxs.forEach(function(idx){
+            if (idx === j.cur){ ITEMS[idx].superseded_idx = -1; ITEMS[idx].is_excluded = false; }
+            else if (j.ex.indexOf(idx) >= 0){ ITEMS[idx].superseded_idx = -1; ITEMS[idx].is_excluded = true; }
+            else { ITEMS[idx].superseded_idx = j.cur; ITEMS[idx].is_excluded = false; }
+        });
+    });
+    renderItems(); renderDupPanel();
+    closeMask('dupMask');
+};
+function reloadAfterDup(){
+    closeMask('dupMask');
+    var id = CUR_ID;
+    if (id) openEdit(id); else { renderItems(); renderDupPanel(); }
+}
 $('#btnDupOpen').on('click', function(){ renderDupPanel(); openMask('dupMask'); });
-$(document).on('click', '.ic-dup-badge', function(){ renderDupPanel(); openMask('dupMask'); });
-
+$(document).on('click', '.ic-dup-badge', function(){ renderDupPanel(); openMask('dupMask'); });
+
 function collectRow($tr){
     var linked = !!$tr.attr('data-ref-source');
     return {
