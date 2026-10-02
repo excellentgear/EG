@@ -93,6 +93,9 @@ switch ($action) {
         oatReply([
             'success'      => true,
             'defs'         => ot_astag_defs($pdo, false),   // 連停用的一起列，設定頁才改得回來
+            // 篩選列的標籤下拉是頁面載入當下由 PHP 排好的，管理員剛改完設定它會是舊的；
+            // 這裡把「目前全部可選標籤」一併回傳，前端就地重建這個下拉（不必重新整理頁面）
+            'options_all'  => ot_astag_options($pdo, true),
             'tree'         => ot_astag_process_tree($pdo),
             'usage'        => ot_astag_usage($pdo),
             'require_save' => ot_astag_require_save($pdo) ? 1 : 0,

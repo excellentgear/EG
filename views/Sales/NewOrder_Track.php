@@ -4092,7 +4092,9 @@ foreach($dCounts as $c) {
                     <button type="button" id="btn-toggle-closed" class="btn btn-xs pull-right" style="display:none;margin-right:8px;margin-top:2px;" onclick="toggleOrderStatus('closed')"></button>
                     <button type="button" id="btn-toggle-urgent" class="btn btn-xs pull-right" style="margin-right:8px;margin-top:2px;" onclick="toggleUrgentFlag()" title="標記為急件：篩選「批圖中」時會排在最上方，清單以淺暖粉紅底色標示"></button>
                     <?php /* 標題與「製程標籤」要並排，所以標題改 inline-block。
-                             注意：全頁有好幾處 $('.modal-title').html(...)（共用選擇器），
+                             注意：切換新增／編輯模式時會重寫 modal-title
+                             （2026-10-02 已全改成只限定 #newOrderModal：原本寫全頁共用選擇器，
+                             會把「設定」等其他跳窗的標題也一起改成「新增訂單」），
                              所以標籤那一排**一定要放在 .modal-title 外面**，不然切換新增/編輯模式時會被整段洗掉。 */ ?>
                     <h4 class="modal-title" style="display:inline-block;vertical-align:middle;margin:0 12px 0 0;"><i class="fa fa-plus-circle"></i> 新增訂單</h4>
                     <!-- ═══ 稽核製程標籤（2026-10-02 使用者交辦）═══════════════════════
@@ -8362,7 +8364,7 @@ foreach($dCounts as $c) {
             $('#btn-save-copy').text('新增並複製');
             $('#btn-save').text('確認新增');
             if (window.canDelete) { $('#btn-delete').hide(); }
-            $('.modal-title').html('<i class="fa fa-plus-circle"></i> 新增訂單');
+            $('#newOrderModal .modal-title').html('<i class="fa fa-plus-circle"></i> 新增訂單');
             $('#btn-toggle-paused').hide();
             $('#btn-toggle-closed').hide();
             $('#btn-open-split').hide();
@@ -8574,6 +8576,8 @@ foreach($dCounts as $c) {
                 });
                 $('#astag-require').prop('checked', !!parseInt(res.require_save || 0, 10));
                 window.AS_TAG_REQUIRE = !!parseInt(res.require_save || 0, 10);
+                ASTAGCFG.optsAll = res.options_all || ASTAGCFG.optsAll;
+                astagSyncFilterOptions(ASTAGCFG.optsAll);   // 篩選列一律跟設定走
                 astagRenderDefs();
                 astagRenderOthers();
                 astagRenderFixed();
@@ -8632,6 +8636,10 @@ foreach($dCounts as $c) {
                 return;
             }
             o[f] = $(this).val();
+            // 文字欄位（短名）**不要整張表重畫**：change 是失焦時觸發的，
+            // 重畫會把使用者剛剛在打的那個輸入框拆掉重建，很容易變成「最後幾個字沒存進去」。
+            // 模型已經由 input 事件即時更新了，這裡只把預覽文字換掉就好。
+            if (f === 'proc_name') { astagUpdateNamePreview($(this), o.proc_name); return; }
             astagRenderOthers();
         });
         $(document).on('input', '#astag-other-tbody input[data-f="proc_name"]', function () {
@@ -8647,6 +8655,29 @@ foreach($dCounts as $c) {
             if (!ASTAGCFG.others[i]) return;
             ASTAGCFG.others.splice(i, 1);
             astagRenderOthers();
+        }
+
+        /**
+         * 把篩選列的「標籤」下拉重建成跟設定一致（2026-10-02 使用者回報）。
+         * 為什麼需要：那個下拉是**頁面載入當下由 PHP 排好的**，管理員在設定裡新增／改名／停用
+         * 之後它還是舊的，會跟訂單跳窗和設定對不起來。一律以設定為準，篩選只多「全部標籤」與
+         * 「尚未設定標籤」兩項。篩選清單用的是**全部**選項（含限本公司的），
+         * 否則廠內治具那種訂單永遠篩不出來。
+         */
+        function astagSyncFilterOptions(opts) {
+            var $f = $('#filter-as-tag');
+            if (!$f.length) return;
+            var cur = $f.val() || '';
+            var h = '<option value="">全部標籤</option><option value="__none__">尚未設定標籤</option>';
+            var stillThere = (cur === '' || cur === '__none__');
+            (opts || []).forEach(function (o) {
+                if (o.key === cur) stillThere = true;
+                h += '<option value="' + escapeHtml(o.key) + '">' + escapeHtml(o.label) + '</option>';
+            });
+            $f.html(h).val(stillThere ? cur : '');
+            // 目前篩的標籤被停用／刪掉了：退回「全部標籤」並重新查一次，
+            // 不然畫面上的清單還是舊篩選的結果、下拉却已經回到「全部」。
+            if (!stillThere && typeof fetchTableData === 'function') fetchTableData(1);
         }
 
         function astagRenderSummary(sm) {
@@ -8723,7 +8754,16 @@ foreach($dCounts as $c) {
                     ASTAGCFG.tree.forEach(function (t) { if (t.process_type_id === r.process_type_id) r.proc_name = t.process_type; });
                 }
             }
-            else r[f] = $(this).val();
+            else {
+                r[f] = $(this).val();
+                // 同上：短名這種文字欄位失焦時不重畫整張表
+                if (f === 'proc_name') {
+                    var prev = (r.scope === 'both') ? ['單製' + r.proc_name, '全製含' + r.proc_name]
+                             : (r.scope === 'single' ? ['單製' + r.proc_name] : ['全製含' + r.proc_name]);
+                    astagUpdateNamePreview($(this), prev);
+                    return;
+                }
+            }
             astagRenderDefs();
         });
         // 短名是打字的，改成 input 即時更新預覽但不重繪（否則每打一個字就失焦）
@@ -8752,6 +8792,14 @@ foreach($dCounts as $c) {
                 h += '<option value="' + sb.no + '"' + ((selected || []).indexOf(String(sb.no)) >= 0 ? ' selected' : '') + '>' + escapeHtml(sb.name) + '</option>';
             });
             return h + '</select>';
+        }
+
+        /** 只更新「訂單畫面會長出」那一列的預覽籤，不重畫整張表（避免拆掉正在編輯的輸入框） */
+        function astagUpdateNamePreview($input, labels) {
+            if (typeof labels === 'string') labels = [labels];
+            var $prev = $input.closest('tr').next('tr').find('.as-tag-cell');
+            if (!$prev.length) return;
+            $prev.each(function (k) { if (labels[k] !== undefined) $(this).text(labels[k] || '（未命名）'); });
         }
 
         function astagAddRow() {
@@ -8784,7 +8832,7 @@ foreach($dCounts as $c) {
                     return;
                 }
                 $('#astag-defs-msg').css('color', '#27ae60').text(res.message || '已儲存');
-                astagSettingsOpen();                    // 重新載入（拿到新的 tag_id 與使用筆數）
+                astagSettingsOpen();                    // 重新載入（拿到新的 tag_id、使用筆數，並同步篩選列的下拉）
                 if ($('#newOrderModal').hasClass('in')) astagLoadOptions(ASTAG.loadedClient || '', true);
             });
         }
@@ -9115,7 +9163,7 @@ foreach($dCounts as $c) {
                 $('#btn-save-copy').text('更新並複製');
                 $('#btn-save').text('確認更新');
                 if (window.canDelete) { $('#btn-delete').show(); }
-                $('.modal-title').html('<i class="fa fa-pencil"></i> 編輯訂單');
+                $('#newOrderModal .modal-title').html('<i class="fa fa-pencil"></i> 編輯訂單');
                 // 依 Order_status 控制欄位鎖定與狀態按鈕
                 var orderStatus = (data.Order_status !== null && data.Order_status !== undefined) ? parseInt(data.Order_status) : null;
                 if (isNaN(orderStatus)) orderStatus = null;
@@ -9651,7 +9699,7 @@ foreach($dCounts as $c) {
                 $('#btn-save-copy').text('新增並複製');
                 $('#btn-save').text('確認新增');
                 if (window.canDelete) { $('#btn-delete').hide(); }
-                $('.modal-title').html('<i class="fa fa-plus-circle"></i> 新增訂單');
+                $('#newOrderModal .modal-title').html('<i class="fa fa-plus-circle"></i> 新增訂單');
 
                 form.find('input[name="OrderNo"]').val(data.OrderNo || '');
                 form.find('input[name="Client_Name"]').val(data.Client_Name_Display || data.Client_Name || '');
@@ -9857,7 +9905,7 @@ foreach($dCounts as $c) {
                         $('#btn-save').text('確認更新');
                         $('#btn-save-copy').text('更新並複製');
                         if (window.canDelete) { $('#btn-delete').show(); }
-                        $('.modal-title').html('<i class="fa fa-pencil"></i> 編輯訂單');
+                        $('#newOrderModal .modal-title').html('<i class="fa fa-pencil"></i> 編輯訂單');
                         // 開拆批 Modal（newOrderModal 先留著）
                         openSplitModal();
                         refreshOrderTable();
@@ -9881,7 +9929,7 @@ foreach($dCounts as $c) {
                                     $('#btn-delete').hide();
 
                                 }
-                                $('.modal-title').html('<i class="fa fa-plus-circle"></i> 新增訂單');
+                                $('#newOrderModal .modal-title').html('<i class="fa fa-plus-circle"></i> 新增訂單');
                             } else {
                                 showToast('新增成功！' + autoPmMsg + '您可以繼續編輯下一筆。');
                             }
