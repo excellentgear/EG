@@ -226,7 +226,8 @@ case 'get':
     jout(['success'=>true,'doc'=>$doc,'items'=>$items,'doc_date_earliest'=>$dates['earliest'],'sign_date_latest'=>$dates['latest'],
           'project_info'=>projectInfoText($db,(int)$doc['part_d_id']),
           'auto_added_count'=>$autoAdded, 'auto_changed_count'=>$autoChanged, 'auto_merged_count'=>$autoMerged,
-          'dup_groups'=>type_id_ctrl_dup_groups($db, $id)]);
+          'dup_groups'=>type_id_ctrl_dup_groups($db, $id),
+          'date_issues'=>type_id_ctrl_date_issues($db, $items, 'id')]);
 
 case 'delete_header':
     needAdmin($perms);
@@ -397,6 +398,22 @@ case 'save_all':
             $db->prepare("UPDATE type_id_ctrl_item SET superseded_by=NULL, updated_at=NOW() WHERE superseded_by IN ($in)")->execute($delIds);
         }
         if ($confirm) {
+            // 日期自相矛盾的清單不可以被「確認」（2026-10-02 使用者：要卡相關日期）。
+            // 一般儲存只警示不擋——補舊資料時本來就可能先存起來再慢慢補日期。
+            $st = $db->prepare("SELECT * FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 AND superseded_by IS NULL ORDER BY seq");
+            $st->execute([$id]);
+            $chk = array_map(fn($r) => buildItemView($db, $r), $st->fetchAll(PDO::FETCH_ASSOC));
+            $dateIssues = type_id_ctrl_date_issues($db, $chk, 'id');
+            if ($dateIssues) {
+                $db->rollBack();
+                jout(['success'=>false, 'code'=>'DATE_ISSUE', 'date_issues'=>$dateIssues,
+                      'message'=>"日期不合理，無法確認清單：
+・" . implode("
+・", array_map(fn($x) => $x['text'], $dateIssues))
+                                 . "
+
+（內容已儲存，請先修正日期再按確認）"]);
+            }
             $db->prepare("UPDATE type_id_ctrl_doc SET review_status='confirmed', confirmed_by=?, confirmed_by_name=?, confirmed_at=NOW() WHERE id=?")
                ->execute([$uid, $uname, $id]);
             // 確認當下把每一筆已連結項目的「版別／文件編號」存成快照，供之後偵測內容是否變更（2026-09-24）
@@ -450,7 +467,14 @@ case 'fetch_ext_for_part':
             'ref_source_label'=>type_id_ctrl_ref_source_label($er['source'], $er['kind'] ?? null),
             'ref_file_name'=>$er['file_name'] ?? null, 'ref_bom_tag'=>$er['bom_tag'] ?? null,
             'ref_cat_id'=>!empty($er['cat_id']) ? (int)$er['cat_id'] : null,
-            'ref_broken'=>false, 'effective_date'=>$er['doc_date'], 'doc_no_text'=>$er['doc_name'], 'file_url'=>null,
+            'ref_broken'=>false, 'effective_date'=>$er['doc_date'], 'doc_no_text'=>$er['doc_name'],
+            // 2026-10-02 使用者回報「圖面無法點開」：這裡原本固定回 null，所以新增管制表（還沒存檔）
+            // 的那幾列不會長出眼睛圖示。一律走 resolve_ref 取得網址（與存檔後顯示的是同一支，不另組）
+            'file_url'=>(function() use ($db, $er) {
+                $lk = type_id_ctrl_resolve_ref($db, $er['source'], (int)$er['attach_id'], (int)$er['ds_pk'],
+                                               $er['file_name'] ?? null, (int)($er['cat_id'] ?? 0));
+                return $lk['file_url'] ?? null;
+            })(),
             // 尚未存檔也要看得到自動帶入的修訂履歷（2026-10-02：原本固定回空陣列，要存檔重開才看得到）
             'revisions'=>array_map(function($a){
                 return ['id'=>0,'rev_date'=>$a['rev_date'],'rev_version'=>$a['rev_version'],
@@ -467,6 +491,7 @@ case 'fetch_ext_for_part':
     $dates = computeDocDates($out);
     jout(['success'=>true,'rows'=>$out,
           'doc_date_earliest'=>$dates['earliest'],
+          'date_issues'=>type_id_ctrl_date_issues($db, $out, null),
           'project_info'=>projectInfoText($db, $dsPk)]);
 
 // ── 依料號自動產生/同步型態識別文件管制表(每料號一份，項目自標所屬製程)────
@@ -520,9 +545,33 @@ case 'set_attach_doc_date':
     $ddate = trim((string)($_POST['doc_date'] ?? ''));
     if (!$aid) jout(['success'=>false,'message'=>'缺少附件編號']);
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $ddate)) jout(['success'=>false,'message'=>'文件日期格式錯誤（需 YYYY-MM-DD）']);
-    $st = $db->prepare("UPDATE part_attachments SET uploaded_at=CONCAT(?,' ',TIME(uploaded_at)) WHERE id=? AND deleted_at IS NULL");
-    $st->execute([$ddate, $aid]);
-    jout(['success'=>true,'updated'=>$st->rowCount()]);
+    if ($ddate > date('Y-m-d')) jout(['success'=>false,'message'=>'日期不可以是未來']);
+    // field=auto（2026-10-02 日期修正用）：自家出的圖的日期是「發行章日期」，寫 uploaded_at 沒有用；
+    // 外來文件沒有發行章欄位，日期就是上傳日。既有呼叫端（上傳檔案）不帶 field，維持原本只寫 uploaded_at。
+    $field = trim((string)($_POST['field'] ?? ''));
+    $target = 'upload';
+    if ($field === 'auto') {
+        $st = $db->prepare("SELECT category_ids, issue_stamp_date FROM part_attachments WHERE id=? AND deleted_at IS NULL");
+        $st->execute([$aid]);
+        $pa = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$pa) jout(['success'=>false,'message'=>'找不到該附件']);
+        $own = false;
+        foreach (array_filter(array_map('intval', explode(',', str_replace(' ', '', (string)$pa['category_ids'])))) as $cid) {
+            $c = $db->prepare("SELECT COALESCE(is_own_drawing,0) FROM quotation_file_categories WHERE id=?");
+            $c->execute([$cid]);
+            if ((int)$c->fetchColumn() === 1) { $own = true; break; }
+        }
+        if ($own || ($pa['issue_stamp_date'] !== null && $pa['issue_stamp_date'] !== '')) $target = 'stamp';
+    }
+    if ($target === 'stamp') {
+        $st = $db->prepare("UPDATE part_attachments SET issue_stamp_date=? WHERE id=? AND deleted_at IS NULL");
+        $st->execute([$ddate, $aid]);
+    } else {
+        $st = $db->prepare("UPDATE part_attachments SET uploaded_at=CONCAT(?,' ',TIME(uploaded_at)) WHERE id=? AND deleted_at IS NULL");
+        $st->execute([$ddate, $aid]);
+    }
+    jout(['success'=>true,'updated'=>$st->rowCount(),'field'=>$target,
+          'field_label'=>$target==='stamp' ? '發行章日期' : '文件日期(上傳日)']);
 
 // ── 本頁「上傳檔案」可選的附件類別（只給會被本模組同步進項目列的類別）──────
 case 'upload_categories':
@@ -694,6 +743,17 @@ case 'stamp_tpl_save':
     type_id_ctrl_stamp_tpl_save($db, $tplId, $uname);
     jout(['success'=>true,'tpl_id'=>type_id_ctrl_stamp_tpl_id($db)]);
 
+case 'print_meta':
+    needView($perms);
+    $bizDate = trim((string)($_GET['biz_date'] ?? '')) ?: date('Y-m-d');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $bizDate)) $bizDate = date('Y-m-d');
+    $asDoc = eg_asdoc_get($db, 'type_id_ctrl');
+    jout(['success'=>true,
+          'company_name'=>type_id_ctrl_company_name($db),
+          'as_doc_no'=>eg_asdoc_no_asof($db, 'type_id_ctrl', $bizDate),
+          'as_doc_name'=>$asDoc['doc_name'] ?? '型態識別文件管制表',
+          'stamp_tpl'=>null, 'is_preview'=>true]);
+
 case 'print_get':
     needView($perms);
     $id = (int)($_GET['id'] ?? 0);
@@ -709,13 +769,24 @@ case 'print_get':
     // 待確認/需重新確認者一律不可列印（2026-09-24 使用者要求）：尚未經人確認過的內容不該當成正式文件印出。
     // 已確認但有新檔案/內容變更（needs_update）者同樣擋下——確認當下的清單與目前來源已經不同，
     // 印出來的內容跟「已確認」的狀態對不起來，一律要先重新確認過才能列印。
-    if ($doc['review_status'] !== 'confirmed') {
-        jout(['success'=>false,'message'=>'此文件尚未確認（目前狀態：'.(REVIEW_LABELS[$doc['review_status']] ?? $doc['review_status']).'），請先完成確認後再列印。']);
-    }
-    if ($doc['part_d_id']) {
-        $diffChk = type_id_ctrl_source_diff($db, (int)$doc['id'], (int)$doc['part_d_id']);
-        if (count($diffChk['new']) > 0 || count($diffChk['changed']) > 0) {
-            jout(['success'=>false,'message'=>'此文件已確認，但偵測到新檔案或內容變更尚待更新，請先「更新狀態」重新確認後再列印。']);
+    // preview=1：只是要看版面，待確認／需更新的也放行，但**不蓋簽章、不留列印紀錄**
+    // （2026-10-02 使用者：「也無法看預覽列印畫面(無簽章)」）
+    $isPreview = !empty($_GET['preview']);
+    if (!$isPreview) {
+        if ($doc['review_status'] !== 'confirmed') {
+            jout(['success'=>false,'message'=>'此文件尚未確認（目前狀態：'.(REVIEW_LABELS[$doc['review_status']] ?? $doc['review_status']).'），請先完成確認後再列印。'.
+                 "
+
+要先看版面可以按「預覽列印」（不蓋簽章）。"]);
+        }
+        if ($doc['part_d_id']) {
+            $diffChk = type_id_ctrl_source_diff($db, (int)$doc['id'], (int)$doc['part_d_id']);
+            if (count($diffChk['new']) > 0 || count($diffChk['changed']) > 0) {
+                jout(['success'=>false,'message'=>'此文件已確認，但偵測到新檔案或內容變更尚待更新，請先「更新狀態」重新確認後再列印。'.
+                     "
+
+要先看版面可以按「預覽列印」（不蓋簽章）。"]);
+            }
         }
     }
     $st = $db->prepare("SELECT * FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 AND superseded_by IS NULL ORDER BY seq");
@@ -727,7 +798,8 @@ case 'print_get':
     $bizDate = $dates['earliest'] ?: substr((string)$doc['created_at'], 0, 10);
     // 列印紀錄（ai-rules/23）：記的是「按下列印」這個動作，不是「印出來了」；「列印全部搜尋結果」
     // 逐筆各自呼叫這個動作，本來就一份文件各記一筆，不會有一次列印被記成好幾筆的問題。
-    eg_print_log_add($db, [
+    // 預覽不是列印，不留列印紀錄（ai-rules/23 記的是「按下列印」這個動作）
+    if (!$isPreview) eg_print_log_add($db, [
         'source' => 'type_id_ctrl', 'doc_kind' => 'form',
         'ref_table' => 'type_id_ctrl_doc', 'ref_id' => (string)$id,
         'doc_name' => '型態識別文件管制表 ' . (string)$doc['doc_no'],
@@ -741,6 +813,7 @@ case 'print_get':
         'as_doc_no'=>eg_asdoc_no_asof($db, 'type_id_ctrl', $bizDate),
         'as_doc_name'=>$asDoc['doc_name'] ?? '型態識別文件管制表',
         'stamp_tpl'=>type_id_ctrl_stamp_tpl($db, type_id_ctrl_stamp_tpl_id($db)),
+        'is_preview'=>$isPreview,
     ]);
 
 // ── 同一種文件出現好幾份時由使用者確認（2026-10-02 使用者要求）──

@@ -84,6 +84,8 @@ function type_id_ctrl_item_view(PDO $db, array $it): array {
         'dup_ignore' => !empty($it['dup_ignore']) ? 1 : 0,
         'superseded_by' => isset($it['superseded_by']) && $it['superseded_by'] !== null ? (int)$it['superseded_by'] : null,
         'ver_count' => $linked['ver_count'] ?? null,
+        // 這一份有沒有真正的發行章日期（沒有＝日期是退回上傳日，日期檢核的提示要講清楚）
+        'has_issue_stamp' => !empty($linked['first_has_stamp']),
         'ref_broken' => ($hasRef && $linked === null), // 曾連結但來源已消失
         'effective_date' => $linked ? $linked['doc_date'] : $it['manual_effective_date'],
         'doc_no_text' => $linked ? $linked['doc_name'] : $it['manual_doc_no'],
@@ -379,18 +381,21 @@ function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $d
         $fam = type_id_ctrl_part_families($db, $dsPk)[$catId] ?? null;
         if (!$fam) return null;                       // 這個料號已經沒有這種文件了＝來源已消失
         $cur = $fam['current'];
-        $hasRevision = ($cur['revision'] !== null && $cur['revision'] !== '');
+        // 版別取用順序（2026-10-02 使用者：「加工圖是採用發行日做為版別」）：
+        //   ①有填版次就用版次 ②沒版次但有發行章日期 → 發行日就是版別（自家出的圖多半這樣管）
+        //   ③兩者都沒有才退回檔名充當畫面辨識用，檔名不是真正的版別故列印不印（2026-08-12 既有規則）
+        $verText = type_id_ctrl_version_text($cur);
         return [
-            // doc_no_is_filename：沒填版次時退回檔名充當顯示用途，但檔名不是真正的「版別／文件編號」，
-            // 列印時不應印出（2026-08-12 使用者要求），僅畫面/跳窗仍顯示以利辨識檔案。
-            'doc_name' => $hasRevision ? $cur['revision'] : $cur['doc_name'],
-            'doc_no_is_filename' => !$hasRevision,
+            'doc_name' => $verText !== '' ? $verText : $cur['doc_name'],
+            'doc_no_is_filename' => ($verText === ''),
             'doc_date' => $fam['first']['_date'],      // ＝型態制定日期：最早一次發行，不隨改版往後跳
             // 「自家出的圖」(如加工圖) 多半沒填版次，退回檔名充當畫面顯示，但列印時檔名不算真正的
             // 版別/文件編號故印空白；有發行章日期時改印「發行章 YYYY.MM.DD」取代空白
             // （2026-09-24 使用者要求：列印看不到任何依據，加工圖那一列整格空白）。
             'issue_stamp_date' => ($cur['issue_stamp_date'] !== null && $cur['issue_stamp_date'] !== '') ? $cur['issue_stamp_date'] : null,
             'cat_id' => $catId,
+            // 制定日期取的是第一版，所以「這個日期是不是只有上傳日」要看第一版（不是現行版）
+            'first_has_stamp' => !empty($fam['first']['issue_stamp_date']),
             'cur_attach_id' => (int)$cur['attach_id'],
             'ver_count' => count($fam['versions']),
             'file_url' => '../../src/store/Part_Attachment_API.php?action=download&id=' . (int)$cur['attach_id'],
@@ -449,7 +454,9 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
             'attach_id' => (int)$cur['attach_id'],          // 現行版（改版後同步會原地指到新的那份）
             'ds_pk' => $dsPk,
             'filename' => $cur['filename'],
-            'doc_name' => $cur['doc_name'],
+            // 版別優先（版次→發行日），都沒有才退回檔名——與 resolve_ref 同一套規則，
+            // 否則「新增管制表」還沒存檔時看到的是檔名、存檔後又變成版別，同一份文件兩種顯示
+            'doc_name' => (type_id_ctrl_version_text($cur) !== '') ? type_id_ctrl_version_text($cur) : $cur['doc_name'],
             'doc_date' => $fam['first']['_date'],           // 制定日期＝最早一次發行
             'cat_id' => (int)$cid,
             'categories' => [$fam['disp']],
@@ -1572,7 +1579,7 @@ function type_id_ctrl_part_families(PDO $db, int $dsPk): array {
             $d = (string)$a['_date'];
             if (!isset($vers[$d])) $vers[$d] = ['date'=>$a['_date'], 'files'=>[], 'revision'=>'', 'is_void'=>true, 'rep'=>null];
             $vers[$d]['files'][] = $a;
-            if ($vers[$d]['revision'] === '' && $a['revision'] !== null && $a['revision'] !== '') $vers[$d]['revision'] = (string)$a['revision'];
+            if ($vers[$d]['revision'] === '') { $t = type_id_ctrl_version_text($a); if ($t !== '') $vers[$d]['revision'] = $t; }
             if (!$a['_is_void']) { $vers[$d]['is_void'] = false; $vers[$d]['rep'] = $a; }   // 同一版裡優先用沒作廢的那一份
             if ($vers[$d]['rep'] === null) $vers[$d]['rep'] = $a;
         }
@@ -1593,6 +1600,18 @@ function type_id_ctrl_part_families(PDO $db, int $dsPk): array {
         ];
     }
     return $cache[$dsPk] = $out;
+}
+
+/**
+ * 一份附件的「版別」文字：有版次用版次，沒版次但有發行章日期就用發行日（使用者 2026-10-02 指定，
+ * 加工圖這類自家出的圖本來就是以發行日當版別），兩者都沒有回空字串（呼叫端自行決定要不要退回檔名）。
+ */
+function type_id_ctrl_version_text(array $a): string {
+    $rev = $a['revision'] ?? null;
+    if ($rev !== null && $rev !== '') return (string)$rev;
+    $d = $a['issue_stamp_date'] ?? null;
+    if ($d !== null && $d !== '') return eg_fmt_date($d);
+    return '';
 }
 
 /** 由附件 id 回推它屬於哪個列入類別（舊資料沒有 ref_cat_id 時用；取最先命中的那一個） */
@@ -1750,6 +1769,81 @@ function type_id_ctrl_revs_save(PDO $db, int $itemId, array $rows): void {
         $in = implode(',', array_fill(0, count($ids), '?'));
         $db->prepare("UPDATE type_id_ctrl_item_rev SET is_deleted=1, updated_at=NOW() WHERE id IN ($in)")->execute($ids);
     }
+}
+
+/* ============================================================================
+ * 日期合理性檢核（2026-10-02 使用者回報）
+ * --------------------------------------------------------------------------
+ * 使用者原話：「原圖的制定日期比加工圖還晚，這一看就不合理，加工圖是依據原圖製作，要卡相關日期。
+ *              原圖的日期一定是最早，其他都是依據原圖/報價圖產出」
+ *
+ * 判定依據**不寫死「原圖」這個名稱**（鐵律4），改用附件類別既有的兩個旗標——這兩個旗標本來就是
+ * 這個意思，不必另開設定：
+ *   is_external_doc=1 ── 外來文件（客戶給的原圖、報價圖、規格書…）＝**基準**，日期應該最早
+ *   is_own_drawing=1  ── 自家出的圖（加工圖、++圖…）＝**依據基準圖產出**，日期不得早於基準
+ *
+ * 實際踩到的資料問題（料號 447-000C-820-18）：原圖沒有發行章日期，所以日期退回「上傳日」
+ * 2026-08-12，而加工圖有真正的發行章日期 2025-03-05 → 看起來像「加工圖比原圖早」。
+ * 真正要修的是原圖的日期，所以提示要同時指出「原圖用的是上傳日、請補發行日期」，不能只罵加工圖。
+ *
+ * 只警示不硬擋**一般儲存**（補舊資料時本來就可能對不起來），但**確認清單會擋**——確認等於正式
+ * 認可這份清單，日期自相矛盾的清單不該被確認掉。
+ * ========================================================================== */
+
+/**
+ * 回傳每個項目列的日期問題：[ item_id(或陣列索引) => ['level'=>'error','text'=>'...'], ... ]
+ * $items 用 type_id_ctrl_item_view() 產出的格式（需有 ref_source/ref_cat_id/effective_date/is_excluded）。
+ * $keyField：用哪個欄位當鍵（已存檔用 'id'，尚未存檔的新管制表用陣列索引請傳 null）。
+ */
+function type_id_ctrl_date_issues(PDO $db, array $items, ?string $keyField = 'id'): array {
+    static $catFlags = null;
+    if ($catFlags === null) {
+        $catFlags = [];
+        foreach ($db->query("SELECT id, COALESCE(is_external_doc,0) ext, COALESCE(is_own_drawing,0) own,
+                                    COALESCE(NULLIF(external_doc_name,''), category_name) disp
+                               FROM quotation_file_categories")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+            $catFlags[(int)$c['id']] = ['ext'=>(int)$c['ext'], 'own'=>(int)$c['own'], 'disp'=>$c['disp']];
+        }
+    }
+
+    $base = null; $baseLabel = ''; $baseKey = null; $baseIsUploadDate = false;
+    $derived = [];
+    foreach ($items as $k => $it) {
+        if (!empty($it['is_excluded'])) continue;
+        $d = $it['effective_date'] ?? null;
+        if (!$d) continue;
+        $cid = (int)($it['ref_cat_id'] ?? 0);
+        $f = $catFlags[$cid] ?? null;
+        if (!$f) continue;                       // 非附件來源（表單、SOP/SIP、ERP報告）不參與這條檢核
+        $key = ($keyField !== null && isset($it[$keyField])) ? $it[$keyField] : $k;
+        if ($f['ext']) {
+            if ($base === null || strcmp((string)$d, (string)$base) < 0) {
+                $base = $d; $baseLabel = (string)($it['item_name'] ?? $f['disp']); $baseKey = $key;
+                // 這份基準圖有沒有真正的發行章日期？沒有就是退回上傳日，提示要講清楚
+                $baseIsUploadDate = empty($it['has_issue_stamp']);
+            }
+        } elseif ($f['own']) {
+            $derived[] = ['key'=>$key, 'date'=>$d, 'name'=>(string)($it['item_name'] ?? $f['disp'])];
+        }
+    }
+    if ($base === null || !$derived) return [];
+
+    $issues = []; $earliest = null;
+    foreach ($derived as $x) {
+        if (strcmp((string)$x['date'], (string)$base) >= 0) continue;
+        $issues[$x['key']] = ['level'=>'error',
+            'text'=>'此日期（'.eg_fmt_date($x['date']).'）早於「'.$baseLabel.'」的 '.eg_fmt_date($base)
+                   .'；'.$x['name'].'是依據'.$baseLabel.'製作的，日期不應該比它早。'];
+        if ($earliest === null || strcmp((string)$x['date'], (string)$earliest) < 0) $earliest = $x['date'];
+    }
+    if ($issues && $baseKey !== null) {
+        $issues[$baseKey] = ['level'=>'error',
+            'text'=>'有依據它產出的文件日期更早（'.eg_fmt_date($earliest).'）。'
+                   .($baseIsUploadDate
+                        ? '這一份沒有填發行章日期，目前顯示的是「上傳日」'.eg_fmt_date($base).'，多半是它需要補上實際的發行日期。'
+                        : '請確認是這一份的發行日期填錯，還是下面那幾份填錯。')];
+    }
+    return $issues;
 }
 
 /* ============================================================================

@@ -107,6 +107,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         table.ic-item-table input[type=text], table.ic-item-table input[type=date], table.ic-item-table select {
             width:100%; box-sizing:border-box; border:1px solid #D8BE93; border-radius:3px; padding:3px 4px; font-size:12px; }
         table.ic-item-table input[disabled] { background:#F7F2E6; color:#5b3a1e; }
+        /* 日期不合理的提示（2026-10-02）：紅字接在日期欄下方，連同修正入口 */
+        .ic-date-warn { margin-top:3px; font-size:11px; line-height:1.45; color:#DD5138; background:#ffe1de;
+                        border:1px solid #f0c4bd; border-radius:4px; padding:3px 5px; }
+        .ic-date-warn .ic-row-btn { margin-top:2px; }
         /* 重複確認（2026-10-02）：提示列與跳窗內的每一份 */
         #dupBar { margin-top:8px; padding:6px 10px; background:#FFF3E2; border:1px solid #F0A24B; border-radius:6px;
                   color:#8A5A2B; font-size:12px; display:flex; align-items:center; gap:8px; }
@@ -303,6 +307,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <span>簽章日期(最新日期)：<b id="fLatestDate">—</b></span>
             <span>確認狀態：<span id="fReviewBadge" class="ic-status st-pending">待確認</span></span>
             <span id="fConfirmedInfo" style="color:#8a6d45;"></span>
+            <button type="button" class="ic-row-btn" onclick="previewPrint()" title="先看列印版面，不蓋簽章也不留列印紀錄；待確認的文件也可以預覽"><i class="fa fa-search"></i> 預覽列印</button>
             <button type="button" class="ic-row-btn" id="btnConfirm" style="margin-left:auto;<?= $perms['canEdit']?'':'display:none;' ?>" onclick="saveAll(true)"><i class="fa fa-check"></i> 確認清單</button>
         </div>
 
@@ -545,6 +550,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <li><b>取消的欄位</b>：表頭的「製程」、項目列的「型態類別」與「所屬製程」三欄依使用者要求取消，畫面與列印版都不再顯示；<b>資料庫欄位保留不刪</b>，既有資料原封不動，存檔時也會把原值照原樣寫回去（畫面上看不到的東西不會因為存一次檔就被改掉）。連帶失效的設定（BOM檔案標籤的「型態類別」、廠內圖面標籤的「需要顯示製程」、項目列旁的製程挑選鈕）一併移除，避免留下改了也看不到的死設定。</li>
             <li><b>「型態制定日期」已更名為「型態制定日期」</b>，只是名稱改變，取值方式與原本完全相同（連結來源時取來源日期：發行章日期／表單日期／檔案日期；手動列則用自己填的日期）。</li>
             <li><b>一種文件一列</b>（2026-10-02 使用者回報）：加工圖、原圖這類<b>綁定圖面每次改版都會上傳一張新圖</b>，原本一個附件一列會讓同一種圖在表上長出好幾列、同一次改版也顯示兩次。現在<b>同一料號＋同一附件類別</b>的歷次上傳收斂成一列：<b>版別／文件編號＝現行版</b>、<b>型態制定日期＝最早一次發行</b>（不隨改版往後跳）、歷次上傳成為<b>修訂履歷</b>；欄位旁的「共 N 版」小籤表示這一種文件目前有幾份。之後再上傳新版時，同步會<b>原地把該列指到新的那一份</b>並在修訂履歷多一筆，不會另外長一列（與 ERP/資材報告標籤同一套做法）。<br><b>舊資料</b>不另外批次處理：那幾份管制表<b>下次被開啟或同步時自動合併</b>，並跳出提示告知合併了幾列、狀態改為「需重新確認」請人覆核。合併時保留最早建立的那一列，人工加的修訂履歷會一併搬過去，任何一列曾被「取消納入」則合併後仍維持取消納入。</li>
+            <li><b>版別怎麼決定</b>（2026-10-02 使用者：「加工圖是採用發行日做為版別」）：①有填<b>版次</b>就用版次 ②沒版次但有<b>發行章日期</b>→<b>發行日就是版別</b>（加工圖這類自家出的圖本來就這樣管）③兩者都沒有才退回顯示<b>檔名</b>供辨識，檔名不是真正的版別所以<b>列印不印</b>。修訂履歷的「修訂後版別」用同一套規則。</li>
+            <li><b>日期合理性</b>（2026-10-02 使用者：「原圖的日期一定是最早，其他都是依據原圖/報價圖產出」）：<b>外來文件</b>（原圖、報價圖、規格書…客戶給的）是基準，日期應該最早；<b>自家出的圖</b>（加工圖、++圖…）是依據它們畫的，日期不得早於基準。判定直接用附件類別既有的「外來文件清單／自家出的圖」兩個旗標，<b>不寫死「原圖」這個名稱</b>。<br>發現倒置時在該列日期欄下方標紅字，並指出<b>真正該修的多半是哪一份</b>——實測料號 447-000C-820-18 就是原圖<b>沒填發行章日期、日期退回「上傳日」</b>才看起來比加工圖晚（另外還有 6512、10093 等料號同樣情形）。紅字旁的<b>「修正日期」</b>可直接改回來源附件：自家出的圖寫<b>發行章日期</b>、外來文件寫<b>文件日期(上傳日)</b>，不可填未來日期。<br><b>一般儲存只警示不擋</b>（補舊資料本來就可能先存起來再慢慢補），但<b>「確認清單」會擋下</b>——確認等於正式認可這份清單，日期自相矛盾的不該被確認掉（擋下時內容仍完整存著，不會白打）。</li>
+            <li><b>預覽列印</b>（2026-10-02 使用者要求）：編輯畫面上方的「預覽列印」可以在<b>還沒確認</b>（甚至還沒存檔）時先看列印版面，頁首標明「預覽（未確認、未簽章，非正式文件）」、<b>不蓋製表簽章</b>、<b>不留列印紀錄</b>、也不會自動跳出列印對話框。正式列印仍維持原規則（要先確認、且沒有待更新的新檔案/內容變更）。</li>
             <li><b>同一種文件有兩份以上 → 由你確認，系統不自動決定</b>（2026-10-02 使用者要求）：上面的收斂只管得了<b>料號附件</b>（同料號同附件類別）。實務上還會出現<b>跨來源</b>的同名文件——例如同樣叫「原圖」，一份是料號附件、一份是報價附件（實測料號 3004012570 就是，而且報價那份檔名是 300401257、比料號少一碼，比較像重複上傳或掛錯）。這種「哪一份才算數」系統沒有把握，所以<b>一律不自動決定</b>。<br>判定範圍是<b>同一個「型態項目名稱」</b>，所以 BOSS圖／單製++圖 都顯示成「加工圖」時也會被拿出來問。建立或同步當下會跳窗，沒處理完也能先存檔，那幾列會持續標著橘色<b>「待確認重複」</b>小籤，點一下就能處理。<br>每一組請指定<b>一份現行版</b>，另外勾選的<b>不列入</b>代表不採認（重複上傳，比照「取消納入」，同步不會再加回來），<b>其餘沒勾的自動成為現行版的舊版</b>——不再是獨立項目列，改以修訂履歷呈現在現行版底下（列本身保留著，同步才不會把它當新檔案又加一列）。<br>如果這幾份<b>本來就是不同的文件</b>（像 BOSS圖 與 單製++圖），按該組右上角的<b>「這幾份不是重複，各自保留」</b>，各自維持一列、之後不再提示。</li>
             <li><b>作廢圖</b>：哪個附件類別代表「已作廢」由管理員在「廠內圖面標籤設定」勾選（<b>不寫死「作廢」這個名稱</b>）。掛到該類別的圖<b>不會被當成現行版</b>——實測確實有家族最新那一份就是作廢的——但仍留在修訂履歷裡以利追溯，並標註「已作廢」。不勾任何類別就不做作廢判定，單純以發行章日期最新者為現行版。</li>
             <li><b>修訂履歷</b>：每一列項目底下可以記錄歷次改版的「修訂日期」與「修訂後版別」，筆數不限。版面維持 A4 直式、履歷獨立成一欄——修訂次數每一列都不一樣，紙本那種固定開「修訂1／2／3」欄位的橫式表會大半空白、超過次數還印不出來。</li>
@@ -1027,7 +1035,7 @@ function upAppendNewRows(dId, verdict){
 
 /* ---------- 新增/編輯 ---------- */
 function resetEditForm(){
-    CUR_ID = 0; ITEMS = [];
+    CUR_ID = 0; ITEMS = []; DATE_ISSUES = {};
     $('#fPartNo').val(''); $('#fPartDId').val('0'); $('#fCustomerName').val(''); $('#fCustomerId').val('');
     $('#fDocNo').text('存檔後自動產生'); $('#fCreatedInfo').text('—');
     $('#fProjectInfo').val('—');
@@ -1053,6 +1061,7 @@ function openEdit(id){
         $('#btnConfirm').text(res.doc.review_status === 'pending' ? ' 確認清單' : ' 重新確認').prepend('<i class="fa fa-check"></i>');
         $('#fConfirmedInfo').text(res.doc.confirmed_by_name ? ('（'+res.doc.confirmed_by_name+' '+fmtDate((res.doc.confirmed_at||'').substring(0,10))+' 確認）') : '');
         ITEMS = res.items || [];
+        DATE_ISSUES = res.date_issues || {};
         renderItems();
         openMask('editMask');
         // 同一種文件有兩份以上：建立／同步當下就跳窗請人確認（2026-10-02 使用者拍板）
@@ -1077,17 +1086,7 @@ EGPartPicker.attach(document.getElementById('fPartNo'), {
         $('#fCustomerName').val(row.customer_name||row.customer_id||''); $('#fCustomerId').val(row.customer_id||'');
         // 新增流程(尚未存檔)：選定料號後自動列出外來文件清單中此料號的資料到項目列，
         // 並即時顯示「建立日期(最早外來文件日期)」與「專案」——不必等按下儲存才看得到
-        if (!CUR_ID) {
-            $.post(API, {action:'fetch_ext_for_part', part_d_id:row.d_id}, function(res){
-                if (res && res.success){
-                    if (res.rows.length){ ITEMS = res.rows; renderItems();
-                        if (dupGroups().length) setTimeout(function(){ renderDupPanel(); openMask('dupMask'); }, 400);
-                    }
-                    $('#fEarliestDate').val(res.doc_date_earliest ? fmtDate(res.doc_date_earliest) : '—');
-                    $('#fProjectInfo').val(res.project_info ? res.project_info : '無專案');
-                }
-            }, 'json');
-        }
+        if (!CUR_ID) reloadNewDocItems(row.d_id);
     }
 });
 // 直接打字修改料號文字但沒有從清單點選＝視同尚未選定有效料號，清空 d_id 避免存到舊選取值
@@ -1142,6 +1141,11 @@ function itemRowHtml(it, idx){
     var linkBadge = linked ? '<span class="ic-link-badge"><i class="fa fa-link"></i> '+esc(srcLabel)+'</span>' : (it.ref_broken ? '<span class="ic-broken-badge">來源已消失</span>' : '');
     // 已確認過的連結項目，來源內容（版別/文件編號）事後變了：小籤提醒，即時值仍以畫面上顯示的為準
     var changedBadge = it.content_changed ? '<span class="ic-broken-badge" title="上次確認時是「'+esc(it.confirmed_ref_snapshot||'')+'」，目前已不同"><i class="fa fa-exclamation-triangle"></i> 內容已變更</span>' : '';
+    var di = (typeof dateIssueOf === 'function') ? dateIssueOf(it, idx) : null;
+    var dateWarn = di
+        ? '<div class="ic-date-warn"><i class="fa fa-exclamation-triangle"></i> '+esc(di.text)
+          + (linked && it.ref_source==='part' ? ' <button type="button" class="ic-row-btn" onclick="fixRowDate(this)">修正日期</button>' : '')
+          + '</div>' : '';
     var dupBadge = DUPSET[idx]
         ? '<span class="ic-dup-badge" title="「'+esc(DUPSET[idx])+'」有兩份以上，請確認哪一份是現行版（點此處理）">待確認重複</span>' : '';
     var verBadge = (it.ver_count && it.ver_count > 1)
@@ -1157,7 +1161,7 @@ function itemRowHtml(it, idx){
         + '<td class="drg" title="拖曳調整順序"><i class="fa fa-ellipsis-v"></i></td>'
         + '<td class="seq">'+(idx+1)+'</td>'
         + '<td><input type="text" class="f-name" value="'+esc(it.item_name||'')+'" placeholder="型態項目名稱"></td>'
-        + '<td><input type="date" class="f-date" value="'+esc(it.effective_date||'')+'"'+(linked?' disabled':'')+'></td>'
+        + '<td><input type="date" class="f-date" value="'+esc(it.effective_date||'')+'"'+(linked?' disabled':'')+'>'+dateWarn+'</td>'
         + '<td>'+docNoCell+' '+linkBadge+verBadge+changedBadge+dupBadge+'</td>'
         + '<td class="revcell">'+revCellHtml(it.revisions||[])+'</td>'
         + '<td class="op">'+opCell+'</td>'
@@ -1399,6 +1403,76 @@ function reloadAfterDup(){
 $('#btnDupOpen').on('click', function(){ renderDupPanel(); openMask('dupMask'); });
 $(document).on('click', '.ic-dup-badge', function(){ renderDupPanel(); openMask('dupMask'); });
 
+/* ---------- 日期合理性提示與修正（2026-10-02 使用者回報：原圖的制定日期比加工圖還晚）----------
+   判定在後端（type_id_ctrl_date_issues，依附件類別的 外來文件／自家出的圖 兩個既有旗標，不寫死名稱）。
+   這裡只負責顯示紅字與提供「修正日期」——日期錯在來源附件上，改畫面沒有用，要改回來源。 */
+var DATE_ISSUES = {};
+function dateIssueOf(it, idx){
+    if (!DATE_ISSUES) return null;
+    if (it && it.id && DATE_ISSUES[it.id]) return DATE_ISSUES[it.id];
+    return DATE_ISSUES[idx] || null;
+}
+window.fixRowDate = function(btn){
+    var $tr = $(btn).closest('tr');
+    var aid = parseInt($tr.attr('data-ref-attach-id'), 10) || 0;
+    if (!aid){ alert('這一列不是連結料號附件，日期請直接在欄位內修改。'); return; }
+    var cur = $tr.find('.f-date').val() || '';
+    var v = prompt('請輸入這份文件實際的發行／文件日期（YYYY-MM-DD）：\n\n日期會寫回這份附件本身，所以其他引用到它的地方也會一起更正。', cur);
+    if (v === null) return;
+    v = (v || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v)){ alert('日期格式需為 YYYY-MM-DD'); return; }
+    $.post(API, {action:'set_attach_doc_date', attach_id:aid, doc_date:v, field:'auto'}, function(res){
+        if (!res.success){ alert(res.message||'修正失敗'); return; }
+        showToastSafe('已更正「'+(res.field_label||'日期')+'」為 '+v);
+        if (CUR_ID) openEdit(CUR_ID);
+        else { var d=$('#fPartDId').val(); if (d && d!=='0') reloadNewDocItems(d); }
+    }, 'json');
+};
+function showToastSafe(msg){ if (typeof showToast === 'function') showToast(msg); else alert(msg); }
+function reloadNewDocItems(dId){
+    $.post(API, {action:'fetch_ext_for_part', part_d_id:dId}, function(res){
+        if (!res || !res.success) return;
+        ITEMS = res.rows || [];
+        DATE_ISSUES = res.date_issues || {};
+        renderItems();
+        $('#fEarliestDate').val(res.doc_date_earliest ? fmtDate(res.doc_date_earliest) : '—');
+        $('#fProjectInfo').val(res.project_info ? res.project_info : '無專案');
+        if (dupGroups().length) setTimeout(function(){ renderDupPanel(); openMask('dupMask'); }, 400);
+    }, 'json');
+}
+
+/* ---------- 預覽列印（不蓋簽章）：待確認的也看得到版面（2026-10-02 使用者要求）---------- */
+window.previewPrint = function(){
+    if (CUR_ID){
+        $.getJSON(API, {action:'print_get', id:CUR_ID, preview:1}, function(res){
+            if (!res.success){ alert(res.message||'載入失敗'); return; }
+            buildTypeIdCtrlPrintWindow(res);
+        });
+        return;
+    }
+    // 尚未存檔：用畫面上的項目列組一份預覽（表頭資料仍向後端拿，公司全名與 AS 編號不在前端寫死）
+    var partNo = $('#fPartNo').val() || '';
+    if (!partNo){ alert('請先選擇產品編號(料號)'); return; }
+    var earliest = '';
+    ITEMS.forEach(function(it){
+        if (it.is_excluded || !it.effective_date) return;
+        if (!earliest || it.effective_date < earliest) earliest = it.effective_date;
+    });
+    $.getJSON(API, {action:'print_meta', biz_date: earliest || ''}, function(meta){
+        if (!meta.success){ alert(meta.message||'載入失敗'); return; }
+        buildTypeIdCtrlPrintWindow($.extend({}, meta, {
+            doc: {customer_name: $('#fCustomerName').val()||'', part_no: partNo, created_by_name: ''},
+            items: ITEMS.filter(function(it){ return !it.is_excluded; }).map(function(it){
+                return {item_name: it.item_name, effective_date: it.effective_date,
+                        print_doc_no: it.doc_no_text || '', is_excluded: false,
+                        revisions: it.revisions || []};
+            }),
+            doc_date_earliest: earliest, sign_date_latest: '',
+            project_info: $('#fProjectInfo').val()||''
+        }));
+    });
+};
+
 function collectRow($tr){
     var linked = !!$tr.attr('data-ref-source');
     return {
@@ -1458,6 +1532,12 @@ function saveAll(confirm){
         items: JSON.stringify(items), confirm: confirm ? 1 : 0
     }, function(res){
         if (!res.success){
+            if (res.code === 'DATE_ISSUE'){
+                DATE_ISSUES = res.date_issues || {};
+                renderItems();
+                alert(res.message || '日期不合理，無法確認清單');
+                return;
+            }
             if (res.dup_id){
                 if (confirm((res.message||'此料號已經有一份型態識別文件管制表')+'\n\n要改為開啟該份嗎？')) openEdit(res.dup_id);
                 return;
@@ -1494,7 +1574,8 @@ function buildTypeIdCtrlPrintWindow(res, onDone){
     var d = res.doc;
     window.__ownCompany = res.company_name || '';
     var activeItems = (res.items||[]).filter(function(it){ return !it.is_excluded; });
-    var body = '<div class="p-comp">'+esc(res.company_name)+'</div>'
+    var body = (res.is_preview ? '<div class="p-preview">預覽（未確認、未簽章，非正式文件）</div>' : '')
+        + '<div class="p-comp">'+esc(res.company_name)+'</div>'
         + '<div class="p-title">'+esc(res.as_doc_name)+'</div>'
         + '<table class="p-hd"><tr><td>客戶</td><td>'+esc(d.customer_name||'')+'</td><td>建立日期</td><td>'+(res.doc_date_earliest?fmtDate(res.doc_date_earliest):'')+'</td></tr>'
         + '<tr><td>料號</td><td>'+esc(d.part_no||'')+'</td><td>專案</td><td>'+esc(res.project_info||'無')+'</td></tr>'
@@ -1519,14 +1600,19 @@ function buildTypeIdCtrlPrintWindow(res, onDone){
     });
     body += '</tbody></table>';
     // 製表＝建立人（2026-09-24 使用者更正：原本印確認人，「製表要是建立人」）
+    var isPreview = !!res.is_preview;
     var makerName = d.created_by_name || '';
     var makerDate = res.sign_date_latest ? fmtDate(res.sign_date_latest) : '';
     // 製表人圖章：模板由管理員在「列印設定」指定；未指定時退回系統預設回墨印並套 91px（ai-rules/18 鐵則6）
+    // 預覽模式一律不蓋章——還沒確認的文件蓋上製表章，印出來就跟正式文件分不出來（2026-10-02）
     var schema = (res.stamp_tpl && res.stamp_tpl.schema) ? res.stamp_tpl.schema : null;
-    var makerStamp = makerName ? EGStamp.stamp(makerName, makerDate, false, schema) : '<span style="color:#999;font-size:12px;">（尚未建立）</span>';
+    var makerStamp = isPreview
+        ? '<span style="color:#999;font-size:12px;">（預覽，未簽章）</span>'
+        : (makerName ? EGStamp.stamp(makerName, makerDate, false, schema) : '<span style="color:#999;font-size:12px;">（尚未建立）</span>');
     body += '<div style="margin-top:16px;display:flex;justify-content:flex-end;align-items:flex-end;gap:6px;">'
           + '<span style="font-size:12px;color:#777;margin-bottom:8px;">製表：</span>' + makerStamp + '</div>';
     var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        + '.p-preview{text-align:center;font-size:12px;color:#DD5138;border:1px dashed #DD5138;border-radius:4px;padding:2px 6px;margin-bottom:6px;}'
         + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:1px;}'
         + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:4px;margin-bottom:10px;}'
         + 'table.p-hd{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px;}'
@@ -1555,7 +1641,8 @@ function buildTypeIdCtrlPrintWindow(res, onDone){
         +'var st=document.createElement(\'style\');'
         +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
         +'document.head.appendChild(st);}'
-        +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+        + (res.is_preview ? '' : 'setTimeout(function(){window.print();},200);')
+        +'};</scr'+'ipt></body></html>');
     w.document.close();
     if (onDone) setTimeout(onDone, 500);
 }
