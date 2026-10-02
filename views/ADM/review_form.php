@@ -154,7 +154,15 @@ $perms = rvf_perms($db, $rvfUser);
     <div class="m-head"><span>新增表單</span><span class="m-close" onclick="closeMask('addMask')">✕</span></div>
     <div class="m-body">
         <label>選擇模板</label><select id="addTplSel" style="width:100%;"></select>
-        <label>建立日期</label><input type="date" id="addBizDate" max="9999-12-31" style="width:100%;">
+        <!-- 綁訂單的模板（合約訂單審查表）：先挑訂單，建立日期一律跟著該訂單的接單日期 -->
+        <div id="addOrdBox" style="display:none;">
+            <label>來源訂單<span style="color:#c0392b;">＊</span></label>
+            <input type="text" id="addOrdKw" style="width:100%;" placeholder="輸入訂單編號／客戶／料號搜尋（至少 2 個字）" data-eg-skip autocomplete="off">
+            <div id="addOrdList" style="max-height:190px;overflow:auto;border:1px solid #E8D5B5;border-radius:4px;margin-top:4px;display:none;"></div>
+            <div id="addOrdPicked" style="display:none;background:#FDF6EC;border:1px solid #E8D5B5;border-radius:4px;padding:6px 8px;margin-top:4px;font-size:12.5px;line-height:1.7;"></div>
+            <div id="addOrdErr" style="color:#c0392b;font-size:12px;display:none;margin-top:2px;"></div>
+        </div>
+        <label id="addBizDateLbl">建立日期</label><input type="date" id="addBizDate" max="9999-12-31" style="width:100%;">
         <div id="addYearBox" style="display:none;">
             <label id="addYearLbl">年度</label><input type="text" id="addYear" style="width:100%;" data-eg-skip>
             <div id="addYearErr" style="color:#c0392b;font-size:12px;display:none;margin-top:2px;"></div>
@@ -341,8 +349,10 @@ function loadTemplates(cb){
     });
 }
 $('#btnAdd').on('click', function(){
+    ADD_ORD = null; $('#addOrdPicked').hide().empty(); $('#addOrdKw').val(''); $('#addOrdList').hide().empty(); $('#addOrdErr').hide();
     $('#addBizDate').val(META.today);
     $('#addYear').val('');
+    addOrdBoxSync();
     updateAddYearBox();
     openMask('addMask');
 });
@@ -375,16 +385,77 @@ function validateAddYear(){
 $('#addTplSel').on('change', updateAddYearBox);
 $('#addBizDate').on('change', updateAddYearBox);
 $('#addYear').on('input', validateAddYear);
+
+/* ── 綁訂單的模板（合約訂單審查表）：挑訂單 ─────────────────────────────────
+   建立日期一律由訂單的接單日期決定（欄位改唯讀），後端 rvf_instance_create() 會再強制一次，
+   所以就算有人直接打 API 送別的日期也寫不進去（鐵律8）。 */
+var ADD_ORD = null;          // 目前挑中的訂單
+function addOrdBoxSync(){
+    var t = curAddTpl(), on = !!(t && t.src_bind==1);
+    $('#addOrdBox').toggle(on);
+    $('#addBizDateLbl').text(on ? '接單日期（由訂單帶入，不可修改）' : '建立日期');
+    $('#addBizDate').prop('readonly', on).css('background', on ? '#F3EADC' : '');
+    if (!on) { ADD_ORD = null; $('#addOrdPicked').hide(); $('#addOrdList').hide(); $('#addOrdKw').val(''); $('#addOrdErr').hide(); }
+    else if (!ADD_ORD) { $('#addBizDate').val(''); }
+}
+$('#addTplSel').on('change', addOrdBoxSync);
+var ADD_ORD_T = null, ADD_ORD_SEQ = 0;
+$('#addOrdKw').on('input', function(){
+    var kw = $.trim(this.value);
+    clearTimeout(ADD_ORD_T);
+    if (kw.length < 2) { $('#addOrdList').hide().empty(); return; }
+    ADD_ORD_T = setTimeout(function(){
+        var seq = ++ADD_ORD_SEQ;
+        $.getJSON(API, {action:'src_order_search', kw:kw}, function(res){
+            if (seq !== ADD_ORD_SEQ) return;     // 打字很快時只採用最後一次查詢的結果
+            if (!res.ok){ $('#addOrdList').hide(); return; }
+            var h = (res.orders||[]).map(function(o){
+                var done = o.rf_id ? '<span style="color:#c0392b;">（已建過 #'+o.rf_id+'）</span>' : '';
+                return '<div class="ord-opt" data-id="'+o.Order_id+'" style="padding:5px 8px;border-bottom:1px solid #F3EADC;cursor:'+(o.rf_id?'not-allowed':'pointer')+';'+(o.rf_id?'opacity:.55;':'')+'">'
+                     + '<b>'+esc(o.Order_oo||('#'+o.Order_id))+'</b> '+done
+                     + '<div style="font-size:11.5px;color:#8a6d45;">'+esc(o.client_name_txt||o.Client_name||'')
+                     + '｜'+esc(o.d_id||'')+'｜'+Number(o.Qty||0).toLocaleString()+' 件｜接單 '+dispDate(o.Order_date)
+                     + '｜<span style="color:#b5862f;">'+esc(o.tag_label||'未設定標籤')+'</span></div></div>';
+            }).join('');
+            if (!h) h = '<div style="padding:6px 8px;color:#8a6d45;font-size:12px;">查不到符合的訂單（只列出「稽核製程」標籤的訂單＝AS 認定需要做合約審查的那些）</div>';
+            $('#addOrdList').html(h).show();
+        });
+    }, 300);
+});
+$(document).on('click', '#addOrdList .ord-opt', function(){
+    var id = $(this).data('id');
+    $.getJSON(API, {action:'src_order_get', order_id:id}, function(res){
+        if (!res.ok){ alert(res.error||'讀取訂單失敗'); return; }
+        var o = res.order;
+        if (o.rf_id){ $('#addOrdErr').text('這張訂單已經建立過本表單（#'+o.rf_id+'），請直接開啟原本那一張').show(); return; }
+        ADD_ORD = o;
+        $('#addOrdErr').hide();
+        $('#addOrdList').hide().empty();
+        $('#addOrdKw').val('');
+        $('#addOrdPicked').html('<b>'+esc(o.Order_oo||('#'+o.Order_id))+'</b>　<span class="rf-mini-btn" onclick="addOrdClear()">改選</span>'
+            + '<br>客戶：'+esc(o.client_name_txt||o.Client_name||'（未綁客戶主檔）')
+            + '<br>料號：'+esc(o.d_id||'')+'　數量：'+Number(o.Qty||0).toLocaleString()+' 件'
+            + '<br>接單日期：'+dispDate(o.Order_date)+'　交期：'+dispDate(o.Delivery_date)
+            + '<br>AS 認定：'+esc(o.tag_label||'')).show();
+        $('#addBizDate').val(o.Order_date);
+        updateAddYearBox();
+    });
+});
+function addOrdClear(){ ADD_ORD = null; $('#addOrdPicked').hide().empty(); $('#addBizDate').val(''); $('#addOrdKw').val('').focus(); }
+
 function submitAdd(){
     var tid = $('#addTplSel').val();
     if (!tid){ alert('請選擇模板'); return; }
     var t = curAddTpl(), yearHeading = null;
+    if (t && t.src_bind==1 && !ADD_ORD){ $('#addOrdErr').text('請先選擇來源訂單').show(); $('#addOrdKw').focus(); return; }
     if (t && t.has_year_heading==1) {
         if (!validateAddYear()){ alert('請輸入正確的年度'); return; }
         yearHeading = yearAdFromInput($('#addYear').val(), (t.schema && t.schema.year_format) || 'ad');
     }
-    $.post(API, {action:'instance_create', csrf:META.csrf, template_id:tid, business_date:$('#addBizDate').val(), year_heading:yearHeading}, function(res){
+    $.post(API, {action:'instance_create', csrf:META.csrf, template_id:tid, business_date:$('#addBizDate').val(),
+                 year_heading:yearHeading, src_order_id:(ADD_ORD ? ADD_ORD.Order_id : 0)}, function(res){
         if (!res.ok){ alert(res.error||'建立失敗'); return; }
+        ADD_ORD = null;
         closeMask('addMask'); loadList(); openView(res.id);
     }, 'json');
 }
@@ -554,6 +625,15 @@ function fieldInputHtml(i, k, c){
         var opts = '<option value="">'+(c.placeholder?esc(c.placeholder):'請選擇')+'</option>' + (c.options||[]).map(function(o){ return '<option value="'+esc(o)+'"'+(o===v?' selected':'')+'>'+esc(o)+'</option>'; }).join('');
         return '<div class="'+cls+'">'+lbl+'<select '+dis+' onchange="subItemFieldEdit('+i+','+k+',\''+c.key+'\',this.value)">'+opts+'</select></div>';
     }
+    /* combo＝下拉可自填（2026-10-02 使用者要求：管理員預設的回覆可以下拉選擇或自行填寫）。
+       用 input + datalist：選得到管理員設好的預設回覆，也可以直接打字。
+       datalist 的 id 一定要帶 i/k——否則同一欄 32 列會共用同一個 id（HTML 不合法、
+       瀏覽器只認第一個），後面每一列都會沒有候選清單而且完全不報錯。 */
+    if (c.type==='combo') {
+        var dlId = 'dl_'+c.key+'_'+i+'_'+k;
+        var dl = '<datalist id="'+dlId+'">' + (c.options||[]).map(function(o){ return '<option value="'+esc(o)+'"></option>'; }).join('') + '</datalist>';
+        return '<div class="'+cls+'">'+lbl+'<input type="text" list="'+dlId+'" '+dis+' placeholder="'+esc(c.placeholder||'可選擇或自行填寫')+'" value="'+esc(v)+'" onchange="subItemFieldEdit('+i+','+k+',\''+c.key+'\',this.value)">'+dl+'</div>';
+    }
     // 文字對齊（2026-08-14 使用者明確要求，只有單行/多行文字欄位有這個設定，預設靠左）
     var alignStyle = ' style="text-align:'+(c.align||'left')+';"';
     if (c.type==='textarea') return '<div class="'+cls+'">'+lbl+'<textarea'+alignStyle+' '+dis+' placeholder="'+esc(c.placeholder)+'" onchange="subItemFieldEdit('+i+','+k+',\''+c.key+'\',this.value)">'+esc(v)+'</textarea></div>';
@@ -567,7 +647,7 @@ function colFillHtml(c){
         return '<div class="col-fill"><input type="date" max="9999-12-31" class="col-fill-inp" id="colFill_'+c.key+'" data-eg-skip>'
              + '<span class="rf-mini-btn" onclick="fillColumn(\''+c.key+'\')">整欄套用</span></div>';
     }
-    if (c.type==='select') {
+    if (c.type==='select' || c.type==='combo') {
         var opts = '<option value="">（選項）</option>' + (c.options||[]).map(function(o){ return '<option value="'+esc(o)+'">'+esc(o)+'</option>'; }).join('');
         return '<div class="col-fill"><select class="col-fill-inp" id="colFill_'+c.key+'" data-eg-skip>'+opts+'</select>'
              + '<span class="rf-mini-btn" onclick="fillColumn(\''+c.key+'\')">整欄套用</span></div>';
