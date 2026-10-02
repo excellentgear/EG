@@ -113,9 +113,19 @@ case 'template_settings_save': {
         'approver_chain'=>is_array($chain) ? $chain : ['top_approver'],
         'maintain_dept_id'=>(int)($_POST['maintain_dept_id'] ?? 0) ?: null,
         'has_year_heading'=>!empty($_POST['has_year_heading']),
+        'src_bind'=>!empty($_POST['src_bind']),
     ], $uname);
     if ($docId >= 0) eg_asdoc_save($db, rvf_asdoc_module($tid), $docId, $uname);
     jout(['template'=>rvf_template_get($db, $tid)]);
+}
+
+/* 把產品開發評估表 2-TD-02-01 的固定 32 項**複製**成列定義回傳給模板編輯畫面。
+   只是回傳資料、不寫入任何東西（管理員還要按「儲存表格結構」才生效），
+   而且複製過去之後兩邊完全脫鉤——使用者 2026-10-02 明確要求「兩邊的項目不可連動」。 */
+case 'tpl_dev_eval_rows': {
+    rvf_need_csrf();
+    if (!$perms['canAdmin']) jerr('沒有權限', 403);
+    jout(['rows'=>rvf_tpl_rows_from_dev_eval($db)]);
 }
 
 case 'template_schema_save': {

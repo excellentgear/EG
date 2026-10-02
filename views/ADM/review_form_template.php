@@ -171,6 +171,9 @@ $perms = rvf_perms($db, $rvfUser);
 
         <div class="rf-sec"><div class="rf-sec-title">年度標題（可選）</div>
             <label><input type="checkbox" id="stHasYear"> 有年度標題（適用整年度彙總類表單，勾選後在「項次欄位定義」內設定年度格式與顯示位置，新建表單時會多一個年度輸入框）</label>
+            <label><input type="checkbox" id="stSrcBind"> 綁定訂單（合約訂單審查表用）：建立表單時必須從訂單追蹤挑一張訂單，一張訂單只能建一份</label>
+            <div class="rf-hint" style="margin:-2px 0 6px 22px;">勾選後：<b>業務日期一律用該訂單的接單日期</b>（不可自己改）；客戶／料號／數量／交期即時取訂單現值顯示與列印；
+                訂單追蹤的清單會長出一欄顯示這張訂單審查到哪裡、可直接點開。<b>全站只會有一個模板勾這個</b>，勾第二個時以 id 最小的為準。</div>
         </div>
     </div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('settingMask')">取消</button>
@@ -201,11 +204,15 @@ $perms = rvf_perms($db, $rvfUser);
                 <label><input type="checkbox" id="scRowSide"> 直式標題<b>右側</b>再加一欄可填入資料（逐列各填一格，紙本組織處境分析表左邊那個窄欄）</label>
                 <div style="margin:-2px 0 6px 22px;"><input type="text" id="scRowSideLabel" maxlength="20" placeholder="這一欄的標題（可留空）" style="max-width:260px;"></div>
                 <label>列標題（由上而下依序）</label>
+                <div class="rf-hint">「區分」是左邊再多一欄的分類（例：人／機／料／法／環），同一個區分連續好幾列會自動合併成一格；留白＝不分組。
+                    「預設負責課」會在建立表單時自動填進每一列的負責單位，使用者不必逐列自己挑（留白＝建立表單時再挑）。</div>
                 <table class="col-tbl">
-                    <thead><tr><th style="width:8%;">順序</th><th>標題文字</th><th style="width:10%;"></th></tr></thead>
+                    <thead><tr><th style="width:7%;">順序</th><th style="width:14%;">區分</th><th>標題文字</th><th style="width:22%;">預設負責課</th><th style="width:8%;"></th></tr></thead>
                     <tbody id="rowHeadBody" data-eg-row-add="rowHeadAdd" data-eg-row-del="rowHeadDelLast"></tbody>
                 </table>
                 <button type="button" onclick="rowHeadAdd()" style="height:26px;font-size:12px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:4px;cursor:pointer;">+ 新增列標題</button>
+                <button type="button" onclick="rowHeadImportDevEval()" style="height:26px;font-size:12px;border:1px solid #b5862f;background:#fff;color:#8a6d45;border-radius:4px;cursor:pointer;margin-left:6px;" title="把產品開發評估表 2-TD-02-01 的 32 項確認項目複製過來當起點">⤓ 從產品開發評估表匯入項目</button>
+                <span class="rf-hint" style="display:inline-block;margin-left:4px;">匯入是<b>複製一份</b>過來，之後兩邊各自獨立：產品開發評估表改了題目不會動到這裡，這裡刪減修改也不會影響那張表。</span>
             </div>
         </div>
 
@@ -553,6 +560,7 @@ function openSettingModal(id){
         renderChainBox(); $('.chain-sel[data-idx=0]').val('top_approver');
         $('#stMaintainDept').val('');
         $('#stHasYear').prop('checked',false);
+        $('#stSrcBind').prop('checked',false);
         openMask('settingMask'); return;
     }
     $.getJSON(API, {action:'template_get', id:id}, function(res){
@@ -570,6 +578,7 @@ function openSettingModal(id){
         (t.approver_chain||['top_approver']).forEach(function(m,i){ $('.chain-sel[data-idx='+i+']').val(m); });
         $('#stMaintainDept').val(t.maintain_dept_id||'');
         $('#stHasYear').prop('checked', t.has_year_heading==1);
+        $('#stSrcBind').prop('checked', t.src_bind==1);
         openMask('settingMask');
     });
 }
@@ -594,7 +603,8 @@ function submitTplSettings(){
         approver_dept_id:$('#stApproverDept').val(), approver_user_id:$('#stApproverUser').val(),
         approver_chain: JSON.stringify(chain.length?chain:['top_approver']),
         maintain_dept_id:$('#stMaintainDept').val(), as_doc_id:$('#stDocLabel').data('id')||0,
-        has_year_heading: $('#stHasYear').is(':checked')?1:0
+        has_year_heading: $('#stHasYear').is(':checked')?1:0,
+        src_bind: $('#stSrcBind').is(':checked')?1:0
     }, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         closeMask('settingMask'); loadTemplates();
@@ -603,7 +613,10 @@ function submitTplSettings(){
 
 /* ============ 項次欄位定義 ============ */
 var FIELDS = [], CUR_SCHEMA_TPL = null;
-var FIELD_TYPES = {text:'單行文字', textarea:'多行文字', select:'下拉選單', date:'日期', seq:'項次（自動編號）'};
+/* combo＝下拉可自填（2026-10-02 使用者要求：管理員預設的回覆可以下拉選擇，也可以自行填寫）。
+   它與 select 的差別只有「填表時能不能打字」，所以選項設定欄位共用同一個 options。 */
+var FIELD_TYPES = {text:'單行文字', textarea:'多行文字', select:'下拉選單', combo:'下拉可自填', date:'日期', seq:'項次（自動編號）'};
+function fieldHasOptions(tp){ return tp==='select' || tp==='combo'; }
 function fieldAdd(){ FIELDS.push({key:'', label:'', type:'text', placeholder:'', required:1, layout:'inline', align:'left', options:''}); renderFields(); }
 function fieldDel(i){ FIELDS.splice(i,1); renderFields(); }
 function fieldDelLast(){ if (FIELDS.length) FIELDS.pop(); renderFields(); }
@@ -625,7 +638,7 @@ function renderFields(){
            +   Object.keys(FIELD_TYPES).map(function(tp){ return '<option value="'+tp+'"'+(c.type===tp?' selected':'')+'>'+FIELD_TYPES[tp]+'</option>'; }).join('')
            + '</select></td>'
            + '<td><input type="text" value="'+esc(c.placeholder)+'" '+(c.type==='seq'?'disabled':'')+' onchange="fieldEdit('+i+',\'placeholder\',this.value)"></td>'
-           + '<td><input type="text" value="'+esc(c.options)+'" '+(c.type!=='select'?'disabled':'')+' title="下拉選項用逗號分隔，例如：合格,不合格,其他" onchange="fieldEdit('+i+',\'options\',this.value)"></td>'
+           + '<td><input type="text" value="'+esc(c.options)+'" '+(fieldHasOptions(c.type)?'':'disabled')+' title="下拉選項用逗號分隔，例如：可／不可／不適用。「下拉可自填」的選項是預設回覆，填表時仍可自己打字" onchange="fieldEdit('+i+',\'options\',this.value)"></td>'
            + '<td style="text-align:center;"><input type="checkbox" '+(c.required?'checked':'')+' '+(c.type==='seq'?'disabled':'')+' onchange="fieldEdit('+i+',\'required\',this.checked?1:0)"></td>'
            + '<td><select onchange="fieldEdit('+i+',\'layout\',this.value)"><option value="inline"'+(c.layout==='inline'?' selected':'')+'>並排</option><option value="block"'+(c.layout==='block'?' selected':'')+'>整行</option></select></td>'
            + '<td><select '+(c.type==='text'||c.type==='textarea'?'':'disabled')+' onchange="fieldEdit('+i+',\'align\',this.value)" title="只有單行/多行文字欄位需要設定，其他類型不受影響">'
@@ -640,22 +653,54 @@ function renderFields(){
     $('#colBody').html(h || '<tr><td colspan="10" style="text-align:center;color:#8a6d45;">尚未新增欄位</td></tr>');
 }
 /* ---- 直式標題（左側列標題）：模板預先定義，建立表單時自動產生成固定的列，使用者不可增刪（2026-09-09 使用者拍板） ---- */
+/* 列定義（2026-10-02 擴充）：每列是 {t 標題文字, g 區分, dept 預設負責課, user 預設負責人}。
+   舊模板存的是純字串，rowHeadNorm() 一律先正規化成物件，後端 rvf_schema_row_defs() 同樣兩種都收。 */
 var ROWHEADS = [];
-function rowHeadAdd(){ ROWHEADS.push(''); renderRowHeads(); }
+function rowHeadNorm(r){
+    if (r && typeof r === 'object') return {t:String(r.t||''), g:String(r.g||''), dept:String(r.dept||''), user:String(r.user||'')};
+    return {t:String(r||''), g:'', dept:'', user:''};
+}
+function rowHeadAdd(){ ROWHEADS.push(rowHeadNorm('')); renderRowHeads(); }
 function rowHeadDel(i){ ROWHEADS.splice(i,1); renderRowHeads(); }
 function rowHeadDelLast(){ if (ROWHEADS.length) ROWHEADS.pop(); renderRowHeads(); }
-function rowHeadEdit(i,v){ ROWHEADS[i]=v; }
+/* 只改值不重繪：重繪會把使用者正在打字的那一格換掉、游標跳走（32 列時特別明顯）。 */
+function rowHeadEdit(i,k,v){ if (ROWHEADS[i]) ROWHEADS[i][k]=v; }
 function renderRowHeads(){
-    var h = ROWHEADS.map(function(t,i){
+    var deptOpt = (META.departments||[]).map(function(d){ return {id:String(d.id), name:d.name}; });
+    var h = ROWHEADS.map(function(r,i){
+        r = ROWHEADS[i] = rowHeadNorm(r);
         return '<tr><td style="text-align:center;color:#8a6d45;">'+(i+1)+'</td>'
-             + '<td><input type="text" maxlength="60" value="'+esc(t)+'" placeholder="例：機會" onchange="rowHeadEdit('+i+',this.value)"></td>'
+             + '<td><input type="text" maxlength="20" value="'+esc(r.g)+'" placeholder="例：人" onchange="rowHeadEdit('+i+',\'g\',this.value)"></td>'
+             + '<td><input type="text" maxlength="200" value="'+esc(r.t)+'" placeholder="例：生產線人員配置是否足夠" onchange="rowHeadEdit('+i+',\'t\',this.value)"></td>'
+             + '<td><select data-eg-filter="輸入部門名稱篩選…" onchange="rowHeadEdit('+i+',\'dept\',this.value)">'
+             +   '<option value="">（建立表單時再挑）</option>'
+             +   deptOpt.map(function(d){ return '<option value="'+d.id+'"'+(r.dept===d.id?' selected':'')+'>'+esc(d.name)+'</option>'; }).join('')
+             + '</select></td>'
              + '<td style="text-align:center;"><span class="rf-del" onclick="rowHeadDel('+i+')"><i class="fa fa-times"></i></span></td></tr>';
     }).join('');
-    $('#rowHeadBody').html(h || '<tr><td colspan="3" style="text-align:center;color:#8a6d45;">尚未新增列標題</td></tr>');
+    $('#rowHeadBody').html(h || '<tr><td colspan="5" style="text-align:center;color:#8a6d45;">尚未新增列標題</td></tr>');
+}
+/* 從產品開發評估表（2-TD-02-01）複製 32 項過來當起點。複製一次就與那張表脫鉤（2026-10-02 使用者明確要求不連動）。 */
+function rowHeadImportDevEval(){
+    var has = ROWHEADS.filter(function(r){ return $.trim(rowHeadNorm(r).t)!==''; }).length;
+    var msg = has ? ('目前已經有 '+has+' 列，匯入會「接在後面」不會覆蓋。要繼續嗎？')
+                  : '要把產品開發評估表的 32 項確認項目複製過來嗎？\n\n複製過來之後兩邊各自獨立，可自行刪減修改。';
+    if (!confirm(msg)) return;
+    $.post(API, {action:'tpl_dev_eval_rows', csrf:META.csrf}, function(res){
+        if (!res || !res.ok) { alert((res && res.error) || '匯入失敗'); return; }
+        var add = (res.rows||[]).map(rowHeadNorm);
+        if (!add.length) { alert('產品開發評估表沒有可匯入的項目'); return; }
+        // 原本只有空白列（按「使用直式標題」時自動長出來的那兩列）就直接取代，不要留下一堆空列
+        ROWHEADS = ROWHEADS.filter(function(r){ return $.trim(rowHeadNorm(r).t)!==''; }).concat(add);
+        renderRowHeads();
+        var noDept = add.filter(function(r){ return !r.dept; }).length;
+        alert('已匯入 '+add.length+' 項'+(noDept ? ('，其中 '+noDept+' 項的負責課對不到部門主檔，請自行挑選') : '（負責課已全部自動對應）')
+              + '\n\n請確認內容後按下方的「儲存表格結構」才會生效。');
+    }, 'json');
 }
 $(document).on('change', '#scUseRowHead', function(){
     $('#rowHeadBox').toggle(this.checked);
-    if (this.checked && !ROWHEADS.length) { ROWHEADS = ['','']; renderRowHeads(); }
+    if (this.checked && !ROWHEADS.length) { ROWHEADS = [rowHeadNorm(''), rowHeadNorm('')]; renderRowHeads(); }
 });
 /* 沒有負責單位/負責人就沒有人可以簽名，簽名方式一律鎖成「不須簽名」（後端 rvf_schema_sign_mode() 同規則再判一次）。 */
 function syncSignModeEnabled(){
@@ -702,7 +747,7 @@ function openSchemaModal(id){
         renderFields();
         // 表格結構（need_owner 舊資料沒有這個鍵＝維持原本一律顯示負責單位/負責人的行為）
         $('#scNeedOwner').prop('checked', t.schema.need_owner===undefined ? true : !!Number(t.schema.need_owner));
-        ROWHEADS = (t.schema.row_mode==='fixed' && Array.isArray(t.schema.row_headings)) ? t.schema.row_headings.slice() : [];
+        ROWHEADS = (t.schema.row_mode==='fixed' && Array.isArray(t.schema.row_headings)) ? t.schema.row_headings.map(rowHeadNorm) : [];
         $('#scUseRowHead').prop('checked', t.schema.row_mode==='fixed');
         $('#rowHeadBox').toggle(t.schema.row_mode==='fixed');
         $('#scCornerCol').val(t.schema.corner_col_label||'');
@@ -746,14 +791,19 @@ $('#scBumpAsDoc').on('change', function(){ $('#bumpBox').toggle(this.checked); }
 
 function buildSchemaObj(){
     var useRow = $('#scUseRowHead').is(':checked');
-    var rowHeads = ROWHEADS.map(function(s){ return $.trim(s||''); }).filter(function(s){ return s!==''; });
+    // 列定義：標題文字空白的列一律剔除（後端 rvf_schema_row_defs() 同規則）。
+    // 只有真的有設區分或負責課才存成物件，否則存回純字串——既有模板的 schema 不會因為開一次設定頁就變形。
+    var rowHeads = ROWHEADS.map(rowHeadNorm).filter(function(r){ return $.trim(r.t)!==''; }).map(function(r){
+        var t = $.trim(r.t), g = $.trim(r.g), dept = $.trim(r.dept), user = $.trim(r.user);
+        return (g==='' && dept==='' && user==='') ? t : {t:t, g:g, dept:dept, user:user};
+    });
     return {
         fields: FIELDS.filter(function(c){ return $.trim(c.label)!==''; }).map(function(c){
             var optStr = Array.isArray(c.options) ? c.options.join(',') : String(c.options||'');
             return {key:c.key, label:c.label, type:c.type, placeholder:c.placeholder||'', required:c.required?1:0, layout:c.layout,
                      align: (c.type==='text'||c.type==='textarea') ? (c.align||'left') : 'left',
                      vertical: c.vertical?1:0, hdr_center: (c.hdr_center===undefined||Number(c.hdr_center))?1:0,
-                     options: c.type==='select' ? optStr.split(',').map(function(s){return $.trim(s);}).filter(Boolean) : []};
+                     options: fieldHasOptions(c.type) ? optStr.split(',').map(function(s){return $.trim(s);}).filter(Boolean) : []};
         }),
         need_owner: $('#scNeedOwner').is(':checked') ? 1 : 0,
         row_mode: useRow ? 'fixed' : 'free',
@@ -783,7 +833,7 @@ function previewSchema(){
     window.open('review_form.php?preview=1', '_blank');
 }
 function submitSchema(){
-    if ($('#scUseRowHead').is(':checked') && !ROWHEADS.filter(function(s){ return $.trim(s||'')!==''; }).length) {
+    if ($('#scUseRowHead').is(':checked') && !ROWHEADS.filter(function(r){ return $.trim(rowHeadNorm(r).t)!==''; }).length) {
         alert('已勾選「使用直式標題」，請至少填一個列標題（或取消勾選）'); return;
     }
     var schema = buildSchemaObj();

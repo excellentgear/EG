@@ -95,7 +95,11 @@ function rvf_csrf_token(): string {
     return $_SESSION['rvf_csrf'];
 }
 function rvf_csrf_ok(?string $t): bool {
-    return $t !== null && hash_equals((string)($_SESSION['rvf_csrf'] ?? ''), (string)$t);
+    // session 裡還沒有 token（這個人從來沒開過本模組的頁面）時一律不通過：
+    // 少了這一關，hash_equals('','') 會是 true ＝ 送一個空的 csrf 就繞過去了（2026-10-02 測試時發現）。
+    $sess = (string)($_SESSION['rvf_csrf'] ?? '');
+    if ($sess === '' || $t === null || $t === '') return false;
+    return hash_equals($sess, (string)$t);
 }
 function rvf_need_csrf(): void {
     if (!rvf_csrf_ok($_POST['csrf'] ?? null)) {
@@ -233,21 +237,21 @@ function rvf_template_settings_save(PDO $db, int $id, array $d, string $byName):
     if ($id) {
         $db->prepare("UPDATE rf_template SET name=?,paper_size=?,orientation=?,list_stamp_tpl_id=?,footer_stamp_tpl_id=?,
                       need_review=?,auto_review=?,review_dept_id=?,need_approval=?,auto_approval=?,
-                      approver_dept_id=?,approver_user_id=?,approver_chain_json=?,maintain_dept_id=?,has_year_heading=?,updated_by=?,updated_at=NOW() WHERE id=?")
+                      approver_dept_id=?,approver_user_id=?,approver_chain_json=?,maintain_dept_id=?,has_year_heading=?,src_bind=?,updated_by=?,updated_at=NOW() WHERE id=?")
            ->execute([$d['name'], $d['paper_size'], $orientation, $d['list_stamp_tpl_id'] ?: null, $d['footer_stamp_tpl_id'] ?: null,
                       $d['need_review']?1:0, $d['auto_review']?1:0, $d['review_dept_id'] ?: null,
                       $d['need_approval']?1:0, $d['auto_approval']?1:0, $d['approver_dept_id'] ?: null, $d['approver_user_id'] ?: null,
-                      $chain, $d['maintain_dept_id'] ?: null, $d['has_year_heading']?1:0, $byName, $id]);
+                      $chain, $d['maintain_dept_id'] ?: null, $d['has_year_heading']?1:0, !empty($d['src_bind'])?1:0, $byName, $id]);
         return $id;
     }
     $db->prepare("INSERT INTO rf_template (name,paper_size,orientation,list_stamp_tpl_id,footer_stamp_tpl_id,
                   need_review,auto_review,review_dept_id,need_approval,auto_approval,approver_dept_id,
-                  approver_user_id,approver_chain_json,maintain_dept_id,has_year_heading,current_schema_json,published_version,created_by)
-                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)")
+                  approver_user_id,approver_chain_json,maintain_dept_id,has_year_heading,src_bind,current_schema_json,published_version,created_by)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)")
        ->execute([$d['name'], $d['paper_size'], $orientation, $d['list_stamp_tpl_id'] ?: null, $d['footer_stamp_tpl_id'] ?: null,
                   $d['need_review']?1:0, $d['auto_review']?1:0, $d['review_dept_id'] ?: null,
                   $d['need_approval']?1:0, $d['auto_approval']?1:0, $d['approver_dept_id'] ?: null, $d['approver_user_id'] ?: null,
-                  $chain, $d['maintain_dept_id'] ?: null, $d['has_year_heading']?1:0,
+                  $chain, $d['maintain_dept_id'] ?: null, $d['has_year_heading']?1:0, !empty($d['src_bind'])?1:0,
                   json_encode(['fields'=>[], 'sign_mode'=>'password'], JSON_UNESCAPED_UNICODE), $byName]);
     return (int)$db->lastInsertId();
 }
