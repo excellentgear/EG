@@ -155,6 +155,9 @@ switch ($action) {
             'year'              => (string)($_POST['year'] ?? 'ALL'),
             'kw'                => (string)($_POST['kw'] ?? ''),
             'include_cancelled' => !empty($_POST['include_cancelled']) ? 1 : 0,
+            // 要改已經綁定好的時才帶（2026-10-02）；只是「看得到」，要真的改還要再帶 overwrite
+            'include_tagged'    => !empty($_POST['include_tagged']) ? 1 : 0,
+            'only_tag'          => (string)($_POST['only_tag'] ?? ''),
         ];
         if (isset($_POST['pi_exact'])) $f['pi_exact'] = (string)$_POST['pi_exact'];
         $r = ot_astag_backfill_orders($pdo, $f, (int)($_POST['page'] ?? 1), (int)($_POST['per'] ?? 20));
@@ -170,6 +173,10 @@ switch ($action) {
             'year'              => (string)($_POST['year'] ?? 'ALL'),
             'kw'                => (string)($_POST['kw'] ?? ''),
             'include_cancelled' => !empty($_POST['include_cancelled']) ? 1 : 0,
+            'include_tagged'    => !empty($_POST['include_tagged']) ? 1 : 0,
+            'only_tag'          => (string)($_POST['only_tag'] ?? ''),
+            // overwrite＝真的改掉已經設定好的（不可逆，所以跟 include_tagged 分兩個旗標）
+            'overwrite'         => !empty($_POST['overwrite']) ? 1 : 0,
         ];
         if (isset($_POST['pi_exact'])) $f['pi_exact'] = (string)$_POST['pi_exact'];
         $ids = [];
@@ -181,6 +188,15 @@ switch ($action) {
         $r = ot_astag_backfill_apply($pdo, $tagId, $scope, $f, $ids, $uid, $uname);
         oatReply(['success' => (bool)$r['ok'], 'applied' => $r['applied'], 'message' => $r['msg'],
                   'summary' => ot_astag_backfill_summary($pdo)]);
+    }
+
+    // ── 清除「被設成某個標籤」的全部訂單綁定（2026-10-02 使用者要求：設錯了要能重來）──
+    // 標籤定義不動，只是把訂單退回「尚未設定」；每一張都會留逐筆歷程。
+    case 'clear_tag': {
+        if (!oatCanSetting($pdo, $uid)) oatDeny();
+        $r = ot_astag_clear_tag($pdo, (int)($_POST['tag_id'] ?? 0), (string)($_POST['scope'] ?? ''), $uid, $uname);
+        oatReply(['success' => (bool)$r['ok'], 'cleared' => $r['cleared'], 'message' => $r['msg'],
+                  'usage' => ot_astag_usage($pdo), 'summary' => ot_astag_backfill_summary($pdo)]);
     }
 
     default:

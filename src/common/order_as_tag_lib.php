@@ -70,10 +70,17 @@ function ot_astag_fixed_seed(): array
 {
     // scope 這裡填的是「訂單存下來會是哪一種」：
     //   全製→full、單製非AS認證→single、廠內治具→none（與全製單製無關）
+    // 序號刻意留空檔（910 / 930 / 990），讓管理員自己加的固定選項插得進來。
+    // 例：「多製程」給 920 就會排成 全製 → 多製程 → 單製其他 → 廠內治具。
+    // 2026-10-02 使用者拍板：四個固定選項排列 全製→多製程→單製其他→廠內治具，
+    // 「多製程」──客戶來料、工廠做了好幾道非稽核製程，但不是做到成品（不算全製），
+    // 也不是只做一道（不算單製其他），scope 跟全製一樣只是 'full'——兩者在「跟全製含某個稽核製程」那類
+    // AS 標籤的認定上都是 full，之所以分得開完全是因為 fixed_code 不同（full_plain vs multi_proc）。
     return [
-        ['fixed_code' => 'full_plain',    'proc_name' => '全製',         'scope' => 'full',   'own' => 0, 'sort' => 900],
-        ['fixed_code' => 'single_non_as', 'proc_name' => '單製非AS認證', 'scope' => 'single', 'own' => 0, 'sort' => 910],
-        ['fixed_code' => 'inhouse_jig',   'proc_name' => '廠內治具',     'scope' => 'none',   'own' => 1, 'sort' => 920],
+        ['fixed_code' => 'full_plain',    'proc_name' => '全製',     'scope' => 'full',   'own' => 0, 'sort' => 910],
+        ['fixed_code' => 'multi_proc',    'proc_name' => '多製程',   'scope' => 'full',   'own' => 0, 'sort' => 920],
+        ['fixed_code' => 'single_non_as', 'proc_name' => '單製其他', 'scope' => 'single', 'own' => 0, 'sort' => 930],
+        ['fixed_code' => 'inhouse_jig',   'proc_name' => '廠內治具', 'scope' => 'none',   'own' => 1, 'sort' => 990],
     ];
 }
 }
@@ -162,6 +169,16 @@ function ot_astag_ensure_schema(PDO $db): bool
         foreach (ot_astag_fixed_seed() as $f) {
             try { $ins->execute([$f['fixed_code'], $f['proc_name'], $f['scope'], $f['own'], $f['sort']]); } catch (Throwable $e) {}
         }
+        // 2026-10-02 使用者要求：「單製非AS認證」改叫「單製其他」，並把內建三個的排序重新排開。
+        // 只在「還是舊值」時才動（冪等）；標籤 id 沒變，所以已經綁定的訂單直接顯示新名稱。
+        try {
+            $db->prepare("UPDATE ot_as_proc_tag SET proc_name=? WHERE fixed_code='single_non_as' AND proc_name=?")
+               ->execute(['單製其他', '單製非AS認證']);
+            foreach (ot_astag_fixed_seed() as $f) {
+                $db->prepare("UPDATE ot_as_proc_tag SET sort_order=? WHERE fixed_code=? AND sort_order<>?")
+                   ->execute([$f['sort'], $f['fixed_code'], $f['sort']]);
+            }
+        } catch (Throwable $e) {}
         $ok = true;
     } catch (Throwable $e) { $ok = false; }
     return $ok;
@@ -340,6 +357,7 @@ function ot_astag_option_hint(array $d, string $scope): string
     if (($d['kind'] ?? '') === 'fixed') {
         switch ((string)$d['fixed_code']) {
             case 'full_plain':    return '從頭做到成品，而且沒有任何一道製程被列為稽核製程';
+            case 'multi_proc':    return '客戶來料，工廠做了好幾道非稽核製程，但不是做到成品也不是只做一道';
             case 'single_non_as': return '只做單一道製程，而且那一道不在 AS 認證範圍內';
             case 'inhouse_jig':   return '自己做給自己用的治具（客戶＝本公司才會出現這個選項）';
         }
@@ -615,6 +633,76 @@ function ot_astag_usage(PDO $db): array
 }
 }
 
+/**
+ * 清掉「被設成某一個標籤」的全部訂單綁定（2026-10-02 使用者要求：設錯了要能重來）。
+ * 那些訂單會回到「尚未設定標籤」，可以重新補設定。
+ *
+ * 三件刻意這樣做的事：
+ *  1. 標籤定義本身**不動**（不是刪標籤，是解除訂單跟它的綁定）。
+ *  2. 每一張被清掉的都**逐筆留歷程**（舊標籤 → 清空，誰、什麼時候）——
+ *     這是 AS 認定的資料，被拿掉了必須查得出來是誰拿的。
+ *  3. 可以只清某一個變體（scope）；不給 scope 就是這個定義底下全部。
+ *
+ * @return array ['ok'=>bool,'cleared'=>int,'msg'=>string]
+ */
+if (!function_exists('ot_astag_clear_tag')) {
+function ot_astag_clear_tag(PDO $db, $tagId, $scope, int $uid, string $uname = ''): array
+{
+    if (!ot_astag_ensure_schema($db)) return ['ok' => false, 'cleared' => 0, 'msg' => '資料表尚未建立'];
+    $tagId = (int)$tagId;
+    $scope = trim((string)$scope);
+    if ($tagId <= 0) return ['ok' => false, 'cleared' => 0, 'msg' => '缺少標籤'];
+
+    $map = ot_astag_label_map($db);
+    $def = $map['def:' . $tagId] ?? null;
+    if (!$def) return ['ok' => false, 'cleared' => 0, 'msg' => '找不到這個標籤'];
+    $name = ($def['kind'] === 'process') ? ('稽核製程「' . $def['proc_name'] . '」') : ('「' . $def['proc_name'] . '」');
+
+    $where = "as_tag_id = ?"; $args = [$tagId];
+    if ($scope !== '') { $where .= " AND as_tag_scope = ?"; $args[] = $scope; $name = '「' . (string)($map[$tagId . ':' . $scope] ?? '') . '」'; }
+
+    try {
+        $q = $db->prepare("SELECT Order_id, as_tag_id, as_tag_scope FROM order_track WHERE $where");
+        $q->execute($args);
+        $rows = $q->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return ['ok' => false, 'cleared' => 0, 'msg' => '查詢失敗：' . $e->getMessage()]; }
+    if (!$rows) return ['ok' => true, 'cleared' => 0, 'msg' => $name . ' 目前沒有任何訂單在用'];
+
+    try {
+        $u = $db->prepare("UPDATE order_track SET as_tag_id=NULL, as_tag_scope=NULL, as_tag_at=NULL, as_tag_by=NULL, as_tag_src=NULL WHERE $where");
+        $u->execute($args);
+        $n = $u->rowCount();
+    } catch (Throwable $e) { return ['ok' => false, 'cleared' => 0, 'msg' => '清除失敗：' . $e->getMessage()]; }
+
+    if ($uname === '') $uname = ot_astag_uname($db, $uid);
+    foreach (array_chunk($rows, 300) as $chunk) {
+        $vals = []; $args2 = [];
+        foreach ($chunk as $o) {
+            $oi = (int)($o['as_tag_id'] ?? 0); $os = (string)($o['as_tag_scope'] ?? '');
+            $vals[] = '(?,?,?,?,NULL,NULL,NULL,?,?,?,?,NOW())';
+            array_push($args2, (int)$o['Order_id'], $oi, $os, (string)($map[$oi . ':' . $os] ?? ''),
+                       'clear', '管理員清除該標籤的全部綁定', ($uid > 0 ? $uid : null), $uname);
+        }
+        try {
+            $db->prepare("INSERT INTO ot_as_tag_order_log
+                (order_id, old_tag_id, old_scope, old_label, new_tag_id, new_scope, new_label, source, note, created_by, created_by_name, created_at)
+                VALUES " . implode(',', $vals))->execute($args2);
+        } catch (Throwable $e) { /* 歷程寫不進去不擋主要作業 */ }
+    }
+    try {
+        $db->prepare("INSERT INTO ot_as_proc_tag_log (batch_id, action, tag_id, tag_label, detail, created_by, created_by_name, created_at)
+                      VALUES (?,'clear',?,?,?,?,?,NOW())")
+           ->execute([bin2hex(random_bytes(8)), $tagId, $name,
+                      json_encode(['cleared' => $n, 'scope' => ($scope !== '' ? $scope : 'all'),
+                                   'order_ids' => array_slice(array_column($rows, 'Order_id'), 0, 200)], JSON_UNESCAPED_UNICODE),
+                      ($uid > 0 ? $uid : null), $uname]);
+    } catch (Throwable $e) {}
+
+    return ['ok' => true, 'cleared' => $n,
+            'msg' => '已清除 ' . $n . ' 張訂單與 ' . $name . ' 的綁定，那些訂單回到「尚未設定標籤」可以重新設。'];
+}
+}
+
 /** 某個標籤目前被「客戶不是本公司」的訂單用了幾筆（勾「限本公司」前要先檢查） */
 if (!function_exists('ot_astag_usage_non_own')) {
 function ot_astag_usage_non_own(PDO $db, int $tagId): int
@@ -772,7 +860,8 @@ function ot_astag_save_defs(PDO $db, array $rows, int $uid, string $uname = ''):
         }
         $clean[] = ['kind' => $kind, 'tag_id' => $tid, 'process_type_id' => ($pt > 0 ? $pt : null),
                     'proc_name' => $nm, 'sub_nos' => $subs, 'scope' => $sc,
-                    'own_company_only' => $own, 'is_active' => $act];
+                    'own_company_only' => $own, 'is_active' => $act,
+                    'sort_order' => max(0, min(9999, (int)($r['sort_order'] ?? 0)))];
     }
 
     // 不在送上來的清單裡＝要刪除；有訂單在用一律擋下
@@ -809,7 +898,9 @@ function ot_astag_save_defs(PDO $db, array $rows, int $uid, string $uname = ''):
         foreach ($clean as $c) {
             $isOther = ($c['kind'] === 'other');
             $subJson = $c['sub_nos'] ? json_encode(array_values($c['sub_nos'])) : null;
-            $sort    = $isOther ? (1000 + (++$seqO) * 10) : ((++$seqP) * 10);
+            // 稽核製程：依畫面順序 10,20,…；其他固定選項：用管理員自己填的「順序」
+            // （內建是 910/930/990，所以填 920 就會插在全製與單製其他之間）。沒填或填 0 就排最後。
+            $sort    = $isOther ? ((int)$c['sort_order'] > 0 ? (int)$c['sort_order'] : (995 + (++$seqO))) : ((++$seqP) * 10);
             $label   = ot_astag_make_label($c, ot_astag_variants($c)[0]);
             if ($c['tag_id'] > 0 && isset($existing[$c['tag_id']])) {
                 $db->prepare("UPDATE ot_as_proc_tag SET kind=?, process_type_id=?, proc_name=?, sub_no_json=?, scope=?,
@@ -858,7 +949,18 @@ function ot_astag_save_defs(PDO $db, array $rows, int $uid, string $uname = ''):
 if (!function_exists('ot_astag_backfill_where')) {
 function ot_astag_backfill_where(array $f, array &$params): string
 {
-    $w = ["ot.as_tag_id IS NULL"];
+    $w = ['1=1'];
+    // 預設只處理「還沒有標籤」的；要改已經綁定好的（使用者 2026-10-02 要求）
+    // 才帶 include_tagged，而且寫入那邊還要再帶一次 overwrite 才真的會覆蓋——
+    // 兩個旗標分開，光是「看得到」不會不小心改到東西。
+    if (empty($f['include_tagged'])) $w[] = "ot.as_tag_id IS NULL";
+    // 只看某一個標籤（'tagid:scope'），管理員要改「被設成⑨⑨的那些單」時用
+    $onlyTag = trim((string)($f['only_tag'] ?? ''));
+    if ($onlyTag !== '' && preg_match('/^(\d+):(single|full|none)$/', $onlyTag, $m)) {
+        $w[] = "ot.as_tag_id = :bf_only_tag AND ot.as_tag_scope = :bf_only_scope";
+        $params[':bf_only_tag']   = (int)$m[1];
+        $params[':bf_only_scope'] = $m[2];
+    }
     // 已取消的訂單預設不列（那不是實際接到的單，硬要補標籤只是製造雜訊）
     if (empty($f['include_cancelled'])) $w[] = "(ot.Order_status IS NULL OR ot.Order_status <> 6)";
     $y = (string)($f['year'] ?? '');
@@ -1062,6 +1164,7 @@ function ot_astag_backfill_orders(PDO $db, array $f = [], int $page = 1, int $pe
 
         $st = $db->prepare("SELECT ot.Order_id, ot.Order_oo, ot.d_id, ot.Client_name, ot.Client_name_ID,
                                    ot.Processing_items, ot.Qty, ot.Order_date, ot.Order_status,
+                                   ot.as_tag_id, ot.as_tag_scope, ot.as_tag_src, ot.as_tag_at,
                                    cl.customer AS cl_name
                             FROM order_track ot
                             LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID
@@ -1074,11 +1177,18 @@ function ot_astag_backfill_orders(PDO $db, array $f = [], int $page = 1, int $pe
 
     $sug = ot_astag_suggester($db);
     $own = ot_astag_own_company_id($db);
+    $lblMap = ot_astag_label_map($db);
     $out = [];
     foreach ($rows as $r) {
         $isOwn = ($own !== '' && trim((string)($r['Client_name_ID'] ?? '')) === $own);
         $s = $sug((string)($r['Processing_items'] ?? ''), $isOwn);
+        $curId  = (int)($r['as_tag_id'] ?? 0);
+        $curKey = $curId > 0 ? ($curId . ':' . (string)($r['as_tag_scope'] ?? '')) : '';
         $out[] = [
+            'cur_key'   => $curKey,
+            'cur_label' => $curKey !== '' ? (string)($lblMap[$curKey] ?? '') : '',
+            'cur_src'   => (string)($r['as_tag_src'] ?? ''),
+            'cur_at'    => (string)($r['as_tag_at'] ?? ''),
             'order_id'   => (int)$r['Order_id'],
             'order_no'   => (string)($r['Order_oo'] ?? ''),
             'part_no'    => (string)($r['d_id'] ?? ''),
@@ -1132,7 +1242,12 @@ function ot_astag_backfill_apply(PDO $db, $tagId, $scope, array $f = [], array $
     if ($ids) {
         $where .= " AND ot.Order_id IN (" . implode(',', $ids) . ")";
     } elseif (!isset($f['pi_exact'])) {
-        return ['ok' => false, 'applied' => 0, 'msg' => '請先選定一組製程文字或勾選要補設定的訂單（避免整批誤套）'];
+        return ['ok' => false, 'applied' => 0, 'msg' => '請先選定一組製程文字或勾選要設定的訂單（避免整批誤套）'];
+    }
+    // 覆蓋模式一律只能「勾選的那幾張」，不接受整組套用——
+    // 改掉已經設定好的 AS 認定是不可逆的，不該用一個製程文字就掃掉幾百張。
+    if (!empty($f['overwrite']) && !$ids) {
+        return ['ok' => false, 'applied' => 0, 'msg' => '改綁定（覆蓋已設定）只能逐筆勾選，不開放整組套用。'];
     }
     // 廠內治具只能套在客戶＝本公司的訂單上（與單筆存檔同一條規則，鐵律8）
     if ($isOwnOnly) {
@@ -1140,18 +1255,59 @@ function ot_astag_backfill_apply(PDO $db, $tagId, $scope, array $f = [], array $
         $params[':bf_own2'] = ot_astag_own_company_id($db);
     }
 
+    // 覆蓋模式（改已經綁定好的）：寫之前先把「舉況會被改掉的舊標籤」抓下來，
+    // 否則 UPDATE 完就再也追不回來原本是什麼——這是 AS 認定的資料，改過什麼必須留得下來。
+    $overwrite = !empty($f['overwrite']);
+    $oldRows = [];
+    if ($overwrite) {
+        try {
+            $q = $db->prepare("SELECT Order_id, as_tag_id, as_tag_scope FROM order_track ot WHERE $where AND ot.as_tag_id IS NOT NULL");
+            $q->execute($params);
+            $oldRows = $q->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        } catch (Throwable $e) { $oldRows = []; }
+    }
     try {
+        // 不是覆蓋模式時再加一道保險：只填空白。
+        // （where 裡本來就有 as_tag_id IS NULL，這裡是第二道——覆蓋是不可逆的動作，值得寫兩次）
+        $guard = $overwrite ? '' : ' AND ot.as_tag_id IS NULL';
         $sql = "UPDATE order_track ot
                    SET ot.as_tag_id = :bf_tag, ot.as_tag_scope = :bf_scope,
-                       ot.as_tag_at = NOW(), ot.as_tag_by = :bf_uid, ot.as_tag_src = 'batch'
-                 WHERE $where";
+                       ot.as_tag_at = NOW(), ot.as_tag_by = :bf_uid, ot.as_tag_src = :bf_src
+                 WHERE $where$guard";
         $params[':bf_tag']   = $tagId;
         $params[':bf_scope'] = $scope;
         $params[':bf_uid']   = ($uid > 0 ? $uid : null);
+        $params[':bf_src']   = $overwrite ? 'rebind' : 'batch';
         $st = $db->prepare($sql);
         $st->execute($params);
         $n = $st->rowCount();
     } catch (Throwable $e) { return ['ok' => false, 'applied' => 0, 'msg' => '寫入失敗：' . $e->getMessage()]; }
+
+    // 覆蓋掉的舊綁定逐筆留歷程（分批多列 INSERT，不要一筆一次打 DB）
+    if ($overwrite && $oldRows) {
+        if ($uname === '') $uname = ot_astag_uname($db, $uid);
+        $map = ot_astag_label_map($db);
+        $newLbl = (string)($map[$tagId . ':' . $scope] ?? '');
+        foreach (array_chunk($oldRows, 300) as $chunk) {
+            $vals = []; $args = [];
+            foreach ($chunk as $o) {
+                $oid = (int)$o['Order_id'];
+                $oi  = (int)($o['as_tag_id'] ?? 0);
+                $os  = (string)($o['as_tag_scope'] ?? '');
+                if ($oi === $tagId && $os === $scope) continue;   // 沒改到就不必記
+                $vals[] = '(?,?,?,?,?,?,?,?,?,?,?,NOW())';
+                array_push($args, $oid, $oi, $os, (string)($map[$oi . ':' . $os] ?? ''),
+                           $tagId, $scope, $newLbl, 'rebind',
+                           '批次改綁定', ($uid > 0 ? $uid : null), $uname);
+            }
+            if (!$vals) continue;
+            try {
+                $db->prepare("INSERT INTO ot_as_tag_order_log
+                    (order_id, old_tag_id, old_scope, old_label, new_tag_id, new_scope, new_label, source, note, created_by, created_by_name, created_at)
+                    VALUES " . implode(',', $vals))->execute($args);
+            } catch (Throwable $e) { /* 歷程寫不進去不擋主要作業 */ }
+        }
+    }
 
     // 批次的第一次設定留一筆彙總歷程（逐筆的「誰、何時」已經在 order_track.as_tag_at/by/src 上）
     if ($n > 0) {
@@ -1165,7 +1321,7 @@ function ot_astag_backfill_apply(PDO $db, $tagId, $scope, array $f = [], array $
                           ($uid > 0 ? $uid : null), $uname]);
         } catch (Throwable $e) {}
     }
-    $msg = '已補設定 ' . $n . ' 張訂單為「' . $label . '」';
+    $msg = ($overwrite ? '已改綁定 ' : '已補設定 ') . $n . ' 張訂單為「' . $label . '」';
     if ($isOwnOnly) $msg .= '（只套用在客戶是本公司的訂單）';
     return ['ok' => true, 'applied' => $n, 'msg' => $msg];
 }
