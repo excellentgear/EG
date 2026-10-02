@@ -443,6 +443,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         <div class="tip" style="margin-bottom:8px;">下方只列出主檔管理已標記「自家出的圖」的附件類別。勾選的類別，其料號附件會比照外來文件清單一併同步進本模組（版別／文件編號優先顯示<b>版次</b>，型態制定日期優先用<b>發行章日期</b>；未填版次/發行章日期時退回檔名與上傳日）。<br>「顯示名稱」留空則沿用類別原名，同步進本模組後會直接成為項目列的「型態項目名稱」（與外來文件清單共用同一顯示名稱設定，若該類別同時列入外來文件清單，改名會兩邊一起變）。<br><b>更新已同步項目名稱</b>：只改設定不會回頭改到之前已經同步進來的項目列，按這顆按鈕會先儲存目前設定、再用最新的顯示名稱覆蓋回所有目前仍連結有效附件的項目列（手動輸入的項目不受影響），不必整批刪除重轉。</div>
         <div id="ownDrawEmpty" style="color:#8a6d45;padding:10px;">載入中…</div>
         <div id="ownDrawList"></div>
+        <div style="margin-top:12px;border-top:1px dashed #D8BE93;padding-top:10px;">
+            <label style="font-size:13px;color:#5b3a1e;font-weight:bold;">代表「已作廢」的附件類別</label>
+            <div class="tip" style="margin:4px 0 6px;">同一種圖每次改版都會上傳一張新圖，本表<b>一種文件只列一列</b>：版別欄顯示<b>現行版</b>、歷次上傳成為<b>修訂履歷</b>、型態制定日期取<b>最早一次發行</b>。<br>勾選的類別代表「這張圖已經作廢」——掛到這些類別的圖<b>不會被當成現行版</b>（實測有圖面是最新的那一份卻已作廢），但仍會留在修訂履歷裡以利追溯。不勾任何一個就不做作廢判定，單純以發行章日期最新者為現行版。</div>
+            <div id="voidCatList" style="display:flex;flex-wrap:wrap;gap:4px 14px;"></div>
+        </div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('ownDrawMask')">取消</button>
@@ -509,8 +514,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <li>清單的 <b>PFMEA</b> 欄顯示這個料號是否已在「潛在失效模式及效應分析」建檔（<b>PFMEA已建立</b>／未建立，點擊可開啟 PFMEA 頁面），是每次查詢當下即時查 pfmea_doc 的結果、不是快照；工具列的「PFMEA」下拉可篩選出已建立／未建立的清單，匯出 CSV 也含這一欄。</li>
             <li><b>取消的欄位</b>：表頭的「製程」、項目列的「型態類別」與「所屬製程」三欄依使用者要求取消，畫面與列印版都不再顯示；<b>資料庫欄位保留不刪</b>，既有資料原封不動，存檔時也會把原值照原樣寫回去（畫面上看不到的東西不會因為存一次檔就被改掉）。連帶失效的設定（BOM檔案標籤的「型態類別」、廠內圖面標籤的「需要顯示製程」、項目列旁的製程挑選鈕）一併移除，避免留下改了也看不到的死設定。</li>
             <li><b>「型態制定日期」已更名為「型態制定日期」</b>，只是名稱改變，取值方式與原本完全相同（連結來源時取來源日期：發行章日期／表單日期／檔案日期；手動列則用自己填的日期）。</li>
+            <li><b>一種文件一列</b>（2026-10-02 使用者回報）：加工圖、原圖這類<b>綁定圖面每次改版都會上傳一張新圖</b>，原本一個附件一列會讓同一種圖在表上長出好幾列、同一次改版也顯示兩次。現在<b>同一料號＋同一附件類別</b>的歷次上傳收斂成一列：<b>版別／文件編號＝現行版</b>、<b>型態制定日期＝最早一次發行</b>（不隨改版往後跳）、歷次上傳成為<b>修訂履歷</b>；欄位旁的「共 N 版」小籤表示這一種文件目前有幾份。之後再上傳新版時，同步會<b>原地把該列指到新的那一份</b>並在修訂履歷多一筆，不會另外長一列（與 ERP/資材報告標籤同一套做法）。<br><b>舊資料</b>不另外批次處理：那幾份管制表<b>下次被開啟或同步時自動合併</b>，並跳出提示告知合併了幾列、狀態改為「需重新確認」請人覆核。合併時保留最早建立的那一列，人工加的修訂履歷會一併搬過去，任何一列曾被「取消納入」則合併後仍維持取消納入。</li>
+            <li><b>作廢圖</b>：哪個附件類別代表「已作廢」由管理員在「廠內圖面標籤設定」勾選（<b>不寫死「作廢」這個名稱</b>）。掛到該類別的圖<b>不會被當成現行版</b>——實測確實有家族最新那一份就是作廢的——但仍留在修訂履歷裡以利追溯，並標註「已作廢」。不勾任何類別就不做作廢判定，單純以發行章日期最新者為現行版。</li>
             <li><b>修訂履歷</b>：每一列項目底下可以記錄歷次改版的「修訂日期」與「修訂後版別」，筆數不限。版面維持 A4 直式、履歷獨立成一欄——修訂次數每一列都不一樣，紙本那種固定開「修訂1／2／3」欄位的橫式表會大半空白、超過次數還印不出來。</li>
-            <li><b>哪些會自動帶入</b>：只做「來源本身真的查得到版次履歷」的兩種——①<b>SOP／SIP</b>取該文件的版次履歷（第一版是制定不算修訂，從第二版起列入）；②<b>料號附件</b>取同料號同類別底下、發行章日期比本列更新的那幾份（判定依據是發行章日期，不是版次）。報價附件、ERP/資材報告、產品開發評估表、PFMEA 的來源端沒有版次欄位可查，一律留白請自行補，系統不猜。自動帶入的列標「自動」小籤，內容仍可直接改；按 ✕ 刪掉後不會在下次開啟時又被合併加回來。</li>
+            <li><b>哪些會自動帶入</b>：只做「來源本身真的查得到版次履歷」的兩種——①<b>SOP／SIP</b>取該文件的版次履歷（第一版是制定不算修訂，從第二版起列入）；②<b>料號附件</b>取這個文件家族第 2 份起的每一次上傳（判定依據是<b>發行章日期</b>、沒填才退回上傳日，不是版次——實測版次欄多半沒填，所以常常是「有修訂日期、沒有修訂後版別」，那仍然是有效的管制資訊）。報價附件、ERP/資材報告、產品開發評估表、PFMEA 的來源端沒有版次欄位可查，一律留白請自行補，系統不猜。自動帶入的列標「自動」小籤，內容仍可直接改；按 ✕ 刪掉後不會在下次開啟時又被合併加回來。</li>
             <li><b>列印版</b>：一次修訂印一列，項次／名稱／制定日期／版別用併格顯示；完全沒有修訂的項目仍然印一列、修訂兩格留白，表上看得出是「尚未改版」而不是漏印。</li>
             <li>找不到需要的製程文字時，按欄位旁的 <i class="fa fa-list"></i> 從此料號的訂單/報價紀錄挑選。</li>
         </ul>
@@ -1017,6 +1024,11 @@ function openEdit(id){
         ITEMS = res.items || [];
         renderItems();
         openMask('editMask');
+        // 舊資料（一個檔案一列）在開啟時自動收斂成「一種文件一列」，要講清楚，不然使用者會以為資料不見了
+        if (res.auto_merged_count > 0) {
+            alert('這份管制表原本把同一種圖的每一次改版各列成一列，已自動合併成「一種文件一列」，共合併 '
+                + res.auto_merged_count + ' 列。\n\n合併後：版別／文件編號顯示現行版，歷次改版在「修訂履歷」欄，型態制定日期改取最早一次發行。\n狀態已改為「需重新確認」，請覆核後再按「重新確認」。');
+        }
         // 點開編輯畫面時系統自動加入新檔案／偵測到內容變更（2026-09-24 使用者要求過要提示，
         // 2026-09-24 稍後改為使用者要求不要跳出確認窗）：狀態徽章與項目清單已即時反映最新結果
         // （新加入/內容變更的項目在清單上另有徽章標示，見 renderItems() 的 changedBadge），不再彈窗打斷操作。
@@ -1095,6 +1107,8 @@ function itemRowHtml(it, idx){
     var linkBadge = linked ? '<span class="ic-link-badge"><i class="fa fa-link"></i> '+esc(srcLabel)+'</span>' : (it.ref_broken ? '<span class="ic-broken-badge">來源已消失</span>' : '');
     // 已確認過的連結項目，來源內容（版別/文件編號）事後變了：小籤提醒，即時值仍以畫面上顯示的為準
     var changedBadge = it.content_changed ? '<span class="ic-broken-badge" title="上次確認時是「'+esc(it.confirmed_ref_snapshot||'')+'」，目前已不同"><i class="fa fa-exclamation-triangle"></i> 內容已變更</span>' : '';
+    var verBadge = (it.ver_count && it.ver_count > 1)
+        ? '<span class="ic-link-badge" title="這一種文件目前共有 '+it.ver_count+' 份（同料號同附件類別），版別欄顯示現行版，其餘在修訂履歷">共 '+it.ver_count+' 版</span>' : '';
     var docNoCell = '<div class="ic-part-box"><input type="text" class="f-docno" value="'+esc(it.doc_no_text||'')+'"'+(linked?' disabled':'')+' placeholder="版別／文件編號">'
         + (linked && it.file_url ? ' <a href="'+esc(it.file_url)+'" target="_blank" class="ic-row-btn" title="點開附件確認內容"><i class="fa fa-eye"></i></a>' : '')
         + '</div>';
@@ -1102,12 +1116,12 @@ function itemRowHtml(it, idx){
         ? '<label class="ic-chk"><input type="checkbox" class="f-included"'+(excluded?'':' checked')+' onchange="toggleExcluded(this)"> 納入</label>'
         : '<button type="button" class="ic-row-btn" onclick="pickExtDoc(this)"'+ (($('#fPartDId').val()|0) ? '' : ' disabled title="請先選擇料號"') +'>選外來文件</button>'
           + ' <button type="button" class="ic-row-btn del" onclick="$(this).closest(\'tr\').remove(); renumberRows();">刪除</button>';
-    return '<tr draggable="true" class="'+(excluded?'ic-excluded':'')+'" data-item-type="'+esc(it.item_type||'other')+'" data-process-tag="'+esc(it.process_tag||'')+'" data-need-proc="'+(needProc?'1':'0')+'" data-ref-source="'+esc(it.ref_source||'')+'" data-ref-attach-id="'+esc(it.ref_attach_id||'')+'" data-ref-ds-pk="'+esc(it.ref_ds_pk||'')+'" data-ref-file-name="'+esc(it.ref_file_name||'')+'" data-ref-bom-tag="'+esc(it.ref_bom_tag||'')+'" data-ref-source-label="'+esc(it.ref_source_label||'')+'" data-id="'+esc(it.id||0)+'">'
+    return '<tr draggable="true" class="'+(excluded?'ic-excluded':'')+'" data-item-type="'+esc(it.item_type||'other')+'" data-process-tag="'+esc(it.process_tag||'')+'" data-need-proc="'+(needProc?'1':'0')+'" data-ref-source="'+esc(it.ref_source||'')+'" data-ref-attach-id="'+esc(it.ref_attach_id||'')+'" data-ref-ds-pk="'+esc(it.ref_ds_pk||'')+'" data-ref-file-name="'+esc(it.ref_file_name||'')+'" data-ref-bom-tag="'+esc(it.ref_bom_tag||'')+'" data-ref-cat-id="'+esc(it.ref_cat_id||'')+'" data-ref-source-label="'+esc(it.ref_source_label||'')+'" data-id="'+esc(it.id||0)+'">'
         + '<td class="drg" title="拖曳調整順序"><i class="fa fa-ellipsis-v"></i></td>'
         + '<td class="seq">'+(idx+1)+'</td>'
         + '<td><input type="text" class="f-name" value="'+esc(it.item_name||'')+'" placeholder="型態項目名稱"></td>'
         + '<td><input type="date" class="f-date" value="'+esc(it.effective_date||'')+'"'+(linked?' disabled':'')+'></td>'
-        + '<td>'+docNoCell+' '+linkBadge+changedBadge+'</td>'
+        + '<td>'+docNoCell+' '+linkBadge+verBadge+changedBadge+'</td>'
         + '<td class="revcell">'+revCellHtml(it.revisions||[])+'</td>'
         + '<td class="op">'+opCell+'</td>'
         + '</tr>';
@@ -1146,7 +1160,7 @@ $('#itemBody').on('drop', 'tr', function(e){
 $('#itemBody').on('dragend', 'tr', function(){ dragSrcRow = null; $('#itemBody tr').removeClass('drag-over'); });
 
 window.icAddRow = function(){
-    var blank = {id:0, item_name:'', item_type:'other', process_tag:'', need_process_hint:false, effective_date:'', doc_no_text:'', is_linked:false, is_excluded:false, ref_source:null, ref_attach_id:null, ref_ds_pk:null, ref_file_name:null, ref_bom_tag:null, ref_source_label:'', revisions:[]};
+    var blank = {id:0, item_name:'', item_type:'other', process_tag:'', need_process_hint:false, effective_date:'', doc_no_text:'', is_linked:false, is_excluded:false, ref_source:null, ref_attach_id:null, ref_ds_pk:null, ref_file_name:null, ref_bom_tag:null, ref_cat_id:null, ref_source_label:'', revisions:[]};
     $('#itemBody').append(itemRowHtml(blank, $('#itemBody tr').length));
     renumberRows();
     return true;
@@ -1205,11 +1219,13 @@ function pickExtDoc(btn){
 window.applyExtDoc = function(i){
     var r = window._extRows[i], $tr = window._extTarget;
     $tr.attr('data-ref-source', r.source).attr('data-ref-attach-id', r.attach_id).attr('data-ref-ds-pk', r.ds_pk)
-       .attr('data-ref-file-name', r.file_name||'').attr('data-ref-bom-tag', r.bom_tag||'');
+       .attr('data-ref-file-name', r.file_name||'').attr('data-ref-bom-tag', r.bom_tag||'')
+       .attr('data-ref-cat-id', r.cat_id||'');
     var idx = $tr.index();
     ITEMS[idx] = collectRow($tr);
     ITEMS[idx].is_linked = true; ITEMS[idx].ref_source = r.source; ITEMS[idx].ref_attach_id = r.attach_id; ITEMS[idx].ref_ds_pk = r.ds_pk;
     ITEMS[idx].ref_file_name = r.file_name||null; ITEMS[idx].ref_bom_tag = r.bom_tag||null;
+    ITEMS[idx].ref_cat_id = r.cat_id||null;
     // sopsip 依 kind 細分 SOP／SIP，不要籠統顯示「SOP／SIP」（與後端 type_id_ctrl_ref_source_label 同一套規則）
     ITEMS[idx].ref_source_label = (r.source === 'sopsip')
         ? (r.kind === 'sip' ? 'SIP' : 'SOP')
@@ -1247,6 +1263,7 @@ function collectRow($tr){
         ref_ds_pk: $tr.attr('data-ref-ds-pk') || null,
         ref_file_name: $tr.attr('data-ref-file-name') || null,
         ref_bom_tag: $tr.attr('data-ref-bom-tag') || null,
+        ref_cat_id: $tr.attr('data-ref-cat-id') || null,
     };
 }
 
@@ -1265,6 +1282,7 @@ function saveAll(confirm){
             ref_ds_pk: it.is_linked ? it.ref_ds_pk : 0,
             ref_file_name: it.is_linked ? (it.ref_file_name||'') : '',
             ref_bom_tag: it.is_linked ? (it.ref_bom_tag||'') : '',
+            ref_cat_id: it.is_linked ? (it.ref_cat_id||0) : 0,
             is_excluded: it.is_excluded ? 1 : 0,
             manual_effective_date: it.is_linked ? '' : it.effective_date,
             manual_doc_no: it.is_linked ? '' : it.doc_no_text,
@@ -1454,8 +1472,19 @@ function saveStampTpl(){
 
 /* ---------- 廠內圖面標籤設定 ---------- */
 $('#btnOwnDrawCats').on('click', function(){
-    $('#ownDrawEmpty').show().text('載入中…'); $('#ownDrawList').empty();
+    $('#ownDrawEmpty').show().text('載入中…'); $('#ownDrawList').empty(); $('#voidCatList').empty();
     openMask('ownDrawMask');
+    // 作廢類別：候選是「全部」附件類別（作廢標記本身通常不是自家出的圖，不會出現在上面那份清單裡）
+    $.getJSON(API, {action:'void_cats_get'}, function(vr){
+        if (!vr || !vr.success) return;
+        var sel = {}; (vr.selected||[]).forEach(function(x){ sel[x] = 1; });
+        var h = '';
+        (vr.rows||[]).forEach(function(r){
+            h += '<label class="ic-chk" style="flex:0 0 auto;"><input type="checkbox" class="void-ck" value="'+r.id+'"'
+               + (sel[r.id]?' checked':'') + (vr.can_edit?'':' disabled') + '> '+esc(r.category_name)+'</label>';
+        });
+        $('#voidCatList').html(h || '<span style="color:#8a6d45;">沒有任何附件類別可選。</span>');
+    });
     $.getJSON(API, {action:'get_own_drawing_categories'}, function(res){
         if (!res.success){ $('#ownDrawEmpty').text(res.message||'載入失敗'); return; }
         if (!res.rows.length){ $('#ownDrawEmpty').text('主檔管理目前沒有任何標記「自家出的圖」的附件類別，請先到主檔管理→附件類別標籤設定勾選。'); return; }
@@ -1483,10 +1512,20 @@ function collectOwnDrawRows(){
     });
     return rows;
 }
+function collectVoidCatIds(){
+    var ids = [];
+    $('#voidCatList .void-ck:checked').each(function(){ ids.push(parseInt(this.value,10)||0); });
+    return ids;
+}
 function saveOwnDrawCats(){
     $.post(API, {action:'save_own_drawing_categories', rows: JSON.stringify(collectOwnDrawRows())}, function(res){
         if (!res.success){ alert(res.message||'儲存失敗'); return; }
-        closeMask('ownDrawMask');
+        // 作廢類別與上面的類別設定是同一個跳窗、同一顆儲存鈕，兩支端點依序存（寫入點各自獨立，
+        // 一支管「哪些自家出的圖要列入」、一支管「哪個類別代表作廢」，不混成一支）
+        $.post(API, {action:'void_cats_save', ids: JSON.stringify(collectVoidCatIds())}, function(r2){
+            if (!r2.success){ alert(r2.message||'作廢類別儲存失敗'); return; }
+            closeMask('ownDrawMask');
+        }, 'json');
     }, 'json');
 }
 function refreshSyncedItemNames(){

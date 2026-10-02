@@ -55,7 +55,7 @@ function type_id_ctrl_item_view(PDO $db, array $it): array {
     // bomfile 來源沒有 attach_id，識別鍵是檔名（見本檔 type_id_ctrl_resolve_ref 的說明）
     $hasRef = $it['ref_source'] && ($it['ref_attach_id'] || ($it['ref_source'] === 'bomfile' && !empty($it['ref_file_name'])));
     if ($hasRef) {
-        $linked = type_id_ctrl_resolve_ref($db, $it['ref_source'], (int)$it['ref_attach_id'], (int)$it['ref_ds_pk'], $it['ref_file_name'] ?? null);
+        $linked = type_id_ctrl_resolve_ref($db, $it['ref_source'], (int)$it['ref_attach_id'], (int)$it['ref_ds_pk'], $it['ref_file_name'] ?? null, (int)($it['ref_cat_id'] ?? 0));
     }
     $printDocNo = ($linked && !empty($linked['doc_no_is_filename'])) ? '' : ($linked ? $linked['doc_name'] : $it['manual_doc_no']);
     // 檔名退回顯示、列印本應空白的情況：若這份文件填了發行章日期（自家出的圖），改印
@@ -79,6 +79,8 @@ function type_id_ctrl_item_view(PDO $db, array $it): array {
         'ref_ds_pk' => $it['ref_ds_pk'] ? (int)$it['ref_ds_pk'] : null,
         'ref_file_name' => $it['ref_file_name'] ?? null,
         'ref_bom_tag' => $it['ref_bom_tag'] ?? null,
+        'ref_cat_id' => isset($it['ref_cat_id']) && $it['ref_cat_id'] !== null ? (int)$it['ref_cat_id'] : ($linked['cat_id'] ?? null),
+        'ver_count' => $linked['ver_count'] ?? null,
         'ref_broken' => ($hasRef && $linked === null), // 曾連結但來源已消失
         'effective_date' => $linked ? $linked['doc_date'] : $it['manual_effective_date'],
         'doc_no_text' => $linked ? $linked['doc_name'] : $it['manual_doc_no'],
@@ -185,6 +187,9 @@ function type_id_ctrl_ensure_schema(PDO $db): void {
         // 存的是「上次確認當下」即時解析出來的 doc_no_text 快照，只在存檔/批次確認/批次更新時
         // 寫入（type_id_ctrl_snapshot_confirm），平時查詢一律拿它跟「現在」即時解析的值比對，
         // 不一致就是「內容已變更」。只對有連結來源的列有意義，手動輸入的列永遠是 NULL。
+        // 2026-10-02：料號附件改成「一種文件一列」（同料號同類別的歷次上傳收斂成一列），
+        // 識別鍵因此由附件 id 改為附件類別；ref_attach_id 仍留著記目前指到哪一份（現行版）。
+        "ALTER TABLE type_id_ctrl_item ADD COLUMN ref_cat_id INT NULL COMMENT '連結料號附件時的附件類別id(ref_source=part專用)；同料號同類別只會有一列，改版時原地指到新檔' AFTER ref_bom_tag",
         "ALTER TABLE type_id_ctrl_item ADD COLUMN confirmed_ref_snapshot VARCHAR(255) NULL COMMENT '上次確認時，該連結來源即時解析出的版別/文件編號快照，供事後比對內容是否變更' AFTER ref_bom_tag",
     ] as $alter) {
         try { $db->exec($alter); } catch (Throwable $e) {}
@@ -313,7 +318,7 @@ function type_id_ctrl_next_doc_no(PDO $db): string {
  * part 來源優先用「版次(revision)」「發行章日期(issue_stamp_date)」顯示（自家出的圖才會填這兩欄；
  * 客戶提供的外來文件通常沒填，此時自動退回檔名/上傳日——2026-08-12 使用者要求）。
  */
-function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $dsPk, ?string $fileName = null): ?array {
+function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $dsPk, ?string $fileName = null, int $catId = 0): ?array {
     // 2026-08-20 使用者要求新增的三種來源：本系統內建立的表單（產品開發評估表／PFMEA）與 NAS 上的
     // ERP/資材報告檔案。表單類的「版別／文件編號」＝該表單的表單編號（doc_no，已改為依表單日期產生），
     // 是真正的文件編號，所以 doc_no_is_filename=false（列印會印出來）。
@@ -362,25 +367,27 @@ function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $d
         ];
     }
     if ($source === 'part') {
-        $st = $db->prepare("SELECT COALESCE(NULLIF(pa.original_name,''), pa.filename) AS doc_name,
-                                    DATE(pa.uploaded_at) AS doc_date, pa.filename, pa.revision, pa.issue_stamp_date
-                             FROM part_attachments pa
-                             WHERE pa.id=? AND pa.d_id=? AND pa.deleted_at IS NULL LIMIT 1");
-        $st->execute([$attachId, $dsPk]);
-        $r = $st->fetch(PDO::FETCH_ASSOC);
-        if (!$r) return null;
-        // doc_no_is_filename：沒填版次時退回檔名充當顯示用途，但檔名不是真正的「版別／文件編號」，
-        // 列印時不應印出（2026-08-12 使用者要求），僅畫面/跳窗仍顯示以利辨識檔案。
-        $hasRevision = ($r['revision'] !== null && $r['revision'] !== '');
+        // 2026-10-02 起料號附件以「文件家族」（同料號同附件類別）為單位：版別取現行版、
+        // 型態制定日期取家族裡最早一次發行（使用者拍板）。舊資料沒有 ref_cat_id 時由附件回推。
+        if ($catId <= 0 && $attachId > 0) $catId = type_id_ctrl_cat_of_attach($db, $dsPk, $attachId);
+        $fam = type_id_ctrl_part_families($db, $dsPk)[$catId] ?? null;
+        if (!$fam) return null;                       // 這個料號已經沒有這種文件了＝來源已消失
+        $cur = $fam['current'];
+        $hasRevision = ($cur['revision'] !== null && $cur['revision'] !== '');
         return [
-            'doc_name' => $hasRevision ? $r['revision'] : $r['doc_name'],
+            // doc_no_is_filename：沒填版次時退回檔名充當顯示用途，但檔名不是真正的「版別／文件編號」，
+            // 列印時不應印出（2026-08-12 使用者要求），僅畫面/跳窗仍顯示以利辨識檔案。
+            'doc_name' => $hasRevision ? $cur['revision'] : $cur['doc_name'],
             'doc_no_is_filename' => !$hasRevision,
-            'doc_date' => $r['issue_stamp_date'] ?: $r['doc_date'],
+            'doc_date' => $fam['first']['_date'],      // ＝型態制定日期：最早一次發行，不隨改版往後跳
             // 「自家出的圖」(如加工圖) 多半沒填版次，退回檔名充當畫面顯示，但列印時檔名不算真正的
             // 版別/文件編號故印空白；有發行章日期時改印「發行章 YYYY.MM.DD」取代空白
             // （2026-09-24 使用者要求：列印看不到任何依據，加工圖那一列整格空白）。
-            'issue_stamp_date' => ($r['issue_stamp_date'] !== null && $r['issue_stamp_date'] !== '') ? $r['issue_stamp_date'] : null,
-            'file_url' => '../../src/store/Part_Attachment_API.php?action=download&id=' . $attachId,
+            'issue_stamp_date' => ($cur['issue_stamp_date'] !== null && $cur['issue_stamp_date'] !== '') ? $cur['issue_stamp_date'] : null,
+            'cat_id' => $catId,
+            'cur_attach_id' => (int)$cur['attach_id'],
+            'ver_count' => count($fam['versions']),
+            'file_url' => '../../src/store/Part_Attachment_API.php?action=download&id=' . (int)$cur['attach_id'],
         ];
     }
     if ($source === 'quote') {
@@ -427,18 +434,24 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
     };
     $rows = [];
 
-    // 料號附件：無製程資訊(本來就與特定製程無關的共用文件，如原圖)，origin_process 一律 NULL
-    $sql = "SELECT pa.id AS attach_id, pa.d_id AS ds_pk, pa.filename,
-                   COALESCE(NULLIF(pa.original_name,''), pa.filename) AS doc_name,
-                   DATE(pa.uploaded_at) AS doc_date, pa.category_ids, '' AS category_id_single,
-                   NULL AS origin_process
-            FROM part_attachments pa
-            WHERE pa.d_id=? AND pa.deleted_at IS NULL AND " . $catCond('pa.category_ids');
-    $st = $db->prepare($sql); $st->execute([$dsPk]);
-    // 批圖工作檔(.egwork.json)與「有工作檔的暫存輸出圖」都不是正式文件，一律不入管制表
-    // （見 imgedit_visibility.php 檔頭 2026-08-25；SELECT 必須帶 pa.filename，過濾是靠檔名判定的）
-    require_once __DIR__ . '/imgedit_visibility.php';
-    foreach (imgedit_strip_workfiles($st->fetchAll(PDO::FETCH_ASSOC), $db) as $r) { $r['source'] = 'part'; $rows[] = $r; }
+    // 料號附件：2026-10-02 起「一種文件一列」——同一料號同一附件類別的歷次上傳收斂成一個家族，
+    // 這裡每個家族只回一列（指向現行版），制定日期取家族最早一次發行，歷次上傳走修訂履歷。
+    // 無製程資訊(本來就與特定製程無關的共用文件，如原圖)，origin_process 一律 NULL。
+    foreach (type_id_ctrl_part_families($db, $dsPk) as $cid => $fam) {
+        $cur = $fam['current'];
+        $rows[] = [
+            'attach_id' => (int)$cur['attach_id'],          // 現行版（改版後同步會原地指到新的那份）
+            'ds_pk' => $dsPk,
+            'filename' => $cur['filename'],
+            'doc_name' => $cur['doc_name'],
+            'doc_date' => $fam['first']['_date'],           // 制定日期＝最早一次發行
+            'cat_id' => (int)$cid,
+            'categories' => [$fam['disp']],
+            'need_process' => $fam['need_process'],
+            'origin_process' => null,
+            'source' => 'part',
+        ];
+    }
 
     $st = $db->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
     $st->execute([$dsPk]);
@@ -475,6 +488,7 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
     }
 
     foreach ($rows as &$r) {
+        if (($r['source'] ?? '') === 'part') continue;   // 料號附件在上面已經以家族為單位組好了
         $names = []; $needProcess = false;
         foreach (array_filter(explode(',', str_replace(' ', '', (string)$r['category_ids']))) as $cid) {
             if (isset($cats[(int)$cid])) {
@@ -1179,6 +1193,77 @@ function type_id_ctrl_refresh_synced_item_names(PDO $db): array {
  * 自動由該文件originating報價項目的製程推導(共用文件留空)；若先前已「已確認」又同步進新項目，
  * 狀態改回「需重新確認」。回傳 [doc_id, is_new, added_count]（2026-08-12 使用者拍板改一料號一份）。
  */
+/**
+ * 把舊資料裡「同一料號同一附件類別卻各自成列」的料號附件項目收斂成一列（2026-10-02 使用者拍板：
+ * 既有資料不另外批次處理，等那份管制表下次被開啟或同步時自動收斂）。
+ *
+ * 合併規則：
+ *   ①留下 id 最小的那一列（最早建立的，通常就是這份文件第一次被收進來的那一列），其餘軟刪除。
+ *   ②留下來的那一列指到現行版、補上 ref_cat_id；歷次上傳自動成為修訂履歷（不必落地）。
+ *   ③被合併掉的列若曾被人工「取消納入」(is_excluded)，留下來的那一列一併視為取消納入——
+ *     人工說過這份文件不適用，不可以因為系統合併就自己變回納入。
+ *   ④被合併掉的列底下若有人工加的修訂履歷，整批搬到留下來的那一列，不丟掉。
+ * 回傳實際合併掉幾列。
+ */
+function type_id_ctrl_collapse_part_items(PDO $db, int $docId, int $dsPk): int {
+    if (!$docId || !$dsPk) return 0;
+    $st = $db->prepare("SELECT id, ref_attach_id, ref_ds_pk, ref_cat_id, is_excluded
+                          FROM type_id_ctrl_item
+                         WHERE doc_id=? AND is_deleted=0 AND ref_source='part'
+                      ORDER BY id");
+    $st->execute([$docId]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return 0;
+
+    $byCat = [];
+    foreach ($rows as $r) {
+        $cid = (int)($r['ref_cat_id'] ?? 0);
+        if ($cid <= 0) $cid = type_id_ctrl_cat_of_attach($db, (int)$r['ref_ds_pk'] ?: $dsPk, (int)$r['ref_attach_id']);
+        if ($cid <= 0) continue;                 // 類別已被取消列入／附件已刪除：留著不動，由既有的「來源已消失」提示處理
+        $byCat[$cid][] = $r;
+    }
+
+    $fams = type_id_ctrl_part_families($db, $dsPk);
+    $merged = 0;
+    foreach ($byCat as $cid => $list) {
+        $keep = $list[0];
+        $curAttach = isset($fams[$cid]) ? (int)$fams[$cid]['current']['attach_id'] : (int)$keep['ref_attach_id'];
+        $excluded = (int)$keep['is_excluded'];
+        foreach ($list as $r) if ((int)$r['is_excluded'] === 1) $excluded = 1;
+
+        if (count($list) > 1) {
+            $dropIds = [];
+            foreach (array_slice($list, 1) as $r) $dropIds[] = (int)$r['id'];
+            $in = implode(',', array_fill(0, count($dropIds), '?'));
+            // 人工加的修訂履歷不可以跟著被刪掉，先搬到留下來的那一列
+            $db->prepare("UPDATE type_id_ctrl_item_rev SET item_id=?, updated_at=NOW()
+                           WHERE item_id IN ($in) AND is_deleted=0 AND (auto_key IS NULL OR auto_key='')")
+               ->execute(array_merge([(int)$keep['id']], $dropIds));
+            $db->prepare("UPDATE type_id_ctrl_item_rev SET is_deleted=1, updated_at=NOW() WHERE item_id IN ($in)")->execute($dropIds);
+            $db->prepare("UPDATE type_id_ctrl_item SET is_deleted=1, updated_at=NOW() WHERE id IN ($in)")->execute($dropIds);
+            $merged += count($dropIds);
+        }
+        if ((int)($keep['ref_cat_id'] ?? 0) !== $cid || (int)$keep['ref_attach_id'] !== $curAttach || (int)$keep['is_excluded'] !== $excluded) {
+            $db->prepare("UPDATE type_id_ctrl_item SET ref_cat_id=?, ref_attach_id=?, is_excluded=?, updated_at=NOW() WHERE id=?")
+               ->execute([$cid, $curAttach, $excluded, (int)$keep['id']]);
+        }
+    }
+    if ($merged > 0) {
+        // 被合併過的清單一律打回「需重新確認」——內容跟當初確認時已經不一樣了
+        $db->prepare("UPDATE type_id_ctrl_doc SET review_status='needs_recheck' WHERE id=? AND review_status='confirmed'")
+           ->execute([$docId]);
+        // 項次重編，不要留下跳號
+        $st = $db->prepare("SELECT id FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 ORDER BY seq, id");
+        $st->execute([$docId]);
+        $i = 0;
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $iid) {
+            $i++;
+            $db->prepare("UPDATE type_id_ctrl_item SET seq=? WHERE id=?")->execute([$i, (int)$iid]);
+        }
+    }
+    return $merged;
+}
+
 function type_id_ctrl_sync_part(PDO $db, int $dsPk): array {
     $st = $db->prepare("SELECT Customer_Id FROM d_setting WHERE d_id=?");
     $st->execute([$dsPk]);
@@ -1201,12 +1286,19 @@ function type_id_ctrl_sync_part(PDO $db, int $dsPk): array {
         $docId = (int)$db->lastInsertId();
     }
 
-    $st = $db->prepare("SELECT id, ref_source, ref_attach_id, ref_ds_pk, ref_file_name, ref_bom_tag
+    // 先把舊資料的重複列收斂掉（同料號同類別本來一個檔案一列），再比對要不要新增（2026-10-02）
+    type_id_ctrl_collapse_part_items($db, $docId, $dsPk);
+
+    $st = $db->prepare("SELECT id, ref_source, ref_attach_id, ref_ds_pk, ref_file_name, ref_bom_tag, ref_cat_id
                           FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 AND ref_source IS NOT NULL");
     $st->execute([$docId]);
-    $existingKeys = []; $bomRowsByTag = [];
+    $existingKeys = []; $bomRowsByTag = []; $partRowsByCat = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        $existingKeys[$r['ref_source'] . '|' . $r['ref_attach_id'] . '|' . $r['ref_ds_pk']] = true;
+        $cid = (int)($r['ref_cat_id'] ?? 0);
+        if ($r['ref_source'] === 'part' && $cid <= 0) $cid = type_id_ctrl_cat_of_attach($db, (int)$r['ref_ds_pk'], (int)$r['ref_attach_id']);
+        $existingKeys[type_id_ctrl_ref_key($r['ref_source'], (int)$r['ref_attach_id'], (int)$r['ref_ds_pk'], $r['ref_bom_tag'], $cid)] = true;
+        // 料號附件：同一個類別永遠只留一列，改版上傳新圖時原地把它指到現行版（與 bomfile 同一套做法）
+        if ($r['ref_source'] === 'part' && $cid > 0) $partRowsByCat[$cid] = $r + ['_cat' => $cid];
         // ERP/資材報告：同一個標籤永遠只留一列，換新檔案時原地把它指到新檔（不另開一列），
         // 型態識別文件管制表要看的是「目前的型態」，不是歷次報告的清單（2026-08-20 使用者拍板）
         if ($r['ref_source'] === 'bomfile' && $r['ref_bom_tag'] !== null && $r['ref_bom_tag'] !== '') {
@@ -1233,7 +1325,20 @@ function type_id_ctrl_sync_part(PDO $db, int $dsPk): array {
                 continue;
             }
         }
-        $key = $er['source'] . '|' . $er['attach_id'] . '|' . $er['ds_pk'];
+        // 料號附件：這個類別已經有一列了，就只把它指到現行版（不另開一列）
+        if (($er['source'] ?? '') === 'part') {
+            $cid = (int)($er['cat_id'] ?? 0);
+            if ($cid > 0 && isset($partRowsByCat[$cid])) {
+                $row = $partRowsByCat[$cid];
+                if ((int)$row['ref_attach_id'] !== (int)$er['attach_id'] || (int)($row['ref_cat_id'] ?? 0) !== $cid) {
+                    $db->prepare("UPDATE type_id_ctrl_item SET ref_attach_id=?, ref_cat_id=?, updated_at=NOW() WHERE id=?")
+                       ->execute([(int)$er['attach_id'], $cid, $row['id']]);
+                    $updatedCount++;
+                }
+                continue;
+            }
+        }
+        $key = type_id_ctrl_ref_key($er['source'], (int)$er['attach_id'], (int)$er['ds_pk'], $er['bom_tag'] ?? null, (int)($er['cat_id'] ?? 0));
         if ($er['source'] !== 'bomfile' && isset($existingKeys[$key])) continue;
         $seq++;
         type_id_ctrl_insert_item_from_source($db, $docId, $seq, $er);
@@ -1258,10 +1363,11 @@ function type_id_ctrl_insert_item_from_source(PDO $db, int $docId, int $seq, arr
     $itemName = !empty($er['categories']) ? $er['categories'][0] : $er['doc_name'];
     $originProcess = $er['origin_process'] ?? null;
     $needProcessHint = !empty($er['need_process']) ? 1 : 0;
-    $st = $db->prepare("INSERT INTO type_id_ctrl_item (doc_id, seq, item_name, item_type, process_tag, need_process_hint, ref_source, ref_attach_id, ref_ds_pk, ref_file_name, ref_bom_tag)
-                         VALUES (?,?,?,?,?,?,?,?,?,?,?)");
+    $st = $db->prepare("INSERT INTO type_id_ctrl_item (doc_id, seq, item_name, item_type, process_tag, need_process_hint, ref_source, ref_attach_id, ref_ds_pk, ref_file_name, ref_bom_tag, ref_cat_id)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
     $st->execute([$docId, $seq, $itemName, $itemType, ($originProcess !== '' ? $originProcess : null), $needProcessHint,
-                  $er['source'], $er['attach_id'], $er['ds_pk'], $er['file_name'] ?? null, $er['bom_tag'] ?? null]);
+                  $er['source'], $er['attach_id'], $er['ds_pk'], $er['file_name'] ?? null, $er['bom_tag'] ?? null,
+                  !empty($er['cat_id']) ? (int)$er['cat_id'] : null]);
     return (int)$db->lastInsertId();
 }
 
@@ -1274,8 +1380,12 @@ function type_id_ctrl_insert_item_from_source(PDO $db, int $docId, int $seq, arr
  * ══════════════════════════════════════════════════════════════════════════════ */
 
 /** 來源列的識別鍵——sync_part／新檔案比對／內容變更比對共用同一套規則（bomfile 用標籤，其餘用 attach_id） */
-function type_id_ctrl_ref_key(string $source, int $attachId, int $dsPk, ?string $bomTag): string {
-    return $source === 'bomfile' ? ('bomfile|' . (string)$bomTag) : ($source . '|' . $attachId . '|' . $dsPk);
+function type_id_ctrl_ref_key(string $source, int $attachId, int $dsPk, ?string $bomTag, int $catId = 0): string {
+    if ($source === 'bomfile') return 'bomfile|' . (string)$bomTag;
+    // 料號附件：識別鍵是「料號＋附件類別」不是附件 id——每次改版都會上傳一張新圖，用附件 id 當鍵
+    // 會讓同一種圖每改一次版就多長一列（2026-10-02 使用者回報）。
+    if ($source === 'part') return 'part|cat' . $catId . '|' . $dsPk;
+    return $source . '|' . $attachId . '|' . $dsPk;
 }
 
 /**
@@ -1288,15 +1398,17 @@ function type_id_ctrl_source_diff(PDO $db, int $docId, int $dsPk): array {
     $fresh = type_id_ctrl_fetch_ext_docs_for_part($db, $dsPk);
     $freshByKey = [];
     foreach ($fresh as $f) {
-        $freshByKey[type_id_ctrl_ref_key($f['source'], (int)$f['attach_id'], (int)$f['ds_pk'], $f['bom_tag'] ?? null)] = $f;
+        $freshByKey[type_id_ctrl_ref_key($f['source'], (int)$f['attach_id'], (int)$f['ds_pk'], $f['bom_tag'] ?? null, (int)($f['cat_id'] ?? 0))] = $f;
     }
 
-    $st = $db->prepare("SELECT id, ref_source, ref_attach_id, ref_ds_pk, ref_bom_tag, confirmed_ref_snapshot
+    $st = $db->prepare("SELECT id, ref_source, ref_attach_id, ref_ds_pk, ref_bom_tag, ref_cat_id, confirmed_ref_snapshot
                           FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 AND ref_source IS NOT NULL");
     $st->execute([$docId]);
     $existingByKey = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $it) {
-        $k = type_id_ctrl_ref_key($it['ref_source'], (int)$it['ref_attach_id'], (int)$it['ref_ds_pk'], $it['ref_bom_tag']);
+        $cid = (int)($it['ref_cat_id'] ?? 0);
+        if ($it['ref_source'] === 'part' && $cid <= 0) $cid = type_id_ctrl_cat_of_attach($db, (int)$it['ref_ds_pk'], (int)$it['ref_attach_id']);
+        $k = type_id_ctrl_ref_key($it['ref_source'], (int)$it['ref_attach_id'], (int)$it['ref_ds_pk'], $it['ref_bom_tag'], $cid);
         $existingByKey[$k] = $it;
     }
 
@@ -1318,7 +1430,7 @@ function type_id_ctrl_snapshot_confirm(PDO $db, int $docId): void {
                           FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 AND ref_source IS NOT NULL");
     $st->execute([$docId]);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $it) {
-        $linked = type_id_ctrl_resolve_ref($db, $it['ref_source'], (int)$it['ref_attach_id'], (int)$it['ref_ds_pk'], $it['ref_file_name']);
+        $linked = type_id_ctrl_resolve_ref($db, $it['ref_source'], (int)$it['ref_attach_id'], (int)$it['ref_ds_pk'], $it['ref_file_name'], (int)($it['ref_cat_id'] ?? 0));
         $snap = $linked ? $linked['doc_name'] : null;
         $db->prepare("UPDATE type_id_ctrl_item SET confirmed_ref_snapshot=? WHERE id=?")->execute([$snap, $it['id']]);
     }
@@ -1358,6 +1470,131 @@ function type_id_ctrl_apply_diff(PDO $db, int $docId, array $diff, bool $confirm
         }
     }
     return ['added_count' => $addedCount, 'changed_count' => $changedCount, 'was_confirmed' => $wasConfirmed];
+}
+
+
+/* ============================================================================
+ * 料號附件「一種文件一列」（2026-10-02 使用者回報：加工圖/原圖是綁定圖面，每次改版都會
+ * 上傳一張新圖，原本一個附件一列會讓同一種圖在管制表長出好幾列，改版資訊也等於顯示兩次）
+ * --------------------------------------------------------------------------
+ * 收斂單位＝「同一料號 × 同一附件類別」＝一個文件家族（family）：
+ *   型態制定日期 ＝ 家族裡最早一次發行（使用者拍板：制定就是第一次訂出來那天，不隨改版往後跳）
+ *   版別／文件編號 ＝ 現行版 ＝ 家族裡最新、且沒有被標成「作廢」的那一份
+ *   修訂履歷      ＝ 第 2 份起的每一次發行（含現行版本身；只有一份時就沒有修訂）
+ * 日期一律取「發行章日期，沒有才退回上傳日」——判準見 ai-rules/15（版次多半沒填，發行章日期才是
+ * 圖面有沒有改版的依據）。
+ * 作廢判定走管理員可設定的類別（type_id_ctrl_void_cat_ids），不寫死「作廢」這個名稱＝鐵律4；
+ * 實測有 3 組家族最新那一份就是作廢，所以不能單純取最新當現行版。
+ * ========================================================================== */
+
+/** 被管理員標記為「代表已作廢」的附件類別 id（可複選；沒設定就是空陣列＝不做作廢判定） */
+function type_id_ctrl_void_cat_ids(PDO $db): array {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    try {
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='TYPE_ID_CTRL' AND param_key='void_category_ids' LIMIT 1");
+        $st->execute();
+        $raw = (string)$st->fetchColumn();
+    } catch (Throwable $e) { $raw = ''; }
+    $ids = [];
+    foreach (explode(',', $raw) as $x) { $x = (int)trim($x); if ($x > 0) $ids[] = $x; }
+    return $cache = array_values(array_unique($ids));
+}
+
+function type_id_ctrl_void_cat_save(PDO $db, array $ids, string $byUser): void {
+    $clean = [];
+    foreach ($ids as $x) { $x = (int)$x; if ($x > 0) $clean[] = $x; }
+    $clean = array_values(array_unique($clean));
+    type_id_ctrl_param_save($db, 'void_category_ids', implode(',', $clean),
+                            '型態識別文件管制表：代表「已作廢」的附件類別（這些圖不會被當成現行版，只收進修訂履歷）', $byUser);
+}
+
+/**
+ * 此料號的料號附件文件家族：cat_id => [
+ *   'cat_id','disp','need_process','all'(由舊到新的每一份), 'first'(最早), 'current'(現行版)
+ * ]
+ * 只含「會列入本模組」的類別（外來文件清單 is_external_doc=1 ＋ 廠內圖面已勾選 type_id_ctrl_include=1）。
+ * 一個附件同時掛兩個列入類別時，兩個家族各算一次（它本來就同時是兩種文件）。
+ */
+function type_id_ctrl_part_families(PDO $db, int $dsPk): array {
+    static $cache = [];
+    if (isset($cache[$dsPk])) return $cache[$dsPk];
+
+    $catRows = $db->query("SELECT id, COALESCE(NULLIF(external_doc_name,''), category_name) AS disp,
+                                  COALESCE(type_id_ctrl_need_process,0) AS need_process
+                           FROM quotation_file_categories WHERE is_external_doc=1 OR type_id_ctrl_include=1")
+                  ->fetchAll(PDO::FETCH_ASSOC);
+    if (!$catRows || !$dsPk) return $cache[$dsPk] = [];
+    $cats = [];
+    foreach ($catRows as $cr) $cats[(int)$cr['id']] = ['disp'=>$cr['disp'], 'need_process'=>(bool)$cr['need_process']];
+
+    $st = $db->prepare("SELECT pa.id AS attach_id, pa.d_id AS ds_pk, pa.filename,
+                               COALESCE(NULLIF(pa.original_name,''), pa.filename) AS doc_name,
+                               pa.category_ids, pa.revision, pa.issue_stamp_date,
+                               DATE(pa.uploaded_at) AS up_date
+                          FROM part_attachments pa
+                         WHERE pa.d_id=? AND pa.deleted_at IS NULL");
+    $st->execute([$dsPk]);
+    // 批圖工作檔(.egwork.json)與「有工作檔的暫存輸出圖」都不是正式文件（imgedit_visibility.php）
+    require_once __DIR__ . '/imgedit_visibility.php';
+    $rows = imgedit_strip_workfiles($st->fetchAll(PDO::FETCH_ASSOC), $db);
+
+    $voidIds = type_id_ctrl_void_cat_ids($db);
+    $fams = [];
+    foreach ($rows as $r) {
+        $ids = [];
+        foreach (explode(',', str_replace(' ', '', (string)$r['category_ids'])) as $x) { $x = (int)$x; if ($x > 0) $ids[] = $x; }
+        $r['_is_void'] = (bool)array_intersect($ids, $voidIds);
+        $r['_date']    = ($r['issue_stamp_date'] !== null && $r['issue_stamp_date'] !== '') ? $r['issue_stamp_date'] : $r['up_date'];
+        foreach ($ids as $cid) {
+            if (!isset($cats[$cid])) continue;      // 不列入本模組的類別（含作廢標記本身）不自成一族
+            $fams[$cid][] = $r;
+        }
+    }
+
+    $out = [];
+    foreach ($fams as $cid => $list) {
+        usort($list, function ($a, $b) {
+            $c = strcmp((string)$a['_date'], (string)$b['_date']);
+            return $c !== 0 ? $c : ((int)$a['attach_id'] <=> (int)$b['attach_id']);
+        });
+        // 版本的單位是「發行章日期」不是「檔案」：同一天上傳/掃描的好幾個檔案是同一版（一張圖掃成
+        // 兩三個檔、或事後補傳同一版的另一份），各算一次修訂會在履歷上冒出「修訂日期跟制定日期同一天」
+        // 這種看不懂的列（實測料號 669 的 BOSS圖就是：117 與 861 都是發行章 2026-02-25）。
+        $vers = [];
+        foreach ($list as $a) {
+            $d = (string)$a['_date'];
+            if (!isset($vers[$d])) $vers[$d] = ['date'=>$a['_date'], 'files'=>[], 'revision'=>'', 'is_void'=>true, 'rep'=>null];
+            $vers[$d]['files'][] = $a;
+            if ($vers[$d]['revision'] === '' && $a['revision'] !== null && $a['revision'] !== '') $vers[$d]['revision'] = (string)$a['revision'];
+            if (!$a['_is_void']) { $vers[$d]['is_void'] = false; $vers[$d]['rep'] = $a; }   // 同一版裡優先用沒作廢的那一份
+            if ($vers[$d]['rep'] === null) $vers[$d]['rep'] = $a;
+        }
+        $vers = array_values($vers);   // $list 已排序，PHP 會保留插入順序＝由舊到新
+        // 現行版＝最新且未作廢的那一版；整族都作廢時退回最新那一版
+        // （寧可指到一份作廢圖，也不要整列空著無從追溯）
+        $curVer = null;
+        for ($i = count($vers) - 1; $i >= 0; $i--) { if (!$vers[$i]['is_void']) { $curVer = $vers[$i]; break; } }
+        if ($curVer === null) $curVer = $vers[count($vers) - 1];
+        $out[$cid] = [
+            'cat_id'       => $cid,
+            'disp'         => $cats[$cid]['disp'],
+            'need_process' => $cats[$cid]['need_process'],
+            'all'          => $list,          // 全部檔案（供對照用）
+            'versions'     => $vers,          // 版本（以發行章日期為單位，由舊到新）
+            'first'        => $vers[0]['rep'],
+            'current'      => $curVer['rep'],
+        ];
+    }
+    return $cache[$dsPk] = $out;
+}
+
+/** 由附件 id 回推它屬於哪個列入類別（舊資料沒有 ref_cat_id 時用；取最先命中的那一個） */
+function type_id_ctrl_cat_of_attach(PDO $db, int $dsPk, int $attachId): int {
+    foreach (type_id_ctrl_part_families($db, $dsPk) as $cid => $f) {
+        foreach ($f['all'] as $a) if ((int)$a['attach_id'] === $attachId) return (int)$cid;
+    }
+    return 0;
 }
 
 /* ============================================================================
@@ -1400,36 +1637,20 @@ function type_id_ctrl_auto_revisions(PDO $db, array $it): array {
         return $out;
     }
 
-    if ($source === 'part' && $attachId && $dsPk) {
-        $st = $db->prepare("SELECT category_ids, revision, issue_stamp_date, DATE(uploaded_at) AS up_date
-                             FROM part_attachments WHERE id=? AND d_id=? AND deleted_at IS NULL LIMIT 1");
-        $st->execute([$attachId, $dsPk]);
-        $self = $st->fetch(PDO::FETCH_ASSOC);
-        if (!$self) return [];
-        $selfDate = $self['issue_stamp_date'] ?: $self['up_date'];
-        $catIds = array_values(array_filter(array_map('intval', explode(',', str_replace(' ', '', (string)$self['category_ids'])))));
-        if (!$catIds) return [];
-        // 同料號、類別有交集、且有發行章日期或版次可辨識版本的其他附件
-        $catCond = implode(' OR ', array_map(fn($c) => "FIND_IN_SET($c, REPLACE(COALESCE(pa.category_ids,''),' ',''))", $catIds));
-        $st = $db->prepare("SELECT pa.id, pa.revision, pa.issue_stamp_date, DATE(pa.uploaded_at) AS up_date, pa.filename
-                             FROM part_attachments pa
-                             WHERE pa.d_id=? AND pa.id<>? AND pa.deleted_at IS NULL
-                               AND (COALESCE(pa.revision,'')<>'' OR pa.issue_stamp_date IS NOT NULL)
-                               AND ($catCond)
-                             ORDER BY COALESCE(pa.issue_stamp_date, DATE(pa.uploaded_at)), pa.id");
-        $st->execute([$dsPk, $attachId]);
-        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-        // 批圖工作檔與暫存輸出圖不是正式文件（imgedit_visibility.php，2026-08-25）
-        require_once __DIR__ . '/imgedit_visibility.php';
-        $rows = imgedit_strip_workfiles($rows, $db);
-        foreach ($rows as $r) {
-            $d = $r['issue_stamp_date'] ?: $r['up_date'];
-            if ($selfDate && $d && $d <= $selfDate) continue;   // 只列「比本列更新」的才算之後的改版
+    if ($source === 'part' && $dsPk) {
+        // 一種文件一列（2026-10-02）：這一列代表整個文件家族，所以修訂履歷＝家族裡第 2 份起的
+        // 每一次上傳（第 1 份是「制定」不是修訂；現行版本身若不是第 1 份，它也是一次修訂）。
+        $catId = (int)($it['ref_cat_id'] ?? 0);
+        if ($catId <= 0 && $attachId > 0) $catId = type_id_ctrl_cat_of_attach($db, $dsPk, $attachId);
+        $fam = type_id_ctrl_part_families($db, $dsPk)[$catId] ?? null;
+        if (!$fam) return [];
+        foreach (array_slice($fam['versions'], 1) as $v) {
+            // auto_key 綁該版代表檔的 id：同一版補傳第二份檔案時不會再冒出一筆重複的修訂
             $out[] = [
-                'auto_key'    => 'part:' . (int)$r['id'],
-                'rev_date'    => $d ?: null,
-                'rev_version' => (string)($r['revision'] ?? ''),
-                'note'        => '',
+                'auto_key'    => 'part:' . (int)$v['rep']['attach_id'],
+                'rev_date'    => $v['date'] ?: null,
+                'rev_version' => (string)$v['revision'],
+                'note'        => !empty($v['is_void']) ? '已作廢' : '',
             ];
         }
     }

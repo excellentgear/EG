@@ -185,6 +185,21 @@ case 'get':
     // 點開編輯畫面時自動加入新檔案／偵測內容變更（2026-09-24 使用者要求）：只有「已確認」的文件才做，
     // 且只有登錄以上權限才會觸發寫入（純檢視權限的人打開來看不應該連帶改到資料）。加入後一律改回
     // 「需重新確認」——不直接視為已確認，要由人親自按「重新確認」，見 type_id_ctrl_apply_diff()。
+    // 料號附件「一種文件一列」改版（2026-10-02）：舊資料是一個檔案一列，開啟時就地收斂。
+    // 只有登錄以上權限才會觸發寫入（純檢視權限的人打開來看不應該連帶改到資料）。
+    $autoMerged = 0;
+    if ($perms['canEdit'] && $doc['part_d_id']) {
+        $autoMerged = type_id_ctrl_collapse_part_items($db, $id, (int)$doc['part_d_id']);
+        if ($autoMerged > 0) {
+            $st = $db->prepare("SELECT h.*, COALESCE(cl.customer,'') AS customer_name, COALESCE(ds.D_Setting_Id,'') AS part_no
+                                 FROM type_id_ctrl_doc h
+                                 LEFT JOIN customer_list cl ON cl.customer_id = h.customer_id
+                                 LEFT JOIN d_setting ds ON ds.d_id = h.part_d_id WHERE h.id=?");
+            $st->execute([$id]);
+            $doc = $st->fetch(PDO::FETCH_ASSOC);
+        }
+    }
+
     $autoAdded = 0; $autoChanged = 0;
     if ($perms['canEdit'] && $doc['review_status'] === 'confirmed' && $doc['part_d_id']) {
         $diff = type_id_ctrl_source_diff($db, $id, (int)$doc['part_d_id']);
@@ -210,7 +225,7 @@ case 'get':
     $dates = computeDocDates($items);
     jout(['success'=>true,'doc'=>$doc,'items'=>$items,'doc_date_earliest'=>$dates['earliest'],'sign_date_latest'=>$dates['latest'],
           'project_info'=>projectInfoText($db,(int)$doc['part_d_id']),
-          'auto_added_count'=>$autoAdded, 'auto_changed_count'=>$autoChanged]);
+          'auto_added_count'=>$autoAdded, 'auto_changed_count'=>$autoChanged, 'auto_merged_count'=>$autoMerged]);
 
 case 'delete_header':
     needAdmin($perms);
@@ -410,7 +425,9 @@ case 'fetch_ext_for_part':
             'ref_source'=>$er['source'], 'ref_attach_id'=>(int)$er['attach_id'], 'ref_ds_pk'=>(int)$er['ds_pk'],
             'ref_source_label'=>type_id_ctrl_ref_source_label($er['source'], $er['kind'] ?? null),
             'ref_file_name'=>$er['file_name'] ?? null, 'ref_bom_tag'=>$er['bom_tag'] ?? null,
+            'ref_cat_id'=>!empty($er['cat_id']) ? (int)$er['cat_id'] : null,
             'ref_broken'=>false, 'effective_date'=>$er['doc_date'], 'doc_no_text'=>$er['doc_name'], 'file_url'=>null,
+            'revisions'=>[],
         ];
     }, $ext);
     // 新增流程(尚未存檔)選定料號後，畫面上的「建立日期(最早外來文件日期)」與「製程」原本要存檔後
@@ -502,6 +519,20 @@ case 'sync_all_missing':
     jout(['success'=>true,'part_count'=>$partCount,'item_count'=>$itemCount]);
 
 // ── 廠內「自家出的圖」標籤設定：從 is_own_drawing=1 的類別挑選要納入本模組的 ──────
+case 'void_cats_get':
+    needView($perms);
+    $rows = $db->query("SELECT id, category_name FROM quotation_file_categories ORDER BY category_name")->fetchAll(PDO::FETCH_ASSOC);
+    jout(['success'=>true, 'rows'=>$rows, 'selected'=>type_id_ctrl_void_cat_ids($db), 'can_edit'=>$perms['canAdmin']]);
+
+case 'void_cats_save':
+    needAdmin($perms);
+    $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+    if (!is_array($ids)) $ids = [];
+    // 只認真的存在的類別，其餘一律忽略（鐵律8：前端擋一次，後端同規則再擋一次）
+    $valid = array_map('intval', $db->query("SELECT id FROM quotation_file_categories")->fetchAll(PDO::FETCH_COLUMN));
+    type_id_ctrl_void_cat_save($db, array_values(array_intersect(array_map('intval', $ids), $valid)), $uname);
+    jout(['success'=>true]);
+
 case 'get_own_drawing_categories':
     needAdmin($perms);
     $rows = $db->query("SELECT id, category_name, type_id_ctrl_include,
