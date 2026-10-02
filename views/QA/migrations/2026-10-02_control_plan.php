@@ -32,8 +32,12 @@ $ddl['cp_special_class'] = "CREATE TABLE IF NOT EXISTS cp_special_class (
   class_name VARCHAR(50) NOT NULL,
   note VARCHAR(255) DEFAULT NULL,
   sort_order INT DEFAULT 0,
-  is_active TINYINT DEFAULT 1
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='特殊特性分類(對應PFMEA的classification)'";
+  is_active TINYINT DEFAULT 1,
+  sev_min TINYINT DEFAULT NULL COMMENT '嚴重度下限(1~10)，NULL=不限制；依AS文件3-TD-01門檻判定用',
+  sev_max TINYINT DEFAULT NULL COMMENT '嚴重度上限',
+  occ_min TINYINT DEFAULT NULL COMMENT '發生率下限(1~10)，NULL=不限制',
+  occ_max TINYINT DEFAULT NULL COMMENT '發生率上限'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='特殊特性分類(依AS文件3-TD-01：關鍵特性CC/重要特性SC，依PFMEA嚴重度/發生率數值判定)'";
 
 $ddl['cp_reaction_opt'] = "CREATE TABLE IF NOT EXISTS cp_reaction_opt (
   opt_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -181,11 +185,17 @@ $seed('cp_stage', [
     ['production', '量產 / 生產', '',                    3, 1, '正式生產階段。頻率取自 SIP 檢驗項目或抽樣規則。'],
 ], "INSERT INTO cp_stage (stage_code,stage_name,default_freq,sort_order,is_active,note) VALUES (?,?,?,?,?,?)");
 
+// 依 AS 文件 3-TD-01「失效模式及效應分析應用辦法」第5.14節：
+// 關鍵特性CC＝嚴重度9~10(需於PFMEA標註)／重要特性SC＝嚴重度5~8或發生率4~10(製程上需特別管制)。
+// 一般特性無符號、不建一筆（維持「沒有分類=一般特性」的既有語意，3-TD-01的表格上它的符號欄本來就是「無」）。
+// 判定一律依PFMEA的severity/occurrence數值算，不比對classification文字——
+// PFMEA自己的自動判定(pfmea_classify_rule_get)目前是二分法、沒有9~10那一段，
+// 只比文字永遠配不到「關鍵特性」，見 cp_special_class_match() 的說明。
 $seed('cp_special_class', [
-    ['◇', '重要特性', '對應 PFMEA classification「重要特性」', 1, 1],
-    ['▽', '關鍵特性', '影響安全或法規符合性', 2, 1],
-    ['☆', '客戶指定', '客戶圖面或合約指定的特殊特性', 3, 1],
-], "INSERT INTO cp_special_class (symbol,class_name,note,sort_order,is_active) VALUES (?,?,?,?,?)");
+    ['CC', '關鍵特性', '依 AS 文件 3-TD-01：嚴重度9~10，需於PFMEA標註。', 1, 1, 9, 10, null, null],
+    ['SC', '重要特性', '依 AS 文件 3-TD-01：嚴重度5~8或發生率4~10，製程上需特別管制。', 2, 1, 5, 8, 4, 10],
+    ['☆', '客戶指定', '非 AS 文件 3-TD-01 定義的官方分類；如客戶合約另有指定特殊特性要求可手動啟用，不依數值自動判定。', 3, 0, null, null, null, null],
+], "INSERT INTO cp_special_class (symbol,class_name,note,sort_order,is_active,sev_min,sev_max,occ_min,occ_max) VALUES (?,?,?,?,?,?,?,?,?)");
 
 // is_default＝自動帶入時用哪一列當預設。預設挑「隔離標示，通知品管判定」——
 // 它最通用、而且不預設任何處置結論（退修／報廢／特採是業務判斷，不可由系統先填）。

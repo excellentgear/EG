@@ -168,6 +168,43 @@ function cp_special_classes(PDO $db, bool $onlyActive = false): array
 }
 
 /**
+ * 依嚴重度(severity)／發生率(occurrence)比對出對應的特殊特性分類。
+ * 依 AS 文件 3-TD-01「失效模式及效應分析應用辦法」第5.14節：
+ *   關鍵特性 CC：嚴重度9~10
+ *   重要特性 SC：嚴重度5~8 或 發生率4~10
+ * 兩個條件（嚴重度落在範圍內、或發生率落在範圍內）是 OR，任一成立即算命中——
+ * 3-TD-01 原文就是寫「嚴重度5~8發生率4~10」，不是兩者都要成立。
+ *
+ * 【為什麼不比對 PFMEA 填的 classification 文字，改依數值判定】
+ * PFMEA 自己的自動判定（pfmea_classify_rule_get）目前是二分法，門檻只有
+ * S 5~8 或 O 4~10 命中「重要特性」，否則「一般特性」——沒有 9~10 那一段，
+ * 全站 109 筆 PFMEA 資料嚴重度最高只到 8，從未出現過 9~10，這解釋了為什麼
+ * 一開始完全沒注意到 3-TD-01 定義的是三級分類（CP 模組最初用的是 AIAG 通用符號
+ * ◇▽☆，不是這裡的 CC/SC，2026-10-02 由使用者指出並查證確認）。
+ * 只比對文字永遠配不到「關鍵特性」；改成直接依數值判定，才能真正依 3-TD-01 的
+ * 官方標準認定，不管 PFMEA 那邊填的文字是什麼、也不受 PFMEA 判定邏輯二分法的限制。
+ *
+ * 門檻存在 cp_special_class 的 sev_min/sev_max/occ_min/occ_max（管理員可在設定頁調，
+ * 不寫死在程式碼——3-TD-01 文件若被修訂，門檻要跟著改）；只對「有設門檻」的分類
+ * 做自動比對，「客戶指定」這種沒設門檻的分類不會被自動配到，只能手動選。
+ * 多個分類同時命中時取 sort_order 最小（最嚴重）的那一個。
+ */
+function cp_special_class_match(PDO $db, ?int $severity, ?int $occurrence): ?array
+{
+    if ($severity === null && $occurrence === null) return null;
+    $defs = cp_special_classes($db, true);
+    foreach ($defs as $d) {
+        $hit = false;
+        if ($severity !== null && $d['sev_min'] !== null && $d['sev_max'] !== null
+            && $severity >= (int)$d['sev_min'] && $severity <= (int)$d['sev_max']) $hit = true;
+        if (!$hit && $occurrence !== null && $d['occ_min'] !== null && $d['occ_max'] !== null
+            && $occurrence >= (int)$d['occ_min'] && $occurrence <= (int)$d['occ_max']) $hit = true;
+        if ($hit) return $d;   // cp_special_classes() 已依 sort_order 排序，第一個命中的就是最嚴重的
+    }
+    return null;
+}
+
+/**
  * 預設反應計畫（管理員在 cp_reaction_opt 把其中一列 is_default=1）。
  * 沒有指定時回第一個啟用的——總比整欄空白好（那是稽核必看的欄位），帶入後仍可逐列改。
  */
@@ -764,7 +801,8 @@ function cp_pfmea_by_process(PDO $db, ?int $partDId): array
         foreach ($st as $r) {
             $pn = (int)$r['process_code'];
             if (!isset($out['by_proc'][$pn])) {
-                $out['by_proc'][$pn] = ['class' => [], 'prev' => [], 'det' => [], 'req' => [], 'func' => [], 'max_rpn' => 0];
+                $out['by_proc'][$pn] = ['class' => [], 'prev' => [], 'det' => [], 'req' => [], 'func' => [],
+                                         'max_rpn' => 0, 'matched_class' => null];
             }
             $b = &$out['by_proc'][$pn];
             foreach ([['classification','class'],['prevention_controls','prev'],['detection_controls','det'],
@@ -773,6 +811,16 @@ function cp_pfmea_by_process(PDO $db, ?int $partDId): array
                 if ($v !== '' && !in_array($v, $b[$pair[1]], true)) $b[$pair[1]][] = $v;
             }
             $b['max_rpn'] = max($b['max_rpn'], (int)$r['rpn']);
+
+            // 依 3-TD-01：這個失效模式的 severity/occurrence 查出對應分類，
+            // 一個製程下有好幾個失效模式時，整個製程取「最嚴重」的那一個（見 cp_special_class_match 排序）。
+            $sev = $r['severity'] !== null ? (int)$r['severity'] : null;
+            $occ = $r['occurrence'] !== null ? (int)$r['occurrence'] : null;
+            $m = cp_special_class_match($db, $sev, $occ);
+            if ($m) {
+                $cur = $b['matched_class'];
+                if (!$cur || (int)$m['sort_order'] < (int)$cur['sort_order']) $b['matched_class'] = $m;
+            }
             unset($b);
         }
     } catch (Throwable $e) {}
@@ -923,7 +971,13 @@ function cp_autofill_preview(PDO $db, array $opt): array
             if ($pfp['det'])  $parts[] = '偵測：' . implode('；', array_slice($pfp['det'], 0, 2));
             $ctrlMethod = implode("\n", $parts);
         }
-        $specialText = $pfp && $pfp['class'] ? implode('、', array_slice($pfp['class'], 0, 2)) : '';
+        // 依 3-TD-01 的嚴重度/發生率數值判定（cp_special_class_match，見該函式說明），
+        // 不比對 PFMEA 填的 classification 文字——理由同函式註解。
+        $matchedClass = $pfp ? ($pfp['matched_class'] ?? null) : null;
+        $specialClassId = $matchedClass ? (int)$matchedClass['class_id'] : null;
+        $specialText = $matchedClass
+            ? ($matchedClass['symbol'] . ' ' . $matchedClass['class_name'])
+            : '';
 
         /* 製程特性（CP 上指「對應這個產品特性的可控製程變數」，例如砂輪修整量、轉速）
            刻意不自動帶 PFMEA 的 function_desc：那是製程層級的「製程功能／要求」，
@@ -957,6 +1011,7 @@ function cp_autofill_preview(PDO $db, array $opt): array
                 'char_no'            => (string)($p['seq'] . '-' . ($k + 1)),
                 'char_product'       => trim((string)($it['ctrl_point'] ?? '')),
                 'char_process'       => '',   // 見上方說明：不逐列套製程層級的 PFMEA 功能描述
+                'special_class_id'   => $specialClassId,
                 'special_class_text' => $specialText,
                 'spec_text'          => $specText,
                 'up_limit'           => $up,

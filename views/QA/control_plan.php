@@ -360,13 +360,19 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
             <div style="margin-bottom:18px;"><button class="btn-w" id="btnSaveStage"><i class="fa fa-save"></i> 儲存階段設定</button></div>
 
             <div class="cp-note">
-                <b>特殊特性分類</b>：CP 上那一欄的符號與名稱。自動帶入時會去抓 PFMEA 的
-                <code>classification</code> 欄文字（實測值例如「重要特性」），文字對得上這裡的名稱就自動選到。
-                <b>已經被 CP 用到的分類不會被真的刪除，只會停用</b>——真刪掉舊 CP 那一欄會變空白。
+                <b>特殊特性分類</b>：CP 上那一欄的符號與名稱，<b>依 AS 文件 3-TD-01「失效模式及效應分析應用辦法」第5.14節</b>
+                定為「關鍵特性 CC」與「重要特性 SC」（2026-10-02 經使用者指正修訂——原本用的是
+                AIAG 通用符號 ◇▽☆，不是公司自己文件規定的符號）。
+                <div style="margin-top:4px;">自動帶入時<b>直接依 PFMEA 失效模式的嚴重度／發生率數值</b>比對下面設的門檻判定，
+                <b>不比對 PFMEA 填的文字</b>——PFMEA 自己的自動判定目前只有二分法（沒有 9~10 那一段），
+                只比文字永遠配不到「關鍵特性」。嚴重度落在範圍內「或」發生率落在範圍內，任一成立即命中；
+                同時命中多個分類時取排序在前（較嚴重）的那一個。門檻留空＝那個條件不比對。</div>
+                <div style="margin-top:4px;"><b>已經被 CP 用到的分類不會被真的刪除，只會停用</b>——真刪掉舊 CP 那一欄會變空白。</div>
             </div>
             <div class="cp-scroll" style="margin-bottom:14px;">
-                <table class="cp-t" id="tClass" style="min-width:760px;" data-eg-row-add="clsAdd" data-eg-row-del="clsDel">
-                    <thead><tr><th style="width:80px;">符號</th><th style="width:170px;">名稱</th><th>說明</th>
+                <table class="cp-t" id="tClass" style="min-width:980px;" data-eg-row-add="clsAdd" data-eg-row-del="clsDel">
+                    <thead><tr><th style="width:70px;">符號</th><th style="width:130px;">名稱</th><th>說明</th>
+                        <th style="width:150px;">嚴重度範圍</th><th style="width:150px;">發生率範圍</th>
                         <th style="width:66px;">排序</th><th style="width:60px;">啟用</th><th style="width:46px;"></th></tr></thead>
                     <tbody></tbody>
                 </table>
@@ -486,7 +492,9 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
                     機台是從<b>報工紀錄</b>抓該製程實際用過的機台（製令本身的機台欄幾乎沒人填）。</li>
                 <li><b>產品特性／規格公差／量測技術／檢具／頻率</b>＝該料號該製程的
                     <b>SIP 標準檢驗指導書</b>的檢驗項目（只取已核准的版次）。找不到時退回「該製程的檢驗項目預設值範本」。</li>
-                <li><b>特殊特性、管制方法</b>＝該料號的 <b>PFMEA</b>（分類、預防管制、偵測管制）。</li>
+                <li><b>特殊特性</b>＝依該料號 PFMEA 失效模式的<b>嚴重度／發生率數值</b>，依 AS 文件 3-TD-01
+                    的門檻判定出「關鍵特性 CC」或「重要特性 SC」（不是比對 PFMEA 填的文字，門檻在「設定」可調）；
+                    <b>管制方法</b>＝該料號的 PFMEA（預防管制、偵測管制）。</li>
                 <li><b>樣本／頻率</b>：階段若設了預設頻率就用它（試作段＝100% 全尺寸），否則用 SIP 上的頻率。</li>
             </ul>
             <p>帶不出來的欄位會<b>明確標示要人工填</b>，不會假裝有資料。</p>
@@ -1189,7 +1197,8 @@ function renderAutoNote(){
     }
     h += '<b>資料從哪裡來</b>：製程列＝該訂單綁定的<b>製令</b>的製程鏈（依製程序）；'
       +  '產品特性／規格公差／量測技術／檢具／頻率＝該料號該製程的 <b>SIP</b>（只取已核准版次），'
-      +  '找不到時退回該製程的<b>檢驗項目預設值範本</b>；特殊特性與管制方法＝該料號的 <b>PFMEA</b>。'
+      +  '找不到時退回該製程的<b>檢驗項目預設值範本</b>；特殊特性依 PFMEA 失效模式的<b>嚴重度／發生率數值</b>'
+      +  '對 AS 文件 3-TD-01 門檻判定（關鍵特性CC／重要特性SC），管制方法＝該料號的 PFMEA 預防偵測管制。'
       +  '機台是從<b>報工紀錄</b>抓該製程實際用過的機台。帶不出來的欄位會標示要人工填，不會假裝有資料。';
     $('#autoNote').html(h);
 }
@@ -1299,12 +1308,15 @@ $(document).on('click', '[data-pickbom]', function(){
     $('#btnPreview').trigger('click');
 });
 function mapPrevProc(p){
-    return { process_no: p.process_no, process_name: p.process_name, op_desc: '',
+    // op_desc 與 special_class_id 都要帶後端算好的真值，不可寫死空／null——
+    // 後端已經依 3-TD-01 的嚴重度/發生率算出 special_class_id，op_desc 帶的是
+    // PFMEA 製程功能/要求，寫死掉等於白算了（2026-10-02 修正，原本兩處都遺漏）。
+    return { process_no: p.process_no, process_name: p.process_name, op_desc: p.op_desc || '',
              machine: p.machine, jig_tool: '', maker_id_no: p.maker_id_no, maker_name: p.maker_name,
              is_outsource: p.is_outsource, bom_sn: p.bom_sn, src: p.src || 'bom', note: '',
              hint: p.hint || '', items: (p.items || []).map(function(it){
                  return { char_no: it.char_no, char_product: it.char_product, char_process: it.char_process,
-                          special_class_id: null, special_class_text: it.special_class_text,
+                          special_class_id: it.special_class_id || null, special_class_text: it.special_class_text,
                           spec_text: it.spec_text, up_limit: it.up_limit, lo_limit: it.lo_limit,
                           eval_method: it.eval_method, tool_id: it.tool_id, tool_no: it.tool_no,
                           sample_size: it.sample_size, sample_freq: it.sample_freq,
@@ -1491,10 +1503,20 @@ function renderCfg(){
     renderTagCfg();
 }
 function clsRow(c){
+    // 嚴重度/發生率門檻：留空＝那個條件不比對（存 NULL）。範圍輸入框一律 1~10（S/O 量表上限）。
+    function rangeInput(f1, f2, v1, v2) {
+        return '<div style="display:flex;gap:3px;align-items:center;">'
+          + '<input type="number" min="1" max="10" data-cf="'+f1+'" value="'+(v1==null?'':v1)+'" placeholder="下限" style="width:54px;height:26px;font-size:12px;">'
+          + '<span class="muted">~</span>'
+          + '<input type="number" min="1" max="10" data-cf="'+f2+'" value="'+(v2==null?'':v2)+'" placeholder="上限" style="width:54px;height:26px;font-size:12px;">'
+          + '</div>';
+    }
     return '<tr data-cid="'+(c.class_id||'')+'">'
       + '<td><input type="text" data-cf="symbol" value="'+esc(c.symbol||'')+'" style="width:100%;height:26px;font-size:13px;text-align:center;"></td>'
       + '<td><input type="text" data-cf="class_name" value="'+esc(c.class_name||'')+'" style="width:100%;height:26px;font-size:13px;"></td>'
       + '<td><input type="text" data-cf="note" value="'+esc(c.note||'')+'" style="width:100%;height:26px;font-size:13px;"></td>'
+      + '<td>'+rangeInput('sev_min','sev_max',c.sev_min,c.sev_max)+'</td>'
+      + '<td>'+rangeInput('occ_min','occ_max',c.occ_min,c.occ_max)+'</td>'
       + '<td><input type="number" data-cf="sort_order" value="'+(c.sort_order||0)+'" style="width:56px;height:26px;font-size:13px;"></td>'
       + '<td style="text-align:center;"><input type="checkbox" data-cf="is_active"'+(c.class_id?(+c.is_active===1?' checked':''):' checked')+'></td>'
       + '<td style="text-align:center;"><a href="#" class="rowdel" style="color:#8c2d18;"><i class="fa fa-times"></i></a></td></tr>';
@@ -1541,15 +1563,25 @@ $('#btnSaveStage').on('click', function(){
     });
 });
 $('#btnSaveClass').on('click', function(){
-    var rows = [];
+    var rows = [], numOrNull = function(v){ v = ($.trim(v)||''); return v === '' ? null : +v; };
     $('#tClass tbody tr').each(function(i){
         var $t = $(this), nm = $t.find('[data-cf=class_name]').val().trim();
         if (!nm) return;
         rows.push({ class_id: $t.data('cid') || 0, symbol: $t.find('[data-cf=symbol]').val(),
             class_name: nm, note: $t.find('[data-cf=note]').val(),
             sort_order: $t.find('[data-cf=sort_order]').val() || (i+1),
-            is_active: $t.find('[data-cf=is_active]').is(':checked') ? 1 : 0 });
+            is_active: $t.find('[data-cf=is_active]').is(':checked') ? 1 : 0,
+            sev_min: numOrNull($t.find('[data-cf=sev_min]').val()), sev_max: numOrNull($t.find('[data-cf=sev_max]').val()),
+            occ_min: numOrNull($t.find('[data-cf=occ_min]').val()), occ_max: numOrNull($t.find('[data-cf=occ_max]').val()) });
     });
+    // 前端先擋一次（鐵律8，後端 excluded_as_tags_save 同款規則再擋一次）：下限不可大於上限
+    for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if ((r.sev_min != null && r.sev_max != null && r.sev_min > r.sev_max)
+         || (r.occ_min != null && r.occ_max != null && r.occ_min > r.occ_max)) {
+            toast('「' + r.class_name + '」的範圍下限不可大於上限。', true); return;
+        }
+    }
     post('special_class_save', { rows: JSON.stringify(rows) }, function(res){
         toast(res.message); CLASSES = res.rows || CLASSES; renderCfg();
     });

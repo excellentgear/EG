@@ -305,8 +305,19 @@ case 'special_class_save': {
     $db->beginTransaction();
     try {
         $keep = [];
-        $up = $db->prepare("UPDATE cp_special_class SET symbol=?, class_name=?, note=?, sort_order=?, is_active=? WHERE class_id=?");
-        $ins = $db->prepare("INSERT INTO cp_special_class (symbol, class_name, note, sort_order, is_active) VALUES (?,?,?,?,?)");
+        $up = $db->prepare(
+            "UPDATE cp_special_class SET symbol=?, class_name=?, note=?, sort_order=?, is_active=?,
+                    sev_min=?, sev_max=?, occ_min=?, occ_max=? WHERE class_id=?"
+        );
+        $ins = $db->prepare(
+            "INSERT INTO cp_special_class (symbol, class_name, note, sort_order, is_active, sev_min, sev_max, occ_min, occ_max)
+             VALUES (?,?,?,?,?,?,?,?,?)"
+        );
+        // 門檻一律 1~10（S/O 量表上限），留空存 NULL＝那個條件不比對；下限不可大於上限（鐵律8：前端擋過的這裡再擋一次）
+        $numOrNull = function ($v) {
+            if ($v === null || $v === '') return null;
+            $n = (int)$v; return max(1, min(10, $n));
+        };
         foreach ($rows as $i => $r) {
             $nm = trim((string)($r['class_name'] ?? ''));
             if ($nm === '') continue;
@@ -314,9 +325,13 @@ case 'special_class_save': {
             $note = trim((string)($r['note'] ?? ''));
             $so = (int)($r['sort_order'] ?? ($i + 1));
             $act = (int)!empty($r['is_active']);
+            $sevMin = $numOrNull($r['sev_min'] ?? null); $sevMax = $numOrNull($r['sev_max'] ?? null);
+            $occMin = $numOrNull($r['occ_min'] ?? null); $occMax = $numOrNull($r['occ_max'] ?? null);
+            if ($sevMin !== null && $sevMax !== null && $sevMin > $sevMax) [$sevMin, $sevMax] = [$sevMax, $sevMin];
+            if ($occMin !== null && $occMax !== null && $occMin > $occMax) [$occMin, $occMax] = [$occMax, $occMin];
             $id = (int)($r['class_id'] ?? 0);
-            if ($id > 0) { $up->execute([$sym, $nm, $note, $so, $act, $id]); $keep[] = $id; }
-            else { $ins->execute([$sym, $nm, $note, $so, $act]); $keep[] = (int)$db->lastInsertId(); }
+            if ($id > 0) { $up->execute([$sym, $nm, $note, $so, $act, $sevMin, $sevMax, $occMin, $occMax, $id]); $keep[] = $id; }
+            else { $ins->execute([$sym, $nm, $note, $so, $act, $sevMin, $sevMax, $occMin, $occMax]); $keep[] = (int)$db->lastInsertId(); }
         }
         // 沒送回來的＝畫面上被刪掉的；但已經被 CP 用到的不可真刪，改為停用（否則舊 CP 的特殊特性會變空白）
         $all = $db->query("SELECT class_id FROM cp_special_class")->fetchAll(PDO::FETCH_COLUMN) ?: [];
