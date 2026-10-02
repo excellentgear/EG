@@ -65,6 +65,12 @@ function dwg_ensure_schema(PDO $pdo): void {
     try { $pdo->exec("ALTER TABLE qc_drawing_change ADD COLUMN updated_at DATETIME NULL"); } catch (Throwable $e) {}
     // 自動建立的來源：attach=料號附件上傳／imgedit=批圖編輯器／manual=手動登錄
     try { $pdo->exec("ALTER TABLE qc_drawing_change ADD COLUMN create_source VARCHAR(10) NOT NULL DEFAULT 'manual' COMMENT 'manual/attach/imgedit'"); } catch (Throwable $e) {}
+    // ── 2026-10-02 使用者要求：要可以「僅記錄，不通知簽收」 ──
+    // 補登以前的變更、或廠內自己小改圖本來就沒有人要簽收時，這張單仍然要正式成立
+    //（照樣複製檢驗標準新版次、回寫主檔版次），只是不建立簽收名單、也不發任何通知。
+    // 一定要存成欄位不可以只當成「這一次存檔的動作」：草稿先存成免簽收、之後才按送出時，
+    // dwg_submit_change() 要知道這一張不可以發通知（它是另一個請求，讀不到當時勾了什麼）。
+    try { $pdo->exec("ALTER TABLE qc_drawing_change ADD COLUMN no_ack TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=僅記錄不通知簽收（不建立簽收名單、不發通知；仍正式成立）'"); } catch (Throwable $e) {}
 
     // 預設簽收（通知）對象：全站一組（使用者拍板）。開單者可以再加人，但不可移除這裡設定的對象。
     try {
@@ -785,6 +791,9 @@ function dwg_apply_revision_to_part(PDO $pdo, array $c, int $byId, string $byNam
  *   ② 寫入簽收名單（一律併入全站預設簽收對象，開單者移不掉）
  *   ③ 通知尚未簽收的人（行動型，沒簽會一直留在置頂未讀）
  *
+ * no_ack=1（僅記錄，不通知簽收）時**②③都不做**，①照做——這張單還是正式成立的變更紀錄，
+ * 只是沒有任何人要簽收（補登歷史變更、廠內小改圖）。
+ *
  * status='DRAFT' 時（自動偵測換圖產生的草稿）**①③都不做**，等使用者補完內容按送出
  * （dwg_submit_change）才正式成立——半成品不該先把 QC 的檢驗標準換掉、也不該先驚動全公司。
  *
@@ -793,7 +802,7 @@ function dwg_apply_revision_to_part(PDO $pdo, array $c, int $byId, string $byNam
  * @param array $p d_id 必填；status=DRAFT 時 summary 可留空，其餘必填。
  *                 old_revision/new_revision（客戶版次）、int_old_revision/int_new_revision（廠內版次＝發行日）、
  *                 rev_scope(customer|internal)、change_date、source、customer_doc_no、from_process_no、detail、
- *                 ack_users[]、ack_depts[]、created_by、trigger_attachment_id、create_source 選填
+ *                 ack_users[]、ack_depts[]、no_ack、created_by、trigger_attachment_id、create_source 選填
  * @return array{id:int, change_no:string, new_version_id:?int, old_version_id:?int, status:string}
  */
 function dwg_create_change(PDO $pdo, array $p): array {
@@ -811,10 +820,14 @@ function dwg_create_change(PDO $pdo, array $p): array {
     $csrc   = in_array(($p['create_source'] ?? ''), ['attach', 'imgedit'], true) ? $p['create_source'] : 'manual';
     $fromP  = (($p['from_process_no'] ?? '') === '' || $p['from_process_no'] === null) ? null : (int)$p['from_process_no'];
     $uid    = (int)($p['created_by'] ?? 0);
+    // 僅記錄不通知簽收（使用者要求 2026-10-02）：這個模式的語意就是「沒有人要簽」，
+    // 所以連「全站預設簽收對象」也刻意不併進來——併回去會留下一份永遠不會被簽收的名單掛在那裡，
+    // 清單上一直顯示 0/N 未簽收。那條強制併入的守門只適用於「要通知」的那一條路。
+    $noAck  = !empty($p['no_ack']) ? 1 : 0;
     // 簽收對象可以混合指定部門與個人；部門在這裡展開成人員（含子部門、只列在職）。
     // 全站預設簽收對象一律併進來——前端把 chip 的 × 拿掉只是體驗，真正的守門在這一行。
-    $def    = dwg_default_ack_get($pdo);
-    $ackIds = dwg_expand_ack_targets($pdo,
+    $def    = $noAck ? ['users' => [], 'depts' => []] : dwg_default_ack_get($pdo);
+    $ackIds = $noAck ? [] : dwg_expand_ack_targets($pdo,
                 array_merge((array)($p['ack_users'] ?? []), $def['users']),
                 array_merge((array)($p['ack_depts'] ?? []), $def['depts']));
     $trigId = ($p['trigger_attachment_id'] ?? null) ? (int)$p['trigger_attachment_id'] : null;
@@ -833,12 +846,12 @@ function dwg_create_change(PDO $pdo, array $p): array {
         $pdo->prepare("INSERT INTO qc_drawing_change
             (change_no, as_doc_no, d_id, old_revision, new_revision, int_old_revision, int_new_revision, rev_scope,
              change_date, source, customer_doc_no, from_process_no, summary, detail,
-             old_version_id, new_version_id, trigger_attachment_id, create_source, status, submitted_at, created_by, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+             old_version_id, new_version_id, trigger_attachment_id, create_source, no_ack, status, submitted_at, created_by, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
             ->execute([$changeNo, dwg_as_doc_no($pdo), $dId, $oldRev, $newRev, ($intOld ?: null), ($intNew ?: null), $scope,
                        (($p['change_date'] ?? '') ?: null), trim((string)($p['source'] ?? '')),
                        trim((string)($p['customer_doc_no'] ?? '')), $fromP,
-                       $summary, trim((string)($p['detail'] ?? '')), $ver['old'], $ver['new'], $trigId, $csrc,
+                       $summary, trim((string)($p['detail'] ?? '')), $ver['old'], $ver['new'], $trigId, $csrc, $noAck,
                        $status, ($status === 'DRAFT' ? null : date('Y-m-d H:i:s')), $uid]);
         $id = (int)$pdo->lastInsertId();
 
@@ -859,8 +872,8 @@ function dwg_create_change(PDO $pdo, array $p): array {
         throw $e;
     }
 
-    // 通知（失敗不影響已寫入的變更紀錄）。草稿不通知。
-    if ($status !== 'DRAFT' && $ackIds) {
+    // 通知（失敗不影響已寫入的變更紀錄）。草稿不通知；僅記錄不通知簽收者 $ackIds 本來就是空的。
+    if ($status !== 'DRAFT' && !$noAck && $ackIds) {
         $partNo = dwg_part_info($pdo, $dId)['part_no'];
         dwg_notify($pdo, $id, '【圖面變更】料號 ' . $partNo . '　請簽收確認',
             dwg_notify_body(['change_no' => $changeNo, 'rev_scope' => $scope, 'old_revision' => $oldRev,
@@ -972,8 +985,29 @@ function dwg_user_name(PDO $pdo, int $uid): string {
 }
 
 /**
+ * 可不可以把這一筆既有的變更紀錄改成「僅記錄，不通知簽收」（唯一實作，前後端共用同一句理由）。
+ *
+ * 不給改的只有一種情況：**已經送出、而且已經有簽收名單**。那些人早就收到「請簽收」的行動型通知，
+ * 事後把名單清空會造成兩個都查不出原因的後果——已經簽收的紀錄整列消失（AS9100 要的追溯證據不見了）、
+ * 還沒簽的人手上留著一則再也清不掉的置頂未讀（簽收鈕要靠名單才出得來）。
+ * 草稿從來沒通知過任何人，所以草稿隨時可以改；原本就是免簽收的單要改回「要通知」也一律放行。
+ *
+ * @param array $cur      qc_drawing_change 的那一列
+ * @param int   $ackTotal 這一筆目前的簽收名單人數
+ * @return array{can:bool, reason:string}
+ */
+function dwg_no_ack_switch_check(array $cur, int $ackTotal): array {
+    if ((string)($cur['status'] ?? '') === 'DRAFT') return ['can' => true, 'reason' => ''];
+    if ($ackTotal <= 0)                             return ['can' => true, 'reason' => ''];
+    return ['can' => false, 'reason' => '這張單已經送出並通知 ' . $ackTotal . ' 位人員簽收，不能再改成「僅記錄，不通知簽收」'
+                                      . '（已簽收的紀錄會消失，未簽收的人會留著一則清不掉的未讀）。'
+                                      . '如果這張單不該存在，請由系統管理員刪除後重新登錄。'];
+}
+
+/**
  * 草稿送出＝正式成立：這時候才複製檢驗標準版次、回寫主檔版次、發簽收通知。
  * 摘要是必填（草稿可以先空著，但送出前一定要寫——只有填表的人知道這次改了什麼）。
+ * no_ack=1（僅記錄不通知簽收）時照樣換版次與回寫主檔，只是不發通知。
  */
 function dwg_submit_change(PDO $pdo, int $id, int $uid): array {
     dwg_ensure_schema($pdo);
@@ -998,15 +1032,20 @@ function dwg_submit_change(PDO $pdo, int $id, int $uid): array {
         throw $e;
     }
 
+    // 僅記錄不通知簽收：一行通知都不發。名單本來就是空的，這裡仍明確判一次，
+    // 免得日後有人在別處補了名單進去，就變成「說不通知卻發了通知」。
     $ackIds = [];
-    try {
-        $a = $pdo->prepare("SELECT user_id FROM qc_drawing_change_ack WHERE change_id=? AND acked_at IS NULL");
-        $a->execute([$id]);
-        // 送出者自己不會收到通知（dwg_notify 會把 actor 過濾掉），回報人數也要跟著扣掉，
-        // 否則畫面會說「已通知 1 位」但其實一封都沒發出去
-        $ackIds = array_values(array_filter(array_map('intval', $a->fetchAll(PDO::FETCH_COLUMN)),
-                    function ($u) use ($uid) { return $u > 0 && $u !== $uid; }));
-    } catch (Throwable $e) {}
+    $noAck  = ((int)($c['no_ack'] ?? 0) === 1);
+    if (!$noAck) {
+        try {
+            $a = $pdo->prepare("SELECT user_id FROM qc_drawing_change_ack WHERE change_id=? AND acked_at IS NULL");
+            $a->execute([$id]);
+            // 送出者自己不會收到通知（dwg_notify 會把 actor 過濾掉），回報人數也要跟著扣掉，
+            // 否則畫面會說「已通知 1 位」但其實一封都沒發出去
+            $ackIds = array_values(array_filter(array_map('intval', $a->fetchAll(PDO::FETCH_COLUMN)),
+                        function ($u) use ($uid) { return $u > 0 && $u !== $uid; }));
+        } catch (Throwable $e) {}
+    }
     if ($ackIds) {
         $partNo = dwg_part_info($pdo, (int)$c['d_id'])['part_no'];
         dwg_notify($pdo, $id, '【圖面變更】料號 ' . $partNo . '　請簽收確認', dwg_notify_body($c), $ackIds, $uid, 'reply');
@@ -1028,7 +1067,7 @@ function dwg_submit_change(PDO $pdo, int $id, int $uid): array {
     } catch (Throwable $e) {}
 
     return ['id' => $id, 'change_no' => (string)$c['change_no'], 'new_version_id' => $ver['new'],
-            'notified' => count($ackIds), 'eng_change' => $engChange];
+            'notified' => count($ackIds), 'no_ack' => ($noAck ? 1 : 0), 'eng_change' => $engChange];
 }
 
 /**

@@ -155,10 +155,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 僅廠內版次變更時不動客戶版次（使用者拍板：客戶沒改圖就不該動客戶版次）
             if ($scope === 'internal') { $oldRev = ''; $newRev = ''; }
             $fromP   = ($_POST['from_process_no'] ?? '') === '' ? null : (int)$_POST['from_process_no'];
+            // 僅記錄，不通知簽收（使用者要求 2026-10-02）：不建立簽收名單、不發通知，
+            // 但這張單照樣正式成立（換檢驗標準版次、回寫主檔版次）。
+            $noAck   = (($_POST['no_ack'] ?? '') === '1');
             // 簽收對象可混合指定部門與個人；部門在這裡展開成人員（含子部門、只列在職）。
             // 全站預設簽收對象一律併回去——前端 chip 拿掉 × 只是體驗，真正的守門在這裡（鐵律8）。
-            $defAck  = dwg_default_ack_get($pdo);
-            $ackIds  = dwg_expand_ack_targets($pdo,
+            // 唯一的例外是「僅記錄不通知簽收」：那個模式的語意就是沒有人要簽，併回去只會留下
+            // 一份永遠不會被簽收的名單（清單上一直掛著 0/N 未簽收）。理由見 dwg_create_change()。
+            $defAck  = $noAck ? ['users' => [], 'depts' => []] : dwg_default_ack_get($pdo);
+            $ackIds  = $noAck ? [] : dwg_expand_ack_targets($pdo,
                          array_merge((array)($_POST['ack_users'] ?? []), $defAck['users']),
                          array_merge((array)($_POST['ack_depts'] ?? []), $defAck['depts']));
 
@@ -181,6 +186,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'from_process_no' => ($_POST['from_process_no'] ?? ''),
                     'detail'          => ($_POST['detail'] ?? ''),
                     'ack_users'       => $ackIds,   // 已展開，lib 內再展開一次也是同一個結果（冪等）
+                    'no_ack'          => ($noAck ? 1 : 0),
                     'created_by'      => (int)$uid,
                 ]);
                 echo json_encode(['success' => true, 'id' => $r['id'], 'status' => $r['status']], JSON_UNESCAPED_UNICODE);
@@ -205,20 +211,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (empty($vr['ok'])) throw new Exception($vr['msg']);
             }
 
-            $pdo->beginTransaction();
-            $pdo->prepare("UPDATE qc_drawing_change SET d_id=?, old_revision=?, new_revision=?,
-                           int_old_revision=?, int_new_revision=?, rev_scope=?, change_date=?,
-                           source=?, customer_doc_no=?, from_process_no=?, summary=?, detail=?,
-                           updated_by=?, updated_at=NOW() WHERE id=?")
-                ->execute([$d_id, $oldRev, $newRev, ($intOld ?: null), ($intNew ?: null), $scope,
-                           ($_POST['change_date'] ?: null), trim($_POST['source'] ?? ''),
-                           trim($_POST['customer_doc_no'] ?? ''), $fromP, $summary, trim($_POST['detail'] ?? ''),
-                           (int)$uid, $id]);
             // 簽收名單（重設；已簽收者保留簽收時間）
             $exist = [];
             $e = $pdo->prepare("SELECT user_id, acked_at FROM qc_drawing_change_ack WHERE change_id=?");
             $e->execute([$id]);
             foreach ($e->fetchAll(PDO::FETCH_ASSOC) as $r) $exist[(int)$r['user_id']] = $r['acked_at'];
+            // 改成「僅記錄，不通知簽收」有條件：已送出又已經有簽收名單的單不給改（理由在 lib 裡，
+            // 前端也會先擋一次並顯示同一句話＝鐵律8）。
+            if ($noAck && (int)$cur['no_ack'] !== 1) {
+                $sw = dwg_no_ack_switch_check($cur, count($exist));
+                if (!$sw['can']) throw new Exception($sw['reason']);
+            }
+
+            $pdo->beginTransaction();
+            $pdo->prepare("UPDATE qc_drawing_change SET d_id=?, old_revision=?, new_revision=?,
+                           int_old_revision=?, int_new_revision=?, rev_scope=?, change_date=?,
+                           source=?, customer_doc_no=?, from_process_no=?, summary=?, detail=?, no_ack=?,
+                           updated_by=?, updated_at=NOW() WHERE id=?")
+                ->execute([$d_id, $oldRev, $newRev, ($intOld ?: null), ($intNew ?: null), $scope,
+                           ($_POST['change_date'] ?: null), trim($_POST['source'] ?? ''),
+                           trim($_POST['customer_doc_no'] ?? ''), $fromP, $summary, trim($_POST['detail'] ?? ''),
+                           ($noAck ? 1 : 0), (int)$uid, $id]);
             $pdo->prepare("DELETE FROM qc_drawing_change_ack WHERE change_id=?")->execute([$id]);
             $insA = $pdo->prepare("INSERT INTO qc_drawing_change_ack (change_id, user_id, acked_at) VALUES (?,?,?)");
             foreach ($ackIds as $u) { $insA->execute([$id, $u, ($exist[$u] ?? null)]); }
@@ -226,7 +239,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             // 通知尚未簽收的人（行動型：沒簽會一直留在未讀）。
             // 草稿階段不通知——草稿還沒送出，內容可能還是半成品。
-            $newOnes = ($cur['status'] === 'DRAFT') ? []
+            // 僅記錄不通知簽收者 $ackIds 本來就是空的，這裡再明確判一次（說不通知就一封都不發）。
+            $newOnes = ($cur['status'] === 'DRAFT' || $noAck) ? []
                      : array_values(array_filter($ackIds, function ($u) use ($exist) { return empty($exist[$u]); }));
             if ($newOnes) {
                 $partNo = dwg_part_info($pdo, $d_id)['part_no'];
@@ -411,6 +425,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     .userpick label { font-weight:normal; display:inline-block; width:33%; margin:0; font-size:13px; }
     .rev-box { background:#FFFDF8; border:1px solid var(--line); border-radius:6px; padding:10px 10px 0; margin-bottom:10px; }
     .ro-auto { background:#F2ECE3 !important; color:#6B4423; }
+    /* 勾了「僅記錄，不通知簽收」＝整個簽收對象區塊淡化且點不動（送出時也不會帶名單上去） */
+    .ack-off { opacity:.45; pointer-events:none; }
+    .noack-box { background:#FFFDF8; border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-bottom:8px; }
     .badge-draft { background:#cfc3b2; color:#4A3524; }
     /* 清單列上的「不需建立」：字級小，line-height 一定要自己指定，
        不然會繼承表格列的行高把整列撐高（2026-09-03 急件徽章踩過同一個坑） */
@@ -508,9 +525,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <div class="row">
                     <div class="col-sm-4 form-group">
                         <label>變更範圍（必填）</label>
+                        <!-- 預設「僅廠內版次」（使用者要求 2026-10-02）：實際登錄的變更絕大多數是我們自己重出圖，
+                             客戶真的改圖才要改選上面那個；選項順序也跟著換，不帶 selected 時瀏覽器取第一個。 -->
                         <select class="form-control input-sm" id="f-scope">
-                            <option value="customer">客戶版次變更（客戶＋廠內都換版）</option>
                             <option value="internal">僅廠內版次變更（客戶版次不動）</option>
+                            <option value="customer">客戶版次變更（客戶＋廠內都換版）</option>
                         </select>
                     </div>
                     <div class="col-sm-4 form-group cust-rev"><label>客戶　變更前版次</label>
@@ -541,7 +560,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <div class="row">
                 <div class="col-sm-3 form-group"><label>變更日期</label><input type="date" class="form-control input-sm" id="f-date"></div>
                 <div class="col-sm-3 form-group"><label>變更來源</label>
-                    <select class="form-control input-sm" id="f-source"><option>客戶</option><option>內部</option></select></div>
+                    <!-- 預設「內部」（使用者要求 2026-10-02）。注意：選到「客戶」時，送出後系統會自動
+                         建一張工程變更申請單草稿（2-TD-01-01），所以這個預設值會連帶影響那邊要不要開單。 -->
+                    <select class="form-control input-sm" id="f-source"><option>內部</option><option>客戶</option></select></div>
                 <div class="col-sm-3 form-group"><label>客戶文件編號</label><input type="text" class="form-control input-sm" id="f-cdoc"></div>
                 <div class="col-sm-3 form-group"><label>從哪個製程開始受影響</label>
                     <select class="form-control input-sm" id="f-fromproc"></select>
@@ -552,7 +573,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <div id="f-summary-err" class="err-msg" style="font-size:11px;margin-top:3px;display:none;">請填寫變更摘要——只有你知道這次改了什麼</div></div>
             <div class="form-group"><label>變更內容明細</label>
                 <textarea class="form-control" id="f-detail" rows="3"></textarea></div>
-            <div class="form-group"><label>需簽收對象（可混合指定部門與個人；未簽收會一直顯示在置頂未讀）
+            <!-- 僅記錄，不通知簽收（使用者要求 2026-10-02）：補登以前的變更、或廠內自己小改圖本來就
+                 沒有人要簽收時用。這張單照常正式成立，差別只在不建立簽收名單、不發任何通知。 -->
+            <div class="noack-box">
+                <label style="cursor:pointer;margin-bottom:2px;">
+                    <input type="checkbox" id="f-noack" data-eg-skip style="vertical-align:-2px;margin-right:4px;">
+                    <b>僅記錄，不通知簽收</b>
+                </label>
+                <div class="muted-help">勾選後這張單<b>照常正式成立</b>（照樣把檢驗標準複製成新版次、照樣回寫料號主檔版次），
+                    只是<b>不建立簽收名單、不通知任何人</b>——連下面的預設簽收對象也不會被加進來。
+                    補登以前的變更紀錄、或廠內自行重出圖沒有人需要簽收時用。
+                    <span id="noack-lock-note" class="err-msg" style="display:none;"></span></div>
+            </div>
+            <div class="form-group" id="ack-box"><label>需簽收對象（可混合指定部門與個人；未簽收會一直顯示在置頂未讀）
                 <span class="muted-help" id="def-ack-note"></span></label>
                 <div id="f-ack-chips" style="display:flex;flex-wrap:wrap;gap:4px;padding:5px;background:#FCF7F0;
                      border:1px solid var(--line);border-radius:6px;min-height:32px;margin-bottom:4px;"></div>
@@ -673,7 +706,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <li><b>客戶版次</b>：客戶圖面自己的版次（A、B、Rev.2…）。很多客戶圖根本沒有版次，所以不是必填。</li>
                 <li><b>廠內版次</b>：我們自己出的圖，一律用<b>發行章日期</b>當版次（見圖面變更判定依據）。</li>
                 <li><b>客戶版次變更</b>＝客戶改圖：客戶版次與廠內版次<b>兩邊都要換版</b>，存檔後新的客戶版次會<b>回寫料號主檔</b>。</li>
-                <li><b>僅廠內版次變更</b>＝客戶沒改圖、我們自己重出圖：<b>只換廠內版次</b>，客戶版次欄位會反灰不給填，主檔版次也不會被動到。</li>
+                <li><b>僅廠內版次變更</b>＝客戶沒改圖、我們自己重出圖：<b>只換廠內版次</b>，客戶版次欄位會反灰不給填，主檔版次也不會被動到。
+                    <b>這是新登錄時的預設值</b>（實際登錄的變更絕大多數是這一種），客戶真的改圖才改選「客戶版次變更」。</li>
                 <li>廠內版次的前／後日期會依這個料號的<b>舊圖與新圖發行章日期自動帶出</b>，帶不出來代表是首次發行、或那張圖還沒填發行章日期。</li>
             </ul>
 
@@ -685,10 +719,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <li>綁好料號後，點<b>料號本身</b>或旁邊的「<i class="fa fa-picture-o"></i> 開啟圖面」，會用<b>另一個分頁</b>開啟圖面查閱——
                     分頁可以拖到另一個螢幕擺著，一邊看圖一邊填這張表。清單與明細跳窗上的料號同樣點得開；
                     同一個料號重複點會沿用同一個分頁，不會愈開愈多。</li>
-                <li>選變更範圍（客戶版次／僅廠內版次），確認自動帶出的版次日期。</li>
+                <li>選變更範圍（預設<b>僅廠內版次</b>；客戶改圖才改選「客戶版次變更」），確認自動帶出的版次日期。</li>
+                <li>「變更來源」預設<b>內部</b>。<b>改選「客戶」時請留意</b>：送出後系統會順便建一張<b>工程變更申請單草稿</b>（2-TD-01-01）等人接手。</li>
                 <li>填變更摘要（<b>必填</b>，這句話會出現在檢驗人員的提醒上）與明細。</li>
                 <li>指定簽收對象 → 「儲存並通知簽收」。內容還沒想好可以先按「存成草稿」，草稿<b>不會通知任何人、也不會換檢驗標準版次</b>。</li>
+                <li><b>沒有人需要簽收時</b>：勾「<b>僅記錄，不通知簽收</b>」（見下一段）。</li>
             </ol>
+
+            <h4>僅記錄，不通知簽收</h4>
+            <ul>
+                <li>用在<b>補登以前的變更</b>、或<b>廠內自行重出圖而沒有人需要簽收</b>的時候：勾起來之後這張單
+                    <b>照常正式成立</b>——照樣把檢驗標準整組複製成新版次、照樣回寫料號主檔版次、檢驗表 2.0 的
+                    <b>製程提醒照樣會跳</b>，差別只在<b>不建立簽收名單、不發任何通知</b>。</li>
+                <li><b>連「預設簽收對象」也不會被加進來</b>（那是刻意的：既然沒有人要簽，加進去只會在清單上
+                    一直掛著「0/N 未簽收」，永遠不會有人去簽）。</li>
+                <li>和「<b>存成草稿</b>」的差別：草稿是<b>還沒成立</b>（檢驗標準沒換版、主檔版次沒回寫，要再按送出）；
+                    僅記錄是<b>已經成立</b>，只是不通知。</li>
+                <li>清單的「簽收」欄會顯示<b>免簽收</b>，明細也會多一列「簽收方式」寫明——不會跟「忘了指定簽收對象」混在一起。</li>
+                <li><b>已經送出而且已經通知過簽收的單，不能事後改成免簽收</b>：那會讓已簽收的紀錄整列消失（AS9100 要的
+                    追溯證據），未簽的人手上還會留著一則清不掉的置頂未讀。這種情況請由系統管理員刪掉重新登錄。
+                    還是<b>草稿</b>的單隨時可以改（從來沒通知過任何人）。</li>
+            </ul>
 
             <h4>自動偵測換圖</h4>
             <ul>
@@ -709,7 +760,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             <h4>設定入口</h4>
             <ul>
-                <li>右上「<b>設定</b>」（僅管理員）：設定<b>預設簽收對象</b>——這些部門/人員會自動加進每一張變更單，開單者可以再加人但<b>移不掉</b>。</li>
+                <li>右上「<b>設定</b>」（僅管理員）：設定<b>預設簽收對象</b>——這些部門/人員會自動加進每一張變更單，開單者可以再加人但<b>移不掉</b>（唯一的例外是勾了「僅記錄，不通知簽收」的單，那種單完全沒有簽收名單）。</li>
                 <li>哪些附件標籤算「自家出的圖」、哪個標籤代表「作廢」：在<b>料號附件的標籤設定</b>調整。</li>
             </ul>
 
@@ -792,6 +843,9 @@ $(function(){
     var IS_ADMIN=false, DEF_ACK={users:[],depts:[]}, SET_ACK=null, curDetail=null, EDIT_PERM=null;
     // 「不需建立」：可不可以按由後端 dwg_cancel_perm() 決定（料號附件上傳權限／批圖編輯器使用權限）
     var CAN_CANCEL=false, ROWS_BY_ID={};
+    // 僅記錄不通知簽收：這一筆是不是免簽收（PDO 回來是字串 "0"/"1"，不可以直接當布林用）
+    function isNoAck(c){ return !!c && String(c.no_ack)==='1'; }
+    var EDIT_IS_DRAFT=false, NOACK_LOCK='';   // 編輯中那一筆是不是草稿／不給改成免簽收的理由
     /** 這一筆是不是「系統自動偵測換圖建出來、還沒送出」的草稿＝可以按「不需建立」的對象 */
     function isAutoDraft(c){
         return c && c.status==='DRAFT' && (c.create_source==='attach' || c.create_source==='imgedit');
@@ -847,9 +901,11 @@ $(function(){
             var rows=r.rows||[]; CAN_CANCEL = !!r.can_cancel;
             ROWS_BY_ID = {}; rows.forEach(function(c){ ROWS_BY_ID[String(c.id)] = c; });
             $('#dc-list').html(rows.length ? rows.map(function(c){
-                var ack=(c.ack_total>0) ? ((c.ack_done>=c.ack_total)
+                // 免簽收要明寫出來：顯示「—」會讓人以為是忘了指定簽收對象
+                var ack = isNoAck(c) ? '<span class="muted-help" title="建立時勾選「僅記錄，不通知簽收」">免簽收</span>'
+                        : ((c.ack_total>0) ? ((c.ack_done>=c.ack_total)
                         ? '<span class="ack-done">✔ '+c.ack_done+'/'+c.ack_total+'</span>'
-                        : '<span class="ack-wait">'+c.ack_done+'/'+c.ack_total+'</span>') : '—';
+                        : '<span class="ack-wait">'+c.ack_done+'/'+c.ack_total+'</span>') : '—');
                 var st = c.status==='DRAFT' ? '<span class="badge badge-draft">草稿</span>'
                        : '<span class="badge '+(c.status==='CLOSED'?'badge-closed':'badge-open')+'">'+(c.status==='CLOSED'?'已結案':'進行中')+'</span>';
                 // 「不需建立」：系統自動偵測換圖建出來、還沒送出的草稿才給；點它不要順便開明細
@@ -915,7 +971,8 @@ $(function(){
         renderPicked();
         $('#f-oldrev').val(row?row.old_revision:''); $('#f-newrev').val(row?row.new_revision:'');
         $('#f-customer').val(row?(row.customer_name||''):'');
-        $('#f-scope').val(row?(row.rev_scope||'customer'):'customer');
+        // 新建預設「僅廠內版次」（使用者要求 2026-10-02）；既有紀錄一律照它存下來的值顯示
+        $('#f-scope').val(row?(row.rev_scope||'customer'):'internal');
         $('#f-intold').val(row&&row.int_old_revision?String(row.int_old_revision).substring(0,10):'');
         $('#f-intnew').val(row&&row.int_new_revision?String(row.int_new_revision).substring(0,10):'');
         $('#intold-src').text(''); $('#intnew-src').text('');
@@ -926,9 +983,22 @@ $(function(){
             ? '<i class="fa fa-lock"></i> '+esc(EDIT_PERM.reason) : '');
         // 草稿才給「存成草稿」；已送出的單不能退回草稿
         $('#btn-save-draft').toggle(!row || row.status==='DRAFT');
-        $('#btn-save').text(row && row.status==='DRAFT' ? '送出（正式成立並通知簽收）' : '儲存並通知簽收');
+        // 僅記錄不通知簽收：既有紀錄照它存下來的值；按鈕文字與簽收區塊的淡化由 applyNoAck() 統一處理
+        EDIT_IS_DRAFT = !!(row && row.status==='DRAFT');
+        NOACK_LOCK = '';
+        if (row && !isNoAck(row) && !EDIT_IS_DRAFT && (acks||[]).length) {
+            // 已送出又已經有簽收名單的單不給改成免簽收（後端用 dwg_no_ack_switch_check() 擋同一條，
+            // 這裡先擋是為了讓使用者勾下去的當下就知道原因，而不是填完才被退回）
+            NOACK_LOCK = '這張單已經送出並通知 '+(acks||[]).length+' 位人員簽收，不能再改成「僅記錄，不通知簽收」'
+                       + '（已簽收的紀錄會消失，未簽收的人會留著一則清不掉的未讀）。'
+                       + '如果這張單不該存在，請由系統管理員刪除後重新登錄。';
+        }
+        $('#f-noack').prop('checked', !!(row && isNoAck(row))).prop('disabled', !!NOACK_LOCK);
+        $('#noack-lock-note').toggle(!!NOACK_LOCK).text(NOACK_LOCK ? '　'+NOACK_LOCK : '');
+        applyNoAck();
         $('#f-date').val(row&&row.change_date?String(row.change_date).substring(0,10):new Date().toISOString().substring(0,10));
-        $('#f-source').val(row?(row.source||'客戶'):'客戶');
+        // 新建預設「內部」（使用者要求 2026-10-02）
+        $('#f-source').val(row?(row.source||'客戶'):'內部');
         $('#f-cdoc').val(row?row.customer_doc_no:''); $('#f-fromproc').val(row&&row.from_process_no?row.from_process_no:'');
         $('#f-summary').val(row?row.summary:''); $('#f-detail').val(row?row.detail:'');
         // 修改既有紀錄時要把原本的簽收名單帶回來——不帶回來的話，存檔會把名單整個洗掉
@@ -946,6 +1016,19 @@ $(function(){
         $('#detailModal').modal('hide');
         $('#editModal').modal('show');
     }
+    /* 僅記錄，不通知簽收：勾了就把簽收對象整區淡化點不動（送出時也不會帶名單上去），
+       並把主要按鈕的字改成講清楚「不會通知」——按鈕上寫著「並通知簽收」卻一封都不發是最難解釋的狀況。 */
+    function applyNoAck(){
+        var off = $('#f-noack').prop('checked');
+        $('#ack-box').toggleClass('ack-off', off);
+        $('#f-ack-q').prop('disabled', off);
+        if(off) $('#f-ack-dd').hide();
+        $('#btn-save').text(EDIT_IS_DRAFT
+            ? (off ? '送出（正式成立，不通知簽收）' : '送出（正式成立並通知簽收）')
+            : (off ? '儲存（僅記錄，不通知簽收）'   : '儲存並通知簽收'));
+    }
+    $('#f-noack').on('change', applyNoAck);
+
     // 變更範圍切換：僅廠內版次時，客戶版次欄位反灰不給填（後端也會忽略送上來的值）
     function applyScope(){
         var internal = $('#f-scope').val()==='internal';
@@ -1084,7 +1167,9 @@ $(function(){
             alert('請填寫變更摘要——只有你知道這次改了什麼，這句話會出現在檢驗人員的提醒上');
             return;
         }
-        var ackSel=ACK.getSelection();
+        // 僅記錄不通知簽收：一個簽收對象都不送上去（後端也不會併入預設簽收對象）
+        var noAck = $('#f-noack').prop('checked');
+        var ackSel = noAck ? {users:[],depts:[]} : ACK.getSelection();
         var $b=$('#btn-save,#btn-save-draft').prop('disabled',true);
         post({ action:'save_change', id:$('#f-id').val(), d_id:pickedPart.d_id,
             rev_scope:$('#f-scope').val(),
@@ -1094,6 +1179,7 @@ $(function(){
             source:$('#f-source').val(), customer_doc_no:$('#f-cdoc').val(), from_process_no:$('#f-fromproc').val(),
             summary:summary, detail:$('#f-detail').val(),
             keep_draft:(keepDraft?'1':'0'), confirm_password:(confirmPw||''),
+            no_ack:(noAck?'1':'0'),
             ack_users:ackSel.users, ack_depts:ackSel.depts
         }, function(r){
             $b.prop('disabled',false);
@@ -1107,15 +1193,17 @@ $(function(){
                 return;
             }
             $('#editModal').modal('hide'); load();
-            var n=ACK.count();
+            var n = noAck ? 0 : ACK.count();
             alert(keepDraft ? '已存成草稿（尚未通知任何人，也還沒換檢驗標準版次）'
-                            : ('已儲存'+(n?('，並已通知 '+n+' 位人員簽收'):'')));
+                 : (noAck   ? '已儲存（僅記錄：未建立簽收名單，也沒有通知任何人）'
+                            : ('已儲存'+(n?('，並已通知 '+n+' 位人員簽收'):''))));
         }).fail(function(x){ $b.prop('disabled',false); alert('儲存錯誤：'+x.responseText); });
     }
     /* 送出成功後的提示。變更來源＝客戶時後端會自動建一張工程變更申請單草稿（2-TD-01-01），
        這裡要把它講出來並讓使用者直接點過去——只丟一句「已送出」的話，那張草稿會沒人知道。 */
     function afterSubmit(res){
-        var msg = '已送出' + (res.notified ? ('，並已通知 ' + res.notified + ' 位人員簽收') : '');
+        var msg = '已送出' + (res.notified ? ('，並已通知 ' + res.notified + ' 位人員簽收')
+                                           : (res.no_ack ? '（僅記錄：未通知任何人簽收）' : ''));
         var ec = res.eng_change;
         if(ec && ec.ec_id){
             msg += '\n\n' + (ec.message || '');
@@ -1179,6 +1267,7 @@ $(function(){
                 // （2026-09-22；舊資料的 as_doc_no 存的是改號前的字串，只在完全沒有綁定時才拿它頂著）
                 '<tr><th width="120">變更單號</th><td><b>'+esc(c.change_no)+'</b>　<span class="as-tag">AS '+esc(AS_DOC_NO_NOW||c.as_doc_no||'')+'</span></td></tr>'+
                 (c.status==='DRAFT'?'<tr><th>狀態</th><td><span class="badge badge-draft">草稿</span> <span class="muted-help">尚未送出：還沒通知任何人，也還沒換檢驗標準版次。補完內容後按下方「送出」才正式成立。</span></td></tr>':'')+
+                (isNoAck(c)?'<tr><th>簽收方式</th><td><b>僅記錄，不通知簽收</b> <span class="muted-help">建立時勾選：這張單沒有簽收名單，也沒有通知任何人（檢驗表 2.0 的製程提醒不受影響，照樣會跳）。</span></td></tr>':'')+
                 '<tr><th>料號</th><td>'+dwgLink(c.part_no||'', c.d_id)+dwgBtn(c.part_no||'', c.d_id)+
                     (c.customer_name?('　<span class="muted-help">客戶：'+esc(c.customer_name)+'</span>'):'')+'</td></tr>'+
                 '<tr><th>變更範圍</th><td>'+(c.rev_scope==='internal'?'僅廠內版次變更（客戶版次不動）':'客戶版次變更（客戶＋廠內都換版）')+'</td></tr>'+
@@ -1198,7 +1287,9 @@ $(function(){
                    return '<tr><td>'+esc(a.user_cname||('#'+a.user_id))+'</td><td>'+
                           (a.acked_at?('<span class="ack-done">✔ '+String(a.acked_at).substring(0,16)+'</span>'):'<span class="ack-wait">尚未簽收</span>')+
                           '</td><td>'+esc(a.note||'')+'</td></tr>';
-               }).join('') : '<tr><td colspan="3" class="muted-help">未指定簽收人員</td></tr>')+'</tbody></table>';
+               }).join('') : ('<tr><td colspan="3" class="muted-help">'
+                   + (isNoAck(c) ? '僅記錄，不通知簽收——這張單沒有簽收名單（建立時勾選）'
+                                 : '未指定簽收人員') + '</td></tr>'))+'</tbody></table>';
             h+='<b>檢驗項目更新確認</b>（由檢驗人員在檢驗表 2.0 上確認）'+
                '<table class="table table-condensed table-bordered dc-table"><thead><tr><th>製程</th><th width="170">確認時間</th><th>確認人</th><th>備註</th></tr></thead><tbody>'+
                (cfs.length ? cfs.map(function(f){
@@ -1214,7 +1305,9 @@ $(function(){
                     // 草稿：送出才正式成立（複製檢驗標準版次＋回寫主檔版次＋發簽收通知）
                     $('#btn-submit').show().off('click').on('click', function(){
                         if(!String(c.summary||'').trim()){ alert('請先按「修改」把變更摘要填好再送出'); return; }
-                        if(!confirm('送出後會：\n① 把此料號的檢驗標準整組複製成新版次\n② 回寫料號主檔版次\n③ 通知簽收對象\n\n確定送出？')) return;
+                        if(!confirm('送出後會：\n① 把此料號的檢驗標準整組複製成新版次\n② 回寫料號主檔版次\n'
+                            + (isNoAck(c) ? '③ 不通知任何人（這張單是「僅記錄，不通知簽收」）' : '③ 通知簽收對象')
+                            + '\n\n確定送出？')) return;
                         var go = function(pw){
                             post({action:'submit_change', id:c.id, confirm_password:(pw||'')}, function(res){
                                 if(!res.success){ alert(res.message); return; }
