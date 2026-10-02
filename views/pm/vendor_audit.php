@@ -202,6 +202,8 @@ $vaLegacyDocs = $vaLegacy ? [] : vendor_audit_legacy_docs($db);
         table.af-table input.af-score:focus { outline:2px solid #F0A24B; outline-offset:-1px; }
         table.af-table input.af-invalid { background:#ffd6d6; color:#DD5138; border-color:#DD5138; font-weight:bold; }
         #afTable.va-abnormal .af-self-col { display:none; }
+        /* 自評已取消(2026-10-02)：新紀錄不顯示自評欄；舊紀錄(凍結快照 self_w>0)仍照原樣顯示 */
+        #afTable.va-noself .af-self-col, .af-quickfill.va-noself .af-self-col { display:none; }
         .af-summary { margin-top:8px; border:1.5px solid #E8D5B5; border-radius:8px; background:#FFF7E8; padding:8px 12px; font-size:12px; color:#5b3a1e; }
         .af-summary table { width:100%; border-collapse:collapse; }
         .af-summary td, .af-summary th { padding:3px 6px; text-align:center; border-bottom:1px solid #F0E7D5; }
@@ -544,7 +546,6 @@ $vaLegacyDocs = $vaLegacy ? [] : vendor_audit_legacy_docs($db);
             </select></div>
             <div><label>稽核員 <span id="recScopeHint" style="font-size:11px;color:#b5762a;"></span></label>
                 <select id="recAuditor"><option value="">—</option></select></div>
-            <div><label>自評人員</label><input type="text" id="recSelfEval" maxlength="50"></div>
             <div><label>報告編號 <span style="font-size:11px;color:#8a6d45;">(稽核報告文件編號,選填)</span></label><input type="text" id="recReport" maxlength="50"></div>
         </div>
         <div style="margin:8px 0;">
@@ -554,7 +555,7 @@ $vaLegacyDocs = $vaLegacy ? [] : vendor_audit_legacy_docs($db);
             <span id="recReviewLegacy" style="display:none;font-size:11px;color:#c0762c;margin-left:10px;"></span>
         </div>
         <div class="af-attach" id="afAttachBox">
-            <div style="font-weight:bold;color:#5b3a1e;margin:10px 0 4px;"><i class="fa fa-paperclip"></i> 佐證附件（供應商自評表等）</div>
+            <div style="font-weight:bold;color:#5b3a1e;margin:10px 0 4px;"><i class="fa fa-paperclip"></i> 佐證附件</div>
             <div id="afAttachList" style="font-size:12px;"></div>
             <div id="afAttachUp" style="margin-top:5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
                 <input type="file" id="afAttachFile" style="font-size:12px;">
@@ -563,11 +564,11 @@ $vaLegacyDocs = $vaLegacy ? [] : vendor_audit_legacy_docs($db);
                 <span style="font-size:11px;color:#8a6d45;">單檔上限 20MB</span>
             </div>
         </div>
-        <div style="font-size:11px;color:#8a6d45;margin:6px 0;">
-            每項依單項滿分評自評分／評鑑分數（0＝最差）；綜合合格率＝自評率×自評權重＋評鑑率×評鑑權重，達合格分數才判合格。
+        <div style="font-size:11px;color:#8a6d45;margin:6px 0;" id="afScoreHint">
+            每項依單項滿分評「評鑑分數」（0＝最差）；綜合評鑑分數＝各項加總÷總分滿分，達合格分數才判合格。
         </div>
         <div class="af-quickfill" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:6px;font-size:12px;color:#5b3a1e;">
-            <span>自評快速套用：<input type="number" id="qfSelf" min="0" style="width:56px;">
+            <span class="af-self-col">自評快速套用：<input type="number" id="qfSelf" min="0" style="width:56px;">
                 <button type="button" class="b-att2" onclick="quickFillScore('self')">套用全部</button>
                 <button type="button" class="b-att2" style="color:#DD5138;" onclick="quickClearScore('self')">清空</button></span>
             <span>評鑑分數快速套用：<input type="number" id="qfAudit" min="0" style="width:56px;">
@@ -600,7 +601,7 @@ $vaLegacyDocs = $vaLegacy ? [] : vendor_audit_legacy_docs($db);
     <div class="m-head"><span id="signTitle">供應商稽核簽核</span><span class="m-close" onclick="closeMask('signMask')">✕</span></div>
     <div class="m-body">
         <div id="signInfo" style="font-size:13px;color:#5b3a1e;margin-bottom:8px;"></div>
-        <table class="af-table" style="width:100%;"><thead><tr><th>評鑑項目</th><th>單項滿分</th><th>自評合格率</th><th>稽核合格率</th></tr></thead><tbody id="signCatBody"></tbody></table>
+        <table class="af-table" style="width:100%;"><thead><tr id="signCatHead"></tr></thead><tbody id="signCatBody"></tbody></table>
         <div id="signConc" class="af-summary" style="margin-top:8px;"></div>
         <div style="margin-top:10px;"><label>意見／退回原因（核准可留空，退回必填）</label>
             <textarea id="signNote" rows="2" style="width:100%;"></textarea></div>
@@ -651,7 +652,7 @@ $vaLegacyDocs = $vaLegacy ? [] : vendor_audit_legacy_docs($db);
         <div id="rsInfo" style="font-size:13px;color:#5b3a1e;margin-bottom:8px;"></div>
         <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;">
             <div style="flex:1;min-width:280px;">
-                <table class="af-table" style="width:100%;"><thead><tr><th>評鑑項目</th><th>單項滿分</th><th>自評合格率</th><th>稽核合格率</th><th>綜合合格率</th></tr></thead>
+                <table class="af-table" style="width:100%;"><thead><tr id="rsCatHead"></tr></thead>
                 <tbody id="rsCatBody"></tbody></table>
                 <div id="rsConc" class="af-summary" style="margin-top:8px;"></div>
             </div>
@@ -755,8 +756,6 @@ $vaLegacyDocs = $vaLegacy ? [] : vendor_audit_legacy_docs($db);
         <div id="clCatsBox"></div>
         <button type="button" class="b-att2" onclick="clAddCat()"><i class="fa fa-plus"></i> 新增類別</button>
         <div style="margin-top:14px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
-            <label>自評權重 <input type="number" id="clSelfW" step="0.05" min="0" max="1" style="width:70px;"></label>
-            <label>稽核權重 <input type="number" id="clAuditW" step="0.05" min="0" max="1" style="width:70px;"></label>
             <label>合格分數（%）<input type="number" id="clPassRate" step="0.5" min="0" max="100" style="width:70px;"></label>
             <span style="font-size:11px;color:#8a6d45;">綜合評鑑分數達這個分數＝合格；<b>「建議評鑑結果」就是用這個門檻自動判定的</b></span>
             <span>總分滿分：<b id="clTotalMax">0</b>（系統自動計算）</span>
@@ -1010,7 +1009,7 @@ $vaLegacyDocs = $vaLegacy ? [] : vendor_audit_legacy_docs($db);
             <li>對應的 2-PH-01-03／2-PH-01-06 已廢止，<b>此分頁預設不顯示</b>；只有管理員按「已廢止表單」開啟後才看得到，開啟時分頁上方會有紅字標示。<b>開啟也不建議再登錄新的稽核批次</b>，新的評鑑一律走「供應商評鑑」分頁。</li>
             <li><b>模型</b>：每期（上半年 1–6 月／下半年 7–12 月）挑一批廠商稽核。</li>
             <li><b>加入稽核對象</b>：依大類／加工項目篩選後多選加入，或隨機抽 N 家（自納管廠商）；可指定「預定稽核月份」。</li>
-            <li><b>登錄</b>：填「供應商評鑑稽核表」簡版 15 項，每項自評分＋評鑑分數各 0~7；系統自動算各類與綜合評鑑分數（自評×0.3＋評鑑×0.7），<b>達合格分數（預設 75%）判合格</b>。</li>
+            <li><b>登錄</b>：填「供應商評鑑稽核表」簡版 15 項，每項評鑑分數 0~7；系統自動算各類與綜合評鑑分數，<b>達合格分數（預設 75%）判合格</b>。</li>
             <li><b>記錄表</b>（已稽核者）：由 15 項換算 5 大類合格率，含<b>雷達圖</b>；可「列印記錄表」或「一次印全部文件」（查核表＋記錄表為不同文件，各自跳出一個列印視窗；記錄表若有上傳佐證附件會一併接續印出，圖片與 PDF 可直接預覽，其他類型僅顯示檔名）；可上傳供應商簽名回傳掃描檔。</li>
             <li><b>停用廠商</b>（master_data 客戶/廠商設為停用者）：灰底、不可加入、不列入 KPI。</li>
         </ul>
@@ -1025,7 +1024,8 @@ $vaLegacyDocs = $vaLegacy ? [] : vendor_audit_legacy_docs($db);
             <li>加入之後的<b>登錄、簽核、記錄表、列印</b>等操作與「稽核批次」完全相同（共用同一套稽核評鑑表單與流程），本分頁上方的完成度只供自行追蹤參考，不是官方 KPI 指標。</li>
             <li><b>文件右上角會加一個外框標記「新供應商評鑑」</b>：查核表（2-PH-01-02，含給供應商填的空白自評版與稽核員的評鑑版）、評鑑記錄表、以及「一次印全部文件」印出來的每一份都會有，記錄表畫面上也看得到。<b>預定評鑑月份</b>欄位不顯示（本分頁不列入年度計畫）。</li>
             <li><b>查核表是本分頁專用的另一份題庫</b>（工具列「查核表設定」，標題為「查核表設定（○○-新供應商）」）：系統已自動建立預設內容<b>4 類 8 項、單項滿分 10 分、總分 80 分</b>——A.管理（認證／品質手冊與內部稽核）、B.品質（產品追溯／檢驗能力／儀器校驗／不良品隔離）、C.交期（出車收送貨）、D.出貨（待驗品·合格品·廢品隔離與標籤）。管理員可自行增刪、改文字與改單項滿分，與「稽核批次」的 15 項題庫<b>各自獨立、互不影響</b>，也<b>依範疇（外包加工／採購）各自一份</b>。</li>
-            <li>自評/稽核權重與合格率門檻同樣在該設定畫面調整（初始值沿用與稽核批次相同的 自評×0.3＋稽核×0.7、≥75% 判合格，使用者未指定故取此為預設，可自行改）。<b>已完成評分的紀錄會凍結當時的題庫內容</b>，之後調整不影響舊紀錄。</li>
+            <li><b>自評已取消（2026-10-02）</b>：評分表只剩一欄「評鑑分數」，權重必然是 100%，所以查核表設定也只剩「<b>合格分數</b>」一個欄位（不再有自評權重／稽核權重）。
+                <b>已完成評分的舊紀錄會凍結當時的題庫與權重</b>，所以 2026-10-02 以前評過的那幾筆打開、列印出來仍然保有自評欄與當初的 自評×0.3＋稽核×0.7 綜合分數，與當初發出去的紙本一致；新建立的紀錄才是單欄。</li>
         </ul>
 
         <h4>一之二、服務分數（定期評核的 服務20%）</h4>
@@ -1455,7 +1455,7 @@ function renderRecStatus(t){
             + (st==='approved' && t.signed_by_name ? '（主管：'+esc(t.signed_by_name)+' '+(fmtDate(t.signed_at)||'')+'）' : '') + '</div>';
     }
     $('#recStatusBox').html(html).toggle(!!html);
-    $('#afBody input, #recPlanMonth, #recDate, #recMode, #recAuditor, #recSelfEval, #recReport, #recConclusion, #recNote, #qfSelf, #qfAudit, input[name=recReviewType]')
+    $('#afBody input, #recPlanMonth, #recDate, #recMode, #recAuditor, #recReport, #recConclusion, #recNote, #qfSelf, #qfAudit, input[name=recReviewType]')
         .prop('disabled', locked);
     $('.af-quickfill button').prop('disabled', locked);
     $('#btnRecSave, #btnRecComplete').toggle(!locked);
@@ -1490,7 +1490,7 @@ function openRec(tid){
             $au.append('<option value="'+esc(t.auditor)+'">'+esc(t.auditor)+'（原紀錄）</option>');
         $au.val(t.auditor||'');
         $('#recScopeHint').text('本供應商屬「'+(t.scope_label||'')+'」'+((res.auditors||[]).length?'':'—尚未設定稽核員，請先按工具列「稽核員設定」'));
-        $('#recSelfEval').val(t.self_evaluator||''); $('#recReport').val(t.report_no||'');
+        $('#recReport').val(t.report_no||'');
         $('#recNote').val(t.note||'');
         $('input[name=recReviewType]').prop('checked', false);
         // 已停用的舊類別(供應商自主評核/異常檢核)不在可選清單裡，只把它寫成提示文字，不會因為存檔被偷偷改掉
@@ -1562,9 +1562,14 @@ function delAttach(aid){
 function reloadAttach(tid){
     $.getJSON(API,{action:'get_form',target_id:tid},function(res){ if(res.ok) renderAttach(tid,res.target?res.attaches:[]); });
 }
+/** 這一筆要不要顯示自評欄：一律看該筆 cfg 的 self_w（自評 2026-10-02 取消，新紀錄一律 0；
+ *  已評分過的舊紀錄凍結了當時的 0.3/0.7，仍要原樣顯示才對得起當初印出去的紙本） */
+function recHasSelf(cfg){ return (+((cfg||CUR_CFG||{}).self_w) || 0) > 0; }
 function renderForm(scores){
     var html='';
     var cfg = CUR_CFG || {items:META.items};
+    // 自評欄（含快速套用）整欄顯示/隱藏，資料不動
+    $('#afTable, .af-quickfill').toggleClass('va-noself', !recHasSelf(cfg));
     cfg.items.forEach(function(cat){
         html+='<tr class="af-cat"><td class="af-q">'+esc(cat[1])+'</td><td class="af-sc af-self-col">自評</td><td class="af-sc af-audit-col">評鑑分數</td></tr>';
         cat[2].forEach(function(it){
@@ -1611,19 +1616,22 @@ function quickClearScore(kind){
 function recompute(){
     var cfg = CUR_CFG || {items:META.items, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
     var pass=cfg.pass_rate, sw=cfg.self_w, aw=cfg.audit_w, scores=collectScores();
-    var rows='<table><tr><th>分類</th><th>滿分</th><th>自評分</th><th>評鑑分數</th><th>自評率</th><th>評鑑率</th></tr>';
+    var hasSelf=recHasSelf(cfg);
+    var rows='<table><tr><th>分類</th><th>滿分</th>'+(hasSelf?'<th>自評分</th>':'')+'<th>評鑑分數</th>'+(hasSelf?'<th>自評率</th>':'')+'<th>評鑑率</th></tr>';
     var tSelf=0,tAudit=0,tMax=0;
     cfg.items.forEach(function(cat){
         var items=cat[2], cMax=0, cSelf=0, cAudit=0;
         items.forEach(function(it){ var mx=it[3], s=scores[it[0]]||{};
             cMax+=mx; cSelf+=Math.max(0,Math.min(mx,+s.self||0)); cAudit+=Math.max(0,Math.min(mx,+s.audit||0)); });
         tSelf+=cSelf; tAudit+=cAudit; tMax+=cMax;
-        rows+='<tr><td>'+esc(cat[1])+'</td><td>'+cMax+'</td><td>'+cSelf+'</td><td>'+cAudit+'</td><td>'+(cMax?Math.round(cSelf/cMax*1000)/10:0)+'%</td><td>'+(cMax?Math.round(cAudit/cMax*1000)/10:0)+'%</td></tr>';
+        rows+='<tr><td>'+esc(cat[1])+'</td><td>'+cMax+'</td>'+(hasSelf?('<td>'+cSelf+'</td>'):'')+'<td>'+cAudit+'</td>'
+            +(hasSelf?('<td>'+(cMax?Math.round(cSelf/cMax*1000)/10:0)+'%</td>'):'')+'<td>'+(cMax?Math.round(cAudit/cMax*1000)/10:0)+'%</td></tr>';
     });
     var selfR=tMax?Math.round(tSelf/tMax*1000)/10:0, auditR=tMax?Math.round(tAudit/tMax*1000)/10:0;
     var overall=Math.round((selfR*sw+auditR*aw)*10)/10, ok=overall>=pass;
-    rows+='<tr class="af-total"><td>總成績</td><td>'+tMax+'</td><td>'+tSelf+'</td><td>'+tAudit+'</td><td>'+selfR+'%</td><td>'+auditR+'%</td></tr></table>';
-    rows+='<div style="margin-top:6px;">綜合評鑑分數（自評×'+sw+'＋評鑑×'+aw+'）：<b style="font-size:15px;">'+overall+'%</b>　判定：'
+    rows+='<tr class="af-total"><td>總成績</td><td>'+tMax+'</td>'+(hasSelf?('<td>'+tSelf+'</td>'):'')+'<td>'+tAudit+'</td>'
+        +(hasSelf?('<td>'+selfR+'%</td>'):'')+'<td>'+auditR+'%</td></tr></table>';
+    rows+='<div style="margin-top:6px;">綜合評鑑分數'+(hasSelf?'（自評×'+sw+'＋評鑑×'+aw+'）':'')+'：<b style="font-size:15px;">'+overall+'%</b>　判定：'
         +(ok?'<span class="af-judge-pass">合格 (≥'+pass+'%)</span>':'<span class="af-judge-fail">不合格 (<'+pass+'%)</span>')+'</div>';
     $('#afSummary').html(rows);
     renderAutoConclusion(tMax ? overall : null, pass);
@@ -1671,7 +1679,7 @@ function submitRec(){
     var scores=collectScores();
     $.post(API, {action:'record_target', target_id:recTid, audit_date:$('#recDate').val(), plan_month:$('#recPlanMonth').val(),
         audit_mode:$('#recMode').val(), auditor:$('#recAuditor').val(), review_type:$('input[name=recReviewType]:checked').val()||'',
-        self_evaluator:$('#recSelfEval').val(), report_no:$('#recReport').val(),
+        report_no:$('#recReport').val(),
         note:$('#recNote').val(), scores:JSON.stringify(scores)},
     function(res){
         if(!res.ok){ alert(res.error||'儲存失敗'); return; }
@@ -1685,12 +1693,12 @@ function recCompleteErrors(){
     if (!$('#recAuditor').val()) errs.push('請填寫稽核員');
     if (!$('#recDate').val()) errs.push('請先填寫評鑑日期');
     if (!$('input[name=recReviewType]:checked').length) errs.push('請選擇評鑑類別（實地評鑑／限定評鑑）');
-    var scores=collectScores(), badSelf=0, badAudit=0;
+    var scores=collectScores(), badSelf=0, badAudit=0, hasSelf=recHasSelf(CUR_CFG);
     (CUR_CFG&&CUR_CFG.items||[]).forEach(function(cat){
         cat[2].forEach(function(it){
             var iid=it[0], mx=it[3], s=scores[iid]||{};
             var ok=function(v){ return v!=null && v!=='' && /^\d+$/.test(String(v)) && +v>=0 && +v<=mx; };
-            if(!ok(s.self)) badSelf++;
+            if(hasSelf && !ok(s.self)) badSelf++;   // 自評已取消，只有舊紀錄(凍結快照 self_w>0)還要求
             if(!ok(s.audit)) badAudit++;
         });
     });
@@ -1704,7 +1712,7 @@ function completeRec(){
     var scores=collectScores();
     $.post(API, {action:'complete_target', target_id:recTid, audit_date:$('#recDate').val(), plan_month:$('#recPlanMonth').val(),
         audit_mode:$('#recMode').val(), auditor:$('#recAuditor').val(), review_type:$('input[name=recReviewType]:checked').val()||'',
-        self_evaluator:$('#recSelfEval').val(), report_no:$('#recReport').val(),
+        report_no:$('#recReport').val(),
         note:$('#recNote').val(), scores:JSON.stringify(scores)},
     function(res){
         if(!res.ok){ alert(res.error||'完成失敗'); return; }
@@ -1729,8 +1737,10 @@ function openSignMask(tid){
         SIGN_TID = tid;
         $('#signTitle').text('供應商稽核簽核：'+t.maker_id+'（'+t.maker_id_no+'）');
         $('#signInfo').html('評鑑日期：'+(fmtDate(t.audit_date)||'—')+'　評鑑狀況：'+vaModeLabel(t.audit_mode)+'　稽核員：'+esc(t.auditor||'—')+'　建議結論：'+esc(vaConcLabel(t.conclusion)||'—'));
-        var rows='';
-        c.cats.forEach(function(k){ rows+='<tr><td class="af-q">'+esc(k.name)+'</td><td class="af-sc">'+k.max+'</td><td class="af-sc">'+k.self_rate+'%</td><td class="af-sc">'+k.audit_rate+'%</td></tr>'; });
+        var hasSelf=recHasSelf(cfg), rows='';
+        $('#signCatHead').html('<th>評鑑項目</th><th>單項滿分</th>'+(hasSelf?'<th>自評合格率</th>':'')+'<th>評鑑合格率</th>');
+        c.cats.forEach(function(k){ rows+='<tr><td class="af-q">'+esc(k.name)+'</td><td class="af-sc">'+k.max+'</td>'
+            +(hasSelf?('<td class="af-sc">'+k.self_rate+'%</td>'):'')+'<td class="af-sc">'+k.audit_rate+'%</td></tr>'; });
         $('#signCatBody').html(rows);
         $('#signConc').html('綜合合格率：<b style="font-size:16px;">'+c.overall+'%</b>　判定：'+vaJudgeBadgeHtml(c.pass));
         $('#signNote').val('');
@@ -1897,6 +1907,9 @@ function auditFormOneVersion(o, mode){
 /** 查核表列印一律一次印兩個版本：空白自評版(給供應商自己填)＋評鑑版(顯示評鑑分數,製表=稽核員) */
 function auditFormHTML(o){
     o = o || {};
+    // 自評已取消(2026-10-02)：新的查核表只印一份評鑑版；
+    // 舊紀錄(凍結快照 self_w>0)仍照原樣印「空白自評版＋評鑑版」兩份，與當初發出去的紙本一致
+    if (!recHasSelf(o.cfg)) return auditFormOneVersion(o, 'site');
     return '<div style="page-break-after:always;">'+auditFormOneVersion(o,'self')+'</div>'+auditFormOneVersion(o,'site');
 }
 /** noPageCount=true：本印出的內容本來就是多份各自獨立的文件(如查核表自評版+審查版)串接列印，
@@ -2000,12 +2013,17 @@ function openRecordSheet(tid){
         $('#rsInfo').html((t.is_adhoc ? '<span style="float:right;border:2px solid #8A5A2B;border-radius:4px;padding:2px 10px;'
                 + 'font-weight:bold;letter-spacing:2px;color:#8A5A2B;">新供應商評鑑</span>' : '')
             + '供應商：<b>'+esc(t.maker_id)+'</b>（'+esc(t.maker_id_no)+'）　評鑑日期：'+(fmtDate(t.audit_date)||'—')+'　評鑑狀況：'+esc(modeL)+'　評鑑類別：'+esc(vaReviewLabel(t.review_type))+'　稽核員：'+esc(t.auditor||'—'));
-        var rows='';
+        var hasSelf=recHasSelf(cfg), rows='';
+        $('#rsCatHead').html('<th>評鑑項目</th><th>單項滿分</th>'+(hasSelf?'<th>自評合格率</th><th>稽核合格率</th><th>綜合合格率</th>':'<th>評鑑合格率</th>'));
         c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*cfg.self_w+k.audit_rate*cfg.audit_w)*10)/10;
-            rows+='<tr><td class="af-q">'+esc(k.name)+'</td><td class="af-sc">'+k.max+'</td><td class="af-sc">'+k.self_rate+'%</td><td class="af-sc">'+k.audit_rate+'%</td><td class="af-sc">'+comb+'%</td></tr>'; });
-        rows+='<tr class="af-cat"><td class="af-q">總成績</td><td class="af-sc">'+c.total_max+'</td><td class="af-sc">'+c.selfR+'%</td><td class="af-sc">'+c.auditR+'%</td><td class="af-sc">'+c.overall+'%</td></tr>';
+            rows+='<tr><td class="af-q">'+esc(k.name)+'</td><td class="af-sc">'+k.max+'</td>'
+                +(hasSelf?('<td class="af-sc">'+k.self_rate+'%</td>'):'')+'<td class="af-sc">'+k.audit_rate+'%</td>'
+                +(hasSelf?('<td class="af-sc">'+comb+'%</td>'):'')+'</tr>'; });
+        rows+='<tr class="af-cat"><td class="af-q">總成績</td><td class="af-sc">'+c.total_max+'</td>'
+            +(hasSelf?('<td class="af-sc">'+c.selfR+'%</td>'):'')+'<td class="af-sc">'+c.auditR+'%</td>'
+            +(hasSelf?('<td class="af-sc">'+c.overall+'%</td>'):'')+'</tr>';
         $('#rsCatBody').html(rows);
-        $('#rsConc').html('綜合評鑑合格率（自評×'+cfg.self_w+'＋稽核×'+cfg.audit_w+'）：<b style="font-size:16px;">'+c.overall+'%</b>'
+        $('#rsConc').html('綜合評鑑分數'+(hasSelf?'（自評×'+cfg.self_w+'＋稽核×'+cfg.audit_w+'）':'')+'：<b style="font-size:16px;">'+c.overall+'%</b>'
             +'（核准條件 ≥'+cfg.pass_rate+'%）'+(t.conclusion?'　建議：'+esc(t.conclusion):'')
             +'<div style="margin-top:6px;">判定：'+vaJudgeBadgeHtml(c.pass)+'</div>');
         rsRenderAttach(tid, res.attaches||[]);
@@ -2033,8 +2051,10 @@ function drawRadar(){
                }}},
         yAxis:{gridLineInterpolation:'polygon', min:0, max:100, tickInterval:20},
         tooltip:{shared:true, valueSuffix:'%'},
-        series:[{name:'自評', data:RS.c.cats.map(function(k){return k.self_rate;}), color:'#E8C170', pointPlacement:'on'},
-                {name:'稽核', data:RS.c.cats.map(function(k){return k.audit_rate;}), color:'#F0A24B', pointPlacement:'on'}]
+        series:(recHasSelf(RS.cfg)
+                ? [{name:'自評', data:RS.c.cats.map(function(k){return k.self_rate;}), color:'#E8C170', pointPlacement:'on'},
+                   {name:'稽核', data:RS.c.cats.map(function(k){return k.audit_rate;}), color:'#F0A24B', pointPlacement:'on'}]
+                : [{name:'評鑑分數', data:RS.c.cats.map(function(k){return k.audit_rate;}), color:'#F0A24B', pointPlacement:'on'}])
     });
 }
 function rsRenderAttach(tid, list){
@@ -2081,21 +2101,24 @@ function vaJudgeBadgeHtml(pass){
 function recordSheetHTML(){
     if (!RS) return '';
     var t=RS.t, c=RS.c, cfg=RS.cfg, doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
+    var pHasSelf=recHasSelf(cfg);   // 自評已取消；只有舊紀錄的凍結快照才還要印自評欄
     var modeL=t.audit_mode?vaModeLabel(t.audit_mode):'____';
     var head='<div style="position:relative;text-align:center;">' + vaNvBadgeHtml(!!t.is_adhoc)
         +'<div style="font-size:25px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
         +'<div style="font-size:19px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
     var info='<table class="pf-info"><tr><td>供應商：'+esc(t.maker_id)+'（'+esc(t.maker_id_no)+'）</td><td>加工項目：'+esc(t.main_cat_name||'—')+'</td><td>評鑑日期：'+(fmtDate(t.audit_date)||'____')+'</td><td>評鑑狀況：'+esc(modeL)+'</td></tr></table>';
     var rows='<table class="pf rs-table" style="table-layout:fixed;"><colgroup><col style="width:38%;"><col style="width:14%;"><col style="width:16%;"><col style="width:16%;"><col style="width:16%;"></colgroup>'
-        +'<thead><tr><th>評鑑項目</th><th>單項滿分</th><th>自評合格率</th><th>稽核合格率</th><th>綜合合格率</th></tr></thead><tbody>';
+        +'<thead><tr><th>評鑑項目</th><th>單項滿分</th>'+(pHasSelf?'<th>自評合格率</th><th>稽核合格率</th><th>綜合合格率</th>':'<th>評鑑合格率</th>')+'</tr></thead><tbody>';
     c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*cfg.self_w+k.audit_rate*cfg.audit_w)*10)/10;
-        rows+='<tr><td class="q">'+esc(k.name)+'</td><td>'+k.max+'</td><td>'+k.self_rate+'%</td><td>'+k.audit_rate+'%</td><td>'+comb+'%</td></tr>'; });
-    rows+='<tr style="font-weight:bold;"><td class="q">總成績</td><td>'+c.total_max+'</td><td>'+c.selfR+'%</td><td>'+c.auditR+'%</td><td>'+c.overall+'%</td></tr></tbody></table>';
+        rows+='<tr><td class="q">'+esc(k.name)+'</td><td>'+k.max+'</td>'
+            +(pHasSelf?('<td>'+k.self_rate+'%</td>'):'')+'<td>'+k.audit_rate+'%</td>'+(pHasSelf?('<td>'+comb+'%</td>'):'')+'</tr>'; });
+    rows+='<tr style="font-weight:bold;"><td class="q">總成績</td><td>'+c.total_max+'</td>'
+        +(pHasSelf?('<td>'+c.selfR+'%</td>'):'')+'<td>'+c.auditR+'%</td>'+(pHasSelf?('<td>'+c.overall+'%</td>'):'')+'</tr></tbody></table>';
     var svg = rsChart ? rsChart.container.querySelector('svg').outerHTML : '';
     var body = '<div style="display:flex;gap:20px;align-items:center;margin-top:8px;">'
         + '<div style="flex:0 0 42%;min-width:0;">'+rows+'</div>'
         + '<div class="rs-chart-wrap" style="text-align:center;flex:1;">'+svg+'</div></div>';
-    var conc='<div style="margin-top:8px;font-size:13px;">綜合評鑑合格率（自評×'+cfg.self_w+'＋稽核×'+cfg.audit_w+'）＝<b style="font-size:16px;">'+c.overall+'%</b>；核准條件：綜合合格率 ≥'+cfg.pass_rate+'%'+(t.conclusion?'；建議：'+esc(t.conclusion):'')+'</div>'
+    var conc='<div style="margin-top:8px;font-size:13px;">綜合評鑑分數'+(pHasSelf?'（自評×'+cfg.self_w+'＋稽核×'+cfg.audit_w+'）':'')+'＝<b style="font-size:16px;">'+c.overall+'%</b>；核准條件：綜合評鑑分數 ≥'+cfg.pass_rate+'%'+(t.conclusion?'；建議：'+esc(vaConcLabel(t.conclusion)):'')+'</div>'
         +'<div style="margin-top:4px;">判定：'+vaJudgeBadgeHtml(c.pass)+'</div>';
     var mgrStamp = (t.status==='approved' && t.signed_by_name) ? vaStampHtml(t.signed_by_name, fmtDate(t.audit_date)||'', !!t.signed_is_deputy) : '';
     var audStamp = t.auditor ? vaStampHtml(t.auditor, fmtDate(t.audit_date)||'') : '';
@@ -3199,7 +3222,7 @@ function openChecklistSetting(mode){
         CL_CATS = (res.items||[]).map(function(cat){
             return {code:cat[0], name:cat[1], items:cat[2].map(function(it){ return {item_id:+it[0], item_no:it[1], question:it[2], item_max:it[3]}; })};
         });
-        $('#clSelfW').val(res.self_w); $('#clAuditW').val(res.audit_w); $('#clPassRate').val(res.pass_rate);
+        $('#clPassRate').val(res.pass_rate);
         $('#checklistMask .m-head span:first').text(clModeTitle());
         $('#clNvNote').toggle(CL_MODE==='newvendor');
         clRenderCats();
@@ -3255,7 +3278,7 @@ function submitChecklist(){
     }
     var nv = (CL_MODE === 'newvendor');
     $.post(API, {action: nv ? 'save_nv_checklist' : 'save_checklist', cats:JSON.stringify(CL_CATS),
-        self_w:$('#clSelfW').val(), audit_w:$('#clAuditW').val(), pass_rate:$('#clPassRate').val()}, function(res){
+        pass_rate:$('#clPassRate').val()}, function(res){
         if(!res.ok){ alert(res.error||'儲存失敗'); return; }
         if (nv) META.nv = res;
         else { META.items=res.items; META.total_max=res.total_max; META.self_w=res.self_w; META.audit_w=res.audit_w; META.pass_rate=res.pass_rate; }

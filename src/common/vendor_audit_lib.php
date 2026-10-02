@@ -344,22 +344,23 @@ function vendor_audit_nv_checklist_ensure_seed(PDO $db, string $scope = 'outsour
         }
     }
 }
-/** 自評/稽核權重與合格率門檻(可由管理員調整，依 scope 各自獨立；預設沿用與稽核批次相同的
- *  0.3/0.7/75%，使用者未指定新供應商評鑑的門檻故取此為初始值) */
+/** 合格分數門檻（依 scope 各自獨立）。自評已取消（2026-10-02），故 self_w 固定 0、audit_w 固定 1
+ *  ——評鑑分數就是全部，權重必然 100%；舊紀錄的凍結快照不受影響，說明見 vendor_audit_weights()。 */
 function vendor_audit_nv_weights(PDO $db, string $scope = 'outsource'): array {
     $key = vendor_audit_nv_scope_key($scope);
     return [
-        'self_w'    => (float)vendor_eval_setting($db, 'vendor_audit_self_w_'.$key, VENDOR_AUDIT_SELF_W),
-        'audit_w'   => (float)vendor_eval_setting($db, 'vendor_audit_audit_w_'.$key, VENDOR_AUDIT_AUDIT_W),
+        'self_w'    => 0.0,
+        'audit_w'   => 1.0,
         'pass_rate' => (float)vendor_eval_setting($db, 'vendor_audit_pass_rate_'.$key, VENDOR_AUDIT_PASS_RATE),
     ];
 }
+/** 只存得了合格分數；自評/稽核權重固定 0/1（自評已取消），傳進來的值一律不採用 */
 function vendor_audit_nv_save_weights(PDO $db, float $selfW, float $auditW, float $passRate, string $scope = 'outsource'): void {
     $key = vendor_audit_nv_scope_key($scope);
     $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
                         ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
-    $up->execute(['vendor_audit_self_w_'.$key, (string)$selfW]);
-    $up->execute(['vendor_audit_audit_w_'.$key, (string)$auditW]);
+    $up->execute(['vendor_audit_self_w_'.$key, '0']);
+    $up->execute(['vendor_audit_audit_w_'.$key, '1']);
     $up->execute(['vendor_audit_pass_rate_'.$key, (string)$passRate]);
 }
 /** 目前生效中的新供應商評鑑查核表(依 scope 各自獨立一份)：[[code,name,[[item_id,item_no,question,item_max],...]],...] */
@@ -540,22 +541,28 @@ function vendor_audit_checklist_ensure_seed(PDO $db, string $scope = 'outsource'
     }
 }
 
-/** 自評/稽核權重與合格率門檻(可由管理員調整,依 scope 各自獨立)：優先讀 scope 專屬鍵，
- *  未設定過(如既有 outsource 舊站台)則回退共用舊鍵，維持既有設定值不因本次改版而消失。 */
+/* ---- 自評已取消（2026-10-02，使用者明確要求）----
+ * 評鑑表單只剩一欄「評鑑分數」，權重必然是 100%，所以 self_w 一律 0、audit_w 一律 1，
+ * 管理員設定畫面也不再顯示這兩個欄位（只剩合格分數）。
+ * **舊紀錄不受影響**：已評分過的紀錄在 vendor_audit_target.checklist_snapshot 裡凍結了當時的
+ * self_w/audit_w（多為 0.3/0.7），vendor_audit_resolve_cfg() 會原樣取回，所以它們的
+ * 自評欄、各項分數與綜合合格率印出來跟當初完全一樣，不會因為這次取消自評而被改寫（AS9100 紀錄可追溯）。
+ * 判斷「這一筆要不要顯示自評欄」一律看該筆 cfg 的 self_w 是不是大於 0，不要另外用旗標。 */
 function vendor_audit_weights(PDO $db, string $scope = 'outsource'): array {
     $scope = vendor_audit_norm_scope($scope);
     return [
-        'self_w'    => (float)vendor_eval_setting($db, 'vendor_audit_self_w_'.$scope, vendor_eval_setting($db, 'vendor_audit_self_w', VENDOR_AUDIT_SELF_W)),
-        'audit_w'   => (float)vendor_eval_setting($db, 'vendor_audit_audit_w_'.$scope, vendor_eval_setting($db, 'vendor_audit_audit_w', VENDOR_AUDIT_AUDIT_W)),
+        'self_w'    => 0.0,
+        'audit_w'   => 1.0,
         'pass_rate' => (float)vendor_eval_setting($db, 'vendor_audit_pass_rate_'.$scope, vendor_eval_setting($db, 'vendor_audit_pass_rate', VENDOR_AUDIT_PASS_RATE)),
     ];
 }
+/** 只存得了合格分數；自評/稽核權重固定 0/1（自評已取消），傳進來的值一律不採用 */
 function vendor_audit_save_weights(PDO $db, float $selfW, float $auditW, float $passRate, string $scope = 'outsource'): void {
     $scope = vendor_audit_norm_scope($scope);
     $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
                         ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
-    $up->execute(['vendor_audit_self_w_'.$scope, (string)$selfW]);
-    $up->execute(['vendor_audit_audit_w_'.$scope, (string)$auditW]);
+    $up->execute(['vendor_audit_self_w_'.$scope, '0']);
+    $up->execute(['vendor_audit_audit_w_'.$scope, '1']);
     $up->execute(['vendor_audit_pass_rate_'.$scope, (string)$passRate]);
 }
 
@@ -680,6 +687,7 @@ function vendor_audit_validate_complete(array $post, array $cfg): array {
     if (!array_key_exists($reviewType, vendor_audit_review_types()))
         $errs[] = '請選擇評鑑類別（'.implode('／', vendor_audit_review_types()).'）';
     $scores = is_array($post['scores'] ?? null) ? $post['scores'] : [];
+    $needSelf = ((float)($cfg['self_w'] ?? 0) > 0);   // 只有舊紀錄的凍結快照才會 >0
     $badSelf = 0; $badAudit = 0;
     foreach (($cfg['items'] ?? []) as $cat) {
         foreach ($cat[2] as $it) {
@@ -691,7 +699,8 @@ function vendor_audit_validate_complete(array $post, array $cfg): array {
             $ok = function($v) use ($iMax) {
                 return $v !== null && $v !== '' && is_numeric($v) && (float)$v >= 0 && (float)$v <= $iMax && (float)$v == (int)$v;
             };
-            if (!$ok($sv)) $badSelf++;
+            // 自評已取消（2026-10-02）：只有舊紀錄（凍結快照裡 self_w>0）才還要求自評分填滿
+            if ($needSelf && !$ok($sv)) $badSelf++;
             if (!$ok($av)) $badAudit++;
         }
     }

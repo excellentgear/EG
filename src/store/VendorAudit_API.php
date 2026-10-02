@@ -1058,8 +1058,8 @@ case 'save_checklist': {
     if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
     $cats = json_decode((string)($_POST['cats'] ?? ''), true);
     if (!is_array($cats) || !$cats) jerr('查核表內容不可為空');
-    $selfW = (float)($_POST['self_w'] ?? VENDOR_AUDIT_SELF_W);
-    $auditW = (float)($_POST['audit_w'] ?? VENDOR_AUDIT_AUDIT_W);
+    // 自評已取消(2026-10-02)：權重固定 0/1，畫面也不再有這兩個欄位；只有合格分數可設
+    $selfW = 0.0; $auditW = 1.0;
     $passRate = (float)($_POST['pass_rate'] ?? VENDOR_AUDIT_PASS_RATE);
     try {
         $db->beginTransaction();
@@ -1080,8 +1080,8 @@ case 'save_nv_checklist': {
     if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
     $cats = json_decode((string)($_POST['cats'] ?? ''), true);
     if (!is_array($cats) || !$cats) jerr('查核表內容不可為空');
-    $selfW = (float)($_POST['self_w'] ?? VENDOR_AUDIT_SELF_W);
-    $auditW = (float)($_POST['audit_w'] ?? VENDOR_AUDIT_AUDIT_W);
+    // 自評已取消(2026-10-02)：權重固定 0/1，畫面也不再有這兩個欄位；只有合格分數可設
+    $selfW = 0.0; $auditW = 1.0;
     $passRate = (float)($_POST['pass_rate'] ?? VENDOR_AUDIT_PASS_RATE);
     try {
         $db->beginTransaction();
