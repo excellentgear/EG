@@ -80,6 +80,9 @@ function type_id_ctrl_item_view(PDO $db, array $it): array {
         'ref_file_name' => $it['ref_file_name'] ?? null,
         'ref_bom_tag' => $it['ref_bom_tag'] ?? null,
         'ref_cat_id' => isset($it['ref_cat_id']) && $it['ref_cat_id'] !== null ? (int)$it['ref_cat_id'] : ($linked['cat_id'] ?? null),
+        // 重複確認的狀態要回給前端，否則重新載入後「不是重複，各自保留」的那一組又會被判成待確認
+        'dup_ignore' => !empty($it['dup_ignore']) ? 1 : 0,
+        'superseded_by' => isset($it['superseded_by']) && $it['superseded_by'] !== null ? (int)$it['superseded_by'] : null,
         'ver_count' => $linked['ver_count'] ?? null,
         'ref_broken' => ($hasRef && $linked === null), // 曾連結但來源已消失
         'effective_date' => $linked ? $linked['doc_date'] : $it['manual_effective_date'],
@@ -189,6 +192,9 @@ function type_id_ctrl_ensure_schema(PDO $db): void {
         // 不一致就是「內容已變更」。只對有連結來源的列有意義，手動輸入的列永遠是 NULL。
         // 2026-10-02：料號附件改成「一種文件一列」（同料號同類別的歷次上傳收斂成一列），
         // 識別鍵因此由附件 id 改為附件類別；ref_attach_id 仍留著記目前指到哪一份（現行版）。
+        // 2026-10-02：同一種文件出現好幾份時由使用者確認（見 type_id_ctrl_dup_groups 說明）
+        "ALTER TABLE type_id_ctrl_item ADD COLUMN superseded_by INT NULL COMMENT '這一列是哪一列的舊版(指向現行版的item id)；有值者不再是獨立項目列，改以修訂履歷呈現' AFTER is_excluded",
+        "ALTER TABLE type_id_ctrl_item ADD COLUMN dup_ignore TINYINT(1) NOT NULL DEFAULT 0 COMMENT '使用者確認過「這幾份不是重複，各自保留」，之後不再提示' AFTER superseded_by",
         "ALTER TABLE type_id_ctrl_item ADD COLUMN ref_cat_id INT NULL COMMENT '連結料號附件時的附件類別id(ref_source=part專用)；同料號同類別只會有一列，改版時原地指到新檔' AFTER ref_bom_tag",
         "ALTER TABLE type_id_ctrl_item ADD COLUMN confirmed_ref_snapshot VARCHAR(255) NULL COMMENT '上次確認時，該連結來源即時解析出的版別/文件編號快照，供事後比對內容是否變更' AFTER ref_bom_tag",
     ] as $alter) {
@@ -1686,7 +1692,10 @@ function type_id_ctrl_item_revs(PDO $db, int $itemId, array $it): array {
             'is_new'      => false,
         ];
     }
-    foreach (type_id_ctrl_auto_revisions($db, $it) as $a) {
+    $auto = type_id_ctrl_auto_revisions($db, $it);
+    // 使用者確認重複時被指為「舊版」的那幾列，也以修訂履歷呈現在現行版底下（2026-10-02）
+    foreach (type_id_ctrl_superseded_revisions($db, $itemId) as $sp) $auto[] = $sp;
+    foreach ($auto as $a) {
         if (isset($seenAuto[$a['auto_key']])) continue;
         $rows[] = [
             'id' => 0, 'rev_date' => $a['rev_date'], 'rev_version' => $a['rev_version'],
@@ -1741,6 +1750,113 @@ function type_id_ctrl_revs_save(PDO $db, int $itemId, array $rows): void {
         $in = implode(',', array_fill(0, count($ids), '?'));
         $db->prepare("UPDATE type_id_ctrl_item_rev SET is_deleted=1, updated_at=NOW() WHERE id IN ($in)")->execute($ids);
     }
+}
+
+/* ============================================================================
+ * 同一種文件出現好幾份時，由使用者確認（2026-10-02 使用者回報）
+ * --------------------------------------------------------------------------
+ * 昨天的「一種文件一列」只收斂得了料號附件（同料號同附件類別）。實測料號 3004012570 還是出現
+ * 兩列「原圖」——一份是料號附件(類別1)、一份是報價附件(類別1)，**跨來源**所以沒被收進同一個家族；
+ * 而且那份報價附件的檔名是 300401257（比料號少一碼 0），比較像重複上傳或掛錯。
+ * 這種「哪一份才是現行的、哪一份其實是重複」系統沒有把握，**一律不自動決定，交給人確認**。
+ *
+ * 使用者拍板：
+ *   ①判定範圍＝**同一個「型態項目名稱」**（所以 BOSS圖／單製++圖 都叫「加工圖」也會被拿出來問；
+ *     那本來就是兩種不同的圖，所以另外給一個「不是重複，各自保留」的出口，不然會被迫合併掉）。
+ *   ②建立／同步當下跳窗，沒處理完也能先存檔，那幾列會持續標示「待確認重複」。
+ *   ③每一組選一份「現行版」、另外勾選「不列入」，**其餘自動認定為舊版**。
+ *
+ * 三種結果怎麼存（都沿用既有欄位語意，不另開狀態機）：
+ *   現行版 ── 一般項目列（superseded_by 為 NULL、is_excluded=0）
+ *   舊版   ── 該列 superseded_by 指向現行版那一列：**不再是獨立項目列**，改以修訂履歷呈現在
+ *             現行版底下。列本身保留著（不刪），同步才不會把它當成「新檔案」又加回來一列。
+ *   不列入 ── is_excluded=1（與既有「取消納入」同一件事，同步也不會再加回來）
+ * ========================================================================== */
+
+/**
+ * 這份管制表裡「同一個型態項目名稱有兩份以上」待確認的群組。
+ * 已經處理過的不會再出現：被指為舊版的(superseded_by 有值)、不列入的(is_excluded)、
+ * 以及使用者按過「不是重複」的(dup_ignore)都不算進來。
+ * 回傳 [ ['name'=>..., 'items'=>[item_id,...]], ... ]
+ */
+function type_id_ctrl_dup_groups(PDO $db, int $docId): array {
+    if (!$docId) return [];
+    $st = $db->prepare("SELECT id, item_name FROM type_id_ctrl_item
+                         WHERE doc_id=? AND is_deleted=0 AND is_excluded=0
+                           AND superseded_by IS NULL AND COALESCE(dup_ignore,0)=0
+                           AND item_name<>'' ORDER BY seq, id");
+    $st->execute([$docId]);
+    $byName = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $byName[(string)$r['item_name']][] = (int)$r['id'];
+    $out = [];
+    foreach ($byName as $name => $ids) {
+        if (count($ids) < 2) continue;
+        $out[] = ['name' => $name, 'items' => $ids];
+    }
+    return $out;
+}
+
+/**
+ * 使用者對某一組重複做出決定。
+ *   $ignore=true ── 這幾份不是重複，各自保留（全部標 dup_ignore，之後不再問）
+ *   否則 ── $currentId 為現行版、$excludeIds 標成不列入、其餘自動成為現行版的舊版
+ * 一律只動「這個群組裡」的列（$memberIds 由後端自己算出來，不採信前端送的範圍＝鐵律8）。
+ */
+function type_id_ctrl_dup_resolve(PDO $db, int $docId, string $name, int $currentId, array $excludeIds, bool $ignore): array {
+    $st = $db->prepare("SELECT id FROM type_id_ctrl_item
+                         WHERE doc_id=? AND is_deleted=0 AND item_name=? ORDER BY seq, id");
+    $st->execute([$docId, $name]);
+    $members = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    if (count($members) < 2) return ['ok'=>false, 'message'=>'這一組已經不是重複了，請重新整理畫面'];
+
+    if ($ignore) {
+        $in = implode(',', array_fill(0, count($members), '?'));
+        $db->prepare("UPDATE type_id_ctrl_item SET dup_ignore=1, superseded_by=NULL, updated_at=NOW() WHERE id IN ($in)")
+           ->execute($members);
+        return ['ok'=>true, 'mode'=>'ignore', 'count'=>count($members)];
+    }
+
+    if (!in_array($currentId, $members, true)) return ['ok'=>false, 'message'=>'請指定其中一份為現行版'];
+    $excludeIds = array_values(array_intersect(array_map('intval', $excludeIds), $members));
+    if (in_array($currentId, $excludeIds, true)) return ['ok'=>false, 'message'=>'現行版不可以同時標成不列入'];
+
+    $old = 0;
+    foreach ($members as $mid) {
+        if ($mid === $currentId) {
+            $db->prepare("UPDATE type_id_ctrl_item SET superseded_by=NULL, is_excluded=0, dup_ignore=0, updated_at=NOW() WHERE id=?")->execute([$mid]);
+        } elseif (in_array($mid, $excludeIds, true)) {
+            $db->prepare("UPDATE type_id_ctrl_item SET superseded_by=NULL, is_excluded=1, dup_ignore=0, updated_at=NOW() WHERE id=?")->execute([$mid]);
+        } else {
+            $db->prepare("UPDATE type_id_ctrl_item SET superseded_by=?, is_excluded=0, dup_ignore=0, updated_at=NOW() WHERE id=?")->execute([$currentId, $mid]);
+            $old++;
+        }
+    }
+    // 被指為舊版的列不可以同時又是別人的現行版（指向鏈只能一層）
+    $db->prepare("UPDATE type_id_ctrl_item SET superseded_by=? WHERE doc_id=? AND is_deleted=0 AND superseded_by IN (SELECT * FROM (SELECT id FROM type_id_ctrl_item WHERE doc_id=? AND superseded_by=?) t)")
+       ->execute([$currentId, $docId, $docId, $currentId]);
+    return ['ok'=>true, 'mode'=>'resolve', 'current'=>$currentId, 'old'=>$old, 'excluded'=>count($excludeIds)];
+}
+
+/**
+ * 被指為「舊版」的那幾列，轉成現行版那一列的修訂履歷項目。
+ * 日期取該列自己的型態日期、版別取它的版別／文件編號；auto_key 綁 item id，所以不會重複長出來，
+ * 使用者也可以把它刪掉（軟刪除保留 auto_key，見 type_id_ctrl_item_revs）。
+ */
+function type_id_ctrl_superseded_revisions(PDO $db, int $itemId): array {
+    if (!$itemId) return [];
+    $st = $db->prepare("SELECT * FROM type_id_ctrl_item WHERE superseded_by=? AND is_deleted=0 ORDER BY seq, id");
+    $st->execute([$itemId]);
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $v = type_id_ctrl_item_view($db, $r);
+        $out[] = [
+            'auto_key'    => 'supersede:' . (int)$r['id'],
+            'rev_date'    => $v['effective_date'] ?: null,
+            'rev_version' => (string)($v['doc_no_text'] ?? ''),
+            'note'        => '舊版（' . ($v['ref_source_label'] ?: '人工輸入') . '）',
+        ];
+    }
+    return $out;
 }
 
 /* ============================================================================

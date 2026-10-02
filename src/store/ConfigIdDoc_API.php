@@ -219,13 +219,14 @@ case 'get':
         }
     }
     $doc['review_status_label'] = REVIEW_LABELS[$doc['review_status']] ?? $doc['review_status'];
-    $st = $db->prepare("SELECT * FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 ORDER BY seq");
+    $st = $db->prepare("SELECT * FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 AND superseded_by IS NULL ORDER BY seq");
     $st->execute([$id]);
     $items = array_map(function($it) use ($db) { return buildItemView($db, $it); }, $st->fetchAll(PDO::FETCH_ASSOC));
     $dates = computeDocDates($items);
     jout(['success'=>true,'doc'=>$doc,'items'=>$items,'doc_date_earliest'=>$dates['earliest'],'sign_date_latest'=>$dates['latest'],
           'project_info'=>projectInfoText($db,(int)$doc['part_d_id']),
-          'auto_added_count'=>$autoAdded, 'auto_changed_count'=>$autoChanged, 'auto_merged_count'=>$autoMerged]);
+          'auto_added_count'=>$autoAdded, 'auto_changed_count'=>$autoChanged, 'auto_merged_count'=>$autoMerged,
+          'dup_groups'=>type_id_ctrl_dup_groups($db, $id)]);
 
 case 'delete_header':
     needAdmin($perms);
@@ -308,12 +309,17 @@ case 'save_all':
             $id = (int)$db->lastInsertId();
         }
 
-        $st = $db->prepare("SELECT id FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0");
+        // superseded_by 有值的列是「某一列的舊版」，畫面上以修訂履歷呈現、不在項目列清單裡，
+        // 所以不可以納入「前端沒送回來就是被刪掉」的判定，否則存一次檔就把它們全部軟刪除了。
+        $st = $db->prepare("SELECT id FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 AND superseded_by IS NULL");
         $st->execute([$id]);
         $existing = array_flip(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN)));
 
+        // 新增管制表時（還沒有 item id）在畫面上就處理掉的重複：前端送「這一列是第幾列的舊版」的
+        // 陣列索引，等所有列都寫進去、拿得到真正的 id 之後再回頭設 superseded_by（第二輪）。
+        $rowIdByIdx = []; $supersedeIdx = [];
         $seq = 0;
-        foreach ($itemsRaw as $it) {
+        foreach ($itemsRaw as $idx => $it) {
             $seq++;
             $itemName = trim((string)($it['item_name'] ?? ''));
             $itemType = (string)($it['item_type'] ?? 'other');
@@ -336,6 +342,10 @@ case 'save_all':
             $manualDate = trim((string)($it['manual_effective_date'] ?? ''));
             $manualDocNo = trim((string)($it['manual_doc_no'] ?? ''));
 
+            $dupIgnore = !empty($it['dup_ignore']) ? 1 : 0;
+            $supIdx = isset($it['superseded_idx']) ? (int)$it['superseded_idx'] : -1;
+            if ($supIdx >= 0 && $supIdx !== (int)$idx) $supersedeIdx[(int)$idx] = $supIdx;
+
             $rowId = (int)($it['id'] ?? 0);
             if ($rowId && isset($existing[$rowId])) {
                 $st = $db->prepare("UPDATE type_id_ctrl_item SET seq=?, item_name=?, item_type=?, process_tag=?, need_process_hint=?,
@@ -349,6 +359,8 @@ case 'save_all':
                     $isLinked ? null : ($manualDate ?: null), $isLinked ? null : ($manualDocNo ?: null),
                     $rowId,
                 ]);
+                $db->prepare("UPDATE type_id_ctrl_item SET dup_ignore=? WHERE id=?")->execute([$dupIgnore, $rowId]);
+                $rowIdByIdx[(int)$idx] = $rowId;
                 unset($existing[$rowId]);
                 type_id_ctrl_revs_save($db, $rowId, is_array($it['revisions'] ?? null) ? $it['revisions'] : []);
             } else {
@@ -361,8 +373,18 @@ case 'save_all':
                     $isLinked && $refFileName !== '' ? $refFileName : null, $isLinked && $refBomTag !== '' ? $refBomTag : null, $isExcluded,
                     $isLinked ? null : ($manualDate ?: null), $isLinked ? null : ($manualDocNo ?: null),
                 ]);
-                type_id_ctrl_revs_save($db, (int)$db->lastInsertId(), is_array($it['revisions'] ?? null) ? $it['revisions'] : []);
+                $newItemId = (int)$db->lastInsertId();
+                if ($dupIgnore) $db->prepare("UPDATE type_id_ctrl_item SET dup_ignore=1 WHERE id=?")->execute([$newItemId]);
+                $rowIdByIdx[(int)$idx] = $newItemId;
+                type_id_ctrl_revs_save($db, $newItemId, is_array($it['revisions'] ?? null) ? $it['revisions'] : []);
             }
+        }
+        // 第二輪：把「這一列是某一列的舊版」寫進去（兩輪是必要的——舊版那一列可能比現行版先寫入，
+        // 第一輪當下還拿不到現行版的 id）
+        foreach ($supersedeIdx as $childIdx => $parentIdx) {
+            if (!isset($rowIdByIdx[$childIdx]) || !isset($rowIdByIdx[$parentIdx])) continue;
+            $db->prepare("UPDATE type_id_ctrl_item SET superseded_by=?, is_excluded=0, dup_ignore=0 WHERE id=?")
+               ->execute([$rowIdByIdx[$parentIdx], $rowIdByIdx[$childIdx]]);
         }
         // 前端已移除的列：軟刪除
         if ($existing) {
@@ -371,6 +393,8 @@ case 'save_all':
             $db->prepare("UPDATE type_id_ctrl_item SET is_deleted=1 WHERE id IN ($in)")->execute($delIds);
             // 項目列刪掉時，它底下的修訂履歷一併軟刪除，否則之後同一個 id 不會再出現、履歷變成孤兒
             $db->prepare("UPDATE type_id_ctrl_item_rev SET is_deleted=1, updated_at=NOW() WHERE item_id IN ($in)")->execute($delIds);
+            // 它底下被指為「舊版」的列要放回來成為獨立項目列，不然會變成指向已刪除列的孤兒、畫面上整個不見
+            $db->prepare("UPDATE type_id_ctrl_item SET superseded_by=NULL, updated_at=NOW() WHERE superseded_by IN ($in)")->execute($delIds);
         }
         if ($confirm) {
             $db->prepare("UPDATE type_id_ctrl_doc SET review_status='confirmed', confirmed_by=?, confirmed_by_name=?, confirmed_at=NOW() WHERE id=?")
@@ -414,7 +438,7 @@ case 'fetch_ext_for_part':
     $dsPk = (int)($_POST['part_d_id'] ?? $_GET['part_d_id'] ?? 0);
     if (!$dsPk) jout(['success'=>true,'rows'=>[],'doc_date_earliest'=>null,'project_info'=>'']);
     $ext = type_id_ctrl_fetch_ext_docs_for_part($db, $dsPk);
-    $out = array_map(function($er){
+    $out = array_map(function($er) use ($db) {
         return [
             'id'=>0, 'seq'=>0,
             'item_name'=> !empty($er['categories']) ? $er['categories'][0] : $er['doc_name'],
@@ -427,7 +451,14 @@ case 'fetch_ext_for_part':
             'ref_file_name'=>$er['file_name'] ?? null, 'ref_bom_tag'=>$er['bom_tag'] ?? null,
             'ref_cat_id'=>!empty($er['cat_id']) ? (int)$er['cat_id'] : null,
             'ref_broken'=>false, 'effective_date'=>$er['doc_date'], 'doc_no_text'=>$er['doc_name'], 'file_url'=>null,
-            'revisions'=>[],
+            // 尚未存檔也要看得到自動帶入的修訂履歷（2026-10-02：原本固定回空陣列，要存檔重開才看得到）
+            'revisions'=>array_map(function($a){
+                return ['id'=>0,'rev_date'=>$a['rev_date'],'rev_version'=>$a['rev_version'],
+                        'note'=>$a['note'],'auto_key'=>$a['auto_key'],'is_auto'=>true,'is_new'=>true];
+            }, type_id_ctrl_auto_revisions($db, [
+                'ref_source'=>$er['source'], 'ref_attach_id'=>(int)$er['attach_id'],
+                'ref_ds_pk'=>(int)$er['ds_pk'], 'ref_cat_id'=>(int)($er['cat_id'] ?? 0),
+            ])),
         ];
     }, $ext);
     // 新增流程(尚未存檔)選定料號後，畫面上的「建立日期(最早外來文件日期)」與「製程」原本要存檔後
@@ -687,7 +718,7 @@ case 'print_get':
             jout(['success'=>false,'message'=>'此文件已確認，但偵測到新檔案或內容變更尚待更新，請先「更新狀態」重新確認後再列印。']);
         }
     }
-    $st = $db->prepare("SELECT * FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 ORDER BY seq");
+    $st = $db->prepare("SELECT * FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 AND superseded_by IS NULL ORDER BY seq");
     $st->execute([$id]);
     $items = array_map(function($it) use ($db) { return buildItemView($db, $it); }, $st->fetchAll(PDO::FETCH_ASSOC));
     $dates = computeDocDates($items);
@@ -711,6 +742,29 @@ case 'print_get':
         'as_doc_name'=>$asDoc['doc_name'] ?? '型態識別文件管制表',
         'stamp_tpl'=>type_id_ctrl_stamp_tpl($db, type_id_ctrl_stamp_tpl_id($db)),
     ]);
+
+// ── 同一種文件出現好幾份時由使用者確認（2026-10-02 使用者要求）──
+case 'dup_resolve':
+    needEdit($perms);
+    $docId = (int)($_POST['doc_id'] ?? 0);
+    $name  = trim((string)($_POST['name'] ?? ''));
+    if (!$docId || $name === '') jout(['success'=>false,'message'=>'缺少參數']);
+    $st = $db->prepare("SELECT 1 FROM type_id_ctrl_doc WHERE id=? AND is_deleted=0");
+    $st->execute([$docId]);
+    if (!$st->fetchColumn()) jout(['success'=>false,'message'=>'找不到該筆或已刪除']);
+    $ignore  = !empty($_POST['ignore']);
+    $curId   = (int)($_POST['current_id'] ?? 0);
+    $exclude = json_decode((string)($_POST['exclude_ids'] ?? '[]'), true);
+    if (!is_array($exclude)) $exclude = [];
+    $db->beginTransaction();
+    try {
+        $r = type_id_ctrl_dup_resolve($db, $docId, $name, $curId, $exclude, $ignore);
+        if (empty($r['ok'])) { $db->rollBack(); jout(['success'=>false,'message'=>$r['message'] ?? '處理失敗']); }
+        // 內容被重新認定過，已確認的清單要打回「需重新確認」
+        $db->prepare("UPDATE type_id_ctrl_doc SET review_status='needs_recheck' WHERE id=? AND review_status='confirmed'")->execute([$docId]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'處理失敗：'.$e->getMessage()]); }
+    jout(['success'=>true] + $r + ['dup_groups'=>type_id_ctrl_dup_groups($db, $docId)]);
 
 // ── 專案相關資料自動列入設定（2026-10-01 使用者要求：由管理員決定哪幾種要自動列入項目列）──
 case 'project_src_get':
