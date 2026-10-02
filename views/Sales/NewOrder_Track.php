@@ -8977,7 +8977,16 @@ foreach($dCounts as $c) {
                 ASTAGCFG.optsAll = res.options_all || ASTAGCFG.optsAll;
                 ASTAGCFG.bfOrders = res.rows || [];
                 ASTAGCFG.bfTotal = parseInt(res.total || 0, 10);
-                if ($('#bf-order-tag option').length === 0) $('#bf-order-tag').replaceWith(astagTagSelectHtml('bf-order-tag', '', ''));
+                // 標籤下拉：選項數跟目前的標籤清單對不上就重建（保留已選的值）。
+                // 不可以只寫「length === 0 才重建」——第一次進來時若 optsAll 還是空的（例如直接切到
+                // 「逐筆設定」分頁、分組查詢還沒回來），會只生出一個「（不設定）」選項（length=1），
+                // 之後永遠不再重建，下拉就永遠挑不到標籤。
+                var $otag = $('#bf-order-tag'), wantN = ASTAGCFG.optsAll.length + 1;
+                if ($otag.find('option').length !== wantN) {
+                    var keep = $otag.val() || '';
+                    $otag.replaceWith(astagTagSelectHtml('bf-order-tag', keep, ''));
+                    $('#bf-order-tag').css('width', '220px');
+                }
                 if (!ASTAGCFG.bfOrders.length) {
                     $('#bf-order-tbody').html('<tr><td colspan="8" class="text-center" style="color:#27ae60;padding:16px;">這個條件底下沒有未設定標籤的訂單了 🎉</td></tr>');
                     $('#bf-order-pager').html(''); return;
