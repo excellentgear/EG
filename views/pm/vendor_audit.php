@@ -92,6 +92,8 @@ $vaLegacyDocs = $vaLegacy ? [] : vendor_audit_legacy_docs($db);
         .va-void-banner { background:#FDECE7; border:1.5px solid #DD5138; border-radius:6px; color:#9c3418;
             padding:7px 12px; font-size:12px; line-height:1.6; margin-bottom:8px; }
         .va-void-banner b { color:#DD5138; }
+        /* 推導欄位（系統算出來的，不給手填）：全站慣用的灰底樣式，比照 business_trip.php／doc_apply.php */
+        .ro-auto { background:#F3EADB; color:#7a6446; cursor:default; }
         /* 合格供應商清冊：依評核等級分頁 */
         .rs-gtabs { display:flex; gap:5px; flex-wrap:wrap; margin:4px 0 6px; }
         .rs-gtab { border:1px solid #E8D5B5; background:#FBF3E5; color:#8a6d45; cursor:pointer; border-radius:14px;
@@ -750,7 +752,8 @@ $vaLegacyDocs = $vaLegacy ? [] : vendor_audit_legacy_docs($db);
             <b>已完成評分的稽核紀錄會凍結當時的查核表內容，之後在此調整不會影響舊紀錄。</b>
         </div>
         <div id="clNvNote" style="display:none;background:#FFF7E8;border:1px solid #E8D5B5;border-radius:6px;padding:6px 10px;color:#8A5A2B;margin-bottom:8px;font-size:12px;">
-            這份是<b>「供應商評鑑」分頁專用</b>的查核表（預設 4 類 8 項、單項滿分 10 分、總分 80 分），與已廢止的「稽核批次」題庫<b>各自獨立</b>，在這裡調整<b>不會影響稽核批次</b>的查核表，反之亦然。
+            <span id="clNoteLive"></span>
+            這份是<b>「供應商評鑑」分頁專用</b>的查核表，與已廢止的「稽核批次」題庫<b>各自獨立</b>，在這裡調整<b>不會影響稽核批次</b>的查核表，反之亦然。
             下面的<b>合格分數</b>就是「建議評鑑結果」自動判定的門檻。
         </div>
         <div id="clCatsBox"></div>
@@ -1023,7 +1026,8 @@ $vaLegacyDocs = $vaLegacy ? [] : vendor_audit_legacy_docs($db);
             <li>按「新增供應商評鑑」挑選廠商（大類／加工項目篩選後多選，或打字搜尋）後直接加入本期，<b>不受年度計畫鎖定限制</b>（即使該年度／範疇的計畫已送出鎖定仍可新增）、<b>一律不設預定稽核月份</b>，因此<b>不會出現在「供應商稽核計劃」年度計畫表，也不計入 KPI「廠商稽核按時執行率」</b>。若廠商尚未建檔，請先至主檔管理新增該廠商。</li>
             <li>加入之後的<b>登錄、簽核、記錄表、列印</b>等操作與「稽核批次」完全相同（共用同一套稽核評鑑表單與流程），本分頁上方的完成度只供自行追蹤參考，不是官方 KPI 指標。</li>
             <li><b>文件右上角會加一個外框標記「新供應商評鑑」</b>：查核表（2-PH-01-02，含給供應商填的空白自評版與稽核員的評鑑版）、評鑑記錄表、以及「一次印全部文件」印出來的每一份都會有，記錄表畫面上也看得到。<b>預定評鑑月份</b>欄位不顯示（本分頁不列入年度計畫）。</li>
-            <li><b>查核表是本分頁專用的另一份題庫</b>（工具列「查核表設定」，標題為「查核表設定（○○-新供應商）」）：系統已自動建立預設內容<b>4 類 8 項、單項滿分 10 分、總分 80 分</b>——A.管理（認證／品質手冊與內部稽核）、B.品質（產品追溯／檢驗能力／儀器校驗／不良品隔離）、C.交期（出車收送貨）、D.出貨（待驗品·合格品·廢品隔離與標籤）。管理員可自行增刪、改文字與改單項滿分，與「稽核批次」的 15 項題庫<b>各自獨立、互不影響</b>，也<b>依範疇（外包加工／採購）各自一份</b>。</li>
+            <li><b>查核表是本分頁專用的另一份題庫</b>（工具列「查核表設定」）：系統<b>初次建立時</b>會先放入 4 類 8 項（單項滿分 10 分）當起點，管理員可自行增刪類別與項次、改文字與改單項滿分；<b>實際有幾類幾項、總分多少，一律以設定畫面上即時顯示的為準</b>（該畫面會依目前內容自動算出來）。與「稽核批次」的題庫<b>各自獨立、互不影響</b>，也<b>依範疇（外包加工／採購）各自一份</b>。
+                <b>類別代號（A、B、C…）與項次是系統自動編的</b>：代號依類別順序給，項次<b>跨類別連續編號</b>（A 底下 1、2，B 就從 3 接下去），兩者都不需要手填、也改不了——手填的編號在增刪或搬動之後一定會跟順序對不起來而且不會報錯。</li>
             <li><b>自評已取消（2026-10-02）</b>：評分表只剩一欄「評鑑分數」，權重必然是 100%，所以查核表設定也只剩「<b>合格分數</b>」一個欄位（不再有自評權重／稽核權重）。
                 <b>已完成評分的舊紀錄會凍結當時的題庫與權重</b>，所以 2026-10-02 以前評過的那幾筆打開、列印出來仍然保有自評欄與當初的 自評×0.3＋稽核×0.7 綜合分數，與當初發出去的紙本一致；新建立的紀錄才是單欄。</li>
         </ul>
@@ -3231,17 +3235,31 @@ function openChecklistSetting(mode){
 }
 $('#btnChecklist').on('click', function(){ openChecklistSetting('audit'); });
 $('#btnNvChecklist').on('click', function(){ openChecklistSetting('newvendor'); });
+/** 類別代號：依順序自動給 A、B、C…（超過 26 類續以 AA、AB…），不給手填——
+ *  手填的代號在新增/刪除/搬動類別之後一定會跟順序對不起來，而且完全不會報錯。 */
+function clLetter(i){ var s=''; i=+i||0; do { s=String.fromCharCode(65+(i%26))+s; i=Math.floor(i/26)-1; } while(i>=0); return s; }
+/** 類別代號與項次都是推導值：每次重畫就依目前順序重算並寫回 CL_CATS（存檔送出的就是這組值）。
+ *  項次**跨類別連續編號**（使用者2026-10-02要求）：A 底下 1、2，B 就從 3 接下去。
+ *  item_no 只是顯示用的編號，紀錄的分數是用 item_id 對應的，所以重新編號不會動到任何已存在的評分。 */
+function clRenumber(){
+    var seq = 0;
+    CL_CATS.forEach(function(cat, ci){
+        cat.code = clLetter(ci);
+        cat.items.forEach(function(it){ seq++; it.item_no = String(seq); });
+    });
+}
 function clRenderCats(){
+    clRenumber();
     var html='';
     CL_CATS.forEach(function(cat, ci){
         html += '<div style="border:1px solid #EADFC8;border-radius:6px;padding:8px;margin-bottom:8px;">';
         html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">'
-            + '<input type="text" data-ci="'+ci+'" class="cl-code" placeholder="代碼(如A)" style="width:60px;" value="'+esc(cat.code||'')+'">'
+            + '<input type="text" class="cl-code ro-auto" readonly title="類別代號依順序自動編碼，不需手填" style="width:60px;text-align:center;font-weight:bold;" value="'+esc(cat.code||'')+'">'
             + '<input type="text" data-ci="'+ci+'" class="cl-name" placeholder="類別名稱" style="flex:1;" value="'+esc(cat.name||'')+'">'
             + '<span class="va-op" style="color:#DD5138;" onclick="clDelCat('+ci+')"><i class="fa fa-times"></i>刪除類別</span></div>';
         html += '<table style="width:100%;font-size:12px;"><thead><tr><th style="width:60px;">項次</th><th>查核問題</th><th style="width:90px;">單項滿分</th><th style="width:40px;"></th></tr></thead><tbody>';
         cat.items.forEach(function(it, ii){
-            html += '<tr><td><input type="text" data-ci="'+ci+'" data-ii="'+ii+'" class="cl-no" value="'+esc(it.item_no||'')+'" style="width:50px;"></td>'
+            html += '<tr><td><input type="text" class="cl-no ro-auto" readonly title="項次依類別順序連續自動編號，不需手填" value="'+esc(it.item_no||'')+'" style="width:50px;text-align:center;"></td>'
                 + '<td><input type="text" data-ci="'+ci+'" data-ii="'+ii+'" class="cl-q" value="'+esc(it.question||'')+'" style="width:100%;"></td>'
                 + '<td><input type="number" data-ci="'+ci+'" data-ii="'+ii+'" class="cl-max" min="1" step="0.5" value="'+it.item_max+'" style="width:70px;"></td>'
                 + '<td><span class="va-op" style="color:#DD5138;" onclick="clDelItem('+ci+','+ii+')"><i class="fa fa-times"></i></span></td></tr>';
@@ -3254,21 +3272,25 @@ function clRenderCats(){
     clRecalcTotal();
 }
 function clBindInputs(){
-    $('.cl-code').off('input').on('input', function(){ CL_CATS[+$(this).data('ci')].code = $(this).val(); });
+    // 類別代號(.cl-code)與項次(.cl-no)是 clRenumber() 推導出來的唯讀欄位，不綁事件
     $('.cl-name').off('input').on('input', function(){ CL_CATS[+$(this).data('ci')].name = $(this).val(); });
-    $('.cl-no').off('input').on('input', function(){ CL_CATS[+$(this).data('ci')].items[+$(this).data('ii')].item_no = $(this).val(); });
     $('.cl-q').off('input').on('input', function(){ CL_CATS[+$(this).data('ci')].items[+$(this).data('ii')].question = $(this).val(); });
     $('.cl-max').off('input').on('input', function(){ CL_CATS[+$(this).data('ci')].items[+$(this).data('ii')].item_max = +$(this).val()||1; clRecalcTotal(); });
 }
 function clRecalcTotal(){
-    var t=0; CL_CATS.forEach(function(cat){ cat.items.forEach(function(it){ t+=(+it.item_max||0); }); });
+    var t=0, items=0;
+    CL_CATS.forEach(function(cat){ cat.items.forEach(function(it){ t+=(+it.item_max||0); items++; }); });
     $('#clTotalMax').text(t);
+    // 說明列的「幾類幾項總分多少」一律由目前畫面上的實際內容算出來，不可以寫死一組數字
+    //（寫死的那組在管理員增刪類別/項次之後會繼續顯示舊的，而且完全不會報錯＝鐵律4）
+    $('#clNoteLive').html('目前內容：<b>'+CL_CATS.length+' 類 '+items+' 項、總分滿分 '+t+' 分</b>（單項滿分可逐項設定）。');
 }
-function clAddCat(){ CL_CATS.push({code:'', name:'新類別', items:[{item_id:0,item_no:'1',question:'',item_max:clDefaultItemMax()}]}); clRenderCats(); }
+function clAddCat(){ CL_CATS.push({code:'', name:'新類別', items:[{item_id:0,item_no:'',question:'',item_max:clDefaultItemMax()}]}); clRenderCats(); }
 function clDelCat(ci){ if(CL_CATS.length<=1){alert('至少要保留一個類別');return;} CL_CATS.splice(ci,1); clRenderCats(); }
-function clAddItem(ci){ CL_CATS[ci].items.push({item_id:0, item_no:String(CL_CATS[ci].items.length+1), question:'', item_max:clDefaultItemMax()}); clRenderCats(); }
+function clAddItem(ci){ CL_CATS[ci].items.push({item_id:0, item_no:'', question:'', item_max:clDefaultItemMax()}); clRenderCats(); }
 function clDelItem(ci,ii){ if(CL_CATS[ci].items.length<=1){alert('該類別至少要保留一個項次');return;} CL_CATS[ci].items.splice(ii,1); clRenderCats(); }
 function submitChecklist(){
+    clRenumber();   // 送出的代號/項次一律以目前順序為準
     for (var i=0;i<CL_CATS.length;i++){
         if (!CL_CATS[i].name.trim()){ alert('類別名稱不可空白'); return; }
         for (var j=0;j<CL_CATS[i].items.length;j++){

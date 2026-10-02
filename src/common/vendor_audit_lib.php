@@ -364,6 +364,13 @@ function vendor_audit_nv_save_weights(PDO $db, float $selfW, float $auditW, floa
     $up->execute(['vendor_audit_pass_rate_'.$key, (string)$passRate]);
 }
 /** 目前生效中的新供應商評鑑查核表(依 scope 各自獨立一份)：[[code,name,[[item_id,item_no,question,item_max],...]],...] */
+/** 類別代號：依順序自動給 A、B、C…，第 27 類起續以 AA、AB…（唯一實作；
+ *  查核表設定畫面的 clLetter() 是同一條規則的即時預覽，實際存進紀錄的以本函式為準）。 */
+function vendor_audit_cat_letter(int $i): string {
+    $s = '';
+    do { $s = chr(65 + ($i % 26)) . $s; $i = intdiv($i, 26) - 1; } while ($i >= 0);
+    return $s;
+}
 function vendor_audit_nv_checklist_live(PDO $db, string $scope = 'outsource'): array {
     vendor_audit_nv_checklist_ensure_seed($db, $scope);
     $key = vendor_audit_nv_scope_key($scope);
@@ -372,13 +379,18 @@ function vendor_audit_nv_checklist_live(PDO $db, string $scope = 'outsource'): a
     $cats = $st->fetchAll(PDO::FETCH_ASSOC);
     $out = [];
     $ist = $db->prepare("SELECT item_id, item_no, question, item_max FROM vendor_audit_checklist_item WHERE cat_id=? AND is_active=1 ORDER BY sort_order, item_id");
+    $ci = 0; $seq = 0;
     foreach ($cats as $c) {
         $ist->execute([$c['cat_id']]);
         $items = [];
         foreach ($ist->fetchAll(PDO::FETCH_ASSOC) as $it) {
-            $items[] = [(string)$it['item_id'], (string)$it['item_no'], $it['question'], (float)$it['item_max']];
+            // 項次一律依目前順序「跨類別連續」即時重編（使用者2026-10-02要求），不採用 item_no 欄位存的值：
+            // 存的值會在增刪類別/項次之後跟順序對不起來，而且完全不報錯。item_no 只是顯示用編號，
+            // 分數是用 item_id 對應的，所以重編不影響任何已登錄的評分；已完成紀錄的凍結快照也不受影響。
+            $items[] = [(string)$it['item_id'], (string)(++$seq), $it['question'], (float)$it['item_max']];
         }
-        if ($items) $out[] = [$c['code'], $c['name'], $items];
+        // 類別代號同樣依順序自動給 A、B、C…（超過 26 類續以 AA、AB…），不採用 code 欄位存的值
+        if ($items) { $out[] = [vendor_audit_cat_letter($ci), $c['name'], $items]; $ci++; }
     }
     return $out;
 }
@@ -575,13 +587,18 @@ function vendor_audit_checklist_live(PDO $db, string $scope = 'outsource'): arra
     $cats = $st->fetchAll(PDO::FETCH_ASSOC);
     $out = [];
     $ist = $db->prepare("SELECT item_id, item_no, question, item_max FROM vendor_audit_checklist_item WHERE cat_id=? AND is_active=1 ORDER BY sort_order, item_id");
+    $ci = 0; $seq = 0;
     foreach ($cats as $c) {
         $ist->execute([$c['cat_id']]);
         $items = [];
         foreach ($ist->fetchAll(PDO::FETCH_ASSOC) as $it) {
-            $items[] = [(string)$it['item_id'], (string)$it['item_no'], $it['question'], (float)$it['item_max']];
+            // 項次一律依目前順序「跨類別連續」即時重編（使用者2026-10-02要求），不採用 item_no 欄位存的值：
+            // 存的值會在增刪類別/項次之後跟順序對不起來，而且完全不報錯。item_no 只是顯示用編號，
+            // 分數是用 item_id 對應的，所以重編不影響任何已登錄的評分；已完成紀錄的凍結快照也不受影響。
+            $items[] = [(string)$it['item_id'], (string)(++$seq), $it['question'], (float)$it['item_max']];
         }
-        if ($items) $out[] = [$c['code'], $c['name'], $items];
+        // 類別代號同樣依順序自動給 A、B、C…（超過 26 類續以 AA、AB…），不採用 code 欄位存的值
+        if ($items) { $out[] = [vendor_audit_cat_letter($ci), $c['name'], $items]; $ci++; }
     }
     return $out;
 }
