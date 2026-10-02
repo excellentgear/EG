@@ -65,8 +65,10 @@ case 'bootstrap': {
         'special_classes' => cp_special_classes($db),
         'reaction_opts'   => cp_reaction_opts($db, false),
         'as_doc'          => cp_print_meta($db),
-        'tag_status'       => $tagInfo,
-        'as_cert_tags'    => cp_as_cert_tags($db),
+        'tag_status'      => $tagInfo,
+        'as_tag_defs'     => cp_as_tag_defs($db, false),
+        'excluded_as_tags'=> cp_excluded_as_tags($db),
+        'required_as_tags'=> cp_required_as_tags($db),
         'csrf'            => $_SESSION['cp_csrf'] ?? '',
     ]);
 }
@@ -366,33 +368,59 @@ case 'reaction_opt_save': {
     jout(true, ['message' => '已儲存。', 'rows' => cp_reaction_opts($db, false)]);
 }
 
-/* AS 認證標籤設定（只讀訂單追蹤模組的標籤，本模組不自己做一套） */
-case 'as_cert_tags_save': {
+/* 哪些稽核製程標籤「不要求」建 CP（存排除名單；空＝全部稽核製程都要求）。
+   標籤定義只讀訂單追蹤模組的 ot_as_proc_tag，本模組不自己做一套。 */
+case 'excluded_as_tags_save': {
     if (!$perm['admin']) { http_response_code(403); jerr('只有管制計畫管理員可以改設定'); }
     $ids = $jsonArr('tag_ids');
-    cp_as_cert_tags_save($db, $ids);
-    jout(true, ['message' => '已儲存，建議建立清單會改以這些標籤的訂單為母體。', 'as_cert_tags' => cp_as_cert_tags($db)]);
+    // 只能排除真正存在的稽核製程定義（鐵律8：擋掉亂送的 id，否則排除名單會留一堆垃圾）
+    $valid = array_map(function ($d) { return (int)$d['tag_id']; }, cp_as_tag_defs($db, false));
+    $ids = array_values(array_intersect(array_map('intval', $ids), $valid));
+    cp_excluded_as_tags_save($db, $ids);
+    $req = cp_required_as_tags($db);
+    jout(true, [
+        'message' => $ids
+            ? ('已儲存：排除 ' . count($ids) . ' 個稽核製程，其餘 ' . count($req) . ' 個仍要求建管制計畫。')
+            : ('已儲存：全部 ' . count($req) . ' 個稽核製程都要求建管制計畫。'),
+        'excluded_as_tags' => cp_excluded_as_tags($db),
+        'required_as_tags' => $req,
+        'tag_status'       => cp_order_tag_status($db),
+    ]);
 }
 
-/* 可選的訂單標籤清單（訂單標籤功能完成後自動有東西，否則回空） */
-case 'order_tags': {
-    $info = cp_order_tag_status($db);
-    $rows = [];
-    if ($info['ready']) {
-        // 標籤主檔名稱也用動態偵測，訂單標籤完成後不必回來改這裡
-        foreach (['order_tag', 'order_track_tag', 'order_tag_dict'] as $t) {
-            try {
-                if (!$db->query("SHOW TABLES LIKE " . $db->quote($t))->fetch()) continue;
-                $cols = $db->query("SHOW COLUMNS FROM `$t`")->fetchAll(PDO::FETCH_COLUMN) ?: [];
-                $idCol = in_array('tag_id', $cols, true) ? 'tag_id' : ($cols[0] ?? 'id');
-                $nmCol = in_array('tag_name', $cols, true) ? 'tag_name' : (in_array('name', $cols, true) ? 'name' : $idCol);
-                $rows = $db->query("SELECT `$idCol` AS tag_id, `$nmCol` AS tag_name FROM `$t` ORDER BY `$idCol`")
-                           ->fetchAll(PDO::FETCH_ASSOC) ?: [];
-                break;
-            } catch (Throwable $e) {}
-        }
+/* 單張訂單的「需不需要 CP」判定（畫面挑到訂單時即時顯示） */
+case 'order_as_tag': {
+    $oid = (int)($_GET['order_id'] ?? 0);
+    if ($oid <= 0) jerr('缺少訂單。');
+    $t = cp_order_as_tag($db, $oid);
+    if (!$t) jerr('找不到這張訂單。');
+    jout(true, ['as_tag' => $t]);
+}
+
+/* 稽核製程標籤定義清單（設定頁用）。含停用的，並附「這個標籤目前掛了幾張訂單」
+   ——管理員要排除某個稽核製程之前，會想知道影響多少張單。 */
+case 'as_tag_list': {
+    $defs = cp_as_tag_defs($db, false);
+    $ex   = cp_excluded_as_tags($db);
+    foreach ($defs as &$d) {
+        $d['excluded'] = in_array((int)$d['tag_id'], $ex, true) ? 1 : 0;
+        $d['n_order']  = 0;
+        $d['n_part']   = 0;
+        try {
+            $st = $db->prepare(
+                "SELECT COUNT(*) n_ord, COUNT(DISTINCT d_id_ID) n_part FROM order_track
+                  WHERE as_tag_id = ? AND (Order_status IS NULL OR Order_status <> 6)"
+            );
+            $st->execute([(int)$d['tag_id']]);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+            $d['n_order'] = (int)($r['n_ord'] ?? 0);
+            $d['n_part']  = (int)($r['n_part'] ?? 0);
+        } catch (Throwable $e) {}
+        $d['label_single'] = cp_as_tag_label($d['proc_name'], 'single');
+        $d['label_full']   = cp_as_tag_label($d['proc_name'], 'full');
     }
-    jout(true, ['rows' => $rows, 'status' => $info]);
+    unset($d);
+    jout(true, ['rows' => $defs, 'status' => cp_order_tag_status($db)]);
 }
 
 /* AS 文件綁定（走共用 asdoc_lib，不自己存一份） */

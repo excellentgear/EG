@@ -195,72 +195,247 @@ function cp_reaction_opts(PDO $db, bool $onlyActive = true): array
     } catch (Throwable $e) { return []; }
 }
 
-/** 讀本模組的 system_parameters 設定值 */
+/**
+ * 讀本模組的 system_parameters 設定值。
+ * 【注意 param_value 是 json 型別（NOT NULL）】所以存進去的一律是 JSON、讀出來要 decode。
+ * 本次實際踩過：把空清單存成空字串 '' 會丟 MySQL 3140「Invalid JSON text: The document is empty」，
+ * 而「清空設定」正是最常見的操作。既有模組（ORDER_ANALYSIS 的 scope_master 存 [77,112]）
+ * 本來就是存 JSON 陣列，照同一套做。
+ */
+/**
+ * 請求內快取（可清除）。寫法比照 qc_tool_display_lib.php 的 qc_tool_disp_cache()——
+ * 單純的 static 快取從外部清不掉，會出現「同一個請求內存完設定再重算，卻吃到舊值」
+ * （資料稽核的 dqa_excl_map() 踩過這個坑：規則存進去了、當下重算卻完全沒作用）。
+ */
+function cp_param_cache(?array $set = null, bool $clear = false): ?array
+{
+    static $c = null;
+    if ($clear) { $c = null; return null; }
+    if ($set !== null) $c = $set;
+    return $c;
+}
+function cp_param_cache_clear(): void { cp_param_cache(null, true); }
+
 function cp_param(PDO $db, string $key, $default = null)
 {
-    static $cache = null;
+    $cache = cp_param_cache();
     if ($cache === null) {
         $cache = [];
         try {
             $st = $db->prepare("SELECT param_key, param_value FROM system_parameters WHERE param_group=?");
             $st->execute([CP_PARAM_GROUP]);
-            foreach ($st as $r) $cache[$r['param_key']] = $r['param_value'];
+            foreach ($st as $r) {
+                $v = json_decode((string)$r['param_value'], true);
+                // 舊值可能是純量（例最初存成 "8"），decode 失敗就沿用原字串，不要整個丟掉
+                $cache[$r['param_key']] = (json_last_error() === JSON_ERROR_NONE) ? $v : $r['param_value'];
+            }
         } catch (Throwable $e) {}
+        cp_param_cache($cache);
     }
     return array_key_exists($key, $cache) ? $cache[$key] : $default;
 }
 
 function cp_param_save(PDO $db, string $key, $val): void
 {
+    $json = json_encode($val, JSON_UNESCAPED_UNICODE);
+    if ($json === false) $json = 'null';
     $st = $db->prepare(
-        "INSERT INTO system_parameters (param_group, param_key, param_value)
-         VALUES (?,?,?) ON DUPLICATE KEY UPDATE param_value=VALUES(param_value)"
+        "INSERT INTO system_parameters (param_group, param_key, param_value, updated_at)
+         VALUES (?,?,?,NOW()) ON DUPLICATE KEY UPDATE param_value=VALUES(param_value), updated_at=NOW()"
     );
-    $st->execute([CP_PARAM_GROUP, $key, (string)$val]);
+    $st->execute([CP_PARAM_GROUP, $key, $json]);
+    cp_param_cache_clear();
+}
+
+/* ===================================================================
+ * 三之二、「哪些訂單需要建 CP」＝訂單追蹤的稽核製程標籤
+ *
+ * 使用者定調（2026-10-02）：「NewOrder_Track.php 的設定已經增加設定『稽核製程』的標籤，
+ * 請認定有此標籤之訂單為需要 CP 之訂單」。
+ *
+ * 標籤的唯一實作在 src/common/order_as_tag_lib.php，本庫只讀不寫。結構：
+ *   定義 ot_as_proc_tag.kind 有三種
+ *     process ＝管理員自訂的「稽核製程」（綁 process_type_id 製程大類）→ **這種才需要 CP**
+ *     fixed   ＝內建三選項：全製／單製非AS認證／廠內治具 → 不需要
+ *     other   ＝管理員自己加的其他固定選項（實測有一筆「單/全製含齒研(不列AS認證)」）→ 不需要
+ *   訂單 order_track.as_tag_id ＋ as_tag_scope（single／full／none，一張訂單只有一個標籤）
+ *
+ * 所以判定就是一句話：**訂單的 as_tag_id 指向 kind='process' 的定義**。
+ * 預設認定全部稽核製程（零設定就生效＝使用者要的），但允許管理員排除特定幾個
+ * （例如新加了一道稽核製程但暫時還不做 CP）；存的是「排除名單」而不是「納入名單」，
+ * 這樣管理員之後在訂單追蹤新增一道稽核製程時，CP 這邊會自動跟上、不必回來補設定。
+ * =================================================================== */
+
+/** 稽核製程的標籤定義（kind='process'）。$onlyActive=false 連停用的也回（舊 CP 要顯示得出名稱） */
+function cp_as_tag_defs(PDO $db, bool $onlyActive = true): array
+{
+    $w = $onlyActive ? " AND t.is_active=1" : "";
+    try {
+        $st = $db->query(
+            "SELECT t.tag_id, t.proc_name, t.scope, t.process_type_id, t.sub_no_json,
+                    t.is_active, t.sort_order
+               FROM ot_as_proc_tag t
+              WHERE t.kind='process' $w
+              ORDER BY t.sort_order, t.tag_id"
+        );
+        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
 }
 
 /**
- * 「哪些訂單標籤視為需要建 CP」。
- * 回傳標籤 id 陣列。訂單標籤機制由訂單追蹤模組提供，本庫只讀；
- * 尚未完成時回空陣列（呼叫端要能處理空的情況，退回 PFMEA 母體）。
+ * 被管理員排除的稽核製程標籤 id（有這個標籤但不要求建 CP 的那幾個）。
+ * 空＝全部稽核製程都需要（預設）。
  */
-function cp_as_cert_tags(PDO $db): array
+function cp_excluded_as_tags(PDO $db): array
 {
-    $raw = (string)cp_param($db, 'as_cert_tags', '');
-    if ($raw === '') return [];
-    $ids = array_values(array_filter(array_map('intval', explode(',', $raw))));
-    return $ids;
+    $v = cp_param($db, 'excluded_as_tags', []);
+    if (is_array($v)) return array_values(array_filter(array_map('intval', $v)));
+    // 相容舊格式（曾存成逗號字串或單一數字）
+    if (is_numeric($v)) return [(int)$v];
+    $s = trim((string)$v);
+    return $s === '' ? [] : array_values(array_filter(array_map('intval', explode(',', $s))));
 }
 
-function cp_as_cert_tags_save(PDO $db, array $ids): void
+function cp_excluded_as_tags_save(PDO $db, array $ids): void
 {
     $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
-    cp_param_save($db, 'as_cert_tags', implode(',', $ids));
+    sort($ids);
+    cp_param_save($db, 'excluded_as_tags', $ids);   // 存 JSON 陣列（空陣列也是合法 JSON）
 }
 
 /**
- * 訂單標籤機制現況偵測。
- * 回 ['ready'=>bool, 'table'=>?string, 'reason'=>string]
- * 刻意做成即時偵測而不是寫死：訂單標籤正由另一條工作線製作中，
- * 做好之後這裡自動就接上，不必回來改程式（鐵律4）。
+ * 真正「需要建 CP」的標籤 id 陣列＝啟用中的稽核製程，扣掉被排除的。
+ * 停用的定義不納入新的認定（但既有 CP 仍看得到自己的快照標籤名稱）。
+ */
+function cp_required_as_tags(PDO $db): array
+{
+    $ex = cp_excluded_as_tags($db);
+    $out = [];
+    foreach (cp_as_tag_defs($db, true) as $d) {
+        $id = (int)$d['tag_id'];
+        if (in_array($id, $ex, true)) continue;
+        $out[] = $id;
+    }
+    return $out;
+}
+
+/**
+ * 標籤顯示名稱。語意與訂單追蹤那邊一致：
+ *   single ＝「單製○○」客戶送料來、只做這一道稽核製程 → CP 只涵蓋那一道
+ *   full   ＝「全製含○○」從頭做到成品、過程中有這一道 → CP 涵蓋整條製程鏈
+ * 刻意只做顯示用的簡版、不去呼叫 ot_astag_make_label()：那一支要連固定三選項與
+ * both 變體一起處理，這裡只需要「稽核製程 × single/full」兩種。
+ */
+function cp_as_tag_label(?string $procName, ?string $scope): string
+{
+    $n = trim((string)$procName);
+    if ($n === '') return '';
+    switch ((string)$scope) {
+        case 'single': return '單製' . $n;
+        case 'full':   return '全製含' . $n;
+    }
+    return $n;
+}
+
+/**
+ * 某一張訂單的稽核製程標籤（含「需不需要 CP」的判定結果與理由）。
+ * 回 null＝訂單不存在；need_cp=false 時 reason 一定有話可說——
+ * 「為什麼這張訂單不用建 CP」是使用者會當場問的問題，不能只回一個 false。
+ */
+function cp_order_as_tag(PDO $db, int $orderId): ?array
+{
+    if ($orderId <= 0) return null;
+    try {
+        $st = $db->prepare(
+            "SELECT o.Order_id, o.as_tag_id, o.as_tag_scope, o.as_tag_at,
+                    t.kind, t.proc_name, t.scope AS def_scope, t.is_active
+               FROM order_track o
+               LEFT JOIN ot_as_proc_tag t ON t.tag_id = o.as_tag_id
+              WHERE o.Order_id = ?"
+        );
+        $st->execute([$orderId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) return null;
+    } catch (Throwable $e) { return null; }
+
+    $tagId = (int)($r['as_tag_id'] ?? 0);
+    $kind  = (string)($r['kind'] ?? '');
+    $scope = (string)($r['as_tag_scope'] ?? '');
+    $req   = cp_required_as_tags($db);
+    $need  = ($tagId > 0 && $kind === 'process' && in_array($tagId, $req, true));
+
+    $why = '';
+    if ($tagId <= 0) {
+        $why = '這張訂單還沒設定稽核製程標籤（訂單追蹤的訂單跳窗標題右側可以設定）。';
+    } elseif ($kind === 'fixed') {
+        $why = '標籤是「' . $r['proc_name'] . '」＝內建選項不是稽核製程，依認定不需要管制計畫。';
+    } elseif ($kind === 'other') {
+        $why = '標籤是「' . $r['proc_name'] . '」＝其他固定選項（不列 AS 認證），依認定不需要管制計畫。';
+    } elseif ($kind === 'process' && !in_array($tagId, $req, true)) {
+        $why = '稽核製程「' . $r['proc_name'] . '」已被管理員在管制計畫設定裡排除，或該定義已停用。';
+    }
+
+    return [
+        'order_id'  => (int)$r['Order_id'],
+        'tag_id'    => $tagId ?: null,
+        'kind'      => $kind,
+        'scope'     => $scope,
+        'proc_name' => (string)($r['proc_name'] ?? ''),
+        'label'     => cp_as_tag_label($r['proc_name'] ?? '', $scope),
+        'is_active' => $r['is_active'] !== null ? (int)$r['is_active'] : null,
+        'need_cp'   => $need,
+        'reason'    => $why,
+        'tagged_at' => $r['as_tag_at'] ?? null,
+        /* 這張 CP 該涵蓋多少製程：single＝客戶送料只做那一道、full＝整條製程鏈。
+           自動帶入取的是該訂單綁的製令的完整製程鏈，單製的製令本來就只有那幾道，
+           所以不必在這裡裁切；但畫面要講出來，否則使用者不知道範圍對不對。 */
+        'scope_hint' => $scope === 'single'
+            ? '單製：客戶送料來、只做這一道稽核製程，這張 CP 只需涵蓋該製程'
+            : ($scope === 'full' ? '全製含：從頭做到成品，這張 CP 要涵蓋整條製程鏈' : ''),
+    ];
+}
+
+/**
+ * 稽核製程標籤機制現況偵測。
+ * 回 ['ready'=>bool, 'reason'=>string, 'n_tag'=>int, 'n_order'=>int, 'n_part'=>int]
  */
 function cp_order_tag_status(PDO $db): array
 {
-    // 候選的標籤對應表名稱（訂單標籤完成後擇一存在即可）
-    $cands = ['order_tag_map', 'order_track_tag_map', 'order_tags'];
-    foreach ($cands as $t) {
-        try {
-            if ($db->query("SHOW TABLES LIKE " . $db->quote($t))->fetch()) {
-                return ['ready' => true, 'table' => $t, 'reason' => ''];
-            }
-        } catch (Throwable $e) {}
+    $base = ['ready' => false, 'n_tag' => 0, 'n_order' => 0, 'n_part' => 0, 'reason' => ''];
+    try {
+        if (!$db->query("SHOW TABLES LIKE 'ot_as_proc_tag'")->fetch()) {
+            $base['reason'] = '訂單追蹤的稽核製程標籤還沒建立（找不到 ot_as_proc_tag）。';
+            return $base;
+        }
+        $cols = $db->query("SHOW COLUMNS FROM order_track")->fetchAll(PDO::FETCH_COLUMN) ?: [];
+        if (!in_array('as_tag_id', $cols, true)) {
+            $base['reason'] = 'order_track 還沒有 as_tag_id 欄位，訂單還無法掛稽核製程標籤。';
+            return $base;
+        }
+    } catch (Throwable $e) {
+        $base['reason'] = '偵測失敗：' . $e->getMessage();
+        return $base;
     }
-    return [
-        'ready'  => false,
-        'table'  => null,
-        'reason' => '訂單標籤功能尚未完成（order_track 目前沒有標籤欄位）。'
-                  . '完成後請到「設定」把代表 AS 認證的標籤勾起來，建議清單就會改以那些訂單為母體。',
-    ];
+
+    $req = cp_required_as_tags($db);
+    if (!$req) {
+        $base['reason'] = '目前沒有任何啟用中、且未被排除的「稽核製程」標籤定義'
+                        . '（訂單追蹤→設定→稽核製程標籤可以新增），所以還認定不出哪些訂單需要管制計畫。';
+        return $base;
+    }
+    $in = implode(',', array_map('intval', $req));
+    $nOrd = 0; $nPart = 0;
+    try {
+        $r = $db->query(
+            "SELECT COUNT(*) n_ord, COUNT(DISTINCT d_id_ID) n_part
+               FROM order_track
+              WHERE as_tag_id IN ($in) AND (Order_status IS NULL OR Order_status <> 6)"
+        )->fetch(PDO::FETCH_ASSOC);
+        $nOrd  = (int)($r['n_ord'] ?? 0);
+        $nPart = (int)($r['n_part'] ?? 0);
+    } catch (Throwable $e) {}
+
+    return ['ready' => true, 'n_tag' => count($req), 'n_order' => $nOrd, 'n_part' => $nPart, 'reason' => ''];
 }
 
 /* ===================================================================
@@ -619,6 +794,7 @@ function cp_autofill_preview(PDO $db, array $opt): array
     $res = [
         'head' => [], 'src' => [], 'processes' => [],
         'pfmea_only' => [], 'bom_choices' => [], 'warn' => [], 'info' => [],
+        'as_tag' => null,
     ];
 
     // --- 由訂單推料號與製令 ---
@@ -635,6 +811,21 @@ function cp_autofill_preview(PDO $db, array $opt): array
         } catch (Throwable $e) {}
         if ($orderRow) {
             if (!$partDId) $partDId = (int)($orderRow['d_id_ID'] ?? 0);
+
+            /* 稽核製程標籤＝「這張訂單到底需不需要 CP」的唯一依據（使用者 2026-10-02 定調）。
+               不需要時刻意只給警示、不擋下建立——補歷史資料、或標籤還沒設好就想先建 CP
+               都是合理的；但畫面上一定要講清楚「依認定這張不需要」，否則使用者會以為
+               系統認可了這張單需要 CP。 */
+            $tag = cp_order_as_tag($db, $orderId);
+            $res['as_tag'] = $tag;
+            if ($tag && !$tag['need_cp']) {
+                $res['warn'][] = '這張訂單依稽核製程標籤的認定**不需要**管制計畫：' . $tag['reason']
+                               . '（仍可繼續建立，但請確認是刻意的）';
+            } elseif ($tag && $tag['need_cp']) {
+                $res['info'][] = '依稽核製程標籤認定需要管制計畫：' . $tag['label']
+                               . '。' . $tag['scope_hint'];
+            }
+
             $res['bom_choices'] = cp_order_boms($db, $orderId);
             if ($bom === '' && count($res['bom_choices']) === 1) {
                 $bom = (string)$res['bom_choices'][0]['bom'];
@@ -693,6 +884,7 @@ function cp_autofill_preview(PDO $db, array $opt): array
     if ($bom !== '' && !$procs) {
         $res['warn'][] = '製令 ' . $bom . ' 查不到任何製程（bom_ing 無資料）。';
     }
+    $tagSrc = $res['as_tag'] ?? null;
     $res['src'] = [
         'order_id'  => $orderId ?: null,
         'order_oo'  => $orderRow ? (string)$orderRow['Order_oo'] : null,
@@ -700,6 +892,10 @@ function cp_autofill_preview(PDO $db, array $opt): array
         'bom_date'  => $bom !== '' ? cp_bom_open_date($bom) : null,
         'stage_id'  => $stageId ?: null,
         'stage_name'=> $stage ? (string)$stage['stage_name'] : '',
+        // 標籤快照：存下來才能回答「這張 CP 當初是因為什麼認定而建的」（標籤之後可能被改）
+        'as_tag_id'    => $tagSrc['tag_id'] ?? null,
+        'as_tag_scope' => $tagSrc['scope'] ?? null,
+        'as_tag_label' => $tagSrc['label'] ?? null,
     ];
 
     $stageFreq = $stage ? trim((string)($stage['default_freq'] ?? '')) : '';
@@ -921,6 +1117,21 @@ function cp_get(PDO $db, int $cpId): ?array
     $st->execute([$cpId]);
     $doc['revisions'] = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
+    /* 來源訂單的稽核製程標籤「現在」是什麼，與這張 CP 建立時的快照比對。
+       不自動改寫快照（見 cp_save 的說明），只在不一致時給提示——
+       標籤被改成「不列 AS」卻還有一張 CP 掛著，是稽核會問的事，要讓人看見。 */
+    $doc['as_tag_now'] = null;
+    $doc['as_tag_changed'] = 0;
+    if (!empty($doc['src_order_id'])) {
+        $now = cp_order_as_tag($db, (int)$doc['src_order_id']);
+        $doc['as_tag_now'] = $now;
+        $snapId = (int)($doc['src_as_tag_id'] ?? 0);
+        if ($now && $snapId > 0) {
+            $doc['as_tag_changed'] = ((int)($now['tag_id'] ?? 0) !== $snapId
+                                   || (string)($now['scope'] ?? '') !== (string)($doc['src_as_tag_scope'] ?? '')) ? 1 : 0;
+        }
+    }
+
     return $doc;
 }
 
@@ -988,6 +1199,9 @@ function cp_save(PDO $db, array $in, array $perm): array
         'src_order_oo' => trim((string)($in['src_order_oo'] ?? '')) ?: null,
         'src_bom' => trim((string)($in['src_bom'] ?? '')) ?: null,
         'src_bom_date' => trim((string)($in['src_bom_date'] ?? '')) ?: null,
+        // 稽核製程標籤快照：一律由來源訂單即時重新解析，不採信前端送來的值
+        // （鐵律8；前端那三個欄位只是顯示用，被改掉也不影響存進去的認定依據）
+        'src_as_tag_id' => null, 'src_as_tag_scope' => null, 'src_as_tag_label' => null,
         'pfmea_doc_id' => (int)($in['pfmea_doc_id'] ?? 0) ?: null,
         'org_code' => trim((string)($in['org_code'] ?? '')),
         'key_contact' => trim((string)($in['key_contact'] ?? '')),
@@ -997,6 +1211,31 @@ function cp_save(PDO $db, array $in, array $perm): array
         'other_appr' => trim((string)($in['other_appr'] ?? '')),
         'note' => (string)($in['note'] ?? ''),
     ];
+
+    /* 有來源訂單時，標籤快照一律重新解析一次（不採信前端）。
+       刻意只在「新建」或「快照還是空的」時候寫入：已經建好的 CP 事後若訂單標籤被改，
+       不該回頭改寫它的認定依據——那張 CP 當初就是依當時的認定建的，
+       現況不一致要用提示讓人看見，而不是靜默覆蓋（同型態識別文件管制表的快照思路）。 */
+    if (!empty($fields['src_order_id'])) {
+        $needSnap = true;
+        if ($cpId > 0) {
+            try {
+                $q = $db->prepare("SELECT src_as_tag_id FROM cp_doc WHERE cp_id=?");
+                $q->execute([$cpId]);
+                $needSnap = ((int)($q->fetchColumn() ?: 0) === 0);
+            } catch (Throwable $e) {}
+        }
+        if ($needSnap) {
+            $tg = cp_order_as_tag($db, (int)$fields['src_order_id']);
+            if ($tg && $tg['tag_id']) {
+                $fields['src_as_tag_id']    = $tg['tag_id'];
+                $fields['src_as_tag_scope'] = $tg['scope'];
+                $fields['src_as_tag_label'] = $tg['label'];
+            }
+        } else {
+            unset($fields['src_as_tag_id'], $fields['src_as_tag_scope'], $fields['src_as_tag_label']);
+        }
+    }
 
     $own = $db->inTransaction() ? false : true;
     if ($own) $db->beginTransaction();
@@ -1322,50 +1561,69 @@ function cp_delete(PDO $db, int $cpId, array $perm): array
 
 /**
  * 「該建 CP 但還沒建」的清單。
- * 母體優先用「有 AS 認證標籤的訂單」（使用者定調）；標籤機制還沒完成時
- * 退回「已建 PFMEA 的料號」——那批本來就是客戶要求 APQP 的對象。
+ * 母體＝**訂單掛了稽核製程標籤（kind='process'）的料號**（使用者 2026-10-02 定調）。
+ * 標籤機制還沒建立或一個稽核製程都沒定義時，退回「已建 PFMEA 的料號」當母體
+ * （那批本來就是客戶要求 APQP 的對象），並在 note 講明為什麼退回。
+ *
+ * 【一個料號一列，不是一張訂單一列】同一個料號會重複下單（實測 1,126 張需 CP 訂單
+ * 只對應 848 個料號），逐訂單列會讓同一個料號出現十幾次。每一列帶「最近一張該標籤的訂單」
+ * 當自動帶入的入口。
+ *
+ * 【為什麼要算資料齊全度並據以排序】實測 848 個需 CP 料號裡只有 25 個有 PFMEA、
+ * 0 個有已核准的 SIP。848 筆清單若不排序，使用者不知道從哪裡開始；
+ * 把「自動帶得出東西的」排在最前面，才有辦法一筆一筆推進。
  */
 function cp_suggest_rows(PDO $db, array $opt = []): array
 {
     $stageId = (int)($opt['stage_id'] ?? 0);
     $tagInfo = cp_order_tag_status($db);
-    $tags    = cp_as_cert_tags($db);
     $rows = [];
     $mode = 'pfmea';
     $note = '';
+    $tagIds = cp_required_as_tags($db);
 
-    if ($tagInfo['ready'] && $tags) {
-        $mode = 'order_tag';
-        $note = '母體＝帶有指定 AS 認證標籤的訂單。';
-        // 訂單標籤完成後接這裡（欄位名以實際完成的結構為準，故用動態表名）
-        $t = $tagInfo['table'];
-        $in = implode(',', array_fill(0, count($tags), '?'));
+    if ($tagInfo['ready'] && $tagIds) {
+        $mode = 'as_tag';
+        $in = implode(',', array_map('intval', $tagIds));
+        /* 一個料號取「最近一張掛該標籤的訂單」。
+           用 MAX(Order_id) 的子查詢而不是 GROUP BY + ORDER BY 其他欄位——
+           本站 sql_mode 含 ONLY_FULL_GROUP_BY，後者會丟 1055
+           （這個坑在本庫已經踩過一次，見 git 紀錄）。 */
         try {
-            $sql = "SELECT o.Order_id, o.Order_oo, o.d_id, o.d_id_ID, o.Client_name, o.Order_date, o.Qty
-                      FROM `$t` m
-                      JOIN order_track o ON o.Order_id = m.order_id
-                     WHERE m.tag_id IN ($in)
-                       AND (o.Order_status IS NULL OR o.Order_status <> 6)
-                     ORDER BY o.Order_date DESC
-                     LIMIT 500";
-            $st = $db->prepare($sql);
-            $st->execute($tags);
+            $st = $db->query(
+                "SELECT o.Order_id, o.Order_oo, o.d_id, o.d_id_ID, o.Client_name, o.Order_date, o.Qty,
+                        o.as_tag_id, o.as_tag_scope,
+                        t.proc_name, t.kind,
+                        ds.D_Setting_Id, ds.Revision, ds.Customer_Id, ds.Remark,
+                        c.customer,
+                        m.n_order
+                   FROM order_track o
+                   /* 同一個料號取「最近一張掛該標籤的訂單」，筆數一起在這支子查詢算完。
+                      刻意不用相關子查詢去數 n_order——那會對 848 列各跑一次，實測慢 1 秒以上
+                      （記憶 slow_list_query_pattern 同一類坑）。 */
+                   JOIN (SELECT d_id_ID, MAX(Order_id) AS mid, COUNT(*) AS n_order
+                           FROM order_track
+                          WHERE as_tag_id IN ($in) AND d_id_ID > 0
+                            AND (Order_status IS NULL OR Order_status <> 6)
+                          GROUP BY d_id_ID) m ON m.mid = o.Order_id
+                   JOIN ot_as_proc_tag t ON t.tag_id = o.as_tag_id
+                   LEFT JOIN d_setting ds ON ds.d_id = o.d_id_ID
+                   LEFT JOIN customer_list c ON c.customer_id = ds.Customer_Id
+                  ORDER BY o.Order_date DESC, o.Order_id DESC"
+            );
             $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $note = '母體＝訂單掛了「稽核製程」標籤的料號（' . $tagInfo['n_order'] . ' 張訂單、'
+                  . $tagInfo['n_part'] . ' 個料號）。一個料號一列，帶最近一張該標籤的訂單當帶入入口。';
         } catch (Throwable $e) {
             $mode = 'pfmea';
-            $note = '讀取訂單標籤失敗（' . $e->getMessage() . '），已退回以 PFMEA 為母體。';
+            $note = '讀取稽核製程標籤失敗（' . $e->getMessage() . '），已退回以 PFMEA 為母體。';
         }
     } else {
-        $note = $tagInfo['ready']
-            ? '尚未在「設定」指定哪些標籤代表 AS 認證，暫以「已建 PFMEA 的料號」為母體。'
-            : $tagInfo['reason'] . ' 暫以「已建 PFMEA 的料號」為母體。';
+        $note = ($tagInfo['reason'] ?: '稽核製程標籤尚未可用。')
+              . ' 暫以「已建 PFMEA 的料號」為母體。';
     }
 
     if ($mode === 'pfmea') {
-        /* 一個料號取「最新那一份 PFMEA」。
-           不可以寫成 GROUP BY part_d_id 再 SELECT 其他欄位——本站 sql_mode 含
-           ONLY_FULL_GROUP_BY，那樣會丟 1055 錯誤；本次就是被 try/catch 吞掉之後
-           整個建議清單變成 0 筆而且畫面上完全沒有線索。 */
         $st = $db->query(
             "SELECT p.part_d_id, p.part_no_text, p.product_name, p.id AS pfmea_doc_id, p.biz_date,
                     d.D_Setting_Id, d.Revision, d.Customer_Id, c.customer
@@ -1384,8 +1642,8 @@ function cp_suggest_rows(PDO $db, array $opt = []): array
     // 已建 CP 的料號（依階段）
     $done = [];
     try {
-        $sql = "SELECT part_d_id, stage_id FROM cp_doc WHERE is_deleted=0 AND part_d_id IS NOT NULL";
-        foreach ($db->query($sql) as $r) {
+        foreach ($db->query("SELECT part_d_id, stage_id FROM cp_doc
+                              WHERE is_deleted=0 AND part_d_id IS NOT NULL") as $r) {
             $done[(int)$r['part_d_id']][(int)$r['stage_id']] = true;
         }
     } catch (Throwable $e) {}
@@ -1398,7 +1656,8 @@ function cp_suggest_rows(PDO $db, array $opt = []): array
         }
     } catch (Throwable $e) {}
 
-    $out = [];
+    // 先篩出真正要列的料號，再一次算資料齊全度（逐列各查一次＝848 次 N+1）
+    $cand = [];
     foreach ($rows as $r) {
         $pid = (int)($r['part_d_id'] ?? $r['d_id_ID'] ?? 0);
         if ($pid <= 0) continue;
@@ -1411,21 +1670,119 @@ function cp_suggest_rows(PDO $db, array $opt = []): array
             // 不指定階段時，只要有任何一張就不再建議（避免清單被已處理的洗滿）
             continue;
         }
+        $r['_pid'] = $pid;
+        $r['_have'] = array_keys($haveStages);
+        $cand[$pid] = $r;
+    }
+
+    $ready = $cand ? cp_part_data_ready($db, array_keys($cand)) : [];
+
+    $out = [];
+    foreach ($cand as $pid => $r) {
+        $rd = $ready[$pid] ?? ['pfmea' => 0, 'sip' => 0, 'sip_draft' => 0, 'bom' => 0, 'proc' => 0];
         $out[] = [
             'part_d_id'    => $pid,
             'part_no_text' => (string)($r['D_Setting_Id'] ?? $r['part_no_text'] ?? $r['d_id'] ?? ''),
-            'product_name' => (string)($r['product_name'] ?? ''),
+            'product_name' => (string)($r['Remark'] ?? $r['product_name'] ?? ''),
             'part_rev'     => (string)($r['Revision'] ?? ''),
             'customer_id'  => (string)($r['Customer_Id'] ?? ''),
             'customer_name'=> (string)($r['customer'] ?? $r['Client_name'] ?? ''),
             'order_id'     => isset($r['Order_id']) ? (int)$r['Order_id'] : null,
             'order_oo'     => (string)($r['Order_oo'] ?? ''),
-            'pfmea_doc_id' => isset($r['pfmea_doc_id']) ? (int)$r['pfmea_doc_id'] : null,
-            'have_stages'  => array_keys($haveStages),
+            'order_date'   => $r['Order_date'] ?? null,
+            'n_order'      => isset($r['n_order']) ? (int)$r['n_order'] : null,
+            'as_tag_id'    => isset($r['as_tag_id']) ? (int)$r['as_tag_id'] : null,
+            'as_tag_scope' => (string)($r['as_tag_scope'] ?? ''),
+            'as_tag_label' => cp_as_tag_label($r['proc_name'] ?? '', $r['as_tag_scope'] ?? ''),
+            'pfmea_doc_id' => $rd['pfmea'] ?: (isset($r['pfmea_doc_id']) ? (int)$r['pfmea_doc_id'] : null),
+            'has_sip'      => (int)$rd['sip'],
+            'sip_draft'    => (int)$rd['sip_draft'],
+            'has_bom'      => (int)$rd['bom'],
+            'n_proc'       => (int)$rd['proc'],
+            'ready_score'  => ($rd['pfmea'] ? 2 : 0) + ($rd['sip'] ? 4 : 0)
+                            + ($rd['sip_draft'] ? 1 : 0) + ($rd['proc'] ? 1 : 0),
+            'have_stages'  => $r['_have'],
         ];
     }
+    // 自動帶得出東西的排前面（齊全度高→訂單多→日期新）
+    usort($out, function ($a, $b) {
+        if ($a['ready_score'] !== $b['ready_score']) return $b['ready_score'] - $a['ready_score'];
+        if ((int)$a['n_order'] !== (int)$b['n_order']) return (int)$b['n_order'] - (int)$a['n_order'];
+        return strcmp((string)$b['order_date'], (string)$a['order_date']);
+    });
 
-    return ['rows' => $out, 'mode' => $mode, 'note' => $note, 'tag_ready' => $tagInfo['ready']];
+    $sum = ['total' => count($out), 'with_pfmea' => 0, 'with_sip' => 0, 'with_sip_draft' => 0, 'with_proc' => 0];
+    foreach ($out as $o) {
+        if ($o['pfmea_doc_id']) $sum['with_pfmea']++;
+        if ($o['has_sip'])      $sum['with_sip']++;
+        if ($o['sip_draft'])    $sum['with_sip_draft']++;
+        if ($o['n_proc'])       $sum['with_proc']++;
+    }
+
+    return ['rows' => $out, 'mode' => $mode, 'note' => $note,
+            'tag_ready' => $tagInfo['ready'], 'tag_status' => $tagInfo, 'summary' => $sum];
+}
+
+/**
+ * 一批料號的「自動帶入資料齊全度」（一次查完，不要逐列 N+1）。
+ * 回 [part_d_id => ['pfmea'=>pfmea_doc_id, 'sip'=>1/0, 'sip_draft'=>1/0, 'bom'=>1/0, 'proc'=>n]]
+ *
+ * sip 與 sip_draft 分開：**自動帶入只取已核准的版次**（草稿的公差不該印在 CP 上），
+ * 但「有 SIP 只是還沒核准」是個可以馬上行動的提示（去把它核准就帶得出來了），
+ * 跟「根本沒有 SIP」是兩件事，混在一起會讓使用者白跑一趟。
+ */
+function cp_part_data_ready(PDO $db, array $partIds): array
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $partIds))));
+    if (!$ids) return [];
+    $in = implode(',', $ids);
+    $out = [];
+    foreach ($ids as $p) $out[$p] = ['pfmea' => 0, 'sip' => 0, 'sip_draft' => 0, 'bom' => 0, 'proc' => 0];
+
+    try {
+        foreach ($db->query("SELECT part_d_id, MAX(id) mid FROM pfmea_doc
+                              WHERE is_deleted=0 AND part_d_id IN ($in)
+                              GROUP BY part_d_id") as $r) {
+            $out[(int)$r['part_d_id']]['pfmea'] = (int)$r['mid'];
+        }
+    } catch (Throwable $e) {}
+
+    try {
+        foreach ($db->query("SELECT d.part_d_id,
+                                    MAX(v.status='approved') app,
+                                    MAX(v.status<>'approved') dft
+                               FROM ss_doc d
+                               JOIN ss_ver v ON v.ver_id = d.cur_ver_id
+                              WHERE d.is_deleted=0 AND d.kind='sip' AND d.part_d_id IN ($in)
+                              GROUP BY d.part_d_id") as $r) {
+            $p = (int)$r['part_d_id'];
+            $out[$p]['sip']       = (int)$r['app'];
+            $out[$p]['sip_draft'] = ((int)$r['app'] === 0 && (int)$r['dft'] === 1) ? 1 : 0;
+        }
+    } catch (Throwable $e) {}
+
+    /* 有沒有製令、製令上有幾道製程（製程列帶不帶得出來）。
+       用該料號最近一張製令；bom.d_setting_id 八成是 NULL（記憶 bom_d_setting_id_mostly_null），
+       所以兩個鍵都要比。 */
+    try {
+        foreach ($db->query(
+            "SELECT x.pid, COUNT(bi.bom_ing_fid) n_proc
+               FROM (SELECT o.d_id_ID pid, MAX(b.bom) bom
+                       FROM order_track o
+                       JOIN bom b ON (b.d_setting_id = o.d_id_ID
+                                   OR (b.d_setting_id IS NULL AND b.d_id = o.d_id))
+                      WHERE o.d_id_ID IN ($in)
+                      GROUP BY o.d_id_ID) x
+               LEFT JOIN bom_ing bi ON bi.bom = x.bom
+              GROUP BY x.pid") as $r) {
+            $p = (int)$r['pid'];
+            if (!isset($out[$p])) continue;
+            $out[$p]['bom']  = 1;
+            $out[$p]['proc'] = (int)$r['n_proc'];
+        }
+    } catch (Throwable $e) {}
+
+    return $out;
 }
 
 function cp_suggest_ignore(PDO $db, int $partDId, int $stageId, string $reason, array $perm): array

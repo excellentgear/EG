@@ -312,6 +312,7 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
                 <select id="aBom" style="display:none;"></select>
                 <button class="btn-w" id="btnPreview"><i class="fa fa-search"></i> 預覽帶入內容</button>
             </div>
+            <div id="aTagBox" style="margin:-4px 0 8px;"></div>
             <div id="prevWrap"></div>
 
             <div class="cp-toolbar" style="margin-top:14px;border-top:2px solid #F7E0BD;padding-top:10px;">
@@ -321,17 +322,22 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
                 <button class="btn-w2" id="btnSug"><i class="fa fa-refresh"></i> 重新整理</button>
                 <button class="btn-w2" id="btnIgnoredList"><i class="fa fa-eye-slash"></i> 忽略名單</button>
             </div>
+            <div class="cp-note" id="sugSummary" style="display:none;"></div>
             <div class="cp-scroll">
-                <table class="cp-t" id="tSug">
+                <table class="cp-t" id="tSug" style="min-width:1120px;">
                     <thead><tr>
-                        <th style="width:160px;">料號</th><th>品名</th><th style="width:90px;">客戶</th>
-                        <th style="width:56px;">版次</th><th style="width:130px;">訂單</th>
-                        <th style="width:80px;">PFMEA</th><th style="width:130px;">已有的階段</th>
-                        <th style="width:170px;">操作</th>
+                        <th style="width:150px;">料號</th><th style="width:120px;">品名</th>
+                        <th style="width:80px;">客戶</th><th style="width:50px;">版次</th>
+                        <th style="width:110px;">稽核製程標籤</th>
+                        <th style="width:120px;">最近訂單</th>
+                        <th style="width:180px;">自動帶得出什麼</th>
+                        <th style="width:110px;">已有的階段</th>
+                        <th style="width:160px;">操作</th>
                     </tr></thead>
-                    <tbody><tr><td colspan="8" style="text-align:center;color:#8a6d45;">按「重新整理」載入</td></tr></tbody>
+                    <tbody><tr><td colspan="9" style="text-align:center;color:#8a6d45;">按「重新整理」載入</td></tr></tbody>
                 </table>
             </div>
+            <div class="pg" id="pgSug" style="justify-content:flex-start;margin-top:6px;"></div>
         </div>
 
 <?php if ($P['admin']): ?>
@@ -390,17 +396,41 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
             </div>
 
             <div class="cp-note <?= $tagInfo['ready'] ? '' : 'warn' ?>">
-                <b>哪些訂單需要建管制計畫</b>：
+                <b>哪些訂單需要建管制計畫</b>
                 <?php if ($tagInfo['ready']): ?>
-                    勾選代表「AS 認證」的訂單標籤，「建議建立清單」就會改以帶有這些標籤的訂單為母體。
+                    ：依訂單追蹤的<b>「稽核製程」標籤</b>認定——訂單掛了稽核製程標籤
+                    （例「單製齒研」「全製含插齒」）就需要管制計畫。
+                    <b>預設全部稽核製程都要求</b>，不必在這裡做任何設定；
+                    下面只是提供「某個稽核製程暫時不做 CP」時的排除選項。
+                    <div style="margin-top:6px;">
+                        目前認定結果：<b><?= (int)$tagInfo['n_tag'] ?></b> 個稽核製程、
+                        <b><?= (int)$tagInfo['n_order'] ?></b> 張訂單、
+                        <b><?= (int)$tagInfo['n_part'] ?></b> 個料號需要管制計畫。
+                    </div>
+                    <div style="margin-top:4px;">內建的「全製」「單製非AS認證」「廠內治具」與管理員自加的
+                        「其他固定選項」（例「單/全製含齒研(不列AS認證)」）<b>都不算稽核製程，不需要 CP</b>。</div>
                 <?php else: ?>
-                    <?= htmlspecialchars($tagInfo['reason']) ?>
+                    ：<?= htmlspecialchars($tagInfo['reason']) ?>
                     目前「建議建立清單」暫以<b>已建 PFMEA 的料號</b>為母體（那批本來就是客戶要求 APQP 的對象）。
                 <?php endif; ?>
-                <div style="margin-top:6px;">本模組<b>不自己做一套訂單標籤</b>，只讀訂單追蹤模組的；標籤完成後這裡會自動出現可勾選的清單。</div>
+                <div style="margin-top:6px;">標籤定義本身<b>只能在訂單追蹤的「設定→稽核製程標籤」改</b>，
+                    本模組只讀不寫（鐵律4：同一份定義不留第二份）。</div>
             </div>
-            <div id="tagWrap" style="margin-bottom:14px;"></div>
-            <div style="margin-bottom:18px;"><button class="btn-w" id="btnSaveTags" <?= $tagInfo['ready'] ? '' : 'disabled' ?>><i class="fa fa-save"></i> 儲存標籤設定</button></div>
+            <div class="cp-scroll" style="margin-bottom:10px;">
+                <table class="cp-t" id="tAsTag" style="min-width:820px;">
+                    <thead><tr>
+                        <th style="width:70px;">標籤 id</th><th style="width:130px;">稽核製程</th>
+                        <th style="width:190px;">訂單上會長出的標籤</th>
+                        <th style="width:90px;">掛了訂單</th><th style="width:80px;">涉及料號</th>
+                        <th style="width:70px;">啟用</th><th style="width:150px;">要求建 CP</th>
+                    </tr></thead>
+                    <tbody><tr><td colspan="7" style="text-align:center;color:#8a6d45;">載入中…</td></tr></tbody>
+                </table>
+            </div>
+            <div style="margin-bottom:18px;">
+                <button class="btn-w" id="btnSaveTags" <?= $tagInfo['ready'] ? '' : 'disabled' ?>><i class="fa fa-save"></i> 儲存排除設定</button>
+                <span class="muted" style="margin-left:8px;">取消勾選＝該稽核製程的訂單不再出現在建議建立清單</span>
+            </div>
 
             <div class="cp-note">
                 <b>AS 文件綁定</b>：決定列印版表頭的表單名稱與頁尾右下角的 AS 編號（版次依每張 CP 的表單日期回推＝ai-rules/16）。
@@ -435,6 +465,20 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
             所以「試產」那一段可以在設定裡停用。線上檢驗的檢驗類別本來也只有「首件／一般」兩種。</p>
             <p><b>同一個料號可以有兩張 CP</b>（試作一張、生產一張），這是正常的——首件是 100% 全尺寸、
             生產是抽驗，兩張的「樣本／頻率」欄本來就不同。建生產段時可以用「改版」或重新帶入。</p>
+
+            <h4>哪些訂單需要建管制計畫</h4>
+            <p>依訂單追蹤的<b>「稽核製程」標籤</b>認定（2026-10-02 起）：訂單掛了稽核製程標籤
+            （例「單製齒研」「全製含插齒」）就是需要管制計畫的訂單。
+            內建的「全製」「單製非AS認證」「廠內治具」與管理員自加的「其他固定選項」
+            （例「單/全製含齒研(不列AS認證)」）<b>都不算稽核製程，不需要 CP</b>。</p>
+            <ul>
+                <li><b>單製○○</b>：客戶送料來、只做這一道稽核製程 → 這張 CP 只需涵蓋該製程。</li>
+                <li><b>全製含○○</b>：從頭做到成品、過程中有這一道 → 這張 CP 要涵蓋整條製程鏈。</li>
+            </ul>
+            <p>標籤定義只能在<b>訂單追蹤 → 設定 → 稽核製程標籤</b>維護，本頁只讀不寫。
+            本頁的設定只提供「某個稽核製程暫時不要求建 CP」的排除選項，<b>預設全部都要求</b>。</p>
+            <p>每張 CP 會記下建立當時的標籤快照當作<b>認定依據</b>；之後訂單標籤被改掉時，
+            編輯畫面會提示不一致，但<b>不會自動改寫</b>那張 CP 的依據（當初就是依當時的認定建的）。</p>
 
             <h4>資料從哪裡自動帶來</h4>
             <ul>
@@ -529,7 +573,8 @@ var CANAPPR  = <?= $P['approve'] ? 'true' : 'false' ?>;
 var CANADMIN = <?= $P['admin'] ? 'true' : 'false' ?>;
 var CANVIEW  = <?= $P['view'] ? 'true' : 'false' ?>;
 
-var STAGES = [], CLASSES = [], REACTS = [], ASMETA = {}, TAGSTATUS = {}, ASCERTTAGS = [];
+var STAGES = [], CLASSES = [], REACTS = [], ASMETA = {}, TAGSTATUS = {};
+var ASTAGDEFS = [], EXCLTAGS = [], REQTAGS = [];   // 稽核製程標籤定義／被排除的／要求建 CP 的
 var DOC = null;          // 目前編輯中的 CP
 var LIST_PAGE = 1;
 var PREVIEW = null;      // 自動帶入預覽結果
@@ -587,7 +632,8 @@ function boot(){
     get('bootstrap', {}, function(res){
         STAGES = res.stages || []; CLASSES = res.special_classes || [];
         REACTS = res.reaction_opts || []; ASMETA = res.as_doc || {};
-        TAGSTATUS = res.tag_status || {}; ASCERTTAGS = res.as_cert_tags || [];
+        TAGSTATUS = res.tag_status || {};
+        ASTAGDEFS = res.as_tag_defs || []; EXCLTAGS = res.excluded_as_tags || []; REQTAGS = res.required_as_tags || [];
         fillStageSelects();
         loadList();
         renderAutoNote();
@@ -732,8 +778,28 @@ function renderEdit(){
     $('#btnReject').toggle(!!DOC.cp_id && DOC.status === 'submitted' && CANAPPR);
     $('#btnRevise').toggle(!!DOC.cp_id && DOC.status === 'approved' && CANEDIT);
     $('#btnPrint').toggle(!!DOC.cp_id);
-    $('#edMsg').html(ro && DOC.status === 'approved'
-        ? '<div class="cp-note">這份管制計畫已核准，不可直接修改。要修改請按「改版」建立新版次（舊版會保留）。</div>' : '');
+    var msg = '';
+    if (ro && DOC.status === 'approved') {
+        msg += '<div class="cp-note">這份管制計畫已核准，不可直接修改。要修改請按「改版」建立新版次（舊版會保留）。</div>';
+    }
+    // 認定依據：建立時的稽核製程標籤快照，以及現在是否已被改掉
+    if (DOC.src_as_tag_label) {
+        msg += '<div class="cp-note"><b>認定依據</b>：建立時來源訂單的稽核製程標籤為'
+             + ' <span class="tag-s sg-3">' + esc(DOC.src_as_tag_label) + '</span>';
+        if (+DOC.as_tag_changed === 1) {
+            var nw = DOC.as_tag_now || {};
+            msg += '<div style="margin-top:5px;color:#8c2d18;">⚠ 該訂單的標籤<b>現在已經不一樣</b>了：'
+                 + esc(nw.label || '（已清除）')
+                 + (nw.need_cp ? '' : '（依現況已不需要管制計畫：' + esc(nw.reason || '') + '）')
+                 + '。這張 CP 的認定依據刻意保留當初的快照不自動改寫，'
+                 + '請確認是標籤改錯了、還是這張 CP 該作廢。</div>';
+        }
+        msg += '</div>';
+    } else if (DOC.src_order_id && DOC.as_tag_now && !DOC.as_tag_now.need_cp) {
+        msg += '<div class="cp-note warn"><b>注意</b>：來源訂單依稽核製程標籤的認定<b>不需要</b>管制計畫'
+             + '（' + esc(DOC.as_tag_now.reason || '') + '）。這張 CP 仍然有效，但請確認是刻意建立的。</div>';
+    }
+    $('#edMsg').html(msg);
 }
 
 $('#eStage').on('change', function(){ renderStageNote(); });
@@ -1072,6 +1138,7 @@ bindOrderAc($('#eOrder'), $('#eOrderId'), function(r){
     });
 });
 bindOrderAc($('#aOrder'), $('#aOrderId'), function(r){
+    showOrderTag(r.Order_id, $('#aTagBox'));
     get('order_boms', { order_id: r.Order_id }, function(res){
         var boms = res.boms || [];
         if (boms.length > 1) {
@@ -1112,14 +1179,35 @@ $(document).on('input', '.tool-pick', function(){
 
 /* ────────────────── 分頁三：自動帶入／建議建立 ────────────────── */
 function renderAutoNote(){
-    var h = '<b>資料從哪裡來</b>：製程列＝該訂單綁定的<b>製令</b>的製程鏈（依製程序）；'
-          + '產品特性／規格公差／量測技術／檢具／頻率＝該料號該製程的 <b>SIP</b>（只取已核准版次），'
-          + '找不到時退回該製程的<b>檢驗項目預設值範本</b>；特殊特性與管制方法＝該料號的 <b>PFMEA</b>。'
-          + '機台是從<b>報工紀錄</b>抓該製程實際用過的機台。帶不出來的欄位會標示要人工填，不會假裝有資料。';
-    if (!TAGSTATUS.ready) {
-        h += '<div style="margin-top:6px;color:#8c2d18;">' + esc(TAGSTATUS.reason || '') + '</div>';
+    var h = '';
+    if (TAGSTATUS.ready) {
+        h += '<b>哪些訂單需要 CP</b>：訂單追蹤掛了<b>「稽核製程」標籤</b>的訂單'
+          +  '（目前 ' + (TAGSTATUS.n_tag||0) + ' 個稽核製程、' + (TAGSTATUS.n_order||0) + ' 張訂單、'
+          +  (TAGSTATUS.n_part||0) + ' 個料號）。挑到訂單後會直接告訴你這張需不需要。<br>';
+    } else {
+        h += '<div style="color:#8c2d18;margin-bottom:6px;">' + esc(TAGSTATUS.reason || '') + '</div>';
     }
+    h += '<b>資料從哪裡來</b>：製程列＝該訂單綁定的<b>製令</b>的製程鏈（依製程序）；'
+      +  '產品特性／規格公差／量測技術／檢具／頻率＝該料號該製程的 <b>SIP</b>（只取已核准版次），'
+      +  '找不到時退回該製程的<b>檢驗項目預設值範本</b>；特殊特性與管制方法＝該料號的 <b>PFMEA</b>。'
+      +  '機台是從<b>報工紀錄</b>抓該製程實際用過的機台。帶不出來的欄位會標示要人工填，不會假裝有資料。';
     $('#autoNote').html(h);
+}
+
+/* 挑到訂單就即時顯示「這張需不需要 CP」——不必等按預覽 */
+function showOrderTag(orderId, $box){
+    if (!orderId) { $box.html(''); return; }
+    get('order_as_tag', { order_id: orderId }, function(res){
+        var t = res.as_tag || {};
+        if (t.need_cp) {
+            $box.html('<span class="tag-s st-approved">需要 CP</span> '
+                + '<span class="tag-s sg-3">' + esc(t.label) + '</span> '
+                + '<span class="muted">' + esc(t.scope_hint || '') + '</span>');
+        } else {
+            $box.html('<span class="tag-s" style="background:#FBE3DD;color:#8c2d18;border-color:#DD5138;">'
+                + '依認定不需要 CP</span> <span class="muted">' + esc(t.reason || '') + '</span>');
+        }
+    });
 }
 $('#btnPreview').on('click', function(){
     var oid = +$('#aOrderId').val() || 0;
@@ -1246,36 +1334,88 @@ $(document).on('click', '#btnCreateFromPrev', function(){
 /* 建議建立清單 */
 $('#btnSug').on('click', loadSug);
 $('#sStage').on('change', loadSug);
+var SUG_ROWS = [], SUG_PAGE = 1, SUG_PER = 20;
 function loadSug(){
     get('suggest', { stage_id: $('#sStage').val() || 0 }, function(res){
         $('#sugMode').text(res.note || '');
-        var rows = res.rows || [], tb = '';
-        if (!rows.length) tb = '<tr><td colspan="8" style="text-align:center;color:#8a6d45;padding:16px;">沒有需要建立的項目</td></tr>';
-        rows.forEach(function(r){
-            var have = (r.have_stages || []).map(function(sid){
-                var s = STAGES.filter(function(x){ return +x.stage_id === +sid; })[0];
-                return s ? '<span class="tag-s sg-'+sid+'">'+esc(s.stage_name)+'</span>' : '';
-            }).join(' ');
-            tb += '<tr>'
-               + '<td><b>'+esc(r.part_no_text)+'</b> <span class="muted">#'+r.part_d_id+'</span></td>'
-               + '<td>'+esc(r.product_name||'')+'</td>'
-               + '<td>'+esc(r.customer_name||'')+'</td>'
-               + '<td style="text-align:center;">'+esc(r.part_rev||'')+'</td>'
-               + '<td>'+esc(r.order_oo||'—')+'</td>'
-               + '<td style="text-align:center;">'+(r.pfmea_doc_id?('#'+r.pfmea_doc_id):'<span style="color:#8c2d18;">無</span>')+'</td>'
-               + '<td>'+(have||'<span class="muted">—</span>')+'</td>'
-               + '<td>'
-               + (r.order_id ? '<button class="btn-w2 btn-xs2" data-sugord="'+r.order_id+'" data-sugoo="'+esc(r.order_oo||'')+'"><i class="fa fa-magic"></i> 帶入</button> ' : '')
-               + '<button class="btn-w2 btn-xs2" data-sugpart="'+r.part_d_id+'" data-sugpn="'+esc(r.part_no_text)+'"><i class="fa fa-plus"></i> 建空白</button> '
-               + '<button class="btn-w2 btn-xs2" data-sugign="'+r.part_d_id+'" style="border-color:#DD5138;color:#8c2d18;"><i class="fa fa-eye-slash"></i></button>'
-               + '</td></tr>';
-        });
-        $('#tSug tbody').html(tb);
+        SUG_ROWS = res.rows || []; SUG_PAGE = 1;
+        var s = res.summary || {};
+        if (s.total) {
+            /* 848 筆清單若不講清楚「有多少帶得出東西」，使用者不知道從哪裡開始。
+               而且「有 SIP 但還是草稿」要單獨講——那是一個可以馬上行動的提示。 */
+            var h = '<b>共 ' + s.total + ' 個料號需要建管制計畫</b>（已建好的不再列出）。'
+                  + '自動帶入目前能帶出：製程列 <b>' + (s.with_proc||0) + '</b> 個料號、'
+                  + '管制方法與特殊特性（PFMEA）<b>' + (s.with_pfmea||0) + '</b> 個、'
+                  + '規格公差與量測技術（已核准 SIP）<b>' + (s.with_sip||0) + '</b> 個。';
+            if (s.with_sip_draft) {
+                h += '<div style="margin-top:5px;color:#8c2d18;">另有 <b>' + s.with_sip_draft
+                   + '</b> 個料號的 SIP 還是草稿——<b>把它核准之後，規格公差與量測技術就帶得出來了</b>'
+                   + '（自動帶入只取已核准版次，草稿的公差不該印在管制計畫上）。</div>';
+            }
+            if (!s.with_sip) {
+                h += '<div style="margin-top:5px;">目前沒有任何需要 CP 的料號有已核准的 SIP，'
+                   + '所以規格公差／量測技術／頻率這幾欄要人工填。這不是系統問題，是那些料號的 SIP 還沒建或還沒核准。</div>';
+            }
+            $('#sugSummary').html(h).show();
+        } else { $('#sugSummary').hide(); }
+        renderSugPage();
     });
 }
+function renderSugPage(){
+    var rows = SUG_ROWS, tb = '';
+    if (!rows.length) {
+        $('#tSug tbody').html('<tr><td colspan="9" style="text-align:center;color:#8a6d45;padding:16px;">沒有需要建立的項目</td></tr>');
+        $('#pgSug').html(''); return;
+    }
+    var st = (SUG_PAGE - 1) * SUG_PER;
+    rows.slice(st, st + SUG_PER).forEach(function(r){
+        var have = (r.have_stages || []).map(function(sid){
+            var s = STAGES.filter(function(x){ return +x.stage_id === +sid; })[0];
+            return s ? '<span class="tag-s sg-'+sid+'">'+esc(s.stage_name)+'</span>' : '';
+        }).join(' ');
+        // 「自動帶得出什麼」：用籤直接講，不要只印有/無讓使用者自己猜
+        var rd = '';
+        rd += r.n_proc ? '<span class="tag-s st-approved">製程 '+r.n_proc+' 道</span> '
+                       : '<span class="tag-s" style="background:#FBE3DD;color:#8c2d18;border-color:#DD5138;">無製令</span> ';
+        rd += r.pfmea_doc_id ? '<span class="tag-s st-approved">PFMEA</span> '
+                             : '<span class="tag-s st-draft">無 PFMEA</span> ';
+        rd += r.has_sip ? '<span class="tag-s st-approved">SIP</span>'
+                        : (r.sip_draft ? '<span class="tag-s st-submitted">SIP 待核准</span>'
+                                       : '<span class="tag-s st-draft">無 SIP</span>');
+        tb += '<tr>'
+           + '<td><b>'+esc(r.part_no_text)+'</b> <span class="muted">#'+r.part_d_id+'</span></td>'
+           + '<td>'+esc(r.product_name||'')+'</td>'
+           + '<td>'+esc(r.customer_name||'')+'</td>'
+           + '<td style="text-align:center;">'+esc(r.part_rev||'')+'</td>'
+           + '<td>'+(r.as_tag_label ? '<span class="tag-s sg-3">'+esc(r.as_tag_label)+'</span>' : '<span class="muted">—</span>')+'</td>'
+           + '<td>'+esc(r.order_oo||'—')
+           +   (r.n_order > 1 ? '<div class="muted">共 '+r.n_order+' 張</div>' : '')+'</td>'
+           + '<td>'+rd+'</td>'
+           + '<td>'+(have||'<span class="muted">—</span>')+'</td>'
+           + '<td>'
+           + (r.order_id ? '<button class="btn-w2 btn-xs2" data-sugord="'+r.order_id+'" data-sugoo="'+esc(r.order_oo||'')+'"><i class="fa fa-magic"></i> 帶入</button> ' : '')
+           + '<button class="btn-w2 btn-xs2" data-sugpart="'+r.part_d_id+'" data-sugpn="'+esc(r.part_no_text)+'"><i class="fa fa-plus"></i> 建空白</button> '
+           + '<button class="btn-w2 btn-xs2" data-sugign="'+r.part_d_id+'" style="border-color:#DD5138;color:#8c2d18;" title="加入忽略名單"><i class="fa fa-eye-slash"></i></button>'
+           + '</td></tr>';
+    });
+    $('#tSug tbody').html(tb);
+    var pages = Math.max(1, Math.ceil(rows.length / SUG_PER)), h = '';
+    h += '<span class="muted">共 '+rows.length+' 筆 / '+pages+' 頁（依「自動帶得出多少」排序，帶得出來的在前）</span>';
+    if (pages > 1) {
+        h += ' <button data-sugpg="1">&laquo;</button>';
+        var s0 = Math.max(1, SUG_PAGE - 2), e0 = Math.min(pages, s0 + 4);
+        for (var i = s0; i <= e0; i++) h += ' <button data-sugpg="'+i+'"'+(i===SUG_PAGE?' class="on"':'')+'>'+i+'</button>';
+        h += ' <button data-sugpg="'+pages+'">&raquo;</button>';
+    }
+    $('#pgSug').html(h);
+}
+$(document).on('click', '#pgSug button', function(){ SUG_PAGE = +$(this).data('sugpg'); renderSugPage(); });
 $(document).on('click', '[data-sugord]', function(){
     $('#aOrderId').val($(this).data('sugord'));
     $('#aOrder').val($(this).data('sugoo'));
+    // 從建議清單按「帶入」是另一條路徑，這裡也要顯示即時判定
+    // （漏掉的話使用者從清單進來就看不到那一行，只有手動打字才看得到）
+    showOrderTag($(this).data('sugord'), $('#aTagBox'));
     get('order_boms', { order_id: $(this).data('sugord') }, function(res){
         var boms = res.boms || [], o = '';
         boms.forEach(function(b){ o += '<option value="'+esc(b.bom)+'">'+esc(b.bom)+'（'+(b.proc_count||0)+' 道）</option>'; });
@@ -1434,26 +1574,48 @@ $('#btnSaveReact').on('click', function(){
 });
 
 function renderTagCfg(){
-    get('order_tags', {}, function(res){
+    get('as_tag_list', {}, function(res){
         var rows = res.rows || [];
         if (!rows.length) {
-            $('#tagWrap').html('<div class="muted">目前沒有可選的訂單標籤。訂單標籤功能完成後，這裡會自動出現可勾選的清單。</div>');
+            $('#tAsTag tbody').html('<tr><td colspan="7" style="text-align:center;color:#8c2d18;padding:14px;">'
+              + '目前沒有任何「稽核製程」標籤定義。請先到<b>訂單追蹤 → 設定 → 稽核製程標籤</b>新增'
+              + '（例：齒研、插齒），本頁才認定得出哪些訂單需要管制計畫。</td></tr>');
             return;
         }
         var h = '';
         rows.forEach(function(t){
-            var on = ASCERTTAGS.indexOf(+t.tag_id) >= 0;
-            h += '<label style="display:inline-block;margin:3px 10px 3px 0;font-size:13px;font-weight:normal;">'
-              +  '<input type="checkbox" class="tagck" value="'+t.tag_id+'"'+(on?' checked':'')+'> '+esc(t.tag_name)+'</label>';
+            // 要求建 CP ＝ 沒被排除（排除名單存的是「不要求」的，所以勾選框是反向的）
+            var req = !+t.excluded;
+            var off = +t.is_active !== 1;
+            h += '<tr'+(off?' style="opacity:.55;"':'')+'>'
+              +  '<td style="text-align:center;">'+t.tag_id+'</td>'
+              +  '<td><b>'+esc(t.proc_name)+'</b></td>'
+              +  '<td><span class="tag-s sg-1">'+esc(t.label_single)+'</span>'
+              +    (t.scope === 'both' || t.scope === 'full' ? ' <span class="tag-s sg-3">'+esc(t.label_full)+'</span>' : '')
+              +  '</td>'
+              +  '<td style="text-align:center;">'+(t.n_order||0)+'</td>'
+              +  '<td style="text-align:center;">'+(t.n_part||0)+'</td>'
+              +  '<td style="text-align:center;">'+(off?'<span class="muted">停用</span>':'✓')+'</td>'
+              +  '<td style="text-align:center;"><label style="font-weight:normal;margin:0;">'
+              +    '<input type="checkbox" class="tagck" value="'+t.tag_id+'"'+(req?' checked':'')+(off?' disabled':'')+'> '
+              +    (off ? '<span class="muted">停用中不認定</span>' : '要求') + '</label></td>'
+              +  '</tr>';
         });
-        $('#tagWrap').html(h);
+        $('#tAsTag tbody').html(h);
     });
 }
 $('#btnSaveTags').on('click', function(){
-    var ids = [];
-    $('.tagck:checked').each(function(){ ids.push(+$(this).val()); });
-    post('as_cert_tags_save', { tag_ids: JSON.stringify(ids) }, function(res){
-        toast(res.message); ASCERTTAGS = res.as_cert_tags || [];
+    // 畫面上勾的是「要求建 CP」，存進去的是「排除名單」＝沒勾的那些
+    var excluded = [];
+    $('#tAsTag .tagck').each(function(){
+        if (!$(this).is(':checked') && !$(this).is(':disabled')) excluded.push(+$(this).val());
+    });
+    var nReq = $('#tAsTag .tagck:checked').length;
+    if (nReq === 0 && !confirm('所有稽核製程都被排除了，建議建立清單會退回以「已建 PFMEA 的料號」為母體。\n確定要這樣存嗎？')) return;
+    post('excluded_as_tags_save', { tag_ids: JSON.stringify(excluded) }, function(res){
+        toast(res.message);
+        TAGSTATUS = res.tag_status || TAGSTATUS;
+        renderTagCfg();
     });
 });
 
