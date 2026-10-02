@@ -231,11 +231,21 @@ function qab_ensure_schema(PDO $db): void
     if ($add) $db->exec("ALTER TABLE qa_abnormal_order " . implode(', ', $add));
     // 開單來源多一種：BOM＝製程中直接綁製令開立（不是從某一張檢驗單來的）。
     // 原本只有 IR/QC，不放寬的話「製程中開立」只能假冒成 QC，之後分不出是誰開的。
+    /* 2026-10-02 再多一種 CS＝客訴：只綁客戶、沒有客退單也沒有製令（分類「客訴」就是這種）。
+       **不可以借用 IR**——那一格在畫面與分析圖上都會顯示成「客退」，而客訴根本沒有退貨回來。 */
     try {
         $t = $db->query("SHOW COLUMNS FROM qa_abnormal_order LIKE 'source_type'")->fetch(PDO::FETCH_ASSOC);
-        if ($t && stripos((string)$t['Type'], "'BOM'") === false) {
-            $db->exec("ALTER TABLE qa_abnormal_order MODIFY COLUMN source_type ENUM('IR','QC','BOM') NOT NULL
-                       COMMENT 'IR=客退來源 QC=檢驗單來源 BOM=製程中直接開立'");
+        if ($t && (stripos((string)$t['Type'], "'BOM'") === false || stripos((string)$t['Type'], "'CS'") === false)) {
+            $db->exec("ALTER TABLE qa_abnormal_order MODIFY COLUMN source_type ENUM('IR','QC','BOM','CS') NOT NULL
+                       COMMENT 'IR=客退來源 QC=檢驗單來源 BOM=製程中直接開立 CS=客訴（只綁客戶）'");
+        }
+        /* 發現單位同樣要多一種「客戶」——客訴是客戶直接反映的，既沒有貨退回來（客退）也不是廠內發現。
+           原本是 enum('廠內','客退')，不放寬的話客訴類別的單會在 INSERT 當下丟 1265 Data truncated
+           而開不出來（2026-10-02 實測踩到）。 */
+        $t = $db->query("SHOW COLUMNS FROM qa_abnormal_order LIKE 'found_unit'")->fetch(PDO::FETCH_ASSOC);
+        if ($t && stripos((string)$t['Type'], 'enum') !== false && stripos((string)$t['Type'], "'客戶'") === false) {
+            $db->exec("ALTER TABLE qa_abnormal_order MODIFY COLUMN found_unit ENUM('廠內','客退','客戶') NULL
+                       COMMENT '發現單位：廠內／客退（退貨回來）／客戶（客訴，客戶直接反映）'");
         }
     } catch (Throwable $e) {}
     if (!in_array('scrap_no', $cols, true)) {
@@ -334,6 +344,21 @@ function qab_ensure_schema(PDO $db): void
         updated_at DATETIME NULL
     ) DEFAULT CHARSET=utf8mb4 COMMENT='品質異常單分類（管理員維護；決定清單分組與單號後綴）'");
 
+    /* ── 2026-10-02 使用者交辦：分類決定「這一類的單一定要綁什麼」 ──────────
+       IQC／FQC／製程不良＝綁製令、客訴＝綁客戶、退貨＝綁客退單(IR)＋製令。
+       做成**逐分類三個旗標**而不是比對名稱（鐵律4）：管理員把「IQC」改名成
+       「進料檢驗」時綁定規則才不會整個失效，也才能自己新增分類並指定要綁什麼。
+       三個都沒勾＝沿用舊規則（製令或客退單任一即可），既有舊單不受影響。 */
+    $catCols = $db->query("SHOW COLUMNS FROM qa_abnormal_cat")->fetchAll(PDO::FETCH_COLUMN);
+    $addCat = [];
+    $needCat = [
+        'need_bom'    => "ADD COLUMN need_bom TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=這一類的單一定要綁製令編號'",
+        'need_ir'     => "ADD COLUMN need_ir TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=這一類的單一定要綁客退單(IR)'",
+        'need_client' => "ADD COLUMN need_client TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=這一類的單一定要綁客戶（客戶主檔 customer_list.customer_id）'",
+    ];
+    foreach ($needCat as $c => $sql) if (!in_array($c, $catCols, true)) $addCat[] = $sql;
+    if ($addCat) $db->exec("ALTER TABLE qa_abnormal_cat " . implode(', ', $addCat));
+
     $cols4 = $db->query("SHOW COLUMNS FROM qa_abnormal_order")->fetchAll(PDO::FETCH_COLUMN);
     $add4 = [];
     $need4 = [
@@ -382,14 +407,19 @@ function qab_seed_defaults(PDO $db): void
         $ins->execute(['gm', '重工', 0, 0, 0, 30]);
         $ins->execute(['gm', '需矯正', 0, 0, 1, 40]);
     }
-    /* 異常單分類（2026-09-29 使用者指定的三個預設值）——**後綴詞刻意留空**，
-       使用者原話「後綴先不用預設」，要用再由管理員到設定頁逐一補。
-       「製程中」帶 is_pm_auto=1＝報工NG累積自動開立的單歸到這一類。 */
+    /* 異常單分類（2026-10-02 使用者指定的五個預設值，取代原本的 製程中／客訴／其他）——
+       **後綴詞刻意留空**，使用者原話「後綴先不用預設」，要用再由管理員到設定頁逐一補。
+       「製程不良」帶 is_pm_auto=1＝報工NG累積自動開立的單歸到這一類。
+       need_bom／need_ir／need_client＝這一類的單一定要綁什麼（使用者指定的規則）。 */
     if ((int)$db->query("SELECT COUNT(*) FROM qa_abnormal_cat")->fetchColumn() === 0) {
-        $ins = $db->prepare("INSERT INTO qa_abnormal_cat (name,suffix,is_pm_auto,sort_order) VALUES (?,?,?,?)");
-        $ins->execute(['製程中', null, 1, 10]);
-        $ins->execute(['客訴',   null, 0, 20]);
-        $ins->execute(['其他',   null, 0, 30]);
+        $ins = $db->prepare("INSERT INTO qa_abnormal_cat
+            (name,suffix,is_pm_auto,sort_order,need_bom,need_ir,need_client) VALUES (?,?,?,?,?,?,?)");
+        //                名稱        後綴  自動 排序  製令 客退 客戶
+        $ins->execute(['IQC',     null, 0, 10, 1, 0, 0]);
+        $ins->execute(['FQC',     null, 0, 20, 1, 0, 0]);
+        $ins->execute(['製程不良', null, 1, 30, 1, 0, 0]);
+        $ins->execute(['客訴',     null, 0, 40, 0, 0, 1]);
+        $ins->execute(['退貨',     null, 0, 50, 1, 1, 0]);
     }
 }
 
@@ -929,7 +959,10 @@ function qab_person_asof(PDO $db, int $uid, string $date): array
  * 共用這一支，不要再各刻一份——`created_by` 一律由呼叫端明確傳入（不可在這裡讀 $_SESSION），
  * 因為自動開單時「開單人」是解析出來的現場主管，不是操作當下按存檔的那個人。
  *
- * $data 可用鍵：kind('ir'|'bom')、cat_id（**必填**，異常單分類）、fill_date、ir_id、bom_no、client_name、part_no、batch_qty、
+ * **要綁什麼由分類決定**（2026-10-02 使用者交辦，唯一判定 qab_cat_binds()）：IQC／FQC／製程不良＝製令、
+ * 客訴＝客戶、退貨＝客退單＋製令。$data['kind'] 只在分類三個旗標都沒勾時才有作用（舊規則的退路）。
+ *
+ * $data 可用鍵：kind('ir'|'bom')、cat_id（**必填**，異常單分類）、fill_date、ir_id、bom_no、client_id、client_name、part_no、batch_qty、
  *              insp_qty、ng_qty、abnormal_phenomenon、created_by（必填）、
  *              resp_process_no（責任製程，選填；自動開單會直接帶，人工開單留給之後在「責任單位」段填）、
  *              auto_opened、auto_open_note、pm_report_id（報工NG自動/補開才會有）。
@@ -945,10 +978,10 @@ function qab_create_order(PDO $db, array $data): array
     /* 異常單分類：使用者指定為**必填**（決定清單分組與單號後綴詞）。
        自動開單由呼叫端帶 qab_cat_auto_pm()；人工開單由畫面上的下拉選。 */
     $catId = (int)($data['cat_id'] ?? 0);
-    if ($catId <= 0) throw new Exception('請選擇異常單分類');
+    if ($catId <= 0) throw new Exception('請選擇異常單類別');
     $catMap = qab_cat_map($db);
-    if (!isset($catMap[$catId])) throw new Exception('選到的異常單分類不存在，請重新整理頁面後再試');
-    if (!$catMap[$catId]['is_active']) throw new Exception('這個異常單分類已停用，請改選其他分類');
+    if (!isset($catMap[$catId])) throw new Exception('選到的異常單類別不存在，請重新整理頁面後再試');
+    if (!$catMap[$catId]['is_active']) throw new Exception('這個異常單類別已停用，請改選其他類別');
 
     $strOrNull = function ($v, $max) {
         if ($v === null) return null;
@@ -966,9 +999,17 @@ function qab_create_order(PDO $db, array $data): array
     $partNo = $strOrNull($data['part_no'] ?? null, 60);
     $batch = $intOrNull($data['batch_qty'] ?? null);
 
-    if ($kind === 'ir') {
-        $irId = (int)($data['ir_id'] ?? 0);
-        if ($irId <= 0) throw new Exception('客退來源請先選擇客退單（IR）');
+    /* 這一類一定要綁什麼（唯一判定 qab_cat_binds）。三個旗標都沒勾的分類
+       退回 2026-10-02 之前的舊規則＝由 $kind 決定製令或客退單其中一個必填。 */
+    $binds = qab_cat_binds($db, $catMap[$catId]);
+    $catName = $catMap[$catId]['name'];
+    $needBom = $binds['legacy'] ? ($kind !== 'ir') : $binds['bom'];
+    $needIr  = $binds['legacy'] ? ($kind === 'ir') : $binds['ir'];
+    $needCli = $binds['legacy'] ? false            : $binds['client'];
+
+    $irId = (int)($data['ir_id'] ?? 0) ?: null;
+    if ($needIr && !$irId) throw new Exception('分類「' . $catName . '」一定要綁客退單（IR），請從清單選一張');
+    if ($irId) {
         $st = $db->prepare("SELECT IR_id, IR_no, Client_name, d_id, Qty FROM ir_track WHERE IR_id=?");
         $st->execute([$irId]);
         $ir = $st->fetch(PDO::FETCH_ASSOC);
@@ -976,19 +1017,15 @@ function qab_create_order(PDO $db, array $data): array
         $irNo = (string)$ir['IR_no'];
         if ($partNo === null) $partNo = $ir['d_id'] !== '' ? mb_substr((string)$ir['d_id'], 0, 60) : null;
         if ($batch === null)  $batch  = $ir['Qty'] !== null ? (int)$ir['Qty'] : null;
-    } else {
-        if ($bomNo === null) throw new Exception('製程來源請先選擇製令編號');
+    }
+    if ($needBom && $bomNo === null) throw new Exception('分類「' . $catName . '」一定要綁製令編號，請從清單選一張');
+    if ($bomNo !== null) {
         $st = $db->prepare("SELECT bom, d_id, Client_Name, sqty FROM bom WHERE bom=?");
         $st->execute([$bomNo]);
         $b = $st->fetch(PDO::FETCH_ASSOC);
-        if (!$b) throw new Exception('找不到這張製令');
+        if (!$b) throw new Exception('找不到這張製令（製令編號請從清單選）');
         if ($partNo === null) $partNo = $b['d_id'] !== '' ? mb_substr((string)$b['d_id'], 0, 60) : null;
         if ($batch === null)  $batch  = $b['sqty'] !== null ? (int)$b['sqty'] : null;
-    }
-    if ($kind === 'ir' && $bomNo !== null) {
-        $chk = $db->prepare("SELECT 1 FROM bom WHERE bom=?");
-        $chk->execute([$bomNo]);
-        if (!$chk->fetchColumn()) throw new Exception('要綁定的製令編號不存在');
     }
 
     // 客戶與料號一律由來源綁定，不採信呼叫端傳來的文字（與人工開單同一規則）
@@ -1000,6 +1037,14 @@ function qab_create_order(PDO $db, array $data): array
         $partNo  = $srcInfo['part_no'];
         $partDid = $srcInfo['part_d_id'];
         if ($batch === null) $batch = $srcInfo['batch'];
+    } elseif ($needCli) {
+        /* 分類「客訴」這種只綁客戶的單：沒有製令也沒有客退單可以回推客戶，
+           改成直接綁**客戶主檔**的編號，而且**名稱一律由主檔回查**不採信前端送的文字
+           （與「客戶一律由來源綁定」同一條規則，手打的名稱對不到主檔完全看不出來）。 */
+        $picked = qab_client_by_id($db, (string)($data['client_id'] ?? ''));
+        if (!$picked) throw new Exception('分類「' . $catName . '」一定要綁客戶，請從客戶主檔清單選一家');
+        $cli = ['id' => $picked['id'], 'name' => $picked['name'], 'src' => 'client'];
+        $client = $picked['name'];
     }
 
     $ngQty = $intOrNull($data['ng_qty'] ?? null);
@@ -1038,6 +1083,12 @@ function qab_create_order(PDO $db, array $data): array
         $respUnit = $respUnit !== '' ? mb_substr($respUnit, 0, 50) : null;
     }
 
+    /* 來源代碼與「發現單位」一律看**實際綁到什麼**，不要看 $kind——分類驅動之後
+       同一個 kind 可能綁到不同的東西（例：退貨同時綁客退單與製令）。
+       CS＝客訴（只綁客戶，既沒有客退單也沒有製令）。 */
+    $srcType   = $irId ? 'IR' : ($bomNo !== null ? 'BOM' : 'CS');
+    $foundUnit = $irId ? '客退' : ($bomNo !== null ? '廠內' : '客戶');
+
     $db->beginTransaction();
     try {
         $no = qab_next_order_no($db, $fillDate, (string)$catMap[$catId]['suffix']);
@@ -1048,8 +1099,8 @@ function qab_create_order(PDO $db, array $data): array
              resp_process_no, responsible_vendor_id, resp_is_internal, responsible_unit,
              auto_opened, auto_open_note, pm_report_id, decider_cfg_id, auto_phenomenon_base)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?,?,?,?,?,?,?,?,?)")
-           ->execute([$catId, $no, ($kind === 'ir' ? 'IR' : 'BOM'), (int)($irId ?: 0), $fillDate, $fillDate,
-                      ($kind === 'ir' ? '客退' : '廠內'), $irId, $irNo, $bomNo, $cli['id'], $client, $partNo, $partDid, $batch,
+           ->execute([$catId, $no, $srcType, (int)($irId ?: 0), $fillDate, $fillDate,
+                      $foundUnit, $irId, $irNo, $bomNo, $cli['id'], $client, $partNo, $partDid, $batch,
                       $inspQty, $ngQty, $phenomenon, $uid, qab_default_rate($db),
                       $respProcessNo, $respVendorId, $respIsInternal, $respUnit,
                       $autoOpened, $autoNote, $pmReportId, $deciderCfgId, $phenomenonBase]);
@@ -1241,7 +1292,7 @@ function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReport
         'cat_id' => qab_cat_auto_pm($db),
     ];
     if (!$data['cat_id']) {
-        throw new Exception('尚未設定「報工NG自動開立」要歸入哪一個異常單分類，請先到清單頁的「設定 → 異常單分類」勾選一個分類');
+        throw new Exception('尚未設定「報工NG自動開立」要歸入哪一個異常單類別，請先到清單頁的「設定 → 異常單類別」勾選一個類別');
     }
     $created = qab_create_order($db, $data);
     $ph = implode(',', array_fill(0, count($reportIds), '?'));
@@ -2080,27 +2131,89 @@ function qab_can_edit_form(PDO $db, array $perms, array $order): bool
 }
 
 /* ─────────────────────────────────────────────────────────────
-   異常單分類（製程中／客訴／其他…；管理員維護）
-   清單依分類分開顯示，分類還可以帶一個「異常單號後綴詞」（例 -IR）。
+   異常單類別（IQC／FQC／製程不良／客訴／退貨…；管理員維護）
+   清單依類別分開顯示；類別還決定「這一類一定要綁什麼」（製令／客退單／客戶，見 qab_cat_binds）
+   以及可選的「異常單號後綴詞」（例 -IR）。
    **不要用名稱判定任何行為**：報工NG自動開立歸哪一類看 is_pm_auto 旗標，
    管理員把分類改名時行為才不會整個失效（鐵律4，與 qa_option 同一條規則）。
    ───────────────────────────────────────────────────────────── */
 /** 分類清單；$activeOnly=false 時連停用的一起回（設定頁與舊單顯示用） */
 function qab_cats(PDO $db, bool $activeOnly = true): array
 {
-    $sql = "SELECT cat_id, name, suffix, is_pm_auto, sort_order, is_active FROM qa_abnormal_cat";
+    $sql = "SELECT cat_id, name, suffix, is_pm_auto, need_bom, need_ir, need_client, sort_order, is_active
+            FROM qa_abnormal_cat";
     if ($activeOnly) $sql .= " WHERE is_active=1";
     $sql .= " ORDER BY sort_order, cat_id";
     $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
     foreach ($rows as &$r) {
-        $r['cat_id']     = (int)$r['cat_id'];
-        $r['suffix']     = (string)($r['suffix'] ?? '');
-        $r['is_pm_auto'] = (int)$r['is_pm_auto'];
-        $r['sort_order'] = (int)$r['sort_order'];
-        $r['is_active']  = (int)$r['is_active'];
+        $r['cat_id']      = (int)$r['cat_id'];
+        $r['suffix']      = (string)($r['suffix'] ?? '');
+        $r['is_pm_auto']  = (int)$r['is_pm_auto'];
+        $r['need_bom']    = (int)$r['need_bom'];
+        $r['need_ir']     = (int)$r['need_ir'];
+        $r['need_client'] = (int)$r['need_client'];
+        $r['sort_order']  = (int)$r['sort_order'];
+        $r['is_active']   = (int)$r['is_active'];
+        $r['bind_label']  = qab_cat_bind_label($r);
     }
     unset($r);
     return $rows;
+}
+
+/**
+ * 這個分類的單一定要綁什麼——**全站唯一實作**（開單、表頭存檔、畫面提示都走這一支）。
+ *
+ * 2026-10-02 使用者交辦的規則：IQC／FQC／製程不良＝綁製令、客訴＝綁客戶、退貨＝綁客退單＋製令。
+ * 但**判定一律看旗標不比對名稱**（鐵律4）：旗標是管理員在「設定 → 異常單分類」逐分類勾的，
+ * 改名或自己新增分類都照樣有效。
+ *
+ * 三個旗標都沒勾時回 'legacy'=true＝**沿用 2026-10-02 之前的舊規則**（製令或客退單任一即可）。
+ * 這條退路一定要留：2026-09-29 之前建立的單分類是 NULL，而管理員也可能自己新增一個
+ * 「不想強制綁任何東西」的分類，硬要求反而會讓既有的單連改個日期都存不回去。
+ *
+ * @param array|int|null $cat 分類列（qab_cats 的一列）或 cat_id；null／查不到一律回 legacy
+ * @return array ['bom'=>bool,'ir'=>bool,'client'=>bool,'legacy'=>bool,'name'=>string]
+ */
+function qab_cat_binds(PDO $db, $cat): array
+{
+    $row = null;
+    if (is_array($cat)) {
+        $row = $cat;
+    } elseif ((int)$cat > 0) {
+        $map = qab_cat_map($db);
+        $row = $map[(int)$cat] ?? null;
+    }
+    if (!$row) return ['bom' => false, 'ir' => false, 'client' => false, 'legacy' => true, 'name' => ''];
+    $b = !empty($row['need_bom']);
+    $i = !empty($row['need_ir']);
+    $c = !empty($row['need_client']);
+    return ['bom' => $b, 'ir' => $i, 'client' => $c, 'legacy' => (!$b && !$i && !$c),
+            'name' => (string)($row['name'] ?? '')];
+}
+
+/** 綁定規則的一句話說明（設定頁、開單跳窗、表頭提示共用同一份文字，不要各寫一次） */
+function qab_cat_bind_label(array $catRow): string
+{
+    $n = [];
+    if (!empty($catRow['need_bom']))    $n[] = '製令';
+    if (!empty($catRow['need_ir']))     $n[] = '客退單';
+    if (!empty($catRow['need_client'])) $n[] = '客戶';
+    return $n ? ('一定要綁' . implode('＋', $n)) : '不強制綁定（製令或客退單任一即可）';
+}
+
+/**
+ * 客戶主檔查一筆（分類為「客訴」這種只綁客戶的單要用）。
+ * @return array|null ['id'=>string,'name'=>string]；查不到回 null
+ */
+function qab_client_by_id(PDO $db, ?string $clientId): ?array
+{
+    $clientId = trim((string)$clientId);
+    if ($clientId === '') return null;
+    // 客戶編號是 char(11) 文字（C2005、T2001…），**不可以 intval**（記憶 client_quarter_lib 同一條）
+    $st = $db->prepare("SELECT customer_id, customer FROM customer_list WHERE customer_id=? LIMIT 1");
+    $st->execute([$clientId]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    return $r ? ['id' => (string)$r['customer_id'], 'name' => (string)$r['customer']] : null;
 }
 
 /** cat_id => 該列（含停用；舊單指到已停用的分類時畫面才不會變空白） */
@@ -2706,6 +2819,13 @@ function qab_order(PDO $db, int $id): ?array
     $o['cat_name']   = $catRow ? $catRow['name'] : '';
     $o['cat_suffix'] = $catRow ? $catRow['suffix'] : '';
     $o['cat_off']    = $catRow ? ($catRow['is_active'] ? 0 : 1) : 0;
+    /* 這一類一定要綁什麼（唯一判定 qab_cat_binds）——表頭要據此標必填、擋清空，
+       「客訴」這種只綁客戶的還要把客戶欄位換成主檔挑選器。 */
+    $cb = qab_cat_binds($db, $catRow);
+    $o['cat_need_bom']    = $cb['bom'] ? 1 : 0;
+    $o['cat_need_ir']     = $cb['ir'] ? 1 : 0;
+    $o['cat_need_client'] = $cb['client'] ? 1 : 0;
+    $o['cat_bind_label']  = $catRow ? qab_cat_bind_label($catRow) : '';
     /* 客戶／料號是不是「真的由來源帶得出來」——畫面要據此決定鎖不鎖。
        只看「有沒有綁來源」是不夠的：手建的客退單常常沒綁料號主檔、Client_name 也是空的，
        那時鎖起來就變成「欄位空白又不給填」，使用者只看得到一片空白（實際踩過）。 */
@@ -2736,6 +2856,10 @@ function qab_order(PDO $db, int $id): ?array
     $o['client_bound'] = trim((string)($srcNow['client']['name'] ?? '')) !== '' ? 1 : 0;
     $o['part_bound']   = trim((string)($srcNow['part_no'] ?? '')) !== '' ? 1 : 0;
     $o['src_client_from'] = (string)($srcNow['client']['src'] ?? '');
+    /* 客戶要用「主檔挑選器」而不是自由輸入：分類要求綁客戶、而且沒有製令／客退單
+       可以回推客戶的時候（＝分類「客訴」）。這一格一樣不給手打——打出來的名稱對不到
+       客戶主檔時，統計與對帳全部會漏掉這一張，而且畫面上完全看不出來。 */
+    $o['client_pick'] = (!empty($o['cat_need_client']) && (string)($srcNow['client']['src'] ?? '') === '') ? 1 : 0;
     /* 綁到的客退單已經不在了（ERP 重新匯入會換一組 IR_id）——畫面要講出來，
        不然只會看到客戶與料號突然帶不出來，完全看不出原因。 */
     $o['ir_missing'] = 0;

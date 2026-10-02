@@ -237,19 +237,24 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                 </h4>
                 <div class="sec-body">
                     <div class="fgrid">
-                        <div class="fld"><label>分類 <span style="color:var(--coral)">*</span>
+                        <div class="fld"><label>類別 <span style="color:var(--coral)">*</span>
                                 <span class="muted-help" id="catHint"></span></label>
                             <select id="f_cat"><option value="">請選擇…</option></select>
+                            <div class="muted-help" id="catBindHint"></div>
                             <div class="err" id="catErr" style="display:none;"></div></div>
                         <div class="fld"><label>填寫日期</label><input type="date" id="f_fill_date"></div>
                         <div class="fld"><label>異常發生日期</label><input type="date" id="f_occ_date"></div>
-                        <div class="fld"><label>客戶 <span class="muted-help" id="clientSrc"></span></label>
-                            <input type="text" id="f_client"></div>
+                        <div class="fld"><label>客戶 <span id="clientReq" style="color:var(--coral);display:none;">*</span>
+                                <span class="muted-help" id="clientSrc"></span></label>
+                            <div class="ac-wrap"><input type="text" id="f_client" autocomplete="off"></div>
+                            <input type="hidden" id="f_client_id">
+                            <div class="err" id="clientErr" style="display:none;"></div></div>
                         <div class="fld"><label>料號 <span class="muted-help" id="partSrc"></span></label><input type="text" id="f_part"></div>
-                        <div class="fld"><label>製令編號 <span class="muted-help">（主製令；綁了才能自動帶客戶、料號與扣款金額）</span></label>
+                        <div class="fld"><label>製令編號 <span id="bomReq" style="color:var(--coral);display:none;">*</span>
+                                <span class="muted-help">（主製令；綁了才能自動帶客戶、料號與扣款金額）</span></label>
                             <div class="ac-wrap"><input type="text" id="f_bom" autocomplete="off" placeholder="輸入製令／料號／客戶後從清單選"></div>
                             <div class="err" id="bomErr" style="display:none;"></div></div>
-                        <div class="fld"><label>客退單號 (IR)</label>
+                        <div class="fld"><label>客退單號 (IR) <span id="irReq" style="color:var(--coral);display:none;">*</span></label>
                             <div class="ac-wrap"><input type="text" id="f_ir" autocomplete="off" placeholder="輸入單號／客戶／料號後從清單選"></div>
                             <input type="hidden" id="f_ir_id">
                             <div class="err" id="irErr" style="display:none;"></div></div>
@@ -542,10 +547,13 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
             <h4>操作步驟</h4>
             <ul>
                 <li><b>① 基本資料</b>：填表頭、責任單位（先製程再廠商；廠商是「廠內加工廠商」時才可再指定部門與人員）、量測值與異常現象，按「儲存填寫內容」。</li>
-                <li><b>① 分類</b>（必填）：這張單算「製程中」「客訴」還是其他——<b>清單會依分類分開顯示</b>，
-                    分類還可以由管理員設定一個<b>單號後綴詞</b>（例 -IR），設了之後這一類的單號會長成 <code>Q1150929001-IR</code>。
-                    <b>換分類時單號的後綴會自動跟著換</b>（本體與流水號不變；已結案的單不動）。
-                    報工NG累積自動開立的單一律歸到管理員勾了「報工NG自動開立」的那一類（預設＝製程中）。</li>
+                <li><b>① 類別</b>（必填）：這張單算 IQC／FQC／製程不良／客訴／退貨——<b>清單會依類別分開顯示</b>，
+                    而且<b>類別決定這張單一定要綁什麼</b>：<b>IQC・FQC・製程不良＝綁製令</b>、<b>客訴＝綁客戶</b>（直接從客戶主檔選一家）、
+                    <b>退貨＝綁客退單(IR)＋製令</b>。該綁的沒綁（或只打字沒從清單選）時存不進去，欄位旁會寫明是哪一類要求的；
+                    要綁什麼是管理員可以逐類調整的（清單頁「設定 → 異常單類別」）。<br>
+                    類別還可以由管理員設定一個<b>單號後綴詞</b>（例 -IR），設了之後這一類的單號會長成 <code>Q1150929001-IR</code>。
+                    <b>換類別時單號的後綴會自動跟著換</b>（本體與流水號不變；已結案的單不動）。
+                    報工NG累積自動開立的單一律歸到管理員勾了「報工NG自動開立」的那一類（預設＝製程不良）。</li>
                 <li><b>② 異常原因分類</b>：勾選分類（可複選、可到第三層），底下可以再填一段<b>簡易說明</b>（備註，會印在紙本的原因分類欄底下）。<b>結案前都能改</b>，一開始判斷錯了可以回來修正。</li>
                 <li><b>③ 相關單位意見</b>：按「送出徵詢」選一個部門（可指定職稱或某一位）→ 對方收到通知後到這一頁回覆 → 再決定下一個問誰，或直接進決策。<b>同一時間只會有一個未回覆的徵詢。</b></li>
                 <li><b>④ 異常處置方式</b>：由決策者（業務／品管主管）勾選。主管無法決定時勾最上方<b>「整批轉呈<?= htmlspecialchars($gmLabel) ?>裁示」</b>
@@ -574,7 +582,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     填了不良數會即時算出<b>不良率</b>。</li>
                 <li><b>客戶與料號不給手打</b>：綁了製令或客退單，兩者都由來源的<b>料號主檔</b>自動帶（同一個料號文字在主檔常分屬好幾家客戶，手打一定會歪）；兩者都沒綁才可以自行填。</li>
                 <li>已結案的單一律不可修改，要改請管理員先「取消結案」；<b>取消結案不會收回已配發的報廢單號</b>（號碼可能已被其他單據引用）。</li>
-                <li>所有選項（異常單分類／原因分類／處置方式／<?= htmlspecialchars($gmLabel) ?>裁示）都<b>存 id 不存文字</b>，管理員改名不會讓舊單失去連動。</li>
+                <li>所有選項（異常單類別／原因分類／處置方式／<?= htmlspecialchars($gmLabel) ?>裁示）都<b>存 id 不存文字</b>，管理員改名不會讓舊單失去連動。</li>
                 <li>本單的狀態與內容會自動出現在<b>不合格品管制記錄表</b>（2-QA-01-03），那一頁只顯示、不可修改。</li>
                 <li><b>自動開立（報工累積NG）的單，幾個欄位一律鎖定，畫面上會反灰並標明</b>：<b>製令編號</b>任何人都不可改（連管理員也不行）；<b>責任單位</b>（製程／廠商／部門人員，開單時已自動帶入該製令該站登記的廠商）只有<b>異常單管理員</b>可以改；<b>批量／檢驗數／不良數</b>任何人都不可改，是報工累積直接加總出來的（批量＝良品＋NG、檢驗數＝同批量、不良數＝NG總數）。其餘欄位（異常現象、原因分類、處置、裁示、扣款…）不受影響，一樣正常填寫。</li>
                 <li><b>自動開立的單，決策者自動帶入品管主管</b>（沿用清單頁「設定→決策者」品管課那一列）。異常現象下方會出現<b>「品管確認說明」</b>區塊：<b>管理員設定的品管通知名單成員</b>可以在上方異常現象欄補充說明（<b>系統自動填入的底稿文字不可整段移除，只能在後面加字</b>），補完按「確認完成」；<b>沒有確認完成之前這張單不能送出主管決策（不會自動送決策，連異常單管理員直接送決策也會被擋）</b>。</li>
@@ -583,7 +591,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
             </ul>
             <h4>設定入口</h4>
             <ul>
-                <li>清單頁右上「設定」（限管理員）：<b>異常單分類</b>（名稱、單號後綴詞、報工NG自動歸哪一類）、異常原因分類三層、異常處置方式、<?= htmlspecialchars($gmLabel) ?>裁示選項、決策者可選的部門與職稱、<b>最終裁示者的部門與職級門檻</b>、扣款加成預設值、AS 文件綁定。</li>
+                <li>清單頁右上「設定」（限管理員）：<b>異常單類別</b>（名稱、<b>一定要綁製令／客退單／客戶</b>、單號後綴詞、報工NG自動歸哪一類）、異常原因分類三層、異常處置方式、<?= htmlspecialchars($gmLabel) ?>裁示選項、決策者可選的部門與職稱、<b>最終裁示者的部門與職級門檻</b>、扣款加成預設值、AS 文件綁定。</li>
                 <li>廠商是否為「廠內加工廠商」＝主檔管理 → 廠商編輯 → 勾選「廠內加工廠商」。</li>
             </ul>
             <h4>權限角色</h4>
@@ -700,7 +708,7 @@ function render(){
     $('#btnClose2').toggle(!o.is_closed);
     $('#btnReopen').toggle(!!o.is_closed && !!p.canAdmin);
 
-    // ① 表頭：分類（必填；含停用的也要列出來，否則舊單指到停用分類時下拉會變空白）
+    // ① 表頭：類別（必填；含停用的也要列出來，否則舊單指到停用類別時下拉會變空白）
     (function(){
         var cats = D.cats || [], cur = Number(o.cat_id || 0);
         var h = '<option value="">請選擇…</option>';
@@ -713,8 +721,9 @@ function render(){
         $('#f_cat').html(h).val(cur ? String(cur) : '');
         var cr = cats.filter(function(c){ return Number(c.cat_id) === cur; })[0];
         $('#catHint').text(cr && cr.suffix ? '（本類單號後綴：' + cr.suffix + '）' : '');
-        $('#catErr').toggle(!cur && canEdit).text(cur ? '' : '這張單還沒有分類，請選一個（清單是依分類分開顯示的）');
+        $('#catErr').toggle(!cur && canEdit).text(cur ? '' : '這張單還沒有類別，請選一個（清單是依類別分開顯示的）');
     })();
+    $('#f_client_id').val(o.client_id || '');
     $('#f_fill_date').val(o.fill_date || '');
     $('#f_occ_date').val(o.occurrence_date || '');
     $('#f_client').val(o.client_name || '');
@@ -722,7 +731,6 @@ function render(){
     $('#f_bom').val(o.bom_no || '');
     // 客戶由來源綁定：綁了製令或客退單就唯讀（同一個料號文字在料號主檔常分屬不同客戶，手打一定會歪）
     var bound = Number(o.client_bound) === 1;
-    $('#f_client').prop('readonly', bound);
     // 料號跟客戶一樣：綁了來源就由來源決定並鎖起來（使用者要求）
     $('#f_part').prop('readonly', bound);
     $('#partSrc').text(bound ? ('（由' + (o.ir_id ? '客退單' : '製令') + '自動綁定'
@@ -812,7 +820,6 @@ function render(){
     var qcNoteEdit = isAuto && !o.is_closed && !!p.canQcNotify;
     $('#secHead').toggleClass('locked', !canEdit && !qcNoteEdit);
     $('#secHead input,#secHead textarea,#secHead select').prop('disabled', !canEdit);
-    if (bound) $('#f_client').prop('readonly', true);
     if (qcNoteEdit) $('#f_phe').prop('disabled', false);
     /* 整區沒有 canEdit 時（.locked 拿掉了）鎖定欄位改靠上面新增的 :disabled 樣式單獨變灰，
        不然這裡完全不鎖住的話，使用者會看不出「只有異常現象這一格能填、其他都還是鎖住的」。
@@ -848,6 +855,9 @@ function render(){
         $('#f_ng').closest('.fld').append(
             '<div id="batchFixedNote" class="muted-help" style="margin-top:2px;">（自動＝報工累積的良品＋NG／不良數＝NG總數，鎖定不可修改）</div>');
     }
+    /* 類別決定的綁定規則一定要在上面那些鎖定邏輯**之後**才套用——
+       客戶那一格在「要綁客戶」的類別下必須可以輸入，寫在前面會被 readonly 蓋回去。 */
+    applyCatBinds();
 
     // ② 原因分類
     CAUSE_SEL = (o.cause_ids || []).slice();
@@ -1483,19 +1493,73 @@ function loadDeciderUsers(sel){
     }, 'json');
 }
 
+/* ───────── 類別決定「這張單一定要綁什麼」（與清單頁開新單同一套規則） ─────────
+   規則來自後端旗標（qab_cat_binds 的唯一判定），**不比對類別名稱**（鐵律4）；
+   前端只負責即時提示與擋在送出之前，後端 save_head 會用同一組規則再擋一次（鐵律8）。 */
+function catRowOf(id){
+    id = Number(id || 0);
+    return ((D && D.cats) || []).filter(function(c){ return Number(c.cat_id) === id; })[0] || null;
+}
+function catBinds(){
+    var c = catRowOf($('#f_cat').val());
+    var b = !!(c && Number(c.need_bom)), i = !!(c && Number(c.need_ir)), k = !!(c && Number(c.need_client));
+    return { row:c, bom:b, ir:i, client:k, legacy:(!!c && !b && !i && !k) };
+}
+function applyCatBinds(){
+    var bd = catBinds();
+    $('#catBindHint').text(bd.row ? (bd.row.bind_label || '') : '');
+    $('#bomReq').toggle(bd.bom);
+    $('#irReq').toggle(bd.ir);
+    $('#clientReq').toggle(bd.client);
+    /* 客戶欄位：類別要求綁客戶、而且沒有製令／客退單可以回推客戶時（＝「客訴」）才給挑，
+       其餘一律維持「由來源自動綁定的唯讀欄」。這一格永遠不給自由打字——打出來的名稱
+       對不到客戶主檔時，統計與對帳會漏掉這一張而且畫面上看不出來。 */
+    var srcBound = !!($('#f_bom').val().trim() || $('#f_ir_id').val());
+    var pickCli = bd.client && !srcBound;
+    var disabled = $('#f_client').prop('disabled');
+    $('#f_client').prop('readonly', !pickCli).css('background', (pickCli && !disabled) ? '' : '#F5F0E8');
+    if (pickCli) {
+        $('#clientSrc').text($('#f_client_id').val()
+            ? ('（已綁客戶主檔：' + $('#f_client_id').val() + '；要換請打字搜尋後重新選）')
+            : '（打字搜尋客戶編號或簡稱後從清單選）');
+    }
+    checkBind(true);
+}
+$(document).on('change', '#f_cat', function(){ applyCatBinds(); });
+// 客戶欄手動改字就視同還沒選主檔（避免「畫面上寫 A、實際綁著 B」）
+$(document).on('input', '#f_client', function(){
+    if (!$('#f_client').prop('readonly')) { $('#f_client_id').val(''); $('#clientErr').hide(); }
+});
+
 /* 儲存填寫區 */
-function checkBind(){
+function checkBind(quiet){
     var ok = true;
+    var bd = catBinds();
     var bom = $('#f_bom').val().trim();
     if (bom && !BOM_OK) {
         $('#bomErr').show().text('請從清單中選擇既有的製令（只打字不選，客戶、料號與扣款金額都帶不出來）');
+        ok = false;
+    } else if (bd.bom && !bom) {
+        // 類別要求綁製令（IQC／FQC／製程不良／退貨）——空的一律擋下並講明是哪一類要求的
+        $('#bomErr').show().text('類別「' + bd.row.name + '」一定要綁製令編號，請從清單選一張（或改選其他類別）');
         ok = false;
     } else $('#bomErr').hide();
     var ir = $('#f_ir').val().trim();
     if (ir && !$('#f_ir_id').val()) {
         $('#irErr').show().text('請從清單中選擇既有的客退單（同一個單號可能有好幾筆，一定要選到是哪一筆）');
         ok = false;
-    } else $('#irErr').hide();
+    } else if (bd.ir && !$('#f_ir_id').val()) {
+        $('#irErr').show().text('類別「' + bd.row.name + '」一定要綁客退單(IR)，請從清單選一張（或改選其他類別）');
+        ok = false;
+    } else if (!Number(((D && D.order) || {}).ir_missing)) $('#irErr').hide();
+    // 類別要求綁客戶，而且沒有製令／客退單可以回推客戶時，一定要綁到客戶主檔
+    var srcBound = !!(bom || $('#f_ir_id').val());
+    if (bd.client && !srcBound && !$('#f_client_id').val()) {
+        $('#clientErr').show().text('類別「' + bd.row.name + '」一定要綁客戶，請打字搜尋後從清單選一家'
+            + '（只打名稱不選主檔，統計與對帳都對不到這一張）');
+        ok = false;
+    } else $('#clientErr').hide();
+    if (quiet) return ok;
     return ok;
 }
 $(document).on('input', '#f_bom', function(){ BOM_OK = false; $('#bomErr').hide(); });
@@ -1503,11 +1567,15 @@ $(document).on('input', '#f_ir', function(){ $('#f_ir_id').val(''); $('#irErr').
 $(document).on('blur', '#f_bom, #f_ir', function(){ checkBind(); });
 
 function saveHead(silent){
-    if (!checkBind()) { if (!silent) alert('製令編號或客退單號要從清單中選擇綁定'); return; }
-    // 分類是必填（後端 save_head 同規則再擋一次）——沒選就不送出，免得把其他欄位存進去卻被整批退回
+    if (!checkBind()) {
+        if (!silent) alert('綁定還沒完成：' + ($('#bomErr:visible').text() || $('#irErr:visible').text()
+                            || $('#clientErr:visible').text() || '製令編號或客退單號要從清單中選擇綁定'));
+        return;
+    }
+    // 類別是必填（後端 save_head 同規則再擋一次）——沒選就不送出，免得把其他欄位存進去卻被整批退回
     if (!$('#f_cat').val()) {
-        $('#catErr').show().text('請選擇分類（必填）');
-        if (!silent) { alert('請先選擇異常單分類'); $('#f_cat').focus(); }
+        $('#catErr').show().text('請選擇類別（必填）');
+        if (!silent) { alert('請先選擇異常單類別'); $('#f_cat').focus(); }
         return;
     }
     $('#catErr').hide();
@@ -1520,7 +1588,7 @@ function saveHead(silent){
     post('save_head', {
         id:OID, cat_id: $('#f_cat').val(),
         fill_date: $('#f_fill_date').val(), occurrence_date: $('#f_occ_date').val(),
-        client_name: $('#f_client').val(), part_no: $('#f_part').val(),
+        client_name: $('#f_client').val(), client_id: $('#f_client_id').val(), part_no: $('#f_part').val(),
         bom_no: $('#f_bom').val(), ir_id: $('#f_ir_id').val(),
         batch_qty: $('#f_batch').val(), insp_qty: $('#f_insp').val(), ng_qty: $('#f_ng').val(),
         abnormal_phenomenon: $('#f_phe').val(), defect_detail: $('#f_detail').val(), qa_ps: $('#f_qaps').val(),
@@ -1879,6 +1947,8 @@ function acSetup(inputSel, action, fmt, pick){
         $list.css({ left:r.left + 'px', top:(r.bottom + 2) + 'px', width:Math.max(r.width, 240) + 'px' });
     }
     $in.on('input focus', function(){
+        // 唯讀／鎖定的欄位不要彈清單：客戶那一格只有「類別要求綁客戶」時才給挑
+        if ($in.prop('readonly') || $in.prop('disabled')) { $list.hide(); return; }
         var kw = $in.val().trim();
         clearTimeout(tmr);
         tmr = setTimeout(function(){
@@ -1924,6 +1994,7 @@ $(function(){
             $('#f_part').val(r.d_id || '').prop('readonly', true);
             $('#partSrc').text('（由製令自動綁定）');
             if (r.sqty) { $('#f_batch').val(r.sqty); refreshSampleHint(true); }
+            applyCatBinds();      // 綁了製令之後客戶改由來源帶，客戶挑選器要收回去
         });
     acSetup('#f_ir', 'search_ir',
         function(r){ return '<span class="hit">' + esc(r.IR_no) + '</span>　' + esc(r.Client_name) + '　' + esc(r.d_id); },
@@ -1936,6 +2007,19 @@ $(function(){
             $('#f_part').val(r.d_id || '').prop('readonly', true);
             $('#partSrc').text('（由客退單自動綁定）');
             if (r.Qty) { $('#f_batch').val(r.Qty); refreshSampleHint(true); }
+            applyCatBinds();
+        });
+    // 客戶主檔挑選（類別「客訴」這種只綁客戶的單用）——存的是客戶編號，不是打進去的那串字
+    acSetup('#f_client', 'search_client',
+        function(r){ return '<span class="hit">' + esc(r.customer_id) + '</span>　' + esc(r.customer)
+            + (r.customer_full && r.customer_full !== r.customer ? '　<span class="muted-help">' + esc(r.customer_full) + '</span>' : '')
+            + (Number(r.is_inactive) ? '　<span class="muted-help">（已停用）</span>' : ''); },
+        function(r){
+            $('#f_client').val(r.customer || '');
+            $('#f_client_id').val(r.customer_id || '');
+            $('#clientErr').hide();
+            $('#clientSrc').text('（已綁客戶主檔：' + (r.customer_id || '') + '）');
+            saveHead(true);       // 挑完就存（這一格是 acSetup 填的，不會觸發 change 自動存檔）
         });
     load();
 });

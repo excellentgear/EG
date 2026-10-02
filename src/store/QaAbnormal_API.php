@@ -108,6 +108,8 @@ case 'create': {
             'fill_date' => $_POST['fill_date'] ?? '',
             'ir_id' => $_POST['ir_id'] ?? '',
             'bom_no' => $_POST['bom_no'] ?? '',
+            // 分類要求綁客戶時（例「客訴」）由畫面從客戶主檔挑，送編號過來；名稱一律由主檔回查
+            'client_id' => $_POST['client_id'] ?? '',
             'client_name' => $_POST['client_name'] ?? '',
             'part_no' => $_POST['part_no'] ?? '',
             'batch_qty' => $_POST['batch_qty'] ?? '',
@@ -198,6 +200,25 @@ case 'save_head': {
     $put = function ($col, $val) use (&$set, &$par) { $set[] = "$col=?"; $par[] = $val; };
     if ($fill !== '') $put('fill_date', $fill);
     if ($occ !== '')  $put('occurrence_date', $occ);
+
+    /* 異常單分類（必填）——決定清單分組、單號後綴詞，以及**這一類一定要綁什麼**（製令／客退單／客戶）。
+       沒送這個欄位＝呼叫端不打算動它（既有慣例），有送就一定要是存在而且啟用中的分類；
+       **改分類時單號的後綴要跟著換**（本體不變，見 qab_order_no_sync_suffix()）。
+       這一段刻意放在製令／客退單／客戶之前——底下的必填檢查要靠它算出來的綁定規則。 */
+    $catChanged = false; $newCatId = $o['cat_id'] !== null ? (int)$o['cat_id'] : null;
+    if (array_key_exists('cat_id', $_POST)) {
+        $newCatId = $intOrNull($_POST['cat_id']);
+        if (!$newCatId) jerr('請選擇異常單分類（必填）', 'CAT_REQUIRED');
+        $catMapX = qab_cat_map($db);
+        if (!isset($catMapX[$newCatId])) jerr('選到的異常單分類不存在，請重新整理頁面後再試');
+        // 已停用的分類只准「維持原狀」，不可以改選成停用的
+        if (!$catMapX[$newCatId]['is_active'] && $newCatId !== (int)($o['cat_id'] ?? 0)) jerr('這個異常單分類已停用，請改選其他分類');
+        $catChanged = $newCatId !== ($o['cat_id'] !== null ? (int)$o['cat_id'] : null);
+        $put('cat_id', $newCatId);
+    }
+    // 唯一判定 qab_cat_binds()；三個旗標都沒勾的分類（含分類還是 NULL 的舊單）不會多出任何必填
+    $binds   = qab_cat_binds($db, $newCatId);
+    $catName = $binds['name'] !== '' ? $binds['name'] : (string)($o['cat_name'] ?? '');
     /* 製令編號／客退單號只要有填，就一定要是「從清單選到的那一張」（使用者要求）。
        只打字不綁定的話，客戶、料號、扣款金額全部帶不出來，而且畫面上看不出哪裡不對。
        自動開立的製令編號一律鎖定，這裡直接用原值、不採信送來的值（連管理員都不行）。 */
@@ -207,6 +228,10 @@ case 'save_head': {
         $c = $db->prepare("SELECT 1 FROM bom WHERE bom=?");
         $c->execute([$bomAfter]);
         if (!$c->fetchColumn()) jerr('製令編號「' . $bomAfter . '」不存在，請從清單中選擇既有的製令（或清空這一欄）', 'BOM_NOT_BOUND');
+    }
+    // 分類要求綁製令時不可以是空的（IQC／FQC／製程不良／退貨；旗標判定，前端已擋，這裡是最後一道）
+    if ($binds['bom'] && $bomAfter === null) {
+        jerr('分類「' . $catName . '」一定要綁製令編號，請從清單選一張（或改選其他分類）', 'BOM_REQUIRED');
     }
     $irAfter = (int)($o['ir_id'] ?? 0);
     if (array_key_exists('ir_id', $_POST)) {
@@ -225,6 +250,10 @@ case 'save_head': {
     } elseif (array_key_exists('ir_no', $_POST) && $strOrNull($_POST['ir_no'], 30) !== null && $irAfter <= 0) {
         jerr('客退單號請從清單中選擇既有的客退單（或清空這一欄）', 'IR_NOT_BOUND');
     }
+    // 分類要求綁客退單時不可以是空的（退貨）
+    if ($binds['ir'] && $irAfter <= 0) {
+        jerr('分類「' . $catName . '」一定要綁客退單（IR），請從清單選一張（或改選其他分類）', 'IR_REQUIRED');
+    }
 
     // 客戶與料號：綁了來源一律由來源重算（畫面那兩格是唯讀的），都沒綁才收前端填的文字
     $srcInfo = qab_resolve_source($db, $bomAfter, $irAfter ?: null);
@@ -234,6 +263,26 @@ case 'save_head': {
         $put('client_name', $cli['name']);
         $put('part_no', $srcInfo['part_no']);
         $put('part_d_id', $srcInfo['part_d_id']);
+    } elseif ($binds['client']) {
+        /* 分類要求綁客戶、又沒有製令／客退單可以回推（＝「客訴」）：一律綁**客戶主檔的編號**，
+           名稱由主檔回查、不採信前端送的文字。
+           **「沒送這個欄位」與「送空字串」是兩回事**（本專案既有慣例）：
+             ·沒送＝呼叫端不打算動它 → 沿用原本綁好的那一家（只改日期或現象的存檔不該被逼著重選客戶）
+             ·送空字串＝使用者在畫面上把客戶清掉了 → 視同沒綁，這一類非綁不可所以擋下 */
+        $cidUse = array_key_exists('client_id', $_POST)
+            ? trim((string)$_POST['client_id'])
+            : trim((string)($o['client_id'] ?? ''));
+        $picked = qab_client_by_id($db, $cidUse);
+        if (!$picked) {
+            jerr('分類「' . $catName . '」一定要綁客戶，請從客戶主檔清單選一家（或改選其他分類）', 'CLIENT_REQUIRED');
+        }
+        $put('client_id', $picked['id']);
+        $put('client_name', $picked['name']);
+        // 料號這種單通常沒有來源可以帶，維持讓使用者自己填
+        if (array_key_exists('part_no', $_POST)) {
+            $put('part_no', $strOrNull($_POST['part_no'], 60));
+            $put('part_d_id', null);
+        }
     } else {
         if (array_key_exists('client_name', $_POST)) {
             $put('client_id', null);
@@ -245,6 +294,12 @@ case 'save_head': {
         }
     }
     if (!$isAutoOpened && array_key_exists('bom_no', $_POST))      $put('bom_no', $strOrNull($_POST['bom_no'], 30));
+    /* 來源代碼跟著「實際綁到什麼」走（清單那個小籤與分析頁的來源分布都讀它）：
+       換了分類之後綁定會變，不同步的話會出現「綁了客退單、籤卻還寫客訴」。
+       **QC 來源一律不動**——那是舊版 QC 檢驗跳窗開的單，改掉就看不出它是從檢驗單來的了。 */
+    if ((string)($o['source_type'] ?? '') !== 'QC') {
+        $put('source_type', $irAfter > 0 ? 'IR' : ($bomAfter !== null ? 'BOM' : 'CS'));
+    }
     // 自動開立的批量／檢驗數／不良數是報工累積直接算出來的，一律鎖定不給改（連管理員都不行）
     if (!$isAutoOpened && array_key_exists('batch_qty', $_POST))   $put('batch_qty', $intOrNull($_POST['batch_qty']));
     if (!$isAutoOpened && array_key_exists('insp_qty', $_POST))    $put('insp_qty', $intOrNull($_POST['insp_qty']));
@@ -255,20 +310,7 @@ case 'save_head': {
         qab_phenomenon_check_base((string)$newPhe, $o['auto_phenomenon_base'] ?? null);
         $put('abnormal_phenomenon', $newPhe);
     }
-    /* 異常單分類（必填）——決定清單分組與單號後綴詞。沒送這個欄位＝呼叫端不打算動它（既有慣例），
-       有送就一定要是存在而且啟用中的分類；**改分類時單號的後綴要跟著換**（本體不變，見
-       qab_order_no_sync_suffix()）。 */
-    $catChanged = false; $newCatId = $o['cat_id'] !== null ? (int)$o['cat_id'] : null;
-    if (array_key_exists('cat_id', $_POST)) {
-        $newCatId = $intOrNull($_POST['cat_id']);
-        if (!$newCatId) jerr('請選擇異常單分類（必填）', 'CAT_REQUIRED');
-        $catMapX = qab_cat_map($db);
-        if (!isset($catMapX[$newCatId])) jerr('選到的異常單分類不存在，請重新整理頁面後再試');
-        // 已停用的分類只准「維持原狀」，不可以改選成停用的
-        if (!$catMapX[$newCatId]['is_active'] && $newCatId !== (int)($o['cat_id'] ?? 0)) jerr('這個異常單分類已停用，請改選其他分類');
-        $catChanged = $newCatId !== ($o['cat_id'] !== null ? (int)$o['cat_id'] : null);
-        $put('cat_id', $newCatId);
-    }
+    /* 分類與它的綁定規則在上面（製令／客退單／客戶的必填檢查要用），這裡不再重複一次 */
     if (array_key_exists('defect_detail', $_POST))       $put('defect_detail', $strOrNull($_POST['defect_detail'], 2000));
     if (array_key_exists('qa_ps', $_POST))               $put('qa_ps', $strOrNull($_POST['qa_ps'], 2000));
     // 決策者是不是這次才被指定/換人——決定要不要通知新的決策者送出決策（下面存檔完之後才判斷）
@@ -809,6 +851,23 @@ case 'search_bom': {
                         ORDER BY Created_At DESC LIMIT 50");
     $st->execute([$kw, "%$kw%", "%$kw%", "%$kw%"]);
     jout(true, ['rows' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+/* 客戶主檔模糊搜尋——分類「客訴」這種只綁客戶的單要用（編號與簡稱都搜得到）。
+   停用的客戶排在後面但仍列出來：補歷史的客訴單時，那家客戶可能已經停用了。 */
+case 'search_client': {
+    $kw = trim((string)($_GET['kw'] ?? ''));
+    $st = $db->prepare("SELECT customer_id, customer, customer_full, is_inactive FROM customer_list
+                        WHERE (? = '' OR customer_id LIKE ? OR customer LIKE ? OR customer_full LIKE ?)
+                        ORDER BY is_inactive, customer, customer_id LIMIT 50");
+    $st->execute([$kw, "%$kw%", "%$kw%", "%$kw%"]);
+    jout(true, ['rows' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+/* 分類清單（含「一定要綁什麼」的旗標）——給別的頁面開異常單時用（例 IR_Track 的「開異常單」），
+   不要在那些頁面各自查一次 qa_abnormal_cat。 */
+case 'cats': {
+    jout(true, ['cats' => qab_cats($db, true)]);
 }
 
 case 'depts': {
@@ -1550,12 +1609,21 @@ function qabSaveCat(PDO $db, array $in): string
     $sort   = (int)($in['sort_order'] ?? 0);
     $active = array_key_exists('is_active', $in) ? (int)!empty($in['is_active']) : 1;
     if ($auto && !$active) return '勾了「報工NG自動開立」的分類不可以停用（自動開單會整個開不出來）';
-    $p = [mb_substr($name, 0, 40), ($suffix === '' ? null : $suffix), $auto, $sort, $active];
+    /* 這一類一定要綁什麼（2026-10-02 使用者交辦）：製令／客退單／客戶，可以複選。
+       報工NG自動開立的那一類**一定要綁製令**——自動開單本來就是從某一張製令的某一站累積NG來的，
+       勾了自動開立卻不綁製令，開出來的單會沒有來源可以追（而且扣款金額也帶不出來）。 */
+    $nBom = (int)!empty($in['need_bom']);
+    $nIr  = (int)!empty($in['need_ir']);
+    $nCli = (int)!empty($in['need_client']);
+    if ($auto && !$nBom) return '勾了「報工NG自動開立」的分類一定要勾「製令」（自動開單是從製令的某一站累積NG開出來的）';
+    $p = [mb_substr($name, 0, 40), ($suffix === '' ? null : $suffix), $auto, $nBom, $nIr, $nCli, $sort, $active];
     if ($catId > 0) {
-        $db->prepare("UPDATE qa_abnormal_cat SET name=?, suffix=?, is_pm_auto=?, sort_order=?, is_active=?, updated_at=NOW() WHERE cat_id=?")
+        $db->prepare("UPDATE qa_abnormal_cat SET name=?, suffix=?, is_pm_auto=?, need_bom=?, need_ir=?, need_client=?,
+                      sort_order=?, is_active=?, updated_at=NOW() WHERE cat_id=?")
            ->execute(array_merge($p, [$catId]));
     } else {
-        $db->prepare("INSERT INTO qa_abnormal_cat (name,suffix,is_pm_auto,sort_order,is_active) VALUES (?,?,?,?,?)")
+        $db->prepare("INSERT INTO qa_abnormal_cat (name,suffix,is_pm_auto,need_bom,need_ir,need_client,sort_order,is_active)
+                      VALUES (?,?,?,?,?,?,?,?)")
            ->execute($p);
         $catId = (int)$db->lastInsertId();
     }

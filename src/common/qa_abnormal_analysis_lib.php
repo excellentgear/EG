@@ -128,7 +128,7 @@ function qaa_base_where(array $period, array $f = []): array
           "COALESCE(o.fill_date,o.occurrence_date,DATE(o.created_at)) BETWEEN ? AND ?",
           "o.id NOT IN (SELECT DISTINCT parent_order_id FROM qa_abnormal_order WHERE parent_order_id IS NOT NULL AND deleted_at IS NULL)"];
     $p = [$period['start'], $period['end']];
-    if (!empty($f['source']) && in_array($f['source'], ['IR', 'QC', 'BOM'], true)) { $w[] = "o.source_type=?"; $p[] = $f['source']; }
+    if (!empty($f['source']) && in_array($f['source'], ['IR', 'QC', 'BOM', 'CS'], true)) { $w[] = "o.source_type=?"; $p[] = $f['source']; }
     /* 異常單分類（製程中／客訴／其他…）：cat='none' ＝分類功能上線前、還沒指定分類的舊單。
        這個篩選跟來源(source)是兩回事——來源是「從哪一張單開出來的」，分類是人為歸類。 */
     if (isset($f['cat']) && $f['cat'] !== '') {
@@ -453,8 +453,10 @@ function qaa_cat_dist(array $rows, array $catOrder = []): array
 
 function qaa_source_type_dist(array $rows): array
 {
-    $label = ['IR' => '客退單(IR)', 'QC' => 'QC檢驗單', 'BOM' => '製程中(製令)'];
-    $g = ['IR' => 0, 'QC' => 0, 'BOM' => 0];
+    // CS＝客訴（只綁客戶，沒有客退單也沒有製令）——新增來源一定要同時補進這份對照，
+    // 不補的話那幾筆會被安靜地從圓餅圖裡丟掉（看起來像「總數對不起來」）
+    $label = ['IR' => '客退單(IR)', 'QC' => 'QC檢驗單', 'BOM' => '製程中(製令)', 'CS' => '客訴(只綁客戶)'];
+    $g = ['IR' => 0, 'QC' => 0, 'BOM' => 0, 'CS' => 0];
     $auto = 0;
     foreach ($rows as $r) {
         $t = $r['source_type'] ?? '';

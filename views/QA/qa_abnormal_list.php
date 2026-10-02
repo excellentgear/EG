@@ -25,6 +25,11 @@ if (empty($_SESSION['qab_csrf'])) $_SESSION['qab_csrf'] = bin2hex(random_bytes(1
 $CSRF = $_SESSION['qab_csrf'];
 $asDoc = eg_asdoc_get($db, QAB_ASDOC_MODULE);
 $asNo  = $asDoc ? eg_asdoc_no($asDoc) : '2-QA-01-01';
+/* 最終裁示者的稱呼（管理員可在「設定 → 其他設定」指定部門；未指定時是「總經理」）——
+   畫面上凡是提到裁示者一律用這個變數，不要再寫死（2026-09-29 使用者交辦）。
+   **一定要在 $roleLabel 之前算**：原本寫在下面，裁示者本人登入時那個角色籤會變成
+   「（最終裁示）」前面一片空白（未定義變數），2026-10-02 順手修掉。 */
+$gmLabel = qab_gm_label($db);
 $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異常單管理員'
             : ($perms['canGm'] ? ($gmLabel . '（最終裁示）') : ($perms['canDecide'] ? '決策主管'
             : ($perms['canCreate'] ? '開單／填寫' : ($perms['canView'] ? '檢閱' : '無權限')))));
@@ -35,10 +40,7 @@ $years = qab_years($db);               // 年度下拉只列真的有資料的�
 $defYear = $years ? (int)$years[0] : $thisYear;
 if (!in_array($thisYear, $years, true)) array_unshift($years, $thisYear);
 $backfillDays = qab_backfill_days($db);
-/* 最終裁示者的稱呼（管理員可在「設定 → 其他設定」指定部門；未指定時是「總經理」）——
-   畫面上凡是提到裁示者一律用這個變數，不要再寫死（2026-09-29 使用者交辦）。 */
-$gmLabel = qab_gm_label($db);
-$cats    = qab_cats($db, true);        // 工具列的分類篩選只列啟用中的
+$cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用中的
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -91,7 +93,7 @@ $cats    = qab_cats($db, true);        // 工具列的分類篩選只列啟用�
         .st-ready  { background:#DDEBD6; color:#2c5c2c; }
         .st-auto   { background:var(--sand); color:var(--ink2); }
         .st-split  { background:#EFD9BF; color:#7a4a1e; }
-        /* 清單依分類分區顯示：每一區一條標題列（使用者交辦「清單也要依照不同分類分開顯示」） */
+        /* 清單依類別分區顯示：每一區一條標題列（使用者交辦「清單也要依照不同類別分開顯示」） */
         table.lst tr.grp td { background:var(--sand); color:var(--ink2); font-weight:bold; padding:5px 8px;
                               position:sticky; top:26px; z-index:1; border-top:2px solid var(--amber-d); }
         table.lst tr.grp .gn { font-size:13.5px; }
@@ -206,13 +208,14 @@ $cats    = qab_cats($db, true);        // 工具列的分類篩選只列啟用�
                     <select id="fClosed"><option value="">全部</option><option value="0">未結案</option><option value="1">已結案</option></select></div>
                 <div class="fg"><label>來源</label>
                     <select id="fSource"><option value="">全部</option>
-                        <option value="IR">客退 (IR)</option><option value="BOM">製程 (製令)</option><option value="QC">檢驗單</option></select></div>
-                <div class="fg"><label>分類</label>
-                    <select id="fCat"><option value="">全部（依分類分區顯示）</option>
+                        <option value="IR">客退 (IR)</option><option value="BOM">製程 (製令)</option>
+                        <option value="CS">客訴 (只綁客戶)</option><option value="QC">檢驗單</option></select></div>
+                <div class="fg"><label>類別</label>
+                    <select id="fCat"><option value="">全部（依類別分區顯示）</option>
                         <?php foreach ($cats as $c): ?>
                         <option value="<?= (int)$c['cat_id'] ?>"><?= htmlspecialchars($c['name']) ?><?= $c['suffix'] !== '' ? '（' . htmlspecialchars($c['suffix']) . '）' : '' ?></option>
                         <?php endforeach; ?>
-                        <option value="none">未指定分類</option>
+                        <option value="none">未指定類別</option>
                     </select></div>
                 <div class="fg" style="flex:1;min-width:200px;"><label>關鍵字（單號／製令／客退單／料號／客戶／現象／責任單位／報廢單號／開單人員）</label>
                     <input type="text" id="fKw" style="width:100%;"></div>
@@ -256,29 +259,30 @@ $cats    = qab_cats($db, true);        // 工具列的分類篩選只列啟用�
     <div class="m-box" style="width:640px;">
         <div class="m-hd"><i class="fa fa-plus"></i> 開立品質異常處理單<span class="x" data-close="newMask">&times;</span></div>
         <div class="m-bd">
-            <div class="note-box">兩種來源：<b>客退</b>＝由退貨單(IR)開立，可另外綁製令也可以不綁；<b>製程中</b>＝直接綁製令編號開立。<br>
-                有綁製令時，扣款區才能自動帶入該製令的製程移轉金額。</div>
-            <div style="display:flex;gap:16px;margin-bottom:10px;">
-                <label style="font-weight:normal;"><input type="radio" name="nkind" value="bom" checked> 製程中（綁製令）</label>
-                <label style="font-weight:normal;"><input type="radio" name="nkind" value="ir"> 客退（IR 單）</label>
-            </div>
+            <div class="note-box"><b>先選類別</b>——類別決定這張單一定要綁什麼，底下的欄位會跟著出現：<br>
+                <span id="nCatRules"></span>
+                <b>綁了製令</b>，扣款區才能自動帶入該製令的製程移轉金額；<b>客戶與料號</b>一律由綁到的來源自動帶出，不給手打。</div>
             <div class="fgrid">
-                <div class="fld"><label>分類 <span style="color:var(--coral)">*</span>
-                        <span class="muted-help">（清單依分類分區；可帶單號後綴詞）</span></label>
+                <div class="fld"><label>類別 <span style="color:var(--coral)">*</span>
+                        <span class="muted-help">（清單依類別分區；可帶單號後綴詞）</span></label>
                     <select id="n_cat"><option value="">請選擇…</option>
                         <?php foreach ($cats as $c): ?>
                         <option value="<?= (int)$c['cat_id'] ?>"><?= htmlspecialchars($c['name']) ?><?= $c['suffix'] !== '' ? '（單號後綴 ' . htmlspecialchars($c['suffix']) . '）' : '' ?></option>
                         <?php endforeach; ?>
-                    </select></div>
+                    </select>
+                    <div class="muted-help" id="nCatBind"></div></div>
                 <div class="fld"><label>填寫日期</label><input type="date" id="n_date"></div>
-                <div class="fld" id="nIrBox" style="display:none;"><label>客退單號 (IR) <span style="color:var(--coral)">*</span></label>
+                <div class="fld" id="nIrBox" style="display:none;"><label>客退單號 (IR) <span style="color:var(--coral)" id="nIrReq">*</span>
+                        <span class="muted-help">（要從清單選）</span></label>
                     <input type="text" id="n_ir" autocomplete="off" placeholder="輸入單號／客戶／料號搜尋">
                     <input type="hidden" id="n_ir_id"></div>
                 <div class="fld" id="nBomBox"><label>製令編號 <span style="color:var(--coral)" id="nBomReq">*</span>
                         <span class="muted-help">（要從清單選）</span></label>
                     <input type="text" id="n_bom" autocomplete="off" placeholder="輸入製令／料號／客戶後從清單選"></div>
-                <div class="fld"><label>客戶 <span class="muted-help">（由來源自動綁定）</span></label>
-                    <input type="text" id="n_client" readonly style="background:#F5F0E8;"></div>
+                <div class="fld" id="nClientBox"><label>客戶 <span id="nClientReq" style="color:var(--coral);display:none;">*</span>
+                        <span class="muted-help" id="nClientHint">（由來源自動綁定）</span></label>
+                    <input type="text" id="n_client" readonly style="background:#F5F0E8;">
+                    <input type="hidden" id="n_client_id"></div>
                 <div class="fld"><label>料號 <span class="muted-help">（由來源自動綁定）</span></label>
                     <input type="text" id="n_part" readonly style="background:#F5F0E8;"></div>
                 <div class="fld"><label>批量</label><input type="number" id="n_batch"></div>
@@ -304,7 +308,7 @@ $cats    = qab_cats($db, true);        // 工具列的分類篩選只列啟用�
         <div class="m-hd"><i class="fa fa-cog"></i> 品質異常處理單 設定<span class="x" data-close="cfgMask">&times;</span></div>
         <div class="m-bd">
             <div class="tabs">
-                <button data-tab="abcat" class="on">異常單分類</button>
+                <button data-tab="abcat" class="on">異常單類別</button>
                 <button data-tab="cause">異常原因分類</button>
                 <button data-tab="disp">異常處置方式</button>
                 <button data-tab="gm"><?= htmlspecialchars($gmLabel) ?>裁示</button>
@@ -315,19 +319,26 @@ $cats    = qab_cats($db, true);        // 工具列的分類篩選只列啟用�
             </div>
 
             <div class="tabp" id="tab-abcat">
-                <div class="note-box">開單時<b>必填</b>的分類（預設：製程中／客訴／其他），<b>清單會依分類分區顯示</b>。<br>
+                <div class="note-box">開單時<b>必填</b>的類別（預設：IQC／FQC／製程不良／客訴／退貨），<b>清單會依類別分區顯示</b>。<br>
+                    <b>一定要綁</b>：決定這一類的單開立時非綁不可的來源，可以複選——
+                    <b>製令</b>（IQC／FQC／製程不良／退貨）、<b>客退單</b>(IR)（退貨）、<b>客戶</b>（客訴，直接綁客戶主檔）。
+                    三個都不勾＝沿用舊規則（製令或客退單任一即可）。
+                    <b>判定看的是這幾個勾選不是名稱</b>，所以類別改名、或自己新增類別都照樣有效；
+                    前端擋下之後<b>後端會用同一組規則再擋一次</b>。<br>
                     <b>單號後綴詞</b>：填了之後這一類的單號會長成 <code>Q1150929001-IR</code>（只能用英文、數字與 <code>- _ .</code>，最多 10 字元；留空＝不加後綴）。
-                    <b>單號本體與流水號全日共用一組、不分分類</b>，所以換分類時只會換後綴、流水號不變，
+                    <b>單號本體與流水號全日共用一組、不分類別</b>，所以換類別時只會換後綴、流水號不變，
                     而且<b>已結案的單不會被改號</b>（紙本已經印出去了）。<br>
-                    <b>報工NG自動開立</b>：勾起來的那一類就是報工累積NG自動開單時要歸入的分類（<b>只能勾一個</b>，勾了別列會自動取消；
-                    <b>判定看的是這個勾選不是名稱</b>，所以分類改名不會讓自動開單失效）。<br>
-                    <b>已經有單在用的分類不可刪除</b>，請改成取消「啟用」——既有的單仍看得到，新單不再出現這個選項。</div>
-                <table class="cfg"><thead><tr><th style="width:28px"></th><th style="width:34%">名稱</th>
-                    <th style="width:20%">單號後綴詞</th><th style="width:14%">報工NG自動開立</th>
-                    <th style="width:9%">啟用</th><th style="width:11%">操作</th></tr></thead>
+                    <b>報工NG自動開立</b>：勾起來的那一類就是報工累積NG自動開單時要歸入的類別（<b>只能勾一個</b>，勾了別列會自動取消；
+                    那一類<b>一定要同時勾「製令」</b>，因為自動開單本來就是從某一張製令的某一站累積NG來的）。<br>
+                    <b>已經有單在用的類別不可刪除</b>，請改成取消「啟用」——既有的單仍看得到，新單不再出現這個選項。</div>
+                <table class="cfg"><thead><tr><th style="width:28px"></th><th style="width:22%">名稱</th>
+                    <th style="width:16%">單號後綴詞</th>
+                    <th style="width:8%">綁製令</th><th style="width:9%">綁客退單</th><th style="width:8%">綁客戶</th>
+                    <th style="width:12%">報工NG自動開立</th>
+                    <th style="width:7%">啟用</th><th style="width:10%">操作</th></tr></thead>
                     <tbody id="cfgAbCat" data-sortgrp="abcat"></tbody></table>
                 <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
-                    <button class="btn btn-warm-o btn-sm" id="btnAbCatAdd"><i class="fa fa-plus"></i> 新增一個分類</button>
+                    <button class="btn btn-warm-o btn-sm" id="btnAbCatAdd"><i class="fa fa-plus"></i> 新增一個類別</button>
                     <span style="margin-left:auto;"></span>
                     <button class="btn btn-warm btn-sm" data-saveall="cat"><i class="fa fa-save"></i> 一鍵存檔（本頁全部）</button>
                 </div>
@@ -521,13 +532,16 @@ $cats    = qab_cats($db, true);        // 工具列的分類篩選只列啟用�
             <p>紙本 <b>2-QA-01-01 品質異常處理單</b> 的清單與入口。查詢舊單、開立新單、進入單張處理頁或直接列印。</p>
             <h4>操作步驟</h4>
             <ul>
-                <li><b>開立異常單</b>：選來源——<b>客退</b>（選 IR 單）或<b>製程中</b>（選製令）。
-                    <b>兩者都一定要從清單選到既有的單據</b>，只打字不選會被擋下（客戶、料號與扣款金額都是靠這個綁定帶出來的）；
-                    客戶與料號會自動帶、不給手打，<b>檢驗數</b>則依線上檢驗的抽樣規則自動建議。建立後自動跳到處理頁填其餘內容。</li>
+                <li><b>開立異常單</b>：<b>先選類別，類別決定這張單一定要綁什麼</b>，底下的欄位會跟著出現——
+                    <b>IQC／FQC／製程不良＝綁製令</b>、<b>客訴＝綁客戶</b>（直接從客戶主檔選一家）、<b>退貨＝綁客退單(IR)＋製令</b>。
+                    <b>一律要從清單選到既有的單據或客戶</b>，只打字不選會被擋下（客戶、料號與扣款金額都是靠這個綁定帶出來的，
+                    客戶只打名稱沒選主檔的話統計與對帳也會對不到這一張）；綁了來源之後<b>客戶與料號會自動帶、不給手打</b>，
+                    <b>檢驗數</b>則依線上檢驗的抽樣規則自動建議。建立後自動跳到處理頁填其餘內容。
+                    要綁什麼是管理員可以逐類調整的（設定 → 異常單類別）。</li>
                 <li><b>進入處理</b>：點該列「處理」。填寫、徵詢相關單位意見、決策、<?= htmlspecialchars($gmLabel) ?>裁示、扣款確認、結案都在那一頁。</li>
-                <li><b>清單依分類分區顯示</b>（製程中／客訴／其他…）：每一區上方有一條標題列，寫著這一類幾張、未結案幾張、單號後綴詞是什麼。
-                    分區順序照管理員在「設定 → 異常單分類」排的順序；<b>分類功能上線前建立的舊單</b>會集中在最後的「未指定分類」區，請進單張處理頁補選。
-                    上方的「分類」篩選可以只看某一類。</li>
+                <li><b>清單依類別分區顯示</b>（IQC／FQC／製程不良／客訴／退貨）：每一區上方有一條標題列，寫著這一類幾張、未結案幾張、單號後綴詞是什麼。
+                    分區順序照管理員在「設定 → 異常單類別」排的順序；<b>類別功能上線前建立的舊單</b>會集中在最後的「未指定類別」區，請進單張處理頁補選。
+                    上方的「類別」篩選可以只看某一類。</li>
                 <li><b>列印</b>：點「列印」開出照紙本版面的正式表單（公司全名、表單名稱、AS 編號與版次都自動帶）；
                     <b>母單（已依決策拆成好幾張子單的原始單）列印時會自動一併開視窗列印每張子單</b>，子單本身也可以用自己的單號獨立列印。</li>
                 <li><b>批次月報列印</b>：工具列「批次月報列印」→ 選年度 → 勾選要印的月份（<b>只有真的有資料的月份才能勾</b>）→
@@ -563,9 +577,12 @@ $cats    = qab_cats($db, true);        // 工具列的分類篩選只列啟用�
                     改名／刪除前會自動查「有沒有異常單、矯正單已經選了它」並列出單號；
                     要刪除有單據在用的分類時，會請你選一個移轉對象，按下去就<b>把那些單據全部自動移轉</b>再刪除。
                     只是想讓它不再出現在新單上，請用<b>停用</b>（既有單仍看得到）。</li>
-                <li><b>異常單分類</b>：開單時必填的分類（預設製程中／客訴／其他）。可以設<b>單號後綴詞</b>（例 -IR，這一類的單號會變成 <code>Q1150929001-IR</code>），
-                    並指定<b>哪一類是報工NG自動開立要歸入的</b>（只能勾一個；判定看旗標不看名稱，所以改名不會讓自動開單失效）。
-                    <b>已經有單在用的分類不可刪除</b>，請改成取消「啟用」。</li>
+                <li><b>異常單類別</b>：開單時必填的類別（預設 IQC／FQC／製程不良／客訴／退貨）。每一類可逐項勾選
+                    <b>「一定要綁」什麼</b>——製令／客退單(IR)／客戶，可以複選；預設是
+                    <b>IQC・FQC・製程不良＝綁製令</b>、<b>客訴＝綁客戶</b>、<b>退貨＝綁客退單＋製令</b>，三個都不勾＝沿用舊規則（製令或客退單任一即可）。
+                    也可以設<b>單號後綴詞</b>（例 -IR，這一類的單號會變成 <code>Q1150929001-IR</code>），
+                    並指定<b>哪一類是報工NG自動開立要歸入的</b>（只能勾一個，而且一定要同時勾「製令」；判定看旗標不看名稱，所以改名不會讓自動開單失效）。
+                    <b>已經有單在用的類別不可刪除</b>，請改成取消「啟用」。</li>
                 <li><b>異常處置方式／<?= htmlspecialchars($gmLabel) ?>裁示</b>：選項可增修；「是報廢」旗標決定結案時要不要配發報廢單號，「轉呈裁示」旗標決定要不要通知最終裁示者。</li>
                 <li><b>決策者</b>：設定可以做處置判定的「部門＋職稱」範圍。
                     <b>最終裁示者不在這裡設定</b>，在「其他設定 → 最終裁示者」——指定一個<b>部門＋職級門檻</b>，
@@ -620,12 +637,17 @@ function nSuggestSample(){
 $(document).on('change', '#n_batch', nSuggestSample);
 $(document).on('input', '#n_bom', function(){ N_BOM_OK = false; });
 var CFG = null, DEPTS = [], POSITIONS = [];
-var CATS = <?= json_encode(qab_cats($db, false), JSON_UNESCAPED_UNICODE) ?>;   // 異常單分類（含停用，舊單指到停用分類時標題才不會空白）
+var CATS = <?= json_encode(qab_cats($db, false), JSON_UNESCAPED_UNICODE) ?>;   // 異常單類別（含停用，舊單指到停用類別時標題才不會空白）
 var GM_LABEL = <?= json_encode($gmLabel, JSON_UNESCAPED_UNICODE) ?>;
 var POS_LEVELS = <?= json_encode(qab_pos_level_names($db), JSON_UNESCAPED_UNICODE) ?>;   // 職級階梯：哪些職稱算第幾階
 
 function esc(s){ return $('<div>').text(s == null ? '' : s).html(); }
 function dispDate(s){ try { return window.egFmtDate ? egFmtDate(s) : (s || ''); } catch(e){ return s || ''; } }
+/* 來源小籤的文字（CS＝客訴，只綁客戶沒有客退單也沒有製令）——新增來源一定要補進這裡，
+   不補的話會掉進最後那個預設值顯示成別的來源，看起來像資料錯了 */
+function srcLabel(t){
+    return t === 'IR' ? '客退' : (t === 'BOM' ? '製程' : (t === 'CS' ? '客訴' : (t === 'QC' ? '檢驗' : (t || ''))));
+}
 function openMask(id){ $('#' + id).show(); }
 function closeMask(id){ $('#' + id).hide(); }
 $(document).on('click', '[data-close]', function(){ closeMask($(this).data('close')); });
@@ -664,7 +686,7 @@ function load(){
             var bomIr = (r.bom_no ? esc(r.bom_no) : '') + (r.ir_no ? ((r.bom_no ? '<br>' : '') + esc(r.ir_no)) : '');
             return '<tr>'
                 + '<td class="c"><b>' + esc(r.abnormal_order_no) + '</b><br><span class="src src-' + esc(r.source_type) + '">'
-                    + (r.source_type === 'IR' ? '客退' : (r.source_type === 'BOM' ? '製程' : '檢驗')) + '</span>'
+                    + srcLabel(r.source_type) + '</span>'
                     + (r.cat_name ? ' <span class="cat-tag">' + esc(r.cat_name) + '</span>' : '') + '</td>'
                 + '<td class="c">' + esc(dispDate(r.fill_date || r.occurrence_date)) + '</td>'
                 + '<td>' + esc(r.created_name || '') + (Number(r.auto_opened) === 1 ? '<br><span class="st st-auto">系統自動</span>' : '') + '</td>'
@@ -688,8 +710,8 @@ function load(){
         }));
     }, 'json').fail(function(){ $('#lstBody').html('<tr><td colspan="11" class="c">連線失敗</td></tr>'); });
 }
-/* 依分類分區：每一區一條標題列（分類名稱＋張數＋未結案數＋單號後綴詞）。
-   分區順序照管理員設定的排序，沒有分類的舊單一律排在最後獨立一區——
+/* 依類別分區：每一區一條標題列（類別名稱＋張數＋未結案數＋單號後綴詞）。
+   分區順序照管理員設定的排序，沒有類別的舊單一律排在最後獨立一區——
    **不要把它們混進某一類**，那會讓使用者以為它們已經分好類了。 */
 function groupByCat(rows, rowHtml){
     var order = (CATS || []).map(function(c){ return Number(c.cat_id); });
@@ -700,7 +722,7 @@ function groupByCat(rows, rowHtml){
         buckets[k].push(r);
     });
     seen.sort(function(a, b){
-        if (a === 0) return 1;            // 未指定分類永遠排最後
+        if (a === 0) return 1;            // 未指定類別永遠排最後
         if (b === 0) return -1;
         var ia = order.indexOf(a), ib = order.indexOf(b);
         return (ia < 0 ? 9999 : ia) - (ib < 0 ? 9999 : ib);
@@ -709,15 +731,16 @@ function groupByCat(rows, rowHtml){
     seen.forEach(function(k){
         var list = buckets[k];
         var cr = (CATS || []).filter(function(c){ return Number(c.cat_id) === k; })[0];
-        var nm = k === 0 ? '未指定分類' : (cr ? cr.name : (list[0].cat_name || ('分類 #' + k)));
+        var nm = k === 0 ? '未指定類別' : (cr ? cr.name : (list[0].cat_name || ('類別 #' + k)));
         var open = list.filter(function(r){ return !Number(r.is_closed); }).length;
         h += '<tr class="grp"><td colspan="11">'
            + '<span class="gn">' + esc(nm) + '</span>'
            + '<span class="gx">' + list.length + ' 張'
            + (open ? ('　未結案 ' + open + ' 張') : '')
            + (cr && cr.suffix ? ('　單號後綴 ' + esc(cr.suffix)) : '')
-           + (cr && !Number(cr.is_active) ? '　（此分類已停用）' : '')
-           + (k === 0 ? '　這些單是分類功能上線前建立的，請進單張處理頁補選分類' : '')
+           + (cr && cr.bind_label ? ('　' + esc(cr.bind_label)) : '')
+           + (cr && !Number(cr.is_active) ? '　（此類別已停用）' : '')
+           + (k === 0 ? '　這些單是類別功能上線前建立的，請進單張處理頁補選類別' : '')
            + '</span></td></tr>';
         h += list.map(rowHtml).join('');
     });
@@ -777,24 +800,85 @@ $('#btnNew').on('click', function(){
     $('#newErr').text('');
     $('#n_date').val(new Date().toISOString().slice(0, 10));
     $('#newBf').hide();
-    $('#n_ir,#n_ir_id,#n_bom,#n_client,#n_part,#n_batch,#n_insp,#n_ng,#n_phe,#n_cat').val('');
+    $('#n_ir,#n_ir_id,#n_bom,#n_client,#n_client_id,#n_part,#n_batch,#n_insp,#n_ng,#n_phe,#n_cat').val('');
     $('#nSampleHint').text('');
     N_BOM_OK = false;
+    nCatRulesHtml();
+    nApplyCatBinds();
     openMask('newMask');
 });
-$(document).on('change', 'input[name=nkind]', function(){
-    var ir = $('input[name=nkind]:checked').val() === 'ir';
-    $('#nIrBox').toggle(ir);
-    $('#nBomReq').toggle(!ir);
-});
+
+/* ───────── 類別決定「這張單一定要綁什麼」 ─────────
+   規則來自後端的旗標（qab_cat_binds 的唯一判定），**不在這裡比對類別名稱**——
+   管理員改名或自己新增類別時，畫面與後端才不會各講一套（鐵律4／鐵律8）。 */
+function nCatOf(id){
+    id = Number(id || 0);
+    var hit = (CATS || []).filter(function(c){ return Number(c.cat_id) === id; })[0];
+    return hit || null;
+}
+/* 跳窗頂端把每一類要綁什麼一次列清楚（使用者一打開就知道該選哪一類），
+   同時依目前的 CATS 重建類別下拉——管理員剛在設定頁加／改／停用的類別要立刻反映，
+   不然會出現「設定頁已經有了、開單下拉卻找不到」而且看不出原因。 */
+function nCatRulesHtml(){
+    var rows = (CATS || []).filter(function(c){ return Number(c.is_active); });
+    $('#nCatRules').html(rows.length
+        ? rows.map(function(c){ return '<b>' + esc(c.name) + '</b>＝' + esc(c.bind_label || ''); }).join('；') + '。<br>'
+        : '');
+    var $sel = $('#n_cat');
+    if ($sel.length) {
+        var keep = $sel.val();
+        $sel.html('<option value="">請選擇…</option>' + rows.map(function(c){
+            return '<option value="' + c.cat_id + '">' + esc(c.name)
+                 + (c.suffix ? '（單號後綴 ' + esc(c.suffix) + '）' : '') + '</option>';
+        }).join(''));
+        if (keep && $sel.find('option[value="' + keep + '"]').length) $sel.val(keep);
+    }
+}
+function nApplyCatBinds(){
+    var c = nCatOf($('#n_cat').val());
+    // 沒選類別，或這一類三個旗標都沒勾（舊規則）＝製令可填可不填、客退單也可填可不填
+    var needBom = !!(c && Number(c.need_bom)), needIr = !!(c && Number(c.need_ir)),
+        needCli = !!(c && Number(c.need_client));
+    var legacy  = !!c && !needBom && !needIr && !needCli;
+
+    $('#nBomBox').toggle(needBom || legacy || !c);
+    $('#nBomReq').toggle(needBom);
+    $('#nIrBox').toggle(needIr || legacy);
+    $('#nIrReq').toggle(needIr);
+    $('#nClientReq').toggle(needCli);
+    // 客戶：要綁客戶的類別改成「從客戶主檔挑」（可輸入可搜尋）；其餘仍是由來源帶出來的唯讀欄
+    $('#n_client').prop('readonly', !needCli).css('background', needCli ? '#fff' : '#F5F0E8');
+    $('#nClientHint').text(needCli ? '（打字搜尋客戶編號或簡稱後從清單選）' : '（由來源自動綁定）');
+    // 不再需要的綁定一律清掉——留著會在換類別之後默默綁上一個使用者以為已經取消的來源
+    if (!(needBom || legacy || !c)) { $('#n_bom').val(''); N_BOM_OK = false; }
+    if (!(needIr || legacy))        { $('#n_ir').val(''); $('#n_ir_id').val(''); }
+    if (!needCli) $('#n_client_id').val('');
+    if (!needCli && !$('#n_bom').val() && !$('#n_ir_id').val()) $('#n_client').val('');
+    $('#nCatBind').text(c ? (c.bind_label || '') : '');
+}
+$(document).on('change', '#n_cat', function(){ $('#newErr').text(''); nApplyCatBinds(); });
+$(document).on('input', '#n_client', function(){ if (!$('#n_client').prop('readonly')) $('#n_client_id').val(''); });
+
 $('#btnNewGo').on('click', function(){
-    var kind = $('input[name=nkind]:checked').val();
-    if (!$('#n_cat').val()) { $('#newErr').text('請選擇分類（必填）——清單是依分類分開顯示的，分類還會決定單號的後綴詞'); return; }
-    if (kind === 'ir' && !$('#n_ir_id').val()) { $('#newErr').text('請從清單中選擇客退單(IR)——同一個單號可能有好幾筆，一定要選到是哪一筆'); return; }
-    if (kind === 'bom' && !$('#n_bom').val().trim()) { $('#newErr').text('請選擇製令編號'); return; }
-    if (kind === 'bom' && !N_BOM_OK) { $('#newErr').text('製令編號請從清單中選擇（只打字不選，客戶、料號與扣款金額都帶不出來）'); return; }
-    post('create', { kind:kind, cat_id:$('#n_cat').val(), fill_date:$('#n_date').val(), ir_id:$('#n_ir_id').val(), bom_no:$('#n_bom').val(),
-                     client_name:$('#n_client').val(), part_no:$('#n_part').val(), batch_qty:$('#n_batch').val(),
+    var c = nCatOf($('#n_cat').val());
+    if (!c) { $('#newErr').text('請選擇類別（必填）——清單是依類別分開顯示的，類別還會決定這張單一定要綁什麼'); return; }
+    var needBom = !!Number(c.need_bom), needIr = !!Number(c.need_ir), needCli = !!Number(c.need_client);
+    var legacy  = !needBom && !needIr && !needCli;
+    if (needIr && !$('#n_ir_id').val()) {
+        $('#newErr').text('類別「' + c.name + '」一定要綁客退單(IR)，請從清單選一張——同一個單號可能有好幾筆，一定要選到是哪一筆'); return;
+    }
+    if (needBom && !$('#n_bom').val().trim()) { $('#newErr').text('類別「' + c.name + '」一定要綁製令編號，請從清單選一張'); return; }
+    if (needCli && !$('#n_client_id').val()) {
+        $('#newErr').text('類別「' + c.name + '」一定要綁客戶，請打字搜尋後從清單選一家（只打名稱不選，統計與對帳都對不到這一張）'); return;
+    }
+    // 舊規則的類別（三個旗標都沒勾）至少要有一個來源，否則客戶、料號與扣款金額全都帶不出來
+    if (legacy && !$('#n_bom').val().trim() && !$('#n_ir_id').val()) {
+        $('#newErr').text('請綁製令編號或客退單(IR) 其中一個'); return;
+    }
+    if ($('#n_bom').val().trim() && !N_BOM_OK) { $('#newErr').text('製令編號請從清單中選擇（只打字不選，客戶、料號與扣款金額都帶不出來）'); return; }
+    post('create', { cat_id:$('#n_cat').val(), fill_date:$('#n_date').val(), ir_id:$('#n_ir_id').val(), bom_no:$('#n_bom').val(),
+                     client_id:$('#n_client_id').val(), client_name:$('#n_client').val(), part_no:$('#n_part').val(),
+                     batch_qty:$('#n_batch').val(),
                      insp_qty:$('#n_insp').val(), ng_qty:$('#n_ng').val(), abnormal_phenomenon:$('#n_phe').val() },
         function(res){ location.href = 'qa_abnormal_form.php?id=' + res.id; });
 });
@@ -805,6 +889,8 @@ function acSetup(inputSel, action, fmt, pick){
     function place(){ var r = $in[0].getBoundingClientRect();
         $list.css({ left:r.left + 'px', top:(r.bottom + 2) + 'px', width:Math.max(r.width, 260) + 'px' }); }
     $in.on('input focus', function(){
+        // 唯讀的欄位不要彈清單：客戶那一格只有「類別要求綁客戶」時才給挑，其餘是由來源帶出來的
+        if ($in.prop('readonly') || $in.prop('disabled')) { $list.hide(); return; }
         var kw = $in.val().trim();
         clearTimeout(tmr);
         tmr = setTimeout(function(){
@@ -907,7 +993,7 @@ function renumberAndSave(grp, $tb){
     });
     post('cfg_save_all', { what:(grp === 'abcat' ? 'cat' : grp), rows:JSON.stringify(collectCfgRows(grp)) }, function(res){
         if (res.causes) CFG.causes = res.causes;
-        if (res.cats) { CFG.cats = res.cats; CATS = res.cats; }
+        if (res.cats) { CFG.cats = res.cats; CATS = res.cats; nCatRulesHtml(); nApplyCatBinds(); }
         if (res.disp_opts) { CFG.disp_opts = res.disp_opts; CFG.gm_opts = res.gm_opts; }
         if (res.deciders) CFG.deciders = res.deciders;
         if (grp === 'cause') renderCause();
@@ -1147,13 +1233,16 @@ function nextSort(list, parentId){
 }
 /* 新增分類已收進維護畫面（EGCausePicker 維護模式的「＋ 在○○底下新增」），本頁不再各留一份 */
 
-/* ───────── 異常單分類（名稱／單號後綴詞／報工NG自動歸類／啟用／拖曳排序） ───────── */
+/* ───────── 異常單類別（名稱／單號後綴詞／一定要綁什麼／報工NG自動歸類／啟用／拖曳排序） ───────── */
 function abCatRow(c){
     return '<tr data-abcat="' + c.cat_id + '">'
         + '<td class="drag" draggable="true" title="按住拖曳可以調整順序（清單分區也照這個順序）">&#x2822;</td>'
         + '<td><input type="text" class="k-name" maxlength="40" value="' + esc(c.name) + '"></td>'
         + '<td><input type="text" class="k-suffix" maxlength="10" value="' + esc(c.suffix || '') + '">'
         + '<div class="muted-help k-prev"></div></td>'
+        + '<td class="c"><input type="checkbox" class="k-nbom" ' + (Number(c.need_bom) ? 'checked' : '') + '></td>'
+        + '<td class="c"><input type="checkbox" class="k-nir" ' + (Number(c.need_ir) ? 'checked' : '') + '></td>'
+        + '<td class="c"><input type="checkbox" class="k-ncli" ' + (Number(c.need_client) ? 'checked' : '') + '></td>'
         + '<td class="c"><input type="radio" name="abcatauto" class="k-auto" ' + (Number(c.is_pm_auto) ? 'checked' : '') + '></td>'
         + '<td class="c"><input type="checkbox" class="k-act" ' + (Number(c.is_active) ? 'checked' : '') + '></td>'
         + '<td class="c"><input type="hidden" class="k-sort" value="' + (c.sort_order || 0) + '">'
@@ -1162,7 +1251,7 @@ function abCatRow(c){
 function renderAbCat(){
     var rows = (CFG && CFG.cats) || CATS || [];
     $('#cfgAbCat').html(rows.length ? rows.map(abCatRow).join('')
-        : '<tr><td colspan="6" class="c">尚未建立任何分類（開單時分類是必填的，請至少留一個）</td></tr>');
+        : '<tr><td colspan="9" class="c">尚未建立任何類別（開單時類別是必填的，請至少留一個）</td></tr>');
     abCatPreview();
 }
 /* 後綴詞打進去當下就讓使用者看到單號長什麼樣子——只看一個「-IR」很難想像整串的結果。
@@ -1181,7 +1270,7 @@ function abCatPreview(){
 $(document).on('click', '#btnAbCatAdd', function(){
     var $tb = $('#cfgAbCat');
     if ($tb.find('td[colspan]').length) $tb.empty();
-    $tb.append(abCatRow({ cat_id:0, name:'', suffix:'', is_pm_auto:0, is_active:1,
+    $tb.append(abCatRow({ cat_id:0, name:'', suffix:'', is_pm_auto:0, need_bom:0, need_ir:0, need_client:0, is_active:1,
                           sort_order:nextSort((CFG && CFG.cats) || CATS) }));
     $tb.find('tr:last .k-name').focus();
 });
@@ -1189,12 +1278,17 @@ function saveAbCatRow($tr, silent){
     if (!$tr.find('.k-name').val().trim()) return;
     post('cat_save', { cat_id:$tr.data('abcat'), name:$tr.find('.k-name').val(),
                        suffix:$tr.find('.k-suffix').val(),
+                       need_bom:$tr.find('.k-nbom').prop('checked') ? 1 : '',
+                       need_ir:$tr.find('.k-nir').prop('checked') ? 1 : '',
+                       need_client:$tr.find('.k-ncli').prop('checked') ? 1 : '',
                        is_pm_auto:$tr.find('.k-auto').prop('checked') ? 1 : '',
                        sort_order:$tr.find('.k-sort').val(),
                        is_active:$tr.find('.k-act').prop('checked') ? 1 : '' },
         function(res){
             CFG.cats = res.cats; CATS = res.cats;
             if (!silent || !$tr.data('abcat')) renderAbCat();
+            // 開新單跳窗的欄位顯示與必填規則都是從 CATS 來的，改完設定要立刻跟著變
+            nCatRulesHtml(); nApplyCatBinds();
             savedTick();
         },
         function(msg){ alert(msg); renderAbCat(); });
@@ -1204,7 +1298,7 @@ $(document).on('input', '#cfgAbCat .k-suffix', abCatPreview);
 $(document).on('click', '.k-del', function(){
     var $tr = $(this).closest('tr');
     if (!$tr.data('abcat')) { $tr.remove(); return; }
-    if (!confirm('刪除這個分類？（已經有單在用的不會讓你刪，請改成取消「啟用」）')) return;
+    if (!confirm('刪除這個類別？（已經有單在用的不會讓你刪，請改成取消「啟用」）')) return;
     post('cat_del', { cat_id:$tr.data('abcat') }, function(res){
         CFG.cats = res.cats; CATS = res.cats; renderAbCat();
     });
@@ -1351,6 +1445,9 @@ function collectCfgRows(what){
             var $tr = $(this);
             rows.push({ cat_id:Number($tr.data('abcat')), name:$tr.find('.k-name').val(),
                         suffix:$tr.find('.k-suffix').val(),
+                        need_bom:$tr.find('.k-nbom').prop('checked') ? 1 : 0,
+                        need_ir:$tr.find('.k-nir').prop('checked') ? 1 : 0,
+                        need_client:$tr.find('.k-ncli').prop('checked') ? 1 : 0,
                         is_pm_auto:$tr.find('.k-auto').prop('checked') ? 1 : 0,
                         sort_order:$tr.find('.k-sort').val(),
                         is_active:$tr.find('.k-act').prop('checked') ? 1 : 0 });
@@ -1392,7 +1489,7 @@ $(document).on('click', '[data-saveall]', function(){
     post('cfg_save_all', { what:what, rows:JSON.stringify(rows) }, function(res){
         CFG.causes = res.causes; CFG.disp_opts = res.disp_opts; CFG.gm_opts = res.gm_opts;
         CFG.deciders = res.deciders; CFG.gm_person = res.gm_person;
-        if (res.cats) { CFG.cats = res.cats; CATS = res.cats; }
+        if (res.cats) { CFG.cats = res.cats; CATS = res.cats; nCatRulesHtml(); nApplyCatBinds(); }
         renderCause(); renderAbCat(); renderOpts(); renderDec();
         alert('已儲存 ' + res.saved + ' 列');
     });
@@ -1445,6 +1542,14 @@ $(function(){
         function(r){ $('#n_bom').val(r.bom); N_BOM_OK = true;
             $('#n_client').val(r.Client_Name || ''); $('#n_part').val(r.d_id || '');
             $('#n_batch').val(r.sqty || ''); $('#newErr').text(''); nSuggestSample(); });
+    // 客戶主檔挑選（類別「客訴」這種只綁客戶的單用）——存的是客戶編號，不是打進去的那串字
+    acSetup('#n_client', 'search_client',
+        function(r){ return '<span class="hit">' + esc(r.customer_id) + '</span>　' + esc(r.customer)
+            + (r.customer_full && r.customer_full !== r.customer ? '　<span class="muted-help">' + esc(r.customer_full) + '</span>' : '')
+            + (Number(r.is_inactive) ? '　<span class="muted-help">（已停用）</span>' : ''); },
+        function(r){ $('#n_client').val(r.customer || ''); $('#n_client_id').val(r.customer_id || ''); $('#newErr').text(''); });
+    nCatRulesHtml();
+    nApplyCatBinds();
     <?php if ($perms['canView']): ?>load();<?php endif; ?>
 });
 </script>

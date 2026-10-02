@@ -19,10 +19,15 @@ $IR_YEARS    = irYears($db);                   // 年度下拉：只列真的有
 $QAB_CAN_CREATE = false;
 $QAB_CAN_ADMIN  = false;
 $QAB_BF_DAYS    = 10;   // 「補資料」的天數門檻一律取異常單模組的設定，不在這裡寫死一份
+/* 異常單「類別」（必填）與每一類一定要綁什麼——2026-10-02 起由類別決定（qab_cat_binds 唯一判定）。
+   這一頁開的單是從客退單來的，所以預設停在「要綁客退單」的那一類（＝退貨），而那一類還要求綁製令，
+   故跳窗裡另外給一個製令挑選器。**不要在這裡比對類別名稱**，一律看旗標（鐵律4）。 */
+$QAB_CATS = [];
 try {
     $QAB_CAN_CREATE = (bool)(qab_perms($db, $IR_UID)['canCreate'] ?? false);
     $QAB_CAN_ADMIN  = (bool)(qab_perms($db, $IR_UID)['canAdmin'] ?? false);   // 就地新增異常原因分類
     $QAB_BF_DAYS    = (int)qab_backfill_days($db);
+    $QAB_CATS       = qab_cats($db, true);
 } catch (Throwable $e) {}
 if (empty($_SESSION['qab_csrf'])) $_SESSION['qab_csrf'] = bin2hex(random_bytes(16));
 $QAB_CSRF = $_SESSION['qab_csrf'];
@@ -129,6 +134,14 @@ try { $QAB_CAUSE_TREE = qab_cause_tree($db, true); } catch (Throwable $e) {}
         .fgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
         .fgrid .fld label { font-size:12px; color:#888; margin-bottom:2px; font-weight:600; }
         .fgrid .fld input, .fgrid .fld select { width:100%; }
+        /* 開異常單跳窗裡的製令模糊搜尋清單：**不可以用 position:absolute**——跳窗的 .modal-body
+           是 overflow:auto 的捲動容器，absolute 會被整個裁掉（打了字卻沒有清單可以選），
+           故與站上其他跳窗內的自動完成一致改用 fixed 由 JS 定位。 */
+        .qn-ac { position:fixed; z-index:10800; background:#fff; border:1px solid #CBD5E1; border-radius:4px;
+                 max-height:240px; overflow:auto; box-shadow:0 4px 14px rgba(0,0,0,.18); font-size:12.5px; }
+        .qn-ac div { padding:4px 8px; cursor:pointer; white-space:nowrap; }
+        .qn-ac div:hover { background:#FEF3C7; }
+        .qn-ac b { color:#92400E; }
         /* 品質異常單綁定徽章 */
         .qa-bind-guess { display:block; font-size:10px; color:#92400E; background:#FEF3C7; border:1px solid #FCD34D;
                          border-radius:8px; padding:0 5px; margin-top:2px; line-height:15px; }
@@ -465,13 +478,25 @@ try { $QAB_CAUSE_TREE = qab_cause_tree($db, true); } catch (Throwable $e) {}
         <div class="modal-body">
             <div class="note-box">
                 來源固定是<b>這一張客退單</b>，客戶與料號由來源自動帶入不給改。建立之後會直接進入單張處理頁
-                （異常原因分類、相關單位意見、處置與裁示、扣款確認都在那裡填），與從「品質異常處理單」清單開立的完全是同一張單。
+                （異常原因分類、相關單位意見、處置與裁示、扣款確認都在那裡填），與從「品質異常處理單」清單開立的完全是同一張單。<br>
+                <b>類別決定這張單一定要綁什麼</b>（由異常單模組的設定來，見清單頁「設定 → 異常單類別」）：
+                預設停在「要綁客退單」的那一類；那一類若還要求綁<b>製令</b>，底下的製令欄位就是必填（<b>要從清單選</b>，
+                綁了扣款區才帶得出該製令的製程移轉金額）。
             </div>
             <div style="margin:10px 0;padding:8px 12px;background:#F1F5F9;border:1px solid #CBD5E1;border-radius:4px;font-size:13px;">
                 <b id="qn_ir_no">-</b>　<span id="qn_ir_info" style="color:#666;"></span>
                 <input type="hidden" id="qn_ir_id">
             </div>
             <div class="fgrid">
+                <div class="fld" style="grid-column:span 2;"><label>類別 <span style="color:#DD5138">*</span></label>
+                    <select class="form-control input-sm" id="qn_cat"></select>
+                    <div class="text-muted" id="qn_cat_bind" style="font-size:11px;margin-top:2px;"></div></div>
+                <div class="fld" id="qn_bom_box" style="grid-column:span 2;display:none;">
+                    <label>製令編號 <span style="color:#DD5138">*</span>
+                        <span class="text-muted" style="font-size:11px;">（輸入製令／料號／客戶後從清單選）</span></label>
+                    <input type="text" class="form-control input-sm" id="qn_bom" autocomplete="off">
+                    <div id="qn_bom_list" class="qn-ac" style="display:none;"></div>
+                    <div class="text-muted" id="qn_bom_hint" style="font-size:11px;margin-top:2px;"></div></div>
                 <div class="fld"><label>填寫日期</label><input type="date" class="form-control input-sm" id="qn_date"></div>
                 <div class="fld"><label>批量</label><input type="number" class="form-control input-sm" id="qn_batch"></div>
                 <div class="fld"><label>檢驗數 <span class="text-muted" id="qn_sample_hint" style="font-size:11px;"></span></label>
@@ -2128,6 +2153,68 @@ function showToast(msg, ok) {
    這裡的來源固定是按下按鈕的那一張客退單，所以只要填數量與現象。 */
 var QAB_API = '../../src/store/QaAbnormal_API.php';
 var QAB_BF_DAYS = <?= (int)$QAB_BF_DAYS ?>;
+/* 異常單類別（含「一定要綁什麼」的旗標）——與異常單模組同一份設定，這裡只讀不另存一份 */
+var QAB_CATS = <?= json_encode($QAB_CATS, JSON_UNESCAPED_UNICODE) ?>;
+var QN_BOM_OK = false;              // 製令欄現在的值是不是「從清單選到的」
+
+function qnCatOf(id){
+    id = Number(id || 0);
+    return (QAB_CATS || []).filter(function(c){ return Number(c.cat_id) === id; })[0] || null;
+}
+/* 類別下拉：預設停在「要綁客退單」的那一類（這一頁開的單一定是從客退單來的）。
+   **用旗標找不用名稱找**——管理員把「退貨」改名也還是對的（鐵律4）。 */
+function qnFillCats(){
+    var rows = (QAB_CATS || []);
+    $('#qn_cat').html(rows.map(function(c){
+        return '<option value="' + c.cat_id + '">' + $('<div>').text(c.name).html() + '</option>';
+    }).join(''));
+    var pref = rows.filter(function(c){ return Number(c.need_ir); })[0] || rows[0];
+    if (pref) $('#qn_cat').val(String(pref.cat_id));
+    qnApplyCat();
+}
+function qnApplyCat(){
+    var c = qnCatOf($('#qn_cat').val());
+    var needBom = !!(c && Number(c.need_bom));
+    $('#qn_cat_bind').text(c ? (c.bind_label || '') : '');
+    $('#qn_bom_box').toggle(needBom);
+    if (!needBom) { $('#qn_bom').val(''); $('#qn_bom_hint').text(''); QN_BOM_OK = false; }
+}
+$(document).on('change', '#qn_cat', function(){ $('#qn_err').text(''); qnApplyCat(); });
+
+/* 製令模糊搜尋（走 QaAbnormal_API 的 search_bom，與異常單那兩頁同一支，不另發明一套） */
+(function(){
+    var tmr = null;
+    function place(){
+        var el = document.getElementById('qn_bom'); if (!el) return;
+        var r = el.getBoundingClientRect();
+        $('#qn_bom_list').css({ left:r.left + 'px', top:(r.bottom + 2) + 'px', width:Math.max(r.width, 300) + 'px' });
+    }
+    $(document).on('input focus', '#qn_bom', function(){
+        QN_BOM_OK = false;
+        var kw = $('#qn_bom').val().trim();
+        clearTimeout(tmr);
+        tmr = setTimeout(function(){
+            $.get(QAB_API, { action:'search_bom', kw:kw }, function(res){
+                if (!res || !res.success || !res.rows.length) { $('#qn_bom_list').hide(); return; }
+                $('#qn_bom_list').html(res.rows.map(function(r, i){
+                    return '<div data-i="' + i + '"><b>' + $('<div>').text(r.bom).html() + '</b>　'
+                         + $('<div>').text(r.d_id || '').html() + '　' + $('<div>').text(r.Client_Name || '').html() + '</div>';
+                }).join('')).data('rows', res.rows);
+                place(); $('#qn_bom_list').show();
+            }, 'json');
+        }, 220);
+    });
+    $(document).on('mousedown', '#qn_bom_list div', function(e){
+        e.preventDefault();
+        var r = ($('#qn_bom_list').data('rows') || [])[$(this).data('i')];
+        if (!r) return;
+        $('#qn_bom').val(r.bom); QN_BOM_OK = true;
+        $('#qn_bom_hint').text('已綁定：' + (r.d_id || '') + '　' + (r.Client_Name || ''));
+        $('#qn_bom_list').hide(); $('#qn_err').text('');
+    });
+    $(document).on('blur', '#qn_bom', function(){ setTimeout(function(){ $('#qn_bom_list').hide(); }, 180); });
+    $(window).on('scroll resize', function(){ if ($('#qn_bom_list').is(':visible')) place(); });
+})();
 
 function openNewQaOrder(irId) {
     var row = allIRData.find(function(r){ return r.IR_id == irId; });
@@ -2140,6 +2227,8 @@ function openNewQaOrder(irId) {
     $('#qn_insp').val(''); $('#qn_ng').val(''); $('#qn_rate').val(''); $('#qn_phe').val('');
     $('#qn_err').text(''); $('#qn_bf').hide();
     $('#qn_sample_hint').text('');
+    $('#qn_bom').val(''); $('#qn_bom_hint').text(''); QN_BOM_OK = false;
+    qnFillCats();
     qnBackfillHint();
     qnSuggestSample();
     $('#qaNewModal').modal('show');
@@ -2178,11 +2267,18 @@ $(document).on('click', '#qn_go', function() {
     if ($b.prop('disabled')) return;
     var d = $('#qn_date').val();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) { $('#qn_err').text('請填寫填寫日期'); return; }
+    // 類別與它要求的綁定（後端 qab_create_order 會用同一組規則再擋一次，鐵律8）
+    var c = qnCatOf($('#qn_cat').val());
+    if (!c) { $('#qn_err').text('請選擇類別'); return; }
+    if (Number(c.need_bom)) {
+        if (!$('#qn_bom').val().trim()) { $('#qn_err').text('類別「' + c.name + '」一定要綁製令編號，請從清單選一張'); return; }
+        if (!QN_BOM_OK) { $('#qn_err').text('製令編號請從清單中選擇（只打字不選，扣款金額帶不出來）'); return; }
+    }
     $('#qn_err').text('');
     $b.prop('disabled', true);
     $.post(QAB_API, {
-        action: 'create', csrf: QAB_CSRF, kind: 'ir',
-        fill_date: d, ir_id: $('#qn_ir_id').val(),
+        action: 'create', csrf: QAB_CSRF, cat_id: $('#qn_cat').val(),
+        fill_date: d, ir_id: $('#qn_ir_id').val(), bom_no: $('#qn_bom').val(),
         batch_qty: $('#qn_batch').val(), insp_qty: $('#qn_insp').val(), ng_qty: $('#qn_ng').val(),
         abnormal_phenomenon: $('#qn_phe').val()
     }, function(res) {
