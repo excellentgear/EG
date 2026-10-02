@@ -7,6 +7,7 @@ require_once '../../src/common/part_alias_lib.php';
 require_once '../../src/common/order_track_perm_lib.php';
 require_once '../../src/common/order_auto_pmget_lib.php';  // 指定特定設計＝存檔自動轉生管（唯一實作）
 require_once '../../src/common/order_attach_cat_lib.php';   // 訂單附件「需綁定料號」的類別判定（唯一實作）
+require_once '../../src/common/order_as_tag_lib.php';       // 稽核製程標籤（AS 認定用，唯一實作）
 
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
@@ -224,6 +225,23 @@ try {
     // 急件旗標（使用者明確要求，2026-09-03）：只收 0/1，權限沿用本區塊上方的 ot_edit 守門。
     $isUrgent = (!empty($_POST['is_urgent']) && $_POST['is_urgent'] !== '0') ? 1 : 0;
 
+    // ── 稽核製程標籤（2026-10-02 使用者交辦）──────────────────────────────
+    // 前端在跳窗標題右側讓使用者點選，這裡用同一套規則再驗一次（鐵律8）。
+    // 兩個刻意這樣做的地方：
+    //  1)【沒送這個欄位＝不要動它】用 array_key_exists 判，而不是判空字串。送空字串才是
+    //     「使用者刻意清掉標籤」；完全沒送多半是別的呼叫端（本專案踩過好幾次同一個坑）。
+    //  2)【必選是管理員開關】ot_astag_require_save() 預設 false，所以沒開之前完全不影響任何人。
+    //     驗證一定要在 INSERT/UPDATE **之前**做，不然會先建出訂單再回失敗。
+    $asTagSent  = array_key_exists('as_tag_id', $_POST);
+    $asTagId    = $asTagSent ? (int)($_POST['as_tag_id'] ?? 0) : 0;
+    $asTagScope = $asTagSent ? trim((string)($_POST['as_tag_scope'] ?? '')) : '';
+    $asTagCheck = ['ok' => true, 'msg' => '', 'tag_id' => 0, 'scope' => ''];
+    if ($asTagSent) {
+        $__asReq = false;
+        try { $__asReq = ot_astag_require_save($db); } catch (Throwable $e) { $__asReq = false; }
+        $asTagCheck = ot_astag_validate($db, $asTagId, $asTagScope, $clientNameId, !$__asReq);
+    }
+
     if (isset($_POST['or_new']) || isset($_POST['or_new_copy'])) {
         ot_require_feature($db, $_ot_uid, 'ot_edit');
         // 附件標籤鐵則：這批暫存附件全部設好標籤才能存檔，否則擋下（不建立訂單）
@@ -232,6 +250,8 @@ try {
             $tagErr = eg_order_attach_check_tagged($db, "batch_key=? AND status='temp'", [$batchKey]);
             if ($tagErr !== null) { echo json_encode(['success' => false, 'message' => $tagErr]); exit; }
         }
+        // 稽核製程標籤：不合法（或管理員已開必選卻沒選）就擋在建立訂單之前
+        if (!$asTagCheck['ok']) { echo json_encode(['success' => false, 'message' => $asTagCheck['msg']]); exit; }
         $sql = "INSERT INTO order_track SET
                     Order_oo         = :OrderNo,
                     d_id             = :d_id,
@@ -287,6 +307,10 @@ try {
         $stmt->bindValue(':is_urgent',        $isUrgent, PDO::PARAM_INT);
         $stmt->execute();
         $newId = $db->lastInsertId();
+        // 稽核製程標籤：寫入一律走 ot_astag_apply_to_order()（唯一寫入點，順便留下設定人與時間）
+        if ($asTagSent && (int)$asTagCheck['tag_id'] > 0) {
+            ot_astag_apply_to_order($db, (int)$newId, $asTagCheck['tag_id'], $asTagCheck['scope'], $_ot_uid, 'form');
+        }
         // 新增訂單附件暫存轉正：畫面開啟時前端產生 batch_key，存檔前上傳的附件先存 temp，這裡歸給剛建立的訂單
         if ($batchKey !== '') {
             try {
@@ -332,6 +356,9 @@ try {
             echo json_encode(['success' => false, 'message' => $__ocGuard['msg']]);
             exit;
         }
+
+        // 稽核製程標籤：不合法（或管理員已開必選卻沒選）就擋在更新之前，一個欄位都不要動
+        if (!$asTagCheck['ok']) { echo json_encode(['success' => false, 'message' => $asTagCheck['msg']]); exit; }
 
         $baseFields = "Order_oo=:OrderNo, d_id=:d_id, Specification=NULL,
                        Order_ps=:Order_ps, Client_name=:Client_Name, Qty=:Qty,
@@ -389,6 +416,10 @@ try {
             $stmt->bindParam(':Delivery_date', $_POST['orderDdate']);
         }
         $stmt->execute();
+        // 稽核製程標籤：沒送這個欄位＝不要動它（見上方 $asTagSent 的說明）
+        if ($asTagSent) {
+            ot_astag_apply_to_order($db, $editOrderId, (int)$asTagCheck['tag_id'], (string)$asTagCheck['scope'], $_ot_uid, 'form');
+        }
         // 客戶真的被換掉時留稽核，並清掉這張訂單的解鎖狀態（下次要再改就得重新輸入本人密碼）
         if (!empty($__ocGuard['changed'])) {
             ot_client_change_audit($db, $_ot_uid, $editOrderId, (string)($row['Order_oo'] ?? ''),
@@ -539,7 +570,12 @@ try {
             ':d_id_ID'          => $parent['d_id_ID'],
             ':Created_By'       => $userId,
         ]);
+        $splitNewId = (int)$db->lastInsertId();
         $db->commit();
+        // 稽核製程標籤：拆批只是把同一張單的交期拆開，AS 認定本來就跟母訂單一樣，直接沿用。
+        // 刻意放在 commit() 之後——ot_astag_apply_to_order() 裡會呼叫 ot_astag_ensure_schema()，
+        // 而 DDL 在交易中會造成隱式 commit（本專案已踩過兩次）。失敗也不可以害拆批跟著失敗。
+        try { ot_astag_inherit($db, $parentId, $splitNewId, $userId); } catch (Throwable $eAsTag) {}
         echo json_encode(['success' => true, 'message' => '子批次新增成功']);
         exit;
     }

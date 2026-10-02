@@ -161,6 +161,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'datepicker_ate'     => $row['datepicker_ate'] ?? '',
                 'Order_status'       => $row['Order_status'] ?? null,
                 'is_urgent'          => (int)($row['is_urgent'] ?? 0),
+                // 稽核製程標籤（2026-10-02）：SELECT ot.* 本來就撈到了，這裡只是帶給跳窗把原本選的標上
+                'as_tag_id'          => (int)($row['as_tag_id'] ?? 0),
+                'as_tag_scope'       => (string)($row['as_tag_scope'] ?? ''),
             ]]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -1626,6 +1629,9 @@ $can_boss_review_setting   = false;
 $can_analysis              = false;
 // 客戶提醒設定（2026-09-23 新增）：全新功能，舊制沒有對應權限碼，一律預設關閉
 $can_client_reminder_manage = false;
+// 稽核製程標籤設定（2026-10-02 新增）：全新功能，舊制沒有對應權限碼，一律預設關閉
+// （看得到本頁的人都點得到標籤；但「哪些製程是稽核製程」「存檔必選」「批次補設定」要另外指派）
+$can_as_tag_setting        = false;
 $can_op_convert            = $can_create;                               // OP轉訂單（舊制沿用一般新增權限）
 $can_view_amount           = true;                                      // 金額顯示（舊制從未限制過，一律可見）
 $can_keyway_calc           = true;                                      // 鍵槽計算（舊制從未限制過，一律可見）
@@ -1740,6 +1746,10 @@ $OT_PAGE_FEATURES = [
     // 2026-09-23 使用者要求：客戶欄旁筆記本圖示可綁定「這個客戶有哪些事要注意」（同客戶可多筆），
     // 選定/變更客戶時跳窗提醒；本項只管「誰能新增/編輯/停用提醒內容」，跳窗本身看得到這頁的人都看得到。
     ['group'=>'客戶提醒',     'code'=>'ot_client_reminder_manage', 'label'=>'設定客戶提醒（新增/編輯/停用提醒內容）'],
+    // 2026-10-02 使用者要求：新增/編輯訂單時要選「這張單在 AS 認定上屬於哪一種」（單製齒研／全製含齒研／
+    // 全製／單製非AS認證／廠內治具…）。**標籤本身看得到本頁的人都點得到**（那是填單的一部分）；
+    // 本項只管「哪些製程算稽核製程」「存檔要不要強制必選」「舊資料批次補設定」這三件管理動作。
+    ['group'=>'稽核製程標籤', 'code'=>'ot_as_tag_setting',       'label'=>'設定稽核製程標籤（含存檔必選開關與舊資料批次補設定）'],
 ];
 
 // ── RBAC 權限檢查（$OT_USE_RBAC = true 時生效）───────────────────────────
@@ -1763,6 +1773,7 @@ if ($OT_USE_RBAC) {
     $can_view_amount            = ot_hasF('ot_view_amount');
     $can_keyway_calc            = ot_hasF('ot_keyway_calc');
     $can_client_reminder_manage = ot_hasF('ot_client_reminder_manage');
+    $can_as_tag_setting        = ot_hasF('ot_as_tag_setting');
     $can_designer_assign_cog   = $IS_OT_RBAC_ADMIN;
     $can_master_edit           = ot_hasF('ot_master_edit');
     $show_op_col      = ($can_create || $can_update);
@@ -1790,6 +1801,17 @@ require_once __DIR__ . '/../../src/common/order_boss_review_lib.php';
 // 唯一實作在 src/common/order_client_reminder_lib.php；沒有任何客戶被設定提醒時
 // 這整套等於不存在（清單一律是空的），畫面與行為與改動前完全相同。
 require_once __DIR__ . '/../../src/common/order_client_reminder_lib.php';
+// ── 稽核製程標籤（2026-10-02 使用者交辦）─────────────────────────────────
+// 唯一實作在 src/common/order_as_tag_lib.php。固定三個選項（全製／單製非AS認證／廠內治具）
+// 會自動種好，稽核製程則由管理員在「設定」跳窗自己加；**「存檔必選」預設關閉**，
+// 所以在管理員真的去開啟之前，畫面只是多出一排可點的標籤，不影響任何人的既有操作。
+require_once __DIR__ . '/../../src/common/order_as_tag_lib.php';
+ot_astag_ensure_schema($db);
+$AS_TAG_REQUIRE = ot_astag_require_save($db);
+// 清單那一欄的標籤名稱對照（含停用的定義，否則停用之後舊訂單會顯示空白）
+$AS_TAG_LABELS  = ot_astag_label_map($db);
+// 篩選下拉用的選項（一律用「本公司」的完整清單，否則廠內治具的訂單永遠篩不出來）
+$AS_TAG_FILTER_OPTS = ot_astag_options($db, true);
 
 if (!($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']))) {
     $ate_list = $conn->getAll("SELECT `user_cname`,`user_uname`,`id` FROM `user` WHERE `user_status`=63");
@@ -2120,6 +2142,16 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     if ($ocr_pending_filter === 1) {
         // 客戶提醒「訂單待確認」篩選（2026-09-23）：這張訂單目前有沒有狀態=pending 的客戶提醒
         $whereClauses[] = ocr_pending_exists_sql('ot');
+    }
+    // 稽核製程標籤篩選（2026-10-02 使用者要求）：'' ＝不篩、'__none__' ＝尚未設定標籤、
+    // 'tagid:scope' ＝某一個標籤（單製齒研與全製含齒研是兩個不同的值，所以要連 scope 一起比）
+    $as_tag_filter = trim((string)($_POST['as_tag'] ?? ''));
+    if ($as_tag_filter === '__none__') {
+        $whereClauses[] = "ot.as_tag_id IS NULL";
+    } elseif ($as_tag_filter !== '' && preg_match('/^(\d+):(single|full|none)$/', $as_tag_filter, $_asM)) {
+        $whereClauses[] = "(ot.as_tag_id = :as_tag_id AND ot.as_tag_scope = :as_tag_scope)";
+        $params[':as_tag_id']    = (int)$_asM[1];
+        $params[':as_tag_scope'] = $_asM[2];
     }
     // 半高卡片第一優先篩選（優先於 status 篩選）
     if ($order_status_filter === 'unfinished') {
@@ -3097,7 +3129,20 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     </div>
                     <?php endif; ?>
                 </td>
-                <td class="col-process"><?= safe_html($order['Processing_items']) ?></td>
+                <td class="col-process"><?= safe_html($order['Processing_items']) ?><?php
+                    // 稽核製程標籤（2026-10-02）：AS 認定結果顯示在製程文字下方。
+                    // 名稱一律查 $AS_TAG_LABELS（含停用的定義），停用之後舊訂單才不會變空白。
+                    $_asTagId = (int)($order['as_tag_id'] ?? 0);
+                    if ($_asTagId > 0):
+                        $_asKey = $_asTagId . ':' . (string)($order['as_tag_scope'] ?? '');
+                        $_asLbl = (string)($AS_TAG_LABELS[$_asKey] ?? '');
+                        $_asDef = $AS_TAG_LABELS['def:' . $_asTagId] ?? null;
+                        if ($_asLbl !== ''):
+                            $_asFx = ($_asDef && in_array(($_asDef['kind'] ?? ''), ['fixed', 'other'], true));
+                    ?><br><span class="as-tag-cell<?= $_asFx ? ' fx' : '' ?>" title="製程標籤（AS 認定）：<?= safe_html($_asLbl) ?>"><?= safe_html($_asLbl) ?></span><?php
+                        endif;
+                    endif;
+                ?></td>
                 <td class="col-qty"><?= number_format($order['Qty'] ?? 0) ?><?php if (!empty($order['qty_over_range'])): ?><br><span style="color:#DD5138;font-size:10px;font-weight:600;white-space:nowrap;" title="OP轉訂單時輸入的數量超出報價階梯區間（含容差後區間），請補報價單">數量超出區間</span><?php endif; ?><?php if (!empty($order['is_repeat_conversion'])): ?><br><span style="color:#F0A24B;font-size:10px;font-weight:600;white-space:nowrap;" title="同一報價項目先前已轉過訂單，這是同一組合的追加訂單">追加訂單</span><?php endif; ?></td>
                 <?php
                 $upDisplay = '';
@@ -3657,6 +3702,30 @@ foreach($dCounts as $c) {
             padding: 15px 20px;
         }
         .modal-title { font-weight: 600; }
+        /* ── 稽核製程標籤（2026-10-02）：訂單跳窗標題右側那一排按鈕 ───────────────
+           跳窗標題是深底白字，所以未選取＝半透明白框、選取後＝暖色亮底深棕字（ai-rules/10）。
+           刻意不用急件那顆的實心橘，否則畫面上兩個東西長得一模一樣分不出來。
+           固定三選項用虛線框，跟管理員設定的「稽核製程」一眼分得出來。 */
+        #as-tag-bar { font-weight: 400; }
+        .as-tag-chip {
+            display: inline-block; margin: 2px 3px 2px 0; padding: 2px 9px; border-radius: 11px;
+            font-size: 11px; line-height: 16px; white-space: nowrap; cursor: pointer;
+            border: 1px solid rgba(255,255,255,.45); color: #f2f2f2; background: transparent;
+            -webkit-user-select: none; user-select: none; transition: background .15s, color .15s;
+        }
+        .as-tag-chip:hover { background: rgba(255,255,255,.18); }
+        .as-tag-chip.on    { background: #FFF6EC; border-color: #c0762c; color: #7a4a18; font-weight: 700; }
+        .as-tag-chip.fx    { border-style: dashed; }
+        #as-tag-bar.need-pick .as-tag-chip { border-color: #FFD9A0; }
+        /* 清單「製程」欄底下那一顆標籤：**一定要自己指定 line-height**——Gentelella 全站
+           td span{line-height:28px}，不指定的話 10px 的字會佔掉 28px 把整列撐高（本專案已踩三次）。 */
+        .as-tag-cell {
+            display: inline-block; margin-top: 2px; padding: 0 5px; border-radius: 3px;
+            font-size: 10px; line-height: 14px; white-space: nowrap; max-width: 100%;
+            overflow: hidden; text-overflow: ellipsis; vertical-align: top;
+            background: #FFF3E2; border: 1px solid #E4D3BC; color: #8a5a2b;
+        }
+        .as-tag-cell.fx { background: #f3f3f3; border-color: #ddd; color: #777; }
         .close { color: white; opacity: 0.8; text-shadow: none; }
         .close:hover { opacity: 1; }
         
@@ -3861,6 +3930,17 @@ foreach($dCounts as $c) {
                         </div>
                         <input type="text" id="filter-part" class="form-control input-sm" placeholder="搜尋料號" style="width: 105px;" autocomplete="new-password" data-lpignore="true" data-form-type="other">
                         <input type="text" id="filter-global" class="form-control input-sm" placeholder="全表搜尋" style="width: 130px;" autocomplete="new-password" data-lpignore="true" data-form-type="other">
+                        <?php /* 稽核製程標籤篩選（2026-10-02 使用者要求）。
+                                 本頁在 input_rules_baseline.txt 基準線內（沒有載入 eg_input_rules.js），
+                                 所以**不可以掛 data-eg-filter**——那會是一個死屬性；選項只有十幾個，直接下拉即可。
+                                 選項一律用「本公司」的完整清單，否則廠內治具的訂單永遠篩不出來。 */ ?>
+                        <select id="filter-as-tag" class="form-control input-sm" style="width:118px;" title="依製程標籤（AS 認定）篩選">
+                            <option value="">全部標籤</option>
+                            <option value="__none__">尚未設定標籤</option>
+                            <?php foreach ($AS_TAG_FILTER_OPTS as $_aso): ?>
+                                <option value="<?= safe_html($_aso['key']) ?>"><?= safe_html($_aso['label']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
                         <button type="button" class="btn btn-warning btn-sm" id="filter-unbound" style="margin:0;" title="篩選尚未綁定客戶ID或料號ID的訂單">
                             <i class="fa fa-unlink"></i><span class="fb-txt"> 未綁定</span>
                         </button>
@@ -3895,10 +3975,10 @@ foreach($dCounts as $c) {
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#5d4037,#a1887f);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
                             <i class="fa fa-history" style="font-size:13px;"></i><span class="fb-txt"> 變更</span>
                         </button>
-                        <?php if ($can_order_change_setting || $can_boss_review_setting): ?>
+                        <?php if ($can_order_change_setting || $can_boss_review_setting || $can_as_tag_setting): ?>
                         <button type="button" id="btn-order-change-settings"
                             onclick="openChangeSettings()"
-                            title="設定（訂單變更通知對象、附件路徑、列印表頭表尾、需給 BOSS 審圖的客戶名單）"
+                            title="設定（訂單變更通知對象、附件路徑、列印表頭表尾、需給 BOSS 審圖的客戶名單、稽核製程標籤）"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#37474f,#607d8b);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
                             <i class="fa fa-cog" style="font-size:13px;"></i><span class="fb-txt"> 設定</span>
                         </button>
@@ -4011,7 +4091,18 @@ foreach($dCounts as $c) {
                     <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
                     <button type="button" id="btn-toggle-closed" class="btn btn-xs pull-right" style="display:none;margin-right:8px;margin-top:2px;" onclick="toggleOrderStatus('closed')"></button>
                     <button type="button" id="btn-toggle-urgent" class="btn btn-xs pull-right" style="margin-right:8px;margin-top:2px;" onclick="toggleUrgentFlag()" title="標記為急件：篩選「批圖中」時會排在最上方，清單以淺暖粉紅底色標示"></button>
-                    <h4 class="modal-title"><i class="fa fa-plus-circle"></i> 新增訂單</h4>
+                    <?php /* 標題與「製程標籤」要並排，所以標題改 inline-block。
+                             注意：全頁有好幾處 $('.modal-title').html(...)（共用選擇器），
+                             所以標籤那一排**一定要放在 .modal-title 外面**，不然切換新增/編輯模式時會被整段洗掉。 */ ?>
+                    <h4 class="modal-title" style="display:inline-block;vertical-align:middle;margin:0 12px 0 0;"><i class="fa fa-plus-circle"></i> 新增訂單</h4>
+                    <!-- ═══ 稽核製程標籤（2026-10-02 使用者交辦）═══════════════════════
+                         這張單在 AS 認定上屬於哪一種：單製○○／全製含○○／全製／單製非AS認證／廠內治具。
+                         單選；廠內治具只有「客戶＝本公司」才會出現；換客戶時會要求重新確認。 -->
+                    <div id="as-tag-bar" style="display:inline-block;vertical-align:middle;max-width:100%;">
+                        <span style="font-size:11px;opacity:.85;margin-right:4px;">製程標籤<span id="as-tag-req" style="display:none;color:#FFD9A0;" title="管理員已開啟「存檔必選」">＊</span></span>
+                        <span id="as-tag-chips" style="display:inline;"></span>
+                        <span id="as-tag-hint" style="display:none;font-size:11px;margin-left:6px;padding:1px 7px;border-radius:9px;"></span>
+                    </div>
                 </div>
                 <div class="modal-body" style="background:#f7f7f7;padding:12px;">
                     <div class="row" style="margin:0;">
@@ -4030,6 +4121,11 @@ foreach($dCounts as $c) {
                                 <input type="hidden" name="quote_no"            id="hidden_quote_no">
                                 <input type="hidden" name="batch_key"           id="order_attach_batch_key">
                                 <input type="hidden" name="is_urgent"           id="hidden_is_urgent" value="0">
+                                <?php /* 稽核製程標籤（2026-10-02）：隨既有的 or_new/or_update 一起存，
+                                         不另開 API——那樣標籤才跟訂單內容在同一次存檔，不會出現
+                                         「訂單存進去了、標籤沒跟上」。後端 _NewOrder_Track.php 會再驗一次。 */ ?>
+                                <input type="hidden" name="as_tag_id"           id="hidden_as_tag_id" value="">
+                                <input type="hidden" name="as_tag_scope"        id="hidden_as_tag_scope" value="">
                                 <div class="row" style="margin:0 -5px;">
 
                                     <!-- Row 1: 訂單編號 | 客戶單號 -->
@@ -5150,6 +5246,10 @@ foreach($dCounts as $c) {
         window.canUpdatePmget = <?= json_encode($can_to_pm) ?>; // 轉生管操作權限（ot_to_pm）
         window.canChangeClient = <?= json_encode((bool)$can_order_change_client) ?>; // 更改已建立訂單的客戶（ot_order_change_client）
         window.OT_CAN_CHANGE_SETTING = <?= json_encode((bool)$can_order_change_setting) ?>; // 訂單變更設定（ot_order_change_setting）
+        // 稽核製程標籤（2026-10-02）：必選開關一律取後端同一支 ot_astag_require_save()，
+        // 不在前端另存一份；開跳窗時 options 回來還會再更新一次（管理員剛改過也立刻生效）
+        window.AS_TAG_REQUIRE = <?= json_encode((bool)$AS_TAG_REQUIRE) ?>;
+        window.AS_TAG_CAN_SET = <?= json_encode((bool)$can_as_tag_setting) ?>;   // 能不能改設定／批次補設定
         window.OT_CAN_BOSS_SETTING   = <?= json_encode((bool)$can_boss_review_setting) ?>;  // 設定「需給 BOSS 審圖」客戶名單（ot_boss_review_setting）
         window.OT_CAN_REMINDER_MANAGE = <?= json_encode((bool)$can_client_reminder_manage) ?>; // 設定客戶提醒（ot_client_reminder_manage）
         window.designerList = <?= json_encode($ate_list) ?>; // 傳遞設計師列表給 JS
@@ -5215,7 +5315,8 @@ foreach($dCounts as $c) {
                 unbound:           currentFilters.unbound    ? 1 : 0,
                 unbound_op:        currentFilters.unbound_op ? 1 : 0,
                 qty_over:          currentFilters.qty_over   ? 1 : 0,
-                pending_reminder:  currentFilters.pending_reminder ? 1 : 0
+                pending_reminder:  currentFilters.pending_reminder ? 1 : 0,
+                as_tag:            ($('#filter-as-tag').val() || '')   // 稽核製程標籤篩選（2026-10-02）
             }, function(res) {
                 if (!res.success) {
                     $('#orderTable tbody').html('<tr><td colspan="20" class="text-center text-danger">載入失敗: ' + (res.message || '未知錯誤') + '</td></tr>');
@@ -5237,7 +5338,8 @@ foreach($dCounts as $c) {
                             unbound:  currentFilters.unbound    ? 1 : 0,
                             unbound_op: currentFilters.unbound_op ? 1 : 0,
                             qty_over:   currentFilters.qty_over   ? 1 : 0,
-                            pending_reminder: currentFilters.pending_reminder ? 1 : 0
+                            pending_reminder: currentFilters.pending_reminder ? 1 : 0,
+                            as_tag:   ($('#filter-as-tag').val() || '')   // 標籤篩選也要帶，否則卡片數字跳不出來的筆數對不起來
                         }, function(r2) {
                             if (r2.success) {
                                 lockedStats = r2.stats;
@@ -5355,6 +5457,13 @@ foreach($dCounts as $c) {
                 fetchTableData(1);
             });
 
+            // 稽核製程標籤篩選（2026-10-02 使用者要求）
+            $('#filter-as-tag').on('change', function() {
+                isStatCardFilter = false;
+                lockedStats = null;
+                fetchTableData(1);
+            });
+
             // ── 文字篩選（防抖） ────────────────────────────────────────────
             var debounceTimer;
             $('#filter-client, #filter-part, #filter-global').on('keyup input', function() {
@@ -5404,6 +5513,7 @@ foreach($dCounts as $c) {
                 $('#filter-client').val('');
                 $('#filter-part').val('');
                 $('#filter-global').val('');
+                $('#filter-as-tag').val('');          // 稽核製程標籤篩選（2026-10-02）
                 currentFilters.status = 'all';
                 currentFilters.unbound = false;
                 currentFilters.unbound_op = false;
@@ -5908,6 +6018,8 @@ foreach($dCounts as $c) {
 
             // 客戶提醒：圖示顯示/計數 + 選定/變更客戶當下跳窗（2026-09-23）
             ocrMaybeCheckOnChange(custPk);
+            // 稽核製程標籤：客戶換掉時重算可選選項並要求重新確認（2026-10-02）
+            astagMaybeOnClientChange(custPk);
         }
 
         // ══════════════════════════════════════════════════════════════════════
@@ -8218,6 +8330,7 @@ foreach($dCounts as $c) {
             $('#newOrderForm')[0].reset();
             $('#op-cust-diff-hint').hide().empty();
             window._cuOrig = null; otResetClientUnlock();   // 新增模式客戶本來就可自由輸入，不帶著上一張訂單的解鎖狀態
+            astagOnOrderLoaded('', 0, '');   // 稽核製程標籤：新增模式尚未選客戶（廠內治具要等選到本公司才出現）
             ocrOnCustomerLoaded('');   // 客戶提醒：新增模式尚未選定任何客戶
             $('#orig_client_pk,#orig_part_pk').val('');
             $('#hidden_Order_id').val('');
@@ -8284,6 +8397,665 @@ foreach($dCounts as $c) {
         }
         function toggleUrgentFlag() { setUrgentFlag($('#hidden_is_urgent').val() !== '1'); }
 
+        // ══════════════════════════════════════════════════════════════════════
+        // 稽核製程標籤（唯一實作 src/common/order_as_tag_lib.php；2026-10-02 使用者交辦）
+        // ─────────────────────────────────────────────────────────────────────
+        // 這張單在 AS 認定上屬於哪一種：單製○○／全製含○○／全製／單製非AS認證／廠內治具。
+        // 四件刻意這樣做的事：
+        //  1)【單選】使用者 2026-10-02 拍板。點新的就取代舊的，不是勾選框。
+        //  2)【選項是後端算的】哪些製程算稽核製程、scope=both 要不要長兩顆、廠內治具出不出現，
+        //     全部由 OrderAsTag_API 的 options 回傳，前端不自己判斷（否則規則遲早走鐘）。
+        //  3)【換客戶要重新確認】使用者明確要求。做法是沿用客戶提醒那一套——updateIdBadges()
+        //     每次都算出目前的 custPk，這裡比對「跟上次載入選項時是不是同一個客戶」。
+        //     **已經選好的標籤不會被安靜清掉**（除非它在新客戶底下根本不能用，例如廠內治具），
+        //     只是要求再點一次確認，否則使用者會發現自己填好的東西莫名消失。
+        //  4)【必選是管理員開關】window.AS_TAG_REQUIRE 來自後端同一支 ot_astag_require_save()，
+        //     預設關；關閉時這一排就只是「可以選，不選也存得進去」，完全不影響既有操作。
+        // ══════════════════════════════════════════════════════════════════════
+        window.ASTAG = {
+            opts: [],            // 目前這張訂單可選的選項
+            key: '',             // 目前選到的 'tagid:scope'（空＝未設定）
+            loadedClient: null,  // 上次載入選項時的客戶ID（null＝還沒初始化過）
+            needPick: false,     // 客戶被換掉了、要求重新確認
+            loading: false
+        };
+
+        function astagApiBase() { return '../../src/store/OrderAsTag_API.php'; }
+
+        /** 把選到的標籤寫進表單（唯一寫入 hidden 欄位的地方） */
+        function astagSet(key) {
+            var o = null;
+            for (var i = 0; i < ASTAG.opts.length; i++) if (ASTAG.opts[i].key === key) { o = ASTAG.opts[i]; break; }
+            if (!o) { ASTAG.key = ''; $('#hidden_as_tag_id').val(''); $('#hidden_as_tag_scope').val(''); }
+            else    { ASTAG.key = key; $('#hidden_as_tag_id').val(o.tag_id); $('#hidden_as_tag_scope').val(o.scope); }
+            astagRender();
+        }
+
+        function astagRender() {
+            var $box = $('#as-tag-chips');
+            if (!$box.length) return;
+            $('#as-tag-req').toggle(!!window.AS_TAG_REQUIRE);
+            if (!ASTAG.opts.length) {
+                $box.html('<span style="font-size:11px;opacity:.7;">'
+                    + (ASTAG.loading ? '載入中…' : '尚未設定任何標籤')
+                    + '</span>');
+            } else {
+                var h = '';
+                for (var i = 0; i < ASTAG.opts.length; i++) {
+                    var o = ASTAG.opts[i];
+                    h += '<span class="as-tag-chip' + (o.key === ASTAG.key ? ' on' : '')
+                       + (o.kind !== 'process' ? ' fx' : '') + '" data-key="' + escapeHtml(o.key) + '"'
+                       + ' title="' + escapeHtml(o.hint || '') + '">' + escapeHtml(o.label) + '</span>';
+                }
+                $box.html(h);
+            }
+            // 提示列：要求重新確認 > 必選未選 > 不顯示
+            var $hint = $('#as-tag-hint');
+            if (ASTAG.needPick) {
+                $hint.text('客戶已變更，請重新確認製程標籤').css({ background: '#FFD9A0', color: '#4A2A0A' }).show();
+                $('#as-tag-bar').addClass('need-pick');
+            } else if (window.AS_TAG_REQUIRE && !ASTAG.key) {
+                $hint.text('存檔前必須選一個').css({ background: '#DD5138', color: '#fff' }).show();
+                $('#as-tag-bar').removeClass('need-pick');
+            } else {
+                $hint.hide();
+                $('#as-tag-bar').removeClass('need-pick');
+            }
+        }
+
+        // 點選（事件委派：chips 是重繪出來的）
+        $(document).on('click', '#as-tag-chips .as-tag-chip', function () {
+            var k = $(this).data('key');
+            if (!k) return;
+            // 再點一次同一個＝取消（必選開啟時不給取消，免得按一下就變成不合法）
+            if (String(k) === ASTAG.key && !window.AS_TAG_REQUIRE) astagSet('');
+            else astagSet(String(k));
+            ASTAG.needPick = false;   // 使用者已經重新確認過了
+            astagRender();
+        });
+
+        /**
+         * 載入某個客戶可選的選項。
+         * @param clientId 客戶ID（空字串＝還沒選客戶，廠內治具不會出現）
+         * @param keepKey  載入完要不要沿用目前選到的標籤（選項裡找不到就會被清掉）
+         */
+        function astagLoadOptions(clientId, keepKey, cb) {
+            ASTAG.loading = true; astagRender();
+            $.post(astagApiBase(), { action: 'options', client_id: clientId || '' }, function (res) {
+                ASTAG.loading = false;
+                if (!res || !res.success) { ASTAG.opts = []; astagRender(); if (cb) cb(false); return; }
+                ASTAG.opts = res.options || [];
+                window.AS_TAG_REQUIRE  = !!parseInt(res.require_save || 0, 10);
+                window.AS_TAG_CAN_SET  = !!parseInt(res.can_setting || 0, 10);
+                ASTAG.loadedClient = clientId || '';
+                astagSet(keepKey ? ASTAG.key : '');   // astagSet 會自己檢查這個 key 還在不在
+                if (cb) cb(true);
+            }, 'json').fail(function () { ASTAG.loading = false; ASTAG.opts = []; astagRender(); if (cb) cb(false); });
+        }
+
+        /** 開啟新增/編輯訂單時呼叫：先「認帳」目前的客戶與標籤，之後才判斷有沒有被換掉 */
+        function astagOnOrderLoaded(clientId, tagId, scope) {
+            ASTAG.needPick = false;
+            ASTAG.key = (parseInt(tagId || 0, 10) > 0) ? (parseInt(tagId, 10) + ':' + (scope || '')) : '';
+            $('#hidden_as_tag_id').val(parseInt(tagId || 0, 10) > 0 ? parseInt(tagId, 10) : '');
+            $('#hidden_as_tag_scope').val(parseInt(tagId || 0, 10) > 0 ? (scope || '') : '');
+            astagLoadOptions(clientId || '', true);
+        }
+
+        /** 客戶被換掉了（由 updateIdBadges 每次呼叫，比對客戶有沒有變） */
+        function astagMaybeOnClientChange(custPk) {
+            custPk = custPk || '';
+            if (ASTAG.loadedClient === null) return;          // 還沒初始化過（頁面剛載入）
+            if (custPk === ASTAG.loadedClient) return;         // 沒換客戶
+            var prevKey = ASTAG.key;
+            astagLoadOptions(custPk, true, function () {
+                if (!prevKey) return;                          // 本來就沒選，不必要求重新確認
+                if (ASTAG.key === prevKey) {
+                    // 原本選的在新客戶底下還能用 → 只要求再確認一次（不清掉）
+                    ASTAG.needPick = true;
+                } else {
+                    // 在新客戶底下不能用了（例如廠內治具換成別家客戶）→ 一定要重選，講明原因
+                    ASTAG.needPick = true;
+                    $('#as-tag-hint').text('客戶已變更，原本的製程標籤在這個客戶底下不適用，請重新選擇');
+                }
+                astagRender();
+            });
+        }
+
+        /** 存檔前檢查（後端 _NewOrder_Track.php 會用同一套規則再擋一次＝鐵律8） */
+        function astagValidateBeforeSave() {
+            if (!$('#as-tag-chips').length) return true;
+            if (ASTAG.needPick) {
+                showOrderAlert('客戶已變更，請重新確認標題右側的「製程標籤」（確認無誤再點一次即可）。');
+                return false;
+            }
+            if (window.AS_TAG_REQUIRE && !ASTAG.key) {
+                showOrderAlert('請先在標題右側選擇「製程標籤」（管理員已開啟存檔必選）。');
+                $('#as-tag-bar').addClass('need-pick');
+                return false;
+            }
+            return true;
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        // 稽核製程標籤－設定與批次補設定（僅 ot_as_tag_setting；入口在「設定」跳窗）
+        // ══════════════════════════════════════════════════════════════════════
+        window.ASTAGCFG = { rows: [], others: [], tree: [], usage: {}, optsAll: [], fixed: [],
+                            bfGroups: [], bfOrders: [], bfPage: 1, bfTotal: 0, bfPi: null, tab: 'group',
+                            bfDirty: false };   // bfDirty：補設定期間有沒有真的寫入過（關跳窗時才刷新主清單）
+
+        function astagCfgApi(data, cb) {
+            $.post(astagApiBase(), data, function (res) { cb(res || { success: false, message: '沒有回應' }); }, 'json')
+             .fail(function (x) { cb({ success: false, message: '連線失敗（' + (x && x.status ? x.status : '?') + '）' }); });
+        }
+        function astagNum(n) { return (parseInt(n || 0, 10) || 0).toLocaleString(); }
+
+        /** 開啟「設定」跳窗時載入（openChangeSettings 會呼叫） */
+        function astagSettingsOpen() {
+            if (!$('#astag-tbody').length) return;      // 沒有這個權限＝後端沒輸出這一區
+            $('#astag-defs-msg').text(''); $('#astag-defs-err').hide().empty();
+            $('#astag-tbody').html('<tr><td colspan="7" class="text-center" style="color:#aaa;padding:14px;">載入中…</td></tr>');
+            astagCfgApi({ action: 'defs' }, function (res) {
+                if (!res.success) { $('#astag-tbody').html('<tr><td colspan="7" class="text-center text-danger" style="padding:14px;">' + escapeHtml(res.message || '載入失敗') + '</td></tr>'); return; }
+                ASTAGCFG.tree  = res.tree  || [];
+                ASTAGCFG.usage = res.usage || {};
+                ASTAGCFG.rows   = [];
+                ASTAGCFG.others = [];
+                ASTAGCFG.fixed  = [];
+                (res.defs || []).forEach(function (d) {
+                    if (d.kind === 'fixed') { ASTAGCFG.fixed.push(d); return; }
+                    var row = {
+                        tag_id: d.tag_id, process_type_id: d.process_type_id || 0, proc_name: d.proc_name || '',
+                        sub_nos: (d.sub_nos || []).map(String), scope: d.scope || 'both',
+                        own_company_only: d.own_company_only ? 1 : 0, is_active: d.is_active ? 1 : 0
+                    };
+                    if (d.kind === 'other') { if (!d.scope) row.scope = 'none'; ASTAGCFG.others.push(row); }
+                    else ASTAGCFG.rows.push(row);
+                });
+                $('#astag-require').prop('checked', !!parseInt(res.require_save || 0, 10));
+                window.AS_TAG_REQUIRE = !!parseInt(res.require_save || 0, 10);
+                astagRenderDefs();
+                astagRenderOthers();
+                astagRenderFixed();
+                astagRenderSummary(res.summary || {});
+            });
+        }
+
+        // ── 管理員自己加的「其他固定選項」（kind=other）─────────────────
+        // 跟稽核製程一樣綁製程大類／小類、有適用範圍與顯示用短名（2026-10-02 使用者要求），
+        // 差別只在標籤怎麼顯示：稽核製程會被加上「單製」「全製含」前缀，
+        // 固定選項則**直接用短名本身**（比照內建的全製／單製非AS認證／廠內治具）。
+        // 內建那三個不在這裡，永遠改不到。
+        function astagRenderOthers() {
+            $('#astag-other-count').text(ASTAGCFG.others.length);
+            if (!ASTAGCFG.others.length) {
+                $('#astag-other-tbody').html('<tr><td colspan="8" class="text-center" style="color:#aaa;padding:12px;">'
+                    + '除了上面內建的三個，還有別的「固定選項」要讓人選就按「新增一列」。</td></tr>');
+                return;
+            }
+            var scopes = [['none', '不分全製／單製'], ['full', '歸在全製類'], ['single', '歸在單製類']];
+            var h = '';
+            ASTAGCFG.others.forEach(function (o, i) {
+                var used = (ASTAGCFG.usage[o.tag_id] && ASTAGCFG.usage[o.tag_id].total) ? ASTAGCFG.usage[o.tag_id].total : 0;
+                h += '<tr>'
+                   + '<td><input type="text" class="form-control input-sm astag-o" data-i="' + i + '" data-f="proc_name" maxlength="20" value="' + escapeHtml(o.proc_name) + '"></td>'
+                   + '<td>' + astagTypeSelHtml('astag-o', i, o.process_type_id) + '</td>'
+                   + '<td>' + astagSubSelHtml('astag-o', i, o.process_type_id, o.sub_nos) + '</td>'
+                   + '<td><select class="form-control input-sm astag-o" data-i="' + i + '" data-f="scope"' + (used ? ' disabled title="已經有訂單在用，不可改適用範圍"' : '') + '>'
+                   + scopes.map(function (x) { return '<option value="' + x[0] + '"' + (o.scope === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('')
+                   + '</select></td>'
+                   + '<td style="text-align:center;vertical-align:middle;"><input type="checkbox" class="astag-o" data-i="' + i + '" data-f="own_company_only"' + (o.own_company_only ? ' checked' : '') + '></td>'
+                   + '<td style="text-align:center;vertical-align:middle;"><input type="checkbox" class="astag-o" data-i="' + i + '" data-f="is_active"' + (o.is_active ? ' checked' : '') + '></td>'
+                   + '<td style="text-align:center;vertical-align:middle;font-size:11px;' + (used ? 'color:#8a5a2b;font-weight:700;' : 'color:#bbb;') + '">' + (used ? astagNum(used) : '—') + '</td>'
+                   + '<td style="text-align:center;vertical-align:middle;">'
+                   + (used ? '<i class="fa fa-lock" style="color:#bbb;" title="已經有 ' + used + ' 張訂單在用，不可刪除；要停止使用請取消「啟用」"></i>'
+                           : '<a href="javascript:;" style="color:#DD5138;" title="刪除這一列" onclick="astagDelOther(' + i + ')"><i class="fa fa-trash"></i></a>')
+                   + '</td></tr>';
+                h += '<tr style="background:#fcfcfc;"><td colspan="8" style="border-top:none;padding:0 8px 6px;font-size:11px;color:#888;">'
+                   + '訂單畫面會長出：<span class="as-tag-cell fx">' + escapeHtml(o.proc_name || '（未命名）') + '</span>'
+                   + (o.own_company_only ? '　<span style="color:#8a5a2b;">（只有客戶是本公司的訂單才出現）</span>' : '')
+                   + (o.is_active ? '' : '　<span style="color:#DD5138;">（已停用，新訂單不會出現）</span>')
+                   + '</td></tr>';
+            });
+            $('#astag-other-tbody').html(h);
+        }
+        $(document).on('change', '#astag-other-tbody .astag-o', function () {
+            var i = parseInt($(this).data('i'), 10), f = $(this).data('f');
+            if (isNaN(i) || !ASTAGCFG.others[i]) return;
+            var o = ASTAGCFG.others[i];
+            if (f === 'own_company_only' || f === 'is_active') { o[f] = $(this).is(':checked') ? 1 : 0; return; }
+            if (f === 'sub_nos') { o.sub_nos = ($(this).val() || []).map(String); return; }
+            if (f === 'process_type_id') {
+                o.process_type_id = parseInt($(this).val(), 10) || 0;
+                o.sub_nos = [];                       // 換了大類，原本選的小類一定不屬於它
+                astagRenderOthers();
+                return;
+            }
+            o[f] = $(this).val();
+            astagRenderOthers();
+        });
+        $(document).on('input', '#astag-other-tbody input[data-f="proc_name"]', function () {
+            var i = parseInt($(this).data('i'), 10);
+            if (!isNaN(i) && ASTAGCFG.others[i]) ASTAGCFG.others[i].proc_name = $(this).val();
+        });
+        function astagAddOther() {
+            ASTAGCFG.others.push({ tag_id: 0, process_type_id: 0, proc_name: '', sub_nos: [],
+                                   scope: 'none', own_company_only: 0, is_active: 1 });
+            astagRenderOthers();
+        }
+        function astagDelOther(i) {
+            if (!ASTAGCFG.others[i]) return;
+            ASTAGCFG.others.splice(i, 1);
+            astagRenderOthers();
+        }
+
+        function astagRenderSummary(sm) {
+            var u = parseInt(sm.untagged || 0, 10), t = parseInt(sm.tagged || 0, 10),
+                c = parseInt(sm.untagged_cancelled || 0, 10), tot = parseInt(sm.total || 0, 10);
+            var h = '目前共 <b>' + astagNum(tot) + '</b> 張訂單：已設定標籤 <b style="color:#27ae60;">' + astagNum(t)
+                  + '</b> 張、<b style="color:#DD5138;">尚未設定 ' + astagNum(u) + ' 張</b>';
+            if (c > 0) h += '（另有 ' + astagNum(c) + ' 張已暫停／取消的也沒有標籤，預設不列出）';
+            h += '。';
+            $('#astag-summary').html(h);
+            if ($('#bf-summary').length) $('#bf-summary').html(h + ' 設定完就不必再進這個畫面了。');
+        }
+
+        function astagRenderFixed() {
+            var h = ASTAGCFG.fixed.map(function (d) {
+                return '<span class="as-tag-cell fx" style="font-size:11px;line-height:16px;padding:1px 7px;margin-right:5px;'
+                     + (d.is_active ? '' : 'opacity:.45;text-decoration:line-through;') + '">'
+                     + escapeHtml(d.proc_name) + (d.own_company_only ? '（限本公司）' : '') + '</span>';
+            }).join('');
+            $('#astag-fixed').html(h || '<span style="color:#aaa;">（尚未建立）</span>');
+        }
+
+        function astagRenderDefs() {
+            $('#astag-count').text(ASTAGCFG.rows.length);
+            if (!ASTAGCFG.rows.length) {
+                $('#astag-tbody').html('<tr><td colspan="7" class="text-center" style="color:#aaa;padding:14px;">'
+                    + '還沒有設定任何稽核製程。按「新增一列」開始，例如：製程大類選「齒研」、適用範圍選「兩者皆可」，'
+                    + '訂單畫面就會出現【單製齒研】與【全製含齒研】兩顆按鈕。</td></tr>');
+                return;
+            }
+            var h = '';
+            ASTAGCFG.rows.forEach(function (r, i) {
+                var used = (ASTAGCFG.usage[r.tag_id] && ASTAGCFG.usage[r.tag_id].total) ? ASTAGCFG.usage[r.tag_id].total : 0;
+                var tsel = astagTypeSelHtml('astag-f', i, r.process_type_id);
+                var ssel = astagSubSelHtml('astag-f', i, r.process_type_id, r.sub_nos);
+                // 適用範圍
+                var scopes = [['both', '兩者皆可（長兩顆）'], ['single', '只有單製'], ['full', '只有全製']];
+                var csel = '<select class="form-control input-sm astag-f" data-i="' + i + '" data-f="scope">'
+                         + scopes.map(function (x) { return '<option value="' + x[0] + '"' + (r.scope === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('')
+                         + '</select>';
+                h += '<tr>'
+                   + '<td>' + tsel + '</td>'
+                   + '<td><input type="text" class="form-control input-sm astag-f" data-i="' + i + '" data-f="proc_name" maxlength="20" value="' + escapeHtml(r.proc_name) + '"></td>'
+                   + '<td>' + ssel + '</td>'
+                   + '<td>' + csel + '</td>'
+                   + '<td style="text-align:center;vertical-align:middle;"><input type="checkbox" class="astag-f" data-i="' + i + '" data-f="is_active"' + (r.is_active ? ' checked' : '') + '></td>'
+                   + '<td style="text-align:center;vertical-align:middle;font-size:11px;' + (used ? 'color:#8a5a2b;font-weight:700;' : 'color:#bbb;') + '">' + (used ? astagNum(used) : '—') + '</td>'
+                   + '<td style="text-align:center;vertical-align:middle;">'
+                   + (used ? '<i class="fa fa-lock" style="color:#bbb;" title="已經有 ' + used + ' 張訂單在用，不可刪除；要停止使用請取消「啟用」"></i>'
+                           : '<a href="javascript:;" style="color:#DD5138;" title="刪除這一列" onclick="astagDelRow(' + i + ')"><i class="fa fa-trash"></i></a>')
+                   + '</td></tr>';
+                // 預覽：這一列會長出哪幾顆按鈕
+                var prev = (r.scope === 'both') ? ['單製' + r.proc_name, '全製含' + r.proc_name]
+                         : (r.scope === 'single' ? ['單製' + r.proc_name] : ['全製含' + r.proc_name]);
+                h += '<tr style="background:#fcfcfc;"><td colspan="7" style="border-top:none;padding:0 8px 6px;font-size:11px;color:#888;">'
+                   + '訂單畫面會長出：' + prev.map(function (p) { return '<span class="as-tag-cell">' + escapeHtml(p) + '</span>'; }).join(' ')
+                   + (r.is_active ? '' : '　<span style="color:#DD5138;">（已停用，新訂單不會出現）</span>')
+                   + '</td></tr>';
+            });
+            $('#astag-tbody').html(h);
+        }
+
+        // 欄位變更（事件委派；表格是重繪出來的）
+        $(document).on('change', '#astag-tbody .astag-f', function () {
+            var i = parseInt($(this).data('i'), 10), f = $(this).data('f');
+            if (isNaN(i) || !ASTAGCFG.rows[i]) return;
+            var r = ASTAGCFG.rows[i];
+            if (f === 'is_active')      r.is_active = $(this).is(':checked') ? 1 : 0;
+            else if (f === 'sub_nos')   r.sub_nos = ($(this).val() || []).map(String);
+            else if (f === 'process_type_id') {
+                r.process_type_id = parseInt($(this).val(), 10) || 0;
+                r.sub_nos = [];                                   // 換了大類，原本選的小類一定不屬於它
+                if (!r.proc_name) {                               // 短名留空就自動帶大類名稱
+                    ASTAGCFG.tree.forEach(function (t) { if (t.process_type_id === r.process_type_id) r.proc_name = t.process_type; });
+                }
+            }
+            else r[f] = $(this).val();
+            astagRenderDefs();
+        });
+        // 短名是打字的，改成 input 即時更新預覽但不重繪（否則每打一個字就失焦）
+        $(document).on('input', '#astag-tbody input[data-f="proc_name"]', function () {
+            var i = parseInt($(this).data('i'), 10);
+            if (!isNaN(i) && ASTAGCFG.rows[i]) ASTAGCFG.rows[i].proc_name = $(this).val();
+        });
+
+        // 製程大類下拉／製程小類多選：兩張表（稽核製程、其他固定選項）共用同一組產生器，
+        // 不要各寫一份——欄位行為一旦分家，之後改一邊另一邊就會走鐘。
+        function astagTypeSelHtml(cls, i, cur) {
+            var h = '<select class="form-control input-sm ' + cls + '" data-i="' + i + '" data-f="process_type_id">'
+                  + '<option value="0">（不綁定）</option>';
+            ASTAGCFG.tree.forEach(function (t) {
+                h += '<option value="' + t.process_type_id + '"' + (parseInt(cur, 10) === t.process_type_id ? ' selected' : '') + '>'
+                   + escapeHtml(t.process_type) + '</option>';
+            });
+            return h + '</select>';
+        }
+        function astagSubSelHtml(cls, i, typeId, selected) {
+            var subs = [];
+            ASTAGCFG.tree.forEach(function (t) { if (t.process_type_id === parseInt(typeId, 10)) subs = t.subs || []; });
+            if (!subs.length) return '<span style="font-size:11px;color:#aaa;">（先選製程大類）</span>';
+            var h = '<select multiple size="3" class="form-control input-sm ' + cls + '" data-i="' + i + '" data-f="sub_nos" style="height:auto;font-size:11px;">';
+            subs.forEach(function (sb) {
+                h += '<option value="' + sb.no + '"' + ((selected || []).indexOf(String(sb.no)) >= 0 ? ' selected' : '') + '>' + escapeHtml(sb.name) + '</option>';
+            });
+            return h + '</select>';
+        }
+
+        function astagAddRow() {
+            ASTAGCFG.rows.push({ tag_id: 0, process_type_id: 0, proc_name: '', sub_nos: [], scope: 'both', is_active: 1, sort_order: 0 });
+            astagRenderDefs();
+        }
+        function astagDelRow(i) {
+            if (!ASTAGCFG.rows[i]) return;
+            ASTAGCFG.rows.splice(i, 1);
+            astagRenderDefs();
+        }
+        function astagSaveDefs() {
+            $('#astag-defs-err').hide().empty();
+            $('#astag-defs-msg').css('color', '#888').text('儲存中…');
+            // 兩張表一起送，各自帶 kind；排序交給後端算（稽核製程在前、自訂固定選項排在內建三個之後）
+            var payload = ASTAGCFG.rows.map(function (r) {
+                return { kind: 'process', tag_id: r.tag_id, process_type_id: r.process_type_id,
+                         proc_name: r.proc_name, sub_nos: r.sub_nos, scope: r.scope, is_active: r.is_active };
+            }).concat(ASTAGCFG.others.map(function (o) {
+                return { kind: 'other', tag_id: o.tag_id, process_type_id: o.process_type_id,
+                         proc_name: o.proc_name, sub_nos: o.sub_nos, scope: o.scope,
+                         own_company_only: o.own_company_only, is_active: o.is_active };
+            }));
+            astagCfgApi({ action: 'defs_save', rows: JSON.stringify(payload) }, function (res) {
+                if (!res.success) {
+                    $('#astag-defs-msg').text('');
+                    $('#astag-defs-err').html((res.errors && res.errors.length
+                        ? res.errors.map(function (e) { return '・' + escapeHtml(e); }).join('<br>')
+                        : escapeHtml(res.message || '儲存失敗'))).show();
+                    return;
+                }
+                $('#astag-defs-msg').css('color', '#27ae60').text(res.message || '已儲存');
+                astagSettingsOpen();                    // 重新載入（拿到新的 tag_id 與使用筆數）
+                if ($('#newOrderModal').hasClass('in')) astagLoadOptions(ASTAG.loadedClient || '', true);
+            });
+        }
+        function astagSaveRequire() {
+            var on = $('#astag-require').is(':checked') ? 1 : 0;
+            $('#astag-require-msg').css('color', '#888').text('套用中…');
+            astagCfgApi({ action: 'require_save', on: on }, function (res) {
+                $('#astag-require-msg').css('color', res.success ? '#27ae60' : '#DD5138').text(res.message || '');
+                if (res.success) window.AS_TAG_REQUIRE = !!parseInt(res.on || 0, 10);
+            });
+        }
+
+        // ── 批次補設定 ────────────────────────────────────────────────────
+        function astagBfFilter() {
+            return { year: $('#bf-year').val() || 'ALL', kw: $('#bf-kw').val() || '',
+                     include_cancelled: $('#bf-cancelled').is(':checked') ? 1 : 0 };
+        }
+        function astagOpenBackfill() {
+            if (!$('#asTagBackfillModal').length) return;
+            ASTAGCFG.bfPi = null; ASTAGCFG.tab = 'group';
+            $('#asTagBackfillModal').modal('show');
+            astagBfTab('group');
+            astagBfReload();
+        }
+        function astagBfTab(which) {
+            ASTAGCFG.tab = which;
+            $('#bf-pane-group').toggle(which === 'group');
+            $('#bf-pane-order').toggle(which === 'order');
+            $('#bf-tab-group').attr('class', 'btn btn-sm ' + (which === 'group' ? 'btn-primary' : 'btn-default'));
+            $('#bf-tab-order').attr('class', 'btn btn-sm ' + (which === 'order' ? 'btn-primary' : 'btn-default'));
+            if (which === 'order') astagBfOrders(1);
+        }
+        function astagBfReload() {
+            if (ASTAGCFG.tab === 'order') astagBfOrders(1); else astagBfGroups();
+        }
+        function astagTagSelectHtml(id, selKey, cls) {
+            var h = '<select class="form-control input-sm' + (cls ? ' ' + cls : '') + '"' + (id ? ' id="' + id + '"' : '') + '>'
+                  + '<option value="">（不設定）</option>';
+            ASTAGCFG.optsAll.forEach(function (o) {
+                h += '<option value="' + escapeHtml(o.key) + '"' + (o.key === selKey ? ' selected' : '') + '>'
+                   + escapeHtml(o.label) + (o.own_only ? '（限本公司）' : '') + '</option>';
+            });
+            return h + '</select>';
+        }
+        function astagBfGroups() {
+            $('#bf-group-msg').text('');
+            $('#bf-group-tbody').html('<tr><td colspan="6" class="text-center" style="color:#aaa;padding:16px;">查詢中…</td></tr>');
+            var f = astagBfFilter(); f.action = 'backfill_groups'; f.limit = 200;
+            astagCfgApi(f, function (res) {
+                if (!res.success) { $('#bf-group-tbody').html('<tr><td colspan="6" class="text-center text-danger" style="padding:16px;">' + escapeHtml(res.message || '查詢失敗') + '</td></tr>'); return; }
+                ASTAGCFG.optsAll = res.options_all || [];
+                ASTAGCFG.bfGroups = res.rows || [];
+                astagRenderSummary(res.summary || {});
+                if (!ASTAGCFG.bfGroups.length) {
+                    $('#bf-group-tbody').html('<tr><td colspan="6" class="text-center" style="color:#27ae60;padding:16px;">'
+                        + '這個條件底下已經沒有未設定標籤的訂單了 🎉</td></tr>');
+                    return;
+                }
+                var h = '';
+                ASTAGCFG.bfGroups.forEach(function (g, i) {
+                    var rng = (g.date_from || '').replace(/-/g, '.') + ((g.date_to && g.date_to !== g.date_from) ? ' ～ ' + g.date_to.replace(/-/g, '.') : '');
+                    h += '<tr data-i="' + i + '">'
+                       + '<td style="word-break:break-all;">' + (g.pi ? escapeHtml(g.pi) : '<span style="color:#aaa;">（製程欄空白）</span>')
+                       + (g.own_n > 0 ? '<br><span style="font-size:10px;color:#8a5a2b;">含本公司訂單 ' + astagNum(g.own_n) + ' 張</span>' : '') + '</td>'
+                       + '<td style="text-align:right;font-weight:700;">' + astagNum(g.n) + '</td>'
+                       + '<td style="font-size:11px;color:#777;">' + escapeHtml(rng) + '</td>'
+                       + '<td>' + astagTagSelectHtml('', g.suggest, 'bf-g-tag') + '</td>'
+                       + '<td style="font-size:11px;color:#777;">' + escapeHtml(g.suggest_why || '') + '</td>'
+                       + '<td><button type="button" class="btn btn-xs btn-primary" onclick="astagBfApplyGroup(' + i + ')">套用這組</button></td>'
+                       + '</tr>';
+                });
+                $('#bf-group-tbody').html(h);
+                if (res.total_groups > ASTAGCFG.bfGroups.length) {
+                    $('#bf-group-msg').css('color', '#8a5a2b')
+                        .text('共有 ' + astagNum(res.total_groups) + ' 種製程寫法，這裡先列筆數最多的 '
+                              + ASTAGCFG.bfGroups.length + ' 種；設完一批重新查詢就會換下一批上來。');
+                }
+            });
+        }
+        /**
+         * 套用某一組（2026-10-02 使用者回報後改成「就地 AJAX 更新」）：
+         *  ・**不跳確認視窗**——這個動作本來就只填空白、不覆蓋已設定的，而且每一組都要按一次，
+         *    每次都確認一遍會讓 700 多種寫法根本補不完。
+         *  ・**不重新查詢整份清單、也不重載主表格**——那會整個畫面閃一下，使用者原話「不要整個畫面
+         *    閃爍重新載入」。成功後只把那一列就地換成結果（它已經不屬於「未設定」了），
+         *    順便用後端回來的 summary 更新上方數字。主清單改在**關閉這個跳窗時**才刷新一次。
+         */
+        function astagBfApplyGroup(i) {
+            var g = ASTAGCFG.bfGroups[i];
+            if (!g) return;
+            var $tr = $('#bf-group-tbody tr[data-i="' + i + '"]');
+            var key = $tr.find('.bf-g-tag').val() || '';
+            if (!key) { $('#bf-group-msg').css('color', '#DD5138').text('請先選擇要設成哪一個標籤'); return; }
+            var lbl = ''; ASTAGCFG.optsAll.forEach(function (o) { if (o.key === key) lbl = o.label; });
+            var $btn = $tr.find('button');
+            if ($btn.prop('disabled')) return;                  // 連點保護
+            $btn.prop('disabled', true).text('套用中…');
+            $('#bf-group-msg').text('');
+            var p = key.split(':'), f = astagBfFilter();
+            astagCfgApi({ action: 'backfill_apply', tag_id: p[0], scope: p[1], pi_exact: g.pi,
+                          year: f.year, kw: f.kw, include_cancelled: f.include_cancelled }, function (res) {
+                if (!res.success) {
+                    $btn.prop('disabled', false).text('套用這組');
+                    $('#bf-group-msg').css('color', '#DD5138').text(res.message || '套用失敗');
+                    return;
+                }
+                ASTAGCFG.bfDirty = true;
+                astagRenderSummary(res.summary || {});
+                astagBfMarkRowDone($tr, res.applied, lbl);
+            });
+        }
+        /** 就地把一列換成「已套用」的樣子並淡出移除（不重新查整份清單） */
+        function astagBfMarkRowDone($tr, applied, lbl) {
+            applied = parseInt(applied || 0, 10);
+            var cols = $tr.children().length;
+            $tr.html('<td colspan="' + cols + '" style="background:#F3FAF4;color:#27ae60;font-size:12px;">'
+                   + '<i class="fa fa-check-circle"></i> 已補設定 <b>' + astagNum(applied) + '</b> 張訂單為「'
+                   + escapeHtml(lbl) + '」'
+                   + (applied === 0 ? '（這一組目前已經沒有未設定標籤的訂單了）' : '')
+                   + '</td>');
+            setTimeout(function () { $tr.fadeOut(220, function () { $(this).remove(); astagBfEmptyCheck(); }); }, 900);
+        }
+        /** 列都清空了就給一句話，不要留一張空表格（也不要自動重查造成閃爍） */
+        function astagBfEmptyCheck() {
+            if ($('#bf-group-tbody tr').length) return;
+            $('#bf-group-tbody').html('<tr><td colspan="6" class="text-center" style="color:#8a5a2b;padding:16px;">'
+                + '這一批都設定完了。按上方【<b>重新查詢</b>】載入下一批，或切到「逐筆設定」處理零散的尾數。</td></tr>');
+        }
+        function astagBfApplyAllSuggest() {
+            var todo = [];
+            ASTAGCFG.bfGroups.forEach(function (g, i) {
+                var key = $('#bf-group-tbody tr[data-i="' + i + '"] .bf-g-tag').val() || '';
+                if (key) todo.push({ i: i, key: key, n: g.n, pi: g.pi });
+            });
+            if (!todo.length) { $('#bf-group-msg').css('color', '#DD5138').text('本頁沒有任何已選定標籤的組'); return; }
+            var tot = todo.reduce(function (a, b) { return a + b.n; }, 0);
+            // 兩段式確認：**不用 confirm()**。連續按多次之後 Chrome 會跳出「阻止此網頁產生
+            // 其他對話框」，使用者一勾下去 confirm() 就**靜默回 false**，按鈕變成「按了完全沒反應」
+            // ——這正是 2026-10-02 使用者回報「套用到勾選的訂單按了沒有被套用」的原因。
+            var $all = $('#btn-bf-all');
+            if (!$all.data('armed')) {
+                $all.data('armed', 1).addClass('btn-danger').removeClass('btn-warning')
+                    .html('<i class="fa fa-exclamation-triangle"></i> 確定套用 ' + todo.length + ' 組／' + astagNum(tot) + ' 張？再按一次');
+                $('#bf-group-msg').css('color', '#8a5a2b').text('再按一次就開始套用（4 秒內沒再按就取消）');
+                clearTimeout(window._bfAllTimer);
+                window._bfAllTimer = setTimeout(function () { astagBfAllDisarm(); $('#bf-group-msg').text(''); }, 4000);
+                return;
+            }
+            clearTimeout(window._bfAllTimer); astagBfAllDisarm();
+            var f = astagBfFilter(), done = 0, applied = 0;
+            $('#bf-group-msg').css('color', '#888').text('套用中…0/' + todo.length);
+            (function next() {
+                if (!todo.length) {
+                    $('#bf-group-msg').css('color', '#27ae60').text('完成：共補設定 ' + astagNum(applied) + ' 張訂單');
+                    return;   // 就地標記就好，不重查整份清單也不重載主表格（使用者要求不要闪爍）
+                }
+                var t = todo.shift(), p = t.key.split(':');
+                astagCfgApi({ action: 'backfill_apply', tag_id: p[0], scope: p[1], pi_exact: t.pi,
+                              year: f.year, kw: f.kw, include_cancelled: f.include_cancelled }, function (res) {
+                    done++;
+                    if (res.success) {
+                        applied += parseInt(res.applied || 0, 10);
+                        ASTAGCFG.bfDirty = true;
+                        astagRenderSummary(res.summary || {});
+                        var lbl = ''; ASTAGCFG.optsAll.forEach(function (o) { if (o.key === t.key) lbl = o.label; });
+                        astagBfMarkRowDone($('#bf-group-tbody tr[data-i="' + t.i + '"]'), res.applied, lbl);
+                    }
+                    $('#bf-group-msg').text('套用中…' + done + '/' + (done + todo.length));
+                    next();
+                });
+            })();
+        }
+        function astagBfAllDisarm() {
+            $('#btn-bf-all').data('armed', 0).removeClass('btn-danger').addClass('btn-warning')
+                .html('<i class="fa fa-check-square-o"></i> 套用本頁全部「建議標籤」');
+        }
+
+        function astagBfOrders(page) {
+            ASTAGCFG.bfPage = Math.max(1, parseInt(page || 1, 10));
+            $('#bf-order-msg').text('');
+            $('#bf-order-tbody').html('<tr><td colspan="8" class="text-center" style="color:#aaa;padding:16px;">查詢中…</td></tr>');
+            var f = astagBfFilter();
+            f.action = 'backfill_orders'; f.page = ASTAGCFG.bfPage; f.per = $('#bf-per').val() || 20;
+            if (ASTAGCFG.bfPi !== null) f.pi_exact = ASTAGCFG.bfPi;
+            $('#bf-order-scope').html(ASTAGCFG.bfPi !== null
+                ? '只列製程文字為「' + escapeHtml(ASTAGCFG.bfPi) + '」的訂單　<a href="javascript:;" onclick="ASTAGCFG.bfPi=null;astagBfOrders(1);">取消這個限定</a>'
+                : '');
+            astagCfgApi(f, function (res) {
+                if (!res.success) { $('#bf-order-tbody').html('<tr><td colspan="8" class="text-center text-danger" style="padding:16px;">' + escapeHtml(res.message || '查詢失敗') + '</td></tr>'); return; }
+                ASTAGCFG.optsAll = res.options_all || ASTAGCFG.optsAll;
+                ASTAGCFG.bfOrders = res.rows || [];
+                ASTAGCFG.bfTotal = parseInt(res.total || 0, 10);
+                if ($('#bf-order-tag option').length === 0) $('#bf-order-tag').replaceWith(astagTagSelectHtml('bf-order-tag', '', ''));
+                if (!ASTAGCFG.bfOrders.length) {
+                    $('#bf-order-tbody').html('<tr><td colspan="8" class="text-center" style="color:#27ae60;padding:16px;">這個條件底下沒有未設定標籤的訂單了 🎉</td></tr>');
+                    $('#bf-order-pager').html(''); return;
+                }
+                var h = '';
+                ASTAGCFG.bfOrders.forEach(function (r) {
+                    h += '<tr>'
+                       + '<td style="text-align:center;"><input type="checkbox" class="bf-o-ck" value="' + r.order_id + '" data-sug="' + escapeHtml(r.suggest || '') + '"></td>'
+                       + '<td>' + escapeHtml(r.order_no) + '</td>'
+                       + '<td style="font-size:11px;">' + escapeHtml((r.order_date || '').replace(/-/g, '.')) + '</td>'
+                       + '<td>' + escapeHtml(r.client) + (r.is_own ? '<br><span style="font-size:10px;color:#8a5a2b;">本公司</span>' : '') + '</td>'
+                       + '<td style="word-break:break-all;">' + escapeHtml(r.part_no) + '</td>'
+                       + '<td style="text-align:right;">' + astagNum(r.qty) + '</td>'
+                       + '<td style="word-break:break-all;">' + escapeHtml(r.process) + '</td>'
+                       + '<td style="font-size:11px;">' + (r.suggest_label ? '<span class="as-tag-cell">' + escapeHtml(r.suggest_label) + '</span>' : '<span style="color:#bbb;">—</span>') + '</td>'
+                       + '</tr>';
+                });
+                $('#bf-order-tbody').html(h);
+                $('#bf-check-all').prop('checked', false);
+                var per = parseInt(f.per, 10), pages = Math.ceil(ASTAGCFG.bfTotal / per);
+                var pg = '<span style="font-size:12px;color:#777;">共 ' + astagNum(ASTAGCFG.bfTotal) + ' 筆　</span>';
+                if (pages > 1) {
+                    pg += '<button class="btn btn-xs btn-default" ' + (ASTAGCFG.bfPage <= 1 ? 'disabled' : '') + ' onclick="astagBfOrders(' + (ASTAGCFG.bfPage - 1) + ')">‹</button>'
+                        + ' <span style="font-size:12px;">' + ASTAGCFG.bfPage + ' / ' + pages + '</span> '
+                        + '<button class="btn btn-xs btn-default" ' + (ASTAGCFG.bfPage >= pages ? 'disabled' : '') + ' onclick="astagBfOrders(' + (ASTAGCFG.bfPage + 1) + ')">›</button>';
+                }
+                $('#bf-order-pager').html(pg);
+            });
+        }
+        // 主清單改在「關掉補設定跳窗」時才刷新一次（2026-10-02 使用者要求）——
+        // 每按一組就重載一次整張表格會讓畮面一直闪，而那張表格還被跳窗蓋著根本看不到。
+        $(document).on('hidden.bs.modal', '#asTagBackfillModal', function () {
+            if (!ASTAGCFG.bfDirty) return;
+            ASTAGCFG.bfDirty = false;
+            if (typeof refreshOrderTable === 'function') refreshOrderTable();
+            if (typeof astagSettingsOpen === 'function') astagSettingsOpen();   // 設定區的數字跟著更新
+        });
+
+        $(document).on('change', '#bf-check-all', function () {
+            $('#bf-order-tbody .bf-o-ck').prop('checked', $(this).is(':checked'));
+        });
+        function astagBfApplyOrders(useSuggest) {
+            var picked = [];
+            $('#bf-order-tbody .bf-o-ck:checked').each(function () {
+                picked.push({ id: $(this).val(), sug: String($(this).data('sug') || '') });
+            });
+            if (!picked.length) { $('#bf-order-msg').css('color', '#DD5138').text('請先勾選訂單'); return; }
+            var groups = {};     // key => [order_id...]
+            var skipped = 0;
+            if (useSuggest) {
+                picked.forEach(function (p) { if (!p.sug) { skipped++; return; } (groups[p.sug] = groups[p.sug] || []).push(p.id); });
+                if (!Object.keys(groups).length) { $('#bf-order-msg').css('color', '#DD5138').text('勾選的訂單都沒有系統建議，請改用上面的下拉指定標籤'); return; }
+            } else {
+                var key = $('#bf-order-tag').val() || '';
+                if (!key) { $('#bf-order-msg').css('color', '#DD5138').text('請先在下拉選擇要設成哪一個標籤'); return; }
+                groups[key] = picked.map(function (p) { return p.id; });
+            }
+            var keys = Object.keys(groups), applied = 0, f = astagBfFilter();
+            $('#bf-order-msg').css('color', '#888').text('套用中…');
+            (function next() {
+                if (!keys.length) {
+                    $('#bf-order-msg').css('color', '#27ae60').text('已補設定 ' + astagNum(applied) + ' 張訂單'
+                        + (skipped ? '（其中 ' + skipped + ' 張沒有系統建議，已略過）' : ''));
+                    ASTAGCFG.bfDirty = true;
+                    astagBfOrders(ASTAGCFG.bfPage);   // 只重查這一頁的未設定清單，不動背後的主表格
+                    return;
+                }
+                var k = keys.shift(), p = k.split(':');
+                astagCfgApi({ action: 'backfill_apply', tag_id: p[0], scope: p[1],
+                              order_ids: JSON.stringify(groups[k]),
+                              year: f.year, kw: f.kw, include_cancelled: f.include_cancelled }, function (res) {
+                    if (res.success) applied += parseInt(res.applied || 0, 10);
+                    else $('#bf-order-msg').css('color', '#DD5138').text(res.message || '套用失敗');
+                    next();
+                });
+            })();
+        }
+
         function editOrder(orderId) {
             window._cuOrig = null; otResetClientUnlock();   // 換一張訂單＝重新上鎖，要改客戶就得重新驗密碼
             $('#orig_client_pk,#orig_part_pk').val('');
@@ -8301,6 +9073,8 @@ foreach($dCounts as $c) {
                 $('#orig_part_pk').val(data.d_id_ID || '');
                 // 客戶提醒：開單當下先「認帳」目前這個客戶，單純開單或沒改客戶不會跳窗（2026-09-23）
                 ocrOnCustomerLoaded(data.Client_name_ID || '');
+                // 稽核製程標籤：帶入這張訂單原本的標籤，並依它的客戶算出可選選項（2026-10-02）
+                astagOnOrderLoaded(data.Client_name_ID || '', data.as_tag_id || 0, data.as_tag_scope || '');
                 $('#selected_part_drawing_no').val(data.Drawing_No || '');
                 $('#bound_quote_item_id').val(data.quote_item_id || '');
                 $('#hidden_quote_no').val(data.quote_no || '');
@@ -9005,6 +9779,9 @@ foreach($dCounts as $c) {
             if (!qty || parseFloat(qty) <= 0) {
                 showOrderAlert('請輸入有效的數量（須大於0）。'); $('input[name="Qty"]').focus(); return;
             }
+            // 稽核製程標籤（2026-10-02）：必選開關由管理員控制、換客戶後要重新確認；
+            // 後端 _NewOrder_Track.php 用同一套規則再擋一次（鐵律8）
+            if (!astagValidateBeforeSave()) return;
 
             var formData = new FormData(document.getElementById('newOrderForm'));
             var orderId = $('#hidden_Order_id').val();
@@ -10921,6 +11698,104 @@ foreach($dCounts as $c) {
               <div id="brc-logs" style="display:none;margin-top:8px;border-top:1px dashed #E4D3BC;padding-top:8px;max-height:220px;overflow-y:auto;"></div>
             </div>
             <?php endif; /* $can_boss_review_setting */ ?>
+
+            <?php if ($can_as_tag_setting): /* 2026-10-02 新增，獨立功能碼 ot_as_tag_setting */ ?>
+            <!-- ═══ 稽核製程標籤（AS 認定）═══════════════════════════════════ -->
+            <div class="main-card" style="margin-top:10px;border:1px solid #E4D3BC;">
+              <div style="font-weight:700;color:#8a5a2b;margin-bottom:6px;"><i class="fa fa-tags"></i> 稽核製程標籤（AS 認定）</div>
+              <div style="font-size:11px;color:#8a5a2b;background:#FFF9F0;border:1px solid #F0E2CC;border-radius:4px;padding:6px 8px;margin-bottom:8px;line-height:1.7;">
+                這裡設定「<b>哪些製程算稽核製程</b>」。設好之後，新增／編輯訂單的跳窗<b>標題右側</b>就會出現對應的標籤讓人點選，
+                一張訂單<b>只能選一個</b>，後續所有 AS 相關的資料認定都讀這個結果（不再去猜製程欄的自由文字）。<br>
+                ・<b>適用範圍</b>選「兩者皆可」時，畫面會長出<b>兩顆</b>按鈕：「<b>單製○○</b>」與「<b>全製含○○</b>」，存下來才分得出是哪一種。<br>
+                ・<b>製程小類</b>不選＝<b>整個製程大類</b>都算；要縮小範圍才去勾特定小類（也會讓「建議標籤」更準）。<br>
+                ・下方三個<b style="border-bottom:1px dashed #c0762c;">固定選項</b>（全製／單製非AS認證／廠內治具）一律存在、不可刪改；
+                   <b>廠內治具只有「客戶＝本公司」的訂單才會出現</b>（本公司取自客戶主檔標記 <code>is_own_company</code>，目前是
+                   <code><?= safe_html(ot_astag_own_company_id($db) ?: '尚未設定') ?></code>）。<br>
+                ・<b>已經有訂單在用的標籤不可以刪除</b>，也不可以把「兩者皆可」收窄掉其中一種；要停止使用請改成「<b>停用</b>」
+                   （停用＝新訂單不再出現這個選項，<b>舊訂單的標籤名稱照樣顯示得出來</b>）。
+              </div>
+
+              <!-- 存檔必選開關 -->
+              <div style="background:#fff;border:1px solid #ddd;border-radius:4px;padding:8px 10px;margin-bottom:10px;">
+                <label style="font-weight:400;font-size:13px;display:inline-flex;align-items:center;gap:6px;margin:0;">
+                  <input type="checkbox" id="astag-require"> <b>新增／編輯訂單存檔時必須先選製程標籤</b>
+                </label>
+                <button type="button" class="btn btn-xs btn-primary" style="margin-left:8px;" onclick="astagSaveRequire()"><i class="fa fa-save"></i> 套用</button>
+                <span id="astag-require-msg" style="font-size:11px;margin-left:6px;"></span>
+                <div style="font-size:11px;color:#888;margin-top:4px;line-height:1.6;">
+                  <b>預設是關閉的</b>，所以這個功能上線不會影響任何人的既有操作。建議順序：先設定好稽核製程 →
+                  用下方「批次補設定」把舊資料補完 → 最後才開啟這個開關。開啟後沒選標籤的存檔會被擋下（後端也會擋）。
+                </div>
+              </div>
+
+              <!-- 稽核製程標籤清單 -->
+              <div style="font-size:12px;color:#666;margin-bottom:4px;display:flex;align-items:center;gap:8px;">
+                稽核製程（<span id="astag-count">0</span> 項）
+                <button type="button" class="btn btn-xs btn-default" onclick="astagAddRow()"><i class="fa fa-plus"></i> 新增一列</button>
+              </div>
+              <div style="border:1px solid #ddd;border-radius:4px;overflow-x:auto;">
+                <table class="table table-condensed" style="margin:0;font-size:12px;min-width:700px;">
+                  <thead><tr style="background:#f5f5f5;">
+                    <th style="width:150px;">製程大類</th>
+                    <th style="width:110px;">顯示用短名</th>
+                    <th style="width:190px;">製程小類（不選＝整個大類）</th>
+                    <th style="width:110px;">適用範圍</th>
+                    <th style="width:54px;text-align:center;">啟用</th>
+                    <th style="width:70px;text-align:center;">使用筆數</th>
+                    <th style="width:40px;"></th>
+                  </tr></thead>
+                  <tbody id="astag-tbody"><tr><td colspan="7" class="text-center" style="color:#aaa;padding:14px;">載入中…</td></tr></tbody>
+                </table>
+              </div>
+              <!-- 內建三選項（唯讀，不可刪改） -->
+              <div style="margin-top:12px;font-size:12px;color:#666;">內建固定選項（一律存在、<b>不可修改也不可刪除</b>）</div>
+              <div id="astag-fixed" style="margin-top:3px;font-size:12px;color:#555;"></div>
+
+              <!-- 管理員自己加的固定選項（2026-10-02 使用者要求）-->
+              <div style="margin-top:12px;font-size:12px;color:#666;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                其他固定選項（自行新增，<span id="astag-other-count">0</span> 項）
+                <button type="button" class="btn btn-xs btn-default" onclick="astagAddOther()"><i class="fa fa-plus"></i> 新增一列</button>
+                <span style="font-size:11px;color:#aaa;">欄位跟稽核製程一模一樣，只是標籤直接用短名本身（不加「單製」「全製含」）</span>
+              </div>
+              <div style="border:1px solid #ddd;border-radius:4px;overflow-x:auto;margin-top:4px;">
+                <table class="table table-condensed" style="margin:0;font-size:12px;min-width:640px;">
+                  <thead><tr style="background:#f5f5f5;">
+                    <th style="width:120px;">顯示用短名<br><span style="font-weight:400;color:#aaa;">（就是標籤本身）</span></th>
+                    <th style="width:140px;">製程大類</th>
+                    <th style="width:170px;">製程小類（不選＝整個大類）</th>
+                    <th style="width:130px;">適用範圍</th>
+                    <th style="width:90px;text-align:center;">限本公司</th>
+                    <th style="width:54px;text-align:center;">啟用</th>
+                    <th style="width:70px;text-align:center;">使用筆數</th>
+                    <th style="width:40px;"></th>
+                  </tr></thead>
+                  <tbody id="astag-other-tbody"></tbody>
+                </table>
+              </div>
+              <div style="font-size:11px;color:#888;margin-top:4px;line-height:1.6;">
+                跟上面的稽核製程一樣可以<b>綁製程大類／小類</b>（供後續 AS 認定知道它涵蓋哪些製程；
+                像「廠內治具」這種根本不對應製程的可以選「不綁定」）。<b>適用範圍</b>決定它在 AS 認定上算
+                「全製類」、「單製類」還是「不分」。<b>與稽核製程的差別：標籤直接用短名本身</b>，
+                不會被加上「單製」「全製含」前缀，所以只會出現<b>一顆</b>按鈕。
+                已經有訂單在用的選項<b>不可刪除、也不可改適用範圍</b>，請改用「停用」。
+              </div>
+
+              <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="btn btn-primary btn-sm" onclick="astagSaveDefs()"><i class="fa fa-save"></i> 儲存（稽核製程＋其他固定選項）</button>
+                <span id="astag-defs-msg" style="font-size:12px;"></span>
+              </div>
+              <div id="astag-defs-err" style="display:none;margin-top:6px;font-size:12px;color:#fff;background:#DD5138;border-radius:4px;padding:6px 8px;line-height:1.7;"></div>
+
+              <!-- 補設定入口 -->
+              <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #E4D3BC;">
+                <div style="font-weight:700;color:#8a5a2b;margin-bottom:4px;"><i class="fa fa-magic"></i> 舊資料批次補設定</div>
+                <div id="astag-summary" style="font-size:12px;color:#555;margin-bottom:6px;">載入中…</div>
+                <button type="button" class="btn btn-sm" style="background:linear-gradient(135deg,#8a5a2b,#F0A24B);color:#fff;border:none;font-weight:600;" onclick="astagOpenBackfill()">
+                  <i class="fa fa-magic"></i> 開啟補設定畫面</button>
+                <span style="font-size:11px;color:#888;margin-left:6px;">全部補完之後就不必再進來了。只會填空白，<b>不會覆蓋</b>已經設定好的訂單。</span>
+              </div>
+            </div>
+            <?php endif; /* $can_as_tag_setting */ ?>
           </div>
           <div class="modal-footer">
             <span id="ocs-msg" style="float:left;font-size:12px;line-height:32px;"></span>
@@ -10933,6 +11808,117 @@ foreach($dCounts as $c) {
         </div>
       </div>
     </div>
+
+    <?php if ($can_as_tag_setting): ?>
+    <!-- ═══ 稽核製程標籤：舊資料批次補設定（2026-10-02 使用者交辦）═════════════
+         使用者原話「舊資料未選者提供管理員批次設定標籤功能（要先可篩選出無標籤之舊資料
+         才批次設定），可以另外使用類似補設定狀態，因為全部設定完之後就不需要使用」。
+         所以做成獨立跳窗，只從「設定」裡面進來，平常完全不佔畫面。
+         實測全庫 9,538 張訂單共有 738 種製程寫法，所以預設是「依製程文字分組」一次設一組，
+         逐筆模式留給零散的尾數。一律只填空白、不覆蓋已設定的（後端 WHERE as_tag_id IS NULL 保證）。 -->
+    <div class="modal fade" id="asTagBackfillModal" tabindex="-1" role="dialog" style="z-index:1062;">
+      <div class="modal-dialog" style="width:94%;max-width:1180px;" role="document">
+        <div class="modal-content">
+          <div class="modal-header" style="background:#8a5a2b;color:#fff;">
+            <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;"><span>&times;</span></button>
+            <h4 class="modal-title"><i class="fa fa-magic"></i> 稽核製程標籤－舊資料批次補設定</h4>
+          </div>
+          <div class="modal-body" style="padding:12px;max-height:76vh;overflow-y:auto;">
+            <div id="bf-summary" style="font-size:12px;background:#FFF9F0;border:1px solid #F0E2CC;border-radius:4px;padding:6px 9px;margin-bottom:8px;color:#8a5a2b;line-height:1.7;"></div>
+
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+              <label style="font-weight:400;font-size:12px;margin:0;">年份
+                <select id="bf-year" class="form-control input-sm" style="width:100px;display:inline-block;">
+                  <option value="ALL">全部年份</option>
+                  <?php for ($y = date('Y'); $y >= 2015; $y--): ?><option value="<?= $y ?>"><?= $y ?> 年</option><?php endfor; ?>
+                </select>
+              </label>
+              <label style="font-weight:400;font-size:12px;margin:0;">關鍵字
+                <input type="text" id="bf-kw" class="form-control input-sm" style="width:170px;display:inline-block;" autocomplete="new-password" data-lpignore="true" data-form-type="other">
+              </label>
+              <span style="font-size:11px;color:#aaa;">比對製程／料號／客戶／訂單編號</span>
+              <label style="font-weight:400;font-size:12px;margin:0;display:inline-flex;align-items:center;gap:4px;">
+                <input type="checkbox" id="bf-cancelled"> 含已暫停／取消的訂單
+              </label>
+              <button type="button" class="btn btn-sm btn-default" onclick="astagBfReload()"><i class="fa fa-refresh"></i> 重新查詢</button>
+              <span style="margin-left:auto;">
+                <button type="button" class="btn btn-sm" id="bf-tab-group" onclick="astagBfTab('group')">依製程文字分組</button>
+                <button type="button" class="btn btn-sm" id="bf-tab-order" onclick="astagBfTab('order')">逐筆設定</button>
+              </span>
+            </div>
+
+            <!-- 分組模式 -->
+            <div id="bf-pane-group">
+              <div style="font-size:11px;color:#888;margin-bottom:5px;line-height:1.7;">
+                同一種製程寫法的訂單一次設完最省事。<b>建議標籤</b>是系統依「製程文字裡有沒有稽核製程的名稱」＋
+                「訂單分析那一套全製／單製關鍵字規則」推出來的，<b>理由欄會寫出它命中了哪個字</b>——
+                請確認過再套用（建議不會自動寫入任何資料）。
+              </div>
+              <div style="border:1px solid #ddd;border-radius:4px;overflow-x:auto;">
+                <table class="table table-condensed table-striped" style="margin:0;font-size:12px;min-width:860px;">
+                  <thead><tr style="background:#f5f5f5;">
+                    <th style="width:220px;">製程文字</th>
+                    <th style="width:60px;text-align:right;">筆數</th>
+                    <th style="width:150px;">接單日期範圍</th>
+                    <th style="width:240px;">要設成哪個標籤</th>
+                    <th>系統建議的理由</th>
+                    <th style="width:80px;"></th>
+                  </tr></thead>
+                  <tbody id="bf-group-tbody"><tr><td colspan="6" class="text-center" style="color:#aaa;padding:16px;">載入中…</td></tr></tbody>
+                </table>
+              </div>
+              <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <button type="button" id="btn-bf-all" class="btn btn-sm btn-warning" onclick="astagBfApplyAllSuggest()">
+                  <i class="fa fa-check-square-o"></i> 套用本頁全部「建議標籤」</button>
+                <span style="font-size:11px;color:#888;">點下去會先變成「確定？再按一次」並告訴您影響幾組、幾張。沒有建議的組不會被動到。</span>
+                <span id="bf-group-msg" style="font-size:12px;margin-left:auto;"></span>
+              </div>
+            </div>
+
+            <!-- 逐筆模式 -->
+            <div id="bf-pane-order" style="display:none;">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+                <span id="bf-order-scope" style="font-size:12px;color:#8a5a2b;"></span>
+                <span style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+                  <label style="font-weight:400;font-size:12px;margin:0;">每頁
+                    <select id="bf-per" class="input-sm" onchange="astagBfOrders(1)">
+                      <option value="20" selected>20</option><option value="50">50</option><option value="100">100</option>
+                    </select> 筆</label>
+                </span>
+              </div>
+              <div style="border:1px solid #ddd;border-radius:4px;overflow-x:auto;">
+                <table class="table table-condensed table-striped" style="margin:0;font-size:12px;min-width:900px;">
+                  <thead><tr style="background:#f5f5f5;">
+                    <th style="width:34px;text-align:center;"><input type="checkbox" id="bf-check-all" title="全選本頁"></th>
+                    <th style="width:120px;">訂單編號</th>
+                    <th style="width:90px;">接單日</th>
+                    <th style="width:110px;">客戶</th>
+                    <th style="width:140px;">料號</th>
+                    <th style="width:60px;text-align:right;">數量</th>
+                    <th>製程</th>
+                    <th style="width:130px;">系統建議</th>
+                  </tr></thead>
+                  <tbody id="bf-order-tbody"><tr><td colspan="8" class="text-center" style="color:#aaa;padding:16px;">載入中…</td></tr></tbody>
+                </table>
+              </div>
+              <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <span style="font-size:12px;">把勾選的設成：</span>
+                <select id="bf-order-tag" class="form-control input-sm" style="width:220px;"></select>
+                <button type="button" class="btn btn-sm btn-primary" onclick="astagBfApplyOrders(false)"><i class="fa fa-check"></i> 套用到勾選的訂單</button>
+                <button type="button" class="btn btn-sm btn-default" onclick="astagBfApplyOrders(true)" title="依每一筆自己的建議分別套用（沒有建議的會略過）"><i class="fa fa-magic"></i> 依各自建議套用勾選</button>
+                <span id="bf-order-msg" style="font-size:12px;"></span>
+                <span id="bf-order-pager" style="margin-left:auto;"></span>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer" style="padding:8px 15px;">
+            <span style="float:left;font-size:11px;color:#888;line-height:30px;">只會填空白：已經設定過標籤的訂單一律不會被覆蓋。</span>
+            <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <?php endif; ?>
 
     <!-- 變更歷史跳窗（全部訂單）-->
     <div class="modal fade" id="changeHistoryModal" tabindex="-1" role="dialog">
@@ -11397,11 +12383,22 @@ foreach($dCounts as $c) {
 
         // ── 設定 ───────────────────────────────────────────────────────────
         var ocsUserRows=[], ocsUserSel=new Set(), ocsWired=false;
+        // 疊第二層跳窗的安全網（2026-10-02 新增）：Bootstrap 3 的 hideModal() 是無條件
+        // $body.removeClass('modal-open')，所以在跳窗 A 上面再開的 B 一關掉，A 就會變成
+        // overflow:hidden 捲不動（.modal 的 overflow-y:auto 寫在 .modal-open .modal 底下）。
+        // 本頁本來就有好幾組疊跳窗（快速新增客戶、稽核製程標籤補設定…），這一段把它補回來。
+        $(document).on('hidden.bs.modal', '.modal', function () {
+            if ($('.modal.in').length) { $('body').addClass('modal-open'); }
+            else { $('.modal-backdrop').remove(); $('body').removeClass('modal-open').css('padding-right', ''); }
+        });
+
         window.openChangeSettings = function(){
             $('#changeSettingsModal').modal('show');
             var msgEl=document.getElementById('ocs-msg'); if(msgEl) msgEl.textContent='';
             // 「需給 BOSS 審圖的客戶」是獨立功能碼（ot_boss_review_setting），跟訂單變更設定各自載入
             if (typeof brcOpen === 'function') brcOpen();
+            // 稽核製程標籤也是獨立功能碼（ot_as_tag_setting），各自載入（2026-10-02）
+            if (typeof astagSettingsOpen === 'function') astagSettingsOpen();
             // 只有 BOSS 審圖名單權限的人看不到下面那些區塊，也就不要去打它們的 API（會 403）
             if (!window.OT_CAN_CHANGE_SETTING) return;
             orderAttachLoadPathSetting();
@@ -12120,6 +13117,43 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
     <li>跳窗裡每則提醒要按【<b>確認</b>】或【<b>設為待處理</b>】才能關閉：<b>確認</b>＝單純表態看過了；<b>設為待處理</b>＝記進「<b>訂單待確認</b>」卡片，並把提醒摘要自動加進業務備註欄下方（原內容不動）。</li>
     <li>要把「待處理」變成完成，一律用清單裡業務備註格下方出現的【<b>客戶提醒待確認</b>】按鈕逐筆按「<b>標記已確認完成</b>」——<b>不會</b>用「業務備註文字有沒有被改過」來猜，避免誤判。</li>
     <li>沒有任何待處理提醒的訂單，畫面完全不會多出這顆按鈕，不影響原本排版。</li>
+</ul>
+
+<h4>四之三、製程標籤（AS 認定）</h4>
+<ul>
+    <li>新增／編輯訂單的跳窗<b>標題右側</b>有一排「製程標籤」，是用來回答「<b>這張單在 AS9100 上屬於哪一種</b>」。<b>一張訂單只能選一個</b>，點新的就取代舊的。</li>
+    <li>標籤分兩種：<b>稽核製程</b>（實線框，由管理員設定哪些製程算，例如 <span style="border:1px solid #c0762c;border-radius:9px;padding:0 6px;background:#FFF6EC;color:#7a4a18;">單製齒研</span> <span style="border:1px solid #c0762c;border-radius:9px;padding:0 6px;background:#FFF6EC;color:#7a4a18;">全製含齒研</span>）
+        與<b>固定三個</b>（虛線框）：<b>全製</b>／<b>單製非AS認證</b>／<b>廠內治具</b>。</li>
+    <li>意思上的差別：「<b>單製○○</b>」＝客戶把料送來、我們只做這一道；「<b>全製含○○</b>」＝從頭做到成品而且過程中有這一道；
+        「<b>全製</b>」＝從頭做到成品但沒有任何一道是稽核製程；「<b>單製非AS認證</b>」＝只做一道而且那一道不在 AS 認證範圍內。</li>
+    <li><b>廠內治具只有「客戶＝本公司」的訂單才會出現</b>（本公司取自客戶主檔勾選「本公司」的那一筆）。</li>
+    <li><b>換了客戶之後會要求重新確認</b>：標籤列會變色並顯示「客戶已變更，請重新確認製程標籤」，<b>再點一次</b>（確認原本選的沒錯，或改選別的）才存得下去。
+        如果原本選的在新客戶底下不能用（例如廠內治具換成別家客戶），會直接要求重新選。</li>
+    <li><b>要不要「必選」是管理員設定的</b>（設定→稽核製程標籤→存檔必選），<b>預設是關閉的</b>；關閉時不選也存得進去，開啟後沒選會在存檔前被擋下。</li>
+    <li>清單的<b>製程</b>欄下方會顯示這張訂單的標籤；篩選列的<b>「全部標籤」</b>下拉可以依標籤篩選，也可以挑「<b>尚未設定標籤</b>」找出還沒補的。</li>
+    <li>拆分交期產生的子批次會<b>自動沿用母訂單的標籤</b>（同一張單拆交期，認定本來就一樣）。</li>
+</ul>
+
+<h4>四之四、稽核製程標籤的設定與舊資料補登（需「設定稽核製程標籤」權限）</h4>
+<ul>
+    <li>入口：工具列【<b>設定</b>】→最下方「<b>稽核製程標籤（AS 認定）</b>」。</li>
+    <li>一列＝一個稽核製程：選<b>製程大類</b>（例如齒研）→填<b>顯示用短名</b>（留空就自動帶大類名稱）→
+        要縮小範圍才去勾<b>製程小類</b>（<b>不勾＝整個大類都算</b>）→選<b>適用範圍</b>。</li>
+    <li><b>適用範圍選「兩者皆可」會長出兩顆按鈕</b>（單製○○／全製含○○），存下來才分得出是哪一種；每一列下方都有預覽告訴您會長出哪幾顆。</li>
+    <li><b>已經有訂單在用的標籤不可以刪除</b>（那一列的刪除鈕會變成鎖頭），也不可以把「兩者皆可」收窄掉其中一種。
+        要停止使用請<b>取消「啟用」</b>——停用＝新訂單不再出現這個選項，<b>舊訂單的標籤名稱照樣顯示得出來</b>。</li>
+    <li><b>其他固定選項（自行新增）</b>：除了內建的全製／單製非AS認證／廠內治具（這三個<b>不可修改也不可刪除</b>），
+        管理員可以自己再加。欄位跟稽核製程一模一樣（<b>顯示用短名＋製程大類／小類＋適用範圍</b>，
+        像廠內治具那種不對應製程的可選「不綁定」），<b>差別只在標籤直接用短名本身</b>（不加「單製」「全製含」前缀），
+        所以只會出現<b>一顆</b>按鈕；畫面上跟內建三個一樣是<b>虛線框</b>。已經有訂單在用的同樣<b>不可刪除、不可改適用範圍</b>。</li>
+    <li><b>舊資料批次補設定</b>：同一區下方的【開啟補設定畫面】。預設「<b>依製程文字分組</b>」，一次設完同一種寫法的所有訂單
+        （全庫實測有 700 多種寫法，筆數最多的排在前面）；<b>建議標籤</b>是系統依「製程文字裡有沒有稽核製程的名稱」＋訂單分析那一套全製／單製關鍵字規則推出來的，
+        <b>理由欄會寫出它命中了哪個字</b>，請確認過再套用。零散的尾數改用「<b>逐筆設定</b>」分頁勾選。</li>
+    <li>【<b>套用這組</b>】與【<b>套用到勾選的訂單</b>】都是<b>按一下就套用，不跳確認視窗</b>，而且<b>只就地更新那一列</b>——
+        畫面不會整個重新載入闪爍；背後的訂單清單是<b>關掉補設定畫面時才刷新一次</b>。
+        只有【套用本頁全部建議】會先變成「確定？再按一次」（那是一次改很多組的動作；它用按鈕自己確認、<b>不用瀏覽器對話框</b>，
+        因為連續按多次之後瀏覽器會把對話框封鎖，變成按了沒反應）。</li>
+    <li><b>補設定一律只填空白、不會覆蓋</b>已經設定好的訂單；全部補完之後就不必再進這個畫面了。</li>
 </ul>
 
 <h4>五、急件標示</h4>
