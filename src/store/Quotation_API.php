@@ -11,6 +11,7 @@ require_once __DIR__ . '/../common/quote_customer_lib.php';   // 整張報價單
 require_once __DIR__ . '/../common/quote_kw_rule_lib.php';    // 依規格關鍵字自動建議製程標籤（唯一實作）
 require_once __DIR__ . '/../common/gear_spec_lib.php';        // 齒輪規格顯示字串（唯一實作，與主檔/訂單追蹤/出貨單同一份）
 require_once __DIR__ . '/../common/gear_save_lib.php';        // 存齒輪時不要洗掉本表單沒管到的欄位（唯一實作）
+require_once __DIR__ . '/../common/part_label_lib.php';       // 讀寫料號標籤上的數值（工件總長，唯一實作）
 
 $db  = new DBConnection();
 $pdo = $db->getPDO();
@@ -3133,40 +3134,18 @@ try {
                     ->execute([$part_no,$type,$cust_id,$revision,$issue_date,$remark,$user_id]);
                 $d_id = (int)$pdo->lastInsertId();
             }
-            // 這張表單只管得到下面那 12 欄，但 DELETE 會把整列（34 欄）清掉——
-            // 徑節/周節標記、鏈輪規格、花鍵尺寸、齒輪等級會一起靜默消失（見 gear_save_lib）
-            $__gsnap = eg_gear_keep_snapshot($pdo, (int)$d_id);
-            $pdo->prepare("DELETE FROM d_setting_gear WHERE d_setting_id=?")->execute([$d_id]);
-            if ($type === 'G' && !empty($gears)) {
-                // Created_By 是 NOT NULL 且沒有預設值——原本這支 INSERT 漏了這一欄，
-                // 所以「齒輪類料號只要填了齒輪規格就一定存檔失敗」（1364，整個交易回滾，
-                // 連料號本身的修改也一起存不進去）。2026-09-22 實際打 API 才發現。
-                $ins_g = $pdo->prepare("INSERT INTO d_setting_gear (d_setting_id,Gear_Type,Module,Teeth,Pressure_Angle,Face_Width,Workpiece_Length,Profile_Shift_X,Helix_Angle,Helix_Angle_Str,Helix_Direction,Remark_Gear,Created_By) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
-                $gi = 0;
-                foreach ($gears as $g) {
-                    $gi++;
-                    // 整列全空就不要建一筆空的齒輪紀錄（工件種類切到齒輪時畫面會自動長一列空白列）
-                    $filled = false;
-                    foreach (['Gear_Type','Module','Teeth','Pressure_Angle','Face_Width','Workpiece_Length','Profile_Shift_X','Helix_Angle','Helix_Angle_Str','Helix_Direction','Remark_Gear'] as $__c) {
-                        if (trim((string)($g[$__c] ?? '')) !== '') { $filled = true; break; }
-                    }
-                    if (!$filled) continue;
-                    // Gear_Type 是 int 外鍵（dict_gear_type.gear_type_id）。前端送 id，
-                    // 但舊分頁可能還在送中文名稱——對得回 id 就用，對不到才擋下並講清楚是哪一列，
-                    // 不要讓它直接撞成 1366 把整筆存檔（含料號本身）一起回滾。
-                    $gt = eg_gear_type_id($pdo, $g['Gear_Type'] ?? null);
-                    if ($gt === false) throw new Exception("第 {$gi} 組齒輪的「齒輪類型」無法辨識，請重新整理頁面後再選一次。");
-                    // 壓力角沒填就補預設（直齒／螺旋齒 20°、花鍵 30°）——與主檔管理同一條規則
-                    $pa = trim((string)($g['Pressure_Angle'] ?? ''));
-                    if ($pa === '') $pa = eg_gear_default_pressure_angle($pdo, $gt);
-                    // 沒填的欄位一律存 NULL：Teeth 是 smallint、Face_Width／Workpiece_Length 是 decimal，
-                    // DB 開著 STRICT_TRANS_TABLES，直接把空字串丟進去一樣會 1366 整筆回滾
-                    // （齒輪類型修好之後，只要少填一格齒數就會踩到下一個同類型的錯）
-                    $v = function ($k) use ($g) { $x = trim((string)($g[$k] ?? '')); return $x === '' ? null : $x; };
-                    $ins_g->execute([$d_id,$gt,$v('Module'),$v('Teeth'),$pa,$v('Face_Width'),$v('Workpiece_Length'),$v('Profile_Shift_X'),$v('Helix_Angle'),$v('Helix_Angle_Str'),$v('Helix_Direction'),$v('Remark_Gear'),$user_id]);
-                }
+            // 齒輪規格：與主檔管理（views/pages/master_data_management.php）**同一支**寫入函式，
+            // 30 欄全寫（模數的 DP/CP 標記、齒輪等級、鏈輪與花鍵尺寸都在內），所以不再需要
+            // gear_save_lib 的「把沒管到的欄位補回來」那一套——這張表單已經沒有管不到的欄位了。
+            eg_gear_rows_save($pdo, (int)$d_id, ($type === 'G') ? $gears : [], (string)$user_id);
+
+            // 工件總長：**存在料號標籤**（與主檔管理「新增/編輯料號」的標籤「工件總長」同一筆資料），
+            // 不是存 d_setting_gear.Workpiece_Length——那是 2026-10-02 之前兩邊各存一份、
+            // 已經實測對不起來的舊做法。沒送這個欄位＝舊呼叫端，一律不要動它。
+            if (array_key_exists('workpiece_length', $_POST)) {
+                $__wlId = eg_workpiece_length_label_id($pdo);
+                if ($__wlId > 0) eg_part_label_set($pdo, (int)$d_id, $__wlId, (string)$_POST['workpiece_length']);
             }
-            eg_gear_keep_restore($pdo, (int)$d_id, $__gsnap, ['Gear_Type','Module','Teeth','Pressure_Angle','Face_Width','Workpiece_Length','Profile_Shift_X','Helix_Angle','Helix_Angle_Str','Helix_Direction','Remark_Gear']);
             $pdo->commit();
             $response = ['success' => true, 'message' => '料號資料儲存成功', 'd_id' => (int)$d_id];
             break;
@@ -3190,6 +3169,9 @@ try {
             } else {
                 $part['gears'] = [];
             }
+            // 工件總長讀的是料號標籤（與主檔管理同一筆資料），不是齒輪表的欄位
+            $__wlId = eg_workpiece_length_label_id($pdo);
+            $part['workpiece_length'] = ($__wlId > 0) ? eg_part_label_value($pdo, $d_id, $__wlId) : null;
             $response = ['success' => true, 'data' => $part];
             break;
 

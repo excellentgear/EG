@@ -10,11 +10,6 @@ $selectedYear = isset($_GET['year']) ? intval($_GET['year']) : date('Y');
 $_pdo     = $conn->getPDO();
 $_user_id = intval($_SESSION['id'] ?? $_SESSION['user_id'] ?? 0);
 
-// 「新增料號」跳窗的齒輪類型選項：值＝dict_gear_type.gear_type_id（Gear_Type 欄位是 int 外鍵）。
-// 唯一實作在 gear_spec_lib，本頁不自己寫死一份中文清單（鐵律4）。
-require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
-$GEAR_TYPE_OPTIONS = eg_gear_type_options($_pdo);
-
 try {
     // 建立全域 RBAC 資料表（若不存在）
     $_pdo->exec("CREATE TABLE IF NOT EXISTS roles (
@@ -564,6 +559,10 @@ body { background:var(--bg); }
 }
 .view-item-table th { background:#f8f9fa; font-size:12px; }
 .view-item-table td { font-size:13px; vertical-align:middle; }
+/* 齒輪規格設定區塊的標題與說明（共用元件 views/pages/_gear_spec_ui.php 的外框會用到，
+   齒型列本身的樣式由元件自己帶，這裡只補這兩個本頁原本沒有的 class） */
+.form-section-title { font-size:12px; font-weight:700; text-transform:uppercase; color:var(--accent); letter-spacing:.8px; margin:16px 0 8px; padding-bottom:4px; border-bottom:1px dashed #e0e0e0; }
+.id-hint { font-size:11px; color:#888; margin-top:3px; }
 @media print { .no-print { display:none !important; } }
 </style>
 </head>
@@ -1600,26 +1599,43 @@ body { background:var(--bg); }
           <div id="part-customer-results" style="position:absolute;z-index:1060;background:white;border:1px solid #ccc;width:90%;max-height:150px;overflow-y:auto;display:none;border-radius:0 0 4px 4px;box-shadow:0 4px 8px rgba(0,0,0,.1);"></div>
         </div>
         <div class="row">
-          <div class="col-md-6 form-group">
+          <div class="col-md-4 form-group">
             <label>版次</label>
             <input type="text" class="form-control" id="part_revision_modal">
           </div>
-          <div class="col-md-6 form-group">
+          <div class="col-md-4 form-group">
             <label>發行日期</label>
             <input type="date" class="form-control" id="part_issue_date_modal">
+          </div>
+          <div class="col-md-4 form-group">
+            <label>工件總長 (mm)
+              <span style="font-weight:normal;color:#999;font-size:11px;">＝主檔管理的標籤「工件總長」</span>
+            </label>
+            <input type="text" class="form-control" id="part_workpiece_len_modal"
+                   title="與主檔管理「新增/編輯料號」的標籤『工件總長』是同一筆資料，在這裡填就等於填在那裡">
           </div>
         </div>
         <div class="form-group">
           <label>備註</label>
           <textarea class="form-control" id="part_remark_modal" rows="2"></textarea>
         </div>
-        <div id="part-gear-section" style="display:none;border-top:2px solid var(--accent);padding-top:12px;margin-top:8px;">
-          <h5 style="color:var(--primary);font-weight:700;margin-bottom:10px;">
-            <i class="fa fa-cog"></i> 齒輪詳細資料
-            <button type="button" class="btn btn-xs btn-success" id="part-btn-add-gear" style="margin-left:10px;"><i class="fa fa-plus"></i> 新增齒輪</button>
-          </h5>
-          <div id="part-gear-rows-container"></div>
-        </div>
+        <?php
+        // 齒輪規格設定：與主檔管理（views/pages/master_data_management.php）**同一份元件**，
+        // 欄位、連動與寫入規則完全一致（使用者交辦：報價單建的齒輪資料要跟主檔管理建的一樣）。
+        // 這一頁沒有「立即刪除既有齒型列」那條路（can.delete=false），其餘與主檔管理相同。
+        $GEAR_SPEC_CFG = [
+            'wrap_id' => 'gear-rows-wrap',
+            'd_id_el' => 'part_d_id_modal',
+            'can'     => ['edit' => (bool)($CAN_CREATE || $CAN_EDIT), 'delete' => false, 'modify' => (bool)($CAN_CREATE || $CAN_EDIT)],
+        ];
+        include __DIR__ . '/../pages/_gear_spec_ui.php';
+        eg_gear_spec_section([
+            'section_id' => 'part-gear-section',
+            'wrap_id'    => 'gear-rows-wrap',
+            'can_edit'   => (bool)($CAN_CREATE || $CAN_EDIT),
+            'style'      => 'display:none;border-top:2px solid var(--accent);padding-top:12px;margin-top:8px;',
+        ]);
+        ?>
         <div class="ln_solid" style="margin:15px 0;"></div>
         <div style="display:flex;gap:8px;">
           <button type="button" class="btn btn-danger" id="part-btn-delete" style="display:none;" onclick="deletePart()"><i class="fa fa-trash"></i> 刪除</button>
@@ -2000,8 +2016,6 @@ const IS_ADMIN         = <?= json_encode($IS_ADMIN) ?>;
 const CAN_LEGACY_SUPP  = <?= json_encode($CAN_LEGACY_SUPP) ?>;   // 舊報價單補附件（只給真正的管理員）
 const PERM_CODE        = <?= json_encode($_perm) ?>;
 const MY_USER_ID       = <?= json_encode($_user_id) ?>;
-// 齒輪類型（來自 dict_gear_type，value 就是要存進 d_setting_gear.Gear_Type 的 id）
-const GEAR_TYPE_OPTIONS = <?= json_encode($GEAR_TYPE_OPTIONS, JSON_UNESCAPED_UNICODE) ?>;
 
 const API_URL      = '../../src/store/Quotation_API.php';
 const FILE_API_URL = '../../src/store/Quotation_File_API.php';
@@ -2375,16 +2389,16 @@ $(document).ready(function () {
         loadPartToModal($(this).data('part').d_id);
         $('html,body').animate({ scrollTop: $('#partFormTitle').offset().top - 80 }, 200);
     });
-    // 工件種類切換
+    // 工件種類切換（齒輪規格列由共用元件 _gear_spec_ui.php 渲染，與主檔管理同一份）
     $(document).on('change', '#part_type_modal', function () {
         if ($(this).val() === 'G') {
             $('#part-gear-section').slideDown();
-            if (!$('#part-gear-rows-container').children().length) addPartGearRow();
+            if (!gearRows.length) addGearRow({});
+            else renderGearRows();
         } else {
             $('#part-gear-section').slideUp();
         }
     });
-    $(document).on('click', '#part-btn-add-gear', function () { addPartGearRow(); });
     // 客戶搜尋（料號 Modal 內）
     $(document).on('input', '#part_client_search_modal', function () {
         const kw = $(this).val().trim();
@@ -2408,46 +2422,7 @@ $(document).ready(function () {
         $('#part_client_search_modal').val($(this).data('name'));
         $('#part-customer-results').hide();
     });
-    // 齒輪螺旋角模式切換
-    $(document).on('click', '.btn-mode-dec', function () {
-        const $g = $(this).closest('.helix-angle-group');
-        $g.find('.mode-decimal').show(); $g.find('.mode-dms').hide();
-        $(this).addClass('active').siblings().removeClass('active');
-    });
-    $(document).on('click', '.btn-mode-dms', function () {
-        const $g = $(this).closest('.helix-angle-group');
-        $g.find('.mode-decimal').hide(); $g.find('.mode-dms').css('display', 'flex');
-        $(this).addClass('active').siblings().removeClass('active');
-    });
-    $(document).on('input', '.gear-helix-val', function () {
-        const $g = $(this).closest('.helix-angle-group');
-        $g.find('.hidden-helix-val').val($(this).val());
-        $g.find('.hidden-helix-str').val($(this).val());
-    });
-    $(document).on('input', '.dms-d, .dms-m, .dms-s', function () {
-        const $g = $(this).closest('.helix-angle-group');
-        const d = parseFloat($g.find('.dms-d').val()) || 0;
-        const m = parseFloat($g.find('.dms-m').val()) || 0;
-        const s = parseFloat($g.find('.dms-s').val()) || 0;
-        $g.find('.hidden-helix-val').val((d + m/60 + s/3600).toFixed(6));
-        $g.find('.hidden-helix-str').val(`${d}°${m}'${s}"`);
-    });
-    $(document).on('blur', '.gear-module', function () {
-        let v = $(this).val().trim().toUpperCase();
-        if (v !== '' && !isNaN(v.charAt(0))) $(this).val('M' + v);
-        else $(this).val(v);
-    });
-    $(document).on('change', '.gear-type', function () {
-        const $row = $(this).closest('.part-gear-row');
-        const v    = $(this).val();
-        // 有沒有螺旋角依字典的 has_helix_angle 決定（螺旋、蝸桿、蝸輪都有），不要用字串比對
-        if (gearTypeHasHelix(v)) $row.find('.helix-angle-group').slideDown();
-        else                     $row.find('.helix-angle-group').slideUp();
-        // 壓力角沒填就自動帶預設值（直齒／螺旋齒 20°、花鍵 30°），讓使用者當場看得到；
-        // 使用者自己填過的值一律不覆蓋。後端存檔時會再補一次同樣的規則（鐵律8）
-        const $pa = $row.find('.gear-pressure-angle');
-        if (v !== '' && $pa.length && $pa.val().trim() === '') $pa.val(gearTypeDefaultPA(v));
-    });
+    // 齒輪的螺旋角模式切換／模數格式化／齒型連動一律由共用元件 views/pages/_gear_spec_ui.php 處理
     // ── 料號跳窗：欄位內按 Enter 自動跳下一欄 ──────────────────────────────
     //   做法比照主檔管理「齒輪規格設定」的 _bindGearKeyNav()：取目前「看得到且可輸入」的
     //   欄位依畫面順序往下跳（隱藏的齒輪區、收起來的螺旋角欄位自然不會被跳到）。
@@ -10050,21 +10025,25 @@ function loadPartToModal(d_id) {
         $('#part_revision_modal').val(p.Revision||'');
         $('#part_issue_date_modal').val(p.Issue_Date||'');
         $('#part_remark_modal').val(p.Remark||'');
+        // 工件總長＝主檔管理的標籤，不是齒輪表的欄位（兩邊同一筆資料）
+        $('#part_workpiece_len_modal').val(p.workpiece_length || '');
         $('#part-btn-delete').show();
-        $('#part-gear-rows-container').empty();
-        if (p.Type === 'G' && p.gears && p.gears.length > 0) p.gears.forEach(g => addPartGearRow(g));
+        gearRows = [];
+        if (p.Type === 'G' && p.gears && p.gears.length > 0) p.gears.forEach(g => addGearRow(g));
+        else renderGearRows();
         $('#partModal .modal-body').scrollTop(0);
     });
 }
 function editPart(d_id) { loadPartToModal(d_id); }
 function resetPartForm() {
     $('#partFormTitle').text('新增料號');
-    $('#part_d_id_modal,#part_no_modal,#part_revision_modal,#part_issue_date_modal,#part_remark_modal').val('');
+    $('#part_d_id_modal,#part_no_modal,#part_revision_modal,#part_issue_date_modal,#part_remark_modal,#part_workpiece_len_modal').val('');
     $('#part_type_modal').val('N').trigger('change');
     $('#part_client_search_modal').val('');
     $('#part_customer_id_modal').val('');
     $('#part-btn-delete').hide();
-    $('#part-gear-rows-container').empty();
+    gearRows = [];
+    renderGearRows();
     $('#part-customer-results').hide();
 }
 function savePart() {
@@ -10073,29 +10052,16 @@ function savePart() {
     if ($('#part_client_search_modal').val().trim() && !$('#part_customer_id_modal').val().trim()) {
         Swal.fire('錯誤', '請從建議列表選擇客戶，或清空客戶欄位', 'error'); return;
     }
-    const gears = [];
-    if ($('#part_type_modal').val() === 'G') {
-        $('#part-gear-rows-container .part-gear-row').each(function () {
-            gears.push({
-                Gear_Type:        $(this).find('.gear-type').val(),
-                Module:           $(this).find('.gear-module').val(),
-                Teeth:            $(this).find('.gear-teeth').val(),
-                Pressure_Angle:   $(this).find('.gear-pressure-angle').val(),
-                Face_Width:       $(this).find('.gear-face-width').val(),
-                Workpiece_Length: $(this).find('.gear-length').val(),
-                Profile_Shift_X:  $(this).find('.gear-shift-x').val(),
-                Helix_Angle:      $(this).find('.hidden-helix-val').val(),
-                Helix_Angle_Str:  $(this).find('.hidden-helix-str').val(),
-                Helix_Direction:  $(this).find('.gear-direction').val(),
-                Remark_Gear:      $(this).find('.gear-remark').val()
-            });
-        });
-    }
+    // 齒輪規格一律由共用元件收集（欄位與主檔管理完全相同，連模數的 DP/CP 標記、
+    // 齒輪等級、鏈輪與花鍵的尺寸都在裡面），不要再自己一欄一欄撿
+    let gears = [];
+    if ($('#part_type_modal').val() === 'G') { collectGearRows(); gears = gearRows; }
     $.post(API_URL, {
         action: 'save_part_info', d_id: $('#part_d_id_modal').val(), part_no: partNo,
         type: $('#part_type_modal').val(), customer_id: $('#part_customer_id_modal').val(),
         revision: $('#part_revision_modal').val(), issue_date: $('#part_issue_date_modal').val(),
-        remark: $('#part_remark_modal').val(), gears: JSON.stringify(gears)
+        remark: $('#part_remark_modal').val(), gears: JSON.stringify(gears),
+        workpiece_length: $('#part_workpiece_len_modal').val()
     }, res => {
         if (res.success) {
             // 從「建立新料號」進入：直接綁定回原項目列並關閉跳窗
@@ -10128,116 +10094,9 @@ function deletePart() {
         });
     });
 }
-// ══ 齒輪類型（唯一來源 dict_gear_type，下拉的 value 就是要存進 Gear_Type 的 id）══
-function gearTypeMeta(v) {
-    if (v === '' || v === null || v === undefined) return null;
-    const sv = String(v);
-    return GEAR_TYPE_OPTIONS.find(o => o.value === sv) || null;
-}
-function gearTypeHasHelix(v) { const m = gearTypeMeta(v); return !!(m && m.hasHelix); }
-// 壓力角沒填時的預設值：花鍵 30 度、其餘（直齒／螺旋齒…）20 度——與主檔管理「齒輪規格設定」同一條規則
-function gearTypeDefaultPA(v) { const m = gearTypeMeta(v); return (m && m.specCategory === 'spline') ? '30' : '20'; }
-function buildGearTypeOptions(cur, curName) {
-    const sv = (cur === null || cur === undefined) ? '' : String(cur);
-    let html = `<option value=""${sv === '' ? ' selected' : ''}>請選擇</option>`;
-    GEAR_TYPE_OPTIONS.forEach(o => {
-        html += `<option value="${escapeHtml(o.value)}"${sv === o.value ? ' selected' : ''}>${escapeHtml(o.label)}</option>`;
-    });
-    // 舊資料的齒型若已被停用（不在啟用清單裡），仍要列出來並選起來——
-    // 否則下拉會退回「請選擇」，使用者只是改個備註按儲存就把 Gear_Type 寫成 NULL，
-    // 連帶讓齒輪等級／鏈輪／花鍵那些本表單沒管到的欄位一起還原失敗而消失
-    if (sv !== '' && !gearTypeMeta(sv)) {
-        html += `<option value="${escapeHtml(sv)}" selected>${escapeHtml(curName || ('類型 #' + sv))}（已停用）</option>`;
-    }
-    return html;
-}
-
-function addPartGearRow(data = {}) {
-    const gearType  = (data.Gear_Type === null || data.Gear_Type === undefined) ? '' : String(data.Gear_Type);
-    const module    = data.Module || '';
-    const teeth     = data.Teeth || '';
-    const pa        = data.Pressure_Angle || '';
-    const width     = data.Face_Width || '';
-    const length    = data.Workpiece_Length || '';
-    const remark    = data.Remark_Gear || '';
-    const helixVal  = (data.Helix_Angle !== undefined && data.Helix_Angle !== null && data.Helix_Angle !== '') ? parseFloat(data.Helix_Angle) : '';
-    const helixStr  = data.Helix_Angle_Str || '';
-    const direction = data.Helix_Direction || '';
-    const shiftX    = (data.Profile_Shift_X !== undefined && data.Profile_Shift_X !== null) ? parseFloat(data.Profile_Shift_X) : '';
-    const showHelix = gearTypeHasHelix(gearType);   // 依字典的 has_helix_angle，不再用字串比對（蝸桿/蝸輪也要有螺旋角）
-    const typeOpts  = buildGearTypeOptions(gearType, data.Gear_Type_Name || '');
-    const html = `
-    <div class="part-gear-row" style="padding:12px;border:1px solid #ddd;border-radius:5px;margin-bottom:10px;background:#f9f9f9;">
-      <div class="row">
-        <div class="col-md-3 form-group"><label>齒輪類型</label>
-          <select class="form-control input-sm gear-type">${typeOpts}</select>
-        </div>
-        <div class="col-md-3 form-group"><label>模數</label>
-          <input type="text" class="form-control input-sm gear-module" value="${escapeHtml(String(module))}">
-        </div>
-        <div class="col-md-3 form-group"><label>齒數</label>
-          <input type="number" class="form-control input-sm gear-teeth" value="${escapeHtml(String(teeth))}">
-        </div>
-        <div class="col-md-3 form-group helix-angle-group" style="display:${showHelix?'block':'none'};background:#e9ecef;padding:8px;border-radius:4px;">
-          <label>螺旋角</label>
-          <div style="display:flex;gap:5px;margin-bottom:5px;">
-            <select class="form-control input-sm gear-direction" style="width:75px;">
-              <option value="" ${direction===''?'selected':''}>旋向</option>
-              <option value="RH" ${direction==='RH'?'selected':''}>RH(右)</option>
-              <option value="LH" ${direction==='LH'?'selected':''}>LH(左)</option>
-            </select>
-            <div class="btn-group btn-group-xs">
-              <button type="button" class="btn btn-default active btn-mode-dec">十進位</button>
-              <button type="button" class="btn btn-default btn-mode-dms">度分秒</button>
-            </div>
-          </div>
-          <div class="mode-decimal">
-            <input type="number" step="any" class="form-control input-sm gear-helix-val" value="${helixVal}" placeholder="例如 15.5">
-          </div>
-          <div class="mode-dms" style="display:none;align-items:center;gap:2px;">
-            <input type="number" class="form-control input-sm dms-d" placeholder="度" style="width:50px;">°
-            <input type="number" class="form-control input-sm dms-m" placeholder="分" style="width:50px;">'
-            <input type="number" class="form-control input-sm dms-s" placeholder="秒" style="width:50px;">"
-          </div>
-          <input type="hidden" class="hidden-helix-val" value="${helixVal}">
-          <input type="hidden" class="hidden-helix-str" value="${escapeHtml(helixStr)}">
-        </div>
-      </div>
-      <div class="row">
-        <div class="col-md-3 form-group"><label>壓力角 (PA) <span style="font-weight:normal;color:#999;font-size:11px;">未填自動帶 20°（花鍵 30°）</span></label>
-          <input type="text" class="form-control input-sm gear-pressure-angle" value="${escapeHtml(String(pa))}">
-        </div>
-        <div class="col-md-3 form-group"><label>齒寬 (W) mm</label>
-          <input type="number" step="0.01" class="form-control input-sm gear-face-width" value="${escapeHtml(String(width))}">
-        </div>
-        <div class="col-md-3 form-group"><label>工件總長 (L) mm</label>
-          <input type="number" step="0.01" class="form-control input-sm gear-length" value="${escapeHtml(String(length))}">
-        </div>
-        <div class="col-md-3 form-group"><label>轉位係數 X</label>
-          <input type="number" step="any" class="form-control input-sm gear-shift-x" value="${shiftX}">
-        </div>
-      </div>
-      <div class="row">
-        <div class="col-md-9 form-group"><label>備註</label>
-          <input type="text" class="form-control input-sm gear-remark" value="${escapeHtml(String(remark))}">
-        </div>
-        <div class="col-md-3 form-group" style="text-align:right;padding-top:25px;">
-          <button type="button" class="btn btn-danger btn-xs" onclick="$(this).closest('.part-gear-row').remove()">
-            <i class="fa fa-trash"></i> 刪除
-          </button>
-        </div>
-      </div>
-    </div>`;
-    $('#part-gear-rows-container').append(html);
-    if (helixStr && (helixStr.includes('°') || helixStr.includes("'"))) {
-        const $lr = $('#part-gear-rows-container .part-gear-row').last();
-        $lr.find('.btn-mode-dms').trigger('click');
-        const d = helixStr.split('°')[0] || '';
-        const m = (helixStr.split('°')[1] || '').split("'")[0];
-        const s = (helixStr.split("'")[1] || '').split('"')[0];
-        $lr.find('.dms-d').val(d); $lr.find('.dms-m').val(m); $lr.find('.dms-s').val(s);
-    }
-}
+// 齒輪規格列（齒型下拉、模數 M/CP/DP、齒輪等級、鏈輪/花鍵欄位…）一律由
+// 共用元件 views/pages/_gear_spec_ui.php 提供：addGearRow()／renderGearRows()／collectGearRows()，
+// 與主檔管理「新增/編輯料號」的齒輪規格設定是**同一份程式**，兩邊填出來的資料完全一樣（鐵律4）。
 
 // ══════════════════════════════════════════════════════════════════════════
 // 整張報價單變更客戶（2026-08-28）

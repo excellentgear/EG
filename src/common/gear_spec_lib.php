@@ -172,12 +172,8 @@ function eg_gear_spec_tidy(string $s): string {
  */
 function eg_gear_type_options(PDO $db): array {
     try {
-        $st = $db->query("SELECT gear_type_id, type_name, has_helix_angle, spec_category
-                            FROM dict_gear_type
-                           WHERE is_active = 1
-                           ORDER BY sort_order, gear_type_id");
         $out = [];
-        foreach (($st->fetchAll(PDO::FETCH_ASSOC) ?: []) as $r) {
+        foreach (eg_gear_type_rows($db) as $r) {
             $out[] = [
                 'value'        => (string)$r['gear_type_id'],
                 'label'        => (string)$r['type_name'],
@@ -223,4 +219,133 @@ function eg_gear_type_id(PDO $db, $v) {
         $id = $st->fetchColumn();
         return $id ? (int)$id : false;
     } catch (Throwable $e) { return false; }
+}
+
+/**
+ * 齒輪類型字典的原始列（啟用中）——SQL 只有這一份。
+ * 欄位與主檔管理原本的 `manage_gear_types op=list` **一字不差**，
+ * 所以把那支改成呼叫這裡不會改變任何既有行為。
+ */
+function eg_gear_type_rows(PDO $db): array {
+    try {
+        return $db->query("SELECT gear_type_id, type_name, has_helix_angle, sort_order, is_active,
+                                  COALESCE(spec_category,'standard') AS spec_category,
+                                  display_template
+                             FROM dict_gear_type WHERE is_active = 1
+                            ORDER BY sort_order, gear_type_id")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 齒輪規格設定元件要用的四份字典，一次取齊（唯一實作）。
+ * 呼叫端：views/pages/gear_spec_api.php（唯一端點）。
+ *   types   齒輪類型（決定齒型下拉、有沒有螺旋角、是不是鏈輪/皮帶輪/花鍵）
+ *   chains  鏈條規格（鏈輪的節距與滾子外徑）
+ *   belts   皮帶齒型（皮帶輪的節距與 PLD）
+ *   quality 齒輪等級對照（JIS/ISO/DIN/AGMA）
+ */
+function eg_gear_spec_dicts(PDO $db): array {
+    $q = function (string $sql) use ($db): array {
+        try { return $db->query($sql)->fetchAll(PDO::FETCH_ASSOC) ?: []; }
+        catch (Throwable $e) { return []; }
+    };
+    return [
+        'types'   => eg_gear_type_rows($db),
+        'chains'  => $q("SELECT chain_size, pitch_mm, roller_dia_mm, chain_std FROM dict_chain_size ORDER BY sort_order, chain_size"),
+        'belts'   => $q("SELECT profile_code, pitch_mm, pld_mm, belt_standard FROM dict_timing_belt_profile ORDER BY sort_order, profile_code"),
+        'quality' => $q("SELECT * FROM dict_gear_quality_ref ORDER BY sort_order, quality_ref_id"),
+    ];
+}
+
+/**
+ * 把一支料號的齒輪規格整批寫回 `d_setting_gear`（**全站唯一實作**，2026-10-02）。
+ *
+ * 由 views/pages/master_data_management.php 原封不動抽出，給它與報價單管理
+ * 「新增料號」共用——使用者要求「在報價單建立的齒輪規格資料要跟在主檔管理建立的一樣、
+ * 記錄到同一個資料表」。報價單那邊原本只寫得了 12 欄（模數的 DP/CP 標記、齒輪等級、
+ * 鏈輪與花鍵的尺寸都存不進去），抽成同一支之後兩邊寫進去的東西完全相同。
+ *
+ * 做法沿用原本的「整批刪掉再逐列寫回」，因為這支 INSERT 寫滿 30 欄
+ * （整張表除了 gear_id／Created_At／Modified_* 之外全部），不會有欄位被洗掉的問題。
+ *
+ * 三條規則（與主檔管理完全相同）：
+ *   ⑴ 模數：module_input_type=M 時補 'M' 前綴；CP/DP 前端已換算成 M 值，一樣補前綴；
+ *   ⑵ 壓力角沒填：花鍵 30 度、其餘 20 度；
+ *   ⑶ 齒輪等級標準只收 JIS/ISO/DIN/AGMA，其餘一律視為沒填。
+ * 另外兩條是這次新增的防呆（抽出來之前只有報價單那條路會踩到）：
+ *   ⑷ 整列全空的齒型不寫入（工件種類切到齒輪時畫面會自動長一列空白列）；
+ *   ⑸ Gear_Type 收 id，也接受舊畫面送來的中文類型名稱並自動對回 id，
+ *      對不到才丟例外——直接讓它撞 `1366 Incorrect integer value` 會把整筆存檔一起回滾。
+ *
+ * @param array $gears 逐列的齒輪資料（欄位名與 d_setting_gear 相同，
+ *                     外加 module_input_type／module_display／Gear_Quality_Std／Gear_Quality_Grade）
+ * @return int 實際寫入幾列
+ * @throws Exception 齒輪類型無法辨識時
+ */
+function eg_gear_rows_save(PDO $db, int $dId, array $gears, string $uid): int {
+    $db->prepare("DELETE FROM d_setting_gear WHERE d_setting_id=?")->execute([$dId]);
+    if (!$gears) return 0;
+
+    // 預先撈 gear_type spec_category，供壓力角預設值判斷
+    $gearTypeCatMap = [];
+    try {
+        foreach (($db->query("SELECT gear_type_id, spec_category FROM dict_gear_type")->fetchAll(PDO::FETCH_ASSOC) ?: []) as $gt) {
+            $gearTypeCatMap[intval($gt['gear_type_id'])] = $gt['spec_category'];
+        }
+    } catch (Throwable $_ge) {}
+
+    $sg = $db->prepare("INSERT INTO d_setting_gear (
+        d_setting_id,Module,Teeth,Face_Width,Helix_Angle,Helix_Angle_Str,Helix_Direction,
+        Pressure_Angle,Profile_Shift_X,Workpiece_Length,Gear_Type,Spec_No,Remark_Gear,
+        gear_quality_std,gear_quality_grade,module_input_type,module_display,
+        spec_chain_size,spec_pitch,spec_roller_dia,spec_starts,
+        spec_pulley_profile,spec_pld,
+        spec_spline_type,spec_spline_major_dia,spec_spline_minor_dia,spec_spline_width,
+        spec_spline_std,spec_spline_nominal_dia,
+        Created_By
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+
+    $n = 0; $idx = 0;
+    foreach ($gears as $g) {
+        $idx++;
+        $v  = function($k) use ($g) { return (isset($g[$k]) && $g[$k] !== '') ? $g[$k] : null; };
+        $vf = function($k) use ($g) { $x = $g[$k] ?? null; return ($x !== null && $x !== '') ? floatval($x) : null; };
+
+        // ⑷ 整列全空就不要建一筆空的齒型紀錄
+        $filled = false;
+        foreach ($g as $gv) { if (trim((string)($gv ?? '')) !== '') { $filled = true; break; } }
+        if (!$filled) continue;
+
+        // ⑸ Gear_Type 一律正規化成 dict_gear_type.gear_type_id
+        $gt = eg_gear_type_id($db, $g['Gear_Type'] ?? null);
+        if ($gt === false) throw new Exception("第 {$idx} 組齒輪的「齒輪類型」無法辨識，請重新整理頁面後再選一次。");
+
+        $mod = $v('Module');
+        if ($mod !== null) {
+            $mit = strtoupper($v('module_input_type') ?? 'M');
+            if ($mit === 'M') { $mod = 'M' . ltrim(ltrim($mod, 'm'), 'M'); }
+            // CP/DP已由前端換算為M值，直接加M前綴
+            else { $num = floatval(preg_replace('/[^\d.]/','',$mod)); $mod = ($num > 0) ? 'M'.rtrim(rtrim(sprintf('%.4f',$num),'0'),'.') : null; }
+        }
+        $qstd = $v('Gear_Quality_Std');
+        if ($qstd !== null && !in_array($qstd, ['JIS','ISO','DIN','AGMA'])) $qstd = null;
+        $qgrade = $v('Gear_Quality_Grade');
+        if ($qgrade !== null) $qgrade = intval($qgrade);
+        $pa = $v('Pressure_Angle');
+        if ($pa === null || trim($pa) === '') {
+            // 花鍵預設30度，其他齒輪預設20度
+            $specCat = $gearTypeCatMap[intval($gt ?? 0)] ?? 'standard';
+            $pa = ($specCat === 'spline') ? '30' : '20';
+        }
+        $sg->execute([$dId,$mod,$v('Teeth'),$vf('Face_Width'),$v('Helix_Angle'),$v('Helix_Angle_Str'),$v('Helix_Direction'),
+            $pa,$vf('Profile_Shift_X'),$vf('Workpiece_Length'),$gt,$v('Spec_No'),$v('Remark_Gear'),
+            $qstd,$qgrade,$v('module_input_type'),$v('module_display') ?: null,
+            $v('spec_chain_size'),$vf('spec_pitch'),$vf('spec_roller_dia'),$v('spec_starts') ? intval($v('spec_starts')) : null,
+            $v('spec_pulley_profile'),$vf('spec_pld'),
+            $v('spec_spline_type'),$vf('spec_spline_major_dia'),$vf('spec_spline_minor_dia'),$vf('spec_spline_width'),
+            $v('spec_spline_std'),$vf('spec_spline_nominal_dia'),
+            $uid]);
+        $n++;
+    }
+    return $n;
 }

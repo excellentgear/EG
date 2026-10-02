@@ -2608,56 +2608,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             // ── 齒輪資料（先取舊資料供審計用）──
             $old_gears_q = $pdo->prepare("SELECT Module,Teeth,Face_Width,Helix_Angle_Str,Helix_Direction,Pressure_Angle,Profile_Shift_X,Workpiece_Length,Gear_Type,Remark_Gear,gear_quality_std,gear_quality_grade FROM d_setting_gear WHERE d_setting_id=? ORDER BY gear_id"); $old_gears_q->execute([$d_id]); $old_gears_data = $old_gears_q->fetchAll(PDO::FETCH_ASSOC);
-            $pdo->prepare("DELETE FROM d_setting_gear WHERE d_setting_id=?")->execute([$d_id]);
-            if ($Type === 'G' && !empty($gears)) {
-                // 預先撈 gear_type spec_category，供壓力角預設值判斷
-                $gearTypeCatMap = [];
-                try {
-                    $gtRows = $pdo->query("SELECT gear_type_id, spec_category FROM dict_gear_type")->fetchAll(PDO::FETCH_ASSOC);
-                    foreach ($gtRows as $gt) $gearTypeCatMap[intval($gt['gear_type_id'])] = $gt['spec_category'];
-                } catch (Exception $_ge) {}
-
-                $sg = $pdo->prepare("INSERT INTO d_setting_gear (
-                    d_setting_id,Module,Teeth,Face_Width,Helix_Angle,Helix_Angle_Str,Helix_Direction,
-                    Pressure_Angle,Profile_Shift_X,Workpiece_Length,Gear_Type,Spec_No,Remark_Gear,
-                    gear_quality_std,gear_quality_grade,module_input_type,module_display,
-                    spec_chain_size,spec_pitch,spec_roller_dia,spec_starts,
-                    spec_pulley_profile,spec_pld,
-                    spec_spline_type,spec_spline_major_dia,spec_spline_minor_dia,spec_spline_width,
-                    spec_spline_std,spec_spline_nominal_dia,
-                    Created_By
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
-                foreach ($gears as $g) {
-                    $v = function($k) use ($g) { return (isset($g[$k]) && $g[$k] !== '') ? $g[$k] : null; };
-                    $vf = function($k) use ($g) { $x = $g[$k] ?? null; return ($x !== null && $x !== '') ? floatval($x) : null; };
-                    $mod = $v('Module');
-                    if ($mod !== null) {
-                        $mit = strtoupper($v('module_input_type') ?? 'M');
-                        if ($mit === 'M') { $mod = 'M' . ltrim(ltrim($mod, 'm'), 'M'); }
-                        // CP/DP已由前端換算為M值，直接加M前綴
-                        else { $num = floatval(preg_replace('/[^\d.]/','',$mod)); $mod = ($num > 0) ? 'M'.rtrim(rtrim(sprintf('%.4f',$num),'0'),'.') : null; }
-                    }
-                    $qstd = $v('Gear_Quality_Std');
-                    if ($qstd !== null && !in_array($qstd, ['JIS','ISO','DIN','AGMA'])) $qstd = null;
-                    $qgrade = $v('Gear_Quality_Grade');
-                    if ($qgrade !== null) $qgrade = intval($qgrade);
-                    $pa = $v('Pressure_Angle');
-                    if ($pa === null || trim($pa) === '') {
-                        // 花鍵預設30度，其他齒輪預設20度
-                        $gearTypeId = intval($v('Gear_Type') ?? 0);
-                        $specCat = $gearTypeCatMap[$gearTypeId] ?? 'standard';
-                        $pa = ($specCat === 'spline') ? '30' : '20';
-                    }
-                    $sg->execute([$d_id,$mod,$v('Teeth'),$vf('Face_Width'),$v('Helix_Angle'),$v('Helix_Angle_Str'),$v('Helix_Direction'),
-                        $pa,$vf('Profile_Shift_X'),$vf('Workpiece_Length'),$v('Gear_Type'),$v('Spec_No'),$v('Remark_Gear'),
-                        $qstd,$qgrade,$v('module_input_type'),$v('module_display') ?: null,
-                        $v('spec_chain_size'),$vf('spec_pitch'),$vf('spec_roller_dia'),$v('spec_starts') ? intval($v('spec_starts')) : null,
-                        $v('spec_pulley_profile'),$vf('spec_pld'),
-                        $v('spec_spline_type'),$vf('spec_spline_major_dia'),$vf('spec_spline_minor_dia'),$vf('spec_spline_width'),
-                        $v('spec_spline_std'),$vf('spec_spline_nominal_dia'),
-                        $uid]);
-                }
-            }
+            // 齒輪規格的寫入收斂到共用庫（與報價單管理「新增料號」同一支、同一套規則）
+            require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
+            eg_gear_rows_save($pdo, (int)$d_id, ($Type === 'G') ? $gears : [], $uid);
 
             // ── 組合件 BOM 子件 ──
             $pdo->prepare("DELETE FROM d_setting_bom WHERE parent_d_id=?")->execute([$d_id]);
@@ -4700,12 +4653,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         try {
             $op = $_POST['op'];
             if ($op === 'list') {
-                echo json_encode(['success'=>true, 'data'=>$pdo->query(
-                    "SELECT gear_type_id, type_name, has_helix_angle, sort_order, is_active,
-                        COALESCE(spec_category,'standard') AS spec_category,
-                        display_template
-                     FROM dict_gear_type WHERE is_active=1 ORDER BY sort_order, gear_type_id"
-                )->fetchAll(PDO::FETCH_ASSOC)]);
+                // 查詢收斂到共用庫（與報價單管理的「新增料號」拿到的是同一份字典）
+                require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
+                echo json_encode(['success'=>true, 'data'=>eg_gear_type_rows($pdo)]);
             } elseif ($op === 'reorder') {
                 if (!$can_dict_part) throw new Exception('無修改權限（需要 A、CDR 或 CDRU 權限）');
                 $ids = array_filter(array_map('intval', explode(',', $_POST['ids']??'')));
@@ -7252,13 +7202,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 .part-label-chip.no-input:hover { background:#c8ece6; }
 
 /* ── Gear / BOM rows ── */
-.gear-row { background:#fffbf0; border:1px solid #fde8c0; border-radius:6px; padding:10px 12px 6px; margin-bottom:10px; position:relative; overflow:hidden; }
-.gear-row .row { margin-left:-5px; margin-right:-5px; }
-.gear-row .row > [class*="col-"] { padding-left:5px; padding-right:5px; }
-.gear-row .form-group { margin-bottom:5px; }
-.gear-row-title { font-size:11px; font-weight:700; color:#e67e22; margin-bottom:8px; text-transform:uppercase; letter-spacing:.5px; }
-.btn-remove-row { position:absolute; top:8px; right:8px; background:none; border:none; color:#c0392b; font-size:16px; cursor:pointer; padding:0 4px; line-height:1; }
-.btn-remove-row:hover { color:#e74c3c; }
+/* .gear-row / .btn-remove-row 的樣式已移至共用元件 views/pages/_gear_spec_ui.php */
 .bom-child-item { padding:8px 12px; cursor:pointer; border-bottom:1px solid #f5f5f5; }
 .bom-child-item:hover { background:#f0ebff; }
 .bom-child-item strong { color:#8e44ad; font-family:Consolas,monospace; }
@@ -8114,18 +8058,19 @@ body { background:#F6F1EA; }
 </div>
 
 <!-- ─ 齒輪設定（Type=G 時顯示）─ -->
-<div id="gear-section" style="display:none;">
-    <div class="form-section-title" style="color:#e67e22;"><i class="fa fa-cog fa-spin"></i> 齒輪規格設定</div>
-    <div id="gear-rows-wrap">
-        <!-- 動態渲染 -->
-    </div>
-    <?php if ($can_edit_gear): ?>
-    <button type="button" class="btn btn-xs btn-default" onclick="addGearRow()" style="margin-top:4px;">
-        <i class="fa fa-plus"></i> 新增齒型
-    </button>
-    <?php endif; ?>
-    <div class="id-hint" style="margin-top:4px;">一個料號可記錄多組齒型（如雙聯齒輪）</div>
-</div>
+<?php
+// 齒輪規格設定（齒型列）＝**全站唯一實作** views/pages/_gear_spec_ui.php，
+// 報價單管理「新增料號」跳窗載的是同一份，兩邊的欄位與規則永遠一致（鐵律4）。
+// 這裡 include 的位置刻意在齒輪區塊的 HTML 之前：外框由 eg_gear_spec_section() 輸出，
+// 函式必須先被定義；元件本身不依賴 jQuery，所以放在版型 JS 之前執行沒有問題。
+$GEAR_SPEC_CFG = [
+    'wrap_id' => 'gear-rows-wrap',
+    'd_id_el' => 'pf-d_id',
+    'can'     => ['edit' => (bool)$can_edit_gear, 'delete' => (bool)$can_delete_gear, 'modify' => (bool)$can_modify_existing_gear],
+];
+include __DIR__ . '/_gear_spec_ui.php';
+eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wrap', 'can_edit' => (bool)$can_edit_gear]);
+?>
 
 <!-- ─ 刀具規格（Type=H/OH 時顯示）─ 2026-08-24 由料號標籤改為專屬表 d_setting_tool -->
 <div id="tool-section" style="display:none;">
@@ -13820,18 +13765,9 @@ function collectToolSpec() {
     return o;
 }
 
-var gearRows = [];
+// 齒輪規格設定（gearRows / 齒型列渲染 / 鏈輪皮帶輪花鍵 / 齒輪等級）已抽成共用元件：views/pages/_gear_spec_ui.php
 var bomRows  = [];
-var gearTypeOptions = [];  // loaded from DB via reloadGearTypeOptions()
-var _gearQualityRef = [];  // loaded from DB via loadGearQualityRef()
 
-function gearTypeHasHelix(typeVal) {
-    if (!typeVal && typeVal !== 0) return false;
-    var sv = String(typeVal);  // convert int to string for comparison
-    var found = gearTypeOptions.filter(function(o){ return o.value===sv; });
-    if (found.length) return found[0].hasHelix;
-    return typeVal.indexOf('斜')>=0 || typeVal.indexOf('螺旋')>=0 || typeVal.indexOf('蝸')>=0;
-}
 
 // ── Type change handler ───────────────────────────────
 function onTypeChange(val, opts) {
@@ -14103,590 +14039,28 @@ function onAssemblyChange(checked) {
 }
 
 // ── Gear rows ─────────────────────────────────────────
-function addGearRow(data) {
-    data = data || {};
-    gearRows.push({
-        gear_id:              data.gear_id              || 0,
-        Gear_Type:            data.Gear_Type             || '',
-        Module:               data.Module                || '',
-        Teeth:                data.Teeth                 || '',
-        Face_Width:           data.Face_Width            || '',
-        Helix_Direction:      data.Helix_Direction       || '',
-        Helix_Angle_Str:      data.Helix_Angle_Str       || '',
-        Helix_Angle:          data.Helix_Angle           || '',
-        Pressure_Angle:       data.Pressure_Angle        || '',
-        Profile_Shift_X:      data.Profile_Shift_X       || '',
-        Workpiece_Length:     data.Workpiece_Length      || '',
-        Spec_No:              data.Spec_No               || '',
-        Remark_Gear:          data.Remark_Gear           || '',
-        Gear_Quality_Std:     data.gear_quality_std      || '',
-        Gear_Quality_Grade:   (data.gear_quality_grade !== null && data.gear_quality_grade !== undefined) ? String(data.gear_quality_grade) : '',
-        module_input_type:    data.module_input_type      || 'M',
-        module_display:       data.module_display         || '',
-        spec_chain_size:      data.spec_chain_size       || '',
-        spec_pitch:           data.spec_pitch            || '',
-        spec_roller_dia:      data.spec_roller_dia       || '',
-        spec_starts:          data.spec_starts           || '',
-        spec_pulley_profile:  data.spec_pulley_profile   || '',
-        spec_spline_type:        data.spec_spline_type         || '',
-        spec_spline_major_dia:   data.spec_spline_major_dia    || '',
-        spec_spline_minor_dia:   data.spec_spline_minor_dia    || '',
-        spec_spline_width:       data.spec_spline_width        || '',
-        spec_spline_std:         data.spec_spline_std          || '',
-        spec_spline_nominal_dia: data.spec_spline_nominal_dia  || ''
-    });
-    renderGearRows();
-}
-
-function removeGearRow(idx) {
-    gearRows.splice(idx, 1);
-    renderGearRows();
-}
-
-function renderGearRows() {
-    var wrap = document.getElementById('gear-rows-wrap');
-    var canDeleteGearRow  = CAN_DELETE_GEAR;
-    var dId = parseInt(document.getElementById('pf-d_id').value||'0');
-    if (!gearRows.length) {
-        wrap.innerHTML = '<div style="color:#aaa;font-size:12px;padding:6px 0;">尚未設定齒輪規格，點擊下方「新增齒型」</div>';
-        return;
-    }
-
-    var html = '';
-    gearRows.forEach(function(g, i) {
-        var isExisting = !!(g.gear_id && dId > 0);
-        var rowEditable = CAN_EDIT_GEAR && (!isExisting || CAN_MODIFY_EXISTING_GEAR);
-        var hasHelix = gearTypeHasHelix(g.Gear_Type);
-        var helixDisplay = hasHelix ? '' : 'display:none;';
-        var specCat = getGearSpecCategory(g.Gear_Type);
-        var isSprocket    = specCat === 'sprocket';
-        var isTimingPulley= specCat === 'timing_pulley';
-        var isSpline      = specCat === 'spline';
-        var isWormGear    = specCat === 'worm_gear';
-        var isStandard    = !isSprocket && !isTimingPulley && !isSpline;
-        // 決定模數輸入類型和顯示值（有 module_display 才能正確還原 CP/DP）
-        var mit = (g.module_display && g.module_display !== '')
-            ? (String(g.module_display).match(/^(M|CP|DP)/i) || ['','M'])[1].toUpperCase()
-            : 'M';
-        var ro = rowEditable ? '' : 'disabled';
-
-        // Build Gear_Type options
-        var typeOpts = '<option value="">— 選擇 —</option>';
-        gearTypeOptions.forEach(function(opt) {
-            typeOpts += '<option value="'+opt.value+'"'+(String(g.Gear_Type)===opt.value?' selected':'')+'>'+opt.label+'</option>';
-        });
-
-        // DMS angle fields
-        var dmsAngle = parseDMS(g.Helix_Angle_Str || String(g.Helix_Angle||''));
-
-        html += '<div class="gear-row" id="gear-row-'+i+'"'+(isExisting&&!CAN_MODIFY_EXISTING_GEAR?' style="opacity:.72;background:#f8f8f8;"':'')+' >';
-        html += '<div class="gear-row-title"><i class="fa fa-cog"></i> 齒型 ' + (i+1) + (isExisting&&!CAN_MODIFY_EXISTING_GEAR?' <span style="font-size:10px;color:#aaa;font-weight:normal;">(唯讀)</span>':'') + '</div>';
-        if (rowEditable && !isExisting) {
-            // new row: client-side remove
-            html += '<button type="button" class="btn-remove-row" onclick="removeGearRow('+i+')" title="移除"><i class="fa fa-times"></i></button>';
-        } else if (CAN_MODIFY_EXISTING_GEAR && isExisting) {
-            // existing row with full permission: show remove (client-side) or delete (server-side)
-            if (canDeleteGearRow && g.gear_id) {
-                html += '<button type="button" class="btn-remove-row" onclick="deleteGearRow('+g.gear_id+','+dId+')" title="立即刪除此齒型" style="color:#e74c3c;"><i class="fa fa-trash"></i></button>';
-            } else {
-                html += '<button type="button" class="btn-remove-row" onclick="removeGearRow('+i+')" title="移除"><i class="fa fa-times"></i></button>';
-            }
-        }
-        // CRU + existing row: no button at all
-
-        html += '<div class="row">';
-        // Gear Type (always visible)
-        html += '<div class="col-md-3"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">齒輪類型</label>';
-        html += '<select class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Gear_Type" onchange="onGearTypeChange('+i+',this.value)" '+ro+'>'+typeOpts+'</select>';
-        html += '</div></div>';
-
-        // ── 標準齒輪欄位（模數 M/CP/DP + 齒數 + 齒寬 + 壓力角）──────────────────
-        html += '<div class="gear-standard-fields-'+i+'"'+(isStandard?'':' style="display:none;"')+'>';
-        // Module with M/CP/DP toggle
-        html += '<div class="col-md-3" data-field-col="Module" data-gear-row="'+i+'"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;" id="lbl-module-'+i+'">模數</label>';
-        html += '<div style="display:flex;gap:3px;">';
-        html += '<select class="form-control input-sm" id="module-type-'+i+'" style="width:60px;flex-shrink:0;" onchange="onModuleTypeChange('+i+',this.value)" '+ro+'>';
-        html += '<option value="M"'+(mit==='M'?' selected':'')+'>M</option>';
-        html += '<option value="CP"'+(mit==='CP'?' selected':'')+'>CP</option>';
-        html += '<option value="DP"'+(mit==='DP'?' selected':'')+'>DP</option>';
-        html += '</select>';
-        var modDisplay;
-        if (g.module_display && g.module_display !== '') {
-            var _md2 = String(g.module_display).match(/^(?:M|CP|DP)(.+)$/i);
-            modDisplay = _md2 ? _md2[1] : g.module_display;
-        } else {
-            modDisplay = g.Module ? String(g.Module).replace(/^[Mm]/,'') : '';
-        }
-        html += '<input type="text" class="form-control input-sm gear-field" id="module-val-'+i+'" data-idx="'+i+'" data-field="Module" value="'+escHtml(modDisplay)+'" placeholder="2.5" onblur="formatModuleNew('+i+')" '+ro+'>';
-        html += '</div>';
-        html += '<div id="module-m-display-'+i+'" style="font-size:10px;color:#888;margin-top:2px;display:none;"></div>';
-        html += '</div></div>';
-        // Teeth
-        html += '<div class="col-md-2" data-field-col="Teeth" data-gear-row="'+i+'"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;" id="lbl-teeth-'+i+'">齒數</label>';
-        html += '<input type="number" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Teeth" value="'+escHtml(String(g.Teeth||''))+'" placeholder="32" '+ro+'>';
-        html += '</div></div>';
-        // Face Width
-        html += '<div class="col-md-2" data-field-col="Face_Width" data-gear-row="'+i+'"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">齒寬 (mm)</label>';
-        html += '<input type="text" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Face_Width" value="'+escHtml(trimFloat(g.Face_Width))+'" placeholder="20" '+ro+'>';
-        html += '</div></div>';
-        // Pressure Angle
-        html += '<div class="col-md-2" data-field-col="Pressure_Angle" data-gear-row="'+i+'"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">壓力角 (PA)</label>';
-        html += '<input type="text" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Pressure_Angle" value="'+escHtml(trimFloat(g.Pressure_Angle))+'" placeholder="20°" '+ro+'>';
-        html += '</div></div>';
-        html += '</div>'; // end gear-standard-fields
-
-        // ── 鏈輪欄位 ─────────────────────────────────────────────────────────────
-        html += '<div class="gear-sprocket-fields-'+i+'"'+(isSprocket?'':' style="display:none;"')+'>';
-        html += '<div class="col-md-3"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">鏈條規格</label>';
-        html += '<select class="form-control input-sm gear-field" data-idx="'+i+'" data-field="spec_chain_size" onchange="onChainSizeChange('+i+',this.value)" '+ro+'>';
-        html += '<option value="">— 選擇或自訂 —</option><option value="custom">自訂節距/滾子徑</option>';
-        html += '</select>';
-        html += '</div></div>';
-        html += '<div class="col-md-2"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">節距 P (mm)</label>';
-        html += '<input type="text" class="form-control input-sm gear-field" id="chain-pitch-'+i+'" data-idx="'+i+'" data-field="spec_pitch" value="'+escHtml(trimFloat(g.spec_pitch))+'" placeholder="12.7" oninput="calcSprocket('+i+')" '+ro+'>';
-        html += '</div></div>';
-        html += '<div class="col-md-2"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">滾子外徑 Dr (mm)</label>';
-        html += '<input type="text" class="form-control input-sm gear-field" id="chain-roller-'+i+'" data-idx="'+i+'" data-field="spec_roller_dia" value="'+escHtml(trimFloat(g.spec_roller_dia))+'" placeholder="7.95" oninput="calcSprocket('+i+')" '+ro+'>';
-        html += '</div></div>';
-        html += '<div class="col-md-2"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;" data-field-col="Teeth">齒數</label>';
-        html += '<input type="number" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Teeth" value="'+escHtml(String(g.Teeth||''))+'" placeholder="20" oninput="calcSprocket('+i+')" '+ro+'>';
-        html += '</div></div>';
-        html += '<div class="col-md-3"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">自動計算</label>';
-        html += '<div id="sprocket-calc-'+i+'" style="font-size:11px;color:#1a5276;background:#f0f4fb;padding:4px 8px;border-radius:4px;line-height:1.6;min-height:28px;"></div>';
-        html += '</div></div>';
-        html += '</div>'; // end sprocket fields
-
-        // ── 皮帶輪欄位 ───────────────────────────────────────────────────────────
-        html += '<div class="gear-pulley-fields-'+i+'"'+(isTimingPulley?'':' style="display:none;"')+'>';
-        html += '<div class="col-md-3"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">皮帶齒型</label>';
-        html += '<select class="form-control input-sm gear-field" data-idx="'+i+'" data-field="spec_pulley_profile" onchange="onBeltProfileChange('+i+',this.value)" '+ro+'>';
-        html += '<option value="">— 選擇 —</option>';
-        html += '</select></div></div>';
-        html += '<div class="col-md-2"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">齒數</label>';
-        html += '<input type="number" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Teeth" value="'+escHtml(String(g.Teeth||''))+'" placeholder="32" oninput="calcTimingPulley('+i+')" '+ro+'>';
-        html += '</div></div>';
-        html += '<div class="col-md-2"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">節距 (mm)</label>';
-        html += '<input type="text" class="form-control input-sm" id="pulley-pitch-'+i+'" value="'+escHtml(trimFloat(g.spec_pitch))+'" placeholder="自動" readonly style="background:#f5f5f5;">';
-        html += '</div></div>';
-        html += '<div class="col-md-2"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">自動計算 (PD/OD)</label>';
-        html += '<div id="pulley-calc-'+i+'" style="font-size:11px;color:#1a5276;background:#f0f4fb;padding:4px 8px;border-radius:4px;line-height:1.6;min-height:28px;"></div>';
-        html += '</div></div>';
-        html += '</div>'; // end pulley fields
-
-        // ── 蝸桿牙口數（worm_gear 才顯示，在 Row 1 末端）──────────────────────
-        html += '<div class="gear-worm-starts-'+i+'"'+(isWormGear?'':' style="display:none;"')+'>';
-        html += '<div class="col-md-2"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">牙口數（條）</label>';
-        html += '<input type="number" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="spec_starts" value="'+escHtml(String(g.spec_starts||''))+'" placeholder="1" min="1" '+ro+'>';
-        html += '</div></div>';
-        html += '</div>'; // end worm-starts
-
-        // ── 花鍵齒形（在 Row 1 末，僅花鍵顯示）─────────────────────────────────
-        html += '<div class="gear-spline-type-'+i+'"'+(isSpline?'':' style="display:none;"')+'>';
-        html += '<div class="col-md-3"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">花鍵標準</label>';
-        html += '<select class="form-control input-sm gear-field" data-idx="'+i+'" data-field="spec_spline_std" onchange="onSplineStdChange('+i+',this.value)" '+ro+'>';
-        html += '<option value="">— 選擇 —</option>';
-        ['DIN5480','ISO4156','ANSI B92.1','JIS B1603','其他'].forEach(function(s){
-            html += '<option value="'+s+'"'+(g.spec_spline_std===s?' selected':'')+'>'+s+'</option>';
-        });
-        html += '</select></div></div>';
-        var _invStds = ['DIN5480','ISO4156','ANSI B92.1','JIS B1603'];
-        var _stdIsInv = _invStds.indexOf(g.spec_spline_std) >= 0;
-        // 已知標準（均為漸開線）自動鎖定齒形，不顯示選擇器
-        html += '<div class="col-md-3 spline-type-block-'+i+'"'+(_stdIsInv?' style="display:none;"':'')+'><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">花鍵齒形</label>';
-        html += '<select class="form-control input-sm gear-field" data-idx="'+i+'" data-field="spec_spline_type" onchange="onSplineTypeChange('+i+',this.value)" '+ro+'>';
-        html += '<option value="">— 選擇 —</option>';
-        ['漸開線','矩形','三角'].forEach(function(t){
-            html += '<option value="'+t+'"'+(g.spec_spline_type===t?' selected':'')+'>'+t+'</option>';
-        });
-        html += '</select></div></div>';
-        html += '</div>'; // end spline-type
-
-        // ── 花鍵 detail（漸開線/矩形/三角，在 Row 1 內，緊接花鍵齒形）──────────
-        var spInvDisplay = (!g.spec_spline_type || g.spec_spline_type==='漸開線' || g.spec_spline_type==='三角') ? '' : 'display:none;';
-        var spRectDisplay = g.spec_spline_type==='矩形' ? '' : 'display:none;';
-        html += '<div class="gear-spline-fields-'+i+'"'+(isSpline?'':' style="display:none;"')+'>';
-        html += '<div class="col-md-2 spline-inv-'+i+'" style="'+spInvDisplay+'"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">模數</label>';
-        html += '<input type="text" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Module" value="'+escHtml(g.Module ? String(g.Module).replace(/^[Mm]/,'') : '')+'" placeholder="2" '+ro+'>';
-        html += '</div></div>';
-        html += '<div class="col-md-2 spline-inv-'+i+'" style="'+spInvDisplay+'"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">鍵數</label>';
-        html += '<input type="number" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Teeth" value="'+escHtml(String(g.Teeth||''))+'" placeholder="6" '+ro+'>';
-        html += '</div></div>';
-        html += '<div class="col-md-2 spline-inv-'+i+'" style="'+spInvDisplay+'"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">壓力角 (PA)</label>';
-        html += '<input type="text" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Pressure_Angle" value="'+escHtml(g.Pressure_Angle||'')+'" placeholder="30°" '+ro+'>';
-        html += '</div></div>';
-        html += '<div class="col-md-2 spline-inv-'+i+'" style="'+spInvDisplay+'"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">公稱直徑 D<sub>B</sub></label>';
-        html += '<input type="text" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="spec_spline_nominal_dia" value="'+escHtml(trimFloat(g.spec_spline_nominal_dia))+'" placeholder="20" '+ro+'>';
-        html += '</div></div>';
-        html += '<div class="col-md-2 spline-rect-'+i+'" style="'+spRectDisplay+'"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">鍵數</label>';
-        html += '<input type="number" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Teeth" value="'+escHtml(String(g.Teeth||''))+'" placeholder="6" '+ro+'>';
-        html += '</div></div>';
-        html += '<div class="col-md-2 spline-rect-'+i+'" style="'+spRectDisplay+'"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">小徑 (mm)</label>';
-        html += '<input type="text" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="spec_spline_minor_dia" value="'+escHtml(trimFloat(g.spec_spline_minor_dia))+'" placeholder="23" '+ro+'>';
-        html += '</div></div>';
-        html += '<div class="col-md-2 spline-rect-'+i+'" style="'+spRectDisplay+'"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">大徑 (mm)</label>';
-        html += '<input type="text" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="spec_spline_major_dia" value="'+escHtml(trimFloat(g.spec_spline_major_dia))+'" placeholder="26" '+ro+'>';
-        html += '</div></div>';
-        html += '<div class="col-md-2 spline-rect-'+i+'" style="'+spRectDisplay+'"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">鍵寬 (mm)</label>';
-        html += '<input type="text" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="spec_spline_width" value="'+escHtml(trimFloat(g.spec_spline_width))+'" placeholder="6" '+ro+'>';
-        html += '</div></div>';
-        html += '</div>'; // end spline-fields
-
-        html += '</div>'; // end row 1
-
-        // Row 2 - helix + extras
-        html += '<div class="row">';
-        // Helix group (show/hide based on type)
-        html += '<div class="col-md-2 helix-group-'+i+'" style="'+helixDisplay+'">';
-        html += '<div class="form-group" style="margin-bottom:6px;"><label style="font-size:11px;">旋向</label>';
-        html += '<select class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Helix_Direction" '+ro+'>';
-        html += '<option value="">—</option>';
-        html += '<option value="RH"'+(g.Helix_Direction==='RH'?' selected':'')+'>RH 右旋</option>';
-        html += '<option value="LH"'+(g.Helix_Direction==='LH'?' selected':'')+'>LH 左旋</option>';
-        html += '</select></div></div>';
-
-        // Helix angle
-        html += '<div class="col-md-4 helix-group-'+i+'" style="'+helixDisplay+'">';
-        html += '<div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">螺旋角 &nbsp;';
-        html += '<label style="font-weight:normal;font-size:10px;cursor:pointer;margin:0;">';
-        html += '<input type="radio" name="helix-mode-'+i+'" value="dec" '+(dmsAngle.mode!=='dms'?'checked':'')+' onchange="switchHelixMode('+i+',\'dec\')" style="margin-right:2px;">十進位</label> ';
-        html += '<label style="font-weight:normal;font-size:10px;cursor:pointer;margin:0;">';
-        html += '<input type="radio" name="helix-mode-'+i+'" value="dms" '+(dmsAngle.mode==='dms'?'checked':'')+' onchange="switchHelixMode('+i+',\'dms\')" style="margin-right:2px;">度分秒</label>';
-        html += '</label>';
-        // decimal mode
-        html += '<div id="helix-dec-'+i+'" style="'+(dmsAngle.mode==='dms'?'display:none;':'')+'">';
-        html += '<input type="text" class="form-control input-sm gear-field" id="helix-dec-val-'+i+'" data-idx="'+i+'" data-field="Helix_Angle_Str" value="'+escHtml(dmsAngle.mode!=='dms'?(g.Helix_Angle_Str||trimFloat(g.Helix_Angle)):'')+'" placeholder="15.5" '+ro+'>';
-        html += '</div>';
-        // DMS mode
-        html += '<div id="helix-dms-'+i+'" style="'+(dmsAngle.mode==='dms'?'':'display:none;')+'">';
-        html += '<div class="input-group" style="display:flex;gap:3px;">';
-        html += '<input type="number" class="form-control input-sm" id="helix-d-'+i+'" placeholder="度" value="'+escHtml(String(dmsAngle.d||''))+'" style="width:50px;" '+ro+'>';
-        html += '<input type="number" class="form-control input-sm" id="helix-m-'+i+'" placeholder="分" value="'+escHtml(String(dmsAngle.m||''))+'" style="width:50px;" onchange="syncDMS('+i+')" '+ro+'>';
-        html += '<input type="number" class="form-control input-sm" id="helix-s-'+i+'" placeholder="秒" value="'+escHtml(String(dmsAngle.s||''))+'" style="width:50px;" onchange="syncDMS('+i+')" '+ro+'>';
-        html += '</div></div>';
-        html += '</div></div></div>';
-
-        // Profile Shift X（僅標準齒輪類型顯示）
-        html += '<div class="col-md-2 gear-shift-block-'+i+'"'+(isStandard?'':' style="display:none;"')+' data-field-col="Profile_Shift_X" data-gear-row="'+i+'"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">轉位係數 X</label>';
-        html += '<input type="text" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Profile_Shift_X" value="'+escHtml(trimFloat(g.Profile_Shift_X))+'" placeholder="0" '+ro+'>';
-        html += '</div></div>';
-        // Remark
-        html += '<div class="col-md-3" data-field-col="Remark_Gear" data-gear-row="'+i+'"><div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">備註</label>';
-        html += '<input type="text" class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Remark_Gear" value="'+escHtml(g.Remark_Gear)+'" placeholder="備用說明" '+ro+'>';
-        html += '</div></div>';
-        // Gear Quality
-        html += '<div class="col-md-3 gear-quality-block-'+i+'"'+(isSprocket?' style="display:none;"':'')+'>';
-        html += '<div class="form-group" style="margin-bottom:6px;">';
-        html += '<label style="font-size:11px;">齒輪等級</label>';
-        html += '<div style="display:flex;gap:4px;">';
-        html += '<select class="form-control input-sm gear-field" data-idx="'+i+'" data-field="Gear_Quality_Std" style="width:82px;" onchange="onGearQualityStdChange('+i+',this.value)" '+ro+'>';
-        html += '<option value="">—</option>';
-        ['JIS','ISO','DIN','AGMA'].forEach(function(s){ html += '<option value="'+s+'"'+(g.Gear_Quality_Std===s?' selected':'')+'>'+s+'</option>'; });
-        html += '</select>';
-        html += '<select class="form-control input-sm gear-field" id="gq-grade-'+i+'" data-idx="'+i+'" data-field="Gear_Quality_Grade" style="width:75px;" '+ro+'>';
-        html += _buildGradeOpts(g.Gear_Quality_Std, g.Gear_Quality_Grade);
-        html += '</select>';
-        html += '</div></div></div>';
-        html += '</div>'; // end row2
 
 
-        html += '</div>'; // end gear-row
-    });
-
-    wrap.innerHTML = html;
-
-    // bind live sync
-    wrap.querySelectorAll('.gear-field').forEach(function(el) {
-        ['change','input'].forEach(function(ev) {
-            el.addEventListener(ev, function() {
-                var idx = parseInt(this.dataset.idx);
-                var field = this.dataset.field;
-                if (!isNaN(idx) && gearRows[idx]) gearRows[idx][field] = this.value;
-            });
-        });
-    });
-
-    // 初始化鏈輪/皮帶輪下拉與計算
-    gearRows.forEach(function(g, i) {
-        // 初始化鏈輪/皮帶輪下拉與計算
-        var cat = getGearSpecCategory(g.Gear_Type);
-        if (cat === 'sprocket') _initChainSizeSelect(i, g.spec_chain_size);
-        if (cat === 'timing_pulley') _initBeltProfileSelect(i, g.spec_pulley_profile);
-    });
-    _bindGearKeyNav();
-}
 
 // ── 齒輪類型切換：顯示/隱藏對應欄位區塊 ──────────────────────────────
-function onGearTypeChange(idx, val) {
-    gearRows[idx].Gear_Type = val;
-    var hasHelix = gearTypeHasHelix(val);
-    document.querySelectorAll('.helix-group-'+idx).forEach(function(el){ el.style.display = hasHelix?'':'none'; });
-    var cat = getGearSpecCategory(val);
-    var isSprocket = cat==='sprocket', isPulley = cat==='timing_pulley', isSpline = cat==='spline', isWorm = cat==='worm_gear';
-    var isStd = !isSprocket && !isPulley && !isSpline;
-    var stdEl = document.querySelector('.gear-standard-fields-'+idx);
-    var spkEl = document.querySelector('.gear-sprocket-fields-'+idx);
-    var puEl  = document.querySelector('.gear-pulley-fields-'+idx);
-    var splEl = document.querySelector('.gear-spline-fields-'+idx);
-    var gqEl  = document.querySelector('.gear-quality-block-'+idx);
-    var gsEl  = document.querySelector('.gear-shift-block-'+idx);
-    var gwEl  = document.querySelector('.gear-worm-starts-'+idx);
-    var gstEl = document.querySelector('.gear-spline-type-'+idx);
-    if (stdEl)  stdEl.style.display  = isStd ? '' : 'none';
-    if (spkEl)  spkEl.style.display  = isSprocket ? '' : 'none';
-    if (puEl)   puEl.style.display   = isPulley ? '' : 'none';
-    if (splEl)  splEl.style.display  = isSpline ? '' : 'none';
-    if (gqEl)   gqEl.style.display   = isSprocket ? 'none' : '';
-    if (gsEl)   gsEl.style.display   = isStd ? '' : 'none';
-    if (gwEl)   gwEl.style.display   = isWorm ? '' : 'none';
-    if (gstEl)  gstEl.style.display  = isSpline ? '' : 'none';
-    if (isSprocket) _initChainSizeSelect(idx, gearRows[idx].spec_chain_size||'');
-    if (isPulley)   _initBeltProfileSelect(idx, gearRows[idx].spec_pulley_profile||'');
-}
 
 // ── 模數 M/CP/DP 切換 ─────────────────────────────────────────────────
-function onModuleTypeChange(idx, mit) {
-    gearRows[idx].module_input_type = mit;
-    var inp = document.getElementById('module-val-'+idx);
-    var disp = document.getElementById('module-m-display-'+idx);
-    if (!inp) return;
-    var v = parseFloat(inp.value);
-    if (!isNaN(v) && v > 0) {
-        var mVal;
-        if (mit==='M')  mVal = v;
-        else if (mit==='CP') mVal = v / Math.PI;
-        else if (mit==='DP') mVal = 25.4 / v;
-        gearRows[idx].module_display = mit + trimFloat(String(v));
-        if (disp) {
-            if (mit!=='M') {
-                var mStr = trimFloat(mVal.toFixed(6));
-                disp.textContent = '= M'+mStr;
-                disp.style.display = '';
-                gearRows[idx].Module = 'M'+mStr;
-            } else {
-                disp.style.display = 'none';
-                gearRows[idx].Module = 'M'+(inp.value||'');
-            }
-        }
-    }
-}
 
-function formatModuleNew(idx) {
-    var mitSel = document.getElementById('module-type-'+idx);
-    var inp    = document.getElementById('module-val-'+idx);
-    var disp   = document.getElementById('module-m-display-'+idx);
-    if (!inp) return;
-    var mit = mitSel ? mitSel.value : 'M';
-    var v   = parseFloat(inp.value);
-    if (!isNaN(v) && v > 0) {
-        var mVal;
-        if (mit==='M')  mVal = v;
-        else if (mit==='CP') mVal = v / Math.PI;
-        else if (mit==='DP') mVal = 25.4 / v;
-        var mStr = trimFloat(mVal.toPrecision(8));
-        gearRows[idx].module_input_type = mit;
-        gearRows[idx].Module = 'M'+mStr;
-        gearRows[idx].module_display = mit + trimFloat(String(v));
-        if (disp && mit!=='M') { disp.textContent = '= M'+mStr; disp.style.display = ''; }
-        else if (disp) { disp.style.display = 'none'; }
-    }
-}
 
 // ── 鏈輪：初始化下拉 & 事件 ─────────────────────────────────────────
-function _initChainSizeSelect(idx, currentVal) {
-    loadChainSizes(function(chains) {
-        var sel = document.querySelector('.gear-sprocket-fields-'+idx+' select[data-field="spec_chain_size"]');
-        if (!sel) return;
-        var existing = sel.innerHTML.replace(/<option value="custom">.*<\/option>/,'');
-        // rebuild options
-        var opts = '<option value="">— 選擇或自訂 —</option>';
-        var isCustom = currentVal && !chains.some(function(c){ return c.chain_size===currentVal; });
-        chains.forEach(function(c) {
-            opts += '<option value="'+escHtml(c.chain_size)+'"'+(c.chain_size===currentVal?' selected':'')+'>'+escHtml(c.chain_size)+' (P='+c.pitch_mm+', Dr='+c.roller_dia_mm+') '+c.chain_std+'</option>';
-        });
-        opts += '<option value="custom"'+(isCustom?' selected':'')+'>自訂節距/滾子徑</option>';
-        sel.innerHTML = opts;
-        if (currentVal && !isCustom) _fillChainSize(idx, currentVal, chains);
-        if (isCustom) {
-            var pitchEl2 = document.getElementById('chain-pitch-'+idx);
-            var rollerEl2 = document.getElementById('chain-roller-'+idx);
-            if (pitchEl2)  { pitchEl2.readOnly=false;  pitchEl2.style.background=''; }
-            if (rollerEl2) { rollerEl2.readOnly=false; rollerEl2.style.background=''; }
-        }
-        calcSprocket(idx);
-    });
-}
 
-function onChainSizeChange(idx, val) {
-    gearRows[idx].spec_chain_size = val;
-    if (val === 'custom') {
-        var pitchEl = document.getElementById('chain-pitch-'+idx);
-        var rollerEl = document.getElementById('chain-roller-'+idx);
-        if (pitchEl)  { pitchEl.readOnly=false;  pitchEl.style.background=''; pitchEl.value=''; }
-        if (rollerEl) { rollerEl.readOnly=false; rollerEl.style.background=''; rollerEl.value=''; }
-        gearRows[idx].spec_pitch = '';
-        gearRows[idx].spec_roller_dia = '';
-        return;
-    }
-    loadChainSizes(function(chains){ _fillChainSize(idx, val, chains); });
-}
 
-function _fillChainSize(idx, val, chains) {
-    var c = chains.filter(function(x){ return x.chain_size===val; })[0];
-    if (!c) return;
-    var pitchEl  = document.getElementById('chain-pitch-'+idx);
-    var rollerEl = document.getElementById('chain-roller-'+idx);
-    if (pitchEl)  { pitchEl.value=c.pitch_mm;    pitchEl.readOnly=true;  pitchEl.style.background='#f5f5f5'; }
-    if (rollerEl) { rollerEl.value=c.roller_dia_mm; rollerEl.readOnly=true; rollerEl.style.background='#f5f5f5'; }
-    gearRows[idx].spec_pitch = c.pitch_mm;
-    gearRows[idx].spec_roller_dia = c.roller_dia_mm;
-    calcSprocket(idx);
-}
 
-function calcSprocket(idx) {
-    var P  = parseFloat(document.getElementById('chain-pitch-'+idx)  ? document.getElementById('chain-pitch-'+idx).value  : '');
-    var Dr = parseFloat(document.getElementById('chain-roller-'+idx) ? document.getElementById('chain-roller-'+idx).value : '');
-    var Z  = parseInt((document.querySelector('.gear-sprocket-fields-'+idx+' input[data-field="Teeth"]')||{}).value||'');
-    var el = document.getElementById('sprocket-calc-'+idx);
-    if (!el) return;
-    if (!P || !Z || Z<=0) { el.innerHTML = '<span style="color:#aaa;">需要 P、Z 才能計算</span>'; return; }
-    var PCD = P / Math.sin(Math.PI / Z);
-    var OD  = P * (0.6 + 1/Math.tan(Math.PI/Z));
-    var RD  = Dr ? (PCD - Dr) : null;
-    el.innerHTML = '<b>PCD</b> = ' + PCD.toFixed(3) + ' mm'
-        + (RD!==null ? '<br><b>根圓徑</b> = '+RD.toFixed(3)+' mm' : '')
-        + '<br><b>OD ≈</b> ' + OD.toFixed(3) + ' mm';
-}
 
 // ── 皮帶輪：初始化下拉 & 事件 ────────────────────────────────────────
-function _initBeltProfileSelect(idx, currentVal) {
-    loadBeltProfiles(function(profiles) {
-        var sel = document.querySelector('.gear-pulley-fields-'+idx+' select[data-field="spec_pulley_profile"]');
-        if (!sel) return;
-        var opts = '<option value="">— 選擇 —</option>';
-        profiles.forEach(function(p){
-            opts += '<option value="'+escHtml(p.profile_code)+'"'+(p.profile_code===currentVal?' selected':'')+'>'+escHtml(p.profile_code)+' (P='+p.pitch_mm+'mm '+p.belt_standard+')</option>';
-        });
-        sel.innerHTML = opts;
-        if (currentVal) _fillBeltProfile(idx, currentVal, profiles);
-    });
-}
 
-function onBeltProfileChange(idx, val) {
-    gearRows[idx].spec_pulley_profile = val;
-    loadBeltProfiles(function(profiles){ _fillBeltProfile(idx, val, profiles); });
-}
 
-function _fillBeltProfile(idx, val, profiles) {
-    var p = profiles.filter(function(x){ return x.profile_code===val; })[0];
-    var pitchEl = document.getElementById('pulley-pitch-'+idx);
-    if (p) {
-        if (pitchEl) pitchEl.value = p.pitch_mm;
-        gearRows[idx].spec_pitch = p.pitch_mm;
-        gearRows[idx].spec_pld   = p.pld_mm;
-    }
-    calcTimingPulley(idx);
-}
 
-function calcTimingPulley(idx) {
-    var teethEl = document.querySelector('.gear-pulley-fields-'+idx+' input[data-field="Teeth"]');
-    var Z = parseInt(teethEl ? teethEl.value : '');
-    var pitchEl = document.getElementById('pulley-pitch-'+idx);
-    var P = parseFloat(pitchEl ? pitchEl.value : '');
-    var g = gearRows[idx]; var PLD = parseFloat(g ? g.spec_pld||0 : 0);
-    var el = document.getElementById('pulley-calc-'+idx);
-    if (!el) return;
-    if (!P || !Z || Z<=0) { el.innerHTML = '<span style="color:#aaa;">需要齒型、齒數才能計算</span>'; return; }
-    var PD = (Z * P) / Math.PI;
-    var OD = PD - (2 * PLD);
-    el.innerHTML = '<b>PD</b> = '+PD.toFixed(3)+' mm<br><b>OD</b> = '+OD.toFixed(3)+' mm';
-}
 
-function getGearTypeName(typeVal) {
-    if (!typeVal) return '';
-    var sv = String(typeVal);
-    var found = gearTypeOptions.filter(function(o){ return o.value===sv; });
-    return found.length ? found[0].label : '';
-}
 
 // ── 花鍵齒形切換 ──────────────────────────────────────────────────────
-function onSplineTypeChange(idx, val) {
-    gearRows[idx].spec_spline_type = val;
-    var isRect = val==='矩形';
-    document.querySelectorAll('.spline-inv-'+idx).forEach(function(el){ el.style.display=isRect?'none':''; });
-    document.querySelectorAll('.spline-rect-'+idx).forEach(function(el){ el.style.display=isRect?'':'none'; });
-}
 
-function onSplineStdChange(idx, val) {
-    gearRows[idx].spec_spline_std = val;
-    var invStds = ['DIN5480','ISO4156','ANSI B92.1','JIS B1603'];
-    var isInvStd = invStds.indexOf(val) >= 0;
-    var typeBlock = document.querySelector('.spline-type-block-'+idx);
-    if (typeBlock) typeBlock.style.display = isInvStd ? 'none' : '';
-    if (isInvStd) {
-        gearRows[idx].spec_spline_type = '漸開線';
-        var typeEl = document.querySelector('[data-idx="'+idx+'"][data-field="spec_spline_type"]');
-        if (typeEl) typeEl.value = '漸開線';
-        // 確保顯示漸開線欄位組
-        document.querySelectorAll('.spline-inv-'+idx).forEach(function(el){ el.style.display=''; });
-        document.querySelectorAll('.spline-rect-'+idx).forEach(function(el){ el.style.display='none'; });
-    }
-}
 
-function _bindGearKeyNav() {
-    var wrap = document.getElementById('gear-rows-wrap');
-    if (!wrap || wrap._keyNavBound) return;
-    wrap._keyNavBound = true;
-    wrap.addEventListener('keydown', function(e) {
-        var el = e.target;
-        // Radio buttons: left/right arrow cycles options in the same name group
-        if (el.type === 'radio' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
-            e.preventDefault();
-            var radios = Array.from(wrap.querySelectorAll('input[type=radio][name="'+el.name+'"]'));
-            var idx = radios.indexOf(el);
-            var next = e.key === 'ArrowRight' ? (idx + 1) % radios.length : (idx - 1 + radios.length) % radios.length;
-            radios[next].click();
-            radios[next].focus();
-            return;
-        }
-        // Enter: advance to next visible+enabled input or select (not radio, not hidden, not button)
-        if (e.key === 'Enter' && el.tagName !== 'BUTTON' && el.type !== 'radio') {
-            e.preventDefault();
-            var all = Array.from(wrap.querySelectorAll(
-                'input:not([type=radio]):not([type=hidden]):not([disabled]), select:not([disabled])'
-            )).filter(function(f) { return f.offsetParent !== null; });
-            var cur = all.indexOf(el);
-            if (cur >= 0 && cur < all.length - 1) all[cur + 1].focus();
-        }
-    });
-}
 
 
 // Gear type change → show/hide helix group + apply field config
@@ -14709,67 +14083,11 @@ function trimFloat(v) {
 }
 
 // DMS parsing
-function parseDMS(str) {
-    if (!str) return {mode:'dec', d:'', m:'', s:''};
-    str = String(str);
-    // pattern like 11°18'5" or 11d18m5s
-    var dmsMatch = str.match(/^(\d+)[°d]\s*(\d+)[\'m]\s*(\d+(?:\.\d+)?)[\"s]?/);
-    if (dmsMatch) {
-        return {mode:'dms', d:dmsMatch[1], m:dmsMatch[2], s:dmsMatch[3]};
-    }
-    return {mode:'dec', d:'', m:'', s:''};
-}
 
-function dmsToDecimal(d, m, s) {
-    return parseFloat(d||0) + parseFloat(m||0)/60 + parseFloat(s||0)/3600;
-}
 
-function switchHelixMode(idx, mode) {
-    var decDiv = document.getElementById('helix-dec-'+idx);
-    var dmsDiv = document.getElementById('helix-dms-'+idx);
-    if (mode === 'dms') {
-        decDiv.style.display = 'none';
-        dmsDiv.style.display = '';
-    } else {
-        decDiv.style.display = '';
-        dmsDiv.style.display = 'none';
-    }
-}
 
-function syncDMS(idx) {
-    var d = parseFloat(document.getElementById('helix-d-'+idx).value||0);
-    var m = parseFloat(document.getElementById('helix-m-'+idx).value||0);
-    var s = parseFloat(document.getElementById('helix-s-'+idx).value||0);
-    var dec = dmsToDecimal(d,m,s);
-    var str = d + '°' + m + '\'' + s + '"';
-    if (gearRows[idx]) {
-        gearRows[idx].Helix_Angle = dec;
-        gearRows[idx].Helix_Angle_Str = str;
-    }
-}
 
 // Collect gear data before submit
-function collectGearRows() {
-    gearRows.forEach(function(g, i) {
-        // Sync all gear-fields
-        var row = document.getElementById('gear-row-'+i);
-        if (!row) return;
-        row.querySelectorAll('.gear-field').forEach(function(el) {
-            if (el.offsetParent !== null) g[el.dataset.field] = el.value;
-        });
-        // Check if DMS mode active
-        var dmsDiv = document.getElementById('helix-dms-'+i);
-        if (dmsDiv && dmsDiv.style.display !== 'none') {
-            syncDMS(i);
-        } else {
-            var decVal = document.getElementById('helix-dec-val-'+i);
-            if (decVal) {
-                g.Helix_Angle_Str = decVal.value;
-                g.Helix_Angle = parseFloat(decVal.value) || '';
-            }
-        }
-    });
-}
 
 // ── BOM rows ──────────────────────────────────────────
 function renderBomRows() {
@@ -23655,89 +22973,16 @@ function _reloadWorkpieceOptions() {
     });
 }
 
-function loadGearQualityRef(callback) {
-    api({ action:'manage_gear_quality', op:'get_ref' }).done(function(r) {
-        if (r.success) _gearQualityRef = r.data || [];
-        if (callback) callback();
-    });
-}
 
-function _buildGradeOpts(std, selectedGrade) {
-    var opts = '<option value="">— 等級 —</option>';
-    if (!std || !_gearQualityRef.length) return opts;
-    var colMap = { JIS:'jis_grade', ISO:'iso_grade', DIN:'din_grade', AGMA:'agma_grade' };
-    var col = colMap[std];
-    if (!col) return opts;
-    var seen = {};
-    _gearQualityRef.forEach(function(row) {
-        var v = row[col];
-        if (v === null || v === undefined || v === '') return;
-        var vs = String(v);
-        if (seen[vs]) return;
-        seen[vs] = true;
-        opts += '<option value="'+vs+'"'+(vs===String(selectedGrade)?' selected':'')+'>'+vs+'</option>';
-    });
-    return opts;
-}
 
-function onGearQualityStdChange(idx, std) {
-    if (!isNaN(idx) && gearRows[idx]) {
-        gearRows[idx]['Gear_Quality_Std']   = std;
-        gearRows[idx]['Gear_Quality_Grade'] = '';
-    }
-    var gradeSelect = document.getElementById('gq-grade-'+idx);
-    if (gradeSelect) {
-        gradeSelect.innerHTML = _buildGradeOpts(std, '');
-        gradeSelect.value = '';
-    }
-}
 
 // Also load gear types for the gear modal rows when dict is updated
-function reloadGearTypeOptions(callback) {
-    api({ action:'manage_gear_types', op:'list' }).done(function(r) {
-        if (r.success) {
-            gearTypeOptions = [];
-            r.data.forEach(function(g) {
-                gearTypeOptions.push({
-                    value:       String(g.gear_type_id),
-                    label:       g.type_name||'',
-                    hasHelix:    g.has_helix_angle=='1'||g.has_helix_angle===1,
-                    specCategory: g.spec_category||'standard',
-                    displayTemplate: g.display_template||''
-                });
-            });
-        }
-        if (callback) callback();
-    });
-}
 
 // ── 查詢鏈條規格字典 ──
-var _chainSizeCache = null;
-function loadChainSizes(cb) {
-    if (_chainSizeCache) { cb(_chainSizeCache); return; }
-    api({ action:'get_chain_sizes' }).done(function(r) {
-        _chainSizeCache = (r.success && r.data) ? r.data : [];
-        cb(_chainSizeCache);
-    }).fail(function(){ _chainSizeCache=[]; cb([]); });
-}
 
 // ── 查詢皮帶輪齒型字典 ──
-var _beltProfileCache = null;
-function loadBeltProfiles(cb) {
-    if (_beltProfileCache) { cb(_beltProfileCache); return; }
-    api({ action:'get_belt_profiles' }).done(function(r) {
-        _beltProfileCache = (r.success && r.data) ? r.data : [];
-        cb(_beltProfileCache);
-    }).fail(function(){ _beltProfileCache=[]; cb([]); });
-}
 
 // ── 取得齒輪類型的 spec_category ──
-function getGearSpecCategory(typeVal) {
-    if (!typeVal) return 'standard';
-    var sv = String(typeVal);
-    var found = gearTypeOptions.filter(function(o){ return o.value===sv; });
-    return found.length ? (found[0].specCategory||'standard') : 'standard';
-}
 
 // ═══════════════════════════════════════════════════════
 // ─── Customer Batch ─────────────────────────────────────
