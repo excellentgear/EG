@@ -151,3 +151,76 @@ function eg_gear_spec_tidy(string $s): string {
     }
     return implode(' / ', $segs);
 }
+
+/**
+ * 「齒輪類型」下拉的選項——**全站唯一實作**（2026-10-02 新增）。
+ *
+ * 踩過的坑：`d_setting_gear.Gear_Type` 是 **int，外鍵指向 `dict_gear_type.gear_type_id`**，
+ * 不是中文名稱。報價單管理的「新增料號」跳窗把選項寫死成 `<option value="直齒">`，
+ * 於是只要工件種類選齒輪並填了齒輪規格，存檔就一定炸
+ * `1366 Incorrect integer value: '直齒' for column 'Gear_Type'`（整個交易回滾，連料號本身也存不進去）；
+ * 而「修改既有齒輪料號」更糟——DB 存的是 id，寫死的中文選項一個都對不上，
+ * 下拉會退回「請選擇」，一按儲存就把 Gear_Type 寫成 NULL，
+ * 連帶讓 `eg_gear_keep_restore()` 的配對失敗（它要求齒型相同才還原），
+ * 鏈輪規格／花鍵尺寸／齒輪等級一起靜默消失。
+ *
+ * 所以任何頁面要讓人挑齒輪類型，一律呼叫這支拿選項、`value` 一律存 gear_type_id，
+ * **不要再在頁面裡寫死一份中文清單**（鐵律4：管理員在主檔管理改名或新增類型，寫死的那份不會跟著變也不報錯）。
+ *
+ * @return array [ ['value'=>'1','label'=>'直齒','hasHelix'=>false,'specCategory'=>'standard'], ... ]
+ *               只回啟用中的，排序與主檔管理的齒輪類型字典完全相同
+ */
+function eg_gear_type_options(PDO $db): array {
+    try {
+        $st = $db->query("SELECT gear_type_id, type_name, has_helix_angle, spec_category
+                            FROM dict_gear_type
+                           WHERE is_active = 1
+                           ORDER BY sort_order, gear_type_id");
+        $out = [];
+        foreach (($st->fetchAll(PDO::FETCH_ASSOC) ?: []) as $r) {
+            $out[] = [
+                'value'        => (string)$r['gear_type_id'],
+                'label'        => (string)$r['type_name'],
+                'hasHelix'     => ((int)$r['has_helix_angle'] === 1),
+                'specCategory' => ((string)($r['spec_category'] ?? '') !== '') ? (string)$r['spec_category'] : 'standard',
+            ];
+        }
+        return $out;
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 壓力角沒填時要補的預設值——**與主檔管理（views/pages/master_data_management.php）同一條規則**：
+ * 花鍵 30 度、其餘（直齒／螺旋齒…）20 度。
+ * `Pressure_Angle` 是 varchar，所以回傳字串。
+ */
+function eg_gear_default_pressure_angle(PDO $db, $gearTypeId): string {
+    static $cat = null;
+    if ($cat === null) {
+        $cat = [];
+        try {
+            foreach (($db->query("SELECT gear_type_id, spec_category FROM dict_gear_type")->fetchAll(PDO::FETCH_ASSOC) ?: []) as $r) {
+                $cat[(int)$r['gear_type_id']] = (string)$r['spec_category'];
+            }
+        } catch (Throwable $e) { $cat = []; }
+    }
+    return (($cat[(int)$gearTypeId] ?? 'standard') === 'spline') ? '30' : '20';
+}
+
+/**
+ * 把前端送來的「齒輪類型」正規化成 `d_setting_gear.Gear_Type` 要存的 int。
+ * 收 id（正常情況）也收類型名稱——後者是給「使用者的分頁在改版前就開著、送來的還是舊的中文值」
+ * 這種情況用的退路，讓它自己對回 id 而不是整筆存檔失敗。
+ * @return int|null  空值回 null；對不到任何啟用中的類型回 false（呼叫端自己決定要不要擋）
+ */
+function eg_gear_type_id(PDO $db, $v) {
+    $s = trim((string)($v ?? ''));
+    if ($s === '') return null;
+    if (ctype_digit($s)) return (int)$s;
+    try {
+        $st = $db->prepare("SELECT gear_type_id FROM dict_gear_type WHERE type_name = ? ORDER BY is_active DESC, sort_order, gear_type_id LIMIT 1");
+        $st->execute([$s]);
+        $id = $st->fetchColumn();
+        return $id ? (int)$id : false;
+    } catch (Throwable $e) { return false; }
+}

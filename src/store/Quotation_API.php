@@ -3142,8 +3142,28 @@ try {
                 // 所以「齒輪類料號只要填了齒輪規格就一定存檔失敗」（1364，整個交易回滾，
                 // 連料號本身的修改也一起存不進去）。2026-09-22 實際打 API 才發現。
                 $ins_g = $pdo->prepare("INSERT INTO d_setting_gear (d_setting_id,Gear_Type,Module,Teeth,Pressure_Angle,Face_Width,Workpiece_Length,Profile_Shift_X,Helix_Angle,Helix_Angle_Str,Helix_Direction,Remark_Gear,Created_By) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                $gi = 0;
                 foreach ($gears as $g) {
-                    $ins_g->execute([$d_id,$g['Gear_Type']??null,$g['Module']??null,$g['Teeth']??null,$g['Pressure_Angle']??null,$g['Face_Width']??null,$g['Workpiece_Length']??null,(isset($g['Profile_Shift_X'])&&$g['Profile_Shift_X']!=='')?$g['Profile_Shift_X']:null,(isset($g['Helix_Angle'])&&$g['Helix_Angle']!=='')?$g['Helix_Angle']:null,$g['Helix_Angle_Str']??null,$g['Helix_Direction']??null,$g['Remark_Gear']??null,$user_id]);
+                    $gi++;
+                    // 整列全空就不要建一筆空的齒輪紀錄（工件種類切到齒輪時畫面會自動長一列空白列）
+                    $filled = false;
+                    foreach (['Gear_Type','Module','Teeth','Pressure_Angle','Face_Width','Workpiece_Length','Profile_Shift_X','Helix_Angle','Helix_Angle_Str','Helix_Direction','Remark_Gear'] as $__c) {
+                        if (trim((string)($g[$__c] ?? '')) !== '') { $filled = true; break; }
+                    }
+                    if (!$filled) continue;
+                    // Gear_Type 是 int 外鍵（dict_gear_type.gear_type_id）。前端送 id，
+                    // 但舊分頁可能還在送中文名稱——對得回 id 就用，對不到才擋下並講清楚是哪一列，
+                    // 不要讓它直接撞成 1366 把整筆存檔（含料號本身）一起回滾。
+                    $gt = eg_gear_type_id($pdo, $g['Gear_Type'] ?? null);
+                    if ($gt === false) throw new Exception("第 {$gi} 組齒輪的「齒輪類型」無法辨識，請重新整理頁面後再選一次。");
+                    // 壓力角沒填就補預設（直齒／螺旋齒 20°、花鍵 30°）——與主檔管理同一條規則
+                    $pa = trim((string)($g['Pressure_Angle'] ?? ''));
+                    if ($pa === '') $pa = eg_gear_default_pressure_angle($pdo, $gt);
+                    // 沒填的欄位一律存 NULL：Teeth 是 smallint、Face_Width／Workpiece_Length 是 decimal，
+                    // DB 開著 STRICT_TRANS_TABLES，直接把空字串丟進去一樣會 1366 整筆回滾
+                    // （齒輪類型修好之後，只要少填一格齒數就會踩到下一個同類型的錯）
+                    $v = function ($k) use ($g) { $x = trim((string)($g[$k] ?? '')); return $x === '' ? null : $x; };
+                    $ins_g->execute([$d_id,$gt,$v('Module'),$v('Teeth'),$pa,$v('Face_Width'),$v('Workpiece_Length'),$v('Profile_Shift_X'),$v('Helix_Angle'),$v('Helix_Angle_Str'),$v('Helix_Direction'),$v('Remark_Gear'),$user_id]);
                 }
             }
             eg_gear_keep_restore($pdo, (int)$d_id, $__gsnap, ['Gear_Type','Module','Teeth','Pressure_Angle','Face_Width','Workpiece_Length','Profile_Shift_X','Helix_Angle','Helix_Angle_Str','Helix_Direction','Remark_Gear']);
@@ -3160,7 +3180,11 @@ try {
             $part = $stmt->fetch(PDO::FETCH_ASSOC);
             if (!$part) throw new Exception('找不到此料號');
             if ($part['Type'] === 'G') {
-                $stmt_g = $pdo->prepare("SELECT * FROM d_setting_gear WHERE d_setting_id = ? ORDER BY gear_id ASC");
+                // 帶出齒型名稱：該齒型若已在字典停用，前端才列得出那一列並選起來（否則一存檔就被洗成 NULL）
+                $stmt_g = $pdo->prepare("SELECT g.*, t.type_name AS Gear_Type_Name
+                                           FROM d_setting_gear g
+                                           LEFT JOIN dict_gear_type t ON t.gear_type_id = g.Gear_Type
+                                          WHERE g.d_setting_id = ? ORDER BY g.gear_id ASC");
                 $stmt_g->execute([$d_id]);
                 $part['gears'] = $stmt_g->fetchAll(PDO::FETCH_ASSOC);
             } else {

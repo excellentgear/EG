@@ -10,6 +10,11 @@ $selectedYear = isset($_GET['year']) ? intval($_GET['year']) : date('Y');
 $_pdo     = $conn->getPDO();
 $_user_id = intval($_SESSION['id'] ?? $_SESSION['user_id'] ?? 0);
 
+// 「新增料號」跳窗的齒輪類型選項：值＝dict_gear_type.gear_type_id（Gear_Type 欄位是 int 外鍵）。
+// 唯一實作在 gear_spec_lib，本頁不自己寫死一份中文清單（鐵律4）。
+require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
+$GEAR_TYPE_OPTIONS = eg_gear_type_options($_pdo);
+
 try {
     // 建立全域 RBAC 資料表（若不存在）
     $_pdo->exec("CREATE TABLE IF NOT EXISTS roles (
@@ -1995,6 +2000,8 @@ const IS_ADMIN         = <?= json_encode($IS_ADMIN) ?>;
 const CAN_LEGACY_SUPP  = <?= json_encode($CAN_LEGACY_SUPP) ?>;   // 舊報價單補附件（只給真正的管理員）
 const PERM_CODE        = <?= json_encode($_perm) ?>;
 const MY_USER_ID       = <?= json_encode($_user_id) ?>;
+// 齒輪類型（來自 dict_gear_type，value 就是要存進 d_setting_gear.Gear_Type 的 id）
+const GEAR_TYPE_OPTIONS = <?= json_encode($GEAR_TYPE_OPTIONS, JSON_UNESCAPED_UNICODE) ?>;
 
 const API_URL      = '../../src/store/Quotation_API.php';
 const FILE_API_URL = '../../src/store/Quotation_File_API.php';
@@ -2432,8 +2439,39 @@ $(document).ready(function () {
     });
     $(document).on('change', '.gear-type', function () {
         const $row = $(this).closest('.part-gear-row');
-        if ($(this).val() === '螺旋') $row.find('.helix-angle-group').slideDown();
-        else $row.find('.helix-angle-group').slideUp();
+        const v    = $(this).val();
+        // 有沒有螺旋角依字典的 has_helix_angle 決定（螺旋、蝸桿、蝸輪都有），不要用字串比對
+        if (gearTypeHasHelix(v)) $row.find('.helix-angle-group').slideDown();
+        else                     $row.find('.helix-angle-group').slideUp();
+        // 壓力角沒填就自動帶預設值（直齒／螺旋齒 20°、花鍵 30°），讓使用者當場看得到；
+        // 使用者自己填過的值一律不覆蓋。後端存檔時會再補一次同樣的規則（鐵律8）
+        const $pa = $row.find('.gear-pressure-angle');
+        if (v !== '' && $pa.length && $pa.val().trim() === '') $pa.val(gearTypeDefaultPA(v));
+    });
+    // ── 料號跳窗：欄位內按 Enter 自動跳下一欄 ──────────────────────────────
+    //   做法比照主檔管理「齒輪規格設定」的 _bindGearKeyNav()：取目前「看得到且可輸入」的
+    //   欄位依畫面順序往下跳（隱藏的齒輪區、收起來的螺旋角欄位自然不會被跳到）。
+    //   ⑴ **只作用在 #part-form-main 之內**——本頁在 input_rules_baseline.txt 內、沒有載
+    //      eg_input_rules.js，整頁掛 Enter 會改掉既有的輸入習慣，所以刻意只包這個跳窗的表單；
+    //   ⑵ textarea（備註）的 Enter 維持換行、按鈕不攔（否則按不了儲存／刪除）；
+    //   ⑶ 停在最後一欄就好，**不自動觸發儲存**，避免打字途中誤存。
+    $(document).on('keydown', '#part-form-main input, #part-form-main select', function (e) {
+        if (e.key !== 'Enter' && e.which !== 13) return;
+        const el = this;
+        if (el.type === 'radio' || el.type === 'checkbox' || el.type === 'hidden') return;
+        e.preventDefault();                       // 擋掉跳窗內的隱性送出
+        $('#part-customer-results').hide();       // 客戶建議清單要收掉，否則會蓋住下一欄
+        const form = document.getElementById('part-form-main');
+        if (!form) return;
+        const all = Array.prototype.slice.call(form.querySelectorAll(
+            'input:not([type=radio]):not([type=checkbox]):not([type=hidden]):not([disabled]):not([readonly]), select:not([disabled])'
+        )).filter(f => f.offsetParent !== null);
+        const cur = all.indexOf(el);
+        if (cur < 0 || cur >= all.length - 1) return;
+        const next = all[cur + 1];
+        next.focus();
+        // 已有資料的欄位聚焦即全選（比照全站輸入規則）；date 等欄位不支援 select() 會丟錯，包起來
+        try { if (next.value !== '' && typeof next.select === 'function') next.select(); } catch (_e) {}
     });
 });
 
@@ -10090,8 +10128,32 @@ function deletePart() {
         });
     });
 }
+// ══ 齒輪類型（唯一來源 dict_gear_type，下拉的 value 就是要存進 Gear_Type 的 id）══
+function gearTypeMeta(v) {
+    if (v === '' || v === null || v === undefined) return null;
+    const sv = String(v);
+    return GEAR_TYPE_OPTIONS.find(o => o.value === sv) || null;
+}
+function gearTypeHasHelix(v) { const m = gearTypeMeta(v); return !!(m && m.hasHelix); }
+// 壓力角沒填時的預設值：花鍵 30 度、其餘（直齒／螺旋齒…）20 度——與主檔管理「齒輪規格設定」同一條規則
+function gearTypeDefaultPA(v) { const m = gearTypeMeta(v); return (m && m.specCategory === 'spline') ? '30' : '20'; }
+function buildGearTypeOptions(cur, curName) {
+    const sv = (cur === null || cur === undefined) ? '' : String(cur);
+    let html = `<option value=""${sv === '' ? ' selected' : ''}>請選擇</option>`;
+    GEAR_TYPE_OPTIONS.forEach(o => {
+        html += `<option value="${escapeHtml(o.value)}"${sv === o.value ? ' selected' : ''}>${escapeHtml(o.label)}</option>`;
+    });
+    // 舊資料的齒型若已被停用（不在啟用清單裡），仍要列出來並選起來——
+    // 否則下拉會退回「請選擇」，使用者只是改個備註按儲存就把 Gear_Type 寫成 NULL，
+    // 連帶讓齒輪等級／鏈輪／花鍵那些本表單沒管到的欄位一起還原失敗而消失
+    if (sv !== '' && !gearTypeMeta(sv)) {
+        html += `<option value="${escapeHtml(sv)}" selected>${escapeHtml(curName || ('類型 #' + sv))}（已停用）</option>`;
+    }
+    return html;
+}
+
 function addPartGearRow(data = {}) {
-    const gearType  = data.Gear_Type || '';
+    const gearType  = (data.Gear_Type === null || data.Gear_Type === undefined) ? '' : String(data.Gear_Type);
     const module    = data.Module || '';
     const teeth     = data.Teeth || '';
     const pa        = data.Pressure_Angle || '';
@@ -10102,19 +10164,13 @@ function addPartGearRow(data = {}) {
     const helixStr  = data.Helix_Angle_Str || '';
     const direction = data.Helix_Direction || '';
     const shiftX    = (data.Profile_Shift_X !== undefined && data.Profile_Shift_X !== null) ? parseFloat(data.Profile_Shift_X) : '';
-    const showHelix = String(gearType).includes('螺旋');
+    const showHelix = gearTypeHasHelix(gearType);   // 依字典的 has_helix_angle，不再用字串比對（蝸桿/蝸輪也要有螺旋角）
+    const typeOpts  = buildGearTypeOptions(gearType, data.Gear_Type_Name || '');
     const html = `
     <div class="part-gear-row" style="padding:12px;border:1px solid #ddd;border-radius:5px;margin-bottom:10px;background:#f9f9f9;">
       <div class="row">
         <div class="col-md-3 form-group"><label>齒輪類型</label>
-          <select class="form-control input-sm gear-type">
-            <option value="" ${gearType===''?'selected':''}>請選擇</option>
-            <option value="直齒" ${gearType==='直齒'?'selected':''}>直齒</option>
-            <option value="螺旋" ${gearType==='螺旋'?'selected':''}>螺旋</option>
-            <option value="傘齒" ${gearType==='傘齒'?'selected':''}>傘齒</option>
-            <option value="蝸桿" ${gearType==='蝸桿'?'selected':''}>蝸桿</option>
-            <option value="蝸輪" ${gearType==='蝸輪'?'selected':''}>蝸輪</option>
-          </select>
+          <select class="form-control input-sm gear-type">${typeOpts}</select>
         </div>
         <div class="col-md-3 form-group"><label>模數</label>
           <input type="text" class="form-control input-sm gear-module" value="${escapeHtml(String(module))}">
@@ -10148,7 +10204,7 @@ function addPartGearRow(data = {}) {
         </div>
       </div>
       <div class="row">
-        <div class="col-md-3 form-group"><label>壓力角 (PA)</label>
+        <div class="col-md-3 form-group"><label>壓力角 (PA) <span style="font-weight:normal;color:#999;font-size:11px;">未填自動帶 20°（花鍵 30°）</span></label>
           <input type="text" class="form-control input-sm gear-pressure-angle" value="${escapeHtml(String(pa))}">
         </div>
         <div class="col-md-3 form-group"><label>齒寬 (W) mm</label>
