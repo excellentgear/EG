@@ -114,6 +114,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         /* 重複確認（2026-10-02）：提示列與跳窗內的每一份 */
         #dupBar { margin-top:8px; padding:6px 10px; background:#FFF3E2; border:1px solid #F0A24B; border-radius:6px;
                   color:#8A5A2B; font-size:12px; display:flex; align-items:center; gap:8px; }
+        .ic-rev-hint { display:inline-block; font-size:10px; line-height:14px; color:#8A5A2B; background:#FFF3E2;
+                       border:1px solid #F0A24B; border-radius:8px; padding:0 5px; margin-left:2px;
+                       white-space:nowrap; text-decoration:none; }
+        .ic-rev-hint:hover { background:#F7E0BD; color:#5b3a1e; text-decoration:none; }
         .ic-dup-badge { font-size:10px; line-height:14px; color:#fff; background:#F0A24B; border-radius:8px;
                         padding:0 6px; margin-left:2px; white-space:nowrap; cursor:pointer; }
         .dup-grp { border:1px solid #EADFC8; border-radius:6px; padding:8px 10px; margin-bottom:10px; }
@@ -550,7 +554,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <li><b>取消的欄位</b>：表頭的「製程」、項目列的「型態類別」與「所屬製程」三欄依使用者要求取消，畫面與列印版都不再顯示；<b>資料庫欄位保留不刪</b>，既有資料原封不動，存檔時也會把原值照原樣寫回去（畫面上看不到的東西不會因為存一次檔就被改掉）。連帶失效的設定（BOM檔案標籤的「型態類別」、廠內圖面標籤的「需要顯示製程」、項目列旁的製程挑選鈕）一併移除，避免留下改了也看不到的死設定。</li>
             <li><b>「型態制定日期」已更名為「型態制定日期」</b>，只是名稱改變，取值方式與原本完全相同（連結來源時取來源日期：發行章日期／表單日期／檔案日期；手動列則用自己填的日期）。</li>
             <li><b>一種文件一列</b>（2026-10-02 使用者回報）：加工圖、原圖這類<b>綁定圖面每次改版都會上傳一張新圖</b>，原本一個附件一列會讓同一種圖在表上長出好幾列、同一次改版也顯示兩次。現在<b>同一料號＋同一附件類別</b>的歷次上傳收斂成一列：<b>版別／文件編號＝現行版</b>、<b>型態制定日期＝最早一次發行</b>（不隨改版往後跳）、歷次上傳成為<b>修訂履歷</b>；欄位旁的「共 N 版」小籤表示這一種文件目前有幾份。之後再上傳新版時，同步會<b>原地把該列指到新的那一份</b>並在修訂履歷多一筆，不會另外長一列（與 ERP/資材報告標籤同一套做法）。<br><b>舊資料</b>不另外批次處理：那幾份管制表<b>下次被開啟或同步時自動合併</b>，並跳出提示告知合併了幾列、狀態改為「需重新確認」請人覆核。合併時保留最早建立的那一列，人工加的修訂履歷會一併搬過去，任何一列曾被「取消納入」則合併後仍維持取消納入。</li>
-            <li><b>版別怎麼決定</b>（2026-10-02 使用者：「加工圖是採用發行日做為版別」）：①有填<b>版次</b>就用版次 ②沒版次但有<b>發行章日期</b>→<b>發行日就是版別</b>（加工圖這類自家出的圖本來就這樣管）③兩者都沒有才退回顯示<b>檔名</b>供辨識，檔名不是真正的版別所以<b>列印不印</b>。修訂履歷的「修訂後版別」用同一套規則。</li>
+            <li><b>版別怎麼決定</b>（2026-10-02 使用者指定的三段順序）：①有填<b>版次</b>就用版次 ②沒版次但有<b>發行章日期</b>→<b>發行日就是版別</b>（加工圖這類自家出的圖本來就這樣管）③兩者都沒有→顯示「<b>接收日期 YYYY.MM.DD</b>」，日期取這份文件的<b>上傳日</b>（原圖、報價圖、報價單附件多半是這一種——客戶給的圖常常沒有版次，系統只知道「我們什麼時候收到它」）。<br><b>一律不再拿檔名當版別</b>（檔名不是版別，而且列印還印不出來）；接收日期是有意義的管制資訊，<b>列印會照印</b>。<br>顯示成接收日期的那幾列旁邊有橘色「<b>未設版次</b>」小籤，<b>點一下直接開主檔管理的該料號附件</b>去補版次；補完回本頁重新整理就會改以版次顯示。修訂履歷的「修訂後版別」用同一套規則。</li>
             <li><b>日期合理性</b>（2026-10-02 使用者：「原圖的日期一定是最早，其他都是依據原圖/報價圖產出」）：<b>外來文件</b>（原圖、報價圖、規格書…客戶給的）是基準，日期應該最早；<b>自家出的圖</b>（加工圖、++圖…）是依據它們畫的，日期不得早於基準。判定直接用附件類別既有的「外來文件清單／自家出的圖」兩個旗標，<b>不寫死「原圖」這個名稱</b>。<br>發現倒置時在該列日期欄下方標紅字，並指出<b>真正該修的多半是哪一份</b>——實測料號 447-000C-820-18 就是原圖<b>沒填發行章日期、日期退回「上傳日」</b>才看起來比加工圖晚（另外還有 6512、10093 等料號同樣情形）。紅字旁的<b>「修正日期」</b>可直接改回來源附件：自家出的圖寫<b>發行章日期</b>、外來文件寫<b>文件日期(上傳日)</b>，不可填未來日期。<br><b>一般儲存只警示不擋</b>（補舊資料本來就可能先存起來再慢慢補），但<b>「確認清單」會擋下</b>——確認等於正式認可這份清單，日期自相矛盾的不該被確認掉（擋下時內容仍完整存著，不會白打）。</li>
             <li><b>預覽列印</b>（2026-10-02 使用者要求）：編輯畫面上方的「預覽列印」可以在<b>還沒確認</b>（甚至還沒存檔）時先看列印版面，頁首標明「預覽（未確認、未簽章，非正式文件）」、<b>不蓋製表簽章</b>、<b>不留列印紀錄</b>、也不會自動跳出列印對話框。正式列印仍維持原規則（要先確認、且沒有待更新的新檔案/內容變更）。</li>
             <li><b>同一種文件有兩份以上 → 由你確認，系統不自動決定</b>（2026-10-02 使用者要求）：上面的收斂只管得了<b>料號附件</b>（同料號同附件類別）。實務上還會出現<b>跨來源</b>的同名文件——例如同樣叫「原圖」，一份是料號附件、一份是報價附件（實測料號 3004012570 就是，而且報價那份檔名是 300401257、比料號少一碼，比較像重複上傳或掛錯）。這種「哪一份才算數」系統沒有把握，所以<b>一律不自動決定</b>。<br>判定範圍是<b>同一個「型態項目名稱」</b>，所以 BOSS圖／單製++圖 都顯示成「加工圖」時也會被拿出來問。建立或同步當下會跳窗，沒處理完也能先存檔，那幾列會持續標著橘色<b>「待確認重複」</b>小籤，點一下就能處理。<br>每一組請指定<b>一份現行版</b>，另外勾選的<b>不列入</b>代表不採認（重複上傳，比照「取消納入」，同步不會再加回來），<b>其餘沒勾的自動成為現行版的舊版</b>——不再是獨立項目列，改以修訂履歷呈現在現行版底下（列本身保留著，同步才不會把它當新檔案又加一列）。<br>如果這幾份<b>本來就是不同的文件</b>（像 BOSS圖 與 單製++圖），按該組右上角的<b>「這幾份不是重複，各自保留」</b>，各自維持一列、之後不再提示。</li>
@@ -1150,6 +1154,13 @@ function itemRowHtml(it, idx){
         ? '<span class="ic-dup-badge" title="「'+esc(DUPSET[idx])+'」有兩份以上，請確認哪一份是現行版（點此處理）">待確認重複</span>' : '';
     var verBadge = (it.ver_count && it.ver_count > 1)
         ? '<span class="ic-link-badge" title="這一種文件目前共有 '+it.ver_count+' 份（同料號同附件類別），版別欄顯示現行版，其餘在修訂履歷">共 '+it.ver_count+' 版</span>' : '';
+    // 版別還是「接收日期」＝這份文件根本還沒填版次，提示去主檔管理補（2026-10-02 使用者要求）
+    var needRevHint = (it.ver_kind === 'received')
+        ? ' <a class="ic-rev-hint" target="_blank" href="../pages/master_data_management.php?open_part='+encodeURIComponent($('#fPartDId').val()||'')
+          +'&part_search='+encodeURIComponent($('#fPartNo').val()||'')
+          +'" title="這份文件還沒有版次，目前只能用「收到它的日期」當版別。'
+          +(it.file_name_text ? ('\n檔案：'+esc(it.file_name_text)) : '')
+          +'\n要填版次請到主檔管理→該料號的附件（點此開啟）">未設版次</a>' : '';
     var docNoCell = '<div class="ic-part-box"><input type="text" class="f-docno" value="'+esc(it.doc_no_text||'')+'"'+(linked?' disabled':'')+' placeholder="版別／文件編號">'
         + (linked && it.file_url ? ' <a href="'+esc(it.file_url)+'" target="_blank" class="ic-row-btn" title="點開附件確認內容"><i class="fa fa-eye"></i></a>' : '')
         + '</div>';
@@ -1162,7 +1173,7 @@ function itemRowHtml(it, idx){
         + '<td class="seq">'+(idx+1)+'</td>'
         + '<td><input type="text" class="f-name" value="'+esc(it.item_name||'')+'" placeholder="型態項目名稱"></td>'
         + '<td><input type="date" class="f-date" value="'+esc(it.effective_date||'')+'"'+(linked?' disabled':'')+'>'+dateWarn+'</td>'
-        + '<td>'+docNoCell+' '+linkBadge+verBadge+changedBadge+dupBadge+'</td>'
+        + '<td>'+docNoCell+' '+linkBadge+needRevHint+verBadge+changedBadge+dupBadge+'</td>'
         + '<td class="revcell">'+revCellHtml(it.revisions||[])+'</td>'
         + '<td class="op">'+opCell+'</td>'
         + '</tr>';

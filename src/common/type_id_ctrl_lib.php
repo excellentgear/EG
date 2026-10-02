@@ -57,12 +57,9 @@ function type_id_ctrl_item_view(PDO $db, array $it): array {
     if ($hasRef) {
         $linked = type_id_ctrl_resolve_ref($db, $it['ref_source'], (int)$it['ref_attach_id'], (int)$it['ref_ds_pk'], $it['ref_file_name'] ?? null, (int)($it['ref_cat_id'] ?? 0));
     }
+    // 列印的「版別／文件編號」：版次／發行日／接收日期三種都是有意義的管制資訊，照印；
+    // 只有連上傳日都查不到、真的退回檔名時才留白（檔名不是版別，2026-08-12 既有規則）。
     $printDocNo = ($linked && !empty($linked['doc_no_is_filename'])) ? '' : ($linked ? $linked['doc_name'] : $it['manual_doc_no']);
-    // 檔名退回顯示、列印本應空白的情況：若這份文件填了發行章日期（自家出的圖），改印
-    // 「發行章 YYYY.MM.DD」，總比整格空白看不出任何依據來得清楚。
-    if ($printDocNo === '' && $linked && !empty($linked['issue_stamp_date'])) {
-        $printDocNo = '發行章 ' . eg_fmt_date($linked['issue_stamp_date']);
-    }
     return [
         'id' => (int)$it['id'],
         'seq' => (int)$it['seq'],
@@ -86,6 +83,9 @@ function type_id_ctrl_item_view(PDO $db, array $it): array {
         'ver_count' => $linked['ver_count'] ?? null,
         // 這一份有沒有真正的發行章日期（沒有＝日期是退回上傳日，日期檢核的提示要講清楚）
         'has_issue_stamp' => !empty($linked['first_has_stamp']),
+        // 版別是哪一種來的（revision/issue/received）；received＝還沒有版次，畫面要提示去主檔管理補
+        'ver_kind' => $linked['ver_kind'] ?? null,
+        'file_name_text' => $linked['file_name_text'] ?? null,
         'ref_broken' => ($hasRef && $linked === null), // 曾連結但來源已消失
         'effective_date' => $linked ? $linked['doc_date'] : $it['manual_effective_date'],
         'doc_no_text' => $linked ? $linked['doc_name'] : $it['manual_doc_no'],
@@ -385,9 +385,13 @@ function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $d
         //   ①有填版次就用版次 ②沒版次但有發行章日期 → 發行日就是版別（自家出的圖多半這樣管）
         //   ③兩者都沒有才退回檔名充當畫面辨識用，檔名不是真正的版別故列印不印（2026-08-12 既有規則）
         $verText = type_id_ctrl_version_text($cur);
+        $verKind = type_id_ctrl_version_kind($cur);
         return [
             'doc_name' => $verText !== '' ? $verText : $cur['doc_name'],
+            // 2026-10-02 起沒版次也不會退回檔名了（改用接收日期），所以只有連上傳日都沒有才算檔名
             'doc_no_is_filename' => ($verText === ''),
+            'ver_kind' => $verKind,
+            'file_name_text' => $cur['doc_name'],
             'doc_date' => $fam['first']['_date'],      // ＝型態制定日期：最早一次發行，不隨改版往後跳
             // 「自家出的圖」(如加工圖) 多半沒填版次，退回檔名充當畫面顯示，但列印時檔名不算真正的
             // 版別/文件編號故印空白；有發行章日期時改印「發行章 YYYY.MM.DD」取代空白
@@ -410,8 +414,11 @@ function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $d
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r) return null;
         return [
-            // 報價附件沒有版次欄位，doc_name 一律是檔名，同理列印時不印（僅畫面顯示供辨識）
-            'doc_name' => $r['doc_name'], 'doc_no_is_filename' => true, 'doc_date' => $r['doc_date'],
+            // 報價附件沒有版次也沒有發行章欄位，一律以「接收日期」當版別（2026-10-02 使用者指定，
+            // 與料號附件同一套；原本是拿檔名充數、列印還印不出來）
+            'doc_name' => type_id_ctrl_version_text(['up_date' => $r['doc_date']]),
+            'doc_no_is_filename' => false, 'ver_kind' => 'received', 'file_name_text' => $r['doc_name'],
+            'doc_date' => $r['doc_date'],
             'file_url' => '../../src/store/Quotation_File_API.php?action=download&quote_no=' . rawurlencode($r['quote_no']) . '&filename=' . rawurlencode($r['filename']),
         ];
     }
@@ -459,6 +466,8 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
             'doc_name' => (type_id_ctrl_version_text($cur) !== '') ? type_id_ctrl_version_text($cur) : $cur['doc_name'],
             'doc_date' => $fam['first']['_date'],           // 制定日期＝最早一次發行
             'cat_id' => (int)$cid,
+            'ver_kind' => type_id_ctrl_version_kind($cur),
+            'file_name_text' => $cur['doc_name'],
             'categories' => [$fam['disp']],
             'need_process' => $fam['need_process'],
             'origin_process' => null,
@@ -502,6 +511,12 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
 
     foreach ($rows as &$r) {
         if (($r['source'] ?? '') === 'part') continue;   // 料號附件在上面已經以家族為單位組好了
+        if (($r['source'] ?? '') === 'quote') {
+            // 報價附件沒有版次也沒有發行章欄位 → 以接收日期當版別（不要拿檔名充數，2026-10-02）
+            $r['file_name_text'] = $r['doc_name'];
+            $r['doc_name'] = type_id_ctrl_version_text(['up_date' => $r['doc_date']]);
+            $r['ver_kind'] = 'received';
+        }
         $names = []; $needProcess = false;
         foreach (array_filter(explode(',', str_replace(' ', '', (string)$r['category_ids']))) as $cid) {
             if (isset($cats[(int)$cid])) {
@@ -1603,14 +1618,30 @@ function type_id_ctrl_part_families(PDO $db, int $dsPk): array {
 }
 
 /**
- * 一份附件的「版別」文字：有版次用版次，沒版次但有發行章日期就用發行日（使用者 2026-10-02 指定，
- * 加工圖這類自家出的圖本來就是以發行日當版別），兩者都沒有回空字串（呼叫端自行決定要不要退回檔名）。
+ * 一份附件的「版別」是哪一種（2026-10-02 使用者指定的三段取用順序）：
+ *   revision ── 有填版次（最準）
+ *   issue    ── 沒版次但有發行章日期 → 發行日就是版別（加工圖這類自家出的圖本來就這樣管）
+ *   received ── 兩者都沒有 → 只知道「什麼時候收到這份文件」，用上傳日當接收日期
+ *               （使用者：「原圖的版別不應該顯示檔名，若未設定就顯示為 接收日期 YYYY.MM.DD」）
+ * 回空字串＝連上傳日都沒有（理論上不會發生）。
  */
-function type_id_ctrl_version_text(array $a): string {
+function type_id_ctrl_version_kind(array $a): string {
     $rev = $a['revision'] ?? null;
-    if ($rev !== null && $rev !== '') return (string)$rev;
+    if ($rev !== null && $rev !== '') return 'revision';
     $d = $a['issue_stamp_date'] ?? null;
-    if ($d !== null && $d !== '') return eg_fmt_date($d);
+    if ($d !== null && $d !== '') return 'issue';
+    $u = $a['up_date'] ?? $a['uploaded_at'] ?? null;
+    if ($u !== null && $u !== '') return 'received';
+    return '';
+}
+
+/** 一份附件的「版別」顯示文字（三種來源見 type_id_ctrl_version_kind） */
+function type_id_ctrl_version_text(array $a): string {
+    switch (type_id_ctrl_version_kind($a)) {
+        case 'revision': return (string)$a['revision'];
+        case 'issue':    return eg_fmt_date((string)$a['issue_stamp_date']);
+        case 'received': return '接收日期 ' . eg_fmt_date(substr((string)($a['up_date'] ?? $a['uploaded_at']), 0, 10));
+    }
     return '';
 }
 

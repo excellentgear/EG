@@ -467,6 +467,7 @@ case 'fetch_ext_for_part':
             'ref_source_label'=>type_id_ctrl_ref_source_label($er['source'], $er['kind'] ?? null),
             'ref_file_name'=>$er['file_name'] ?? null, 'ref_bom_tag'=>$er['bom_tag'] ?? null,
             'ref_cat_id'=>!empty($er['cat_id']) ? (int)$er['cat_id'] : null,
+            'ver_kind'=>$er['ver_kind'] ?? null, 'file_name_text'=>$er['file_name_text'] ?? null,
             'ref_broken'=>false, 'effective_date'=>$er['doc_date'], 'doc_no_text'=>$er['doc_name'],
             // 2026-10-02 使用者回報「圖面無法點開」：這裡原本固定回 null，所以新增管制表（還沒存檔）
             // 的那幾列不會長出眼睛圖示。一律走 resolve_ref 取得網址（與存檔後顯示的是同一支，不另組）
