@@ -11610,7 +11610,9 @@ foreach($dCounts as $c) {
         <div class="modal-content">
           <div class="modal-header" style="background:#607d8b;color:#fff;">
             <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;"><span>&times;</span></button>
-            <h4 class="modal-title"><i class="fa fa-cog"></i> 訂單變更設定</h4>
+            <?php /* 標題就叫「設定」：這個跳窗裡面不是只有訂單變更，還有訂單附件路徑／附件標籤／
+                     列印 AS 綁定／BOSS 審圖客戶名單／稽核製程標籤等好幾區（2026-10-02 使用者要求） */ ?>
+            <h4 class="modal-title"><i class="fa fa-cog"></i> 設定</h4>
           </div>
           <div class="modal-body" style="padding:14px;max-height:74vh;overflow-y:auto;">
             <?php if ($can_order_change_setting): /* 訂單變更相關設定：維持原本的權限（ot_order_change_setting） */ ?>
