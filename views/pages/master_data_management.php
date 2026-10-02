@@ -347,7 +347,7 @@ $db  = new DBConnection();
 $pdo = $db->getPDO();
 
 // ── Migration 版本鎖：版本符合時跳過所有 ALTER/CREATE，只跑一次 ──────────
-define('MDM_MIGRATION_VERSION', '20261001_04');   // 2026-10-01 廠商/客戶新增「認定新廠商/新客戶日期」欄位 est_date（maker_list/customer_list）
+define('MDM_MIGRATION_VERSION', '20261002_01');   // 2026-10-02 料號標籤新增「新增料號時必填」旗標 dict_label.is_required
 $_mdm_skip_migration = false;
 try {
     // system_settings 可能尚不存在（第一次執行），用 try 保護
@@ -1010,6 +1010,9 @@ try {
     try { $pdo->exec("ALTER TABLE dict_label ADD COLUMN prefix_char VARCHAR(20) NULL COMMENT '前綴字元'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE dict_label ADD COLUMN suffix_char VARCHAR(20) NULL COMMENT '後綴字元'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE dict_label ADD COLUMN is_hidden_frontend TINYINT NOT NULL DEFAULT 0 COMMENT '不顯示於前端 1=是 0=否'"); } catch(Exception $e){}
+    // 新增料號時必填（只擋新增，修改既有料號不擋——全庫 23,969 支適用料號裡只有 277 支有值，
+    // 連修改都擋的話，任何人只是要改個客戶或備註都會先被擋在外面）
+    try { $pdo->exec("ALTER TABLE dict_label ADD COLUMN is_required TINYINT NOT NULL DEFAULT 0 COMMENT '新增料號時必填 1=是 0=否'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE item_label_map ADD COLUMN qty DECIMAL(15,4) NULL COMMENT '數量(用於數量-長x寬)'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE item_sub_label_map ADD COLUMN qty DECIMAL(15,4) NULL COMMENT '數量(用於數量-長x寬)'"); } catch(Exception $e){}
 
@@ -2513,6 +2516,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             if (empty($D_Setting_Id)) throw new Exception('料號不可為空');
             if (empty($Customer_Id))  throw new Exception('客戶為必填欄位');
+            // 標籤字典勾了「新增料號時必填」的，新增時一定要填（修改既有料號不擋，見 part_label_lib 說明）。
+            // 前端 submitPartForm() 已先擋一次，這裡同規則再擋一次，避免直打 API 繞過（鐵律8）。
+            if ($d_id <= 0) {
+                require_once __DIR__ . '/../../src/common/part_label_lib.php';
+                $__miss = eg_part_required_missing($pdo, $Type, $labels_list);
+                if ($__miss) throw new Exception('新增料號必須填寫：' . implode('、', $__miss));
+            }
 
             // 取得舊資料（用於 audit diff）
             $old_part_row = [];
@@ -4723,10 +4733,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $type_filter = trim($_POST['type_code'] ?? '');
                 if ($type_filter && $type_filter !== '__ALL__') {
                     // FIND_IN_SET supports both single type_code and comma-separated multi-type
-                    $stmt = $pdo->prepare("SELECT label_id, label_name, type_code, is_repeatable, input_type, has_draw_lathe, is_range, sort_order, has_tolerance, is_calc_diff, calc_base_label_id, calc_sub_label_id, tolerance_std_upper, COALESCE(is_exclude_calc,0) AS is_exclude_calc, COALESCE(is_dimension,0) AS is_dimension, COALESCE(is_qty_dim,0) AS is_qty_dim, COALESCE(prefix_char,'') AS prefix_char, COALESCE(suffix_char,'') AS suffix_char, COALESCE(is_hidden_frontend,0) AS is_hidden_frontend, COALESCE(lathe_optional,0) AS lathe_optional, COALESCE(has_draw_lathe_depth,0) AS has_draw_lathe_depth, COALESCE(is_triple_dim,0) AS is_triple_dim, COALESCE(calc_base_name,'') AS calc_base_name, COALESCE(calc_sub_name,'') AS calc_sub_name FROM dict_label WHERE FIND_IN_SET(?, type_code) AND is_active=1 ORDER BY sort_order, label_id");
+                    $stmt = $pdo->prepare("SELECT label_id, label_name, type_code, is_repeatable, input_type, has_draw_lathe, is_range, sort_order, has_tolerance, is_calc_diff, calc_base_label_id, calc_sub_label_id, tolerance_std_upper, COALESCE(is_exclude_calc,0) AS is_exclude_calc, COALESCE(is_dimension,0) AS is_dimension, COALESCE(is_qty_dim,0) AS is_qty_dim, COALESCE(prefix_char,'') AS prefix_char, COALESCE(suffix_char,'') AS suffix_char, COALESCE(is_hidden_frontend,0) AS is_hidden_frontend, COALESCE(lathe_optional,0) AS lathe_optional, COALESCE(has_draw_lathe_depth,0) AS has_draw_lathe_depth, COALESCE(is_triple_dim,0) AS is_triple_dim, COALESCE(calc_base_name,'') AS calc_base_name, COALESCE(calc_sub_name,'') AS calc_sub_name, COALESCE(is_required,0) AS is_required FROM dict_label WHERE FIND_IN_SET(?, type_code) AND is_active=1 ORDER BY sort_order, label_id");
                     $stmt->execute([$type_filter]);
                 } else {
-                    $stmt = $pdo->query("SELECT label_id, label_name, type_code, is_repeatable, input_type, has_draw_lathe, is_range, sort_order, has_tolerance, is_calc_diff, calc_base_label_id, calc_sub_label_id, tolerance_std_upper, COALESCE(is_exclude_calc,0) AS is_exclude_calc, COALESCE(is_dimension,0) AS is_dimension, COALESCE(is_qty_dim,0) AS is_qty_dim, COALESCE(prefix_char,'') AS prefix_char, COALESCE(suffix_char,'') AS suffix_char, COALESCE(is_hidden_frontend,0) AS is_hidden_frontend, COALESCE(lathe_optional,0) AS lathe_optional, COALESCE(has_draw_lathe_depth,0) AS has_draw_lathe_depth, COALESCE(is_triple_dim,0) AS is_triple_dim, COALESCE(calc_base_name,'') AS calc_base_name, COALESCE(calc_sub_name,'') AS calc_sub_name FROM dict_label WHERE is_active=1 ORDER BY sort_order, label_id");
+                    $stmt = $pdo->query("SELECT label_id, label_name, type_code, is_repeatable, input_type, has_draw_lathe, is_range, sort_order, has_tolerance, is_calc_diff, calc_base_label_id, calc_sub_label_id, tolerance_std_upper, COALESCE(is_exclude_calc,0) AS is_exclude_calc, COALESCE(is_dimension,0) AS is_dimension, COALESCE(is_qty_dim,0) AS is_qty_dim, COALESCE(prefix_char,'') AS prefix_char, COALESCE(suffix_char,'') AS suffix_char, COALESCE(is_hidden_frontend,0) AS is_hidden_frontend, COALESCE(lathe_optional,0) AS lathe_optional, COALESCE(has_draw_lathe_depth,0) AS has_draw_lathe_depth, COALESCE(is_triple_dim,0) AS is_triple_dim, COALESCE(calc_base_name,'') AS calc_base_name, COALESCE(calc_sub_name,'') AS calc_sub_name, COALESCE(is_required,0) AS is_required FROM dict_label WHERE is_active=1 ORDER BY sort_order, label_id");
                 }
                 $lbl_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 // 使用中筆數（供清單顯示「用 N」徽章並反灰刪除鈕；真正的守門在 check_delete／delete）
@@ -4770,6 +4780,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $prefix_char    = trim($_POST['prefix_char'] ?? '');
                 $suffix_char    = trim($_POST['suffix_char'] ?? '');
                 $is_hidden_fe   = intval($_POST['is_hidden_frontend'] ?? 0);
+                $is_required_sv = intval($_POST['is_required'] ?? 0);   // 新增料號時必填
                 $lathe_optional      = intval($_POST['lathe_optional'] ?? 0);
                 $has_draw_lathe_depth= intval($_POST['has_draw_lathe_depth'] ?? 0);
                 $is_triple_dim_sv    = intval($_POST['is_triple_dim'] ?? 0);
@@ -4805,14 +4816,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if ((int)$dup->fetchColumn() > 0) throw new Exception("已存在相同名稱的標籤「{$name}」，請使用不同名稱");
                 $uid = $_SESSION['user_id']??null; $op_name = _get_operator($pdo,$uid);
                 if ($id) {
-                    $old_lbl = $pdo->prepare("SELECT label_name,type_code,input_type,is_repeatable,has_draw_lathe,is_range,has_tolerance,is_calc_diff,calc_base_label_id,calc_sub_label_id,tolerance_std_upper,is_exclude_calc,COALESCE(is_dimension,0) AS is_dimension,COALESCE(is_qty_dim,0) AS is_qty_dim,COALESCE(prefix_char,'') AS prefix_char,COALESCE(suffix_char,'') AS suffix_char,COALESCE(is_hidden_frontend,0) AS is_hidden_frontend FROM dict_label WHERE label_id=?"); $old_lbl->execute([$id]); $old_lbl_row = $old_lbl->fetch(PDO::FETCH_ASSOC);
-                    $pdo->prepare("UPDATE dict_label SET label_name=?, type_code=?, is_repeatable=?, input_type=?, has_draw_lathe=?, is_range=?, has_tolerance=?, is_calc_diff=?, calc_base_label_id=?, calc_sub_label_id=?, tolerance_std_upper=?, is_exclude_calc=?, is_dimension=?, is_qty_dim=?, prefix_char=?, suffix_char=?, is_hidden_frontend=?, lathe_optional=?, has_draw_lathe_depth=?, is_triple_dim=?, calc_base_name=?, calc_sub_name=? WHERE label_id=?")
-                        ->execute([$name, $type_code, $is_rep, $input_type, $has_draw_lathe, $is_range_v, $has_tolerance, $is_calc_diff, $calc_base_id, $calc_sub_id, $tol_std_upper, $is_excl_calc, $is_dim, $is_qty_dim, $prefix_char ?: null, $suffix_char ?: null, $is_hidden_fe, $lathe_optional, $has_draw_lathe_depth, $is_triple_dim_sv, $calc_base_name_sv ?: null, $calc_sub_name_sv ?: null, $id]);
+                    $old_lbl = $pdo->prepare("SELECT label_name,type_code,input_type,is_repeatable,has_draw_lathe,is_range,has_tolerance,is_calc_diff,calc_base_label_id,calc_sub_label_id,tolerance_std_upper,is_exclude_calc,COALESCE(is_dimension,0) AS is_dimension,COALESCE(is_qty_dim,0) AS is_qty_dim,COALESCE(prefix_char,'') AS prefix_char,COALESCE(suffix_char,'') AS suffix_char,COALESCE(is_hidden_frontend,0) AS is_hidden_frontend,COALESCE(is_required,0) AS is_required FROM dict_label WHERE label_id=?"); $old_lbl->execute([$id]); $old_lbl_row = $old_lbl->fetch(PDO::FETCH_ASSOC);
+                    $pdo->prepare("UPDATE dict_label SET label_name=?, type_code=?, is_repeatable=?, input_type=?, has_draw_lathe=?, is_range=?, has_tolerance=?, is_calc_diff=?, calc_base_label_id=?, calc_sub_label_id=?, tolerance_std_upper=?, is_exclude_calc=?, is_dimension=?, is_qty_dim=?, prefix_char=?, suffix_char=?, is_hidden_frontend=?, lathe_optional=?, has_draw_lathe_depth=?, is_triple_dim=?, calc_base_name=?, calc_sub_name=?, is_required=? WHERE label_id=?")
+                        ->execute([$name, $type_code, $is_rep, $input_type, $has_draw_lathe, $is_range_v, $has_tolerance, $is_calc_diff, $calc_base_id, $calc_sub_id, $tol_std_upper, $is_excl_calc, $is_dim, $is_qty_dim, $prefix_char ?: null, $suffix_char ?: null, $is_hidden_fe, $lathe_optional, $has_draw_lathe_depth, $is_triple_dim_sv, $calc_base_name_sv ?: null, $calc_sub_name_sv ?: null, $is_required_sv, $id]);
                     $new_id = $id;
-                    $ch=_diff_rows($old_lbl_row??[],['label_name'=>$name,'type_code'=>$type_code,'input_type'=>$input_type,'is_repeatable'=>(string)$is_rep,'has_draw_lathe'=>(string)$has_draw_lathe,'is_range'=>(string)$is_range_v,'has_tolerance'=>(string)$has_tolerance,'is_calc_diff'=>(string)$is_calc_diff,'calc_base_label_id'=>(string)($calc_base_id??''),'calc_sub_label_id'=>(string)($calc_sub_id??''),'tolerance_std_upper'=>(string)($tol_std_upper??''),'is_exclude_calc'=>(string)$is_excl_calc,'is_dimension'=>(string)$is_dim,'is_qty_dim'=>(string)$is_qty_dim,'prefix_char'=>$prefix_char,'suffix_char'=>$suffix_char,'is_hidden_frontend'=>(string)$is_hidden_fe],array_keys($old_lbl_row??[])); if(!empty($ch)) _log_audit($pdo,'update','dict','label:'.$id,$name,$ch,$uid,$op_name);
+                    $ch=_diff_rows($old_lbl_row??[],['label_name'=>$name,'type_code'=>$type_code,'input_type'=>$input_type,'is_repeatable'=>(string)$is_rep,'has_draw_lathe'=>(string)$has_draw_lathe,'is_range'=>(string)$is_range_v,'has_tolerance'=>(string)$has_tolerance,'is_calc_diff'=>(string)$is_calc_diff,'calc_base_label_id'=>(string)($calc_base_id??''),'calc_sub_label_id'=>(string)($calc_sub_id??''),'tolerance_std_upper'=>(string)($tol_std_upper??''),'is_exclude_calc'=>(string)$is_excl_calc,'is_dimension'=>(string)$is_dim,'is_qty_dim'=>(string)$is_qty_dim,'prefix_char'=>$prefix_char,'suffix_char'=>$suffix_char,'is_hidden_frontend'=>(string)$is_hidden_fe,'is_required'=>(string)$is_required_sv],array_keys($old_lbl_row??[])); if(!empty($ch)) _log_audit($pdo,'update','dict','label:'.$id,$name,$ch,$uid,$op_name);
                 } else {
-                    $pdo->prepare("INSERT INTO dict_label (label_name, type_code, is_repeatable, input_type, has_draw_lathe, is_range, has_tolerance, is_calc_diff, calc_base_label_id, calc_sub_label_id, tolerance_std_upper, is_exclude_calc, is_dimension, is_qty_dim, prefix_char, suffix_char, is_hidden_frontend, lathe_optional, has_draw_lathe_depth, is_triple_dim, calc_base_name, calc_sub_name, sort_order) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE((SELECT MAX(sort_order)+1 FROM dict_label AS _t2),0))")
-                        ->execute([$name, $type_code, $is_rep, $input_type, $has_draw_lathe, $is_range_v, $has_tolerance, $is_calc_diff, $calc_base_id, $calc_sub_id, $tol_std_upper, $is_excl_calc, $is_dim, $is_qty_dim, $prefix_char ?: null, $suffix_char ?: null, $is_hidden_fe, $lathe_optional, $has_draw_lathe_depth, $is_triple_dim_sv, $calc_base_name_sv ?: null, $calc_sub_name_sv ?: null]);
+                    $pdo->prepare("INSERT INTO dict_label (label_name, type_code, is_repeatable, input_type, has_draw_lathe, is_range, has_tolerance, is_calc_diff, calc_base_label_id, calc_sub_label_id, tolerance_std_upper, is_exclude_calc, is_dimension, is_qty_dim, prefix_char, suffix_char, is_hidden_frontend, lathe_optional, has_draw_lathe_depth, is_triple_dim, calc_base_name, calc_sub_name, is_required, sort_order) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE((SELECT MAX(sort_order)+1 FROM dict_label AS _t2),0))")
+                        ->execute([$name, $type_code, $is_rep, $input_type, $has_draw_lathe, $is_range_v, $has_tolerance, $is_calc_diff, $calc_base_id, $calc_sub_id, $tol_std_upper, $is_excl_calc, $is_dim, $is_qty_dim, $prefix_char ?: null, $suffix_char ?: null, $is_hidden_fe, $lathe_optional, $has_draw_lathe_depth, $is_triple_dim_sv, $calc_base_name_sv ?: null, $calc_sub_name_sv ?: null, $is_required_sv]);
                     $new_id = (int)$pdo->lastInsertId();
                     _log_audit($pdo,'insert','dict','label:'.$new_id,$name,null,$uid,$op_name);
                 }
@@ -12972,7 +12983,7 @@ function renderPartLabelChips(labelDefs, existing) {
             var isDim    = (ldef.is_dimension == '1' || ldef.is_dimension === 1);
             var isQtyDim = (ldef.is_qty_dim == '1' || ldef.is_qty_dim === 1);
             var chipLabel;
-            var _dispName = escHtml(ldef.label_name||'');
+            var _dispName = escHtml(ldef.label_name||'') + ((ldef.is_required=='1'||ldef.is_required===1) ? ' <span style="color:#c0392b;font-weight:700;" title="新增料號時必填">*</span>' : '');
             if (isCalc || hasDl || hasDlDepth || isTripleDimL || inpType !== 'none' || isRng || hasTol || isDim || isQtyDim) {
                 chipLabel = '<i class="fa fa-plus" style="font-size:9px;"></i> '+_dispName;
             } else {
@@ -14817,10 +14828,34 @@ function openPartModal(d_id) {
     }
 }
 
+// 新增料號時還沒填的必填標籤（_labelDefs 來自 manage_labels op=list，帶著 is_required）
+function _pfMissingRequiredLabels() {
+    var miss = [];
+    (_labelDefs||[]).forEach(function(ld){
+        if (!(ld.is_required=='1'||ld.is_required===1)) return;
+        var applied = document.querySelectorAll('#pf-label-chips [data-label-id="'+ld.label_id+'"]');
+        var ok = false;
+        Array.prototype.forEach.call(applied, function(el){
+            if (el.dataset.applied === '0') return;          // 那是「＋」未套用的 chip
+            var inp = el.querySelectorAll('input');
+            if (!inp.length) { ok = true; return; }           // 無輸入型標籤：套用了就算填了
+            for (var i=0;i<inp.length;i++) if (String(inp[i].value||'').trim()!=='') { ok = true; return; }
+            if (/[0-9]/.test(el.textContent)) ok = true;      // 值是以文字顯示的（數字標籤套用後的樣子）
+        });
+        if (!ok) miss.push(ld.label_name||('標籤#'+ld.label_id));
+    });
+    return miss;
+}
+
 function submitPartForm() {
     collectGearRows();
     // Validate
     var type = document.getElementById('pf-Type').value;
+    // 標籤字典勾了「新增料號時必填」的，新增時一定要填（修改既有料號不擋）。後端同規則再擋一次（鐵律8）
+    if (!parseInt(document.getElementById('pf-d_id').value||'0')) {
+        var _missReq = _pfMissingRequiredLabels();
+        if (_missReq.length) { showToast('新增料號必須填寫：' + _missReq.join('、'), 'error'); return; }
+    }
     if (type === 'G' && gearRows.length === 0) { showToast('齒輪料號至少需設定一筆齒輪規格','error'); return; }
     if (type === 'G') {
         for (var i=0; i<gearRows.length; i++) {
@@ -17352,6 +17387,7 @@ var dictConfig = {
             html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#1565C0;;display:none;"><input type="checkbox" id="dict-f-lbl-dim" style="margin-right:3px;" onchange="onLblDimChange(this.checked)"> 長×寬(圓×深)</label>';
             html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#6a1a9a;;display:none;"><input type="checkbox" id="dict-f-lbl-qty-dim" style="margin-right:3px;" onchange="onLblQtyDimChange(this.checked)"> 數量-長×寬</label>';
             html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#546e7a;"><input type="checkbox" id="dict-f-lbl-hidden-fe" style="margin-right:3px;"> 不顯示於前端</label>';
+            html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#c0392b;" title="勾選後，新增料號時一定要填這個標籤才存得了檔（修改既有料號不擋）"><input type="checkbox" id="dict-f-lbl-required" style="margin-right:3px;"> 新增料號時必填</label>';
             html += '</div>';
             html += '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:flex-end;margin-bottom:4px;">';
             html += '<div><label style="font-size:10px;color:#888;margin-bottom:2px;">前綴字元 <span style="font-size:9px;color:#aaa;">(適用長×寬/數量-長×寬)</span></label>';
@@ -17419,6 +17455,7 @@ var dictConfig = {
             $('#dict-f-lbl-dim').prop('checked', isDim);
             $('#dict-f-lbl-qty-dim').prop('checked', isQtyDim);
             $('#dict-f-lbl-hidden-fe').prop('checked', d.is_hidden_frontend=='1'||d.is_hidden_frontend===1);
+            $('#dict-f-lbl-required').prop('checked', d.is_required=='1'||d.is_required===1);
             $('#dict-f-lbl-prefix').val(d.prefix_char||'');
             $('#dict-f-lbl-suffix').val(d.suffix_char||'');
             if (hasDl) {
@@ -17512,6 +17549,7 @@ var dictConfig = {
             var isDim    = (!hasDl && !hasDlDepth && !isTripleDimG && !isRng && !hasTol && !isCalc && $('#dict-f-lbl-dim').is(':checked')) ? 1 : 0;
             var isQtyDim = (!hasDl && !hasDlDepth && !isTripleDimG && !isRng && !hasTol && !isCalc && !isDim && $('#dict-f-lbl-qty-dim').is(':checked')) ? 1 : 0;
             var isHidFe  = $('#dict-f-lbl-hidden-fe').is(':checked') ? 1 : 0;
+            var isReqLbl = $('#dict-f-lbl-required').is(':checked') ? 1 : 0;
             var pfxChar  = ($('#dict-f-lbl-prefix').val()||'').trim();
             var sfxChar  = ($('#dict-f-lbl-suffix').val()||'').trim();
             var it       = (hasDl || hasDlDepth || isTripleDimG || isRng || hasTol || isCalc || isDim || isQtyDim) ? 'number' : ($('#dict-f-lbl-input').val()||'none');
@@ -17533,7 +17571,7 @@ var dictConfig = {
                      calc_base_name:calcBaseName, calc_sub_name:calcSubName,
                      tolerance_std_upper:tolStd, is_exclude_calc:exclCalc, is_dimension:isDim,
                      is_qty_dim:isQtyDim, prefix_char:pfxChar, suffix_char:sfxChar,
-                     is_hidden_frontend:isHidFe, subs_json:subsJson };
+                     is_hidden_frontend:isHidFe, is_required:isReqLbl, subs_json:subsJson };
         },
         getDeleteId: function(d){ return d.label_id; }
     },

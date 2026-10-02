@@ -1608,7 +1608,7 @@ body { background:var(--bg); }
             <input type="date" class="form-control" id="part_issue_date_modal">
           </div>
           <div class="col-md-4 form-group">
-            <label>工件總長 (mm)
+            <label>工件總長 (mm) <span id="part_wl_req_star" class="text-danger" style="display:none;">*</span>
               <span style="font-weight:normal;color:#999;font-size:11px;">＝主檔管理的標籤「工件總長」</span>
             </label>
             <input type="text" class="form-control" id="part_workpiece_len_modal"
@@ -1623,6 +1623,10 @@ body { background:var(--bg); }
         // 齒輪規格設定：與主檔管理（views/pages/master_data_management.php）**同一份元件**，
         // 欄位、連動與寫入規則完全一致（使用者交辦：報價單建的齒輪資料要跟主檔管理建的一樣）。
         // 這一頁沒有「立即刪除既有齒型列」那條路（can.delete=false），其餘與主檔管理相同。
+        // 工件總長標籤的設定（名稱／適用料號種類／是不是「新增料號時必填」）——
+        // 必填與否由主檔管理的標籤字典決定，本頁不自己訂一套（鐵律4）
+        require_once __DIR__ . '/../../src/common/part_label_lib.php';
+        $WL_LABEL_META = eg_part_label_meta($_pdo, eg_workpiece_length_label_id($_pdo)) ?: ['id'=>0,'name'=>'工件總長','types'=>[],'required'=>false];
         $GEAR_SPEC_CFG = [
             'wrap_id' => 'gear-rows-wrap',
             'd_id_el' => 'part_d_id_modal',
@@ -2016,6 +2020,8 @@ const IS_ADMIN         = <?= json_encode($IS_ADMIN) ?>;
 const CAN_LEGACY_SUPP  = <?= json_encode($CAN_LEGACY_SUPP) ?>;   // 舊報價單補附件（只給真正的管理員）
 const PERM_CODE        = <?= json_encode($_perm) ?>;
 const MY_USER_ID       = <?= json_encode($_user_id) ?>;
+// 工件總長標籤：名稱／適用的料號種類／是不是「新增料號時必填」（來自主檔管理的標籤字典）
+const WL_LABEL = <?= json_encode($WL_LABEL_META, JSON_UNESCAPED_UNICODE) ?>;
 
 const API_URL      = '../../src/store/Quotation_API.php';
 const FILE_API_URL = '../../src/store/Quotation_File_API.php';
@@ -2391,6 +2397,7 @@ $(document).ready(function () {
     });
     // 工件種類切換（齒輪規格列由共用元件 _gear_spec_ui.php 渲染，與主檔管理同一份）
     $(document).on('change', '#part_type_modal', function () {
+        wlSyncRequiredStar();
         if ($(this).val() === 'G') {
             $('#part-gear-section').slideDown();
             if (!gearRows.length) addGearRow({});
@@ -10046,11 +10053,25 @@ function resetPartForm() {
     renderGearRows();
     $('#part-customer-results').hide();
 }
+// 工件總長是不是「這個料號種類」的必填欄位（設定來自主檔管理的標籤字典，本頁只讀）
+function wlIsRequiredFor(type) {
+    return !!(WL_LABEL && WL_LABEL.required && (WL_LABEL.types || []).indexOf(String(type)) >= 0);
+}
+function wlSyncRequiredStar() {
+    $('#part_wl_req_star').toggle(wlIsRequiredFor($('#part_type_modal').val()));
+}
 function savePart() {
     const partNo = $('#part_no_modal').val().trim();
     if (!partNo) { Swal.fire('錯誤', '料號不可為空', 'error'); return; }
     if ($('#part_client_search_modal').val().trim() && !$('#part_customer_id_modal').val().trim()) {
         Swal.fire('錯誤', '請從建議列表選擇客戶，或清空客戶欄位', 'error'); return;
+    }
+    // 工件總長：新增料號時必填（修改既有料號不擋）。後端同規則再擋一次（鐵律8）
+    const _isNew = !String($('#part_d_id_modal').val() || '').trim();
+    if (_isNew && wlIsRequiredFor($('#part_type_modal').val()) && !$('#part_workpiece_len_modal').val().trim()) {
+        Swal.fire('錯誤', '「' + (WL_LABEL.name || '工件總長') + '」為必填，請先填寫（這一欄就是主檔管理的標籤「工件總長」）', 'error');
+        $('#part_workpiece_len_modal').focus();
+        return;
     }
     // 齒輪規格一律由共用元件收集（欄位與主檔管理完全相同，連模數的 DP/CP 標記、
     // 齒輪等級、鏈輪與花鍵的尺寸都在裡面），不要再自己一欄一欄撿

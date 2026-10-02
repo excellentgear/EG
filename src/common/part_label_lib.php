@@ -90,3 +90,81 @@ function eg_part_label_set(PDO $db, int $dId, int $labelId, ?string $value): boo
         return true;
     } catch (Throwable $e) { return false; }
 }
+
+/**
+ * 「新增料號時必填」的標籤清單（唯一實作，2026-10-02）。
+ *
+ * 使用者交辦「工件總長要是必填項目」。刻意不把標籤名稱寫死在程式裡，
+ * 改成 `dict_label.is_required` 旗標，管理員可在主檔管理的標籤字典設定自行勾選
+ * （鐵律4：寫死名稱的話，管理員改個名這條規則就靜靜失效）。
+ *
+ * **只擋新增、不擋修改既有料號**（使用者拍板）：全庫適用這個標籤的料號有 23,969 支，
+ * 目前只有 277 支有值；連修改都擋的話，任何人只是要改客戶或備註都會先被擋在外面。
+ *
+ * @param string $partType 料號種類（G/J/N/CFG…），只回傳適用於該種類的標籤
+ *                         （滾刀 H 不在工件總長的 type_code 裡，自然不會被要求）
+ * @return array [['label_id'=>int,'label_name'=>string], ...]
+ */
+function eg_part_required_labels(PDO $db, string $partType): array {
+    $t = trim($partType);
+    if ($t === '') return [];
+    try {
+        $st = $db->prepare("SELECT label_id, label_name FROM dict_label
+                             WHERE is_active = 1 AND COALESCE(is_required,0) = 1
+                               AND FIND_IN_SET(?, type_code)
+                             ORDER BY sort_order, label_id");
+        $st->execute([$t]);
+        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }   // 欄位還沒建出來時一律視為沒有必填標籤，不要讓存檔壞掉
+}
+
+/**
+ * 判斷「這一列標籤資料算不算有填」。
+ * 數字/文字標籤看 input_value；圖面車床型看 draw_dim；範圍型看 value_min/value_max；
+ * 計算差異型看 calc_value——只要任何一種放值的欄位有東西就算有填。
+ */
+function eg_part_label_row_filled(array $row): bool {
+    foreach (['input_value', 'draw_dim', 'lathe_dim', 'value_min', 'value_max', 'calc_value', 'qty'] as $k) {
+        if (isset($row[$k]) && trim((string)$row[$k]) !== '') return true;
+    }
+    return false;
+}
+
+/**
+ * 檢查一批要存進去的標籤資料有沒有漏掉必填的，回傳漏掉的標籤名稱（空陣列＝都填了）。
+ * @param array $labels 與主檔管理 save_part 的 labels 相同格式：[['label_id'=>..,'input_value'=>..], ...]
+ */
+function eg_part_required_missing(PDO $db, string $partType, array $labels): array {
+    $req = eg_part_required_labels($db, $partType);
+    if (!$req) return [];
+    $filled = [];
+    foreach ($labels as $l) {
+        $lid = intval($l['label_id'] ?? 0);
+        if ($lid > 0 && eg_part_label_row_filled((array)$l)) $filled[$lid] = true;
+    }
+    $miss = [];
+    foreach ($req as $r) { if (empty($filled[(int)$r['label_id']])) $miss[] = (string)$r['label_name']; }
+    return $miss;
+}
+
+/**
+ * 單一標籤的設定（名稱／適用料號種類／是不是新增時必填），給只放得下一個標籤的畫面用
+ * （例：報價單管理「新增料號」跳窗只有「工件總長」一欄）。
+ * @return array|null ['id'=>int,'name'=>string,'types'=>['G','J',…],'required'=>bool]
+ */
+function eg_part_label_meta(PDO $db, int $labelId): ?array {
+    if ($labelId <= 0) return null;
+    try {
+        $st = $db->prepare("SELECT label_id, label_name, type_code, COALESCE(is_required,0) AS is_required
+                              FROM dict_label WHERE label_id=? AND is_active=1");
+        $st->execute([$labelId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) return null;
+        return [
+            'id'       => (int)$r['label_id'],
+            'name'     => (string)$r['label_name'],
+            'types'    => array_values(array_filter(array_map('trim', explode(',', (string)$r['type_code'])))),
+            'required' => ((int)$r['is_required'] === 1),
+        ];
+    } catch (Throwable $e) { return null; }
+}

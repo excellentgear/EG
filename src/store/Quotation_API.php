@@ -3081,6 +3081,17 @@ try {
             $gears_raw = $_POST['gears']        ?? '[]';
             $gears     = json_decode($gears_raw, true) ?: [];
             if (empty($part_no)) throw new Exception('料號不可為空');
+            // 工件總長：新增料號時必填（修改既有料號不擋）。必填與否讀主檔管理標籤字典的 is_required，
+            // 本頁不自己訂一套；前端已擋一次，這裡同規則再擋一次避免直打 API 繞過（鐵律8）。
+            // 註：這個跳窗只放得下「工件總長」一個標籤，所以只檢查它；其他標籤若被管理員設成必填，
+            //     由主檔管理那一頁把關（在這裡擋會變成從報價單一支新料號都建不出來）。
+            if (empty($d_id)) {
+                $__wlMeta = eg_part_label_meta($pdo, eg_workpiece_length_label_id($pdo));
+                if ($__wlMeta && $__wlMeta['required'] && in_array($type, $__wlMeta['types'], true)
+                    && trim((string)($_POST['workpiece_length'] ?? '')) === '') {
+                    throw new Exception('「' . $__wlMeta['name'] . '」為必填，請先填寫');
+                }
+            }
             $cust_id = ($cust_id !== '' && $cust_id !== null) ? $cust_id : null;
 
             $pdo->beginTransaction();
