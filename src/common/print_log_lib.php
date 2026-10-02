@@ -239,6 +239,7 @@ if (!function_exists('eg_print_sources')) {
             'packing_insp'   => ['label' => '包裝檢驗回報－已結案檢驗紀錄表', 'page' => 'views/pm/packing_schedule.php',           'kind' => 'form'],
             'meeting'        => ['label' => '會議紀錄／簽到表／會議通知單',   'page' => 'views/ADM/meeting_record.php',            'kind' => 'form'],
             'as_schedule'    => ['label' => 'AS 文件年度排程表',             'page' => 'views/ADM/as_schedule.php',               'kind' => 'form'],
+            'kpi_scheme'     => ['label' => 'KPI 新方案（草案）',            'page' => 'views/news/KPI_new.php',                  'kind' => 'form'],
         ];
     }
 }
