@@ -376,6 +376,7 @@ $EG_ROLE_MODULES = [
     'qa_ncr'              => ['prefix'=>'ncr',     'label'=>'不合格品管制記錄表',  'page'=>'ncr_control_log.php'],
     'qa_abnormal'         => ['prefix'=>'qab',     'label'=>'品質異常處理單',      'page'=>'qa_abnormal_list.php'],
     'sop_sip'             => ['prefix'=>'sopsip',  'label'=>'作業標準書SOP／檢驗指導書SIP', 'page'=>'sop_sip.php'],
+    'control_plan'        => ['prefix'=>'cp',      'label'=>'管制計畫CP',          'page'=>'control_plan.php'],
     'data_audit'          => ['prefix'=>'dqa',     'label'=>'資料稽核',            'page'=>'data_audit.php'],
     'leave'               => ['prefix'=>'leave',   'label'=>'請假系統',            'page'=>'leave_request.php'],
     'shipping'            => ['prefix'=>'ship',    'label'=>'快速出貨',            'page'=>'Shipping_Quick.php'],

@@ -240,6 +240,7 @@ if (!function_exists('eg_print_sources')) {
             'meeting'        => ['label' => '會議紀錄／簽到表／會議通知單',   'page' => 'views/ADM/meeting_record.php',            'kind' => 'form'],
             'as_schedule'    => ['label' => 'AS 文件年度排程表',             'page' => 'views/ADM/as_schedule.php',               'kind' => 'form'],
             'kpi_scheme'     => ['label' => 'KPI 新方案（草案）',            'page' => 'views/news/KPI_new.php',                  'kind' => 'form'],
+            'control_plan'   => ['label' => '管制計畫 CP（Control Plan）',   'page' => 'views/QA/control_plan.php',               'kind' => 'form'],
         ];
     }
 }
