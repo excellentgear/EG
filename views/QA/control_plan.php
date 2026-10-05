@@ -296,6 +296,7 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
                     <span class="muted">製程以 BOM 為主；每道製程下面是該製程要管制的特性列</span>
                     <button class="btn-w2 btn-xs2" id="btnAddProc" style="margin-left:auto;"><i class="fa fa-plus"></i> 新增製程</button>
                     <button class="btn-w2 btn-xs2" id="btnRefillFromSrc"><i class="fa fa-refresh"></i> 重新由來源帶入</button>
+                    <button class="btn-w2 btn-xs2" id="btnRecalcInsp" title="依「設定」分頁的IQC代號／包裝代號／AS稽核製程規則，重新判定每一列的檢驗類別（只套在目前畫面，按儲存才會留下）"><i class="fa fa-stethoscope"></i> 重新判定檢驗類別</button>
                 </div>
                 <div id="procWrap"></div>
             </div>
@@ -401,6 +402,31 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
                 <button class="btn-w2" id="btnAddReact"><i class="fa fa-plus"></i> 新增一列</button>
             </div>
 
+            <div class="cp-note">
+                <b>檢驗類別自動判定（IQC／IPQC／FQC）</b>：自動帶入製程列時，依下面的「製程代號」判定每一道製程
+                後面接哪種檢驗——<b>預設都是 IPQC（製程檢驗）</b>，介於 IQC 與 FQC 之間的其他製程維持 IPQC 不必另設。
+                判定結果存進每一道製程列的「檢驗類別」欄位，<b>之後是人工可覆蓋的欄位</b>（編輯畫面逐列下拉可改，
+                或按「重新判定檢驗類別」套用目前設定）；這裡的規則只負責「自動帶入那一刻該猜成什麼」。
+                <div style="margin-top:4px;">是<b>製程代號（process_no小類）不是製程大類</b>——同一個大類底下常有
+                好幾個代號（例如「齒研」大類底下有齒研／結合齒研／粗齒研／磨齒…），要哪幾個代號才算，請逐個挑選加入。</div>
+            </div>
+            <div style="margin-bottom:6px;"><b>①哪些製程代號後面接 IQC</b>
+                <span class="muted">（同一條製程鏈只認最早出現的那一個，代表材料剛進站，例如委外回廠、客供半成品銜接點；
+                鏈中其餘出現不重複觸發）</span></div>
+            <div id="iqcCodeList" style="margin-bottom:6px;min-height:26px;"></div>
+            <div class="ac-box" style="display:inline-block;margin-bottom:14px;">
+                <input type="text" id="iqcCodeAdd" placeholder="打字搜尋製程代號後點選加入" autocomplete="off" style="height:28px;min-width:260px;">
+            </div>
+            <div style="margin-bottom:6px;"><b>②哪些製程代號是包裝製程</b>
+                <span class="muted">（包裝本身不算檢驗點，由管理員認定；包裝前一道製程固定接 FQC 最終檢驗）</span></div>
+            <div id="packCodeList" style="margin-bottom:6px;min-height:26px;"></div>
+            <div class="ac-box" style="display:inline-block;margin-bottom:10px;">
+                <input type="text" id="packCodeAdd" placeholder="打字搜尋製程代號後點選加入" autocomplete="off" style="height:28px;min-width:260px;">
+            </div>
+            <div style="margin-bottom:18px;">
+                <button class="btn-w" id="btnSaveInspCodes"><i class="fa fa-save"></i> 儲存檢驗類別代號設定</button>
+            </div>
+
             <div class="cp-note <?= $tagInfo['ready'] ? '' : 'warn' ?>">
                 <b>哪些訂單需要建管制計畫</b>
                 <?php if ($tagInfo['ready']): ?>
@@ -421,21 +447,25 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
                 <?php endif; ?>
                 <div style="margin-top:6px;">標籤定義本身<b>只能在訂單追蹤的「設定→稽核製程標籤」改</b>，
                     本模組只讀不寫（鐵律4：同一份定義不留第二份）。</div>
+                <div style="margin-top:6px;"><b>「次站檢驗類別」</b>：這個稽核製程本身是否要指定「下一道製程」
+                    固定接 IQC 或 FQC（不指定＝照上面①②的一般規則判，判不到就是 IPQC）。
+                    這是管理員對該稽核製程的業務判斷，<b>優先序最高</b>——會覆蓋①②判出來的結果。</div>
             </div>
             <div class="cp-scroll" style="margin-bottom:10px;">
-                <table class="cp-t" id="tAsTag" style="min-width:820px;">
+                <table class="cp-t" id="tAsTag" style="min-width:940px;">
                     <thead><tr>
                         <th style="width:70px;">標籤 id</th><th style="width:130px;">稽核製程</th>
                         <th style="width:190px;">訂單上會長出的標籤</th>
                         <th style="width:90px;">掛了訂單</th><th style="width:80px;">涉及料號</th>
                         <th style="width:70px;">啟用</th><th style="width:150px;">要求建 CP</th>
+                        <th style="width:140px;">次站檢驗類別</th>
                     </tr></thead>
-                    <tbody><tr><td colspan="7" style="text-align:center;color:#8a6d45;">載入中…</td></tr></tbody>
+                    <tbody><tr><td colspan="8" style="text-align:center;color:#8a6d45;">載入中…</td></tr></tbody>
                 </table>
             </div>
             <div style="margin-bottom:18px;">
-                <button class="btn-w" id="btnSaveTags" <?= $tagInfo['ready'] ? '' : 'disabled' ?>><i class="fa fa-save"></i> 儲存排除設定</button>
-                <span class="muted" style="margin-left:8px;">取消勾選＝該稽核製程的訂單不再出現在建議建立清單</span>
+                <button class="btn-w" id="btnSaveTags" <?= $tagInfo['ready'] ? '' : 'disabled' ?>><i class="fa fa-save"></i> 儲存稽核製程設定</button>
+                <span class="muted" style="margin-left:8px;">同時存「要求建CP」排除名單與「次站檢驗類別」；取消勾選「要求建CP」＝該稽核製程的訂單不再出現在建議建立清單</span>
             </div>
 
             <div class="cp-note">
@@ -499,6 +529,21 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
             </ul>
             <p>帶不出來的欄位會<b>明確標示要人工填</b>，不會假裝有資料。</p>
 
+            <h4>檢驗類別：IQC／IPQC／FQC</h4>
+            <p>自動帶入時每道製程會判定出該接哪種檢驗，判定結果就是<b>每一道製程列的「檢驗類別」欄位</b>
+            （也會在製程名稱旁顯示徽章），<b>判定完之後是人工可覆蓋的欄位</b>，不是每次都重算。</p>
+            <ul>
+                <li>預設都是 <b>IPQC（製程檢驗）</b>——介於下面兩種之間的其他製程維持 IPQC 不必另設。</li>
+                <li>管理員在「設定」挑選的<b>「後面接IQC」製程代號</b>——同一條製程鏈只認最早出現的那一個，
+                    代表材料剛進站（例如委外回廠、客供半成品銜接點），命中的那一列本身就是 <b>IQC（進料檢驗）</b>。</li>
+                <li>管理員在「設定」挑選的<b>「包裝製程」代號</b>——包裝本身不算檢驗點，<b>包裝前一道製程</b>
+                    固定接 <b>FQC（最終檢驗）</b>。</li>
+                <li><b>AS 稽核製程</b>（訂單追蹤的「稽核製程」標籤）可逐個標籤額外指定「下一站固定 IQC 或 FQC」，
+                    優先序最高，會覆蓋上面兩條規則判出來的結果。</li>
+            </ul>
+            <p>編輯畫面「製程與管制特性」工具列有<b>「重新判定檢驗類別」</b>按鈕——手動調整過製程順序或增刪列之後，
+            可依目前的設定重新套用判定（只套用在畫面上，按「儲存」才會留下）。</p>
+
             <h4>操作步驟</h4>
             <ul>
                 <li>到「自動帶入／建議建立」→ 搜尋並點選訂單 → 選階段 →「預覽帶入內容」→ 確認後「建立」。</li>
@@ -520,7 +565,8 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
             </ul>
 
             <h4>設定入口</h4>
-            <p>「設定」分頁（限管理員）：階段、特殊特性分類、反應計畫常用語、哪些訂單標籤需要建 CP、AS 文件綁定。</p>
+            <p>「設定」分頁（限管理員）：階段、特殊特性分類、反應計畫常用語、檢驗類別（IQC代號／包裝代號／
+            AS稽核製程次站檢驗類別）、哪些訂單標籤需要建 CP、AS 文件綁定。</p>
         </div>
         <div class="m-ft"><button class="btn-w2" data-close="helpUseMask">關閉</button></div>
     </div>
@@ -583,6 +629,7 @@ var CANVIEW  = <?= $P['view'] ? 'true' : 'false' ?>;
 
 var STAGES = [], CLASSES = [], REACTS = [], ASMETA = {}, TAGSTATUS = {};
 var ASTAGDEFS = [], EXCLTAGS = [], REQTAGS = [];   // 稽核製程標籤定義／被排除的／要求建 CP 的
+var ICODES = [], PACKCODES = [], ASTAGINSP = {};   // 檢驗類別自動判定：IQC代號／包裝代號／AS稽核製程次站設定
 var DOC = null;          // 目前編輯中的 CP
 var LIST_PAGE = 1;
 var PREVIEW = null;      // 自動帶入預覽結果
@@ -642,6 +689,7 @@ function boot(){
         REACTS = res.reaction_opts || []; ASMETA = res.as_doc || {};
         TAGSTATUS = res.tag_status || {};
         ASTAGDEFS = res.as_tag_defs || []; EXCLTAGS = res.excluded_as_tags || []; REQTAGS = res.required_as_tags || [];
+        ICODES = res.iqc_codes || []; PACKCODES = res.pack_codes || []; ASTAGINSP = res.as_tag_insp || {};
         fillStageSelects();
         loadList();
         renderAutoNote();
@@ -844,6 +892,7 @@ function renderProcs(){
           +   (p.process_no ? '<span class="src-tag">#'+esc(p.process_no)+'</span>' : '')
           +   (p.src === 'bom' ? '<span class="src-tag">來自製令</span>' : '<span class="src-tag">手動</span>')
           +   (+p.is_outsource ? '<span class="tag-s sg-2">委外</span>' : '')
+          +   inspBadge(p.insp_stage)
           +   '<button class="btn-w2 btn-xs2" data-additem="'+pi+'" style="margin-left:auto;"><i class="fa fa-plus"></i> 新增特性</button>'
           +   '<button class="btn-w2 btn-xs2" data-upproc="'+pi+'"><i class="fa fa-arrow-up"></i></button>'
           +   '<button class="btn-w2 btn-xs2" data-dnproc="'+pi+'"><i class="fa fa-arrow-down"></i></button>'
@@ -855,6 +904,7 @@ function renderProcs(){
           +   '<div><label>機器／裝置</label><input type="text" data-pf="machine" data-pi="'+pi+'" value="'+esc(p.machine||'')+'" style="width:170px;"></div>'
           +   '<div><label>治具／工具</label><input type="text" data-pf="jig_tool" data-pi="'+pi+'" value="'+esc(p.jig_tool||'')+'" style="width:170px;"></div>'
           +   '<div><label>委外廠商</label><input type="text" data-pf="maker_name" data-pi="'+pi+'" value="'+esc(p.maker_name||'')+'" style="width:140px;"></div>'
+          +   '<div><label>檢驗類別</label>' + inspSelect(p, pi) + '</div>'
           +  '</div>';
 
         if (p.hint) h += '<div class="cp-note" style="margin:0 0 6px;">'+esc(p.hint)+'</div>';
@@ -907,6 +957,19 @@ function renderProcs(){
     });
     $('#procWrap').html(h || '<div class="cp-note">還沒有製程列。按「新增製程」手動加入，或到「自動帶入／建議建立」從訂單的製令帶入。</div>');
     if (DOC.status === 'approved' && !CANADMIN) $('#procWrap').find('input,select').prop('disabled', true);
+}
+/* 檢驗類別（IQC/IPQC/FQC）：顯示徽章＋可改的下拉，自動帶入會算好，之後是人工可覆蓋欄位 */
+var INSP_LABEL = { IQC: 'IQC', IPQC: 'IPQC', FQC: 'FQC' };
+function inspBadge(stage){
+    if (!stage || !INSP_LABEL[stage]) return '';
+    var cls = stage === 'IQC' ? 'sg-1' : (stage === 'FQC' ? 'sg-3' : 'sg-2');
+    return '<span class="tag-s '+cls+'" title="檢驗類別（可在下方「檢驗類別」欄位改）">'+INSP_LABEL[stage]+'</span>';
+}
+function inspSelect(p, pi){
+    var opts = [['', '—（包裝／不適用）'], ['IQC','IQC（進料檢驗）'], ['IPQC','IPQC（製程檢驗）'], ['FQC','FQC（最終檢驗）']];
+    var h = '<select data-pf="insp_stage" data-pi="'+pi+'" style="width:150px;">';
+    opts.forEach(function(o){ h += '<option value="'+o[0]+'"'+((p.insp_stage||'')===o[0]?' selected':'')+'>'+o[1]+'</option>'; });
+    return h + '</select>';
 }
 function td(pi, ii, f, v, style, isTa){
     if (isTa) {
@@ -973,6 +1036,20 @@ $('#btnRefillFromSrc').on('click', function(){
         DOC.processes = (res.processes || []).map(mapPrevProc);
         renderProcs();
         toast('已重新帶入 ' + DOC.processes.length + ' 道製程。');
+    });
+});
+$('#btnRecalcInsp').on('click', function(){
+    if (!DOC.processes || !DOC.processes.length) { toast('還沒有任何製程列。', true); return; }
+    // 只送 process_no，順序＝畫面目前的順序（管理員設定的IQC代號/包裝代號/AS稽核製程規則依此重算）
+    var rows = DOC.processes.map(function(p){ return { process_no: p.process_no }; });
+    post('recalc_insp', { processes: JSON.stringify(rows) }, function(res){
+        (res.processes || []).forEach(function(r, i){
+            if (!DOC.processes[i]) return;
+            DOC.processes[i].insp_stage = r.insp_stage || '';
+            DOC.processes[i].insp_src = r.insp_src || '';
+        });
+        renderProcs();
+        toast('已依設定重新判定，請確認後按「儲存」。');
     });
 });
 
@@ -1273,7 +1350,7 @@ function renderPreview(r){
         if (!items.length) {
             h += '<tr><td style="text-align:center;">'+p.seq+'</td>'
               +  '<td><b>'+esc(p.process_name||('製程'+p.process_no))+'</b>'
-              +  (p.process_no?'<span class="src-tag">#'+p.process_no+'</span>':'')+'</td>'
+              +  (p.process_no?'<span class="src-tag">#'+p.process_no+'</span>':'') + inspBadge(p.insp_stage) + '</td>'
               +  '<td>'+esc(p.machine||'—')+(p.maker_name?'<div class="muted">'+esc(p.maker_name)+'</div>':'')+'</td>'
               +  '<td colspan="7" style="color:#8c2d18;">'+esc(p.hint||'查不到檢驗項目，要人工填')+'</td></tr>';
             return;
@@ -1284,6 +1361,7 @@ function renderPreview(r){
                 h += '<td rowspan="'+items.length+'" style="text-align:center;">'+p.seq+'</td>'
                   +  '<td rowspan="'+items.length+'"><b>'+esc(p.process_name||('製程'+p.process_no))+'</b>'
                   +  (p.process_no?'<span class="src-tag">#'+p.process_no+'</span>':'')
+                  +  inspBadge(p.insp_stage)
                   +  (+p.is_outsource?'<div><span class="tag-s sg-2">委外</span></div>':'')+'</td>'
                   +  '<td rowspan="'+items.length+'">'+esc(p.machine||'—')
                   +  (p.maker_name?'<div class="muted">'+esc(p.maker_name)+'</div>':'')+'</td>';
@@ -1313,7 +1391,8 @@ function mapPrevProc(p){
     // PFMEA 製程功能/要求，寫死掉等於白算了（2026-10-02 修正，原本兩處都遺漏）。
     return { process_no: p.process_no, process_name: p.process_name, op_desc: p.op_desc || '',
              machine: p.machine, jig_tool: '', maker_id_no: p.maker_id_no, maker_name: p.maker_name,
-             is_outsource: p.is_outsource, bom_sn: p.bom_sn, src: p.src || 'bom', note: '',
+             is_outsource: p.is_outsource, insp_stage: p.insp_stage || '', insp_src: p.insp_src || '',
+             bom_sn: p.bom_sn, src: p.src || 'bom', note: '',
              hint: p.hint || '', items: (p.items || []).map(function(it){
                  return { char_no: it.char_no, char_product: it.char_product, char_process: it.char_process,
                           special_class_id: it.special_class_id || null, special_class_text: it.special_class_text,
@@ -1500,8 +1579,60 @@ function renderCfg(){
     REACTS.forEach(function(o){ h += reactRow(o); });
     $('#tReact tbody').html(h || reactRow({}));
 
+    renderCodeChips('#iqcCodeList', ICODES);
+    renderCodeChips('#packCodeList', PACKCODES);
     renderTagCfg();
 }
+
+/* 檢驗類別①②的製程代號清單：標籤式 chip，可逐個 × 移除 */
+function renderCodeChips(sel, list){
+    var h = '';
+    (list || []).forEach(function(c, i){
+        h += '<span class="tag-s sg-1" style="margin:2px 4px 2px 0;font-size:12px;line-height:18px;padding:2px 8px;">'
+           + '#'+esc(c.no)+' '+esc(c.name||'') + ' <a href="#" data-chipdel="'+i+'" data-chiplist="'+sel+'" style="color:#8c2d18;">&times;</a></span>';
+    });
+    $(sel).html(h || '<span class="muted">尚未設定</span>');
+}
+$(document).on('click', '[data-chipdel]', function(e){
+    e.preventDefault();
+    var sel = $(this).data('chiplist'), i = +$(this).data('chipdel');
+    var list = sel === '#iqcCodeList' ? ICODES : PACKCODES;
+    list.splice(i, 1);
+    renderCodeChips(sel, list);
+});
+/* 製程代號自動完成（走既有 search_process，不自刻一套搜尋） */
+function bindProcessAc($inp, onPick){
+    $inp.on('input', function(){
+        var kw = $(this).val().trim(), $me = $(this);
+        clearTimeout(acTimer);
+        if (!kw) { acHide(); return; }
+        acTimer = setTimeout(function(){
+            get('search_process', { kw: kw }, function(res){
+                acShow($me, res.rows || [], function(r){
+                    return '<b>#'+esc(r.ProcessNo)+'</b> '+esc(r.ProcessName||'');
+                }, onPick);
+            });
+        }, 300);
+    });
+}
+bindProcessAc($('#iqcCodeAdd'), function(r){
+    if (!ICODES.some(function(c){ return +c.no === +r.ProcessNo; })) ICODES.push({ no: +r.ProcessNo, name: r.ProcessName || '' });
+    $('#iqcCodeAdd').val(''); renderCodeChips('#iqcCodeList', ICODES);
+});
+bindProcessAc($('#packCodeAdd'), function(r){
+    if (!PACKCODES.some(function(c){ return +c.no === +r.ProcessNo; })) PACKCODES.push({ no: +r.ProcessNo, name: r.ProcessName || '' });
+    $('#packCodeAdd').val(''); renderCodeChips('#packCodeList', PACKCODES);
+});
+$('#btnSaveInspCodes').on('click', function(){
+    post('iqc_codes_save', { codes: JSON.stringify(ICODES.map(function(c){ return c.no; })) }, function(res){
+        ICODES = res.codes || ICODES;
+        post('pack_codes_save', { codes: JSON.stringify(PACKCODES.map(function(c){ return c.no; })) }, function(res2){
+            PACKCODES = res2.codes || PACKCODES;
+            renderCodeChips('#iqcCodeList', ICODES); renderCodeChips('#packCodeList', PACKCODES);
+            toast('已儲存檢驗類別代號設定。');
+        });
+    });
+});
 function clsRow(c){
     // 嚴重度/發生率門檻：留空＝那個條件不比對（存 NULL）。範圍輸入框一律 1~10（S/O 量表上限）。
     function rangeInput(f1, f2, v1, v2) {
@@ -1609,7 +1740,7 @@ function renderTagCfg(){
     get('as_tag_list', {}, function(res){
         var rows = res.rows || [];
         if (!rows.length) {
-            $('#tAsTag tbody').html('<tr><td colspan="7" style="text-align:center;color:#8c2d18;padding:14px;">'
+            $('#tAsTag tbody').html('<tr><td colspan="8" style="text-align:center;color:#8c2d18;padding:14px;">'
               + '目前沒有任何「稽核製程」標籤定義。請先到<b>訂單追蹤 → 設定 → 稽核製程標籤</b>新增'
               + '（例：齒研、插齒），本頁才認定得出哪些訂單需要管制計畫。</td></tr>');
             return;
@@ -1619,6 +1750,7 @@ function renderTagCfg(){
             // 要求建 CP ＝ 沒被排除（排除名單存的是「不要求」的，所以勾選框是反向的）
             var req = !+t.excluded;
             var off = +t.is_active !== 1;
+            var insp = t.insp_next || '';
             h += '<tr'+(off?' style="opacity:.55;"':'')+'>'
               +  '<td style="text-align:center;">'+t.tag_id+'</td>'
               +  '<td><b>'+esc(t.proc_name)+'</b></td>'
@@ -1631,6 +1763,11 @@ function renderTagCfg(){
               +  '<td style="text-align:center;"><label style="font-weight:normal;margin:0;">'
               +    '<input type="checkbox" class="tagck" value="'+t.tag_id+'"'+(req?' checked':'')+(off?' disabled':'')+'> '
               +    (off ? '<span class="muted">停用中不認定</span>' : '要求') + '</label></td>'
+              +  '<td><select class="tagInspSel" data-tagid="'+t.tag_id+'" style="width:100%;height:26px;font-size:12px;">'
+              +    '<option value=""'+(insp===''?' selected':'')+'>（不指定）</option>'
+              +    '<option value="IQC"'+(insp==='IQC'?' selected':'')+'>下一站固定 IQC</option>'
+              +    '<option value="FQC"'+(insp==='FQC'?' selected':'')+'>下一站固定 FQC</option>'
+              +  '</select></td>'
               +  '</tr>';
         });
         $('#tAsTag tbody').html(h);
@@ -1644,10 +1781,18 @@ $('#btnSaveTags').on('click', function(){
     });
     var nReq = $('#tAsTag .tagck:checked').length;
     if (nReq === 0 && !confirm('所有稽核製程都被排除了，建議建立清單會退回以「已建 PFMEA 的料號」為母體。\n確定要這樣存嗎？')) return;
+    var inspMap = {};
+    $('#tAsTag .tagInspSel').each(function(){
+        var v = $(this).val();
+        if (v) inspMap[$(this).data('tagid')] = v;
+    });
     post('excluded_as_tags_save', { tag_ids: JSON.stringify(excluded) }, function(res){
-        toast(res.message);
         TAGSTATUS = res.tag_status || TAGSTATUS;
-        renderTagCfg();
+        post('as_tag_insp_save', { map: JSON.stringify(inspMap) }, function(res2){
+            ASTAGINSP = res2.as_tag_insp || ASTAGINSP;
+            toast(res.message);
+            renderTagCfg();
+        });
     });
 });
 
@@ -1703,6 +1848,7 @@ function buildPrintHtml(d, meta, classes){
             if (ii === 0) {
                 rows += '<td rowspan="'+items.length+'" class="c">'+esc(p.seq)+'</td>'
                      +  '<td rowspan="'+items.length+'">'+esc(p.process_name||'')
+                     +  (p.insp_stage ? '<div class="sm">檢驗：'+esc(p.insp_stage)+'</div>' : '')
                      +  (p.op_desc ? '<div class="sm">'+esc(p.op_desc)+'</div>' : '')
                      +  (+p.is_outsource && p.maker_name ? '<div class="sm">委外：'+esc(p.maker_name)+'</div>' : '')
                      +  '</td>'

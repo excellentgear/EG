@@ -166,6 +166,28 @@ foreach ($ddl as $t => $sql) {
     echo "  [已建立] $t\n";
 }
 
+// ---- 2026-10-05 追加：檢驗類別（IQC/IPQC/FQC）自動判定，見 control_plan_lib.php 六之二節 ----
+// 注意：這台 MySQL 9.4 的 ADD COLUMN 不吃 IF NOT EXISTS（實測語法錯誤），
+// 一律先 SHOW COLUMNS 再條件式 ALTER（比照既有 ADD INDEX 的做法）。
+echo "--- 欄位追加 ---\n";
+$colAlters = [
+    'cp_process' => [
+        'insp_stage' => "ALTER TABLE cp_process ADD COLUMN insp_stage ENUM('IQC','IPQC','FQC') DEFAULT NULL "
+            . "COMMENT '檢驗類別：cp_compute_insp_stages() 自動判定，可人工覆蓋' AFTER is_outsource",
+    ],
+];
+foreach ($colAlters as $t => $cols) {
+    $exists = $db->query("SHOW TABLES LIKE ".$db->quote($t))->fetch();
+    if (!$exists) { echo "  [略過] $t 尚未建立\n"; continue; }
+    $have = $db->query("SHOW COLUMNS FROM `$t`")->fetchAll(PDO::FETCH_COLUMN) ?: [];
+    foreach ($cols as $col => $sql) {
+        if (in_array($col, $have, true)) { echo "  [已存在] $t.$col\n"; continue; }
+        if (!$run) { echo "  [將新增] $t.$col\n"; continue; }
+        $db->exec($sql);
+        echo "  [已新增] $t.$col\n";
+    }
+}
+
 // ---- 預設資料（只在空表時塞）----
 $seed = function($table, $rows, $insSql) use ($db, $run) {
     $ex = $db->query("SHOW TABLES LIKE ".$db->quote($table))->fetch();

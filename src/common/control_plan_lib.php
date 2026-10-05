@@ -1056,7 +1056,235 @@ function cp_autofill_preview(PDO $db, array $opt): array
             . '。製程以 BOM 為主，故不自動加入；若確實該納入請手動新增一列。';
     }
 
+    // 檢驗類別（IQC/IPQC/FQC）：只對「來自BOM」的製程鏈算，鏈條完整才算得出「最早」「前一道」
+    if ($res['processes']) {
+        $res['processes'] = cp_compute_insp_stages($db, $res['processes']);
+    }
+
     return $res;
+}
+
+/* ===================================================================
+ * 六之二、檢驗類別自動判定（IQC／IPQC／FQC）
+ *
+ * 使用者定調（2026-10-05）：製程列要能自動帶出「這一道後面接哪種檢驗」。
+ * 三條規則，優先序由下往上（下面的會覆蓋上面的）：
+ *   ①預設＝IPQC（製程中間，介於 IQC 與 FQC 之間的一律是 IPQC）。
+ *   ②管理員設定「哪些製程代號後面接IQC」——一條製程鏈只認**最早出現**的那一個，
+ *     命中的那一列本身＝IQC（代表材料剛進站，例如委外回廠、客供半成品銜接點）。
+ *   ③管理員設定「哪些製程代號是包裝製程」——鏈中最早出現的包裝代號那一列本身
+ *     不算檢驗點（packaging 不是檢驗），**它的前一道**固定＝FQC；若與②撞在同一列
+ *     （鏈很短，IQC代號剛好就是包裝前一道），FQC 優先——包裝是結構事實、IQC代號
+ *     只是通用猜測，短鏈時以確定的那條規則為準。
+ *   ④AS 稽核製程（訂單追蹤的「稽核製程」標籤，kind='process'）可逐個標籤**額外**設定
+ *     「下一站固定是 IQC 或 FQC」，命中時覆蓋的是**該製程的下一列**（不是它自己），
+ *     優先序最高（使用者原話：這是管理員對該稽核製程的明確業務判斷，一般規則判不出來
+ *     的才靠②③，AS 稽核製程則直接讓管理員指定）。若下一列剛好是包裝列，不覆蓋
+ *     （包裝本身不是檢驗點，覆蓋了反而看不出哪一列是FQC）。
+ *
+ * 三個設定一律存在 CP 自己的 system_parameters（CP_PARAM_GROUP），不寫進
+ * ot_as_proc_tag（鐵律4：那張表屬訂單追蹤模組，本模組只讀不寫；AS 稽核製程的
+ * IQC/FQC 指定是 CP 自己才需要的判斷，不屬於訂單追蹤的標籤定義）。
+ *
+ * 只在「自動帶入」（cp_autofill_preview，製程來自 BOM）算一次，存進 cp_process.insp_stage
+ * 之後就是人工可覆蓋的欄位（比照 special_class_id 同一套思路）；手動新增的製程列
+ * 預設 IPQC，不會被自動規則碰到。畫面另有「依設定重新判定」按鈕可在手動調整過
+ * 製程順序／增刪列之後，重新套用規則（仍只套用在目前畫面的列，使用者確認後才存檔）。
+ * =================================================================== */
+
+/** insp_stage 合法值正規化：非法值一律存 NULL，不讓壞資料寫進 ENUM 欄位爆例外。 */
+function cp_insp_stage_norm($v): ?string
+{
+    $v = strtoupper(trim((string)$v));
+    return in_array($v, ['IQC', 'IPQC', 'FQC'], true) ? $v : null;
+}
+
+/** 設定：哪些製程代號「後面接IQC」（存 process_no 整數陣列） */
+function cp_iqc_codes(PDO $db): array
+{
+    $v = cp_param($db, 'iqc_codes', []);
+    return is_array($v) ? array_values(array_unique(array_map('intval', $v))) : [];
+}
+function cp_iqc_codes_save(PDO $db, array $codes): void
+{
+    $codes = array_values(array_unique(array_filter(array_map('intval', $codes), function ($n) { return $n > 0; })));
+    sort($codes);
+    cp_param_save($db, 'iqc_codes', $codes);
+}
+
+/** 設定：哪些製程代號是「包裝製程」（存 process_no 整數陣列） */
+function cp_pack_codes(PDO $db): array
+{
+    $v = cp_param($db, 'pack_codes', []);
+    return is_array($v) ? array_values(array_unique(array_map('intval', $v))) : [];
+}
+function cp_pack_codes_save(PDO $db, array $codes): void
+{
+    $codes = array_values(array_unique(array_filter(array_map('intval', $codes), function ($n) { return $n > 0; })));
+    sort($codes);
+    cp_param_save($db, 'pack_codes', $codes);
+}
+
+/** 設定：AS稽核製程標籤 → 下一站固定檢驗類別（tag_id => 'IQC'|'FQC'）。只收合法值與真實存在的tag_id。 */
+function cp_as_tag_insp(PDO $db): array
+{
+    $v = cp_param($db, 'as_tag_insp', []);
+    if (!is_array($v)) return [];
+    $out = [];
+    foreach ($v as $tid => $val) {
+        $val = cp_insp_stage_norm($val);
+        if ($val === 'IPQC' || $val === null) continue;   // 這個設定只收 IQC/FQC，IPQC是預設不必存
+        $out[(int)$tid] = $val;
+    }
+    return $out;
+}
+function cp_as_tag_insp_save(PDO $db, array $map): void
+{
+    $valid = array_map(function ($d) { return (int)$d['tag_id']; }, cp_as_tag_defs($db, false));
+    $out = [];
+    foreach ($map as $tid => $val) {
+        $tid = (int)$tid;
+        if (!in_array($tid, $valid, true)) continue;
+        $val = cp_insp_stage_norm($val);
+        if ($val === 'IQC' || $val === 'FQC') $out[$tid] = $val;
+    }
+    cp_param_save($db, 'as_tag_insp', $out);
+}
+
+/**
+ * 展開某個 AS 稽核製程標籤定義會涵蓋的 process_no 清單。
+ * sub_no_json 有指定小類就用它；沒指定＝整個製程大類（process_no.process_type_id）。
+ * 走 order_as_tag_lib.php 既有的 ot_astag_sub_nos()，不重寫一份 JSON 解析。
+ */
+function cp_as_tag_proc_nos(PDO $db, array $def): array
+{
+    require_once __DIR__ . '/order_as_tag_lib.php';
+    $subs = ot_astag_sub_nos($def['sub_no_json'] ?? '');
+    if ($subs) return array_map('intval', $subs);
+    $pt = (int)($def['process_type_id'] ?? 0);
+    if ($pt <= 0) return [];
+    try {
+        $st = $db->prepare("SELECT ProcessNo FROM process_no WHERE process_type_id=?");
+        $st->execute([$pt]);
+        return array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN) ?: []);
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 核心：依上面三＋一條規則，判定整條製程鏈每一列的檢驗類別。
+ * 純函式、不寫 DB。$procs 必須已依製程順序（bom_sn／seq）排好，每列至少要有 process_no
+ * （手動列若沒填製程代號，一律落在預設 IPQC，規則判不到它）。
+ * 回傳同一份陣列，每列補上：
+ *   insp_stage ＝ 'IQC'/'IPQC'/'FQC'/null（null 只用在「包裝列本身」，代表不是檢驗點）
+ *   insp_src   ＝ 判定依據（顯示用，不落庫）：iqc_code／fqc_pack／pack／as_tag／default
+ */
+function cp_compute_insp_stages(PDO $db, array $procs): array
+{
+    if (!$procs) return $procs;
+
+    $iqcCodes  = array_flip(cp_iqc_codes($db));
+    $packCodes = array_flip(cp_pack_codes($db));
+    $asInsp    = cp_as_tag_insp($db);
+
+    // 展開 AS 稽核製程 → process_no 對應（一個代號若同時屬於多個設了值的標籤，取第一個找到的）
+    $asNoMap = [];
+    if ($asInsp) {
+        foreach (cp_as_tag_defs($db, true) as $def) {
+            $want = $asInsp[(int)$def['tag_id']] ?? null;
+            if (!$want) continue;
+            foreach (cp_as_tag_proc_nos($db, $def) as $no) {
+                if (!isset($asNoMap[$no])) $asNoMap[$no] = $want;
+            }
+        }
+    }
+
+    // ①預設：全部 IPQC
+    foreach ($procs as &$p) { $p['insp_stage'] = 'IPQC'; $p['insp_src'] = 'default'; }
+    unset($p);
+
+    $procNoOf = function ($p) { return $p['process_no'] !== null && $p['process_no'] !== '' ? (int)$p['process_no'] : null; };
+
+    // ③包裝：鏈中最早出現的包裝代號那一列本身不算檢驗點，前一列固定＝FQC
+    $packIdx = null;
+    if ($packCodes) {
+        foreach ($procs as $i => $p) {
+            $pn = $procNoOf($p);
+            if ($pn !== null && isset($packCodes[$pn])) { $packIdx = $i; break; }
+        }
+    }
+    if ($packIdx !== null) {
+        $procs[$packIdx]['insp_stage'] = null;
+        $procs[$packIdx]['insp_src']   = 'pack';
+        if ($packIdx > 0) {
+            $procs[$packIdx - 1]['insp_stage'] = 'FQC';
+            $procs[$packIdx - 1]['insp_src']   = 'fqc_pack';
+        }
+    }
+
+    // ②IQC：鏈中最早出現的IQC代號那一列本身＝IQC；若那一列已被③佔用（短鏈撞在一起），FQC優先、放棄這條
+    if ($iqcCodes) {
+        foreach ($procs as $i => $p) {
+            $pn = $procNoOf($p);
+            if ($pn === null || !isset($iqcCodes[$pn])) continue;
+            if (in_array($procs[$i]['insp_src'], ['fqc_pack', 'pack'], true)) break;   // 只試最早那一個，撞到就不找第二個
+            $procs[$i]['insp_stage'] = 'IQC';
+            $procs[$i]['insp_src']   = 'iqc_code';
+            break;
+        }
+    }
+
+    // ④AS稽核製程：覆蓋「下一列」，優先序最高，放最後套用；下一列若是包裝列不覆蓋
+    if ($asNoMap) {
+        $n = count($procs);
+        foreach ($procs as $i => $p) {
+            $pn = $procNoOf($p);
+            if ($pn === null || !isset($asNoMap[$pn])) continue;
+            $j = $i + 1;
+            if ($j >= $n) continue;                 // 鏈上最後一道，沒有下一站可覆蓋
+            if ($j === $packIdx) continue;           // 下一列是包裝本身，不覆蓋
+            $procs[$j]['insp_stage'] = $asNoMap[$pn];
+            $procs[$j]['insp_src']   = 'as_tag';
+        }
+    }
+
+    return $procs;
+}
+
+/** 一次查出多個製程代號的名稱（設定頁顯示用，避免逐筆查） */
+function cp_process_name_map(PDO $db, array $nos): array
+{
+    $nos = array_values(array_unique(array_filter(array_map('intval', $nos), function ($n) { return $n > 0; })));
+    if (!$nos) return [];
+    $in = implode(',', array_fill(0, count($nos), '?'));
+    try {
+        $st = $db->prepare("SELECT ProcessNo, ProcessName FROM process_no WHERE ProcessNo IN ($in)");
+        $st->execute($nos);
+        $out = [];
+        foreach ($st as $r) $out[(int)$r['ProcessNo']] = (string)($r['ProcessName'] ?? '');
+        return $out;
+    } catch (Throwable $e) { return []; }
+}
+
+/** cp_iqc_codes()／cp_pack_codes() 的顯示版（含製程名稱），設定頁用 */
+function cp_iqc_codes_detail(PDO $db): array { return cp_codes_detail($db, cp_iqc_codes($db)); }
+function cp_pack_codes_detail(PDO $db): array { return cp_codes_detail($db, cp_pack_codes($db)); }
+function cp_codes_detail(PDO $db, array $nos): array
+{
+    $map = cp_process_name_map($db, $nos);
+    $out = [];
+    foreach ($nos as $n) $out[] = ['no' => $n, 'name' => $map[$n] ?? ('#' . $n)];
+    return $out;
+}
+
+/** insp_stage 的顯示文字（設定頁／編輯畫面共用，避免前端各自判斷字串） */
+function cp_insp_stage_label(?string $s): string
+{
+    switch ($s) {
+        case 'IQC':  return 'IQC（進料檢驗）';
+        case 'IPQC': return 'IPQC（製程檢驗）';
+        case 'FQC':  return 'FQC（最終檢驗）';
+    }
+    return '';
 }
 
 /* ===================================================================
@@ -1346,8 +1574,8 @@ function cp_save(PDO $db, array $in, array $perm): array
         $pSt = $db->prepare(
             "INSERT INTO cp_process
                (cp_id, seq, process_no, process_name, op_desc, machine, jig_tool,
-                maker_id_no, maker_name, is_outsource, bom_sn, src, note)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                maker_id_no, maker_name, is_outsource, insp_stage, bom_sn, src, note)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         );
         $iSt = $db->prepare(
             "INSERT INTO cp_item
@@ -1361,6 +1589,7 @@ function cp_save(PDO $db, array $in, array $perm): array
             $pname = trim((string)($p['process_name'] ?? ''));
             $pno   = (int)($p['process_no'] ?? 0) ?: null;
             if ($pname === '' && !$pno) continue;
+            $inspStage = cp_insp_stage_norm($p['insp_stage'] ?? null);
             $pSt->execute([
                 $cpId, $pi + 1, $pno, $pname,
                 trim((string)($p['op_desc'] ?? '')),
@@ -1369,6 +1598,7 @@ function cp_save(PDO $db, array $in, array $perm): array
                 trim((string)($p['maker_id_no'] ?? '')) ?: null,
                 trim((string)($p['maker_name'] ?? '')),
                 (int)!empty($p['is_outsource']),
+                $inspStage,
                 isset($p['bom_sn']) && $p['bom_sn'] !== '' ? (int)$p['bom_sn'] : null,
                 trim((string)($p['src'] ?? 'manual')),
                 trim((string)($p['note'] ?? '')),
@@ -1556,8 +1786,8 @@ function cp_revise(PDO $db, int $cpId, string $note, array $perm): array
         $pSt = $db->prepare(
             "INSERT INTO cp_process
                (cp_id, seq, process_no, process_name, op_desc, machine, jig_tool,
-                maker_id_no, maker_name, is_outsource, bom_sn, src, note)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                maker_id_no, maker_name, is_outsource, insp_stage, bom_sn, src, note)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         );
         $iSt = $db->prepare(
             "INSERT INTO cp_item
@@ -1569,7 +1799,7 @@ function cp_revise(PDO $db, int $cpId, string $note, array $perm): array
         foreach (($doc['processes'] ?? []) as $p) {
             $pSt->execute([$newId, $p['seq'], $p['process_no'], $p['process_name'], $p['op_desc'],
                 $p['machine'], $p['jig_tool'], $p['maker_id_no'], $p['maker_name'],
-                $p['is_outsource'], $p['bom_sn'], $p['src'], $p['note']]);
+                $p['is_outsource'], cp_insp_stage_norm($p['insp_stage'] ?? null), $p['bom_sn'], $p['src'], $p['note']]);
             $np = (int)$db->lastInsertId();
             foreach (($p['items'] ?? []) as $it) {
                 $iSt->execute([$np, $it['seq'], $it['char_no'], $it['char_product'], $it['char_process'],
