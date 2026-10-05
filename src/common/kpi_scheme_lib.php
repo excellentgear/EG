@@ -85,33 +85,16 @@ function kpi_scheme_src_label(string $s): string {
  *   calc  ＝ ['existing', 既有指標 item_no]   讀正式表的月快照
  *           ['preview',  函式名, 參數陣列]    即時試算（唯讀）
  *           ['none']                          沒有資料來源，純人工
+ *   hidden＝ true 時暫時不列入主表格與總數（kpi_scheme_visible_items() 會濾掉），
+ *           定義保留、隨時可以打開——這支函式本身永遠回傳全部項目，
+ *           「要不要顯示」交給呼叫端決定，不要在這裡偷偷砍資料。
  * ============================================================ */
 function kpi_scheme_items(): array {
     return [
-    /* ---------- COP01 客戶需求／客戶滿意（業務課=12） ---------- */
-    ['code'=>'order_ontime','block'=>'COP01','name'=>'準時出貨率','dept'=>12,
-     'freq'=>'monthly','vtype'=>'percent','dir'=>'gte','target'=>90,'unit'=>'%',
-     'src'=>'auto','status'=>'move','calc'=>['existing',8],
-     'basis'=>'分母＝當月交期的訂單筆數（排除已取消）；分子＝出貨日 ≤ 交期＋寬限工作天者。未交判定方式與寬限天數沿用既有年度設定。',
-     'note'=>'稽核老師指出這項的責任在業務端，故由生管組改掛業務課。計算完全不變，只改負責部門——正式上線只要改一個設定值，程式零改動。'],
-
-    ['code'=>'order_review','block'=>'COP01','name'=>'訂單審查及時率','dept'=>12,
-     'freq'=>'monthly','vtype'=>'percent','dir'=>'gte','target'=>90,'unit'=>'%',
-     'src'=>'auto','status'=>'new','calc'=>['preview','kps_order_review',['days'=>2]],
-     'basis'=>'分母＝當月下單（Order_date）的訂單筆數，排除已取消（Order_status=6）；分子＝「接單移轉設計」（ateGet）距下單日 ≤ 2 個工作日者。工作日認定與「出圖準時率」同一套（行事曆 evenement）。',
-     'note'=>'對應流程圖 COP01 的「合約訂單審查管理程序」——既有的「出圖準時率」管的是設計→生管那一段，接單→移轉設計這一段目前完全沒有指標。'
-           . '⚠ 但試算出來每月都是 95~100%，查證後原因是：2026 年 2,983 張訂單裡有 2,771 張（93%）的 ateGet 與下單日是**同一天**，'
-           . '也就是業務多半在建單當下就一起按了「移轉設計」，這個欄位實際上是建單流程的一部分、不是一個獨立的審查動作。'
-           . '所以這項指標以目前的作業習慣**量不出東西**（門檻改成 1 天也還是 93%）。'
-           . '要有鑑別度有兩條路：① 改口徑成「客戶下單日 → 系統建單日」（但系統沒有存客戶下單日，要新增欄位）'
-           . '② 改用「訂單審查完整率」＝檢查交期·數量·單價·製程是否齊備，而不是看時間。**這一項請你決定要改口徑還是拿掉。**'],
-
-    ['code'=>'complaint_rate','block'=>'COP01','name'=>'客訴件數','dept'=>12,
-     'freq'=>'monthly','vtype'=>'count','dir'=>'lte','target'=>2,'unit'=>'件',
-     'src'=>'auto','status'=>'keep','calc'=>['existing',1],
-     'basis'=>'當月客退明細筆數（可依退貨性質只計入真正的客訴）。',
-     'note'=>'對應「客戶滿意管理流程」。'],
-
+    /* ---------- COP01 客戶需求／客戶滿意（業務課=12） ----------
+     * 排序依使用者指示：訂單金額達成→出貨金額達成→出貨準時（一條「接單→出貨」的業績敘事），
+     * 再接客訴→客戶滿意度（客訴是滿意度的輸入因子，兩者放在一起才連得起來）。
+     */
     ['code'=>'order_target','block'=>'COP01','name'=>'月份受訂目標達成率','dept'=>12,
      'freq'=>'monthly','vtype'=>'percent','dir'=>'gte','target'=>85,'unit'=>'%',
      'src'=>'auto','status'=>'keep','calc'=>['existing',2],
@@ -123,6 +106,18 @@ function kpi_scheme_items(): array {
      'src'=>'auto','status'=>'keep','calc'=>['existing',3],
      'basis'=>'當月出貨金額 ÷ 該月銷貨目標金額。',
      'note'=>''],
+
+    ['code'=>'order_ontime','block'=>'COP01','name'=>'準時出貨率','dept'=>12,
+     'freq'=>'monthly','vtype'=>'percent','dir'=>'gte','target'=>90,'unit'=>'%',
+     'src'=>'auto','status'=>'move','calc'=>['existing',8],
+     'basis'=>'分母＝當月交期的訂單筆數（排除已取消）；分子＝出貨日 ≤ 交期＋寬限工作天者。未交判定方式與寬限天數沿用既有年度設定。',
+     'note'=>'稽核老師指出這項的責任在業務端，故由生管組改掛業務課。計算完全不變，只改負責部門——正式上線只要改一個設定值，程式零改動。'],
+
+    ['code'=>'complaint_rate','block'=>'COP01','name'=>'客訴件數','dept'=>12,
+     'freq'=>'monthly','vtype'=>'count','dir'=>'lte','target'=>2,'unit'=>'件',
+     'src'=>'auto','status'=>'keep','calc'=>['existing',1],
+     'basis'=>'當月客退明細筆數（可依退貨性質只計入真正的客訴）。',
+     'note'=>'對應「客戶滿意管理流程」。'],
 
     ['code'=>'cust_satis','block'=>'COP01','name'=>'客戶滿意度','dept'=>12,
      'freq'=>'quarterly','vtype'=>'score','dir'=>'gte','target'=>8,'unit'=>'分',
@@ -209,7 +204,7 @@ function kpi_scheme_items(): array {
      'basis'=>'分母＝當月結案的包裝檢驗表；分子＝其中「前一關完成 → 包裝結案」在 3 個工作日內者。起算點優先用前一關的 QC 檢驗完成日（qc_completed_at），該站若還沒標記完成則退回該站最後一次完工報工日期；兩者都查不到的不計入分母。結束點＝包裝檢驗表的結案日期。',
      'note'=>'取代原提案的「委外回廠檢驗不良率」。⚠ **這項目前母體極小**：全庫只有 3 筆包裝檢驗紀錄（8/3、9/1、9/19 各一筆），其中 1 筆沒有綁 BOM 編號、查不到前一關，實際只有 2 筆能用。查證時發現一個很重要的坑：若直接用「前一關的 QC_check_date」當起點，有一筆會算出起點（9/24）比包裝結案（9/23）還晚——查下去是那個 QC 欄位後來被改過（這欄只存最後一次、不是日誌），**所以起點一定要用「QC 完成時標記的 qc_completed_at」，不能用 QC_check_date**，已在計算裡這樣處理。這項要有代表性，得等包裝檢驗表累積到至少一兩個月的量。'],
 
-    ['code'=>'purchase_ontime','block'=>'COP04','name'=>'採購進貨準交率','dept'=>7,
+    ['code'=>'purchase_ontime','block'=>'COP04','name'=>'採購進貨準交率','dept'=>7,'hidden'=>true,
      'freq'=>'monthly','vtype'=>'percent','dir'=>'gte','target'=>90,'unit'=>'%',
      'src'=>'auto','status'=>'empty','calc'=>['preview','kps_purchase_ontime',[]],
      'basis'=>'分母＝當月預計到貨日（purchase_request.expected_date）落在該月的請購項目；分子＝實際到貨日（purchase_receipt.rcpt_date）≤ 預計到貨日者。範圍可設定只看刀具／砂輪／油品等耗材類別。',
@@ -248,6 +243,23 @@ function kpi_scheme_items(): array {
     ];
 }
 
+/**
+ * 看得到的項目（排除 'hidden'=>true 的）。
+ * 頁面主表格、總數卡片、各區塊統計一律呼叫這一支，不要直接呼叫 kpi_scheme_items()——
+ * 否則「先隱藏」的項目會在總數裡被算進去、卻在表格裡看不到，兩邊對不起來。
+ * 「隱藏」跟「建議停用（kpi_scheme_dropped）」不是同一件事：
+ * 隱藏＝目前沒有東西好看（例如完全沒有歷史資料），定義留著隨時可以打開；
+ * 停用＝已經決定不用這個指標了。
+ */
+function kpi_scheme_visible_items(): array {
+    return array_values(array_filter(kpi_scheme_items(), fn($it) => empty($it['hidden'])));
+}
+
+/** 目前被隱藏的項目（連同隱藏原因，供頁面列出讓使用者知道還有什麼、隨時可以打開） */
+function kpi_scheme_hidden_items(): array {
+    return array_values(array_filter(kpi_scheme_items(), fn($it) => !empty($it['hidden'])));
+}
+
 /** 建議停用（不再列入新方案） */
 function kpi_scheme_dropped(): array {
     return [
@@ -258,7 +270,9 @@ function kpi_scheme_dropped(): array {
         ['no'=>12,'name'=>'出圖正確性',
          'why'=>'純人工填件數，與「出圖準時率」管同一件事。若要保留，建議改接圖面變更紀錄（qc_drawing_change，目前 7 筆）。保留與否請你決定。'],
         ['no'=>4, 'name'=>'報價單接單率',
-         'why'=>'你問這項是不是必要——查過 AS9100 條文，**沒有任何一條要求「報價轉換成訂單的比率」**；那是業務端的商業績效指標（接單率高低反映的是報價策略或業務能力），不是品質管理系統要求。拿掉它之後 COP01 仍有訂單審查及時率、客訴件數、受訂目標達成率、銷貨目標達成率、客戶滿意度共 5 項，遠超過「每個 COP 至少 2 項」的門檻，不影響涵蓋率。'],
+         'why'=>'你問這項是不是必要——查過 AS9100 條文，**沒有任何一條要求「報價轉換成訂單的比率」**；那是業務端的商業績效指標（接單率高低反映的是報價策略或業務能力），不是品質管理系統要求。拿掉它之後 COP01 仍有受訂目標達成率、銷貨目標達成率、準時出貨率、客訴件數、客戶滿意度共 5 項，遠超過「每個 COP 至少 2 項」的門檻，不影響涵蓋率。'],
+        ['no'=>0, 'name'=>'訂單審查及時率',
+         'why'=>'依你的指示拿掉。查證時就已發現這項量不出東西：2026 年 2,983 張訂單有 2,771 張（93%）「接單移轉設計」與下單日是同一天，業務多半建單當下就一起按了移轉，門檻改成 1 天也還是 93%，沒有鑑別度。'],
         ['no'=>0, 'name'=>'廠內關鍵製程準交率／特殊製程（熱處理）委外準交率',
          'why'=>'依你的指示拿掉。COP03 現在沒有交期類指標，改以齒研／插齒製程不良率＋三項產能達成率為主；委外熱處理的管控若之後要恢復，可另外補回。'],
         ['no'=>0, 'name'=>'整體製程不良率',
@@ -277,8 +291,8 @@ function kpi_scheme_pending(): array {
          'why'=>'同上，2026 年零填寫。'],
         ['no'=>0, 'name'=>'量測儀器按時校驗率',
          'why'=>'自動值全年是 0/0，畫面上的 95~100% 是管理者逐月覆寫的。要補校驗紀錄、改標人工、還是停用？'],
-        ['no'=>0, 'name'=>'訂單審查及時率／產品開發評估完成時效',
-         'why'=>'兩項試算都接近 100%，查證後是「同一天完成」造成的（詳見各項的 ⓘ）。要改口徑還是拿掉？'],
+        ['no'=>0, 'name'=>'產品開發評估完成時效',
+         'why'=>'試算每月都是 100%，查證後是「同一天完成」造成的——41 張評估表的 closed_at 與 fill_date 全部同一天（詳見 ⓘ）。要改口徑還是拿掉？（同一個問題的「訂單審查及時率」已依你指示拿掉）'],
     ];
 }
 
@@ -352,27 +366,6 @@ function kps_from_snapshot(PDO $db, int $itemNo, int $year): ?array {
                                   'src' => $src];
     }
     return $out;
-}
-
-/* ---------- COP01 訂單審查及時率 ---------- */
-function kps_order_review(PDO $db, int $year, int $month, array $a): ?array {
-    $days = max(1, (int)($a['days'] ?? 2));
-    $ym = sprintf('%04d-%02d', $year, $month);
-    $st = $db->prepare("SELECT Order_date, ateGet FROM order_track
-                        WHERE DATE_FORMAT(Order_date,'%Y-%m')=?
-                          AND (Order_status IS NULL OR Order_status<>6)");
-    $st->execute([$ym]);
-    $num = 0; $den = 0;
-    while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
-        $den++;
-        if (empty($r['ateGet'])) continue;               // 還沒移轉設計＝審查尚未完成
-        $d1 = substr((string)$r['Order_date'], 0, 10);
-        $d2 = substr((string)$r['ateGet'], 0, 10);
-        if ($d2 < $d1) { $num++; continue; }             // 先移轉、事後才補建訂單（既有資料常見），視為及時
-        $wd = ($d1 === $d2) ? 1 : kpi_as_workdays_inclusive($db, $d1, $d2);
-        if ($wd <= $days) $num++;
-    }
-    return ['v'=>$den > 0 ? $num / $den * 100 : null, 'num'=>$num, 'den'=>$den];
 }
 
 /* ---------- COP02 產品開發評估完成時效 ---------- */
@@ -600,7 +593,7 @@ function kps_kpi_overall(PDO $db, int $year, int $month, array $a): ?array {
 function kpi_scheme_block_stat(): array {
     $out = [];
     foreach (kpi_scheme_blocks() as $code => $b) $out[$code] = ['n'=>0, 'auto'=>0, 'new'=>0];
-    foreach (kpi_scheme_items() as $it) {
+    foreach (kpi_scheme_visible_items() as $it) {
         $c = $it['block'];
         if (!isset($out[$c])) continue;
         $out[$c]['n']++;
@@ -614,7 +607,7 @@ function kpi_scheme_block_stat(): array {
 function kpi_scheme_summary(): array {
     $s = ['total'=>0, 'auto'=>0, 'semi'=>0, 'manual'=>0,
           'new'=>0, 'keep'=>0, 'retune'=>0, 'move'=>0, 'watch'=>0, 'warn'=>0, 'empty'=>0];
-    foreach (kpi_scheme_items() as $it) {
+    foreach (kpi_scheme_visible_items() as $it) {
         $s['total']++;
         if (isset($s[$it['src']]))    $s[$it['src']]++;
         if (isset($s[$it['status']])) $s[$it['status']]++;

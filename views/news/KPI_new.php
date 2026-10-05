@@ -49,7 +49,8 @@ foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSO
 
 $YEAR   = kpi_scheme_sample_year();
 $BLOCKS = kpi_scheme_blocks();
-$ITEMS  = kpi_scheme_items();
+$ITEMS  = kpi_scheme_visible_items();
+$HIDDEN = kpi_scheme_hidden_items();
 $SUM    = kpi_scheme_summary();
 $BSTAT  = kpi_scheme_block_stat();
 
@@ -264,6 +265,7 @@ function kpsTargetText(array $it): string {
             <div class="ks-card"><div class="n"><?= $SUM['manual'] ?></div><div class="t">人工填寫</div></div>
             <div class="ks-card"><div class="n"><?= $SUM['new'] ?></div><div class="t">新增</div></div>
             <div class="ks-card"><div class="n"><?= $SUM['retune'] + $SUM['move'] ?></div><div class="t">改口徑／改部門</div></div>
+            <div class="ks-card"><div class="n"><?= count($HIDDEN) ?></div><div class="t">暫時隱藏</div></div>
             <div class="ks-card"><div class="n"><?= count(kpi_scheme_dropped()) ?></div><div class="t">建議停用</div></div>
         </div>
 
@@ -345,6 +347,20 @@ function kpsTargetText(array $it): string {
             </tbody>
         </table>
         </div>
+
+        <?php if ($HIDDEN): ?>
+        <div class="ks-sec">
+            <h4><i class="fa fa-eye-slash"></i> 暫時隱藏（<?= count($HIDDEN) ?> 項，定義保留、隨時可以打開）</h4>
+            <div><ul>
+            <?php foreach ($HIDDEN as $it): ?>
+                <li><b><?= htmlspecialchars($it['block']) ?>　<?= htmlspecialchars($it['name']) ?></b>　—
+                    <span class="ks-why"><?= htmlspecialchars($it['note']) ?></span>
+                    <i class="fa fa-info-circle ks-i" onclick="showInfo('<?= htmlspecialchars($it['code']) ?>')"
+                       title="計算方式與備註"></i></li>
+            <?php endforeach; ?>
+            </ul></div>
+        </div>
+        <?php endif; ?>
 
         <div class="ks-sec">
             <h4><i class="fa fa-ban"></i> 建議停用（依你回饋的營運實況，不再列入新方案）</h4>
@@ -433,6 +449,11 @@ function kpsTargetText(array $it): string {
             <p>點指標名稱右邊的 <i class="fa fa-info-circle" style="color:#b5762a;"></i>，會列出該項的
                <b>計算方式</b>（分子分母怎麼取）與<b>備註</b>（資料面的提醒、為什麼這樣設計）。</p>
 
+            <h4>「暫時隱藏」是什麼</h4>
+            <p>主表格下方若有「暫時隱藏」區塊，代表這幾項<b>定義已經寫好、但先不放進主表格與總數裡</b>——
+               通常是目前完全沒有歷史資料可看，放在表格裡只會是一整排空白。
+               跟「建議停用」不同：停用是已經決定不用了，隱藏只是先收起來，隨時可以打開。</p>
+
             <h4>列印</h4>
             <p>固定 A3 橫式。列印對話框請把紙張選成 A3。這是內部討論用的草案、不是正式 AS 表單，
                所以只印公司全名與頁碼，<b>不印 AS 文件編號</b>。</p>
@@ -462,7 +483,7 @@ $(document).ready(function(){
 var ITEM_INFO = <?= json_encode(array_map(function ($x) {
         return ['name'=>$x['name'], 'block'=>$x['block'], 'basis'=>$x['basis'], 'note'=>$x['note'],
                 'status'=>$x['status'], 'src'=>$x['src']];
-    }, array_column($ITEMS, null, 'code')), JSON_UNESCAPED_UNICODE) ?>;
+    }, array_column(array_merge($ITEMS, $HIDDEN), null, 'code')), JSON_UNESCAPED_UNICODE) ?>;
 var STATUS_TXT = <?php
     $statusKeys = ['keep','move','retune','new','watch','warn','empty'];
     $statusMap = [];
