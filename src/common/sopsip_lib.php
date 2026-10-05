@@ -1542,6 +1542,110 @@ function ss_ver_clone(PDO $db, int $fromVerId, array $in, int $uid): int
 }
 
 /**
+ * 把某個檔案清單（ss_file）整批搬到另一個版次底下，已經有同一份（同
+ * part_attach_id+usage_kind+sec_key）的不重複搬，回傳「搬之前的 file_id → 搬之後/比對到
+ * 既有的 file_id」對照表，供呼叫端接手 draw_file_id（唯一實作，供合併版次與其他改版流程共用）。
+ */
+function ss_file_merge_into(PDO $db, int $docId, int $targetVerId, int $fromVerId): array
+{
+    $matchKey = fn($r) => ($r['usage_kind'] ?? '') . '|' . ($r['part_attach_id'] ?? '') . '|' . ($r['sec_key'] ?? '');
+    $st = $db->prepare("SELECT file_id, usage_kind, part_attach_id, sec_key FROM ss_file WHERE ver_id=?");
+    $st->execute([$targetVerId]);
+    $have = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $f) $have[$matchKey($f)][] = (int)$f['file_id'];
+
+    $st = $db->prepare("SELECT * FROM ss_file WHERE ver_id=?");
+    $st->execute([$fromVerId]);
+    $map = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $f) {
+        $k = $matchKey($f);
+        if (!empty($have[$k])) { $map[(int)$f['file_id']] = (int)array_shift($have[$k]); continue; }
+        $db->prepare("INSERT INTO ss_file (doc_id, ver_id, usage_kind, sec_key, src, part_attach_id, file_name,
+                          orig_name, mime, file_size, rot, uploaded_at, uploaded_by)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+           ->execute([$docId, $targetVerId, $f['usage_kind'], $f['sec_key'], $f['src'], $f['part_attach_id'],
+                      $f['file_name'], $f['orig_name'], $f['mime'], $f['file_size'], (int)($f['rot'] ?? 0),
+                      $f['uploaded_at'], $f['uploaded_by']]);
+        $map[(int)$f['file_id']] = (int)$db->lastInsertId();
+    }
+    return $map;
+}
+
+/**
+ * 管理員工具：把這一版的內容合併進「上一版」（同一份文件裡 ver_id 比它小、最接近的那一筆），
+ * 合併完這一版就整筆刪除（使用者 2026-10-05：遷移腳本/手動修正常把不想要的內容複製成新版次，
+ * 給一個通用鈕直接收回去，不必每次都請人另寫一支一次性腳本）。
+ * **目標版次的狀態／簽核一律不動**——合併視為「同一次修改」而不是新的簽核事件，
+ * 已核准的目標版次合併完仍是已核准，不必重新送簽。
+ */
+function ss_ver_merge_into_prev(PDO $db, int $verId, int $uid): array
+{
+    $src = ss_ver_get($db, $verId);
+    if (!$src) throw new RuntimeException('找不到要合併的版次');
+    $docId = (int)$src['doc_id'];
+
+    $st = $db->prepare("SELECT * FROM ss_ver WHERE doc_id=? AND ver_id<? ORDER BY ver_id DESC LIMIT 1");
+    $st->execute([$docId, $verId]);
+    $target = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$target) throw new RuntimeException('這已經是最早的一版，沒有上一版可以合併');
+    $targetId = (int)$target['ver_id'];
+
+    $db->prepare("DELETE FROM ss_item WHERE ver_id=?")->execute([$targetId]);
+    $db->prepare("INSERT INTO ss_item (ver_id, seq, ctrl_point, q_char, up_limit, lo_limit, owner, owner_dept_id,
+                      method, tool_type_id, tool_id, tool_no, freq, note, tpl_id, lock_ctrl, lock_q,
+                      ctrl_pat, q_pat, input_kind)
+                  SELECT ?, seq, ctrl_point, q_char, up_limit, lo_limit, owner, owner_dept_id,
+                      method, tool_type_id, tool_id, tool_no, freq, note, tpl_id, lock_ctrl, lock_q,
+                      ctrl_pat, q_pat, input_kind
+                  FROM ss_item WHERE ver_id=?")->execute([$targetId, $verId]);
+
+    $db->prepare("DELETE FROM ss_step WHERE ver_id=?")->execute([$targetId]);
+    $db->prepare("INSERT INTO ss_step (ver_id, seq, sect, step_name, img_file_id, step_text, note, kv_json)
+                  SELECT ?, seq, sect, step_name, img_file_id, step_text, note, kv_json
+                  FROM ss_step WHERE ver_id=?")->execute([$targetId, $verId]);
+
+    $fileMap = ss_file_merge_into($db, $docId, $targetId, $verId);
+    $srcDrawId = (int)($src['draw_file_id'] ?? 0);
+    if ($srcDrawId > 0 && isset($fileMap[$srcDrawId])) {
+        $db->prepare("UPDATE ss_ver SET draw_file_id=? WHERE ver_id=?")->execute([$fileMap[$srcDrawId], $targetId]);
+    }
+
+    $db->prepare("DELETE FROM ss_item WHERE ver_id=?")->execute([$verId]);
+    $db->prepare("DELETE FROM ss_step WHERE ver_id=?")->execute([$verId]);
+    $db->prepare("DELETE FROM ss_sign WHERE ver_id=?")->execute([$verId]);
+    $db->prepare("DELETE FROM ss_file WHERE ver_id=?")->execute([$verId]);
+    $db->prepare("DELETE FROM ss_ver WHERE ver_id=?")->execute([$verId]);
+
+    ss_refresh_cur_ver($db, $docId);
+    return ['target_ver_id' => $targetId];
+}
+
+/**
+ * 管理員工具：永久刪除一筆版次（連同它的明細／簽章／檔案），任何狀態都可以刪
+ * （已核准的也能刪——呼叫端務必先驗過操作確認密碼，這裡不重複驗，鐵律8 的「後端同規則再擋
+ * 一次」在這支指的是「不可以是這份文件唯一的一筆」這一條）。
+ * **版次號不會自動往前遞補**：其他版次如果已經核准／已經印出去過，號碼不該因為刪掉別筆
+ * 而事後被改掉，刪除後版次歷程上原本的號碼會留一個缺口，是刻意的。
+ */
+function ss_ver_delete(PDO $db, int $verId, int $uid): void
+{
+    $v = ss_ver_get($db, $verId);
+    if (!$v) throw new RuntimeException('找不到這個版次');
+    $docId = (int)$v['doc_id'];
+    $st = $db->prepare("SELECT COUNT(*) FROM ss_ver WHERE doc_id=?");
+    $st->execute([$docId]);
+    if ((int)$st->fetchColumn() <= 1) {
+        throw new RuntimeException('這是這份文件唯一的版次，不能刪除；要整份刪除請用「刪除文件」');
+    }
+    $db->prepare("DELETE FROM ss_item WHERE ver_id=?")->execute([$verId]);
+    $db->prepare("DELETE FROM ss_step WHERE ver_id=?")->execute([$verId]);
+    $db->prepare("DELETE FROM ss_sign WHERE ver_id=?")->execute([$verId]);
+    $db->prepare("DELETE FROM ss_file WHERE ver_id=?")->execute([$verId]);
+    $db->prepare("DELETE FROM ss_ver WHERE ver_id=?")->execute([$verId]);
+    ss_refresh_cur_ver($db, $docId);
+}
+
+/**
  * 操作步驟的項次編號一律由系統重編成同一種格式「1.內容」（使用者 2026-09-22 指定：
  * 原本已經打好的也要一起統一，而且不要人工維護編號——手打最容易跳號或重號）。
  * 認得出來的舊寫法一律先剝掉再重編：`1.` `1、` `1,` `1)` `(1)` `１.`（全形數字）、後面可有空白。

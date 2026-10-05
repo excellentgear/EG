@@ -14,6 +14,7 @@ require_once __DIR__ . '/../common/_config.php';
 require_once __DIR__ . '/../common/DBConnection.php';
 require_once __DIR__ . '/../common/sopsip_lib.php';
 require_once __DIR__ . '/../common/asdoc_lib.php';
+require_once __DIR__ . '/../common/confirm_password_lib.php';
 
 /* 未捕捉的例外一律轉成 JSON——不轉的話會回一片空白的 500，畫面上就是「按了完全沒反應」 */
 set_exception_handler(function (Throwable $e) {
@@ -478,6 +479,37 @@ case 'ver_new': {
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
     jout(true, ['ver_id' => $newId, 'merged' => $merged]);
+}
+
+/** 管理員：把這一版合併進上一版（整筆收回去），給「遷移腳本/手動修正多出一筆不想要的版次」用 */
+case 'ver_merge_prev': {
+    $verId = (int)($_POST['ver_id'] ?? 0);
+    [$kind, $v, $d] = $kindOfVer($verId);
+    $needAdmin();
+    $db->beginTransaction();
+    try {
+        $res = ss_ver_merge_into_prev($db, $verId, $uid);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
+    jout(true, $res);
+}
+
+/** 管理員：永久刪除一筆版次（任何狀態都可以），需操作確認密碼（鐵律8：這裡再驗一次，不信任前端） */
+case 'ver_delete': {
+    $verId = (int)($_POST['ver_id'] ?? 0);
+    [$kind, $v, $d] = $kindOfVer($verId);
+    $needAdmin();
+    $pw = (string)($_POST['password'] ?? '');
+    $r = eg_confirm_password_verify_scoped($db, $uid, $pw, 'sopsip_ver_delete');
+    if (!$r['ok']) jerr($r['msg'], $r['locked'] ? 'LOCKED' : 'PW');
+    $docId = (int)$v['doc_id'];
+    $db->beginTransaction();
+    try {
+        ss_ver_delete($db, $verId, $uid);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
+    $doc = ss_doc_get($db, $docId);
+    jout(true, ['cur_ver_id' => (int)($doc['cur_ver_id'] ?? 0)]);
 }
 
 case 'submit': {

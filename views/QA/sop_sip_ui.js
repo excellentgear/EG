@@ -1518,20 +1518,35 @@ function signHtml() {
 
 /** 版次歷程＝紙本上的修訂履歷（不另外手打，由各版次組出來） */
 function versHtml() {
+    var isAdmin = !!SS_PERMS.canAdmin;
     var h = '<div class="sec"><h5>版次歷程<span class="muted-help">紙本的「修訂履歷／修改記錄」就是這一份</span></h5>'
           + '<table class="grid"><thead><tr><th style="width:70px;">版次</th><th style="width:110px;">日期</th>'
-          + '<th>說明</th><th style="width:90px;">狀態</th><th style="width:80px;"></th></tr></thead><tbody>';
-    $.each(CUR.vers || [], function (i, v) {
+          + '<th>說明</th><th style="width:90px;">狀態</th><th' + (isAdmin ? ' style="width:190px;"' : ' style="width:80px;"') + '></th></tr></thead><tbody>';
+    var vers = CUR.vers || [];
+    $.each(vers, function (i, v) {
         var cur = num(v.ver_id) === num(CUR.ver.ver_id);
+        var hasPrev = i < vers.length - 1;   // 排序是新→舊，最後一列（最舊）沒有「上一版」可合併
+        var ops = cur ? '' : '<button class="btn btn-xs btn-warm-o v-open" data-ver="' + num(v.ver_id) + '">開啟</button>';
+        if (isAdmin) {
+            if (hasPrev) {
+                ops += ' <button class="btn btn-xs v-merge-prev" data-ver="' + num(v.ver_id) + '" data-no="' + esc(v.ver_no) + '"'
+                     + ' title="把這一版的內容收進上一版，這一版整筆刪除（給遷移腳本/修正多出來的版次用）">合併進上一版</button>';
+            }
+            ops += ' <button class="btn btn-xs btn-danger-o v-del" data-ver="' + num(v.ver_id) + '" data-no="' + esc(v.ver_no) + '">刪除</button>';
+        }
         h += '<tr' + (cur ? ' style="background:#FFF6E6;"' : '') + '>'
            + '<td class="c">' + esc(v.ver_no) + (cur ? '　<span class="muted-help">目前</span>' : '') + '</td>'
            + '<td class="c">' + dispDate(v.form_date) + '</td>'
            + '<td>' + esc(v.rev_text || v.rev_note || '') + '</td>'
            + '<td class="c"><span class="st st-' + esc(v.status) + '">' + esc(SS_STATUSES[v.status] || v.status) + '</span></td>'
-           + '<td class="c">' + (cur ? '' : '<button class="btn btn-xs btn-warm-o v-open" data-ver="' + num(v.ver_id) + '">開啟</button>') + '</td>'
+           + '<td class="c">' + ops + '</td>'
            + '</tr>';
     });
-    h += '</tbody></table></div>';
+    h += '</tbody></table>'
+       + (isAdmin ? '<div class="muted-help" style="margin-top:4px;">'
+            + '「合併進上一版」：把這一版的內容直接覆蓋進它的上一版（目標版次的狀態／簽核不會變動，視為同一次修改），這一版隨即整筆刪除。'
+            + '「刪除」：任何狀態的版次都可以永久刪除，需輸入操作確認密碼；版次號不會自動往前遞補。兩者皆不可復原，請先確認清楚。</div>' : '')
+       + '</div>';
     return h;
 }
 
@@ -2703,6 +2718,48 @@ $(document).on('click', '#btnNewVer', function () {
              if (res.merged) alert('日期跟目前這一版相同，認定為同一次修改：已直接重新打開這一版繼續編輯，不會新增版次列。');
              openDoc(num(res.ver_id)); load(true);
          });
+});
+
+/** 管理員：把這一版合併進上一版（整筆收回去），給遷移腳本/手動修正多出一筆不想要的版次用 */
+$(document).on('click', '.v-merge-prev', function () {
+    var verId = num($(this).data('ver')), no = $(this).data('no');
+    if (!confirm('確定把「版次 ' + no + '」的內容合併進它的上一版？\n\n'
+        + '這一版的內容會直接覆蓋進上一版（上一版的狀態／簽核不會變動），\n'
+        + '合併完「版次 ' + no + '」就整筆刪除，無法復原。')) return;
+    post('ver_merge_prev', { ver_id: verId }, function (res) {
+        // 合併掉的正是目前打開看的那一版才需要換頁，合併別筆只要重畫版次歷程就好
+        openDoc(verId === num(CUR.ver.ver_id) ? num(res.target_ver_id) : num(CUR.ver.ver_id));
+        load(true);
+    });
+});
+
+/** 管理員：永久刪除一筆版次（任何狀態都可以），需輸入操作確認密碼 */
+$(document).on('click', '.v-del', function () {
+    var verId = num($(this).data('ver')), no = $(this).data('no');
+    $('#pickTitle').text('刪除版次');
+    $('#pickBody').html(
+        '<div class="note-box" style="color:#A5301E;">'
+        + '確定要<b>永久刪除「版次 ' + esc(no) + '」</b>嗎？連同它的檢驗項目／簽章／附件一併刪除，無法復原。<br>'
+        + '版次號不會自動往前遞補，刪除後版次歷程上原本的號碼會留一個缺口。</div>'
+        + '<div style="margin-top:10px;"><label>操作確認密碼</label>'
+        + '<input type="password" id="vDelPw" class="form-control input-sm" autocomplete="off" placeholder="請輸入您的操作確認密碼" style="max-width:260px;"></div>'
+        + '<div class="text-muted" style="font-size:11px;margin-top:4px;">與登入密碼不同；未設定過請到「修改個人密碼」頁設定。連續錯誤 3 次會鎖定 7 天。</div>'
+        + '<div id="vDelMsg" class="text-danger" style="font-size:12px;margin-top:6px;"></div>'
+        + '<div style="margin-top:8px;"><button class="btn btn-sm btn-danger-o" id="vDelOk" data-ver="' + verId + '">確定刪除</button></div>'
+    );
+    openMask('maskPick');
+    setTimeout(function () { $('#vDelPw').focus(); }, 50);
+});
+$(document).on('click', '#vDelOk', function () {
+    var verId = num($(this).data('ver')), pw = $('#vDelPw').val() || '';
+    if (!pw) { $('#vDelMsg').text('請輸入操作確認密碼'); return; }
+    post('ver_delete', { ver_id: verId, password: pw }, function (res) {
+        closeMask('maskPick');
+        load(true);
+        // 刪掉的正是目前打開看的那一版才需要換頁，刪別筆只要重畫版次歷程就好
+        if (verId === num(CUR.ver.ver_id)) openDoc(num(res.cur_ver_id));
+        else openDoc(num(CUR.ver.ver_id));
+    });
 });
 
 /* ══════════════════════ 列印 ══════════════════════ */

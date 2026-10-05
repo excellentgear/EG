@@ -85,6 +85,8 @@ foreach ($KIND_SCOPES_NEW as $k => $ss) foreach ($ss as $sc) {
         .btn-warm:hover,.btn-warm:focus { background:var(--amber-d); color:#fff; }
         .btn-warm-o { background:#fff; border:1px solid var(--amber-d); color:var(--amber-d); }
         .btn-warm-o:hover { background:var(--sand); color:var(--ink); }
+        .btn-danger-o { background:#fff; border:1px solid #DD5138; color:#DD5138; }
+        .btn-danger-o:hover { background:#FBEAE6; color:#A5301E; }
         .warm-panel { background:#fff; border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:10px; }
         .ss-tabs { display:flex; gap:6px; margin-bottom:10px; }
         .ss-tab { border:1px solid var(--line); border-bottom:none; background:#EFE3CF; color:var(--ink2);
