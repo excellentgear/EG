@@ -113,19 +113,9 @@ case 'template_settings_save': {
         'approver_chain'=>is_array($chain) ? $chain : ['top_approver'],
         'maintain_dept_id'=>(int)($_POST['maintain_dept_id'] ?? 0) ?: null,
         'has_year_heading'=>!empty($_POST['has_year_heading']),
-        'src_bind'=>!empty($_POST['src_bind']),
     ], $uname);
     if ($docId >= 0) eg_asdoc_save($db, rvf_asdoc_module($tid), $docId, $uname);
     jout(['template'=>rvf_template_get($db, $tid)]);
-}
-
-/* 把產品開發評估表 2-TD-02-01 的固定 32 項**複製**成列定義回傳給模板編輯畫面。
-   只是回傳資料、不寫入任何東西（管理員還要按「儲存表格結構」才生效），
-   而且複製過去之後兩邊完全脫鉤——使用者 2026-10-02 明確要求「兩邊的項目不可連動」。 */
-case 'tpl_dev_eval_rows': {
-    rvf_need_csrf();
-    if (!$perms['canAdmin']) jerr('沒有權限', 403);
-    jout(['rows'=>rvf_tpl_rows_from_dev_eval($db)]);
 }
 
 case 'template_schema_save': {
@@ -249,53 +239,10 @@ case 'instance_create': {
     $title = trim((string)($_POST['title'] ?? ''));
     $bizDate = trim((string)($_POST['business_date'] ?? '')) ?: date('Y-m-d');
     $yearHeading = ($_POST['year_heading'] ?? '') !== '' ? (int)$_POST['year_heading'] : null;
-    $srcOrderId = (int)($_POST['src_order_id'] ?? 0);
     try {
-        // 綁訂單的模板沒給標題時，用訂單編號當標題——方便在列表上一眼看出是哪張訂單
-        // （業務日期本身一律由 rvf_instance_create() 內部強制用接單日期，前端送的 bizDate 不採信）。
-        if ($title === '' && $srcOrderId > 0) {
-            $o = rvf_src_order_get($db, $srcOrderId);
-            $title = $o ? (string)($o['Order_oo'] ?: ('#'.$o['Order_id'])) : '';
-        }
-        $id = rvf_instance_create($db, $tid, $uid, $uname, $title, $bizDate, $yearHeading, $srcOrderId);
+        $id = rvf_instance_create($db, $tid, $uid, $uname, $title, $bizDate, $yearHeading);
     } catch (Throwable $e) { jerr($e->getMessage()); }
     jout(['id'=>$id]);
-}
-
-/* 合約訂單審查表挑訂單用：只列「需要審查」的訂單（稽核製程標籤 kind='process'），
-   已經建過本表單的也列出來但標明 rf_id，前端據此反灰擋下重複建立。 */
-case 'src_order_search': {
-    $kw = trim((string)($_GET['kw'] ?? ''));
-    if (mb_strlen($kw) < 2) jout(['orders'=>[]]);
-    $tid = rvf_src_bind_template_id($db);
-    $like = '%'.$kw.'%';
-    $st = $db->prepare("SELECT ot.Order_id, ot.Order_oo, ot.d_id, ot.Qty, ot.Order_date, ot.Delivery_date,
-                               ot.Client_name, cl.customer AS client_name_txt, t.proc_name AS tag_label
-                        FROM order_track ot
-                        LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID
-                        JOIN ot_as_proc_tag t ON t.tag_id = ot.as_tag_id AND t.kind='process'
-                        WHERE (ot.Order_status IS NULL OR ot.Order_status<>6)
-                          AND (ot.Order_oo LIKE ? OR ot.d_id LIKE ? OR ot.Client_name LIKE ? OR cl.customer LIKE ?)
-                        ORDER BY ot.Order_id DESC LIMIT 30");
-    $st->execute([$like, $like, $like, $like]);
-    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-    if ($tid > 0 && $rows) {
-        $map = rvf_src_order_status_map($db, $tid, array_column($rows, 'Order_id'));
-        foreach ($rows as &$r) $r['rf_id'] = $map[(int)$r['Order_id']]['id'] ?? 0;
-    } else {
-        foreach ($rows as &$r) $r['rf_id'] = 0;
-    }
-    jout(['orders'=>$rows]);
-}
-
-case 'src_order_get': {
-    $oid = (int)($_GET['order_id'] ?? 0);
-    $o = rvf_src_order_get($db, $oid);
-    if (!$o) jerr('找不到此訂單或該訂單已取消', 404);
-    $tid = rvf_src_bind_template_id($db);
-    $o['rf_id'] = $tid > 0 ? rvf_src_order_instance_id($db, $tid, $oid) : 0;
-    $o['tag_label'] = $o['tag_proc_name'] ? (($o['as_tag_scope']==='full' ? '全製含' : '單製') . $o['tag_proc_name']) : '';
-    jout(['order'=>$o]);
 }
 
 case 'instance_save_items': {

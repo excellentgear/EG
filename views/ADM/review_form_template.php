@@ -171,9 +171,6 @@ $perms = rvf_perms($db, $rvfUser);
 
         <div class="rf-sec"><div class="rf-sec-title">年度標題（可選）</div>
             <label><input type="checkbox" id="stHasYear"> 有年度標題（適用整年度彙總類表單，勾選後在「項次欄位定義」內設定年度格式與顯示位置，新建表單時會多一個年度輸入框）</label>
-            <label><input type="checkbox" id="stSrcBind"> 綁定訂單（合約訂單審查表用）：建立表單時必須從訂單追蹤挑一張訂單，一張訂單只能建一份</label>
-            <div class="rf-hint" style="margin:-2px 0 6px 22px;">勾選後：<b>業務日期一律用該訂單的接單日期</b>（不可自己改）；客戶／料號／數量／交期即時取訂單現值顯示與列印；
-                訂單追蹤的清單會長出一欄顯示這張訂單審查到哪裡、可直接點開。<b>全站只會有一個模板勾這個</b>，勾第二個時以 id 最小的為準。</div>
         </div>
     </div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('settingMask')">取消</button>
@@ -211,8 +208,6 @@ $perms = rvf_perms($db, $rvfUser);
                     <tbody id="rowHeadBody" data-eg-row-add="rowHeadAdd" data-eg-row-del="rowHeadDelLast"></tbody>
                 </table>
                 <button type="button" onclick="rowHeadAdd()" style="height:26px;font-size:12px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:4px;cursor:pointer;">+ 新增列標題</button>
-                <button type="button" onclick="rowHeadImportDevEval()" style="height:26px;font-size:12px;border:1px solid #b5862f;background:#fff;color:#8a6d45;border-radius:4px;cursor:pointer;margin-left:6px;" title="把產品開發評估表 2-TD-02-01 的 32 項確認項目複製過來當起點">⤓ 從產品開發評估表匯入項目</button>
-                <span class="rf-hint" style="display:inline-block;margin-left:4px;">匯入是<b>複製一份</b>過來，之後兩邊各自獨立：產品開發評估表改了題目不會動到這裡，這裡刪減修改也不會影響那張表。</span>
             </div>
         </div>
 
@@ -560,7 +555,6 @@ function openSettingModal(id){
         renderChainBox(); $('.chain-sel[data-idx=0]').val('top_approver');
         $('#stMaintainDept').val('');
         $('#stHasYear').prop('checked',false);
-        $('#stSrcBind').prop('checked',false);
         openMask('settingMask'); return;
     }
     $.getJSON(API, {action:'template_get', id:id}, function(res){
@@ -578,7 +572,6 @@ function openSettingModal(id){
         (t.approver_chain||['top_approver']).forEach(function(m,i){ $('.chain-sel[data-idx='+i+']').val(m); });
         $('#stMaintainDept').val(t.maintain_dept_id||'');
         $('#stHasYear').prop('checked', t.has_year_heading==1);
-        $('#stSrcBind').prop('checked', t.src_bind==1);
         openMask('settingMask');
     });
 }
@@ -603,8 +596,7 @@ function submitTplSettings(){
         approver_dept_id:$('#stApproverDept').val(), approver_user_id:$('#stApproverUser').val(),
         approver_chain: JSON.stringify(chain.length?chain:['top_approver']),
         maintain_dept_id:$('#stMaintainDept').val(), as_doc_id:$('#stDocLabel').data('id')||0,
-        has_year_heading: $('#stHasYear').is(':checked')?1:0,
-        src_bind: $('#stSrcBind').is(':checked')?1:0
+        has_year_heading: $('#stHasYear').is(':checked')?1:0
     }, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         closeMask('settingMask'); loadTemplates();
@@ -679,24 +671,6 @@ function renderRowHeads(){
              + '<td style="text-align:center;"><span class="rf-del" onclick="rowHeadDel('+i+')"><i class="fa fa-times"></i></span></td></tr>';
     }).join('');
     $('#rowHeadBody').html(h || '<tr><td colspan="5" style="text-align:center;color:#8a6d45;">尚未新增列標題</td></tr>');
-}
-/* 從產品開發評估表（2-TD-02-01）複製 32 項過來當起點。複製一次就與那張表脫鉤（2026-10-02 使用者明確要求不連動）。 */
-function rowHeadImportDevEval(){
-    var has = ROWHEADS.filter(function(r){ return $.trim(rowHeadNorm(r).t)!==''; }).length;
-    var msg = has ? ('目前已經有 '+has+' 列，匯入會「接在後面」不會覆蓋。要繼續嗎？')
-                  : '要把產品開發評估表的 32 項確認項目複製過來嗎？\n\n複製過來之後兩邊各自獨立，可自行刪減修改。';
-    if (!confirm(msg)) return;
-    $.post(API, {action:'tpl_dev_eval_rows', csrf:META.csrf}, function(res){
-        if (!res || !res.ok) { alert((res && res.error) || '匯入失敗'); return; }
-        var add = (res.rows||[]).map(rowHeadNorm);
-        if (!add.length) { alert('產品開發評估表沒有可匯入的項目'); return; }
-        // 原本只有空白列（按「使用直式標題」時自動長出來的那兩列）就直接取代，不要留下一堆空列
-        ROWHEADS = ROWHEADS.filter(function(r){ return $.trim(rowHeadNorm(r).t)!==''; }).concat(add);
-        renderRowHeads();
-        var noDept = add.filter(function(r){ return !r.dept; }).length;
-        alert('已匯入 '+add.length+' 項'+(noDept ? ('，其中 '+noDept+' 項的負責課對不到部門主檔，請自行挑選') : '（負責課已全部自動對應）')
-              + '\n\n請確認內容後按下方的「儲存表格結構」才會生效。');
-    }, 'json');
 }
 $(document).on('change', '#scUseRowHead', function(){
     $('#rowHeadBox').toggle(this.checked);

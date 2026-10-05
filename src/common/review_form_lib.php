@@ -237,21 +237,21 @@ function rvf_template_settings_save(PDO $db, int $id, array $d, string $byName):
     if ($id) {
         $db->prepare("UPDATE rf_template SET name=?,paper_size=?,orientation=?,list_stamp_tpl_id=?,footer_stamp_tpl_id=?,
                       need_review=?,auto_review=?,review_dept_id=?,need_approval=?,auto_approval=?,
-                      approver_dept_id=?,approver_user_id=?,approver_chain_json=?,maintain_dept_id=?,has_year_heading=?,src_bind=?,updated_by=?,updated_at=NOW() WHERE id=?")
+                      approver_dept_id=?,approver_user_id=?,approver_chain_json=?,maintain_dept_id=?,has_year_heading=?,updated_by=?,updated_at=NOW() WHERE id=?")
            ->execute([$d['name'], $d['paper_size'], $orientation, $d['list_stamp_tpl_id'] ?: null, $d['footer_stamp_tpl_id'] ?: null,
                       $d['need_review']?1:0, $d['auto_review']?1:0, $d['review_dept_id'] ?: null,
                       $d['need_approval']?1:0, $d['auto_approval']?1:0, $d['approver_dept_id'] ?: null, $d['approver_user_id'] ?: null,
-                      $chain, $d['maintain_dept_id'] ?: null, $d['has_year_heading']?1:0, !empty($d['src_bind'])?1:0, $byName, $id]);
+                      $chain, $d['maintain_dept_id'] ?: null, $d['has_year_heading']?1:0, $byName, $id]);
         return $id;
     }
     $db->prepare("INSERT INTO rf_template (name,paper_size,orientation,list_stamp_tpl_id,footer_stamp_tpl_id,
                   need_review,auto_review,review_dept_id,need_approval,auto_approval,approver_dept_id,
-                  approver_user_id,approver_chain_json,maintain_dept_id,has_year_heading,src_bind,current_schema_json,published_version,created_by)
-                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)")
+                  approver_user_id,approver_chain_json,maintain_dept_id,has_year_heading,current_schema_json,published_version,created_by)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)")
        ->execute([$d['name'], $d['paper_size'], $orientation, $d['list_stamp_tpl_id'] ?: null, $d['footer_stamp_tpl_id'] ?: null,
                   $d['need_review']?1:0, $d['auto_review']?1:0, $d['review_dept_id'] ?: null,
                   $d['need_approval']?1:0, $d['auto_approval']?1:0, $d['approver_dept_id'] ?: null, $d['approver_user_id'] ?: null,
-                  $chain, $d['maintain_dept_id'] ?: null, $d['has_year_heading']?1:0, !empty($d['src_bind'])?1:0,
+                  $chain, $d['maintain_dept_id'] ?: null, $d['has_year_heading']?1:0,
                   json_encode(['fields'=>[], 'sign_mode'=>'password'], JSON_UNESCAPED_UNICODE), $byName]);
     return (int)$db->lastInsertId();
 }
@@ -475,20 +475,9 @@ function rvf_schema_sign_mode(array $schema): string {
     return (string)($schema['sign_mode'] ?? 'password');
 }
 
-/** @param int $srcOrderId 來源訂單 order_track.Order_id（0＝不綁）。只有模板勾了「綁來源訂單」才有意義，
- *                         業務日期一律以該訂單的接單日期為準，見 rvf_src_order_apply()。 */
-function rvf_instance_create(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate, ?int $yearHeading = null, int $srcOrderId = 0): int {
+function rvf_instance_create(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate, ?int $yearHeading = null): int {
     $tpl = rvf_template_get($db, $templateId);
     if (!$tpl) throw new Exception('找不到此模板');
-    $srcOrder = null;
-    if (!empty($tpl['src_bind'])) {
-        // 綁訂單的模板：訂單必選、不可重複建、業務日期強制用接單日期（2026-10-02 使用者拍板）
-        $srcOrder = rvf_src_order_get($db, $srcOrderId);
-        if (!$srcOrder) throw new Exception('請選擇來源訂單');
-        if (rvf_src_order_instance_id($db, $templateId, $srcOrderId)) throw new Exception('這張訂單已經建立過本表單，請直接開啟原本那一張');
-        $bizDate = (string)$srcOrder['Order_date'];
-        if ($bizDate === '' || $bizDate === '0000-00-00') throw new Exception('這張訂單沒有接單日期，請先到訂單追蹤補上');
-    }
     $bizDate = $bizDate ?: date('Y-m-d');
     if (!empty($tpl['has_year_heading'])) {
         $bizYear = (int)date('Y', strtotime($bizDate));
@@ -498,9 +487,9 @@ function rvf_instance_create(PDO $db, int $templateId, int $uid, string $uname, 
     } else {
         $yearHeading = null;
     }
-    $db->prepare("INSERT INTO rf_instance (template_id,template_version,title,business_date,year_heading,status,created_by,created_by_name,src_order_id)
-                  VALUES (?,?,?,?,?,'draft',?,?,?)")
-       ->execute([$templateId, (int)$tpl['published_version'], $title, $bizDate, $yearHeading, $uid, $uname, ($srcOrder ? $srcOrderId : null)]);
+    $db->prepare("INSERT INTO rf_instance (template_id,template_version,title,business_date,year_heading,status,created_by,created_by_name)
+                  VALUES (?,?,?,?,?,'draft',?,?)")
+       ->execute([$templateId, (int)$tpl['published_version'], $title, $bizDate, $yearHeading, $uid, $uname]);
     $instanceId = (int)$db->lastInsertId();
     // 直式標題模式：列由模板決定、使用者不可增刪，所以建立表單當下就把列建好（各一個空白小項），
     // 使用者一打開就看到完整矩陣，不必先按存檔才長出格子。
@@ -517,101 +506,6 @@ function rvf_instance_create(PDO $db, int $templateId, int $uid, string $uname, 
         }
     }
     return $instanceId;
-}
-
-/* ---- 來源訂單綁定（2026-10-02 使用者交辦：合約訂單審查表一張訂單一份）------------------
-   訂單的客戶／料號／數量／交期一律由 src_order_id 即時 JOIN order_track 取現值，**不存快照**：
-   訂單事後變更時若留著舊數字，畫面與列印都看不出來已經過期（訂單變更本身另有 2-SM-01-03 在管）。
-   「這張訂單要不要審查」＝它的稽核製程標籤 kind='process'（齒研、插齒這種 AS 認證範圍內的製程），
-   判定一律借 order_as_tag_lib.php 的定義，不在這裡另列一份製程清單（鐵律4）。 */
-
-/** 取來源訂單（含客戶名稱與稽核製程標籤名稱）。查不到或已取消一律回 null。 */
-function rvf_src_order_get(PDO $db, int $orderId): ?array {
-    if ($orderId <= 0) return null;
-    $st = $db->prepare("SELECT ot.Order_id, ot.Order_oo, ot.d_id, ot.Specification, ot.Qty, ot.Order_date,
-                               ot.Delivery_date, ot.C_order, ot.Processing_items, ot.Order_status,
-                               ot.as_tag_id, ot.as_tag_scope, ot.Client_name,
-                               cl.customer AS client_name_txt, t.kind AS tag_kind, t.proc_name AS tag_proc_name
-                        FROM order_track ot
-                        LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID
-                        LEFT JOIN ot_as_proc_tag t ON t.tag_id = ot.as_tag_id
-                        WHERE ot.Order_id=? AND (ot.Order_status IS NULL OR ot.Order_status<>6)");
-    $st->execute([$orderId]);
-    return $st->fetch(PDO::FETCH_ASSOC) ?: null;
-}
-
-/** 這張訂單在 AS 認定上需不需要做合約訂單審查＝標籤是「稽核製程」(kind=process)。
- *  全製／單製非AS認證／廠內治具／管理員自加的其他選項(kind=fixed/other)一律不需要。 */
-function rvf_src_order_need_review(?array $order): bool {
-    return $order && (string)($order['tag_kind'] ?? '') === 'process';
-}
-
-/** 這張訂單在這個模板已經建過的表單 id（0＝還沒建）。作廢(void)的不算，可以重新建一張。 */
-function rvf_src_order_instance_id(PDO $db, int $templateId, int $orderId): int {
-    if ($templateId <= 0 || $orderId <= 0) return 0;
-    $st = $db->prepare("SELECT id FROM rf_instance WHERE template_id=? AND src_order_id=? AND status<>'void' ORDER BY id DESC LIMIT 1");
-    $st->execute([$templateId, $orderId]);
-    return (int)($st->fetchColumn() ?: 0);
-}
-
-/** 批次版：給訂單追蹤清單一次撈一頁訂單的審查狀態用（逐列各查一次會是 N+1）。
- *  @param int[] $orderIds
- *  @return array [Order_id => ['id'=>表單id,'status'=>狀態]] */
-function rvf_src_order_status_map(PDO $db, int $templateId, array $orderIds): array {
-    $ids = array_values(array_unique(array_filter(array_map('intval', $orderIds), fn($n) => $n > 0)));
-    if ($templateId <= 0 || !$ids) return [];
-    $in = implode(',', array_fill(0, count($ids), '?'));
-    $st = $db->prepare("SELECT src_order_id, id, status FROM rf_instance
-                        WHERE template_id=? AND status<>'void' AND src_order_id IN ($in) ORDER BY id");
-    $st->execute(array_merge([$templateId], $ids));
-    $map = [];
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        $map[(int)$r['src_order_id']] = ['id' => (int)$r['id'], 'status' => (string)$r['status']];
-    }
-    return $map;
-}
-
-/** 綁訂單的模板只會有一個（合約訂單審查表）。找不到回 0。
- *  用 src_bind 旗標找而不是寫死模板 id——模板是管理員自己建的，id 不可預期。 */
-function rvf_src_bind_template_id(PDO $db): int {
-    static $cache = null;
-    if ($cache !== null) return $cache;
-    try {
-        $st = $db->query("SELECT id FROM rf_template WHERE src_bind=1 AND status='active' ORDER BY id LIMIT 1");
-        $cache = (int)($st->fetchColumn() ?: 0);
-    } catch (Throwable $e) { $cache = 0; }   // 欄位還沒建（migration 未跑）一律視同沒有，不可害清單掛掉
-    return $cache;
-}
-
-/** 從產品開發評估表（2-TD-02-01）的固定 32 項**複製一份**成本引擎的列定義。
- *  刻意是「複製」不是「連動」（2026-10-02 使用者明確要求）：回傳的是一份快照陣列，
- *  存進模板 schema 之後就與 TD_DEV_EVAL_TEMPLATE 完全脫鉤，管理員可自行刪減修改，
- *  日後產品開發評估表改了題目也不會回頭動到這張表單（反之亦然）。
- *  評估單位（生產課/品保課/資材課/技術課/業務課/管理課）以部門名稱回查 department.id，
- *  查不到的留白讓管理員自己挑（硬猜一個部門會讓簽核寄給錯的人）。
- *  **「品保課」要另外對照**：紙本與產品開發評估表寫的是「品保課」，部門主檔現在叫「品管課」
- *  （供應商稽核 2026-08-03 已踩過同一個坑），不對照的話那 1 項永遠帶不出負責課。 */
-function rvf_tpl_rows_from_dev_eval(PDO $db): array {
-    require_once __DIR__ . '/td_dev_eval_lib.php';
-    $deptIds = [];
-    foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d) {
-        $deptIds[trim((string)$d['name'])] = (int)$d['id'];
-    }
-    // 舊名稱→主檔現名（只在這裡做名稱對照，不去改產品開發評估表的題目文字）
-    foreach (['品保課' => '品管課', '品保部' => '品管課'] as $old => $now) {
-        if (!isset($deptIds[$old]) && isset($deptIds[$now])) $deptIds[$old] = $deptIds[$now];
-    }
-    $rows = [];
-    foreach (TD_DEV_EVAL_TEMPLATE as $t) {
-        [$group, $text, $deptName] = [$t[0], $t[1], $t[2] ?? ''];
-        $rows[] = [
-            't'    => $text,
-            'g'    => $group,
-            'dept' => isset($deptIds[$deptName]) ? (string)$deptIds[$deptName] : '',
-            'user' => '',
-        ];
-    }
-    return $rows;
 }
 
 function rvf_instance_get(PDO $db, int $id): ?array {
