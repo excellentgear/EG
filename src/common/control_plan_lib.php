@@ -35,6 +35,7 @@ if (!defined('CP_LIB_LOADED')) {
 define('CP_LIB_LOADED', 1);
 
 require_once __DIR__ . '/date_fmt_lib.php';
+require_once __DIR__ . '/part_cost_lib.php';   // ppc_kg_set()：客供料製程集合，IQC 判定直接沿用，不重寫一份判準
 
 /** 本模組在 system_parameters 的分組名 */
 define('CP_PARAM_GROUP', 'CONTROL_PLAN');
@@ -1059,6 +1060,7 @@ function cp_autofill_preview(PDO $db, array $opt): array
     // 檢驗類別（IQC/IPQC/FQC）：只對「來自BOM」的製程鏈算，鏈條完整才算得出「最早」「前一道」
     if ($res['processes']) {
         $res['processes'] = cp_compute_insp_stages($db, $res['processes']);
+        $res['processes'] = cp_insp_gap_annotate($db, $res['processes'], $partDId ?: null);
     }
 
     return $res;
@@ -1067,24 +1069,40 @@ function cp_autofill_preview(PDO $db, array $opt): array
 /* ===================================================================
  * 六之二、檢驗類別自動判定（IQC／IPQC／FQC）
  *
- * 使用者定調（2026-10-05）：製程列要能自動帶出「這一道後面接哪種檢驗」。
+ * 使用者定調（2026-10-05，二次）：四種檢驗類別在現場的真實對應——
+ *   IQC  進料檢驗：客供料的檢驗項目。
+ *   IPQC 製程中檢驗：SOP（製造製程說明書）中的檢驗項目。
+ *   FQC  最終檢驗：網頁「成品檢驗」（線上檢驗模組），檢樣項目依該製程的 SIP。
+ *   OQC  出貨檢驗：網頁的「包裝自主檢驗表」（packing_schedule.php，各自有單號）——
+ *        **本模組刻意不做 OQC 分類**（使用者拍板取消），包裝檢驗已經是獨立模組、
+ *        自己有單號可查，不必在 CP 的 insp_stage 裡重複表達一次。
+ *
  * 三條規則，優先序由下往上（下面的會覆蓋上面的）：
  *   ①預設＝IPQC（製程中間，介於 IQC 與 FQC 之間的一律是 IPQC）。
- *   ②管理員設定「哪些製程代號後面接IQC」——一條製程鏈只認**最早出現**的那一個，
- *     命中的那一列本身＝IQC（代表材料剛進站，例如委外回廠、客供半成品銜接點）。
+ *   ②**客供料自動判定**＝IQC：一條製程鏈只認**最早出現**的那一個客供料製程（沿用
+ *     part_cost_lib.php 的 ppc_kg_set()＝ProcessNo=138 或製程名稱含「客供料」，
+ *     與成本推算用的是同一份判準，不另設一份會走鐘的「IQC代號」清單）。
  *   ③管理員設定「哪些製程代號是包裝製程」——鏈中最早出現的包裝代號那一列本身
- *     不算檢驗點（packaging 不是檢驗），**它的前一道**固定＝FQC；若與②撞在同一列
- *     （鏈很短，IQC代號剛好就是包裝前一道），FQC 優先——包裝是結構事實、IQC代號
- *     只是通用猜測，短鏈時以確定的那條規則為準。
+ *     不算檢驗點（packaging 走獨立的包裝自主檢驗，不在這裡分類），**它的前一道**
+ *     固定＝FQC（使用者原話「包裝前一道一定是FQC」，不因查無SIP而改判）；若與②
+ *     撞在同一列（鏈很短，客供料剛好就是包裝前一道），FQC 優先——包裝是結構事實、
+ *     客供料判定只是猜測起點，短鏈時以確定的那條規則為準。
  *   ④AS 稽核製程（訂單追蹤的「稽核製程」標籤，kind='process'）可逐個標籤**額外**設定
  *     「下一站固定是 IQC 或 FQC」，命中時覆蓋的是**該製程的下一列**（不是它自己），
  *     優先序最高（使用者原話：這是管理員對該稽核製程的明確業務判斷，一般規則判不出來
  *     的才靠②③，AS 稽核製程則直接讓管理員指定）。若下一列剛好是包裝列，不覆蓋
  *     （包裝本身不是檢驗點，覆蓋了反而看不出哪一列是FQC）。
  *
- * 三個設定一律存在 CP 自己的 system_parameters（CP_PARAM_GROUP），不寫進
- * ot_as_proc_tag（鐵律4：那張表屬訂單追蹤模組，本模組只讀不寫；AS 稽核製程的
- * IQC/FQC 指定是 CP 自己才需要的判斷，不屬於訂單追蹤的標籤定義）。
+ * 「包裝代號」設定仍存在 CP 自己的 system_parameters（CP_PARAM_GROUP，只用來定位
+ * 包裝在鏈中的位置），不寫進 ot_as_proc_tag（鐵律4：那張表屬訂單追蹤模組，本模組
+ * 只讀不寫）。IQC 判定已改為自動偵測，不再需要管理員另外維護一份代號清單。
+ *
+ * 文件缺口提示（使用者原話「無SOP時要求補SOP」「FQC一定要有此製程的SIP」）：
+ * 分類本身不因缺文件而改判（IPQC 照樣預設、包裝前一道照樣FQC），但 cp_insp_gap_annotate()
+ * 會逐列即時查——IPQC 列查無已核准 SOP、FQC 列查無**真正的**已核准 SIP（排除
+ * ss_item_tpl 範本退路，那不算正式文件）——命中的補上 insp_gap='sop'/'sip'，供畫面
+ * 顯示警示並引導去 SOP/SIP 模組補建。這一欄每次顯示都即時查、不落庫（與 insp_src
+ * 同一種「顯示用」欄位），所以草稿、預覽、已存檔的 CP 都看得到最新缺口狀態。
  *
  * 只在「自動帶入」（cp_autofill_preview，製程來自 BOM）算一次，存進 cp_process.insp_stage
  * 之後就是人工可覆蓋的欄位（比照 special_class_id 同一套思路）；手動新增的製程列
@@ -1097,19 +1115,6 @@ function cp_insp_stage_norm($v): ?string
 {
     $v = strtoupper(trim((string)$v));
     return in_array($v, ['IQC', 'IPQC', 'FQC'], true) ? $v : null;
-}
-
-/** 設定：哪些製程代號「後面接IQC」（存 process_no 整數陣列） */
-function cp_iqc_codes(PDO $db): array
-{
-    $v = cp_param($db, 'iqc_codes', []);
-    return is_array($v) ? array_values(array_unique(array_map('intval', $v))) : [];
-}
-function cp_iqc_codes_save(PDO $db, array $codes): void
-{
-    $codes = array_values(array_unique(array_filter(array_map('intval', $codes), function ($n) { return $n > 0; })));
-    sort($codes);
-    cp_param_save($db, 'iqc_codes', $codes);
 }
 
 /** 設定：哪些製程代號是「包裝製程」（存 process_no 整數陣列） */
@@ -1182,7 +1187,7 @@ function cp_compute_insp_stages(PDO $db, array $procs): array
 {
     if (!$procs) return $procs;
 
-    $iqcCodes  = array_flip(cp_iqc_codes($db));
+    $kgSet     = array_flip(ppc_kg_set($db));   // 客供料製程（IQC），與 part_cost_lib 同一份判準
     $packCodes = array_flip(cp_pack_codes($db));
     $asInsp    = cp_as_tag_insp($db);
 
@@ -1221,14 +1226,14 @@ function cp_compute_insp_stages(PDO $db, array $procs): array
         }
     }
 
-    // ②IQC：鏈中最早出現的IQC代號那一列本身＝IQC；若那一列已被③佔用（短鏈撞在一起），FQC優先、放棄這條
-    if ($iqcCodes) {
+    // ②客供料：鏈中最早出現的客供料製程本身＝IQC；若那一列已被③佔用（短鏈撞在一起），FQC優先、放棄這條
+    if ($kgSet) {
         foreach ($procs as $i => $p) {
             $pn = $procNoOf($p);
-            if ($pn === null || !isset($iqcCodes[$pn])) continue;
+            if ($pn === null || !isset($kgSet[$pn])) continue;
             if (in_array($procs[$i]['insp_src'], ['fqc_pack', 'pack'], true)) break;   // 只試最早那一個，撞到就不找第二個
             $procs[$i]['insp_stage'] = 'IQC';
-            $procs[$i]['insp_src']   = 'iqc_code';
+            $procs[$i]['insp_src']   = 'kg';
             break;
         }
     }
@@ -1250,6 +1255,67 @@ function cp_compute_insp_stages(PDO $db, array $procs): array
     return $procs;
 }
 
+/**
+ * 這個料號／製程有沒有「已核准的 SOP」（kind='process'，製造製程說明書）。
+ * 優先序比照 cp_sip_items 的 doc 查找：綁這個料號的 → 該製程的通用版。
+ * 只回傳存不存在，IPQC 文件缺口提示只需要這個，不必展開內容。
+ */
+function cp_has_sop(PDO $db, ?int $partDId, ?int $processNo): bool
+{
+    return cp_ss_doc_exists($db, 'process', $partDId, $processNo);
+}
+
+/**
+ * 這個料號／製程有沒有「真正的已核准 SIP」（kind='sip'，標準檢驗指導書）。
+ * 刻意不接受 cp_sip_items() 的 ss_item_tpl 範本退路——範本只是「查不到正式文件時
+ * 的檢驗項目預設值」，不是一份已審核過的 SIP，FQC 的文件缺口提示要看的是「有沒有
+ * 真的建立並核准這份文件」。
+ */
+function cp_has_real_sip(PDO $db, ?int $partDId, ?int $processNo): bool
+{
+    return cp_ss_doc_exists($db, 'sip', $partDId, $processNo);
+}
+
+/** cp_has_sop／cp_has_real_sip 共用：ss_doc 是否存在已核准版本（part 優先，查不到才退回 general）。 */
+function cp_ss_doc_exists(PDO $db, string $kind, ?int $partDId, ?int $processNo): bool
+{
+    if ($processNo === null) return false;
+    $try = function ($scope) use ($db, $kind, $partDId, $processNo) {
+        $sql = "SELECT 1 FROM ss_doc d JOIN ss_ver v ON v.ver_id = d.cur_ver_id AND v.status='approved'
+                 WHERE d.is_deleted=0 AND d.kind=? AND d.scope=? AND d.process_no=?";
+        $par = [$kind, $scope, $processNo];
+        if ($scope === 'part') { $sql .= " AND d.part_d_id=?"; $par[] = (int)$partDId; }
+        $sql .= " LIMIT 1";
+        try { $st = $db->prepare($sql); $st->execute($par); return (bool)$st->fetchColumn(); }
+        catch (Throwable $e) { return false; }
+    };
+    if ($partDId && $try('part')) return true;
+    return $try('general');
+}
+
+/**
+ * 逐列補上文件缺口提示：IPQC 查無已核准 SOP → insp_gap='sop'；FQC 查無真正的已核准
+ * SIP → insp_gap='sip'。不改判分類（包裝前一道照樣是 FQC），只是標出「這份分類背後
+ * 該有的文件還沒建」。每次顯示即時查、不落庫（與 insp_src 同一種顯示用欄位）。
+ */
+function cp_insp_gap_annotate(PDO $db, array $procs, ?int $partDId): array
+{
+    foreach ($procs as &$p) {
+        $p['insp_gap'] = null;
+        $pn = isset($p['process_no']) && $p['process_no'] !== null && $p['process_no'] !== ''
+            ? (int)$p['process_no'] : null;
+        $stage = $p['insp_stage'] ?? null;
+        if ($pn === null || !$stage) continue;
+        if ($stage === 'IPQC' && !cp_has_sop($db, $partDId, $pn)) {
+            $p['insp_gap'] = 'sop';
+        } elseif ($stage === 'FQC' && !cp_has_real_sip($db, $partDId, $pn)) {
+            $p['insp_gap'] = 'sip';
+        }
+    }
+    unset($p);
+    return $procs;
+}
+
 /** 一次查出多個製程代號的名稱（設定頁顯示用，避免逐筆查） */
 function cp_process_name_map(PDO $db, array $nos): array
 {
@@ -1265,9 +1331,10 @@ function cp_process_name_map(PDO $db, array $nos): array
     } catch (Throwable $e) { return []; }
 }
 
-/** cp_iqc_codes()／cp_pack_codes() 的顯示版（含製程名稱），設定頁用 */
-function cp_iqc_codes_detail(PDO $db): array { return cp_codes_detail($db, cp_iqc_codes($db)); }
+/** cp_pack_codes() 的顯示版（含製程名稱），設定頁用 */
 function cp_pack_codes_detail(PDO $db): array { return cp_codes_detail($db, cp_pack_codes($db)); }
+/** 目前系統認定的客供料製程（IQC判定依據），純顯示用，不可在這裡編輯——要改請改 process_no 主檔的製程名稱 */
+function cp_kg_codes_detail(PDO $db): array { return cp_codes_detail($db, ppc_kg_set($db)); }
 function cp_codes_detail(PDO $db, array $nos): array
 {
     $map = cp_process_name_map($db, $nos);
@@ -1381,6 +1448,10 @@ function cp_get(PDO $db, int $cpId): ?array
             $p['items'] = $byProc[(int)$p['cp_proc_id']] ?? [];
         }
         unset($p);
+
+        // 文件缺口即時查（不落庫，見 cp_insp_gap_annotate 說明）——已存檔的 CP 一樣要看得到
+        // 目前查無 SOP/SIP 的提示，不是只有自動帶入那一刻才算一次。
+        $procs = cp_insp_gap_annotate($db, $procs, (int)($doc['part_d_id'] ?? 0) ?: null);
     }
     $doc['processes'] = $procs;
 

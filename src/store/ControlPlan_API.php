@@ -69,7 +69,7 @@ case 'bootstrap': {
         'as_tag_defs'     => cp_as_tag_defs($db, false),
         'excluded_as_tags'=> cp_excluded_as_tags($db),
         'required_as_tags'=> cp_required_as_tags($db),
-        'iqc_codes'       => cp_iqc_codes_detail($db),
+        'kg_codes'        => cp_kg_codes_detail($db),
         'pack_codes'      => cp_pack_codes_detail($db),
         'as_tag_insp'     => cp_as_tag_insp($db),
         'csrf'            => $_SESSION['cp_csrf'] ?? '',
@@ -110,7 +110,9 @@ case 'autofill': {
    $rows 只需要 process_no，順序＝畫面目前的順序（呼叫端要照目前順序送）。 */
 case 'recalc_insp': {
     $rows = $jsonArr('processes');
+    $partDId = (int)($_POST['part_d_id'] ?? 0);
     $rows = cp_compute_insp_stages($db, $rows);
+    $rows = cp_insp_gap_annotate($db, $rows, $partDId ?: null);
     jout(true, ['processes' => $rows]);
 }
 
@@ -414,14 +416,7 @@ case 'excluded_as_tags_save': {
     ]);
 }
 
-/* 哪些製程代號「後面接IQC」（見 control_plan_lib.php 六之二節） */
-case 'iqc_codes_save': {
-    if (!$perm['admin']) { http_response_code(403); jerr('只有管制計畫管理員可以改設定'); }
-    cp_iqc_codes_save($db, $jsonArr('codes'));
-    jout(true, ['message' => '已儲存。', 'codes' => cp_iqc_codes_detail($db)]);
-}
-
-/* 哪些製程代號是「包裝製程」（包裝前一道固定接FQC） */
+/* 哪些製程代號是「包裝製程」（包裝前一道固定接FQC）；IQC 已改為客供料自動判定，不再需要人工設代號 */
 case 'pack_codes_save': {
     if (!$perm['admin']) { http_response_code(403); jerr('只有管制計畫管理員可以改設定'); }
     cp_pack_codes_save($db, $jsonArr('codes'));
