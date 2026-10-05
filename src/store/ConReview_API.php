@@ -52,6 +52,7 @@ case 'tpl_save': {
         'item_text'=>trim((string)($_POST['item_text'] ?? '')),
         'dept_id'=>(int)($_POST['dept_id'] ?? 0) ?: null,
         'options'=>array_filter(array_map('trim', explode(',', (string)($_POST['options'] ?? '')))),
+        'default_value'=>trim((string)($_POST['default_value'] ?? '')),
         'is_active'=>!empty($_POST['is_active']),
     ];
     try { $id = cnrv_tpl_item_save($db, (int)($_POST['id'] ?? 0), $data, $uid, $uname); }
@@ -202,6 +203,14 @@ case 'approve': {
     try { cnrv_approve($db, (int)($_POST['doc_id'] ?? 0), $uid, $uname, $perms['isAdmin']); }
     catch (Throwable $e) { jerr($e->getMessage()); }
     jout([]);
+}
+case 'admin_auto_fill_sign': {
+    cnrv_need_csrf();
+    if (!$perms['canAdmin']) jerr('沒有權限', 403);
+    try {
+        $r = cnrv_admin_auto_fill_sign($db, (int)($_POST['doc_id'] ?? 0), (string)($_POST['sign_date'] ?? ''), $uid, $uname);
+    } catch (Throwable $e) { jerr($e->getMessage()); }
+    jout($r);
 }
 case 'void': {
     cnrv_need_csrf();

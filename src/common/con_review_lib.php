@@ -148,6 +148,29 @@ function cnrv_ensure_schema(PDO $db): void {
         UNIQUE KEY uq_doc_dept (doc_id, dept_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='合約訂單審查表-內容部門簽核'");
 
+    // 2026-10-05：管理員「自動填寫並簽核」要用的設定與標記。
+    // 實測這個 MySQL（9.4.0）的 `ADD COLUMN IF NOT EXISTS` 語法會直接 1064 語法錯誤
+    // （不是本專案少數別處記過「MySQL 的 ADD COLUMN 支援 IF NOT EXISTS」那種情況——
+    // 兩者矛盾，以這次實測為準，別再假設這語法能用），一律改用「先查
+    // information_schema.COLUMNS 再決定要不要 ALTER」這個最保守、全版本都通用的寫法。
+    $hasCol = function (string $tbl, string $col) use ($db): bool {
+        $st = $db->prepare("SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?");
+        $st->execute([$tbl, $col]);
+        return (bool)$st->fetchColumn();
+    };
+    if (!$hasCol('con_review_tpl_item', 'default_value')) {
+        try { $db->exec("ALTER TABLE con_review_tpl_item ADD COLUMN default_value VARCHAR(200) NULL
+                         COMMENT '預設回覆值，供管理員「自動填寫並簽核」使用' AFTER preset_options"); } catch (Throwable $e) {}
+    }
+    if (!$hasCol('con_review_item', 'default_value')) {
+        try { $db->exec("ALTER TABLE con_review_item ADD COLUMN default_value VARCHAR(200) NULL
+                         COMMENT '建立當下的範本預設值快照' AFTER preset_options"); } catch (Throwable $e) {}
+    }
+    if (!$hasCol('con_review_dept_sign', 'is_auto_sign')) {
+        try { $db->exec("ALTER TABLE con_review_dept_sign ADD COLUMN is_auto_sign TINYINT(1) NOT NULL DEFAULT 0
+                         COMMENT '由管理員「自動填寫並簽核」寫入(與is_backfill不同：那是逐格指定原簽核人補登，這是整批自動帶入)' AFTER backfill_by_name"); } catch (Throwable $e) {}
+    }
+
     // 角色自動建立（module='con_review'，比照 equip_list_lib.php 同一套寫法；加好之後會自動出現在
     // user_permissions.php 的動態角色區塊，不必改設定頁程式）。canView 是進本模組 API 的最低門檻
     // （比照 td_dev_eval 的既有慣例），內容部門的填寫/簽核權限在這之上另有「人在那個部門」的
@@ -223,7 +246,19 @@ function cnrv_perms(PDO $db, ?array $u): array {
 
 /* ============================================================ 範本項目（管理員維護） ============================================================ */
 
-/** @return array 每項 ['id','sort_order','group_label','item_text','dept_id','dept_name','options'=>array,'is_active'] */
+/** 每個項目的結果一律是「是／否／N/A」三者之一，外加範本上設定的預設回覆選項之一
+ *  （2026-10-05 使用者明確要求）。這三個是固定的基礎選項，不給管理員改名或刪除——
+ *  範本的「預設回覆選項」只是在這三個之外**追加**的額外選擇，不是取代。 */
+if (!defined('CNRV_BASE_OPTIONS')) define('CNRV_BASE_OPTIONS', ['是', '否', 'N/A']);
+
+/** 合併基礎三選項與範本自訂選項（去重，基礎選項固定排前面）。$custom 可為陣列或 JSON 字串。 */
+function cnrv_merge_options($custom): array {
+    $arr = is_array($custom) ? $custom : (json_decode((string)$custom, true) ?: []);
+    $arr = array_values(array_filter(array_map('trim', (array)$arr), fn($s) => $s !== '' && !in_array($s, CNRV_BASE_OPTIONS, true)));
+    return array_merge(CNRV_BASE_OPTIONS, $arr);
+}
+
+/** @return array 每項 ['id','sort_order','group_label','item_text','dept_id','dept_name','options'=>array(含基礎三選項),'default_value','is_active'] */
 function cnrv_tpl_items_get(PDO $db, bool $activeOnly = false): array {
     cnrv_ensure_schema($db);
     $sql = "SELECT t.*, d.name AS dept_name FROM con_review_tpl_item t
@@ -231,31 +266,37 @@ function cnrv_tpl_items_get(PDO $db, bool $activeOnly = false): array {
             ORDER BY t.sort_order, t.id";
     $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
     foreach ($rows as &$r) {
-        $r['options'] = json_decode((string)$r['preset_options'], true) ?: [];
+        $r['custom_options'] = json_decode((string)$r['preset_options'], true) ?: [];   // 畫面編輯欄只顯示「額外加的」
+        $r['options'] = cnrv_merge_options($r['custom_options']);                       // 填寫時真正可選的完整清單
         $r['dept_id'] = $r['dept_id'] !== null ? (int)$r['dept_id'] : null;
     }
     return $rows;
 }
 
-/** $id=0 新增。$data: sort_order,group_label,item_text,dept_id,options(array),is_active */
+/** $id=0 新增。$data: sort_order,group_label,item_text,dept_id,options(array，額外選項不含基礎三選項),default_value,is_active */
 function cnrv_tpl_item_save(PDO $db, int $id, array $data, int $uid, string $uname): int {
     cnrv_ensure_schema($db);
     $text = trim((string)($data['item_text'] ?? ''));
     if ($text === '') throw new Exception('項目內容不可空白');
     $group = trim((string)($data['group_label'] ?? ''));
     $deptId = (int)($data['dept_id'] ?? 0) ?: null;
-    $opts = array_values(array_filter(array_map('trim', (array)($data['options'] ?? [])), fn($s) => $s !== ''));
+    $opts = array_values(array_filter(array_map('trim', (array)($data['options'] ?? [])), fn($s) => $s !== '' && !in_array($s, CNRV_BASE_OPTIONS, true)));
     $optsJson = $opts ? json_encode($opts, JSON_UNESCAPED_UNICODE) : null;
     $isActive = !empty($data['is_active']) ? 1 : 0;
+    $defVal = trim((string)($data['default_value'] ?? ''));
+    if ($defVal !== '' && !in_array($defVal, array_merge(CNRV_BASE_OPTIONS, $opts), true)) {
+        throw new Exception('預設值必須是「是／否／N/A」或範本設定的額外選項之一');
+    }
+    $defVal = $defVal !== '' ? $defVal : null;
     if ($id) {
-        $db->prepare("UPDATE con_review_tpl_item SET sort_order=?,group_label=?,item_text=?,dept_id=?,preset_options=?,is_active=?,
+        $db->prepare("UPDATE con_review_tpl_item SET sort_order=?,group_label=?,item_text=?,dept_id=?,preset_options=?,default_value=?,is_active=?,
                       updated_by=?,updated_by_name=?,updated_at=NOW() WHERE id=?")
-           ->execute([(int)($data['sort_order'] ?? 0), $group, $text, $deptId, $optsJson, $isActive, $uid, $uname, $id]);
+           ->execute([(int)($data['sort_order'] ?? 0), $group, $text, $deptId, $optsJson, $defVal, $isActive, $uid, $uname, $id]);
         return $id;
     }
-    $db->prepare("INSERT INTO con_review_tpl_item (sort_order,group_label,item_text,dept_id,preset_options,is_active,created_by,created_by_name)
-                  VALUES (?,?,?,?,?,?,?,?)")
-       ->execute([(int)($data['sort_order'] ?? 0), $group, $text, $deptId, $optsJson, $isActive, $uid, $uname]);
+    $db->prepare("INSERT INTO con_review_tpl_item (sort_order,group_label,item_text,dept_id,preset_options,default_value,is_active,created_by,created_by_name)
+                  VALUES (?,?,?,?,?,?,?,?,?)")
+       ->execute([(int)($data['sort_order'] ?? 0), $group, $text, $deptId, $optsJson, $defVal, $isActive, $uid, $uname]);
     return (int)$db->lastInsertId();
 }
 
@@ -370,11 +411,15 @@ function cnrv_create(PDO $db, int $orderId, int $uid, string $uname): int {
                       $order['d_id'], (int)$order['Qty'], ($order['Delivery_date'] ?: null), $order['tag_label'], $uid, $uname]);
         $docId = (int)$db->lastInsertId();
 
-        $ins = $db->prepare("INSERT INTO con_review_item (doc_id,tpl_item_id,sort_order,group_label,item_text,dept_id,preset_options)
-                              VALUES (?,?,?,?,?,?,?)");
+        // preset_options 存的是「額外選項」（custom_options），不是合併後的完整清單——
+        // 完整清單（含固定的是/否/N-A）一律由 cnrv_merge_options() 在讀取時現算，
+        // 存成合併後的結果會讓舊單據的欄位跟著基礎選項以後若有調整而過期。
+        $ins = $db->prepare("INSERT INTO con_review_item (doc_id,tpl_item_id,sort_order,group_label,item_text,dept_id,preset_options,default_value)
+                              VALUES (?,?,?,?,?,?,?,?)");
         foreach (cnrv_tpl_items_get($db, true) as $t) {
             $ins->execute([$docId, $t['id'], $t['sort_order'], $t['group_label'], $t['item_text'], $t['dept_id'],
-                            $t['options'] ? json_encode($t['options'], JSON_UNESCAPED_UNICODE) : null]);
+                            $t['custom_options'] ? json_encode($t['custom_options'], JSON_UNESCAPED_UNICODE) : null,
+                            $t['default_value']]);
         }
         $db->commit();
         return $docId;
@@ -444,7 +489,7 @@ function cnrv_items_get(PDO $db, int $docId): array {
                         WHERE i.doc_id=? ORDER BY i.sort_order, i.id");
     $st->execute([$docId]);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($rows as &$r) $r['options'] = json_decode((string)$r['preset_options'], true) ?: [];
+    foreach ($rows as &$r) $r['options'] = cnrv_merge_options($r['preset_options']);
     return $rows;
 }
 
@@ -577,6 +622,104 @@ function cnrv_dept_sign(PDO $db, int $docId, int $deptId, int $uid, string $unam
     $toUids = array_map(fn($p) => (int)$p['id'], cnrv_sales_pool($db));
     if ($toUids) cnrv_notify($db, $docId, $toUids, '合約訂單審查待決行',
         "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查，內容部門已全部簽核，請前往決行。", $uid);
+}
+
+/* ============================================================ 管理員：自動填寫並簽核（2026-10-05 使用者交辦） ============================================================
+ * 「管理員可以不需送出自動全部填寫...自動帶入預設結果後自動簽核」——給例行、低風險訂單一鍵快速
+ * 走完內容部門這一段（送出＋逐項帶入範本預設值＋內容部門自動簽核），業務課決行／總經理核准
+ * 仍是個別的人工動作（那是實質的業務判斷，不該被「預設值」代勞）。
+ *
+ * 簽核日期規則：預設＝接單日期（業務日期）當天；管理員可改晚於當天的日期，但一定要是工作日
+ * （借用 leave_lib.php 既有的 eg_leave_is_workday()，不重寫一套假日判斷）。
+ *
+ * 簽核人一定要是「那天真的有上班」的人：借用 meeting_lib.php 已經驗證過的
+ * meeting_notice_absent_reason()（在職狀態asof＋整天請假／整天公出，2026-09-29 踩過
+ * 「公出單有填時間、allday旗標卻是0」這個坑才修好的那一套，這裡直接重用不重寫）。
+ * 逐一嘗試部門候選名單裡的每個人，找到第一個「那天真的在」的人才簽；整個候選名單都不在，
+ * 這個部門就不自動簽、把原因列出來讓管理員自己決定（換日期，或自己手動簽），
+ * **絕不可以明知道對方那天不在還是把章蓋上去**——那正是使用者原話要避免的情況。
+ */
+
+/** 某部門在指定日期「找得到誰可以簽」：回傳 ['signer'=>人員陣列或null, 'warnings'=>[跳過原因...]]。 */
+function cnrv_dept_pool_available(PDO $db, int $deptId, string $date): array {
+    require_once __DIR__ . '/meeting_lib.php';
+    $warnings = [];
+    foreach (cnrv_dept_pool($db, $deptId) as $p) {
+        $why = meeting_notice_absent_reason($db, (int)$p['id'], $date);
+        if ($why === '') return ['signer'=>$p, 'warnings'=>$warnings];
+        $warnings[] = $p['user_cname'] . '：' . $why;
+    }
+    return ['signer'=>null, 'warnings'=>$warnings];
+}
+
+/**
+ * @return array ['sign_date','filled'=>N,'skipped_no_default'=>N,
+ *                'signed_depts'=>[dept_id=>['dept_name','signer_name','note_warnings'=>[]]],
+ *                'unsigned_depts'=>[dept_id=>['dept_name','reason']]]
+ */
+function cnrv_admin_auto_fill_sign(PDO $db, int $docId, string $signDate, int $adminUid, string $adminName): array {
+    require_once __DIR__ . '/leave_lib.php';
+    $doc = cnrv_get($db, $docId);
+    if (!$doc) throw new Exception('找不到此表單');
+    if (!in_array($doc['status'], ['draft', 'submitted'], true)) throw new Exception('此表單狀態不可使用自動填寫並簽核');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $signDate)) throw new Exception('簽核日期格式不正確');
+    if ($signDate < (string)$doc['business_date']) throw new Exception('簽核日期不可早於接單日期（' . $doc['business_date'] . '）');
+    if (!eg_leave_is_workday($db, $signDate)) throw new Exception('簽核日期 ' . $signDate . ' 不是工作日，請改選工作日');
+
+    $deptNames = [];
+    foreach ($db->query("SELECT id,name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d) $deptNames[(int)$d['id']] = $d['name'];
+
+    $db->beginTransaction();
+    try {
+        if ($doc['status'] === 'draft') {
+            $db->prepare("UPDATE con_review_doc SET status='submitted',submit_date=?,submitted_at=?,submitted_by=?,submitted_by_name=? WHERE id=?")
+               ->execute([$signDate, $signDate . ' 09:00:00', $adminUid, $adminName, $docId]);
+        }
+
+        // 逐項帶入範本預設值：只補還沒填的，已有答案的一律不動（不可覆蓋別人已填的內容）。
+        $filled = 0; $skippedNoDefault = 0;
+        $itemSt = $db->prepare("SELECT id, answer_value, default_value FROM con_review_item WHERE doc_id=?");
+        $itemSt->execute([$docId]);
+        $updSt = $db->prepare("UPDATE con_review_item SET answer_value=?,filled_by=?,filled_by_name=?,filled_at=? WHERE id=?");
+        foreach ($itemSt->fetchAll(PDO::FETCH_ASSOC) as $it) {
+            if ($it['answer_value'] !== null && $it['answer_value'] !== '') continue;
+            if ($it['default_value'] === null || $it['default_value'] === '') { $skippedNoDefault++; continue; }
+            $updSt->execute([$it['default_value'], $adminUid, $adminName, $signDate . ' 09:00:00', $it['id']]);
+            $filled++;
+        }
+
+        // 逐內容部門嘗試自動簽核
+        $signedDepts = []; $unsignedDepts = [];
+        foreach (cnrv_doc_dept_ids($db, $docId) as $deptId) {
+            $dName = $deptNames[$deptId] ?? ('#' . $deptId);
+            if (cnrv_dept_signed($db, $docId, $deptId)) continue;   // 已簽過的（含人工先簽的）不動
+            $chk = $db->prepare("SELECT COUNT(*) c, SUM(answer_value IS NOT NULL AND answer_value<>'') filled
+                                 FROM con_review_item WHERE doc_id=? AND dept_id=?");
+            $chk->execute([$docId, $deptId]);
+            $r = $chk->fetch(PDO::FETCH_ASSOC);
+            if ((int)$r['c'] > (int)$r['filled']) {
+                $unsignedDepts[$deptId] = ['dept_name'=>$dName, 'reason'=>'本部門仍有項目沒有設定預設值，無法自動填完整'];
+                continue;
+            }
+            $avail = cnrv_dept_pool_available($db, $deptId, $signDate);
+            if (!$avail['signer']) {
+                $unsignedDepts[$deptId] = ['dept_name'=>$dName, 'reason'=>'這天本部門候選簽核人都不在：' . ($avail['warnings'] ? implode('；', $avail['warnings']) : '查無候選人員，請先設定部門主管或人員')];
+                continue;
+            }
+            $db->prepare("INSERT INTO con_review_dept_sign (doc_id,dept_id,signed_by,signed_by_name,signed_at,is_auto_sign)
+                          VALUES (?,?,?,?,?,1)")
+               ->execute([$docId, $deptId, (int)$avail['signer']['id'], $avail['signer']['user_cname'], $signDate . ' 09:30:00']);
+            $signedDepts[$deptId] = ['dept_name'=>$dName, 'signer_name'=>$avail['signer']['user_cname'], 'note_warnings'=>$avail['warnings']];
+        }
+        $db->commit();
+        if ($signedDepts) {
+            $toUids = array_map(fn($p) => (int)$p['id'], cnrv_sales_pool($db));
+            if ($toUids && cnrv_all_depts_signed($db, $docId)) cnrv_notify($db, $docId, $toUids, '合約訂單審查待決行',
+                "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查，內容部門已全部簽核，請前往決行。", $adminUid);
+        }
+        return ['sign_date'=>$signDate, 'filled'=>$filled, 'skipped_no_default'=>$skippedNoDefault,
+                'signed_depts'=>$signedDepts, 'unsigned_depts'=>$unsignedDepts];
+    } catch (Throwable $e) { $db->rollBack(); throw $e; }
 }
 
 /** draft → submitted：鎖表頭（本模組表頭本來就是建立當下拍照、create 之後不可編輯，這裡主要是狀態轉換與通知）。 */
