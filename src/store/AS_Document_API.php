@@ -447,7 +447,7 @@ $asGate = [
     // form_record_download 於 case 內依 inline 分流（預覽=view / 原檔=download）
     // form_record_fsd_pdf 於 case 內檢查（view ＋「這件真的屬於這份文件」的歸屬驗證）
     'audit_rec_list'=>'view',
-    // audit_rec_save／audit_rec_delete 於 case 內另行檢查（僅限管理員，新增/修改/刪除稽核建議內容）
+    // audit_rec_save_batch／audit_rec_delete 於 case 內另行檢查（僅限管理員，新增/修改/刪除稽核建議內容）
     'audit_rec_toggle'=>'view',   // 已處理／已複核 點檢，與 flow_issue_toggle 同一套UX，任何檢閱者皆可操作
 ];
 if (!$currentUserId) {
@@ -2921,38 +2921,84 @@ case 'flow_issue_toggle':   // AS流程總覽·待處理問題：已修改／已
 // 那份是比對程序書與現況的結構性缺失，這裡是「稽核當次口頭/書面反饋」，來源與性質不同，
 // 日後若發現同一個意見跨兩邊重複，才考慮是否合併，不要在這裡先猜。
 case 'audit_rec_list':   // 回全部年度（筆數不多，交前端依年度/優先度/課室/關鍵字篩選，與本頁其他兩個分頁同一套做法）
-    $rows = $db->query("SELECT * FROM as_audit_recommend ORDER BY audit_year DESC, sort_order ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
+    // 綁定一律存 id，顯示用的文件/條文名稱在這裡即時 JOIN 解析，不吃任何快取文字——
+    // 文件改名或條文題庫改版後，舊紀錄顯示的名稱自動跟著更新，不會對不起來。
+    $rows = $db->query("SELECT r.*, d.doc_no AS as_doc_no, d.doc_name AS as_doc_name,
+                                c.clause_text AS clause_text
+                         FROM as_audit_recommend r
+                         LEFT JOIN as_document d ON d.id = r.as_doc_id AND d.is_deleted = 0
+                         LEFT JOIN ia_as_clause c ON c.clause_id = r.clause_id
+                         ORDER BY r.audit_year DESC, r.sort_order ASC, r.id ASC")->fetchAll(PDO::FETCH_ASSOC);
     jout(['status'=>'success', 'rows'=>$rows]);
 
-case 'audit_rec_save':
+case 'audit_rec_save_batch':   // 一次送一整批（年度/日期/來源共用一次，逐筆可各自是新增或修改既有筆）
     if (!asIsAdmin()) jout(['status'=>'error','message'=>'僅管理員可新增／修改稽核建議內容']);
-    $id       = (int)($_POST['id'] ?? 0);
-    $year     = (int)($_POST['audit_year'] ?? 0);
-    $date     = trim($_POST['audit_date'] ?? '');
-    $src      = trim($_POST['source_note'] ?? '');
-    $sev      = trim($_POST['severity'] ?? '中');
-    $dept     = trim($_POST['dept'] ?? '');
-    $docNo    = trim($_POST['doc_no'] ?? '');
-    $finding  = trim($_POST['finding'] ?? '');
-    $suggest  = trim($_POST['suggestion'] ?? '');
+    $year  = (int)($_POST['audit_year'] ?? 0);
+    $date  = trim($_POST['audit_date'] ?? '');
+    $src   = trim($_POST['source_note'] ?? '');
     if ($year < 2000 || $year > 2100) jout(['status'=>'error','message'=>'請填寫有效的稽核年度']);
-    if (!in_array($sev, ['高','中','低'], true)) jout(['status'=>'error','message'=>'優先度錯誤']);
-    if ($finding === '') jout(['status'=>'error','message'=>'請填寫稽核老師的意見內容']);
     if ($date !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) jout(['status'=>'error','message'=>'稽核日期格式錯誤']);
-    if ($id > 0) {
-        $db->prepare("UPDATE as_audit_recommend SET audit_year=?, audit_date=?, source_note=?, severity=?, dept=?, doc_no=?,
-                          finding=?, suggestion=?, updated_by=?, updated_at=NOW() WHERE id=?")
-           ->execute([$year, $date ?: null, $src ?: null, $sev, $dept ?: null, $docNo ?: null, $finding, $suggest ?: null, $currentCname, $id]);
-    } else {
-        $maxOrd = (int)$db->query("SELECT COALESCE(MAX(sort_order),0) FROM as_audit_recommend WHERE audit_year=".(int)$year)->fetchColumn();
-        $db->prepare("INSERT INTO as_audit_recommend
-                          (audit_year, audit_date, source_note, severity, dept, doc_no, finding, suggestion, sort_order, created_by, created_at)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,NOW())")
-           ->execute([$year, $date ?: null, $src ?: null, $sev, $dept ?: null, $docNo ?: null, $finding, $suggest ?: null, $maxOrd + 1, $currentCname]);
-        $id = (int)$db->lastInsertId();
+    $items = json_decode((string)($_POST['items'] ?? ''), true);
+    if (!is_array($items) || !count($items)) jout(['status'=>'error','message'=>'至少要有一筆稽核意見']);
+    if (count($items) > 50) jout(['status'=>'error','message'=>'一次最多 50 筆，請分批儲存']);
+
+    // 先逐筆驗證完畢才動手寫入，任何一筆不合法整批都不寫（不要存一半）
+    $clean = [];
+    foreach ($items as $i => $it) {
+        $n       = $i + 1;
+        $rowId   = (int)($it['id'] ?? 0);
+        $sev     = trim((string)($it['severity'] ?? '中'));
+        $dept    = trim((string)($it['dept'] ?? ''));
+        $finding = trim((string)($it['finding'] ?? ''));
+        $suggest = trim((string)($it['suggestion'] ?? ''));
+        $locNote = trim((string)($it['location_note'] ?? ''));
+        $asDocId = (int)($it['as_doc_id'] ?? 0);
+        $clauseId = (int)($it['clause_id'] ?? 0);
+        if (!in_array($sev, ['高','中','低'], true)) jout(['status'=>'error','message'=>"第{$n}筆：優先度錯誤"]);
+        if ($finding === '') jout(['status'=>'error','message'=>"第{$n}筆：請填寫稽核老師的意見內容"]);
+        if ($asDocId > 0) {
+            $chk = $db->prepare("SELECT COUNT(*) FROM as_document WHERE id=? AND is_deleted=0");
+            $chk->execute([$asDocId]);
+            if (!$chk->fetchColumn()) jout(['status'=>'error','message'=>"第{$n}筆：綁定的 AS 文件不存在"]);
+        } else { $asDocId = null; }
+        if ($clauseId > 0) {
+            $chk = $db->prepare("SELECT COUNT(*) FROM ia_as_clause WHERE clause_id=?");
+            $chk->execute([$clauseId]);
+            if (!$chk->fetchColumn()) jout(['status'=>'error','message'=>"第{$n}筆：綁定的內部條文不存在"]);
+        } else { $clauseId = null; }
+        $clean[] = ['id'=>$rowId, 'severity'=>$sev, 'dept'=>($dept !== '' ? $dept : null),
+            'location_note'=>($locNote !== '' ? $locNote : null), 'as_doc_id'=>$asDocId, 'clause_id'=>$clauseId,
+            'finding'=>$finding, 'suggestion'=>($suggest !== '' ? $suggest : null)];
     }
-    $row = $db->query("SELECT * FROM as_audit_recommend WHERE id=".(int)$id)->fetch(PDO::FETCH_ASSOC);
-    jout(['status'=>'success', 'row'=>$row]);
+
+    $db->beginTransaction();
+    try {
+        $maxOrd = (int)$db->query("SELECT COALESCE(MAX(sort_order),0) FROM as_audit_recommend WHERE audit_year=".(int)$year)->fetchColumn();
+        $ids = [];
+        foreach ($clean as $it) {
+            if ($it['id'] > 0) {
+                $db->prepare("UPDATE as_audit_recommend SET audit_year=?, audit_date=?, source_note=?, severity=?, dept=?,
+                                  location_note=?, as_doc_id=?, clause_id=?, finding=?, suggestion=?, updated_by=?, updated_at=NOW() WHERE id=?")
+                   ->execute([$year, $date ?: null, $src ?: null, $it['severity'], $it['dept'], $it['location_note'],
+                              $it['as_doc_id'], $it['clause_id'], $it['finding'], $it['suggestion'], $currentCname, $it['id']]);
+                $ids[] = $it['id'];
+            } else {
+                $maxOrd++;
+                $db->prepare("INSERT INTO as_audit_recommend
+                                  (audit_year, audit_date, source_note, severity, dept, location_note, as_doc_id, clause_id,
+                                   finding, suggestion, sort_order, created_by, created_at)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+                   ->execute([$year, $date ?: null, $src ?: null, $it['severity'], $it['dept'], $it['location_note'],
+                              $it['as_doc_id'], $it['clause_id'], $it['finding'], $it['suggestion'], $maxOrd, $currentCname]);
+                $ids[] = (int)$db->lastInsertId();
+            }
+        }
+        $db->commit();
+    } catch (Exception $e) {
+        $db->rollBack();
+        jout(['status'=>'error','message'=>'儲存失敗：'.$e->getMessage()]);
+    }
+    jout(['status'=>'success', 'count'=>count($ids), 'ids'=>$ids]);
 
 case 'audit_rec_delete':
     if (!asIsAdmin()) jout(['status'=>'error','message'=>'僅管理員可刪除稽核建議內容']);

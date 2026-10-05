@@ -499,9 +499,16 @@ if (isset($_GET['ai_report'])) {
 // 與上面「待處理問題」刻意分開：待處理問題是比對程序書與現況產生的結構性缺失（寫在本檔 $ISSUES，
 // 來源是三方交叉比對），這裡是「稽核當次口頭／書面反饋」，逐年度各自累積，來源與性質不同，
 // 不要為了省一張表就混在一起——哪一年稽核提了什麼、有沒有結案，稽核老師回來複查時要能單獨拉出來看。
+// 綁定一律存 id（as_doc_id／clause_id），顯示用名稱在這裡即時 JOIN 解析——
+// 與 AS_Document_API.php 的 audit_rec_list 同一套 SQL（兩處各自要向自己的連線查，字串重複但規則一致，
+// 不是各寫一套判斷邏輯，不違反鐵律4）。
 $AUDIT_REC = [];
 try {
-    $AUDIT_REC = $conn->query("SELECT * FROM as_audit_recommend ORDER BY audit_year DESC, sort_order ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
+    $AUDIT_REC = $conn->query("SELECT r.*, d.doc_no AS as_doc_no, d.doc_name AS as_doc_name, c.clause_text AS clause_text
+                                FROM as_audit_recommend r
+                                LEFT JOIN as_document d ON d.id = r.as_doc_id AND d.is_deleted = 0
+                                LEFT JOIN ia_as_clause c ON c.clause_id = r.clause_id
+                                ORDER BY r.audit_year DESC, r.sort_order ASC, r.id ASC")->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { error_log('as_flow_guide audit_rec: ' . $e->getMessage()); }
 $AUDIT_YEARS = array_values(array_unique(array_map(fn($r) => (int)$r['audit_year'], $AUDIT_REC)));
 $thisYear = (int)date('Y');
@@ -509,6 +516,36 @@ if (!in_array($thisYear, $AUDIT_YEARS, true)) { $AUDIT_YEARS[] = $thisYear; }   
 rsort($AUDIT_YEARS);
 $curAuditYear = $AUDIT_YEARS[0] ?? $thisYear;
 $cntAuditOpen = count(array_filter($AUDIT_REC, fn($r) => !$r['checked']));
+
+/** 內部條文（AS9100 標準題庫）的文件／表單清單欄常是好幾行、好幾個 AS 編號的自由文字，
+ *  比照 egmd_inline() 的順序（先跳脫再找編號）把裡面的 AS 編號變成可點 docchip，換行保留。 */
+function eg_clause_doc_html($text) {
+    if (!$text) { return ''; }
+    $s = htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
+    $s = egmd_docno($s);
+    return nl2br($s);
+}
+// 內部條文題庫（供「稽核建議修改」分頁的條文綁定挑選用）：只列可挑選的細項，章節標題（is_header=1）不列入。
+$CLAUSES = [];
+try {
+    $cRows = $conn->query("SELECT clause_id, clause_text, doc_ref FROM ia_as_clause
+                            WHERE is_header=0 AND is_active=1 ORDER BY sort_order")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($cRows as $cr) {
+        $txt = trim((string)$cr['clause_text']);
+        preg_match('/^([0-9]+(?:\.[0-9]+){0,4})\s*(.*)$/u', $txt, $mm);
+        $no    = $mm[1] ?? '';
+        $title = trim($mm[2] ?? $txt);
+        $CLAUSES[] = [
+            'id'       => (int)$cr['clause_id'],
+            'no'       => $no,
+            'title'    => mb_substr($title, 0, 60),
+            'full'     => $txt,
+            'doc_html' => eg_clause_doc_html($cr['doc_ref']),
+        ];
+    }
+} catch (Exception $e) { error_log('as_flow_guide clauses: ' . $e->getMessage()); }
+$CLAUSE_BY_ID = [];
+foreach ($CLAUSES as $c) { $CLAUSE_BY_ID[$c['id']] = $c; }
 
 // 四階表單清單（線上表單對照分頁用）：doc_no 有 3 段以上者＝表單
 $FORMS = [];
@@ -625,6 +662,14 @@ a.docchip.has-online:hover i { color:#fff; }
 .chip-legend { font-size:12px; color:#8A6D45; background:#FFF7E8; border:1px dashed #F0A24B;
                border-radius:6px; padding:5px 10px; margin:0 0 10px; }
 
+/* ── 稽核建議修改：內部條文 chip（點擊展開完整條文＋相關文件） ── */
+.clause-chip { display:inline-block; background:#F7E0BD; color:#5A3D1E; border-radius:9px; padding:1px 8px;
+               font-size:11.5px; cursor:pointer; white-space:nowrap; margin-top:3px; }
+.clause-chip:hover { background:#F0A24B; color:#fff; }
+.clause-detail { margin-top:5px; background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px;
+                 padding:7px 10px; font-size:12px; color:#5B3A1E; line-height:1.6; }
+.clause-detail .cd-ref { margin-top:5px; color:#8A6D45; }
+
 /* ── 線上表單對照 ── */
 .of-table { width:100%; border-collapse:collapse; font-size:13px; }
 .of-table th { background:#F7E0BD; color:#5A3D1E; padding:7px 9px; border:1px solid #E0CBA0; text-align:left; }
@@ -683,8 +728,34 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
 .help-doc .tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin:6px 0; }
 
 .fg-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:9999; }
-.fg-mask .box { background:#fff; max-width:720px; margin:6vh auto; border-radius:8px; padding:18px 22px; max-height:84vh; overflow:auto; }
+/* height:auto 必須明寫：custom.min.js 版型舊帶的 div.box{height:100px}（Gentelella 殘留元件樣式）
+   雖然特異度較低，但它是唯一宣告 height 的規則，沒有東西跟它搶這個屬性時照樣套用——
+   會把本頁所有 .fg-mask .box 跳窗（含既有的 pvMask／roleMask／helpUseMask）壓成固定 100px、
+   其餘內容要捲動才看得到，使用者回報「新增稽核意見視窗沒有完全顯示」就是這個根因。 */
+.fg-mask .box { background:#fff; max-width:720px; margin:6vh auto; border-radius:8px; padding:18px 22px; max-height:84vh; height:auto; overflow:auto; }
 .fg-mask h4 { color:#8A5A2B; border-bottom:2px solid #F7E0BD; padding-bottom:5px; margin-top:0; }
+
+/* ── 稽核建議修改：批次新增／編輯跳窗（比一般 .fg-mask .box 寬得多，裝得下整張表） ── */
+#audRecMask .box.ar-box { max-width:1180px; width:94vw; max-height:92vh; display:flex; flex-direction:column; padding:18px 22px 14px; }
+.ar-head { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:8px; }
+.ar-head-f label, .ar-batch-bar label { display:block; font-size:12.5px; color:#8A6D45; margin-bottom:3px; }
+.ar-batch-bar { display:flex; align-items:center; gap:8px; background:#FFF7E8; border:1px dashed #F0A24B;
+                border-radius:6px; padding:7px 10px; margin-bottom:10px; flex-wrap:wrap; }
+.ar-batch-bar select { width:160px; display:inline-block; }
+.ar-batch-bar .ar-hint { font-size:11.5px; color:#A08B70; }
+.ar-itemswrap { overflow:auto; flex:1 1 auto; border:1px solid #E0CBA0; border-radius:6px; min-height:140px; max-height:48vh; }
+.ar-items { width:100%; border-collapse:collapse; font-size:12.5px; min-width:960px; }
+.ar-items thead th { position:sticky; top:0; background:#F7E0BD; color:#5A3D1E; padding:6px 8px; border:1px solid #E0CBA0; text-align:left; z-index:1; }
+.ar-items td { padding:6px 7px; border:1px solid #E8D9B8; vertical-align:top; background:#fff; }
+.ar-items textarea { min-height:52px; resize:vertical; font-size:12.5px; }
+.ar-bind-cell .ar-bind-show { font-size:11.5px; margin:3px 0; line-height:1.5; }
+.ar-bind-cell .ar-bind-show .docchip { font-size:11.5px; }
+.ar-bind-cell .ar-bind-show .clause-chip { margin-top:0; }
+.ar-bind-cell button.ar-unbind, .ar-bind-cell button.ar-unbind-c { border:none; background:none; color:#DD5138;
+    cursor:pointer; font-size:13px; line-height:1; padding:0 2px; }
+.ar-row-del { border:none; background:none; color:#A08B70; cursor:pointer; font-size:14px; }
+.ar-row-del:hover { color:#DD5138; }
+.ar-foot { text-align:right; padding-top:10px; margin-top:4px; border-top:1px solid #F0E3CB; }
 #fgTop { display:none; position:fixed; right:22px; bottom:26px; z-index:60; background:#F0A24B; color:#fff;
          border:none; border-radius:50%; width:42px; height:42px; font-size:17px; cursor:pointer; box-shadow:0 2px 8px rgba(90,61,30,.3); }
 @media print { .fg-side, .fg-tabs, .fg-bar, #fgTop, .fg-role { display:none !important; } .fg-main { border:none; box-shadow:none; } }
@@ -951,7 +1022,7 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
         <option value="">全部優先度</option><option value="高">高</option><option value="中">中</option><option value="低">低</option>
       </select>
       <select id="recDeptFilter" class="form-control input-sm" style="width:180px;height:30px;display:inline-block;">
-        <option value="">全部課室</option>
+        <option value="">全部負責部門</option>
         <?php foreach (array_keys($DEPT2KEY) as $dp): ?>
           <option value="<?= htmlspecialchars($dp) ?>"><?= htmlspecialchars($dp) ?></option>
         <?php endforeach; ?>
@@ -976,20 +1047,35 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
       切換年度即可看該次稽核的全部建議與處理進度；<?= $isRoleAdmin ? '管理者可在此新增／編輯／刪除。' : '新增與編輯僅限管理者。' ?></p>
 
     <div class="iss-tablewrap">
-    <table class="iss-table" id="recTable" style="min-width:1280px;">
+    <table class="iss-table" id="recTable" style="min-width:1320px;">
       <thead><tr>
-        <th style="width:52px;">優先</th><th style="width:110px;">課室</th><th style="width:160px;">文件／位置</th>
+        <th style="width:52px;">優先</th><th style="width:110px;">負責部門</th><th style="width:190px;">文件／條文</th>
         <th>稽核老師意見</th><th>建議修改做法</th><th style="width:120px;">來源／日期</th>
         <th style="width:112px;">已處理</th><th style="width:112px;">已複核</th>
         <?php if ($isRoleAdmin): ?><th style="width:92px;">操作</th><?php endif; ?>
       </tr></thead>
       <tbody>
-      <?php foreach ($AUDIT_REC as $r): ?>
+      <?php foreach ($AUDIT_REC as $r): $cl = $CLAUSE_BY_ID[(int)$r['clause_id']] ?? null; ?>
         <tr data-id="<?= (int)$r['id'] ?>" data-year="<?= (int)$r['audit_year'] ?>" data-lv="<?= htmlspecialchars($r['severity']) ?>"
             data-dept="<?= htmlspecialchars($r['dept'] ?? '') ?>" data-fixed="<?= (int)$r['fixed'] ?>" data-checked="<?= (int)$r['checked'] ?>">
           <td><span class="lv lv-<?= htmlspecialchars($r['severity']) ?>"><?= htmlspecialchars($r['severity']) ?></span></td>
           <td><?= htmlspecialchars($r['dept'] ?? '') ?: '—' ?></td>
-          <td><?= $r['doc_no'] ? eg_doclink($r['doc_no']) : '—' ?></td>
+          <td>
+            <?php if ($r['as_doc_id'] && $r['as_doc_no']): ?>
+              <a href="#" class="docchip has-online" data-no="<?= htmlspecialchars($r['as_doc_no']) ?>"
+                 title="<?= htmlspecialchars((string)$r['as_doc_name'], ENT_QUOTES, 'UTF-8') ?>（點擊線上預覽）">
+                <?= htmlspecialchars($r['as_doc_no']) ?><i class="fa fa-bolt"></i></a><br>
+            <?php endif; ?>
+            <?php if ($cl): ?>
+              <span class="clause-chip" data-cid="<?= (int)$r['clause_id'] ?>" title="點擊查看完整條文與相關文件">
+                <i class="fa fa-bookmark-o"></i> <?= htmlspecialchars($cl['no']) ?> <?= htmlspecialchars(mb_substr($cl['title'], 0, 14)) ?><?= mb_strlen($cl['title']) > 14 ? '…' : '' ?></span>
+              <div class="clause-detail" data-cid-slot="<?= (int)$r['clause_id'] ?>" style="display:none;"></div>
+            <?php endif; ?>
+            <?php if ($r['location_note']): ?>
+              <div style="font-size:11.5px;color:#8A6D45;margin-top:2px;"><?= htmlspecialchars($r['location_note']) ?></div>
+            <?php endif; ?>
+            <?php if (!$r['as_doc_id'] && !$cl && !$r['location_note']): ?>—<?php endif; ?>
+          </td>
           <td><?= nl2br(htmlspecialchars((string)$r['finding'])) ?></td>
           <td style="color:#7A4E17;"><?= $r['suggestion'] ? nl2br(htmlspecialchars((string)$r['suggestion'])) : '—' ?></td>
           <td style="font-size:12px;color:#8A6D45;">
@@ -1057,10 +1143,19 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
           兩者都可加入篩選條件（已確認正確／已確認齊全／尚未確認）。</li>
       <li><b>稽核建議修改</b>：逐<b>年度</b>登記稽核老師／稽核單位當次反饋的意見與建議修改做法——與「待處理問題」是不同來源、分開管理
           （待處理問題是比對程序書與現況的結構性缺失；這裡是稽核當次口頭／書面反饋，每年各自累積一份清單）。
-          切換上方年度下拉即可看該次稽核的全部建議，可依優先度、課室、關鍵字篩選；
+          切換上方年度下拉即可看該次稽核的全部建議，可依優先度、負責部門、關鍵字篩選；
           每筆同樣可按<b>「已處理」</b>／<b>「已複核」</b>點檢（規則與待處理問題相同）。
-          <b>新增／編輯／刪除僅限管理者</b>——把稽核老師反饋的重點貼進「稽核老師意見」欄即可登記一筆，
-          「文件／位置」欄若含 AS 編號會自動變成可點連結。</li>
+          <b>新增／編輯／刪除僅限管理者</b>，按「新增稽核意見」開啟跳窗：
+          <ul>
+            <li><b>可一次登記一大串，不必一條填一次年度/日期</b>——稽核年度／日期／來源在最上方填<u>一次</u>，
+                底下按「再新增一列」逐條加稽核意見，最後一次「全部儲存」。</li>
+            <li><b>負責部門</b>每列各自選，也可以用「批次設定負責部門」一次套用到全部列（套用後仍可逐列再改）。</li>
+            <li><b>AS文件／內部條文</b>皆可選填綁定：在欄位打文件編號或條文編號（也可打名稱關鍵字）、
+                從清單選一筆即完成綁定，綁定後顯示<b>可點連結</b>——點 AS 文件直接開線上預覽，
+                點條文展開完整條文內容與該條文對應建立的文件／表單（內含的 AS 編號一樣可點開）。
+                另有「補充位置」欄位可自由輸入章節/段落等細節。</li>
+            <li>編輯既有一筆時固定只開 1 列（不會跟別筆混在一起誤改）。</li>
+          </ul></li>
     </ul>
 
     <h4>點編號會發生什麼事</h4>
@@ -1108,37 +1203,55 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
   <div id="pvBody"></div>
 </div></div>
 
-<!-- 稽核建議修改：新增／編輯跳窗（僅管理者按鈕才會出現，後端 audit_rec_save 另再驗一次） -->
-<div class="fg-mask" id="audRecMask"><div class="box">
+<!-- 稽核建議修改：新增／編輯跳窗（僅管理者按鈕才會出現，後端 audit_rec_save_batch 另再驗一次）
+     年度／日期／來源整批共用一次，底下可逐列新增多筆稽核意見；編輯既有筆時沿用同一個跳窗，
+     只是固定只有 1 列（不開放把編輯中的那一筆跟別筆一起合併送出，避免改錯別筆）。 -->
+<div class="fg-mask" id="audRecMask"><div class="box ar-box">
   <h4><i class="fa fa-bullhorn"></i> <span id="arTitle">新增稽核意見</span></h4>
-  <input type="hidden" id="arId" value="0">
-  <div class="row">
-    <div class="col-sm-4 form-group"><label>稽核年度</label>
-      <input type="number" class="form-control" id="arYear" min="2000" max="2100"></div>
-    <div class="col-sm-4 form-group"><label>稽核日期（選填）</label>
-      <input type="date" class="form-control" id="arDate"></div>
-    <div class="col-sm-4 form-group"><label>優先度</label>
-      <select class="form-control" id="arSev"><option value="高">高</option><option value="中" selected>中</option><option value="低">低</option></select></div>
+
+  <div class="ar-head">
+    <div class="ar-head-f" style="width:130px;"><label>稽核年度</label>
+      <input type="number" class="form-control input-sm" id="arYear" min="2000" max="2100"></div>
+    <div class="ar-head-f" style="width:170px;"><label>稽核日期（選填）</label>
+      <input type="date" class="form-control input-sm" id="arDate"></div>
+    <div class="ar-head-f" style="flex:1 1 260px;"><label>稽核來源／備註（選填，如「外部稽核－王老師」）</label>
+      <input type="text" class="form-control input-sm" id="arSrc"></div>
   </div>
-  <div class="row">
-    <div class="col-sm-6 form-group"><label>相關課室（選填）</label>
-      <input type="text" class="form-control" id="arDept" list="arDeptList"></div>
-    <div class="col-sm-6 form-group"><label>文件／位置（選填，含 AS 編號如 2-QA-01 會自動變成可點連結）</label>
-      <input type="text" class="form-control" id="arDocNo"></div>
+
+  <div class="ar-batch-bar">
+    <label>批次設定負責部門：</label>
+    <select id="arBatchDept" class="form-control input-sm">
+      <option value="">（不設定）</option>
+      <?php foreach (array_keys($DEPT2KEY) as $dp): ?><option value="<?= htmlspecialchars($dp) ?>"><?= htmlspecialchars($dp) ?></option><?php endforeach; ?>
+    </select>
+    <button type="button" class="btn-mini" id="btnArBatchApply">套用到全部列</button>
+    <span class="ar-hint">套用後每一列仍可各自再改</span>
   </div>
-  <div class="form-group"><label>稽核老師意見／發現事項</label>
-    <textarea class="form-control" id="arFinding" rows="4" placeholder="把稽核老師反饋的重點貼進來…"></textarea></div>
-  <div class="form-group"><label>建議修改做法（選填）</label>
-    <textarea class="form-control" id="arSuggest" rows="4"></textarea></div>
-  <div class="form-group"><label>稽核來源／備註（選填，如「外部稽核－王老師」）</label>
-    <input type="text" class="form-control" id="arSrc"></div>
-  <div id="arErr" style="color:#DD5138;font-size:12.5px;margin-bottom:6px;"></div>
-  <div style="text-align:right;">
+
+  <div class="ar-itemswrap">
+  <table class="ar-items">
+    <thead><tr>
+      <th style="width:58px;">優先</th><th style="width:108px;">負責部門</th><th style="width:250px;">AS文件／內部條文（選填）</th>
+      <th>稽核老師意見</th><th>建議修改做法（選填）</th><th style="width:30px;"></th>
+    </tr></thead>
+    <tbody id="arItemsBody" data-eg-row-add="arRowAdd" data-eg-row-del="arRowDel"></tbody>
+  </table>
+  </div>
+  <button type="button" class="btn-mini" id="btnArAddRow"><i class="fa fa-plus"></i> 再新增一列</button>
+
+  <div id="arErr" style="color:#DD5138;font-size:12.5px;margin:8px 0 0;"></div>
+  <div class="ar-foot">
     <button class="btn btn-sm btn-default" onclick="document.getElementById('audRecMask').style.display='none'">取消</button>
-    <button class="btn btn-sm" id="btnArSave" style="background:#F0A24B;border-color:#D98A33;color:#fff;"><i class="fa fa-save"></i> 儲存</button>
+    <button class="btn btn-sm" id="btnArSave" style="background:#F0A24B;border-color:#D98A33;color:#fff;">
+      <i class="fa fa-save"></i> <span id="arSaveLabel">全部儲存</span></button>
   </div>
 </div></div>
-<datalist id="arDeptList"><?php foreach (array_keys($DEPT2KEY) as $dp): ?><option value="<?= htmlspecialchars($dp) ?>"><?php endforeach; ?></datalist>
+<datalist id="arDocList">
+  <?php foreach ($DOCMAP as $arNo => $arD): ?><option value="<?= htmlspecialchars($arNo . '　' . $arD['name']) ?>"><?php endforeach; ?>
+</datalist>
+<datalist id="arClauseList">
+  <?php foreach ($CLAUSES as $arC): ?><option value="<?= htmlspecialchars($arC['no'] . '　' . $arC['title']) ?>"><?php endforeach; ?>
+</datalist>
 
 <button id="fgTop" title="回到頂端"><i class="fa fa-arrow-up"></i></button>
 
@@ -1371,6 +1484,10 @@ $(document).ready(function () {
 
     // ══ 稽核建議修改 ══
     var ASDOC_API = DOC_API;   // 同一支 AS_Document_API.php
+    var CLAUSES = <?= json_encode($CLAUSES, JSON_UNESCAPED_UNICODE) ?>;        // 內部條文題庫（供條文綁定挑選）
+    var ARDEPTS = <?= json_encode(array_keys($DEPT2KEY), JSON_UNESCAPED_UNICODE) ?>;   // 負責部門候選（與課室清單同一份）
+    var CLAUSE_BY_ID = {}, CLAUSE_BY_NO = {};
+    CLAUSES.forEach(function (c) { CLAUSE_BY_ID[c.id] = c; if (c.no) { CLAUSE_BY_NO[c.no] = c; } });
     function recFilter() {
         var yr = $('#recYear').val(), lv = $('#recLvFilter').val(), dp = $('#recDeptFilter').val(),
             kw = $.trim($('#recKw').val()).toLowerCase(), n = 0, cH = 0, cM = 0, cL = 0;
@@ -1414,19 +1531,127 @@ $(document).ready(function () {
         }, 'json').fail(function () { alert('請求失敗'); $b.prop('disabled', false); });
     });
 
-    // 新增／編輯（僅管理者看得到按鈕；後端 audit_rec_save 另再驗一次）
+    // ── 新增／編輯（僅管理者看得到按鈕；後端 audit_rec_save_batch 另再驗一次）──
+    // 年度／日期／來源整批共用一次；底下逐列各自是一筆稽核意見，新增時可一次加好多列，
+    // 編輯既有筆時固定只開 1 列（不混合別筆，避免改錯）。
+    function arParseLeading(text) {
+        var t = $.trim(text || '');
+        if (!t) { return ''; }
+        var idx = t.indexOf('　');
+        return (idx >= 0 ? t.substring(0, idx) : t);
+    }
+    function arResolveDocId(text) {
+        var no = arParseLeading(text);
+        return (no && DOCMAP[no]) ? DOCMAP[no].id : 0;
+    }
+    function arResolveClauseId(text) {
+        var no = arParseLeading(text);
+        return (no && CLAUSE_BY_NO[no]) ? CLAUSE_BY_NO[no].id : 0;
+    }
+
+    // 建一列（item 為既有資料時＝編輯/預填，留空＝新增一列空白）
+    function arBuildRow(item) {
+        item = item || {};
+        var $tr = $('<tr class="ar-item-row"></tr>');
+
+        var sevOpts = ['高', '中', '低'].map(function (v) {
+            return '<option value="' + v + '"' + ((item.severity ? item.severity === v : v === '中') ? ' selected' : '') + '>' + v + '</option>';
+        }).join('');
+        $tr.append($('<td></td>').append('<select class="form-control input-sm ar-sev">' + sevOpts + '</select>'));
+
+        var deptOpts = '<option value="">（未設定）</option>' + ARDEPTS.map(function (d) {
+            return '<option value="' + esc(d) + '"' + (item.dept === d ? ' selected' : '') + '>' + esc(d) + '</option>';
+        }).join('');
+        $tr.append($('<td></td>').append('<select class="form-control input-sm ar-dept">' + deptOpts + '</select>'));
+
+        // AS文件／內部條文／位置補充
+        var $bindTd = $('<td class="ar-bind-cell"></td>');
+        var docText = item.as_doc_no ? (item.as_doc_no + '　' + (item.as_doc_name || '')) : '';
+        var $docInput = $('<input type="text" class="form-control input-sm ar-doc-input" list="arDocList" autocomplete="off" placeholder="AS文件編號／名稱…">').val(docText);
+        var $docShow = $('<div class="ar-bind-show ar-doc-show"></div>');
+        var clauseObj = item.clause_id ? CLAUSE_BY_ID[item.clause_id] : null;
+        var clauseText = clauseObj ? (clauseObj.no + '　' + clauseObj.title) : '';
+        var $clauseInput = $('<input type="text" class="form-control input-sm ar-clause-input" list="arClauseList" autocomplete="off" style="margin-top:4px;" placeholder="內部條文編號／名稱…">').val(clauseText);
+        var $clauseShow = $('<div class="ar-bind-show ar-clause-show"></div>');
+        var $locInput = $('<input type="text" class="form-control input-sm ar-loc-input" style="margin-top:4px;" placeholder="補充位置（選填，如§6.2）">').val(item.location_note || '');
+        $bindTd.append($docInput, $docShow, $clauseInput, $clauseShow, $locInput);
+        $tr.append($bindTd);
+        $tr.data('asDocId', item.as_doc_id || 0);
+        $tr.data('clauseId', item.clause_id || 0);
+        $tr.data('rowId', item.id || 0);
+
+        function renderDocShow() {
+            var id = $tr.data('asDocId'), no = arParseLeading($docInput.val()), d = id ? DOCMAP[no] : null;
+            if (id && d) {
+                $docShow.html('<a href="#" class="docchip has-online ar-doc-open" data-no="' + no + '">' + esc(no) + '<i class="fa fa-bolt"></i></a> '
+                    + esc(d.name) + ' <button type="button" class="ar-unbind" title="解除綁定">&times;</button>').show();
+            } else { $docShow.hide().empty(); }
+        }
+        function renderClauseShow() {
+            var id = $tr.data('clauseId'), c = id ? CLAUSE_BY_ID[id] : null;
+            if (id && c) {
+                $clauseShow.html('<span class="clause-chip ar-clause-open" data-cid="' + id + '"><i class="fa fa-bookmark-o"></i> '
+                    + esc(c.no) + ' ' + esc(c.title) + '</span> <button type="button" class="ar-unbind-c" title="解除綁定">&times;</button>').show();
+            } else { $clauseShow.hide().empty(); }
+        }
+        renderDocShow(); renderClauseShow();
+
+        $docInput.on('input change', function () { $tr.data('asDocId', arResolveDocId($(this).val())); renderDocShow(); });
+        $clauseInput.on('input change', function () { $tr.data('clauseId', arResolveClauseId($(this).val())); renderClauseShow(); });
+        $bindTd.on('click', '.ar-unbind', function () { $tr.data('asDocId', 0); $docInput.val(''); renderDocShow(); });
+        $bindTd.on('click', '.ar-unbind-c', function () { $tr.data('clauseId', 0); $clauseInput.val(''); renderClauseShow(); });
+        $bindTd.on('click', '.ar-doc-open', function (e) { e.preventDefault(); openPreview($(this).data('no')); });
+        $bindTd.on('click', '.ar-clause-open', function () { arToggleClauseDetail($(this).data('cid'), $bindTd); });
+
+        $tr.append($('<td></td>').append($('<textarea class="form-control ar-finding" rows="3" placeholder="把稽核老師反饋的重點貼進來…"></textarea>').val(item.finding || '')));
+        $tr.append($('<td></td>').append($('<textarea class="form-control ar-suggest" rows="3"></textarea>').val(item.suggestion || '')));
+        $tr.append($('<td style="text-align:center;"><button type="button" class="ar-row-del" title="刪除這一列"><i class="fa fa-times"></i></button></td>'));
+        return $tr;
+    }
+    // 條文 chip 的「點擊展開」通用在表格列與跳窗列都要用，收斂成一支（鐵律4）
+    function arToggleClauseDetail(cid, $afterEl) {
+        var c = CLAUSE_BY_ID[cid];
+        if (!c) { return; }
+        var $exist = $afterEl.find('.clause-detail-inline');
+        if ($exist.length) { $exist.remove(); return; }
+        var html = '<div class="clause-detail clause-detail-inline"><strong>' + esc(c.no) + ' ' + esc(c.title) + '</strong>'
+            + (c.doc_html ? '<div class="cd-ref">建立的文件／表單：<br>' + c.doc_html + '</div>' : '') + '</div>';
+        $afterEl.find('.ar-clause-show').first().after(html);
+    }
+    // 課室說明文件、線上表單對照以外，表格裡（非跳窗內）的條文 chip 也要能點開（同一支函式）
+    $(document).on('click', '.clause-chip', function () {
+        var cid = $(this).data('cid'), $td = $(this).closest('td');
+        var c = CLAUSE_BY_ID[cid];
+        if (!c) { return; }
+        var $slot = $td.find('.clause-detail[data-cid-slot="' + cid + '"]');
+        if (!$slot.length) { return; }   // 跳窗內的列表走 arToggleClauseDetail，不會進到這裡
+        if ($slot.is(':visible')) { $slot.hide(); return; }
+        $slot.html('<strong>' + esc(c.no) + ' ' + esc(c.title) + '</strong>'
+            + (c.doc_html ? '<div class="cd-ref">建立的文件／表單：<br>' + c.doc_html + '</div>' : '')).show();
+    });
+
+    window.arRowAdd = function () { $('#arItemsBody').append(arBuildRow({})); return true; };
+    window.arRowDel = function () {
+        var $rows = $('#arItemsBody tr');
+        if ($rows.length <= 1) { return false; }
+        $rows.last().remove();
+        return true;
+    };
+    $('#btnArAddRow').on('click', function () { arRowAdd(); });
+
+    var AR_EDIT_MODE = false;   // true＝編輯既有一筆（固定單列）；false＝新增可多列
     function arOpen(row) {
         $('#arErr').text('');
-        $('#arId').val(row ? row.id : 0);
+        AR_EDIT_MODE = !!row;
         $('#arTitle').text(row ? '編輯稽核意見' : '新增稽核意見');
+        $('#arSaveLabel').text(row ? '儲存' : '全部儲存');
         $('#arYear').val(row ? row.audit_year : ($('#recYear').val() || <?= (int)$curAuditYear ?>));
         $('#arDate').val(row ? (row.audit_date || '') : '');
-        $('#arSev').val(row ? row.severity : '中');
-        $('#arDept').val(row ? (row.dept || '') : '');
-        $('#arDocNo').val(row ? (row.doc_no || '') : '');
-        $('#arFinding').val(row ? row.finding : '');
-        $('#arSuggest').val(row ? (row.suggestion || '') : '');
         $('#arSrc').val(row ? (row.source_note || '') : '');
+        $('#arBatchDept').val('');
+        $('.ar-batch-bar').toggle(!row);          // 編輯單筆時不需要「批次設定」
+        $('#btnArAddRow').toggle(!row);           // 編輯單筆時固定 1 列，不給加列
+        $('#arItemsBody').empty().append(arBuildRow(row || {}));
         $('#audRecMask').show();
     }
     $('#btnRecAdd').on('click', function () { arOpen(null); });
@@ -1439,16 +1664,38 @@ $(document).ready(function () {
             location.reload();
         }, 'json').fail(function () { alert('請求失敗'); });
     });
+
+    $('#btnArBatchApply').on('click', function () {
+        var v = $('#arBatchDept').val();
+        if (!v) { return; }
+        $('#arItemsBody .ar-dept').val(v);
+    });
+
     $('#btnArSave').on('click', function () {
-        var year = $.trim($('#arYear').val()), finding = $.trim($('#arFinding').val());
+        var year = $.trim($('#arYear').val());
         if (!year) { $('#arErr').text('請填寫稽核年度'); return; }
-        if (!finding) { $('#arErr').text('請填寫稽核老師的意見內容'); return; }
+        var items = [], hasErr = '';
+        $('#arItemsBody > tr').each(function (i) {
+            var $tr = $(this), finding = $.trim($tr.find('.ar-finding').val());
+            if (finding === '') { hasErr = '第' + (i + 1) + '列：請填寫稽核老師的意見內容'; return false; }
+            items.push({
+                id: $tr.data('rowId') || 0,
+                severity: $tr.find('.ar-sev').val(),
+                dept: $.trim($tr.find('.ar-dept').val()),
+                as_doc_id: $tr.data('asDocId') || 0,
+                clause_id: $tr.data('clauseId') || 0,
+                location_note: $.trim($tr.find('.ar-loc-input').val()),
+                finding: finding,
+                suggestion: $.trim($tr.find('.ar-suggest').val())
+            });
+        });
+        if (hasErr) { $('#arErr').text(hasErr); return; }
+        if (!items.length) { $('#arErr').text('請至少填寫一列稽核意見'); return; }
         $('#arErr').text('');
         $(this).prop('disabled', true);
         $.post(ASDOC_API, {
-            action: 'audit_rec_save', id: $('#arId').val(), audit_year: year, audit_date: $('#arDate').val(),
-            severity: $('#arSev').val(), dept: $.trim($('#arDept').val()), doc_no: $.trim($('#arDocNo').val()),
-            finding: finding, suggestion: $.trim($('#arSuggest').val()), source_note: $.trim($('#arSrc').val())
+            action: 'audit_rec_save_batch', audit_year: year, audit_date: $('#arDate').val(), source_note: $.trim($('#arSrc').val()),
+            items: JSON.stringify(items)
         }, function (r) {
             if (r.status !== 'success') { $('#arErr').text(r.message || '儲存失敗'); $('#btnArSave').prop('disabled', false); return; }
             location.reload();
