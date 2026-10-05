@@ -2190,16 +2190,28 @@ function cp_part_data_ready(PDO $db, array $partIds): array
 
     /* 有沒有製令、製令上有幾道製程（製程列帶不帶得出來）。
        用該料號最近一張製令；bom.d_setting_id 八成是 NULL（記憶 bom_d_setting_id_mostly_null），
-       所以兩個鍵都要比。 */
+       所以兩個鍵都要比——但**不可以寫成單一個 OR 條件**：`b.d_setting_id=o.d_id_ID
+       OR (b.d_setting_id IS NULL AND b.d_id=o.d_id)` 讓 MySQL 完全放棄索引，兩邊
+       各自 ALL scan 再 hash join，實測 998 個候選料號要 **2.6 秒**（EXPLAIN 顯示
+       衍生表估算 574 萬列中間結果）。拆成 UNION ALL 兩段各自乾淨的等號 join，
+       每段都能用上既有索引（`idx_bom_did`／候選 id 的小範圍），實測降到 **0.07 秒**，
+       與原寫法逐 pid 比對零差異（2026-10-05 實測 975 筆完全相同）。 */
     try {
         foreach ($db->query(
             "SELECT x.pid, COUNT(bi.bom_ing_fid) n_proc
-               FROM (SELECT o.d_id_ID pid, MAX(b.bom) bom
-                       FROM order_track o
-                       JOIN bom b ON (b.d_setting_id = o.d_id_ID
-                                   OR (b.d_setting_id IS NULL AND b.d_id = o.d_id))
-                      WHERE o.d_id_ID IN ($in)
-                      GROUP BY o.d_id_ID) x
+               FROM (
+                 SELECT pid, MAX(bom) bom FROM (
+                   SELECT o.d_id_ID pid, b.bom
+                     FROM order_track o
+                     JOIN bom b ON b.d_setting_id = o.d_id_ID
+                    WHERE o.d_id_ID IN ($in)
+                   UNION ALL
+                   SELECT o.d_id_ID pid, b.bom
+                     FROM order_track o
+                     JOIN bom b ON b.d_id = o.d_id AND b.d_setting_id IS NULL
+                    WHERE o.d_id_ID IN ($in)
+                 ) u GROUP BY pid
+               ) x
                LEFT JOIN bom_ing bi ON bi.bom = x.bom
               GROUP BY x.pid") as $r) {
             $p = (int)$r['pid'];

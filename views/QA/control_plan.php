@@ -324,6 +324,7 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
                 <button class="btn-w2" id="btnIgnoredList"><i class="fa fa-eye-slash"></i> 忽略名單</button>
             </div>
             <div class="cp-note" id="sugSummary" style="display:none;"></div>
+            <div class="pg" id="pgSug" style="margin-bottom:4px;"></div>
             <div class="cp-scroll">
                 <table class="cp-t" id="tSug" style="min-width:1120px;">
                     <thead><tr>
@@ -338,7 +339,6 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
                     <tbody><tr><td colspan="9" style="text-align:center;color:#8a6d45;">按「重新整理」載入</td></tr></tbody>
                 </table>
             </div>
-            <div class="pg" id="pgSug" style="justify-content:flex-start;margin-top:6px;"></div>
         </div>
 
 <?php if ($P['admin']): ?>
@@ -979,6 +979,9 @@ function inspBadge(stage, gap){
     }
     return h;
 }
+/* 特性列右上角小籤：這一列的規格是哪裡來的（cp_sip_items 的 src）——顯示一律大寫縮寫，不要印原始小寫代碼 */
+var ITEM_SRC_LABEL = { sip: 'SIP', sip_general: 'SIP(通用)', tpl: '範本', manual: '手動' };
+function itemSrcLabel(src){ return ITEM_SRC_LABEL[src] || (src || ''); }
 function inspSelect(p, pi){
     var opts = [['', '—（包裝／不適用）'], ['IQC','IQC（進料檢驗）'], ['IPQC','IPQC（製程檢驗）'], ['FQC','FQC（最終檢驗）']];
     var h = '<select data-pf="insp_stage" data-pi="'+pi+'" style="width:150px;">';
@@ -1381,7 +1384,7 @@ function renderPreview(r){
                   +  '<td rowspan="'+items.length+'">'+esc(p.machine||'—')
                   +  (p.maker_name?'<div class="muted">'+esc(p.maker_name)+'</div>':'')+'</td>';
             }
-            h += '<td>'+esc(it.char_product||'')+'<span class="src-tag">'+esc(it.src||'')+'</span></td>'
+            h += '<td>'+esc(it.char_product||'')+'<span class="src-tag">'+esc(itemSrcLabel(it.src))+'</span></td>'
               +  '<td>'+esc(it.special_class_text||'—')+'</td>'
               +  '<td>'+esc(it.spec_text||'—')+'</td>'
               +  '<td>'+esc(it.eval_method||'—')+'</td>'
