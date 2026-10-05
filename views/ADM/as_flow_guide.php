@@ -64,6 +64,17 @@ $roleLabel = $isRoleAdmin ? '管理者' : ($canView ? '檢閱' : '無權限');
 // 勾選功能碼 asdoc_online_form_beta 開放給特定角色測試（含本頁「去建立線上表單」「開線上表單」「新填一張」按鈕）。
 $showOnlineForm = $isRoleAdmin || in_array('asdoc_online_form_beta', $asFeatures, true);
 
+// 「線上表單對照」分頁是否顯示：管理員可設定（待處理問題交辦，2026-10-05）。
+// 值存 system_parameters(param_group='AS_FLOW_GUIDE', param_key='show_onl_tab')；
+// 沒有這一列＝預設顯示（鐵律4：新裝站點/尚未設定過時不該讓一個分頁憑空消失）。
+$showOnlTab = true;
+try {
+    $st = $conn->prepare("SELECT param_value FROM system_parameters WHERE param_group='AS_FLOW_GUIDE' AND param_key='show_onl_tab' LIMIT 1");
+    $st->execute();
+    $v = $st->fetchColumn();
+    if ($v !== false) { $showOnlTab = ($v !== '0'); }
+} catch (Exception $e) { /* 設定表若查詢失敗，視為預設顯示，不讓分頁整頁壞掉 */ }
+
 // ── MD 檔白名單（key => [顯示名稱, 檔名, 圖示]）——只允許這幾支，杜絕路徑穿越 ──
 $MD_DIR = __DIR__ . '/../../FOR CODEING 說明文件/AS9100(各組維護版)/';
 $DOCS = [
@@ -575,6 +586,9 @@ $cntIssueOpen = count(array_filter($ISSUES, fn($r) => !$r['ck']));
 // JS 切換分頁時會同步把 ?tab= 寫進網址列（history.replaceState，不觸發導頁），reload 自然帶著這個值回來。
 $curTab = $_GET['tab'] ?? 'doc';
 if (!in_array($curTab, ['doc', 'iss', 'onl', 'adv'], true)) { $curTab = 'doc'; }
+// 管理員關閉「線上表單對照」分頁後，一般角色即使直接帶 ?tab=onl 進來也要退回預設分頁；
+// 管理員本人仍可進入（否則關掉之後連自己都找不到地方打開）。
+if ($curTab === 'onl' && !$showOnlTab && !$isRoleAdmin) { $curTab = 'doc'; }
 
 // 預設顯示的文件
 $cur = $_GET['doc'] ?? 'overview';
@@ -615,6 +629,10 @@ html { overflow-x: hidden; }
           padding:7px 18px; font-size:14px; border-radius:6px 6px 0 0; margin-bottom:-2px; }
 .fg-tab.active { background:#fff; color:#5B3A1E; font-weight:bold; border-bottom:2px solid #fff; }
 .fg-tab .badge-warm { background:#DD5138; color:#fff; border-radius:9px; padding:0 7px; font-size:11px; margin-left:5px; }
+.fg-tab-off { color:#A08B70; font-size:11px; margin-left:4px; }
+.fg-tab-toggle { margin-left:auto; align-self:center; display:flex; align-items:center; gap:6px;
+                 font-size:12.5px; color:#8A6D45; cursor:pointer; user-select:none; }
+.fg-tab-toggle input { cursor:pointer; }
 
 .fg-wrap { display:flex; gap:12px; align-items:flex-start; }
 .fg-side { flex:0 0 190px; background:#fff; border:1px solid #E0CBA0; border-radius:8px; padding:8px; box-shadow:0 2px 8px rgba(90,61,30,.10); }
@@ -805,10 +823,19 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
   <div class="fg-tab <?= $curTab === 'doc' ? 'active' : '' ?>" data-tab="doc"><i class="fa fa-file-text-o"></i> 課室說明文件</div>
   <div class="fg-tab <?= $curTab === 'iss' ? 'active' : '' ?>" data-tab="iss"><i class="fa fa-exclamation-triangle"></i> 待處理問題
     <span class="badge-warm"><?= $cntIssueOpen ?></span></div>
+  <?php if ($showOnlTab || $isRoleAdmin): ?>
   <div class="fg-tab <?= $curTab === 'onl' ? 'active' : '' ?>" data-tab="onl"><i class="fa fa-bolt"></i> 線上表單對照
-    <span class="badge-warm"><?= $onlineCnt ?>/<?= count($FORMS) ?></span></div>
+    <span class="badge-warm"><?= $onlineCnt ?>/<?= count($FORMS) ?></span>
+    <?php if (!$showOnlTab): ?><span class="fg-tab-off" title="目前只有管理者看得到：已被設定為不顯示">（已隱藏）</span><?php endif; ?></div>
+  <?php endif; ?>
   <div class="fg-tab <?= $curTab === 'adv' ? 'active' : '' ?>" data-tab="adv"><i class="fa fa-bullhorn"></i> 稽核建議修改
     <span class="badge-warm"><?= $cntAuditOpen ?></span></div>
+  <?php if ($isRoleAdmin): ?>
+  <label class="fg-tab-toggle" title="關閉後一般角色看不到「線上表單對照」分頁，管理者仍可進入">
+    <input type="checkbox" id="chkShowOnlTab" <?= $showOnlTab ? 'checked' : '' ?>>
+    顯示「線上表單對照」分頁
+  </label>
+  <?php endif; ?>
 </div>
 
 <!-- ═════════ 分頁：課室說明文件 ═════════ -->
@@ -1209,6 +1236,12 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
        各筆表單「操作」欄的「開線上表單」／「新填一張」都不會顯示。管理員可到「AS 文件管理」角色設定，
        為特定角色勾選功能碼 <code>asdoc_online_form_beta</code> 開放測試；管理者固定可見。</p>
 
+    <h4>管理員可設定是否顯示「線上表單對照」分頁</h4>
+    <p>上方分頁列最右側（僅管理者看得到）有一個「顯示『線上表單對照』分頁」勾選框：取消勾選後，
+       <b>一般角色不會再看到這個分頁</b>（即使直接帶網址 <code>?tab=onl</code> 也會被退回「課室說明文件」），
+       <b>管理者仍可照常進入與操作</b>（分頁上會多標「（已隱藏）」提示目前對一般角色不顯示）。
+       設定值存在 <code>system_parameters(param_group='AS_FLOW_GUIDE', param_key='show_onl_tab')</code>，全站只有這一個開關、對所有人一體適用。</p>
+
     <h4>權限</h4>
     <p>沿用 AS 文件管理的 <code>as_doc</code> 模組角色與本頁 ACRUD：有 <b>A</b>／<b>R</b>／<code>asdoc_view</code> 即可檢視；管理者固定可看。
        本頁以唯讀說明為主，僅「表單正確」／「資料齊全」點檢按鈕會寫入資料（沿用同一權限；取消確認另限原確認人或管理者）。</p>
@@ -1307,6 +1340,17 @@ $(document).ready(function () {
         $('#tabOnl').toggle(t === 'onl');
         $('#tabAdv').toggle(t === 'adv');
         fgSyncTabUrl(t);
+    });
+
+    // 管理員：是否顯示「線上表單對照」分頁（僅管理者看得到此控制項，見 PHP $isRoleAdmin）
+    $('#chkShowOnlTab').on('change', function () {
+        var $cb = $(this), next = $cb.is(':checked') ? 1 : 0;
+        $cb.prop('disabled', true);
+        $.post('../../src/store/AS_Document_API.php', {action: 'flow_guide_setting_save', show_onl_tab: next}, function (r) {
+            $cb.prop('disabled', false);
+            if (r && r.status === 'success') { location.reload(); }
+            else { alert((r && r.message) || '儲存失敗'); $cb.prop('checked', !next); }
+        }, 'json').fail(function () { $cb.prop('disabled', false).prop('checked', !next); alert('儲存失敗，請重新整理後再試'); });
     });
 
     // ══ 文件／表單 線上預覽 ══

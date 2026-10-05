@@ -2867,6 +2867,21 @@ case 'set_linked_module':
     $db->prepare("UPDATE as_document SET linked_module=?, updated_at=NOW() WHERE id=?")->execute([$module ?: null, $docId]);
     jout(['status'=>'success']);
 
+case 'flow_guide_setting_save':   // AS流程總覽：是否顯示「線上表單對照」分頁（僅管理者可設，views/ADM/as_flow_guide.php）
+    if (!asIsAdmin()) jout(['status'=>'error','message'=>'僅管理者可設定']);
+    $show = (int)($_POST['show_onl_tab'] ?? 1) ? '1' : '0';
+    $st = $db->prepare("SELECT id FROM system_parameters WHERE param_group='AS_FLOW_GUIDE' AND param_key='show_onl_tab' LIMIT 1");
+    $st->execute();
+    if ($pid = $st->fetchColumn()) {
+        $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")
+           ->execute([$show, $currentCname, $pid]);
+    } else {
+        $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by)
+                      VALUES ('AS_FLOW_GUIDE', 'show_onl_tab', ?, '是否顯示 AS 流程說明手冊的「線上表單對照」分頁（0=僅管理者可見）', ?)")
+           ->execute([$show, $currentCname]);
+    }
+    jout(['status'=>'success', 'value'=>$show]);
+
 case 'flow_check_toggle':   // AS流程總覽·線上表單對照：表單正確／資料齊全 點檢（views/ADM/as_flow_guide.php）
     if (!asCan('view')) jout(['status'=>'error','message'=>'無權限']);
     $docId = (int)($_POST['doc_id'] ?? 0);
