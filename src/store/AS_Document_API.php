@@ -2921,14 +2921,30 @@ case 'flow_issue_toggle':   // AS流程總覽·待處理問題：已修改／已
 // 那份是比對程序書與現況的結構性缺失，這裡是「稽核當次口頭/書面反饋」，來源與性質不同，
 // 日後若發現同一個意見跨兩邊重複，才考慮是否合併，不要在這裡先猜。
 case 'audit_rec_list':   // 回全部年度（筆數不多，交前端依年度/優先度/課室/關鍵字篩選，與本頁其他兩個分頁同一套做法）
-    // 綁定一律存 id，顯示用的文件/條文名稱在這裡即時 JOIN 解析，不吃任何快取文字——
-    // 文件改名或條文題庫改版後，舊紀錄顯示的名稱自動跟著更新，不會對不起來。
-    $rows = $db->query("SELECT r.*, d.doc_no AS as_doc_no, d.doc_name AS as_doc_name,
-                                c.clause_text AS clause_text
-                         FROM as_audit_recommend r
-                         LEFT JOIN as_document d ON d.id = r.as_doc_id AND d.is_deleted = 0
-                         LEFT JOIN ia_as_clause c ON c.clause_id = r.clause_id
-                         ORDER BY r.audit_year DESC, r.sort_order ASC, r.id ASC")->fetchAll(PDO::FETCH_ASSOC);
+    // 一筆意見可能同時提到好幾份 AS 文件、好幾條內部條文（多對多，見 as_audit_recommend_doc/_clause）；
+    // 顯示用的文件/條文名稱在這裡即時 JOIN 解析，不吃任何快取文字——文件改名或條文題庫改版後，
+    // 舊紀錄顯示的名稱自動跟著更新，不會對不起來。
+    $rows = $db->query("SELECT * FROM as_audit_recommend ORDER BY audit_year DESC, sort_order ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
+    $recIds = array_column($rows, 'id');
+    $docsByRec = []; $clausesByRec = [];
+    if ($recIds) {
+        $in = implode(',', array_map('intval', $recIds));
+        $dq = $db->query("SELECT rd.rec_id, d.id, d.doc_no, d.doc_name
+                           FROM as_audit_recommend_doc rd
+                           JOIN as_document d ON d.id = rd.as_doc_id AND d.is_deleted = 0
+                           WHERE rd.rec_id IN ($in) ORDER BY rd.id")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($dq as $d) { $docsByRec[$d['rec_id']][] = ['id'=>(int)$d['id'], 'no'=>$d['doc_no'], 'name'=>$d['doc_name']]; }
+        $cq = $db->query("SELECT rc.rec_id, c.clause_id, c.clause_text
+                           FROM as_audit_recommend_clause rc
+                           JOIN ia_as_clause c ON c.clause_id = rc.clause_id
+                           WHERE rc.rec_id IN ($in) ORDER BY rc.id")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($cq as $c) {
+            preg_match('/^([0-9]+(?:\.[0-9]+){0,4})\s*(.*)$/u', trim((string)$c['clause_text']), $mm);
+            $clausesByRec[$c['rec_id']][] = ['id'=>(int)$c['clause_id'], 'no'=>$mm[1] ?? '', 'title'=>trim($mm[2] ?? $c['clause_text'])];
+        }
+    }
+    foreach ($rows as &$r) { $r['docs'] = $docsByRec[$r['id']] ?? []; $r['clauses'] = $clausesByRec[$r['id']] ?? []; }
+    unset($r);
     jout(['status'=>'success', 'rows'=>$rows]);
 
 case 'audit_rec_save_batch':   // 一次送一整批（年度/日期/來源共用一次，逐筆可各自是新增或修改既有筆）
@@ -2943,6 +2959,7 @@ case 'audit_rec_save_batch':   // 一次送一整批（年度/日期/來源共�
     if (count($items) > 50) jout(['status'=>'error','message'=>'一次最多 50 筆，請分批儲存']);
 
     // 先逐筆驗證完畢才動手寫入，任何一筆不合法整批都不寫（不要存一半）
+    // AS文件／內部條文一筆意見常混著提到好幾項（多對多），故 as_doc_ids／clause_ids 皆為陣列。
     $clean = [];
     foreach ($items as $i => $it) {
         $n       = $i + 1;
@@ -2952,22 +2969,26 @@ case 'audit_rec_save_batch':   // 一次送一整批（年度/日期/來源共�
         $finding = trim((string)($it['finding'] ?? ''));
         $suggest = trim((string)($it['suggestion'] ?? ''));
         $locNote = trim((string)($it['location_note'] ?? ''));
-        $asDocId = (int)($it['as_doc_id'] ?? 0);
-        $clauseId = (int)($it['clause_id'] ?? 0);
+        $docIds    = array_values(array_unique(array_filter(array_map('intval', (array)($it['as_doc_ids'] ?? [])))));
+        $clauseIds = array_values(array_unique(array_filter(array_map('intval', (array)($it['clause_ids'] ?? [])))));
         if (!in_array($sev, ['高','中','低'], true)) jout(['status'=>'error','message'=>"第{$n}筆：優先度錯誤"]);
         if ($finding === '') jout(['status'=>'error','message'=>"第{$n}筆：請填寫稽核老師的意見內容"]);
-        if ($asDocId > 0) {
-            $chk = $db->prepare("SELECT COUNT(*) FROM as_document WHERE id=? AND is_deleted=0");
-            $chk->execute([$asDocId]);
-            if (!$chk->fetchColumn()) jout(['status'=>'error','message'=>"第{$n}筆：綁定的 AS 文件不存在"]);
-        } else { $asDocId = null; }
-        if ($clauseId > 0) {
-            $chk = $db->prepare("SELECT COUNT(*) FROM ia_as_clause WHERE clause_id=?");
-            $chk->execute([$clauseId]);
-            if (!$chk->fetchColumn()) jout(['status'=>'error','message'=>"第{$n}筆：綁定的內部條文不存在"]);
-        } else { $clauseId = null; }
+        if (count($docIds) > 10) jout(['status'=>'error','message'=>"第{$n}筆：AS文件最多綁定 10 份"]);
+        if (count($clauseIds) > 10) jout(['status'=>'error','message'=>"第{$n}筆：內部條文最多綁定 10 條"]);
+        if ($docIds) {
+            $ph = implode(',', array_fill(0, count($docIds), '?'));
+            $chk = $db->prepare("SELECT COUNT(*) FROM as_document WHERE is_deleted=0 AND id IN ($ph)");
+            $chk->execute($docIds);
+            if ((int)$chk->fetchColumn() !== count($docIds)) jout(['status'=>'error','message'=>"第{$n}筆：綁定的 AS 文件有不存在的"]);
+        }
+        if ($clauseIds) {
+            $ph = implode(',', array_fill(0, count($clauseIds), '?'));
+            $chk = $db->prepare("SELECT COUNT(*) FROM ia_as_clause WHERE clause_id IN ($ph)");
+            $chk->execute($clauseIds);
+            if ((int)$chk->fetchColumn() !== count($clauseIds)) jout(['status'=>'error','message'=>"第{$n}筆：綁定的內部條文有不存在的"]);
+        }
         $clean[] = ['id'=>$rowId, 'severity'=>$sev, 'dept'=>($dept !== '' ? $dept : null),
-            'location_note'=>($locNote !== '' ? $locNote : null), 'as_doc_id'=>$asDocId, 'clause_id'=>$clauseId,
+            'location_note'=>($locNote !== '' ? $locNote : null), 'doc_ids'=>$docIds, 'clause_ids'=>$clauseIds,
             'finding'=>$finding, 'suggestion'=>($suggest !== '' ? $suggest : null)];
     }
 
@@ -2978,19 +2999,29 @@ case 'audit_rec_save_batch':   // 一次送一整批（年度/日期/來源共�
         foreach ($clean as $it) {
             if ($it['id'] > 0) {
                 $db->prepare("UPDATE as_audit_recommend SET audit_year=?, audit_date=?, source_note=?, severity=?, dept=?,
-                                  location_note=?, as_doc_id=?, clause_id=?, finding=?, suggestion=?, updated_by=?, updated_at=NOW() WHERE id=?")
+                                  location_note=?, finding=?, suggestion=?, updated_by=?, updated_at=NOW() WHERE id=?")
                    ->execute([$year, $date ?: null, $src ?: null, $it['severity'], $it['dept'], $it['location_note'],
-                              $it['as_doc_id'], $it['clause_id'], $it['finding'], $it['suggestion'], $currentCname, $it['id']]);
-                $ids[] = $it['id'];
+                              $it['finding'], $it['suggestion'], $currentCname, $it['id']]);
+                $recId = $it['id'];
             } else {
                 $maxOrd++;
                 $db->prepare("INSERT INTO as_audit_recommend
-                                  (audit_year, audit_date, source_note, severity, dept, location_note, as_doc_id, clause_id,
+                                  (audit_year, audit_date, source_note, severity, dept, location_note,
                                    finding, suggestion, sort_order, created_by, created_at)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+                              VALUES (?,?,?,?,?,?,?,?,?,?,NOW())")
                    ->execute([$year, $date ?: null, $src ?: null, $it['severity'], $it['dept'], $it['location_note'],
-                              $it['as_doc_id'], $it['clause_id'], $it['finding'], $it['suggestion'], $maxOrd, $currentCname]);
-                $ids[] = (int)$db->lastInsertId();
+                              $it['finding'], $it['suggestion'], $maxOrd, $currentCname]);
+                $recId = (int)$db->lastInsertId();
+            }
+            $ids[] = $recId;
+            // 多對多整批覆寫（先刪再插，比對「新增了哪個/移除了哪個」更簡單也不容易出錯）
+            $db->prepare("DELETE FROM as_audit_recommend_doc WHERE rec_id=?")->execute([$recId]);
+            foreach ($it['doc_ids'] as $did) {
+                $db->prepare("INSERT INTO as_audit_recommend_doc (rec_id, as_doc_id) VALUES (?,?)")->execute([$recId, $did]);
+            }
+            $db->prepare("DELETE FROM as_audit_recommend_clause WHERE rec_id=?")->execute([$recId]);
+            foreach ($it['clause_ids'] as $cid) {
+                $db->prepare("INSERT INTO as_audit_recommend_clause (rec_id, clause_id) VALUES (?,?)")->execute([$recId, $cid]);
             }
         }
         $db->commit();
@@ -3004,6 +3035,8 @@ case 'audit_rec_delete':
     if (!asIsAdmin()) jout(['status'=>'error','message'=>'僅管理員可刪除稽核建議內容']);
     $id = (int)($_POST['id'] ?? 0);
     if ($id <= 0) jout(['status'=>'error','message'=>'無效 ID']);
+    $db->prepare("DELETE FROM as_audit_recommend_doc WHERE rec_id=?")->execute([$id]);
+    $db->prepare("DELETE FROM as_audit_recommend_clause WHERE rec_id=?")->execute([$id]);
     $db->prepare("DELETE FROM as_audit_recommend WHERE id=?")->execute([$id]);
     jout(['status'=>'success']);
 

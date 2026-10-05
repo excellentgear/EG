@@ -499,16 +499,27 @@ if (isset($_GET['ai_report'])) {
 // 與上面「待處理問題」刻意分開：待處理問題是比對程序書與現況產生的結構性缺失（寫在本檔 $ISSUES，
 // 來源是三方交叉比對），這裡是「稽核當次口頭／書面反饋」，逐年度各自累積，來源與性質不同，
 // 不要為了省一張表就混在一起——哪一年稽核提了什麼、有沒有結案，稽核老師回來複查時要能單獨拉出來看。
-// 綁定一律存 id（as_doc_id／clause_id），顯示用名稱在這裡即時 JOIN 解析——
-// 與 AS_Document_API.php 的 audit_rec_list 同一套 SQL（兩處各自要向自己的連線查，字串重複但規則一致，
-// 不是各寫一套判斷邏輯，不違反鐵律4）。
+// 綁定一律存 id，一筆意見常混著提到好幾份 AS 文件、好幾條內部條文（多對多，使用者 2026-10-05
+// 回報「不一定只有一項」），存在 as_audit_recommend_doc／_clause 兩張關聯表；顯示名稱在這裡即時
+// JOIN 解析——與 AS_Document_API.php 的 audit_rec_list 同一套邏輯（兩處各自要向自己的連線查，
+// 字串重複但規則一致，不是各寫一套判斷邏輯，不違反鐵律4）。
 $AUDIT_REC = [];
 try {
-    $AUDIT_REC = $conn->query("SELECT r.*, d.doc_no AS as_doc_no, d.doc_name AS as_doc_name, c.clause_text AS clause_text
-                                FROM as_audit_recommend r
-                                LEFT JOIN as_document d ON d.id = r.as_doc_id AND d.is_deleted = 0
-                                LEFT JOIN ia_as_clause c ON c.clause_id = r.clause_id
-                                ORDER BY r.audit_year DESC, r.sort_order ASC, r.id ASC")->fetchAll(PDO::FETCH_ASSOC);
+    $AUDIT_REC = $conn->query("SELECT * FROM as_audit_recommend ORDER BY audit_year DESC, sort_order ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
+    $recIds = array_column($AUDIT_REC, 'id');
+    $docsByRec = []; $clauseIdsByRec = [];
+    if ($recIds) {
+        $in = implode(',', array_map('intval', $recIds));
+        $dq = $conn->query("SELECT rd.rec_id, d.id, d.doc_no, d.doc_name
+                             FROM as_audit_recommend_doc rd
+                             JOIN as_document d ON d.id = rd.as_doc_id AND d.is_deleted = 0
+                             WHERE rd.rec_id IN ($in) ORDER BY rd.id")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($dq as $d) { $docsByRec[$d['rec_id']][] = ['id'=>(int)$d['id'], 'no'=>$d['doc_no'], 'name'=>$d['doc_name']]; }
+        $cq = $conn->query("SELECT rec_id, clause_id FROM as_audit_recommend_clause WHERE rec_id IN ($in) ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($cq as $c) { $clauseIdsByRec[$c['rec_id']][] = (int)$c['clause_id']; }
+    }
+    foreach ($AUDIT_REC as &$r) { $r['docs'] = $docsByRec[$r['id']] ?? []; $r['clause_ids'] = $clauseIdsByRec[$r['id']] ?? []; }
+    unset($r);
 } catch (Exception $e) { error_log('as_flow_guide audit_rec: ' . $e->getMessage()); }
 $AUDIT_YEARS = array_values(array_unique(array_map(fn($r) => (int)$r['audit_year'], $AUDIT_REC)));
 $thisYear = (int)date('Y');
@@ -748,11 +759,15 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
 .ar-items thead th { position:sticky; top:0; background:#F7E0BD; color:#5A3D1E; padding:6px 8px; border:1px solid #E0CBA0; text-align:left; z-index:1; }
 .ar-items td { padding:6px 7px; border:1px solid #E8D9B8; vertical-align:top; background:#fff; }
 .ar-items textarea { min-height:52px; resize:vertical; font-size:12.5px; }
-.ar-bind-cell .ar-bind-show { font-size:11.5px; margin:3px 0; line-height:1.5; }
-.ar-bind-cell .ar-bind-show .docchip { font-size:11.5px; }
-.ar-bind-cell .ar-bind-show .clause-chip { margin-top:0; }
-.ar-bind-cell button.ar-unbind, .ar-bind-cell button.ar-unbind-c { border:none; background:none; color:#DD5138;
-    cursor:pointer; font-size:13px; line-height:1; padding:0 2px; }
+/* AS文件／內部條文可複選：一列一組 chip，選一筆就浮出來，可一直加下去 */
+.ar-chips { display:flex; flex-wrap:wrap; gap:3px; margin-bottom:3px; }
+.ar-chips:empty { margin-bottom:0; }
+.ar-chip { display:inline-flex; align-items:center; gap:3px; background:#FFF7E8; border:1px solid #F0E3CB;
+           border-radius:4px; padding:1px 4px; font-size:11.5px; line-height:1.5; }
+.ar-chip .docchip { font-size:11.5px; }
+.ar-chip .clause-chip { margin-top:0; }
+.ar-bind-cell button.ar-chip-x { border:none; background:none; color:#DD5138;
+    cursor:pointer; font-size:13px; line-height:1; padding:0 1px; }
 .ar-row-del { border:none; background:none; color:#A08B70; cursor:pointer; font-size:14px; }
 .ar-row-del:hover { color:#DD5138; }
 .ar-foot { text-align:right; padding-top:10px; margin-top:4px; border-top:1px solid #F0E3CB; }
@@ -1056,26 +1071,26 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
         <?php if ($isRoleAdmin): ?><th style="width:92px;">操作</th><?php endif; ?>
       </tr></thead>
       <tbody>
-      <?php foreach ($AUDIT_REC as $r): $cl = $CLAUSE_BY_ID[(int)$r['clause_id']] ?? null; ?>
+      <?php foreach ($AUDIT_REC as $r): ?>
         <tr data-id="<?= (int)$r['id'] ?>" data-year="<?= (int)$r['audit_year'] ?>" data-lv="<?= htmlspecialchars($r['severity']) ?>"
             data-dept="<?= htmlspecialchars($r['dept'] ?? '') ?>" data-fixed="<?= (int)$r['fixed'] ?>" data-checked="<?= (int)$r['checked'] ?>">
           <td><span class="lv lv-<?= htmlspecialchars($r['severity']) ?>"><?= htmlspecialchars($r['severity']) ?></span></td>
           <td><?= htmlspecialchars($r['dept'] ?? '') ?: '—' ?></td>
           <td>
-            <?php if ($r['as_doc_id'] && $r['as_doc_no']): ?>
-              <a href="#" class="docchip has-online" data-no="<?= htmlspecialchars($r['as_doc_no']) ?>"
-                 title="<?= htmlspecialchars((string)$r['as_doc_name'], ENT_QUOTES, 'UTF-8') ?>（點擊線上預覽）">
-                <?= htmlspecialchars($r['as_doc_no']) ?><i class="fa fa-bolt"></i></a><br>
-            <?php endif; ?>
-            <?php if ($cl): ?>
-              <span class="clause-chip" data-cid="<?= (int)$r['clause_id'] ?>" title="點擊查看完整條文與相關文件">
+            <?php foreach ($r['docs'] as $d): ?>
+              <a href="#" class="docchip has-online" data-no="<?= htmlspecialchars($d['no']) ?>"
+                 title="<?= htmlspecialchars((string)$d['name'], ENT_QUOTES, 'UTF-8') ?>（點擊線上預覽）">
+                <?= htmlspecialchars($d['no']) ?><i class="fa fa-bolt"></i></a><br>
+            <?php endforeach; ?>
+            <?php foreach ($r['clause_ids'] as $cid): $cl = $CLAUSE_BY_ID[$cid] ?? null; if (!$cl) continue; ?>
+              <span class="clause-chip" data-cid="<?= $cid ?>" title="點擊查看完整條文與相關文件">
                 <i class="fa fa-bookmark-o"></i> <?= htmlspecialchars($cl['no']) ?> <?= htmlspecialchars(mb_substr($cl['title'], 0, 14)) ?><?= mb_strlen($cl['title']) > 14 ? '…' : '' ?></span>
-              <div class="clause-detail" data-cid-slot="<?= (int)$r['clause_id'] ?>" style="display:none;"></div>
-            <?php endif; ?>
+              <div class="clause-detail" data-cid-slot="<?= $cid ?>" style="display:none;"></div>
+            <?php endforeach; ?>
             <?php if ($r['location_note']): ?>
               <div style="font-size:11.5px;color:#8A6D45;margin-top:2px;"><?= htmlspecialchars($r['location_note']) ?></div>
             <?php endif; ?>
-            <?php if (!$r['as_doc_id'] && !$cl && !$r['location_note']): ?>—<?php endif; ?>
+            <?php if (!$r['docs'] && !$r['clause_ids'] && !$r['location_note']): ?>—<?php endif; ?>
           </td>
           <td><?= nl2br(egmd_docno(htmlspecialchars((string)$r['finding']))) ?></td>
           <td style="color:#7A4E17;"><?= $r['suggestion'] ? nl2br(egmd_docno(htmlspecialchars((string)$r['suggestion']))) : '—' ?></td>
@@ -1151,10 +1166,11 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
             <li><b>可一次登記一大串，不必一條填一次年度/日期</b>——稽核年度／日期／來源在最上方填<u>一次</u>，
                 底下按「再新增一列」逐條加稽核意見，最後一次「全部儲存」。</li>
             <li><b>負責部門</b>每列各自選，也可以用「批次設定負責部門」一次套用到全部列（套用後仍可逐列再改）。</li>
-            <li><b>AS文件／內部條文</b>皆可選填綁定：在欄位打文件編號或條文編號（也可打名稱關鍵字）、
-                從清單選一筆即完成綁定，綁定後顯示<b>可點連結</b>——點 AS 文件直接開線上預覽，
-                點條文展開完整條文內容與該條文對應建立的文件／表單（內含的 AS 編號一樣可點開）。
-                另有「補充位置」欄位可自由輸入章節/段落等細節。</li>
+            <li><b>AS文件／內部條文皆可選填，而且可以複選</b>（一筆意見常常同時混著提到好幾份文件、好幾條條文）：
+                在欄位打文件編號或條文編號（也可打名稱關鍵字），從清單選一筆就會立刻變成<b>一個 chip</b>加進去，
+                輸入框自動清空可以<b>接著選下一筆</b>，每個 chip 右側 <b>&times;</b> 可單獨移除。
+                綁定後的 chip 可點連結——點 AS 文件直接開線上預覽，點條文展開完整條文內容與該條文對應建立的文件／表單
+                （內含的 AS 編號一樣可點開）。另有「補充位置」欄位可自由輸入章節/段落等細節。</li>
             <li>編輯既有一筆時固定只開 1 列（不會跟別筆混在一起誤改）。</li>
           </ul>
           「稽核老師意見」「建議修改做法」內文裡只要寫到 AS 文件／表單編號，<b>存檔後也會自動變成可點連結</b>——
@@ -1543,14 +1559,17 @@ $(document).ready(function () {
         var idx = t.indexOf('　');
         return (idx >= 0 ? t.substring(0, idx) : t);
     }
-    function arResolveDocId(text) {
+    // 一筆意見可能混著提到好幾份 AS 文件、好幾條內部條文（使用者 2026-10-05 回報「不一定只有一項」），
+    // 故兩個欄位都是「打字挑一筆→加入 chip→輸入框清空可再挑下一筆」的多選，不是單一綁定。
+    function arResolveDoc(text) {
         var no = arParseLeading(text);
-        return (no && DOCMAP[no]) ? DOCMAP[no].id : 0;
+        return (no && DOCMAP[no]) ? { id: DOCMAP[no].id, no: no, name: DOCMAP[no].name } : null;
     }
-    function arResolveClauseId(text) {
+    function arResolveClause(text) {
         var no = arParseLeading(text);
-        return (no && CLAUSE_BY_NO[no]) ? CLAUSE_BY_NO[no].id : 0;
+        return (no && CLAUSE_BY_NO[no]) ? CLAUSE_BY_NO[no] : null;
     }
+    var AR_MAX_BIND = 10;   // 單筆最多可綁定幾份 AS 文件／幾條內部條文（防呆上限，非常態需求不會踩到）
 
     // 建一列（item 為既有資料時＝編輯/預填，留空＝新增一列空白）
     function arBuildRow(item) {
@@ -1567,42 +1586,72 @@ $(document).ready(function () {
         }).join('');
         $tr.append($('<td></td>').append('<select class="form-control input-sm ar-dept">' + deptOpts + '</select>'));
 
-        // AS文件／內部條文／位置補充
+        // AS文件（可複選）／內部條文（可複選）／位置補充
         var $bindTd = $('<td class="ar-bind-cell"></td>');
-        var docText = item.as_doc_no ? (item.as_doc_no + '　' + (item.as_doc_name || '')) : '';
-        var $docInput = $('<input type="text" class="form-control input-sm ar-doc-input" list="arDocList" autocomplete="off" placeholder="AS文件編號／名稱…">').val(docText);
-        var $docShow = $('<div class="ar-bind-show ar-doc-show"></div>');
-        var clauseObj = item.clause_id ? CLAUSE_BY_ID[item.clause_id] : null;
-        var clauseText = clauseObj ? (clauseObj.no + '　' + clauseObj.title) : '';
-        var $clauseInput = $('<input type="text" class="form-control input-sm ar-clause-input" list="arClauseList" autocomplete="off" style="margin-top:4px;" placeholder="內部條文編號／名稱…">').val(clauseText);
-        var $clauseShow = $('<div class="ar-bind-show ar-clause-show"></div>');
+        var $docChips = $('<div class="ar-chips ar-doc-chips"></div>');
+        var $docInput = $('<input type="text" class="form-control input-sm ar-doc-input" list="arDocList" autocomplete="off" placeholder="AS文件編號／名稱…選一筆即加入，可再選下一筆">');
+        var $clauseChips = $('<div class="ar-chips ar-clause-chips" style="margin-top:4px;"></div>');
+        var $clauseInput = $('<input type="text" class="form-control input-sm ar-clause-input" list="arClauseList" autocomplete="off" style="margin-top:4px;" placeholder="內部條文編號／名稱…選一筆即加入，可再選下一筆">');
         var $locInput = $('<input type="text" class="form-control input-sm ar-loc-input" style="margin-top:4px;" placeholder="補充位置（選填，如§6.2）">').val(item.location_note || '');
-        $bindTd.append($docInput, $docShow, $clauseInput, $clauseShow, $locInput);
+        $bindTd.append($docChips, $docInput, $clauseChips, $clauseInput, $locInput);
         $tr.append($bindTd);
-        $tr.data('asDocId', item.as_doc_id || 0);
-        $tr.data('clauseId', item.clause_id || 0);
         $tr.data('rowId', item.id || 0);
+        // 既有資料：docs 來自伺服器已是 [{id,no,name}]；clause_ids 轉成 [{id,no,title}] 跟新增時格式一致
+        $tr.data('docs', (item.docs || []).slice());
+        $tr.data('clauses', (item.clause_ids || []).map(function (cid) { return CLAUSE_BY_ID[cid]; }).filter(Boolean));
 
-        function renderDocShow() {
-            var id = $tr.data('asDocId'), no = arParseLeading($docInput.val()), d = id ? DOCMAP[no] : null;
-            if (id && d) {
-                $docShow.html('<a href="#" class="docchip has-online ar-doc-open" data-no="' + no + '">' + esc(no) + '<i class="fa fa-bolt"></i></a> '
-                    + esc(d.name) + ' <button type="button" class="ar-unbind" title="解除綁定">&times;</button>').show();
-            } else { $docShow.hide().empty(); }
+        function renderDocChips() {
+            var docs = $tr.data('docs') || [];
+            $docChips.empty();
+            docs.forEach(function (d) {
+                var $c = $('<span class="ar-chip"></span>').data('docId', d.id);
+                $c.html('<a href="#" class="docchip has-online ar-doc-open" data-no="' + d.no + '">' + esc(d.no) + '<i class="fa fa-bolt"></i></a> '
+                    + esc(d.name) + ' <button type="button" class="ar-chip-x" title="移除">&times;</button>');
+                $docChips.append($c);
+            });
         }
-        function renderClauseShow() {
-            var id = $tr.data('clauseId'), c = id ? CLAUSE_BY_ID[id] : null;
-            if (id && c) {
-                $clauseShow.html('<span class="clause-chip ar-clause-open" data-cid="' + id + '"><i class="fa fa-bookmark-o"></i> '
-                    + esc(c.no) + ' ' + esc(c.title) + '</span> <button type="button" class="ar-unbind-c" title="解除綁定">&times;</button>').show();
-            } else { $clauseShow.hide().empty(); }
+        function renderClauseChips() {
+            var cls = $tr.data('clauses') || [];
+            $clauseChips.empty();
+            cls.forEach(function (c) {
+                var $c = $('<span class="ar-chip"></span>').data('clauseId', c.id);
+                $c.html('<span class="clause-chip ar-clause-open" data-cid="' + c.id + '"><i class="fa fa-bookmark-o"></i> '
+                    + esc(c.no) + ' ' + esc(c.title) + '</span> <button type="button" class="ar-chip-x" title="移除">&times;</button>');
+                $clauseChips.append($c);
+            });
         }
-        renderDocShow(); renderClauseShow();
+        renderDocChips(); renderClauseChips();
 
-        $docInput.on('input change', function () { $tr.data('asDocId', arResolveDocId($(this).val())); renderDocShow(); });
-        $clauseInput.on('input change', function () { $tr.data('clauseId', arResolveClauseId($(this).val())); renderClauseShow(); });
-        $bindTd.on('click', '.ar-unbind', function () { $tr.data('asDocId', 0); $docInput.val(''); renderDocShow(); });
-        $bindTd.on('click', '.ar-unbind-c', function () { $tr.data('clauseId', 0); $clauseInput.val(''); renderClauseShow(); });
+        function addDoc() {
+            var d = arResolveDoc($docInput.val());
+            if (d) {
+                var docs = $tr.data('docs') || [];
+                if (docs.length >= AR_MAX_BIND) { alert('單筆最多綁定 ' + AR_MAX_BIND + ' 份 AS 文件'); }
+                else if (!docs.some(function (x) { return x.id === d.id; })) { docs.push(d); $tr.data('docs', docs); renderDocChips(); }
+            }
+            $docInput.val('');
+        }
+        function addClause() {
+            var c = arResolveClause($clauseInput.val());
+            if (c) {
+                var cls = $tr.data('clauses') || [];
+                if (cls.length >= AR_MAX_BIND) { alert('單筆最多綁定 ' + AR_MAX_BIND + ' 條內部條文'); }
+                else if (!cls.some(function (x) { return x.id === c.id; })) { cls.push(c); $tr.data('clauses', cls); renderClauseChips(); }
+            }
+            $clauseInput.val('');
+        }
+        $docInput.on('change', addDoc).on('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addDoc(); } });
+        $clauseInput.on('change', addClause).on('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addClause(); } });
+        $bindTd.on('click', '.ar-doc-chips .ar-chip-x', function () {
+            var id = $(this).closest('.ar-chip').data('docId');
+            $tr.data('docs', ($tr.data('docs') || []).filter(function (d) { return d.id !== id; }));
+            renderDocChips();
+        });
+        $bindTd.on('click', '.ar-clause-chips .ar-chip-x', function () {
+            var id = $(this).closest('.ar-chip').data('clauseId');
+            $tr.data('clauses', ($tr.data('clauses') || []).filter(function (c) { return c.id !== id; }));
+            renderClauseChips();
+        });
         $bindTd.on('click', '.ar-doc-open', function (e) { e.preventDefault(); openPreview($(this).data('no')); });
         $bindTd.on('click', '.ar-clause-open', function () { arToggleClauseDetail($(this).data('cid'), $bindTd); });
 
@@ -1611,15 +1660,18 @@ $(document).ready(function () {
         $tr.append($('<td style="text-align:center;"><button type="button" class="ar-row-del" title="刪除這一列"><i class="fa fa-times"></i></button></td>'));
         return $tr;
     }
-    // 條文 chip 的「點擊展開」通用在表格列與跳窗列都要用，收斂成一支（鐵律4）
+    // 條文 chip 的「點擊展開」通用在表格列與跳窗列都要用，收斂成一支（鐵律4）。
+    // 一列可能綁多條條文，故要比對點的是不是同一條：同一條再點一次＝收合，點別條＝換內容顯示。
     function arToggleClauseDetail(cid, $afterEl) {
         var c = CLAUSE_BY_ID[cid];
         if (!c) { return; }
         var $exist = $afterEl.find('.clause-detail-inline');
-        if ($exist.length) { $exist.remove(); return; }
+        var already = $exist.length && $exist.data('cid') === cid;
+        $exist.remove();
+        if (already) { return; }
         var html = '<div class="clause-detail clause-detail-inline"><strong>' + esc(c.no) + ' ' + esc(c.title) + '</strong>'
             + (c.doc_html ? '<div class="cd-ref">建立的文件／表單：<br>' + c.doc_html + '</div>' : '') + '</div>';
-        $afterEl.find('.ar-clause-show').first().after(html);
+        $afterEl.find('.ar-clause-chips').first().after($(html).data('cid', cid));
     }
     // 課室說明文件、線上表單對照以外，表格裡（非跳窗內）的條文 chip 也要能點開（同一支函式）
     $(document).on('click', '.clause-chip', function () {
@@ -1685,8 +1737,8 @@ $(document).ready(function () {
                 id: $tr.data('rowId') || 0,
                 severity: $tr.find('.ar-sev').val(),
                 dept: $.trim($tr.find('.ar-dept').val()),
-                as_doc_id: $tr.data('asDocId') || 0,
-                clause_id: $tr.data('clauseId') || 0,
+                as_doc_ids: ($tr.data('docs') || []).map(function (d) { return d.id; }),
+                clause_ids: ($tr.data('clauses') || []).map(function (c) { return c.id; }),
                 location_note: $.trim($tr.find('.ar-loc-input').val()),
                 finding: finding,
                 suggestion: $.trim($tr.find('.ar-suggest').val())
