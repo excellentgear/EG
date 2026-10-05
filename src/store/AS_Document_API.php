@@ -446,6 +446,9 @@ $asGate = [
     // add_versions_batch 於 case 內另行檢查（僅限管理員）
     // form_record_download 於 case 內依 inline 分流（預覽=view / 原檔=download）
     // form_record_fsd_pdf 於 case 內檢查（view ＋「這件真的屬於這份文件」的歸屬驗證）
+    'audit_rec_list'=>'view',
+    // audit_rec_save／audit_rec_delete 於 case 內另行檢查（僅限管理員，新增/修改/刪除稽核建議內容）
+    'audit_rec_toggle'=>'view',   // 已處理／已複核 點檢，與 flow_issue_toggle 同一套UX，任何檢閱者皆可操作
 ];
 if (!$currentUserId) {
     if ($action === 'download' || $action === 'download_template') { http_response_code(403); exit('尚未登入'); }
@@ -2910,6 +2913,72 @@ case 'flow_issue_toggle':   // AS流程總覽·待處理問題：已修改／已
                         ON DUPLICATE KEY UPDATE $field=VALUES($field), $byCol=VALUES($byCol),
                             $atCol=".($val ? "NOW()" : "NULL"));
     $st->execute([$issueKey, $val, $by]);
+    jout(['status'=>'success', 'value'=>$val, 'by'=>$by, 'at'=>$val ? date('Y-m-d H:i') : null]);
+
+// ══════════ 稽核建議修改（views/ADM/as_flow_guide.php「稽核建議修改」分頁）══════════
+// 逐年度登記稽核老師／稽核單位反饋的意見與建議修改做法；資料表 as_audit_recommend 唯一來源，
+// 不與「待處理問題」（程序書三方交叉比對，寫死在 as_flow_guide.php 的 $ISSUES）混用——
+// 那份是比對程序書與現況的結構性缺失，這裡是「稽核當次口頭/書面反饋」，來源與性質不同，
+// 日後若發現同一個意見跨兩邊重複，才考慮是否合併，不要在這裡先猜。
+case 'audit_rec_list':   // 回全部年度（筆數不多，交前端依年度/優先度/課室/關鍵字篩選，與本頁其他兩個分頁同一套做法）
+    $rows = $db->query("SELECT * FROM as_audit_recommend ORDER BY audit_year DESC, sort_order ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
+    jout(['status'=>'success', 'rows'=>$rows]);
+
+case 'audit_rec_save':
+    if (!asIsAdmin()) jout(['status'=>'error','message'=>'僅管理員可新增／修改稽核建議內容']);
+    $id       = (int)($_POST['id'] ?? 0);
+    $year     = (int)($_POST['audit_year'] ?? 0);
+    $date     = trim($_POST['audit_date'] ?? '');
+    $src      = trim($_POST['source_note'] ?? '');
+    $sev      = trim($_POST['severity'] ?? '中');
+    $dept     = trim($_POST['dept'] ?? '');
+    $docNo    = trim($_POST['doc_no'] ?? '');
+    $finding  = trim($_POST['finding'] ?? '');
+    $suggest  = trim($_POST['suggestion'] ?? '');
+    if ($year < 2000 || $year > 2100) jout(['status'=>'error','message'=>'請填寫有效的稽核年度']);
+    if (!in_array($sev, ['高','中','低'], true)) jout(['status'=>'error','message'=>'優先度錯誤']);
+    if ($finding === '') jout(['status'=>'error','message'=>'請填寫稽核老師的意見內容']);
+    if ($date !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) jout(['status'=>'error','message'=>'稽核日期格式錯誤']);
+    if ($id > 0) {
+        $db->prepare("UPDATE as_audit_recommend SET audit_year=?, audit_date=?, source_note=?, severity=?, dept=?, doc_no=?,
+                          finding=?, suggestion=?, updated_by=?, updated_at=NOW() WHERE id=?")
+           ->execute([$year, $date ?: null, $src ?: null, $sev, $dept ?: null, $docNo ?: null, $finding, $suggest ?: null, $currentCname, $id]);
+    } else {
+        $maxOrd = (int)$db->query("SELECT COALESCE(MAX(sort_order),0) FROM as_audit_recommend WHERE audit_year=".(int)$year)->fetchColumn();
+        $db->prepare("INSERT INTO as_audit_recommend
+                          (audit_year, audit_date, source_note, severity, dept, doc_no, finding, suggestion, sort_order, created_by, created_at)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,NOW())")
+           ->execute([$year, $date ?: null, $src ?: null, $sev, $dept ?: null, $docNo ?: null, $finding, $suggest ?: null, $maxOrd + 1, $currentCname]);
+        $id = (int)$db->lastInsertId();
+    }
+    $row = $db->query("SELECT * FROM as_audit_recommend WHERE id=".(int)$id)->fetch(PDO::FETCH_ASSOC);
+    jout(['status'=>'success', 'row'=>$row]);
+
+case 'audit_rec_delete':
+    if (!asIsAdmin()) jout(['status'=>'error','message'=>'僅管理員可刪除稽核建議內容']);
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id <= 0) jout(['status'=>'error','message'=>'無效 ID']);
+    $db->prepare("DELETE FROM as_audit_recommend WHERE id=?")->execute([$id]);
+    jout(['status'=>'success']);
+
+case 'audit_rec_toggle':   // 已處理／已複核 點檢，與 flow_issue_toggle 同一套UX（按下記人名時間，僅本人/管理者可取消）
+    $id    = (int)($_POST['id'] ?? 0);
+    $field = trim($_POST['field'] ?? '');
+    $val   = (int)($_POST['value'] ?? 0) ? 1 : 0;
+    if ($id <= 0) jout(['status'=>'error','message'=>'無效 ID']);
+    if (!in_array($field, ['fixed','checked'], true)) jout(['status'=>'error','message'=>'欄位錯誤']);
+    $byCol = $field.'_by'; $atCol = $field.'_at';
+    if ($val === 0 && !$asIsRoleAdmin) {
+        $chk = $db->prepare("SELECT $byCol FROM as_audit_recommend WHERE id=?");
+        $chk->execute([$id]);
+        $curBy = (string)($chk->fetchColumn() ?: '');
+        if ($curBy !== '' && $curBy !== $currentCname) {
+            jout(['status'=>'error','message'=>'僅原確認人「'.$curBy.'」或管理者可取消']);
+        }
+    }
+    $by = $val ? $currentCname : null;
+    $db->prepare("UPDATE as_audit_recommend SET $field=?, $byCol=?, $atCol=".($val ? "NOW()" : "NULL")." WHERE id=?")
+       ->execute([$val, $by, $id]);
     jout(['status'=>'success', 'value'=>$val, 'by'=>$by, 'at'=>$val ? date('Y-m-d H:i') : null]);
 
 default:

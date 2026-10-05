@@ -223,9 +223,9 @@ function eg_doclink($txt) {
 }
 /** 待處理問題「已修改」／「已檢查」點檢鈕（跟線上表單對照的表單正確／資料齊全同一套UX：
  *  按下記人名＋時間，只有本人或管理者能再按一次取消）。*/
-function eg_iss_chk_btn($issueKey, $field, $label, $ok, $by, $at, $isRoleAdmin, $currentCname) {
+function eg_iss_chk_btn($issueKey, $field, $label, $ok, $by, $at, $isRoleAdmin, $currentCname, $cls = 'iss-chk-btn') {
     $canCancel = $isRoleAdmin || ($ok && $by === $currentCname);
-    echo '<button class="btn-mini iss-chk-btn' . ($ok ? ' warm' : '') . '"'
+    echo '<button class="btn-mini ' . $cls . ($ok ? ' warm' : '') . '"'
        . ' data-key="' . htmlspecialchars($issueKey, ENT_QUOTES) . '" data-field="' . $field . '"'
        . ' data-label="' . htmlspecialchars($label, ENT_QUOTES) . '" data-val="' . $ok . '"'
        . ' data-cancancel="' . ($canCancel ? 1 : 0) . '"'
@@ -495,6 +495,21 @@ if (isset($_GET['ai_report'])) {
     exit;
 }
 
+// ── 稽核建議修改（逐年度登記稽核老師／稽核單位反饋的意見與建議修改做法，唯一來源 as_audit_recommend）──
+// 與上面「待處理問題」刻意分開：待處理問題是比對程序書與現況產生的結構性缺失（寫在本檔 $ISSUES，
+// 來源是三方交叉比對），這裡是「稽核當次口頭／書面反饋」，逐年度各自累積，來源與性質不同，
+// 不要為了省一張表就混在一起——哪一年稽核提了什麼、有沒有結案，稽核老師回來複查時要能單獨拉出來看。
+$AUDIT_REC = [];
+try {
+    $AUDIT_REC = $conn->query("SELECT * FROM as_audit_recommend ORDER BY audit_year DESC, sort_order ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) { error_log('as_flow_guide audit_rec: ' . $e->getMessage()); }
+$AUDIT_YEARS = array_values(array_unique(array_map(fn($r) => (int)$r['audit_year'], $AUDIT_REC)));
+$thisYear = (int)date('Y');
+if (!in_array($thisYear, $AUDIT_YEARS, true)) { $AUDIT_YEARS[] = $thisYear; }   // 今年永遠在選單裡，即使還沒登記任何一筆
+rsort($AUDIT_YEARS);
+$curAuditYear = $AUDIT_YEARS[0] ?? $thisYear;
+$cntAuditOpen = count(array_filter($AUDIT_REC, fn($r) => !$r['checked']));
+
 // 四階表單清單（線上表單對照分頁用）：doc_no 有 3 段以上者＝表單
 $FORMS = [];
 foreach ($DOCMAP as $no => $d) {
@@ -701,6 +716,8 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
     <span class="badge-warm"><?= $cntIssueOpen ?></span></div>
   <div class="fg-tab" data-tab="onl"><i class="fa fa-bolt"></i> 線上表單對照
     <span class="badge-warm"><?= $onlineCnt ?>/<?= count($FORMS) ?></span></div>
+  <div class="fg-tab" data-tab="adv"><i class="fa fa-bullhorn"></i> 稽核建議修改
+    <span class="badge-warm"><?= $cntAuditOpen ?></span></div>
 </div>
 
 <!-- ═════════ 分頁：課室說明文件 ═════════ -->
@@ -921,6 +938,83 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
   </div>
 </div>
 
+<!-- ═════════ 分頁：稽核建議修改 ═════════ -->
+<div id="tabAdv" style="display:none;">
+  <div class="fg-main">
+    <div class="fg-bar">
+      <select id="recYear" class="form-control input-sm" style="width:130px;height:30px;display:inline-block;">
+        <?php foreach ($AUDIT_YEARS as $y): ?>
+          <option value="<?= $y ?>" <?= $y === $curAuditYear ? 'selected' : '' ?>><?= $y ?> 年度稽核</option>
+        <?php endforeach; ?>
+      </select>
+      <select id="recLvFilter" class="form-control input-sm" style="width:150px;height:30px;display:inline-block;">
+        <option value="">全部優先度</option><option value="高">高</option><option value="中">中</option><option value="低">低</option>
+      </select>
+      <select id="recDeptFilter" class="form-control input-sm" style="width:180px;height:30px;display:inline-block;">
+        <option value="">全部課室</option>
+        <?php foreach (array_keys($DEPT2KEY) as $dp): ?>
+          <option value="<?= htmlspecialchars($dp) ?>"><?= htmlspecialchars($dp) ?></option>
+        <?php endforeach; ?>
+      </select>
+      <input type="text" id="recKw" placeholder="搜尋文件編號／意見內容…">
+      <button id="btnRecClear"><i class="fa fa-eraser"></i> 清除</button>
+      <?php if ($isRoleAdmin): ?>
+        <button class="btn-warm" id="btnRecAdd"><i class="fa fa-plus"></i> 新增稽核意見</button>
+      <?php endif; ?>
+      <button id="btnRecPrint"><i class="fa fa-print"></i> 列印</button>
+      <span class="fg-file">共 <span id="recCount">0</span> 筆</span>
+    </div>
+
+    <div class="iss-sum">
+      <div class="iss-card c-high"><b id="recCntHigh">0</b><span>高：建議優先處理</span></div>
+      <div class="iss-card c-mid"><b id="recCntMid">0</b><span>中：下次改版一併處理</span></div>
+      <div class="iss-card c-low"><b id="recCntLow">0</b><span>低：次要建議</span></div>
+    </div>
+
+    <p style="font-size:12.5px;color:#8A6D45;margin:0 0 10px;">
+      本分頁逐年度登記<strong>稽核老師／稽核單位</strong>當次反饋的意見與建議修改做法，與上方「待處理問題」（比對程序書與現況的結構性缺失）是不同來源、分開管理。
+      切換年度即可看該次稽核的全部建議與處理進度；<?= $isRoleAdmin ? '管理者可在此新增／編輯／刪除。' : '新增與編輯僅限管理者。' ?></p>
+
+    <div class="iss-tablewrap">
+    <table class="iss-table" id="recTable" style="min-width:1280px;">
+      <thead><tr>
+        <th style="width:52px;">優先</th><th style="width:110px;">課室</th><th style="width:160px;">文件／位置</th>
+        <th>稽核老師意見</th><th>建議修改做法</th><th style="width:120px;">來源／日期</th>
+        <th style="width:112px;">已處理</th><th style="width:112px;">已複核</th>
+        <?php if ($isRoleAdmin): ?><th style="width:92px;">操作</th><?php endif; ?>
+      </tr></thead>
+      <tbody>
+      <?php foreach ($AUDIT_REC as $r): ?>
+        <tr data-id="<?= (int)$r['id'] ?>" data-year="<?= (int)$r['audit_year'] ?>" data-lv="<?= htmlspecialchars($r['severity']) ?>"
+            data-dept="<?= htmlspecialchars($r['dept'] ?? '') ?>" data-fixed="<?= (int)$r['fixed'] ?>" data-checked="<?= (int)$r['checked'] ?>">
+          <td><span class="lv lv-<?= htmlspecialchars($r['severity']) ?>"><?= htmlspecialchars($r['severity']) ?></span></td>
+          <td><?= htmlspecialchars($r['dept'] ?? '') ?: '—' ?></td>
+          <td><?= $r['doc_no'] ? eg_doclink($r['doc_no']) : '—' ?></td>
+          <td><?= nl2br(htmlspecialchars((string)$r['finding'])) ?></td>
+          <td style="color:#7A4E17;"><?= $r['suggestion'] ? nl2br(htmlspecialchars((string)$r['suggestion'])) : '—' ?></td>
+          <td style="font-size:12px;color:#8A6D45;">
+            <?= htmlspecialchars($r['source_note'] ?? '') ?>
+            <?= $r['audit_date'] ? '<br>' . htmlspecialchars($r['audit_date']) : '' ?>
+          </td>
+          <td><?php eg_iss_chk_btn((string)$r['id'], 'fixed', '已處理', (int)$r['fixed'], (string)$r['fixed_by'], (string)$r['fixed_at'], $isRoleAdmin, $currentCname, 'rec-chk-btn'); ?></td>
+          <td><?php eg_iss_chk_btn((string)$r['id'], 'checked', '已複核', (int)$r['checked'], (string)$r['checked_by'], (string)$r['checked_at'], $isRoleAdmin, $currentCname, 'rec-chk-btn'); ?></td>
+          <?php if ($isRoleAdmin): ?>
+          <td>
+            <button class="btn-mini rec-edit" data-row='<?= htmlspecialchars(json_encode($r, JSON_UNESCAPED_UNICODE), ENT_QUOTES) ?>'><i class="fa fa-pencil"></i></button>
+            <button class="btn-mini rec-del" data-id="<?= (int)$r['id'] ?>"><i class="fa fa-trash-o"></i></button>
+          </td>
+          <?php endif; ?>
+        </tr>
+      <?php endforeach; ?>
+      </tbody>
+    </table>
+    </div>
+    <p id="recEmpty" style="display:none;text-align:center;color:#A08B70;padding:30px 0;">
+      <i class="fa fa-inbox fa-2x"></i><br><br>這個年度還沒有登記任何稽核建議。
+      <?= $isRoleAdmin ? '按上方「新增稽核意見」開始登記。' : '' ?></p>
+  </div>
+</div>
+
 <?php endif; ?>
 </div><!-- right_col -->
 </div></div>
@@ -951,7 +1045,7 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
        並標出<b>程序書與現況不一致的待處理問題</b>，以及每張表單<b>有沒有線上表單可用</b>。
        內容來源是 <code>FOR CODEING 說明文件\AS9100(各組維護版)\AS流程-*.md</code>，<b>改了 MD 檔本頁立刻反映</b>，不需要動程式。</p>
 
-    <h4>三個分頁怎麼用</h4>
+    <h4>四個分頁怎麼用</h4>
     <ul>
       <li><b>課室說明文件</b>：左側選課室，右側閱讀。可在本篇搜尋（Enter 逐筆跳）、看原始 MD、下載 MD、列印。</li>
       <li><b>待處理問題</b>：比對程序書／實體表單檔／系統文件三方交叉檢查出的不一致，分高中低三級，可依優先度、課室、關鍵字篩選。
@@ -961,6 +1055,12 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
       <li><b>線上表單對照</b>：全部四階表單一覽，顯示是否已有線上表單，可直接開啟或新填一張；
           可對每張表單按<b>「表單正確」</b>／<b>「資料齊全」</b>做點檢確認（會記錄確認人與時間；只有原確認人本人或管理者可再按一次取消），
           兩者都可加入篩選條件（已確認正確／已確認齊全／尚未確認）。</li>
+      <li><b>稽核建議修改</b>：逐<b>年度</b>登記稽核老師／稽核單位當次反饋的意見與建議修改做法——與「待處理問題」是不同來源、分開管理
+          （待處理問題是比對程序書與現況的結構性缺失；這裡是稽核當次口頭／書面反饋，每年各自累積一份清單）。
+          切換上方年度下拉即可看該次稽核的全部建議，可依優先度、課室、關鍵字篩選；
+          每筆同樣可按<b>「已處理」</b>／<b>「已複核」</b>點檢（規則與待處理問題相同）。
+          <b>新增／編輯／刪除僅限管理者</b>——把稽核老師反饋的重點貼進「稽核老師意見」欄即可登記一筆，
+          「文件／位置」欄若含 AS 編號會自動變成可點連結。</li>
     </ul>
 
     <h4>點編號會發生什麼事</h4>
@@ -1008,6 +1108,38 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
   <div id="pvBody"></div>
 </div></div>
 
+<!-- 稽核建議修改：新增／編輯跳窗（僅管理者按鈕才會出現，後端 audit_rec_save 另再驗一次） -->
+<div class="fg-mask" id="audRecMask"><div class="box">
+  <h4><i class="fa fa-bullhorn"></i> <span id="arTitle">新增稽核意見</span></h4>
+  <input type="hidden" id="arId" value="0">
+  <div class="row">
+    <div class="col-sm-4 form-group"><label>稽核年度</label>
+      <input type="number" class="form-control" id="arYear" min="2000" max="2100"></div>
+    <div class="col-sm-4 form-group"><label>稽核日期（選填）</label>
+      <input type="date" class="form-control" id="arDate"></div>
+    <div class="col-sm-4 form-group"><label>優先度</label>
+      <select class="form-control" id="arSev"><option value="高">高</option><option value="中" selected>中</option><option value="低">低</option></select></div>
+  </div>
+  <div class="row">
+    <div class="col-sm-6 form-group"><label>相關課室（選填）</label>
+      <input type="text" class="form-control" id="arDept" list="arDeptList"></div>
+    <div class="col-sm-6 form-group"><label>文件／位置（選填，含 AS 編號如 2-QA-01 會自動變成可點連結）</label>
+      <input type="text" class="form-control" id="arDocNo"></div>
+  </div>
+  <div class="form-group"><label>稽核老師意見／發現事項</label>
+    <textarea class="form-control" id="arFinding" rows="4" placeholder="把稽核老師反饋的重點貼進來…"></textarea></div>
+  <div class="form-group"><label>建議修改做法（選填）</label>
+    <textarea class="form-control" id="arSuggest" rows="4"></textarea></div>
+  <div class="form-group"><label>稽核來源／備註（選填，如「外部稽核－王老師」）</label>
+    <input type="text" class="form-control" id="arSrc"></div>
+  <div id="arErr" style="color:#DD5138;font-size:12.5px;margin-bottom:6px;"></div>
+  <div style="text-align:right;">
+    <button class="btn btn-sm btn-default" onclick="document.getElementById('audRecMask').style.display='none'">取消</button>
+    <button class="btn btn-sm" id="btnArSave" style="background:#F0A24B;border-color:#D98A33;color:#fff;"><i class="fa fa-save"></i> 儲存</button>
+  </div>
+</div></div>
+<datalist id="arDeptList"><?php foreach (array_keys($DEPT2KEY) as $dp): ?><option value="<?= htmlspecialchars($dp) ?>"><?php endforeach; ?></datalist>
+
 <button id="fgTop" title="回到頂端"><i class="fa fa-arrow-up"></i></button>
 
 <script src="../../resource/js/jquery.min.js"></script>
@@ -1027,6 +1159,7 @@ $(document).ready(function () {
         $('#tabDoc').toggle(t === 'doc');
         $('#tabIss').toggle(t === 'iss');
         $('#tabOnl').toggle(t === 'onl');
+        $('#tabAdv').toggle(t === 'adv');
     });
 
     // ══ 文件／表單 線上預覽 ══
@@ -1234,6 +1367,92 @@ $(document).ready(function () {
     $('#issKw').on('input', issFilter);
     $('#btnIssClear').on('click', function () {
         $('#lvFilter,#deptFilter').val(''); $('#issKw').val(''); issFilter();
+    });
+
+    // ══ 稽核建議修改 ══
+    var ASDOC_API = DOC_API;   // 同一支 AS_Document_API.php
+    function recFilter() {
+        var yr = $('#recYear').val(), lv = $('#recLvFilter').val(), dp = $('#recDeptFilter').val(),
+            kw = $.trim($('#recKw').val()).toLowerCase(), n = 0, cH = 0, cM = 0, cL = 0;
+        $('#recTable tbody tr').each(function () {
+            var $t = $(this),
+                ok = String($t.data('year')) === String(yr)
+                  && (!lv || $t.data('lv') === lv)
+                  && (!dp || String($t.data('dept')) === dp)
+                  && (!kw || $t.text().toLowerCase().indexOf(kw) >= 0);
+            $t.toggle(ok);
+            if (ok) {
+                n++;
+                var rlv = $t.data('lv');
+                if (rlv === '高') { cH++; } else if (rlv === '中') { cM++; } else if (rlv === '低') { cL++; }
+            }
+        });
+        $('#recCount').text(n);
+        $('#recCntHigh').text(cH); $('#recCntMid').text(cM); $('#recCntLow').text(cL);
+        $('#recEmpty').toggle(n === 0);
+    }
+    $('#recYear,#recLvFilter,#recDeptFilter').on('change', recFilter);
+    $('#recKw').on('input', recFilter);
+    $('#btnRecClear').on('click', function () { $('#recLvFilter,#recDeptFilter').val(''); $('#recKw').val(''); recFilter(); });
+    $('#btnRecPrint').on('click', function () { window.print(); });
+    recFilter();   // 初始套用預設年度篩選
+
+    // 已處理／已複核 點檢（獨立 class，避免與「待處理問題」的 .iss-chk-btn 共用 handler 打到錯的 action）
+    $(document).on('click', '.rec-chk-btn', function () {
+        var $b = $(this), $tr = $b.closest('tr'), $meta = $b.next('.chk-meta'), field = $b.data('field'),
+            cur = parseInt($b.data('val'), 10) || 0, next = cur ? 0 : 1, label = $b.data('label');
+        if (cur && !confirm('要取消「' + label + '」的確認狀態嗎？')) { return; }
+        $b.prop('disabled', true);
+        $.post(ASDOC_API, {action: 'audit_rec_toggle', id: $b.data('key'), field: field, value: next}, function (r) {
+            if (r.status !== 'success') { alert(r.message || '操作失敗'); $b.prop('disabled', cur ? true : false); return; }
+            $b.data('val', r.value).data('cancancel', 1);
+            $tr.attr('data-' + field, r.value).data(field, r.value);
+            $b.toggleClass('warm', !!r.value)
+              .html('<i class="fa ' + (r.value ? 'fa-check-circle' : 'fa-circle-o') + '"></i> ' + esc(label));
+            $meta.text(r.value ? (r.by + ' ' + r.at) : '');
+            $b.prop('disabled', false);
+        }, 'json').fail(function () { alert('請求失敗'); $b.prop('disabled', false); });
+    });
+
+    // 新增／編輯（僅管理者看得到按鈕；後端 audit_rec_save 另再驗一次）
+    function arOpen(row) {
+        $('#arErr').text('');
+        $('#arId').val(row ? row.id : 0);
+        $('#arTitle').text(row ? '編輯稽核意見' : '新增稽核意見');
+        $('#arYear').val(row ? row.audit_year : ($('#recYear').val() || <?= (int)$curAuditYear ?>));
+        $('#arDate').val(row ? (row.audit_date || '') : '');
+        $('#arSev').val(row ? row.severity : '中');
+        $('#arDept').val(row ? (row.dept || '') : '');
+        $('#arDocNo').val(row ? (row.doc_no || '') : '');
+        $('#arFinding').val(row ? row.finding : '');
+        $('#arSuggest').val(row ? (row.suggestion || '') : '');
+        $('#arSrc').val(row ? (row.source_note || '') : '');
+        $('#audRecMask').show();
+    }
+    $('#btnRecAdd').on('click', function () { arOpen(null); });
+    $(document).on('click', '.rec-edit', function () { arOpen($(this).data('row')); });
+    $(document).on('click', '.rec-del', function () {
+        var id = $(this).data('id');
+        if (!confirm('確定要刪除這筆稽核建議嗎？此動作無法復原。')) { return; }
+        $.post(ASDOC_API, {action: 'audit_rec_delete', id: id}, function (r) {
+            if (r.status !== 'success') { alert(r.message || '刪除失敗'); return; }
+            location.reload();
+        }, 'json').fail(function () { alert('請求失敗'); });
+    });
+    $('#btnArSave').on('click', function () {
+        var year = $.trim($('#arYear').val()), finding = $.trim($('#arFinding').val());
+        if (!year) { $('#arErr').text('請填寫稽核年度'); return; }
+        if (!finding) { $('#arErr').text('請填寫稽核老師的意見內容'); return; }
+        $('#arErr').text('');
+        $(this).prop('disabled', true);
+        $.post(ASDOC_API, {
+            action: 'audit_rec_save', id: $('#arId').val(), audit_year: year, audit_date: $('#arDate').val(),
+            severity: $('#arSev').val(), dept: $.trim($('#arDept').val()), doc_no: $.trim($('#arDocNo').val()),
+            finding: finding, suggestion: $.trim($('#arSuggest').val()), source_note: $.trim($('#arSrc').val())
+        }, function (r) {
+            if (r.status !== 'success') { $('#arErr').text(r.message || '儲存失敗'); $('#btnArSave').prop('disabled', false); return; }
+            location.reload();
+        }, 'json').fail(function () { $('#arErr').text('請求失敗'); $('#btnArSave').prop('disabled', false); });
     });
 
     $('#btnRoleHelp').on('click', function () { $('#roleMask').show(); });
