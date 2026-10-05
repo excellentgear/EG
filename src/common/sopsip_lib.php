@@ -2402,8 +2402,9 @@ function ss_auto_title_base(PDO $db, string $kind, string $scope, array $in): st
     if ($kind === 'sip') {
         return trim(($part !== '' ? $part : '通用') . ($proc !== '' ? ' ' . $proc : ''));
     }
-    // process：製程為主，綁了料號才把料號接在後面
-    if ($proc !== '' && $part !== '') return $proc . ' ' . $part;
+    // process：料號在前、製程在後，與 SIP 同一順序（2026-10-05 使用者回報：同一料號同一製程
+    // 的 SOP／SIP 在型態識別文件管制表上順序不一致，要以 SIP 的順序為準統一）
+    if ($proc !== '' && $part !== '') return $part . ' ' . $proc;
     return $proc !== '' ? $proc : $part;
 }
 
