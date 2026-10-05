@@ -31,6 +31,7 @@
 require_once __DIR__ . '/people_lib.php';
 require_once __DIR__ . '/position_history_lib.php';
 require_once __DIR__ . '/asdoc_lib.php';
+require_once __DIR__ . '/process_type_lib.php'; // eg_process_type_id()：檢驗項目預設值範本依製程大類退回要用
 /* 量具（檢驗設備一覽表）怎麼判在不在用、在別的頁面要顯示哪幾欄：一律走這一支，不自己寫條件。
    **qc_tool.state 是 1＝停用、0/NULL＝在用**，本檔原本寫反了，
    於是在用的 QC-001／QC-002 在挑檢具清單裡一支都看不到、停用的 QC-003 反而一直列出來。 */
@@ -3340,11 +3341,43 @@ function ss_tpl_family(string $use = 'sip'): array
     return $k[$use] ?? $k['sip'];
 }
 
+/**
+ * 同一個製程大類底下、別的製程代號已經設過的「逐製程」範本（proc／gproc）。
+ * 只在 ss_tpl_rows() 精準比對這個 process_no 本身一無所獲時才派上用場——
+ * 製程代號本來就常常一類好幾個（包裝 168／169 同屬「雷刻與包裝」大類，
+ * 齒研還有 156/165/167/205/209 五個兄弟代號），逐一替每個代號各設一份範本只會
+ * 讓同一套標準在系統裡放好幾份、改一份忘了改另一份；設定一次、同大類全部代號
+ * 自動吃到，往後現場再加新代號只要掛進同一個 process_type 即可，不必回頭補範本。
+ * 多個兄弟代號都各自設過範本時，取 process_no 最小的那份（與其他「同大類退回」
+ * 邏輯一致的決定性規則）。
+ */
+function ss_tpl_rows_by_type(PDO $db, string $kind, int $processNo): array
+{
+    try { $kind = ss_tpl_kind_norm($kind); } catch (Throwable $e) { return []; }
+    if (!ss_tpl_kind_is_proc($kind)) return [];
+    $typeId = eg_process_type_id($db, $processNo);
+    if (!$typeId) return [];
+    try {
+        $st = $db->prepare(
+            "SELECT t.process_no
+               FROM ss_item_tpl t
+               JOIN process_no pn ON pn.ProcessNo = t.process_no AND pn.process_type_id = ?
+              WHERE t.tpl_kind=? AND t.process_no<>? AND t.is_active=1
+              ORDER BY t.process_no LIMIT 1"
+        );
+        $st->execute([$typeId, $kind, $processNo]);
+        $srcNo = $st->fetchColumn();
+        if (!$srcNo) return [];
+        return ss_tpl_rows($db, $kind, (int)$srcNo);
+    } catch (Throwable $e) { return []; }
+}
+
 function ss_default_items(PDO $db, int $processNo, ?bool $withStd = null, string $use = 'sip'): array
 {
     $fam  = ss_tpl_family($use);
     $cfg  = ss_proc_cfg($db, $processNo);
     $proc = ss_tpl_rows($db, $fam['proc'], $processNo);
+    if (!$proc) $proc = ss_tpl_rows_by_type($db, $fam['proc'], $processNo);   // 自己沒設，退回同製程大類
 
     /* 使用者 2026-09-23：「有製程預設的檢驗項目預設值要優先帶入，沒有才帶入全站共用。」
        原本是「製程專屬 ＋ 全站共用」一律兩份都帶，所以綁齒研時會同時帶進齒研與全站兩套，

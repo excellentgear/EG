@@ -36,6 +36,7 @@ define('CP_LIB_LOADED', 1);
 
 require_once __DIR__ . '/date_fmt_lib.php';
 require_once __DIR__ . '/part_cost_lib.php';   // ppc_kg_set()：客供料製程集合，IQC 判定直接沿用，不重寫一份判準
+require_once __DIR__ . '/process_type_lib.php'; // eg_process_type_id()：製程大類查詢，通用SIP退回要用
 
 /** 本模組在 system_parameters 的分組名 */
 define('CP_PARAM_GROUP', 'CONTROL_PLAN');
@@ -716,21 +717,12 @@ function cp_bom_processes(PDO $db, string $bom): array
  * =================================================================== */
 
 /**
- * 製程大類（process_type_id）查詢，請求內快取——cp_sip_items()／cp_ss_doc_exists()
- * 的「通用 SIP 依製程大類退回」都要用它，一個請求裡同一個 process_no 只查一次。
+ * 製程大類查詢（唯一實作在 process_type_lib.php 的 eg_process_type_id()，這裡保留
+ * 同名包裝只是不必改既有呼叫端）。
  */
 function cp_process_type_id(PDO $db, int $processNo): ?int
 {
-    static $cache = [];
-    if (array_key_exists($processNo, $cache)) return $cache[$processNo];
-    $v = null;
-    try {
-        $st = $db->prepare("SELECT process_type_id FROM process_no WHERE ProcessNo=?");
-        $st->execute([$processNo]);
-        $r = $st->fetchColumn();
-        if ($r !== false && $r !== null) $v = (int)$r;
-    } catch (Throwable $e) {}
-    return $cache[$processNo] = $v;
+    return eg_process_type_id($db, $processNo);
 }
 
 /**
@@ -810,18 +802,40 @@ function cp_sip_items(PDO $db, ?int $partDId, ?int $processNo): array
         } catch (Throwable $e) {}
     }
 
-    // 退回「依製程的檢驗項目預設值」範本
-    try {
-        $st = $db->prepare(
-            "SELECT tpl_id AS item_id, seq, ctrl_point, q_char, up_limit, lo_limit,
-                    method, tool_no, tool_id, freq, note
-               FROM ss_item_tpl
-              WHERE is_active=1 AND process_no=? ORDER BY seq, tpl_id"
-        );
-        $st->execute([$processNo]);
-        $items = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
-        if ($items) return ['items' => $items, 'src' => 'tpl', 'src_ref' => 'proc' . $processNo];
-    } catch (Throwable $e) {}
+    // 退回「依製程的檢驗項目預設值」範本（精準 process_no，查不到再退回同製程大類）
+    $tplFetch = function (int $pno) use ($db) {
+        try {
+            $st = $db->prepare(
+                "SELECT tpl_id AS item_id, seq, ctrl_point, q_char, up_limit, lo_limit,
+                        method, tool_no, tool_id, freq, note
+                   FROM ss_item_tpl
+                  WHERE is_active=1 AND tpl_kind='proc' AND process_no=? ORDER BY seq, tpl_id"
+            );
+            $st->execute([$pno]);
+            return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        } catch (Throwable $e) { return []; }
+    };
+    $items = $tplFetch($processNo);
+    if ($items) return ['items' => $items, 'src' => 'tpl', 'src_ref' => 'proc' . $processNo];
+
+    $typeId = eg_process_type_id($db, $processNo);
+    if ($typeId) {
+        try {
+            $st = $db->prepare(
+                "SELECT t.process_no
+                   FROM ss_item_tpl t
+                   JOIN process_no pn ON pn.ProcessNo = t.process_no AND pn.process_type_id = ?
+                  WHERE t.tpl_kind='proc' AND t.process_no<>? AND t.is_active=1
+                  ORDER BY t.process_no LIMIT 1"
+            );
+            $st->execute([$typeId, $processNo]);
+            $srcNo = $st->fetchColumn();
+            if ($srcNo) {
+                $items = $tplFetch((int)$srcNo);
+                if ($items) return ['items' => $items, 'src' => 'tpl_cat', 'src_ref' => 'proc' . $srcNo];
+            }
+        } catch (Throwable $e) {}
+    }
 
     return ['items' => [], 'src' => '', 'src_ref' => ''];
 }
