@@ -183,6 +183,16 @@ function cnrv_ensure_schema(PDO $db): void {
         try { $db->exec("ALTER TABLE con_review_dept_sign ADD COLUMN is_auto_sign TINYINT(1) NOT NULL DEFAULT 0
                          COMMENT '由管理員「自動填寫並簽核」寫入(與is_backfill不同：那是逐格指定原簽核人補登，這是整批自動帶入)' AFTER backfill_by_name"); } catch (Throwable $e) {}
     }
+    // 2026-10-05：清單「管理員代簽」欄要顯示「是哪位管理員、什麼時候」做的自動帶入——is_auto_sign
+    // 本身只是個旗標，沒有留住「誰按的」，補兩欄記錄（is_backfill 已經有 backfill_by_name，這裡
+    // 補的是 is_auto_sign 那條路徑一直缺的對應欄位）。
+    if (!$hasCol('con_review_dept_sign', 'auto_sign_by')) {
+        try { $db->exec("ALTER TABLE con_review_dept_sign ADD COLUMN auto_sign_by INT NULL
+                         COMMENT '執行「自動填寫並簽核」的管理員帳號' AFTER is_auto_sign"); } catch (Throwable $e) {}
+    }
+    if (!$hasCol('con_review_dept_sign', 'auto_sign_by_name')) {
+        try { $db->exec("ALTER TABLE con_review_dept_sign ADD COLUMN auto_sign_by_name VARCHAR(50) NULL AFTER auto_sign_by"); } catch (Throwable $e) {}
+    }
     // 2026-10-05：管理員刪除功能（使用者要求「可刪除未審核的」），走既有的 is_deleted 軟刪除
     // （cnrv_get()／cnrv_list() 本來就已經過濾 is_deleted=0，只是一直沒有寫入端——補上）。
     if (!$hasCol('con_review_doc', 'deleted_by')) {
@@ -961,9 +971,9 @@ function cnrv_admin_auto_fill_sign(PDO $db, int $docId, string $signDate, int $a
                 $unsignedDepts[$deptId] = ['dept_name'=>$dName, 'reason'=>'這天本部門候選簽核人都不在：' . ($avail['warnings'] ? implode('；', $avail['warnings']) : '查無候選人員，請先設定部門主管或人員')];
                 continue;
             }
-            $db->prepare("INSERT INTO con_review_dept_sign (doc_id,dept_id,signed_by,signed_by_name,signed_at,is_auto_sign)
-                          VALUES (?,?,?,?,?,1)")
-               ->execute([$docId, $deptId, (int)$avail['signer']['id'], $avail['signer']['user_cname'], $signDate . ' 09:30:00']);
+            $db->prepare("INSERT INTO con_review_dept_sign (doc_id,dept_id,signed_by,signed_by_name,signed_at,is_auto_sign,auto_sign_by,auto_sign_by_name)
+                          VALUES (?,?,?,?,?,1,?,?)")
+               ->execute([$docId, $deptId, (int)$avail['signer']['id'], $avail['signer']['user_cname'], $signDate . ' 09:30:00', $adminUid, $adminName]);
             $signedDepts[$deptId] = ['dept_name'=>$dName, 'signer_name'=>$avail['signer']['user_cname'], 'note_warnings'=>$avail['warnings']];
         }
         $db->commit();
@@ -1082,8 +1092,35 @@ function cnrv_list(PDO $db, array $f = []): array {
     $st = $db->prepare($sql);
     $st->execute($params);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    // 2026-10-05 使用者要求：「管理員代簽」欄要顯示代簽管理員的姓名與日期時間（名稱換行後接日期時間），
+    // 不能只是個靜態「管理員代簽」標籤。彙整三種來源：部門自動填寫並簽核（auto_sign_by_name）、
+    // 部門逐格補登（backfill_by_name）、決行/核准由管理員代真人簽（*_proxy_name）——批次一次查，
+    // 避免每一列各查一次（N+1）。
+    $docIds = array_map(fn($r) => (int)$r['id'], $rows);
+    $deptEvents = [];
+    if ($docIds) {
+        $ph = implode(',', array_fill(0, count($docIds), '?'));
+        $dst = $db->prepare("SELECT doc_id, is_auto_sign, is_backfill, auto_sign_by_name, backfill_by_name, signed_at
+                              FROM con_review_dept_sign
+                              WHERE doc_id IN ($ph) AND (is_auto_sign=1 OR is_backfill=1)");
+        $dst->execute($docIds);
+        foreach ($dst->fetchAll(PDO::FETCH_ASSOC) as $dr) {
+            $name = $dr['is_auto_sign'] ? ($dr['auto_sign_by_name'] ?: null) : ($dr['backfill_by_name'] ?: null);
+            if (!$name) continue;
+            $deptEvents[(int)$dr['doc_id']][] = ['name'=>$name, 'at'=>$dr['signed_at']];
+        }
+    }
     foreach ($rows as &$r) {
+        $events = $deptEvents[(int)$r['id']] ?? [];
+        if (!empty($r['sales_decided_is_proxy']) && $r['sales_decided_proxy_name']) {
+            $events[] = ['name'=>$r['sales_decided_proxy_name'], 'at'=>$r['sales_decided_at']];
+        }
+        if (!empty($r['gm_approved_is_proxy']) && $r['gm_approved_proxy_name']) {
+            $events[] = ['name'=>$r['gm_approved_proxy_name'], 'at'=>$r['gm_approved_at']];
+        }
         $r['has_admin_sign'] = !empty($r['has_dept_admin_sign']) || !empty($r['sales_decided_is_proxy']) || !empty($r['gm_approved_is_proxy']);
+        $r['admin_sign_events'] = $events;
         unset($r['has_dept_admin_sign']);
     }
     unset($r);

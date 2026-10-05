@@ -176,7 +176,7 @@ case 'list': {
     ]);
     // has_admin_sign（這張單有沒有管理員自動/代為簽核）只提供管理員查看（2026-10-05 使用者要求），
     // 非管理員的清單一律拿掉這個欄位，前端「顯示管理員代簽標記」開關也只對管理員輸出。
-    if (!$perms['canAdmin']) { foreach ($r['rows'] as &$row) unset($row['has_admin_sign']); unset($row); }
+    if (!$perms['canAdmin']) { foreach ($r['rows'] as &$row) { unset($row['has_admin_sign'], $row['admin_sign_events']); } unset($row); }
     jout($r);
 }
 

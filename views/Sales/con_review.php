@@ -330,10 +330,17 @@ function loadList(){
         var h = '';
         (res.rows||[]).forEach(function(r){
             var dc = r.decision ? '<span class="dc-'+r.decision+'">'+esc(DECISIONS[r.decision]||r.decision)+'</span>' : '<span style="color:#bbb;">—</span>';
+            // 2026-10-05 使用者要求：這欄要顯示代簽的管理員「名稱＋換行＋日期時間」，不是靜態的
+            // 「管理員代簽」標籤文字——一張單可能有好幾段代簽（內容部門自動帶入/補登、決行、
+            // 核准），逐段各自一行名稱+日期時間疊著顯示；仍抓不到姓名時退回舊的靜態標籤。
+            var evHtml = (r.admin_sign_events || []).map(function(ev){
+                var at = String(ev.at || ''), dPart = at.substring(0,10), tPart = at.substring(11,16);
+                return '<div style="margin-bottom:2px;">' + esc(ev.name) + '<br>' + dispDate(dPart) + (tPart ? (' ' + tPart) : '') + '</div>';
+            }).join('');
+            if (!evHtml && r.has_admin_sign) evHtml = '管理員代簽';
             var adminCell = isAdmin
-                ? '<td class="cr-admin-col" style="'+(SHOW_ADMIN_SIGN_COL?'':'display:none;')+'">'
-                  + (r.has_admin_sign ? '<span style="font-size:11px;color:#b5862f;border:1px dashed #E8D5B5;border-radius:3px;padding:0 5px;">管理員代簽</span>' : '')
-                  + '</td>'
+                ? '<td class="cr-admin-col" style="'+(SHOW_ADMIN_SIGN_COL?'':'display:none;')+'font-size:11px;color:#b5862f;line-height:1.3;">'
+                  + evHtml + '</td>'
                 : '';
             h += '<tr><td>'+esc(r.doc_no)+'</td><td>'+esc(r.order_oo)+'</td><td>'+esc(r.client_name)+'</td><td>'+esc(r.part_no_text)+'</td>'
                + '<td>'+esc(r.tag_label||'')+'</td>'
