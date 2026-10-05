@@ -99,7 +99,7 @@ function type_id_ctrl_item_view(PDO $db, array $it): array {
         // 快照是 NULL 的情況（從沒被確認過、或手動輸入列）一律不算變更。
         'confirmed_ref_snapshot' => $it['confirmed_ref_snapshot'] ?? null,
         'content_changed' => ($linked !== null && !empty($it['confirmed_ref_snapshot'])
-                              && (string)$it['confirmed_ref_snapshot'] !== (string)$linked['doc_name']),
+                              && (string)$it['confirmed_ref_snapshot'] !== (string)type_id_ctrl_change_key($linked)),
     ];
 }
 
@@ -384,13 +384,27 @@ function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $d
         // 版別取用順序（2026-10-02 使用者：「加工圖是採用發行日做為版別」）：
         //   ①有填版次就用版次 ②沒版次但有發行章日期 → 發行日就是版別（自家出的圖多半這樣管）
         //   ③兩者都沒有才退回檔名充當畫面辨識用，檔名不是真正的版別故列印不印（2026-08-12 既有規則）
-        $verText = type_id_ctrl_version_text($cur);
-        $verKind = type_id_ctrl_version_kind($cur);
+        $mode    = $fam['ver_mode'] ?? 'auto';
+        // 「版別／文件編號」是**制定當時**那一版的版別，不是現行版（2026-10-02 使用者：
+        // 「修改前與修改後是不可能相同，不然就不叫修改」）——這一欄跟右邊的修訂履歷連起來讀就是
+        //  「<制定日期> 以 <版別> 制定，<修訂日期> 改版為 <修訂後版別>」；
+        // 原本放現行版的話，最後一次修訂必然跟它一模一樣，看起來就像沒改。
+        // 現行版＝修訂履歷最後一筆（沒有修訂過就是制定那一版）。
+        $first   = $fam['first'];
+        $verText = type_id_ctrl_version_text($first, $mode);
+        $verKind = type_id_ctrl_version_kind($first, $mode);
+        $curText = type_id_ctrl_version_text($cur, $mode);
         return [
-            'doc_name' => $verText !== '' ? $verText : $cur['doc_name'],
+            'doc_name' => $verText !== '' ? $verText : $first['doc_name'],
             // 2026-10-02 起沒版次也不會退回檔名了（改用接收日期），所以只有連上傳日都沒有才算檔名
             'doc_no_is_filename' => ($verText === ''),
             'ver_kind' => $verKind,
+            'cur_ver_text' => $curText,
+            // 偵測「來源內容有沒有變」用的鍵：刻意用**原始資料**（附件id/版次/發行章日期/版本數），
+            // 不可以用上面那兩個格式化顯示字串——管理員改一次「版別來源」設定（ver_mode），顯示字串
+            // 就會整個換一種格式，若拿它當變更偵測鍵，會讓全系統所有已確認文件在下次開啟時全部被
+            // 誤判成「內容已變更」，即使附件一個檔案都沒動過。這個坑今天已經連踩三次（2026-10-02）。
+            'change_key' => type_id_ctrl_change_key_raw($fam),
             'file_name_text' => $cur['doc_name'],
             'doc_date' => $fam['first']['_date'],      // ＝型態制定日期：最早一次發行，不隨改版往後跳
             // 「自家出的圖」(如加工圖) 多半沒填版次，退回檔名充當畫面顯示，但列印時檔名不算真正的
@@ -423,6 +437,30 @@ function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $d
         ];
     }
     return null;
+}
+
+/** 其他來源沒有「家族」概念，變更偵測鍵就是顯示值本身 */
+function type_id_ctrl_change_key(?array $linked): ?string {
+    if (!$linked) return null;
+    return $linked['change_key'] ?? ($linked['doc_name'] ?? null);
+}
+
+/**
+ * 料號附件家族的「內容真的有沒有變」偵測鍵——一律用**原始資料**組成，刻意不用任何格式化後的
+ * 顯示字串（2026-10-02 教訓：管理員改一次「版別來源」設定(ver_mode)，顯示字串就整個換一種
+ * 格式，若拿它當鍵會讓全系統所有已確認文件在下次開啟時全部被誤判成「內容已變更」，即使附件
+ * 一個檔案都沒動過——這個坑同一天已經踩了三次，用原始資料才能讓顯示規則與變更偵測徹底脫鉤）。
+ * 鍵含：現行版附件id/版次/發行章日期、制定版附件id/版次/發行章日期、版本數——
+ * 新上傳一版、現行版指到別的附件、或既有附件的版次/發行章日期被改過，這個鍵都會變。
+ */
+function type_id_ctrl_change_key_raw(array $fam): string {
+    $cur = $fam['current']; $first = $fam['first'];
+    $parts = [
+        (int)($cur['attach_id'] ?? 0), (string)($cur['revision'] ?? ''), (string)($cur['issue_stamp_date'] ?? ''),
+        (int)($first['attach_id'] ?? 0), (string)($first['revision'] ?? ''), (string)($first['issue_stamp_date'] ?? ''),
+        count($fam['versions'] ?? []),
+    ];
+    return implode('|', $parts);
 }
 
 /**
@@ -463,10 +501,15 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
             'filename' => $cur['filename'],
             // 版別優先（版次→發行日），都沒有才退回檔名——與 resolve_ref 同一套規則，
             // 否則「新增管制表」還沒存檔時看到的是檔名、存檔後又變成版別，同一份文件兩種顯示
-            'doc_name' => (type_id_ctrl_version_text($cur) !== '') ? type_id_ctrl_version_text($cur) : $cur['doc_name'],
+            // 顯示的是制定版（見 resolve_ref 的說明），變更偵測另走 change_key
+            'doc_name' => (type_id_ctrl_version_text($fam['first'], $fam['ver_mode']) !== '')
+                            ? type_id_ctrl_version_text($fam['first'], $fam['ver_mode']) : $fam['first']['doc_name'],
+            // 原始資料鍵，不可用顯示字串——見 resolve_ref() 裡的同名說明（2026-10-02）
+            'change_key' => type_id_ctrl_change_key_raw($fam),
+            'cur_ver_text' => type_id_ctrl_version_text($cur, $fam['ver_mode']),
             'doc_date' => $fam['first']['_date'],           // 制定日期＝最早一次發行
             'cat_id' => (int)$cid,
-            'ver_kind' => type_id_ctrl_version_kind($cur),
+            'ver_kind' => type_id_ctrl_version_kind($fam['first'], $fam['ver_mode']),
             'file_name_text' => $cur['doc_name'],
             'categories' => [$fam['disp']],
             'need_process' => $fam['need_process'],
@@ -616,7 +659,10 @@ function type_id_ctrl_bom_file_dir(PDO $db): string {
     try {
         $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='TYPE_ID_CTRL' AND param_key='bom_file_dir' LIMIT 1");
         $st->execute();
-        $dir = trim((string)$st->fetchColumn());
+        // system_parameters.param_value 是 MySQL JSON 型別欄位，一律存/讀 JSON 字串（見
+        // type_id_ctrl_bom_tag_map_save 的說明），不可再存原始路徑字串
+        $raw = json_decode((string)$st->fetchColumn(), true);
+        $dir = is_string($raw) ? trim($raw) : '';
     } catch (Throwable $e) {}
     if ($dir === '') $dir = eg_bom_erp_scan_dir_auto();
     $dir = str_replace('\\', '/', $dir);
@@ -705,7 +751,11 @@ function type_id_ctrl_bom_tag_map_save(PDO $db, array $map, string $dir, string 
     type_id_ctrl_param_save($db, 'bom_file_tags', json_encode($clean, JSON_UNESCAPED_UNICODE),
                             '型態識別文件管制表：要列入的 ERP/資材報告檔名標籤與對應型態項目名稱/類別', $byUser);
     $dir = trim($dir);
-    if ($dir !== '') type_id_ctrl_param_save($db, 'bom_file_dir', $dir, '型態識別文件管制表：ERP/資材報告掃描資料夾', $byUser);
+    // system_parameters.param_value 是 MySQL JSON 型別欄位，原始路徑字串（如 Z:\BOM\...）不是合法
+    // JSON，直接存會被 MySQL 拒絕丟 PDOException（2026-10-02 無頭 Chrome 測另一個欄位時連帶挖出這個
+    // 既有缺口：這支從建置以來只要有人真的改過掃描資料夾就會 500，從沒有成功存過——因為預設值是空字串
+    // 才躲過去）。一律 json_encode 成 JSON 字串，type_id_ctrl_bom_file_dir() 對應改用 json_decode 讀。
+    if ($dir !== '') type_id_ctrl_param_save($db, 'bom_file_dir', json_encode($dir), '型態識別文件管制表：ERP/資材報告掃描資料夾', $byUser);
 }
 
 /** 本模組自己的設定值寫入 system_parameters(TYPE_ID_CTRL) */
@@ -1445,7 +1495,8 @@ function type_id_ctrl_source_diff(PDO $db, int $docId, int $dsPk): array {
         if (!isset($existingByKey[$k])) { $new[] = $f; continue; }
         $it = $existingByKey[$k];
         $snap = $it['confirmed_ref_snapshot'];
-        if ($snap !== null && (string)$snap !== (string)$f['doc_name']) {
+        $freshKey = $f['change_key'] ?? $f['doc_name'];
+        if ($snap !== null && (string)$snap !== (string)$freshKey) {
             $changed[] = ['item_id' => (int)$it['id'], 'fresh' => $f, 'old_snapshot' => $snap];
         }
     }
@@ -1459,7 +1510,7 @@ function type_id_ctrl_snapshot_confirm(PDO $db, int $docId): void {
     $st->execute([$docId]);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $it) {
         $linked = type_id_ctrl_resolve_ref($db, $it['ref_source'], (int)$it['ref_attach_id'], (int)$it['ref_ds_pk'], $it['ref_file_name'], (int)($it['ref_cat_id'] ?? 0));
-        $snap = $linked ? $linked['doc_name'] : null;
+        $snap = type_id_ctrl_change_key($linked);
         $db->prepare("UPDATE type_id_ctrl_item SET confirmed_ref_snapshot=? WHERE id=?")->execute([$snap, $it['id']]);
     }
 }
@@ -1519,13 +1570,17 @@ function type_id_ctrl_apply_diff(PDO $db, int $docId, array $diff, bool $confirm
 function type_id_ctrl_void_cat_ids(PDO $db): array {
     static $cache = null;
     if ($cache !== null) return $cache;
+    $raw = [];
     try {
         $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='TYPE_ID_CTRL' AND param_key='void_category_ids' LIMIT 1");
         $st->execute();
-        $raw = (string)$st->fetchColumn();
-    } catch (Throwable $e) { $raw = ''; }
+        // system_parameters.param_value 是 MySQL JSON 欄位（寫非法 JSON 會直接丟 PDOException，見下方
+        // type_id_ctrl_void_cat_save 的說明），一律存/讀 JSON 陣列，不可再用逗號分隔字串
+        $raw = json_decode((string)$st->fetchColumn(), true);
+    } catch (Throwable $e) {}
+    if (!is_array($raw)) $raw = [];
     $ids = [];
-    foreach (explode(',', $raw) as $x) { $x = (int)trim($x); if ($x > 0) $ids[] = $x; }
+    foreach ($raw as $x) { $x = (int)$x; if ($x > 0) $ids[] = $x; }
     return $cache = array_values(array_unique($ids));
 }
 
@@ -1533,7 +1588,12 @@ function type_id_ctrl_void_cat_save(PDO $db, array $ids, string $byUser): void {
     $clean = [];
     foreach ($ids as $x) { $x = (int)$x; if ($x > 0) $clean[] = $x; }
     $clean = array_values(array_unique($clean));
-    type_id_ctrl_param_save($db, 'void_category_ids', implode(',', $clean),
+    // system_parameters.param_value 是 MySQL JSON 型別欄位：原本用 implode(',', ...) 存成逗號分隔
+    // 字串，空陣列時會變成空字串 ''，MySQL 判定非法 JSON 直接丟 PDOException（HTTP 500、空白回應，
+    // 前端 $.post(dataType:'json') 連 error callback 都不會觸發，畫面上完全看不出原因）——
+    // 2026-10-02 無頭 Chrome 實測「作廢類別預設沒有設定（空陣列）」這條路一打就死，才挖出來。
+    // 一律存/讀 JSON 陣列。
+    type_id_ctrl_param_save($db, 'void_category_ids', json_encode($clean),
                             '型態識別文件管制表：代表「已作廢」的附件類別（這些圖不會被當成現行版，只收進修訂履歷）', $byUser);
 }
 
@@ -1568,6 +1628,7 @@ function type_id_ctrl_part_families(PDO $db, int $dsPk): array {
     $rows = imgedit_strip_workfiles($st->fetchAll(PDO::FETCH_ASSOC), $db);
 
     $voidIds = type_id_ctrl_void_cat_ids($db);
+    $verCfg  = type_id_ctrl_ver_source_cfg($db);
     $fams = [];
     foreach ($rows as $r) {
         $ids = [];
@@ -1594,7 +1655,7 @@ function type_id_ctrl_part_families(PDO $db, int $dsPk): array {
             $d = (string)$a['_date'];
             if (!isset($vers[$d])) $vers[$d] = ['date'=>$a['_date'], 'files'=>[], 'revision'=>'', 'is_void'=>true, 'rep'=>null];
             $vers[$d]['files'][] = $a;
-            if ($vers[$d]['revision'] === '') { $t = type_id_ctrl_version_text($a); if ($t !== '') $vers[$d]['revision'] = $t; }
+            if ($vers[$d]['revision'] === '') { $t = type_id_ctrl_version_text($a, $verCfg[$cid] ?? 'auto'); if ($t !== '') $vers[$d]['revision'] = $t; }
             if (!$a['_is_void']) { $vers[$d]['is_void'] = false; $vers[$d]['rep'] = $a; }   // 同一版裡優先用沒作廢的那一份
             if ($vers[$d]['rep'] === null) $vers[$d]['rep'] = $a;
         }
@@ -1606,6 +1667,7 @@ function type_id_ctrl_part_families(PDO $db, int $dsPk): array {
         if ($curVer === null) $curVer = $vers[count($vers) - 1];
         $out[$cid] = [
             'cat_id'       => $cid,
+            'ver_mode'     => $verCfg[$cid] ?? 'auto',
             'disp'         => $cats[$cid]['disp'],
             'need_process' => $cats[$cid]['need_process'],
             'all'          => $list,          // 全部檔案（供對照用）
@@ -1617,27 +1679,77 @@ function type_id_ctrl_part_families(PDO $db, int $dsPk): array {
     return $cache[$dsPk] = $out;
 }
 
-/**
- * 一份附件的「版別」是哪一種（2026-10-02 使用者指定的三段取用順序）：
- *   revision ── 有填版次（最準）
- *   issue    ── 沒版次但有發行章日期 → 發行日就是版別（加工圖這類自家出的圖本來就這樣管）
- *   received ── 兩者都沒有 → 只知道「什麼時候收到這份文件」，用上傳日當接收日期
- *               （使用者：「原圖的版別不應該顯示檔名，若未設定就顯示為 接收日期 YYYY.MM.DD」）
- * 回空字串＝連上傳日都沒有（理論上不會發生）。
- */
-function type_id_ctrl_version_kind(array $a): string {
-    $rev = $a['revision'] ?? null;
-    if ($rev !== null && $rev !== '') return 'revision';
-    $d = $a['issue_stamp_date'] ?? null;
-    if ($d !== null && $d !== '') return 'issue';
-    $u = $a['up_date'] ?? $a['uploaded_at'] ?? null;
-    if ($u !== null && $u !== '') return 'received';
-    return '';
+/* ──────────────────────────────────────────────────────────────────────────
+ * 「版別／文件編號」這一欄要取用哪一種資料，**逐附件類別由管理員設定**
+ * （2026-10-02 使用者：「應該要讓管理員可以設定此種使用版次、上傳日期、發行章日期的哪一種」）。
+ * 起因：加工圖的附件同時有 Rev.7 與發行章 2026-09-04，而他們要的是**發行章日期**；
+ * 原本寫死「版次優先」就會顯示 7。不同類別的管理方式本來就不一樣，所以做成設定而不是再猜一套。
+ *
+ *   auto     ── 版次 → 發行章日期 → 接收日期（依序取第一個有資料的）
+ *   revision ── 版次
+ *   issue    ── 發行章日期
+ *   upload   ── 上傳日期（顯示成「接收日期 YYYY.MM.DD」）
+ * 指定的那一種沒有資料時一律退到「接收日期」（每一份附件都有上傳日，不會整格空白）
+ * ＝使用者說的「(有這個資料才顯示)」。
+ *
+ * 預設值（還沒設定過時）直接由類別既有的旗標推導，不寫死類別名稱（鐵律4）：
+ *   自家出的圖(is_own_drawing=1) → issue（加工圖/++圖這種以發行章日期管版別的）
+ *   其餘（外來文件）             → auto（原圖多半沒有版次也沒有發行章，自然會落到接收日期）
+ * ────────────────────────────────────────────────────────────────────────── */
+const TIC_VER_SOURCES = ['auto'=>'自動（版次→發行章日期→接收日期）', 'revision'=>'版次',
+                         'issue'=>'發行章日期', 'upload'=>'上傳日期（接收日期）'];
+
+/** 逐類別的版別來源設定（已套用預設值）：cat_id => auto|revision|issue|upload */
+function type_id_ctrl_ver_source_cfg(PDO $db): array {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    try {
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='TYPE_ID_CTRL' AND param_key='ver_source_by_cat' LIMIT 1");
+        $st->execute();
+        $saved = json_decode((string)$st->fetchColumn(), true);
+    } catch (Throwable $e) { $saved = null; }
+    if (!is_array($saved)) $saved = [];
+    $out = [];
+    foreach ($db->query("SELECT id, COALESCE(is_own_drawing,0) own FROM quotation_file_categories")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+        $cid = (int)$c['id'];
+        $v = (string)($saved[$cid] ?? $saved[(string)$cid] ?? '');
+        if (!isset(TIC_VER_SOURCES[$v])) $v = ((int)$c['own'] === 1) ? 'issue' : 'auto';
+        $out[$cid] = $v;
+    }
+    return $cache = $out;
 }
 
-/** 一份附件的「版別」顯示文字（三種來源見 type_id_ctrl_version_kind） */
-function type_id_ctrl_version_text(array $a): string {
-    switch (type_id_ctrl_version_kind($a)) {
+/** 儲存逐類別的版別來源設定（只認真的存在的類別與合法的來源代碼） */
+function type_id_ctrl_ver_source_save(PDO $db, array $map, string $byUser): void {
+    $valid = array_map('intval', $db->query("SELECT id FROM quotation_file_categories")->fetchAll(PDO::FETCH_COLUMN));
+    $clean = [];
+    foreach ($map as $cid => $v) {
+        $cid = (int)$cid; $v = (string)$v;
+        if (!in_array($cid, $valid, true) || !isset(TIC_VER_SOURCES[$v])) continue;
+        $clean[$cid] = $v;
+    }
+    type_id_ctrl_param_save($db, 'ver_source_by_cat', json_encode($clean, JSON_UNESCAPED_UNICODE),
+                            '型態識別文件管制表：逐附件類別的「版別／文件編號」取用來源', $byUser);
+}
+
+/** 一份附件的「版別」是哪一種（依該類別的設定；指定的那一種沒資料就退到 received） */
+function type_id_ctrl_version_kind(array $a, string $mode = 'auto'): string {
+    $hasRev = (($a['revision'] ?? null) !== null && ($a['revision'] ?? '') !== '');
+    $hasIss = (($a['issue_stamp_date'] ?? null) !== null && ($a['issue_stamp_date'] ?? '') !== '');
+    $hasUp  = (($a['up_date'] ?? $a['uploaded_at'] ?? null) !== null && ($a['up_date'] ?? $a['uploaded_at'] ?? '') !== '');
+    if ($mode === 'revision' && $hasRev) return 'revision';
+    if ($mode === 'issue'    && $hasIss) return 'issue';
+    if ($mode === 'upload'   && $hasUp)  return 'received';
+    if ($mode === 'auto') {
+        if ($hasRev) return 'revision';
+        if ($hasIss) return 'issue';
+    }
+    return $hasUp ? 'received' : '';     // 指定的那一種沒資料 → 退到接收日期
+}
+
+/** 一份附件的「版別」顯示文字 */
+function type_id_ctrl_version_text(array $a, string $mode = 'auto'): string {
+    switch (type_id_ctrl_version_kind($a, $mode)) {
         case 'revision': return (string)$a['revision'];
         case 'issue':    return eg_fmt_date((string)$a['issue_stamp_date']);
         case 'received': return '接收日期 ' . eg_fmt_date(substr((string)($a['up_date'] ?? $a['uploaded_at']), 0, 10));

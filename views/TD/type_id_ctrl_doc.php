@@ -114,6 +114,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         /* 重複確認（2026-10-02）：提示列與跳窗內的每一份 */
         #dupBar { margin-top:8px; padding:6px 10px; background:#FFF3E2; border:1px solid #F0A24B; border-radius:6px;
                   color:#8A5A2B; font-size:12px; display:flex; align-items:center; gap:8px; }
+        .vs-row { display:flex; align-items:center; gap:8px; margin:5px 0; padding:5px 8px;
+                  border:1px solid #EADFC8; border-radius:6px; font-size:12px; color:#5b3a1e; }
+        .vs-name { flex:0 0 190px; }
+        .vs-row select { flex:1 1 auto; height:28px; font-size:12px; }
+        .vs-tag { flex:0 0 auto; font-size:10px; line-height:16px; color:#8A5A2B; background:#F7E0BD;
+                  border-radius:8px; padding:0 6px; white-space:nowrap; }
         .ic-rev-hint { display:inline-block; font-size:10px; line-height:14px; color:#8A5A2B; background:#FFF3E2;
                        border:1px solid #F0A24B; border-radius:8px; padding:0 5px; margin-left:2px;
                        white-space:nowrap; text-decoration:none; }
@@ -470,6 +476,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         <div id="ownDrawEmpty" style="color:#8a6d45;padding:10px;">載入中…</div>
         <div id="ownDrawList"></div>
         <div style="margin-top:12px;border-top:1px dashed #D8BE93;padding-top:10px;">
+            <label style="font-size:13px;color:#5b3a1e;font-weight:bold;">「版別／文件編號」要用哪一種資料</label>
+            <div class="tip" style="margin:4px 0 6px;">逐類別各自設定，因為不同文件的管版方式本來就不一樣——加工圖是用<b>發行章日期</b>當版別（即使附件上也填了版次），原圖多半既沒版次也沒發行章、只知道<b>什麼時候收到</b>。<br>選定的那一種<b>沒有資料時一律退回「接收日期」</b>（每份附件都有上傳日，不會整格空白）。<br>這一欄顯示的是<b>制定當時</b>那一版的版別；之後每次改版列在右邊的修訂履歷，所以「版別」與「修訂後版別」本來就應該不一樣。</div>
+            <div id="verSrcList"></div>
+        </div>
+        <div style="margin-top:12px;border-top:1px dashed #D8BE93;padding-top:10px;">
             <label style="font-size:13px;color:#5b3a1e;font-weight:bold;">代表「已作廢」的附件類別</label>
             <div class="tip" style="margin:4px 0 6px;">同一種圖每次改版都會上傳一張新圖，本表<b>一種文件只列一列</b>：版別欄顯示<b>現行版</b>、歷次上傳成為<b>修訂履歷</b>、型態制定日期取<b>最早一次發行</b>。<br>勾選的類別代表「這張圖已經作廢」——掛到這些類別的圖<b>不會被當成現行版</b>（實測有圖面是最新的那一份卻已作廢），但仍會留在修訂履歷裡以利追溯。不勾任何一個就不做作廢判定，單純以發行章日期最新者為現行版。</div>
             <div id="voidCatList" style="display:flex;flex-wrap:wrap;gap:4px 14px;"></div>
@@ -553,8 +564,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <li>清單的 <b>PFMEA</b> 欄顯示這個料號是否已在「潛在失效模式及效應分析」建檔（<b>PFMEA已建立</b>／未建立，點擊可開啟 PFMEA 頁面），是每次查詢當下即時查 pfmea_doc 的結果、不是快照；工具列的「PFMEA」下拉可篩選出已建立／未建立的清單，匯出 CSV 也含這一欄。</li>
             <li><b>取消的欄位</b>：表頭的「製程」、項目列的「型態類別」與「所屬製程」三欄依使用者要求取消，畫面與列印版都不再顯示；<b>資料庫欄位保留不刪</b>，既有資料原封不動，存檔時也會把原值照原樣寫回去（畫面上看不到的東西不會因為存一次檔就被改掉）。連帶失效的設定（BOM檔案標籤的「型態類別」、廠內圖面標籤的「需要顯示製程」、項目列旁的製程挑選鈕）一併移除，避免留下改了也看不到的死設定。</li>
             <li><b>「型態制定日期」已更名為「型態制定日期」</b>，只是名稱改變，取值方式與原本完全相同（連結來源時取來源日期：發行章日期／表單日期／檔案日期；手動列則用自己填的日期）。</li>
-            <li><b>一種文件一列</b>（2026-10-02 使用者回報）：加工圖、原圖這類<b>綁定圖面每次改版都會上傳一張新圖</b>，原本一個附件一列會讓同一種圖在表上長出好幾列、同一次改版也顯示兩次。現在<b>同一料號＋同一附件類別</b>的歷次上傳收斂成一列：<b>版別／文件編號＝現行版</b>、<b>型態制定日期＝最早一次發行</b>（不隨改版往後跳）、歷次上傳成為<b>修訂履歷</b>；欄位旁的「共 N 版」小籤表示這一種文件目前有幾份。之後再上傳新版時，同步會<b>原地把該列指到新的那一份</b>並在修訂履歷多一筆，不會另外長一列（與 ERP/資材報告標籤同一套做法）。<br><b>舊資料</b>不另外批次處理：那幾份管制表<b>下次被開啟或同步時自動合併</b>，並跳出提示告知合併了幾列、狀態改為「需重新確認」請人覆核。合併時保留最早建立的那一列，人工加的修訂履歷會一併搬過去，任何一列曾被「取消納入」則合併後仍維持取消納入。</li>
-            <li><b>版別怎麼決定</b>（2026-10-02 使用者指定的三段順序）：①有填<b>版次</b>就用版次 ②沒版次但有<b>發行章日期</b>→<b>發行日就是版別</b>（加工圖這類自家出的圖本來就這樣管）③兩者都沒有→顯示「<b>接收日期 YYYY.MM.DD</b>」，日期取這份文件的<b>上傳日</b>（原圖、報價圖、報價單附件多半是這一種——客戶給的圖常常沒有版次，系統只知道「我們什麼時候收到它」）。<br><b>一律不再拿檔名當版別</b>（檔名不是版別，而且列印還印不出來）；接收日期是有意義的管制資訊，<b>列印會照印</b>。<br>顯示成接收日期的那幾列旁邊有橘色「<b>未設版次</b>」小籤，<b>點一下直接開主檔管理的該料號附件</b>去補版次；補完回本頁重新整理就會改以版次顯示。修訂履歷的「修訂後版別」用同一套規則。</li>
+            <li><b>一種文件一列</b>（2026-10-02 使用者回報）：加工圖、原圖這類<b>綁定圖面每次改版都會上傳一張新圖</b>，原本一個附件一列會讓同一種圖在表上長出好幾列、同一次改版也顯示兩次。現在<b>同一料號＋同一附件類別</b>的歷次上傳收斂成一列：<b>型態制定日期＝最早一次發行</b>（不隨改版往後跳）、歷次上傳成為<b>修訂履歷</b>；欄位旁的「共 N 版」小籤表示這一種文件目前有幾份。之後再上傳新版時，同步會<b>原地把該列指到新的那一份</b>並在修訂履歷多一筆，不會另外長一列（與 ERP/資材報告標籤同一套做法）。<br><b>舊資料</b>不另外批次處理：那幾份管制表<b>下次被開啟或同步時自動合併</b>，並跳出提示告知合併了幾列、狀態改為「需重新確認」請人覆核。合併時保留最早建立的那一列，人工加的修訂履歷會一併搬過去，任何一列曾被「取消納入」則合併後仍維持取消納入。</li>
+            <li><b>版別怎麼決定、逐附件類別可設定</b>（2026-10-02 使用者：「應該要讓管理員可以設定此種使用版次、上傳日期、發行章日期的哪一種」）：取用來源有四種——<b>自動</b>（版次→發行章日期→接收日期，依序取第一個有資料的）、<b>版次</b>、<b>發行章日期</b>、<b>上傳日期</b>；由管理員在「廠內圖面標籤設定」跳窗的「版別／文件編號要用哪一種資料」逐類別勾選。<b>指定的那一種沒有資料時一律退回顯示「接收日期 YYYY.MM.DD」</b>（取上傳日，每份附件都有，不會整格空白）。<br>還沒設定過的類別採預設值：<b>自家出的圖</b>（加工圖、++圖…）預設<b>發行章日期</b>——這類圖即使填了版次，使用者要看的仍是發行章日期；<b>外來文件</b>（原圖、報價圖…）預設<b>自動</b>，多半會落到接收日期（客戶給的圖常常沒版次也沒發行章）。<br><b>一律不再拿檔名當版別</b>（檔名不是版別，而且列印還印不出來）；接收日期是有意義的管制資訊，<b>列印會照印</b>。顯示成接收日期的那幾列旁邊有橘色「<b>未設版次</b>」小籤，<b>點一下直接開主檔管理的該料號附件</b>去補版次。<br><b>這一欄顯示的是「制定當時」那一版的版別，不是現行版</b>——使用者明確要求「修改前與修改後是不可能相同」，所以版別欄固定是這份文件<b>第一次發行</b>時的版別，右邊修訂履歷列出每一次改版（含現行版，若沒有改版過就沒有修訂履歷）。</li>
             <li><b>日期合理性</b>（2026-10-02 使用者：「原圖的日期一定是最早，其他都是依據原圖/報價圖產出」）：<b>外來文件</b>（原圖、報價圖、規格書…客戶給的）是基準，日期應該最早；<b>自家出的圖</b>（加工圖、++圖…）是依據它們畫的，日期不得早於基準。判定直接用附件類別既有的「外來文件清單／自家出的圖」兩個旗標，<b>不寫死「原圖」這個名稱</b>。<br>發現倒置時在該列日期欄下方標紅字，並指出<b>真正該修的多半是哪一份</b>——實測料號 447-000C-820-18 就是原圖<b>沒填發行章日期、日期退回「上傳日」</b>才看起來比加工圖晚（另外還有 6512、10093 等料號同樣情形）。紅字旁的<b>「修正日期」</b>可直接改回來源附件：自家出的圖寫<b>發行章日期</b>、外來文件寫<b>文件日期(上傳日)</b>，不可填未來日期。<br><b>一般儲存只警示不擋</b>（補舊資料本來就可能先存起來再慢慢補），但<b>「確認清單」會擋下</b>——確認等於正式認可這份清單，日期自相矛盾的不該被確認掉（擋下時內容仍完整存著，不會白打）。</li>
             <li><b>預覽列印</b>（2026-10-02 使用者要求）：編輯畫面上方的「預覽列印」可以在<b>還沒確認</b>（甚至還沒存檔）時先看列印版面，頁首標明「預覽（未確認、未簽章，非正式文件）」、<b>不蓋製表簽章</b>、<b>不留列印紀錄</b>、也不會自動跳出列印對話框。正式列印仍維持原規則（要先確認、且沒有待更新的新檔案/內容變更）。</li>
             <li><b>同一種文件有兩份以上 → 由你確認，系統不自動決定</b>（2026-10-02 使用者要求）：上面的收斂只管得了<b>料號附件</b>（同料號同附件類別）。實務上還會出現<b>跨來源</b>的同名文件——例如同樣叫「原圖」，一份是料號附件、一份是報價附件（實測料號 3004012570 就是，而且報價那份檔名是 300401257、比料號少一碼，比較像重複上傳或掛錯）。這種「哪一份才算數」系統沒有把握，所以<b>一律不自動決定</b>。<br>判定範圍是<b>同一個「型態項目名稱」</b>，所以 BOSS圖／單製++圖 都顯示成「加工圖」時也會被拿出來問。建立或同步當下會跳窗，沒處理完也能先存檔，那幾列會持續標著橘色<b>「待確認重複」</b>小籤，點一下就能處理。<br>每一組請指定<b>一份現行版</b>，另外勾選的<b>不列入</b>代表不採認（重複上傳，比照「取消納入」，同步不會再加回來），<b>其餘沒勾的自動成為現行版的舊版</b>——不再是獨立項目列，改以修訂履歷呈現在現行版底下（列本身保留著，同步才不會把它當新檔案又加一列）。<br>如果這幾份<b>本來就是不同的文件</b>（像 BOSS圖 與 單製++圖），按該組右上角的<b>「這幾份不是重複，各自保留」</b>，各自維持一列、之後不再提示。</li>
@@ -1734,8 +1745,25 @@ function saveStampTpl(){
 
 /* ---------- 廠內圖面標籤設定 ---------- */
 $('#btnOwnDrawCats').on('click', function(){
-    $('#ownDrawEmpty').show().text('載入中…'); $('#ownDrawList').empty(); $('#voidCatList').empty();
+    $('#ownDrawEmpty').show().text('載入中…'); $('#ownDrawList').empty(); $('#voidCatList').empty(); $('#verSrcList').empty();
     openMask('ownDrawMask');
+    // 版別來源：逐類別一個下拉（候選是本模組會列入的類別）
+    $.getJSON(API, {action:'ver_source_get'}, function(vs){
+        if (!vs || !vs.success) return;
+        var h = '';
+        (vs.rows||[]).forEach(function(r){
+            var opts = '';
+            Object.keys(vs.sources).forEach(function(k){
+                opts += '<option value="'+esc(k)+'"'+(r.mode===k?' selected':'')+'>'+esc(vs.sources[k])+'</option>';
+            });
+            h += '<div class="vs-row" data-cat="'+r.id+'">'
+               + '<span class="vs-name">'+esc(r.category_name)+(r.disp!==r.category_name?('（'+esc(r.disp)+'）'):'')+'</span>'
+               + '<select class="vs-mode"'+(vs.can_edit?'':' disabled')+'>'+opts+'</select>'
+               + '<span class="vs-tag">'+(parseInt(r.own,10)===1?'自家出的圖':'外來文件')+'</span>'
+               + '</div>';
+        });
+        $('#verSrcList').html(h || '<span style="color:#8a6d45;">沒有列入本模組的附件類別。</span>');
+    });
     // 作廢類別：候選是「全部」附件類別（作廢標記本身通常不是自家出的圖，不會出現在上面那份清單裡）
     $.getJSON(API, {action:'void_cats_get'}, function(vr){
         if (!vr || !vr.success) return;
@@ -1786,7 +1814,12 @@ function saveOwnDrawCats(){
         // 一支管「哪些自家出的圖要列入」、一支管「哪個類別代表作廢」，不混成一支）
         $.post(API, {action:'void_cats_save', ids: JSON.stringify(collectVoidCatIds())}, function(r2){
             if (!r2.success){ alert(r2.message||'作廢類別儲存失敗'); return; }
-            closeMask('ownDrawMask');
+            var map = {};
+            $('#verSrcList .vs-row').each(function(){ map[$(this).attr('data-cat')] = $(this).find('.vs-mode').val(); });
+            $.post(API, {action:'ver_source_save', map: JSON.stringify(map)}, function(r3){
+                if (!r3.success){ alert(r3.message||'版別來源儲存失敗'); return; }
+                closeMask('ownDrawMask');
+            }, 'json');
         }, 'json');
     }, 'json');
 }

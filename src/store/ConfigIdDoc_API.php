@@ -468,6 +468,10 @@ case 'fetch_ext_for_part':
             'ref_file_name'=>$er['file_name'] ?? null, 'ref_bom_tag'=>$er['bom_tag'] ?? null,
             'ref_cat_id'=>!empty($er['cat_id']) ? (int)$er['cat_id'] : null,
             'ver_kind'=>$er['ver_kind'] ?? null, 'file_name_text'=>$er['file_name_text'] ?? null,
+            // 2026-10-02 使用者：「修改前與修改後是不可能相同」——版別顯示制定當時那一版，
+            // 現行版另外帶 cur_ver_text 供前端比對；change_key 是偵測來源有沒有變的鍵（即使
+            // 顯示值不變，例如同一天又補傳一份，change_key 仍會變）
+            'cur_ver_text'=>$er['cur_ver_text'] ?? null, 'change_key'=>$er['change_key'] ?? null,
             'ref_broken'=>false, 'effective_date'=>$er['doc_date'], 'doc_no_text'=>$er['doc_name'],
             // 2026-10-02 使用者回報「圖面無法點開」：這裡原本固定回 null，所以新增管制表（還沒存檔）
             // 的那幾列不會長出眼睛圖示。一律走 resolve_ref 取得網址（與存檔後顯示的是同一支，不另組）
@@ -600,6 +604,25 @@ case 'sync_all_missing':
     jout(['success'=>true,'part_count'=>$partCount,'item_count'=>$itemCount]);
 
 // ── 廠內「自家出的圖」標籤設定：從 is_own_drawing=1 的類別挑選要納入本模組的 ──────
+case 'ver_source_get':
+    needView($perms);
+    $rows = $db->query("SELECT id, category_name, COALESCE(NULLIF(external_doc_name,''), category_name) AS disp,
+                               COALESCE(is_own_drawing,0) own, COALESCE(is_external_doc,0) ext
+                          FROM quotation_file_categories
+                         WHERE is_external_doc=1 OR type_id_ctrl_include=1
+                      ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
+    $cfg = type_id_ctrl_ver_source_cfg($db);
+    foreach ($rows as &$r) { $r['mode'] = $cfg[(int)$r['id']] ?? 'auto'; }
+    unset($r);
+    jout(['success'=>true, 'rows'=>$rows, 'sources'=>TIC_VER_SOURCES, 'can_edit'=>$perms['canAdmin']]);
+
+case 'ver_source_save':
+    needAdmin($perms);
+    $map = json_decode((string)($_POST['map'] ?? '{}'), true);
+    if (!is_array($map)) $map = [];
+    type_id_ctrl_ver_source_save($db, $map, $uname);
+    jout(['success'=>true]);
+
 case 'void_cats_get':
     needView($perms);
     $rows = $db->query("SELECT id, category_name FROM quotation_file_categories ORDER BY category_name")->fetchAll(PDO::FETCH_ASSOC);
