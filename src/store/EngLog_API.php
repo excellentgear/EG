@@ -397,6 +397,25 @@ if ($action === 'save_log') {
        一筆都查不到，等於存了沒有用。 */
     if (!$binds) jerr('請至少綁定一個對象（BOM／料號／訂單／出貨單／退貨單／客戶／廠商）');
 
+    /* 2026-10-05：新建案件時若綁定訂單，且那張訂單已經有案件（多半是訂單追蹤「設計備註」
+       自動建立的），擋下不給建第二個——維持「一張訂單只有一個 eng_log 案件」的不變量，
+       不論從哪個入口建立。既有案件改用 item_save 加問題即可，不必在這裡重新開一張。 */
+    if ($id === 0) {
+        foreach ($binds as $b) {
+            if ((string)($b['bind_type'] ?? '') !== 'order') continue;
+            $oid = trim((string)($b['bind_id'] ?? ''));
+            if ($oid === '') continue;
+            $dupSt = $db->prepare("SELECT el.id, el.log_no FROM eng_log_bind bb JOIN eng_log el ON el.id=bb.log_id
+                                   WHERE bb.bind_type='order' AND bb.bind_id=? ORDER BY el.id LIMIT 1");
+            $dupSt->execute([$oid]);
+            $dup = $dupSt->fetch(PDO::FETCH_ASSOC);
+            if ($dup) {
+                jerr('這張訂單已經有案件「' . $dup['log_no'] . '」，請直接開啟那一筆新增問題，不要另外建立新案件。'
+                   . '（多半是訂單追蹤「設計備註」自動建立的）', ['dup_log_id' => (int)$dup['id']]);
+            }
+        }
+    }
+
     /* 類型沒選時依綁定自動判定（退貨單＝退貨、訂單＝批圖），使用者仍可自己改 */
     if ($logType === '' || $logType === 'other') {
         foreach ($binds as $b) {

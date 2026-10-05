@@ -376,8 +376,16 @@ function el_visible_sql(array $P): array
 /* ============================ 編號 ============================ */
 
 /**
- * 案件編號：EL + 民國年3碼 + MMDD + 3位流水（依建立日期，不是「今天」）。
+ * 案件編號：EL + 民國年3碼 + MMDD + 3位以上流水（依建立日期，不是「今天」）。
  * 例：2026-09-09 → EL-1150909001
+ *
+ * ★ 2026-10-05 修正：原本用 `ORDER BY log_no DESC LIMIT 1` 取「最後一筆」字串、
+ * 再 `substr($last,-3)` 取最後3位當數字——這兩步在同一天超過 999 筆之後都會壞：
+ * 後綴變成4位數時，字串排序是比字面值不是數值（"999" 排在 "1000" 前面，DESC 永遠選到
+ * "999" 那筆），而且 `substr(-3)` 不管前綴是幾位數、永遠只切最後3個字元，兩個問題疊加
+ * 會讓同一個候選號碼被反覆算出、撞鍵 50 次用盡後退到亂碼結尾。改成不管後綴幾位數，
+ * 一律用「去掉前綴之後的整串」轉成數字取最大值，只在超過三位數時才多印位數（三位數內
+ * 完全不影響既有格式／既有編號）。
  */
 function el_next_log_no(PDO $db, ?string $date = null): string
 {
@@ -385,11 +393,16 @@ function el_next_log_no(PDO $db, ?string $date = null): string
     $ts = strtotime($d);
     if ($ts === false) $ts = time();
     $prefix = 'EL-' . sprintf('%03d', (int)date('Y', $ts) - 1911) . date('md', $ts);
+    $plen = mb_strlen($prefix);
     for ($try = 0; $try < 50; $try++) {
-        $st = $db->prepare("SELECT log_no FROM eng_log WHERE log_no LIKE ? ORDER BY log_no DESC LIMIT 1");
+        $st = $db->prepare("SELECT log_no FROM eng_log WHERE log_no LIKE ?");
         $st->execute([$prefix . '%']);
-        $last = (string)$st->fetchColumn();
-        $seq = $last === '' ? 1 : ((int)substr($last, -3) + 1);
+        $max = 0;
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $existing) {
+            $suf = (int)substr((string)$existing, $plen);
+            if ($suf > $max) $max = $suf;
+        }
+        $seq = $max + 1;
         $no = $prefix . sprintf('%03d', $seq);
         $chk = $db->prepare("SELECT 1 FROM eng_log WHERE log_no = ?");
         $chk->execute([$no]);
@@ -1021,24 +1034,29 @@ function el_order_open_exists_sql(string $orderAlias = 'ot'): string
 }
 
 /**
- * 「業務」對象的預設人選＝這張訂單的打單人員（order_track.Created_By，存的是工號文字）。
- * 查不到就回 null（UI 端留空讓使用者手動選，不擋流程——舊訂單的 Created_By 可能是空的
- * 或對應不到現職人員）。
+ * 「業務」對象的預設人選＝這張訂單的打單人員（order_track.Created_By）。
+ *
+ * ★ 實測發現：Created_By 存的其實是 `user.id`（ai-rules/tools/migrate_user_id.php 遷移後
+ * 的 9 位員工編號，例如 "109100502"），不是登入帳號 `user.user_uname`（例如 "010"）——
+ * 兩者容易搞混，第一版就寫錯成比對 user_uname 永遠查不到人。優先用 id 查，查不到且不是
+ * 純數字時才退回 user_uname 相容極舊資料。查不到就回 null（UI 端留空讓使用者手動選，
+ * 不擋流程——舊訂單的 Created_By 可能是空的或對應不到現職人員）。
  * @param array $orderRow 至少要有 Created_By 鍵（order_track 的一列）
  */
 function el_order_business_default(PDO $db, array $orderRow): ?array
 {
-    $uname = trim((string)($orderRow['Created_By'] ?? ''));
-    if ($uname === '') return null;
+    $raw = trim((string)($orderRow['Created_By'] ?? ''));
+    if ($raw === '') return null;
+    $isId = ctype_digit($raw);
     try {
         $st = $db->prepare("SELECT u.id, u.user_cname, d.name AS dept, p.name AS pos, COALESCE(p.sort_order,999) s
                             FROM `user` u
                             LEFT JOIN user_department_position_map m ON m.user_id = u.id
                             LEFT JOIN department d ON d.id = m.department_id
                             LEFT JOIN position p ON p.id = m.position_id
-                            WHERE u.user_uname = ?
+                            WHERE " . ($isId ? "u.id = ?" : "u.user_uname = ?") . "
                             ORDER BY s ASC, m.is_main DESC, m.id ASC LIMIT 1");
-        $st->execute([$uname]);
+        $st->execute([$isId ? (int)$raw : $raw]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r || empty($r['id'])) return null;
         return [

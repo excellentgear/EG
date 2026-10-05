@@ -16,6 +16,12 @@ function safe_html($val) {
     return htmlspecialchars($val ?? '', ENT_QUOTES, 'UTF-8');
 }
 
+// 設計備註問答（2026-10-05 併入 eng_log）：唯一實作見 eng_log_lib.php。
+// 「批圖溝通中」原本判定 ot.ateNote 有內容且未轉生管；新輸入改走 eng_log 的問題項，
+// 不再寫進 ateNote 欄位本身，故統計條件也要跟著改成 el_order_open_exists_sql('ot')
+// （這張訂單綁定的案件底下還有未處理的問題項），全頁 6 處統計/篩選都吃同一份函式。
+require_once __DIR__ . '/../../src/common/eng_log_lib.php';
+
 // 將報價項目 process_notes（逗號分隔的 sub_tag_id）轉為製程名稱字串（・連接），寫回每列 'processes'
 function eg_build_process_names($pdo, array $rows) {
     $allSubTagIds = [];
@@ -64,6 +70,9 @@ require_once '../../src/common/order_price_lib.php';      // 訂單顯示單價�
 require_once '../../src/common/gear_save_lib.php';        // 存齒輪時不要洗掉本表單沒管到的欄位（唯一實作）
 
 $conn = new DBConnection();
+// eng_log 表一定要在本頁任何統計 SQL（el_order_open_exists_sql）跑之前存在，否則全頁掛掉；
+// CREATE TABLE IF NOT EXISTS 成本極低且有 static 旗標防重複，放最前面執行一次即可。
+el_ensure_schema($conn->getPDO());
 
 // ── 清掉舊版留在 session 裡的 NAS 檔名大清單（2026-09-03）──────────────────
 // 舊做法把 19,000 多個檔名存進 $_SESSION，session 檔膨脹到 600KB 以上，
@@ -1329,8 +1338,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             } elseif ($status === 'transferred') {
                 $whereClauses[] = "(ot.pmGet IS NOT NULL AND ot.pmGet != '')";
             } elseif ($status === 'communication') {
-                // 溝通中＝有設計備註且還沒轉生管，不論目前是否在審圖中都算（審圖中仍可能持續溝通修改）
-                $whereClauses[] = "((ot.pmGet IS NULL OR ot.pmGet = '') AND ot.ateNote IS NOT NULL AND ot.ateNote != '')";
+                // 溝通中＝有設計備註問題尚未處理且還沒轉生管，不論目前是否在審圖中都算
+                // （2026-10-05 改為 eng_log 問題項，見 OT_ATE_Q_OPEN_EXISTS_SQL）
+                $whereClauses[] = "((ot.pmGet IS NULL OR ot.pmGet = '') AND " . el_order_open_exists_sql('ot') . ")";
             }
 
             if (!empty($global)) {
@@ -1353,7 +1363,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $whereSql = "WHERE " . implode(' AND ', $whereClauses);
 
             // Query 1: 統計數據
-            $statsSql = "SELECT COUNT(*) as total_records, SUM(CASE WHEN (ot.pmGet IS NULL OR ot.pmGet = '') THEN 1 ELSE 0 END) as processing, SUM(CASE WHEN (ot.pmGet IS NOT NULL AND ot.pmGet != '') THEN 1 ELSE 0 END) as done, SUM(CASE WHEN ((ot.pmGet IS NULL OR ot.pmGet = '') AND ot.ateNote IS NOT NULL AND ot.ateNote != '') THEN 1 ELSE 0 END) as communication FROM order_track ot LEFT JOIN user u ON u.id = ot.ate $whereSql";
+            $statsSql = "SELECT COUNT(*) as total_records, SUM(CASE WHEN (ot.pmGet IS NULL OR ot.pmGet = '') THEN 1 ELSE 0 END) as processing, SUM(CASE WHEN (ot.pmGet IS NOT NULL AND ot.pmGet != '') THEN 1 ELSE 0 END) as done, SUM(CASE WHEN ((ot.pmGet IS NULL OR ot.pmGet = '') AND " . el_order_open_exists_sql('ot') . ") THEN 1 ELSE 0 END) as communication FROM order_track ot LEFT JOIN user u ON u.id = ot.ate $whereSql";
             $stmtStats = $pdo->prepare($statsSql);
             $stmtStats->execute($params);
             $statsResult = $stmtStats->fetch(PDO::FETCH_ASSOC);
@@ -1632,6 +1642,11 @@ $can_client_reminder_manage = false;
 // 稽核製程標籤設定（2026-10-02 新增）：全新功能，舊制沒有對應權限碼，一律預設關閉
 // （看得到本頁的人都點得到標籤；但「哪些製程是稽核製程」「存檔必選」「批次補設定」要另外指派）
 $can_as_tag_setting        = false;
+// 設計備註問答元件（2026-10-05 新增，併入 eng_log 資料模型）：全新功能，舊制沒有對應權限碼。
+// 新增問題／回覆沿用「可編輯訂單」一般門檻（業務與設計角色目前都有 ot_edit，貼合現場協作習慣）；
+// 「標記已處理／代填任何對象」另外指派專屬角色，與舊有 ot_design_note（只決定舊 textarea 能不能打字）脫鉤。
+$can_design_qa             = $can_update;
+$can_design_qa_resolve     = false;
 $can_op_convert            = $can_create;                               // OP轉訂單（舊制沿用一般新增權限）
 $can_view_amount           = true;                                      // 金額顯示（舊制從未限制過，一律可見）
 $can_keyway_calc           = true;                                      // 鍵槽計算（舊制從未限制過，一律可見）
@@ -1750,6 +1765,10 @@ $OT_PAGE_FEATURES = [
     // 全製／單製非AS認證／廠內治具…）。**標籤本身看得到本頁的人都點得到**（那是填單的一部分）；
     // 本項只管「哪些製程算稽核製程」「存檔要不要強制必選」「舊資料批次補設定」這三件管理動作。
     ['group'=>'稽核製程標籤', 'code'=>'ot_as_tag_setting',       'label'=>'設定稽核製程標籤（含存檔必選開關與舊資料批次補設定）'],
+    // 2026-10-05 使用者要求：把工程處理紀錄(eng_log)併入設計備註，問答元件的基本操作
+    // （新增問題／回覆）沿用上面的 ot_edit；這裡只新增「標記已處理」的設計身分門檻，
+    // 刻意與 ot_design_note（舊 textarea 能不能打字）分開，不自動套用在既有「設計」角色上。
+    ['group'=>'設計與批圖',   'code'=>'ot_design_note_resolve',  'label'=>'設計備註問題（標記已處理／代填任何對象）'],
 ];
 
 // ── RBAC 權限檢查（$OT_USE_RBAC = true 時生效）───────────────────────────
@@ -1774,6 +1793,8 @@ if ($OT_USE_RBAC) {
     $can_keyway_calc            = ot_hasF('ot_keyway_calc');
     $can_client_reminder_manage = ot_hasF('ot_client_reminder_manage');
     $can_as_tag_setting        = ot_hasF('ot_as_tag_setting');
+    $can_design_qa             = $can_update;                   // 新增問題／回覆＝一般編輯門檻（見上方註解）
+    $can_design_qa_resolve     = ot_hasF('ot_design_note_resolve');
     $can_designer_assign_cog   = $IS_OT_RBAC_ADMIN;
     $can_master_edit           = ot_hasF('ot_master_edit');
     $show_op_col      = ($can_create || $can_update);
@@ -2044,6 +2065,183 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_note_logs') {
     exit;
 }
 
+// ── 設計備註問答（2026-10-05 併入 eng_log）─────────────────────────────────
+// 使用者要求：工程處理紀錄(eng_log.php)併入訂單追蹤「設計備註」欄位，不要讓現場多一個
+// 輸入入口；eng_log.php 退居查詢/明細頁（跟訂單無關的一般工程問題仍可在那邊手動建立）。
+// 權限刻意分兩層：$can_design_qa（＝一般編輯訂單門檻 ot_edit，業務與設計皆有，貼合現場
+// 協作習慣）管「新增問題／回覆」；$can_design_qa_resolve（新角色，另外指派）管「標記已處理／
+// 代填任何對象」。核心資料操作一律呼叫 eng_log_lib.php 的共用函式，不在這裡重寫一次 SQL。
+
+// 讀取本頁用的「問題對象」候選清單：客戶／廠商直接查主檔，公司內部人員走 people_lib
+// （鐵律：長清單一律可打字篩選、人員清單一律走 eg_people_list，不自己拼人員 SQL）。
+// 刻意不呼叫 EngLog_API.php 的對應端點——那支以 eng_log 模組角色把關(fail-closed)，
+// 訂單追蹤這邊的使用者多半沒有那個模組的角色，呼叫會被擋下。
+if (isset($_POST['action']) && $_POST['action'] === 'ate_q_target_search') {
+    header('Content-Type: application/json');
+    $pdo = $conn->getPDO();
+    try {
+        if (!$can_design_qa) throw new Exception('沒有使用此功能的權限');
+        $type = trim((string)($_POST['type'] ?? ''));
+        $kw   = trim((string)($_POST['kw'] ?? ''));
+        $rows = [];
+        if ($type === 'customer') {
+            $st = $pdo->prepare("SELECT customer_id AS id, customer AS label FROM customer_list
+                                 WHERE customer_id LIKE ? OR customer LIKE ? ORDER BY customer LIMIT 30");
+            $st->execute(["%$kw%", "%$kw%"]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        } elseif ($type === 'maker') {
+            $st = $pdo->prepare("SELECT maker_id_no AS id, maker_id AS label FROM maker_list
+                                 WHERE maker_id_no LIKE ? OR maker_id LIKE ? ORDER BY maker_id LIMIT 30");
+            $st->execute(["%$kw%", "%$kw%"]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        } elseif ($type === 'user') {
+            require_once __DIR__ . '/../../src/common/people_lib.php';
+            foreach (eg_people_list($pdo, ['all_posts' => true]) as $p) {
+                $post = trim(((string)($p['dept_name'] ?? '')) . ' ' . ((string)($p['position_name'] ?? '')));
+                $disp = trim($post . ' ' . (string)$p['user_cname']);
+                if ($kw !== '' && mb_stripos($disp, $kw) === false) continue;
+                $rows[] = ['id' => (string)$p['id'], 'label' => (string)$p['user_cname'],
+                           'display' => $disp, 'post' => $post, 'post_key' => (string)($p['post_key'] ?? $p['id'])];
+                if (count($rows) >= 40) break;
+            }
+        } else {
+            throw new Exception('對象類別不正確');
+        }
+        echo json_encode(['success' => true, 'rows' => $rows]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// 讀取某張訂單目前的問答內容（唯讀；渲染小跳窗用）
+if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
+    header('Content-Type: application/json');
+    $pdo = $conn->getPDO();
+    try {
+        if (!$can_design_qa) throw new Exception('沒有使用此功能的權限');
+        $oid = (int)($_POST['order_id'] ?? 0);
+        if (!$oid) throw new Exception('未指定訂單');
+        $st = $pdo->prepare("SELECT el.id FROM eng_log_bind b JOIN eng_log el ON el.id = b.log_id
+                             WHERE b.bind_type='order' AND b.bind_id=? ORDER BY el.id LIMIT 1");
+        $st->execute([(string)$oid]);
+        $logId = (int)$st->fetchColumn();
+        $items = [];
+        if ($logId > 0) {
+            $it = $pdo->prepare("SELECT * FROM eng_log_item WHERE log_id=? ORDER BY seq, id");
+            $it->execute([$logId]);
+            $items = $it->fetchAll(PDO::FETCH_ASSOC);
+            if ($items) {
+                $ids = implode(',', array_map(fn($x) => (int)$x['id'], $items));
+                $rp = $pdo->query("SELECT r.*, u.user_cname AS created_by_name FROM eng_log_reply r
+                                   LEFT JOIN `user` u ON u.id = r.created_by
+                                   WHERE r.item_id IN ({$ids}) ORDER BY r.replied_on, r.id")->fetchAll(PDO::FETCH_ASSOC);
+                $rmap = [];
+                foreach ($rp as $r) $rmap[(int)$r['item_id']][] = $r;
+                foreach ($items as &$x) { $x['replies'] = $rmap[(int)$x['id']] ?? []; }
+                unset($x);
+            }
+        }
+        $ordSt = $pdo->prepare("SELECT Order_oo, d_id, Client_name, Created_By FROM order_track WHERE Order_id=?");
+        $ordSt->execute([$oid]);
+        $ord = $ordSt->fetch(PDO::FETCH_ASSOC) ?: [];
+        $bizDefault = el_order_business_default($pdo, $ord);
+        echo json_encode(['success' => true, 'log_id' => $logId, 'items' => $items,
+            'can_resolve' => $can_design_qa_resolve, 'biz_default' => $bizDefault,
+            'order' => ['order_no' => (string)($ord['Order_oo'] ?? ''), 'part_no' => (string)($ord['d_id'] ?? ''),
+                        'client' => (string)($ord['Client_name'] ?? '')]]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// 新增一或多條問題（鍵盤↓可在跳窗內逐列新增，一次送出全部）
+if (isset($_POST['action']) && $_POST['action'] === 'ate_q_add') {
+    header('Content-Type: application/json');
+    $pdo = $conn->getPDO();
+    try {
+        if (!$can_design_qa) throw new Exception('沒有使用此功能的權限');
+        $oid = (int)($_POST['order_id'] ?? 0);
+        if (!$oid) throw new Exception('未指定訂單');
+        $chkOrd = $pdo->prepare("SELECT 1 FROM order_track WHERE Order_id=?");
+        $chkOrd->execute([$oid]);
+        if (!$chkOrd->fetchColumn()) throw new Exception('查無此訂單');
+        $rows = json_decode((string)($_POST['items'] ?? '[]'), true);
+        if (!is_array($rows) || !$rows) throw new Exception('請至少填寫一條問題');
+        $nowL = (string)$pdo->query("SELECT NOW()")->fetchColumn();
+        $todayL = substr($nowL, 0, 10);
+        $pdo->beginTransaction();
+        $logId = el_order_case_get_or_create($pdo, $oid, ['uid' => $id, 'dept_id' => null], $nowL, $todayL);
+        $created = 0;
+        foreach ($rows as $r) {
+            if (!is_array($r)) continue;
+            el_item_upsert($pdo, $logId, 0, $r, $nowL, $todayL);
+            $created++;
+        }
+        if (!$created) { $pdo->rollBack(); throw new Exception('請至少填寫一條問題'); }
+        el_reindex($pdo, $logId);
+        $pdo->prepare("UPDATE eng_log SET updated_at=? WHERE id=?")->execute([$nowL, $logId]);
+        $pdo->commit();
+        $cnt = (int)$pdo->query("SELECT COUNT(*) FROM eng_log_item WHERE log_id={$logId} AND status NOT IN ('resolved','dropped')")->fetchColumn();
+        echo json_encode(['success' => true, 'log_id' => $logId, 'created' => $created, 'open_count' => $cnt]);
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// 回覆（可一次套用到多條問題；可選同時標記已處理，標記已處理需 $can_design_qa_resolve）
+if (isset($_POST['action']) && $_POST['action'] === 'ate_q_reply') {
+    header('Content-Type: application/json');
+    $pdo = $conn->getPDO();
+    try {
+        if (!$can_design_qa) throw new Exception('沒有使用此功能的權限');
+        $logId = (int)($_POST['log_id'] ?? 0);
+        if (!$logId) throw new Exception('未指定案件');
+        $itemIds = json_decode((string)($_POST['item_ids'] ?? '[]'), true);
+        if (!is_array($itemIds)) $itemIds = [];
+        $resolve = !empty($_POST['resolve']);
+        if ($resolve && !$can_design_qa_resolve) throw new Exception('沒有標記已處理的權限');
+        $nowL = (string)$pdo->query("SELECT NOW()")->fetchColumn();
+        $todayL = substr($nowL, 0, 10);
+        $pdo->beginTransaction();
+        $ret = el_reply_add($pdo, $logId, $itemIds, $_POST, $id, $nowL, $todayL);
+        if ($resolve) {
+            foreach ($itemIds as $iid) el_item_set_status($pdo, $logId, (int)$iid, 'resolved', '', $nowL);
+        }
+        el_order_case_sync_status($pdo, $logId, $nowL);
+        $pdo->commit();
+        $cnt = (int)$pdo->query("SELECT COUNT(*) FROM eng_log_item WHERE log_id={$logId} AND status NOT IN ('resolved','dropped')")->fetchColumn();
+        echo json_encode(['success' => true, 'open_count' => $cnt, 'reply_count' => count($ret['ids'])]);
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// 單獨標記/取消已處理（限 $can_design_qa_resolve）
+if (isset($_POST['action']) && $_POST['action'] === 'ate_q_resolve') {
+    header('Content-Type: application/json');
+    $pdo = $conn->getPDO();
+    try {
+        if (!$can_design_qa_resolve) throw new Exception('沒有標記已處理的權限');
+        $logId  = (int)($_POST['log_id'] ?? 0);
+        $itemId = (int)($_POST['id'] ?? 0);
+        $status = trim((string)($_POST['status'] ?? 'resolved'));
+        $nowL = (string)$pdo->query("SELECT NOW()")->fetchColumn();
+        el_item_set_status($pdo, $logId, $itemId, $status, '', $nowL);
+        el_order_case_sync_status($pdo, $logId, $nowL);
+        $cnt = (int)$pdo->query("SELECT COUNT(*) FROM eng_log_item WHERE log_id={$logId} AND status NOT IN ('resolved','dropped')")->fetchColumn();
+        echo json_encode(['success' => true, 'open_count' => $cnt]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
 // --- 新增：AJAX 分頁與篩選 API (由前端 JS 呼叫) ---
 if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     $pdo = $conn->getPDO(); // [FIX] 確保 $pdo 變數在此作用域可用
@@ -2170,7 +2368,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     } elseif ($status === 'transferred') {
         $whereClauses[] = "(ot.pmGet IS NOT NULL AND (ot.Order_status IS NULL OR ot.Order_status != 6))";
     } elseif ($status === 'communication') {
-        $whereClauses[] = "(ot.pmGet IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND (ot.Order_status IS NULL OR ot.Order_status != 6))";
+        $whereClauses[] = "(ot.pmGet IS NULL AND " . el_order_open_exists_sql('ot') . " AND (ot.Order_status IS NULL OR ot.Order_status != 6))";
     }
     if (!empty($global)) {
         // 全表搜尋一律用 LIKE 掃全部可見欄位。
@@ -2203,7 +2401,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         $mainStatsSql = "SELECT COUNT(*) as total_records,
             SUM(CASE WHEN (ot.pmGet IS NULL AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as processing,
             SUM(CASE WHEN (ot.pmGet IS NOT NULL AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as done,
-            SUM(CASE WHEN (ot.pmGet IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as communication,
+            SUM(CASE WHEN (ot.pmGet IS NULL AND " . el_order_open_exists_sql('ot') . " AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as communication,
             SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op,
             SUM(CASE WHEN (ot.qty_over_range = 1) THEN 1 ELSE 0 END) as qty_over,
             SUM(CASE WHEN ($ocrPendingExistsSql) THEN 1 ELSE 0 END) as pending_reminder
@@ -2214,7 +2412,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         $mainStatsSql = "SELECT COUNT(*) as total_records,
             SUM(CASE WHEN (ot.pmGet IS NULL AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as processing,
             SUM(CASE WHEN (ot.pmGet IS NOT NULL AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as done,
-            SUM(CASE WHEN (ot.pmGet IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as communication,
+            SUM(CASE WHEN (ot.pmGet IS NULL AND " . el_order_open_exists_sql('ot') . " AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as communication,
             SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op,
             SUM(CASE WHEN (ot.qty_over_range = 1) THEN 1 ELSE 0 END) as qty_over,
             SUM(CASE WHEN ($ocrPendingExistsSql) THEN 1 ELSE 0 END) as pending_reminder
@@ -2439,6 +2637,18 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                 foreach ($qL->fetchAll(PDO::FETCH_ASSOC) as $rL) { $ate_log_map[(int)$rL['Order_id']] = (int)$rL['cnt']; }
             }
         } catch (Exception $eL) { $ate_log_map = []; }
+    }
+
+    // 設計備註問答（2026-10-05 併入 eng_log）：Order_id => 目前未處理的問題數。
+    // 批次版 el_order_open_item_counts()（唯一實作見 eng_log_lib.php），避免每列各查一次。
+    require_once __DIR__ . '/../../src/common/eng_log_lib.php';
+    el_ensure_schema($pdo);
+    $ate_q_map = [];
+    if (!empty($order_list)) {
+        try {
+            $oidsQ = array_values(array_filter(array_map('intval', array_column($order_list, 'Order_id'))));
+            $ate_q_map = el_order_open_item_counts($pdo, $oidsQ);
+        } catch (Throwable $eQ) { $ate_q_map = []; }
     }
 
     // 客戶提醒「待處理」筆數（2026-09-23）：Order_id => 筆數。整頁一次查完，不要每列各打一次；
@@ -3200,28 +3410,30 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     </div>
                     <?php endif; ?>
                 </td>
-                <td>
-                    <div class="textarea-wrap">
-                        <textarea class="table-textarea" name="ateNote" <?= $can_edit_ateNote ? '' : 'readonly' ?> rows="1" data-orig="<?= safe_html($order['ateNote']) ?>" oninput="autoResize(this)" onfocus="autoResize(this)" onblur="autoResize(this)" onkeydown="handleKeyDown(event, this, '<?= $order['Order_id'] ?>')"><?= safe_html($order['ateNote']) ?></textarea>
-                        <span class="note-more-hint" title="內容超過5行，點擊欄位可展開查看全文"><i class="fa fa-ellipsis-h"></i> 還有更多</span>
-                    </div>
+                <td data-ate-q-order="<?= (int)$order['Order_id'] ?>">
                     <?php
-                    // 設計備註「已處理」與溝通紀錄（2026-09-03 使用者要求）
-                    // 已處理＝把目前這段內容轉成一筆溝通紀錄並清空欄位，之後可以繼續打新的；
-                    // 欄位一空「批圖溝通中」就不會再算這一筆（該卡片的判定本來就是 ateNote 有內容且未轉生管），
-                    // 所以統計 SQL 一行都不必改，剩下的自然就是「還沒處理完」的訂單。
+                    // 設計備註問答（2026-10-05 併入 eng_log，取代原本單一文字框的 ateNote）：
+                    // 打字→跳窗選對象(業務/客戶/廠商/純備註)→可多題→多輪回覆→逐題可標記已處理。
+                    // 既有的「溝通紀錄」(order_ate_note_log) 是改版前按過「已處理」的歷史快照，
+                    // 原樣保留唯讀查看；舊的自由文字內容已由遷移腳本搬成第一筆「純備註」問題項。
+                    $_ateQOpen = (int)($ate_q_map[(int)$order['Order_id']] ?? 0);
                     $_ateLogCnt = (int)($ate_log_map[(int)$order['Order_id']] ?? 0);
-                    $_ateHasTxt = (trim((string)($order['ateNote'] ?? '')) !== '');
                     ?>
-                    <div class="ate-note-bar">
-                        <?php if ($can_edit_ateNote): ?>
-                        <button type="button" class="ate-note-btn ate-note-done" <?= $_ateHasTxt ? '' : 'style="display:none;"' ?>
-                                onclick="ateNoteDone(<?= (int)$order['Order_id'] ?>, this)"
-                                title="把目前這段設計備註轉成溝通紀錄並清空欄位，之後可以繼續打新的內容；清空後就不再算「批圖溝通中」"><i class="fa fa-check"></i> 已處理</button>
+                    <div class="ate-q-cell">
+                        <?php if ($_ateQOpen > 0): ?>
+                        <button type="button" class="ate-q-badge" onclick="ateQOpen(<?= (int)$order['Order_id'] ?>)"
+                                title="點擊查看／回覆這張訂單的設計備註問題"><i class="fa fa-flag"></i> <?= $_ateQOpen ?> 待處理</button>
+                        <?php elseif ($can_design_qa): ?>
+                        <button type="button" class="ate-q-add-btn" onclick="ateQOpen(<?= (int)$order['Order_id'] ?>)"
+                                title="新增設計備註問題"><i class="fa fa-plus"></i> 新增</button>
+                        <?php else: ?>
+                        <span class="text-muted" style="font-size:11px;">（無）</span>
                         <?php endif; ?>
+                    </div>
+                    <div class="ate-note-bar">
                         <button type="button" class="ate-note-btn ate-note-log" <?= $_ateLogCnt > 0 ? '' : 'style="display:none;"' ?>
                                 onclick="openAteNoteLogs(<?= (int)$order['Order_id'] ?>)"
-                                title="查看這張訂單過去按過「已處理」的設計備註（溝通紀錄）"><i class="fa fa-history"></i> 溝通紀錄 <span class="n"><?= $_ateLogCnt ?></span></button>
+                                title="查看改版前「已處理」的歷史溝通紀錄"><i class="fa fa-history"></i> 溝通紀錄 <span class="n"><?= $_ateLogCnt ?></span></button>
                     </div>
                 </td>
                 <td class="col-status" name="pmGetCell">
@@ -3418,7 +3630,7 @@ $initResult = $conn->getPDO()->query($initStatsSql)->fetch(PDO::FETCH_ASSOC);
 $processingSql = "SELECT
     SUM(CASE WHEN (ot.pmGet IS NULL AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as processing,
     SUM(CASE WHEN (ot.pmGet IS NOT NULL AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as done,
-    SUM(CASE WHEN (ot.pmGet IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as communication
+    SUM(CASE WHEN (ot.pmGet IS NULL AND " . el_order_open_exists_sql('ot') . " AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as communication
     FROM order_track ot $yearCondInit";
 $processingResult = $conn->getPDO()->query($processingSql)->fetch(PDO::FETCH_ASSOC);
 
@@ -3675,6 +3887,43 @@ foreach($dCounts as $c) {
                         background:#fff; padding:6px 9px; margin-bottom:6px; }
         .ate-log-item .meta { font-size:11px; color:#8a7355; margin-bottom:3px; }
         .ate-log-item .txt { font-size:13px; color:#333; white-space:pre-wrap; word-break:break-word; }
+
+        /* 設計備註問答（2026-10-05 併入 eng_log）＝暖色系（ai-rules/10），色票沿用本頁既有的
+           急件燈號(#DD5138/#F0A24B)與溝通紀錄配色(#EADFCD/#D8CBB8/#6b5638)，不另創新色。 */
+        .ate-q-cell { min-height:20px; }
+        .ate-q-badge, .ate-q-add-btn { border:1px solid; border-radius:3px; font-size:10px; line-height:1.6;
+            padding:1px 6px; cursor:pointer; }
+        .ate-q-badge { background:#DD5138; border-color:#c14631; color:#fff; }
+        .ate-q-badge:hover { background:#c84a31; }
+        .ate-q-add-btn { background:#FAF6EF; border-color:#D8CBB8; color:#6b5638; }
+        .ate-q-add-btn:hover { background:#F1E8D9; }
+        #ate-q-modal .modal-dialog { max-width:600px; width:92%; }
+        #ate-q-modal .modal-body { max-height:72vh; overflow-y:auto; padding:14px; }
+        .ate-q-item { border:1px solid #EADFCD; border-left:3px solid #F0A24B; border-radius:4px;
+            background:#fff; padding:8px 10px; margin-bottom:8px; }
+        .ate-q-item-head { display:flex; align-items:center; gap:7px; margin-bottom:4px; }
+        .ate-q-stbadge { font-size:10px; color:#fff; border-radius:3px; padding:1px 6px; }
+        .ate-q-target { font-size:11px; color:#8a7355; }
+        .ate-q-question { font-size:13px; color:#333; white-space:pre-wrap; word-break:break-word; margin-bottom:4px; }
+        .ate-q-reply { background:#FAF6EF; border-radius:3px; padding:4px 7px; margin:4px 0; }
+        .ate-q-reply-meta { font-size:10px; color:#998a6e; display:block; margin-bottom:2px; }
+        .ate-q-reply-content { font-size:12px; color:#444; white-space:pre-wrap; word-break:break-word; }
+        .ate-q-item-actions { display:flex; gap:6px; margin-top:4px; }
+        .ate-q-btn { border:1px solid #D8CBB8; border-radius:3px; background:#fff; color:#6b5638;
+            font-size:11px; padding:1px 8px; cursor:pointer; }
+        .ate-q-btn:hover { background:#F1E8D9; }
+        .ate-q-btn-ok { border-color:#E0A46A; color:#8a4b12; background:#FDF1E3; }
+        .ate-q-btn-ok:hover { background:#F7DFC5; }
+        .ate-q-replybox { margin-top:6px; border-top:1px dashed #EADFCD; padding-top:6px; }
+        .ate-q-replybox textarea { font-size:12px; margin-bottom:4px; }
+        .ate-q-chk { display:block; font-size:11px; color:#6b5638; font-weight:400; margin-bottom:4px; }
+        .ate-q-composer { border-top:2px solid #EADFCD; margin-top:10px; padding-top:10px; }
+        .ate-q-add-title { font-size:12px; color:#8a4b12; font-weight:700; margin-bottom:6px; }
+        .ate-q-add-table { width:100%; }
+        .ate-q-add-table td { vertical-align:top; padding:3px; }
+        .ate-q-add-table textarea.ate-q-qtext { width:100%; font-size:12px; }
+        .ate-q-add-table select { width:100%; font-size:12px; }
+        .ate-q-add-foot { display:flex; justify-content:space-between; margin-top:6px; }
 
         /* 備註欄位超過5行時的「還有更多」提示 */
         .textarea-wrap { position: relative; }
@@ -8140,6 +8389,222 @@ foreach($dCounts as $c) {
             });
         }
 
+        // ══ 設計備註問答（2026-10-05 併入 eng_log）══════════════════════════════
+        // 打字→小跳窗選對象(業務/客戶/廠商/純備註)→可多題→多輪回覆→逐題可標記已處理。
+        // 每個動作都是獨立、立即送出的 AJAX（不做「全部填完再按總存檔」），成功後只局部
+        // 更新這一列的徽章，不整頁重載（比照 applySyncedCustomerToRow 既有模式）。
+        var ATE_Q = { orderId: 0, logId: 0, canResolve: false, bizDefault: null, items: [], rows: [],
+                      cands: { customer: null, maker: null, user: null } };
+
+        function ateQNewRow() {
+            var d = ATE_Q.bizDefault;
+            return { question: '', target_type: 'user',
+                     target_id: d ? String(d.id) : '', target_label: d ? d.name : '', target_post: d ? d.post : '' };
+        }
+
+        function ateQOpen(orderId) {
+            ATE_Q.orderId = orderId;
+            $.post('', { action: 'ate_q_list', order_id: orderId }, function(res) {
+                if (!res || !res.success) { showToast((res && res.message) || '讀取失敗'); return; }
+                ATE_Q.logId = res.log_id || 0;
+                ATE_Q.canResolve = !!res.can_resolve;
+                ATE_Q.bizDefault = res.biz_default || null;
+                ATE_Q.items = res.items || [];
+                ATE_Q.rows = [ateQNewRow()];
+                var ord = res.order || {};
+                $('#ate-q-modal-title').text([ord.order_no, ord.part_no, ord.client].filter(function(x){return x;}).join('　'));
+                $('#ate-q-modal').modal('show');
+                ateQEnsureCandidates('customer', function() {
+                ateQEnsureCandidates('maker', function() {
+                ateQEnsureCandidates('user', function() {
+                    ateQRenderItems();
+                    ateQRedrawComposer();
+                }); }); });
+            }, 'json').fail(function() { showToast('讀取失敗，請重新整理後再試'); });
+        }
+
+        function ateQEnsureCandidates(type, cb) {
+            if (ATE_Q.cands[type]) { cb(); return; }
+            $.post('', { action: 'ate_q_target_search', type: type, kw: '' }, function(res) {
+                ATE_Q.cands[type] = (res && res.success) ? res.rows : [];
+                cb();
+            }, 'json').fail(function() { ATE_Q.cands[type] = []; cb(); });
+        }
+
+        function ateQTargetLabel(it) {
+            if (!it.target_type) return '純備註';
+            var map = { customer: '客戶', maker: '廠商', user: '業務' };
+            return (map[it.target_type] || it.target_type) + '：' + (it.target_label || '（未指定）');
+        }
+
+        function ateQStatusBadge(st) {
+            var map = { waiting: ['待回覆', '#DD5138'], answered: ['已回覆', '#F0A24B'],
+                        resolved: ['已處理', '#EADFCD'], dropped: ['不處理', '#D8CBB8'] };
+            var x = map[st] || [st, '#999'];
+            var light = (st === 'resolved' || st === 'dropped');
+            return '<span class="ate-q-stbadge" style="background:' + x[1] + ';' + (light ? 'color:#6b5638;' : '') + '">' + x[0] + '</span>';
+        }
+
+        function ateQRenderItems() {
+            var html = '';
+            if (ATE_Q.items.length) {
+                ATE_Q.items.forEach(function(it) { html += ateQItemHtml(it); });
+            } else {
+                html = '<div class="text-muted" style="font-size:12px;margin-bottom:6px;">目前沒有任何問題。</div>';
+            }
+            $('#ate-q-items-wrap').html(html);
+        }
+
+        function ateQItemHtml(it) {
+            var repliesHtml = '';
+            (it.replies || []).forEach(function(r) {
+                var when = r.replied_on ? (typeof egFmtDate === 'function' ? egFmtDate(r.replied_on) : r.replied_on) : '';
+                repliesHtml += '<div class="ate-q-reply"><span class="ate-q-reply-meta">' + escapeHtml(r.reply_by || r.created_by_name || '') +
+                    (when ? ' ・ ' + escapeHtml(when) : '') + '</span><div class="ate-q-reply-content">' + escapeHtml(r.content || '') + '</div></div>';
+            });
+            var actions = '<button type="button" class="ate-q-btn" onclick="ateQToggleReplyBox(' + it.id + ')"><i class="fa fa-reply"></i> 回覆</button>';
+            if (ATE_Q.canResolve) {
+                actions += (it.status === 'resolved' || it.status === 'dropped')
+                    ? '<button type="button" class="ate-q-btn" onclick="ateQResolve(' + it.id + ',\'waiting\')">退回待回覆</button>'
+                    : '<button type="button" class="ate-q-btn ate-q-btn-ok" onclick="ateQResolve(' + it.id + ',\'resolved\')"><i class="fa fa-check"></i> 已處理</button>';
+            }
+            return '<div class="ate-q-item">'
+                + '<div class="ate-q-item-head">' + ateQStatusBadge(it.status) + '<span class="ate-q-target">' + escapeHtml(ateQTargetLabel(it)) + '</span></div>'
+                + '<div class="ate-q-question">' + escapeHtml(it.question || '') + '</div>'
+                + repliesHtml
+                + '<div class="ate-q-item-actions">' + actions + '</div>'
+                + '<div class="ate-q-replybox" id="ate-q-replybox-' + it.id + '" style="display:none;">'
+                +   '<textarea class="form-control" rows="2" placeholder="輸入回覆內容…" id="ate-q-replytxt-' + it.id + '"></textarea>'
+                +   (ATE_Q.canResolve ? '<label class="ate-q-chk"><input type="checkbox" id="ate-q-replyok-' + it.id + '"> 回覆後直接標記已處理</label>' : '')
+                +   '<button type="button" class="btn btn-xs btn-warm" onclick="ateQSubmitReply(' + it.id + ')"><i class="fa fa-paper-plane"></i> 送出回覆</button>'
+                + '</div></div>';
+        }
+
+        function ateQToggleReplyBox(itemId) { $('#ate-q-replybox-' + itemId).toggle(); }
+
+        function ateQSubmitReply(itemId) {
+            var $ta = $('#ate-q-replytxt-' + itemId);
+            var txt = $.trim($ta.val());
+            if (!txt) { showToast('請輸入回覆內容'); return; }
+            var resolve = $('#ate-q-replyok-' + itemId).is(':checked') ? 1 : 0;
+            $.post('', { action: 'ate_q_reply', log_id: ATE_Q.logId, item_ids: JSON.stringify([itemId]),
+                         content: txt, resolve: resolve }, function(res) {
+                if (!res || !res.success) { showToast((res && res.message) || '回覆失敗'); return; }
+                ateQApplyBadge(ATE_Q.orderId, res.open_count);
+                ateQOpen(ATE_Q.orderId);
+            }, 'json').fail(function() { showToast('回覆失敗，請重試'); });
+        }
+
+        function ateQResolve(itemId, status) {
+            $.post('', { action: 'ate_q_resolve', log_id: ATE_Q.logId, id: itemId, status: status }, function(res) {
+                if (!res || !res.success) { showToast((res && res.message) || '操作失敗'); return; }
+                ateQApplyBadge(ATE_Q.orderId, res.open_count);
+                ateQOpen(ATE_Q.orderId);
+            }, 'json').fail(function() { showToast('操作失敗，請重試'); });
+        }
+
+        // ── 新增問題 composer：鍵盤 ↓ 自動加列走共用 eg_input_rules.js（data-eg-row-add/del） ──
+        function ateQRedrawComposer() {
+            if (!window.OT_CAN_DESIGN_QA) { $('#ate-q-composer-wrap').html(''); return; }
+            var html = '<div class="ate-q-composer"><div class="ate-q-add-title"><i class="fa fa-plus-circle"></i> 新增問題</div>'
+                + '<table class="ate-q-add-table"><tbody data-eg-row-add="ateQRowAdd" data-eg-row-del="ateQRowDel">';
+            ATE_Q.rows.forEach(function(r, idx) { html += ateQRowHtml(r, idx); });
+            html += '</tbody></table>'
+                + '<div class="ate-q-add-foot">'
+                +   '<button type="button" class="btn btn-xs btn-default" onclick="ateQRowAdd()"><i class="fa fa-plus"></i> 再加一條</button>'
+                +   '<button type="button" class="btn btn-sm btn-warm" id="ate-q-submit-new" onclick="ateQSubmitNew()"><i class="fa fa-paper-plane"></i> 送出</button>'
+                + '</div></div>';
+            $('#ate-q-composer-wrap').html(html);
+        }
+
+        function ateQCandOptions(type, selId) {
+            var list = ATE_Q.cands[type] || [];
+            var html = '<option value="">（請選擇）</option>';
+            list.forEach(function(r) {
+                var disp = r.display || r.label;
+                html += '<option value="' + escapeHtml(String(r.id)) + '" data-label="' + escapeHtml(r.label || '')
+                      + '" data-post="' + escapeHtml(r.post || '') + '"' + (String(r.id) === String(selId) ? ' selected' : '')
+                      + '>' + escapeHtml(disp) + '</option>';
+            });
+            return html;
+        }
+
+        function ateQRowHtml(r, idx) {
+            var typeOpts = [['user', '業務'], ['customer', '客戶'], ['maker', '廠商'], ['', '純備註']];
+            var typeHtml = '<select class="ate-q-type" onchange="ateQRowTypeChange(' + idx + ',this.value)">';
+            typeOpts.forEach(function(o) { typeHtml += '<option value="' + o[0] + '"' + (r.target_type === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; });
+            typeHtml += '</select>';
+            var targetHtml = r.target_type
+                ? '<select class="ate-q-target-sel" data-eg-filter="輸入關鍵字篩選…" onchange="ateQRowTargetChange(' + idx + ',this)">' + ateQCandOptions(r.target_type, r.target_id) + '</select>'
+                : '<span class="text-muted" style="font-size:11px;">不指定對象</span>';
+            var delBtn = ATE_Q.rows.length > 1
+                ? '<button type="button" class="btn btn-xs btn-link" onclick="ateQRowDelAt(' + idx + ')" title="移除這一條"><i class="fa fa-times"></i></button>' : '';
+            return '<tr>'
+                + '<td style="width:44%;"><textarea class="form-control ate-q-qtext" rows="2" placeholder="輸入問題內容…" oninput="ateQRowQChange(' + idx + ',this.value)">' + escapeHtml(r.question) + '</textarea></td>'
+                + '<td style="width:18%;">' + typeHtml + '</td>'
+                + '<td style="width:30%;">' + targetHtml + '</td>'
+                + '<td style="width:8%;text-align:center;">' + delBtn + '</td>'
+                + '</tr>';
+        }
+
+        function ateQRowQChange(idx, val) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].question = val; }
+        function ateQRowTypeChange(idx, val) {
+            var r = ATE_Q.rows[idx]; if (!r) return;
+            r.target_type = val;
+            if (val === 'user' && !r.target_id && ATE_Q.bizDefault) {
+                r.target_id = String(ATE_Q.bizDefault.id); r.target_label = ATE_Q.bizDefault.name; r.target_post = ATE_Q.bizDefault.post;
+            } else if (!val) {
+                r.target_id = ''; r.target_label = ''; r.target_post = '';
+            }
+            ateQRedrawComposer();
+        }
+        function ateQRowTargetChange(idx, sel) {
+            var r = ATE_Q.rows[idx]; if (!r) return;
+            var opt = sel.options[sel.selectedIndex];
+            r.target_id = sel.value;
+            r.target_label = opt ? (opt.getAttribute('data-label') || '') : '';
+            r.target_post = opt ? (opt.getAttribute('data-post') || '') : '';
+        }
+        // 共用檔 eg_input_rules.js 規則6要求：不帶參數，呼叫後多一列/少一列並自己重繪
+        function ateQRowAdd() { ATE_Q.rows.push(ateQNewRow()); ateQRedrawComposer(); }
+        function ateQRowDel() { if (ATE_Q.rows.length > 1) { ATE_Q.rows.pop(); ateQRedrawComposer(); } }
+        function ateQRowDelAt(idx) { if (ATE_Q.rows.length > 1) { ATE_Q.rows.splice(idx, 1); ateQRedrawComposer(); } }
+
+        function ateQSubmitNew() {
+            var out = []; var bad = false;
+            ATE_Q.rows.forEach(function(r) {
+                var q = $.trim(r.question || '');
+                if (!q) return;
+                if (r.target_type && !r.target_id) { bad = true; return; }
+                out.push({ question: q, target_type: r.target_type, target_id: r.target_id, target_label: r.target_label, target_post: r.target_post });
+            });
+            if (bad) { showToast('有問題選了對象類別卻沒有選到對象，請補選'); return; }
+            if (!out.length) { showToast('請至少填寫一條問題內容'); return; }
+            $('#ate-q-submit-new').prop('disabled', true);
+            $.post('', { action: 'ate_q_add', order_id: ATE_Q.orderId, items: JSON.stringify(out) }, function(res) {
+                $('#ate-q-submit-new').prop('disabled', false);
+                if (!res || !res.success) { showToast((res && res.message) || '新增失敗'); return; }
+                ateQApplyBadge(ATE_Q.orderId, res.open_count);
+                ateQOpen(ATE_Q.orderId);
+            }, 'json').fail(function() { $('#ate-q-submit-new').prop('disabled', false); showToast('新增失敗，請重試'); });
+        }
+
+        // 只局部更新這一列的徽章，不整頁重載（比照 applySyncedCustomerToRow 既有模式）
+        function ateQApplyBadge(orderId, openCount) {
+            var $cell = $('td[data-ate-q-order="' + orderId + '"] .ate-q-cell');
+            if (!$cell.length) return;
+            openCount = parseInt(openCount, 10) || 0;
+            if (openCount > 0) {
+                $cell.html('<button type="button" class="ate-q-badge" onclick="ateQOpen(' + orderId + ')" title="點擊查看／回覆這張訂單的設計備註問題"><i class="fa fa-flag"></i> ' + openCount + ' 待處理</button>');
+            } else if (window.OT_CAN_DESIGN_QA) {
+                $cell.html('<button type="button" class="ate-q-add-btn" onclick="ateQOpen(' + orderId + ')" title="新增設計備註問題"><i class="fa fa-plus"></i> 新增</button>');
+            } else {
+                $cell.html('<span class="text-muted" style="font-size:11px;">（無）</span>');
+            }
+            $cell.closest('td').css('background', '#fff6e0');
+            setTimeout(function() { $cell.closest('td').css('background', ''); }, 1200);
+        }
+
 
         // ── 「轉生管日／BOM開立」那一格的唯一畫法（2026-09-18 收斂）──────────
         //    審圖／取消審圖／轉生管／取消轉生管／BOSS審核OK／清除BOSS審圖 六個動作做完之後
@@ -11668,6 +12133,25 @@ foreach($dCounts as $c) {
         </div></div>
     </div>
 
+    <!-- ═══ MODAL: 設計備註問答（2026-10-05 併入 eng_log）═══════════════════ -->
+    <div class="modal fade" id="ate-q-modal" tabindex="-1">
+        <div class="modal-dialog"><div class="modal-content">
+            <div class="modal-header" style="background:#8a5a2b;">
+                <button type="button" class="close" data-dismiss="modal" style="color:#fff;">&times;</button>
+                <h4 class="modal-title" style="color:#fff;font-size:15px;">
+                    <i class="fa fa-comments"></i> 設計備註問答 — <span id="ate-q-modal-title"></span>
+                </h4>
+            </div>
+            <div class="modal-body">
+                <div id="ate-q-items-wrap"></div>
+                <div id="ate-q-composer-wrap"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
+            </div>
+        </div></div>
+    </div>
+
     <!-- ═══════════════════════════════════════════════════════════════════════
          訂單變更系統 Modals（變更 / 設定 / 歷史 / 明細）
          ═══════════════════════════════════════════════════════════════════════ -->
@@ -13309,6 +13793,9 @@ window.OT_FEAT = <?= json_encode(array_values(array_map('strval', $_ot_features)
 window.otHasFeat = function(code) {
     return window.OT_FEAT.indexOf('all') !== -1 || window.OT_FEAT.indexOf(code) !== -1;
 };
+// 設計備註問答（2026-10-05）：直接用後端算好的最終值，不在前端重新判斷一次規則。
+window.OT_CAN_DESIGN_QA = <?= json_encode((bool)$can_design_qa) ?>;
+window.OT_CAN_DESIGN_QA_RESOLVE = <?= json_encode((bool)$can_design_qa_resolve) ?>;
 
 // ── 篩選列自適應（2026-09-22 使用者指定口徑）──────────────────────────────
 // 一行放不下時**先縮搜尋欄位**（先客戶、還不夠再連料號與全表搜尋），
