@@ -12,9 +12,9 @@
  * 鐵則：
  *   ① 既有指標的數字一律讀正式表的月快照（kpi_as_monthly_value），不自己另算一份——
  *      另算一份就會出現「草案頁 85%、正式頁 83%」這種沒人查得出原因的落差。
- *   ② 新指標的試算一律呼叫既有共用庫（工作日走 kpi_as_workdays_inclusive、回廠日走
- *      vendor_kpi_lib 的 vkRdSQL/vkBackJoin、不合格品走 qa_ncr_lib、AS 文件排程走
- *      asdoc_schedule_lib），不在這裡重寫一套判定，否則正式上線數字會跟草案對不起來。
+ *   ② 新指標的試算一律呼叫既有共用庫（工作日走 kpi_as_workdays_inclusive、產能走
+ *      kpi_as_lib 的 capacity_rate 計算模組、製程不良率走 process_ng_rate 計算模組），
+ *      不在這裡重寫一套判定，否則正式上線數字會跟草案對不起來。
  *   ③ 這支檔案**不寫入任何資料**（全檔沒有 INSERT/UPDATE/DELETE），純讀取與計算。
  */
 
@@ -159,24 +159,18 @@ function kpi_scheme_items(): array {
      'basis'=>'分母＝已建立的型態識別文件管制表（未刪除）；分子＝確認狀態為「已確認」者。這是「現況快照」，每季季底看一次。',
      'note'=>'對應 AS9100 的型態管理（configuration management），稽核必問。⚠ 現況 380 份只有 4 份已確認＝約 1%，訂目標之前請先確認是「作業習慣還沒建立」還是「本來就不必每一份都確認」。'],
 
-    /* ---------- COP03 生產管理（生產課=9／生管組=6／品管課=2） ---------- */
-    ['code'=>'inhouse_ontime','block'=>'COP03','name'=>'廠內關鍵製程準交率','dept'=>9,
-     'freq'=>'monthly','vtype'=>'percent','dir'=>'gte','target'=>85,'unit'=>'%',
-     'src'=>'auto','status'=>'new','calc'=>['preview','kps_inhouse_ontime',['procs'=>[12,4,34,27,5],'tol'=>3]],
-     'basis'=>'限定製程＝齒研(12)·滾齒(4)·粗滾(34)·精滾(27)·插齒(5)，且限「廠內單位」（maker_list.internal=1，即掛在超正名下的廠內加工站別，不是外包廠商）。分母＝當月發包、且已到容忍期的這幾個製程筆數；分子＝回廠日 ≤ 發包日＋3 個容忍工作天者。回廠日取「生管登錄回廠日／製程移轉憑單單號日期／QC 檢驗日」三者最早，與「外包廠商績效」頁同一套判定。',
-     'note'=>'取代原本對外包廠商的要求。⚠ 兩個提醒：① 插齒目前只有發包／回廠紀錄（2026 年 47 筆掛在廠內，其中 29 筆有發包日），但完全沒有現場報工紀錄——所以這一項（準交率）算得出插齒，下面的「產能達成率」與「製程不良率」算不出插齒（那兩項要靠報工資料）；② 現有「外包廠商績效」頁把超正齒研等 11 家廠內單位列為例外廠商（那頁本來就是看外包的），所以正式上線要新開一個計算模組，不能直接重用該頁的函式。'],
-
-    ['code'=>'ht_vendor_ontime','block'=>'COP03','name'=>'特殊製程（熱處理）委外準交率','dept'=>6,
-     'freq'=>'monthly','vtype'=>'percent','dir'=>'gte','target'=>85,'unit'=>'%',
-     'src'=>'auto','status'=>'retune','calc'=>['preview','kps_ht_ontime',['ptypes'=>[7],'tol'=>3]],
-     'basis'=>'與上一項同一套判定，範圍改成「委外廠商（internal≠1）× 熱處理類製程（process_type_id=7）」。',
-     'note'=>'由原「廠商準時交貨率」限縮而來。認證範圍的外包只有熱處理，但 AS9100 對特殊製程外包的管控是必考題，建議保留而不是整項刪掉。2026 年鑫光 525／長信 235／國鐽 132 筆，發包日覆蓋率 99%。'],
-
-    ['code'=>'process_ng','block'=>'COP03','name'=>'關鍵製程不良率（齒研）','dept'=>9,
+    /* ---------- COP03 生產管理（生產課=9／品管課=2） ---------- */
+    ['code'=>'process_ng','block'=>'COP03','name'=>'齒研製程不良率','dept'=>9,
      'freq'=>'monthly','vtype'=>'percent','dir'=>'lte','target'=>0.5,'unit'=>'%',
      'src'=>'auto','status'=>'retune','calc'=>['existing',15],
      'basis'=>'限定製程＝齒研（process_type_id=12）。分子＝Σ當月報工 NG 數；分母＝Σ當月完成數。',
-     'note'=>'原「齒研製程不良率」，範圍只有齒研一種製程（這是目前唯一有長期累積報工數據、母體最大的製程）。⚠ 2026 實績 0.00~0.44%、目標卻是 ≤5%＝形同永遠達標，沒有管理訊號。建議目標收緊到 ≤0.5%（或改用 PPM 百萬件不良數）。插齒目前沒有報工資料，無法加進這一項；下面另外新增「整體製程不良率」涵蓋全部有報工的製程。'],
+     'note'=>'原「關鍵製程不良率（齒研）」改名。⚠ 2026 實績 0.00~0.44%、目標卻是 ≤5%＝形同永遠達標，沒有管理訊號。建議目標收緊到 ≤0.5%（或改用 PPM 百萬件不良數）。'],
+
+    ['code'=>'process_ng_cp5','block'=>'COP03','name'=>'插齒製程不良率','dept'=>9,
+     'freq'=>'monthly','vtype'=>'percent','dir'=>'lte','target'=>null,'unit'=>'%',
+     'src'=>'auto','status'=>'watch','calc'=>['preview','kps_process_ng_proc',['process_type_ids'=>[5]]],
+     'basis'=>'與上一項同一套判定（process_ng_rate 計算模組），限定製程＝插齒（process_type_id=5，涵蓋 ProcessNo 5／154 兩個插齒站別代碼）。分子＝Σ當月報工 NG 數；分母＝Σ當月完成數。',
+     'note'=>'⚠ 插齒目前完全沒有現場報工紀錄（2026 年 0 筆），這一項會全部空白——不是計算錯誤，是現場還沒有用系統報工登記插齒的生產與不良數量。要有數字，得先請插齒站的人員開始用「待加工排程」報工（與「產能達成率－插齒」同一個先決條件）。'],
 
     ['code'=>'capacity_1','block'=>'COP03','name'=>'產能達成率－創成','dept'=>9,
      'freq'=>'monthly','vtype'=>'rate','dir'=>'gte','target'=>15,'unit'=>'顆/小時',
@@ -195,12 +189,6 @@ function kpi_scheme_items(): array {
      'src'=>'auto','status'=>'watch','calc'=>['preview','kps_capacity_custom',['machine_ids'=>[1894]]],
      'basis'=>'與創成／成型同一套判定（Σ完成數量 ÷ Σ生產起訖工時），機台限定插齒機（EG-047）。',
      'note'=>'⚠ 插齒機（machine_id=1894）2026 年完全沒有現場報工紀錄，這一項目前全部是空白——不是計算錯誤，是現場還沒有用系統報工登記插齒的生產數量與工時。要有數字，得先請插齒站的人員開始用「待加工排程」報工。'],
-
-    ['code'=>'process_ng_all','block'=>'COP03','name'=>'整體製程不良率','dept'=>2,
-     'freq'=>'monthly','vtype'=>'percent','dir'=>'lte','target'=>null,'unit'=>'%',
-     'src'=>'auto','status'=>'new','calc'=>['preview','kps_process_ng_all',[]],
-     'basis'=>'分子＝Σ當月全部製程的報工 NG 數；分母＝Σ當月全部製程的完成數量（不限齒研，涵蓋現場所有有報工紀錄的製程）。',
-     'note'=>'原提案「不合格品開立件數」改成比率。與上面的「關鍵製程不良率（齒研）」互補——那一項只看齒研一種製程，這一項涵蓋全部有報工的製程，才看得出齒研以外的站別有沒有問題。2026 年全製程報工 4,507 筆、完成 268,871 顆、NG 249 顆，約 0.09%，目標值待你定。'],
 
     ['code'=>'packing_ng','block'=>'COP03','name'=>'成品出貨不良率','dept'=>2,
      'freq'=>'monthly','vtype'=>'percent','dir'=>'lte','target'=>null,'unit'=>'%',
@@ -234,7 +222,7 @@ function kpi_scheme_items(): array {
      'basis'=>'分母＝當月計畫訓練場次（排除取消）；分子＝其中已完成場次。',
      'note'=>'對應「人力資源管理」。原本沒有設負責部門，建議補上管理課。已依你的意見取消「人員流動率」。已依你的意見拿掉「職業災害件數」，SP01 這次就只留這一項（流程圖另外列了「工安管理程序」，但既然你不需要人工填寫的指標，就不勉強湊數）。⚠ 2026 年 1~7 月全部 100%（計畫幾場就做幾場，必然達標），8/9 月分母 0＝沒排課。建議改成「年度訓練時數達成率」（training_session 已有 hours／actual_hours 欄位）才有鑑別度——要改請告訴我。'],
 
-    /* ---------- SP02 品管輔助（品管課=2／文管中心=14） ---------- */
+    /* ---------- SP02 品管輔助（品管課=2） ---------- */
     ['code'=>'calibration','block'=>'SP02','name'=>'量測儀器按時校驗率','dept'=>2,
      'freq'=>'monthly','vtype'=>'percent','dir'=>'gte','target'=>95,'unit'=>'%',
      'src'=>'auto','status'=>'warn','calc'=>['existing',18],
@@ -243,12 +231,6 @@ function kpi_scheme_items(): array {
            . '自動計算 2026 年九個月全部是 0/0；而畫面上看到的 95~100% 是**管理者逐月手動覆寫**上去的（8 個月都是覆寫）。'
            . '稽核老師只要問一句「這個數字怎麼來的、佐證在哪」就會變成缺失。'
            . '請決定：① 把校驗紀錄補進系統（最正確）② 先停用這一項 ③ 維持人工填寫但改標示為「人工」並附紙本佐證。'],
-
-    ['code'=>'asdoc_update','block'=>'SP02','name'=>'AS 文件按時更新率','dept'=>14,
-     'freq'=>'quarterly','vtype'=>'percent','dir'=>'gte','target'=>90,'unit'=>'%',
-     'src'=>'auto','status'=>'new','calc'=>['preview','kps_asdoc_update',[]],
-     'basis'=>'分母＝該季已到期的 AS 文件排程點；分子＝已完成者。查不到完成紀錄的一律判「無法判定」、不計入分母（沿用 AS 文件排程模組既有規則：系統查不到 ≠ 沒做）。',
-     'note'=>'對應「文件與紀錄管理程序」。AS 文件排程模組的推導函式已經寫好，直接接即可。⚠ 170 份文件只有 33 份設了固定週期（26 份每年／6 份每月／1 份每日），其餘 84 份標不定時、53 份未設，分母偏小，要先把更新頻率補齊。'],
 
     /* ---------- MP01 經營管理（總經理室=15） ---------- */
     ['code'=>'kpi_overall','block'=>'MP01','name'=>'全廠 KPI 總體達標率','dept'=>15,
@@ -270,13 +252,19 @@ function kpi_scheme_items(): array {
 function kpi_scheme_dropped(): array {
     return [
         ['no'=>6, 'name'=>'廠商稽核按時執行率',
-         'why'=>'外包只認證熱處理，耗材商不需稽核（你確認過）。對外包的管控改由新方案的「特殊製程（熱處理）委外準交率」承接。'],
+         'why'=>'外包只認證熱處理，耗材商不需稽核（你確認過）。'],
         ['no'=>9, 'name'=>'發料錯誤件數',
          'why'=>'客供料做完就出貨，沒有發料作業（你確認過）。原本也沒有設負責部門、2026 是人工填寫。'],
         ['no'=>12,'name'=>'出圖正確性',
-         'why'=>'純人工填件數，與「出圖準時率」管同一件事。若要保留，建議改接圖面變更紀錄（qc_drawing_change，目前 7 筆）或直接併入新增的「整體製程不良率」。保留與否請你決定。'],
+         'why'=>'純人工填件數，與「出圖準時率」管同一件事。若要保留，建議改接圖面變更紀錄（qc_drawing_change，目前 7 筆）。保留與否請你決定。'],
         ['no'=>4, 'name'=>'報價單接單率',
          'why'=>'你問這項是不是必要——查過 AS9100 條文，**沒有任何一條要求「報價轉換成訂單的比率」**；那是業務端的商業績效指標（接單率高低反映的是報價策略或業務能力），不是品質管理系統要求。拿掉它之後 COP01 仍有訂單審查及時率、客訴件數、受訂目標達成率、銷貨目標達成率、客戶滿意度共 5 項，遠超過「每個 COP 至少 2 項」的門檻，不影響涵蓋率。'],
+        ['no'=>0, 'name'=>'廠內關鍵製程準交率／特殊製程（熱處理）委外準交率',
+         'why'=>'依你的指示拿掉。COP03 現在沒有交期類指標，改以齒研／插齒製程不良率＋三項產能達成率為主；委外熱處理的管控若之後要恢復，可另外補回。'],
+        ['no'=>0, 'name'=>'整體製程不良率',
+         'why'=>'依你的指示拿掉，「齒研製程不良率」與新增的「插齒製程不良率」已分別涵蓋這兩個製程。'],
+        ['no'=>0, 'name'=>'AS 文件按時更新率',
+         'why'=>'依你的指示拿掉。SP02 現在只剩「量測儀器按時校驗率」一項（該項仍標示為待你決定，見下方）。'],
     ];
 }
 
@@ -299,8 +287,8 @@ function kpi_scheme_prereq(): array {
     return [
         ['t'=>'量測儀器校驗紀錄要先建',
          'd'=>'系統裡有 80 支量具，但校驗紀錄表一筆都沒有。不補的話「量測儀器按時校驗率」永遠是空白。'],
-        ['t'=>'AS 文件更新頻率要補齊',
-         'd'=>'170 份文件只有 33 份設了固定週期，其餘 137 份標不定時或未設，「AS 文件按時更新率」的分母會偏小、不具代表性。'],
+        ['t'=>'插齒站要開始用系統報工',
+         'd'=>'插齒機（EG-047）2026 年現場報工 0 筆，「插齒製程不良率」與「產能達成率－插齒」目前全部是空白，不是計算錯誤。'],
         ['t'=>'包裝檢驗表要累積量',
          'd'=>'全庫只有 3 筆包裝檢驗紀錄，「包裝效率」目前只有 2 筆能用，代表性不足。'],
         ['t'=>'採購要走系統請購→訂購→到貨的完整流程',
@@ -415,85 +403,6 @@ function kps_type_ctrl(PDO $db, int $year, int $month, array $a): ?array {
     return ['v'=>$den > 0 ? $num / $den * 100 : null, 'num'=>$num, 'den'=>$den];
 }
 
-/* ---------- COP03 準交率（廠內／委外共用同一套判定） ----------
- * 判定與「外包廠商績效」頁完全相同：發包日＋容忍工作天＝截止日；回廠日取
- * 「生管登錄回廠日／製程移轉憑單單號日期／QC 檢驗日」三者最早（vendor_kpi_lib 的 vkRdSQL）。
- * 唯一的差別是範圍：那一頁把廠內單位列在例外廠商裡（它本來就是看外包的），
- * 所以這裡不吃那份例外清單，改用 internal 旗標與製程自行界定範圍。
- */
-function kps_ontime_core(PDO $db, int $year, int $month, string $scope,
-                         array $procNos, array $procTypes, int $tol): ?array {
-    // 整年查一次、在 PHP 分月（逐月各發一次 LATERAL 查詢實測要 3.9 秒，整年一次只要 0.4 秒）
-    $all = kps_ontime_year($db, $year, $scope, $procNos, $procTypes, $tol);
-    return $all[$month] ?? ['v'=>null, 'num'=>0, 'den'=>0];
-}
-
-/** 某年度逐月的準交率（整年一次查完，依發包月份分組）；同一組條件只算一次 */
-function kps_ontime_year(PDO $db, int $year, string $scope,
-                         array $procNos, array $procTypes, int $tol): array {
-    static $cache = [];
-    $ck = $scope . '|' . implode(',', $procNos) . '|' . implode(',', $procTypes) . '|' . $tol . '|' . $year;
-    if (isset($cache[$ck])) return $cache[$ck];
-
-    require_once __DIR__ . '/vendor_kpi_lib.php';
-    $ds = sprintf('%04d-01-01', $year);
-    $de = sprintf('%04d-12-31', $year);
-    $today = date('Y-m-d');
-
-    $where = ["bi.outsource_date IS NOT NULL", "DATE(bi.outsource_date) BETWEEN ? AND ?"];
-    $bind  = [$ds, $de];
-    if ($scope === 'internal')     $where[] = "mk.internal=1";
-    elseif ($scope === 'external') $where[] = "(mk.internal IS NULL OR mk.internal<>1)";
-    if ($procNos) {
-        $where[] = "bi.process_no IN (" . implode(',', array_fill(0, count($procNos), '?')) . ")";
-        $bind = array_merge($bind, array_map('intval', $procNos));
-    }
-    if ($procTypes) {
-        $where[] = "pn.process_type_id IN (" . implode(',', array_fill(0, count($procTypes), '?')) . ")";
-        $bind = array_merge($bind, array_map('intval', $procTypes));
-    }
-    $sql = "SELECT DATE(bi.outsource_date) AS od, " . vkRdSQL('bi') . " AS rd
-            FROM bom_ing bi
-            LEFT JOIN maker_list mk ON mk.maker_id_no=bi.maker_id_no
-            LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
-            " . vkBackJoin('bi') . "
-            WHERE " . implode(' AND ', $where);
-    $st = $db->prepare($sql);
-    $st->execute($bind);
-    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-
-    $out = [];
-    for ($m = 1; $m <= 12; $m++) $out[$m] = ['v'=>null, 'num'=>0, 'den'=>0];
-    if (!$rows) return $cache[$ck] = $out;
-
-    $maps   = loadWorkdayMaps($db, date('Y-m-d', strtotime($ds . ' -30 days')),
-                                   date('Y-m-d', strtotime($de . ' +60 days')));
-    $cutoff = subtractWorkdays($today, $tol, $maps);
-    $dl = [];
-    foreach ($rows as $r) {
-        $od = (string)$r['od'];
-        if ($od > $cutoff) continue;                     // 還沒到容忍期，不列入分母（與那一頁同一條規則）
-        $m = (int)substr($od, 5, 2);
-        if ($m < 1 || $m > 12) continue;
-        $out[$m]['den']++;
-        if (!isset($dl[$od])) $dl[$od] = calcDeadline($od, $tol, $maps);
-        $rd = (string)($r['rd'] ?? '');
-        if ($rd !== '' && $rd <= $dl[$od]) $out[$m]['num']++;
-    }
-    foreach ($out as $m => $c) {
-        $out[$m]['v'] = $c['den'] > 0 ? $c['num'] / $c['den'] * 100 : null;
-    }
-    return $cache[$ck] = $out;
-}
-function kps_inhouse_ontime(PDO $db, int $year, int $month, array $a): ?array {
-    return kps_ontime_core($db, $year, $month, 'internal',
-                           (array)($a['procs'] ?? []), (array)($a['ptypes'] ?? []), (int)($a['tol'] ?? 3));
-}
-function kps_ht_ontime(PDO $db, int $year, int $month, array $a): ?array {
-    return kps_ontime_core($db, $year, $month, 'external',
-                           (array)($a['procs'] ?? []), (array)($a['ptypes'] ?? [7]), (int)($a['tol'] ?? 3));
-}
-
 /* ---------- COP04 依製程切分的點收／回廠檢驗不良率 ----------
  * 口徑與既有「進料檢驗不良率」完全相同（分母＝當月已判定的檢驗筆數），
  * 只多一個「限定哪些製程」的範圍；正式上線時在既有計算模組加一個參數即可。
@@ -546,31 +455,11 @@ function kps_capacity_custom(PDO $db, int $year, int $month, array $a): ?array {
     return ['v'=>$r['value'] ?? null, 'num'=>$r['num'] ?? null, 'den'=>$r['den'] ?? null];
 }
 
-/* ---------- COP03 整體製程不良率（全部有報工的製程，不限齒研） ---------- */
-function kps_process_ng_all(PDO $db, int $year, int $month, array $a): ?array {
-    $all = kps_process_ng_all_year($db, $year);
-    return $all[$month] ?? ['v'=>null, 'num'=>0, 'den'=>0];
-}
-function kps_process_ng_all_year(PDO $db, int $year): array {
-    static $cache = [];
-    if (isset($cache[$year])) return $cache[$year];
-    $st = $db->prepare("SELECT MONTH(r.report_date) m, SUM(r.produced_qty) den
-                        FROM pm_process_daily_report r WHERE YEAR(r.report_date)=? GROUP BY m");
-    $st->execute([$year]);
-    $den = [];
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $den[(int)$r['m']] = (int)$r['den'];
-    $st = $db->prepare("SELECT MONTH(r.report_date) m, SUM(g.ng_qty) num
-                        FROM pm_process_daily_ng g JOIN pm_process_daily_report r ON r.report_id=g.report_id
-                        WHERE YEAR(r.report_date)=? GROUP BY m");
-    $st->execute([$year]);
-    $num = [];
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $num[(int)$r['m']] = (int)$r['num'];
-    $out = [];
-    for ($m = 1; $m <= 12; $m++) {
-        $d = $den[$m] ?? 0; $n = $num[$m] ?? 0;
-        $out[$m] = ['v'=>$d > 0 ? $n / $d * 100 : null, 'num'=>$n, 'den'=>$d];
-    }
-    return $cache[$year] = $out;
+/* ---------- COP03 插齒製程不良率（薄包裝，直接重用既有的 process_ng_rate 計算模組） ---------- */
+function kps_process_ng_proc(PDO $db, int $year, int $month, array $a): ?array {
+    $r = kpi_as_compute($db, 'process_ng_rate', $year, $month, $a);
+    if ($r === null) return null;
+    return ['v'=>$r['value'] ?? null, 'num'=>$r['num'] ?? null, 'den'=>$r['den'] ?? null];
 }
 
 /* ---------- COP04 包裝效率 ----------
@@ -671,32 +560,6 @@ function kps_car_ontime(PDO $db, int $year, int $month, array $a): ?array {
         $den++;
         if (!empty($r['close_date'])
             && substr((string)$r['close_date'], 0, 10) <= substr((string)$r['correction_due'], 0, 10)) $num++;
-    }
-    return ['v'=>$den > 0 ? $num / $den * 100 : null, 'num'=>$num, 'den'=>$den];
-}
-
-/* ---------- SP02 AS 文件按時更新率（季） ---------- */
-function kps_asdoc_update(PDO $db, int $year, int $month, array $a): ?array {
-    require_once __DIR__ . '/asdoc_schedule_lib.php';
-    static $cache = [];
-    if (!array_key_exists($year, $cache)) {
-        try { asched_ensure($db); $cache[$year] = asched_plan($db, $year); }
-        catch (Throwable $e) { $cache[$year] = null; }
-    }
-    $plan = $cache[$year];
-    if (!$plan) return null;
-
-    $q  = (int)ceil($month / 3);
-    $ms = ($q - 1) * 3 + 1; $me = $q * 3;
-    $num = 0; $den = 0;
-    foreach (($plan['rows'] ?? []) as $r) {
-        $m = (int)($r['due_month'] ?? 0);
-        if ($m < $ms || $m > $me) continue;
-        $state = (string)($r['state'] ?? '');
-        // unknown（查不到完成紀錄）／nomonth（月份未定）一律不計入分母＝沿用該模組既有規則；
-        // upcoming／due 是「還沒到期」，也不該列入「按時更新率」的分母。
-        if ($state === 'done')         { $den++; $num++; }
-        elseif ($state === 'overdue')  { $den++; }
     }
     return ['v'=>$den > 0 ? $num / $den * 100 : null, 'num'=>$num, 'den'=>$den];
 }
