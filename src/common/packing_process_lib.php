@@ -71,7 +71,7 @@ if (!function_exists('pk_packing_rows_for_fid')) {
             $st = $pdo->prepare("
                 SELECT packing_inspection_id, inspection_date, judgement, status,
                        order_qty, bom_total_qty, ok_qty, ng_qty, ship_now_qty, warehouse_qty,
-                       packer, inspector, remark, created_at, closed_by, closed_at
+                       packer, inspector, remark, created_at, closed_by, closed_at, pack_no
                 FROM qc_packing_inspection
                 WHERE bom_ing_fid = ?
                 ORDER BY packing_inspection_id ASC

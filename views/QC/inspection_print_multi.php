@@ -108,7 +108,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         if ($fids) {
             $ph = implode(',', array_fill(0, count($fids), '?'));
             $fs = $pdo->prepare("
-                SELECT qc_form_id, bom_ing_fid, batch_no, round_no, incoming_qty, sample_qty, ng_qty,
+                SELECT qc_form_id, insp_no, bom_ing_fid, batch_no, round_no, incoming_qty, sample_qty, ng_qty,
                        check_result, main_remark, check_date, created_by, inspector_by, insp_kind, created_at
                 FROM qc_check_form
                 WHERE bom_ing_fid IN ($ph) AND status <> 'DRAFT'
@@ -124,7 +124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // 的出貨檢驗單，一律只取最新一張（可能重新產生過好幾次），用固定 sentinel fid=-1 接到
         // 下面同一套「批次/完整明細」組裝邏輯，不必另外複製一份 ──
         $SHIP_FID = -1;
-        $shipForm = $pdo->prepare("SELECT qc_form_id, bom_ing_fid, batch_no, round_no, incoming_qty, sample_qty, ng_qty,
+        $shipForm = $pdo->prepare("SELECT qc_form_id, insp_no, bom_ing_fid, batch_no, round_no, incoming_qty, sample_qty, ng_qty,
                                     check_result, main_remark, check_date, created_by, inspector_by, insp_kind, created_at
                                    FROM qc_check_form WHERE ship_bom=? AND insp_kind='SHIP' AND status<>'DRAFT'
                                    ORDER BY qc_form_id DESC LIMIT 1");
@@ -193,6 +193,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     // creator，逐批明細區塊印不出是誰驗的；insp_kind 一併帶出供正確標示首件/末件。
                     $itemsByFid[$fid][] = [
                         'batch_no' => (int)$formRow['batch_no'], 'round_no' => (int)$formRow['round_no'],
+                        'insp_no' => $formRow['insp_no'] ?? '',
                         'insp_kind' => $formRow['insp_kind'] ?: 'NORMAL',
                         'date' => substr((string)($formRow['check_date'] ?: $formRow['created_at']), 0, 10),
                         'check_result' => $formRow['check_result'],
@@ -282,7 +283,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (!isset($batches[$bn])) $batches[$bn] = ['batch_no' => $bn, 'rounds' => []];
                 $batches[$bn]['rounds'][] = [
                     'round_no' => (int)$f['round_no'], 'check_result' => $f['check_result'],
-                    'insp_kind' => $f['insp_kind'] ?: 'NORMAL',
+                    'insp_kind' => $f['insp_kind'] ?: 'NORMAL', 'insp_no' => $f['insp_no'] ?? '',
                     'ng_qty' => (int)$f['ng_qty'], 'date' => substr((string)($f['check_date'] ?: $f['created_at']), 0, 10),
                     'creator' => $nameMap[$creatorOf($f)] ?? '',
                 ];
@@ -319,7 +320,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $batches[$i + 1] = ['batch_no' => $i + 1, 'rounds' => [[
                     'round_no' => 1, 'check_result' => $judgeToResult($pr['judgement']),
                     'ng_qty' => (int)$pr['ng_qty'], 'date' => substr((string)$pr['inspection_date'], 0, 10),
-                    'creator' => $pr['packer'] ?: '',
+                    'creator' => $pr['packer'] ?: '', 'pack_no' => $pr['pack_no'] ?? '',
                 ]]];
             }
             $last = $pkRows ? end($pkRows) : null;
@@ -337,7 +338,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'date' => substr((string)$last['inspection_date'], 0, 10)] : null,
                 'detail' => $pkRows ? ['sample_n' => 0, 'items' => [], 'packing_rows' => array_map(function ($pr) {
                     return [
-                        'date' => substr((string)$pr['inspection_date'], 0, 10),
+                        'date' => substr((string)$pr['inspection_date'], 0, 10), 'pack_no' => $pr['pack_no'] ?? '',
                         'order_qty' => (int)$pr['order_qty'], 'ok_qty' => (int)$pr['ok_qty'], 'ng_qty' => (int)$pr['ng_qty'],
                         'ship_now_qty' => (int)$pr['ship_now_qty'],
                         'warehouse_qty' => $pr['warehouse_qty'] !== null ? (int)$pr['warehouse_qty'] : null,
@@ -739,12 +740,12 @@ function buildProcessFullBlock(p, idx){
     if(p.is_packing){
         var rows=(p.detail&&p.detail.packing_rows)||[];
         if(!rows.length) return head + '<div class="muted-help" style="margin:4px 0 14px;">尚無包裝檢驗紀錄</div>';
-        var pbody='<table class="pm-items"><thead><tr><th>日期</th><th>待包裝數</th><th>合格數</th><th>不良數</th>'
+        var pbody='<table class="pm-items"><thead><tr><th>包裝單號</th><th>日期</th><th>待包裝數</th><th>合格數</th><th>不良數</th>'
             + '<th>本次出貨</th><th>入庫</th><th>判定</th><th>結案狀態</th><th>包裝人員</th><th>品檢人員</th><th>備註</th></tr></thead><tbody>';
         rows.forEach(function(r){
             var judge2 = r.judgement==='FAIL' ? '<span class="pm-ng">不良</span>' : (r.judgement==='PASS' ? '合格' : '待判定');
             var stTxt = r.status==='closed' ? '已結案' : '<span class="pm-ng">未結案</span>';
-            pbody += '<tr><td>'+esc(r.date)+'</td><td>'+r.order_qty+'</td><td>'+r.ok_qty+'</td><td>'+r.ng_qty+'</td>'
+            pbody += '<tr><td>'+esc(r.pack_no||(r.status==='closed'?'—':'（結案後產生）'))+'</td><td>'+esc(r.date)+'</td><td>'+r.order_qty+'</td><td>'+r.ok_qty+'</td><td>'+r.ng_qty+'</td>'
                 + '<td>'+r.ship_now_qty+'</td><td>'+(r.warehouse_qty!=null?r.warehouse_qty:'')+'</td>'
                 + '<td>'+judge2+'</td><td>'+stTxt+'</td><td>'+esc(r.packer||'')+'</td><td>'+esc(r.inspector||'')+'</td>'
                 + '<td class="tl">'+esc(r.remark||'')+'</td></tr>';
@@ -768,9 +769,9 @@ function buildProcessFullBlock(p, idx){
         var tag = d.insp_kind==='FIRST' ? '首件' : d.insp_kind==='LAST' ? '末件'
             : !prevInBatch ? ('第'+d.batch_no+'批')
             : (prevInBatch.check_result==='NG' ? '重驗' : ('第'+d.batch_no+'批續驗'));
-        // 使用者 2026-09-24 回報「每張檢驗表都要顯示檢驗人員」
+        // 使用者 2026-09-24 回報「每張檢驗表都要顯示檢驗人員」；2026-10-05 回報合併列印也要顯示檢驗單號
         var roundTag = tag+'　'+esc(d.date||'')+'　'+(d.check_result==='NG'?'<span class="pm-ng">不良</span>':'合格')+
-            '　<b>檢驗人：</b>'+esc(d.creator||'—');
+            '　<b>檢驗人：</b>'+esc(d.creator||'—')+'　<b>檢驗單號：</b>'+esc(d.insp_no||'—');
         // 使用量具改成整個批次區塊印一行（量具是綁在整張檢驗單上，不是逐項）
         var toolLine = d.tools ? ('　<b>使用量具：</b>'+esc(d.tools)) : '';
         out += '<div class="pm-round-tag">'+roundTag+toolLine+'</div>';
