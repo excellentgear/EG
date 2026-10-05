@@ -955,13 +955,16 @@ function dwg_auto_draft_from_part(PDO $pdo, int $dId, int $uid, ?int $attachId =
         'd_id'                  => $dId,
         'summary'               => $autoSummary,          // 抓不到時留空，由使用者在另開的分頁補
         'status'                => 'DRAFT',
-        'rev_scope'             => 'customer',            // 預設客戶改圖；不是的話使用者改成「僅廠內版次」
-        'old_revision'          => $info['revision'],     // 料號主檔目前的客戶版次＝變更前
+        // 預設「僅廠內版次」＋來源「內部」，比照 drawing_change_log.php 手動新建的預設值
+        //（使用者要求 2026-10-02 兩邊統一）：自動偵測到的只是「圖換了」，換圖不等於客戶也跟著換版，
+        // 由使用者在另開的分頁判斷是否真的是客戶版次變更再自行改掉。
+        'rev_scope'             => 'internal',
+        'old_revision'          => $info['revision'],     // 料號主檔目前的客戶版次＝變更前（僅廠內時不會用到）
         'new_revision'          => $newRev,
         'int_old_revision'      => $pair['old_date'],
         'int_new_revision'      => $pair['new_date'],
         'change_date'           => $pair['new_date'],     // 變更日＝新圖發行章日期
-        'source'                => '客戶',
+        'source'                => '內部',
         'detail'                => '（系統自動偵測換圖）新圖：' . (string)$pair['new_name']
                                  . '　舊圖：' . (string)$pair['old_name'],
         'trigger_attachment_id' => $pair['new_id'],
