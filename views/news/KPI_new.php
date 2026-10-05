@@ -71,6 +71,7 @@ if ($kpiPerms['canView']) {
     }
     $calcMs = (int)round((microtime(true) - $t0) * 1000);
 }
+$ATTACH_COUNTS = $kpiPerms['canView'] ? kps_attach_counts_year($db, $YEAR) : [];
 
 /** 顯示值格式化 */
 function kpsFmt($v, string $type): string {
@@ -182,6 +183,28 @@ function kpsOwnerText(array $row, array $deptName): string {
         /* ===== 單一欄位修改／明細（2026-10-05 續）===== */
         td.ks-cell { cursor:pointer; }
         td.ks-cell:hover { background:#FBF0DD; box-shadow:inset 0 0 0 1px #D8BE93; }
+        .ks-attach-badge { font-size:9px; color:#8a6d45; margin-left:3px; vertical-align:1px; }
+        .att-row { display:flex; gap:8px; align-items:center; border-bottom:1px dashed #EADFC8; padding:6px 0; font-size:13px; }
+        .att-row .att-name { color:#b5762a; cursor:pointer; text-decoration:underline; flex:1;
+            overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .att-row .att-note { color:#8a6d45; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .att-row .att-del { color:#DD5138; cursor:pointer; }
+        .att-missing { color:#c9bda9; text-decoration:line-through; }
+
+        /* 補登模式（管理員補資料）：整張表變成可直接填寫的格子，比照 KPI.php */
+        #btnFill.on { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        #fillBar { margin:0 0 10px; padding:6px 10px; border:1px solid #D8BE93; background:#FBF5EA;
+            color:#5b3a1e; font-size:13px; border-radius:4px; }
+        #fillBar input[type=text] { height:26px; border:1px solid #D8BE93; border-radius:4px; padding:0 8px;
+            font-size:12px; width:260px; margin-left:6px; }
+        #fillBar .fb-n { margin-left:10px; color:#8a6d45; }
+        #fillBar button.warm { height:26px; padding:0 12px; border-radius:4px; font-size:12px; margin-left:8px;
+            border:1px solid #d98a33; background:#F0A24B; color:#fff; cursor:pointer; }
+        table.ks-tbl td .fillIn { width:100%; min-width:44px; box-sizing:border-box; height:22px; font-size:12px;
+            text-align:center; border:1px solid #E8D5B5; border-radius:3px; padding:0 2px; background:#fff; color:#5b3a1e; }
+        table.ks-tbl td .fillIn:focus { border-color:#F0A24B; outline:none; background:#FFFBF3; }
+        table.ks-tbl td .fillIn.ov { background:#FDF3E3; }
+        table.ks-tbl td .fillIn.dirty { border-color:#C2601C; background:#FBEBD6; font-weight:bold; }
 
         /* 儲存格右鍵選單式小面板（仿 KPI.php #cellMenu）。
            一定要用 position:absolute 搭配 e.pageX/pageY（文件座標，含捲動量）——
@@ -374,9 +397,20 @@ function kpsOwnerText(array $row, array $deptName): string {
             <span style="font-size:13px;color:#5b3a1e;">試算年度　<b><?= $YEAR ?></b></span>
             <button onclick="location.reload()"><i class="fa fa-refresh"></i> 重新試算</button>
             <button onclick="openCnyMask()"><i class="fa fa-calendar-check-o"></i> 春節目標調整設定</button>
+            <?php if ($kpiPerms['isAdmin'] || $kpiPerms['canAdmin']): ?>
+            <button id="btnFill" onclick="toggleFill()" title="整張表直接填寫（補舊年度資料用，不需逐格填原因）">
+                <i class="fa fa-table"></i> 補登模式</button>
+            <?php endif; ?>
             <button onclick="doPrint()"><i class="fa fa-print"></i> 列印（A3 橫式）</button>
             <a class="btn" href="KPI.php" style="line-height:28px;"><i class="fa fa-table"></i> 回正式 KPI 表</a>
             <span class="ks-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b></span>
+        </div>
+
+        <div id="fillBar" style="display:none;">
+            補登模式：點格子直接輸入數值（寫入方式＝手動覆寫，不需逐格填原因；空白＝清除覆寫）。
+            說明　<input type="text" id="fillNote" maxlength="200" placeholder="（選填）這批資料的補登說明，留空則用預設說明">
+            <button class="warm" onclick="fillSave()"><i class="fa fa-save"></i> 送出補登</button>
+            <span class="fb-n">已修改 <b id="fillCount">0</b> 格</span>
         </div>
 
         <div class="ks-note">
@@ -460,10 +494,13 @@ function kpsOwnerText(array $row, array $deptName): string {
                         if (!in_array($m, $validMonths, true)) { echo '<td class="ks-na">NA</td>'; continue; }
                         $future = ($YEAR > $curY) || ($YEAR === $curY && $m > $curM);
                         $c = ($vals && array_key_exists($m, $vals)) ? $vals[$m] : null;
-                        $srcAttr = ' data-iid="' . $iid . '" data-m="' . $m . '" data-src="'
-                                 . htmlspecialchars((string)($c['src'] ?? '')) . '"';
+                        $attN = $ATTACH_COUNTS[$iid][$m] ?? 0;
+                        $attBadge = $attN > 0 ? '<span class="ks-attach-badge" title="佐證附件 ' . $attN . ' 件"><i class="fa fa-paperclip"></i>' . $attN . '</span>' : '';
+                        $srcAttr = ' data-iid="' . $iid . '" data-m="' . $m . '" data-future="' . ($future ? 1 : 0) . '" data-src="'
+                                 . htmlspecialchars((string)($c['src'] ?? '')) . '" data-rawv="'
+                                 . htmlspecialchars($c !== null && $c['v'] !== null ? (string)round((float)$c['v'], 4) : '') . '"';
                         if ($c === null || $c['v'] === null) {
-                            echo '<td class="ks-cell"' . $srcAttr . '><span class="ks-na">' . ($future ? 'NA' : '?') . '</span></td>';
+                            echo '<td class="ks-cell"' . $srcAttr . '><span class="ks-na">' . ($future ? 'NA' : '?') . '</span>' . $attBadge . '</td>';
                             continue;
                         }
                         $v   = (float)$c['v'];
@@ -489,7 +526,7 @@ function kpsOwnerText(array $row, array $deptName): string {
                             $tipParts[] = '件數 ' . (string)$c['num'];
                         $tip = $tipParts ? ' title="' . htmlspecialchars(implode('；', $tipParts)) . '"' : '';
                         echo '<td class="ks-cell"' . $srcAttr . $tip . '><span class="' . ($bad ? 'ks-below' : '') . '">'
-                           . htmlspecialchars(kpsFmt($v, $row['value_type'])) . '</span>' . $mk . '</td>';
+                           . htmlspecialchars(kpsFmt($v, $row['value_type'])) . '</span>' . $mk . $attBadge . '</td>';
                     endfor; ?>
                     <td><?= $agg === null ? '<span class="ks-na">–</span>'
                             : '<b>' . htmlspecialchars(kpsFmt($agg, $row['value_type'])) . '</b>'
@@ -592,6 +629,28 @@ function kpsOwnerText(array $row, array $deptName): string {
             <span class="m-close" onclick="closeMask('vioMask')">&times;</span></div>
         <div class="m-body" id="vioBody"></div>
         <div class="vio-foot" id="vioFoot" style="padding:0 15px 12px;"></div>
+    </div>
+</div>
+
+<!-- 佐證附件 -->
+<div class="ks-mask" id="attMask">
+    <div class="ks-modal" style="max-width:560px;">
+        <div class="m-head"><span id="attTitle">佐證附件</span>
+            <span class="m-close" onclick="closeMask('attMask')">&times;</span></div>
+        <div class="m-body">
+            <div id="attList" style="min-height:40px;"></div>
+            <div id="attUpBox" style="margin-top:10px;border-top:1px dashed #EADFC8;padding-top:8px;">
+                <div style="font-size:12px;color:#8a6d45;margin-bottom:4px;" id="attLimitTxt"></div>
+                <input type="file" id="attFile" multiple
+                       accept=".jpg,.jpeg,.png,.gif,.webp,.bmp,.pdf,.xls,.xlsx,.xlsm,.xlsb,.doc,.docx,.docm,.ppt,.pptx,.csv,.txt,.zip,.7z,.rar,.odt,.ods">
+                <div style="font-size:11px;color:#8a6d45;margin-top:2px;">可一次選多個檔案；單檔 20MB。</div>
+                <input type="text" id="attNote" maxlength="200" placeholder="附件說明（選填）"
+                       style="width:100%;height:28px;border:1px solid #D8BE93;border-radius:4px;padding:0 8px;margin-top:6px;">
+                <div style="text-align:right;margin-top:6px;">
+                    <button class="ksc-btn-save" onclick="submitAttach()"><i class="fa fa-upload"></i> 上傳</button>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -725,6 +784,9 @@ function showInfo(itemNo){
  * 單一欄位修改／增減個別調整排除／查看單一月份統計資料（2026-10-05 續，比照 KPI.php）
  * ============================================================ */
 var YESNO = <?= json_encode(kpi_as_yesno_tokens(), JSON_UNESCAPED_UNICODE) ?>;
+var FILL = false;            // 補登模式（管理員補資料）開關
+var FILL_DIRTY = {};         // iid_m -> 使用者輸入但尚未儲存的值
+var FILL_ORIG = {};          // iid_m -> 進補登模式前這格的原始 HTML（離開時原樣還原，不必整頁重load）
 function kpiParseInputJs(type, raw){
     var s = $.trim(String(raw == null ? '' : raw));
     if (s === '') return null;
@@ -739,6 +801,7 @@ function kpiParseInputJs(type, raw){
 
 /* ---------- 儲存格點擊選單 ---------- */
 $(document).on('click', 'td.ks-cell', function(e){
+    if (FILL) return;                                     // 補登模式：點格子＝直接編輯，不開選單
     var $td = $(this);
     var iid = +$td.data('iid'), m = +$td.data('m'), src = $td.data('src') || '';
     var itemNo = IID2ITEM[iid]; var it = ITEM_INFO[itemNo];
@@ -752,6 +815,7 @@ $(document).on('click', 'td.ks-cell', function(e){
         items.push({t:'<i class="fa fa-pencil"></i> 填寫 / 修改', f:function(){ openFillMask(iid, m, 'fill'); }});
         if (src === 'manual') items.push({t:'<i class="fa fa-eraser"></i> 清除填寫', f:function(){ doClearFill(iid, m); }});
     }
+    items.push({t:'<i class="fa fa-paperclip"></i> 佐證附件', f:function(){ openAttach(iid, m); }});
     var html = '<div class="cm-head">' + itemNo + '. ' + esc(it.name) + '｜' + m + '月</div>';
     items.forEach(function(x, i){ html += '<div class="cm-item" data-i="' + i + '">' + x.t + '</div>'; });
     var $menu = $('#cellMenu').html(html).show();
@@ -768,6 +832,193 @@ $(document).on('click', 'td.ks-cell', function(e){
     e.stopPropagation();
 });
 $(document).on('click', function(){ $('#cellMenu').hide(); });
+
+/* ============================================================
+ * 補登模式（管理員補資料；使用者要求比照 KPI.php 的整張表直接填寫）
+ * ------------------------------------------------------------
+ * 整張表的每一格換成輸入框，離開補登模式時用進入前存下的原始 HTML 直接換回去
+ * （不必整頁重新整理），寫入一律走 bulk_override（顯示優先序最高的覆寫值），
+ * 不要求逐格填原因，一次送出整批。
+ * ============================================================ */
+function fillCanUse(){ return <?= ($kpiPerms['isAdmin'] || $kpiPerms['canAdmin']) ? 'true' : 'false' ?>; }
+function fillKey(iid, m){ return iid + '_' + m; }
+function toggleFill(){
+    if (!fillCanUse()) { alert('補登模式僅 KPI 管理員／系統管理員可用'); return; }
+    if (FILL && Object.keys(FILL_DIRTY).length) {
+        if (!confirm('有 ' + Object.keys(FILL_DIRTY).length + ' 格還沒儲存，確定離開補登模式？')) return;
+    }
+    FILL = !FILL;
+    FILL_DIRTY = {};
+    $('#btnFill').toggleClass('on', FILL);
+    $('#fillBar').toggle(FILL);
+    renderFillCells();
+}
+function fillCellHtml(td){
+    var $td = $(td);
+    var iid = +$td.data('iid'), m = +$td.data('m');
+    var itemNo = IID2ITEM[iid]; var it = ITEM_INFO[itemNo];
+    if (!it) return $td.html();                          // 不是可編輯指標格（理論上不會發生，保底）
+    var key = fillKey(iid, m);
+    var v = (key in FILL_DIRTY) ? FILL_DIRTY[key] : ($td.data('rawv') == null ? '' : String($td.data('rawv')));
+    var cls = 'fillIn' + ($td.data('src') === 'override' ? ' ov' : '') + ((key in FILL_DIRTY) ? ' dirty' : '');
+    var at = ' data-i="' + iid + '" data-m="' + m + '"';
+    if (it.value_type === 'yesno') {
+        var sv = (v === '' || v === null) ? '' : (Number(v) >= 1 ? '1' : '0');
+        return '<select class="' + cls + '"' + at + '>'
+             + '<option value=""' + (sv === ''  ? ' selected' : '') + '>—</option>'
+             + '<option value="1"' + (sv === '1' ? ' selected' : '') + '>Yes</option>'
+             + '<option value="0"' + (sv === '0' ? ' selected' : '') + '>No</option></select>';
+    }
+    return '<input type="text" class="' + cls + '"' + at + ' value="' + esc(String(v)) + '" autocomplete="off">';
+}
+function renderFillCells(){
+    $('table.ks-tbl td.ks-cell').each(function(){
+        var $td = $(this);
+        var iid = +$td.data('iid'), m = +$td.data('m');
+        var key = fillKey(iid, m);
+        if (FILL) {
+            if ($td.data('future') == 1) return;          // 未來月份不開放補登，維持原樣（NA）
+            if (!(key in FILL_ORIG)) FILL_ORIG[key] = $td.html();
+            $td.html(fillCellHtml(this));
+        } else if (key in FILL_ORIG) {
+            $td.html(FILL_ORIG[key]);
+            delete FILL_ORIG[key];
+        }
+    });
+}
+$(document).on('input change', 'table.ks-tbl .fillIn', function(){
+    var $i = $(this);
+    FILL_DIRTY[fillKey($i.attr('data-i'), $i.attr('data-m'))] = $i.val();
+    $i.addClass('dirty');
+    $('#fillCount').text(Object.keys(FILL_DIRTY).length);
+});
+/* 點到已有資料的格子＝整個值選起來，直接打字就換掉（比照 KPI.php 同一套規則） */
+$(document).on('focus', 'table.ks-tbl .fillIn', function(){
+    var el = this;
+    if (el.value === '') return;
+    el.__selAll = true;
+    setTimeout(function(){
+        if (document.activeElement !== el) return;
+        try { el.select(); } catch (err) {}
+    }, 0);
+});
+$(document).on('mouseup', 'table.ks-tbl .fillIn', function(e){
+    if (this.__selAll) { e.preventDefault(); this.__selAll = false; }
+});
+$(document).on('blur', 'table.ks-tbl .fillIn', function(){ this.__selAll = false; });
+/* Enter＝往右一格（換行接下一列開頭）；↑↓＝同一個月份上下移動 */
+$(document).on('keydown', 'table.ks-tbl .fillIn', function(e){
+    var k = e.key;
+    if (k !== 'Enter' && k !== 'ArrowDown' && k !== 'ArrowUp') return;
+    e.preventDefault();
+    if (k === 'Enter') {
+        var all = $('table.ks-tbl .fillIn');
+        var i = all.index(this);
+        if (i >= 0 && i + 1 < all.length) all.eq(i + 1).focus().select();
+        return;
+    }
+    var m = $(this).attr('data-m');
+    var col = $('table.ks-tbl .fillIn[data-m="' + m + '"]');
+    var idx = col.index(this);
+    var to = (k === 'ArrowUp') ? idx - 1 : idx + 1;
+    if (to >= 0 && to < col.length) col.eq(to).focus().select();
+});
+function fillSave(){
+    var keys = Object.keys(FILL_DIRTY);
+    if (!keys.length) { alert('沒有變更'); return; }
+    var bad = [];
+    var cells = keys.map(function(k){
+        var p = k.split('_'), iid = +p[0];
+        var it = ITEM_INFO[IID2ITEM[iid]];
+        var v = $.trim(String(FILL_DIRTY[k]));
+        if (v !== '' && it && kpiParseInputJs(it.value_type, v) === null) bad.push(v);
+        return {i:iid, m:+p[1], v:v};
+    });
+    if (bad.length) { alert('有 ' + bad.length + ' 格的值無法辨識：' + bad.slice(0,5).join('、')
+        + '\n數字型請填數字；Yes/No 型請填 ' + YESNO.yes.slice(0,3).join('／') + ' 或 '
+        + YESNO.no.slice(0,3).join('／') + '，也可以清空該格。'); return; }
+    var note = $('#fillNote').val();
+    if (!confirm('把 ' + cells.length + ' 格寫進 ' + KS_YEAR + ' 年度？\n（寫入方式＝手動覆寫，不需要逐格填原因；空白的格子＝清除覆寫）')) return;
+    $.post(API, {action:'bulk_override', year:KS_YEAR, note:note, cells:JSON.stringify(cells)}, function(res){
+        if (!res || !res.ok) { alert((res && res.error) || '儲存失敗'); return; }
+        var msg = '已寫入 ' + res.saved + ' 格' + (res.cleared ? ('，清除 ' + res.cleared + ' 格') : '') + '。';
+        if (res.skipped && res.skipped.length) msg += '\n略過 ' + res.skipped.length + ' 格：\n' + res.skipped.slice(0,8).join('\n');
+        alert(msg);
+        location.reload();
+    }, 'json').fail(function(x){ alert('儲存失敗：' + ((x.responseJSON && x.responseJSON.error) || x.status)); });
+}
+
+/* ---------- 佐證附件 ---------- */
+var ATT_CTX = null;
+function openAttach(iid, m){
+    ATT_CTX = {iid:iid, m:m};
+    var itemNo = IID2ITEM[iid]; var it = ITEM_INFO[itemNo];
+    document.getElementById('attTitle').textContent = '佐證附件：' + itemNo + '. ' + it.name + '　' + KS_YEAR + '年' + m + '月';
+    refreshAttList();
+    openMask('attMask');
+}
+function refreshAttList(){
+    if (!ATT_CTX) return;
+    $.getJSON(API, {action:'attach_list', indicator_id:ATT_CTX.iid, year:KS_YEAR, month:ATT_CTX.m}, function(res){
+        if (!res || !res.ok) { $('#attList').html(esc((res && res.error) || '載入失敗')); return; }
+        $('#attLimitTxt').text('每月每項上限 ' + res.max + ' 件，單檔 20MB');
+        if (!res.list.length) { $('#attList').html('<span style="color:#8a6d45;font-size:12px;">尚無附件</span>'); return; }
+        var h = '';
+        res.list.forEach(function(a){
+            h += '<div class="att-row">';
+            h += a.exists
+               ? '<span class="att-name" title="開啟" onclick="window.open(API+\'?action=attach_open&attach_id=' + a.attach_id + '\')">📄 ' + esc(a.original_name) + '</span>'
+               : '<span class="att-name att-missing" title="檔案不存在（NAS路徑可能已變更）">📄 ' + esc(a.original_name) + '</span>';
+            h += '<span class="att-note" title="' + esc(a.note || '') + '">' + esc(a.note || '') + '</span>';
+            h += '<span style="color:#8a6d45;font-size:11px;">' + esc(a.uploaded_by_name || '') + ' ' + esc((a.created_at || '').substr(5,11)) + '</span>';
+            if (a.can_delete) h += '<span class="att-del" title="刪除" onclick="delAttach(' + a.attach_id + ')"><i class="fa fa-trash"></i></span>';
+            h += '</div>';
+        });
+        $('#attList').html(h);
+    });
+}
+/* 一次多選上傳：後端一支請求收一個檔，逐檔送、全部送完才回報（比照 KPI.php）。
+   送出當下直接讀 input.files，不靠 change 事件記住檔案（見記憶 file_upload_change_event）。 */
+function submitAttach(){
+    if (!ATT_CTX) return;
+    var f = document.getElementById('attFile');
+    var files = f.files ? Array.prototype.slice.call(f.files) : [];
+    if (!files.length) { alert('請選擇檔案'); return; }
+    var note = $('#attNote').val();
+    var okN = 0, errs = [];
+    (function next(i){
+        if (i >= files.length) {
+            f.value = ''; $('#attNote').val('');
+            refreshAttList();
+            if (errs.length) alert('成功 ' + okN + ' 個，失敗 ' + errs.length + ' 個：\n' + errs.join('\n'));
+            else if (okN > 1) alert('已上傳 ' + okN + ' 個檔案。');
+            return;
+        }
+        var fd = new FormData();
+        fd.append('action', 'attach_upload');
+        fd.append('indicator_id', ATT_CTX.iid);
+        fd.append('year', KS_YEAR);
+        fd.append('month', ATT_CTX.m);
+        fd.append('note', note);
+        fd.append('file', files[i]);
+        $.ajax({url:API, method:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
+            .done(function(res){
+                if (res && res.ok) okN++; else errs.push(files[i].name + '：' + ((res && res.error) || '上傳失敗'));
+                next(i + 1);
+            })
+            .fail(function(x){
+                errs.push(files[i].name + '：' + ((x.responseJSON && x.responseJSON.error) || x.status));
+                next(i + 1);
+            });
+    })(0);
+}
+function delAttach(aid){
+    if (!confirm('刪除此附件？（NAS上的檔案將一併刪除）')) return;
+    $.post(API, {action:'attach_delete', attach_id:aid}, function(res){
+        if (!res || !res.ok) { alert((res && res.error) || '刪除失敗'); return; }
+        refreshAttList();
+    }, 'json').fail(function(){ alert('刪除失敗：連線異常'); });
+}
 
 /* ---------- 單一欄位修改：填寫（人工）／手動覆寫（自動） ---------- */
 function openFillMask(iid, m, mode){

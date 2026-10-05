@@ -444,6 +444,161 @@ case 'clear_override': {
     jout([]);
 }
 
+/* ---------- 補登模式：整張表直接填寫（管理員補資料用，比照 KPI.php 的 bulk_override） ----------
+   僅系統管理員；只能補「已結束的月份」；不論該指標是 auto 還是 manual，一律寫成 override_value
+   （顯示優先序最高），不要求逐格填覆寫原因（整批共用同一句說明，誰在什麼時候補的仍留在
+   override_by／override_at）；空字串＝清掉這一格的覆寫。 */
+case 'bulk_override': {
+    if (empty($perms['isAdmin']) && empty($perms['canAdmin'])) jerr('僅 KPI 管理員／系統管理員可使用補登模式', 403);
+    $year = (int)($_POST['year'] ?? 0);
+    if ($year < 2020 || $year > $curY + 2) jerr('年度不合法');
+    $cells = json_decode((string)($_POST['cells'] ?? '[]'), true);
+    if (!is_array($cells) || !$cells) jerr('沒有要寫入的資料');
+    if (count($cells) > 500) jerr('一次最多 500 格');
+    $note = mb_substr(trim((string)($_POST['note'] ?? '')), 0, 200);
+    if ($note === '') $note = '補登舊年度資料（補登模式整批填寫）';
+
+    $rows = [];
+    foreach (kpi_scheme_list_year($db, $year) as $r) {
+        if ((int)$r['ind_active'] !== 1 || (int)$r['year_active'] !== 1) continue;
+        $rows[(int)$r['indicator_id']] = $r;
+    }
+
+    $set = $db->prepare("INSERT INTO kpi_scheme_monthly_value
+            (indicator_id,year,month,override_value,override_by,override_by_name,override_at,override_reason)
+            VALUES (?,?,?,?,?,?,NOW(),?)
+            ON DUPLICATE KEY UPDATE override_value=VALUES(override_value), override_by=VALUES(override_by),
+                    override_by_name=VALUES(override_by_name), override_at=NOW(), override_reason=VALUES(override_reason)");
+    $clr = $db->prepare("UPDATE kpi_scheme_monthly_value
+            SET override_value=NULL, override_by=NULL, override_by_name=NULL, override_at=NULL, override_reason=NULL
+            WHERE indicator_id=? AND year=? AND month=?");
+    $saved = 0; $cleared = 0; $skipped = [];
+    $db->beginTransaction();
+    try {
+        foreach ($cells as $c) {
+            $iid = (int)($c['i'] ?? 0);
+            $m   = (int)($c['m'] ?? 0);
+            $raw = trim((string)($c['v'] ?? ''));
+            $row = $rows[$iid] ?? null;
+            if (!$row) { $skipped[] = "指標 $iid 不存在"; continue; }
+            if (!in_array($m, kpi_as_valid_months($row), true)) { $skipped[] = $row['name'] . " {$m}月 不適用"; continue; }
+            if (!kps_month_ended($year, $m)) { $skipped[] = $row['name'] . " {$m}月 尚未結束"; continue; }
+            if ($raw === '') { $clr->execute([$iid, $year, $m]); $cleared += $clr->rowCount() ? 1 : 0; continue; }
+            $val = kpi_as_parse_input((string)$row['value_type'], $raw);
+            if ($val === null) {
+                $skipped[] = $row['name'] . " {$m}月「{$raw}」無法辨識（" . kpi_as_input_hint((string)$row['value_type']) . '）';
+                continue;
+            }
+            $set->execute([$iid, $year, $m, $val, (int)$u['id'], (string)$u['user_cname'], $note]);
+            $saved++;
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('寫入失敗：' . $e->getMessage(), 500); }
+
+    jout(['saved'=>$saved, 'cleared'=>$cleared, 'skipped'=>$skipped]);
+}
+
+/* ---------- 佐證附件 ---------- */
+case 'attach_list': {
+    $iid = (int)($_GET['indicator_id'] ?? 0);
+    $year = (int)($_GET['year'] ?? 0);
+    $month = (int)($_GET['month'] ?? 0);
+    $st = $db->prepare("SELECT attach_id, file_name, original_name, file_size, note, uploaded_by, uploaded_by_name, created_at
+                        FROM kpi_scheme_attachment WHERE indicator_id=? AND year=? AND month=? ORDER BY attach_id");
+    $st->execute([$iid, $year, $month]);
+    $list = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $r['can_delete'] = !empty($perms['canAdmin']) || (int)$r['uploaded_by'] === (int)$u['id'];
+        $r['exists'] = kps_attach_path($db, array_merge($r, ['year'=>$year])) !== null;
+        unset($r['file_name']);
+        $list[] = $r;
+    }
+    jout(['list'=>$list, 'max'=>kps_attach_max($db)]);
+}
+
+case 'attach_upload': {
+    $iid = (int)($_POST['indicator_id'] ?? 0);
+    $year = (int)($_POST['year'] ?? 0);
+    $month = (int)($_POST['month'] ?? 0);
+    if ($year < 2020 || $year > $curY + 2) jerr('年度不合法');
+    $iy = kps_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    if (!in_array($month, kpi_as_valid_months($iy), true)) jerr('該指標此月份不適用');
+    $ownerId = $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null;
+    if (!kps_can_edit($perms, $ownerId, (int)$u['id'])) jerr('僅該指標擔當者本人或 KPI 管理員可上傳佐證', 403);
+    if (empty($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) jerr('檔案上傳失敗');
+    if ($_FILES['file']['size'] > 20 * 1024 * 1024) jerr('檔案超過 20MB');
+    $allowed = ['jpg','jpeg','png','gif','webp','bmp','pdf','xls','xlsx','xlsm','xlsb','doc','docx','docm',
+                'ppt','pptx','csv','txt','zip','7z','rar','odt','ods'];
+    $orig = basename((string)$_FILES['file']['name']);
+    if (!mb_check_encoding($orig, 'UTF-8')) {
+        $conv = @mb_convert_encoding($orig, 'UTF-8', 'BIG-5');
+        $orig = ($conv !== false && mb_check_encoding($conv, 'UTF-8')) ? $conv : ('附件_' . date('Ymd_His'));
+    }
+    $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+    if (!in_array($ext, $allowed, true)) jerr('不支援的檔案格式：' . $ext);
+    $max = kps_attach_max($db);
+    $st = $db->prepare("SELECT COUNT(*) FROM kpi_scheme_attachment WHERE indicator_id=? AND year=? AND month=?");
+    $st->execute([$iid, $year, $month]);
+    if ((int)$st->fetchColumn() >= $max) jerr("此月份佐證已達上限 {$max} 件");
+    $base = kps_attach_dir($db);
+    $dir = rtrim($base, '\\/') . DIRECTORY_SEPARATOR . $year;
+    if (!eg_attach_ensure_dir($dir)) jerr('無法建立附件目錄，請確認NAS路徑設定：' . $dir);
+    $fname = 'kps' . $iid . '_' . sprintf('%02d', $month) . '_' . date('Ymd_His_') . bin2hex(random_bytes(4)) . '.' . $ext;
+    $destPath = $dir . DIRECTORY_SEPARATOR . $fname;
+    if (!move_uploaded_file($_FILES['file']['tmp_name'], $destPath)) jerr('檔案寫入失敗');
+    $note = trim((string)($_POST['note'] ?? ''));
+    if (!mb_check_encoding($note, 'UTF-8')) {
+        $conv = @mb_convert_encoding($note, 'UTF-8', 'BIG-5');
+        $note = ($conv !== false && mb_check_encoding($conv, 'UTF-8')) ? $conv : '';
+    }
+    $note = mb_substr($note, 0, 200);
+    // DB 寫不進去就要把剛落地的實體檔 unlink 掉，不然 NAS 上會留一個沒人認得的孤兒檔
+    // （本專案 ia_attach 已踩過同一個坑，見記憶）。
+    try {
+        $st = $db->prepare("INSERT INTO kpi_scheme_attachment (indicator_id,year,month,file_name,original_name,file_size,note,uploaded_by,uploaded_by_name)
+                            VALUES (?,?,?,?,?,?,?,?,?)");
+        $st->execute([$iid, $year, $month, $fname, $orig, (int)$_FILES['file']['size'], $note, (int)$u['id'], (string)$u['user_cname']]);
+    } catch (Throwable $e) {
+        @unlink($destPath);
+        jerr('寫入失敗：' . $e->getMessage(), 500);
+    }
+    jout(['attach_id'=>(int)$db->lastInsertId()]);
+}
+
+case 'attach_delete': {
+    $aid = (int)($_POST['attach_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM kpi_scheme_attachment WHERE attach_id=?");
+    $st->execute([$aid]);
+    $att = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$att) jerr('找不到附件');
+    if (!(!empty($perms['canAdmin']) || (int)$att['uploaded_by'] === (int)$u['id'])) jerr('僅上傳者或管理者可刪除', 403);
+    $p = kps_attach_path($db, $att);
+    if ($p) @unlink($p);
+    $db->prepare("DELETE FROM kpi_scheme_attachment WHERE attach_id=?")->execute([$aid]);
+    jout([]);
+}
+
+case 'attach_open': {
+    $aid = (int)($_GET['attach_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM kpi_scheme_attachment WHERE attach_id=?");
+    $st->execute([$aid]);
+    $att = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$att) jerr('找不到附件', 404);
+    $p = kps_attach_path($db, $att);
+    if (!$p) jerr('檔案不存在（可能NAS路徑已變更或檔案被移除）', 404);
+    $ext = strtolower(pathinfo($p, PATHINFO_EXTENSION));
+    $inline = ['pdf'=>'application/pdf','jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png',
+               'gif'=>'image/gif','webp'=>'image/webp','bmp'=>'image/bmp','txt'=>'text/plain; charset=utf-8'];
+    header_remove('Content-Type');
+    if (isset($inline[$ext])) header('Content-Type: ' . $inline[$ext]);
+    else header('Content-Type: application/octet-stream');
+    eg_attach_send_disposition((string)($att['original_name'] ?: basename($p)));
+    header('Content-Length: ' . filesize($p));
+    readfile($p);
+    exit;
+}
+
 default:
     jerr('不支援的操作：'.$action, 400);
 }

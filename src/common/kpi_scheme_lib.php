@@ -947,7 +947,53 @@ function kpi_scheme_ind_ensure_schema(PDO $db): void {
             KEY idx_iy (indicator_id, year)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
           COMMENT='KPI新方案-依維度整批排除(不改真實資料，與正式 kpi_as_excl_rule 完全分離)'");
+
+        // 佐證附件——結構比照 kpi_as_attachment，DB 只存檔名，完整路徑由 kps_attach_dir() 即時組出
+        // （ai-rules/07／鐵律5），與正式系統的 kpi_as_attachment 完全分離、各自的 NAS 資料夾也分開。
+        $db->exec("CREATE TABLE IF NOT EXISTS kpi_scheme_attachment (
+            attach_id INT AUTO_INCREMENT PRIMARY KEY,
+            indicator_id INT NOT NULL, year SMALLINT NOT NULL, month TINYINT NOT NULL,
+            file_name VARCHAR(255) NOT NULL COMMENT 'NAS實際檔名(不含路徑,子資料夾=年度即時組)',
+            original_name VARCHAR(255) NULL, file_size INT NULL, note VARCHAR(200) NULL,
+            uploaded_by INT NULL, uploaded_by_name VARCHAR(30) NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            KEY idx_cell (indicator_id, year, month)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+          COMMENT='KPI新方案-佐證附件(DB只存檔名,路徑即時組;與正式 kpi_as_attachment 完全分離)'");
     } catch (Throwable $e) {}
+}
+
+/* ============================================================
+ * 六之三、佐證附件（2026-10-05 續）——與 kpi_as_attachment 系列同一套規則（鐵律5／ai-rules/07），
+ * 只是另開一個 NAS 子資料夾「KPI新方案」，DB 一律只存檔名。
+ * ============================================================ */
+require_once __DIR__ . '/attach_lib.php';
+
+function kps_attach_dir(PDO $db): string { return eg_attach_dir($db, 'kpi_scheme_attach_dir', 'KPI新方案'); }
+function kps_attach_max(PDO $db): int {
+    try {
+        $v = (int)$db->query("SELECT setting_value FROM system_settings WHERE setting_key='kpi_scheme_attach_max'")->fetchColumn();
+        if ($v > 0) return $v;
+    } catch (Throwable $e) {}
+    return 5;
+}
+/** 集中路徑解析：所有讀/刪一律經此，防目錄穿越；檔案不存在回 null */
+function kps_attach_path(PDO $db, array $att): ?string {
+    $fn = basename((string)($att['file_name'] ?? ''));
+    if ($fn === '') return null;
+    $p = rtrim(kps_attach_dir($db), '\\/') . DIRECTORY_SEPARATOR . (int)$att['year'] . DIRECTORY_SEPARATOR . $fn;
+    return is_file($p) ? $p : null;
+}
+/** 某年度逐格的附件數（給總覽表一次查完，不要每格各打一次） */
+function kps_attach_counts_year(PDO $db, int $year): array {
+    kpi_scheme_ind_ensure_schema($db);
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT indicator_id, month, COUNT(*) c FROM kpi_scheme_attachment WHERE year=? GROUP BY indicator_id, month");
+        $st->execute([$year]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(int)$r['indicator_id']][(int)$r['month']] = (int)$r['c'];
+    } catch (Throwable $e) {}
+    return $out;
 }
 
 /**
