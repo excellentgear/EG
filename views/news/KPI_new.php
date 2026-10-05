@@ -149,6 +149,7 @@ function kpsTargetText(array $it): string {
         /* 值來源記號：覆寫/手動的格子要看得出來（稽核會問「這數字怎麼來的」） */
         .ks-mk { font-size:9px; vertical-align:super; color:#C2601C; }
         .ks-mk.man { color:#8a6d45; }
+        .ks-mk.cny { color:#DD5138; font-weight:bold; margin-left:1px; }
 
         /* 標籤（line-height 一定要自己指定，否則會繼承 custom.css 的 td span{line-height:28px} 把列撐高） */
         .ks-tag { display:inline-block; font-size:10px; line-height:16px; height:16px; padding:0 6px;
@@ -244,6 +245,7 @@ function kpsTargetText(array $it): string {
         <div class="ks-toolbar">
             <span style="font-size:13px;color:#5b3a1e;">試算年度　<b><?= $YEAR ?></b></span>
             <button onclick="location.reload()"><i class="fa fa-refresh"></i> 重新試算</button>
+            <button onclick="openCnyMask()"><i class="fa fa-calendar-check-o"></i> 春節目標調整設定</button>
             <button onclick="doPrint()"><i class="fa fa-print"></i> 列印（A3 橫式）</button>
             <a class="btn" href="KPI.php" style="line-height:28px;"><i class="fa fa-table"></i> 回正式 KPI 表</a>
             <span class="ks-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b></span>
@@ -251,10 +253,13 @@ function kpsTargetText(array $it): string {
 
         <div class="ks-draft">
             <b><i class="fa fa-exclamation-triangle"></i> 這是草案，不影響正式 KPI。</b>
-            這一頁<b>不會寫入任何資料</b>——沒有填值、沒有覆寫、沒有快照。正式 KPI 表（2-GM-04-01）維持原本 22 項、2026 年的資料一格都沒有動。<br>
+            正式 KPI 表（2-GM-04-01）維持原本 22 項，2026 年的資料一格都沒有動；
+            這一頁唯一會寫入的是「春節目標調整」的管理員額外調整率（下方 <i class="fa fa-calendar-check-o"></i> 按鈕），
+            那是這個草案功能自己的設定，不是正式 KPI 資料。<br>
             表格裡的數字是<b>用 <?= $YEAR ?> 年的真實資料即時試算</b>出來的（本次耗時 <?= $calcMs ?> ms），目的是讓你先看到「這個指標實際上會長成什麼樣子」再決定要不要採用。
             既有指標直接讀正式表的月快照（所以跟正式頁一定一致）；新指標則是當場算。<br>
-            格子右上角的記號：<span class="ks-mk">✱</span> ＝管理者覆寫的值、<span class="ks-mk man">✎</span> ＝人工填寫的值，沒有記號＝系統自動算的。
+            格子右上角的記號：<span class="ks-mk">✱</span> ＝管理者覆寫的值、<span class="ks-mk man">✎</span> ＝人工填寫的值、
+            <span class="ks-mk cny">春</span> ＝春節自動調整過（滑鼠移過去看原始值與調整後的差異），沒有記號＝系統自動算的。
             <b>紅字</b>＝未達該項目標。
         </div>
 
@@ -330,11 +335,21 @@ function kpsTargetText(array $it): string {
                         $src = (string)($c['src'] ?? '');
                         $mk  = $src === 'override' ? '<span class="ks-mk">✱</span>'
                              : ($src === 'manual'  ? '<span class="ks-mk man">✎</span>' : '');
-                        $tip = '';
+                        // 春節調整過的格子另外加一個記號，並把「原始值→調整後值」寫進提示裡
+                        $cnyOrig = $c['cny_orig_v'] ?? null;
+                        $tipParts = [];
+                        if ($cnyOrig !== null) {
+                            $mk .= '<span class="ks-mk cny" title="春節調整">春</span>';
+                            $tipParts[] = sprintf('春節調整：原始 %s%% → 調整後 %s%%（比例 %s）',
+                                rtrim(rtrim(number_format((float)$cnyOrig, 1), '0'), '.'),
+                                rtrim(rtrim(number_format($v, 1), '0'), '.'),
+                                rtrim(rtrim(number_format((float)($c['cny_ratio'] ?? 1), 4), '0'), '.'));
+                        }
                         if (isset($c['den']) && $c['den'] !== null && $c['den'] !== '')
-                            $tip = ' title="分子 ' . htmlspecialchars((string)$c['num']) . ' ／ 分母 ' . htmlspecialchars((string)$c['den']) . '"';
+                            $tipParts[] = '分子 ' . (string)$c['num'] . ' ／ 分母 ' . (string)$c['den'];
                         elseif (isset($c['num']) && $c['num'] !== null)
-                            $tip = ' title="件數 ' . htmlspecialchars((string)$c['num']) . '"';
+                            $tipParts[] = '件數 ' . (string)$c['num'];
+                        $tip = $tipParts ? ' title="' . htmlspecialchars(implode('；', $tipParts)) . '"' : '';
                         echo '<td' . $tip . '><span class="' . ($bad ? 'ks-below' : '') . '">'
                            . htmlspecialchars(kpsFmt($v, $it['vtype'])) . '</span>' . $mk . '</td>';
                     endfor; ?>
@@ -406,6 +421,33 @@ function kpsTargetText(array $it): string {
     </div>
 </div>
 
+<!-- 春節目標調整設定 -->
+<div class="ks-mask" id="cnyMask">
+    <div class="ks-modal" style="max-width:860px;">
+        <div class="m-head"><span>春節目標調整設定　<span id="cnyYearLabel"></span></span>
+            <span class="m-close" onclick="closeMask('cnyMask')">&times;</span></div>
+        <div class="m-body">
+            <div class="ks-why" style="margin-bottom:10px;">
+                影響「月份受訂目標達成率」「月銷貨額達成率」兩項。自動比例＝(30−春節損失工作天數)/30，
+                損失天數取自行事曆上標題含「春節」的國定假日（只算週一到週五）；春節跨兩個月時兩個月各自計算。
+                「額外調整率」是管理員疊加的手動修正（百分點，可正可負），用來微調自動算出來的跟實際出入太大的情況。
+            </div>
+            <div id="cnyNoEdit" class="vio-warn" style="display:none;">
+                你沒有 KPI 管理者權限，以下僅供檢視，無法修改額外調整率。
+            </div>
+            <div style="overflow-x:auto;">
+            <table class="ks-tbl" style="width:100%;">
+                <thead><tr>
+                    <th>月份</th><th>春節損失天數</th><th>自動比例</th>
+                    <th>額外調整率(%)</th><th>最終比例</th><th>備註</th><th></th>
+                </tr></thead>
+                <tbody id="cnyTbody"></tbody>
+            </table>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- 使用說明（鐵律7） -->
 <div class="ks-mask" id="helpUseMask">
     <div class="ks-modal">
@@ -418,8 +460,8 @@ function kpsTargetText(array $it): string {
 
             <h4>它會不會動到正式 KPI</h4>
             <ul>
-                <li><b>完全不會。</b>這一頁沒有任何寫入動作——不能填值、不能覆寫、不會產生快照或附件。</li>
-                <li>正式 KPI 表（2-GM-04-01）維持原本 22 項，2026 年的資料一格都沒有動。</li>
+                <li><b>不會。</b>正式 KPI 表（2-GM-04-01）維持原本 22 項，2026 年的資料一格都沒有動，不能填值、不能覆寫、不會產生快照或附件。</li>
+                <li>唯一的例外是「春節目標調整」的管理員額外調整率——那是這個草案功能自己的設定（獨立的小資料表），不是正式 KPI 資料，不影響 2-GM-04-01。</li>
                 <li>等你拍板後，才會把確定的指標搬進正式表。</li>
             </ul>
 
@@ -429,7 +471,8 @@ function kpsTargetText(array $it): string {
                 <li><b>既有指標</b>的數字直接讀正式 KPI 表的月快照，所以跟正式頁一定一致。</li>
                 <li><b>新指標</b>的數字是當場試算（用 <?= $YEAR ?> 年真實資料），還沒發生的月份一律留白、不給假數字。</li>
                 <li>滑鼠移到數字上會顯示<b>分子／分母</b>。</li>
-                <li>格子右上角：<span class="ks-mk">✱</span>＝管理者覆寫、<span class="ks-mk man">✎</span>＝人工填寫、無記號＝系統自動算。
+                <li>格子右上角：<span class="ks-mk">✱</span>＝管理者覆寫、<span class="ks-mk man">✎</span>＝人工填寫、
+                    <span class="ks-mk cny">春</span>＝春節自動調整過、無記號＝系統自動算。
                     <b>這個記號很重要</b>——稽核時被問「這個數字怎麼來的」，有覆寫記號的就要拿得出佐證。</li>
                 <li><b>紅字</b>＝未達該項目標。標「觀察期」的項目刻意不訂目標，所以不會有紅字。</li>
             </ul>
@@ -469,6 +512,7 @@ function kpsTargetText(array $it): string {
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script>
 $(document).ready(function(){
@@ -505,6 +549,53 @@ function showInfo(code){
     h += '<h5>這一項的狀態</h5><div>' + esc(STATUS_TXT[it.status] || it.status) + '</div>';
     document.getElementById('infoBody').innerHTML = h;
     openMask('infoMask');
+}
+
+var CNY_API = '../../src/store/KpiSchemeCny_API.php';
+var CNY_MONTH_NAME = ['','1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+
+function openCnyMask(){
+    openMask('cnyMask');
+    document.getElementById('cnyYearLabel').textContent = <?= $YEAR ?>;
+    document.getElementById('cnyTbody').innerHTML = '<tr><td colspan="7" style="text-align:center;color:#8a6d45;">載入中…</td></tr>';
+    $.getJSON(CNY_API, { action:'list', year: <?= $YEAR ?> }, function(res){
+        if (!res || !res.ok) { document.getElementById('cnyTbody').innerHTML =
+            '<tr><td colspan="7" style="text-align:center;color:#DD5138;">載入失敗：' + esc((res && res.error) || '') + '</td></tr>'; return; }
+        document.getElementById('cnyNoEdit').style.display = res.can_edit ? 'none' : 'block';
+        var html = '';
+        res.rows.forEach(function(r){
+            var editable = res.can_edit;
+            html += '<tr data-m="' + r.month + '">'
+                 + '<td>' + CNY_MONTH_NAME[r.month] + '</td>'
+                 + '<td>' + (r.lost_days > 0 ? r.lost_days + ' 天' : '<span class="ks-na">–</span>') + '</td>'
+                 + '<td>' + (parseFloat(r.auto_ratio) < 1 ? (parseFloat(r.auto_ratio)*100).toFixed(1)+'%' : '<span class="ks-na">不調整</span>') + '</td>'
+                 + '<td>' + (editable
+                       ? '<input type="text" class="cny-extra" value="' + esc(r.extra_pct) + '" style="width:64px;height:24px;border:1px solid #D8BE93;border-radius:3px;padding:0 4px;text-align:right;">'
+                       : esc(r.extra_pct)) + '</td>'
+                 + '<td><b>' + (parseFloat(r.final_ratio)*100).toFixed(1) + '%</b></td>'
+                 + '<td>' + (editable
+                       ? '<input type="text" class="cny-note" value="' + esc(r.note || '') + '" placeholder="選填：調整原因" style="width:140px;height:24px;border:1px solid #D8BE93;border-radius:3px;padding:0 4px;">'
+                       : esc(r.note || '')) + '</td>'
+                 + '<td>' + (editable ? '<button onclick="saveCnyRow(' + r.month + ')" style="height:24px;font-size:12px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:3px;cursor:pointer;padding:0 8px;">儲存</button>' : '') + '</td>'
+                 + '</tr>';
+        });
+        document.getElementById('cnyTbody').innerHTML = html;
+    }).fail(function(){
+        document.getElementById('cnyTbody').innerHTML = '<tr><td colspan="7" style="text-align:center;color:#DD5138;">連線失敗</td></tr>';
+    });
+}
+
+function saveCnyRow(month){
+    var $tr = $('#cnyTbody tr[data-m="' + month + '"]');
+    var extra = $tr.find('.cny-extra').val();
+    var note = $tr.find('.cny-note').val();
+    if (extra === '' || isNaN(parseFloat(extra))) { alert('額外調整率請輸入數字（可以是 0）'); return; }
+    $.post(CNY_API, { action:'save', year: <?= $YEAR ?>, month: month, extra_pct: extra, note: note }, function(res){
+        if (!res || !res.ok) { alert('儲存失敗：' + ((res && res.error) || '')); return; }
+        // 直接整頁重載：既重新載入設定面板的最新值，也讓主表格跟著重算
+        // （這一格調整前後可能從「有調整」變成「沒調整」，兩邊只有整頁重算才會一致）
+        location.reload();
+    }, 'json').fail(function(){ alert('儲存失敗：連線異常'); });
 }
 
 function doPrint(){

@@ -15,7 +15,11 @@
  *   ② 新指標的試算一律呼叫既有共用庫（工作日走 kpi_as_workdays_inclusive、產能走
  *      kpi_as_lib 的 capacity_rate 計算模組、製程不良率走 process_ng_rate 計算模組），
  *      不在這裡重寫一套判定，否則正式上線數字會跟草案對不起來。
- *   ③ 這支檔案**不寫入任何資料**（全檔沒有 INSERT/UPDATE/DELETE），純讀取與計算。
+ *   ③ 這支檔案**原則上不寫入業務資料**（kpi_as_indicator／kpi_as_monthly_value 等正式表
+ *      全檔沒有 INSERT/UPDATE/DELETE，純讀取與計算）。
+ *      **唯一的例外**是 2026-10-05 新增的「春節目標調整」管理員額外調整率（kpi_scheme_cny_adjust）——
+ *      那是這個草案功能自己的設定、不是正式 KPI 資料，寫入收斂在本檔「五、春節目標調整」整節，
+ *      且只有 KpiSchemeCny_API.php 的 save 動作會呼叫，其餘函式仍然唯讀。
  */
 
 require_once __DIR__ . '/kpi_as_lib.php';
@@ -97,15 +101,15 @@ function kpi_scheme_items(): array {
      */
     ['code'=>'order_target','block'=>'COP01','name'=>'月份受訂目標達成率','dept'=>12,
      'freq'=>'monthly','vtype'=>'percent','dir'=>'gte','target'=>85,'unit'=>'%',
-     'src'=>'auto','status'=>'keep','calc'=>['existing',2],
-     'basis'=>'當月接單金額 ÷ 該月受訂目標金額。',
-     'note'=>''],
+     'src'=>'auto','status'=>'retune','calc'=>['preview','kps_target_cny_adjusted',['item_no'=>2]],
+     'basis'=>'當月接單金額 ÷ 該月受訂目標金額，讀正式表的達成率快照；遇春節月份再依「春節目標調整」的比例放大達成率（見下）。',
+     'note'=>kps_cny_note_text()],
 
     ['code'=>'shipping_target','block'=>'COP01','name'=>'月銷貨額達成率','dept'=>12,
      'freq'=>'monthly','vtype'=>'percent','dir'=>'gte','target'=>85,'unit'=>'%',
-     'src'=>'auto','status'=>'keep','calc'=>['existing',3],
-     'basis'=>'當月出貨金額 ÷ 該月銷貨目標金額。',
-     'note'=>''],
+     'src'=>'auto','status'=>'retune','calc'=>['preview','kps_target_cny_adjusted',['item_no'=>3]],
+     'basis'=>'當月出貨金額 ÷ 該月銷貨目標金額，讀正式表的達成率快照；遇春節月份再依「春節目標調整」的比例放大達成率（見下）。',
+     'note'=>kps_cny_note_text()],
 
     ['code'=>'order_ontime','block'=>'COP01','name'=>'準時出貨率','dept'=>12,
      'freq'=>'monthly','vtype'=>'percent','dir'=>'gte','target'=>90,'unit'=>'%',
@@ -613,4 +617,172 @@ function kpi_scheme_summary(): array {
         if (isset($s[$it['status']])) $s[$it['status']]++;
     }
     return $s;
+}
+
+/* ============================================================
+ * 五、春節目標調整（2026-10-05 使用者要求）
+ *
+ * 問題：月份受訂／銷貨目標是固定金額，但春節期間工廠實際能上班的天數比平常少，
+ * 拿同一個固定目標去比，春節那個月的達成率必然偏低——那不是業績真的差，
+ * 是分母（目標）本身就不合理，看那個月的達成率會失真。
+ *
+ * 規則（使用者定義）：
+ *   ① 基準 30 天：比例 = (30 − 該月春節損失的工作天數) / 30，只有春節會觸發調整，
+ *      其他月份一律比例=1（不調整）。
+ *   ② 春節若跨兩個月，兩個月各自依各自分到的天數算比例——這樣算出來的結果
+ *      天然就會比「整段春節都算在同一個月」時，每個月的降幅都小（損失天數被分散了）。
+ *   ③ 管理員可疊加一個「額外調整率」，微調自動算出來的比例，避免跟實際出入太大。
+ *
+ * 春節日期哪裡來：行事曆 evenement（分類「國定假日」day_type='s'）裡標題含「春節」
+ * 的那幾天——這是 HR／行政每年固定會登錄的既有行事曆資料，不另外維護第二份日期表
+ * （鐵律4）。只算週一到週五：週末本來就不算工作日，春節蓋到週末不該重複扣。
+ *
+ * 寫入：本節是這支檔案唯一有寫入動作的地方（管理員額外調整率），只有
+ * KpiSchemeCny_API.php 的 save 動作會呼叫 kps_cny_override_save()，其餘函式唯讀。
+ * ============================================================ */
+
+/** 給 order_target／shipping_target 共用的備註文字，避免兩處各打一份、改一邊忘了另一邊 */
+function kps_cny_note_text(): string {
+    return '原本固定用一個金額當每月目標，春節月份工作天數變少，達成率會失真——不是業績真的差，是分母（目標）本身就不合理。'
+         . '春節那個月（可能是一個月，也可能跨兩個月）的達成率，等同於用「目標先依實際可上班天數的比例折算」'
+         . '再重算一次（基準 30 天，其他月份不調整），表格上滑鼠移過去的提示看得到調整前後的差異。'
+         . '⚠ 正式系統這兩個指標 2026 年 1~6 月都被管理者手動覆寫過（原本自動算出來的數字跟固定目標對不起來，已人工修正），'
+         . '所以調整刻意做在「達成率本身」而不是重算一次「調整後的目標金額」——目標縮小成原本比例，達成率放大成原本的倒數，數學上等價，'
+         . '但不會動到管理者已經確認過的覆寫值。管理員可以在「春節目標調整設定」疊加一個額外調整率微調，避免自動算出來的跟實際狀況差太多。';
+}
+
+/** 建表（可重複呼叫）：管理員額外調整率，本檔唯一的寫入資料表 */
+function kpi_scheme_cny_ensure_schema(PDO $db): void {
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try {
+        $db->exec("CREATE TABLE IF NOT EXISTS kpi_scheme_cny_adjust (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            year SMALLINT NOT NULL,
+            month TINYINT NOT NULL,
+            extra_pct DECIMAL(5,2) NOT NULL DEFAULT 0
+                COMMENT '管理員額外調整率(百分點，可正可負，疊加在自動算出的比例上)',
+            note VARCHAR(200) NULL,
+            updated_by VARCHAR(30) NULL,
+            updated_at DATETIME NULL,
+            UNIQUE KEY uk_ym (year, month)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+          COMMENT='KPI新方案草案：春節目標調整的管理員額外調整率，見 kpi_scheme_lib.php'");
+    } catch (Throwable $e) {}
+}
+
+/**
+ * 某年度逐月「春節損失的工作天數」。
+ * 只算週一到週五（週末本來就不是工作日，不重複扣）；一段連假橫跨月份時，
+ * 直接依實際日期分月累加，不必另外處理「跨月」——這就是為什麼同一段春節
+ * 分跨兩個月時，各月的損失天數自然比全部算在同一個月時來得少。
+ */
+function kps_cny_lost_days_by_month(PDO $db, int $year): array {
+    static $cache = [];
+    if (isset($cache[$year])) return $cache[$year];
+    $out = array_fill(1, 12, 0);
+    try {
+        $st = $db->prepare("SELECT DATE(e.start) d1, DATE(COALESCE(e.end,e.start)) d2
+                            FROM evenement e JOIN event_category ec ON ec.id=e.category_id
+                            WHERE ec.day_type='s' AND e.title LIKE '%春節%'
+                              AND YEAR(e.start)<=? AND YEAR(COALESCE(e.end,e.start))>=?");
+        $st->execute([$year, $year]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $d = strtotime((string)$r['d1']); $end = strtotime((string)$r['d2']);
+            if ($d === false || $end === false || $end < $d) continue;
+            $guard = 0;
+            while ($d <= $end && $guard++ < 60) {
+                $y = (int)date('Y', $d); $m = (int)date('n', $d);
+                $dow = (int)date('w', $d);                       // 0=週日 … 6=週六
+                if ($y === $year && $dow !== 0 && $dow !== 6) $out[$m]++;
+                $d = strtotime('+1 day', $d);
+            }
+        }
+    } catch (Throwable $e) {}
+    return $cache[$year] = $out;
+}
+
+/** 管理員額外調整率：單月讀取（查不到回 null，不是回 0——0 是「管理員確認過不必調」，null 是「還沒設」） */
+function kps_cny_override_get(PDO $db, int $year, int $month): ?array {
+    kpi_scheme_cny_ensure_schema($db);
+    try {
+        $st = $db->prepare("SELECT extra_pct, note, updated_by, updated_at
+                            FROM kpi_scheme_cny_adjust WHERE year=? AND month=?");
+        $st->execute([$year, $month]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return $r ?: null;
+    } catch (Throwable $e) { return null; }
+}
+
+/** 管理員額外調整率：整年讀取（供設定頁一次列出 12 個月） */
+function kps_cny_override_all(PDO $db, int $year): array {
+    kpi_scheme_cny_ensure_schema($db);
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT month, extra_pct, note, updated_by, updated_at
+                            FROM kpi_scheme_cny_adjust WHERE year=?");
+        $st->execute([$year]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(int)$r['month']] = $r;
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/** 寫入管理員額外調整率（本檔唯一的寫入點，只給 KpiSchemeCny_API.php 呼叫） */
+function kps_cny_override_save(PDO $db, int $year, int $month, float $extraPct, string $note, string $byName): void {
+    kpi_scheme_cny_ensure_schema($db);
+    $extraPct = max(-50, min(50, $extraPct));                    // 守住合理範圍，不給打出離譜的值
+    $note = mb_substr(trim($note), 0, 200);
+    $st = $db->prepare("INSERT INTO kpi_scheme_cny_adjust (year, month, extra_pct, note, updated_by, updated_at)
+                        VALUES (?,?,?,?,?,NOW())
+                        ON DUPLICATE KEY UPDATE extra_pct=VALUES(extra_pct), note=VALUES(note),
+                                                updated_by=VALUES(updated_by), updated_at=NOW()");
+    $st->execute([$year, $month, $extraPct, $note === '' ? null : $note, $byName]);
+}
+
+/**
+ * 某年某月的最終調整比例＝自動比例＋管理員額外調整率，夾在 [0, 1.5] 之間
+ * （防呆：不給調成負的目標，也不給調到離譜大）。
+ * 回傳 auto（自動算出的）、extra（管理員設定，無則 null）、final（兩者疊加後採用的）、lost_days。
+ */
+function kps_cny_ratio(PDO $db, int $year, int $month): array {
+    $lost = kps_cny_lost_days_by_month($db, $year)[$month] ?? 0;
+    $auto = $lost > 0 ? max(0, (30 - $lost) / 30) : 1.0;
+    $ov = kps_cny_override_get($db, $year, $month);
+    $extraPct = $ov ? (float)$ov['extra_pct'] : 0.0;
+    $final = max(0, min(1.5, $auto + $extraPct / 100));
+    return ['auto'=>$auto, 'extra_pct'=>$extraPct, 'note'=>$ov['note'] ?? null, 'final'=>$final, 'lost_days'=>$lost];
+}
+
+/**
+ * COP01 月份受訂／銷貨目標達成率的試算入口：讀正式表快照的達成率（鐵律①：永遠讀正式快照，
+ * 不重算實際金額），遇春節月份就把這個達成率除以當月比例（＝等同目標縮小成原本比例倍）。
+ * $a['item_no'] 指定要讀哪一個既有指標（2＝受訂、3＝銷貨），這支函式本身是通用的，
+ * 之後有別的「金額目標」指標要套用同一套春節調整，傳不同 item_no 即可重用。
+ */
+function kps_target_cny_adjusted(PDO $db, int $year, int $month, array $a): ?array {
+    $itemNo = (int)($a['item_no'] ?? 0);
+    if ($itemNo <= 0) return null;
+    $snap = kps_from_snapshot($db, $itemNo, $year);
+    $cell = $snap[$month] ?? null;
+    if ($cell === null || $cell['v'] === null) return $cell;
+
+    $r = kps_cny_ratio($db, $year, $month);
+    $ratio = $r['final'];
+    if ($ratio >= 0.999) {
+        // 非春節月份：原樣回傳，只附帶比例資訊（=1）供畫面判斷要不要顯示調整籤
+        return $cell + ['cny_ratio'=>$ratio, 'cny_lost'=>$r['lost_days'], 'cny_orig_v'=>null];
+    }
+
+    /* 刻意不碰 num/den、不試圖重算出「調整後的目標金額」：
+     * 這兩個指標在正式系統裡 numerator/denominator 只是自動計算當下的殘留值，
+     * 查證真實資料發現 2026 年 1~6 月全部被管理者手動覆寫過（auto_value 算出來
+     * 只有 0.03%~68%，跟 denominator=8,000,000 這個固定值兜不起來），覆寫之後
+     * num/den 早就跟畫面顯示的 v 脫鉤——拿脫鉤的 den 乘比例重算，等於悄悄蓋掉
+     * 管理者已經確認過的覆寫值。數學上「目標縮小成原本的 ratio 倍」等價於
+     * 「達成率放大成原本的 1/ratio 倍」，所以直接對顯示值 v 做這個運算，
+     * 不管 v 原本是自動算的還是人工覆寫的都通用、都不會誤改到原始資料。 */
+    $adjV = $ratio > 0 ? (float)$cell['v'] / $ratio : null;
+    return ['v'=>$adjV, 'num'=>$cell['num'], 'den'=>$cell['den'], 'src'=>$cell['src'],
+            'cny_ratio'=>$ratio, 'cny_lost'=>$r['lost_days'], 'cny_orig_v'=>$cell['v']];
 }

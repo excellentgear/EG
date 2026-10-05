@@ -386,6 +386,7 @@ $EG_ROLE_MODULES = [
     'order_track'         => ['prefix'=>'otrk',    'label'=>'訂單追蹤',            'page'=>'_cleanOrder_Track_ate_only.php'],
     'type_id_ctrl'        => ['prefix'=>'tidc',    'label'=>'型態識別文件管制表',  'page'=>'type_id_ctrl_doc.php'],
     'td_dev_eval'         => ['prefix'=>'tdev',    'label'=>'產品開發評估表',      'page'=>'td_dev_eval.php'],
+    'con_review'          => ['prefix'=>'cnrv',    'label'=>'合約訂單審查表',      'page'=>'con_review.php'],
     'pfmea'               => ['prefix'=>'pfmea',   'label'=>'PFMEA',               'page'=>'pfmea.php'],
     'proc_transfer'       => ['prefix'=>'ptl',     'label'=>'製程移轉一覽表',      'page'=>'Transfer_Log_Analysis.php'],
     'project'             => ['prefix'=>'prj',     'label'=>'專案管理',            'page'=>'project_mgmt.php'],
@@ -1715,6 +1716,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('tdev', 'td_dev_eval', '產品開發評估表', 'fa-flask', '#c0762c',
                         '為每位使用者指派「產品開發評估表」頁（技術部 &gt; 產品開發評估表，AS 2-TD-02-01）的操作角色。角色功能：<strong>評估表檢閱</strong>＝檢視清單、開啟查看、列印；<strong>評估表登錄</strong>＝檢閱＋新增/編輯、逐項填寫、依部門身分簽核；<strong>評估表管理員</strong>＝登錄＋刪除、AS 文件編號綁定、取消他人簽核。<strong>APQP 小組簽認各部門欄位由該部門任一主管簽核</strong>，部門綁定在「組織角色綁定設定」頁（重用技術/業務/管理/生產/品保部門既有綁定，另有資材部門角色），與本頁的檢閱/登錄/管理角色是兩件事——這裡只決定誰能進本頁操作，能不能簽某部門的欄位另外看是否為該部門主管。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
                         rs_of('td_dev_eval'), rsu_of('td_dev_eval'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('cnrv', 'con_review', '合約訂單審查表', 'fa-handshake-o', '#c0762c',
+                        '為每位使用者指派「合約訂單審查表」頁（業務 &gt; 合約訂單審查表，AS 2-SM-01-06）的操作角色。角色功能：<strong>合約訂單審查-檢視/填寫</strong>＝檢視清單、開啟查看、列印，並可填寫/簽核<strong>自己所屬部門</strong>負責的項目（不需額外指派、只要人在該部門即可，本角色是進本頁的最低門檻）；<strong>合約訂單審查-建立表單</strong>＝檢閱＋挑訂單建立新審查；<strong>合約訂單審查-範本維護與管理</strong>＝建立＋範本項目增刪修改、補資料、作廢。<strong>只有訂單追蹤設定的「稽核製程標籤」判定為需要審查的訂單</strong>（AS 認證範圍內的製程）才能建立本表單。業務課決行走組織角色綁定的 sales_dept、總經理核准走 top_approver，與本頁角色是兩件事——這裡只決定誰能進本頁操作。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
+                        rs_of('con_review'), rsu_of('con_review'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('pfmea', 'pfmea', 'PFMEA潛在失效模式及效應分析', 'fa-exclamation-triangle', '#8A5A2B',
                         '為每位使用者指派「PFMEA潛在失效模式及效應分析」頁（技術部 &gt; PFMEA，AS 3-TD-01-02）的操作角色。角色功能：<strong>PFMEA檢閱</strong>＝檢視清單、開啟查看、列印；<strong>PFMEA登錄</strong>＝檢閱＋新增/編輯分析列；<strong>PFMEA管理員</strong>＝登錄＋刪除、AS 文件編號綁定。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
