@@ -1271,8 +1271,32 @@ function kps_excl_rule_rows(PDO $db, int $iid, int $year): array {
  */
 function kps_detail(PDO $db, string $calc, int $year, int $month, array $params, array $rules = []): array {
     $asMap = kps_as_delegate_map();
-    if (isset($asMap[$calc])) return kpi_as_detail($db, $asMap[$calc], $year, $month, $params, $rules);
-    $out = ['cols'=>[], 'rows'=>[], 'total'=>0, 'note'=>''];
+    if (isset($asMap[$calc])) {
+        $d = kpi_as_detail($db, $asMap[$calc], $year, $month, $params, $rules);
+        $d['supported'] = 1; $d['readonly'] = 0;
+        return $d;
+    }
+    if ($calc === 'existing' || $calc === 'existing_cny') {
+        // existing／existing_cny 本身只是讀正式系統的月快照，沒有自己的來源列——
+        // 但正式項次背後用的計算模組如果本來就支援明細，就唯讀借用過來顯示
+        // （只 SELECT 正式表的排除規則，不寫、也不提供排除功能，鐵則①不破壞）。
+        $oi = kps_official_calc_info($db, (int)($params['item_no'] ?? 0), $year);
+        if ($oi && $oi['calculator_key'] && kpi_as_detail_supported((string)$oi['calculator_key'])) {
+            $oParams = kpi_as_params($oi['params_json']);
+            $oRules = kpi_as_excl_rules($db, (int)$oi['indicator_id'], $year);
+            $d = kpi_as_detail($db, (string)$oi['calculator_key'], $year, $month, $oParams, $oRules);
+            $d['supported'] = 1; $d['readonly'] = 1;
+            $d['note'] = '（沿用正式 KPI 表「#' . (int)($params['item_no'] ?? 0) . '」的明細，僅供檢視）' . ($d['note'] ?? '');
+            return $d;
+        }
+        $hasOfficialCalc = $oi && !empty($oi['calculator_key']);
+        $out = ['cols'=>[], 'rows'=>[], 'total'=>0, 'supported'=>0, 'readonly'=>1,
+                'note'=>$hasOfficialCalc ? ('這個計算方式（' . (string)$oi['calculator_key'] . '）在正式系統也還沒有逐筆明細，請到正式 KPI 表查看目前數值。')
+                      : ($oi ? '正式項次是人工填寫，沒有來源明細可看，請到正式 KPI 表查看目前數值。'
+                             : '找不到對應的正式指標。')];
+        return kpi_as_detail_finish($out, []);
+    }
+    $out = ['cols'=>[], 'rows'=>[], 'total'=>0, 'note'=>'', 'supported'=>1, 'readonly'=>0];
     switch ($calc) {
         case 'dev_eval_lead':
             $out['cols'] = [['k'=>'doc','t'=>'文件編號'], ['k'=>'part','t'=>'料號/品名'],
@@ -1316,8 +1340,22 @@ function kps_detail(PDO $db, string $calc, int $year, int $month, array $params,
             break;
         default:
             $out['note'] = '這個計算方式沒有逐筆明細。';
+            $out['supported'] = 0;
     }
     return kpi_as_detail_finish($out, $rules);
+}
+
+/** 查某個正式 KPI 項次目前的計算方式與參數（唯讀；給 existing／existing_cny 的「數值明細」借用正式明細用，
+ *  只 SELECT 不寫——鐵則①已經在用的同一種唯讀借用，這裡只是多借「明細」這一塊） */
+function kps_official_calc_info(PDO $db, int $itemNo, int $year): ?array {
+    if ($itemNo <= 0) return null;
+    $st = $db->prepare("SELECT i.indicator_id, y.calculator_key, y.params_json
+                        FROM kpi_as_indicator i
+                        JOIN kpi_as_indicator_year y ON y.indicator_id=i.indicator_id AND y.year=?
+                        WHERE i.item_no=?");
+    $st->execute([$year, $itemNo]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    return $r ?: null;
 }
 
 /** 單一指標的試算（DB 列版本，取代舊的 kpi_scheme_preview($item)；邏輯相同只是資料來源換成 DB）。

@@ -183,8 +183,11 @@ function kpsOwnerText(array $row, array $deptName): string {
         td.ks-cell { cursor:pointer; }
         td.ks-cell:hover { background:#FBF0DD; box-shadow:inset 0 0 0 1px #D8BE93; }
 
-        /* 儲存格右鍵選單式小面板（仿 KPI.php #cellMenu） */
-        .cm-menu { position:fixed; z-index:1200; background:#fff; border:1px solid #D8BE93; border-radius:6px;
+        /* 儲存格右鍵選單式小面板（仿 KPI.php #cellMenu）。
+           一定要用 position:absolute 搭配 e.pageX/pageY（文件座標，含捲動量）——
+           用 position:fixed 搭配 pageX/pageY 會在頁面/表格有捲動時整個對不上點擊位置
+           （fixed 是視窗座標、pageX/Y 是文件座標，兩者混用捲動一多就差了一截）。 */
+        .cm-menu { position:absolute; z-index:1200; background:#fff; border:1px solid #D8BE93; border-radius:6px;
             box-shadow:0 4px 16px rgba(0,0,0,.18); min-width:190px; font-size:13px; display:none; }
         .cm-head { padding:7px 12px; background:#F7E0BD; color:#5b3a1e; font-weight:bold; border-radius:6px 6px 0 0; }
         .cm-item { padding:7px 12px; color:#5b3a1e; cursor:pointer; }
@@ -752,9 +755,15 @@ $(document).on('click', 'td.ks-cell', function(e){
     var html = '<div class="cm-head">' + itemNo + '. ' + esc(it.name) + '｜' + m + '月</div>';
     items.forEach(function(x, i){ html += '<div class="cm-item" data-i="' + i + '">' + x.t + '</div>'; });
     var $menu = $('#cellMenu').html(html).show();
-    var left = Math.min(e.pageX, $(window).width() - 220);
-    var top  = Math.min(e.pageY + 4, $(window).height() - (items.length * 34 + 40));
-    $menu.css({left: Math.max(4, left), top: Math.max(4, top)});
+    // position:absolute 用的是文件座標（跟 e.pageX/pageY 同一套），下限/上限都要
+    // 加回目前捲動量才夾得對——只用 $(window).width()/height() 夾會在頁面捲動後把選單
+    // 夾到視窗外看不見的地方。
+    var scrollL = $(window).scrollLeft(), scrollT = $(window).scrollTop();
+    var maxLeft = scrollL + $(window).width() - 220;
+    var maxTop  = scrollT + $(window).height() - (items.length * 34 + 40);
+    var left = Math.min(e.pageX, maxLeft);
+    var top  = Math.min(e.pageY + 4, maxTop);
+    $menu.css({left: Math.max(scrollL + 4, left), top: Math.max(scrollT + 4, top)});
     $menu.find('.cm-item').off('click').on('click', function(){ $menu.hide(); items[+$(this).data('i')].f(); });
     e.stopPropagation();
 });
@@ -955,11 +964,15 @@ function renderVio(){
        + '<br>不符合標準 <b>' + d.total + '</b> 筆' + (exN ? ('，其中 <b>' + exN + '</b> 筆已逐筆排除') : '')
        + (+d.rule_ex ? ('，另有 <b>' + d.rule_ex + '</b> 筆被排除規則排掉') : '')
        + (+d.truncated ? '（畫面最多顯示 500 筆）' : '') + '。</div>';
-    if (+d.can_adjust) {
+    if (+d.readonly) {
+        h += '<div class="vio-warn">這是沿用<b>正式 KPI 表</b>背後計算模組所算出來的明細，<b>僅供檢視</b>——'
+           + '本方案的指標本身是直接讀正式表的月快照，不會自己重算，所以這裡不提供排除。'
+           + '要調整請到 <a href="KPI.php" target="_blank" rel="noopener">正式 KPI 表</a> 操作。</div>';
+    } else if (+d.can_adjust) {
         h += '<div class="vio-warn">確實不符合標準的請保持原樣；不該算進績效的那幾筆才勾選後按「排除選取」——'
            + '<b>排除只影響 KPI 計算，不會動到任何一筆真實資料</b>。</div>';
     }
-    h += vioRulesHtml();
+    if (!+d.readonly) h += vioRulesHtml();
     h += vioFilterHtml();
 
     var showChk = (+d.can_adjust && d.rows.length) ? 1 : 0;

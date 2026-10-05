@@ -198,16 +198,20 @@ case 'detail_rows': {
     $iy = kps_get_iy_row($db, $iid, $year);
     if (!$iy) jerr('找不到指標');
     $calc = (string)$iy['calculator_key'];
-    if ($iy['source_mode'] !== 'auto' || !kps_detail_supported($calc)) {
-        jout(['supported'=>0, 'rows'=>[], 'cols'=>[],
-              'msg'=>$iy['source_mode'] !== 'auto' ? '人工填寫的指標沒有來源明細。'
-                                                   : '這個計算方式還沒有做數值明細。']);
+    if ($iy['source_mode'] !== 'auto') {
+        jout(['supported'=>0, 'readonly'=>0, 'rows'=>[], 'cols'=>[], 'msg'=>'人工填寫的指標沒有來源明細。']);
     }
+    // existing／existing_cny 不受 kps_detail_supported() 這道白名單限制——是否有東西可以看，
+    // 交給 kps_detail() 自己去查正式項次背後的計算模組決定（唯讀代理），不在這裡先擋掉。
     $params = kpi_as_params($iy['params_json']);
     $rules  = kps_excl_rules($db, $iid, $year);
     $d = kps_detail($db, $calc, $year, $month, $params, $rules);
+    $readonly = !empty($d['readonly']);
+    if (empty($d['supported'])) {
+        jout(['supported'=>0, 'readonly'=>$readonly ? 1 : 0, 'rows'=>[], 'cols'=>[], 'msg'=>$d['note'] ?? '這個計算方式還沒有做數值明細。']);
+    }
     $adj = [];
-    foreach (kps_adjust_rows($db, $iid, $year, $month) as $a) $adj[(string)$a['row_key']] = $a;
+    if (!$readonly) foreach (kps_adjust_rows($db, $iid, $year, $month) as $a) $adj[(string)$a['row_key']] = $a;
     $rows = [];
     $cap = 500;
     $ordered = [];
@@ -223,13 +227,14 @@ case 'detail_rows': {
         $r['ex_at']     = isset($adj[$k]) ? (string)$adj[$k]['created_at'] : '';
         $rows[] = $r;
     }
-    jout(['supported'=>1, 'warn'=>$d['warn'] ?? 0, 'cols'=>$d['cols'], 'rows'=>$rows,
+    $canAdjust = $readonly ? 0 : (kps_can_edit($perms, $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null,
+                                                (int)$u['id']) ? 1 : 0);
+    jout(['supported'=>1, 'readonly'=>$readonly ? 1 : 0, 'warn'=>$d['warn'] ?? 0, 'cols'=>$d['cols'], 'rows'=>$rows,
           'total'=>$d['total'], 'listed'=>count($d['rows']), 'rule_ex'=>$d['rule_ex'] ?? 0,
           'truncated'=>count($d['rows']) > $cap ? 1 : 0, 'note'=>$d['note'],
-          'dims'=>$d['dims'] ?? [], 'dim_labels'=>kpi_as_dim_labels(),
-          'rules'=>kps_excl_rule_rows($db, $iid, $year),
-          'can_adjust'=>kps_can_edit($perms, $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null,
-                                     (int)$u['id']) ? 1 : 0,
+          'dims'=>$readonly ? [] : ($d['dims'] ?? []), 'dim_labels'=>kpi_as_dim_labels(),
+          'rules'=>$readonly ? [] : kps_excl_rule_rows($db, $iid, $year),
+          'can_adjust'=>$canAdjust,
           'target'=>['dir'=>$iy['target_direction'], 'value'=>$iy['target_value']]]);
 }
 
