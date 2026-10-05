@@ -716,8 +716,59 @@ function cp_bom_processes(PDO $db, string $bom): array
  * =================================================================== */
 
 /**
+ * 製程大類（process_type_id）查詢，請求內快取——cp_sip_items()／cp_ss_doc_exists()
+ * 的「通用 SIP 依製程大類退回」都要用它，一個請求裡同一個 process_no 只查一次。
+ */
+function cp_process_type_id(PDO $db, int $processNo): ?int
+{
+    static $cache = [];
+    if (array_key_exists($processNo, $cache)) return $cache[$processNo];
+    $v = null;
+    try {
+        $st = $db->prepare("SELECT process_type_id FROM process_no WHERE ProcessNo=?");
+        $st->execute([$processNo]);
+        $r = $st->fetchColumn();
+        if ($r !== false && $r !== null) $v = (int)$r;
+    } catch (Throwable $e) {}
+    return $cache[$processNo] = $v;
+}
+
+/**
+ * 通用文件（scope='general'）依「製程大類」退回：精準 process_no 比對找不到時，
+ * 改找同一個製程大類（process_type_id）底下、綁在別的 process_no 上的通用文件。
+ *
+ * 為什麼需要這一層（2026-10-05 使用者交辦）：包裝製程代號現場有 168／169 兩個
+ * （還可能繼續增加），檢驗標準卻是同一套——通用 SIP 若只能綁單一 process_no，
+ * 不是兩個代號各建一份內容要手動同步的文件，就是新代號一出現又抓不到。
+ * process_type 主檔本來就把同一類製程歸在一起（168／169 皆屬
+ * process_type_id=16「雷刻與包裝」），用它當退回鍵，管理員只要把新製程代號
+ * 掛進同一個 process_type，不必回頭改任何通用 SIP 的綁定。
+ *
+ * 刻意放在「精準 process_no 比對」之後、「ss_item_tpl 範本」之前：
+ * 已經綁了自己專屬通用文件的製程（如 process_no=12 齒研）優先權不變，
+ * 這一層只補「同大類底下沒有自己專屬通用文件」的那些製程代號。
+ */
+function cp_sip_general_doc_by_type(PDO $db, string $kind, int $processNo): ?array
+{
+    $typeId = cp_process_type_id($db, $processNo);
+    if (!$typeId) return null;
+    try {
+        $sql = "SELECT d.doc_id, v.ver_id, v.ver_no
+                  FROM ss_doc d
+                  JOIN ss_ver v ON v.ver_id = d.cur_ver_id AND v.status='approved'
+                  JOIN process_no pn ON pn.ProcessNo = d.process_no AND pn.process_type_id = ?
+                 WHERE d.is_deleted=0 AND d.kind=? AND d.scope='general' AND d.process_no<>?
+                 ORDER BY d.doc_id DESC LIMIT 1";
+        $st = $db->prepare($sql);
+        $st->execute([$typeId, $kind, $processNo]);
+        return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+    } catch (Throwable $e) { return null; }
+}
+
+/**
  * 該料號／該製程的 SIP 檢驗項目。
- * 優先序：綁這個料號的 SIP → 該製程的通用 SIP → 該製程的檢驗項目預設值範本。
+ * 優先序：綁這個料號的 SIP → 該製程的通用 SIP → 同製程大類的通用 SIP（見
+ * cp_sip_general_doc_by_type 說明）→ 該製程的檢驗項目預設值範本。
  * 一律只取 approved 版次（見檔頭資料事實⑵）。
  */
 function cp_sip_items(PDO $db, ?int $partDId, ?int $processNo): array
@@ -742,6 +793,7 @@ function cp_sip_items(PDO $db, ?int $partDId, ?int $processNo): array
     $doc = null; $src = '';
     if ($partDId) { $doc = $try('part'); if ($doc) $src = 'sip'; }
     if (!$doc)    { $doc = $try('general'); if ($doc) $src = 'sip_general'; }
+    if (!$doc)    { $doc = cp_sip_general_doc_by_type($db, 'sip', $processNo); if ($doc) $src = 'sip_general_cat'; }
 
     if ($doc) {
         try {
@@ -1276,7 +1328,11 @@ function cp_has_real_sip(PDO $db, ?int $partDId, ?int $processNo): bool
     return cp_ss_doc_exists($db, 'sip', $partDId, $processNo);
 }
 
-/** cp_has_sop／cp_has_real_sip 共用：ss_doc 是否存在已核准版本（part 優先，查不到才退回 general）。 */
+/**
+ * cp_has_sop／cp_has_real_sip 共用：ss_doc 是否存在已核准版本
+ * （part 優先 → 該製程的通用 → 同製程大類的通用，與 cp_sip_items() 同一套優先序，
+ * 否則會出現「CP 已經顯示包裝檢驗項目了，缺口提示卻還說缺 SIP」的矛盾）。
+ */
 function cp_ss_doc_exists(PDO $db, string $kind, ?int $partDId, ?int $processNo): bool
 {
     if ($processNo === null) return false;
@@ -1290,7 +1346,8 @@ function cp_ss_doc_exists(PDO $db, string $kind, ?int $partDId, ?int $processNo)
         catch (Throwable $e) { return false; }
     };
     if ($partDId && $try('part')) return true;
-    return $try('general');
+    if ($try('general')) return true;
+    return cp_sip_general_doc_by_type($db, $kind, $processNo) !== null;
 }
 
 /**
