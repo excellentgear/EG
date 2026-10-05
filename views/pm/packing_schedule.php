@@ -138,6 +138,64 @@ pk_ensure_index($pdo, 'qc_packing_inspection', 'idx_pki_insdate', "INDEX idx_pki
 // 既有資料（本次改版前寫入的）一律視為已結案：status 預設值已是 'closed'，這裡只需確保欄位不是 NULL（保險）
 try { $pdo->exec("UPDATE qc_packing_inspection SET status='closed' WHERE status IS NULL OR status=''"); } catch (Exception $e) {}
 
+// =============================================================================
+// 包裝日期編號（2026-10-05 使用者交辦）：格式＝前綴＋包裝日期(YYYYMMDD)＋當天流水號，
+// 例 PK20161005001。只在第一次結案(status 由非 closed 變成 closed)時配發並永久保留，
+// 不因之後解鎖修改或編碼規則被管理員改掉而重新產生——「調整編碼原則不溯及既往」就是靠
+// 「只在尚未配號時才配號」這一條規則天然達成，不必另外記一份「生效前/後」的時間點。
+// =============================================================================
+pk_ensure_column($pdo, 'qc_packing_inspection', 'pack_no', "pack_no VARCHAR(20) NULL COMMENT '包裝日期編號(結案當下依當時編碼規則產生，一經產生不受後續規則修改影響)' AFTER closed_at");
+pk_ensure_index($pdo, 'qc_packing_inspection', 'idx_pki_packno', "UNIQUE INDEX idx_pki_packno (pack_no)");
+
+// 包裝日期編號的每日流水號計數器（同一天不論用哪一種前綴規則，流水號一律連續不重置）
+$pdo->exec("CREATE TABLE IF NOT EXISTS pm_packing_no_seq (
+    seq_date DATE PRIMARY KEY COMMENT '包裝日期',
+    last_no  INT NOT NULL DEFAULT 0 COMMENT '當天已配發的最後一個流水號'
+) COMMENT='包裝日期編號流水號計數器'");
+
+// 編碼原則（管理員可改，僅影響「之後才結案」的新紀錄）：前綴文字＋流水號位數，皆有合理預設值
+function pk_packno_rule(PDO $pdo): array {
+    $def = ['prefix' => 'PK', 'digits' => 3];
+    try {
+        $st = $pdo->prepare("SELECT param_value FROM system_parameters WHERE param_group='PACKING_SCHEDULE' AND param_key='pack_no_rule' LIMIT 1");
+        $st->execute();
+        $v = $st->fetchColumn();
+        if ($v === false) return $def;
+        $r = json_decode($v, true);
+        if (!is_array($r)) return $def;
+        $prefix = isset($r['prefix']) ? trim((string)$r['prefix']) : $def['prefix'];
+        $digits = isset($r['digits']) ? (int)$r['digits'] : $def['digits'];
+        if ($prefix === '') $prefix = $def['prefix'];
+        if ($digits < 1 || $digits > 6) $digits = $def['digits'];
+        return ['prefix' => $prefix, 'digits' => $digits];
+    } catch (Throwable $e) { return $def; }
+}
+function pk_packno_rule_save(PDO $pdo, string $prefix, int $digits, string $by): void {
+    $prefix = trim($prefix);
+    if ($prefix === '') throw new Exception('編號前綴不可空白');
+    if (!preg_match('/^[A-Za-z0-9]{1,10}$/', $prefix)) throw new Exception('編號前綴只能是英數字，最多10字');
+    if ($digits < 1 || $digits > 6) throw new Exception('流水號位數需在 1~6 之間');
+    $upd = $pdo->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by)
+                           VALUES ('PACKING_SCHEDULE', 'pack_no_rule', ?, '包裝日期編號：前綴與流水號位數（不溯及既往，僅影響之後才結案的紀錄）', ?)
+                           ON DUPLICATE KEY UPDATE param_value = VALUES(param_value), updated_by = VALUES(updated_by)");
+    $upd->execute([json_encode(['prefix' => $prefix, 'digits' => $digits]), $by]);
+}
+
+// 配發一個包裝日期編號；$ymd 指定要用哪一天（即該筆紀錄的檢驗日期，補登歷史資料時可能是過去日期），
+// 預設今天。與 qab_scrap_alloc() 同一套做法：INSERT IGNORE 建當日列 + SELECT…FOR UPDATE 鎖住配號，
+// 杜絕並發撞號；呼叫端必須已在交易內（本頁唯一呼叫點 save_result 本身就有 beginTransaction）。
+function pk_packno_alloc(PDO $pdo, ?string $ymd = null): string {
+    $dateSql = $ymd ?: date('Y-m-d');
+    $pdo->prepare("INSERT IGNORE INTO pm_packing_no_seq (seq_date, last_no) VALUES (?, 0)")->execute([$dateSql]);
+    $sel = $pdo->prepare("SELECT last_no FROM pm_packing_no_seq WHERE seq_date = ? FOR UPDATE");
+    $sel->execute([$dateSql]);
+    $next = (int)$sel->fetchColumn() + 1;
+    $pdo->prepare("UPDATE pm_packing_no_seq SET last_no = ? WHERE seq_date = ?")->execute([$next, $dateSql]);
+    $rule = pk_packno_rule($pdo);
+    $ymdCompact = str_replace('-', '', $dateSql);
+    return $rule['prefix'] . $ymdCompact . str_pad((string)$next, $rule['digits'], '0', STR_PAD_LEFT);
+}
+
 // 包裝外觀檢驗「預設模板」（全系統一份）
 $pdo->exec("CREATE TABLE IF NOT EXISTS pm_packing_appearance_template (
     id INT AUTO_INCREMENT PRIMARY KEY COMMENT '主鍵',
@@ -846,6 +904,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $now = date('Y-m-d H:i:s');
 
             $pdo->beginTransaction();
+
+            // 包裝日期編號：只在「第一次結案」配發，且一經配發永久保留（不溯及既往，見上方
+            // pk_packno_alloc() 註解）——既有紀錄已經有編號就不重配，避免解鎖修改後再按完成又多配一個。
+            $packNo = null;
+            if ($complete && (!$cur || empty($cur['pack_no']))) {
+                $packNo = pk_packno_alloc($pdo, $insDate);
+            }
+
             if ($cur) {
                 $pkgId = (int)$cur['packing_inspection_id'];
                 $sql = "UPDATE qc_packing_inspection SET
@@ -856,6 +922,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             is_backfill = GREATEST(is_backfill, ?), backfill_by = COALESCE(backfill_by, ?), backfill_at = COALESCE(backfill_at, ?),
                             closed_by = " . ($complete ? "COALESCE(closed_by, ?)" : "closed_by") . ",
                             closed_at = " . ($complete ? "COALESCE(closed_at, ?)" : "closed_at") . ",
+                            pack_no = COALESCE(pack_no, ?),
                             updated_by = ?" . ($needPasswordNote ? ", edit_note = ?" : "") . "
                         WHERE packing_inspection_id = ?";
                 $params = [
@@ -867,6 +934,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 ];
                 if ($complete) $params[] = $pk_uid;
                 if ($complete) $params[] = $now;
+                $params[] = $packNo;
                 $params[] = $pk_uid;
                 if ($needPasswordNote) $params[] = ('管理員解鎖修改：' . $user_cname . ' ' . date('Y-m-d H:i'));
                 $params[] = $pkgId;
@@ -876,14 +944,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         (bom_ing_fid, bom, part_no, inspection_date, customer_name, order_qty, bom_total_qty,
                          inspected_qty, ok_qty, ng_qty, ship_now_qty, warehouse_qty, is_full_shipment, storage_method, pallet_qty,
                          judgement, inspector, inspector_id, packer, packer_id, remark, status,
-                         is_backfill, backfill_by, backfill_at, closed_by, closed_at, updated_by)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                         is_backfill, backfill_by, backfill_at, closed_by, closed_at, pack_no, updated_by)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
                 $pdo->prepare($sql)->execute([
                     $bomIngFid, $bi['bom'], $bi['part_no'], $insDate, $bi['Client_Name'], $orderQty, $bomTotalQty,
                     $orderQty, $okQty, $ngQty, $shipNowQty, $warehouseQty, $isFullShip, ($storageMethod ?: null), $palletQty,
                     $judgement, $inspectorName, $inspectorId, $packerName, $packerId, $remark, $newStatus,
                     $isBackfill, ($isBackfill ? $pk_uid : null), ($isBackfill ? $now : null),
-                    ($complete ? $pk_uid : null), ($complete ? $now : null), $pk_uid,
+                    ($complete ? $pk_uid : null), ($complete ? $now : null), $packNo, $pk_uid,
                 ]);
                 $pkgId = (int)$pdo->lastInsertId();
             }
@@ -899,7 +967,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
 
             echo json_encode(['success' => true, 'message' => $complete ? '包裝已完成並結案' : '已暫存，可稍後繼續填寫',
-                'pkg_id' => $pkgId, 'status' => $newStatus]);
+                'pkg_id' => $pkgId, 'status' => $newStatus, 'pack_no' => ($packNo ?: ($cur['pack_no'] ?? null))]);
             exit;
         }
 
@@ -1111,14 +1179,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // 12. 已結案檢驗表列印設定：讀取（不卡管理員，ai-rules/18 鐵則9：卡了一般人列印永遠拿不到綁定資訊）
         if ($action === 'print_setting_get') {
             echo json_encode(['success' => true,
-                'as_docs'   => eg_asdoc_list($pdo),
-                'as_doc_id' => eg_asdoc_id($pdo, PACKING_INSP_ASDOC_MODULE),
-                'as_doc'    => eg_asdoc_get($pdo, PACKING_INSP_ASDOC_MODULE),
+                'as_docs'      => eg_asdoc_list($pdo),
+                'as_doc_id'    => eg_asdoc_id($pdo, PACKING_INSP_ASDOC_MODULE),
+                'as_doc'       => eg_asdoc_get($pdo, PACKING_INSP_ASDOC_MODULE),
+                'pack_no_rule' => pk_packno_rule($pdo),
             ]);
             exit;
         }
 
         // 12a. 已結案檢驗表列印設定：儲存（僅管理員；鐵律8 後端再驗一次文件存在性）
+        //      包裝日期編號的編碼原則（前綴／流水號位數）一併在此存檔——改了只影響「之後才結案」
+        //      的新紀錄，已經配過號的既有紀錄一律不受影響（pk_packno_rule_save 本身不碰任何既有資料）。
         if ($action === 'print_setting_save') {
             if (!$PK_CAN_ADMIN) throw new Exception('無權限，僅管理員可設定');
             $docId = (int)($_POST['as_doc_id'] ?? 0);
@@ -1128,6 +1199,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (!$chk->fetchColumn()) throw new Exception('選擇的 AS 文件不存在或已刪除');
             }
             eg_asdoc_save($pdo, PACKING_INSP_ASDOC_MODULE, $docId, $user_cname);
+            if (isset($_POST['pack_no_prefix']) || isset($_POST['pack_no_digits'])) {
+                $cur = pk_packno_rule($pdo);
+                $prefix = trim((string)($_POST['pack_no_prefix'] ?? $cur['prefix']));
+                $digits = (int)($_POST['pack_no_digits'] ?? $cur['digits']);
+                pk_packno_rule_save($pdo, $prefix, $digits, $user_cname);
+            }
             echo json_encode(['success' => true]);
             exit;
         }
@@ -1470,7 +1547,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                     <p class="text-muted" style="margin-bottom:10px;">
                                         <i class="fa fa-info-circle"></i> 預設顯示本月資料；篩選 BOM／料號（同一欄，符合任一即列出）不限定年月份。
                                         已結案紀錄鎖定不可修改，<?= $PK_CAN_ADMIN ? '管理員可點列表右側「解鎖修改」以操作確認密碼開鎖。' : '如需修改請洽管理員以操作確認密碼開鎖。' ?>
-                                        「列印已包裝明細」是清單彙總表；每一列右側 <i class="fa fa-print"></i> 或「批次列印檢驗表」印的是正式的成品包裝及出貨檢驗表（依目前篩選結果逐筆各自列印）。
+                                        「列印已包裝明細」是清單彙總表；每一列右側 <i class="fa fa-print"></i> 或「批次列印檢驗表」印的是正式的包裝自主檢查表（依目前篩選結果逐筆各自列印）。
                                         <span class="pk-count-badge pull-right" id="cl-count"></span>
                                     </p>
                                     <table class="table pk-table">
@@ -1567,7 +1644,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     <div class="pk-float-window" id="pkWindow">
         <div class="pk-float-header" id="pkWindowHeader">
             <button type="button" class="close" id="pkWindowClose">&times;</button>
-            <h4 style="margin:0;"><i class="fa fa-cube"></i> 包裝檢驗回報 <small id="pk-win-sub" style="color:#cde6ff;"></small></h4>
+            <h4 style="margin:0;"><i class="fa fa-cube"></i> 包裝自主檢查表 <small id="pk-win-sub" style="color:#cde6ff;"></small></h4>
         </div>
         <div class="pk-float-body">
             <!-- 表頭資訊 -->
@@ -1826,11 +1903,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
             <h4 class="modal-title"><i class="fa fa-print"></i> 已結案檢驗表 — 列印設定</h4></div>
         <div class="modal-body">
-            <p class="text-muted" style="font-size:12px;">綁定的 AS 文件決定正式列印版的表頭名稱與頁尾右下角編號（版次依每筆紀錄自己的檢驗日期回推）。預設已綁定 <strong>3-SM-01-01 成品包裝及出貨檢驗表</strong>，可依實際使用的表單改綁其他文件。</p>
+            <p class="text-muted" style="font-size:12px;">綁定的 AS 文件決定正式列印版的表頭名稱與頁尾右下角編號（版次依每筆紀錄自己的檢驗日期回推）。預設已綁定 <strong>3-SM-01-01 包裝自主檢查表</strong>，可依實際使用的表單改綁其他文件。</p>
             <label>目前綁定：</label>
             <div style="margin:6px 0 10px;"><span id="pki-asdoc-label" style="font-weight:600;"></span></div>
             <button type="button" class="btn btn-default btn-sm" id="pki-asdoc-pick"><i class="fa fa-search"></i> 選擇 AS 文件</button>
             <button type="button" class="btn btn-link btn-sm" id="pki-asdoc-clear">解除綁定</button>
+
+            <hr>
+            <p class="text-muted" style="font-size:12px;">印在表單右上角的<strong>包裝日期編號</strong>（例：PK20161005001＝前綴＋包裝日期＋當天流水號3碼），於每筆紀錄<strong>第一次完成包裝結案時</strong>依下列編碼原則自動產生並永久保留；<strong>修改編碼原則不會改掉已經產生過的編號，只影響修改之後才結案的新紀錄</strong>。</p>
+            <div class="row">
+                <div class="col-sm-6">
+                    <label>編號前綴</label>
+                    <input type="text" id="pki-packno-prefix" class="form-control" maxlength="10" placeholder="PK">
+                </div>
+                <div class="col-sm-6">
+                    <label>流水號位數</label>
+                    <input type="number" id="pki-packno-digits" class="form-control" min="1" max="6" value="3">
+                </div>
+            </div>
+            <p class="text-muted" style="font-size:12px;margin-top:6px;">範例：<span id="pki-packno-sample" style="font-weight:600;"></span></p>
         </div>
         <div class="modal-footer">
             <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
@@ -1861,9 +1952,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     <li>「判定結果」分合格／不合格／待判定三種，擇一：不合格一律要人工手動勾選，系統不會自動判不合格；「已結案清單」上方的卡片可依判定結果快速篩選（全部／合格／不合格／待判定），數字是該篩選條件下符合的筆數。</li>
                     <li>已結案的紀錄無法直接修改，需由管理員在「已結案清單」點「解鎖修改」並輸入操作確認密碼。</li>
                     <?php if ($PK_CAN_BACKFILL): ?><li>「補登包裝紀錄」僅能用於<strong>完全沒有包裝紀錄</strong>的舊 BOM，已有紀錄的請改用「已結案清單」解鎖修改。<?= $PK_CAN_BACKFILL_PACKER ? '你目前有權限可指定其他人為包裝人員；管理員可在「包裝製程設定」限制可挑選的部門範圍（含子部門），未設定則全公司在職人員皆可選。' : '你目前只能以自己的身分補登，如需指定他人請洽管理員授權。' ?>由補登建立的紀錄若先按「暫存」，之後不論用點列或已結案清單解鎖再打開，補登日期與包裝人員欄位一樣看得到、改得動，不會消失。</li><?php endif; ?>
-                    <li>「已結案清單」每一列右側 <i class="fa fa-print"></i> 可列印這一筆的正式<strong>成品包裝及出貨檢驗表</strong>（依該筆紀錄的檢驗日期回推版次，品檢／包裝人員蓋帶日期的圖章）；「批次列印檢驗表」依目前的篩選結果（關鍵字／日期區間／判定卡片）一次逐筆各自開視窗列印，不會合併成一份文件，筆數較多時會先提醒可能出現瀏覽器快顯封鎖。</li>
+                    <li>「已結案清單」每一列右側 <i class="fa fa-print"></i> 可列印這一筆的正式<strong>包裝自主檢查表</strong>（依該筆紀錄的檢驗日期回推版次，品檢／包裝人員蓋帶日期的圖章，右上角印<strong>包裝日期編號</strong>）；「批次列印檢驗表」依目前的篩選結果（關鍵字／日期區間／判定卡片）一次逐筆各自開視窗列印，不會合併成一份文件，筆數較多時會先提醒可能出現瀏覽器快顯封鎖。</li>
+                    <li><strong>包裝日期編號</strong>在第一次「完成包裝」結案時自動產生並永久保留，格式為「前綴＋包裝日期（檢驗日期）YYYYMMDD＋同一天的流水號3碼」（預設前綴 PK，例：PK20261005001）；<?= $PK_CAN_ADMIN ? '前綴與流水號位數可在「檢驗表列印設定」調整，' : '' ?><strong>調整編碼原則不會改掉已經產生過的編號，只影響調整之後才結案的新紀錄</strong>。</li>
                 </ul>
-                <p><strong>設定入口：</strong>包裝製程設定／外觀檢驗模板（頁首按鈕）；補登可指定包裝人員的部門範圍在「包裝製程設定」跳窗內（僅管理員看得到）；已結案清單的「檢驗表列印設定」（僅管理員看得到）可改綁列印用的 AS 文件編號，預設綁定 3-SM-01-01。</p>
+                <p><strong>設定入口：</strong>包裝製程設定／外觀檢驗模板（頁首按鈕）；補登可指定包裝人員的部門範圍在「包裝製程設定」跳窗內（僅管理員看得到）；已結案清單的「檢驗表列印設定」（僅管理員看得到）可改綁列印用的 AS 文件編號（預設綁定 3-SM-01-01）與<strong>包裝日期編號的前綴／流水號位數</strong>。</p>
                 <p><strong>權限角色：</strong>一般包裝填寫（暫存/完成包裝、勾選判定結果）與檢驗表列印全體登入者皆可使用；「補登舊資料」與「指定補登包裝人員」「解鎖修改已結案紀錄／角色與功能設定」「設定包裝人員部門範圍」「檢驗表列印設定」由管理員於本頁「角色與功能設定」指派角色，再到人員權限設定指派給人員。</p>
             </div>
         </div></div>
@@ -3122,7 +3214,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             var row = data.row || {}, hdr = row.header || {};
             var company = data.company || '';
             window.__ownCompany = company; // eg_stamp.js 畫預設回墨印時要用（ai-rules/18 鐵則2）
-            var title = (data.doc && data.doc.doc_name) ? data.doc.doc_name : '成品包裝及出貨檢驗表';
+            var title = (data.doc && data.doc.doc_name) ? data.doc.doc_name : '包裝自主檢查表';
             var asTxt = String(data.doc_no_print || '').replace(/['\\]/g, '');
             var bizDate = pkiDispDate(row.inspection_date);
 
@@ -3190,13 +3282,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 '<td class="p-sign-box"><div class="cap">包裝人員</div>' + pkiStampHtml(data.packer_name, bizDate, data.packer_asof) + '</td>' +
                 '</tr></table>';
 
-            var body = '<div class="p-comp">' + pkEsc(company) + '</div>' +
+            var packNoTxt = String(row.pack_no || '').replace(/['\\]/g, '');
+            var body = '<div class="p-hdr">' +
+                (packNoTxt ? ('<div class="p-packno">包裝日期編號：' + pkEsc(packNoTxt) + '</div>') : '') +
+                '<div class="p-comp">' + pkEsc(company) + '</div>' +
                 '<div class="p-title">' + pkEsc(title) + '</div>' +
+                '</div>' +
                 metaTbl + apTbl + protTbl + ctTbl + shipTbl + signTbl;
 
             var css = 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;margin:0;padding:0 4mm;color:#222;' +
                 '-webkit-print-color-adjust:exact;print-color-adjust:exact;}' +
                 '*{box-sizing:border-box;}' +
+                '.p-hdr{position:relative;}' +
+                '.p-packno{position:absolute;top:0;right:0;font-size:10px;color:#333;}' +
                 '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:2px;}' +
                 '.p-title{font-size:16px;font-weight:bold;text-align:center;letter-spacing:5px;margin-bottom:8px;}' +
                 'table{width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse;margin-bottom:6px;}' +
@@ -3259,7 +3357,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }, 'json');
         });
 
-        // ── 檢驗表列印設定（AS 文件編號綁定）：限管理員 ─────────────────────
+        // ── 檢驗表列印設定（AS 文件編號綁定＋包裝日期編號規則）：限管理員 ─────────────────────
         <?php if ($PK_CAN_ADMIN): ?>
         var PKI_PRINT_SET = { docs: [], docId: 0, doc: null };
         $('#btn-print-setting').click(function () {
@@ -3269,6 +3367,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 PKI_PRINT_SET.docId = parseInt(r.as_doc_id || 0) || 0;
                 PKI_PRINT_SET.doc = r.as_doc || null;
                 pkiRenderAsDocLabel();
+                var rule = r.pack_no_rule || { prefix: 'PK', digits: 3 };
+                $('#pki-packno-prefix').val(rule.prefix);
+                $('#pki-packno-digits').val(rule.digits);
+                pkiRenderPacknoSample();
                 $('#printSetModal').modal('show');
             }, 'json');
         });
@@ -3276,6 +3378,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             var txt = (window.EGAsDoc && EGAsDoc.label) ? EGAsDoc.label(PKI_PRINT_SET.doc) : (PKI_PRINT_SET.doc ? PKI_PRINT_SET.doc.doc_no : '尚未綁定');
             $('#pki-asdoc-label').text(txt);
         }
+        function pkiRenderPacknoSample() {
+            var prefix = ($('#pki-packno-prefix').val() || 'PK').trim();
+            var digits = parseInt($('#pki-packno-digits').val(), 10) || 3;
+            var today = new Date(), ymd = today.getFullYear() + String(today.getMonth() + 1).padStart(2, '0') + String(today.getDate()).padStart(2, '0');
+            $('#pki-packno-sample').text(prefix + ymd + '1'.padStart(digits, '0'));
+        }
+        $('#pki-packno-prefix, #pki-packno-digits').on('input', pkiRenderPacknoSample);
         $('#pki-asdoc-pick').click(function () {
             EGAsDoc.open({
                 docs: PKI_PRINT_SET.docs, current: PKI_PRINT_SET.docId, title: '已結案檢驗表－AS 文件編號綁定',
@@ -3284,7 +3393,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         });
         $('#pki-asdoc-clear').click(function () { PKI_PRINT_SET.docId = 0; PKI_PRINT_SET.doc = null; pkiRenderAsDocLabel(); });
         $('#btn-save-print-setting').click(function () {
-            $.post(API, { action: 'print_setting_save', as_doc_id: PKI_PRINT_SET.docId }, function (r) {
+            var prefix = ($('#pki-packno-prefix').val() || '').trim();
+            var digits = parseInt($('#pki-packno-digits').val(), 10) || 3;
+            if (!/^[A-Za-z0-9]{1,10}$/.test(prefix)) { alert('編號前綴只能是英數字，最多10字'); return; }
+            if (digits < 1 || digits > 6) { alert('流水號位數需在 1~6 之間'); return; }
+            $.post(API, { action: 'print_setting_save', as_doc_id: PKI_PRINT_SET.docId, pack_no_prefix: prefix, pack_no_digits: digits }, function (r) {
                 if (!r.success) { alert(r.message || '儲存失敗'); return; }
                 $('#printSetModal').modal('hide');
             }, 'json');
