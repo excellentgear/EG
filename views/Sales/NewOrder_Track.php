@@ -1812,13 +1812,6 @@ $AS_TAG_REQUIRE = ot_astag_require_save($db);
 $AS_TAG_LABELS  = ot_astag_label_map($db);
 // 篩選下拉用的選項（一律用「本公司」的完整清單，否則廠內治具的訂單永遠篩不出來）
 $AS_TAG_FILTER_OPTS = ot_astag_options($db, true);
-// ── 合約訂單審查表（2026-10-02 使用者交辦）───────────────────────────────
-// 「這張訂單要不要審查」＝上面稽核製程標籤的 kind='process' 那幾種（齒研、插齒…），
-// 唯一判定在 order_as_tag_lib.php，這裡不再另外列一份製程清單。
-// $RVF_SRC_TID=0 代表管理員還沒在審核表單引擎建那張綁訂單的模板，入口自動整欄不顯示，
-// 不影響任何人現有的操作（與稽核製程標籤本身同一種「設定前完全不存在」的上線方式）。
-require_once __DIR__ . '/../../src/common/review_form_lib.php';
-$RVF_SRC_TID = rvf_src_bind_template_id($db);
 
 if (!($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']))) {
     $ate_list = $conn->getAll("SELECT `user_cname`,`user_uname`,`id` FROM `user` WHERE `user_status`=63");
@@ -3344,11 +3337,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         $startRow = ($offset + 1);
         $endRow   = min($offset + $limit, $statsResult['total_records']);
 
-        $pagination  = '<div style="display:flex;align-items:center;gap:6px;justify-content:flex-end;">';
-        $pagination .= '<small style="color:#888;white-space:nowrap;">' . $startRow . '–' . $endRow . ' / ' . $statsResult['total_records'] . ' 筆</small>';
+        // 2026-10-05 使用者要求：移到表格右上角之後順便加「跳第一頁／最後一頁」——
+        // 筆數多時（這頁常見上千筆）只有上一頁/下一頁要點很多次才能到頭尾。
+        $pagination  = '<div style="display:flex;align-items:center;gap:4px;justify-content:flex-end;">';
+        $pagination .= '<small style="color:#888;white-space:nowrap;margin-right:2px;">' . $startRow . '–' . $endRow . ' / ' . $statsResult['total_records'] . ' 筆</small>';
+        $pagination .= '<button class="btn btn-default btn-xs" ' . ($prevDisabled ? 'disabled' : '') . ' onclick="fetchTableData(1);return false;" title="第一頁"><i class="fa fa-angle-double-left"></i></button>';
         $pagination .= '<button class="btn btn-default btn-xs" ' . ($prevDisabled ? 'disabled' : '') . ' onclick="fetchTableData(' . max(1,$page-1) . ');return false;" title="上一頁"><i class="fa fa-chevron-left"></i></button>';
-        $pagination .= '<span style="font-size:12px;color:#555;">' . $page . ' / ' . $totalPages . '</span>';
+        $pagination .= '<span style="font-size:12px;color:#555;white-space:nowrap;">' . $page . ' / ' . $totalPages . '</span>';
         $pagination .= '<button class="btn btn-default btn-xs" ' . ($nextDisabled ? 'disabled' : '') . ' onclick="fetchTableData(' . min($totalPages,$page+1) . ');return false;" title="下一頁"><i class="fa fa-chevron-right"></i></button>';
+        $pagination .= '<button class="btn btn-default btn-xs" ' . ($nextDisabled ? 'disabled' : '') . ' onclick="fetchTableData(' . $totalPages . ');return false;" title="最後一頁"><i class="fa fa-angle-double-right"></i></button>';
         $pagination .= '</div>';
     }
 
@@ -3908,14 +3905,38 @@ foreach($dCounts as $c) {
                     /* 篩選列自適應（2026-09-22 使用者指定口徑）：一行放不下時**先把搜尋欄位縮小**，
                        **按鈕文字一律保留不可以收成圖示**——只剩圖示時根本看不出哪顆是哪顆。
                        第一段只縮客戶（使用者指定），還不夠才連料號與全表搜尋一起縮，
-                       再放不下就讓它換行（分頁不靠右，避免第二行留一大片空白）。
-                       欄位變窄時 placeholder 也會換成短字（由 fbFit() 處理），否則只看得到半個字。 */
+                       再放不下就讓它換行。
+                       欄位變窄時 placeholder 也會換成短字（由 fbFit() 處理），否則只看得到半個字。
+                       2026-10-05：分頁已搬到表格右上角（見下方 main-card），不再跟按鈕搶這一行的寬度，
+                       所以原本「換行時把分頁拉回按鈕旁」的 fb-packed/#pagination-container 規則已經沒有
+                       作用對象、移除；fbFit() 裡 fb-packed 的 class 切換邏輯留著不動（零風險、純粹不再
+                       有對應的 CSS 規則），避免為了這點小事去動那支已經穩定運作的函式。 */
                     .filter-bar.fb-narrow  #filter-client { width:70px !important; }
                     .filter-bar.fb-narrow2 #filter-client { width:64px !important; }
                     .filter-bar.fb-narrow2 #filter-part   { width:72px !important; }
                     .filter-bar.fb-narrow2 #filter-global { width:88px !important; }
-                    /* 仍塞不下而換行：分頁不再靠右推出大片空白，改為緊接按鈕排列 */
-                    .filter-bar.fb-packed #pagination-container { margin-left:0 !important; }
+                    /* 第三段（2026-10-05 使用者要求「所有按鍵都要在第一排」，narrow2 仍放不下才觸發）：
+                       縮小元件間距、部分下拉寬度、按鈕左右內距（不動文字，鐵律：按鈕文字不可收成純圖示），
+                       盡量連 1280px 這種較窄螢幕也擠進同一行；仍放不下才真的換行（fb-packed，行為不變）。
+                       只有先前 fb-narrow／fb-narrow2 都不夠用時 fbFit() 才會加這個 class，一般較寬螢幕
+                       完全不受影響——零風險套用在既有使用者身上。 */
+                    .filter-bar.fb-narrow3 { gap:2px !important; }
+                    .filter-bar.fb-narrow3 #year-select     { width:78px !important; }
+                    .filter-bar.fb-narrow3 #filter-designer { width:68px !important; }
+                    .filter-bar.fb-narrow3 #filter-as-tag   { width:96px !important; }
+                    <?php /* 按鈕內距壓到 4px（原本 10px）：這組選擇器涵蓋全部會在篩選列出現的按鈕，
+                             「自動綁定」雖然平常隱藏，但篩選「未綁定」時會跟其他按鈕搶同一行，所以也要
+                             一起壓縮，否則窄螢幕下一開「未綁定」篩選反而又擠不進一行（2026-10-05 實測抓到）。 */ ?>
+                    .filter-bar.fb-narrow3 #filter-unbound,
+                    .filter-bar.fb-narrow3 #clear-filters,
+                    .filter-bar.fb-narrow3 #btn-auto-bind,
+                    .filter-bar.fb-narrow3 #btn-open-gear-tool,
+                    .filter-bar.fb-narrow3 #btn-open-kw-tool,
+                    .filter-bar.fb-narrow3 #btn-order-change-history,
+                    .filter-bar.fb-narrow3 #btn-order-change-settings,
+                    .filter-bar.fb-narrow3 #btn-order-analysis,
+                    .filter-bar.fb-narrow3 #btn-image-editor,
+                    .filter-bar.fb-narrow3 #btn-ot-role-settings { padding-left:4px !important; padding-right:4px !important; }
                     </style>
                     <div class="filter-bar" style="background: #fff; padding: 8px 10px; border-radius: 8px; margin-bottom: 15px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
                         <select id="year-select" class="form-control input-sm" style="width: 92px; display: inline-block;">
@@ -3950,21 +3971,42 @@ foreach($dCounts as $c) {
                         <?php /* 稽核製程標籤篩選（2026-10-02 使用者要求）。
                                  本頁在 input_rules_baseline.txt 基準線內（沒有載入 eg_input_rules.js），
                                  所以**不可以掛 data-eg-filter**——那會是一個死屬性；選項只有十幾個，直接下拉即可。
-                                 選項一律用「本公司」的完整清單，否則廠內治具的訂單永遠篩不出來。 */ ?>
+                                 選項一律用「本公司」的完整清單，否則廠內治具的訂單永遠篩不出來。
+                                 2026-10-05 使用者要求：AS（稽核製程）與非AS（固定選項）要分框／分隔線——
+                                 原生 select 做不出真的框線，業界標準做法就是 <optgroup>（瀏覽器會自動加粗體
+                                 群組標題＋縮排，等於分隔線＋標題），JS 端重建這個下拉時也要用同一套分組
+                                 （astagOptionsGroupedHtml()），否則管理員改完設定後分組又會不見。 */
+                            $_asGrpAS  = array_filter($AS_TAG_FILTER_OPTS, function ($o) { return $o['kind'] === 'process'; });
+                            $_asGrpNon = array_filter($AS_TAG_FILTER_OPTS, function ($o) { return $o['kind'] !== 'process'; });
+                        ?>
                         <select id="filter-as-tag" class="form-control input-sm" style="width:118px;" title="依製程標籤（AS 認定）篩選">
                             <option value="">全部標籤</option>
                             <option value="__none__">尚未設定標籤</option>
-                            <?php foreach ($AS_TAG_FILTER_OPTS as $_aso): ?>
+                            <?php if ($_asGrpAS): ?>
+                            <optgroup label="AS">
+                                <?php foreach ($_asGrpAS as $_aso): ?>
                                 <option value="<?= safe_html($_aso['key']) ?>"><?= safe_html($_aso['label']) ?></option>
-                            <?php endforeach; ?>
+                                <?php endforeach; ?>
+                            </optgroup>
+                            <?php endif; ?>
+                            <?php if ($_asGrpNon): ?>
+                            <optgroup label="非AS">
+                                <?php foreach ($_asGrpNon as $_aso): ?>
+                                <option value="<?= safe_html($_aso['key']) ?>"><?= safe_html($_aso['label']) ?></option>
+                                <?php endforeach; ?>
+                            </optgroup>
+                            <?php endif; ?>
                         </select>
                         <button type="button" class="btn btn-warning btn-sm" id="filter-unbound" style="margin:0;" title="篩選尚未綁定客戶ID或料號ID的訂單">
                             <i class="fa fa-unlink"></i><span class="fb-txt"> 未綁定</span>
                         </button>
                         <?php if ($can_update): /* 批次自動綁定：一次寫進大量訂單，門檻＝新建/編輯訂單（ot_edit） */ ?>
+                        <?php /* 2026-10-05 使用者要求：只在篩選「未綁定」時才出現（平常收起來省一顆按鈕的寬度）。
+                                 預設 display:none（頁面載入時 currentFilters.unbound 一律是 false），
+                                 由 otSyncAutoBindBtn() 統一控制顯示／隱藏，三個會改到 unbound 狀態的地方都要呼叫它。 */ ?>
                         <button type="button" id="btn-auto-bind" onclick="openAutoBind()"
                             title="批次自動綁定：把「客戶與料號候選都只有一筆、而且料號文字完全相同」的未綁定訂單一次補完（會先試算給你看）"
-                            style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#8a5a2b,#F0A24B);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
+                            style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#8a5a2b,#F0A24B);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;align-items:center;gap:5px;display:none;">
                             <i class="fa fa-magic" style="font-size:13px;"></i><span class="fb-txt"> 自動綁定</span>
                         </button>
                         <?php endif; ?>
@@ -4006,7 +4048,7 @@ foreach($dCounts as $c) {
                             onclick="window.open('Order_Analysis.php','egOrderAnalysis')"
                             title="訂單分析（本年度新訂單、訂單金額與筆數趨勢、全製/單製、數量區間佔比、客戶比較與增減排名、受訂料號排名）"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#8a5a2b,#F0A24B);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
-                            <i class="fa fa-bar-chart" style="font-size:13px;"></i><span class="fb-txt"> 訂單分析</span>
+                            <i class="fa fa-bar-chart" style="font-size:13px;"></i><span class="fb-txt"> 分析</span>
                         </button>
                         <?php endif; ?>
                         <!-- 批圖編輯器：獨立跳窗（可拖到另一個螢幕），小畫家+Figma 混合式圖面編輯 -->
@@ -4025,8 +4067,6 @@ foreach($dCounts as $c) {
                             <i class="fa fa-key" style="font-size:13px;"></i><span class="fb-txt"> 角色設定</span>
                         </button>
                         <?php endif; ?>
-                        <!-- 分頁控制：推到最右側與按鈕同列 -->
-                        <div id="pagination-container" style="margin-left:auto; display:flex; align-items:center; white-space:nowrap;"></div>
                     </div><!-- /filter-bar -->
 
                     <!-- Main Table -->
@@ -4038,6 +4078,13 @@ foreach($dCounts as $c) {
                                     <i class="fa fa-exclamation-triangle" style="color:#e67e22;margin-right:5px;"></i>
                                     <strong>未綁定篩選已啟用</strong> — 目前顯示的是 <span id="unbound-banner-type">未綁定客戶/料號 ID</span> 的訂單，請逐筆確認並完成綁定。
                                     <button type="button" class="btn btn-xs btn-default pull-right" onclick="clearUnboundFilter()" style="margin-top:-1px;"><i class="fa fa-times"></i> 取消篩選</button>
+                                </div>
+                                <?php /* 分頁（2026-10-05 使用者要求移到表格右上角，釋放篩選列的寬度讓按鈕能排在同一行）：
+                                         原本在 .filter-bar 內用 margin-left:auto 推到最右側，跟一整排按鈕搶同一行的空間；
+                                         搬到這裡之後是獨立一行、只跟表格本身對齊，篩選列不再需要為它預留寬度。
+                                         id 與被填入的 HTML（res.pagination）完全不變，JS 端（含 MutationObserver）不必改。 */ ?>
+                                <div style="display:flex;justify-content:flex-end;margin-bottom:6px;">
+                                    <div id="pagination-container" style="display:flex; align-items:center; white-space:nowrap;"></div>
                                 </div>
                                 <!-- 2026-07-31 使用者要求：頁面完整顯示、禁用左右拉桿——overflow-x 改 hidden，
                                      欄寬以「料號可折行＋備註/次要欄可壓縮」讓表格自然塞進容器，不再出現水平捲軸 -->
@@ -5558,6 +5605,7 @@ foreach($dCounts as $c) {
                 $('#stat-card-unbound-op').removeClass('active');
                 // 隱藏未綁定橫幅
                 $('#unbound-filter-banner').hide();
+                otSyncAutoBindBtn();
                 fetchTableData(1);
             });
 
@@ -5572,6 +5620,7 @@ foreach($dCounts as $c) {
                     $(this).removeClass('btn-primary').addClass('btn-warning');
                     $('#unbound-filter-banner').hide();
                 }
+                otSyncAutoBindBtn();
                 isStatCardFilter = false;
                 lockedStats = null;
                 fetchTableData(1);
@@ -7871,6 +7920,17 @@ foreach($dCounts as $c) {
         }
 
         // ── 橫幅右側「取消篩選」按鈕 ────────────────────────────────────────
+        // 「自動綁定」只在篩選「未綁定」時才出現（2026-10-05 使用者要求，省一顆按鈕的寬度）；
+        // 宣告成全域函式（不嵌在某個 $(document).ready() 閉包裡）才能被 clear-filters/filter-unbound
+        // 的 handler 與 clearUnboundFilter() 三處一致呼叫到。按鈕的 display 要設 inline-flex，
+        // 不可用 jQuery .show() 預設回填的 inline，否則圖示跟文字會對不齊（跟其他按鈕外觀不一致）。
+        function otSyncAutoBindBtn() {
+            $('#btn-auto-bind').css('display', currentFilters.unbound ? 'inline-flex' : 'none');
+            // 這顆按鈕一出現/消失，篩選列的寬度需求就變了，要讓 fbFit() 重新判斷要不要縮欄位/換行
+            // （見 fbFit 定義處 window.fbFit 的說明）；用 setTimeout 讓按鈕先完成顯示/隱藏再量高度。
+            if (typeof window.fbFit === 'function') setTimeout(window.fbFit, 0);
+        }
+
         function clearUnboundFilter() {
             currentFilters.unbound    = false;
             currentFilters.unbound_op = false;
@@ -7879,6 +7939,7 @@ foreach($dCounts as $c) {
             $('#stat-card-unbound-op').removeClass('active');
             $('#count-qty-over-note').css({'font-weight':''});
             $('#unbound-filter-banner').hide();
+            otSyncAutoBindBtn();
             isStatCardFilter = false;
             lockedStats = null;
             fetchTableData(1);
@@ -8739,16 +8800,27 @@ foreach($dCounts as $c) {
          * 「尚未設定標籤」兩項。篩選清單用的是**全部**選項（含限本公司的），
          * 否則廠內治具那種訂單永遠篩不出來。
          */
+        // AS（kind=process，稽核製程）／非AS（固定選項＋管理員自加的其他選項）分組成 optgroup，
+        // 跟 PHP 端首次渲染用同一套分法（2026-10-05 使用者要求：分框／分隔線）。
+        function astagOptionsGroupedHtml(opts) {
+            var hAs = '', hNon = '';
+            (opts || []).forEach(function (o) {
+                var li = '<option value="' + escapeHtml(o.key) + '">' + escapeHtml(o.label) + '</option>';
+                if (o.kind === 'process') hAs += li; else hNon += li;
+            });
+            var h = '';
+            if (hAs)  h += '<optgroup label="AS">' + hAs + '</optgroup>';
+            if (hNon) h += '<optgroup label="非AS">' + hNon + '</optgroup>';
+            return h;
+        }
         function astagSyncFilterOptions(opts) {
             var $f = $('#filter-as-tag');
             if (!$f.length) return;
             var cur = $f.val() || '';
             var h = '<option value="">全部標籤</option><option value="__none__">尚未設定標籤</option>';
             var stillThere = (cur === '' || cur === '__none__');
-            (opts || []).forEach(function (o) {
-                if (o.key === cur) stillThere = true;
-                h += '<option value="' + escapeHtml(o.key) + '">' + escapeHtml(o.label) + '</option>';
-            });
+            (opts || []).forEach(function (o) { if (o.key === cur) stillThere = true; });
+            h += astagOptionsGroupedHtml(opts);
             $f.html(h).val(stillThere ? cur : '');
             // 目前篩的標籤被停用／刪掉了：退回「全部標籤」並重新查一次，
             // 不然畫面上的清單還是舊篩選的結果、下拉却已經回到「全部」。
@@ -13237,6 +13309,7 @@ window.otHasFeat = function(code) {
         phInit();
         bar.classList.remove('fb-narrow');
         bar.classList.remove('fb-narrow2');
+        bar.classList.remove('fb-narrow3');
         bar.classList.remove('fb-packed');
         setPh('filter-client', false); setPh('filter-part', false); setPh('filter-global', false);
         // 單行高度約 46px（input-sm 30 + 上下 padding 16）；超過即代表換行了
@@ -13247,13 +13320,21 @@ window.otHasFeat = function(code) {
         bar.classList.add('fb-narrow2');               // ② 料號與全表搜尋一起縮
         setPh('filter-part', true); setPh('filter-global', true);
         if (bar.offsetHeight <= 56) return;
-        // ③ 縮到底還是得換行 → 把剛剛縮的全部還原（既然一樣要換行，就不要白白把欄位變小），
-        //    只把分頁拉回來貼齊按鈕，避免第二行留一大片空白
+        // ③（2026-10-05 新增）①②還不夠 → 再壓縮元件間距／部分下拉寬度／按鈕內距一次，
+        //    盡量讓 1280px 這種較窄螢幕也能擠進同一行（不動按鈕文字，鐵律：不可收成純圖示）
+        bar.classList.add('fb-narrow3');
+        if (bar.offsetHeight <= 56) return;
+        // ④ 三段縮到底還是得換行 → 全部還原（既然一樣要換行，就不要白白把畫面擠得這麼緊）
         bar.classList.remove('fb-narrow');
         bar.classList.remove('fb-narrow2');
+        bar.classList.remove('fb-narrow3');
         setPh('filter-client', false); setPh('filter-part', false); setPh('filter-global', false);
         bar.classList.add('fb-packed');
     }
+    // 2026-10-05：「自動綁定」按鈕只在篩選「未綁定」時才出現，一出現這一行的寬度需求就變了，
+    // 但這顆按鈕本身不是靠 #pagination-container 重繪觸發的（那個 MutationObserver 只看分頁），
+    // 所以曝露給 otSyncAutoBindBtn() 在切換顯示/隱藏之後手動呼叫一次，重新判斷要不要換行。
+    window.fbFit = fbFit;
     window.addEventListener('resize', function() {
         clearTimeout(fbFitTimer);
         fbFitTimer = setTimeout(fbFit, 120);
