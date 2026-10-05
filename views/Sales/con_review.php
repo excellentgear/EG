@@ -105,8 +105,8 @@ $companyName = eg_company_full_name($db);
 <div class="right_col" role="main" style="min-height:100vh;">
     <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
         <h3 style="margin:6px 0;">合約訂單審查表 <small>（2-SM-01-06）</small></h3>
-        <span style="font-size:12.5px;color:#8a6d45;margin-left:auto;margin-right:10px;">身分：<?= safe_html($roleLabel) ?></span>
-        <button type="button" class="page-help-btn" id="btnPageHelp"><i class="fa fa-question-circle"></i> 使用說明</button>
+        <span style="font-size:12.5px;color:#8a6d45;margin-left:12px;">身分：<?= safe_html($roleLabel) ?></span>
+        <button type="button" class="page-help-btn" id="btnPageHelp" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
     </div>
     <div class="clearfix"></div>
 
@@ -157,6 +157,7 @@ $companyName = eg_company_full_name($db);
                 <option value="30">最近 30 天</option><option value="60">最近 60 天</option><option value="90">最近 90 天</option><option value="0">不限（全部）</option>
             </select>
             <button type="button" class="cr-btn b-plain" style="height:30px;" onclick="loadSuggest()">重新查詢</button>
+            <input type="text" id="suggestClientKw" placeholder="輸入客戶部份ID或部份名稱篩選" style="height:30px;width:200px;border:1px solid #E8D5B5;border-radius:4px;padding:0 8px;">
             <span id="suggestTotal" style="font-size:12.5px;color:#8a6d45;margin-left:auto;"></span>
         </div>
         <table class="cr-tbl">
@@ -311,33 +312,54 @@ function submitAdd(){
 }
 
 /* ───────────────── 建議建立清單（批次一鍵建立） ───────────────── */
-var SUGGEST_ROWS = [];
-$('#btnSuggest').on('click', function(){ openMask('suggestMask'); loadSuggest(); });
+var SUGGEST_ROWS = [], SUGGEST_PICKED = {};   // order_id => true，用物件而非只看畫面勾選，篩選前後才不會把已勾的洗掉
+$('#btnSuggest').on('click', function(){ SUGGEST_PICKED = {}; $('#suggestClientKw').val(''); openMask('suggestMask'); loadSuggest(); });
 function loadSuggest(){
     $('#suggestBody').html('<tr><td colspan="6" style="text-align:center;color:#999;">載入中…</td></tr>');
     $.getJSON(API, {action:'suggest_list', days:$('#suggestDays').val()}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         SUGGEST_ROWS = res.rows || [];
-        var h = SUGGEST_ROWS.map(function(o){
-            return '<tr><td style="text-align:center;"><input type="checkbox" class="suggest-chk" value="'+o.Order_id+'"></td>'
-                 + '<td>'+esc(o.Order_oo||('#'+o.Order_id))+'</td><td>'+esc(o.client_name_txt||o.Client_name||'')+'</td>'
-                 + '<td>'+esc(o.d_id||'')+'</td><td>'+dispDate(o.Order_date)+'</td><td>'+esc(o.tag_label||'')+'</td></tr>';
-        }).join('');
-        $('#suggestBody').html(h || '<tr><td colspan="6" style="text-align:center;color:#999;">目前沒有待建議建立的訂單</td></tr>');
-        $('#suggestAll').prop('checked', false);
-        var shown = SUGGEST_ROWS.length, total = res.total || 0;
-        $('#suggestTotal').text(total > shown ? ('顯示 '+shown+' / 共 '+total+'（調整範圍可看到更多）') : ('共 '+total+' 筆'));
-        suggestUpdateCount();
+        SUGGEST_LAST_TOTAL = res.total || 0;
+        suggestApplyFilter();
     });
 }
-function suggestToggleAll(on){ $('.suggest-chk').prop('checked', on); suggestUpdateCount(); }
-$(document).on('change', '.suggest-chk', suggestUpdateCount);
+/* 客戶部份ID或部份名稱即時篩選（2026-10-05 使用者要求）：資料已經整批載入畫面，
+   直接在前端過濾即時顯示，不必每打一個字都打一次後端。 */
+var SUGGEST_LAST_TOTAL = 0;
+function suggestApplyFilter(){
+    var kw = $.trim($('#suggestClientKw').val()).toLowerCase();
+    var rows = !kw ? SUGGEST_ROWS : SUGGEST_ROWS.filter(function(o){
+        var idTxt = String(o.client_id||'').toLowerCase();
+        var nameTxt = String(o.client_name_txt||o.Client_name||'').toLowerCase();
+        return idTxt.indexOf(kw) !== -1 || nameTxt.indexOf(kw) !== -1;
+    });
+    var h = rows.map(function(o){
+        var checked = SUGGEST_PICKED[o.Order_id] ? ' checked' : '';
+        return '<tr><td style="text-align:center;"><input type="checkbox" class="suggest-chk" value="'+o.Order_id+'"'+checked+'></td>'
+             + '<td>'+esc(o.Order_oo||('#'+o.Order_id))+'</td><td>'+esc(o.client_name_txt||o.Client_name||'')+(o.client_id?' <span style="color:#b5862f;font-size:11px;">('+esc(o.client_id)+')</span>':'')+'</td>'
+             + '<td>'+esc(o.d_id||'')+'</td><td>'+dispDate(o.Order_date)+'</td><td>'+esc(o.tag_label||'')+'</td></tr>';
+    }).join('');
+    $('#suggestBody').html(h || '<tr><td colspan="6" style="text-align:center;color:#999;">'+(kw?'沒有符合「'+esc(kw)+'」的訂單':'目前沒有待建議建立的訂單')+'</td></tr>');
+    $('#suggestAll').prop('checked', rows.length>0 && rows.every(function(o){ return SUGGEST_PICKED[o.Order_id]; }));
+    var shown = SUGGEST_ROWS.length;
+    $('#suggestTotal').text(kw ? ('篩選出 '+rows.length+' / 已載入 '+shown+' 筆')
+                               : (SUGGEST_LAST_TOTAL > shown ? ('顯示 '+shown+' / 共 '+SUGGEST_LAST_TOTAL+'（調整範圍可看到更多）') : ('共 '+SUGGEST_LAST_TOTAL+' 筆')));
+    suggestUpdateCount();
+}
+$('#suggestClientKw').on('input', suggestApplyFilter);
+function suggestToggleAll(on){
+    $('.suggest-chk').prop('checked', on).each(function(){ SUGGEST_PICKED[$(this).val()] = on ? true : undefined; });
+    suggestUpdateCount();
+}
+$(document).on('change', '.suggest-chk', function(){ SUGGEST_PICKED[this.value] = this.checked ? true : undefined; suggestUpdateCount(); });
 function suggestUpdateCount(){
-    var n = $('.suggest-chk:checked').length;
-    $('#suggestPickedCount').text(n ? ('已勾選 '+n+' 筆') : '');
+    var n = Object.keys(SUGGEST_PICKED).filter(function(k){ return SUGGEST_PICKED[k]; }).length;
+    $('#suggestPickedCount').text(n ? ('已勾選 '+n+' 筆（篩選不會洗掉已勾選的）') : '');
 }
 function suggestBatchCreate(){
-    var ids = $('.suggest-chk:checked').map(function(){ return $(this).val(); }).get();
+    // 用 SUGGEST_PICKED 不是 $('.suggest-chk:checked')——篩選過後只有「目前看得到」的列在 DOM 裡，
+    // 篩選前勾選、篩選後不在畫面上的那些也要一起送出，否則會悄悄漏掉使用者已經勾選的訂單。
+    var ids = Object.keys(SUGGEST_PICKED).filter(function(k){ return SUGGEST_PICKED[k]; });
     if (!ids.length){ alert('請先勾選要建立的訂單'); return; }
     if (!confirm('確定要一次建立 '+ids.length+' 張合約訂單審查表嗎？')) return;
     $.post(API, {action:'batch_create', csrf:META.csrf, order_ids:ids.join(',')}, function(res){

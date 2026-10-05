@@ -388,8 +388,10 @@ function cnrv_create(PDO $db, int $orderId, int $uid, string $uname): int {
  * 避免一次把上千張舊訂單全部列出來嚇到人；$days=0 代表不限天數（列出全部待建議的）。
  */
 function cnrv_suggest_list(PDO $db, int $days = 30, int $limit = 300): array {
+    // client_id：前端「輸入客戶部份ID或部份名稱即時篩選」要靠它（2026-10-05 使用者要求）。
     $sql = "SELECT ot.Order_id, ot.Order_oo, ot.d_id, ot.Qty, ot.Order_date, ot.Delivery_date,
-                   ot.Client_name, cl.customer AS client_name_txt, t.proc_name AS tag_proc_name, ot.as_tag_scope
+                   ot.Client_name, cl.customer AS client_name_txt, cl.customer_id AS client_id,
+                   t.proc_name AS tag_proc_name, ot.as_tag_scope
             FROM order_track ot
             LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID
             JOIN ot_as_proc_tag t ON t.tag_id = ot.as_tag_id AND t.kind='process'
