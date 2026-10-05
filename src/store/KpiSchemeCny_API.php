@@ -99,7 +99,17 @@ case 'list_scheme': {
     }
     $ptypes = []; $officialItems = [];
     try { $ptypes = $db->query("SELECT process_type_id, process_type FROM process_type ORDER BY sort_order, process_type_id")->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e) {}
-    try { $officialItems = $db->query("SELECT item_no, name FROM kpi_as_indicator ORDER BY item_no")->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e) {}
+    try {
+        // 連同該年度正式指標目前的 calculator_key／params_json 一起回傳，讓前端的
+        // existing／existing_cny 選擇器能順便顯示「這個官方項次目前用什麼算法、
+        // 月目標金額設多少」——這些資料仍然只唯讀 SELECT，不會寫回正式表。
+        $st = $db->prepare("SELECT i.item_no, i.name, y.calculator_key, y.params_json
+                            FROM kpi_as_indicator i
+                            LEFT JOIN kpi_as_indicator_year y ON y.indicator_id=i.indicator_id AND y.year=?
+                            ORDER BY i.item_no");
+        $st->execute([$year]);
+        $officialItems = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {}
 
     jout([
         'year'=>$year, 'rows'=>$rows, 'registry'=>kpi_scheme_registry(), 'blocks'=>kpi_scheme_blocks(),

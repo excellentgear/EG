@@ -853,12 +853,24 @@ function kscRenderParamFields(calcKey, paramsJsonStr){
 
     if (!reg.params || !reg.params.length) { box.innerHTML = '<div style="color:#8a6d45;font-size:12px;">（此計算方式不需要參數）</div>'; return; }
 
+    var isExisting = (calcKey === 'existing' || calcKey === 'existing_cny');
     var h = '<div class="ksc-param-box"><div class="pname">參數</div>';
     reg.params.forEach(function(p){
         var v = params[p.key];
         var id = 'fp_' + p.key;
         h += '<div class="ksc-fld w2" style="margin-right:8px;margin-bottom:6px;"><label>' + esc(p.label) + '</label>';
-        if (p.type === 'process_type_ids') {
+        if (isExisting && p.key === 'item_no') {
+            // existing／existing_cny 的 item_no 不再是裸數字輸入，改成可打字搜尋的正式
+            // 指標選擇器——這樣「要沿用正式系統哪一種計算模組」直接挑就好，不必自己
+            // 對照下面那份清單手打項次編號。
+            var items = KSC_DATA.dicts.official_items || [];
+            var optsHtml = '<option value="">（請選擇正式指標）</option>' + items.map(function(o){
+                var selAttr = (v !== undefined && v !== null && String(v) === String(o.item_no)) ? ' selected' : '';
+                return '<option value="' + o.item_no + '"' + selAttr + '>#' + o.item_no + ' ' + esc(o.name)
+                     + (o.calculator_key ? '（' + esc(o.calculator_key) + '）' : '') + '</option>';
+            }).join('');
+            h += '<select id="' + id + '" data-eg-filter="輸入正式指標名稱或項次篩選…" onchange="kscOnExistingItemNoChange()">' + optsHtml + '</select>';
+        } else if (p.type === 'process_type_ids') {
             var sel = Array.isArray(v) ? v.map(String) : [];
             var opts = (KSC_DATA.dicts.process_types || []).map(function(pt){
                 var checked = sel.indexOf(String(pt.process_type_id)) >= 0;
@@ -874,9 +886,64 @@ function kscRenderParamFields(calcKey, paramsJsonStr){
         }
         h += '</div>';
     });
-    h += '<div style="width:100%;font-size:11.5px;color:#8a6d45;">「existing／existing_cny」的 item_no 指的是正式 KPI 表的項次：'
-       + (KSC_DATA.dicts.official_items || []).map(function(o){ return '#' + o.item_no + ' ' + esc(o.name); }).join('、')
-       + '</div>';
+    if (isExisting) h += '<div id="f_officialinfo" style="width:100%;"></div>';
+    h += '</div>';
+    box.innerHTML = h;
+    if (isExisting) kscRenderOfficialInfo(calcKey);
+}
+
+/** 找出某個正式 item_no 目前的名稱／計算方式／參數（list_scheme 一併帶回，純唯讀） */
+function kscOfficialItemInfo(itemNo){
+    var list = KSC_DATA.dicts.official_items || [];
+    for (var i = 0; i < list.length; i++) { if (String(list[i].item_no) === String(itemNo)) return list[i]; }
+    return null;
+}
+function kscMoney(n){ n = Math.round(Number(n) || 0); return n.toLocaleString('zh-Hant'); }
+
+function kscOnExistingItemNoChange(){
+    kscRenderOfficialInfo(document.getElementById('f_calckey').value);
+}
+
+/**
+ * existing／existing_cny 選了哪個正式指標之後，順便唯讀顯示那個指標「目前用什麼算法」，
+ * 若是月目標金額型（order_target_amount／shipping_target_amount）再列出逐月目標金額——
+ * 這些數字只存在正式 KPI 系統（kpi_as_indicator_year），本頁不碰它一個字，要改請去
+ * KPI_setting.php，這裡只給一個連結＋唯讀顯示讓管理員知道去哪裡調。
+ */
+function kscRenderOfficialInfo(calcKey){
+    var box = document.getElementById('f_officialinfo');
+    if (!box) return;
+    if (calcKey !== 'existing' && calcKey !== 'existing_cny') { box.innerHTML = ''; return; }
+    var sel = document.getElementById('fp_item_no');
+    var itemNo = sel ? sel.value : '';
+    var it = itemNo ? kscOfficialItemInfo(itemNo) : null;
+    var h = '<div style="border:1px dashed #D8BE93;border-radius:6px;padding:8px;margin-top:6px;background:#FFFBF2;font-size:12px;color:#5b3a1e;">';
+    if (!it) {
+        h += '請先在上面選擇要沿用的正式 KPI 項次。';
+    } else {
+        h += '資料來源：讀取正式 KPI <b>#' + it.item_no + ' ' + esc(it.name) + '</b> 的月快照'
+           + (calcKey === 'existing_cny' ? '（春節月份自動調整）' : '') + '；'
+           + '正式指標目前的計算方式：<b>' + esc(it.calculator_key || '（尚未設定）') + '</b>。';
+        var oparams = {};
+        try { oparams = it.params_json ? JSON.parse(it.params_json) : {}; } catch(e){}
+        if (it.calculator_key === 'order_target_amount' || it.calculator_key === 'shipping_target_amount') {
+            var mt = (oparams.monthly_targets && oparams.monthly_targets.v && typeof oparams.monthly_targets.v === 'object')
+                   ? oparams.monthly_targets.v : null;
+            h += '<div style="margin-top:6px;">此指標依「各月目標金額」計算，<b>金額設定在正式 KPI 系統（KPI_setting.php）</b>，本頁僅唯讀顯示、不可在此修改：</div>';
+            if (mt) {
+                h += '<div style="overflow-x:auto;margin-top:4px;"><table style="border-collapse:collapse;font-size:11.5px;">'
+                   + '<tr>' + CNY_MONTH_NAME.slice(1).map(function(n){ return '<td style="border:1px solid #EADFC8;padding:2px 6px;font-weight:bold;background:#FDF8EF;">' + n + '</td>'; }).join('') + '</tr>'
+                   + '<tr>' + CNY_MONTH_NAME.slice(1).map(function(n, i){
+                       var m = i + 1;
+                       return '<td style="border:1px solid #EADFC8;padding:2px 6px;text-align:right;">'
+                            + (mt[m] !== undefined ? kscMoney(mt[m]) : '<span class="ks-na">–</span>') + '</td>';
+                     }).join('') + '</tr></table></div>';
+            } else {
+                h += '<div style="color:#DD5138;">尚未逐月設定目標金額（可能使用全站預設目標），請到正式 KPI 設定頁確認。</div>';
+            }
+        }
+        h += '<div style="margin-top:6px;"><a href="KPI_setting.php" target="_blank" rel="noopener"><i class="fa fa-external-link"></i> 前往正式 KPI 設定頁調整 →</a></div>';
+    }
     h += '</div>';
     box.innerHTML = h;
 }
