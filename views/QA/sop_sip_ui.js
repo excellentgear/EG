@@ -2699,7 +2699,10 @@ $(document).on('click', '#btnNewVer', function () {
     var v = prompt('新版次的版次號（留空＝自動遞增）', '');
     if (v === null) return;
     post('ver_new', { from_ver_id: num(CUR.ver.ver_id), ver_no: v || '', form_date: SS_TODAY, rev_note: '' },
-         function (res) { openDoc(num(res.ver_id)); load(true); });
+         function (res) {
+             if (res.merged) alert('日期跟目前這一版相同，認定為同一次修改：已直接重新打開這一版繼續編輯，不會新增版次列。');
+             openDoc(num(res.ver_id)); load(true);
+         });
 });
 
 /* ══════════════════════ 列印 ══════════════════════ */

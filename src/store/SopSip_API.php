@@ -459,12 +459,25 @@ case 'ver_new': {
     $fromId = (int)($_POST['from_ver_id'] ?? 0);
     [$kind, $v, $d] = $kindOfVer($fromId);
     $needEdit($kind);
+    $formDate = trim((string)($_POST['form_date'] ?? '')) ?: date('Y-m-d');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $formDate)) $formDate = date('Y-m-d');
     $db->beginTransaction();
     try {
-        $newId = ss_ver_clone($db, $fromId, $_POST, $uid);
+        /* 日期跟來源版次相同＝認定為同一次修改，不新增一筆版次列（使用者 2026-10-05 指定）：
+           同一天接續要改的東西，不該在「版次歷程」上變成好幾筆各自獨立的修訂——
+           直接把來源版次重新打開繼續編輯（已核准/已送審的話比照「取消送簽」清掉簽章退回草稿，
+           還在草稿就什麼都不用動），版次號與版次列數都不變。
+           跨天才算真正的新修訂，走原本的 ss_ver_clone() 另開一筆。 */
+        $merged = ((string)$v['form_date'] === $formDate);
+        if ($merged) {
+            if ((string)$v['status'] !== 'draft') ss_unsubmit($db, $fromId, $uid);
+            $newId = $fromId;
+        } else {
+            $newId = ss_ver_clone($db, $fromId, $_POST, $uid);
+        }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
-    jout(true, ['ver_id' => $newId]);
+    jout(true, ['ver_id' => $newId, 'merged' => $merged]);
 }
 
 case 'submit': {
