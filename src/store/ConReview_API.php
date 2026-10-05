@@ -35,7 +35,8 @@ case 'meta': {
     $depts = $db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     jout(['perms'=>$perms, 'uid'=>$uid, 'uname'=>$uname, 'csrf'=>cnrv_csrf_token(), 'today'=>date('Y-m-d'),
           'departments'=>$depts, 'decisions'=>CNRV_DECISIONS,
-          'as_doc'=>eg_asdoc_get($db, CNRV_AS_MODULE)]);
+          'as_doc'=>eg_asdoc_get($db, CNRV_AS_MODULE),
+          'stamp_tpl'=>cnrv_stamp_tpl($db, cnrv_stamp_tpl_id($db))]);
 }
 
 /* ---- 範本項目（僅管理員） ---- */
@@ -152,6 +153,11 @@ case 'get': {
             'signed_at'=>$deptSign[$d]['signed_at'] ?? null,
             'note'=>$deptSign[$d]['note'] ?? null,
             'can_fill'=>cnrv_can_fill_dept($db, $uid, $d, $perms['isAdmin']),
+            // is_auto_sign／is_backfill 只給管理員在畫面上看（2026-10-05 使用者要求「把自動審核紀錄
+            // 留在LOG中只提供管理員查看，其他前端一律是正常簽核」），一般使用者看到的 signed_by_name
+            // 本來就已經是真人姓名，不必再隱藏這兩個旗標本身。
+            'is_auto_sign'=>(bool)($deptSign[$d]['is_auto_sign'] ?? false),
+            'is_backfill'=>(bool)($deptSign[$d]['is_backfill'] ?? false),
         ];
     }
     jout([
@@ -225,6 +231,59 @@ case 'delete': {
     if (!$perms['canAdmin']) jerr('沒有權限', 403);
     try { cnrv_delete($db, (int)($_POST['doc_id'] ?? 0), $uid, $uname); }
     catch (Throwable $e) { jerr($e->getMessage()); }
+    jout([]);
+}
+
+/* ---- 列印（ai-rules/16：公司全名、表頭取綁定AS文件表單名稱、版次依業務日期回推、頁尾右下AS編號；
+         ai-rules/18：簽章一律走 eg_stamp.js 圖章＋日期，不印純文字姓名） ---- */
+case 'print_get': {
+    $id = (int)($_GET['id'] ?? 0);
+    $doc = cnrv_get($db, $id);
+    if (!$doc) jerr('找不到此表單', 404);
+    $items = cnrv_items_get($db, $id);
+    $deptIds = cnrv_doc_dept_ids($db, $id);
+    $deptSign = cnrv_dept_sign_map($db, $id);
+    $deptNameSt = $deptIds ? $db->prepare("SELECT id,name FROM department WHERE id IN (" . implode(',', array_fill(0, count($deptIds), '?')) . ")") : null;
+    $deptNames = [];
+    if ($deptNameSt) { $deptNameSt->execute($deptIds); foreach ($deptNameSt->fetchAll(PDO::FETCH_ASSOC) as $d) $deptNames[(int)$d['id']] = $d['name']; }
+    $depts = [];
+    foreach ($deptIds as $d) {
+        $depts[] = [
+            'dept_id'=>$d, 'dept_name'=>$deptNames[$d] ?? ('#'.$d),
+            'signed'=>!empty($deptSign[$d]['signed_by']),
+            'signed_by_name'=>$deptSign[$d]['signed_by_name'] ?? null,
+            'signed_at'=>$deptSign[$d]['signed_at'] ?? null,
+            'note'=>$deptSign[$d]['note'] ?? null,
+        ];
+    }
+    $asDoc = eg_asdoc_get($db, CNRV_AS_MODULE);
+    jout([
+        'doc'=>$doc, 'items'=>$items, 'depts'=>$depts,
+        'company_name'=>eg_company_full_name($db),
+        'as_doc_name'=>$asDoc['doc_name'] ?? '合約訂單審查表',
+        'as_doc_no'=>eg_asdoc_no_asof($db, CNRV_AS_MODULE, (string)$doc['business_date']),
+        'stamp_tpl'=>cnrv_stamp_tpl($db, cnrv_stamp_tpl_id($db)),
+    ]);
+}
+
+/* ---- 列印設定（AS 文件編號綁定＋簽章圖章模板）：僅管理員，比照 stock.php 領料需求單既有做法 ---- */
+case 'print_setting_get': {
+    if (!$perms['canAdmin']) jerr('沒有權限', 403);
+    jout([
+        'as_docs'=>eg_asdoc_list($db),
+        'as_doc_id'=>eg_asdoc_id($db, CNRV_AS_MODULE),
+        'as_doc'=>eg_asdoc_get($db, CNRV_AS_MODULE),
+        'stamp_tpls'=>cnrv_stamp_tpl_options($db),
+        'stamp_tpl_id'=>cnrv_stamp_tpl_id($db),
+    ]);
+}
+case 'print_setting_save': {
+    cnrv_need_csrf();
+    if (!$perms['canAdmin']) jerr('沒有權限', 403);
+    try {
+        eg_asdoc_save($db, CNRV_AS_MODULE, (int)($_POST['as_doc_id'] ?? 0), $uname);
+        cnrv_stamp_tpl_save($db, (int)($_POST['stamp_tpl_id'] ?? 0), $uname);
+    } catch (Throwable $e) { jerr($e->getMessage()); }
     jout([]);
 }
 

@@ -98,9 +98,7 @@ $companyName = eg_company_full_name($db);
 <body class="nav-sm">
 <div class="container body">
 <div class="main_container">
-<div class="col-md-3 left_col"><div class="left_col scroll-view"><div class="clearfix"></div>
-<div id="sidebar-menu" class="main_menu_side hidden-print main_menu"></div>
-</div></div>
+<?php include '../partPage/sideAndTopBarMenu.html' ?>
 
 <div class="right_col" role="main" style="min-height:100vh;">
     <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
@@ -116,7 +114,10 @@ $companyName = eg_company_full_name($db);
         <select id="filterStatus"><option value="">全部狀態</option><option value="draft">草稿</option><option value="submitted">審查中</option><option value="closed">已結案</option></select>
         <input type="text" id="filterKw" placeholder="訂單編號／客戶／料號／編號 搜尋" style="width:220px;">
         <button type="button" class="cr-btn b-plain" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
-        <?php if ($perms['canAdmin']): ?><button type="button" class="cr-btn b-plain" id="btnTpl" style="margin-left:auto;"><i class="fa fa-list"></i> 範本維護</button><?php endif; ?>
+        <?php if ($perms['canAdmin']): ?>
+        <button type="button" class="cr-btn b-plain" id="btnTpl" style="margin-left:auto;"><i class="fa fa-list"></i> 範本維護</button>
+        <button type="button" class="cr-btn b-plain" id="btnPrintSet"><i class="fa fa-cog"></i> 列印設定</button>
+        <?php endif; ?>
     </div>
 
     <table class="cr-tbl">
@@ -200,6 +201,25 @@ $companyName = eg_company_full_name($db);
     <div class="m-foot"><button type="button" class="cr-btn b-plain" onclick="closeMask('tplMask')">關閉</button></div>
 </div></div>
 
+<!-- 列印設定（AS 文件編號綁定＋簽章圖章模板，僅管理員，ai-rules/16一之三／ai-rules/18） -->
+<div class="cr-mask" id="printSetMask"><div class="cr-modal narrow">
+    <div class="m-head"><span>列印設定</span><span class="m-close" onclick="closeMask('printSetMask')">✕</span></div>
+    <div class="m-body">
+        <label>綁定 AS 文件編號</label>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span id="psAsDocLabel" style="flex:1;min-width:200px;padding:6px 10px;background:#FDF6EC;border:1px solid #E8D5B5;border-radius:4px;color:#8a6d45;">尚未綁定</span>
+            <button type="button" class="cr-btn b-plain" style="height:30px;" onclick="pickPrintAsDoc()"><i class="fa fa-search"></i> 選擇</button>
+            <button type="button" class="cr-btn b-plain" style="height:30px;" onclick="clearPrintAsDoc()"><i class="fa fa-times"></i> 取消</button>
+        </div>
+        <div style="font-size:11.5px;color:#8a6d45;margin-top:4px;">列印表頭取這份文件的名稱，頁尾右下角印文件編號（版次依該筆審查的接單日期回推）。</div>
+
+        <label style="margin-top:14px;">簽章圖章模板</label>
+        <select id="psStampTpl"><option value="0">（用系統預設印章）</option></select>
+        <div style="font-size:11.5px;color:#8a6d45;margin-top:4px;">各內容部門簽核、業務課決行、總經理核准，列印與畫面上一律蓋這個模板的圖章；未指定則用系統預設回墨印。模板在「圖章管理 → 線上圖章設計」建立。</div>
+    </div>
+    <div class="m-foot"><button type="button" class="cr-btn b-plain" onclick="closeMask('printSetMask')">取消</button> <button type="button" class="cr-btn" onclick="savePrintSetting()"><i class="fa fa-save"></i> 儲存</button></div>
+</div></div>
+
 <!-- 使用說明 -->
 <div class="cr-mask" id="helpUseMask"><div class="cr-modal">
     <div class="m-head"><span>使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
@@ -236,7 +256,9 @@ $companyName = eg_company_full_name($db);
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/Sortable.min.js"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+<script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+<script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script>
 $(document).ready(function(){ $('#sidebar-menu').css('visibility','visible'); });
@@ -251,6 +273,14 @@ function esc(s){ return $('<div>').text(s==null?'':String(s)).html(); }
 function dispDate(d, withTime){ return d ? egFmtDate(d, withTime) : ''; }   // eg_date_fmt.js 只匯出 egFmtDate()，dispDate() 是各頁慣例自己包一層（ai-rules/20）
 function openMask(id){ $('#'+id).css('display','block'); }
 function closeMask(id){ $('#'+id).css('display','none'); }
+// 簽章一律走 eg_stamp.js 產生帶日期印章（ai-rules/18），不可只印人名文字；模板由管理員在「列印設定」指定
+// （META.stamp_tpl，未指定則 EGStamp.stamp 自動退回系統預設回墨印），畫面與列印共用同一支。
+function stampHtml(name, dateStr, isDeputy){
+    if (!name) return '';
+    var schema = (META.stamp_tpl && META.stamp_tpl.schema) ? META.stamp_tpl.schema : null;
+    try { if (window.EGStamp && EGStamp.stamp) return EGStamp.stamp(name, dateStr||'', !!isDeputy, schema); } catch(e){}
+    return esc(name);
+}
 var STATUS_LABEL = {draft:'草稿', submitted:'審查中', closed:'已結案', void:'已作廢'};
 
 function loadMeta(cb){
@@ -403,12 +433,22 @@ function openView(id){
         openMask('viewMask');
     });
 }
+// 2026-10-05 使用者要求：結果一律隱藏「是/否/N-A」字樣、直接顯示額外選項內容（兩者過去是用
+// 「、」接在一起存成同一個 answer_value，舊資料也是這種格式）；若整個答案就只有「是/否/N-A」
+// 本身、後面沒有接額外文字，仍然顯示原值——不然那一格會整個空白、完全看不出其實已經填過。
+function resultText(v){
+    v = String(v==null?'':v);
+    var stripped = v.replace(/^(是|否|N\/A)[、,，]\s*/, '');
+    return stripped.trim() !== '' ? stripped : v;
+}
 function itemFieldHtml(it, editable){
+    // 回簽（填寫）時不再提供「是/否/N-A」選項，只提供這個項目自己的額外選項（cnrv_fill_options()
+    // 已經在後端把基礎三選項濾掉了），但 <input type=text> 本來就還是能自由輸入任何文字。
     var opts = it.options || [];
     var dlId = 'dl_'+it.id;
     var dl = opts.length ? '<datalist id="'+dlId+'">'+opts.map(function(o){return '<option value="'+esc(o)+'"></option>';}).join('')+'</datalist>' : '';
-    if (!editable) return esc(it.answer_value||'') + dl;
-    return '<input type="text" list="'+dlId+'" value="'+esc(it.answer_value||'')+'" placeholder="可選擇或自行填寫" '
+    if (!editable) return esc(resultText(it.answer_value)) + dl;
+    return '<input type="text" list="'+dlId+'" value="'+esc(resultText(it.answer_value))+'" placeholder="可選擇或自行填寫" '
          + 'onchange="itemSave('+it.id+',this.value,null)" style="width:100%;border:1px solid #E8D5B5;border-radius:4px;padding:3px 6px;font-size:12.5px;">' + dl;
 }
 function renderView(){
@@ -452,7 +492,13 @@ function renderView(){
     depts.forEach(function(dp){
         h += '<div class="cr-dept-box'+(dp.signed?' signed':'')+'"><div class="hd"><b>'+esc(dp.dept_name)+'</b>';
         if (dp.signed) {
-            h += '<span style="color:#2d6a3e;font-size:12.5px;"><i class="fa fa-check-circle"></i> '+esc(dp.signed_by_name)+' 於 '+dispDate(dp.signed_at)+' 簽核</span>';
+            // 簽核一律走圖章（ai-rules/18），不只印人名文字；is_auto_sign／is_backfill 這個「這一章
+            // 是管理員自動帶入／補登的」紀錄只有管理員看得到（2026-10-05 使用者要求「把自動審核紀錄
+            // 留在LOG中只提供管理員查看，其他前端一律是正常簽核」），一般使用者看到的就是正常的章。
+            h += '<span style="display:inline-flex;align-items:center;gap:6px;">'
+               + stampHtml(dp.signed_by_name, String(dp.signed_at||'').substring(0,10))
+               + (CUR.is_admin && (dp.is_auto_sign || dp.is_backfill) ? '<span title="'+(dp.is_auto_sign?'管理員「自動填寫並簽核」自動帶入':'管理員補登')+'" style="font-size:10px;color:#b5862f;border:1px dashed #E8D5B5;border-radius:3px;padding:0 4px;">LOG</span>' : '')
+               + '</span>';
         } else if (d.status==='submitted' && (dp.can_fill || CUR.is_admin)) {
             h += '<span><input type="text" id="deptNote_'+dp.dept_id+'" placeholder="意見(選填)" style="width:200px;border:1px solid #E8D5B5;border-radius:4px;padding:3px 6px;font-size:12px;margin-right:6px;">'
                + '<button type="button" class="cr-btn" style="height:26px;padding:0 10px;font-size:12px;" onclick="deptSign('+dp.dept_id+')">本課確認</button></span>';
@@ -467,9 +513,22 @@ function renderView(){
         h += '<p style="color:#8a6d45;font-size:13px;">尚未送出，送出後各負責部門才能填寫與簽核。</p>';
         if (CUR.can_edit_header) h += '<button type="button" class="cr-btn" onclick="submitDoc()">送出</button>';
     } else {
+        // 決行／核准一律走圖章（ai-rules/18）；sales_decided_is_proxy／gm_approved_is_proxy
+        // （2026-10-05 使用者要求「決行與核准也要是對應部門人員決行，絕對不可以是代簽的管理員
+        // (除非管理原本就應該簽那一欄)」——後端已經把代簽一律改記真人，這兩個旗標只是
+        // 「這一章其實是管理員代為操作」的 LOG，只有管理員看得到，一般畫面完全是正常簽核）。
         h += '<div class="cr-hdr-grid" style="grid-template-columns:1fr 1fr;">';
-        h += '<div><span class="k">業務課決行：</span><span class="v">'+(d.decision ? ('<span class="dc-'+d.decision+'">'+esc(DECISIONS[d.decision])+'</span> — '+esc(d.sales_decided_by_name||'')+' '+dispDate(d.sales_decided_at)) : '尚未決行')+'</span></div>';
-        h += '<div><span class="k">總經理核准：</span><span class="v">'+(d.gm_approved_by_name ? (esc(d.gm_approved_by_name)+' '+dispDate(d.gm_approved_at)+(d.gm_is_deputy?'（代）':'')) : '尚未核准')+'</span></div>';
+        var decideStampHtml = d.decision
+            ? ('<span class="dc-'+d.decision+'">'+esc(DECISIONS[d.decision])+'</span>　'
+               + stampHtml(d.sales_decided_by_name, String(d.sales_decided_at||'').substring(0,10))
+               + (CUR.is_admin && d.sales_decided_is_proxy ? ' <span title="由管理員 '+esc(d.sales_decided_proxy_name||'')+' 代為操作" style="font-size:10px;color:#b5862f;border:1px dashed #E8D5B5;border-radius:3px;padding:0 4px;">LOG</span>' : ''))
+            : '尚未決行';
+        h += '<div><span class="k">業務課決行：</span><span class="v">'+decideStampHtml+'</span></div>';
+        var gmStampHtml = d.gm_approved_by_name
+            ? (stampHtml(d.gm_approved_by_name, String(d.gm_approved_at||'').substring(0,10), d.gm_is_deputy)
+               + (CUR.is_admin && d.gm_approved_is_proxy ? ' <span title="由管理員 '+esc(d.gm_approved_proxy_name||'')+' 代為操作" style="font-size:10px;color:#b5862f;border:1px dashed #E8D5B5;border-radius:3px;padding:0 4px;">LOG</span>' : ''))
+            : '尚未核准';
+        h += '<div><span class="k">總經理核准：</span><span class="v">'+gmStampHtml+'</span></div>';
         h += '</div>';
         if (d.decision===null && d.status==='submitted') {
             if (CUR.all_depts_signed && (CUR.can_decide || CUR.is_admin)) {
@@ -523,7 +582,84 @@ function approveDoc(){
         openView(CUR.doc.id); loadList();
     }, 'json');
 }
-function printDoc(){ window.print(); }
+/* ───────────────── 列印（ai-rules/16：公司全名動態取、表頭取綁定AS文件表單名稱、頁碼左下
+   只有多頁才印、AS編號右下每頁都印且版次依業務日期回推；ai-rules/18：簽章一律走圖章） ───────────────── */
+function printDoc(){
+    if (!CUR) return;
+    $.getJSON(API, {action:'print_get', id:CUR.doc.id}, function(res){
+        if (!res.ok){ alert(res.error||'載入列印資料失敗'); return; }
+        var d = res.doc, items = res.items||[], depts = res.depts||[];
+        var schema = (res.stamp_tpl && res.stamp_tpl.schema) ? res.stamp_tpl.schema : null;
+        var pStamp = function(name, dt, isDeputy){
+            if (!name) return '<div style="min-height:50px;"></div>';
+            try { if (window.EGStamp && EGStamp.stamp) return EGStamp.stamp(name, dt||'', !!isDeputy, schema); } catch(e){}
+            return esc(name);
+        };
+        var itemRows = items.map(function(it){
+            return '<tr><td>'+esc(it.group_label)+'</td><td class="tl">'+esc(it.item_text)+'</td><td>'+esc(it.dept_name||'')+'</td>'
+                 + '<td class="tl">'+esc(resultText(it.answer_value))+'</td><td>'+esc(it.filled_by_name||'')+'</td></tr>';
+        }).join('');
+        // 內容部門簽核改兩欄並列（2026-10-05 使用者要求）：每列放兩個部門，省掉的垂直空間讓整張表
+        // 更容易印在一頁內；部門數是單數時最後一列右邊補空白儲存格補滿欄數。
+        var deptCell = function(dp){
+            if (!dp) return '<td class="dept"></td><td class="tl"></td>';
+            return '<td class="dept">'+esc(dp.dept_name)+'</td><td class="tl">'
+                 + (dp.note?('<div style="font-size:10px;color:#555;margin-bottom:2px;">'+esc(dp.note)+'</div>'):'')
+                 + pStamp(dp.signed_by_name, String(dp.signed_at||'').substring(0,10))
+                 + '</td>';
+        };
+        var deptRows = '';
+        for (var di=0; di<depts.length; di+=2) deptRows += '<tr>'+deptCell(depts[di])+deptCell(depts[di+1])+'</tr>';
+        var decisionTxt = d.decision ? esc(DECISIONS[d.decision]||d.decision) : '（未決行）';
+        var body = '<div class="p-comp">'+esc(res.company_name)+'</div>'
+            + '<div class="p-title">'+esc(res.as_doc_name)+'</div>'
+            + '<table class="p-hd">'
+            + '<tr><td>訂單編號</td><td>'+esc(d.order_oo)+'</td><td>客戶</td><td>'+esc(d.client_name)+'</td><td>料號</td><td>'+esc(d.part_no_text)+'</td></tr>'
+            + '<tr><td>數量</td><td>'+Number(d.qty||0).toLocaleString()+'</td><td>接單日期</td><td>'+dispDate(d.business_date)+'</td><td>交期</td><td>'+dispDate(d.delivery_date)+'</td></tr>'
+            + '<tr><td>AS 認定</td><td colspan="3">'+esc(d.tag_label||'')+'</td><td>編號</td><td>'+esc(d.doc_no)+'</td></tr>'
+            + '</table>'
+            + '<table class="p-tb"><thead><tr><th style="width:50px;">區分</th><th>項目內容</th><th style="width:70px;">負責部門</th><th style="width:110px;">結果</th><th style="width:70px;">填寫人</th></tr></thead><tbody>'+itemRows+'</tbody></table>'
+            + '<div class="p-sec">內容部門簽核</div>'
+            + '<table class="p-tb"><tbody>'+deptRows+'</tbody></table>'
+            // 決行與核准改並列同一列（2026-10-05 使用者要求）：業務課決行／總經理核准各佔一半寬度。
+            + '<div class="p-sec">決行與核准　決行結果：'+decisionTxt+'</div>'
+            + '<table class="p-tb"><tr>'
+            + '<td class="dept">業務課決行</td><td class="tl">'+pStamp(d.sales_decided_by_name, String(d.sales_decided_at||'').substring(0,10))+'</td>'
+            + '<td class="dept">總經理核准</td><td class="tl">'+pStamp(d.gm_approved_by_name, String(d.gm_approved_at||'').substring(0,10), d.gm_is_deputy)+'</td>'
+            + '</tr></table>';
+        var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+            + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:1px;}'
+            + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:4px;margin-bottom:10px;}'
+            + '.p-sec{font-size:13px;font-weight:bold;color:#8A5A2B;border-left:4px solid #F0A24B;padding-left:6px;margin:10px 0 4px;break-after:avoid;}'
+            + 'table.p-hd{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:6px;}'
+            + 'table.p-hd td{border:1px solid #666;padding:3px 5px;} table.p-hd td:nth-child(odd){background:#f3ead6;font-weight:bold;white-space:nowrap;}'
+            + 'table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:10.5px;margin-bottom:4px;}'
+            + 'table.p-tb thead{display:table-header-group;}'
+            + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:3px 5px;text-align:center;overflow-wrap:anywhere;}'
+            + 'table.p-tb thead th{background:#f3ead6;} table.p-tb td.tl{text-align:left;} table.p-tb td.dept{font-weight:bold;background:#f3ead6;width:70px;}'
+            + 'table.p-tb tr{break-inside:avoid;}'
+            + '.stamp-wrap{display:inline-block;text-align:center;margin:2px 10px 2px 0;}'
+            + '@page{margin:12mm 10mm 18mm;'
+            + (res.as_doc_no ? " @bottom-right{ content:'"+String(res.as_doc_no).replace(/['\\]/g,'')+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
+            + '}';
+        var w = window.open('', '_blank');
+        w.document.write('<html><head><meta charset="utf-8"><title>合約訂單審查表</title><style>'+css+'</style></head><body>'+body+'</body></html>');
+        w.document.close();
+        // 頁碼左下角只有多頁才印（ai-rules/16）：寫入後量實際內容高度，超過單頁可印高度才補加頁碼樣式，
+        // 不事先寫死，避免單頁報表也印出「第 1 頁／共 1 頁」。
+        setTimeout(function(){
+            try {
+                var h = w.document.body.scrollHeight;
+                if (h > 1000) {
+                    var st = w.document.createElement('style');
+                    st.textContent = "@page{ @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";
+                    w.document.head.appendChild(st);
+                }
+            } catch(e){}
+            w.print();
+        }, 250);
+    });
+}
 function deleteDoc(){
     if (!confirm('確定要刪除這張審查表單嗎？\n訂單 '+CUR.doc.order_oo+'（'+CUR.doc.client_name+'），編號 '+CUR.doc.doc_no+'\n\n刪除後這張訂單可以重新建立一張新的審查表單，此動作無法由畫面復原。')) return;
     $.post(API, {action:'delete', csrf:META.csrf, doc_id:CUR.doc.id}, function(res){
@@ -547,31 +683,63 @@ function submitAutoFillSign(){
     $.post(API, {action:'admin_auto_fill_sign', csrf:META.csrf, doc_id:CUR.doc.id, sign_date:signDate}, function(res){
         $('#btnAutoFillGo').prop('disabled', false).text('執行');
         if (!res.ok){ alert(res.error||'執行失敗'); return; }
-        var h = '<div style="background:#E7F3E8;border:1px solid #bfe0c4;border-radius:6px;padding:8px 10px;font-size:12.5px;">'
-              + '已帶入 '+res.filled+' 個項目的預設值'+(res.skipped_no_default?('，'+res.skipped_no_default+' 個項目沒有設定預設值已略過'):'')+'。</div>';
+        var msg = '已帶入 '+res.filled+' 個項目的預設值'+(res.skipped_no_default?('，'+res.skipped_no_default+' 個項目沒有設定預設值已略過'):'')+'。';
         var signedKeys = Object.keys(res.signed_depts||{});
         if (signedKeys.length) {
-            h += '<div style="margin-top:8px;"><b style="font-size:12.5px;color:#2d6a3e;">已自動簽核：</b><ul style="margin:4px 0 0;padding-left:20px;font-size:12px;">';
+            msg += '\n\n已自動簽核：';
             signedKeys.forEach(function(k){
                 var info = res.signed_depts[k];
-                h += '<li>'+esc(info.dept_name)+'　由 '+esc(info.signer_name)+' 簽核'
-                   + (info.note_warnings && info.note_warnings.length ? '　<span style="color:#b5862f;">（原候選人當天不在：'+esc(info.note_warnings.join('；'))+'，已改由下一位）</span>' : '')
-                   + '</li>';
+                msg += '\n・'+info.dept_name+'　由 '+info.signer_name+' 簽核'
+                     + (info.note_warnings && info.note_warnings.length ? '（原候選人當天不在：'+info.note_warnings.join('；')+'，已改由下一位）' : '');
             });
-            h += '</ul></div>';
         }
         var unsignedKeys = Object.keys(res.unsigned_depts||{});
         if (unsignedKeys.length) {
-            h += '<div style="margin-top:8px;"><b style="font-size:12.5px;color:#c0392b;">未能自動簽核（請自行處理）：</b><ul style="margin:4px 0 0;padding-left:20px;font-size:12px;">';
+            msg += '\n\n未能自動簽核（請自行處理）：';
             unsignedKeys.forEach(function(k){
                 var info = res.unsigned_depts[k];
-                h += '<li>'+esc(info.dept_name)+'：'+esc(info.reason)+'</li>';
+                msg += '\n・'+info.dept_name+'：'+info.reason;
             });
-            h += '</ul></div>';
         }
-        $('#autoFillResult').html(h);
+        // 2026-10-05 使用者要求：執行完要關閉跳窗，不要還停留在原畫面，避免誤以為沒有完成——
+        // 結果改用 alert 一次講清楚，關窗後詳情畫面本來就會即時重新整理顯示真實的簽核結果。
+        closeMask('autoFillMask');
+        alert(msg);
         openView(CUR.doc.id); loadList();
     }, 'json').fail(function(){ $('#btnAutoFillGo').prop('disabled', false).text('執行'); });
+}
+
+/* ───────────────── 列印設定（AS 文件編號綁定＋簽章圖章模板，僅管理員） ───────────────── */
+var PRINT_SET = {docs:[], docId:0, doc:null};
+$('#btnPrintSet').on('click', function(){
+    $.getJSON(API, {action:'print_setting_get'}, function(res){
+        if (!res.ok){ alert(res.error||'載入設定失敗'); return; }
+        PRINT_SET.docs = res.as_docs||[]; PRINT_SET.docId = parseInt(res.as_doc_id||0)||0; PRINT_SET.doc = res.as_doc||null;
+        renderPrintAsDocLabel();
+        var $s = $('#psStampTpl').html('<option value="0">（用系統預設印章）</option>');
+        (res.stamp_tpls||[]).forEach(function(t){
+            $s.append('<option value="'+t.id+'">'+esc(t.tpl_name)+(t.type_name?'（'+esc(t.type_name)+'）':'')+'</option>');
+        });
+        $s.val(String(parseInt(res.stamp_tpl_id||0)||0));
+        if ($s.val()===null) $s.val('0');
+        openMask('printSetMask');
+    });
+});
+function renderPrintAsDocLabel(){
+    var txt = (window.EGAsDoc && EGAsDoc.label) ? EGAsDoc.label(PRINT_SET.doc) : (PRINT_SET.doc ? PRINT_SET.doc.doc_no : '尚未綁定');
+    $('#psAsDocLabel').text(txt);
+}
+function pickPrintAsDoc(){
+    EGAsDoc.open({docs:PRINT_SET.docs, current:PRINT_SET.docId, title:'合約訂單審查表－AS 文件編號綁定',
+        onSave:function(id, doc){ PRINT_SET.docId = parseInt(id)||0; PRINT_SET.doc = doc||null; renderPrintAsDocLabel(); }});
+}
+function clearPrintAsDoc(){ PRINT_SET.docId = 0; PRINT_SET.doc = null; renderPrintAsDocLabel(); }
+function savePrintSetting(){
+    $.post(API, {action:'print_setting_save', csrf:META.csrf, as_doc_id:PRINT_SET.docId, stamp_tpl_id:parseInt($('#psStampTpl').val()||0)||0}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        closeMask('printSetMask');
+        loadMeta();   // 重新載入 META.as_doc／META.stamp_tpl，讓畫面上的圖章與 AS 編號立刻套用新設定
+    }, 'json');
 }
 
 /* ───────────────── 範本維護 ───────────────── */

@@ -194,6 +194,29 @@ function cnrv_ensure_schema(PDO $db): void {
     if (!$hasCol('con_review_doc', 'deleted_at')) {
         try { $db->exec("ALTER TABLE con_review_doc ADD COLUMN deleted_at DATETIME NULL AFTER deleted_by_name"); } catch (Throwable $e) {}
     }
+    // 2026-10-05（使用者交辦）：決行／核准若實際是管理員代為操作（本人不是業務課決行池或總經理核准人選），
+    // 一律改記「真正該簽這一欄的人」，管理員本人只留在 proxy 欄位供 LOG 查核（畫面一律顯示真人，不顯示管理員）。
+    if (!$hasCol('con_review_doc', 'sales_decided_is_proxy')) {
+        try { $db->exec("ALTER TABLE con_review_doc ADD COLUMN sales_decided_is_proxy TINYINT(1) NOT NULL DEFAULT 0
+                         COMMENT '決行人非業務課真正人選、由管理員代操作' AFTER sales_is_deputy"); } catch (Throwable $e) {}
+    }
+    if (!$hasCol('con_review_doc', 'sales_decided_proxy_uid')) {
+        try { $db->exec("ALTER TABLE con_review_doc ADD COLUMN sales_decided_proxy_uid INT NULL
+                         COMMENT '實際操作的管理員帳號(僅供管理員查看的LOG，前端一律顯示sales_decided_by_name)' AFTER sales_decided_is_proxy"); } catch (Throwable $e) {}
+    }
+    if (!$hasCol('con_review_doc', 'sales_decided_proxy_name')) {
+        try { $db->exec("ALTER TABLE con_review_doc ADD COLUMN sales_decided_proxy_name VARCHAR(50) NULL AFTER sales_decided_proxy_uid"); } catch (Throwable $e) {}
+    }
+    if (!$hasCol('con_review_doc', 'gm_approved_is_proxy')) {
+        try { $db->exec("ALTER TABLE con_review_doc ADD COLUMN gm_approved_is_proxy TINYINT(1) NOT NULL DEFAULT 0
+                         COMMENT '核准人非總經理真正人選、由管理員代操作' AFTER gm_is_deputy"); } catch (Throwable $e) {}
+    }
+    if (!$hasCol('con_review_doc', 'gm_approved_proxy_uid')) {
+        try { $db->exec("ALTER TABLE con_review_doc ADD COLUMN gm_approved_proxy_uid INT NULL AFTER gm_approved_is_proxy"); } catch (Throwable $e) {}
+    }
+    if (!$hasCol('con_review_doc', 'gm_approved_proxy_name')) {
+        try { $db->exec("ALTER TABLE con_review_doc ADD COLUMN gm_approved_proxy_name VARCHAR(50) NULL AFTER gm_approved_proxy_uid"); } catch (Throwable $e) {}
+    }
 
     // 角色自動建立（module='con_review'，比照 equip_list_lib.php 同一套寫法；加好之後會自動出現在
     // user_permissions.php 的動態角色區塊，不必改設定頁程式）。canView 是進本模組 API 的最低門檻
@@ -275,11 +298,22 @@ function cnrv_perms(PDO $db, ?array $u): array {
  *  範本的「預設回覆選項」只是在這三個之外**追加**的額外選擇，不是取代。 */
 if (!defined('CNRV_BASE_OPTIONS')) define('CNRV_BASE_OPTIONS', ['是', '否', 'N/A']);
 
-/** 合併基礎三選項與範本自訂選項（去重，基礎選項固定排前面）。$custom 可為陣列或 JSON 字串。 */
+/** 合併基礎三選項與範本自訂選項（去重，基礎選項固定排前面）。$custom 可為陣列或 JSON 字串。
+ *  僅供「範本維護」畫面使用（管理員要看得到含基礎三選項的完整值域）；**填寫一份已建立的審查表單**
+ *  不要用這支，見下面 cnrv_fill_options()（2026-10-05 使用者更正：回簽時不再提供是/否/NA）。 */
 function cnrv_merge_options($custom): array {
     $arr = is_array($custom) ? $custom : (json_decode((string)$custom, true) ?: []);
     $arr = array_values(array_filter(array_map('trim', (array)$arr), fn($s) => $s !== '' && !in_array($s, CNRV_BASE_OPTIONS, true)));
     return array_merge(CNRV_BASE_OPTIONS, $arr);
+}
+
+/** 填寫表單時真正可選的清單：只有這個項目自己的額外選項，不含「是/否/N-A」三個基礎選項
+ *  （2026-10-05 使用者明確要求「回簽時也不提供是/否/NA選項，直接提供額外選項選項，但一樣可以
+ *  手動自行輸入」）——datalist 只是建議清單，<input type=text> 本來就還是能自由輸入任何文字，
+ *  這支只是不再把是/否/N-A 加進建議清單裡。範本維護畫面仍走 cnrv_merge_options()，不受影響。 */
+function cnrv_fill_options($custom): array {
+    $arr = is_array($custom) ? $custom : (json_decode((string)$custom, true) ?: []);
+    return array_values(array_filter(array_map('trim', (array)$arr), fn($s) => $s !== '' && !in_array($s, CNRV_BASE_OPTIONS, true)));
 }
 
 /** @return array 每項 ['id','sort_order','group_label','item_text','dept_id','dept_name','options'=>array(含基礎三選項),'default_value','is_active'] */
@@ -544,7 +578,7 @@ function cnrv_items_get(PDO $db, int $docId): array {
                         WHERE i.doc_id=? ORDER BY i.sort_order, i.id");
     $st->execute([$docId]);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($rows as &$r) $r['options'] = cnrv_merge_options($r['preset_options']);
+    foreach ($rows as &$r) $r['options'] = cnrv_fill_options($r['preset_options']);
     return $rows;
 }
 
@@ -626,6 +660,58 @@ function cnrv_gm_signer(PDO $db, int $docId): ?array {
     $st->execute([$signerId]);
     $d = $st->fetch(PDO::FETCH_ASSOC);
     return $d ? ['id'=>(int)$d['id'], 'user_cname'=>$d['user_cname'], 'is_deputy'=>true] : ['id'=>(int)$u['id'], 'user_cname'=>$u['user_cname'], 'is_deputy'=>false];
+}
+
+/* ============================================================ 列印設定（簽章圖章模板，ai-rules/18） ============================================================
+ * 比照 stock.php 領料需求單的既有做法（鐵律4：全站只有一套「模組→圖章模板」存法）。
+ * 值存 system_parameters('CON_REVIEW','stamp_tpl_id')，0＝未指定、消費端退回 eg_stamp.js 預設回墨印。
+ */
+
+/** 本模組要套用的圖章模板 id（0＝未設定）。 */
+function cnrv_stamp_tpl_id(PDO $db): int {
+    try {
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='CON_REVIEW' AND param_key='stamp_tpl_id' LIMIT 1");
+        $st->execute();
+        $v = $st->fetchColumn();
+        if ($v === false) return 0;
+        $d = json_decode((string)$v, true);
+        return (int)(is_numeric($d) ? $d : (is_numeric($v) ? $v : 0));
+    } catch (Throwable $e) { return 0; }
+}
+
+/** 圖章模板內容（停用或查無回 null）。 */
+function cnrv_stamp_tpl(PDO $db, int $tplId): ?array {
+    if (!$tplId) return null;
+    try {
+        $st = $db->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");
+        $st->execute([$tplId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return $r ? ['id'=>(int)$r['id'], 'tpl_name'=>$r['tpl_name'], 'schema'=>json_decode((string)$r['schema_json'], true)] : null;
+    } catch (Throwable $e) { return null; }
+}
+
+/** 圖章模板下拉清單（設定跳窗用）。 */
+function cnrv_stamp_tpl_options(PDO $db): array {
+    try {
+        return $db->query("SELECT p.id, p.tpl_name, t.type_name FROM stamp_template p
+                           LEFT JOIN stamp_type t ON t.id=p.type_id
+                           WHERE p.is_active=1 ORDER BY p.tpl_name")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+/** 存檔：僅管理員（呼叫端自行驗證），$tplId=0 代表改回系統預設回墨印。 */
+function cnrv_stamp_tpl_save(PDO $db, int $tplId, string $by): void {
+    if ($tplId) {
+        $chk = $db->prepare("SELECT id FROM stamp_template WHERE id=? AND is_active=1");
+        $chk->execute([$tplId]);
+        if (!$chk->fetchColumn()) throw new Exception('選擇的圖章模板不存在或已停用');
+    }
+    $ex = $db->prepare("SELECT id FROM system_parameters WHERE param_group='CON_REVIEW' AND param_key='stamp_tpl_id' LIMIT 1");
+    $ex->execute();
+    $rid = $ex->fetchColumn();
+    if ($rid) $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")->execute([(string)$tplId, $by, $rid]);
+    else $db->prepare("INSERT INTO system_parameters (param_group,param_key,param_value,description,updated_by) VALUES ('CON_REVIEW','stamp_tpl_id',?,?,?)")
+             ->execute([(string)$tplId, '合約訂單審查表列印/畫面：簽章圖章模板 id（0=用系統預設印章）', $by]);
 }
 
 /* ============================================================ 寫入 ============================================================ */
@@ -731,24 +817,44 @@ function cnrv_admin_auto_fill_sign(PDO $db, int $docId, string $signDate, int $a
                ->execute([$signDate, $signDate . ' 09:00:00', $adminUid, $adminName, $docId]);
         }
 
+        // 每個內容部門「這天可以簽的人」只算一次——項目填寫人與最後的部門簽核要是同一個人，
+        // 不可以項目填寫人是 A、部門簽核卻換成 B（2026-10-05 使用者要求「填寫人要是各單位對應到的
+        // 人員」，不可以顯示成執行這次操作的「超級管理員」）。已簽過的部門（含人工先簽）不重算。
+        $deptAvail = [];
+        foreach (cnrv_doc_dept_ids($db, $docId) as $deptId) {
+            $deptAvail[$deptId] = cnrv_dept_signed($db, $docId, $deptId)
+                ? ['signer'=>null, 'warnings'=>[]]
+                : cnrv_dept_pool_available($db, $deptId, $signDate);
+        }
+
         // 逐項帶入範本預設值：只補還沒填的，已有答案的一律不動（不可覆蓋別人已填的內容）。
-        // default_value（是/否/N-A）與 default_extra（額外選項）是兩個各自獨立的設定
-        // （2026-10-05 使用者明確要求「這兩個是分開設定，不是只能從裡面選一個」），
-        // 兩者都可能有值，最終答案是把有值的部分合併顯示（用「、」連接），任一邊空的就不接進去；
-        // 兩邊都沒設定才算「沒有預設值」略過不填。
+        // 2026-10-05 使用者更正：答案一律只用「額外選項」的預設值（default_extra），
+        // 不再把「是/否/N-A」（default_value）接進答案文字——使用者原話「前端與列印結果隱藏
+        // 是/否/NA 改成直接顯示額外選項」，回填時自然也比照辦理；default_value 仍留在範本
+        // 設定供管理員參考（不刪除這個設定欄位），只是不再組進自動帶入的答案裡。
+        // 沒有設定額外選項預設值的項目（只設了是/否/N-A 或兩個都沒設）視為「沒有預設值」略過。
+        // 填寫人＝該項目所屬部門這天解析出來的真人（$deptAvail 的 signer）；當天查無可用人員時
+        // 退回該部門人員池的第一人（他仍是真實的部門成員、只是那天不在無法簽核，部門因此留在
+        // 「未簽核」狀態由管理員自行處理，但項目內容的填寫人依然要是一個真人不是管理員）；
+        // 部門完全沒有任何人員（池本身是空的）才不得已退回管理員本人。
         $filled = 0; $skippedNoDefault = 0;
-        $itemSt = $db->prepare("SELECT id, answer_value, default_value, default_extra FROM con_review_item WHERE doc_id=?");
+        $itemSt = $db->prepare("SELECT id, dept_id, answer_value, default_extra FROM con_review_item WHERE doc_id=?");
         $itemSt->execute([$docId]);
         $updSt = $db->prepare("UPDATE con_review_item SET answer_value=?,filled_by=?,filled_by_name=?,filled_at=? WHERE id=?");
         foreach ($itemSt->fetchAll(PDO::FETCH_ASSOC) as $it) {
             if ($it['answer_value'] !== null && $it['answer_value'] !== '') continue;
-            $parts = array_filter([$it['default_value'], $it['default_extra']], fn($v) => $v !== null && $v !== '');
-            if (!$parts) { $skippedNoDefault++; continue; }
-            $updSt->execute([implode('、', $parts), $adminUid, $adminName, $signDate . ' 09:00:00', $it['id']]);
+            $ans = trim((string)($it['default_extra'] ?? ''));
+            if ($ans === '') { $skippedNoDefault++; continue; }
+            $deptId = (int)($it['dept_id'] ?? 0);
+            $filler = $deptAvail[$deptId]['signer'] ?? null;
+            if (!$filler) { $pool = cnrv_dept_pool($db, $deptId); $filler = $pool[0] ?? null; }
+            $fillerUid = $filler ? (int)$filler['id'] : $adminUid;
+            $fillerName = $filler ? $filler['user_cname'] : $adminName;
+            $updSt->execute([$ans, $fillerUid, $fillerName, $signDate . ' 09:00:00', $it['id']]);
             $filled++;
         }
 
-        // 逐內容部門嘗試自動簽核
+        // 逐內容部門嘗試自動簽核（沿用上面已經算好的 $deptAvail，不重新查一次候選名單）
         $signedDepts = []; $unsignedDepts = [];
         foreach (cnrv_doc_dept_ids($db, $docId) as $deptId) {
             $dName = $deptNames[$deptId] ?? ('#' . $deptId);
@@ -761,7 +867,7 @@ function cnrv_admin_auto_fill_sign(PDO $db, int $docId, string $signDate, int $a
                 $unsignedDepts[$deptId] = ['dept_name'=>$dName, 'reason'=>'本部門仍有項目沒有設定預設值，無法自動填完整'];
                 continue;
             }
-            $avail = cnrv_dept_pool_available($db, $deptId, $signDate);
+            $avail = $deptAvail[$deptId] ?? ['signer'=>null, 'warnings'=>[]];
             if (!$avail['signer']) {
                 $unsignedDepts[$deptId] = ['dept_name'=>$dName, 'reason'=>'這天本部門候選簽核人都不在：' . ($avail['warnings'] ? implode('；', $avail['warnings']) : '查無候選人員，請先設定部門主管或人員')];
                 continue;
@@ -796,7 +902,13 @@ function cnrv_submit(PDO $db, int $docId, int $uid, string $uname): void {
         "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查已送出，請填寫並簽核您負責的項目。", $uid);
 }
 
-/** 業務課決行：全部內容部門簽完才能決行。 */
+/**
+ * 業務課決行：全部內容部門簽完才能決行。
+ * 2026-10-05 使用者交辦：「決行與核准也要是對應部門人員決行，絕對不可以是代簽的管理員（除非
+ * 管理原本就應該簽那一欄）」——操作者本人若真的在業務課決行人員池內（含管理員本人剛好就是
+ * 業務課主管的情況），照常記本人；不在池內（典型是管理員代為操作）則改記業務課真正的人選，
+ * 操作者本人只留進 proxy 欄位供「只有管理員看得到的 LOG」查核，一般畫面與列印一律只顯示真人。
+ */
 function cnrv_decide(PDO $db, int $docId, int $uid, string $uname, string $decision, ?string $note, bool $isAdmin): void {
     $doc = cnrv_get($db, $docId);
     if (!$doc) throw new Exception('找不到此表單');
@@ -804,25 +916,46 @@ function cnrv_decide(PDO $db, int $docId, int $uid, string $uname, string $decis
     if (!array_key_exists($decision, CNRV_DECISIONS)) throw new Exception('決行結果不合法');
     if (!$isAdmin && !cnrv_can_decide($db, $uid, false)) throw new Exception('您沒有業務課決行的權限');
     if (!cnrv_all_depts_signed($db, $docId)) throw new Exception('尚有內容部門未完成簽核，不可決行');
-    $db->prepare("UPDATE con_review_doc SET decision=?,decision_note=?,sales_decided_by=?,sales_decided_by_name=?,sales_decided_at=NOW() WHERE id=?")
-       ->execute([$decision, $note, $uid, $uname, $docId]);
+
+    $signerId = $uid; $signerName = $uname; $isProxy = 0; $proxyUid = null; $proxyName = null;
+    if (!cnrv_can_decide($db, $uid, false)) {
+        $pool = cnrv_sales_pool($db);
+        if ($pool) {
+            $signerId = (int)$pool[0]['id']; $signerName = $pool[0]['user_cname'];
+            $isProxy = 1; $proxyUid = $uid; $proxyName = $uname;
+        }
+        // 業務課完全沒設定任何人員（池是空的）時沒有真人可代，只能仍記操作者本人。
+    }
+    $db->prepare("UPDATE con_review_doc SET decision=?,decision_note=?,sales_decided_by=?,sales_decided_by_name=?,sales_decided_at=NOW(),
+                  sales_decided_is_proxy=?,sales_decided_proxy_uid=?,sales_decided_proxy_name=? WHERE id=?")
+       ->execute([$decision, $note, $signerId, $signerName, $isProxy, $proxyUid, $proxyName, $docId]);
     $gm = cnrv_gm_signer($db, $docId);
     if ($gm) cnrv_notify($db, $docId, [(int)$gm['id']], '合約訂單審查待核准',
         "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查已決行為「" . CNRV_DECISIONS[$decision] . "」，請核准。", $uid);
 }
 
-/** 總經理核准：核准後 status=closed。 */
+/** 總經理核准：核准後 status=closed。同一套「代簽記真人、管理員本人只留 LOG」規則（見 cnrv_decide() 說明）。 */
 function cnrv_approve(PDO $db, int $docId, int $uid, string $uname, bool $isAdmin, bool $isDeputy = false): void {
     $doc = cnrv_get($db, $docId);
     if (!$doc) throw new Exception('找不到此表單');
     if ($doc['status'] !== 'submitted' || $doc['decision'] === null) throw new Exception('尚未完成業務課決行，不可核准');
+
+    $gm = cnrv_gm_signer($db, $docId);
+    $signerId = $uid; $signerName = $uname; $isProxy = 0; $proxyUid = null; $proxyName = null;
     if (!$isAdmin) {
-        $gm = cnrv_gm_signer($db, $docId);
         if (!$gm || (int)$gm['id'] !== $uid) throw new Exception('您沒有核准此表單的權限');
         $isDeputy = !empty($gm['is_deputy']);
+    } elseif ($gm && (int)$gm['id'] !== $uid) {
+        // 管理員本人不是真正的總經理核准人（含代理解析後的結果）→ 代簽，記錄真正的核准人，
+        // 管理員本人只留進 proxy 欄位。
+        $signerId = (int)$gm['id']; $signerName = $gm['user_cname'];
+        $isDeputy = !empty($gm['is_deputy']);
+        $isProxy = 1; $proxyUid = $uid; $proxyName = $uname;
     }
-    $db->prepare("UPDATE con_review_doc SET status='closed',gm_approved_by=?,gm_approved_by_name=?,gm_approved_at=NOW(),gm_is_deputy=?,closed_at=NOW() WHERE id=?")
-       ->execute([$uid, $uname, $isDeputy?1:0, $docId]);
+    // $gm 查無資料（完全沒設定 top_approver）時沒有真人可代，只能仍記操作者本人（可能是管理員）。
+    $db->prepare("UPDATE con_review_doc SET status='closed',gm_approved_by=?,gm_approved_by_name=?,gm_approved_at=NOW(),gm_is_deputy=?,
+                  gm_approved_is_proxy=?,gm_approved_proxy_uid=?,gm_approved_proxy_name=?,closed_at=NOW() WHERE id=?")
+       ->execute([$signerId, $signerName, $isDeputy?1:0, $isProxy, $proxyUid, $proxyName, $docId]);
 }
 
 /** 管理員刪除（2026-10-05 使用者交辦「可刪除未審核的」）：只能刪還沒結案的（draft/submitted）——
