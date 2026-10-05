@@ -270,6 +270,15 @@ function kpsOwnerText(array $row, array $deptName): string {
         .vio-foot { padding:8px 0 0; display:flex; gap:8px; align-items:center; }
         .vio-warn { font-size:12.5px; color:#8A5A2B; background:#FDF8EF; border:1px solid #E8D5B5;
             border-radius:6px; padding:7px 10px; margin-bottom:8px; }
+        .vio-warn.ok { background:#EAF0E2; border-color:#cfe0bb; color:#4d6b33; }
+        /* 直接修改來源資料欄位 */
+        td.vio-edit { vertical-align:top; }
+        .ve-row { margin-bottom:4px; }
+        .ve-row .ve-lb { display:block; font-size:10.5px; color:#8a6d45; }
+        .ve-row .veF { width:100%; height:24px; border:1px solid #D8BE93; border-radius:3px;
+            padding:0 4px; font-size:11.5px; color:#5b3a1e; }
+        .vio-set { margin-left:auto; font-size:12.5px; color:#5b3a1e; }
+        .vio-set select { height:28px; border:1px solid #D8BE93; border-radius:4px; padding:0 6px; font-size:12.5px; }
 
         .ks-sec { border:1px solid #E8D5B5; border-radius:8px; background:#fff; margin-top:12px; }
         .ks-sec > h4 { margin:0; padding:8px 12px; background:#F7E0BD; color:#5b3a1e; font-size:14px;
@@ -1215,13 +1224,20 @@ function renderVio(){
        + '<br>不符合標準 <b>' + d.total + '</b> 筆' + (exN ? ('，其中 <b>' + exN + '</b> 筆已逐筆排除') : '')
        + (+d.rule_ex ? ('，另有 <b>' + d.rule_ex + '</b> 筆被排除規則排掉') : '')
        + (+d.truncated ? '（畫面最多顯示 500 筆）' : '') + '。</div>';
+    var hasEdit = (d.mode === 'allow' && (d.edit_fields || []).length) ? 1 : 0;
     if (+d.readonly) {
         h += '<div class="vio-warn">這是沿用<b>正式 KPI 表</b>背後計算模組所算出來的明細，<b>僅供檢視</b>——'
            + '本方案的指標本身是直接讀正式表的月快照，不會自己重算，所以這裡不提供排除。'
            + '要調整請到 <a href="KPI.php" target="_blank" rel="noopener">正式 KPI 表</a> 操作。</div>';
-    } else if (+d.can_adjust) {
-        h += '<div class="vio-warn">確實不符合標準的請保持原樣；不該算進績效的那幾筆才勾選後按「排除選取」——'
+    } else if (d.mode === 'deny') {
+        h += '<div class="vio-warn">這個指標的來源資料<b>不開放直接修改</b>（' + esc(d.edit_why || '') + '）。'
+           + '如果某幾筆不應該算進這個月的績效，請勾選後按下方「排除選取」並填寫原因——'
            + '<b>排除只影響 KPI 計算，不會動到任何一筆真實資料</b>。</div>';
+    } else if (d.mode === 'allow') {
+        h += '<div class="vio-warn ok">這個指標的來源資料<b>可以修改</b>（' + esc(d.edit_why || '') + '）：'
+           + (hasEdit ? '可以直接在最右邊那一欄改（改完立刻重算，並留下誰改了什麼的紀錄）。'
+                      : '請到來源頁面修正；這裡還沒有就地修改欄位。')
+           + '<b>只有登錄錯誤才改</b>，確實不符合標準的請保持原樣，不該算進績效的請用勾選＋「排除選取」處理。</div>';
     }
     if (!+d.readonly) h += vioRulesHtml();
     h += vioFilterHtml();
@@ -1230,11 +1246,14 @@ function renderVio(){
     h += '<div class="vio-tblwrap"><table class="vio-tbl"><colgroup>';
     if (showChk) h += '<col style="width:26px;">';
     d.cols.forEach(function(){ h += '<col>'; });
-    h += '<col style="width:18%;">';
+    h += '<col style="width:15%;">';
+    if (hasEdit) h += '<col style="width:180px;">';
     h += '</colgroup><thead><tr>';
     if (showChk) h += '<th><input type="checkbox" id="vioAll" title="全選目前篩選出來的列"></th>';
     d.cols.forEach(function(c){ h += '<th>' + esc(c.t) + '</th>'; });
-    h += '<th>不符合的原因</th></tr></thead><tbody id="vioTb">';
+    h += '<th>不符合的原因</th>';
+    if (hasEdit) h += '<th>直接修改</th>';
+    h += '</tr></thead><tbody id="vioTb">';
     var shown = 0;
     d.rows.forEach(function(x, ix){
         if (!vioRowVisible(x)) return;
@@ -1248,9 +1267,30 @@ function renderVio(){
            + (+x.excluded ? ('　<button class="vio-exbtn undo" data-k="' + esc(x.key) + '" data-act="undo">取消排除</button>'
                               + '<span style="color:#a08356;font-size:11px;"> ' + esc(x.ex_by || '') + ' '
                               + esc((x.ex_at || '').substr(0,10)) + (x.ex_reason ? ('｜' + esc(x.ex_reason)) : '') + '</span>')
-             : '') + '</td></tr>';
+             : '') + '</td>';
+        if (hasEdit) {
+            h += '<td class="vio-edit">';
+            if (+d.can_edit && x.kind === 'bad') {
+                (d.edit_fields || []).forEach(function(f){
+                    var cur = x.edit && x.edit[f.k] != null ? String(x.edit[f.k]) : '';
+                    h += '<div class="ve-row"><span class="ve-lb" title="' + esc(f.hint || '') + '">' + esc(f.t) + '</span>';
+                    if (f.type === 'select') {
+                        h += '<select class="veF" data-k="' + esc(x.key) + '" data-f="' + esc(f.k) + '"><option value="">（不變）</option>';
+                        (f.opts || []).forEach(function(o){ h += '<option value="' + esc(o.v) + '"' + (o.v === cur ? ' selected' : '') + '>' + esc(o.t) + '</option>'; });
+                        h += '</select>';
+                    } else {
+                        h += '<input type="date" class="veF" data-k="' + esc(x.key) + '" data-f="' + esc(f.k) + '" value="' + esc(cur) + '">';
+                    }
+                    h += '</div>';
+                });
+            } else {
+                h += '<span style="color:#a08356;font-size:11px;">' + (+d.can_edit ? '—' : '無修改權限') + '</span>';
+            }
+            h += '</td>';
+        }
+        h += '</tr>';
     });
-    if (!shown) h += '<tr><td colspan="' + (d.cols.length + (showChk?2:1)) + '" style="text-align:center;color:#a08356;">（沒有符合篩選條件的項目）</td></tr>';
+    if (!shown) h += '<tr><td colspan="' + (d.cols.length + (showChk?2:1) + (hasEdit?1:0)) + '" style="text-align:center;color:#a08356;">（沒有符合篩選條件的項目）</td></tr>';
     h += '</tbody></table></div>';
     $('#vioBody').html(h);
 
@@ -1259,7 +1299,40 @@ function renderVio(){
         foot = '<input type="text" id="vioExReason" placeholder="排除原因（選填）" style="flex:1;height:30px;border:1px solid #D8BE93;border-radius:4px;padding:0 8px;font-size:13px;">'
              + '<button class="ksc-btn-save" id="vioExBtn"><i class="fa fa-ban"></i> 排除選取</button>';
     }
+    if (+d.can_set_mode) {
+        foot += '<span class="vio-set">管理員設定：<select id="vioMode">'
+             + '<option value="suggest"' + (d.setting === 'suggest' ? ' selected' : '') + '>依系統建議（' + esc(d.suggest) + '）</option>'
+             + '<option value="allow"' + (d.setting === 'allow' ? ' selected' : '') + '>可直接修改真實資料</option>'
+             + '<option value="deny"' + (d.setting === 'deny' ? ' selected' : '') + '>不可修改，只能排除</option>'
+             + '</select></span>';
+    }
     $('#vioFoot').html(foot);
+    $('#vioMode').off('change').on('change', function(){
+        $.post(API, {action:'edit_mode_save', indicator_id:VIO.iid, mode:$(this).val()}, function(res){
+            if (!res || !res.ok) { alert((res && res.error) || '設定失敗'); return; }
+            openVio(VIO.iid, VIO.m);
+        }, 'json').fail(function(){ alert('設定失敗：連線異常'); });
+    });
+    $('.veF').off('change').on('change', function(){
+        var $f = $(this), key = $f.attr('data-k'), field = $f.attr('data-f'), val = $f.val();
+        if (val === '' && $f.is('select')) return;             // 下拉的「（不變）」
+        var lb = $f.closest('.ve-row').find('.ve-lb').text();
+        if (!confirm('確定把這一筆的「' + lb + '」改成「' + (val || '（清空）') + '」？\n這會直接修改來源資料，並立刻重算這一格。')) {
+            openVio(VIO.iid, VIO.m); return;
+        }
+        $f.prop('disabled', true);
+        $.post(API, {action:'src_edit', indicator_id:VIO.iid, year:KS_YEAR, month:VIO.m,
+                     row_key:key, field:field, value:val}, function(res){
+            if (!res || !res.ok) { alert((res && res.error) || '修改失敗'); openVio(VIO.iid, VIO.m); return; }
+            alert('已修改（' + (res.old || '空白') + ' → ' + (res.new || '空白') + '）。這一格重算為 '
+                  + (res.value === null ? '無資料' : res.value) + '（' + res.num + '／' + res.den + '）。'
+                  + (res.also_month ? ('\n這一筆以後會算到 ' + res.also_month + '，請到該月份確認。') : ''));
+            openVio(VIO.iid, VIO.m);
+        }, 'json').fail(function(x){
+            alert('修改失敗：' + ((x.responseJSON && x.responseJSON.error) || x.status));
+            openVio(VIO.iid, VIO.m);
+        });
+    });
 
     $('#vioKw').off('input').on('input', function(){ VIO.kw = $(this).val(); renderVio(); });
     $('.vioF').off('change').on('change', function(){ VIO.filt[$(this).data('k')] = $(this).val(); renderVio(); });

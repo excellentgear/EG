@@ -181,6 +181,8 @@ case 'preview_compute': {
     }
     try { $r = kpi_scheme_compute_by_key($db, $calcKey, $year, $month, $params); }
     catch (Throwable $e) { jerr('試算失敗：'.$e->getMessage()); }
+    // 同一個浮點序列化坑：v 改送字串，num/den 維持原樣(金額/件數精確值前端有用途，不強制轉字串)
+    if ($r && $r['v'] !== null) $r['v'] = number_format((float)$r['v'], 4, '.', '');
     jout(['result'=>$r]);
 }
 
@@ -229,12 +231,52 @@ case 'detail_rows': {
     }
     $canAdjust = $readonly ? 0 : (kps_can_edit($perms, $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null,
                                                 (int)$u['id']) ? 1 : 0);
+
+    // 直接修改來源資料（使用者要求比照 KPI.php 補齊）：existing/existing_cny 一律 na，
+    // 其餘依 kps_edit_mode()（管理員設定優先於系統建議）。
+    $em = kps_edit_mode($db, $iid, $calc);
+    $editFields = []; $canEdit = 0;
+    $spec = $readonly ? [] : kps_detail_edit_spec($calc);
+    if (!$readonly && $em['mode'] === 'allow' && $spec) {
+        $canEdit = $canAdjust;  // 同一群人（擔當者本人或 KPI 管理員）才能直接改來源
+        foreach ($spec['fields'] as $f) {
+            $opts = [];
+            foreach (($f['opts'] ?? []) as $k => $t) $opts[] = ['v'=>(string)$k, 't'=>$t];
+            $editFields[] = ['k'=>$f['k'], 't'=>$f['t'], 'type'=>$f['type'], 'opts'=>$opts, 'hint'=>$f['hint'] ?? ''];
+        }
+        if ($rows) {
+            $keys = array_map(fn($r) => $r['key'], $rows);
+            $cols = array_map(fn($f) => '`' . $f['k'] . '`', $spec['fields']);
+            $in = implode(',', array_fill(0, count($keys), '?'));
+            try {
+                $q = $db->prepare("SELECT `" . $spec['pk'] . "` AS __k, " . implode(',', $cols)
+                                  . " FROM `" . $spec['table'] . "` WHERE `" . $spec['pk'] . "` IN ($in)");
+                $q->execute($keys);
+                $cur = [];
+                foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $cr) {
+                    $k = (string)$cr['__k']; unset($cr['__k']);
+                    foreach ($cr as $ck => $cv) {
+                        $cur[$k][$ck] = ($cv === null) ? '' : substr((string)$cv, 0, 10);
+                        foreach ($spec['fields'] as $f) {
+                            if ($f['k'] === $ck && ($f['type'] ?? '') !== 'date') $cur[$k][$ck] = (string)$cv;
+                        }
+                    }
+                }
+                foreach ($rows as &$rr) { $rr['edit'] = $cur[(string)$rr['key']] ?? new stdClass(); }
+                unset($rr);
+            } catch (Throwable $e) { /* 取不到就不給編輯欄位，不影響清單本身 */ }
+        }
+    }
+
     jout(['supported'=>1, 'readonly'=>$readonly ? 1 : 0, 'warn'=>$d['warn'] ?? 0, 'cols'=>$d['cols'], 'rows'=>$rows,
           'total'=>$d['total'], 'listed'=>count($d['rows']), 'rule_ex'=>$d['rule_ex'] ?? 0,
           'truncated'=>count($d['rows']) > $cap ? 1 : 0, 'note'=>$d['note'],
           'dims'=>$readonly ? [] : ($d['dims'] ?? []), 'dim_labels'=>kpi_as_dim_labels(),
           'rules'=>$readonly ? [] : kps_excl_rule_rows($db, $iid, $year),
           'can_adjust'=>$canAdjust,
+          'mode'=>$em['mode'], 'setting'=>$em['setting'], 'suggest'=>$em['suggest'], 'edit_why'=>$em['why'],
+          'edit_fields'=>$editFields, 'can_edit'=>$canEdit,
+          'can_set_mode'=>(!empty($perms['canAdmin']) || !empty($perms['isAdmin'])) && !$readonly ? 1 : 0,
           'target'=>['dir'=>$iy['target_direction'], 'value'=>$iy['target_value']]]);
 }
 
@@ -301,6 +343,120 @@ case 'adjust_del': {
     $n = $st->rowCount();
     if (!$n) jerr('這幾筆本來就沒有被排除（請重新整理）');
     jout(['removed'=>$n]);
+}
+
+/* ---------- 直接修改來源資料（使用者要求比照 KPI.php 補齊） ----------
+   安全邊界：表名／主鍵／欄位／可選值一律取自程式碼裡的白名單（kps_detail_edit_spec），
+   請求端只送 row_key 與欄位代號；一定要先確認那一筆真的出現在這一格的不符合標準清單裡
+   （鐵律8）。kpi_scheme 沒有快照／settle 概念，改完直接是下次讀取就反映，不必另外觸發
+   別的月份重算——這點刻意比官方系統簡單。 */
+case 'src_edit': {
+    $iid   = (int)($_POST['indicator_id'] ?? 0);
+    $year  = (int)($_POST['year'] ?? 0);
+    $month = max(1, min(12, (int)($_POST['month'] ?? 0)));
+    $iy = kps_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    $calc = (string)$iy['calculator_key'];
+    if ($iy['source_mode'] !== 'auto' || !kps_detail_supported($calc)) jerr('這個指標不支援明細修改');
+
+    $em = kps_edit_mode($db, $iid, $calc);
+    if ($em['mode'] !== 'allow') jerr('這個指標的來源資料不開放直接修改（' . $em['why'] . '），請改用「排除」', 403);
+    $ownerId = $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null;
+    if (!kps_can_edit($perms, $ownerId, (int)$u['id'])) jerr('您沒有修改這個指標來源資料的權限（限擔當者本人或 KPI 管理員）', 403);
+    $spec = kps_detail_edit_spec($calc);
+    if (!$spec) jerr('這個指標沒有可修改的欄位');
+
+    $rowKey = trim((string)($_POST['row_key'] ?? ''));
+    $fieldK = trim((string)($_POST['field'] ?? ''));
+    $value  = (string)($_POST['value'] ?? '');
+    if ($rowKey === '') jerr('缺少資料列');
+    $fd = null;
+    foreach ($spec['fields'] as $f) { if ($f['k'] === $fieldK) { $fd = $f; break; } }
+    if (!$fd) jerr('這個欄位不開放修改');
+
+    $params = kpi_as_params($iy['params_json']);
+    $d = kps_detail($db, $calc, $year, $month, $params, kps_excl_rules($db, $iid, $year));
+    $hit = null;
+    foreach ($d['rows'] as $r) { if ((string)$r['key'] === $rowKey) { $hit = $r; break; } }
+    if (!$hit) jerr('這一筆已經不在本月的清單內（可能別人剛改過），請重新整理後再試');
+
+    $val = $value;
+    if (($fd['type'] ?? '') === 'select') {
+        if (!isset($fd['opts'][$val])) jerr('選項不正確');
+    } elseif (($fd['type'] ?? '') === 'date') {
+        if ($val === '') {
+            if (empty($fd['nullable'])) jerr('這個欄位不可留空');
+            $val = null;
+        } elseif (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $val, $mm) || !checkdate((int)$mm[2], (int)$mm[3], (int)$mm[1])) {
+            jerr('日期格式不正確');
+        }
+    } else {
+        jerr('欄位型態不支援');
+    }
+
+    $table = $spec['table']; $pk = $spec['pk'];
+    if (!preg_match('/^[A-Za-z0-9_]+$/', $table) || !preg_match('/^[A-Za-z0-9_]+$/', $pk)
+        || !preg_match('/^[A-Za-z0-9_]+$/', $fieldK)) jerr('設定不正確');
+
+    $st = $db->prepare("SELECT `$fieldK` FROM `$table` WHERE `$pk`=?");
+    $st->execute([$rowKey]);
+    if ($st->rowCount() === 0) jerr('來源資料不存在');
+    $oldVal = $st->fetchColumn();
+    $oldStr = $oldVal === null ? '' : (string)$oldVal;
+    $newStr = $val === null ? '' : (string)$val;
+    if (substr($oldStr, 0, 10) === substr($newStr, 0, 10) && strlen($oldStr) && strlen($newStr)) {
+        if ($oldStr === $newStr || (($fd['type'] ?? '') === 'date')) jerr('值沒有變更');
+    }
+
+    $sets = ["`$fieldK`=?"]; $bind = [$val];
+    if (!empty($spec['stamp']['by'])) { $sets[] = "`" . $spec['stamp']['by'] . "`=?"; $bind[] = (string)$u['user_cname']; }
+    if (!empty($spec['stamp']['at'])) { $sets[] = "`" . $spec['stamp']['at'] . "`=NOW()"; }
+    $bind[] = $rowKey;
+    $db->beginTransaction();
+    try {
+        $db->prepare("UPDATE `$table` SET " . implode(',', $sets) . " WHERE `$pk`=?")->execute($bind);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('寫入失敗：' . $e->getMessage(), 500); }
+
+    // 全站稽核紀錄（改的是別的模組的資料，kpi_scheme 沒有自己的 change_log，寫這裡才查得到）
+    try {
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                      VALUES ('kpi_scheme_src_edit', ?, ?, ?, ?, ?, ?, NOW())")
+           ->execute([$table, (string)$rowKey, mb_substr(implode(' ｜ ', $hit['vals']), 0, 100),
+                      json_encode(['field'=>$fieldK, 'old'=>$oldStr, 'new'=>$newStr,
+                                   'indicator_id'=>$iid, 'year'=>$year, 'month'=>$month],
+                                  JSON_UNESCAPED_UNICODE),
+                      (int)$u['id'], (string)$u['user_cname']]);
+    } catch (Throwable $e) {}
+
+    // 重新即時算這一格（不必另外觸發別的月份重算，kpi_scheme 本來就沒有快照）；
+    // 若改的是「決定算在哪個月」的欄位，順便告訴使用者這一筆以後會改算到哪個月（純提示，不代為處理）。
+    $also = null;
+    if (!empty($fd['remonth'])) {
+        $t = kps_edit_target_ym($calc, $fieldK, $newStr);
+        if ($t && !($t[0] === $year && $t[1] === $month)) $also = $t[0] . '年' . $t[1] . '月';
+    }
+    $exclRows = kps_adjust_keys($db, $iid, $year, $month);
+    $rules = kps_excl_rules($db, $iid, $year);
+    $res = kpi_scheme_compute_by_key($db, $calc, $year, $month, $params, $exclRows, $rules);
+    // 浮點數直接 json_encode 在這台環境的 serialize_precision 下會印出一長串誤差尾巴，
+    // 一律送「乾淨的字串」給前端（前端拿去顯示或 parseFloat 都一樣），不要送裸 float。
+    jout(['old'=>$oldStr, 'new'=>$newStr, 'also_month'=>$also,
+          'value'=>($res && $res['v'] !== null) ? number_format((float)$res['v'], 2, '.', '') : null,
+          'num'=>$res['num'] ?? null, 'den'=>$res['den'] ?? null]);
+}
+
+/* ---------- 管理員設定：這個指標的來源資料可不可以直接改 ---------- */
+case 'edit_mode_save': {
+    if (empty($perms['canAdmin']) && empty($perms['isAdmin'])) jerr('僅KPI管理者可設定', 403);
+    $iid  = (int)($_POST['indicator_id'] ?? 0);
+    $mode = (string)($_POST['mode'] ?? '');
+    if (!in_array($mode, ['suggest', 'allow', 'deny'], true)) jerr('設定值不正確');
+    $st = $db->prepare("SELECT 1 FROM kpi_scheme_indicator WHERE indicator_id=?");
+    $st->execute([$iid]);
+    if (!$st->fetchColumn()) jerr('找不到指標');
+    kps_edit_mode_save($db, $iid, $mode, (string)$u['user_cname']);
+    jout(['mode'=>$mode]);
 }
 
 /* ---------- 排除規則的候選查詢（整年度依維度排除；只有重用官方引擎的 calc 才有 dims） ---------- */

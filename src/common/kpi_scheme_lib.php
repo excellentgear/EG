@@ -888,6 +888,10 @@ function kpi_scheme_ind_ensure_schema(PDO $db): void {
             UNIQUE KEY uk_item_no (item_no)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
           COMMENT='KPI 新方案指標主檔（與正式 kpi_as_indicator 完全分離，不互相影響）'");
+        // 這個指標的來源資料可不可以直接改：suggest=依系統建議 / allow=可改 / deny=只能用排除
+        // （比照正式系統 kpi_as_indicator.src_edit_mode，獨立一份設定，不影響正式系統）
+        try { $db->exec("ALTER TABLE kpi_scheme_indicator ADD COLUMN src_edit_mode ENUM('suggest','allow','deny')
+            NOT NULL DEFAULT 'suggest' COMMENT '來源資料可否直接修改 suggest=依系統建議' AFTER is_active"); } catch (Throwable $e) {}
         $db->exec("CREATE TABLE IF NOT EXISTS kpi_scheme_indicator_year (
             iy_id INT AUTO_INCREMENT PRIMARY KEY,
             indicator_id INT NOT NULL,
@@ -1083,6 +1087,102 @@ function kps_detail_supported(string $calc): bool {
     if (isset($map[$calc])) return kpi_as_detail_supported($map[$calc]);
     return in_array($calc, ['dev_eval_lead', 'type_ctrl', 'qc_by_proc', 'packing_efficiency',
                              'purchase_ontime', 'car_ontime', 'kpi_overall'], true);
+}
+
+/* ============================================================
+ * 六之四、直接修改來源資料（2026-10-05 續，使用者要求比照 KPI.php 補齊）
+ * ------------------------------------------------------------
+ * 安全邊界完全比照官方：表名／主鍵／欄位／可選值一律取自程式碼裡的白名單
+ * （kps_detail_edit_spec），請求端只送 row_key 與欄位代號；一定要先確認那一筆
+ * 真的出現在這一格的「不符合標準清單」裡才准改（鐵律8）。existing／existing_cny
+ * 是唯讀代理（顯示的是正式系統的凍結快照，改來源也不會讓這裡的顯示值跟著變），
+ * 一律強制 'na'，不開放、也不經過下面的建議表。
+ * ============================================================ */
+
+/** 系統建議：這個 calculator_key 的來源資料預設可不可以直接改（管理員可在明細跳窗覆寫） */
+function kps_edit_mode_suggest(string $calc): array {
+    $asMap = kps_as_delegate_map();
+    if (isset($asMap[$calc])) return kpi_as_edit_mode_suggest($asMap[$calc]);
+    switch ($calc) {
+        case 'dev_eval_lead': return ['allow', '填表日／決行日登錄錯誤時可直接修正，不影響帳務'];
+        case 'type_ctrl':     return ['allow', '確認狀態登錄錯誤時可直接修正，不影響帳務'];
+        case 'qc_by_proc':    return ['allow', '檢驗判定與日期登錄錯誤時可直接修正，不影響帳務'];
+        case 'car_ontime':    return ['allow', '應結案日／實際結案日登錄錯誤時可直接修正，不影響帳務'];
+        case 'packing_efficiency':
+            return ['deny', '時效起點來自前一關製程的完工時間，不在這裡開放修改，請到製程報工或包裝檢驗頁面修正'];
+        case 'purchase_ontime':
+            return ['deny', '預計到貨日在請購單主檔（非本月明細這一筆本身），不在這裡開放修改，請到申請採購頁面修正'];
+        case 'kpi_overall':
+            return ['na', '這是彙總其他指標算出來的，沒有可直接修改的來源資料'];
+        default: return ['na', ''];
+    }
+}
+/** 這個指標實際採用的模式（管理員設定優先於系統建議；existing/existing_cny 一律強制唯讀） */
+function kps_edit_mode(PDO $db, int $iid, string $calc): array {
+    if ($calc === 'existing' || $calc === 'existing_cny') {
+        return ['mode'=>'na', 'setting'=>'na', 'suggest'=>'na',
+                'why'=>'這是沿用正式 KPI 表快照的唯讀明細，修改來源資料不會讓這裡的顯示值跟著變（要等正式系統重新結算），如需修正請到正式 KPI 表操作。'];
+    }
+    $sg = kps_edit_mode_suggest($calc);
+    $sug = $sg[0]; $why = $sg[1];
+    $set = 'suggest';
+    try {
+        $st = $db->prepare("SELECT src_edit_mode FROM kpi_scheme_indicator WHERE indicator_id=?");
+        $st->execute([$iid]);
+        $v = $st->fetchColumn();
+        if ($v) $set = (string)$v;
+    } catch (Throwable $e) {}
+    $eff = ($set === 'suggest') ? $sug : $set;
+    return ['mode'=>$eff, 'setting'=>$set, 'suggest'=>$sug, 'why'=>$why];
+}
+/** 寫入：這個指標的來源資料可不可以直接改（管理員設定，僅 kps_can_edit 的 canAdmin 層級可用，API 層再擋一次） */
+function kps_edit_mode_save(PDO $db, int $iid, string $mode, string $byName): void {
+    kpi_scheme_ind_ensure_schema($db);
+    $db->prepare("UPDATE kpi_scheme_indicator SET src_edit_mode=?, Modified_By=?, Modified_At=NOW() WHERE indicator_id=?")
+       ->execute([$mode, $byName, $iid]);
+}
+
+/** 這個 calc 的明細「可直接修改」時，欄位白名單（表／主鍵／欄位型態與可選值）；delegate 的直接借用官方同一份 */
+function kps_detail_edit_spec(string $calc): array {
+    $asMap = kps_as_delegate_map();
+    if (isset($asMap[$calc])) return kpi_as_detail_edit_spec($asMap[$calc]);
+    switch ($calc) {
+        case 'dev_eval_lead':
+            return ['table'=>'td_dev_eval', 'pk'=>'id', 'stamp'=>null, 'fields'=>[
+                ['k'=>'fill_date', 't'=>'填表日', 'type'=>'date', 'remonth'=>1, 'hint'=>'這一欄決定這筆算在哪一個月'],
+                ['k'=>'closed_at', 't'=>'決行日', 'type'=>'date', 'nullable'=>1, 'hint'=>'還沒決行的留空；格式只取日期，原有時分會被覆蓋'],
+            ]];
+        case 'type_ctrl':
+            return ['table'=>'type_id_ctrl_doc', 'pk'=>'id', 'stamp'=>['by'=>'updated_by_name','at'=>'updated_at'], 'fields'=>[
+                ['k'=>'review_status', 't'=>'確認狀態', 'type'=>'select',
+                 'opts'=>['pending'=>'待確認', 'confirmed'=>'已確認'],
+                 'hint'=>'只有登錄錯誤才改；要重新確認內容請到型態識別文件管制表頁面操作'],
+            ]];
+        case 'qc_by_proc':
+            // 與官方 incoming_ng_rate 讀的是同一張 bom_ing 表，欄位定義直接借用，不要另抄一份
+            return kpi_as_detail_edit_spec('incoming_ng_rate');
+        case 'car_ontime':
+            return ['table'=>'car_order', 'pk'=>'id', 'stamp'=>null, 'fields'=>[
+                ['k'=>'correction_due', 't'=>'應結案日', 'type'=>'date', 'remonth'=>1, 'hint'=>'這一欄決定這筆算在哪一個月'],
+                ['k'=>'close_date', 't'=>'實際結案日', 'type'=>'date', 'nullable'=>1, 'hint'=>'還沒結案的留空'],
+            ]];
+    }
+    return [];
+}
+/** 修改後這一筆會落在哪一個年月（remonth 欄位用）；回 [year, month] 或 null（kpi_scheme 本身沒有快照要重算，
+ *  這裡純粹是給前端顯示「這一筆以後會算到哪個月」的參考訊息，不需要像官方那樣另外觸發一次 settle） */
+function kps_edit_target_ym(string $calc, string $field, string $value): ?array {
+    $asMap = kps_as_delegate_map();
+    if (isset($asMap[$calc])) {
+        $curY = (int)date('Y');
+        return kpi_as_edit_target_ym($asMap[$calc], $field, $value, $curY);
+    }
+    if ($value === '') return null;
+    $remonthFields = ['fill_date', 'QC_check_date', 'correction_due'];
+    if (!in_array($field, $remonthFields, true)) return null;
+    $t = strtotime($value);
+    if ($t === false) return null;
+    return [(int)date('Y', $t), (int)date('n', $t)];
 }
 
 /**
