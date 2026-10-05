@@ -23,6 +23,7 @@ var NEW = {};               // 新增跳窗目前的狀態（綁定對象、自�
    FRESH 只在「建立當下」設起來，之後只要對這份文件有任何一次寫入成功就清掉（見 api()）。 */
 var FRESH = null;           // {doc_id, ver_id, title}
 var DIRTY = false;          // 文件跳窗打開之後有沒有被動過（決定要不要問一句再刪）
+var TPL_CLEAN_SNAPSHOT = null;   // 「檢驗項目預設值」(tpl) 這一組目前畫面狀態的快照，渲染完/存檔後重設
 
 function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -52,6 +53,13 @@ function openMask(id) {
     $m.addClass('on');
 }
 function closeMask(id) {
+    /* 設定跳窗關掉前一樣要過「檢驗項目預設值這一組還沒存檔」那關——X／「關閉」鈕／
+       點遮罩外面／按 Esc 全部都是走這支關掉的，顧這裡一處就涵蓋全部入口。 */
+    if (id === 'maskSet') {
+        if (tplIsDirty() && !confirm('目前這一組「檢驗項目預設值」已經改過，但還沒按「儲存這一組」。' + NLNL
+                + '按【確定】放棄這些修改並關閉。\n按【取消】留在這裡繼續編輯。')) return;
+        TPL_CLEAN_SNAPSHOT = null;   // 真的要關了，不留著舊快照給下次誤判（同 tplGuardLeave 的理由）
+    }
     $('#' + id).removeClass('on').css('z-index', '');   // 還原疊層，不然每開一次就高 10
     /* #maskPick 是「改綁定／挑使用設備／挑檢具／挑圖面」共用的跳窗，內容由各自的按鈕當場組出來。
        關掉時一定要把內容清掉：不清的話，只要有哪一次跳窗被打開卻沒重組內容（例如按到一個
@@ -2723,8 +2731,11 @@ $('#btnSetting').on('click', function () {
     });
 });
 $(document).on('click', '.ss-tab[data-set]', function () {
-    $('.ss-tab[data-set]').removeClass('on'); $(this).addClass('on');
-    setPane($(this).data('set'));
+    var $tab = $(this), which = $tab.data('set');
+    tplGuardLeave(function () {
+        $('.ss-tab[data-set]').removeClass('on'); $tab.addClass('on');
+        setPane(which);
+    });
 });
 
 function setPane(which) {
@@ -3009,6 +3020,44 @@ function tplKindOf(pno) {
     var fam = (window.SS_TPL_KINDS || {})[TPL_USE] || { proc: 'proc', std: 'std' };
     return pno ? fam.proc : fam.std;
 }
+/**
+ * 「SOP／SIP 設定」裡「檢驗項目預設值」(tpl) 這一組改了卻沒按「儲存這一組」的離開保護
+ * （使用者 2026-10-05 要求）。**用畫面目前的實際欄位值比對，不用事件監聽**——
+ * 這張表的互動太多種（打字、拖曳排序、挑等級、插入符號、清除檢具、「找出重複的項目」
+ * 整批代入…），逐一掛 change/input 很容易漏掉其中一種而悄悄沒抓到；
+ * 直接序列化「現在長什麼樣子」跟「剛渲染完的樣子」比對，不管改法是什麼都抓得到。
+ */
+var TPL_SNAP_SEP1 = String.fromCharCode(1);   // 欄位分隔（同一列內）
+var TPL_SNAP_SEP2 = String.fromCharCode(2);   // 列分隔
+function tplSnapshot() {
+    if (!$('#tblTpl').length) return null;
+    var parts = [$('#tplAuto').is(':checked') ? '1' : '0',
+                 $('#tplStd').length ? ($('#tplStd').is(':checked') ? '1' : '0') : ''];
+    $('#tblTpl tbody tr').each(function () {
+        var $t = $(this);
+        parts.push([$t.find('.i-ctrl').val() || '', $t.find('.i-q').val() || '',
+            $t.find('.i-up').val() || '', $t.find('.i-lo').val() || '',
+            $t.find('.i-own').val() || '', $t.find('.i-mth').val() || '', $t.find('.i-tool').val() || '',
+            $t.find('.i-freq-sel').val() || '', $t.find('.i-freq-txt').val() || '',
+            $t.find('.i-lc').is(':checked') ? '1' : '0', $t.find('.i-lq').is(':checked') ? '1' : '0',
+            $t.find('.i-ik').val() || '', $t.find('.i-note').val() || ''].join(TPL_SNAP_SEP1));
+    });
+    return parts.join(TPL_SNAP_SEP2);
+}
+function tplMarkClean() { TPL_CLEAN_SNAPSHOT = tplSnapshot(); }
+function tplIsDirty() { return TPL_CLEAN_SNAPSHOT !== null && tplSnapshot() !== TPL_CLEAN_SNAPSHOT; }
+/** 要離開目前這一組（換另一個製程／換標準項目／切 SIP↔SOP／關掉設定跳窗）之前都要先過這關 */
+function tplGuardLeave(next) {
+    if (tplIsDirty() && !confirm('目前這一組「檢驗項目預設值」已經改過，但還沒按「儲存這一組」。' + NLNL
+            + '按【確定】放棄這些修改並離開。\n按【取消】留在這裡繼續編輯。')) return;
+    /* 離開就不用再追蹤了（不管要不要離開都先清掉）——換到別的分頁時 #tblTpl 會被整個換掉，
+       沒有這一步的話 tplSnapshot() 之後回傳 null、拿去跟剛才那份非 null 的舊快照比對，
+       會被誤判成「還是髒的」，之後連去關掉設定跳窗都會被擋下一句假警告。
+       next() 若是重新渲染 tpl（換製程／換用途）會立刻由 setPaneTpl() 自己重設成正確的新快照。 */
+    TPL_CLEAN_SNAPSHOT = null;
+    next();
+}
+
 function setPaneTpl(pno) {
     api('tpl_get', { tpl_kind: tplKindOf(pno), process_no: pno, tpl_use: TPL_USE }, function (res) {
         if (res.tpl_kinds) window.SS_TPL_KINDS = res.tpl_kinds;
@@ -3091,6 +3140,7 @@ function setPaneTpl(pno) {
            + '那是各料號自己的），列出來讓你挑，<b>按了儲存才會真的存下去</b>。</span></div>';
         $('#setPane').html(h);
         ssSortable('#tblTpl');          // 拖曳排序（順序就是代入文件時的順序）
+        tplMarkClean();                 // 剛渲染完＝乾淨狀態，往後比對都以這次為基準
     });
 }
 var TPLCTX = null;
@@ -3186,15 +3236,18 @@ $(document).on('click', '#tplSuggest', function () {
             + '刪掉不要的之後，按「儲存這一組」才會真的存下去。');
     });
 });
-$(document).on('click', '.tpl-std', function () { setPaneTpl(0); });
-$(document).on('click', '.tpl-go', function () { setPaneTpl(num($(this).data('no'))); });
+$(document).on('click', '.tpl-std', function () { tplGuardLeave(function () { setPaneTpl(0); }); });
+$(document).on('click', '.tpl-go', function () {
+    var no = num($(this).data('no'));
+    tplGuardLeave(function () { setPaneTpl(no); });
+});
 acAttach('#tplProc', {
     action: 'search_process', hidden: '#tplProcNo',
     row: function (r) {
         return '<span class="hit">' + esc(r.process_name) + '</span>　<span class="muted-help">編號 '
              + num(r.process_no) + '</span>';
     },
-    pick: function (r) { setPaneTpl(num(r.process_no)); }
+    pick: function (r) { tplGuardLeave(function () { setPaneTpl(num(r.process_no)); }); }
 });
 $(document).on('click', '#tplSave', function () {
     var pno = num($('#tplProcNo').val());
@@ -3931,8 +3984,8 @@ $(document).on('click', '#btnResetTpl', function () {
 $(document).on('click', '.tpl-use', function () {
     var u = $(this).data('use');
     if (u === TPL_USE) return;
-    TPL_USE = u;
-    setPaneTpl(num($('#tplProcNo').val()));
+    var pno = num($('#tplProcNo').val());
+    tplGuardLeave(function () { TPL_USE = u; setPaneTpl(pno); });
 });
 
 /* ══════════════ 參數格的 Enter：**直向**跳格 ══════════════
