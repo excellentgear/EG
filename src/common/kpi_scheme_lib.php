@@ -372,46 +372,83 @@ function kps_from_snapshot(PDO $db, int $itemNo, int $year): ?array {
     return $out;
 }
 
-/* ---------- COP02 產品開發評估完成時效 ---------- */
-function kps_dev_eval(PDO $db, int $year, int $month, array $a): ?array {
-    $days = max(1, (int)($a['days'] ?? 10));
-    $ym = sprintf('%04d-%02d', $year, $month);
-    $st = $db->prepare("SELECT fill_date, closed_at FROM td_dev_eval
-                        WHERE is_deleted=0 AND DATE_FORMAT(fill_date,'%Y-%m')=?");
-    $st->execute([$ym]);
+/**
+ * 2026-10-05（續）：自有計算模組改成「先組出整批來源列，再套用排除」的共同寫法——
+ * compute（算 KPI 數值）與 detail（不符合標準的明細）吃同一份 rows，才不會出現
+ * 「明細顯示的筆數」與「KPI 算出來的分子分母」兩邊對不起來的情況（這是 KPI.php
+ * 早期版本吃過的虧，本方案從一開始就用同一套)。row 的形狀：
+ *   key  = 來源列的唯一識別（排除時存這個）
+ *   kind = 'bad'（不符合標準，分子不算）／'info'（正常，分子算）
+ *   vals = {欄位代號: 顯示文字}，給明細表格用
+ *   dims = {維度代號: 值}，給「排除規則」用；本方案自有模組目前刻意不開放規則式
+ *          排除（kps_calc_dims() 對這些 calc 回空陣列），所以這裡留空即可
+ *   why  = 一句話說明為什麼算 bad／info
+ */
+function kps_calc_apply_excl(array $rows, array $exclRows = [], array $rules = []): array {
+    $exSet = $exclRows ? array_flip(array_map('strval', $exclRows)) : [];
     $num = 0; $den = 0;
-    while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
+    foreach ($rows as $r) {
+        if ($exSet && isset($exSet[(string)$r['key']])) continue;
+        if (!empty($r['dims']) && kpi_as_dims_hit($r['dims'], $rules) !== '') continue;
         $den++;
-        if (empty($r['closed_at'])) continue;            // 還沒完成決行
-        $d1 = substr((string)$r['fill_date'], 0, 10);
-        $d2 = substr((string)$r['closed_at'], 0, 10);
-        if ($d2 < $d1) { $num++; continue; }
-        $wd = ($d1 === $d2) ? 1 : kpi_as_workdays_inclusive($db, $d1, $d2);
-        if ($wd <= $days) $num++;
+        if (($r['kind'] ?? 'bad') !== 'bad') $num++;
     }
     return ['v'=>$den > 0 ? $num / $den * 100 : null, 'num'=>$num, 'den'=>$den];
 }
 
-/* ---------- COP02 型態識別文件確認率（現況快照，季指標） ---------- */
-function kps_type_ctrl(PDO $db, int $year, int $month, array $a): ?array {
-    $den = (int)$db->query("SELECT COUNT(*) FROM type_id_ctrl_doc WHERE is_deleted=0")->fetchColumn();
-    $num = (int)$db->query("SELECT COUNT(*) FROM type_id_ctrl_doc
-                            WHERE is_deleted=0 AND review_status='confirmed'")->fetchColumn();
-    return ['v'=>$den > 0 ? $num / $den * 100 : null, 'num'=>$num, 'den'=>$den];
+/* ---------- COP02 產品開發評估完成時效 ---------- */
+function kps_dev_eval_rows(PDO $db, int $year, int $month, int $days): array {
+    $ym = sprintf('%04d-%02d', $year, $month);
+    $st = $db->prepare("SELECT id, doc_no, part_no_text, product_name, fill_date, closed_at
+                        FROM td_dev_eval WHERE is_deleted=0 AND DATE_FORMAT(fill_date,'%Y-%m')=?");
+    $st->execute([$ym]);
+    $rows = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $d1 = substr((string)$r['fill_date'], 0, 10);
+        $kind = 'bad'; $why = ''; $wd = null; $d2 = '';
+        if (empty($r['closed_at'])) { $why = '還沒完成決行'; }
+        else {
+            $d2 = substr((string)$r['closed_at'], 0, 10);
+            if ($d2 < $d1) { $why = '決行日早於填表日（資料可能有誤）'; }
+            else {
+                $wd = ($d1 === $d2) ? 1 : kpi_as_workdays_inclusive($db, $d1, $d2);
+                if ($wd > $days) { $why = '經過 ' . $wd . ' 個工作日，超過門檻 ' . $days . ' 天'; }
+                else { $kind = 'info'; $why = '準時完成（' . $wd . ' 個工作日）'; }
+            }
+        }
+        $rows[] = ['key'=>(string)$r['id'], 'kind'=>$kind, 'dims'=>[], 'why'=>$why,
+                   'vals'=>['doc'=>(string)$r['doc_no'], 'part'=>(string)($r['part_no_text'] ?: $r['product_name']),
+                            'fill'=>$d1, 'close'=>$d2, 'days'=>$wd === null ? '' : $wd]];
+    }
+    return $rows;
+}
+function kps_dev_eval(PDO $db, int $year, int $month, array $a, array $exclRows = []): ?array {
+    $days = max(1, (int)($a['days'] ?? 10));
+    return kps_calc_apply_excl(kps_dev_eval_rows($db, $year, $month, $days), $exclRows);
+}
+
+/* ---------- COP02 型態識別文件確認率（現況快照，季指標；不分月份，每個月看到的是同一份現況） ---------- */
+function kps_type_ctrl_rows(PDO $db): array {
+    $rows = [];
+    $st = $db->query("SELECT id, doc_no, process_desc, review_status FROM type_id_ctrl_doc WHERE is_deleted=0");
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $ok = ((string)$r['review_status'] === 'confirmed');
+        $rows[] = ['key'=>(string)$r['id'], 'kind'=>$ok ? 'info' : 'bad', 'dims'=>[],
+                   'why'=>$ok ? '已確認' : ('尚未確認（' . ((string)$r['review_status'] ?: '待確認') . '）'),
+                   'vals'=>['doc'=>(string)$r['doc_no'], 'proc'=>(string)($r['process_desc'] ?? ''),
+                            'status'=>$ok ? '已確認' : ((string)$r['review_status'] ?: '待確認')]];
+    }
+    return $rows;
+}
+function kps_type_ctrl(PDO $db, int $year, int $month, array $a, array $exclRows = []): ?array {
+    return kps_calc_apply_excl(kps_type_ctrl_rows($db), $exclRows);
 }
 
 /* ---------- COP04 依製程切分的點收／回廠檢驗不良率 ----------
  * 口徑與既有「進料檢驗不良率」完全相同（分母＝當月已判定的檢驗筆數），
  * 只多一個「限定哪些製程」的範圍；正式上線時在既有計算模組加一個參數即可。
  */
-function kps_qc_by_proc(PDO $db, int $year, int $month, array $a): ?array {
-    $all = kps_qc_year($db, $year, (array)($a['procs'] ?? []), (array)($a['ptypes'] ?? []),
-                       (array)($a['ngs'] ?? ['ng']));
-    return $all[$month] ?? ['v'=>null, 'num'=>0, 'den'=>0];
-}
-
-/** 某年度逐月的檢驗不良率（整年一次 GROUP BY month 查完） */
-function kps_qc_year(PDO $db, int $year, array $procs, array $ptypes, array $ngs): array {
+function kps_qc_by_proc_rows_year(PDO $db, int $year, array $procs, array $ptypes, array $ngs): array {
     if (!$ngs) $ngs = ['ng'];
     static $cache = [];
     $ck = implode(',', $procs) . '|' . implode(',', $ptypes) . '|' . implode(',', $ngs) . '|' . $year;
@@ -428,31 +465,41 @@ function kps_qc_year(PDO $db, int $year, array $procs, array $ptypes, array $ngs
         $where[] = "pn.process_type_id IN (" . implode(',', array_fill(0, count($ptypes), '?')) . ")";
         $bind = array_merge($bind, array_map('intval', $ptypes));
     }
-    $ngIn = implode(',', array_fill(0, count($ngs), '?'));
-    $sql = "SELECT MONTH(bi.QC_check_date) m, COUNT(*) den,
-                   SUM(CASE WHEN bi.QC_check IN ($ngIn) THEN 1 ELSE 0 END) num
-            FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
-            WHERE " . implode(' AND ', $where) . " GROUP BY m";
-    $st = $db->prepare($sql);
-    $st->execute(array_merge($ngs, $bind));
+    // 判定 NG 與否在 PHP 端逐列比對，SQL 本身不用 NG 條件過濾（不良與正常都要一起列出來才有完整分母）。
+    $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom, bi.process_no, pn.ProcessName,
+                               bi.QC_check_date, bi.QC_check
+                        FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
+                        WHERE " . implode(' AND ', $where));
+    $st->execute($bind);
 
-    $out = [];
-    for ($m = 1; $m <= 12; $m++) $out[$m] = ['v'=>null, 'num'=>0, 'den'=>0];
+    $out = []; for ($m = 1; $m <= 12; $m++) $out[$m] = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        $m = (int)$r['m']; $den = (int)$r['den']; $num = (int)$r['num'];
-        $out[$m] = ['v'=>$den > 0 ? $num / $den * 100 : null, 'num'=>$num, 'den'=>$den];
+        $m = (int)substr((string)$r['QC_check_date'], 5, 2);
+        if ($m < 1 || $m > 12) continue;
+        $isNg = in_array((string)$r['QC_check'], $ngs, true);
+        $procName = (string)($r['ProcessName'] ?: $r['process_no']);
+        $out[$m][] = ['key'=>(string)$r['bom_ing_fid'], 'kind'=>$isNg ? 'bad' : 'info', 'dims'=>[],
+                      'why'=>$isNg ? ('判定為「' . $r['QC_check'] . '」') : '合格',
+                      'vals'=>['bom'=>(string)$r['bom'], 'proc'=>$procName,
+                               'date'=>substr((string)$r['QC_check_date'], 0, 10), 'result'=>(string)$r['QC_check']]];
     }
     return $cache[$ck] = $out;
 }
+function kps_qc_by_proc(PDO $db, int $year, int $month, array $a, array $exclRows = [], array $rules = []): ?array {
+    $rows = kps_qc_by_proc_rows_year($db, $year, kpi_as_list($a['procs'] ?? []),
+                                     kpi_as_list($a['ptypes'] ?? []), kpi_as_list($a['ngs'] ?? ['ng']))[$month] ?? [];
+    return kps_calc_apply_excl($rows, $exclRows, $rules);
+}
 
-/* ---------- COP03 產能達成率－插齒（薄包裝，直接重用既有的 capacity_rate 計算模組，不重寫邏輯） ---------- */
+/* ---------- COP03 產能達成率－插齒／製程不良率（已改為直接重用官方 capacity_rate／process_ng_rate
+   計算模組，見 kps_as_delegate_map()；kpi_scheme_compute_by_key() 會在抵達這裡之前就轉呼叫
+   kpi_as_compute()，本節原本兩支薄包裝函式已無呼叫端，留著只為相容舊版 kpi_scheme_items()
+   種子資料裡的函式名稱字串，不再是計算路徑上會被呼叫到的程式碼。 ---------- */
 function kps_capacity_custom(PDO $db, int $year, int $month, array $a): ?array {
     $r = kpi_as_compute($db, 'capacity_rate', $year, $month, $a);
     if ($r === null) return null;
     return ['v'=>$r['value'] ?? null, 'num'=>$r['num'] ?? null, 'den'=>$r['den'] ?? null];
 }
-
-/* ---------- COP03 插齒製程不良率（薄包裝，直接重用既有的 process_ng_rate 計算模組） ---------- */
 function kps_process_ng_proc(PDO $db, int $year, int $month, array $a): ?array {
     $r = kpi_as_compute($db, 'process_ng_rate', $year, $month, $a);
     if ($r === null) return null;
@@ -468,12 +515,7 @@ function kps_process_ng_proc(PDO $db, int $year, int $month, array $a): ?array {
  * 實測有一筆的 QC_check_date（9/24）比包裝結案（9/23）還晚——用它會算出負的天數。
  * qc_completed_at 是「標記完成當下」寫入、不會事後被別的動作改掉，才是可信的起點。
  */
-function kps_packing_efficiency(PDO $db, int $year, int $month, array $a): ?array {
-    $days = max(1, (int)($a['days'] ?? 3));
-    $all = kps_packing_efficiency_year($db, $year, $days);
-    return $all[$month] ?? ['v'=>null, 'num'=>0, 'den'=>0];
-}
-function kps_packing_efficiency_year(PDO $db, int $year, int $days): array {
+function kps_packing_efficiency_rows_year(PDO $db, int $year, int $days): array {
     static $cache = [];
     $ck = $year . '|' . $days;
     if (isset($cache[$ck])) return $cache[$ck];
@@ -483,11 +525,10 @@ function kps_packing_efficiency_year(PDO $db, int $year, int $days): array {
                         FROM qc_packing_inspection p
                         WHERE p.status='closed' AND YEAR(COALESCE(p.closed_at, p.updated_at))=?");
     $st->execute([$year]);
-    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $srcRows = $st->fetchAll(PDO::FETCH_ASSOC);
 
-    $out = [];
-    for ($m = 1; $m <= 12; $m++) $out[$m] = ['v'=>null, 'num'=>0, 'den'=>0];
-    if (!$rows) return $cache[$ck] = $out;
+    $out = []; for ($m = 1; $m <= 12; $m++) $out[$m] = [];
+    if (!$srcRows) return $cache[$ck] = $out;
 
     $prevSt = $db->prepare("SELECT bom_ing_fid, qc_completed, qc_completed_at
                             FROM bom_ing WHERE bom=? AND bom_sn=(
@@ -496,7 +537,7 @@ function kps_packing_efficiency_year(PDO $db, int $year, int $days): array {
     $repSt = $db->prepare("SELECT MAX(report_date) FROM pm_process_daily_report
                            WHERE bom_ing_fid=? AND is_finished=1");
 
-    foreach ($rows as $r) {
+    foreach ($srcRows as $r) {
         $bom = (string)($r['bom'] ?? '');
         if ($bom === '') continue;                       // 查不到 BOM 編號、找不到前一關，不計入分母
         $m = (int)substr((string)$r['cdate'], 5, 2);
@@ -516,13 +557,19 @@ function kps_packing_efficiency_year(PDO $db, int $year, int $days): array {
         }
         if ($start === null) continue;                    // 前一關完成日查不到，不計入分母（查不到≠不準時）
 
-        $out[$m]['den']++;
         $end = substr((string)$r['cdate'], 0, 10);
         $wd = ($start === $end) ? 1 : kpi_as_workdays_inclusive($db, $start, $end);
-        if ($end >= $start && $wd <= $days) $out[$m]['num']++;
+        $ok = ($end >= $start && $wd <= $days);
+        $out[$m][] = ['key'=>(string)$r['packing_inspection_id'], 'kind'=>$ok ? 'info' : 'bad', 'dims'=>[],
+                      'why'=>$ok ? ($wd . ' 個工作日內完成') : ('經過 ' . $wd . ' 個工作日，超過門檻 ' . $days . ' 天'),
+                      'vals'=>['bom'=>$bom, 'start'=>$start, 'end'=>$end, 'days'=>$wd]];
     }
-    foreach ($out as $m => $c) $out[$m]['v'] = $c['den'] > 0 ? $c['num'] / $c['den'] * 100 : null;
     return $cache[$ck] = $out;
+}
+function kps_packing_efficiency(PDO $db, int $year, int $month, array $a, array $exclRows = []): ?array {
+    $days = max(1, (int)($a['days'] ?? 3));
+    $rows = kps_packing_efficiency_rows_year($db, $year, $days)[$month] ?? [];
+    return kps_calc_apply_excl($rows, $exclRows);
 }
 
 /* ---------- COP04 採購進貨準交率 ----------
@@ -530,38 +577,53 @@ function kps_packing_efficiency_year(PDO $db, int $year, int $days): array {
  * 分子＝該項目實際收貨日（purchase_receipt.rcpt_date，取最早一次）≤ 預計到貨日者。
  * 欄位結構齊備，但目前系統裡幾乎沒有走完整流程的紀錄（見 note），試算會全部回 null。
  */
-function kps_purchase_ontime(PDO $db, int $year, int $month, array $a): ?array {
+function kps_purchase_ontime_rows(PDO $db, int $year, int $month): array {
     $ym = sprintf('%04d-%02d', $year, $month);
-    $st = $db->prepare("SELECT pri.req_id, pr.expected_date,
+    $st = $db->prepare("SELECT pri.pr_item_id, pri.item_name, pr.req_no, pr.expected_date,
                                (SELECT MIN(rc.rcpt_date) FROM purchase_receipt rc WHERE rc.pr_item_id=pri.pr_item_id) AS got
                         FROM purchase_request_item pri
                         JOIN purchase_request pr ON pr.req_id=pri.req_id
                         WHERE pr.expected_date IS NOT NULL AND DATE_FORMAT(pr.expected_date,'%Y-%m')=?");
     $st->execute([$ym]);
-    $num = 0; $den = 0;
-    while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
-        $den++;
-        if (!empty($r['got']) && substr((string)$r['got'], 0, 10) <= substr((string)$r['expected_date'], 0, 10)) $num++;
+    $rows = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $exp = substr((string)$r['expected_date'], 0, 10);
+        $got = $r['got'] !== null ? substr((string)$r['got'], 0, 10) : '';
+        $ok = ($got !== '' && $got <= $exp);
+        $rows[] = ['key'=>(string)$r['pr_item_id'], 'kind'=>$ok ? 'info' : 'bad', 'dims'=>[],
+                   'why'=>$got === '' ? '尚未收貨' : ($ok ? '準時到貨' : '逾期到貨'),
+                   'vals'=>['req'=>(string)$r['req_no'], 'item'=>(string)$r['item_name'],
+                            'expected'=>$exp, 'got'=>$got]];
     }
-    return ['v'=>$den > 0 ? $num / $den * 100 : null, 'num'=>$num, 'den'=>$den];
+    return $rows;
+}
+function kps_purchase_ontime(PDO $db, int $year, int $month, array $a, array $exclRows = []): ?array {
+    return kps_calc_apply_excl(kps_purchase_ontime_rows($db, $year, $month), $exclRows);
 }
 
 /* ---------- MP02 矯正措施按時結案率 ---------- */
-function kps_car_ontime(PDO $db, int $year, int $month, array $a): ?array {
+function kps_car_ontime_rows(PDO $db, int $year, int $month): array {
     $ym = sprintf('%04d-%02d', $year, $month);
-    $st = $db->prepare("SELECT correction_due, close_date FROM car_order
+    $st = $db->prepare("SELECT id, car_no, correction_due, close_date FROM car_order
                         WHERE correction_due IS NOT NULL AND DATE_FORMAT(correction_due,'%Y-%m')=?");
     $st->execute([$ym]);
-    $num = 0; $den = 0;
-    while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
-        $den++;
-        if (!empty($r['close_date'])
-            && substr((string)$r['close_date'], 0, 10) <= substr((string)$r['correction_due'], 0, 10)) $num++;
+    $rows = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $due = substr((string)$r['correction_due'], 0, 10);
+        $close = $r['close_date'] !== null ? substr((string)$r['close_date'], 0, 10) : '';
+        $ok = ($close !== '' && $close <= $due);
+        $rows[] = ['key'=>(string)$r['id'], 'kind'=>$ok ? 'info' : 'bad', 'dims'=>[],
+                   'why'=>$close === '' ? '尚未結案' : ($ok ? '按時結案' : '逾期結案'),
+                   'vals'=>['no'=>(string)$r['car_no'], 'due'=>$due, 'close'=>$close]];
     }
-    return ['v'=>$den > 0 ? $num / $den * 100 : null, 'num'=>$num, 'den'=>$den];
+    return $rows;
+}
+function kps_car_ontime(PDO $db, int $year, int $month, array $a, array $exclRows = []): ?array {
+    return kps_calc_apply_excl(kps_car_ontime_rows($db, $year, $month), $exclRows);
 }
 
-/* ---------- MP01 全廠 KPI 總體達標率 ---------- */
+/* ---------- MP01 全廠 KPI 總體達標率（舊版，吃正式系統的 kpi_as_indicator，
+   已無呼叫端——DB 驅動的計算一律走下面的 kps_scheme_kpi_overall，留著只相容舊種子資料字串）---------- */
 function kps_kpi_overall(PDO $db, int $year, int $month, array $a): ?array {
     $st = $db->prepare("SELECT i.indicator_id, y.target_direction, y.target_value
                         FROM kpi_as_indicator i
@@ -844,6 +906,47 @@ function kpi_scheme_ind_ensure_schema(PDO $db): void {
             UNIQUE KEY uk_iy (indicator_id, year)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
           COMMENT='KPI 新方案指標年度設定（與正式 kpi_as_indicator_year 完全分離，不互相影響）'");
+
+        // ---- 2026-10-05（續）：總覽頁的單一欄位修改／逐筆排除／排除規則，比照 KPI.php
+        // 的 kpi_as_monthly_value／kpi_as_adjust／kpi_as_excl_rule，但一律另開新表、
+        // indicator_id 指向 kpi_scheme_indicator（不是 kpi_as_indicator）——兩套 id
+        // 空間各自獨立，絕對不可以共用正式表，否則「排除第3項」會連正式系統的第3項一起中獎。
+        $db->exec("CREATE TABLE IF NOT EXISTS kpi_scheme_monthly_value (
+            mv_id INT AUTO_INCREMENT PRIMARY KEY,
+            indicator_id INT NOT NULL, year SMALLINT NOT NULL, month TINYINT NOT NULL,
+            manual_value DECIMAL(14,4) NULL COMMENT '人工填寫值(source_mode=manual)',
+            filled_by INT NULL, filled_by_name VARCHAR(50) NULL, filled_at DATETIME NULL,
+            note VARCHAR(200) NULL,
+            override_value DECIMAL(14,4) NULL COMMENT '覆寫值(source_mode=auto，顯示優先序最高)',
+            override_by INT NULL, override_by_name VARCHAR(50) NULL, override_at DATETIME NULL,
+            override_reason VARCHAR(255) NULL COMMENT '覆寫原因(必填，供追溯)',
+            UNIQUE KEY uk_cell (indicator_id, year, month)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+          COMMENT='KPI新方案-每月人工填寫/覆寫值(與正式 kpi_as_monthly_value 完全分離)'");
+        $db->exec("CREATE TABLE IF NOT EXISTS kpi_scheme_adjust (
+            adj_id INT AUTO_INCREMENT PRIMARY KEY,
+            indicator_id INT NOT NULL, year SMALLINT NOT NULL, month TINYINT NOT NULL,
+            calculator_key VARCHAR(40) NOT NULL,
+            row_key VARCHAR(100) NOT NULL, row_label VARCHAR(255) NULL, row_json TEXT NULL,
+            reason VARCHAR(255) NULL,
+            created_by INT NULL, created_by_name VARCHAR(50) NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uk_cell_row (indicator_id, year, month, row_key),
+            KEY idx_cell (indicator_id, year, month)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+          COMMENT='KPI新方案-排除指定來源列(不改真實資料，與正式 kpi_as_adjust 完全分離)'");
+        $db->exec("CREATE TABLE IF NOT EXISTS kpi_scheme_excl_rule (
+            rule_id INT AUTO_INCREMENT PRIMARY KEY,
+            indicator_id INT NOT NULL, year SMALLINT NOT NULL,
+            scope ENUM('year','all') NOT NULL DEFAULT 'year',
+            dim VARCHAR(20) NOT NULL, val VARCHAR(190) NOT NULL,
+            reason VARCHAR(255) NULL,
+            created_by INT NULL, created_by_name VARCHAR(50) NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uk_rule (indicator_id, year, dim, val),
+            KEY idx_iy (indicator_id, year)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+          COMMENT='KPI新方案-依維度整批排除(不改真實資料，與正式 kpi_as_excl_rule 完全分離)'");
     } catch (Throwable $e) {}
 }
 
@@ -862,6 +965,18 @@ function kpi_scheme_registry(): array {
         'existing_cny' => [
             'name'=>'沿用正式指標＋春節目標調整', 'desc'=>'同上，但春節月份會依「春節目標調整設定」自動放大達成率。',
             'params'=>[['key'=>'item_no','label'=>'正式指標項次(item_no)','type'=>'int','fe'=>0]]],
+        'target_order' => [
+            'name'=>'月受訂目標達成率（本方案自有目標）',
+            'desc'=>'接單金額(訂單交期歸屬)÷本方案自己設定的各月受訂目標金額——完全不讀正式 KPI 系統的設定，'
+                  . '各月目標金額直接在這裡填，不必去正式 KPI 設定頁（KPI.php）調整。可勾選春節月份自動放大達成率。',
+            'params'=>[['key'=>'monthly_targets','label'=>'各月受訂目標金額','type'=>'months_map','fe'=>0],
+                       ['key'=>'cny','label'=>'春節月份自動放大達成率','type'=>'bool','fe'=>0]]],
+        'target_shipping' => [
+            'name'=>'月銷貨目標達成率（本方案自有目標）',
+            'desc'=>'出貨金額÷本方案自己設定的各月銷貨目標金額——完全不讀正式 KPI 系統的設定，'
+                  . '各月目標金額直接在這裡填，不必去正式 KPI 設定頁（KPI.php）調整。可勾選春節月份自動放大達成率。',
+            'params'=>[['key'=>'monthly_targets','label'=>'各月銷貨目標金額','type'=>'months_map','fe'=>0],
+                       ['key'=>'cny','label'=>'春節月份自動放大達成率','type'=>'bool','fe'=>0]]],
         'dev_eval_lead' => [
             'name'=>'產品開發評估完成時效', 'desc'=>'分母＝當月填表的產品開發評估表；分子＝N 個工作日內完成決行者。',
             'params'=>[['key'=>'days','label'=>'門檻工作日數','type'=>'int','fe'=>1]]],
@@ -893,8 +1008,62 @@ function kpi_scheme_registry(): array {
     ];
 }
 
-/** 依 calculator_key 分派到對應的試算函式，統一入口（新增指標只要在上面登記表加一筆、這裡加一個 case） */
-function kpi_scheme_compute_by_key(PDO $db, string $calcKey, int $year, int $month, array $params): ?array {
+/**
+ * 哪些 calculator_key 是「直接重用官方 kpi_as_compute()/kpi_as_detail() 引擎」——
+ * 左邊是本方案自己的 calculator_key，右邊是 kpi_as_registry() 裡對應的官方 calc key。
+ * 這組 calc 因為官方引擎本來就是「純函式、exclRows/rules 皆由參數傳入」，
+ * 排除（逐筆 adjust／整年度 excl_rule）與「不符合標準的明細」可以整套直接借用，
+ * 不必在這裡重寫一份——capacity_rate／process_ng_rate／order_target_amount／
+ * shipping_target_amount 四個都在官方 kpi_as_detail_supported() 名單內。
+ */
+function kps_as_delegate_map(): array {
+    return [
+        'capacity_custom'  => 'capacity_rate',
+        'process_ng_proc'  => 'process_ng_rate',
+        'target_order'     => 'order_target_amount',
+        'target_shipping'  => 'shipping_target_amount',
+    ];
+}
+
+/** 這個 calculator_key 可不可以用「排除規則」（整年度依維度排除）；只有重用官方引擎的那四種才有 */
+function kps_calc_dims(string $calc): array {
+    $map = kps_as_delegate_map();
+    return isset($map[$calc]) ? kpi_as_calc_dims($map[$calc]) : [];
+}
+
+/** 這個 calculator_key 支援不支援「數值明細／不符合標準的明細」 */
+function kps_detail_supported(string $calc): bool {
+    $map = kps_as_delegate_map();
+    if (isset($map[$calc])) return kpi_as_detail_supported($map[$calc]);
+    return in_array($calc, ['dev_eval_lead', 'type_ctrl', 'qc_by_proc', 'packing_efficiency',
+                             'purchase_ontime', 'car_ontime', 'kpi_overall'], true);
+}
+
+/**
+ * 依 calculator_key 分派到對應的試算函式，統一入口（新增指標只要在上面登記表加一筆、這裡加一個 case）。
+ * $exclRows＝這一格（這個指標＋年＋月）逐筆排除的 row_key；$rules＝這個指標整年度的排除規則
+ * （dim=>[val,...]），兩者皆由呼叫端（kpi_scheme_preview_row／明細 API）從 kpi_scheme_adjust／
+ * kpi_scheme_excl_rule 讀出——本函式不自己查表，維持純函式好測試。
+ */
+function kpi_scheme_compute_by_key(PDO $db, string $calcKey, int $year, int $month, array $params,
+                                   array $exclRows = [], array $rules = []): ?array {
+    $asMap = kps_as_delegate_map();
+    if (isset($asMap[$calcKey])) {
+        $res = kpi_as_compute($db, $asMap[$calcKey], $year, $month, $params, $exclRows, $rules);
+        if ($res === null) return null;
+        $out = ['v'=>$res['value'] ?? null, 'num'=>$res['num'] ?? null, 'den'=>$res['den'] ?? null];
+        // 春節自動調整（本方案自己算出來的 v，直接調整，不經過正式系統快照——
+        // 與 kps_target_cny_adjusted() 同一套數學，差別只是作用對象是「自己算的 v」）
+        if ($out['v'] !== null && kpi_as_pv($params, 'cny', false)) {
+            $r = kps_cny_ratio($db, $year, $month);
+            if ($r['final'] < 0.999) {
+                $out['cny_orig_v'] = $out['v'];
+                $out['v'] = $r['final'] > 0 ? $out['v'] / $r['final'] : null;
+            }
+            $out['cny_ratio'] = $r['final']; $out['cny_lost'] = $r['lost_days'];
+        }
+        return $out;
+    }
     switch ($calcKey) {
         case 'existing': {
             $snap = kps_from_snapshot($db, (int)($params['item_no'] ?? 0), $year);
@@ -902,15 +1071,13 @@ function kpi_scheme_compute_by_key(PDO $db, string $calcKey, int $year, int $mon
         }
         case 'existing_cny':
             return kps_target_cny_adjusted($db, $year, $month, $params);
-        case 'dev_eval_lead':      return kps_dev_eval($db, $year, $month, $params);
-        case 'type_ctrl':          return kps_type_ctrl($db, $year, $month, $params);
-        case 'process_ng_proc':    return kps_process_ng_proc($db, $year, $month, $params);
-        case 'capacity_custom':    return kps_capacity_custom($db, $year, $month, $params);
-        case 'qc_by_proc':         return kps_qc_by_proc($db, $year, $month, $params);
-        case 'packing_efficiency': return kps_packing_efficiency($db, $year, $month, $params);
-        case 'purchase_ontime':    return kps_purchase_ontime($db, $year, $month, $params);
-        case 'car_ontime':         return kps_car_ontime($db, $year, $month, $params);
-        case 'kpi_overall':        return kps_scheme_kpi_overall($db, $year, $month, $params);
+        case 'dev_eval_lead':      return kps_dev_eval($db, $year, $month, $params, $exclRows);
+        case 'type_ctrl':          return kps_type_ctrl($db, $year, $month, $params, $exclRows);
+        case 'qc_by_proc':         return kps_qc_by_proc($db, $year, $month, $params, $exclRows, $rules);
+        case 'packing_efficiency': return kps_packing_efficiency($db, $year, $month, $params, $exclRows);
+        case 'purchase_ontime':    return kps_purchase_ontime($db, $year, $month, $params, $exclRows);
+        case 'car_ontime':         return kps_car_ontime($db, $year, $month, $params, $exclRows);
+        case 'kpi_overall':        return kps_scheme_kpi_overall($db, $year, $month, $params, $exclRows);
         default: return null;
     }
 }
@@ -919,25 +1086,29 @@ function kpi_scheme_compute_by_key(PDO $db, string $calcKey, int $year, int $mon
  * 全廠 KPI 總體達標率——改成對「這個新方案自己的指標集合」算達標率（不是正式系統的
  * 22 項），讀 kpi_scheme_indicator_year，查詢時排除自己這個 item_no 避免自我循環。
  */
-function kps_scheme_kpi_overall(PDO $db, int $year, int $month, array $params): ?array {
+/**
+ * 全廠 KPI 總體達標率的來源列——每一個其他指標（排除自己）算一列。
+ * 每個子指標都要套用**它自己的**逐筆排除／排除規則才算，否則總體達標率會跟
+ * 畫面上那個子指標顯示的數字（已排除過的）對不起來。
+ */
+function kps_kpi_overall_rows(PDO $db, int $year, int $month, int $selfItemNo): array {
     kpi_scheme_ind_ensure_schema($db);
-    $selfItemNo = (int)($params['_self_item_no'] ?? 0);   // 由呼叫端(kpi_scheme_list_year)注入，避免自我循環
-    $st = $db->prepare("SELECT i.indicator_id, i.item_no, i.freq, i.value_type,
-                               y.calculator_key, y.params_json, y.target_direction, y.target_value
+    $st = $db->prepare("SELECT i.indicator_id, i.item_no, i.name, i.freq, i.value_type,
+                               y.calculator_key, y.params_json, y.target_direction, y.target_value, y.target_unit
                         FROM kpi_scheme_indicator i
                         JOIN kpi_scheme_indicator_year y ON y.indicator_id=i.indicator_id AND y.year=?
                         WHERE i.is_active=1 AND y.is_active=1 AND y.source_mode='auto'");
     $st->execute([$year]);
-    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-    $num = 0; $den = 0;
-    foreach ($rows as $r) {
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         if ($selfItemNo > 0 && (int)$r['item_no'] === $selfItemNo) continue;
         $p = [];
         try { $p = json_decode((string)$r['params_json'], true) ?: []; } catch (Throwable $e) {}
+        $iid = (int)$r['indicator_id'];
         // 非逐月指標（quarterly/halfyear/yearly）這個月不一定有值，照查就好，查不到就跳過不算
-        $cell = kpi_scheme_compute_by_key($db, (string)$r['calculator_key'], $year, $month, $p);
+        $cell = kpi_scheme_compute_by_key($db, (string)$r['calculator_key'], $year, $month, $p,
+            kps_adjust_keys($db, $iid, $year, $month), kps_excl_rules($db, $iid, $year));
         if (!$cell || $cell['v'] === null) continue;
-        $den++;
         $v = (float)$cell['v']; $tv = $r['target_value'] === null ? null : (float)$r['target_value'];
         $below = false;
         if ($tv !== null) {
@@ -945,9 +1116,17 @@ function kps_scheme_kpi_overall(PDO $db, int $year, int $month, array $params): 
             elseif ($r['target_direction'] === 'yes') $below = $v < 1;
             else $below = $v < $tv;
         }
-        if (!$below) $num++;
+        $out[] = ['key'=>(string)$iid, 'kind'=>$below ? 'bad' : 'info', 'dims'=>[],
+                  'why'=>$below ? '未達目標' : '已達目標',
+                  'vals'=>['item'=>'#'.$r['item_no'].' '.$r['name'],
+                           'value'=>rtrim(rtrim(number_format($v, 2, '.', ''), '0'), '.')
+                                   . ($r['value_type'] === 'percent' ? '%' : (string)$r['target_unit'])]];
     }
-    return ['v'=>$den > 0 ? $num / $den * 100 : null, 'num'=>$num, 'den'=>$den];
+    return $out;
+}
+function kps_scheme_kpi_overall(PDO $db, int $year, int $month, array $params, array $exclRows = []): ?array {
+    $selfItemNo = (int)($params['_self_item_no'] ?? 0);   // 由呼叫端(kpi_scheme_preview_row)注入，避免自我循環
+    return kps_calc_apply_excl(kps_kpi_overall_rows($db, $year, $month, $selfItemNo), $exclRows);
 }
 
 /**
@@ -1022,22 +1201,204 @@ function kpi_scheme_list_year(PDO $db, int $year): array {
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
-/** 單一指標的試算（DB 列版本，取代舊的 kpi_scheme_preview($item)；邏輯相同只是資料來源換成 DB） */
+/* ============================================================
+ * 六之二、單一欄位修改／逐筆排除／排除規則（2026-10-05 續，比照 KPI.php）
+ * ------------------------------------------------------------
+ * 三張新表各自的存取函式，皆以 kpi_scheme_indicator.indicator_id 為鍵，
+ * 與正式系統的 kpi_as_monthly_value／kpi_as_adjust／kpi_as_excl_rule 完全分離。
+ * ============================================================ */
+
+/** 某指標某年度逐月的人工填寫／覆寫值（month=>row） */
+function kps_monthly_values(PDO $db, int $iid, int $year): array {
+    kpi_scheme_ind_ensure_schema($db);
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT * FROM kpi_scheme_monthly_value WHERE indicator_id=? AND year=?");
+        $st->execute([$iid, $year]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(int)$r['month']] = $r;
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/** 某一格已排除的 row_key（計算時用） */
+function kps_adjust_keys(PDO $db, int $iid, int $year, int $month): array {
+    kpi_scheme_ind_ensure_schema($db);
+    try {
+        $st = $db->prepare("SELECT row_key FROM kpi_scheme_adjust WHERE indicator_id=? AND year=? AND month=?");
+        $st->execute([$iid, $year, $month]);
+        return $st->fetchAll(PDO::FETCH_COLUMN) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+/** 某一格已排除的來源列（完整資料，內部畫面用） */
+function kps_adjust_rows(PDO $db, int $iid, int $year, int $month): array {
+    kpi_scheme_ind_ensure_schema($db);
+    try {
+        $st = $db->prepare("SELECT * FROM kpi_scheme_adjust WHERE indicator_id=? AND year=? AND month=? ORDER BY adj_id");
+        $st->execute([$iid, $year, $month]);
+        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+/** 這個指標目前適用的排除規則（本年度自己的＋標成「所有年度」的），給計算用：dim=>[val,...] */
+function kps_excl_rules(PDO $db, int $iid, int $year): array {
+    kpi_scheme_ind_ensure_schema($db);
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT dim, val FROM kpi_scheme_excl_rule WHERE indicator_id=? AND (year=? OR scope='all')");
+        $st->execute([$iid, $year]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $d = (string)$r['dim']; $v = (string)$r['val'];
+            if (!isset($out[$d]) || !in_array($v, $out[$d], true)) $out[$d][] = $v;
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+/** 這個指標目前適用的排除規則（完整資料，畫面用） */
+function kps_excl_rule_rows(PDO $db, int $iid, int $year): array {
+    kpi_scheme_ind_ensure_schema($db);
+    try {
+        $st = $db->prepare("SELECT * FROM kpi_scheme_excl_rule WHERE indicator_id=? AND (year=? OR scope='all')
+                            ORDER BY scope DESC, dim, val");
+        $st->execute([$iid, $year]);
+        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 不符合標準的明細（數值明細）。回傳形狀與 kpi_as_detail() 完全相同：
+ * ['cols','rows'(含 bad/info 兩種 kind)，'total'(僅 bad 計數)，'note'，'dims'(可篩選/可設規則的維度)，...]
+ * 重用官方引擎的四種 calc 直接轉呼叫 kpi_as_detail()；本方案自有的七種另外組裝，
+ * 一律走 kpi_as_detail_finish() 收尾（標記規則命中、整理維度選項），不另寫一份收尾邏輯。
+ */
+function kps_detail(PDO $db, string $calc, int $year, int $month, array $params, array $rules = []): array {
+    $asMap = kps_as_delegate_map();
+    if (isset($asMap[$calc])) return kpi_as_detail($db, $asMap[$calc], $year, $month, $params, $rules);
+    $out = ['cols'=>[], 'rows'=>[], 'total'=>0, 'note'=>''];
+    switch ($calc) {
+        case 'dev_eval_lead':
+            $out['cols'] = [['k'=>'doc','t'=>'文件編號'], ['k'=>'part','t'=>'料號/品名'],
+                            ['k'=>'fill','t'=>'填表日'], ['k'=>'close','t'=>'決行日'], ['k'=>'days','t'=>'工作日']];
+            $out['note'] = '分母＝本月填表的產品開發評估表；分子＝門檻工作日內完成決行者。';
+            $out['rows'] = kps_dev_eval_rows($db, $year, $month, max(1, (int)($params['days'] ?? 10)));
+            break;
+        case 'type_ctrl':
+            $out['cols'] = [['k'=>'doc','t'=>'文件編號'], ['k'=>'proc','t'=>'製程'], ['k'=>'status','t'=>'確認狀態']];
+            $out['note'] = '分母＝已建立的型態識別文件管制表（現況快照，不分月份）；分子＝已確認者。';
+            $out['rows'] = kps_type_ctrl_rows($db);
+            break;
+        case 'qc_by_proc':
+            $out['cols'] = [['k'=>'bom','t'=>'製令'], ['k'=>'proc','t'=>'製程'],
+                            ['k'=>'date','t'=>'檢驗日'], ['k'=>'result','t'=>'判定']];
+            $out['note'] = '分母＝本月已判定的檢驗筆數；分子＝判定非指定不良項目者。';
+            $out['rows'] = kps_qc_by_proc_rows_year($db, $year, kpi_as_list($params['procs'] ?? []),
+                kpi_as_list($params['ptypes'] ?? []), kpi_as_list($params['ngs'] ?? ['ng']))[$month] ?? [];
+            break;
+        case 'packing_efficiency':
+            $out['cols'] = [['k'=>'bom','t'=>'製令'], ['k'=>'start','t'=>'前一關完成日'],
+                            ['k'=>'end','t'=>'包裝結案日'], ['k'=>'days','t'=>'工作日']];
+            $out['note'] = '分母＝本月結案的包裝檢驗；分子＝前一關完成到包裝結案在門檻工作日內者。';
+            $out['rows'] = kps_packing_efficiency_rows_year($db, $year, max(1, (int)($params['days'] ?? 3)))[$month] ?? [];
+            break;
+        case 'purchase_ontime':
+            $out['cols'] = [['k'=>'req','t'=>'請購單號'], ['k'=>'item','t'=>'項目'],
+                            ['k'=>'expected','t'=>'預計到貨日'], ['k'=>'got','t'=>'實際到貨日']];
+            $out['note'] = '分母＝預計到貨日落在本月的請購項目；分子＝實際到貨日未超過預計到貨日者。';
+            $out['rows'] = kps_purchase_ontime_rows($db, $year, $month);
+            break;
+        case 'car_ontime':
+            $out['cols'] = [['k'=>'no','t'=>'矯正單號'], ['k'=>'due','t'=>'應結案日'], ['k'=>'close','t'=>'實際結案日']];
+            $out['note'] = '分母＝應結案日落在本月的矯正措施；分子＝實際結案日未超過應結案日者。';
+            $out['rows'] = kps_car_ontime_rows($db, $year, $month);
+            break;
+        case 'kpi_overall':
+            $out['cols'] = [['k'=>'item','t'=>'指標'], ['k'=>'value','t'=>'本月數值']];
+            $out['note'] = '分母＝本方案當月有數值的其他指標數；分子＝其中達成目標者。';
+            $out['rows'] = kps_kpi_overall_rows($db, $year, $month, (int)($params['_self_item_no'] ?? 0));
+            break;
+        default:
+            $out['note'] = '這個計算方式沒有逐筆明細。';
+    }
+    return kpi_as_detail_finish($out, $rules);
+}
+
+/** 單一指標的試算（DB 列版本，取代舊的 kpi_scheme_preview($item)；邏輯相同只是資料來源換成 DB）。
+ *  依序決定每一格要顯示的值：覆寫（override）＞人工填寫（manual）＞自動計算（auto，已套用排除）。 */
 function kpi_scheme_preview_row(PDO $db, array $row, int $year): ?array {
     if ((int)($row['year_active'] ?? 0) !== 1) return null;
-    if ((string)$row['source_mode'] !== 'auto' || empty($row['calculator_key'])) return null;
+    $iid = (int)$row['indicator_id'];
+    $curY = (int)date('Y'); $curM = (int)date('n');
+    $mv = kps_monthly_values($db, $iid, $year);
+    $out = [];
+
+    if ((string)$row['source_mode'] !== 'auto' || empty($row['calculator_key'])) {
+        // 人工填寫：只讀 kpi_scheme_monthly_value.manual_value，沒填就是 null（畫面顯示「–」）。
+        // 月份範圍一律用 kpi_as_valid_months()（手動填寫可選期間內任何一個月記錄），
+        // 不可用 kpi_as_months()（那只會列出季/半年/年的 bucket 結束月，會漏看別的月填的值）。
+        foreach (kpi_as_valid_months($row) as $m) {
+            if ($year > $curY || ($year === $curY && $m > $curM)) { $out[$m] = null; continue; }
+            $r = $mv[$m] ?? null;
+            $out[$m] = ($r && $r['manual_value'] !== null)
+                ? ['v'=>(float)$r['manual_value'], 'num'=>null, 'den'=>null, 'src'=>'manual',
+                   'filled_by'=>$r['filled_by_name'] ?? '', 'filled_at'=>$r['filled_at'] ?? '', 'note'=>$r['note'] ?? '']
+                : null;
+        }
+        return $out;
+    }
+
     $params = [];
     try { $params = json_decode((string)$row['params_json'], true) ?: []; } catch (Throwable $e) {}
     if ($row['calculator_key'] === 'kpi_overall') $params['_self_item_no'] = (int)$row['item_no'];
+    $rules = kps_excl_rules($db, $iid, $year);
 
-    $curY = (int)date('Y'); $curM = (int)date('n');
-    $out = [];
-    foreach (kpi_as_months((string)$row['freq']) as $m) {
+    foreach (kpi_as_valid_months($row) as $m) {
         if ($year > $curY || ($year === $curY && $m > $curM)) { $out[$m] = null; continue; }
-        try { $out[$m] = kpi_scheme_compute_by_key($db, (string)$row['calculator_key'], $year, $m, $params); }
-        catch (Throwable $e) { $out[$m] = null; }
+        $r = $mv[$m] ?? null;
+        if ($r && $r['override_value'] !== null) {
+            $out[$m] = ['v'=>(float)$r['override_value'], 'num'=>null, 'den'=>null, 'src'=>'override',
+                        'ov_by'=>$r['override_by_name'] ?? '', 'ov_at'=>$r['override_at'] ?? '',
+                        'ov_reason'=>$r['override_reason'] ?? ''];
+            continue;
+        }
+        $exclRows = kps_adjust_keys($db, $iid, $year, $m);
+        try { $c = kpi_scheme_compute_by_key($db, (string)$row['calculator_key'], $year, $m, $params, $exclRows, $rules); }
+        catch (Throwable $e) { $c = null; }
+        if ($c !== null) $c['src'] = 'auto';
+        $out[$m] = $c;
     }
     return $out;
+}
+
+/** 人工填寫（source_mode=manual 專用）。寫入 kpi_scheme_monthly_value.manual_value。 */
+function kps_fill_save(PDO $db, int $iid, int $year, int $month, float $val, string $note, int $uid, string $uname): void {
+    kpi_scheme_ind_ensure_schema($db);
+    $st = $db->prepare("INSERT INTO kpi_scheme_monthly_value
+            (indicator_id,year,month,manual_value,filled_by,filled_by_name,filled_at,note)
+            VALUES (?,?,?,?,?,?,NOW(),?)
+            ON DUPLICATE KEY UPDATE manual_value=VALUES(manual_value), filled_by=VALUES(filled_by),
+                    filled_by_name=VALUES(filled_by_name), filled_at=NOW(), note=VALUES(note)");
+    $st->execute([$iid, $year, $month, $val, $uid, $uname, $note !== '' ? $note : null]);
+}
+function kps_fill_clear(PDO $db, int $iid, int $year, int $month): void {
+    kpi_scheme_ind_ensure_schema($db);
+    $db->prepare("UPDATE kpi_scheme_monthly_value SET manual_value=NULL, filled_by=NULL,
+                  filled_by_name=NULL, filled_at=NULL, note=NULL WHERE indicator_id=? AND year=? AND month=?")
+       ->execute([$iid, $year, $month]);
+}
+/** 手動覆寫（source_mode=auto 專用，顯示優先序最高）。寫入 kpi_scheme_monthly_value.override_value。 */
+function kps_override_save(PDO $db, int $iid, int $year, int $month, float $val, string $reason, int $uid, string $uname): void {
+    kpi_scheme_ind_ensure_schema($db);
+    $st = $db->prepare("INSERT INTO kpi_scheme_monthly_value
+            (indicator_id,year,month,override_value,override_by,override_by_name,override_at,override_reason)
+            VALUES (?,?,?,?,?,?,NOW(),?)
+            ON DUPLICATE KEY UPDATE override_value=VALUES(override_value), override_by=VALUES(override_by),
+                    override_by_name=VALUES(override_by_name), override_at=NOW(), override_reason=VALUES(override_reason)");
+    $st->execute([$iid, $year, $month, $val, $uid, $uname, $reason]);
+}
+function kps_override_clear(PDO $db, int $iid, int $year, int $month): void {
+    kpi_scheme_ind_ensure_schema($db);
+    $db->prepare("UPDATE kpi_scheme_monthly_value SET override_value=NULL, override_by=NULL,
+                  override_by_name=NULL, override_at=NULL, override_reason=NULL
+                  WHERE indicator_id=? AND year=? AND month=?")
+       ->execute([$iid, $year, $month]);
 }
 
 /* ============================================================

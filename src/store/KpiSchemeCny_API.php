@@ -40,6 +40,32 @@ if (!$perms['canView']) jerr('無 KPI 檢閱權限', 403);
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 $curY = (int)date('Y');
+$curM = (int)date('n');
+
+/** 某年某月是否已整月結束（未來月份不可填寫/覆寫，比照正式系統 kpi_month_ended） */
+function kps_month_ended(int $y, int $m): bool {
+    return strtotime(date('Y-m-t', mktime(0, 0, 0, $m, 1, $y)) . ' 23:59:59') < time();
+}
+/** 讀單一指標的主檔＋年度設定（本頁寫入動作共用的查詢，找不到回 null） */
+function kps_get_iy_row(PDO $db, int $iid, int $year): ?array {
+    $st = $db->prepare("SELECT i.indicator_id, i.item_no, i.name, i.freq, i.value_type,
+                               y.owner_user_id, y.source_mode, y.calculator_key, y.params_json,
+                               y.target_direction, y.target_value
+                        FROM kpi_scheme_indicator i
+                        JOIN kpi_scheme_indicator_year y ON y.indicator_id=i.indicator_id AND y.year=?
+                        WHERE i.indicator_id=? AND i.is_active=1 AND y.is_active=1");
+    $st->execute([$year, $iid]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    return $r ?: null;
+}
+/**
+ * 誰可以改這個指標的這一格——本方案沒有正式系統那套「年度鎖定」與「請假代理」，
+ * 單純：系統管理者／KPI 管理員永遠可以；指標指定的擔當者本人可以改自己名下的指標。
+ */
+function kps_can_edit(array $perms, ?int $ownerUserId, int $uid): bool {
+    if (!empty($perms['isAdmin']) || !empty($perms['canAdmin'])) return true;
+    return !empty($perms['canFill']) && $ownerUserId !== null && $ownerUserId === $uid;
+}
 
 switch ($action) {
 
@@ -156,6 +182,261 @@ case 'preview_compute': {
     try { $r = kpi_scheme_compute_by_key($db, $calcKey, $year, $month, $params); }
     catch (Throwable $e) { jerr('試算失敗：'.$e->getMessage()); }
     jout(['result'=>$r]);
+}
+
+/* ============================================================
+ * 2026-10-05（續）：總覽頁單一欄位修改／逐筆排除／排除規則／數值明細，比照 KPI.php
+ * 的 KpiAs_API.php，但一律只碰 kpi_scheme_*（kpi_scheme_monthly_value／_adjust／
+ * _excl_rule），與正式系統的 kpi_as_monthly_value／_adjust／_excl_rule 完全分離。
+ * ============================================================ */
+
+/* ---------- 數值明細（「查看單一月份統計資料」） ---------- */
+case 'detail_rows': {
+    $iid   = (int)($_GET['indicator_id'] ?? 0);
+    $year  = (int)($_GET['year'] ?? $curY);
+    $month = max(1, min(12, (int)($_GET['month'] ?? 1)));
+    $iy = kps_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    $calc = (string)$iy['calculator_key'];
+    if ($iy['source_mode'] !== 'auto' || !kps_detail_supported($calc)) {
+        jout(['supported'=>0, 'rows'=>[], 'cols'=>[],
+              'msg'=>$iy['source_mode'] !== 'auto' ? '人工填寫的指標沒有來源明細。'
+                                                   : '這個計算方式還沒有做數值明細。']);
+    }
+    $params = kpi_as_params($iy['params_json']);
+    $rules  = kps_excl_rules($db, $iid, $year);
+    $d = kps_detail($db, $calc, $year, $month, $params, $rules);
+    $adj = [];
+    foreach (kps_adjust_rows($db, $iid, $year, $month) as $a) $adj[(string)$a['row_key']] = $a;
+    $rows = [];
+    $cap = 500;
+    $ordered = [];
+    foreach (['bad', 'warn', 'info'] as $kk) {
+        foreach ($d['rows'] as $r) if ((string)($r['kind'] ?? 'bad') === $kk) $ordered[] = $r;
+    }
+    foreach ($ordered as $r) {
+        if (count($rows) >= $cap) break;
+        $k = (string)$r['key'];
+        $r['excluded']  = isset($adj[$k]) ? 1 : 0;
+        $r['ex_reason'] = isset($adj[$k]) ? (string)$adj[$k]['reason'] : '';
+        $r['ex_by']     = isset($adj[$k]) ? (string)$adj[$k]['created_by_name'] : '';
+        $r['ex_at']     = isset($adj[$k]) ? (string)$adj[$k]['created_at'] : '';
+        $rows[] = $r;
+    }
+    jout(['supported'=>1, 'warn'=>$d['warn'] ?? 0, 'cols'=>$d['cols'], 'rows'=>$rows,
+          'total'=>$d['total'], 'listed'=>count($d['rows']), 'rule_ex'=>$d['rule_ex'] ?? 0,
+          'truncated'=>count($d['rows']) > $cap ? 1 : 0, 'note'=>$d['note'],
+          'dims'=>$d['dims'] ?? [], 'dim_labels'=>kpi_as_dim_labels(),
+          'rules'=>kps_excl_rule_rows($db, $iid, $year),
+          'can_adjust'=>kps_can_edit($perms, $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null,
+                                     (int)$u['id']) ? 1 : 0,
+          'target'=>['dir'=>$iy['target_direction'], 'value'=>$iy['target_value']]]);
+}
+
+/* ---------- 逐筆排除／取消排除（「增減個別調整排除」之一：單一來源列） ---------- */
+case 'adjust_add': {
+    $iid   = (int)($_POST['indicator_id'] ?? 0);
+    $year  = (int)($_POST['year'] ?? 0);
+    $month = max(1, min(12, (int)($_POST['month'] ?? 0)));
+    $iy = kps_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    $calc = (string)$iy['calculator_key'];
+    if ($iy['source_mode'] !== 'auto' || !kps_detail_supported($calc)) jerr('這個指標不支援排除');
+    $ownerId = $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null;
+    if (!kps_can_edit($perms, $ownerId, (int)$u['id'])) jerr('您沒有調整這個指標的權限（限擔當者本人或 KPI 管理員）', 403);
+    $reason = mb_substr(trim((string)($_POST['reason'] ?? '')), 0, 200);
+    $keys = json_decode((string)($_POST['keys'] ?? '[]'), true);
+    $keys = is_array($keys) ? array_values(array_unique(array_filter(array_map('strval', $keys), 'strlen'))) : [];
+    if (!$keys) jerr('請選擇要排除的項目');
+
+    $params = kpi_as_params($iy['params_json']);
+    $d = kps_detail($db, $calc, $year, $month, $params, kps_excl_rules($db, $iid, $year));
+    $valid = [];
+    foreach ($d['rows'] as $r) {
+        if (!empty($r['rule_ex'])) continue;
+        if ((string)($r['kind'] ?? 'bad') !== 'bad') continue;
+        $valid[(string)$r['key']] = $r;
+    }
+    $ins = $db->prepare("INSERT INTO kpi_scheme_adjust
+        (indicator_id,year,month,calculator_key,row_key,row_label,row_json,reason,created_by,created_by_name)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+        ON DUPLICATE KEY UPDATE reason=VALUES(reason), created_by=VALUES(created_by),
+                                created_by_name=VALUES(created_by_name), created_at=NOW()");
+    $done = 0; $skip = 0;
+    $db->beginTransaction();
+    try {
+        foreach ($keys as $k) {
+            if (!isset($valid[$k])) { $skip++; continue; }
+            $r = $valid[$k];
+            $ins->execute([$iid, $year, $month, $calc, $k, mb_substr(implode(' ｜ ', $r['vals']), 0, 250),
+                           json_encode($r, JSON_UNESCAPED_UNICODE), $reason,
+                           (int)$u['id'], (string)$u['user_cname']]);
+            $done++;
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('寫入失敗：'.$e->getMessage(), 500); }
+    if (!$done) jerr('沒有可排除的項目（選到的資料已經不在這個月的清單內，請重新整理）');
+    jout(['added'=>$done, 'skipped'=>$skip]);
+}
+
+case 'adjust_del': {
+    $iid   = (int)($_POST['indicator_id'] ?? 0);
+    $year  = (int)($_POST['year'] ?? 0);
+    $month = max(1, min(12, (int)($_POST['month'] ?? 0)));
+    $iy = kps_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    $ownerId = $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null;
+    if (!kps_can_edit($perms, $ownerId, (int)$u['id'])) jerr('您沒有調整這個指標的權限（限擔當者本人或 KPI 管理員）', 403);
+    $keys = json_decode((string)($_POST['keys'] ?? '[]'), true);
+    $keys = is_array($keys) ? array_values(array_filter(array_map('strval', $keys), 'strlen')) : [];
+    if (!$keys) jerr('請選擇要取消排除的項目');
+    $in = implode(',', array_fill(0, count($keys), '?'));
+    $st = $db->prepare("DELETE FROM kpi_scheme_adjust WHERE indicator_id=? AND year=? AND month=? AND row_key IN ($in)");
+    $st->execute(array_merge([$iid, $year, $month], $keys));
+    $n = $st->rowCount();
+    if (!$n) jerr('這幾筆本來就沒有被排除（請重新整理）');
+    jout(['removed'=>$n]);
+}
+
+/* ---------- 排除規則的候選查詢（整年度依維度排除；只有重用官方引擎的 calc 才有 dims） ---------- */
+case 'excl_dim_search': {
+    $iid  = (int)($_GET['indicator_id'] ?? 0);
+    $year = (int)($_GET['year'] ?? $curY);
+    $iy = kps_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    $calc = (string)$iy['calculator_key'];
+    $dim  = trim((string)($_GET['dim'] ?? ''));
+    if (!in_array($dim, kps_calc_dims($calc), true)) jerr('這個指標沒有這種排除維度');
+    $asMap = kps_as_delegate_map();
+    $q = trim((string)($_GET['q'] ?? ''));
+    if ($q === '') {
+        // 年度候選清單借用官方的「這年度真的有的值」查詢（以轉呼叫的官方 calc key 查）
+        jout(['dim'=>$dim, 'q'=>'', 'src'=>'本年度',
+              'rows'=>kpi_as_dim_year_values($db, $asMap[$calc] ?? null, $dim, $year, 300)]);
+    }
+    jout(['dim'=>$dim, 'q'=>$q, 'src'=>'主檔', 'rows'=>kpi_as_dim_lookup($db, $dim, $q, 50)]);
+}
+
+case 'excl_rule_add': {
+    $iid  = (int)($_POST['indicator_id'] ?? 0);
+    $year = (int)($_POST['year'] ?? 0);
+    $iy = kps_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    $calc = (string)$iy['calculator_key'];
+    if ($iy['source_mode'] !== 'auto' || !kps_detail_supported($calc)) jerr('這個指標不支援排除');
+    $ownerId = $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null;
+    if (!kps_can_edit($perms, $ownerId, (int)$u['id'])) jerr('您沒有調整這個指標的權限（限擔當者本人或 KPI 管理員）', 403);
+    $scope = ((string)($_POST['scope'] ?? 'year') === 'all') ? 'all' : 'year';
+    $rowYear = ($scope === 'all') ? 0 : $year;
+    $dim = trim((string)($_POST['dim'] ?? ''));
+    if (!in_array($dim, kps_calc_dims($calc), true)) jerr('這個指標沒有這種排除維度');
+    $vals = json_decode((string)($_POST['vals'] ?? '[]'), true);
+    $vals = is_array($vals) ? array_values(array_unique(array_filter(array_map(function ($v) {
+        return mb_substr(trim((string)$v), 0, 190);
+    }, $vals), 'strlen'))) : [];
+    if (!$vals) jerr('請選擇要排除的項目');
+    if (count($vals) > 200) jerr('一次最多 200 項');
+    $reason = mb_substr(trim((string)($_POST['reason'] ?? '')), 0, 200);
+
+    $ins = $db->prepare("INSERT INTO kpi_scheme_excl_rule (indicator_id,year,scope,dim,val,reason,created_by,created_by_name)
+                         VALUES (?,?,?,?,?,?,?,?)
+                         ON DUPLICATE KEY UPDATE scope=VALUES(scope), reason=VALUES(reason),
+                                                 created_by=VALUES(created_by),
+                                                 created_by_name=VALUES(created_by_name), created_at=NOW()");
+    $delNarrow = $db->prepare("DELETE FROM kpi_scheme_excl_rule WHERE indicator_id=? AND dim=? AND val=? AND scope='year'");
+    $db->beginTransaction();
+    try {
+        foreach ($vals as $v) {
+            if ($scope === 'all') $delNarrow->execute([$iid, $dim, $v]);
+            $ins->execute([$iid, $rowYear, $scope, $dim, $v, ($reason !== '' ? $reason : null),
+                           (int)$u['id'], (string)$u['user_cname']]);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('寫入失敗：'.$e->getMessage(), 500); }
+    jout(['added'=>count($vals), 'scope'=>$scope, 'rules'=>kps_excl_rule_rows($db, $iid, $year)]);
+}
+
+case 'excl_rule_del': {
+    $iid  = (int)($_POST['indicator_id'] ?? 0);
+    $year = (int)($_POST['year'] ?? 0);
+    $iy = kps_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    $ownerId = $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null;
+    if (!kps_can_edit($perms, $ownerId, (int)$u['id'])) jerr('您沒有調整這個指標的權限（限擔當者本人或 KPI 管理員）', 403);
+    $ids = json_decode((string)($_POST['rule_ids'] ?? '[]'), true);
+    $ids = is_array($ids) ? array_values(array_filter(array_map('intval', $ids))) : [];
+    if (!$ids) jerr('請選擇要取消的規則');
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    $st = $db->prepare("DELETE FROM kpi_scheme_excl_rule WHERE indicator_id=? AND rule_id IN ($in)");
+    $st->execute(array_merge([$iid], $ids));
+    $n = $st->rowCount();
+    if (!$n) jerr('這幾條規則本來就不存在（請重新整理）');
+    jout(['removed'=>$n, 'rules'=>kps_excl_rule_rows($db, $iid, $year)]);
+}
+
+/* ---------- 單一欄位修改：人工填寫（manual）／手動覆寫（auto） ---------- */
+case 'fill': {
+    $iid   = (int)($_POST['indicator_id'] ?? 0);
+    $year  = (int)($_POST['year'] ?? 0);
+    $month = (int)($_POST['month'] ?? 0);
+    $iy = kps_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    if ($iy['source_mode'] !== 'manual') jerr('此指標為自動計算，如需修正請用手動覆寫功能');
+    $ownerId = $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null;
+    if (!kps_can_edit($perms, $ownerId, (int)$u['id'])) jerr('您沒有填寫這個指標的權限（限擔當者本人或 KPI 管理員）', 403);
+    if (!in_array($month, kpi_as_valid_months($iy), true)) jerr('該指標此月份不適用（頻率：'.$iy['freq'].'）');
+    if ($year === $curY && $month > $curM) jerr('不可填寫未來月份');
+    $raw = trim((string)($_POST['value'] ?? ''));
+    if ($raw === '') jerr('請輸入數值');
+    $val = kpi_as_parse_input((string)$iy['value_type'], $raw);
+    if ($val === null) jerr('「'.$raw.'」無法辨識，'.kpi_as_input_hint((string)$iy['value_type']));
+    $note = mb_substr(trim((string)($_POST['note'] ?? '')), 0, 200);
+    kps_fill_save($db, $iid, $year, $month, $val, $note, (int)$u['id'], (string)$u['user_cname']);
+    jout(['value'=>$val]);
+}
+
+case 'clear_fill': {
+    $iid   = (int)($_POST['indicator_id'] ?? 0);
+    $year  = (int)($_POST['year'] ?? 0);
+    $month = (int)($_POST['month'] ?? 0);
+    $iy = kps_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    $ownerId = $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null;
+    if (!kps_can_edit($perms, $ownerId, (int)$u['id'])) jerr('您沒有清除這個指標填寫內容的權限', 403);
+    kps_fill_clear($db, $iid, $year, $month);
+    jout([]);
+}
+
+case 'override': {
+    $iid   = (int)($_POST['indicator_id'] ?? 0);
+    $year  = (int)($_POST['year'] ?? 0);
+    $month = (int)($_POST['month'] ?? 0);
+    $iy = kps_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    if ($iy['source_mode'] !== 'auto') jerr('人工填寫的指標請用「填寫/修改」');
+    $ownerId = $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null;
+    if (!kps_can_edit($perms, $ownerId, (int)$u['id'])) jerr('您沒有覆寫這個指標的權限（限擔當者本人或 KPI 管理員）', 403);
+    if (!in_array($month, kpi_as_valid_months($iy), true)) jerr('該指標此月份不適用');
+    $raw = trim((string)($_POST['value'] ?? ''));
+    $reason = mb_substr(trim((string)($_POST['reason'] ?? '')), 0, 200);
+    if ($raw === '') jerr('請輸入覆寫值');
+    if ($reason === '') jerr('覆寫原因必填（AS9100 可追溯要求）');
+    $val = kpi_as_parse_input((string)$iy['value_type'], $raw);
+    if ($val === null) jerr('「'.$raw.'」無法辨識，'.kpi_as_input_hint((string)$iy['value_type']));
+    kps_override_save($db, $iid, $year, $month, $val, $reason, (int)$u['id'], (string)$u['user_cname']);
+    jout(['value'=>$val]);
+}
+
+case 'clear_override': {
+    $iid   = (int)($_POST['indicator_id'] ?? 0);
+    $year  = (int)($_POST['year'] ?? 0);
+    $month = (int)($_POST['month'] ?? 0);
+    $iy = kps_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    $ownerId = $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null;
+    if (!kps_can_edit($perms, $ownerId, (int)$u['id'])) jerr('您沒有清除這個指標覆寫值的權限', 403);
+    kps_override_clear($db, $iid, $year, $month);
+    jout([]);
 }
 
 default:

@@ -54,6 +54,7 @@ foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSO
 }
 
 $curY = (int)date('Y');
+$curM = (int)date('n');
 $YEAR = (int)($_GET['year'] ?? $curY);
 if ($YEAR < 2020 || $YEAR > $curY + 2) $YEAR = $curY;
 $BLOCKS = kpi_scheme_blocks();
@@ -177,6 +178,72 @@ function kpsOwnerText(array $row, array $deptName): string {
         .ks-src.auto   { background:#EAF0E2; color:#4d6b33; }
         .ks-src.manual { background:#F1ECE3; color:#8a6d45; }
         .ks-i { cursor:pointer; color:#b5762a; margin-left:4px; }
+
+        /* ===== 單一欄位修改／明細（2026-10-05 續）===== */
+        td.ks-cell { cursor:pointer; }
+        td.ks-cell:hover { background:#FBF0DD; box-shadow:inset 0 0 0 1px #D8BE93; }
+
+        /* 儲存格右鍵選單式小面板（仿 KPI.php #cellMenu） */
+        .cm-menu { position:fixed; z-index:1200; background:#fff; border:1px solid #D8BE93; border-radius:6px;
+            box-shadow:0 4px 16px rgba(0,0,0,.18); min-width:190px; font-size:13px; display:none; }
+        .cm-head { padding:7px 12px; background:#F7E0BD; color:#5b3a1e; font-weight:bold; border-radius:6px 6px 0 0; }
+        .cm-item { padding:7px 12px; color:#5b3a1e; cursor:pointer; }
+        .cm-item:hover { background:#FDF8EF; }
+        .cm-info { padding:5px 12px; font-size:11px; color:#8a6d45; border-top:1px solid #EADFC8; }
+
+        /* 填寫／覆寫 迷你跳窗 */
+        .fillm-row { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
+        .fillm-row label { font-size:12.5px; color:#8a6d45; min-width:64px; }
+        .fillm-row input[type=text], .fillm-row textarea { border:1px solid #D8BE93; border-radius:4px;
+            padding:4px 8px; font-size:13px; color:#5b3a1e; flex:1; min-width:160px; }
+        .fillm-row textarea { min-height:50px; resize:vertical; }
+
+        /* 數值明細／不符合標準的明細（仿 KPI.php #vioMask） */
+        .vio-head { font-size:14px; margin-bottom:6px; }
+        .vio-mode { font-size:11px; padding:1px 7px; border-radius:8px; margin-left:6px; }
+        .vio-mode.deny { background:#F1ECE3; color:#8a6d45; }
+        .vio-note { font-size:12.5px; color:#8a6d45; background:#FDF8EF; border:1px solid #EADFC8;
+            border-radius:6px; padding:7px 10px; margin-bottom:8px; line-height:1.7; }
+        .vio-rules { font-size:12.5px; color:#5b3a1e; background:#FFFBF2; border:1px dashed #D8BE93;
+            border-radius:6px; padding:8px 10px; margin-bottom:8px; }
+        .vr-chip { display:inline-flex; align-items:center; gap:4px; background:#F1ECE3; border-radius:12px;
+            padding:2px 8px 2px 10px; margin:3px 4px 0 0; font-size:12px; }
+        .vr-chip.allyr { background:#F0E2C8; }
+        .vr-scope { font-size:10px; color:#8a6d45; background:#fff; border-radius:6px; padding:0 5px; }
+        .vr-x { cursor:pointer; color:#DD5138; font-weight:bold; margin-left:2px; }
+        .vr-new { margin-top:8px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+        .vr-new select, .vr-new input[type=text] { height:28px; border:1px solid #D8BE93; border-radius:4px;
+            padding:0 6px; font-size:12.5px; }
+        .vr-new button.warm { height:28px; padding:0 12px; border:1px solid #d98a33; background:#F0A24B;
+            color:#fff; border-radius:4px; cursor:pointer; font-size:12.5px; }
+        .vr-list { margin-top:6px; max-height:140px; overflow-y:auto; border:1px solid #EADFC8; border-radius:6px;
+            background:#fff; }
+        .vr-it { padding:4px 10px; font-size:12.5px; cursor:pointer; color:#5b3a1e; }
+        .vr-it:hover { background:#FDF8EF; } .vr-it.on { background:#F7E0BD; }
+        .vr-id { color:#8a6d45; font-size:11px; margin-left:4px; }
+        .vr-src { float:right; font-size:10px; color:#a08356; }
+        .vr-none { padding:8px 10px; font-size:12px; color:#a08356; }
+        .vr-picked { margin-top:4px; font-size:12px; color:#5b3a1e; }
+        .vr-chip2 { display:inline-flex; align-items:center; gap:3px; background:#F0E2C8; border-radius:10px;
+            padding:1px 7px; margin:2px 3px 0 0; font-size:11.5px; }
+        .vr-x2 { cursor:pointer; color:#DD5138; font-weight:bold; }
+        .vio-filter { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px; font-size:12.5px; }
+        .vio-filter label { color:#8a6d45; }
+        .vio-filter select, .vio-filter input[type=text] { height:26px; border:1px solid #D8BE93; border-radius:4px;
+            padding:0 6px; font-size:12.5px; }
+        .vf-clear { color:#b5762a; cursor:pointer; text-decoration:underline; }
+        .vio-tblwrap { overflow-x:auto; max-height:360px; border:1px solid #EADFC8; border-radius:6px; }
+        table.vio-tbl { width:100%; border-collapse:collapse; font-size:12.5px; }
+        table.vio-tbl th, table.vio-tbl td { border-bottom:1px solid #EADFC8; padding:4px 7px; text-align:left; }
+        table.vio-tbl thead th { background:#FDF8EF; color:#8a6d45; position:sticky; top:0; }
+        table.vio-tbl tr.ex { background:#F1ECE3; color:#a08356; text-decoration:line-through; }
+        table.vio-tbl tr.rex td { color:#a08356; }
+        .vio-exbtn { height:22px; font-size:11px; padding:0 8px; border:1px solid #D8BE93; border-radius:3px;
+            background:#fff; color:#5b3a1e; cursor:pointer; }
+        .vio-exbtn.undo { border-color:#a08356; }
+        .vio-foot { padding:8px 0 0; display:flex; gap:8px; align-items:center; }
+        .vio-warn { font-size:12.5px; color:#8A5A2B; background:#FDF8EF; border:1px solid #E8D5B5;
+            border-radius:6px; padding:7px 10px; margin-bottom:8px; }
 
         .ks-sec { border:1px solid #E8D5B5; border-radius:8px; background:#fff; margin-top:12px; }
         .ks-sec > h4 { margin:0; padding:8px 12px; background:#F7E0BD; color:#5b3a1e; font-size:14px;
@@ -364,6 +431,7 @@ function kpsOwnerText(array $row, array $deptName): string {
                 </td></tr>
                 <?php foreach ($bRows as $row):
                     $itemNo = (int)$row['item_no'];
+                    $iid = (int)$row['indicator_id'];
                     $vals = $VALUES[$itemNo] ?? null;
                     $nums = [];
                     if ($vals) foreach ($vals as $c) { if ($c !== null && $c['v'] !== null) $nums[] = (float)$c['v']; }
@@ -372,6 +440,7 @@ function kpsOwnerText(array $row, array $deptName): string {
                         if ($row['value_type'] === 'count') { $agg = array_sum($nums); $aggLbl = '合計'; }
                         else { $agg = array_sum($nums) / count($nums); $aggLbl = '平均'; }
                     }
+                    $validMonths = kpi_as_valid_months($row);
                 ?>
                 <tr>
                     <td><?= $itemNo ?></td>
@@ -385,8 +454,15 @@ function kpsOwnerText(array $row, array $deptName): string {
                     <td><?= htmlspecialchars(kpsTargetTextRow($row)) ?></td>
                     <td><span class="ks-src <?= htmlspecialchars($row['source_mode']) ?>"><?= $row['source_mode'] === 'auto' ? '自動' : '人工' ?></span></td>
                     <?php for ($m = 1; $m <= 12; $m++):
+                        if (!in_array($m, $validMonths, true)) { echo '<td class="ks-na">NA</td>'; continue; }
+                        $future = ($YEAR > $curY) || ($YEAR === $curY && $m > $curM);
                         $c = ($vals && array_key_exists($m, $vals)) ? $vals[$m] : null;
-                        if ($c === null || $c['v'] === null) { echo '<td class="ks-na">–</td>'; continue; }
+                        $srcAttr = ' data-iid="' . $iid . '" data-m="' . $m . '" data-src="'
+                                 . htmlspecialchars((string)($c['src'] ?? '')) . '"';
+                        if ($c === null || $c['v'] === null) {
+                            echo '<td class="ks-cell"' . $srcAttr . '><span class="ks-na">' . ($future ? 'NA' : '?') . '</span></td>';
+                            continue;
+                        }
                         $v   = (float)$c['v'];
                         $bad = kpsBelowRow($v, $row);
                         $mk  = '';
@@ -399,12 +475,17 @@ function kpsOwnerText(array $row, array $deptName): string {
                                 rtrim(rtrim(number_format($v, 1), '0'), '.'),
                                 rtrim(rtrim(number_format((float)($c['cny_ratio'] ?? 1), 4), '0'), '.'));
                         }
+                        if (($c['src'] ?? '') === 'override') {
+                            $mk .= '<span class="ks-mk man" title="手動覆寫：' . htmlspecialchars((string)($c['ov_reason'] ?? '')) . '">✱</span>';
+                        } elseif (($c['src'] ?? '') === 'manual') {
+                            $mk .= '<span class="ks-mk man" title="人工填寫">填</span>';
+                        }
                         if (isset($c['den']) && $c['den'] !== null && $c['den'] !== '')
                             $tipParts[] = '分子 ' . (string)$c['num'] . ' ／ 分母 ' . (string)$c['den'];
                         elseif (isset($c['num']) && $c['num'] !== null)
                             $tipParts[] = '件數 ' . (string)$c['num'];
                         $tip = $tipParts ? ' title="' . htmlspecialchars(implode('；', $tipParts)) . '"' : '';
-                        echo '<td' . $tip . '><span class="' . ($bad ? 'ks-below' : '') . '">'
+                        echo '<td class="ks-cell"' . $srcAttr . $tip . '><span class="' . ($bad ? 'ks-below' : '') . '">'
                            . htmlspecialchars(kpsFmt($v, $row['value_type'])) . '</span>' . $mk . '</td>';
                     endfor; ?>
                     <td><?= $agg === null ? '<span class="ks-na">–</span>'
@@ -489,6 +570,28 @@ function kpsOwnerText(array $row, array $deptName): string {
     </div>
 </div>
 
+<!-- 儲存格選單（單一欄位修改／明細，仿 KPI.php #cellMenu） -->
+<div class="cm-menu" id="cellMenu"></div>
+
+<!-- 單一欄位修改：填寫（人工）／手動覆寫（自動） -->
+<div class="ks-mask" id="fillMask">
+    <div class="ks-modal" style="max-width:480px;">
+        <div class="m-head"><span id="fillTitle">填寫</span>
+            <span class="m-close" onclick="closeMask('fillMask')">&times;</span></div>
+        <div class="m-body" id="fillBody"></div>
+    </div>
+</div>
+
+<!-- 數值明細／不符合標準的明細（增減個別調整排除＋查看單一月份統計資料，仿 KPI.php #vioMask） -->
+<div class="ks-mask" id="vioMask">
+    <div class="ks-modal" style="max-width:920px;">
+        <div class="m-head"><span id="vioTitle">數值明細</span>
+            <span class="m-close" onclick="closeMask('vioMask')">&times;</span></div>
+        <div class="m-body" id="vioBody"></div>
+        <div class="vio-foot" id="vioFoot" style="padding:0 15px 12px;"></div>
+    </div>
+</div>
+
 <!-- 使用說明（鐵律7） -->
 <div class="ks-mask" id="helpUseMask">
     <div class="ks-modal">
@@ -521,9 +624,29 @@ function kpsOwnerText(array $row, array $deptName): string {
                 <li>指標依區塊分組列出，點「編輯」開啟單一指標的完整編輯面板（基本資料／目標／擔當者／資料來源與參數）。</li>
                 <li>資料來源選「自動計算」時，選擇計算方式後會列出該方式需要的參數；選「existing／existing_cny」時，
                     參數填的是<b>正式 KPI 表的項次編號</b>（可參考清單上的對照）。</li>
+                <li>選「月受訂目標達成率／月銷貨目標達成率（本方案自有目標）」時，<b>各月目標金額直接在這個編輯面板填寫</b>，
+                    完全不依賴正式 KPI 系統、也不必去 KPI 設定頁（KPI.php）調整；可勾選「春節月份自動放大達成率」。</li>
                 <li>存檔前可按「試算目前設定」，在不存檔的情況下先看這組設定會算出什麼結果。</li>
                 <li>「新增指標」會開同一個編輯面板（空白狀態），新增完就是一個完整可用的指標。</li>
                 <li>停用一個指標不會刪除歷史試算結果（反正本頁不存快照），只是總覽分頁不再列出它。</li>
+            </ul>
+
+            <h4>總覽：單一欄位修改／逐筆排除與排除規則／查看單一月份統計資料</h4>
+            <ul>
+                <li>點任何一格數字（或「–」「?」空格）會彈出選單：<b>自動計算</b>指標可開「數值明細 / 不符合標準的明細」
+                    或「手動覆寫」；<b>人工填寫</b>指標可開「填寫 / 修改」。</li>
+                <li>手動覆寫／清除覆寫、填寫／清除填寫一律寫進本方案自己的 kpi_scheme_monthly_value，
+                    與正式系統的 kpi_as_monthly_value 完全分離；覆寫原因必填（供追溯）。</li>
+                <li>「數值明細」只有部分計算方式支援（目前：產能達成率—插齒、插齒製程不良率、
+                    月受訂／月銷貨目標達成率（本方案自有目標）、產品開發評估完成時效、型態識別文件確認率、
+                    客供料點收檢驗不良率、包裝效率、採購進貨準交率、矯正措施按時結案率、全廠 KPI 總體達標率），
+                    不支援的會直接說明原因。</li>
+                <li><b>逐筆排除</b>：在明細清單勾選真正不應該算進這個月績效的那幾筆，按「排除選取」——
+                    排除只影響 KPI 計算，<b>不會修改任何一筆真實資料</b>，也可以隨時「取消排除」。</li>
+                <li><b>排除規則</b>（整年度依客戶／料號等維度一次排除）只有「重用正式計算模組」的那幾種
+                    計算方式才有（因為要有現成的維度可選）；逐筆排除則所有支援明細的計算方式都可以用。</li>
+                <li>這一整套（覆寫、填寫、逐筆排除、排除規則）都是即時試算，不會寫進任何月快照，
+                    頁面重整就會用最新設定重新算一次。</li>
             </ul>
 
             <h4>列印</h4>
@@ -556,19 +679,23 @@ $(document).ready(function(){
 var KS_YEAR = <?= $YEAR ?>;
 var API = '../../src/store/KpiSchemeCny_API.php';
 
-/* ===== 指標說明（同時涵蓋總覽與設定分頁的 info 圖示） ===== */
+/* ===== 指標說明（同時涵蓋總覽與設定分頁的 info 圖示），兼做「單一欄位修改／明細」用的指標資料 ===== */
 var ITEM_INFO = {};
+var IID2ITEM = {};   // indicator_id -> item_no，儲存格只帶 iid，查 ITEM_INFO 要先轉一次
 <?php foreach ($ROWS as $row):
     $itemNo = (int)$row['item_no'];
+    $iid = (int)$row['indicator_id'];
     $reg = kpi_scheme_registry();
     $calcDesc = ($row['calculator_key'] && isset($reg[$row['calculator_key']]))
         ? $reg[$row['calculator_key']]['desc'] : '';
 ?>
 ITEM_INFO[<?= $itemNo ?>] = <?= json_encode([
-    'name'=>$row['name'], 'block'=>$row['block'], 'calc_key'=>$row['calculator_key'],
+    'iid'=>$iid, 'name'=>$row['name'], 'block'=>$row['block'], 'calc_key'=>$row['calculator_key'],
     'calc_desc'=>$calcDesc, 'params'=>$row['params_json'], 'note'=>$row['note'],
     'source_mode'=>$row['source_mode'], 'active'=>(int)$row['year_active'],
+    'value_type'=>$row['value_type'], 'freq'=>$row['freq'], 'target_text'=>kpsTargetTextRow($row),
 ], JSON_UNESCAPED_UNICODE) ?>;
+IID2ITEM[<?= $iid ?>] = <?= $itemNo ?>;
 <?php endforeach; ?>
 
 function openMask(id){ document.getElementById(id).style.display='block'; }
@@ -589,6 +716,356 @@ function showInfo(itemNo){
     h += '<h5>本年度狀態</h5><div>' + (it.active ? '啟用' : '已停用（不計入總覽）') + '</div>';
     document.getElementById('infoBody').innerHTML = h;
     openMask('infoMask');
+}
+
+/* ============================================================
+ * 單一欄位修改／增減個別調整排除／查看單一月份統計資料（2026-10-05 續，比照 KPI.php）
+ * ============================================================ */
+var YESNO = <?= json_encode(kpi_as_yesno_tokens(), JSON_UNESCAPED_UNICODE) ?>;
+function kpiParseInputJs(type, raw){
+    var s = $.trim(String(raw == null ? '' : raw));
+    if (s === '') return null;
+    if (type === 'yesno') {
+        var t = s.toUpperCase();
+        if (YESNO.yes.indexOf(t) >= 0) return 1;
+        if (YESNO.no.indexOf(t) >= 0) return 0;
+        return isNaN(Number(s)) ? null : (Number(s) >= 1 ? 1 : 0);
+    }
+    return isNaN(Number(s)) ? null : Number(s);
+}
+
+/* ---------- 儲存格點擊選單 ---------- */
+$(document).on('click', 'td.ks-cell', function(e){
+    var $td = $(this);
+    var iid = +$td.data('iid'), m = +$td.data('m'), src = $td.data('src') || '';
+    var itemNo = IID2ITEM[iid]; var it = ITEM_INFO[itemNo];
+    if (!it) return;
+    var items = [];
+    if (it.source_mode === 'auto') {
+        items.push({t:'<i class="fa fa-info-circle"></i> 數值明細 / 不符合標準的明細', f:function(){ openVio(iid, m); }});
+        items.push({t:'<i class="fa fa-hand-paper-o"></i> 手動覆寫', f:function(){ openFillMask(iid, m, 'override'); }});
+        if (src === 'override') items.push({t:'<i class="fa fa-eraser"></i> 清除覆寫', f:function(){ doClearOverride(iid, m); }});
+    } else {
+        items.push({t:'<i class="fa fa-pencil"></i> 填寫 / 修改', f:function(){ openFillMask(iid, m, 'fill'); }});
+        if (src === 'manual') items.push({t:'<i class="fa fa-eraser"></i> 清除填寫', f:function(){ doClearFill(iid, m); }});
+    }
+    var html = '<div class="cm-head">' + itemNo + '. ' + esc(it.name) + '｜' + m + '月</div>';
+    items.forEach(function(x, i){ html += '<div class="cm-item" data-i="' + i + '">' + x.t + '</div>'; });
+    var $menu = $('#cellMenu').html(html).show();
+    var left = Math.min(e.pageX, $(window).width() - 220);
+    var top  = Math.min(e.pageY + 4, $(window).height() - (items.length * 34 + 40));
+    $menu.css({left: Math.max(4, left), top: Math.max(4, top)});
+    $menu.find('.cm-item').off('click').on('click', function(){ $menu.hide(); items[+$(this).data('i')].f(); });
+    e.stopPropagation();
+});
+$(document).on('click', function(){ $('#cellMenu').hide(); });
+
+/* ---------- 單一欄位修改：填寫（人工）／手動覆寫（自動） ---------- */
+function openFillMask(iid, m, mode){
+    var itemNo = IID2ITEM[iid]; var it = ITEM_INFO[itemNo];
+    var hint = it.value_type === 'percent' ? '例：85（代表 85%）'
+             : it.value_type === 'yesno' ? '輸入 Yes/No 或 1/0'
+             : '請輸入數字';
+    document.getElementById('fillTitle').textContent = (mode === 'fill' ? '填寫' : '手動覆寫')
+        + '　' + itemNo + '. ' + it.name + '　' + KS_YEAR + '年' + m + '月';
+    var h = '<div class="fillm-row"><label>數值</label><input type="text" id="fmVal" placeholder="' + esc(hint) + '"></div>';
+    if (mode === 'override') {
+        h += '<div class="fillm-row"><label>覆寫原因</label><textarea id="fmReason" placeholder="必填，供追溯（AS9100 可追溯要求）"></textarea></div>';
+    } else {
+        h += '<div class="fillm-row"><label>備註</label><textarea id="fmNote" placeholder="選填"></textarea></div>';
+    }
+    h += '<div class="ksc-err" id="fmErr" style="display:none;"></div>';
+    h += '<div class="ksc-foot" style="padding:10px 0 0;border-top:none;">'
+       + '<button class="ksc-btn-save" onclick="doFillSave(' + iid + ',' + m + ',\'' + mode + '\')"><i class="fa fa-save"></i> 儲存</button>'
+       + '<button class="ksc-btn-cancel" onclick="closeMask(\'fillMask\')">取消</button></div>';
+    document.getElementById('fillBody').innerHTML = h;
+    openMask('fillMask');
+}
+function doFillSave(iid, m, mode){
+    var raw = $('#fmVal').val();
+    var err = document.getElementById('fmErr');
+    err.style.display = 'none';
+    var post = {action: mode === 'fill' ? 'fill' : 'override', indicator_id: iid, year: KS_YEAR, month: m, value: raw};
+    if (mode === 'fill') post.note = $('#fmNote').val();
+    else post.reason = $('#fmReason').val();
+    $.post(API, post, function(res){
+        if (!res || !res.ok) { err.style.display = 'block'; err.textContent = (res && res.error) || '儲存失敗'; return; }
+        closeMask('fillMask');
+        location.reload();
+    }, 'json').fail(function(x){
+        err.style.display = 'block'; err.textContent = '儲存失敗：' + ((x.responseJSON && x.responseJSON.error) || x.status);
+    });
+}
+function doClearFill(iid, m){
+    if (!confirm('確定要清除這一格的填寫內容？')) return;
+    $.post(API, {action:'clear_fill', indicator_id:iid, year:KS_YEAR, month:m}, function(res){
+        if (!res || !res.ok) { alert((res && res.error) || '清除失敗'); return; }
+        location.reload();
+    }, 'json').fail(function(){ alert('清除失敗：連線異常'); });
+}
+function doClearOverride(iid, m){
+    if (!confirm('確定要清除這一格的手動覆寫？（會恢復成自動計算的值）')) return;
+    $.post(API, {action:'clear_override', indicator_id:iid, year:KS_YEAR, month:m}, function(res){
+        if (!res || !res.ok) { alert((res && res.error) || '清除失敗'); return; }
+        location.reload();
+    }, 'json').fail(function(){ alert('清除失敗：連線異常'); });
+}
+
+/* ---------- 數值明細／不符合標準的明細（含逐筆排除＋整年度排除規則） ---------- */
+var VIO = null;
+function openVio(iid, m){
+    var itemNo = IID2ITEM[iid]; var it = ITEM_INFO[itemNo];
+    VIO = {iid:iid, m:m, itemNo:itemNo, data:null, filt:{}, kw:'', kind:'bad',
+           rdim:'', rkw:'', rsel:[], rfound:[], rsrc:'', rbusy:0, rscope:'year'};
+    document.getElementById('vioTitle').textContent = itemNo + '. ' + it.name + '　' + KS_YEAR + '年' + m + '月';
+    document.getElementById('vioBody').innerHTML = '<div style="padding:16px;color:#8a6d45;">載入中…</div>';
+    document.getElementById('vioFoot').innerHTML = '';
+    openMask('vioMask');
+    $.getJSON(API, {action:'detail_rows', indicator_id:iid, year:KS_YEAR, month:m}, function(res){
+        if (!res || !res.ok) { $('#vioBody').html('<div style="padding:16px;color:#DD5138;">' + esc((res&&res.error)||'載入失敗') + '</div>'); return; }
+        VIO.data = res;
+        renderVio();
+    }).fail(function(x){
+        $('#vioBody').html('<div style="padding:16px;color:#DD5138;">載入失敗：' + esc((x.responseJSON&&x.responseJSON.error)||x.status) + '</div>');
+    });
+}
+function vioResetFilter(){ VIO.filt = {}; VIO.kw = ''; VIO.kind = 'bad'; }
+function vioRowVisible(x){
+    var d = VIO.data;
+    if (VIO.kind === 'bad' && x.kind === 'info' && !+x.excluded && !x.rule_ex) return false;
+    for (var k in VIO.filt) {
+        if (!VIO.filt[k]) continue;
+        var v = (x.dims && x.dims[k] != null) ? String(x.dims[k]) : '';
+        if (v !== VIO.filt[k]) return false;
+    }
+    if (VIO.kw) {
+        var hay = '';
+        d.cols.forEach(function(c){ hay += ' ' + (x.vals[c.k] == null ? '' : x.vals[c.k]); });
+        hay += ' ' + (x.why || '');
+        var ws = VIO.kw.split(/\s+/);
+        for (var i = 0; i < ws.length; i++) { if (ws[i] && hay.toUpperCase().indexOf(ws[i].toUpperCase()) < 0) return false; }
+    }
+    return true;
+}
+function vioFilterHtml(){
+    var d = VIO.data, h = '<div class="vio-filter">';
+    (d.dims || []).forEach(function(dm){
+        if (!dm.opts.length) return;
+        h += '<label>' + esc(dm.t) + '：<select class="vioF" data-k="' + esc(dm.k) + '" data-eg-filter="輸入' + esc(dm.t) + '篩選…">'
+           + '<option value="">全部（' + dm.opts.length + '）</option>';
+        dm.opts.forEach(function(o){
+            var txt = o.v + (o.id && o.id !== o.v ? ('（' + o.id + '）') : '');
+            h += '<option value="' + esc(o.v) + '"' + (VIO.filt[dm.k] === o.v ? ' selected' : '') + '>' + esc(txt) + '</option>';
+        });
+        h += '</select></label>';
+    });
+    h += '<label>關鍵字：<input type="text" id="vioKw" value="' + esc(VIO.kw || '') + '" placeholder="製令／單號／代號…"></label>';
+    var hasInfo = false;
+    d.rows.forEach(function(x){ if (x.kind === 'info') hasInfo = true; });
+    if (hasInfo) {
+        h += '<label>顯示：<select id="vioKind">'
+           + '<option value="bad"' + (VIO.kind === 'bad' ? ' selected' : '') + '>只看不符合標準</option>'
+           + '<option value="all"' + (VIO.kind === 'all' ? ' selected' : '') + '>全部（含參考用的正常資料）</option>'
+           + '</select></label>';
+    }
+    h += '<span class="vf-clear" id="vioClr">清除篩選</span></div>';
+    return h;
+}
+function vioDimById(k){ var r = null; ((VIO.data && VIO.data.dims) || []).forEach(function(d){ if (d.k === k) r = d; }); return r; }
+function vioRuleWords(){ return $.trim(VIO.rkw || '').split(/\s+/).filter(function(w){ return w.length > 0; }); }
+function vioRuleMatch(o, ws){
+    var hay = (o.v + ' ' + (o.id || '')).toUpperCase();
+    for (var i = 0; i < ws.length; i++) if (hay.indexOf(ws[i].toUpperCase()) < 0) return false;
+    return true;
+}
+function vioRenderRuleList(){
+    var dm = vioDimById($('#vrDim').val()), ws = vioRuleWords(), h = '', n = 0, total = 0;
+    var picked = {}; (VIO.rsel || []).forEach(function(v){ picked[v] = 1; });
+    var dimK = $('#vrDim').val(), done = {};
+    ((VIO.data && VIO.data.rules) || []).forEach(function(x){ if (x.dim === dimK) done[x.val] = 1; });
+    var cap = 60, seen = {}, list = [];
+    ((dm && dm.opts) || []).forEach(function(o){
+        if (!vioRuleMatch(o, ws) || seen[o.v]) return; seen[o.v] = 1; list.push({v:o.v, id:o.id, src:'本月'});
+    });
+    var fsrc = VIO.rsrc || '主檔';
+    (VIO.rfound || []).forEach(function(o){ if (seen[o.v]) return; seen[o.v] = 1; list.push({v:o.v, id:o.id, src:fsrc}); });
+    list = list.filter(function(o){ return !done[o.v]; });
+    list.forEach(function(o){
+        total++; if (n >= cap) return; n++;
+        h += '<div class="vr-it' + (picked[o.v] ? ' on' : '') + '" data-v="' + esc(o.v) + '">'
+           + esc(o.v) + (o.id ? ('<span class="vr-id">' + esc(o.id) + '</span>') : '')
+           + '<span class="vr-src">' + esc(o.src) + '</span>' + (picked[o.v] ? '　✔ 已選' : '') + '</div>';
+    });
+    if (total > cap) h += '<div class="vr-none">還有 ' + (total - cap) + ' 筆沒顯示，請再輸入關鍵字縮小範圍。</div>';
+    if (!total) {
+        var kw = $.trim(VIO.rkw || '');
+        h = VIO.rbusy ? '<div class="vr-none">查詢中…</div>'
+          : (kw ? '<div class="vr-none">找不到「' + esc(kw) + '」。排除規則比對的是<b>名稱</b>，'
+                + '真的要直接使用請按 <a href="#" id="vrFree">直接使用「' + esc(kw) + '」</a>。</div>'
+               : '<div class="vr-none">這個年度的資料裡沒有可選的項目，請輸入代號或名稱搜尋主檔。</div>');
+    }
+    $('#vrList').html(h);
+    var ph = ''; (VIO.rsel || []).forEach(function(v){
+        ph += '<span class="vr-chip2">' + esc(v) + '<span class="vr-x2" data-v="' + esc(v) + '">×</span></span>';
+    });
+    $('#vrPicked').html('已選 ' + (VIO.rsel || []).length + ' 項：' + (ph || '<span style="color:#a08356;">（尚未選擇）</span>'));
+}
+function vioRulesHtml(){
+    var d = VIO.data, h = '';
+    var rs = d.rules || [], lb = d.dim_labels || {};
+    h += '<div class="vio-rules"><b>排除規則</b>（' + KS_YEAR + ' 年度整年適用，只影響 KPI 計算、不會修改任何真實資料）：';
+    if (!rs.length) h += '<span style="color:#a08356;">目前沒有設定任何規則。</span>';
+    rs.forEach(function(r){
+        h += '<span class="vr-chip' + (r.scope === 'all' ? ' allyr' : '') + '" title="'
+           + esc(r.created_by_name || '') + ' ' + esc((r.created_at || '').substr(0, 16))
+           + (r.reason ? ('｜' + esc(r.reason)) : '') + '">'
+           + esc(lb[r.dim] || r.dim) + '：' + esc(r.val)
+           + '<span class="vr-scope">' + (r.scope === 'all' ? '所有年度' : (r.year + ' 年度')) + '</span>'
+           + (+d.can_adjust ? ('<span class="vr-x" data-id="' + r.rule_id + '" title="取消這條規則">×</span>') : '')
+           + '</span>';
+    });
+    if (+d.can_adjust && (d.dims || []).length) {
+        h += '<div class="vr-new">新增：<select id="vrDim">';
+        (d.dims || []).forEach(function(dm){
+            if (!dm.opts.length) return;
+            h += '<option value="' + esc(dm.k) + '"' + (VIO.rdim === dm.k ? ' selected' : '') + '>' + esc(dm.t) + '</option>';
+        });
+        h += '</select><input type="text" id="vrKw" value="' + esc(VIO.rkw || '') + '" placeholder="輸入代號或名稱模糊搜尋">'
+           + '<label style="margin:0;font-weight:normal;font-size:12.5px;">適用：<select id="vrScope">'
+           + '<option value="year"' + (VIO.rscope === 'all' ? '' : ' selected') + '>僅 ' + KS_YEAR + ' 年度</option>'
+           + '<option value="all"' + (VIO.rscope === 'all' ? ' selected' : '') + '>所有年度</option>'
+           + '</select></label>'
+           + '<button id="vrAdd" class="warm">建立排除規則（立即存檔）</button></div>'
+           + '<div class="vr-list" id="vrList"></div><div class="vr-picked" id="vrPicked"></div>'
+           + '<div class="vio-seltip" style="font-size:11.5px;color:#8a6d45;margin-top:4px;">'
+           + '清單預設只列本年度資料裡真的有的；這個年度沒有的，打代號或名稱就會從主檔搜出來。'
+           + '點一下加入／再點一次取消，不必填原因，系統會記下是誰在什麼時候設定的。</div>';
+    }
+    h += '</div>';
+    return h;
+}
+function renderVio(){
+    var d = VIO.data, h = '';
+    if (!+d.supported) {
+        h += '<div class="vio-note">' + esc(d.msg || '這個指標還沒有做數值明細。') + '</div>';
+        $('#vioBody').html(h); $('#vioFoot').html(''); return;
+    }
+    var exN = 0; d.rows.forEach(function(x){ if (+x.excluded) exN++; });
+    h += '<div class="vio-note">' + esc(d.note || '')
+       + '<br>不符合標準 <b>' + d.total + '</b> 筆' + (exN ? ('，其中 <b>' + exN + '</b> 筆已逐筆排除') : '')
+       + (+d.rule_ex ? ('，另有 <b>' + d.rule_ex + '</b> 筆被排除規則排掉') : '')
+       + (+d.truncated ? '（畫面最多顯示 500 筆）' : '') + '。</div>';
+    if (+d.can_adjust) {
+        h += '<div class="vio-warn">確實不符合標準的請保持原樣；不該算進績效的那幾筆才勾選後按「排除選取」——'
+           + '<b>排除只影響 KPI 計算，不會動到任何一筆真實資料</b>。</div>';
+    }
+    h += vioRulesHtml();
+    h += vioFilterHtml();
+
+    var showChk = (+d.can_adjust && d.rows.length) ? 1 : 0;
+    h += '<div class="vio-tblwrap"><table class="vio-tbl"><colgroup>';
+    if (showChk) h += '<col style="width:26px;">';
+    d.cols.forEach(function(){ h += '<col>'; });
+    h += '<col style="width:18%;">';
+    h += '</colgroup><thead><tr>';
+    if (showChk) h += '<th><input type="checkbox" id="vioAll" title="全選目前篩選出來的列"></th>';
+    d.cols.forEach(function(c){ h += '<th>' + esc(c.t) + '</th>'; });
+    h += '<th>不符合的原因</th></tr></thead><tbody id="vioTb">';
+    var shown = 0;
+    d.rows.forEach(function(x, ix){
+        if (!vioRowVisible(x)) return;
+        shown++;
+        var cls = []; if (+x.excluded) cls.push('ex'); if (x.rule_ex) cls.push('rex');
+        h += '<tr class="' + cls.join(' ') + '" data-k="' + esc(x.key) + '" data-ix="' + ix + '">';
+        if (showChk) h += '<td>' + (x.excluded || x.rule_ex ? '' : '<input type="checkbox" class="vioChk">') + '</td>';
+        d.cols.forEach(function(c){ h += '<td>' + esc(x.vals[c.k] == null ? '' : x.vals[c.k]) + '</td>'; });
+        h += '<td>' + esc(x.why || '')
+           + (x.rule_ex ? ('　<span style="color:#a08356;">（規則排除：' + esc(x.rule_ex) + '）</span>') : '')
+           + (+x.excluded ? ('　<button class="vio-exbtn undo" data-k="' + esc(x.key) + '" data-act="undo">取消排除</button>'
+                              + '<span style="color:#a08356;font-size:11px;"> ' + esc(x.ex_by || '') + ' '
+                              + esc((x.ex_at || '').substr(0,10)) + (x.ex_reason ? ('｜' + esc(x.ex_reason)) : '') + '</span>')
+             : '') + '</td></tr>';
+    });
+    if (!shown) h += '<tr><td colspan="' + (d.cols.length + (showChk?2:1)) + '" style="text-align:center;color:#a08356;">（沒有符合篩選條件的項目）</td></tr>';
+    h += '</tbody></table></div>';
+    $('#vioBody').html(h);
+
+    var foot = '';
+    if (+d.can_adjust) {
+        foot = '<input type="text" id="vioExReason" placeholder="排除原因（選填）" style="flex:1;height:30px;border:1px solid #D8BE93;border-radius:4px;padding:0 8px;font-size:13px;">'
+             + '<button class="ksc-btn-save" id="vioExBtn"><i class="fa fa-ban"></i> 排除選取</button>';
+    }
+    $('#vioFoot').html(foot);
+
+    $('#vioKw').off('input').on('input', function(){ VIO.kw = $(this).val(); renderVio(); });
+    $('.vioF').off('change').on('change', function(){ VIO.filt[$(this).data('k')] = $(this).val(); renderVio(); });
+    $('#vioKind').off('change').on('change', function(){ VIO.kind = $(this).val(); renderVio(); });
+    $('#vioClr').off('click').on('click', function(){ vioResetFilter(); renderVio(); });
+    $('#vioAll').off('change').on('change', function(){ $('.vioChk').prop('checked', $(this).prop('checked')); });
+    $('.vio-exbtn').off('click').on('click', function(){
+        var k = $(this).data('k');
+        $.post(API, {action:'adjust_del', indicator_id:VIO.iid, year:KS_YEAR, month:VIO.m, keys:JSON.stringify([k])}, function(res){
+            if (!res || !res.ok) { alert((res && res.error) || '取消排除失敗'); return; }
+            openVio(VIO.iid, VIO.m);
+        }, 'json').fail(function(){ alert('連線異常'); });
+    });
+    $('#vioExBtn').off('click').on('click', function(){
+        var keys = []; $('#vioTb tr').each(function(){ if ($(this).find('.vioChk').prop('checked')) keys.push($(this).data('k')); });
+        if (!keys.length) { alert('請先勾選要排除的項目'); return; }
+        $.post(API, {action:'adjust_add', indicator_id:VIO.iid, year:KS_YEAR, month:VIO.m,
+                     keys:JSON.stringify(keys), reason:$('#vioExReason').val()}, function(res){
+            if (!res || !res.ok) { alert((res && res.error) || '排除失敗'); return; }
+            openVio(VIO.iid, VIO.m);
+        }, 'json').fail(function(){ alert('連線異常'); });
+    });
+    $('.vr-x').off('click').on('click', function(){
+        if (!confirm('確定要取消這條排除規則？')) return;
+        $.post(API, {action:'excl_rule_del', indicator_id:VIO.iid, year:KS_YEAR, rule_ids:JSON.stringify([$(this).data('id')])}, function(res){
+            if (!res || !res.ok) { alert((res && res.error) || '取消失敗'); return; }
+            openVio(VIO.iid, VIO.m);
+        }, 'json').fail(function(){ alert('連線異常'); });
+    });
+    $('#vrDim').off('change').on('change', function(){ VIO.rdim = $(this).val(); VIO.rsel = []; VIO.rfound = []; VIO.rkw = ''; $('#vrKw').val(''); vioRenderRuleList(); });
+    var vrTimer = null;
+    $('#vrKw').off('input').on('input', function(){
+        VIO.rkw = $(this).val();
+        if (vrTimer) clearTimeout(vrTimer);
+        vrTimer = setTimeout(function(){
+            var q = $.trim(VIO.rkw || '');
+            if (q === '') { VIO.rfound = []; VIO.rsrc = ''; vioRenderRuleList(); return; }
+            VIO.rbusy = 1; vioRenderRuleList();
+            $.getJSON(API, {action:'excl_dim_search', indicator_id:VIO.iid, year:KS_YEAR, dim:$('#vrDim').val(), q:q}, function(res){
+                VIO.rbusy = 0;
+                if (!res || !res.ok) { VIO.rfound = []; vioRenderRuleList(); return; }
+                VIO.rfound = res.rows || []; VIO.rsrc = res.src || '主檔'; vioRenderRuleList();
+            }).fail(function(){ VIO.rbusy = 0; vioRenderRuleList(); });
+        }, 280);
+    });
+    if (VIO.rdim === '') { var $firstDim = $('#vrDim option:first'); if ($firstDim.length) VIO.rdim = $firstDim.val(); }
+    $(document).off('click.vrit').on('click.vrit', '.vr-it', function(){
+        var v = $(this).data('v'); var i = VIO.rsel.indexOf(v);
+        if (i >= 0) VIO.rsel.splice(i, 1); else VIO.rsel.push(v);
+        vioRenderRuleList();
+    });
+    $(document).off('click.vrx2').on('click.vrx2', '.vr-x2', function(){
+        var v = $(this).data('v'); var i = VIO.rsel.indexOf(v);
+        if (i >= 0) VIO.rsel.splice(i, 1);
+        vioRenderRuleList();
+    });
+    $(document).off('click.vrfree').on('click.vrfree', '#vrFree', function(e){
+        e.preventDefault();
+        var kw = $.trim(VIO.rkw || ''); if (kw && VIO.rsel.indexOf(kw) < 0) VIO.rsel.push(kw);
+        vioRenderRuleList();
+    });
+    $('#vrAdd').off('click').on('click', function(){
+        if (!VIO.rsel.length) { alert('請先點選要排除的項目'); return; }
+        $.post(API, {action:'excl_rule_add', indicator_id:VIO.iid, year:KS_YEAR, dim:$('#vrDim').val(),
+                     vals:JSON.stringify(VIO.rsel), scope:$('#vrScope').val()}, function(res){
+            if (!res || !res.ok) { alert((res && res.error) || '建立失敗'); return; }
+            openVio(VIO.iid, VIO.m);
+        }, 'json').fail(function(){ alert('連線異常'); });
+    });
+    if ($('#vrDim').length) vioRenderRuleList();
 }
 
 /* ===== 分頁切換 ===== */
@@ -858,6 +1335,21 @@ function kscRenderParamFields(calcKey, paramsJsonStr){
     reg.params.forEach(function(p){
         var v = params[p.key];
         var id = 'fp_' + p.key;
+        if (p.type === 'months_map') {
+            // 各月目標金額——本方案自己的指標直接在這裡填（不必去正式 KPI 設定頁 KPI.php 調整），
+            // 寬度要放 12 個月份輸入框，不能套用其他參數共用的窄欄位（w2=170px）
+            var mv = (v && typeof v === 'object') ? v : {};
+            var mmHtml = '<div style="width:100%;margin-bottom:6px;"><label style="font-size:11.5px;color:#8a6d45;display:block;margin-bottom:3px;">'
+                       + esc(p.label) + '</label><div id="' + id + '" style="display:flex;flex-wrap:wrap;gap:4px;">';
+            for (var mm = 1; mm <= 12; mm++) {
+                var mval = mv[mm] !== undefined ? mv[mm] : '';
+                mmHtml += '<div style="width:72px;"><div style="font-size:10.5px;color:#8a6d45;text-align:center;">' + mm + '月</div>'
+                        + '<input type="text" class="mm-input" data-m="' + mm + '" value="' + esc(mval) + '" '
+                        + 'style="width:100%;height:24px;border:1px solid #D8BE93;border-radius:3px;padding:0 4px;text-align:right;font-size:11.5px;"></div>';
+            }
+            h += mmHtml + '</div></div>';
+            return;
+        }
         h += '<div class="ksc-fld w2" style="margin-right:8px;margin-bottom:6px;"><label>' + esc(p.label) + '</label>';
         if (isExisting && p.key === 'item_no') {
             // existing／existing_cny 的 item_no 不再是裸數字輸入，改成可打字搜尋的正式
@@ -879,6 +1371,9 @@ function kscRenderParamFields(calcKey, paramsJsonStr){
             h += '<div id="' + id + '" style="border:1px solid #D8BE93;border-radius:4px;padding:4px 6px;max-height:90px;overflow-y:auto;">' + opts + '</div>';
         } else if (p.type === 'int') {
             h += '<input type="number" id="' + id + '" value="' + (v !== undefined && v !== null ? v : '') + '">';
+        } else if (p.type === 'bool') {
+            var checked = !!v;
+            h += '<label style="font-size:12.5px;"><input type="checkbox" id="' + id + '"' + (checked ? ' checked' : '') + '> 啟用</label>';
         } else {
             // textlist：逗號分隔文字，存檔時轉陣列
             var txt = Array.isArray(v) ? v.join(',') : (v !== undefined && v !== null ? v : '');
@@ -961,6 +1456,16 @@ function kscCollectParams(calcKey){
         } else if (p.type === 'int') {
             var el = document.getElementById(id);
             out[p.key] = el && el.value !== '' ? parseInt(el.value, 10) : null;
+        } else if (p.type === 'bool') {
+            var elb = document.getElementById(id);
+            out[p.key] = !!(elb && elb.checked);
+        } else if (p.type === 'months_map') {
+            var mm = {};
+            document.querySelectorAll('#' + id + ' .mm-input').forEach(function(inp){
+                var mv = inp.value.trim();
+                if (mv !== '' && !isNaN(mv)) mm[inp.getAttribute('data-m')] = parseFloat(mv);
+            });
+            out[p.key] = mm;
         } else {
             var el2 = document.getElementById(id);
             var raw = el2 ? el2.value : '';
