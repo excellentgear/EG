@@ -997,17 +997,24 @@ function el_order_case_sync_status(PDO $db, int $logId, string $now): void
 }
 
 /**
- * 批次版：多張訂單各自目前「未處理問題數」＋「最新一條未處理問題」的預覽文字。
+ * 批次版：多張訂單各自的「未處理問題數／總問題數」＋一條預覽問題。
  * 比照 qab_bom_scrap_sum_rows() 既有模式，避免清單頁逐列各查一次（N+1）。
  *
- * 2026-10-05 使用者實測回報：只顯示數字要點進去才看得到內容，不方便——list 頁要能
- * 掃一眼就看到最新問題是什麼，比照舊版 textarea「看得到內容」的體驗，所以每張訂單
- * 一併帶出「最新一條未處理問題」（依 id 由新到舊取第一條）供畫面直接顯示預覽。
+ * 2026-10-05 使用者實測回報兩件事，這支函式一次處理：①只顯示數字要點進去才看得到
+ * 內容，不方便——所以一併帶出一條問題文字當預覽，比照舊版 textarea 的體驗；
+ * ②全部問題都已處理完時，原本直接判定「沒有未處理」而回傳空值，清單上會變成只顯示
+ * 「＋新增」，使用者完全看不出這張訂單其實有歷史紀錄——改成只要「有過任何問題」
+ * （不論狀態）都回傳一列，呼叫端依 `open_count` 是否 >0 決定要顯示「待處理」還是
+ * 「已完成（可查看）」，而不是直接當作沒有案件。
  *
- * @return array [order_id(int) => ['count'=>int,'question'=>string,'target_type'=>?string,'target_label'=>?string]]
- *         沒有案件或沒有未處理問題的訂單不會出現在結果裡。
+ * 預覽問題的挑法：有未處理的就挑「最新一條未處理」；全部處理完了就挑「最新一條
+ * （不論狀態）」——用 `ORDER BY 是否未處理 DESC, id DESC` 一次排序做到，不用分兩次查。
+ *
+ * @return array [order_id(int) => ['open_count'=>int,'total_count'=>int,'question'=>string,
+ *                'status'=>string,'target_type'=>?string,'target_label'=>?string]]
+ *         完全沒有任何問題項的訂單不會出現在結果裡。
  */
-function el_order_open_rows(PDO $db, array $orderIds): array
+function el_order_item_summary(PDO $db, array $orderIds): array
 {
     $ids = array_values(array_unique(array_filter(array_map('intval', $orderIds), fn($v) => $v > 0)));
     if (!$ids) return [];
@@ -1015,19 +1022,23 @@ function el_order_open_rows(PDO $db, array $orderIds): array
     $out = [];
     try {
         $rows = $db->query("
-            SELECT order_id, question, target_type, target_label, cnt FROM (
-                SELECT b.bind_id AS order_id, i.question, i.target_type, i.target_label,
-                       COUNT(*) OVER (PARTITION BY b.bind_id) AS cnt,
-                       ROW_NUMBER() OVER (PARTITION BY b.bind_id ORDER BY i.id DESC) AS rn
+            SELECT order_id, question, status, target_type, target_label, total_cnt, open_cnt FROM (
+                SELECT b.bind_id AS order_id, i.question, i.status, i.target_type, i.target_label,
+                       COUNT(*) OVER (PARTITION BY b.bind_id) AS total_cnt,
+                       SUM(CASE WHEN i.status NOT IN ('resolved','dropped') THEN 1 ELSE 0 END)
+                           OVER (PARTITION BY b.bind_id) AS open_cnt,
+                       ROW_NUMBER() OVER (PARTITION BY b.bind_id
+                           ORDER BY (i.status NOT IN ('resolved','dropped')) DESC, i.id DESC) AS rn
                 FROM eng_log_bind b JOIN eng_log_item i ON i.log_id = b.log_id
                 WHERE b.bind_type='order' AND b.bind_id IN ({$in})
-                  AND i.status NOT IN ('resolved','dropped')
             ) t WHERE rn = 1
         ")->fetchAll(PDO::FETCH_ASSOC);
         foreach ($rows as $r) {
             $out[(int)$r['order_id']] = [
-                'count'        => (int)$r['cnt'],
+                'open_count'   => (int)$r['open_cnt'],
+                'total_count'  => (int)$r['total_cnt'],
                 'question'     => (string)$r['question'],
+                'status'       => (string)$r['status'],
                 'target_type'  => $r['target_type'] !== null ? (string)$r['target_type'] : null,
                 'target_label' => $r['target_label'] !== null ? (string)$r['target_label'] : null,
             ];
@@ -1036,11 +1047,11 @@ function el_order_open_rows(PDO $db, array $orderIds): array
     return $out;
 }
 
-/** 相容版：只要未處理問題數時用這支（現場目前只有 NewOrder_Track.php 用到 el_order_open_rows()） */
+/** 相容版：只要未處理問題數時用這支 */
 function el_order_open_item_counts(PDO $db, array $orderIds): array
 {
     $out = [];
-    foreach (el_order_open_rows($db, $orderIds) as $oid => $r) $out[$oid] = $r['count'];
+    foreach (el_order_item_summary($db, $orderIds) as $oid => $r) $out[$oid] = $r['open_count'];
     return $out;
 }
 

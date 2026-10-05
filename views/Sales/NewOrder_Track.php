@@ -2184,9 +2184,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_add') {
         el_reindex($pdo, $logId);
         $pdo->prepare("UPDATE eng_log SET updated_at=? WHERE id=?")->execute([$nowL, $logId]);
         $pdo->commit();
-        $prevRow = el_order_open_rows($pdo, [$oid])[$oid] ?? null;
+        $prevRow = el_order_item_summary($pdo, [$oid])[$oid] ?? null;
         echo json_encode(['success' => true, 'log_id' => $logId, 'created' => $created,
-            'open_count' => $prevRow['count'] ?? 0, 'preview' => $prevRow]);
+            'open_count' => $prevRow['open_count'] ?? 0, 'preview' => $prevRow]);
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -2216,8 +2216,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_reply') {
         el_order_case_sync_status($pdo, $logId, $nowL);
         $pdo->commit();
         $oidR = el_case_order_id($pdo, $logId);
-        $prevRow = $oidR ? (el_order_open_rows($pdo, [$oidR])[$oidR] ?? null) : null;
-        echo json_encode(['success' => true, 'open_count' => $prevRow['count'] ?? 0,
+        $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR])[$oidR] ?? null) : null;
+        echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0,
             'reply_count' => count($ret['ids']), 'preview' => $prevRow]);
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -2239,8 +2239,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_resolve') {
         el_item_set_status($pdo, $logId, $itemId, $status, '', $nowL);
         el_order_case_sync_status($pdo, $logId, $nowL);
         $oidR = el_case_order_id($pdo, $logId);
-        $prevRow = $oidR ? (el_order_open_rows($pdo, [$oidR])[$oidR] ?? null) : null;
-        echo json_encode(['success' => true, 'open_count' => $prevRow['count'] ?? 0, 'preview' => $prevRow]);
+        $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR])[$oidR] ?? null) : null;
+        echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'preview' => $prevRow]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
@@ -2648,14 +2648,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     // 批次版 el_order_open_item_counts()（唯一實作見 eng_log_lib.php），避免每列各查一次。
     require_once __DIR__ . '/../../src/common/eng_log_lib.php';
     el_ensure_schema($pdo);
-    // [order_id => ['count'=>N,'question'=>最新一條未處理問題,'target_type'=>?,'target_label'=>?]]
-    // 2026-10-05 使用者實測回報：只有數字要點進去才看得到內容，不方便——改成一併帶出
-    // 最新一條問題文字，清單上直接看得到，不必每張都點開才知道在問什麼。
+    // [order_id => ['open_count'=>N,'total_count'=>N,'question'=>預覽問題,'status'=>,'target_type'=>?,'target_label'=>?]]
+    // 2026-10-05 使用者實測回報：①只有數字要點進去才看得到內容，不方便——改成一併帶出
+    // 問題文字，清單上直接看得到；②全部已處理完時只看 open_count 會判定成「沒有案件」，
+    // 使用者完全看不出有歷史紀錄——el_order_item_summary() 改成只要有過任何問題就回傳。
     $ate_q_map = [];
     if (!empty($order_list)) {
         try {
             $oidsQ = array_values(array_filter(array_map('intval', array_column($order_list, 'Order_id'))));
-            $ate_q_map = el_order_open_rows($pdo, $oidsQ);
+            $ate_q_map = el_order_item_summary($pdo, $oidsQ);
         } catch (Throwable $eQ) { $ate_q_map = []; }
     }
 
@@ -3424,25 +3425,39 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     // 打字→跳窗選對象(業務/客戶/廠商/純備註)→可多題→多輪回覆→逐題可標記已處理。
                     // 既有的「溝通紀錄」(order_ate_note_log) 是改版前按過「已處理」的歷史快照，
                     // 原樣保留唯讀查看；舊的自由文字內容已由遷移腳本搬成第一筆「純備註」問題項。
-                    // 2026-10-05 使用者實測回報：只顯示數字要點進去才看得到內容——改成直接帶出
-                    // 最新一條未處理問題的預覽文字，掃一眼列表就看得到，不必每張都點開查看。
+                    // 2026-10-05 使用者實測回報：①只顯示數字要點進去才看得到內容——改成直接帶出
+                    // 一條問題文字的預覽，掃一眼列表就看得到；②全部已處理完時原本只顯示「＋新增」，
+                    // 看不出有歷史紀錄——改成只要這張訂單「有過任何問題」就顯示預覽卡片（已完成的
+                    // 用不同樣式標示，不會跟還沒處理的搞混），不是只看目前有沒有未處理的才顯示。
                     $_ateQRow = $ate_q_map[(int)$order['Order_id']] ?? null;
-                    $_ateQOpen = $_ateQRow ? (int)$_ateQRow['count'] : 0;
+                    $_ateQOpen = $_ateQRow ? (int)$_ateQRow['open_count'] : 0;
                     $_ateLogCnt = (int)($ate_log_map[(int)$order['Order_id']] ?? 0);
                     ?>
                     <div class="ate-q-cell">
                         <?php if ($_ateQRow): ?>
                         <?php
+                        // PS＝純備註的前端簡寫（使用者要求），其餘對象維持完整名稱＋人名/客戶/廠商
                         $_ateQTMap = ['customer' => '客戶', 'maker' => '廠商', 'user' => '業務'];
                         $_ateQTT = $_ateQRow['target_type'];
-                        $_ateQPrefix = $_ateQTT ? ('【' . ($_ateQTMap[$_ateQTT] ?? $_ateQTT) . '：' . (string)$_ateQRow['target_label'] . '】') : '【純備註】';
+                        $_ateQPrefix = $_ateQTT ? ('【' . ($_ateQTMap[$_ateQTT] ?? $_ateQTT) . '：' . (string)$_ateQRow['target_label'] . '】') : '【PS】';
                         $_ateQText = (string)$_ateQRow['question'];
-                        $_ateQShort = mb_substr($_ateQText, 0, 22) . (mb_strlen($_ateQText) > 22 ? '…' : '');
+                        $_ateQFull = $_ateQPrefix . $_ateQText;
+                        $_ateQDone = ($_ateQOpen === 0);
                         ?>
-                        <div class="ate-q-preview" onclick="ateQOpen(<?= (int)$order['Order_id'] ?>)"
-                             title="<?= safe_html($_ateQPrefix . $_ateQText) ?>（點擊查看／回覆）">
-                            <span class="ate-q-badge-inline"><i class="fa fa-flag"></i> <?= $_ateQOpen ?></span>
-                            <span class="ate-q-preview-txt"><?= safe_html($_ateQPrefix . $_ateQShort) ?></span>
+                        <div class="ate-q-preview<?= $_ateQDone ? ' ate-q-preview-done' : '' ?>"
+                             onclick="ateQOpen(<?= (int)$order['Order_id'] ?>)"
+                             title="<?= safe_html($_ateQFull) ?>（點擊查看／回覆）">
+                            <div class="ate-q-preview-head">
+                                <?php if (!$_ateQDone): ?>
+                                <span class="ate-q-badge-inline"><i class="fa fa-flag"></i> <?= $_ateQOpen ?></span>
+                                <?php else: ?>
+                                <span class="ate-q-badge-inline ate-q-badge-done"><i class="fa fa-check"></i> 已完成</span>
+                                <?php endif; ?>
+                            </div>
+                            <div class="ate-q-preview-txt"><?= safe_html($_ateQFull) ?></div>
+                            <?php if (mb_strlen($_ateQFull) > 36): ?>
+                            <div class="ate-q-preview-more">還有更多</div>
+                            <?php endif; ?>
                         </div>
                         <?php elseif ($can_design_qa): ?>
                         <button type="button" class="ate-q-add-btn" onclick="ateQOpen(<?= (int)$order['Order_id'] ?>)"
@@ -3915,14 +3930,23 @@ foreach($dCounts as $c) {
         .ate-q-add-btn { border:1px solid; border-radius:3px; font-size:10px; line-height:1.6;
             padding:1px 6px; cursor:pointer; background:#FAF6EF; border-color:#D8CBB8; color:#6b5638; }
         .ate-q-add-btn:hover { background:#F1E8D9; }
-        /* 2026-10-05：徽章+預覽文字，點一下跟按鈕一樣可開跳窗，但平常就看得到內容是什麼 */
-        .ate-q-preview { display:flex; align-items:center; gap:4px; cursor:pointer; border:1px solid #E8BCA9;
-            border-radius:3px; background:#FDF1E3; padding:1px 6px; max-width:100%; }
+        /* 2026-10-05：徽章+預覽文字，點一下跟按鈕一樣可開跳窗，但平常就看得到內容是什麼。
+           寬度比照舊版 .table-textarea（width:100%;max-width:400px），文字改成多行自動換行
+           （不是單行省略號），超過顯示「還有更多」，點擊開跳窗看完整內容——跟舊版
+           .note-more-hint「內容超過5行，點擊展開」同一種體驗。 */
+        .ate-q-preview { display:block; cursor:pointer; border:1px solid #E8BCA9; border-radius:3px;
+            background:#FDF1E3; padding:3px 6px; width:100%; max-width:400px; box-sizing:border-box; }
         .ate-q-preview:hover { background:#F7DFC5; }
+        .ate-q-preview-done { background:#FAF6EF; border-color:#D8CBB8; }
+        .ate-q-preview-done:hover { background:#F1E8D9; }
+        .ate-q-preview-head { margin-bottom:2px; }
         .ate-q-badge-inline { background:#DD5138; color:#fff; border-radius:3px; font-size:10px;
-            line-height:1.5; padding:0 4px; flex:0 0 auto; }
-        .ate-q-preview-txt { font-size:11px; color:#8a4b12; white-space:nowrap; overflow:hidden;
-            text-overflow:ellipsis; }
+            line-height:1.5; padding:0 4px; display:inline-block; }
+        .ate-q-badge-done { background:#8a9a7a; }
+        .ate-q-preview-txt { font-size:11px; color:#8a4b12; white-space:normal; word-break:break-word;
+            display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+        .ate-q-preview-done .ate-q-preview-txt { color:#6b5638; }
+        .ate-q-preview-more { font-size:10px; color:#b36a1e; text-decoration:underline; margin-top:1px; }
         #ate-q-modal .modal-dialog { max-width:600px; width:92%; }
         #ate-q-modal .modal-body { max-height:72vh; overflow-y:auto; padding:14px; }
         .ate-q-item { border:1px solid #EADFCD; border-left:3px solid #F0A24B; border-radius:4px;
@@ -3942,9 +3966,9 @@ foreach($dCounts as $c) {
         .ate-q-btn-ok:hover { background:#F7DFC5; }
         .ate-q-replybox { margin-top:6px; border-top:1px dashed #EADFCD; padding-top:6px; }
         .ate-q-replybox textarea { font-size:12px; margin-bottom:4px; }
-        .ate-q-replydate { display:flex; align-items:center; gap:5px; margin-bottom:4px; }
-        .ate-q-replydate label { font-size:11px; color:#6b5638; font-weight:400; margin:0; white-space:nowrap; }
-        .ate-q-replydate input { font-size:12px; padding:2px 5px; height:24px; width:150px; }
+        .ate-q-replyby, .ate-q-replydate { display:flex; align-items:center; gap:5px; margin-bottom:4px; }
+        .ate-q-replyby label, .ate-q-replydate label { font-size:11px; color:#6b5638; font-weight:400; margin:0; white-space:nowrap; }
+        .ate-q-replyby input, .ate-q-replydate input { font-size:12px; padding:2px 5px; height:24px; width:150px; }
         .ate-q-chk { display:block; font-size:11px; color:#6b5638; font-weight:400; margin-bottom:4px; }
         .ate-q-composer { border-top:2px solid #EADFCD; margin-top:10px; padding-top:10px; }
         .ate-q-add-title { font-size:12px; color:#8a4b12; font-weight:700; margin-bottom:6px; }
@@ -8462,7 +8486,7 @@ foreach($dCounts as $c) {
         }
 
         function ateQTargetLabel(it) {
-            if (!it.target_type) return '純備註';
+            if (!it.target_type) return 'PS';   // 純備註前端簡寫（使用者要求）
             var map = { customer: '客戶', maker: '廠商', user: '業務' };
             return (map[it.target_type] || it.target_type) + '：' + (it.target_label || '（未指定）');
         }
@@ -8505,7 +8529,12 @@ foreach($dCounts as $c) {
                 + repliesHtml
                 + '<div class="ate-q-item-actions">' + actions + '</div>'
                 + '<div class="ate-q-replybox" id="ate-q-replybox-' + it.id + '" style="display:none;">'
-                +   '<textarea class="form-control" rows="2" placeholder="輸入回覆內容…" id="ate-q-replytxt-' + it.id + '"></textarea>'
+                +   '<textarea class="form-control" rows="2" placeholder="輸入回覆內容…按 Enter 直接送出，Shift+Enter 換行" '
+                +     'id="ate-q-replytxt-' + it.id + '" onkeydown="ateQReplyKeyDown(event,' + it.id + ')"></textarea>'
+                +   '<div class="ate-q-replyby"><label>回覆對象：</label>'
+                // 預設帶出這條問題本來指定的對象（這題是問業務/客戶/廠商誰，回覆自然也掛在
+                // 同一個對象名下），使用者仍可改成實際回覆的人（例如業務轉述客戶窗口的話）
+                +     '<input type="text" class="form-control" id="ate-q-replyby-' + it.id + '" value="' + escapeHtml(it.target_label || '') + '" placeholder="對方是誰（可留空）"></div>'
                 +   '<div class="ate-q-replydate"><label>回覆日期：</label>'
                 +     '<input type="date" class="form-control" id="ate-q-replydate-' + it.id + '" value="' + escapeHtml(today) + '" max="' + escapeHtml(today) + '"></div>'
                 +   (ATE_Q.canResolve ? '<label class="ate-q-chk"><input type="checkbox" id="ate-q-replyok-' + it.id + '"> 回覆後直接標記已處理</label>' : '')
@@ -8515,19 +8544,30 @@ foreach($dCounts as $c) {
 
         function ateQToggleReplyBox(itemId) { $('#ate-q-replybox-' + itemId).toggle(); }
 
+        // Enter 直接送出、Shift+Enter 換行，比照舊版設計備註 handleKeyDown() 同一種操作習慣
+        function ateQReplyKeyDown(e, itemId) {
+            if ((e.key === 'Enter' || e.keyCode === 13) && !e.shiftKey) {
+                e.preventDefault();
+                ateQSubmitReply(itemId);
+            }
+        }
+
         function ateQSubmitReply(itemId) {
             var $ta = $('#ate-q-replytxt-' + itemId);
             var txt = $.trim($ta.val());
             if (!txt) { showToast('請輸入回覆內容'); return; }
+            var replyBy = $.trim($('#ate-q-replyby-' + itemId).val() || '');
             // 回覆日期預設今天，可自行改成實際回覆的那一天（例如客戶是電話回的、隔幾天才補登）；
             // 不可以是未來日期（後端 el_reply_add() 同規則再擋一次）
             var repliedOn = $('#ate-q-replydate-' + itemId).val() || '';
             var resolve = $('#ate-q-replyok-' + itemId).is(':checked') ? 1 : 0;
             $.post('', { action: 'ate_q_reply', log_id: ATE_Q.logId, item_ids: JSON.stringify([itemId]),
-                         content: txt, replied_on: repliedOn, resolve: resolve }, function(res) {
+                         content: txt, reply_by: replyBy, replied_on: repliedOn, resolve: resolve }, function(res) {
                 if (!res || !res.success) { showToast((res && res.message) || '回覆失敗'); return; }
+                // 比照舊版設計備註存檔成功的視覺回饋：欄位先變綠再重新整理，不是存完整個跳窗瞬間換畫面
+                $ta.css('background-color', '#d4edda');
                 ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview);
-                ateQOpen(ATE_Q.orderId);
+                setTimeout(function() { ateQOpen(ATE_Q.orderId); }, 450);
             }, 'json').fail(function() { showToast('回覆失敗，請重試'); });
         }
 
@@ -8576,7 +8616,8 @@ foreach($dCounts as $c) {
             var delBtn = ATE_Q.rows.length > 1
                 ? '<button type="button" class="btn btn-xs btn-link" onclick="ateQRowDelAt(' + idx + ')" title="移除這一條"><i class="fa fa-times"></i></button>' : '';
             return '<tr>'
-                + '<td style="width:44%;"><textarea class="form-control ate-q-qtext" rows="2" placeholder="輸入問題內容…" oninput="ateQRowQChange(' + idx + ',this.value)">' + escapeHtml(r.question) + '</textarea></td>'
+                + '<td style="width:44%;"><textarea class="form-control ate-q-qtext" rows="2" placeholder="輸入問題內容…按 Enter 直接送出，Shift+Enter 換行，↓可新增下一條" '
+                +   'oninput="ateQRowQChange(' + idx + ',this.value)" onkeydown="ateQRowKeyDown(event,' + idx + ')">' + escapeHtml(r.question) + '</textarea></td>'
                 + '<td style="width:18%;">' + typeHtml + '</td>'
                 + '<td style="width:30%;">' + targetHtml + '</td>'
                 + '<td style="width:8%;text-align:center;">' + delBtn + '</td>'
@@ -8606,6 +8647,15 @@ foreach($dCounts as $c) {
         function ateQRowDel() { if (ATE_Q.rows.length > 1) { ATE_Q.rows.pop(); ateQRedrawComposer(); } }
         function ateQRowDelAt(idx) { if (ATE_Q.rows.length > 1) { ATE_Q.rows.splice(idx, 1); ateQRedrawComposer(); } }
 
+        // Enter 直接送出（提交整個 composer，跟按「送出」同一個動作）、Shift+Enter 換行、
+        // ↓（最後一列時）沿用共用檔 eg_input_rules.js 自動新增下一條，比照舊版設計備註操作習慣
+        function ateQRowKeyDown(e, idx) {
+            if ((e.key === 'Enter' || e.keyCode === 13) && !e.shiftKey) {
+                e.preventDefault();
+                ateQSubmitNew();
+            }
+        }
+
         function ateQSubmitNew() {
             var out = []; var bad = false;
             ATE_Q.rows.forEach(function(r) {
@@ -8617,26 +8667,37 @@ foreach($dCounts as $c) {
             if (bad) { showToast('有問題選了對象類別卻沒有選到對象，請補選'); return; }
             if (!out.length) { showToast('請至少填寫一條問題內容'); return; }
             $('#ate-q-submit-new').prop('disabled', true);
+            $('.ate-q-qtext').css('background-color', '#d4edda');   // 比照舊版存檔成功的綠色回饋
             $.post('', { action: 'ate_q_add', order_id: ATE_Q.orderId, items: JSON.stringify(out) }, function(res) {
                 $('#ate-q-submit-new').prop('disabled', false);
-                if (!res || !res.success) { showToast((res && res.message) || '新增失敗'); return; }
+                if (!res || !res.success) { $('.ate-q-qtext').css('background-color', ''); showToast((res && res.message) || '新增失敗'); return; }
                 ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview);
-                ateQOpen(ATE_Q.orderId);
-            }, 'json').fail(function() { $('#ate-q-submit-new').prop('disabled', false); showToast('新增失敗，請重試'); });
+                setTimeout(function() { ateQOpen(ATE_Q.orderId); }, 450);
+            }, 'json').fail(function() { $('#ate-q-submit-new').prop('disabled', false); $('.ate-q-qtext').css('background-color', ''); showToast('新增失敗，請重試'); });
         }
 
         // 只局部更新這一列的徽章+預覽文字，不整頁重載（比照 applySyncedCustomerToRow 既有模式）
+        // preview 的 target_type 為 null 時顯示【PS】（純備註前端簡寫，使用者要求）；
+        // 全部已處理完（openCount=0 但 preview 仍有內容）要顯示「已完成」卡片，不可以
+        // 直接退回「＋新增」——那樣會讓使用者看不出這張訂單其實有歷史紀錄。
         function ateQApplyBadge(orderId, openCount, preview) {
             var $cell = $('td[data-ate-q-order="' + orderId + '"] .ate-q-cell');
             if (!$cell.length) return;
             openCount = parseInt(openCount, 10) || 0;
-            if (openCount > 0 && preview) {
-                var prefix = '【' + ateQTargetLabel({ target_type: preview.target_type, target_label: preview.target_label }) + '】';
-                var q = preview.question || '';
-                var shortQ = q.length > 22 ? (q.substr(0, 22) + '…') : q;
-                $cell.html('<div class="ate-q-preview" onclick="ateQOpen(' + orderId + ')" title="' + escapeHtml(prefix + q) + '（點擊查看／回覆）">'
-                    + '<span class="ate-q-badge-inline"><i class="fa fa-flag"></i> ' + openCount + '</span>'
-                    + '<span class="ate-q-preview-txt">' + escapeHtml(prefix + shortQ) + '</span></div>');
+            if (preview) {
+                var tMap = { customer: '客戶', maker: '廠商', user: '業務' };
+                var prefix = preview.target_type
+                    ? ('【' + (tMap[preview.target_type] || preview.target_type) + '：' + (preview.target_label || '（未指定）') + '】')
+                    : '【PS】';
+                var full = prefix + (preview.question || '');
+                var done = openCount === 0;
+                var badge = done
+                    ? '<span class="ate-q-badge-inline ate-q-badge-done"><i class="fa fa-check"></i> 已完成</span>'
+                    : '<span class="ate-q-badge-inline"><i class="fa fa-flag"></i> ' + openCount + '</span>';
+                var more = full.length > 36 ? '<div class="ate-q-preview-more">還有更多</div>' : '';
+                $cell.html('<div class="ate-q-preview' + (done ? ' ate-q-preview-done' : '') + '" onclick="ateQOpen(' + orderId + ')" title="' + escapeHtml(full) + '（點擊查看／回覆）">'
+                    + '<div class="ate-q-preview-head">' + badge + '</div>'
+                    + '<div class="ate-q-preview-txt">' + escapeHtml(full) + '</div>' + more + '</div>');
             } else if (window.OT_CAN_DESIGN_QA) {
                 $cell.html('<button type="button" class="ate-q-add-btn" onclick="ateQOpen(' + orderId + ')" title="新增設計備註問題"><i class="fa fa-plus"></i> 新增</button>');
             } else {
