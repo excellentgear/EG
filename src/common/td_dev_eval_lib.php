@@ -14,9 +14,10 @@
  * 自行填寫本部門負責的項目（TD_DEV_EVAL_TEMPLATE 第3欄與 TD_DEV_EVAL_SLOTS 標籤字串一致比對歸屬）
  * +意見(非必填)後簽核；六部門不限順序皆可平行簽，但需六部門全部簽完才能簽「生產課決行」，決行完才能
  * 簽「總經理決行」；總經理簽完自動 status=closed 並記錄 closed_at。各階段完成會通知下一階段的合格簽核池。
- * 超級管理員（isAdmin，非僅td_dev_eval_admin模組角色）另有「32項快速設定」與「全部自動簽核(指定日期)」
- * 兩個補舊資料專用動作，不受上述送出/簽核狀態限制；自動簽核時間比照 ai-rules/21：業務日期與精確時間戳
- * 分離存放、時間跟送出時刻隨機錯開5~30分鐘、不可跨天。
+ * 管理員（canAdmin：全站超級管理員 isAdmin，或持有本頁模組角色 td_dev_eval_admin 的「本頁管理員」，
+ * 2026-10-05 使用者更正為兩者同權，見 ai-rules/26-頁面管理員角色.md）另有「32項快速設定」與
+ * 「全部自動簽核(指定日期)」兩個補舊資料專用動作，不受上述送出/簽核狀態限制；自動簽核時間比照
+ * ai-rules/21：業務日期與精確時間戳分離存放、時間跟送出時刻隨機錯開5~30分鐘、不可跨天。
  */
 
 /** 固定模板：32 項確認項目（項次=>[區分, 評估項目, 評估單位]），AS9100 表單本身格式固定，內容(答案)才是使用者填的 */
@@ -470,10 +471,10 @@ function td_dev_eval_answer_write(PDO $db, int $docId, array $map): int {
  *   ・其餘一律要 status=submitted，且該項次所屬部門欄「本人在簽核池內」「該欄尚未有人簽核」
  * 已經簽核完成的欄位一律不可再改——那等於從側門繞過已完成的簽認。
  */
-function td_dev_eval_answer_filter_writable(PDO $db, array $doc, array $answers, int $uid, bool $isSuperAdmin, array &$rejected = []): array {
+function td_dev_eval_answer_filter_writable(PDO $db, array $doc, array $answers, int $uid, bool $isAdmin, array &$rejected = []): array {
     $rejected = [];
     $out = [];
-    if ($isSuperAdmin) {                       // 全表填寫模式：不受狀態與部門限制
+    if ($isAdmin) {                            // 全表填寫模式（本頁管理員或全站超管）：不受狀態與部門限制
         foreach ($answers as $no => $v) $out[(int)$no] = $v;
         return $out;
     }

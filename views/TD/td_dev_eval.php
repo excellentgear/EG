@@ -255,16 +255,16 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
         <div class="te-decision-grp" id="gmDecisionGrp"></div>
         <table class="te-slot"><tbody id="gmBody"></tbody></table>
 
-        <div style="margin-top:10px;<?= $perms['isAdmin']?'':'display:none;' ?>">
+        <div style="margin-top:10px;<?= $perms['canAdmin']?'':'display:none;' ?>">
             <button type="button" class="te-row-btn" id="btnFullEditMode"><i class="fa fa-unlock-alt"></i> 開啟全表填寫模式（操作確認密碼）</button>
-            <span style="font-size:11px;color:#8a6d45;margin-left:6px;">僅系統管理員可用：輸入操作確認密碼後可自行填寫上方全部32項確認結果，不受部門/簽核順序限制；填完後仍需用下方「補登簽核」或「全部自動簽核」正式完成簽核。</span>
+            <span style="font-size:11px;color:#8a6d45;margin-left:6px;">僅管理員可用：輸入操作確認密碼後可自行填寫上方全部32項確認結果，不受部門/簽核順序限制；填完後仍需用下方「補登簽核」或「全部自動簽核」正式完成簽核。</span>
         </div>
         <div style="margin-top:10px;<?= $canBackfill?'':'display:none;' ?>">
             <button type="button" class="te-row-btn" id="btnBackfillOpen"><i class="fa fa-user-secret"></i> 補登簽核（操作確認密碼）</button>
         </div>
 
-        <div class="te-admin-panel" id="adminQuickPanel" style="<?= $perms['isAdmin']?'':'display:none;' ?>">
-            <h5><i class="fa fa-user-secret"></i> 系統管理員快速設定（僅補歷史紙本資料用，會跳過送出/簽核流程）</h5>
+        <div class="te-admin-panel" id="adminQuickPanel" style="<?= $perms['canAdmin']?'':'display:none;' ?>">
+            <h5><i class="fa fa-user-secret"></i> 管理員快速設定（僅補歷史紙本資料用，會跳過送出/簽核流程）</h5>
             <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">確認項目結果請先按上方「開啟全表填寫模式」輸入密碼後編輯；決行結果請在下方選擇（不是上方表格內的選項——上方選項一樣要照正常流程走完六部門/生產課才會開放），選好後按下方按鈕一次把尚未簽核的欄位全部自動簽核。<b>表頭「填表日期」會一併自動改成下方指定的簽核業務日期</b>（補紙本時兩者本來就是同一天）。</div>
             <label style="display:inline-block;margin:0 8px 0 0;">決行結果</label>
             <select id="adminDecisionSelect" style="width:140px;display:inline-block;">
@@ -428,7 +428,6 @@ var PART_API = '../../src/store/PartPicker_API.php';
 var VIEWER_URL = '../pm/bom_viewer.php';
 var CAN_EDIT = <?= $perms['canEdit'] ? 'true' : 'false' ?>;
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
-var IS_SUPER_ADMIN = <?= $perms['isAdmin'] ? 'true' : 'false' ?>;
 var CUR_USER_NAME = <?= json_encode($teUser ? $teUser['user_cname'] : '', JSON_UNESCAPED_UNICODE) ?>;
 window.__ownCompany = <?= json_encode($companyName, JSON_UNESCAPED_UNICODE) ?>; // eg_stamp.js 簽章圖章要靠這個顯示公司名稱，跳窗內即時簽核也要有，不是只有列印時才設
 var DEFAULT_PRODUCT_NAME = <?= json_encode($defaultProductName, JSON_UNESCAPED_UNICODE) ?>; // 產品名稱預設值：全部產品通用單一值，不是特定料號（2026-08-13使用者更正）
@@ -729,7 +728,7 @@ function applyStatusUI(){
     if (CUR_ID) {
         badge.show().attr('class', 'te-status te-status-'+CUR_STATUS).text(STATUS_LABELS[CUR_STATUS]||CUR_STATUS);
     } else badge.hide();
-    var locked = CUR_ID && CUR_STATUS !== 'draft' && !IS_SUPER_ADMIN;
+    var locked = CUR_ID && CUR_STATUS !== 'draft' && !CAN_ADMIN;
     $('#hdrLockedTip').toggle(!!locked);
     $('#chkDraftTip').toggle(CUR_STATUS === 'draft' && !FULL_EDIT_MODE);
     $('#fCustomerName,#fPartNo,#fProductName,#fEstQty,#fFillDate,#fSampleTime').prop('disabled', !!locked);

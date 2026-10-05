@@ -152,10 +152,10 @@ case 'get': {
             'signed_by_name'=>$deptSign[$d]['signed_by_name'] ?? null,
             'signed_at'=>$deptSign[$d]['signed_at'] ?? null,
             'note'=>$deptSign[$d]['note'] ?? null,
-            'can_fill'=>cnrv_can_fill_dept($db, $uid, $d, $perms['isAdmin']),
-            // is_auto_sign／is_backfill 只給管理員在畫面上看（2026-10-05 使用者要求「把自動審核紀錄
-            // 留在LOG中只提供管理員查看，其他前端一律是正常簽核」），一般使用者看到的 signed_by_name
-            // 本來就已經是真人姓名，不必再隱藏這兩個旗標本身。
+            'can_fill'=>cnrv_can_fill_dept($db, $uid, $d, $perms['canAdmin']),
+            // is_auto_sign／is_backfill：這一章是管理員自動帶入／補登的，資料本身不是秘密（一般使用者
+            // 看到的 signed_by_name 本來就已經是真人姓名），詳情頁目前不逐部門顯示，彙總版在清單頁
+            // 「顯示管理員代簽標記」開關（has_admin_sign，見 case 'list'）。
             'is_auto_sign'=>(bool)($deptSign[$d]['is_auto_sign'] ?? false),
             'is_backfill'=>(bool)($deptSign[$d]['is_backfill'] ?? false),
         ];
@@ -163,10 +163,10 @@ case 'get': {
     jout([
         'doc'=>$doc, 'items'=>$items, 'depts'=>$depts,
         'all_depts_signed'=>cnrv_all_depts_signed($db, $id),
-        'can_decide'=>cnrv_can_decide($db, $uid, $perms['isAdmin']),
+        'can_decide'=>cnrv_can_decide($db, $uid, $perms['canAdmin']),
         'can_edit_header'=>($doc['status']==='draft' && ((int)$doc['created_by']===$uid || $perms['canAdmin'])),
         'gm_signer'=>cnrv_gm_signer($db, $id),
-        'is_admin'=>$perms['isAdmin'],
+        'is_admin'=>$perms['canAdmin'],
     ]);
 }
 case 'list': {
@@ -176,7 +176,7 @@ case 'list': {
     ]);
     // has_admin_sign（這張單有沒有管理員自動/代為簽核）只提供管理員查看（2026-10-05 使用者要求），
     // 非管理員的清單一律拿掉這個欄位，前端「顯示管理員代簽標記」開關也只對管理員輸出。
-    if (!$perms['isAdmin']) { foreach ($r['rows'] as &$row) unset($row['has_admin_sign']); unset($row); }
+    if (!$perms['canAdmin']) { foreach ($r['rows'] as &$row) unset($row['has_admin_sign']); unset($row); }
     jout($r);
 }
 
@@ -184,7 +184,7 @@ case 'list': {
 case 'item_save': {
     cnrv_need_csrf();
     try {
-        cnrv_item_save($db, (int)($_POST['doc_id'] ?? 0), (int)($_POST['item_id'] ?? 0), $uid, $perms['isAdmin'],
+        cnrv_item_save($db, (int)($_POST['doc_id'] ?? 0), (int)($_POST['item_id'] ?? 0), $uid, $perms['canAdmin'],
             ($_POST['value'] ?? '') === '' ? null : (string)$_POST['value'],
             ($_POST['note'] ?? '') === '' ? null : (string)$_POST['note'], $uname);
     } catch (Throwable $e) { jerr($e->getMessage()); }
@@ -203,7 +203,7 @@ case 'dept_sign': {
     cnrv_need_csrf();
     try {
         cnrv_dept_sign($db, (int)($_POST['doc_id'] ?? 0), (int)($_POST['dept_id'] ?? 0), $uid, $uname,
-            ($_POST['note'] ?? '') === '' ? null : (string)$_POST['note'], $perms['isAdmin']);
+            ($_POST['note'] ?? '') === '' ? null : (string)$_POST['note'], $perms['canAdmin']);
     } catch (Throwable $e) { jerr($e->getMessage()); }
     jout([]);
 }
@@ -211,13 +211,13 @@ case 'decide': {
     cnrv_need_csrf();
     try {
         cnrv_decide($db, (int)($_POST['doc_id'] ?? 0), $uid, $uname, (string)($_POST['decision'] ?? ''),
-            ($_POST['note'] ?? '') === '' ? null : (string)$_POST['note'], $perms['isAdmin']);
+            ($_POST['note'] ?? '') === '' ? null : (string)$_POST['note'], $perms['canAdmin']);
     } catch (Throwable $e) { jerr($e->getMessage()); }
     jout([]);
 }
 case 'approve': {
     cnrv_need_csrf();
-    try { cnrv_approve($db, (int)($_POST['doc_id'] ?? 0), $uid, $uname, $perms['isAdmin']); }
+    try { cnrv_approve($db, (int)($_POST['doc_id'] ?? 0), $uid, $uname, $perms['canAdmin']); }
     catch (Throwable $e) { jerr($e->getMessage()); }
     jout([]);
 }

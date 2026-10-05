@@ -34,8 +34,6 @@ function jout($arr) { echo json_encode($arr, JSON_UNESCAPED_UNICODE); exit; }
 function needView(array $perms) { if (!$perms['canView']) jout(['success'=>false,'message'=>'無檢閱權限']); }
 function needEdit(array $perms) { if (!$perms['canEdit']) jout(['success'=>false,'message'=>'無登錄權限']); }
 function needAdmin(array $perms) { if (!$perms['canAdmin']) jout(['success'=>false,'message'=>'無管理權限']); }
-/** 32項快速設定／全部自動簽核：僅限系統超級管理員(isAdmin)，比一般模組管理員(td_dev_eval_admin)更高，僅補舊資料用 */
-function needSuperAdmin(array $perms) { if (!$perms['isAdmin']) jout(['success'=>false,'message'=>'僅系統管理員可使用此功能']); }
 
 const RESULT_LABELS = ['yes'=>'是', 'no'=>'否', 'na'=>'N/A'];
 
@@ -163,7 +161,7 @@ case 'save':
             $st->execute([$id]);
             $curStatus = $st->fetchColumn();
             if ($curStatus === false) throw new Exception('找不到該筆或已刪除');
-            if ($curStatus !== 'draft' && !$perms['isAdmin']) throw new Exception('已送出後表頭與確認項目改為各部門於簽核關卡自行填寫，僅系統管理員可整批修改');
+            if ($curStatus !== 'draft' && !$perms['canAdmin']) throw new Exception('已送出後表頭與確認項目改為各部門於簽核關卡自行填寫，僅管理員可整批修改');
             $st = $db->prepare("UPDATE td_dev_eval SET customer_name=?, part_d_id=?, part_no_text=?, product_name=?,
                                  est_qty=?, fill_date=?, sample_time=?, updated_at=NOW(), updated_by=?, updated_by_name=? WHERE id=?");
             $st->execute([$customerName ?: null, $partDId ?: null, $partNoText ?: null, $productName ?: null,
@@ -307,7 +305,7 @@ case 'answer_save':
     if (!$doc) jout(['success'=>false,'message'=>'找不到該筆或已刪除']);
 
     $rejected = [];
-    $writable = td_dev_eval_answer_filter_writable($db, $doc, $answersRaw, $uid, !empty($perms['isAdmin']), $rejected);
+    $writable = td_dev_eval_answer_filter_writable($db, $doc, $answersRaw, $uid, !empty($perms['canAdmin']), $rejected);
     if (!$writable) {
         // 一項都寫不進去才算失敗，要講清楚原因（點開即刷新鐵則：多半是別人已經簽走了這一關）
         jout(['success'=>false,'message'=>$rejected ? implode('；', array_slice(array_unique($rejected), 0, 3)) : '沒有可儲存的項目', 'reload'=>true]);
@@ -319,9 +317,12 @@ case 'answer_save':
     } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'自動儲存失敗：'.$e->getMessage()]); }
     jout(['success'=>true, 'saved'=>$n, 'skipped'=>array_values(array_unique($rejected))]);
 
-// ── 超級管理員：32項快速設定 + 全部自動簽核(指定日期)，補舊資料用，不受送出/簽核狀態限制 ──
+// ── 管理員：32項快速設定 + 全部自動簽核(指定日期)，補舊資料用，不受送出/簽核狀態限制 ──
+// 2026-10-05 使用者更正：本頁管理員角色（td_dev_eval_admin）要跟全站超級管理員有同等的本頁
+// 管理權限（含這幾個自動簽核/整批修改功能），不再限定僅系統超級管理員才能用——canAdmin 已經
+// 等於「isAdmin 或持有 td_dev_eval_admin 角色」，故只要改用 needAdmin() 即可，不必另開一套。
 case 'admin_auto_sign_all':
-    needSuperAdmin($perms);
+    needAdmin($perms);
     $docId = (int)($_POST['doc_id'] ?? 0);
     $bizDate = trim((string)($_POST['biz_date'] ?? ''));
     $applyDefaults = !empty($_POST['apply_defaults']);
@@ -331,11 +332,11 @@ case 'admin_auto_sign_all':
     if (!$r['ok']) jout(['success'=>false,'message'=>$r['msg']]);
     jout(['success'=>true]);
 
-// ── 確認項目及結果預設值：超級管理員設定，供「全部自動簽核」可選套用 ──
-// ── 開啟全表填寫模式：僅系統管理員(isAdmin)，輸入操作確認密碼後前端才放行不受部門/簽核順序限制編輯32項 ──
+// ── 確認項目及結果預設值：管理員設定，供「全部自動簽核」可選套用 ──
+// ── 開啟全表填寫模式：管理員（canAdmin），輸入操作確認密碼後前端才放行不受部門/簽核順序限制編輯32項 ──
 // 只驗證密碼，不寫入任何資料；真正的資料寫入仍走 save/sign/backfill_sign_all/admin_auto_sign_all 既有動作與各自的規則。
 case 'admin_full_edit_check':
-    needSuperAdmin($perms);
+    needAdmin($perms);
     $password = (string)($_POST['password'] ?? '');
     $chk = eg_confirm_password_verify($db, $uid, $password);
     if (!$chk['ok']) jout(['success'=>false,'message'=>$chk['msg']]);
@@ -346,7 +347,7 @@ case 'answer_defaults_get':
     jout(['success'=>true, 'defaults'=>td_dev_eval_answer_defaults_get($db)]);
 
 case 'answer_defaults_save':
-    needSuperAdmin($perms);
+    needAdmin($perms);
     $map = json_decode((string)($_POST['defaults'] ?? '{}'), true);
     if (!is_array($map)) $map = [];
     td_dev_eval_answer_defaults_save($db, $map, $uid, $uname);
