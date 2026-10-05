@@ -612,9 +612,12 @@ function tplEdit(id){
    「預設值不是合法選項」擋下整列存檔，使用者卻看不出是哪裡出錯。 */
 function tplOptionsChanged(id, el){
     var tr = $('#tplBody tr[data-id='+id+']');
-    var allOpts = CNRV_BASE_OPTIONS.concat($.trim(el.value).split(',').map(function(s){ return $.trim(s); }).filter(Boolean));
+    var allOpts = CNRV_BASE_OPTIONS.concat($.trim(el.value).split(',').map(function(s){ return $.trim(s); }).filter(Boolean).filter(function(s){ return CNRV_BASE_OPTIONS.indexOf(s)===-1; }));
+    // 重建這一列「預設值」的候選清單（datalist 是 renderTpl() 畫表格當下就定型的，
+    // 改了「額外選項」不會自動跟著變，不重建的話剛打的新選項要存檔+重新整個表格才選得到）。
+    $('#tpldl_'+id).html(allOpts.map(function(o){ return '<option value="'+esc(o)+'"></option>'; }).join(''));
     var $dv = tr.find('[data-f=default_value]');
-    if ($dv.val() && allOpts.indexOf($dv.val())===-1) $dv.val('');
+    if ($dv.val() && allOpts.indexOf($dv.val())===-1) $dv.val('');   // 原本選的值如果已經不在新清單裡，清空要求重選
     tplEdit(id);
 }
 function tplAdd(){
