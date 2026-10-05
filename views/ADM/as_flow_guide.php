@@ -586,9 +586,10 @@ $cntIssueOpen = count(array_filter($ISSUES, fn($r) => !$r['ck']));
 // JS 切換分頁時會同步把 ?tab= 寫進網址列（history.replaceState，不觸發導頁），reload 自然帶著這個值回來。
 $curTab = $_GET['tab'] ?? 'doc';
 if (!in_array($curTab, ['doc', 'iss', 'onl', 'adv'], true)) { $curTab = 'doc'; }
-// 管理員關閉「線上表單對照」分頁後，一般角色即使直接帶 ?tab=onl 進來也要退回預設分頁；
-// 管理員本人仍可進入（否則關掉之後連自己都找不到地方打開）。
-if ($curTab === 'onl' && !$showOnlTab && !$isRoleAdmin) { $curTab = 'doc'; }
+// 管理員關閉「線上表單對照」分頁後，一律（含管理者本人）退回預設分頁——使用者明確要求
+// 「設定後管理員畫面一樣也要隱藏才對」。管理員要恢復顯示，走題列右上角的「分頁顯示設定」跳窗，
+// 那顆按鈕獨立於分頁列之外、不受本設定影響，永遠看得到、永遠打得開。
+if ($curTab === 'onl' && !$showOnlTab) { $curTab = 'doc'; }
 
 // 預設顯示的文件
 $cur = $_GET['doc'] ?? 'overview';
@@ -629,10 +630,16 @@ html { overflow-x: hidden; }
           padding:7px 18px; font-size:14px; border-radius:6px 6px 0 0; margin-bottom:-2px; }
 .fg-tab.active { background:#fff; color:#5B3A1E; font-weight:bold; border-bottom:2px solid #fff; }
 .fg-tab .badge-warm { background:#DD5138; color:#fff; border-radius:9px; padding:0 7px; font-size:11px; margin-left:5px; }
-.fg-tab-off { color:#A08B70; font-size:11px; margin-left:4px; }
-.fg-tab-toggle { margin-left:auto; align-self:center; display:flex; align-items:center; gap:6px;
-                 font-size:12.5px; color:#8A6D45; cursor:pointer; user-select:none; }
-.fg-tab-toggle input { cursor:pointer; }
+
+/* 「分頁顯示設定」按鈕（僅管理者看得到，與線上表單對照分頁是否顯示無關，故放題列不放分頁列） */
+.page-set-btn { height:30px; font-size:13px; padding:0 12px; border:1px solid #8A5A2B; border-radius:15px;
+                background:#fff; color:#8A5A2B; cursor:pointer; }
+.page-set-btn:hover { background:#F7E0BD; }
+@media print { .page-set-btn { display:none !important; } }
+.fg-onlset-row { display:flex; align-items:center; gap:10px; margin:10px 0; }
+.fg-onlset-row select { height:32px; font-size:13.5px; padding:0 8px; border:1px solid #D8BE93; border-radius:4px; width:160px; }
+.fg-onlset-cur { font-size:12.5px; color:#8A6D45; }
+.fg-onlset-cur b { color:#5B3A1E; }
 
 .fg-wrap { display:flex; gap:12px; align-items:flex-start; }
 .fg-side { flex:0 0 190px; background:#fff; border:1px solid #E0CBA0; border-radius:8px; padding:8px; box-shadow:0 2px 8px rgba(90,61,30,.10); }
@@ -807,6 +814,9 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
 <div class="fg-title">
   <h2><i class="fa fa-book"></i> AS 流程說明手冊</h2>
   <div style="display:flex;align-items:center;gap:8px;">
+    <?php if ($isRoleAdmin): ?>
+    <button class="page-set-btn" id="btnFgOnlSetting"><i class="fa fa-cog"></i> 分頁顯示設定</button>
+    <?php endif; ?>
     <button class="page-help-btn" id="btnPageHelp"><i class="fa fa-question-circle"></i> 使用說明</button>
     <span class="fg-role">目前角色：<?= htmlspecialchars($roleLabel) ?><i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
   </div>
@@ -823,19 +833,12 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
   <div class="fg-tab <?= $curTab === 'doc' ? 'active' : '' ?>" data-tab="doc"><i class="fa fa-file-text-o"></i> 課室說明文件</div>
   <div class="fg-tab <?= $curTab === 'iss' ? 'active' : '' ?>" data-tab="iss"><i class="fa fa-exclamation-triangle"></i> 待處理問題
     <span class="badge-warm"><?= $cntIssueOpen ?></span></div>
-  <?php if ($showOnlTab || $isRoleAdmin): ?>
+  <?php if ($showOnlTab): ?>
   <div class="fg-tab <?= $curTab === 'onl' ? 'active' : '' ?>" data-tab="onl"><i class="fa fa-bolt"></i> 線上表單對照
-    <span class="badge-warm"><?= $onlineCnt ?>/<?= count($FORMS) ?></span>
-    <?php if (!$showOnlTab): ?><span class="fg-tab-off" title="目前只有管理者看得到：已被設定為不顯示">（已隱藏）</span><?php endif; ?></div>
+    <span class="badge-warm"><?= $onlineCnt ?>/<?= count($FORMS) ?></span></div>
   <?php endif; ?>
   <div class="fg-tab <?= $curTab === 'adv' ? 'active' : '' ?>" data-tab="adv"><i class="fa fa-bullhorn"></i> 稽核建議修改
     <span class="badge-warm"><?= $cntAuditOpen ?></span></div>
-  <?php if ($isRoleAdmin): ?>
-  <label class="fg-tab-toggle" title="關閉後一般角色看不到「線上表單對照」分頁，管理者仍可進入">
-    <input type="checkbox" id="chkShowOnlTab" <?= $showOnlTab ? 'checked' : '' ?>>
-    顯示「線上表單對照」分頁
-  </label>
-  <?php endif; ?>
 </div>
 
 <!-- ═════════ 分頁：課室說明文件 ═════════ -->
@@ -1170,6 +1173,28 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
   <div style="text-align:right;"><button class="btn btn-sm btn-default" onclick="document.getElementById('roleMask').style.display='none'">關閉</button></div>
 </div></div>
 
+<!-- 分頁顯示設定（僅管理者）：使用者明確要求用跳窗設定、不要用勾選；設定後管理者畫面也要跟著隱藏，
+     所以本按鈕刻意放在題列（不在分頁列內），不受設定值影響、永遠看得到打得開。 -->
+<?php if ($isRoleAdmin): ?>
+<div class="fg-mask" id="fgOnlSetMask"><div class="box">
+  <h4><i class="fa fa-cog"></i> 分頁顯示設定</h4>
+  <p style="font-size:13px;color:#5B3A1E;margin-top:0;">設定「線上表單對照」分頁是否顯示。
+    <b>設為隱藏後，包含管理者本人，整頁都看不到這個分頁</b>；要再打開請回到這個跳窗（本按鈕不受此設定影響，一律看得到）。</p>
+  <div class="fg-onlset-row">
+    <label for="fgOnlSetSel" style="font-size:13px;color:#5B3A1E;">線上表單對照分頁：</label>
+    <select id="fgOnlSetSel">
+      <option value="1" <?= $showOnlTab ? 'selected' : '' ?>>顯示</option>
+      <option value="0" <?= !$showOnlTab ? 'selected' : '' ?>>隱藏</option>
+    </select>
+  </div>
+  <p class="fg-onlset-cur">目前狀態：<b><?= $showOnlTab ? '顯示中' : '已隱藏（含管理者畫面）' ?></b></p>
+  <div style="text-align:right;margin-top:10px;">
+    <button class="btn btn-sm btn-default" onclick="document.getElementById('fgOnlSetMask').style.display='none'">取消</button>
+    <button class="btn btn-sm btn-warning" id="btnFgOnlSetSave" style="margin-left:6px;"><i class="fa fa-save"></i> 儲存</button>
+  </div>
+</div></div>
+<?php endif; ?>
+
 <!-- 使用說明（鐵律7：全站統一右上角按鈕＋跳窗） -->
 <div class="fg-mask" id="helpUseMask"><div class="box">
   <h4><i class="fa fa-question-circle"></i> 使用說明 — AS 流程說明手冊</h4>
@@ -1237,10 +1262,10 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
        為特定角色勾選功能碼 <code>asdoc_online_form_beta</code> 開放測試；管理者固定可見。</p>
 
     <h4>管理員可設定是否顯示「線上表單對照」分頁</h4>
-    <p>上方分頁列最右側（僅管理者看得到）有一個「顯示『線上表單對照』分頁」勾選框：取消勾選後，
-       <b>一般角色不會再看到這個分頁</b>（即使直接帶網址 <code>?tab=onl</code> 也會被退回「課室說明文件」），
-       <b>管理者仍可照常進入與操作</b>（分頁上會多標「（已隱藏）」提示目前對一般角色不顯示）。
-       設定值存在 <code>system_parameters(param_group='AS_FLOW_GUIDE', param_key='show_onl_tab')</code>，全站只有這一個開關、對所有人一體適用。</p>
+    <p>題列右上角（僅管理者看得到）有一顆<b>「分頁顯示設定」</b>按鈕，點開跳窗可將「線上表單對照」分頁設為顯示／隱藏。
+       <b>設為隱藏後，連管理者本人的畫面也看不到這個分頁</b>（即使直接帶網址 <code>?tab=onl</code> 也會被退回「課室說明文件」）——
+       這顆設定按鈕本身<b>不受此設定影響，一律看得到、打得開</b>，要再打開顯示就回到這個跳窗重新選「顯示」即可。
+       設定值存在 <code>system_parameters(param_group='AS_FLOW_GUIDE', param_key='show_onl_tab')</code>，全站只有這一個開關、對所有人（含管理者）一體適用。</p>
 
     <h4>權限</h4>
     <p>沿用 AS 文件管理的 <code>as_doc</code> 模組角色與本頁 ACRUD：有 <b>A</b>／<b>R</b>／<code>asdoc_view</code> 即可檢視；管理者固定可看。
@@ -1342,15 +1367,15 @@ $(document).ready(function () {
         fgSyncTabUrl(t);
     });
 
-    // 管理員：是否顯示「線上表單對照」分頁（僅管理者看得到此控制項，見 PHP $isRoleAdmin）
-    $('#chkShowOnlTab').on('change', function () {
-        var $cb = $(this), next = $cb.is(':checked') ? 1 : 0;
-        $cb.prop('disabled', true);
+    // 管理員：是否顯示「線上表單對照」分頁（跳窗設定，按鈕在題列、不受此設定影響、永遠看得到打得開）
+    $('#btnFgOnlSetting').on('click', function () { $('#fgOnlSetMask').show(); });
+    $('#btnFgOnlSetSave').on('click', function () {
+        var $btn = $(this), next = $('#fgOnlSetSel').val();
+        $btn.prop('disabled', true);
         $.post('../../src/store/AS_Document_API.php', {action: 'flow_guide_setting_save', show_onl_tab: next}, function (r) {
-            $cb.prop('disabled', false);
             if (r && r.status === 'success') { location.reload(); }
-            else { alert((r && r.message) || '儲存失敗'); $cb.prop('checked', !next); }
-        }, 'json').fail(function () { $cb.prop('disabled', false).prop('checked', !next); alert('儲存失敗，請重新整理後再試'); });
+            else { $btn.prop('disabled', false); alert((r && r.message) || '儲存失敗'); }
+        }, 'json').fail(function () { $btn.prop('disabled', false); alert('儲存失敗，請重新整理後再試'); });
     });
 
     // ══ 文件／表單 線上預覽 ══
