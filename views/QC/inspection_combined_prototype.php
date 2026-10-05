@@ -259,7 +259,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 以及「最後修改」欄一併解析成姓名（last_edited_by 存的是 user id，原本直接印數字，同一個坑）。
             $history = [];
             try {
-                $hq = "SELECT f.qc_form_id, f.batch_no, f.round_no, f.incoming_qty, f.sample_qty, f.ng_qty, f.check_result,
+                $hq = "SELECT f.qc_form_id, f.insp_no, f.batch_no, f.round_no, f.incoming_qty, f.sample_qty, f.ng_qty, f.check_result,
                               f.check_date, f.created_at, f.created_by, f.main_remark, f.insp_kind,
                               f.edit_unlocked, f.last_edited_by, f.last_edited_at,
                               f.inspector_by, f.approved_by, f.approved_at,
@@ -537,14 +537,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // --- 2c. 先寫入檢驗表頭（ng/判定先給預設值，寫完明細再由後端彙總回填）---
             // check_date 用 COALESCE(?,CURDATE())：一般填寫者沒送補資料日期(綁定值 NULL)時
             // 行為與改版前完全相同（沿用 DB 的 CURDATE()），只有補資料時才會用指定的日期覆蓋。
+            // 檢驗單號(insp_no)：字首+業務日期+流水3碼，業務日期與 check_date 同一個值（補資料
+            // 指定過去日期時延續那一天原本的序號），存檔當下就固定，改字首不會回頭改寫舊單號。
+            $insp_no = qc_insp_no_alloc($pdo, $bfCheckDate ?: $todayS);
             $insForm = $pdo->prepare(
                 "INSERT INTO qc_check_form
-                 (bom_ing_fid, d_id, version_id, form_type_id, insp_kind, process_name, batch_no, round_no,
+                 (bom_ing_fid, d_id, version_id, form_type_id, insp_no, insp_kind, process_name, batch_no, round_no,
                   incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, pcs_verdicts, check_date,
                   inspector_by, approved_by, approved_at, created_by, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, COALESCE(?, CURDATE()), ?, ?, ?, ?, NOW())");
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, COALESCE(?, CURDATE()), ?, ?, ?, ?, NOW())");
             $insForm->execute([
-                $fid, $d_id, $version_id, (string)$form_type_id, $insp_kind, $process, $batch_no, $round_no,
+                $fid, $d_id, $version_id, (string)$form_type_id, $insp_no, $insp_kind, $process, $batch_no, $round_no,
                 $incoming_qty, $sample_qty, $main_remark,
                 json_encode($pcs, JSON_UNESCAPED_UNICODE), $bfCheckDate, $bfInspector, $bfApprovedBy, $bfApprovedAt, $user_id,
             ]);
@@ -573,6 +576,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode([
                 'success' => true,
                 'qc_form_id' => $qc_form_id,
+                'insp_no' => $insp_no,
                 'summary' => [
                     'bom_ing_fid'  => $fid,
                     'process'      => $process,
@@ -584,6 +588,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'ng_qty'       => $ng_qty,   // 判定NG項目數 → 不良數
                     'aod_qty'      => $aod_qty,  // 允收(讓步)項目數
                     'check_result' => $check_result,
+                    'insp_no'      => $insp_no,
                 ],
             ], JSON_UNESCAPED_UNICODE);
             exit;
@@ -748,7 +753,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode([
                 'success'=>true,
                 'header'=>[
-                    'qc_form_id'=>(int)$form['qc_form_id'], 'bom_ing_fid'=>(int)$form['bom_ing_fid'],
+                    'qc_form_id'=>(int)$form['qc_form_id'], 'insp_no'=>$form['insp_no'] ?? '', 'bom_ing_fid'=>(int)$form['bom_ing_fid'],
                     'batch_no'=>(int)$form['batch_no'], 'round_no'=>(int)$form['round_no'],
                     'incoming_qty'=>(int)$form['incoming_qty'], 'sample_qty'=>(int)$form['sample_qty'],
                     'ng_qty'=>(int)$form['ng_qty'], 'check_result'=>$form['check_result'],

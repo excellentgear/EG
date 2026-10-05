@@ -389,3 +389,68 @@ if (!function_exists('qc_form_tools_label')) {
         return implode('、', $parts);
     }
 }
+
+/* ─────────────────────────────────────────────────────────────
+ * 檢驗單號（insp_no）：{管理員可設字首} + YYYYMMDD + 流水號3碼（預設字首 QR，例 QR20261005001）
+ *  - 字首存 system_settings('qc_insp_no_prefix')，只有管理員／qc_manage_settings 能改；
+ *    改字首只影響「之後」新配發的號碼——既有紀錄的 insp_no 存檔當下就寫死了，不會被回頭改寫
+ *    （使用者明確要求「修改不溯及既往」）。
+ *  - 流水號依「這筆檢驗的業務日期」逐日歸零（補資料指定過去日期時，延續那一天原本的序號，
+ *    不是用今天的日期編號），與 qa_scrap_seq／qab_scrap_alloc 同一套 INSERT IGNORE + FOR UPDATE
+ *    做法避免並發撞號；呼叫端通常已在 beginTransaction() 內，這裡偵測到已在交易中就不另開一層。
+ *  - 只有「正式送出」(status=SUBMITTED) 的新建寫入點才配號，草稿(DRAFT)不配——草稿多半會被
+ *    丟棄或改存成另一筆，配了號碼只會留下一堆用不到的缺號。
+ * ───────────────────────────────────────────────────────────── */
+if (!function_exists('qc_insp_no_prefix')) {
+    function qc_insp_no_prefix(PDO $pdo): string {
+        try {
+            $s = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key='qc_insp_no_prefix' LIMIT 1");
+            $s->execute();
+            $v = trim((string)$s->fetchColumn());
+        } catch (Throwable $e) { $v = ''; }
+        return $v !== '' ? $v : 'QR';
+    }
+}
+
+if (!function_exists('qc_insp_no_prefix_normalize')) {
+    /** 字首規則：1~8 碼，僅限英數字，自動轉大寫；不合規直接丟例外（前後端都要擋，鐵律8）。 */
+    function qc_insp_no_prefix_normalize(string $raw): string {
+        $v = strtoupper(trim($raw));
+        if ($v === '') throw new Exception('檢驗單號字首不可空白');
+        if (!preg_match('/^[A-Z0-9]{1,8}$/', $v)) throw new Exception('檢驗單號字首僅限英數字，且不超過 8 碼');
+        return $v;
+    }
+}
+
+if (!function_exists('qc_insp_no_prefix_save')) {
+    function qc_insp_no_prefix_save(PDO $pdo, string $raw, $uid): string {
+        $v = qc_insp_no_prefix_normalize($raw);
+        $up = $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id) VALUES ('qc_insp_no_prefix', ?, ?)
+                             ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value), updated_by_id=VALUES(updated_by_id)");
+        $up->execute([$v, (int)$uid]);
+        return $v;
+    }
+}
+
+if (!function_exists('qc_insp_no_alloc')) {
+    function qc_insp_no_alloc(PDO $pdo, ?string $bizDate = null): string {
+        $ts = $bizDate ? strtotime($bizDate) : false;
+        if ($ts === false) $ts = time();
+        $dateSql = date('Y-m-d', $ts);
+        $prefix = qc_insp_no_prefix($pdo);
+        $own = !$pdo->inTransaction();
+        if ($own) $pdo->beginTransaction();
+        try {
+            $pdo->prepare("INSERT IGNORE INTO qc_insp_no_seq (seq_date,last_no) VALUES (?,0)")->execute([$dateSql]);
+            $sel = $pdo->prepare("SELECT last_no FROM qc_insp_no_seq WHERE seq_date=? FOR UPDATE");
+            $sel->execute([$dateSql]);
+            $next = (int)$sel->fetchColumn() + 1;
+            $pdo->prepare("UPDATE qc_insp_no_seq SET last_no=? WHERE seq_date=?")->execute([$next, $dateSql]);
+            if ($own) $pdo->commit();
+        } catch (Throwable $e) {
+            if ($own && $pdo->inTransaction()) $pdo->rollBack();
+            throw $e;
+        }
+        return $prefix . date('Ymd', $ts) . str_pad((string)$next, 3, '0', STR_PAD_LEFT);
+    }
+}

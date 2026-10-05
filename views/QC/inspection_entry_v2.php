@@ -98,7 +98,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     try {
         $WRITE = ['sym_save', 'sym_delete', 'save_adhoc', 'log_sample_change', 'del_inspection',
                   'dwg_confirm', 'std_item_save', 'std_item_delete', 'std_version_activate', 'std_version_delete',
-                  'print_cfg_save', 'tol_table_save', 'tol_table_delete', 'save_ship', 'backfill_save'];
+                  'print_cfg_save', 'tol_table_save', 'tol_table_delete', 'save_ship', 'backfill_save',
+                  'insp_no_cfg_save'];
         if (in_array($act, $WRITE, true)) {
             $tok = $_POST['csrf'] ?? '';
             if (!is_string($tok) || $tok === '' || !hash_equals((string)($_SESSION['qc_csrf'] ?? ''), $tok)) {
@@ -197,6 +198,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             if (isset($_POST['as_doc_id'])) $up->execute(['qc_inspection_as_doc_id', (int)$_POST['as_doc_id'], (int)$uid]);
             $pdo->commit();
             echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // ---- 檢驗單號編碼設定（字首，可改；改了不溯及既往，見 qc_insp_no_lib 的說明）----
+        if ($act === 'insp_no_cfg_get') {
+            $canCfg = $isAdmin || $hasF('qc_manage_settings');
+            echo json_encode(['success' => true, 'prefix' => qc_insp_no_prefix($pdo), 'can_cfg' => $canCfg], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'insp_no_cfg_save') {
+            if (!$isAdmin && !$hasF('qc_manage_settings')) throw new Exception('您沒有「管理檢驗設定」權限，請洽管理員於 設定 → 權限設定開通');
+            $newPrefix = qc_insp_no_prefix_save($pdo, (string)($_POST['prefix'] ?? ''), $uid);
+            echo json_encode(['success' => true, 'prefix' => $newPrefix], JSON_UNESCAPED_UNICODE);
             exit;
         }
 
@@ -315,12 +329,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             [$bfCheckDate, $bfInspector, $bfApprovedBy, $bfApprovedAt] = qc_backfill_extract($pdo, $canBackfillA, $todayA);
 
             // bom_ing_fid=0 代表「非 BOM 來源」的臨時檢驗單
+            // 檢驗單號：字首+業務日期+流水3碼，業務日期與 check_date 同一個值
+            $inspNoA = qc_insp_no_alloc($pdo, $bfCheckDate ?: $todayA);
             $pdo->prepare("INSERT INTO qc_check_form
-                 (bom_ing_fid, d_id, version_id, form_type_id, insp_kind, process_name, batch_no, round_no,
+                 (bom_ing_fid, d_id, version_id, form_type_id, insp_no, insp_kind, process_name, batch_no, round_no,
                   incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, pcs_verdicts, check_date,
                   inspector_by, approved_by, approved_at, created_by, created_at)
-                 VALUES (0, ?, ?, ?, ?, ?, 1, 1, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, COALESCE(?, CURDATE()), ?, ?, ?, ?, NOW())")
-                ->execute([$d_id, $version_id, (string)$form_type_id, $inspKind, $process, $incoming, $sample, $remark,
+                 VALUES (0, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, COALESCE(?, CURDATE()), ?, ?, ?, ?, NOW())")
+                ->execute([$d_id, $version_id, (string)$form_type_id, $inspNoA, $inspKind, $process, $incoming, $sample, $remark,
                            json_encode($pcs, JSON_UNESCAPED_UNICODE), $bfCheckDate, $bfInspector, $bfApprovedBy, $bfApprovedAt, $uid]);
             $qc_form_id = (int)$pdo->lastInsertId();
 
@@ -332,10 +348,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 ->execute([$tot['ng_qty'], $tot['check_result'], $qc_form_id]);
             $pdo->commit();
 
-            echo json_encode(['success' => true, 'qc_form_id' => $qc_form_id, 'summary' => [
+            echo json_encode(['success' => true, 'qc_form_id' => $qc_form_id, 'insp_no' => $inspNoA, 'summary' => [
                 'bom_ing_fid' => 0, 'process' => $process, 'batch_no' => 1, 'round_no' => 1,
                 'incoming_qty' => $incoming, 'sample_qty' => $sample, 'total_items' => count($items),
-                'ng_qty' => $tot['ng_qty'], 'aod_qty' => $tot['aod_qty'], 'check_result' => $tot['check_result'],
+                'ng_qty' => $tot['ng_qty'], 'aod_qty' => $tot['aod_qty'], 'check_result' => $tot['check_result'], 'insp_no' => $inspNoA,
             ]], JSON_UNESCAPED_UNICODE);
             exit;
         }
@@ -495,12 +511,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 $itemIds[$idx] = (int)$iid;
             }
 
+            $inspNoP = qc_insp_no_alloc($pdo, $bfCheckDate ?: $todayP);
             $pdo->prepare("INSERT INTO qc_check_form
-                 (bom_ing_fid, d_id, version_id, form_type_id, insp_kind, ship_bom, process_name, batch_no, round_no,
+                 (bom_ing_fid, d_id, version_id, form_type_id, insp_no, insp_kind, ship_bom, process_name, batch_no, round_no,
                   incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, pcs_verdicts, check_date,
                   inspector_by, approved_by, approved_at, created_by, created_at)
-                 VALUES (0, ?, ?, ?, 'SHIP', ?, ?, 1, 1, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, COALESCE(?, CURDATE()), ?, ?, ?, ?, NOW())")
-                ->execute([$d_id, $version_id, (string)$form_type_id, $bom, $process, $incoming, $sample, $remark,
+                 VALUES (0, ?, ?, ?, ?, 'SHIP', ?, ?, 1, 1, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, COALESCE(?, CURDATE()), ?, ?, ?, ?, NOW())")
+                ->execute([$d_id, $version_id, (string)$form_type_id, $inspNoP, $bom, $process, $incoming, $sample, $remark,
                            json_encode($pcs, JSON_UNESCAPED_UNICODE), $bfCheckDate, $bfInspector, $bfApprovedBy, $bfApprovedAt, $uid]);
             $qc_form_id = (int)$pdo->lastInsertId();
 
@@ -510,10 +527,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 ->execute([$tot['ng_qty'], $tot['check_result'], $qc_form_id]);
             $pdo->commit();
 
-            echo json_encode(['success' => true, 'qc_form_id' => $qc_form_id, 'summary' => [
+            echo json_encode(['success' => true, 'qc_form_id' => $qc_form_id, 'insp_no' => $inspNoP, 'summary' => [
                 'bom_ing_fid' => 0, 'process' => $process, 'batch_no' => 1, 'round_no' => 1,
                 'incoming_qty' => $incoming, 'sample_qty' => $sample, 'total_items' => count($items),
-                'ng_qty' => $tot['ng_qty'], 'aod_qty' => $tot['aod_qty'], 'check_result' => $tot['check_result'],
+                'ng_qty' => $tot['ng_qty'], 'aod_qty' => $tot['aod_qty'], 'check_result' => $tot['check_result'], 'insp_no' => $inspNoP,
             ]], JSON_UNESCAPED_UNICODE);
             exit;
         }
@@ -1338,6 +1355,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         #print-area .pr-title { text-align:center; font-size:16px; font-weight:bold; margin:2px 0 6px; }
         /* AS 文件編號：每頁固定右下角 */
         #print-area .pt-foot { position:fixed; right:8mm; bottom:5mm; font-size:9pt; color:#333; }
+        /* 檢驗單號：固定印在首頁右上角，與畫面上表單右上角的徽章同一個位置呈現 */
+        #print-area .pr-no { position:fixed; right:8mm; top:9mm; font-size:10pt; font-weight:bold; color:#333; }
         /* 簽章圖章尺寸全站統一 91px（ai-rules/18 第6條） */
         #print-area svg.car-stamp { width:91px !important; height:91px !important; }
         #print-area .c-tol .lo { display:block; }
@@ -1370,6 +1389,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <div class="title_left"><h3>品管檢驗表 <small>2.0 新版填寫介面</small></h3></div>
                 <div class="title_right">
                     <div class="pull-right">
+                        <span id="insp-no-chip" class="label" style="display:none;background:#F0A24B;color:#4A3524;font-size:13px;padding:6px 10px;margin-right:8px;vertical-align:middle;" title="檢驗單號：存檔時自動產生，字首可於「設定→檢驗單號編碼設定」調整（不影響既有單號）"><i class="fa fa-barcode"></i> <span id="insp-no-chip-text"></span></span>
                         <button class="page-help-btn" id="btnPageHelp"><i class="fa fa-question-circle"></i> 使用說明</button>
                         <button class="btn btn-default btn-sm" id="btn-print"><i class="fa fa-print"></i> 列印</button>
                         <button class="btn btn-default btn-sm" id="btn-csv"><i class="fa fa-file-excel-o"></i> 匯出CSV</button>
@@ -1388,6 +1408,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                                 <li class="sampling-menu-item" style="display:none;"><a href="#" id="btn-sampling-setting"><i class="fa fa-list-ol"></i> 抽樣規則設定</a></li>
                                 <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-qadept-setting"><i class="fa fa-sitemap"></i> 異常單回覆部門設定</a></li>
                                 <li class="approve-menu-item" style="display:none;"><a href="#" id="btn-approve-setting"><i class="fa fa-check-square-o"></i> 主管審核自動核可設定</a></li>
+                                <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-inspno-setting"><i class="fa fa-barcode"></i> 檢驗單號編碼設定</a></li>
                                 <li><a href="#" id="btn-qadecide-setting"><i class="fa fa-gavel"></i> 異常單處置決策設定</a></li>
                                 <li class="divider"></li>
                                 <li><a href="#" id="btn-perm-setting"><i class="fa fa-key"></i> 權限設定（角色）</a></li>
@@ -2144,6 +2165,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     </div></div>
 </div>
 
+<!-- 檢驗單號編碼設定 Modal（權限：qc_manage_settings，管理員固定可用） -->
+<div class="modal fade" id="inspNoCfgModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header" style="background:#F0A24B;color:#4A3524;border-radius:6px 6px 0 0;">
+            <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+            <h4 class="modal-title"><i class="fa fa-barcode"></i> 檢驗單號編碼設定</h4></div>
+        <div class="modal-body">
+            <p class="muted-help">每一筆正式送出的檢驗記錄，存檔當下會自動產生一個檢驗單號：
+               <b>字首＋YYYYMMDD（檢驗日期）＋流水號3碼</b>（例如 <b>QR20261005001</b>），顯示在表單右上角與列印版右上角。
+               流水號依檢驗日期逐日由 001 重新編號。</p>
+            <div class="form-group">
+                <label>字首</label>
+                <input type="text" id="insp-no-prefix" class="form-control input-sm" style="width:140px;" maxlength="8" placeholder="例：QR">
+                <p class="muted-help" style="margin-top:4px;">僅限英數字，最多 8 碼；<b>只影響之後新產生的單號</b>，已經存檔的舊單號不會被改掉（不溯及既往）。</p>
+                <p class="text-danger" id="insp-no-hint" style="display:none;"></p>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-warning" id="insp-no-save"><i class="fa fa-save"></i> 儲存</button>
+        </div>
+    </div></div>
+</div>
+
 <!-- 量具設定 Modal（種類 + 編號；與 inspection_standard_setting.php 共用資料表） -->
 <div class="modal fade" id="toolManageModal" tabindex="-1" role="dialog">
     <div class="modal-dialog modal-lg"><div class="modal-content">
@@ -2769,7 +2814,7 @@ $(function(){
     var state = { sampleN:5, batches:[], curBatch:0, processes:[], curProc:0, demo:false,
                   is_supervisor:false, can_fill:true, canManageSettings:false, canManageSampling:false,
                   canView:true, editFormId:null, viewFormId:null, viewOnly:false, draftFormId:0, inspKind:'NORMAL', canBackfill:false,
-                  currentUserId:'', bfStage:null };
+                  currentUserId:'', bfStage:null, curInspNo:'' };
     var MODEL = { items:[], pcs:[], tools:[] };   // tools＝本單使用量具（Tool_id 字串陣列）
     var TOOLS = ['卡尺','分厘卡','投影機','三次元','針規','目視'];
     var TOOL_INSTANCES = [];                                  // [{id,no,cat}]
@@ -4406,7 +4451,15 @@ $(function(){
         });
         return { left:Math.max(0, good-used), order:order, good:good, used:used };
     }
+    // 檢驗單號徽章（表單右上角）：只有「存檔過的那一筆」才有編號，正在填寫還沒存檔的新一輪不顯示；
+    // state.curInspNo 同步記下目前這筆的編號，供列印（buildPrintHtml）直接取用。
+    function setInspNoChip(no){
+        state.curInspNo = no || '';
+        if(no){ $('#insp-no-chip-text').text(no); $('#insp-no-chip').show(); }
+        else { $('#insp-no-chip').hide(); $('#insp-no-chip-text').text(''); }
+    }
     function renderCtxBar(){
+        setInspNoChip('');   // 開始填寫新的一輪，編號要存檔後才會產生
         var partCell = ctx.part_no
             ? '<a href="javascript:void(0)" class="cv" id="lnk-part-drawing" title="點擊開啟圖檔預覽">'+esc(ctx.part_no)+' <i class="fa fa-picture-o"></i></a>'
             : '<span class="cv">—</span>';
@@ -4629,7 +4682,7 @@ $(function(){
             if(!byBatch[b]) byBatch[b]={ no:b, status:'WAIT', rounds:[] };
             byBatch[b].rounds.push({
                 date:(h.check_date||h.created_at||''), status:(h.check_result==='NG'?'NG':'OK'),
-                qc_form_id:h.qc_form_id, round_no:(h.round_no||1), ng_qty:(h.ng_qty||0),
+                qc_form_id:h.qc_form_id, insp_no:(h.insp_no||''), round_no:(h.round_no||1), ng_qty:(h.ng_qty||0),
                 incoming_qty:(parseInt(h.incoming_qty)||0), sample_qty:(parseInt(h.sample_qty)||0),
                 insp_kind:(h.insp_kind||'NORMAL'),
                 inspector_name:h.inspector_name||'', approved_name:h.approved_name||'', approved_at:h.approved_at||'',
@@ -4716,7 +4769,8 @@ $(function(){
             // 次數固定顯示「排在第幾筆」(i+1)，不直接印資料庫存的 round_no——
             // 中間刪掉一筆之後舊資料的 round_no 可能還沒補齊(2026-09-24 前建立的)，
             // 用位置編號永遠是連續的 1,2,3…，不會出現看起來像漏資料的缺口。
-            return '<tr class="history-row"><td>第'+(i+1)+'次'+inspKindBadge(r.insp_kind)+'</td><td>'+esc(r.date)+insp+appr+edited+'</td><td>'+statusLabel(r.status)+
+            var noLine = r.insp_no ? ('<br><small class="muted-help">'+esc(r.insp_no)+'</small>') : '';
+            return '<tr class="history-row"><td>第'+(i+1)+'次'+inspKindBadge(r.insp_kind)+noLine+'</td><td>'+esc(r.date)+insp+appr+edited+'</td><td>'+statusLabel(r.status)+
                    '</td><td>'+(r.incoming_qty||0)+' / '+(r.ng_qty||0)+'</td><td>'+ncr+'</td><td>'+act+'</td></tr>';
         }).join('');
         $('#batch-history').html(
@@ -4818,6 +4872,7 @@ $(function(){
             var editable=!!res.can_edit;
             state.editFormId = editable ? qcFormId : null;
             state.viewFormId = editable ? null : qcFormId;
+            setInspNoChip(h.insp_no||'');
             // 列印簽章用：已存檔紀錄的簽章日期＝檢驗日、檢驗員＝存檔者
             state.editMeta={ check_date:h.check_date||'', creator_name:h.creator_name||'',
                               approved_name:h.approved_name||'', approved_at:h.approved_at||'' };
@@ -5645,12 +5700,13 @@ $(function(){
                 var s=res.summary;
                 state.bfStage=null; renderBfStageBanner();
                 flushSampleChanges(res.qc_form_id);
-                state.batches[0].rounds.push({ date:'剛剛', status:s.check_result, qc_form_id:res.qc_form_id, round_no:1, ng_qty:s.ng_qty,
+                setInspNoChip(res.insp_no||'');
+                state.batches[0].rounds.push({ date:'剛剛', status:s.check_result, qc_form_id:res.qc_form_id, insp_no:res.insp_no, round_no:1, ng_qty:s.ng_qty,
                                                incoming_qty:(parseInt($('#inp-qty').val())||0) });
                 state.batches[0].status=s.check_result;
                 renderBatches();
                 function done(){
-                    alert('出貨檢驗單已儲存（qc_form_id='+res.qc_form_id+'）\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty);
+                    alert('出貨檢驗單已儲存（檢驗單號 '+(res.insp_no||'')+'）\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty);
                 }
                 if(s.check_result==='NG') openNgAsk(res.qc_form_id, s, items, done); else done();
             }, 'json').fail(function(x){ $sb.prop('disabled',false); alert('儲存錯誤：'+x.responseText); });
@@ -5670,12 +5726,13 @@ $(function(){
                 var s=res.summary;
                 state.bfStage=null; renderBfStageBanner();
                 flushSampleChanges(res.qc_form_id);
-                state.batches[0].rounds.push({ date:'剛剛', status:s.check_result, qc_form_id:res.qc_form_id, round_no:1, ng_qty:s.ng_qty,
+                setInspNoChip(res.insp_no||'');
+                state.batches[0].rounds.push({ date:'剛剛', status:s.check_result, qc_form_id:res.qc_form_id, insp_no:res.insp_no, round_no:1, ng_qty:s.ng_qty,
                                                incoming_qty:(parseInt($('#inp-qty').val())||0), insp_kind:state.inspKind });
                 state.batches[0].status=s.check_result;
                 renderBatches();
                 function done(){
-                    alert('臨時檢驗單已儲存（qc_form_id='+res.qc_form_id+'）\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty);
+                    alert('臨時檢驗單已儲存（檢驗單號 '+(res.insp_no||'')+'）\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty);
                 }
                 if(s.check_result==='NG') openNgAsk(res.qc_form_id, s, items, done); else done();
             }, 'json').fail(function(x){ $ab.prop('disabled',false); alert('儲存錯誤：'+x.responseText); });
@@ -5697,7 +5754,8 @@ $(function(){
             var s=res.summary;
             state.bfStage=null; renderBfStageBanner();
             flushSampleChanges(res.qc_form_id);
-            b.rounds.push({ date:'剛剛', status:(asRedo?'NG':s.check_result), qc_form_id:res.qc_form_id,
+            setInspNoChip(res.insp_no||'');
+            b.rounds.push({ date:'剛剛', status:(asRedo?'NG':s.check_result), qc_form_id:res.qc_form_id, insp_no:res.insp_no,
                             round_no:(b.rounds.length+1), ng_qty:s.ng_qty,
                             incoming_qty:(parseInt($('#inp-qty').val())||0), insp_kind:state.inspKind });
             b.status = asRedo ? 'REDO' : s.check_result;
@@ -5723,7 +5781,7 @@ $(function(){
                             if(confirm('檢驗結果已儲存並回傳待驗清單。\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty+autoMsg()+'\n按確定關閉本視窗。')) window.close();
                         }, 400);
                     } else {
-                        alert('已儲存（qc_form_id='+res.qc_form_id+'）\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty+'　允收(讓步)：'+s.aod_qty+autoMsg());
+                        alert('已儲存（檢驗單號 '+(res.insp_no||'')+'）\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty+'　允收(讓步)：'+s.aod_qty+autoMsg());
                         reloadContext();
                     }
                 }
@@ -5840,7 +5898,9 @@ $(function(){
         var dateStr=printSignDate().replace(/-/g,'.');
         // 大標題＝本公司全名、副標題＝綁定 AS 文件的表單名稱（皆動態取，禁寫死；ai-rules/16）
         var kindTag = state.inspKind==='FIRST' ? '　【首件檢驗】' : state.inspKind==='LAST' ? '　【末件檢驗】' : '';
+        // 檢驗單號：固定印在右上角（表單右上角與列印右上角同一個位置呈現，兩邊一致）
         var head='<div class="pr-co">'+esc(PRINTCFG.company||'')+'</div>'+
+            (state.curInspNo ? '<div class="pr-no">檢驗單號：'+esc(state.curInspNo)+'</div>' : '')+
             '<div class="pr-title">'+esc((PRINTCFG.doc&&PRINTCFG.doc.name)||'檢驗記錄表')+esc(kindTag)+'</div>'+
             '<table class="pr-meta"><tr>'+
             '<td class="k">料號</td><td>'+esc(m.part)+'</td><td class="k">客戶</td><td>'+esc(m.client)+'</td><td class="k">日期</td><td>'+dateStr+'</td></tr>'+
@@ -5917,7 +5977,8 @@ $(function(){
         head.push('判定','備註');
         var q=function(s){ s=(s==null?'':String(s)); return '"'+s.replace(/"/g,'""')+'"'; };
         // 使用量具是整張單的資訊 → 印在檔案最上方一列，不再逐項一欄（2026-09-16）
-        var lines=[[q('本單使用量具'), q(formToolsLabel()||'—')].join(','), '', head.map(q).join(',')];
+        var lines=[[q('檢驗單號'), q(state.curInspNo||'（尚未存檔）')].join(','),
+                   [q('本單使用量具'), q(formToolsLabel()||'—')].join(','), '', head.map(q).join(',')];
         items.forEach(function(it,idx){
             var readings=[{samples:it.samples}];
             (it.extra||[]).forEach(function(ex){ readings.push({samples:ex.samples}); });
@@ -6070,6 +6131,25 @@ $(function(){
             if(!res.success){ alert(res.message||'儲存失敗'); return; }
             $('#approveCfgModal').modal('hide'); loadPrintCfg();
         },'json').fail(function(x){ alert('儲存失敗：'+x.responseText); });
+    });
+
+    // ============ 設定：檢驗單號編碼設定（字首；改了不影響既有單號） ============
+    $('#btn-inspno-setting').on('click', function(e){
+        e.preventDefault();
+        $.post(V2API,{ v2action:'insp_no_cfg_get' },function(res){
+            if(!res.success){ alert(res.message||'載入失敗'); return; }
+            $('#insp-no-prefix').val(res.prefix||'QR');
+            $('#insp-no-hint').hide();
+            $('#inspNoCfgModal').modal('show');
+        },'json');
+    });
+    $('#insp-no-save').on('click', function(){
+        var v=$('#insp-no-prefix').val();
+        $.post(V2API,{ v2action:'insp_no_cfg_save', csrf:CSRF, prefix:v }, function(res){
+            if(!res.success){ $('#insp-no-hint').show().text(res.message||'儲存失敗'); return; }
+            $('#inspNoCfgModal').modal('hide');
+            flashMsg('已更新檢驗單號字首為「'+esc(res.prefix)+'」，往後新建立的檢驗單將套用新字首。');
+        },'json').fail(function(x){ $('#insp-no-hint').show().text('儲存錯誤：'+x.responseText); });
     });
 
     // ============ 設定：量具設定（種類/編號 CRUD、取代刪除） ============
