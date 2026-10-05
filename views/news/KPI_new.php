@@ -1,17 +1,22 @@
 <?php
 /**
- * KPI 新方案（草案） — views/news/KPI_new.php
+ * KPI 新方案 — views/news/KPI_new.php
  *
- * 依「附件C 品質管理系統流程圖」的八大區塊（COP01~04／SP01·02／MP01·02）重新規劃的 KPI 方案，
- * 給使用者先看過、決定要不要修改，拍板後才搬進正式的 KPI 表（2-GM-04-01）。
+ * 依「附件C 品質管理系統流程圖」的八大區塊（COP01~04／SP01·02／MP01·02）規劃的 KPI 方案。
+ * 2026-10-05 起正式功能化：指標資料改存進獨立新表 kpi_scheme_indicator／
+ * kpi_scheme_indicator_year（與正式表完全分離），並在本頁內新增「設定」分頁可直接維護。
  *
- * 與正式 KPI 頁（KPI.php）的關係：
- *   ① 這一頁**不寫入任何資料**——沒有填值、沒有覆寫、沒有快照、沒有附件，純唯讀。
- *   ② 既有指標的數字一律讀正式表的月快照，不另算一份（否則兩頁會對不起來）。
- *   ③ 新指標的數字是「即時試算」，用的是 2026 年的真實資料，讓使用者看得到實際落點。
- *   ④ 方案定義與試算邏輯全部在 src/common/kpi_scheme_lib.php（唯一登記表）。
+ * 與正式 KPI 頁（KPI.php）的關係（使用者明確要求的架構界線）：
+ *   ① 這一頁完全不寫入 kpi_as_indicator／kpi_as_indicator_year／kpi_as_monthly_value，
+ *      只有 kps_from_snapshot() 會唯讀 SELECT 那幾張表（來源模式＝existing/existing_cny
+ *      時，用來沿用正式指標的月快照），確保 views/news/KPI.php 不受本頁任何操作影響。
+ *   ② 本頁自己的指標設定存在 kpi_scheme_indicator／kpi_scheme_indicator_year（全新、
+ *      獨立的表），寫入走 src/store/KpiSchemeCny_API.php 的 save_indicator／
+ *      save_indicator_year。
+ *   ③ 不做月快照/鎖定——全部是「即時試算」，每次開頁面都用目前的設定重新算一次。
+ *   ④ 春節目標調整沿用既有的 kpi_scheme_cny_adjust 表與邏輯，不受影響。
  *
- * 權限沿用 kpi 模組既有角色（看得到正式 KPI 的人就看得到這一頁），不另開角色。
+ * 權限沿用 kpi 模組既有角色（看得到正式 KPI 的人就看得到這一頁；要設定要有 canAdmin）。
  */
 session_start();
 if (!isset($_SESSION['userName'])) {
@@ -26,6 +31,7 @@ include_once '../../src/common/kpi_scheme_lib.php';
 
 $db = (new DBConnection())->getPDO();
 kpi_as_ensure_schema($db);
+kpi_scheme_ind_ensure_schema($db);
 $kpiUser  = kpi_as_current_user($db);
 $kpiPerms = kpi_as_perms($db, $kpiUser);
 $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
@@ -47,19 +53,21 @@ foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSO
     $deptName[(int)$r['id']] = (string)$r['name'];
 }
 
-$YEAR   = kpi_scheme_sample_year();
+$curY = (int)date('Y');
+$YEAR = (int)($_GET['year'] ?? $curY);
+if ($YEAR < 2020 || $YEAR > $curY + 2) $YEAR = $curY;
 $BLOCKS = kpi_scheme_blocks();
-$ITEMS  = kpi_scheme_visible_items();
-$HIDDEN = kpi_scheme_hidden_items();
-$SUM    = kpi_scheme_summary();
-$BSTAT  = kpi_scheme_block_stat();
 
-/* ---- 逐項試算（唯讀；只有有檢閱權才跑，省掉無權限者的查詢成本） ---- */
+/* ---- 依 DB 設定逐項試算（唯讀；只有有檢閱權才跑，省掉無權限者的查詢成本） ---- */
+$ROWS = $kpiPerms['canView'] ? kpi_scheme_list_year($db, $YEAR) : [];
 $VALUES = [];
 $calcMs = 0;
 if ($kpiPerms['canView']) {
     $t0 = microtime(true);
-    foreach ($ITEMS as $it) $VALUES[$it['code']] = kpi_scheme_preview($db, $it, $YEAR);
+    foreach ($ROWS as $row) {
+        if ((int)$row['ind_active'] !== 1) continue;
+        $VALUES[(int)$row['item_no']] = kpi_scheme_preview_row($db, $row, $YEAR);
+    }
     $calcMs = (int)round((microtime(true) - $t0) * 1000);
 }
 
@@ -68,25 +76,30 @@ function kpsFmt($v, string $type): string {
     if ($v === null) return '';
     $v = (float)$v;
     if ($type === 'percent') return (round($v * 10) / 10) . '%';
-    if ($type === 'count')   return (string)(round($v * 10) / 10);
     return (string)(round($v * 10) / 10);
 }
-/** 未達標？（與 KPI 模組同一套判定語意） */
-function kpsBelow($v, array $it): bool {
-    if ($v === null || $it['target'] === null) return false;
-    $t = (float)$it['target']; $v = (float)$v;
-    if ($it['dir'] === 'lte') return $v > $t;
-    if ($it['dir'] === 'yes') return $v < 1;
+/** 未達標？（與 KPI 模組同一套判定語意，直接吃 row 的 target_direction/target_value） */
+function kpsBelowRow($v, array $row): bool {
+    if ($v === null || $row['target_value'] === null) return false;
+    $t = (float)$row['target_value']; $v = (float)$v;
+    if ($row['target_direction'] === 'lte') return $v > $t;
+    if ($row['target_direction'] === 'yes') return $v < 1;
     return $v < $t;
 }
 function kpsFreqName(string $f): string {
     return ['monthly'=>'每月','quarterly'=>'每季','halfyear'=>'半年','yearly'=>'每年'][$f] ?? $f;
 }
-function kpsTargetText(array $it): string {
-    if ($it['target'] === null) return '觀察期（未訂）';
-    $op = $it['dir'] === 'lte' ? '≤' : ($it['dir'] === 'yes' ? '＝' : '≥');
-    $t  = rtrim(rtrim(number_format((float)$it['target'], 2, '.', ''), '0'), '.');
-    return $op . ' ' . $t . $it['unit'];
+function kpsTargetTextRow(array $row): string {
+    if ($row['target_text']) return (string)$row['target_text'];
+    if ($row['target_value'] === null) return '觀察期（未訂）';
+    $op = $row['target_direction'] === 'lte' ? '≤' : ($row['target_direction'] === 'yes' ? '＝' : '≥');
+    $t  = rtrim(rtrim(number_format((float)$row['target_value'], 2, '.', ''), '0'), '.');
+    return $op . ' ' . $t . (string)($row['target_unit'] ?? '');
+}
+function kpsOwnerText(array $row, array $deptName): string {
+    if (!empty($row['owner_display'])) return (string)$row['owner_display'];
+    $d = $row['owner_dept_id'] ? ($deptName[(int)$row['owner_dept_id']] ?? '') : '';
+    return $d !== '' ? $d : '（未設定）';
 }
 ?>
 <!DOCTYPE html>
@@ -95,7 +108,7 @@ function kpsTargetText(array $it): string {
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>KPI 新方案（草案）</title>
+    <title>KPI 新方案</title>
     <link href="../../resource/css/bootstrap.css" rel="stylesheet">
     <link href="../../resource/css/font-awesome.css" rel="stylesheet">
     <link href="../../resource/css/nprogress.css" rel="stylesheet">
@@ -110,18 +123,23 @@ function kpsTargetText(array $it): string {
         .right_col .page-title h2 { margin:6px 0; }
         .ks-wrap { clear:both; }
 
+        .ks-tabs { display:flex; gap:6px; margin-bottom:10px; }
+        .ks-tab { height:34px; line-height:34px; padding:0 18px; border:1.5px solid #D8BE93; border-radius:6px 6px 0 0;
+            background:#F1ECE3; color:#8a6d45; cursor:pointer; font-size:14px; font-weight:bold; }
+        .ks-tab.on { background:#F7E0BD; color:#5b3a1e; border-bottom-color:#F7E0BD; }
+
         .ks-toolbar { display:flex; flex-wrap:wrap; gap:6px; align-items:center;
             border:1.5px solid #E8D5B5; border-radius:8px; padding:8px 10px; margin-bottom:10px; background:#FDF8EF; }
         .ks-toolbar button, .ks-toolbar a.btn { height:30px; font-size:13px; line-height:1; padding:0 10px;
             border:1px solid #D8BE93; border-radius:4px; background:#fff; color:#5b3a1e; cursor:pointer; }
         .ks-toolbar button:hover, .ks-toolbar a.btn:hover { background:#F7E0BD; }
+        .ks-toolbar button:disabled { opacity:.45; cursor:not-allowed; }
         .ks-role-badge { margin-left:auto; font-size:13px; color:#5b3a1e; background:#F7E0BD;
             border-radius:12px; padding:4px 12px; }
 
-        /* 草案提示條 */
-        .ks-draft { border:1.5px solid #F0A24B; background:#FFF7E8; border-radius:8px;
+        .ks-note { border:1.5px solid #E8D5B5; background:#FDF8EF; border-radius:8px;
             padding:10px 14px; margin-bottom:10px; font-size:13px; color:#5b3a1e; line-height:1.8; }
-        .ks-draft b { color:#C2601C; }
+        .ks-note b { color:#C2601C; }
 
         /* 摘要卡 */
         .ks-cards { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
@@ -146,7 +164,6 @@ function kpsTargetText(array $it): string {
         tr.ks-blk .bk-proc { font-weight:normal; color:#8a6d45; font-size:11.5px; display:block; margin-top:2px; }
         .ks-below { color:#DD5138; font-weight:bold; }
         .ks-na { color:#c4b7a3; }
-        /* 值來源記號：覆寫/手動的格子要看得出來（稽核會問「這數字怎麼來的」） */
         .ks-mk { font-size:9px; vertical-align:super; color:#C2601C; }
         .ks-mk.man { color:#8a6d45; }
         .ks-mk.cny { color:#DD5138; font-weight:bold; margin-left:1px; }
@@ -154,21 +171,13 @@ function kpsTargetText(array $it): string {
         /* 標籤（line-height 一定要自己指定，否則會繼承 custom.css 的 td span{line-height:28px} 把列撐高） */
         .ks-tag { display:inline-block; font-size:10px; line-height:16px; height:16px; padding:0 6px;
             border-radius:8px; margin-left:4px; vertical-align:1px; white-space:nowrap; }
-        .ks-tag.new    { background:#F0A24B; color:#fff; }
-        .ks-tag.keep   { background:#F1ECE3; color:#8a6d45; }
-        .ks-tag.retune { background:#F7E0BD; color:#8A5A2B; }
-        .ks-tag.move   { background:#EFE3C8; color:#6b4a20; }
-        .ks-tag.watch  { background:#FBE6C8; color:#A6630E; }
-        .ks-tag.warn   { background:#DD5138; color:#fff; }
-        .ks-tag.empty  { background:#F1ECE3; color:#a08356; border:1px dashed #D8BE93; line-height:14px; }
+        .ks-tag.off { background:#F1ECE3; color:#a08356; border:1px dashed #D8BE93; line-height:14px; }
         .ks-src { display:inline-block; font-size:10px; line-height:16px; height:16px; padding:0 6px;
             border-radius:8px; white-space:nowrap; }
         .ks-src.auto   { background:#EAF0E2; color:#4d6b33; }
-        .ks-src.semi   { background:#F7E0BD; color:#8A5A2B; }
         .ks-src.manual { background:#F1ECE3; color:#8a6d45; }
         .ks-i { cursor:pointer; color:#b5762a; margin-left:4px; }
 
-        /* 下方三區 */
         .ks-sec { border:1px solid #E8D5B5; border-radius:8px; background:#fff; margin-top:12px; }
         .ks-sec > h4 { margin:0; padding:8px 12px; background:#F7E0BD; color:#5b3a1e; font-size:14px;
             font-weight:bold; border-radius:8px 8px 0 0; }
@@ -176,8 +185,50 @@ function kpsTargetText(array $it): string {
         .ks-sec ul { padding-left:20px; margin:4px 0; }
         .ks-sec .ks-why { color:#7a6046; }
 
-        /* modal */
-        .ks-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; }
+        /* 設定分頁 */
+        .ksc-block { border:1px solid #E8D5B5; border-radius:8px; background:#fff; margin-bottom:10px; }
+        .ksc-block > h5 { margin:0; padding:7px 12px; background:#F0E2C8; color:#6b4a20; font-size:13px;
+            font-weight:bold; border-radius:8px 8px 0 0; }
+        table.ksc-tbl { width:100%; border-collapse:collapse; font-size:12.5px; }
+        table.ksc-tbl th, table.ksc-tbl td { border-bottom:1px solid #EADFC8; padding:5px 8px; text-align:left; }
+        table.ksc-tbl th { background:#FDF8EF; color:#8a6d45; font-weight:bold; }
+        table.ksc-tbl tbody tr:hover { background:#FBF0DD; }
+        .ksc-edit-btn { height:24px; font-size:11.5px; line-height:1; padding:0 8px; border:1px solid #D8BE93;
+            border-radius:3px; background:#fff; color:#5b3a1e; cursor:pointer; }
+        .ksc-edit-btn:hover { background:#F7E0BD; }
+        .ksc-badge-off { color:#a08356; font-size:11px; }
+
+        /* 設定面板（抽屜） */
+        .ksc-panel { background:#fff; border-radius:8px; max-width:880px; margin:30px auto; padding:0;
+            box-shadow:0 5px 25px rgba(0,0,0,.3); max-height:90vh; display:flex; flex-direction:column; }
+        .ksc-panel .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:10px 15px;
+            border-radius:8px 8px 0 0; display:flex; justify-content:space-between; }
+        .ksc-panel .m-head .m-close { cursor:pointer; color:#b5762a; }
+        .ksc-panel .m-body { padding:15px; overflow-y:auto; font-size:13px; color:#5b3a1e; }
+        .ksc-sec { border:1px solid #E8D5B5; border-radius:6px; margin-bottom:10px; }
+        .ksc-sec > div.hd { background:#FDF8EF; color:#8A5A2B; font-weight:bold; font-size:12.5px;
+            padding:5px 10px; border-radius:6px 6px 0 0; }
+        .ksc-sec > div.bd { padding:10px; display:flex; flex-wrap:wrap; gap:8px; }
+        .ksc-fld { display:flex; flex-direction:column; gap:2px; }
+        .ksc-fld label { font-size:11.5px; color:#8a6d45; }
+        .ksc-fld input[type=text], .ksc-fld input[type=number], .ksc-fld select, .ksc-fld textarea {
+            height:28px; border:1px solid #D8BE93; border-radius:4px; padding:0 6px; font-size:12.5px; color:#5b3a1e; }
+        .ksc-fld textarea { height:50px; padding:4px 6px; resize:vertical; }
+        .ksc-fld.w1 { width:110px; } .ksc-fld.w2 { width:170px; } .ksc-fld.w3 { width:240px; } .ksc-fld.wfull { width:100%; }
+        .ksc-param-box { border:1px dashed #D8BE93; border-radius:6px; padding:8px; margin-top:6px; width:100%; background:#FFFBF2; }
+        .ksc-param-box .pname { font-size:12px; font-weight:bold; color:#8A5A2B; margin-bottom:6px; }
+        .ksc-foot { display:flex; gap:8px; align-items:center; padding:10px 15px; border-top:1px solid #EADFC8; }
+        .ksc-foot button { height:32px; padding:0 16px; border-radius:4px; cursor:pointer; font-size:13px; }
+        .ksc-btn-save { background:#F0A24B; color:#fff; border:1px solid #d98a33; }
+        .ksc-btn-save:hover { background:#e8933a; }
+        .ksc-btn-prev { background:#fff; color:#5b3a1e; border:1px solid #D8BE93; }
+        .ksc-btn-prev:hover { background:#F7E0BD; }
+        .ksc-btn-cancel { background:#fff; color:#8a6d45; border:1px solid #D8BE93; }
+        .ksc-prev-result { margin-left:auto; font-size:12.5px; }
+        .ksc-err { color:#DD5138; font-size:12px; margin-top:4px; }
+
+        /* modal（指標說明/春節/使用說明） */
+        .ks-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; overflow-y:auto; }
         .ks-modal { background:#fff; border-radius:8px; max-width:720px; margin:60px auto; padding:0;
             box-shadow:0 5px 25px rgba(0,0,0,.3); max-height:82vh; display:flex; flex-direction:column; }
         .ks-modal .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:10px 15px;
@@ -191,12 +242,12 @@ function kpsTargetText(array $it): string {
         .ks-noperm { border:1px solid #E8D5B5; background:#FDF8EF; border-radius:8px; padding:24px;
             color:#5b3a1e; text-align:center; }
 
-        /* 列印：A3 橫式（ai-rules/16）。這是內部草案不是正式 AS 表單，故只印公司全名、不印 AS 編號。 */
+        /* 列印：A3 橫式（ai-rules/16）。這是內部方案不是正式 AS 表單，故只印公司全名、不印 AS 編號。 */
         @media print {
             @page { size: A3 landscape; margin: 14mm 14mm 16mm 14mm; }
             @page { @bottom-left { content: "第 " counter(page) " 頁／共 " counter(pages) " 頁";
                                    font-size: 9pt; color:#555; } }
-            .page-title, .ks-toolbar, .left_col, .nav_menu, footer, .ks-i, .ks-mask { display:none !important; }
+            .page-title, .ks-toolbar, .ks-tabs, .left_col, .nav_menu, footer, .ks-i, .ks-mask { display:none !important; }
             .right_col { margin:0 !important; padding:0 !important; min-height:0 !important; height:auto !important; }
             .container.body, .main_container { min-height:0 !important; height:auto !important; }
             body { background:#fff !important; }
@@ -208,7 +259,7 @@ function kpsTargetText(array $it): string {
             table.ks-tbl { font-size:8.5pt; }
             table.ks-tbl thead { display:table-header-group; }
             table.ks-tbl tr { page-break-inside:avoid; }
-            .ks-sec { page-break-inside:avoid; }
+            .ks-sec, #tabSetting { display:none !important; }
         }
         .ks-print-head { display:none; }
     </style>
@@ -219,8 +270,8 @@ function kpsTargetText(array $it): string {
     <?php include '../partPage/sideAndTopBarMenu.html' ?>
     <div class="right_col" role="main">
         <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;clear:both;">
-            <h2 style="margin:6px 0;">KPI 新方案（草案）
-                <small style="color:#8a6d45;">依品質管理系統流程圖八大區塊重新規劃　<?= htmlspecialchars(kpi_scheme_version()) ?></small></h2>
+            <h2 style="margin:6px 0;">KPI 新方案
+                <small style="color:#8a6d45;">依品質管理系統流程圖八大區塊規劃　<?= htmlspecialchars(kpi_scheme_version()) ?></small></h2>
             <button type="button" class="page-help-btn" id="btnPageHelp" title="這一頁怎麼用">
                 <i class="fa fa-question-circle"></i> 使用說明</button>
         </div>
@@ -238,9 +289,16 @@ function kpsTargetText(array $it): string {
 
         <div class="ks-print-head">
             <div class="c"><?= htmlspecialchars($companyName ?: '（尚未設定本公司全名）') ?></div>
-            <div class="t">KPI 新方案（草案）　<?= htmlspecialchars(kpi_scheme_version()) ?></div>
-            <div class="s">數字為 <?= $YEAR ?> 年真實資料試算，僅供討論，非正式 KPI 紀錄</div>
+            <div class="t">KPI 新方案　<?= htmlspecialchars(kpi_scheme_version()) ?></div>
+            <div class="s">數字為 <?= $YEAR ?> 年即時試算</div>
         </div>
+
+        <div class="ks-tabs">
+            <div class="ks-tab on" id="tabBtnOverview" onclick="kscSwitchTab('overview')"><i class="fa fa-table"></i> 總覽</div>
+            <div class="ks-tab" id="tabBtnSetting" onclick="kscSwitchTab('setting')"><i class="fa fa-cog"></i> 設定</div>
+        </div>
+
+        <div id="tabOverview">
 
         <div class="ks-toolbar">
             <span style="font-size:13px;color:#5b3a1e;">試算年度　<b><?= $YEAR ?></b></span>
@@ -251,27 +309,29 @@ function kpsTargetText(array $it): string {
             <span class="ks-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b></span>
         </div>
 
-        <div class="ks-draft">
-            <b><i class="fa fa-exclamation-triangle"></i> 這是草案，不影響正式 KPI。</b>
-            正式 KPI 表（2-GM-04-01）維持原本 22 項，2026 年的資料一格都沒有動；
-            這一頁唯一會寫入的是「春節目標調整」的管理員額外調整率（下方 <i class="fa fa-calendar-check-o"></i> 按鈕），
-            那是這個草案功能自己的設定，不是正式 KPI 資料。<br>
-            表格裡的數字是<b>用 <?= $YEAR ?> 年的真實資料即時試算</b>出來的（本次耗時 <?= $calcMs ?> ms），目的是讓你先看到「這個指標實際上會長成什麼樣子」再決定要不要採用。
-            既有指標直接讀正式表的月快照（所以跟正式頁一定一致）；新指標則是當場算。<br>
-            格子右上角的記號：<span class="ks-mk">✱</span> ＝管理者覆寫的值、<span class="ks-mk man">✎</span> ＝人工填寫的值、
-            <span class="ks-mk cny">春</span> ＝春節自動調整過（滑鼠移過去看原始值與調整後的差異），沒有記號＝系統自動算的。
+        <div class="ks-note">
+            <b><i class="fa fa-info-circle"></i> 這是獨立於正式 KPI 的新方案頁。</b>
+            正式 KPI 表（2-GM-04-01）維持原本 22 項，資料完全不受本頁影響；
+            本頁的指標設定存在獨立的新表，寫入只會發生在你按「設定」分頁的儲存鈕時。<br>
+            表格裡的數字是<b>用 <?= $YEAR ?> 年的資料即時試算</b>出來的（本次耗時 <?= $calcMs ?> ms），沒有月快照、每次開頁面都重新算一次。<br>
+            格子右上角：<span class="ks-mk cny">春</span> ＝春節自動調整過（滑鼠移過去看原始值與調整後的差異）。
             <b>紅字</b>＝未達該項目標。
         </div>
 
         <div class="ks-cards">
-            <div class="ks-card"><div class="n"><?= $SUM['total'] ?></div><div class="t">指標總數</div></div>
-            <div class="ks-card"><div class="n"><?= $SUM['auto'] ?></div><div class="t">全自動計算</div></div>
-            <div class="ks-card"><div class="n"><?= $SUM['semi'] ?></div><div class="t">半自動</div></div>
-            <div class="ks-card"><div class="n"><?= $SUM['manual'] ?></div><div class="t">人工填寫</div></div>
-            <div class="ks-card"><div class="n"><?= $SUM['new'] ?></div><div class="t">新增</div></div>
-            <div class="ks-card"><div class="n"><?= $SUM['retune'] + $SUM['move'] ?></div><div class="t">改口徑／改部門</div></div>
-            <div class="ks-card"><div class="n"><?= count($HIDDEN) ?></div><div class="t">暫時隱藏</div></div>
-            <div class="ks-card"><div class="n"><?= count(kpi_scheme_dropped()) ?></div><div class="t">建議停用</div></div>
+            <?php
+            $totalActive = 0; $autoCnt = 0; $manualCnt = 0; $hiddenCnt = 0;
+            foreach ($ROWS as $row) {
+                if ((int)$row['ind_active'] !== 1) continue;
+                if ((int)$row['year_active'] !== 1) { $hiddenCnt++; continue; }
+                $totalActive++;
+                if ($row['source_mode'] === 'auto') $autoCnt++; else $manualCnt++;
+            }
+            ?>
+            <div class="ks-card"><div class="n"><?= $totalActive ?></div><div class="t">啟用中指標</div></div>
+            <div class="ks-card"><div class="n"><?= $autoCnt ?></div><div class="t">自動計算</div></div>
+            <div class="ks-card"><div class="n"><?= $manualCnt ?></div><div class="t">人工填寫</div></div>
+            <div class="ks-card"><div class="n"><?= $hiddenCnt ?></div><div class="t">已停用（本年度）</div></div>
         </div>
 
         <div class="ks-tblwrap">
@@ -290,52 +350,46 @@ function kpsTargetText(array $it): string {
             </thead>
             <tbody>
             <?php
-            $seq = 0;
             foreach ($BLOCKS as $bcode => $b):
-                $bItems = array_values(array_filter($ITEMS, fn($x) => $x['block'] === $bcode));
-                if (!$bItems) continue;
-                $st = $BSTAT[$bcode];
+                $bRows = array_values(array_filter($ROWS, fn($x) => $x['block'] === $bcode
+                    && (int)$x['ind_active'] === 1 && (int)$x['year_active'] === 1));
+                if (!$bRows) continue;
+                $autoInBlk = count(array_filter($bRows, fn($x) => $x['source_mode'] === 'auto'));
             ?>
                 <tr class="ks-blk"><td colspan="19">
                     <span class="bk-code"><?= htmlspecialchars($bcode) ?></span><?= htmlspecialchars($b['name']) ?>
                     <span style="font-weight:normal;color:#8a6d45;font-size:12px;">
-                        （<?= $st['n'] ?> 項，其中自動 <?= $st['auto'] ?> 項、新增 <?= $st['new'] ?> 項）</span>
+                        （<?= count($bRows) ?> 項，其中自動 <?= $autoInBlk ?> 項）</span>
                     <span class="bk-proc">涵蓋程序：<?= htmlspecialchars($b['proc']) ?></span>
                 </td></tr>
-                <?php foreach ($bItems as $it):
-                    $seq++;
-                    $vals = $VALUES[$it['code']] ?? null;
-                    [$tagTxt, ] = kpi_scheme_status_label($it['status']);
-                    // 平均（比率型）或合計（件數型）
+                <?php foreach ($bRows as $row):
+                    $itemNo = (int)$row['item_no'];
+                    $vals = $VALUES[$itemNo] ?? null;
                     $nums = [];
                     if ($vals) foreach ($vals as $c) { if ($c !== null && $c['v'] !== null) $nums[] = (float)$c['v']; }
                     $agg = null; $aggLbl = '';
                     if ($nums) {
-                        if ($it['vtype'] === 'count') { $agg = array_sum($nums); $aggLbl = '合計'; }
+                        if ($row['value_type'] === 'count') { $agg = array_sum($nums); $aggLbl = '合計'; }
                         else { $agg = array_sum($nums) / count($nums); $aggLbl = '平均'; }
                     }
                 ?>
                 <tr>
-                    <td><?= $seq ?></td>
+                    <td><?= $itemNo ?></td>
                     <td class="ks-name">
-                        <?= htmlspecialchars($it['name']) ?>
-                        <span class="ks-tag <?= htmlspecialchars($it['status']) ?>"><?= htmlspecialchars($tagTxt) ?></span>
-                        <i class="fa fa-info-circle ks-i" onclick="showInfo('<?= htmlspecialchars($it['code']) ?>')"
+                        <?= htmlspecialchars($row['name']) ?>
+                        <i class="fa fa-info-circle ks-i" onclick="showInfo(<?= $itemNo ?>)"
                            title="計算方式與備註"></i>
                     </td>
-                    <td><?= htmlspecialchars($deptName[$it['dept']] ?? '（未設定）') ?></td>
-                    <td><?= kpsFreqName($it['freq']) ?></td>
-                    <td><?= htmlspecialchars(kpsTargetText($it)) ?></td>
-                    <td><span class="ks-src <?= htmlspecialchars($it['src']) ?>"><?= htmlspecialchars(kpi_scheme_src_label($it['src'])) ?></span></td>
+                    <td><?= htmlspecialchars(kpsOwnerText($row, $deptName)) ?></td>
+                    <td><?= kpsFreqName($row['freq']) ?></td>
+                    <td><?= htmlspecialchars(kpsTargetTextRow($row)) ?></td>
+                    <td><span class="ks-src <?= htmlspecialchars($row['source_mode']) ?>"><?= $row['source_mode'] === 'auto' ? '自動' : '人工' ?></span></td>
                     <?php for ($m = 1; $m <= 12; $m++):
                         $c = ($vals && array_key_exists($m, $vals)) ? $vals[$m] : null;
                         if ($c === null || $c['v'] === null) { echo '<td class="ks-na">–</td>'; continue; }
                         $v   = (float)$c['v'];
-                        $bad = kpsBelow($v, $it);
-                        $src = (string)($c['src'] ?? '');
-                        $mk  = $src === 'override' ? '<span class="ks-mk">✱</span>'
-                             : ($src === 'manual'  ? '<span class="ks-mk man">✎</span>' : '');
-                        // 春節調整過的格子另外加一個記號，並把「原始值→調整後值」寫進提示裡
+                        $bad = kpsBelowRow($v, $row);
+                        $mk  = '';
                         $cnyOrig = $c['cny_orig_v'] ?? null;
                         $tipParts = [];
                         if ($cnyOrig !== null) {
@@ -351,10 +405,10 @@ function kpsTargetText(array $it): string {
                             $tipParts[] = '件數 ' . (string)$c['num'];
                         $tip = $tipParts ? ' title="' . htmlspecialchars(implode('；', $tipParts)) . '"' : '';
                         echo '<td' . $tip . '><span class="' . ($bad ? 'ks-below' : '') . '">'
-                           . htmlspecialchars(kpsFmt($v, $it['vtype'])) . '</span>' . $mk . '</td>';
+                           . htmlspecialchars(kpsFmt($v, $row['value_type'])) . '</span>' . $mk . '</td>';
                     endfor; ?>
                     <td><?= $agg === null ? '<span class="ks-na">–</span>'
-                            : '<b>' . htmlspecialchars(kpsFmt($agg, $it['vtype'])) . '</b>'
+                            : '<b>' . htmlspecialchars(kpsFmt($agg, $row['value_type'])) . '</b>'
                               . '<span style="font-size:10px;color:#8a6d45;"> ' . $aggLbl . '</span>' ?></td>
                 </tr>
                 <?php endforeach; ?>
@@ -363,48 +417,25 @@ function kpsTargetText(array $it): string {
         </table>
         </div>
 
-        <?php if ($HIDDEN): ?>
+        <?php
+        $hiddenRows = array_values(array_filter($ROWS, fn($x) => (int)$x['ind_active'] === 1 && (int)$x['year_active'] !== 1));
+        if ($hiddenRows):
+        ?>
         <div class="ks-sec">
-            <h4><i class="fa fa-eye-slash"></i> 暫時隱藏（<?= count($HIDDEN) ?> 項，定義保留、隨時可以打開）</h4>
+            <h4><i class="fa fa-eye-slash"></i> 已停用（<?= count($hiddenRows) ?> 項，本年度不計入總覽，隨時可在「設定」分頁重新啟用）</h4>
             <div><ul>
-            <?php foreach ($HIDDEN as $it): ?>
-                <li><b><?= htmlspecialchars($it['block']) ?>　<?= htmlspecialchars($it['name']) ?></b>　—
-                    <span class="ks-why"><?= htmlspecialchars($it['note']) ?></span>
-                    <i class="fa fa-info-circle ks-i" onclick="showInfo('<?= htmlspecialchars($it['code']) ?>')"
+            <?php foreach ($hiddenRows as $row): ?>
+                <li><b><?= htmlspecialchars($row['block']) ?>　<?= htmlspecialchars($row['name']) ?></b>
+                    <i class="fa fa-info-circle ks-i" onclick="showInfo(<?= (int)$row['item_no'] ?>)"
                        title="計算方式與備註"></i></li>
             <?php endforeach; ?>
             </ul></div>
         </div>
         <?php endif; ?>
 
-        <div class="ks-sec">
-            <h4><i class="fa fa-ban"></i> 建議停用（依你回饋的營運實況，不再列入新方案）</h4>
-            <div><ul>
-            <?php foreach (kpi_scheme_dropped() as $d): ?>
-                <li><b><?= (int)$d['no'] > 0 ? '原 #' . (int)$d['no'] . '　' : '' ?><?= htmlspecialchars($d['name']) ?></b>　—
-                    <span class="ks-why"><?= htmlspecialchars($d['why']) ?></span></li>
-            <?php endforeach; ?>
-            </ul></div>
-        </div>
+        </div><!-- /#tabOverview -->
 
-        <div class="ks-sec">
-            <h4><i class="fa fa-question-circle"></i> 待你決定</h4>
-            <div><ul>
-            <?php foreach (kpi_scheme_pending() as $d): ?>
-                <li><b><?= (int)$d['no'] > 0 ? '原 #' . (int)$d['no'] . '　' : '' ?><?= htmlspecialchars($d['name']) ?></b>　—
-                    <span class="ks-why"><?= htmlspecialchars($d['why']) ?></span></li>
-            <?php endforeach; ?>
-            </ul></div>
-        </div>
-
-        <div class="ks-sec">
-            <h4><i class="fa fa-wrench"></i> 上線前的先決條件（不先處理，指標一上線就是空白或假數字）</h4>
-            <div><ul>
-            <?php foreach (kpi_scheme_prereq() as $p): ?>
-                <li><b><?= htmlspecialchars($p['t']) ?></b>　—　<span class="ks-why"><?= htmlspecialchars($p['d']) ?></span></li>
-            <?php endforeach; ?>
-            </ul></div>
-        </div>
+        <div id="tabSetting" style="display:none;"></div>
 
         </div><!-- /.ks-wrap -->
 <?php endif; ?>
@@ -428,8 +459,9 @@ function kpsTargetText(array $it): string {
             <span class="m-close" onclick="closeMask('cnyMask')">&times;</span></div>
         <div class="m-body">
             <div class="ks-why" style="margin-bottom:10px;">
-                影響「月份受訂目標達成率」「月銷貨額達成率」兩項。自動比例＝(30−春節損失工作天數)/30，
-                損失天數取自行事曆上標題含「春節」的國定假日（只算週一到週五）；春節跨兩個月時兩個月各自計算。
+                影響來源模式設為「existing_cny」的指標（例如月份受訂目標達成率／月銷貨額達成率）。
+                自動比例＝(30−春節損失工作天數)/30，損失天數取自行事曆上標題含「春節」的國定假日
+                （只算週一到週五）；春節跨兩個月時兩個月各自計算。
                 「額外調整率」是管理員疊加的手動修正（百分點，可正可負），用來微調自動算出來的跟實際出入太大的情況。
             </div>
             <div id="cnyNoEdit" class="vio-warn" style="display:none;">
@@ -448,6 +480,15 @@ function kpsTargetText(array $it): string {
     </div>
 </div>
 
+<!-- 設定：單一指標編輯面板 -->
+<div class="ks-mask" id="editMask">
+    <div class="ksc-panel">
+        <div class="m-head"><span id="editTitle">新增指標</span>
+            <span class="m-close" onclick="closeMask('editMask')">&times;</span></div>
+        <div class="m-body" id="editBody">載入中…</div>
+    </div>
+</div>
+
 <!-- 使用說明（鐵律7） -->
 <div class="ks-mask" id="helpUseMask">
     <div class="ks-modal">
@@ -455,54 +496,42 @@ function kpsTargetText(array $it): string {
             <span class="m-close" onclick="closeMask('helpUseMask')">&times;</span></div>
         <div class="m-body help-doc">
             <h4>這一頁是什麼</h4>
-            <p>依「附件C 品質管理系統流程圖」的八大區塊（COP01~COP04、SP01·SP02、MP01·MP02）重新規劃的 KPI 方案草案。
-               目的是讓你<b>先看到每個指標用真實資料算出來長什麼樣子</b>，再決定要不要採用或修改。</p>
+            <p>依「附件C 品質管理系統流程圖」的八大區塊（COP01~COP04、SP01·SP02、MP01·MP02）規劃的 KPI 方案，
+               與正式 KPI 表（2-GM-04-01）<b>完全獨立</b>——兩者的指標資料存在不同的資料表，互不影響。</p>
 
             <h4>它會不會動到正式 KPI</h4>
             <ul>
-                <li><b>不會。</b>正式 KPI 表（2-GM-04-01）維持原本 22 項，2026 年的資料一格都沒有動，不能填值、不能覆寫、不會產生快照或附件。</li>
-                <li>唯一的例外是「春節目標調整」的管理員額外調整率——那是這個草案功能自己的設定（獨立的小資料表），不是正式 KPI 資料，不影響 2-GM-04-01。</li>
-                <li>等你拍板後，才會把確定的指標搬進正式表。</li>
+                <li><b>不會。</b>本頁所有寫入只會發生在「設定」分頁，而那些寫入全部落在 kpi_scheme_indicator／
+                    kpi_scheme_indicator_year 這兩張全新、獨立的表，正式表 kpi_as_indicator 等一行都不會動。</li>
+                <li>「春節目標調整」用的是這個頁面自己的小表（kpi_scheme_cny_adjust），也與正式表無關。</li>
             </ul>
 
-            <h4>表格怎麼看</h4>
+            <h4>總覽分頁怎麼看</h4>
             <ul>
-                <li>每個區塊一條底色標題列，括號裡寫明該區塊有幾項、其中幾項可自動計算。</li>
-                <li><b>既有指標</b>的數字直接讀正式 KPI 表的月快照，所以跟正式頁一定一致。</li>
-                <li><b>新指標</b>的數字是當場試算（用 <?= $YEAR ?> 年真實資料），還沒發生的月份一律留白、不給假數字。</li>
-                <li>滑鼠移到數字上會顯示<b>分子／分母</b>。</li>
-                <li>格子右上角：<span class="ks-mk">✱</span>＝管理者覆寫、<span class="ks-mk man">✎</span>＝人工填寫、
-                    <span class="ks-mk cny">春</span>＝春節自動調整過、無記號＝系統自動算。
-                    <b>這個記號很重要</b>——稽核時被問「這個數字怎麼來的」，有覆寫記號的就要拿得出佐證。</li>
-                <li><b>紅字</b>＝未達該項目標。標「觀察期」的項目刻意不訂目標，所以不會有紅字。</li>
+                <li>每個區塊一條底色標題列，括號裡寫明該區塊有幾項、其中幾項設為自動計算。</li>
+                <li>數字是<b>即時試算</b>（用 <?= $YEAR ?> 年資料），沒有月快照，每次開頁面重新算一次。</li>
+                <li>滑鼠移到數字上會顯示<b>分子／分母</b>（或件數）。</li>
+                <li>格子右上角：<span class="ks-mk cny">春</span>＝春節自動調整過；<b>紅字</b>＝未達該項目標。</li>
+                <li>資料來源「existing／existing_cny」是直接沿用正式 KPI 表某一項的月快照，所以跟正式頁的那一項一定一致。</li>
             </ul>
 
-            <h4>狀態標籤</h4>
+            <h4>設定分頁怎麼用</h4>
             <ul>
-                <li><span class="ks-tag new">新增</span>本次新提案的指標</li>
-                <li><span class="ks-tag keep">沿用</span>既有指標，口徑不變</li>
-                <li><span class="ks-tag retune">改口徑</span>既有指標，目標或計算範圍要調整</li>
-                <li><span class="ks-tag move">改負責部門</span>指標不變，只換負責單位</li>
-                <li><span class="ks-tag watch">觀察期</span>資料量還不夠，先不訂目標</li>
-                <li><span class="ks-tag warn">待補資料</span>算得出來，但來源幾乎是空的</li>
-                <li><span class="ks-tag empty">無歷史資料</span>欄位結構已備妥，但系統裡還沒有任何一筆走完整個流程的紀錄</li>
+                <li>僅 <b>KPI 管理員／管理者</b>可編輯；其他角色只能檢視。</li>
+                <li>指標依區塊分組列出，點「編輯」開啟單一指標的完整編輯面板（基本資料／目標／擔當者／資料來源與參數）。</li>
+                <li>資料來源選「自動計算」時，選擇計算方式後會列出該方式需要的參數；選「existing／existing_cny」時，
+                    參數填的是<b>正式 KPI 表的項次編號</b>（可參考清單上的對照）。</li>
+                <li>存檔前可按「試算目前設定」，在不存檔的情況下先看這組設定會算出什麼結果。</li>
+                <li>「新增指標」會開同一個編輯面板（空白狀態），新增完就是一個完整可用的指標。</li>
+                <li>停用一個指標不會刪除歷史試算結果（反正本頁不存快照），只是總覽分頁不再列出它。</li>
             </ul>
-
-            <h4>每一項的計算方式去哪裡看</h4>
-            <p>點指標名稱右邊的 <i class="fa fa-info-circle" style="color:#b5762a;"></i>，會列出該項的
-               <b>計算方式</b>（分子分母怎麼取）與<b>備註</b>（資料面的提醒、為什麼這樣設計）。</p>
-
-            <h4>「暫時隱藏」是什麼</h4>
-            <p>主表格下方若有「暫時隱藏」區塊，代表這幾項<b>定義已經寫好、但先不放進主表格與總數裡</b>——
-               通常是目前完全沒有歷史資料可看，放在表格裡只會是一整排空白。
-               跟「建議停用」不同：停用是已經決定不用了，隱藏只是先收起來，隨時可以打開。</p>
 
             <h4>列印</h4>
-            <p>固定 A3 橫式。列印對話框請把紙張選成 A3。這是內部討論用的草案、不是正式 AS 表單，
+            <p>固定 A3 橫式。列印對話框請把紙張選成 A3。這是內部方案、不是正式 AS 表單，
                所以只印公司全名與頁碼，<b>不印 AS 文件編號</b>。</p>
 
             <h4>權限</h4>
-            <p>沿用 KPI 模組既有角色，看得到正式 KPI 表的人就看得到這一頁，不另外指派。</p>
+            <p>沿用 KPI 模組既有角色：看得到正式 KPI 表的人就看得到本頁總覽；KPI 管理員／管理者才能用設定分頁。</p>
         </div>
     </div>
 </div>
@@ -524,41 +553,62 @@ $(document).ready(function(){
     $('#sidebar-menu').css('visibility', 'visible');
 });
 
-var ITEM_INFO = <?= json_encode(array_map(function ($x) {
-        return ['name'=>$x['name'], 'block'=>$x['block'], 'basis'=>$x['basis'], 'note'=>$x['note'],
-                'status'=>$x['status'], 'src'=>$x['src']];
-    }, array_column(array_merge($ITEMS, $HIDDEN), null, 'code')), JSON_UNESCAPED_UNICODE) ?>;
-var STATUS_TXT = <?php
-    $statusKeys = ['keep','move','retune','new','watch','warn','empty'];
-    $statusMap = [];
-    foreach ($statusKeys as $sk) $statusMap[$sk] = kpi_scheme_status_label($sk)[1];
-    echo json_encode($statusMap, JSON_UNESCAPED_UNICODE);
-?>;
+var KS_YEAR = <?= $YEAR ?>;
+var API = '../../src/store/KpiSchemeCny_API.php';
+
+/* ===== 指標說明（同時涵蓋總覽與設定分頁的 info 圖示） ===== */
+var ITEM_INFO = {};
+<?php foreach ($ROWS as $row):
+    $itemNo = (int)$row['item_no'];
+    $reg = kpi_scheme_registry();
+    $calcDesc = ($row['calculator_key'] && isset($reg[$row['calculator_key']]))
+        ? $reg[$row['calculator_key']]['desc'] : '';
+?>
+ITEM_INFO[<?= $itemNo ?>] = <?= json_encode([
+    'name'=>$row['name'], 'block'=>$row['block'], 'calc_key'=>$row['calculator_key'],
+    'calc_desc'=>$calcDesc, 'params'=>$row['params_json'], 'note'=>$row['note'],
+    'source_mode'=>$row['source_mode'], 'active'=>(int)$row['year_active'],
+], JSON_UNESCAPED_UNICODE) ?>;
+<?php endforeach; ?>
 
 function openMask(id){ document.getElementById(id).style.display='block'; }
 function closeMask(id){ document.getElementById(id).style.display='none'; }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 
-function showInfo(code){
-    var it = ITEM_INFO[code];
+function showInfo(itemNo){
+    var it = ITEM_INFO[itemNo];
     if (!it) return;
     document.getElementById('infoTitle').textContent = it.block + '　' + it.name;
-    var h = '<h5>計算方式</h5><div>' + esc(it.basis) + '</div>';
-    if (it.note) h += '<h5>備註與提醒</h5><div>' + esc(it.note) + '</div>';
-    h += '<h5>這一項的狀態</h5><div>' + esc(STATUS_TXT[it.status] || it.status) + '</div>';
+    var h = '';
+    h += '<h5>資料來源</h5><div>' + (it.source_mode === 'auto' ? '自動計算' : '人工填寫') +
+         (it.calc_key ? '（' + esc(it.calc_key) + '）' : '') + '</div>';
+    if (it.calc_desc) h += '<h5>計算方式</h5><div>' + esc(it.calc_desc) + '</div>';
+    if (it.params) h += '<h5>參數</h5><div style="font-family:monospace;">' + esc(it.params) + '</div>';
+    if (it.note) h += '<h5>備註</h5><div>' + esc(it.note) + '</div>';
+    h += '<h5>本年度狀態</h5><div>' + (it.active ? '啟用' : '已停用（不計入總覽）') + '</div>';
     document.getElementById('infoBody').innerHTML = h;
     openMask('infoMask');
 }
 
-var CNY_API = '../../src/store/KpiSchemeCny_API.php';
+/* ===== 分頁切換 ===== */
+var KSC_LOADED = false;
+function kscSwitchTab(tab){
+    document.getElementById('tabBtnOverview').className = 'ks-tab' + (tab === 'overview' ? ' on' : '');
+    document.getElementById('tabBtnSetting').className  = 'ks-tab' + (tab === 'setting'  ? ' on' : '');
+    document.getElementById('tabOverview').style.display = tab === 'overview' ? '' : 'none';
+    document.getElementById('tabSetting').style.display  = tab === 'setting'  ? '' : 'none';
+    if (tab === 'setting' && !KSC_LOADED) kscLoad();
+}
+
+/* ===== 春節目標調整（沿用既有邏輯） ===== */
 var CNY_MONTH_NAME = ['','1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
 
 function openCnyMask(){
     openMask('cnyMask');
-    document.getElementById('cnyYearLabel').textContent = <?= $YEAR ?>;
+    document.getElementById('cnyYearLabel').textContent = KS_YEAR;
     document.getElementById('cnyTbody').innerHTML = '<tr><td colspan="7" style="text-align:center;color:#8a6d45;">載入中…</td></tr>';
-    $.getJSON(CNY_API, { action:'list', year: <?= $YEAR ?> }, function(res){
+    $.getJSON(API, { action:'list', year: KS_YEAR }, function(res){
         if (!res || !res.ok) { document.getElementById('cnyTbody').innerHTML =
             '<tr><td colspan="7" style="text-align:center;color:#DD5138;">載入失敗：' + esc((res && res.error) || '') + '</td></tr>'; return; }
         document.getElementById('cnyNoEdit').style.display = res.can_edit ? 'none' : 'block';
@@ -590,29 +640,351 @@ function saveCnyRow(month){
     var extra = $tr.find('.cny-extra').val();
     var note = $tr.find('.cny-note').val();
     if (extra === '' || isNaN(parseFloat(extra))) { alert('額外調整率請輸入數字（可以是 0）'); return; }
-    $.post(CNY_API, { action:'save', year: <?= $YEAR ?>, month: month, extra_pct: extra, note: note }, function(res){
+    $.post(API, { action:'save', year: KS_YEAR, month: month, extra_pct: extra, note: note }, function(res){
         if (!res || !res.ok) { alert('儲存失敗：' + ((res && res.error) || '')); return; }
-        // 直接整頁重載：既重新載入設定面板的最新值，也讓主表格跟著重算
-        // （這一格調整前後可能從「有調整」變成「沒調整」，兩邊只有整頁重算才會一致）
         location.reload();
     }, 'json').fail(function(){ alert('儲存失敗：連線異常'); });
 }
 
 function doPrint(){
-    // ai-rules/23：列印一律留紀錄（一次列印只記一筆）
     try {
         if (window.EGPrintLog && EGPrintLog.record) {
             EGPrintLog.record({ source:'kpi_scheme', doc_kind:'form',
-                                doc_name:'KPI 新方案（草案） <?= $YEAR ?>' });
+                                doc_name:'KPI 新方案 ' + KS_YEAR });
         }
     } catch(e){}
     alert('列印對話框請把紙張選成 A3、方向選橫式。');
     window.print();
 }
 
-// 點遮罩空白處關閉
 $(document).on('click', '.ks-mask', function(e){ if (e.target === this) this.style.display='none'; });
 $(document).on('click', '#btnPageHelp', function(){ openMask('helpUseMask'); });
+
+/* ============================================================
+ * 設定分頁
+ * ============================================================ */
+var KSC_DATA = null;   // list_scheme 的完整回應
+var KSC_CUR_ROW = null; // 目前編輯面板對應的資料列（row，來自 KSC_DATA.rows）；新增時為 null
+
+function kscLoad(){
+    document.getElementById('tabSetting').innerHTML = '<div style="padding:20px;text-align:center;color:#8a6d45;">載入中…</div>';
+    $.getJSON(API, { action:'list_scheme', year: KS_YEAR }, function(res){
+        if (!res || !res.ok) {
+            document.getElementById('tabSetting').innerHTML =
+                '<div class="ks-noperm">載入失敗：' + esc((res && res.error) || '') + '</div>';
+            return;
+        }
+        KSC_DATA = res;
+        KSC_LOADED = true;
+        kscRender();
+    }).fail(function(){
+        document.getElementById('tabSetting').innerHTML = '<div class="ks-noperm">連線失敗</div>';
+    });
+}
+
+function kscRender(){
+    var canEdit = KSC_DATA.can_edit;
+    var blocks = KSC_DATA.blocks;
+    var rows = KSC_DATA.rows;
+    var html = '<div class="ks-toolbar">'
+        + '<span style="font-size:13px;color:#5b3a1e;">年度　<b>' + KS_YEAR + '</b></span>'
+        + (canEdit ? '<button onclick="kscOpenEdit(null)"><i class="fa fa-plus"></i> 新增指標</button>' : '')
+        + '<button onclick="kscLoad()"><i class="fa fa-refresh"></i> 重新載入</button>'
+        + (canEdit ? '' : '<span style="color:#a08356;font-size:12.5px;">你沒有 KPI 管理者權限，僅供檢視</span>')
+        + '</div>';
+
+    Object.keys(blocks).forEach(function(bcode){
+        var bRows = rows.filter(function(r){ return r.block === bcode; });
+        if (!bRows.length) return;
+        html += '<div class="ksc-block"><h5>' +
+            '<span class="bk-code" style="display:inline-block;background:#8A5A2B;color:#fff;border-radius:4px;padding:1px 8px;margin-right:8px;font-size:12px;">' + esc(bcode) + '</span>'
+            + esc(blocks[bcode].name) + '　（' + bRows.length + ' 項）</h5>';
+        html += '<table class="ksc-tbl"><thead><tr>'
+            + '<th style="width:36px;">#</th><th>名稱</th><th style="width:70px;">頻率</th>'
+            + '<th style="width:110px;">目標</th><th style="width:140px;">擔當者</th>'
+            + '<th style="width:70px;">來源</th><th style="width:60px;">狀態</th><th style="width:60px;"></th>'
+            + '</tr></thead><tbody>';
+        bRows.forEach(function(r){
+            html += '<tr>'
+                + '<td>' + r.item_no + '</td>'
+                + '<td>' + esc(r.name) + ' <i class="fa fa-info-circle ks-i" onclick="showInfo(' + r.item_no + ')"></i></td>'
+                + '<td>' + kscFreqName(r.freq) + '</td>'
+                + '<td>' + esc(kscTargetText(r)) + '</td>'
+                + '<td>' + esc(r.owner_display || '（未設定）') + '</td>'
+                + '<td>' + (r.source_mode === 'auto' ? '自動' : '人工') + '</td>'
+                + '<td>' + (String(r.year_active) === '1' ? '啟用' : '<span class="ksc-badge-off">已停用</span>') + '</td>'
+                + '<td>' + (canEdit ? '<button class="ksc-edit-btn" onclick="kscOpenEdit(' + r.indicator_id + ')">編輯</button>' : '') + '</td>'
+                + '</tr>';
+        });
+        html += '</tbody></table></div>';
+    });
+
+    document.getElementById('tabSetting').innerHTML = html;
+}
+
+function kscFreqName(f){ return {monthly:'每月',quarterly:'每季',halfyear:'半年',yearly:'每年'}[f] || f; }
+function kscTargetText(r){
+    if (r.target_text) return r.target_text;
+    if (r.target_value === null || r.target_value === undefined || r.target_value === '') return '觀察期（未訂）';
+    var op = r.target_direction === 'lte' ? '≤' : (r.target_direction === 'yes' ? '＝' : '≥');
+    var t = parseFloat(r.target_value);
+    t = (Math.round(t*100)/100).toString();
+    return op + ' ' + t + (r.target_unit || '');
+}
+
+/* ---- 單一指標編輯面板 ---- */
+function kscFindRow(indicatorId){
+    if (!indicatorId) return null;
+    var found = null;
+    (KSC_DATA.rows || []).forEach(function(r){ if (String(r.indicator_id) === String(indicatorId)) found = r; });
+    return found;
+}
+
+function kscOpenEdit(indicatorId){
+    KSC_CUR_ROW = kscFindRow(indicatorId);
+    document.getElementById('editTitle').textContent = KSC_CUR_ROW ? ('編輯指標　#' + KSC_CUR_ROW.item_no + '　' + KSC_CUR_ROW.name) : '新增指標';
+    document.getElementById('editBody').innerHTML = kscEditFormHtml(KSC_CUR_ROW);
+    kscBindSourceModeToggle();
+    kscRenderParamFields(KSC_CUR_ROW ? KSC_CUR_ROW.calculator_key : '', KSC_CUR_ROW ? KSC_CUR_ROW.params_json : null);
+    kscFillOwnerMembers(KSC_CUR_ROW ? KSC_CUR_ROW.owner_dept_id : null, KSC_CUR_ROW ? KSC_CUR_ROW.owner_user_id : null);
+    openMask('editMask');
+}
+
+function kscEditFormHtml(r){
+    var blocks = KSC_DATA.blocks;
+    var depts = KSC_DATA.dicts.departments;
+    var registry = KSC_DATA.registry;
+
+    var blockOpts = Object.keys(blocks).map(function(bc){
+        return '<option value="' + esc(bc) + '"' + (r && r.block === bc ? ' selected' : '') + '>' + esc(bc) + ' ' + esc(blocks[bc].name) + '</option>';
+    }).join('');
+
+    var deptOpts = '<option value="">（未設定）</option>' + depts.map(function(d){
+        return '<option value="' + d.id + '"' + (r && String(r.owner_dept_id) === String(d.id) ? ' selected' : '') + '>' + esc(d.name) + '</option>';
+    }).join('');
+
+    var calcOpts = '<option value="">（請選擇）</option>' + Object.keys(registry).map(function(k){
+        return '<option value="' + esc(k) + '"' + (r && r.calculator_key === k ? ' selected' : '') + '>' + esc(registry[k].name) + '（' + esc(k) + '）</option>';
+    }).join('');
+
+    var freqSel = function(v){ return ['monthly','quarterly','halfyear','yearly'].map(function(f){
+        return '<option value="' + f + '"' + (v === f ? ' selected' : '') + '>' + kscFreqName(f) + '</option>'; }).join(''); };
+    var vtSel = function(v){ return [['percent','百分比'],['count','件數'],['score','分數'],['rate','比率(非百分比)'],['yesno','是否']].map(function(p){
+        return '<option value="' + p[0] + '"' + (v === p[0] ? ' selected' : '') + '>' + p[1] + '</option>'; }).join(''); };
+    var dirSel = function(v){ return [['gte','≥ 大於等於'],['lte','≤ 小於等於'],['yes','＝ 是／否']].map(function(p){
+        return '<option value="' + p[0] + '"' + (v === p[0] ? ' selected' : '') + '>' + p[1] + '</option>'; }).join(''); };
+
+    var sourceMode = r ? r.source_mode : 'manual';
+
+    var h = '';
+    h += '<div class="ksc-sec"><div class="hd">基本資料</div><div class="bd">'
+       + '<div class="ksc-fld w3"><label>名稱</label><input type="text" id="f_name" value="' + esc(r ? r.name : '') + '"></div>'
+       + '<div class="ksc-fld w2"><label>區塊</label><select id="f_block">' + blockOpts + '</select></div>'
+       + '<div class="ksc-fld w1"><label>頻率</label><select id="f_freq">' + freqSel(r ? r.freq : 'monthly') + '</select></div>'
+       + '<div class="ksc-fld w1"><label>數值型態</label><select id="f_vtype">' + vtSel(r ? r.value_type : 'percent') + '</select></div>'
+       + '<div class="ksc-fld w1"><label>啟用</label><select id="f_active">'
+       +   '<option value="1"' + (!r || String(r.year_active) === '1' ? ' selected' : '') + '>啟用</option>'
+       +   '<option value="0"' + (r && String(r.year_active) === '0' ? ' selected' : '') + '>停用</option></select></div>'
+       + '</div></div>';
+
+    h += '<div class="ksc-sec"><div class="hd">目標</div><div class="bd">'
+       + '<div class="ksc-fld w1"><label>方向</label><select id="f_dir">' + dirSel(r ? r.target_direction : 'gte') + '</select></div>'
+       + '<div class="ksc-fld w1"><label>數值（留空＝觀察期）</label><input type="text" id="f_tval" value="' + esc(r && r.target_value !== null ? r.target_value : '') + '"></div>'
+       + '<div class="ksc-fld w1"><label>單位</label><input type="text" id="f_tunit" value="' + esc(r ? (r.target_unit || '') : '') + '"></div>'
+       + '<div class="ksc-fld w2"><label>文字覆寫（留空則自動由方向/數值/單位組出）</label><input type="text" id="f_ttext" value="' + esc(r ? (r.target_text || '') : '') + '"></div>'
+       + '</div></div>';
+
+    h += '<div class="ksc-sec"><div class="hd">擔當者</div><div class="bd">'
+       + '<div class="ksc-fld w2"><label>部門</label><select id="f_odept" data-eg-filter="輸入部門名稱篩選…" onchange="kscFillOwnerMembers(this.value,null)">' + deptOpts + '</select></div>'
+       + '<div class="ksc-fld w2"><label>部門人員（選填）</label><select id="f_ouser" data-eg-filter="輸入姓名篩選…"><option value="">（不指定）</option></select></div>'
+       + '<div class="ksc-fld w3"><label>顯示文字覆寫（留空則自動用部門/人員名稱）</label><input type="text" id="f_odisp" value="' + esc(r ? (r.owner_display || '') : '') + '"></div>'
+       + '</div></div>';
+
+    h += '<div class="ksc-sec"><div class="hd">資料來源</div><div class="bd">'
+       + '<div class="ksc-fld w1"><label>模式</label><select id="f_srcmode" onchange="kscOnSourceModeChange()">'
+       +   '<option value="manual"' + (sourceMode === 'manual' ? ' selected' : '') + '>人工填寫</option>'
+       +   '<option value="auto"' + (sourceMode === 'auto' ? ' selected' : '') + '>自動計算</option></select></div>'
+       + '<div class="ksc-fld w3" id="f_calcwrap" style="' + (sourceMode === 'auto' ? '' : 'display:none;') + '">'
+       +   '<label>計算方式</label><select id="f_calckey" data-eg-filter="輸入計算方式名稱篩選…" onchange="kscOnCalcKeyChange()">' + calcOpts + '</select></div>'
+       + '<div id="f_calcdesc" style="width:100%;font-size:12px;color:#8a6d45;' + (sourceMode === 'auto' ? '' : 'display:none;') + '"></div>'
+       + '<div id="f_paramsbox" style="width:100%;' + (sourceMode === 'auto' ? '' : 'display:none;') + '"></div>'
+       + '</div></div>';
+
+    h += '<div class="ksc-sec"><div class="hd">備註</div><div class="bd">'
+       + '<div class="ksc-fld wfull"><textarea id="f_note">' + esc(r ? (r.note || '') : '') + '</textarea></div>'
+       + '</div></div>';
+
+    h += '<div class="ksc-err" id="f_err" style="display:none;"></div>';
+
+    h += '<div class="ksc-foot">'
+       + '<button class="ksc-btn-save" onclick="kscSave()"><i class="fa fa-save"></i> 儲存</button>'
+       + '<button class="ksc-btn-prev" onclick="kscPreview()"><i class="fa fa-calculator"></i> 試算目前設定</button>'
+       + '<button class="ksc-btn-cancel" onclick="closeMask(\'editMask\')">取消</button>'
+       + '<span class="ksc-prev-result" id="f_prevresult"></span>'
+       + '</div>';
+
+    return h;
+}
+
+function kscOnSourceModeChange(){
+    var mode = document.getElementById('f_srcmode').value;
+    document.getElementById('f_calcwrap').style.display = mode === 'auto' ? '' : 'none';
+    document.getElementById('f_calcdesc').style.display = mode === 'auto' ? '' : 'none';
+    document.getElementById('f_paramsbox').style.display = mode === 'auto' ? '' : 'none';
+    if (mode === 'auto') kscOnCalcKeyChange();
+}
+
+function kscOnCalcKeyChange(){
+    var key = document.getElementById('f_calckey').value;
+    var reg = KSC_DATA.registry[key];
+    document.getElementById('f_calcdesc').textContent = reg ? reg.desc : '';
+    // 切換計算方式時，若目前編輯的指標本來就是這個 calculator_key，沿用原參數；否則空白重來
+    var curParams = (KSC_CUR_ROW && KSC_CUR_ROW.calculator_key === key) ? KSC_CUR_ROW.params_json : null;
+    kscRenderParamFields(key, curParams);
+}
+
+function kscRenderParamFields(calcKey, paramsJsonStr){
+    var box = document.getElementById('f_paramsbox');
+    if (!calcKey) { box.innerHTML = ''; return; }
+    var reg = KSC_DATA.registry[calcKey];
+    if (!reg) { box.innerHTML = ''; return; }
+    var params = {};
+    try { params = paramsJsonStr ? JSON.parse(paramsJsonStr) : {}; } catch(e){ params = {}; }
+
+    if (!reg.params || !reg.params.length) { box.innerHTML = '<div style="color:#8a6d45;font-size:12px;">（此計算方式不需要參數）</div>'; return; }
+
+    var h = '<div class="ksc-param-box"><div class="pname">參數</div>';
+    reg.params.forEach(function(p){
+        var v = params[p.key];
+        var id = 'fp_' + p.key;
+        h += '<div class="ksc-fld w2" style="margin-right:8px;margin-bottom:6px;"><label>' + esc(p.label) + '</label>';
+        if (p.type === 'process_type_ids') {
+            var sel = Array.isArray(v) ? v.map(String) : [];
+            var opts = (KSC_DATA.dicts.process_types || []).map(function(pt){
+                var checked = sel.indexOf(String(pt.process_type_id)) >= 0;
+                return '<label style="display:inline-block;margin-right:8px;font-size:12px;"><input type="checkbox" class="pt-chk" data-pid="' + pt.process_type_id + '" ' + (checked?'checked':'') + '> ' + esc(pt.process_type) + '</label>';
+            }).join('');
+            h += '<div id="' + id + '" style="border:1px solid #D8BE93;border-radius:4px;padding:4px 6px;max-height:90px;overflow-y:auto;">' + opts + '</div>';
+        } else if (p.type === 'int') {
+            h += '<input type="number" id="' + id + '" value="' + (v !== undefined && v !== null ? v : '') + '">';
+        } else {
+            // textlist：逗號分隔文字，存檔時轉陣列
+            var txt = Array.isArray(v) ? v.join(',') : (v !== undefined && v !== null ? v : '');
+            h += '<input type="text" id="' + id + '" value="' + esc(txt) + '" placeholder="逗號分隔，例：1,2,3">';
+        }
+        h += '</div>';
+    });
+    h += '<div style="width:100%;font-size:11.5px;color:#8a6d45;">「existing／existing_cny」的 item_no 指的是正式 KPI 表的項次：'
+       + (KSC_DATA.dicts.official_items || []).map(function(o){ return '#' + o.item_no + ' ' + esc(o.name); }).join('、')
+       + '</div>';
+    h += '</div>';
+    box.innerHTML = h;
+}
+
+function kscCollectParams(calcKey){
+    var reg = KSC_DATA.registry[calcKey];
+    if (!reg || !reg.params || !reg.params.length) return {};
+    var out = {};
+    reg.params.forEach(function(p){
+        var id = 'fp_' + p.key;
+        if (p.type === 'process_type_ids') {
+            var ids = [];
+            document.querySelectorAll('#' + id + ' .pt-chk:checked').forEach(function(cb){ ids.push(parseInt(cb.getAttribute('data-pid'), 10)); });
+            out[p.key] = ids;
+        } else if (p.type === 'int') {
+            var el = document.getElementById(id);
+            out[p.key] = el && el.value !== '' ? parseInt(el.value, 10) : null;
+        } else {
+            var el2 = document.getElementById(id);
+            var raw = el2 ? el2.value : '';
+            out[p.key] = raw.split(',').map(function(s){ s = s.trim(); return s === '' ? null : (isNaN(s) ? s : parseFloat(s)); }).filter(function(s){ return s !== null; });
+        }
+    });
+    return out;
+}
+
+function kscFillOwnerMembers(deptId, selectUserId){
+    var sel = document.getElementById('f_ouser');
+    if (!sel) return;
+    var members = (deptId && KSC_DATA.dicts.dept_members[deptId]) ? KSC_DATA.dicts.dept_members[deptId] : [];
+    var html = '<option value="">（不指定）</option>';
+    members.forEach(function(m){
+        html += '<option value="' + m.user_id + '"' + (selectUserId && String(selectUserId) === String(m.user_id) ? ' selected' : '') + '>'
+             + esc(m.cname) + (m.position_name ? '（' + esc(m.position_name) + '）' : '') + '</option>';
+    });
+    sel.innerHTML = html;
+}
+
+function kscBindSourceModeToggle(){
+    // 補一次 owner dept 的候選人員（新增/切換部門時可能還沒填 selectUserId）
+}
+
+function kscSetErr(msg){
+    var el = document.getElementById('f_err');
+    if (!msg) { el.style.display = 'none'; el.textContent = ''; return; }
+    el.style.display = 'block'; el.textContent = msg;
+}
+
+function kscSave(){
+    kscSetErr('');
+    var name = document.getElementById('f_name').value.trim();
+    if (!name) { kscSetErr('名稱必填'); return; }
+    var post = {
+        year: KS_YEAR,
+        indicator_id: KSC_CUR_ROW ? KSC_CUR_ROW.indicator_id : 0,
+        name: name,
+        block: document.getElementById('f_block').value,
+        freq: document.getElementById('f_freq').value,
+        value_type: document.getElementById('f_vtype').value,
+        sort_order: KSC_CUR_ROW ? KSC_CUR_ROW.sort_order : 0,
+        is_active: document.getElementById('f_active').value,
+    };
+    $.post(API, { action:'save_indicator', year: post.year, indicator_id: post.indicator_id, name: post.name,
+                  block: post.block, freq: post.freq, value_type: post.value_type, sort_order: post.sort_order,
+                  is_active: post.is_active }, function(res1){
+        if (!res1 || !res1.ok) { kscSetErr('主檔儲存失敗：' + ((res1 && res1.error) || '')); return; }
+        var indicatorId = res1.indicator_id;
+        var srcMode = document.getElementById('f_srcmode').value;
+        var calcKey = srcMode === 'auto' ? document.getElementById('f_calckey').value : '';
+        if (srcMode === 'auto' && !calcKey) { kscSetErr('自動模式請選擇計算方式'); return; }
+        var params = (srcMode === 'auto' && calcKey) ? kscCollectParams(calcKey) : {};
+        var odeptEl = document.getElementById('f_odept'), ouserEl = document.getElementById('f_ouser');
+        var iyPost = {
+            action:'save_indicator_year', indicator_id: indicatorId, year: KS_YEAR,
+            owner_dept_id: odeptEl.value, owner_user_id: ouserEl.value, owner_display: document.getElementById('f_odisp').value,
+            source_mode: srcMode, calculator_key: calcKey, params_json: JSON.stringify(params),
+            target_direction: document.getElementById('f_dir').value, target_value: document.getElementById('f_tval').value,
+            target_unit: document.getElementById('f_tunit').value, target_text: document.getElementById('f_ttext').value,
+            note: document.getElementById('f_note').value, is_active: document.getElementById('f_active').value,
+        };
+        $.post(API, iyPost, function(res2){
+            if (!res2 || !res2.ok) { kscSetErr('年度設定儲存失敗：' + ((res2 && res2.error) || '')); return; }
+            closeMask('editMask');
+            kscLoad();
+            // 總覽分頁的數字也要跟著重新算，直接重整頁面最省事也最保證一致
+            setTimeout(function(){ location.reload(); }, 150);
+        }, 'json').fail(function(){ kscSetErr('年度設定儲存失敗：連線異常'); });
+    }, 'json').fail(function(){ kscSetErr('主檔儲存失敗：連線異常'); });
+}
+
+function kscPreview(){
+    var srcMode = document.getElementById('f_srcmode').value;
+    var calcKey = srcMode === 'auto' ? document.getElementById('f_calckey').value : '';
+    if (!calcKey) { kscSetErr('請先選擇計算方式才能試算'); return; }
+    kscSetErr('');
+    var params = kscCollectParams(calcKey);
+    var now = new Date();
+    document.getElementById('f_prevresult').textContent = '試算中…';
+    $.post(API, { action:'preview_compute', calculator_key: calcKey, year: KS_YEAR, month: now.getMonth() + 1,
+                  params_json: JSON.stringify(params) }, function(res){
+        if (!res || !res.ok) { document.getElementById('f_prevresult').textContent = '試算失敗：' + ((res && res.error) || ''); return; }
+        var r = res.result;
+        if (!r || r.v === null || r.v === undefined) { document.getElementById('f_prevresult').textContent = '本月（' + (now.getMonth()+1) + '月）查無資料'; return; }
+        var txt = '試算結果（' + (now.getMonth()+1) + '月）：' + r.v;
+        if (r.den !== undefined && r.den !== null) txt += '（' + r.num + '/' + r.den + '）';
+        document.getElementById('f_prevresult').textContent = txt;
+    }, 'json').fail(function(){ document.getElementById('f_prevresult').textContent = '試算失敗：連線異常'; });
+}
 </script>
 </body>
 </html>

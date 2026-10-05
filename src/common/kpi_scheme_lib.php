@@ -786,3 +786,349 @@ function kps_target_cny_adjusted(PDO $db, int $year, int $month, array $a): ?arr
     return ['v'=>$adjV, 'num'=>$cell['num'], 'den'=>$cell['den'], 'src'=>$cell['src'],
             'cny_ratio'=>$ratio, 'cny_lost'=>$r['lost_days'], 'cny_orig_v'=>$cell['v']];
 }
+
+/* ============================================================
+ * 六、指標正式化儲存（2026-10-05 使用者要求）
+ *
+ * 「KPI 新方案」要從草案變成正式可用、管理員可自行編輯設定的頁面，但使用者明確要求
+ * **絕對不可以影響 `views/news/KPI.php`**——那一頁直接讀 `kpi_as_indicator` /
+ * `kpi_as_indicator_year` / `kpi_as_monthly_value`，這三張表本節完全不碰（不新增、
+ * 不刪除、不修改一筆），只有唯讀 SELECT（`kps_from_snapshot()` 既有做法，給「既有
+ * 指標」讀同一份真實數字用，這是從一開始就有的安全設計，不是本節新增的風險）。
+ *
+ * 做法：指標定義（原本寫死在 kpi_scheme_items() 的 PHP 陣列）搬進兩張**全新、獨立**
+ * 的表（kpi_scheme_indicator / kpi_scheme_indicator_year，結構比照 kpi_as_indicator
+ * 系列但完全分開），管理員可以在 KPI_new.php 的「設定」分頁編輯；kpi_scheme_items()
+ * 保留在程式碼裡**只當成一次性的種子資料來源**，不再是頁面即時讀取的對象。
+ *
+ * 刻意不做月快照／年度鎖定：維持草案的「即時試算」——指標定義一旦存進資料庫，
+ * 已經發生過的月份本來就會在每次載入時立刻算出來，不需要另外寫一套「回填」。
+ * 這樣更簡單、風險更低，而且跟正式表的鎖定機制完全無關、不會混淆兩套邏輯。
+ * ============================================================ */
+
+/** 建表（可重複呼叫）：指標主檔＋年度設定，本節唯一的寫入資料表 */
+function kpi_scheme_ind_ensure_schema(PDO $db): void {
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try {
+        $db->exec("CREATE TABLE IF NOT EXISTS kpi_scheme_indicator (
+            indicator_id INT AUTO_INCREMENT PRIMARY KEY,
+            item_no INT NOT NULL,
+            block VARCHAR(10) NOT NULL COMMENT 'COP01~04/SP01/SP02/MP01/MP02',
+            name VARCHAR(100) NOT NULL,
+            freq ENUM('monthly','quarterly','halfyear','yearly') NOT NULL DEFAULT 'monthly',
+            value_type ENUM('percent','count','score','rate','yesno') NOT NULL DEFAULT 'percent',
+            sort_order INT NOT NULL DEFAULT 0,
+            is_active TINYINT(1) NOT NULL DEFAULT 1,
+            Created_By VARCHAR(30) NULL, Created_At DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            Modified_By VARCHAR(30) NULL, Modified_At DATETIME NULL,
+            UNIQUE KEY uk_item_no (item_no)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+          COMMENT='KPI 新方案指標主檔（與正式 kpi_as_indicator 完全分離，不互相影響）'");
+        $db->exec("CREATE TABLE IF NOT EXISTS kpi_scheme_indicator_year (
+            iy_id INT AUTO_INCREMENT PRIMARY KEY,
+            indicator_id INT NOT NULL,
+            year SMALLINT NOT NULL,
+            owner_dept_id INT NULL, owner_user_id INT NULL, owner_position_id INT NULL,
+            owner_display VARCHAR(50) NULL,
+            source_mode ENUM('auto','manual') NOT NULL DEFAULT 'manual',
+            calculator_key VARCHAR(60) NULL COMMENT '對應 kpi_scheme_registry() 的 key',
+            params_json TEXT NULL,
+            target_direction ENUM('gte','lte','yes') NOT NULL DEFAULT 'gte',
+            target_value DECIMAL(12,2) NULL, target_unit VARCHAR(20) NULL, target_text VARCHAR(60) NULL,
+            note VARCHAR(200) NULL COMMENT '管理員自由備註',
+            is_active TINYINT(1) NOT NULL DEFAULT 1,
+            Created_By VARCHAR(30) NULL, Created_At DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            Modified_By VARCHAR(30) NULL, Modified_At DATETIME NULL,
+            UNIQUE KEY uk_iy (indicator_id, year)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+          COMMENT='KPI 新方案指標年度設定（與正式 kpi_as_indicator_year 完全分離，不互相影響）'");
+    } catch (Throwable $e) {}
+}
+
+/**
+ * 計算方式登記表——只收錄這個新方案自己會用到的 calculator_key，數量遠比正式系統的
+ * 21 筆少（約 10 筆），每筆含 name/desc/params schema，schema 格式與
+ * `kpi_as_registry()` 完全相同（int/num/bool/choice/months_map/typedays_map/
+ * process_type_ids/machine_type_ids 這幾種型別的參數編輯器可以直接共用同一套
+ * 前端渲染邏輯，不必重寫）。
+ */
+function kpi_scheme_registry(): array {
+    return [
+        'existing' => [
+            'name'=>'沿用正式指標的數字', 'desc'=>'直接讀正式 KPI 表（2-GM-04-01）某一項的月快照，不重算，確保兩邊數字一致。',
+            'params'=>[['key'=>'item_no','label'=>'正式指標項次(item_no)','type'=>'int','fe'=>0]]],
+        'existing_cny' => [
+            'name'=>'沿用正式指標＋春節目標調整', 'desc'=>'同上，但春節月份會依「春節目標調整設定」自動放大達成率。',
+            'params'=>[['key'=>'item_no','label'=>'正式指標項次(item_no)','type'=>'int','fe'=>0]]],
+        'dev_eval_lead' => [
+            'name'=>'產品開發評估完成時效', 'desc'=>'分母＝當月填表的產品開發評估表；分子＝N 個工作日內完成決行者。',
+            'params'=>[['key'=>'days','label'=>'門檻工作日數','type'=>'int','fe'=>1]]],
+        'type_ctrl' => [
+            'name'=>'型態識別文件確認率', 'desc'=>'現況快照：已建立的型態識別文件管制表中，已確認的佔比。',
+            'params'=>[]],
+        'process_ng_proc' => [
+            'name'=>'製程不良率（限定製程類別）', 'desc'=>'薄包裝重用正式系統的 process_ng_rate 計算模組，限定製程類別。',
+            'params'=>[['key'=>'process_type_ids','label'=>'製程類別','type'=>'process_type_ids','fe'=>0]]],
+        'capacity_custom' => [
+            'name'=>'產能達成率（限定機台）', 'desc'=>'薄包裝重用正式系統的 capacity_rate 計算模組，限定機台。',
+            'params'=>[['key'=>'machine_ids','label'=>'機台id(逗號分隔)','type'=>'textlist','fe'=>0]]],
+        'qc_by_proc' => [
+            'name'=>'檢驗不良率（限定製程）', 'desc'=>'分母＝當月指定製程已判定的檢驗筆數；分子＝判定為指定狀態者。',
+            'params'=>[['key'=>'procs','label'=>'限定製程編號(逗號分隔)','type'=>'textlist','fe'=>0],
+                       ['key'=>'ngs','label'=>'算不良的判定(逗號分隔，如 ng,QQ)','type'=>'textlist','fe'=>1]]],
+        'packing_efficiency' => [
+            'name'=>'包裝效率', 'desc'=>'前一關完成(QC完成確認或報工完工) → 包裝結案，在門檻工作日內的比例。',
+            'params'=>[['key'=>'days','label'=>'門檻工作日數','type'=>'int','fe'=>1]]],
+        'purchase_ontime' => [
+            'name'=>'採購進貨準交率', 'desc'=>'分母＝當月預計到貨的請購項目；分子＝實際到貨日未超過預計到貨日者。',
+            'params'=>[]],
+        'car_ontime' => [
+            'name'=>'矯正措施按時結案率', 'desc'=>'分母＝當月到期的矯正措施；分子＝結案日未超過期限者。',
+            'params'=>[]],
+        'kpi_overall' => [
+            'name'=>'全廠 KPI 總體達標率', 'desc'=>'分母＝本方案當月有數值的指標數；分子＝其中達成目標者（排除本項自己）。',
+            'params'=>[]],
+    ];
+}
+
+/** 依 calculator_key 分派到對應的試算函式，統一入口（新增指標只要在上面登記表加一筆、這裡加一個 case） */
+function kpi_scheme_compute_by_key(PDO $db, string $calcKey, int $year, int $month, array $params): ?array {
+    switch ($calcKey) {
+        case 'existing': {
+            $snap = kps_from_snapshot($db, (int)($params['item_no'] ?? 0), $year);
+            return $snap[$month] ?? null;
+        }
+        case 'existing_cny':
+            return kps_target_cny_adjusted($db, $year, $month, $params);
+        case 'dev_eval_lead':      return kps_dev_eval($db, $year, $month, $params);
+        case 'type_ctrl':          return kps_type_ctrl($db, $year, $month, $params);
+        case 'process_ng_proc':    return kps_process_ng_proc($db, $year, $month, $params);
+        case 'capacity_custom':    return kps_capacity_custom($db, $year, $month, $params);
+        case 'qc_by_proc':         return kps_qc_by_proc($db, $year, $month, $params);
+        case 'packing_efficiency': return kps_packing_efficiency($db, $year, $month, $params);
+        case 'purchase_ontime':    return kps_purchase_ontime($db, $year, $month, $params);
+        case 'car_ontime':         return kps_car_ontime($db, $year, $month, $params);
+        case 'kpi_overall':        return kps_scheme_kpi_overall($db, $year, $month, $params);
+        default: return null;
+    }
+}
+
+/**
+ * 全廠 KPI 總體達標率——改成對「這個新方案自己的指標集合」算達標率（不是正式系統的
+ * 22 項），讀 kpi_scheme_indicator_year，查詢時排除自己這個 item_no 避免自我循環。
+ */
+function kps_scheme_kpi_overall(PDO $db, int $year, int $month, array $params): ?array {
+    kpi_scheme_ind_ensure_schema($db);
+    $selfItemNo = (int)($params['_self_item_no'] ?? 0);   // 由呼叫端(kpi_scheme_list_year)注入，避免自我循環
+    $st = $db->prepare("SELECT i.indicator_id, i.item_no, i.freq, i.value_type,
+                               y.calculator_key, y.params_json, y.target_direction, y.target_value
+                        FROM kpi_scheme_indicator i
+                        JOIN kpi_scheme_indicator_year y ON y.indicator_id=i.indicator_id AND y.year=?
+                        WHERE i.is_active=1 AND y.is_active=1 AND y.source_mode='auto'");
+    $st->execute([$year]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $num = 0; $den = 0;
+    foreach ($rows as $r) {
+        if ($selfItemNo > 0 && (int)$r['item_no'] === $selfItemNo) continue;
+        $p = [];
+        try { $p = json_decode((string)$r['params_json'], true) ?: []; } catch (Throwable $e) {}
+        // 非逐月指標（quarterly/halfyear/yearly）這個月不一定有值，照查就好，查不到就跳過不算
+        $cell = kpi_scheme_compute_by_key($db, (string)$r['calculator_key'], $year, $month, $p);
+        if (!$cell || $cell['v'] === null) continue;
+        $den++;
+        $v = (float)$cell['v']; $tv = $r['target_value'] === null ? null : (float)$r['target_value'];
+        $below = false;
+        if ($tv !== null) {
+            if ($r['target_direction'] === 'lte') $below = $v > $tv;
+            elseif ($r['target_direction'] === 'yes') $below = $v < 1;
+            else $below = $v < $tv;
+        }
+        if (!$below) $num++;
+    }
+    return ['v'=>$den > 0 ? $num / $den * 100 : null, 'num'=>$num, 'den'=>$den];
+}
+
+/**
+ * 一次性種子：把 kpi_scheme_items() 目前的 23 項（含 1 項隱藏＝is_active=0）寫進新表，
+ * 只給指定年度建立，已存在的 item_no 不重複寫入（可重複執行、不會長出重複資料）。
+ * 回傳本次新增了幾項。只有 CLI 遷移腳本會呼叫，不是頁面載入路徑。
+ */
+function kpi_scheme_ind_seed(PDO $db, int $year, string $byName): int {
+    kpi_scheme_ind_ensure_schema($db);
+    $seq = 0; $created = 0;
+    $stIns = $db->prepare("INSERT INTO kpi_scheme_indicator
+        (item_no, block, name, freq, value_type, sort_order, is_active, Created_By)
+        VALUES (?,?,?,?,?,?,?,?)");
+    $stIy = $db->prepare("INSERT INTO kpi_scheme_indicator_year
+        (indicator_id, year, owner_dept_id, source_mode, calculator_key, params_json,
+         target_direction, target_value, target_unit, target_text, is_active, Created_By)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+    $stChk = $db->prepare("SELECT indicator_id FROM kpi_scheme_indicator WHERE item_no=?");
+
+    foreach (kpi_scheme_items() as $it) {
+        $seq++;
+        $stChk->execute([$seq]);
+        if ($stChk->fetchColumn()) continue;   // 已經種過，不重複
+
+        // 把舊的 calc=['existing',N] / ['preview',fn,args] / ['none'] 轉成新的 calculator_key/params
+        $calc = $it['calc'] ?? ['none'];
+        $mode = $calc[0] ?? 'none';
+        $calcKey = null; $params = [];
+        if ($mode === 'existing') {
+            $calcKey = 'existing';
+            $params = ['item_no' => (int)($calc[1] ?? 0)];
+        } elseif ($mode === 'preview') {
+            $fnMap = ['kps_dev_eval'=>'dev_eval_lead', 'kps_type_ctrl'=>'type_ctrl',
+                      'kps_process_ng_proc'=>'process_ng_proc', 'kps_capacity_custom'=>'capacity_custom',
+                      'kps_qc_by_proc'=>'qc_by_proc', 'kps_packing_efficiency'=>'packing_efficiency',
+                      'kps_purchase_ontime'=>'purchase_ontime', 'kps_car_ontime'=>'car_ontime',
+                      'kps_kpi_overall'=>'kpi_overall',
+                      // 月份受訂/銷貨目標達成率實際是 calc=['preview','kps_target_cny_adjusted',...]
+                      // （春節調整包裝函式），不是 ['existing',N]——它要對映到 existing_cny，
+                      // 下面 'existing' 分支裡原本想在這裡做的特判永遠不會被走到。
+                      'kps_target_cny_adjusted'=>'existing_cny'];
+            $calcKey = $fnMap[(string)($calc[1] ?? '')] ?? null;
+            $params = (array)($calc[2] ?? []);
+        }
+        $sourceMode = $calcKey ? 'auto' : 'manual';
+
+        $stIns->execute([$seq, $it['block'], $it['name'], $it['freq'], $it['vtype'], $seq * 10,
+                          empty($it['hidden']) ? 1 : 0, $byName]);
+        $iid = (int)$db->lastInsertId();
+        $stIy->execute([$iid, $year, $it['dept'] ?? null, $sourceMode, $calcKey,
+                         $params ? json_encode($params, JSON_UNESCAPED_UNICODE) : null,
+                         $it['dir'], $it['target'], $it['unit'], null,
+                         empty($it['hidden']) ? 1 : 0, $byName]);
+        $created++;
+    }
+    return $created;
+}
+
+/** 讀某年度全部指標＋設定（給頁面主表格與設定分頁共用） */
+function kpi_scheme_list_year(PDO $db, int $year): array {
+    kpi_scheme_ind_ensure_schema($db);
+    $st = $db->prepare("SELECT i.indicator_id, i.item_no, i.block, i.name, i.freq, i.value_type,
+                               i.sort_order, i.is_active AS ind_active,
+                               y.iy_id, y.owner_dept_id, y.owner_user_id, y.owner_position_id, y.owner_display,
+                               y.source_mode, y.calculator_key, y.params_json,
+                               y.target_direction, y.target_value, y.target_unit, y.target_text,
+                               y.note, y.is_active AS year_active
+                        FROM kpi_scheme_indicator i
+                        LEFT JOIN kpi_scheme_indicator_year y ON y.indicator_id=i.indicator_id AND y.year=?
+                        ORDER BY i.sort_order, i.item_no");
+    $st->execute([$year]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/** 單一指標的試算（DB 列版本，取代舊的 kpi_scheme_preview($item)；邏輯相同只是資料來源換成 DB） */
+function kpi_scheme_preview_row(PDO $db, array $row, int $year): ?array {
+    if ((int)($row['year_active'] ?? 0) !== 1) return null;
+    if ((string)$row['source_mode'] !== 'auto' || empty($row['calculator_key'])) return null;
+    $params = [];
+    try { $params = json_decode((string)$row['params_json'], true) ?: []; } catch (Throwable $e) {}
+    if ($row['calculator_key'] === 'kpi_overall') $params['_self_item_no'] = (int)$row['item_no'];
+
+    $curY = (int)date('Y'); $curM = (int)date('n');
+    $out = [];
+    foreach (kpi_as_months((string)$row['freq']) as $m) {
+        if ($year > $curY || ($year === $curY && $m > $curM)) { $out[$m] = null; continue; }
+        try { $out[$m] = kpi_scheme_compute_by_key($db, (string)$row['calculator_key'], $year, $m, $params); }
+        catch (Throwable $e) { $out[$m] = null; }
+    }
+    return $out;
+}
+
+/* ============================================================
+ * 七、設定頁寫入（給 KPI_new.php 的「設定」分頁用，一樣只碰新表）
+ * ============================================================ */
+
+/** 下一個可用 item_no（不要求連續，單純找最大值+1） */
+function kpi_scheme_next_item_no(PDO $db): int {
+    kpi_scheme_ind_ensure_schema($db);
+    return (int)$db->query("SELECT COALESCE(MAX(item_no),0)+1 FROM kpi_scheme_indicator")->fetchColumn();
+}
+
+/**
+ * 新增或更新指標主檔。$post['indicator_id']<=0 時建立新指標（自動配 item_no，
+ * 並同時建立該年度的 indicator_year 空列，呼叫端再用 kpi_scheme_iy_save 補上目標/來源）。
+ * 回傳 indicator_id。
+ */
+function kpi_scheme_ind_save(PDO $db, array $post, int $year, string $byName): int {
+    kpi_scheme_ind_ensure_schema($db);
+    $iid = (int)($post['indicator_id'] ?? 0);
+    $name = mb_substr(trim((string)($post['name'] ?? '')), 0, 100);
+    if ($name === '') throw new RuntimeException('指標名稱必填');
+    $block = (string)($post['block'] ?? '');
+    if (!isset(kpi_scheme_blocks()[$block])) throw new RuntimeException('區塊不合法');
+    $freq = in_array($post['freq'] ?? '', ['monthly','quarterly','halfyear','yearly'], true) ? $post['freq'] : 'monthly';
+    $vt = in_array($post['value_type'] ?? '', ['percent','count','score','rate','yesno'], true) ? $post['value_type'] : 'percent';
+    $active = (int)($post['is_active'] ?? 1) ? 1 : 0;
+
+    if ($iid > 0) {
+        $st = $db->prepare("SELECT 1 FROM kpi_scheme_indicator WHERE indicator_id=?");
+        $st->execute([$iid]);
+        if (!$st->fetchColumn()) throw new RuntimeException('找不到指標');
+        $sort = (int)($post['sort_order'] ?? 0);
+        $st = $db->prepare("UPDATE kpi_scheme_indicator SET name=?, block=?, freq=?, value_type=?,
+                            sort_order=?, is_active=?, Modified_By=?, Modified_At=NOW() WHERE indicator_id=?");
+        $st->execute([$name, $block, $freq, $vt, $sort, $active, $byName, $iid]);
+        return $iid;
+    }
+
+    $itemNo = kpi_scheme_next_item_no($db);
+    $sort = $itemNo * 10;
+    $st = $db->prepare("INSERT INTO kpi_scheme_indicator (item_no, block, name, freq, value_type, sort_order, is_active, Created_By)
+                        VALUES (?,?,?,?,?,?,?,?)");
+    $st->execute([$itemNo, $block, $name, $freq, $vt, $sort, $active, $byName]);
+    $iid = (int)$db->lastInsertId();
+    // 同時建一列空的年度設定，呼叫端馬上會用 kpi_scheme_iy_save 補上目標/擔當者/來源——
+    // 不先建這一列的話，新增指標後要等使用者填完年度設定才看得到這一列，體驗上像是「存了但不見了」。
+    $st = $db->prepare("INSERT INTO kpi_scheme_indicator_year (indicator_id, year, source_mode, target_direction, is_active, Created_By)
+                        VALUES (?,?,'manual','gte',?,?)");
+    $st->execute([$iid, $year, $active, $byName]);
+    return $iid;
+}
+
+/** 新增或更新指標的年度設定（目標/擔當者/來源/參數）。$params 為關聯陣列，會被 json_encode。 */
+function kpi_scheme_iy_save(PDO $db, int $indicatorId, int $year, array $post, array $params, string $byName): void {
+    kpi_scheme_ind_ensure_schema($db);
+    $sourceMode = ($post['source_mode'] ?? '') === 'auto' ? 'auto' : 'manual';
+    $calcKey = $sourceMode === 'auto' ? trim((string)($post['calculator_key'] ?? '')) : null;
+    if ($sourceMode === 'auto' && $calcKey === '') throw new RuntimeException('自動模式請選擇計算方式');
+    if ($calcKey !== null && !isset(kpi_scheme_registry()[$calcKey])) throw new RuntimeException('計算方式不合法');
+    $dir = in_array($post['target_direction'] ?? '', ['gte','lte','yes'], true) ? $post['target_direction'] : 'gte';
+    $tv = ($post['target_value'] ?? '') === '' ? null : (float)$post['target_value'];
+    $tu = mb_substr(trim((string)($post['target_unit'] ?? '')), 0, 20);
+    $tt = mb_substr(trim((string)($post['target_text'] ?? '')), 0, 60);
+    $note = mb_substr(trim((string)($post['note'] ?? '')), 0, 200);
+    $active = (int)($post['is_active'] ?? 1) ? 1 : 0;
+    $deptId = ($post['owner_dept_id'] ?? '') !== '' ? (int)$post['owner_dept_id'] : null;
+    $userId = ($post['owner_user_id'] ?? '') !== '' ? (int)$post['owner_user_id'] : null;
+    $posId  = ($post['owner_position_id'] ?? '') !== '' ? (int)$post['owner_position_id'] : null;
+    $disp = mb_substr(trim((string)($post['owner_display'] ?? '')), 0, 50);
+
+    $st = $db->prepare("SELECT iy_id FROM kpi_scheme_indicator_year WHERE indicator_id=? AND year=?");
+    $st->execute([$indicatorId, $year]);
+    $exists = $st->fetchColumn();
+    $paramsJson = $params ? json_encode($params, JSON_UNESCAPED_UNICODE) : null;
+
+    if ($exists) {
+        $st = $db->prepare("UPDATE kpi_scheme_indicator_year SET
+            owner_dept_id=?, owner_user_id=?, owner_position_id=?, owner_display=?,
+            source_mode=?, calculator_key=?, params_json=?,
+            target_direction=?, target_value=?, target_unit=?, target_text=?, note=?, is_active=?,
+            Modified_By=?, Modified_At=NOW() WHERE indicator_id=? AND year=?");
+        $st->execute([$deptId, $userId, $posId, $disp, $sourceMode, $calcKey, $paramsJson,
+                      $dir, $tv, $tu, $tt, $note, $active, $byName, $indicatorId, $year]);
+    } else {
+        $st = $db->prepare("INSERT INTO kpi_scheme_indicator_year
+            (indicator_id, year, owner_dept_id, owner_user_id, owner_position_id, owner_display,
+             source_mode, calculator_key, params_json, target_direction, target_value, target_unit,
+             target_text, note, is_active, Created_By)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        $st->execute([$indicatorId, $year, $deptId, $userId, $posId, $disp, $sourceMode, $calcKey, $paramsJson,
+                      $dir, $tv, $tu, $tt, $note, $active, $byName]);
+    }
+}
