@@ -220,10 +220,11 @@ case 'admin_auto_fill_sign': {
     } catch (Throwable $e) { jerr($e->getMessage()); }
     jout($r);
 }
-case 'void': {
+case 'delete': {
     cnrv_need_csrf();
     if (!$perms['canAdmin']) jerr('沒有權限', 403);
-    cnrv_void($db, (int)($_POST['doc_id'] ?? 0));
+    try { cnrv_delete($db, (int)($_POST['doc_id'] ?? 0), $uid, $uname); }
+    catch (Throwable $e) { jerr($e->getMessage()); }
     jout([]);
 }
 

@@ -97,7 +97,7 @@ function cnrv_ensure_schema(PDO $db): void {
 
     $db->exec("CREATE TABLE IF NOT EXISTS con_review_doc (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        order_id INT NOT NULL COMMENT 'order_track.Order_id，一張訂單只能建一份(UNIQUE，排除已作廢)',
+        order_id INT NOT NULL COMMENT 'order_track.Order_id，一張訂單只能建一份(排除已刪除的)',
         doc_no VARCHAR(20) NOT NULL COMMENT '表單編號(業務日期YYYYMMDD+3位流水號)',
         business_date DATE NOT NULL COMMENT '業務日期＝建立當下的訂單接單日期(快照，不隨訂單異動)',
         order_oo VARCHAR(30) NULL COMMENT '訂單編號快照',
@@ -106,7 +106,7 @@ function cnrv_ensure_schema(PDO $db): void {
         qty INT NULL COMMENT '數量快照',
         delivery_date DATE NULL COMMENT '交期快照',
         tag_label VARCHAR(60) NULL COMMENT 'AS認定(稽核製程標籤)快照',
-        status VARCHAR(20) NOT NULL DEFAULT 'draft' COMMENT 'draft/submitted/closed/void',
+        status VARCHAR(20) NOT NULL DEFAULT 'draft' COMMENT 'draft/submitted/closed',
         submit_date DATE NULL, submitted_at DATETIME NULL, submitted_by INT NULL, submitted_by_name VARCHAR(50) NULL,
         decision VARCHAR(20) NULL COMMENT 'accept/conditional/reject',
         decision_note VARCHAR(500) NULL,
@@ -117,6 +117,7 @@ function cnrv_ensure_schema(PDO $db): void {
         closed_at DATETIME NULL,
         created_by INT NULL, created_by_name VARCHAR(50) NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         is_deleted TINYINT(1) NOT NULL DEFAULT 0,
+        deleted_by INT NULL, deleted_by_name VARCHAR(50) NULL, deleted_at DATETIME NULL,
         UNIQUE KEY uq_doc_no (doc_no),
         KEY idx_order (order_id),
         KEY idx_status (status)
@@ -181,6 +182,17 @@ function cnrv_ensure_schema(PDO $db): void {
     if (!$hasCol('con_review_dept_sign', 'is_auto_sign')) {
         try { $db->exec("ALTER TABLE con_review_dept_sign ADD COLUMN is_auto_sign TINYINT(1) NOT NULL DEFAULT 0
                          COMMENT '由管理員「自動填寫並簽核」寫入(與is_backfill不同：那是逐格指定原簽核人補登，這是整批自動帶入)' AFTER backfill_by_name"); } catch (Throwable $e) {}
+    }
+    // 2026-10-05：管理員刪除功能（使用者要求「可刪除未審核的」），走既有的 is_deleted 軟刪除
+    // （cnrv_get()／cnrv_list() 本來就已經過濾 is_deleted=0，只是一直沒有寫入端——補上）。
+    if (!$hasCol('con_review_doc', 'deleted_by')) {
+        try { $db->exec("ALTER TABLE con_review_doc ADD COLUMN deleted_by INT NULL AFTER is_deleted"); } catch (Throwable $e) {}
+    }
+    if (!$hasCol('con_review_doc', 'deleted_by_name')) {
+        try { $db->exec("ALTER TABLE con_review_doc ADD COLUMN deleted_by_name VARCHAR(50) NULL AFTER deleted_by"); } catch (Throwable $e) {}
+    }
+    if (!$hasCol('con_review_doc', 'deleted_at')) {
+        try { $db->exec("ALTER TABLE con_review_doc ADD COLUMN deleted_at DATETIME NULL AFTER deleted_by_name"); } catch (Throwable $e) {}
     }
 
     // 角色自動建立（module='con_review'，比照 equip_list_lib.php 同一套寫法；加好之後會自動出現在
@@ -403,10 +415,10 @@ function cnrv_need_review(?array $order): bool {
     return $order && (string)($order['tag_kind'] ?? '') === 'process';
 }
 
-/** 這張訂單已經建過的審查表單 id（0＝還沒建）。作廢(void)的不算，可以重新建一張。 */
+/** 這張訂單已經建過的審查表單 id（0＝還沒建）。已刪除的不算，可以重新建一張。 */
 function cnrv_doc_by_order(PDO $db, int $orderId): int {
     cnrv_ensure_schema($db);
-    $st = $db->prepare("SELECT id FROM con_review_doc WHERE order_id=? AND status<>'void' ORDER BY id DESC LIMIT 1");
+    $st = $db->prepare("SELECT id FROM con_review_doc WHERE order_id=? AND is_deleted=0 ORDER BY id DESC LIMIT 1");
     $st->execute([$orderId]);
     return (int)($st->fetchColumn() ?: 0);
 }
@@ -418,7 +430,7 @@ function cnrv_doc_status_map(PDO $db, array $orderIds): array {
     $ids = array_values(array_unique(array_filter(array_map('intval', $orderIds), fn($n) => $n > 0)));
     if (!$ids) return [];
     $in = implode(',', array_fill(0, count($ids), '?'));
-    $st = $db->prepare("SELECT order_id, id, status FROM con_review_doc WHERE status<>'void' AND order_id IN ($in) ORDER BY id");
+    $st = $db->prepare("SELECT order_id, id, status FROM con_review_doc WHERE is_deleted=0 AND order_id IN ($in) ORDER BY id");
     $st->execute($ids);
     $map = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $map[(int)$r['order_id']] = ['id'=>(int)$r['id'], 'status'=>(string)$r['status']];
@@ -484,7 +496,7 @@ function cnrv_suggest_list(PDO $db, int $days = 30, int $limit = 300): array {
             LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID
             JOIN ot_as_proc_tag t ON t.tag_id = ot.as_tag_id AND t.kind='process'
             WHERE (ot.Order_status IS NULL OR ot.Order_status<>6)
-              AND NOT EXISTS (SELECT 1 FROM con_review_doc d WHERE d.order_id=ot.Order_id AND d.status<>'void')";
+              AND NOT EXISTS (SELECT 1 FROM con_review_doc d WHERE d.order_id=ot.Order_id AND d.is_deleted=0)";
     $params = [];
     if ($days > 0) { $sql .= " AND ot.Order_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)"; $params[] = $days; }
     $sql .= " ORDER BY ot.Order_date DESC, ot.Order_id DESC LIMIT " . max(1, min(1000, $limit));
@@ -495,7 +507,7 @@ function cnrv_suggest_list(PDO $db, int $days = 30, int $limit = 300): array {
     // 總數（不受 limit 影響，讓畫面知道「還有多少沒列出來」）
     $cntSql = "SELECT COUNT(*) FROM order_track ot JOIN ot_as_proc_tag t ON t.tag_id=ot.as_tag_id AND t.kind='process'
                WHERE (ot.Order_status IS NULL OR ot.Order_status<>6)
-                 AND NOT EXISTS (SELECT 1 FROM con_review_doc d WHERE d.order_id=ot.Order_id AND d.status<>'void')"
+                 AND NOT EXISTS (SELECT 1 FROM con_review_doc d WHERE d.order_id=ot.Order_id AND d.is_deleted=0)"
               . ($days > 0 ? " AND ot.Order_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)" : "");
     $cst = $db->prepare($cntSql);
     $cst->execute($days > 0 ? [$days] : []);
@@ -813,9 +825,18 @@ function cnrv_approve(PDO $db, int $docId, int $uid, string $uname, bool $isAdmi
        ->execute([$uid, $uname, $isDeputy?1:0, $docId]);
 }
 
-/** 作廢（僅管理員；作廢後該訂單可以重新建立一張）。 */
-function cnrv_void(PDO $db, int $docId): void {
-    $db->prepare("UPDATE con_review_doc SET status='void' WHERE id=?")->execute([$docId]);
+/** 管理員刪除（2026-10-05 使用者交辦「可刪除未審核的」）：只能刪還沒結案的（draft/submitted）——
+ *  已結案（closed）代表總經理已經核准，是正式完成的紀錄，不可刪除，確保稽核軌跡完整。
+ *  軟刪除（is_deleted=1，留 deleted_by/_at），不是真的 DELETE：訂單審查紀錄本身屬於品質
+ *  紀錄的一種，刪了也要留痕跡供日後追查「誰在什麼時候刪掉了這一筆」，不能憑空消失。
+ *  刪除後該訂單的名額釋放出來，可以重新建立一張新的審查表單（cnrv_doc_by_order() 等查詢
+ *  一律只看 is_deleted=0 的列）。 */
+function cnrv_delete(PDO $db, int $docId, int $uid, string $uname): void {
+    $doc = cnrv_get($db, $docId);
+    if (!$doc) throw new Exception('找不到此表單');
+    if ($doc['status'] === 'closed') throw new Exception('已結案的審查表單不可刪除（結案代表已完成核准，屬正式紀錄）');
+    $db->prepare("UPDATE con_review_doc SET is_deleted=1,deleted_by=?,deleted_by_name=?,deleted_at=NOW() WHERE id=?")
+       ->execute([$uid, $uname, $docId]);
 }
 
 /* ============================================================ 清單 ============================================================ */

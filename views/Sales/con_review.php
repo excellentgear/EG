@@ -219,6 +219,8 @@ $companyName = eg_company_full_name($db);
         <p><b>「預設-是否」與「預設-額外」是兩個各自獨立的設定</b>，不是合併成同一個下拉選一個——可以兩個都設、只設一個，或都不設：「預設-是否」只能選「是／否／N/A」三者之一；「預設-額外」只能從這個項目目前設定的額外選項裡選一個（改了額外選項，候選清單會跟著更新，原本選的如果不在新清單裡會自動清空要求重選）。自動填寫時，兩邊有設定的部分會合併成最終答案（例如「否、需要外包」）。</p>
         <h4>管理員：自動填寫並簽核</h4>
         <p>給例行、低風險的訂單快速走完內容部門這一段：未送出的會先自動送出，尚未填寫的項目依範本設定的「預設值」帶入（沒設定預設值的項目會跳過），內容部門逐一嘗試自動簽核。<b>簽核日期預設是接單日期，可改成之後的日期但必須是工作日</b>；<b>只有當天真的有上班（在職、沒請假、沒整天公出）的人才會被記為簽核人</b>，當天都不在就不自動簽、列出原因讓管理員自己處理，絕不會蓋一個當天根本不在的人的章。已填寫的項目、已簽核的部門不會被覆蓋。業務課決行／總經理核准仍需要人工進行，不會被這個功能代勞。</p>
+        <h4>管理員：刪除表單</h4>
+        <p>只能刪除<b>還沒結案</b>的審查表單（草稿或審查中）——已結案代表總經理已經核准，是正式紀錄，不可刪除。刪除後該訂單可以重新建立一張新的審查表單；刪除留有紀錄（誰在什麼時候刪的），不是真的從資料庫消失。</p>
         <h4>誰能填寫／簽核</h4>
         <p>每個項目指定一個負責部門，<b>該部門的人</b>（部門主管優先，沒有主管時部門內任一人）就能填寫與簽核該部門的項目，不需要額外指派角色；要能進入本頁檢視/填寫，仍需要管理員指派「con_review_view」角色。</p>
         <h4>權限角色</h4>
@@ -426,9 +428,12 @@ function renderView(){
     // 管理員「自動填寫並簽核」（2026-10-05 使用者交辦）：給例行、低風險訂單一鍵快速走完
     // 送出＋逐項帶入範本預設值＋內容部門自動簽核；業務課決行／總經理核准仍要人工進行。
     if (CUR.is_admin && (d.status==='draft' || d.status==='submitted')) {
-        h += '<div style="margin:10px 0;padding:10px 12px;background:#FDF6EC;border:1px dashed #E8D5B5;border-radius:6px;">'
+        h += '<div style="margin:10px 0;padding:10px 12px;background:#FDF6EC;border:1px dashed #E8D5B5;border-radius:6px;display:flex;align-items:center;flex-wrap:wrap;gap:8px;">'
            + '<button type="button" class="cr-btn b-plain" onclick="openAutoFillSign()"><i class="fa fa-magic"></i> 自動填寫並簽核</button>'
-           + '<span style="font-size:11.5px;color:#8a6d45;margin-left:10px;">用範本設定的預設值快速帶入尚未填寫的項目，並自動完成內容部門簽核（已填寫/已簽核的不會被覆蓋）。</span>'
+           + '<span style="font-size:11.5px;color:#8a6d45;">用範本設定的預設值快速帶入尚未填寫的項目，並自動完成內容部門簽核（已填寫/已簽核的不會被覆蓋）。</span>'
+           // 刪除（2026-10-05 使用者交辦「可刪除未審核的」）：只有還沒結案才能刪，已結案代表
+           // 總經理已核准是正式紀錄，不可刪除；放在最右側並用警示色與既有按鈕明顯區隔，避免誤按。
+           + '<button type="button" class="cr-btn" style="margin-left:auto;background:#fff;color:#c0392b;border-color:#e4b2ac;" onclick="deleteDoc()"><i class="fa fa-trash"></i> 刪除此表單</button>'
            + '</div>';
     }
 
@@ -519,6 +524,13 @@ function approveDoc(){
     }, 'json');
 }
 function printDoc(){ window.print(); }
+function deleteDoc(){
+    if (!confirm('確定要刪除這張審查表單嗎？\n訂單 '+CUR.doc.order_oo+'（'+CUR.doc.client_name+'），編號 '+CUR.doc.doc_no+'\n\n刪除後這張訂單可以重新建立一張新的審查表單，此動作無法由畫面復原。')) return;
+    $.post(API, {action:'delete', csrf:META.csrf, doc_id:CUR.doc.id}, function(res){
+        if (!res.ok){ alert(res.error||'刪除失敗'); return; }
+        closeMask('viewMask'); loadList();
+    }, 'json');
+}
 
 /* ───────────────── 管理員：自動填寫並簽核 ───────────────── */
 function openAutoFillSign(){
