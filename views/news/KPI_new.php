@@ -158,6 +158,7 @@ function kpsTargetText(array $it): string {
         .ks-tag.move   { background:#EFE3C8; color:#6b4a20; }
         .ks-tag.watch  { background:#FBE6C8; color:#A6630E; }
         .ks-tag.warn   { background:#DD5138; color:#fff; }
+        .ks-tag.empty  { background:#F1ECE3; color:#a08356; border:1px dashed #D8BE93; line-height:14px; }
         .ks-src { display:inline-block; font-size:10px; line-height:16px; height:16px; padding:0 6px;
             border-radius:8px; white-space:nowrap; }
         .ks-src.auto   { background:#EAF0E2; color:#4d6b33; }
@@ -349,7 +350,7 @@ function kpsTargetText(array $it): string {
             <h4><i class="fa fa-ban"></i> 建議停用（依你回饋的營運實況，不再列入新方案）</h4>
             <div><ul>
             <?php foreach (kpi_scheme_dropped() as $d): ?>
-                <li><b>原 #<?= (int)$d['no'] ?>　<?= htmlspecialchars($d['name']) ?></b>　—
+                <li><b><?= (int)$d['no'] > 0 ? '原 #' . (int)$d['no'] . '　' : '' ?><?= htmlspecialchars($d['name']) ?></b>　—
                     <span class="ks-why"><?= htmlspecialchars($d['why']) ?></span></li>
             <?php endforeach; ?>
             </ul></div>
@@ -359,15 +360,9 @@ function kpsTargetText(array $it): string {
             <h4><i class="fa fa-question-circle"></i> 待你決定</h4>
             <div><ul>
             <?php foreach (kpi_scheme_pending() as $d): ?>
-                <li><b>原 #<?= (int)$d['no'] ?>　<?= htmlspecialchars($d['name']) ?></b>　—
+                <li><b><?= (int)$d['no'] > 0 ? '原 #' . (int)$d['no'] . '　' : '' ?><?= htmlspecialchars($d['name']) ?></b>　—
                     <span class="ks-why"><?= htmlspecialchars($d['why']) ?></span></li>
             <?php endforeach; ?>
-                <li><b>耗材／刀具盤點正確率</b>　—
-                    <span class="ks-why">你說「沒有庫存」，但系統裡盤點其實很活躍（12 次盤點、每次約 1,480 筆明細）。要保留、限縮成只盤耗材刀具、還是整項停用？</span></li>
-                <li><b>量測儀器按時校驗率</b>　—
-                    <span class="ks-why">自動值全年是空的，畫面上的 95~100% 是管理者逐月覆寫的。要補校驗紀錄、改標人工、還是停用？</span></li>
-                <li><b>訂單審查及時率／產品開發評估完成時效</b>　—
-                    <span class="ks-why">兩項試算都接近 100%，查證後是「同一天完成」造成的（詳見各項的 <i class="fa fa-info-circle"></i>）。要改口徑還是拿掉？</span></li>
             </ul></div>
         </div>
 
@@ -431,6 +426,7 @@ function kpsTargetText(array $it): string {
                 <li><span class="ks-tag move">改負責部門</span>指標不變，只換負責單位</li>
                 <li><span class="ks-tag watch">觀察期</span>資料量還不夠，先不訂目標</li>
                 <li><span class="ks-tag warn">待補資料</span>算得出來，但來源幾乎是空的</li>
+                <li><span class="ks-tag empty">無歷史資料</span>欄位結構已備妥，但系統裡還沒有任何一筆走完整個流程的紀錄</li>
             </ul>
 
             <h4>每一項的計算方式去哪裡看</h4>
@@ -467,9 +463,12 @@ var ITEM_INFO = <?= json_encode(array_map(function ($x) {
         return ['name'=>$x['name'], 'block'=>$x['block'], 'basis'=>$x['basis'], 'note'=>$x['note'],
                 'status'=>$x['status'], 'src'=>$x['src']];
     }, array_column($ITEMS, null, 'code')), JSON_UNESCAPED_UNICODE) ?>;
-var STATUS_TXT = <?= json_encode(array_map(fn($s) => kpi_scheme_status_label($s)[1],
-        array_combine(['keep','move','retune','new','watch','warn'], ['keep','move','retune','new','watch','warn'])),
-        JSON_UNESCAPED_UNICODE) ?>;
+var STATUS_TXT = <?php
+    $statusKeys = ['keep','move','retune','new','watch','warn','empty'];
+    $statusMap = [];
+    foreach ($statusKeys as $sk) $statusMap[$sk] = kpi_scheme_status_label($sk)[1];
+    echo json_encode($statusMap, JSON_UNESCAPED_UNICODE);
+?>;
 
 function openMask(id){ document.getElementById(id).style.display='block'; }
 function closeMask(id){ document.getElementById(id).style.display='none'; }
