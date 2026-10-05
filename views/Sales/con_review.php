@@ -215,7 +215,7 @@ $companyName = eg_company_full_name($db);
             <li>業務課決行（可接單／可接單需客戶確認條件／不可接單）後，交由總經理核准，核准後表單結案。</li>
         </ul>
         <h4>項目範本</h4>
-        <p>項目範本由管理員在「範本維護」裡增刪修改，可一次從產品開發評估表複製 32 項當起點——<b>複製後兩邊完全獨立</b>，之後互不影響。每個項目的結果固定可選「是／否／N/A」三選一，管理員可再加「額外選項」，填寫時可下拉選擇也可以自己打字輸入；另可設「預設值」供下方的自動填寫功能使用。</p>
+        <p>項目範本由管理員在「範本維護」裡增刪修改，可一次從產品開發評估表複製 32 項當起點——<b>複製後兩邊完全獨立</b>，之後互不影響。每個項目的結果固定可選「是／否／N/A」三選一，管理員可再加「額外選項」（逗號分隔），<b>部門實際填寫答案時</b>可下拉選擇也可以自己打字輸入；「預設值」則<b>只能從「是／否／N/A＋目前設定的額外選項」裡下拉挑一個</b>（不能自己打字），供下方的自動填寫功能使用——改了額外選項，預設值的候選清單會跟著更新，原本選的如果不在新清單裡會自動清空要求重選。</p>
         <h4>管理員：自動填寫並簽核</h4>
         <p>給例行、低風險的訂單快速走完內容部門這一段：未送出的會先自動送出，尚未填寫的項目依範本設定的「預設值」帶入（沒設定預設值的項目會跳過），內容部門逐一嘗試自動簽核。<b>簽核日期預設是接單日期，可改成之後的日期但必須是工作日</b>；<b>只有當天真的有上班（在職、沒請假、沒整天公出）的人才會被記為簽核人</b>，當天都不在就不自動簽、列出原因讓管理員自己處理，絕不會蓋一個當天根本不在的人的章。已填寫的項目、已簽核的部門不會被覆蓋。業務課決行／總經理核准仍需要人工進行，不會被這個功能代勞。</p>
         <h4>誰能填寫／簽核</h4>
@@ -568,20 +568,27 @@ function loadTpl(){
     });
 }
 var CNRV_BASE_OPTIONS = ['是','否','N/A'];   // 跟後端 CNRV_BASE_OPTIONS 同一份固定基礎選項
+/* 預設值選單選項：固定的是/否/N-A + 這一列目前的額外選項，去重。
+   跟後端 cnrv_merge_options() 是同一份規則（基礎三選項固定在前）。 */
+function tplDefaultOptsHtml(customOptsArr, curVal){
+    var allOpts = CNRV_BASE_OPTIONS.concat((customOptsArr||[]).filter(function(o){ return CNRV_BASE_OPTIONS.indexOf(o)===-1; }));
+    var h = '<option value="">（不設定）</option>';
+    allOpts.forEach(function(o){ h += '<option value="'+esc(o)+'"'+(o===curVal?' selected':'')+'>'+esc(o)+'</option>'; });
+    return h;
+}
 function renderTpl(items){
     var deptOpts = '<option value="">（未指定）</option>' + (META.departments||[]).map(function(d){ return '<option value="'+d.id+'">'+esc(d.name)+'</option>'; }).join('');
     var h = (items||[]).map(function(it){
         var sel = deptOpts.replace('value="'+it.dept_id+'"', 'value="'+it.dept_id+'" selected');
-        var dlId = 'tpldl_'+it.id;
-        var allOpts = CNRV_BASE_OPTIONS.concat((it.custom_options||[]).filter(function(o){ return CNRV_BASE_OPTIONS.indexOf(o)===-1; }));
-        var dl = '<datalist id="'+dlId+'">'+allOpts.map(function(o){ return '<option value="'+esc(o)+'"></option>'; }).join('')+'</datalist>';
         return '<tr data-id="'+it.id+'">'
              + '<td><input type="text" data-f="sort_order" value="'+it.sort_order+'" style="width:50px;" onchange="tplEdit('+it.id+',this)"></td>'
              + '<td><input type="text" data-f="group_label" value="'+esc(it.group_label)+'" style="width:60px;" onchange="tplEdit('+it.id+',this)"></td>'
              + '<td><input type="text" data-f="item_text" value="'+esc(it.item_text)+'" onchange="tplEdit('+it.id+',this)"></td>'
              + '<td><select data-f="dept_id" onchange="tplEdit('+it.id+',this)">'+sel+'</select></td>'
              + '<td><input type="text" data-f="options" value="'+esc((it.custom_options||[]).join(','))+'" title="在「是／否／N/A」固定三選項之外，這個項目額外可選的回覆" onchange="tplOptionsChanged('+it.id+',this)"></td>'
-             + '<td><input type="text" data-f="default_value" list="'+dlId+'" value="'+esc(it.default_value||'')+'" placeholder="是／否／N/A或額外選項之一" title="管理員按「自動填寫並簽核」時，這個項目沒人填就自動帶入這個值" onchange="tplEdit('+it.id+',this)">'+dl+'</td>'
+             // 預設值一律是「下拉選」不是打字——直接綁定當下的額外選項清單，不可能選到不存在的值
+             // （2026-10-05 使用者要求：預設值要「對應到可以綁定的額外選項」，不要用自由輸入的 combo）。
+             + '<td><select data-f="default_value" title="管理員按「自動填寫並簽核」時，這個項目沒人填就自動帶入這個值" onchange="tplEdit('+it.id+',this)">'+tplDefaultOptsHtml(it.custom_options, it.default_value)+'</select></td>'
              + '<td style="text-align:center;"><input type="checkbox" data-f="is_active" '+(it.is_active?'checked':'')+' onchange="tplEdit('+it.id+',this)"></td>'
              + '<td style="text-align:center;"><span class="rf-mini-btn" onclick="tplDel('+it.id+')"><i class="fa fa-times"></i> 刪除</span></td></tr>';
     }).join('');
@@ -612,12 +619,13 @@ function tplEdit(id){
    「預設值不是合法選項」擋下整列存檔，使用者卻看不出是哪裡出錯。 */
 function tplOptionsChanged(id, el){
     var tr = $('#tplBody tr[data-id='+id+']');
-    var allOpts = CNRV_BASE_OPTIONS.concat($.trim(el.value).split(',').map(function(s){ return $.trim(s); }).filter(Boolean).filter(function(s){ return CNRV_BASE_OPTIONS.indexOf(s)===-1; }));
-    // 重建這一列「預設值」的候選清單（datalist 是 renderTpl() 畫表格當下就定型的，
-    // 改了「額外選項」不會自動跟著變，不重建的話剛打的新選項要存檔+重新整個表格才選得到）。
-    $('#tpldl_'+id).html(allOpts.map(function(o){ return '<option value="'+esc(o)+'"></option>'; }).join(''));
+    var customOpts = $.trim(el.value).split(',').map(function(s){ return $.trim(s); }).filter(Boolean);
     var $dv = tr.find('[data-f=default_value]');
-    if ($dv.val() && allOpts.indexOf($dv.val())===-1) $dv.val('');   // 原本選的值如果已經不在新清單裡，清空要求重選
+    var curVal = $dv.val();
+    // 預設值下拉是「綁定」在這一列目前的額外選項上——改了額外選項，候選清單要立刻跟著重建
+    // （select 是 renderTpl() 畫表格當下就定型的，不重建的話剛打的新選項要存檔+整表重畫才選得到）；
+    // 原本選的值如果已經不在新清單裡，一併清空要求重選（tplDefaultOptsHtml 選不到就自動落在「不設定」）。
+    $dv.html(tplDefaultOptsHtml(customOpts, curVal));
     tplEdit(id);
 }
 function tplAdd(){
