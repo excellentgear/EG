@@ -997,11 +997,17 @@ function el_order_case_sync_status(PDO $db, int $logId, string $now): void
 }
 
 /**
- * 批次版：多張訂單各自目前「未處理問題數」（非 resolved/dropped 的問題項數）。
+ * 批次版：多張訂單各自目前「未處理問題數」＋「最新一條未處理問題」的預覽文字。
  * 比照 qab_bom_scrap_sum_rows() 既有模式，避免清單頁逐列各查一次（N+1）。
- * @return array [order_id(int) => count(int)]，沒有案件或沒有未處理問題的訂單不會出現（視為 0）
+ *
+ * 2026-10-05 使用者實測回報：只顯示數字要點進去才看得到內容，不方便——list 頁要能
+ * 掃一眼就看到最新問題是什麼，比照舊版 textarea「看得到內容」的體驗，所以每張訂單
+ * 一併帶出「最新一條未處理問題」（依 id 由新到舊取第一條）供畫面直接顯示預覽。
+ *
+ * @return array [order_id(int) => ['count'=>int,'question'=>string,'target_type'=>?string,'target_label'=>?string]]
+ *         沒有案件或沒有未處理問題的訂單不會出現在結果裡。
  */
-function el_order_open_item_counts(PDO $db, array $orderIds): array
+function el_order_open_rows(PDO $db, array $orderIds): array
 {
     $ids = array_values(array_unique(array_filter(array_map('intval', $orderIds), fn($v) => $v > 0)));
     if (!$ids) return [];
@@ -1009,15 +1015,43 @@ function el_order_open_item_counts(PDO $db, array $orderIds): array
     $out = [];
     try {
         $rows = $db->query("
-            SELECT b.bind_id AS order_id, COUNT(*) AS cnt
-            FROM eng_log_bind b JOIN eng_log_item i ON i.log_id = b.log_id
-            WHERE b.bind_type='order' AND b.bind_id IN ({$in})
-              AND i.status NOT IN ('resolved','dropped')
-            GROUP BY b.bind_id
+            SELECT order_id, question, target_type, target_label, cnt FROM (
+                SELECT b.bind_id AS order_id, i.question, i.target_type, i.target_label,
+                       COUNT(*) OVER (PARTITION BY b.bind_id) AS cnt,
+                       ROW_NUMBER() OVER (PARTITION BY b.bind_id ORDER BY i.id DESC) AS rn
+                FROM eng_log_bind b JOIN eng_log_item i ON i.log_id = b.log_id
+                WHERE b.bind_type='order' AND b.bind_id IN ({$in})
+                  AND i.status NOT IN ('resolved','dropped')
+            ) t WHERE rn = 1
         ")->fetchAll(PDO::FETCH_ASSOC);
-        foreach ($rows as $r) $out[(int)$r['order_id']] = (int)$r['cnt'];
+        foreach ($rows as $r) {
+            $out[(int)$r['order_id']] = [
+                'count'        => (int)$r['cnt'],
+                'question'     => (string)$r['question'],
+                'target_type'  => $r['target_type'] !== null ? (string)$r['target_type'] : null,
+                'target_label' => $r['target_label'] !== null ? (string)$r['target_label'] : null,
+            ];
+        }
     } catch (Throwable $e) {}
     return $out;
+}
+
+/** 相容版：只要未處理問題數時用這支（現場目前只有 NewOrder_Track.php 用到 el_order_open_rows()） */
+function el_order_open_item_counts(PDO $db, array $orderIds): array
+{
+    $out = [];
+    foreach (el_order_open_rows($db, $orderIds) as $oid => $r) $out[$oid] = $r['count'];
+    return $out;
+}
+
+/** 這個案件綁的是哪一張訂單（bind_type='order'），查不到回 0。給回覆/已處理動作事後要重算該列預覽用。 */
+function el_case_order_id(PDO $db, int $logId): int
+{
+    try {
+        $st = $db->prepare("SELECT bind_id FROM eng_log_bind WHERE log_id=? AND bind_type='order' LIMIT 1");
+        $st->execute([$logId]);
+        return (int)$st->fetchColumn();
+    } catch (Throwable $e) { return 0; }
 }
 
 /**

@@ -2146,7 +2146,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
         $ordSt->execute([$oid]);
         $ord = $ordSt->fetch(PDO::FETCH_ASSOC) ?: [];
         $bizDefault = el_order_business_default($pdo, $ord);
-        echo json_encode(['success' => true, 'log_id' => $logId, 'items' => $items,
+        $todayL = substr((string)$pdo->query("SELECT NOW()")->fetchColumn(), 0, 10);
+        echo json_encode(['success' => true, 'log_id' => $logId, 'items' => $items, 'today' => $todayL,
             'can_resolve' => $can_design_qa_resolve, 'biz_default' => $bizDefault,
             'order' => ['order_no' => (string)($ord['Order_oo'] ?? ''), 'part_no' => (string)($ord['d_id'] ?? ''),
                         'client' => (string)($ord['Client_name'] ?? '')]]);
@@ -2183,8 +2184,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_add') {
         el_reindex($pdo, $logId);
         $pdo->prepare("UPDATE eng_log SET updated_at=? WHERE id=?")->execute([$nowL, $logId]);
         $pdo->commit();
-        $cnt = (int)$pdo->query("SELECT COUNT(*) FROM eng_log_item WHERE log_id={$logId} AND status NOT IN ('resolved','dropped')")->fetchColumn();
-        echo json_encode(['success' => true, 'log_id' => $logId, 'created' => $created, 'open_count' => $cnt]);
+        $prevRow = el_order_open_rows($pdo, [$oid])[$oid] ?? null;
+        echo json_encode(['success' => true, 'log_id' => $logId, 'created' => $created,
+            'open_count' => $prevRow['count'] ?? 0, 'preview' => $prevRow]);
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -2213,8 +2215,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_reply') {
         }
         el_order_case_sync_status($pdo, $logId, $nowL);
         $pdo->commit();
-        $cnt = (int)$pdo->query("SELECT COUNT(*) FROM eng_log_item WHERE log_id={$logId} AND status NOT IN ('resolved','dropped')")->fetchColumn();
-        echo json_encode(['success' => true, 'open_count' => $cnt, 'reply_count' => count($ret['ids'])]);
+        $oidR = el_case_order_id($pdo, $logId);
+        $prevRow = $oidR ? (el_order_open_rows($pdo, [$oidR])[$oidR] ?? null) : null;
+        echo json_encode(['success' => true, 'open_count' => $prevRow['count'] ?? 0,
+            'reply_count' => count($ret['ids']), 'preview' => $prevRow]);
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -2234,8 +2238,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_resolve') {
         $nowL = (string)$pdo->query("SELECT NOW()")->fetchColumn();
         el_item_set_status($pdo, $logId, $itemId, $status, '', $nowL);
         el_order_case_sync_status($pdo, $logId, $nowL);
-        $cnt = (int)$pdo->query("SELECT COUNT(*) FROM eng_log_item WHERE log_id={$logId} AND status NOT IN ('resolved','dropped')")->fetchColumn();
-        echo json_encode(['success' => true, 'open_count' => $cnt]);
+        $oidR = el_case_order_id($pdo, $logId);
+        $prevRow = $oidR ? (el_order_open_rows($pdo, [$oidR])[$oidR] ?? null) : null;
+        echo json_encode(['success' => true, 'open_count' => $prevRow['count'] ?? 0, 'preview' => $prevRow]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
@@ -2643,11 +2648,14 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     // 批次版 el_order_open_item_counts()（唯一實作見 eng_log_lib.php），避免每列各查一次。
     require_once __DIR__ . '/../../src/common/eng_log_lib.php';
     el_ensure_schema($pdo);
+    // [order_id => ['count'=>N,'question'=>最新一條未處理問題,'target_type'=>?,'target_label'=>?]]
+    // 2026-10-05 使用者實測回報：只有數字要點進去才看得到內容，不方便——改成一併帶出
+    // 最新一條問題文字，清單上直接看得到，不必每張都點開才知道在問什麼。
     $ate_q_map = [];
     if (!empty($order_list)) {
         try {
             $oidsQ = array_values(array_filter(array_map('intval', array_column($order_list, 'Order_id'))));
-            $ate_q_map = el_order_open_item_counts($pdo, $oidsQ);
+            $ate_q_map = el_order_open_rows($pdo, $oidsQ);
         } catch (Throwable $eQ) { $ate_q_map = []; }
     }
 
@@ -3416,13 +3424,26 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     // 打字→跳窗選對象(業務/客戶/廠商/純備註)→可多題→多輪回覆→逐題可標記已處理。
                     // 既有的「溝通紀錄」(order_ate_note_log) 是改版前按過「已處理」的歷史快照，
                     // 原樣保留唯讀查看；舊的自由文字內容已由遷移腳本搬成第一筆「純備註」問題項。
-                    $_ateQOpen = (int)($ate_q_map[(int)$order['Order_id']] ?? 0);
+                    // 2026-10-05 使用者實測回報：只顯示數字要點進去才看得到內容——改成直接帶出
+                    // 最新一條未處理問題的預覽文字，掃一眼列表就看得到，不必每張都點開查看。
+                    $_ateQRow = $ate_q_map[(int)$order['Order_id']] ?? null;
+                    $_ateQOpen = $_ateQRow ? (int)$_ateQRow['count'] : 0;
                     $_ateLogCnt = (int)($ate_log_map[(int)$order['Order_id']] ?? 0);
                     ?>
                     <div class="ate-q-cell">
-                        <?php if ($_ateQOpen > 0): ?>
-                        <button type="button" class="ate-q-badge" onclick="ateQOpen(<?= (int)$order['Order_id'] ?>)"
-                                title="點擊查看／回覆這張訂單的設計備註問題"><i class="fa fa-flag"></i> <?= $_ateQOpen ?> 待處理</button>
+                        <?php if ($_ateQRow): ?>
+                        <?php
+                        $_ateQTMap = ['customer' => '客戶', 'maker' => '廠商', 'user' => '業務'];
+                        $_ateQTT = $_ateQRow['target_type'];
+                        $_ateQPrefix = $_ateQTT ? ('【' . ($_ateQTMap[$_ateQTT] ?? $_ateQTT) . '：' . (string)$_ateQRow['target_label'] . '】') : '【純備註】';
+                        $_ateQText = (string)$_ateQRow['question'];
+                        $_ateQShort = mb_substr($_ateQText, 0, 22) . (mb_strlen($_ateQText) > 22 ? '…' : '');
+                        ?>
+                        <div class="ate-q-preview" onclick="ateQOpen(<?= (int)$order['Order_id'] ?>)"
+                             title="<?= safe_html($_ateQPrefix . $_ateQText) ?>（點擊查看／回覆）">
+                            <span class="ate-q-badge-inline"><i class="fa fa-flag"></i> <?= $_ateQOpen ?></span>
+                            <span class="ate-q-preview-txt"><?= safe_html($_ateQPrefix . $_ateQShort) ?></span>
+                        </div>
                         <?php elseif ($can_design_qa): ?>
                         <button type="button" class="ate-q-add-btn" onclick="ateQOpen(<?= (int)$order['Order_id'] ?>)"
                                 title="新增設計備註問題"><i class="fa fa-plus"></i> 新增</button>
@@ -3891,12 +3912,17 @@ foreach($dCounts as $c) {
         /* 設計備註問答（2026-10-05 併入 eng_log）＝暖色系（ai-rules/10），色票沿用本頁既有的
            急件燈號(#DD5138/#F0A24B)與溝通紀錄配色(#EADFCD/#D8CBB8/#6b5638)，不另創新色。 */
         .ate-q-cell { min-height:20px; }
-        .ate-q-badge, .ate-q-add-btn { border:1px solid; border-radius:3px; font-size:10px; line-height:1.6;
-            padding:1px 6px; cursor:pointer; }
-        .ate-q-badge { background:#DD5138; border-color:#c14631; color:#fff; }
-        .ate-q-badge:hover { background:#c84a31; }
-        .ate-q-add-btn { background:#FAF6EF; border-color:#D8CBB8; color:#6b5638; }
+        .ate-q-add-btn { border:1px solid; border-radius:3px; font-size:10px; line-height:1.6;
+            padding:1px 6px; cursor:pointer; background:#FAF6EF; border-color:#D8CBB8; color:#6b5638; }
         .ate-q-add-btn:hover { background:#F1E8D9; }
+        /* 2026-10-05：徽章+預覽文字，點一下跟按鈕一樣可開跳窗，但平常就看得到內容是什麼 */
+        .ate-q-preview { display:flex; align-items:center; gap:4px; cursor:pointer; border:1px solid #E8BCA9;
+            border-radius:3px; background:#FDF1E3; padding:1px 6px; max-width:100%; }
+        .ate-q-preview:hover { background:#F7DFC5; }
+        .ate-q-badge-inline { background:#DD5138; color:#fff; border-radius:3px; font-size:10px;
+            line-height:1.5; padding:0 4px; flex:0 0 auto; }
+        .ate-q-preview-txt { font-size:11px; color:#8a4b12; white-space:nowrap; overflow:hidden;
+            text-overflow:ellipsis; }
         #ate-q-modal .modal-dialog { max-width:600px; width:92%; }
         #ate-q-modal .modal-body { max-height:72vh; overflow-y:auto; padding:14px; }
         .ate-q-item { border:1px solid #EADFCD; border-left:3px solid #F0A24B; border-radius:4px;
@@ -3916,6 +3942,9 @@ foreach($dCounts as $c) {
         .ate-q-btn-ok:hover { background:#F7DFC5; }
         .ate-q-replybox { margin-top:6px; border-top:1px dashed #EADFCD; padding-top:6px; }
         .ate-q-replybox textarea { font-size:12px; margin-bottom:4px; }
+        .ate-q-replydate { display:flex; align-items:center; gap:5px; margin-bottom:4px; }
+        .ate-q-replydate label { font-size:11px; color:#6b5638; font-weight:400; margin:0; white-space:nowrap; }
+        .ate-q-replydate input { font-size:12px; padding:2px 5px; height:24px; width:150px; }
         .ate-q-chk { display:block; font-size:11px; color:#6b5638; font-weight:400; margin-bottom:4px; }
         .ate-q-composer { border-top:2px solid #EADFCD; margin-top:10px; padding-top:10px; }
         .ate-q-add-title { font-size:12px; color:#8a4b12; font-weight:700; margin-bottom:6px; }
@@ -8409,6 +8438,7 @@ foreach($dCounts as $c) {
                 ATE_Q.logId = res.log_id || 0;
                 ATE_Q.canResolve = !!res.can_resolve;
                 ATE_Q.bizDefault = res.biz_default || null;
+                ATE_Q.today = res.today || '';
                 ATE_Q.items = res.items || [];
                 ATE_Q.rows = [ateQNewRow()];
                 var ord = res.order || {};
@@ -8468,6 +8498,7 @@ foreach($dCounts as $c) {
                     ? '<button type="button" class="ate-q-btn" onclick="ateQResolve(' + it.id + ',\'waiting\')">退回待回覆</button>'
                     : '<button type="button" class="ate-q-btn ate-q-btn-ok" onclick="ateQResolve(' + it.id + ',\'resolved\')"><i class="fa fa-check"></i> 已處理</button>';
             }
+            var today = (ATE_Q.today || '');
             return '<div class="ate-q-item">'
                 + '<div class="ate-q-item-head">' + ateQStatusBadge(it.status) + '<span class="ate-q-target">' + escapeHtml(ateQTargetLabel(it)) + '</span></div>'
                 + '<div class="ate-q-question">' + escapeHtml(it.question || '') + '</div>'
@@ -8475,6 +8506,8 @@ foreach($dCounts as $c) {
                 + '<div class="ate-q-item-actions">' + actions + '</div>'
                 + '<div class="ate-q-replybox" id="ate-q-replybox-' + it.id + '" style="display:none;">'
                 +   '<textarea class="form-control" rows="2" placeholder="輸入回覆內容…" id="ate-q-replytxt-' + it.id + '"></textarea>'
+                +   '<div class="ate-q-replydate"><label>回覆日期：</label>'
+                +     '<input type="date" class="form-control" id="ate-q-replydate-' + it.id + '" value="' + escapeHtml(today) + '" max="' + escapeHtml(today) + '"></div>'
                 +   (ATE_Q.canResolve ? '<label class="ate-q-chk"><input type="checkbox" id="ate-q-replyok-' + it.id + '"> 回覆後直接標記已處理</label>' : '')
                 +   '<button type="button" class="btn btn-xs btn-warm" onclick="ateQSubmitReply(' + it.id + ')"><i class="fa fa-paper-plane"></i> 送出回覆</button>'
                 + '</div></div>';
@@ -8486,11 +8519,14 @@ foreach($dCounts as $c) {
             var $ta = $('#ate-q-replytxt-' + itemId);
             var txt = $.trim($ta.val());
             if (!txt) { showToast('請輸入回覆內容'); return; }
+            // 回覆日期預設今天，可自行改成實際回覆的那一天（例如客戶是電話回的、隔幾天才補登）；
+            // 不可以是未來日期（後端 el_reply_add() 同規則再擋一次）
+            var repliedOn = $('#ate-q-replydate-' + itemId).val() || '';
             var resolve = $('#ate-q-replyok-' + itemId).is(':checked') ? 1 : 0;
             $.post('', { action: 'ate_q_reply', log_id: ATE_Q.logId, item_ids: JSON.stringify([itemId]),
-                         content: txt, resolve: resolve }, function(res) {
+                         content: txt, replied_on: repliedOn, resolve: resolve }, function(res) {
                 if (!res || !res.success) { showToast((res && res.message) || '回覆失敗'); return; }
-                ateQApplyBadge(ATE_Q.orderId, res.open_count);
+                ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview);
                 ateQOpen(ATE_Q.orderId);
             }, 'json').fail(function() { showToast('回覆失敗，請重試'); });
         }
@@ -8498,7 +8534,7 @@ foreach($dCounts as $c) {
         function ateQResolve(itemId, status) {
             $.post('', { action: 'ate_q_resolve', log_id: ATE_Q.logId, id: itemId, status: status }, function(res) {
                 if (!res || !res.success) { showToast((res && res.message) || '操作失敗'); return; }
-                ateQApplyBadge(ATE_Q.orderId, res.open_count);
+                ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview);
                 ateQOpen(ATE_Q.orderId);
             }, 'json').fail(function() { showToast('操作失敗，請重試'); });
         }
@@ -8584,18 +8620,23 @@ foreach($dCounts as $c) {
             $.post('', { action: 'ate_q_add', order_id: ATE_Q.orderId, items: JSON.stringify(out) }, function(res) {
                 $('#ate-q-submit-new').prop('disabled', false);
                 if (!res || !res.success) { showToast((res && res.message) || '新增失敗'); return; }
-                ateQApplyBadge(ATE_Q.orderId, res.open_count);
+                ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview);
                 ateQOpen(ATE_Q.orderId);
             }, 'json').fail(function() { $('#ate-q-submit-new').prop('disabled', false); showToast('新增失敗，請重試'); });
         }
 
-        // 只局部更新這一列的徽章，不整頁重載（比照 applySyncedCustomerToRow 既有模式）
-        function ateQApplyBadge(orderId, openCount) {
+        // 只局部更新這一列的徽章+預覽文字，不整頁重載（比照 applySyncedCustomerToRow 既有模式）
+        function ateQApplyBadge(orderId, openCount, preview) {
             var $cell = $('td[data-ate-q-order="' + orderId + '"] .ate-q-cell');
             if (!$cell.length) return;
             openCount = parseInt(openCount, 10) || 0;
-            if (openCount > 0) {
-                $cell.html('<button type="button" class="ate-q-badge" onclick="ateQOpen(' + orderId + ')" title="點擊查看／回覆這張訂單的設計備註問題"><i class="fa fa-flag"></i> ' + openCount + ' 待處理</button>');
+            if (openCount > 0 && preview) {
+                var prefix = '【' + ateQTargetLabel({ target_type: preview.target_type, target_label: preview.target_label }) + '】';
+                var q = preview.question || '';
+                var shortQ = q.length > 22 ? (q.substr(0, 22) + '…') : q;
+                $cell.html('<div class="ate-q-preview" onclick="ateQOpen(' + orderId + ')" title="' + escapeHtml(prefix + q) + '（點擊查看／回覆）">'
+                    + '<span class="ate-q-badge-inline"><i class="fa fa-flag"></i> ' + openCount + '</span>'
+                    + '<span class="ate-q-preview-txt">' + escapeHtml(prefix + shortQ) + '</span></div>');
             } else if (window.OT_CAN_DESIGN_QA) {
                 $cell.html('<button type="button" class="ate-q-add-btn" onclick="ateQOpen(' + orderId + ')" title="新增設計備註問題"><i class="fa fa-plus"></i> 新增</button>');
             } else {
