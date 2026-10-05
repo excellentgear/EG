@@ -120,11 +120,12 @@ $companyName = eg_company_full_name($db);
         </label>
         <button type="button" class="cr-btn b-plain" id="btnTpl" style="margin-left:auto;"><i class="fa fa-list"></i> 範本維護</button>
         <button type="button" class="cr-btn b-plain" id="btnPrintSet"><i class="fa fa-cog"></i> 列印設定</button>
+        <button type="button" class="cr-btn b-plain" id="btnPermCheck"><i class="fa fa-user-circle-o"></i> 簽核人員權限檢查</button>
         <?php endif; ?>
     </div>
 
     <table class="cr-tbl">
-        <thead><tr><th style="width:120px;">編號</th><th>訂單</th><th>客戶</th><th>料號</th><th style="width:110px;">AS 認定</th><th style="width:90px;">業務日期</th><th style="width:70px;">狀態</th><th style="width:120px;">決行</th>
+        <thead><tr><th style="width:120px;">審查單號</th><th>訂單</th><th>客戶</th><th>料號</th><th style="width:110px;">AS 認定</th><th style="width:90px;">業務日期</th><th style="width:70px;">狀態</th><th style="width:120px;">決行</th>
             <?php if ($perms['canAdmin']): ?><th class="cr-admin-col" style="width:120px;display:none;">管理員代簽</th><?php endif; ?>
             <th style="width:70px;"></th></tr></thead>
         <tbody id="listBody"><tr><td colspan="<?= $perms['canAdmin'] ? 10 : 9 ?>" style="text-align:center;color:#999;">載入中…</td></tr></tbody>
@@ -225,6 +226,22 @@ $companyName = eg_company_full_name($db);
     <div class="m-foot"><button type="button" class="cr-btn b-plain" onclick="closeMask('printSetMask')">取消</button> <button type="button" class="cr-btn" onclick="savePrintSetting()"><i class="fa fa-save"></i> 儲存</button></div>
 </div></div>
 
+<!-- 簽核人員權限檢查（僅管理員，2026-10-05 使用者提問交辦）：解析出來的部門/決行/核准人員
+     有沒有實際被指派本頁的檢視權限，沒有的人點開待簽通知只會看到 403，系統不會主動提醒 -->
+<div class="cr-mask" id="permCheckMask"><div class="cr-modal">
+    <div class="m-head"><span>簽核人員權限檢查</span><span class="m-close" onclick="closeMask('permCheckMask')">✕</span></div>
+    <div class="m-body">
+        <p style="font-size:12.5px;color:#8a6d45;">內容部門填寫/簽核、業務課決行、總經理核准，系統都是依組織架構（部門主管／業務課主管／最高核准人員）自動解析出候選人；但要真的打得開本頁或 API，這個人還要<b>另外被指派「合約訂單審查-檢視/填寫」角色（或以上）</b>才行——兩者是分開的設定，部門主管換人、組織角色改綁定時，新人選很可能完全沒有這個角色指派。以下是目前解析出來的每一位候選人，<span style="color:#c0392b;">紅字＝這個人目前打不開本頁</span>。</p>
+        <div id="permCheckBody" style="margin:10px 0;">載入中…</div>
+        <div id="permCheckGapBar" style="display:none;background:#FFF3EE;border:1px dashed #DD5138;border-radius:6px;padding:8px 10px;font-size:12.5px;color:#c0392b;margin-top:6px;"></div>
+    </div>
+    <div class="m-foot">
+        <span id="permCheckFixHint" style="float:left;font-size:12px;color:#8a6d45;margin-top:6px;"></span>
+        <button type="button" class="cr-btn b-plain" onclick="closeMask('permCheckMask')">關閉</button>
+        <button type="button" class="cr-btn" id="btnPermFix" style="display:none;" onclick="submitPermFix()"><i class="fa fa-magic"></i> 一鍵補上缺少的檢視權限</button>
+    </div>
+</div></div>
+
 <!-- 使用說明 -->
 <div class="cr-mask" id="helpUseMask"><div class="cr-modal">
     <div class="m-head"><span>使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
@@ -297,15 +314,19 @@ function loadMeta(cb){
 }
 
 /* ───────────────── 清單 ───────────────── */
-// 「顯示管理員代簽標記」開關：只有管理員看得到（META.perms.isAdmin，後端 list 的 has_admin_sign
-// 欄位也只有管理員才會收到），開了才在清單多一欄；2026-10-05 使用者更正——這才是「LOG」該有的
-// 樣子，不是在表單畫面上掛一塊寫著 LOG 字樣的小標籤。
+// 「顯示管理員代簽標記」開關：只有管理員（canAdmin＝全站超管或本頁管理員角色）看得到
+// （後端 list 的 has_admin_sign 欄位同規則才會收到），開了才在清單多一欄；2026-10-05 使用者
+// 更正——這才是「LOG」該有的樣子，不是在表單畫面上掛一塊寫著 LOG 字樣的小標籤。
+// 這裡一定要用 canAdmin 不可以用 isAdmin——PHP 端的表頭（<th class="cr-admin-col">）是用
+// canAdmin 決定要不要輸出的，這裡判斷錯邊會讓本頁管理員（canAdmin=true, isAdmin=false）的
+// 表頭有這一欄、資料列卻少一個 <td>，整排往左擠一欄，「開啟」按鈕就會跑到「管理員代簽」
+// 欄位底下（2026-10-05 使用者截圖回報的症狀）。
 var SHOW_ADMIN_SIGN_COL = false;
-function listColspan(){ return (META.perms && META.perms.isAdmin) ? 10 : 9; }
+function listColspan(){ return (META.perms && META.perms.canAdmin) ? 10 : 9; }
 function loadList(){
     $.getJSON(API, {action:'list', status:$('#filterStatus').val(), keyword:$.trim($('#filterKw').val())}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
-        var isAdmin = !!(META.perms && META.perms.isAdmin);
+        var isAdmin = !!(META.perms && META.perms.canAdmin);
         var h = '';
         (res.rows||[]).forEach(function(r){
             var dc = r.decision ? '<span class="dc-'+r.decision+'">'+esc(DECISIONS[r.decision]||r.decision)+'</span>' : '<span style="color:#bbb;">—</span>';
@@ -483,7 +504,7 @@ function renderView(){
         + '<div><span class="k">交期：</span><span class="v">'+dispDate(d.delivery_date)+'</span></div>'
         + '<div><span class="k">AS 認定：</span><span class="v">'+esc(d.tag_label)+'</span></div>'
         + '<div><span class="k">狀態：</span><span class="v"><span class="st-badge st-'+d.status+'">'+STATUS_LABEL[d.status]+'</span></span></div>'
-        + '<div><span class="k">編號：</span><span class="v">'+esc(d.doc_no)+'</span></div>'
+        + '<div><span class="k">審查單號：</span><span class="v">'+esc(d.doc_no)+'</span></div>'
         + '</div>';
 
     // 管理員「自動填寫並簽核」（2026-10-05 使用者交辦）：給例行、低風險訂單一鍵快速走完
@@ -518,7 +539,7 @@ function renderView(){
             // 簽核一律走圖章（ai-rules/18），不只印人名文字。is_auto_sign／is_backfill（這一章是
             // 管理員自動帶入／補登的）在這裡完全不顯示任何字樣——2026-10-05 使用者更正：這個紀錄
             // 要改成「清單上有個開關，開了才多一欄顯示管理員代簽」，不是在表單畫面上掛標籤。
-            h += stampHtml(dp.signed_by_name, String(dp.signed_at||'').substring(0,10));
+            h += stampHtml(dp.signed_by_name, dispDate(String(dp.signed_at||'').substring(0,10)));
         } else if (d.status==='submitted' && (dp.can_fill || CUR.is_admin)) {
             h += '<span><input type="text" id="deptNote_'+dp.dept_id+'" placeholder="意見(選填)" style="width:200px;border:1px solid #E8D5B5;border-radius:4px;padding:3px 6px;font-size:12px;margin-right:6px;">'
                + '<button type="button" class="cr-btn" style="height:26px;padding:0 10px;font-size:12px;" onclick="deptSign('+dp.dept_id+')">本課確認</button></span>';
@@ -538,11 +559,11 @@ function renderView(){
         // 清單頁的「顯示管理員代簽標記」開關（2026-10-05 使用者更正）。
         h += '<div class="cr-hdr-grid" style="grid-template-columns:1fr 1fr;">';
         var decideStampHtml = d.decision
-            ? ('<span class="dc-'+d.decision+'">'+esc(DECISIONS[d.decision])+'</span>　'+stampHtml(d.sales_decided_by_name, String(d.sales_decided_at||'').substring(0,10)))
+            ? ('<span class="dc-'+d.decision+'">'+esc(DECISIONS[d.decision])+'</span>　'+stampHtml(d.sales_decided_by_name, dispDate(String(d.sales_decided_at||'').substring(0,10))))
             : '尚未決行';
         h += '<div><span class="k">業務課決行：</span><span class="v">'+decideStampHtml+'</span></div>';
         var gmStampHtml = d.gm_approved_by_name
-            ? stampHtml(d.gm_approved_by_name, String(d.gm_approved_at||'').substring(0,10), d.gm_is_deputy)
+            ? stampHtml(d.gm_approved_by_name, dispDate(String(d.gm_approved_at||'').substring(0,10)), d.gm_is_deputy)
             : '尚未核准';
         h += '<div><span class="k">總經理核准：</span><span class="v">'+gmStampHtml+'</span></div>';
         h += '</div>';
@@ -621,7 +642,7 @@ function printDoc(){
             if (!dp) return '<td class="dept"></td><td class="tl"></td>';
             return '<td class="dept">'+esc(dp.dept_name)+'</td><td class="tl">'
                  + (dp.note?('<div style="font-size:10px;color:#555;margin-bottom:2px;">'+esc(dp.note)+'</div>'):'')
-                 + pStamp(dp.signed_by_name, String(dp.signed_at||'').substring(0,10))
+                 + pStamp(dp.signed_by_name, dispDate(String(dp.signed_at||'').substring(0,10)))
                  + '</td>';
         };
         var deptRows = '';
@@ -632,7 +653,7 @@ function printDoc(){
             + '<table class="p-hd">'
             + '<tr><td>訂單編號</td><td>'+esc(d.order_oo)+'</td><td>客戶</td><td>'+esc(d.client_name)+'</td><td>料號</td><td>'+esc(d.part_no_text)+'</td></tr>'
             + '<tr><td>數量</td><td>'+Number(d.qty||0).toLocaleString()+'</td><td>接單日期</td><td>'+dispDate(d.business_date)+'</td><td>交期</td><td>'+dispDate(d.delivery_date)+'</td></tr>'
-            + '<tr><td>AS 認定</td><td colspan="3">'+esc(d.tag_label||'')+'</td><td>編號</td><td>'+esc(d.doc_no)+'</td></tr>'
+            + '<tr><td>AS 認定</td><td colspan="3">'+esc(d.tag_label||'')+'</td><td>審查單號</td><td>'+esc(d.doc_no)+'</td></tr>'
             + '</table>'
             + '<table class="p-tb"><thead><tr><th style="width:50px;">區分</th><th>項目內容</th><th style="width:70px;">負責部門</th><th style="width:110px;">結果</th><th style="width:70px;">填寫人</th></tr></thead><tbody>'+itemRows+'</tbody></table>'
             + '<div class="p-sec">內容部門簽核</div>'
@@ -640,8 +661,8 @@ function printDoc(){
             // 決行與核准改並列同一列（2026-10-05 使用者要求）：業務課決行／總經理核准各佔一半寬度。
             + '<div class="p-sec">決行與核准　決行結果：'+decisionTxt+'</div>'
             + '<table class="p-tb"><tr>'
-            + '<td class="dept">業務課決行</td><td class="tl">'+pStamp(d.sales_decided_by_name, String(d.sales_decided_at||'').substring(0,10))+'</td>'
-            + '<td class="dept">總經理核准</td><td class="tl">'+pStamp(d.gm_approved_by_name, String(d.gm_approved_at||'').substring(0,10), d.gm_is_deputy)+'</td>'
+            + '<td class="dept">業務課決行</td><td class="tl">'+pStamp(d.sales_decided_by_name, dispDate(String(d.sales_decided_at||'').substring(0,10)))+'</td>'
+            + '<td class="dept">總經理核准</td><td class="tl">'+pStamp(d.gm_approved_by_name, dispDate(String(d.gm_approved_at||'').substring(0,10)), d.gm_is_deputy)+'</td>'
             + '</tr></table>';
         var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:1px;}'
@@ -655,7 +676,9 @@ function printDoc(){
             + 'table.p-tb thead th{background:#f3ead6;} table.p-tb td.tl{text-align:left;} table.p-tb td.dept{font-weight:bold;background:#f3ead6;width:70px;}'
             + 'table.p-tb tr{break-inside:avoid;}'
             + '.stamp-wrap{display:inline-block;text-align:center;margin:2px 10px 2px 0;}'
-            + '@page{margin:12mm 10mm 18mm;'
+            // 列印預設 A4 直式（2026-10-05 使用者回報瀏覽器列印對話框一直跳出橫向，要求固定直式）：
+            // size 要明講 portrait，不寫的話瀏覽器會沿用「使用者上次列印選的方向」，不是網頁內容的方向。
+            + '@page{size:A4 portrait;margin:12mm 10mm 18mm;'
             + (res.as_doc_no ? " @bottom-right{ content:'"+String(res.as_doc_no).replace(/['\\]/g,'')+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
             + '}';
         var w = window.open('', '_blank');
@@ -677,7 +700,7 @@ function printDoc(){
     });
 }
 function deleteDoc(){
-    if (!confirm('確定要刪除這張審查表單嗎？\n訂單 '+CUR.doc.order_oo+'（'+CUR.doc.client_name+'），編號 '+CUR.doc.doc_no+'\n\n刪除後這張訂單可以重新建立一張新的審查表單，此動作無法由畫面復原。')) return;
+    if (!confirm('確定要刪除這張審查表單嗎？\n訂單 '+CUR.doc.order_oo+'（'+CUR.doc.client_name+'），審查單號 '+CUR.doc.doc_no+'\n\n刪除後這張訂單可以重新建立一張新的審查表單，此動作無法由畫面復原。')) return;
     $.post(API, {action:'delete', csrf:META.csrf, doc_id:CUR.doc.id}, function(res){
         if (!res.ok){ alert(res.error||'刪除失敗'); return; }
         closeMask('viewMask'); loadList();
@@ -755,6 +778,58 @@ function savePrintSetting(){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         closeMask('printSetMask');
         loadMeta();   // 重新載入 META.as_doc／META.stamp_tpl，讓畫面上的圖章與 AS 編號立刻套用新設定
+    }, 'json');
+}
+
+/* ───────────────── 簽核人員權限檢查（2026-10-05 使用者提問交辦） ───────────────── */
+var PERM_CHECK_GAP_IDS = [];
+$('#btnPermCheck').on('click', function(){ openMask('permCheckMask'); loadPermCheck(); });
+function loadPermCheck(){
+    $('#permCheckBody').html('載入中…');
+    $('#permCheckGapBar').hide().empty();
+    $('#btnPermFix').hide();
+    $('#permCheckFixHint').text('');
+    $.getJSON(API, {action:'perm_check'}, function(res){
+        if (!res.ok){ $('#permCheckBody').html('<span style="color:#c0392b;">'+esc(res.error||'載入失敗')+'</span>'); return; }
+        renderPermCheck(res);
+    });
+}
+function permRowHtml(label, people){
+    if (!people || !people.length) return '<tr><td style="font-weight:600;white-space:nowrap;">'+esc(label)+'</td><td style="color:#bbb;">（查無候選人員，請先到組織角色綁定設定）</td></tr>';
+    var names = people.map(function(p){
+        var style = p.can_view ? 'color:#2d6a3e;' : 'color:#c0392b;font-weight:600;';
+        return '<span style="'+style+'">'+esc(p.user_cname)+(p.can_view?'':'（無本頁權限）')+'</span>';
+    }).join('、');
+    return '<tr><td style="font-weight:600;white-space:nowrap;vertical-align:top;">'+esc(label)+'</td><td>'+names+'</td></tr>';
+}
+function renderPermCheck(res){
+    var h = '<table class="cr-tbl"><tbody>';
+    (res.depts||[]).forEach(function(dp){ h += permRowHtml(dp.dept_name, dp.people); });
+    h += permRowHtml('業務課決行', res.sales);
+    h += permRowHtml('總經理核准', res.gm ? [res.gm] : []);
+    h += '</tbody></table>';
+    $('#permCheckBody').html(h);
+
+    var gaps = res.gaps || [];
+    PERM_CHECK_GAP_IDS = gaps.map(function(g){ return g.id; });
+    if (gaps.length) {
+        var list = gaps.map(function(g){ return esc(g.user_cname)+'（'+esc((g.scopes||[]).join('、'))+'）'; }).join('；');
+        $('#permCheckGapBar').show().html('<b>以下 '+gaps.length+' 人目前打不開本頁，簽核通知點進去只會看到「沒有權限」：</b><br>'+list);
+        $('#btnPermFix').show();
+        $('#permCheckFixHint').text('一鍵補上＝幫上面這些人指派「合約訂單審查-檢視/填寫」角色（最低門檻，不會動到其他權限）。');
+    } else {
+        $('#permCheckGapBar').hide().empty();
+        $('#btnPermFix').hide();
+        $('#permCheckFixHint').text('目前解析出來的候選人都已經有本頁的檢視權限。');
+    }
+}
+function submitPermFix(){
+    if (!PERM_CHECK_GAP_IDS.length) return;
+    if (!confirm('確定要幫這 '+PERM_CHECK_GAP_IDS.length+' 位補上「合約訂單審查-檢視/填寫」角色嗎？')) return;
+    $.post(API, {action:'perm_fix', csrf:META.csrf, ids:PERM_CHECK_GAP_IDS.join(',')}, function(res){
+        if (!res.ok){ alert(res.error||'補上失敗'); return; }
+        alert('已補上 '+res.fixed+' 人。');
+        renderPermCheck(res.result);
     }, 'json');
 }
 

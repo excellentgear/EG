@@ -291,6 +291,95 @@ function cnrv_perms(PDO $db, ?array $u): array {
     return ['isAdmin'=>$isAdmin,'canAdmin'=>$canAdmin,'canCreate'=>$canCreate,'canView'=>$canView];
 }
 
+/** 這個 uid 是不是全站超級管理員，不吃 session（供下面批次檢查「其他人」用，不能只查目前登入者）。 */
+function cnrv_uid_is_super_admin(PDO $db, int $uid): bool {
+    if ($uid === 1) return true;
+    $st = $db->prepare("SELECT user_status FROM user WHERE id=?");
+    $st->execute([$uid]);
+    $status = $st->fetchColumn();
+    if ($status !== false && in_array((int)$status, [9, 90], true)) return true;
+    $st = $db->prepare("SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
+                        WHERE ur.user_id=? AND r.role_code='admin' AND r.is_system=1 LIMIT 1");
+    $st->execute([$uid]);
+    return (bool)$st->fetchColumn();
+}
+
+/** 這個 uid 進不進得了本模組（canView 以上），不吃 session——給「簽核人員權限檢查」查任意
+ *  一個人（不是目前登入者）夠不夠資格使用本頁。 */
+function cnrv_user_can_view(PDO $db, int $uid): bool {
+    if (cnrv_uid_is_super_admin($db, $uid)) return true;
+    return cnrv_has_role($db, $uid, ['con_review_view', 'con_review_create', 'con_review_admin']);
+}
+
+/**
+ * 簽核人員權限自查（2026-10-05 使用者提問「要回簽的人員也需要本頁面權限嗎」拍板要做）：
+ * 內容部門填寫/簽核、業務課決行、總經理核准都是兩層把關——人要先在這個人員池裡（部門主管／
+ * 業務課主管／組織角色綁定的最高核准人），**還要**另外被指派 con_review_view 以上的角色才能
+ * 真的打得開本頁/API（cnrv_perms() 的 canView）。部門主管換人、組織角色改綁定時，新人選
+ * 很可能完全沒有這個角色指派，「系統解析出來的人」跟「真的能用的人」兩邊會對不起來而且
+ * 不會主動報錯（那個人點開通知只會看到 403）——這支函式就是抓出這個落差，供管理員一眼看到
+ * 要去「使用者權限設定」補哪些人。範圍＝目前範本有效項目用到的部門（之後新建的表單就是解析
+ * 這些部門）；業務課決行池、總經理核准也一併查。
+ * @return array ['depts'=>[{dept_id,dept_name,people:[{id,user_cname,can_view}]}],
+ *                'sales'=>[{id,user_cname,can_view}], 'gm'=>?array, 'gaps'=>[{id,user_cname,scopes}]]
+ */
+function cnrv_perm_check(PDO $db): array {
+    $deptIds = array_values(array_unique(array_map('intval',
+        $db->query("SELECT DISTINCT dept_id FROM con_review_tpl_item WHERE is_active=1 AND dept_id IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN)
+    )));
+    $deptNames = [];
+    foreach ($db->query("SELECT id,name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d) $deptNames[(int)$d['id']] = $d['name'];
+
+    $annotate = function (array $people) use ($db): array {
+        foreach ($people as &$p) $p['can_view'] = cnrv_user_can_view($db, (int)$p['id']);
+        unset($p);
+        return $people;
+    };
+
+    $depts = [];
+    foreach ($deptIds as $d) {
+        $depts[] = ['dept_id'=>$d, 'dept_name'=>$deptNames[$d] ?? ('#'.$d), 'people'=>$annotate(cnrv_dept_pool($db, $d))];
+    }
+    $sales = $annotate(cnrv_sales_pool($db));
+    // 總經理核准查「組織角色綁定的最高核准人員」本人（不經代理解析）——代理是「今天誰代簽」，
+    // 這裡要查的是「這個固定人選本身有沒有被指派角色」，兩者是不同層次的問題。
+    $gmUser = eg_org_user($db, 'top_approver');
+    $gm = $gmUser ? ['id'=>(int)$gmUser['id'], 'user_cname'=>$gmUser['user_cname'], 'can_view'=>cnrv_user_can_view($db, (int)$gmUser['id'])] : null;
+
+    // 缺口彙總：同一個人可能同時出現在好幾個範圍（例如同時是某部門主管又是業務課主管），
+    // 併成一筆、scopes 列出「哪些範圍都需要他」，不要重複列好幾行。
+    $gapMap = [];
+    $addGap = function (array $p, string $scope) use (&$gapMap) {
+        if (!empty($p['can_view'])) return;
+        $uid = (int)$p['id'];
+        if (!isset($gapMap[$uid])) $gapMap[$uid] = ['id'=>$uid, 'user_cname'=>$p['user_cname'], 'scopes'=>[]];
+        $gapMap[$uid]['scopes'][] = $scope;
+    };
+    foreach ($depts as $dp) foreach ($dp['people'] as $p) $addGap($p, $dp['dept_name']);
+    foreach ($sales as $p) $addGap($p, '業務課決行');
+    if ($gm) $addGap($gm, '總經理核准');
+
+    return ['depts'=>$depts, 'sales'=>$sales, 'gm'=>$gm, 'gaps'=>array_values($gapMap)];
+}
+
+/** 一鍵補齊：把 con_review_view 角色指派給傳入清單裡「目前真的缺權限」的每一個人（僅管理員可用，
+ *  呼叫端自行驗證權限）。已經有角色的人（含更高的 create/admin）一律跳過不重複寫入。
+ *  @return int 實際補上的人數 */
+function cnrv_perm_fix(PDO $db, array $uids): int {
+    $st = $db->prepare("SELECT role_id FROM roles WHERE module='" . CNRV_AS_MODULE . "' AND role_code='con_review_view' LIMIT 1");
+    $st->execute();
+    $roleId = (int)$st->fetchColumn();
+    if (!$roleId) throw new Exception('找不到 con_review_view 角色，請先確認模組角色已建立');
+    $n = 0;
+    $ins = $db->prepare("INSERT IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)");
+    foreach (array_unique(array_map('intval', $uids)) as $uid) {
+        if ($uid <= 0 || cnrv_user_can_view($db, $uid)) continue;
+        $ins->execute([$uid, $roleId]);
+        if ($ins->rowCount() > 0) $n++;
+    }
+    return $n;
+}
+
 /* ============================================================ 範本項目（管理員維護） ============================================================ */
 
 /** 每個項目的結果一律是「是／否／N/A」三者之一，外加範本上設定的預設回覆選項之一

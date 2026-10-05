@@ -290,6 +290,22 @@ case 'print_setting_save': {
     jout([]);
 }
 
+/* ---- 簽核人員權限自查（2026-10-05 使用者提問交辦）：解析出來的部門/決行/核准人員
+   有沒有被指派本頁的檢視權限（con_review_view 以上），沒有的人點開通知只會看到 403 ---- */
+case 'perm_check': {
+    if (!$perms['canAdmin']) jerr('沒有權限', 403);
+    jout(cnrv_perm_check($db));
+}
+case 'perm_fix': {
+    cnrv_need_csrf();
+    if (!$perms['canAdmin']) jerr('沒有權限', 403);
+    $ids = array_filter(array_map('intval', explode(',', (string)($_POST['ids'] ?? ''))));
+    if (!$ids) jerr('沒有要補的人員');
+    try { $n = cnrv_perm_fix($db, $ids); }
+    catch (Throwable $e) { jerr($e->getMessage()); }
+    jout(['fixed'=>$n, 'result'=>cnrv_perm_check($db)]);
+}
+
 default: jerr('無效的操作');
 }
 } catch (Throwable $e) {
