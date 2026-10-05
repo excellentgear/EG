@@ -102,6 +102,20 @@ case 'order_get': {
     jout(['order'=>$o]);
 }
 
+/* ---- 建議建立清單（批次一鍵建立） ---- */
+case 'suggest_list': {
+    if (!$perms['canCreate']) jerr('沒有權限', 403);
+    jout(cnrv_suggest_list($db, (int)($_GET['days'] ?? 30), (int)($_GET['limit'] ?? 300)));
+}
+case 'batch_create': {
+    cnrv_need_csrf();
+    if (!$perms['canCreate']) jerr('沒有建立權限', 403);
+    $ids = array_filter(array_map('intval', explode(',', (string)($_POST['order_ids'] ?? ''))));
+    if (!$ids) jerr('沒有勾選任何訂單');
+    $r = cnrv_batch_create($db, $ids, $uid, $uname);
+    jout(['created_count'=>count($r['created']), 'failed'=>$r['failed']]);
+}
+
 /* ---- 表單建立／讀取／清單 ---- */
 case 'create': {
     cnrv_need_csrf();

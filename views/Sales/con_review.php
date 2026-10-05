@@ -103,16 +103,16 @@ $companyName = eg_company_full_name($db);
 </div></div>
 
 <div class="right_col" role="main" style="min-height:100vh;">
-    <div class="page-title">
-        <div class="title_left"><h3>合約訂單審查表 <small>（2-SM-01-06）</small></h3></div>
-        <div class="title_right" style="display:flex;align-items:center;">
-            <span style="font-size:12.5px;color:#8a6d45;margin-right:10px;">身分：<?= safe_html($roleLabel) ?></span>
-            <button type="button" class="page-help-btn" id="btnPageHelp"><i class="fa fa-question-circle"></i> 使用說明</button>
-        </div>
+    <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
+        <h3 style="margin:6px 0;">合約訂單審查表 <small>（2-SM-01-06）</small></h3>
+        <span style="font-size:12.5px;color:#8a6d45;margin-left:auto;margin-right:10px;">身分：<?= safe_html($roleLabel) ?></span>
+        <button type="button" class="page-help-btn" id="btnPageHelp"><i class="fa fa-question-circle"></i> 使用說明</button>
     </div>
+    <div class="clearfix"></div>
 
     <div class="cr-toolbar cr-print-hide">
-        <?php if ($perms['canCreate']): ?><button type="button" class="cr-btn" id="btnAdd"><i class="fa fa-plus"></i> 新增審查</button><?php endif; ?>
+        <?php if ($perms['canCreate']): ?><button type="button" class="cr-btn" id="btnAdd"><i class="fa fa-plus"></i> 新增審查</button>
+        <button type="button" class="cr-btn b-plain" id="btnSuggest"><i class="fa fa-magic"></i> 建議建立清單</button><?php endif; ?>
         <select id="filterStatus"><option value="">全部狀態</option><option value="draft">草稿</option><option value="submitted">審查中</option><option value="closed">已結案</option></select>
         <input type="text" id="filterKw" placeholder="訂單編號／客戶／料號／編號 搜尋" style="width:220px;">
         <button type="button" class="cr-btn b-plain" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
@@ -146,6 +146,29 @@ $companyName = eg_company_full_name($db);
     <div class="m-foot cr-print-hide"><button type="button" class="cr-btn b-plain" onclick="closeMask('viewMask')">關閉</button> <button type="button" class="cr-btn b-plain" onclick="printDoc()"><i class="fa fa-print"></i> 列印</button></div>
 </div></div>
 
+<!-- 建議建立清單 -->
+<div class="cr-mask" id="suggestMask"><div class="cr-modal">
+    <div class="m-head"><span>建議建立清單</span><span class="m-close" onclick="closeMask('suggestMask')">✕</span></div>
+    <div class="m-body">
+        <p style="font-size:12.5px;color:#8a6d45;">以下是「AS 認定需要審查、但還沒建立審查表單」的訂單（舊資料不強制補，這裡只是方便一次補齊，由您決定要不要建立）。</p>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+            <label style="margin:0;font-size:12.5px;">範圍：</label>
+            <select id="suggestDays" style="height:30px;border:1px solid #E8D5B5;border-radius:4px;padding:0 6px;">
+                <option value="30">最近 30 天</option><option value="60">最近 60 天</option><option value="90">最近 90 天</option><option value="0">不限（全部）</option>
+            </select>
+            <button type="button" class="cr-btn b-plain" style="height:30px;" onclick="loadSuggest()">重新查詢</button>
+            <span id="suggestTotal" style="font-size:12.5px;color:#8a6d45;margin-left:auto;"></span>
+        </div>
+        <table class="cr-tbl">
+            <thead><tr><th style="width:36px;text-align:center;"><input type="checkbox" id="suggestAll" onchange="suggestToggleAll(this.checked)"></th><th>訂單</th><th>客戶</th><th>料號</th><th style="width:90px;">接單日期</th><th style="width:110px;">AS 認定</th></tr></thead>
+            <tbody id="suggestBody"><tr><td colspan="6" style="text-align:center;color:#999;">載入中…</td></tr></tbody>
+        </table>
+    </div>
+    <div class="m-foot"><span id="suggestPickedCount" style="float:left;font-size:12.5px;color:#8a6d45;margin-top:6px;"></span>
+        <button type="button" class="cr-btn b-plain" onclick="closeMask('suggestMask')">關閉</button>
+        <button type="button" class="cr-btn" onclick="suggestBatchCreate()"><i class="fa fa-magic"></i> 一鍵建立已勾選</button></div>
+</div></div>
+
 <!-- 範本維護 -->
 <div class="cr-mask" id="tplMask"><div class="cr-modal">
     <div class="m-head"><span>範本項目維護</span><span class="m-close" onclick="closeMask('tplMask')">✕</span></div>
@@ -170,7 +193,7 @@ $companyName = eg_company_full_name($db);
         <p>AS9100 7.2 合約訂單審查：接到一張訂單時，評估「人機料法環」等能力是否足以接單。<b>只有訂單追蹤設定的「稽核製程標籤」判定為需要審查的訂單</b>（AS 認證範圍內的製程）才需要建立這張表單，其餘訂單（全製、單製非AS認證、廠內治具）不需要。</p>
         <h4>操作步驟</h4>
         <ul>
-            <li>按「新增審查」挑選一張需要審查的訂單（已建過的會標示出來、不可重複建立）。</li>
+            <li>按「新增審查」挑選一張需要審查的訂單（已建過的會標示出來、不可重複建立）；或按「建議建立清單」一次列出所有還沒建立的訂單，勾選後「一鍵建立已勾選」。</li>
             <li>建立後業務日期自動帶入該訂單的接單日期，<b>不可修改</b>——審查的是「接單那一刻」的狀況；訂單後續若有變更，走另一份文件「訂單修改審查記錄表」。</li>
             <li>按「送出」後，負責各項目的部門才能開始填寫並簽核。</li>
             <li>各部門填完自己負責的項目後按「本課確認」簽核；<b>全部內容部門簽完</b>才能進行業務課決行。</li>
@@ -284,6 +307,46 @@ function submitAdd(){
     $.post(API, {action:'create', csrf:META.csrf, order_id:ADD_ORD.Order_id}, function(res){
         if (!res.ok){ alert(res.error||'建立失敗'); return; }
         closeMask('addMask'); loadList(); openView(res.id);
+    }, 'json');
+}
+
+/* ───────────────── 建議建立清單（批次一鍵建立） ───────────────── */
+var SUGGEST_ROWS = [];
+$('#btnSuggest').on('click', function(){ openMask('suggestMask'); loadSuggest(); });
+function loadSuggest(){
+    $('#suggestBody').html('<tr><td colspan="6" style="text-align:center;color:#999;">載入中…</td></tr>');
+    $.getJSON(API, {action:'suggest_list', days:$('#suggestDays').val()}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        SUGGEST_ROWS = res.rows || [];
+        var h = SUGGEST_ROWS.map(function(o){
+            return '<tr><td style="text-align:center;"><input type="checkbox" class="suggest-chk" value="'+o.Order_id+'"></td>'
+                 + '<td>'+esc(o.Order_oo||('#'+o.Order_id))+'</td><td>'+esc(o.client_name_txt||o.Client_name||'')+'</td>'
+                 + '<td>'+esc(o.d_id||'')+'</td><td>'+dispDate(o.Order_date)+'</td><td>'+esc(o.tag_label||'')+'</td></tr>';
+        }).join('');
+        $('#suggestBody').html(h || '<tr><td colspan="6" style="text-align:center;color:#999;">目前沒有待建議建立的訂單</td></tr>');
+        $('#suggestAll').prop('checked', false);
+        var shown = SUGGEST_ROWS.length, total = res.total || 0;
+        $('#suggestTotal').text(total > shown ? ('顯示 '+shown+' / 共 '+total+'（調整範圍可看到更多）') : ('共 '+total+' 筆'));
+        suggestUpdateCount();
+    });
+}
+function suggestToggleAll(on){ $('.suggest-chk').prop('checked', on); suggestUpdateCount(); }
+$(document).on('change', '.suggest-chk', suggestUpdateCount);
+function suggestUpdateCount(){
+    var n = $('.suggest-chk:checked').length;
+    $('#suggestPickedCount').text(n ? ('已勾選 '+n+' 筆') : '');
+}
+function suggestBatchCreate(){
+    var ids = $('.suggest-chk:checked').map(function(){ return $(this).val(); }).get();
+    if (!ids.length){ alert('請先勾選要建立的訂單'); return; }
+    if (!confirm('確定要一次建立 '+ids.length+' 張合約訂單審查表嗎？')) return;
+    $.post(API, {action:'batch_create', csrf:META.csrf, order_ids:ids.join(',')}, function(res){
+        if (!res.ok){ alert(res.error||'建立失敗'); return; }
+        var failN = Object.keys(res.failed||{}).length;
+        var msg = '已建立 '+res.created_count+' 張';
+        if (failN) msg += '，'+failN+' 張失敗：\n' + Object.values(res.failed).join('\n');
+        alert(msg);
+        closeMask('suggestMask'); loadList();
     }, 'json');
 }
 
@@ -478,7 +541,32 @@ function tplSeedFromDevEval(){
 }
 $('#btnTpl').on('click', function(){ loadTpl(); openMask('tplMask'); });
 
-loadMeta(loadList);
+/* 深連結（2026-10-05）：從訂單追蹤頁的入口連結過來，語意比照 part_viewer 的 ?tags_setting=1——
+   頁面照常載入之後多做一件事，守門與必填一字不動；查不到就安靜退回正常畫面，不留白畫面。
+   這裡是一般 <a target="_blank"> 真的被使用者點擊開新分頁，不是 JS 觸發的 window.open()，
+   不會被彈出視窗封鎖，不需要 document.open/write/close 那一套。 */
+var Q_OPEN_ID = parseInt(new URLSearchParams(location.search).get('open_id'), 10) || 0;
+var Q_NEW_ORDER = parseInt(new URLSearchParams(location.search).get('new_order'), 10) || 0;
+function openAddForOrder(orderId){
+    $('#btnAdd').trigger('click');
+    $.getJSON(API, {action:'order_get', order_id:orderId}, function(res){
+        if (!res.ok || !res.order) return;      // 查不到就停在「已開啟新增表單」，使用者自己挑
+        var o = res.order;
+        if (o.doc_id){ $('#addOrdErr').text('這張訂單已經建立過審查表單（#'+o.doc_id+'），請直接開啟原本那一張').show(); return; }
+        if (!o.need_review){ $('#addOrdErr').text('這張訂單的 AS 認定不需要做合約訂單審查').show(); return; }
+        ADD_ORD = o; $('#addOrdErr').hide();
+        $('#addOrdPicked').html('<b>'+esc(o.Order_oo)+'</b>　<span class="rf-mini-btn" onclick="addOrdClear()">改選</span>'
+            + '<br>客戶：'+esc(o.client_name_txt||o.Client_name||'（未綁客戶主檔）')
+            + '<br>料號：'+esc(o.d_id||'')+'　數量：'+Number(o.Qty||0).toLocaleString()+' 件'
+            + '<br>接單日期：'+dispDate(o.Order_date)+'　交期：'+dispDate(o.Delivery_date)
+            + '<br>AS 認定：'+esc(o.tag_label||'')).show();
+    });
+}
+loadMeta(function(){
+    loadList();
+    if (Q_OPEN_ID) openView(Q_OPEN_ID);
+    else if (Q_NEW_ORDER) openAddForOrder(Q_NEW_ORDER);
+});
 </script>
 </body>
 </html>

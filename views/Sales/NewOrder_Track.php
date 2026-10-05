@@ -1812,6 +1812,10 @@ $AS_TAG_REQUIRE = ot_astag_require_save($db);
 $AS_TAG_LABELS  = ot_astag_label_map($db);
 // 篩選下拉用的選項（一律用「本公司」的完整清單，否則廠內治具的訂單永遠篩不出來）
 $AS_TAG_FILTER_OPTS = ot_astag_options($db, true);
+// 合約訂單審查表（2026-10-05）：「這張訂單要不要審查」＝上面稽核製程標籤的 kind='process'
+// 那幾種（齒研、插齒…），唯一判定在 order_as_tag_lib.php，這裡不再另外列一份製程清單。
+// 批次狀態查詢在 $order_list 取得之後才做（見下方），這裡先載入共用庫。
+require_once __DIR__ . '/../../src/common/con_review_lib.php';
 
 if (!($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']))) {
     $ate_list = $conn->getAll("SELECT `user_cname`,`user_uname`,`id` FROM `user` WHERE `user_status`=63");
@@ -2275,6 +2279,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     if (!empty($order_list)) {
         eg_order_price_fill($pdo, $order_list);
     }
+
+    // 合約訂單審查表（2026-10-05）：這一頁每張訂單是否已建立審查表單，批次查一次（避免 N+1）。
+    $CNRV_STATUS_MAP = !empty($order_list) ? cnrv_doc_status_map($pdo, array_column($order_list, 'Order_id')) : [];
 
     // 設計師當月接單統計（1 分鐘 Session 快取）
     $ldpDesignerCounts = [];
@@ -3141,6 +3148,16 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                             $_asFx = ($_asDef && in_array(($_asDef['kind'] ?? ''), ['fixed', 'other'], true));
                     ?><br><span class="as-tag-cell<?= $_asFx ? ' fx' : '' ?>" title="製程標籤（AS 認定）：<?= safe_html($_asLbl) ?>"><?= safe_html($_asLbl) ?></span><?php
                         endif;
+                        // 合約訂單審查表（2026-10-05）：只有稽核製程（kind='process'）才需要審查，
+                        // 全製／單製非AS認證／廠內治具／管理員自加的其他選項一律不顯示這個入口。
+                        if ($_asDef && (string)($_asDef['kind'] ?? '') === 'process'):
+                            $_cnrvSt = $CNRV_STATUS_MAP[(int)$order['Order_id']] ?? null;
+                            if ($_cnrvSt):
+                                $_cnrvLbl = ['draft'=>'草稿','submitted'=>'審查中','closed'=>'已結案','void'=>'已作廢'][$_cnrvSt['status']] ?? $_cnrvSt['status'];
+                    ?><br><a href="con_review.php?open_id=<?= (int)$_cnrvSt['id'] ?>" target="_blank" rel="noopener" class="cnrv-cell-link" title="合約訂單審查：<?= safe_html($_cnrvLbl) ?>">合約審查：<?= safe_html($_cnrvLbl) ?></a><?php
+                            else: ?><br><a href="con_review.php?new_order=<?= (int)$order['Order_id'] ?>" target="_blank" rel="noopener" class="cnrv-cell-link cnrv-cell-link-new" title="這張訂單尚未建立合約訂單審查表">+ 建立合約審查</a><?php
+                            endif;
+                        endif;
                     endif;
                 ?></td>
                 <td class="col-qty"><?= number_format($order['Qty'] ?? 0) ?><?php if (!empty($order['qty_over_range'])): ?><br><span style="color:#DD5138;font-size:10px;font-weight:600;white-space:nowrap;" title="OP轉訂單時輸入的數量超出報價階梯區間（含容差後區間），請補報價單">數量超出區間</span><?php endif; ?><?php if (!empty($order['is_repeat_conversion'])): ?><br><span style="color:#F0A24B;font-size:10px;font-weight:600;white-space:nowrap;" title="同一報價項目先前已轉過訂單，這是同一組合的追加訂單">追加訂單</span><?php endif; ?></td>
@@ -3740,6 +3757,16 @@ foreach($dCounts as $c) {
             background: #FFF3E2; border: 1px solid #E4D3BC; color: #8a5a2b;
         }
         .as-tag-cell.fx { background: #F3EDE7; border-color: #D8C7B8; color: #6B513C; }
+        /* 合約訂單審查表入口（2026-10-05）：跟 as-tag-cell 同一種小籤樣式，一律自己設 line-height，
+           否則會繼承 Gentelella 全站 td span{line-height:28px} 把這一列的行高撐高。 */
+        .cnrv-cell-link {
+            display: inline-block; margin-top: 2px; padding: 0 5px; border-radius: 3px;
+            font-size: 10px; line-height: 14px; white-space: nowrap; max-width: 100%;
+            overflow: hidden; text-overflow: ellipsis; vertical-align: top; text-decoration: none;
+            background: #FDF6EC; border: 1px solid #E8D5B5; color: #8a6d45;
+        }
+        .cnrv-cell-link:hover { background: #F0A24B; color: #fff; border-color: #d98a33; }
+        .cnrv-cell-link-new { background: #fff; color: #b5862f; border-style: dashed; }
         .close { color: white; opacity: 0.8; text-shadow: none; }
         .close:hover { opacity: 1; }
         

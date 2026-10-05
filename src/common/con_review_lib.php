@@ -381,6 +381,51 @@ function cnrv_create(PDO $db, int $orderId, int $uid, string $uname): int {
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
 }
 
+/**
+ * 建議建立清單：找出「需要審查、但還沒建過審查表單」的訂單（2026-10-05 使用者要求）。
+ * 舊資料不強制補（CLAUDE.md 既有口徑），所以這裡只是「列出來讓管理員自己決定要不要一鍵建」，
+ * 不會自動建立、也不會因為沒建就擋下任何訂單操作。預設只看最近 N 天的訂單（$days），
+ * 避免一次把上千張舊訂單全部列出來嚇到人；$days=0 代表不限天數（列出全部待建議的）。
+ */
+function cnrv_suggest_list(PDO $db, int $days = 30, int $limit = 300): array {
+    $sql = "SELECT ot.Order_id, ot.Order_oo, ot.d_id, ot.Qty, ot.Order_date, ot.Delivery_date,
+                   ot.Client_name, cl.customer AS client_name_txt, t.proc_name AS tag_proc_name, ot.as_tag_scope
+            FROM order_track ot
+            LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID
+            JOIN ot_as_proc_tag t ON t.tag_id = ot.as_tag_id AND t.kind='process'
+            WHERE (ot.Order_status IS NULL OR ot.Order_status<>6)
+              AND NOT EXISTS (SELECT 1 FROM con_review_doc d WHERE d.order_id=ot.Order_id AND d.status<>'void')";
+    $params = [];
+    if ($days > 0) { $sql .= " AND ot.Order_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)"; $params[] = $days; }
+    $sql .= " ORDER BY ot.Order_date DESC, ot.Order_id DESC LIMIT " . max(1, min(1000, $limit));
+    $st = $db->prepare($sql);
+    $st->execute($params);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) $r['tag_label'] = $r['tag_proc_name'] ? (($r['as_tag_scope']==='full' ? '全製含' : '單製') . $r['tag_proc_name']) : '';
+    // 總數（不受 limit 影響，讓畫面知道「還有多少沒列出來」）
+    $cntSql = "SELECT COUNT(*) FROM order_track ot JOIN ot_as_proc_tag t ON t.tag_id=ot.as_tag_id AND t.kind='process'
+               WHERE (ot.Order_status IS NULL OR ot.Order_status<>6)
+                 AND NOT EXISTS (SELECT 1 FROM con_review_doc d WHERE d.order_id=ot.Order_id AND d.status<>'void')"
+              . ($days > 0 ? " AND ot.Order_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)" : "");
+    $cst = $db->prepare($cntSql);
+    $cst->execute($days > 0 ? [$days] : []);
+    return ['rows'=>$rows, 'total'=>(int)$cst->fetchColumn()];
+}
+
+/**
+ * 批次建立：逐筆呼叫 cnrv_create()，個別成功/失敗互不影響（某張訂單缺接單日期等原因失敗，
+ * 不應該讓整批都建不成）。回傳 ['created'=>[訂單id=>表單id], 'failed'=>[訂單id=>原因]]。
+ */
+function cnrv_batch_create(PDO $db, array $orderIds, int $uid, string $uname): array {
+    $created = []; $failed = [];
+    foreach (array_unique(array_map('intval', $orderIds)) as $oid) {
+        if ($oid <= 0) continue;
+        try { $created[$oid] = cnrv_create($db, $oid, $uid, $uname); }
+        catch (Throwable $e) { $failed[$oid] = $e->getMessage(); }
+    }
+    return ['created'=>$created, 'failed'=>$failed];
+}
+
 /* ============================================================ 讀取 ============================================================ */
 
 function cnrv_get(PDO $db, int $id): ?array {
