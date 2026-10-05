@@ -571,6 +571,11 @@ $cntMid  = count(array_filter($ISSUES, fn($r) => $r[0] === '中' && !$r['ck']));
 $cntLow  = count(array_filter($ISSUES, fn($r) => $r[0] === '低' && !$r['ck']));
 $cntIssueOpen = count(array_filter($ISSUES, fn($r) => !$r['ck']));
 
+// 目前分頁（doc/iss/onl/adv）：讓儲存／刪除後 location.reload() 能停留在原分頁，不要每次都彈回「課室說明文件」——
+// JS 切換分頁時會同步把 ?tab= 寫進網址列（history.replaceState，不觸發導頁），reload 自然帶著這個值回來。
+$curTab = $_GET['tab'] ?? 'doc';
+if (!in_array($curTab, ['doc', 'iss', 'onl', 'adv'], true)) { $curTab = 'doc'; }
+
 // 預設顯示的文件
 $cur = $_GET['doc'] ?? 'overview';
 if (!isset($DOCS[$cur])) { $cur = 'overview'; }
@@ -797,17 +802,17 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
 <?php else: ?>
 
 <div class="fg-tabs">
-  <div class="fg-tab active" data-tab="doc"><i class="fa fa-file-text-o"></i> 課室說明文件</div>
-  <div class="fg-tab" data-tab="iss"><i class="fa fa-exclamation-triangle"></i> 待處理問題
+  <div class="fg-tab <?= $curTab === 'doc' ? 'active' : '' ?>" data-tab="doc"><i class="fa fa-file-text-o"></i> 課室說明文件</div>
+  <div class="fg-tab <?= $curTab === 'iss' ? 'active' : '' ?>" data-tab="iss"><i class="fa fa-exclamation-triangle"></i> 待處理問題
     <span class="badge-warm"><?= $cntIssueOpen ?></span></div>
-  <div class="fg-tab" data-tab="onl"><i class="fa fa-bolt"></i> 線上表單對照
+  <div class="fg-tab <?= $curTab === 'onl' ? 'active' : '' ?>" data-tab="onl"><i class="fa fa-bolt"></i> 線上表單對照
     <span class="badge-warm"><?= $onlineCnt ?>/<?= count($FORMS) ?></span></div>
-  <div class="fg-tab" data-tab="adv"><i class="fa fa-bullhorn"></i> 稽核建議修改
+  <div class="fg-tab <?= $curTab === 'adv' ? 'active' : '' ?>" data-tab="adv"><i class="fa fa-bullhorn"></i> 稽核建議修改
     <span class="badge-warm"><?= $cntAuditOpen ?></span></div>
 </div>
 
 <!-- ═════════ 分頁：課室說明文件 ═════════ -->
-<div id="tabDoc">
+<div id="tabDoc" style="<?= $curTab === 'doc' ? '' : 'display:none;' ?>">
 <div class="fg-wrap">
   <div class="fg-side">
     <div class="sd-h">課室</div>
@@ -848,7 +853,7 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
 </div>
 
 <!-- ═════════ 分頁：待處理問題 ═════════ -->
-<div id="tabIss" style="display:none;">
+<div id="tabIss" style="<?= $curTab === 'iss' ? '' : 'display:none;' ?>">
   <div class="fg-main">
     <div class="fg-bar">
       <select id="lvFilter" class="form-control input-sm" style="width:150px;height:30px;display:inline-block;">
@@ -921,7 +926,7 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
 </div>
 
 <!-- ═════════ 分頁：線上表單對照 ═════════ -->
-<div id="tabOnl" style="display:none;">
+<div id="tabOnl" style="<?= $curTab === 'onl' ? '' : 'display:none;' ?>">
   <div class="fg-main">
     <div class="fg-bar">
       <select id="onFilter" class="form-control input-sm" style="width:190px;height:30px;display:inline-block;">
@@ -1025,7 +1030,7 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
 </div>
 
 <!-- ═════════ 分頁：稽核建議修改 ═════════ -->
-<div id="tabAdv" style="display:none;">
+<div id="tabAdv" style="<?= $curTab === 'adv' ? '' : 'display:none;' ?>">
   <div class="fg-main">
     <div class="fg-bar">
       <select id="recYear" class="form-control input-sm" style="width:130px;height:30px;display:inline-block;">
@@ -1284,7 +1289,16 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
 $(document).ready(function () {
     $('#sidebar-menu').css('visibility', 'visible');   // 側欄恢復（CSS 隱藏必須配這行）
 
-    // 分頁切換
+    // 分頁切換：同步把目前分頁寫進網址列（history.replaceState，不會導頁／不會留歷史紀錄），
+    // 這樣「稽核建議修改」存檔／刪除後的 location.reload() 才會停留在原分頁，不會每次都彈回「課室說明文件」
+    // （使用者 2026-10-05 回報：編輯稽核建議修改後儲存，畫面會跳回第一個分頁）。
+    function fgSyncTabUrl(tab) {
+        try {
+            var url = new URL(location.href);
+            url.searchParams.set('tab', tab);
+            history.replaceState(null, '', url.toString());
+        } catch (e) { /* 極舊瀏覽器沒有 URL API 就放棄同步網址，不影響分頁切換本身 */ }
+    }
     $('.fg-tab').on('click', function () {
         $('.fg-tab').removeClass('active'); $(this).addClass('active');
         var t = $(this).data('tab');
@@ -1292,6 +1306,7 @@ $(document).ready(function () {
         $('#tabIss').toggle(t === 'iss');
         $('#tabOnl').toggle(t === 'onl');
         $('#tabAdv').toggle(t === 'adv');
+        fgSyncTabUrl(t);
     });
 
     // ══ 文件／表單 線上預覽 ══
