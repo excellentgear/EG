@@ -70,6 +70,9 @@ function el_log_types(): array {
         'process'   => '製程中',
         'return'    => '退貨',
         'other'     => '未分類',
+        // order_note：訂單追蹤「設計備註」自動建立的案件（2026-10-05），只供顯示，
+        // 不出現在 eng_log.php 手動新建的選單——那一類一律由訂單追蹤那邊建立。
+        'order_note'=> '訂單備註',
         // ── 以下為舊值，只供顯示，不再出現在選單 ──
         'outsource' => '發包', 'spec' => '規格', 'material' => '材料',
         'quality'   => '品質', 'delivery' => '交期',
@@ -117,6 +120,26 @@ function el_channel_rows(PDO $db): array {
                            ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) { return []; }
 }
+
+/* ============================ 共用小工具 ============================
+ * 原本各自寫在 EngLog_API.php 裡（函式名相同），2026-10-05 收斂到這裡：
+ * 新增的 el_item_upsert()/el_reply_add() 等共用函式也要用到同一套正規化，
+ * 放兩處遲早走鐘（鐵律4）。EngLog_API.php 已移除同名定義，改吃這裡的。
+ */
+function el_norm_date($v) {
+    $v = trim((string)$v);
+    if ($v === '') return null;
+    $v = substr(str_replace('/', '-', $v), 0, 10);
+    return preg_match('/^\d{4}-\d{2}-\d{2}$/', $v) ? $v : null;
+}
+function el_norm_dt($v) {
+    $v = trim((string)$v);
+    if ($v === '') return null;
+    $v = str_replace('T', ' ', $v);
+    if (strlen($v) === 16) $v .= ':00';
+    return $v;
+}
+function el_norm_int($v) { $v = trim((string)$v); return $v === '' ? null : (int)$v; }
 
 /* ============================ 資料表 ============================ */
 
@@ -793,6 +816,237 @@ function el_manual_no_others(PDO $db, string $type, string $no, int $exceptLogId
         $st->execute([$type, $no, $exceptLogId]);
         return $st->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) { return []; }
+}
+
+/* ============================ 問題項／回覆：純資料操作 ============================
+ * 給 EngLog_API.php 與訂單追蹤設計備註小工具共用（2026-10-05 由 EngLog_API.php 抽出）。
+ * 刻意不含任何權限檢查、不含交易控制、不含 el_reindex()／updated_at——
+ * 呼叫端各自有不同的權限模型（eng_log 本身的角色制 vs 訂單追蹤既有的設計備註權限），
+ * 這裡只管資料本身（鐵律4：一份 SQL，兩種守門各自在呼叫端做）。
+ * 驗證失敗丟 InvalidArgumentException（訊息可直接顯示給使用者）；其餘例外照常往外丟。
+ */
+
+/**
+ * 新增／編輯一條問題項。呼叫端要自己開交易、自己呼叫 el_reindex()。
+ * @param array $in 可用鍵：question/target_type/target_id/target_label/target_contact/
+ *                  target_post/asked_at/follow_up_days/parent_item_id
+ * @return int 問題項 id
+ */
+function el_item_upsert(PDO $db, int $logId, int $itemId, array $in, string $now, string $today): int
+{
+    $q = trim((string)($in['question'] ?? ''));
+    if ($q === '') throw new InvalidArgumentException('請填寫問題內容');
+    $tt = trim((string)($in['target_type'] ?? ''));
+    if (!in_array($tt, ['customer', 'maker', 'user'], true)) $tt = null;
+    $ti = trim((string)($in['target_id'] ?? ''));
+    $tl = trim((string)($in['target_label'] ?? ''));
+    $tc = trim((string)($in['target_contact'] ?? ''));
+    $tp = trim((string)($in['target_post'] ?? ''));
+    if ($tt !== null && $ti === '') throw new InvalidArgumentException('對象要從清單選擇（只打名字的話日後對方改名就對應不到）');
+    $asked = el_norm_date($in['asked_at'] ?? '') ?? $today;
+    if ($asked > $today) throw new InvalidArgumentException('提出日期不可以是未來日期');
+    $fud = el_norm_int($in['follow_up_days'] ?? '');
+    if ($fud !== null && ($fud < 1 || $fud > 365)) throw new InvalidArgumentException('催回覆天數請填 1～365');
+
+    if ($itemId > 0) {
+        $st = $db->prepare("SELECT * FROM eng_log_item WHERE id=? AND log_id=?");
+        $st->execute([$itemId, $logId]);
+        $cur = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$cur) throw new InvalidArgumentException('查無此問題項，請重新整理');
+        $resend = ((string)$cur['asked_at'] !== (string)$asked || (string)$cur['follow_up_days'] !== (string)$fud) ? 0 : (int)$cur['remind_sent'];
+        $db->prepare("UPDATE eng_log_item SET question=?, target_type=?, target_id=?, target_label=?,
+                      target_post=?, target_contact=?, asked_at=?, follow_up_days=?, remind_sent=?,
+                      updated_at=? WHERE id=?")
+           ->execute([$q, $tt, ($ti === '' ? null : $ti), ($tl === '' ? null : $tl), ($tp === '' ? null : $tp),
+                      ($tc === '' ? null : $tc), $asked, $fud, $resend, $now, $itemId]);
+        return $itemId;
+    }
+
+    $mx = $db->prepare("SELECT COALESCE(MAX(seq),0)+1 FROM eng_log_item WHERE log_id=?");
+    $mx->execute([$logId]);
+    $parent = el_norm_int($in['parent_item_id'] ?? '');
+    if ($parent !== null) {
+        $pc = $db->prepare("SELECT 1 FROM eng_log_item WHERE id=? AND log_id=?");
+        $pc->execute([$parent, $logId]);
+        if (!$pc->fetchColumn()) throw new InvalidArgumentException('要延伸的那一條問題不存在，請重新整理');
+    }
+    $db->prepare("INSERT INTO eng_log_item (log_id, parent_item_id, seq, question, target_type, target_id,
+                  target_label, target_post, target_contact, asked_at, status, follow_up_days, remind_sent, created_at)
+                  VALUES (?,?,?,?,?,?,?,?,?,?, 'waiting', ?, 0, ?)")
+       ->execute([$logId, $parent, (int)$mx->fetchColumn(), $q, $tt, ($ti === '' ? null : $ti),
+                  ($tl === '' ? null : $tl), ($tp === '' ? null : $tp), ($tc === '' ? null : $tc),
+                  $asked, $fud, $now]);
+    return (int)$db->lastInsertId();
+}
+
+/** 手動改問題項狀態（已解決／不處理／退回待回覆）。 */
+function el_item_set_status(PDO $db, int $logId, int $itemId, string $status, $conclusion, string $now): void
+{
+    if (!isset(el_item_status()[$status])) throw new InvalidArgumentException('狀態不正確');
+    $conclusion = trim((string)$conclusion);
+    if ($status === 'waiting') {
+        // 退回待回覆時一併重置提醒，否則這條從此不會再催
+        $db->prepare("UPDATE eng_log_item SET status='waiting', remind_sent=0, conclusion=?, updated_at=? WHERE id=? AND log_id=?")
+           ->execute([($conclusion === '' ? null : $conclusion), $now, $itemId, $logId]);
+    } else {
+        $db->prepare("UPDATE eng_log_item SET status=?, conclusion=?, updated_at=? WHERE id=? AND log_id=?")
+           ->execute([$status, ($conclusion === '' ? null : $conclusion), $now, $itemId, $logId]);
+    }
+}
+
+/**
+ * 新增回覆，可一次套用到多條問題項。呼叫端要自己開交易；附件轉正留給呼叫端處理
+ * （只掛在第一則新回覆上，用回傳的 first_id）。
+ * @param array $itemIds 問題項 id 陣列
+ * @param array $in 可用鍵：content/replied_on/reply_by/channel
+ * @return array ['ids'=>新回覆id陣列, 'first_id'=>第一筆的id或0]
+ */
+function el_reply_add(PDO $db, int $logId, array $itemIds, array $in, int $createdBy, string $now, string $today): array
+{
+    if (!$itemIds) throw new InvalidArgumentException('請至少勾選一條問題');
+    $content = trim((string)($in['content'] ?? ''));
+    if ($content === '') throw new InvalidArgumentException('請填寫回覆內容');
+    // 回覆日期：未選＝今天；擋未來日期，其餘不限制（補登很久以前的事是正常的）
+    $repliedOn = el_norm_date($in['replied_on'] ?? '') ?? $today;
+    if ($repliedOn > $today) throw new InvalidArgumentException('回覆日期不可以是未來日期');
+    $replyBy = trim((string)($in['reply_by'] ?? ''));
+    $channel = trim((string)($in['channel'] ?? ''));
+    if ($channel !== '' && !isset(el_channels()[$channel])) $channel = '';
+
+    $newIds = []; $firstId = 0;
+    $chk = $db->prepare("SELECT id FROM eng_log_item WHERE id=? AND log_id=?");
+    $ins = $db->prepare("INSERT INTO eng_log_reply (item_id, log_id, replied_on, reply_by, channel, content, created_by, created_at)
+                         VALUES (?,?,?,?,?,?,?,?)");
+    $upd = $db->prepare("UPDATE eng_log_item SET status=CASE WHEN status='waiting' THEN 'answered' ELSE status END,
+                         remind_sent=1, updated_at=? WHERE id=?");
+    foreach ($itemIds as $iid) {
+        $iid = (int)$iid;
+        $chk->execute([$iid, $logId]);
+        if (!$chk->fetchColumn()) continue;      // 不屬於這筆案件的問題項一律略過
+        $ins->execute([$iid, $logId, $repliedOn, ($replyBy === '' ? null : $replyBy),
+                       ($channel === '' ? null : $channel), $content, $createdBy, $now]);
+        $rid = (int)$db->lastInsertId();
+        $newIds[] = $rid;
+        if ($firstId === 0) $firstId = $rid;
+        $upd->execute([$now, $iid]);
+    }
+    if (!$newIds) throw new InvalidArgumentException('勾選的問題項不存在，請重新整理');
+    return ['ids' => $newIds, 'first_id' => $firstId];
+}
+
+/* ============================ 訂單追蹤「設計備註」整合 ============================
+ * 2026-10-05 新增：把 views/Sales/NewOrder_Track.php 的 ateNote 欄位接到 eng_log
+ * 的資料模型上。訂單格子只跟「它自己綁定的那一個 eng_log 案件」互動，
+ * 問題/回覆仍是上面那三支共用函式，這裡只負責「一張訂單對應唯一一個案件」。
+ */
+
+/**
+ * 依 bind_type='order' 查這張訂單目前綁的案件，查不到才新建。
+ * 不管案件目前 open/done 一律沿用同一筆——避免同一張訂單被重複呼叫而長出多個案件。
+ * @param array $actor ['uid'=>int, 'dept_id'=>?int]
+ */
+function el_order_case_get_or_create(PDO $db, int $orderId, array $actor, string $now, string $today): int
+{
+    $st = $db->prepare("SELECT el.id FROM eng_log_bind b JOIN eng_log el ON el.id = b.log_id
+                        WHERE b.bind_type='order' AND b.bind_id=? ORDER BY el.id LIMIT 1");
+    $st->execute([(string)$orderId]);
+    $id = (int)$st->fetchColumn();
+    if ($id > 0) return $id;
+
+    $logNo = el_next_log_no($db, $today);
+    $db->prepare("INSERT INTO eng_log (log_no, user_id, dept_id, title, log_type, status, visibility, created_at)
+                  VALUES (?,?,?, '訂單備註', 'order_note', 'open', 'dept', ?)")
+       ->execute([$logNo, (int)($actor['uid'] ?? 0), $actor['dept_id'] ?? null, $now]);
+    $id = (int)$db->lastInsertId();
+    $label = el_bind_label($db, 'order', (string)$orderId);
+    $db->prepare("INSERT INTO eng_log_bind (log_id, bind_type, bind_id, bind_label, is_manual, sort_order)
+                  VALUES (?, 'order', ?, ?, 0, 0)")
+       ->execute([$id, (string)$orderId, $label]);
+    el_reindex($db, $id);
+    return $id;
+}
+
+/**
+ * 依「底下是否還有非 resolved/dropped 的問題項」自動同步案件的 open/done 狀態，
+ * 讓 eng_log.php 既有的案件篩選（待處理／已結案）對這批自動建立的案件也有意義。
+ */
+function el_order_case_sync_status(PDO $db, int $logId, string $now): void
+{
+    $st = $db->prepare("SELECT COUNT(*) FROM eng_log_item WHERE log_id=? AND status NOT IN ('resolved','dropped')");
+    $st->execute([$logId]);
+    $hasOpen = (int)$st->fetchColumn() > 0;
+    if ($hasOpen) {
+        $db->prepare("UPDATE eng_log SET status='open', closed_at=NULL, updated_at=? WHERE id=?")->execute([$now, $logId]);
+    } else {
+        $db->prepare("UPDATE eng_log SET status='done', closed_at=COALESCE(closed_at,?), updated_at=? WHERE id=?")
+           ->execute([$now, $now, $logId]);
+    }
+}
+
+/**
+ * 批次版：多張訂單各自目前「未處理問題數」（非 resolved/dropped 的問題項數）。
+ * 比照 qab_bom_scrap_sum_rows() 既有模式，避免清單頁逐列各查一次（N+1）。
+ * @return array [order_id(int) => count(int)]，沒有案件或沒有未處理問題的訂單不會出現（視為 0）
+ */
+function el_order_open_item_counts(PDO $db, array $orderIds): array
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $orderIds), fn($v) => $v > 0)));
+    if (!$ids) return [];
+    $in = implode(',', $ids);
+    $out = [];
+    try {
+        $rows = $db->query("
+            SELECT b.bind_id AS order_id, COUNT(*) AS cnt
+            FROM eng_log_bind b JOIN eng_log_item i ON i.log_id = b.log_id
+            WHERE b.bind_type='order' AND b.bind_id IN ({$in})
+              AND i.status NOT IN ('resolved','dropped')
+            GROUP BY b.bind_id
+        ")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $r) $out[(int)$r['order_id']] = (int)$r['cnt'];
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/**
+ * 「這張訂單目前有沒有未處理的問題」EXISTS 片段，給 WHERE／CASE WHEN 直接接進去用。
+ * 比照 order_client_reminder_lib.php 的 ocr_pending_exists_sql() 同一種寫法（鐵律4：
+ * 全站只定義這一份，NewOrder_Track.php 的統計/篩選 SQL 全部吃同一份，不要各自拼一次）。
+ * eng_log_bind(bind_type,bind_id) 與 eng_log_item(log_id,status) 皆有索引。
+ */
+function el_order_open_exists_sql(string $orderAlias = 'ot'): string
+{
+    return "EXISTS (SELECT 1 FROM eng_log_bind elb JOIN eng_log_item eli ON eli.log_id = elb.log_id
+        WHERE elb.bind_type='order' AND elb.bind_id = {$orderAlias}.Order_id
+        AND eli.status NOT IN ('resolved','dropped'))";
+}
+
+/**
+ * 「業務」對象的預設人選＝這張訂單的打單人員（order_track.Created_By，存的是工號文字）。
+ * 查不到就回 null（UI 端留空讓使用者手動選，不擋流程——舊訂單的 Created_By 可能是空的
+ * 或對應不到現職人員）。
+ * @param array $orderRow 至少要有 Created_By 鍵（order_track 的一列）
+ */
+function el_order_business_default(PDO $db, array $orderRow): ?array
+{
+    $uname = trim((string)($orderRow['Created_By'] ?? ''));
+    if ($uname === '') return null;
+    try {
+        $st = $db->prepare("SELECT u.id, u.user_cname, d.name AS dept, p.name AS pos, COALESCE(p.sort_order,999) s
+                            FROM `user` u
+                            LEFT JOIN user_department_position_map m ON m.user_id = u.id
+                            LEFT JOIN department d ON d.id = m.department_id
+                            LEFT JOIN position p ON p.id = m.position_id
+                            WHERE u.user_uname = ?
+                            ORDER BY s ASC, m.is_main DESC, m.id ASC LIMIT 1");
+        $st->execute([$uname]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r || empty($r['id'])) return null;
+        return [
+            'id'   => (int)$r['id'],
+            'name' => (string)$r['user_cname'],
+            'post' => trim(((string)$r['dept']) . ' ' . ((string)$r['pos'])),
+        ];
+    } catch (Throwable $e) { return null; }
 }
 
 /* ============================ 問題項狀態與逾期 ============================ */

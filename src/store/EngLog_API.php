@@ -52,21 +52,8 @@ function need_csrf() {
 function need_edit() { global $P; if (!$P['canEdit']) jerr('沒有編輯權限（唯讀檢閱角色）'); }
 
 /* ── 小工具 ──────────────────────────────────────────────────────────── */
-
-function el_norm_date($v) {
-    $v = trim((string)$v);
-    if ($v === '') return null;
-    $v = substr(str_replace('/', '-', $v), 0, 10);
-    return preg_match('/^\d{4}-\d{2}-\d{2}$/', $v) ? $v : null;
-}
-function el_norm_dt($v) {
-    $v = trim((string)$v);
-    if ($v === '') return null;
-    $v = str_replace('T', ' ', $v);
-    if (strlen($v) === 16) $v .= ':00';
-    return $v;
-}
-function el_norm_int($v) { $v = trim((string)$v); return $v === '' ? null : (int)$v; }
+/* el_norm_date()/el_norm_dt()/el_norm_int() 已搬到 eng_log_lib.php（2026-10-05，
+   供新的 el_item_upsert()/el_reply_add() 共用函式一起使用，鐵律4不留兩份）。 */
 
 /** 這筆案件我看得到嗎（明細與所有子動作的唯一守門） */
 function el_load_log(PDO $db, int $id, array $P): array {
@@ -574,56 +561,18 @@ if ($action === 'item_save') {
     $row = el_load_log($db, $logId, $P);
     el_need_write($row, $P);
     $itemId = (int)($_POST['id'] ?? 0);
-    $q = trim((string)($_POST['question'] ?? ''));
-    if ($q === '') jerr('請填寫問題內容');
 
-    $tt = trim((string)($_POST['target_type'] ?? ''));
-    if (!in_array($tt, ['customer', 'maker', 'user'], true)) $tt = null;
-    $ti = trim((string)($_POST['target_id'] ?? ''));
-    $tl = trim((string)($_POST['target_label'] ?? ''));
-    $tc = trim((string)($_POST['target_contact'] ?? ''));
-    $tp = trim((string)($_POST['target_post'] ?? ''));   // 使用者實際選的部門職務（兼任者關鍵）
-    // 對象一定要帶 ID（同 save_log）：只打名字的話對方改名就對應不到，索引也展不出來
-    if ($tt !== null && $ti === '') jerr('對象要從清單選擇（只打名字的話日後對方改名就對應不到）');
-    $asked = el_norm_date($_POST['asked_at'] ?? '') ?? $today;
-    if ($asked > $today) jerr('提出日期不可以是未來日期');
-    $fud = el_norm_int($_POST['follow_up_days'] ?? '');
-    if ($fud !== null && ($fud < 1 || $fud > 365)) jerr('催回覆天數請填 1～365');
-
+    // 核心 INSERT/UPDATE 邏輯收斂到 eng_log_lib.php 的 el_item_upsert()（2026-10-05），
+    // 給訂單追蹤設計備註小工具共用，這裡只管權限與交易（鐵律4）。
     try {
         $db->beginTransaction();
-        if ($itemId > 0) {
-            $st = $db->prepare("SELECT * FROM eng_log_item WHERE id=? AND log_id=?");
-            $st->execute([$itemId, $logId]);
-            $cur = $st->fetch(PDO::FETCH_ASSOC);
-            if (!$cur) { $db->rollBack(); jerr('查無此問題項，請重新整理'); }
-            $resend = ((string)$cur['asked_at'] !== (string)$asked || (string)$cur['follow_up_days'] !== (string)$fud) ? 0 : (int)$cur['remind_sent'];
-            $db->prepare("UPDATE eng_log_item SET question=?, target_type=?, target_id=?, target_label=?,
-                          target_post=?, target_contact=?, asked_at=?, follow_up_days=?, remind_sent=?,
-                          updated_at=? WHERE id=?")
-               ->execute([$q, $tt, ($ti === '' ? null : $ti), ($tl === '' ? null : $tl), ($tp === '' ? null : $tp),
-                          ($tc === '' ? null : $tc), $asked, $fud, $resend, $now, $itemId]);
-        } else {
-            $mx = $db->prepare("SELECT COALESCE(MAX(seq),0)+1 FROM eng_log_item WHERE log_id=?");
-            $mx->execute([$logId]);
-            // 延伸問題：對方回覆之後才衍生出來的小問題，掛在原問題底下
-            $parent = el_norm_int($_POST['parent_item_id'] ?? '');
-            if ($parent !== null) {
-                $pc = $db->prepare("SELECT 1 FROM eng_log_item WHERE id=? AND log_id=?");
-                $pc->execute([$parent, $logId]);
-                if (!$pc->fetchColumn()) { $db->rollBack(); jerr('要延伸的那一條問題不存在，請重新整理'); }
-            }
-            $db->prepare("INSERT INTO eng_log_item (log_id, parent_item_id, seq, question, target_type, target_id,
-                          target_label, target_post, target_contact, asked_at, status, follow_up_days, remind_sent, created_at)
-                          VALUES (?,?,?,?,?,?,?,?,?,?, 'waiting', ?, 0, ?)")
-               ->execute([$logId, $parent, (int)$mx->fetchColumn(), $q, $tt, ($ti === '' ? null : $ti),
-                          ($tl === '' ? null : $tl), ($tp === '' ? null : $tp), ($tc === '' ? null : $tc),
-                          $asked, $fud, $now]);
-            $itemId = (int)$db->lastInsertId();
-        }
+        $itemId = el_item_upsert($db, $logId, $itemId, $_POST, $now, $today);
         el_reindex($db, $logId);      // 對象改了，索引要跟著更新
         $db->prepare("UPDATE eng_log SET updated_at=? WHERE id=?")->execute([$now, $logId]);
         $db->commit();
+    } catch (InvalidArgumentException $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        jerr($e->getMessage());
     } catch (Throwable $e) {
         if ($db->inTransaction()) $db->rollBack();
         jerr('儲存失敗：' . $e->getMessage());
@@ -666,17 +615,9 @@ if ($action === 'item_status') {
     $row = el_load_log($db, $logId, $P);
     el_need_write($row, $P);
     $itemId = (int)($_POST['id'] ?? 0);
-    $status = trim((string)($_POST['status'] ?? ''));
-    if (!isset(el_item_status()[$status])) jerr('狀態不正確');
-    $conclusion = trim((string)($_POST['conclusion'] ?? ''));
-    if ($status === 'waiting') {
-        // 退回待回覆時一併重置提醒，否則這條從此不會再催
-        $db->prepare("UPDATE eng_log_item SET status='waiting', remind_sent=0, conclusion=?, updated_at=? WHERE id=? AND log_id=?")
-           ->execute([($conclusion === '' ? null : $conclusion), $now, $itemId, $logId]);
-    } else {
-        $db->prepare("UPDATE eng_log_item SET status=?, conclusion=?, updated_at=? WHERE id=? AND log_id=?")
-           ->execute([$status, ($conclusion === '' ? null : $conclusion), $now, $itemId, $logId]);
-    }
+    try {
+        el_item_set_status($db, $logId, $itemId, (string)($_POST['status'] ?? ''), $_POST['conclusion'] ?? '', $now);
+    } catch (InvalidArgumentException $e) { jerr($e->getMessage()); }
     jout([]);
 }
 
@@ -712,54 +653,31 @@ if ($action === 'reply_add') {
     el_need_write($row, $P);
 
     $itemIds = json_decode((string)($_POST['item_ids'] ?? '[]'), true);
-    if (!is_array($itemIds) || !$itemIds) jerr('請至少勾選一條問題');
-    $content = trim((string)($_POST['content'] ?? ''));
-    if ($content === '') jerr('請填寫回覆內容');
-
-    // 回覆日期：未選＝今天（使用者明確要求）；擋未來日期，其餘不限制（補登很久以前的事是正常的）
-    $repliedOn = el_norm_date($_POST['replied_on'] ?? '') ?? $today;
-    if ($repliedOn > $today) jerr('回覆日期不可以是未來日期');
-
-    $replyBy = trim((string)($_POST['reply_by'] ?? ''));
-    $channel = trim((string)($_POST['channel'] ?? ''));
-    if ($channel !== '' && !isset(el_channels()[$channel])) $channel = '';
+    if (!is_array($itemIds)) $itemIds = [];
     $tempFiles = json_decode((string)($_POST['temp_files'] ?? '[]'), true);
     if (!is_array($tempFiles)) $tempFiles = [];
 
-    $newIds = [];
+    // 核心 INSERT 邏輯收斂到 eng_log_lib.php 的 el_reply_add()（2026-10-05）。
+    $result = ['ids' => [], 'first_id' => 0];
     try {
         $db->beginTransaction();
-        $chk = $db->prepare("SELECT id FROM eng_log_item WHERE id=? AND log_id=?");
-        $ins = $db->prepare("INSERT INTO eng_log_reply (item_id, log_id, replied_on, reply_by, channel, content, created_by, created_at)
-                             VALUES (?,?,?,?,?,?,?,?)");
-        $upd = $db->prepare("UPDATE eng_log_item SET status=CASE WHEN status='waiting' THEN 'answered' ELSE status END,
-                             remind_sent=1, updated_at=? WHERE id=?");
-        $first = true;
-        foreach ($itemIds as $iid) {
-            $iid = (int)$iid;
-            $chk->execute([$iid, $logId]);
-            if (!$chk->fetchColumn()) continue;      // 不屬於這筆案件的問題項一律略過
-            $ins->execute([$iid, $logId, $repliedOn, ($replyBy === '' ? null : $replyBy),
-                           ($channel === '' ? null : $channel), $content, (int)$P['uid'], $now]);
-            $rid = (int)$db->lastInsertId();
-            $newIds[] = $rid;
-            $upd->execute([$now, $iid]);
-            // 附件只掛在第一則（同一份檔案不重複複製到每一條問題）
-            if ($first && $tempFiles) {
-                $up = $db->prepare("UPDATE eng_log_file SET log_id=?, owner_type='reply', owner_id=?, status='active', expire_at=NULL
-                                    WHERE id=? AND status='temp' AND uploaded_by=?");
-                foreach ($tempFiles as $fid) $up->execute([$logId, $rid, (int)$fid, (int)$P['uid']]);
-                $first = false;
-            }
+        $result = el_reply_add($db, $logId, $itemIds, $_POST, (int)$P['uid'], $now, $today);
+        // 附件只掛在第一則（同一份檔案不重複複製到每一條問題）
+        if ($tempFiles && $result['first_id']) {
+            $up = $db->prepare("UPDATE eng_log_file SET log_id=?, owner_type='reply', owner_id=?, status='active', expire_at=NULL
+                                WHERE id=? AND status='temp' AND uploaded_by=?");
+            foreach ($tempFiles as $fid) $up->execute([$logId, $result['first_id'], (int)$fid, (int)$P['uid']]);
         }
-        if (!$newIds) { $db->rollBack(); jerr('勾選的問題項不存在，請重新整理'); }
         $db->prepare("UPDATE eng_log SET updated_at=? WHERE id=?")->execute([$now, $logId]);
         $db->commit();
+    } catch (InvalidArgumentException $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        jerr($e->getMessage());
     } catch (Throwable $e) {
         if ($db->inTransaction()) $db->rollBack();
         jerr('儲存失敗：' . $e->getMessage());
     }
-    jout(['ids' => $newIds, 'count' => count($newIds)]);
+    jout(['ids' => $result['ids'], 'count' => count($result['ids'])]);
 }
 
 if ($action === 'reply_delete') {
