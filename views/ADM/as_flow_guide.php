@@ -1044,7 +1044,8 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
 
     <p style="font-size:12.5px;color:#8A6D45;margin:0 0 10px;">
       本分頁逐年度登記<strong>稽核老師／稽核單位</strong>當次反饋的意見與建議修改做法，與上方「待處理問題」（比對程序書與現況的結構性缺失）是不同來源、分開管理。
-      切換年度即可看該次稽核的全部建議與處理進度；<?= $isRoleAdmin ? '管理者可在此新增／編輯／刪除。' : '新增與編輯僅限管理者。' ?></p>
+      切換年度即可看該次稽核的全部建議與處理進度；<?= $isRoleAdmin ? '管理者可在此新增／編輯／刪除。' : '新增與編輯僅限管理者。' ?>
+      「稽核老師意見」「建議修改做法」內文裡只要提到 AS 文件／表單編號（如 2-GM-01、2-QA-01-01），一樣會<strong>自動變成可點連結</strong>，不必額外用上方「AS文件／內部條文」欄再綁一次。</p>
 
     <div class="iss-tablewrap">
     <table class="iss-table" id="recTable" style="min-width:1320px;">
@@ -1076,8 +1077,8 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
             <?php endif; ?>
             <?php if (!$r['as_doc_id'] && !$cl && !$r['location_note']): ?>—<?php endif; ?>
           </td>
-          <td><?= nl2br(htmlspecialchars((string)$r['finding'])) ?></td>
-          <td style="color:#7A4E17;"><?= $r['suggestion'] ? nl2br(htmlspecialchars((string)$r['suggestion'])) : '—' ?></td>
+          <td><?= nl2br(egmd_docno(htmlspecialchars((string)$r['finding']))) ?></td>
+          <td style="color:#7A4E17;"><?= $r['suggestion'] ? nl2br(egmd_docno(htmlspecialchars((string)$r['suggestion']))) : '—' ?></td>
           <td style="font-size:12px;color:#8A6D45;">
             <?= htmlspecialchars($r['source_note'] ?? '') ?>
             <?= $r['audit_date'] ? '<br>' . htmlspecialchars($r['audit_date']) : '' ?>
@@ -1155,7 +1156,9 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
                 點條文展開完整條文內容與該條文對應建立的文件／表單（內含的 AS 編號一樣可點開）。
                 另有「補充位置」欄位可自由輸入章節/段落等細節。</li>
             <li>編輯既有一筆時固定只開 1 列（不會跟別筆混在一起誤改）。</li>
-          </ul></li>
+          </ul>
+          「稽核老師意見」「建議修改做法」內文裡只要寫到 AS 文件／表單編號，<b>存檔後也會自動變成可點連結</b>——
+          不是只有上方專門的「AS文件／內部條文」欄位綁定的那組才能點，兩者互不影響、可以同時用。</li>
     </ul>
 
     <h4>點編號會發生什麼事</h4>
