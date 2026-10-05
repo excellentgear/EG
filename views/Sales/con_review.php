@@ -115,14 +115,19 @@ $companyName = eg_company_full_name($db);
         <input type="text" id="filterKw" placeholder="訂單編號／客戶／料號／編號 搜尋" style="width:220px;">
         <button type="button" class="cr-btn b-plain" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
         <?php if ($perms['canAdmin']): ?>
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#8a6d45;cursor:pointer;margin-left:6px;">
+            <input type="checkbox" id="chkAdminSignCol"> 顯示管理員代簽標記
+        </label>
         <button type="button" class="cr-btn b-plain" id="btnTpl" style="margin-left:auto;"><i class="fa fa-list"></i> 範本維護</button>
         <button type="button" class="cr-btn b-plain" id="btnPrintSet"><i class="fa fa-cog"></i> 列印設定</button>
         <?php endif; ?>
     </div>
 
     <table class="cr-tbl">
-        <thead><tr><th style="width:120px;">編號</th><th>訂單</th><th>客戶</th><th>料號</th><th style="width:90px;">業務日期</th><th style="width:70px;">狀態</th><th style="width:120px;">決行</th><th style="width:70px;"></th></tr></thead>
-        <tbody id="listBody"><tr><td colspan="8" style="text-align:center;color:#999;">載入中…</td></tr></tbody>
+        <thead><tr><th style="width:120px;">編號</th><th>訂單</th><th>客戶</th><th>料號</th><th style="width:110px;">AS 認定</th><th style="width:90px;">業務日期</th><th style="width:70px;">狀態</th><th style="width:120px;">決行</th>
+            <?php if ($perms['canAdmin']): ?><th class="cr-admin-col" style="width:120px;display:none;">管理員代簽</th><?php endif; ?>
+            <th style="width:70px;"></th></tr></thead>
+        <tbody id="listBody"><tr><td colspan="<?= $perms['canAdmin'] ? 10 : 9 ?>" style="text-align:center;color:#999;">載入中…</td></tr></tbody>
     </table>
     <div style="margin-top:10px;font-size:12.5px;color:#8a6d45;" id="listTotal"></div>
 </div></div></div>
@@ -292,20 +297,36 @@ function loadMeta(cb){
 }
 
 /* ───────────────── 清單 ───────────────── */
+// 「顯示管理員代簽標記」開關：只有管理員看得到（META.perms.isAdmin，後端 list 的 has_admin_sign
+// 欄位也只有管理員才會收到），開了才在清單多一欄；2026-10-05 使用者更正——這才是「LOG」該有的
+// 樣子，不是在表單畫面上掛一塊寫著 LOG 字樣的小標籤。
+var SHOW_ADMIN_SIGN_COL = false;
+function listColspan(){ return (META.perms && META.perms.isAdmin) ? 10 : 9; }
 function loadList(){
     $.getJSON(API, {action:'list', status:$('#filterStatus').val(), keyword:$.trim($('#filterKw').val())}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        var isAdmin = !!(META.perms && META.perms.isAdmin);
         var h = '';
         (res.rows||[]).forEach(function(r){
             var dc = r.decision ? '<span class="dc-'+r.decision+'">'+esc(DECISIONS[r.decision]||r.decision)+'</span>' : '<span style="color:#bbb;">—</span>';
+            var adminCell = isAdmin
+                ? '<td class="cr-admin-col" style="'+(SHOW_ADMIN_SIGN_COL?'':'display:none;')+'">'
+                  + (r.has_admin_sign ? '<span style="font-size:11px;color:#b5862f;border:1px dashed #E8D5B5;border-radius:3px;padding:0 5px;">管理員代簽</span>' : '')
+                  + '</td>'
+                : '';
             h += '<tr><td>'+esc(r.doc_no)+'</td><td>'+esc(r.order_oo)+'</td><td>'+esc(r.client_name)+'</td><td>'+esc(r.part_no_text)+'</td>'
+               + '<td>'+esc(r.tag_label||'')+'</td>'
                + '<td>'+dispDate(r.business_date)+'</td><td><span class="st-badge st-'+r.status+'">'+STATUS_LABEL[r.status]+'</span></td>'
-               + '<td>'+dc+'</td><td><button type="button" class="cr-btn b-plain" style="padding:2px 10px;height:26px;" onclick="openView('+r.id+')">開啟</button></td></tr>';
+               + '<td>'+dc+'</td>'+adminCell+'<td><button type="button" class="cr-btn b-plain" style="padding:2px 10px;height:26px;" onclick="openView('+r.id+')">開啟</button></td></tr>';
         });
-        $('#listBody').html(h || '<tr><td colspan="8" style="text-align:center;color:#999;">沒有符合條件的資料</td></tr>');
+        $('#listBody').html(h || '<tr><td colspan="'+listColspan()+'" style="text-align:center;color:#999;">沒有符合條件的資料</td></tr>');
         $('#listTotal').text('共 ' + (res.total||0) + ' 筆');
     });
 }
+$('#chkAdminSignCol').on('change', function(){
+    SHOW_ADMIN_SIGN_COL = this.checked;
+    $('.cr-admin-col').toggle(SHOW_ADMIN_SIGN_COL);
+});
 $('#btnSearch').on('click', loadList);
 $('#filterStatus').on('change', loadList);
 $('#filterKw').on('keydown', function(e){ if (e.key==='Enter') loadList(); });
@@ -467,14 +488,16 @@ function renderView(){
 
     // 管理員「自動填寫並簽核」（2026-10-05 使用者交辦）：給例行、低風險訂單一鍵快速走完
     // 送出＋逐項帶入範本預設值＋內容部門自動簽核；業務課決行／總經理核准仍要人工進行。
-    if (CUR.is_admin && (d.status==='draft' || d.status==='submitted')) {
-        h += '<div style="margin:10px 0;padding:10px 12px;background:#FDF6EC;border:1px dashed #E8D5B5;border-radius:6px;display:flex;align-items:center;flex-wrap:wrap;gap:8px;">'
-           + '<button type="button" class="cr-btn b-plain" onclick="openAutoFillSign()"><i class="fa fa-magic"></i> 自動填寫並簽核</button>'
-           + '<span style="font-size:11.5px;color:#8a6d45;">用範本設定的預設值快速帶入尚未填寫的項目，並自動完成內容部門簽核（已填寫/已簽核的不會被覆蓋）。</span>'
-           // 刪除（2026-10-05 使用者交辦「可刪除未審核的」）：只有還沒結案才能刪，已結案代表
-           // 總經理已核准是正式紀錄，不可刪除；放在最右側並用警示色與既有按鈕明顯區隔，避免誤按。
-           + '<button type="button" class="cr-btn" style="margin-left:auto;background:#fff;color:#c0392b;border-color:#e4b2ac;" onclick="deleteDoc()"><i class="fa fa-trash"></i> 刪除此表單</button>'
-           + '</div>';
+    // 刪除（2026-10-05 使用者交辦「可刪除未審核的」，同日再交辦「也要能刪除舊有已決行(含已結案)
+    // 的表單」）：管理員不論狀態一律可刪，放在最右側並用警示色與既有按鈕明顯區隔，避免誤按。
+    if (CUR.is_admin) {
+        var adminPanel = '';
+        if (d.status==='draft' || d.status==='submitted') {
+            adminPanel += '<button type="button" class="cr-btn b-plain" onclick="openAutoFillSign()"><i class="fa fa-magic"></i> 自動填寫並簽核</button>'
+                        + '<span style="font-size:11.5px;color:#8a6d45;">用範本設定的預設值快速帶入尚未填寫的項目，並自動完成內容部門簽核（已填寫/已簽核的不會被覆蓋）。</span>';
+        }
+        adminPanel += '<button type="button" class="cr-btn" style="margin-left:auto;background:#fff;color:#c0392b;border-color:#e4b2ac;" onclick="deleteDoc()"><i class="fa fa-trash"></i> 刪除此表單</button>';
+        h += '<div style="margin:10px 0;padding:10px 12px;background:#FDF6EC;border:1px dashed #E8D5B5;border-radius:6px;display:flex;align-items:center;flex-wrap:wrap;gap:8px;">'+adminPanel+'</div>';
     }
 
     h += '<div class="cr-sec-title">審查項目</div>';
@@ -492,13 +515,10 @@ function renderView(){
     depts.forEach(function(dp){
         h += '<div class="cr-dept-box'+(dp.signed?' signed':'')+'"><div class="hd"><b>'+esc(dp.dept_name)+'</b>';
         if (dp.signed) {
-            // 簽核一律走圖章（ai-rules/18），不只印人名文字；is_auto_sign／is_backfill 這個「這一章
-            // 是管理員自動帶入／補登的」紀錄只有管理員看得到（2026-10-05 使用者要求「把自動審核紀錄
-            // 留在LOG中只提供管理員查看，其他前端一律是正常簽核」），一般使用者看到的就是正常的章。
-            h += '<span style="display:inline-flex;align-items:center;gap:6px;">'
-               + stampHtml(dp.signed_by_name, String(dp.signed_at||'').substring(0,10))
-               + (CUR.is_admin && (dp.is_auto_sign || dp.is_backfill) ? '<span title="'+(dp.is_auto_sign?'管理員「自動填寫並簽核」自動帶入':'管理員補登')+'" style="font-size:10px;color:#b5862f;border:1px dashed #E8D5B5;border-radius:3px;padding:0 4px;">LOG</span>' : '')
-               + '</span>';
+            // 簽核一律走圖章（ai-rules/18），不只印人名文字。is_auto_sign／is_backfill（這一章是
+            // 管理員自動帶入／補登的）在這裡完全不顯示任何字樣——2026-10-05 使用者更正：這個紀錄
+            // 要改成「清單上有個開關，開了才多一欄顯示管理員代簽」，不是在表單畫面上掛標籤。
+            h += stampHtml(dp.signed_by_name, String(dp.signed_at||'').substring(0,10));
         } else if (d.status==='submitted' && (dp.can_fill || CUR.is_admin)) {
             h += '<span><input type="text" id="deptNote_'+dp.dept_id+'" placeholder="意見(選填)" style="width:200px;border:1px solid #E8D5B5;border-radius:4px;padding:3px 6px;font-size:12px;margin-right:6px;">'
                + '<button type="button" class="cr-btn" style="height:26px;padding:0 10px;font-size:12px;" onclick="deptSign('+dp.dept_id+')">本課確認</button></span>';
@@ -513,20 +533,16 @@ function renderView(){
         h += '<p style="color:#8a6d45;font-size:13px;">尚未送出，送出後各負責部門才能填寫與簽核。</p>';
         if (CUR.can_edit_header) h += '<button type="button" class="cr-btn" onclick="submitDoc()">送出</button>';
     } else {
-        // 決行／核准一律走圖章（ai-rules/18）；sales_decided_is_proxy／gm_approved_is_proxy
-        // （2026-10-05 使用者要求「決行與核准也要是對應部門人員決行，絕對不可以是代簽的管理員
-        // (除非管理原本就應該簽那一欄)」——後端已經把代簽一律改記真人，這兩個旗標只是
-        // 「這一章其實是管理員代為操作」的 LOG，只有管理員看得到，一般畫面完全是正常簽核）。
+        // 決行／核准一律走圖章（ai-rules/18）。sales_decided_is_proxy／gm_approved_is_proxy
+        // （操作者不是真正該簽的人、由管理員代為操作）在這裡完全不顯示任何字樣，查核入口在
+        // 清單頁的「顯示管理員代簽標記」開關（2026-10-05 使用者更正）。
         h += '<div class="cr-hdr-grid" style="grid-template-columns:1fr 1fr;">';
         var decideStampHtml = d.decision
-            ? ('<span class="dc-'+d.decision+'">'+esc(DECISIONS[d.decision])+'</span>　'
-               + stampHtml(d.sales_decided_by_name, String(d.sales_decided_at||'').substring(0,10))
-               + (CUR.is_admin && d.sales_decided_is_proxy ? ' <span title="由管理員 '+esc(d.sales_decided_proxy_name||'')+' 代為操作" style="font-size:10px;color:#b5862f;border:1px dashed #E8D5B5;border-radius:3px;padding:0 4px;">LOG</span>' : ''))
+            ? ('<span class="dc-'+d.decision+'">'+esc(DECISIONS[d.decision])+'</span>　'+stampHtml(d.sales_decided_by_name, String(d.sales_decided_at||'').substring(0,10)))
             : '尚未決行';
         h += '<div><span class="k">業務課決行：</span><span class="v">'+decideStampHtml+'</span></div>';
         var gmStampHtml = d.gm_approved_by_name
-            ? (stampHtml(d.gm_approved_by_name, String(d.gm_approved_at||'').substring(0,10), d.gm_is_deputy)
-               + (CUR.is_admin && d.gm_approved_is_proxy ? ' <span title="由管理員 '+esc(d.gm_approved_proxy_name||'')+' 代為操作" style="font-size:10px;color:#b5862f;border:1px dashed #E8D5B5;border-radius:3px;padding:0 4px;">LOG</span>' : ''))
+            ? stampHtml(d.gm_approved_by_name, String(d.gm_approved_at||'').substring(0,10), d.gm_is_deputy)
             : '尚未核准';
         h += '<div><span class="k">總經理核准：</span><span class="v">'+gmStampHtml+'</span></div>';
         h += '</div>';

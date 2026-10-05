@@ -958,16 +958,14 @@ function cnrv_approve(PDO $db, int $docId, int $uid, string $uname, bool $isAdmi
        ->execute([$signerId, $signerName, $isDeputy?1:0, $isProxy, $proxyUid, $proxyName, $docId]);
 }
 
-/** 管理員刪除（2026-10-05 使用者交辦「可刪除未審核的」）：只能刪還沒結案的（draft/submitted）——
- *  已結案（closed）代表總經理已經核准，是正式完成的紀錄，不可刪除，確保稽核軌跡完整。
- *  軟刪除（is_deleted=1，留 deleted_by/_at），不是真的 DELETE：訂單審查紀錄本身屬於品質
- *  紀錄的一種，刪了也要留痕跡供日後追查「誰在什麼時候刪掉了這一筆」，不能憑空消失。
- *  刪除後該訂單的名額釋放出來，可以重新建立一張新的審查表單（cnrv_doc_by_order() 等查詢
- *  一律只看 is_deleted=0 的列）。 */
+/** 管理員刪除（2026-10-05 使用者交辦「可刪除未審核的」，同日再交辦「也要能刪除舊有已決行
+ *  （含已結案）的表單」，原本只准刪 draft/submitted 的限制已解除）：軟刪除（is_deleted=1，
+ *  留 deleted_by/_at），不是真的 DELETE——訂單審查紀錄本身屬於品質紀錄的一種，刪了也要留
+ *  痕跡供日後追查「誰在什麼時候刪掉了這一筆」，不能憑空消失；刪除後該訂單的名額釋放出來，
+ *  可以重新建立一張新的審查表單（cnrv_doc_by_order() 等查詢一律只看 is_deleted=0 的列）。 */
 function cnrv_delete(PDO $db, int $docId, int $uid, string $uname): void {
     $doc = cnrv_get($db, $docId);
     if (!$doc) throw new Exception('找不到此表單');
-    if ($doc['status'] === 'closed') throw new Exception('已結案的審查表單不可刪除（結案代表已完成核准，屬正式紀錄）');
     $db->prepare("UPDATE con_review_doc SET is_deleted=1,deleted_by=?,deleted_by_name=?,deleted_at=NOW() WHERE id=?")
        ->execute([$uid, $uname, $docId]);
 }
@@ -983,13 +981,23 @@ function cnrv_list(PDO $db, array $f = []): array {
         $where[] = '(order_oo LIKE ? OR client_name LIKE ? OR part_no_text LIKE ? OR doc_no LIKE ?)';
         $kw = '%' . $f['keyword'] . '%'; array_push($params, $kw, $kw, $kw, $kw);
     }
-    $sql = "SELECT * FROM con_review_doc WHERE " . implode(' AND ', $where) . " ORDER BY id DESC";
+    // has_admin_sign：這張單有沒有任何一段是管理員自動／代為簽核的（內容部門自動帶入、補登，
+    // 或決行／核准由管理員代真人簽），只給清單「顯示管理員代簽標記」開關（僅管理員看得到）用；
+    // 一般欄位（簽核人姓名）本來就已經是真人，這欄只是額外的管理員查核用途。
+    $sql = "SELECT d.*,
+                   EXISTS(SELECT 1 FROM con_review_dept_sign s WHERE s.doc_id=d.id AND (s.is_auto_sign=1 OR s.is_backfill=1)) AS has_dept_admin_sign
+            FROM con_review_doc d WHERE " . implode(' AND ', $where) . " ORDER BY d.id DESC";
     $limit = max(1, min(200, (int)($f['limit'] ?? 50)));
     $offset = max(0, (int)($f['offset'] ?? 0));
     $sql .= " LIMIT $limit OFFSET $offset";
     $st = $db->prepare($sql);
     $st->execute($params);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        $r['has_admin_sign'] = !empty($r['has_dept_admin_sign']) || !empty($r['sales_decided_is_proxy']) || !empty($r['gm_approved_is_proxy']);
+        unset($r['has_dept_admin_sign']);
+    }
+    unset($r);
     $cnt = $db->prepare("SELECT COUNT(*) FROM con_review_doc WHERE " . implode(' AND ', $where));
     $cnt->execute($params);
     return ['rows'=>$rows, 'total'=>(int)$cnt->fetchColumn()];
