@@ -1280,13 +1280,27 @@ function kps_detail(PDO $db, string $calc, int $year, int $month, array $params,
         // existing／existing_cny 本身只是讀正式系統的月快照，沒有自己的來源列——
         // 但正式項次背後用的計算模組如果本來就支援明細，就唯讀借用過來顯示
         // （只 SELECT 正式表的排除規則，不寫、也不提供排除功能，鐵則①不破壞）。
-        $oi = kps_official_calc_info($db, (int)($params['item_no'] ?? 0), $year);
+        $itemNo = (int)($params['item_no'] ?? 0);
+        $oi = kps_official_calc_info($db, $itemNo, $year);
         if ($oi && $oi['calculator_key'] && kpi_as_detail_supported((string)$oi['calculator_key'])) {
             $oParams = kpi_as_params($oi['params_json']);
             $oRules = kpi_as_excl_rules($db, (int)$oi['indicator_id'], $year);
             $d = kpi_as_detail($db, (string)$oi['calculator_key'], $year, $month, $oParams, $oRules);
             $d['supported'] = 1; $d['readonly'] = 1;
-            $d['note'] = '（沿用正式 KPI 表「#' . (int)($params['item_no'] ?? 0) . '」的明細，僅供檢視）' . ($d['note'] ?? '');
+            $noteParts = ['（沿用正式 KPI 表「#' . $itemNo . '」的明細，僅供檢視）'];
+            // 明細是依公式即時重算出來的，畫面上那一格顯示的數字如果是「管理者手動覆寫」，
+            // 兩者天生就對不上——覆寫就是人判斷公式算出來的不準才手動修正的，不講清楚
+            // 使用者會以為系統算錯。
+            $snap = kps_from_snapshot($db, $itemNo, $year);
+            $cell = $snap[$month] ?? null;
+            $cellSrc = $cell['src'] ?? '';
+            if ($cell && ($cellSrc === 'override' || $cellSrc === 'manual')) {
+                $noteParts[] = '⚠ 畫面上這一格目前顯示的 ' . rtrim(rtrim(number_format((float)$cell['v'], 2), '0'), '.')
+                             . ' 是' . ($cellSrc === 'override' ? '管理者手動覆寫' : '人工填寫') . '的數字，'
+                             . '不是下面這份依公式即時重算的明細算出來的（公式算出來的是分子/分母比對應的那個數字），'
+                             . '兩者不一定相同，請以畫面上顯示的那個數字為準。';
+            }
+            $d['note'] = implode(' ', $noteParts) . ($d['note'] ?? '');
             return $d;
         }
         $hasOfficialCalc = $oi && !empty($oi['calculator_key']);
