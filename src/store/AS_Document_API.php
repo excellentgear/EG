@@ -2867,20 +2867,39 @@ case 'set_linked_module':
     $db->prepare("UPDATE as_document SET linked_module=?, updated_at=NOW() WHERE id=?")->execute([$module ?: null, $docId]);
     jout(['status'=>'success']);
 
-case 'flow_guide_setting_save':   // AS流程總覽：是否顯示「線上表單對照」分頁（僅管理者可設，views/ADM/as_flow_guide.php）
+case 'flow_guide_setting_save':   // AS流程總覽：各分頁是否顯示（僅管理者可設，views/ADM/as_flow_guide.php）
     if (!asIsAdmin()) jout(['status'=>'error','message'=>'僅管理者可設定']);
-    $show = (int)($_POST['show_onl_tab'] ?? 1) ? '1' : '0';
-    $st = $db->prepare("SELECT id FROM system_parameters WHERE param_group='AS_FLOW_GUIDE' AND param_key='show_onl_tab' LIMIT 1");
-    $st->execute();
-    if ($pid = $st->fetchColumn()) {
-        $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")
-           ->execute([$show, $currentCname, $pid]);
-    } else {
-        $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by)
-                      VALUES ('AS_FLOW_GUIDE', 'show_onl_tab', ?, '是否顯示 AS 流程說明手冊的「線上表單對照」分頁（0=僅管理者可見）', ?)")
-           ->execute([$show, $currentCname]);
+    // 合法 param_key 白名單一律取自這裡（跟頁面 $TAB_HIDE_CFG 同一組代碼），不吃前端送來的任意鍵——
+    // 否則 tabs[任意字串] 就能在 system_parameters 裡亂寫一列（鐵律8）。加分頁時這裡與頁面兩處都要加。
+    $TAB_KEY_MAP = [
+        'iss' => ['key' => 'show_iss_tab', 'desc' => '待處理問題'],
+        'onl' => ['key' => 'show_onl_tab', 'desc' => '線上表單對照'],
+    ];
+    $tabsIn = $_POST['tabs'] ?? null;
+    if (!is_array($tabsIn)) {
+        // 相容舊版單一參數（2026-10-05 初版只有「線上表單對照」一個分頁可設）
+        $tabsIn = isset($_POST['show_onl_tab']) ? ['onl' => $_POST['show_onl_tab']] : [];
     }
-    jout(['status'=>'success', 'value'=>$show]);
+    if (!$tabsIn) jout(['status'=>'error','message'=>'沒有要儲存的設定']);
+    $result = [];
+    $st = $db->prepare("SELECT id FROM system_parameters WHERE param_group='AS_FLOW_GUIDE' AND param_key=? LIMIT 1");
+    foreach ($tabsIn as $tk => $v) {
+        if (!isset($TAB_KEY_MAP[$tk])) continue;   // 不認得的分頁代碼安靜略過，不報錯也不寫入
+        $show = (int)$v ? '1' : '0';
+        $pkey = $TAB_KEY_MAP[$tk]['key'];
+        $st->execute([$pkey]);
+        if ($pid = $st->fetchColumn()) {
+            $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")
+               ->execute([$show, $currentCname, $pid]);
+        } else {
+            $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by)
+                          VALUES ('AS_FLOW_GUIDE', ?, ?, ?, ?)")
+               ->execute([$pkey, $show, '是否顯示 AS 流程說明手冊的「'.$TAB_KEY_MAP[$tk]['desc'].'」分頁（0=僅管理者可見）', $currentCname]);
+        }
+        $result[$tk] = $show;
+    }
+    if (!$result) jout(['status'=>'error','message'=>'沒有合法的分頁代碼']);
+    jout(['status'=>'success', 'value'=>$result]);
 
 case 'flow_check_toggle':   // AS流程總覽·線上表單對照：表單正確／資料齊全 點檢（views/ADM/as_flow_guide.php）
     if (!asCan('view')) jout(['status'=>'error','message'=>'無權限']);

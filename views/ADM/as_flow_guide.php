@@ -64,16 +64,30 @@ $roleLabel = $isRoleAdmin ? '管理者' : ($canView ? '檢閱' : '無權限');
 // 勾選功能碼 asdoc_online_form_beta 開放給特定角色測試（含本頁「去建立線上表單」「開線上表單」「新填一張」按鈕）。
 $showOnlineForm = $isRoleAdmin || in_array('asdoc_online_form_beta', $asFeatures, true);
 
-// 「線上表單對照」分頁是否顯示：管理員可設定（待處理問題交辦，2026-10-05）。
-// 值存 system_parameters(param_group='AS_FLOW_GUIDE', param_key='show_onl_tab')；
+// 哪些分頁可由管理員設定顯示／隱藏（唯一登記表，加一個分頁只要在這裡加一列——
+// 「課室說明文件」是本頁核心內容、「稽核建議修改」使用者未提，故目前只開放這兩個）：
+// 「線上表單對照」2026-10-05 交辦、「待處理問題」同日稍後追加交辦。
+$TAB_HIDE_CFG = [
+    'iss' => ['label' => '待處理問題',     'key' => 'show_iss_tab'],
+    'onl' => ['label' => '線上表單對照',   'key' => 'show_onl_tab'],
+];
+// 值存 system_parameters(param_group='AS_FLOW_GUIDE', param_key=上列 key)；
 // 沒有這一列＝預設顯示（鐵律4：新裝站點/尚未設定過時不該讓一個分頁憑空消失）。
-$showOnlTab = true;
+$tabVis = [];
+foreach ($TAB_HIDE_CFG as $tk => $cfg) { $tabVis[$tk] = true; }
 try {
-    $st = $conn->prepare("SELECT param_value FROM system_parameters WHERE param_group='AS_FLOW_GUIDE' AND param_key='show_onl_tab' LIMIT 1");
-    $st->execute();
-    $v = $st->fetchColumn();
-    if ($v !== false) { $showOnlTab = ($v !== '0'); }
-} catch (Exception $e) { /* 設定表若查詢失敗，視為預設顯示，不讓分頁整頁壞掉 */ }
+    $keys = array_column($TAB_HIDE_CFG, 'key');
+    $in = implode(',', array_fill(0, count($keys), '?'));
+    $st = $conn->prepare("SELECT param_key, param_value FROM system_parameters WHERE param_group='AS_FLOW_GUIDE' AND param_key IN ($in)");
+    $st->execute($keys);
+    $rowsByKey = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) { $rowsByKey[$r['param_key']] = $r['param_value']; }
+    foreach ($TAB_HIDE_CFG as $tk => $cfg) {
+        if (isset($rowsByKey[$cfg['key']])) { $tabVis[$tk] = ($rowsByKey[$cfg['key']] !== '0'); }
+    }
+} catch (Exception $e) { /* 設定表若查詢失敗，視為全部預設顯示，不讓分頁整頁壞掉 */ }
+// 相容舊變數名（2026-10-05 初版只有這一個分頁，保留別名避免下面一次要改的地方太分散）
+$showOnlTab = $tabVis['onl'];
 
 // ── MD 檔白名單（key => [顯示名稱, 檔名, 圖示]）——只允許這幾支，杜絕路徑穿越 ──
 $MD_DIR = __DIR__ . '/../../FOR CODEING 說明文件/AS9100(各組維護版)/';
@@ -586,10 +600,10 @@ $cntIssueOpen = count(array_filter($ISSUES, fn($r) => !$r['ck']));
 // JS 切換分頁時會同步把 ?tab= 寫進網址列（history.replaceState，不觸發導頁），reload 自然帶著這個值回來。
 $curTab = $_GET['tab'] ?? 'doc';
 if (!in_array($curTab, ['doc', 'iss', 'onl', 'adv'], true)) { $curTab = 'doc'; }
-// 管理員關閉「線上表單對照」分頁後，一律（含管理者本人）退回預設分頁——使用者明確要求
+// 管理員關閉某分頁後，一律（含管理者本人）退回預設分頁——使用者明確要求
 // 「設定後管理員畫面一樣也要隱藏才對」。管理員要恢復顯示，走題列右上角的「分頁顯示設定」跳窗，
 // 那顆按鈕獨立於分頁列之外、不受本設定影響，永遠看得到、永遠打得開。
-if ($curTab === 'onl' && !$showOnlTab) { $curTab = 'doc'; }
+if (isset($TAB_HIDE_CFG[$curTab]) && !$tabVis[$curTab]) { $curTab = 'doc'; }
 
 // 預設顯示的文件
 $cur = $_GET['doc'] ?? 'overview';
@@ -637,8 +651,8 @@ html { overflow-x: hidden; }
 .page-set-btn:hover { background:#F7E0BD; }
 @media print { .page-set-btn { display:none !important; } }
 .fg-onlset-row { display:flex; align-items:center; gap:10px; margin:10px 0; }
-.fg-onlset-row select { height:32px; font-size:13.5px; padding:0 8px; border:1px solid #D8BE93; border-radius:4px; width:160px; }
-.fg-onlset-cur { font-size:12.5px; color:#8A6D45; }
+.fg-onlset-row select { height:32px; font-size:13.5px; padding:0 8px; border:1px solid #D8BE93; border-radius:4px; width:120px; }
+.fg-onlset-cur { font-size:12.5px; color:#8A6D45; margin-left:4px; }
 .fg-onlset-cur b { color:#5B3A1E; }
 
 .fg-wrap { display:flex; gap:12px; align-items:flex-start; }
@@ -831,8 +845,10 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
 
 <div class="fg-tabs">
   <div class="fg-tab <?= $curTab === 'doc' ? 'active' : '' ?>" data-tab="doc"><i class="fa fa-file-text-o"></i> 課室說明文件</div>
+  <?php if ($tabVis['iss']): ?>
   <div class="fg-tab <?= $curTab === 'iss' ? 'active' : '' ?>" data-tab="iss"><i class="fa fa-exclamation-triangle"></i> 待處理問題
     <span class="badge-warm"><?= $cntIssueOpen ?></span></div>
+  <?php endif; ?>
   <?php if ($showOnlTab): ?>
   <div class="fg-tab <?= $curTab === 'onl' ? 'active' : '' ?>" data-tab="onl"><i class="fa fa-bolt"></i> 線上表單對照
     <span class="badge-warm"><?= $onlineCnt ?>/<?= count($FORMS) ?></span></div>
@@ -1178,16 +1194,18 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
 <?php if ($isRoleAdmin): ?>
 <div class="fg-mask" id="fgOnlSetMask"><div class="box">
   <h4><i class="fa fa-cog"></i> 分頁顯示設定</h4>
-  <p style="font-size:13px;color:#5B3A1E;margin-top:0;">設定「線上表單對照」分頁是否顯示。
-    <b>設為隱藏後，包含管理者本人，整頁都看不到這個分頁</b>；要再打開請回到這個跳窗（本按鈕不受此設定影響，一律看得到）。</p>
-  <div class="fg-onlset-row">
-    <label for="fgOnlSetSel" style="font-size:13px;color:#5B3A1E;">線上表單對照分頁：</label>
-    <select id="fgOnlSetSel">
-      <option value="1" <?= $showOnlTab ? 'selected' : '' ?>>顯示</option>
-      <option value="0" <?= !$showOnlTab ? 'selected' : '' ?>>隱藏</option>
+  <p style="font-size:13px;color:#5B3A1E;margin-top:0;">設定下列分頁是否顯示。
+    <b>設為隱藏後，包含管理者本人，整頁都看不到該分頁</b>；要再打開請回到這個跳窗（本按鈕不受此設定影響，一律看得到）。</p>
+  <?php foreach ($TAB_HIDE_CFG as $tk => $cfg): ?>
+  <div class="fg-onlset-row" data-tabkey="<?= htmlspecialchars($tk) ?>">
+    <label for="fgTabSetSel_<?= htmlspecialchars($tk) ?>" style="font-size:13px;color:#5B3A1E;width:120px;"><?= htmlspecialchars($cfg['label']) ?>分頁：</label>
+    <select id="fgTabSetSel_<?= htmlspecialchars($tk) ?>" class="fg-tabset-sel" data-tabkey="<?= htmlspecialchars($tk) ?>">
+      <option value="1" <?= $tabVis[$tk] ? 'selected' : '' ?>>顯示</option>
+      <option value="0" <?= !$tabVis[$tk] ? 'selected' : '' ?>>隱藏</option>
     </select>
+    <span class="fg-onlset-cur">目前：<b><?= $tabVis[$tk] ? '顯示中' : '已隱藏（含管理者畫面）' ?></b></span>
   </div>
-  <p class="fg-onlset-cur">目前狀態：<b><?= $showOnlTab ? '顯示中' : '已隱藏（含管理者畫面）' ?></b></p>
+  <?php endforeach; ?>
   <div style="text-align:right;margin-top:10px;">
     <button class="btn btn-sm btn-default" onclick="document.getElementById('fgOnlSetMask').style.display='none'">取消</button>
     <button class="btn btn-sm btn-warning" id="btnFgOnlSetSave" style="margin-left:6px;"><i class="fa fa-save"></i> 儲存</button>
@@ -1261,11 +1279,12 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
        各筆表單「操作」欄的「開線上表單」／「新填一張」都不會顯示。管理員可到「AS 文件管理」角色設定，
        為特定角色勾選功能碼 <code>asdoc_online_form_beta</code> 開放測試；管理者固定可見。</p>
 
-    <h4>管理員可設定是否顯示「線上表單對照」分頁</h4>
-    <p>題列右上角（僅管理者看得到）有一顆<b>「分頁顯示設定」</b>按鈕，點開跳窗可將「線上表單對照」分頁設為顯示／隱藏。
-       <b>設為隱藏後，連管理者本人的畫面也看不到這個分頁</b>（即使直接帶網址 <code>?tab=onl</code> 也會被退回「課室說明文件」）——
+    <h4>管理員可設定是否顯示「待處理問題」／「線上表單對照」分頁</h4>
+    <p>題列右上角（僅管理者看得到）有一顆<b>「分頁顯示設定」</b>按鈕，點開跳窗可逐一將這兩個分頁設為顯示／隱藏
+       （「課室說明文件」是本頁核心內容、「稽核建議修改」目前未開放設定，不在這裡）。
+       <b>設為隱藏後，連管理者本人的畫面也看不到該分頁</b>（即使直接帶網址 <code>?tab=iss</code>／<code>?tab=onl</code> 也會被退回「課室說明文件」）——
        這顆設定按鈕本身<b>不受此設定影響，一律看得到、打得開</b>，要再打開顯示就回到這個跳窗重新選「顯示」即可。
-       設定值存在 <code>system_parameters(param_group='AS_FLOW_GUIDE', param_key='show_onl_tab')</code>，全站只有這一個開關、對所有人（含管理者）一體適用。</p>
+       設定值各自存在 <code>system_parameters(param_group='AS_FLOW_GUIDE')</code> 底下（<code>show_iss_tab</code>／<code>show_onl_tab</code>），全站只有這一組開關、對所有人（含管理者）一體適用。</p>
 
     <h4>權限</h4>
     <p>沿用 AS 文件管理的 <code>as_doc</code> 模組角色與本頁 ACRUD：有 <b>A</b>／<b>R</b>／<code>asdoc_view</code> 即可檢視；管理者固定可看。
@@ -1367,12 +1386,14 @@ $(document).ready(function () {
         fgSyncTabUrl(t);
     });
 
-    // 管理員：是否顯示「線上表單對照」分頁（跳窗設定，按鈕在題列、不受此設定影響、永遠看得到打得開）
+    // 管理員：分頁顯示設定（跳窗，按鈕在題列、不受此設定影響、永遠看得到打得開）
+    // 一次送出全部分頁的選擇（tabs[分頁代碼]=0/1），加新分頁只要多一個 .fg-tabset-sel，這裡不必再改。
     $('#btnFgOnlSetting').on('click', function () { $('#fgOnlSetMask').show(); });
     $('#btnFgOnlSetSave').on('click', function () {
-        var $btn = $(this), next = $('#fgOnlSetSel').val();
+        var $btn = $(this), tabs = {};
+        $('.fg-tabset-sel').each(function () { tabs[$(this).data('tabkey')] = $(this).val(); });
         $btn.prop('disabled', true);
-        $.post('../../src/store/AS_Document_API.php', {action: 'flow_guide_setting_save', show_onl_tab: next}, function (r) {
+        $.post('../../src/store/AS_Document_API.php', {action: 'flow_guide_setting_save', tabs: tabs}, function (r) {
             if (r && r.status === 'success') { location.reload(); }
             else { $btn.prop('disabled', false); alert((r && r.message) || '儲存失敗'); }
         }, 'json').fail(function () { $btn.prop('disabled', false); alert('儲存失敗，請重新整理後再試'); });
