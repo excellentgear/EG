@@ -193,7 +193,7 @@ $companyName = eg_company_full_name($db);
             <button type="button" class="cr-btn b-plain" onclick="tplSeedFromDevEval()" title="把產品開發評估表 2-TD-02-01 的 32 項確認項目複製過來，之後兩邊各自獨立"><i class="fa fa-download"></i> 從產品開發評估表複製項目</button>
         </div>
         <table class="cr-tbl">
-            <thead><tr><th style="width:60px;">順序</th><th style="width:70px;">區分</th><th>項目內容</th><th style="width:110px;">負責部門</th><th style="width:140px;">額外選項(逗號分隔)</th><th style="width:110px;">預設值</th><th style="width:50px;">啟用</th><th style="width:60px;"></th></tr></thead>
+            <thead><tr><th style="width:30px;" title="拖曳調整順序"><i class="fa fa-sort"></i></th><th style="width:70px;">區分</th><th>項目內容</th><th style="width:110px;">負責部門</th><th style="width:140px;">額外選項(逗號分隔)</th><th style="width:100px;">預設-是否</th><th style="width:100px;">預設-額外</th><th style="width:50px;">啟用</th><th style="width:60px;"></th></tr></thead>
             <tbody id="tplBody"></tbody>
         </table>
     </div>
@@ -215,7 +215,8 @@ $companyName = eg_company_full_name($db);
             <li>業務課決行（可接單／可接單需客戶確認條件／不可接單）後，交由總經理核准，核准後表單結案。</li>
         </ul>
         <h4>項目範本</h4>
-        <p>項目範本由管理員在「範本維護」裡增刪修改，可一次從產品開發評估表複製 32 項當起點——<b>複製後兩邊完全獨立</b>，之後互不影響。每個項目的結果固定可選「是／否／N/A」三選一，管理員可再加「額外選項」（逗號分隔），<b>部門實際填寫答案時</b>可下拉選擇也可以自己打字輸入；「預設值」則<b>只能從「是／否／N/A＋目前設定的額外選項」裡下拉挑一個</b>（不能自己打字），供下方的自動填寫功能使用——改了額外選項，預設值的候選清單會跟著更新，原本選的如果不在新清單裡會自動清空要求重選。</p>
+        <p>項目範本由管理員在「範本維護」裡增刪修改，可一次從產品開發評估表複製 32 項當起點——<b>複製後兩邊完全獨立</b>，之後互不影響。最左邊拖曳 <i class="fa fa-bars"></i> 可調整項目順序（順序自動編號，不必自己填數字）。每個項目的結果固定可選「是／否／N/A」三選一，管理員可再加「額外選項」（逗號分隔），<b>部門實際填寫答案時</b>可下拉選擇也可以自己打字輸入。</p>
+        <p><b>「預設-是否」與「預設-額外」是兩個各自獨立的設定</b>，不是合併成同一個下拉選一個——可以兩個都設、只設一個，或都不設：「預設-是否」只能選「是／否／N/A」三者之一；「預設-額外」只能從這個項目目前設定的額外選項裡選一個（改了額外選項，候選清單會跟著更新，原本選的如果不在新清單裡會自動清空要求重選）。自動填寫時，兩邊有設定的部分會合併成最終答案（例如「否、需要外包」）。</p>
         <h4>管理員：自動填寫並簽核</h4>
         <p>給例行、低風險的訂單快速走完內容部門這一段：未送出的會先自動送出，尚未填寫的項目依範本設定的「預設值」帶入（沒設定預設值的項目會跳過），內容部門逐一嘗試自動簽核。<b>簽核日期預設是接單日期，可改成之後的日期但必須是工作日</b>；<b>只有當天真的有上班（在職、沒請假、沒整天公出）的人才會被記為簽核人</b>，當天都不在就不自動簽、列出原因讓管理員自己處理，絕不會蓋一個當天根本不在的人的章。已填寫的項目、已簽核的部門不會被覆蓋。業務課決行／總經理核准仍需要人工進行，不會被這個功能代勞。</p>
         <h4>誰能填寫／簽核</h4>
@@ -231,6 +232,7 @@ $companyName = eg_company_full_name($db);
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/Sortable.min.js"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
@@ -568,12 +570,20 @@ function loadTpl(){
     });
 }
 var CNRV_BASE_OPTIONS = ['是','否','N/A'];   // 跟後端 CNRV_BASE_OPTIONS 同一份固定基礎選項
-/* 預設值選單選項：固定的是/否/N-A + 這一列目前的額外選項，去重。
-   跟後端 cnrv_merge_options() 是同一份規則（基礎三選項固定在前）。 */
-function tplDefaultOptsHtml(customOptsArr, curVal){
-    var allOpts = CNRV_BASE_OPTIONS.concat((customOptsArr||[]).filter(function(o){ return CNRV_BASE_OPTIONS.indexOf(o)===-1; }));
+/* 固定三選項下拉（是/否/N-A），與「額外選項」完全無關、不受它影響。 */
+function tplBaseOptsHtml(curVal){
     var h = '<option value="">（不設定）</option>';
-    allOpts.forEach(function(o){ h += '<option value="'+esc(o)+'"'+(o===curVal?' selected':'')+'>'+esc(o)+'</option>'; });
+    CNRV_BASE_OPTIONS.forEach(function(o){ h += '<option value="'+esc(o)+'"'+(o===curVal?' selected':'')+'>'+esc(o)+'</option>'; });
+    return h;
+}
+/* 額外選項下拉：只列這一列目前設定的額外選項（2026-10-05 使用者更正：這是跟「是/否/N-A預設」
+   各自獨立的第二個設定，不是合併成同一個下拉選一個——可以兩個都設、也可以只設一個）。
+   這一列還沒設定任何額外選項時顯示停用的提示，不給選。 */
+function tplExtraOptsHtml(customOptsArr, curVal){
+    var opts = customOptsArr || [];
+    if (!opts.length) return '<option value="">（尚未設定額外選項）</option>';
+    var h = '<option value="">（不設定）</option>';
+    opts.forEach(function(o){ h += '<option value="'+esc(o)+'"'+(o===curVal?' selected':'')+'>'+esc(o)+'</option>'; });
     return h;
 }
 function renderTpl(items){
@@ -581,55 +591,75 @@ function renderTpl(items){
     var h = (items||[]).map(function(it){
         var sel = deptOpts.replace('value="'+it.dept_id+'"', 'value="'+it.dept_id+'" selected');
         return '<tr data-id="'+it.id+'">'
-             + '<td><input type="text" data-f="sort_order" value="'+it.sort_order+'" style="width:50px;" onchange="tplEdit('+it.id+',this)"></td>'
+             + '<td class="tpl-drag-handle" style="text-align:center;cursor:move;color:#b5862f;" title="拖曳調整順序"><i class="fa fa-bars"></i></td>'
              + '<td><input type="text" data-f="group_label" value="'+esc(it.group_label)+'" style="width:60px;" onchange="tplEdit('+it.id+',this)"></td>'
              + '<td><input type="text" data-f="item_text" value="'+esc(it.item_text)+'" onchange="tplEdit('+it.id+',this)"></td>'
              + '<td><select data-f="dept_id" onchange="tplEdit('+it.id+',this)">'+sel+'</select></td>'
              + '<td><input type="text" data-f="options" value="'+esc((it.custom_options||[]).join(','))+'" title="在「是／否／N/A」固定三選項之外，這個項目額外可選的回覆" onchange="tplOptionsChanged('+it.id+',this)"></td>'
-             // 預設值一律是「下拉選」不是打字——直接綁定當下的額外選項清單，不可能選到不存在的值
-             // （2026-10-05 使用者要求：預設值要「對應到可以綁定的額外選項」，不要用自由輸入的 combo）。
-             + '<td><select data-f="default_value" title="管理員按「自動填寫並簽核」時，這個項目沒人填就自動帶入這個值" onchange="tplEdit('+it.id+',this)">'+tplDefaultOptsHtml(it.custom_options, it.default_value)+'</select></td>'
+             // 兩個「預設值」各自獨立（2026-10-05 使用者明確要求「這兩個是分開設定，不是只能從
+             // 裡面選一個」）：可以兩個都設、只設一個，或都不設。自動填寫時會把有值的部分合併。
+             + '<td><select data-f="default_value" title="自動填寫並簽核時，若此項目尚未填寫答案，是/否/N-A 的預設值" onchange="tplEdit('+it.id+',this)">'+tplBaseOptsHtml(it.default_value)+'</select></td>'
+             + '<td><select data-f="default_extra" title="自動填寫並簽核時，若此項目尚未填寫答案，額外選項的預設值（可與上面的是/否/N-A同時生效）" onchange="tplEdit('+it.id+',this)">'+tplExtraOptsHtml(it.custom_options, it.default_extra)+'</select></td>'
              + '<td style="text-align:center;"><input type="checkbox" data-f="is_active" '+(it.is_active?'checked':'')+' onchange="tplEdit('+it.id+',this)"></td>'
              + '<td style="text-align:center;"><span class="rf-mini-btn" onclick="tplDel('+it.id+')"><i class="fa fa-times"></i> 刪除</span></td></tr>';
     }).join('');
-    $('#tplBody').html(h || '<tr><td colspan="8" style="text-align:center;color:#999;">尚無項目，可按上方「從產品開發評估表複製項目」當起點</td></tr>');
+    $('#tplBody').html(h || '<tr><td colspan="9" style="text-align:center;color:#999;">尚無項目，可按上方「從產品開發評估表複製項目」當起點</td></tr>');
+    initTplSortable();
+}
+/* 拖曳排序（使用者要求「範本項目維護順序要可以拖移更改」）：把手限定最左邊那一格
+   （本頁其餘欄位全是輸入框/下拉，整列可拖會讓在欄位裡打字、選字變成拖列——
+   跟站上 SOP/SIP 等頁面同一條既有規則）。放開當下依目前 DOM 順序整批重編號並存檔。 */
+function initTplSortable(){
+    var tbody = document.getElementById('tplBody');
+    if (!tbody || typeof Sortable === 'undefined') return;
+    if (tbody._sortable) tbody._sortable.destroy();
+    tbody._sortable = Sortable.create(tbody, {
+        animation: 150, handle: '.tpl-drag-handle',
+        onEnd: function(){
+            var ids = Array.prototype.map.call(tbody.querySelectorAll('tr[data-id]'), function(tr){ return tr.getAttribute('data-id'); });
+            $.post(API, {action:'tpl_reorder', csrf:META.csrf, ids:ids.join(',')}, function(res){
+                if (!res.ok){ alert(res.error||'排序儲存失敗'); loadTpl(); return; }
+            }, 'json');
+        }
+    });
 }
 /* 改用 data-f 屬性而非位置索引讀欄位——新增欄位時位置索引很容易悄悄錯位（本頁已有前車之鑑）。 */
 function tplRowData(tr){
     return {
         id: tr.data('id'),
-        sort_order: tr.find('[data-f=sort_order]').val(),
         group_label: tr.find('[data-f=group_label]').val(),
         item_text: tr.find('[data-f=item_text]').val(),
         dept_id: tr.find('[data-f=dept_id]').val(),
         options: tr.find('[data-f=options]').val(),
         default_value: tr.find('[data-f=default_value]').val(),
+        default_extra: tr.find('[data-f=default_extra]').val(),
         is_active: tr.find('[data-f=is_active]').is(':checked') ? 1 : 0,
     };
 }
 function tplEdit(id){
     var tr = $('#tplBody tr[data-id='+id+']');
     var data = tplRowData(tr);
-    $.post(API, {action:'tpl_save', csrf:META.csrf, id:id, sort_order:data.sort_order, group_label:data.group_label,
-                 item_text:data.item_text, dept_id:data.dept_id, options:data.options, default_value:data.default_value, is_active:data.is_active}, function(res){
+    $.post(API, {action:'tpl_save', csrf:META.csrf, id:id, group_label:data.group_label,
+                 item_text:data.item_text, dept_id:data.dept_id, options:data.options,
+                 default_value:data.default_value, default_extra:data.default_extra, is_active:data.is_active}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); loadTpl(); return; }
     }, 'json');
 }
-/* 改「額外選項」時，如果目前的預設值已經不在新的選項清單裡，要連帶清掉，否則後端會因為
-   「預設值不是合法選項」擋下整列存檔，使用者卻看不出是哪裡出錯。 */
+/* 改「額外選項」時，「額外選項預設值」的候選清單要立刻跟著重建（select 是 renderTpl() 畫表格
+   當下就定型的，不重建的話剛打的新選項要存檔+整表重畫才選得到）；原本選的值如果已經不在新
+   清單裡就清空要求重選。**不影響「是/否/N-A預設值」那個下拉**——兩者各自獨立，改額外選項
+   不會動到是/否/N-A的設定（2026-10-05 使用者明確要求兩者分開）。 */
 function tplOptionsChanged(id, el){
     var tr = $('#tplBody tr[data-id='+id+']');
     var customOpts = $.trim(el.value).split(',').map(function(s){ return $.trim(s); }).filter(Boolean);
-    var $dv = tr.find('[data-f=default_value]');
-    var curVal = $dv.val();
-    // 預設值下拉是「綁定」在這一列目前的額外選項上——改了額外選項，候選清單要立刻跟著重建
-    // （select 是 renderTpl() 畫表格當下就定型的，不重建的話剛打的新選項要存檔+整表重畫才選得到）；
-    // 原本選的值如果已經不在新清單裡，一併清空要求重選（tplDefaultOptsHtml 選不到就自動落在「不設定」）。
-    $dv.html(tplDefaultOptsHtml(customOpts, curVal));
+    var $de = tr.find('[data-f=default_extra]');
+    var curVal = $de.val();
+    $de.html(tplExtraOptsHtml(customOpts, curVal));
     tplEdit(id);
 }
 function tplAdd(){
-    $.post(API, {action:'tpl_save', csrf:META.csrf, id:0, sort_order:9999, group_label:'', item_text:'（新項目，請編輯內容）', dept_id:0, options:'', default_value:'', is_active:1}, function(res){
+    // 順序不必填，後端自動接在最後面（2026-10-05 使用者要求「順序請自動給」）。
+    $.post(API, {action:'tpl_save', csrf:META.csrf, id:0, group_label:'', item_text:'（新項目，請編輯內容）', dept_id:0, options:'', default_value:'', default_extra:'', is_active:1}, function(res){
         if (!res.ok){ alert(res.error||'新增失敗'); return; }
         renderTpl(res.items);
     }, 'json');

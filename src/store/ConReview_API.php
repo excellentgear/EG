@@ -47,17 +47,25 @@ case 'tpl_save': {
     cnrv_need_csrf();
     if (!$perms['canAdmin']) jerr('沒有權限', 403);
     $data = [
-        'sort_order'=>(int)($_POST['sort_order'] ?? 0),
         'group_label'=>trim((string)($_POST['group_label'] ?? '')),
         'item_text'=>trim((string)($_POST['item_text'] ?? '')),
         'dept_id'=>(int)($_POST['dept_id'] ?? 0) ?: null,
         'options'=>array_filter(array_map('trim', explode(',', (string)($_POST['options'] ?? '')))),
         'default_value'=>trim((string)($_POST['default_value'] ?? '')),
+        'default_extra'=>trim((string)($_POST['default_extra'] ?? '')),
         'is_active'=>!empty($_POST['is_active']),
     ];
     try { $id = cnrv_tpl_item_save($db, (int)($_POST['id'] ?? 0), $data, $uid, $uname); }
     catch (Throwable $e) { jerr($e->getMessage()); }
     jout(['id'=>$id, 'items'=>cnrv_tpl_items_get($db)]);
+}
+case 'tpl_reorder': {
+    cnrv_need_csrf();
+    if (!$perms['canAdmin']) jerr('沒有權限', 403);
+    $ids = array_filter(array_map('intval', explode(',', (string)($_POST['ids'] ?? ''))));
+    if (!$ids) jerr('缺少排序清單');
+    cnrv_tpl_reorder($db, $ids);
+    jout(['items'=>cnrv_tpl_items_get($db)]);
 }
 case 'tpl_delete': {
     cnrv_need_csrf();

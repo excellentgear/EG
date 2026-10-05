@@ -160,11 +160,23 @@ function cnrv_ensure_schema(PDO $db): void {
     };
     if (!$hasCol('con_review_tpl_item', 'default_value')) {
         try { $db->exec("ALTER TABLE con_review_tpl_item ADD COLUMN default_value VARCHAR(200) NULL
-                         COMMENT '預設回覆值，供管理員「自動填寫並簽核」使用' AFTER preset_options"); } catch (Throwable $e) {}
+                         COMMENT '預設「是/否/N-A」，供管理員「自動填寫並簽核」使用' AFTER preset_options"); } catch (Throwable $e) {}
+    }
+    // 2026-10-05（使用者更正）：預設值要拆成兩個「各自獨立」的設定，不是合併成一個三選一／N選一——
+    // 一個是固定三選項「是/否/N-A」的預設(default_value)，一個是額外選項的預設(default_extra)，
+    // 兩者可以同時設、也可以只設其中一個；自動填寫時把兩個有值的部分合併成最終答案文字
+    // （見 cnrv_admin_auto_fill_sign() 的組字邏輯）。
+    if (!$hasCol('con_review_tpl_item', 'default_extra')) {
+        try { $db->exec("ALTER TABLE con_review_tpl_item ADD COLUMN default_extra VARCHAR(200) NULL
+                         COMMENT '預設的額外選項(與default_value各自獨立，皆可為空)，供管理員「自動填寫並簽核」使用' AFTER default_value"); } catch (Throwable $e) {}
     }
     if (!$hasCol('con_review_item', 'default_value')) {
         try { $db->exec("ALTER TABLE con_review_item ADD COLUMN default_value VARCHAR(200) NULL
-                         COMMENT '建立當下的範本預設值快照' AFTER preset_options"); } catch (Throwable $e) {}
+                         COMMENT '建立當下的範本預設值快照(是/否/N-A部分)' AFTER preset_options"); } catch (Throwable $e) {}
+    }
+    if (!$hasCol('con_review_item', 'default_extra')) {
+        try { $db->exec("ALTER TABLE con_review_item ADD COLUMN default_extra VARCHAR(200) NULL
+                         COMMENT '建立當下的範本預設值快照(額外選項部分)' AFTER default_value"); } catch (Throwable $e) {}
     }
     if (!$hasCol('con_review_dept_sign', 'is_auto_sign')) {
         try { $db->exec("ALTER TABLE con_review_dept_sign ADD COLUMN is_auto_sign TINYINT(1) NOT NULL DEFAULT 0
@@ -273,7 +285,11 @@ function cnrv_tpl_items_get(PDO $db, bool $activeOnly = false): array {
     return $rows;
 }
 
-/** $id=0 新增。$data: sort_order,group_label,item_text,dept_id,options(array，額外選項不含基礎三選項),default_value,is_active */
+/** $id=0 新增。$data: group_label,item_text,dept_id,options(array，額外選項不含基礎三選項),
+ *  default_value（是/否/N-A 其一，與 default_extra 各自獨立、可同時設或只設一個），
+ *  default_extra（額外選項其一），is_active。
+ *  **sort_order 不收在這裡**——順序一律由 cnrv_tpl_reorder()（拖曳排序）或新增時的自動
+ *  給號決定，使用者不必也不應該自己填數字（2026-10-05 使用者要求「順序請自動給」）。 */
 function cnrv_tpl_item_save(PDO $db, int $id, array $data, int $uid, string $uname): int {
     cnrv_ensure_schema($db);
     $text = trim((string)($data['item_text'] ?? ''));
@@ -283,26 +299,53 @@ function cnrv_tpl_item_save(PDO $db, int $id, array $data, int $uid, string $una
     $opts = array_values(array_filter(array_map('trim', (array)($data['options'] ?? [])), fn($s) => $s !== '' && !in_array($s, CNRV_BASE_OPTIONS, true)));
     $optsJson = $opts ? json_encode($opts, JSON_UNESCAPED_UNICODE) : null;
     $isActive = !empty($data['is_active']) ? 1 : 0;
+
+    // 兩個預設值各自獨立驗證、各自對應自己的值域（使用者明確要求「這兩個是分開設定，
+    // 不是只能從裡面選一個」）：default_value 只能是固定三選項之一，default_extra 只能是
+    // 這個項目自己設定的額外選項之一；兩者互不影響，可以同時有值、也可以只有一個有值。
     $defVal = trim((string)($data['default_value'] ?? ''));
-    if ($defVal !== '' && !in_array($defVal, array_merge(CNRV_BASE_OPTIONS, $opts), true)) {
-        throw new Exception('預設值必須是「是／否／N/A」或範本設定的額外選項之一');
+    if ($defVal !== '' && !in_array($defVal, CNRV_BASE_OPTIONS, true)) {
+        throw new Exception('「是/否/N-A 預設值」必須是「是」「否」「N/A」三者之一');
     }
     $defVal = $defVal !== '' ? $defVal : null;
+    $defExtra = trim((string)($data['default_extra'] ?? ''));
+    if ($defExtra !== '' && !in_array($defExtra, $opts, true)) {
+        throw new Exception('「額外選項預設值」必須是這個項目目前設定的額外選項之一');
+    }
+    $defExtra = $defExtra !== '' ? $defExtra : null;
+
     if ($id) {
-        $db->prepare("UPDATE con_review_tpl_item SET sort_order=?,group_label=?,item_text=?,dept_id=?,preset_options=?,default_value=?,is_active=?,
+        $db->prepare("UPDATE con_review_tpl_item SET group_label=?,item_text=?,dept_id=?,preset_options=?,default_value=?,default_extra=?,is_active=?,
                       updated_by=?,updated_by_name=?,updated_at=NOW() WHERE id=?")
-           ->execute([(int)($data['sort_order'] ?? 0), $group, $text, $deptId, $optsJson, $defVal, $isActive, $uid, $uname, $id]);
+           ->execute([$group, $text, $deptId, $optsJson, $defVal, $defExtra, $isActive, $uid, $uname, $id]);
         return $id;
     }
-    $db->prepare("INSERT INTO con_review_tpl_item (sort_order,group_label,item_text,dept_id,preset_options,default_value,is_active,created_by,created_by_name)
-                  VALUES (?,?,?,?,?,?,?,?,?)")
-       ->execute([(int)($data['sort_order'] ?? 0), $group, $text, $deptId, $optsJson, $defVal, $isActive, $uid, $uname]);
+    // 新增：順序自動接在最後面（現有最大值 +10），不必使用者自己指定。
+    $nextSort = (int)($db->query("SELECT COALESCE(MAX(sort_order),0) FROM con_review_tpl_item")->fetchColumn()) + 10;
+    $db->prepare("INSERT INTO con_review_tpl_item (sort_order,group_label,item_text,dept_id,preset_options,default_value,default_extra,is_active,created_by,created_by_name)
+                  VALUES (?,?,?,?,?,?,?,?,?,?)")
+       ->execute([$nextSort, $group, $text, $deptId, $optsJson, $defVal, $defExtra, $isActive, $uid, $uname]);
     return (int)$db->lastInsertId();
 }
 
 function cnrv_tpl_item_delete(PDO $db, int $id): void {
     cnrv_ensure_schema($db);
     $db->prepare("DELETE FROM con_review_tpl_item WHERE id=?")->execute([$id]);
+}
+
+/** 拖曳排序：$orderedIds 是畫面上拖完之後、由上到下的 id 清單，依序重新編號 10,20,30...
+ *  （留間隔不是緊鄰整數，方便日後要插在兩項中間時不必整批重編——雖然目前排序只能靠拖曳，
+ *  這個習慣沿用全站其他拖曳排序頁面的既有做法）。 */
+function cnrv_tpl_reorder(PDO $db, array $orderedIds): void {
+    cnrv_ensure_schema($db);
+    $upd = $db->prepare("UPDATE con_review_tpl_item SET sort_order=? WHERE id=?");
+    $sort = 0;
+    foreach ($orderedIds as $id) {
+        $id = (int)$id;
+        if ($id <= 0) continue;
+        $sort += 10;
+        $upd->execute([$sort, $id]);
+    }
 }
 
 /**
@@ -414,12 +457,12 @@ function cnrv_create(PDO $db, int $orderId, int $uid, string $uname): int {
         // preset_options 存的是「額外選項」（custom_options），不是合併後的完整清單——
         // 完整清單（含固定的是/否/N-A）一律由 cnrv_merge_options() 在讀取時現算，
         // 存成合併後的結果會讓舊單據的欄位跟著基礎選項以後若有調整而過期。
-        $ins = $db->prepare("INSERT INTO con_review_item (doc_id,tpl_item_id,sort_order,group_label,item_text,dept_id,preset_options,default_value)
-                              VALUES (?,?,?,?,?,?,?,?)");
+        $ins = $db->prepare("INSERT INTO con_review_item (doc_id,tpl_item_id,sort_order,group_label,item_text,dept_id,preset_options,default_value,default_extra)
+                              VALUES (?,?,?,?,?,?,?,?,?)");
         foreach (cnrv_tpl_items_get($db, true) as $t) {
             $ins->execute([$docId, $t['id'], $t['sort_order'], $t['group_label'], $t['item_text'], $t['dept_id'],
                             $t['custom_options'] ? json_encode($t['custom_options'], JSON_UNESCAPED_UNICODE) : null,
-                            $t['default_value']]);
+                            $t['default_value'], $t['default_extra']]);
         }
         $db->commit();
         return $docId;
@@ -677,14 +720,19 @@ function cnrv_admin_auto_fill_sign(PDO $db, int $docId, string $signDate, int $a
         }
 
         // 逐項帶入範本預設值：只補還沒填的，已有答案的一律不動（不可覆蓋別人已填的內容）。
+        // default_value（是/否/N-A）與 default_extra（額外選項）是兩個各自獨立的設定
+        // （2026-10-05 使用者明確要求「這兩個是分開設定，不是只能從裡面選一個」），
+        // 兩者都可能有值，最終答案是把有值的部分合併顯示（用「、」連接），任一邊空的就不接進去；
+        // 兩邊都沒設定才算「沒有預設值」略過不填。
         $filled = 0; $skippedNoDefault = 0;
-        $itemSt = $db->prepare("SELECT id, answer_value, default_value FROM con_review_item WHERE doc_id=?");
+        $itemSt = $db->prepare("SELECT id, answer_value, default_value, default_extra FROM con_review_item WHERE doc_id=?");
         $itemSt->execute([$docId]);
         $updSt = $db->prepare("UPDATE con_review_item SET answer_value=?,filled_by=?,filled_by_name=?,filled_at=? WHERE id=?");
         foreach ($itemSt->fetchAll(PDO::FETCH_ASSOC) as $it) {
             if ($it['answer_value'] !== null && $it['answer_value'] !== '') continue;
-            if ($it['default_value'] === null || $it['default_value'] === '') { $skippedNoDefault++; continue; }
-            $updSt->execute([$it['default_value'], $adminUid, $adminName, $signDate . ' 09:00:00', $it['id']]);
+            $parts = array_filter([$it['default_value'], $it['default_extra']], fn($v) => $v !== null && $v !== '');
+            if (!$parts) { $skippedNoDefault++; continue; }
+            $updSt->execute([implode('、', $parts), $adminUid, $adminName, $signDate . ' 09:00:00', $it['id']]);
             $filled++;
         }
 
