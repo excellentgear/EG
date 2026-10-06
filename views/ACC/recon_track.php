@@ -241,9 +241,7 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
       <div class="art-pager-row">
         <div class="art-pager">
           <label>每頁</label>
-          <select id="listPerPage" class="form-control input-sm" style="width:70px;display:inline-block;" onchange="LIST_PAGE=1;LIST_PER_PAGE=parseInt(this.value);renderListTbl();">
-            <option value="5">5</option><option value="10" selected>10</option><option value="20">20</option><option value="50">50</option>
-          </select>
+          <select id="listPerPage" class="form-control input-sm" style="width:70px;display:inline-block;" onchange="LIST_PAGE=1;LIST_PER_PAGE=parseInt(this.value);renderListTbl();"></select>
           <button onclick="listPagePrev()"><i class="fa fa-angle-left"></i></button>
           <span id="listPageLabel">第 1 / 1 頁</span>
           <button onclick="listPageNext()"><i class="fa fa-angle-right"></i></button>
@@ -297,9 +295,7 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
       <div class="art-pager-row">
         <div class="art-pager">
           <label>每頁</label>
-          <select id="logPerPage" class="form-control input-sm" style="width:70px;display:inline-block;" onchange="LOG_PAGE=1;LOG_PER_PAGE=parseInt(this.value);loadLog();">
-            <option value="10">10</option><option value="20" selected>20</option><option value="50">50</option>
-          </select>
+          <select id="logPerPage" class="form-control input-sm" style="width:70px;display:inline-block;" onchange="LOG_PAGE=1;LOG_PER_PAGE=parseInt(this.value);loadLog();"></select>
           <button onclick="logPagePrev()"><i class="fa fa-angle-left"></i></button>
           <span id="logPageLabel">第 1 / 1 頁</span>
           <button onclick="logPageNext()"><i class="fa fa-angle-right"></i></button>
@@ -319,8 +315,16 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
     <div class="m-head">對帳進度追蹤 — 設定 <span class="x" data-close="setMask">✕</span></div>
     <div class="m-body">
       <h4 style="font-size:14px;">一般設定</h4>
-      <label class="opt-chk"><input type="checkbox" id="optAllowSkip"> 允許跳過順序（可直接按較後面的狀態，中間階段的日期自動帶入同一個時間）</label>
+      <div style="margin-bottom:6px;">
+        <span style="font-size:12px;color:var(--muted);margin-right:6px;">允許跳過順序（可直接按較後面的狀態，中間階段日期自動帶入同一個時間）：</span>
+        <label class="opt-chk"><input type="checkbox" id="optAllowSkipAr"> 應收</label>
+        <label class="opt-chk"><input type="checkbox" id="optAllowSkipAp"> 應付</label>
+      </div>
       <label class="opt-chk"><input type="checkbox" id="optShowAmount"> 顯示「本期金額(含稅)」欄位</label>
+      <div style="margin-top:6px;">
+        <label class="opt-chk" style="margin-right:6px;">預設每頁筆數：</label>
+        <input type="number" id="optDefaultPerPage" class="form-control input-sm" style="width:70px;display:inline-block;" min="1" max="200">
+      </div>
 
       <h4 style="font-size:14px;margin-top:16px;">角色權限矩陣 <span class="hint" style="font-size:11px;color:#888;">勾選的角色可以把狀態按鈕按成該列狀態；本頁管理員(art_admin)不受此限，永遠可以任意設定/回復</span></h4>
       <div id="matrixWrap"></div>
@@ -429,7 +433,8 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
       <h4>狀態按鈕</h4>
       <ul>
         <li>操作欄顯示目前這個人可以按的所有狀態（可能不只一個），可以跳過中間階段直接按較後面的狀態——跳過的階段日期會自動帶入與實際按下那格相同的時間，工作天數統計才算得出來。</li>
-        <li>是否允許跳過順序可在「設定」關閉，關閉後只能依序一步一步按。</li>
+        <li>是否允許跳過順序，應收／應付可在「設定」分開開關，關閉後只能依序一步一步按（本頁管理員不受此限）。</li>
+        <li>操作欄位的下拉選單只用來補按鈕涵蓋不到的狀態（例如回復到較早狀態），已經有按鈕的狀態不會在下拉裡重複出現。</li>
         <li>每個狀態能不能由哪個角色按，由管理員在「設定→角色權限矩陣」調整（同一個狀態可以同時勾生管與業務）。</li>
         <li>往回退到較早的狀態僅本頁管理員（art_admin）可做。</li>
       </ul>
@@ -463,7 +468,7 @@ var API = '../../src/store/AccTrack_API.php';
 var CSRF = <?= json_encode($CSRF) ?>;
 var PERMS = <?= json_encode($perms) ?>;
 var STATUSES = {}, ANCHORS = {}, MATRIX = {}, GROUPS = [];
-var ALLOW_SKIP = true, SHOW_AMOUNT = true;
+var ALLOW_SKIP = {ar:true, ap:true}, SHOW_AMOUNT = true, DEFAULT_PER_PAGE = 6;
 var SIDE = 'ar';
 var LAST_ROWS = [];
 var SELECTED = {};   // track_id => true（跨換頁保留）
@@ -483,6 +488,17 @@ function showToast(msg, type){
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function fmtMoney(v){ v = Number(v||0); return v.toLocaleString('en-US', {maximumFractionDigits:0}); }
 function statusLabel(k){ return (k==='' || k==null) ? '尚未開始' : (STATUSES[k] || k); }
+/* 每頁筆數下拉：固定選項 5/10/20/50 之外，把管理員設定的預設值也插進去（如 6），並預選它 */
+function rebuildPerPageOptions(){
+    var base = [5, 10, 20, 50];
+    if (base.indexOf(DEFAULT_PER_PAGE) < 0) base.push(DEFAULT_PER_PAGE);
+    base.sort(function(a,b){ return a-b; });
+    var optsHtml = base.map(function(n){ return '<option value="'+n+'"' + (n===DEFAULT_PER_PAGE?' selected':'') + '>'+n+'</option>'; }).join('');
+    document.getElementById('listPerPage').innerHTML = optsHtml;
+    document.getElementById('logPerPage').innerHTML = optsHtml;
+    LIST_PER_PAGE = DEFAULT_PER_PAGE;
+    LOG_PER_PAGE = DEFAULT_PER_PAGE;
+}
 function statusBadge(k){ return '<span class="badge-st badge-' + (k===''?'empty':k) + '">' + esc(statusLabel(k)) + '</span>'; }
 
 function api(data){
@@ -551,7 +567,8 @@ function toggleStFilter(k){ ST_FILTER = (ST_FILTER===k) ? '' : k; loadList(); }
 function allowedTargets(row){
     var order = Object.keys(STATUSES);
     var curIdx = row.status === '' ? -1 : order.indexOf(row.status);
-    var candidates = ALLOW_SKIP ? order.slice(curIdx+1) : order.slice(curIdx+1, curIdx+2);
+    var skip = ALLOW_SKIP[row.side];
+    var candidates = skip ? order.slice(curIdx+1) : order.slice(curIdx+1, curIdx+2);
     if (PERMS.canAdmin) return candidates;
     var out = [];
     candidates.forEach(function(s){
@@ -574,8 +591,8 @@ function loadList(){
     });
 }
 
-/* 頁內分頁（換頁鈕在表格右上角，預設每頁 10 筆） */
-var LIST_PAGE = 1, LIST_PER_PAGE = 10;
+/* 頁內分頁（換頁鈕在表格右上角，預設每頁筆數由管理員在設定調整） */
+var LIST_PAGE = 1, LIST_PER_PAGE = 6;
 function listPagePrev(){ if (LIST_PAGE>1) { LIST_PAGE--; renderListTbl(); } }
 function listPageNext(){ LIST_PAGE++; renderListTbl(); }
 
@@ -586,7 +603,7 @@ function renderListTbl(){
 
     var cols = [];
     if (canBatch) cols.push('<th style="width:30px;"><input type="checkbox" id="chkAll" onchange="toggleAllChk(this.checked)"></th>');
-    cols.push('<th style="width:85px;">' + (isAr?'客戶編號':'廠商編號') + '</th>');
+    cols.push('<th style="width:58px;">' + (isAr?'客戶編號':'廠商編號') + '</th>');
     cols.push('<th style="width:150px;">' + (isAr?'客戶':'廠商') + '</th>');
     cols.push('<th style="width:70px;">結帳日</th>');
     if (!isAr) cols.push('<th style="width:50px;">筆數</th>');
@@ -619,10 +636,15 @@ function renderListTbl(){
             return '<button class="btn btn-warm row-btn" onclick="doSetStatus(' + r.track_id + ',\'' + s + '\')">' + esc(statusLabel(s)) + '</button>';
         }).join('');
         if (PERMS.canAdmin) {
-            btns += ' <select class="form-control input-sm" style="width:90px;display:inline-block;" onchange="if(this.value)doSetStatus(' + r.track_id + ',this.value);this.value=\'\';">' +
-                '<option value="">（改派）</option>' +
-                Object.keys(STATUSES).filter(function(k){return k!==r.status;}).map(function(k){ return '<option value="'+k+'">'+esc(STATUSES[k])+'</option>'; }).join('') +
-                '</select>';
+            // 已經有按鈕可以按的狀態就不在下拉選單裡重複出現（使用者要求）；
+            // 下拉只保留按鈕涵蓋不到的（例如回復到較早狀態、或跳過順序被關閉時被按鈕排除掉的）
+            var dropdownOpts = Object.keys(STATUSES).filter(function(k){ return k!==r.status && targets.indexOf(k)<0; });
+            if (dropdownOpts.length) {
+                btns += ' <select class="form-control input-sm" style="width:90px;display:inline-block;" onchange="if(this.value)doSetStatus(' + r.track_id + ',this.value);this.value=\'\';">' +
+                    '<option value="">（改派）</option>' +
+                    dropdownOpts.map(function(k){ return '<option value="'+k+'">'+esc(STATUSES[k])+'</option>'; }).join('') +
+                    '</select>';
+            }
         }
         var settleBtn = (PERMS.canAdmin && targetId) ? '<button class="icon-btn" title="修改結帳日" onclick="openSettleMask(\''+targetType+'\',\''+esc(targetId)+'\',\''+esc(r.party_name)+'\',\''+(r.settlement_mode||'FIXED')+'\','+(r.settlement_day||'')+')"><i class="fa fa-pencil"></i></button>' : '';
 
@@ -714,7 +736,7 @@ function saveSettle(){
 }
 
 /* ── 修改紀錄（獨立分頁，伺服器端分頁）───────────────────────────── */
-var LOG_PAGE = 1, LOG_PER_PAGE = 20;
+var LOG_PAGE = 1, LOG_PER_PAGE = 6;
 function logPagePrev(){ if (LOG_PAGE>1) { LOG_PAGE--; loadLog(); } }
 function logPageNext(){ LOG_PAGE++; loadLog(); }
 function loadLog(){
@@ -853,8 +875,10 @@ function renderTrend(trend){
 var ROLE_CODES = [['art_pm','生管'],['art_sales','業務'],['art_acc','會計']];
 var DEPT_LIST_CACHE = null, DEPT_PEOPLE_CACHE = [];
 function openSettingMask(){
-    document.getElementById('optAllowSkip').checked = !!ALLOW_SKIP;
+    document.getElementById('optAllowSkipAr').checked = !!ALLOW_SKIP.ar;
+    document.getElementById('optAllowSkipAp').checked = !!ALLOW_SKIP.ap;
     document.getElementById('optShowAmount').checked = !!SHOW_AMOUNT;
+    document.getElementById('optDefaultPerPage').value = DEFAULT_PER_PAGE;
     document.getElementById('matrixWrap').innerHTML = '';
     renderMatrix();
     renderGroups();
@@ -971,18 +995,22 @@ function saveSetting(){
     var groups = collectGroups().filter(function(g){ return g.label; });
     if (!groups.length) { document.getElementById('setErr').textContent = '至少要有一組工作天數統計分組'; return; }
     var rows = collectMatrixRows();
-    var allowSkipV = document.getElementById('optAllowSkip').checked ? '1' : '0';
+    var skipAr = document.getElementById('optAllowSkipAr').checked ? '1' : '0';
+    var skipAp = document.getElementById('optAllowSkipAp').checked ? '1' : '0';
     var showAmountV = document.getElementById('optShowAmount').checked ? '1' : '0';
+    var perPage = parseInt(document.getElementById('optDefaultPerPage').value, 10) || 6;
     $.when(
         api({action:'role_matrix_save', rows: JSON.stringify(rows)}),
         api({action:'workday_groups_save', groups: JSON.stringify(groups)}),
-        api({action:'allow_skip_save', v: allowSkipV}),
-        api({action:'show_amount_save', v: showAmountV})
-    ).done(function(r1, r2, r3, r4){
+        api({action:'allow_skip_save', ar: skipAr, ap: skipAp}),
+        api({action:'show_amount_save', v: showAmountV}),
+        api({action:'default_per_page_save', v: perPage})
+    ).done(function(r1, r2, r3, r4, r5){
         if (r1[0] && r1[0].ok) MATRIX = r1[0].matrix;
         if (r2[0] && r2[0].ok) GROUPS = r2[0].groups;
         if (r3[0] && r3[0].ok) ALLOW_SKIP = r3[0].allow_skip;
         if (r4[0] && r4[0].ok) SHOW_AMOUNT = r4[0].show_amount;
+        if (r5[0] && r5[0].ok) { DEFAULT_PER_PAGE = r5[0].default_per_page; rebuildPerPageOptions(); }
         showToast('已儲存','success');
         closeMask('setMask');
         loadList(); if (document.getElementById('paneStat').classList.contains('on')) loadStat();
@@ -997,8 +1025,10 @@ $(function(){
     apiGet('bootstrap', {}).done(function(r){
         if (!r || !r.ok) return;
         STATUSES = r.statuses; ANCHORS = r.anchors; MATRIX = r.matrix; GROUPS = r.groups;
-        ALLOW_SKIP = !!r.allow_skip; SHOW_AMOUNT = !!r.show_amount;
+        ALLOW_SKIP = r.allow_skip || {ar:true, ap:true}; SHOW_AMOUNT = !!r.show_amount;
+        DEFAULT_PER_PAGE = r.default_per_page || 6;
         CARD_ORDER = [''].concat(Object.keys(STATUSES));
+        rebuildPerPageOptions();
         fillGranYear(r.years);
         loadOwnerPool();
         setSide('ar');

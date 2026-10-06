@@ -351,16 +351,40 @@ function act_track_get_or_create(PDO $db, string $side, string $partyKey, string
     return $st2->fetch(PDO::FETCH_ASSOC);
 }}
 
-if (!function_exists('act_allow_skip')) {
-/** 是否允許跳過順序直接按較後面的狀態（預設允許；管理員可在設定關閉改回嚴格依序） */
-function act_allow_skip(PDO $db): bool
+if (!function_exists('act_allow_skip_map')) {
+/**
+ * 是否允許跳過順序，應收／應付各自獨立設定（使用者明確要求「要可以個別設定」）。
+ * 相容舊資料：這個設定鍵曾經短暫存過單一布林值（兩側共用），讀到的話兩側都套用那個值。
+ */
+function act_allow_skip_map(PDO $db): array
 {
-    return (bool)act_param_get($db, 'allow_skip', true);
+    $v = act_param_get($db, 'allow_skip', ['ar' => true, 'ap' => true]);
+    if (is_bool($v)) return ['ar' => $v, 'ap' => $v];
+    return ['ar' => (bool)($v['ar'] ?? true), 'ap' => (bool)($v['ap'] ?? true)];
+}}
+if (!function_exists('act_allow_skip_for')) {
+function act_allow_skip_for(PDO $db, string $side): bool
+{
+    $m = act_allow_skip_map($db);
+    return $m[$side === 'ap' ? 'ap' : 'ar'];
 }}
 if (!function_exists('act_allow_skip_save')) {
-function act_allow_skip_save(PDO $db, bool $v, string $by = ''): void
+function act_allow_skip_save(PDO $db, array $map, string $by = ''): void
 {
-    act_param_save($db, 'allow_skip', $v, $by);
+    act_param_save($db, 'allow_skip', ['ar' => !empty($map['ar']), 'ap' => !empty($map['ap'])], $by);
+}}
+if (!function_exists('act_default_per_page')) {
+/** 進度清單／修改紀錄預設每頁筆數（管理員可在設定調整） */
+function act_default_per_page(PDO $db): int
+{
+    $v = (int)act_param_get($db, 'default_per_page', 6);
+    return ($v >= 1 && $v <= 200) ? $v : 6;
+}}
+if (!function_exists('act_default_per_page_save')) {
+function act_default_per_page_save(PDO $db, int $v, string $by = ''): void
+{
+    $v = ($v >= 1 && $v <= 200) ? $v : 6;
+    act_param_save($db, 'default_per_page', $v, $by);
 }}
 if (!function_exists('act_show_amount')) {
 /** 「本期金額(含稅)」欄位是否顯示（預設顯示；管理員可關閉） */
@@ -405,7 +429,7 @@ function act_set_status(PDO $db, int $trackId, string $toStatus, array $perms, ?
     if (!act_can_set_status($db, $perms, $row['side'], $toStatus)) return ['success' => false, 'message' => '沒有設定此狀態的權限'];
 
     if ($toIdx > $curIdx) {
-        if (empty($perms['canAdmin']) && !act_allow_skip($db) && $toIdx > $curIdx + 1) {
+        if (empty($perms['canAdmin']) && !act_allow_skip_for($db, $row['side']) && $toIdx > $curIdx + 1) {
             return ['success' => false, 'message' => '目前設定不允許跳過順序，請依序設定狀態'];
         }
     } else {

@@ -49,7 +49,7 @@ if (empty($_SESSION['act_csrf'])) $_SESSION['act_csrf'] = bin2hex(random_bytes(1
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 $WRITE = ['set_status', 'settle_quick_edit', 'settle_revert', 'role_matrix_save', 'workday_groups_save',
-          'settle_ex_save', 'settle_ex_delete', 'allow_skip_save', 'show_amount_save',
+          'settle_ex_save', 'settle_ex_delete', 'allow_skip_save', 'show_amount_save', 'default_per_page_save',
           'owner_pool_add', 'owner_pool_remove', 'owner_set_batch'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
@@ -71,8 +71,9 @@ switch ($action) {
             'years'   => act_years($db),
             'matrix'  => act_role_matrix($db),
             'groups'  => act_workday_groups($db),
-            'allow_skip'  => act_allow_skip($db),
-            'show_amount' => act_show_amount($db),
+            'allow_skip'       => act_allow_skip_map($db),
+            'show_amount'      => act_show_amount($db),
+            'default_per_page' => act_default_per_page($db),
         ]);
     }
 
@@ -232,11 +233,19 @@ switch ($action) {
         actOut(['message' => '已刪除']);
     }
 
-    /* ── 是否允許跳過順序／本期金額欄位是否顯示（管理員設定）────────── */
+    /* ── 是否允許跳過順序（應收/應付各自獨立）／本期金額欄位是否顯示／預設每頁筆數 ─ */
     case 'allow_skip_save': {
         if (!$perms['canAdmin']) actErr('沒有設定權限（僅本頁管理員）', 403);
-        act_allow_skip_save($db, !empty($_POST['v']) && $_POST['v'] !== '0', $uname);
-        actOut(['allow_skip' => act_allow_skip($db)]);
+        act_allow_skip_save($db, [
+            'ar' => !empty($_POST['ar']) && $_POST['ar'] !== '0',
+            'ap' => !empty($_POST['ap']) && $_POST['ap'] !== '0',
+        ], $uname);
+        actOut(['allow_skip' => act_allow_skip_map($db)]);
+    }
+    case 'default_per_page_save': {
+        if (!$perms['canAdmin']) actErr('沒有設定權限（僅本頁管理員）', 403);
+        act_default_per_page_save($db, (int)($_POST['v'] ?? 6), $uname);
+        actOut(['default_per_page' => act_default_per_page($db)]);
     }
     case 'show_amount_save': {
         if (!$perms['canAdmin']) actErr('沒有設定權限（僅本頁管理員）', 403);
