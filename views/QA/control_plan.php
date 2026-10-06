@@ -406,17 +406,18 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
                 <b>檢驗類別自動判定（IQC／IPQC／FQC）</b>：自動帶入製程列時，依下面規則判定每一道製程後面
                 接哪種檢驗。判定結果存進每一道製程列的「檢驗類別」欄位，<b>之後是人工可覆蓋的欄位</b>
                 （編輯畫面逐列下拉可改，或按「重新判定檢驗類別」套用目前規則；但「重新判定」只重算分類，
-                不會重新插入下面③的 FQC 合成列，那個只在自動帶入預覽時處理一次）。
+                不會重新插入下面的 FQC 合成列，那個只在自動帶入預覽時處理一次）。
                 <div style="margin-top:6px;">
                     <b>IQC（進料檢驗）</b>＝客供料的檢驗項目，<b>系統自動判定、不必設定</b>：
                     一條製程鏈裡最早出現的「客供料製程」（下方①目前認定清單）本身就是 IQC；查無 SIP 時
                     會退回「線上檢驗」自己的檢驗標準庫（SOP/SIP 都還沒建時至少看得到現場在用的標準）。<br>
                     <b>IPQC（製程檢驗）</b>＝SOP 中的檢驗項目，<b>預設都是 IPQC</b>（介於 IQC 與 FQC 之間的其他
                     製程維持 IPQC 不必另設）；若該製程查無已核准的 SOP，畫面會標出「缺SOP」提醒補建。<br>
-                    <b>FQC（最終檢驗）</b>＝網頁「成品檢驗」依 SIP 檢樣，<b>不是鏈上某一道製程被改判，而是在
-                    ③登記的來源製程與包裝之間插入一道新的合成列</b>（例：齒研若登記為FQC來源，齒研自己仍然是
-                    IPQC，另外多一列「齒研（最終檢驗）」＝FQC，借用齒研的 SIP 內容）；查無真正已核准的 SIP
-                    時畫面會標出「缺SIP」提醒補建。<br>
+                    <b>FQC（最終檢驗）</b>＝<b>只要鏈上有包裝，包裝前一道一律自動插入一道新的合成列</b>
+                    （不是任何既有列被改判——例如齒研，齒研自己仍然是 IPQC，另外多一列「齒研（最終檢驗）」
+                    ＝FQC），<b>不必登記任何製程代號</b>。內容依②門檻二選一：總製程數少時借用包裝前一道
+                    自己的 SIP；製程數多時改用「出貨檢驗」內容（跨製程彙整，見下方②說明）。查無內容時
+                    畫面會標出「缺SIP」或「查無出貨檢驗」提醒補建。<br>
                     <b>OQC（出貨檢驗）</b>＝包裝自主檢驗，走獨立的
                     <a href="../pm/packing_schedule.php" target="_blank">包裝排程模組</a>（自己有檢驗單號），
                     <b>本頁刻意不做 OQC 分類</b>，包裝那一列維持「非檢驗點」。
@@ -430,16 +431,14 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
                 <span class="muted">（讀「<a href="../pm/packing_schedule.php" target="_blank">包裝排程</a>→
                 包裝製程設定」的登記，與線上檢驗排除包裝站用的是同一份來源；要調整請到那一頁改，這裡唯讀）</span></div>
             <div id="packCodeList" style="margin-bottom:18px;min-height:26px;"></div>
-            <div style="margin-bottom:6px;"><b>②哪些製程代號算「FQC來源」</b>
-                <span class="muted">（例：齒研、插齒——這道製程本身仍是 IPQC，系統會在它與包裝之間
-                額外插入一道「○○（最終檢驗）」FQC 合成列，借用它的 SIP 內容；同一條鏈只認最後一個
-                〈離包裝最近〉命中的來源；一個都沒登記就不插入）</span></div>
-            <div id="fqcCodeList" style="margin-bottom:6px;min-height:26px;"></div>
-            <div class="ac-box" style="display:inline-block;margin-bottom:10px;">
-                <input type="text" id="fqcCodeAdd" placeholder="打字搜尋製程代號後點選加入" autocomplete="off" style="height:28px;min-width:260px;">
-            </div>
+            <div style="margin-bottom:6px;"><b>②FQC 內容切換門檻</b>
+                <span class="muted">（插入前的總製程數——含客供料／包裝都算在內——
+                <b>≤門檻</b>：借用包裝前一道製程自己的 SIP；<b>＞門檻</b>：改用該料號的
+                「<a href="../QC/inspection_entry_v2.php" target="_blank">線上檢驗</a>→出貨檢驗」內容，
+                那是跨製程彙整的成品確認、較適合工序較多的料號）</span></div>
             <div style="margin-bottom:18px;">
-                <button class="btn-w" id="btnSaveInspCodes"><i class="fa fa-save"></i> 儲存 FQC 來源設定</button>
+                <input type="number" id="fqcThreshold" min="1" style="width:70px;height:28px;font-size:13px;">
+                <button class="btn-w2" id="btnSaveFqcThreshold"><i class="fa fa-save"></i> 儲存門檻</button>
             </div>
 
             <div class="cp-note <?= $tagInfo['ready'] ? '' : 'warn' ?>">
@@ -463,8 +462,9 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
                 <div style="margin-top:6px;">標籤定義本身<b>只能在訂單追蹤的「設定→稽核製程標籤」改</b>，
                     本模組只讀不寫（鐵律4：同一份定義不留第二份）。</div>
                 <div style="margin-top:6px;"><b>「次站檢驗類別」</b>：這個稽核製程本身是否要指定「下一道製程」
-                    固定接 IQC 或 FQC（不指定＝照上面①②的一般規則判，判不到就是 IPQC）。
-                    這是管理員對該稽核製程的業務判斷，<b>優先序最高</b>——會覆蓋①②判出來的結果。</div>
+                    固定接 IQC（不指定＝照上面①②的一般規則判，判不到就是 IPQC）。
+                    這是管理員對該稽核製程的業務判斷，<b>優先序最高</b>——會覆蓋①②判出來的結果。
+                    （FQC 已改成「包裝前一道自動插入」，不在這裡設定，見「檢驗類別自動判定」區塊）</div>
             </div>
             <div class="cp-scroll" style="margin-bottom:10px;">
                 <table class="cp-t" id="tAsTag" style="min-width:940px;">
@@ -550,13 +550,15 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
             <p>自動帶入時每道製程會判定出該接哪種檢驗，判定結果就是<b>每一道製程列的「檢驗類別」欄位</b>
             （也會在製程名稱旁顯示徽章），<b>判定完之後是人工可覆蓋的欄位</b>，不是每次都重算。</p>
             <ul>
-                <li>預設都是 <b>IPQC（製程檢驗）</b>——介於下面兩種之間的其他製程維持 IPQC 不必另設。</li>
-                <li>管理員在「設定」挑選的<b>「後面接IQC」製程代號</b>——同一條製程鏈只認最早出現的那一個，
-                    代表材料剛進站（例如委外回廠、客供半成品銜接點），命中的那一列本身就是 <b>IQC（進料檢驗）</b>。</li>
-                <li>管理員在「設定」挑選的<b>「包裝製程」代號</b>——包裝本身不算檢驗點，<b>包裝前一道製程</b>
-                    固定接 <b>FQC（最終檢驗）</b>。</li>
-                <li><b>AS 稽核製程</b>（訂單追蹤的「稽核製程」標籤）可逐個標籤額外指定「下一站固定 IQC 或 FQC」，
-                    優先序最高，會覆蓋上面兩條規則判出來的結果。</li>
+                <li>預設都是 <b>IPQC（製程檢驗）</b>——不是下面幾種的其他製程維持 IPQC 不必另設。</li>
+                <li><b>客供料製程</b>（系統自動判定，ProcessNo=138 或名稱含「客供料」）——同一條製程鏈只認
+                    最早出現的那一個，命中的那一列本身就是 <b>IQC（進料檢驗）</b>。</li>
+                <li><b>包裝製程</b>（讀「包裝排程」設定，與線上檢驗同一份）——包裝本身不算檢驗點。</li>
+                <li><b>FQC（最終檢驗）</b>：只要鏈上有包裝，<b>包裝前一道一律自動插入一道新的合成列</b>，
+                    不是既有列被改判。內容依「設定→②FQC內容切換門檻」二選一：總製程數≤門檻借用包裝前一道
+                    的 SIP、＞門檻改用該料號的出貨檢驗內容。</li>
+                <li><b>AS 稽核製程</b>（訂單追蹤的「稽核製程」標籤）可逐個標籤額外指定「下一站固定 IQC」，
+                    優先序最高，會覆蓋上面的一般規則。</li>
             </ul>
             <p>編輯畫面「製程與管制特性」工具列有<b>「重新判定檢驗類別」</b>按鈕——手動調整過製程順序或增刪列之後，
             可依目前的設定重新套用判定（只套用在畫面上，按「儲存」才會留下）。</p>
@@ -646,7 +648,7 @@ var CANVIEW  = <?= $P['view'] ? 'true' : 'false' ?>;
 
 var STAGES = [], CLASSES = [], REACTS = [], ASMETA = {}, TAGSTATUS = {};
 var ASTAGDEFS = [], EXCLTAGS = [], REQTAGS = [];   // 稽核製程標籤定義／被排除的／要求建 CP 的
-var KGCODES = [], PACKCODES = [], FQCCODES = [], ASTAGINSP = {};   // 檢驗類別自動判定：客供料(IQC,唯讀)／包裝(唯讀)／FQC來源／AS稽核製程次站設定
+var KGCODES = [], PACKCODES = [], FQC_THRESHOLD = 4, ASTAGINSP = {};   // 檢驗類別自動判定：客供料(IQC,唯讀)／包裝(唯讀)／FQC內容切換門檻／AS稽核製程次站設定
 var DOC = null;          // 目前編輯中的 CP
 var LIST_PAGE = 1;
 var PREVIEW = null;      // 自動帶入預覽結果
@@ -707,7 +709,7 @@ function boot(){
         REACTS = res.reaction_opts || []; ASMETA = res.as_doc || {};
         TAGSTATUS = res.tag_status || {};
         ASTAGDEFS = res.as_tag_defs || []; EXCLTAGS = res.excluded_as_tags || []; REQTAGS = res.required_as_tags || [];
-        KGCODES = res.kg_codes || []; PACKCODES = res.pack_codes || []; FQCCODES = res.fqc_codes || [];
+        KGCODES = res.kg_codes || []; PACKCODES = res.pack_codes || []; FQC_THRESHOLD = res.fqc_threshold || 4;
         ASTAGINSP = res.as_tag_insp || {};
         fillStageSelects();
         loadList();
@@ -912,7 +914,8 @@ function renderProcs(){
           +   '<span class="pname">'+(pi+1)+'. '+esc(p.process_name || ('製程 ' + (p.process_no || '')))+'</span>'
           +   (p.process_no ? '<span class="src-tag">#'+esc(p.process_no)+'</span>' : '')
           +   (p.src === 'bom' ? '<span class="src-tag">來自製令</span>'
-               : p.src === 'fqc_insert' ? '<span class="src-tag" title="依「設定→②FQC來源」自動插入，可自行調整或刪除">自動插入(FQC)</span>'
+               : p.src === 'fqc_insert' ? '<span class="src-tag" title="包裝前一道自動插入，內容借用前一道製程的SIP，可自行調整或刪除">自動插入(FQC)</span>'
+               : p.src === 'fqc_insert_ship' ? '<span class="src-tag" title="包裝前一道自動插入，製程數超過門檻改用出貨檢驗內容，可自行調整或刪除">自動插入(FQC/出貨檢驗)</span>'
                : '<span class="src-tag">手動</span>')
           +   (+p.is_outsource ? '<span class="tag-s sg-2">委外</span>' : '')
           +   inspBadge(p.insp_stage, p.insp_gap)
@@ -1003,7 +1006,7 @@ function inspBadge(stage, gap){
 }
 /* 特性列右上角小籤：這一列的規格是哪裡來的（cp_sip_items 的 src）——顯示一律大寫縮寫，不要印原始小寫代碼 */
 var ITEM_SRC_LABEL = { sip: 'SIP', sip_general: 'SIP(通用)', sip_general_cat: 'SIP(同大類通用)',
-    qcv2: '線上檢驗標準', tpl: '範本', tpl_cat: '範本(同大類)', manual: '手動' };
+    qcv2: '線上檢驗標準', ship: '出貨檢驗', tpl: '範本', tpl_cat: '範本(同大類)', manual: '手動' };
 function itemSrcLabel(src){ return ITEM_SRC_LABEL[src] || (src || ''); }
 function inspSelect(p, pi){
     var opts = [['', '—（包裝／不適用）'], ['IQC','IQC（進料檢驗）'], ['IPQC','IPQC（製程檢驗）'], ['FQC','FQC（最終檢驗）']];
@@ -1679,52 +1682,26 @@ function renderCfg(){
 
     renderCodeChips('#kgCodeList', KGCODES, true);
     renderCodeChips('#packCodeList', PACKCODES, true);
-    renderCodeChips('#fqcCodeList', FQCCODES);
+    $('#fqcThreshold').val(FQC_THRESHOLD);
     renderTagCfg();
 }
 
-/* FQC來源製程代號清單：標籤式 chip，可逐個 × 移除；readOnly=true 時（客供料／包裝清單）不給刪 */
-function renderCodeChips(sel, list, readOnly){
+/* 製程代號清單：唯讀標籤式 chip（客供料／包裝，兩者都改自動判定，這裡只是顯示目前認定結果） */
+function renderCodeChips(sel, list){
     var h = '';
-    (list || []).forEach(function(c, i){
+    (list || []).forEach(function(c){
         h += '<span class="tag-s sg-1" style="margin:2px 4px 2px 0;font-size:12px;line-height:18px;padding:2px 8px;">'
-           + '#'+esc(c.no)+' '+esc(c.name||'')
-           + (readOnly ? '' : ' <a href="#" data-chipdel="'+i+'" data-chiplist="'+sel+'" style="color:#8c2d18;">&times;</a>')
-           + '</span>';
+           + '#'+esc(c.no)+' '+esc(c.name||'') + '</span>';
     });
     $(sel).html(h || '<span class="muted">尚未設定</span>');
 }
-$(document).on('click', '[data-chipdel]', function(e){
-    e.preventDefault();
-    var sel = $(this).data('chiplist'), i = +$(this).data('chipdel');
-    var list = FQCCODES;
-    list.splice(i, 1);
-    renderCodeChips(sel, list);
-});
-/* 製程代號自動完成（走既有 search_process，不自刻一套搜尋） */
-function bindProcessAc($inp, onPick){
-    $inp.on('input', function(){
-        var kw = $(this).val().trim(), $me = $(this);
-        clearTimeout(acTimer);
-        if (!kw) { acHide(); return; }
-        acTimer = setTimeout(function(){
-            get('search_process', { kw: kw }, function(res){
-                acShow($me, res.rows || [], function(r){
-                    return '<b>#'+esc(r.ProcessNo)+'</b> '+esc(r.ProcessName||'');
-                }, onPick);
-            });
-        }, 300);
-    });
-}
-bindProcessAc($('#fqcCodeAdd'), function(r){
-    if (!FQCCODES.some(function(c){ return +c.no === +r.ProcessNo; })) FQCCODES.push({ no: +r.ProcessNo, name: r.ProcessName || '' });
-    $('#fqcCodeAdd').val(''); renderCodeChips('#fqcCodeList', FQCCODES);
-});
-$('#btnSaveInspCodes').on('click', function(){
-    post('fqc_codes_save', { codes: JSON.stringify(FQCCODES.map(function(c){ return c.no; })) }, function(res2){
-        FQCCODES = res2.codes || FQCCODES;
-        renderCodeChips('#fqcCodeList', FQCCODES);
-        toast('已儲存 FQC 來源設定。');
+$('#btnSaveFqcThreshold').on('click', function(){
+    var v = +$('#fqcThreshold').val() || 0;
+    if (v <= 0) { toast('門檻需為正整數。', true); return; }
+    post('fqc_threshold_save', { threshold: v }, function(res){
+        FQC_THRESHOLD = res.fqc_threshold || v;
+        $('#fqcThreshold').val(FQC_THRESHOLD);
+        toast('已儲存。');
     });
 });
 function clsRow(c){
@@ -1858,10 +1835,11 @@ function renderTagCfg(){
               +    '<input type="checkbox" class="tagck" value="'+t.tag_id+'"'+(req?' checked':'')+(off?' disabled':'')+'> '
               +    (off ? '<span class="muted">停用中不認定</span>' : '要求') + '</label></td>'
               +  '<td><select class="tagInspSel" data-tagid="'+t.tag_id+'" style="width:100%;height:26px;font-size:12px;">'
-              +    '<option value=""'+(insp===''?' selected':'')+'>（不指定）</option>'
+              +    '<option value=""'+(insp===''||insp==='FQC'?' selected':'')+'>（不指定）</option>'
               +    '<option value="IQC"'+(insp==='IQC'?' selected':'')+'>下一站固定 IQC</option>'
-              +    '<option value="FQC"'+(insp==='FQC'?' selected':'')+'>下一站固定 FQC</option>'
-              +  '</select></td>'
+              +  '</select>'
+              +    (insp==='FQC' ? '<div class="muted" style="font-size:11px;">原設定「下一站固定FQC」已改為自動判定（見上方②），存檔後會清掉這個舊值</div>' : '')
+              +  '</td>'
               +  '</tr>';
         });
         $('#tAsTag tbody').html(h);

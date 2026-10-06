@@ -71,7 +71,7 @@ case 'bootstrap': {
         'required_as_tags'=> cp_required_as_tags($db),
         'kg_codes'        => cp_kg_codes_detail($db),
         'pack_codes'      => cp_pack_codes_detail($db),
-        'fqc_codes'       => cp_fqc_codes_detail($db),
+        'fqc_threshold'   => cp_fqc_threshold($db),
         'as_tag_insp'     => cp_as_tag_insp($db),
         'csrf'            => $_SESSION['cp_csrf'] ?? '',
     ]);
@@ -448,15 +448,17 @@ case 'excluded_as_tags_save': {
     ]);
 }
 
-/* 哪些製程代號算「FQC來源」，命中時在它與包裝之間插入一道合成FQC列（見 control_plan_lib.php 六之二節⑤）。
-   IQC 已改客供料自動判定、包裝已改讀 packing_schedule.php 的權威登記，兩者都不再需要人工設代號。 */
-case 'fqc_codes_save': {
+/* FQC 2026-10-06（三次）起改用「包裝前一道」位置判定自動插入（見 cp_insert_fqc_row()），
+   不再需要任何登記；內容依「總製程數≤門檻用SIP／＞門檻用出貨檢驗」，門檻見下方 fqc_threshold_save。 */
+case 'fqc_threshold_save': {
     if (!$perm['admin']) { http_response_code(403); jerr('只有管制計畫管理員可以改設定'); }
-    cp_fqc_codes_save($db, $jsonArr('codes'));
-    jout(true, ['message' => '已儲存。', 'codes' => cp_fqc_codes_detail($db)]);
+    $v = (int)($_POST['threshold'] ?? 0);
+    if ($v <= 0) jerr('門檻需為正整數。');
+    cp_fqc_threshold_save($db, $v);
+    jout(true, ['message' => '已儲存。', 'fqc_threshold' => cp_fqc_threshold($db)]);
 }
 
-/* AS稽核製程逐個標籤設定「下一站固定IQC或FQC」（map: tag_id=>'IQC'/'FQC'/''） */
+/* AS稽核製程逐個標籤設定「下一站固定IQC」（map: tag_id=>'IQC'/''；FQC 選項已移除，見上方說明） */
 case 'as_tag_insp_save': {
     if (!$perm['admin']) { http_response_code(403); jerr('只有管制計畫管理員可以改設定'); }
     cp_as_tag_insp_save($db, $jsonArr('map'));

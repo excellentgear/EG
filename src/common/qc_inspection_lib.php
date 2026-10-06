@@ -504,3 +504,32 @@ if (!function_exists('qc_v2_items_by_process')) {
         } catch (Throwable $e) { return []; }
     }
 }
+
+if (!function_exists('qc_v2_ship_items')) {
+    /**
+     * 該料號的「出貨檢驗」(inspection_entry_v2.php insp_kind=SHIP) 內容。
+     * 出貨檢驗**不是**像其他製程那樣有一份固定範本——它是 QC 第一次對這張 BOM
+     * 按「出貨檢驗→自動生成」時，從各製程最後一批的實測數據逐項目挑選組成，
+     * 存檔時才會在 qc_inspection_item 補一組 process_name='出貨檢驗' 的項目
+     * （該頁註解：「找不到才新建且 is_active=0」——這組天生就是 is_active=0，
+     * 不是「停用的舊標準」，是「還沒被人正式核可成通用標準」，所以這裡**刻意不照
+     * qc_v2_items_by_process() 的規則濾掉 is_active=0**，否則這個來源永遠讀不到
+     * 任何東西）。沒有任何出貨檢驗紀錄時回空陣列，管制計畫那邊需要有對應的
+     * 「查無出貨檢驗標準」提示，不可以假裝有資料。
+     */
+    function qc_v2_ship_items(PDO $pdo, int $dId): array {
+        if ($dId <= 0) return [];
+        try {
+            $st = $pdo->prepare(
+                "SELECT i.item_id, i.item_code, i.item_name, i.standard_text,
+                        i.plus_tolerance, i.minus_tolerance, i.result_type, i.sort_order
+                   FROM qc_inspection_item i
+                   JOIN qc_inspection_version v ON v.version_id = i.version_id AND v.is_active=1 AND v.d_id=?
+                  WHERE i.process_name='出貨檢驗'
+                  ORDER BY i.sort_order, i.item_id"
+            );
+            $st->execute([$dId]);
+            return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        } catch (Throwable $e) { return []; }
+    }
+}
