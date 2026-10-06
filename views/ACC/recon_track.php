@@ -14,6 +14,14 @@
  *   art_admin    本頁管理員（可修改）：任意設定/回復任何狀態、改結帳日、改權限矩陣
  *   art_view_all 本頁管理員（唯讀）：看得到全部，不能按任何按鈕、不能改設定
  *   art_pm / art_sales / art_acc：生管／業務／會計，哪個角色可以按哪個狀態由「設定→角色權限矩陣」決定
+ *
+ * 2026-10-06（二次，使用者回報修正）：
+ *  ①狀態預設留空（不自動顯示「處理中」）②狀態按鈕顯示全部可按選項，可跳過順序（跳過的
+ *  中間狀態日期自動帶入與實際按下那格相同的時間，見 acc_track_lib.php act_set_status()）
+ *  ③是否允許跳過順序由管理員在設定開關（allow_skip）④「本期金額」欄位可由管理員設定隱藏
+ *  （show_amount）⑤客戶/廠商編號顯示在最左側⑥修改紀錄改成獨立頁內分頁（不在每列後面）
+ *  ⑦結帳月份加前後切換按鈕⑧每頁預設 10 筆、換頁鈕在表格右上角⑨應收新增負責人候選名單
+ *  （部門→選人）與批次指派。
  */
 ini_set('session.gc_maxlifetime', 43200);
 session_set_cookie_params(43200);
@@ -94,6 +102,8 @@ body { background:#F6F1EA; }
 .main-tabs button { border:1px solid var(--line); background:#fff; color:#6B4423; padding:6px 16px; border-radius:16px; font-size:13px; font-weight:700; cursor:pointer; }
 .main-tabs button.on { background:var(--ink); color:#fff; border-color:var(--ink); }
 .art-tabpane { display:none; } .art-tabpane.on { display:block; }
+.bm-nav { display:flex; align-items:center; gap:3px; }
+.bm-nav .btn { padding:3px 7px; }
 /* 狀態卡片／籤 */
 .st-cards { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
 .st-card { flex:1 1 110px; min-width:110px; background:#fff; border:1px solid var(--line); border-top:3px solid var(--muted);
@@ -101,19 +111,21 @@ body { background:#F6F1EA; }
 .st-card.on { outline:2px solid var(--amber-d); }
 .st-card .lab { font-size:11px; color:var(--muted); }
 .st-card .val { font-size:22px; font-weight:700; color:var(--ink); }
+.st-card[data-st=""]             { border-top-color:#C9BBA3; }
 .st-card[data-st="processing"]   { border-top-color:#a08a6f; }
 .st-card[data-st="reconciled"]   { border-top-color:var(--amber); }
 .st-card[data-st="sent_to_acc"]  { border-top-color:#C77C1A; }
 .st-card[data-st="acc_received"] { border-top-color:#5B8A72; }
 .st-card[data-st="acc_done"]     { border-top-color:#2E7D32; }
-.badge-st { display:inline-block; border-radius:10px; padding:2px 9px; font-size:11px; font-weight:700; color:#fff; white-space:nowrap; }
-.badge-processing   { background:#a08a6f; }
-.badge-reconciled   { background:var(--amber); color:#4E2C0B; }
+.badge-st { display:inline-block; border-radius:10px; padding:2px 9px; font-size:11px; font-weight:700; color:#fff; white-space:nowrap; line-height:16px; }
+.badge-empty        { background:#D8CBB4; color:#5A4328; }
+.badge-processing    { background:#a08a6f; }
+.badge-reconciled    { background:var(--amber); color:#4E2C0B; }
 .badge-sent_to_acc   { background:#C77C1A; }
-.badge-acc_received { background:#5B8A72; }
-.badge-acc_done      { background:#2E7D32; }
-.badge-need  { background:var(--coral); color:#fff; border-radius:9px; padding:1px 7px; font-size:10px; }
-.badge-nneed { background:#E4D3BC; color:#6B4423; border-radius:9px; padding:1px 7px; font-size:10px; }
+.badge-acc_received  { background:#5B8A72; }
+.badge-acc_done       { background:#2E7D32; }
+.badge-need  { background:var(--coral); color:#fff; border-radius:9px; padding:3px 11px; font-size:13px; font-weight:600; line-height:18px; display:inline-block; }
+.badge-nneed { background:#E4D3BC; color:#6B4423; border-radius:9px; padding:3px 11px; font-size:13px; font-weight:600; line-height:18px; display:inline-block; }
 table.art-t { width:100%; border-collapse:collapse; font-size:12px; table-layout:fixed; }
 table.art-t th, table.art-t td { border:1px solid var(--line); padding:5px 6px; vertical-align:middle; word-break:break-all; line-height:1.5; }
 table.art-t th { background:#faf6f0; color:#6B4423; font-weight:700; text-align:center; white-space:nowrap; }
@@ -125,6 +137,15 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
 .row-btn { font-size:11px; padding:2px 9px; border-radius:10px; margin:1px; }
 .icon-btn { border:none; background:none; color:var(--brown); cursor:pointer; font-size:14px; padding:2px 4px; }
 .icon-btn:hover { color:var(--coral); }
+/* 頁內分頁（換頁鈕一律放表格右上角） */
+.art-pager-row { display:flex; justify-content:flex-end; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap; }
+.art-pager { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
+.art-pager button { border:1px solid var(--line); background:#fff; color:#6B4423; border-radius:4px; padding:2px 10px; font-size:12px; cursor:pointer; }
+.art-pager button:hover:not(:disabled) { background:var(--sand); }
+.art-pager button:disabled { opacity:.4; cursor:default; }
+/* 批次操作列（勾選後出現） */
+.batch-bar { display:none; align-items:center; gap:10px; background:#FBEFD9; border:1px solid var(--amber); border-radius:6px; padding:6px 10px; margin-bottom:8px; font-size:12px; color:#6B4423; }
+.batch-bar.show { display:flex; }
 /* 跳窗 */
 .m-mask { position:fixed; inset:0; background:rgba(74,53,36,.45); z-index:10300; display:none; }
 .m-win  { background:#fff; border-radius:8px; width:760px; max-width:95vw; margin:4vh auto;
@@ -155,6 +176,9 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
 .ins-warn { border-left-color:var(--amber); }  .ins-warn .ic { color:var(--amber-d); }
 .ins-good { border-left-color:#4F8A4F; }       .ins-good .ic { color:#2E7D32; }
 .ins-info { border-left-color:#B9A78C; }       .ins-info .ic { color:var(--muted); }
+.opt-chk { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--ink); margin-right:16px; font-weight:normal; cursor:pointer; }
+.pool-ppl { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; max-height:160px; overflow:auto; border:1px solid var(--line); border-radius:6px; padding:8px; }
+.pool-ppl label { font-size:12px; font-weight:normal; display:flex; align-items:center; gap:4px; margin:0; }
 </style>
 </head>
 <body class="nav-sm">
@@ -188,6 +212,7 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
   <div class="main-tabs">
     <button id="tabList" class="on" onclick="switchTab('list')"><i class="fa fa-list"></i> 進度清單</button>
     <button id="tabStat" onclick="switchTab('stat')"><i class="fa fa-bar-chart"></i> 統計分析</button>
+    <button id="tabLog" onclick="switchTab('log')"><i class="fa fa-history"></i> 修改紀錄</button>
   </div>
 
   <!-- ══════════ 進度清單 ══════════ -->
@@ -195,16 +220,36 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
     <div class="sec">
       <h4>
         <span id="listTitle">應收 進度清單</span>
-        <span class="hint">依結帳月份顯示，每月第一次開啟時系統會自動建立追蹤列（預設狀態：處理中）</span>
+        <span class="hint">依結帳月份顯示，狀態預設留空，要有人實際按過才算</span>
         <div class="sec-tools">
           <label>結帳月份</label>
-          <input type="month" id="fBm" class="form-control input-sm" style="width:130px;" onchange="loadList()">
+          <div class="bm-nav">
+            <button class="btn btn-xs btn-warm-o" onclick="shiftBm(-1)"><i class="fa fa-chevron-left"></i></button>
+            <input type="month" id="fBm" class="form-control input-sm" style="width:130px;" onchange="loadList()">
+            <button class="btn btn-xs btn-warm-o" onclick="shiftBm(1)"><i class="fa fa-chevron-right"></i></button>
+          </div>
           <input type="text" id="fKw" class="form-control input-sm" style="width:160px;" placeholder="搜尋客戶/廠商名稱…" onkeyup="if(event.key==='Enter')loadList()">
           <button class="btn btn-sm btn-warm-o" onclick="loadList()"><i class="fa fa-search"></i> 查詢</button>
         </div>
       </h4>
       <div class="st-cards" id="stCards"></div>
-      <div class="tbl-wrap"><table class="art-t" id="listTbl"><thead></thead><tbody><tr><td colspan="9" class="c">請選擇結帳月份</td></tr></tbody></table></div>
+      <div class="batch-bar" id="batchBar">
+        <span><i class="fa fa-check-square-o"></i> 已選 <b id="batchCnt">0</b> 筆</span>
+        <button class="btn btn-xs btn-warm" onclick="openOwnerAssignMask()"><i class="fa fa-user"></i> 批次設定負責人</button>
+        <button class="btn btn-xs btn-default" onclick="clearSelection()">取消選取</button>
+      </div>
+      <div class="art-pager-row">
+        <div class="art-pager">
+          <label>每頁</label>
+          <select id="listPerPage" class="form-control input-sm" style="width:70px;display:inline-block;" onchange="LIST_PAGE=1;LIST_PER_PAGE=parseInt(this.value);renderListTbl();">
+            <option value="5">5</option><option value="10" selected>10</option><option value="20">20</option><option value="50">50</option>
+          </select>
+          <button onclick="listPagePrev()"><i class="fa fa-angle-left"></i></button>
+          <span id="listPageLabel">第 1 / 1 頁</span>
+          <button onclick="listPageNext()"><i class="fa fa-angle-right"></i></button>
+        </div>
+      </div>
+      <div class="tbl-wrap"><table class="art-t" id="listTbl"><thead></thead><tbody><tr><td class="c">請選擇結帳月份</td></tr></tbody></table></div>
     </div>
   </div>
 
@@ -234,6 +279,37 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
     </div>
   </div>
 
+  <!-- ══════════ 修改紀錄（獨立分頁）══════════ -->
+  <div class="art-tabpane" id="paneLog">
+    <div class="sec">
+      <h4>
+        修改紀錄
+        <span class="hint">客戶/廠商結帳日快速修改的異動紀錄，跨對象彙總</span>
+        <div class="sec-tools">
+          <label>對象類型</label>
+          <select id="logType" class="form-control input-sm" style="width:90px;" onchange="LOG_PAGE=1;loadLog();">
+            <option value="">全部</option><option value="customer">客戶</option><option value="maker">廠商</option>
+          </select>
+          <input type="text" id="logKw" class="form-control input-sm" style="width:160px;" placeholder="搜尋客戶/廠商名稱或編號…" onkeyup="if(event.key==='Enter'){LOG_PAGE=1;loadLog();}">
+          <button class="btn btn-sm btn-warm-o" onclick="LOG_PAGE=1;loadLog();"><i class="fa fa-search"></i> 查詢</button>
+        </div>
+      </h4>
+      <div class="art-pager-row">
+        <div class="art-pager">
+          <label>每頁</label>
+          <select id="logPerPage" class="form-control input-sm" style="width:70px;display:inline-block;" onchange="LOG_PAGE=1;LOG_PER_PAGE=parseInt(this.value);loadLog();">
+            <option value="10">10</option><option value="20" selected>20</option><option value="50">50</option>
+          </select>
+          <button onclick="logPagePrev()"><i class="fa fa-angle-left"></i></button>
+          <span id="logPageLabel">第 1 / 1 頁</span>
+          <button onclick="logPageNext()"><i class="fa fa-angle-right"></i></button>
+        </div>
+      </div>
+      <div class="tbl-wrap"><table class="art-t" id="logTbl"><thead>
+        <tr><th style="width:140px;">對象</th><th>欄位</th><th>修改前</th><th>修改後</th><th style="width:90px;">修改人</th><th style="width:130px;">修改時間</th><th style="width:100px;">狀態</th><th style="width:60px;">操作</th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </div>
+
 <?php endif; ?>
 </div><!-- /right_col -->
 
@@ -242,13 +318,28 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
   <div class="m-win wide">
     <div class="m-head">對帳進度追蹤 — 設定 <span class="x" data-close="setMask">✕</span></div>
     <div class="m-body">
-      <h4 style="font-size:14px;">角色權限矩陣 <span class="hint" style="font-size:11px;color:#888;">勾選的角色可以把狀態按鈕按成該列狀態；本頁管理員(art_admin)不受此限，永遠可以任意設定/回復</span></h4>
+      <h4 style="font-size:14px;">一般設定</h4>
+      <label class="opt-chk"><input type="checkbox" id="optAllowSkip"> 允許跳過順序（可直接按較後面的狀態，中間階段的日期自動帶入同一個時間）</label>
+      <label class="opt-chk"><input type="checkbox" id="optShowAmount"> 顯示「本期金額(含稅)」欄位</label>
+
+      <h4 style="font-size:14px;margin-top:16px;">角色權限矩陣 <span class="hint" style="font-size:11px;color:#888;">勾選的角色可以把狀態按鈕按成該列狀態；本頁管理員(art_admin)不受此限，永遠可以任意設定/回復</span></h4>
       <div id="matrixWrap"></div>
+
       <h4 style="font-size:14px;margin-top:16px;">工作天數統計分組</h4>
       <table class="art-t" id="groupTbl" style="margin-bottom:6px;"><thead>
         <tr><th>名稱</th><th>起點</th><th>終點</th><th style="width:40px;"></th></tr></thead>
         <tbody id="groupTbody" data-eg-row-add="groupAdd" data-eg-row-del="groupDel"></tbody></table>
       <button class="btn btn-sm btn-warm-o" onclick="groupAdd()"><i class="fa fa-plus"></i> 加一組</button>
+
+      <h4 style="font-size:14px;margin-top:16px;">應收負責人候選名單 <span class="hint" style="font-size:11px;color:#888;">先選部門，從部門人員裡挑選加入候選名單，供進度清單批次指派</span></h4>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+        <select id="poolDept" class="form-control input-sm" style="width:160px;" onchange="loadDeptPeople()"><option value="">— 選部門 —</option></select>
+        <button class="btn btn-sm btn-warm-o" onclick="addCheckedToPool()"><i class="fa fa-plus"></i> 加入候選名單</button>
+      </div>
+      <div class="pool-ppl" id="poolPplWrap"><span class="hint">請先選部門</span></div>
+      <table class="art-t" style="margin-top:6px;"><thead><tr><th>部門</th><th>姓名</th><th style="width:40px;"></th></tr></thead>
+        <tbody id="poolTbody"></tbody></table>
+
       <div class="err-txt" id="setErr"></div>
     </div>
     <div class="m-foot">
@@ -274,7 +365,7 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
       <div class="form-group" id="seDayWrap"><label>固定結帳日（1~31）</label>
         <input type="number" id="seDay" class="form-control" min="1" max="31"></div>
       <div class="err-txt" id="settleErr"></div>
-      <p style="font-size:11px;color:#888;">修改會同步寫回<?= '' ?>客戶/廠商主檔，並留下修改紀錄（可在「修改紀錄」查看與快速復原）。</p>
+      <p style="font-size:11px;color:#888;">修改會同步寫回客戶/廠商主檔，並留下修改紀錄（可到「修改紀錄」分頁查看與快速復原）。</p>
     </div>
     <div class="m-foot">
       <button class="btn btn-default" data-close="settleMask">關閉</button>
@@ -283,13 +374,21 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
   </div>
 </div>
 
-<!-- ══════════ 修改紀錄 ══════════ -->
-<div class="m-mask" id="logMask">
-  <div class="m-win">
-    <div class="m-head">修改紀錄 <span class="x" data-close="logMask">✕</span></div>
-    <div class="m-body"><div class="tbl-wrap" style="max-height:400px;"><table class="art-t" id="logTbl"><thead>
-      <tr><th>欄位</th><th>修改前</th><th>修改後</th><th>修改人</th><th>修改時間</th><th>狀態</th><th>操作</th></tr></thead><tbody></tbody></table></div></div>
-    <div class="m-foot"><button class="btn btn-default" data-close="logMask">關閉</button></div>
+<!-- ══════════ 批次設定負責人（應收）══════════ -->
+<div class="m-mask" id="ownerMask">
+  <div class="m-win" style="width:420px;">
+    <div class="m-head">批次設定負責人 <span class="x" data-close="ownerMask">✕</span></div>
+    <div class="m-body">
+      <p id="ownerAssignCnt" style="font-weight:700;color:var(--ink);"></p>
+      <div class="form-group"><label>負責人</label>
+        <select id="ownerSelect" class="form-control"><option value="">（清空負責人）</option></select>
+      </div>
+      <div class="err-txt" id="ownerErr"></div>
+    </div>
+    <div class="m-foot">
+      <button class="btn btn-default" data-close="ownerMask">關閉</button>
+      <button class="btn btn-warm" onclick="saveOwnerAssign()">套用</button>
+    </div>
   </div>
 </div>
 
@@ -325,17 +424,21 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
       <ul>
         <li>應收：選定結帳月份後，自動抓出該月有出貨紀錄的客戶（與出貨單、對帳作業同一套結帳日口徑）。</li>
         <li>應付：自動抓出該結帳月份有加工移轉憑單的廠商（與「製程移轉一覽表」同一套廠商結帳日口徑）。</li>
-        <li>第一次開啟某個月份時，系統會自動把這些對象建成追蹤列，預設狀態「處理中」。</li>
+        <li>狀態預設留空（尚未開始），要有人實際按過狀態按鈕才會改變，不會自動顯示「處理中」。</li>
       </ul>
       <h4>狀態按鈕</h4>
       <ul>
+        <li>操作欄顯示目前這個人可以按的所有狀態（可能不只一個），可以跳過中間階段直接按較後面的狀態——跳過的階段日期會自動帶入與實際按下那格相同的時間，工作天數統計才算得出來。</li>
+        <li>是否允許跳過順序可在「設定」關閉，關閉後只能依序一步一步按。</li>
         <li>每個狀態能不能由哪個角色按，由管理員在「設定→角色權限矩陣」調整（同一個狀態可以同時勾生管與業務）。</li>
-        <li>本頁管理員（art_admin）不受矩陣限制，可以任意設定或回復任何狀態。</li>
+        <li>往回退到較早的狀態僅本頁管理員（art_admin）可做。</li>
       </ul>
       <h4>結帳日快速修改</h4>
-      <p>管理員可在清單上直接修改客戶/廠商的結帳模式與固定結帳日，會同步寫回主檔管理（客戶/廠商分頁），並留下修改紀錄（欄位、修改前後、修改人、時間），可一鍵復原。</p>
+      <p>管理員可在清單上直接修改客戶/廠商的結帳模式與固定結帳日，會同步寫回主檔管理（客戶/廠商分頁），並留下修改紀錄，可到「修改紀錄」分頁查看與一鍵復原。</p>
       <h4>臨時結帳調整（僅應收）</h4>
-      <p>某客戶某個月結帳日臨時提前或延後，可在清單的「臨時結帳調整」按鈕設定，與主檔管理→客戶編輯的設定是同一份資料。</p>
+      <p>某客戶某個月結帳日臨時提前或延後，可在清單每一列的「臨時調整」按鈕設定，與主檔管理→客戶編輯的設定是同一份資料。</p>
+      <h4>應收負責人</h4>
+      <p>管理員在「設定」先選部門、從部門人員裡挑人加入候選名單；進度清單勾選多筆客戶後按「批次設定負責人」即可一次指派。</p>
       <h4>統計分析</h4>
       <p>按月/季/半年/年切換期間，看各分組（如「結帳日→已送會計」）的平均工作天數、本期自動分析（與上一期比較），以及本年度各期別的趨勢圖。分組可在「設定」新增/修改。</p>
       <h4>權限角色</h4>
@@ -360,8 +463,11 @@ var API = '../../src/store/AccTrack_API.php';
 var CSRF = <?= json_encode($CSRF) ?>;
 var PERMS = <?= json_encode($perms) ?>;
 var STATUSES = {}, ANCHORS = {}, MATRIX = {}, GROUPS = [];
+var ALLOW_SKIP = true, SHOW_AMOUNT = true;
 var SIDE = 'ar';
 var LAST_ROWS = [];
+var SELECTED = {};   // track_id => true（跨換頁保留）
+var OWNER_POOL = [];
 
 function openMask(id){ document.getElementById(id).style.display='block'; }
 function closeMask(id){ document.getElementById(id).style.display='none'; }
@@ -376,11 +482,13 @@ function showToast(msg, type){
 }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function fmtMoney(v){ v = Number(v||0); return v.toLocaleString('en-US', {maximumFractionDigits:0}); }
+function statusLabel(k){ return (k==='' || k==null) ? '尚未開始' : (STATUSES[k] || k); }
+function statusBadge(k){ return '<span class="badge-st badge-' + (k===''?'empty':k) + '">' + esc(statusLabel(k)) + '</span>'; }
 
 function api(data){
     data = data || {};
     data.csrf = CSRF;
-    return $.ajax({ url: API, method: (data.action && data._get) ? 'GET' : 'POST', data: data, dataType: 'json' })
+    return $.ajax({ url: API, method: 'POST', data: data, dataType: 'json' })
         .fail(function(xhr){
             var r = {}; try { r = JSON.parse(xhr.responseText); } catch(e){}
             showToast(r.error || '發生錯誤', 'error');
@@ -394,21 +502,26 @@ function apiGet(action, params){
     });
 }
 
-/* ── 側別切換 ─────────────────────────────────────────────── */
+/* ── 側別切換／分頁切換 ──────────────────────────────────────── */
 function setSide(s){
     SIDE = s;
     document.getElementById('sideAr').classList.toggle('on', s==='ar');
     document.getElementById('sideAp').classList.toggle('on', s==='ap');
     document.getElementById('listTitle').textContent = (s==='ar' ? '應收' : '應付') + ' 進度清單';
+    clearSelection();
+    LIST_PAGE = 1;
     loadList();
     if (document.getElementById('paneStat').classList.contains('on')) loadStat();
 }
 function switchTab(t){
     document.getElementById('tabList').classList.toggle('on', t==='list');
     document.getElementById('tabStat').classList.toggle('on', t==='stat');
+    document.getElementById('tabLog').classList.toggle('on', t==='log');
     document.getElementById('paneList').classList.toggle('on', t==='list');
     document.getElementById('paneStat').classList.toggle('on', t==='stat');
+    document.getElementById('paneLog').classList.toggle('on', t==='log');
     if (t==='stat') loadStat();
+    if (t==='log') loadLog();
 }
 
 /* ── 進度清單 ─────────────────────────────────────────────── */
@@ -416,28 +529,36 @@ function defaultBm(){
     var d = new Date(); var m = d.getMonth()+1;
     return d.getFullYear() + '-' + (m<10?'0'+m:m);
 }
+function shiftBm(delta){
+    var v = document.getElementById('fBm').value || defaultBm();
+    var p = v.split('-'); var y = parseInt(p[0],10), m = parseInt(p[1],10) + delta;
+    if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; }
+    document.getElementById('fBm').value = y + '-' + (m<10?'0'+m:m);
+    loadList();
+}
 var ST_FILTER = '';
+var CARD_ORDER = [];
 function renderStCards(counts){
     var html = '';
-    Object.keys(STATUSES).forEach(function(k){
+    CARD_ORDER.forEach(function(k){
         html += '<div class="st-card' + (ST_FILTER===k?' on':'') + '" data-st="' + k + '" onclick="toggleStFilter(\'' + k + '\')">' +
-            '<div class="lab">' + esc(STATUSES[k]) + '</div><div class="val">' + (counts[k]||0) + '</div></div>';
+            '<div class="lab">' + esc(statusLabel(k)) + '</div><div class="val">' + (counts[k]||0) + '</div></div>';
     });
     document.getElementById('stCards').innerHTML = html;
 }
 function toggleStFilter(k){ ST_FILTER = (ST_FILTER===k) ? '' : k; loadList(); }
 
-function nextAllowedStatus(row){
+function allowedTargets(row){
     var order = Object.keys(STATUSES);
-    var i = order.indexOf(row.status);
-    if (i < 0 || i >= order.length-1) return null;
-    var to = order[i+1];
-    if (PERMS.canAdmin) return to;
-    var allowed = (MATRIX[row.side] && MATRIX[row.side][to]) || [];
-    if (PERMS.isPm && allowed.indexOf('art_pm')>=0) return to;
-    if (PERMS.isSales && allowed.indexOf('art_sales')>=0) return to;
-    if (PERMS.isAcc && allowed.indexOf('art_acc')>=0) return to;
-    return null;
+    var curIdx = row.status === '' ? -1 : order.indexOf(row.status);
+    var candidates = ALLOW_SKIP ? order.slice(curIdx+1) : order.slice(curIdx+1, curIdx+2);
+    if (PERMS.canAdmin) return candidates;
+    var out = [];
+    candidates.forEach(function(s){
+        var allowed = (MATRIX[row.side] && MATRIX[row.side][s]) || [];
+        if ((PERMS.isPm && allowed.indexOf('art_pm')>=0) || (PERMS.isSales && allowed.indexOf('art_sales')>=0) || (PERMS.isAcc && allowed.indexOf('art_acc')>=0)) out.push(s);
+    });
+    return out;
 }
 
 function loadList(){
@@ -448,67 +569,126 @@ function loadList(){
         if (!r || !r.ok) return;
         LAST_ROWS = r.rows;
         renderStCards(r.counts);
-        renderListTbl(r.rows);
+        LIST_PAGE = 1;
+        renderListTbl();
     });
 }
-function renderListTbl(rows){
+
+/* 頁內分頁（換頁鈕在表格右上角，預設每頁 10 筆） */
+var LIST_PAGE = 1, LIST_PER_PAGE = 10;
+function listPagePrev(){ if (LIST_PAGE>1) { LIST_PAGE--; renderListTbl(); } }
+function listPageNext(){ LIST_PAGE++; renderListTbl(); }
+
+function renderListTbl(){
+    var rows = LAST_ROWS;
     var isAr = (SIDE==='ar');
-    var head = isAr
-        ? '<tr><th style="width:150px;">客戶</th><th style="width:70px;">結帳日</th><th style="width:90px;">本期金額(含稅)</th>' +
-          '<th style="width:110px;">對帳單</th><th style="width:100px;">狀態</th><th style="width:150px;">操作</th><th style="width:70px;">結帳日設定</th><th style="width:70px;">臨時調整</th><th style="width:70px;">修改紀錄</th></tr>'
-        : '<tr><th style="width:150px;">廠商</th><th style="width:70px;">結帳日</th><th style="width:60px;">筆數</th><th style="width:90px;">本期金額(含稅)</th>' +
-          '<th style="width:100px;">狀態</th><th style="width:150px;">操作</th><th style="width:70px;">結帳日設定</th><th style="width:70px;">修改紀錄</th></tr>';
-    document.getElementById('listTbl').querySelector('thead').innerHTML = head;
+    var canBatch = isAr && (PERMS.canAdmin || PERMS.isSales);
+
+    var cols = [];
+    if (canBatch) cols.push('<th style="width:30px;"><input type="checkbox" id="chkAll" onchange="toggleAllChk(this.checked)"></th>');
+    cols.push('<th style="width:85px;">' + (isAr?'客戶編號':'廠商編號') + '</th>');
+    cols.push('<th style="width:150px;">' + (isAr?'客戶':'廠商') + '</th>');
+    cols.push('<th style="width:70px;">結帳日</th>');
+    if (!isAr) cols.push('<th style="width:50px;">筆數</th>');
+    if (SHOW_AMOUNT) cols.push('<th style="width:95px;">本期金額(含稅)</th>');
+    if (isAr) cols.push('<th style="width:120px;">對帳單</th>');
+    if (isAr) cols.push('<th style="width:85px;">負責人</th>');
+    cols.push('<th style="width:95px;">狀態</th>');
+    cols.push('<th style="width:170px;">操作</th>');
+    cols.push('<th style="width:60px;">結帳日設定</th>');
+    if (isAr) cols.push('<th style="width:60px;">臨時調整</th>');
+    document.getElementById('listTbl').querySelector('thead').innerHTML = '<tr>' + cols.join('') + '</tr>';
+    var colCount = cols.length;
+
+    var totalPages = Math.max(1, Math.ceil(rows.length / LIST_PER_PAGE));
+    if (LIST_PAGE > totalPages) LIST_PAGE = totalPages;
+    document.getElementById('listPageLabel').textContent = '第 ' + LIST_PAGE + ' / ' + totalPages + ' 頁（共 ' + rows.length + ' 筆）';
+    var pageRows = rows.slice((LIST_PAGE-1)*LIST_PER_PAGE, LIST_PAGE*LIST_PER_PAGE);
 
     if (!rows.length) {
-        document.getElementById('listTbl').querySelector('tbody').innerHTML = '<tr><td colspan="9" class="c">這個月份沒有符合條件的資料</td></tr>';
+        document.getElementById('listTbl').querySelector('tbody').innerHTML = '<tr><td colspan="' + colCount + '" class="c">這個月份沒有符合條件的資料</td></tr>';
+        updateBatchBar();
         return;
     }
     var html = '';
-    rows.forEach(function(r){
-        var badge = '<span class="badge-st badge-' + r.status + '">' + esc(STATUSES[r.status]||r.status) + '</span>';
-        var next = nextAllowedStatus(r);
-        var btns = next ? '<button class="btn btn-warm row-btn" onclick="doSetStatus(' + r.track_id + ',\'' + next + '\')">設為' + esc(STATUSES[next]) + '</button>' : '';
+    pageRows.forEach(function(r){
+        var targetType = isAr ? 'customer' : 'maker';
+        var targetId = r.party_id || '';
+        var targets = allowedTargets(r);
+        var btns = targets.map(function(s){
+            return '<button class="btn btn-warm row-btn" onclick="doSetStatus(' + r.track_id + ',\'' + s + '\')">' + esc(statusLabel(s)) + '</button>';
+        }).join('');
         if (PERMS.canAdmin) {
-            btns += ' <select class="form-control input-sm" style="width:100px;display:inline-block;" onchange="if(this.value)doSetStatus(' + r.track_id + ',this.value);this.value=\'\';">' +
-                '<option value="">（管理員改派）</option>' +
+            btns += ' <select class="form-control input-sm" style="width:90px;display:inline-block;" onchange="if(this.value)doSetStatus(' + r.track_id + ',this.value);this.value=\'\';">' +
+                '<option value="">（改派）</option>' +
                 Object.keys(STATUSES).filter(function(k){return k!==r.status;}).map(function(k){ return '<option value="'+k+'">'+esc(STATUSES[k])+'</option>'; }).join('') +
                 '</select>';
         }
-        var targetType = isAr ? 'customer' : 'maker';
-        var targetId = r.party_id || '';
         var settleBtn = (PERMS.canAdmin && targetId) ? '<button class="icon-btn" title="修改結帳日" onclick="openSettleMask(\''+targetType+'\',\''+esc(targetId)+'\',\''+esc(r.party_name)+'\',\''+(r.settlement_mode||'FIXED')+'\','+(r.settlement_day||'')+')"><i class="fa fa-pencil"></i></button>' : '';
-        var logBtn = targetId ? '<button class="icon-btn" title="修改紀錄" onclick="openLogMask(\''+targetType+'\',\''+esc(targetId)+'\')"><i class="fa fa-history"></i></button>' : '';
 
+        var tds = [];
+        if (canBatch) tds.push('<td class="c"><input type="checkbox" class="row-chk" data-tid="' + r.track_id + '" ' + (SELECTED[r.track_id]?'checked':'') + ' onchange="toggleChk(' + r.track_id + ',this.checked)"></td>');
+        tds.push('<td class="c">' + esc(r.party_id || '—') + '</td>');
+        tds.push('<td>' + esc(r.party_name) + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + '</td>');
+        tds.push('<td class="c">' + (r.cutoff_date||'—') + '</td>');
+        if (!isAr) tds.push('<td class="n">' + (r.cnt||0) + '</td>');
+        if (SHOW_AMOUNT) tds.push('<td class="n">' + fmtMoney(r.total_amt) + '</td>');
         if (isAr) {
-            var needBadge = r.need_recon_stmt ? '<span class="badge-need">需要（' + (r.recon_provide_by==='company'?'本公司提供':'客戶提供') + '）</span>' : '<span class="badge-nneed">不需要</span>';
-            var exBtn = (targetId && (PERMS.canAdmin||PERMS.isSales)) ? '<button class="icon-btn" title="臨時結帳調整" onclick="openExMaskFor(\''+esc(targetId)+'\',\''+esc(r.party_name)+'\')"><i class="fa fa-calendar-plus-o"></i></button>' : '';
-            html += '<tr><td>' + esc(r.party_name) + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + '</td>' +
-                '<td class="c">' + (r.cutoff_date||'—') + '</td>' +
-                '<td class="n">' + fmtMoney(r.total_amt) + '</td>' +
-                '<td class="c">' + needBadge + '</td>' +
-                '<td class="c">' + badge + '</td>' +
-                '<td class="c">' + btns + '</td>' +
-                '<td class="c">' + settleBtn + '</td>' +
-                '<td class="c">' + exBtn + '</td>' +
-                '<td class="c">' + logBtn + '</td></tr>';
-        } else {
-            html += '<tr><td>' + esc(r.party_name) + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + '</td>' +
-                '<td class="c">' + (r.cutoff_date||'—') + '</td>' +
-                '<td class="n">' + (r.cnt||0) + '</td>' +
-                '<td class="n">' + fmtMoney(r.total_amt) + '</td>' +
-                '<td class="c">' + badge + '</td>' +
-                '<td class="c">' + btns + '</td>' +
-                '<td class="c">' + settleBtn + '</td>' +
-                '<td class="c">' + logBtn + '</td></tr>';
+            var needBadge = r.need_recon_stmt ? '<span class="badge-need">需要（' + (r.recon_provide_by==='company'?'本公司':'客戶') + '）</span>' : '<span class="badge-nneed">不需要</span>';
+            tds.push('<td class="c">' + needBadge + '</td>');
+            tds.push('<td class="c">' + esc(r.owner_name || '—') + '</td>');
         }
+        tds.push('<td class="c">' + statusBadge(r.status) + '</td>');
+        tds.push('<td class="c">' + btns + '</td>');
+        tds.push('<td class="c">' + settleBtn + '</td>');
+        if (isAr) {
+            var exBtn = (targetId && (PERMS.canAdmin||PERMS.isSales)) ? '<button class="icon-btn" title="臨時結帳調整" onclick="openExMaskFor(\''+esc(targetId)+'\',\''+esc(r.party_name)+'\')"><i class="fa fa-calendar-plus-o"></i></button>' : '';
+            tds.push('<td class="c">' + exBtn + '</td>');
+        }
+        html += '<tr>' + tds.join('') + '</tr>';
     });
     document.getElementById('listTbl').querySelector('tbody').innerHTML = html;
+    updateBatchBar();
 }
 function doSetStatus(trackId, to){
     api({action:'set_status', track_id:trackId, to_status:to}).done(function(r){
         if (r && r.ok) { showToast(r.message||'已更新','success'); loadList(); }
     });
+}
+
+/* ── 批次選取／指派負責人 ─────────────────────────────────────── */
+function toggleChk(tid, on){ if (on) SELECTED[tid]=true; else delete SELECTED[tid]; updateBatchBar(); }
+function toggleAllChk(on){
+    document.querySelectorAll('#listTbl .row-chk').forEach(function(cb){ cb.checked = on; toggleChk(parseInt(cb.dataset.tid,10), on); });
+}
+function clearSelection(){ SELECTED = {}; updateBatchBar(); }
+function updateBatchBar(){
+    var cnt = Object.keys(SELECTED).length;
+    document.getElementById('batchCnt').textContent = cnt;
+    document.getElementById('batchBar').classList.toggle('show', cnt>0 && SIDE==='ar');
+}
+function openOwnerAssignMask(){
+    var cnt = Object.keys(SELECTED).length;
+    if (!cnt) { showToast('請先勾選要指派的客戶','error'); return; }
+    document.getElementById('ownerAssignCnt').textContent = '已選 ' + cnt + ' 筆';
+    var sel = document.getElementById('ownerSelect');
+    sel.innerHTML = '<option value="">（清空負責人）</option>' + OWNER_POOL.map(function(p){
+        return '<option value="'+p.user_id+'" data-name="'+esc(p.user_name)+'">'+esc(p.dept_name||'')+' '+esc(p.user_name)+'</option>';
+    }).join('');
+    document.getElementById('ownerErr').textContent = '';
+    openMask('ownerMask');
+}
+function saveOwnerAssign(){
+    var sel = document.getElementById('ownerSelect');
+    var opt = sel.options[sel.selectedIndex];
+    var ownerId = sel.value, ownerName = ownerId ? opt.dataset.name : '';
+    api({action:'owner_set_batch', track_ids: JSON.stringify(Object.keys(SELECTED).map(Number)), owner_id:ownerId, owner_name:ownerName}).done(function(r){
+        if (r && r.ok) { showToast('已指派 ' + r.updated + ' 筆','success'); closeMask('ownerMask'); clearSelection(); loadList(); }
+        else if (r) document.getElementById('ownerErr').textContent = r.error||'';
+    });
+}
+function loadOwnerPool(){
+    apiGet('owner_pool_list', {}).done(function(r){ if (r && r.ok) OWNER_POOL = r.rows; });
 }
 
 /* ── 結帳日快速修改 ──────────────────────────────────────────── */
@@ -533,29 +713,31 @@ function saveSettle(){
     });
 }
 
-/* ── 修改紀錄 ─────────────────────────────────────────────── */
-var LOG_TARGET = null;
-function openLogMask(type, id){
-    LOG_TARGET = {type:type, id:id};
-    apiGet('change_log', {target_type:type, target_id:id}).done(function(r){
+/* ── 修改紀錄（獨立分頁，伺服器端分頁）───────────────────────────── */
+var LOG_PAGE = 1, LOG_PER_PAGE = 20;
+function logPagePrev(){ if (LOG_PAGE>1) { LOG_PAGE--; loadLog(); } }
+function logPageNext(){ LOG_PAGE++; loadLog(); }
+function loadLog(){
+    apiGet('change_log_all', {target_type:document.getElementById('logType').value, kw:document.getElementById('logKw').value.trim(), page:LOG_PAGE, per_page:LOG_PER_PAGE}).done(function(r){
         if (!r || !r.ok) return;
+        var totalPages = Math.max(1, Math.ceil(r.total / LOG_PER_PAGE));
+        document.getElementById('logPageLabel').textContent = '第 ' + r.page + ' / ' + totalPages + ' 頁（共 ' + r.total + ' 筆）';
         var html = '';
-        if (!r.rows.length) html = '<tr><td colspan="7" class="c">尚無修改紀錄</td></tr>';
+        if (!r.rows.length) html = '<tr><td colspan="8" class="c">尚無修改紀錄</td></tr>';
         r.rows.forEach(function(l){
             var canRevert = PERMS.canAdmin && !l.reverted;
-            html += '<tr><td>' + esc(l.field) + '</td><td>' + esc(l.old_value) + '</td><td>' + esc(l.new_value) + '</td>' +
+            html += '<tr><td>' + esc(l.target_name) + '</td><td>' + esc(l.field) + '</td><td>' + esc(l.old_value) + '</td><td>' + esc(l.new_value) + '</td>' +
                 '<td>' + esc(l.changed_by_cname||l.changed_by_name) + '</td><td>' + esc(l.changed_at) + '</td>' +
                 '<td>' + (l.reverted ? '已復原' : (l.revert_of_id ? '復原自 #'+l.revert_of_id : '—')) + '</td>' +
                 '<td>' + (canRevert ? '<button class="btn btn-xs btn-danger-o" onclick="doRevert('+l.id+')">復原</button>' : '') + '</td></tr>';
         });
         document.getElementById('logTbl').querySelector('tbody').innerHTML = html;
-        openMask('logMask');
     });
 }
 function doRevert(logId){
     if (!confirm('確定要復原這筆修改嗎？')) return;
     api({action:'settle_revert', log_id:logId}).done(function(r){
-        if (r && r.ok) { showToast('已復原','success'); openLogMask(LOG_TARGET.type, LOG_TARGET.id); loadList(); }
+        if (r && r.ok) { showToast('已復原','success'); loadLog(); loadList(); }
     });
 }
 
@@ -627,8 +809,8 @@ function renderStatKpi(counts, period){
     var total = 0; Object.keys(counts).forEach(function(k){ total += counts[k]; });
     var html = '<div class="kpi-card"><div class="k-lab">期間</div><div class="k-val" style="font-size:14px;">' + esc(period.label) + '</div></div>';
     html += '<div class="kpi-card"><div class="k-lab">追蹤筆數</div><div class="k-val">' + total + '</div></div>';
-    Object.keys(STATUSES).forEach(function(k){
-        html += '<div class="kpi-card"><div class="k-lab">' + esc(STATUSES[k]) + '</div><div class="k-val">' + (counts[k]||0) + '</div></div>';
+    CARD_ORDER.forEach(function(k){
+        html += '<div class="kpi-card"><div class="k-lab">' + esc(statusLabel(k)) + '</div><div class="k-val">' + (counts[k]||0) + '</div></div>';
     });
     document.getElementById('statKpi').innerHTML = html;
 }
@@ -667,18 +849,24 @@ function renderTrend(trend){
     });
 }
 
-/* ── 設定跳窗（角色矩陣 + 工作天數分組）────────────────────────── */
+/* ── 設定跳窗（一般設定＋角色矩陣＋工作天數分組＋負責人候選名單）────── */
 var ROLE_CODES = [['art_pm','生管'],['art_sales','業務'],['art_acc','會計']];
+var DEPT_LIST_CACHE = null, DEPT_PEOPLE_CACHE = [];
 function openSettingMask(){
+    document.getElementById('optAllowSkip').checked = !!ALLOW_SKIP;
+    document.getElementById('optShowAmount').checked = !!SHOW_AMOUNT;
+    document.getElementById('matrixWrap').innerHTML = '';
     renderMatrix();
     renderGroups();
+    renderPool();
+    if (!DEPT_LIST_CACHE) loadDeptList();
     document.getElementById('setErr').textContent = '';
     openMask('setMask');
 }
 function renderMatrix(){
     ['ar','ap'].forEach(function(side){
         var title = side==='ar' ? '應收' : '應付';
-        var rows = Object.keys(STATUSES).filter(function(k){ return k!=='processing'; }).map(function(st){
+        var rows = Object.keys(STATUSES).map(function(st){
             var allowed = (MATRIX[side] && MATRIX[side][st]) || [];
             var cells = ROLE_CODES.map(function(rc){
                 var checked = allowed.indexOf(rc[0])>=0 ? 'checked' : '';
@@ -725,16 +913,76 @@ function collectMatrixRows(){
     });
     return Object.values(map);
 }
+
+/* 負責人候選名單 */
+function loadDeptList(){
+    apiGet('dept_list', {}).done(function(r){
+        if (!r || !r.ok) return;
+        DEPT_LIST_CACHE = r.rows;
+        document.getElementById('poolDept').innerHTML = '<option value="">— 選部門 —</option>' +
+            r.rows.map(function(d){ return '<option value="'+d.id+'">'+esc(d.name)+'</option>'; }).join('');
+    });
+}
+function loadDeptPeople(){
+    var deptId = document.getElementById('poolDept').value;
+    var wrap = document.getElementById('poolPplWrap');
+    if (!deptId) { wrap.innerHTML = '<span class="hint">請先選部門</span>'; DEPT_PEOPLE_CACHE = []; return; }
+    apiGet('dept_people', {dept_id:deptId}).done(function(r){
+        if (!r || !r.ok) return;
+        DEPT_PEOPLE_CACHE = r.rows;
+        var poolIds = OWNER_POOL.map(function(p){ return p.user_id; });
+        if (!r.rows.length) { wrap.innerHTML = '<span class="hint">這個部門沒有在職人員</span>'; return; }
+        wrap.innerHTML = r.rows.map(function(p){
+            var already = poolIds.indexOf(p.id) >= 0;
+            return '<label' + (already?' style="color:#aaa;"':'') + '><input type="checkbox" value="'+p.id+'" data-name="'+esc(p.user_cname||p.name)+'" ' + (already?'disabled checked':'') + '> ' + esc(p.user_cname||p.name) + (already?'（已在名單）':'') + '</label>';
+        }).join('');
+    });
+}
+function addCheckedToPool(){
+    var deptSel = document.getElementById('poolDept');
+    var deptName = deptSel.options[deptSel.selectedIndex] ? deptSel.options[deptSel.selectedIndex].textContent : '';
+    var deptId = deptSel.value;
+    var checked = Array.from(document.querySelectorAll('#poolPplWrap input[type=checkbox]:checked:not(:disabled)'));
+    if (!checked.length) { showToast('請先勾選要加入的人員','error'); return; }
+    var calls = checked.map(function(cb){
+        return api({action:'owner_pool_add', user_id:cb.value, user_name:cb.dataset.name, dept_id:deptId, dept_name:deptName});
+    });
+    $.when.apply($, calls).always(function(){
+        loadOwnerPool();
+        setTimeout(function(){ renderPool(); loadDeptPeople(); }, 300);
+    });
+}
+function renderPool(){
+    apiGet('owner_pool_list', {}).done(function(r){
+        if (!r || !r.ok) return;
+        OWNER_POOL = r.rows;
+        document.getElementById('poolTbody').innerHTML = r.rows.length ? r.rows.map(function(p){
+            return '<tr><td>' + esc(p.dept_name||'') + '</td><td>' + esc(p.user_name) + '</td>' +
+                '<td><button class="icon-btn" onclick="removeFromPool(' + p.id + ')"><i class="fa fa-trash"></i></button></td></tr>';
+        }).join('') : '<tr><td colspan="3" class="c">尚未設定候選名單</td></tr>';
+    });
+}
+function removeFromPool(id){
+    if (!confirm('確定從候選名單移除？')) return;
+    api({action:'owner_pool_remove', id:id}).done(function(r){ if (r && r.ok) { renderPool(); loadDeptPeople(); } });
+}
+
 function saveSetting(){
     var groups = collectGroups().filter(function(g){ return g.label; });
     if (!groups.length) { document.getElementById('setErr').textContent = '至少要有一組工作天數統計分組'; return; }
     var rows = collectMatrixRows();
+    var allowSkipV = document.getElementById('optAllowSkip').checked ? '1' : '0';
+    var showAmountV = document.getElementById('optShowAmount').checked ? '1' : '0';
     $.when(
         api({action:'role_matrix_save', rows: JSON.stringify(rows)}),
-        api({action:'workday_groups_save', groups: JSON.stringify(groups)})
-    ).done(function(r1, r2){
+        api({action:'workday_groups_save', groups: JSON.stringify(groups)}),
+        api({action:'allow_skip_save', v: allowSkipV}),
+        api({action:'show_amount_save', v: showAmountV})
+    ).done(function(r1, r2, r3, r4){
         if (r1[0] && r1[0].ok) MATRIX = r1[0].matrix;
         if (r2[0] && r2[0].ok) GROUPS = r2[0].groups;
+        if (r3[0] && r3[0].ok) ALLOW_SKIP = r3[0].allow_skip;
+        if (r4[0] && r4[0].ok) SHOW_AMOUNT = r4[0].show_amount;
         showToast('已儲存','success');
         closeMask('setMask');
         loadList(); if (document.getElementById('paneStat').classList.contains('on')) loadStat();
@@ -749,7 +997,10 @@ $(function(){
     apiGet('bootstrap', {}).done(function(r){
         if (!r || !r.ok) return;
         STATUSES = r.statuses; ANCHORS = r.anchors; MATRIX = r.matrix; GROUPS = r.groups;
+        ALLOW_SKIP = !!r.allow_skip; SHOW_AMOUNT = !!r.show_amount;
+        CARD_ORDER = [''].concat(Object.keys(STATUSES));
         fillGranYear(r.years);
+        loadOwnerPool();
         setSide('ar');
     });
 });
