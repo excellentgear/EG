@@ -554,7 +554,7 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
             <ul>
                 <li><b>製程列</b>＝該訂單綁定的<b>製令（BOM）</b>的製程鏈，依製程序排列。
                     機台是從<b>報工紀錄</b>抓該製程實際用過的機台（製令本身的機台欄幾乎沒人填）。</li>
-                <li><b>產品特性／規格公差／量測技術／檢具／頻率</b>＝該料號該製程的
+                <li><b>產品特性／規格公差／檢驗方法／檢具編號／頻率</b>＝該料號該製程的
                     <b>SIP 標準檢驗指導書</b>的檢驗項目（只取已核准的版次）。找不到時退回「該製程的檢驗項目預設值範本」。</li>
                 <li><b>特殊分類／管制方法</b>＝<b>一律留白，由人逐列填</b>。PFMEA 的失效模式是「製程」粒度、
                     不是逐一特性分別記錄，同一製程常同時有好幾種失效模式（例：尺寸偏擺／外觀刮傷／咬合精度），
@@ -592,7 +592,7 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
             </ul>
 
             <h4>送出前會檢查什麼</h4>
-            <p>每一列特性至少要有<b>量測技術或檢具</b>、以及<b>樣本或頻率</b>——這兩欄是稽核必查的。
+            <p>每一列特性至少要有<b>檢驗方法或檢具編號</b>、以及<b>樣本或頻率</b>——這兩欄是稽核必查的。
             其餘欄位留白不擋，由核准人判斷。</p>
 
             <h4>權限角色</h4>
@@ -960,8 +960,8 @@ function renderProcs(){
 
         h += '<div class="cp-scroll"><table class="cp-t"><thead><tr>'
           +   '<th style="width:58px;">特性號</th><th style="width:150px;">產品特性</th><th style="width:130px;">製程特性</th>'
-          +   '<th style="width:92px;">特殊分類</th><th style="width:170px;">規格／公差</th>'
-          +   '<th style="width:130px;">量測技術</th><th style="width:110px;">檢具</th>'
+          +   '<th style="width:92px;">分類</th><th style="width:170px;">規格／公差</th>'
+          +   '<th style="width:130px;">檢驗方法</th><th style="width:110px;">檢具編號</th>'
           +   '<th style="width:74px;">樣本</th><th style="width:120px;">頻率</th>'
           +   '<th style="width:190px;">管制方法</th><th style="width:170px;">反應計畫</th><th style="width:40px;"></th>'
           +  '</tr></thead><tbody>';
@@ -1396,8 +1396,8 @@ function renderAutoNote(){
         h += '<div style="color:#8c2d18;margin-bottom:6px;">' + esc(TAGSTATUS.reason || '') + '</div>';
     }
     h += '<b>資料從哪裡來</b>：製程列＝該訂單綁定的<b>製令</b>的製程鏈（依製程序）；'
-      +  '產品特性／規格公差／量測技術／檢具／頻率＝該料號該製程的 <b>SIP</b>（只取已核准版次），'
-      +  '找不到時退回該製程的<b>檢驗項目預設值範本</b>；<b>特殊分類／管制方法一律留白由人逐列填</b>'
+      +  '產品特性／規格公差／檢驗方法／檢具編號／頻率＝該料號該製程的 <b>SIP</b>（只取已核准版次），'
+      +  '找不到時退回該製程的<b>檢驗項目預設值範本</b>；<b>分類（特殊分類）／管制方法一律留白由人逐列填</b>'
       +  '（PFMEA 是製程粒度、不是逐特性記錄，自動套用會出現語意錯誤，整理過的 PFMEA 參考改顯示在每道製程下方）。'
       +  '機台是從<b>報工紀錄</b>抓該製程實際用過的機台。帶不出來的欄位會標示要人工填，不會假裝有資料。';
     $('#autoNote').html(h);
@@ -1494,8 +1494,8 @@ function renderPreview(r){
 
     h += '<div class="cp-scroll"><table class="cp-t" style="min-width:1200px;"><thead><tr>'
       +  '<th style="width:40px;">#</th><th style="width:120px;">製程</th><th style="width:120px;">機器／廠商</th>'
-      +  '<th style="width:150px;">產品特性</th><th style="width:88px;">特殊分類</th><th style="width:160px;">規格／公差</th>'
-      +  '<th style="width:120px;">量測技術</th><th style="width:96px;">檢具</th><th style="width:120px;">頻率</th>'
+      +  '<th style="width:150px;">產品特性</th><th style="width:88px;">分類</th><th style="width:160px;">規格／公差</th>'
+      +  '<th style="width:120px;">檢驗方法</th><th style="width:96px;">檢具編號</th><th style="width:120px;">頻率</th>'
       +  '<th>管制方法</th></tr></thead><tbody>';
     procs.forEach(function(p){
         var items = p.items || [];
@@ -1608,15 +1608,15 @@ function renderSugSummary(s){
     var h = '<b>共 ' + s.total + ' 個料號需要建管制計畫</b>（已建好的不再列出）。'
           + '自動帶入目前能帶出：製程列 <b>' + (s.with_proc||0) + '</b> 個料號、'
           + '管制方法與特殊特性（PFMEA）<b>' + (s.with_pfmea||0) + '</b> 個、'
-          + '規格公差與量測技術（已核准 SIP）<b>' + (s.with_sip||0) + '</b> 個。';
+          + '規格公差與檢驗方法（已核准 SIP）<b>' + (s.with_sip||0) + '</b> 個。';
     if (s.with_sip_draft) {
         h += '<div style="margin-top:5px;color:#8c2d18;">另有 <b>' + s.with_sip_draft
-           + '</b> 個料號的 SIP 還是草稿——<b>把它核准之後，規格公差與量測技術就帶得出來了</b>'
+           + '</b> 個料號的 SIP 還是草稿——<b>把它核准之後，規格公差與檢驗方法就帶得出來了</b>'
            + '（自動帶入只取已核准版次，草稿的公差不該印在管制計畫上）。</div>';
     }
     if (!s.with_sip) {
         h += '<div style="margin-top:5px;">目前沒有任何需要 CP 的料號有已核准的 SIP，'
-           + '所以規格公差／量測技術／頻率這幾欄要人工填。這不是系統問題，是那些料號的 SIP 還沒建或還沒核准。</div>';
+           + '所以規格公差／檢驗方法／頻率這幾欄要人工填。這不是系統問題，是那些料號的 SIP 還沒建或還沒核准。</div>';
     }
     $('#sugSummary').html(h).show();
 }

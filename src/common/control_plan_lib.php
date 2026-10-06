@@ -8,8 +8,8 @@
  *   製程列   ← bom_ing（被標為 AS 認證的那張訂單所綁的製令，依 bom_sn 排序）
  *   產品特性 ← ss_item.ctrl_point / q_char（SIP 檢驗項目）
  *   公差     ← ss_item.up_limit / lo_limit（計量值）、q_char（屬性值）
- *   量測技術 ← ss_item.method + tool_no
- *   頻率     ← cp_stage.default_freq（階段優先）→ ss_item.freq → 抽樣規則
+ *   檢驗方法／檢具編號 ← ss_item.method + tool_no
+ *   頻率     ← ss_item.freq（SIP 優先，SIP 沒填才退回 cp_stage.default_freq）→ 抽樣規則
  *   特殊特性 ← pfmea_item.classification
  *   管制方法 ← pfmea_item.prevention_controls / detection_controls
  * 所以「自動帶入」不是另存一份資料，而是即時去那三個地方讀。CP 存下來的是「人確認過的版本」。
@@ -947,7 +947,7 @@ function cp_sip_general_candidates(PDO $db, int $processNo): array
 /**
  * 切換器選定某份通用SIP後，重新抓它的檢驗項目（格式與 cp_autofill_preview 組 items
  * 用的完全一樣，前端直接替換那一列的 items，不必另外寫一套映射）。$stageFreq 比照
- * autofill 的頻率覆蓋規則（階段預設優先，查無則用 SIP 自己的頻率）。
+ * autofill 的頻率覆蓋規則（SIP 自己的頻率優先，SIP 沒填才用階段預設）。
  */
 function cp_sip_items_for_switch(PDO $db, int $processNo, string $stageFreq = ''): array
 {
@@ -965,7 +965,8 @@ function cp_sip_items_for_switch(PDO $db, int $processNo, string $stageFreq = ''
             $rangeTxt = $num($lo) . ' ~ ' . $num($up);
             $specText = $specText !== '' ? ($rangeTxt . '（' . $specText . '）') : $rangeTxt;
         }
-        $freq = $stageFreq !== '' ? $stageFreq : trim((string)($it['freq'] ?? ''));
+        $itFreq = trim((string)($it['freq'] ?? ''));
+        $freq = $itFreq !== '' ? $itFreq : $stageFreq;
         $ctrlPoint = trim((string)($it['ctrl_point'] ?? ''));
         $out[] = [
             'seq' => $k + 1, 'char_product' => $ctrlPoint, 'char_process' => '',
@@ -1236,7 +1237,11 @@ function cp_autofill_preview(PDO $db, array $opt): array
                 $specText = $specText !== '' ? ($rangeTxt . '（' . $specText . '）') : $rangeTxt;
             }
 
-            /* 頻率：階段預設優先（試作段=100%/首件），否則用 SIP 的頻率。
+            /* 頻率：SIP 自己填的頻率優先（那是已核准文件上逐特性訂定的依據，不可被
+               一個階段層級的通用值蓋掉——否則同一道製程底下尺寸/精度等級/外觀等
+               不同特性原本各自不同的頻率，會被全部抹平成同一句「100%全尺寸(首件)」），
+               SIP 沒填這一項才退回階段預設（cp_stage.default_freq，用於 SIP 完全沒有
+               指定頻率的項目）。2026-10-06 使用者回報糾正：先前版本寫反了優先序。
                **FQC 合成列例外**（使用者 2026-10-06 交辦「FQC內容是齒研製程SIP內容，
                只是檢驗頻率改寫同抽樣規範」）：FQC 代表批次放行前的最終確認，業界慣例
                是照抽樣規則表抽驗，不是沿用製程中檢驗(IPQC)那種「每顆/100%全尺寸」的
@@ -1245,7 +1250,7 @@ function cp_autofill_preview(PDO $db, array $opt): array
                qc_suggest_sample_qty() 查的是同一張 qc_sampling_rule 表）。 */
             $freq = (($p['src'] ?? '') === 'fqc_insert' || ($p['src'] ?? '') === 'fqc_insert_ship')
                 ? '依抽樣規則表抽驗（同線上檢驗，依實際批量查表）'
-                : ($stageFreq !== '' ? $stageFreq : trim((string)($it['freq'] ?? '')));
+                : (trim((string)($it['freq'] ?? '')) !== '' ? trim((string)($it['freq'] ?? '')) : $stageFreq);
             $ctrlPoint = trim((string)($it['ctrl_point'] ?? ''));
             $items[] = [
                 'seq'                => $k + 1,
@@ -2192,7 +2197,7 @@ function cp_validate_for_submit(array $doc): array
         foreach (($p['items'] ?? []) as $it) {
             $nItem++;
             $miss = [];
-            if (trim((string)($it['eval_method'] ?? '')) === '' && trim((string)($it['tool_no'] ?? '')) === '') $miss[] = '量測技術';
+            if (trim((string)($it['eval_method'] ?? '')) === '' && trim((string)($it['tool_no'] ?? '')) === '') $miss[] = '檢驗方法';
             if (trim((string)($it['sample_freq'] ?? '')) === '' && trim((string)($it['sample_size'] ?? '')) === '') $miss[] = '樣本/頻率';
             if ($miss) {
                 $bad[] = ($p['process_name'] ?: ('製程' . $p['process_no'])) . '「'
