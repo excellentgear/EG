@@ -279,6 +279,13 @@ if (isset($_GET['view_customer']) && isset($_GET['embed'])) {
         <div class="cv-row">
             <?php cv_field('已確認此結帳日', !empty($cv['confirmed_settlement']) ? '是' : '否'); ?>
         </div>
+        <div class="cv-row">
+            <?php
+                $cvReconLabel = empty($cv['need_recon_stmt']) ? '不需要' :
+                    (($cv['recon_provide_by'] ?? '') === 'company' ? '需要（本公司提供）' : '需要（客戶提供）');
+                cv_field('是否需要對帳單', $cvReconLabel);
+            ?>
+        </div>
         <div class="cv-sec">報價 / 收款方式</div>
         <div class="cv-row">
             <?php cv_field('報價方式', $cv['quote_method']); cv_field('收款方式', $cv['payment_method']); ?>
@@ -347,7 +354,7 @@ $db  = new DBConnection();
 $pdo = $db->getPDO();
 
 // ── Migration 版本鎖：版本符合時跳過所有 ALTER/CREATE，只跑一次 ──────────
-define('MDM_MIGRATION_VERSION', '20261002_01');   // 2026-10-02 料號標籤新增「新增料號時必填」旗標 dict_label.is_required
+define('MDM_MIGRATION_VERSION', '20261006_01');   // 2026-10-06 客戶新增「是否需要對帳單／提供方式」(need_recon_stmt/recon_provide_by)
 $_mdm_skip_migration = false;
 try {
     // system_settings 可能尚不存在（第一次執行），用 try 保護
@@ -754,6 +761,8 @@ try {
     try { $pdo->exec("ALTER TABLE customer_list ADD COLUMN billing_note    TEXT         NULL DEFAULT NULL COMMENT '帳務備註（整帳時間等）'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE customer_list ADD COLUMN general_note    TEXT         NULL DEFAULT NULL COMMENT '一般備註'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE customer_list ADD COLUMN is_own_company TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否為本公司：1=是 0=否（全系統唯一）'"); } catch(Exception $e){}
+    try { $pdo->exec("ALTER TABLE customer_list ADD COLUMN need_recon_stmt   TINYINT(1)  NULL DEFAULT 0   COMMENT '是否需要對帳單：1=需要 0/NULL=不需要（僅管理員可設定）'"); } catch(Exception $e){}
+    try { $pdo->exec("ALTER TABLE customer_list ADD COLUMN recon_provide_by  VARCHAR(10) NULL DEFAULT NULL COMMENT '對帳單提供方式：customer=客戶提供 company=本公司提供'"); } catch(Exception $e){}
     // ── 客戶聯絡人獨立表 ─────────────────────────────────────────
     $pdo->exec("CREATE TABLE IF NOT EXISTS customer_contacts (
         contact_id   INT AUTO_INCREMENT PRIMARY KEY COMMENT '聯絡人主鍵',
@@ -3113,6 +3122,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $confirmed_settlement = intval($_POST['confirmed_settlement'] ?? 0);
             $confirmed_payment    = intval($_POST['confirmed_payment'] ?? 0);
             $is_own_company       = intval($_POST['is_own_company'] ?? 0);
+            // 是否需要對帳單／提供方式：僅本頁管理員可設定（鐵律8，非管理員送來的值一律忽略不採信）
+            if ($is_admin) {
+                $need_recon_stmt  = intval($_POST['need_recon_stmt'] ?? 0);
+                $recon_provide_by = trim($_POST['recon_provide_by'] ?? '');
+                $recon_provide_by = in_array($recon_provide_by, ['customer','company'], true) ? $recon_provide_by : null;
+                if (!$need_recon_stmt) { $need_recon_stmt = 0; $recon_provide_by = null; }
+            } elseif ($is_new) {
+                $need_recon_stmt = 0; $recon_provide_by = null;
+            } else {
+                $oldReconQ = $pdo->prepare("SELECT need_recon_stmt, recon_provide_by FROM customer_list WHERE customer_id=?");
+                $oldReconQ->execute([$customer_id]);
+                $oldRecon = $oldReconQ->fetch(PDO::FETCH_ASSOC) ?: [];
+                $need_recon_stmt  = intval($oldRecon['need_recon_stmt'] ?? 0);
+                $recon_provide_by = $oldRecon['recon_provide_by'] ?? null;
+            }
             // 認定新客戶日期：新增時預設今天；修改時若未送合法日期一律保留原值，不要安靜清空
             $est_date = trim($_POST['est_date'] ?? '');
             if ($est_date !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $est_date)) $est_date = '';
@@ -3134,7 +3158,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $old_cust_row = [];
             $old_sales_p_uid=0; $old_sales_p_name=''; $old_sales_d_uid=0; $old_sales_d_name='';
             if (!$is_new) {
-                $oq = $pdo->prepare("SELECT customer,customer_full,customer_full_en,customer_tel,customer_fax,customer_address,is_inactive,customer_grade,settlement_mode,settlement_day,tax_id,quote_method,payment_method,net_days,allow_deduct,bank_name,bank_branch,bank_account,billing_contact,shipping_req,invoice_email,billing_note,general_note FROM customer_list WHERE customer_id=?");
+                $oq = $pdo->prepare("SELECT customer,customer_full,customer_full_en,customer_tel,customer_fax,customer_address,is_inactive,customer_grade,settlement_mode,settlement_day,tax_id,quote_method,payment_method,net_days,allow_deduct,bank_name,bank_branch,bank_account,billing_contact,shipping_req,invoice_email,billing_note,general_note,need_recon_stmt,recon_provide_by FROM customer_list WHERE customer_id=?");
                 $oq->execute([$customer_id]);
                 $old_cust_row = $oq->fetch(PDO::FETCH_ASSOC) ?: [];
                 // 取舊業務
@@ -3160,23 +3184,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     (customer_id,customer,customer_full,customer_full_en,customer_tel,customer_fax,customer_address,is_inactive,customer_grade,
                      settlement_mode,settlement_day,tax_id,quote_method,payment_method,net_days,allow_deduct,
                      bank_name,bank_branch,bank_account,billing_contact,shipping_req,invoice_email,billing_note,general_note,
-                     confirmed_settlement,confirmed_payment,is_own_company,est_date,Created_By,Created_At)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+                     confirmed_settlement,confirmed_payment,is_own_company,need_recon_stmt,recon_provide_by,est_date,Created_By,Created_At)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
                     ->execute([$customer_id,$customer,$customer_full,$customer_full_en,$customer_tel,$customer_fax,$customer_address,$is_inactive,$customer_grade,
                                $settlement_mode,$settlement_day,$tax_id,$quote_method,$payment_method,$net_days,$allow_deduct,
                                $bank_name,$bank_branch,$bank_account,$billing_contact,$shipping_req,$invoice_email,$billing_note,$general_note,
-                               $confirmed_settlement,$confirmed_payment,$is_own_company,$est_date,$uid]);
+                               $confirmed_settlement,$confirmed_payment,$is_own_company,$need_recon_stmt,$recon_provide_by,$est_date,$uid]);
             } else {
                 if (!$can_update) throw new Exception('無修改權限');
                 $pdo->prepare("UPDATE customer_list SET
                     customer=?,customer_full=?,customer_full_en=?,customer_tel=?,customer_fax=?,customer_address=?,is_inactive=?,customer_grade=?,
                     settlement_mode=?,settlement_day=?,tax_id=?,quote_method=?,payment_method=?,net_days=?,allow_deduct=?,
                     bank_name=?,bank_branch=?,bank_account=?,billing_contact=?,shipping_req=?,invoice_email=?,billing_note=?,general_note=?,
-                    confirmed_settlement=?,confirmed_payment=?,is_own_company=?,est_date=?,Modified_By=?,Modified_At=NOW() WHERE customer_id=?")
+                    confirmed_settlement=?,confirmed_payment=?,is_own_company=?,need_recon_stmt=?,recon_provide_by=?,est_date=?,Modified_By=?,Modified_At=NOW() WHERE customer_id=?")
                     ->execute([$customer,$customer_full,$customer_full_en,$customer_tel,$customer_fax,$customer_address,$is_inactive,$customer_grade,
                                $settlement_mode,$settlement_day,$tax_id,$quote_method,$payment_method,$net_days,$allow_deduct,
                                $bank_name,$bank_branch,$bank_account,$billing_contact,$shipping_req,$invoice_email,$billing_note,$general_note,
-                               $confirmed_settlement,$confirmed_payment,$is_own_company,$est_date,$uid,$customer_id]);
+                               $confirmed_settlement,$confirmed_payment,$is_own_company,$need_recon_stmt,$recon_provide_by,$est_date,$uid,$customer_id]);
             }
             // 產業別小類 Delete-then-Insert
             $industry_subs = json_decode($_POST['industry_subs'] ?? '[]', true) ?: [];
@@ -3225,7 +3249,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($is_new) {
                 _log_audit($pdo,'insert','customer',$customer_id,$customer,null,$uid,$op_name);
             } else {
-                $new_cust_arr = ['customer'=>$customer,'customer_full'=>$customer_full,'customer_full_en'=>$customer_full_en,'customer_tel'=>$customer_tel,'customer_fax'=>$customer_fax,'customer_address'=>$customer_address,'is_inactive'=>$is_inactive,'customer_grade'=>$customer_grade,'settlement_mode'=>$settlement_mode,'settlement_day'=>$settlement_day,'tax_id'=>$tax_id,'quote_method'=>$quote_method,'payment_method'=>$payment_method,'net_days'=>$net_days,'allow_deduct'=>$allow_deduct,'bank_name'=>$bank_name,'bank_branch'=>$bank_branch,'bank_account'=>$bank_account,'billing_contact'=>$billing_contact,'shipping_req'=>$shipping_req,'invoice_email'=>$invoice_email,'billing_note'=>$billing_note,'general_note'=>$general_note];
+                $new_cust_arr = ['customer'=>$customer,'customer_full'=>$customer_full,'customer_full_en'=>$customer_full_en,'customer_tel'=>$customer_tel,'customer_fax'=>$customer_fax,'customer_address'=>$customer_address,'is_inactive'=>$is_inactive,'customer_grade'=>$customer_grade,'settlement_mode'=>$settlement_mode,'settlement_day'=>$settlement_day,'tax_id'=>$tax_id,'quote_method'=>$quote_method,'payment_method'=>$payment_method,'net_days'=>$net_days,'allow_deduct'=>$allow_deduct,'bank_name'=>$bank_name,'bank_branch'=>$bank_branch,'bank_account'=>$bank_account,'billing_contact'=>$billing_contact,'shipping_req'=>$shipping_req,'invoice_email'=>$invoice_email,'billing_note'=>$billing_note,'general_note'=>$general_note,'need_recon_stmt'=>$need_recon_stmt,'recon_provide_by'=>$recon_provide_by];
                 $ch = _diff_rows($old_cust_row, $new_cust_arr, array_keys($new_cust_arr));
                 // 業務變動追蹤
                 if ($old_sales_p_uid !== $primary_uid) {
@@ -8396,6 +8420,33 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
     </div>
 </div>
 
+<?php if ($is_admin): ?>
+<div class="form-section-title"><i class="fa fa-file-text-o"></i> 對帳單設定（僅管理員可設定）</div>
+<div class="row">
+    <div class="col-md-4">
+        <div class="form-group">
+            <label style="font-weight:normal;cursor:pointer;">
+                <input type="checkbox" id="cf-need_recon_stmt" name="need_recon_stmt" value="1" style="margin-right:6px;" onchange="onNeedReconStmtChange()">是否需要對帳單
+            </label>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="form-group" id="cf-recon-provide-wrap" style="display:none;">
+            <label>提供方式</label>
+            <select class="form-control" id="cf-recon_provide_by" name="recon_provide_by" onchange="onReconProvideByChange()">
+                <option value="customer">客戶提供</option>
+                <option value="company">本公司提供</option>
+            </select>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="form-group" id="cf-recon-provide-hint-wrap" style="padding-top:24px;display:none;">
+            <div style="font-size:11px;color:#888;" id="cf-recon-provide-hint"></div>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
 <div class="form-section-title"><i class="fa fa-money"></i> 報價 / 收款方式</div>
 <div class="row">
     <div class="col-md-3">
@@ -10347,6 +10398,14 @@ var SYS_CUST_DEFAULT_SETTLEMENT_MODE   = <?= json_encode(_get_setting($pdo, 'cus
 var SYS_CUST_DEFAULT_SETTLEMENT_DAY    = <?= json_encode(_get_setting($pdo, 'cust_default_settlement_day', '25')) ?>;
 var SYS_CUST_DEFAULT_PAYMENT_METHOD    = <?= json_encode(_get_setting($pdo, 'cust_default_payment_method', '匯款')) ?>;
 var SYS_CUST_DEFAULT_NET_DAYS          = <?= json_encode(_get_setting($pdo, 'cust_default_net_days', '')) ?>;
+<?php
+$__ownCompanyName = '';
+try {
+    $__ownQ = $pdo->query("SELECT COALESCE(NULLIF(customer_full,''), customer) AS nm FROM customer_list WHERE is_own_company=1 LIMIT 1");
+    $__ownCompanyName = $__ownQ ? (string)($__ownQ->fetchColumn() ?: '') : '';
+} catch (Exception $e) {}
+?>
+var SYS_OWN_COMPANY_NAME = <?= json_encode($__ownCompanyName) ?>;
 <?php
 try {
     $pl_stmt = $pdo->query("SELECT proc_label_id, label_name, input_type, numeric_type, unit FROM dict_maker_proc_label WHERE is_active=1 ORDER BY sort_order, proc_label_id");
@@ -15670,6 +15729,26 @@ function updateSettlementDayHint() {
     if (day >= 29) hint.innerHTML = '<span style="color:#e67e22;"><i class="fa fa-info-circle"></i> 遇2月或小月將自動調整為該月最後一天</span>';
     else hint.textContent = '';
 }
+function onNeedReconStmtChange() {
+    var chk = document.getElementById('cf-need_recon_stmt');
+    var wrap = document.getElementById('cf-recon-provide-wrap');
+    if (!chk || !wrap) return;
+    wrap.style.display = chk.checked ? '' : 'none';
+    onReconProvideByChange();
+}
+function onReconProvideByChange() {
+    var chk = document.getElementById('cf-need_recon_stmt');
+    var sel = document.getElementById('cf-recon_provide_by');
+    var hw  = document.getElementById('cf-recon-provide-hint-wrap');
+    var h   = document.getElementById('cf-recon-provide-hint');
+    if (!chk || !sel || !hw || !h) return;
+    if (chk.checked && sel.value === 'company') {
+        h.textContent = '本公司（' + (SYS_OWN_COMPANY_NAME || '尚未於客戶分頁設定「本公司」') + '）將負責提供對帳單';
+        hw.style.display = '';
+    } else {
+        hw.style.display = 'none';
+    }
+}
 function _applyCustPaymentDefaultHints(mode, day, pay, nd, dbConfirmSettle, dbConfirmPay) {
     var settleSame = (mode === SYS_CUST_DEFAULT_SETTLEMENT_MODE &&
         (mode !== 'FIXED' || String(day||'') === String(SYS_CUST_DEFAULT_SETTLEMENT_DAY||'')));
@@ -15801,6 +15880,14 @@ function openCustomerModal(customer_id, readonly) {
             _applyCustPaymentDefaultHints(mode, cDay, cPay, cNd, d.confirmed_settlement, d.confirmed_payment);
             var exBtn = document.getElementById('cf-exception-btn');
             if (exBtn) exBtn.style.display = '';
+            // 對帳單設定（僅管理員看得到這組欄位，一般使用者頁面上不存在這些元素）
+            var nrs = document.getElementById('cf-need_recon_stmt');
+            if (nrs) {
+                nrs.checked = (d.need_recon_stmt == 1 || d.need_recon_stmt === '1');
+                var rpb = document.getElementById('cf-recon_provide_by');
+                if (rpb) rpb.value = d.recon_provide_by || 'customer';
+                onNeedReconStmtChange();
+            }
             // Contacts
             loadContactRows(d.contacts||[]);
             // Industries
@@ -15835,6 +15922,8 @@ function openCustomerModal(customer_id, readonly) {
         _applyCustPaymentDefaultHints(SYS_CUST_DEFAULT_SETTLEMENT_MODE, SYS_CUST_DEFAULT_SETTLEMENT_DAY, SYS_CUST_DEFAULT_PAYMENT_METHOD, SYS_CUST_DEFAULT_NET_DAYS, 0, 0);
         var exBtn = document.getElementById('cf-exception-btn');
         if (exBtn) exBtn.style.display = 'none';
+        var nrs = document.getElementById('cf-need_recon_stmt');
+        if (nrs) { nrs.checked = false; onNeedReconStmtChange(); }
         var ad = document.getElementById('cf-allow_deduct');
         if (ad) ad.checked = false;
         var gsel = document.getElementById('cf-customer_grade');
@@ -15893,6 +15982,8 @@ function submitCustomerForm() {
         confirmed_settlement: gc('cf-confirmed_settlement'),
         confirmed_payment:    gc('cf-confirmed_payment'),
         is_own_company:       gc('cf-is_own_company'),
+        need_recon_stmt:      gc('cf-need_recon_stmt'),
+        recon_provide_by:     gv('cf-recon_provide_by'),
         est_date:             gv('cf-est_date')
     };
     if (!data.customer_id) { showToast('客戶代碼不可為空','error'); return; }
