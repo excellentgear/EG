@@ -45,6 +45,7 @@ require_once __DIR__ . '/acc_lib.php';
 require_once __DIR__ . '/billing_month_lib.php';
 require_once __DIR__ . '/kpi_as_lib.php';
 require_once __DIR__ . '/order_analysis_lib.php';   // oa_period_buckets()/oa_period_pick() 等：純日期計算，通用
+require_once __DIR__ . '/people_lib.php';           // eg_people_list()：負責人候選名單挑人，ai-rules/08 第五節鐵則
 
 if (!defined('ACT_MODULE'))      define('ACT_MODULE', 'acc_recon_track');
 if (!defined('ACT_PARAM_GROUP')) define('ACT_PARAM_GROUP', 'ACC_RECON_TRACK');
@@ -66,7 +67,9 @@ function act_ensure_schema(PDO $db): void
             party_name      VARCHAR(100) NULL COMMENT '顯示用名稱快取，每次列表時會跟著主檔更新',
             billing_month   CHAR(7) NOT NULL COMMENT '帳款月份 YYYY-MM',
             cutoff_date     DATE NULL COMMENT '該對象該月份的結帳日（工作天數統計錨點）',
-            status          VARCHAR(20) NOT NULL DEFAULT 'processing',
+            status          VARCHAR(20) NOT NULL DEFAULT '',
+            owner_id        INT NULL COMMENT '負責人 user.id（目前僅應收使用）',
+            owner_name      VARCHAR(50) NULL,
             created_at      DATETIME NULL,
             created_by      INT NULL,
             created_by_name VARCHAR(50) NULL,
@@ -119,17 +122,41 @@ function act_ensure_schema(PDO $db): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
           COMMENT='狀態按鈕權限矩陣：管理員可調整哪些角色可以按哪個狀態'");
 
+        $db->exec("CREATE TABLE IF NOT EXISTS acc_recon_track_owner_pool (
+            id          INT AUTO_INCREMENT PRIMARY KEY,
+            user_id     INT NOT NULL,
+            user_name   VARCHAR(50) NULL,
+            dept_id     INT NULL,
+            dept_name   VARCHAR(50) NULL,
+            added_by    INT NULL,
+            added_by_name VARCHAR(50) NULL,
+            added_at    DATETIME NULL,
+            UNIQUE KEY uk_user (user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+          COMMENT='應收負責人候選名單：管理員在設定頁挑部門、從部門人員裡選入'");
+
         // 預設矩陣：只在整張表還是空的（第一次建立）時種入，管理員調整過後不會被蓋回來
         $cnt = (int)$db->query("SELECT COUNT(*) FROM acc_recon_track_role_matrix")->fetchColumn();
         if ($cnt === 0) {
             $ins = $db->prepare("INSERT IGNORE INTO acc_recon_track_role_matrix (side,status,role_code) VALUES (?,?,?)");
             foreach ([
-                ['ar','reconciled','art_sales'], ['ar','sent_to_acc','art_sales'],
-                ['ap','reconciled','art_pm'],    ['ap','sent_to_acc','art_pm'],
-                ['ar','acc_received','art_acc'], ['ar','acc_done','art_acc'],
-                ['ap','acc_received','art_acc'], ['ap','acc_done','art_acc'],
+                ['ar','processing','art_sales'],  ['ap','processing','art_pm'],
+                ['ar','reconciled','art_sales'],  ['ar','sent_to_acc','art_sales'],
+                ['ap','reconciled','art_pm'],     ['ap','sent_to_acc','art_pm'],
+                ['ar','acc_received','art_acc'],  ['ar','acc_done','art_acc'],
+                ['ap','acc_received','art_acc'],  ['ap','acc_done','art_acc'],
             ] as $r) $ins->execute($r);
         }
+    } catch (Throwable $e) {}
+
+    // 既有安裝（表已建立過，CREATE TABLE IF NOT EXISTS 不會補新欄位）：
+    try { $db->exec("ALTER TABLE acc_recon_track ALTER COLUMN status SET DEFAULT ''"); } catch (Throwable $e) {}
+    try { $db->exec("ALTER TABLE acc_recon_track ADD COLUMN owner_id INT NULL COMMENT '負責人 user.id（目前僅應收使用）'"); } catch (Throwable $e) {}
+    try { $db->exec("ALTER TABLE acc_recon_track ADD COLUMN owner_name VARCHAR(50) NULL"); } catch (Throwable $e) {}
+    // 既有矩陣表已非空（不會再跑上面的預設種入），這裡補上新增的 processing 兩列（可重複執行）
+    try {
+        $db->prepare("INSERT IGNORE INTO acc_recon_track_role_matrix (side,status,role_code) VALUES ('ar','processing','art_sales')")->execute();
+        $db->prepare("INSERT IGNORE INTO acc_recon_track_role_matrix (side,status,role_code) VALUES ('ap','processing','art_pm')")->execute();
     } catch (Throwable $e) {}
 
     // 應收歸戶需要的兩個欄位（是否需要對帳單／提供方式）已由 master_data_management.php 建立，
@@ -313,19 +340,55 @@ function act_track_get_or_create(PDO $db, string $side, string $partyKey, string
         return $row;
     }
     $now = date('Y-m-d H:i:s');
+    // 狀態預設留空（使用者明確要求：不要自動顯示「處理中」），要有人真的按過才算數；
+    // 正因如此這裡不寫狀態歷程——空字串不是 act_statuses() 的合法值，寫了也沒有錨點意義。
     $db->prepare("INSERT INTO acc_recon_track (side,party_key,party_name,billing_month,cutoff_date,status,created_at)
-                  VALUES (?,?,?,?,?, 'processing', ?)")
+                  VALUES (?,?,?,?,?, '', ?)")
        ->execute([$side, $partyKey, $partyName, $billingMonth, $cutoffDate, $now]);
     $id = (int)$db->lastInsertId();
-    $db->prepare("INSERT INTO acc_recon_track_status_log (track_id,from_status,to_status,changed_by,changed_by_name,changed_at,note)
-                  VALUES (?,NULL,'processing',NULL,'系統',?,'自動建立（首次列出）')")
-       ->execute([$id, $now]);
     $st2 = $db->prepare("SELECT * FROM acc_recon_track WHERE id=?");
     $st2->execute([$id]);
     return $st2->fetch(PDO::FETCH_ASSOC);
 }}
 
+if (!function_exists('act_allow_skip')) {
+/** 是否允許跳過順序直接按較後面的狀態（預設允許；管理員可在設定關閉改回嚴格依序） */
+function act_allow_skip(PDO $db): bool
+{
+    return (bool)act_param_get($db, 'allow_skip', true);
+}}
+if (!function_exists('act_allow_skip_save')) {
+function act_allow_skip_save(PDO $db, bool $v, string $by = ''): void
+{
+    act_param_save($db, 'allow_skip', $v, $by);
+}}
+if (!function_exists('act_show_amount')) {
+/** 「本期金額(含稅)」欄位是否顯示（預設顯示；管理員可關閉） */
+function act_show_amount(PDO $db): bool
+{
+    return (bool)act_param_get($db, 'show_amount', true);
+}}
+if (!function_exists('act_show_amount_save')) {
+function act_show_amount_save(PDO $db, bool $v, string $by = ''): void
+{
+    act_param_save($db, 'show_amount', $v, $by);
+}}
+
+if (!function_exists('act_status_index')) {
+/** 狀態在順序中的位置；空字串（尚未開始）回 -1 */
+function act_status_index(string $status): int
+{
+    if ($status === '') return -1;
+    $i = array_search($status, array_keys(act_statuses()), true);
+    return $i === false ? -1 : $i;
+}}
+
 if (!function_exists('act_set_status')) {
+/**
+ * 設定狀態。使用者明確要求：①狀態按鈕要能跳過順序（如直接從空白按「已送會計」，中間的
+ * 「處理中」「已對帳」自動補上與「已送會計」相同的時間，工作天數統計才算得出來）
+ * ②跳過順序與否可由管理員在設定關閉 ③往回退（回到較早的狀態）一律僅本頁管理員可做。
+ */
 function act_set_status(PDO $db, int $trackId, string $toStatus, array $perms, ?string $note = null): array
 {
     if (!array_key_exists($toStatus, act_statuses())) return ['success' => false, 'message' => '不合法的狀態'];
@@ -333,19 +396,66 @@ function act_set_status(PDO $db, int $trackId, string $toStatus, array $perms, ?
     $st->execute([$trackId]);
     $row = $st->fetch(PDO::FETCH_ASSOC);
     if (!$row) return ['success' => false, 'message' => '查無此筆追蹤資料，請重新整理'];
+
+    $order  = array_keys(act_statuses());
+    $curIdx = act_status_index((string)$row['status']);
+    $toIdx  = array_search($toStatus, $order, true);
+    if ($toIdx === $curIdx) return ['success' => true, 'message' => '狀態未變動'];
+
     if (!act_can_set_status($db, $perms, $row['side'], $toStatus)) return ['success' => false, 'message' => '沒有設定此狀態的權限'];
-    if ($row['status'] === $toStatus) return ['success' => true, 'message' => '狀態未變動'];
+
+    if ($toIdx > $curIdx) {
+        if (empty($perms['canAdmin']) && !act_allow_skip($db) && $toIdx > $curIdx + 1) {
+            return ['success' => false, 'message' => '目前設定不允許跳過順序，請依序設定狀態'];
+        }
+    } else {
+        if (empty($perms['canAdmin'])) return ['success' => false, 'message' => '沒有回復到較早狀態的權限（僅本頁管理員）'];
+    }
+
     $now = date('Y-m-d H:i:s');
     $db->beginTransaction();
     try {
+        // 跳過的中間狀態：第一次抵達時間一律補成跟這次實際按下的狀態同一時間
+        // （使用者原話：跳過「已對帳」直接按「已送會計」，已對帳日期自動＝已送會計日期）
+        if ($toIdx > $curIdx) {
+            for ($i = max($curIdx + 1, 0); $i < $toIdx; $i++) {
+                $skipStatus = $order[$i];
+                $chk = $db->prepare("SELECT COUNT(*) FROM acc_recon_track_status_log WHERE track_id=? AND to_status=?");
+                $chk->execute([$trackId, $skipStatus]);
+                if ((int)$chk->fetchColumn() === 0) {
+                    $db->prepare("INSERT INTO acc_recon_track_status_log (track_id,from_status,to_status,changed_by,changed_by_name,changed_at,note)
+                                  VALUES (?,?,?,?,?,?,?)")
+                       ->execute([$trackId, $i === 0 ? null : $order[$i - 1], $skipStatus, $perms['uid'] ?? null, $perms['uname'] ?? '', $now, '（跳過，日期自動帶入）']);
+                }
+            }
+        }
         $db->prepare("UPDATE acc_recon_track SET status=?, modified_at=?, modified_by=?, modified_by_name=? WHERE id=?")
            ->execute([$toStatus, $now, $perms['uid'] ?? null, $perms['uname'] ?? '', $trackId]);
         $db->prepare("INSERT INTO acc_recon_track_status_log (track_id,from_status,to_status,changed_by,changed_by_name,changed_at,note)
                       VALUES (?,?,?,?,?,?,?)")
-           ->execute([$trackId, $row['status'], $toStatus, $perms['uid'] ?? null, $perms['uname'] ?? '', $now, $note]);
+           ->execute([$trackId, $row['status'] !== '' ? $row['status'] : null, $toStatus, $perms['uid'] ?? null, $perms['uname'] ?? '', $now, $note]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); return ['success' => false, 'message' => $e->getMessage()]; }
     return ['success' => true, 'message' => '已更新', 'from' => $row['status'], 'to' => $toStatus];
+}}
+
+if (!function_exists('act_allowed_next_statuses')) {
+/** 這個人現在可以把這一列按成哪些狀態（前端渲染多顆按鈕用；後端 act_set_status 仍會再驗一次） */
+function act_allowed_next_statuses(PDO $db, array $row, array $perms, bool $allowSkip): array
+{
+    $order  = array_keys(act_statuses());
+    $curIdx = act_status_index((string)$row['status']);
+    $candidates = $allowSkip ? array_slice($order, $curIdx + 1) : array_slice($order, $curIdx + 1, 1);
+    if (!empty($perms['canAdmin'])) return $candidates;
+    $matrix = act_role_matrix($db);
+    $out = [];
+    foreach ($candidates as $s) {
+        $allowed = $matrix[$row['side']][$s] ?? [];
+        if ((!empty($perms['isPm'])    && in_array('art_pm', $allowed, true)) ||
+            (!empty($perms['isSales']) && in_array('art_sales', $allowed, true)) ||
+            (!empty($perms['isAcc'])   && in_array('art_acc', $allowed, true))) $out[] = $s;
+    }
+    return $out;
 }}
 
 /* ══════════════════════════════════════════════════════════════════
@@ -375,6 +485,8 @@ function act_ar_rows(PDO $db, string $billingMonth): array
             'billing_month'   => $billingMonth,
             'cutoff_date'     => $track['cutoff_date'],
             'status'          => $track['status'],
+            'owner_id'        => $track['owner_id'] ?? null,
+            'owner_name'      => $track['owner_name'] ?? null,
             'ship_amt'        => (float)$r['ship_amt'],
             'ret_amt'         => (float)$r['ret_amt'],
             'net_amt'         => (float)$r['net_amt'],
@@ -652,12 +764,28 @@ function act_period_status_counts(PDO $db, string $side, array $period): array
 {
     $bmFrom = substr($period['start'], 0, 7);
     $bmTo   = substr($period['end'], 0, 7);
-    $out = array_fill_keys(array_keys(act_statuses()), 0);
+    $out = array_merge(['' => 0], array_fill_keys(array_keys(act_statuses()), 0));
     try {
         $st = $db->prepare("SELECT status, COUNT(*) c FROM acc_recon_track WHERE side=? AND billing_month BETWEEN ? AND ? GROUP BY status");
         $st->execute([$side, $bmFrom, $bmTo]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[$r['status']] = (int)$r['c'];
     } catch (Throwable $e) {}
+    return $out;
+}}
+
+if (!function_exists('act_years')) {
+/** 畫面年度下拉：出貨與加工移轉憑單實際涵蓋的年度，至少含今年 */
+function act_years(PDO $db): array
+{
+    $years = [];
+    try {
+        foreach ($db->query("SELECT DISTINCT YEAR(Order_date) y FROM is_list WHERE Order_date IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN) as $y) $years[(int)$y] = true;
+        foreach ($db->query("SELECT DISTINCT YEAR(transfer_date) y FROM bom_ing_transfer_log WHERE transfer_date IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN) as $y) $years[(int)$y] = true;
+    } catch (Throwable $e) {}
+    $years[(int)date('Y')] = true;
+    $years[(int)date('Y') + 1] = true;
+    $out = array_keys($years);
+    rsort($out);
     return $out;
 }}
 
@@ -685,9 +813,94 @@ function act_insights(PDO $db, string $side, array $period, array $prevPeriod, a
         }
     }
     $counts = act_period_status_counts($db, $side, $period);
-    $stuckAtProcessing = $counts['processing'] ?? 0;
-    if ($stuckAtProcessing > 0) {
-        $out[] = ['level' => 'warn', 'title' => '尚有 ' . $stuckAtProcessing . ' 筆還在「處理中」', 'detail' => '這段期間內還沒有人按下「已對帳」'];
+    $notStarted = $counts[''] ?? 0;
+    if ($notStarted > 0) {
+        $out[] = ['level' => 'warn', 'title' => '尚有 ' . $notStarted . ' 筆還沒有人開始處理', 'detail' => '這段期間內還沒有人按下任何狀態按鈕'];
     }
     return $out;
+}}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 修改紀錄（跨對象彙總，供獨立「修改紀錄」分頁用）
+ * ══════════════════════════════════════════════════════════════════ */
+if (!function_exists('act_change_log_list_all')) {
+function act_change_log_list_all(PDO $db, array $f): array
+{
+    $where = []; $args = [];
+    $type = (string)($f['target_type'] ?? '');
+    if (in_array($type, ['customer', 'maker'], true)) { $where[] = 'l.target_type=?'; $args[] = $type; }
+    $kw = trim((string)($f['kw'] ?? ''));
+    if ($kw !== '') {
+        $where[] = '(l.target_id LIKE ? OR cl.customer LIKE ? OR cl.customer_full LIKE ? OR mk.maker_id LIKE ? OR mk.maker_id_all LIKE ?)';
+        $like = '%' . $kw . '%';
+        array_push($args, $like, $like, $like, $like, $like);
+    }
+    $sql = "SELECT l.*, u.user_cname AS changed_by_cname,
+                   COALESCE(cl.customer_full, cl.customer, mk.maker_id_all, mk.maker_id, l.target_id) AS target_name
+            FROM acc_recon_track_change_log l
+            LEFT JOIN user u ON u.id=l.changed_by
+            LEFT JOIN customer_list cl ON l.target_type='customer' AND cl.customer_id=l.target_id
+            LEFT JOIN maker_list mk ON l.target_type='maker' AND mk.maker_id_no=l.target_id"
+          . ($where ? ' WHERE ' . implode(' AND ', $where) : '')
+          . ' ORDER BY l.changed_at DESC';
+    $st = $db->prepare($sql);
+    $st->execute($args);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+    $total = count($rows);
+    $perPage = (int)($f['per_page'] ?? 20);
+    if ($perPage <= 0) return ['rows' => $rows, 'total' => $total, 'page' => 1, 'per_page' => 0];
+    $page = max(1, (int)($f['page'] ?? 1));
+    return ['rows' => array_slice($rows, ($page - 1) * $perPage, $perPage), 'total' => $total, 'page' => $page, 'per_page' => $perPage];
+}}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 應收負責人（候選名單由管理員在設定頁挑部門→選人建立；清單可批次指派）
+ * ══════════════════════════════════════════════════════════════════ */
+if (!function_exists('act_dept_list')) {
+function act_dept_list(PDO $db): array
+{
+    try {
+        return $db->query("SELECT id, name, parent_id FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}}
+if (!function_exists('act_dept_people')) {
+function act_dept_people(PDO $db, int $deptId): array
+{
+    if ($deptId <= 0 || !function_exists('eg_people_list')) return [];
+    return eg_people_list($db, ['dept_ids' => [$deptId]]);
+}}
+if (!function_exists('act_owner_pool_list')) {
+function act_owner_pool_list(PDO $db): array
+{
+    try {
+        return $db->query("SELECT * FROM acc_recon_track_owner_pool ORDER BY dept_name, user_name")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}}
+if (!function_exists('act_owner_pool_add')) {
+function act_owner_pool_add(PDO $db, int $userId, string $userName, ?int $deptId, ?string $deptName, array $perms): array
+{
+    if ($userId <= 0) return ['success' => false, 'message' => '缺少人員'];
+    $db->prepare("INSERT INTO acc_recon_track_owner_pool (user_id,user_name,dept_id,dept_name,added_by,added_by_name,added_at)
+                  VALUES (?,?,?,?,?,?,NOW())
+                  ON DUPLICATE KEY UPDATE user_name=VALUES(user_name), dept_id=VALUES(dept_id), dept_name=VALUES(dept_name)")
+       ->execute([$userId, $userName, $deptId, $deptName, $perms['uid'] ?? null, $perms['uname'] ?? '']);
+    return ['success' => true];
+}}
+if (!function_exists('act_owner_pool_remove')) {
+function act_owner_pool_remove(PDO $db, int $id): array
+{
+    $db->prepare("DELETE FROM acc_recon_track_owner_pool WHERE id=?")->execute([$id]);
+    return ['success' => true];
+}}
+if (!function_exists('act_owner_set_batch')) {
+/** 批次指派負責人（目前僅應收使用；AP 的 track_id 若誤送一併忽略不處理） */
+function act_owner_set_batch(PDO $db, array $trackIds, ?int $ownerId, ?string $ownerName): array
+{
+    $trackIds = array_values(array_filter(array_map('intval', $trackIds)));
+    if (!$trackIds) return ['success' => false, 'message' => '沒有選取任何列'];
+    $in = implode(',', array_fill(0, count($trackIds), '?'));
+    $args = array_merge([$ownerId ?: null, $ownerId ? $ownerName : null], $trackIds, ['ar']);
+    $db->prepare("UPDATE acc_recon_track SET owner_id=?, owner_name=? WHERE id IN ($in) AND side=?")->execute($args);
+    return ['success' => true, 'updated' => count($trackIds)];
 }}
