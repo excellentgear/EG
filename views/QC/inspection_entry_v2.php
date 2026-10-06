@@ -1239,8 +1239,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .btn-type-toggle.type-okng:hover { background:var(--ink); }
     /* RANGE 模式下限≥上限：即時紅框提示（表單三總則③錯誤即時偵測並顯示原因） */
     #items-table .table-input.tol-invalid { border-color:var(--coral); background:#FDEDEA; }
-    /* 容器未選擇紅框（2026-10-06 使用者要求：阻擋存檔之外要紅框框出未填區塊，方便快速確認） */
-    #insp-container-1.ctn-invalid, #insp-container-2.ctn-invalid { border-color:var(--coral); background:#FDEDEA; box-shadow:0 0 0 1px var(--coral); }
+    /* 容器未選擇／已選容器卻未填箱數，紅框框出未填區塊（2026-10-06 使用者要求，方便快速確認）；
+       同一個 class 共用在容器下拉與箱數輸入框，具體框哪一個由 doSave() 判斷哪裡沒填就框哪裡。 */
+    #insp-container-1.ctn-invalid, #insp-container-2.ctn-invalid,
+    #insp-quantity-1.ctn-invalid, #insp-quantity-2.ctn-invalid { border-color:var(--coral); background:#FDEDEA; box-shadow:0 0 0 1px var(--coral); }
+    /* 本單使用量具未選擇紅框（2026-10-06 使用者要求：量具也必填，擋存檔之外同樣要紅框提示） */
+    #form-tool-row.ft-invalid { border:1px solid var(--coral); background:#FDEDEA; border-radius:6px; padding:6px 10px; }
     /* 項目列的操作鈕（加量測/備註/刪除）改放在「檢驗項目」欄名稱下方，
        原本擺最右欄會被視窗右緣切掉看不到（2026-07-30 現場回饋） */
     .row-acts { margin-top:4px; font-size:12px; }
@@ -3636,6 +3640,8 @@ $(function(){
                    '<button type="button" class="ft-x" data-id="'+esc(t.id)+'" title="移除這支量具">×</button></span>';
         }).join('');
         $('#form-tool-chips').html(h || '<span class="ft-none">尚未選擇量具</span>');
+        // 選到量具就立刻撤掉紅框，不必等下一次按儲存才知道已經補填（存檔前的把關仍在 validateBeforeSave 本身）
+        if((MODEL.tools||[]).length) $('#form-tool-row').removeClass('ft-invalid');
     }
 
     function openToolPicker(){
@@ -3940,10 +3946,13 @@ $(function(){
     }
     $('#inp-qty,#inp-remark').on('input', scheduleDraftSave);
     $('#inp-qty').on('input', updateQtyLive);
-    // 選了任一容器就立刻撤掉紅框，不必等下一次按儲存才知道已經補填（存檔前的把關仍在 doSave 本身）
+    // 選了任一容器、或補上箱數，就立刻撤掉對應的紅框，不必等下一次按儲存才知道已經補填
+    // （存檔前的實際把關仍在 doSave 本身，這裡只是即時回饋）。
     $('#insp-container-1,#insp-container-2').on('change', function(){
         if($('#insp-container-1').val() || $('#insp-container-2').val()) $('#insp-container-1,#insp-container-2').removeClass('ctn-invalid');
     });
+    $('#insp-quantity-1').on('input', function(){ if(parseInt($(this).val())>0) $(this).removeClass('ctn-invalid'); });
+    $('#insp-quantity-2').on('input', function(){ if(parseInt($(this).val())>0) $(this).removeClass('ctn-invalid'); });
     $('#btn-dock-extra').on('click', function(){ $('#dock-extra').slideToggle(120, syncDockPad); });
 
     // ---------- 首件/末件：簡單按鈕，按了才算，不按＝一般檢驗；直接全檢(=送驗數件)不走抽樣 ----------
@@ -4087,11 +4096,11 @@ $(function(){
         $('#main-area').show(); $('#dock').show(); syncDockPad();
         $('#inp-qty').val(SHIP_DATA.total_qty||0); updateQtyLive();
         $('#inp-sample').val(state.sampleN).data('prev', state.sampleN);
-        $('#insp-container-1,#insp-container-2').val('').removeClass('ctn-invalid'); $('#insp-quantity-1,#insp-quantity-2').val('');
+        $('#insp-container-1,#insp-container-2').val('').removeClass('ctn-invalid'); $('#insp-quantity-1,#insp-quantity-2').val('').removeClass('ctn-invalid');
         applyInspKindUI();
         renderBfStageBanner();
         renderBatches();
-        MODEL.tools=[];
+        MODEL.tools=[]; $('#form-tool-row').removeClass('ft-invalid');
         view='GRID'; localStorage.setItem('qc2_view', view);
         $('#chk-std-edit').prop('checked', true);
         $('#chk-save-std').prop('checked', false).closest('label').hide();  // 出貨檢驗不改寫各製程自己的標準
@@ -4334,10 +4343,10 @@ $(function(){
             $('#inp-qty').val(ctx.order_qty || 0); updateQtyLive();
             $('#inp-sample').val(state.sampleN);
             $('#insp-container-1,#insp-container-2').val('').removeClass('ctn-invalid');
-            $('#insp-quantity-1,#insp-quantity-2').val('');
+            $('#insp-quantity-1,#insp-quantity-2').val('').removeClass('ctn-invalid');
             applyInspKindUI();
             renderBatches();
-            MODEL.tools=[];                       // 新的一張檢驗單：本單使用量具從空的開始
+            MODEL.tools=[]; $('#form-tool-row').removeClass('ft-invalid');  // 新的一張檢驗單：本單使用量具從空的開始
             renderItems(res.items || []);
             $('#no-std-hint').toggle(!res.has_std);
             var noPart = !ctx.d_id || ctx.d_id<=0;
@@ -4709,7 +4718,7 @@ $(function(){
         $('#inp-remark').val($('#ah-remark').val());
         $('#chk-save-std').prop('checked', false).closest('label').hide();  // 臨時檢驗不改寫料號標準
         renderBatches();
-        MODEL.tools=[];
+        MODEL.tools=[]; $('#form-tool-row').removeClass('ft-invalid');
         renderItems([]);
         $('#no-std-hint').hide();
         $('#btn-save,#btn-redo').prop('disabled', !state.can_fill);
@@ -5735,8 +5744,11 @@ $(function(){
                 }
             });
         });
-        // 量具：整張檢驗單只要選過任一支就算數（目視／功能檢查的單子不強制）
-        if(anyNum && !(MODEL.tools||[]).length){
+        // 量具：整張檢驗單一律必填（2026-10-06 使用者更正：連目視／功能檢查的單子也要強制——
+        // 「目視」本身就是量具清單裡的一個選項，OKNG 型項目一樣要選它，才記得下是用什麼方式判定的；
+        // anyNum 不再是觸發條件）
+        $('#form-tool-row').toggleClass('ft-invalid', !(MODEL.tools||[]).length);
+        if(!(MODEL.tools||[]).length){
             out.push({ i:-1, r:0, field:'formtool',
                        text:'<b>尚未選擇本單使用的量具</b>（品質紀錄需可追溯到這張檢驗單用了哪幾支量具）' });
         }
@@ -5864,21 +5876,30 @@ $(function(){
         });
         if(warnCells.length && !confirm('下列實測值與標準值差異過大，可能是誤填：\n\n'+warnCells.join('\n')+
             '\n\n確定這些數值正確、要照這樣存檔嗎？')) return;
-        // 容器至少要選一個，直接擋下存檔（2026-10-06 使用者更正：不是提醒，是必填）。
+        // 容器至少要選一個，而且選了就要填箱數，直接擋下存檔（2026-10-06 使用者更正兩次：
+        // ①不是提醒，是必填 ②只選容器沒填箱數〈等於0箱〉也要擋，不能真的存成0箱）。
         // 容器只隨「允收(OK)自動彙總」(autoSubmitQcResult) 一起寫入，而那段只掛在製程製令的
         // 正常存檔路徑——asRedo（退回重做）、修改既有紀錄、出貨檢驗(ctx.ship)、臨時檢驗單
         // (ctx.adhoc) 都不會觸發它，這幾種不檢查；只設定其中一個時 autoSubmitQcResult() 會自動
-        // 搬到容器1位置，這裡只擋「兩個都完全沒選」。
+        // 搬到容器1位置。
         if(!asRedo && !state.editFormId && !ctx.ship && !ctx.adhoc){
             var ctn1=$('#insp-container-1').val()||'', ctn2=$('#insp-container-2').val()||'';
-            if(!ctn1 && !ctn2){
+            var cqty1=$('#insp-quantity-1').val()||'', cqty2=$('#insp-quantity-2').val()||'';
+            var noneCtn = !ctn1 && !ctn2;
+            var missQty1 = !!ctn1 && (cqty1==='' || parseInt(cqty1)<=0);
+            var missQty2 = !!ctn2 && (cqty2==='' || parseInt(cqty2)<=0);
+            $('#insp-container-1,#insp-container-2').toggleClass('ctn-invalid', noneCtn);
+            $('#insp-quantity-1').toggleClass('ctn-invalid', missQty1);
+            $('#insp-quantity-2').toggleClass('ctn-invalid', missQty2);
+            if(noneCtn || missQty1 || missQty2){
                 $('#dock-extra').show(); syncDockPad();
-                $('#insp-container-1,#insp-container-2').addClass('ctn-invalid');   // 紅框框出未填區塊
-                alert('請至少選擇一個容器（容器1或容器2）才能儲存檢驗結果。\n\n只設定其中一個時會自動視為容器1的內容。');
-                $('#insp-container-1').focus();
+                var ctnMsg = noneCtn
+                    ? '請至少選擇一個容器（容器1或容器2）才能儲存檢驗結果。\n\n只設定其中一個時會自動視為容器1的內容。'
+                    : '已選擇容器但未填「箱數」，請補上'+(missQty1&&missQty2?'容器1與容器2':(missQty1?'容器1':'容器2'))+'的箱數才能儲存（箱數不可為 0 或空白）。';
+                alert(ctnMsg);
+                $(noneCtn ? '#insp-container-1' : (missQty1 ? '#insp-quantity-1' : '#insp-quantity-2')).focus();
                 return;
             }
-            $('#insp-container-1,#insp-container-2').removeClass('ctn-invalid');
         }
 
         // 補資料（管理員）：新單暫存的檢驗日期/檢驗人員/主管審核，隨這次存檔一起送出；
