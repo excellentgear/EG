@@ -714,15 +714,22 @@ function oa_analyze(PDO $db, array $opt = []): array
 
     /* ── 全製／單製／多製程：本期彙總（2026-10-06 使用者交辦：直接依「稽核製程標籤（AS 認定）」
        判定，不再退回關鍵字規則猜——$rules／oa_proc_class() 不刪，order_as_tag_lib.php 的
-       ot_astag_suggester() 批次補設定頁的「建議標籤」還在用它，只是這個分析結果不再採用。 */
+       ot_astag_suggester() 批次補設定頁的「建議標籤」還在用它，只是這個分析結果不再採用。
+       2026-10-06（同日再交辦）：「單製」要再拆成「AS單製」（kind=process，如單製齒研/單製
+       插齒，是管理員設定的稽核製程）與「單製」（kind=fixed/other，如單製其他——同一道製程
+       但不在 AS 認證範圍內，意義不同，不可混算）；「全製」比照（目前系統裡還沒有人設定
+       scope=full/both 的稽核製程，所以 full_as 恆為 0，保留這個分支只是避免日後管理員真的
+       設了卻被吃掉）。 */
     $procSamples = ['full' => [], 'single' => [], 'multi' => [], 'unknown' => [], 'none' => []];
-    $astagFull = 0; $astagSingle = 0; $astagMulti = 0; $astagExcluded = 0; $astagUnsetCnt = 0;
+    $astagFullAs = 0; $astagFullOther = 0; $astagSingleAs = 0; $astagSingleOther = 0;
+    $astagMulti = 0; $astagExcluded = 0; $astagUnsetCnt = 0;
     foreach ($rows as $r) {
         if (!$inSel($r) || !$inRange($r, $curE)) continue;
         if ($r['cls_src'] === 'astag') {
-            if ($r['cls'] === 'full') $astagFull++;
-            elseif ($r['cls'] === 'multi') $astagMulti++;
-            else $astagSingle++;
+            $isProc = ($r['as_kind'] === 'process');
+            if ($r['cls'] === 'full')        { if ($isProc) $astagFullAs++;   else $astagFullOther++; }
+            elseif ($r['cls'] === 'multi')   { $astagMulti++; }
+            else                             { if ($isProc) $astagSingleAs++; else $astagSingleOther++; }
         } elseif ($r['cls_src'] === 'astag_excluded') {
             $astagExcluded++;
         } else {
@@ -971,7 +978,9 @@ function oa_analyze(PDO $db, array $opt = []): array
         'trend'       => ['cur' => $trendCur, 'prev' => $trendPrev, 'prev_year' => $year - 1],
         'bands'       => $bandAgg,
         'proc'        => ['samples' => $procSamples,
-                           'astag_full' => $astagFull, 'astag_single' => $astagSingle, 'astag_multi' => $astagMulti,
+                           'astag_full_as' => $astagFullAs, 'astag_full_other' => $astagFullOther,
+                           'astag_single_as' => $astagSingleAs, 'astag_single_other' => $astagSingleOther,
+                           'astag_multi' => $astagMulti,
                            'astag_excluded' => $astagExcluded, 'astag_unset' => $astagUnsetCnt],
         'astag'       => ['rows' => $astagRows, 'trend' => $astagTrend, 'buckets' => array_map(function ($b) { return $b['label']; }, oa_period_buckets($year, $gran)),
                            'unset' => $astagUnset, 'tagged_pct' => $astagTaggedPct],

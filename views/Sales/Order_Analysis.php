@@ -1286,17 +1286,24 @@ function renderProc(){
     plotOptions:{ column:{ stacking:'normal', borderRadius:2, pointPadding:0.05, groupPadding:0.16 } },
     series: ser
   }));
+  // 2026-10-06 使用者交辦：下面改成「AS單製、單製、多製程、全製、尚未設定標籤」一項一列——
+  // 「單製」要拆開：AS單製＝kind=process（如單製齒研/單製插齒，管理員設定的稽核製程）；
+  // 單製＝kind=fixed/other（如單製其他，同一道製程但不在 AS 認證範圍內，意義不同不可混算）。
+  // 全製同理可能有 AS全製／全製兩種，目前系統沒人設過 scope=full 的稽核製程所以 full_as
+  // 恆為 0，只有真的出現時才多印一列，避免平常多一列全是 0 的雜訊。
   var samp = (pr.samples)||{}, h='';
-  h += '<tr><td style="color:#2E7D32;">依訂單上的「稽核製程標籤（AS 認定）」判定</td>'
-     + '<td class="n">'+nf((pr.astag_full||0)+(pr.astag_single||0)+(pr.astag_multi||0))+'</td>'
-     + '<td style="font-size:11px;color:#a08a6f;">全製 '+nf(pr.astag_full||0)+'／單製 '+nf(pr.astag_single||0)
-     + '／多製程 '+nf(pr.astag_multi||0)+'</td></tr>';
-  h += '<tr><td style="color:#a08a6f;">尚未設定標籤（不猜全製或單製）</td>'
-     + '<td class="n">'+nf(pr.astag_unset||0)+'</td>'
-     + '<td style="font-size:11px;color:#a08a6f;">其中製程欄空白 '+nf(DATA.kpi.cur.none||0)+' 筆'
-     + ((samp.unknown||[]).length ? '；例如：'+esc(samp.unknown.slice(0,6).join('、')) : '')+'</td></tr>';
-  if(pr.astag_excluded) h += '<tr><td style="color:#a08a6f;">AS 認定為「不分單製全製」（如廠內治具／其他非加工），不列入本區塊統計</td>'
-     + '<td class="n">'+nf(pr.astag_excluded)+'</td><td></td></tr>';
+  var row3 = function(lab, val, note, color){
+    return '<tr><td'+(color?' style="color:'+color+';"':'')+'>'+lab+'</td><td class="n">'+nf(val)+'</td>'
+         + '<td style="font-size:11px;color:#a08a6f;">'+(note||'')+'</td></tr>';
+  };
+  if(pr.astag_full_as) h += row3('AS全製', pr.astag_full_as, '管理員設定的稽核製程，scope=全製／兩者皆可', '#2E7D32');
+  h += row3('AS單製', pr.astag_single_as||0, '管理員設定的稽核製程（如單製齒研／單製插齒）', '#2E7D32');
+  h += row3('單製', pr.astag_single_other||0, '單一製程但不在 AS 認證範圍內（如單製其他）');
+  h += row3('多製程', pr.astag_multi||0, '客戶來料、做了好幾道非稽核製程，但不是做到成品也不是只做一道');
+  h += row3('全製', pr.astag_full_other||0, '從頭做到成品，過程中沒有被列為稽核製程');
+  h += row3('尚未設定標籤', pr.astag_unset||0, '不猜全製或單製；其中製程欄空白 '+nf(DATA.kpi.cur.none||0)+' 筆'
+     + ((samp.unknown||[]).length ? '；例如：'+esc(samp.unknown.slice(0,6).join('、')) : ''));
+  if(pr.astag_excluded) h += row3('不分單製全製（不列入本區塊統計）', pr.astag_excluded, '如廠內治具／其他非加工');
   $('#tblProc tbody').html(h);
 }
 
@@ -1576,11 +1583,15 @@ $('#btnCsv').on('click', function(){
   row('【數量區間】','區間','筆數','佔筆數%','數量','佔數量%','金額','佔金額%');
   DATA.bands.forEach(function(b){ row('', b.label, b.orders, b.pct_orders, b.qty, b.pct_qty, Math.round(b.amount), b.pct_amount); });
   row('');
-  row('【全製/單製】（直接依稽核製程標籤AS認定判定，不使用關鍵字猜測）','判定依據','全製','單製','多製程');
-  row('', '依AS認定判定', DATA.proc.astag_full||0, DATA.proc.astag_single||0, DATA.proc.astag_multi||0);
-  row('', '尚未設定標籤(不猜)', DATA.proc.astag_unset||0, '', '');
-  row('', '其中製程欄空白', DATA.kpi.cur.none||0, '', '');
-  row('', 'AS認定不分單製全製(不列入)', DATA.proc.astag_excluded||0, '', '');
+  row('【全製/單製】（直接依稽核製程標籤AS認定判定，不使用關鍵字猜測）','判定依據','筆數');
+  if(DATA.proc.astag_full_as) row('', 'AS全製', DATA.proc.astag_full_as);
+  row('', 'AS單製', DATA.proc.astag_single_as||0);
+  row('', '單製(非AS)', DATA.proc.astag_single_other||0);
+  row('', '多製程', DATA.proc.astag_multi||0);
+  row('', '全製', DATA.proc.astag_full_other||0);
+  row('', '尚未設定標籤(不猜)', DATA.proc.astag_unset||0);
+  row('', '其中製程欄空白', DATA.kpi.cur.none||0);
+  row('', 'AS認定不分單製全製(不列入)', DATA.proc.astag_excluded||0);
   row('');
   row('【AS 稽核分類】','分類',curL+'筆數',curL+'數量',curL+'金額',baseL+'筆數',baseL+'數量',baseL+'金額');
   (DATA.astag && DATA.astag.rows || []).forEach(function(t){
@@ -1744,11 +1755,14 @@ function oaPrintHtml(){
     bandRows += '<tr><td>'+esc(b.label)+'</td><td class="tr">'+nf(b.orders)+'</td><td class="tr">'+b.pct_orders+'%</td>'+
       '<td class="tr">'+money(b.amount)+'</td></tr>';
   });
-  // 直接依稽核製程標籤（AS 認定）判定，不使用關鍵字猜測（2026-10-06）
-  var procRows = '<tr><td>依AS認定判定</td><td class="tc">全製／單製／多製程</td><td class="tr">'
-    + nf(DATA.proc.astag_full||0)+'／'+nf(DATA.proc.astag_single||0)+'／'+nf(DATA.proc.astag_multi||0)+'</td></tr>'
-    + '<tr><td>尚未設定標籤（不猜）</td><td class="tc">—</td><td class="tr">'+nf(DATA.proc.astag_unset||0)+'</td></tr>'
-    + (DATA.proc.astag_excluded ? '<tr><td>AS認定不分單製全製（不列入）</td><td class="tc">—</td><td class="tr">'+nf(DATA.proc.astag_excluded)+'</td></tr>' : '');
+  // 直接依稽核製程標籤（AS 認定）判定，不使用關鍵字猜測；單製／全製各拆 AS／非AS 兩種（2026-10-06）
+  var procRows = (DATA.proc.astag_full_as ? '<tr><td>AS全製</td><td class="tc">管理員設定的稽核製程</td><td class="tr">'+nf(DATA.proc.astag_full_as)+'</td></tr>' : '')
+    + '<tr><td>AS單製</td><td class="tc">管理員設定的稽核製程</td><td class="tr">'+nf(DATA.proc.astag_single_as||0)+'</td></tr>'
+    + '<tr><td>單製</td><td class="tc">不在AS認證範圍內</td><td class="tr">'+nf(DATA.proc.astag_single_other||0)+'</td></tr>'
+    + '<tr><td>多製程</td><td class="tc">—</td><td class="tr">'+nf(DATA.proc.astag_multi||0)+'</td></tr>'
+    + '<tr><td>全製</td><td class="tc">—</td><td class="tr">'+nf(DATA.proc.astag_full_other||0)+'</td></tr>'
+    + '<tr><td>尚未設定標籤</td><td class="tc">不猜</td><td class="tr">'+nf(DATA.proc.astag_unset||0)+'</td></tr>'
+    + (DATA.proc.astag_excluded ? '<tr><td>不分單製全製（不列入）</td><td class="tc">—</td><td class="tr">'+nf(DATA.proc.astag_excluded)+'</td></tr>' : '');
   h += '<div class="pr-sec"><div class="pr-two">'+
     '<div><div class="pr-sec-title">數量區間分析</div>'+
       (bandSvg?'<div class="pr-chart">'+bandSvg+'</div>':'')+
