@@ -1019,9 +1019,13 @@ var INSP_GAP_TITLE = { sop: '查無此製程已核准的 SOP（製造製程說�
    帶料號當關鍵字＝sop_sip.php 既有的 ?tab=sop|sip&kw= 深連結（專案管理「文件檢核」已經在用
    同一套，不是本頁新發明一套）。partNo 沒有時（設定頁的預覽等情境）退回純文字不可點。 */
 function inspBadge(stage, gap, partNo){
-    if (!stage || !INSP_LABEL[stage]) return '';
-    var cls = stage === 'IQC' ? 'sg-1' : (stage === 'FQC' ? 'sg-3' : 'sg-2');
-    var h = '<span class="tag-s '+cls+'" title="檢驗類別（可在下方「檢驗類別」欄位改）">'+INSP_LABEL[stage]+'</span>';
+    var h = '';
+    if (stage && INSP_LABEL[stage]) {
+        var cls = stage === 'IQC' ? 'sg-1' : (stage === 'FQC' ? 'sg-3' : 'sg-2');
+        h = '<span class="tag-s '+cls+'" title="檢驗類別（可在下方「檢驗類別」欄位改）">'+INSP_LABEL[stage]+'</span>';
+    }
+    /* 包裝本身沒有 insp_stage（不是檢驗點）仍可能帶 gap='sip'——這裡就是不早退、
+       讓下面的缺口籤照樣畫出來的原因（見 cp_insp_gap_annotate 說明）。 */
     if (gap && INSP_GAP_LABEL[gap]) {
         var gapStyle = 'background:#f3e2c7;color:#8c2d18;border:1px solid #DD5138;margin-left:2px;';
         if (partNo) {

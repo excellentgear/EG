@@ -1730,6 +1730,15 @@ function cp_ss_doc_exists(PDO $db, string $kind, ?int $partDId, ?int $processNo)
  * 逐列補上文件缺口提示：IPQC 查無已核准 SOP → insp_gap='sop'；FQC 查無真正的已核准
  * SIP → insp_gap='sip'。不改判分類（包裝前一道照樣是 FQC），只是標出「這份分類背後
  * 該有的文件還沒建」。每次顯示即時查、不落庫（與 insp_src 同一種顯示用欄位）。
+ *
+ * 包裝本身（insp_src='pack'）刻意被 cp_compute_insp_stages() 判成 insp_stage=null
+ * （它不是一個檢驗點），但它的特性內容仍是 cp_sip_items() 從「包裝通用SIP」查來的
+ * （見同檔 cp_sip_general_doc_by_type() 說明）——這份SIP沒建好一樣要提示缺口，不能
+ * 因為沒有 insp_stage 就被上面那段 IPQC/FQC 判斷略過，否則「CP已經顯示包裝檢驗項目
+ * 了，缺口提示卻完全不提」會變成一個使用者找不到原因的死角（2026-10-06 使用者問
+ * 「一般應該顯示包裝自主檢驗項目還是包裝SIP內容」，答案是後者——本來就是，這裡補
+ * 上對應的缺口偵測，不是另外接 packing_schedule.php 那套綁在具體製令上的即時檢驗
+ * 記錄，那是不同層級的東西，CP這種料號範本頁面查不到也不該查）。
  */
 function cp_insp_gap_annotate(PDO $db, array $procs, ?int $partDId): array
 {
@@ -1737,11 +1746,13 @@ function cp_insp_gap_annotate(PDO $db, array $procs, ?int $partDId): array
         $p['insp_gap'] = null;
         $pn = isset($p['process_no']) && $p['process_no'] !== null && $p['process_no'] !== ''
             ? (int)$p['process_no'] : null;
+        if ($pn === null) continue;
         $stage = $p['insp_stage'] ?? null;
-        if ($pn === null || !$stage) continue;
         if ($stage === 'IPQC' && !cp_has_sop($db, $partDId, $pn)) {
             $p['insp_gap'] = 'sop';
         } elseif ($stage === 'FQC' && !cp_has_real_sip($db, $partDId, $pn)) {
+            $p['insp_gap'] = 'sip';
+        } elseif (!$stage && ($p['insp_src'] ?? '') === 'pack' && !cp_has_real_sip($db, $partDId, $pn)) {
             $p['insp_gap'] = 'sip';
         }
     }
