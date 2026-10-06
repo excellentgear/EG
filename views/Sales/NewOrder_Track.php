@@ -2189,8 +2189,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
         $ord = $ordSt->fetch(PDO::FETCH_ASSOC) ?: [];
         $bizDefault = el_order_business_default($pdo, $ord);
         $todayL = substr((string)$pdo->query("SELECT NOW()")->fetchColumn(), 0, 10);
+        // 回覆方式（電話／Line／E-mail…，使用者交辦）：一律即時查 eng_log_channel 現況，
+        // 不在這裡另存一份清單——管理員在 eng_log.php「維護回覆方式」加的新選項，這裡會
+        // 自動一起出現，兩邊共用同一張表、同一套函式（鐵律4）。
         echo json_encode(['success' => true, 'log_id' => $logId, 'items' => $items, 'today' => $todayL,
-            'can_resolve' => $can_design_qa_resolve, 'biz_default' => $bizDefault,
+            'can_resolve' => $can_design_qa_resolve, 'biz_default' => $bizDefault, 'channels' => el_channels($pdo),
             'order' => ['order_no' => (string)($ord['Order_oo'] ?? ''), 'part_no' => (string)($ord['d_id'] ?? ''),
                         'client' => (string)($ord['Client_name'] ?? '')]]);
     } catch (Exception $e) {
@@ -4014,6 +4017,15 @@ foreach($dCounts as $c) {
         .ate-q-replyby > label, .ate-q-replydate label { font-size:11px; color:#6b5638; font-weight:400; margin:0 0 3px; white-space:nowrap; display:block; }
         .ate-q-replydate input { font-size:12px; padding:2px 5px; height:24px; width:150px; }
         .ate-q-chk { display:block; font-size:11px; color:#6b5638; font-weight:400; margin-bottom:4px; }
+        /* 回覆方式按鈕（電話／Line／E-mail…，2026-10-06 使用者交辦，預設電話；其他方式由
+           管理員在 eng_log.php「維護回覆方式」增加，這裡不寫死選項，見 ATE_Q.channels）。
+           暖色系（ai-rules/10）：未選＝白底暖棕字，已選＝琥珀實心（跟問題狀態籤的「已回覆」
+           同一色，視覺上呼應「這則回覆是用什麼方式」）。 */
+        .ate-q-ch-row { display:inline-flex; flex-wrap:wrap; gap:4px; }
+        .ate-q-ch-btn { display:inline-block; font-size:11px; line-height:1.8; padding:0 9px; border-radius:11px;
+            cursor:pointer; border:1px solid #D8CBB8; background:#fff; color:#6b5638; }
+        .ate-q-ch-btn:hover { border-color:#E0A46A; color:#8a4b12; }
+        .ate-q-ch-btn.on { background:#F0A24B; border-color:#d98a33; color:#fff; font-weight:700; }
         .ate-q-composer { border-top:2px solid #EADFCD; margin-top:10px; padding-top:10px; }
         .ate-q-add-title { font-size:12px; color:#8a4b12; font-weight:700; margin-bottom:6px; }
         .ate-q-add-table { width:100%; }
@@ -8540,7 +8552,8 @@ foreach($dCounts as $c) {
         // 對象選擇器（ateQTp*）新增問題與回覆共用同一套——業務＝下拉（限業務課人員）、
         // 廠商/客戶＝打字模糊搜尋選定後可再選/填聯絡人、其他＝手動輸入說明文字。
         var ATE_Q = { orderId: 0, logId: 0, canResolve: false, bizDefault: null, items: [], rows: [],
-                      cands: { user: null }, replyState: {}, contactCache: {}, tpState: {}, tpOnChange: {} };
+                      cands: { user: null }, replyState: {}, contactCache: {}, tpState: {}, tpOnChange: {},
+                      channels: {}, replyChannel: {} };
 
         function ateQNewRow() {
             var d = ATE_Q.bizDefault;
@@ -8559,6 +8572,8 @@ foreach($dCounts as $c) {
                 ATE_Q.today = res.today || '';
                 ATE_Q.items = res.items || [];
                 ATE_Q.replyState = {};
+                ATE_Q.channels = res.channels || {};
+                ATE_Q.replyChannel = {};   // 每次重新打開都退回預設（電話），不沿用上一次開啟時選過的
                 ATE_Q.rows = [ateQNewRow()];
                 var ord = res.order || {};
                 $('#ate-q-modal-title').text([ord.order_no, ord.part_no, ord.client].filter(function(x){return x;}).join('　'));
@@ -8621,8 +8636,9 @@ foreach($dCounts as $c) {
             var repliesHtml = '';
             (it.replies || []).forEach(function(r) {
                 var when = r.replied_on ? (typeof egFmtDate === 'function' ? egFmtDate(r.replied_on) : r.replied_on) : '';
+                var chLabel = (r.channel && ATE_Q.channels && ATE_Q.channels[r.channel]) ? ATE_Q.channels[r.channel] : '';
                 repliesHtml += '<div class="ate-q-reply"><span class="ate-q-reply-meta">' + escapeHtml(r.reply_by || r.created_by_name || '') +
-                    (when ? ' ・ ' + escapeHtml(when) : '') + '</span><div class="ate-q-reply-content">' + escapeHtml(r.content || '') + '</div></div>';
+                    (when ? ' ・ ' + escapeHtml(when) : '') + (chLabel ? ' ・ ' + escapeHtml(chLabel) : '') + '</span><div class="ate-q-reply-content">' + escapeHtml(r.content || '') + '</div></div>';
             });
             var actions = '<button type="button" class="ate-q-btn" onclick="ateQToggleReplyBox(' + it.id + ')"><i class="fa fa-reply"></i> 回覆</button>';
             if (ATE_Q.canResolve) {
@@ -8644,6 +8660,9 @@ foreach($dCounts as $c) {
                 + '<div class="ate-q-replybox" id="ate-q-replybox-' + it.id + '" style="display:none;">'
                 +   '<textarea class="form-control" rows="2" placeholder="輸入回覆內容…按 Enter 直接送出，Shift+Enter 換行" '
                 +     'id="ate-q-replytxt-' + it.id + '" onkeydown="ateQReplyKeyDown(event,' + it.id + ')"></textarea>'
+                // 回覆方式（電話／Line／E-mail…使用者交辦，預設電話）：選項即時取自管理員
+                // 維護的 eng_log_channel（走 eng_log.php「維護回覆方式」），不是寫死的清單
+                +   '<div class="ate-q-replyby"><label>回覆方式：</label>' + ateQChannelHtml(it.id) + '</div>'
                 // 回覆對象：預設帶出這條問題本來指定的對象（使用者仍可改成實際回覆的人，
                 // 例如業務轉述客戶窗口的話），與新增問題共用同一套按鈕式選擇器
                 +   '<div class="ate-q-replyby"><label>回覆對象：</label>' + ateQTpHtml(rns, ATE_Q.replyState[it.id]) + '</div>'
@@ -8655,6 +8674,32 @@ foreach($dCounts as $c) {
         }
 
         function ateQToggleReplyBox(itemId) { $('#ate-q-replybox-' + itemId).toggle(); }
+
+        /** 回覆方式按鈕列（使用者交辦：電話／Line／E-mail…，預設電話，其他方式管理員可增加）。
+         *  選項一律即時取自 ATE_Q.channels（由 eng_log_channel 查來，管理員改了馬上生效，
+         *  不要在這裡另外寫死一份選項清單——鐵律4）。沒有任何一項（理論上不會，表自動種了
+         *  六個預設值）就整列不輸出，不留一個空的「回覆方式：」標籤困惑使用者。 */
+        function ateQChannelHtml(itemId) {
+            var ch = ATE_Q.channels || {};
+            var codes = Object.keys(ch);
+            if (!codes.length) return '<span style="font-size:11px;color:#bbb;">（尚未設定）</span>';
+            if (!ATE_Q.replyChannel[itemId]) {
+                ATE_Q.replyChannel[itemId] = ch.phone ? 'phone' : codes[0];
+            }
+            var cur = ATE_Q.replyChannel[itemId];
+            var h = '<span class="ate-q-ch-row" id="ate-q-ch-' + itemId + '">';
+            codes.forEach(function (code) {
+                h += '<span class="ate-q-ch-btn' + (code === cur ? ' on' : '') + '" data-ch="' + escapeHtml(code) + '" '
+                   + 'onclick="ateQPickChannel(' + itemId + ',\'' + code + '\')">' + escapeHtml(ch[code]) + '</span>';
+            });
+            return h + '</span>';
+        }
+        function ateQPickChannel(itemId, code) {
+            ATE_Q.replyChannel[itemId] = code;
+            var $row = $('#ate-q-ch-' + itemId);
+            $row.find('.ate-q-ch-btn').removeClass('on');
+            $row.find('[data-ch="' + code + '"]').addClass('on');
+        }
 
         // Enter 直接送出、Shift+Enter 換行，比照舊版設計備註 handleKeyDown() 同一種操作習慣
         function ateQReplyKeyDown(e, itemId) {
@@ -8686,8 +8731,9 @@ foreach($dCounts as $c) {
             // 不可以是未來日期（後端 el_reply_add() 同規則再擋一次）
             var repliedOn = $('#ate-q-replydate-' + itemId).val() || '';
             var resolve = $('#ate-q-replyok-' + itemId).is(':checked') ? 1 : 0;
+            var channel = ATE_Q.replyChannel[itemId] || '';
             $.post('', { action: 'ate_q_reply', log_id: ATE_Q.logId, item_ids: JSON.stringify([itemId]),
-                         content: txt, reply_by: replyBy, replied_on: repliedOn, resolve: resolve }, function(res) {
+                         content: txt, reply_by: replyBy, replied_on: repliedOn, resolve: resolve, channel: channel }, function(res) {
                 if (!res || !res.success) { showToast((res && res.message) || '回覆失敗'); return; }
                 // 比照舊版設計備註存檔成功的視覺回饋：欄位先變綠再重新整理，不是存完整個跳窗瞬間換畫面
                 $ta.css('background-color', '#d4edda');

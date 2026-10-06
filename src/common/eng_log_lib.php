@@ -939,7 +939,11 @@ function el_reply_add(PDO $db, int $logId, array $itemIds, array $in, int $creat
     if ($repliedOn > $today) throw new InvalidArgumentException('回覆日期不可以是未來日期');
     $replyBy = trim((string)($in['reply_by'] ?? ''));
     $channel = trim((string)($in['channel'] ?? ''));
-    if ($channel !== '' && !isset(el_channels()[$channel])) $channel = '';
+    // ※ 2026-10-06 修正既有 bug：原本呼叫 el_channels() 沒帶 $db，該函式沒給 $db 時固定回
+    // 空陣列，導致這裡的白名單檢查永遠判定失敗、$channel 每次都被清成空字串——不管前端選了
+    // 哪個回覆方式都存不進去（實測全庫 11 筆既有回覆的 channel 欄一律是 NULL，連 eng_log.php
+    // 自己原本就有的「必選回覆方式」檢查也從未真的存檔成功過）。
+    if ($channel !== '' && !isset(el_channels($db)[$channel])) $channel = '';
 
     $newIds = []; $firstId = 0;
     $chk = $db->prepare("SELECT id FROM eng_log_item WHERE id=? AND log_id=?");
