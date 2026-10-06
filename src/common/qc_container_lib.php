@@ -369,6 +369,18 @@ function eg_qc_container_ensure_schema($db) {
 }
 
 /**
+ * 單一容器值（"3P" 這種存檔格式）轉成人看得懂的顯示文字（"3 PP箱"）；
+ * 解析不出來（空值/格式不符）原樣退回，不讓舊資料憑空消失。
+ */
+function eg_qc_container_disp_text($val, $db = null) {
+    $val = trim((string)$val);
+    if ($val === '') return '';
+    $p = eg_qc_container_parse($val);
+    if (!$p) return $val;
+    return $p['qty'] . ' ' . eg_qc_container_name($p['code'], $db);
+}
+
+/**
  * 組出畫面上的容器顯示文字
  * 兩邊相同或只有一邊 → 直接顯示該值；兩邊都有且不同 → 「QC：1P / 生管：2P」
  * 回傳 array(text, diff)；diff=true 代表兩邊對不起來，畫面要用警示色

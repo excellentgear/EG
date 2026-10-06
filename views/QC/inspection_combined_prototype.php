@@ -17,6 +17,7 @@ include_once '../../src/common/qc_inspection_lib.php'; // #3/#10/#12：後端重
 include_once '../../src/common/qc_tool_display_lib.php'; // 量具顯示名稱統一格式（ai-rules/25，唯一實作）
 include_once '../../src/common/qa_abnormal_lib.php'; // 報廢扣減唯一實作 qab_bom_scrap_qty()（2026-09-24）
 include_once '../../src/common/packing_process_lib.php'; // 包裝製程不列入線上檢驗（2026-09-24，已獨立到包裝排程頁）
+include_once '../../src/common/qc_container_lib.php'; // 容器代碼/格式唯一實作（2026-10-06：每輪檢驗紀錄自己的容器要跟畫面「允收」寫入 bom_ing.QC_ps 同一套打包/解析規則，不可另寫一份）
 
 // 權限不足專用例外：讓 catch 統一回 HTTP 403（前端可據此禁用/提示）
 if (!class_exists('QcPermException')) { class QcPermException extends Exception {} }
@@ -261,6 +262,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             try {
                 $hq = "SELECT f.qc_form_id, f.insp_no, f.batch_no, f.round_no, f.incoming_qty, f.sample_qty, f.ng_qty, f.check_result,
                               f.check_date, f.created_at, f.created_by, f.main_remark, f.insp_kind,
+                              f.container_1, f.container_2,
                               f.edit_unlocked, f.last_edited_by, f.last_edited_at,
                               f.inspector_by, f.approved_by, f.approved_at,
                               f.ncr_decision, f.ncr_skip_reason, f.abnormal_order_id, qa.abnormal_order_no,
@@ -276,8 +278,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                        WHERE f.bom_ing_fid=? AND f.status <> 'DRAFT' ORDER BY f.batch_no ASC, f.round_no ASC, f.qc_form_id ASC";
                 $hs = $pdo->prepare($hq); $hs->execute([$fid]);
                 $history = $hs->fetchAll(PDO::FETCH_ASSOC);
-                // #6：標記每筆「本人是否於寬限期內可自改」
-                foreach ($history as &$hr) { $hr['self_grace'] = qcOwnerWithinGrace($pdo, $hr, $user_id) ? 1 : 0; }
+                // #6：標記每筆「本人是否於寬限期內可自改」；容器顯示文字（2026-10-06）同一支共用函式組字
+                foreach ($history as &$hr) {
+                    $hr['self_grace'] = qcOwnerWithinGrace($pdo, $hr, $user_id) ? 1 : 0;
+                    $hr['container_1_disp'] = eg_qc_container_disp_text($hr['container_1'] ?? '', $pdo);
+                    $hr['container_2_disp'] = eg_qc_container_disp_text($hr['container_2'] ?? '', $pdo);
+                }
                 unset($hr);
             } catch (Exception $e) { /* 欄位可能尚未建立 */ }
 
@@ -394,6 +400,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sample_qty   = (int)($_POST['sample_qty'] ?? 0);
             $main_remark  = trim($_POST['main_remark'] ?? '');
             $update_std   = ($_POST['update_std'] ?? '0') === '1';
+            // 本輪容器（2026-10-06）：格式與寫入規則一律沿用 qc_container_lib.php 的
+            // eg_qc_container_pack()，跟畫面「允收(OK)自動彙總」寫進 bom_ing.QC_ps/QC_ps2
+            // 的是同一套，不是另一套格式——代碼不合法就當沒填，不擋存檔（容器是追溯用的
+            // 輔助資訊，不是必填的判定欄位，前端已在存檔前用 confirm 提醒過）。
+            [$container_1, $container_2] = eg_qc_container_pack(
+                [$_POST['container_1'] ?? '', $_POST['container_2'] ?? ''],
+                [$_POST['qty_1'] ?? '', $_POST['qty_2'] ?? '']
+            );
+            $qcCtnCheck = function ($v) use ($pdo) {
+                $p = eg_qc_container_parse($v);
+                return ($p && eg_qc_container_valid_code($p['code'], $pdo)) ? $v : '';
+            };
+            $container_1 = $qcCtnCheck($container_1);
+            $container_2 = $qcCtnCheck($container_2);
             // 首件/末件：不必走抽樣，直接全檢＝抽驗數強制等於送驗數（後端再驗一次，不採信前端）
             $insp_kind = in_array(($_POST['insp_kind'] ?? 'NORMAL'), ['FIRST','LAST'], true) ? $_POST['insp_kind'] : 'NORMAL';
             if ($insp_kind !== 'NORMAL' && $incoming_qty > 0) $sample_qty = $incoming_qty;
@@ -543,12 +563,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $insForm = $pdo->prepare(
                 "INSERT INTO qc_check_form
                  (bom_ing_fid, d_id, version_id, form_type_id, insp_no, insp_kind, process_name, batch_no, round_no,
-                  incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, pcs_verdicts, check_date,
+                  incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, container_1, container_2, pcs_verdicts, check_date,
                   inspector_by, approved_by, approved_at, created_by, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, COALESCE(?, CURDATE()), ?, ?, ?, ?, NOW())");
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, ?, ?, COALESCE(?, CURDATE()), ?, ?, ?, ?, NOW())");
             $insForm->execute([
                 $fid, $d_id, $version_id, (string)$form_type_id, $insp_no, $insp_kind, $process, $batch_no, $round_no,
-                $incoming_qty, $sample_qty, $main_remark,
+                $incoming_qty, $sample_qty, $main_remark, ($container_1 !== '' ? $container_1 : null), ($container_2 !== '' ? $container_2 : null),
                 json_encode($pcs, JSON_UNESCAPED_UNICODE), $bfCheckDate, $bfInspector, $bfApprovedBy, $bfApprovedAt, $user_id,
             ]);
             $qc_form_id = (int)$pdo->lastInsertId();
@@ -758,6 +778,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'incoming_qty'=>(int)$form['incoming_qty'], 'sample_qty'=>(int)$form['sample_qty'],
                     'ng_qty'=>(int)$form['ng_qty'], 'check_result'=>$form['check_result'],
                     'process_name'=>$form['process_name'], 'main_remark'=>$form['main_remark'],
+                    // 本輪容器（2026-10-06）：只有存檔當下寫入的才有，舊資料（本欄位上線前）一律空字串，
+                    // 顯示文字由共用庫 eg_qc_container_disp_text() 統一組出，不在前端另外解析格式。
+                    'container_1'=>$form['container_1'] ?? '', 'container_1_disp'=>eg_qc_container_disp_text($form['container_1'] ?? '', $pdo),
+                    'container_2'=>$form['container_2'] ?? '', 'container_2_disp'=>eg_qc_container_disp_text($form['container_2'] ?? '', $pdo),
                     'pcs_verdicts'=>(is_array($pv = json_decode($form['pcs_verdicts'] ?? '[]', true)) ? $pv : []),
                     'edit_unlocked'=>(int)$form['edit_unlocked'],
                     // 列印簽章用：已存檔紀錄的簽章日期＝檢驗日，簽章人＝檢驗人員
