@@ -16,7 +16,7 @@ if (!isset($_SESSION['userName'])) {
 // 先設台灣時區，否則 PHP 預設 UTC 會讓版本時間比實際少 8 小時
 date_default_timezone_set('Asia/Taipei');
 $EDITOR_VER = 'v' . date('Y.m.d-H:i', filemtime(__FILE__));
-header('Cache-Control: no-cache, must-revalidate');
+header('Cache-Control: no-store, no-cache, must-revalidate');
 header('Pragma: no-cache');
 
 include '../../src/common/DBConnection.php';
