@@ -8680,7 +8680,32 @@ foreach($dCounts as $c) {
             }, 'json').fail(function() { showToast('回覆失敗，請重試'); });
         }
 
+        // 直接按「已處理」（沒有先展開回覆框填內容）時，2026-10-06 使用者交辦：自動補一筆回覆，
+        // 帶出「幾號＋預設回覆對象＋已處理完成」（例：10/6 業務鄭莛蓁 已處理完成），不要只是
+        // 狀態變了卻完全沒有留下是誰、哪天結案的紀錄。預設對象沿用 ateQReplyDefaultState() 同一套
+        // （這題本來有指定對象就用那個，沒有才退回打單人員），跟「填完回覆再勾已處理」共用同一支
+        // ate_q_reply（resolve=1），不另開一條更新路徑。
+        function ateQAutoResolveNote(st) {
+            var map = { user: '業務', maker: '廠商', customer: '客戶', other: '其他' };
+            var typeLabel = (st && st.target_type) ? (map[st.target_type] || st.target_type) : '';
+            var name = (st && st.target_label) ? st.target_label : '';
+            var who = (typeLabel + name) || '（未指定對象）';
+            var today = ATE_Q.today || '', md = '';
+            if (today.length >= 10) md = parseInt(today.substring(5, 7), 10) + '/' + parseInt(today.substring(8, 10), 10);
+            return (md ? md + ' ' : '') + who + ' 已處理完成';
+        }
         function ateQResolve(itemId, status) {
+            if (status === 'resolved') {
+                var st = ATE_Q.replyState[itemId];
+                var content = ateQAutoResolveNote(st);
+                $.post('', { action: 'ate_q_reply', log_id: ATE_Q.logId, item_ids: JSON.stringify([itemId]),
+                             content: content, replied_on: ATE_Q.today || '', resolve: 1 }, function(res) {
+                    if (!res || !res.success) { showToast((res && res.message) || '操作失敗'); return; }
+                    ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview);
+                    ateQOpen(ATE_Q.orderId);
+                }, 'json').fail(function() { showToast('操作失敗，請重試'); });
+                return;
+            }
             $.post('', { action: 'ate_q_resolve', log_id: ATE_Q.logId, id: itemId, status: status }, function(res) {
                 if (!res || !res.success) { showToast((res && res.message) || '操作失敗'); return; }
                 ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview);
