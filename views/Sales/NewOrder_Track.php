@@ -4144,6 +4144,11 @@ foreach($dCounts as $c) {
         }
         .cnrv-cell-link:hover { background: #F0A24B; color: #fff; border-color: #d98a33; }
         .cnrv-cell-link-new { background: #fff; color: #b5862f; border-style: dashed; }
+        /* 稽核製程標籤－舊資料批次補設定：框選列（2026-10-06，見同名 JS 區塊 ASTAGDRAG）。
+           同一列的文字格仍可正常選字/雙擊，只有跨列拖曳或點中勾選欄整格才會換底色；
+           色票沿用 KPI 明細頁（views/news/KPI.php tr.sel）同一套暖色系，全站一致。 */
+        #bf-group-tbody tr.sel td, #bf-order-tbody tr.sel td { background: #FBE6C8; }
+        #bf-group-tbody td:first-child, #bf-order-tbody td:first-child { cursor: pointer; }
         .close { color: white; opacity: 0.8; text-shadow: none; }
         .close:hover { opacity: 1; }
         
@@ -10009,7 +10014,10 @@ foreach($dCounts as $c) {
         }
         /** 表頭全選／取消全選（只影響目前畫面上看得到的列） */
         function astagBfGroupCheckAll() {
-            $('.bf-g-chk').prop('checked', $('#bf-group-check-all').is(':checked'));
+            var on = $('#bf-group-check-all').is(':checked');
+            $('#bf-group-tbody tr[data-i]').each(function () {
+                astagBfSetRowSel($(this), $(this).find('.bf-g-chk'), on);
+            });
             astagBfGroupUpdateSelCount();
         }
         function astagBfGroupSelectedIdx() {
@@ -10018,7 +10026,66 @@ foreach($dCounts as $c) {
             return out;
         }
         function astagBfGroupUpdateSelCount() { $('#bf-g-sel-count').text(astagBfGroupSelectedIdx().length); }
+        // 底色跟著勾選同步（不管是哪種方式勾的：鍵盤 Tab+空白鍵、或下面框選邏輯以外的途徑）
+        $(document).on('change', '.bf-g-chk, .bf-o-ck', function () {
+            $(this).closest('tr').toggleClass('sel', $(this).is(':checked'));
+        });
         $(document).on('change', '.bf-g-chk', astagBfGroupUpdateSelCount);
+
+        /* ── 框選多列（2026-10-06 使用者交辦）───────────────────────────────────
+           使用者原話「下方要可以滑鼠框選，不要使用勾選，需要很精準點選欄位，非常
+           不方便」「多框選後可以一次設定所有框選對象的標籤」「被框選時底色要改變，
+           方便一眼看出有被框選」。沿用 2026-09-17 KPI 明細頁（views/news/KPI.php
+           的 VIODRAG）已經驗證過的同一套手勢規則，不要再發明第二套：
+             ・點在勾選欄那一整格（不必精準點中 14px 的小方框）＝立刻切換
+             ・在同一列的其他欄位按住拖曳＝不攔，瀏覽器照常選字（製程文字/料號常要
+               複製去別處對），拖到別的一列才確定是要多選——這時把剛拖出來的反白
+               清掉、起始列也補上勾選，並沿路把拖過的每一列套用同一個目標狀態
+             ・底層仍是既有的 .bf-g-chk／.bf-o-ck checkbox 記錄選取狀態，
+               astagBfGroupSelectedIdx()／套用到勾選的組／套用到勾選的訂單
+               一行都不必改，只是多了拖曳與整格可點兩種觸發方式。 */
+        var ASTAGDRAG = null;
+        function astagBfSetRowSel($tr, $chk, on) {
+            if (!$chk.length || $chk.prop('disabled')) return;
+            $chk.prop('checked', on);
+            $tr.toggleClass('sel', on);
+        }
+        function astagBfBindDrag(tbodySel, rowSel, chkCls, afterFn) {
+            var full = tbodySel + ' ' + rowSel;
+            $(document).on('mousedown', full, function (e) {
+                if (e.which && e.which !== 1) return;              // 只管左鍵
+                var $tr = $(this), $chk = $tr.find('.' + chkCls);
+                if (!$chk.length || $chk.prop('disabled')) return;
+                if ($(e.target).is('input,select,textarea,button,a,option,label')) {
+                    if ($(e.target).hasClass(chkCls)) ASTAGDRAG = { state: !$chk.prop('checked'), armed: true, tbody: tbodySel };
+                    return;    // 下拉/按鈕/連結一律不攔，交給它們自己的行為
+                }
+                // 先只記著，還不動任何勾選狀態——等真的拖到別列再說（這樣同一列內就能正常選字）
+                ASTAGDRAG = { state: !$chk.prop('checked'), armed: false, from: this, tbody: tbodySel, chkCls: chkCls, after: afterFn };
+                // 點在勾選欄那一整格＝立刻切換（不必精準點中那個小方框）
+                if ($(e.target).closest('td').find('.' + chkCls).length) {
+                    ASTAGDRAG.armed = true;
+                    astagBfSetRowSel($tr, $chk, ASTAGDRAG.state);
+                    if (typeof afterFn === 'function') afterFn();
+                    e.preventDefault();
+                }
+            });
+            $(document).on('mouseenter', full, function () {
+                if (!ASTAGDRAG || ASTAGDRAG.tbody !== tbodySel) return;
+                var $chk = $(this).find('.' + chkCls);
+                if (!ASTAGDRAG.armed) {
+                    // 第一次跨到別的一列＝確定是要多選：起始列補上，並把剛剛拖出來的反白清掉
+                    ASTAGDRAG.armed = true;
+                    if (ASTAGDRAG.from) astagBfSetRowSel($(ASTAGDRAG.from), $(ASTAGDRAG.from).find('.' + chkCls), ASTAGDRAG.state);
+                    try { (window.getSelection().removeAllRanges || function () {})(); } catch (e2) {}
+                }
+                astagBfSetRowSel($(this), $chk, ASTAGDRAG.state);
+                if (typeof afterFn === 'function') afterFn();
+            });
+        }
+        $(document).on('mouseup', function () { ASTAGDRAG = null; });
+        astagBfBindDrag('#bf-group-tbody', 'tr[data-i]', 'bf-g-chk', function () { astagBfGroupUpdateSelCount(); });
+        astagBfBindDrag('#bf-order-tbody', 'tr', 'bf-o-ck', null);
 
         /** 每次重新查詢分組清單都呼叫一次：重建「統一設成」下拉、歸零勾選計數與按鈕狀態 */
         function astagBfGroupBulkBarInit() {
@@ -10290,7 +10357,8 @@ foreach($dCounts as $c) {
         });
 
         $(document).on('change', '#bf-check-all', function () {
-            $('#bf-order-tbody .bf-o-ck').prop('checked', $(this).is(':checked'));
+            var on = $(this).is(':checked');
+            $('#bf-order-tbody .bf-o-ck').prop('checked', on).each(function () { $(this).closest('tr').toggleClass('sel', on); });
         });
         function astagBfApplyOrders(useSuggest) {
             var picked = [];
@@ -13184,7 +13252,9 @@ foreach($dCounts as $c) {
                 請確認過再套用（建議不會自動寫入任何資料）。把上面「顯示」切成「全部（含已設定）」
                 再配合關鍵字／只看標籤篩選，可以找出哪些製程寫法目前被設成某個標籤、要不要重新分類；
                 <b>這一組還沒設定過的直接套用補空白，已經設定過的改按「覆蓋這組」（二次確認後才會真的
-                覆蓋、每一筆都留得下變更歷程）</b>；也可以用左側勾選框一次框選多組，統一設成同一個標籤。
+                覆蓋、每一筆都留得下變更歷程）</b>；也可以在最左欄<b>按住滑鼠往下拖過好幾列</b>一次框選
+                （不必精準點中那個小方框，點在整格或拖過都算；被選到的列底色會變成橘色），
+                再到下方統一設成同一個標籤。
               </div>
               <div style="border:1px solid #ddd;border-radius:4px;overflow-x:auto;">
                 <table class="table table-condensed table-striped" style="margin:0;font-size:12px;min-width:1000px;">
@@ -14506,7 +14576,9 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
         所以只會出現<b>一顆</b>按鈕；畫面上跟內建三個一樣是<b>虛線框</b>。已經有訂單在用的同樣<b>不可刪除、不可改適用範圍</b>。</li>
     <li><b>舊資料批次補設定</b>：同一區下方的【開啟補設定畫面】。預設「<b>依製程文字分組</b>」，一次設完同一種寫法的所有訂單
         （全庫實測有 700 多種寫法，筆數最多的排在前面）；<b>建議標籤</b>是系統依「製程文字裡有沒有稽核製程的名稱」＋訂單分析那一套全製／單製關鍵字規則推出來的，
-        <b>理由欄會寫出它命中了哪個字</b>，請確認過再套用。零散的尾數改用「<b>逐筆設定</b>」分頁勾選。</li>
+        <b>理由欄會寫出它命中了哪個字</b>，請確認過再套用。零散的尾數改用「<b>逐筆設定</b>」分頁勾選。
+        兩個分頁的最左欄都可以<b>按住滑鼠往下拖過好幾列一次框選</b>（不必精準點中那個小方框，點在整格或拖過都算），
+        被框選的列會變成<b>橘色底</b>；文字格仍可正常選字/雙擊複製，拖到別列才會變成框選。</li>
     <li>【<b>套用這組</b>】與【<b>套用到勾選的訂單</b>】都是<b>按一下就套用，不跳確認視窗</b>，而且<b>只就地更新那一列</b>——
         畫面不會整個重新載入闪爍；背後的訂單清單是<b>關掉補設定畫面時才刷新一次</b>。
         只有【套用本頁全部建議】會先變成「確定？再按一次」（那是一次改很多組的動作；它用按鈕自己確認、<b>不用瀏覽器對話框</b>，
