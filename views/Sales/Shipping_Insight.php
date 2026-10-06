@@ -156,6 +156,12 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
 .nav-jump a { font-size:12px; border:1px solid var(--line); background:#fff; color:#1B4F78;
               padding:3px 10px; border-radius:12px; text-decoration:none; }
 .nav-jump a:hover { background:var(--sand); }
+/* 頁內分頁（分類／項目太多時，表格分頁顯示用） */
+.oa-pager { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); flex-wrap:wrap; }
+.oa-pager button { border:1px solid var(--line); background:#fff; color:#1B4F78; border-radius:4px;
+                    padding:2px 10px; font-size:12px; cursor:pointer; }
+.oa-pager button:hover:not(:disabled) { background:var(--sand); }
+.oa-pager button:disabled { opacity:.4; cursor:default; }
 /* 右側懸浮工具列：回頂端／快速導覽（比照 Order_Analysis.php 同一套；「回出貨紀錄分析」
    已經在頁首有連結，不在這裡重複放一顆，注意透明度避免遮蔽圖表） */
 .float-tools { position:fixed; right:18px; bottom:18px; z-index:9000;
@@ -271,6 +277,7 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
   <div id="kpiAlertBar"></div>
   <div class="nav-jump">
     <a href="#secInsight">自動分析</a><a href="#secTrend">相關金額趨勢</a><a href="#secSaleType">出貨性質分布</a>
+    <a href="#secAstag">AS 稽核分類</a>
     <a href="#secClient">客戶比較</a><a href="#secRank">客戶增減排名</a><a href="#secMa">出貨淨額監控</a>
     <a href="#secCq">客戶季度分析</a><a href="#secList">出貨明細／退貨單／訂單／客戶統計</a>
   </div>
@@ -320,6 +327,33 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
         </table>
       </div>
     </div>
+  </div>
+
+  <!-- ── AS 稽核分類（透過出貨單綁定的訂單反查「稽核製程標籤 AS 認定」）────── -->
+  <div class="sec" id="secAstag">
+    <h4><i class="fa fa-certificate" style="color:var(--blue-d);"></i> AS 稽核分類分析
+      <span class="hint" id="astagHint"></span>
+      <span class="sec-tools">
+        <label style="margin:0;font-size:12px;">圖表顯示</label>
+        <select id="astagMetric" class="form-control input-sm" style="width:100px;">
+          <option value="amount">金額</option>
+          <option value="qty">數量</option>
+          <option value="rows">筆數</option>
+        </select>
+      </span>
+    </h4>
+    <div class="two-col">
+      <div><div id="chAstagPie" class="chart-box"></div></div>
+      <div><div id="chAstagTrend" class="chart-box"></div></div>
+    </div>
+    <table class="oa-t" id="tblAstag" style="margin-top:10px;">
+      <colgroup><col style="width:24%"><col style="width:13%"><col style="width:13%"><col style="width:17%">
+                <col style="width:13%"><col style="width:20%"></colgroup>
+      <thead><tr><th>分類（AS 認定）</th><th>本期筆數</th><th>本期數量</th><th>本期出貨金額</th>
+                 <th>基期筆數</th><th>較<span class="cmpLab">基期</span>增減</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="oa-pager" id="astagPager" style="margin-top:6px;"></div>
   </div>
 
   <!-- ── 客戶比較 ─────────────────────────────────────── -->
@@ -515,6 +549,7 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
       <a href="#secInsight">自動分析</a>
       <a href="#secTrend">相關金額趨勢</a>
       <a href="#secSaleType">出貨性質分布</a>
+      <a href="#secAstag">AS 稽核分類</a>
       <a href="#secClient">客戶比較</a>
       <a href="#secRank">客戶增減排名</a>
       <a href="#secMa">出貨淨額監控</a>
@@ -533,6 +568,9 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
       <ul>
         <li><b>出貨／退貨／訂單金額的趨勢</b>：可切月／季／半年／整年，並疊上去年同期對照。</li>
         <li><b>出貨性質分布</b>：本期各出貨性質（一般產品、樣品…）各佔多少金額。</li>
+        <li><b>AS 稽核分類</b>：出貨單透過已綁定的訂單反查訂單追蹤設定的「稽核製程標籤（AS 認定）」
+            （全製／單製○○／多製程／廠內治具…），有趨勢圖與期間金額統計；分類由管理員在訂單追蹤的
+            設定自動決定，分類太多時表格會自動分頁。</li>
         <li><b>客戶比較／客戶增減排名</b>：挑幾家客戶並排比較，或看整體誰成長、誰衰退（依淨額增減排序）。</li>
         <li><b>出貨淨額監控</b>：出貨金額移動平均是否連續低於安全水平。</li>
         <li><b>客戶季度分析</b>：帳款季逐季走勢與成長／衰退排行（與出貨紀錄分析頁同一套計算）。</li>
@@ -553,6 +591,10 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
         <li><b>異常偵測</b>：一般出貨金額為 0（多半漏填單價）會被標記；若某出貨性質設定「金額&gt;0 視為異常」（如樣品），則反過來抓有金額的那幾筆；
             設定「排除異常檢測」的性質完全不檢查。可在「異常偵測」跳窗逐筆或整批標記「已確認」（正常，非資料錯誤）。</li>
         <li><b>月份截止日</b>：影響「客戶季度分析」帳款季的季別切法，全站與出貨紀錄分析頁共用同一個設定。</li>
+        <li><b>AS 稽核分類只能統計「已綁定訂單」的出貨</b>——出貨單本身沒有稽核製程標籤這個欄位，
+            一定要先在快速出貨或追溯對照把出貨單綁到訂單，才查得到訂單追蹤設定的 AS 認定；
+            綁定率低不是程式漏算，是現場還沒做綁定，畫面上會誠實列出「未綁定訂單」與
+            「訂單尚未設定標籤」兩種不同的缺口，分開補齊即可。</li>
       </ul>
       <h4>設定入口</h4>
       <ul>
@@ -968,7 +1010,7 @@ function load(){
     if(!r || !r.ok){ $('#noteBar').html('<div class="oa-note oa-warn">'+esc((r&&r.error)||'載入失敗')+'</div>'); return; }
     DATA = r;
     renderNote(); renderKpiAlert(); renderKpi(); renderInsights();
-    renderTrend(); renderSaleType(); renderClient(); renderRank(); renderMa();
+    renderTrend(); renderSaleType(); renderAstag(); renderClient(); renderRank(); renderMa();
     listReload();
   }, 'json').fail(function(x){
     $('#noteBar').html('<div class="oa-note oa-warn">載入失敗（HTTP '+x.status+'）'
@@ -1148,6 +1190,78 @@ function renderSaleType(){
   var h=''; s.forEach(function(x){ h += '<tr><td>'+esc(x.name)+'</td><td class="n">'+nf(x.rows)+'</td><td class="n">'+nf(x.qty)+'</td><td class="n">'+money(x.amount)+'</td></tr>'; });
   $('#tblSaleType tbody').html(h||'<tr><td colspan="4" style="text-align:center;color:var(--muted);">本期沒有出貨</td></tr>');
 }
+
+/* ── AS 稽核分類（透過出貨單綁定的訂單反查「稽核製程標籤（AS 認定）」）──────
+   出貨單本身沒有這個欄位，要透過「出貨單↔訂單」綁定才查得到該訂單的 AS 認定，
+   所以「未綁定訂單」與「訂單尚未設定標籤」兩種缺口要分開講清楚，不能混在一起；
+   分類清單完全跟著訂單追蹤「稽核製程標籤」的設定自動變動，類別多時表格頁內分頁。 */
+var ASTAG_PAGE = 1, ASTAG_PER = 10;
+function renderAstag(){
+  var a = DATA.astag || {rows:[], trend:[], buckets:[], unbound:null, unset:null, bound_pct:0}, rows = a.rows||[];
+  var met = $('#astagMetric').val();
+  var unboundRows = (a.unbound && a.unbound.cur) ? a.unbound.cur.ship_rows : 0;
+  $('#astagHint').text('本期出貨有綁定訂單的佔 '+nf1(a.bound_pct)+'%'
+    + (unboundRows ? '，還有 '+nf(unboundRows)+' 筆未綁定訂單（列在下表）' : '')
+    + '；分類由「訂單追蹤 → 設定 → 稽核製程標籤（AS 認定）」決定，改了這裡自動跟著變');
+
+  /* 圓餅：只畫真的查得到分類的那一部分（未綁定／訂單尚未設定標籤不畫進圓餅，
+     混進去會佔掉一大塊、模糊了已查得到分類的真實比例） */
+  var pieRows = rows.filter(function(t){ return t.key!=='unbound' && t.key!=='unset' && Number(t.cur[met])>0; });
+  chart('chAstagPie', opt({
+    chart:{ type:'pie' },
+    tooltip:{ pointFormat: met==='amount' ? '<b>{point.y:,.0f} 元</b>（{point.percentage:.1f}%）'
+                                           : '<b>{point.y:,.0f}</b>（{point.percentage:.1f}%）', style:{fontSize:'11px'} },
+    plotOptions:{ pie:{ dataLabels:{ enabled:true, style:{fontSize:'11px',color:'#1B4F78',textOutline:'none'},
+                        format:'{point.name}<br>{point.percentage:.0f}%' } } },
+    series:[{ name:'本期（已查得到分類）', colorByPoint:true,
+               data: pieRows.map(function(t,i){ return { name:t.label, y:t.cur[met], color:PAL[i%PAL.length] }; }) }]
+  }));
+
+  var buckets = (a.buckets||[]).map(function(s){ return s.replace(/^\d{4}\s*/,''); });
+  var ser = (a.trend||[]).map(function(s, i){
+    var key = (met==='rows') ? 'rows' : met;
+    return { name:s.label, data:(s[key]||[]), color:PAL[i%PAL.length], borderRadius:2 };
+  });
+  chart('chAstagTrend', opt({
+    chart:{ type:'column' },
+    xAxis:{ categories: buckets },
+    yAxis:{ min:0, title:{text:(met==='amount'?'出貨金額':(met==='qty'?'數量':'筆數')),style:{fontSize:'11px',color:'var(--muted)'}},
+            gridLineColor:'#EAF3FC', labels:{style:{fontSize:'10px',color:'var(--muted)'}} },
+    tooltip:{ shared:true, style:{fontSize:'11px'} },
+    plotOptions:{ column:{ stacking:'normal', borderRadius:2, pointPadding:0.04, groupPadding:0.12 } },
+    series: ser.length ? ser : [{ name:'（沒有資料）', data:[] }]
+  }));
+
+  ASTAG_PAGE = 1;
+  renderAstagTable();
+}
+function renderAstagTable(){
+  var a = DATA.astag || {rows:[]}, rows = (a.rows||[]).slice();
+  var total = rows.length, pages = Math.max(1, Math.ceil(total/ASTAG_PER));
+  if(ASTAG_PAGE > pages) ASTAG_PAGE = pages;
+  if(ASTAG_PAGE < 1) ASTAG_PAGE = 1;
+  var slice = rows.slice((ASTAG_PAGE-1)*ASTAG_PER, ASTAG_PAGE*ASTAG_PER);
+  var h = '';
+  slice.forEach(function(t){
+    var isGap = (t.key === 'unbound' || t.key === 'unset');
+    h += '<tr'+(isGap?' style="color:var(--muted);"':'')+'>'
+       + '<td>'+esc(t.label)+(isGap?' <span class="badge-warn">查不到分類</span>':'')+'</td>'
+       + '<td class="n">'+nf(t.cur.ship_rows)+'</td><td class="n">'+nf(t.cur.ship_qty)+'</td>'
+       + '<td class="n">'+money(t.cur.ship_amount)+'</td>'
+       + '<td class="n">'+nf(t.cmp.ship_rows)+'</td>'
+       + '<td class="n">'+deltaHtml(t.cur.ship_amount, t.cmp.ship_amount, money)+'</td></tr>';
+  });
+  $('#tblAstag tbody').html(h || '<tr><td colspan="6" style="text-align:center;color:var(--muted);">本期沒有資料</td></tr>');
+
+  if(total <= ASTAG_PER){ $('#astagPager').html(''); return; }
+  var ph = '<button type="button" id="astagPrev"'+(ASTAG_PAGE<=1?' disabled':'')+'><i class="fa fa-angle-left"></i> 上一頁</button>'
+    + '<span>第 '+ASTAG_PAGE+' / '+pages+' 頁（共 '+total+' 個分類）</span>'
+    + '<button type="button" id="astagNext"'+(ASTAG_PAGE>=pages?' disabled':'')+'>下一頁 <i class="fa fa-angle-right"></i></button>';
+  $('#astagPager').html(ph);
+}
+$(document).on('click', '#astagPrev', function(){ ASTAG_PAGE--; renderAstagTable(); });
+$(document).on('click', '#astagNext', function(){ ASTAG_PAGE++; renderAstagTable(); });
+$('#astagMetric').on('change', function(){ if(DATA) renderAstag(); });
 
 function renderClient(){
   var cc = DATA.client_cmp, met = $('#cliMetric').val(), m = DATA.meta;
@@ -1647,6 +1761,22 @@ function siPrintHtml(){
      + (prChartSvg('chMa',560,260)?'<div class="pr-chart">'+prChartSvg('chMa',560,260)+'</div>':'<div style="font-size:9pt;color:#6C89A6;">無資料</div>')
      + '</div></div></div>';
 
+  // AS 稽核分類（透過出貨單綁定的訂單反查「稽核製程標籤」認定；分類數隨設定自動變動）
+  var astagPieSvg = prChartSvg('chAstagPie', 420, 260);
+  var astagRows = ''; ((DATA.astag && DATA.astag.rows)||[]).slice(0,12).forEach(function(t){
+    astagRows += '<tr><td>'+esc(t.label)+'</td><td class="tr">'+nf(t.cur.ship_rows)+'</td><td class="tr">'+money(t.cur.ship_amount)+'</td></tr>';
+  });
+  if(astagPieSvg || astagRows){
+    h += '<div class="pr-sec"><div class="pr-two">'
+       + '<div><div class="pr-sec-title">AS 稽核分類（本期有綁定訂單的出貨佔 '+nf1((DATA.astag&&DATA.astag.bound_pct)||0)+'%）</div>'
+       + (astagPieSvg?'<div class="pr-chart">'+astagPieSvg+'</div>':'')+'</div>'
+       + '<div><div class="pr-sec-title">　</div>'
+       + '<table><colgroup><col style="width:50%"><col style="width:24%"><col style="width:26%"></colgroup>'
+       + '<thead><tr><th>分類</th><th class="tr">本期筆數</th><th class="tr">本期出貨金額</th></tr></thead>'
+       + '<tbody>'+(astagRows||'<tr><td colspan="3" class="tc">無</td></tr>')+'</tbody></table></div>'
+       + '</div></div>';
+  }
+
   var rankSvg = prChartSvg('chRank', 1180, Math.min(420, document.getElementById('chRank').offsetHeight||300));
   if(rankSvg) h += '<div class="pr-sec"><div class="pr-sec-title">期間內客戶增減排名</div><div class="pr-chart">'+rankSvg+'</div></div>';
 
@@ -1719,6 +1849,12 @@ $('#btnCsv').on('click', function(){
   row('');
   row('【出貨性質分布】','性質','筆數','數量','金額');
   (DATA.sale_type_stat||[]).forEach(function(x){ row('', x.name, x.rows, x.qty, Math.round(x.amount)); });
+  row('');
+  row('【AS 稽核分類】','本期有綁定訂單的出貨佔比', (DATA.astag?DATA.astag.bound_pct:0)+'%');
+  row('【AS 稽核分類】','分類','本期筆數','本期數量','本期出貨金額','基期筆數','基期出貨金額');
+  (DATA.astag && DATA.astag.rows || []).forEach(function(t){
+    row('', t.label, t.cur.ship_rows, t.cur.ship_qty, Math.round(t.cur.ship_amount), t.cmp.ship_rows, Math.round(t.cmp.ship_amount));
+  });
   row('');
   row('【客戶（全部）】','客戶','客戶編號','出貨金額','退貨金額','訂單金額','淨額','異常筆數','狀態');
   (DATA.clients||[]).forEach(function(c){

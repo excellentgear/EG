@@ -28,6 +28,7 @@
 
 require_once __DIR__ . '/client_quarter_lib.php';
 require_once __DIR__ . '/order_analysis_lib.php';
+require_once __DIR__ . '/order_as_tag_lib.php';     // ot_astag_for_orders()：稽核製程標籤（AS 認定，唯一依據）
 
 if (!defined('SI_PARAM_GROUP')) define('SI_PARAM_GROUP', 'SHIPPING_INSIGHT');
 
@@ -257,6 +258,26 @@ function si_report(PDO $db, array $opt = []): array
     $ordRows  = oa_fetch_orders($db, $from, $to, ['basis' => 'order', 'include_paused' => false]);
     $clFirst  = oa_client_first_seen($db);
 
+    // ── 逐筆標上「稽核製程標籤（AS 認定）」──
+    // 出貨單本身沒有這個欄位，一定要透過「出貨單已綁定的訂單」（si_fetch_ship() 帶回的
+    // order_id，即 ship_order_bind_lib 同步出來的「主要訂單」快取）反查該訂單的 AS 認定，
+    // 唯一依據 order_as_tag_lib.php，不自己猜。「沒綁定訂單」與「綁定了但訂單還沒設定標籤」
+    // 是兩種不同的缺口，刻意分開兩類不要混在一起——前者要去補綁定，後者要去補標籤。
+    $astagByOrder = ot_astag_for_orders($db, array_column($shipRows, 'order_id'));
+    foreach ($shipRows as &$r) {
+        $oid  = (int)$r['order_id'];
+        $info = ($oid > 0) ? ($astagByOrder[$oid] ?? null) : null;
+        if ($oid <= 0) {
+            $r['as_key'] = 'unbound'; $r['as_label'] = '出貨單未綁定訂單';
+        } elseif (!$info) {
+            $r['as_key'] = 'unset';   $r['as_label'] = '訂單尚未設定標籤';
+        } else {
+            $r['as_key']   = $info['tag_id'] . ':' . $info['scope'];
+            $r['as_label'] = $info['label'];
+        }
+    }
+    unset($r);
+
     $inSel   = function (array $r) use ($selMap) { return !$selMap || isset($selMap[$r['ckey']]); };
     $inRange = function (array $r, array $p) { return $r['dt'] >= $p['start'] && $r['dt'] <= $p['end']; };
 
@@ -300,6 +321,44 @@ function si_report(PDO $db, array $opt = []): array
     }
     $stAgg = array_values($stAgg);
     usort($stAgg, function ($a, $b) { return $b['amount'] <=> $a['amount']; });
+
+    /* ── AS 稽核分類（透過出貨單綁定的訂單反查「稽核製程標籤」認定）──
+       與訂單分析同一套人工認定結果，不是另外猜的；「未綁定訂單」與「訂單尚未設定標籤」
+       分開列，方便分辨要去補綁定還是要去補標籤。 */
+    $byAstag = [];
+    $accumAs = function (array $p, string $slot) use ($shipRows, &$byAstag, $inSel, $inRange) {
+        foreach ($shipRows as $r) {
+            if (!$inSel($r) || !$inRange($r, $p)) continue;
+            $k = $r['as_key'];
+            if (!isset($byAstag[$k])) $byAstag[$k] = ['key' => $k, 'label' => $r['as_label'], 'cur' => si_blank(), 'cmp' => si_blank()];
+            si_add_ship($byAstag[$k][$slot], $r);
+        }
+    };
+    $accumAs($curE, 'cur');
+    $accumAs($cmpE, 'cmp');
+    $astagRows = [];
+    foreach ($byAstag as $t) {
+        $t['d_amount'] = $t['cur']['ship_amount'] - $t['cmp']['ship_amount'];
+        $astagRows[] = $t;
+    }
+    usort($astagRows, function ($a, $b) { return $b['cur']['ship_amount'] <=> $a['cur']['ship_amount']; });
+    $astagTopKeys = array_slice(array_map(function ($t) { return $t['key']; }, $astagRows), 0, 12);
+    $astagTrend = [];
+    foreach ($astagTopKeys as $k) {
+        $row = ['key' => $k, 'label' => $byAstag[$k]['label'], 'rows' => [], 'qty' => [], 'amount' => []];
+        foreach (oa_period_buckets($year, $gran) as $b) {
+            $a = si_blank();
+            foreach ($shipRows as $r) { if ($inSel($r) && $r['as_key'] === $k && $inRange($r, $b)) si_add_ship($a, $r); }
+            $row['rows'][] = $a['ship_rows']; $row['qty'][] = $a['ship_qty']; $row['amount'][] = round($a['ship_amount']);
+        }
+        $astagTrend[] = $row;
+    }
+    $astagUnbound = $byAstag['unbound'] ?? null;
+    $astagUnset   = $byAstag['unset']   ?? null;
+    $astagShipTot = 0;
+    foreach ($shipRows as $r) { if ($inSel($r) && $inRange($r, $curE)) $astagShipTot++; }
+    $astagBoundRows = $astagShipTot - (int)($astagUnbound['cur']['ship_rows'] ?? 0);
+    $astagBoundPct  = $astagShipTot ? round($astagBoundRows * 100 / $astagShipTot, 1) : 0.0;
 
     /* ── 客戶比較：選了客戶就比那幾家，沒選就自動取本期淨額前 8 名 ── */
     $byClient = [];
@@ -396,6 +455,9 @@ function si_report(PDO $db, array $opt = []): array
         'kpi'        => ['cur' => $kpiCur, 'cmp' => $kpiCmp],
         'trend'      => ['cur' => $trendCur, 'prev' => $trendPrev, 'prev_year' => $year - 1],
         'sale_type_stat' => $stAgg,
+        'astag'      => ['rows' => $astagRows, 'trend' => $astagTrend,
+                          'buckets' => array_map(function ($b) { return $b['label']; }, oa_period_buckets($year, $gran)),
+                          'unbound' => $astagUnbound, 'unset' => $astagUnset, 'bound_pct' => $astagBoundPct],
         'clients'    => $clientRows,
         'client_cmp' => ['keys' => $cmpKeys, 'series' => $cmpSeries],
         'rank_clients' => $rankClients,
@@ -748,6 +810,38 @@ function si_insights(PDO $db, array $res, ?array $kpiAlert = null, ?array $ma = 
              . $m['warn']['no_client'] . ' 筆出貨）——' . implode('、', $names) . (count($badCli) > 6 ? ' 等' : '')
              . '，這些出貨被各自當成獨立客戶處理，請到會計的對帳作業建別名歸戶。', count($badCli) . ' 個',
              ['clients' => $mkCliList($badCli), 'unit' => '元', 'cmp_label' => '本期']);
+    }
+
+    /* ⑩ AS 稽核分類（透過出貨單綁定的訂單反查「稽核製程標籤」認定）──
+     * 出貨單要先綁訂單才查得到分類，所以這裡先講清楚「綁定率」低不是程式漏算，
+     * 是現場還沒做綁定，建議到快速出貨或追溯對照補綁。 */
+    $astagInfo = $res['astag'] ?? null;
+    if ($astagInfo) {
+        $boundPct = (float)($astagInfo['bound_pct'] ?? 0);
+        $unbound  = $astagInfo['unbound'] ?? null;
+        $unboundRows = (int)($unbound['cur']['ship_rows'] ?? 0);
+        if ($unboundRows > 0) {
+            $add($boundPct < 30 ? 'warn' : 'info', 'AS 稽核分類只能統計已綁定訂單的出貨',
+                 '本期出貨有綁定訂單的佔 ' . $boundPct . '%，還有 ' . $fmt($unboundRows)
+                 . ' 筆沒有綁定訂單、查不到稽核分類認定，建議到快速出貨或追溯對照補綁，' .
+                 '綁定後這裡會自動反映。', $boundPct . '%');
+        }
+        $astagVals = [];
+        foreach (($astagInfo['rows'] ?? []) as $t) {
+            if (in_array($t['key'], ['unbound', 'unset'], true)) continue;
+            $v = (float)$t['cur']['ship_amount'];
+            if ($v > 0) $astagVals[] = ['n' => $t['label'], 'v' => $v];
+        }
+        $astagTot = 0.0; foreach ($astagVals as $v) $astagTot += $v['v'];
+        if ($astagTot > 0 && $astagVals) {
+            usort($astagVals, function ($a, $b) { return $b['v'] <=> $a['v']; });
+            $atop = $astagVals[0];
+            $ap = round($atop['v'] * 100 / $astagTot, 1);
+            if ($ap >= 40) {
+                $add('info', 'AS 認定分類集中在「' . $atop['n'] . '」',
+                     '已查得到分類認定的出貨裡，「' . $atop['n'] . '」佔出貨金額的 ' . $ap . '%。', $ap . '%');
+            }
+        }
     }
 
     if (!$out) $add('info', '本期沒有需要特別指出的變化', '各項指標與' . $cl . '相比沒有明顯異常波動。');
