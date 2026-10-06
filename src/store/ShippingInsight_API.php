@@ -93,6 +93,7 @@ switch ($action) {
         $res['insights']  = si_insights($db, $res, $kpiAlert, $ma);
         $res['kpi_alert'] = $kpiAlert;
         $res['ma']        = $ma;
+        try { $res['recommend'] = si_recommend($res['insights']); } catch (Throwable $e) { $res['recommend'] = []; }
         $res['perm'] = ['canAdmin' => $canAdmin ? 1 : 0, 'isAdmin' => $perms['isAdmin'] ? 1 : 0];
         siOut($res);
     }

@@ -264,16 +264,24 @@ function si_report(PDO $db, array $opt = []): array
     // 唯一依據 order_as_tag_lib.php，不自己猜。「沒綁定訂單」與「綁定了但訂單還沒設定標籤」
     // 是兩種不同的缺口，刻意分開兩類不要混在一起——前者要去補綁定，後者要去補標籤。
     $astagByOrder = ot_astag_for_orders($db, array_column($shipRows, 'order_id'));
+    // 2026-10-06 使用者交辦：客戶比較表也要能依「全製/多製程/單製」交叉統計，口徑與
+    // order_analysis_lib.php 的 cls 判定一致（scope='full'→full／'multi'→多製程／
+    // 'single'→single／'none'→excluded 不分單製全製），出貨單沒綁定訂單或訂單
+    // 還沒設定標籤的一律歸 unknown，不細分 none（出貨單本身沒有製程文字可供判斷）。
     foreach ($shipRows as &$r) {
         $oid  = (int)$r['order_id'];
         $info = ($oid > 0) ? ($astagByOrder[$oid] ?? null) : null;
         if ($oid <= 0) {
-            $r['as_key'] = 'unbound'; $r['as_label'] = '出貨單未綁定訂單';
+            $r['as_key'] = 'unbound'; $r['as_label'] = '出貨單未綁定訂單'; $r['cls'] = 'unknown';
         } elseif (!$info) {
-            $r['as_key'] = 'unset';   $r['as_label'] = '訂單尚未設定標籤';
+            $r['as_key'] = 'unset';   $r['as_label'] = '訂單尚未設定標籤'; $r['cls'] = 'unknown';
         } else {
             $r['as_key']   = $info['tag_id'] . ':' . $info['scope'];
             $r['as_label'] = $info['label'];
+            $r['cls'] = $info['scope'] === 'full' ? 'full'
+                      : ($info['scope'] === 'multi' ? 'multi'
+                      : ($info['scope'] === 'single' ? 'single'
+                      : ($info['scope'] === 'none' ? 'excluded' : 'unknown')));
         }
     }
     unset($r);
@@ -441,6 +449,41 @@ function si_report(PDO $db, array $opt = []): array
         }
         $cmpSeries[] = $row;
     }
+    $cmpKeyNames = array_map(function ($k) use ($byClient) { return $byClient[$k]['name'] ?? $k; }, $cmpKeys);
+
+    /* ── 客戶比較表的「依訂單標籤分類」／「依全製/多製程/單製」交叉表 ──
+     * 2026-10-06 使用者交辦，與訂單分析的客戶比較表同一組需求；只能依「出貨單」本身算
+     * （si_add_ship 已統計的 shipRows），退貨／訂單沒有綁定 AS 標籤的途徑，刻意不混進來。 */
+    $cmpN = count($cmpKeys);
+    $clsOrder = ['full', 'multi', 'single', 'unknown', 'excluded'];
+    $clsLabel = ['full' => '全製', 'multi' => '多製程', 'single' => '單製',
+                 'unknown' => '尚未設定標籤', 'excluded' => '不分單製全製（不列入）'];
+    $clientByCls = [];
+    foreach ($clsOrder as $ck) $clientByCls[$ck] = ['key' => $ck, 'label' => $clsLabel[$ck], 'bands' => array_fill(0, $cmpN, 0)];
+    $clientByAstag = [];
+    foreach ($byAstag as $k => $meta) {
+        $clientByAstag[$k] = ['key' => $k, 'label' => $meta['label'], 'is_proc' => $meta['is_proc'],
+                               'sort_order' => $meta['sort_order'], 'bands' => array_fill(0, $cmpN, 0)];
+    }
+    $cmpKeyIdx = array_flip($cmpKeys);
+    foreach ($shipRows as $r) {
+        if (!$inSel($r) || !$inRange($r, $curE)) continue;
+        if (!isset($cmpKeyIdx[$r['ckey']])) continue;
+        $ci = $cmpKeyIdx[$r['ckey']];
+        $clientByCls[$r['cls']]['bands'][$ci]++;
+        $k = $r['as_key'];
+        if (!isset($clientByAstag[$k])) {
+            $clientByAstag[$k] = ['key' => $k, 'label' => $r['as_label'], 'is_proc' => 0,
+                                   'sort_order' => 99999, 'bands' => array_fill(0, $cmpN, 0)];
+        }
+        $clientByAstag[$k]['bands'][$ci]++;
+    }
+    $clientByCls = array_values(array_filter($clientByCls, function ($x) { return array_sum($x['bands']) > 0; }));
+    $clientByAstag = array_values(array_filter($clientByAstag, function ($x) { return array_sum($x['bands']) > 0; }));
+    usort($clientByAstag, function ($a, $b) {
+        if ($a['is_proc'] !== $b['is_proc']) return $b['is_proc'] <=> $a['is_proc'];
+        return $a['sort_order'] <=> $b['sort_order'];
+    });
 
     /* ── 客戶增減排名：依「增減淨額」排序，不是依百分比 ─────── */
     $rankMetricKey = 'd_net';
@@ -484,7 +527,8 @@ function si_report(PDO $db, array $opt = []): array
                           'buckets' => array_map(function ($b) { return $b['label']; }, oa_period_buckets($year, $gran)),
                           'unbound' => $astagUnbound, 'unset' => $astagUnset, 'bound_pct' => $astagBoundPct],
         'clients'    => $clientRows,
-        'client_cmp' => ['keys' => $cmpKeys, 'series' => $cmpSeries],
+        'client_cmp' => ['keys' => $cmpKeys, 'names' => $cmpKeyNames, 'series' => $cmpSeries],
+        'client_by_cls' => $clientByCls, 'client_by_astag' => $clientByAstag,
         'rank_clients' => $rankClients,
         'anomaly_list' => array_slice($anomList, 0, 50),
         'anomaly_total_unconfirmed' => count($anomList),
@@ -870,5 +914,85 @@ function si_insights(PDO $db, array $res, ?array $kpiAlert = null, ?array $ma = 
     }
 
     if (!$out) $add('info', '本期沒有需要特別指出的變化', '各項指標與' . $cl . '相比沒有明顯異常波動。');
+    return $out;
+}
+
+/**
+ * 綜合 si_insights() 算出的各項自動分析結論，給業務具體的「建議採取」行動
+ * （2026-10-06 使用者交辦：出貨分析也要跟訂單分析一樣有這個區塊，與 order_analysis_lib.php
+ * 的 oa_recommend() 同一套做法——只依「哪些結論出現了」對應行動，不重新查一次資料庫，
+ * 判斷依據只能有一份，鐵律4）。
+ * @return array 每筆 ['level','title','actions'=>[逐條具體行動字串]]，依嚴重度排序
+ */
+function si_recommend(array $insights): array
+{
+    $out = [];
+    $find = function (string $needle) use ($insights) {
+        foreach ($insights as $i) if (mb_strpos((string)($i['title'] ?? ''), $needle, 0, 'UTF-8') !== false) return $i;
+        return null;
+    };
+    $add = function ($level, $title, array $actions) use (&$out) {
+        $out[] = ['level' => $level, 'title' => $title, 'actions' => $actions];
+    };
+
+    if ($find('出貨金額衰退') || $find('淨額（出貨－退貨）衰退') || $find('淨額連續兩期下滑')) {
+        $add('bad', '出貨/淨額下滑，建議優先處理', [
+            '安排拜訪或致電主要客戶，確認後續出貨排程與有沒有轉單的風險',
+            '檢視「流失客戶」清單，逐一聯繫確認停止出貨的原因',
+            '檢討近期訂單轉出貨的進度，是否有卡在生管或品管環節沒出得去',
+        ]);
+    }
+    if ($find('客戶集中度偏高')) {
+        $add('warn', '降低客戶集中度風險', [
+            '安排業務開發新客戶，分散對前三大客戶的出貨依賴',
+            '與集中度最高的那幾家客戶保持更密集聯繫，及早掌握出貨量變化',
+        ]);
+    }
+    if ($find('流失客戶')) {
+        $add('bad', '逐一聯繫流失客戶', [
+            '依「流失客戶」清單，優先聯繫出貨金額最大的前幾家',
+            '了解停止出貨的原因（轉單同業／價格／交期／品質），記錄下來供下次報價參考',
+        ]);
+    }
+    if ($find('退貨率偏高')) {
+        $add('warn', '檢討退貨率偏高原因', [
+            '盤點本期退貨明細，確認是品質、規格誤解還是客戶端自己的問題',
+            '退貨率偏高且比上期更差，建議會同品管一併檢討出貨前的檢驗把關',
+        ]);
+    }
+    if ($find('有未確認的異常出貨')) {
+        $add('bad', '清查未確認的異常出貨', [
+            '到「異常偵測」逐筆確認或補單價，異常出貨不處理，相關的金額與KPI統計都會失真',
+        ]);
+    }
+    if ($find('有少量未確認的異常出貨')) {
+        $add('info', '抽空確認少量異常出貨', ['到「異常偵測」確認剩下的幾筆，避免之後累積變多。']);
+    }
+    if ($find('月銷貨額連續未達標')) {
+        $add('bad', '加強本月出貨衝刺', [
+            '盤點已確認訂單中尚未安排出貨的量，優先排入本月出貨排程',
+            '與生管協調加快已逾期製令的出貨進度',
+        ]);
+    }
+    if ($find('出貨淨額移動平均連續低於安全水平')) {
+        $add('bad', '加碼業務開發力道', [
+            '近期出貨淨額持續低於安全水平，建議加強開發力道並檢視報價中案件的進度',
+        ]);
+    }
+    if ($find('個客戶名稱對不到客戶主檔')) {
+        $add('warn', '補齊客戶主檔歸戶', [
+            '請會計到「對帳作業」建立客戶別名歸戶，讓同一家客戶的出貨能正確合併統計',
+        ]);
+    }
+    if ($find('AS 稽核分類只能統計已綁定訂單的出貨')) {
+        $add('info', '補齊出貨單與訂單的綁定', [
+            '到快速出貨或追溯對照補綁訂單，否則全製/單製與 AS 稽核分類的統計都只算得到一部分出貨',
+        ]);
+    }
+    if (!$out) {
+        $add('good', '本期沒有特別需要處理的異常', ['維持目前的出貨節奏即可，持續關注下方自動分析的各項指標。']);
+    }
+    $pri = ['bad' => 0, 'warn' => 1, 'good' => 2, 'info' => 3];
+    usort($out, function ($a, $b) use ($pri) { return ($pri[$a['level']] ?? 9) <=> ($pri[$b['level']] ?? 9); });
     return $out;
 }

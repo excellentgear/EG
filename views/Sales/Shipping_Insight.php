@@ -114,6 +114,10 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
    分組規則與 NewOrder_Track.php 下拉分組同一套（kind==='process'） */
 .badge-as    { background:var(--coral); color:#fff; border-radius:4px; padding:1px 6px; font-size:10px; font-weight:700; line-height:16px; display:inline-block; margin-right:4px; }
 .badge-nonas { background:#C7DEF2; color:#1B4F78; border-radius:4px; padding:1px 6px; font-size:10px; font-weight:700; line-height:16px; display:inline-block; margin-right:4px; }
+.badge-tag   { background:var(--sand); color:#1B4F78; border:1px solid var(--line); border-radius:4px; padding:1px 6px;
+               font-size:10px; line-height:16px; display:inline-block; margin:1px 3px 1px 0; }
+.rec-actions { margin:4px 0 0; padding-left:18px; font-size:12px; color:#1B4F78; line-height:1.7; }
+.rec-actions li { margin-bottom:1px; }
 .chips { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
 .chip { background:var(--sand); color:#1B4F78; border:1px solid var(--line); border-radius:12px;
         padding:1px 8px; font-size:12px; line-height:19px; }
@@ -280,7 +284,7 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
   <div id="noteBar"></div>
   <div id="kpiAlertBar"></div>
   <div class="nav-jump">
-    <a href="#secInsight">自動分析</a><a href="#secTrend">相關金額趨勢</a><a href="#secSaleType">出貨性質分布</a>
+    <a href="#secInsight">自動分析</a><a href="#secRecommend">建議採取</a><a href="#secTrend">相關金額趨勢</a><a href="#secSaleType">出貨性質分布</a>
     <a href="#secAstag">AS 稽核分類</a>
     <a href="#secClient">客戶比較</a><a href="#secRank">客戶增減排名</a><a href="#secMa">出貨淨額監控</a>
     <a href="#secCq">客戶季度分析</a><a href="#secList">出貨明細／退貨單／訂單／客戶統計</a>
@@ -294,6 +298,14 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
       <span class="hint">系統直接把「要自己盯著圖表看才發現得了」的事寫成結論，每一條都附數字</span>
     </h4>
     <div id="insightList" class="ins-list"></div>
+  </div>
+
+  <!-- ── 建議採取 ─────────────────────────────────────── -->
+  <div class="sec" id="secRecommend">
+    <h4><i class="fa fa-flag-o" style="color:var(--coral);"></i> 建議採取
+      <span class="hint">綜合上方「自動分析」各項結論，整理成業務可以實際動手做的行動清單</span>
+    </h4>
+    <div id="recommendList" class="ins-list"></div>
   </div>
 
   <!-- ── 相關金額趨勢 ─────────────────────────────────── -->
@@ -372,12 +384,17 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
         </select>
       </span>
     </h4>
+    <div class="sec-tools" style="margin-bottom:8px;">
+      <button type="button" class="btn btn-xs btn-primary" id="cliTabAll" onclick="cliTab('all')">全部</button>
+      <button type="button" class="btn btn-xs btn-default" id="cliTabAstag" onclick="cliTab('astag')">依訂單標籤分類</button>
+      <button type="button" class="btn btn-xs btn-default" id="cliTabCls" onclick="cliTab('cls')">依全製/多製程/單製</button>
+    </div>
     <div id="chClient" class="chart-box tall"></div>
     <div class="tbl-wrap" style="margin-top:10px;">
       <table class="oa-t" id="tblClient">
-        <colgroup><col style="width:16%"><col style="width:13%"><col style="width:13%"><col style="width:13%">
+        <colgroup id="tblClientCols"><col style="width:16%"><col style="width:13%"><col style="width:13%"><col style="width:13%">
                   <col style="width:13%"><col style="width:13%"><col style="width:19%"></colgroup>
-        <thead><tr><th>客戶</th><th>出貨</th><th>退貨</th><th>訂單</th><th>淨額</th><th>異常筆數</th><th>較<span class="cmpLab">基期</span>淨額增減</th></tr></thead>
+        <thead id="tblClientHead"><tr><th>客戶</th><th>出貨</th><th>退貨</th><th>訂單</th><th>淨額</th><th>異常筆數</th><th>較<span class="cmpLab">基期</span>淨額增減</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -551,6 +568,7 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
     <button type="button" class="qnav-fab" title="快速導覽（各區塊）"><i class="fa fa-compass"></i></button>
     <div class="qnav-panel">
       <a href="#secInsight">自動分析</a>
+      <a href="#secRecommend">建議採取</a>
       <a href="#secTrend">相關金額趨勢</a>
       <a href="#secSaleType">出貨性質分布</a>
       <a href="#secAstag">AS 稽核分類</a>
@@ -1013,7 +1031,7 @@ function load(){
   $.post(SI_API, req, function(r){
     if(!r || !r.ok){ $('#noteBar').html('<div class="oa-note oa-warn">'+esc((r&&r.error)||'載入失敗')+'</div>'); return; }
     DATA = r;
-    renderNote(); renderKpiAlert(); renderKpi(); renderInsights();
+    renderNote(); renderKpiAlert(); renderKpi(); renderInsights(); renderRecommend();
     renderTrend(); renderSaleType(); renderAstag(); renderClient(); renderRank(); renderMa();
     listReload();
   }, 'json').fail(function(x){
@@ -1094,6 +1112,25 @@ function siToggleInsList(id, el){
   var show = box.style.display === 'none';
   box.style.display = show ? 'block' : 'none';
   $(el).html(show ? '收合名單 <i class="fa fa-caret-up"></i>' : '展開名單 <i class="fa fa-caret-down"></i>');
+}
+
+/* ── 建議採取 ───────────────────────────────────────── */
+// 2026-10-06 使用者交辦：出貨分析也要跟訂單分析一樣有這個區塊，資料是 si_recommend()
+// （shipping_insight_lib.php）依「哪些自動分析結論出現了」對應出的行動清單，這裡只負責畫。
+function renderRecommend(){
+  var list = DATA.recommend || [], icons = {bad:'fa-exclamation-triangle', warn:'fa-exclamation-circle',
+                                             good:'fa-check-circle', info:'fa-info-circle'};
+  if(!list.length){ $('#recommendList').html('<div style="font-size:12px;color:var(--muted);">本期沒有特別需要處理的異常。</div>'); return; }
+  var h = '';
+  list.forEach(function(x){
+    var acts = (x.actions||[]).map(function(a){ return '<li>'+esc(a)+'</li>'; }).join('');
+    h += '<div class="ins ins-'+esc(x.level)+'">'
+       + '<div class="ic"><i class="fa '+(icons[x.level]||'fa-info-circle')+'"></i></div>'
+       + '<div class="bd"><div class="tt">'+esc(x.title)+'</div>'
+       + (acts ? '<ul class="rec-actions">'+acts+'</ul>' : '')
+       + '</div></div>';
+  });
+  $('#recommendList').html(h);
 }
 
 function renderMa(){
@@ -1278,7 +1315,29 @@ $(document).on('click', '#astagPrev', function(){ ASTAG_PAGE--; renderAstagTable
 $(document).on('click', '#astagNext', function(){ ASTAG_PAGE++; renderAstagTable(); });
 $('#astagMetric').on('change', function(){ if(DATA) renderAstag(); });
 
+// 2026-10-06 使用者交辦：客戶比較表也要能切「依訂單標籤分類」／「依全製/多製程/單製」，
+// 與訂單分析同一套交叉資料做法（DATA.client_by_cls／DATA.client_by_astag，categories 換成
+// DATA.client_cmp.names 這份跟比較圖同一組客戶）；只能依「出貨單」統計（si_report() 已講明：
+// 退貨／訂單沒有綁定 AS 標籤的途徑）。
+var CLI_TAB = 'all';
+var TBL_CLIENT_COLS_HTML = '<col style="width:16%"><col style="width:13%"><col style="width:13%"><col style="width:13%">'
+  + '<col style="width:13%"><col style="width:13%"><col style="width:19%">';
+var TBL_CLIENT_HEAD_HTML = '<tr><th>客戶</th><th>出貨</th><th>退貨</th><th>訂單</th><th>淨額</th><th>異常筆數</th><th>較<span class="cmpLab">基期</span>淨額增減</th></tr>';
+function cliTab(t){
+  CLI_TAB = t;
+  ['cliTabAll','cliTabAstag','cliTabCls'].forEach(function(id){
+    var on = id === 'cliTab'+(t==='all'?'All':(t==='astag'?'Astag':'Cls'));
+    $('#'+id).toggleClass('btn-primary', on).toggleClass('btn-default', !on);
+  });
+  renderClient();
+}
 function renderClient(){
+  if (CLI_TAB !== 'all') {
+    renderClientCross(CLI_TAB === 'cls' ? (DATA.client_by_cls||[]) : (DATA.client_by_astag||[]));
+    return;
+  }
+  $('#tblClientCols').html(TBL_CLIENT_COLS_HTML);
+  $('#tblClientHead').html(TBL_CLIENT_HEAD_HTML);
   var cc = DATA.client_cmp, met = $('#cliMetric').val(), m = DATA.meta;
   var cats = (m.buckets||[]).map(function(s){ return s.replace(/^\d{4}\s*/,''); });
   var ser = (cc.series||[]).map(function(s, i){
@@ -1308,6 +1367,34 @@ function renderClient(){
   });
   $('#tblClient tbody').html(h||'<tr><td colspan="7" style="text-align:center;color:var(--muted);">沒有可比較的客戶</td></tr>');
   $('#cliHint').text(Object.keys(CLI_SEL).length ? ('已篩選 '+Object.keys(CLI_SEL).length+' 家客戶') : '未篩選客戶 → 自動取本期淨額前 8 大客戶');
+}
+/** 依訂單標籤分類／依全製-多製程-單製 共用的客戶交叉表：堆疊柱狀圖＋分類×客戶矩陣表，
+    只能依「出貨單」統計，categories 換成客戶名稱。 */
+function renderClientCross(list){
+  var names = (DATA.client_cmp && DATA.client_cmp.names) || [];
+  var palette = PAL;
+  var ser = list.map(function(row, i){ return { name: row.label, data: row.bands, color: palette[i % palette.length] }; });
+  chart('chClient', opt({
+    chart:{ type:'column' },
+    xAxis:{ categories: names },
+    yAxis:{ min:0, title:{text:'出貨筆數',style:{fontSize:'11px',color:'var(--muted)'}}, gridLineColor:'#EAF3FC',
+            labels:{style:{fontSize:'10px',color:'var(--muted)'}} },
+    tooltip:{ shared:true, style:{fontSize:'11px'} },
+    plotOptions:{ column:{ stacking:'normal', borderRadius:2, pointPadding:0.05, groupPadding:0.16 } },
+    series: ser.length ? ser : [{ name:'（本期沒有資料）', data: names.map(function(){return 0;}) }]
+  }));
+  $('#tblClientCols').html('');
+  $('#tblClientHead').html('<tr><th>分類</th>'+names.map(function(n){ return '<th class="tr">'+esc(n)+'</th>'; }).join('')+'<th class="tr">合計</th></tr>');
+  var h = '';
+  list.forEach(function(row){
+    var tot = row.bands.reduce(function(a,v){ return a+v; }, 0);
+    h += '<tr><td>'+esc(row.label)+(row.is_proc?' <span class="badge-as">AS</span>':'')+'</td>'
+       + row.bands.map(function(v){ return '<td class="n">'+(v?nf(v):'')+'</td>'; }).join('')
+       + '<td class="n"><b>'+nf(tot)+'</b></td></tr>';
+  });
+  $('#tblClient tbody').html(h || '<tr><td colspan="'+(names.length+2)+'" style="text-align:center;color:var(--muted);">沒有可比較的客戶</td></tr>');
+  $('#cliHint').text('依'+(CLI_TAB==='cls'?'全製/多製程/單製':'訂單標籤')+'分類交叉統計出貨單筆數，客戶範圍與上方「客戶比較表」相同'
+    + (Object.keys(CLI_SEL).length ? '（已篩選 '+Object.keys(CLI_SEL).length+' 家客戶）' : '（未篩選 → 自動取本期淨額前 8 大客戶）'));
 }
 $('#cliMetric').on('change', function(){ if(DATA) renderClient(); });
 
