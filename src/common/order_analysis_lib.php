@@ -920,6 +920,40 @@ function oa_analyze(PDO $db, array $opt = []): array
         $cmpSeries[] = $row;
     }
 
+    /* ── 客戶比較：標籤分類交叉表（2026-10-06 使用者交辦，跟數量區間那組同一套口徑）──
+       X 軸沿用上面已經選定要比較的那幾家客戶（$cmpKeys，使用者自選或自動前8名），
+       不是全部客戶——跟上面時間趨勢圖看的是同一組公司，只是換一個角度交叉統計。
+       $clsGroupOf／$clsOrder／$clsLabel／$byAstag 是數量區間那段已經算好的共用素材，
+       這裡直接沿用不重新定義一次（鐵律4）。 */
+    $cmpN = count($cmpKeys);
+    $clientByCls = [];
+    foreach ($clsOrder as $ck) $clientByCls[$ck] = ['key' => $ck, 'label' => $clsLabel[$ck], 'bands' => array_fill(0, $cmpN, 0)];
+    $clientByAstag = [];
+    foreach ($byAstag as $k => $meta) {
+        $clientByAstag[$k] = ['key' => $k, 'label' => $meta['label'], 'is_proc' => $meta['is_proc'],
+                               'sort_order' => $meta['sort_order'], 'bands' => array_fill(0, $cmpN, 0)];
+    }
+    $cmpKeyIdx = array_flip($cmpKeys);
+    foreach ($rows as $r) {
+        if (!$inSel($r) || !$inRange($r, $curE)) continue;
+        if (!isset($cmpKeyIdx[$r['ckey']])) continue;   // 只算有被選進比較表的那幾家
+        $ci = $cmpKeyIdx[$r['ckey']];
+        $clientByCls[$clsGroupOf($r['cls'])]['bands'][$ci]++;
+        $k = $r['as_key'];
+        if (!isset($clientByAstag[$k])) {
+            $clientByAstag[$k] = ['key' => $k, 'label' => $r['as_label'], 'is_proc' => $r['as_proc'],
+                                   'sort_order' => 99999, 'bands' => array_fill(0, $cmpN, 0)];
+        }
+        $clientByAstag[$k]['bands'][$ci]++;
+    }
+    $clientByCls = array_values(array_filter($clientByCls, function ($x) { return array_sum($x['bands']) > 0; }));
+    $clientByAstag = array_values(array_filter($clientByAstag, function ($x) { return array_sum($x['bands']) > 0; }));
+    usort($clientByAstag, function ($a, $b) {
+        if ($a['is_proc'] !== $b['is_proc']) return $b['is_proc'] <=> $a['is_proc'];
+        return $a['sort_order'] <=> $b['sort_order'];
+    });
+    $cmpKeyNames = array_map(function ($k) use ($byClient) { return $byClient[$k]['name'] ?? $k; }, $cmpKeys);
+
     /* ── 客戶增減排名：依「增減金額」排序，不是依百分比 ──
        只看 % 的話，1 萬變 2 萬的小客戶會永遠排在 500 萬掉到 400 萬的大客戶前面。 */
     // 排序口徑：預設金額，但**基期幾乎沒人填單價時自動改用數量**。
@@ -953,8 +987,12 @@ function oa_analyze(PDO $db, array $opt = []): array
             if (!isset($byPart[$k])) $byPart[$k] = ['key' => $k, 'pno' => $r['pno'], 'cname' => $r['cname'],
                                                     'pid' => (int)$r['pid'],
                                                     'first' => $r['first'], 'fsrc' => $r['fsrc'],
-                                                    'cur' => oa_blank(), 'cmp' => oa_blank()];
+                                                    'cur' => oa_blank(), 'cmp' => oa_blank(), 'cur_tags' => []];
             oa_add($byPart[$k][$slot], $r, false);
+            // 2026-10-06 使用者交辦：受訂料號排名要顯示這支料號掛的稽核製程標籤——同一支料號
+            // 本期可能分散在好幾張訂單、各自的 AS 認定不一定相同，所以收集成一個集合（去重），
+            // 有幾種就顯示幾種；還沒設定標籤的訂單不算進來（不是一種「標籤」）。
+            if ($slot === 'cur' && $r['as_key'] !== 'unset') $byPart[$k]['cur_tags'][$r['as_key']] = $r['as_label'];
         }
     };
     $accumP($curE, 'cur');
@@ -965,6 +1003,8 @@ function oa_analyze(PDO $db, array $opt = []): array
         $p['d_orders'] = $p['cur']['orders'] - $p['cmp']['orders'];
         $p['d_qty']    = $p['cur']['qty']    - $p['cmp']['qty'];
         $p['is_new']   = ($p['first'] !== '' && $p['first'] >= $curE['start'] && $p['first'] <= $curE['end']) ? 1 : 0;
+        $p['tags']     = array_values($p['cur_tags']);
+        unset($p['cur_tags']);
         $partRows[] = $p;
     }
     $rankParts = $partRows;
@@ -982,7 +1022,7 @@ function oa_analyze(PDO $db, array $opt = []): array
         $newList[] = ['key' => $p['key'], 'pno' => $p['pno'], 'cname' => $p['cname'], 'pid' => (int)$p['pid'],
                       'first' => $p['first'], 'fsrc' => $p['fsrc'],
                       'orders' => $p['cur']['orders'], 'qty' => $p['cur']['qty'],
-                      'amount' => $p['cur']['amount'], 'px' => $p['cur']['px_orders']];
+                      'amount' => $p['cur']['amount'], 'px' => $p['cur']['px_orders'], 'tags' => $p['tags']];
     }
     usort($newList, function ($a, $b) {
         $d = $b['amount'] <=> $a['amount'];
@@ -1030,7 +1070,9 @@ function oa_analyze(PDO $db, array $opt = []): array
         'astag'       => ['rows' => $astagRows, 'trend' => $astagTrend, 'buckets' => array_map(function ($b) { return $b['label']; }, oa_period_buckets($year, $gran)),
                            'unset' => $astagUnset, 'tagged_pct' => $astagTaggedPct],
         'clients'     => $clientRows,
-        'client_cmp'  => ['keys' => $cmpKeys, 'series' => $cmpSeries],
+        'client_cmp'  => ['keys' => $cmpKeys, 'names' => $cmpKeyNames, 'series' => $cmpSeries],
+        'client_by_cls'   => $clientByCls,
+        'client_by_astag' => $clientByAstag,
         'rank_clients' => $rankClients,
         'rank_parts'   => array_slice($rankParts, 0, $topN),
         'rank_parts_delta' => array_slice($rankPartsDelta, 0, $topN),
@@ -1578,6 +1620,92 @@ function oa_insights(PDO $db, array $res, ?array $kpiAlert = null, ?array $ma = 
 }
 
 /**
+ * 綜合 oa_insights() 算出的各項自動分析結論，給業務具體的「建議採取」行動
+ * （2026-10-06 使用者交辦：「這邊要綜合自動分析各種結果建議業務要採取什麼樣的行為」）。
+ * 刻意不重新查一次資料庫——純粹依「哪些結論出現了」對應出行動建議，資料只來自
+ * $insights（oa_insights() 的回傳），避免同一件事判斷兩次、兩邊結論對不起來（鐵律4）。
+ * @return array 每筆 ['level','title','actions'=>[逐條具體行動字串]]，依嚴重度排序
+ */
+function oa_recommend(array $insights): array
+{
+    $out = [];
+    $find = function (string $needle) use ($insights) {
+        foreach ($insights as $i) if (mb_strpos((string)($i['title'] ?? ''), $needle, 0, 'UTF-8') !== false) return $i;
+        return null;
+    };
+    $add = function ($level, $title, array $actions) use (&$out) {
+        $out[] = ['level' => $level, 'title' => $title, 'actions' => $actions];
+    };
+
+    if ($find('金額衰退') || $find('數量衰退') || $find('連續兩期下滑')) {
+        $add('bad', '業績下滑，建議優先處理', [
+            '安排拜訪或致電前三大客戶，確認後續訂單狀況與排程',
+            '檢視「流失客戶」清單，逐一聯繫確認停止下單的原因',
+            '檢討近期報價轉換率，加快新案開發速度補上缺口',
+        ]);
+    }
+    if ($find('客戶集中度偏高')) {
+        $add('warn', '降低客戶集中度風險', [
+            '安排業務開發新客戶，分散對前三大客戶的依賴',
+            '與集中度最高的那幾家客戶保持更密集聯繫，及早掌握訂單變化',
+        ]);
+    }
+    if ($find('本期完全沒有下單')) {
+        $add('bad', '逐一聯繫流失客戶', [
+            '依「流失客戶」清單，優先聯繫金額最大的前幾家',
+            '了解停止下單的原因（轉單同業／價格／交期／品質），記錄下來供下次報價參考',
+        ]);
+    }
+    if ($find('對不到客戶主檔')) {
+        $add('warn', '補齊客戶主檔歸戶', [
+            '請會計到「對帳作業」建立客戶別名歸戶，讓同一家客戶的訂單能正確合併統計',
+        ]);
+    }
+    $npIns = $find('新料號佔本期料號');
+    if ($npIns && mb_strpos((string)($npIns['detail'] ?? ''), '新案源偏少', 0, 'UTF-8') !== false) {
+        $add('warn', '加強新案開發', [
+            '新案源偏少，建議業務加強報價開發力道，避免營收過度依賴既有料號的重複下單',
+        ]);
+    }
+    if ($find('全製比例下降')) {
+        $add('warn', '檢討全製案件比例', [
+            '全製單通常毛利較高，建議檢討報價策略，爭取更多全製案件或調整單製報價',
+        ]);
+    }
+    if ($find('尚未設定稽核製程標籤')) {
+        $add('info', '補齊稽核製程標籤', [
+            '儘速到訂單追蹤逐筆補設定稽核製程標籤（AS 認定），否則全製/單製與 AS 稽核分類的統計都不準確',
+        ]);
+    }
+    if ($find('小量訂單佔比偏高')) {
+        $add('info', '檢討小量訂單處理方式', [
+            '評估是否能合併生產排程、或調整報價門檻反映換線與管理成本',
+        ]);
+    }
+    if ($find('沒有填單價')) {
+        $add('warn', '補齊訂單單價', [
+            '儘速補上未填單價的訂單，否則金額類分析（成長率、客戶排名、全製比例金額等）都會被低估',
+        ]);
+    }
+    if ($find('訂單 KPI 未達標')) {
+        $add('bad', '加強本月衝刺', [
+            '鎖定目標客戶加速下單轉換，優先跟進已報價但尚未轉單的案件',
+        ]);
+    }
+    if ($find('移動平均已連續')) {
+        $add('bad', '加碼業務開發力道', [
+            '近期接單量持續低於安全水平，建議加強開發力道並檢視報價中案件的進度',
+        ]);
+    }
+    if (!$out) {
+        $add('good', '本期沒有特別需要處理的異常', ['維持目前的業務節奏即可，持續關注下方自動分析的各項指標。']);
+    }
+    $pri = ['bad' => 0, 'warn' => 1, 'good' => 2, 'info' => 3];
+    usort($out, function ($a, $b) use ($pri) { return ($pri[$a['level']] ?? 9) <=> ($pri[$b['level']] ?? 9); });
+    return $out;
+}
+
+/**
  * 畫面／列印／通知一律呼叫這一支：分析結果＋KPI 提醒＋移動平均＋自動分析。
  * 三個附掛區塊刻意不寫進 oa_analyze()——那支是純計算，而這三個會去讀 KPI 模組與設定。
  */
@@ -1591,6 +1719,8 @@ function oa_report(PDO $db, array $opt = []): array
     $res['ma']        = $ma;
     try { $res['insights'] = oa_insights($db, $res, $kpi, $ma); }
     catch (Throwable $e) { $res['insights'] = []; }
+    try { $res['recommend'] = oa_recommend($res['insights']); }
+    catch (Throwable $e) { $res['recommend'] = []; }
     return $res;
 }
 

@@ -120,6 +120,9 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
    分組規則與 NewOrder_Track.php 下拉分組同一套（kind==='process'） */
 .badge-as    { background:var(--coral); color:#fff; border-radius:4px; padding:1px 6px; font-size:10px; font-weight:700; line-height:16px; display:inline-block; margin-right:4px; }
 .badge-nonas { background:#E4D3BC; color:#6B4423; border-radius:4px; padding:1px 6px; font-size:10px; font-weight:700; line-height:16px; display:inline-block; margin-right:4px; }
+/* 一支料號／一筆統計跨多張訂單時，可能同時掛著好幾種稽核製程標籤——逐個小籤列出，不合併成一個字串 */
+.badge-tag   { background:var(--sand); color:#6B4423; border:1px solid var(--line); border-radius:4px; padding:1px 6px;
+               font-size:10px; line-height:16px; display:inline-block; margin:1px 3px 1px 0; }
 /* 客戶 chips */
 .chips { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
 .chip { background:var(--sand); color:#6B4423; border:1px solid var(--line); border-radius:12px;
@@ -164,6 +167,9 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 .ins-cli-name a { color:#8a5a2b; border-bottom:1px dotted #8a5a2b; cursor:pointer; }
 .ins-cli-name a:hover { color:var(--coral); border-bottom-color:var(--coral); }
 .ins-cli-amt { color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+/* 建議採取：跟自動分析同一套卡片樣式，底下多一份逐條行動清單 */
+.rec-actions { margin:4px 0 0; padding-left:18px; font-size:12px; color:#6B4423; line-height:1.7; }
+.rec-actions li { margin-bottom:1px; }
 /* 可點的料號（開圖面檢視） */
 .pno-link { color:#8a5a2b; border-bottom:1px dotted #8a5a2b; cursor:pointer; }
 .pno-link:hover { color:var(--coral); border-bottom-color:var(--coral); }
@@ -284,7 +290,7 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
   </div>
 
   <div class="nav-jump">
-    <a href="#secInsight">自動分析</a><a href="#secTrend">訂單趨勢</a><a href="#secNew">新訂單（新料號）</a><a href="#secProc">全製／單製</a>
+    <a href="#secInsight">自動分析</a><a href="#secRecommend">建議採取</a><a href="#secTrend">訂單趨勢</a><a href="#secNew">新訂單（新料號）</a><a href="#secProc">全製／單製</a>
     <a href="#secAstag">AS 稽核分類</a>
     <a href="#secBand">數量區間</a><a href="#secClient">客戶比較</a><a href="#secRank">客戶增減排名</a>
     <a href="#secMa">訂單量監控</a><a href="#secPart">受訂料號排名</a>
@@ -301,6 +307,14 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
       <span class="hint">系統直接把「要自己盯著圖表看才發現得了」的事寫成結論，每一條都附數字</span>
     </h4>
     <div id="insightList" class="ins-list"></div>
+  </div>
+
+  <!-- ── 建議採取 ─────────────────────────────────────── -->
+  <div class="sec" id="secRecommend">
+    <h4><i class="fa fa-flag-o" style="color:var(--coral);"></i> 建議採取
+      <span class="hint">綜合上方「自動分析」各項結論，整理成業務可以實際動手做的行動清單</span>
+    </h4>
+    <div id="recommendList" class="ins-list"></div>
   </div>
 
   <!-- ── 趨勢 ─────────────────────────────────────────── -->
@@ -335,9 +349,9 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
     </div>
     <div class="tbl-wrap" style="margin-top:10px;">
       <table class="oa-t" id="tblNew">
-        <colgroup><col style="width:22%"><col style="width:16%"><col style="width:13%"><col style="width:10%">
-                  <col style="width:10%"><col style="width:13%"><col style="width:16%"></colgroup>
-        <thead><tr><th>料號</th><th>客戶</th><th>第一次出現</th><th>來源</th>
+        <colgroup><col style="width:18%"><col style="width:13%"><col style="width:11%"><col style="width:9%">
+                  <col style="width:16%"><col style="width:9%"><col style="width:9%"><col style="width:15%"></colgroup>
+        <thead><tr><th>料號</th><th>客戶</th><th>第一次出現</th><th>來源</th><th>訂單標籤</th>
                    <th><span class="curLab">本期</span>筆數</th><th><span class="curLab">本期</span>數量</th><th><span class="curLab">本期</span>金額</th></tr></thead>
         <tbody></tbody>
       </table>
@@ -420,12 +434,17 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
         </select>
       </span>
     </h4>
+    <div class="sec-tools" style="margin-bottom:8px;">
+      <button type="button" class="btn btn-xs btn-primary" id="cliTabAll" onclick="cliTab('all')">全部</button>
+      <button type="button" class="btn btn-xs btn-default" id="cliTabAstag" onclick="cliTab('astag')">依訂單標籤分類</button>
+      <button type="button" class="btn btn-xs btn-default" id="cliTabCls" onclick="cliTab('cls')">依全製/多製程/單製</button>
+    </div>
     <div id="chClient" class="chart-box tall"></div>
     <div class="tbl-wrap" style="margin-top:10px;">
       <table class="oa-t" id="tblClient">
-        <colgroup><col style="width:15%"><col style="width:8%"><col style="width:11%"><col style="width:13%">
+        <colgroup id="tblClientCols"><col style="width:15%"><col style="width:8%"><col style="width:11%"><col style="width:13%">
                   <col style="width:9%"><col style="width:9%"><col style="width:9%"><col style="width:9%"><col style="width:17%"></colgroup>
-        <thead><tr><th>客戶</th><th>筆數</th><th>數量</th><th>金額</th><th>料號數</th><th>新料號</th>
+        <thead id="tblClientHead"><tr><th>客戶</th><th>筆數</th><th>數量</th><th>金額</th><th>料號數</th><th>新料號</th>
                    <th>全製</th><th>單製</th><th>較<span class="cmpLab">基期</span>增減</th></tr></thead>
         <tbody></tbody>
       </table>
@@ -491,9 +510,9 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
     <div id="chParts" class="chart-box tall"></div>
     <div class="tbl-wrap" style="margin-top:10px;">
       <table class="oa-t" id="tblParts">
-        <colgroup><col style="width:5%"><col style="width:21%"><col style="width:14%"><col style="width:10%">
-                  <col style="width:12%"><col style="width:14%"><col style="width:12%"><col style="width:12%"></colgroup>
-        <thead><tr><th>#</th><th>料號</th><th>客戶</th><th>筆數</th><th>數量</th><th>金額</th>
+        <colgroup><col style="width:4%"><col style="width:16%"><col style="width:11%"><col style="width:16%"><col style="width:8%">
+                  <col style="width:10%"><col style="width:12%"><col style="width:11%"><col style="width:10%"></colgroup>
+        <thead><tr><th>#</th><th>料號</th><th>客戶</th><th>訂單標籤</th><th>筆數</th><th>數量</th><th>金額</th>
                    <th>較基期增減</th><th>新料號</th></tr></thead><tbody></tbody>
       </table>
     </div>
@@ -511,6 +530,7 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
     <button type="button" class="qnav-fab" title="快速導覽（各區塊）"><i class="fa fa-compass"></i></button>
     <div class="qnav-panel">
       <a href="#secInsight">自動分析</a>
+      <a href="#secRecommend">建議採取</a>
       <a href="#secTrend">訂單趨勢</a>
       <a href="#secNew">新訂單（新料號）</a>
       <a href="#secProc">全製／單製</a>
@@ -969,7 +989,7 @@ function load(){
   $.post(OA_API, req, function(r){
     if(!r || !r.ok){ $('#noteBar').html('<div class="oa-note oa-warn">'+esc((r&&r.error)||'載入失敗')+'</div>'); return; }
     DATA = r;
-    renderNote(); renderKpiAlert(); renderKpi(); renderInsights();
+    renderNote(); renderKpiAlert(); renderKpi(); renderInsights(); renderRecommend();
     renderTrend(); renderNew(); renderProc(); renderAstag(); renderBand();
     renderClient(); renderRank(); renderMa(); renderParts();
   }, 'json').fail(function(x){
@@ -1078,6 +1098,26 @@ function oaRenderInsClientGrid(x, listId){
        + '<div class="ins-cli-grid" style="'+colStyle+'">'+cells+'</div>'
        + '</div>';
 }
+/* ── 建議採取 ───────────────────────────────────────── */
+// 2026-10-06 使用者交辦：自動分析要再往前一步，綜合各項結論建議業務該採取什麼行動。
+// 資料是 oa_recommend()（order_analysis_lib.php）依「哪些自動分析結論出現了」對應出的行動清單，
+// 這裡只負責畫，不在前端重新判斷一次條件（鐵律4：判斷依據只能有一份）。
+function renderRecommend(){
+  var list = DATA.recommend || [], icons = {bad:'fa-exclamation-triangle', warn:'fa-exclamation-circle',
+                                             good:'fa-check-circle', info:'fa-info-circle'};
+  if(!list.length){ $('#recommendList').html('<div style="font-size:12px;color:var(--muted);">本期沒有特別需要處理的異常。</div>'); return; }
+  var h = '';
+  list.forEach(function(x){
+    var acts = (x.actions||[]).map(function(a){ return '<li>'+esc(a)+'</li>'; }).join('');
+    h += '<div class="ins ins-'+esc(x.level)+'">'
+       + '<div class="ic"><i class="fa '+(icons[x.level]||'fa-info-circle')+'"></i></div>'
+       + '<div class="bd"><div class="tt">'+esc(x.title)+'</div>'
+       + (acts ? '<ul class="rec-actions">'+acts+'</ul>' : '')
+       + '</div></div>';
+  });
+  $('#recommendList').html(h);
+}
+
 function oaToggleInsList(id, el){
   var box = document.getElementById(id);
   if(!box) return;
@@ -1238,6 +1278,11 @@ function renderNew(){
   $('#newHint').text('本期新料號 '+nf(c.new_parts)+' 支、產生 '+nf(c.new_orders)+' 筆訂單（金額 '+money(c.new_amount)+'）');
   renderNewTable();
 }
+/** 一支料號本期可能掛著好幾種稽核製程標籤（不同訂單各自設定不同）——逐個列出，不是只顯示第一個。 */
+function tagsHtml(tags){
+  if(!tags || !tags.length) return '<span style="color:#a08a6f;">—</span>';
+  return tags.map(function(t){ return '<span class="badge-tag">'+esc(t)+'</span>'; }).join('');
+}
 function renderNewTable(){
   var kw = String($('#newKw').val()||'').trim().toLowerCase();
   var lab = DATA.meta.source_labels || {}, h='', n=0;
@@ -1246,10 +1291,11 @@ function renderNewTable(){
     n++;
     h += '<tr><td>'+pnoCell(p)+'</td><td>'+esc(p.cname)+'</td><td>'+dispDate(p.first)+'</td>'
        + '<td style="text-align:center;">'+esc(lab[p.fsrc]||p.fsrc||'—')+'</td>'
+       + '<td>'+tagsHtml(p.tags)+'</td>'
        + '<td class="n">'+nf(p.orders)+'</td><td class="n">'+nf(p.qty)+'</td>'
        + '<td class="n">'+(p.px? money(p.amount) : '<span style="color:#a08a6f;">未開價</span>')+'</td></tr>';
   });
-  $('#tblNew tbody').html(h || '<tr><td colspan="7" style="text-align:center;color:#a08a6f;">本期沒有新料號</td></tr>');
+  $('#tblNew tbody').html(h || '<tr><td colspan="8" style="text-align:center;color:#a08a6f;">本期沒有新料號</td></tr>');
 }
 $('#newKw').on('input', function(){ if(DATA) renderNewTable(); });
 
@@ -1464,7 +1510,29 @@ function renderBandCross(list){
 }
 
 /* ── 客戶比較 ───────────────────────────────────────── */
+// 2026-10-06 使用者交辦：客戶比較表也要能切「依訂單標籤分類」／「依全製/多製程/單製」，
+// 與數量區間分析同一組交叉資料做法（DATA.client_by_cls／DATA.client_by_astag，categories 換成
+// DATA.client_cmp.names 這份跟比較圖同一組客戶），沿用 renderBandCross() 同一套矩陣表畫法。
+var CLI_TAB = 'all';
+var TBL_CLIENT_COLS_HTML = '<col style="width:15%"><col style="width:8%"><col style="width:11%"><col style="width:13%">'
+  + '<col style="width:9%"><col style="width:9%"><col style="width:9%"><col style="width:9%"><col style="width:17%">';
+var TBL_CLIENT_HEAD_HTML = '<tr><th>客戶</th><th>筆數</th><th>數量</th><th>金額</th><th>料號數</th><th>新料號</th>'
+  + '<th>全製</th><th>單製</th><th>較<span class="cmpLab">基期</span>增減</th></tr>';
+function cliTab(t){
+  CLI_TAB = t;
+  ['cliTabAll','cliTabAstag','cliTabCls'].forEach(function(id){
+    var on = id === 'cliTab'+(t==='all'?'All':(t==='astag'?'Astag':'Cls'));
+    $('#'+id).toggleClass('btn-primary', on).toggleClass('btn-default', !on);
+  });
+  renderClient();
+}
 function renderClient(){
+  if (CLI_TAB !== 'all') {
+    renderClientCross(CLI_TAB === 'cls' ? (DATA.client_by_cls||[]) : (DATA.client_by_astag||[]));
+    return;
+  }
+  $('#tblClientCols').html(TBL_CLIENT_COLS_HTML);
+  $('#tblClientHead').html(TBL_CLIENT_HEAD_HTML);
   var cc = DATA.client_cmp, met = $('#cliMetric').val(), m = DATA.meta;
   var cats = (m.buckets||[]).map(function(s){ return s.replace(/^\d{4}\s*/,''); });
   var isAmt = (met==='amount');
@@ -1498,6 +1566,34 @@ function renderClient(){
   $('#cliHint').text(Object.keys(CLI_SEL).length
     ? ('已篩選 '+Object.keys(CLI_SEL).length+' 家客戶，整份報表都只算這幾家')
     : ('未篩選客戶 → 自動取本期前 8 大客戶做比較（增減欄位依「'+metLabel(m.rank_metric)+'」）'));
+}
+/** 依訂單標籤分類／依全製-多製程-單製 共用的客戶交叉表：堆疊柱狀圖＋分類×客戶矩陣表，
+    與數量區間分析的 renderBandCross() 同一套畫法，只是 categories 換成客戶名稱。 */
+function renderClientCross(list){
+  var names = (DATA.client_cmp && DATA.client_cmp.names) || [];
+  var palette = [C_AMBER, C_BROWN, '#C9A227', C_SAND, '#D9CDBC', C_CORAL, '#8a7355', '#A3C9A8', '#C98A8A', '#9AA5C9', '#D2B48C', '#B08968'];
+  var ser = list.map(function(row, i){ return { name: row.label, data: row.bands, color: palette[i % palette.length] }; });
+  chart('chClient', opt({
+    chart:{ type:'column' },
+    xAxis:{ categories: names },
+    yAxis:{ min:0, title:{text:'訂單筆數',style:{fontSize:'11px',color:'#a08a6f'}}, gridLineColor:'#F0E8DC',
+            labels:{style:{fontSize:'10px',color:'#a08a6f'}} },
+    tooltip:{ shared:true, style:{fontSize:'11px'} },
+    plotOptions:{ column:{ stacking:'normal', borderRadius:2, pointPadding:0.05, groupPadding:0.16 } },
+    series: ser.length ? ser : [{ name:'（本期沒有資料）', data: names.map(function(){return 0;}) }]
+  }));
+  $('#tblClientCols').html('');
+  $('#tblClientHead').html('<tr><th>分類</th>'+names.map(function(n){ return '<th class="tr">'+esc(n)+'</th>'; }).join('')+'<th class="tr">合計</th></tr>');
+  var h = '';
+  list.forEach(function(row){
+    var tot = row.bands.reduce(function(a,v){ return a+v; }, 0);
+    h += '<tr><td>'+esc(row.label)+(row.is_proc?' <span class="badge-as">AS</span>':'')+'</td>'
+       + row.bands.map(function(v){ return '<td class="n">'+(v?nf(v):'')+'</td>'; }).join('')
+       + '<td class="n"><b>'+nf(tot)+'</b></td></tr>';
+  });
+  $('#tblClient tbody').html(h || '<tr><td colspan="'+(names.length+2)+'" style="text-align:center;color:#a08a6f;">沒有可比較的客戶</td></tr>');
+  $('#cliHint').text('依'+(CLI_TAB==='cls'?'全製/多製程/單製':'訂單標籤')+'分類交叉統計，客戶範圍與上方「客戶比較表」相同'
+    + (Object.keys(CLI_SEL).length ? '（已篩選 '+Object.keys(CLI_SEL).length+' 家客戶）' : '（未篩選 → 自動取本期前 8 大客戶）'));
 }
 function metLabel(k){ return k==='amount'?'金額':(k==='qty'?'數量':'筆數'); }
 $('#cliMetric').on('change', function(){ if(DATA) renderClient(); });
@@ -1589,12 +1685,13 @@ function renderParts(){
   var fmt = isAmt? money : nf, h='';
   (DATA.rank_parts||[]).forEach(function(p, i){
     h += '<tr><td class="n">'+(i+1)+'</td><td>'+pnoCell(p)+'</td><td>'+esc(p.cname)+'</td>'
+       + '<td>'+tagsHtml(p.tags)+'</td>'
        + '<td class="n">'+nf(p.cur.orders)+'</td><td class="n">'+nf(p.cur.qty)+'</td>'
        + '<td class="n">'+money(p.cur.amount)+'</td>'
        + '<td class="n">'+deltaHtml(p.cur[m.rank_metric], p.cmp[m.rank_metric], fmt)+'</td>'
        + '<td style="text-align:center;">'+(p.is_new?'<span class="badge-new">新</span>':'')+'</td></tr>';
   });
-  $('#tblParts tbody').html(h||'<tr><td colspan="8" style="text-align:center;color:#a08a6f;">本期沒有訂單</td></tr>');
+  $('#tblParts tbody').html(h||'<tr><td colspan="9" style="text-align:center;color:#a08a6f;">本期沒有訂單</td></tr>');
   $('#partHint').text('依本期「'+metLabel(m.rank_metric)+'」排序，紅色＝本期第一次出現的新料號');
 }
 
@@ -1650,15 +1747,15 @@ $('#btnCsv').on('click', function(){
         (c.flag==='new'?'新客戶':(c.flag==='return'?'回流客戶':(c.flag==='lost'?'本期掛零':'')))+(c.bad?' 未建主檔':''));
   });
   row('');
-  row('【受訂料號排名】','#','料號','客戶',curL+'筆數',curL+'數量',curL+'金額',baseL+'金額','是否新料號','第一次出現','來源');
+  row('【受訂料號排名】','#','料號','客戶','訂單標籤',curL+'筆數',curL+'數量',curL+'金額',baseL+'金額','是否新料號','第一次出現','來源');
   (DATA.rank_parts||[]).forEach(function(p,i){
-    row('', i+1, p.pno, p.cname, p.cur.orders, p.cur.qty, Math.round(p.cur.amount), Math.round(p.cmp.amount),
+    row('', i+1, p.pno, p.cname, (p.tags||[]).join('、'), p.cur.orders, p.cur.qty, Math.round(p.cur.amount), Math.round(p.cmp.amount),
         p.is_new?'新':'', p.first, (m.source_labels||{})[p.fsrc]||p.fsrc);
   });
   row('');
-  row('【新料號明細】','料號','客戶','第一次出現','來源',curL+'筆數',curL+'數量',curL+'金額');
+  row('【新料號明細】','料號','客戶','第一次出現','來源','訂單標籤',curL+'筆數',curL+'數量',curL+'金額');
   (DATA.new_list||[]).forEach(function(p){
-    row('', p.pno, p.cname, p.first, (m.source_labels||{})[p.fsrc]||p.fsrc, p.orders, p.qty, Math.round(p.amount));
+    row('', p.pno, p.cname, p.first, (m.source_labels||{})[p.fsrc]||p.fsrc, (p.tags||[]).join('、'), p.orders, p.qty, Math.round(p.amount));
   });
 
   var blob = new Blob(['﻿'+L.join('\r\n')], {type:'text/csv;charset=utf-8;'});
@@ -1873,13 +1970,14 @@ function oaPrintHtml(){
   // 受訂料號排名（前10）
   var partRows = ''; (DATA.rank_parts||[]).slice(0,10).forEach(function(p,i){
     partRows += '<tr><td class="tc">'+(i+1)+'</td><td>'+esc(p.pno)+'</td><td>'+esc(p.cname)+'</td>'+
+      '<td>'+esc((p.tags||[]).join('、'))+'</td>'+
       '<td class="tr">'+nf(p.cur.orders)+'</td><td class="tr">'+nf(p.cur.qty)+'</td><td class="tr">'+money(p.cur.amount)+'</td>'+
       '<td class="tc">'+(p.is_new?'<span class="pr-badge new">新</span>':'')+'</td></tr>';
   });
   h += '<div class="pr-sec"><div class="pr-sec-title">受訂料號排名（前 10）</div>'+
-    '<table><colgroup><col style="width:5%"><col style="width:22%"><col style="width:16%"><col style="width:14%"><col style="width:14%"><col style="width:19%"><col style="width:10%"></colgroup>'+
-    '<thead><tr><th>#</th><th>料號</th><th>客戶</th><th class="tr">筆數</th><th class="tr">數量</th><th class="tr">金額</th><th class="tc">新料號</th></tr></thead>'+
-    '<tbody>'+(partRows||'<tr><td colspan="7" class="tc">無</td></tr>')+'</tbody></table></div>';
+    '<table><colgroup><col style="width:4%"><col style="width:16%"><col style="width:12%"><col style="width:16%"><col style="width:13%"><col style="width:13%"><col style="width:17%"><col style="width:9%"></colgroup>'+
+    '<thead><tr><th>#</th><th>料號</th><th>客戶</th><th>訂單標籤</th><th class="tr">筆數</th><th class="tr">數量</th><th class="tr">金額</th><th class="tc">新料號</th></tr></thead>'+
+    '<tbody>'+(partRows||'<tr><td colspan="8" class="tc">無</td></tr>')+'</tbody></table></div>';
 
   h += '<div class="pr-footer">本報告由 EGsystem 訂单分析自動產生｜列印時間：'+esc(printTime)+'</div>';
 
