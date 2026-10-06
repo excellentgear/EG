@@ -132,6 +132,20 @@ switch ($action) {
         if (!isset(oa_grans()[$gran])) oaErr('不合法的期間粒度');
         if (!isset(oa_compares()[$cmp])) oaErr('不合法的比較基準');
 
+        // 急件判定百分位可「僅本次計算」覆寫（不寫回 oa_urgent_settings，不影響管理員預設值）；
+        // 鍵白名單只收 full/multi/single，值夾在 1~100（oa_leadtime_report 內再夾一次＝鐵律8）。
+        $urgentPct = null;
+        $upRaw = $_POST['urgent_pct'] ?? $_GET['urgent_pct'] ?? '';
+        if ($upRaw !== '') {
+            $d = is_string($upRaw) ? json_decode($upRaw, true) : $upRaw;
+            if (is_array($d)) {
+                $urgentPct = [];
+                foreach (['full', 'multi', 'single'] as $k) {
+                    if (isset($d[$k]) && is_numeric($d[$k])) $urgentPct[$k] = max(1, min(100, (int)$d[$k]));
+                }
+            }
+        }
+
         $rep = oa_leadtime_report($db, [
             'year'           => (int)($_REQUEST['year'] ?? date('Y')),
             'gran'           => $gran,
@@ -140,6 +154,7 @@ switch ($action) {
             'align'          => array_key_exists('align', $_REQUEST) ? (int)$_REQUEST['align'] : 1,
             'include_paused' => !empty($_REQUEST['include_paused']),
             'clients'        => array_values((array)$clients),
+            'urgent_pct'     => $urgentPct,
         ]);
         $rep['insights'] = oa_urgent_insights($rep);
         oaOut($rep);
@@ -153,8 +168,21 @@ switch ($action) {
         if (!isset(oa_grans()[$gran]))       oaErr('不合法的期間粒度');
         if (!isset(oa_date_bases()[$basis])) oaErr('不合法的日期基準');
         if (!isset(oa_compares()[$cmp]))     oaErr('不合法的比較基準');
-        $client = trim((string)($_REQUEST['client'] ?? ''));
-        if ($client === '') oaErr('請先選擇客戶');
+
+        // 可多選客戶（使用者交辦），相容舊版單一 client 參數
+        $clientsRaw = $_POST['clients'] ?? $_GET['clients'] ?? '';
+        $clients = [];
+        if (is_string($clientsRaw) && $clientsRaw !== '') {
+            $d = json_decode($clientsRaw, true);
+            $clients = is_array($d) ? $d : array_filter(array_map('trim', explode(',', $clientsRaw)));
+        }
+        $clients = array_values(array_filter(array_map('strval', (array)$clients)));
+        if (!$clients) {
+            $single = trim((string)($_REQUEST['client'] ?? ''));
+            if ($single !== '') $clients = [$single];
+        }
+        if (!$clients) oaErr('請先選擇客戶');
+        if (count($clients) > 10) oaErr('一次最多選 10 家客戶');
 
         $rep = oa_client_share($db, [
             'year'           => (int)($_REQUEST['year'] ?? date('Y')),
@@ -164,8 +192,9 @@ switch ($action) {
             'cmp'            => $cmp,
             'align'          => array_key_exists('align', $_REQUEST) ? (int)$_REQUEST['align'] : 1,
             'include_paused' => !empty($_REQUEST['include_paused']),
-            'client'         => $client,
+            'clients'        => $clients,
         ]);
+        $rep['insights'] = oa_client_share_insights($rep);
         oaOut($rep);
     }
 

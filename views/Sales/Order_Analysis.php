@@ -217,6 +217,17 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 .oa-mtab.active { background:var(--amber-d); color:#fff; }
 .pct-bar-wrap { background:#F0E8DC; border-radius:6px; height:8px; overflow:hidden; margin-top:4px; }
 .pct-bar { background:var(--amber-d); height:100%; }
+/* 客戶佔比報告：客戶欄位改成即時模糊搜尋＋多選（使用者要求，不要另外顯示右側的下拉選單） */
+.sh-ac-wrap { position:relative; flex:1 1 320px; max-width:420px; }
+.sh-ac-wrap input { width:100%; }
+.sh-suggest { position:absolute; left:0; top:100%; margin-top:2px; width:100%; max-height:260px; overflow:auto;
+              background:#fff; border:1px solid var(--line); border-radius:6px; box-shadow:0 6px 16px rgba(0,0,0,.15); z-index:50; }
+.sh-suggest .it { padding:5px 10px; font-size:12px; cursor:pointer; display:flex; justify-content:space-between; gap:8px; }
+.sh-suggest .it:hover, .sh-suggest .it.hi { background:var(--sand); }
+.sh-suggest .it .cid { color:var(--muted); font-size:11px; }
+.sh-suggest .empty { padding:8px 10px; font-size:12px; color:var(--muted); }
+.sh-block { border-top:3px solid var(--amber); }
+.sh-block + .sh-block { margin-top:4px; }
 </style>
 </head>
 <!-- 側欄載入時維持收合（全站慣例 nav-sm） -->
@@ -537,6 +548,21 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 
   <!-- ══════════════ 交期與急件分析 ══════════════ -->
   <div class="oa-tabpanel" data-tab="leadtime" style="display:none;">
+    <div class="warm-panel">
+      <div class="oa-bar">
+        <label>急件（交期過短）判定</label>
+        <label style="font-weight:normal;">全製</label><input type="number" id="ltPctFull" class="rm-in" style="width:52px;" min="1" max="100">
+        <label style="font-weight:normal;">%　多製程</label><input type="number" id="ltPctMulti" class="rm-in" style="width:52px;" min="1" max="100">
+        <label style="font-weight:normal;">%　單製</label><input type="number" id="ltPctSingle" class="rm-in" style="width:52px;" min="1" max="100">
+        <label style="font-weight:normal;">%</label>
+        <button class="btn btn-xs btn-warm" id="btnLtApplyPct"><i class="fa fa-refresh"></i> 套用（僅本次計算）</button>
+        <button class="btn btn-xs btn-default" id="btnLtResetPct">回復管理員預設值</button>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:4px;">
+        上面欄位預設帶入管理員目前設定的值，調整後按「套用」只影響這一次計算，<b>不會更改管理員的預設設定</b>；
+        要改管理員預設值請按右下「急件判定設定」。
+      </div>
+    </div>
     <div id="ltNote" class="oa-note"></div>
     <div id="ltKpiRow" class="kpi-row"></div>
 
@@ -579,8 +605,8 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
       </h4>
       <div class="tbl-wrap">
         <table class="oa-t" id="tblLtClient">
-          <colgroup><col style="width:6%"><col style="width:40%"><col style="width:27%"><col style="width:27%"></colgroup>
-          <thead><tr><th>#</th><th>客戶</th><th>急件筆數</th><th>急件金額</th></tr></thead>
+          <colgroup><col style="width:5%"><col style="width:26%"><col style="width:15%"><col style="width:17%"><col style="width:17%"><col style="width:20%"></colgroup>
+          <thead><tr><th>#</th><th>客戶</th><th>急件筆數</th><th>急件金額</th><th>佔急件總額</th><th>較基期增減</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -592,10 +618,11 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
       </h4>
       <div class="tbl-wrap">
         <table class="oa-t" id="tblLtList">
-          <colgroup><col style="width:12%"><col style="width:15%"><col style="width:13%"><col style="width:10%">
-                    <col style="width:10%"><col style="width:9%"><col style="width:10%"><col style="width:10%"><col style="width:11%"></colgroup>
+          <colgroup><col style="width:10%"><col style="width:12%"><col style="width:11%"><col style="width:8%">
+                    <col style="width:8%"><col style="width:8%"><col style="width:9%"><col style="width:8%"><col style="width:9%">
+                    <col style="width:9%"><col style="width:8%"></colgroup>
           <thead><tr><th>訂單號</th><th>客戶</th><th>料號</th><th>下單日</th><th>交期</th>
-                     <th>工作天數</th><th>類別</th><th>數量</th><th>金額</th></tr></thead>
+                     <th>工作天數</th><th>類別</th><th>數量</th><th>金額</th><th>key單人員</th><th>key單日期</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -605,40 +632,37 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
   <!-- ══════════════ 客戶佔比報告 ══════════════ -->
   <div class="oa-tabpanel" data-tab="share" style="display:none;">
     <div class="warm-panel">
-      <div class="oa-bar">
-        <label>客戶</label>
-        <select id="shClient" class="form-control input-sm" style="width:280px;" data-eg-filter="輸入客戶名稱或編號篩選…">
-          <option value="">（請先選擇客戶）</option>
-        </select>
+      <div class="oa-bar" style="align-items:flex-start;">
+        <label style="padding-top:6px;">客戶（可多選，最多 10 家）</label>
+        <div class="sh-ac-wrap">
+          <input type="text" id="shClientInput" class="form-control input-sm" placeholder="輸入客戶名稱或編號搜尋…" autocomplete="off">
+          <div id="shClientSuggest" class="sh-suggest" style="display:none;"></div>
+        </div>
         <button class="btn btn-sm btn-warm" id="btnShLoad"><i class="fa fa-calculator"></i> 產生報告</button>
         <button class="btn btn-sm btn-warm-o" id="btnShPrint"><i class="fa fa-print"></i> 列印 A4 報告</button>
       </div>
+      <div class="chips" id="shClientChips" style="margin-top:8px;">
+        <span style="font-size:12px;color:var(--muted);">尚未選擇客戶</span>
+      </div>
     </div>
     <div id="shNote" class="oa-note"></div>
-    <div id="shEmpty" class="oa-note">請先在上方選擇客戶，再按「產生報告」——本頁使用與「總覽分析」相同的年度／期間／比較基準設定。</div>
+    <div id="shEmpty" class="oa-note">請先在上方輸入關鍵字挑選客戶（可多選），再按「產生報告」——本頁使用與「總覽分析」相同的年度／期間／比較基準設定。</div>
     <div id="shBody" style="display:none;">
-      <div id="shKpiRow" class="kpi-row"></div>
-      <div class="sec">
-        <h4><i class="fa fa-pie-chart" style="color:var(--amber-d);"></i> 製程類別佔比（本客戶 vs 全體）</h4>
-        <div class="two-col">
-          <div><div id="chShCls" class="chart-box"></div></div>
-          <div>
-            <table class="oa-t" id="tblShCls">
-              <colgroup><col style="width:28%"><col style="width:18%"><col style="width:18%"><col style="width:18%"><col style="width:18%"></colgroup>
-              <thead><tr><th>類別</th><th>本客戶筆數</th><th>本客戶金額</th><th>全體筆數</th><th>佔全體比例</th></tr></thead>
-              <tbody></tbody>
-            </table>
-          </div>
+      <div class="sec" id="secShCmp" style="display:none;">
+        <h4><i class="fa fa-table" style="color:var(--amber-d);"></i> 已選客戶佔比比較</h4>
+        <div class="tbl-wrap">
+          <table class="oa-t" id="tblShCmp">
+            <colgroup><col style="width:18%"><col style="width:11%"><col style="width:13%"><col style="width:11%"><col style="width:11%"><col style="width:9%"><col style="width:12%"><col style="width:15%"></colgroup>
+            <thead><tr><th>客戶</th><th>本期訂單</th><th>本期金額</th><th>金額佔比</th><th>基期佔比</th><th>排名</th><th>急件比例</th><th>平均交期工作天</th></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
       </div>
-      <div class="sec">
-        <h4><i class="fa fa-cube" style="color:var(--amber-d);"></i> 本客戶受訂料號排名（前 10）</h4>
-        <table class="oa-t" id="tblShParts">
-          <colgroup><col style="width:8%"><col style="width:42%"><col style="width:16%"><col style="width:17%"><col style="width:17%"></colgroup>
-          <thead><tr><th>#</th><th>料號</th><th>筆數</th><th>數量</th><th>金額</th></tr></thead>
-          <tbody></tbody>
-        </table>
+      <div class="sec" id="secShInsight">
+        <h4><i class="fa fa-lightbulb-o" style="color:var(--coral);"></i> 自動分析</h4>
+        <div id="shInsightList" class="ins-list"></div>
       </div>
+      <div id="shClientBlocks"></div>
     </div>
   </div><!-- /oa-tabpanel share -->
 
@@ -1136,7 +1160,7 @@ function oaSwitchMainTab(t){
   $('.oa-mtab').removeClass('active');
   $('.oa-mtab[data-tab="'+t+'"]').addClass('active');
   if(t==='leadtime' && !LT_DATA) loadLeadtime();
-  if(t==='share' && !CLI_LIST.length) loadClients(fillShClientSelect);
+  if(t==='share' && !CLI_LIST.length) loadClients();
 }
 $('.oa-mtab').on('click', function(){ oaSwitchMainTab($(this).data('tab')); });
 /* 浮動快速導覽的連結是跳到「總覽分析」分頁內的區塊，點之前先切回該分頁才跳得到 */
@@ -1157,7 +1181,7 @@ function load(){
     renderTrend(); renderNew(); renderProc(); renderAstag(); renderBand();
     renderClient(); renderRank(); renderMa(); renderParts();
     if(LT_DATA) loadLeadtime();                       // 篩選條件變了，急件分析也要跟著重算
-    if(SH_DATA && $('#shClient').val()) loadClientShare();
+    if(SH_DATA && Object.keys(SH_SEL).length) loadClientShare();
   }, 'json').fail(function(x){
     $('#noteBar').html('<div class="oa-note oa-warn">載入失敗（HTTP '+x.status+'）'
       + (x.status===403?'：權限不足或連線憑證失效，請重新整理頁面':'') + '</div>');
@@ -1866,24 +1890,50 @@ function renderParts(){
  * 交期與急件分析（2026-10-06 使用者交辦）
  * ══════════════════════════════════════════════════════════════════ */
 var LT_DATA = null;
+var LT_PCT_INIT = false;   // 是否已經把管理員預設值帶進輸入框過一次
 function loadLeadtime(){
   var req = {
     action:'leadtime_analyze', year:$('#fYear').val(), gran:$('#fGran').val(), idx:$('#fIdx').val(),
     cmp:$('#fCmp').val(), align:$('#cbAlign').is(':checked')?1:0, include_paused:$('#cbPaused').is(':checked')?1:0,
     clients:JSON.stringify(Object.keys(CLI_SEL))
   };
+  // 百分位門檻一旦已經把管理員預設值帶進輸入框過，之後每次重算都照目前輸入框的值送
+  // （不論是使用者自己改過，或還是預設值）——這樣「僅本次計算」的覆寫值才能跨期間切換保留。
+  if(LT_PCT_INIT){
+    req.urgent_pct = JSON.stringify({
+      full:   parseInt($('#ltPctFull').val(),10)   || 20,
+      multi:  parseInt($('#ltPctMulti').val(),10)  || 20,
+      single: parseInt($('#ltPctSingle').val(),10) || 20
+    });
+  }
   $('#ltNote').html('<i class="fa fa-spinner fa-spin"></i> 計算中…');
   $.post(OA_API, req, function(r){
     if(!r||!r.ok){ $('#ltNote').html('<span style="color:var(--coral);">'+esc((r&&r.error)||'載入失敗')+'</span>'); return; }
     LT_DATA = r;
+    if(!LT_PCT_INIT){
+      var d = r.settings_default.percentile;
+      $('#ltPctFull').val(d.full); $('#ltPctMulti').val(d.multi); $('#ltPctSingle').val(d.single);
+      LT_PCT_INIT = true;
+    }
     renderLtNote(); renderLtKpi(); renderLtInsights(); renderLtDist(); renderLtBand(); renderLtClient(); renderLtList();
   }, 'json').fail(function(x){
     $('#ltNote').html('<span style="color:var(--coral);">載入失敗（HTTP '+x.status+'）</span>');
   });
 }
+$('#btnLtApplyPct').on('click', loadLeadtime);
+$('#btnLtResetPct').on('click', function(){
+  var d = (LT_DATA && LT_DATA.settings_default && LT_DATA.settings_default.percentile) || {full:20,multi:20,single:20};
+  $('#ltPctFull').val(d.full); $('#ltPctMulti').val(d.multi); $('#ltPctSingle').val(d.single);
+  loadLeadtime();
+});
 function renderLtNote(){
   var m = LT_DATA.period, c = LT_DATA.cmp_period;
-  $('#ltNote').html('<b>本期</b>：'+esc(m.label)+'（'+dispDate(m.start)+'～'+dispDate(m.end)+'）　'
+  var used = LT_DATA.settings.percentile, def = LT_DATA.settings_default.percentile;
+  var pctLine = '<b>本次使用的急件判定</b>：全製 '+used.full+'%／多製程 '+used.multi+'%／單製 '+used.single+'%'
+    + '　<span style="color:var(--muted);">（管理員預設值：全製 '+def.full+'%／多製程 '+def.multi+'%／單製 '+def.single+'%）</span>';
+  if(LT_DATA.is_override) pctLine += ' <span class="badge-warn">已修改，僅本次計算，不影響管理員預設值</span>';
+  $('#ltNote').html(pctLine + '<br>'
+    + '<b>本期</b>：'+esc(m.label)+'（'+dispDate(m.start)+'～'+dispDate(m.end)+'）　'
     + '<b>基期</b>：'+esc(c.label)+'（'+dispDate(c.start)+'～'+dispDate(c.end)+'）<br>'
     + '交期工作天數＝下單日到交期之間扣掉假日的工作天數（不含下單當天，同一天交貨＝0 個工作天）；'
     + '急件門檻依「全製／多製程／單製」各自的分布百分位計算，<b>門檻用全部客戶資料算，不受上方客戶篩選影響</b>。');
@@ -1902,9 +1952,18 @@ function renderLtKpi(){
 function renderLtInsights(){
   var list = LT_DATA.insights || [];
   var icon = {bad:'fa-exclamation-circle', warn:'fa-exclamation-triangle', good:'fa-check-circle', info:'fa-info-circle'};
+  // 涉及具體客戶的結論（如「急件集中在少數客戶」）可展開清單——展開／收合沿用總覽分頁既有的
+  // oaToggleInsList()，但表格內容另寫 ltRenderUrgentClientTable()：這裡要多顯示「佔急件總額」
+  // 與「較基期增減」兩欄，總覽分頁通用的 oaRenderInsClientGrid() 只有名稱＋單一數字兩欄放不下。
   var h = list.map(function(x){
+    var hasList = x.clients && x.clients.length;
+    var listId = hasList ? ('ltInsCli'+(_insSeq++)) : '';
     return '<div class="ins ins-'+x.level+'"><div class="ic"><i class="fa '+(icon[x.level]||'fa-info-circle')+'"></i></div>'
-      + '<div class="bd"><div class="tt">'+esc(x.title)+'</div><div class="dt">'+esc(x.detail)+'</div></div>'
+      + '<div class="bd"><div class="tt">'+esc(x.title)
+      + (hasList ? ' <span class="ins-toggle" onclick="oaToggleInsList(\''+listId+'\',this)">展開名單 <i class="fa fa-caret-down"></i></span>' : '')
+      + '</div><div class="dt">'+esc(x.detail)+'</div>'
+      + (hasList ? ('<div class="ins-cli-wrap" id="'+listId+'" style="display:none;">'+ltRenderUrgentClientTable(x.clients)+'</div>') : '')
+      + '</div>'
       + (x.metric?('<div class="mt">'+esc(x.metric)+'</div>'):'')+'</div>';
   }).join('');
   $('#ltInsightList').html(h || '<div style="color:var(--muted);font-size:12px;">（沒有分析結果）</div>');
@@ -1947,14 +2006,38 @@ function renderLtBand(){
     ]
   }));
 }
+/* 急件客戶清單（排行與自動分析展開名單共用同一組欄位）：
+   佔急件總額＝這家客戶的急件金額佔「本期急件總額」的比例；較基期增減＝同一家客戶跟基期比，
+   基期這家客戶沒有急件（分母為 0）時百分比沒有意義，改顯示「基期無急件」。 */
+function ltDeltaText(c){
+  if(c.delta_pct===null || c.delta_pct===undefined) return '<span style="color:var(--muted);">基期無急件</span>';
+  var v = c.delta_pct;
+  return '<span class="'+(v>=0?'up':'down')+'">'+(v>=0?'+':'')+v+'%</span>';
+}
 function renderLtClient(){
   var rows = LT_DATA.cur.client_list || [];
   $('#ltClientCount').text(nf(LT_DATA.cur.urgent_clients));
   var h = rows.map(function(r,i){
     return '<tr><td class="n">'+(i+1)+'</td><td>'+esc(r.name)+(r.bad?' <span class="badge-warn">未建主檔</span>':'')+'</td>'
-      + '<td class="n">'+nf(r.n)+'</td><td class="n">'+money(r.amount)+'</td></tr>';
+      + '<td class="n">'+nf(r.n)+'</td><td class="n">'+money(r.amount)+'</td>'
+      + '<td class="n">'+(r.pct_of_total!=null?r.pct_of_total+'%':'—')+'</td>'
+      + '<td class="n">'+ltDeltaText(r)+'</td></tr>';
   }).join('');
-  $('#tblLtClient tbody').html(h || '<tr><td colspan="4" style="text-align:center;color:var(--muted);">（本期沒有急件）</td></tr>');
+  $('#tblLtClient tbody').html(h || '<tr><td colspan="6" style="text-align:center;color:var(--muted);">（本期沒有急件）</td></tr>');
+}
+/* 「急件集中在少數客戶」展開名單：欄位比總覽分頁的通用展開元件多（佔比／較基期增減），
+   另寫一份小表格渲染，不勉強套用 oaRenderInsClientGrid()（那支是「名稱＋單一數字」兩欄版型）。 */
+function ltRenderUrgentClientTable(clients){
+  var rows = clients.map(function(c){
+    return '<tr><td>'+esc(c.name)+(c.bad?' <span class="badge-warn">未建主檔</span>':'')+'</td>'
+      + '<td class="n">'+nf(c.n)+'</td><td class="n">'+money(c.amount)+'</td>'
+      + '<td class="n">'+(c.pct_of_total!=null?c.pct_of_total+'%':'—')+'</td>'
+      + '<td class="n">'+ltDeltaText(c)+'</td></tr>';
+  }).join('');
+  return '<div class="tbl-wrap" style="max-height:260px;margin-top:6px;"><table class="oa-t">'
+    + '<colgroup><col style="width:32%"><col style="width:16%"><col style="width:20%"><col style="width:16%"><col style="width:16%"></colgroup>'
+    + '<thead><tr><th>客戶</th><th>急件筆數</th><th>急件金額</th><th>佔急件總額</th><th>較基期增減</th></tr></thead>'
+    + '<tbody>'+rows+'</tbody></table></div>';
 }
 function renderLtList(){
   var rows = LT_DATA.cur.urgent_list || [];
@@ -1963,67 +2046,178 @@ function renderLtList(){
       + '<td>'+esc(r.cname)+'</td><td>'+pnoCell(r)+'</td>'
       + '<td>'+dispDate(r.odate)+'</td><td>'+dispDate(r.ddate)+'</td>'
       + '<td class="n">'+r.lt+'</td><td>'+esc(r.label)+'</td>'
-      + '<td class="n">'+nf(r.qty)+'</td><td class="n">'+money(r.amount)+'</td></tr>';
+      + '<td class="n">'+nf(r.qty)+'</td><td class="n">'+money(r.amount)+'</td>'
+      + '<td>'+esc(r.created_by_name||'—')+'</td><td>'+(r.created_at?dispDate(r.created_at):'—')+'</td></tr>';
   }).join('');
-  $('#tblLtList tbody').html(h || '<tr><td colspan="9" style="text-align:center;color:var(--muted);">（本期沒有急件）</td></tr>');
+  $('#tblLtList tbody').html(h || '<tr><td colspan="11" style="text-align:center;color:var(--muted);">（本期沒有急件）</td></tr>');
 }
 
 /* ══════════════════════════════════════════════════════════════════
  * 客戶佔比報告（2026-10-06 使用者交辦；可印出 A4 報告）
  * ══════════════════════════════════════════════════════════════════ */
 var SH_DATA = null;
-function fillShClientSelect(){
-  var keep = $('#shClient').val();
-  var h = '<option value="">（請先選擇客戶）</option>';
-  CLI_LIST.slice().sort(function(a,b){ return b.amount-a.amount; }).forEach(function(c){
-    h += '<option value="'+esc(c.key)+'">'+esc(c.name)+(c.cid?'（'+esc(c.cid)+'）':'')+'</option>';
-  });
-  $('#shClient').html(h);
-  if(keep) $('#shClient').val(keep);
+var SH_SEL = {};   // 已選客戶（可多選，使用者要求）：key -> {name,cid}
+
+/* ── 客戶欄位：輸入即時模糊搜尋＋點選加入，不另外顯示下拉選單（使用者明確要求）──── */
+function shFilterCandidates(kw){
+  kw = String(kw || '').trim().toLowerCase();
+  if (!kw) return [];
+  return CLI_LIST.filter(function(c){
+    if (SH_SEL[c.key]) return false;   // 已選的不再出現在候選裡
+    return c.name.toLowerCase().indexOf(kw) >= 0 || String(c.cid||'').toLowerCase().indexOf(kw) >= 0;
+  }).slice(0, 20);
 }
+function shRenderSuggest(){
+  var kw = $('#shClientInput').val();
+  if (!String(kw||'').trim()) { $('#shClientSuggest').hide(); return; }
+  var list = shFilterCandidates(kw);
+  var h = list.length ? list.map(function(c){
+    return '<div class="it" data-k="'+esc(c.key)+'"><span>'+esc(c.name)+'</span><span class="cid">'+esc(c.cid||'')+'</span></div>';
+  }).join('') : '<div class="empty">沒有符合的客戶</div>';
+  $('#shClientSuggest').html(h).show();
+}
+function shAddClient(key){
+  var c = CLI_LIST.find(function(x){ return x.key===key; });
+  if (!c) return;
+  if (Object.keys(SH_SEL).length >= 10) { alert('一次最多選 10 家客戶'); return; }
+  SH_SEL[key] = { name:c.name, cid:c.cid };
+  $('#shClientInput').val('').focus();
+  $('#shClientSuggest').hide();
+  shRenderChips();
+}
+function shRemoveClient(key){ delete SH_SEL[key]; shRenderChips(); }
+function shRenderChips(){
+  var keys = Object.keys(SH_SEL);
+  if (!keys.length) { $('#shClientChips').html('<span style="font-size:12px;color:var(--muted);">尚未選擇客戶</span>'); return; }
+  var h = keys.map(function(k){
+    return '<span class="chip">'+esc(SH_SEL[k].name)+'<i class="fa fa-times" data-k="'+esc(k)+'"></i></span>';
+  }).join('');
+  $('#shClientChips').html(h);
+}
+$('#shClientInput').on('input focus', shRenderSuggest);
+$('#shClientInput').on('keydown', function(e){
+  if (e.which === 13) { e.preventDefault(); var first = $('#shClientSuggest .it').first(); if (first.length) shAddClient(first.data('k')); }
+});
+$(document).on('click', '#shClientSuggest .it', function(){ shAddClient($(this).data('k')); });
+$(document).on('click', '#shClientChips .fa-times', function(){ shRemoveClient($(this).data('k')); });
+$(document).on('click', function(e){ if (!$(e.target).closest('.sh-ac-wrap').length) $('#shClientSuggest').hide(); });
+
+/* ── 產生報告（可一次多家客戶）────────────────────────── */
 function loadClientShare(){
-  var ck = $('#shClient').val();
-  if(!ck){ alert('請先選擇客戶'); return; }
+  var keys = Object.keys(SH_SEL);
+  if (!keys.length) { alert('請先輸入客戶名稱或編號，從清單挑選至少一家客戶'); return; }
   var req = {
     action:'client_share', year:$('#fYear').val(), gran:$('#fGran').val(), idx:$('#fIdx').val(),
     basis:$('#fBasis').val(), cmp:$('#fCmp').val(), align:$('#cbAlign').is(':checked')?1:0,
-    include_paused:$('#cbPaused').is(':checked')?1:0, client:ck
+    include_paused:$('#cbPaused').is(':checked')?1:0, clients:JSON.stringify(keys)
   };
   $('#shNote').html('<i class="fa fa-spinner fa-spin"></i> 計算中…');
   $.post(OA_API, req, function(r){
-    if(!r||!r.ok){ $('#shNote').html('<span style="color:var(--coral);">'+esc((r&&r.error)||'載入失敗')+'</span>'); return; }
+    if (!r || !r.ok) { $('#shNote').html('<span style="color:var(--coral);">'+esc((r&&r.error)||'載入失敗')+'</span>'); return; }
     SH_DATA = r;
     $('#shBody').show(); $('#shEmpty').hide();
-    renderShNote(); renderShKpi(); renderShCls(); renderShParts();
+    renderShNote(); renderShCmp(); renderShInsights(); shBuildBlocks();
   }, 'json').fail(function(x){
     $('#shNote').html('<span style="color:var(--coral);">載入失敗（HTTP '+x.status+'）</span>');
   });
 }
 $('#btnShLoad').on('click', loadClientShare);
+
 function renderShNote(){
-  var m = SH_DATA.period, c = SH_DATA.cmp_period, cl = SH_DATA.client;
-  $('#shNote').html('<b>'+esc(cl.name||cl.key)+'</b>　本期：'+esc(m.label)+'（'+dispDate(m.start)+'～'+dispDate(m.end)+'）　'
-    + '基期：'+esc(c.label)+'（'+dispDate(c.start)+'～'+dispDate(c.end)+'）');
+  var m = SH_DATA.period, c = SH_DATA.cmp_period;
+  $('#shNote').html('本期：<b>'+esc(m.label)+'</b>（'+dispDate(m.start)+'～'+dispDate(m.end)+'）　'
+    + '基期：<b>'+esc(c.label)+'</b>（'+dispDate(c.start)+'～'+dispDate(c.end)+'）　'
+    + '整體有下單的客戶數：本期 '+nf(SH_DATA.total_clients_cur)+' 家／基期 '+nf(SH_DATA.total_clients_cmp)+' 家。'
+    + '<br>平均交期工作天數與急件比例，一律沿用「交期與急件分析」分頁目前的急件判定設定。');
 }
-function renderShKpi(){
-  var cur = SH_DATA.cur, cmp = SH_DATA.cmp, h = '';
-  h += ltCard('訂單筆數佔比', cur.share_orders+'%', nf(cur.mine.orders)+' / '+nf(cur.total.orders)+' 張（基期 '+cmp.share_orders+'%）');
-  h += ltCard('金額佔比', cur.share_amount+'%', money(cur.mine.amount)+' / '+money(cur.total.amount)+' 元');
-  h += ltCard('數量佔比', cur.share_qty+'%', nf(cur.mine.qty)+' / '+nf(cur.total.qty));
-  h += ltCard('客戶排名', '第 '+(cur.rank||'—')+' 名', '共 '+cur.total_clients+' 家有下單的客戶');
-  h += ltCard('本客戶急件比例', cur.mine.urgent_ratio+'%', nf(cur.mine.urgent_orders)+' 張急件');
-  $('#shKpiRow').html(h);
+/* 多選客戶時，各自在整體裡的佔比要能並排比較——使用者明確要求 */
+function renderShCmp(){
+  var list = SH_DATA.clients || [];
+  if (list.length < 2) { $('#secShCmp').hide(); return; }
+  $('#secShCmp').show();
+  var h = list.map(function(c){
+    var cur = c.cur, cmp = c.cmp;
+    return '<tr><td>'+esc(c.client.name)+'</td><td class="n">'+nf(cur.agg.orders)+'</td>'
+      + '<td class="n">'+money(cur.agg.amount)+'</td><td class="n">'+cur.share_amount+'%</td>'
+      + '<td class="n">'+cmp.share_amount+'%</td><td class="n">'+(cur.rank||'—')+'</td>'
+      + '<td class="n">'+cur.agg.urgent_ratio+'%</td><td class="n">'+(cur.agg.avg_leadtime==null?'—':cur.agg.avg_leadtime)+'</td></tr>';
+  }).join('');
+  $('#tblShCmp tbody').html(h);
 }
-function renderShCls(){
-  var mine = SH_DATA.cur.mine.by_cls||[], totalMap = {};
-  (SH_DATA.cur.total.by_cls||[]).forEach(function(t){ totalMap[t.cls]=t; });
-  chart('chShCls', opt({
+function renderShInsights(){
+  var list = SH_DATA.insights || [];
+  var icon = {bad:'fa-exclamation-circle', warn:'fa-exclamation-triangle', good:'fa-check-circle', info:'fa-info-circle'};
+  var h = list.map(function(x){
+    return '<div class="ins ins-'+x.level+'"><div class="ic"><i class="fa '+(icon[x.level]||'fa-info-circle')+'"></i></div>'
+      + '<div class="bd"><div class="tt">'+esc(x.title)+'</div><div class="dt">'+esc(x.detail)+'</div></div>'
+      + (x.metric?('<div class="mt">'+esc(x.metric)+'</div>'):'')+'</div>';
+  }).join('');
+  $('#shInsightList').html(h || '<div style="color:var(--muted);font-size:12px;">（沒有分析結果）</div>');
+}
+/* ── 每一家客戶各自一個區塊：KPI／逐月趨勢／製程類別／受訂料號排名 ─────── */
+function shBuildBlocks(){
+  var list = SH_DATA.clients || [];
+  var h = list.map(function(c, i){
+    return '<div class="sec sh-block" id="shBlk_'+i+'">'
+      + '<h4><i class="fa fa-user" style="color:var(--amber-d);"></i> '+esc(c.client.name)
+      + '<span class="hint">排名第 '+(c.cur.rank||'—')+' 名／共 '+SH_DATA.total_clients_cur+' 家有下單的客戶</span></h4>'
+      + '<div id="shKpi_'+i+'" class="kpi-row"></div>'
+      + '<div class="two-col">'
+      +   '<div><h5 style="margin:6px 0 4px;color:var(--ink);font-size:13px;">'+SH_DATA.year+' 年逐月趨勢</h5><div id="chShTrend_'+i+'" class="chart-box"></div></div>'
+      +   '<div><h5 style="margin:6px 0 4px;color:var(--ink);font-size:13px;">製程類別佔比（本客戶 vs 全體）</h5><div id="chShCls_'+i+'" class="chart-box" style="height:260px;"></div></div>'
+      + '</div>'
+      + '<table class="oa-t" id="tblShCls_'+i+'" style="margin-top:8px;">'
+      +   '<colgroup><col style="width:26%"><col style="width:16%"><col style="width:18%"><col style="width:16%"><col style="width:24%"></colgroup>'
+      +   '<thead><tr><th>類別</th><th>本客戶筆數</th><th>本客戶金額</th><th>全體筆數</th><th>佔全體比例</th></tr></thead><tbody></tbody>'
+      + '</table>'
+      + '<h5 style="margin:12px 0 4px;color:var(--ink);font-size:13px;">本客戶受訂料號排名（前 10）</h5>'
+      + '<div class="tbl-wrap"><table class="oa-t" id="tblShParts_'+i+'">'
+      +   '<colgroup><col style="width:5%"><col style="width:13%"><col style="width:7%"><col style="width:8%"><col style="width:10%">'
+      +              '<col style="width:15%"><col style="width:17%"><col style="width:12%"><col style="width:13%"></colgroup>'
+      +   '<thead><tr><th>#</th><th>料號</th><th>筆數</th><th>數量</th><th>金額</th><th>訂單標籤</th><th>製程內容</th><th>接單人員</th><th>平均工作天</th></tr></thead>'
+      +   '<tbody></tbody></table></div>'
+      + '</div>';
+  }).join('');
+  $('#shClientBlocks').html(h);
+  list.forEach(function(c, i){ shRenderKpi(i, c); shRenderTrend(i, c); shRenderCls(i, c); shRenderParts(i, c); });
+}
+function shRenderKpi(i, c){
+  var cur = c.cur, cmp = c.cmp, h = '';
+  h += ltCard('訂單筆數佔比', cur.share_orders+'%', nf(cur.agg.orders)+' / '+nf(SH_DATA.total_cur.orders)+' 張（基期 '+cmp.share_orders+'%）');
+  h += ltCard('金額佔比', cur.share_amount+'%', money(cur.agg.amount)+' / '+money(SH_DATA.total_cur.amount)+' 元（基期 '+cmp.share_amount+'%）');
+  h += ltCard('數量佔比', cur.share_qty+'%', nf(cur.agg.qty)+' / '+nf(SH_DATA.total_cur.qty));
+  h += ltCard('急件比例', cur.agg.urgent_ratio+'%', nf(cur.agg.urgent_orders)+' 張急件／'+money(cur.agg.urgent_amount)+' 元');
+  h += ltCard('平均交期工作天', (cur.agg.avg_leadtime==null?'—':cur.agg.avg_leadtime), '工作天（不含下單當天）');
+  $('#shKpi_'+i).html(h);
+}
+function shRenderTrend(i, c){
+  var t = c.trend || [];
+  chart('chShTrend_'+i, opt({
+    chart:{ type:'column' },
+    xAxis:{ categories: t.map(function(x){ return x.label.replace(/^\d{4}\//,''); }) },
+    yAxis:[
+      { min:0, title:{text:'金額',style:{fontSize:'11px',color:'#a08a6f'}}, gridLineColor:'#F0E8DC',
+        labels:{style:{fontSize:'10px',color:'#a08a6f'}} },
+      { min:0, max:100, opposite:true, title:{text:'佔當月全體%',style:{fontSize:'11px',color:'#a08a6f'}},
+        gridLineColor:'transparent', labels:{style:{fontSize:'10px',color:'#a08a6f'}} }
+    ],
+    tooltip:{ shared:true, style:{fontSize:'11px'} },
+    series:[
+      { name:'本客戶金額', type:'column', yAxis:0, data:t.map(function(x){ return x.amount; }), color:C_AMBER, borderRadius:2 },
+      { name:'佔當月全體比例', type:'line', yAxis:1, data:t.map(function(x){ return x.share; }), color:C_CORAL, marker:{enabled:true} }
+    ]
+  }));
+}
+function shRenderCls(i, c){
+  var mine = c.cur.agg.by_cls || [], totalMap = {};
+  (SH_DATA.total_cur.by_cls||[]).forEach(function(t){ totalMap[t.cls]=t; });
+  chart('chShCls_'+i, opt({
     chart:{ type:'pie' },
     tooltip:{ pointFormat:'<b>{point.y} 筆</b>（{point.percentage:.1f}%）', style:{fontSize:'11px'} },
     plotOptions:{ pie:{ dataLabels:{ enabled:true, style:{fontSize:'11px',color:'#6B4423',textOutline:'none'},
                         format:'{point.name}<br>{point.y} 筆' } } },
     series:[{ name:'本客戶筆數', colorByPoint:true,
-               data: mine.map(function(m,i){ return { name:m.label, y:m.n, color:PAL[i%PAL.length] }; }) }]
+               data: mine.map(function(m,ii){ return { name:m.label, y:m.n, color:PAL[ii%PAL.length] }; }) }]
   }));
   var h = mine.map(function(m){
     var t = totalMap[m.cls]||{n:0};
@@ -2031,15 +2225,19 @@ function renderShCls(){
     return '<tr><td>'+esc(m.label)+'</td><td class="n">'+nf(m.n)+'</td><td class="n">'+money(m.amount)+'</td>'
       + '<td class="n">'+nf(t.n)+'</td><td class="n">'+sh+'%</td></tr>';
   }).join('');
-  $('#tblShCls tbody').html(h || '<tr><td colspan="5" style="text-align:center;color:var(--muted);">（本期本客戶沒有訂單）</td></tr>');
+  $('#tblShCls_'+i+' tbody').html(h || '<tr><td colspan="5" style="text-align:center;color:var(--muted);">（本期本客戶沒有訂單）</td></tr>');
 }
-function renderShParts(){
-  var rows = SH_DATA.cur.mine.top_parts || [];
-  var h = rows.map(function(r,i){
-    return '<tr><td class="n">'+(i+1)+'</td><td>'+pnoCell(r)+'</td><td class="n">'+nf(r.n)+'</td>'
-      + '<td class="n">'+nf(r.qty)+'</td><td class="n">'+money(r.amount)+'</td></tr>';
+function shRenderParts(i, c){
+  var rows = c.cur.agg.top_parts || [];
+  var h = rows.map(function(r, ii){
+    return '<tr><td class="n">'+(ii+1)+'</td><td>'+pnoCell(r)+'</td><td class="n">'+nf(r.n)+'</td>'
+      + '<td class="n">'+nf(r.qty)+'</td><td class="n">'+money(r.amount)+'</td>'
+      + '<td>'+esc((r.tags||[]).join('、')||'—')+'</td>'
+      + '<td>'+esc((r.procs||[]).join('、')||'—')+'</td>'
+      + '<td>'+esc((r.creators||[]).join('、')||'—')+'</td>'
+      + '<td class="n">'+(r.avg_leadtime==null?'—':r.avg_leadtime)+'</td></tr>';
   }).join('');
-  $('#tblShParts tbody').html(h || '<tr><td colspan="5" style="text-align:center;color:var(--muted);">（無資料）</td></tr>');
+  $('#tblShParts_'+i+' tbody').html(h || '<tr><td colspan="9" style="text-align:center;color:var(--muted);">（無資料）</td></tr>');
 }
 
 /* ── CSV（把畫面上全部區塊一次帶去 Excel）──────────── */
@@ -2372,8 +2570,9 @@ $('#btnPrint').on('click', function(){
  * ══════════════════════════════════════════════════════════════════ */
 var SH_PR_MG = 12, SH_PR_PAD = 5, SH_PR_W_MM = 210, SH_PR_H_MM = 297;
 function oaClientSharePrintHtml(){
-  var d = SH_DATA, cl = d.client, cur = d.cur, cmp = d.cmp;
+  var d = SH_DATA;
   var printTime = new Date().toLocaleString('zh-TW');
+  var multi = d.clients.length > 1;
   var css =
     '*{box-sizing:border-box;margin:0;padding:0;}'+
     'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#222;font-size:10.5pt;padding:'+SH_PR_PAD+'mm;}'+
@@ -2390,6 +2589,13 @@ function oaClientSharePrintHtml(){
     '.pr-kc .sb{font-size:7.5pt;color:#a08a6f;margin-top:0.5mm;}'+
     '.pr-sec{margin-bottom:4mm;}'+
     '.pr-sec-title{font-size:12pt;font-weight:700;color:#4A3524;border-left:1.2mm solid #F0A24B;padding-left:2mm;margin-bottom:2mm;}'+
+    '.pr-two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:3mm;margin-bottom:3mm;}'+
+    '.pr-chart{text-align:center;} .pr-chart svg{max-width:100%;height:auto;}'+
+    '.pr-ins{display:flex;gap:2mm;align-items:flex-start;border:1px solid #E4D3BC;border-left:1mm solid #B9A78C;'+
+    'border-radius:1mm;padding:1.5mm 2.5mm;margin-bottom:1.2mm;font-size:8.5pt;line-height:1.5;}'+
+    '.pr-ins.bad{border-left-color:#DD5138;} .pr-ins.warn{border-left-color:#F0A24B;} .pr-ins.good{border-left-color:#4F8A4F;}'+
+    '.pr-ins .tag{flex:0 0 auto;font-size:7pt;font-weight:700;color:#fff;background:#B9A78C;border-radius:3mm;padding:0.2mm 1.8mm;}'+
+    '.pr-ins.bad .tag{background:#DD5138;} .pr-ins.warn .tag{background:#F0A24B;color:#4E2C0B;} .pr-ins.good .tag{background:#4F8A4F;}'+
     'table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:9pt;}'+
     'th{background:#8a5a2b;color:#fff;padding:1.3mm 2mm;font-weight:700;}'+
     'td{padding:1.2mm 2mm;border-bottom:0.2mm solid #E4D3BC;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'+
@@ -2398,46 +2604,81 @@ function oaClientSharePrintHtml(){
     '.pr-footer{margin-top:3mm;padding-top:2mm;border-top:0.2mm solid #E4D3BC;font-size:7.5pt;color:#a08a6f;text-align:center;}';
 
   var h = '<div class="pr-head"><div class="pr-co">'+esc(COMPANY||'')+'</div>'+
-    '<div class="pr-tt">客戶佔比分析報告 — '+esc(cl.name||cl.key)+'</div>'+
+    '<div class="pr-tt">客戶佔比分析報告'+(multi ? '（共 '+d.clients.length+' 家客戶）' : ' — '+esc(d.clients[0].client.name))+'</div>'+
     '<div class="pr-sub">期間：'+esc(d.period.label)+'（'+dispDate(d.period.start)+'～'+dispDate(d.period.end)+'）'+
     '　比較基準：'+esc(d.cmp_period.label)+'　列印時間：'+esc(printTime)+'</div></div>';
 
+  if (multi) {
+    var cmpRows = d.clients.map(function(c){
+      return '<tr><td>'+esc(c.client.name)+'</td><td class="tr">'+nf(c.cur.agg.orders)+'</td>'
+        + '<td class="tr">'+money(c.cur.agg.amount)+'</td><td class="tr">'+c.cur.share_amount+'%</td>'
+        + '<td class="tr">'+c.cmp.share_amount+'%</td><td class="tc">'+(c.cur.rank||'—')+'</td>'
+        + '<td class="tr">'+c.cur.agg.urgent_ratio+'%</td><td class="tr">'+(c.cur.agg.avg_leadtime==null?'—':c.cur.agg.avg_leadtime)+'</td></tr>';
+    }).join('');
+    h += '<div class="pr-sec"><div class="pr-sec-title">已選客戶佔比比較</div>'+
+      '<table><colgroup><col style="width:18%"><col style="width:11%"><col style="width:14%"><col style="width:11%"><col style="width:11%"><col style="width:9%"><col style="width:12%"><col style="width:14%"></colgroup>'+
+      '<thead><tr><th>客戶</th><th class="tr">本期訂單</th><th class="tr">本期金額</th><th class="tr">金額佔比</th>'+
+      '<th class="tr">基期佔比</th><th class="tc">排名</th><th class="tr">急件比例</th><th class="tr">平均工作天</th></tr></thead>'+
+      '<tbody>'+cmpRows+'</tbody></table></div>';
+  }
+  if ((d.insights||[]).length) {
+    var insHtml = d.insights.map(function(x){
+      return '<div class="pr-ins '+esc(x.level)+'"><span class="tag">'+prBadgeTxt(x.level)+'</span>'
+        + '<div><b>'+esc(x.title)+'</b>　'+esc(x.detail)+'</div></div>';
+    }).join('');
+    h += '<div class="pr-sec"><div class="pr-sec-title">自動分析</div>'+insHtml+'</div>';
+  }
+
   function kc(lab,val,sub){ return '<div class="pr-kc"><div class="lb">'+lab+'</div><div class="vl">'+val+'</div><div class="sb">'+sub+'</div></div>'; }
-  h += '<div class="pr-kpi">'+
-    kc('訂單筆數佔比', cur.share_orders+'%', nf(cur.mine.orders)+' / '+nf(cur.total.orders)+' 張') +
-    kc('金額佔比', cur.share_amount+'%', money(cur.mine.amount)+' / '+money(cur.total.amount)+' 元') +
-    kc('數量佔比', cur.share_qty+'%', nf(cur.mine.qty)+' / '+nf(cur.total.qty)) +
-    kc('客戶排名', '第 '+(cur.rank||'—')+' 名', '共 '+cur.total_clients+' 家') +
-    kc('急件比例', cur.mine.urgent_ratio+'%', nf(cur.mine.urgent_orders)+' 張急件') +
-    kc('較基期金額佔比', cmp.share_amount+'%', '基期：'+esc(d.cmp_period.label)) +
-    '</div>';
+  d.clients.forEach(function(c, i){
+    var cur = c.cur, cmp = c.cmp;
+    h += '<div class="pr-sec"'+(i>0?' style="page-break-before:always;"':'')+'>'
+      + '<div class="pr-sec-title" style="font-size:13pt;">'+esc(c.client.name)+'　排名第 '+(cur.rank||'—')+' 名／共 '+d.total_clients_cur+' 家</div>';
+    h += '<div class="pr-kpi">'+
+      kc('訂單筆數佔比', cur.share_orders+'%', nf(cur.agg.orders)+' / '+nf(d.total_cur.orders)+' 張') +
+      kc('金額佔比', cur.share_amount+'%', money(cur.agg.amount)+' / '+money(d.total_cur.amount)+' 元') +
+      kc('數量佔比', cur.share_qty+'%', nf(cur.agg.qty)+' / '+nf(d.total_cur.qty)) +
+      kc('較基期金額佔比', cmp.share_amount+'%', '基期：'+esc(d.cmp_period.label)) +
+      kc('急件比例', cur.agg.urgent_ratio+'%', nf(cur.agg.urgent_orders)+' 張急件／'+money(cur.agg.urgent_amount)+' 元') +
+      kc('平均交期工作天', (cur.agg.avg_leadtime==null?'—':cur.agg.avg_leadtime), '工作天（不含下單當天）') +
+      '</div>';
 
-  var clsRows = '', totalMap = {};
-  (cur.total.by_cls||[]).forEach(function(t){ totalMap[t.cls]=t; });
-  (cur.mine.by_cls||[]).forEach(function(m){
-    var t = totalMap[m.cls]||{n:0};
-    var sh = t.n ? (Math.round(m.n*1000/t.n)/10) : 0;
-    clsRows += '<tr><td>'+esc(m.label)+'</td><td class="tr">'+nf(m.n)+'</td><td class="tr">'+money(m.amount)+'</td>'
-      + '<td class="tr">'+nf(t.n)+'</td><td class="tr">'+sh+'%</td></tr>';
-  });
-  h += '<div class="pr-sec"><div class="pr-sec-title">製程類別佔比（本客戶 vs 全體）</div>'+
-    '<table><colgroup><col style="width:28%"><col style="width:18%"><col style="width:20%"><col style="width:16%"><col style="width:18%"></colgroup>'+
-    '<thead><tr><th>類別</th><th class="tr">本客戶筆數</th><th class="tr">本客戶金額</th><th class="tr">全體筆數</th><th class="tr">佔全體比例</th></tr></thead>'+
-    '<tbody>'+(clsRows||'<tr><td colspan="5" class="tc">無</td></tr>')+'</tbody></table></div>';
+    var trendSvg = prChartSvg('chShTrend_'+i, 380, 160);
+    var clsSvg   = prChartSvg('chShCls_'+i, 280, 160);
+    h += '<div class="pr-two"><div class="pr-chart">'+trendSvg+'</div><div class="pr-chart">'+clsSvg+'</div></div>';
 
-  var partRows = '';
-  (cur.mine.top_parts||[]).forEach(function(p,i){
-    partRows += '<tr><td class="tc">'+(i+1)+'</td><td>'+esc(p.pno)+'</td><td class="tr">'+nf(p.n)+'</td>'
-      + '<td class="tr">'+nf(p.qty)+'</td><td class="tr">'+money(p.amount)+'</td></tr>';
+    var clsRows = '', totalMap = {};
+    (d.total_cur.by_cls||[]).forEach(function(t){ totalMap[t.cls]=t; });
+    (cur.agg.by_cls||[]).forEach(function(m){
+      var t = totalMap[m.cls]||{n:0};
+      var sh = t.n ? (Math.round(m.n*1000/t.n)/10) : 0;
+      clsRows += '<tr><td>'+esc(m.label)+'</td><td class="tr">'+nf(m.n)+'</td><td class="tr">'+money(m.amount)+'</td>'
+        + '<td class="tr">'+nf(t.n)+'</td><td class="tr">'+sh+'%</td></tr>';
+    });
+    h += '<table><colgroup><col style="width:28%"><col style="width:18%"><col style="width:20%"><col style="width:16%"><col style="width:18%"></colgroup>'+
+      '<thead><tr><th>類別</th><th class="tr">本客戶筆數</th><th class="tr">本客戶金額</th><th class="tr">全體筆數</th><th class="tr">佔全體比例</th></tr></thead>'+
+      '<tbody>'+(clsRows||'<tr><td colspan="5" class="tc">無</td></tr>')+'</tbody></table>';
+
+    var partRows = '';
+    (cur.agg.top_parts||[]).forEach(function(p, ii){
+      partRows += '<tr><td class="tc">'+(ii+1)+'</td><td>'+esc(p.pno)+'</td><td class="tr">'+nf(p.n)+'</td>'
+        + '<td class="tr">'+nf(p.qty)+'</td><td class="tr">'+money(p.amount)+'</td>'
+        + '<td>'+esc((p.tags||[]).join('、')||'—')+'</td><td>'+esc((p.procs||[]).join('、')||'—')+'</td>'
+        + '<td>'+esc((p.creators||[]).join('、')||'—')+'</td><td class="tr">'+(p.avg_leadtime==null?'—':p.avg_leadtime)+'</td></tr>';
+    });
+    h += '<div style="margin:2mm 0 1.5mm;font-weight:700;color:#4A3524;font-size:10pt;">本客戶受訂料號排名（前 10）</div>'+
+      '<table><colgroup><col style="width:5%"><col style="width:13%"><col style="width:7%"><col style="width:8%"><col style="width:10%">'+
+      '<col style="width:15%"><col style="width:17%"><col style="width:12%"><col style="width:13%"></colgroup>'+
+      '<thead><tr><th>#</th><th>料號</th><th class="tr">筆數</th><th class="tr">數量</th><th class="tr">金額</th>'+
+      '<th>訂單標籤</th><th>製程內容</th><th>接單人員</th><th class="tr">平均工作天</th></tr></thead>'+
+      '<tbody>'+(partRows||'<tr><td colspan="9" class="tc">無</td></tr>')+'</tbody></table>';
+    h += '</div>';
   });
-  h += '<div class="pr-sec"><div class="pr-sec-title">本客戶受訂料號排名（前 10）</div>'+
-    '<table><colgroup><col style="width:8%"><col style="width:42%"><col style="width:16%"><col style="width:17%"><col style="width:17%"></colgroup>'+
-    '<thead><tr><th>#</th><th>料號</th><th class="tr">筆數</th><th class="tr">數量</th><th class="tr">金額</th></tr></thead>'+
-    '<tbody>'+(partRows||'<tr><td colspan="5" class="tc">無</td></tr>')+'</tbody></table></div>';
 
   h += '<div class="pr-footer">本報告由 EGsystem 訂單分析（客戶佔比）自動產生｜列印時間：'+esc(printTime)+'</div>';
 
-  return '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>客戶佔比分析報告 '+esc(cl.name||cl.key)+'</title>'+
+  var titleTxt = multi ? ('客戶佔比分析報告（共 '+d.clients.length+' 家）') : ('客戶佔比分析報告 '+(d.clients[0].client.name||''));
+  return '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>'+esc(titleTxt)+'</title>'+
     '<style>'+css+'</style></head><body>'+h+'</body></html>';
 }
 function shNeedPageCounter(win){
@@ -2463,7 +2704,8 @@ $('#btnShPrint').on('click', function(){
   if(!w){ alert('瀏覽器擋掉了彈出視窗，請允許本站彈出後再試'); return; }
   w.document.write(oaClientSharePrintHtml()); w.document.close(); w.focus();
   try {
-    if(window.EGPrintLog) EGPrintLog.record({ source:'order_analysis', doc_name:'客戶佔比分析報告 '+(SH_DATA.client.name||SH_DATA.client.key), doc_kind:'form' });
+    var _shNames = SH_DATA.clients.map(function(c){ return c.client.name; }).join('、');
+    if(window.EGPrintLog) EGPrintLog.record({ source:'order_analysis', doc_name:'客戶佔比分析報告 '+_shNames, doc_kind:'form' });
   } catch(e){}
   setTimeout(function(){
     if(shNeedPageCounter(w)) shAddPageCounter(w);

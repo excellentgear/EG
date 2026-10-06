@@ -480,11 +480,15 @@ function oa_fetch_orders(PDO $db, string $from, string $to, array $opt = []): ar
     $resolve  = $opt['resolver'] ?? cqa_client_resolver($db);
 
     // Order_status：6＝暫停/取消（預設排除）、9＝已結案（一律計入，那是正常做完的單）
+    // Created_By 雖然欄位型態是 varchar(11)，實際存的是 user.id（比照 NewOrder_Track.php 既有
+    // 「LEFT JOIN user AS creator ON creator.id = ot.Created_By」同一種接法，不另發明對照方式）。
     $sql = "SELECT ot.Order_id, ot.Order_oo, ot.C_order, ot.`$dateCol` AS dt, ot.Order_date, ot.Delivery_date,
                    ot.Client_name, ot.Client_name_ID, ot.d_id, ot.d_id_ID, ot.Qty, ot.unit_price,
-                   ot.Processing_items, ot.Order_status, ds.Customer_Id AS part_cust
+                   ot.Processing_items, ot.Order_status, ds.Customer_Id AS part_cust,
+                   ot.Created_By, ot.Created_At, creator.user_cname AS creator_name
               FROM order_track ot
               LEFT JOIN d_setting ds ON ds.d_id = ot.d_id_ID
+              LEFT JOIN user creator ON creator.id = ot.Created_By
              WHERE ot.`$dateCol` BETWEEN ? AND ?";
     if (!$incPause) $sql .= " AND (ot.Order_status IS NULL OR ot.Order_status <> 6)";
     $st = $db->prepare($sql);
@@ -526,6 +530,8 @@ function oa_fetch_orders(PDO $db, string $from, string $to, array $opt = []): ar
             'cls'     => $pc['cls'],
             'rule'    => $pc['rule'],
             'status'  => $r['Order_status'] === null ? '' : (string)$r['Order_status'],
+            'created_by_name' => trim((string)($r['creator_name'] ?? '')) !== '' ? (string)$r['creator_name'] : '',
+            'created_at'      => $r['Created_At'] ? substr((string)$r['Created_At'], 0, 10) : '',
         ];
     }
     return $out;
@@ -1873,7 +1879,20 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
     }
     unset($r);
 
-    $us = oa_urgent_settings($db);
+    // 急件判定百分位：管理員預設值一律先算出來，使用者可在畫面上改成「僅本次計算」的覆寫值
+    // ——兩者都要原樣回傳，畫面／報告上才能同時清楚印出「這次用的值」與「管理員預設值」，
+    // 覆寫值刻意不寫回 oa_urgent_settings()，不影響管理員設定。
+    $usDefault = oa_urgent_settings($db);
+    $us = $usDefault;
+    $override = $opt['urgent_pct'] ?? null;
+    if (is_array($override)) {
+        foreach ($us['percentile'] as $k => $v) {
+            if (isset($override[$k]) && is_numeric($override[$k])) {
+                $us['percentile'][$k] = max(1, min(100, (int)$override[$k]));
+            }
+        }
+    }
+    $isOverride = $us['percentile'] !== $usDefault['percentile'];
     $urgentClasses = array_flip(oa_urgent_classes());
 
     $build = function (array $p) use ($rows, $selMap, $us, $urgentClasses, $bands) {
@@ -1921,7 +1940,8 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
                 $urgentList[] = ['no' => $r['no'], 'c_order' => $r['c_order'], 'cname' => $r['cname'],
                                  'pno' => $r['pno'], 'pid' => $r['pid'], 'odate' => $r['odate'], 'ddate' => $r['ddate'],
                                  'lt' => $lt, 'cls' => $cls, 'label' => oa_cls_label($cls),
-                                 'amount' => $r['amount'], 'qty' => $r['qty']];
+                                 'amount' => $r['amount'], 'qty' => $r['qty'],
+                                 'created_by_name' => $r['created_by_name'], 'created_at' => $r['created_at']];
             }
             $bk = (int)$r['band'];
             if (!isset($bandAgg[$bk])) $bandAgg[$bk] = ['band' => $bk, 'label' => $bk >= 0 ? ($bands[$bk]['label'] ?? '') : '未涵蓋', 'n' => 0, 'urgent_n' => 0];
@@ -1959,9 +1979,27 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
     $curRes = $build($cur);
     $cmpRes = $build($cmpE);
 
+    // 急件客戶排行每一列再補兩個數字：①佔本期急件總額的比例（區間內總體佔比）
+    // ②跟基期同一家客戶的急件金額比較之增減比例——兩者都是「使用者看了名單會立刻想問」的問題，
+    // 不補的話名單只是一串數字，看不出誰在變多、誰佔比特別高。
+    $cmpByClient = [];
+    foreach ($cmpRes['client_list'] as $c) { $cmpByClient[$c['ckey']] = $c; }
+    foreach ($curRes['client_list'] as &$c) {
+        $c['pct_of_total'] = $curRes['urgent_amount'] > 0 ? round($c['amount'] * 100 / $curRes['urgent_amount'], 1) : 0.0;
+        $prev = $cmpByClient[$c['ckey']] ?? null;
+        $c['cmp_amount'] = $prev ? $prev['amount'] : 0.0;
+        $c['cmp_n']      = $prev ? $prev['n']      : 0;
+        if ($c['cmp_amount'] > 0) {
+            $c['delta_pct'] = round(($c['amount'] - $c['cmp_amount']) * 100 / $c['cmp_amount'], 1);
+        } else {
+            $c['delta_pct'] = null;   // 基期 0（含基期沒有這家客戶的急件）：算不出有意義的百分比，前端顯示「新增」
+        }
+    }
+    unset($c);
+
     return [
         'period' => $cur, 'cmp_period' => $cmpE, 'cmp_mode' => $cmpK,
-        'settings' => $us,
+        'settings' => $us, 'settings_default' => $usDefault, 'is_override' => $isOverride ? 1 : 0,
         'cur' => $curRes, 'cmp' => $cmpRes,
     ];
 }
@@ -1970,8 +2008,12 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
 function oa_urgent_insights(array $rep): array
 {
     $out = [];
-    $add = function ($level, $title, $detail, $metric = null) use (&$out) {
-        $out[] = ['level' => $level, 'title' => $title, 'detail' => $detail, 'metric' => $metric];
+    // $clients 有值時畫面會顯示「展開名單」（與總覽分頁流失客戶等既有結論共用同一套前端元件
+    // oaRenderInsClientGrid()／oaToggleInsList()，不再各自刻一份）；$unit 決定欄位顯示「元」或「支」。
+    $add = function ($level, $title, $detail, $metric = null, $clients = null, $unit = '元', $cmpLabel = '急件') use (&$out) {
+        $item = ['level' => $level, 'title' => $title, 'detail' => $detail, 'metric' => $metric];
+        if ($clients) { $item['clients'] = $clients; $item['unit'] = $unit; $item['cmp_label'] = $cmpLabel; }
+        $out[] = $item;
     };
     $cur = $rep['cur']; $cmp = $rep['cmp'];
 
@@ -2001,7 +2043,8 @@ function oa_urgent_insights(array $rep): array
         if ($top3 && $conc >= 50) {
             $names = implode('、', array_column($top3, 'name'));
             $add('warn', '急件集中在少數客戶', '急件金額前 3 大客戶（' . $names . '）就佔了急件總金額的 ' . $conc . '%，'
-                . '這幾家客戶的交期安排值得優先關注。');
+                . '這幾家客戶的交期安排值得優先關注（可點「展開名單」看完整清單）。',
+                null, $cur['client_list']);
         }
 
         $byCls = $cur['by_cls'];
@@ -2023,6 +2066,15 @@ function oa_urgent_insights(array $rep): array
 /* ══════════════════════════════════════════════════════════════════
  * 客戶佔比報告：單一客戶在整體（全部客戶）裡的佔比，供畫面檢視與列印 A4 報告。
  * ══════════════════════════════════════════════════════════════════ */
+/**
+ * 客戶佔比報告（2026-10-06 使用者交辦，多輪追加）：可一次選多家客戶，每家各自顯示在整體裡的
+ * 訂單/金額/數量佔比、排名、急件與交期工作天資料、製程類別分布、受訂料號排名（含標籤/製程/
+ * 接單人員/平均工作天），並附逐月趨勢與自動分析。
+ *
+ * 多選時「整體」的分母只算一次（同一批 $rows、同一組門檻），每家客戶各自代入分子——
+ * 不是對每家客戶各自重新抓一次資料，否則同一個期間、同一份整體數字理論上要一樣卻可能因為
+ * 併發查詢時間差而兜不起來。
+ */
 function oa_client_share(PDO $db, array $opt = []): array
 {
     $year  = max(2000, min(2100, (int)($opt['year'] ?? date('Y'))));
@@ -2032,34 +2084,39 @@ function oa_client_share(PDO $db, array $opt = []): array
     $cmpK  = isset(oa_compares()[$opt['cmp'] ?? '']) ? (string)$opt['cmp'] : 'yoy';
     $align = !array_key_exists('align', $opt) || !empty($opt['align']);
     $incP  = !empty($opt['include_paused']);
-    $ckey  = trim((string)($opt['client'] ?? ''));
+    $ckeys = array_values(array_filter(array_map('strval', (array)($opt['clients'] ?? []))));
+    if (!$ckeys && !empty($opt['client'])) $ckeys = [(string)$opt['client']];   // 相容單一客戶的舊呼叫方式
+    $ckeys = array_values(array_unique($ckeys));
 
     $cur  = oa_period_pick($year, $gran, $idx);
     $cmpP = oa_compare_period($year, $gran, $idx, $cmpK);
     $elap = oa_elapsed_days($cur);
     $cmpE = $align ? oa_cap_period($cmpP, $elap) : $cmpP;
 
-    $from = min($cur['start'], $cmpP['start']);
-    $to   = max($cur['end'], $cmpP['end']);
+    // 趨勢固定抓「選定年度整年」逐月，跟上面選的期間粒度脫鉤——這份報告要看的是這家客戶整年的
+    // 走勢，不是只看目前選到的那一期；抓取範圍因此要涵蓋 本期／基期／選定年度 三者的聯集。
+    $from = min($cur['start'], $cmpP['start'], $year . '-01-01');
+    $to   = max($cur['end'],   $cmpP['end'],   $year . '-12-31');
     $rows = oa_fetch_orders($db, $from, $to, ['basis' => $basis, 'include_paused' => $incP]);
     $astagMap = ot_astag_for_orders($db, array_column($rows, 'id'));
     $bands = oa_qty_bands($db);
     $us = oa_urgent_settings($db);
     $urgentClasses = array_flip(oa_urgent_classes());
     foreach ($rows as &$r) {
-        $r['cls']  = oa_scope_to_cls($astagMap[$r['id']] ?? null);
-        $r['lt']   = oa_leadtime_workdays($db, $r['odate'], $r['ddate']);
-        $r['band'] = oa_band_index((int)$r['qty'], $bands);
+        $info = $astagMap[$r['id']] ?? null;
+        $r['cls']      = oa_scope_to_cls($info);
+        $r['as_label'] = $info ? (string)$info['label'] : '';
+        $r['lt']       = oa_leadtime_workdays($db, $r['odate'], $r['ddate']);
+        $r['band']     = oa_band_index((int)$r['qty'], $bands);
     }
     unset($r);
 
-    $cname = '';
-    foreach ($rows as $r) { if ($r['ckey'] === $ckey) { $cname = $r['cname']; break; } }
+    $nameMap = [];
+    foreach ($rows as $r) { if (!isset($nameMap[$r['ckey']])) $nameMap[$r['ckey']] = $r['cname']; }
 
-    $build = function (array $p) use ($rows, $ckey, $urgentClasses, $us) {
+    $build = function (array $p) use ($rows, $ckeys, $urgentClasses, $us) {
         $inRange = function (array $r) use ($p) { return $r['dt'] >= $p['start'] && $r['dt'] <= $p['end']; };
-        $all  = array_values(array_filter($rows, $inRange));
-        $mine = $ckey !== '' ? array_values(array_filter($all, function ($r) use ($ckey) { return $r['ckey'] === $ckey; })) : [];
+        $all = array_values(array_filter($rows, $inRange));
 
         // 急件門檻只用「全部客戶、同一期間」的分布算，跟 oa_leadtime_report() 同一個道理
         $byClassLt = [];
@@ -2068,50 +2125,174 @@ function oa_client_share(PDO $db, array $opt = []): array
         foreach ($byClassLt as $cls => $arr) { sort($arr); $thr[$cls] = oa_percentile($arr, (float)($us['percentile'][$cls] ?? 20)); }
 
         $sum = function (array $set) use ($thr, $urgentClasses) {
-            $o = count($set); $amt = 0.0; $qty = 0; $px = 0; $byCls = []; $urgentN = 0; $parts = [];
+            $o = count($set); $amt = 0.0; $qty = 0; $px = 0; $byCls = [];
+            $urgentN = 0; $urgentAmt = 0.0; $ltSum = 0; $ltN = 0; $parts = [];
             foreach ($set as $r) {
                 $amt += $r['amount']; $qty += $r['qty']; if ($r['haspx']) $px++;
                 if (!isset($byCls[$r['cls']])) $byCls[$r['cls']] = ['cls' => $r['cls'], 'label' => oa_cls_label($r['cls']), 'n' => 0, 'amount' => 0.0];
                 $byCls[$r['cls']]['n']++; $byCls[$r['cls']]['amount'] += $r['amount'];
-                if ($r['lt'] !== null && isset($urgentClasses[$r['cls']]) && isset($thr[$r['cls']]) && $thr[$r['cls']] !== null && $r['lt'] <= $thr[$r['cls']]) $urgentN++;
+                if ($r['lt'] !== null) { $ltSum += $r['lt']; $ltN++; }
+                $isUrgent = $r['lt'] !== null && isset($urgentClasses[$r['cls']]) && isset($thr[$r['cls']]) && $thr[$r['cls']] !== null && $r['lt'] <= $thr[$r['cls']];
+                if ($isUrgent) { $urgentN++; $urgentAmt += $r['amount']; }
                 $k = $r['pkey'];
-                if (!isset($parts[$k])) $parts[$k] = ['pno' => $r['pno'], 'pid' => $r['pid'], 'n' => 0, 'amount' => 0.0, 'qty' => 0];
-                $parts[$k]['n']++; $parts[$k]['amount'] += $r['amount']; $parts[$k]['qty'] += $r['qty'];
+                if (!isset($parts[$k])) {
+                    $parts[$k] = ['pno' => $r['pno'], 'pid' => $r['pid'], 'n' => 0, 'amount' => 0.0, 'qty' => 0,
+                                  'tags' => [], 'procs' => [], 'creators' => [], 'lt_sum' => 0, 'lt_n' => 0];
+                }
+                $pp = &$parts[$k];
+                $pp['n']++; $pp['amount'] += $r['amount']; $pp['qty'] += $r['qty'];
+                if ($r['as_label'] !== '') $pp['tags'][$r['as_label']] = 1;
+                if (trim($r['proc']) !== '') $pp['procs'][trim($r['proc'])] = 1;
+                if ($r['created_by_name'] !== '') $pp['creators'][$r['created_by_name']] = 1;
+                if ($r['lt'] !== null) { $pp['lt_sum'] += $r['lt']; $pp['lt_n']++; }
+                unset($pp);
             }
             $partList = array_values($parts);
+            foreach ($partList as &$pp2) {
+                $pp2['tags']     = array_values(array_keys($pp2['tags']));
+                $pp2['procs']    = array_values(array_keys($pp2['procs']));
+                $pp2['creators'] = array_values(array_keys($pp2['creators']));
+                $pp2['avg_leadtime'] = $pp2['lt_n'] ? round($pp2['lt_sum'] / $pp2['lt_n'], 1) : null;
+                unset($pp2['lt_sum'], $pp2['lt_n']);
+            }
+            unset($pp2);
             usort($partList, function ($a, $b) { return $b['amount'] <=> $a['amount']; });
             return ['orders' => $o, 'amount' => $amt, 'qty' => $qty, 'px_orders' => $px,
-                    'urgent_orders' => $urgentN, 'urgent_ratio' => $o ? round($urgentN * 100 / $o, 1) : 0.0,
+                    'urgent_orders' => $urgentN, 'urgent_amount' => $urgentAmt,
+                    'urgent_ratio' => $o ? round($urgentN * 100 / $o, 1) : 0.0,
+                    'avg_leadtime' => $ltN ? round($ltSum / $ltN, 1) : null,
                     'by_cls' => array_values($byCls), 'top_parts' => array_slice($partList, 0, 10)];
         };
 
         $totalAgg = $sum($all);
-        $mineAgg  = $sum($mine);
 
-        $byClient = [];
-        foreach ($all as $r) { $byClient[$r['ckey']] = ($byClient[$r['ckey']] ?? 0) + $r['amount']; }
-        arsort($byClient);
-        $rank = 0; $i = 0;
-        foreach ($byClient as $k => $v) { $i++; if ($k === $ckey) { $rank = $i; break; } }
+        $byClientAmt = [];
+        foreach ($all as $r) { $byClientAmt[$r['ckey']] = ($byClientAmt[$r['ckey']] ?? 0) + $r['amount']; }
+        arsort($byClientAmt);
+        $rankMap = []; $i = 0;
+        foreach ($byClientAmt as $k => $v) { $i++; $rankMap[$k] = $i; }
 
         $share = function ($num, $den) { return $den > 0 ? round($num * 100 / $den, 1) : 0.0; };
-        return [
-            'total' => $totalAgg, 'mine' => $mineAgg,
-            'share_orders' => $share($mineAgg['orders'], $totalAgg['orders']),
-            'share_amount' => $share($mineAgg['amount'], $totalAgg['amount']),
-            'share_qty'    => $share($mineAgg['qty'],    $totalAgg['qty']),
-            'rank' => $rank, 'total_clients' => count($byClient),
-        ];
+
+        $perClient = [];
+        foreach ($ckeys as $ck) {
+            $mine = array_values(array_filter($all, function ($r) use ($ck) { return $r['ckey'] === $ck; }));
+            $mineAgg = $sum($mine);
+            $perClient[$ck] = [
+                'agg' => $mineAgg,
+                'share_orders' => $share($mineAgg['orders'], $totalAgg['orders']),
+                'share_amount' => $share($mineAgg['amount'], $totalAgg['amount']),
+                'share_qty'    => $share($mineAgg['qty'],    $totalAgg['qty']),
+                'rank' => $rankMap[$ck] ?? 0,
+            ];
+        }
+        return ['total' => $totalAgg, 'total_clients' => count($byClientAmt), 'per_client' => $perClient];
     };
 
     $curRes = $build($cur);
     $cmpRes = $build($cmpE);
 
+    // 逐月趨勢：固定整年，每個選定客戶各自一條序列，另加全體合計序列供對照／算佔比走勢。
+    $months = oa_period_buckets($year, 'month');
+    $trendTotal = []; $trendByClient = []; foreach ($ckeys as $ck) $trendByClient[$ck] = [];
+    foreach ($months as $mb) {
+        $mrows = array_values(array_filter($rows, function (array $r) use ($mb) { return $r['dt'] >= $mb['start'] && $r['dt'] <= $mb['end']; }));
+        $tAmt = 0.0; $tOrd = 0;
+        foreach ($mrows as $r) { $tAmt += $r['amount']; $tOrd++; }
+        // 'done'＝這個月已經完整過完（本月還沒過完／未來月份都算未完成，拿去比較會失真）
+        $done = $mb['end'] < date('Y-m-d') ? 1 : 0;
+        $trendTotal[] = ['label' => $mb['label'], 'amount' => $tAmt, 'orders' => $tOrd, 'done' => $done];
+        foreach ($ckeys as $ck) {
+            $camt = 0.0; $cord = 0;
+            foreach ($mrows as $r) { if ($r['ckey'] === $ck) { $camt += $r['amount']; $cord++; } }
+            $trendByClient[$ck][] = ['label' => $mb['label'], 'amount' => $camt, 'orders' => $cord, 'done' => $done,
+                                      'share' => $tAmt > 0 ? round($camt * 100 / $tAmt, 1) : 0.0];
+        }
+    }
+
+    $clientsOut = [];
+    foreach ($ckeys as $ck) {
+        $pc = $curRes['per_client'][$ck]; $pp = $cmpRes['per_client'][$ck];
+        $clientsOut[] = [
+            'client' => ['key' => $ck, 'name' => $nameMap[$ck] ?? $ck],
+            'cur' => ['agg' => $pc['agg'], 'share_orders' => $pc['share_orders'], 'share_amount' => $pc['share_amount'],
+                      'share_qty' => $pc['share_qty'], 'rank' => $pc['rank']],
+            'cmp' => ['agg' => $pp['agg'], 'share_orders' => $pp['share_orders'], 'share_amount' => $pp['share_amount'],
+                      'share_qty' => $pp['share_qty'], 'rank' => $pp['rank']],
+            'trend' => $trendByClient[$ck],
+        ];
+    }
+
     return [
-        'client' => ['key' => $ckey, 'name' => $cname],
-        'period' => $cur, 'cmp_period' => $cmpE, 'cmp_mode' => $cmpK,
-        'cur' => $curRes, 'cmp' => $cmpRes,
+        'period' => $cur, 'cmp_period' => $cmpE, 'cmp_mode' => $cmpK, 'year' => $year,
+        'total_cur' => $curRes['total'], 'total_cmp' => $cmpRes['total'],
+        'total_clients_cur' => $curRes['total_clients'], 'total_clients_cmp' => $cmpRes['total_clients'],
+        'trend_months' => array_column($months, 'label'), 'trend_total' => $trendTotal,
+        'clients' => $clientsOut,
     ];
+}
+
+/** 客戶佔比報告自動分析：逐家客戶各自判斷，每一條都附具體數字 */
+function oa_client_share_insights(array $rep): array
+{
+    $out = [];
+    $add = function ($level, $title, $detail, $metric = null) use (&$out) {
+        $out[] = ['level' => $level, 'title' => $title, 'detail' => $detail, 'metric' => $metric];
+    };
+    $totalUrgentRatio = (float)($rep['total_cur']['urgent_ratio'] ?? 0);
+
+    foreach ($rep['clients'] as $c) {
+        $name = (string)$c['client']['name']; $cur = $c['cur']; $cmp = $c['cmp'];
+
+        if (!$cur['agg']['orders'] && !$cmp['agg']['orders']) {
+            $add('info', $name . '：這段期間沒有任何訂單', '本期與基期皆查無訂單資料。');
+            continue;
+        }
+        if (!$cur['agg']['orders'] && $cmp['agg']['orders'] > 0) {
+            $add('warn', $name . '：本期零下單', '基期曾有 ' . $cmp['agg']['orders'] . ' 張訂單（'
+                . number_format($cmp['agg']['amount']) . ' 元），本期完全沒有下單，建議確認狀況。');
+            continue;
+        }
+
+        $dAmt = $cur['share_amount'] - $cmp['share_amount'];
+        if (abs($dAmt) >= 0.5) {
+            $add($dAmt > 0 ? 'good' : 'warn', $name . '：佔整體金額比例' . ($dAmt > 0 ? '上升' : '下降'),
+                 '本期佔整體金額 ' . $cur['share_amount'] . '%，基期 ' . $cmp['share_amount'] . '%，'
+                . ($dAmt >= 0 ? '增加 ' : '減少 ') . number_format(abs($dAmt), 1) . ' 個百分點。',
+                 ($dAmt >= 0 ? '+' : '') . number_format($dAmt, 1) . 'pp');
+        }
+        if ($cur['rank'] && $cmp['rank'] && $cur['rank'] != $cmp['rank']) {
+            $add($cur['rank'] < $cmp['rank'] ? 'good' : 'warn', $name . '：客戶排名' . ($cur['rank'] < $cmp['rank'] ? '上升' : '下降'),
+                 '本期排第 ' . $cur['rank'] . ' 名，基期第 ' . $cmp['rank'] . ' 名（共 ' . $rep['total_clients_cur'] . ' 家）。');
+        }
+        if ($cur['share_amount'] >= 15) {
+            $add('warn', $name . '：佔整體金額比例偏高，集中度風險',
+                 '本期佔整體訂單金額 ' . $cur['share_amount'] . '%，單一客戶佔比過高時交期與產能都容易被牽動，建議留意對該客戶的依賴程度。');
+        }
+        if ($cur['agg']['urgent_ratio'] > 0) {
+            $d2 = $cur['agg']['urgent_ratio'] - $totalUrgentRatio;
+            if ($d2 >= 10) {
+                $add('warn', $name . '：急件比例高於整體平均',
+                     '本客戶本期急件比例 ' . $cur['agg']['urgent_ratio'] . '%，高於整體平均 ' . $totalUrgentRatio . '%'
+                    . '（高出 ' . number_format($d2, 1) . ' 個百分點），交期安排建議優先留意這家客戶。');
+            }
+        }
+        // 連續下滑只看「已經完整過完」的月份——本月還沒過完／未來月份（含預先建立的遠期訂單）
+        // 金額天生偏低，混進來比較會把「月份還沒過完」誤判成「業績下滑」。
+        $trend = $c['trend'];
+        $nz = array_values(array_filter($trend, function ($t) { return $t['orders'] > 0 && !empty($t['done']); }));
+        if (count($nz) >= 3) {
+            $l3 = array_slice($nz, -3);
+            if ($l3[0]['amount'] > $l3[1]['amount'] && $l3[1]['amount'] > $l3[2]['amount']) {
+                $add('warn', $name . '：近幾個月金額連續下滑',
+                     $l3[0]['label'] . ' ' . number_format($l3[0]['amount']) . ' 元 → '
+                    . $l3[1]['label'] . ' ' . number_format($l3[1]['amount']) . ' 元 → '
+                    . $l3[2]['label'] . ' ' . number_format($l3[2]['amount']) . ' 元，連續下滑。');
+            }
+        }
+    }
+    if (!$out) $add('good', '沒有特別需要留意的變化', '所選客戶本期表現平穩，沒有異常起伏。');
+    return $out;
 }
 
 
