@@ -9927,6 +9927,19 @@ foreach($dCounts as $c) {
             astagBfApplyBtnStyle();
             astagBfReload();   // 2026-10-06：兩個分頁共用這顆下拉，改了要刷新目前看得到的那一個
         }
+        /** 「含已暫停／取消的訂單」勾起來，通常就是為了去改這些訂單「已經設定好」的標籤
+         *  （使用者原話「訂單已取消也要可以更改設定好的標籤」）——但「顯示」預設是「只列
+         *  尚未設定的」，兩個條件要一起設才看得到、改得了；勾下去時自動把「顯示」也切成
+         *  「全部（含已設定）」，省得使用者要自己發現兩個控制項要搭配使用。取消勾選則不動
+         *  「顯示」（使用者可能是要回到只看未設定、單純少看幾筆已取消的，不是這裡的事）。 */
+        function astagBfCancelledChange() {
+            if ($('#bf-cancelled').is(':checked') && !astagBfShowAll()) {
+                $('#bf-show').val('all');
+                astagBfShowChange();   // 會連同重建只看標籤選單、調整按鈕樣式、重新查詢
+            } else {
+                astagBfReload();
+            }
+        }
         /** 改綁定模式跟補設定模式的按鈕要一眼分得出來（前者會覆蓋已經設好的） */
         function astagBfApplyBtnStyle() {
             var all = astagBfShowAll(), $b = $('#btn-bf-apply-sel');
@@ -13261,8 +13274,8 @@ foreach($dCounts as $c) {
               <label style="font-weight:400;font-size:12px;margin:0;" id="bf-onlytag-wrap" style="display:none;">只看標籤
                 <select id="bf-only-tag" class="form-control input-sm" style="width:190px;display:inline-block;" onchange="astagBfReload()"></select>
               </label>
-              <label style="font-weight:400;font-size:12px;margin:0;display:inline-flex;align-items:center;gap:4px;">
-                <input type="checkbox" id="bf-cancelled"> 含已暫停／取消的訂單
+              <label style="font-weight:400;font-size:12px;margin:0;display:inline-flex;align-items:center;gap:4px;" title="勾選後也會自動把上面「顯示」切成「全部（含已設定）」，否則已取消訂單原本設定好的標籤會因為「只列尚未設定的」被濾掉，看得到但改不了">
+                <input type="checkbox" id="bf-cancelled" onchange="astagBfCancelledChange()"> 含已暫停／取消的訂單（可一併更改已設定的標籤）
               </label>
               <button type="button" class="btn btn-sm btn-default" onclick="astagBfReload()"><i class="fa fa-refresh"></i> 重新查詢</button>
               <span style="margin-left:auto;">
