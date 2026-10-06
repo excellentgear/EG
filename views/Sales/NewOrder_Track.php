@@ -10032,14 +10032,20 @@ foreach($dCounts as $c) {
         });
         $(document).on('change', '.bf-g-chk', astagBfGroupUpdateSelCount);
 
-        /* ── 框選多列（2026-10-06 使用者交辦）───────────────────────────────────
+        /* ── 框選多列（2026-10-06 使用者交辦；當天追加修正）───────────────────────
            使用者原話「下方要可以滑鼠框選，不要使用勾選，需要很精準點選欄位，非常
            不方便」「多框選後可以一次設定所有框選對象的標籤」「被框選時底色要改變，
-           方便一眼看出有被框選」。沿用 2026-09-17 KPI 明細頁（views/news/KPI.php
-           的 VIODRAG）已經驗證過的同一套手勢規則，不要再發明第二套：
+           方便一眼看出有被框選」；實測回報「框選沒有真的被選取，反而只有選到文字」。
+           **第一版用 mouseenter 偵測拖過哪一列失敗的原因**：原生文字選取拖曳進行中，
+           瀏覽器不保證會在途經的每個元素上派送 mouseenter/mouseover（那是用來做
+           hover 效果的事件，不是文字選取機制的一部分），所以拖過去但從來沒有任何一列
+           被標記選取，使用者看到的就只有瀏覽器自己的藍色反白文字。
+           **改用 mousemove 全域監聽＋`elementFromPoint` 主動查「游標現在在哪一列上」**
+           ——mousemove 在原生文字選取拖曳期間一定會持續觸發（瀏覽器就是靠它即時延伸
+           選取範圍的），用這個查詢絕對可靠，不依賴任何可能被跳過的 hover 事件。
              ・點在勾選欄那一整格（不必精準點中 14px 的小方框）＝立刻切換
              ・在同一列的其他欄位按住拖曳＝不攔，瀏覽器照常選字（製程文字/料號常要
-               複製去別處對），拖到別的一列才確定是要多選——這時把剛拖出來的反白
+               複製去別處對），游標移到別的一列才確定是要多選——這時把剛拖出來的反白
                清掉、起始列也補上勾選，並沿路把拖過的每一列套用同一個目標狀態
              ・底層仍是既有的 .bf-g-chk／.bf-o-ck checkbox 記錄選取狀態，
                astagBfGroupSelectedIdx()／套用到勾選的組／套用到勾選的訂單
@@ -10050,6 +10056,12 @@ foreach($dCounts as $c) {
             $chk.prop('checked', on);
             $tr.toggleClass('sel', on);
         }
+        function astagBfRowAtPoint(x, y, tbodySel, rowSel) {
+            var el = document.elementFromPoint(x, y);
+            if (!el) return null;
+            var $row = $(el).closest(tbodySel + ' ' + rowSel);
+            return $row.length ? $row : null;
+        }
         function astagBfBindDrag(tbodySel, rowSel, chkCls, afterFn) {
             var full = tbodySel + ' ' + rowSel;
             $(document).on('mousedown', full, function (e) {
@@ -10057,11 +10069,11 @@ foreach($dCounts as $c) {
                 var $tr = $(this), $chk = $tr.find('.' + chkCls);
                 if (!$chk.length || $chk.prop('disabled')) return;
                 if ($(e.target).is('input,select,textarea,button,a,option,label')) {
-                    if ($(e.target).hasClass(chkCls)) ASTAGDRAG = { state: !$chk.prop('checked'), armed: true, tbody: tbodySel };
+                    if ($(e.target).hasClass(chkCls)) ASTAGDRAG = { state: !$chk.prop('checked'), armed: true, tbodySel: tbodySel, rowSel: rowSel, chkCls: chkCls, after: afterFn, lastEl: this };
                     return;    // 下拉/按鈕/連結一律不攔，交給它們自己的行為
                 }
                 // 先只記著，還不動任何勾選狀態——等真的拖到別列再說（這樣同一列內就能正常選字）
-                ASTAGDRAG = { state: !$chk.prop('checked'), armed: false, from: this, tbody: tbodySel, chkCls: chkCls, after: afterFn };
+                ASTAGDRAG = { state: !$chk.prop('checked'), armed: false, from: this, tbodySel: tbodySel, rowSel: rowSel, chkCls: chkCls, after: afterFn, lastEl: this };
                 // 點在勾選欄那一整格＝立刻切換（不必精準點中那個小方框）
                 if ($(e.target).closest('td').find('.' + chkCls).length) {
                     ASTAGDRAG.armed = true;
@@ -10070,19 +10082,23 @@ foreach($dCounts as $c) {
                     e.preventDefault();
                 }
             });
-            $(document).on('mouseenter', full, function () {
-                if (!ASTAGDRAG || ASTAGDRAG.tbody !== tbodySel) return;
-                var $chk = $(this).find('.' + chkCls);
-                if (!ASTAGDRAG.armed) {
-                    // 第一次跨到別的一列＝確定是要多選：起始列補上，並把剛剛拖出來的反白清掉
-                    ASTAGDRAG.armed = true;
-                    if (ASTAGDRAG.from) astagBfSetRowSel($(ASTAGDRAG.from), $(ASTAGDRAG.from).find('.' + chkCls), ASTAGDRAG.state);
-                    try { (window.getSelection().removeAllRanges || function () {})(); } catch (e2) {}
-                }
-                astagBfSetRowSel($(this), $chk, ASTAGDRAG.state);
-                if (typeof afterFn === 'function') afterFn();
-            });
         }
+        $(document).on('mousemove', function (e) {
+            if (!ASTAGDRAG) return;
+            var $row = astagBfRowAtPoint(e.clientX, e.clientY, ASTAGDRAG.tbodySel, ASTAGDRAG.rowSel);
+            if (!$row || $row[0] === ASTAGDRAG.lastEl) return;      // 還停在同一列，不用重算
+            var $chk = $row.find('.' + ASTAGDRAG.chkCls);
+            if (!$chk.length || $chk.prop('disabled')) return;      // 拖到「已套用」那種沒有勾選框的列
+            if (!ASTAGDRAG.armed) {
+                // 第一次跨到別的一列＝確定是要多選：起始列補上，並把剛剛拖出來的反白清掉
+                ASTAGDRAG.armed = true;
+                if (ASTAGDRAG.from) astagBfSetRowSel($(ASTAGDRAG.from), $(ASTAGDRAG.from).find('.' + ASTAGDRAG.chkCls), ASTAGDRAG.state);
+                try { (window.getSelection().removeAllRanges || function () {})(); } catch (eSel) {}
+            }
+            astagBfSetRowSel($row, $chk, ASTAGDRAG.state);
+            ASTAGDRAG.lastEl = $row[0];
+            if (typeof ASTAGDRAG.after === 'function') ASTAGDRAG.after();
+        });
         $(document).on('mouseup', function () { ASTAGDRAG = null; });
         astagBfBindDrag('#bf-group-tbody', 'tr[data-i]', 'bf-g-chk', function () { astagBfGroupUpdateSelCount(); });
         astagBfBindDrag('#bf-order-tbody', 'tr', 'bf-o-ck', null);
