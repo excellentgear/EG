@@ -1294,6 +1294,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .batch-chip { display:inline-block; padding:6px 12px; margin:0 6px 6px 0; border-radius:18px; border:1px solid var(--line);
                   background:#fff; cursor:pointer; font-size:13px; user-select:none; color:var(--ink2); }
     .batch-chip.active { background:var(--ink2); border-color:var(--ink2); color:#fff; }
+    .batch-view-btn { margin-left:4px; opacity:.6; }
+    .batch-view-btn:hover { opacity:1; }
     .st-ok { color:var(--amber-d); } .st-ng { color:var(--coral); } .st-redo { color:#a9772f; } .st-wait { color:#8a6a45; }
     .batch-chip.active .st-ok,.batch-chip.active .st-ng,.batch-chip.active .st-redo,.batch-chip.active .st-wait { color:#fff; }
     /* 檢驗性質徽章（首件／末件，像按鈕般有底色；暖色調色盤既有色，禁用紅色避免跟不良/異常混淆） */
@@ -2048,7 +2050,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     </div></div>
 </div>
 
-<!-- NG 後詢問是否開立異常單 Modal（必選：開立 或 填原因不開立） -->
+<!-- NG 後詢問是否開立異常單 Modal（開立異常單 或 稍後再決定；2026-10-06 依使用者要求隱藏「不開立」選項，
+     不再提供填原因不開立的路徑——舊紀錄中既有的 ncr_decision=SKIP 仍照常顯示，只是不能再新產生） -->
 <div class="modal fade" id="ngAskModal" tabindex="-1" role="dialog" data-backdrop="static" data-keyboard="false">
     <div class="modal-dialog"><div class="modal-content">
         <div class="modal-header" style="background:#d9534f;color:#fff;border-radius:6px 6px 0 0;">
@@ -2057,20 +2060,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         <div class="modal-body">
             <p id="ng-ask-info" style="font-size:15px;"></p>
             <div class="text-center" style="margin:16px 0;">
-                <button class="btn btn-danger btn-lg" id="btn-ng-open" style="margin-right:14px;"><i class="fa fa-file-text-o"></i> 開立異常單</button>
-                <button class="btn btn-default btn-lg" id="btn-ng-skip">不開立（填原因）</button>
+                <button class="btn btn-danger btn-lg" id="btn-ng-open"><i class="fa fa-file-text-o"></i> 開立異常單</button>
             </div>
             <div class="text-center">
                 <button class="btn btn-link" id="btn-ng-later" style="color:#8a6a45;">
                     <i class="fa fa-clock-o"></i> 取消，稍後再決定</button>
                 <div class="muted-help">檢驗結果<b>已經存檔</b>，關掉不影響紀錄；之後可從「批次與檢驗歷程」的<b>開異常單</b>按鈕補開。</div>
-            </div>
-            <div id="ng-skip-area" style="display:none;">
-                <label>不開立異常單的原因（必填，會記錄於檢驗歷程）</label>
-                <textarea class="form-control" id="ng-skip-reason" rows="2" placeholder="例：輕微偏差已現場處置、客戶允收…"></textarea>
-                <div class="text-right" style="margin-top:8px;">
-                    <button class="btn btn-primary btn-sm" id="btn-ng-skip-confirm"><i class="fa fa-check"></i> 確認不開立</button>
-                </div>
             </div>
         </div>
     </div></div>
@@ -2081,6 +2076,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     <div class="modal-dialog modal-lg"><div class="modal-content">
         <div class="modal-header"><button class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-history"></i> 檢驗歷程修改紀錄</h4></div>
         <div class="modal-body" id="log-modal-body"></div>
+    </div></div>
+</div>
+
+<!-- 檢驗紀錄檢視 Modal（唯讀，不可修改；2026-10-06 使用者要求「批次與檢驗歷程都要有檢視按鈕，另開跳窗唯讀顯示」）
+     與主畫面完全獨立渲染，不讀寫 MODEL/state，所以不會動到目前正在填寫中的新一輪、也不可能在裡面改到資料。 -->
+<div class="modal fade" id="qcViewModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-lg"><div class="modal-content">
+        <div class="modal-header"><button class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title"><i class="fa fa-eye"></i> 檢驗紀錄檢視（唯讀）</h4></div>
+        <div class="modal-body" id="qc-view-modal-body" style="max-height:72vh;overflow:auto;"></div>
+        <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+    </div></div>
+</div>
+
+<!-- 批次檢視 Modal（唯讀，列出該批次全部檢驗次數；每一次再點「檢視」可看該筆完整內容） -->
+<div class="modal fade" id="qcBatchViewModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-lg"><div class="modal-content">
+        <div class="modal-header"><button class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title"><i class="fa fa-eye"></i> 批次檢視（唯讀）<span id="qc-batch-view-title"></span></h4></div>
+        <div class="modal-body" id="qc-batch-view-body" style="max-height:72vh;overflow:auto;"></div>
+        <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
     </div></div>
 </div>
 
@@ -4474,7 +4490,8 @@ $(function(){
             +'</span></div>'+
             (ctx.adhoc
                 ? '<div><b>送驗數</b><span class="cv">'+(ctx.order_qty||0)+'</span></div>'
-                : '<div><b>尚未檢驗 / 良品數 / BOM總數</b><span class="cv" id="ctx-pending" title="BOM總數 '+ps.order+' 件'+(ps.good<ps.order?'，已扣報廐後良品數 '+ps.good+' 件':'')+'，已送驗 '+ps.used+' 件">'+ps.left+' / '+ps.good+' / '+ps.order+'pcs</span></div>')+
+                : '<div><b>尚未檢驗 / 良品數 / BOM總數</b><span class="cv" id="ctx-pending" title="BOM總數 '+ps.order+' 件'+(ps.good<ps.order?'，已扣報廐後良品數 '+ps.good+' 件':'')+'，已送驗 '+ps.used+' 件">'+ps.left+' / '+ps.good+' / '+ps.order+'pcs</span>'+
+                  '<span id="ctx-pending-warn" style="'+(ps.left<=0?'':'display:none;')+'color:var(--coral);font-weight:bold;font-size:12px;margin-left:6px;"><i class="fa fa-exclamation-triangle"></i> 無待驗數量</span></div>')+
             '<div><b>'+(ctx.adhoc?'抽驗數':'建議抽驗')+'</b><span class="cv">'+(ctx.sample_qty||0)+' 件</span></div>'+
             (ctx.ship ? '' : '<div id="kind-box"><b>檢驗性質</b><span class="cv"><span class="ki-btns">'+
                 ['NORMAL','FIRST','LAST'].map(function(k){
@@ -4700,7 +4717,10 @@ $(function(){
     }
     function renderBatches(){
         var h=state.batches.map(function(b,i){
-            return '<span class="batch-chip '+(i===state.curBatch?'active':'')+'" data-i="'+i+'">批次'+b.no+' '+statusLabel(b.status)+'</span>';
+            // 檢視鈕（眼睛圖示）只是「唯讀跳窗看這個批次的全部檢驗紀錄」，點它不切換目前批次、
+            // 不影響正在填寫的新一輪——跟點整個 chip（切換目前批次）是兩個不同動作。
+            return '<span class="batch-chip '+(i===state.curBatch?'active':'')+'" data-i="'+i+'">批次'+b.no+' '+statusLabel(b.status)+
+                   ' <i class="fa fa-eye batch-view-btn" data-i="'+i+'" title="檢視此批次所有檢驗紀錄（唯讀，不影響目前批次）"></i></span>';
         }).join('');
         h+='<span class="batch-chip" id="btn-new-batch" style="border-style:dashed;"><i class="fa fa-plus"></i> 新到貨批次</span>';
         $('#batch-bar').html(h);
@@ -4716,6 +4736,7 @@ $(function(){
         var ps=pendingSummary();
         $el.attr('title','BOM總數 '+ps.order+' 件'+(ps.good<ps.order?'，已扣報廐後良品數 '+ps.good+' 件':'')+'，已送驗 '+ps.used+' 件')
            .text(ps.left+' / '+ps.good+' / '+ps.order+'pcs');
+        $('#ctx-pending-warn').toggle(ps.left<=0);
     }
     // 準備填寫「下一次」檢驗時，「本批送驗數」自動帶入「尚未檢驗」的剩餘量，不必自己心算
     // 訂單數減掉已送驗的量——不論這是批次的第一次、還是同一批次接著再驗一次（例：首件驗完
@@ -4731,7 +4752,14 @@ $(function(){
         $('#batch-zone').slideToggle(120);
         $(this).find('i').toggleClass('fa-caret-right fa-caret-down');
     });
-    $('#batch-bar').on('click','.batch-chip[data-i]', function(){ state.curBatch=$(this).data('i'); renderBatches(); });
+    $('#batch-bar').on('click','.batch-chip[data-i]', function(e){
+        if($(e.target).closest('.batch-view-btn').length) return;   // 檢視鈕不切換目前批次
+        state.curBatch=$(this).data('i'); renderBatches();
+    });
+    $('#batch-bar').on('click','.batch-view-btn', function(e){
+        e.stopPropagation();
+        openBatchViewModal($(this).data('i'));
+    });
     $('#batch-bar').on('click','#btn-new-batch', function(){
         state.batches.push({ no:state.batches.length+1, status:'WAIT', rounds:[] });
         state.curBatch=state.batches.length-1; renderBatches();
@@ -4746,11 +4774,11 @@ $(function(){
                 var editable=(!locked && state.can_fill) || state.is_supervisor || selfGrace;
                 if(locked && !editable) act+='<span class="muted-help" title="已鎖定，需主管開放"><i class="fa fa-lock"></i> 鎖定</span> ';
                 if(locked && state.is_supervisor) act+='<button class="btn btn-xs btn-warm-o act-unlock" data-id="'+r.qc_form_id+'"><i class="fa fa-unlock-alt"></i> 開放修改</button> ';
-                // 檢視／修改共用同一顆鈕點開：能不能真的存檔由後端 can_edit 再判一次，
-                // 不可修改時一律開「檢視畫面」（欄位反灰唯讀），不是完全不能看內容
-                // （使用者 2026-09-24 回報：鎖定的紀錄原本點不開，連檢驗相關資料都看不到）。
-                act+='<button class="btn btn-xs '+(editable?'btn-warm':'btn-default')+' act-edit" data-id="'+r.qc_form_id+'"'+(locked&&selfGrace?' title="本人寬限期內可自改"':'')+'>'+
-                     '<i class="fa fa-'+(editable?'pencil':'eye')+'"></i> '+(editable?('修改'+(locked&&selfGrace?'（本人）':'')):'檢視')+'</button> ';
+                // 「修改」只在真的可以存檔時才出現（進到本頁的填寫畫面）；
+                // 「檢視」每一筆都固定有（2026-10-06 使用者要求），一律另開唯讀跳窗，
+                // 不會動到正在填寫中的這一頁、也不可能在裡面誤改到資料。
+                if(editable) act+='<button class="btn btn-xs btn-warm act-edit" data-id="'+r.qc_form_id+'"'+(locked&&selfGrace?' title="本人寬限期內可自改"':'')+'><i class="fa fa-pencil"></i> 修改'+(locked&&selfGrace?'（本人）':'')+'</button> ';
+                act+='<button class="btn btn-xs btn-default act-view" data-id="'+r.qc_form_id+'" title="唯讀檢視，不可修改"><i class="fa fa-eye"></i> 檢視</button> ';
                 act+='<button class="btn btn-xs btn-default act-print-hist" data-id="'+r.qc_form_id+'" title="列印這一筆檢驗紀錄"><i class="fa fa-print"></i> 列印</button> ';
                 if(r.edit_log_count>0) act+='<button class="btn btn-xs btn-default act-log" data-id="'+r.qc_form_id+'"><i class="fa fa-history"></i> 紀錄</button> ';
                 if(IS_SUPER) act+='<button class="btn btn-xs act-del-rec" data-id="'+r.qc_form_id+'" title="完全刪除此筆檢驗紀錄（測試用，需密碼）" style="background:#8F3016;color:#fff;border:0;"><i class="fa fa-trash"></i></button>';
@@ -4788,6 +4816,7 @@ $(function(){
         },'json');
     });
     $('#batch-history').on('click','.act-edit', function(){ openEditRecord($(this).data('id')); });
+    $('#batch-history').on('click','.act-view', function(){ openViewModal($(this).data('id')); });
     $('#batch-history').on('click','.act-print-hist', function(){ printHistoryRecord($(this).data('id')); });
 
     // ---------- 完全刪除檢驗紀錄（僅超級管理員；測試用） ----------
@@ -4858,6 +4887,94 @@ $(function(){
             });
         },'json');
     });
+
+    // ---------- 檢視跳窗（唯讀，不可修改；2026-10-06） ----------
+    // 刻意不借用 MODEL/state（那是「目前正在填寫中的這一輪」共用的資料），改成直接把
+    // get_history_record() 回來的內容組成一段獨立的 HTML 字串塞進跳窗——這樣看歷史紀錄
+    // 永遠不會動到正在填寫的新一輪，跳窗裡也沒有任何輸入框，不可能被改到。
+    function qcViewMetaHtml(h, tools){
+        var toolsTxt=(tools||[]).map(function(t){ return t.label||t.no||''; }).filter(function(s){ return s!==''; }).join('、');
+        var kindTxt = h.insp_kind==='FIRST'?'首件':(h.insp_kind==='LAST'?'末件':(h.insp_kind==='SHIP'?'出貨檢驗':'一般'));
+        var ncr='';
+        if(h.check_result==='NG'){
+            if(h.abnormal_order_no) ncr='<a href="../QA/qa_abnormal_view.php?id='+h.abnormal_order_id+'" target="_blank">'+esc(h.abnormal_order_no)+'</a>';
+            else if(h.ncr_decision==='SKIP') ncr='不開單';
+            else ncr='未開單';
+        } else ncr='—';
+        return '<table class="table table-condensed table-bordered" style="background:#fff;">'+
+            '<tr><th width="110">檢驗單號</th><td>'+esc(h.insp_no||('#'+h.qc_form_id))+'</td>'+
+                '<th width="110">批次 / 次數</th><td>批次'+(h.batch_no||1)+'　第'+(h.round_no||1)+'次</td></tr>'+
+            '<tr><th>日期</th><td>'+esc(String(h.check_date||'').substring(0,10).replace(/-/g,'.'))+'</td>'+
+                '<th>檢驗性質</th><td>'+esc(kindTxt)+'</td></tr>'+
+            '<tr><th>送驗數 / 抽驗數</th><td>'+(h.incoming_qty||0)+' / '+(h.sample_qty||0)+'</td>'+
+                '<th>判定</th><td>'+(h.check_result==='NG'?'<span class="st-ng">✘不良</span>':'<span class="st-ok">✔合格</span>')+'　不良 '+(h.ng_qty||0)+' 件</td></tr>'+
+            '<tr><th>檢驗員</th><td>'+esc(h.creator_name||'—')+'</td>'+
+                '<th>主管審核</th><td>'+(h.approved_name?(esc(h.approved_name)+' '+esc(String(h.approved_at||'').substring(0,10))):'—')+'</td></tr>'+
+            '<tr><th>使用量具</th><td colspan="3">'+esc(toolsTxt||'—')+'</td></tr>'+
+            '<tr><th>異常單</th><td colspan="3">'+ncr+'</td></tr>'+
+            (h.main_remark ? ('<tr><th>備註</th><td colspan="3">'+esc(h.main_remark)+'</td></tr>') : '')+
+            '</table>';
+    }
+    function qcViewItemsHtml(items, sampleN){
+        var n=sampleN||1, pcsHead=''; for(var i=1;i<=n;i++) pcsHead+='<th>'+i+'</th>';
+        var body='';
+        (items||[]).forEach(function(it,idx){
+            var readings=[{samples:it.samples||[]}];
+            (it.extra||[]).forEach(function(ex){ readings.push({samples:ex.samples||[]}); });
+            readings.forEach(function(rd,ri){
+                var cells='';
+                for(var i2=0;i2<n;i2++){
+                    var sv=(rd.samples||[])[i2];
+                    var v=(sv && sv.v!=null && sv.v!=='')?sv.v:'';
+                    cells+='<td'+((sv&&sv.r==='NG'&&v!=='')?' style="color:var(--coral);font-weight:bold;"':'')+'>'+esc(v)+'</td>';
+                }
+                var stdTd;
+                if(it.mode==='RANGE' && it.type!=='OKNG') stdTd='<td>'+esc(specDisplayText(it))+'</td><td></td>';
+                else stdTd='<td>'+esc(it.std||'')+'</td><td>'+esc(it.up||'')+(it.lo?('／'+esc(it.lo)):'')+'</td>';
+                body+='<tr>'+
+                    (ri===0 ? ('<td>'+codeLabel(idx)+'</td><td style="text-align:left">'+esc(it.name)+'</td>'+stdTd)
+                            : ('<td></td><td style="text-align:left;font-size:10px;color:#7A5A35">↳ 加量測 '+ri+'</td><td></td><td></td>'))+
+                    cells+
+                    (ri===0?('<td rowspan="'+readings.length+'">'+(it.verdict==='NG'?'<span class="st-ng">✘不良</span>':'<span class="st-ok">✔合格</span>')+'</td>'):'')+'</tr>';
+                if(ri===0 && it.remark) body+='<tr><td colspan="'+(4+n)+'" style="text-align:left;font-size:11px">備註：'+esc(it.remark)+'</td></tr>';
+            });
+        });
+        return '<table class="table table-condensed table-bordered" style="background:#fff;margin-top:10px;">'+
+            '<thead><tr><th width="40">編號</th><th>檢驗項目</th><th width="70">標準</th><th width="70">公差</th>'+pcsHead+'<th width="60">判定</th></tr></thead>'+
+            '<tbody>'+body+'</tbody></table>';
+    }
+    function openViewModal(qcFormId){
+        $('#qc-view-modal-body').html('<div class="muted-help">載入中…</div>');
+        $('#qcViewModal').modal('show');
+        $.post(API,{action:'get_history_record',qc_form_id:qcFormId},function(res){
+            if(!res.success){ $('#qc-view-modal-body').html('<div class="alert alert-danger" style="margin:0;">載入失敗：'+esc(res.message||'')+'</div>'); return; }
+            $('#qc-view-modal-body').html(qcViewMetaHtml(res.header, res.tools)+qcViewItemsHtml(res.items, res.header.sample_qty||1));
+        },'json').fail(function(x){ $('#qc-view-modal-body').html('<div class="alert alert-danger" style="margin:0;">載入錯誤：'+esc(x.responseText||'')+'</div>'); });
+    }
+    // 批次檢視：直接用已經在畫面上的 state.batches[i].rounds（不必再打一次 API），
+    // 列出該批次每一次檢驗的摘要，每一列再附「檢視」按鈕點進單筆完整內容。
+    function openBatchViewModal(batchIdx){
+        var b=state.batches[batchIdx];
+        $('#qc-batch-view-title').text(b?('　批次'+b.no):'');
+        if(!b || !b.rounds.length){ $('#qc-batch-view-body').html('<div class="muted-help">此批次尚無檢驗紀錄。</div>'); $('#qcBatchViewModal').modal('show'); return; }
+        var rows=b.rounds.map(function(r,i){
+            var ncr='—';
+            if(r.status==='NG'){
+                if(r.abnormal_order_no) ncr='<a href="../QA/qa_abnormal_view.php?id='+r.abnormal_order_id+'" target="_blank">'+esc(r.abnormal_order_no)+'</a>';
+                else if(r.ncr_decision==='SKIP') ncr='不開單';
+                else ncr='未開單';
+            }
+            var btn=r.qc_form_id ? ('<button class="btn btn-xs btn-default qc-bv-view" data-id="'+r.qc_form_id+'"><i class="fa fa-eye"></i> 檢視</button>') : '';
+            return '<tr><td>第'+(i+1)+'次'+inspKindBadge(r.insp_kind)+'</td><td>'+esc(r.date)+'</td><td>'+statusLabel(r.status)+'</td>'+
+                   '<td>'+(r.incoming_qty||0)+' / '+(r.ng_qty||0)+'</td><td>'+ncr+'</td><td>'+btn+'</td></tr>';
+        }).join('');
+        $('#qc-batch-view-body').html(
+            '<table class="table table-condensed table-bordered" style="background:#fff;"><thead>'+
+            '<tr><th width="90">次數</th><th width="150">日期</th><th width="80">結果</th><th width="110">檢驗數/不良數</th><th width="100">異常單</th><th width="90">操作</th></tr>'+
+            '</thead><tbody>'+rows+'</tbody></table>');
+        $('#qcBatchViewModal').modal('show');
+    }
+    $('#qc-batch-view-body').on('click','.qc-bv-view', function(){ openViewModal($(this).data('id')); });
 
     // ---------- 修改 / 檢視模式 ----------
     // 使用者 2026-09-24 回報：鎖定的歷程原本完全點不開（連內容都看不到）。
@@ -5637,6 +5754,12 @@ $(function(){
         if(state.demo){ alert('示範模式不寫入資料庫，請由待驗清單開啟實際待驗項目。'); return; }
         var items=collectItems();
         if(!items.length){ alert('請至少輸入一個檢驗項目'); return; }
+        // 尚未檢驗（待驗剩餘量）＝0 時再次提醒：只在「新建一輪」時才有意義，修改既有
+        // 紀錄或臨時檢驗單（無「尚未檢驗」概念）不適用——使用者2026-10-06要求存檔時再提醒一次。
+        if(!ctx.adhoc && !state.editFormId){
+            var psNow=pendingSummary();
+            if(psNow.left<=0 && !confirm('目前「尚未檢驗」剩餘數量為 0（良品 '+psNow.good+' 件、已送驗 '+psNow.used+' 件），此批可能已無待驗數量。仍要繼續儲存這筆檢驗結果嗎？')) return;
+        }
         // 存檔前檢核：缺量具編號等硬性問題一律擋下，並明確告知哪一項缺什麼
         var probs = validateBeforeSave();
         if(probs.length){ showValidateModal(probs); return; }
@@ -5829,7 +5952,6 @@ $(function(){
     function openNgAsk(qcFormId, s, items, done){
         ngCtx={ qcFormId:qcFormId, summary:s, items:items, done:done, decided:false };
         $('#ng-ask-info').html('本次檢驗判定為<b class="text-danger">不良</b>（不良 <b>'+s.ng_qty+'</b> 件）。是否開立品質異常單？<br><small class="text-muted">開立後將自動通知回覆部門與相關人員，並要求回覆回簽。</small>');
-        $('#ng-skip-area').hide(); $('#ng-skip-reason').val('');
         $('#ngAskModal').modal('show');
     }
     $('#btn-ng-open').on('click', function(){
@@ -5858,19 +5980,6 @@ $(function(){
     });
     $('#qamModal').on('hidden.bs.modal', function(){
         if(ngCtx && !ngCtx.decided) setTimeout(function(){ $('#ngAskModal').modal('show'); }, 300);
-    });
-    $('#btn-ng-skip').on('click', function(){ $('#ng-skip-area').slideDown(120); $('#ng-skip-reason').focus(); });
-    $('#btn-ng-skip-confirm').on('click', function(){
-        if(!ngCtx) return;
-        var reason=$('#ng-skip-reason').val().trim();
-        if(!reason){ alert('請填寫不開立異常單的原因'); $('#ng-skip-reason').focus(); return; }
-        var qid=ngCtx.qcFormId;
-        $.post(API,{action:'set_ncr_decision',qc_form_id:qid,decision:'SKIP',reason:reason}, function(r){
-            if(!r.success){ alert(r.message||'儲存失敗'); return; }
-            ngCtx.decided=true;
-            $('#ngAskModal').modal('hide');
-            var d=ngCtx.done; ngCtx=null; if(d) d();
-        },'json');
     });
 
     // =====================================================================
