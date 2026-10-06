@@ -604,14 +604,16 @@ function oa_analyze(PDO $db, array $opt = []): array
     // 唯一依據 order_as_tag_lib.php 的人工設定結果，不是這裡再猜一次（鐵律4，見檔頭第1點）。
     // 還沒設定的一律歸進 'unset'（尚未設定標籤），不可以漏報成「沒有這個分類」。
     //
-    // 2026-10-06 使用者交辦：「全製／單製分析」改為優先採用這個人工確認過的標籤——
-    // 有設定標籤的訂單，cls 直接改用標籤的「適用範圍」（scope）決定，不再用關鍵字猜；
-    // scope='none'（不分單製全製，如廠內治具／其他非加工）整筆排除在全製/單製這個維度外
-    // （cls 改記成 'excluded'，但 orders/qty/amount 等其他總計完全不受影響，只是不落進
-    // 全製/單製/多製程的分子分母——這些總計本來就跟「算不算全製單製」無關）；
-    // 沒有設定標籤的訂單才繼續退回下面的關鍵字規則猜（既有行為不變）。
-    // 「多製程」自 2026-10-06 起是獨立的 scope='multi'（見 order_as_tag_lib.php 檔頭），
-    // 這裡直接照 scope 分支即可，不必再比對 fixed_code。
+    // 2026-10-06 使用者交辦（兩輪）：「全製／單製分析」①先改為優先採用這個人工確認過的標籤、
+    // 沒設定的才退回關鍵字猜 ②再交辦改成**直接依標籤判定，完全不依關鍵字判定**——
+    // 沒設定標籤的訂單一律歸 'unknown'（尚未設定標籤），不再退回 oa_proc_class() 的關鍵字猜測；
+    // 關鍵字規則本身不刪（order_as_tag_lib.php 的 ot_astag_suggester() 批次補設定頁的「建議標籤」
+    // 還在用，那是給人工審核用的建議、跟這裡「自動算出全製/單製統計」是不同用途，鐵律4不是指
+    // 兩處都要用同一個結果，是指同一套規則只能有一份實作——oa_proc_class() 本身沒有重複）。
+    // scope='full'→full、'multi'→多製程、'single'→single、'none'（不分單製全製，如廠內治具／
+    // 其他非加工）整筆排除在全製/單製這個維度外（cls 記成 'excluded'，但 orders/qty/amount 等
+    // 其他總計完全不受影響，只是不落進全製/單製/多製程的分子分母——這些總計本來就跟
+    // 「算不算全製單製」無關）。
     $astagMap = ot_astag_for_orders($db, array_column($rows, 'id'));
     foreach ($rows as &$r) {
         $info = $astagMap[$r['id']] ?? null;
@@ -620,24 +622,20 @@ function oa_analyze(PDO $db, array $opt = []): array
         $r['as_kind']  = $info ? $info['kind']  : '';
         $r['as_proc']  = ($info && $info['is_as_process']) ? 1 : 0;
 
-        $r['cls_src'] = '';   // ''＝關鍵字猜的（含 fallback／未命中）；'astag'／'astag_excluded'＝來自 AS 認定
-        if ($info) {
-            if ($info['scope'] === 'full') {
-                $r['cls']     = 'full';
-                $r['rule']    = '';
-                $r['cls_src'] = 'astag';
-            } elseif ($info['scope'] === 'multi') {
-                $r['cls']     = 'multi';
-                $r['rule']    = '';
-                $r['cls_src'] = 'astag';
-            } elseif ($info['scope'] === 'single') {
-                $r['cls']     = 'single';
-                $r['rule']    = '';
-                $r['cls_src'] = 'astag';
-            } elseif ($info['scope'] === 'none') {
-                $r['cls']     = 'excluded';
-                $r['cls_src'] = 'astag_excluded';
-            }
+        $r['rule'] = '';   // 不再用關鍵字猜，這欄保留給 oa_proc_rules() 設定頁校正用途顯示命中數
+        if ($info && $info['scope'] === 'full') {
+            $r['cls'] = 'full'; $r['cls_src'] = 'astag';
+        } elseif ($info && $info['scope'] === 'multi') {
+            $r['cls'] = 'multi'; $r['cls_src'] = 'astag';
+        } elseif ($info && $info['scope'] === 'single') {
+            $r['cls'] = 'single'; $r['cls_src'] = 'astag';
+        } elseif ($info && $info['scope'] === 'none') {
+            $r['cls'] = 'excluded'; $r['cls_src'] = 'astag_excluded';
+        } else {
+            // 還沒設定標籤：'none'＝製程欄本身是空的（純資料品質提示，跟猜測無關）、
+            // 'unknown'＝製程欄有字但沒設標籤，一律歸「尚未設定標籤」，不再猜全製還是單製
+            $r['cls'] = (trim((string)$r['proc']) === '') ? 'none' : 'unknown';
+            $r['cls_src'] = 'astag_unset';
         }
     }
     unset($r);
@@ -714,15 +712,11 @@ function oa_analyze(PDO $db, array $opt = []): array
     }
     unset($b);
 
-    /* ── 全製／單製／多製程：本期彙總 ＋ 每條規則命中幾筆（設定畫面要拿來校正用） ──
-       有設定「稽核製程標籤」的訂單一律優先採用標籤的 scope（上面的 cls_src='astag'／
-       'astag_excluded'），只有沒設定標籤的訂單才算進關鍵字規則命中／退回預設值這兩欄，
-       所以這裡要把兩種來源分開計數，不能再用「全製總數－規則命中數」去反推退回預設值的筆數
-       （那個算法在混入 AS 認定之後會算錯，因為 full 的總數現在含兩種來源）。 */
-    $ruleHits = [];
-    foreach ($rules as $i => $rr) $ruleHits[$i] = ['label' => $rr['label'], 'kw' => $rr['kw'], 'cls' => $rr['cls'], 'orders' => 0];
+    /* ── 全製／單製／多製程：本期彙總（2026-10-06 使用者交辦：直接依「稽核製程標籤（AS 認定）」
+       判定，不再退回關鍵字規則猜——$rules／oa_proc_class() 不刪，order_as_tag_lib.php 的
+       ot_astag_suggester() 批次補設定頁的「建議標籤」還在用它，只是這個分析結果不再採用。 */
     $procSamples = ['full' => [], 'single' => [], 'multi' => [], 'unknown' => [], 'none' => []];
-    $astagFull = 0; $astagSingle = 0; $astagMulti = 0; $astagExcluded = 0; $fallbackCnt = 0;
+    $astagFull = 0; $astagSingle = 0; $astagMulti = 0; $astagExcluded = 0; $astagUnsetCnt = 0;
     foreach ($rows as $r) {
         if (!$inSel($r) || !$inRange($r, $curE)) continue;
         if ($r['cls_src'] === 'astag') {
@@ -731,10 +725,8 @@ function oa_analyze(PDO $db, array $opt = []): array
             else $astagSingle++;
         } elseif ($r['cls_src'] === 'astag_excluded') {
             $astagExcluded++;
-        } elseif ($r['rule'] !== '') {
-            foreach ($ruleHits as $i => $h) if ($h['label'] === $r['rule']) { $ruleHits[$i]['orders']++; break; }
-        } elseif ($r['cls'] === 'full' || $r['cls'] === 'single') {
-            $fallbackCnt++;   // 沒有標籤、也沒命中任何關鍵字規則，退回設定的預設值
+        } else {
+            $astagUnsetCnt++;   // 還沒設定標籤（cls 為 unknown 或 none，不猜）
         }
         $c = $r['cls'];
         if (isset($procSamples[$c]) && count($procSamples[$c]) < 12 && $r['proc'] !== ''
@@ -978,9 +970,9 @@ function oa_analyze(PDO $db, array $opt = []): array
         'kpi'         => ['cur' => $kpiCur, 'cmp' => $kpiCmp],
         'trend'       => ['cur' => $trendCur, 'prev' => $trendPrev, 'prev_year' => $year - 1],
         'bands'       => $bandAgg,
-        'proc'        => ['rule_hits' => array_values($ruleHits), 'samples' => $procSamples,
+        'proc'        => ['samples' => $procSamples,
                            'astag_full' => $astagFull, 'astag_single' => $astagSingle, 'astag_multi' => $astagMulti,
-                           'astag_excluded' => $astagExcluded, 'fallback_count' => $fallbackCnt],
+                           'astag_excluded' => $astagExcluded, 'astag_unset' => $astagUnsetCnt],
         'astag'       => ['rows' => $astagRows, 'trend' => $astagTrend, 'buckets' => array_map(function ($b) { return $b['label']; }, oa_period_buckets($year, $gran)),
                            'unset' => $astagUnset, 'tagged_pct' => $astagTaggedPct],
         'clients'     => $clientRows,

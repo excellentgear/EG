@@ -338,7 +338,7 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
         <colgroup><col style="width:22%"><col style="width:16%"><col style="width:13%"><col style="width:10%">
                   <col style="width:10%"><col style="width:13%"><col style="width:16%"></colgroup>
         <thead><tr><th>料號</th><th>客戶</th><th>第一次出現</th><th>來源</th>
-                   <th>本期筆數</th><th>本期數量</th><th>本期金額</th></tr></thead>
+                   <th><span class="curLab">本期</span>筆數</th><th><span class="curLab">本期</span>數量</th><th><span class="curLab">本期</span>金額</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -347,8 +347,9 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
   <!-- ── 全製／單製 ───────────────────────────────────── -->
   <div class="sec" id="secProc">
     <h4><i class="fa fa-cogs" style="color:var(--amber-d);"></i> 全製／單製分析
-      <span class="hint">優先採用訂單上已設定的「稽核製程標籤（AS 認定）」；AS 認定標示為「不分單製全製」的（如廠內治具／其他非加工）不列入本區塊統計；
-        還沒設定標籤的訂單才用下面的「製程」欄文字關鍵字規則猜<?= $canSet ? '（可在「設定」調整規則）' : '' ?></span>
+      <span class="hint">直接依訂單上已設定的「稽核製程標籤（AS 認定）」判定，不使用關鍵字猜測；
+        AS 認定標示為「不分單製全製」的（如廠內治具／其他非加工）不列入本區塊統計；
+        還沒設定標籤的訂單歸入「尚未設定標籤」，不猜全製還是單製</span>
     </h4>
     <div class="two-col">
       <div><div id="chProcPie" class="chart-box"></div></div>
@@ -356,8 +357,8 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
     </div>
     <div style="margin-top:10px;">
       <table class="oa-t" id="tblProc">
-        <colgroup><col style="width:24%"><col style="width:14%"><col style="width:12%"><col style="width:12%"><col style="width:38%"></colgroup>
-        <thead><tr><th>規則</th><th>關鍵字</th><th>判定</th><th>本期命中筆數</th><th>本期出現過的製程寫法（抽樣）</th></tr></thead>
+        <colgroup><col style="width:30%"><col style="width:14%"><col style="width:56%"></colgroup>
+        <thead><tr><th>判定依據</th><th>本期筆數</th><th>說明</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -383,8 +384,8 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
     <table class="oa-t" id="tblAstag" style="margin-top:10px;">
       <colgroup><col style="width:22%"><col style="width:11%"><col style="width:11%"><col style="width:15%">
                 <col style="width:11%"><col style="width:15%"><col style="width:15%"></colgroup>
-      <thead><tr><th>分類（AS 認定）</th><th>本期筆數</th><th>本期數量</th><th>本期金額</th>
-                 <th>基期筆數</th><th>基期金額</th><th>較<span class="cmpLab">基期</span>增減</th></tr></thead>
+      <thead><tr><th>分類（AS 認定）</th><th><span class="curLab">本期</span>筆數</th><th><span class="curLab">本期</span>數量</th><th><span class="curLab">本期</span>金額</th>
+                 <th><span class="baseLab">基期</span>筆數</th><th><span class="baseLab">基期</span>金額</th><th>較<span class="cmpLab">基期</span>增減</th></tr></thead>
       <tbody></tbody>
     </table>
     <div class="oa-pager" id="astagPager" style="margin-top:6px;"></div>
@@ -445,7 +446,7 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
         <div class="tbl-wrap" style="max-height:300px;">
           <table class="oa-t" id="tblRankUp">
             <colgroup><col style="width:26%"><col style="width:25%"><col style="width:25%"><col style="width:24%"></colgroup>
-            <thead><tr><th>客戶</th><th>本期</th><th>基期</th><th>增減</th></tr></thead><tbody></tbody>
+            <thead><tr><th>客戶</th><th class="curLab">本期</th><th class="baseLab">基期</th><th>增減</th></tr></thead><tbody></tbody>
           </table>
         </div>
       </div>
@@ -454,7 +455,7 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
         <div class="tbl-wrap" style="max-height:300px;">
           <table class="oa-t" id="tblRankDown">
             <colgroup><col style="width:26%"><col style="width:25%"><col style="width:25%"><col style="width:24%"></colgroup>
-            <thead><tr><th>客戶</th><th>本期</th><th>基期</th><th>增減</th></tr></thead><tbody></tbody>
+            <thead><tr><th>客戶</th><th class="curLab">本期</th><th class="baseLab">基期</th><th>增減</th></tr></thead><tbody></tbody>
           </table>
         </div>
       </div>
@@ -556,11 +557,12 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
             四個來源各自最早的資料日期（資料視界）會印在說明列上，在那之前的歷史系統裡沒有。</li>
         <li><b>訂單狀態</b>：暫停／取消的訂單預設不列入（那不是實際接到的單），已結案的一律列入（那是正常做完的單）。
             要一起看請勾「含暫停/取消的訂單」。</li>
-        <li><b>全製／單製優先採用「稽核製程標籤（AS 認定）」</b>——那是訂單追蹤頁逐張人工確認過的結果，
-            比「製程」欄的關鍵字猜準確。<b>AS 認定標示為「不分單製全製」的（如廠內治具／其他非加工）
-            整筆不列入全製／單製的統計</b>（不算進分子也不算進分母）；還沒設定標籤的訂單才退回用製程欄的
-            文字關鍵字猜。規則與每條規則命中幾筆、以及 AS 認定各算到幾筆都列在「全製／單製分析」區塊，
-            猜得不對請到「設定」調整關鍵字；要提高準確度，更好的做法是直接到訂單追蹤逐筆補設定標籤。</li>
+        <li><b>全製／單製直接依「稽核製程標籤（AS 認定）」判定</b>——那是訂單追蹤頁逐張人工確認過的結果，
+            2026-10-06 起<b>不再用「製程」欄文字關鍵字猜</b>。<b>AS 認定標示為「不分單製全製」的（如廠內
+            治具／其他非加工）整筆不列入全製／單製的統計</b>（不算進分子也不算進分母）；還沒設定標籤的
+            訂單一律歸「尚未設定標籤」，不會被猜成全製或單製，各算到幾筆都列在「全製／單製分析」區塊。
+            要讓這個分析更準，請到訂單追蹤逐筆補設定標籤；關鍵字規則本身沒有刪，仍用於訂單追蹤
+            「批次補設定」頁面幫忙算出建議標籤（仍要人工確認）。</li>
         <li><b>AS 稽核分類</b>與上面的全製／單製是同一套 AS 認定結果，只是展開成每一個分類各自的統計；
             分類清單完全跟著「訂單追蹤 → 設定 → 稽核製程標籤（AS 認定）」目前的設定走，管理員新增／停用／
             改適用範圍，這裡會自動跟著變，不需要改這一頁的任何程式。</li>
@@ -645,7 +647,9 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
         訂單的「製程」欄是<b>手打的自由文字</b>（代料成品／代料完成／全製 (齒研)…），
         系統裡沒有欄位記著這張單是全製還是單製，所以用關鍵字判定。<b>由上往下比，先命中先算</b>。<br>
         關鍵字語法：<code>逗號</code>分隔＝<b>全部都要含</b>；同一個關鍵字裡用 <code>|</code> 分隔＝<b>任一即可</b>
-        （例：<code>代料|備料</code>）。判得對不對請看主畫面「全製／單製分析」裡每條規則命中幾筆。
+        （例：<code>代料|備料</code>）。<b>2026-10-06 起主畫面「全製／單製分析」改為直接依「稽核製程標籤
+        （AS 認定）」判定，不再用這組規則</b>；這組規則現在只用在訂單追蹤「批次補設定」頁面，
+        幫還沒設定標籤的訂單算出一個可參考的「建議標籤」，仍要人工確認過才會真的寫入。
       </div>
       <table class="oa-t" id="tblSetRule">
         <colgroup><col style="width:26%"><col style="width:40%"><col style="width:18%"><col style="width:16%"></colgroup>
@@ -995,6 +999,10 @@ function renderNote(){
        + (m.warn.no_part   ? '　有 <b>'+nf(m.warn.no_part)+'</b> 筆訂單沒有綁料號主檔，無法判定是不是新料號。' : ''));
   $('#noteBar').html('<div class="oa-note">'+h.join('<br>')+'</div>');
   $('.cmpLab').text(m.cmp_label);
+  // 2026-10-06 使用者交辦：表格欄位不要只印「本期／基期」這種無法分辨是哪一段的字，
+  // 一律帶出實際日期區間（粒度對得上就印短格式如「2026 Q4」，見 oa_period_buckets()）
+  $('.curLab').text(m.period.label);
+  $('.baseLab').text(m.cmp_period.label);
 }
 
 /* ── 訂單 KPI 未達標 → 本月要衝刺（使用者要求的提醒）──────── */
@@ -1241,7 +1249,10 @@ function renderNewTable(){
 }
 $('#newKw').on('input', function(){ if(DATA) renderNewTable(); });
 
-/* ── 全製／單製 ─────────────────────────────────────── */
+/* ── 全製／單製 ───────────────────────────────────────
+   2026-10-06 使用者交辦：直接依訂單上的「稽核製程標籤（AS 認定）」判定，不再用關鍵字猜；
+   還沒設定標籤的訂單一律歸「尚未設定標籤」（cls=unknown／製程欄空白者再細分 none），
+   不會被猜成全製或單製。 */
 function renderProc(){
   var c = DATA.kpi.cur, t = DATA.trend, pr = DATA.proc || {};
   var pie = [
@@ -1249,7 +1260,7 @@ function renderProc(){
     { name:'單製', y:c.single, color:C_BROWN }
   ];
   if(c.multi)   pie.push({ name:'多製程', y:c.multi, color:'#C9A227' });
-  if(c.unknown) pie.push({ name:'無法判定', y:c.unknown, color:C_SAND });
+  if(c.unknown) pie.push({ name:'尚未設定標籤', y:c.unknown, color:C_SAND });
   if(c.none)    pie.push({ name:'未填製程', y:c.none,    color:'#D9CDBC' });
   chart('chProcPie', opt({
     chart:{ type:'pie' },
@@ -1264,7 +1275,7 @@ function renderProc(){
     { name:'單製', data:t.cur.map(function(b){return b.single;}),  color:C_BROWN }
   ];
   if(c.multi)   ser.push({ name:'多製程', data:t.cur.map(function(b){return b.multi||0;}), color:'#C9A227' });
-  if(c.unknown) ser.push({ name:'無法判定', data:t.cur.map(function(b){return b.unknown;}), color:C_SAND });
+  if(c.unknown) ser.push({ name:'尚未設定標籤', data:t.cur.map(function(b){return b.unknown;}), color:C_SAND });
   if(c.none)    ser.push({ name:'未填製程', data:t.cur.map(function(b){return b.none;}),    color:'#D9CDBC' });
   chart('chProcStack', opt({
     chart:{ type:'column' },
@@ -1276,25 +1287,16 @@ function renderProc(){
     series: ser
   }));
   var samp = (pr.samples)||{}, h='';
-  (pr.rule_hits||[]).forEach(function(r){
-    h += '<tr><td>'+esc(r.label)+'</td><td>'+esc(r.kw)+'</td>'
-       + '<td style="text-align:center;">'+(r.cls==='full'?'全製':'單製')+'</td>'
-       + '<td class="n">'+nf(r.orders)+'</td><td></td></tr>';
-  });
-  /* AS 認定（人設定的稽核製程標籤）直接算出的筆數：不是規則命中、也不是退回預設值，
-     跟下面兩列（關鍵字規則命中／沒命中退回預設值）是互斥的三種來源，三者合計才等於
-     上面圖表全部類別的總筆數。 */
-  h += '<tr><td colspan="3" style="color:#2E7D32;">依訂單上的「稽核製程標籤（AS 認定）」判定</td>'
+  h += '<tr><td style="color:#2E7D32;">依訂單上的「稽核製程標籤（AS 認定）」判定</td>'
      + '<td class="n">'+nf((pr.astag_full||0)+(pr.astag_single||0)+(pr.astag_multi||0))+'</td>'
      + '<td style="font-size:11px;color:#a08a6f;">全製 '+nf(pr.astag_full||0)+'／單製 '+nf(pr.astag_single||0)
      + '／多製程 '+nf(pr.astag_multi||0)+'</td></tr>';
-  h += '<tr><td colspan="3" style="color:#a08a6f;">沒有標籤、也沒有命中任何規則 → 歸為「'
-     + (DATA.meta.fallback==='full'?'全製':(DATA.meta.fallback==='single'?'單製':'無法判定'))+'」</td>'
-     + '<td class="n">'+nf(pr.fallback_count||0)+'</td>'
-     + '<td style="font-size:11px;color:#a08a6f;">'+esc((samp[DATA.meta.fallback]||[]).slice(0,6).join('、'))+'</td></tr>';
-  if(pr.astag_excluded) h += '<tr><td colspan="3" style="color:#a08a6f;">AS 認定為「不分單製全製」（如廠內治具／其他非加工），不列入本區塊統計</td>'
+  h += '<tr><td style="color:#a08a6f;">尚未設定標籤（不猜全製或單製）</td>'
+     + '<td class="n">'+nf(pr.astag_unset||0)+'</td>'
+     + '<td style="font-size:11px;color:#a08a6f;">其中製程欄空白 '+nf(DATA.kpi.cur.none||0)+' 筆'
+     + ((samp.unknown||[]).length ? '；例如：'+esc(samp.unknown.slice(0,6).join('、')) : '')+'</td></tr>';
+  if(pr.astag_excluded) h += '<tr><td style="color:#a08a6f;">AS 認定為「不分單製全製」（如廠內治具／其他非加工），不列入本區塊統計</td>'
      + '<td class="n">'+nf(pr.astag_excluded)+'</td><td></td></tr>';
-  h += '<tr><td colspan="3" style="color:#a08a6f;">製程欄空白</td><td class="n">'+nf(DATA.kpi.cur.none)+'</td><td></td></tr>';
   $('#tblProc tbody').html(h);
 }
 
@@ -1549,6 +1551,8 @@ function renderParts(){
 $('#btnCsv').on('click', function(){
   if(!DATA){ alert('請先計算'); return; }
   var m = DATA.meta, L = [];
+  // 2026-10-06 使用者交辦：表格欄位不要只印「本期／基期」，一律帶出實際日期區間短格式（如「2026 Q4」）
+  var curL = m.period.label, baseL = m.cmp_period.label;
   function row(){ L.push(Array.prototype.slice.call(arguments).map(function(v){
     v = (v==null)?'':String(v);
     return /[",\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v;
@@ -1559,7 +1563,7 @@ $('#btnCsv').on('click', function(){
   row('※金額只計「有填單價」的訂單', '本期 '+DATA.kpi.cur.px_orders+'/'+DATA.kpi.cur.orders+' 張有單價',
       '基期 '+DATA.kpi.cmp.px_orders+'/'+DATA.kpi.cmp.orders+' 張');
   row('');
-  row('【摘要】','項目','本期','基期');
+  row('【摘要】','項目',curL,baseL);
   [['訂單筆數','orders'],['訂單數量','qty'],['訂單金額','amount'],['下單客戶數','clients'],
    ['受訂料號數','parts'],['新料號','new_parts'],['新料號訂單','new_orders'],['新料號金額','new_amount'],
    ['全製筆數','full'],['單製筆數','single']].forEach(function(x){
@@ -1572,24 +1576,18 @@ $('#btnCsv').on('click', function(){
   row('【數量區間】','區間','筆數','佔筆數%','數量','佔數量%','金額','佔金額%');
   DATA.bands.forEach(function(b){ row('', b.label, b.orders, b.pct_orders, b.qty, b.pct_qty, Math.round(b.amount), b.pct_amount); });
   row('');
-  row('【全製/單製】','規則','關鍵字','判定','命中筆數');
-  (DATA.proc.rule_hits||[]).forEach(function(r){ row('', r.label, r.kw, r.cls==='full'?'全製':'單製', r.orders); });
-  row('', '依AS認定判定', '', '全製', DATA.proc.astag_full||0);
-  row('', '依AS認定判定', '', '單製', DATA.proc.astag_single||0);
-  row('', '依AS認定判定', '', '多製程', DATA.proc.astag_multi||0);
-  row('', '沒有標籤也沒命中規則', '', '退回預設值', DATA.proc.fallback_count||0);
-  row('', '合計', '', '全製', DATA.kpi.cur.full);
-  row('', '合計', '', '單製', DATA.kpi.cur.single);
-  row('', '合計', '', '多製程', DATA.kpi.cur.multi||0);
-  row('', '合計', '', '未填製程', DATA.kpi.cur.none);
-  row('', '合計', '', 'AS認定不分單製全製(不列入)', DATA.kpi.cur.excluded||0);
+  row('【全製/單製】（直接依稽核製程標籤AS認定判定，不使用關鍵字猜測）','判定依據','全製','單製','多製程');
+  row('', '依AS認定判定', DATA.proc.astag_full||0, DATA.proc.astag_single||0, DATA.proc.astag_multi||0);
+  row('', '尚未設定標籤(不猜)', DATA.proc.astag_unset||0, '', '');
+  row('', '其中製程欄空白', DATA.kpi.cur.none||0, '', '');
+  row('', 'AS認定不分單製全製(不列入)', DATA.proc.astag_excluded||0, '', '');
   row('');
-  row('【AS 稽核分類】','分類','本期筆數','本期數量','本期金額','基期筆數','基期數量','基期金額');
+  row('【AS 稽核分類】','分類',curL+'筆數',curL+'數量',curL+'金額',baseL+'筆數',baseL+'數量',baseL+'金額');
   (DATA.astag && DATA.astag.rows || []).forEach(function(t){
     row('', astagLabelText(t), t.cur.orders, t.cur.qty, Math.round(t.cur.amount), t.cmp.orders, t.cmp.qty, Math.round(t.cmp.amount));
   });
   row('');
-  row('【客戶（全部）】','客戶','客戶編號','本期筆數','本期數量','本期金額','基期筆數','基期數量','基期金額',
+  row('【客戶（全部）】','客戶','客戶編號',curL+'筆數',curL+'數量',curL+'金額',baseL+'筆數',baseL+'數量',baseL+'金額',
       '料號數','新料號','全製','單製','狀態');
   (DATA.clients||[]).forEach(function(c){
     row('', c.name, c.cid, c.cur.orders, c.cur.qty, Math.round(c.cur.amount),
@@ -1597,13 +1595,13 @@ $('#btnCsv').on('click', function(){
         (c.flag==='new'?'新客戶':(c.flag==='return'?'回流客戶':(c.flag==='lost'?'本期掛零':'')))+(c.bad?' 未建主檔':''));
   });
   row('');
-  row('【受訂料號排名】','#','料號','客戶','本期筆數','本期數量','本期金額','基期金額','是否新料號','第一次出現','來源');
+  row('【受訂料號排名】','#','料號','客戶',curL+'筆數',curL+'數量',curL+'金額',baseL+'金額','是否新料號','第一次出現','來源');
   (DATA.rank_parts||[]).forEach(function(p,i){
     row('', i+1, p.pno, p.cname, p.cur.orders, p.cur.qty, Math.round(p.cur.amount), Math.round(p.cmp.amount),
         p.is_new?'新':'', p.first, (m.source_labels||{})[p.fsrc]||p.fsrc);
   });
   row('');
-  row('【新料號明細】','料號','客戶','第一次出現','來源','本期筆數','本期數量','本期金額');
+  row('【新料號明細】','料號','客戶','第一次出現','來源',curL+'筆數',curL+'數量',curL+'金額');
   (DATA.new_list||[]).forEach(function(p){
     row('', p.pno, p.cname, p.first, (m.source_labels||{})[p.fsrc]||p.fsrc, p.orders, p.qty, Math.round(p.amount));
   });
@@ -1643,6 +1641,7 @@ function prChartSvg(id, w, h){
 function prBadgeTxt(lv){ return lv==='bad'?'要處理':(lv==='warn'?'要注意':(lv==='good'?'正面':'說明')); }
 function oaPrintHtml(){
   var m = DATA.meta, k = DATA.kpi, useAmt = (m.px_cov_cur>=30 && m.px_cov_cmp>=30);
+  var curL = m.period.label, baseL = m.cmp_period.label;   // 本期／基期一律印實際期間短格式
   var printTime = new Date().toLocaleString('zh-TW');
 
   var css =
@@ -1745,18 +1744,20 @@ function oaPrintHtml(){
     bandRows += '<tr><td>'+esc(b.label)+'</td><td class="tr">'+nf(b.orders)+'</td><td class="tr">'+b.pct_orders+'%</td>'+
       '<td class="tr">'+money(b.amount)+'</td></tr>';
   });
-  var ruleRows = ''; (DATA.proc.rule_hits||[]).forEach(function(r){
-    ruleRows += '<tr><td>'+esc(r.label)+'</td><td class="tc">'+(r.cls==='full'?'全製':'單製')+'</td><td class="tr">'+nf(r.orders)+'</td></tr>';
-  });
+  // 直接依稽核製程標籤（AS 認定）判定，不使用關鍵字猜測（2026-10-06）
+  var procRows = '<tr><td>依AS認定判定</td><td class="tc">全製／單製／多製程</td><td class="tr">'
+    + nf(DATA.proc.astag_full||0)+'／'+nf(DATA.proc.astag_single||0)+'／'+nf(DATA.proc.astag_multi||0)+'</td></tr>'
+    + '<tr><td>尚未設定標籤（不猜）</td><td class="tc">—</td><td class="tr">'+nf(DATA.proc.astag_unset||0)+'</td></tr>'
+    + (DATA.proc.astag_excluded ? '<tr><td>AS認定不分單製全製（不列入）</td><td class="tc">—</td><td class="tr">'+nf(DATA.proc.astag_excluded)+'</td></tr>' : '');
   h += '<div class="pr-sec"><div class="pr-two">'+
     '<div><div class="pr-sec-title">數量區間分析</div>'+
       (bandSvg?'<div class="pr-chart">'+bandSvg+'</div>':'')+
       '<table><colgroup><col style="width:34%"><col style="width:20%"><col style="width:20%"><col style="width:26%"></colgroup>'+
       '<thead><tr><th>區間</th><th class="tr">筆數</th><th class="tr">佔比</th><th class="tr">金額</th></tr></thead><tbody>'+bandRows+'</tbody></table></div>'+
-    '<div><div class="pr-sec-title">全製／單製分析</div>'+
+    '<div><div class="pr-sec-title">全製／單製分析（依稽核製程標籤AS認定）</div>'+
       (procSvg?'<div class="pr-chart">'+procSvg+'</div>':'')+
       '<table><colgroup><col style="width:44%"><col style="width:24%"><col style="width:32%"></colgroup>'+
-      '<thead><tr><th>規則</th><th class="tc">判定</th><th class="tr">命中筆數</th></tr></thead><tbody>'+ruleRows+'</tbody></table></div>'+
+      '<thead><tr><th>判定依據</th><th class="tc">分類</th><th class="tr">筆數</th></tr></thead><tbody>'+procRows+'</tbody></table></div>'+
     '</div></div>';
 
   // AS 稽核分類（依訂單追蹤「稽核製程標籤」認定；分類數隨管理員設定自動變動）
@@ -1770,7 +1771,7 @@ function oaPrintHtml(){
         (astagPieSvg?'<div class="pr-chart">'+astagPieSvg+'</div>':'')+'</div>'+
       '<div><div class="pr-sec-title">　</div>'+
         '<table><colgroup><col style="width:50%"><col style="width:24%"><col style="width:26%"></colgroup>'+
-        '<thead><tr><th>分類</th><th class="tr">本期筆數</th><th class="tr">本期金額</th></tr></thead>'+
+        '<thead><tr><th>分類</th><th class="tr">'+esc(curL)+'筆數</th><th class="tr">'+esc(curL)+'金額</th></tr></thead>'+
         '<tbody>'+(astagRows||'<tr><td colspan="3" class="tc">無</td></tr>')+'</tbody></table></div>'+
       '</div></div>';
   }
@@ -1790,10 +1791,10 @@ function oaPrintHtml(){
   h += '<div class="pr-sec"><div class="pr-two">'+
     '<div><div class="pr-sec-title" style="border-left-color:#4F8A4F;">成長客戶（前 '+ups.length+' 家）</div>'+
       '<table><colgroup><col style="width:38%"><col style="width:20%"><col style="width:20%"><col style="width:22%"></colgroup>'+
-      '<thead><tr><th>客戶</th><th class="tr">本期</th><th class="tr">基期</th><th class="tr">增減</th></tr></thead><tbody>'+rankRows(ups)+'</tbody></table></div>'+
+      '<thead><tr><th>客戶</th><th class="tr">'+esc(curL)+'</th><th class="tr">'+esc(baseL)+'</th><th class="tr">增減</th></tr></thead><tbody>'+rankRows(ups)+'</tbody></table></div>'+
     '<div><div class="pr-sec-title" style="border-left-color:#DD5138;">衰退客戶（前 '+downs.length+' 家）</div>'+
       '<table><colgroup><col style="width:38%"><col style="width:20%"><col style="width:20%"><col style="width:22%"></colgroup>'+
-      '<thead><tr><th>客戶</th><th class="tr">本期</th><th class="tr">基期</th><th class="tr">增減</th></tr></thead><tbody>'+rankRows(downs)+'</tbody></table></div>'+
+      '<thead><tr><th>客戶</th><th class="tr">'+esc(curL)+'</th><th class="tr">'+esc(baseL)+'</th><th class="tr">增減</th></tr></thead><tbody>'+rankRows(downs)+'</tbody></table></div>'+
     '</div></div>';
 
   // 訂单量監控（移動平均）
