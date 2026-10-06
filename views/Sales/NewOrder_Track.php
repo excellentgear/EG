@@ -7009,9 +7009,15 @@ foreach($dCounts as $c) {
             // ※ 新增：客戶由系統帶入，設為唯讀
             setPartModalCustomerReadonly(true);
             // 先隱藏快速綁定 Modal，再開料號設定 Modal
+            // ※ 2026-10-06 修正：Bootstrap 的 modal('show') 在「另一個 modal 的
+            //   hidden.bs.modal 事件處理常式裡」同步呼叫會悄悄失敗（isShown 被設成
+            //   true，但 backdrop／modal-open／display:block 全部沒有真的套用，
+            //   畫面上完全看不到新跳窗、也不報任何錯誤）——這是使用者實測回報
+            //   「點選新建料號沒出現跳窗」的真因，用 setTimeout(0) 讓前一個 modal
+            //   的隱藏流程完全跑完、呼叫堆疊清空後再開新的，才會正常顯示。
             $('#quickBindModal').modal('hide');
             $('#quickBindModal').one('hidden.bs.modal', function() {
-                $('#partSettingsModal').modal('show');
+                setTimeout(function() { $('#partSettingsModal').modal('show'); }, 0);
             });
         }
         function submitQuickAddPart() {
@@ -7731,9 +7737,12 @@ foreach($dCounts as $c) {
             var clientText = $('#qb-client-current').text().replace(/「|」/g, '').trim();
             if (clientText) $('#customer_name_modal').val(clientText);
             // 先隱藏快速綁定 Modal，再開客戶設定 Modal
+            // ※ 2026-10-06 修正：同下方 openPartSettingsFromQb() 的 setTimeout(0) 理由
+            // ——modal('show') 在另一個 modal 的 hidden.bs.modal 處理常式裡同步呼叫會
+            // 悄悄失敗，畫面上完全看不到新跳窗也不報錯。
             $('#quickBindModal').modal('hide');
             $('#quickBindModal').one('hidden.bs.modal', function() {
-                $('#customerSettingsModal').modal('show');
+                setTimeout(function() { $('#customerSettingsModal').modal('show'); }, 0);
             });
         }
 
@@ -7807,13 +7816,14 @@ foreach($dCounts as $c) {
                         var newCustomer = { customer_id: savedId, customer: savedName };
                         qbSelectedCustomer = newCustomer;
                         // 關閉 customerSettingsModal，重開快速綁定 Modal
+                        // ※ 2026-10-06 修正：同 openPartSettingsFromQb() 的 setTimeout(0) 理由
                         $('#customerSettingsModal').modal('hide');
                         $('#customerSettingsModal').one('hidden.bs.modal', function() {
                             // 更新客戶欄顯示
                             $('#qb-client-list').html('<span class="label label-success" style="font-size:11px;"><i class="fa fa-check"></i> ' + escapeHtml(savedId) + ' ' + escapeHtml(savedName) + '</span>');
                             $('#qb-client-new-area').hide();
                             updateQbSummary();
-                            $('#quickBindModal').modal('show');
+                            setTimeout(function() { $('#quickBindModal').modal('show'); }, 0);
                         });
                         return;
                     }
@@ -8067,6 +8077,7 @@ foreach($dCounts as $c) {
                                 if (!found) found = r2.data[0]; // fallback 取第一筆
                             }
                             // 關閉料號設定 Modal，開啟快速綁定 Modal
+                            // ※ 2026-10-06 修正：同 openPartSettingsFromQb() 的 setTimeout(0) 理由
                             $('#partSettingsModal').modal('hide');
                             $('#partSettingsModal').one('hidden.bs.modal', function() {
                                 if (found) {
@@ -8078,7 +8089,7 @@ foreach($dCounts as $c) {
                                     $('#qb-part-new-area').hide();
                                 }
                                 updateQbSummary();
-                                $('#quickBindModal').modal('show');
+                                setTimeout(function() { $('#quickBindModal').modal('show'); }, 0);
                             });
                         }, 'json');
                         return;
