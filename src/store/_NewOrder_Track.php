@@ -831,6 +831,14 @@ try {
             return $best;
         };
 
+        // 稽核製程標籤（2026-10-06 使用者要求）：OP轉訂單跟「新增/編輯訂單」共用同一套必選規則，
+        // 不然開了「存檔必選」卻能從 OP 這條路繞過去，等於這個開關沒有真的生效。
+        // ensure_schema 一定要在交易開始之前先跑過一次——DDL 在交易中會隱式 commit（本專案已踩過兩次），
+        // 若等到迴圈裡第一次呼叫 ot_astag_validate() 才觸發，那時人已經在交易裡，資料表沒建過的話
+        // 整批驗證會被迫全部當成「標籤不存在」擋下。
+        $__asReq = false;
+        try { ot_astag_ensure_schema($db); $__asReq = ot_astag_require_save($db); } catch (Throwable $e) { $__asReq = false; }
+
         $db->beginTransaction();
         try {
             $created = [];
@@ -927,6 +935,16 @@ try {
                 $clientId   = !empty($src['part_customer_id']) ? $src['part_customer_id'] : $src['quote_client_id'];
                 $clientName = !empty($src['part_customer_id']) ? $src['part_customer_name'] : $src['quote_client_name'];
 
+                // 稽核製程標籤：前端在批次畫面逐列（或批次套用）選好才送，鐵律8 這裡用同一套規則再驗一次。
+                // 沒送這個欄位＝沒選，allowEmpty 吃全站「存檔必選」開關，跟新增/編輯訂單一致。
+                $asTagSent  = array_key_exists('as_tag_id', $row);
+                $asTagId    = $asTagSent ? (int)($row['as_tag_id'] ?? 0) : 0;
+                $asTagScope = $asTagSent ? trim((string)($row['as_tag_scope'] ?? '')) : '';
+                $asTagCheck = ot_astag_validate($db, $asTagId, $asTagScope, $clientId, !$__asReq);
+                if (!$asTagCheck['ok']) {
+                    throw new Exception('料號 ' . $src['product_id'] . '：' . $asTagCheck['msg']);
+                }
+
                 $processes        = eg_process_names_for($db, $src['process_notes']);
                 $processing_items = $processes !== '' ? $processes : ($src['specification'] ?? '');
 
@@ -964,6 +982,8 @@ try {
                     'order_oo'    => $orderNo,
                     'd_id'        => $src['D_Setting_Id'],
                     'is_assembly' => intval($src['Is_Assembly']) === 1,
+                    'as_tag_id'   => (int)$asTagCheck['tag_id'],
+                    'as_tag_scope'=> (string)$asTagCheck['scope'],
                 ];
             }
 
@@ -1006,6 +1026,14 @@ try {
             foreach ($created as $c) { ot_auto_pmget_apply($db, (int)$c['order_id']); }
 
             $db->commit();
+            // 稽核製程標籤：寫入一律走 ot_astag_apply_to_order()（唯一寫入點）；刻意放在 commit() 之後，
+            // 單筆標籤寫入失敗也不可以害整批訂單跟著建立失敗（比照拆批沿用母訂單標籤的既有寫法）。
+            foreach ($created as $c) {
+                if ((int)($c['as_tag_id'] ?? 0) > 0) {
+                    try { ot_astag_apply_to_order($db, (int)$c['order_id'], (int)$c['as_tag_id'], (string)$c['as_tag_scope'], $userId, 'opconv'); }
+                    catch (Throwable $eAsTag) {}
+                }
+            }
             echo json_encode(['success' => true, 'created' => $created, 'message' => '已建立 ' . count($created) . ' 筆訂單']);
         } catch (PDOException $e) {
             if ($db->inTransaction()) $db->rollBack();

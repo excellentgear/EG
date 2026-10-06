@@ -877,7 +877,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $quote_id = intval($_POST['quote_id'] ?? 0);
             if (!$quote_id) throw new Exception('未指定報價單ID');
 
-            $stmtQ = $pdo->prepare("SELECT quote_id, quote_no, quote_date, client_name, is_negotiation FROM quotation_list WHERE quote_id = ?");
+            $stmtQ = $pdo->prepare("SELECT quote_id, quote_no, quote_date, client_name, client_id, is_negotiation FROM quotation_list WHERE quote_id = ?");
             $stmtQ->execute([$quote_id]);
             $quote = $stmtQ->fetch(PDO::FETCH_ASSOC);
             if (!$quote) throw new Exception('找不到報價單');
@@ -5531,6 +5531,7 @@ foreach($dCounts as $c) {
                                             <th style="min-width:110px;">指派設計</th>
                                             <th style="min-width:110px;">設計接收日</th>
                                             <th style="min-width:150px;">訂單編號</th>
+                                            <th style="min-width:150px;">製程標籤<small id="op-astag-th-note" style="font-weight:400;color:#999;"><br>（AS 認定，選填）</small></th>
                                         </tr>
                                     </thead>
                                     <tbody id="op-items-tbody"></tbody>
@@ -5587,6 +5588,15 @@ foreach($dCounts as $c) {
                                             <option value="1">容差後區間</option>
                                         </select>
                                         <span class="input-group-btn"><button type="button" class="btn btn-default" onclick="opApplyBatch('tolmatch')">套用</button></span>
+                                    </div>
+                                </div>
+                                <!-- 製程標籤（稽核製程／AS 認定，2026-10-06 使用者要求）：整批同一個客戶，
+                                     候選選項在選定 OP 單時一次載入（見 opAstagLoadOptions），個別列仍可改。 -->
+                                <div class="col-xs-3" style="padding:0 5px;">
+                                    <label style="font-size:11px;">製程標籤<small style="color:#999;">（AS 認定）</small></label>
+                                    <div class="input-group input-group-sm">
+                                        <select class="form-control" id="op-batch-astag"><option value="">載入中…</option></select>
+                                        <span class="input-group-btn"><button type="button" class="btn btn-default" onclick="opApplyBatch('astag')">套用</button></span>
                                     </div>
                                 </div>
                             </div>
@@ -11579,6 +11589,8 @@ foreach($dCounts as $c) {
             $('#op-batch-delivery, #op-batch-ateget').val('');
             $('#op-batch-ps, #op-batch-orderno').val('');
             $('#op-batch-ate').val('2');
+            $('#op-batch-astag').html('<option value="">載入中…</option>');
+            OP_ASTAG_OPTS = [];
             opCurrentQuote = null;
             opSwitchSearchTab('no');
 
@@ -11677,6 +11689,7 @@ foreach($dCounts as $c) {
                 $('#op-modal-footer-items').show();
                 $('#op-items-header').html('<i class="fa fa-file-text-o"></i> ' + escapeHtml(opCurrentQuote.quote_no) + opNegoBadge(opCurrentQuote.is_negotiation) +
                     '　客戶：' + escapeHtml(opCurrentQuote.client_name || ''));
+                opAstagLoadOptions(opCurrentQuote.client_id || '');
             }, 'json').fail(function() { showOrderAlert('連線失敗，請稍後再試'); });
         }
 
@@ -11796,9 +11809,50 @@ foreach($dCounts as $c) {
                 $tr.append($('<td></td>').append($('<select class="form-control input-sm op-f-ate"></select>').html(ateOptionsHtml)));
                 $tr.append($('<td></td>').append($('<input type="date" class="form-control input-sm op-f-ateget">').val(todayStr)));
                 $tr.append($('<td></td>').append($('<input type="text" class="form-control input-sm op-f-orderno" placeholder="OO...">')));
+                $tr.append($('<td></td>').append($('<select class="form-control input-sm op-f-astag"></select>').html(opAstagRowSelectHtml())));
                 $tb.append($tr);
             });
             $('#op-check-all').prop('checked', false);
+        }
+
+        // ── OP轉訂單：製程標籤（稽核製程／AS 認定，2026-10-06 使用者要求）────────
+        // 整批 OP 單共用同一個客戶（opCurrentQuote.client_id），候選選項選定 OP 單時一次載入；
+        // 個別列可改、也可用下方「批次套用」一次套給勾選的列，兩種方式並存。
+        var OP_ASTAG_OPTS = [];
+        function opAstagRowSelectHtml(selKey) {
+            var h = '<option value="">（未設定）</option>' + astagOptionsGroupedHtml(OP_ASTAG_OPTS);
+            var $tmp = $('<select></select>').html(h);
+            if (selKey) $tmp.val(selKey);
+            return $tmp.html();
+        }
+        function opAstagRenderBatchSelect() {
+            $('#op-batch-astag').html('<option value="">（不設定）</option>' + astagOptionsGroupedHtml(OP_ASTAG_OPTS));
+        }
+        function opAstagRenderRowSelects() {
+            // 既有列（已畫出來的）換成正式選項；使用者這時通常還沒選，所以不特別保留舊值也沒關係
+            $('#op-items-tbody .op-f-astag').each(function() {
+                var cur = $(this).val();
+                $(this).html(opAstagRowSelectHtml(cur));
+            });
+        }
+        function opAstagHeaderSync() {
+            $('#op-astag-th-note').html(window.AS_TAG_REQUIRE
+                ? '<br><span style="color:#DD5138;">（AS 認定，必選）</span>' : '<br>（AS 認定，選填）');
+        }
+        function opAstagLoadOptions(clientId) {
+            OP_ASTAG_OPTS = [];
+            $('#op-batch-astag').html('<option value="">載入中…</option>');
+            $.post(astagApiBase(), { action: 'options', client_id: clientId || '' }, function(res) {
+                if (res && res.success) {
+                    OP_ASTAG_OPTS = res.options || [];
+                    window.AS_TAG_REQUIRE = !!parseInt(res.require_save || 0, 10);
+                }
+                opAstagRenderBatchSelect();
+                opAstagRenderRowSelects();
+                opAstagHeaderSync();
+            }, 'json').fail(function() {
+                $('#op-batch-astag').html('<option value="">（載入失敗）</option>');
+            });
         }
 
         // ── OP轉訂單附件（整批共用一個暫存批次；多料號時可指定對應料號或「共用(全部)」）──
@@ -11957,6 +12011,8 @@ foreach($dCounts as $c) {
                 $checked.find('.op-f-ateget').val($('#op-batch-ateget').val());
             } else if (field === 'orderno') {
                 $checked.find('.op-f-orderno').val($('#op-batch-orderno').val().trim().toUpperCase());
+            } else if (field === 'astag') {
+                $checked.find('.op-f-astag').val($('#op-batch-astag').val());
             } else if (field === 'tolmatch') {
                 // 全部改用容差區間對價／改回容差前（報價）區間對價
                 var on = $('#op-batch-tolmatch').val() === '1';
@@ -12006,7 +12062,14 @@ foreach($dCounts as $c) {
                     var vr = validateOrderNo(orderNo);
                     if (!vr.valid) { errMsg = '料號 ' + label + ' 訂單編號有誤：' + vr.msg; return; }
                 }
+                var astagKey = $tr.find('.op-f-astag').val() || '';
+                if (window.AS_TAG_REQUIRE && !astagKey) { errMsg = '料號 ' + label + ' 尚未選擇製程標籤（管理員已開啟「存檔必選」）。'; return; }
                 var payload = { quote_item_id: it.item_id, order_no: orderNo, delivery_date: delivery, order_ps: ps, ate: ate, ateget: ateget };
+                if (astagKey) {
+                    var astagParts = astagKey.split(':');
+                    payload.as_tag_id = astagParts[0];
+                    payload.as_tag_scope = astagParts[1] || '';
+                }
                 if (it.converted_order_oo) {
                     payload.repeat_confirm = 1;
                     repeatLabels.push(label + '（先前：' + it.converted_order_oo + '）');
