@@ -812,6 +812,49 @@ function oa_analyze(PDO $db, array $opt = []): array
     $astagUnsetOrd  = (int)($astagUnset['cur']['orders'] ?? 0);
     $astagTaggedPct = $kpiCur['orders'] ? round(100 - ($astagUnsetOrd * 100 / $kpiCur['orders']), 1) : 0.0;
 
+    /* ── 數量區間交叉表（2026-10-06 使用者交辦：數量區間分析要分「全部」／「依訂單標籤分類」／
+       「依全製/多製程/單製」三種）。沿用上面已經算好的 $bandAgg（含「未涵蓋」那一列，若有）、
+       $byAstag（AS 認定分類清單與排序，不重新列一次——鐵律4）。「全部」就是上面原本的 $bandAgg，
+       這裡只需要再算兩個交叉表：band_by_cls（cls 只取全製/多製程/單製/尚未設定/不列入五種，
+       跟使用者這次講的「全製/多製程/單製」同一個口徑，unknown 與 none 合併成「尚未設定標籤」
+       避免跟上面「判定依據」表又拆出 AS單製/單製 搞混——這裡要的是粗分類不是細分類）、
+       band_by_astag（逐一 AS 認定分類，給「依訂單標籤分類」用）。 */
+    $bandN  = count($bandAgg);
+    $naIdx  = ($bandNA['orders'] > 0) ? ($bandN - 1) : -1;
+    $clsGroupOf = function (string $cls): string {
+        if ($cls === 'unknown' || $cls === 'none') return 'unknown';
+        return $cls;
+    };
+    $clsOrder  = ['full', 'multi', 'single', 'unknown', 'excluded'];
+    $clsLabel  = ['full' => '全製', 'multi' => '多製程', 'single' => '單製',
+                  'unknown' => '尚未設定標籤', 'excluded' => '不分單製全製（不列入）'];
+    $bandByCls = [];
+    foreach ($clsOrder as $ck) $bandByCls[$ck] = ['key' => $ck, 'label' => $clsLabel[$ck], 'bands' => array_fill(0, $bandN, 0)];
+    $bandByAstag = [];
+    foreach ($byAstag as $k => $meta) {
+        $bandByAstag[$k] = ['key' => $k, 'label' => $meta['label'], 'is_proc' => $meta['is_proc'],
+                             'sort_order' => $meta['sort_order'], 'bands' => array_fill(0, $bandN, 0)];
+    }
+    foreach ($rows as $r) {
+        if (!$inSel($r) || !$inRange($r, $curE)) continue;
+        $i  = oa_band_index((int)$r['qty'], $bands);
+        $bi = ($i >= 0) ? $i : $naIdx;
+        if ($bi < 0) continue;   // 理論上不會發生：走到這裡代表至少有一筆落在「未涵蓋」
+        $bandByCls[$clsGroupOf($r['cls'])]['bands'][$bi]++;
+        $k = $r['as_key'];
+        if (!isset($bandByAstag[$k])) {
+            $bandByAstag[$k] = ['key' => $k, 'label' => $r['as_label'], 'is_proc' => $r['as_proc'],
+                                 'sort_order' => 99999, 'bands' => array_fill(0, $bandN, 0)];
+        }
+        $bandByAstag[$k]['bands'][$bi]++;
+    }
+    $bandByCls = array_values(array_filter($bandByCls, function ($x) { return array_sum($x['bands']) > 0; }));
+    $bandByAstag = array_values(array_filter($bandByAstag, function ($x) { return array_sum($x['bands']) > 0; }));
+    usort($bandByAstag, function ($a, $b) {
+        if ($a['is_proc'] !== $b['is_proc']) return $b['is_proc'] <=> $a['is_proc'];
+        return $a['sort_order'] <=> $b['sort_order'];
+    });
+
     /* ── 客戶比較：選了客戶就比那幾家，沒選就自動取本期金額（無金額時用筆數）前 8 名 ── */
     $byClient = [];
     $accum = function (array $p, string $slot) use ($rows, &$byClient, $inSel, $isNewIn, $inRange) {
@@ -977,6 +1020,8 @@ function oa_analyze(PDO $db, array $opt = []): array
         'kpi'         => ['cur' => $kpiCur, 'cmp' => $kpiCmp],
         'trend'       => ['cur' => $trendCur, 'prev' => $trendPrev, 'prev_year' => $year - 1],
         'bands'       => $bandAgg,
+        'band_by_cls'   => $bandByCls,
+        'band_by_astag' => $bandByAstag,
         'proc'        => ['samples' => $procSamples,
                            'astag_full_as' => $astagFullAs, 'astag_full_other' => $astagFullOther,
                            'astag_single_as' => $astagSingleAs, 'astag_single_other' => $astagSingleOther,

@@ -394,13 +394,17 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
   <!-- ── 數量區間 ─────────────────────────────────────── -->
   <div class="sec" id="secBand">
     <h4><i class="fa fa-sliders" style="color:var(--amber-d);"></i> 數量區間分析
-      <span class="hint"><?= $canSet ? '區間可在「設定」調整' : '區間由管理員設定' ?></span>
+      <span class="hint"><?= $canSet ? '區間可在「設定」調整' : '區間由管理員設定' ?>；
+        可切換「全部」／「依訂單標籤分類」／「依全製/多製程/單製」三種角度</span>
+      <span class="sec-tools">
+        <button type="button" class="btn btn-xs btn-primary" id="bandTabAll" onclick="bandTab('all')">全部</button>
+        <button type="button" class="btn btn-xs btn-default" id="bandTabAstag" onclick="bandTab('astag')">依訂單標籤分類</button>
+        <button type="button" class="btn btn-xs btn-default" id="bandTabCls" onclick="bandTab('cls')">依全製/多製程/單製</button>
+      </span>
     </h4>
     <div id="chBand" class="chart-box"></div>
     <table class="oa-t" id="tblBand" style="margin-top:10px;">
-      <colgroup><col style="width:18%"><col style="width:13%"><col style="width:11%"><col style="width:16%">
-                <col style="width:11%"><col style="width:20%"><col style="width:11%"></colgroup>
-      <thead><tr><th>數量區間</th><th>筆數</th><th>佔筆數</th><th>總數量</th><th>佔數量</th><th>金額</th><th>佔金額</th></tr></thead>
+      <thead id="tblBandHead"><tr><th>數量區間</th><th>筆數</th><th>佔筆數</th><th>總數量</th><th>佔數量</th><th>金額</th><th>佔金額</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -1391,8 +1395,22 @@ $(document).on('click', '#astagNext', function(){ ASTAG_PAGE++; renderAstagTable
 $('#astagMetric').on('change', function(){ if(DATA) renderAstag(); });
 
 /* ── 數量區間 ───────────────────────────────────────── */
+// 2026-10-06 使用者交辦：數量區間分析要能切「全部」／「依訂單標籤分類」／「依全製/多製程/單製」
+// 三種角度——後兩種是同一組訂單依不同分類軸重新交叉統計，資料已經在後端算好
+// （DATA.band_by_cls／DATA.band_by_astag，見 order_analysis_lib.php），這裡只負責畫。
+var BAND_TAB = 'all';
+function bandTab(t){
+  BAND_TAB = t;
+  ['bandTabAll','bandTabAstag','bandTabCls'].forEach(function(id){
+    $('#'+id).toggleClass('btn-primary', id === 'bandTab'+(t==='all'?'All':(t==='astag'?'Astag':'Cls')))
+             .toggleClass('btn-default', id !== 'bandTab'+(t==='all'?'All':(t==='astag'?'Astag':'Cls')));
+  });
+  renderBand();
+}
 function renderBand(){
+  if (BAND_TAB !== 'all') { renderBandCross(BAND_TAB === 'cls' ? (DATA.band_by_cls||[]) : (DATA.band_by_astag||[])); return; }
   var b = DATA.bands||[];
+  $('#tblBandHead').html('<tr><th>數量區間</th><th>筆數</th><th>佔筆數</th><th>總數量</th><th>佔數量</th><th>金額</th><th>佔金額</th></tr>');
   chart('chBand', opt({
     chart:{ type:'column' },
     xAxis:{ categories:b.map(function(x){return x.label;}) },
@@ -1417,6 +1435,32 @@ function renderBand(){
        + '<td class="n">'+money(x.amount)+'</td><td class="n">'+x.pct_amount+'%</td></tr>';
   });
   $('#tblBand tbody').html(h||'<tr><td colspan="7" style="text-align:center;color:#a08a6f;">本期沒有訂單</td></tr>');
+}
+/** 「依訂單標籤分類」／「依全製/多製程/單製」共用的交叉表渲染：堆疊柱狀圖＋分類×區間矩陣表。
+    list 的每一項是 {key,label,is_proc?,bands:[各數量區間筆數]}，只列本期真的有訂單的分類
+    （後端已經過濾掉全部是 0 的列）。 */
+function renderBandCross(list){
+  var bandsMeta = DATA.bands||[], cats = bandsMeta.map(function(x){return x.label;});
+  var palette = [C_AMBER, C_BROWN, '#C9A227', C_SAND, '#D9CDBC', C_CORAL, '#8a7355', '#A3C9A8', '#C98A8A', '#9AA5C9', '#D2B48C', '#B08968'];
+  var ser = list.map(function(row, i){ return { name: row.label, data: row.bands, color: palette[i % palette.length] }; });
+  chart('chBand', opt({
+    chart:{ type:'column' },
+    xAxis:{ categories: cats },
+    yAxis:{ min:0, title:{text:'訂單筆數',style:{fontSize:'11px',color:'#a08a6f'}}, gridLineColor:'#F0E8DC',
+            labels:{style:{fontSize:'10px',color:'#a08a6f'}} },
+    tooltip:{ shared:true, style:{fontSize:'11px'} },
+    plotOptions:{ column:{ stacking:'normal', borderRadius:2, pointPadding:0.05, groupPadding:0.16 } },
+    series: ser.length ? ser : [{ name:'（本期沒有資料）', data: cats.map(function(){return 0;}) }]
+  }));
+  $('#tblBandHead').html('<tr><th>分類</th>'+cats.map(function(c){ return '<th class="tr">'+esc(c)+'</th>'; }).join('')+'<th class="tr">合計</th></tr>');
+  var h = '';
+  list.forEach(function(row){
+    var tot = row.bands.reduce(function(a,v){ return a+v; }, 0);
+    h += '<tr><td>'+esc(row.label)+(row.is_proc?' <span class="badge-as">AS</span>':'')+'</td>'
+       + row.bands.map(function(v){ return '<td class="n">'+(v?nf(v):'')+'</td>'; }).join('')
+       + '<td class="n"><b>'+nf(tot)+'</b></td></tr>';
+  });
+  $('#tblBand tbody').html(h || '<tr><td colspan="'+(cats.length+2)+'" style="text-align:center;color:#a08a6f;">本期沒有訂單</td></tr>');
 }
 
 /* ── 客戶比較 ───────────────────────────────────────── */
