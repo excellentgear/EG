@@ -9884,7 +9884,7 @@ foreach($dCounts as $c) {
                     }).join(''));
             }
             astagBfApplyBtnStyle();
-            astagBfOrders(1);
+            astagBfReload();   // 2026-10-06：兩個分頁共用這顆下拉，改了要刷新目前看得到的那一個
         }
         /** 改綁定模式跟補設定模式的按鈕要一眼分得出來（前者會覆蓋已經設好的） */
         function astagBfApplyBtnStyle() {
@@ -9925,29 +9925,47 @@ foreach($dCounts as $c) {
         }
         function astagBfGroups() {
             $('#bf-group-msg').text('');
-            $('#bf-group-tbody').html('<tr><td colspan="6" class="text-center" style="color:#aaa;padding:16px;">查詢中…</td></tr>');
+            $('#bf-group-tbody').html('<tr><td colspan="7" class="text-center" style="color:#aaa;padding:16px;">查詢中…</td></tr>');
             var f = astagBfFilter(); f.action = 'backfill_groups'; f.limit = 200;
+            var showAll = astagBfShowAll();
             astagCfgApi(f, function (res) {
-                if (!res.success) { $('#bf-group-tbody').html('<tr><td colspan="6" class="text-center text-danger" style="padding:16px;">' + escapeHtml(res.message || '查詢失敗') + '</td></tr>'); return; }
+                if (!res.success) { $('#bf-group-tbody').html('<tr><td colspan="7" class="text-center text-danger" style="padding:16px;">' + escapeHtml(res.message || '查詢失敗') + '</td></tr>'); return; }
                 ASTAGCFG.optsAll = res.options_all || [];
                 ASTAGCFG.bfGroups = res.rows || [];
                 astagRenderSummary(res.summary || {});
                 if (!ASTAGCFG.bfGroups.length) {
-                    $('#bf-group-tbody').html('<tr><td colspan="6" class="text-center" style="color:#27ae60;padding:16px;">'
-                        + '這個條件底下已經沒有未設定標籤的訂單了 🎉</td></tr>');
+                    $('#bf-group-tbody').html('<tr><td colspan="7" class="text-center" style="color:#27ae60;padding:16px;">'
+                        + (showAll ? '這個條件底下查不到任何訂單。' : '這個條件底下已經沒有未設定標籤的訂單了 🎉') + '</td></tr>');
                     return;
                 }
                 var h = '';
                 ASTAGCFG.bfGroups.forEach(function (g, i) {
                     var rng = (g.date_from || '').replace(/-/g, '.') + ((g.date_to && g.date_to !== g.date_from) ? ' ～ ' + g.date_to.replace(/-/g, '.') : '');
+                    // 目前標籤欄：showAll 時才查得到 breakdown；全部還沒設定就印「尚未設定」，
+                    // 混著既有標籤與未設定的話把兩者都列出來（下面套用按鈕只補未設定那幾筆）
+                    var tagCell;
+                    if (!showAll) {
+                        tagCell = '<span style="color:#aaa;">尚未設定</span>';
+                    } else if (!g.tag_breakdown || !g.tag_breakdown.length) {
+                        tagCell = '<span style="color:#aaa;">尚未設定</span>';
+                    } else {
+                        tagCell = g.tag_breakdown.map(function (x) {
+                            return '<span style="display:inline-block;background:#F3EFE6;border-radius:3px;padding:0 5px;margin:0 3px 2px 0;">'
+                                 + escapeHtml(x.label) + '×' + astagNum(x.count) + '</span>';
+                        }).join('')
+                        + (g.untagged_n > 0 ? '<br><span style="font-size:10px;color:#8a5a2b;">尚未設定 ' + astagNum(g.untagged_n) + ' 張</span>' : '');
+                    }
                     h += '<tr data-i="' + i + '">'
                        + '<td style="word-break:break-all;">' + (g.pi ? escapeHtml(g.pi) : '<span style="color:#aaa;">（製程欄空白）</span>')
                        + (g.own_n > 0 ? '<br><span style="font-size:10px;color:#8a5a2b;">含本公司訂單 ' + astagNum(g.own_n) + ' 張</span>' : '') + '</td>'
                        + '<td style="text-align:right;font-weight:700;">' + astagNum(g.n) + '</td>'
                        + '<td style="font-size:11px;color:#777;">' + escapeHtml(rng) + '</td>'
+                       + '<td style="font-size:11px;">' + tagCell + '</td>'
                        + '<td>' + astagTagSelectHtml('', g.suggest, 'bf-g-tag') + '</td>'
                        + '<td style="font-size:11px;color:#777;">' + escapeHtml(g.suggest_why || '') + '</td>'
-                       + '<td><button type="button" class="btn btn-xs btn-primary" onclick="astagBfApplyGroup(' + i + ')">套用這組</button></td>'
+                       + '<td><button type="button" class="btn btn-xs btn-primary" onclick="astagBfApplyGroup(' + i + ')"'
+                       +   (g.untagged_n === 0 && showAll ? ' disabled title="這一組全部都已經設定過了，請到逐筆設定改綁定"' : '')
+                       +   '>套用這組</button></td>'
                        + '</tr>';
                 });
                 $('#bf-group-tbody').html(h);
@@ -9977,9 +9995,15 @@ foreach($dCounts as $c) {
             if ($btn.prop('disabled')) return;                  // 連點保護
             $btn.prop('disabled', true).text('套用中…');
             $('#bf-group-msg').text('');
+            // 把目前的篩選（含 include_tagged／only_tag，showAll 時才有）一併帶給 apply——
+            // 這裡刻意不帶 overwrite：後端 ot_astag_backfill_apply() 沒有 overwrite 一律只補
+            // as_tag_id IS NULL 那幾筆，所以即使這組已經有人設過標籤，這顆按鈕也只會補上
+            // 還沒設定的那幾張，不會覆蓋別人已經選好的（要覆蓋請到「逐筆設定」勾選）。
             var p = key.split(':'), f = astagBfFilter();
-            astagCfgApi({ action: 'backfill_apply', tag_id: p[0], scope: p[1], pi_exact: g.pi,
-                          year: f.year, kw: f.kw, include_cancelled: f.include_cancelled }, function (res) {
+            var payload = { action: 'backfill_apply', tag_id: p[0], scope: p[1], pi_exact: g.pi,
+                             year: f.year, kw: f.kw, include_cancelled: f.include_cancelled };
+            if (f.include_tagged) { payload.include_tagged = f.include_tagged; if (f.only_tag) payload.only_tag = f.only_tag; }
+            astagCfgApi(payload, function (res) {
                 if (!res.success) {
                     $btn.prop('disabled', false).text('套用這組');
                     $('#bf-group-msg').css('color', '#DD5138').text(res.message || '套用失敗');
@@ -10004,16 +10028,17 @@ foreach($dCounts as $c) {
         /** 列都清空了就給一句話，不要留一張空表格（也不要自動重查造成閃爍） */
         function astagBfEmptyCheck() {
             if ($('#bf-group-tbody tr').length) return;
-            $('#bf-group-tbody').html('<tr><td colspan="6" class="text-center" style="color:#8a5a2b;padding:16px;">'
+            $('#bf-group-tbody').html('<tr><td colspan="7" class="text-center" style="color:#8a5a2b;padding:16px;">'
                 + '這一批都設定完了。按上方【<b>重新查詢</b>】載入下一批，或切到「逐筆設定」處理零散的尾數。</td></tr>');
         }
         function astagBfApplyAllSuggest() {
             var todo = [];
             ASTAGCFG.bfGroups.forEach(function (g, i) {
+                if ((g.untagged_n || 0) === 0) return;   // 這一組已經全部設定過了，套用也不會動到任何一筆
                 var key = $('#bf-group-tbody tr[data-i="' + i + '"] .bf-g-tag').val() || '';
-                if (key) todo.push({ i: i, key: key, n: g.n, pi: g.pi });
+                if (key) todo.push({ i: i, key: key, n: (g.untagged_n != null ? g.untagged_n : g.n), pi: g.pi });
             });
-            if (!todo.length) { $('#bf-group-msg').css('color', '#DD5138').text('本頁沒有任何已選定標籤的組'); return; }
+            if (!todo.length) { $('#bf-group-msg').css('color', '#DD5138').text('本頁沒有任何已選定標籤、且還有未設定訂單的組'); return; }
             var tot = todo.reduce(function (a, b) { return a + b.n; }, 0);
             // 兩段式確認：**不用 confirm()**。連續按多次之後 Chrome 會跳出「阻止此網頁產生
             // 其他對話框」，使用者一勾下去 confirm() 就**靜默回 false**，按鈕變成「按了完全沒反應」
@@ -10036,8 +10061,10 @@ foreach($dCounts as $c) {
                     return;   // 就地標記就好，不重查整份清單也不重載主表格（使用者要求不要闪爍）
                 }
                 var t = todo.shift(), p = t.key.split(':');
-                astagCfgApi({ action: 'backfill_apply', tag_id: p[0], scope: p[1], pi_exact: t.pi,
-                              year: f.year, kw: f.kw, include_cancelled: f.include_cancelled }, function (res) {
+                var payload = { action: 'backfill_apply', tag_id: p[0], scope: p[1], pi_exact: t.pi,
+                                 year: f.year, kw: f.kw, include_cancelled: f.include_cancelled };
+                if (f.include_tagged) { payload.include_tagged = f.include_tagged; if (f.only_tag) payload.only_tag = f.only_tag; }
+                astagCfgApi(payload, function (res) {
                     done++;
                     if (res.success) {
                         applied += parseInt(res.applied || 0, 10);
@@ -12960,12 +12987,18 @@ foreach($dCounts as $c) {
     </div>
 
     <?php if ($can_as_tag_setting): ?>
-    <!-- ═══ 稽核製程標籤：舊資料批次補設定（2026-10-02 使用者交辦）═════════════
+    <!-- ═══ 稽核製程標籤：舊資料批次補設定（2026-10-02 使用者交辦；2026-10-06 補強）═════
          使用者原話「舊資料未選者提供管理員批次設定標籤功能（要先可篩選出無標籤之舊資料
          才批次設定），可以另外使用類似補設定狀態，因為全部設定完之後就不需要使用」。
          所以做成獨立跳窗，只從「設定」裡面進來，平常完全不佔畫面。
          實測全庫 9,538 張訂單共有 738 種製程寫法，所以預設是「依製程文字分組」一次設一組，
-         逐筆模式留給零散的尾數。一律只填空白、不覆蓋已設定的（後端 WHERE as_tag_id IS NULL 保證）。 -->
+         逐筆模式留給零散的尾數。一律只填空白、不覆蓋已設定的（後端 WHERE as_tag_id IS NULL 保證）。
+         2026-10-06 使用者交辦：批次補設定要能「批次修改已設定的訂單，使用已設定標籤+關鍵字
+         搜索」——「顯示：全部（含已設定）」＋「只看標籤」＋關鍵字三者共用一套篩選
+         （astagBfFilter()），分組／逐筆兩個分頁都吃得到；分組模式的「套用這組」／「套用本頁全部」
+         一律只補那幾筆還沒設定的（後端 ot_astag_backfill_apply() 沒帶 overwrite 一律這樣），
+         要真的改掉已經設定好的標籤（覆蓋）仍然只能在「逐筆設定」逐筆勾選，這是刻意保留的安全界線
+         ——改掉已經設定好的 AS 認定不可逆，不該一個製程文字就整組掃過去。 -->
     <div class="modal fade" id="asTagBackfillModal" tabindex="-1" role="dialog" style="z-index:1062;">
       <div class="modal-dialog" style="width:94%;max-width:1180px;" role="document">
         <div class="modal-content">
@@ -12987,6 +13020,18 @@ foreach($dCounts as $c) {
                 <input type="text" id="bf-kw" class="form-control input-sm" style="width:170px;display:inline-block;" autocomplete="new-password" data-lpignore="true" data-form-type="other">
               </label>
               <span style="font-size:11px;color:#aaa;">比對製程／料號／客戶／訂單編號</span>
+              <?php /* 顯示範圍與「只看標籤」2026-10-06 從逐筆設定搬到這裡共用——分組模式原本
+                       完全看不到已設定過的、也沒辦法用已設定的標籤篩選，兩個分頁其實同一套
+                       篩選條件（astagBfFilter()），放在分頁各自裡面只會讓另一個分頁用不到 */ ?>
+              <label style="font-weight:400;font-size:12px;margin:0;">顯示
+                <select id="bf-show" class="form-control input-sm" style="width:160px;display:inline-block;" onchange="astagBfShowChange()">
+                  <option value="untagged">只列尚未設定的</option>
+                  <option value="all">全部（含已設定，可篩選/改綁定）</option>
+                </select>
+              </label>
+              <label style="font-weight:400;font-size:12px;margin:0;" id="bf-onlytag-wrap" style="display:none;">只看標籤
+                <select id="bf-only-tag" class="form-control input-sm" style="width:190px;display:inline-block;" onchange="astagBfReload()"></select>
+              </label>
               <label style="font-weight:400;font-size:12px;margin:0;display:inline-flex;align-items:center;gap:4px;">
                 <input type="checkbox" id="bf-cancelled"> 含已暫停／取消的訂單
               </label>
@@ -13002,19 +13047,23 @@ foreach($dCounts as $c) {
               <div style="font-size:11px;color:#888;margin-bottom:5px;line-height:1.7;">
                 同一種製程寫法的訂單一次設完最省事。<b>建議標籤</b>是系統依「製程文字裡有沒有稽核製程的名稱」＋
                 「訂單分析那一套全製／單製關鍵字規則」推出來的，<b>理由欄會寫出它命中了哪個字</b>——
-                請確認過再套用（建議不會自動寫入任何資料）。
+                請確認過再套用（建議不會自動寫入任何資料）。把上面「顯示」切成「全部（含已設定）」
+                再配合關鍵字／只看標籤篩選，可以找出哪些製程寫法目前被設成某個標籤、要不要重新分類；
+                <b>套用這組一律只補目前還沒設定的那幾筆，不會動到已經設定好的</b>（要改已經設定好的，
+                請切到「逐筆設定」勾選要改的訂單）。
               </div>
               <div style="border:1px solid #ddd;border-radius:4px;overflow-x:auto;">
-                <table class="table table-condensed table-striped" style="margin:0;font-size:12px;min-width:860px;">
+                <table class="table table-condensed table-striped" style="margin:0;font-size:12px;min-width:960px;">
                   <thead><tr style="background:#f5f5f5;">
-                    <th style="width:220px;">製程文字</th>
+                    <th style="width:200px;">製程文字</th>
                     <th style="width:60px;text-align:right;">筆數</th>
                     <th style="width:150px;">接單日期範圍</th>
+                    <th style="width:150px;">目前標籤</th>
                     <th style="width:240px;">要設成哪個標籤</th>
                     <th>系統建議的理由</th>
                     <th style="width:80px;"></th>
                   </tr></thead>
-                  <tbody id="bf-group-tbody"><tr><td colspan="6" class="text-center" style="color:#aaa;padding:16px;">載入中…</td></tr></tbody>
+                  <tbody id="bf-group-tbody"><tr><td colspan="7" class="text-center" style="color:#aaa;padding:16px;">載入中…</td></tr></tbody>
                 </table>
               </div>
               <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -13028,17 +13077,7 @@ foreach($dCounts as $c) {
             <!-- 逐筆模式 -->
             <div id="bf-pane-order" style="display:none;">
               <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-                <?php /* 顯示範圍（2026-10-02 使用者要求）：預設只列未設定的；
-                         要改已經綁定好的就切到「全部」，那時候才會出現「改綁定」的按鈕 */ ?>
-                <label style="font-weight:400;font-size:12px;margin:0;">顯示
-                  <select id="bf-show" class="form-control input-sm" style="width:160px;display:inline-block;" onchange="astagBfShowChange()">
-                    <option value="untagged">只列尚未設定的</option>
-                    <option value="all">全部（含已設定，可改綁定）</option>
-                  </select>
-                </label>
-                <label style="font-weight:400;font-size:12px;margin:0;" id="bf-onlytag-wrap" style="display:none;">只看標籤
-                  <select id="bf-only-tag" class="form-control input-sm" style="width:190px;display:inline-block;" onchange="astagBfOrders(1)"></select>
-                </label>
+                <?php /* 2026-10-06：顯示範圍／只看標籤已搬到上面兩個分頁共用的篩選列，這裡不再重複一份 */ ?>
                 <span id="bf-order-scope" style="font-size:12px;color:#8a5a2b;"></span>
                 <span style="margin-left:auto;display:flex;align-items:center;gap:6px;">
                   <label style="font-weight:400;font-size:12px;margin:0;">每頁
@@ -13075,7 +13114,7 @@ foreach($dCounts as $c) {
             </div>
           </div>
           <div class="modal-footer" style="padding:8px 15px;">
-            <span style="float:left;font-size:11px;color:#888;line-height:30px;">「只列尚未設定的」模式只填空白；要改已經綁定好的，請在「逐筆設定」把顯示改成「全部」。</span>
+            <span style="float:left;font-size:11px;color:#888;line-height:30px;">「只列尚未設定的」模式兩個分頁都只填空白；上方「顯示」切成「全部」可用已設定的標籤＋關鍵字篩選，但要真的覆蓋已經設定好的，一律只能在「逐筆設定」逐筆勾選改綁定。</span>
             <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
           </div>
         </div>

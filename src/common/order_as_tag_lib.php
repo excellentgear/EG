@@ -433,8 +433,10 @@ function ot_astag_label_map(PDO $db): array
     if ($map !== null) return $map;
     $map = [];
     foreach (ot_astag_defs($db, false) as $d) {
-        // 停用／收窄過 scope 的定義，舊訂單可能存著「現在已經不提供」的變體，三種都先備好
-        foreach (['single', 'full', 'none'] as $sc) {
+        // 停用／收窄過 scope 的定義，舊訂單可能存著「現在已經不提供」的變體，四種都先備好
+        // （'multi' 是 2026-10-06 起「多製程」固定標籤專用的獨立 scope，漏了這個值會讓
+        // 所有已設定「多製程」的訂單在這張對照表查無標籤文字、顯示成空白分類）。
+        foreach (['single', 'full', 'multi', 'none'] as $sc) {
             $map[$d['tag_id'] . ':' . $sc] = ot_astag_make_label($d, $sc);
         }
         $map['def:' . $d['tag_id']] = $d;
@@ -970,7 +972,7 @@ function ot_astag_backfill_where(array $f, array &$params): string
     if (empty($f['include_tagged'])) $w[] = "ot.as_tag_id IS NULL";
     // 只看某一個標籤（'tagid:scope'），管理員要改「被設成⑨⑨的那些單」時用
     $onlyTag = trim((string)($f['only_tag'] ?? ''));
-    if ($onlyTag !== '' && preg_match('/^(\d+):(single|full|none)$/', $onlyTag, $m)) {
+    if ($onlyTag !== '' && preg_match('/^(\d+):(single|full|none|multi)$/', $onlyTag, $m)) {
         $w[] = "ot.as_tag_id = :bf_only_tag AND ot.as_tag_scope = :bf_only_scope";
         $params[':bf_only_tag']   = (int)$m[1];
         $params[':bf_only_scope'] = $m[2];
@@ -1043,11 +1045,41 @@ function ot_astag_backfill_groups(PDO $db, array $f = [], int $limit = 200): arr
         $totalGroups = (int)$cst->fetchColumn();
     } catch (Throwable $e) { return ['rows' => [], 'total_groups' => 0]; }
 
+    // 2026-10-06 使用者交辦：批次補設定要能看到「已經設定過的」再用關鍵字＋已設定標籤篩選——
+    // 「顯示：全部（含已設定）」切過去時，這裡也要讓管理員看得出每一組目前掛著什麼標籤，
+    // 不然會誤以為「套用這組」把整組都蓋過去了（實際上套用一律只補空白，見 ot_astag_backfill_apply()
+    // 的 $guard：沒有 overwrite 就一定只動 as_tag_id IS NULL 的那幾筆，這裡只是把現況攤開來看）。
+    // 只在真的有要看「含已設定」時才多查一次，預設路徑（只看未設定）不多付這個成本。
+    $breakdown = [];
+    if (!empty($f['include_tagged']) && $rows) {
+        try {
+            // $where 本身是 ot_astag_backfill_where() 組出來的具名參數（:bf_kw 等），PDO 不允許
+            // 具名／匿名參數混用在同一句，所以 pi 清單也要用具名佔位符，不能用 IN (?,?,...)
+            $pis = array_values(array_unique(array_map(fn($r) => (string)$r['pi'], $rows)));
+            $phKeys = []; $bParams = $params;
+            foreach ($pis as $i => $v) { $k = ":bf_pi$i"; $phKeys[] = $k; $bParams[$k] = $v; }
+            $bSql = "SELECT TRIM(COALESCE(ot.Processing_items,'')) pi, ot.as_tag_id, ot.as_tag_scope, COUNT(*) c
+                     FROM order_track ot
+                     WHERE $where AND ot.as_tag_id IS NOT NULL
+                       AND TRIM(COALESCE(ot.Processing_items,'')) IN (" . implode(',', $phKeys) . ")
+                     GROUP BY pi, ot.as_tag_id, ot.as_tag_scope";
+            $bSt = $db->prepare($bSql);
+            $bSt->execute($bParams);
+            $map = ot_astag_label_map($db);
+            foreach ($bSt->fetchAll(PDO::FETCH_ASSOC) as $b) {
+                $tid = (int)$b['as_tag_id']; $sc = (string)$b['as_tag_scope'];
+                $breakdown[(string)$b['pi']][] = ['label' => (string)($map[$tid . ':' . $sc] ?? ($tid . ':' . $sc)), 'count' => (int)$b['c']];
+            }
+        } catch (Throwable $e) { $breakdown = []; }
+    }
+
     $sug = ot_astag_suggester($db);
     $out = [];
     foreach ($rows as $r) {
-        $pi = (string)$r['pi'];
-        $s  = $sug($pi, (int)$r['own_n'] > 0);
+        $pi  = (string)$r['pi'];
+        $s   = $sug($pi, (int)$r['own_n'] > 0);
+        $tb  = $breakdown[$pi] ?? [];
+        $taggedN = 0; foreach ($tb as $x) $taggedN += $x['count'];
         $out[] = [
             'pi'         => $pi,
             'n'          => (int)$r['n'],
@@ -1057,6 +1089,9 @@ function ot_astag_backfill_groups(PDO $db, array $f = [], int $limit = 200): arr
             'suggest'    => $s['key'],
             'suggest_label' => $s['label'],
             'suggest_why'   => $s['why'],
+            'tag_breakdown' => $tb,                 // 這一組目前已經掛著哪些標籤（含筆數），空陣列＝這一組全部還沒設定
+            'tagged_n'      => $taggedN,
+            'untagged_n'    => max(0, (int)$r['n'] - $taggedN),
         ];
     }
     return ['rows' => $out, 'total_groups' => $totalGroups];

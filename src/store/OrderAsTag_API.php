@@ -140,6 +140,10 @@ switch ($action) {
             'year'              => (string)($_POST['year'] ?? 'ALL'),
             'kw'                => (string)($_POST['kw'] ?? ''),
             'include_cancelled' => !empty($_POST['include_cancelled']) ? 1 : 0,
+            // 2026-10-06 補上：原本漏了這兩個旗標，前端「顯示：全部（含已設定）」切過去
+            // 分組模式完全沒反應，只有逐筆模式吃得到（真正的 gap 在這裡，不只是 UI 沒露出入口）
+            'include_tagged'    => !empty($_POST['include_tagged']) ? 1 : 0,
+            'only_tag'          => (string)($_POST['only_tag'] ?? ''),
         ];
         $limit = (int)($_POST['limit'] ?? 200);
         $g = ot_astag_backfill_groups($pdo, $f, $limit);
