@@ -84,6 +84,13 @@ switch ($action) {
         if (!preg_match('/^\d{4}-\d{2}$/', $bm)) actErr('不合法的結帳月份');
         $allRows = ($side === 'ar') ? act_ar_rows($db, $bm) : act_ap_rows($db, $bm);
 
+        // 依結帳日由先到後排序（使用者要求）；沒有結帳日的排最後，同一天再依名稱排序求穩定
+        usort($allRows, function ($a, $b) {
+            $da = $a['cutoff_date'] ?: '9999-99-99';
+            $dbv = $b['cutoff_date'] ?: '9999-99-99';
+            return $da <=> $dbv ?: strnatcasecmp((string)$a['party_name'], (string)$b['party_name']);
+        });
+
         // 卡片／篩選一律依「顯示用狀態」(card_status) 分類：結帳日未到(not_due)／需對帳(need_recon)
         // 才是空白狀態真正的兩種意思，不是籠統的一個「未開始」桶。
         $counts = array_merge(['not_due' => 0, 'need_recon' => 0], array_fill_keys(array_keys(act_statuses()), 0));

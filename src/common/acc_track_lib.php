@@ -531,7 +531,7 @@ function act_ar_rows(PDO $db, string $billingMonth): array
     foreach ($sum['rows'] as $r) {
         $c         = $cust[$r['customer']] ?? null;
         $partyKey  = $r['customer_id'] ? (string)$r['customer_id'] : ('UNM:' . $r['customer']);
-        $partyName = $r['customer_full'] ?: $r['customer'];
+        $partyName = $r['customer'] ?: $r['customer_full'];   // 顯示簡稱（使用者指定），全名只在查無簡稱時退回
         $cutoff    = act_cutoff_date_ar($db, $c, $billingMonth);
         $track     = act_track_get_or_create($db, 'ar', $partyKey, $partyName, $billingMonth, $cutoff);
         $out[] = [
@@ -602,7 +602,7 @@ function act_ap_rows(PDO $db, string $billingMonth): array
         $id = trim((string)$r['maker_from']);
         $m  = $mk[$id] ?? null;
         $partyKey  = $id !== '' ? $id : 'UNM:unknown';
-        $partyName = $m['maker_id_all'] ?? ($m['maker_id'] ?? ($id !== '' ? $id : '（未指定廠商）'));
+        $partyName = $m['maker_id'] ?? ($m['maker_id_all'] ?? ($id !== '' ? $id : '（未指定廠商）'));   // 顯示簡稱（使用者指定），全稱只在查無簡稱時退回
         $cutoff    = $id !== '' ? act_cutoff_date_ap($db, $id, $billingMonth) : null;
         $track     = act_track_get_or_create($db, 'ap', $partyKey, $partyName, $billingMonth, $cutoff);
         $amt = (float)$r['amt']; $tax = (float)$r['tax'];
@@ -905,7 +905,7 @@ function act_change_log_list_all(PDO $db, array $f): array
         array_push($args, $like, $like, $like, $like, $like);
     }
     $sql = "SELECT l.*, u.user_cname AS changed_by_cname,
-                   COALESCE(cl.customer_full, cl.customer, mk.maker_id_all, mk.maker_id, l.target_id) AS target_name
+                   COALESCE(cl.customer, cl.customer_full, mk.maker_id, mk.maker_id_all, l.target_id) AS target_name
             FROM acc_recon_track_change_log l
             LEFT JOIN user u ON u.id=l.changed_by
             LEFT JOIN customer_list cl ON l.target_type='customer' AND cl.customer_id=l.target_id
