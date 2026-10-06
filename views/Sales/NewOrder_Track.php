@@ -12056,7 +12056,12 @@ foreach($dCounts as $c) {
             document.getElementById('ot-dn-modal-title').textContent = title;
             document.getElementById('ot-dn-modal-content').innerHTML = '<i class="fa fa-spinner fa-spin"></i> 載入中…';
             var mdmLink = document.getElementById('ot-dn-mdm-link');
-            if (partId && mdmLink) mdmLink.href = '../../views/pages/master_data_management.php#parts';
+            if (mdmLink) {
+                // 優先導向客戶分頁並以客戶ID篩選（既有 ?customer_search= 機制，master_data_management.php 會自動切頁+帶入搜尋）
+                mdmLink.href = custId
+                    ? '../../views/pages/master_data_management.php?customer_search=' + encodeURIComponent(custId)
+                    : '../../views/pages/master_data_management.php#parts';
+            }
             $('#ot-design-notes-modal').modal('show');
 
             $.post('', { action: 'get_design_notes_ot', part_id: partId, cust_id: custId }, function(res) {
