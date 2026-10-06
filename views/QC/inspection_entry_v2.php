@@ -1083,9 +1083,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                display:flex; flex-wrap:wrap; gap:6px 20px; align-items:center; font-size:14px; color:var(--ink); }
     .ctx-bar b { color:#8a6a45; font-weight:normal; font-size:12px; display:block; line-height:1.1; }
     .ctx-bar .cv { font-weight:bold; font-size:15px; }
-    /* 本次檢驗數：使用者要求放大清楚，獨立放大字級＋徽章底色，跟其他情境列數值（15px）區分出來 */
-    .ctx-qty-live { font-weight:bold; font-size:30px; line-height:1; color:var(--amber-d);
-                    background:var(--sand); border-radius:8px; padding:2px 14px; display:inline-block; }
+    /* 本次檢驗數：使用者要求放大清楚，獨立放大字級＋徽章底色，跟其他情境列數值（15px）區分出來；
+       數字顏色改成白字配實心琥珀底（高對比），比原本「橘字配淺橘底」明顯得多；可雙擊直接修改。 */
+    .ctx-qty-live { font-weight:bold; font-size:30px; line-height:1; color:#fff;
+                    background:var(--amber-d); border-radius:8px; padding:2px 14px; display:inline-block;
+                    cursor:pointer; min-width:48px; text-align:center; }
+    .ctx-qty-live input.ctx-qty-live-edit { width:70px; font-size:28px; font-weight:bold; text-align:center;
+        color:var(--ink); border:0; border-radius:4px; padding:0 2px; vertical-align:middle; }
     .ctx-bar a.cv { color:var(--ink); text-decoration:underline; }
     /* 檢驗性質：一般／首件／末件，三選一直接點選（首件/末件＝全數檢驗，抽驗數鎖定＝送驗數） */
     .ctx-bar .ki-btns { display:inline-flex; gap:4px; }
@@ -4566,7 +4570,8 @@ $(function(){
             // 本次檢驗數：鏡射下方「本批送驗數」（#inp-qty），靠最右顯示，改下方數量當下
             // 這裡就跟著更新（updateQtyLive，不必整列重畫）——2026-10-06 使用者要求，
             // 不用再把底部「數量/處置備註」面板拉開才看得到本次填的是多少件。
-            '<div style="margin-left:auto;"><b>本次檢驗數</b><span class="ctx-qty-live" id="ctx-qty-live-val">0</span></div>');
+            // 雙擊可直接修改（同一天使用者追加要求），顯示跟編輯共用同一個元素。
+            '<div style="margin-left:auto;"><b>本次檢驗數</b><span class="ctx-qty-live" id="ctx-qty-live-val" title="雙擊可直接修改">0</span></div>');
         applyInspKindUI();
         refreshSaveDraftBtn();
         refreshBackfillBtn();
@@ -4574,9 +4579,44 @@ $(function(){
         updateQtyLive();
     }
     // 「本次檢驗數」即時顯示（情境列最右）：純讀 #inp-qty 現值，供人一眼看到不用展開底部面板。
+    // 編輯中（.ctx-qty-live-edit 存在）時不要被重畫蓋掉，否則正在打字的輸入框會被整個換掉。
     function updateQtyLive(){
+        if($('#ctx-qty-live-val input').length) return;
         $('#ctx-qty-live-val').text(parseInt($('#inp-qty').val())||0);
     }
+    // 「本次檢驗數」雙擊直接修改（2026-10-06 使用者要求）：編輯的就是 #inp-qty 本身，改完
+    // 直接寫回並觸發既有的 input 事件（草稿自動存檔／首件末件全檢同步件數都沿用原邏輯，
+    // 不另外重寫一套）。必須是正整數；超過「尚未檢驗」剩餘量只提示不擋（可能是合理的覆蓋修正）。
+    $(document).on('dblclick', '#ctx-qty-live-val', function(){
+        if(state.viewOnly) return;                 // 唯讀檢視中不可改
+        var $wrap=$(this);
+        if($wrap.find('input').length) return;      // 已經在編輯中
+        var cur=parseInt($('#inp-qty').val())||0;
+        var $inp=$('<input type="number" min="1" step="1" class="ctx-qty-live-edit">').val(cur);
+        $wrap.empty().append($inp);
+        $inp.trigger('focus');
+        try{ $inp[0].select(); }catch(e){}
+        var cancelled=false;
+        function commit(){
+            var v=parseInt($inp.val());
+            if(isNaN(v) || v<=0){
+                alert('本次檢驗數必須是正整數。');
+                $inp.trigger('focus'); try{ $inp[0].select(); }catch(e){}
+                return;
+            }
+            var left = (ctx && !ctx.adhoc) ? pendingSummary().left : null;
+            if(left!=null && v>left){
+                alert('本次檢驗數 '+v+' 件，已超過「尚未檢驗」剩餘數量 '+left+' 件，請確認是否正確。');
+            }
+            $('#inp-qty').val(v).trigger('input');
+            updateQtyLive();
+        }
+        $inp.on('keydown', function(e){
+            if(e.which===13){ e.preventDefault(); $inp.trigger('blur'); }
+            else if(e.which===27){ e.preventDefault(); cancelled=true; $inp.trigger('blur'); }
+        });
+        $inp.on('blur', function(){ if(cancelled) updateQtyLive(); else commit(); });
+    });
     // ---------- 製程切換（同一 BOM 的其他製程，不用回待驗清單重找）----------
     // 防呆：切換前若目前這筆有還沒存檔的填寫內容，先跳確認，避免誤點跑錯製程（2026-08 使用者需求）
     function loadSiblingProcesses(){
