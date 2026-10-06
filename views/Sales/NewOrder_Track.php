@@ -13029,6 +13029,15 @@ foreach($dCounts as $c) {
                 <div class="oc-edit-row"><label>數量</label><input type="number" id="oc-e-qty" class="form-control input-sm oc-input" step="any"><span class="oc-orig-hint" id="oc-h-qty"></span></div>
                 <div class="oc-edit-row"><label>單價</label><input type="number" id="oc-e-price" class="form-control input-sm oc-input" step="any"><span class="oc-orig-hint" id="oc-h-price"></span></div>
                 <div class="oc-edit-row"><label>製程</label><input type="text" id="oc-e-proc" class="form-control input-sm oc-input"><span class="oc-orig-hint" id="oc-h-proc"></span></div>
+                <?php /* 製程變更提醒（2026-10-06 使用者要求）：製程是判定「製程標籤（AS 認定）」的依據，
+                         改了製程不會自動跟著改標籤，容易出現「製程換了、標籤卻還是依照舊製程選的」這種
+                         對不起來的情況，只提醒不擋下（是不是要改標籤是人的判斷，不是這裡能自動決定的）。 */ ?>
+                <div class="oc-edit-row" id="oc-proc-tag-note" style="display:none;grid-column:1/3;">
+                  <span style="font-size:11px;color:#8a5a2b;background:#FFF6EC;border:1px solid #E8D3B8;border-radius:4px;padding:3px 7px;line-height:1.6;display:inline-block;">
+                    <i class="fa fa-exclamation-triangle" style="color:#F0A24B;"></i>
+                    製程有異動，請重新確認這張訂單的「<b>製程標籤（AS 認定）</b>」是否仍正確——有需要請到「編輯訂單」跳窗重新設定。
+                  </span>
+                </div>
               </div>
               <div class="oc-edit-row" style="align-items:flex-start;"><label style="margin-top:5px;">業務備註</label><textarea id="oc-e-ps" class="form-control input-sm oc-input" rows="2" style="height:auto;"></textarea></div>
             </div>
@@ -13713,6 +13722,12 @@ foreach($dCounts as $c) {
             });
         }
 
+        // 製程變更提醒（2026-10-06）：這欄有填值＝這次變更會改到製程（比照 submitOrderChange() 的
+        // newVals 判斷規則＝非空字串才算有變更），就提醒要重新確認製程標籤是否仍正確。
+        $(document).on('input', '#oc-e-proc', function(){
+            document.getElementById('oc-proc-tag-note').style.display = (this.value.trim() !== '') ? '' : 'none';
+        });
+
         // ── 開啟變更跳窗 ───────────────────────────────────────────────────
         window.openOrderChange = function(orderId){
             document.getElementById('oc-order-id').value = orderId;
@@ -13724,6 +13739,7 @@ foreach($dCounts as $c) {
             ['oc-o-client','oc-o-did','oc-o-no','oc-o-cord','oc-o-odate','oc-o-del','oc-o-qty','oc-o-price','oc-o-proc','oc-o-ps']
                 .forEach(function(id){ document.getElementById(id).textContent='—'; });
             ['oc-e-del','oc-e-qty','oc-e-price','oc-e-proc','oc-e-ps'].forEach(function(id){ document.getElementById(id).value=''; });
+            document.getElementById('oc-proc-tag-note').style.display='none';
             document.getElementById('oc-targets').innerHTML='<span style="color:#aaa;font-size:12px;">載入中…</span>';
             document.getElementById('oc-order-history').innerHTML='<span style="color:#aaa;font-size:12px;">載入中…</span>';
             $('#orderChangeModal').modal('show');
@@ -13833,6 +13849,7 @@ foreach($dCounts as $c) {
                     var v=document.getElementById(p[1]).value;
                     if(v!=null && String(v).trim()!=='') newVals[p[0]]=v;
                 });
+            var procChanged = !!newVals.Processing_items;   // 製程有變更＝存完要再提醒一次確認標籤
             var targets=[]; document.querySelectorAll('#oc-targets .oc-tg:checked').forEach(function(c){ targets.push(c.value); });
             var btn=document.getElementById('oc-save-btn'); btn.disabled=true; msg.style.color='#888'; msg.textContent='處理中…';
             ocApi('save_change', {order_id:orderId, note:note, new_values:JSON.stringify(newVals), targets:targets})
@@ -13846,6 +13863,7 @@ foreach($dCounts as $c) {
                         btn.disabled=false;
                         $('#orderChangeModal').modal('hide');
                         var t='變更已儲存'; if(res.changed>0) t+='，更新 '+res.changed+' 欄'; if(res.notified) t+='，已發送通知';
+                        if(procChanged) t+='；製程已變更，請記得確認製程標籤（AS 認定）是否仍正確';
                         if(fileArr.length) t+='，附件 '+(fileArr.length-failed.length)+'/'+fileArr.length;
                         ocToast(t + (failed.length? ('；附件失敗：'+failed.join('、')) : ''));
                         if(typeof refreshOrderTable==='function') refreshOrderTable();
