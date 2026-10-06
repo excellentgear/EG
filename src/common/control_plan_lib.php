@@ -35,7 +35,9 @@ if (!defined('CP_LIB_LOADED')) {
 define('CP_LIB_LOADED', 1);
 
 require_once __DIR__ . '/date_fmt_lib.php';
-require_once __DIR__ . '/part_cost_lib.php';   // ppc_kg_set()：客供料製程集合，IQC 判定直接沿用，不重寫一份判準
+require_once __DIR__ . '/part_cost_lib.php';          // ppc_kg_set()：客供料製程集合，IQC 判定直接沿用，不重寫一份判準
+require_once __DIR__ . '/packing_process_lib.php';    // pk_packing_process_nos()：包裝製程的唯一權威來源，不自己再存一份代號
+require_once __DIR__ . '/qc_inspection_lib.php';      // qc_v2_items_by_process()：線上檢驗標準庫，SIP查無時的退路來源
 require_once __DIR__ . '/process_type_lib.php'; // eg_process_type_id()：製程大類查詢，通用SIP退回要用
 
 /** 本模組在 system_parameters 的分組名 */

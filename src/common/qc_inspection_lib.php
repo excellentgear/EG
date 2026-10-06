@@ -454,3 +454,53 @@ if (!function_exists('qc_insp_no_alloc')) {
         return $prefix . date('Ymd', $ts) . str_pad((string)$next, 3, '0', STR_PAD_LEFT);
     }
 }
+
+if (!function_exists('qc_v2_ensure_process_no_col')) {
+    /**
+     * `qc_inspection_item` 原本只有自由文字的 `process_name`，沒有 `process_no` 外鍵
+     * （2026-10-06 管制計畫 CP 要拿這裡的項目當 SIP 查無時的退路內容，使用者明確要求
+     * 「不是比對製程文字，應該比對製程ID」——文字比對在這張表上實測不可靠，同一製程
+     * 有「車床」「車 床」兩種寫法）。比照站上既有 ADD COLUMN 模式：先 SHOW COLUMNS
+     * 再條件式 ALTER（MySQL 9.4 的 ADD COLUMN 不吃 IF NOT EXISTS）。
+     */
+    function qc_v2_ensure_process_no_col(PDO $pdo): bool {
+        static $done = null;
+        if ($done !== null) return $done;
+        try {
+            $have = $pdo->query("SHOW COLUMNS FROM qc_inspection_item LIKE 'process_no'")->fetch();
+            if (!$have) {
+                $pdo->exec("ALTER TABLE qc_inspection_item ADD COLUMN process_no INT NULL "
+                    . "COMMENT '綁定 process_no.ProcessNo（比對製程ID用，取代原本只能比對文字的 process_name）' "
+                    . "AFTER process_name, ADD INDEX idx_qii_procno (process_no)");
+            }
+            $done = true;
+        } catch (Throwable $e) { $done = false; }
+        return $done;
+    }
+}
+
+if (!function_exists('qc_v2_items_by_process')) {
+    /**
+     * 該料號有沒有在「線上檢驗」(inspection_entry_v2.php) 建過這個製程的檢驗標準
+     * （qc_inspection_version 是**料號專屬**的，沒有像 SIP 那種「通用版」）。
+     * 只回該料號目前啟用版本(is_active=1)裡、process_no 綁定正確且仍啟用的項目。
+     * 全站唯一實作，管制計畫(control_plan_lib.php)當 SIP 查無時的退路來源，
+     * 將來 inspection_entry_v2.php 自己要查也應改呼叫這一支，不要各自寫 SQL。
+     */
+    function qc_v2_items_by_process(PDO $pdo, int $dId, int $processNo): array {
+        if ($dId <= 0 || $processNo <= 0) return [];
+        if (!qc_v2_ensure_process_no_col($pdo)) return [];
+        try {
+            $st = $pdo->prepare(
+                "SELECT i.item_id, i.item_code, i.item_name, i.standard_text,
+                        i.plus_tolerance, i.minus_tolerance, i.result_type, i.sort_order
+                   FROM qc_inspection_item i
+                   JOIN qc_inspection_version v ON v.version_id = i.version_id AND v.is_active=1 AND v.d_id=?
+                  WHERE i.process_no=? AND i.is_active=1
+                  ORDER BY i.sort_order, i.item_id"
+            );
+            $st->execute([$dId, $processNo]);
+            return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        } catch (Throwable $e) { return []; }
+    }
+}
