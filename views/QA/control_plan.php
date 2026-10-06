@@ -537,9 +537,11 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
                     機台是從<b>報工紀錄</b>抓該製程實際用過的機台（製令本身的機台欄幾乎沒人填）。</li>
                 <li><b>產品特性／規格公差／量測技術／檢具／頻率</b>＝該料號該製程的
                     <b>SIP 標準檢驗指導書</b>的檢驗項目（只取已核准的版次）。找不到時退回「該製程的檢驗項目預設值範本」。</li>
-                <li><b>特殊特性</b>＝依該料號 PFMEA 失效模式的<b>嚴重度／發生率數值</b>，依 AS 文件 3-TD-01
-                    的門檻判定出「關鍵特性 CC」或「重要特性 SC」（不是比對 PFMEA 填的文字，門檻在「設定」可調）；
-                    <b>管制方法</b>＝該料號的 PFMEA（預防管制、偵測管制）。</li>
+                <li><b>特殊分類／管制方法</b>＝<b>一律留白，由人逐列填</b>。PFMEA 的失效模式是「製程」粒度、
+                    不是逐一特性分別記錄，同一製程常同時有好幾種失效模式（例：尺寸偏擺／外觀刮傷／咬合精度），
+                    各自的分類與管制方法都不一樣，自動套到每一列會出現「外觀被套上尺寸管制」這種語意錯誤
+                    （2026-10-06 實測發現後改為留白）；PFMEA 的全部失效模式會整理成一段<b>參考文字</b>顯示在
+                    每道製程下方（淡黃底），供填寫時逐列對照判斷。</li>
                 <li><b>樣本／頻率</b>：階段若設了預設頻率就用它（試作段＝100% 全尺寸），否則用 SIP 上的頻率。</li>
             </ul>
             <p>帶不出來的欄位會<b>明確標示要人工填</b>，不會假裝有資料。</p>
@@ -930,6 +932,9 @@ function renderProcs(){
           +  '</div>';
 
         if (p.hint) h += '<div class="cp-note" style="margin:0 0 6px;">'+esc(p.hint)+'</div>';
+        // PFMEA 參考（製程層級彙整，不逐列套用）：供填「特殊分類」「管制方法」時自己對照，
+        // 兩欄一律留白由人判斷（2026-10-06 使用者實測抓到「外觀套到尺寸管制」的語意錯誤）。
+        if (p.pfmea_note) h += '<div class="cp-note" style="margin:0 0 6px;white-space:pre-line;background:#F7E0BD;border-color:#e0c79a;color:#6b4a28;">'+esc(p.pfmea_note)+'</div>';
 
         h += '<div class="cp-scroll"><table class="cp-t"><thead><tr>'
           +   '<th style="width:58px;">特性號</th><th style="width:150px;">產品特性</th><th style="width:130px;">製程特性</th>'
@@ -1333,8 +1338,8 @@ function renderAutoNote(){
     }
     h += '<b>資料從哪裡來</b>：製程列＝該訂單綁定的<b>製令</b>的製程鏈（依製程序）；'
       +  '產品特性／規格公差／量測技術／檢具／頻率＝該料號該製程的 <b>SIP</b>（只取已核准版次），'
-      +  '找不到時退回該製程的<b>檢驗項目預設值範本</b>；特殊特性依 PFMEA 失效模式的<b>嚴重度／發生率數值</b>'
-      +  '對 AS 文件 3-TD-01 門檻判定（關鍵特性CC／重要特性SC），管制方法＝該料號的 PFMEA 預防偵測管制。'
+      +  '找不到時退回該製程的<b>檢驗項目預設值範本</b>；<b>特殊分類／管制方法一律留白由人逐列填</b>'
+      +  '（PFMEA 是製程粒度、不是逐特性記錄，自動套用會出現語意錯誤，整理過的 PFMEA 參考改顯示在每道製程下方）。'
       +  '機台是從<b>報工紀錄</b>抓該製程實際用過的機台。帶不出來的欄位會標示要人工填，不會假裝有資料。';
     $('#autoNote').html(h);
 }
@@ -1399,6 +1404,13 @@ function renderPreview(r){
       +  (CANEDIT ? '<button class="btn-w" id="btnCreateFromPrev" style="margin-left:auto;"><i class="fa fa-check"></i> 用這些內容建立管制計畫</button>' : '')
       +  '</div>';
 
+    // 「特殊分類」「管制方法」兩欄下面表格一律空白（2026-10-06 起不再自動套用，見下方說明），
+    // PFMEA 整理過的參考資訊改在這裡逐製程列出，供建立前先核對。
+    procs.forEach(function(p){
+        if (p.pfmea_note) h += '<div class="cp-note" style="white-space:pre-line;background:#F7E0BD;border-color:#e0c79a;color:#6b4a28;">'
+            + '<b>'+esc(p.process_name||('製程'+p.process_no))+'：</b>'+esc(p.pfmea_note)+'</div>';
+    });
+
     h += '<div class="cp-scroll"><table class="cp-t" style="min-width:1200px;"><thead><tr>'
       +  '<th style="width:40px;">#</th><th style="width:120px;">製程</th><th style="width:120px;">機器／廠商</th>'
       +  '<th style="width:150px;">產品特性</th><th style="width:88px;">特殊分類</th><th style="width:160px;">規格／公差</th>'
@@ -1445,14 +1457,15 @@ $(document).on('click', '[data-pickbom]', function(){
     $('#btnPreview').trigger('click');
 });
 function mapPrevProc(p){
-    // op_desc 與 special_class_id 都要帶後端算好的真值，不可寫死空／null——
-    // 後端已經依 3-TD-01 的嚴重度/發生率算出 special_class_id，op_desc 帶的是
-    // PFMEA 製程功能/要求，寫死掉等於白算了（2026-10-02 修正，原本兩處都遺漏）。
+    // op_desc 要帶後端算好的真值（PFMEA 製程功能/要求），寫死掉等於白算了
+    // （2026-10-02 修正，原本遺漏）。special_class_id／control_method 2026-10-06 起
+    // 改為一律留白由人填，不再從 PFMEA 自動帶（見 control_plan_lib.php 說明），
+    // pfmea_note 是製程層級的 PFMEA 參考文字，供人逐列判斷用、本身不寫進任何欄位。
     return { process_no: p.process_no, process_name: p.process_name, op_desc: p.op_desc || '',
              machine: p.machine, jig_tool: '', maker_id_no: p.maker_id_no, maker_name: p.maker_name,
              is_outsource: p.is_outsource, insp_stage: p.insp_stage || '', insp_src: p.insp_src || '', insp_gap: p.insp_gap || '',
              bom_sn: p.bom_sn, src: p.src || 'bom', note: '',
-             hint: p.hint || '', items: (p.items || []).map(function(it){
+             hint: p.hint || '', pfmea_note: p.pfmea_note || '', items: (p.items || []).map(function(it){
                  return { char_no: it.char_no, char_product: it.char_product, char_process: it.char_process,
                           special_class_id: it.special_class_id || null, special_class_text: it.special_class_text,
                           spec_text: it.spec_text, up_limit: it.up_limit, lo_limit: it.lo_limit,

@@ -1123,24 +1123,24 @@ function cp_autofill_preview(PDO $db, array $opt): array
         $sip = cp_sip_items($db, $partDId ?: null, $pn);
         $pfp = ($pn !== null && isset($pf['by_proc'][$pn])) ? $pf['by_proc'][$pn] : null;
 
-        /* 管制方法取自 PFMEA 的預防／偵測管制。
-           這是「製程層級」的資料，套到該製程的每一列特性是合理的（同一製程的 SPC、
-           首件確認等管制方式本來就適用於該製程的所有特性），但要精簡——預防與偵測
-           各取三條全部串起來會變成一百多字塞在一格，列印出來是一團黑。 */
+        /* 管制方法／特殊分類：2026-10-06 使用者實測抓到的錯誤——「外觀」這種定性特性
+           被套上「齒輪咬合 X 0.0812」那組尺寸類失效模式的管制方法與 SC 分類，兩者完全
+           無關。根因跟下面「製程特性」刻意留白是同一件事：PFMEA 資料目前只到「製程」
+           這個粒度（pfmea_item 用 process_code 分組，沒有「這筆失效模式對應哪一個
+           特性」的欄位），系統配不出哪一筆失效模式該套到哪一列特性——同一製程常常
+           同時存在好幾種失效模式（尺寸偏擺、外觀刮傷、咬合精度…），各自的管制方法
+           與風險等級本來就不一樣，硬套「這個製程最嚴重的那一筆」到每一列，必定會
+           出現像這次「外觀套到尺寸管制」的語意矛盾。
+           依 AS9100／APQP 慣例，Control Plan 的管制方法與特殊特性分類本來就是**逐一
+           特性**由人員依實際風險判斷填入（且不等於 SIP 的量測技術——SIP 只回答
+           「怎麼量」，管制方法回答「怎麼防、怎麼守」，兩者是不同概念，不應該混用
+           同一個來源）；系統能做的是把 PFMEA 整理過的資訊**當參考**攤出來，不能替
+           使用者下判斷。故**兩欄一律留白由人逐列填**，PFMEA 的全部失效模式整理成
+           一段參考文字放在製程層級的提示列（pfmea_note，畫面在「作業說明」下方），
+           供建 CP 的人自己對照該製程的所有特性，判斷哪一條適用於哪一列。 */
         $ctrlMethod = '';
-        if ($pfp) {
-            $parts = [];
-            if ($pfp['prev']) $parts[] = '預防：' . implode('；', array_slice($pfp['prev'], 0, 2));
-            if ($pfp['det'])  $parts[] = '偵測：' . implode('；', array_slice($pfp['det'], 0, 2));
-            $ctrlMethod = implode("\n", $parts);
-        }
-        // 依 3-TD-01 的嚴重度/發生率數值判定（cp_special_class_match，見該函式說明），
-        // 不比對 PFMEA 填的 classification 文字——理由同函式註解。
-        $matchedClass = $pfp ? ($pfp['matched_class'] ?? null) : null;
-        $specialClassId = $matchedClass ? (int)$matchedClass['class_id'] : null;
-        $specialText = $matchedClass
-            ? ($matchedClass['symbol'] . ' ' . $matchedClass['class_name'])
-            : '';
+        $specialClassId = null;
+        $specialText = '';
 
         /* 製程特性（CP 上指「對應這個產品特性的可控製程變數」，例如砂輪修整量、轉速）
            刻意不自動帶 PFMEA 的 function_desc：那是製程層級的「製程功能／要求」，
@@ -1151,6 +1151,24 @@ function cp_autofill_preview(PDO $db, array $opt): array
         $opDesc = $pfp && $pfp['func']
             ? ('PFMEA 製程功能／要求：' . implode('；', array_slice($pfp['func'], 0, 3)))
             : '';
+
+        /* PFMEA 參考提示（製程層級，一個製程只出現一次，供人逐列判斷用，不寫入任何欄位）：
+           這個製程底下 PFMEA 列出的每一種失效模式各自的要求／分類／管制方法都列出來，
+           而不是只挑「最嚴重的那一筆」代表全部——挑最嚴重那筆正是目前問題的根因。 */
+        $pfmeaNote = '';
+        if ($pfp) {
+            $lines = [];
+            // req/class 陣列已去重但彼此長度不一定對齊（來源是逐失效模式彙整），
+            // 這裡只需要給人看「這製程有哪些要求、哪些分類被登記過」，不必逐筆一一配對。
+            if ($pfp['req'])   $lines[] = '要求／偏差項目：' . implode('、', array_slice($pfp['req'], 0, 6));
+            if ($pfp['class']) $lines[] = 'PFMEA 自填分類：' . implode('、', array_slice($pfp['class'], 0, 6));
+            if ($pfp['prev'])  $lines[] = '預防管制：' . implode('；', array_slice($pfp['prev'], 0, 4));
+            if ($pfp['det'])   $lines[] = '偵測管制：' . implode('；', array_slice($pfp['det'], 0, 4));
+            if ($lines) {
+                $pfmeaNote = 'PFMEA 參考（這個製程全部失效模式整理，哪一條適用哪一列特性請自行判斷）：'
+                    . "\n" . implode("\n", $lines);
+            }
+        }
 
         $items = [];
         foreach ($sip['items'] as $k => $it) {
@@ -1194,6 +1212,7 @@ function cp_autofill_preview(PDO $db, array $opt): array
 
         $p['items'] = $items;
         if (empty($p['op_desc'])) $p['op_desc'] = $opDesc;
+        $p['pfmea_note'] = $pfmeaNote;
         $p['sip_src'] = $sip['src'];
         $p['has_pfmea'] = $pfp ? 1 : 0;
         if (!$items) {
