@@ -1083,6 +1083,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                display:flex; flex-wrap:wrap; gap:6px 20px; align-items:center; font-size:14px; color:var(--ink); }
     .ctx-bar b { color:#8a6a45; font-weight:normal; font-size:12px; display:block; line-height:1.1; }
     .ctx-bar .cv { font-weight:bold; font-size:15px; }
+    /* 本次檢驗數：使用者要求放大清楚，獨立放大字級＋徽章底色，跟其他情境列數值（15px）區分出來 */
+    .ctx-qty-live { font-weight:bold; font-size:30px; line-height:1; color:var(--amber-d);
+                    background:var(--sand); border-radius:8px; padding:2px 14px; display:inline-block; }
     .ctx-bar a.cv { color:var(--ink); text-decoration:underline; }
     /* 檢驗性質：一般／首件／末件，三選一直接點選（首件/末件＝全數檢驗，抽驗數鎖定＝送驗數） */
     .ctx-bar .ki-btns { display:inline-flex; gap:4px; }
@@ -4548,7 +4551,7 @@ $(function(){
             // 本次檢驗數：鏡射下方「本批送驗數」（#inp-qty），靠最右顯示，改下方數量當下
             // 這裡就跟著更新（updateQtyLive，不必整列重畫）——2026-10-06 使用者要求，
             // 不用再把底部「數量/處置備註」面板拉開才看得到本次填的是多少件。
-            '<div style="margin-left:auto;"><b>本次檢驗數</b><span class="cv" id="ctx-qty-live-val">0</span></div>');
+            '<div style="margin-left:auto;"><b>本次檢驗數</b><span class="ctx-qty-live" id="ctx-qty-live-val">0</span></div>');
         applyInspKindUI();
         refreshSaveDraftBtn();
         refreshBackfillBtn();
@@ -5855,14 +5858,19 @@ $(function(){
         });
         if(warnCells.length && !confirm('下列實測值與標準值差異過大，可能是誤填：\n\n'+warnCells.join('\n')+
             '\n\n確定這些數值正確、要照這樣存檔嗎？')) return;
-        // 容器未選擇要提醒（2026-10-06 使用者要求）：容器只隨「允收(OK)自動彙總」
-        // (autoSubmitQcResult) 一起寫入，而那段只掛在製程製令的正常存檔路徑——asRedo（退回
-        // 重做）、修改既有紀錄、出貨檢驗(ctx.ship)、臨時檢驗單(ctx.adhoc) 都不會觸發它，不必檢查，
-        // 不然會對用不到容器的流程誤報；只設定其中一個時 autoSubmitQcResult() 會自動搬到容器1位置，
-        // 這裡只擋「兩個都完全沒選」。
+        // 容器至少要選一個，直接擋下存檔（2026-10-06 使用者更正：不是提醒，是必填）。
+        // 容器只隨「允收(OK)自動彙總」(autoSubmitQcResult) 一起寫入，而那段只掛在製程製令的
+        // 正常存檔路徑——asRedo（退回重做）、修改既有紀錄、出貨檢驗(ctx.ship)、臨時檢驗單
+        // (ctx.adhoc) 都不會觸發它，這幾種不檢查；只設定其中一個時 autoSubmitQcResult() 會自動
+        // 搬到容器1位置，這裡只擋「兩個都完全沒選」。
         if(!asRedo && !state.editFormId && !ctx.ship && !ctx.adhoc){
             var ctn1=$('#insp-container-1').val()||'', ctn2=$('#insp-container-2').val()||'';
-            if(!ctn1 && !ctn2 && !confirm('尚未選擇容器（容器1／容器2皆未選），之後較難回溯這批貨裝在哪個容器。\n\n（只設定其中一個時會自動視為容器1的內容）\n\n仍要繼續儲存嗎？')) return;
+            if(!ctn1 && !ctn2){
+                $('#dock-extra').show(); syncDockPad();
+                alert('請至少選擇一個容器（容器1或容器2）才能儲存檢驗結果。\n\n只設定其中一個時會自動視為容器1的內容。');
+                $('#insp-container-1').focus();
+                return;
+            }
         }
 
         // 補資料（管理員）：新單暫存的檢驗日期/檢驗人員/主管審核，隨這次存檔一起送出；
