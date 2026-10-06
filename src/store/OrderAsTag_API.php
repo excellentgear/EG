@@ -101,6 +101,8 @@ switch ($action) {
             'require_save' => ot_astag_require_save($pdo) ? 1 : 0,
             'summary'      => ot_astag_backfill_summary($pdo),
             'own_company'  => ot_astag_own_company_id($pdo),
+            // 「單價為0」卡片要排除哪些標籤（2026-10-06）：跟著設定頁一起載入，免得另開一支請求
+            'zeroprice_excl_keys' => ot_astag_zeroprice_excl_keys($pdo),
         ]);
     }
 
@@ -125,6 +127,21 @@ switch ($action) {
         }
         oatReply(['success' => true, 'on' => $on,
                   'message' => $on ? '已開啟：新增/編輯訂單存檔時必須先選製程標籤' : '已關閉：存檔時不強制選擇製程標籤']);
+    }
+
+    // ── 設定頁：「單價為0」卡片要排除哪些標籤（2026-10-06 使用者要求）────────
+    //   有些標籤本來就不收費（例如廠內治具），不該被算進「單價為0」這個異常提示。
+    case 'zeroprice_get': {
+        if (!oatCanSetting($pdo, $uid)) oatDeny();
+        oatReply(['success' => true, 'keys' => ot_astag_zeroprice_excl_keys($pdo), 'options_all' => ot_astag_options($pdo, true)]);
+    }
+    case 'zeroprice_save': {
+        if (!oatCanSetting($pdo, $uid)) oatDeny();
+        $keys = json_decode((string)($_POST['keys'] ?? '[]'), true);
+        if (!is_array($keys)) oatReply(['success' => false, 'message' => '資料格式有誤']);
+        $clean = ot_astag_zeroprice_excl_save($pdo, $keys);
+        oatReply(['success' => true, 'keys' => $clean,
+                   'message' => $clean ? ('已設定排除 ' . count($clean) . ' 個標籤') : '已清空，「單價為0」卡片不再排除任何標籤']);
     }
 
     // ── 補設定：總覽數字 ──────────────────────────────────────────────

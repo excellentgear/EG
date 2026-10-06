@@ -2340,6 +2340,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
 
     $whereClauses = ["1=1", "(ot.parent_order_id IS NULL OR ot.parent_order_id = 0)"];
     $params = [];
+    // 「單價為0」卡片要排除哪些標籤（2026-10-06 使用者要求；管理員在「設定」跳窗維護）：
+    // 統計與清單篩選共用同一套判定，一次算好，兩處都接上（唯一實作 order_as_tag_lib.php）。
+    $zpExclSql = ot_astag_zeroprice_excl_sql($pdo, 'ot');
 
     if ($year !== 'ALL') {
         $whereClauses[] = "ot.Order_date >= :year_start AND ot.Order_date < :year_end";
@@ -2380,7 +2383,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     }
     if ($unbound_op === 1) {
         // 未綁定OP條件暫時停用（OP單據尚未開始使用）；恢復時在 OR 前取消 /*…OR*/ 的 SQL 注解
-        $whereClauses[] = "(/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0)";
+        $whereClauses[] = "(/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0)" . $zpExclSql;
     }
     if ($qty_over === 1) {
         // OP轉訂單時輸入數量超出報價階梯區間（含容差後區間）的訂單，供補報價單追蹤
@@ -2447,7 +2450,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
             SUM(CASE WHEN (ot.pmGet IS NULL AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as processing,
             SUM(CASE WHEN (ot.pmGet IS NOT NULL AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as done,
             SUM(CASE WHEN (ot.pmGet IS NULL AND " . el_order_open_exists_sql('ot') . " AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as communication,
-            SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op,
+            SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0){$zpExclSql} THEN 1 ELSE 0 END) as unbound_op,
             SUM(CASE WHEN (ot.qty_over_range = 1) THEN 1 ELSE 0 END) as qty_over,
             SUM(CASE WHEN ($ocrPendingExistsSql) THEN 1 ELSE 0 END) as pending_reminder
             FROM order_track ot LEFT JOIN user u ON u.id = ot.ate LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID $whereSql";
@@ -2458,7 +2461,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
             SUM(CASE WHEN (ot.pmGet IS NULL AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as processing,
             SUM(CASE WHEN (ot.pmGet IS NOT NULL AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as done,
             SUM(CASE WHEN (ot.pmGet IS NULL AND " . el_order_open_exists_sql('ot') . " AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as communication,
-            SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op,
+            SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0){$zpExclSql} THEN 1 ELSE 0 END) as unbound_op,
             SUM(CASE WHEN (ot.qty_over_range = 1) THEN 1 ELSE 0 END) as qty_over,
             SUM(CASE WHEN ($ocrPendingExistsSql) THEN 1 ELSE 0 END) as pending_reminder
             FROM order_track ot LEFT JOIN user u ON u.id = ot.ate LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID $whereSql";
@@ -3678,9 +3681,11 @@ catch (Exception $_eUrg) {
 // 只在「真的開頁面」時跑一次（AJAX 清單不跑，避免每次翻頁都 SHOW COLUMNS）
 try { ot_boss_ensure_schema($conn->getPDO()); } catch (Exception $_eBoss) {}
 try { ocr_ensure_schema($conn->getPDO()); } catch (Exception $_eOcr) {}
+// 「單價為0」卡片要排除哪些標籤（2026-10-06 使用者要求）：與 AJAX 分頁那支共用同一套判定。
+$zpExclSqlInit = ot_astag_zeroprice_excl_sql($db, 'ot');
 $initStatsSql = "SELECT
     COUNT(*) as total_records,
-    SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op,
+    SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0){$zpExclSqlInit} THEN 1 ELSE 0 END) as unbound_op,
     SUM(CASE WHEN (ot.qty_over_range = 1) THEN 1 ELSE 0 END) as qty_over,
     SUM(CASE WHEN (ot.Order_status = 6) THEN 1 ELSE 0 END) as paused,
     SUM(CASE WHEN (ot.Order_status = 9) THEN 1 ELSE 0 END) as closed,
@@ -6102,6 +6107,38 @@ foreach($dCounts as $c) {
                     if ($(this).is('#part_id_input')) { $('#selected_part_pk').val(''); updateIdBadges(); }
                 }
             });
+
+            // ── 新增/編輯訂單視窗：Enter 跳下一個可輸入欄位、聚焦已有資料自動全選 ──
+            // （2026-10-06 使用者要求；本頁其餘輸入框/篩選列不受影響——刻意不載入全站共用
+            //   eg_input_rules.js，只在 #newOrderForm 範圍內加這兩條規則，避免影響既有操作）
+            (function() {
+                function orderModalNavFields() {
+                    return $('#newOrderForm').find(
+                        'input[type="text"], input[type="number"], input[type="date"], select, textarea'
+                    ).filter(function() { return !this.disabled && !this.readOnly && $(this).is(':visible'); });
+                }
+                // 聚焦已有資料自動全選（select 沒有文字可選，跳過）
+                $(document).on('focus', '#newOrderForm input[type="text"], #newOrderForm input[type="number"], #newOrderForm textarea', function() {
+                    var el = this;
+                    if (el.disabled || el.readOnly || el.value === '' || el.value == null) return;
+                    setTimeout(function() {
+                        if (document.activeElement !== el) return;
+                        try { el.select(); } catch (e) {}
+                    }, 0);
+                });
+                // Enter 跳下一個欄位（textarea 內 Enter 仍為換行，不攔截）
+                $(document).on('keydown', '#newOrderForm input[type="text"], #newOrderForm input[type="number"], #newOrderForm input[type="date"], #newOrderForm select', function(e) {
+                    if (e.key !== 'Enter' || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+                    var $fields = orderModalNavFields();
+                    var idx = $fields.index(this);
+                    if (idx < 0) return;
+                    var $next = $fields.eq(idx + 1);
+                    if (!$next.length) return;
+                    e.preventDefault();
+                    $next.focus();
+                    try { $next[0].select(); } catch (err) {}
+                });
+            })();
 
             // ── Autocomplete ────────────────────────────────────────────────
             setupAutocomplete('#client_name_input', '#client-suggestions', 'customer');
@@ -9557,7 +9594,8 @@ foreach($dCounts as $c) {
         // ══════════════════════════════════════════════════════════════════════
         window.ASTAGCFG = { rows: [], others: [], tree: [], usage: {}, optsAll: [], fixed: [],
                             bfGroups: [], bfOrders: [], bfPage: 1, bfTotal: 0, bfPi: null, tab: 'group',
-                            bfDirty: false };   // bfDirty：補設定期間有沒有真的寫入過（關跳窗時才刷新主清單）
+                            bfDirty: false,     // bfDirty：補設定期間有沒有真的寫入過（關跳窗時才刷新主清單）
+                            zpExcl: [] };       // 「單價為0」卡片排除的標籤鍵（'tagId:scope'，2026-10-06）
 
         function astagCfgApi(data, cb) {
             $.post(astagApiBase(), data, function (res) { cb(res || { success: false, message: '沒有回應' }); }, 'json')
@@ -9596,6 +9634,46 @@ foreach($dCounts as $c) {
                 astagRenderOthers();
                 astagRenderFixed();
                 astagRenderSummary(res.summary || {});
+                ASTAGCFG.zpExcl = res.zeroprice_excl_keys || [];
+                astagZpRender();
+            });
+        }
+
+        // ── 「單價為0」卡片排除標籤（2026-10-06 使用者要求）──────────────────
+        // 有些標籤本來就不收費（廠內治具…），勾起來之後這幾種標籤的訂單不算進「單價為0」卡片；
+        // 清單一律用目前全部可選的標籤（ASTAGCFG.optsAll，含停用前就已勾選、現在已停用的也要留著能看到/取消）。
+        function astagZpRender() {
+            var $box = $('#astag-zp-list');
+            if (!$box.length) return;
+            var opts = ASTAGCFG.optsAll || [];
+            var excl = ASTAGCFG.zpExcl || [];
+            // 已勾選但目前已不在可選清單裡（標籤後來被刪除）的，仍要顯示出來，否則使用者看不出「怎麼少了一項」
+            var optKeys = {}; opts.forEach(function (o) { optKeys[o.key] = true; });
+            var orphan = excl.filter(function (k) { return !optKeys[k]; });
+            if (!opts.length && !orphan.length) {
+                $box.html('<span style="color:#aaa;">目前沒有任何稽核製程標籤，請先在上方建立。</span>');
+                return;
+            }
+            var h = opts.map(function (o) {
+                var checked = excl.indexOf(o.key) !== -1;
+                return '<label style="font-weight:400;display:inline-flex;align-items:center;gap:4px;cursor:pointer;">'
+                     + '<input type="checkbox" class="astag-zp-ck" value="' + escapeHtml(o.key) + '"' + (checked ? ' checked' : '') + '>'
+                     + escapeHtml(o.label) + '</label>';
+            }).join('');
+            h += orphan.map(function (k) {
+                return '<label style="font-weight:400;display:inline-flex;align-items:center;gap:4px;color:#DD5138;" title="這個標籤已經不存在了，取消勾選後就會從排除清單移除">'
+                     + '<input type="checkbox" class="astag-zp-ck" value="' + escapeHtml(k) + '" checked>'
+                     + '（已刪除的標籤）</label>';
+            }).join('');
+            $box.html(h);
+        }
+        function astagZpSave() {
+            var keys = [];
+            $('#astag-zp-list .astag-zp-ck:checked').each(function () { keys.push($(this).val()); });
+            $('#astag-zp-msg').css('color', '#888').text('儲存中…');
+            astagCfgApi({ action: 'zeroprice_save', keys: JSON.stringify(keys) }, function (res) {
+                $('#astag-zp-msg').css('color', res.success ? '#27ae60' : '#DD5138').text(res.message || '');
+                if (res.success) { ASTAGCFG.zpExcl = res.keys || []; astagZpRender(); fetchTableData(currentPage || 1); }
             });
         }
 
@@ -13240,6 +13318,18 @@ foreach($dCounts as $c) {
                 <button type="button" class="btn btn-sm" style="background:linear-gradient(135deg,#8a5a2b,#F0A24B);color:#fff;border:none;font-weight:600;" onclick="astagOpenBackfill()">
                   <i class="fa fa-magic"></i> 開啟補設定畫面</button>
                 <span style="font-size:11px;color:#888;margin-left:6px;">補設定只會填空白；要<b>改</b>已經綁定好的，進去切到「逐筆設定」→顯示選「全部」。</span>
+              </div>
+
+              <!-- 「單價為0」卡片排除標籤（2026-10-06 使用者要求）-->
+              <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #E4D3BC;">
+                <div style="font-weight:700;color:#8a5a2b;margin-bottom:4px;"><i class="fa fa-exclamation-triangle"></i> 「單價為0」卡片要排除的標籤</div>
+                <div style="font-size:11px;color:#888;margin-bottom:8px;line-height:1.6;">
+                  有些標籤本來就不收費（例如<b>廠內治具</b>），勾起來之後這幾種標籤的訂單<b>不會被算進「單價為0」這張卡片的筆數，也不會出現在它的篩選清單裡</b>；
+                  其餘條件完全不受影響。目前沒有任何訂單標籤時，下方清單會是空的，請先建立/補設定標籤再回來勾選。
+                </div>
+                <div id="astag-zp-list" style="display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;margin-bottom:8px;"><span style="color:#aaa;">載入中…</span></div>
+                <button type="button" class="btn btn-xs btn-primary" onclick="astagZpSave()"><i class="fa fa-save"></i> 套用</button>
+                <span id="astag-zp-msg" style="font-size:11px;margin-left:6px;"></span>
               </div>
             </div>
             <?php endif; /* $can_as_tag_setting */ ?>

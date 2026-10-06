@@ -235,6 +235,61 @@ function ot_astag_require_save(PDO $db): bool
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ * 「單價為0」統計卡片要排除哪些標籤（2026-10-06 使用者要求）
+ * 有些標籤本來就不收費（例如廠內治具），不該被算進「單價為0」這張卡片的異常提示裡；
+ * 哪些標籤要排除由管理員在設定頁勾選，統計卡片與「單價為0」的清單篩選必須共用同一套判定
+ * （只改一邊會出現「卡片數字排除了、點進去清單卻還是列著」這種對不起來的情況）。
+ * ══════════════════════════════════════════════════════════════════ */
+/** 目前被排除的標籤變體鍵（'tagId:scope'，與 ot_astag_options() 的 key 同格式） */
+if (!function_exists('ot_astag_zeroprice_excl_keys')) {
+function ot_astag_zeroprice_excl_keys(PDO $db): array
+{
+    $v = ot_astag_param_get($db, 'zeroprice_excl_keys', []);
+    if (!is_array($v)) return [];
+    $out = [];
+    foreach ($v as $k) { $k = trim((string)$k); if ($k !== '') $out[$k] = true; }
+    return array_keys($out);
+}
+}
+/** 存檔（鐵律8：後端只收目前真的存在的標籤變體鍵，不存在的直接忽略不報錯） */
+if (!function_exists('ot_astag_zeroprice_excl_save')) {
+function ot_astag_zeroprice_excl_save(PDO $db, array $keys): array
+{
+    $valid = [];
+    foreach (ot_astag_options($db, true) as $o) $valid[$o['key']] = true;
+    $clean = [];
+    foreach ($keys as $k) {
+        $k = trim((string)$k);
+        if ($k !== '' && isset($valid[$k])) $clean[$k] = true;
+    }
+    $clean = array_keys($clean);
+    ot_astag_param_set($db, 'zeroprice_excl_keys', $clean);
+    return $clean;
+}
+}
+/**
+ * 「單價為0」判定要排除的 SQL 片段（唯一實作；統計卡片與清單篩選一律呼叫這支，不要各自比對一次）。
+ * 沒有排除設定時回傳空字串，接在既有條件後面即可。
+ * 直接內嵌字面值、不用 bind 參數——標籤鍵存檔前已用 /^(\d+):([a-z]+)$/ 驗證過，
+ * tag_id 是整數、scope 只會是純英文小寫，可以安全內嵌；這樣呼叫端不論是否走預備語句都能直接拼接，
+ * 不必額外處理參數合併（本頁有一處初始統計是用 PDO::query() 直接下、沒有 execute($params) 的管道）。
+ */
+if (!function_exists('ot_astag_zeroprice_excl_sql')) {
+function ot_astag_zeroprice_excl_sql(PDO $db, string $alias = 'ot'): string
+{
+    $keys = ot_astag_zeroprice_excl_keys($db);
+    if (!$keys) return '';
+    $ors = [];
+    foreach ($keys as $k) {
+        if (!preg_match('/^(\d+):([a-z]+)$/', $k, $m)) continue;
+        $ors[] = "($alias.as_tag_id = " . (int)$m[1] . " AND $alias.as_tag_scope = '" . $m[2] . "')";
+    }
+    if (!$ors) return '';
+    return ' AND NOT (' . implode(' OR ', $ors) . ')';
+}
+}
+
+/* ══════════════════════════════════════════════════════════════════
  * 本公司判定（唯一來源 customer_list.is_own_company=1，禁寫死公司ID）
  * ══════════════════════════════════════════════════════════════════ */
 if (!function_exists('ot_astag_own_company_id')) {
