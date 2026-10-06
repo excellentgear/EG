@@ -546,7 +546,7 @@ function renderView(){
             // 簽核一律走圖章（ai-rules/18），不只印人名文字。is_auto_sign／is_backfill（這一章是
             // 管理員自動帶入／補登的）在這裡完全不顯示任何字樣——2026-10-05 使用者更正：這個紀錄
             // 要改成「清單上有個開關，開了才多一欄顯示管理員代簽」，不是在表單畫面上掛標籤。
-            h += stampHtml(dp.signed_by_name, dispDate(String(dp.signed_at||'').substring(0,10)));
+            h += stampHtml(dp.signed_by_name, dispDate(dp.sign_date || String(dp.signed_at||'').substring(0,10)));
         } else if (d.status==='submitted' && (dp.can_fill || CUR.is_admin)) {
             h += '<span><input type="text" id="deptNote_'+dp.dept_id+'" placeholder="意見(選填)" style="width:200px;border:1px solid #E8D5B5;border-radius:4px;padding:3px 6px;font-size:12px;margin-right:6px;">'
                + '<button type="button" class="cr-btn" style="height:26px;padding:0 10px;font-size:12px;" onclick="deptSign('+dp.dept_id+')">本課確認</button></span>';
@@ -566,11 +566,11 @@ function renderView(){
         // 清單頁的「顯示管理員代簽標記」開關（2026-10-05 使用者更正）。
         h += '<div class="cr-hdr-grid" style="grid-template-columns:1fr 1fr;">';
         var decideStampHtml = d.decision
-            ? ('<span class="dc-'+d.decision+'">'+esc(DECISIONS[d.decision])+'</span>　'+stampHtml(d.sales_decided_by_name, dispDate(String(d.sales_decided_at||'').substring(0,10))))
+            ? ('<span class="dc-'+d.decision+'">'+esc(DECISIONS[d.decision])+'</span>　'+stampHtml(d.sales_decided_by_name, dispDate(d.sales_decided_date || String(d.sales_decided_at||'').substring(0,10))))
             : '尚未決行';
         h += '<div><span class="k">業務課決行：</span><span class="v">'+decideStampHtml+'</span></div>';
         var gmStampHtml = d.gm_approved_by_name
-            ? stampHtml(d.gm_approved_by_name, dispDate(String(d.gm_approved_at||'').substring(0,10)), d.gm_is_deputy)
+            ? stampHtml(d.gm_approved_by_name, dispDate(d.gm_approved_date || String(d.gm_approved_at||'').substring(0,10)), d.gm_is_deputy)
             : '尚未核准';
         h += '<div><span class="k">總經理核准：</span><span class="v">'+gmStampHtml+'</span></div>';
         h += '</div>';
@@ -649,7 +649,7 @@ function printDoc(){
             if (!dp) return '<td class="dept"></td><td class="tl"></td>';
             return '<td class="dept">'+esc(dp.dept_name)+'</td><td class="tl">'
                  + (dp.note?('<div style="font-size:10px;color:#555;margin-bottom:2px;">'+esc(dp.note)+'</div>'):'')
-                 + pStamp(dp.signed_by_name, dispDate(String(dp.signed_at||'').substring(0,10)))
+                 + pStamp(dp.signed_by_name, dispDate(dp.sign_date || String(dp.signed_at||'').substring(0,10)))
                  + '</td>';
         };
         var deptRows = '';
@@ -668,8 +668,8 @@ function printDoc(){
             // 決行與核准改並列同一列（2026-10-05 使用者要求）：業務課決行／總經理核准各佔一半寬度。
             + '<div class="p-sec">決行與核准　決行結果：'+decisionTxt+'</div>'
             + '<table class="p-tb"><tr>'
-            + '<td class="dept">業務課決行</td><td class="tl">'+pStamp(d.sales_decided_by_name, dispDate(String(d.sales_decided_at||'').substring(0,10)))+'</td>'
-            + '<td class="dept">總經理核准</td><td class="tl">'+pStamp(d.gm_approved_by_name, dispDate(String(d.gm_approved_at||'').substring(0,10)), d.gm_is_deputy)+'</td>'
+            + '<td class="dept">業務課決行</td><td class="tl">'+pStamp(d.sales_decided_by_name, dispDate(d.sales_decided_date || String(d.sales_decided_at||'').substring(0,10)))+'</td>'
+            + '<td class="dept">總經理核准</td><td class="tl">'+pStamp(d.gm_approved_by_name, dispDate(d.gm_approved_date || String(d.gm_approved_at||'').substring(0,10)), d.gm_is_deputy)+'</td>'
             + '</tr></table>';
         var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:1px;}'

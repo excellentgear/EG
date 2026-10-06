@@ -193,6 +193,26 @@ function cnrv_ensure_schema(PDO $db): void {
     if (!$hasCol('con_review_dept_sign', 'auto_sign_by_name')) {
         try { $db->exec("ALTER TABLE con_review_dept_sign ADD COLUMN auto_sign_by_name VARCHAR(50) NULL AFTER auto_sign_by"); } catch (Throwable $e) {}
     }
+    // 2026-10-06（使用者回報）：①管理員按「本課確認」時原本直接把自己記成簽核人，不是該部門
+    // 真正的人選——補上跟 cnrv_decide()/cnrv_approve() 同一套「代簽記真人、管理員本人只留 LOG」
+    // 規則要用的欄位。②簽章日期原本是按下按鈕當下的真實時間（NOW()），應該一律是接單日期
+    // （業務日期，ai-rules/18第4條／ai-rules/21：章面日期＝單據業務日期，精確時間戳只當內部
+    // 稽核軌跡）——signed_at 繼續留真實時間戳供稽核，章面顯示改看這個新欄位 sign_date。
+    if (!$hasCol('con_review_dept_sign', 'sign_date')) {
+        try { $db->exec("ALTER TABLE con_review_dept_sign ADD COLUMN sign_date DATE NULL
+                         COMMENT '章面顯示日期(業務日期，永遠=接單日期，不是signed_at這個精確稽核時間戳)' AFTER signed_at"); } catch (Throwable $e) {}
+    }
+    if (!$hasCol('con_review_dept_sign', 'is_proxy')) {
+        try { $db->exec("ALTER TABLE con_review_dept_sign ADD COLUMN is_proxy TINYINT(1) NOT NULL DEFAULT 0
+                         COMMENT '簽核人非本部門真正人選、由管理員代操作(人工點「本課確認」時管理員本人不在部門池內才觸發，與is_auto_sign/is_backfill不同)' AFTER auto_sign_by_name"); } catch (Throwable $e) {}
+    }
+    if (!$hasCol('con_review_dept_sign', 'proxy_uid')) {
+        try { $db->exec("ALTER TABLE con_review_dept_sign ADD COLUMN proxy_uid INT NULL
+                         COMMENT '實際操作的管理員帳號(僅供管理員查看的LOG，前端一律顯示signed_by_name)' AFTER is_proxy"); } catch (Throwable $e) {}
+    }
+    if (!$hasCol('con_review_dept_sign', 'proxy_name')) {
+        try { $db->exec("ALTER TABLE con_review_dept_sign ADD COLUMN proxy_name VARCHAR(50) NULL AFTER proxy_uid"); } catch (Throwable $e) {}
+    }
     // 2026-10-05：管理員刪除功能（使用者要求「可刪除未審核的」），走既有的 is_deleted 軟刪除
     // （cnrv_get()／cnrv_list() 本來就已經過濾 is_deleted=0，只是一直沒有寫入端——補上）。
     if (!$hasCol('con_review_doc', 'deleted_by')) {
@@ -226,6 +246,17 @@ function cnrv_ensure_schema(PDO $db): void {
     }
     if (!$hasCol('con_review_doc', 'gm_approved_proxy_name')) {
         try { $db->exec("ALTER TABLE con_review_doc ADD COLUMN gm_approved_proxy_name VARCHAR(50) NULL AFTER gm_approved_proxy_uid"); } catch (Throwable $e) {}
+    }
+    // 2026-10-06（使用者回報）：決行／核准的章面日期原本是按下按鈕當下的真實時間（NOW()），應該
+    // 一律是接單日期（業務日期）——sales_decided_at／gm_approved_at 繼續留真實時間戳供稽核，
+    // 章面顯示改看這兩個新欄位（同 con_review_dept_sign.sign_date 的理由，見上）。
+    if (!$hasCol('con_review_doc', 'sales_decided_date')) {
+        try { $db->exec("ALTER TABLE con_review_doc ADD COLUMN sales_decided_date DATE NULL
+                         COMMENT '章面顯示日期(業務日期，永遠=接單日期business_date，不是sales_decided_at這個精確稽核時間戳)' AFTER sales_decided_at"); } catch (Throwable $e) {}
+    }
+    if (!$hasCol('con_review_doc', 'gm_approved_date')) {
+        try { $db->exec("ALTER TABLE con_review_doc ADD COLUMN gm_approved_date DATE NULL
+                         COMMENT '章面顯示日期(業務日期，永遠=接單日期business_date，不是gm_approved_at這個精確稽核時間戳)' AFTER gm_approved_at"); } catch (Throwable $e) {}
     }
 
     // 角色自動建立（module='con_review'，比照 equip_list_lib.php 同一套寫法；加好之後會自動出現在
@@ -849,7 +880,8 @@ function cnrv_dept_sign(PDO $db, int $docId, int $deptId, int $uid, string $unam
     $doc = cnrv_get($db, $docId);
     if (!$doc) throw new Exception('找不到此表單');
     if (!$isAdmin && $doc['status'] !== 'submitted') throw new Exception('表單尚未送出或已結案');
-    if (!$isAdmin && !cnrv_can_fill_dept($db, $uid, $deptId, false)) throw new Exception('您不在此部門的簽核範圍內');
+    $canFillSelf = cnrv_can_fill_dept($db, $uid, $deptId, false);
+    if (!$isAdmin && !$canFillSelf) throw new Exception('您不在此部門的簽核範圍內');
     if (cnrv_dept_signed($db, $docId, $deptId)) throw new Exception('此部門已簽核過，不可重複簽核');
     if (!$isAdmin) {
         $st = $db->prepare("SELECT COUNT(*) c, SUM(answer_value IS NOT NULL AND answer_value<>'') filled
@@ -858,11 +890,32 @@ function cnrv_dept_sign(PDO $db, int $docId, int $deptId, int $uid, string $unam
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if ((int)$r['c'] > (int)$r['filled']) throw new Exception('本部門負責的項目尚未全部填寫完成');
     }
-    $db->prepare("INSERT INTO con_review_dept_sign (doc_id,dept_id,note,signed_by,signed_by_name,signed_at,is_backfill,backfill_by_name)
-                  VALUES (?,?,?,?,?,NOW(),?,?)
+
+    // 2026-10-06 使用者回報：管理員按「本課確認」時原本直接把自己記成該部門簽核人（signed_by=$uid），
+    // 不是該部門真正的人員——跟 cnrv_decide()/cnrv_approve() 同一套「代簽記真人、管理員本人只留 LOG」
+    // 規則，這裡原本漏做。管理員本人若剛好真的在部門池內（$canFillSelf=true）仍記自己，不算代簽，
+    // 與另外兩關同一種判斷；$isBackfill 情境（目前尚無呼叫端使用，保留給未來）由呼叫端自行決定
+    // signed_by/uname 要記誰，這裡不再覆寫。
+    $signerId = $uid; $signerName = $uname; $isProxy = 0; $proxyUid = null; $proxyName = null;
+    if ($isAdmin && !$canFillSelf && !$isBackfill) {
+        $pool = cnrv_dept_pool($db, $deptId);
+        if ($pool) {
+            $signerId = (int)$pool[0]['id']; $signerName = $pool[0]['user_cname'];
+            $isProxy = 1; $proxyUid = $uid; $proxyName = $uname;
+        }
+        // 部門完全沒設定任何人員（池是空的）時沒有真人可代，只能仍記操作者本人。
+    }
+
+    // 2026-10-06 使用者回報：簽章日期要一律是接單日期（業務日期），不是按下按鈕當下的真實時間——
+    // signed_at 仍留真實時間戳供稽核（何時真的按下），章面顯示另外看 sign_date（ai-rules/18第4條／
+    // ai-rules/21：章面日期＝單據業務日期，精確時間戳只當內部稽核軌跡，不是章面顯示值）。
+    $signDate = (string)$doc['business_date'];
+    $db->prepare("INSERT INTO con_review_dept_sign (doc_id,dept_id,note,signed_by,signed_by_name,signed_at,sign_date,is_backfill,backfill_by_name,is_proxy,proxy_uid,proxy_name)
+                  VALUES (?,?,?,?,?,NOW(),?,?,?,?,?,?)
                   ON DUPLICATE KEY UPDATE note=VALUES(note),signed_by=VALUES(signed_by),signed_by_name=VALUES(signed_by_name),
-                      signed_at=VALUES(signed_at),is_backfill=VALUES(is_backfill),backfill_by_name=VALUES(backfill_by_name)")
-       ->execute([$docId, $deptId, $note, $uid, $uname, $isBackfill?1:0, $backfillByName]);
+                      signed_at=VALUES(signed_at),sign_date=VALUES(sign_date),is_backfill=VALUES(is_backfill),backfill_by_name=VALUES(backfill_by_name),
+                      is_proxy=VALUES(is_proxy),proxy_uid=VALUES(proxy_uid),proxy_name=VALUES(proxy_name)")
+       ->execute([$docId, $deptId, $note, $signerId, $signerName, $signDate, $isBackfill?1:0, $backfillByName, $isProxy, $proxyUid, $proxyName]);
 
     $toUids = array_map(fn($p) => (int)$p['id'], cnrv_sales_pool($db));
     if ($toUids) cnrv_notify($db, $docId, $toUids, '合約訂單審查待決行',
@@ -976,9 +1029,9 @@ function cnrv_admin_auto_fill_sign(PDO $db, int $docId, string $signDate, int $a
                 $unsignedDepts[$deptId] = ['dept_name'=>$dName, 'reason'=>'這天本部門候選簽核人都不在：' . ($avail['warnings'] ? implode('；', $avail['warnings']) : '查無候選人員，請先設定部門主管或人員')];
                 continue;
             }
-            $db->prepare("INSERT INTO con_review_dept_sign (doc_id,dept_id,signed_by,signed_by_name,signed_at,is_auto_sign,auto_sign_by,auto_sign_by_name)
-                          VALUES (?,?,?,?,?,1,?,?)")
-               ->execute([$docId, $deptId, (int)$avail['signer']['id'], $avail['signer']['user_cname'], $signDate . ' 09:30:00', $adminUid, $adminName]);
+            $db->prepare("INSERT INTO con_review_dept_sign (doc_id,dept_id,signed_by,signed_by_name,signed_at,sign_date,is_auto_sign,auto_sign_by,auto_sign_by_name)
+                          VALUES (?,?,?,?,?,?,1,?,?)")
+               ->execute([$docId, $deptId, (int)$avail['signer']['id'], $avail['signer']['user_cname'], $signDate . ' 09:30:00', $signDate, $adminUid, $adminName]);
             $signedDepts[$deptId] = ['dept_name'=>$dName, 'signer_name'=>$avail['signer']['user_cname'], 'note_warnings'=>$avail['warnings']];
         }
         $db->commit();
@@ -1030,9 +1083,11 @@ function cnrv_decide(PDO $db, int $docId, int $uid, string $uname, string $decis
         }
         // 業務課完全沒設定任何人員（池是空的）時沒有真人可代，只能仍記操作者本人。
     }
-    $db->prepare("UPDATE con_review_doc SET decision=?,decision_note=?,sales_decided_by=?,sales_decided_by_name=?,sales_decided_at=NOW(),
+    // 2026-10-06 使用者回報：決行章面日期要一律是接單日期（業務日期），不是按下按鈕當下的真實
+    // 時間——sales_decided_at 仍留真實時間戳供稽核，章面顯示改看 sales_decided_date。
+    $db->prepare("UPDATE con_review_doc SET decision=?,decision_note=?,sales_decided_by=?,sales_decided_by_name=?,sales_decided_at=NOW(),sales_decided_date=?,
                   sales_decided_is_proxy=?,sales_decided_proxy_uid=?,sales_decided_proxy_name=? WHERE id=?")
-       ->execute([$decision, $note, $signerId, $signerName, $isProxy, $proxyUid, $proxyName, $docId]);
+       ->execute([$decision, $note, $signerId, $signerName, $doc['business_date'], $isProxy, $proxyUid, $proxyName, $docId]);
     $gm = cnrv_gm_signer($db, $docId);
     if ($gm) cnrv_notify($db, $docId, [(int)$gm['id']], '合約訂單審查待核准',
         "訂單 {$doc['order_oo']}（{$doc['client_name']}）的合約訂單審查已決行為「" . CNRV_DECISIONS[$decision] . "」，請核准。", $uid);
@@ -1057,9 +1112,12 @@ function cnrv_approve(PDO $db, int $docId, int $uid, string $uname, bool $isAdmi
         $isProxy = 1; $proxyUid = $uid; $proxyName = $uname;
     }
     // $gm 查無資料（完全沒設定 top_approver）時沒有真人可代，只能仍記操作者本人（可能是管理員）。
-    $db->prepare("UPDATE con_review_doc SET status='closed',gm_approved_by=?,gm_approved_by_name=?,gm_approved_at=NOW(),gm_is_deputy=?,
+    // 2026-10-06 使用者回報：核准章面日期要一律是接單日期（業務日期），不是按下按鈕當下的真實
+    // 時間——gm_approved_at 仍留真實時間戳供稽核（何時真的按下／closed_at 也是），章面顯示
+    // 改看新增的 gm_approved_date。
+    $db->prepare("UPDATE con_review_doc SET status='closed',gm_approved_by=?,gm_approved_by_name=?,gm_approved_at=NOW(),gm_approved_date=?,gm_is_deputy=?,
                   gm_approved_is_proxy=?,gm_approved_proxy_uid=?,gm_approved_proxy_name=?,closed_at=NOW() WHERE id=?")
-       ->execute([$signerId, $signerName, $isDeputy?1:0, $isProxy, $proxyUid, $proxyName, $docId]);
+       ->execute([$signerId, $signerName, $doc['business_date'], $isDeputy?1:0, $isProxy, $proxyUid, $proxyName, $docId]);
 }
 
 /** 管理員刪除（2026-10-05 使用者交辦「可刪除未審核的」，同日再交辦「也要能刪除舊有已決行
@@ -1089,7 +1147,7 @@ function cnrv_list(PDO $db, array $f = []): array {
     // 或決行／核准由管理員代真人簽），只給清單「顯示管理員代簽標記」開關（僅管理員看得到）用；
     // 一般欄位（簽核人姓名）本來就已經是真人，這欄只是額外的管理員查核用途。
     $sql = "SELECT d.*,
-                   EXISTS(SELECT 1 FROM con_review_dept_sign s WHERE s.doc_id=d.id AND (s.is_auto_sign=1 OR s.is_backfill=1)) AS has_dept_admin_sign
+                   EXISTS(SELECT 1 FROM con_review_dept_sign s WHERE s.doc_id=d.id AND (s.is_auto_sign=1 OR s.is_backfill=1 OR s.is_proxy=1)) AS has_dept_admin_sign
             FROM con_review_doc d WHERE " . implode(' AND ', $where) . " ORDER BY d.id DESC";
     $limit = max(1, min(200, (int)($f['limit'] ?? 50)));
     $offset = max(0, (int)($f['offset'] ?? 0));
@@ -1106,12 +1164,12 @@ function cnrv_list(PDO $db, array $f = []): array {
     $deptEvents = [];
     if ($docIds) {
         $ph = implode(',', array_fill(0, count($docIds), '?'));
-        $dst = $db->prepare("SELECT doc_id, is_auto_sign, is_backfill, auto_sign_by_name, backfill_by_name, signed_at
+        $dst = $db->prepare("SELECT doc_id, is_auto_sign, is_backfill, is_proxy, auto_sign_by_name, backfill_by_name, proxy_name, signed_at
                               FROM con_review_dept_sign
-                              WHERE doc_id IN ($ph) AND (is_auto_sign=1 OR is_backfill=1)");
+                              WHERE doc_id IN ($ph) AND (is_auto_sign=1 OR is_backfill=1 OR is_proxy=1)");
         $dst->execute($docIds);
         foreach ($dst->fetchAll(PDO::FETCH_ASSOC) as $dr) {
-            $name = $dr['is_auto_sign'] ? ($dr['auto_sign_by_name'] ?: null) : ($dr['backfill_by_name'] ?: null);
+            $name = $dr['is_auto_sign'] ? ($dr['auto_sign_by_name'] ?: null) : ($dr['is_backfill'] ? ($dr['backfill_by_name'] ?: null) : ($dr['proxy_name'] ?: null));
             if (!$name) continue;
             $deptEvents[(int)$dr['doc_id']][] = ['name'=>$name, 'at'=>$dr['signed_at']];
         }

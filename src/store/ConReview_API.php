@@ -151,13 +151,17 @@ case 'get': {
             'signed'=>!empty($deptSign[$d]['signed_by']),
             'signed_by_name'=>$deptSign[$d]['signed_by_name'] ?? null,
             'signed_at'=>$deptSign[$d]['signed_at'] ?? null,
+            // sign_date：章面顯示日期＝這張單的業務日期（接單日期），不是 signed_at 這個精確稽核
+            // 時間戳（2026-10-06 使用者回報修正，見 ai-rules/18 第4條／ai-rules/21）。
+            'sign_date'=>$deptSign[$d]['sign_date'] ?? null,
             'note'=>$deptSign[$d]['note'] ?? null,
             'can_fill'=>cnrv_can_fill_dept($db, $uid, $d, $perms['canAdmin']),
-            // is_auto_sign／is_backfill：這一章是管理員自動帶入／補登的，資料本身不是秘密（一般使用者
-            // 看到的 signed_by_name 本來就已經是真人姓名），詳情頁目前不逐部門顯示，彙總版在清單頁
-            // 「顯示管理員代簽標記」開關（has_admin_sign，見 case 'list'）。
+            // is_auto_sign／is_backfill／is_proxy：這一章是管理員自動帶入／補登／代簽的，資料本身
+            // 不是秘密（一般使用者看到的 signed_by_name 本來就已經是真人姓名），詳情頁目前不逐部門
+            // 顯示，彙總版在清單頁「顯示管理員代簽標記」開關（has_admin_sign，見 case 'list'）。
             'is_auto_sign'=>(bool)($deptSign[$d]['is_auto_sign'] ?? false),
             'is_backfill'=>(bool)($deptSign[$d]['is_backfill'] ?? false),
+            'is_proxy'=>(bool)($deptSign[$d]['is_proxy'] ?? false),
         ];
     }
     jout([
@@ -256,6 +260,7 @@ case 'print_get': {
             'signed'=>!empty($deptSign[$d]['signed_by']),
             'signed_by_name'=>$deptSign[$d]['signed_by_name'] ?? null,
             'signed_at'=>$deptSign[$d]['signed_at'] ?? null,
+            'sign_date'=>$deptSign[$d]['sign_date'] ?? null,
             'note'=>$deptSign[$d]['note'] ?? null,
         ];
     }
