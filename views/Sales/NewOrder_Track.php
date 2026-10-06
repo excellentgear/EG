@@ -1984,6 +1984,35 @@ function ot_ensure_ate_note_log(PDO $pdo) {
     } catch (Exception $e) {}
 }
 
+// ── 設計備註凍結（2026-10-06 使用者要求）────────────────────────────────
+// 已轉生管超過一個日曆天就凍結設計備註（轉生管當天仍可編輯，隔天起只能查看，不能
+// 再新增/回覆/標記已處理），新的狀況改到左側料號欄的「製程中紀錄」記錄。
+// 取消轉生管(pmGet 清空)後條件自然不成立＝自動解除凍結，不需要另外存一個凍結旗標
+// 或寫還原邏輯——frozen 永遠是「現在」當下即時算出來的，不是存檔時決定的。
+// $pmGetRaw 可以是 DATE 或 DATETIME 字串；$todayStr 一律由呼叫端查 DB 的 CURDATE()
+// 傳進來（不用 PHP 的 date()，避免 PHP(UTC) 與 MySQL(本地) 時區不一致算錯一天）。
+function ot_note_frozen(?string $pmGetRaw, string $todayStr): bool {
+    if (!$pmGetRaw) return false;
+    $pmDate = substr($pmGetRaw, 0, 10);
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $pmDate)) return false;
+    return $pmDate < $todayStr;
+}
+
+/** 依訂單 id 直接查凍結狀態（給 ate_q_reply／ate_q_resolve 這種只拿得到 log_id、
+ *  要回推訂單 id 之後才能判斷的場合用；ate_q_list／ate_q_add 已經有 $order['pmGet']
+ *  或可以直接查，不必呼叫這支，省一次查詢）。 */
+function ot_note_frozen_for_order(PDO $pdo, int $orderId): bool {
+    if ($orderId <= 0) return false;
+    try {
+        $st = $pdo->prepare("SELECT pmGet FROM order_track WHERE Order_id=?");
+        $st->execute([$orderId]);
+        $pmRaw = $st->fetchColumn();
+        if ($pmRaw === false || $pmRaw === null) return false;
+        $todayStr = (string)$pdo->query("SELECT CURDATE()")->fetchColumn();
+        return ot_note_frozen((string)$pmRaw, $todayStr);
+    } catch (Throwable $e) { return false; }
+}
+
 if (isset($_POST['action']) && $_POST['action'] === 'ate_note_done') {
     header('Content-Type: application/json');
     $pdo = $conn->getPDO();
@@ -2164,7 +2193,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
         if (!$can_design_qa) throw new Exception('沒有使用此功能的權限');
         $oid = (int)($_POST['order_id'] ?? 0);
         if (!$oid) throw new Exception('未指定訂單');
-        // kind：note＝訂單階段設計備註（預設，既有行為）／process＝轉生管後的製程中問題
+        // kind：note＝訂單階段設計備註（預設，既有行為）／process＝轉生管後的製程中紀錄
         // （2026-10-06 新增，與設計備註完全分開的另一個案件，見 eng_log_lib.php 說明）。
         $kind = (($_POST['kind'] ?? '') === 'process') ? 'process' : 'note';
         $logType = ($kind === 'process') ? 'order_process' : 'order_note';
@@ -2188,15 +2217,20 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
                 unset($x);
             }
         }
-        $ordSt = $pdo->prepare("SELECT Order_oo, d_id, Client_name, Created_By FROM order_track WHERE Order_id=?");
+        $ordSt = $pdo->prepare("SELECT Order_oo, d_id, Client_name, Created_By, pmGet FROM order_track WHERE Order_id=?");
         $ordSt->execute([$oid]);
         $ord = $ordSt->fetch(PDO::FETCH_ASSOC) ?: [];
         $bizDefault = el_order_business_default($pdo, $ord);
         $todayL = substr((string)$pdo->query("SELECT NOW()")->fetchColumn(), 0, 10);
+        // 設計備註凍結（2026-10-06）：只有 note（設計備註）才需要判斷；製程中紀錄沒有凍結規則。
+        $frozen = ($kind === 'note') ? ot_note_frozen((string)($ord['pmGet'] ?? ''), $todayL) : false;
+        // 回覆者預設＝目前登入者（2026-10-06，製程中紀錄用；設計備註不需要這個，省一次查詢）。
+        $curUser = ($kind === 'process') ? el_person_post($pdo, $id) : null;
         // 回覆方式（電話／Line／E-mail…，使用者交辦）：一律即時查 eng_log_channel 現況，
         // 不在這裡另存一份清單——管理員在 eng_log.php「維護回覆方式」加的新選項，這裡會
         // 自動一起出現，兩邊共用同一張表、同一套函式（鐵律4）。
         echo json_encode(['success' => true, 'log_id' => $logId, 'items' => $items, 'today' => $todayL, 'kind' => $kind,
+            'frozen' => $frozen, 'cur_user' => $curUser,
             'can_resolve' => $can_design_qa_resolve, 'biz_default' => $bizDefault, 'channels' => el_channels($pdo),
             'order' => ['order_no' => (string)($ord['Order_oo'] ?? ''), 'part_no' => (string)($ord['d_id'] ?? ''),
                         'client' => (string)($ord['Client_name'] ?? '')]]);
@@ -2214,15 +2248,20 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_add') {
         if (!$can_design_qa) throw new Exception('沒有使用此功能的權限');
         $oid = (int)($_POST['order_id'] ?? 0);
         if (!$oid) throw new Exception('未指定訂單');
-        // kind：note＝訂單階段設計備註（預設，既有行為）／process＝轉生管後的製程中問題
+        // kind：note＝訂單階段設計備註（預設，既有行為）／process＝轉生管後的製程中紀錄
         // （2026-10-06 新增，見 ate_q_list 同一段註解，兩種案件各自獨立不互相影響）。
         $kind = (($_POST['kind'] ?? '') === 'process') ? 'process' : 'note';
         $logType = ($kind === 'process') ? 'order_process' : 'order_note';
         $chkOrd = $pdo->prepare("SELECT 1 FROM order_track WHERE Order_id=?");
         $chkOrd->execute([$oid]);
         if (!$chkOrd->fetchColumn()) throw new Exception('查無此訂單');
+        // 設計備註凍結（2026-10-06）：只擋 note，製程中紀錄沒有這條規則；後端再擋一次，
+        // 不可只靠前端隱藏「＋新增」鈕（鐵律8）。
+        if ($kind === 'note' && ot_note_frozen_for_order($pdo, $oid)) {
+            throw new Exception('此訂單已轉生管超過一天，設計備註已凍結無法再新增，如需記錄請改用左側「製程中紀錄」');
+        }
         $rows = json_decode((string)($_POST['items'] ?? '[]'), true);
-        if (!is_array($rows) || !$rows) throw new Exception('請至少填寫一條問題');
+        if (!is_array($rows) || !$rows) throw new Exception('請至少填寫一條內容');
         $nowL = (string)$pdo->query("SELECT NOW()")->fetchColumn();
         $todayL = substr($nowL, 0, 10);
         $pdo->beginTransaction();
@@ -2232,10 +2271,24 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_add') {
         $created = 0;
         foreach ($rows as $r) {
             if (!is_array($r)) continue;
-            el_item_upsert($pdo, $logId, 0, $r, $nowL, $todayL);
+            $newItemId = el_item_upsert($pdo, $logId, 0, $r, $nowL, $todayL);
             $created++;
+            // 製程中紀錄「新增紀錄」可以順便一併填回覆（使用者拍板：單一／分開兩種建立方式
+            // 都要能用，避免先收到狀況、還沒有結果時無法紀錄）——有填「回覆內容」才真的建立
+            // 一筆回覆，留白就只建立這筆紀錄，之後仍可用既有「回覆」功能補上。
+            if ($kind === 'process') {
+                $replyContent = trim((string)($r['reply_content'] ?? ''));
+                if ($replyContent !== '') {
+                    el_reply_add($pdo, $logId, [$newItemId], [
+                        'content'    => $replyContent,
+                        'replied_on' => (string)($r['replied_on'] ?? ''),
+                        'reply_by'   => (string)($r['reply_by'] ?? ''),
+                        'channel'    => (string)($r['channel'] ?? ''),
+                    ], $id, $nowL, $todayL);
+                }
+            }
         }
-        if (!$created) { $pdo->rollBack(); throw new Exception('請至少填寫一條問題'); }
+        if (!$created) { $pdo->rollBack(); throw new Exception('請至少填寫一條內容'); }
         el_reindex($pdo, $logId);
         $pdo->prepare("UPDATE eng_log SET updated_at=? WHERE id=?")->execute([$nowL, $logId]);
         $pdo->commit();
@@ -2261,6 +2314,14 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_reply') {
         if (!is_array($itemIds)) $itemIds = [];
         $resolve = !empty($_POST['resolve']);
         if ($resolve && !$can_design_qa_resolve) throw new Exception('沒有標記已處理的權限');
+        // 設計備註凍結（2026-10-06）：這個案件若是 order_note 且已過凍結日，擋下回覆/標記已處理
+        // （鐵律8，後端同規則再擋一次；前端已先行隱藏回覆入口，這裡是防直打 API 繞過）。
+        if (el_log_type_of($pdo, $logId) === 'order_note') {
+            $oidFz = el_case_order_id($pdo, $logId);
+            if ($oidFz && ot_note_frozen_for_order($pdo, $oidFz)) {
+                throw new Exception('此訂單已轉生管超過一天，設計備註已凍結無法再回覆/標記已處理');
+            }
+        }
         $nowL = (string)$pdo->query("SELECT NOW()")->fetchColumn();
         $todayL = substr($nowL, 0, 10);
         $pdo->beginTransaction();
@@ -2272,7 +2333,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_reply') {
         $pdo->commit();
         $oidR = el_case_order_id($pdo, $logId);
         // kind 要依這個案件實際的 log_type 判斷（而不是信任前端），否則前端不知道要更新
-        // 「設計備註」還是「製程中問題」哪一個小格子（2026-10-06 新增，見 eng_log_lib.php 說明）。
+        // 「設計備註」還是「製程中紀錄」哪一個小格子（2026-10-06 新增，見 eng_log_lib.php 說明）。
         $kindR = (el_log_type_of($pdo, $logId) === 'order_process') ? 'process' : 'note';
         $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR], $kindR === 'process' ? 'order_process' : 'order_note')[$oidR] ?? null) : null;
         echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'kind' => $kindR,
@@ -2293,6 +2354,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_resolve') {
         $logId  = (int)($_POST['log_id'] ?? 0);
         $itemId = (int)($_POST['id'] ?? 0);
         $status = trim((string)($_POST['status'] ?? 'resolved'));
+        if (el_log_type_of($pdo, $logId) === 'order_note') {
+            $oidFz = el_case_order_id($pdo, $logId);
+            if ($oidFz && ot_note_frozen_for_order($pdo, $oidFz)) {
+                throw new Exception('此訂單已轉生管超過一天，設計備註已凍結無法再回覆/標記已處理');
+            }
+        }
         $nowL = (string)$pdo->query("SELECT NOW()")->fetchColumn();
         el_item_set_status($pdo, $logId, $itemId, $status, '', $nowL);
         el_order_case_sync_status($pdo, $logId, $nowL);
@@ -2712,14 +2779,19 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     // 問題文字，清單上直接看得到；②全部已處理完時只看 open_count 會判定成「沒有案件」，
     // 使用者完全看不出有歷史紀錄——el_order_item_summary() 改成只要有過任何問題就回傳。
     $ate_q_map = [];
-    // 製程中問題（2026-10-06 新增）：Order_id => 摘要（與上面的設計備註是完全分開的另一個
-    // eng_log 案件，log_type='order_process'，同一批查詢，不要再各自跑一次 oidsQ）。
+    // 製程中紀錄（2026-10-06 新增，原稱「製程中問題」後改名）：Order_id => 摘要（與上面的
+    // 設計備註是完全分開的另一個 eng_log 案件，log_type='order_process'，同一批查詢，
+    // 不要再各自跑一次 oidsQ）。
     $ate_proc_map = [];
+    // 設計備註凍結（2026-10-06）：今天的日期由 DB 查一次給整頁所有列共用比對，
+    // 不要每列各自查一次 CURDATE()。
+    $todayNoteFreezeStr = '';
     if (!empty($order_list)) {
         try {
             $oidsQ = array_values(array_filter(array_map('intval', array_column($order_list, 'Order_id'))));
             $ate_q_map = el_order_item_summary($pdo, $oidsQ);
             $ate_proc_map = el_order_item_summary($pdo, $oidsQ, 'order_process');
+            $todayNoteFreezeStr = (string)$pdo->query("SELECT CURDATE()")->fetchColumn();
         } catch (Throwable $eQ) { $ate_q_map = []; $ate_proc_map = []; }
     }
 
@@ -3315,26 +3387,27 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         <?php endif; ?>
                         <?php endif; ?>
                         <?php
-                        // 製程中問題（2026-10-06 新增）：轉生管之後的問答記在獨立的 eng_log 案件
-                        // (log_type='order_process')，與上面「設計備註」(ot-dn-btn，訂單階段用) 完全
-                        // 分開，並自動綁定這張訂單的料號與 BOM 編號(bom_order_process_map)，供日後
-                        // 用 BOM／料號反查相關訂單與製程中問題。只有「已經有紀錄」或「這張訂單已
-                        // 轉生管且使用者有新增問答權限」時才顯示，避免還沒轉生管的訂單上出現一個
-                        // 永遠用不到的空圖示。這是全新、獨立的小圖示，完全不動上面既有的「設計備註」
-                        // 按鈕與欄位（嚴禁影響現有使用者）。
+                        // 製程中紀錄（2026-10-06 新增，原稱「製程中問題」，使用者更正：不是問題，
+                        // 是製程中發生事情的回報/處理紀錄，有的提出時就已經有結果）：轉生管之後的
+                        // 紀錄記在獨立的 eng_log 案件 (log_type='order_process')，與上面「設計備註」
+                        // (ot-dn-btn，訂單階段用) 完全分開，並自動綁定這張訂單的料號與 BOM 編號
+                        // (bom_order_process_map)，供日後用 BOM／料號反查相關訂單與製程中紀錄。
+                        // 只有「已經有紀錄」或「這張訂單已轉生管且使用者有新增紀錄權限」時才顯示，
+                        // 避免還沒轉生管的訂單上出現一個永遠用不到的空圖示。這是全新、獨立的小圖示，
+                        // 完全不動上面既有的「設計備註」按鈕與欄位（嚴禁影響現有使用者）。
                         $_procRow  = $ate_proc_map[(int)$order['Order_id']] ?? null;
                         $_procOpen = $_procRow ? (int)$_procRow['open_count'] : 0;
                         if ($_procRow || (!empty($order['pmGet_formatted']) && $can_design_qa)):
                             if ($_procRow):
                                 $_procTMap = ['customer' => '客戶', 'maker' => '廠商', 'user' => '業務', 'other' => '其他'];
                                 $_procTT = $_procRow['target_type'];
-                                $_procPrefix = $_procTT ? ('【' . ($_procTMap[$_procTT] ?? $_procTT) . '：' . (string)$_procRow['target_label'] . '】') : '【PS】';
-                                $_procTitle = '製程中問題' . ($_procOpen > 0 ? '（' . $_procOpen . ' 筆未處理）' : '（已完成，可查看）') . '：' . $_procPrefix . (string)$_procRow['question'];
+                                $_procPrefix = $_procTT ? ('【回報：' . ($_procTMap[$_procTT] ?? $_procTT) . ' ' . (string)$_procRow['target_label'] . '】') : '【PS】';
+                                $_procTitle = '製程中紀錄' . ($_procOpen > 0 ? '（' . $_procOpen . ' 筆未處理）' : '（已完成，可查看）') . '：' . $_procPrefix . (string)$_procRow['question'];
                                 $_procCss = $_procOpen > 0
                                     ? 'background:#FFF3E2;border:1px solid #F0A24B;color:#8a5a2b;'
                                     : 'background:#f0fff8;border:1px solid #1ABB9C;color:#1ABB9C;';
                             else:
-                                $_procTitle = '新增製程中問題（轉生管後的問答，跟訂單階段的設計備註分開記錄，自動綁定料號與BOM編號）';
+                                $_procTitle = '新增製程中紀錄（轉生管後的處理紀錄，跟訂單階段的設計備註分開記錄，自動綁定料號與BOM編號）';
                                 $_procCss = 'background:#f7f7f7;border:1px dashed #ccc;color:#999;';
                             endif;
                         ?>
@@ -3528,6 +3601,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     $_ateQRow = $ate_q_map[(int)$order['Order_id']] ?? null;
                     $_ateQOpen = $_ateQRow ? (int)$_ateQRow['open_count'] : 0;
                     $_ateLogCnt = (int)($ate_log_map[(int)$order['Order_id']] ?? 0);
+                    // 設計備註凍結（2026-10-06 使用者要求）：轉生管超過一天就凍結，只能查看
+                    // 不能再新增/回覆/標記已處理；取消轉生管後 pmGet 清空，條件自然不成立，
+                    // 不需要另外還原。唯一實作 ot_note_frozen()，見本檔上方函式說明。
+                    $_noteFrozen = ot_note_frozen((string)($order['pmGet'] ?? ''), $todayNoteFreezeStr);
                     ?>
                     <div class="ate-q-cell">
                         <?php if ($_ateQRow): ?>
@@ -3542,9 +3619,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         ?>
                         <div class="ate-q-preview<?= $_ateQDone ? ' ate-q-preview-done' : '' ?>"
                              onclick="ateQOpen(<?= (int)$order['Order_id'] ?>)"
-                             title="<?= safe_html($_ateQFull) ?>（點擊查看／回覆）">
+                             title="<?= safe_html($_ateQFull) ?>（<?= $_noteFrozen ? '已凍結，只能查看' : '點擊查看／回覆' ?>）">
                             <div class="ate-q-preview-head">
-                                <?php if (!$_ateQDone): ?>
+                                <?php if ($_noteFrozen): ?>
+                                <span class="ate-q-badge-inline" style="background:#9a8c76;" title="已轉生管超過一天，設計備註已凍結"><i class="fa fa-lock"></i> 已凍結</span>
+                                <?php elseif (!$_ateQDone): ?>
                                 <span class="ate-q-badge-inline"><i class="fa fa-flag"></i> <?= $_ateQOpen ?></span>
                                 <?php else: ?>
                                 <span class="ate-q-badge-inline ate-q-badge-done"><i class="fa fa-check"></i> 已完成</span>
@@ -3555,6 +3634,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                             <div class="ate-q-preview-more">還有更多</div>
                             <?php endif; ?>
                         </div>
+                        <?php elseif ($_noteFrozen): ?>
+                        <span class="text-muted" style="font-size:11px;" title="已轉生管超過一天，設計備註已凍結（原本就沒有任何紀錄）"><i class="fa fa-lock"></i> 已凍結</span>
                         <?php elseif ($can_design_qa): ?>
                         <button type="button" class="ate-q-add-btn" onclick="ateQOpen(<?= (int)$order['Order_id'] ?>)"
                                 title="新增設計備註問題"><i class="fa fa-plus"></i> 新增</button>
@@ -4117,6 +4198,27 @@ foreach($dCounts as $c) {
         .ate-tp-cpick-item { margin-left:6px; color:#337ab7; cursor:pointer; }
         .ate-tp-cpick-item:hover { text-decoration:underline; }
         .ate-tp-other input { width:100%; font-size:12px; height:28px; padding:2px 6px; }
+
+        /* 設計備註凍結提示（2026-10-06） */
+        .ate-q-frozen-banner { background:#F1E8D9; border:1px solid #D8CBB8; color:#6b5638;
+            border-radius:4px; padding:7px 10px; font-size:12px; margin-bottom:10px; line-height:1.6; }
+
+        /* 製程中紀錄「新增紀錄」composer（2026-10-06）：每列塞不下設計備註那種窄欄位，
+           改用單一寬欄＋內部 grid 排版；對象＝回報來源、另外附一組選填的「回覆」子區塊
+           （回覆方式／回覆者／回覆日期／回覆內容），留白則只建立紀錄本身。 */
+        .ate-rec-cell { padding:8px 4px; }
+        .ate-rec-top { display:flex; gap:8px; align-items:flex-start; }
+        .ate-rec-top textarea.ate-q-qtext { flex:1; font-size:12px; }
+        .ate-rec-del { flex-shrink:0; }
+        .ate-rec-meta { display:flex; gap:10px; align-items:flex-start; margin-top:6px; flex-wrap:wrap; }
+        .ate-rec-field { font-size:11px; color:#6b5638; }
+        .ate-rec-field > label { display:block; font-weight:700; margin-bottom:2px; white-space:nowrap; }
+        .ate-rec-field input[type=date] { font-size:12px; height:28px; padding:2px 6px; width:130px; }
+        .ate-rec-field.ate-rec-wide { flex:1; min-width:200px; }
+        .ate-rec-reply { margin-top:8px; border:1px dashed #D8CBB8; border-radius:4px; padding:8px; background:#FAF6EF; }
+        .ate-rec-reply-head { font-size:11px; color:#8a4b12; font-weight:700; margin-bottom:6px; }
+        .ate-rec-reply-grid { display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap; margin-bottom:6px; }
+        .ate-rec-reply textarea { width:100%; font-size:12px; }
 
         /* 備註欄位超過5行時的「還有更多」提示 */
         .textarea-wrap { position: relative; }
@@ -8636,20 +8738,35 @@ foreach($dCounts as $c) {
         // 更新這一列的徽章，不整頁重載（比照 applySyncedCustomerToRow 既有模式）。
         // 對象選擇器（ateQTp*）新增問題與回覆共用同一套——業務＝下拉（限業務課人員）、
         // 廠商/客戶＝打字模糊搜尋選定後可再選/填聯絡人、其他＝手動輸入說明文字。
-        var ATE_Q = { orderId: 0, logId: 0, kind: 'note', canResolve: false, bizDefault: null, items: [], rows: [],
+        var ATE_Q = { orderId: 0, logId: 0, kind: 'note', frozen: false, curUser: null, canResolve: false,
+                      bizDefault: null, items: [], rows: [],
                       cands: { user: null }, replyState: {}, contactCache: {}, tpState: {}, tpOnChange: {},
                       channels: {}, replyChannel: {} };
 
-        // 製程中問題（2026-10-06 新增）與設計備註問答是兩個分開的 eng_log 案件，但共用同一套
-        // 跳窗與互動邏輯（打字→選對象→多題→多輪回覆→標記已處理），只靠 ATE_Q.kind 區分
-        // 要讀寫哪一個案件；kind 不帶時一律退回 'note'（既有呼叫端全部不帶這個參數，行為
-        // 與改動前完全相同——嚴禁影響現有使用者）。
+        // 製程中紀錄（2026-10-06 新增，原稱「製程中問題」後改名）與設計備註問答是兩個分開的
+        // eng_log 案件，但共用同一套跳窗與互動邏輯（打字→選對象→多題→多輪回覆→標記已處理），
+        // 只靠 ATE_Q.kind 區分要讀寫哪一個案件；kind 不帶時一律退回 'note'（既有呼叫端全部
+        // 不帶這個參數，行為與改動前完全相同——嚴禁影響現有使用者）。
         var ATE_Q_KIND_META = {
             note:    { icon: 'fa-comments', label: '設計備註問答' },
-            process: { icon: 'fa-wrench',   label: '製程中問題' }
+            process: { icon: 'fa-wrench',   label: '製程中紀錄' }
         };
 
         function ateQNewRow() {
+            // 製程中紀錄（2026-10-06）：對象改稱「回報來源」且不預設任何人（誰回報不一定是
+            // 打單業務，可能是廠商來電或現場人員），但「回覆者」預設是目前登入者本人
+            // （使用者拍板），同一步可以順便填回覆方式/回覆者/回覆日期/回覆內容——留白則
+            // 只建立這筆紀錄，之後仍可用既有「回覆」功能補上（避免先收到狀況還沒有結果時
+            // 無法紀錄）。設計備註（note）完全沿用改動前的邏輯，不受影響。
+            if (ATE_Q.kind === 'process') {
+                var cu = ATE_Q.curUser;
+                return { question: '', target_type: '', asked_at: ATE_Q.today || '',
+                         target_id: '', target_label: '', target_post: '', target_contact: '',
+                         channel: '', reply_date: ATE_Q.today || '', reply_content: '',
+                         replyTarget: cu
+                             ? { target_type: 'user', target_id: String(cu.id), target_label: cu.name, target_post: cu.post, target_contact: '' }
+                             : { target_type: '', target_id: '', target_label: '', target_post: '', target_contact: '' } };
+            }
             var d = ATE_Q.bizDefault;
             return { question: '', target_type: 'user', asked_at: ATE_Q.today || '',
                      target_id: d ? String(d.id) : '', target_label: d ? d.name : '', target_post: d ? d.post : '',
@@ -8663,6 +8780,8 @@ foreach($dCounts as $c) {
                 if (!res || !res.success) { showToast((res && res.message) || '讀取失敗'); return; }
                 ATE_Q.logId = res.log_id || 0;
                 ATE_Q.kind = (res.kind === 'process') ? 'process' : 'note';
+                ATE_Q.frozen = !!res.frozen;
+                ATE_Q.curUser = res.cur_user || null;
                 ATE_Q.canResolve = !!res.can_resolve;
                 ATE_Q.bizDefault = res.biz_default || null;
                 ATE_Q.today = res.today || '';
@@ -8674,8 +8793,9 @@ foreach($dCounts as $c) {
                 var ord = res.order || {};
                 var km = ATE_Q_KIND_META[ATE_Q.kind] || ATE_Q_KIND_META.note;
                 $('#ate-q-modal-icon').attr('class', 'fa ' + km.icon);
-                $('#ate-q-modal-kindtext').text(km.label);
+                $('#ate-q-modal-kindtext').text(km.label + (ATE_Q.frozen ? '（已凍結，僅可查看）' : ''));
                 $('#ate-q-modal-title').text([ord.order_no, ord.part_no, ord.client].filter(function(x){return x;}).join('　'));
+                $('#ate-q-frozen-banner').toggle(ATE_Q.frozen);
                 $('#ate-q-modal').modal('show');
                 ateQEnsureCandidates('user', function() {
                     ateQRenderItems();
@@ -8697,6 +8817,9 @@ foreach($dCounts as $c) {
             var map = { customer: '客戶', maker: '廠商', user: '業務', other: '其他' };
             var base = (map[it.target_type] || it.target_type) + '：' + (it.target_label || '（未指定）');
             if ((it.target_type === 'customer' || it.target_type === 'maker') && it.target_contact) base += '（' + it.target_contact + '）';
+            // 製程中紀錄的「對象」語意是誰回報這件事，不是問給誰（2026-10-06 使用者更正），
+            // 加「回報：」前綴避免跟設計備註問答的語意混淆；設計備註(note)完全不受影響。
+            if (ATE_Q.kind === 'process') base = '回報：' + base;
             return base;
         }
 
@@ -8739,8 +8862,11 @@ foreach($dCounts as $c) {
                 repliesHtml += '<div class="ate-q-reply"><span class="ate-q-reply-meta">' + escapeHtml(r.reply_by || r.created_by_name || '') +
                     (when ? ' ・ ' + escapeHtml(when) : '') + (chLabel ? ' ・ ' + escapeHtml(chLabel) : '') + '</span><div class="ate-q-reply-content">' + escapeHtml(r.content || '') + '</div></div>';
             });
-            var actions = '<button type="button" class="ate-q-btn" onclick="ateQToggleReplyBox(' + it.id + ')"><i class="fa fa-reply"></i> 回覆</button>';
-            if (ATE_Q.canResolve) {
+            // 設計備註已凍結時（kind==='note' && ATE_Q.frozen）唯讀：不給回覆/標記已處理，
+            // 也不渲染回覆框（鐵律8，後端已同規則再擋一次，這裡只是避免使用者點了才被打臉）。
+            var frozenView = (ATE_Q.kind === 'note' && ATE_Q.frozen);
+            var actions = frozenView ? '' : '<button type="button" class="ate-q-btn" onclick="ateQToggleReplyBox(' + it.id + ')"><i class="fa fa-reply"></i> 回覆</button>';
+            if (!frozenView && ATE_Q.canResolve) {
                 actions += (it.status === 'resolved' || it.status === 'dropped')
                     ? '<button type="button" class="ate-q-btn" onclick="ateQResolve(' + it.id + ',\'waiting\')">退回待回覆</button>'
                     : '<button type="button" class="ate-q-btn ate-q-btn-ok" onclick="ateQResolve(' + it.id + ',\'resolved\')"><i class="fa fa-check"></i> 已處理</button>';
@@ -8748,28 +8874,36 @@ foreach($dCounts as $c) {
             var today = (ATE_Q.today || '');
             var askedTxt = it.asked_at ? (typeof egFmtDate === 'function' ? egFmtDate(it.asked_at) : it.asked_at) : '';
             var rns = 'reply' + it.id;
-            if (!ATE_Q.replyState[it.id]) ATE_Q.replyState[it.id] = ateQReplyDefaultState(it);
-            ateQTpRegister(rns, ATE_Q.replyState[it.id], function() { ateQTpRedraw(rns); });
+            var replyBoxHtml = '';
+            if (!frozenView) {
+                if (!ATE_Q.replyState[it.id]) ATE_Q.replyState[it.id] = ateQReplyDefaultState(it);
+                ateQTpRegister(rns, ATE_Q.replyState[it.id], function() { ateQTpRedraw(rns); });
+                // 回覆對象／回覆者：設計備註問答維持「回覆對象」（既有行為不變），製程中紀錄
+                // 改稱「回覆者」（2026-10-06 使用者要求，與新增紀錄 composer 的欄位名一致）。
+                var replyByLabel = (ATE_Q.kind === 'process') ? '回覆者' : '回覆對象';
+                replyBoxHtml = '<div class="ate-q-replybox" id="ate-q-replybox-' + it.id + '" style="display:none;">'
+                    +   '<textarea class="form-control" rows="2" placeholder="輸入回覆內容…按 Enter 直接送出，Shift+Enter 換行" '
+                    +     'id="ate-q-replytxt-' + it.id + '" onkeydown="ateQReplyKeyDown(event,' + it.id + ')"></textarea>'
+                    // 回覆方式（電話／Line／E-mail…使用者交辦，預設電話）：選項即時取自管理員
+                    // 維護的 eng_log_channel（走 eng_log.php「維護回覆方式」），不是寫死的清單
+                    +   '<div class="ate-q-replyby"><label>回覆方式：</label>' + ateQChannelHtml(it.id) + '</div>'
+                    // 預設帶出這條問題本來指定的對象（使用者仍可改成實際回覆的人，例如業務轉述
+                    // 客戶窗口的話），與新增問題共用同一套按鈕式選擇器
+                    +   '<div class="ate-q-replyby"><label>' + replyByLabel + '：</label>' + ateQTpHtml(rns, ATE_Q.replyState[it.id]) + '</div>'
+                    +   '<div class="ate-q-replydate"><label>回覆日期：</label>'
+                    +     '<input type="date" class="form-control" id="ate-q-replydate-' + it.id + '" value="' + escapeHtml(today) + '" max="' + escapeHtml(today) + '"></div>'
+                    +   (ATE_Q.canResolve ? '<label class="ate-q-chk"><input type="checkbox" id="ate-q-replyok-' + it.id + '"> 回覆後直接標記已處理</label>' : '')
+                    +   '<button type="button" class="btn btn-xs btn-warm" onclick="ateQSubmitReply(' + it.id + ')"><i class="fa fa-paper-plane"></i> 送出回覆</button>'
+                    + '</div>';
+            }
             return '<div class="ate-q-item">'
                 + '<div class="ate-q-item-head">' + ateQStatusBadge(it.status) + '<span class="ate-q-target">' + escapeHtml(ateQTargetLabel(it)) + '</span>'
                 + (askedTxt ? '<span class="ate-q-asked">' + escapeHtml(askedTxt) + ' 提出</span>' : '') + '</div>'
                 + '<div class="ate-q-question">' + escapeHtml(it.question || '') + '</div>'
                 + repliesHtml
-                + '<div class="ate-q-item-actions">' + actions + '</div>'
-                + '<div class="ate-q-replybox" id="ate-q-replybox-' + it.id + '" style="display:none;">'
-                +   '<textarea class="form-control" rows="2" placeholder="輸入回覆內容…按 Enter 直接送出，Shift+Enter 換行" '
-                +     'id="ate-q-replytxt-' + it.id + '" onkeydown="ateQReplyKeyDown(event,' + it.id + ')"></textarea>'
-                // 回覆方式（電話／Line／E-mail…使用者交辦，預設電話）：選項即時取自管理員
-                // 維護的 eng_log_channel（走 eng_log.php「維護回覆方式」），不是寫死的清單
-                +   '<div class="ate-q-replyby"><label>回覆方式：</label>' + ateQChannelHtml(it.id) + '</div>'
-                // 回覆對象：預設帶出這條問題本來指定的對象（使用者仍可改成實際回覆的人，
-                // 例如業務轉述客戶窗口的話），與新增問題共用同一套按鈕式選擇器
-                +   '<div class="ate-q-replyby"><label>回覆對象：</label>' + ateQTpHtml(rns, ATE_Q.replyState[it.id]) + '</div>'
-                +   '<div class="ate-q-replydate"><label>回覆日期：</label>'
-                +     '<input type="date" class="form-control" id="ate-q-replydate-' + it.id + '" value="' + escapeHtml(today) + '" max="' + escapeHtml(today) + '"></div>'
-                +   (ATE_Q.canResolve ? '<label class="ate-q-chk"><input type="checkbox" id="ate-q-replyok-' + it.id + '"> 回覆後直接標記已處理</label>' : '')
-                +   '<button type="button" class="btn btn-xs btn-warm" onclick="ateQSubmitReply(' + it.id + ')"><i class="fa fa-paper-plane"></i> 送出回覆</button>'
-                + '</div></div>';
+                + (actions ? '<div class="ate-q-item-actions">' + actions + '</div>' : '')
+                + replyBoxHtml
+                + '</div>';
         }
 
         function ateQToggleReplyBox(itemId) { $('#ate-q-replybox-' + itemId).toggle(); }
@@ -9066,10 +9200,12 @@ foreach($dCounts as $c) {
         });
         $(window).on('scroll resize', function() { $('.ate-tp-ac.on').removeClass('on'); });
 
-        // ── 新增問題 composer：鍵盤 ↓ 自動加列走共用 eg_input_rules.js（data-eg-row-add/del） ──
+        // ── 新增問題／新增紀錄 composer：鍵盤 ↓ 自動加列走共用 eg_input_rules.js
+        //    （data-eg-row-add/del）；設計備註(note)凍結後不給新增，composer 直接清空。
         function ateQRedrawComposer() {
-            if (!window.OT_CAN_DESIGN_QA) { $('#ate-q-composer-wrap').html(''); return; }
-            var html = '<div class="ate-q-composer"><div class="ate-q-add-title"><i class="fa fa-plus-circle"></i> 新增問題</div>'
+            if (!window.OT_CAN_DESIGN_QA || (ATE_Q.kind === 'note' && ATE_Q.frozen)) { $('#ate-q-composer-wrap').html(''); return; }
+            var addTitle = (ATE_Q.kind === 'process') ? '新增紀錄' : '新增問題';
+            var html = '<div class="ate-q-composer"><div class="ate-q-add-title"><i class="fa fa-plus-circle"></i> ' + addTitle + '</div>'
                 + '<table class="ate-q-add-table"><tbody data-eg-row-add="ateQRowAdd" data-eg-row-del="ateQRowDel">';
             ATE_Q.rows.forEach(function(r, idx) { html += ateQRowHtml(r, idx); });
             html += '</tbody></table>'
@@ -9081,6 +9217,7 @@ foreach($dCounts as $c) {
         }
 
         function ateQRowHtml(r, idx) {
+            if (ATE_Q.kind === 'process') return ateQRecRowHtml(r, idx);
             var ns = 'new' + idx;
             ateQTpRegister(ns, r, ateQRedrawComposer);
             var delBtn = ATE_Q.rows.length > 1
@@ -9094,6 +9231,61 @@ foreach($dCounts as $c) {
                 + '<td style="width:8%;text-align:center;">' + delBtn + '</td>'
                 + '</tr>';
         }
+
+        // 製程中紀錄的「新增紀錄」列（2026-10-06）：對象改稱「回報來源」，並多一個選填的
+        // 「回覆」子區塊（回覆方式/回覆者/回覆日期/回覆內容）——使用者拍板單一步驟與分開
+        // 兩步驟都要能用：回覆內容留白就只建立這筆紀錄，填了就連同第一筆回覆一起建立。
+        function ateQRecRowHtml(r, idx) {
+            var ns = 'new' + idx, rns = 'newReply' + idx;
+            ateQTpRegister(ns, r, ateQRedrawComposer);
+            ateQTpRegister(rns, r.replyTarget, ateQRedrawComposer);
+            var delBtn = ATE_Q.rows.length > 1
+                ? '<button type="button" class="btn btn-xs btn-link" onclick="ateQRowDelAt(' + idx + ')" title="移除這一條"><i class="fa fa-times"></i></button>' : '';
+            var html = '<tr><td class="ate-rec-cell">';
+            html += '<div class="ate-rec-top">'
+                + '<textarea class="form-control ate-q-qtext" rows="2" placeholder="輸入製程中發生的狀況…按 Enter 直接送出，Shift+Enter 換行，↓可新增下一條" '
+                +   'oninput="ateQRowQChange(' + idx + ',this.value)" onkeydown="ateQRowKeyDown(event,' + idx + ')">' + escapeHtml(r.question) + '</textarea>'
+                + '<div class="ate-rec-del">' + delBtn + '</div></div>';
+            html += '<div class="ate-rec-meta">'
+                + '<div class="ate-rec-field"><label>日期</label><input type="date" class="form-control" value="' + escapeHtml(r.asked_at || ATE_Q.today || '') + '" '
+                +   'max="' + escapeHtml(ATE_Q.today || '') + '" onchange="ateQRowDateChange(' + idx + ',this.value)"></div>'
+                + '<div class="ate-rec-field ate-rec-wide"><label>回報來源（選填，誰提出/回報這件事）</label>' + ateQTpHtml(ns, r) + '</div>'
+                + '</div>';
+            html += '<div class="ate-rec-reply">'
+                + '<div class="ate-rec-reply-head"><i class="fa fa-reply"></i> 回覆（若已經有結果可以一併填寫；留白則先只建立這筆紀錄，之後再用「回覆」補）</div>'
+                + '<div class="ate-rec-reply-grid">'
+                +   '<div class="ate-rec-field"><label>回覆方式</label>' + ateQRowChannelHtml(idx, r) + '</div>'
+                +   '<div class="ate-rec-field ate-rec-wide"><label>回覆者</label>' + ateQTpHtml(rns, r.replyTarget) + '</div>'
+                +   '<div class="ate-rec-field"><label>回覆日期</label><input type="date" class="form-control" value="' + escapeHtml(r.reply_date || ATE_Q.today || '') + '" '
+                +     'max="' + escapeHtml(ATE_Q.today || '') + '" onchange="ateQRowReplyDateChange(' + idx + ',this.value)"></div>'
+                + '</div>'
+                + '<textarea class="form-control" rows="2" placeholder="回覆內容（選填）" '
+                +   'oninput="ateQRowReplyContentChange(' + idx + ',this.value)">' + escapeHtml(r.reply_content || '') + '</textarea>'
+                + '</div>';
+            html += '</td></tr>';
+            return html;
+        }
+
+        /** 製程中紀錄composer每列自己的回覆方式選擇（r.channel），跟既有 ateQChannelHtml()
+         *  按 item id 存狀態不同——composer 還沒有 item id，狀態直接存在列物件 r 上。 */
+        function ateQRowChannelHtml(idx, r) {
+            var ch = ATE_Q.channels || {};
+            var codes = Object.keys(ch);
+            if (!codes.length) return '<span style="font-size:11px;color:#bbb;">（尚未設定）</span>';
+            if (!r.channel) r.channel = ch.phone ? 'phone' : codes[0];
+            var h = '<span class="ate-q-ch-row">';
+            codes.forEach(function(code) {
+                h += '<span class="ate-q-ch-btn' + (code === r.channel ? ' on' : '') + '" onclick="ateQRowPickChannel(' + idx + ',\'' + code + '\')">' + escapeHtml(ch[code]) + '</span>';
+            });
+            return h + '</span>';
+        }
+        function ateQRowPickChannel(idx, code) {
+            if (!ATE_Q.rows[idx]) return;
+            ATE_Q.rows[idx].channel = code;
+            ateQRedrawComposer();
+        }
+        function ateQRowReplyDateChange(idx, val) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].reply_date = val; }
+        function ateQRowReplyContentChange(idx, val) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].reply_content = val; }
 
         function ateQRowQChange(idx, val) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].question = val; }
         function ateQRowDateChange(idx, val) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].asked_at = val; }
@@ -9112,6 +9304,7 @@ foreach($dCounts as $c) {
         }
 
         function ateQSubmitNew() {
+            if (ATE_Q.kind === 'note' && ATE_Q.frozen) { showToast('此訂單設計備註已凍結，無法再新增'); return; }
             var out = []; var bad = false;
             ATE_Q.rows.forEach(function(r) {
                 var q = $.trim(r.question || '');
@@ -9119,11 +9312,26 @@ foreach($dCounts as $c) {
                 if (r.target_type === 'other') {
                     if (!$.trim(r.target_label || '')) { bad = true; return; }
                 } else if (r.target_type && !r.target_id) { bad = true; return; }
-                out.push({ question: q, target_type: r.target_type, target_id: r.target_id, target_label: r.target_label,
-                           target_post: r.target_post, target_contact: r.target_contact, asked_at: r.asked_at });
+                var row = { question: q, target_type: r.target_type, target_id: r.target_id, target_label: r.target_label,
+                            target_post: r.target_post, target_contact: r.target_contact, asked_at: r.asked_at };
+                // 製程中紀錄：回覆內容有填才一併建立第一筆回覆，留白只建立這筆紀錄本身
+                if (ATE_Q.kind === 'process') {
+                    var rc = $.trim(r.reply_content || '');
+                    if (rc) {
+                        var rt = r.replyTarget || {};
+                        if (rt.target_type === 'other') {
+                            if (!$.trim(rt.target_label || '')) { bad = true; return; }
+                        } else if (rt.target_type && !rt.target_id) { bad = true; return; }
+                        row.channel = r.channel || '';
+                        row.replied_on = r.reply_date || '';
+                        row.reply_content = rc;
+                        row.reply_by = ateQTpComposeReplyBy(rt);
+                    }
+                }
+                out.push(row);
             });
             if (bad) { showToast('有問題選了對象類別卻沒有填完對象資料，請補選／補填'); return; }
-            if (!out.length) { showToast('請至少填寫一條問題內容'); return; }
+            if (!out.length) { showToast('請至少填寫一條內容'); return; }
             $('#ate-q-submit-new').prop('disabled', true);
             $('.ate-q-qtext').css('background-color', '#d4edda');   // 比照舊版存檔成功的綠色回饋
             $.post('', { action: 'ate_q_add', order_id: ATE_Q.orderId, kind: ATE_Q.kind, items: JSON.stringify(out) }, function(res) {
@@ -9139,7 +9347,7 @@ foreach($dCounts as $c) {
         // 全部已處理完（openCount=0 但 preview 仍有內容）要顯示「已完成」卡片，不可以
         // 直接退回「＋新增」——那樣會讓使用者看不出這張訂單其實有歷史紀錄。
         // kind='process' 時改走 ateProcApplyBadge()（2026-10-06 新增，更新的是料號欄裡那顆
-        // 獨立的「製程中問題」小圖示，不是這裡的 .ate-q-cell）；kind 不帶或非 'process' 時
+        // 獨立的「製程中紀錄」小圖示，不是這裡的 .ate-q-cell）；kind 不帶或非 'process' 時
         // 完全沿用原本的邏輯，與改動前逐行相同——嚴禁影響現有使用者。
         function ateQApplyBadge(orderId, openCount, preview, kind) {
             if (kind === 'process') { ateProcApplyBadge(orderId, openCount, preview); return; }
@@ -9169,10 +9377,11 @@ foreach($dCounts as $c) {
             setTimeout(function() { $cell.closest('td').css('background', ''); }, 1200);
         }
 
-        // 製程中問題（2026-10-06 新增）：更新料號欄裡那顆獨立小圖示（PHP 端渲染規則見
-        // NewOrder_Track.php 的 $_procRow／$_procCss 那一段，這裡要畫出同一種樣式，兩邊
-        // 看起來才不會在存檔前後對不起來）。找不到元素（例如這張訂單剛轉生管、還沒有重新整理
-        // 過列表資料，圖示從未被渲染過）就什麼都不做——下次重新整理列表就會補上。
+        // 製程中紀錄（2026-10-06 新增，原稱「製程中問題」後改名）：更新料號欄裡那顆獨立小
+        // 圖示（PHP 端渲染規則見 NewOrder_Track.php 的 $_procRow／$_procCss 那一段，這裡要
+        // 畫出同一種樣式，兩邊看起來才不會在存檔前後對不起來）。找不到元素（例如這張訂單
+        // 剛轉生管、還沒有重新整理過列表資料，圖示從未被渲染過）就什麼都不做——下次重新
+        // 整理列表就會補上。
         function ateProcApplyBadge(orderId, openCount, preview) {
             var $btn = $('button[data-proc-q-order="' + orderId + '"]');
             if (!$btn.length) return;
@@ -9181,15 +9390,15 @@ foreach($dCounts as $c) {
             var css, title, inner;
             if (preview) {
                 var prefix = preview.target_type
-                    ? ('【' + (tMap[preview.target_type] || preview.target_type) + '：' + (preview.target_label || '（未指定）') + '】')
+                    ? ('【回報：' + (tMap[preview.target_type] || preview.target_type) + ' ' + (preview.target_label || '（未指定）') + '】')
                     : '【PS】';
-                title = '製程中問題' + (openCount > 0 ? '（' + openCount + ' 筆未處理）' : '（已完成，可查看）') + '：' + prefix + (preview.question || '');
+                title = '製程中紀錄' + (openCount > 0 ? '（' + openCount + ' 筆未處理）' : '（已完成，可查看）') + '：' + prefix + (preview.question || '');
                 css = openCount > 0
                     ? 'background:#FFF3E2;border:1px solid #F0A24B;color:#8a5a2b;'
                     : 'background:#f0fff8;border:1px solid #1ABB9C;color:#1ABB9C;';
                 inner = '<i class="fa fa-wrench"></i>' + (openCount > 0 ? openCount : '<i class="fa fa-check" style="font-size:8px;margin-left:1px;"></i>');
             } else {
-                title = '新增製程中問題（轉生管後的問答，跟訂單階段的設計備註分開記錄，自動綁定料號與BOM編號）';
+                title = '新增製程中紀錄（轉生管後的處理紀錄，跟訂單階段的設計備註分開記錄，自動綁定料號與BOM編號）';
                 css = 'background:#f7f7f7;border:1px dashed #ccc;color:#999;';
                 inner = '<i class="fa fa-wrench"></i>';
             }
@@ -13075,8 +13284,8 @@ foreach($dCounts as $c) {
         </div></div>
     </div>
 
-    <!-- ═══ MODAL: 設計備註問答／製程中問題（2026-10-05 併入 eng_log；2026-10-06 共用同一個
-         跳窗顯示「製程中問題」(kind='process')，標題文字與圖示依 ATE_Q.kind 動態切換，
+    <!-- ═══ MODAL: 設計備註問答／製程中紀錄（2026-10-05 併入 eng_log；2026-10-06 共用同一個
+         跳窗顯示「製程中紀錄」(kind='process')，標題文字與圖示依 ATE_Q.kind 動態切換，
          見 ateQOpen() 的 ATE_Q_KIND_META）═══════════════════ -->
     <div class="modal fade" id="ate-q-modal" tabindex="-1">
         <div class="modal-dialog"><div class="modal-content">
@@ -13087,6 +13296,13 @@ foreach($dCounts as $c) {
                 </h4>
             </div>
             <div class="modal-body">
+                <!-- 設計備註凍結提示（2026-10-06）：只有 kind='note' 且已過凍結日才顯示，
+                     ateQOpen() 依 res.frozen toggle；製程中紀錄沒有凍結規則，一律隱藏。 -->
+                <div id="ate-q-frozen-banner" class="ate-q-frozen-banner" style="display:none;">
+                    <i class="fa fa-lock"></i> 此訂單已轉生管超過一天，設計備註已自動凍結，僅能查看歷史紀錄，
+                    無法再新增/回覆/標記已處理。如需記錄新的狀況，請改用料號欄的「製程中紀錄」
+                    <i class="fa fa-wrench"></i> 圖示。
+                </div>
                 <div id="ate-q-items-wrap"></div>
                 <div id="ate-q-composer-wrap"></div>
             </div>

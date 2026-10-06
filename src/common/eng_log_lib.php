@@ -87,7 +87,9 @@ function el_log_types(): array {
         // ──那是給 eng_log.php 手動建立、與特定訂單無關的一般製程問題用的；若共用同一個
         // log_type，萬一有人手動建立的那一筆剛好也綁到同一張訂單，訂單追蹤這邊的
         // find-or-create 查詢會誤認成自己建立的案件而混用。
-        'order_process' => '製程中問題',
+        // 2026-10-06 使用者更正：這一類不是「問題」，是製程中發生事情的回報/處理紀錄
+        // （有的提出時就已經有結果），故標籤由「製程中問題」改為「製程中紀錄」。
+        'order_process' => '製程中紀錄',
         // ── 以下為舊值，只供顯示，不再出現在選單 ──
         'outsource' => '發包', 'spec' => '規格', 'material' => '材料',
         'quality'   => '品質', 'delivery' => '交期',
@@ -985,9 +987,9 @@ function el_reply_add(PDO $db, int $logId, array $itemIds, array $in, int $creat
  */
 function el_order_case_get_or_create(PDO $db, int $orderId, array $actor, string $now, string $today): int
 {
-    // ★ 2026-10-06 補上 log_type 篩選：轉生管之後的「製程中問題」(el_order_process_case_get_or_create)
+    // ★ 2026-10-06 補上 log_type 篩選：轉生管之後的「製程中紀錄」(el_order_process_case_get_or_create)
     // 也會用同一個 bind_type='order' 綁定這張訂單，兩種案件要靠 log_type 分清楚，否則這裡可能
-    // 誤抓到製程中問題那一筆（反之 el_order_process_case_get_or_create 也要篩自己的 log_type）。
+    // 誤抓到製程中紀錄那一筆（反之 el_order_process_case_get_or_create 也要篩自己的 log_type）。
     $st = $db->prepare("SELECT el.id FROM eng_log_bind b JOIN eng_log el ON el.id = b.log_id
                         WHERE b.bind_type='order' AND b.bind_id=? AND el.log_type='order_note' ORDER BY el.id LIMIT 1");
     $st->execute([(string)$orderId]);
@@ -1008,17 +1010,17 @@ function el_order_case_get_or_create(PDO $db, int $orderId, array $actor, string
 }
 
 /**
- * 製程中問題（2026-10-06 新增）：訂單「轉生管」之後的問答改記錄在這個獨立案件
+ * 製程中紀錄（2026-10-06 新增，原稱「製程中問題」）：訂單「轉生管」之後的紀錄改記錄在這個獨立案件
  * (log_type='order_process')，與訂單階段的「設計備註」(order_note) 完全分開——
  * 同一張訂單最多各有一筆，互不影響、互不混用。
  *
  * 除了跟 order_note 一樣綁 bind_type='order'（讓 el_order_item_summary() 能依訂單彙總），
  * 另外綁定這張訂單目前的「料號」與「BOM 編號」(bom_order_process_map)，讓日後可以直接拿
- * BOM 或料號反查相關訂單與製程中問題（eng_log.php 的三軸索引 eng_log_index 本來就是
+ * BOM 或料號反查相關訂單與製程中紀錄（eng_log.php 的三軸索引 eng_log_index 本來就是
  * 查詢唯一入口，這裡只要綁好 bind_type='part'/'bom'，el_reindex() 會自動展開）。
  *
  * BOM 綁定每次呼叫都重新同步一次（見 el_order_process_sync_binds()）：轉生管當下可能
- * 還沒有 BOM，生管之後才開出來，下次有人在這張訂單新增製程中問題時會自動補上。
+ * 還沒有 BOM，生管之後才開出來，下次有人在這張訂單新增製程中紀錄時會自動補上。
  */
 function el_order_process_case_get_or_create(PDO $db, int $orderId, array $actor, string $now, string $today): int
 {
@@ -1030,7 +1032,7 @@ function el_order_process_case_get_or_create(PDO $db, int $orderId, array $actor
     if ($id === 0) {
         $logNo = el_next_log_no($db, $today);
         $db->prepare("INSERT INTO eng_log (log_no, user_id, dept_id, title, log_type, status, visibility, created_at)
-                      VALUES (?,?,?, '製程中問題', 'order_process', 'open', 'dept', ?)")
+                      VALUES (?,?,?, '製程中紀錄', 'order_process', 'open', 'dept', ?)")
            ->execute([$logNo, (int)($actor['uid'] ?? 0), $actor['dept_id'] ?? null, $now]);
         $id = (int)$db->lastInsertId();
         $label = el_bind_label($db, 'order', (string)$orderId);
@@ -1044,7 +1046,7 @@ function el_order_process_case_get_or_create(PDO $db, int $orderId, array $actor
 }
 
 /**
- * 補齊/更新「製程中問題」案件的料號與 BOM 綁定。新建與既有案件都會呼叫這支，已經綁過的
+ * 補齊/更新「製程中紀錄」案件的料號與 BOM 綁定。新建與既有案件都會呼叫這支，已經綁過的
  * 不會重複寫入；只有真的新增了綁定才重建三軸索引（避免每次開問答都白白重算一次）。
  */
 function el_order_process_sync_binds(PDO $db, int $logId, int $orderId): void
@@ -1124,7 +1126,7 @@ function el_order_case_sync_status(PDO $db, int $logId, string $now): void
  * （不論狀態）」——用 `ORDER BY 是否未處理 DESC, id DESC` 一次排序做到，不用分兩次查。
  *
  * @param string $logType 'order_note'（預設，訂單階段設計備註）或 'order_process'（轉生管後
- *                製程中問題）——兩種案件都綁 bind_type='order'，不篩就會混在一起彙總。
+ *                製程中紀錄）——兩種案件都綁 bind_type='order'，不篩就會混在一起彙總。
  * @return array [order_id(int) => ['open_count'=>int,'total_count'=>int,'question'=>string,
  *                'status'=>string,'target_type'=>?string,'target_label'=>?string]]
  *         完全沒有任何問題項的訂單不會出現在結果裡。
@@ -1209,7 +1211,7 @@ function el_log_type_of(PDO $db, int $logId): ?string
 function el_order_open_exists_sql(string $orderAlias = 'ot', string $logType = 'order_note'): string
 {
     // ★ 2026-10-06：加上 log_type 篩選（預設仍是 'order_note'，與改動前行為完全相同）。
-    // 「批圖溝通中」指的是訂單階段的設計備註未處理，轉生管之後才會有的「製程中問題」
+    // 「批圖溝通中」指的是訂單階段的設計備註未處理，轉生管之後才會有的「製程中紀錄」
     // (order_process) 不該被算進這個統計，否則既有的卡片數字會被不相干的新資料灌水。
     if (!in_array($logType, ['order_note', 'order_process'], true)) $logType = 'order_note';
     return "EXISTS (SELECT 1 FROM eng_log_bind elb
@@ -1234,16 +1236,33 @@ function el_order_business_default(PDO $db, array $orderRow): ?array
 {
     $raw = trim((string)($orderRow['Created_By'] ?? ''));
     if ($raw === '') return null;
-    $isId = ctype_digit($raw);
+    if (ctype_digit($raw)) return el_person_post($db, (int)$raw);
+    // 極舊資料 Created_By 可能是登入帳號(user_uname)不是 id，先查回 id 再轉呼叫 el_person_post()
+    try {
+        $st = $db->prepare("SELECT id FROM `user` WHERE user_uname = ? LIMIT 1");
+        $st->execute([$raw]);
+        $uid = (int)$st->fetchColumn();
+        return $uid > 0 ? el_person_post($db, $uid) : null;
+    } catch (Throwable $e) { return null; }
+}
+
+/**
+ * 依使用者 id 查目前姓名與部門職稱（職級最高那筆）。給 el_order_business_default()
+ * 與「回覆者」預設值＝目前登入者（2026-10-06 新增，製程中紀錄用）共用，同一種查法
+ * 不要各寫一份（鐵律4）。
+ */
+function el_person_post(PDO $db, int $uid): ?array
+{
+    if ($uid <= 0) return null;
     try {
         $st = $db->prepare("SELECT u.id, u.user_cname, d.name AS dept, p.name AS pos, COALESCE(p.sort_order,999) s
                             FROM `user` u
                             LEFT JOIN user_department_position_map m ON m.user_id = u.id
                             LEFT JOIN department d ON d.id = m.department_id
                             LEFT JOIN position p ON p.id = m.position_id
-                            WHERE " . ($isId ? "u.id = ?" : "u.user_uname = ?") . "
+                            WHERE u.id = ?
                             ORDER BY s ASC, m.is_main DESC, m.id ASC LIMIT 1");
-        $st->execute([$isId ? (int)$raw : $raw]);
+        $st->execute([$uid]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r || empty($r['id'])) return null;
         return [
