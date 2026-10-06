@@ -273,8 +273,21 @@ case 'delete': {
 }
 
 /* ── 建議建立清單 ─────────────────────────────────────── */
+/* $per>0 時只切一頁回傳（前端用來「先載入第一頁，其餘背景載入」——ai-rules/08
+   資料列表規則：只預載第 1 頁，其餘頁面需要時才載入或背景載入）。排序/齊全度一律
+   還是對「全部」候選算完才切，不是只算這一頁的——切頁只是減少這次要傳、要畫的筆數，
+   不能影響「誰排第一頁」這件事。 */
 case 'suggest': {
-    jout(true, cp_suggest_rows($db, ['stage_id' => (int)($_GET['stage_id'] ?? 0)]));
+    $r = cp_suggest_rows($db, ['stage_id' => (int)($_GET['stage_id'] ?? 0)]);
+    $per = (int)($_GET['per'] ?? 0);
+    if ($per > 0) {
+        $page = max(1, (int)($_GET['page'] ?? 1));
+        $r['total'] = count($r['rows']);
+        $r['page']  = $page;
+        $r['per']   = $per;
+        $r['rows']  = array_slice($r['rows'], ($page - 1) * $per, $per);
+    }
+    jout(true, $r);
 }
 
 case 'suggest_ignore': {

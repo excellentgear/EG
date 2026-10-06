@@ -694,6 +694,7 @@ $('.cp-tab').on('click', function(){
     $('.cp-pane').removeClass('on'); $('#pane-' + p).addClass('on');
     if (p === 'list') loadList();
     if (p === 'cfg')  renderCfg();
+    if (p === 'auto') loadSug();   // 切進來就自動帶第一頁，不必再按一次「重新整理」
 });
 
 /* ────────────────── 啟動 ────────────────── */
@@ -717,7 +718,9 @@ function fillStageSelects(){
     var optAct = '', optSug = '<option value="">不分階段（任一階段都沒有才列出）</option>';
     STAGES.forEach(function(s){
         optAll += '<option value="'+s.stage_id+'">'+esc(s.stage_name)+'</option>';
-        optSug += '<option value="'+s.stage_id+'">'+esc(s.stage_name)+'</option>';
+        // 停用的階段不給新 CP 選（與 #aStage／#eStage 同規則）；建議建立清單的篩選也比照，
+        // 否則「已停用」在畫面上看起來像沒生效（2026-10-06 使用者回報：量產設不啟用，前端還是顯示）。
+        if (+s.is_active === 1) { optSug += '<option value="'+s.stage_id+'">'+esc(s.stage_name)+'</option>'; }
         if (+s.is_active === 1) optAct += '<option value="'+s.stage_id+'">'+esc(s.stage_name)+'</option>';
     });
     $('#fStage').html(optAll);
@@ -1478,44 +1481,66 @@ $(document).on('click', '#btnCreateFromPrev', function(){
     toast('已帶入，請確認內容後按「儲存」。');
 });
 
-/* 建議建立清單 */
+/* 建議建立清單：先載入第一頁、其餘背景載入（ai-rules/08 資料列表規則），
+   不要讓使用者點進這個分頁還要再按一次「重新整理」才看得到東西。 */
 $('#btnSug').on('click', loadSug);
 $('#sStage').on('change', loadSug);
-var SUG_ROWS = [], SUG_PAGE = 1, SUG_PER = 20;
+var SUG_ROWS = [], SUG_PAGE = 1, SUG_PER = 20, SUG_TOTAL = 0, SUG_LOADING_MORE = false;
 function loadSug(){
-    get('suggest', { stage_id: $('#sStage').val() || 0 }, function(res){
+    var stageId = $('#sStage').val() || 0;
+    SUG_LOADING_MORE = false;
+    get('suggest', { stage_id: stageId, per: SUG_PER, page: 1 }, function(res){
         $('#sugMode').text(res.note || '');
         SUG_ROWS = res.rows || []; SUG_PAGE = 1;
-        var s = res.summary || {};
-        if (s.total) {
-            /* 848 筆清單若不講清楚「有多少帶得出東西」，使用者不知道從哪裡開始。
-               而且「有 SIP 但還是草稿」要單獨講——那是一個可以馬上行動的提示。 */
-            var h = '<b>共 ' + s.total + ' 個料號需要建管制計畫</b>（已建好的不再列出）。'
-                  + '自動帶入目前能帶出：製程列 <b>' + (s.with_proc||0) + '</b> 個料號、'
-                  + '管制方法與特殊特性（PFMEA）<b>' + (s.with_pfmea||0) + '</b> 個、'
-                  + '規格公差與量測技術（已核准 SIP）<b>' + (s.with_sip||0) + '</b> 個。';
-            if (s.with_sip_draft) {
-                h += '<div style="margin-top:5px;color:#8c2d18;">另有 <b>' + s.with_sip_draft
-                   + '</b> 個料號的 SIP 還是草稿——<b>把它核准之後，規格公差與量測技術就帶得出來了</b>'
-                   + '（自動帶入只取已核准版次，草稿的公差不該印在管制計畫上）。</div>';
-            }
-            if (!s.with_sip) {
-                h += '<div style="margin-top:5px;">目前沒有任何需要 CP 的料號有已核准的 SIP，'
-                   + '所以規格公差／量測技術／頻率這幾欄要人工填。這不是系統問題，是那些料號的 SIP 還沒建或還沒核准。</div>';
-            }
-            $('#sugSummary').html(h).show();
-        } else { $('#sugSummary').hide(); }
+        SUG_TOTAL = (res.total != null) ? res.total : SUG_ROWS.length;
+        renderSugSummary(res.summary || {});
         renderSugPage();
+        // 第一頁已經可以看、可以操作了，其餘筆數背景補齊（同一個 stage_id，不帶 per 就是全部）
+        if (SUG_TOTAL > SUG_ROWS.length) {
+            SUG_LOADING_MORE = true;
+            renderSugPage();
+            get('suggest', { stage_id: stageId }, function(res2){
+                if (($('#sStage').val() || 0) != stageId) return;   // 期間篩選條件被使用者換掉了，這批結果不要蓋上去
+                SUG_ROWS = res2.rows || []; SUG_TOTAL = SUG_ROWS.length; SUG_LOADING_MORE = false;
+                renderSugPage();
+            });
+        }
     });
+}
+function renderSugSummary(s){
+    if (!s.total) { $('#sugSummary').hide(); return; }
+    /* 848 筆清單若不講清楚「有多少帶得出東西」，使用者不知道從哪裡開始。
+       而且「有 SIP 但還是草稿」要單獨講——那是一個可以馬上行動的提示。 */
+    var h = '<b>共 ' + s.total + ' 個料號需要建管制計畫</b>（已建好的不再列出）。'
+          + '自動帶入目前能帶出：製程列 <b>' + (s.with_proc||0) + '</b> 個料號、'
+          + '管制方法與特殊特性（PFMEA）<b>' + (s.with_pfmea||0) + '</b> 個、'
+          + '規格公差與量測技術（已核准 SIP）<b>' + (s.with_sip||0) + '</b> 個。';
+    if (s.with_sip_draft) {
+        h += '<div style="margin-top:5px;color:#8c2d18;">另有 <b>' + s.with_sip_draft
+           + '</b> 個料號的 SIP 還是草稿——<b>把它核准之後，規格公差與量測技術就帶得出來了</b>'
+           + '（自動帶入只取已核准版次，草稿的公差不該印在管制計畫上）。</div>';
+    }
+    if (!s.with_sip) {
+        h += '<div style="margin-top:5px;">目前沒有任何需要 CP 的料號有已核准的 SIP，'
+           + '所以規格公差／量測技術／頻率這幾欄要人工填。這不是系統問題，是那些料號的 SIP 還沒建或還沒核准。</div>';
+    }
+    $('#sugSummary').html(h).show();
 }
 function renderSugPage(){
     var rows = SUG_ROWS, tb = '';
-    if (!rows.length) {
+    if (!SUG_TOTAL) {
         $('#tSug tbody').html('<tr><td colspan="9" style="text-align:center;color:#8a6d45;padding:16px;">沒有需要建立的項目</td></tr>');
         $('#pgSug').html(''); return;
     }
     var st = (SUG_PAGE - 1) * SUG_PER;
-    rows.slice(st, st + SUG_PER).forEach(function(r){
+    var pageRows = rows.slice(st, st + SUG_PER);
+    if (!pageRows.length && SUG_LOADING_MORE) {
+        // 背景還在補齊全部筆數，使用者已經先翻到還沒載到的那一頁——一瞬間的事，不要顯示空白表格
+        $('#tSug tbody').html('<tr><td colspan="9" style="text-align:center;color:#8a6d45;padding:16px;">載入中…</td></tr>');
+        renderSugPager();
+        return;
+    }
+    pageRows.forEach(function(r){
         var have = (r.have_stages || []).map(function(sid){
             var s = STAGES.filter(function(x){ return +x.stage_id === +sid; })[0];
             return s ? '<span class="tag-s sg-'+sid+'">'+esc(s.stage_name)+'</span>' : '';
@@ -1546,8 +1571,12 @@ function renderSugPage(){
            + '</td></tr>';
     });
     $('#tSug tbody').html(tb);
-    var pages = Math.max(1, Math.ceil(rows.length / SUG_PER)), h = '';
-    h += '<span class="muted">共 '+rows.length+' 筆 / '+pages+' 頁（依「自動帶得出多少」排序，帶得出來的在前）</span>';
+    renderSugPager();
+}
+function renderSugPager(){
+    var pages = Math.max(1, Math.ceil(SUG_TOTAL / SUG_PER)), h = '';
+    h += '<span class="muted">共 '+SUG_TOTAL+' 筆 / '+pages+' 頁（依「自動帶得出多少」排序，帶得出來的在前）</span>';
+    if (SUG_LOADING_MORE) h += ' <span class="muted"><i class="fa fa-spinner fa-spin"></i> 其餘筆數背景載入中…</span>';
     if (pages > 1) {
         h += ' <button data-sugpg="1">&laquo;</button>';
         var s0 = Math.max(1, SUG_PAGE - 2), e0 = Math.min(pages, s0 + 4);
