@@ -937,7 +937,7 @@ function renderProcs(){
                : p.src === 'fqc_insert_ship' ? '<span class="src-tag" title="包裝前一道自動插入，製程數超過門檻改用出貨檢驗內容，可自行調整或刪除">自動插入(FQC/出貨檢驗)</span>'
                : '<span class="src-tag">手動</span>')
           +   (+p.is_outsource ? '<span class="tag-s sg-2">委外</span>' : '')
-          +   inspBadge(p.insp_stage, p.insp_gap)
+          +   inspBadge(p.insp_stage, p.insp_gap, DOC.part_no_text)
           +   (p.process_no ? '<button class="btn-w2 btn-xs2" data-swsip="'+pi+'" title="改用同製程大類的其他通用SIP，取代這一列目前的特性內容"><i class="fa fa-exchange"></i> 切換SIP</button>' : '')
           +   '<button class="btn-w2 btn-xs2" data-additem="'+pi+'" style="margin-left:auto;"><i class="fa fa-plus"></i> 新增特性</button>'
           +   '<button class="btn-w2 btn-xs2" data-upproc="'+pi+'"><i class="fa fa-arrow-up"></i></button>'
@@ -1012,14 +1012,24 @@ function renderProcs(){
    SOP/SIP 文件還查無已核准版本（cp_insp_gap_annotate，見 control_plan_lib.php 六之二節）。 */
 var INSP_LABEL = { IQC: 'IQC', IPQC: 'IPQC', FQC: 'FQC' };
 var INSP_GAP_LABEL = { sop: '缺SOP', sip: '缺SIP' };
-var INSP_GAP_TITLE = { sop: '查無此製程已核准的 SOP（製造製程說明書），請到 SOP/SIP 模組補建',
-                        sip: '查無此製程已核准的 SIP（標準檢驗指導書），請到 SOP/SIP 模組補建' };
-function inspBadge(stage, gap){
+var INSP_GAP_TAB   = { sop: 'sop', sip: 'sip' };
+var INSP_GAP_TITLE = { sop: '查無此製程已核准的 SOP（製造製程說明書）——點一下直接開 SOP/SIP 模組查這個料號',
+                        sip: '查無此製程已核准的 SIP（標準檢驗指導書）——點一下直接開 SOP/SIP 模組查這個料號' };
+/* gap 標籤做成可點的深連結（ai-rules/08：缺資料要能直接帶去設定頁，不是只有一句提示字），
+   帶料號當關鍵字＝sop_sip.php 既有的 ?tab=sop|sip&kw= 深連結（專案管理「文件檢核」已經在用
+   同一套，不是本頁新發明一套）。partNo 沒有時（設定頁的預覽等情境）退回純文字不可點。 */
+function inspBadge(stage, gap, partNo){
     if (!stage || !INSP_LABEL[stage]) return '';
     var cls = stage === 'IQC' ? 'sg-1' : (stage === 'FQC' ? 'sg-3' : 'sg-2');
     var h = '<span class="tag-s '+cls+'" title="檢驗類別（可在下方「檢驗類別」欄位改）">'+INSP_LABEL[stage]+'</span>';
     if (gap && INSP_GAP_LABEL[gap]) {
-        h += '<span class="tag-s" style="background:#f3e2c7;color:#8c2d18;border:1px solid #DD5138;margin-left:2px;" title="'+INSP_GAP_TITLE[gap]+'"><i class="fa fa-exclamation-triangle"></i> '+INSP_GAP_LABEL[gap]+'</span>';
+        var gapStyle = 'background:#f3e2c7;color:#8c2d18;border:1px solid #DD5138;margin-left:2px;';
+        if (partNo) {
+            var url = '../QA/sop_sip.php?tab='+INSP_GAP_TAB[gap]+'&kw='+encodeURIComponent(partNo);
+            h += '<a href="'+url+'" target="_blank" class="tag-s" style="'+gapStyle+'text-decoration:none;" title="'+INSP_GAP_TITLE[gap]+'"><i class="fa fa-exclamation-triangle"></i> '+INSP_GAP_LABEL[gap]+' <i class="fa fa-external-link" style="font-size:9px;"></i></a>';
+        } else {
+            h += '<span class="tag-s" style="'+gapStyle+'" title="'+INSP_GAP_TITLE[gap]+'"><i class="fa fa-exclamation-triangle"></i> '+INSP_GAP_LABEL[gap]+'</span>';
+        }
     }
     return h;
 }
@@ -1466,7 +1476,7 @@ function renderPreview(r){
         if (!items.length) {
             h += '<tr><td style="text-align:center;">'+p.seq+'</td>'
               +  '<td><b>'+esc(p.process_name||('製程'+p.process_no))+'</b>'
-              +  (p.process_no?'<span class="src-tag">#'+p.process_no+'</span>':'') + inspBadge(p.insp_stage, p.insp_gap) + '</td>'
+              +  (p.process_no?'<span class="src-tag">#'+p.process_no+'</span>':'') + inspBadge(p.insp_stage, p.insp_gap, hd.part_no_text) + '</td>'
               +  '<td>'+esc(p.machine||'—')+(p.maker_name?'<div class="muted">'+esc(p.maker_name)+'</div>':'')+'</td>'
               +  '<td colspan="7" style="color:#8c2d18;">'+esc(p.hint||'查不到檢驗項目，要人工填')+'</td></tr>';
             return;
@@ -1477,7 +1487,7 @@ function renderPreview(r){
                 h += '<td rowspan="'+items.length+'" style="text-align:center;">'+p.seq+'</td>'
                   +  '<td rowspan="'+items.length+'"><b>'+esc(p.process_name||('製程'+p.process_no))+'</b>'
                   +  (p.process_no?'<span class="src-tag">#'+p.process_no+'</span>':'')
-                  +  inspBadge(p.insp_stage, p.insp_gap)
+                  +  inspBadge(p.insp_stage, p.insp_gap, hd.part_no_text)
                   +  (+p.is_outsource?'<div><span class="tag-s sg-2">委外</span></div>':'')+'</td>'
                   +  '<td rowspan="'+items.length+'">'+esc(p.machine||'—')
                   +  (p.maker_name?'<div class="muted">'+esc(p.maker_name)+'</div>':'')+'</td>';
