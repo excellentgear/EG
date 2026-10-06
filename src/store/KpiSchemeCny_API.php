@@ -148,8 +148,11 @@ case 'list_scheme': {
 case 'save_indicator': {
     if (!$perms['canAdmin']) jerr('僅 KPI 管理者可設定', 403);
     $year = (int)($_POST['year'] ?? $curY);
+    $wasNew = (int)($_POST['indicator_id'] ?? 0) <= 0;
     try { $iid = kpi_scheme_ind_save($db, $_POST, $year, (string)($u['user_cname'] ?? '')); }
     catch (Throwable $e) { jerr($e->getMessage()); }
+    kps_log($db, $iid, $year, null, 'setting', 'indicator', null, (string)($_POST['name'] ?? ''),
+            $wasNew ? '新增指標' : '修改指標基本資料', $u);
     jout(['indicator_id'=>$iid]);
 }
 
@@ -165,11 +168,15 @@ case 'save_indicator_year': {
     }
     try { kpi_scheme_iy_save($db, $iid, $year, $_POST, $params, (string)($u['user_cname'] ?? '')); }
     catch (Throwable $e) { jerr($e->getMessage()); }
+    kps_log($db, $iid, $year, null, 'setting', 'indicator_year', null,
+            (string)($_POST['source_mode'] ?? '') . '/' . (string)($_POST['calculator_key'] ?? ''),
+            '修改年度設定（目標/擔當者/來源/參數）', $u);
     jout([]);
 }
 
 case 'preview_compute': {
-    if (!$perms['canAdmin']) jerr('僅 KPI 管理者可設定', 403);
+    // 僅唯讀試算（不寫入任何資料），canView 即可——設定分頁的「試算目前設定」與總覽的
+    // 「前端即時試算」（toggleSim）共用這支，後者刻意開放給所有看得到這頁的人，不限管理員。
     $calcKey = trim((string)($_POST['calculator_key'] ?? ''));
     $year = (int)($_POST['year'] ?? $curY);
     $month = (int)($_POST['month'] ?? (int)date('n'));
@@ -184,6 +191,38 @@ case 'preview_compute': {
     // 同一個浮點序列化坑：v 改送字串，num/den 維持原樣(金額/件數精確值前端有用途，不強制轉字串)
     if ($r && $r['v'] !== null) $r['v'] = number_format((float)$r['v'], 4, '.', '');
     jout(['result'=>$r]);
+}
+
+/* ---------- 套用試算：把「前端即時試算」目前調整的開放參數寫回本年度設定（僅管理者） ----------
+   只允許套用「本來就被標記為開放前端試算」的參數（params_json 裡該值是 {v,fe:1} 包起來的），
+   不是隨便一個參數鍵都能被這支端點改掉——避免繞過「設定」分頁的正常編輯流程。 */
+case 'apply_params': {
+    if (!$perms['canAdmin']) jerr('僅 KPI 管理者可套用修改', 403);
+    $iid = (int)($_POST['indicator_id'] ?? 0);
+    $year = (int)($_POST['year'] ?? 0);
+    if ($year < 2020 || $year > $curY + 2) jerr('年度不合法');
+    $iy = kps_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    if ($iy['source_mode'] !== 'auto') jerr('人工填寫的指標沒有參數可套用');
+    $params = kpi_as_params($iy['params_json']);
+    $ov = json_decode((string)($_POST['params'] ?? '{}'), true);
+    if (!is_array($ov)) jerr('參數格式錯誤');
+    $changed = [];
+    foreach ($ov as $k => $v) {
+        $cur = $params[$k] ?? null;
+        $fe = is_array($cur) && !empty($cur['fe']);
+        if (!$fe) continue;   // 只允許套用「開放前端試算」的參數
+        $oldV = is_array($cur) && array_key_exists('v', $cur) ? $cur['v'] : null;
+        $params[$k] = ['v'=>$v, 'fe'=>1];
+        if (json_encode($oldV) !== json_encode($v)) $changed[$k] = ['old'=>$oldV, 'new'=>$v];
+    }
+    if (!$changed) jout(['changed'=>0]);
+    $db->prepare("UPDATE kpi_scheme_indicator_year SET params_json=?, Modified_By=?, Modified_At=NOW()
+                 WHERE indicator_id=? AND year=?")
+       ->execute([json_encode($params, JSON_UNESCAPED_UNICODE), (string)$u['user_cname'], $iid, $year]);
+    kps_log($db, $iid, $year, null, 'setting', 'apply_params', null,
+            json_encode($changed, JSON_UNESCAPED_UNICODE), '前端即時試算套用', $u);
+    jout(['changed'=>count($changed)]);
 }
 
 /* ============================================================
@@ -323,6 +362,8 @@ case 'adjust_add': {
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('寫入失敗：'.$e->getMessage(), 500); }
     if (!$done) jerr('沒有可排除的項目（選到的資料已經不在這個月的清單內，請重新整理）');
+    kps_log($db, $iid, $year, $month, 'adjust_add', 'exclude', null, implode(',', $keys),
+            '排除 ' . $done . ' 筆' . ($reason !== '' ? ('（原因：' . $reason . '）') : ''), $u);
     jout(['added'=>$done, 'skipped'=>$skip]);
 }
 
@@ -342,6 +383,7 @@ case 'adjust_del': {
     $st->execute(array_merge([$iid, $year, $month], $keys));
     $n = $st->rowCount();
     if (!$n) jerr('這幾筆本來就沒有被排除（請重新整理）');
+    kps_log($db, $iid, $year, $month, 'adjust_del', 'exclude', implode(',', $keys), null, '取消排除 ' . $n . ' 筆', $u);
     jout(['removed'=>$n]);
 }
 
@@ -428,6 +470,8 @@ case 'src_edit': {
                                   JSON_UNESCAPED_UNICODE),
                       (int)$u['id'], (string)$u['user_cname']]);
     } catch (Throwable $e) {}
+    kps_log($db, $iid, $year, $month, 'src_edit', $table . '.' . $fieldK, $oldStr, $newStr,
+            '由數值明細修改來源資料（' . $spec['pk'] . '=' . $rowKey . '）', $u);
 
     // 重新即時算這一格（不必另外觸發別的月份重算，kpi_scheme 本來就沒有快照）；
     // 若改的是「決定算在哪個月」的欄位，順便告訴使用者這一筆以後會改算到哪個月（純提示，不代為處理）。
@@ -456,6 +500,7 @@ case 'edit_mode_save': {
     $st->execute([$iid]);
     if (!$st->fetchColumn()) jerr('找不到指標');
     kps_edit_mode_save($db, $iid, $mode, (string)$u['user_cname']);
+    kps_log($db, $iid, null, null, 'edit_mode', 'src_edit_mode', null, $mode, '來源資料可否直接修改', $u);
     jout(['mode'=>$mode]);
 }
 
@@ -514,6 +559,8 @@ case 'excl_rule_add': {
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('寫入失敗：'.$e->getMessage(), 500); }
+    kps_log($db, $iid, ($scope === 'all' ? null : $year), null, 'excl_rule_add', 'excl_' . $dim, null,
+            implode(',', $vals), '新增排除規則 ' . count($vals) . ' 項（適用：' . ($scope === 'all' ? '所有年度' : ($year . ' 年度')) . '）', $u);
     jout(['added'=>count($vals), 'scope'=>$scope, 'rules'=>kps_excl_rule_rows($db, $iid, $year)]);
 }
 
@@ -532,6 +579,7 @@ case 'excl_rule_del': {
     $st->execute(array_merge([$iid], $ids));
     $n = $st->rowCount();
     if (!$n) jerr('這幾條規則本來就不存在（請重新整理）');
+    kps_log($db, $iid, $year, null, 'excl_rule_del', 'excl_rule', implode(',', $ids), null, '取消排除規則 ' . $n . ' 條', $u);
     jout(['removed'=>$n, 'rules'=>kps_excl_rule_rows($db, $iid, $year)]);
 }
 
@@ -553,6 +601,7 @@ case 'fill': {
     if ($val === null) jerr('「'.$raw.'」無法辨識，'.kpi_as_input_hint((string)$iy['value_type']));
     $note = mb_substr(trim((string)($_POST['note'] ?? '')), 0, 200);
     kps_fill_save($db, $iid, $year, $month, $val, $note, (int)$u['id'], (string)$u['user_cname']);
+    kps_log($db, $iid, $year, $month, 'fill', 'manual_value', null, (string)$val, $note ?: null, $u);
     jout(['value'=>$val]);
 }
 
@@ -565,6 +614,7 @@ case 'clear_fill': {
     $ownerId = $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null;
     if (!kps_can_edit($perms, $ownerId, (int)$u['id'])) jerr('您沒有清除這個指標填寫內容的權限', 403);
     kps_fill_clear($db, $iid, $year, $month);
+    kps_log($db, $iid, $year, $month, 'fill', 'manual_value', null, null, '清除填寫', $u);
     jout([]);
 }
 
@@ -585,6 +635,7 @@ case 'override': {
     $val = kpi_as_parse_input((string)$iy['value_type'], $raw);
     if ($val === null) jerr('「'.$raw.'」無法辨識，'.kpi_as_input_hint((string)$iy['value_type']));
     kps_override_save($db, $iid, $year, $month, $val, $reason, (int)$u['id'], (string)$u['user_cname']);
+    kps_log($db, $iid, $year, $month, 'override', 'override_value', null, (string)$val, $reason, $u);
     jout(['value'=>$val]);
 }
 
@@ -597,6 +648,7 @@ case 'clear_override': {
     $ownerId = $iy['owner_user_id'] !== null ? (int)$iy['owner_user_id'] : null;
     if (!kps_can_edit($perms, $ownerId, (int)$u['id'])) jerr('您沒有清除這個指標覆寫值的權限', 403);
     kps_override_clear($db, $iid, $year, $month);
+    kps_log($db, $iid, $year, $month, 'override', 'override_value', null, null, '清除覆寫', $u);
     jout([]);
 }
 
@@ -639,13 +691,18 @@ case 'bulk_override': {
             if (!$row) { $skipped[] = "指標 $iid 不存在"; continue; }
             if (!in_array($m, kpi_as_valid_months($row), true)) { $skipped[] = $row['name'] . " {$m}月 不適用"; continue; }
             if (!kps_month_ended($year, $m)) { $skipped[] = $row['name'] . " {$m}月 尚未結束"; continue; }
-            if ($raw === '') { $clr->execute([$iid, $year, $m]); $cleared += $clr->rowCount() ? 1 : 0; continue; }
+            if ($raw === '') {
+                $clr->execute([$iid, $year, $m]);
+                if ($clr->rowCount()) { $cleared++; kps_log($db, $iid, $year, $m, 'bulk_override', 'override_value', null, null, '補登模式清除', $u); }
+                continue;
+            }
             $val = kpi_as_parse_input((string)$row['value_type'], $raw);
             if ($val === null) {
                 $skipped[] = $row['name'] . " {$m}月「{$raw}」無法辨識（" . kpi_as_input_hint((string)$row['value_type']) . '）';
                 continue;
             }
             $set->execute([$iid, $year, $m, $val, (int)$u['id'], (string)$u['user_cname'], $note]);
+            kps_log($db, $iid, $year, $m, 'bulk_override', 'override_value', null, (string)$val, $note, $u);
             $saved++;
         }
         $db->commit();
@@ -719,6 +776,7 @@ case 'attach_upload': {
         @unlink($destPath);
         jerr('寫入失敗：' . $e->getMessage(), 500);
     }
+    kps_log($db, $iid, $year, $month, 'attach', 'upload', null, $orig, $note ?: null, $u);
     jout(['attach_id'=>(int)$db->lastInsertId()]);
 }
 
@@ -732,6 +790,8 @@ case 'attach_delete': {
     $p = kps_attach_path($db, $att);
     if ($p) @unlink($p);
     $db->prepare("DELETE FROM kpi_scheme_attachment WHERE attach_id=?")->execute([$aid]);
+    kps_log($db, (int)$att['indicator_id'], (int)$att['year'], (int)$att['month'], 'attach', 'delete',
+            (string)$att['original_name'], null, null, $u);
     jout([]);
 }
 
@@ -753,6 +813,15 @@ case 'attach_open': {
     header('Content-Length: ' . filesize($p));
     readfile($p);
     exit;
+}
+
+/* ---------- 變更歷史（使用者要求：KPI.php 連畫面都沒有，本方案額外補的查看功能） ---------- */
+case 'change_log': {
+    $iid = (int)($_GET['indicator_id'] ?? 0);
+    if ($iid <= 0) jerr('缺少指標');
+    $year = isset($_GET['year']) && $_GET['year'] !== '' ? (int)$_GET['year'] : null;
+    $rows = kps_log_rows($db, $iid, $year, 300);
+    jout(['rows'=>$rows]);
 }
 
 default:

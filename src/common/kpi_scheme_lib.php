@@ -964,7 +964,49 @@ function kpi_scheme_ind_ensure_schema(PDO $db): void {
             KEY idx_cell (indicator_id, year, month)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
           COMMENT='KPI新方案-佐證附件(DB只存檔名,路徑即時組;與正式 kpi_as_attachment 完全分離)'");
+
+        // 變更歷史——結構比照 kpi_as_change_log，但官方那張表其實連 KPI.php 自己都沒有畫面可以看
+        // （只寫不讀，純粹留供 AS9100 稽核事後查資料庫）；本方案額外補一個查看畫面，見下方 kps_log()。
+        $db->exec("CREATE TABLE IF NOT EXISTS kpi_scheme_change_log (
+            log_id INT AUTO_INCREMENT PRIMARY KEY,
+            indicator_id INT NULL, year SMALLINT NULL, month TINYINT NULL,
+            action VARCHAR(30) NOT NULL COMMENT 'setting/fill/override/adjust_add/adjust_del/excl_rule_add/excl_rule_del/src_edit/edit_mode/bulk_override',
+            field VARCHAR(60) NULL, old_value TEXT NULL, new_value TEXT NULL, note VARCHAR(255) NULL,
+            changed_by INT NULL, changed_by_name VARCHAR(30) NULL,
+            changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            KEY idx_ind (indicator_id, year)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+          COMMENT='KPI新方案-設定/數值變更歷史(與正式 kpi_as_change_log 完全分離)'");
     } catch (Throwable $e) {}
+}
+
+/** 寫入變更歷史（本方案所有會改資料的動作都要呼叫這支，唯一寫入點） */
+function kps_log(PDO $db, ?int $iid, ?int $year, ?int $month, string $action, ?string $field,
+                 $old, $new, ?string $note, array $u): void {
+    kpi_scheme_ind_ensure_schema($db);
+    try {
+        $db->prepare("INSERT INTO kpi_scheme_change_log
+                (indicator_id,year,month,action,field,old_value,new_value,note,changed_by,changed_by_name)
+                VALUES (?,?,?,?,?,?,?,?,?,?)")
+           ->execute([$iid, $year, $month, $action, $field,
+                     $old === null ? null : (string)$old, $new === null ? null : (string)$new,
+                     $note, (int)($u['id'] ?? 0), (string)($u['user_cname'] ?? '')]);
+    } catch (Throwable $e) {}
+}
+/** 讀取某指標（可選年度）的變更歷史，給查看畫面用 */
+function kps_log_rows(PDO $db, int $iid, ?int $year = null, int $limit = 200): array {
+    kpi_scheme_ind_ensure_schema($db);
+    try {
+        if ($year !== null) {
+            $st = $db->prepare("SELECT * FROM kpi_scheme_change_log WHERE indicator_id=? AND (year=? OR year IS NULL)
+                                ORDER BY log_id DESC LIMIT " . (int)$limit);
+            $st->execute([$iid, $year]);
+        } else {
+            $st = $db->prepare("SELECT * FROM kpi_scheme_change_log WHERE indicator_id=? ORDER BY log_id DESC LIMIT " . (int)$limit);
+            $st->execute([$iid]);
+        }
+        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
 }
 
 /* ============================================================
@@ -1516,6 +1558,30 @@ function kps_official_calc_info(PDO $db, int $itemNo, int $year): ?array {
     $st->execute([$year, $itemNo]);
     $r = $st->fetch(PDO::FETCH_ASSOC);
     return $r ?: null;
+}
+
+/**
+ * 前端即時試算（使用者要求比照 KPI.php 補齊）：這個指標目前有哪些參數「開放前端試算」。
+ * 兩層判斷都要過：①登記表（kpi_scheme_registry）本身允許這個參數被開放（$pm['fe']）
+ * ②這個指標這次存檔時實際勾選了要開放（params_json 裡該值是 {v:...,fe:1} 包起來的）——
+ * 沒勾的仍是裸值（int/array/...），不會被判定為可試算，兩邊缺一不可。
+ */
+function kps_exposed_params(array $row): array {
+    if ((string)($row['source_mode'] ?? '') !== 'auto' || empty($row['calculator_key'])) return [];
+    $reg = kpi_scheme_registry();
+    if (!isset($reg[$row['calculator_key']])) return [];
+    $params = [];
+    try { $params = json_decode((string)$row['params_json'], true) ?: []; } catch (Throwable $e) {}
+    $exposed = [];
+    foreach ($reg[$row['calculator_key']]['params'] as $pm) {
+        $pv = $params[$pm['key']] ?? null;
+        $fe = is_array($pv) && !empty($pv['fe']);
+        if ($fe && !empty($pm['fe'])) {
+            $exposed[] = ['key'=>$pm['key'], 'label'=>$pm['label'], 'type'=>$pm['type'],
+                          'value'=>is_array($pv) && array_key_exists('v', $pv) ? $pv['v'] : $pv];
+        }
+    }
+    return $exposed;
 }
 
 /** 單一指標的試算（DB 列版本，取代舊的 kpi_scheme_preview($item)；邏輯相同只是資料來源換成 DB）。

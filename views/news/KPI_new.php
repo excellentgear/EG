@@ -72,6 +72,7 @@ if ($kpiPerms['canView']) {
     $calcMs = (int)round((microtime(true) - $t0) * 1000);
 }
 $ATTACH_COUNTS = $kpiPerms['canView'] ? kps_attach_counts_year($db, $YEAR) : [];
+$SIM_PARAMS_MAP = [];   // iid => 開放前端即時試算的參數清單（總覽表渲染時逐行填入，見下方迴圈）
 
 /** 顯示值格式化 */
 function kpsFmt($v, string $type): string {
@@ -190,6 +191,21 @@ function kpsOwnerText(array $row, array $deptName): string {
         .att-row .att-note { color:#8a6d45; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .att-row .att-del { color:#DD5138; cursor:pointer; }
         .att-missing { color:#c9bda9; text-decoration:line-through; }
+        table.log-tbl { width:100%; border-collapse:collapse; font-size:12px; }
+        table.log-tbl th, table.log-tbl td { border-bottom:1px solid #EADFC8; padding:4px 7px; text-align:left; }
+        table.log-tbl thead th { background:#FDF8EF; color:#8a6d45; }
+        table.log-tbl .log-act { display:inline-block; font-size:10.5px; background:#F1ECE3; color:#8a6d45;
+            border-radius:8px; padding:1px 7px; white-space:nowrap; }
+        table.log-tbl .log-diff { color:#5b3a1e; }
+        table.log-tbl .log-diff .old { color:#a08356; text-decoration:line-through; }
+        table.log-tbl .log-diff .new { color:#4d6b33; font-weight:bold; }
+        /* 前端即時試算 */
+        .kpi-preview { color:#F0A24B; font-style:italic; }
+        .kpi-sim-bar { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px;
+            margin:4px 0; font-size:12px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+        .kpi-sim-bar input { width:110px; height:24px; font-size:12px; border:1px solid #D8BE93; border-radius:3px; padding:0 5px; }
+        .kpi-sim-bar button { height:24px; font-size:12px; border:1px solid #d98a33; background:#F0A24B; color:#fff;
+            border-radius:3px; cursor:pointer; padding:0 10px; }
 
         /* 補登模式（管理員補資料）：整張表變成可直接填寫的格子，比照 KPI.php */
         #btnFill.on { background:#F0A24B; color:#fff; border-color:#d98a33; }
@@ -487,6 +503,7 @@ function kpsOwnerText(array $row, array $deptName): string {
                         else { $agg = array_sum($nums) / count($nums); $aggLbl = '平均'; }
                     }
                     $validMonths = kpi_as_valid_months($row);
+                    $exposed = kps_exposed_params($row);
                 ?>
                 <tr>
                     <td><?= $itemNo ?></td>
@@ -494,6 +511,10 @@ function kpsOwnerText(array $row, array $deptName): string {
                         <?= htmlspecialchars($row['name']) ?>
                         <i class="fa fa-info-circle ks-i" onclick="showInfo(<?= $itemNo ?>)"
                            title="計算方式與備註"></i>
+                        <?php if ($exposed): ?>
+                        <i class="fa fa-sliders ks-i" style="color:#F0A24B;" title="試算（調整開放參數）"
+                           onclick="toggleSim(<?= $iid ?>, event)"></i>
+                        <?php endif; ?>
                     </td>
                     <td><?= htmlspecialchars(kpsOwnerText($row, $deptName)) ?></td>
                     <td><?= kpsFreqName($row['freq']) ?></td>
@@ -541,6 +562,9 @@ function kpsOwnerText(array $row, array $deptName): string {
                             : '<b>' . htmlspecialchars(kpsFmt($agg, $row['value_type'])) . '</b>'
                               . '<span style="font-size:10px;color:#8a6d45;"> ' . $aggLbl . '</span>' ?></td>
                 </tr>
+                <?php if ($exposed): $SIM_PARAMS_MAP[$iid] = $exposed; ?>
+                <tr class="ks-sim-row" id="simRow<?= $iid ?>" style="display:none;"><td colspan="19"></td></tr>
+                <?php endif; ?>
                 <?php endforeach; ?>
             <?php endforeach; ?>
             </tbody>
@@ -663,6 +687,21 @@ function kpsOwnerText(array $row, array $deptName): string {
     </div>
 </div>
 
+<!-- 變更歷史 -->
+<div class="ks-mask" id="logMask">
+    <div class="ks-modal" style="max-width:760px;">
+        <div class="m-head"><span id="logTitle">變更歷史</span>
+            <span class="m-close" onclick="closeMask('logMask')">&times;</span></div>
+        <div class="m-body">
+            <div class="vio-note">這份紀錄只有本頁看得到（正式 KPI 表沒有對應的查看畫面），
+                涵蓋設定異動、填寫/覆寫、逐筆排除、排除規則、來源資料修改、佐證附件上傳/刪除；最多列出最近 300 筆。</div>
+            <label style="font-size:12.5px;color:#8a6d45;">
+                <input type="checkbox" id="logYearOnly" checked> 只看目前年度（<span id="logYearLabel"></span>）</label>
+            <div id="logList" style="min-height:40px;margin-top:8px;"></div>
+        </div>
+    </div>
+</div>
+
 <!-- 使用說明（鐵律7） -->
 <div class="ks-mask" id="helpUseMask">
     <div class="ks-modal">
@@ -769,6 +808,9 @@ ITEM_INFO[<?= $itemNo ?>] = <?= json_encode([
 IID2ITEM[<?= $iid ?>] = <?= $itemNo ?>;
 <?php endforeach; ?>
 
+/* ===== 前端即時試算（調整開放參數）：iid -> 這個指標目前開放試算的參數清單 ===== */
+var SIM_PARAMS = <?= json_encode($SIM_PARAMS_MAP, JSON_UNESCAPED_UNICODE) ?>;
+
 function openMask(id){ document.getElementById(id).style.display='block'; }
 function closeMask(id){ document.getElementById(id).style.display='none'; }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){
@@ -825,6 +867,7 @@ $(document).on('click', 'td.ks-cell', function(e){
         if (src === 'manual') items.push({t:'<i class="fa fa-eraser"></i> 清除填寫', f:function(){ doClearFill(iid, m); }});
     }
     items.push({t:'<i class="fa fa-paperclip"></i> 佐證附件', f:function(){ openAttach(iid, m); }});
+    items.push({t:'<i class="fa fa-history"></i> 變更歷史', f:function(){ openLog(iid); }});
     var html = '<div class="cm-head">' + itemNo + '. ' + esc(it.name) + '｜' + m + '月</div>';
     items.forEach(function(x, i){ html += '<div class="cm-item" data-i="' + i + '">' + x.t + '</div>'; });
     var $menu = $('#cellMenu').html(html).show();
@@ -1028,6 +1071,46 @@ function delAttach(aid){
         refreshAttList();
     }, 'json').fail(function(){ alert('刪除失敗：連線異常'); });
 }
+
+/* ---------- 變更歷史（KPI.php 本身沒有對應的查看畫面，本方案額外補的功能） ---------- */
+var LOG_ACTION_LABEL = {
+    setting:'設定', fill:'填寫/覆寫', override:'手動覆寫', adjust_add:'逐筆排除',
+    adjust_del:'取消排除', excl_rule_add:'新增排除規則', excl_rule_del:'取消排除規則',
+    src_edit:'修改來源資料', edit_mode:'設定可否修改', bulk_override:'補登模式', attach:'佐證附件'
+};
+var LOG_CTX = null;
+function openLog(iid){
+    var itemNo = IID2ITEM[iid]; var it = ITEM_INFO[itemNo];
+    LOG_CTX = {iid:iid};
+    document.getElementById('logTitle').textContent = '變更歷史：' + itemNo + '. ' + it.name;
+    document.getElementById('logYearLabel').textContent = KS_YEAR;
+    document.getElementById('logYearOnly').checked = true;
+    refreshLog();
+    openMask('logMask');
+}
+function refreshLog(){
+    if (!LOG_CTX) return;
+    var onlyYear = document.getElementById('logYearOnly').checked;
+    document.getElementById('logList').innerHTML = '<div style="padding:10px;color:#8a6d45;">載入中…</div>';
+    $.getJSON(API, {action:'change_log', indicator_id:LOG_CTX.iid, year: onlyYear ? KS_YEAR : ''}, function(res){
+        if (!res || !res.ok) { $('#logList').html(esc((res && res.error) || '載入失敗')); return; }
+        if (!res.rows.length) { $('#logList').html('<span style="color:#8a6d45;font-size:12px;">目前沒有變更紀錄。</span>'); return; }
+        var h = '<table class="log-tbl"><thead><tr><th>時間</th><th>月份</th><th>動作</th><th>內容</th><th>操作人</th></tr></thead><tbody>';
+        res.rows.forEach(function(r){
+            h += '<tr><td style="white-space:nowrap;">' + esc((r.changed_at || '').substr(0,16)) + '</td>'
+               + '<td>' + (r.month ? (r.month + '月') : '—') + '</td>'
+               + '<td><span class="log-act">' + esc(LOG_ACTION_LABEL[r.action] || r.action) + '</span></td>'
+               + '<td class="log-diff">' + (r.field ? ('<b>' + esc(r.field) + '</b>　') : '')
+               + (r.old_value != null && r.old_value !== '' ? ('<span class="old">' + esc(r.old_value) + '</span> → ') : '')
+               + (r.new_value != null && r.new_value !== '' ? ('<span class="new">' + esc(r.new_value) + '</span>') : (r.old_value ? '（清空）' : ''))
+               + (r.note ? ('<div style="color:#8a6d45;font-size:11px;">' + esc(r.note) + '</div>') : '') + '</td>'
+               + '<td style="white-space:nowrap;">' + esc(r.changed_by_name || '') + '</td></tr>';
+        });
+        h += '</tbody></table>';
+        $('#logList').html(h);
+    }).fail(function(){ $('#logList').html('<span style="color:#DD5138;">載入失敗：連線異常</span>'); });
+}
+$(document).on('change', '#logYearOnly', refreshLog);
 
 /* ---------- 單一欄位修改：填寫（人工）／手動覆寫（自動） ---------- */
 function openFillMask(iid, m, mode){
@@ -1405,6 +1488,70 @@ function renderVio(){
     if ($('#vrDim').length) vioRenderRuleList();
 }
 
+/* ============================================================
+ * 前端即時試算（調整開放參數；使用者要求比照 KPI.php 補齊）
+ * ------------------------------------------------------------
+ * 只有「設定分頁有勾選開放前端試算」的參數才會出現滑桿圖示；
+ * 「試算」純預覽（打 preview_compute，canView 即可用）；
+ * 「套用修改」才會真的寫回本年度設定並重算（僅 KPI 管理員）。
+ * ============================================================ */
+var KPI_CAN_ADMIN = <?= ($kpiPerms['isAdmin'] || $kpiPerms['canAdmin']) ? 'true' : 'false' ?>;
+function toggleSim(iid, ev){
+    if (ev) ev.stopPropagation();
+    var $row = $('#simRow' + iid);
+    if (!$row.length) return;
+    if ($row.is(':visible')) { $row.hide(); location.reload(); return; }
+    var plist = SIM_PARAMS[iid] || [];
+    var h = '<div class="kpi-sim-bar"><b><i class="fa fa-sliders"></i> 試算</b>';
+    plist.forEach(function(p){
+        var val = Array.isArray(p.value) ? p.value.join(',') : (p.value === null || typeof p.value === 'object' ? '' : p.value);
+        h += '<label>' + esc(p.label) + '</label><input data-key="' + esc(p.key) + '" data-type="' + esc(p.type) + '" value="' + esc(val) + '">';
+    });
+    h += '<button onclick="runSim(' + iid + ')">試算</button>';
+    if (KPI_CAN_ADMIN) h += '<button style="background:#DD5138;border-color:#b53c28;color:#fff;" onclick="applySim(' + iid + ')" title="把目前試算參數寫回本年度設定">套用修改</button>';
+    h += '<button style="background:#fff;color:#5b3a1e;border-color:#D8BE93;" onclick="toggleSim(' + iid + ')">還原</button>';
+    h += '<span style="color:#b5762a;">試算僅預覽；「套用修改」才會寫回本年度設定</span></div>';
+    $row.show().find('td').html(h);
+}
+function collectSimParams(iid){
+    var params = {};
+    $('#simRow' + iid + ' input').each(function(){
+        var k = $(this).data('key'), t = $(this).data('type'), v = $.trim($(this).val());
+        if (t === 'int' || t === 'num') params[k] = v === '' ? 0 : +v;
+        else if (t === 'bool') params[k] = v === '1' || v === 'true' ? 1 : 0;
+        else params[k] = v;
+    });
+    return params;
+}
+function runSim(iid){
+    var itemNo = IID2ITEM[iid]; var it = ITEM_INFO[itemNo];
+    var params = collectSimParams(iid);
+    $.post(API, {action:'preview_compute', calculator_key:it.calc_key, year:KS_YEAR, month:(new Date()).getMonth()+1,
+                 params_json:JSON.stringify(params)}, function(res){
+        if (!res || !res.ok) { alert((res && res.error) || '試算失敗'); return; }
+        var r = res.result;
+        var $tr = $('td.ks-cell[data-iid="' + iid + '"]');
+        var m = (new Date()).getMonth() + 1;
+        var $td = $tr.filter('[data-m="' + m + '"]');
+        if (!$td.length || !r || r.v === null || r.v === undefined) { alert('本月（' + m + '月）查無試算結果'); return; }
+        $td.html('<span class="kpi-preview" title="試算值 分子=' + r.num + ' 分母=' + r.den + '">' + kpsFmtJs(r.v, it.value_type) + '</span>');
+    }, 'json').fail(function(){ alert('試算失敗：連線異常'); });
+}
+function kpsFmtJs(v, type){
+    v = parseFloat(v);
+    if (type === 'percent') return (Math.round(v*10)/10) + '%';
+    return (Math.round(v*10)/10) + '';
+}
+function applySim(iid){
+    var itemNo = IID2ITEM[iid]; var it = ITEM_INFO[itemNo];
+    if (!confirm('把「' + itemNo + '. ' + it.name + '」目前試算的參數寫回 ' + KS_YEAR + ' 年度設定？')) return;
+    $.post(API, {action:'apply_params', indicator_id:iid, year:KS_YEAR, params:JSON.stringify(collectSimParams(iid))}, function(res){
+        if (!res || !res.ok) { alert((res && res.error) || '套用失敗'); return; }
+        alert(res.changed > 0 ? ('已套用並重算（更新 ' + res.changed + ' 個參數）') : '參數無變更');
+        location.reload();
+    }, 'json').fail(function(x){ alert('套用失敗：' + ((x.responseJSON && x.responseJSON.error) || x.status)); });
+}
+
 /* ===== 分頁切換 ===== */
 var KSC_LOADED = false;
 function kscSwitchTab(tab){
@@ -1670,7 +1817,12 @@ function kscRenderParamFields(calcKey, paramsJsonStr){
     var isExisting = (calcKey === 'existing' || calcKey === 'existing_cny');
     var h = '<div class="ksc-param-box"><div class="pname">參數</div>';
     reg.params.forEach(function(p){
-        var v = params[p.key];
+        var raw = params[p.key];
+        // 開放前端即時試算（p.fe===1 的那種參數類型才有這個選項）存成 {v:值, fe:0/1}，
+        // 其餘參數一律存裸值——這裡要先拆開，不然 int/bool/textlist 的渲染會把整個
+        // {v,fe} 物件當成值印出來。
+        var feOn = !!(raw && typeof raw === 'object' && !Array.isArray(raw) && 'fe' in raw && raw.fe);
+        var v = (raw && typeof raw === 'object' && !Array.isArray(raw) && 'v' in raw) ? raw.v : raw;
         var id = 'fp_' + p.key;
         if (p.type === 'months_map') {
             // 各月目標金額——本方案自己的指標直接在這裡填（不必去正式 KPI 設定頁 KPI.php 調整），
@@ -1715,6 +1867,12 @@ function kscRenderParamFields(calcKey, paramsJsonStr){
             // textlist：逗號分隔文字，存檔時轉陣列
             var txt = Array.isArray(v) ? v.join(',') : (v !== undefined && v !== null ? v : '');
             h += '<input type="text" id="' + id + '" value="' + esc(txt) + '" placeholder="逗號分隔，例：1,2,3">';
+        }
+        if (p.fe === 1) {
+            // 這種參數類型允許開放前端即時試算（總覽表會長出滑桿圖示，canView 的人都能調整
+            // 試看看、不存檔；只有勾了這裡才會出現，且只有管理員按「套用修改」才會真的寫回）
+            h += '<label style="display:block;font-size:11px;color:#8a6d45;margin-top:3px;">'
+               + '<input type="checkbox" id="' + id + '_fe"' + (feOn ? ' checked' : '') + '> 開放前端即時試算</label>';
         }
         h += '</div>';
     });
@@ -1807,6 +1965,13 @@ function kscCollectParams(calcKey){
             var el2 = document.getElementById(id);
             var raw = el2 ? el2.value : '';
             out[p.key] = raw.split(',').map(function(s){ s = s.trim(); return s === '' ? null : (isNaN(s) ? s : parseFloat(s)); }).filter(function(s){ return s !== null; });
+        }
+        // 這種參數類型允許開放前端即時試算：有勾選「開放」就把值包成 {v,fe:1}，
+        // 沒勾就存裸值——裸值與 {v,fe:0} 對計算完全等效（kpi_as_pv 兩種都讀得到），
+        // 但存裸值比較乾淨，不必每個參數都背一份 fe:0 的殼。
+        if (p.fe === 1) {
+            var feEl = document.getElementById(id + '_fe');
+            if (feEl && feEl.checked) out[p.key] = {v: out[p.key], fe: 1};
         }
     });
     return out;
