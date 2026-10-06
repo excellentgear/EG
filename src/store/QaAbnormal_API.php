@@ -137,8 +137,11 @@ case 'auto_open_from_qc': {
     if (!is_array($measures)) $measures = [];
     $selected = json_decode((string)($_POST['selected'] ?? '[]'), true);
     if (!is_array($selected)) $selected = [];
+    // 「線上檢驗NG自動開立」可以設定不只一個類別（IQC/FQC皆可能來自線上檢驗），超過一個時
+    // 前端會先讓品管挑好傳 cat_id 過來；只有一個時可以不傳，由 qab_auto_open_from_qc_ng() 自動採用。
+    $catId = (int)($_POST['cat_id'] ?? 0);
     try {
-        $r = qab_auto_open_from_qc_ng($db, $qcFormId, $uid, $measures, $selected);
+        $r = qab_auto_open_from_qc_ng($db, $qcFormId, $uid, $measures, $selected, $catId);
     } catch (Throwable $e) { jerr($e->getMessage()); }
     $log($r['id'], 'create', '', $r['no'] . '（線上檢驗NG自動開立）');
     jout(true, ['id' => $r['id'], 'no' => $r['no'], 'existed' => !empty($r['existed'])]);
@@ -1662,10 +1665,11 @@ function qabSaveCat(PDO $db, array $in): string
            ->execute($p);
         $catId = (int)$db->lastInsertId();
     }
-    // 「報工NG自動開立」「線上檢驗NG自動開立」各自是唯一的，設在這一列就要把其他列的同一個旗標取消，
-    // 否則 qab_cat_auto_pm()／qab_cat_auto_qc() 只會拿到排序最前那一個
-    if ($auto)   $db->prepare("UPDATE qa_abnormal_cat SET is_pm_auto=0 WHERE cat_id<>?")->execute([$catId]);
-    if ($qcAuto) $db->prepare("UPDATE qa_abnormal_cat SET is_qc_auto=0 WHERE cat_id<>?")->execute([$catId]);
+    // 「報工NG自動開立」全站只能有一列是1（報工累積是系統觸發，沒有真人在場挑類別），設在這一列
+    // 就要把其他列的旗標取消，否則 qab_cat_auto_pm() 只會拿到排序最前那一個。
+    // 「線上檢驗NG自動開立」刻意不做互斥——2026-10-06 使用者要求可以設定不只一個（IQC/FQC都可能
+    // 來自線上檢驗），超過一個時由品管在開單當下挑，見 qab_cats_auto_qc()／qab_auto_open_from_qc_ng()。
+    if ($auto) $db->prepare("UPDATE qa_abnormal_cat SET is_pm_auto=0 WHERE cat_id<>?")->execute([$catId]);
     $GLOBALS['qab_last_abcat_id'] = $catId;
     return '';
 }

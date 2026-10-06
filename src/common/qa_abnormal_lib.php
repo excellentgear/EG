@@ -355,8 +355,9 @@ function qab_ensure_schema(PDO $db): void
         'need_bom'    => "ADD COLUMN need_bom TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=這一類的單一定要綁製令編號'",
         'need_ir'     => "ADD COLUMN need_ir TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=這一類的單一定要綁客退單(IR)'",
         'need_client' => "ADD COLUMN need_client TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=這一類的單一定要綁客戶（客戶主檔 customer_list.customer_id）'",
-        // 2026-10-06：線上檢驗NG自動開立歸哪一類，刻意與 is_pm_auto（報工NG自動開立）分開
-        'is_qc_auto'  => "ADD COLUMN is_qc_auto TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=線上檢驗NG自動開立的單歸入這一類（全站只有一列會是1）'",
+        // 2026-10-06：線上檢驗NG自動開立歸哪一類，刻意與 is_pm_auto（報工NG自動開立）分開；
+        // 可以設定不只一列是1（IQC/FQC都可能來自線上檢驗），詳見 qab_cats_auto_qc()
+        'is_qc_auto'  => "ADD COLUMN is_qc_auto TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=線上檢驗NG自動開立的單可歸入這一類（可以不只一列是1）'",
     ];
     foreach ($needCat as $c => $sql) if (!in_array($c, $catCols, true)) $addCat[] = $sql;
     if ($addCat) $db->exec("ALTER TABLE qa_abnormal_cat " . implode(', ', $addCat));
@@ -1366,8 +1367,11 @@ function qab_notify_qc_review(PDO $db, int $orderId, string $bomNo, int $ngQty, 
  * $measures：量測列陣列，每列 ['dim_name'=>string, 'vals'=>string[]]（最多12個實測值，比照紙本）；
  * 不限筆數——qa_abnormal_measure 本來就是一張單對多列的表，不是紙本那種寫死三列的限制。
  * $selectedKeys：目前勾選的量測項目索引（對應 get_history_record 回傳 items 的順序）。
+ * $catId：品管在開單跳窗指定要歸入的類別（當「線上檢驗NG自動開立」設定了不只一類時必填，
+ *   前端會先用 action=cats 讀出候選清單讓品管挑，見 inspection_entry_v2.php；傳 0 ＝沒指定，
+ *   只有候選類別剛好只有一個時才允許，由本函式再驗一次，不信任前端算出來的「只有一個」）。
  */
-function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array $measures, array $selectedKeys): array
+function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array $measures, array $selectedKeys, int $catId = 0): array
 {
     qab_ensure_schema($db);
     if ($qcFormId <= 0) throw new Exception('缺少 qc_form_id');
@@ -1392,11 +1396,21 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
     if (!$qc) throw new Exception('找不到這筆檢驗紀錄');
     if (empty($qc['bom'])) throw new Exception('這筆檢驗紀錄沒有連結到製令，無法自動開立異常單（請改用人工開單）');
 
-    /* 分類：一律歸到管理員勾了「線上檢驗NG自動開立」旗標的那一類。**不可以比對名稱**——
-       管理員把分類改名，自動開單就會整個開不出來（鐵律4，與報工路徑同一條規則）。 */
-    $catId = qab_cat_auto_qc($db);
-    if (!$catId) {
-        throw new Exception('尚未設定「線上檢驗NG自動開立」要歸入哪一個異常單類別，請先到清單頁的「設定 → 異常單類別」勾選一個類別');
+    /* 分類：一律歸到管理員勾了「線上檢驗NG自動開立」旗標的那幾類之一。**不可以比對名稱**——
+       管理員把分類改名，自動開單就會整個開不出來（鐵律4，與報工路徑同一條規則）。
+       可以設定不只一類（IQC／FQC都可能來自線上檢驗），只有一類時自動採用，超過一類時
+       一定要由前端挑好傳進來，這裡再驗一次是不是真的在候選清單內——不信任前端的判斷。 */
+    $qcCats = qab_cats_auto_qc($db);
+    if (!$qcCats) {
+        throw new Exception('尚未設定「線上檢驗NG自動開立」要歸入哪一個異常單類別，請先到清單頁的「設定 → 異常單類別」勾選至少一個類別');
+    }
+    if ($catId > 0) {
+        $okCat = false;
+        foreach ($qcCats as $c) if ((int)$c['cat_id'] === $catId) { $okCat = true; break; }
+        if (!$okCat) throw new Exception('指定的類別不是目前設定「線上檢驗NG自動開立」的類別之一，請重新整理頁面再試');
+    } else {
+        if (count($qcCats) > 1) throw new Exception('目前有多個類別都設定為「線上檢驗NG自動開立」，請先選擇這張單要歸入哪一類');
+        $catId = (int)$qcCats[0]['cat_id'];
     }
 
     $autoNote = mb_substr('品管於線上檢驗判定NG時自動開立（檢驗單號 ' . (string)$qc['insp_no'] . '）', 0, 255);
@@ -2347,12 +2361,15 @@ function qab_cat_auto_pm(PDO $db): ?int
     return null;
 }
 
-/** 線上檢驗NG自動開立的單要歸到哪一類（旗標判定，刻意與 is_pm_auto 分開——兩種觸發來源不同，
- *  管理員應該能各自指定歸類；查不到回 null，呼叫端(qab_auto_open_from_qc_ng)自行決定要不要擋下）。 */
-function qab_cat_auto_qc(PDO $db): ?int
+/** 線上檢驗NG自動開立可以歸入的類別清單（旗標判定，刻意與 is_pm_auto 分開——兩種觸發來源不同，
+ *  管理員應該能各自指定歸類）。2026-10-06 使用者要求：**可以設定不只一個**（IQC／FQC都可能來自
+ *  品管線上檢驗，不該被迫只能歸同一類），所以這裡回傳全部符合的類別，由呼叫端（開單當下）決定
+ *  只有一個就直接用、超過一個就請品管當場選。空陣列＝呼叫端自行決定要不要擋下。 */
+function qab_cats_auto_qc(PDO $db): array
 {
-    foreach (qab_cats($db, true) as $r) if ($r['is_qc_auto']) return $r['cat_id'];
-    return null;
+    $out = [];
+    foreach (qab_cats($db, true) as $r) if ($r['is_qc_auto']) $out[] = $r;
+    return $out;
 }
 
 /** 這個分類的單號後綴詞（沒有分類或沒設定後綴一律回空字串） */
