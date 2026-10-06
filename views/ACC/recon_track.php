@@ -201,7 +201,6 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
           <input type="month" id="fBm" class="form-control input-sm" style="width:130px;" onchange="loadList()">
           <input type="text" id="fKw" class="form-control input-sm" style="width:160px;" placeholder="搜尋客戶/廠商名稱…" onkeyup="if(event.key==='Enter')loadList()">
           <button class="btn btn-sm btn-warm-o" onclick="loadList()"><i class="fa fa-search"></i> 查詢</button>
-          <button class="btn btn-sm btn-warm-o" id="btnExSetting" onclick="openExMask()" style="display:none;"><i class="fa fa-calendar-plus-o"></i> 臨時結帳調整</button>
         </div>
       </h4>
       <div class="st-cards" id="stCards"></div>
@@ -401,7 +400,6 @@ function setSide(s){
     document.getElementById('sideAr').classList.toggle('on', s==='ar');
     document.getElementById('sideAp').classList.toggle('on', s==='ap');
     document.getElementById('listTitle').textContent = (s==='ar' ? '應收' : '應付') + ' 進度清單';
-    document.getElementById('btnExSetting').style.display = (s==='ar' && (PERMS.canAdmin||PERMS.isSales)) ? '' : 'none';
     loadList();
     if (document.getElementById('paneStat').classList.contains('on')) loadStat();
 }
@@ -457,13 +455,13 @@ function renderListTbl(rows){
     var isAr = (SIDE==='ar');
     var head = isAr
         ? '<tr><th style="width:150px;">客戶</th><th style="width:70px;">結帳日</th><th style="width:90px;">本期金額(含稅)</th>' +
-          '<th style="width:110px;">對帳單</th><th style="width:100px;">狀態</th><th style="width:150px;">操作</th><th style="width:70px;">結帳日設定</th><th style="width:70px;">修改紀錄</th></tr>'
+          '<th style="width:110px;">對帳單</th><th style="width:100px;">狀態</th><th style="width:150px;">操作</th><th style="width:70px;">結帳日設定</th><th style="width:70px;">臨時調整</th><th style="width:70px;">修改紀錄</th></tr>'
         : '<tr><th style="width:150px;">廠商</th><th style="width:70px;">結帳日</th><th style="width:60px;">筆數</th><th style="width:90px;">本期金額(含稅)</th>' +
           '<th style="width:100px;">狀態</th><th style="width:150px;">操作</th><th style="width:70px;">結帳日設定</th><th style="width:70px;">修改紀錄</th></tr>';
     document.getElementById('listTbl').querySelector('thead').innerHTML = head;
 
     if (!rows.length) {
-        document.getElementById('listTbl').querySelector('tbody').innerHTML = '<tr><td colspan="8" class="c">這個月份沒有符合條件的資料</td></tr>';
+        document.getElementById('listTbl').querySelector('tbody').innerHTML = '<tr><td colspan="9" class="c">這個月份沒有符合條件的資料</td></tr>';
         return;
     }
     var html = '';
@@ -484,6 +482,7 @@ function renderListTbl(rows){
 
         if (isAr) {
             var needBadge = r.need_recon_stmt ? '<span class="badge-need">需要（' + (r.recon_provide_by==='company'?'本公司提供':'客戶提供') + '）</span>' : '<span class="badge-nneed">不需要</span>';
+            var exBtn = (targetId && (PERMS.canAdmin||PERMS.isSales)) ? '<button class="icon-btn" title="臨時結帳調整" onclick="openExMaskFor(\''+esc(targetId)+'\',\''+esc(r.party_name)+'\')"><i class="fa fa-calendar-plus-o"></i></button>' : '';
             html += '<tr><td>' + esc(r.party_name) + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + '</td>' +
                 '<td class="c">' + (r.cutoff_date||'—') + '</td>' +
                 '<td class="n">' + fmtMoney(r.total_amt) + '</td>' +
@@ -491,6 +490,7 @@ function renderListTbl(rows){
                 '<td class="c">' + badge + '</td>' +
                 '<td class="c">' + btns + '</td>' +
                 '<td class="c">' + settleBtn + '</td>' +
+                '<td class="c">' + exBtn + '</td>' +
                 '<td class="c">' + logBtn + '</td></tr>';
         } else {
             html += '<tr><td>' + esc(r.party_name) + (r.in_master?'':' <span class="hint" style="color:var(--coral);">(未建主檔)</span>') + '</td>' +
@@ -561,12 +561,6 @@ function doRevert(logId){
 
 /* ── 臨時結帳調整（應收）──────────────────────────────────────── */
 var EX_TARGET = null;
-function openExMask(){
-    // 以清單上第一筆客戶為預設，使用者可在列表點每一列的修改紀錄旁開（簡化：先選清單第一筆已綁主檔的客戶）
-    var row = LAST_ROWS.find(function(r){ return r.party_id; });
-    if (!row) { showToast('目前清單沒有已建主檔的客戶，請先查詢有資料的結帳月份','error'); return; }
-    openExMaskFor(row.party_id, row.party_name);
-}
 function openExMaskFor(customerId, name){
     EX_TARGET = customerId;
     document.getElementById('exTargetName').textContent = name + '（' + customerId + '）';
