@@ -2085,18 +2085,25 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_target_search') {
         $kw   = trim((string)($_POST['kw'] ?? ''));
         $rows = [];
         if ($type === 'customer') {
-            $st = $pdo->prepare("SELECT customer_id AS id, customer AS label FROM customer_list
+            $st = $pdo->prepare("SELECT customer_id AS id, customer AS label, customer_id AS sub FROM customer_list
                                  WHERE customer_id LIKE ? OR customer LIKE ? ORDER BY customer LIMIT 30");
             $st->execute(["%$kw%", "%$kw%"]);
             $rows = $st->fetchAll(PDO::FETCH_ASSOC);
         } elseif ($type === 'maker') {
-            $st = $pdo->prepare("SELECT maker_id_no AS id, maker_id AS label FROM maker_list
-                                 WHERE maker_id_no LIKE ? OR maker_id LIKE ? ORDER BY maker_id LIMIT 30");
-            $st->execute(["%$kw%", "%$kw%"]);
+            $st = $pdo->prepare("SELECT maker_id_no AS id, maker_id AS label, maker_id_all AS sub FROM maker_list
+                                 WHERE maker_id_no LIKE ? OR maker_id LIKE ? OR maker_id_all LIKE ?
+                                 ORDER BY maker_id LIMIT 30");
+            $st->execute(["%$kw%", "%$kw%", "%$kw%"]);
             $rows = $st->fetchAll(PDO::FETCH_ASSOC);
         } elseif ($type === 'user') {
+            // 業務對象＝業務課人員（使用者要求），部門綁定走全站共用 org_role_lib，
+            // 禁止寫死部門id；尚未設定該綁定時退回全公司（不要讓功能整個不能用）。
             require_once __DIR__ . '/../../src/common/people_lib.php';
-            foreach (eg_people_list($pdo, ['all_posts' => true]) as $p) {
+            require_once __DIR__ . '/../../src/common/org_role_lib.php';
+            $salesDeptIds = eg_org_dept_ids($pdo, 'sales_dept');
+            $peopleOpt = ['all_posts' => true];
+            if ($salesDeptIds) $peopleOpt['dept_ids'] = $salesDeptIds;
+            foreach (eg_people_list($pdo, $peopleOpt) as $p) {
                 $post = trim(((string)($p['dept_name'] ?? '')) . ' ' . ((string)($p['position_name'] ?? '')));
                 $disp = trim($post . ' ' . (string)$p['user_cname']);
                 if ($kw !== '' && mb_stripos($disp, $kw) === false) continue;
@@ -2106,6 +2113,41 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_target_search') {
             }
         } else {
             throw new Exception('對象類別不正確');
+        }
+        echo json_encode(['success' => true, 'rows' => $rows]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// 選了客戶／廠商之後，查這一家底下登記過的聯絡人（customer_contacts／maker_contacts，
+// 主檔管理既有的聯絡人資料，不另存一份）；沒有登記過就回空陣列，前端照樣可以手動輸入。
+if (isset($_POST['action']) && $_POST['action'] === 'ate_q_contact_search') {
+    header('Content-Type: application/json');
+    $pdo = $conn->getPDO();
+    try {
+        if (!$can_design_qa) throw new Exception('沒有使用此功能的權限');
+        $type = trim((string)($_POST['type'] ?? ''));
+        $tid  = trim((string)($_POST['target_id'] ?? ''));
+        $rows = [];
+        if ($tid !== '') {
+            if ($type === 'customer') {
+                $st = $pdo->prepare("SELECT contact_id AS id, name, title FROM customer_contacts
+                                     WHERE customer_id=? ORDER BY is_primary DESC, sort_order, contact_id");
+                $st->execute([$tid]);
+            } elseif ($type === 'maker') {
+                $st = $pdo->prepare("SELECT contact_id AS id, name, title FROM maker_contacts
+                                     WHERE maker_id_no=? ORDER BY is_primary DESC, sort_order, contact_id");
+                $st->execute([$tid]);
+            } else {
+                throw new Exception('對象類別不正確');
+            }
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $c) {
+                $label = trim((string)$c['name']);
+                if (!empty($c['title'])) $label .= '／' . trim((string)$c['title']);
+                $rows[] = ['id' => (int)$c['id'], 'label' => $label];
+            }
         }
         echo json_encode(['success' => true, 'rows' => $rows]);
     } catch (Exception $e) {
@@ -3437,7 +3479,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         <?php if ($_ateQRow): ?>
                         <?php
                         // PS＝純備註的前端簡寫（使用者要求），其餘對象維持完整名稱＋人名/客戶/廠商
-                        $_ateQTMap = ['customer' => '客戶', 'maker' => '廠商', 'user' => '業務'];
+                        $_ateQTMap = ['customer' => '客戶', 'maker' => '廠商', 'user' => '業務', 'other' => '其他'];
                         $_ateQTT = $_ateQRow['target_type'];
                         $_ateQPrefix = $_ateQTT ? ('【' . ($_ateQTMap[$_ateQTT] ?? $_ateQTT) . '：' . (string)$_ateQRow['target_label'] . '】') : '【PS】';
                         $_ateQText = (string)$_ateQRow['question'];
@@ -3947,13 +3989,14 @@ foreach($dCounts as $c) {
             display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
         .ate-q-preview-done .ate-q-preview-txt { color:#6b5638; }
         .ate-q-preview-more { font-size:10px; color:#b36a1e; text-decoration:underline; margin-top:1px; }
-        #ate-q-modal .modal-dialog { max-width:600px; width:92%; }
+        #ate-q-modal .modal-dialog { max-width:760px; width:94%; }
         #ate-q-modal .modal-body { max-height:72vh; overflow-y:auto; padding:14px; }
         .ate-q-item { border:1px solid #EADFCD; border-left:3px solid #F0A24B; border-radius:4px;
             background:#fff; padding:8px 10px; margin-bottom:8px; }
         .ate-q-item-head { display:flex; align-items:center; gap:7px; margin-bottom:4px; }
         .ate-q-stbadge { font-size:10px; color:#fff; border-radius:3px; padding:1px 6px; }
         .ate-q-target { font-size:11px; color:#8a7355; }
+        .ate-q-asked { font-size:10px; color:#aaa; margin-left:auto; white-space:nowrap; }
         .ate-q-question { font-size:13px; color:#333; white-space:pre-wrap; word-break:break-word; margin-bottom:4px; }
         .ate-q-reply { background:#FAF6EF; border-radius:3px; padding:4px 7px; margin:4px 0; }
         .ate-q-reply-meta { font-size:10px; color:#998a6e; display:block; margin-bottom:2px; }
@@ -3966,9 +4009,10 @@ foreach($dCounts as $c) {
         .ate-q-btn-ok:hover { background:#F7DFC5; }
         .ate-q-replybox { margin-top:6px; border-top:1px dashed #EADFCD; padding-top:6px; }
         .ate-q-replybox textarea { font-size:12px; margin-bottom:4px; }
-        .ate-q-replyby, .ate-q-replydate { display:flex; align-items:center; gap:5px; margin-bottom:4px; }
-        .ate-q-replyby label, .ate-q-replydate label { font-size:11px; color:#6b5638; font-weight:400; margin:0; white-space:nowrap; }
-        .ate-q-replyby input, .ate-q-replydate input { font-size:12px; padding:2px 5px; height:24px; width:150px; }
+        .ate-q-replyby { margin-bottom:6px; }
+        .ate-q-replydate { display:flex; align-items:center; gap:5px; margin-bottom:4px; }
+        .ate-q-replyby > label, .ate-q-replydate label { font-size:11px; color:#6b5638; font-weight:400; margin:0 0 3px; white-space:nowrap; display:block; }
+        .ate-q-replydate input { font-size:12px; padding:2px 5px; height:24px; width:150px; }
         .ate-q-chk { display:block; font-size:11px; color:#6b5638; font-weight:400; margin-bottom:4px; }
         .ate-q-composer { border-top:2px solid #EADFCD; margin-top:10px; padding-top:10px; }
         .ate-q-add-title { font-size:12px; color:#8a4b12; font-weight:700; margin-bottom:6px; }
@@ -3976,7 +4020,38 @@ foreach($dCounts as $c) {
         .ate-q-add-table td { vertical-align:top; padding:3px; }
         .ate-q-add-table textarea.ate-q-qtext { width:100%; font-size:12px; }
         .ate-q-add-table select { width:100%; font-size:12px; }
+        .ate-q-add-table input[type=date] { width:100%; font-size:12px; height:30px; }
         .ate-q-add-foot { display:flex; justify-content:space-between; margin-top:6px; }
+
+        /* 2026-10-06：對象選擇器（業務/廠商/客戶/其他，按鈕式），新增問題與回覆共用同一套
+           ateQTp* 函式與樣式（鐵律4：同一種選擇邏輯只刻一份）。 */
+        .ate-tp-btns { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:4px; }
+        .ate-tp-btn { border:1px solid #D8CBB8; border-radius:3px; background:#fff; color:#6b5638;
+            font-size:11px; padding:2px 9px; cursor:pointer; }
+        .ate-tp-btn:hover { background:#F1E8D9; }
+        .ate-tp-btn.active { background:#F0A24B; border-color:#DD6B2C; color:#fff; font-weight:700; }
+        .ate-tp-body { min-height:24px; }
+        .ate-tp-body select.ate-tp-sel { width:100%; font-size:12px; height:28px; }
+        .ate-tp-search input { width:100%; font-size:12px; height:28px; padding:2px 6px; }
+        .ate-tp-ac { display:none; position:fixed; z-index:20050; background:#fff; border:1px solid #D8CBB8;
+            border-radius:4px; box-shadow:0 3px 10px rgba(0,0,0,.18); overflow-y:auto; }
+        .ate-tp-ac.on { display:block; }
+        .ate-tp-ac-item { padding:4px 8px; font-size:12px; cursor:pointer; border-bottom:1px solid #F1E8D9; }
+        .ate-tp-ac-item:last-child { border-bottom:none; }
+        .ate-tp-ac-item:hover { background:#FDF1E3; }
+        .ate-tp-ac-item .s { color:#999; font-size:10px; margin-left:5px; }
+        .ate-tp-ac-empty { padding:6px 8px; font-size:11px; color:#999; }
+        .ate-tp-picked { display:flex; align-items:center; gap:8px; font-size:12px; margin-bottom:4px; }
+        .ate-tp-picked-chip { background:#FDF1E3; border:1px solid #E8BCA9; color:#8a4b12; border-radius:3px;
+            padding:2px 7px; font-weight:700; }
+        .ate-tp-picked a { font-size:11px; color:#337ab7; }
+        .ate-tp-contact { display:flex; align-items:center; gap:5px; }
+        .ate-tp-contact label { font-size:11px; color:#6b5638; font-weight:400; margin:0; white-space:nowrap; }
+        .ate-tp-contact input { flex:1; font-size:12px; height:26px; padding:2px 6px; }
+        .ate-tp-cpick-list { font-size:11px; color:#998a6e; margin-top:3px; }
+        .ate-tp-cpick-item { margin-left:6px; color:#337ab7; cursor:pointer; }
+        .ate-tp-cpick-item:hover { text-decoration:underline; }
+        .ate-tp-other input { width:100%; font-size:12px; height:28px; padding:2px 6px; }
 
         /* 備註欄位超過5行時的「還有更多」提示 */
         .textarea-wrap { position: relative; }
@@ -8442,17 +8517,20 @@ foreach($dCounts as $c) {
             });
         }
 
-        // ══ 設計備註問答（2026-10-05 併入 eng_log）══════════════════════════════
-        // 打字→小跳窗選對象(業務/客戶/廠商/純備註)→可多題→多輪回覆→逐題可標記已處理。
+        // ══ 設計備註問答（2026-10-05 併入 eng_log；2026-10-06 對象改按鈕式選擇器）══════
+        // 打字→按鈕選對象(業務/廠商/客戶/其他)→可多題→多輪回覆→逐題可標記已處理。
         // 每個動作都是獨立、立即送出的 AJAX（不做「全部填完再按總存檔」），成功後只局部
         // 更新這一列的徽章，不整頁重載（比照 applySyncedCustomerToRow 既有模式）。
+        // 對象選擇器（ateQTp*）新增問題與回覆共用同一套——業務＝下拉（限業務課人員）、
+        // 廠商/客戶＝打字模糊搜尋選定後可再選/填聯絡人、其他＝手動輸入說明文字。
         var ATE_Q = { orderId: 0, logId: 0, canResolve: false, bizDefault: null, items: [], rows: [],
-                      cands: { customer: null, maker: null, user: null } };
+                      cands: { user: null }, replyState: {}, contactCache: {}, tpState: {}, tpOnChange: {} };
 
         function ateQNewRow() {
             var d = ATE_Q.bizDefault;
-            return { question: '', target_type: 'user',
-                     target_id: d ? String(d.id) : '', target_label: d ? d.name : '', target_post: d ? d.post : '' };
+            return { question: '', target_type: 'user', asked_at: ATE_Q.today || '',
+                     target_id: d ? String(d.id) : '', target_label: d ? d.name : '', target_post: d ? d.post : '',
+                     target_contact: '' };
         }
 
         function ateQOpen(orderId) {
@@ -8464,16 +8542,15 @@ foreach($dCounts as $c) {
                 ATE_Q.bizDefault = res.biz_default || null;
                 ATE_Q.today = res.today || '';
                 ATE_Q.items = res.items || [];
+                ATE_Q.replyState = {};
                 ATE_Q.rows = [ateQNewRow()];
                 var ord = res.order || {};
                 $('#ate-q-modal-title').text([ord.order_no, ord.part_no, ord.client].filter(function(x){return x;}).join('　'));
                 $('#ate-q-modal').modal('show');
-                ateQEnsureCandidates('customer', function() {
-                ateQEnsureCandidates('maker', function() {
                 ateQEnsureCandidates('user', function() {
                     ateQRenderItems();
                     ateQRedrawComposer();
-                }); }); });
+                });
             }, 'json').fail(function() { showToast('讀取失敗，請重新整理後再試'); });
         }
 
@@ -8486,9 +8563,11 @@ foreach($dCounts as $c) {
         }
 
         function ateQTargetLabel(it) {
-            if (!it.target_type) return 'PS';   // 純備註前端簡寫（使用者要求）
-            var map = { customer: '客戶', maker: '廠商', user: '業務' };
-            return (map[it.target_type] || it.target_type) + '：' + (it.target_label || '（未指定）');
+            if (!it.target_type) return 'PS';   // 純備註前端簡寫（使用者要求，舊資料仍可能有）
+            var map = { customer: '客戶', maker: '廠商', user: '業務', other: '其他' };
+            var base = (map[it.target_type] || it.target_type) + '：' + (it.target_label || '（未指定）');
+            if ((it.target_type === 'customer' || it.target_type === 'maker') && it.target_contact) base += '（' + it.target_contact + '）';
+            return base;
         }
 
         function ateQStatusBadge(st) {
@@ -8509,6 +8588,19 @@ foreach($dCounts as $c) {
             $('#ate-q-items-wrap').html(html);
         }
 
+        // 回覆對象預設值：這題本來就有指定對象就沿用（通常回覆的人跟被問的人是同一個）；
+        // 沒指定對象（純備註）才退回這張訂單的打單人員（使用者回報「沒有自動預設」，
+        // 問題本身若已有對象，優先權在那個對象，不是不分青紅皂白一律套打單人員）。
+        function ateQReplyDefaultState(it) {
+            if (it.target_type) {
+                return { target_type: it.target_type, target_id: it.target_id || '', target_label: it.target_label || '',
+                         target_post: it.target_post || '', target_contact: it.target_contact || '' };
+            }
+            var d = ATE_Q.bizDefault;
+            return d ? { target_type: 'user', target_id: String(d.id), target_label: d.name, target_post: d.post, target_contact: '' }
+                     : { target_type: '', target_id: '', target_label: '', target_post: '', target_contact: '' };
+        }
+
         function ateQItemHtml(it) {
             var repliesHtml = '';
             (it.replies || []).forEach(function(r) {
@@ -8523,18 +8615,22 @@ foreach($dCounts as $c) {
                     : '<button type="button" class="ate-q-btn ate-q-btn-ok" onclick="ateQResolve(' + it.id + ',\'resolved\')"><i class="fa fa-check"></i> 已處理</button>';
             }
             var today = (ATE_Q.today || '');
+            var askedTxt = it.asked_at ? (typeof egFmtDate === 'function' ? egFmtDate(it.asked_at) : it.asked_at) : '';
+            var rns = 'reply' + it.id;
+            if (!ATE_Q.replyState[it.id]) ATE_Q.replyState[it.id] = ateQReplyDefaultState(it);
+            ateQTpRegister(rns, ATE_Q.replyState[it.id], function() { ateQTpRedraw(rns); });
             return '<div class="ate-q-item">'
-                + '<div class="ate-q-item-head">' + ateQStatusBadge(it.status) + '<span class="ate-q-target">' + escapeHtml(ateQTargetLabel(it)) + '</span></div>'
+                + '<div class="ate-q-item-head">' + ateQStatusBadge(it.status) + '<span class="ate-q-target">' + escapeHtml(ateQTargetLabel(it)) + '</span>'
+                + (askedTxt ? '<span class="ate-q-asked">' + escapeHtml(askedTxt) + ' 提出</span>' : '') + '</div>'
                 + '<div class="ate-q-question">' + escapeHtml(it.question || '') + '</div>'
                 + repliesHtml
                 + '<div class="ate-q-item-actions">' + actions + '</div>'
                 + '<div class="ate-q-replybox" id="ate-q-replybox-' + it.id + '" style="display:none;">'
                 +   '<textarea class="form-control" rows="2" placeholder="輸入回覆內容…按 Enter 直接送出，Shift+Enter 換行" '
                 +     'id="ate-q-replytxt-' + it.id + '" onkeydown="ateQReplyKeyDown(event,' + it.id + ')"></textarea>'
-                +   '<div class="ate-q-replyby"><label>回覆對象：</label>'
-                // 預設帶出這條問題本來指定的對象（這題是問業務/客戶/廠商誰，回覆自然也掛在
-                // 同一個對象名下），使用者仍可改成實際回覆的人（例如業務轉述客戶窗口的話）
-                +     '<input type="text" class="form-control" id="ate-q-replyby-' + it.id + '" value="' + escapeHtml(it.target_label || '') + '" placeholder="對方是誰（可留空）"></div>'
+                // 回覆對象：預設帶出這條問題本來指定的對象（使用者仍可改成實際回覆的人，
+                // 例如業務轉述客戶窗口的話），與新增問題共用同一套按鈕式選擇器
+                +   '<div class="ate-q-replyby"><label>回覆對象：</label>' + ateQTpHtml(rns, ATE_Q.replyState[it.id]) + '</div>'
                 +   '<div class="ate-q-replydate"><label>回覆日期：</label>'
                 +     '<input type="date" class="form-control" id="ate-q-replydate-' + it.id + '" value="' + escapeHtml(today) + '" max="' + escapeHtml(today) + '"></div>'
                 +   (ATE_Q.canResolve ? '<label class="ate-q-chk"><input type="checkbox" id="ate-q-replyok-' + it.id + '"> 回覆後直接標記已處理</label>' : '')
@@ -8552,11 +8648,24 @@ foreach($dCounts as $c) {
             }
         }
 
+        // 回覆對象組成單一字串（eng_log_reply.reply_by 本來就是自由文字欄，不另外加結構化
+        // 欄位──是誰回的只是給人看的說明，不需要像問題項那樣可被反查追蹤）
+        function ateQTpComposeReplyBy(st) {
+            if (!st || !st.target_type) return '';
+            var map = { user: '業務', maker: '廠商', customer: '客戶', other: '其他' };
+            var extra = '';
+            if (st.target_type === 'user' && st.target_post) extra = st.target_post;
+            if ((st.target_type === 'customer' || st.target_type === 'maker') && st.target_contact) extra = st.target_contact;
+            var s = (map[st.target_type] || st.target_type) + '：' + (st.target_label || '');
+            if (extra) s += '（' + extra + '）';
+            return s;
+        }
+
         function ateQSubmitReply(itemId) {
             var $ta = $('#ate-q-replytxt-' + itemId);
             var txt = $.trim($ta.val());
             if (!txt) { showToast('請輸入回覆內容'); return; }
-            var replyBy = $.trim($('#ate-q-replyby-' + itemId).val() || '');
+            var replyBy = ateQTpComposeReplyBy(ATE_Q.replyState[itemId]);
             // 回覆日期預設今天，可自行改成實際回覆的那一天（例如客戶是電話回的、隔幾天才補登）；
             // 不可以是未來日期（後端 el_reply_add() 同規則再擋一次）
             var repliedOn = $('#ate-q-replydate-' + itemId).val() || '';
@@ -8579,6 +8688,198 @@ foreach($dCounts as $c) {
             }, 'json').fail(function() { showToast('操作失敗，請重試'); });
         }
 
+        // ═══ 對象選擇器（業務/廠商/客戶/其他，按鈕式）：新增問題與回覆共用 ══════════
+        // ns＝每個選擇器的唯一命名空間（composer 用 'new0'/'new1'…，回覆用 'reply'+itemId），
+        // 狀態存在 ATE_Q.tpState[ns]（composer 直接共用 rows[idx] 物件，不另存一份），
+        // 按鈕/選定變動後呼叫 ATE_Q.tpOnChange[ns]()──composer 整個 composer 重繪（本來就是
+        // 既有行為，不會遺失已填的問題文字），回覆則只重繪該選擇器自己這一小塊，不動旁邊
+        // 正在打的回覆內容。
+        function ateQTpRegister(ns, state, onChange) { ATE_Q.tpState[ns] = state; ATE_Q.tpOnChange[ns] = onChange; }
+
+        function ateQTpButtonsHtml(ns, st) {
+            var opts = [['user', '業務'], ['maker', '廠商'], ['customer', '客戶'], ['other', '其他']];
+            var html = '<div class="ate-tp-btns">';
+            opts.forEach(function(o) {
+                html += '<button type="button" class="ate-tp-btn' + (st.target_type === o[0] ? ' active' : '') + '" '
+                      + 'onclick="ateQTpSetType(\'' + ns + '\',\'' + o[0] + '\')">' + o[1] + '</button>';
+            });
+            html += '</div>';
+            return html;
+        }
+
+        // 候選清單一律從清單挑（打名字日後對方改名就對不到了），但目前已選定的值萬一不在
+        // 候選清單裡（例如業務預設值剛好不屬於業務課、或舊資料的人已離開候選範圍）仍要讓
+        // 下拉顯示得出目前選的是誰，不能讓畫面看起來「選了卻又沒選」。
+        function ateQCandOptions(type, selId, selLabel, selPost) {
+            var list = (ATE_Q.cands[type] || []).slice();
+            if (selId && !list.some(function(x) { return String(x.id) === String(selId); })) {
+                list = [{ id: selId, label: selLabel || selId,
+                           display: ((selPost ? selPost + ' ' : '') + (selLabel || selId)), post: selPost || '' }].concat(list);
+            }
+            var html = '<option value="">（請選擇）</option>';
+            list.forEach(function(r) {
+                var disp = r.display || r.label;
+                html += '<option value="' + escapeHtml(String(r.id)) + '" data-label="' + escapeHtml(r.label || '')
+                      + '" data-post="' + escapeHtml(r.post || '') + '"' + (String(r.id) === String(selId) ? ' selected' : '')
+                      + '>' + escapeHtml(disp) + '</option>';
+            });
+            return html;
+        }
+
+        function ateQTpBodyHtml(ns, st) {
+            var t = st.target_type;
+            if (t === 'user') {
+                return '<select class="form-control ate-tp-sel" data-eg-filter="輸入姓名篩選…" onchange="ateQTpUserPick(\'' + ns + '\',this)">'
+                     + ateQCandOptions('user', st.target_id, st.target_label, st.target_post) + '</select>';
+            }
+            if (t === 'customer' || t === 'maker') {
+                if (st.target_id) {
+                    var html = '<div class="ate-tp-picked"><span class="ate-tp-picked-chip"><i class="fa fa-check-circle"></i> '
+                        + escapeHtml(st.target_label || '') + '</span>'
+                        + '<a href="javascript:;" onclick="ateQTpReset(\'' + ns + '\')">重新選擇</a></div>'
+                        + '<div class="ate-tp-contact"><label>聯絡人：</label>'
+                        + '<input type="text" class="form-control" value="' + escapeHtml(st.target_contact || '') + '" '
+                        + 'placeholder="可留空，或輸入聯絡人姓名" oninput="ateQTpContactInput(\'' + ns + '\',this.value)"></div>'
+                        + '<div id="ate-tp-cpick-' + ns + '"></div>';
+                    // 查這一家底下有沒有登記過的聯絡人（customer_contacts／maker_contacts），
+                    // 查到就在輸入框旁多列幾個可點選的，查不到前端照樣可以手動輸入
+                    ateQTpLoadContacts(ns, t, st.target_id);
+                    return html;
+                }
+                return '<div class="ate-tp-search"><input type="text" class="form-control" id="ate-tp-acinput-' + ns + '" '
+                     + 'placeholder="輸入' + (t === 'customer' ? '客戶' : '廠商') + 'ID或名稱搜尋…" autocomplete="off" '
+                     + 'oninput="ateQTpAcInput(\'' + ns + '\',\'' + t + '\',this.value)"></div>'
+                     + '<div class="ate-tp-ac" id="ate-tp-ac-' + ns + '"></div>';
+            }
+            if (t === 'other') {
+                return '<div class="ate-tp-other"><input type="text" placeholder="請輸入對象說明（例如：倉管部門／客戶現場窗口）" '
+                     + 'value="' + escapeHtml(st.target_label || '') + '" oninput="ateQTpOtherInput(\'' + ns + '\',this.value)"></div>';
+            }
+            return '<span class="text-muted" style="font-size:11px;">請先選擇對象類別</span>';
+        }
+
+        function ateQTpHtml(ns, st) {
+            return '<div class="ate-tp" id="ate-tp-' + ns + '">' + ateQTpButtonsHtml(ns, st) + '<div class="ate-tp-body" id="ate-tp-body-' + ns + '">' + ateQTpBodyHtml(ns, st) + '</div></div>';
+        }
+
+        function ateQTpRedraw(ns) {
+            var st = ATE_Q.tpState[ns]; if (!st) return;
+            var $w = $('#ate-tp-' + ns);
+            if (!$w.length) return;
+            $w.replaceWith(ateQTpHtml(ns, st));
+        }
+
+        function ateQTpSetType(ns, type) {
+            var st = ATE_Q.tpState[ns]; if (!st || st.target_type === type) return;
+            st.target_type = type; st.target_id = ''; st.target_label = ''; st.target_post = ''; st.target_contact = '';
+            if (type === 'user' && ATE_Q.bizDefault) {
+                st.target_id = String(ATE_Q.bizDefault.id); st.target_label = ATE_Q.bizDefault.name; st.target_post = ATE_Q.bizDefault.post;
+            }
+            var fn = ATE_Q.tpOnChange[ns]; if (fn) fn();
+        }
+
+        function ateQTpUserPick(ns, sel) {
+            var st = ATE_Q.tpState[ns]; if (!st) return;
+            var opt = sel.options[sel.selectedIndex];
+            st.target_id = sel.value;
+            st.target_label = opt ? (opt.getAttribute('data-label') || '') : '';
+            st.target_post = opt ? (opt.getAttribute('data-post') || '') : '';
+        }
+
+        function ateQTpPick(ns, type, row) {
+            var st = ATE_Q.tpState[ns]; if (!st) return;
+            st.target_id = String(row.id); st.target_label = row.label || ''; st.target_post = ''; st.target_contact = '';
+            var fn = ATE_Q.tpOnChange[ns]; if (fn) fn();
+        }
+
+        function ateQTpReset(ns) {
+            var st = ATE_Q.tpState[ns]; if (!st) return;
+            st.target_id = ''; st.target_label = ''; st.target_contact = '';
+            var fn = ATE_Q.tpOnChange[ns]; if (fn) fn();
+        }
+
+        function ateQTpContactInput(ns, val) { var st = ATE_Q.tpState[ns]; if (st) st.target_contact = val; }
+        function ateQTpOtherInput(ns, val) { var st = ATE_Q.tpState[ns]; if (st) st.target_label = val; }
+
+        function ateQTpContactPick(ns, label) {
+            var st = ATE_Q.tpState[ns]; if (!st) return;
+            st.target_contact = label;
+            $('#ate-tp-body-' + ns + ' .ate-tp-contact input').val(label);
+        }
+
+        function ateQTpLoadContacts(ns, type, targetId) {
+            var key = type + ':' + targetId;
+            if (ATE_Q.contactCache[key]) { ateQTpRenderContacts(ns, ATE_Q.contactCache[key]); return; }
+            $.post('', { action: 'ate_q_contact_search', type: type, target_id: targetId }, function(res) {
+                var rows = (res && res.success) ? (res.rows || []) : [];
+                ATE_Q.contactCache[key] = rows;
+                ateQTpRenderContacts(ns, rows);
+            }, 'json');
+        }
+        function ateQTpRenderContacts(ns, rows) {
+            var $w = $('#ate-tp-cpick-' + ns);
+            if (!$w.length) return;
+            if (!rows.length) { $w.html(''); return; }
+            var html = '<div class="ate-tp-cpick-list">已登錄聯絡人：';
+            rows.forEach(function(c) {
+                html += '<span class="ate-tp-cpick-item" data-ns="' + ns + '" data-label="' + escapeHtml(c.label) + '">' + escapeHtml(c.label) + '</span>';
+            });
+            html += '</div>';
+            $w.html(html);
+        }
+        $(document).on('click', '.ate-tp-cpick-item', function() { ateQTpContactPick($(this).data('ns'), String($(this).data('label') || '')); });
+
+        // 廠商/客戶打字即時搜尋（debounce），跳窗內一律 position:fixed 定位──
+        // #ate-q-modal .modal-body 是 overflow-y:auto 的捲動容器，absolute 會被它裁掉。
+        var _ateTpAcTimer = null;
+        function ateQTpPlaceAc($inp, $ac) {
+            var r = $inp[0].getBoundingClientRect();
+            var w = Math.max(r.width, 240);
+            var left = Math.max(6, Math.min(r.left, $(window).width() - w - 8));
+            var maxH = 240, top = r.bottom + 2;
+            if (top + maxH > $(window).height() - 8) {
+                var above = r.top - 2 - maxH;
+                if (above > 6) top = r.top - 2 - Math.min(maxH, r.top - 10);
+            }
+            $ac.css({ left: left, top: top, width: w, maxHeight: maxH });
+        }
+        function ateQTpAcInput(ns, type, val) {
+            clearTimeout(_ateTpAcTimer);
+            var kw = $.trim(val || '');
+            var $ac = $('#ate-tp-ac-' + ns);
+            if (!kw) { $ac.removeClass('on').empty(); return; }
+            _ateTpAcTimer = setTimeout(function() {
+                $.post('', { action: 'ate_q_target_search', type: type, kw: kw }, function(res) {
+                    $ac.empty();
+                    var $inp = $('#ate-tp-acinput-' + ns);
+                    if ($inp.length) ateQTpPlaceAc($inp, $ac);
+                    if (!res || !res.success || !res.rows || !res.rows.length) {
+                        $ac.append('<div class="ate-tp-ac-empty">查無資料，換個關鍵字試試（可用ID或名稱）</div>').addClass('on');
+                        return;
+                    }
+                    res.rows.forEach(function(r) {
+                        var $item = $('<div class="ate-tp-ac-item">').text(r.label)
+                            .attr('data-ns', ns).attr('data-type', type).attr('data-id', r.id).attr('data-label', r.label);
+                        if (r.sub) $item.append($('<span class="s">').text(r.sub));
+                        $ac.append($item);
+                    });
+                    $ac.addClass('on');
+                }, 'json');
+            }, 220);
+        }
+        $(document).on('mousedown', '.ate-tp-ac-item', function(e) {
+            e.preventDefault();
+            var ns = String($(this).data('ns')), type = String($(this).data('type'));
+            var row = { id: $(this).data('id'), label: String($(this).data('label') || '') };
+            $(this).closest('.ate-tp-ac').removeClass('on').empty();
+            ateQTpPick(ns, type, row);
+        });
+        $(document).on('blur', '.ate-tp-search input', function() {
+            var $ac = $(this).closest('.ate-tp-search').next('.ate-tp-ac');
+            setTimeout(function() { $ac.removeClass('on'); }, 180);
+        });
+        $(window).on('scroll resize', function() { $('.ate-tp-ac.on').removeClass('on'); });
+
         // ── 新增問題 composer：鍵盤 ↓ 自動加列走共用 eg_input_rules.js（data-eg-row-add/del） ──
         function ateQRedrawComposer() {
             if (!window.OT_CAN_DESIGN_QA) { $('#ate-q-composer-wrap').html(''); return; }
@@ -8593,55 +8894,23 @@ foreach($dCounts as $c) {
             $('#ate-q-composer-wrap').html(html);
         }
 
-        function ateQCandOptions(type, selId) {
-            var list = ATE_Q.cands[type] || [];
-            var html = '<option value="">（請選擇）</option>';
-            list.forEach(function(r) {
-                var disp = r.display || r.label;
-                html += '<option value="' + escapeHtml(String(r.id)) + '" data-label="' + escapeHtml(r.label || '')
-                      + '" data-post="' + escapeHtml(r.post || '') + '"' + (String(r.id) === String(selId) ? ' selected' : '')
-                      + '>' + escapeHtml(disp) + '</option>';
-            });
-            return html;
-        }
-
         function ateQRowHtml(r, idx) {
-            var typeOpts = [['user', '業務'], ['customer', '客戶'], ['maker', '廠商'], ['', '純備註']];
-            var typeHtml = '<select class="ate-q-type" onchange="ateQRowTypeChange(' + idx + ',this.value)">';
-            typeOpts.forEach(function(o) { typeHtml += '<option value="' + o[0] + '"' + (r.target_type === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; });
-            typeHtml += '</select>';
-            var targetHtml = r.target_type
-                ? '<select class="ate-q-target-sel" data-eg-filter="輸入關鍵字篩選…" onchange="ateQRowTargetChange(' + idx + ',this)">' + ateQCandOptions(r.target_type, r.target_id) + '</select>'
-                : '<span class="text-muted" style="font-size:11px;">不指定對象</span>';
+            var ns = 'new' + idx;
+            ateQTpRegister(ns, r, ateQRedrawComposer);
             var delBtn = ATE_Q.rows.length > 1
                 ? '<button type="button" class="btn btn-xs btn-link" onclick="ateQRowDelAt(' + idx + ')" title="移除這一條"><i class="fa fa-times"></i></button>' : '';
             return '<tr>'
-                + '<td style="width:44%;"><textarea class="form-control ate-q-qtext" rows="2" placeholder="輸入問題內容…按 Enter 直接送出，Shift+Enter 換行，↓可新增下一條" '
+                + '<td style="width:32%;"><textarea class="form-control ate-q-qtext" rows="2" placeholder="輸入問題內容…按 Enter 直接送出，Shift+Enter 換行，↓可新增下一條" '
                 +   'oninput="ateQRowQChange(' + idx + ',this.value)" onkeydown="ateQRowKeyDown(event,' + idx + ')">' + escapeHtml(r.question) + '</textarea></td>'
-                + '<td style="width:18%;">' + typeHtml + '</td>'
-                + '<td style="width:30%;">' + targetHtml + '</td>'
+                + '<td style="width:13%;"><input type="date" class="form-control" value="' + escapeHtml(r.asked_at || ATE_Q.today || '') + '" '
+                +   'max="' + escapeHtml(ATE_Q.today || '') + '" onchange="ateQRowDateChange(' + idx + ',this.value)"></td>'
+                + '<td style="width:47%;">' + ateQTpHtml(ns, r) + '</td>'
                 + '<td style="width:8%;text-align:center;">' + delBtn + '</td>'
                 + '</tr>';
         }
 
         function ateQRowQChange(idx, val) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].question = val; }
-        function ateQRowTypeChange(idx, val) {
-            var r = ATE_Q.rows[idx]; if (!r) return;
-            r.target_type = val;
-            if (val === 'user' && !r.target_id && ATE_Q.bizDefault) {
-                r.target_id = String(ATE_Q.bizDefault.id); r.target_label = ATE_Q.bizDefault.name; r.target_post = ATE_Q.bizDefault.post;
-            } else if (!val) {
-                r.target_id = ''; r.target_label = ''; r.target_post = '';
-            }
-            ateQRedrawComposer();
-        }
-        function ateQRowTargetChange(idx, sel) {
-            var r = ATE_Q.rows[idx]; if (!r) return;
-            var opt = sel.options[sel.selectedIndex];
-            r.target_id = sel.value;
-            r.target_label = opt ? (opt.getAttribute('data-label') || '') : '';
-            r.target_post = opt ? (opt.getAttribute('data-post') || '') : '';
-        }
+        function ateQRowDateChange(idx, val) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].asked_at = val; }
         // 共用檔 eg_input_rules.js 規則6要求：不帶參數，呼叫後多一列/少一列並自己重繪
         function ateQRowAdd() { ATE_Q.rows.push(ateQNewRow()); ateQRedrawComposer(); }
         function ateQRowDel() { if (ATE_Q.rows.length > 1) { ATE_Q.rows.pop(); ateQRedrawComposer(); } }
@@ -8661,10 +8930,13 @@ foreach($dCounts as $c) {
             ATE_Q.rows.forEach(function(r) {
                 var q = $.trim(r.question || '');
                 if (!q) return;
-                if (r.target_type && !r.target_id) { bad = true; return; }
-                out.push({ question: q, target_type: r.target_type, target_id: r.target_id, target_label: r.target_label, target_post: r.target_post });
+                if (r.target_type === 'other') {
+                    if (!$.trim(r.target_label || '')) { bad = true; return; }
+                } else if (r.target_type && !r.target_id) { bad = true; return; }
+                out.push({ question: q, target_type: r.target_type, target_id: r.target_id, target_label: r.target_label,
+                           target_post: r.target_post, target_contact: r.target_contact, asked_at: r.asked_at });
             });
-            if (bad) { showToast('有問題選了對象類別卻沒有選到對象，請補選'); return; }
+            if (bad) { showToast('有問題選了對象類別卻沒有填完對象資料，請補選／補填'); return; }
             if (!out.length) { showToast('請至少填寫一條問題內容'); return; }
             $('#ate-q-submit-new').prop('disabled', true);
             $('.ate-q-qtext').css('background-color', '#d4edda');   // 比照舊版存檔成功的綠色回饋
@@ -8685,7 +8957,7 @@ foreach($dCounts as $c) {
             if (!$cell.length) return;
             openCount = parseInt(openCount, 10) || 0;
             if (preview) {
-                var tMap = { customer: '客戶', maker: '廠商', user: '業務' };
+                var tMap = { customer: '客戶', maker: '廠商', user: '業務', other: '其他' };
                 var prefix = preview.target_type
                     ? ('【' + (tMap[preview.target_type] || preview.target_type) + '：' + (preview.target_label || '（未指定）') + '】')
                     : '【PS】';

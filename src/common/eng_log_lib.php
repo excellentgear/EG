@@ -51,6 +51,15 @@ function el_item_status(): array {
     return ['waiting' => '待回覆', 'answered' => '已回覆', 'resolved' => '已解決', 'dropped' => '不處理'];
 }
 
+/**
+ * 問題項「對象」型別 → 顯示名稱（2026-10-06 新增 other，供訂單追蹤設計備註問答的
+ * 按鈕式選擇器使用；customer/maker/user 一律要挑清單、other 一律手動輸入說明文字，
+ * 唯一實作見下方 el_item_upsert() 的驗證邏輯，呼叫端不要自己另判一套）。
+ */
+function el_item_target_types(): array {
+    return ['user' => '業務', 'maker' => '廠商', 'customer' => '客戶', 'other' => '其他'];
+}
+
 function el_log_status(): array {
     return ['open' => '處理中', 'done' => '已結案'];
 }
@@ -850,12 +859,18 @@ function el_item_upsert(PDO $db, int $logId, int $itemId, array $in, string $now
     $q = trim((string)($in['question'] ?? ''));
     if ($q === '') throw new InvalidArgumentException('請填寫問題內容');
     $tt = trim((string)($in['target_type'] ?? ''));
-    if (!in_array($tt, ['customer', 'maker', 'user'], true)) $tt = null;
+    if (!array_key_exists($tt, el_item_target_types())) $tt = null;
     $ti = trim((string)($in['target_id'] ?? ''));
     $tl = trim((string)($in['target_label'] ?? ''));
     $tc = trim((string)($in['target_contact'] ?? ''));
     $tp = trim((string)($in['target_post'] ?? ''));
-    if ($tt !== null && $ti === '') throw new InvalidArgumentException('對象要從清單選擇（只打名字的話日後對方改名就對應不到）');
+    // other＝手動輸入說明文字，沒有清單可挑，要求的是 target_label 不是 target_id；
+    // 其餘（customer/maker/user）一律要從候選清單選到，只打名字日後對方改名就對不到了
+    if ($tt === 'other') {
+        if ($tl === '') throw new InvalidArgumentException('請輸入「其他」對象的說明文字');
+    } elseif ($tt !== null && $ti === '') {
+        throw new InvalidArgumentException('對象要從清單選擇（只打名字的話日後對方改名就對應不到）');
+    }
     $asked = el_norm_date($in['asked_at'] ?? '') ?? $today;
     if ($asked > $today) throw new InvalidArgumentException('提出日期不可以是未來日期');
     $fud = el_norm_int($in['follow_up_days'] ?? '');
