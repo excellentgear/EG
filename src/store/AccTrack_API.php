@@ -49,7 +49,8 @@ if (empty($_SESSION['act_csrf'])) $_SESSION['act_csrf'] = bin2hex(random_bytes(1
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 $WRITE = ['set_status', 'settle_quick_edit', 'settle_revert', 'role_matrix_save', 'workday_groups_save',
-          'settle_ex_save', 'settle_ex_delete'];
+          'settle_ex_save', 'settle_ex_delete', 'allow_skip_save', 'show_amount_save',
+          'owner_pool_add', 'owner_pool_remove', 'owner_set_batch'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['act_csrf'], $tok)) {
@@ -70,6 +71,8 @@ switch ($action) {
             'years'   => act_years($db),
             'matrix'  => act_role_matrix($db),
             'groups'  => act_workday_groups($db),
+            'allow_skip'  => act_allow_skip($db),
+            'show_amount' => act_show_amount($db),
         ]);
     }
 
@@ -91,7 +94,7 @@ switch ($action) {
                 mb_stripos((string)($r['party_short'] ?? ''), $kw) !== false ||
                 mb_stripos((string)($r['party_id'] ?? ''), $kw) !== false));
         }
-        $counts = array_fill_keys(array_keys(act_statuses()), 0);
+        $counts = array_merge(['' => 0], array_fill_keys(array_keys(act_statuses()), 0));
         foreach (($side === 'ar') ? act_ar_rows($db, $bm) : act_ap_rows($db, $bm) as $r) $counts[$r['status']]++;
 
         actOut(['rows' => $rows, 'total' => count($rows), 'counts' => $counts, 'bm' => $bm, 'side' => $side]);
@@ -131,11 +134,23 @@ switch ($action) {
         actOut(['message' => $r['message']]);
     }
 
+    /* 單一對象（結帳日修改跳窗內嵌小清單用） */
     case 'change_log': {
         $type = (string)($_GET['target_type'] ?? '');
         $id   = trim((string)($_GET['target_id'] ?? ''));
         if ($id === '') actErr('缺少對象');
         actOut(['rows' => act_change_log_list($db, $type, $id, 30)]);
+    }
+
+    /* 「修改紀錄」獨立分頁：跨對象彙總＋頁內分頁 */
+    case 'change_log_all': {
+        $r = act_change_log_list_all($db, [
+            'target_type' => (string)($_GET['target_type'] ?? ''),
+            'kw'          => (string)($_GET['kw'] ?? ''),
+            'page'        => (int)($_GET['page'] ?? 1),
+            'per_page'    => (int)($_GET['per_page'] ?? 20),
+        ]);
+        actOut($r);
     }
 
     /* ── 角色矩陣設定 ───────────────────────────────────────────────── */
@@ -215,6 +230,53 @@ switch ($action) {
         $r = acc_settle_ex_delete($db, $id, ['id' => $uid, 'name' => $uname]);
         if (!$r['success']) actErr($r['message']);
         actOut(['message' => '已刪除']);
+    }
+
+    /* ── 是否允許跳過順序／本期金額欄位是否顯示（管理員設定）────────── */
+    case 'allow_skip_save': {
+        if (!$perms['canAdmin']) actErr('沒有設定權限（僅本頁管理員）', 403);
+        act_allow_skip_save($db, !empty($_POST['v']) && $_POST['v'] !== '0', $uname);
+        actOut(['allow_skip' => act_allow_skip($db)]);
+    }
+    case 'show_amount_save': {
+        if (!$perms['canAdmin']) actErr('沒有設定權限（僅本頁管理員）', 403);
+        act_show_amount_save($db, !empty($_POST['v']) && $_POST['v'] !== '0', $uname);
+        actOut(['show_amount' => act_show_amount($db)]);
+    }
+
+    /* ── 應收負責人候選名單＋批次指派 ─────────────────────────────── */
+    case 'dept_list': {
+        actOut(['rows' => act_dept_list($db)]);
+    }
+    case 'dept_people': {
+        $deptId = (int)($_GET['dept_id'] ?? 0);
+        actOut(['rows' => act_dept_people($db, $deptId)]);
+    }
+    case 'owner_pool_list': {
+        actOut(['rows' => act_owner_pool_list($db)]);
+    }
+    case 'owner_pool_add': {
+        if (!$perms['canAdmin']) actErr('沒有設定權限（僅本頁管理員）', 403);
+        $r = act_owner_pool_add($db,
+            (int)($_POST['user_id'] ?? 0), trim((string)($_POST['user_name'] ?? '')),
+            (int)($_POST['dept_id'] ?? 0) ?: null, trim((string)($_POST['dept_name'] ?? '')) ?: null, $perms);
+        if (!$r['success']) actErr($r['message']);
+        actOut(['rows' => act_owner_pool_list($db)]);
+    }
+    case 'owner_pool_remove': {
+        if (!$perms['canAdmin']) actErr('沒有設定權限（僅本頁管理員）', 403);
+        act_owner_pool_remove($db, (int)($_POST['id'] ?? 0));
+        actOut(['rows' => act_owner_pool_list($db)]);
+    }
+    case 'owner_set_batch': {
+        if (!($perms['canAdmin'] || $perms['isSales'])) actErr('沒有批次指派負責人的權限', 403);
+        $ids = json_decode((string)($_POST['track_ids'] ?? '[]'), true);
+        if (!is_array($ids)) actErr('格式錯誤');
+        $ownerId = (int)($_POST['owner_id'] ?? 0) ?: null;
+        $ownerName = trim((string)($_POST['owner_name'] ?? ''));
+        $r = act_owner_set_batch($db, $ids, $ownerId, $ownerName);
+        if (!$r['success']) actErr($r['message']);
+        actOut($r);
     }
 
     default:
