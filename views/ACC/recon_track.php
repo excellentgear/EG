@@ -111,14 +111,16 @@ body { background:#F6F1EA; }
 .st-card.on { outline:2px solid var(--amber-d); }
 .st-card .lab { font-size:11px; color:var(--muted); }
 .st-card .val { font-size:22px; font-weight:700; color:var(--ink); }
-.st-card[data-st=""]             { border-top-color:#C9BBA3; }
+.st-card[data-st="not_due"]      { border-top-color:#C9BBA3; }
+.st-card[data-st="need_recon"]   { border-top-color:var(--coral); }
 .st-card[data-st="processing"]   { border-top-color:#a08a6f; }
 .st-card[data-st="reconciled"]   { border-top-color:var(--amber); }
 .st-card[data-st="sent_to_acc"]  { border-top-color:#C77C1A; }
 .st-card[data-st="acc_received"] { border-top-color:#5B8A72; }
 .st-card[data-st="acc_done"]     { border-top-color:#2E7D32; }
 .badge-st { display:inline-block; border-radius:10px; padding:2px 9px; font-size:11px; font-weight:700; color:#fff; white-space:nowrap; line-height:16px; }
-.badge-empty        { background:#D8CBB4; color:#5A4328; }
+.badge-not_due       { background:#D8CBB4; color:#5A4328; }
+.badge-need_recon    { background:var(--coral); color:#fff; }
 .badge-processing    { background:#a08a6f; }
 .badge-reconciled    { background:var(--amber); color:#4E2C0B; }
 .badge-sent_to_acc   { background:#C77C1A; }
@@ -487,7 +489,11 @@ function showToast(msg, type){
 }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function fmtMoney(v){ v = Number(v||0); return v.toLocaleString('en-US', {maximumFractionDigits:0}); }
-function statusLabel(k){ return (k==='' || k==null) ? '尚未開始' : (STATUSES[k] || k); }
+function statusLabel(k){
+    if (k === 'not_due') return '未到結帳日';
+    if (k === 'need_recon') return '需對帳';
+    return (k==='' || k==null) ? '需對帳' : (STATUSES[k] || k);
+}
 /* 每頁筆數下拉：固定選項 5/10/20/50 之外，把管理員設定的預設值也插進去（如 6），並預選它 */
 function rebuildPerPageOptions(){
     var base = [5, 10, 20, 50];
@@ -499,7 +505,7 @@ function rebuildPerPageOptions(){
     LIST_PER_PAGE = DEFAULT_PER_PAGE;
     LOG_PER_PAGE = DEFAULT_PER_PAGE;
 }
-function statusBadge(k){ return '<span class="badge-st badge-' + (k===''?'empty':k) + '">' + esc(statusLabel(k)) + '</span>'; }
+function statusBadge(k){ return '<span class="badge-st badge-' + (k===''?'need_recon':k) + '">' + esc(statusLabel(k)) + '</span>'; }
 
 function api(data){
     data = data || {};
@@ -565,6 +571,8 @@ function renderStCards(counts){
 function toggleStFilter(k){ ST_FILTER = (ST_FILTER===k) ? '' : k; loadList(); }
 
 function allowedTargets(row){
+    // 結帳日還沒到、狀態還空白時，非本頁管理員不給操作（使用者要求：結帳開始後才顯示為「需對帳」，這時才可點選其他操作）
+    if (!PERMS.canAdmin && row.card_status === 'not_due') return [];
     var order = Object.keys(STATUSES);
     var curIdx = row.status === '' ? -1 : order.indexOf(row.status);
     var skip = ALLOW_SKIP[row.side];
@@ -660,7 +668,7 @@ function renderListTbl(){
             tds.push('<td class="c">' + needBadge + '</td>');
             tds.push('<td class="c">' + esc(r.owner_name || '—') + '</td>');
         }
-        tds.push('<td class="c">' + statusBadge(r.status) + '</td>');
+        tds.push('<td class="c">' + statusBadge(r.card_status) + '</td>');
         tds.push('<td class="c">' + btns + '</td>');
         tds.push('<td class="c">' + settleBtn + '</td>');
         if (isAr) {
@@ -1027,7 +1035,7 @@ $(function(){
         STATUSES = r.statuses; ANCHORS = r.anchors; MATRIX = r.matrix; GROUPS = r.groups;
         ALLOW_SKIP = r.allow_skip || {ar:true, ap:true}; SHOW_AMOUNT = !!r.show_amount;
         DEFAULT_PER_PAGE = r.default_per_page || 6;
-        CARD_ORDER = [''].concat(Object.keys(STATUSES));
+        CARD_ORDER = ['not_due', 'need_recon'].concat(Object.keys(STATUSES));
         rebuildPerPageOptions();
         fillGranYear(r.years);
         loadOwnerPool();

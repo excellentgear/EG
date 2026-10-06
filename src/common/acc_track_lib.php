@@ -407,6 +407,39 @@ function act_status_index(string $status): int
     return $i === false ? -1 : $i;
 }}
 
+if (!function_exists('act_today')) {
+/** 今天（取 DB 時間，不用 PHP date()——PHP 是 UTC、MySQL 是本地，混用會差時區） */
+function act_today(PDO $db): string
+{
+    static $d = null;
+    if ($d !== null) return $d;
+    try { $d = (string)$db->query('SELECT CURDATE()')->fetchColumn(); } catch (Throwable $e) { $d = date('Y-m-d'); }
+    return $d;
+}}
+
+if (!function_exists('act_card_status')) {
+/**
+ * 顯示用的狀態鍵（使用者明確要求：結帳開始後才顯示為「需對帳」，這之前不給操作）。
+ * 狀態欄位本身（status）的空字串語意不變（還沒有人真的按過），這支只是多算出
+ * 「空白期間要顯示成『未到結帳日』還是『需對帳』」——結帳日已到＝可以開始對了。
+ */
+function act_card_status(PDO $db, string $status, ?string $cutoffDate): string
+{
+    if ($status !== '') return $status;
+    $today = act_today($db);
+    return ($cutoffDate && $cutoffDate <= $today) ? 'need_recon' : 'not_due';
+}}
+
+if (!function_exists('act_is_actionable')) {
+/** 結帳日還沒到、且狀態仍空白時，非本頁管理員不可操作任何狀態按鈕 */
+function act_is_actionable(PDO $db, array $row, array $perms): bool
+{
+    if (!empty($perms['canAdmin'])) return true;
+    if ((string)($row['status'] ?? '') !== '') return true;
+    $today = act_today($db);
+    return !empty($row['cutoff_date']) && $row['cutoff_date'] <= $today;
+}}
+
 if (!function_exists('act_set_status')) {
 /**
  * 設定狀態。使用者明確要求：①狀態按鈕要能跳過順序（如直接從空白按「已送會計」，中間的
@@ -420,6 +453,9 @@ function act_set_status(PDO $db, int $trackId, string $toStatus, array $perms, ?
     $st->execute([$trackId]);
     $row = $st->fetch(PDO::FETCH_ASSOC);
     if (!$row) return ['success' => false, 'message' => '查無此筆追蹤資料，請重新整理'];
+    if (!act_is_actionable($db, $row, $perms)) {
+        return ['success' => false, 'message' => '結帳日（' . ($row['cutoff_date'] ?: '未定') . '）尚未到，還不能操作狀態'];
+    }
 
     $order  = array_keys(act_statuses());
     $curIdx = act_status_index((string)$row['status']);
@@ -509,6 +545,7 @@ function act_ar_rows(PDO $db, string $billingMonth): array
             'billing_month'   => $billingMonth,
             'cutoff_date'     => $track['cutoff_date'],
             'status'          => $track['status'],
+            'card_status'     => act_card_status($db, (string)$track['status'], $track['cutoff_date']),
             'owner_id'        => $track['owner_id'] ?? null,
             'owner_name'      => $track['owner_name'] ?? null,
             'ship_amt'        => (float)$r['ship_amt'],
@@ -580,6 +617,7 @@ function act_ap_rows(PDO $db, string $billingMonth): array
             'billing_month'  => $billingMonth,
             'cutoff_date'    => $track['cutoff_date'],
             'status'         => $track['status'],
+            'card_status'    => act_card_status($db, (string)$track['status'], $track['cutoff_date']),
             'cnt'            => (int)$r['cnt'],
             'amount'         => $amt,
             'tax_amount'     => $tax,
@@ -783,16 +821,23 @@ function act_workday_stats(PDO $db, string $side, array $period, array $groups):
 }}
 
 if (!function_exists('act_period_status_counts')) {
-/** 這段期間（依 billing_month）各狀態的筆數，給 KPI 卡/圓餅用 */
+/**
+ * 這段期間（依 billing_month）各「顯示用狀態」(card_status) 的筆數，給 KPI 卡/圓餅用。
+ * 跟清單那邊 act_card_status() 同一套判定：空白狀態要再依結帳日拆成「未到結帳日」／「需對帳」。
+ */
 function act_period_status_counts(PDO $db, string $side, array $period): array
 {
     $bmFrom = substr($period['start'], 0, 7);
     $bmTo   = substr($period['end'], 0, 7);
-    $out = array_merge(['' => 0], array_fill_keys(array_keys(act_statuses()), 0));
+    $out = array_merge(['not_due' => 0, 'need_recon' => 0], array_fill_keys(array_keys(act_statuses()), 0));
     try {
-        $st = $db->prepare("SELECT status, COUNT(*) c FROM acc_recon_track WHERE side=? AND billing_month BETWEEN ? AND ? GROUP BY status");
+        $today = act_today($db);
+        $st = $db->prepare("SELECT status, cutoff_date FROM acc_recon_track WHERE side=? AND billing_month BETWEEN ? AND ?");
         $st->execute([$side, $bmFrom, $bmTo]);
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[$r['status']] = (int)$r['c'];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $key = ($r['status'] !== '') ? $r['status'] : (($r['cutoff_date'] && $r['cutoff_date'] <= $today) ? 'need_recon' : 'not_due');
+            $out[$key] = ($out[$key] ?? 0) + 1;
+        }
     } catch (Throwable $e) {}
     return $out;
 }}
@@ -837,9 +882,9 @@ function act_insights(PDO $db, string $side, array $period, array $prevPeriod, a
         }
     }
     $counts = act_period_status_counts($db, $side, $period);
-    $notStarted = $counts[''] ?? 0;
-    if ($notStarted > 0) {
-        $out[] = ['level' => 'warn', 'title' => '尚有 ' . $notStarted . ' 筆還沒有人開始處理', 'detail' => '這段期間內還沒有人按下任何狀態按鈕'];
+    $needRecon = $counts['need_recon'] ?? 0;
+    if ($needRecon > 0) {
+        $out[] = ['level' => 'warn', 'title' => '尚有 ' . $needRecon . ' 筆已到結帳日但還沒有人開始處理', 'detail' => '這段期間內已經可以對帳，但還沒有人按下任何狀態按鈕'];
     }
     return $out;
 }}

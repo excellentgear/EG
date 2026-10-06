@@ -82,11 +82,17 @@ switch ($action) {
         $side = actSide($_GET['side'] ?? 'ar');
         $bm   = (string)($_GET['bm'] ?? date('Y-m'));
         if (!preg_match('/^\d{4}-\d{2}$/', $bm)) actErr('不合法的結帳月份');
-        $rows = ($side === 'ar') ? act_ar_rows($db, $bm) : act_ap_rows($db, $bm);
+        $allRows = ($side === 'ar') ? act_ar_rows($db, $bm) : act_ap_rows($db, $bm);
 
+        // 卡片／篩選一律依「顯示用狀態」(card_status) 分類：結帳日未到(not_due)／需對帳(need_recon)
+        // 才是空白狀態真正的兩種意思，不是籠統的一個「未開始」桶。
+        $counts = array_merge(['not_due' => 0, 'need_recon' => 0], array_fill_keys(array_keys(act_statuses()), 0));
+        foreach ($allRows as $r) $counts[$r['card_status']]++;
+
+        $rows = $allRows;
         $status = (string)($_GET['status'] ?? '');
-        if ($status !== '' && array_key_exists($status, act_statuses())) {
-            $rows = array_values(array_filter($rows, fn($r) => $r['status'] === $status));
+        if ($status !== '' && array_key_exists($status, $counts)) {
+            $rows = array_values(array_filter($rows, fn($r) => $r['card_status'] === $status));
         }
         $kw = trim((string)($_GET['kw'] ?? ''));
         if ($kw !== '') {
@@ -95,8 +101,6 @@ switch ($action) {
                 mb_stripos((string)($r['party_short'] ?? ''), $kw) !== false ||
                 mb_stripos((string)($r['party_id'] ?? ''), $kw) !== false));
         }
-        $counts = array_merge(['' => 0], array_fill_keys(array_keys(act_statuses()), 0));
-        foreach (($side === 'ar') ? act_ar_rows($db, $bm) : act_ap_rows($db, $bm) as $r) $counts[$r['status']]++;
 
         actOut(['rows' => $rows, 'total' => count($rows), 'counts' => $counts, 'bm' => $bm, 'side' => $side]);
     }

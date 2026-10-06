@@ -382,6 +382,7 @@ $EG_ROLE_MODULES = [
     'shipping'            => ['prefix'=>'ship',    'label'=>'快速出貨',            'page'=>'Shipping_Quick.php'],
     'purchase'            => ['prefix'=>'purc',    'label'=>'申請採購',            'page'=>'purchase_request.php'],
     'accounting'          => ['prefix'=>'acc',     'label'=>'會計',                'page'=>'recon_overview.php'],
+    'acc_recon_track'     => ['prefix'=>'art',     'label'=>'對帳進度追蹤',        'page'=>'recon_track.php'],
     'external_doc'        => ['prefix'=>'extdoc',  'label'=>'外來文件清單',        'page'=>'external_doc_list.php'],
     'order_track'         => ['prefix'=>'otrk',    'label'=>'訂單追蹤',            'page'=>'_cleanOrder_Track_ate_only.php'],
     'type_id_ctrl'        => ['prefix'=>'tidc',    'label'=>'型態識別文件管制表',  'page'=>'type_id_ctrl_doc.php'],
@@ -1729,6 +1730,14 @@ $_quotDepts = array_keys($_deptSet);
                         '為每位使用者指派「專案管理」頁（總經理室 &gt; 專案管理，AS 2-GM-02 專案管理程序）的操作角色。角色功能：<strong>專案檢閱</strong>＝檢視清單、明細、列印執行規劃表(2-GM-02-02)與專案管理卡(2-GM-02-03)；<strong>專案登錄</strong>＝檢閱＋建立/編輯專案、訂單轉專案、編排執行規劃表、開立管理卡、同步 BOM 製程；<strong>專案管理員</strong>＝登錄＋刪除專案與管理卡、自訂標籤維護、模組設定（立案核准人、預設會簽單位、結案前文件檢核開關、圖章模板）、AS 文件編號綁定、批次自動簽核。'
                         . '<br><strong>另有兩種不看角色的身分</strong>：①<strong>專案負責人</strong>（每個專案自己指定的人）即使只有「專案檢閱」角色，也能編輯自己負責的那些專案；②被指派為某一列<strong>會簽人</strong>者不需要任何角色就能處理自己那一列會簽。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
                         rs_of('project'), rsu_of('project'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('art', 'acc_recon_track', '對帳進度追蹤', 'fa-tasks', '#C77C1A',
+                        '為每位使用者指派「<a href="../ACC/recon_track.php" target="_blank" style="color:#b5762a;">對帳進度追蹤</a>」頁（會計 &gt; 對帳進度追蹤）的角色。這一頁管的是「這個月這家客戶/廠商的對帳作業，流程走到哪一關」（需對帳→處理中→已對帳→已送會計→會計已接收→會計已處理），跟對帳作業（逐筆核對金額）是分開的看板，<strong>與會計模組的角色各自獨立設定</strong>。<br>
+                         <strong>對帳追蹤-本頁管理員（可修改）</strong>＝任意設定/回復任何狀態、修改結帳日並留紀錄、設定角色權限矩陣與跳過順序等全部設定；
+                         <strong>對帳追蹤-管理檢閱（唯讀）</strong>＝看得到全部應收/應付與統計，但不能按任何按鈕、不能改設定（給只需要掌握進度、不需要操作的人）；
+                         <strong>對帳追蹤-生管</strong>／<strong>對帳追蹤-業務</strong>／<strong>對帳追蹤-會計</strong>＝能按哪個狀態依「設定→角色權限矩陣」逐一勾選（同一個狀態可以同時勾生管與業務），預設生管/業務可推進到已送會計、會計可接續到會計已處理。<br>
+                         <span style="color:#b06f27;">結帳日還沒到之前不能操作</span>：狀態欄自動依結帳日顯示「未到結帳日」或「需對帳」，結帳日到了才會出現狀態按鈕（本頁管理員不受此限，方便補歷史資料）。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
+                        rs_of('acc_recon_track'), rsu_of('acc_recon_track'), $admins, $_quotDepts, $canEdit);
 
                     // ── 其他模組：有建角色、但上面還沒有手寫區塊的，自動補一塊 ──────────────
                     //   以前新模組要回到本頁手寫 4 段（宣告/載入/載入/呼叫），漏掉就整塊設定畫面消失、
