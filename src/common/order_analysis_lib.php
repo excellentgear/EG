@@ -2137,7 +2137,7 @@ function oa_client_share(PDO $db, array $opt = []): array
                 $k = $r['pkey'];
                 if (!isset($parts[$k])) {
                     $parts[$k] = ['pno' => $r['pno'], 'pid' => $r['pid'], 'n' => 0, 'amount' => 0.0, 'qty' => 0,
-                                  'tags' => [], 'procs' => [], 'creators' => [], 'lt_sum' => 0, 'lt_n' => 0];
+                                  'tags' => [], 'procs' => [], 'creators' => [], 'lt_sum' => 0, 'lt_n' => 0, 'urgent_n' => 0];
                 }
                 $pp = &$parts[$k];
                 $pp['n']++; $pp['amount'] += $r['amount']; $pp['qty'] += $r['qty'];
@@ -2145,6 +2145,7 @@ function oa_client_share(PDO $db, array $opt = []): array
                 if (trim($r['proc']) !== '') $pp['procs'][trim($r['proc'])] = 1;
                 if ($r['created_by_name'] !== '') $pp['creators'][$r['created_by_name']] = 1;
                 if ($r['lt'] !== null) { $pp['lt_sum'] += $r['lt']; $pp['lt_n']++; }
+                if ($isUrgent) $pp['urgent_n']++;
                 unset($pp);
             }
             $partList = array_values($parts);

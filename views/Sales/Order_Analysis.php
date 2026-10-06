@@ -167,6 +167,11 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 .ins-cli-name a { color:#8a5a2b; border-bottom:1px dotted #8a5a2b; cursor:pointer; }
 .ins-cli-name a:hover { color:var(--coral); border-bottom-color:var(--coral); }
 .ins-cli-amt { color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+/* 急件集中客戶展開名單：跟上面同一種多欄格狀排版，但每格多一行（筆數／佔比／較基期） */
+.ltu-cell { padding:3px 0; border-bottom:1px dashed var(--line); }
+.ltu-cell .l1 { display:flex; justify-content:space-between; gap:8px; font-size:12px; }
+.ltu-cell .l1 .amt { color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.ltu-cell .l2 { display:flex; justify-content:space-between; gap:8px; font-size:10.5px; color:var(--muted); margin-top:1px; }
 /* 建議採取：跟自動分析同一套卡片樣式，底下多一份逐條行動清單 */
 .rec-actions { margin:4px 0 0; padding-left:18px; font-size:12px; color:#6B4423; line-height:1.7; }
 .rec-actions li { margin-bottom:1px; }
@@ -618,11 +623,11 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
       </h4>
       <div class="tbl-wrap">
         <table class="oa-t" id="tblLtList">
-          <colgroup><col style="width:10%"><col style="width:12%"><col style="width:11%"><col style="width:8%">
+          <colgroup><col style="width:10%"><col style="width:9%"><col style="width:11%"><col style="width:11%"><col style="width:8%">
                     <col style="width:8%"><col style="width:8%"><col style="width:9%"><col style="width:8%"><col style="width:9%">
-                    <col style="width:9%"><col style="width:8%"></colgroup>
-          <thead><tr><th>訂單號</th><th>客戶</th><th>料號</th><th>下單日</th><th>交期</th>
-                     <th>工作天數</th><th>類別</th><th>數量</th><th>金額</th><th>key單人員</th><th>key單日期</th></tr></thead>
+                    <col style="width:9%"></colgroup>
+          <thead><tr><th>訂單號</th><th>KEY單業務</th><th>客戶</th><th>料號</th><th>下單日</th><th>交期</th>
+                     <th>工作天數</th><th>類別</th><th>數量</th><th>金額</th><th>key單日期</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -1952,9 +1957,9 @@ function renderLtKpi(){
 function renderLtInsights(){
   var list = LT_DATA.insights || [];
   var icon = {bad:'fa-exclamation-circle', warn:'fa-exclamation-triangle', good:'fa-check-circle', info:'fa-info-circle'};
-  // 涉及具體客戶的結論（如「急件集中在少數客戶」）可展開清單——展開／收合沿用總覽分頁既有的
-  // oaToggleInsList()，但表格內容另寫 ltRenderUrgentClientTable()：這裡要多顯示「佔急件總額」
-  // 與「較基期增減」兩欄，總覽分頁通用的 oaRenderInsClientGrid() 只有名稱＋單一數字兩欄放不下。
+  // 涉及具體客戶的結論（如「急件集中在少數客戶」）可展開清單——展開／收合與排版都沿用總覽分頁
+  // 既有的多欄格狀樣式（oaToggleInsList()＋.ins-cli-grid，使用者明確要求不要下捲表格），
+  // 只是每格多印一行（ltRenderUrgentClientGrid()：筆數／佔急件總額／較基期增減）。
   var h = list.map(function(x){
     var hasList = x.clients && x.clients.length;
     var listId = hasList ? ('ltInsCli'+(_insSeq++)) : '';
@@ -1962,7 +1967,7 @@ function renderLtInsights(){
       + '<div class="bd"><div class="tt">'+esc(x.title)
       + (hasList ? ' <span class="ins-toggle" onclick="oaToggleInsList(\''+listId+'\',this)">展開名單 <i class="fa fa-caret-down"></i></span>' : '')
       + '</div><div class="dt">'+esc(x.detail)+'</div>'
-      + (hasList ? ('<div class="ins-cli-wrap" id="'+listId+'" style="display:none;">'+ltRenderUrgentClientTable(x.clients)+'</div>') : '')
+      + (hasList ? ('<div class="ins-cli-wrap" id="'+listId+'" style="display:none;">'+ltRenderUrgentClientGrid(x.clients)+'</div>') : '')
       + '</div>'
       + (x.metric?('<div class="mt">'+esc(x.metric)+'</div>'):'')+'</div>';
   }).join('');
@@ -2025,29 +2030,32 @@ function renderLtClient(){
   }).join('');
   $('#tblLtClient tbody').html(h || '<tr><td colspan="6" style="text-align:center;color:var(--muted);">（本期沒有急件）</td></tr>');
 }
-/* 「急件集中在少數客戶」展開名單：欄位比總覽分頁的通用展開元件多（佔比／較基期增減），
-   另寫一份小表格渲染，不勉強套用 oaRenderInsClientGrid()（那支是「名稱＋單一數字」兩欄版型）。 */
-function ltRenderUrgentClientTable(clients){
-  var rows = clients.map(function(c){
-    return '<tr><td>'+esc(c.name)+(c.bad?' <span class="badge-warn">未建主檔</span>':'')+'</td>'
-      + '<td class="n">'+nf(c.n)+'</td><td class="n">'+money(c.amount)+'</td>'
-      + '<td class="n">'+(c.pct_of_total!=null?c.pct_of_total+'%':'—')+'</td>'
-      + '<td class="n">'+ltDeltaText(c)+'</td></tr>';
+/* 「急件集中在少數客戶」展開名單：使用者要求跟總覽分頁「回流客戶」等既有展開名單同一種
+   多欄格狀排版（不要下捲表格），所以沿用同一套 .ins-cli-grid 多欄格線，只是每格多印一行
+   （筆數／佔急件總額／較基期增減），資料比總覽分頁的通用版（名稱＋單一數字）更豐富。 */
+function ltRenderUrgentClientGrid(clients){
+  var cols = (clients.length > 15) ? 3 : 2;
+  var colStyle = 'grid-template-columns:repeat('+cols+',1fr);';
+  var cells = clients.map(function(c){
+    return '<div class="ltu-cell">'
+      + '<div class="l1"><span class="ins-cli-name">'+esc(c.name)+(c.bad?' <span class="badge-warn">未建主檔</span>':'')+'</span>'
+      + '<span class="amt">'+money(c.amount)+' 元</span></div>'
+      + '<div class="l2"><span>'+nf(c.n)+' 筆／佔急件總額 '+(c.pct_of_total!=null?c.pct_of_total+'%':'—')+'</span>'
+      + '<span>較基期'+ltDeltaText(c)+'</span></div>'
+      + '</div>';
   }).join('');
-  return '<div class="tbl-wrap" style="max-height:260px;margin-top:6px;"><table class="oa-t">'
-    + '<colgroup><col style="width:32%"><col style="width:16%"><col style="width:20%"><col style="width:16%"><col style="width:16%"></colgroup>'
-    + '<thead><tr><th>客戶</th><th>急件筆數</th><th>急件金額</th><th>佔急件總額</th><th>較基期增減</th></tr></thead>'
-    + '<tbody>'+rows+'</tbody></table></div>';
+  return '<div class="ins-cli-grid" style="'+colStyle+'margin-top:6px;">'+cells+'</div>';
 }
 function renderLtList(){
   var rows = LT_DATA.cur.urgent_list || [];
   var h = rows.map(function(r){
     return '<tr><td>'+esc(r.no)+(r.c_order?('<br><span style="font-size:10px;color:var(--muted);">'+esc(r.c_order)+'</span>'):'')+'</td>'
+      + '<td>'+esc(r.created_by_name||'—')+'</td>'
       + '<td>'+esc(r.cname)+'</td><td>'+pnoCell(r)+'</td>'
       + '<td>'+dispDate(r.odate)+'</td><td>'+dispDate(r.ddate)+'</td>'
       + '<td class="n">'+r.lt+'</td><td>'+esc(r.label)+'</td>'
       + '<td class="n">'+nf(r.qty)+'</td><td class="n">'+money(r.amount)+'</td>'
-      + '<td>'+esc(r.created_by_name||'—')+'</td><td>'+(r.created_at?dispDate(r.created_at):'—')+'</td></tr>';
+      + '<td>'+(r.created_at?dispDate(r.created_at):'—')+'</td></tr>';
   }).join('');
   $('#tblLtList tbody').html(h || '<tr><td colspan="11" style="text-align:center;color:var(--muted);">（本期沒有急件）</td></tr>');
 }
@@ -2172,9 +2180,9 @@ function shBuildBlocks(){
       + '</table>'
       + '<h5 style="margin:12px 0 4px;color:var(--ink);font-size:13px;">本客戶受訂料號排名（前 10）</h5>'
       + '<div class="tbl-wrap"><table class="oa-t" id="tblShParts_'+i+'">'
-      +   '<colgroup><col style="width:5%"><col style="width:13%"><col style="width:7%"><col style="width:8%"><col style="width:10%">'
-      +              '<col style="width:15%"><col style="width:17%"><col style="width:12%"><col style="width:13%"></colgroup>'
-      +   '<thead><tr><th>#</th><th>料號</th><th>筆數</th><th>數量</th><th>金額</th><th>訂單標籤</th><th>製程內容</th><th>接單人員</th><th>平均工作天</th></tr></thead>'
+      +   '<colgroup><col style="width:4%"><col style="width:12%"><col style="width:6%"><col style="width:7%"><col style="width:9%">'
+      +              '<col style="width:9%"><col style="width:14%"><col style="width:16%"><col style="width:11%"><col style="width:12%"></colgroup>'
+      +   '<thead><tr><th>#</th><th>料號</th><th>筆數</th><th>數量</th><th>金額</th><th>急件</th><th>訂單標籤</th><th>製程內容</th><th>接單人員</th><th>平均工作天</th></tr></thead>'
       +   '<tbody></tbody></table></div>'
       + '</div>';
   }).join('');
@@ -2227,17 +2235,23 @@ function shRenderCls(i, c){
   }).join('');
   $('#tblShCls_'+i+' tbody').html(h || '<tr><td colspan="5" style="text-align:center;color:var(--muted);">（本期本客戶沒有訂單）</td></tr>');
 }
+/* 急件欄位：這支料號 n 筆訂單裡有幾筆是急件（可能只有一部份，不是整支料號都急） */
+function shUrgentBadge(r){
+  if (!r.urgent_n) return '<span style="color:var(--muted);">—</span>';
+  return '<span class="badge-warn">'+r.urgent_n+'/'+r.n+' 急件</span>';
+}
 function shRenderParts(i, c){
   var rows = c.cur.agg.top_parts || [];
   var h = rows.map(function(r, ii){
     return '<tr><td class="n">'+(ii+1)+'</td><td>'+pnoCell(r)+'</td><td class="n">'+nf(r.n)+'</td>'
       + '<td class="n">'+nf(r.qty)+'</td><td class="n">'+money(r.amount)+'</td>'
+      + '<td class="n">'+shUrgentBadge(r)+'</td>'
       + '<td>'+esc((r.tags||[]).join('、')||'—')+'</td>'
       + '<td>'+esc((r.procs||[]).join('、')||'—')+'</td>'
       + '<td>'+esc((r.creators||[]).join('、')||'—')+'</td>'
       + '<td class="n">'+(r.avg_leadtime==null?'—':r.avg_leadtime)+'</td></tr>';
   }).join('');
-  $('#tblShParts_'+i+' tbody').html(h || '<tr><td colspan="9" style="text-align:center;color:var(--muted);">（無資料）</td></tr>');
+  $('#tblShParts_'+i+' tbody').html(h || '<tr><td colspan="10" style="text-align:center;color:var(--muted);">（無資料）</td></tr>');
 }
 
 /* ── CSV（把畫面上全部區塊一次帶去 Excel）──────────── */
@@ -2663,15 +2677,16 @@ function oaClientSharePrintHtml(){
     (cur.agg.top_parts||[]).forEach(function(p, ii){
       partRows += '<tr><td class="tc">'+(ii+1)+'</td><td>'+esc(p.pno)+'</td><td class="tr">'+nf(p.n)+'</td>'
         + '<td class="tr">'+nf(p.qty)+'</td><td class="tr">'+money(p.amount)+'</td>'
+        + '<td class="tc">'+(p.urgent_n?(p.urgent_n+'/'+p.n):'—')+'</td>'
         + '<td>'+esc((p.tags||[]).join('、')||'—')+'</td><td>'+esc((p.procs||[]).join('、')||'—')+'</td>'
         + '<td>'+esc((p.creators||[]).join('、')||'—')+'</td><td class="tr">'+(p.avg_leadtime==null?'—':p.avg_leadtime)+'</td></tr>';
     });
     h += '<div style="margin:2mm 0 1.5mm;font-weight:700;color:#4A3524;font-size:10pt;">本客戶受訂料號排名（前 10）</div>'+
-      '<table><colgroup><col style="width:5%"><col style="width:13%"><col style="width:7%"><col style="width:8%"><col style="width:10%">'+
-      '<col style="width:15%"><col style="width:17%"><col style="width:12%"><col style="width:13%"></colgroup>'+
-      '<thead><tr><th>#</th><th>料號</th><th class="tr">筆數</th><th class="tr">數量</th><th class="tr">金額</th>'+
+      '<table><colgroup><col style="width:4%"><col style="width:11%"><col style="width:6%"><col style="width:7%"><col style="width:9%">'+
+      '<col style="width:8%"><col style="width:13%"><col style="width:16%"><col style="width:11%"><col style="width:12%"></colgroup>'+
+      '<thead><tr><th>#</th><th>料號</th><th class="tr">筆數</th><th class="tr">數量</th><th class="tr">金額</th><th>急件</th>'+
       '<th>訂單標籤</th><th>製程內容</th><th>接單人員</th><th class="tr">平均工作天</th></tr></thead>'+
-      '<tbody>'+(partRows||'<tr><td colspan="9" class="tc">無</td></tr>')+'</tbody></table>';
+      '<tbody>'+(partRows||'<tr><td colspan="10" class="tc">無</td></tr>')+'</tbody></table>';
     h += '</div>';
   });
 
