@@ -1831,8 +1831,13 @@ ot_astag_ensure_schema($db);
 $AS_TAG_REQUIRE = ot_astag_require_save($db);
 // 清單那一欄的標籤名稱對照（含停用的定義，否則停用之後舊訂單會顯示空白）
 $AS_TAG_LABELS  = ot_astag_label_map($db);
-// 篩選下拉用的選項（一律用「本公司」的完整清單，否則廠內治具的訂單永遠篩不出來）
-$AS_TAG_FILTER_OPTS = ot_astag_options($db, true);
+// 篩選下拉用的選項（一律用「本公司」的完整清單，否則廠內治具的訂單永遠篩不出來）；
+// 2026-10-06 使用者要求：只列「目前真的有訂單在用」的標籤，定義了卻還沒有任何訂單用到的不要出現，
+// 免得清單一長串卻大半點了也篩不出東西。用量判定唯一來源 ot_astag_usage()，不要自己另外查一次。
+$AS_TAG_USAGE = ot_astag_usage($db);
+$AS_TAG_FILTER_OPTS = array_values(array_filter(ot_astag_options($db, true), function ($o) use ($AS_TAG_USAGE) {
+    return (int)($AS_TAG_USAGE[$o['tag_id']]['by_scope'][$o['scope']] ?? 0) > 0;
+}));
 if (!($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']))) {
     $ate_list = $conn->getAll("SELECT `user_cname`,`user_uname`,`id` FROM `user` WHERE `user_status`=63");
 
@@ -9826,16 +9831,27 @@ foreach($dCounts as $c) {
             if (hNon) h += '<optgroup label="非AS">' + hNon + '</optgroup>';
             return h;
         }
+        // 只列「目前真的有訂單在用」的標籤（2026-10-06 使用者要求），依 ASTAGCFG.usage（由 defs 一起載入）
+        // 判定；正在篩選中的那一個即使用量變成 0 也要留著，不然選到一半清單突然把它洗掉會很困惑。
+        function astagOptsWithUsage(opts, keepKey) {
+            return (opts || []).filter(function (o) {
+                if (keepKey && o.key === keepKey) return true;
+                var u = (ASTAGCFG.usage || {})[o.tag_id];
+                var n = (u && u.by_scope) ? (parseInt(u.by_scope[o.scope], 10) || 0) : 0;
+                return n > 0;
+            });
+        }
         function astagSyncFilterOptions(opts) {
             var $f = $('#filter-as-tag');
             if (!$f.length) return;
             var cur = $f.val() || '';
             var h = '<option value="">全部標籤</option><option value="__none__">尚未設定標籤</option>';
+            var used = astagOptsWithUsage(opts, cur);
             var stillThere = (cur === '' || cur === '__none__');
-            (opts || []).forEach(function (o) { if (o.key === cur) stillThere = true; });
-            h += astagOptionsGroupedHtml(opts);
+            used.forEach(function (o) { if (o.key === cur) stillThere = true; });
+            h += astagOptionsGroupedHtml(used);
             $f.html(h).val(stillThere ? cur : '');
-            // 目前篩的標籤被停用／刪掉了：退回「全部標籤」並重新查一次，
+            // 目前篩的標籤被停用／刪掉了（或已經沒有任何訂單在用）：退回「全部標籤」並重新查一次，
             // 不然畫面上的清單還是舊篩選的結果、下拉却已經回到「全部」。
             if (!stillThere && typeof fetchTableData === 'function') fetchTableData(1);
         }
