@@ -1256,11 +1256,15 @@ function ot_astag_backfill_orders(PDO $db, array $f = [], int $page = 1, int $pe
 }
 
 /**
- * 批次補設定：把一個標籤套到「符合條件、而且還沒有標籤」的訂單上。
+ * 批次補設定：把一個標籤套到符合條件的訂單上。
  * 兩種用法：
  *   ① 整組（同一個製程文字）：$f['pi_exact'] 給那組文字
  *   ② 逐筆勾選：$orderIds 給訂單 id 清單
- * **一律只填空白、不覆蓋已設定的**（使用者明確要求），靠 WHERE as_tag_id IS NULL 保證。
+ * 預設**只填空白、不覆蓋已設定的**，靠 WHERE as_tag_id IS NULL 保證；$f['overwrite']=1 時才會
+ * 覆蓋已經設定好的（2026-10-06 使用者交辦放寬，見下方 overwrite 守門的註解），這種情況下一律
+ * 強制視同 include_tagged=1（不然 ot_astag_backfill_where() 預設加的 as_tag_id IS NULL 會把
+ * 已設定的那幾筆連同 WHERE 本身就濾掉，overwrite 傳了也沒用——呼叫端忘記一起帶 include_tagged
+ * 不該讓這支函式悄悄變成 0 筆，一定要在這裡自己把兩者綁在一起，不要靠呼叫端自己記得）。
  * @return array ['ok'=>bool,'applied'=>int,'msg'=>string]
  */
 if (!function_exists('ot_astag_backfill_apply')) {
@@ -1270,6 +1274,7 @@ function ot_astag_backfill_apply(PDO $db, $tagId, $scope, array $f = [], array $
     $tagId = (int)$tagId;
     $scope = trim((string)$scope);
     if ($tagId <= 0) return ['ok' => false, 'applied' => 0, 'msg' => '請選擇要套用的標籤'];
+    if (!empty($f['overwrite'])) $f['include_tagged'] = 1;
 
     // 標籤本身要存在且啟用、變體要真的提供（不檢查客戶，下面依訂單逐批判定）
     $okVariant = false; $isOwnOnly = false; $label = '';
@@ -1293,10 +1298,13 @@ function ot_astag_backfill_apply(PDO $db, $tagId, $scope, array $f = [], array $
     } elseif (!isset($f['pi_exact'])) {
         return ['ok' => false, 'applied' => 0, 'msg' => '請先選定一組製程文字或勾選要設定的訂單（避免整批誤套）'];
     }
-    // 覆蓋模式一律只能「勾選的那幾張」，不接受整組套用——
-    // 改掉已經設定好的 AS 認定是不可逆的，不該用一個製程文字就掃掉幾百張。
-    if (!empty($f['overwrite']) && !$ids) {
-        return ['ok' => false, 'applied' => 0, 'msg' => '改綁定（覆蓋已設定）只能逐筆勾選，不開放整組套用。'];
+    // 覆蓋模式原本一律只能「勾選的那幾張」，2026-10-06 使用者交辦放寬：
+    // 「依製程文字分組」畫面上管理員看得到這一組目前掛著什麼標籤（目前標籤欄）、幾張，
+    // 選定單一組（pi_exact，精確比對，不是模糊的 kw）也視同「已經審視過範圍」一併放行；
+    // 真正要擋的是**只靠關鍵字模糊比對**就整批覆蓋（那才是「一個關鍵字掃掉幾百張」的原風險），
+    // 所以這裡只要有 pi_exact 或 $ids 任一個就放行，純粹只有 kw/year 條件、兩者都沒有才擋下。
+    if (!empty($f['overwrite']) && !$ids && !isset($f['pi_exact'])) {
+        return ['ok' => false, 'applied' => 0, 'msg' => '改綁定（覆蓋已設定）只能逐筆勾選，或指定單一組製程文字整組套用，不開放用關鍵字模糊整批覆蓋。'];
     }
     // 廠內治具只能套在客戶＝本公司的訂單上（與單筆存檔同一條規則，鐵律8）
     if ($isOwnOnly) {

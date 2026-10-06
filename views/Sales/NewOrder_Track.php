@@ -9925,16 +9925,18 @@ foreach($dCounts as $c) {
         }
         function astagBfGroups() {
             $('#bf-group-msg').text('');
-            $('#bf-group-tbody').html('<tr><td colspan="7" class="text-center" style="color:#aaa;padding:16px;">查詢中…</td></tr>');
+            $('#bf-group-tbody').html('<tr><td colspan="8" class="text-center" style="color:#aaa;padding:16px;">查詢中…</td></tr>');
             var f = astagBfFilter(); f.action = 'backfill_groups'; f.limit = 200;
             var showAll = astagBfShowAll();
+            $('#bf-group-check-all').prop('checked', false);
             astagCfgApi(f, function (res) {
-                if (!res.success) { $('#bf-group-tbody').html('<tr><td colspan="7" class="text-center text-danger" style="padding:16px;">' + escapeHtml(res.message || '查詢失敗') + '</td></tr>'); return; }
+                if (!res.success) { $('#bf-group-tbody').html('<tr><td colspan="8" class="text-center text-danger" style="padding:16px;">' + escapeHtml(res.message || '查詢失敗') + '</td></tr>'); return; }
                 ASTAGCFG.optsAll = res.options_all || [];
                 ASTAGCFG.bfGroups = res.rows || [];
                 astagRenderSummary(res.summary || {});
+                astagBfGroupBulkBarInit();
                 if (!ASTAGCFG.bfGroups.length) {
-                    $('#bf-group-tbody').html('<tr><td colspan="7" class="text-center" style="color:#27ae60;padding:16px;">'
+                    $('#bf-group-tbody').html('<tr><td colspan="8" class="text-center" style="color:#27ae60;padding:16px;">'
                         + (showAll ? '這個條件底下查不到任何訂單。' : '這個條件底下已經沒有未設定標籤的訂單了 🎉') + '</td></tr>');
                     return;
                 }
@@ -9942,7 +9944,7 @@ foreach($dCounts as $c) {
                 ASTAGCFG.bfGroups.forEach(function (g, i) {
                     var rng = (g.date_from || '').replace(/-/g, '.') + ((g.date_to && g.date_to !== g.date_from) ? ' ～ ' + g.date_to.replace(/-/g, '.') : '');
                     // 目前標籤欄：showAll 時才查得到 breakdown；全部還沒設定就印「尚未設定」，
-                    // 混著既有標籤與未設定的話把兩者都列出來（下面套用按鈕只補未設定那幾筆）
+                    // 混著既有標籤與未設定的話把兩者都列出來
                     var tagCell;
                     if (!showAll) {
                         tagCell = '<span style="color:#aaa;">尚未設定</span>';
@@ -9955,7 +9957,12 @@ foreach($dCounts as $c) {
                         }).join('')
                         + (g.untagged_n > 0 ? '<br><span style="font-size:10px;color:#8a5a2b;">尚未設定 ' + astagNum(g.untagged_n) + ' 張</span>' : '');
                     }
+                    // 這一組已經有標籤了（tagged_n>0）＝套用這組會變成「覆蓋」，按鈕改走danger配色
+                    // 提醒使用者，但**不再 disabled**——2026-10-06 使用者交辦：指定單一組（pi_exact，
+                    // 畫面上看得到目前標籤與筆數）要能直接覆蓋，不用被迫去逐筆設定一張一張勾。
+                    var hasTagged = (g.tagged_n || 0) > 0;
                     h += '<tr data-i="' + i + '">'
+                       + '<td style="text-align:center;"><input type="checkbox" class="bf-g-chk" data-i="' + i + '"></td>'
                        + '<td style="word-break:break-all;">' + (g.pi ? escapeHtml(g.pi) : '<span style="color:#aaa;">（製程欄空白）</span>')
                        + (g.own_n > 0 ? '<br><span style="font-size:10px;color:#8a5a2b;">含本公司訂單 ' + astagNum(g.own_n) + ' 張</span>' : '') + '</td>'
                        + '<td style="text-align:right;font-weight:700;">' + astagNum(g.n) + '</td>'
@@ -9963,9 +9970,8 @@ foreach($dCounts as $c) {
                        + '<td style="font-size:11px;">' + tagCell + '</td>'
                        + '<td>' + astagTagSelectHtml('', g.suggest, 'bf-g-tag') + '</td>'
                        + '<td style="font-size:11px;color:#777;">' + escapeHtml(g.suggest_why || '') + '</td>'
-                       + '<td><button type="button" class="btn btn-xs btn-primary" onclick="astagBfApplyGroup(' + i + ')"'
-                       +   (g.untagged_n === 0 && showAll ? ' disabled title="這一組全部都已經設定過了，請到逐筆設定改綁定"' : '')
-                       +   '>套用這組</button></td>'
+                       + '<td><button type="button" class="btn btn-xs ' + (hasTagged ? 'btn-default' : 'btn-primary') + '" onclick="astagBfApplyGroup(' + i + ')">'
+                       +   (hasTagged ? '覆蓋這組' : '套用這組') + '</button></td>'
                        + '</tr>';
                 });
                 $('#bf-group-tbody').html(h);
@@ -9976,13 +9982,104 @@ foreach($dCounts as $c) {
                 }
             });
         }
+        /** 表頭全選／取消全選（只影響目前畫面上看得到的列） */
+        function astagBfGroupCheckAll() {
+            $('.bf-g-chk').prop('checked', $('#bf-group-check-all').is(':checked'));
+            astagBfGroupUpdateSelCount();
+        }
+        function astagBfGroupSelectedIdx() {
+            var out = [];
+            $('.bf-g-chk:checked').each(function () { out.push(parseInt($(this).data('i'), 10)); });
+            return out;
+        }
+        function astagBfGroupUpdateSelCount() { $('#bf-g-sel-count').text(astagBfGroupSelectedIdx().length); }
+        $(document).on('change', '.bf-g-chk', astagBfGroupUpdateSelCount);
+
+        /** 每次重新查詢分組清單都呼叫一次：重建「統一設成」下拉、歸零勾選計數與按鈕狀態 */
+        function astagBfGroupBulkBarInit() {
+            $('#bf-group-bulk-tag').html('<option value="">（請選擇）</option>'
+                + (ASTAGCFG.optsAll || []).map(function (o) {
+                    return '<option value="' + escapeHtml(o.key) + '">' + escapeHtml(o.label) + (o.own_only ? '（限本公司）' : '') + '</option>';
+                }).join(''));
+            $('#bf-g-sel-count').text(0);
+            $('#bf-group-bulk-msg').text('');
+            astagBfGroupBulkDisarm();
+        }
+        function astagBfGroupBulkDisarm() {
+            clearTimeout(window._bfGroupBulkTimer);
+            $('#btn-bf-group-bulk').data('armed', 0).removeClass('btn-danger').addClass('btn-primary')
+                .html('<i class="fa fa-check"></i> 套用到勾選的組');
+        }
         /**
-         * 套用某一組（2026-10-02 使用者回報後改成「就地 AJAX 更新」）：
-         *  ・**不跳確認視窗**——這個動作本來就只填空白、不覆蓋已設定的，而且每一組都要按一次，
-         *    每次都確認一遍會讓 700 多種寫法根本補不完。
+         * 框選多組，統一設成同一個標籤（2026-10-06 使用者交辦）。與「套用本頁全部建議標籤」
+         * 不同——那個是每組各自用自己的建議值，這個是勾選的全部組統一設成同一個人工指定的標籤，
+         * 所以就算勾到已經設定過標籤的組也會一併處理（逐組判斷要不要帶 overwrite）。
+         * 勾選裡只要有任何一組已經有標籤，就先跳兩段式確認並講清楚有幾組、幾張會被覆蓋。
+         */
+        function astagBfGroupBulkApply() {
+            var idxs = astagBfGroupSelectedIdx();
+            if (!idxs.length) { $('#bf-group-bulk-msg').css('color', '#DD5138').text('請先勾選要設定的組'); return; }
+            var key = $('#bf-group-bulk-tag').val() || '';
+            if (!key) { $('#bf-group-bulk-msg').css('color', '#DD5138').text('請選擇要設成哪一個標籤'); return; }
+            var lbl = ''; ASTAGCFG.optsAll.forEach(function (o) { if (o.key === key) lbl = o.label; });
+            var todo = [], totN = 0, overwriteN = 0, overwriteGroups = 0;
+            idxs.forEach(function (i) {
+                var g = ASTAGCFG.bfGroups[i];
+                if (!g) return;
+                var ow = (g.tagged_n || 0) > 0;
+                todo.push({ i: i, pi: g.pi, overwrite: ow });
+                totN += g.n;
+                if (ow) { overwriteN += g.tagged_n; overwriteGroups++; }
+            });
+            if (!todo.length) { $('#bf-group-bulk-msg').css('color', '#DD5138').text('勾選的組都已經不在清單上了，請重新查詢'); return; }
+            var $btn = $('#btn-bf-group-bulk');
+            if (!$btn.data('armed')) {
+                var msg = overwriteN > 0
+                    ? ('確定套用？其中 ' + overwriteGroups + ' 組共 ' + astagNum(overwriteN) + ' 張已設定過標籤，會被覆蓋。再按一次')
+                    : ('確定套用 ' + todo.length + ' 組／' + astagNum(totN) + ' 張？再按一次');
+                $btn.data('armed', 1).removeClass('btn-primary').addClass('btn-danger')
+                    .html('<i class="fa fa-exclamation-triangle"></i> ' + msg);
+                $('#bf-group-bulk-msg').css('color', '#8a5a2b').text('4 秒內沒再按就取消');
+                clearTimeout(window._bfGroupBulkTimer);
+                window._bfGroupBulkTimer = setTimeout(function () { astagBfGroupBulkDisarm(); $('#bf-group-bulk-msg').text(''); }, 4000);
+                return;
+            }
+            astagBfGroupBulkDisarm();
+            var p = key.split(':'), f = astagBfFilter(), done = 0, applied = 0;
+            $('#bf-group-bulk-msg').css('color', '#888').text('套用中…0/' + todo.length);
+            (function next() {
+                if (!todo.length) {
+                    $('#bf-group-bulk-msg').css('color', '#27ae60').text('完成：共套用 ' + astagNum(applied) + ' 張訂單');
+                    $('#bf-group-check-all').prop('checked', false);
+                    astagBfGroupUpdateSelCount();
+                    return;   // 就地標記就好，不重查整份清單也不重載主表格（跟既有的套用邏輯同一套，不要閃爍）
+                }
+                var t = todo.shift();
+                var payload = { action: 'backfill_apply', tag_id: p[0], scope: p[1], pi_exact: t.pi,
+                                 year: f.year, kw: f.kw, include_cancelled: f.include_cancelled };
+                if (f.include_tagged) { payload.include_tagged = f.include_tagged; if (f.only_tag) payload.only_tag = f.only_tag; }
+                if (t.overwrite) payload.overwrite = 1;
+                astagCfgApi(payload, function (res) {
+                    done++;
+                    if (res.success) {
+                        applied += parseInt(res.applied || 0, 10);
+                        ASTAGCFG.bfDirty = true;
+                        astagRenderSummary(res.summary || {});
+                        astagBfMarkRowDone($('#bf-group-tbody tr[data-i="' + t.i + '"]'), res.applied, lbl);
+                    }
+                    $('#bf-group-bulk-msg').text('套用中…' + done + '/' + (done + todo.length));
+                    next();
+                });
+            })();
+        }
+        /**
+         * 套用某一組（2026-10-02 使用者回報後改成「就地 AJAX 更新」；2026-10-06 使用者交辦
+         * 開放覆蓋已設定的組）：
+         *  ・這一組**全部還沒設定**時不跳確認——跟原本行為一樣，一組一組補空白不必每次確認。
+         *  ・這一組**已經有標籤**時改成覆蓋，走兩段式確認（跟「套用本頁全部」同一套，不用 confirm()，
+         *    連續按多次 Chrome 會把 confirm() 靜默擋成 false，變成「按了沒反應」）。
          *  ・**不重新查詢整份清單、也不重載主表格**——那會整個畫面閃一下，使用者原話「不要整個畫面
-         *    閃爍重新載入」。成功後只把那一列就地換成結果（它已經不屬於「未設定」了），
-         *    順便用後端回來的 summary 更新上方數字。主清單改在**關閉這個跳窗時**才刷新一次。
+         *    閃爍重新載入」。成功後只把那一列就地換成結果，順便用後端回來的 summary 更新上方數字。
          */
         function astagBfApplyGroup(i) {
             var g = ASTAGCFG.bfGroups[i];
@@ -9993,19 +10090,31 @@ foreach($dCounts as $c) {
             var lbl = ''; ASTAGCFG.optsAll.forEach(function (o) { if (o.key === key) lbl = o.label; });
             var $btn = $tr.find('button');
             if ($btn.prop('disabled')) return;                  // 連點保護
+            var overwrite = (g.tagged_n || 0) > 0;
+            if (overwrite && !$btn.data('armed')) {
+                $btn.data('armed', 1).removeClass('btn-default').addClass('btn-danger')
+                    .html('<i class="fa fa-exclamation-triangle"></i> 確定覆蓋 ' + astagNum(g.tagged_n) + ' 張？再按一次');
+                $('#bf-group-msg').css('color', '#8a5a2b').text('這一組已有 ' + astagNum(g.tagged_n) + ' 張設定過標籤，再按一次就會覆蓋（4 秒內沒再按就取消）');
+                clearTimeout($btn.data('timer'));
+                $btn.data('timer', setTimeout(function () {
+                    $btn.data('armed', 0).removeClass('btn-danger').addClass('btn-default').text('覆蓋這組');
+                }, 4000));
+                return;
+            }
+            clearTimeout($btn.data('timer'));
             $btn.prop('disabled', true).text('套用中…');
             $('#bf-group-msg').text('');
-            // 把目前的篩選（含 include_tagged／only_tag，showAll 時才有）一併帶給 apply——
-            // 這裡刻意不帶 overwrite：後端 ot_astag_backfill_apply() 沒有 overwrite 一律只補
-            // as_tag_id IS NULL 那幾筆，所以即使這組已經有人設過標籤，這顆按鈕也只會補上
-            // 還沒設定的那幾張，不會覆蓋別人已經選好的（要覆蓋請到「逐筆設定」勾選）。
+            // 把目前的篩選（含 include_tagged／only_tag，showAll 時才有）一併帶給 apply；
+            // 這一組有已設定的才帶 overwrite（後端 ot_astag_backfill_apply() 2026-10-06 已放寬：
+            // 指定單一 pi_exact 時覆蓋不必再逐筆勾選），沒有已設定的仍只補空白、不留覆蓋歷程。
             var p = key.split(':'), f = astagBfFilter();
             var payload = { action: 'backfill_apply', tag_id: p[0], scope: p[1], pi_exact: g.pi,
                              year: f.year, kw: f.kw, include_cancelled: f.include_cancelled };
             if (f.include_tagged) { payload.include_tagged = f.include_tagged; if (f.only_tag) payload.only_tag = f.only_tag; }
+            if (overwrite) payload.overwrite = 1;
             astagCfgApi(payload, function (res) {
                 if (!res.success) {
-                    $btn.prop('disabled', false).text('套用這組');
+                    $btn.prop('disabled', false).text(overwrite ? '覆蓋這組' : '套用這組');
                     $('#bf-group-msg').css('color', '#DD5138').text(res.message || '套用失敗');
                     return;
                 }
@@ -10028,7 +10137,7 @@ foreach($dCounts as $c) {
         /** 列都清空了就給一句話，不要留一張空表格（也不要自動重查造成閃爍） */
         function astagBfEmptyCheck() {
             if ($('#bf-group-tbody tr').length) return;
-            $('#bf-group-tbody').html('<tr><td colspan="7" class="text-center" style="color:#8a5a2b;padding:16px;">'
+            $('#bf-group-tbody').html('<tr><td colspan="8" class="text-center" style="color:#8a5a2b;padding:16px;">'
                 + '這一批都設定完了。按上方【<b>重新查詢</b>】載入下一批，或切到「逐筆設定」處理零散的尾數。</td></tr>');
         }
         function astagBfApplyAllSuggest() {
@@ -13049,13 +13158,14 @@ foreach($dCounts as $c) {
                 「訂單分析那一套全製／單製關鍵字規則」推出來的，<b>理由欄會寫出它命中了哪個字</b>——
                 請確認過再套用（建議不會自動寫入任何資料）。把上面「顯示」切成「全部（含已設定）」
                 再配合關鍵字／只看標籤篩選，可以找出哪些製程寫法目前被設成某個標籤、要不要重新分類；
-                <b>套用這組一律只補目前還沒設定的那幾筆，不會動到已經設定好的</b>（要改已經設定好的，
-                請切到「逐筆設定」勾選要改的訂單）。
+                <b>這一組還沒設定過的直接套用補空白，已經設定過的改按「覆蓋這組」（二次確認後才會真的
+                覆蓋、每一筆都留得下變更歷程）</b>；也可以用左側勾選框一次框選多組，統一設成同一個標籤。
               </div>
               <div style="border:1px solid #ddd;border-radius:4px;overflow-x:auto;">
-                <table class="table table-condensed table-striped" style="margin:0;font-size:12px;min-width:960px;">
+                <table class="table table-condensed table-striped" style="margin:0;font-size:12px;min-width:1000px;">
                   <thead><tr style="background:#f5f5f5;">
-                    <th style="width:200px;">製程文字</th>
+                    <th style="width:30px;text-align:center;"><input type="checkbox" id="bf-group-check-all" onchange="astagBfGroupCheckAll()" title="全選本頁"></th>
+                    <th style="width:190px;">製程文字</th>
                     <th style="width:60px;text-align:right;">筆數</th>
                     <th style="width:150px;">接單日期範圍</th>
                     <th style="width:150px;">目前標籤</th>
@@ -13063,13 +13173,22 @@ foreach($dCounts as $c) {
                     <th>系統建議的理由</th>
                     <th style="width:80px;"></th>
                   </tr></thead>
-                  <tbody id="bf-group-tbody"><tr><td colspan="7" class="text-center" style="color:#aaa;padding:16px;">載入中…</td></tr></tbody>
+                  <tbody id="bf-group-tbody"><tr><td colspan="8" class="text-center" style="color:#aaa;padding:16px;">載入中…</td></tr></tbody>
                 </table>
               </div>
               <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                 <button type="button" id="btn-bf-all" class="btn btn-sm btn-warning" onclick="astagBfApplyAllSuggest()">
                   <i class="fa fa-check-square-o"></i> 套用本頁全部「建議標籤」</button>
-                <span style="font-size:11px;color:#888;">點下去會先變成「確定？再按一次」並告訴您影響幾組、幾張。沒有建議的組不會被動到。</span>
+                <span style="font-size:11px;color:#888;">點下去會先變成「確定？再按一次」並告訴您影響幾組、幾張。只會補還沒設定的，沒有建議或全部都已設定的組不會被動到。</span>
+              </div>
+              <?php /* 2026-10-06 使用者交辦：框選多組後統一設成同一個標籤（跟上面「套用全部建議」不同——
+                       那個是每組各自用自己的建議值，這個是勾選的全部組統一設成同一個人工指定的標籤）。 */ ?>
+              <div style="margin-top:6px;padding-top:8px;border-top:1px dashed #E4D3BC;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <span style="font-size:12px;">把勾選的 <b id="bf-g-sel-count">0</b> 組統一設成：</span>
+                <select id="bf-group-bulk-tag" class="form-control input-sm" style="width:220px;"></select>
+                <button type="button" id="btn-bf-group-bulk" class="btn btn-sm btn-primary" onclick="astagBfGroupBulkApply()">
+                  <i class="fa fa-check"></i> 套用到勾選的組</button>
+                <span id="bf-group-bulk-msg" style="font-size:12px;"></span>
                 <span id="bf-group-msg" style="font-size:12px;margin-left:auto;"></span>
               </div>
             </div>
