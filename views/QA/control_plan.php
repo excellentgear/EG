@@ -405,14 +405,18 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
             <div class="cp-note">
                 <b>檢驗類別自動判定（IQC／IPQC／FQC）</b>：自動帶入製程列時，依下面規則判定每一道製程後面
                 接哪種檢驗。判定結果存進每一道製程列的「檢驗類別」欄位，<b>之後是人工可覆蓋的欄位</b>
-                （編輯畫面逐列下拉可改，或按「重新判定檢驗類別」套用目前規則）。
+                （編輯畫面逐列下拉可改，或按「重新判定檢驗類別」套用目前規則；但「重新判定」只重算分類，
+                不會重新插入下面③的 FQC 合成列，那個只在自動帶入預覽時處理一次）。
                 <div style="margin-top:6px;">
                     <b>IQC（進料檢驗）</b>＝客供料的檢驗項目，<b>系統自動判定、不必設定</b>：
-                    一條製程鏈裡最早出現的「客供料製程」（下方目前認定清單）本身就是 IQC。<br>
+                    一條製程鏈裡最早出現的「客供料製程」（下方①目前認定清單）本身就是 IQC；查無 SIP 時
+                    會退回「線上檢驗」自己的檢驗標準庫（SOP/SIP 都還沒建時至少看得到現場在用的標準）。<br>
                     <b>IPQC（製程檢驗）</b>＝SOP 中的檢驗項目，<b>預設都是 IPQC</b>（介於 IQC 與 FQC 之間的其他
                     製程維持 IPQC 不必另設）；若該製程查無已核准的 SOP，畫面會標出「缺SOP」提醒補建。<br>
-                    <b>FQC（最終檢驗）</b>＝網頁「成品檢驗」依 SIP 檢樣，<b>包裝前一道製程固定是 FQC</b>
-                    （見下方①包裝代號設定）；若那一道查無真正已核准的 SIP，畫面會標出「缺SIP」提醒補建。<br>
+                    <b>FQC（最終檢驗）</b>＝網頁「成品檢驗」依 SIP 檢樣，<b>不是鏈上某一道製程被改判，而是在
+                    ③登記的來源製程與包裝之間插入一道新的合成列</b>（例：齒研若登記為FQC來源，齒研自己仍然是
+                    IPQC，另外多一列「齒研（最終檢驗）」＝FQC，借用齒研的 SIP 內容）；查無真正已核准的 SIP
+                    時畫面會標出「缺SIP」提醒補建。<br>
                     <b>OQC（出貨檢驗）</b>＝包裝自主檢驗，走獨立的
                     <a href="../pm/packing_schedule.php" target="_blank">包裝排程模組</a>（自己有檢驗單號），
                     <b>本頁刻意不做 OQC 分類</b>，包裝那一列維持「非檢驗點」。
@@ -422,14 +426,20 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
                 <span class="muted">（ProcessNo=138 或製程名稱含「客供料」，與成本推算同一份判準；
                 要調整請到主檔管理改製程名稱，這裡唯讀）</span></div>
             <div id="kgCodeList" style="margin-bottom:18px;min-height:26px;"></div>
-            <div style="margin-bottom:6px;"><b>①哪些製程代號是包裝製程</b>
-                <span class="muted">（包裝本身不算檢驗點，由管理員認定；包裝前一道製程固定接 FQC 最終檢驗）</span></div>
-            <div id="packCodeList" style="margin-bottom:6px;min-height:26px;"></div>
+            <div style="margin-bottom:6px;"><b>①目前認定的包裝製程</b>
+                <span class="muted">（讀「<a href="../pm/packing_schedule.php" target="_blank">包裝排程</a>→
+                包裝製程設定」的登記，與線上檢驗排除包裝站用的是同一份來源；要調整請到那一頁改，這裡唯讀）</span></div>
+            <div id="packCodeList" style="margin-bottom:18px;min-height:26px;"></div>
+            <div style="margin-bottom:6px;"><b>②哪些製程代號算「FQC來源」</b>
+                <span class="muted">（例：齒研、插齒——這道製程本身仍是 IPQC，系統會在它與包裝之間
+                額外插入一道「○○（最終檢驗）」FQC 合成列，借用它的 SIP 內容；同一條鏈只認最後一個
+                〈離包裝最近〉命中的來源；一個都沒登記就不插入）</span></div>
+            <div id="fqcCodeList" style="margin-bottom:6px;min-height:26px;"></div>
             <div class="ac-box" style="display:inline-block;margin-bottom:10px;">
-                <input type="text" id="packCodeAdd" placeholder="打字搜尋製程代號後點選加入" autocomplete="off" style="height:28px;min-width:260px;">
+                <input type="text" id="fqcCodeAdd" placeholder="打字搜尋製程代號後點選加入" autocomplete="off" style="height:28px;min-width:260px;">
             </div>
             <div style="margin-bottom:18px;">
-                <button class="btn-w" id="btnSaveInspCodes"><i class="fa fa-save"></i> 儲存包裝代號設定</button>
+                <button class="btn-w" id="btnSaveInspCodes"><i class="fa fa-save"></i> 儲存 FQC 來源設定</button>
             </div>
 
             <div class="cp-note <?= $tagInfo['ready'] ? '' : 'warn' ?>">
@@ -634,7 +644,7 @@ var CANVIEW  = <?= $P['view'] ? 'true' : 'false' ?>;
 
 var STAGES = [], CLASSES = [], REACTS = [], ASMETA = {}, TAGSTATUS = {};
 var ASTAGDEFS = [], EXCLTAGS = [], REQTAGS = [];   // 稽核製程標籤定義／被排除的／要求建 CP 的
-var KGCODES = [], PACKCODES = [], ASTAGINSP = {};   // 檢驗類別自動判定：客供料(IQC,唯讀)／包裝代號／AS稽核製程次站設定
+var KGCODES = [], PACKCODES = [], FQCCODES = [], ASTAGINSP = {};   // 檢驗類別自動判定：客供料(IQC,唯讀)／包裝(唯讀)／FQC來源／AS稽核製程次站設定
 var DOC = null;          // 目前編輯中的 CP
 var LIST_PAGE = 1;
 var PREVIEW = null;      // 自動帶入預覽結果
@@ -694,7 +704,8 @@ function boot(){
         REACTS = res.reaction_opts || []; ASMETA = res.as_doc || {};
         TAGSTATUS = res.tag_status || {};
         ASTAGDEFS = res.as_tag_defs || []; EXCLTAGS = res.excluded_as_tags || []; REQTAGS = res.required_as_tags || [];
-        KGCODES = res.kg_codes || []; PACKCODES = res.pack_codes || []; ASTAGINSP = res.as_tag_insp || {};
+        KGCODES = res.kg_codes || []; PACKCODES = res.pack_codes || []; FQCCODES = res.fqc_codes || [];
+        ASTAGINSP = res.as_tag_insp || {};
         fillStageSelects();
         loadList();
         renderAutoNote();
@@ -895,9 +906,12 @@ function renderProcs(){
           +  '<div class="proc-head">'
           +   '<span class="pname">'+(pi+1)+'. '+esc(p.process_name || ('製程 ' + (p.process_no || '')))+'</span>'
           +   (p.process_no ? '<span class="src-tag">#'+esc(p.process_no)+'</span>' : '')
-          +   (p.src === 'bom' ? '<span class="src-tag">來自製令</span>' : '<span class="src-tag">手動</span>')
+          +   (p.src === 'bom' ? '<span class="src-tag">來自製令</span>'
+               : p.src === 'fqc_insert' ? '<span class="src-tag" title="依「設定→②FQC來源」自動插入，可自行調整或刪除">自動插入(FQC)</span>'
+               : '<span class="src-tag">手動</span>')
           +   (+p.is_outsource ? '<span class="tag-s sg-2">委外</span>' : '')
           +   inspBadge(p.insp_stage, p.insp_gap)
+          +   (p.process_no ? '<button class="btn-w2 btn-xs2" data-swsip="'+pi+'" title="改用同製程大類的其他通用SIP，取代這一列目前的特性內容"><i class="fa fa-exchange"></i> 切換SIP</button>' : '')
           +   '<button class="btn-w2 btn-xs2" data-additem="'+pi+'" style="margin-left:auto;"><i class="fa fa-plus"></i> 新增特性</button>'
           +   '<button class="btn-w2 btn-xs2" data-upproc="'+pi+'"><i class="fa fa-arrow-up"></i></button>'
           +   '<button class="btn-w2 btn-xs2" data-dnproc="'+pi+'"><i class="fa fa-arrow-down"></i></button>'
@@ -980,7 +994,8 @@ function inspBadge(stage, gap){
     return h;
 }
 /* 特性列右上角小籤：這一列的規格是哪裡來的（cp_sip_items 的 src）——顯示一律大寫縮寫，不要印原始小寫代碼 */
-var ITEM_SRC_LABEL = { sip: 'SIP', sip_general: 'SIP(通用)', tpl: '範本', manual: '手動' };
+var ITEM_SRC_LABEL = { sip: 'SIP', sip_general: 'SIP(通用)', sip_general_cat: 'SIP(同大類通用)',
+    qcv2: '線上檢驗標準', tpl: '範本', tpl_cat: '範本(同大類)', manual: '手動' };
 function itemSrcLabel(src){ return ITEM_SRC_LABEL[src] || (src || ''); }
 function inspSelect(p, pi){
     var opts = [['', '—（包裝／不適用）'], ['IQC','IQC（進料檢驗）'], ['IPQC','IPQC（製程檢驗）'], ['FQC','FQC（最終檢驗）']];
@@ -1020,6 +1035,29 @@ $(document).on('click', '[data-additem]', function(){
     DOC.processes[pi].items.push({ char_no: (pi+1)+'-'+(DOC.processes[pi].items.length+1),
         sample_freq: s && s.default_freq ? s.default_freq : '', src: 'manual' });
     renderProcs();
+});
+$(document).on('click', '[data-swsip]', function(){
+    var pi = +$(this).data('swsip'), p = DOC.processes[pi], $btn = $(this);
+    if (!p || !p.process_no) return;
+    get('sip_candidates', { process_no: p.process_no }, function(res){
+        var rows = res.rows || [];
+        if (!rows.length) { toast('同製程大類找不到其他已核准的通用 SIP 可切換。', true); return; }
+        acShow($btn, rows, function(r){
+            return '<b>#'+esc(r.process_no)+' '+esc(r.process_name||'')+'</b>'
+                 + '　'+esc(r.title||('doc#'+r.doc_id))+'　<span class="muted">'+esc(r.ver_no||'')+'</span>';
+        }, function(r){
+            if (!confirm('改用「#'+r.process_no+' '+(r.process_name||'')+'　'+(r.title||'')+'」的 SIP 內容？\n這一列目前的特性會被取代（還沒按「儲存」前都可以再改回來）。')) return;
+            get('sip_switch_items', { process_no: r.process_no, stage_id: $('#eStage').val() || 0 }, function(res2){
+                var items = (res2.items || []).map(function(it, k){
+                    it.char_no = (pi + 1) + '-' + (k + 1);
+                    return it;
+                });
+                DOC.processes[pi].items = items;
+                renderProcs();
+                toast('已改用 #' + r.process_no + ' 的通用 SIP，共 ' + items.length + ' 項特性，請確認後按「儲存」。');
+            });
+        });
+    });
 });
 $(document).on('click', '[data-delitem]', function(e){
     e.preventDefault();
@@ -1598,11 +1636,12 @@ function renderCfg(){
     $('#tReact tbody').html(h || reactRow({}));
 
     renderCodeChips('#kgCodeList', KGCODES, true);
-    renderCodeChips('#packCodeList', PACKCODES);
+    renderCodeChips('#packCodeList', PACKCODES, true);
+    renderCodeChips('#fqcCodeList', FQCCODES);
     renderTagCfg();
 }
 
-/* 包裝代號的製程代號清單：標籤式 chip，可逐個 × 移除；readOnly=true 時（客供料清單）不給刪 */
+/* FQC來源製程代號清單：標籤式 chip，可逐個 × 移除；readOnly=true 時（客供料／包裝清單）不給刪 */
 function renderCodeChips(sel, list, readOnly){
     var h = '';
     (list || []).forEach(function(c, i){
@@ -1616,7 +1655,7 @@ function renderCodeChips(sel, list, readOnly){
 $(document).on('click', '[data-chipdel]', function(e){
     e.preventDefault();
     var sel = $(this).data('chiplist'), i = +$(this).data('chipdel');
-    var list = PACKCODES;
+    var list = FQCCODES;
     list.splice(i, 1);
     renderCodeChips(sel, list);
 });
@@ -1635,15 +1674,15 @@ function bindProcessAc($inp, onPick){
         }, 300);
     });
 }
-bindProcessAc($('#packCodeAdd'), function(r){
-    if (!PACKCODES.some(function(c){ return +c.no === +r.ProcessNo; })) PACKCODES.push({ no: +r.ProcessNo, name: r.ProcessName || '' });
-    $('#packCodeAdd').val(''); renderCodeChips('#packCodeList', PACKCODES);
+bindProcessAc($('#fqcCodeAdd'), function(r){
+    if (!FQCCODES.some(function(c){ return +c.no === +r.ProcessNo; })) FQCCODES.push({ no: +r.ProcessNo, name: r.ProcessName || '' });
+    $('#fqcCodeAdd').val(''); renderCodeChips('#fqcCodeList', FQCCODES);
 });
 $('#btnSaveInspCodes').on('click', function(){
-    post('pack_codes_save', { codes: JSON.stringify(PACKCODES.map(function(c){ return c.no; })) }, function(res2){
-        PACKCODES = res2.codes || PACKCODES;
-        renderCodeChips('#packCodeList', PACKCODES);
-        toast('已儲存包裝代號設定。');
+    post('fqc_codes_save', { codes: JSON.stringify(FQCCODES.map(function(c){ return c.no; })) }, function(res2){
+        FQCCODES = res2.codes || FQCCODES;
+        renderCodeChips('#fqcCodeList', FQCCODES);
+        toast('已儲存 FQC 來源設定。');
     });
 });
 function clsRow(c){

@@ -804,6 +804,38 @@ function cp_sip_items(PDO $db, ?int $partDId, ?int $processNo): array
         } catch (Throwable $e) {}
     }
 
+    /* 退回「線上檢驗」(inspection_entry_v2.php) 自己的檢驗標準庫（qc_inspection_item，
+       料號專屬、沒有通用版）——使用者 2026-10-06 明確要求：SIP 完全查無時（連通用、
+       同製程大類都沒有）才退到這裡，不可以優先於正式 SIP 文件；比對一律用 process_no
+       （2026-10-06 已補欄位並回填，不信任舊有的自由文字 process_name 比對，同一製程
+       現場有「車床」「車 床」兩種寫法）。欄位格式轉成跟 ss_item 一樣的形狀，下游顯示
+       邏輯不必另外判斷來源是哪一套系統。 */
+    if ($partDId) {
+        $v2 = qc_v2_items_by_process($db, $partDId, $processNo);
+        if ($v2) {
+            $items = array_map(function ($r) {
+                $std = trim((string)($r['standard_text'] ?? ''));
+                $plus = $r['plus_tolerance']; $minus = $r['minus_tolerance'];
+                $up = ''; $lo = ''; $qChar = '';
+                if ((string)($r['result_type'] ?? '') === 'NUMERIC' && $std !== '' && is_numeric($std)) {
+                    $base = (float)$std;
+                    $up = $plus !== null ? (string)($base + (float)$plus) : $std;
+                    $lo = $minus !== null ? (string)($base - (float)$minus) : $std;
+                } else {
+                    $qChar = $std;
+                }
+                return [
+                    'item_id' => $r['item_id'], 'seq' => (int)($r['sort_order'] ?? 0),
+                    'ctrl_point' => (string)($r['item_name'] ?? ''), 'q_char' => $qChar,
+                    'up_limit' => $up, 'lo_limit' => $lo,
+                    'method' => '', 'tool_no' => '', 'tool_id' => null, 'freq' => '',
+                    'note' => '線上檢驗標準' . ($r['item_code'] !== '' ? '　編號' . $r['item_code'] : ''),
+                ];
+            }, $v2);
+            return ['items' => $items, 'src' => 'qcv2', 'src_ref' => 'qcv2_part' . $partDId . '_proc' . $processNo];
+        }
+    }
+
     // 退回「依製程的檢驗項目預設值」範本（精準 process_no，查不到再退回同製程大類）
     $tplFetch = function (int $pno) use ($db) {
         try {
@@ -840,6 +872,65 @@ function cp_sip_items(PDO $db, ?int $partDId, ?int $processNo): array
     }
 
     return ['items' => [], 'src' => '', 'src_ref' => ''];
+}
+
+/**
+ * 同製程大類（process_type_id）底下，有哪些「通用SIP」可以選（切換器用，使用者
+ * 2026-10-06 明確要求：包裝常見同一大類底下分齒輪/非齒輪好幾份通用SIP，cp_sip_items()
+ * 自動只會抓到大類裡第一份找到的，管理員/使用者要能自己換成另一份）。
+ * 只回 scope='general' 且已核准的，排除 part 專屬文件（那個不該被挑去借給別的料號）；
+ * 固定依 process_no 排序，不是「最新的排前面」——切換器要的是逐一比較，不是猜哪份新。
+ */
+function cp_sip_general_candidates(PDO $db, int $processNo): array
+{
+    $typeId = cp_process_type_id($db, $processNo);
+    if (!$typeId) return [];
+    try {
+        $st = $db->prepare(
+            "SELECT d.doc_id, d.process_no, pn.ProcessName AS process_name, v.ver_id, v.ver_no, d.title
+               FROM ss_doc d
+               JOIN ss_ver v ON v.ver_id = d.cur_ver_id AND v.status='approved'
+               JOIN process_no pn ON pn.ProcessNo = d.process_no AND pn.process_type_id = ?
+              WHERE d.is_deleted=0 AND d.kind='sip' AND d.scope='general'
+              ORDER BY d.process_no, d.doc_id DESC"
+        );
+        $st->execute([$typeId]);
+        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 切換器選定某份通用SIP後，重新抓它的檢驗項目（格式與 cp_autofill_preview 組 items
+ * 用的完全一樣，前端直接替換那一列的 items，不必另外寫一套映射）。$stageFreq 比照
+ * autofill 的頻率覆蓋規則（階段預設優先，查無則用 SIP 自己的頻率）。
+ */
+function cp_sip_items_for_switch(PDO $db, int $processNo, string $stageFreq = ''): array
+{
+    $sip = cp_sip_items($db, null, $processNo);   // 切換器只挑 general，不走 part 專屬那一層
+    $out = [];
+    foreach ($sip['items'] as $k => $it) {
+        $up = trim((string)($it['up_limit'] ?? ''));
+        $lo = trim((string)($it['lo_limit'] ?? ''));
+        $specText = trim((string)($it['q_char'] ?? ''));
+        if ($up !== '' || $lo !== '') {
+            $num = function ($v) {
+                if ($v === '' || $v === null) return '';
+                return rtrim(rtrim(number_format((float)$v, 6, '.', ''), '0'), '.');
+            };
+            $rangeTxt = $num($lo) . ' ~ ' . $num($up);
+            $specText = $specText !== '' ? ($rangeTxt . '（' . $specText . '）') : $rangeTxt;
+        }
+        $freq = $stageFreq !== '' ? $stageFreq : trim((string)($it['freq'] ?? ''));
+        $out[] = [
+            'seq' => $k + 1, 'char_product' => trim((string)($it['ctrl_point'] ?? '')), 'char_process' => '',
+            'special_class_id' => null, 'special_class_text' => '', 'spec_text' => $specText,
+            'up_limit' => $up, 'lo_limit' => $lo, 'eval_method' => trim((string)($it['method'] ?? '')),
+            'tool_no' => trim((string)($it['tool_no'] ?? '')), 'tool_id' => (int)($it['tool_id'] ?? 0) ?: null,
+            'sample_size' => '', 'sample_freq' => $freq, 'control_method' => '', 'reaction_plan' => '',
+            'src' => $sip['src'] ?: 'manual', 'src_ref' => $sip['src_ref'] ?? '', 'note' => trim((string)($it['note'] ?? '')),
+        ];
+    }
+    return $out;
 }
 
 /**
@@ -1001,6 +1092,9 @@ function cp_autofill_preview(PDO $db, array $opt): array
     if ($bom !== '' && !$procs) {
         $res['warn'][] = '製令 ' . $bom . ' 查不到任何製程（bom_ing 無資料）。';
     }
+    // 插入FQC合成列（見六之二節⑤）要在這裡做——下面的 items 迴圈才會自然幫這道合成列
+    // 也撈一份 SIP 內容，不必另外寫一套抓取邏輯。
+    if ($procs) $procs = cp_insert_fqc_row($db, $procs);
     $tagSrc = $res['as_tag'] ?? null;
     $res['src'] = [
         'order_id'  => $orderId ?: null,
@@ -1137,45 +1231,57 @@ function cp_autofill_preview(PDO $db, array $opt): array
 /* ===================================================================
  * 六之二、檢驗類別自動判定（IQC／IPQC／FQC）
  *
- * 使用者定調（2026-10-05，二次）：四種檢驗類別在現場的真實對應——
+ * 使用者定調（2026-10-05／10-06，三輪）：四種檢驗類別在現場的真實對應——
  *   IQC  進料檢驗：客供料的檢驗項目。
  *   IPQC 製程中檢驗：SOP（製造製程說明書）中的檢驗項目。
- *   FQC  最終檢驗：網頁「成品檢驗」（線上檢驗模組），檢樣項目依該製程的 SIP。
+ *   FQC  最終檢驗：網頁「成品檢驗」（線上檢驗模組），檢樣項目依「登記為FQC來源」
+ *        的那道製程（例：齒研、插齒）的 SIP——**FQC 不是鏈上某一道製程本身被改判，
+ *        而是在它與包裝之間插入一道新的合成列**（使用者原話「我是要你在包裝跟前一道
+ *        製程中間增加一道叫FQC」；該道製程自己原本的分類〈例：齒研＝IPQC〉維持不變，
+ *        不會因為它同時是FQC來源就被相走）。
  *   OQC  出貨檢驗：網頁的「包裝自主檢驗表」（packing_schedule.php，各自有單號）——
  *        **本模組刻意不做 OQC 分類**（使用者拍板取消），包裝檢驗已經是獨立模組、
  *        自己有單號可查，不必在 CP 的 insp_stage 裡重複表達一次。
  *
- * 三條規則，優先序由下往上（下面的會覆蓋上面的）：
+ * 五條規則，優先序由下往上（下面的會覆蓋上面的）：
  *   ①預設＝IPQC（製程中間，介於 IQC 與 FQC 之間的一律是 IPQC）。
  *   ②**客供料自動判定**＝IQC：一條製程鏈只認**最早出現**的那一個客供料製程（沿用
  *     part_cost_lib.php 的 ppc_kg_set()＝ProcessNo=138 或製程名稱含「客供料」，
  *     與成本推算用的是同一份判準，不另設一份會走鐘的「IQC代號」清單）。
- *   ③管理員設定「哪些製程代號是包裝製程」——鏈中最早出現的包裝代號那一列本身
- *     不算檢驗點（packaging 走獨立的包裝自主檢驗，不在這裡分類），**它的前一道**
- *     固定＝FQC（使用者原話「包裝前一道一定是FQC」，不因查無SIP而改判）；若與②
- *     撞在同一列（鏈很短，客供料剛好就是包裝前一道），FQC 優先——包裝是結構事實、
- *     客供料判定只是猜測起點，短鏈時以確定的那條規則為準。
+ *   ③**包裝自動判定**：鏈中最早出現的包裝製程（沿用 packing_process_lib.php 的
+ *     pk_packing_process_nos()＝packing_schedule.php「包裝製程設定」的權威登記，
+ *     不在 CP 另存一份代號清單——2026-10-05 實測：CP 自己原本那份「包裝代號」
+ *     一直沒人設定，導致④的「次站規則」在沒有防護的情況下把 FQC 誤蓋到包裝本身，
+ *     使用者截圖回報「包裝不要顯示FQC」就是這個防護缺口的後果）。包裝本身
+ *     insp_stage=null（非檢驗點，走獨立的包裝自主檢驗）；**不再**把它的前一道
+ *     自動改判成 FQC——FQC 現在是下面⑤插入的獨立列，不是相走既有列。
  *   ④AS 稽核製程（訂單追蹤的「稽核製程」標籤，kind='process'）可逐個標籤**額外**設定
- *     「下一站固定是 IQC 或 FQC」，命中時覆蓋的是**該製程的下一列**（不是它自己），
- *     優先序最高（使用者原話：這是管理員對該稽核製程的明確業務判斷，一般規則判不出來
- *     的才靠②③，AS 稽核製程則直接讓管理員指定）。若下一列剛好是包裝列，不覆蓋
- *     （包裝本身不是檢驗點，覆蓋了反而看不出哪一列是FQC）。
- *
- * 「包裝代號」設定仍存在 CP 自己的 system_parameters（CP_PARAM_GROUP，只用來定位
- * 包裝在鏈中的位置），不寫進 ot_as_proc_tag（鐵律4：那張表屬訂單追蹤模組，本模組
- * 只讀不寫）。IQC 判定已改為自動偵測，不再需要管理員另外維護一份代號清單。
+ *     「下一站固定是 IQC 或 FQC」，命中時覆蓋的是**該製程的下一列**（不是它自己）。
+ *     若下一列剛好是包裝列或是⑤插入的合成FQC列，不覆蓋（包裝本身不是檢驗點；
+ *     合成列已經定案是FQC，覆蓋了也沒有意義）。
+ *   ⑤**FQC 合成列插入**（cp_insert_fqc_row()，唯一實作，在 cp_autofill_preview()
+ *     跑 items 迴圈「之前」就先插好，這樣合成列會跟其他列一樣自然撈到 SIP 內容，
+ *     不必另外寫一套抓取邏輯）：管理員登記「哪些製程代號算FQC來源」
+ *     （cp_fqc_codes()，比照舊的 IQC 代號設定模式——這裡沒有像客供料那種全站
+ *     通用的自動判準可借，只能讓管理員明確登記）。鏈中**最後一個**（離包裝最近）
+ *     符合登記的製程，在它與包裝之間插入一道新列：process_no 借用該製程的
+ *     process_no（SIP 內容因此直接共用、不必另外查）、process_name 加註
+ *     「（最終檢驗）」、insp_stage 直接定案='FQC'、src='fqc_insert'。
+ *     沒有包裝列時插在鏈尾；一個都沒登記命中時不插入（維持原樣）。
+ *     插入後是**一般的製程列**，可以手動調順序／改內容／刪除，不受保護。
  *
  * 文件缺口提示（使用者原話「無SOP時要求補SOP」「FQC一定要有此製程的SIP」）：
- * 分類本身不因缺文件而改判（IPQC 照樣預設、包裝前一道照樣FQC），但 cp_insp_gap_annotate()
- * 會逐列即時查——IPQC 列查無已核准 SOP、FQC 列查無**真正的**已核准 SIP（排除
- * ss_item_tpl 範本退路，那不算正式文件）——命中的補上 insp_gap='sop'/'sip'，供畫面
- * 顯示警示並引導去 SOP/SIP 模組補建。這一欄每次顯示都即時查、不落庫（與 insp_src
- * 同一種「顯示用」欄位），所以草稿、預覽、已存檔的 CP 都看得到最新缺口狀態。
+ * 分類本身不因缺文件而改判，但 cp_insp_gap_annotate() 會逐列即時查——IPQC 列查無
+ * 已核准 SOP、FQC 列查無**真正的**已核准 SIP（排除 ss_item_tpl 範本退路，那不算
+ * 正式文件）——命中的補上 insp_gap='sop'/'sip'，供畫面顯示警示並引導去 SOP/SIP
+ * 模組補建。這一欄每次顯示都即時查、不落庫（與 insp_src 同一種「顯示用」欄位），
+ * 所以草稿、預覽、已存檔的 CP 都看得到最新缺口狀態。
  *
  * 只在「自動帶入」（cp_autofill_preview，製程來自 BOM）算一次，存進 cp_process.insp_stage
  * 之後就是人工可覆蓋的欄位（比照 special_class_id 同一套思路）；手動新增的製程列
  * 預設 IPQC，不會被自動規則碰到。畫面另有「依設定重新判定」按鈕可在手動調整過
- * 製程順序／增刪列之後，重新套用規則（仍只套用在目前畫面的列，使用者確認後才存檔）。
+ * 製程順序／增刪列之後，重新套用規則（仍只套用在目前畫面的列，使用者確認後才存檔；
+ * 這顆按鈕只送 process_no 沒有 items，所以**不會**重新插入FQC合成列，只重算分類）。
  * =================================================================== */
 
 /** insp_stage 合法值正規化：非法值一律存 NULL，不讓壞資料寫進 ENUM 欄位爆例外。 */
@@ -1185,17 +1291,22 @@ function cp_insp_stage_norm($v): ?string
     return in_array($v, ['IQC', 'IPQC', 'FQC'], true) ? $v : null;
 }
 
-/** 設定：哪些製程代號是「包裝製程」（存 process_no 整數陣列） */
-function cp_pack_codes(PDO $db): array
+/**
+ * 設定：哪些製程代號算「FQC 來源」（存 process_no 整數陣列，例：齒研、插齒）。
+ * 這裡沒有像客供料(ppc_kg_set)那種全站通用、不分業種的自動判準可借——「哪道製程
+ * 是最終檢驗」是業務判斷（齒輪廠是齒研／插齒，別的業種可能是別的製程），只能讓
+ * 管理員明確登記，供 cp_insert_fqc_row() 判斷在哪裡插入合成的 FQC 列。
+ */
+function cp_fqc_codes(PDO $db): array
 {
-    $v = cp_param($db, 'pack_codes', []);
+    $v = cp_param($db, 'fqc_codes', []);
     return is_array($v) ? array_values(array_unique(array_map('intval', $v))) : [];
 }
-function cp_pack_codes_save(PDO $db, array $codes): void
+function cp_fqc_codes_save(PDO $db, array $codes): void
 {
     $codes = array_values(array_unique(array_filter(array_map('intval', $codes), function ($n) { return $n > 0; })));
     sort($codes);
-    cp_param_save($db, 'pack_codes', $codes);
+    cp_param_save($db, 'fqc_codes', $codes);
 }
 
 /** 設定：AS稽核製程標籤 → 下一站固定檢驗類別（tag_id => 'IQC'|'FQC'）。只收合法值與真實存在的tag_id。 */
@@ -1255,8 +1366,8 @@ function cp_compute_insp_stages(PDO $db, array $procs): array
 {
     if (!$procs) return $procs;
 
-    $kgSet     = array_flip(ppc_kg_set($db));   // 客供料製程（IQC），與 part_cost_lib 同一份判準
-    $packCodes = array_flip(cp_pack_codes($db));
+    $kgSet     = array_flip(ppc_kg_set($db));              // 客供料製程（IQC），與 part_cost_lib 同一份判準
+    $packCodes = array_flip(pk_packing_process_nos($db));  // 包裝製程，與 packing_schedule.php 同一份權威登記
     $asInsp    = cp_as_tag_insp($db);
 
     // 展開 AS 稽核製程 → process_no 對應（一個代號若同時屬於多個設了值的標籤，取第一個找到的）
@@ -1271,16 +1382,23 @@ function cp_compute_insp_stages(PDO $db, array $procs): array
         }
     }
 
-    // ①預設：全部 IPQC
-    foreach ($procs as &$p) { $p['insp_stage'] = 'IPQC'; $p['insp_src'] = 'default'; }
+    // ⑤插入的合成FQC列已經定案，一般規則一律跳過（不可被①~④改判或誤判成別的分類）
+    $isFqcInsert = function ($p) { return ($p['src'] ?? '') === 'fqc_insert'; };
+
+    // ①預設：全部 IPQC（合成列除外，它進來時就已經是 insp_stage=FQC/insp_src=fqc_insert）
+    foreach ($procs as &$p) {
+        if ($isFqcInsert($p)) continue;
+        $p['insp_stage'] = 'IPQC'; $p['insp_src'] = 'default';
+    }
     unset($p);
 
     $procNoOf = function ($p) { return $p['process_no'] !== null && $p['process_no'] !== '' ? (int)$p['process_no'] : null; };
 
-    // ③包裝：鏈中最早出現的包裝代號那一列本身不算檢驗點，前一列固定＝FQC
+    // ③包裝：鏈中最早出現的包裝製程本身不算檢驗點（FQC 現在是⑤獨立插入的列，不再相走這裡的前一道）
     $packIdx = null;
     if ($packCodes) {
         foreach ($procs as $i => $p) {
+            if ($isFqcInsert($p)) continue;
             $pn = $procNoOf($p);
             if ($pn !== null && isset($packCodes[$pn])) { $packIdx = $i; break; }
         }
@@ -1288,37 +1406,89 @@ function cp_compute_insp_stages(PDO $db, array $procs): array
     if ($packIdx !== null) {
         $procs[$packIdx]['insp_stage'] = null;
         $procs[$packIdx]['insp_src']   = 'pack';
-        if ($packIdx > 0) {
-            $procs[$packIdx - 1]['insp_stage'] = 'FQC';
-            $procs[$packIdx - 1]['insp_src']   = 'fqc_pack';
-        }
     }
 
-    // ②客供料：鏈中最早出現的客供料製程本身＝IQC；若那一列已被③佔用（短鏈撞在一起），FQC優先、放棄這條
+    // ②客供料：鏈中最早出現的客供料製程本身＝IQC；若那一列已被③佔用（短鏈撞在一起），包裝優先、放棄這條
     if ($kgSet) {
         foreach ($procs as $i => $p) {
+            if ($isFqcInsert($p)) continue;
             $pn = $procNoOf($p);
             if ($pn === null || !isset($kgSet[$pn])) continue;
-            if (in_array($procs[$i]['insp_src'], ['fqc_pack', 'pack'], true)) break;   // 只試最早那一個，撞到就不找第二個
+            if (($procs[$i]['insp_src'] ?? '') === 'pack') break;   // 只試最早那一個，撞到就不找第二個
             $procs[$i]['insp_stage'] = 'IQC';
             $procs[$i]['insp_src']   = 'kg';
             break;
         }
     }
 
-    // ④AS稽核製程：覆蓋「下一列」，優先序最高，放最後套用；下一列若是包裝列不覆蓋
+    // ④AS稽核製程：覆蓋「下一列」，優先序最高，放最後套用；下一列若是包裝列或合成FQC列不覆蓋
     if ($asNoMap) {
         $n = count($procs);
         foreach ($procs as $i => $p) {
+            if ($isFqcInsert($p)) continue;
             $pn = $procNoOf($p);
             if ($pn === null || !isset($asNoMap[$pn])) continue;
             $j = $i + 1;
             if ($j >= $n) continue;                 // 鏈上最後一道，沒有下一站可覆蓋
             if ($j === $packIdx) continue;           // 下一列是包裝本身，不覆蓋
+            if ($isFqcInsert($procs[$j])) continue;  // 下一列是合成FQC列，已經定案不覆蓋
             $procs[$j]['insp_stage'] = $asNoMap[$pn];
             $procs[$j]['insp_src']   = 'as_tag';
         }
     }
+
+    return $procs;
+}
+
+/**
+ * ⑤FQC 合成列插入（見六之二節說明，唯一實作）。純函式、不寫 DB。
+ * 在 cp_bom_processes() 之後、items 迴圈之前呼叫——這樣插入的合成列會跟其他
+ * 正常列一樣被後面的迴圈撈到 SIP 內容，不必另外寫一套抓取邏輯。
+ * $procs 的每一列只需要 process_no／process_name／seq；回傳時已重新連續編號 seq。
+ */
+function cp_insert_fqc_row(PDO $db, array $procs): array
+{
+    if (!$procs) return $procs;
+
+    $fqcSet = array_flip(cp_fqc_codes($db));
+    if (!$fqcSet) return $procs;   // 一個都沒登記，不插入，維持原樣
+
+    $packSet = array_flip(pk_packing_process_nos($db));
+    $procNoOf = function ($p) { return $p['process_no'] !== null && $p['process_no'] !== '' ? (int)$p['process_no'] : null; };
+
+    // 找鏈中最早出現的包裝列位置，與最後一個（離包裝最近）命中FQC登記清單的來源列位置
+    $packIdx = null; $srcIdx = null;
+    foreach ($procs as $i => $p) {
+        $pn = $procNoOf($p);
+        if ($pn === null) continue;
+        if ($packIdx === null && isset($packSet[$pn])) $packIdx = $i;
+        if (isset($fqcSet[$pn])) $srcIdx = $i;   // 不 break，持續覆蓋找到最後一個
+    }
+    if ($srcIdx === null) return $procs;   // 鏈上沒有任何一道登記為FQC來源
+
+    $src = $procs[$srcIdx];
+    $row = [
+        'seq'          => 0,   // 插入後統一重新編號
+        'bom_ing_fid'  => null,
+        'bom_sn'       => null,
+        'process_no'   => $src['process_no'],
+        'process_name' => trim((string)($src['process_name'] ?? '')) . '（最終檢驗）',
+        'machine'      => '',
+        'maker_id_no'  => '',
+        'maker_name'   => '',
+        'is_outsource' => 0,
+        'src'          => 'fqc_insert',
+        'insp_stage'   => 'FQC',
+        'insp_src'     => 'fqc_insert',
+    ];
+
+    // 插入位置：包裝列之前（且要在來源列之後，避免包裝其實排在來源列前面這種異常鏈）；
+    // 沒有包裝列就插在鏈尾。
+    $insertAt = ($packIdx !== null && $packIdx > $srcIdx) ? $packIdx : count($procs);
+    array_splice($procs, $insertAt, 0, [$row]);
+
+    foreach ($procs as $i => &$p) { $p['seq'] = $i + 1; }
+    unset($p);
 
     return $procs;
 }
@@ -1404,10 +1574,12 @@ function cp_process_name_map(PDO $db, array $nos): array
     } catch (Throwable $e) { return []; }
 }
 
-/** cp_pack_codes() 的顯示版（含製程名稱），設定頁用 */
-function cp_pack_codes_detail(PDO $db): array { return cp_codes_detail($db, cp_pack_codes($db)); }
 /** 目前系統認定的客供料製程（IQC判定依據），純顯示用，不可在這裡編輯——要改請改 process_no 主檔的製程名稱 */
 function cp_kg_codes_detail(PDO $db): array { return cp_codes_detail($db, ppc_kg_set($db)); }
+/** 目前被 packing_schedule.php 認定為包裝的製程（③判定依據），純顯示用，不可在這裡編輯——要改請到「包裝製程設定」 */
+function cp_pack_codes_detail(PDO $db): array { return cp_codes_detail($db, pk_packing_process_nos($db)); }
+/** cp_fqc_codes() 的顯示版（含製程名稱），設定頁用 */
+function cp_fqc_codes_detail(PDO $db): array { return cp_codes_detail($db, cp_fqc_codes($db)); }
 function cp_codes_detail(PDO $db, array $nos): array
 {
     $map = cp_process_name_map($db, $nos);

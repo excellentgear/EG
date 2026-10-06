@@ -71,6 +71,7 @@ case 'bootstrap': {
         'required_as_tags'=> cp_required_as_tags($db),
         'kg_codes'        => cp_kg_codes_detail($db),
         'pack_codes'      => cp_pack_codes_detail($db),
+        'fqc_codes'       => cp_fqc_codes_detail($db),
         'as_tag_insp'     => cp_as_tag_insp($db),
         'csrf'            => $_SESSION['cp_csrf'] ?? '',
     ]);
@@ -185,6 +186,24 @@ case 'search_process': {
     );
     $st->execute([$like, $like]);
     jout(true, ['rows' => $st->fetchAll(PDO::FETCH_ASSOC) ?: []]);
+}
+
+/* 通用SIP切換器：同製程大類底下有哪幾份通用SIP可選（2026-10-06 使用者交辦，
+   包裝常見同大類分齒輪/非齒輪好幾份） */
+case 'sip_candidates': {
+    $pno = (int)($_GET['process_no'] ?? 0);
+    if ($pno <= 0) jerr('缺少製程代號。');
+    jout(true, ['rows' => cp_sip_general_candidates($db, $pno)]);
+}
+
+/* 切換器選定某份通用SIP後，重新抓它的檢驗項目給前端直接替換該列 items（不寫入，使用者確認後按「儲存」才算數） */
+case 'sip_switch_items': {
+    $pno = (int)($_GET['process_no'] ?? 0);
+    if ($pno <= 0) jerr('缺少製程代號。');
+    $stageId = (int)($_GET['stage_id'] ?? 0);
+    $stage = $stageId ? cp_stage_one($db, $stageId) : null;
+    $stageFreq = $stage ? trim((string)($stage['default_freq'] ?? '')) : '';
+    jout(true, ['items' => cp_sip_items_for_switch($db, $pno, $stageFreq)]);
 }
 
 /* ── 存檔與流程 ────────────────────────────────────────── */
@@ -416,11 +435,12 @@ case 'excluded_as_tags_save': {
     ]);
 }
 
-/* 哪些製程代號是「包裝製程」（包裝前一道固定接FQC）；IQC 已改為客供料自動判定，不再需要人工設代號 */
-case 'pack_codes_save': {
+/* 哪些製程代號算「FQC來源」，命中時在它與包裝之間插入一道合成FQC列（見 control_plan_lib.php 六之二節⑤）。
+   IQC 已改客供料自動判定、包裝已改讀 packing_schedule.php 的權威登記，兩者都不再需要人工設代號。 */
+case 'fqc_codes_save': {
     if (!$perm['admin']) { http_response_code(403); jerr('只有管制計畫管理員可以改設定'); }
-    cp_pack_codes_save($db, $jsonArr('codes'));
-    jout(true, ['message' => '已儲存。', 'codes' => cp_pack_codes_detail($db)]);
+    cp_fqc_codes_save($db, $jsonArr('codes'));
+    jout(true, ['message' => '已儲存。', 'codes' => cp_fqc_codes_detail($db)]);
 }
 
 /* AS稽核製程逐個標籤設定「下一站固定IQC或FQC」（map: tag_id=>'IQC'/'FQC'/''） */
