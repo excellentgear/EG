@@ -13259,7 +13259,7 @@ foreach($dCounts as $c) {
                 </select>
               </label>
               <label style="font-weight:400;font-size:12px;margin:0;">關鍵字
-                <input type="text" id="bf-kw" class="form-control input-sm" style="width:170px;display:inline-block;" autocomplete="new-password" data-lpignore="true" data-form-type="other">
+                <input type="text" id="bf-kw" class="form-control input-sm" style="width:170px;display:inline-block;" autocomplete="new-password" data-lpignore="true" data-form-type="other" onkeydown="if(event.key==='Enter'){astagBfReload();}">
               </label>
               <span style="font-size:11px;color:#aaa;">比對製程／料號／客戶／訂單編號</span>
               <?php /* 顯示範圍與「只看標籤」2026-10-06 從逐筆設定搬到這裡共用——分組模式原本
