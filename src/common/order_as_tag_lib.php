@@ -69,16 +69,19 @@ if (!function_exists('ot_astag_fixed_seed')) {
 function ot_astag_fixed_seed(): array
 {
     // scope 這裡填的是「訂單存下來會是哪一種」：
-    //   全製→full、單製非AS認證→single、廠內治具→none（與全製單製無關）
+    //   全製→full、多製程→multi（2026-10-06 使用者拍板獨立一類，見下）、
+    //   單製其他→single、廠內治具→none（與全製單製無關）
     // 序號刻意留空檔（910 / 930 / 990），讓管理員自己加的固定選項插得進來。
     // 例：「多製程」給 920 就會排成 全製 → 多製程 → 單製其他 → 廠內治具。
-    // 2026-10-02 使用者拍板：四個固定選項排列 全製→多製程→單製其他→廠內治具，
-    // 「多製程」──客戶來料、工廠做了好幾道非稽核製程，但不是做到成品（不算全製），
-    // 也不是只做一道（不算單製其他），scope 跟全製一樣只是 'full'——兩者在「跟全製含某個稽核製程」那類
-    // AS 標籤的認定上都是 full，之所以分得開完全是因為 fixed_code 不同（full_plain vs multi_proc）。
+    // 2026-10-02 使用者拍板：四個固定選項排列 全製→多製程→單製其他→廠內治具。
+    // 2026-10-06 使用者拍板：「多製程」改獨立成自己的 scope='multi'（原本借用 scope='full'、
+    // 只靠 fixed_code='multi_proc' 跟「全製」區分，下游各自要記得比對 fixed_code 才不會混進
+    // 全製那一類，order_analysis_lib.php 就因此疊了一層 fixed_code 特判——改成獨立 scope 之後
+    // 那層特判可以拿掉，下游只要看 scope 值就對了）。scope 值本身只是程式代碼，VARCHAR(8)
+    // 隨便加新值都合法（不是 DB enum），其他三個維持原值不動。
     return [
         ['fixed_code' => 'full_plain',    'proc_name' => '全製',     'scope' => 'full',   'own' => 0, 'sort' => 910],
-        ['fixed_code' => 'multi_proc',    'proc_name' => '多製程',   'scope' => 'full',   'own' => 0, 'sort' => 920],
+        ['fixed_code' => 'multi_proc',    'proc_name' => '多製程',   'scope' => 'multi',  'own' => 0, 'sort' => 920],
         ['fixed_code' => 'single_non_as', 'proc_name' => '單製其他', 'scope' => 'single', 'own' => 0, 'sort' => 930],
         ['fixed_code' => 'inhouse_jig',   'proc_name' => '廠內治具', 'scope' => 'none',   'own' => 1, 'sort' => 990],
     ];
@@ -178,6 +181,17 @@ function ot_astag_ensure_schema(PDO $db): bool
                 $db->prepare("UPDATE ot_as_proc_tag SET sort_order=? WHERE fixed_code=? AND sort_order<>?")
                    ->execute([$f['sort'], $f['fixed_code'], $f['sort']]);
             }
+        } catch (Throwable $e) {}
+        // 2026-10-06：「多製程」scope 由 full 改成獨立的 multi（見上方種子註解）。
+        // 只在「還是舊值」時才動（冪等）：①定義本身 ②已經設定過這個標籤的訂單一併改，
+        // 否則舊訂單存著 as_tag_scope='full'，分析頁會因為看不到 multi 又掉回全製那一類
+        // （fixed 標籤的顯示文字本來就不看 scope，只看 proc_name，所以改這個值不影響任何
+        // 畫面上看得到的文字，純粹是內部分類代碼更正，故不寫 ot_as_tag_order_log 歷程）。
+        try {
+            $db->exec("UPDATE ot_as_proc_tag SET scope='multi' WHERE fixed_code='multi_proc' AND scope='full'");
+            $db->exec("UPDATE order_track SET as_tag_scope='multi'
+                       WHERE as_tag_scope='full'
+                         AND as_tag_id = (SELECT tag_id FROM ot_as_proc_tag WHERE fixed_code='multi_proc')");
         } catch (Throwable $e) {}
         $ok = true;
     } catch (Throwable $e) { $ok = false; }

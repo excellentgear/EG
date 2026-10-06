@@ -539,7 +539,12 @@ function cnrv_order_get(PDO $db, int $orderId): ?array {
     $st->execute([$orderId]);
     $o = $st->fetch(PDO::FETCH_ASSOC);
     if (!$o) return null;
-    $o['tag_label'] = $o['tag_proc_name'] ? (($o['as_tag_scope']==='full' ? '全製含' : '單製') . $o['tag_proc_name']) : '';
+    // 2026-10-06 改走唯一實作 ot_astag_make_label()，不再自己寫死 full→全製含／其餘→單製
+    // 這個二分法——這張訂單的標籤可能是 kind=fixed/other（如「多製程」「廠內治具」，不該被
+    // 加上「單製」前綴）或 scope=none，原本的寫法會把這些全部誤標成「單製○○」。
+    $o['tag_label'] = $o['tag_proc_name']
+        ? ot_astag_make_label(['kind' => (string)($o['tag_kind'] ?? ''), 'proc_name' => (string)$o['tag_proc_name']], (string)($o['as_tag_scope'] ?? ''))
+        : '';
     return $o;
 }
 

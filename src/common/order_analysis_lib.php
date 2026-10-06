@@ -610,9 +610,8 @@ function oa_analyze(PDO $db, array $opt = []): array
     // （cls 改記成 'excluded'，但 orders/qty/amount 等其他總計完全不受影響，只是不落進
     // 全製/單製/多製程的分子分母——這些總計本來就跟「算不算全製單製」無關）；
     // 沒有設定標籤的訂單才繼續退回下面的關鍵字規則猜（既有行為不變）。
-    // 「多製程」是唯一一個固定不給管理員改的系統代碼 fixed_code='multi_proc'
-    // （與 scope='full' 但 fixed_code≠'multi_proc' 的「全製」分開顯示），不是比對某個
-    // 管理員自訂標籤的名稱，所以這裡比對 fixed_code 不算鐵律4講的「寫死」。
+    // 「多製程」自 2026-10-06 起是獨立的 scope='multi'（見 order_as_tag_lib.php 檔頭），
+    // 這裡直接照 scope 分支即可，不必再比對 fixed_code。
     $astagMap = ot_astag_for_orders($db, array_column($rows, 'id'));
     foreach ($rows as &$r) {
         $info = $astagMap[$r['id']] ?? null;
@@ -624,7 +623,11 @@ function oa_analyze(PDO $db, array $opt = []): array
         $r['cls_src'] = '';   // ''＝關鍵字猜的（含 fallback／未命中）；'astag'／'astag_excluded'＝來自 AS 認定
         if ($info) {
             if ($info['scope'] === 'full') {
-                $r['cls']     = ($info['fixed_code'] === 'multi_proc') ? 'multi' : 'full';
+                $r['cls']     = 'full';
+                $r['rule']    = '';
+                $r['cls_src'] = 'astag';
+            } elseif ($info['scope'] === 'multi') {
+                $r['cls']     = 'multi';
                 $r['rule']    = '';
                 $r['cls_src'] = 'astag';
             } elseif ($info['scope'] === 'single') {
