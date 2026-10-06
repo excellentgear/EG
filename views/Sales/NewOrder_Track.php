@@ -2164,9 +2164,13 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
         if (!$can_design_qa) throw new Exception('沒有使用此功能的權限');
         $oid = (int)($_POST['order_id'] ?? 0);
         if (!$oid) throw new Exception('未指定訂單');
+        // kind：note＝訂單階段設計備註（預設，既有行為）／process＝轉生管後的製程中問題
+        // （2026-10-06 新增，與設計備註完全分開的另一個案件，見 eng_log_lib.php 說明）。
+        $kind = (($_POST['kind'] ?? '') === 'process') ? 'process' : 'note';
+        $logType = ($kind === 'process') ? 'order_process' : 'order_note';
         $st = $pdo->prepare("SELECT el.id FROM eng_log_bind b JOIN eng_log el ON el.id = b.log_id
-                             WHERE b.bind_type='order' AND b.bind_id=? ORDER BY el.id LIMIT 1");
-        $st->execute([(string)$oid]);
+                             WHERE b.bind_type='order' AND b.bind_id=? AND el.log_type=? ORDER BY el.id LIMIT 1");
+        $st->execute([(string)$oid, $logType]);
         $logId = (int)$st->fetchColumn();
         $items = [];
         if ($logId > 0) {
@@ -2192,7 +2196,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
         // 回覆方式（電話／Line／E-mail…，使用者交辦）：一律即時查 eng_log_channel 現況，
         // 不在這裡另存一份清單——管理員在 eng_log.php「維護回覆方式」加的新選項，這裡會
         // 自動一起出現，兩邊共用同一張表、同一套函式（鐵律4）。
-        echo json_encode(['success' => true, 'log_id' => $logId, 'items' => $items, 'today' => $todayL,
+        echo json_encode(['success' => true, 'log_id' => $logId, 'items' => $items, 'today' => $todayL, 'kind' => $kind,
             'can_resolve' => $can_design_qa_resolve, 'biz_default' => $bizDefault, 'channels' => el_channels($pdo),
             'order' => ['order_no' => (string)($ord['Order_oo'] ?? ''), 'part_no' => (string)($ord['d_id'] ?? ''),
                         'client' => (string)($ord['Client_name'] ?? '')]]);
@@ -2210,6 +2214,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_add') {
         if (!$can_design_qa) throw new Exception('沒有使用此功能的權限');
         $oid = (int)($_POST['order_id'] ?? 0);
         if (!$oid) throw new Exception('未指定訂單');
+        // kind：note＝訂單階段設計備註（預設，既有行為）／process＝轉生管後的製程中問題
+        // （2026-10-06 新增，見 ate_q_list 同一段註解，兩種案件各自獨立不互相影響）。
+        $kind = (($_POST['kind'] ?? '') === 'process') ? 'process' : 'note';
+        $logType = ($kind === 'process') ? 'order_process' : 'order_note';
         $chkOrd = $pdo->prepare("SELECT 1 FROM order_track WHERE Order_id=?");
         $chkOrd->execute([$oid]);
         if (!$chkOrd->fetchColumn()) throw new Exception('查無此訂單');
@@ -2218,7 +2226,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_add') {
         $nowL = (string)$pdo->query("SELECT NOW()")->fetchColumn();
         $todayL = substr($nowL, 0, 10);
         $pdo->beginTransaction();
-        $logId = el_order_case_get_or_create($pdo, $oid, ['uid' => $id, 'dept_id' => null], $nowL, $todayL);
+        $logId = ($kind === 'process')
+            ? el_order_process_case_get_or_create($pdo, $oid, ['uid' => $id, 'dept_id' => null], $nowL, $todayL)
+            : el_order_case_get_or_create($pdo, $oid, ['uid' => $id, 'dept_id' => null], $nowL, $todayL);
         $created = 0;
         foreach ($rows as $r) {
             if (!is_array($r)) continue;
@@ -2229,8 +2239,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_add') {
         el_reindex($pdo, $logId);
         $pdo->prepare("UPDATE eng_log SET updated_at=? WHERE id=?")->execute([$nowL, $logId]);
         $pdo->commit();
-        $prevRow = el_order_item_summary($pdo, [$oid])[$oid] ?? null;
-        echo json_encode(['success' => true, 'log_id' => $logId, 'created' => $created,
+        $prevRow = el_order_item_summary($pdo, [$oid], $logType)[$oid] ?? null;
+        echo json_encode(['success' => true, 'log_id' => $logId, 'created' => $created, 'kind' => $kind,
             'open_count' => $prevRow['open_count'] ?? 0, 'preview' => $prevRow]);
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -2261,8 +2271,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_reply') {
         el_order_case_sync_status($pdo, $logId, $nowL);
         $pdo->commit();
         $oidR = el_case_order_id($pdo, $logId);
-        $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR])[$oidR] ?? null) : null;
-        echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0,
+        // kind 要依這個案件實際的 log_type 判斷（而不是信任前端），否則前端不知道要更新
+        // 「設計備註」還是「製程中問題」哪一個小格子（2026-10-06 新增，見 eng_log_lib.php 說明）。
+        $kindR = (el_log_type_of($pdo, $logId) === 'order_process') ? 'process' : 'note';
+        $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR], $kindR === 'process' ? 'order_process' : 'order_note')[$oidR] ?? null) : null;
+        echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'kind' => $kindR,
             'reply_count' => count($ret['ids']), 'preview' => $prevRow]);
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -2284,8 +2297,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_resolve') {
         el_item_set_status($pdo, $logId, $itemId, $status, '', $nowL);
         el_order_case_sync_status($pdo, $logId, $nowL);
         $oidR = el_case_order_id($pdo, $logId);
-        $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR])[$oidR] ?? null) : null;
-        echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'preview' => $prevRow]);
+        $kindR = (el_log_type_of($pdo, $logId) === 'order_process') ? 'process' : 'note';
+        $prevRow = $oidR ? (el_order_item_summary($pdo, [$oidR], $kindR === 'process' ? 'order_process' : 'order_note')[$oidR] ?? null) : null;
+        echo json_encode(['success' => true, 'open_count' => $prevRow['open_count'] ?? 0, 'kind' => $kindR, 'preview' => $prevRow]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
@@ -2698,11 +2712,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     // 問題文字，清單上直接看得到；②全部已處理完時只看 open_count 會判定成「沒有案件」，
     // 使用者完全看不出有歷史紀錄——el_order_item_summary() 改成只要有過任何問題就回傳。
     $ate_q_map = [];
+    // 製程中問題（2026-10-06 新增）：Order_id => 摘要（與上面的設計備註是完全分開的另一個
+    // eng_log 案件，log_type='order_process'，同一批查詢，不要再各自跑一次 oidsQ）。
+    $ate_proc_map = [];
     if (!empty($order_list)) {
         try {
             $oidsQ = array_values(array_filter(array_map('intval', array_column($order_list, 'Order_id'))));
             $ate_q_map = el_order_item_summary($pdo, $oidsQ);
-        } catch (Throwable $eQ) { $ate_q_map = []; }
+            $ate_proc_map = el_order_item_summary($pdo, $oidsQ, 'order_process');
+        } catch (Throwable $eQ) { $ate_q_map = []; $ate_proc_map = []; }
     }
 
     // 客戶提醒「待處理」筆數（2026-09-23）：Order_id => 筆數。整頁一次查完，不要每列各打一次；
@@ -3295,6 +3313,41 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                             <i class="fa fa-file-text-o"></i><?= $_dn_total ?><?= $_dn_img ? '<i class="fa fa-image" style="font-size:8px;margin-left:1px;"></i>' : '' ?>
                         </button>
                         <?php endif; ?>
+                        <?php endif; ?>
+                        <?php
+                        // 製程中問題（2026-10-06 新增）：轉生管之後的問答記在獨立的 eng_log 案件
+                        // (log_type='order_process')，與上面「設計備註」(ot-dn-btn，訂單階段用) 完全
+                        // 分開，並自動綁定這張訂單的料號與 BOM 編號(bom_order_process_map)，供日後
+                        // 用 BOM／料號反查相關訂單與製程中問題。只有「已經有紀錄」或「這張訂單已
+                        // 轉生管且使用者有新增問答權限」時才顯示，避免還沒轉生管的訂單上出現一個
+                        // 永遠用不到的空圖示。這是全新、獨立的小圖示，完全不動上面既有的「設計備註」
+                        // 按鈕與欄位（嚴禁影響現有使用者）。
+                        $_procRow  = $ate_proc_map[(int)$order['Order_id']] ?? null;
+                        $_procOpen = $_procRow ? (int)$_procRow['open_count'] : 0;
+                        if ($_procRow || (!empty($order['pmGet_formatted']) && $can_design_qa)):
+                            if ($_procRow):
+                                $_procTMap = ['customer' => '客戶', 'maker' => '廠商', 'user' => '業務', 'other' => '其他'];
+                                $_procTT = $_procRow['target_type'];
+                                $_procPrefix = $_procTT ? ('【' . ($_procTMap[$_procTT] ?? $_procTT) . '：' . (string)$_procRow['target_label'] . '】') : '【PS】';
+                                $_procTitle = '製程中問題' . ($_procOpen > 0 ? '（' . $_procOpen . ' 筆未處理）' : '（已完成，可查看）') . '：' . $_procPrefix . (string)$_procRow['question'];
+                                $_procCss = $_procOpen > 0
+                                    ? 'background:#FFF3E2;border:1px solid #F0A24B;color:#8a5a2b;'
+                                    : 'background:#f0fff8;border:1px solid #1ABB9C;color:#1ABB9C;';
+                            else:
+                                $_procTitle = '新增製程中問題（轉生管後的問答，跟訂單階段的設計備註分開記錄，自動綁定料號與BOM編號）';
+                                $_procCss = 'background:#f7f7f7;border:1px dashed #ccc;color:#999;';
+                            endif;
+                        ?>
+                        <button type="button" class="btn btn-xs" data-proc-q-order="<?= (int)$order['Order_id'] ?>"
+                            style="padding:0 4px;font-size:10px;line-height:16px;<?= $_procCss ?>flex-shrink:0;"
+                            onclick="ateQOpen(<?= (int)$order['Order_id'] ?>,'process')"
+                            title="<?= safe_html($_procTitle) ?>">
+                            <i class="fa fa-wrench"></i><?php
+                                if ($_procRow) {
+                                    echo $_procOpen > 0 ? $_procOpen : '<i class="fa fa-check" style="font-size:8px;margin-left:1px;"></i>';
+                                }
+                            ?>
+                        </button>
                         <?php endif; ?>
                         <?php if ($can_master_edit): ?>
                         <?php if (!empty($order['d_id_ID'])): ?>
@@ -8583,9 +8636,18 @@ foreach($dCounts as $c) {
         // 更新這一列的徽章，不整頁重載（比照 applySyncedCustomerToRow 既有模式）。
         // 對象選擇器（ateQTp*）新增問題與回覆共用同一套——業務＝下拉（限業務課人員）、
         // 廠商/客戶＝打字模糊搜尋選定後可再選/填聯絡人、其他＝手動輸入說明文字。
-        var ATE_Q = { orderId: 0, logId: 0, canResolve: false, bizDefault: null, items: [], rows: [],
+        var ATE_Q = { orderId: 0, logId: 0, kind: 'note', canResolve: false, bizDefault: null, items: [], rows: [],
                       cands: { user: null }, replyState: {}, contactCache: {}, tpState: {}, tpOnChange: {},
                       channels: {}, replyChannel: {} };
+
+        // 製程中問題（2026-10-06 新增）與設計備註問答是兩個分開的 eng_log 案件，但共用同一套
+        // 跳窗與互動邏輯（打字→選對象→多題→多輪回覆→標記已處理），只靠 ATE_Q.kind 區分
+        // 要讀寫哪一個案件；kind 不帶時一律退回 'note'（既有呼叫端全部不帶這個參數，行為
+        // 與改動前完全相同——嚴禁影響現有使用者）。
+        var ATE_Q_KIND_META = {
+            note:    { icon: 'fa-comments', label: '設計備註問答' },
+            process: { icon: 'fa-wrench',   label: '製程中問題' }
+        };
 
         function ateQNewRow() {
             var d = ATE_Q.bizDefault;
@@ -8594,11 +8656,13 @@ foreach($dCounts as $c) {
                      target_contact: '' };
         }
 
-        function ateQOpen(orderId) {
+        function ateQOpen(orderId, kind) {
             ATE_Q.orderId = orderId;
-            $.post('', { action: 'ate_q_list', order_id: orderId }, function(res) {
+            ATE_Q.kind = (kind === 'process') ? 'process' : 'note';
+            $.post('', { action: 'ate_q_list', order_id: orderId, kind: ATE_Q.kind }, function(res) {
                 if (!res || !res.success) { showToast((res && res.message) || '讀取失敗'); return; }
                 ATE_Q.logId = res.log_id || 0;
+                ATE_Q.kind = (res.kind === 'process') ? 'process' : 'note';
                 ATE_Q.canResolve = !!res.can_resolve;
                 ATE_Q.bizDefault = res.biz_default || null;
                 ATE_Q.today = res.today || '';
@@ -8608,6 +8672,9 @@ foreach($dCounts as $c) {
                 ATE_Q.replyChannel = {};   // 每次重新打開都退回預設（電話），不沿用上一次開啟時選過的
                 ATE_Q.rows = [ateQNewRow()];
                 var ord = res.order || {};
+                var km = ATE_Q_KIND_META[ATE_Q.kind] || ATE_Q_KIND_META.note;
+                $('#ate-q-modal-icon').attr('class', 'fa ' + km.icon);
+                $('#ate-q-modal-kindtext').text(km.label);
                 $('#ate-q-modal-title').text([ord.order_no, ord.part_no, ord.client].filter(function(x){return x;}).join('　'));
                 $('#ate-q-modal').modal('show');
                 ateQEnsureCandidates('user', function() {
@@ -8769,8 +8836,8 @@ foreach($dCounts as $c) {
                 if (!res || !res.success) { showToast((res && res.message) || '回覆失敗'); return; }
                 // 比照舊版設計備註存檔成功的視覺回饋：欄位先變綠再重新整理，不是存完整個跳窗瞬間換畫面
                 $ta.css('background-color', '#d4edda');
-                ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview);
-                setTimeout(function() { ateQOpen(ATE_Q.orderId); }, 450);
+                ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview, res.kind);
+                setTimeout(function() { ateQOpen(ATE_Q.orderId, ATE_Q.kind); }, 450);
             }, 'json').fail(function() { showToast('回覆失敗，請重試'); });
         }
 
@@ -8795,15 +8862,15 @@ foreach($dCounts as $c) {
                 $.post('', { action: 'ate_q_reply', log_id: ATE_Q.logId, item_ids: JSON.stringify([itemId]),
                              content: content, replied_on: ATE_Q.today || '', resolve: 1 }, function(res) {
                     if (!res || !res.success) { showToast((res && res.message) || '操作失敗'); return; }
-                    ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview);
-                    ateQOpen(ATE_Q.orderId);
+                    ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview, res.kind);
+                    ateQOpen(ATE_Q.orderId, ATE_Q.kind);
                 }, 'json').fail(function() { showToast('操作失敗，請重試'); });
                 return;
             }
             $.post('', { action: 'ate_q_resolve', log_id: ATE_Q.logId, id: itemId, status: status }, function(res) {
                 if (!res || !res.success) { showToast((res && res.message) || '操作失敗'); return; }
-                ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview);
-                ateQOpen(ATE_Q.orderId);
+                ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview, res.kind);
+                ateQOpen(ATE_Q.orderId, ATE_Q.kind);
             }, 'json').fail(function() { showToast('操作失敗，請重試'); });
         }
 
@@ -9059,11 +9126,11 @@ foreach($dCounts as $c) {
             if (!out.length) { showToast('請至少填寫一條問題內容'); return; }
             $('#ate-q-submit-new').prop('disabled', true);
             $('.ate-q-qtext').css('background-color', '#d4edda');   // 比照舊版存檔成功的綠色回饋
-            $.post('', { action: 'ate_q_add', order_id: ATE_Q.orderId, items: JSON.stringify(out) }, function(res) {
+            $.post('', { action: 'ate_q_add', order_id: ATE_Q.orderId, kind: ATE_Q.kind, items: JSON.stringify(out) }, function(res) {
                 $('#ate-q-submit-new').prop('disabled', false);
                 if (!res || !res.success) { $('.ate-q-qtext').css('background-color', ''); showToast((res && res.message) || '新增失敗'); return; }
-                ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview);
-                setTimeout(function() { ateQOpen(ATE_Q.orderId); }, 450);
+                ateQApplyBadge(ATE_Q.orderId, res.open_count, res.preview, res.kind);
+                setTimeout(function() { ateQOpen(ATE_Q.orderId, ATE_Q.kind); }, 450);
             }, 'json').fail(function() { $('#ate-q-submit-new').prop('disabled', false); $('.ate-q-qtext').css('background-color', ''); showToast('新增失敗，請重試'); });
         }
 
@@ -9071,7 +9138,11 @@ foreach($dCounts as $c) {
         // preview 的 target_type 為 null 時顯示【PS】（純備註前端簡寫，使用者要求）；
         // 全部已處理完（openCount=0 但 preview 仍有內容）要顯示「已完成」卡片，不可以
         // 直接退回「＋新增」——那樣會讓使用者看不出這張訂單其實有歷史紀錄。
-        function ateQApplyBadge(orderId, openCount, preview) {
+        // kind='process' 時改走 ateProcApplyBadge()（2026-10-06 新增，更新的是料號欄裡那顆
+        // 獨立的「製程中問題」小圖示，不是這裡的 .ate-q-cell）；kind 不帶或非 'process' 時
+        // 完全沿用原本的邏輯，與改動前逐行相同——嚴禁影響現有使用者。
+        function ateQApplyBadge(orderId, openCount, preview, kind) {
+            if (kind === 'process') { ateProcApplyBadge(orderId, openCount, preview); return; }
             var $cell = $('td[data-ate-q-order="' + orderId + '"] .ate-q-cell');
             if (!$cell.length) return;
             openCount = parseInt(openCount, 10) || 0;
@@ -9096,6 +9167,36 @@ foreach($dCounts as $c) {
             }
             $cell.closest('td').css('background', '#fff6e0');
             setTimeout(function() { $cell.closest('td').css('background', ''); }, 1200);
+        }
+
+        // 製程中問題（2026-10-06 新增）：更新料號欄裡那顆獨立小圖示（PHP 端渲染規則見
+        // NewOrder_Track.php 的 $_procRow／$_procCss 那一段，這裡要畫出同一種樣式，兩邊
+        // 看起來才不會在存檔前後對不起來）。找不到元素（例如這張訂單剛轉生管、還沒有重新整理
+        // 過列表資料，圖示從未被渲染過）就什麼都不做——下次重新整理列表就會補上。
+        function ateProcApplyBadge(orderId, openCount, preview) {
+            var $btn = $('button[data-proc-q-order="' + orderId + '"]');
+            if (!$btn.length) return;
+            openCount = parseInt(openCount, 10) || 0;
+            var tMap = { customer: '客戶', maker: '廠商', user: '業務', other: '其他' };
+            var css, title, inner;
+            if (preview) {
+                var prefix = preview.target_type
+                    ? ('【' + (tMap[preview.target_type] || preview.target_type) + '：' + (preview.target_label || '（未指定）') + '】')
+                    : '【PS】';
+                title = '製程中問題' + (openCount > 0 ? '（' + openCount + ' 筆未處理）' : '（已完成，可查看）') + '：' + prefix + (preview.question || '');
+                css = openCount > 0
+                    ? 'background:#FFF3E2;border:1px solid #F0A24B;color:#8a5a2b;'
+                    : 'background:#f0fff8;border:1px solid #1ABB9C;color:#1ABB9C;';
+                inner = '<i class="fa fa-wrench"></i>' + (openCount > 0 ? openCount : '<i class="fa fa-check" style="font-size:8px;margin-left:1px;"></i>');
+            } else {
+                title = '新增製程中問題（轉生管後的問答，跟訂單階段的設計備註分開記錄，自動綁定料號與BOM編號）';
+                css = 'background:#f7f7f7;border:1px dashed #ccc;color:#999;';
+                inner = '<i class="fa fa-wrench"></i>';
+            }
+            $btn.attr('style', 'padding:0 4px;font-size:10px;line-height:16px;' + css + 'flex-shrink:0;')
+                .attr('title', title).html(inner);
+            $btn.closest('td').css('background', '#fff6e0');
+            setTimeout(function() { $btn.closest('td').css('background', ''); }, 1200);
         }
 
 
@@ -12974,13 +13075,15 @@ foreach($dCounts as $c) {
         </div></div>
     </div>
 
-    <!-- ═══ MODAL: 設計備註問答（2026-10-05 併入 eng_log）═══════════════════ -->
+    <!-- ═══ MODAL: 設計備註問答／製程中問題（2026-10-05 併入 eng_log；2026-10-06 共用同一個
+         跳窗顯示「製程中問題」(kind='process')，標題文字與圖示依 ATE_Q.kind 動態切換，
+         見 ateQOpen() 的 ATE_Q_KIND_META）═══════════════════ -->
     <div class="modal fade" id="ate-q-modal" tabindex="-1">
         <div class="modal-dialog"><div class="modal-content">
             <div class="modal-header" style="background:#8a5a2b;">
                 <button type="button" class="close" data-dismiss="modal" style="color:#fff;">&times;</button>
                 <h4 class="modal-title" style="color:#fff;font-size:15px;">
-                    <i class="fa fa-comments"></i> 設計備註問答 — <span id="ate-q-modal-title"></span>
+                    <i id="ate-q-modal-icon" class="fa fa-comments"></i> <span id="ate-q-modal-kindtext">設計備註問答</span> — <span id="ate-q-modal-title"></span>
                 </h4>
             </div>
             <div class="modal-body">

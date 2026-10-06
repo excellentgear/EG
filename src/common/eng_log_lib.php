@@ -82,6 +82,12 @@ function el_log_types(): array {
         // order_note：訂單追蹤「設計備註」自動建立的案件（2026-10-05），只供顯示，
         // 不出現在 eng_log.php 手動新建的選單——那一類一律由訂單追蹤那邊建立。
         'order_note'=> '訂單備註',
+        // order_process（2026-10-06）：訂單追蹤「轉生管之後」的問答自動建立的案件，與 order_note
+        // 同一種設計（只供顯示、不出現在 eng_log.php 手動新建選單）。刻意不沿用既有的 'process'
+        // ──那是給 eng_log.php 手動建立、與特定訂單無關的一般製程問題用的；若共用同一個
+        // log_type，萬一有人手動建立的那一筆剛好也綁到同一張訂單，訂單追蹤這邊的
+        // find-or-create 查詢會誤認成自己建立的案件而混用。
+        'order_process' => '製程中問題',
         // ── 以下為舊值，只供顯示，不再出現在選單 ──
         'outsource' => '發包', 'spec' => '規格', 'material' => '材料',
         'quality'   => '品質', 'delivery' => '交期',
@@ -979,8 +985,11 @@ function el_reply_add(PDO $db, int $logId, array $itemIds, array $in, int $creat
  */
 function el_order_case_get_or_create(PDO $db, int $orderId, array $actor, string $now, string $today): int
 {
+    // ★ 2026-10-06 補上 log_type 篩選：轉生管之後的「製程中問題」(el_order_process_case_get_or_create)
+    // 也會用同一個 bind_type='order' 綁定這張訂單，兩種案件要靠 log_type 分清楚，否則這裡可能
+    // 誤抓到製程中問題那一筆（反之 el_order_process_case_get_or_create 也要篩自己的 log_type）。
     $st = $db->prepare("SELECT el.id FROM eng_log_bind b JOIN eng_log el ON el.id = b.log_id
-                        WHERE b.bind_type='order' AND b.bind_id=? ORDER BY el.id LIMIT 1");
+                        WHERE b.bind_type='order' AND b.bind_id=? AND el.log_type='order_note' ORDER BY el.id LIMIT 1");
     $st->execute([(string)$orderId]);
     $id = (int)$st->fetchColumn();
     if ($id > 0) return $id;
@@ -996,6 +1005,91 @@ function el_order_case_get_or_create(PDO $db, int $orderId, array $actor, string
        ->execute([$id, (string)$orderId, $label]);
     el_reindex($db, $id);
     return $id;
+}
+
+/**
+ * 製程中問題（2026-10-06 新增）：訂單「轉生管」之後的問答改記錄在這個獨立案件
+ * (log_type='order_process')，與訂單階段的「設計備註」(order_note) 完全分開——
+ * 同一張訂單最多各有一筆，互不影響、互不混用。
+ *
+ * 除了跟 order_note 一樣綁 bind_type='order'（讓 el_order_item_summary() 能依訂單彙總），
+ * 另外綁定這張訂單目前的「料號」與「BOM 編號」(bom_order_process_map)，讓日後可以直接拿
+ * BOM 或料號反查相關訂單與製程中問題（eng_log.php 的三軸索引 eng_log_index 本來就是
+ * 查詢唯一入口，這裡只要綁好 bind_type='part'/'bom'，el_reindex() 會自動展開）。
+ *
+ * BOM 綁定每次呼叫都重新同步一次（見 el_order_process_sync_binds()）：轉生管當下可能
+ * 還沒有 BOM，生管之後才開出來，下次有人在這張訂單新增製程中問題時會自動補上。
+ */
+function el_order_process_case_get_or_create(PDO $db, int $orderId, array $actor, string $now, string $today): int
+{
+    $st = $db->prepare("SELECT el.id FROM eng_log_bind b JOIN eng_log el ON el.id = b.log_id
+                        WHERE b.bind_type='order' AND b.bind_id=? AND el.log_type='order_process' ORDER BY el.id LIMIT 1");
+    $st->execute([(string)$orderId]);
+    $id = (int)$st->fetchColumn();
+
+    if ($id === 0) {
+        $logNo = el_next_log_no($db, $today);
+        $db->prepare("INSERT INTO eng_log (log_no, user_id, dept_id, title, log_type, status, visibility, created_at)
+                      VALUES (?,?,?, '製程中問題', 'order_process', 'open', 'dept', ?)")
+           ->execute([$logNo, (int)($actor['uid'] ?? 0), $actor['dept_id'] ?? null, $now]);
+        $id = (int)$db->lastInsertId();
+        $label = el_bind_label($db, 'order', (string)$orderId);
+        $db->prepare("INSERT INTO eng_log_bind (log_id, bind_type, bind_id, bind_label, is_manual, sort_order)
+                      VALUES (?, 'order', ?, ?, 0, 0)")
+           ->execute([$id, (string)$orderId, $label]);
+    }
+
+    el_order_process_sync_binds($db, $id, $orderId);
+    return $id;
+}
+
+/**
+ * 補齊/更新「製程中問題」案件的料號與 BOM 綁定。新建與既有案件都會呼叫這支，已經綁過的
+ * 不會重複寫入；只有真的新增了綁定才重建三軸索引（避免每次開問答都白白重算一次）。
+ */
+function el_order_process_sync_binds(PDO $db, int $logId, int $orderId): void
+{
+    $changed = false;
+
+    try {
+        $ord = $db->prepare("SELECT d_id_ID, d_id FROM order_track WHERE Order_id=?");
+        $ord->execute([$orderId]);
+        $o = $ord->fetch(PDO::FETCH_ASSOC);
+        if ($o) {
+            $partId = el_resolve_part_id($db, $o['d_id_ID'] ?? 0, (string)($o['d_id'] ?? ''));
+            if ($partId > 0) {
+                $chk = $db->prepare("SELECT 1 FROM eng_log_bind WHERE log_id=? AND bind_type='part' AND bind_id=?");
+                $chk->execute([$logId, (string)$partId]);
+                if (!$chk->fetchColumn()) {
+                    $lb = el_bind_label($db, 'part', (string)$partId);
+                    $db->prepare("INSERT INTO eng_log_bind (log_id, bind_type, bind_id, bind_label, is_manual, sort_order)
+                                  VALUES (?, 'part', ?, ?, 0, 1)")->execute([$logId, (string)$partId, $lb]);
+                    $changed = true;
+                }
+            }
+        }
+    } catch (Throwable $e) {}
+
+    try {
+        $exist = [];
+        $ex = $db->prepare("SELECT bind_id FROM eng_log_bind WHERE log_id=? AND bind_type='bom'");
+        $ex->execute([$logId]);
+        foreach ($ex->fetchAll(PDO::FETCH_COLUMN) as $v) $exist[(string)$v] = true;
+
+        $b = $db->prepare("SELECT DISTINCT bom FROM bom_order_process_map WHERE order_id=?");
+        $b->execute([$orderId]);
+        $seq = 90;
+        foreach ($b->fetchAll(PDO::FETCH_COLUMN) as $bomNo) {
+            $bomNo = trim((string)$bomNo);
+            if ($bomNo === '' || isset($exist[$bomNo])) continue;
+            $lb = el_bind_label($db, 'bom', $bomNo);
+            $db->prepare("INSERT INTO eng_log_bind (log_id, bind_type, bind_id, bind_label, is_manual, sort_order)
+                          VALUES (?, 'bom', ?, ?, 0, ?)")->execute([$logId, $bomNo, $lb, $seq++]);
+            $changed = true;
+        }
+    } catch (Throwable $e) {}
+
+    if ($changed) { try { el_reindex($db, $logId); } catch (Throwable $e) {} }
 }
 
 /**
@@ -1029,18 +1123,21 @@ function el_order_case_sync_status(PDO $db, int $logId, string $now): void
  * 預覽問題的挑法：有未處理的就挑「最新一條未處理」；全部處理完了就挑「最新一條
  * （不論狀態）」——用 `ORDER BY 是否未處理 DESC, id DESC` 一次排序做到，不用分兩次查。
  *
+ * @param string $logType 'order_note'（預設，訂單階段設計備註）或 'order_process'（轉生管後
+ *                製程中問題）——兩種案件都綁 bind_type='order'，不篩就會混在一起彙總。
  * @return array [order_id(int) => ['open_count'=>int,'total_count'=>int,'question'=>string,
  *                'status'=>string,'target_type'=>?string,'target_label'=>?string]]
  *         完全沒有任何問題項的訂單不會出現在結果裡。
  */
-function el_order_item_summary(PDO $db, array $orderIds): array
+function el_order_item_summary(PDO $db, array $orderIds, string $logType = 'order_note'): array
 {
     $ids = array_values(array_unique(array_filter(array_map('intval', $orderIds), fn($v) => $v > 0)));
     if (!$ids) return [];
+    if (!in_array($logType, ['order_note', 'order_process'], true)) $logType = 'order_note';
     $in = implode(',', $ids);
     $out = [];
     try {
-        $rows = $db->query("
+        $st = $db->prepare("
             SELECT order_id, question, status, target_type, target_label, total_cnt, open_cnt FROM (
                 SELECT b.bind_id AS order_id, i.question, i.status, i.target_type, i.target_label,
                        COUNT(*) OVER (PARTITION BY b.bind_id) AS total_cnt,
@@ -1048,10 +1145,14 @@ function el_order_item_summary(PDO $db, array $orderIds): array
                            OVER (PARTITION BY b.bind_id) AS open_cnt,
                        ROW_NUMBER() OVER (PARTITION BY b.bind_id
                            ORDER BY (i.status NOT IN ('resolved','dropped')) DESC, i.id DESC) AS rn
-                FROM eng_log_bind b JOIN eng_log_item i ON i.log_id = b.log_id
-                WHERE b.bind_type='order' AND b.bind_id IN ({$in})
+                FROM eng_log_bind b
+                JOIN eng_log g ON g.id = b.log_id
+                JOIN eng_log_item i ON i.log_id = b.log_id
+                WHERE b.bind_type='order' AND b.bind_id IN ({$in}) AND g.log_type = ?
             ) t WHERE rn = 1
-        ")->fetchAll(PDO::FETCH_ASSOC);
+        ");
+        $st->execute([$logType]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
         foreach ($rows as $r) {
             $out[(int)$r['order_id']] = [
                 'open_count'   => (int)$r['open_cnt'],
@@ -1067,10 +1168,10 @@ function el_order_item_summary(PDO $db, array $orderIds): array
 }
 
 /** 相容版：只要未處理問題數時用這支 */
-function el_order_open_item_counts(PDO $db, array $orderIds): array
+function el_order_open_item_counts(PDO $db, array $orderIds, string $logType = 'order_note'): array
 {
     $out = [];
-    foreach (el_order_item_summary($db, $orderIds) as $oid => $r) $out[$oid] = $r['open_count'];
+    foreach (el_order_item_summary($db, $orderIds, $logType) as $oid => $r) $out[$oid] = $r['open_count'];
     return $out;
 }
 
@@ -1085,15 +1186,37 @@ function el_case_order_id(PDO $db, int $logId): int
 }
 
 /**
+ * 這個案件的 log_type（'order_note'／'order_process'／其他）。給回覆/已處理動作事後要
+ * 重算預覽時判斷該更新哪一個前端元件用（鐵律4：不要讓呼叫端各自猜）。
+ */
+function el_log_type_of(PDO $db, int $logId): ?string
+{
+    if ($logId <= 0) return null;
+    try {
+        $st = $db->prepare("SELECT log_type FROM eng_log WHERE id=?");
+        $st->execute([$logId]);
+        $v = $st->fetchColumn();
+        return $v === false ? null : (string)$v;
+    } catch (Throwable $e) { return null; }
+}
+
+/**
  * 「這張訂單目前有沒有未處理的問題」EXISTS 片段，給 WHERE／CASE WHEN 直接接進去用。
  * 比照 order_client_reminder_lib.php 的 ocr_pending_exists_sql() 同一種寫法（鐵律4：
  * 全站只定義這一份，NewOrder_Track.php 的統計/篩選 SQL 全部吃同一份，不要各自拼一次）。
  * eng_log_bind(bind_type,bind_id) 與 eng_log_item(log_id,status) 皆有索引。
  */
-function el_order_open_exists_sql(string $orderAlias = 'ot'): string
+function el_order_open_exists_sql(string $orderAlias = 'ot', string $logType = 'order_note'): string
 {
-    return "EXISTS (SELECT 1 FROM eng_log_bind elb JOIN eng_log_item eli ON eli.log_id = elb.log_id
+    // ★ 2026-10-06：加上 log_type 篩選（預設仍是 'order_note'，與改動前行為完全相同）。
+    // 「批圖溝通中」指的是訂單階段的設計備註未處理，轉生管之後才會有的「製程中問題」
+    // (order_process) 不該被算進這個統計，否則既有的卡片數字會被不相干的新資料灌水。
+    if (!in_array($logType, ['order_note', 'order_process'], true)) $logType = 'order_note';
+    return "EXISTS (SELECT 1 FROM eng_log_bind elb
+        JOIN eng_log elg ON elg.id = elb.log_id
+        JOIN eng_log_item eli ON eli.log_id = elb.log_id
         WHERE elb.bind_type='order' AND elb.bind_id = {$orderAlias}.Order_id
+        AND elg.log_type = '{$logType}'
         AND eli.status NOT IN ('resolved','dropped'))";
 }
 
