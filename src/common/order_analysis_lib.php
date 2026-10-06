@@ -756,19 +756,24 @@ function oa_analyze(PDO $db, array $opt = []): array
         foreach (ot_astag_variants($d) as $sc) {
             $k = $d['tag_id'] . ':' . $sc;
             $byAstag[$k] = ['key' => $k, 'label' => ot_astag_make_label($d, $sc), 'kind' => $d['kind'],
-                            'is_proc' => ($d['kind'] === 'process') ? 1 : 0, 'cur' => oa_blank(), 'cmp' => oa_blank()];
+                            'is_proc' => ($d['kind'] === 'process') ? 1 : 0, 'sort_order' => (int)$d['sort_order'],
+                            'cur' => oa_blank(), 'cmp' => oa_blank()];
         }
     }
-    $byAstag['unset'] = ['key' => 'unset', 'label' => '尚未設定標籤', 'kind' => '', 'is_proc' => 0,
+    // 2026-10-06 使用者要求：AS 集中在上面、非AS 在下面，組內順序照訂單追蹤設定的排序——
+    // 「尚未設定標籤」不是真正的認定分類，sort_order 給一個比任何定義都大的值，固定排最後。
+    $byAstag['unset'] = ['key' => 'unset', 'label' => '尚未設定標籤', 'kind' => '', 'is_proc' => 0, 'sort_order' => PHP_INT_MAX,
                           'cur' => oa_blank(), 'cmp' => oa_blank()];
     $accumAs = function (array $p, string $slot) use ($rows, &$byAstag, $inSel, $inRange) {
         foreach ($rows as $r) {
             if (!$inSel($r) || !$inRange($r, $p)) continue;
             $k = $r['as_key'];
             // 保險退路：訂單存著的標籤已經被停用（ot_astag_defs(true) 查不到），上面種不到，
-            // 真的遇到才現場補一列——不然那張單的資料會憑空消失。
+            // 真的遇到才現場補一列（排序值給一個很大但比 unset 小的數，落在各自 AS/非AS 組的尾端）
+            // ——不然那張單的資料會憑空消失。
             if (!isset($byAstag[$k])) $byAstag[$k] = ['key' => $k, 'label' => $r['as_label'], 'kind' => $r['as_kind'],
-                                                       'is_proc' => $r['as_proc'], 'cur' => oa_blank(), 'cmp' => oa_blank()];
+                                                       'is_proc' => $r['as_proc'], 'sort_order' => 99999,
+                                                       'cur' => oa_blank(), 'cmp' => oa_blank()];
             oa_add($byAstag[$k][$slot], $r, false);
         }
     };
@@ -781,12 +786,19 @@ function oa_analyze(PDO $db, array $opt = []): array
         $t['d_qty']    = $t['cur']['qty']    - $t['cmp']['qty'];
         $astagRows[] = $t;
     }
+    // 顯示順序：AS 在前、非AS 在後，組內依訂單追蹤「稽核製程標籤」設定頁的排序（sort_order）。
     usort($astagRows, function ($a, $b) {
+        if ($a['is_proc'] !== $b['is_proc']) return $b['is_proc'] <=> $a['is_proc'];
+        return $a['sort_order'] <=> $b['sort_order'];
+    });
+    // 趨勢圖另外依「本期金額」挑最重要的 12 類（避免圖表塞爆；不跟著上面的顯示順序走，
+    // 否則分類一多，金額最大的那幾類反而可能被排序擠出趨勢圖）。
+    $astagByAmount = $astagRows;
+    usort($astagByAmount, function ($a, $b) {
         $d = $b['cur']['amount'] <=> $a['cur']['amount'];
         return $d !== 0 ? $d : ($b['cur']['orders'] <=> $a['cur']['orders']);
     });
-    // 趨勢：本期實際出現過的分類，上限 12 條（避免圖表塞爆；分類再多靠下方表格分頁查）
-    $astagTopKeys = array_slice(array_map(function ($t) { return $t['key']; }, $astagRows), 0, 12);
+    $astagTopKeys = array_slice(array_map(function ($t) { return $t['key']; }, $astagByAmount), 0, 12);
     $astagTrend = [];
     foreach ($astagTopKeys as $k) {
         $row = ['key' => $k, 'label' => $byAstag[$k]['label'], 'orders' => [], 'qty' => [], 'amount' => []];

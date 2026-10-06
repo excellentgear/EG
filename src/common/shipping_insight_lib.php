@@ -333,16 +333,22 @@ function si_report(PDO $db, array $opt = []): array
         foreach (ot_astag_variants($d) as $sc) {
             $k = $d['tag_id'] . ':' . $sc;
             $byAstag[$k] = ['key' => $k, 'label' => ot_astag_make_label($d, $sc),
-                            'is_proc' => ($d['kind'] === 'process') ? 1 : 0, 'cur' => si_blank(), 'cmp' => si_blank()];
+                            'is_proc' => ($d['kind'] === 'process') ? 1 : 0, 'sort_order' => (int)$d['sort_order'],
+                            'cur' => si_blank(), 'cmp' => si_blank()];
         }
     }
-    $byAstag['unbound'] = ['key' => 'unbound', 'label' => '出貨單未綁定訂單', 'is_proc' => 0, 'cur' => si_blank(), 'cmp' => si_blank()];
-    $byAstag['unset']   = ['key' => 'unset',   'label' => '訂單尚未設定標籤', 'is_proc' => 0, 'cur' => si_blank(), 'cmp' => si_blank()];
+    // 2026-10-06 使用者要求：AS 集中在上面、非AS 在下面，組內順序照訂單追蹤設定的排序；
+    // 「未綁定訂單」「訂單尚未設定標籤」不是真正的認定分類，固定排在最後面。
+    $byAstag['unbound'] = ['key' => 'unbound', 'label' => '出貨單未綁定訂單', 'is_proc' => 0, 'sort_order' => PHP_INT_MAX,
+                           'cur' => si_blank(), 'cmp' => si_blank()];
+    $byAstag['unset']   = ['key' => 'unset',   'label' => '訂單尚未設定標籤', 'is_proc' => 0, 'sort_order' => PHP_INT_MAX - 1,
+                           'cur' => si_blank(), 'cmp' => si_blank()];
     $accumAs = function (array $p, string $slot) use ($shipRows, &$byAstag, $inSel, $inRange) {
         foreach ($shipRows as $r) {
             if (!$inSel($r) || !$inRange($r, $p)) continue;
             $k = $r['as_key'];
-            if (!isset($byAstag[$k])) $byAstag[$k] = ['key' => $k, 'label' => $r['as_label'], 'is_proc' => 0, 'cur' => si_blank(), 'cmp' => si_blank()];
+            if (!isset($byAstag[$k])) $byAstag[$k] = ['key' => $k, 'label' => $r['as_label'], 'is_proc' => 0,
+                                                       'sort_order' => 99999, 'cur' => si_blank(), 'cmp' => si_blank()];
             si_add_ship($byAstag[$k][$slot], $r);
         }
     };
@@ -353,8 +359,15 @@ function si_report(PDO $db, array $opt = []): array
         $t['d_amount'] = $t['cur']['ship_amount'] - $t['cmp']['ship_amount'];
         $astagRows[] = $t;
     }
-    usort($astagRows, function ($a, $b) { return $b['cur']['ship_amount'] <=> $a['cur']['ship_amount']; });
-    $astagTopKeys = array_slice(array_map(function ($t) { return $t['key']; }, $astagRows), 0, 12);
+    // 顯示順序：AS 在前、非AS 在後，組內依訂單追蹤「稽核製程標籤」設定頁的排序。
+    usort($astagRows, function ($a, $b) {
+        if ($a['is_proc'] !== $b['is_proc']) return $b['is_proc'] <=> $a['is_proc'];
+        return $a['sort_order'] <=> $b['sort_order'];
+    });
+    // 趨勢圖另外依「本期出貨金額」挑最重要的 12 類，不跟著上面的顯示順序走。
+    $astagByAmount = $astagRows;
+    usort($astagByAmount, function ($a, $b) { return $b['cur']['ship_amount'] <=> $a['cur']['ship_amount']; });
+    $astagTopKeys = array_slice(array_map(function ($t) { return $t['key']; }, $astagByAmount), 0, 12);
     $astagTrend = [];
     foreach ($astagTopKeys as $k) {
         $row = ['key' => $k, 'label' => $byAstag[$k]['label'], 'rows' => [], 'qty' => [], 'amount' => []];
