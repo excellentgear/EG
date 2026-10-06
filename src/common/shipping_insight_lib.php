@@ -738,11 +738,15 @@ function si_kpi_alert(PDO $db, ?string $today = null): ?array
     $got = $cur[$k]['ship'] ?? 0.0;
     $days = (int)date('t', strtotime($today));
     $left = max(0, $days - (int)date('j', strtotime($today)) + 1);
+    // 「只剩幾天」補一個工作天版本（今天起算到月底，含假日補班）——沿用 KPI 模組既有的行事曆。
+    $monthEnd = date('Y-m-t', strtotime($today));
+    $wdLeft = $left;
+    try { $wdLeft = kpi_as_workdays_inclusive($db, $today, $monthEnd); } catch (Throwable $e) {}
     return [
         'enabled' => 1, 'below' => 1, 'n' => $n, 'months' => $rows, 'bad_count' => count($bad),
         'bad_list' => array_map(function ($r) { return $r['year'] . '/' . $r['month'] . '月'; }, $bad),
         'this_year' => $y, 'this_month' => $m, 'month_target' => $mt, 'month_got' => $got,
-        'month_gap' => ($mt === null) ? null : max(0, $mt - $got), 'days_left' => $left,
+        'month_gap' => ($mt === null) ? null : max(0, $mt - $got), 'days_left' => $left, 'workdays_left' => $wdLeft,
         'indicator' => $have[0]['indicator'] ?? '月銷貨額達成率',
     ];
 }

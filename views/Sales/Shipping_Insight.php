@@ -1066,7 +1066,8 @@ function renderKpiAlert(){
   else {
     h += '<b>'+a.this_year+'/'+a.this_month+'月</b> 目標 <b>'+money(a.month_target)+'</b> 元，'
        + '目前已出貨 <b>'+money(a.month_got)+'</b> 元'
-       + (gap > 0 ? ('，<b style="color:var(--coral);font-size:15px;">還差 '+money(gap)+' 元</b>，只剩 <b>'+a.days_left+'</b> 天。')
+       + (gap > 0 ? ('，<b style="color:var(--coral);font-size:15px;">還差 '+money(gap)+' 元</b>，只剩 <b>'+a.days_left+'</b> 天'
+                     +(a.workdays_left!=null?'（約 <b>'+a.workdays_left+'</b> 個工作天）':'')+'。')
                   : '，<b style="color:#2E7D32;">本月已達標</b>。');
   }
   $('#kpiAlertBar').html(h);

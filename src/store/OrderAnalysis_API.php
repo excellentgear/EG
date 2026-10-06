@@ -120,7 +120,56 @@ switch ($action) {
         oaOut(['clients' => $list, 'year' => $year]);
     }
 
-    /* ── 設定（數量區間／全製單製關鍵字）─────────────────────── */
+    /* ── 交期工作天數 ＋ 急件分析 ──────────────────────────────── */
+    case 'leadtime_analyze': {
+        $clients = $_POST['clients'] ?? $_GET['clients'] ?? '';
+        if (is_string($clients)) {
+            $d = json_decode($clients, true);
+            $clients = is_array($d) ? $d : array_filter(array_map('trim', explode(',', $clients)));
+        }
+        $gran = (string)($_REQUEST['gran'] ?? 'quarter');
+        $cmp  = (string)($_REQUEST['cmp']  ?? 'yoy');
+        if (!isset(oa_grans()[$gran])) oaErr('不合法的期間粒度');
+        if (!isset(oa_compares()[$cmp])) oaErr('不合法的比較基準');
+
+        $rep = oa_leadtime_report($db, [
+            'year'           => (int)($_REQUEST['year'] ?? date('Y')),
+            'gran'           => $gran,
+            'idx'            => (int)($_REQUEST['idx'] ?? 1),
+            'cmp'            => $cmp,
+            'align'          => array_key_exists('align', $_REQUEST) ? (int)$_REQUEST['align'] : 1,
+            'include_paused' => !empty($_REQUEST['include_paused']),
+            'clients'        => array_values((array)$clients),
+        ]);
+        $rep['insights'] = oa_urgent_insights($rep);
+        oaOut($rep);
+    }
+
+    /* ── 客戶佔比報告（單一客戶 vs 全體，供列印 A4）───────────── */
+    case 'client_share': {
+        $gran  = (string)($_REQUEST['gran']  ?? 'quarter');
+        $basis = (string)($_REQUEST['basis'] ?? 'order');
+        $cmp   = (string)($_REQUEST['cmp']   ?? 'yoy');
+        if (!isset(oa_grans()[$gran]))       oaErr('不合法的期間粒度');
+        if (!isset(oa_date_bases()[$basis])) oaErr('不合法的日期基準');
+        if (!isset(oa_compares()[$cmp]))     oaErr('不合法的比較基準');
+        $client = trim((string)($_REQUEST['client'] ?? ''));
+        if ($client === '') oaErr('請先選擇客戶');
+
+        $rep = oa_client_share($db, [
+            'year'           => (int)($_REQUEST['year'] ?? date('Y')),
+            'gran'           => $gran,
+            'idx'            => (int)($_REQUEST['idx'] ?? 1),
+            'basis'          => $basis,
+            'cmp'            => $cmp,
+            'align'          => array_key_exists('align', $_REQUEST) ? (int)$_REQUEST['align'] : 1,
+            'include_paused' => !empty($_REQUEST['include_paused']),
+            'client'         => $client,
+        ]);
+        oaOut($rep);
+    }
+
+    /* ── 設定（數量區間／全製單製關鍵字／急件判定）───────────── */
     case 'settings_get': {
         $s  = oa_settings($db);
         $iy = oa_kpi_iy($db, (int)date('Y'));
@@ -128,8 +177,9 @@ switch ($action) {
             'bands'    => oa_qty_bands($db),
             'rules'    => oa_proc_rules($db),
             'fallback' => oa_proc_fallback($db),
+            'urgent'   => oa_urgent_settings($db),
             'defaults' => ['bands' => oa_qty_bands_default(), 'rules' => oa_proc_rules_default(),
-                           'alert' => oa_settings_default()],
+                           'alert' => oa_settings_default(), 'urgent' => oa_urgent_settings_default()],
             'alert'    => $s,
             'kpi_info' => $iy ? ['indicator_id' => (int)$iy['indicator_id'], 'name' => (string)$iy['name'],
                                  'target_text' => (string)($iy['target_text'] ?? ''),
@@ -186,6 +236,9 @@ switch ($action) {
         // 提醒／監控設定（前端同樣先驗一次，這裡用 oa_settings_save() 的同一套規則再擋一次）
         $alert = json_decode((string)($_POST['alert'] ?? 'null'), true);
         if ($alert !== null && !is_array($alert)) oaErr('提醒設定格式不正確');
+        // 急件判定設定（逐類別百分位，同規則由 oa_urgent_settings_save() 再擋一次）
+        $urgent = json_decode((string)($_POST['urgent'] ?? 'null'), true);
+        if ($urgent !== null && !is_array($urgent)) oaErr('急件判定設定格式不正確');
 
         $uname = (string)($_SESSION['userName'] ?? $uid);
         $db->beginTransaction();
@@ -197,12 +250,17 @@ switch ($action) {
                 $sv = oa_settings_save($db, $alert, $uname);
                 if (empty($sv['ok'])) { $db->rollBack(); oaErr(implode("\n", $sv['errors']), 400, ['errors' => $sv['errors']]); }
             }
+            if (is_array($urgent)) {
+                $su = oa_urgent_settings_save($db, $urgent, $uname);
+                if (empty($su['ok'])) { $db->rollBack(); oaErr(implode("\n", $su['errors']), 400, ['errors' => $su['errors']]); }
+            }
             $db->commit();
         } catch (Throwable $e) {
             if ($db->inTransaction()) $db->rollBack();
             oaErr('儲存失敗：' . $e->getMessage(), 500);
         }
-        oaOut(['bands' => $nb['bands'], 'rules' => $nr['rules'], 'fallback' => $fb, 'alert' => oa_settings($db)]);
+        oaOut(['bands' => $nb['bands'], 'rules' => $nr['rules'], 'fallback' => $fb,
+               'alert' => oa_settings($db), 'urgent' => oa_urgent_settings($db)]);
     }
 
     default:
