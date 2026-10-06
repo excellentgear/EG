@@ -196,6 +196,7 @@ table.a-t tbody tr:hover{background:#FBF0DE;}
         <a href="reconcile.php" title="到對帳作業頁"><i class="fa fa-check-square-o"></i> 對帳作業</a>
         <a href="ar_statement.php">應收對帳單</a>
         <a href="ap_statement.php">應付對帳單</a>
+        <a href="recon_track.php" title="每個客戶/廠商每個結帳月份的流程進度（處理中→已對帳→已送會計→會計已接收→會計已處理）"><i class="fa fa-tasks"></i> 對帳進度追蹤</a>
       </span>
     </div>
 
