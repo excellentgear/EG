@@ -403,6 +403,25 @@ $roleLabel = $P['admin'] ? '管制計畫管理員' : ($P['approve'] ? '可核准
             </div>
 
             <div class="cp-note">
+                <b>管制方法快選庫</b>：自動帶入時依<b>每一列特性自己的名稱</b>（產品特性欄，不是看製程）
+                比對「關鍵字」，命中就自動填入對應的管制方法；填寫畫面也有下拉可手動挑選，不必每次都打字。
+                <div style="margin-top:6px;">「關鍵字」是<b>特性名稱裡有包含到就算命中</b>（例：關鍵字「外觀」會命中
+                「外觀」「表面外觀」）；同時命中多筆關鍵字時，<b>取字數最長的那一筆</b>（較具體的優先，
+                例：「表面外觀不良」會贏過「外觀」）。帶入後仍是人工可覆蓋的欄位。</div>
+            </div>
+            <div class="cp-scroll" style="margin-bottom:14px;">
+                <table class="cp-t" id="tCtrlMethod" style="min-width:760px;" data-eg-row-add="ctrlMethodAdd" data-eg-row-del="ctrlMethodDel">
+                    <thead><tr><th style="width:160px;">特性名稱關鍵字</th><th>預設管制方法</th>
+                        <th style="width:66px;">排序</th><th style="width:60px;">啟用</th><th style="width:46px;"></th></tr></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div style="margin-bottom:18px;">
+                <button class="btn-w" id="btnSaveCtrlMethod"><i class="fa fa-save"></i> 儲存管制方法快選庫</button>
+                <button class="btn-w2" id="btnAddCtrlMethod"><i class="fa fa-plus"></i> 新增一列</button>
+            </div>
+
+            <div class="cp-note">
                 <b>檢驗類別自動判定（IQC／IPQC／FQC）</b>：自動帶入製程列時，依下面規則判定每一道製程後面
                 接哪種檢驗。判定結果存進每一道製程列的「檢驗類別」欄位，<b>之後是人工可覆蓋的欄位</b>
                 （編輯畫面逐列下拉可改，或按「重新判定檢驗類別」套用目前規則；但「重新判定」只重算分類，
@@ -646,7 +665,7 @@ var CANAPPR  = <?= $P['approve'] ? 'true' : 'false' ?>;
 var CANADMIN = <?= $P['admin'] ? 'true' : 'false' ?>;
 var CANVIEW  = <?= $P['view'] ? 'true' : 'false' ?>;
 
-var STAGES = [], CLASSES = [], REACTS = [], ASMETA = {}, TAGSTATUS = {};
+var STAGES = [], CLASSES = [], REACTS = [], CTRL_METHODS = [], ASMETA = {}, TAGSTATUS = {};
 var ASTAGDEFS = [], EXCLTAGS = [], REQTAGS = [];   // 稽核製程標籤定義／被排除的／要求建 CP 的
 var KGCODES = [], PACKCODES = [], FQC_THRESHOLD = 4, ASTAGINSP = {};   // 檢驗類別自動判定：客供料(IQC,唯讀)／包裝(唯讀)／FQC內容切換門檻／AS稽核製程次站設定
 var DOC = null;          // 目前編輯中的 CP
@@ -706,7 +725,7 @@ function boot(){
     if (!CANVIEW) return;
     get('bootstrap', {}, function(res){
         STAGES = res.stages || []; CLASSES = res.special_classes || [];
-        REACTS = res.reaction_opts || []; ASMETA = res.as_doc || {};
+        REACTS = res.reaction_opts || []; CTRL_METHODS = res.ctrl_method_defaults || []; ASMETA = res.as_doc || {};
         TAGSTATUS = res.tag_status || {};
         ASTAGDEFS = res.as_tag_defs || []; EXCLTAGS = res.excluded_as_tags || []; REQTAGS = res.required_as_tags || [];
         KGCODES = res.kg_codes || []; PACKCODES = res.pack_codes || []; FQC_THRESHOLD = res.fqc_threshold || 4;
@@ -978,7 +997,7 @@ function renderProcs(){
               +   '<input type="hidden" data-if="tool_id" data-pi="'+pi+'" data-ii="'+ii+'" value="'+esc(it.tool_id||'')+'"></td>'
               + td(pi,ii,'sample_size',it.sample_size,'width:68px;')
               + td(pi,ii,'sample_freq',it.sample_freq,'width:114px;')
-              + td(pi,ii,'control_method',it.control_method,'width:184px;',true)
+              + '<td>' + ctrlMethodPickHtml(pi,ii) + td(pi,ii,'control_method',it.control_method,'width:184px;margin-top:2px;',true,true) + '</td>'
               + '<td><select data-if="reaction_plan" data-pi="'+pi+'" data-ii="'+ii+'" style="width:164px;font-size:12px;height:26px;">'+reOpt+'</select></td>'
               + '<td style="text-align:center;"><a href="#" data-delitem="1" data-pi="'+pi+'" data-ii="'+ii+'" style="color:#8c2d18;"><i class="fa fa-times"></i></a></td>'
               + '</tr>';
@@ -1014,15 +1033,38 @@ function inspSelect(p, pi){
     opts.forEach(function(o){ h += '<option value="'+o[0]+'"'+((p.insp_stage||'')===o[0]?' selected':'')+'>'+o[1]+'</option>'; });
     return h + '</select>';
 }
-function td(pi, ii, f, v, style, isTa){
+function td(pi, ii, f, v, style, isTa, bare){
+    var open = bare ? '' : '<td>', close = bare ? '' : '</td>';
     if (isTa) {
-        return '<td><textarea data-if="'+f+'" data-pi="'+pi+'" data-ii="'+ii+'" style="'+(style||'')
+        return open + '<textarea data-if="'+f+'" data-pi="'+pi+'" data-ii="'+ii+'" style="'+(style||'')
              + 'font-size:12px;min-height:26px;height:46px;padding:2px 4px;border:1px solid #d8c3a0;border-radius:3px;">'
-             + esc(v||'') + '</textarea></td>';
+             + esc(v||'') + '</textarea>' + close;
     }
-    return '<td><input type="text" data-if="'+f+'" data-pi="'+pi+'" data-ii="'+ii+'" value="'+esc(v||'')
-         + '" style="'+(style||'')+'font-size:12px;height:26px;padding:2px 4px;border:1px solid #d8c3a0;border-radius:3px;"></td>';
+    return open + '<input type="text" data-if="'+f+'" data-pi="'+pi+'" data-ii="'+ii+'" value="'+esc(v||'')
+         + '" style="'+(style||'')+'font-size:12px;height:26px;padding:2px 4px;border:1px solid #d8c3a0;border-radius:3px;">' + close;
 }
+/* 管制方法快選下拉：選一個就直接覆蓋這一列的管制方法內容（不是附加——避免選錯又要手動清） */
+function ctrlMethodPickHtml(pi, ii){
+    if (!CTRL_METHODS.length) return '';
+    var h = '<select class="ctrl-method-pick" data-pi="'+pi+'" data-ii="'+ii+'" style="width:184px;font-size:11px;height:22px;margin-bottom:2px;">'
+          + '<option value="">快選…</option>';
+    CTRL_METHODS.forEach(function(c){
+        if (+c.is_active !== 1) return;
+        var preview = (c.control_method||'').replace(/\n/g,'／');
+        if (preview.length > 16) preview = preview.substring(0,16) + '…';
+        h += '<option value="'+c.id+'">['+esc(c.match_text)+'] '+esc(preview)+'</option>';
+    });
+    return h + '</select><br>';
+}
+$(document).on('change', '.ctrl-method-pick', function(){
+    var id = +$(this).val(); if (!id) return;
+    var pi = +$(this).data('pi'), ii = +$(this).data('ii');
+    var hit = CTRL_METHODS.filter(function(c){ return +c.id === id; })[0];
+    if (!hit || !DOC || !DOC.processes[pi] || !DOC.processes[pi].items[ii]) return;
+    DOC.processes[pi].items[ii].control_method = hit.control_method;
+    $(this).val('');
+    renderProcs();
+});
 
 /* 欄位改動即寫回 DOC（不等存檔，避免重繪時遺失） */
 $(document).on('input change', '[data-if]', function(){
@@ -1680,6 +1722,10 @@ function renderCfg(){
     REACTS.forEach(function(o){ h += reactRow(o); });
     $('#tReact tbody').html(h || reactRow({}));
 
+    h = '';
+    CTRL_METHODS.forEach(function(o){ h += ctrlMethodRow(o); });
+    $('#tCtrlMethod tbody').html(h || ctrlMethodRow({}));
+
     renderCodeChips('#kgCodeList', KGCODES, true);
     renderCodeChips('#packCodeList', PACKCODES, true);
     $('#fqcThreshold').val(FQC_THRESHOLD);
@@ -1732,14 +1778,26 @@ function reactRow(o){
       + '<td style="text-align:center;"><input type="radio" name="reactDef" data-rf="is_default"'+(+o.is_default===1?' checked':'')+'></td>'
       + '<td style="text-align:center;"><a href="#" class="rowdel" style="color:#8c2d18;"><i class="fa fa-times"></i></a></td></tr>';
 }
+function ctrlMethodRow(o){
+    return '<tr data-cmid="'+(o.id||'')+'">'
+      + '<td><input type="text" data-cmf="match_text" value="'+esc(o.match_text||'')+'" style="width:100%;height:26px;font-size:13px;" placeholder="例：外觀"></td>'
+      + '<td><textarea data-cmf="control_method" style="width:100%;min-height:26px;height:46px;font-size:13px;padding:2px 4px;border:1px solid #d8c3a0;border-radius:3px;">'+esc(o.control_method||'')+'</textarea></td>'
+      + '<td><input type="number" data-cmf="sort_order" value="'+(o.sort_order||0)+'" style="width:56px;height:26px;font-size:13px;"></td>'
+      + '<td style="text-align:center;"><input type="checkbox" data-cmf="is_active"'+(o.id?(+o.is_active===1?' checked':''):' checked')+'></td>'
+      + '<td style="text-align:center;"><a href="#" class="rowdel" style="color:#8c2d18;"><i class="fa fa-times"></i></a></td></tr>';
+}
 /* 可增列表格一律走共用檔的 data-eg-row-add/del（UI 規範，不自刻鍵盤邏輯） */
 function clsAdd($tb){ $tb = $tb && $tb.length ? $tb : $('#tClass tbody'); $tb.append(clsRow({})); }
 function clsDel($tr){ $tr = $tr && $tr.length ? $tr : $('#tClass tbody tr:last'); if ($('#tClass tbody tr').length > 1) $tr.remove(); }
 function reactAdd($tb){ $tb = $tb && $tb.length ? $tb : $('#tReact tbody'); $tb.append(reactRow({})); }
 function reactDel($tr){ $tr = $tr && $tr.length ? $tr : $('#tReact tbody tr:last'); if ($('#tReact tbody tr').length > 1) $tr.remove(); }
+function ctrlMethodAdd($tb){ $tb = $tb && $tb.length ? $tb : $('#tCtrlMethod tbody'); $tb.append(ctrlMethodRow({})); }
+function ctrlMethodDel($tr){ $tr = $tr && $tr.length ? $tr : $('#tCtrlMethod tbody tr:last'); if ($('#tCtrlMethod tbody tr').length > 1) $tr.remove(); }
 window.clsAdd = clsAdd; window.clsDel = clsDel; window.reactAdd = reactAdd; window.reactDel = reactDel;
+window.ctrlMethodAdd = ctrlMethodAdd; window.ctrlMethodDel = ctrlMethodDel;
 $('#btnAddClass').on('click', function(){ clsAdd(); });
 $('#btnAddReact').on('click', function(){ reactAdd(); });
+$('#btnAddCtrlMethod').on('click', function(){ ctrlMethodAdd(); });
 $(document).on('click', '.rowdel', function(e){
     e.preventDefault();
     var $tb = $(this).closest('tbody');
@@ -1804,6 +1862,20 @@ $('#btnSaveReact').on('click', function(){
     }
     post('reaction_opt_save', { rows: JSON.stringify(rows) }, function(res){
         toast(res.message); REACTS = res.rows || REACTS; renderCfg();
+    });
+});
+$('#btnSaveCtrlMethod').on('click', function(){
+    var rows = [];
+    $('#tCtrlMethod tbody tr').each(function(i){
+        var $t = $(this), mt = $t.find('[data-cmf=match_text]').val().trim(),
+            cm = $t.find('[data-cmf=control_method]').val().trim();
+        if (!mt || !cm) return;
+        rows.push({ id: $t.data('cmid') || 0, match_text: mt, control_method: cm,
+            sort_order: $t.find('[data-cmf=sort_order]').val() || (i+1),
+            is_active: $t.find('[data-cmf=is_active]').is(':checked') ? 1 : 0 });
+    });
+    post('ctrl_method_default_save', { rows: JSON.stringify(rows) }, function(res){
+        toast(res.message); CTRL_METHODS = res.rows || CTRL_METHODS; renderCfg();
     });
 });
 

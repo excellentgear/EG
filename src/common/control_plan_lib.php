@@ -237,6 +237,43 @@ function cp_reaction_opts(PDO $db, bool $onlyActive = true): array
 }
 
 /**
+ * 管制方法快選庫（cp_ctrl_method_default，使用者 2026-10-06 交辦）：管理員維護
+ * 「特性名稱關鍵字 → 預設管制方法」，自動帶入時依**特性自己的名稱**（ss_item.ctrl_point）
+ * 比對套用——刻意跟稍早修掉的 bug（管制方法照搬製程層級PFMEA、外觀被套到齒輪咬合
+ * 的管制方法）走不同維度：這裡比對的是這一列特性自己叫什麼，不是它所屬製程最嚴重
+ * 的失效模式是什麼，所以不會錯套到不相干的特性。
+ */
+function cp_ctrl_method_defaults(PDO $db, bool $onlyActive = true): array
+{
+    $w = $onlyActive ? "WHERE is_active=1" : "";
+    try {
+        return $db->query("SELECT * FROM cp_ctrl_method_default $w ORDER BY sort_order, id")
+                  ->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 依特性名稱找預設管制方法：CONTAINS 比對（match_text 是 ctrl_point 的子字串），
+ * 多筆命中時取 **match_text 最長**的那一筆（越具體的關鍵字優先，例如「表面外觀不良」
+ * 要贏過「外觀」），長度相同再依 sort_order。查無命中回空字串（自動帶入維持留白，
+ * 不是每個特性都一定要有管理員設過的管制方法）。
+ */
+function cp_ctrl_method_match(PDO $db, string $ctrlPoint): string
+{
+    $ctrlPoint = trim($ctrlPoint);
+    if ($ctrlPoint === '') return '';
+    $defs = cp_ctrl_method_defaults($db, true);
+    $best = null; $bestLen = -1;
+    foreach ($defs as $d) {
+        $mt = trim((string)($d['match_text'] ?? ''));
+        if ($mt === '' || mb_strpos($ctrlPoint, $mt) === false) continue;
+        $len = mb_strlen($mt);
+        if ($len > $bestLen) { $bestLen = $len; $best = $d; }
+    }
+    return $best ? (string)$best['control_method'] : '';
+}
+
+/**
  * 讀本模組的 system_parameters 設定值。
  * 【注意 param_value 是 json 型別（NOT NULL）】所以存進去的一律是 JSON、讀出來要 decode。
  * 本次實際踩過：把空清單存成空字串 '' 會丟 MySQL 3140「Invalid JSON text: The document is empty」，
@@ -929,12 +966,13 @@ function cp_sip_items_for_switch(PDO $db, int $processNo, string $stageFreq = ''
             $specText = $specText !== '' ? ($rangeTxt . '（' . $specText . '）') : $rangeTxt;
         }
         $freq = $stageFreq !== '' ? $stageFreq : trim((string)($it['freq'] ?? ''));
+        $ctrlPoint = trim((string)($it['ctrl_point'] ?? ''));
         $out[] = [
-            'seq' => $k + 1, 'char_product' => trim((string)($it['ctrl_point'] ?? '')), 'char_process' => '',
+            'seq' => $k + 1, 'char_product' => $ctrlPoint, 'char_process' => '',
             'special_class_id' => null, 'special_class_text' => '', 'spec_text' => $specText,
             'up_limit' => $up, 'lo_limit' => $lo, 'eval_method' => trim((string)($it['method'] ?? '')),
             'tool_no' => trim((string)($it['tool_no'] ?? '')), 'tool_id' => (int)($it['tool_id'] ?? 0) ?: null,
-            'sample_size' => '', 'sample_freq' => $freq, 'control_method' => '', 'reaction_plan' => '',
+            'sample_size' => '', 'sample_freq' => $freq, 'control_method' => cp_ctrl_method_match($db, $ctrlPoint), 'reaction_plan' => '',
             'src' => $sip['src'] ?: 'manual', 'src_ref' => $sip['src_ref'] ?? '', 'note' => trim((string)($it['note'] ?? '')),
         ];
     }
@@ -1148,8 +1186,10 @@ function cp_autofill_preview(PDO $db, array $opt): array
            同一個來源）；系統能做的是把 PFMEA 整理過的資訊**當參考**攤出來，不能替
            使用者下判斷。故**兩欄一律留白由人逐列填**，PFMEA 的全部失效模式整理成
            一段參考文字放在製程層級的提示列（pfmea_note，畫面在「作業說明」下方），
-           供建 CP 的人自己對照該製程的所有特性，判斷哪一條適用於哪一列。 */
-        $ctrlMethod = '';
+           供建 CP 的人自己對照該製程的所有特性，判斷哪一條適用於哪一列。
+           管制方法 2026-10-06 再追加：管理員可在「設定→管制方法快選庫」維護
+           「特性名稱關鍵字→預設管制方法」，下面 items 迴圈會依**每一列自己的
+           特性名稱**（不是製程）比對套用，見 cp_ctrl_method_match()。 */
         $specialClassId = null;
         $specialText = '';
 
@@ -1196,12 +1236,21 @@ function cp_autofill_preview(PDO $db, array $opt): array
                 $specText = $specText !== '' ? ($rangeTxt . '（' . $specText . '）') : $rangeTxt;
             }
 
-            // 頻率：階段預設優先（試作段=100%/首件），否則用 SIP 的頻率
-            $freq = $stageFreq !== '' ? $stageFreq : trim((string)($it['freq'] ?? ''));
+            /* 頻率：階段預設優先（試作段=100%/首件），否則用 SIP 的頻率。
+               **FQC 合成列例外**（使用者 2026-10-06 交辦「FQC內容是齒研製程SIP內容，
+               只是檢驗頻率改寫同抽樣規範」）：FQC 代表批次放行前的最終確認，業界慣例
+               是照抽樣規則表抽驗，不是沿用製程中檢驗(IPQC)那種「每顆/100%全尺寸」的
+               頻率寫法；CP 是範本不是對應單一批次的紀錄，沒有實際批量可以算出具體
+               抽驗數，所以印的是規則本身的參照，不是一個寫死的數字（跟線上檢驗
+               qc_suggest_sample_qty() 查的是同一張 qc_sampling_rule 表）。 */
+            $freq = (($p['src'] ?? '') === 'fqc_insert' || ($p['src'] ?? '') === 'fqc_insert_ship')
+                ? '依抽樣規則表抽驗（同線上檢驗，依實際批量查表）'
+                : ($stageFreq !== '' ? $stageFreq : trim((string)($it['freq'] ?? '')));
+            $ctrlPoint = trim((string)($it['ctrl_point'] ?? ''));
             $items[] = [
                 'seq'                => $k + 1,
                 'char_no'            => (string)($p['seq'] . '-' . ($k + 1)),
-                'char_product'       => trim((string)($it['ctrl_point'] ?? '')),
+                'char_product'       => $ctrlPoint,
                 'char_process'       => '',   // 見上方說明：不逐列套製程層級的 PFMEA 功能描述
                 'special_class_id'   => $specialClassId,
                 'special_class_text' => $specialText,
@@ -1213,7 +1262,7 @@ function cp_autofill_preview(PDO $db, array $opt): array
                 'tool_id'            => (int)($it['tool_id'] ?? 0) ?: null,
                 'sample_size'        => '',
                 'sample_freq'        => $freq,
-                'control_method'     => $ctrlMethod,
+                'control_method'     => cp_ctrl_method_match($db, $ctrlPoint),
                 'reaction_plan'      => $defReact,
                 'src'                => $sip['src'] ?: 'manual',
                 'src_ref'            => $sip['src_ref'] ? ($sip['src_ref'] . '#' . $it['item_id']) : '',

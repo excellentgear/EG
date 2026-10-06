@@ -64,6 +64,7 @@ case 'bootstrap': {
         'stages'          => cp_stages($db),
         'special_classes' => cp_special_classes($db),
         'reaction_opts'   => cp_reaction_opts($db, false),
+        'ctrl_method_defaults' => cp_ctrl_method_defaults($db, false),
         'as_doc'          => cp_print_meta($db),
         'tag_status'      => $tagInfo,
         'as_tag_defs'     => cp_as_tag_defs($db, false),
@@ -426,6 +427,37 @@ case 'reaction_opt_save': {
         jerr('儲存失敗：' . $e->getMessage());
     }
     jout(true, ['message' => '已儲存。', 'rows' => cp_reaction_opts($db, false)]);
+}
+
+/* 管制方法快選庫：特性名稱關鍵字 → 預設管制方法（見 cp_ctrl_method_match() 說明） */
+case 'ctrl_method_default_save': {
+    if (!$perm['admin']) { http_response_code(403); jerr('只有管制計畫管理員可以改設定'); }
+    $rows = $jsonArr('rows');
+    $db->beginTransaction();
+    try {
+        $keep = [];
+        $up = $db->prepare("UPDATE cp_ctrl_method_default SET match_text=?, control_method=?, sort_order=?, is_active=? WHERE id=?");
+        $ins = $db->prepare("INSERT INTO cp_ctrl_method_default (match_text, control_method, sort_order, is_active) VALUES (?,?,?,?)");
+        foreach ($rows as $i => $r) {
+            $mt = trim((string)($r['match_text'] ?? ''));
+            $cm = trim((string)($r['control_method'] ?? ''));
+            if ($mt === '' || $cm === '') continue;
+            $so = (int)($r['sort_order'] ?? ($i + 1));
+            $act = (int)!empty($r['is_active']);
+            $id = (int)($r['id'] ?? 0);
+            if ($id > 0) { $up->execute([$mt, $cm, $so, $act, $id]); $keep[] = $id; }
+            else { $ins->execute([$mt, $cm, $so, $act]); $keep[] = (int)$db->lastInsertId(); }
+        }
+        $all = $db->query("SELECT id FROM cp_ctrl_method_default")->fetchAll(PDO::FETCH_COLUMN) ?: [];
+        foreach ($all as $cid) {
+            if (!in_array((int)$cid, $keep, true)) $db->exec("DELETE FROM cp_ctrl_method_default WHERE id=" . (int)$cid);
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        jerr('儲存失敗：' . $e->getMessage());
+    }
+    jout(true, ['message' => '已儲存。', 'rows' => cp_ctrl_method_defaults($db, false)]);
 }
 
 /* 哪些稽核製程標籤「不要求」建 CP（存排除名單；空＝全部稽核製程都要求）。
