@@ -1239,6 +1239,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .btn-type-toggle.type-okng:hover { background:var(--ink); }
     /* RANGE 模式下限≥上限：即時紅框提示（表單三總則③錯誤即時偵測並顯示原因） */
     #items-table .table-input.tol-invalid { border-color:var(--coral); background:#FDEDEA; }
+    /* 容器未選擇紅框（2026-10-06 使用者要求：阻擋存檔之外要紅框框出未填區塊，方便快速確認） */
+    #insp-container-1.ctn-invalid, #insp-container-2.ctn-invalid { border-color:var(--coral); background:#FDEDEA; box-shadow:0 0 0 1px var(--coral); }
     /* 項目列的操作鈕（加量測/備註/刪除）改放在「檢驗項目」欄名稱下方，
        原本擺最右欄會被視窗右緣切掉看不到（2026-07-30 現場回饋） */
     .row-acts { margin-top:4px; font-size:12px; }
@@ -3938,6 +3940,10 @@ $(function(){
     }
     $('#inp-qty,#inp-remark').on('input', scheduleDraftSave);
     $('#inp-qty').on('input', updateQtyLive);
+    // 選了任一容器就立刻撤掉紅框，不必等下一次按儲存才知道已經補填（存檔前的把關仍在 doSave 本身）
+    $('#insp-container-1,#insp-container-2').on('change', function(){
+        if($('#insp-container-1').val() || $('#insp-container-2').val()) $('#insp-container-1,#insp-container-2').removeClass('ctn-invalid');
+    });
     $('#btn-dock-extra').on('click', function(){ $('#dock-extra').slideToggle(120, syncDockPad); });
 
     // ---------- 首件/末件：簡單按鈕，按了才算，不按＝一般檢驗；直接全檢(=送驗數件)不走抽樣 ----------
@@ -4081,7 +4087,7 @@ $(function(){
         $('#main-area').show(); $('#dock').show(); syncDockPad();
         $('#inp-qty').val(SHIP_DATA.total_qty||0); updateQtyLive();
         $('#inp-sample').val(state.sampleN).data('prev', state.sampleN);
-        $('#insp-container-1,#insp-container-2').val(''); $('#insp-quantity-1,#insp-quantity-2').val('');
+        $('#insp-container-1,#insp-container-2').val('').removeClass('ctn-invalid'); $('#insp-quantity-1,#insp-quantity-2').val('');
         applyInspKindUI();
         renderBfStageBanner();
         renderBatches();
@@ -4327,7 +4333,7 @@ $(function(){
             $('#main-area').show(); $('#dock').show(); syncDockPad();
             $('#inp-qty').val(ctx.order_qty || 0); updateQtyLive();
             $('#inp-sample').val(state.sampleN);
-            $('#insp-container-1,#insp-container-2').val('');
+            $('#insp-container-1,#insp-container-2').val('').removeClass('ctn-invalid');
             $('#insp-quantity-1,#insp-quantity-2').val('');
             applyInspKindUI();
             renderBatches();
@@ -5867,10 +5873,12 @@ $(function(){
             var ctn1=$('#insp-container-1').val()||'', ctn2=$('#insp-container-2').val()||'';
             if(!ctn1 && !ctn2){
                 $('#dock-extra').show(); syncDockPad();
+                $('#insp-container-1,#insp-container-2').addClass('ctn-invalid');   // 紅框框出未填區塊
                 alert('請至少選擇一個容器（容器1或容器2）才能儲存檢驗結果。\n\n只設定其中一個時會自動視為容器1的內容。');
                 $('#insp-container-1').focus();
                 return;
             }
+            $('#insp-container-1,#insp-container-2').removeClass('ctn-invalid');
         }
 
         // 補資料（管理員）：新單暫存的檢驗日期/檢驗人員/主管審核，隨這次存檔一起送出；
