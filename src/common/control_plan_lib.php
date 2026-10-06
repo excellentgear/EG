@@ -1306,6 +1306,16 @@ function cp_autofill_preview(PDO $db, array $opt): array
         $res['processes'] = cp_insp_gap_annotate($db, $res['processes'], $partDId ?: null);
     }
 
+    // 同料號是否已有製程鏈完全相同的既有CP可以直接複製內容（見 cp_find_similar_cp 說明）
+    if ($partDId && $res['processes']) {
+        $realNos = [];
+        foreach ($res['processes'] as $p) {
+            if (in_array($p['src'] ?? '', ['fqc_insert', 'fqc_insert_ship'], true)) continue;
+            if ($p['process_no'] !== null) $realNos[] = (int)$p['process_no'];
+        }
+        $res['similar_cp'] = $realNos ? cp_find_similar_cp($db, $partDId, $realNos) : null;
+    }
+
     return $res;
 }
 
@@ -1595,6 +1605,82 @@ function cp_insert_fqc_row(PDO $db, array $procs, ?int $partDId): array
     unset($p);
 
     return $procs;
+}
+
+/**
+ * 同料號是否已有一份「製程鏈完全相同」的既有管制計畫可以直接複製（使用者 2026-10-06
+ * 交辦）：自動帶入永遠重新從 SIP/PFMEA 帶，管制方法／特殊分類一律留白或走快選庫；
+ * 但如果這個料號、這個製程鏈之前已經建過 CP，那份 CP 上的管制方法／特殊分類是人工
+ * 確認過的內容，比重新留白再填一次更有效率——找得到就在預覽畫面提供「複製」選項，
+ * 找不到就跟現在一樣走全新自動帶入，兩條路並存不互相影響。
+ * 比對只看「真正的製程鏈」（排除 cp_insert_fqc_row 插入的合成列），那是每次自動帶入
+ * 都會重算的衍生資料，不是製令本身真正的製程順序，拿來比對只會永遠比不中。
+ * 多筆候選時取**最近更新**的那一份（最新的最可能反映目前的正確做法）。
+ */
+function cp_find_similar_cp(PDO $db, int $partDId, array $realProcNos): ?array
+{
+    if (!$partDId || !$realProcNos) return null;
+    $want = array_values(array_map('intval', $realProcNos));
+    try {
+        $st = $db->prepare(
+            "SELECT cp_id, cp_no, status, stage_id, COALESCE(modified_at, created_at) AS updated_at FROM cp_doc
+              WHERE is_deleted=0 AND scope='part' AND part_d_id=?
+              ORDER BY COALESCE(modified_at, created_at) DESC"
+        );
+        $st->execute([$partDId]);
+        $cands = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        foreach ($cands as $c) {
+            $st2 = $db->prepare(
+                "SELECT process_no FROM cp_process WHERE cp_id=? AND src NOT IN ('fqc_insert','fqc_insert_ship') ORDER BY seq"
+            );
+            $st2->execute([(int)$c['cp_id']]);
+            $chain = array_values(array_map('intval', $st2->fetchAll(PDO::FETCH_COLUMN) ?: []));
+            if ($chain === $want) {
+                $c['stage_name'] = ($s = cp_stage_one($db, (int)$c['stage_id'])) ? $s['stage_name'] : '';
+                $c['status_label'] = cp_status_label((string)$c['status']);
+                return $c;
+            }
+        }
+    } catch (Throwable $e) {}
+    return null;
+}
+
+/**
+ * 複製既有 CP 的內容（含人工確認過的管制方法／特殊分類），回傳格式比照
+ * cp_autofill_preview() 的 processes 形狀，前端可以直接拿去替換預覽內容、
+ * 走同一條「用這些內容建立」存檔流程（不直接複製整張 cp_doc，使用者在預覽階段
+ * 還可以再調整，跟一般自動帶入預覽的體驗一致）。
+ */
+function cp_copy_from_cp(PDO $db, int $srcCpId): array
+{
+    $doc = cp_get($db, $srcCpId);
+    if (!$doc) return [];
+    $out = [];
+    foreach (($doc['processes'] ?? []) as $p) {
+        $items = [];
+        foreach (($p['items'] ?? []) as $it) {
+            $items[] = [
+                'char_no' => $it['char_no'], 'char_product' => $it['char_product'], 'char_process' => $it['char_process'],
+                'special_class_id' => $it['special_class_id'], 'special_class_text' => $it['special_class_text'],
+                'spec_text' => $it['spec_text'], 'up_limit' => $it['up_limit'], 'lo_limit' => $it['lo_limit'],
+                'eval_method' => $it['eval_method'], 'tool_id' => $it['tool_id'], 'tool_no' => $it['tool_no'],
+                'sample_size' => $it['sample_size'], 'sample_freq' => $it['sample_freq'],
+                'control_method' => $it['control_method'], 'reaction_plan' => $it['reaction_plan'],
+                'src' => 'copy_cp', 'src_ref' => 'cp' . $srcCpId, 'note' => $it['note'],
+            ];
+        }
+        $out[] = [
+            'process_no' => $p['process_no'], 'process_name' => $p['process_name'], 'op_desc' => $p['op_desc'],
+            'machine' => $p['machine'], 'jig_tool' => $p['jig_tool'], 'maker_id_no' => $p['maker_id_no'], 'maker_name' => $p['maker_name'],
+            'is_outsource' => $p['is_outsource'], 'insp_stage' => $p['insp_stage'], 'insp_src' => 'copy_cp', 'insp_gap' => null,
+            'bom_sn' => $p['bom_sn'], 'src' => ($p['src'] ?: 'copy_cp'), 'note' => $p['note'], 'hint' => '', 'pfmea_note' => '',
+            'items' => $items,
+        ];
+    }
+    // 複製進來的分類/文件缺口是「當時」的狀態，查無已核准SOP/SIP的提示要用現在的資料重查一次，
+    // 否則會出現「複製過來的列永遠不會標缺口」的假象。
+    $partDId = (int)($doc['part_d_id'] ?? 0);
+    return cp_insp_gap_annotate($db, $out, $partDId ?: null);
 }
 
 /**

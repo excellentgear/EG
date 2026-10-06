@@ -108,6 +108,17 @@ case 'autofill': {
     jout(true, $r);
 }
 
+/* 複製同料號、製程鏈完全相同的既有CP內容（見 control_plan_lib.php cp_find_similar_cp／
+   cp_copy_from_cp 說明），$r.similar_cp 存在時預覽畫面會有「複製」按鈕呼叫這裡。 */
+case 'copy_from_cp': {
+    if (!$perm['view']) { http_response_code(403); jerr('沒有檢視權限'); }
+    $srcId = (int)($_GET['src_cp_id'] ?? $_POST['src_cp_id'] ?? 0);
+    if ($srcId <= 0) jerr('缺少來源管制計畫。');
+    $rows = cp_copy_from_cp($db, $srcId);
+    if (!$rows) jerr('找不到來源管制計畫，或它沒有任何製程列。');
+    jout(true, ['processes' => $rows]);
+}
+
 /* 依目前設定重新判定檢驗類別（給手動調整過製程順序／增刪列之後用；純計算、不寫入）。
    $rows 只需要 process_no，順序＝畫面目前的順序（呼叫端要照目前順序送）。 */
 case 'recalc_insp': {

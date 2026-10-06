@@ -1422,6 +1422,15 @@ $('#btnPreview').on('click', function(){
         PREVIEW = res; renderPreview(res);
     });
 });
+$(document).on('click', '#btnCopyFromCp', function(){
+    var srcId = +$(this).data('srccpid');
+    if (!srcId || !PREVIEW) return;
+    get('copy_from_cp', { src_cp_id: srcId }, function(res){
+        PREVIEW.processes = res.processes || PREVIEW.processes;
+        renderPreview(PREVIEW);
+        toast('已複製該份管制計畫的內容，確認無誤後按「用這些內容建立管制計畫」。');
+    });
+});
 function renderPreview(r){
     var h = '';
     (r.warn || []).forEach(function(w){ h += '<div class="cp-note warn">'+esc(w)+'</div>'; });
@@ -1446,6 +1455,19 @@ function renderPreview(r){
       +  (src.bom_date ? '（'+dispDate(src.bom_date)+'）' : '')
       +  '　PFMEA '+(hd.pfmea_doc_id ? ('#'+hd.pfmea_doc_id) : '<span style="color:#8c2d18;">無</span>')
       +  '</div>';
+
+    /* 同料號若已有一份製程鏈完全相同的既有CP，提供「複製」——那份的管制方法／特殊分類
+       是人工確認過的內容，比這裡自動帶入永遠留白再手動填一次更有效率（見
+       cp_find_similar_cp 說明），兩條路並存，使用者自己選。 */
+    if (r.similar_cp) {
+        var sc = r.similar_cp;
+        h += '<div class="cp-note" style="background:#F7E0BD;border-color:#e0c79a;color:#6b4a28;">'
+          +  '<b>這個料號已有一份製程完全相同的管制計畫</b>：'+esc(sc.cp_no||('#'+sc.cp_id))
+          +  '　階段 '+esc(sc.stage_name||'—')+'　狀態 '+esc(sc.status_label||sc.status)
+          +  '　更新於 '+dispDate(sc.updated_at)
+          +  '　<button class="btn-w2 btn-xs2" id="btnCopyFromCp" data-srccpid="'+sc.cp_id+'">'
+          +  '<i class="fa fa-copy"></i> 複製這份內容（含已確認的管制方法／特殊分類）</button></div>';
+    }
 
     var procs = r.processes || [], nItem = 0;
     procs.forEach(function(p){ nItem += (p.items||[]).length; });
@@ -1517,7 +1539,7 @@ function mapPrevProc(p){
     // 改為一律留白由人填，不再從 PFMEA 自動帶（見 control_plan_lib.php 說明），
     // pfmea_note 是製程層級的 PFMEA 參考文字，供人逐列判斷用、本身不寫進任何欄位。
     return { process_no: p.process_no, process_name: p.process_name, op_desc: p.op_desc || '',
-             machine: p.machine, jig_tool: '', maker_id_no: p.maker_id_no, maker_name: p.maker_name,
+             machine: p.machine, jig_tool: p.jig_tool || '', maker_id_no: p.maker_id_no, maker_name: p.maker_name,
              is_outsource: p.is_outsource, insp_stage: p.insp_stage || '', insp_src: p.insp_src || '', insp_gap: p.insp_gap || '',
              bom_sn: p.bom_sn, src: p.src || 'bom', note: '',
              hint: p.hint || '', pfmea_note: p.pfmea_note || '', items: (p.items || []).map(function(it){
