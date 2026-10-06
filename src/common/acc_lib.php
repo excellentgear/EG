@@ -1546,7 +1546,7 @@ function acc_customer_by_name(PDO $db, bool $reload = false): array
         foreach ($db->query("SELECT customer_id, customer, customer_full, tax_id, invoice_email,
                                     customer_address, customer_tel, customer_fax,
                                     billing_contact, settlement_mode, settlement_day,
-                                    payment_method, net_days
+                                    payment_method, net_days, need_recon_stmt, recon_provide_by
                              FROM customer_list")->fetchAll(PDO::FETCH_ASSOC) as $c) {
             $c['alias_of'] = null;
             $byId[trim((string)$c['customer_id'])] = $c;
