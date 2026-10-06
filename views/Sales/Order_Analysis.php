@@ -116,6 +116,10 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 .badge-return { background:var(--amber); color:#4E2C0B; border-radius:9px; padding:1px 7px; font-size:10px; line-height:16px; display:inline-block; }
 .badge-lost { background:#7A4A34; color:#fff; border-radius:9px; padding:1px 7px; font-size:10px; line-height:16px; display:inline-block; }
 .badge-warn { background:var(--sand); color:#6B4423; border-radius:9px; padding:1px 7px; font-size:10px; line-height:16px; display:inline-block; }
+/* AS 稽核分類：AS（kind=process，管理員設定的稽核製程）／非AS（固定選項＋管理員自訂其他選項），
+   分組規則與 NewOrder_Track.php 下拉分組同一套（kind==='process'） */
+.badge-as    { background:var(--coral); color:#fff; border-radius:4px; padding:1px 6px; font-size:10px; font-weight:700; line-height:16px; display:inline-block; margin-right:4px; }
+.badge-nonas { background:#E4D3BC; color:#6B4423; border-radius:4px; padding:1px 6px; font-size:10px; font-weight:700; line-height:16px; display:inline-block; margin-right:4px; }
 /* 客戶 chips */
 .chips { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
 .chip { background:var(--sand); color:#6B4423; border:1px solid var(--line); border-radius:12px;
@@ -1298,6 +1302,18 @@ function renderProc(){
    與上面「全製／單製」用的是同一套人工認定結果，但這裡展開成「每一個認定分類」
    各自的統計（全製／單製○○／多製程／廠內治具…＋尚未設定標籤），分類數跟著管理員
    在訂單追蹤設定的稽核製程標籤自動變動；類別一多，表格用頁內分頁（每頁 10 列）顯示。 */
+/* 分類名稱左側的 AS／非AS 籤：is_proc=1（kind=process，管理員設定的稽核製程，如齒研/插齒）＝AS，
+   其餘固定選項／管理員自訂其他選項＝非AS；與 NewOrder_Track.php 下拉分組同一套規則。
+   「尚未設定標籤」沒有認定結果，不給籤（避免誤讀成某一類）。 */
+function astagBadge(t){
+  if(t.key === 'unset') return '';
+  return t.is_proc ? '<span class="badge-as">AS</span>' : '<span class="badge-nonas">非AS</span>';
+}
+/* 同一組規則的純文字版（CSV／列印用，不能嵌 HTML） */
+function astagLabelText(t){
+  if(t.key === 'unset') return t.label;
+  return (t.is_proc ? 'AS ' : '非AS ') + t.label;
+}
 var ASTAG_PAGE = 1, ASTAG_PER = 10;
 function renderAstag(){
   var a = DATA.astag || {rows:[], trend:[], buckets:[], unset:null, tagged_pct:0}, rows = a.rows||[];
@@ -1347,7 +1363,7 @@ function renderAstagTable(){
   slice.forEach(function(t){
     var isUnset = (t.key === 'unset');
     h += '<tr'+(isUnset?' style="color:#a08a6f;"':'')+'>'
-       + '<td>'+esc(t.label)+(isUnset?' <span class="badge-warn">尚未設定</span>':'')+'</td>'
+       + '<td>'+astagBadge(t)+esc(t.label)+(isUnset?' <span class="badge-warn">尚未設定</span>':'')+'</td>'
        + '<td class="n">'+nf(t.cur.orders)+'</td><td class="n">'+nf(t.cur.qty)+'</td>'
        + '<td class="n">'+money(t.cur.amount)+'</td>'
        + '<td class="n">'+nf(t.cmp.orders)+'</td><td class="n">'+money(t.cmp.amount)+'</td>'
@@ -1570,7 +1586,7 @@ $('#btnCsv').on('click', function(){
   row('');
   row('【AS 稽核分類】','分類','本期筆數','本期數量','本期金額','基期筆數','基期數量','基期金額');
   (DATA.astag && DATA.astag.rows || []).forEach(function(t){
-    row('', t.label, t.cur.orders, t.cur.qty, Math.round(t.cur.amount), t.cmp.orders, t.cmp.qty, Math.round(t.cmp.amount));
+    row('', astagLabelText(t), t.cur.orders, t.cur.qty, Math.round(t.cur.amount), t.cmp.orders, t.cmp.qty, Math.round(t.cmp.amount));
   });
   row('');
   row('【客戶（全部）】','客戶','客戶編號','本期筆數','本期數量','本期金額','基期筆數','基期數量','基期金額',
@@ -1746,7 +1762,7 @@ function oaPrintHtml(){
   // AS 稽核分類（依訂單追蹤「稽核製程標籤」認定；分類數隨管理員設定自動變動）
   var astagPieSvg = prChartSvg('chAstagPie', 420, 260);
   var astagRows = ''; ((DATA.astag && DATA.astag.rows)||[]).slice(0,12).forEach(function(t){
-    astagRows += '<tr><td>'+esc(t.label)+'</td><td class="tr">'+nf(t.cur.orders)+'</td><td class="tr">'+money(t.cur.amount)+'</td></tr>';
+    astagRows += '<tr><td>'+esc(astagLabelText(t))+'</td><td class="tr">'+nf(t.cur.orders)+'</td><td class="tr">'+money(t.cur.amount)+'</td></tr>';
   });
   if(astagPieSvg || astagRows){
     h += '<div class="pr-sec"><div class="pr-two">'+

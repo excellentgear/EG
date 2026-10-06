@@ -744,12 +744,29 @@ function oa_analyze(PDO $db, array $opt = []): array
     /* ── AS 稽核分類（依訂單追蹤「稽核製程標籤」設定，人確認過的結果，不是關鍵字猜的）──
        與上面「全製／單製」是兩回事：那個是程式用製程文字猜的粗略分類，這裡是每張單
        自己選過的稽核認定（全製／單製○○／多製程／廠內治具…）。同一張單只會落在一個分類，
-       還沒設定的歸進 'unset'（尚未設定標籤），刻意不漏報，否則使用者會以為系統漏算。 */
+       還沒設定的歸進 'unset'（尚未設定標籤），刻意不漏報，否則使用者會以為系統漏算。
+       2026-10-06 使用者回報「有新增項目但分析表上沒顯示」——原本只有「本期或基期真的有
+       訂單」的分類才會出現，管理員剛新增的分類在還沒有任何訂單掛上去之前永遠看不到，
+       沒辦法確認設定有沒有生效。改成**先用目前全部啟用中的定義把每一個分類（含每個變體）
+       都種一列 0**，再疊上真實資料；'is_proc'＝這個分類算不算「AS」（kind=process，即管理員
+       設定的稽核製程），非 AS＝固定選項／管理員自訂的其他固定選項，前端用這個旗標加
+       「AS／非AS」籤，分組規則與 NewOrder_Track.php 的下拉分組同一套（kind==='process'）。 */
     $byAstag = [];
+    foreach (ot_astag_defs($db, true) as $d) {
+        foreach (ot_astag_variants($d) as $sc) {
+            $k = $d['tag_id'] . ':' . $sc;
+            $byAstag[$k] = ['key' => $k, 'label' => ot_astag_make_label($d, $sc), 'kind' => $d['kind'],
+                            'is_proc' => ($d['kind'] === 'process') ? 1 : 0, 'cur' => oa_blank(), 'cmp' => oa_blank()];
+        }
+    }
+    $byAstag['unset'] = ['key' => 'unset', 'label' => '尚未設定標籤', 'kind' => '', 'is_proc' => 0,
+                          'cur' => oa_blank(), 'cmp' => oa_blank()];
     $accumAs = function (array $p, string $slot) use ($rows, &$byAstag, $inSel, $inRange) {
         foreach ($rows as $r) {
             if (!$inSel($r) || !$inRange($r, $p)) continue;
             $k = $r['as_key'];
+            // 保險退路：訂單存著的標籤已經被停用（ot_astag_defs(true) 查不到），上面種不到，
+            // 真的遇到才現場補一列——不然那張單的資料會憑空消失。
             if (!isset($byAstag[$k])) $byAstag[$k] = ['key' => $k, 'label' => $r['as_label'], 'kind' => $r['as_kind'],
                                                        'is_proc' => $r['as_proc'], 'cur' => oa_blank(), 'cmp' => oa_blank()];
             oa_add($byAstag[$k][$slot], $r, false);

@@ -324,13 +324,25 @@ function si_report(PDO $db, array $opt = []): array
 
     /* ── AS 稽核分類（透過出貨單綁定的訂單反查「稽核製程標籤」認定）──
        與訂單分析同一套人工認定結果，不是另外猜的；「未綁定訂單」與「訂單尚未設定標籤」
-       分開列，方便分辨要去補綁定還是要去補標籤。 */
+       分開列，方便分辨要去補綁定還是要去補標籤。與訂單分析同規則：先把目前啟用中的
+       定義（含每個變體）都種一列 0，管理員剛新增的分類才看得到（不必等到有出貨資料）；
+       'is_proc' 供前端標「AS／非AS」籤，判定與 NewOrder_Track.php 的下拉分組同一套
+       （kind==='process' 才算 AS）。 */
     $byAstag = [];
+    foreach (ot_astag_defs($db, true) as $d) {
+        foreach (ot_astag_variants($d) as $sc) {
+            $k = $d['tag_id'] . ':' . $sc;
+            $byAstag[$k] = ['key' => $k, 'label' => ot_astag_make_label($d, $sc),
+                            'is_proc' => ($d['kind'] === 'process') ? 1 : 0, 'cur' => si_blank(), 'cmp' => si_blank()];
+        }
+    }
+    $byAstag['unbound'] = ['key' => 'unbound', 'label' => '出貨單未綁定訂單', 'is_proc' => 0, 'cur' => si_blank(), 'cmp' => si_blank()];
+    $byAstag['unset']   = ['key' => 'unset',   'label' => '訂單尚未設定標籤', 'is_proc' => 0, 'cur' => si_blank(), 'cmp' => si_blank()];
     $accumAs = function (array $p, string $slot) use ($shipRows, &$byAstag, $inSel, $inRange) {
         foreach ($shipRows as $r) {
             if (!$inSel($r) || !$inRange($r, $p)) continue;
             $k = $r['as_key'];
-            if (!isset($byAstag[$k])) $byAstag[$k] = ['key' => $k, 'label' => $r['as_label'], 'cur' => si_blank(), 'cmp' => si_blank()];
+            if (!isset($byAstag[$k])) $byAstag[$k] = ['key' => $k, 'label' => $r['as_label'], 'is_proc' => 0, 'cur' => si_blank(), 'cmp' => si_blank()];
             si_add_ship($byAstag[$k][$slot], $r);
         }
     };

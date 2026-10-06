@@ -110,6 +110,10 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
 .badge-lost { background:#5B7A99; color:#fff; border-radius:9px; padding:1px 7px; font-size:10px; line-height:16px; display:inline-block; }
 .badge-warn { background:var(--sand); color:#1B4F78; border-radius:9px; padding:1px 7px; font-size:10px; line-height:16px; display:inline-block; }
 .badge-anom { background:#FCE9E7; color:var(--coral); border:1px solid var(--coral); border-radius:9px; padding:0 6px; font-size:10px; line-height:16px; display:inline-block; }
+/* AS 稽核分類：AS（kind=process，管理員設定的稽核製程）／非AS（固定選項＋管理員自訂其他選項），
+   分組規則與 NewOrder_Track.php 下拉分組同一套（kind==='process'） */
+.badge-as    { background:var(--coral); color:#fff; border-radius:4px; padding:1px 6px; font-size:10px; font-weight:700; line-height:16px; display:inline-block; margin-right:4px; }
+.badge-nonas { background:#C7DEF2; color:#1B4F78; border-radius:4px; padding:1px 6px; font-size:10px; font-weight:700; line-height:16px; display:inline-block; margin-right:4px; }
 .chips { display:flex; gap:5px; flex-wrap:wrap; align-items:center; }
 .chip { background:var(--sand); color:#1B4F78; border:1px solid var(--line); border-radius:12px;
         padding:1px 8px; font-size:12px; line-height:19px; }
@@ -1195,6 +1199,17 @@ function renderSaleType(){
    出貨單本身沒有這個欄位，要透過「出貨單↔訂單」綁定才查得到該訂單的 AS 認定，
    所以「未綁定訂單」與「訂單尚未設定標籤」兩種缺口要分開講清楚，不能混在一起；
    分類清單完全跟著訂單追蹤「稽核製程標籤」的設定自動變動，類別多時表格頁內分頁。 */
+/* 分類名稱左側的 AS／非AS 籤：is_proc=1（kind=process，管理員設定的稽核製程，如齒研/插齒）＝AS，
+   其餘固定選項／管理員自訂其他選項＝非AS；與 NewOrder_Track.php 下拉分組同一套規則。
+   「未綁定訂單」「訂單尚未設定標籤」沒有認定結果，不給籤。 */
+function astagBadge(t){
+  if(t.key === 'unbound' || t.key === 'unset') return '';
+  return t.is_proc ? '<span class="badge-as">AS</span>' : '<span class="badge-nonas">非AS</span>';
+}
+function astagLabelText(t){
+  if(t.key === 'unbound' || t.key === 'unset') return t.label;
+  return (t.is_proc ? 'AS ' : '非AS ') + t.label;
+}
 var ASTAG_PAGE = 1, ASTAG_PER = 10;
 function renderAstag(){
   var a = DATA.astag || {rows:[], trend:[], buckets:[], unbound:null, unset:null, bound_pct:0}, rows = a.rows||[];
@@ -1245,7 +1260,7 @@ function renderAstagTable(){
   slice.forEach(function(t){
     var isGap = (t.key === 'unbound' || t.key === 'unset');
     h += '<tr'+(isGap?' style="color:var(--muted);"':'')+'>'
-       + '<td>'+esc(t.label)+(isGap?' <span class="badge-warn">查不到分類</span>':'')+'</td>'
+       + '<td>'+astagBadge(t)+esc(t.label)+(isGap?' <span class="badge-warn">查不到分類</span>':'')+'</td>'
        + '<td class="n">'+nf(t.cur.ship_rows)+'</td><td class="n">'+nf(t.cur.ship_qty)+'</td>'
        + '<td class="n">'+money(t.cur.ship_amount)+'</td>'
        + '<td class="n">'+nf(t.cmp.ship_rows)+'</td>'
@@ -1764,7 +1779,7 @@ function siPrintHtml(){
   // AS 稽核分類（透過出貨單綁定的訂單反查「稽核製程標籤」認定；分類數隨設定自動變動）
   var astagPieSvg = prChartSvg('chAstagPie', 420, 260);
   var astagRows = ''; ((DATA.astag && DATA.astag.rows)||[]).slice(0,12).forEach(function(t){
-    astagRows += '<tr><td>'+esc(t.label)+'</td><td class="tr">'+nf(t.cur.ship_rows)+'</td><td class="tr">'+money(t.cur.ship_amount)+'</td></tr>';
+    astagRows += '<tr><td>'+esc(astagLabelText(t))+'</td><td class="tr">'+nf(t.cur.ship_rows)+'</td><td class="tr">'+money(t.cur.ship_amount)+'</td></tr>';
   });
   if(astagPieSvg || astagRows){
     h += '<div class="pr-sec"><div class="pr-two">'
@@ -1853,7 +1868,7 @@ $('#btnCsv').on('click', function(){
   row('【AS 稽核分類】','本期有綁定訂單的出貨佔比', (DATA.astag?DATA.astag.bound_pct:0)+'%');
   row('【AS 稽核分類】','分類','本期筆數','本期數量','本期出貨金額','基期筆數','基期出貨金額');
   (DATA.astag && DATA.astag.rows || []).forEach(function(t){
-    row('', t.label, t.cur.ship_rows, t.cur.ship_qty, Math.round(t.cur.ship_amount), t.cmp.ship_rows, Math.round(t.cmp.ship_amount));
+    row('', astagLabelText(t), t.cur.ship_rows, t.cur.ship_qty, Math.round(t.cur.ship_amount), t.cmp.ship_rows, Math.round(t.cmp.ship_amount));
   });
   row('');
   row('【客戶（全部）】','客戶','客戶編號','出貨金額','退貨金額','訂單金額','淨額','異常筆數','狀態');
