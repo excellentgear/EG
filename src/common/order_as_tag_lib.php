@@ -1068,7 +1068,11 @@ function ot_astag_backfill_groups(PDO $db, array $f = [], int $limit = 200): arr
             $map = ot_astag_label_map($db);
             foreach ($bSt->fetchAll(PDO::FETCH_ASSOC) as $b) {
                 $tid = (int)$b['as_tag_id']; $sc = (string)$b['as_tag_scope'];
-                $breakdown[(string)$b['pi']][] = ['label' => (string)($map[$tid . ':' . $sc] ?? ($tid . ':' . $sc)), 'count' => (int)$b['c']];
+                $breakdown[(string)$b['pi']][] = [
+                    'key'   => $tid . ':' . $sc,
+                    'label' => (string)($map[$tid . ':' . $sc] ?? ($tid . ':' . $sc)),
+                    'count' => (int)$b['c'],
+                ];
             }
         } catch (Throwable $e) { $breakdown = []; }
     }
@@ -1080,6 +1084,13 @@ function ot_astag_backfill_groups(PDO $db, array $f = [], int $limit = 200): arr
         $s   = $sug($pi, (int)$r['own_n'] > 0);
         $tb  = $breakdown[$pi] ?? [];
         $taggedN = 0; foreach ($tb as $x) $taggedN += $x['count'];
+        // 2026-10-06 使用者回報：「要設成哪個標籤」原本一律顯示關鍵字猜出來的建議，跟「目前
+        // 標籤」是兩回事，使用者誤會成「現在就是設定成這個」。這組如果已經有標籤、而且全部
+        // 掛的都是同一個（$tb 只有一種 key，不是好幾種混著），下拉改預設顯示那個目前的值，
+        // 不要顯示跟現況無關的建議——避免「目前標籤顯示砂輪、要設成哪個標籤卻顯示單製其他」
+        // 這種一看就以為自己設錯的情況。混著好幾種標籤時沒有單一現況可顯示，維持原本顯示建議。
+        $curKey = ''; $curLabel = '';
+        if (count($tb) === 1) { $curKey = (string)$tb[0]['key']; $curLabel = (string)$tb[0]['label']; }
         $out[] = [
             'pi'         => $pi,
             'n'          => (int)$r['n'],
@@ -1089,6 +1100,8 @@ function ot_astag_backfill_groups(PDO $db, array $f = [], int $limit = 200): arr
             'suggest'    => $s['key'],
             'suggest_label' => $s['label'],
             'suggest_why'   => $s['why'],
+            'current_key'   => $curKey,              // 這一組目前唯一的既有標籤（混著好幾種時留空）
+            'current_label' => $curLabel,
             'tag_breakdown' => $tb,                 // 這一組目前已經掛著哪些標籤（含筆數），空陣列＝這一組全部還沒設定
             'tagged_n'      => $taggedN,
             'untagged_n'    => max(0, (int)$r['n'] - $taggedN),

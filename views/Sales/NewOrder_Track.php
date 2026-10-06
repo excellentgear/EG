@@ -10015,6 +10015,16 @@ foreach($dCounts as $c) {
                     // 提醒使用者，但**不再 disabled**——2026-10-06 使用者交辦：指定單一組（pi_exact，
                     // 畫面上看得到目前標籤與筆數）要能直接覆蓋，不用被迫去逐筆設定一張一張勾。
                     var hasTagged = (g.tagged_n || 0) > 0;
+                    // 2026-10-06 使用者回報：「要設成哪個標籤」原本固定顯示關鍵字猜出來的建議，
+                    // 跟左邊「目前標籤」常常對不上（目前標籤印「砂輪」、這裡卻印「單製其他」），
+                    // 會被誤會成「現在就是設定成這個」。這組如果已經全部是同一個既有標籤
+                    // （g.current_key 有值），下拉改預設沿用那個現況值、理由欄也改講清楚是沿用
+                    // 現況，不是重新建議；混著好幾種標籤時沒有單一現況可沿用，才維持顯示建議。
+                    var useCurrent = showAll && g.current_key;
+                    var defKey = useCurrent ? g.current_key : g.suggest;
+                    var reasonHtml = useCurrent
+                        ? ('沿用目前已設定的「<b>' + escapeHtml(g.current_label) + '</b>」；要改成別的標籤請自行切換左邊下拉')
+                        : escapeHtml(g.suggest_why || '');
                     h += '<tr data-i="' + i + '">'
                        + '<td style="text-align:center;"><input type="checkbox" class="bf-g-chk" data-i="' + i + '"></td>'
                        + '<td style="word-break:break-all;">' + (g.pi ? escapeHtml(g.pi) : '<span style="color:#aaa;">（製程欄空白）</span>')
@@ -10022,8 +10032,8 @@ foreach($dCounts as $c) {
                        + '<td style="text-align:right;font-weight:700;">' + astagNum(g.n) + '</td>'
                        + '<td style="font-size:11px;color:#777;">' + escapeHtml(rng) + '</td>'
                        + '<td style="font-size:11px;">' + tagCell + '</td>'
-                       + '<td>' + astagTagSelectHtml('', g.suggest, 'bf-g-tag') + '</td>'
-                       + '<td style="font-size:11px;color:#777;">' + escapeHtml(g.suggest_why || '') + '</td>'
+                       + '<td>' + astagTagSelectHtml('', defKey, 'bf-g-tag') + '</td>'
+                       + '<td style="font-size:11px;color:#777;">' + reasonHtml + '</td>'
                        + '<td><button type="button" class="btn btn-xs ' + (hasTagged ? 'btn-default' : 'btn-primary') + '" onclick="astagBfApplyGroup(' + i + ')">'
                        +   (hasTagged ? '覆蓋這組' : '套用這組') + '</button></td>'
                        + '</tr>';
