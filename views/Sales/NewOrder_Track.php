@@ -3307,6 +3307,14 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                             onclick="openQuickBind('<?= $order['Order_id'] ?>','<?= safe_html($order['Client_name'] ?? '') ?>','<?= safe_html($order['d_id']) ?>')"
                             title="料號未綁定主檔，點此先綁定"><i class="fa fa-cog"></i><i class="fa fa-exclamation" style="font-size:8px;margin-left:1px;"></i></button>
                         <?php endif; ?>
+                        <?php /* NEW 徽章（2026-10-06 使用者要求）：這個料號在圖面查閱（bom_viewer.php）
+                                 裡還查不到任何圖面，放在「前往料號主檔編輯」齒輪圖示右邊提醒要補圖。
+                                 判定沿用同一份 $has_drawing_map（即 bom_viewer.php 圖面查閱分頁的資料來源），
+                                 不另外算一次，兩邊才不會對不起來。 */ ?>
+                        <?php if (!$_has_draw): ?>
+                        <span style="background:#e67e22;color:#fff;border-radius:3px;padding:0 4px;font-size:9px;line-height:15px;flex-shrink:0;white-space:nowrap;cursor:default;font-weight:700;"
+                              title="這個料號在圖面查閱裡還沒有任何圖面資料">NEW</span>
+                        <?php endif; ?>
                         <?php endif; ?>
                         <?php if ($_stk_t > 0): ?>
                         <button type="button" class="btn btn-xs"
