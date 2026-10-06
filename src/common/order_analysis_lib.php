@@ -52,6 +52,7 @@
 
 require_once __DIR__ . '/client_quarter_lib.php';   // cqa_client_resolver()：客戶歸戶（含別名）
 require_once __DIR__ . '/data_audit_lib.php';       // dqa_bom_open_date()：製令開立日（編號回推）
+require_once __DIR__ . '/order_as_tag_lib.php';     // ot_astag_for_orders()：稽核製程標籤（AS 認定，唯一依據）
 
 if (!defined('OA_PARAM_GROUP')) define('OA_PARAM_GROUP', 'ORDER_ANALYSIS');
 
@@ -599,6 +600,45 @@ function oa_analyze(PDO $db, array $opt = []): array
     }
     unset($r);
 
+    // ── 逐筆標上「稽核製程標籤（AS 認定）」──
+    // 唯一依據 order_as_tag_lib.php 的人工設定結果，不是這裡再猜一次（鐵律4，見檔頭第1點）。
+    // 還沒設定的一律歸進 'unset'（尚未設定標籤），不可以漏報成「沒有這個分類」。
+    //
+    // 2026-10-06 使用者交辦：「全製／單製分析」改為優先採用這個人工確認過的標籤——
+    // 有設定標籤的訂單，cls 直接改用標籤的「適用範圍」（scope）決定，不再用關鍵字猜；
+    // scope='none'（不分單製全製，如廠內治具／其他非加工）整筆排除在全製/單製這個維度外
+    // （cls 改記成 'excluded'，但 orders/qty/amount 等其他總計完全不受影響，只是不落進
+    // 全製/單製/多製程的分子分母——這些總計本來就跟「算不算全製單製」無關）；
+    // 沒有設定標籤的訂單才繼續退回下面的關鍵字規則猜（既有行為不變）。
+    // 「多製程」是唯一一個固定不給管理員改的系統代碼 fixed_code='multi_proc'
+    // （與 scope='full' 但 fixed_code≠'multi_proc' 的「全製」分開顯示），不是比對某個
+    // 管理員自訂標籤的名稱，所以這裡比對 fixed_code 不算鐵律4講的「寫死」。
+    $astagMap = ot_astag_for_orders($db, array_column($rows, 'id'));
+    foreach ($rows as &$r) {
+        $info = $astagMap[$r['id']] ?? null;
+        $r['as_key']   = $info ? ($info['tag_id'] . ':' . $info['scope']) : 'unset';
+        $r['as_label'] = $info ? $info['label'] : '尚未設定標籤';
+        $r['as_kind']  = $info ? $info['kind']  : '';
+        $r['as_proc']  = ($info && $info['is_as_process']) ? 1 : 0;
+
+        $r['cls_src'] = '';   // ''＝關鍵字猜的（含 fallback／未命中）；'astag'／'astag_excluded'＝來自 AS 認定
+        if ($info) {
+            if ($info['scope'] === 'full') {
+                $r['cls']     = ($info['fixed_code'] === 'multi_proc') ? 'multi' : 'full';
+                $r['rule']    = '';
+                $r['cls_src'] = 'astag';
+            } elseif ($info['scope'] === 'single') {
+                $r['cls']     = 'single';
+                $r['rule']    = '';
+                $r['cls_src'] = 'astag';
+            } elseif ($info['scope'] === 'none') {
+                $r['cls']     = 'excluded';
+                $r['cls_src'] = 'astag_excluded';
+            }
+        }
+    }
+    unset($r);
+
     $inSel = function (array $r) use ($selMap) { return !$selMap || isset($selMap[$r['ckey']]); };
     $inRange = function (array $r, array $p) { return $r['dt'] >= $p['start'] && $r['dt'] <= $p['end']; };
     // 「新料號」＝這支料號在系統裡的第一次出現就落在這個期間內
@@ -671,19 +711,75 @@ function oa_analyze(PDO $db, array $opt = []): array
     }
     unset($b);
 
-    /* ── 全製／單製：本期彙總 ＋ 每條規則命中幾筆（設定畫面要拿來校正用） ── */
+    /* ── 全製／單製／多製程：本期彙總 ＋ 每條規則命中幾筆（設定畫面要拿來校正用） ──
+       有設定「稽核製程標籤」的訂單一律優先採用標籤的 scope（上面的 cls_src='astag'／
+       'astag_excluded'），只有沒設定標籤的訂單才算進關鍵字規則命中／退回預設值這兩欄，
+       所以這裡要把兩種來源分開計數，不能再用「全製總數－規則命中數」去反推退回預設值的筆數
+       （那個算法在混入 AS 認定之後會算錯，因為 full 的總數現在含兩種來源）。 */
     $ruleHits = [];
     foreach ($rules as $i => $rr) $ruleHits[$i] = ['label' => $rr['label'], 'kw' => $rr['kw'], 'cls' => $rr['cls'], 'orders' => 0];
-    $procSamples = ['full' => [], 'single' => [], 'unknown' => [], 'none' => []];
+    $procSamples = ['full' => [], 'single' => [], 'multi' => [], 'unknown' => [], 'none' => []];
+    $astagFull = 0; $astagSingle = 0; $astagMulti = 0; $astagExcluded = 0; $fallbackCnt = 0;
     foreach ($rows as $r) {
         if (!$inSel($r) || !$inRange($r, $curE)) continue;
-        if ($r['rule'] !== '') {
+        if ($r['cls_src'] === 'astag') {
+            if ($r['cls'] === 'full') $astagFull++;
+            elseif ($r['cls'] === 'multi') $astagMulti++;
+            else $astagSingle++;
+        } elseif ($r['cls_src'] === 'astag_excluded') {
+            $astagExcluded++;
+        } elseif ($r['rule'] !== '') {
             foreach ($ruleHits as $i => $h) if ($h['label'] === $r['rule']) { $ruleHits[$i]['orders']++; break; }
+        } elseif ($r['cls'] === 'full' || $r['cls'] === 'single') {
+            $fallbackCnt++;   // 沒有標籤、也沒命中任何關鍵字規則，退回設定的預設值
         }
         $c = $r['cls'];
         if (isset($procSamples[$c]) && count($procSamples[$c]) < 12 && $r['proc'] !== ''
             && !in_array($r['proc'], $procSamples[$c], true)) $procSamples[$c][] = $r['proc'];
     }
+
+    /* ── AS 稽核分類（依訂單追蹤「稽核製程標籤」設定，人確認過的結果，不是關鍵字猜的）──
+       與上面「全製／單製」是兩回事：那個是程式用製程文字猜的粗略分類，這裡是每張單
+       自己選過的稽核認定（全製／單製○○／多製程／廠內治具…）。同一張單只會落在一個分類，
+       還沒設定的歸進 'unset'（尚未設定標籤），刻意不漏報，否則使用者會以為系統漏算。 */
+    $byAstag = [];
+    $accumAs = function (array $p, string $slot) use ($rows, &$byAstag, $inSel, $inRange) {
+        foreach ($rows as $r) {
+            if (!$inSel($r) || !$inRange($r, $p)) continue;
+            $k = $r['as_key'];
+            if (!isset($byAstag[$k])) $byAstag[$k] = ['key' => $k, 'label' => $r['as_label'], 'kind' => $r['as_kind'],
+                                                       'is_proc' => $r['as_proc'], 'cur' => oa_blank(), 'cmp' => oa_blank()];
+            oa_add($byAstag[$k][$slot], $r, false);
+        }
+    };
+    $accumAs($curE, 'cur');
+    $accumAs($cmpE, 'cmp');
+    $astagRows = [];
+    foreach ($byAstag as $t) {
+        $t['d_amount'] = $t['cur']['amount'] - $t['cmp']['amount'];
+        $t['d_orders'] = $t['cur']['orders'] - $t['cmp']['orders'];
+        $t['d_qty']    = $t['cur']['qty']    - $t['cmp']['qty'];
+        $astagRows[] = $t;
+    }
+    usort($astagRows, function ($a, $b) {
+        $d = $b['cur']['amount'] <=> $a['cur']['amount'];
+        return $d !== 0 ? $d : ($b['cur']['orders'] <=> $a['cur']['orders']);
+    });
+    // 趨勢：本期實際出現過的分類，上限 12 條（避免圖表塞爆；分類再多靠下方表格分頁查）
+    $astagTopKeys = array_slice(array_map(function ($t) { return $t['key']; }, $astagRows), 0, 12);
+    $astagTrend = [];
+    foreach ($astagTopKeys as $k) {
+        $row = ['key' => $k, 'label' => $byAstag[$k]['label'], 'orders' => [], 'qty' => [], 'amount' => []];
+        foreach (oa_period_buckets($year, $gran) as $b) {
+            $a = oa_blank();
+            foreach ($rows as $r) { if ($inSel($r) && $r['as_key'] === $k && $inRange($r, $b)) oa_add($a, $r, false); }
+            $row['orders'][] = $a['orders']; $row['qty'][] = $a['qty']; $row['amount'][] = round($a['amount']);
+        }
+        $astagTrend[] = $row;
+    }
+    $astagUnset     = $byAstag['unset'] ?? null;
+    $astagUnsetOrd  = (int)($astagUnset['cur']['orders'] ?? 0);
+    $astagTaggedPct = $kpiCur['orders'] ? round(100 - ($astagUnsetOrd * 100 / $kpiCur['orders']), 1) : 0.0;
 
     /* ── 客戶比較：選了客戶就比那幾家，沒選就自動取本期金額（無金額時用筆數）前 8 名 ── */
     $byClient = [];
@@ -850,7 +946,11 @@ function oa_analyze(PDO $db, array $opt = []): array
         'kpi'         => ['cur' => $kpiCur, 'cmp' => $kpiCmp],
         'trend'       => ['cur' => $trendCur, 'prev' => $trendPrev, 'prev_year' => $year - 1],
         'bands'       => $bandAgg,
-        'proc'        => ['rule_hits' => array_values($ruleHits), 'samples' => $procSamples],
+        'proc'        => ['rule_hits' => array_values($ruleHits), 'samples' => $procSamples,
+                           'astag_full' => $astagFull, 'astag_single' => $astagSingle, 'astag_multi' => $astagMulti,
+                           'astag_excluded' => $astagExcluded, 'fallback_count' => $fallbackCnt],
+        'astag'       => ['rows' => $astagRows, 'trend' => $astagTrend, 'buckets' => array_map(function ($b) { return $b['label']; }, oa_period_buckets($year, $gran)),
+                           'unset' => $astagUnset, 'tagged_pct' => $astagTaggedPct],
         'clients'     => $clientRows,
         'client_cmp'  => ['keys' => $cmpKeys, 'series' => $cmpSeries],
         'rank_clients' => $rankClients,
@@ -1303,15 +1403,50 @@ function oa_insights(PDO $db, array $res, ?array $kpiAlert = null, ?array $ma = 
              . ($np <= 10 ? '新案源偏少，營收會越來越依賴既有料號的重複下單。' : ''), $np . '%');
     }
 
-    /* ⑥ 全製／單製結構 */
-    if ($cur['orders'] > 0 && $cmp['orders'] > 0) {
-        $f0 = round($cur['full'] * 100 / $cur['orders'], 1);
-        $f1 = round($cmp['full'] * 100 / $cmp['orders'], 1);
+    /* ⑥ 全製／單製結構
+     * 分母刻意排除「AS 認定為不分單製全製」的訂單（excluded，如廠內治具／其他非加工）——
+     * 那些訂單不屬於這個維度，算進分母只會把比例稀釋掉，見本函式上方 cls_src 的設計說明。 */
+    $curBase = $cur['orders'] - (int)($cur['excluded'] ?? 0);
+    $cmpBase = $cmp['orders'] - (int)($cmp['excluded'] ?? 0);
+    if ($curBase > 0 && $cmpBase > 0) {
+        $f0 = round($cur['full'] * 100 / $curBase, 1);
+        $f1 = round($cmp['full'] * 100 / $cmpBase, 1);
         $d  = round($f0 - $f1, 1);
         if (abs($d) >= 5) {
             $add($d < 0 ? 'warn' : 'good', '全製比例' . ($d < 0 ? '下降' : '上升'),
-                 '本期全製佔 ' . $f0 . '%（' . $fmt($cur['full']) . ' 筆），' . $cl . ' ' . $f1 . '%。'
+                 '本期全製佔 ' . $f0 . '%（' . $fmt($cur['full']) . ' 筆／' . $fmt($curBase) . ' 筆適用），' . $cl . ' ' . $f1 . '%。'
                  . ($d < 0 ? '全製單通常單價與毛利較高，比例下降會直接稀釋整體金額。' : ''), ($d > 0 ? '+' : '') . $d . '個百分點');
+        }
+    }
+
+    /* ⑥a AS 稽核分類（依訂單追蹤「稽核製程標籤」人工認定，不是關鍵字猜的）──
+     * 兩件事：提醒還有多少訂單沒設定（會直接影響上面 ⑥ 的可信度），
+     * 以及已設定的那些裡面，認定結果是不是集中在某一類。 */
+    $astagInfo = $res['astag'] ?? null;
+    if ($astagInfo) {
+        $astagUnsetRow   = $astagInfo['unset'] ?? null;
+        $astagUnsetOrders = (int)($astagUnsetRow['cur']['orders'] ?? 0);
+        if ($cur['orders'] > 0 && $astagUnsetOrders > 0) {
+            $up = round($astagUnsetOrders * 100 / $cur['orders'], 1);
+            $add($up >= 50 ? 'warn' : 'info', '本期有 ' . $fmt($astagUnsetOrders) . ' 筆訂單尚未設定稽核製程標籤',
+                 '佔本期訂單 ' . $up . '%，這些訂單在 AS 稽核分類（全製／單製○○／多製程／廠內治具…）裡查不到認定結果，'
+                 . '建議到訂單追蹤逐筆補設定，上面「全製比例」的計算也只看得到已設定的那一部分。', $up . '%');
+        }
+        $astagVals = [];
+        foreach (($astagInfo['rows'] ?? []) as $t) {
+            if ($t['key'] === 'unset') continue;
+            $v = (float)$t['cur'][$mk];
+            if ($v > 0) $astagVals[] = ['n' => $t['label'], 'v' => $v];
+        }
+        $astagTot = 0.0; foreach ($astagVals as $v) $astagTot += $v['v'];
+        if ($astagTot > 0 && $astagVals) {
+            usort($astagVals, function ($a, $b) { return $b['v'] <=> $a['v']; });
+            $atop = $astagVals[0];
+            $ap = round($atop['v'] * 100 / $astagTot, 1);
+            if ($ap >= 40) {
+                $add('info', 'AS 認定分類集中在「' . $atop['n'] . '」',
+                     '已設定標籤的訂單裡，「' . $atop['n'] . '」佔已分類' . ($useAmt ? '金額' : '數量') . ' 的 ' . $ap . '%。', $ap . '%');
+            }
         }
     }
 
