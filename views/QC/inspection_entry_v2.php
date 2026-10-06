@@ -28,6 +28,11 @@ require_once '../../src/common/qc_container_lib.php'; // 容器選項唯一來�
 // CSRF：與舊頁共用同一組 session token（後端比對的就是 $_SESSION['qc_csrf']）
 if (empty($_SESSION['qc_csrf'])) { $_SESSION['qc_csrf'] = bin2hex(random_bytes(16)); }
 $CSRF = $_SESSION['qc_csrf'];
+// 品質異常處理單模組(QaAbnormal_API.php)自己的一組 CSRF（$_SESSION['qab_csrf']）——
+// NG 判定後直接自動開立異常單草稿(2026-10-06)要打那支 API，帶的是它自己的 token，
+// 不是這支頁面的 qc_csrf，兩套 CSRF 不互通。
+if (empty($_SESSION['qab_csrf'])) { $_SESSION['qab_csrf'] = bin2hex(random_bytes(16)); }
+$QAB_CSRF = $_SESSION['qab_csrf'];
 
 $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
 
@@ -1249,6 +1254,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     #insp-quantity-1.ctn-invalid, #insp-quantity-2.ctn-invalid { border-color:var(--coral); background:#FDEDEA; box-shadow:0 0 0 1px var(--coral); }
     /* 本單使用量具未選擇紅框（2026-10-06 使用者要求：量具也必填，擋存檔之外同樣要紅框提示） */
     #form-tool-row.ft-invalid { border:1px solid var(--coral); background:#FDEDEA; border-radius:6px; padding:6px 10px; }
+    /* 開立異常單：量測項目挑選列（2026-10-06） */
+    .qcab-pick-row { display:block; padding:6px 10px; border-bottom:1px solid var(--line); cursor:pointer; }
+    .qcab-pick-row:hover { background:var(--cream); }
+    .qcab-pick-row.ng { background:#FFF6F4; }
+    .qcab-pick-row .label-danger { background:var(--coral); }
     /* 項目列的操作鈕（加量測/備註/刪除）改放在「檢驗項目」欄名稱下方，
        原本擺最右欄會被視窗右緣切掉看不到（2026-07-30 現場回饋） */
     .row-acts { margin-top:4px; font-size:12px; }
@@ -2092,6 +2102,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     </div></div>
 </div>
 
+<!-- 開立品質異常單 — 選擇列入「量測尺寸與實測值」的項目（2026-10-06 使用者要求：NG判定後不再開
+     逐欄填寫的跳窗，改成品管勾選要帶入異常單的量測項目，確認後直接自動建立草稿並另開分頁進
+     qa_abnormal_form.php 讓品管接著填寫，草稿＋品管確認的模式比照報工NG自動開立。 -->
+<div class="modal fade" id="qcAbPickModal" tabindex="-1" role="dialog" data-backdrop="static">
+    <div class="modal-dialog modal-lg"><div class="modal-content">
+        <div class="modal-header" style="background:#DD5138;color:#fff;border-radius:6px 6px 0 0;">
+            <h4 class="modal-title"><i class="fa fa-file-text-o"></i> 開立品質異常單 — 選擇列入的量測項目</h4>
+        </div>
+        <div class="modal-body">
+            <div class="muted-help" style="margin-bottom:8px;">
+                勾選要列入異常單「量測尺寸與實測值」的項目（預設已勾選判定不良的項目，可自行增減，
+                <b>不限筆數</b>）。確認後會直接自動開立異常單草稿，並另開分頁進去填寫其餘欄位；
+                <b>品管完成確認前</b>，隨時可以回到異常單用「由檢驗紀錄帶入」重新勾選套用。
+            </div>
+            <div id="qcAbPickList" style="max-height:420px;overflow:auto;"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-default" data-dismiss="modal">取消</button>
+            <button class="btn btn-coral" id="btnQcAbPickGo"><i class="fa fa-check"></i> 確認開立異常單</button>
+        </div>
+    </div></div>
+</div>
+
 <!-- 修改紀錄 Modal -->
 <div class="modal fade" id="logModal" tabindex="-1" role="dialog">
     <div class="modal-dialog modal-lg"><div class="modal-content">
@@ -2810,6 +2843,10 @@ $(function(){
     // 超級管理員＝id 1 ＋ user_status 9 ＋ 在職（後端會再驗一次，這裡只決定按鈕顯不顯示）
     var IS_SUPER = <?php echo $IS_SUPER ? 'true' : 'false'; ?>;
     var CSRF = <?php echo json_encode($CSRF, JSON_UNESCAPED_SLASHES); ?>;
+    // 品質異常處理單模組自己的 CSRF（$_SESSION['qab_csrf']）——注意下面的 ajaxPrefilter 會對
+    // 「沒帶 csrf 欄位」的 POST 自動補上面那組 CSRF（給本頁自己的 API 用），所以呼叫
+    // QaAbnormal_API.php 時務必在 payload 裡明確指定 csrf:QAB_CSRF，不可以讓它被自動補錯。
+    var QAB_CSRF = <?php echo json_encode($QAB_CSRF, JSON_UNESCAPED_SLASHES); ?>;
     // 存檔後自動建立允收/異常彙總紀錄要用（同舊頁 _updateQC_check_list_ok/qq.php 的 id= 參數）
     var CURRENT_UID = <?php echo json_encode((int)($_SESSION['id'] ?? 0)); ?>;
     $.ajaxPrefilter(function(opts){
@@ -4993,16 +5030,7 @@ $(function(){
             if(res.header && res.header.abnormal_order_no){
                 alert('此筆檢驗已開立異常單 '+res.header.abnormal_order_no+'，不可重複開立。'); reloadContext(); return;
             }
-            QAAbnormalModal.open({
-                source_type:'QC', source_id:qid,
-                title_suffix:(ctx?('料號 '+ctx.part_no):''),
-                prefill: ngPrefill(res.header.ng_qty, ngSummaryText(res.items)),
-                onCreated:function(r){
-                    $.post(API,{action:'set_ncr_decision',qc_form_id:qid,decision:'OPEN',abnormal_order_id:r.id},function(){
-                        alert('異常單 '+r.no+' 已開立並發送通知。'); reloadContext();
-                    },'json');
-                }
-            });
+            openQcAbPick(qid, res.items, function(){ reloadContext(); });
         },'json');
     });
 
@@ -6105,21 +6133,6 @@ $(function(){
     // NG → 是否開立品質異常單
     // =====================================================================
     var ngCtx=null;
-    function ngSummaryText(items){
-        var lines=['品管檢驗判定 NG，NG 項目：'], n=0;
-        (items||[]).forEach(function(it){
-            if(it.verdict!=='NG') return;
-            n++;
-            var tol=(it.up||it.lo)?('（公差 '+(it.up?'+'+it.up:'')+(it.lo?' / '+it.lo:'')+'）'):'';
-            var ngVals=(it.samples||[]).filter(function(sv){ return sv.r==='NG'; }).map(function(sv){ return sv.v; }).filter(function(v){ return v!==''; }).join(', ');
-            lines.push(n+'. '+it.name+'：標準 '+(it.std||'-')+tol+(ngVals?('，NG 實測值：'+ngVals):''));
-        });
-        return lines.join('\n');
-    }
-    function ngPrefill(sqty, phenomenon){
-        return { sqty:sqty, phenomenon:phenomenon, qa_ps:$('#inp-remark').val(),
-                 bom_no:(ctx?ctx.bom:''), bom_process_fids:(ctx?String(ctx.bom_ing_fid):'') };
-    }
     function openNgAsk(qcFormId, s, items, done){
         ngCtx={ qcFormId:qcFormId, summary:s, items:items, done:done, decided:false };
         $('#ng-ask-info').html('本次檢驗判定為<b class="text-danger">不良</b>（不良 <b>'+s.ng_qty+'</b> 件）。是否開立品質異常單？<br><small class="text-muted">開立後將自動通知回覆部門與相關人員，並要求回覆回簽。</small>');
@@ -6128,19 +6141,71 @@ $(function(){
     $('#btn-ng-open').on('click', function(){
         if(!ngCtx) return;
         $('#ngAskModal').modal('hide');
-        QAAbnormalModal.open({
-            source_type:'QC', source_id:ngCtx.qcFormId,
-            title_suffix:(ctx?('料號 '+ctx.part_no):''),
-            prefill: ngPrefill(ngCtx.summary.ng_qty, ngSummaryText(ngCtx.items)),
-            onCreated:function(r){
-                ngCtx.decided=true;
-                var qid=ngCtx.qcFormId;
-                $.post(API,{ action:'set_ncr_decision', qc_form_id:qid, decision:'OPEN', abnormal_order_id:r.id }, function(){
-                    alert('異常單 '+r.no+' 已開立並發送通知。');
-                    var d=ngCtx.done; ngCtx=null; if(d) d();
-                }, 'json');
-            }
+        openQcAbPick(ngCtx.qcFormId, ngCtx.items, function(){
+            ngCtx.decided=true;
+            var d=ngCtx.done; ngCtx=null; if(d) d();
         });
+    });
+
+    // ---------------------------------------------------------------
+    // 開立品質異常單（直接自動開立草稿，2026-10-06）：勾選要列入「量測尺寸與實測值」的
+    // 項目後，直接呼叫 QaAbnormal_API.php 的 auto_open_from_qc 建立草稿，不再經過逐欄填寫
+    // 的跳窗；建立成功後連動 set_ncr_decision（本頁既有的「這筆檢驗已綁哪張異常單」機制不變），
+    // 另開分頁進 qa_abnormal_form.php 讓品管直接在編輯畫面接著填寫其餘欄位。
+    // ---------------------------------------------------------------
+    var qcAbPickItems=[], qcAbPickSel={}, qcAbPickDone=null, qcAbPickFormId=0;
+    function openQcAbPick(qcFormId, items, doneCb){
+        qcAbPickFormId = qcFormId;
+        qcAbPickItems = items || [];
+        qcAbPickSel = {};
+        // 預設勾選判定不良的項目；OK 項目使用者仍可自行加選（例如要對照正常值一起留存）
+        qcAbPickItems.forEach(function(it,idx){ if(it.verdict==='NG') qcAbPickSel[idx]=true; });
+        qcAbPickDone = doneCb;
+        renderQcAbPick();
+        $('#qcAbPickModal').modal('show');
+    }
+    function qcAbItemValsText(it){
+        return (it.samples||[]).map(function(sv){ return (sv && sv.v!=null) ? String(sv.v) : ''; })
+                                .filter(function(v){ return v!==''; }).join(', ');
+    }
+    function renderQcAbPick(){
+        var rows = qcAbPickItems.map(function(it,idx){
+            var tol=(it.up||it.lo)?('（公差 '+(it.up?'+'+it.up:'')+(it.lo?' / '+it.lo:'')+'）'):'';
+            var vals=qcAbItemValsText(it);
+            return '<label class="qcab-pick-row'+(it.verdict==='NG'?' ng':'')+'">'+
+                '<input type="checkbox" class="qcab-pick-chk" data-i="'+idx+'" '+(qcAbPickSel[idx]?'checked':'')+'> '+
+                '<b>'+(idx+1)+'. '+esc(it.name||'（未命名項目）')+'</b>　標準 '+esc(it.std||'-')+esc(tol)+
+                (vals?('　實測：'+esc(vals)):'')+(it.verdict==='NG'?' <span class="label label-danger">NG</span>':'')+
+                '</label>';
+        }).join('');
+        $('#qcAbPickList').html(rows || '<div class="muted-help">尚無檢驗項目可選</div>');
+    }
+    $(document).on('change','.qcab-pick-chk', function(){
+        var i=+$(this).data('i');
+        if($(this).is(':checked')) qcAbPickSel[i]=true; else delete qcAbPickSel[i];
+    });
+    $('#btnQcAbPickGo').on('click', function(){
+        var sel = Object.keys(qcAbPickSel).map(Number).sort(function(a,b){ return a-b; });
+        if(!sel.length){ alert('請至少勾選一個量測項目列入異常單。'); return; }
+        var measures = sel.map(function(idx){
+            var it=qcAbPickItems[idx]||{};
+            var tol=(it.up||it.lo)?('（公差 '+(it.up?'+'+it.up:'')+(it.lo?' / '+it.lo:'')+'）'):'';
+            return { dim_name:(it.name||'')+'　標準 '+(it.std||'-')+tol,
+                     vals:(it.samples||[]).map(function(sv){ return (sv && sv.v!=null) ? String(sv.v) : ''; }).slice(0,12) };
+        });
+        var $btn=$(this).prop('disabled',true);
+        $.post('../../src/store/QaAbnormal_API.php', {
+            action:'auto_open_from_qc', csrf:QAB_CSRF, qc_form_id:qcAbPickFormId,
+            measures: JSON.stringify(measures), selected: JSON.stringify(sel)
+        }, function(res){
+            $btn.prop('disabled',false);
+            if(!res.success){ alert(res.message||'開立失敗'); return; }
+            $('#qcAbPickModal').modal('hide');
+            $.post(API,{ action:'set_ncr_decision', qc_form_id:qcAbPickFormId, decision:'OPEN', abnormal_order_id:res.id }, function(){
+                try{ window.open('../QA/qa_abnormal_form.php?id='+res.id, '_blank'); }catch(e){}
+                var d=qcAbPickDone; qcAbPickDone=null; if(d) d();
+            }, 'json');
+        }, 'json').fail(function(x){ $btn.prop('disabled',false); alert('開立錯誤：'+x.responseText); });
     });
     // 取消：不現在決定要不要開異常單（檢驗結果已存檔），之後可從歷程「開異常單」補開
     $('#btn-ng-later').on('click', function(){

@@ -123,6 +123,27 @@ case 'create': {
     jout(true, ['id' => $r['id'], 'no' => $r['no']]);
 }
 
+/* ═══════════ 線上檢驗 NG 直接自動開立草稿（2026-10-06 使用者要求） ═══════════
+   品管在 inspection_entry_v2.php 判定 NG 時，不再經過開單跳窗逐欄填寫，改成勾選要
+   列入異常單「量測尺寸與實測值」的量測項目後直接呼叫這支建立草稿，隨即另開分頁進
+   qa_abnormal_form.php 讓品管接著填寫其餘欄位——寫入邏輯一律走 qab_auto_open_from_qc_ng()
+   （鐵律4）。量測項目是否要重新勾選，事後就在 qa_abnormal_form.php 用同一顆「由檢驗紀錄
+   帶入」picker 重新挑過（純改前端 #mtb 表格內容，照常走既有的 save_head 存檔，不必另開
+   一支 action——量測表本來就是可以逐列編修的既有欄位）。 */
+case 'auto_open_from_qc': {
+    if (!$perms['canCreate']) jerr('沒有開立品質異常單的權限');
+    $qcFormId = (int)($_POST['qc_form_id'] ?? 0);
+    $measures = json_decode((string)($_POST['measures'] ?? '[]'), true);
+    if (!is_array($measures)) $measures = [];
+    $selected = json_decode((string)($_POST['selected'] ?? '[]'), true);
+    if (!is_array($selected)) $selected = [];
+    try {
+        $r = qab_auto_open_from_qc_ng($db, $qcFormId, $uid, $measures, $selected);
+    } catch (Throwable $e) { jerr($e->getMessage()); }
+    $log($r['id'], 'create', '', $r['no'] . '（線上檢驗NG自動開立）');
+    jout(true, ['id' => $r['id'], 'no' => $r['no'], 'existed' => !empty($r['existed'])]);
+}
+
 /* ═══════════ 讀一張單（表單頁與列印共用） ═══════════ */
 case 'get': {
     $id = (int)($_GET['id'] ?? $_POST['id'] ?? 0);
@@ -361,17 +382,26 @@ case 'save_head': {
             }
         }
 
-        // 量測尺寸與實測值（紙本三列 × 12 值）
+        // 量測尺寸與實測值：原本紙本固定三列，畫面預設也還是先給 3 列可以手填；
+        // 2026-10-06 使用者交辦「由檢驗紀錄帶入」不限筆數，這裡**不再把列數砍到 3**
+        // （qa_abnormal_measure 本來就是一張單對多列，不是紙本那種寫死列數的限制），
+        // 每列的實測值上限仍維持 12（比照紙本一列 12 格，QC 抽驗數通常不超過這個量）。
         if (isset($_POST['measures'])) {
             $ms = json_decode((string)$_POST['measures'], true) ?: [];
             $db->prepare("DELETE FROM qa_abnormal_measure WHERE order_id=?")->execute([$id]);
             $ins = $db->prepare("INSERT INTO qa_abnormal_measure (order_id,seq,dim_name,vals) VALUES (?,?,?,?)");
-            foreach (array_slice($ms, 0, 3) as $i => $m) {
+            $seq = 1;
+            foreach ($ms as $m) {
                 $dim = trim((string)($m['dim_name'] ?? ''));
                 $vals = array_slice(array_map(function ($v) { return mb_substr(trim((string)$v), 0, 20); }, (array)($m['vals'] ?? [])), 0, 12);
                 if ($dim === '' && !array_filter($vals, function ($v) { return $v !== ''; })) continue;
-                $ins->execute([$id, $i + 1, mb_substr($dim, 0, 60), json_encode($vals, JSON_UNESCAPED_UNICODE)]);
+                $ins->execute([$id, $seq++, mb_substr($dim, 0, 60), json_encode($vals, JSON_UNESCAPED_UNICODE)]);
             }
+        }
+        // 「由檢驗紀錄帶入」目前勾選狀態——純供下次重開 picker 時還原勾選，沒送就不動
+        if (array_key_exists('selected_qc_items', $_POST)) {
+            $db->prepare("UPDATE qa_abnormal_order SET src_qc_item_sel=? WHERE id=?")
+               ->execute([mb_substr((string)$_POST['selected_qc_items'], 0, 2000), $id]);
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
@@ -1606,29 +1636,36 @@ function qabSaveCat(PDO $db, array $in): string
         return '單號後綴詞只能用英文、數字與 - _ .（最多 10 個字元），例：-IR';
     }
     $auto   = (int)!empty($in['is_pm_auto']);
+    // 2026-10-06：線上檢驗NG自動開立歸哪一類，與報工自動開立分開獨立設定（is_qc_auto）
+    $qcAuto = (int)!empty($in['is_qc_auto']);
     $sort   = (int)($in['sort_order'] ?? 0);
     $active = array_key_exists('is_active', $in) ? (int)!empty($in['is_active']) : 1;
     if ($auto && !$active) return '勾了「報工NG自動開立」的分類不可以停用（自動開單會整個開不出來）';
+    if ($qcAuto && !$active) return '勾了「線上檢驗NG自動開立」的分類不可以停用（自動開單會整個開不出來）';
     /* 這一類一定要綁什麼（2026-10-02 使用者交辦）：製令／客退單／客戶，可以複選。
        報工NG自動開立的那一類**一定要綁製令**——自動開單本來就是從某一張製令的某一站累積NG來的，
-       勾了自動開立卻不綁製令，開出來的單會沒有來源可以追（而且扣款金額也帶不出來）。 */
+       勾了自動開立卻不綁製令，開出來的單會沒有來源可以追（而且扣款金額也帶不出來）。
+       線上檢驗NG自動開立同理也一定要綁製令（來源一樣是檢驗紀錄所屬的那張製令）。 */
     $nBom = (int)!empty($in['need_bom']);
     $nIr  = (int)!empty($in['need_ir']);
     $nCli = (int)!empty($in['need_client']);
     if ($auto && !$nBom) return '勾了「報工NG自動開立」的分類一定要勾「製令」（自動開單是從製令的某一站累積NG開出來的）';
-    $p = [mb_substr($name, 0, 40), ($suffix === '' ? null : $suffix), $auto, $nBom, $nIr, $nCli, $sort, $active];
+    if ($qcAuto && !$nBom) return '勾了「線上檢驗NG自動開立」的分類一定要勾「製令」（自動開單是從檢驗紀錄所屬的製令開出來的）';
+    $p = [mb_substr($name, 0, 40), ($suffix === '' ? null : $suffix), $auto, $qcAuto, $nBom, $nIr, $nCli, $sort, $active];
     if ($catId > 0) {
-        $db->prepare("UPDATE qa_abnormal_cat SET name=?, suffix=?, is_pm_auto=?, need_bom=?, need_ir=?, need_client=?,
+        $db->prepare("UPDATE qa_abnormal_cat SET name=?, suffix=?, is_pm_auto=?, is_qc_auto=?, need_bom=?, need_ir=?, need_client=?,
                       sort_order=?, is_active=?, updated_at=NOW() WHERE cat_id=?")
            ->execute(array_merge($p, [$catId]));
     } else {
-        $db->prepare("INSERT INTO qa_abnormal_cat (name,suffix,is_pm_auto,need_bom,need_ir,need_client,sort_order,is_active)
-                      VALUES (?,?,?,?,?,?,?,?)")
+        $db->prepare("INSERT INTO qa_abnormal_cat (name,suffix,is_pm_auto,is_qc_auto,need_bom,need_ir,need_client,sort_order,is_active)
+                      VALUES (?,?,?,?,?,?,?,?,?)")
            ->execute($p);
         $catId = (int)$db->lastInsertId();
     }
-    // 「報工NG自動開立」是唯一的，設在這一列就要把其他列取消，否則 qab_cat_auto_pm() 只會拿到排序最前那一個
-    if ($auto) $db->prepare("UPDATE qa_abnormal_cat SET is_pm_auto=0 WHERE cat_id<>?")->execute([$catId]);
+    // 「報工NG自動開立」「線上檢驗NG自動開立」各自是唯一的，設在這一列就要把其他列的同一個旗標取消，
+    // 否則 qab_cat_auto_pm()／qab_cat_auto_qc() 只會拿到排序最前那一個
+    if ($auto)   $db->prepare("UPDATE qa_abnormal_cat SET is_pm_auto=0 WHERE cat_id<>?")->execute([$catId]);
+    if ($qcAuto) $db->prepare("UPDATE qa_abnormal_cat SET is_qc_auto=0 WHERE cat_id<>?")->execute([$catId]);
     $GLOBALS['qab_last_abcat_id'] = $catId;
     return '';
 }

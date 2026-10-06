@@ -192,6 +192,7 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
             <span id="stBox"></span>
             <span id="scrapBox"></span>
             <span style="margin-left:auto;"></span>
+            <button class="btn btn-warm-o btn-sm" id="btnAttach"><i class="fa fa-paperclip"></i> 附件</button>
             <button class="btn btn-warm-o btn-sm" id="btnPrint"><i class="fa fa-print"></i> 列印</button>
             <button class="btn btn-warm btn-sm" id="btnClose2"><i class="fa fa-archive"></i> 結案</button>
             <button class="btn btn-warm-o btn-sm" id="btnReopen" style="display:none;"><i class="fa fa-undo"></i> 取消結案</button>
@@ -309,11 +310,14 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
                     </div>
 
                     <div style="margin-top:10px;">
-                        <div class="muted-help" style="margin-bottom:3px;"><b>量測尺寸與實測值</b>（比照紙本三列 × 12 值，沒有量測值就留空）</div>
+                        <div class="muted-help" style="margin-bottom:3px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <span><b>量測尺寸與實測值</b>（比照紙本三列 × 12 值，沒有量測值就留空；最後一列按 ↓ 可再加一列、空白的最後一列按 ↑ 可移除）</span>
+                            <button type="button" class="btn btn-warm-o btn-xs" id="btnQcMeasurePick" style="display:none;"><i class="fa fa-download"></i> 由檢驗紀錄帶入</button>
+                        </div>
                         <table class="mtb" id="mtb">
                             <thead><tr><th style="width:16%">量測尺寸</th>
                                 <?php for ($i = 1; $i <= 12; $i++) echo '<th>' . $i . '</th>'; ?></tr></thead>
-                            <tbody></tbody>
+                            <tbody data-eg-row-add="mtAddRow" data-eg-row-del="mtDelRow"></tbody>
                         </table>
                     </div>
 
@@ -520,6 +524,34 @@ $roleLabel = $perms['isAdmin'] ? '系統管理者' : ($perms['canAdmin'] ? '異�
     </div>
 </div>
 
+<!-- 由檢驗紀錄帶入「量測尺寸與實測值」（2026-10-06，只有線上檢驗NG自動開立的單看得到這顆按鈕） -->
+<div class="m-mask" id="qcMeasurePickMask">
+    <div class="m-box" style="width:720px;">
+        <div class="m-hd"><i class="fa fa-download"></i> 由檢驗紀錄帶入量測項目<span class="x" data-close="qcMeasurePickMask">&times;</span></div>
+        <div class="m-bd">
+            <div class="note-box">勾選要列入「量測尺寸與實測值」的項目（<b>不限筆數</b>），套用後會<b>整個取代</b>目前的量測表內容並立即存檔。</div>
+            <div id="qcMeasurePickList" style="max-height:440px;overflow:auto;"></div>
+        </div>
+        <div class="m-ft">
+            <button class="btn btn-default btn-sm" data-close="qcMeasurePickMask">取消</button>
+            <button class="btn btn-warm btn-sm" id="btnQcMeasureApply"><i class="fa fa-check"></i> 套用並儲存</button>
+        </div>
+    </div>
+</div>
+
+<!-- 異常單附件（2026-10-06 使用者要求補上；沿用既有 store_QA_Abnormal_API.php 的附件表與下載端點） -->
+<div class="m-mask" id="attachMask">
+    <div class="m-box" style="width:560px;">
+        <div class="m-hd"><i class="fa fa-paperclip"></i> 異常單附件<span class="x" data-close="attachMask">&times;</span></div>
+        <div class="m-bd">
+            <div class="note-box">支援圖片／PDF／Excel／Word，單檔 20MB 以內。</div>
+            <div style="margin-bottom:8px;"><input type="file" id="attFile"></div>
+            <div id="attList"></div>
+        </div>
+        <div class="m-ft"><button class="btn btn-default btn-sm" data-close="attachMask">關閉</button></div>
+    </div>
+</div>
+
 <!-- 管理員代填代簽解鎖（自動開立單，非傳統補資料） -->
 <div class="m-mask" id="qabUnlockMask">
     <div class="m-box" style="width:440px;">
@@ -671,14 +703,8 @@ function buildStaticOpts(){
     $('#gmOpts').html((D.gm_opts || []).map(function(o){
         return '<label data-opt="' + o.opt_id + '"><input type="checkbox" class="gchk" value="' + o.opt_id + '"> ' + esc(o.name) + '</label>';
     }).join('') + '<label data-opt="deduct" style="border-color:var(--coral);"><input type="checkbox" id="g_deduct"> 扣款</label>');
-    // 量測三列
-    var mt = '';
-    for (var r = 0; r < 3; r++){
-        mt += '<tr><td><input type="text" class="m-dim" data-r="' + r + '"></td>';
-        for (var i = 0; i < 12; i++) mt += '<td><input type="text" class="m-val" data-r="' + r + '" data-i="' + i + '"></td>';
-        mt += '</tr>';
-    }
-    $('#mtb tbody').html(mt);
+    // 量測列：預設先給 3 列（比照紙本），之後 render() 依實際筆數改用 mtRenderRows()
+    mtRenderRows(3);
     // 部門下拉（徵詢用）
     $.get(API, { action:'depts' }, function(res){
         if (!res || !res.success) return;
@@ -688,6 +714,146 @@ function buildStaticOpts(){
         $('#f_resp_dept').html(hh.replace('請選擇…', '選擇部門…')).val(keep);
     }, 'json');
 }
+
+/* ───────── 量測尺寸與實測值：列數改成動態（2026-10-06） ─────────
+   原本紙本固定三列，qa_abnormal_measure 本來就是一張單對多列、沒有筆數限制——
+   「由檢驗紀錄帶入」可能帶進任意筆數，手動增刪列則走共用鍵盤規則(eg_input_rules.js
+   的 data-eg-row-add/del，↓在最後一列加一列、↑在空白的最後一列移除)，不自己刻一套。
+   重畫時盡量保留使用者已經打的值，不要整欄清空重建。 */
+function mtCollectRows(){
+    var out = [];
+    $('#mtb tbody tr').each(function(){
+        var $tr = $(this);
+        out.push({ dim: $tr.find('.m-dim').val() || '',
+                   vals: $tr.find('.m-val').map(function(){ return $(this).val() || ''; }).get() });
+    });
+    return out;
+}
+function mtRenderRows(n){
+    var keep = mtCollectRows();
+    n = Math.max(1, n || 1);
+    var mt = '';
+    for (var r = 0; r < n; r++){
+        mt += '<tr><td><input type="text" class="m-dim" data-r="' + r + '"></td>';
+        for (var i = 0; i < 12; i++) mt += '<td><input type="text" class="m-val" data-r="' + r + '" data-i="' + i + '"></td>';
+        mt += '</tr>';
+    }
+    $('#mtb tbody').html(mt);
+    keep.forEach(function(row, r){
+        if (r >= n) return;
+        $('.m-dim[data-r="' + r + '"]').val(row.dim);
+        row.vals.forEach(function(v, i){ $('.m-val[data-r="' + r + '"][data-i="' + i + '"]').val(v); });
+    });
+}
+function mtAddRow(){ mtRenderRows($('#mtb tbody tr').length + 1); }
+function mtDelRow(){
+    var n = $('#mtb tbody tr').length;
+    if (n <= 1) return;   // 至少留一列
+    mtRenderRows(n - 1);
+}
+
+/* ───────── 由檢驗紀錄帶入「量測尺寸與實測值」（2026-10-06） ─────────
+   只有線上檢驗NG自動開立的單（D.order.src_qc_form_id 有值）才看得到這顆按鈕。項目資料
+   直接向 QC 模組既有的 get_history_record 要（inspection_combined_prototype.php，與開單
+   當下用的是同一支，鐵律4：不要在這裡另外重寫一次「怎麼把檢驗項目組成文字」的邏輯）。
+   套用後整個取代量測表內容並立即存檔——QCM_LAST_SEL 給 saveHead() 讀，送出後清空。 */
+var QCM_ITEMS = [], QCM_SEL = {}, QCM_LAST_SEL = null;
+function qcMeasureOpenPicker(){
+    var qid = Number((D.order || {}).src_qc_form_id || 0);
+    if (!qid) return;
+    $('#qcMeasurePickList').html('<div class="muted-help">載入中…</div>');
+    openMask('qcMeasurePickMask');
+    $.post('../QC/inspection_combined_prototype.php', { action:'get_history_record', qc_form_id: qid }, function(res){
+        if (!res || !res.success) {
+            $('#qcMeasurePickList').html('<div class="err" style="display:block;">載入失敗：' + esc((res && res.message) || '') + '</div>');
+            return;
+        }
+        QCM_ITEMS = res.items || [];
+        var prevSel = [];
+        try { prevSel = JSON.parse(D.order.src_qc_item_sel || '[]') || []; } catch (e) { prevSel = []; }
+        QCM_SEL = {};
+        if (prevSel.length) prevSel.forEach(function(i){ QCM_SEL[i] = true; });
+        else QCM_ITEMS.forEach(function(it, idx){ if (it.verdict === 'NG') QCM_SEL[idx] = true; });
+        qcMeasureRenderPicker();
+    }, 'json').fail(function(){ $('#qcMeasurePickList').html('<div class="err" style="display:block;">連線失敗</div>'); });
+}
+function qcMeasureValsText(it){
+    return (it.samples || []).map(function(sv){ return (sv && sv.v != null) ? String(sv.v) : ''; })
+                              .filter(function(v){ return v !== ''; }).join(', ');
+}
+function qcMeasureRenderPicker(){
+    var rows = QCM_ITEMS.map(function(it, idx){
+        var tol = (it.up || it.lo) ? ('（公差 ' + (it.up ? '+' + it.up : '') + (it.lo ? ' / ' + it.lo : '') + '）') : '';
+        var vals = qcMeasureValsText(it);
+        return '<label style="display:block;padding:6px 8px;border-bottom:1px solid var(--line);' + (it.verdict === 'NG' ? 'background:#FFF6F4;' : '') + '">'
+            + '<input type="checkbox" class="qcm-pick-chk" data-i="' + idx + '" ' + (QCM_SEL[idx] ? 'checked' : '') + '> '
+            + '<b>' + (idx + 1) + '. ' + esc(it.name || '（未命名項目）') + '</b>　標準 ' + esc(it.std || '-') + esc(tol)
+            + (vals ? ('　實測：' + esc(vals)) : '')
+            + (it.verdict === 'NG' ? ' <span style="color:#fff;background:var(--coral);border-radius:3px;padding:0 5px;font-size:11px;">NG</span>' : '')
+            + '</label>';
+    }).join('');
+    $('#qcMeasurePickList').html(rows || '<div class="muted-help">這筆檢驗紀錄沒有檢驗項目</div>');
+}
+$(document).on('change', '.qcm-pick-chk', function(){
+    var i = +$(this).data('i');
+    if ($(this).is(':checked')) QCM_SEL[i] = true; else delete QCM_SEL[i];
+});
+$('#btnQcMeasureApply').on('click', function(){
+    var sel = Object.keys(QCM_SEL).map(Number).sort(function(a, b){ return a - b; });
+    if (!sel.length) { alert('請至少勾選一個量測項目。'); return; }
+    var rows = sel.map(function(idx){
+        var it = QCM_ITEMS[idx] || {};
+        var tol = (it.up || it.lo) ? ('（公差 ' + (it.up ? '+' + it.up : '') + (it.lo ? ' / ' + it.lo : '') + '）') : '';
+        return { dim: (it.name || '') + '　標準 ' + (it.std || '-') + tol,
+                 vals: (it.samples || []).map(function(sv){ return (sv && sv.v != null) ? String(sv.v) : ''; }).slice(0, 12) };
+    });
+    mtRenderRows(rows.length);
+    rows.forEach(function(row, r){
+        $('.m-dim[data-r="' + r + '"]').val(row.dim);
+        row.vals.forEach(function(v, i){ $('.m-val[data-r="' + r + '"][data-i="' + i + '"]').val(v); });
+    });
+    QCM_LAST_SEL = sel;
+    closeMask('qcMeasurePickMask');
+    saveHead(true);
+});
+$('#btnQcMeasurePick').on('click', qcMeasureOpenPicker);
+
+/* ───────── 異常單附件（2026-10-06）：沿用既有 store_QA_Abnormal_API.php 的
+   upload_attachment／get_attachments／delete_attachment 與下載端點 qa_attachment_download.php
+   （鐵律4：這一套已經是本模組附件的唯一實作，不要在 QaAbnormal_API.php 另開一份）。
+   field_type 固定用 'phenomenon'——這裡做的是整張單共用的附件區，不是逐欄位各自一顆上傳鈕。 */
+var ATT_API = '../../src/store/store_QA_Abnormal_API.php';
+function attLoad(){
+    $.post(ATT_API, { action:'get_attachments', abnormal_order_id: OID }, function(res){
+        var rows = (res && res.success) ? (res.data || []) : [];
+        $('#attList').html(rows.length ? rows.map(function(a){
+            return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--line);">'
+                + '<a href="../../src/store/qa_attachment_download.php?id=' + a.id + '" target="_blank" style="flex:1;"><i class="fa fa-paperclip"></i> ' + esc(a.file_name) + '</a>'
+                + '<button type="button" class="btn btn-default btn-xs att-del" data-id="' + a.id + '"><i class="fa fa-trash"></i></button></div>';
+        }).join('') : '<div class="muted-help">尚無附件</div>');
+    }, 'json');
+}
+function openAttachMask(){ openMask('attachMask'); attLoad(); }
+$('#btnAttach').on('click', openAttachMask);
+$('#attFile').on('change', function(){
+    var f = this.files && this.files[0];
+    if (!f) return;
+    var fd = new FormData();
+    fd.append('action', 'upload_attachment'); fd.append('file', f);
+    fd.append('field_type', 'phenomenon');
+    fd.append('abnormal_order_id', OID); fd.append('abnormal_order_no', (D.order || {}).abnormal_order_no || '');
+    $.ajax({ url: ATT_API, type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' })
+        .done(function(res){ if (!res || !res.success) { alert((res && res.message) || '上傳失敗'); return; } attLoad(); })
+        .fail(function(){ alert('上傳失敗，請稍後再試'); })
+        .always(function(){ $('#attFile').val(''); });
+});
+$(document).on('click', '.att-del', function(){
+    if (!confirm('確定刪除這個附件？')) return;
+    $.post(ATT_API, { action:'delete_attachment', id: $(this).data('id') }, function(res){
+        if (!res || !res.success) { alert((res && res.message) || '刪除失敗'); return; }
+        attLoad();
+    }, 'json');
+});
 
 /* ───────── 畫面 ───────── */
 function render(){
@@ -786,11 +952,16 @@ function render(){
     }
     $('#f_detail').val(o.defect_detail || '');
     $('#f_qaps').val(o.qa_ps || '');
+    // 量測尺寸與實測值：列數不再寫死 3（2026-10-06，使用者要求「由檢驗紀錄帶入」不限筆數）——
+    // 紙本預設仍是 3 列可手填，筆數多於 3 時（多半是帶入自線上檢驗）就照實際筆數畫出來。
+    mtRenderRows(Math.max(3, (o.measures || []).length));
     (o.measures || []).forEach(function(m){
         var r = m.seq - 1;
         $('.m-dim[data-r="' + r + '"]').val(m.dim_name || '');
         (m.vals || []).forEach(function(v, i){ $('.m-val[data-r="' + r + '"][data-i="' + i + '"]').val(v); });
     });
+    // 「由檢驗紀錄帶入」只給線上檢驗NG自動開立的單（src_qc_form_id 有值）使用
+    $('#btnQcMeasurePick').toggle(!!Number(o.src_qc_form_id) && canEdit);
     // 補資料模式（業務日期在 N 天以前）
     var bf = Number(o.is_backfill) === 1;
     $('#bfBox').toggle(bf).html(!bf ? '' :
@@ -1579,13 +1750,9 @@ function saveHead(silent){
         return;
     }
     $('#catErr').hide();
-    var ms = [];
-    for (var r = 0; r < 3; r++){
-        var vals = [];
-        for (var i = 0; i < 12; i++) vals.push($('.m-val[data-r="' + r + '"][data-i="' + i + '"]').val() || '');
-        ms.push({ dim_name: $('.m-dim[data-r="' + r + '"]').val() || '', vals: vals });
-    }
-    post('save_head', {
+    // 列數改成動態讀（不再寫死 3，見 mtRenderRows()/mtCollectRows()，2026-10-06）
+    var ms = mtCollectRows().map(function(row){ return { dim_name: row.dim, vals: row.vals }; });
+    var payload = {
         id:OID, cat_id: $('#f_cat').val(),
         fill_date: $('#f_fill_date').val(), occurrence_date: $('#f_occ_date').val(),
         client_name: $('#f_client').val(), client_id: $('#f_client_id').val(), part_no: $('#f_part').val(),
@@ -1596,7 +1763,14 @@ function saveHead(silent){
         resp_people: JSON.stringify(RESP),
         decider_cfg_id: $('#f_decider').val(), decider_user_id: $('#f_decider_user').val(),
         measures: JSON.stringify(ms)
-    }, function(){ savedAt('#savedHead'); if (!silent) toast('已儲存'); }, !!silent);
+    };
+    // 「由檢驗紀錄帶入」套用當下記下這次選了哪幾項，隨下一次存檔一起送出；一送出就清掉
+    // 旗標，不會在往後每一次自動存檔都重複送同一包（QCM_LAST_SEL 見 qcMeasureOpenPicker 區塊）。
+    if (typeof QCM_LAST_SEL !== 'undefined' && QCM_LAST_SEL !== null) {
+        payload.selected_qc_items = JSON.stringify(QCM_LAST_SEL);
+        QCM_LAST_SEL = null;
+    }
+    post('save_head', payload, function(){ savedAt('#savedHead'); if (!silent) toast('已儲存'); }, !!silent);
 }
 $('#btnSaveHead').on('click', function(){ saveHead(false); });
 $('#btnOwnerSign').on('click', function(){ post('owner_sign', { id:OID }, function(){ toast('已簽章'); }); });

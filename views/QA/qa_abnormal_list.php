@@ -330,12 +330,14 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
                     而且<b>已結案的單不會被改號</b>（紙本已經印出去了）。<br>
                     <b>報工NG自動開立</b>：勾起來的那一類就是報工累積NG自動開單時要歸入的類別（<b>只能勾一個</b>，勾了別列會自動取消；
                     那一類<b>一定要同時勾「製令」</b>，因為自動開單本來就是從某一張製令的某一站累積NG來的）。<br>
+                    <b>線上檢驗NG自動開立</b>：品管在線上檢驗判定NG直接開立異常單草稿時要歸入的類別（<b>只能勾一個</b>，與「報工NG自動開立」分開設定、可以不同類別；同樣一定要同時勾「製令」）。<br>
                     <b>已經有單在用的類別不可刪除</b>，請改成取消「啟用」——既有的單仍看得到，新單不再出現這個選項。</div>
-                <table class="cfg"><thead><tr><th style="width:28px"></th><th style="width:22%">名稱</th>
-                    <th style="width:16%">單號後綴詞</th>
-                    <th style="width:8%">綁製令</th><th style="width:9%">綁客退單</th><th style="width:8%">綁客戶</th>
-                    <th style="width:12%">報工NG自動開立</th>
-                    <th style="width:7%">啟用</th><th style="width:10%">操作</th></tr></thead>
+                <table class="cfg"><thead><tr><th style="width:28px"></th><th style="width:18%">名稱</th>
+                    <th style="width:14%">單號後綴詞</th>
+                    <th style="width:7%">綁製令</th><th style="width:8%">綁客退單</th><th style="width:7%">綁客戶</th>
+                    <th style="width:11%">報工NG自動開立</th>
+                    <th style="width:11%">線上檢驗NG自動開立</th>
+                    <th style="width:6%">啟用</th><th style="width:9%">操作</th></tr></thead>
                     <tbody id="cfgAbCat" data-sortgrp="abcat"></tbody></table>
                 <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
                     <button class="btn btn-warm-o btn-sm" id="btnAbCatAdd"><i class="fa fa-plus"></i> 新增一個類別</button>
@@ -1244,6 +1246,7 @@ function abCatRow(c){
         + '<td class="c"><input type="checkbox" class="k-nir" ' + (Number(c.need_ir) ? 'checked' : '') + '></td>'
         + '<td class="c"><input type="checkbox" class="k-ncli" ' + (Number(c.need_client) ? 'checked' : '') + '></td>'
         + '<td class="c"><input type="radio" name="abcatauto" class="k-auto" ' + (Number(c.is_pm_auto) ? 'checked' : '') + '></td>'
+        + '<td class="c"><input type="radio" name="abcatqcauto" class="k-qcauto" ' + (Number(c.is_qc_auto) ? 'checked' : '') + '></td>'
         + '<td class="c"><input type="checkbox" class="k-act" ' + (Number(c.is_active) ? 'checked' : '') + '></td>'
         + '<td class="c"><input type="hidden" class="k-sort" value="' + (c.sort_order || 0) + '">'
         + '<button class="btn btn-warm-o btn-xs k-del">刪</button></td></tr>';
@@ -1251,7 +1254,7 @@ function abCatRow(c){
 function renderAbCat(){
     var rows = (CFG && CFG.cats) || CATS || [];
     $('#cfgAbCat').html(rows.length ? rows.map(abCatRow).join('')
-        : '<tr><td colspan="9" class="c">尚未建立任何類別（開單時類別是必填的，請至少留一個）</td></tr>');
+        : '<tr><td colspan="10" class="c">尚未建立任何類別（開單時類別是必填的，請至少留一個）</td></tr>');
     abCatPreview();
 }
 /* 後綴詞打進去當下就讓使用者看到單號長什麼樣子——只看一個「-IR」很難想像整串的結果。
@@ -1270,7 +1273,7 @@ function abCatPreview(){
 $(document).on('click', '#btnAbCatAdd', function(){
     var $tb = $('#cfgAbCat');
     if ($tb.find('td[colspan]').length) $tb.empty();
-    $tb.append(abCatRow({ cat_id:0, name:'', suffix:'', is_pm_auto:0, need_bom:0, need_ir:0, need_client:0, is_active:1,
+    $tb.append(abCatRow({ cat_id:0, name:'', suffix:'', is_pm_auto:0, is_qc_auto:0, need_bom:0, need_ir:0, need_client:0, is_active:1,
                           sort_order:nextSort((CFG && CFG.cats) || CATS) }));
     $tb.find('tr:last .k-name').focus();
 });
@@ -1282,6 +1285,7 @@ function saveAbCatRow($tr, silent){
                        need_ir:$tr.find('.k-nir').prop('checked') ? 1 : '',
                        need_client:$tr.find('.k-ncli').prop('checked') ? 1 : '',
                        is_pm_auto:$tr.find('.k-auto').prop('checked') ? 1 : '',
+                       is_qc_auto:$tr.find('.k-qcauto').prop('checked') ? 1 : '',
                        sort_order:$tr.find('.k-sort').val(),
                        is_active:$tr.find('.k-act').prop('checked') ? 1 : '' },
         function(res){
@@ -1449,6 +1453,7 @@ function collectCfgRows(what){
                         need_ir:$tr.find('.k-nir').prop('checked') ? 1 : 0,
                         need_client:$tr.find('.k-ncli').prop('checked') ? 1 : 0,
                         is_pm_auto:$tr.find('.k-auto').prop('checked') ? 1 : 0,
+                        is_qc_auto:$tr.find('.k-qcauto').prop('checked') ? 1 : 0,
                         sort_order:$tr.find('.k-sort').val(),
                         is_active:$tr.find('.k-act').prop('checked') ? 1 : 0 });
         });

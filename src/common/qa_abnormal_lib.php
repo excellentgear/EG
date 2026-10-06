@@ -355,6 +355,8 @@ function qab_ensure_schema(PDO $db): void
         'need_bom'    => "ADD COLUMN need_bom TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=這一類的單一定要綁製令編號'",
         'need_ir'     => "ADD COLUMN need_ir TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=這一類的單一定要綁客退單(IR)'",
         'need_client' => "ADD COLUMN need_client TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=這一類的單一定要綁客戶（客戶主檔 customer_list.customer_id）'",
+        // 2026-10-06：線上檢驗NG自動開立歸哪一類，刻意與 is_pm_auto（報工NG自動開立）分開
+        'is_qc_auto'  => "ADD COLUMN is_qc_auto TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=線上檢驗NG自動開立的單歸入這一類（全站只有一列會是1）'",
     ];
     foreach ($needCat as $c => $sql) if (!in_array($c, $catCols, true)) $addCat[] = $sql;
     if ($addCat) $db->exec("ALTER TABLE qa_abnormal_cat " . implode(', ', $addCat));
@@ -364,6 +366,10 @@ function qab_ensure_schema(PDO $db): void
     $need4 = [
         'cat_id'     => "ADD COLUMN cat_id INT NULL COMMENT '異常單分類 qa_abnormal_cat.cat_id（新單必填；2026-09-29 之前的舊單可能是 NULL）'",
         'cause_note' => "ADD COLUMN cause_note VARCHAR(255) NULL COMMENT '異常原因分類的簡易說明（備註），列印時印在原因分類欄底下'",
+        // 2026-10-06：線上檢驗NG自動開立——回指來源檢驗紀錄＋目前勾選列入內容的量測項目
+        // （不可挪用既有 source_type/source_id，那是 IR/BOM/CS 業務實體綁定的既有語意）
+        'src_qc_form_id'  => "ADD COLUMN src_qc_form_id INT NULL COMMENT '由哪一筆線上檢驗紀錄(qc_check_form.qc_form_id)自動開立，非此來源則為NULL'",
+        'src_qc_item_sel' => "ADD COLUMN src_qc_item_sel TEXT NULL COMMENT '目前列入異常現象內容的量測項目索引(JSON陣列)，品管確認前可重新勾選套用'",
     ];
     foreach ($need4 as $c => $sql) if (!in_array($c, $cols4, true)) $add4[] = $sql;
     if ($add4) $db->exec("ALTER TABLE qa_abnormal_order " . implode(', ', $add4));
@@ -380,6 +386,16 @@ function qab_ensure_schema(PDO $db): void
         $t = $db->query("SHOW COLUMNS FROM qa_abnormal_del_log LIKE 'abnormal_order_no'")->fetch(PDO::FETCH_ASSOC);
         if ($t && stripos((string)$t['Type'], 'varchar(20)') !== false) {
             $db->exec("ALTER TABLE qa_abnormal_del_log MODIFY COLUMN abnormal_order_no VARCHAR(32) NULL");
+        }
+    } catch (Throwable $e) {}
+    /* auto_phenomenon_base 原本只給報工路徑的固定短字串「報工發現不良」用，VARCHAR(255) 夠用；
+       2026-10-06 線上檢驗NG自動開立這條路徑的底稿是品管勾選的量測項目摘要，項目不限筆數，
+       很容易超過255字被硬截斷——截斷後 qab_phenomenon_apply_reselect() 的子字串比對/置換會對不
+       起來（底稿變成一段不完整的文字）。改存 TEXT，報工路徑的短字串存起來完全不受影響。 */
+    try {
+        $t = $db->query("SHOW COLUMNS FROM qa_abnormal_order LIKE 'auto_phenomenon_base'")->fetch(PDO::FETCH_ASSOC);
+        if ($t && stripos((string)$t['Type'], 'varchar') !== false) {
+            $db->exec("ALTER TABLE qa_abnormal_order MODIFY COLUMN auto_phenomenon_base TEXT NULL COMMENT '自動開立時的異常現象底稿，save_head 之後只准補充不可整段移除；線上檢驗NG路徑的底稿會隨「重新套用」一起更新'");
         }
     } catch (Throwable $e) {}
 
@@ -1058,8 +1074,11 @@ function qab_create_order(PDO $db, array $data): array
     $pmReportId = $intOrNull($data['pm_report_id'] ?? null);
     $phenomenon = $strOrNull($data['abnormal_phenomenon'] ?? null, 2000);
     $deciderCfgId = $intOrNull($data['decider_cfg_id'] ?? null);
-    // 自動開立時寫入的異常現象底稿——save_head 之後只准補充、不可移除（2026-09-24 使用者交辦）
-    $phenomenonBase = $autoOpened ? $strOrNull($data['auto_phenomenon_base'] ?? $phenomenon, 255) : null;
+    // 自動開立時寫入的異常現象底稿——save_head 之後只准補充、不可移除（2026-09-24 使用者交辦）。
+    // 上限與 abnormal_phenomenon 同為 2000（欄位本身已於 2026-10-06 改成 TEXT）：報工路徑的底稿
+    // 固定是「報工發現不良」短字串完全不受影響，線上檢驗NG路徑的底稿是品管勾選的量測項目摘要、
+    // 項目不限筆數，若沿用舊的 255 上限會被截斷，之後比對/置換就對不起來。
+    $phenomenonBase = $autoOpened ? $strOrNull($data['auto_phenomenon_base'] ?? $phenomenon, 2000) : null;
 
     /* 責任單位（製程＋廠商）在建單當下就一併帶出——2026-09-24 使用者回報：自動開立已經選好製程，
        但廠商欄卻是空的，要現場再手動選一次。同一張製令、同一個製程站在 bom_ing 上本來就已經記著
@@ -1312,7 +1331,7 @@ function qab_auto_open_from_bom_ing(PDO $db, int $bomIngFid, ?int $triggerReport
  * 一律走 `qa_notify.php` 既有的 `eg_qa_insert_event()`（唯一通知入口，站內＋Web Push＋Telegram
  * 一次到位，不另外自己組 live_event／live_event_target，鐵律4）；名單為空時安靜不發，不是錯誤。
  */
-function qab_notify_qc_review(PDO $db, int $orderId, string $bomNo, int $ngQty): void
+function qab_notify_qc_review(PDO $db, int $orderId, string $bomNo, int $ngQty, ?string $triggerDesc = null): void
 {
     $people = qab_auto_qc_notify_list($db);
     if (!$people) return;
@@ -1321,13 +1340,109 @@ function qab_notify_qc_review(PDO $db, int $orderId, string $bomNo, int $ngQty):
     $st->execute([$orderId]);
     $no = (string)$st->fetchColumn();
     $title = '品質異常單待品管確認：' . $no;
-    $content = '製令 ' . $bomNo . ' 報工累積發現 ' . $ngQty . ' 件NG，系統已自動開立異常單 ' . $no
+    // $triggerDesc：這張單是怎麼來的那半句話，預設沿用報工路徑原本的講法（既有呼叫端不受影響）；
+    // 線上檢驗NG路徑（qab_auto_open_from_qc_ng）會帶自己的講法，不講「報工累積發現」才不會誤導。
+    $triggerDesc = $triggerDesc ?? ('製令 ' . $bomNo . ' 報工累積發現 ' . $ngQty . ' 件NG');
+    $content = $triggerDesc . '，系統已自動開立異常單 ' . $no
              . '，請補充異常現象說明後按「確認完成」送出主管決策。';
     $targets = array_map(function ($p) { return ['type' => 'user', 'id' => (int)$p['id'], 'mode' => 'read']; }, $people);
     eg_qa_insert_event($db, $orderId, $title, $content, $targets, null, 0, [
         'ref_type' => 'QA_QC_REVIEW',
         'url' => '/EGsystem/views/QA/qa_abnormal_form.php?id=' . $orderId,
     ]);
+}
+
+/**
+ * 線上檢驗 NG 判定後，品管當場直接自動開立品質異常單草稿（2026-10-06 使用者要求，比照
+ * qab_auto_open_from_bom_ing() 同一套「草稿＋品管確認」模式）。差異：
+ *  ①開單人就是當下操作的品管人員本人（created_by 直接用登入者，不像報工路徑要解析現場主管——
+ *    那條路徑是批次/系統觸發沒有真人在場，這裡人就在眼前按鈕）；
+ *  ②異常現象只放一句固定的簡短說明（細節看量測表），**量測尺寸與實測值一律寫進既有的
+ *    qa_abnormal_measure**（表單原本就有「量測尺寸與實測值」這張表，是真正結構化的量測資料，
+ *    不是塞進一段文字描述裡——鐵律4：不要另外發明一套文字格式去表達本來就有欄位的東西）；
+ *  ③分類看 is_qc_auto 旗標（qab_cat_auto_qc()），與報工路徑的 is_pm_auto 分開，管理員可各自配置；
+ *  ④多記一筆 src_qc_form_id（回指來源檢驗紀錄）／src_qc_item_sel（目前勾選狀態，JSON陣列），
+ *    供品管事後回到異常單用「由檢驗紀錄帶入」重新勾選時，picker 畫面知道上次勾了哪幾項。
+ * $measures：量測列陣列，每列 ['dim_name'=>string, 'vals'=>string[]]（最多12個實測值，比照紙本）；
+ * 不限筆數——qa_abnormal_measure 本來就是一張單對多列的表，不是紙本那種寫死三列的限制。
+ * $selectedKeys：目前勾選的量測項目索引（對應 get_history_record 回傳 items 的順序）。
+ */
+function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array $measures, array $selectedKeys): array
+{
+    qab_ensure_schema($db);
+    if ($qcFormId <= 0) throw new Exception('缺少 qc_form_id');
+    if ($createdBy <= 0) throw new Exception('缺少開單人');
+    if (!$measures) throw new Exception('請至少勾選一個量測項目列入異常單內容');
+
+    // 同一筆檢驗紀錄不可重複自動開立（前端已有「已開立異常單」的擋下，這裡是最後一道防線，
+    // 例如重複點擊/網路延遲重送）——查到既有的直接回傳，不報錯也不新建第二張。
+    $exist = $db->prepare("SELECT id, abnormal_order_no FROM qa_abnormal_order WHERE src_qc_form_id=? AND deleted_at IS NULL LIMIT 1");
+    $exist->execute([$qcFormId]);
+    if ($row = $exist->fetch(PDO::FETCH_ASSOC)) {
+        return ['id' => (int)$row['id'], 'no' => (string)$row['abnormal_order_no'], 'existed' => true];
+    }
+
+    $st = $db->prepare("SELECT f.bom_ing_fid, f.insp_no, f.ng_qty, f.incoming_qty, f.sample_qty,
+                                bi.bom, bi.process_no
+                         FROM qc_check_form f
+                         LEFT JOIN bom_ing bi ON bi.bom_ing_fid = f.bom_ing_fid
+                         WHERE f.qc_form_id=?");
+    $st->execute([$qcFormId]);
+    $qc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$qc) throw new Exception('找不到這筆檢驗紀錄');
+    if (empty($qc['bom'])) throw new Exception('這筆檢驗紀錄沒有連結到製令，無法自動開立異常單（請改用人工開單）');
+
+    /* 分類：一律歸到管理員勾了「線上檢驗NG自動開立」旗標的那一類。**不可以比對名稱**——
+       管理員把分類改名，自動開單就會整個開不出來（鐵律4，與報工路徑同一條規則）。 */
+    $catId = qab_cat_auto_qc($db);
+    if (!$catId) {
+        throw new Exception('尚未設定「線上檢驗NG自動開立」要歸入哪一個異常單類別，請先到清單頁的「設定 → 異常單類別」勾選一個類別');
+    }
+
+    $autoNote = mb_substr('品管於線上檢驗判定NG時自動開立（檢驗單號 ' . (string)$qc['insp_no'] . '）', 0, 255);
+    $phenomenon = '線上檢驗判定不良（檢驗單號 ' . (string)$qc['insp_no'] . '），詳細量測數據見下方「量測尺寸與實測值」。';
+
+    $data = [
+        'kind' => 'bom',
+        'bom_no' => (string)$qc['bom'],
+        'batch_qty' => (int)$qc['incoming_qty'],
+        'insp_qty' => (int)$qc['sample_qty'],
+        'ng_qty' => (int)$qc['ng_qty'],
+        'abnormal_phenomenon' => $phenomenon,
+        'created_by' => $createdBy,
+        'resp_process_no' => $qc['process_no'] !== null ? (int)$qc['process_no'] : null,
+        'auto_opened' => 1,
+        'auto_open_note' => $autoNote,
+        // 決策者自動＝品管主管，沿用管理員在「設定→決策者」已設好的品管部門那一列，
+        // 與報工路徑同一支解析，換人由品管課職務調動自然反映。
+        'decider_cfg_id' => qab_decider_cfg_id_for_dept($db, 'qc_dept'),
+        'auto_phenomenon_base' => $phenomenon,
+        'cat_id' => $catId,
+    ];
+    $created = qab_create_order($db, $data);
+    $id = $created['id'];
+
+    $db->prepare("UPDATE qa_abnormal_order SET src_qc_form_id=?, src_qc_item_sel=? WHERE id=?")
+       ->execute([$qcFormId, json_encode(array_values($selectedKeys), JSON_UNESCAPED_UNICODE), $id]);
+
+    // 量測尺寸與實測值——寫法與 QaAbnormal_API.php 的 save_head 處理 measures 完全同一套
+    // （先清空重建，seq 從 1 起算），不另外重寫一次 INSERT 邏輯。
+    $insM = $db->prepare("INSERT INTO qa_abnormal_measure (order_id,seq,dim_name,vals) VALUES (?,?,?,?)");
+    $seq = 1;
+    foreach ($measures as $m) {
+        $dimName = mb_substr(trim((string)($m['dim_name'] ?? '')), 0, 60);
+        $vals = array_values(array_map('strval', (array)($m['vals'] ?? [])));
+        $insM->execute([$id, $seq++, $dimName, json_encode($vals, JSON_UNESCAPED_UNICODE)]);
+    }
+
+    // 通知管理員設定的品管部門人員來補充說明並確認——品管完整填寫後才送主管決策，不會自動送決策，
+    // 與報工路徑同一套「品管確認」閘門（qc_review_by／qc_review_at），只是這裡觸發來源不同。
+    try {
+        $desc = '線上檢驗（檢驗單號 ' . (string)$qc['insp_no'] . '）判定製令 ' . (string)$qc['bom'] . ' 不良 ' . (int)$qc['ng_qty'] . ' 件';
+        qab_notify_qc_review($db, $id, (string)$qc['bom'], (int)$qc['ng_qty'], $desc);
+    } catch (Throwable $e) {}
+
+    return ['id' => $id, 'no' => $created['no'], 'existed' => false];
 }
 
 /**
@@ -2140,7 +2255,7 @@ function qab_can_edit_form(PDO $db, array $perms, array $order): bool
 /** 分類清單；$activeOnly=false 時連停用的一起回（設定頁與舊單顯示用） */
 function qab_cats(PDO $db, bool $activeOnly = true): array
 {
-    $sql = "SELECT cat_id, name, suffix, is_pm_auto, need_bom, need_ir, need_client, sort_order, is_active
+    $sql = "SELECT cat_id, name, suffix, is_pm_auto, is_qc_auto, need_bom, need_ir, need_client, sort_order, is_active
             FROM qa_abnormal_cat";
     if ($activeOnly) $sql .= " WHERE is_active=1";
     $sql .= " ORDER BY sort_order, cat_id";
@@ -2149,6 +2264,7 @@ function qab_cats(PDO $db, bool $activeOnly = true): array
         $r['cat_id']      = (int)$r['cat_id'];
         $r['suffix']      = (string)($r['suffix'] ?? '');
         $r['is_pm_auto']  = (int)$r['is_pm_auto'];
+        $r['is_qc_auto']  = (int)$r['is_qc_auto'];
         $r['need_bom']    = (int)$r['need_bom'];
         $r['need_ir']     = (int)$r['need_ir'];
         $r['need_client'] = (int)$r['need_client'];
@@ -2228,6 +2344,14 @@ function qab_cat_map(PDO $db): array
 function qab_cat_auto_pm(PDO $db): ?int
 {
     foreach (qab_cats($db, true) as $r) if ($r['is_pm_auto']) return $r['cat_id'];
+    return null;
+}
+
+/** 線上檢驗NG自動開立的單要歸到哪一類（旗標判定，刻意與 is_pm_auto 分開——兩種觸發來源不同，
+ *  管理員應該能各自指定歸類；查不到回 null，呼叫端(qab_auto_open_from_qc_ng)自行決定要不要擋下）。 */
+function qab_cat_auto_qc(PDO $db): ?int
+{
+    foreach (qab_cats($db, true) as $r) if ($r['is_qc_auto']) return $r['cat_id'];
     return null;
 }
 
