@@ -354,7 +354,7 @@ $db  = new DBConnection();
 $pdo = $db->getPDO();
 
 // ── Migration 版本鎖：版本符合時跳過所有 ALTER/CREATE，只跑一次 ──────────
-define('MDM_MIGRATION_VERSION', '20261007_03');   // 2026-10-07（三次）專用機台擴充：專用機台種類(d_setting_machine_type_map)/專用機型(d_setting_machine_model_map)
+define('MDM_MIGRATION_VERSION', '20261007_04');   // 2026-10-07（四次）治具「整組」(dict_workpiece_type.is_jig_set)
 $_mdm_skip_migration = false;
 try {
     // system_settings 可能尚不存在（第一次執行），用 try 保護
@@ -546,6 +546,15 @@ try {
      */
     try { $pdo->exec("ALTER TABLE dict_workpiece_type ADD COLUMN is_jig_type TINYINT(1) NOT NULL DEFAULT 0 COMMENT '此工件種類的料號是否可被認定為治具(可被其他料號挑選為專用/通用治具)'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE dict_workpiece_type ADD COLUMN show_jig    TINYINT(1) NOT NULL DEFAULT 0 COMMENT '料號表單是否顯示專用治具/通用治具欄位(多選已標記is_jig_type的現有d_setting料號 → d_setting_jig_map)'"); } catch(Exception $e){}
+    /**
+     * is_jig_set（2026-10-08，「整組」）：使用者原話「有點類似組合件的概念，但不希望多設定料號」——
+     * 治具料號不必像組合件那樣拆成一堆子件料號，只要能記「配哪台機台用／搭配哪個既有料號」就夠辨識，
+     * 沒綁的話就用它自己的規格/名稱當自訂名稱。技術上就是「專用料號」＋「專用機台」這兩個早就做好的
+     * 欄位（d_setting_dedicated_part_map／d_setting_machine_map），這顆旗標純粹是把「勾這個=同時打開
+     * 那兩個欄位」做成一個好懂、好找的單一動作，存檔時會一併把 show_part_no／show_machine 打開
+     * （只會自動打開、不會自動關閉——管理員若有其他理由另外開著，不該被這顆旗標關掉）。
+     */
+    try { $pdo->exec("ALTER TABLE dict_workpiece_type ADD COLUMN is_jig_set  TINYINT(1) NOT NULL DEFAULT 0 COMMENT '整組：此工件種類的料號可設定使用料號/使用機台(等同自動打開show_part_no+show_machine)，不必另建組合件子件'"); } catch(Exception $e){}
     /**
      * d_setting_vendor_map — 料號↔廠商對應（含每廠商單價）
      *  d_id        → d_setting.d_id（料號）
@@ -4911,7 +4920,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $code = trim($_POST['type_code'] ?? '');
                 $name = trim($_POST['type_name'] ?? '');
                 if (empty($code) || empty($name)) throw new Exception('代碼與名稱不可為空');
-                $old_wt = $pdo->prepare("SELECT type_name, show_vendor, show_part_no, show_machine, show_price, is_jig_type, show_jig FROM dict_workpiece_type WHERE type_code=?"); $old_wt->execute([$code]); $old_wt_row = $old_wt->fetch(PDO::FETCH_ASSOC);
+                $old_wt = $pdo->prepare("SELECT type_name, show_vendor, show_part_no, show_machine, show_price, is_jig_type, show_jig, is_jig_set FROM dict_workpiece_type WHERE type_code=?"); $old_wt->execute([$code]); $old_wt_row = $old_wt->fetch(PDO::FETCH_ASSOC);
                 if (!_mdPerm('workpiece_type', $old_wt_row ? 'edit' : 'add', $can_dict_part)) throw new Exception('無'.($old_wt_row?'修改':'新增').'權限（需要 A、CDR 或 CDRU 權限）');
                 // 料號表單欄位顯示開關（依工件種類）
                 $sv = !empty($_POST['show_vendor'])  ? 1 : 0;
@@ -4920,10 +4929,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $spr= !empty($_POST['show_price'])   ? 1 : 0;
                 $sjt= !empty($_POST['is_jig_type'])  ? 1 : 0;   // 此種類的料號可被認定為治具（可被挑選）
                 $sj = !empty($_POST['show_jig'])     ? 1 : 0;   // 料號表單顯示專用/通用治具欄位（可挑治具）
-                $pdo->prepare("INSERT INTO dict_workpiece_type (type_code, type_name, show_vendor, show_part_no, show_machine, show_price, is_jig_type, show_jig) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE type_name=VALUES(type_name), show_vendor=VALUES(show_vendor), show_part_no=VALUES(show_part_no), show_machine=VALUES(show_machine), show_price=VALUES(show_price), is_jig_type=VALUES(is_jig_type), show_jig=VALUES(show_jig)")->execute([$code, $name, $sv, $sp, $sm, $spr, $sjt, $sj]);
+                $sjs= !empty($_POST['is_jig_set'])   ? 1 : 0;   // 整組：可設定使用料號/使用機台
+                // 「整組」只會自動打開 show_part_no/show_machine，不會自動關掉——管理員若有其他理由
+                // 另外開著這兩個欄位，不該因為沒勾整組就被這裡關掉。
+                if ($sjs) { $sp = 1; $sm = 1; }
+                $pdo->prepare("INSERT INTO dict_workpiece_type (type_code, type_name, show_vendor, show_part_no, show_machine, show_price, is_jig_type, show_jig, is_jig_set) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE type_name=VALUES(type_name), show_vendor=VALUES(show_vendor), show_part_no=VALUES(show_part_no), show_machine=VALUES(show_machine), show_price=VALUES(show_price), is_jig_type=VALUES(is_jig_type), show_jig=VALUES(show_jig), is_jig_set=VALUES(is_jig_set)")->execute([$code, $name, $sv, $sp, $sm, $spr, $sjt, $sj, $sjs]);
                 $uid = $_SESSION['user_id']??null; $op_name = _get_operator($pdo,$uid);
-                $newRow = ['type_name'=>$name,'show_vendor'=>$sv,'show_part_no'=>$sp,'show_machine'=>$sm,'show_price'=>$spr,'is_jig_type'=>$sjt,'show_jig'=>$sj];
-                if ($old_wt_row) { $ch=_diff_rows($old_wt_row,$newRow,['type_name','show_vendor','show_part_no','show_machine','show_price','is_jig_type','show_jig']); if(!empty($ch)) _log_audit($pdo,'update','dict','workpiece:'.$code,$name,$ch,$uid,$op_name); }
+                $newRow = ['type_name'=>$name,'show_vendor'=>$sv,'show_part_no'=>$sp,'show_machine'=>$sm,'show_price'=>$spr,'is_jig_type'=>$sjt,'show_jig'=>$sj,'is_jig_set'=>$sjs];
+                if ($old_wt_row) { $ch=_diff_rows($old_wt_row,$newRow,['type_name','show_vendor','show_part_no','show_machine','show_price','is_jig_type','show_jig','is_jig_set']); if(!empty($ch)) _log_audit($pdo,'update','dict','workpiece:'.$code,$name,$ch,$uid,$op_name); }
                 else _log_audit($pdo,'insert','dict','workpiece:'.$code,$name,null,$uid,$op_name);
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'check_delete') {
@@ -8691,7 +8704,7 @@ body { background:#F6F1EA; }
     <!-- 專用料號（可多選現有料號）→ d_setting_dedicated_part_map -->
     <div class="col-md-6" id="pf-partno-group" style="display:none;">
         <div class="form-group">
-            <label style="font-size:12px;"><i class="fa fa-barcode" style="color:#888;margin-right:4px;"></i>專用料號 <span style="font-weight:normal;color:#aaa;font-size:11px;">（可多選，來源為現有料號）</span></label>
+            <label style="font-size:12px;"><i class="fa fa-barcode" style="color:#888;margin-right:4px;"></i><span id="pf-partno-label-txt">專用料號</span> <span style="font-weight:normal;color:#aaa;font-size:11px;">（可多選，來源為現有料號）</span></label>
             <div style="position:relative;">
                 <input type="text" class="form-control input-sm" id="pf-ac-partno-input" placeholder="輸入料號或規格搜尋…" autocomplete="off" oninput="pfAcSearch('partno',this.value)" onkeydown="pfAcInputKey(event,'partno')">
                 <div id="pf-ac-partno-dropdown" class="pf-ac-dropdown" style="display:none;"></div>
@@ -8706,7 +8719,7 @@ body { background:#F6F1EA; }
          機台都可以用，不限定哪一台)；機型＝綁到機台型號文字(同型號的機台都可以用)。 -->
     <div class="col-md-6" id="pf-machine-group" style="display:none;">
         <div class="form-group">
-            <label style="font-size:12px;"><i class="fa fa-cogs" style="color:#888;margin-right:4px;"></i>專用機台 <span style="font-weight:normal;color:#aaa;font-size:11px;">（機台編號，可多選）</span></label>
+            <label style="font-size:12px;"><i class="fa fa-cogs" style="color:#888;margin-right:4px;"></i><span id="pf-machine-label-txt">專用機台</span> <span style="font-weight:normal;color:#aaa;font-size:11px;">（機台編號，可多選）</span></label>
             <div id="mpk-list-machine" class="pf-ac-list" style="margin-top:2px;"></div>
             <button type="button" class="btn btn-xs btn-default" onclick="mpkOpen('machine')" style="margin-top:4px;"><i class="fa fa-plus"></i> 挑選機台</button>
             <input type="hidden" id="pf-machine-map" name="machine_map" value="[]">
@@ -14869,6 +14882,13 @@ function applyPartExtraFieldVisibility(typeCode) {
     if (jgg) jgg.style.display = meta.show_jig ? '' : 'none';
     if (wrap) wrap.style.display = (vendorVisible||meta.show_part_no||meta.show_machine||meta.show_jig) ? '' : 'none';
     _pfAcRenderList('vendor'); // 價格欄顯示狀態可能改變，重繪廠商清單
+    // 「整組」工件種類（如治具 J）：專用料號/專用機台改稱「使用料號」「使用機台」——對一般料號來說
+    // 這兩個欄位是「我需要什麼」，但對治具整組來說是「我自己是配哪個料號/哪台機台用的」，意思相反，
+    // 換個名字才不會混淆（使用者 2026-10-08：治具整組要能依使用料號/使用機台辨識）。
+    var ptxt = document.getElementById('pf-partno-label-txt');
+    var mtxt = document.getElementById('pf-machine-label-txt');
+    if (ptxt) ptxt.textContent = meta.is_jig_set ? '使用料號' : '專用料號';
+    if (mtxt) mtxt.textContent = meta.is_jig_set ? '使用機台' : '專用機台';
 }
 
 // 清空欄位（新增料號時呼叫）
@@ -15849,7 +15869,8 @@ function _loadPartTypeOptions(currentVal, callback) {
                     show_part_no: Number(t.show_part_no)===1,
                     show_machine: Number(t.show_machine)===1,
                     show_price:   Number(t.show_price)===1,
-                    show_jig:     Number(t.show_jig)===1
+                    show_jig:     Number(t.show_jig)===1,
+                    is_jig_set:   Number(t.is_jig_set)===1
                 };
             });
         } else {
@@ -18387,7 +18408,8 @@ var dictConfig = {
             if (Number(d.show_jig))     f.push('專用/通用治具');
             if (f.length) badges = ' <span style="font-size:10px;color:#3949ab;background:#e8eaf6;border-radius:3px;padding:1px 5px;margin-left:4px;">'+f.join('、')+'</span>';
             var jigBadge = Number(d.is_jig_type) ? ' <span style="font-size:10px;color:#a0522d;background:#fdf0e3;border-radius:3px;padding:1px 5px;margin-left:4px;">可被認定為治具</span>' : '';
-            return '<span class="dict-code-badge">'+escHtml(d.type_code)+'</span>'+escHtml(d.type_name)+badges+jigBadge;
+            var jigSetBadge = Number(d.is_jig_set) ? ' <span style="font-size:10px;color:#a0522d;background:#fdf0e3;border-radius:3px;padding:1px 5px;margin-left:4px;">整組</span>' : '';
+            return '<span class="dict-code-badge">'+escHtml(d.type_code)+'</span>'+escHtml(d.type_name)+badges+jigBadge+jigSetBadge;
         },
         renderForm: function() {
             var html = '';
@@ -18411,6 +18433,9 @@ var dictConfig = {
             html += '<div style="width:100%;flex-basis:100%;margin-top:8px;border-top:1px dashed #ddd;padding-top:8px;">';
             html += '<label style="font-weight:normal;cursor:pointer;font-size:13px;color:#a0522d;"><input type="checkbox" id="dict-f-is_jig_type" style="vertical-align:-1px;margin-right:4px;">可被認定為治具'
                   + '<span style="color:#aaa;font-weight:normal;">（勾選後，此工件種類底下的料號可以被其他任何料號挑選為「專用治具」或「通用治具」；全站共用同一份清單，不分是哪個種類在挑）</span></label>';
+            html += '<label style="font-weight:normal;cursor:pointer;font-size:13px;color:#a0522d;display:block;margin-top:6px;"><input type="checkbox" id="dict-f-is_jig_set" style="vertical-align:-1px;margin-right:4px;">整組（可設定使用料號／使用機台）'
+                  + '<span style="color:#aaa;font-weight:normal;">（這個治具不必另外拆成一堆子件料號，就是一個整組——勾選後自動打開「專用料號」「專用機台」兩個欄位讓它綁定「使用料號」與「使用機台」，'
+                  + '沒綁的話就用它自己的規格/名稱當自訂名稱；取消勾選不會把已經打開的那兩個欄位關掉）</span></label>';
             html += '</div>';
             return html;
         },
@@ -18423,6 +18448,7 @@ var dictConfig = {
             $('#dict-f-show_price').prop('checked', Number(d.show_price)===1);
             $('#dict-f-show_jig').prop('checked', Number(d.show_jig)===1);
             $('#dict-f-is_jig_type').prop('checked', Number(d.is_jig_type)===1);
+            $('#dict-f-is_jig_set').prop('checked', Number(d.is_jig_set)===1);
         },
         getData: function() {
             var code = $('#dict-f-code').val().trim();
@@ -18436,7 +18462,8 @@ var dictConfig = {
                 show_machine: $('#dict-f-show_machine').prop('checked') ? 1 : 0,
                 show_price:   $('#dict-f-show_price').prop('checked')   ? 1 : 0,
                 show_jig:     $('#dict-f-show_jig').prop('checked')     ? 1 : 0,
-                is_jig_type:  $('#dict-f-is_jig_type').prop('checked')  ? 1 : 0
+                is_jig_type:  $('#dict-f-is_jig_type').prop('checked')  ? 1 : 0,
+                is_jig_set:   $('#dict-f-is_jig_set').prop('checked')   ? 1 : 0
             };
         },
         getDeleteId: function(d){ return d.type_code; }
@@ -23929,7 +23956,7 @@ function clearDictForm() {
     }
     if (currentDictType==='workpiece') {
         $('#dict-f-code').val('').prop('readonly',false).css('background','');
-        $('#dict-f-show_vendor,#dict-f-show_part_no,#dict-f-show_machine,#dict-f-show_price,#dict-f-show_jig,#dict-f-is_jig_type').prop('checked',false);
+        $('#dict-f-show_vendor,#dict-f-show_part_no,#dict-f-show_machine,#dict-f-show_price,#dict-f-show_jig,#dict-f-is_jig_type,#dict-f-is_jig_set').prop('checked',false);
     }
     if (currentDictType==='gear') {
         $('#dict-f-helix').prop('checked',false);
