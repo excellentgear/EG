@@ -1961,11 +1961,13 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
     $astagMap = ot_astag_for_orders($db, array_column($rows, 'id'));
     $bands    = oa_qty_bands($db);
     $shipMap  = oa_actual_ship_dates($db, array_column($rows, 'id'));
+    $stepMap  = oa_order_process_steps($db, array_column($rows, 'id'));
     foreach ($rows as &$r) {
         $info = $astagMap[$r['id']] ?? null;
         $r['cls']      = oa_scope_to_cls($info);
         $r['as_label'] = $info ? (string)$info['label'] : '';
         $r['band']     = oa_band_index((int)$r['qty'], $bands);
+        $r['proc_steps'] = $stepMap[$r['id']] ?? null;
 
         $ltRaw = oa_leadtime_workdays($db, $r['odate'], $r['ddate']);
         $r['lt_raw'] = $ltRaw;
@@ -2042,7 +2044,8 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
                                  'as_label' => $r['as_label'], 'proc' => $r['proc'], 'order_ps' => $r['order_ps'],
                                  'amount' => $r['amount'], 'qty' => $r['qty'],
                                  'created_by_name' => $r['created_by_name'], 'created_at' => $r['created_at'],
-                                 'ship_date' => $r['ship_date'], 'ship_lt' => $r['ship_lt'], 'delay_days' => $r['delay_days']];
+                                 'ship_date' => $r['ship_date'], 'ship_lt' => $r['ship_lt'], 'delay_days' => $r['delay_days'],
+                                 'proc_steps' => $r['proc_steps']];
             }
             $bk = (int)$r['band'];
             if (!isset($bandAgg[$bk])) $bandAgg[$bk] = ['band' => $bk, 'label' => $bk >= 0 ? ($bands[$bk]['label'] ?? '') : '未涵蓋', 'n' => 0, 'urgent_n' => 0];
@@ -2111,6 +2114,11 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
 }
 
 /** 急件自動分析（每一條都附具體數字） */
+/**
+ * @param array $rep oa_leadtime_report() 的完整回傳值
+ * 文字一律帶入實際的期間名稱（如「2026 Q4」「2025 Q4」），不要只印「本期」「基期」
+ * 這種讓人分不出是哪一期的通用字——使用者明確要求，報告要能自己說清楚在比什麼。
+ */
 function oa_urgent_insights(array $rep): array
 {
     $out = [];
@@ -2122,23 +2130,25 @@ function oa_urgent_insights(array $rep): array
         $out[] = $item;
     };
     $cur = $rep['cur']; $cmp = $rep['cmp'];
+    $curL = (string)($rep['period']['label'] ?? '本期');
+    $cmpL = (string)($rep['cmp_period']['label'] ?? '基期');
 
     if (!$cur['orders']) {
-        $add('info', '本期沒有可供判定的交期資料', '這一期沒有訂單，或訂單缺下單日／交期。');
+        $add('info', $curL . '沒有可供判定的交期資料', '這一期沒有訂單，或訂單缺下單日／交期。');
         return $out;
     }
     if ($cur['no_leadtime'] > 0) {
         $add('info', '有訂單缺交期資料未納入急件判定',
-             '本期 ' . $cur['no_leadtime'] . ' 張訂單缺下單日或交期（或交期早於下單日），這幾張不計入急件統計。');
+             $curL . ' ' . $cur['no_leadtime'] . ' 張訂單缺下單日或交期（或交期早於下單日），這幾張不計入急件統計。');
     }
     if (!empty($cur['noise_excluded'])) {
         $add('info', '有訂單疑似誤植交期，已依設定排除',
-             '本期 ' . $cur['noise_excluded'] . ' 張訂單的交期工作天數低於管理員設定的排除下限（多半是交期打錯日期），'
+             $curL . ' ' . $cur['noise_excluded'] . ' 張訂單的交期工作天數低於管理員設定的排除下限（多半是交期打錯日期），'
             . '已整段不計入本次分析（平均值／急件判定都不算），設定在「急件判定設定」調整。');
     }
     if ($cur['ship_bound_n'] > 0) {
         $add('info', '實際出貨與延誤（目前多半尚未綁定出貨單）',
-             '本期有綁定出貨單可查的訂單 ' . $cur['ship_bound_n'] . ' 張（覆蓋率 ' . $cur['ship_coverage'] . '%）：'
+             $curL . ' 有綁定出貨單可查的訂單 ' . $cur['ship_bound_n'] . ' 張（覆蓋率 ' . $cur['ship_coverage'] . '%）：'
             . '平均實際出貨工作天 ' . ($cur['avg_ship_leadtime'] === null ? '—' : $cur['avg_ship_leadtime']) . ' 天，'
             . '逾交期 ' . $cur['late_n'] . ' 張（' . $cur['late_ratio'] . '%）'
             . ($cur['avg_delay_days'] === null ? '。' : ('，平均延誤 ' . $cur['avg_delay_days'] . ' 天。')));
@@ -2147,12 +2157,12 @@ function oa_urgent_insights(array $rep): array
     $d = $cur['urgent_order_ratio'] - $cmp['urgent_order_ratio'];
     $lvl = abs($d) < 1 ? 'info' : ($d > 0 ? 'warn' : 'good');
     $add($lvl, '急件比例' . ($d > 0 ? '上升' : ($d < 0 ? '下降' : '持平')),
-         '本期急件 ' . $cur['urgent_orders'] . ' 張／共 ' . $cur['orders'] . ' 張（' . $cur['urgent_order_ratio'] . '%），'
-        . '基期 ' . $cmp['urgent_order_ratio'] . '%，' . ($d >= 0 ? '增加 ' : '減少 ') . number_format(abs($d), 1) . ' 個百分點。',
+         $curL . ' 急件 ' . $cur['urgent_orders'] . ' 張／共 ' . $cur['orders'] . ' 張（' . $cur['urgent_order_ratio'] . '%），'
+        . $cmpL . ' ' . $cmp['urgent_order_ratio'] . '%，' . ($d >= 0 ? '增加 ' : '減少 ') . number_format(abs($d), 1) . ' 個百分點。',
          ($d >= 0 ? '+' : '') . number_format($d, 1) . 'pp');
 
     if ($cur['urgent_orders'] > 0) {
-        $add('info', '急件金額佔比', '本期急件訂單金額佔整體 ' . $cur['urgent_amount_ratio'] . '%'
+        $add('info', '急件金額佔比', $curL . ' 急件訂單金額佔整體 ' . $cur['urgent_amount_ratio'] . '%'
             . '（急件 ' . number_format($cur['urgent_amount']) . ' 元／整體 ' . number_format($cur['amount']) . ' 元）。');
 
         $top3 = array_slice($cur['client_list'], 0, 3);
@@ -2171,12 +2181,12 @@ function oa_urgent_insights(array $rep): array
         foreach ($byCls as $b) { if ($b['is_urgent_class'] && $b['n'] >= 3) { $top = $b; break; } }
         if ($top) {
             $add('info', '「' . $top['label'] . '」急件比例最高',
-                 $top['label'] . ' 類別本期 ' . $top['n'] . ' 張訂單中有 ' . $top['urgent_n'] . ' 張是急件（' . $top['urgent_ratio'] . '%），'
+                 $top['label'] . ' 類別 ' . $curL . ' ' . $top['n'] . ' 張訂單中有 ' . $top['urgent_n'] . ' 張是急件（' . $top['urgent_ratio'] . '%），'
                 . '平均交期工作天數 ' . $top['avg'] . ' 天、門檻 '
                 . (($top['threshold'] === null) ? '尚未算出' : number_format($top['threshold'], 1) . ' 天') . '。');
         }
     } else {
-        $add('good', '本期沒有符合急件門檻的訂單', '依目前設定的百分位門檻，本期交期工作天數都高於急件門檻。');
+        $add('good', $curL . '沒有符合急件門檻的訂單', '依目前設定的百分位門檻，' . $curL . ' 交期工作天數都高於急件門檻。');
     }
     return $out;
 }

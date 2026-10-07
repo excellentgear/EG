@@ -305,7 +305,7 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
         <?php endif; ?>
       </span>
     </div>
-    <div class="oa-bar" style="margin-top:8px;">
+    <div class="oa-bar" style="margin-top:8px;" id="cliFilterBar">
       <label>客戶篩選</label>
       <button class="btn btn-xs btn-warm-o" id="btnCliPick"><i class="fa fa-users"></i> 選擇客戶（可多選比較）</button>
       <button class="btn btn-xs btn-default" id="btnCliClear" style="display:none;">清除</button>
@@ -611,7 +611,7 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
       <div class="tbl-wrap">
         <table class="oa-t" id="tblLtClient">
           <colgroup><col style="width:5%"><col style="width:26%"><col style="width:15%"><col style="width:17%"><col style="width:17%"><col style="width:20%"></colgroup>
-          <thead><tr><th>#</th><th>客戶</th><th>急件筆數</th><th>急件金額</th><th>佔急件總額</th><th>較基期增減</th></tr></thead>
+          <thead><tr><th>#</th><th>客戶</th><th>急件筆數</th><th>急件金額</th><th>佔急件總額</th><th id="tblLtClientCmpHead">較基期增減</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -623,11 +623,11 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
       </h4>
       <div class="tbl-wrap">
         <table class="oa-t" id="tblLtList">
-          <colgroup><col style="width:8%"><col style="width:7%"><col style="width:7%"><col style="width:9%"><col style="width:6%">
-                    <col style="width:6%"><col style="width:6%"><col style="width:12%"><col style="width:5%"><col style="width:7%">
-                    <col style="width:10%"><col style="width:10%"><col style="width:7%"></colgroup>
-          <thead><tr><th>訂單號</th><th>KEY單業務</th><th>客戶</th><th>料號</th><th>下單日</th><th>交期</th>
-                     <th>工作天數</th><th>類別</th><th>數量</th><th>金額</th><th>實際出貨</th><th>備註</th><th>key單日期</th></tr></thead>
+          <colgroup><col style="width:8%"><col style="width:8%"><col style="width:7%"><col style="width:9%"><col style="width:6%">
+                    <col style="width:6%"><col style="width:6%"><col style="width:5%"><col style="width:11%"><col style="width:5%"><col style="width:7%">
+                    <col style="width:10%"><col style="width:10%"></colgroup>
+          <thead><tr><th>訂單號</th><th>KEY單日期/業務</th><th>客戶</th><th>料號</th><th>下單日</th><th>交期</th>
+                     <th>工作天數</th><th>製程數</th><th>類別</th><th>數量</th><th>金額</th><th>實際出貨</th><th>備註</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -1176,6 +1176,8 @@ function oaSwitchMainTab(t){
   $('.oa-mtab[data-tab="'+t+'"]').addClass('active');
   if(t==='leadtime' && !LT_DATA) loadLeadtime();
   if(t==='share' && !CLI_LIST.length) loadClients();
+  // 「客戶篩選」只有總覽／交期與急件分析用得到，客戶佔比報告有自己的客戶挑選器，切過去就自動收起來
+  $('#cliFilterBar').toggle(t !== 'share');
 }
 $('.oa-mtab').on('click', function(){ oaSwitchMainTab($(this).data('tab')); });
 /* 浮動快速導覽的連結是跳到「總覽分析」分頁內的區塊，點之前先切回該分頁才跳得到 */
@@ -1958,10 +1960,11 @@ function ltCard(lab, val, sub){
 }
 function renderLtKpi(){
   var c = LT_DATA.cur, p = LT_DATA.cmp, h = '';
-  h += ltCard('急件筆數', nf(c.urgent_orders), '佔本期 '+c.urgent_order_ratio+'%（基期 '+p.urgent_order_ratio+'%）');
+  var curL = LT_DATA.period.label, cmpL = LT_DATA.cmp_period.label;
+  h += ltCard('急件筆數', nf(c.urgent_orders), '佔'+curL+' '+c.urgent_order_ratio+'%（'+cmpL+' '+p.urgent_order_ratio+'%）');
   h += ltCard('急件金額佔比', c.urgent_amount_ratio+'%', money(c.urgent_amount)+' 元');
   h += ltCard('急件客戶數', nf(c.urgent_clients), '家');
-  h += ltCard('本期訂單總數', nf(c.orders), money(c.amount)+' 元');
+  h += ltCard(curL+'訂單總數', nf(c.orders), money(c.amount)+' 元');
   h += ltCard('出貨綁定覆蓋率', c.ship_coverage+'%', nf(c.ship_bound_n)+' / '+nf(c.orders)+' 張（多數尚未綁定）');
   h += ltCard('平均實際出貨工作天', c.avg_ship_leadtime==null?'—':c.avg_ship_leadtime, '僅計已綁定出貨單的訂單');
   h += ltCard('逾交期比例', c.late_ratio+'%', nf(c.late_n)+' 張逾交期'+(c.avg_delay_days==null?'':('，平均延誤 '+c.avg_delay_days+' 天')));
@@ -2028,13 +2031,14 @@ function renderLtBand(){
    佔急件總額＝這家客戶的急件金額佔「本期急件總額」的比例；較基期增減＝同一家客戶跟基期比，
    基期這家客戶沒有急件（分母為 0）時百分比沒有意義，改顯示「基期無急件」。 */
 function ltDeltaText(c){
-  if(c.delta_pct===null || c.delta_pct===undefined) return '<span style="color:var(--muted);">基期無急件</span>';
+  if(c.delta_pct===null || c.delta_pct===undefined) return '<span style="color:var(--muted);">'+esc(LT_DATA.cmp_period.label)+'無急件</span>';
   var v = c.delta_pct;
   return '<span class="'+(v>=0?'up':'down')+'">'+(v>=0?'+':'')+v+'%</span>';
 }
 function renderLtClient(){
   var rows = LT_DATA.cur.client_list || [];
   $('#ltClientCount').text(nf(LT_DATA.cur.urgent_clients));
+  $('#tblLtClientCmpHead').text('較'+LT_DATA.cmp_period.label+'增減');
   var h = rows.map(function(r,i){
     return '<tr><td class="n">'+(i+1)+'</td><td>'+esc(r.name)+(r.bad?' <span class="badge-warn">未建主檔</span>':'')+'</td>'
       + '<td class="n">'+nf(r.n)+'</td><td class="n">'+money(r.amount)+'</td>'
@@ -2054,7 +2058,7 @@ function ltRenderUrgentClientGrid(clients){
       + '<div class="l1"><span class="ins-cli-name">'+esc(c.name)+(c.bad?' <span class="badge-warn">未建主檔</span>':'')+'</span>'
       + '<span class="amt">'+money(c.amount)+' 元</span></div>'
       + '<div class="l2"><span>'+nf(c.n)+' 筆／佔急件總額 '+(c.pct_of_total!=null?c.pct_of_total+'%':'—')+'</span>'
-      + '<span>較基期'+ltDeltaText(c)+'</span></div>'
+      + '<span>較'+esc(LT_DATA.cmp_period.label)+ltDeltaText(c)+'</span></div>'
       + '</div>';
   }).join('');
   return '<div class="ins-cli-grid" style="'+colStyle+'margin-top:6px;">'+cells+'</div>';
@@ -2076,19 +2080,24 @@ function ltShipCell(r){
     + '<div style="font-size:10px;color:var(--muted);">工作天 '+(r.ship_lt==null?'—':r.ship_lt)+'</div>'
     + (dTxt ? '<div style="font-size:10px;color:'+dCol+';">'+dTxt+'</div>' : '');
 }
+/* KEY單日期/業務：日期在上、業務（填單人員）在下，疊兩行放在客戶左側（使用者指定順序） */
+function ltKeyCell(r){
+  return '<div style="font-size:11px;">'+(r.created_at?dispDate(r.created_at):'—')+'</div>'
+    + '<div style="font-size:10px;color:var(--muted);">'+esc(r.created_by_name||'—')+'</div>';
+}
 function renderLtList(){
   var rows = LT_DATA.cur.urgent_list || [];
   var h = rows.map(function(r){
     return '<tr><td>'+esc(r.no)+(r.c_order?('<br><span style="font-size:10px;color:var(--muted);">'+esc(r.c_order)+'</span>'):'')+'</td>'
-      + '<td>'+esc(r.created_by_name||'—')+'</td>'
+      + '<td>'+ltKeyCell(r)+'</td>'
       + '<td>'+esc(r.cname)+'</td><td>'+pnoCell(r)+'</td>'
       + '<td>'+dispDate(r.odate)+'</td><td>'+dispDate(r.ddate)+'</td>'
       + '<td class="n">'+r.lt+'</td>'
+      + '<td class="n">'+(r.proc_steps==null?'—':nf(r.proc_steps))+'</td>'
       + '<td>'+ltCatCell(r)+'</td>'
       + '<td class="n">'+nf(r.qty)+'</td><td class="n">'+money(r.amount)+'</td>'
       + '<td>'+ltShipCell(r)+'</td>'
-      + '<td style="font-size:11px;">'+(r.order_ps?esc(r.order_ps):'<span style="color:var(--muted);">—</span>')+'</td>'
-      + '<td>'+(r.created_at?dispDate(r.created_at):'—')+'</td></tr>';
+      + '<td style="font-size:11px;">'+(r.order_ps?esc(r.order_ps):'<span style="color:var(--muted);">—</span>')+'</td></tr>';
   }).join('');
   $('#tblLtList tbody').html(h || '<tr><td colspan="13" style="text-align:center;color:var(--muted);">（本期沒有急件）</td></tr>');
 }
