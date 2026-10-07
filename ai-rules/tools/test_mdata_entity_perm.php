@@ -1,8 +1,14 @@
 <?php
-// 2026-10-07：料號/客戶/廠商「本體」新增/編輯/刪除/狀態切換 + 齒輪規格編輯/刪除，
-// 全面改成完全以角色為準（mdata_entity_add/edit/delete/status、mdata_gear_edit/delete）。
-// 本測試逐步給測試角色加功能碼，驗證每加一項，對應動作才會從「被擋」變成「放行」，
-// 其餘動作仍維持被擋（確認權限碼之間互相獨立，沒有一個碼就放行全部的情況）。
+// 2026-10-07（三次改版）：使用者看了角色設定畫面後要求「料號／客戶／廠商本體操作」三種
+// 要分開——不可以共用同一組功能碼（上一版 mdata_entity_add/edit/delete/status 是刻意合併
+// 省工的設計，已被推翻）。新碼：mdata_part_add/edit/delete、
+// mdata_customer_add/edit/delete/status、mdata_maker_add/edit/delete/status
+// （料號沒有「狀態」，本來就沒有停用/啟用這個概念）；齒輪規格 mdata_gear_edit/delete
+// 維持獨立不受影響。
+//
+// 本測試重點：①逐步給測試角色加功能碼，驗證每加一項，對應動作才會從「被擋」變成
+// 「放行」②明確驗證三種實體互相獨立——只給 mdata_part_add 不可以用來新增客戶或廠商，
+// 只給 mdata_customer_status 不可以用來切換廠商狀態，反之亦然。
 chdir(__DIR__);
 require_once '../../src/common/DBConnection.php';
 $db = new DBConnection();
@@ -40,90 +46,139 @@ $pdo->prepare("INSERT INTO user_module_permissions (user_id, module_code, permis
 $legacyPermId = (int)$pdo->lastInsertId();
 echo "測試角色 role_id={$roleId}（功能碼逐步追加），掛在既有在職員工 {$UID} 身上\n";
 
-// ── 步驟①：完全沒有任何 entity/gear 功能碼（只有一個無關的 md_open）→ 全部動作應被擋 ──
+// ── 步驟①：完全沒有任何本體功能碼（只有一個無關的 md_open）→ 全部動作應被擋 ──
 grant($pdo, $roleId, 'md_open');
 $r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'save_part','d_id'=>0,'D_Setting_Id'=>$PART_ID,'Type'=>'N','Customer_Id'=>$REF_CUST,'gears'=>'[]','bom_children'=>'[]','vendor_map'=>'[]','dedicated_part_map'=>'[]','machine_map'=>'[]','labels'=>json_encode([['label_id'=>1,'input_value'=>'100']])]);
-check('①-1 無任何entity碼 → 新增料號被擋', is_array($r) && empty($r['success']));
+check('①-1 無任何本體碼 → 新增料號被擋', is_array($r) && empty($r['success']));
 $r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'save_customer','is_new'=>1,'customer_id'=>$CUST_ID,'customer'=>'測試']);
-check('①-2 無任何entity碼 → 新增客戶被擋', is_array($r) && empty($r['success']));
+check('①-2 無任何本體碼 → 新增客戶被擋', is_array($r) && empty($r['success']));
 $r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'save_maker','is_new'=>1,'maker_id_no'=>$MAKER_ID,'maker_id'=>'測試廠商']);
-check('①-3 無任何entity碼 → 新增廠商被擋', is_array($r) && empty($r['success']));
+check('①-3 無任何本體碼 → 新增廠商被擋', is_array($r) && empty($r['success']));
 
-// ── 步驟②：給 mdata_entity_add → 可以新增，但還不能編輯/刪除/狀態切換 ──
-grant($pdo, $roleId, 'mdata_entity_add');
+// ── 步驟②：只給 mdata_part_add → 只能新增料號，客戶/廠商新增依然被擋（三者互相獨立） ──
+grant($pdo, $roleId, 'mdata_part_add');
 $r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'save_part','d_id'=>0,'D_Setting_Id'=>$PART_ID,'Type'=>'N','Customer_Id'=>$REF_CUST,'gears'=>'[]','bom_children'=>'[]','vendor_map'=>'[]','dedicated_part_map'=>'[]','machine_map'=>'[]','labels'=>json_encode([['label_id'=>1,'input_value'=>'100']])]);
-check('②-1 有entity_add → 新增料號成功', is_array($r) && !empty($r['success']));
+check('②-1 有part_add → 新增料號成功', is_array($r) && !empty($r['success']));
 $dId = (int)($r['d_id'] ?? 0);
+check('②-2 料號真的建到DB裡', $dId > 0);
+
 $r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'save_customer','is_new'=>1,'customer_id'=>$CUST_ID,'customer'=>'測試客戶勿留']);
-check('②-2 有entity_add → 新增客戶成功', is_array($r) && !empty($r['success']));
+check('②-3 只有part_add → 新增客戶仍被擋（跨實體不互通）', is_array($r) && empty($r['success']));
+$chkC0 = $pdo->prepare("SELECT COUNT(*) FROM customer_list WHERE customer_id=?"); $chkC0->execute([$CUST_ID]);
+check('②-4 客戶確實沒有被建立', (int)$chkC0->fetchColumn() === 0);
+
 $r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'save_maker','is_new'=>1,'maker_id_no'=>$MAKER_ID,'maker_id'=>'測試廠商勿留']);
-check('②-3 有entity_add → 新增廠商成功', is_array($r) && !empty($r['success']));
+check('②-5 只有part_add → 新增廠商仍被擋（跨實體不互通）', is_array($r) && empty($r['success']));
+$chkM0 = $pdo->prepare("SELECT COUNT(*) FROM maker_list WHERE maker_id_no=?"); $chkM0->execute([$MAKER_ID]);
+check('②-6 廠商確實沒有被建立', (int)$chkM0->fetchColumn() === 0);
 
-check('②-4 料號真的建到DB裡', $dId > 0);
+// ── 步驟③：補上 mdata_customer_add → 客戶新增放行，廠商新增依然被擋 ──
+grant($pdo, $roleId, 'mdata_customer_add');
+$r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'save_customer','is_new'=>1,'customer_id'=>$CUST_ID,'customer'=>'測試客戶勿留']);
+check('③-1 補上customer_add → 新增客戶成功', is_array($r) && !empty($r['success']));
 $chkC = $pdo->prepare("SELECT COUNT(*) FROM customer_list WHERE customer_id=?"); $chkC->execute([$CUST_ID]);
-check('②-5 客戶真的建到DB裡', (int)$chkC->fetchColumn() === 1);
+check('③-2 客戶真的建到DB裡', (int)$chkC->fetchColumn() === 1);
+
+$r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'save_maker','is_new'=>1,'maker_id_no'=>$MAKER_ID,'maker_id'=>'測試廠商勿留']);
+check('③-3 customer_add不等於maker_add → 新增廠商依然被擋', is_array($r) && empty($r['success']));
+$chkM1 = $pdo->prepare("SELECT COUNT(*) FROM maker_list WHERE maker_id_no=?"); $chkM1->execute([$MAKER_ID]);
+check('③-4 廠商確實還沒被建立', (int)$chkM1->fetchColumn() === 0);
+
+// ── 步驟④：補上 mdata_maker_add → 廠商新增放行 ──
+grant($pdo, $roleId, 'mdata_maker_add');
+$r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'save_maker','is_new'=>1,'maker_id_no'=>$MAKER_ID,'maker_id'=>'測試廠商勿留']);
+check('④-1 補上maker_add → 新增廠商成功', is_array($r) && !empty($r['success']));
 $chkM = $pdo->prepare("SELECT COUNT(*) FROM maker_list WHERE maker_id_no=?"); $chkM->execute([$MAKER_ID]);
-check('②-6 廠商真的建到DB裡', (int)$chkM->fetchColumn() === 1);
+check('④-2 廠商真的建到DB裡', (int)$chkM->fetchColumn() === 1);
 
-// 還沒有 entity_edit：嘗試編輯剛建好的客戶名稱，應被擋
+// ── 步驟⑤：此刻只有三個 *_add，尚未有任何 *_edit → 三者編輯一律被擋 ──
 $r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'save_customer','is_new'=>0,'customer_id'=>$CUST_ID,'customer'=>'改過的名字']);
-check('②-7 還沒有entity_edit → 修改客戶被擋', is_array($r) && empty($r['success']));
+check('⑤-1 還沒有customer_edit → 修改客戶被擋', is_array($r) && empty($r['success']));
 $row = $pdo->prepare("SELECT customer FROM customer_list WHERE customer_id=?"); $row->execute([$CUST_ID]); $cr = $row->fetch(PDO::FETCH_ASSOC);
-check('②-8 客戶名稱確實沒被改動', $cr && $cr['customer'] === '測試客戶勿留');
+check('⑤-2 客戶名稱確實沒被改動', $cr && $cr['customer'] === '測試客戶勿留');
 
-// 還沒有 entity_status：切換客戶狀態應被擋
-$r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'toggle_customer_status','customer_id'=>$CUST_ID]);
-check('②-9 還沒有entity_status → 切換客戶狀態被擋', is_array($r) && empty($r['success']));
-
-// 還沒有 entity_delete：刪除廠商應被擋
-$r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'delete_maker','maker_id_no'=>$MAKER_ID]);
-check('②-10 還沒有entity_delete → 刪除廠商被擋', is_array($r) && empty($r['success']));
-$chkM2 = $pdo->prepare("SELECT COUNT(*) FROM maker_list WHERE maker_id_no=?"); $chkM2->execute([$MAKER_ID]);
-check('②-11 廠商確實還在DB裡', (int)$chkM2->fetchColumn() === 1);
-
-// ── 步驟③：補上 mdata_entity_edit → 編輯放行，刪除/狀態仍擋 ──
-grant($pdo, $roleId, 'mdata_entity_edit');
+// ── 步驟⑥：補上 mdata_customer_edit → 客戶編輯放行，但不等於 part_edit/maker_edit ──
+grant($pdo, $roleId, 'mdata_customer_edit');
 $r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'save_customer','is_new'=>0,'customer_id'=>$CUST_ID,'customer'=>'改過的名字']);
-check('③-1 補上entity_edit → 修改客戶成功', is_array($r) && !empty($r['success']));
+check('⑥-1 補上customer_edit → 修改客戶成功', is_array($r) && !empty($r['success']));
 $row = $pdo->prepare("SELECT customer FROM customer_list WHERE customer_id=?"); $row->execute([$CUST_ID]); $cr = $row->fetch(PDO::FETCH_ASSOC);
-check('③-2 客戶名稱真的被改成功', $cr && $cr['customer'] === '改過的名字');
+check('⑥-2 客戶名稱真的被改成功', $cr && $cr['customer'] === '改過的名字');
 
-$r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'toggle_customer_status','customer_id'=>$CUST_ID]);
-check('③-3 entity_edit不等於entity_status → 切換狀態依然被擋', is_array($r) && empty($r['success']));
+$r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'save_part','d_id'=>$dId,'D_Setting_Id'=>$PART_ID,'Type'=>'N','Customer_Id'=>$REF_CUST,'Remark'=>'改過的備註','gears'=>'[]','bom_children'=>'[]','vendor_map'=>'[]','dedicated_part_map'=>'[]','machine_map'=>'[]','labels'=>json_encode([['label_id'=>1,'input_value'=>'100']])]);
+check('⑥-3 customer_edit不等於part_edit → 修改料號依然被擋（跨實體不互通）', is_array($r) && empty($r['success']));
+$rowP = $pdo->prepare("SELECT Remark FROM d_setting WHERE d_id=?"); $rowP->execute([$dId]); $pr = $rowP->fetch(PDO::FETCH_ASSOC);
+check('⑥-4 料號備註確實沒被改動', $pr && ($pr['Remark']==='' || $pr['Remark']===null));
 
-// ── 步驟④：補上 mdata_entity_status → 狀態切換放行 ──
-grant($pdo, $roleId, 'mdata_entity_status');
+// ── 步驟⑦：客戶/廠商狀態切換——customer_status 與 maker_status 互相獨立 ──
 $r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'toggle_customer_status','customer_id'=>$CUST_ID]);
-check('④-1 補上entity_status → 切換客戶狀態成功', is_array($r) && !empty($r['success']));
+check('⑦-1 還沒有customer_status → 切換客戶狀態被擋', is_array($r) && empty($r['success']));
+
+grant($pdo, $roleId, 'mdata_customer_status');
+$r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'toggle_customer_status','customer_id'=>$CUST_ID]);
+check('⑦-2 補上customer_status → 切換客戶狀態成功', is_array($r) && !empty($r['success']));
 $row = $pdo->prepare("SELECT is_inactive FROM customer_list WHERE customer_id=?"); $row->execute([$CUST_ID]); $cr = $row->fetch(PDO::FETCH_ASSOC);
-check('④-2 客戶確實變成停用狀態', $cr && (int)$cr['is_inactive'] === 1);
+check('⑦-3 客戶確實變成停用狀態', $cr && (int)$cr['is_inactive'] === 1);
 
-// ── 步驟⑤：補上 mdata_entity_delete → 刪除放行 ──
-grant($pdo, $roleId, 'mdata_entity_delete');
+// 注：廠商狀態切換在畫面上實際是走除錯工具的「停用廠商」（dup_deactivate_maker，
+// 把 status 設為單字元 'X'）；toggle_maker_status 這個動作在前端從未被任何按鈕呼叫
+// 過（UI 註解明講「廠商停用/啟用請透過編輯 modal 的廠商狀態欄位操作」），且其 SQL
+// 把 status 寫成「停用」兩個全角字但該欄位是 char(1)，對任何人（含超級管理員）呼叫
+// 都會直接 SQL 例外——這是與本次權限分拆無關的既有死碼缺陷，不在本次範圍內修正，
+// 故改用真正會被使用的 dup_deactivate_maker 驗證 mdata_maker_status 這個權限碼。
+$r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'dup_deactivate_maker','maker_id_no'=>$MAKER_ID]);
+check('⑦-4 customer_status不等於maker_status → 停用廠商依然被擋', is_array($r) && empty($r['success']));
+$rowMk = $pdo->prepare("SELECT status FROM maker_list WHERE maker_id_no=?"); $rowMk->execute([$MAKER_ID]); $mkr = $rowMk->fetch(PDO::FETCH_ASSOC);
+check('⑦-5 廠商狀態確實沒被改動', $mkr && $mkr['status'] !== 'X');
+
+grant($pdo, $roleId, 'mdata_maker_status');
+$r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'dup_deactivate_maker','maker_id_no'=>$MAKER_ID]);
+check('⑦-6 補上maker_status → 停用廠商成功', is_array($r) && !empty($r['success']));
+$rowMk2 = $pdo->prepare("SELECT status FROM maker_list WHERE maker_id_no=?"); $rowMk2->execute([$MAKER_ID]); $mkr2 = $rowMk2->fetch(PDO::FETCH_ASSOC);
+check('⑦-7 廠商確實變成停用狀態', $mkr2 && $mkr2['status'] === 'X');
+
+// ── 步驟⑧：刪除——customer_delete 與 maker_delete 互相獨立 ──
 $r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'delete_maker','maker_id_no'=>$MAKER_ID]);
-check('⑤-1 補上entity_delete → 刪除廠商成功', is_array($r) && !empty($r['success']));
-$chkM3 = $pdo->prepare("SELECT COUNT(*) FROM maker_list WHERE maker_id_no=?"); $chkM3->execute([$MAKER_ID]);
-check('⑤-2 廠商真的從DB消失', (int)$chkM3->fetchColumn() === 0);
+check('⑧-1 還沒有maker_delete → 刪除廠商被擋', is_array($r) && empty($r['success']));
+$chkM2 = $pdo->prepare("SELECT COUNT(*) FROM maker_list WHERE maker_id_no=?"); $chkM2->execute([$MAKER_ID]);
+check('⑧-2 廠商確實還在DB裡', (int)$chkM2->fetchColumn() === 1);
 
-// ── 步驟⑥：齒輪規格刪除——先插一筆測試齒輪規格列，驗證 mdata_gear_delete 獨立於其他entity碼 ──
+grant($pdo, $roleId, 'mdata_customer_delete');
+$r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'delete_maker','maker_id_no'=>$MAKER_ID]);
+check('⑧-3 customer_delete不等於maker_delete → 刪除廠商依然被擋', is_array($r) && empty($r['success']));
+$chkM2b = $pdo->prepare("SELECT COUNT(*) FROM maker_list WHERE maker_id_no=?"); $chkM2b->execute([$MAKER_ID]);
+check('⑧-4 廠商確實還在DB裡', (int)$chkM2b->fetchColumn() === 1);
+
+grant($pdo, $roleId, 'mdata_maker_delete');
+$r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'delete_maker','maker_id_no'=>$MAKER_ID]);
+check('⑧-5 補上maker_delete → 刪除廠商成功', is_array($r) && !empty($r['success']));
+$chkM3 = $pdo->prepare("SELECT COUNT(*) FROM maker_list WHERE maker_id_no=?"); $chkM3->execute([$MAKER_ID]);
+check('⑧-6 廠商真的從DB消失', (int)$chkM3->fetchColumn() === 0);
+
+// ── 步驟⑨：齒輪規格刪除——先插一筆測試齒輪規格列，驗證 mdata_gear_delete 獨立於其他本體碼 ──
 $pdo->prepare("INSERT INTO d_setting_gear (d_setting_id, Module, Teeth, Created_By) VALUES (?,?,?,?)")->execute([$dId, 2.0, 20, (string)$UID]);
 $gearId = (int)$pdo->lastInsertId();
 $r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'delete_gear_row','gear_id'=>$gearId,'d_setting_id'=>$dId]);
-check('⑥-1 還沒有gear_delete → 刪除齒輪規格列被擋（即使已有entity_delete）', is_array($r) && empty($r['success']));
+check('⑨-1 還沒有gear_delete → 刪除齒輪規格列被擋（即使已有customer/maker_delete）', is_array($r) && empty($r['success']));
 $chkG = $pdo->prepare("SELECT COUNT(*) FROM d_setting_gear WHERE gear_id=?"); $chkG->execute([$gearId]);
-check('⑥-2 齒輪規格列確實還在', (int)$chkG->fetchColumn() === 1);
+check('⑨-2 齒輪規格列確實還在', (int)$chkG->fetchColumn() === 1);
 
 grant($pdo, $roleId, 'mdata_gear_delete');
 $r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'delete_gear_row','gear_id'=>$gearId,'d_setting_id'=>$dId]);
-check('⑥-3 補上gear_delete → 刪除齒輪規格列成功', is_array($r) && !empty($r['success']));
+check('⑨-3 補上gear_delete → 刪除齒輪規格列成功', is_array($r) && !empty($r['success']));
 $chkG2 = $pdo->prepare("SELECT COUNT(*) FROM d_setting_gear WHERE gear_id=?"); $chkG2->execute([$gearId]);
-check('⑥-4 齒輪規格列真的被刪除', (int)$chkG2->fetchColumn() === 0);
+check('⑨-4 齒輪規格列真的被刪除', (int)$chkG2->fetchColumn() === 0);
 
-// ── 步驟⑦：確認料號刪除也受 entity_delete 控管（已有，驗證一次） ──
+// ── 步驟⑩：料號刪除——目前只有 customer_delete/maker_delete，料號刪除應仍被擋，補上 part_delete 才放行 ──
 $r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'delete_part','d_id'=>$dId]);
-check('⑦-1 已有entity_delete → 刪除料號成功', is_array($r) && !empty($r['success']));
+check('⑩-1 customer_delete/maker_delete不等於part_delete → 刪除料號依然被擋', is_array($r) && empty($r['success']));
+$chkP0 = $pdo->prepare("SELECT COUNT(*) FROM d_setting WHERE d_id=?"); $chkP0->execute([$dId]);
+check('⑩-2 料號確實還在DB裡', (int)$chkP0->fetchColumn() === 1);
+
+grant($pdo, $roleId, 'mdata_part_delete');
+$r = call_md($RUNNER, $SCRIPT, $UID, ['action'=>'delete_part','d_id'=>$dId]);
+check('⑩-3 補上part_delete → 刪除料號成功', is_array($r) && !empty($r['success']));
 $chkP = $pdo->prepare("SELECT COUNT(*) FROM d_setting WHERE d_id=?"); $chkP->execute([$dId]);
-check('⑦-2 料號真的被刪除', (int)$chkP->fetchColumn() === 0);
+check('⑩-4 料號真的被刪除', (int)$chkP->fetchColumn() === 0);
 
 echo "\n==== 結果：PASS=$pass FAIL=$fail ====\n";
 

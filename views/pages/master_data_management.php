@@ -1637,19 +1637,24 @@ function _mdTagCan(string $action): bool {
     return false;
 }
 
-// 2026-10-07 使用者再次確認：料號/客戶/廠商「本體」的新增/修改/刪除/狀態切換，以及齒輪
-// 規格列的編輯/刪除，一併改成完全以角色為準、停用 CDRU 字母判定（原本只有維護設定/標籤
-// 指派改了，本體CRUD還留著舊規則，才會出現「CDRU改R之後，角色設定的人卻顯示無權限」）。
-// 刻意沿用 CDRU 原本的granularity（料號/客戶/廠商三者共用同一組「本體操作」權限碼，不像
-// 維護設定那樣逐項拆開）——這是 1:1 複製舊規則的語意，不是新設計，三者原本就是同一套字母。
-// 新功能碼：mdata_entity_add/edit/delete/status（本體），mdata_gear_edit/delete/
-// modify_existing（齒輪規格列，CDRU與齒輪規格本來就是不同條件，維持分開）。
-// 料號附件沿用既有 md_attach_upload/edit/delete（與「其他附件」分頁同一組功能碼，
-// 不另外發明新代碼——那三個碼本來就是「對料號附件能做什麼」）。
-$can_create     = _mdPerm('entity', 'add');
-$can_update     = _mdPerm('entity', 'edit');
-$can_delete_all = _mdPerm('entity', 'delete');
-$can_set_status = _mdPerm('entity', 'status');
+// 2026-10-07（三次）使用者要求：料號／客戶／廠商「本體」的新增/修改/刪除/狀態切換
+// 要「分開」——不可以三者共用同一組權限碼（上一版為了省工合併成 entity，使用者看了
+// 角色設定畫面後要求拆開，改回貼近各自獨立判定的設計）。
+// 新功能碼：mdata_part_add/edit/delete、mdata_customer_add/edit/delete/status、
+// mdata_maker_add/edit/delete/status（料號沒有「狀態」，料號本來就沒有停用/啟用這個
+// 概念）；齒輪規格 mdata_gear_edit/delete/modify_existing 維持獨立不受影響。
+// 料號附件沿用既有 md_attach_upload/edit/delete（與「其他附件」分頁同一組功能碼）。
+$canPartAdd    = _mdPerm('part', 'add');
+$canPartEdit   = _mdPerm('part', 'edit');
+$canPartDelete = _mdPerm('part', 'delete');
+$canCustAdd    = _mdPerm('customer', 'add');
+$canCustEdit   = _mdPerm('customer', 'edit');
+$canCustDelete = _mdPerm('customer', 'delete');
+$canCustStatus = _mdPerm('customer', 'status');
+$canMakerAdd    = _mdPerm('maker', 'add');
+$canMakerEdit   = _mdPerm('maker', 'edit');
+$canMakerDelete = _mdPerm('maker', 'delete');
+$canMakerStatus = _mdPerm('maker', 'status');
 $can_edit_gear  = _mdPerm('gear', 'edit');
 $can_delete_gear= _mdPerm('gear', 'delete');
 $can_modify_existing_gear = _mdPerm('gear', 'modify_existing');
@@ -1658,6 +1663,17 @@ $can_part_attach = $is_admin || $_mdRbacAll
     || in_array('md_attach_upload', $_mdFeats, true)
     || in_array('md_attach_edit',   $_mdFeats, true)
     || in_array('md_attach_delete', $_mdFeats, true);
+// 以下四個舊變數已不再用於任何「料號／客戶／廠商」本體CRUD的判定（全部呼叫點已
+// 於 2026-10-07 三次改版逐一換成上面的 $canPartXxx/$canCustXxx/$canMakerXxx）。
+// 保留只因為：①字典維護群組（industry_type/maker_category/maker_proc_label/
+// maker_main_cat_process）的 _mdPerm() 呼叫仍把它們當 legacyFallback 參數傳入
+// （該參數現已不被內部讀取，純屬歷史殘留，無實際作用）②JS 端 CAN_CREATE/CAN_UPDATE/
+// CAN_DELETE_ALL/CAN_SET_STATUS 的匯出值。新寫的程式碼一律改用 $canPartXxx/
+// $canCustXxx/$canMakerXxx，不要再新增對這幾個變數的依賴。
+$can_create     = $canPartAdd || $canCustAdd || $canMakerAdd;
+$can_update     = $canPartEdit || $canCustEdit || $canMakerEdit;
+$can_delete_all = $canPartDelete || $canCustDelete || $canMakerDelete;
+$can_set_status = $canCustStatus || $canMakerStatus;
 
 define('PART_ATTACH_API_URL', '../../src/store/Part_Attachment_API.php');
 
@@ -2612,7 +2628,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $RevForCheck    = ($Revision  === '' || $Revision  === null) ? null : $Revision;
 
             if ($d_id > 0) {
-                if (!$can_update && !$can_edit_gear) throw new Exception('無修改權限');
+                if (!$canPartEdit && !$can_edit_gear) throw new Exception('無修改權限');
                 $ck = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND d_id<>? AND (Customer_Id <=> ?) AND (Spec_No <=> ?) AND (Revision <=> ?)");
                 $ck->execute([$D_Setting_Id, $d_id, $CustIdForCheck, $SpecForCheck, $RevForCheck]);
                 if ($ck->fetch()) throw new Exception("料號「$D_Setting_Id」已存在（同客戶、同規格、同版次）");
@@ -2639,7 +2655,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     }
                 }
             } else {
-                if (!$can_create) throw new Exception('無新增權限');
+                if (!$canPartAdd) throw new Exception('無新增權限');
                 $ck = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND (Customer_Id <=> ?) AND (Spec_No <=> ?) AND (Revision <=> ?)");
                 $ck->execute([$D_Setting_Id, $CustIdForCheck, $SpecForCheck, $RevForCheck]);
                 if ($ck->fetch()) throw new Exception("料號「$D_Setting_Id」已存在（同客戶、同規格、同版次）");
@@ -2994,7 +3010,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     if ($_POST['action'] === 'delete_part') {
         try {
-            if (!$can_delete_all) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
+            if (!$canPartDelete) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
             $d_id = intval($_POST['d_id']);
             $del_row_q = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
             $del_row_q->execute([$d_id]);
@@ -3223,10 +3239,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 結帳設定（settlement_mode/settlement_day/net_days/allow_deduct）／報價方式／收款方式／
             // 銀行帳戶：改成角色可設定（原本只受「能不能存這張客戶」整張表單共用的 $can_create/$can_update
             // 管控，沒有逐區塊區分）。無編輯權限者：新增客戶用預設值、修改客戶則保留原值（鐵律8）。
-            $canSettle     = _mdPerm('settle',       'edit', $is_new ? $can_create : $can_update);
-            $canQuoteMeth  = _mdPerm('quote_method', 'edit', $is_new ? $can_create : $can_update);
-            $canPayterm    = _mdPerm('payterm',      'edit', $is_new ? $can_create : $can_update);
-            $canBank       = _mdPerm('bank',         'edit', $is_new ? $can_create : $can_update);
+            $canSettle     = _mdPerm('settle',       'edit', $is_new ? $canCustAdd : $canCustEdit);
+            $canQuoteMeth  = _mdPerm('quote_method', 'edit', $is_new ? $canCustAdd : $canCustEdit);
+            $canPayterm    = _mdPerm('payterm',      'edit', $is_new ? $canCustAdd : $canCustEdit);
+            $canBank       = _mdPerm('bank',         'edit', $is_new ? $canCustAdd : $canCustEdit);
             $old_settle_block = [];
             if (!$is_new && (!$canSettle || !$canQuoteMeth || !$canPayterm || !$canBank)) {
                 $osbQ = $pdo->prepare("SELECT settlement_mode,settlement_day,net_days,allow_deduct,quote_method,payment_method,bank_name,bank_branch,bank_account FROM customer_list WHERE customer_id=?");
@@ -3344,7 +3360,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $pdo->prepare("UPDATE customer_list SET is_own_company=0 WHERE customer_id != ?")->execute([$customer_id]);
             }
             if ($is_new) {
-                if (!$can_create) throw new Exception('無新增權限');
+                if (!$canCustAdd) throw new Exception('無新增權限');
                 $ck = $pdo->prepare("SELECT customer_id FROM customer_list WHERE customer_id=?");
                 $ck->execute([$customer_id]);
                 if ($ck->fetch()) throw new Exception("客戶代碼「{$customer_id}」已存在");
@@ -3359,7 +3375,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                $bank_name,$bank_branch,$bank_account,$billing_contact,$shipping_req,$invoice_email,$billing_note,$general_note,
                                $confirmed_settlement,$confirmed_payment,$is_own_company,$need_recon_stmt,$recon_provide_by,$est_date,$uid]);
             } else {
-                if (!$can_update) throw new Exception('無修改權限');
+                if (!$canCustEdit) throw new Exception('無修改權限');
                 $pdo->prepare("UPDATE customer_list SET
                     customer=?,customer_full=?,customer_full_en=?,customer_tel=?,customer_fax=?,customer_address=?,is_inactive=?,customer_grade=?,
                     settlement_mode=?,settlement_day=?,tax_id=?,quote_method=?,payment_method=?,net_days=?,allow_deduct=?,
@@ -3440,7 +3456,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     if ($_POST['action'] === 'delete_customer') {
         try {
-            if (!$can_delete_all) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
+            if (!$canCustDelete) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
             $cid = trim($_POST['customer_id']);
             $blocks = [];
             $chk = $pdo->prepare("SELECT COUNT(*) FROM d_setting WHERE Customer_Id=?");
@@ -3831,7 +3847,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 廠商歷史編號：新增連結 ───────────────────────────────────────────────
     if ($_POST['action'] === 'add_maker_alias') {
         try {
-            if (!($can_update||$can_create)) throw new Exception('無權限');
+            if (!($canMakerEdit||$canMakerAdd)) throw new Exception('無權限');
             $new_id = trim($_POST['maker_id_no']);    // 目前廠商（新）
             $old_id = strtoupper(trim($_POST['old_id']));  // 舊廠商編號
             if (!$old_id || !$new_id) throw new Exception('廠商編號不可為空');
@@ -3855,7 +3871,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 廠商歷史編號：移除連結 ───────────────────────────────────────────────
     if ($_POST['action'] === 'remove_maker_alias') {
         try {
-            if (!($can_update||$can_create)) throw new Exception('無權限');
+            if (!($canMakerEdit||$canMakerAdd)) throw new Exception('無權限');
             $aid = intval($_POST['alias_id']);
             $pdo->prepare("DELETE FROM maker_aliases WHERE alias_id=?")->execute([$aid]);
             echo json_encode(['success'=>true]);
@@ -3987,8 +4003,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
             // 結帳設定／付款方式：角色可設定（與客戶表單共用同一組權限碼 settle/payterm，
             // 無編輯權限者：新增廠商用預設值、修改廠商則保留原值，鐵律8）
-            $mdMakerSettleEdit  = _mdPerm('settle',  'edit', $is_new ? $can_create : $can_update);
-            $mdMakerPaytermEdit = _mdPerm('payterm', 'edit', $is_new ? $can_create : $can_update);
+            $mdMakerSettleEdit  = _mdPerm('settle',  'edit', $is_new ? $canMakerAdd : $canMakerEdit);
+            $mdMakerPaytermEdit = _mdPerm('payterm', 'edit', $is_new ? $canMakerAdd : $canMakerEdit);
             if ($mdMakerSettleEdit) {
                 $m_settlement_mode = trim($_POST['settlement_mode'] ?? 'FIXED');
                 if (!in_array($m_settlement_mode, ['FIXED','EOM','VARIABLE'])) $m_settlement_mode = 'FIXED';
@@ -4022,7 +4038,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $pdo->beginTransaction();
 
             if ($is_new) {
-                if (!$can_create) throw new Exception('無新增權限');
+                if (!$canMakerAdd) throw new Exception('無新增權限');
                 $ck = $pdo->prepare("SELECT maker_id_no FROM maker_list WHERE maker_id_no=?");
                 $ck->execute([$mid]);
                 if ($ck->fetch()) throw new Exception("廠商編號「{$mid}」已存在");
@@ -4030,7 +4046,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $pdo->prepare("INSERT INTO maker_list (maker_id_no,{$fields},Created_By,Created_At) VALUES ({$ph},NOW())")
                     ->execute(array_merge([$mid],$vals,[$uid]));
             } else {
-                if (!$can_update) throw new Exception('無修改權限');
+                if (!$canMakerEdit) throw new Exception('無修改權限');
                 $sets = implode(',', array_map(function($f){ return "$f=?"; }, explode(',',$fields)));
                 $pdo->prepare("UPDATE maker_list SET {$sets},Modified_By=?,Modified_At=NOW() WHERE maker_id_no=?")
                     ->execute(array_merge($vals,[$uid,$mid]));
@@ -4201,7 +4217,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 客戶綁定移轉（不可逆，需 A 或 CDRU 權限）────────────────────────────
     if ($_POST['action'] === 'transfer_customer_binding') {
         try {
-            if (!$can_delete_all) throw new Exception('無移轉綁定權限（需要 A 或 CDRU 權限）');
+            if (!$canCustDelete) throw new Exception('無移轉綁定權限（需要 A 或 CDRU 權限）');
             $src_id = trim($_POST['src_customer_id']);
             $tgt_id = trim($_POST['tgt_customer_id']);
             if ($src_id==='' || $tgt_id==='') throw new Exception('客戶代碼不可為空');
@@ -4281,7 +4297,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 料號綁定移轉（不可逆，需 A 或 CDRU 權限）────────────────────────────
     if ($_POST['action'] === 'transfer_part_binding') {
         try {
-            if (!$can_delete_all) throw new Exception('無移轉綁定權限（需要 A 或 CDRU 權限）');
+            if (!$canPartDelete) throw new Exception('無移轉綁定權限（需要 A 或 CDRU 權限）');
             $src_id = intval($_POST['src_d_id']);
             $tgt_id = intval($_POST['tgt_d_id']);
             if ($src_id <= 0 || $tgt_id <= 0) throw new Exception('料號 ID 不合法');
@@ -4479,7 +4495,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 廠商綁定移轉（不可逆，需 A 或 CDRU 權限）────────────────────────────
     if ($_POST['action'] === 'transfer_maker_binding') {
         try {
-            if (!$can_delete_all) throw new Exception('無移轉綁定權限（需要 A 或 CDRU 權限）');
+            if (!$canMakerDelete) throw new Exception('無移轉綁定權限（需要 A 或 CDRU 權限）');
             $src_id = trim($_POST['src_maker_id_no']);
             $tgt_id = trim($_POST['tgt_maker_id_no']);
             if ($src_id==='' || $tgt_id==='') throw new Exception('廠商編號不可為空');
@@ -4525,7 +4541,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     if ($_POST['action'] === 'delete_maker') {
         try {
-            if (!$can_delete_all) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
+            if (!$canMakerDelete) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
             $mid = trim($_POST['maker_id_no']);
             $del_maker_q = $pdo->prepare("SELECT maker_id FROM maker_list WHERE maker_id_no=?"); $del_maker_q->execute([$mid]); $del_maker_name = $del_maker_q->fetchColumn();
             $blocks = [];
@@ -4543,7 +4559,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 切換客戶狀態 ──────────────────────────────────────────────────────────
     if ($_POST['action'] === 'toggle_customer_status') {
         try {
-            if (!$can_set_status) throw new Exception('無狀態切換權限');
+            if (!$canCustStatus) throw new Exception('無狀態切換權限');
             $cid = trim($_POST['customer_id']);
             $pdo->prepare("UPDATE customer_list SET is_inactive=IF(COALESCE(is_inactive,0)=1,0,1),Modified_By=?,Modified_At=NOW() WHERE customer_id=?")->execute([$uid,$cid]);
             $sq = $pdo->prepare("SELECT is_inactive,customer FROM customer_list WHERE customer_id=?"); $sq->execute([$cid]); $sr = $sq->fetch(PDO::FETCH_ASSOC);
@@ -4557,7 +4573,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 切換廠商狀態 ──────────────────────────────────────────────────────────
     if ($_POST['action'] === 'toggle_maker_status') {
         try {
-            if (!$can_set_status) throw new Exception('無狀態切換權限');
+            if (!$canMakerStatus) throw new Exception('無狀態切換權限');
             $mid = trim($_POST['maker_id_no']);
             $pdo->prepare("UPDATE maker_list SET status=IF(status='停用','正常','停用'),Modified_By=?,Modified_At=NOW() WHERE maker_id_no=?")->execute([$uid,$mid]);
             $smq = $pdo->prepare("SELECT status,maker_id FROM maker_list WHERE maker_id_no=?"); $smq->execute([$mid]); $smr = $smq->fetch(PDO::FETCH_ASSOC);
@@ -5868,7 +5884,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 除錯：停用/刪除客戶 ────────────────────────────────────────────────
     if ($_POST['action'] === 'dup_deactivate_customer') {
         try {
-            if (!$can_set_status) throw new Exception('無狀態切換權限（需要 A 或 CDRU 權限）');
+            if (!$canCustStatus) throw new Exception('無狀態切換權限（需要 A 或 CDRU 權限）');
             $cid = trim($_POST['customer_id']);
             $pdo->prepare("UPDATE customer_list SET is_inactive=1, Modified_By=?, Modified_At=NOW() WHERE customer_id=?")
                 ->execute([$uid, $cid]);
@@ -5879,7 +5895,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     if ($_POST['action'] === 'dup_delete_customer') {
         try {
-            if (!$can_delete_all) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
+            if (!$canCustDelete) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
             $cid = trim($_POST['customer_id']);
             // Check relations
             $n1 = $pdo->prepare("SELECT COUNT(*) FROM d_setting WHERE Customer_Id=?"); $n1->execute([$cid]); $c1=(int)$n1->fetchColumn();
@@ -5895,7 +5911,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 除錯：停用/刪除廠商 ────────────────────────────────────────────────
     if ($_POST['action'] === 'dup_deactivate_maker') {
         try {
-            if (!$can_set_status) throw new Exception('無狀態切換權限（需要 A 或 CDRU 權限）');
+            if (!$canMakerStatus) throw new Exception('無狀態切換權限（需要 A 或 CDRU 權限）');
             $mid = trim($_POST['maker_id_no']);
             $pdo->prepare("UPDATE maker_list SET status='X', Modified_By=?, Modified_At=NOW() WHERE maker_id_no=?")
                 ->execute([$uid, $mid]);
@@ -5906,7 +5922,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     if ($_POST['action'] === 'dup_delete_maker') {
         try {
-            if (!$can_delete_all) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
+            if (!$canMakerDelete) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
             $mid = trim($_POST['maker_id_no']);
             $n1 = $pdo->prepare("SELECT COUNT(*) FROM bom_ing WHERE maker_id_no=?"); $n1->execute([$mid]); $c1=(int)$n1->fetchColumn();
             if ($c1 > 0) throw new Exception("此廠商有加工單 {$c1} 筆關聯，不可刪除（請改為停用）");
@@ -5922,7 +5938,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 刪除單筆料號（用於除錯刪除重複） ────────────────────────────────────
     if ($_POST['action'] === 'delete_part_by_id') {
         try {
-            if (!$can_delete_all) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
+            if (!$canPartDelete) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
             $d_id = intval($_POST['d_id']);
             $pdo->beginTransaction();
             $pdo->prepare("DELETE FROM d_setting_gear WHERE d_setting_id=?")->execute([$d_id]);
@@ -6015,7 +6031,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 儲存客戶業務設定 ─────────────────────────────────────────────────
     if ($_POST['action'] === 'save_customer_sales') {
         try {
-            if (!$can_update) throw new Exception('無修改權限');
+            if (!$canCustEdit) throw new Exception('無修改權限');
             $cid          = trim($_POST['customer_id']);
             $primary_uid  = intval($_POST['primary_user_id'] ?? 0);
             $deputy_uid   = intval($_POST['deputy_user_id'] ?? 0);
@@ -6123,7 +6139,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // 儲存客戶產業別小類
     if ($_POST['action'] === 'save_customer_industry_subs') {
         try {
-            if (!$can_update) throw new Exception('無修改權限');
+            if (!$canCustEdit) throw new Exception('無修改權限');
             $cid  = trim($_POST['customer_id']);
             $subs = json_decode($_POST['subs'] ?? '[]', true) ?: [];
             $pdo->beginTransaction();
@@ -6144,7 +6160,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 批次設定客戶等級 / 產業別 / 結帳日 ────────────────────────────────
     if ($_POST['action'] === 'batch_update_customers') {
         try {
-            if (!$can_update) throw new Exception('無修改權限');
+            if (!$canCustEdit) throw new Exception('無修改權限');
             $ids    = json_decode($_POST['customer_ids'] ?? '[]', true) ?: [];
             $field  = trim($_POST['field'] ?? '');
             $value  = trim($_POST['value'] ?? '');
@@ -6179,7 +6195,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 批次設定料號工件種類 / 小類 ────────────────────────────────────
     if ($_POST['action'] === 'batch_update_parts') {
         try {
-            if (!$can_update) throw new Exception('無修改權限');
+            if (!$canPartEdit) throw new Exception('無修改權限');
             $ids   = json_decode($_POST['d_ids'] ?? '[]', true) ?: [];
             $field = trim($_POST['field'] ?? '');
             $value = trim($_POST['value'] ?? '');
@@ -7643,11 +7659,24 @@ body { background:#F6F1EA; }
               ['md_attach_delete','其他附件—刪除'],
               ['md_attach_edit','其他附件—編輯（標籤/浮水印）']
             ]},
-            { title: '料號／客戶／廠商本體操作', items: [
-              ['mdata_entity_add','新增料號／客戶／廠商'],
-              ['mdata_entity_edit','編輯料號／客戶／廠商（含業務設定、產業別、批次修改、廠商別名）'],
-              ['mdata_entity_delete','刪除料號／客戶／廠商（含綁定移轉，不可逆）'],
-              ['mdata_entity_status','切換客戶／廠商停用狀態'],
+            { title: '料號本體操作', items: [
+              ['mdata_part_add','新增料號'],
+              ['mdata_part_edit','編輯料號（含批次修改）'],
+              ['mdata_part_delete','刪除料號（含綁定移轉，不可逆）']
+            ]},
+            { title: '客戶本體操作', items: [
+              ['mdata_customer_add','新增客戶'],
+              ['mdata_customer_edit','編輯客戶（含業務設定、產業別、批次修改）'],
+              ['mdata_customer_delete','刪除客戶（含綁定移轉，不可逆）'],
+              ['mdata_customer_status','切換客戶停用狀態']
+            ]},
+            { title: '廠商本體操作', items: [
+              ['mdata_maker_add','新增廠商'],
+              ['mdata_maker_edit','編輯廠商（含批次修改、廠商別名）'],
+              ['mdata_maker_delete','刪除廠商（含綁定移轉，不可逆）'],
+              ['mdata_maker_status','切換廠商停用狀態']
+            ]},
+            { title: '齒輪規格操作', items: [
               ['mdata_gear_edit','新增／編輯齒輪規格'],
               ['mdata_gear_delete','刪除齒輪規格列'],
               ['mdata_gear_modify_existing','修改既有齒輪規格列（區分新增中與既有的列）']
@@ -7858,7 +7887,7 @@ body { background:#F6F1EA; }
                            ondblclick="if(this.value){this.value='';loadParts(1);}">
                     <div id="parts-search-dd" class="parts-cust-dropdown" style="top:100%;left:0;right:0;width:auto;max-width:none;min-width:220px;"></div>
                 </div>
-                <?php if ($can_create): ?>
+                <?php if ($canPartAdd): ?>
                 <button class="btn-add" onclick="openPartModal(0)"><i class="fa fa-plus"></i> 新增料號</button>
                 <?php endif; ?>
                 <button class="btn btn-default btn-sm" id="parts-clear-filter-btn" onclick="clearPartsFilter()" style="border-radius:16px;font-size:12px;display:none;background:#fff5f5;color:#e74c3c;border-color:#e74c3c88;"><i class="fa fa-times"></i> 取消篩選</button>
@@ -8023,7 +8052,7 @@ body { background:#F6F1EA; }
                            ondblclick="if(this.value){this.value='';loadCustomers(1);}">
                     <div id="cust-search-dd" class="parts-cust-dropdown" style="top:100%;left:0;right:0;width:auto;max-width:none;min-width:220px;"></div>
                 </div>
-                <?php if ($can_create): ?>
+                <?php if ($canCustAdd): ?>
                 <button class="btn-add" onclick="openCustomerModal(null)"><i class="fa fa-plus"></i> 新增客戶</button>
                 <?php endif; ?>
                 <button id="cust-clear-filter-btn" class="clear-filter-btn" style="display:none;" onclick="clearCustFilter()">取消篩選</button>
@@ -8096,7 +8125,7 @@ body { background:#F6F1EA; }
                            ondblclick="if(this.value){this.value='';loadMakers(1);}">
                     <div id="makers-search-dd" class="parts-cust-dropdown" style="top:100%;left:0;right:0;width:auto;max-width:none;min-width:220px;"></div>
                 </div>
-                <?php if ($can_create): ?>
+                <?php if ($canMakerAdd): ?>
                 <button class="btn-add" onclick="openMakerModal(null)"><i class="fa fa-plus"></i> 新增廠商</button>
                 <?php endif; ?>
                 <button id="makers-clear-filter-btn" class="clear-filter-btn" style="display:none;" onclick="clearMakersFilter()">取消篩選</button>
@@ -8567,7 +8596,7 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
 </div>
 <div class="modal-footer">
     <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
-    <?php if ($can_create || $can_update): ?>
+    <?php if ($canPartAdd || $canPartEdit): ?>
     <button type="button" class="btn btn-success" id="part-save-btn" onclick="submitPartForm()"><i class="fa fa-save"></i> 儲存</button>
     <?php endif; ?>
 </div>
@@ -8727,10 +8756,10 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
 <?php
 // 結帳設定／報價方式／收款方式／銀行帳戶／對帳單設定：角色可設定（可檢視/可編輯兩級，
 // 唯一判定 _mdPerm()，見上方「本頁維護設定的角色化權限」區塊）
-$mdSettleView  = _mdPerm('settle','view', true);   $mdSettleEdit  = _mdPerm('settle','edit', $can_create || $can_update);
-$mdQuoteMView  = _mdPerm('quote_method','view', true); $mdQuoteMEdit = _mdPerm('quote_method','edit', $can_create || $can_update);
-$mdPaytermView = _mdPerm('payterm','view', true);  $mdPaytermEdit = _mdPerm('payterm','edit', $can_create || $can_update);
-$mdBankView    = _mdPerm('bank','view', true);     $mdBankEdit    = _mdPerm('bank','edit', $can_create || $can_update);
+$mdSettleView  = _mdPerm('settle','view', true);   $mdSettleEdit  = _mdPerm('settle','edit', $canCustAdd || $canCustEdit);
+$mdQuoteMView  = _mdPerm('quote_method','view', true); $mdQuoteMEdit = _mdPerm('quote_method','edit', $canCustAdd || $canCustEdit);
+$mdPaytermView = _mdPerm('payterm','view', true);  $mdPaytermEdit = _mdPerm('payterm','edit', $canCustAdd || $canCustEdit);
+$mdBankView    = _mdPerm('bank','view', true);     $mdBankEdit    = _mdPerm('bank','edit', $canCustAdd || $canCustEdit);
 $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('recon','edit', $is_admin);
 ?>
 <div class="tab-pane" id="cust-tab-payment">
@@ -8937,7 +8966,7 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 </div><!-- /modal-body -->
 <div class="modal-footer">
     <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
-    <?php if ($can_create || $can_update): ?>
+    <?php if ($canCustAdd || $canCustEdit): ?>
     <button type="button" id="cf-save-btn" class="btn btn-success" onclick="submitCustomerForm()"><i class="fa fa-save"></i> 儲存</button>
     <?php endif; ?>
 </div>
@@ -9178,8 +9207,8 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 </div>
 
 <?php
-$mdMakerSettleView  = _mdPerm('settle','view', true);  $mdMakerSettleEditV  = _mdPerm('settle','edit', $can_create || $can_update);
-$mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _mdPerm('payterm','edit', $can_create || $can_update);
+$mdMakerSettleView  = _mdPerm('settle','view', true);  $mdMakerSettleEditV  = _mdPerm('settle','edit', $canMakerAdd || $canMakerEdit);
+$mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _mdPerm('payterm','edit', $canMakerAdd || $canMakerEdit);
 ?>
 <!-- ⑤ 付款設定 -->
 <?php if ($mdMakerSettleView || $mdMakerPaytermView): ?>
@@ -9250,7 +9279,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
     <span style="font-size:11px;font-weight:normal;color:#aaa;margin-left:8px;">此廠商改名前的舊編號，用於查詢歷史加工紀錄</span>
 </div>
 <div id="mf-aliases-wrap" style="margin-bottom:8px;min-height:28px;display:flex;flex-wrap:wrap;gap:6px;"></div>
-<?php if ($can_update || $can_create): ?>
+<?php if ($canMakerEdit || $canMakerAdd): ?>
 <div style="display:flex;gap:6px;align-items:center;">
     <div style="position:relative;">
         <input type="text" id="mf-alias-input" class="form-control input-sm" placeholder="輸入舊廠商編號（最多11碼）" maxlength="11" style="width:200px;text-transform:uppercase;" oninput="this.value=this.value.toUpperCase()">
@@ -9265,7 +9294,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 </div>
 <div class="modal-footer">
     <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
-    <?php if ($can_create || $can_update): ?>
+    <?php if ($canMakerAdd || $canMakerEdit): ?>
     <button type="button" class="btn btn-success" onclick="submitMakerForm()"><i class="fa fa-save"></i> 儲存</button>
     <?php endif; ?>
 </div>
@@ -9593,7 +9622,10 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 <table class="table table-bordered table-condensed" style="font-size:12px;">
 <thead><tr style="background:#f7f9fb;"><th style="white-space:nowrap;width:160px;">功能分類</th><th>說明</th></tr></thead>
 <tbody>
-<tr><td style="white-space:nowrap;"><strong>料號／客戶／廠商本體操作</strong></td><td>新增、編輯（含業務設定/產業別/批次修改/廠商別名連結）、刪除（含不可逆的綁定移轉）、客戶/廠商停用狀態切換、齒輪規格的新增/編輯/刪除/修改既有列</td></tr>
+<tr><td style="white-space:nowrap;"><strong>料號本體操作</strong></td><td>新增、編輯（含批次修改）、刪除（含不可逆的綁定移轉）——三者各自獨立授權，互不相通</td></tr>
+<tr><td style="white-space:nowrap;"><strong>客戶本體操作</strong></td><td>新增、編輯（含業務設定/產業別/批次修改）、刪除（含不可逆的綁定移轉）、停用狀態切換</td></tr>
+<tr><td style="white-space:nowrap;"><strong>廠商本體操作</strong></td><td>新增、編輯（含批次修改/廠商別名連結）、刪除（含不可逆的綁定移轉）、停用狀態切換</td></tr>
+<tr><td style="white-space:nowrap;"><strong>齒輪規格操作</strong></td><td>新增/編輯齒輪規格、刪除齒輪規格列、修改既有齒輪規格列</td></tr>
 <tr><td style="white-space:nowrap;"><strong>客戶／廠商表單設定欄位</strong></td><td>對帳單設定、結帳設定（含臨時結帳調整）、報價方式、收款/付款方式、銀行帳戶，各自可設檢視/編輯</td></tr>
 <tr><td style="white-space:nowrap;"><strong>料號標籤指派</strong></td><td>新增標籤指派／修改或移除他人指派的標籤——沒有後者的人仍可改動/移除自己指派過的那一筆</td></tr>
 <tr><td style="white-space:nowrap;"><strong>標籤與字典維護</strong></td><td>標籤定義、工件種類、齒輪類型、齒輪等級對照、客戶產業別、製程大類與製程主檔，各自可設新增/編輯/刪除/檢視</td></tr>
@@ -10762,6 +10794,19 @@ var CAN_CREATE      = <?= json_encode($can_create) ?>;
 var CAN_UPDATE      = <?= json_encode($can_update) ?>;
 var CAN_DELETE      = <?= json_encode($mdSettleEdit) ?>;   // 唯一用途：結帳例外列的刪除鈕，對應 settle 群組編輯權（見 save/delete_settlement_exception）
 var CAN_DELETE_ALL  = <?= json_encode($can_delete_all) ?>;   // 刪除廠商/客戶/料號/字典（A或CDRU）
+// 2026-10-07：料號／客戶／廠商本體CRUD三者已分開，新寫的JS一律改用下面這組，
+// 上面 CAN_CREATE/CAN_UPDATE/CAN_DELETE_ALL/CAN_SET_STATUS 僅為尚未逐一替換完的殘留呼叫端保留。
+var CAN_PART_ADD    = <?= json_encode($canPartAdd) ?>;
+var CAN_PART_EDIT   = <?= json_encode($canPartEdit) ?>;
+var CAN_PART_DELETE = <?= json_encode($canPartDelete) ?>;
+var CAN_CUST_ADD    = <?= json_encode($canCustAdd) ?>;
+var CAN_CUST_EDIT   = <?= json_encode($canCustEdit) ?>;
+var CAN_CUST_DELETE = <?= json_encode($canCustDelete) ?>;
+var CAN_CUST_STATUS = <?= json_encode($canCustStatus) ?>;
+var CAN_MAKER_ADD    = <?= json_encode($canMakerAdd) ?>;
+var CAN_MAKER_EDIT   = <?= json_encode($canMakerEdit) ?>;
+var CAN_MAKER_DELETE = <?= json_encode($canMakerDelete) ?>;
+var CAN_MAKER_STATUS = <?= json_encode($canMakerStatus) ?>;
 var CAN_DELETE_GEAR     = <?= json_encode($can_delete_gear) ?>;         // 刪除齒輪規格列（A或CDR）
 var CAN_EDIT_GEAR       = <?= json_encode($can_edit_gear) ?>;           // 新增/編輯齒輪規格欄位與料號標籤（A,CRU,CRD,CDRU）
 var CAN_MODIFY_EXISTING_GEAR = <?= json_encode($can_modify_existing_gear) ?>; // 修改既有齒型列（A或含D；CRU不可）
@@ -13030,14 +13075,14 @@ function openPartDrawing(pid, pk) {
 }
 
 function renderPartsTable(rows, total, pg, pages) {
-    var colCount = 10 + (CAN_UPDATE||CAN_DELETE_ALL ? 1 : 0) + (CAN_SEE_DESIGN ? 1 : 0);
+    var colCount = 10 + (CAN_PART_EDIT||CAN_PART_DELETE ? 1 : 0) + (CAN_SEE_DESIGN ? 1 : 0);
     var html = '<div style="overflow-x:auto;"><table class="table"><thead><tr>';
     html += '<th style="width:36px;">#</th>';
     html += '<th style="max-width:130px;">料號</th><th>規格</th><th style="white-space:nowrap;">版次 / 發行日</th><th>種類</th><th>客戶</th><th>備註</th><th style="white-space:nowrap;">重量</th>';
     html += '<th style="white-space:nowrap;min-width:90px;">出貨筆數/件數</th>';
     html += '<th style="min-width:80px;white-space:nowrap;"><i class="fa fa-paperclip"></i> 附件</th>';
     if (CAN_SEE_DESIGN) html += '<th style="min-width:120px;">設計備註</th>';
-    if (CAN_UPDATE||CAN_DELETE_ALL) html += '<th style="text-align:center;width:80px;">操作</th>';
+    if (CAN_PART_EDIT||CAN_PART_DELETE) html += '<th style="text-align:center;width:80px;">操作</th>';
     html += '</tr></thead><tbody>';
 
     if (!rows.length) {
@@ -13323,12 +13368,12 @@ function renderPartsTable(rows, total, pg, pages) {
                     html += '<td style="color:#bbb;font-size:11px;">無備註</td>';
                 }
             }
-            if (CAN_UPDATE||CAN_CREATE||CAN_DELETE_ALL||CAN_DELETE_GEAR||CAN_SEE_DESIGN) {
+            if (CAN_PART_EDIT||CAN_PART_ADD||CAN_PART_DELETE||CAN_DELETE_GEAR||CAN_SEE_DESIGN) {
                 html += '<td><div class="row-actions">';
-                if (CAN_UPDATE||CAN_DELETE_GEAR) html += '<button class="btn-row btn-edit" onclick="openPartModal('+r.d_id+')" title="'+(CAN_UPDATE?'編輯':'查看/管理齒輪規格')+'"><i class="fa fa-'+(CAN_UPDATE?'pencil':'gear')+'"></i></button>';
-                if (CAN_CREATE||CAN_UPDATE) html += '<button class="btn-row" onclick="copyPartModal('+r.d_id+')" title="複製料號" style="color:#27ae60;"><i class="fa fa-copy"></i></button>';
+                if (CAN_PART_EDIT||CAN_DELETE_GEAR) html += '<button class="btn-row btn-edit" onclick="openPartModal('+r.d_id+')" title="'+(CAN_PART_EDIT?'編輯':'查看/管理齒輪規格')+'"><i class="fa fa-'+(CAN_PART_EDIT?'pencil':'gear')+'"></i></button>';
+                if (CAN_PART_ADD||CAN_PART_EDIT) html += '<button class="btn-row" onclick="copyPartModal('+r.d_id+')" title="複製料號" style="color:#27ae60;"><i class="fa fa-copy"></i></button>';
                 if (CAN_SEE_DESIGN) html += '<button class="btn-row" onclick="openPartDesignModal('+r.d_id+',\''+escAttr(r.D_Setting_Id)+'\')" title="設計備註" style="color:#c0392b;font-size:11px;font-weight:600;padding:1px 5px;"><i class="fa fa-file-text-o"></i> 設計</button>';
-                if (CAN_DELETE_ALL) html += '<button class="btn-row btn-delete" onclick="deletePart('+r.d_id+',\''+escAttr(r.D_Setting_Id)+'\')" title="刪除"><i class="fa fa-trash"></i></button>';
+                if (CAN_PART_DELETE) html += '<button class="btn-row btn-delete" onclick="deletePart('+r.d_id+',\''+escAttr(r.D_Setting_Id)+'\')" title="刪除"><i class="fa fa-trash"></i></button>';
                 html += '</div></td>';
             }
             html += '</tr>';
@@ -14556,7 +14601,7 @@ function trimFloat(v) {
 // ── BOM rows ──────────────────────────────────────────
 function renderBomRows() {
     var wrap = document.getElementById('bom-rows-wrap');
-    var canEdit = (CAN_CREATE || CAN_UPDATE);
+    var canEdit = (CAN_PART_ADD || CAN_PART_EDIT);
     if (!bomRows.length) {
         wrap.innerHTML = '<tr><td colspan="4" style="color:#aaa;font-size:12px;padding:8px;">尚未加入子件，請使用下方搜尋框新增</td></tr>';
         return;
@@ -15179,7 +15224,7 @@ function _getWeightKg() {
 function openPartModal(d_id) {
     gearRows = []; bomRows = [];
     if (d_id > 0) {
-        if (!CAN_UPDATE && !CAN_EDIT_GEAR && !CAN_DELETE_GEAR) { showToast('無修改權限','error'); return; }
+        if (!CAN_PART_EDIT && !CAN_EDIT_GEAR && !CAN_DELETE_GEAR) { showToast('無修改權限','error'); return; }
         api({ action:'get_part', d_id:d_id }).done(function(r) {
             if (!r.success) { showToast(r.message,'error'); return; }
             var d = r.data;
@@ -15242,11 +15287,11 @@ function openPartModal(d_id) {
             var pdWrap = document.getElementById('part-design-note-wrap');
             if (pdWrap) pdWrap.style.display = 'none';
             var saveBtn = document.getElementById('part-save-btn');
-            if (saveBtn) saveBtn.style.display = (CAN_UPDATE || CAN_EDIT_GEAR) ? '' : 'none';
+            if (saveBtn) saveBtn.style.display = (CAN_PART_EDIT || CAN_EDIT_GEAR) ? '' : 'none';
             $('#partModal').modal('show');
         });
     } else {
-        if (!CAN_CREATE) { showToast('無新增權限','error'); return; }
+        if (!CAN_PART_ADD) { showToast('無新增權限','error'); return; }
         document.getElementById('partModal-title').textContent = '新增料號';
         document.getElementById('partForm').reset();
         _setWeightUnit('g');
@@ -15387,7 +15432,7 @@ function deletePart(d_id, name) {
             var ul = document.getElementById('dpm-blocks-list');
             ul.innerHTML = r.blocks.map(function(b){ return '<li>'+escHtml(b)+'</li>'; }).join('');
             document.getElementById('dpm-blocked').style.display = '';
-            document.getElementById('dpm-transfer-btn-wrap').style.display = CAN_DELETE_ALL ? '' : 'none';
+            document.getElementById('dpm-transfer-btn-wrap').style.display = CAN_PART_DELETE ? '' : 'none';
             // 填入來源料號資訊
             var p = r.part || {};
             document.getElementById('dpm-src-info').innerHTML =
@@ -15487,7 +15532,7 @@ function doTransferPart() {
 
 // ── 複製料號（預填資料到新增視窗，讓使用者確認後存檔）──
 function copyPartModal(d_id) {
-    if (!CAN_CREATE && !CAN_UPDATE) { showToast('無新增或編輯權限','error'); return; }
+    if (!CAN_PART_ADD && !CAN_PART_EDIT) { showToast('無新增或編輯權限','error'); return; }
     api({ action:'get_part', d_id:d_id }).done(function(r) {
         if (!r.success) { showToast(r.message||'讀取失敗','error'); return; }
         var d = r.data;
@@ -15649,7 +15694,7 @@ function loadCustomers(pg) {
 var settleModeLabel = {FIXED:'固定日', EOM:'月底', VARIABLE:'不固定'};
 
 function renderCustomersTable(rows, total, pg, pages) {
-    var cols = 10 + (CAN_UPDATE||CAN_DELETE_ALL||CAN_SET_STATUS ? 1 : 0) + (CAN_SEE_DESIGN ? 1 : 0);
+    var cols = 10 + (CAN_CUST_EDIT||CAN_CUST_DELETE||CAN_CUST_STATUS ? 1 : 0) + (CAN_SEE_DESIGN ? 1 : 0);
     var html = '<div style="overflow-x:auto;"><table class="table" style="font-size:12px;"><thead><tr>';
     html += '<th style="width:82px;white-space:nowrap;">客戶代碼</th>';
     html += '<th style="min-width:110px;">客戶名稱</th>';
@@ -15662,7 +15707,7 @@ function renderCustomersTable(rows, total, pg, pages) {
     html += '<th style="width:70px;white-space:nowrap;">結帳日</th>';
     html += '<th style="width:50px;text-align:center;">狀態</th>';
     if (CAN_SEE_DESIGN) html += '<th style="min-width:120px;">設計備註</th>';
-    if (CAN_UPDATE||CAN_DELETE_ALL||CAN_SET_STATUS) html += '<th style="text-align:center;width:90px;">操作</th>';
+    if (CAN_CUST_EDIT||CAN_CUST_DELETE||CAN_CUST_STATUS) html += '<th style="text-align:center;width:90px;">操作</th>';
     html += '</tr></thead><tbody>';
     if (!rows.length) {
         html += '<tr><td colspan="'+cols+'"><div class="empty-state"><i class="fa fa-users"></i>查無資料</div></td></tr>';
@@ -15724,12 +15769,12 @@ function renderCustomersTable(rows, total, pg, pages) {
                     html += '<td style="color:#bbb;font-size:11px;">無備註</td>';
                 }
             }
-            if (CAN_UPDATE||CAN_DELETE_ALL||CAN_SET_STATUS||CAN_SEE_DESIGN) {
+            if (CAN_CUST_EDIT||CAN_CUST_DELETE||CAN_CUST_STATUS||CAN_SEE_DESIGN) {
                 html += '<td><div class="row-actions">';
-                if (CAN_UPDATE) html += '<button class="btn-row btn-edit" onclick="openCustomerModal(\''+escAttr(r.customer_id)+'\')" title="編輯"><i class="fa fa-pencil"></i></button>';
+                if (CAN_CUST_EDIT) html += '<button class="btn-row btn-edit" onclick="openCustomerModal(\''+escAttr(r.customer_id)+'\')" title="編輯"><i class="fa fa-pencil"></i></button>';
                 if (CAN_SEE_DESIGN) html += '<button class="btn-row" onclick="openCustDesignModal(\''+escAttr(r.customer_id)+'\',\''+escAttr(r.customer)+'\')" title="設計備註" style="color:#c0392b;font-size:11px;font-weight:600;padding:1px 5px;"><i class="fa fa-file-text-o"></i> 設計</button>';
-                if (CAN_SET_STATUS) { var isInact=(r.is_inactive=='1'); html += '<button class="btn-row" onclick="toggleCustomerStatus(\''+escAttr(r.customer_id)+'\','+isInact+')" title="'+(isInact?'啟用':'停用')+'" style="color:'+(isInact?'#1ABB9C':'#e74c3c')+'"><i class="fa fa-toggle-'+(isInact?'on':'off')+'"></i></button>'; }
-                if (CAN_DELETE_ALL) html += '<button class="btn-row btn-delete" onclick="deleteCustomer(\''+escAttr(r.customer_id)+'\',\''+escAttr(r.customer)+'\')" title="刪除"><i class="fa fa-trash"></i></button>';
+                if (CAN_CUST_STATUS) { var isInact=(r.is_inactive=='1'); html += '<button class="btn-row" onclick="toggleCustomerStatus(\''+escAttr(r.customer_id)+'\','+isInact+')" title="'+(isInact?'啟用':'停用')+'" style="color:'+(isInact?'#1ABB9C':'#e74c3c')+'"><i class="fa fa-toggle-'+(isInact?'on':'off')+'"></i></button>'; }
+                if (CAN_CUST_DELETE) html += '<button class="btn-row btn-delete" onclick="deleteCustomer(\''+escAttr(r.customer_id)+'\',\''+escAttr(r.customer)+'\')" title="刪除"><i class="fa fa-trash"></i></button>';
                 html += '</div></td>';
             }
             html += '</tr>';
@@ -16231,7 +16276,7 @@ function _mdmTodayStr() {
 function openCustomerModal(customer_id, readonly) {
     readonly = !!readonly;
     if (customer_id) {
-        if (!readonly && !CAN_UPDATE) { showToast('無修改權限','error'); return; }
+        if (!readonly && !CAN_CUST_EDIT) { showToast('無修改權限','error'); return; }
         api({ action:'get_customer', customer_id:customer_id }).done(function(r) {
             if (!r.success) { showToast(r.message,'error'); return; }
             var d = r.data;
@@ -16301,7 +16346,7 @@ function openCustomerModal(customer_id, readonly) {
             $('#customerModal').modal('show');
         });
     } else {
-        if (!CAN_CREATE) { showToast('無新增權限','error'); return; }
+        if (!CAN_CUST_ADD) { showToast('無新增權限','error'); return; }
         _setCustModalReadonly(false);
         document.getElementById('custModal-title').textContent = '新增客戶';
         document.getElementById('customerForm').reset();
@@ -16423,7 +16468,7 @@ function deleteCustomer(id, name) {
             var ul = document.getElementById('dcm-blocks-list');
             ul.innerHTML = r.blocks.map(function(b){ return '<li>'+escHtml(b)+'</li>'; }).join('');
             document.getElementById('dcm-blocked').style.display = '';
-            document.getElementById('dcm-transfer-btn-wrap').style.display = CAN_DELETE_ALL ? '' : 'none';
+            document.getElementById('dcm-transfer-btn-wrap').style.display = CAN_CUST_DELETE ? '' : 'none';
             // 填來源客戶資訊
             var c = r.customer || {};
             document.getElementById('dcm-src-info').innerHTML =
@@ -16522,7 +16567,7 @@ function deleteMaker(id, name) {
             var ul = document.getElementById('dmkm-blocks-list');
             ul.innerHTML = r.blocks.map(function(b){ return '<li>'+escHtml(b)+'</li>'; }).join('');
             document.getElementById('dmkm-blocked').style.display = '';
-            document.getElementById('dmkm-transfer-btn-wrap').style.display = CAN_DELETE_ALL ? '' : 'none';
+            document.getElementById('dmkm-transfer-btn-wrap').style.display = CAN_MAKER_DELETE ? '' : 'none';
             var m = r.maker || {};
             document.getElementById('dmkm-src-info').innerHTML =
                 '<strong>' + escHtml(m.maker_id||'') + '</strong>'
@@ -16659,11 +16704,11 @@ function renderMakersTable(rows, total, pg, pages) {
     html += '<th style="width:11%;">備註</th>';
     html += '<th style="width:5%;text-align:center;">KPI</th>';
     html += '<th style="width:6%;">狀態</th>';
-    if (CAN_UPDATE||CAN_DELETE_ALL||CAN_SET_STATUS) html += '<th style="width:7%;text-align:center;white-space:nowrap;">操作</th>';
+    if (CAN_MAKER_EDIT||CAN_MAKER_DELETE||CAN_MAKER_STATUS) html += '<th style="width:7%;text-align:center;white-space:nowrap;">操作</th>';
     html += '</tr></thead><tbody>';
 
     if (!rows.length) {
-        var cp = (CAN_UPDATE||CAN_DELETE_ALL||CAN_SET_STATUS) ? 11 : 10;
+        var cp = (CAN_MAKER_EDIT||CAN_MAKER_DELETE||CAN_MAKER_STATUS) ? 11 : 10;
         html += '<tr><td colspan="'+cp+'"><div class="empty-state"><i class="fa fa-industry"></i>查無資料</div></td></tr>';
     } else {
         rows.forEach(function(r) {
@@ -16793,17 +16838,17 @@ function renderMakersTable(rows, total, pg, pages) {
             // KPI 欄：placeholder
             html += '<td id="kpi-'+escHtml(r.maker_id_no)+'" style="text-align:center;"><span style="color:#ddd;font-size:11px;">…</span></td>';
             html += '<td>'+badge+'</td>';
-            if (CAN_UPDATE||CAN_DELETE_ALL||CAN_SET_STATUS) {
+            if (CAN_MAKER_EDIT||CAN_MAKER_DELETE||CAN_MAKER_STATUS) {
                 html += '<td><div class="row-actions">';
-                if (CAN_UPDATE) html += '<button class="btn-row btn-edit" onclick="openMakerModal(\''+escAttr(r.maker_id_no)+'\')" title="編輯"><i class="fa fa-pencil"></i></button>';
+                if (CAN_MAKER_EDIT) html += '<button class="btn-row btn-edit" onclick="openMakerModal(\''+escAttr(r.maker_id_no)+'\')" title="編輯"><i class="fa fa-pencil"></i></button>';
                 // 廠商停用/啟用請透過編輯 modal 的廠商狀態欄位操作
-                if (CAN_DELETE_ALL) html += '<button class="btn-row btn-delete" onclick="deleteMaker(\''+escAttr(r.maker_id_no)+'\',\''+escAttr(r.maker_id)+'\')" title="刪除"><i class="fa fa-trash"></i></button>';
+                if (CAN_MAKER_DELETE) html += '<button class="btn-row btn-delete" onclick="deleteMaker(\''+escAttr(r.maker_id_no)+'\',\''+escAttr(r.maker_id)+'\')" title="刪除"><i class="fa fa-trash"></i></button>';
                 html += '</div></td>';
             }
             html += '</tr>';
             // 舊編號跨欄提示列（廠商～加工限制，共4欄）
             if (r.is_old_alias) {
-                var totalCols = (CAN_UPDATE||CAN_DELETE_ALL||CAN_SET_STATUS) ? 11 : 10;
+                var totalCols = (CAN_MAKER_EDIT||CAN_MAKER_DELETE||CAN_MAKER_STATUS) ? 11 : 10;
                 html += '<tr><td></td>'
                     + '<td colspan="4" style="padding:2px 8px 4px;border-top:none;">'
                     + '<span style="display:inline-block;background:#fff3e0;color:#e65100;border:1px solid #ffcc80;border-radius:4px;font-size:10px;font-weight:700;padding:2px 8px;">'
@@ -17057,7 +17102,7 @@ function syncSubCatHidden() {
 
 function openMakerModal(maker_id_no) {
     if (maker_id_no) {
-        if (!CAN_UPDATE) { showToast('無修改權限','error'); return; }
+        if (!CAN_MAKER_EDIT) { showToast('無修改權限','error'); return; }
         api({ action:'get_maker', maker_id_no:maker_id_no }).done(function(r) {
             if (!r.success) { showToast(r.message,'error'); return; }
             var d = r.data;
@@ -17109,7 +17154,7 @@ function openMakerModal(maker_id_no) {
             $('#makerModal').modal('show');
         });
     } else {
-        if (!CAN_CREATE) { showToast('無新增權限','error'); return; }
+        if (!CAN_MAKER_ADD) { showToast('無新增權限','error'); return; }
         document.getElementById('makerModal-title').textContent = '新增廠商';
         document.getElementById('makerForm').reset();
         document.getElementById('mf-is_new').value = '1';
@@ -17328,7 +17373,7 @@ function _buildSubLabelInputHtml(sd, subTmpId, parentTmpId, exSub) {
 }
 
 function toggleMakerProcChip(chip) {
-    if (!CAN_UPDATE && !CAN_CREATE) return;
+    if (!CAN_MAKER_EDIT && !CAN_MAKER_ADD) return;
     var lid    = chip.dataset.lid;
     var isRep  = chip.dataset.isRep === '1';
     var hasSubs = chip.dataset.hasSubs === '1';
@@ -17390,7 +17435,7 @@ function _addProcInstanceToArea(lid, instArea, chip) {
 }
 
 function addProcInstance(lid) {
-    if (!CAN_UPDATE && !CAN_CREATE) return;
+    if (!CAN_MAKER_EDIT && !CAN_MAKER_ADD) return;
     var instArea = document.querySelector('#mf-proc-label-area .mpl-instances[data-parent-lid="'+lid+'"]');
     var chip = document.querySelector('#mf-proc-label-area .mf-proc-chip[data-lid="'+lid+'"]');
     _addProcInstanceToArea(String(lid), instArea, chip);
@@ -23719,7 +23764,7 @@ function renderDupParts(data) {
             if (r.Remark)      html += '<span class="dup-field" style="color:#aaa;">'+escHtml(r.Remark.substring(0,20))+'</span>';
             html += '<span style="color:#aaa;font-size:10px;">id='+r.d_id+'</span>';
             // 操作按鈕（A/CDRU）
-            if (CAN_DELETE_ALL) {
+            if (CAN_PART_DELETE) {
                 if (!hasRel) {
                     html += '<button class="btn btn-xs btn-danger" onclick="dupQuickDeletePart('+r.d_id+',\''+escAttr(r.D_Setting_Id)+'\',this)" title="刪除"><i class="fa fa-trash"></i> 刪除</button>';
                 } else {
@@ -23839,10 +23884,10 @@ function buildDupEntityRow(item, type) {
         // 操作
         html += '<div class="dup-del-btn" style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">';
         var hasRel = item.relations && item.relations.length > 0;
-        if (CAN_SET_STATUS && item.is_inactive != '1') {
+        if (CAN_CUST_STATUS && item.is_inactive != '1') {
             html += '<button class="btn btn-xs btn-warning" onclick="dupDeactivateCustomer(\''+escAttr(item.customer_id)+'\',\''+escAttr(item.customer)+'\')"><i class="fa fa-pause"></i> 停用</button>';
         }
-        if (CAN_DELETE_ALL) {
+        if (CAN_CUST_DELETE) {
             if (!hasRel) {
                 html += '<button class="btn btn-xs btn-danger" onclick="dupQuickDeleteCustomer(\''+escAttr(item.customer_id)+'\',\''+escAttr(item.customer)+'\',this)" title="刪除"><i class="fa fa-trash"></i> 刪除</button>';
             } else {
@@ -23875,10 +23920,10 @@ function buildDupEntityRow(item, type) {
         html += '</div>';
         html += '<div class="dup-del-btn" style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">';
         var hasRel = item.relations && item.relations.length > 0;
-        if (CAN_SET_STATUS && item.status !== 'X') {
+        if (CAN_MAKER_STATUS && item.status !== 'X') {
             html += '<button class="btn btn-xs btn-warning" onclick="dupDeactivateMaker(\''+escAttr(item.maker_id_no)+'\',\''+escAttr(item.maker_id)+'\')"><i class="fa fa-pause"></i> 停用</button>';
         }
-        if (CAN_DELETE_ALL) {
+        if (CAN_MAKER_DELETE) {
             if (!hasRel) {
                 html += '<button class="btn btn-xs btn-danger" onclick="dupQuickDeleteMaker(\''+escAttr(item.maker_id_no)+'\',\''+escAttr(item.maker_id)+'\',this)" title="刪除"><i class="fa fa-trash"></i> 刪除</button>';
             } else {

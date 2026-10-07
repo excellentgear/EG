@@ -30,10 +30,10 @@ $roleCode = 'TEST_MDPERM_' . bin2hex(random_bytes(3));
 $pdo->prepare("INSERT INTO roles (role_code, role_name, module, is_system) VALUES (?,?,'master_data',0)")->execute([$roleCode, '測試用-勿留']);
 $roleId = (int)$pdo->lastInsertId();
 $pdo->prepare("INSERT INTO role_features (role_id, feature_code) VALUES (?, 'mdata_recon_edit')")->execute([$roleId]);
-// 2026-10-07 起料號/客戶/廠商本體CRUD也改成角色制了，要測settle/recon等維護設定群組，
-// 仍必須先給 entity_add/entity_edit，否則連 save_customer 本身都會被新的本體權限擋下
-$pdo->prepare("INSERT INTO role_features (role_id, feature_code) VALUES (?, 'mdata_entity_add')")->execute([$roleId]);
-$pdo->prepare("INSERT INTO role_features (role_id, feature_code) VALUES (?, 'mdata_entity_edit')")->execute([$roleId]);
+// 2026-10-07（三次）起料號/客戶/廠商本體CRUD已三者分開，要測settle/recon等維護設定群組，
+// 仍必須先給 customer_add/customer_edit，否則連 save_customer 本身都會被新的本體權限擋下
+$pdo->prepare("INSERT INTO role_features (role_id, feature_code) VALUES (?, 'mdata_customer_add')")->execute([$roleId]);
+$pdo->prepare("INSERT INTO role_features (role_id, feature_code) VALUES (?, 'mdata_customer_edit')")->execute([$roleId]);
 $pdo->prepare("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)")->execute([$TEST_UID, $roleId]);
 // 給這個使用者在本頁完整的舊式 CRUD 權限，才能驗證「settle 即使legacy可編輯也被新角色擋下」
 $pdo->prepare("INSERT INTO user_module_permissions (user_id, module_code, permission, scope) VALUES (?, '76', 'CDRU', 'page')")->execute([$TEST_UID]);
