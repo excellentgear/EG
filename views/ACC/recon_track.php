@@ -581,7 +581,7 @@ function allowedTargets(row){
     var skip = ALLOW_SKIP[row.side];
     var candidates = skip ? order.slice(curIdx+1) : order.slice(curIdx+1, curIdx+2);
     // 只有全站管理員(isAll)看得到所有按鈕；本頁管理員(art_admin)的快速按鈕也要依生管/業務/會計角色顯示
-    // （使用者明確要求）——art_admin 若本身也兼任那些角色，一樣看得到對應按鈕；若沒有，改用「管理員改派」下拉操作。
+    // （使用者明確要求，且 art_admin 不再有「改派」下拉可繞過）——art_admin 若本身也兼任那些角色才看得到對應按鈕。
     if (PERMS.isAll) return candidates;
     var out = [];
     candidates.forEach(function(s){
@@ -649,9 +649,10 @@ function renderListTbl(){
         var btns = targets.map(function(s){
             return '<button class="btn btn-warm row-btn" onclick="doSetStatus(' + r.track_id + ',\'' + s + '\')">' + esc(statusLabel(s)) + '</button>';
         }).join('');
-        if (PERMS.canAdmin) {
-            // 已經有按鈕可以按的狀態就不在下拉選單裡重複出現（使用者要求）；
-            // 下拉只保留按鈕涵蓋不到的（例如回復到較早狀態、或跳過順序被關閉時被按鈕排除掉的）
+        if (PERMS.isAll) {
+            // 使用者明確要求：本頁管理員(art_admin)不要有「改派」下拉——只有全站管理員(isAll)才看得到。
+            // 已經有按鈕可以按的狀態就不在下拉選單裡重複出現；下拉只保留按鈕涵蓋不到的
+            // （例如回復到較早狀態、或跳過順序被關閉時被按鈕排除掉的）
             var dropdownOpts = Object.keys(STATUSES).filter(function(k){ return k!==r.status && targets.indexOf(k)<0; });
             if (dropdownOpts.length) {
                 btns += ' <select class="form-control input-sm" style="width:90px;display:inline-block;" onchange="if(this.value)doSetStatus(' + r.track_id + ',this.value);this.value=\'\';">' +
