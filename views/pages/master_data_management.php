@@ -1675,6 +1675,29 @@ $can_update     = $canPartEdit || $canCustEdit || $canMakerEdit;
 $can_delete_all = $canPartDelete || $canCustDelete || $canMakerDelete;
 $can_set_status = $canCustStatus || $canMakerStatus;
 
+// 2026-10-08 修正：「標籤與字典維護」區塊的工件種類/小類、齒輪類型、料號標籤(含子標籤)、
+// 客戶產業別、製程大類，角色設定頁早就拆成 mdata_<group>_add/edit/delete 各自獨立勾選
+// （見上面 _mdPerm 呼叫），但 JS 端的按鈕顯示一直共用單一舊旗標 $can_dict_part（衍生自
+// user_module_permissions 頁級 CRUD 字母），導致只用新版角色設定（例如「設計」「生管」）
+// 指派、未被授予舊式頁級權限的使用者，即使角色已勾選新增/編輯，畫面上還是看不到按鈕——
+// 回報案例：同時具「設計」「生管」角色、工件種類/小類已勾新增＋編輯，登入卻無法新增/編輯。
+// 改為逐型別各自算（workpiece/workpiece-sub 共用 workpiece_type、label/label-sub 共用
+// label_dict），下面經 JS 的 DICT_PERM 逐型別判斷；$can_dict_part 本身降級為「這幾種字典
+// 任一種有新增或編輯權限」的聯集，只給仍直接引用它的 PHP 端渲染判斷（子標籤管理面板等）用。
+function _mdDictCap(string $group): array {
+    return ['add' => _mdPerm($group, 'add'), 'edit' => _mdPerm($group, 'edit'), 'delete' => _mdPerm($group, 'delete')];
+}
+$dictCapWorkpiece   = _mdDictCap('workpiece_type');
+$dictCapGear        = _mdDictCap('gear_type_dict');
+$dictCapLabel       = _mdDictCap('label_dict');
+$dictCapIndustry    = _mdDictCap('industry_type');
+$dictCapProcessType = _mdDictCap('process_type_dict');
+$can_dict_part = $dictCapWorkpiece['add'] || $dictCapWorkpiece['edit']
+              || $dictCapGear['add'] || $dictCapGear['edit']
+              || $dictCapLabel['add'] || $dictCapLabel['edit']
+              || $dictCapIndustry['add'] || $dictCapIndustry['edit']
+              || $dictCapProcessType['add'] || $dictCapProcessType['edit'];
+
 define('PART_ATTACH_API_URL', '../../src/store/Part_Attachment_API.php');
 
 // =============================================================================
@@ -2438,7 +2461,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             } catch (Exception $ex) { $row['dedicated_part_map'] = []; }
             // 專用機台對應
             try {
-                $mq = $pdo->prepare("SELECT mm.machine_id, COALESCE(ml.machine,'') AS machine_name, COALESCE(pt.process_type,'') AS machine_type
+                $mq = $pdo->prepare("SELECT mm.machine_id, COALESCE(ml.machine,'') AS machine_name, COALESCE(pt.process_type,'') AS machine_type, COALESCE(ml.field_no,'') AS field_no
                                      FROM d_setting_machine_map mm LEFT JOIN machine_list ml ON ml.machine_id=mm.machine_id
                                      LEFT JOIN process_type pt ON pt.process_type_id=ml.machine_type_id
                                      WHERE mm.d_id=? ORDER BY mm.sort_order, mm.map_id");
@@ -3606,10 +3629,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         try {
             $kw = trim($_POST['kw'] ?? '');
             if ($kw === '') { echo json_encode(['success'=>true,'data'=>[]]); exit; }
-            $stmt = $pdo->prepare("SELECT ml.machine_id, COALESCE(ml.machine,'') AS machine_name, COALESCE(pt.process_type,'') AS machine_type
+            $stmt = $pdo->prepare("SELECT ml.machine_id, COALESCE(ml.machine,'') AS machine_name, COALESCE(pt.process_type,'') AS machine_type, COALESCE(ml.field_no,'') AS field_no
                                    FROM machine_list ml
                                    LEFT JOIN process_type pt ON pt.process_type_id = ml.machine_type_id
-                                   WHERE (ml.machine LIKE :kw OR CAST(ml.machine_id AS CHAR) LIKE :kw)
+                                   WHERE (ml.machine LIKE :kw OR CAST(ml.machine_id AS CHAR) LIKE :kw OR ml.field_no LIKE :kw)
                                      AND (ml.state IS NULL OR ml.state != 1)
                                    ORDER BY ml.machine LIMIT 15");
             $stmt->execute([':kw'=>"%$kw%"]);
@@ -10813,7 +10836,17 @@ var CAN_MODIFY_EXISTING_GEAR = <?= json_encode($can_modify_existing_gear) ?>; //
 var CAN_REMOVE_LABELS   = <?= json_encode($can_remove_part_labels) ?>;  // 移除料號標籤（A或CDR）
 var CAN_SET_STATUS      = <?= json_encode($can_set_status) ?>;          // 切換客戶/廠商狀態（A或CDRU）
 var CAN_DICT_EDIT       = <?= json_encode($can_dict_edit) ?>;           // 字典設定編輯（A或CDRU）
-var CAN_DICT_PART       = <?= json_encode($can_dict_part) ?>;           // 工件/齒輪/標籤/製程大類字典（A/CDR/CDRU）
+var CAN_DICT_PART       = <?= json_encode($can_dict_part) ?>;           // 工件/齒輪/標籤/製程大類字典（A/CDR/CDRU）——舊式聯集旗標，僅供尚未拆開的 PHP 端渲染判斷用，JS 按鈕顯示請用下面 DICT_PERM
+// 2026-10-08：各字典型別各自獨立的新增/編輯/刪除權限（取代單一 CAN_DICT_PART，見 _canEditDict/_canDeleteDict）
+var DICT_PERM = {
+    'workpiece':     <?= json_encode($dictCapWorkpiece) ?>,
+    'workpiece-sub': <?= json_encode($dictCapWorkpiece) ?>,
+    'gear':          <?= json_encode($dictCapGear) ?>,
+    'label':         <?= json_encode($dictCapLabel) ?>,
+    'label-sub':     <?= json_encode($dictCapLabel) ?>,
+    'industry':      <?= json_encode($dictCapIndustry) ?>,
+    'process-type':  <?= json_encode($dictCapProcessType) ?>
+};
 var CAN_SEE_DESIGN      = <?= json_encode($can_see_design) ?>;          // 可見設計/技術備註（A/CDR/CDRU）
 var CAN_EDIT_DESIGN     = <?= json_encode($can_edit_design) ?>;         // 可編輯備註（A/CDR）
 var CAN_PROC_EDIT       = <?= json_encode($can_proc_edit) ?>;
@@ -14383,7 +14416,7 @@ function _pfAcNormalize(field, row) {
     if (field==='partno') {
         return { id:String(row.d_id), label:row.part_id + (row.spec_no? ' / '+row.spec_no : '') };
     }
-    return { id:String(row.machine_id), label:row.machine_name + (row.machine_type? ' ('+row.machine_type+')':'') };
+    return { id:String(row.machine_id), label:row.machine_name + (row.field_no? ' ['+row.field_no+']':'') + (row.machine_type? ' ('+row.machine_type+')':'') };
 }
 
 function pfAcSearch(field, kw) {
@@ -14525,7 +14558,7 @@ function pfAcLoadFromPart(d) {
         return { id:String(p.ref_d_id), label:p.part_id + (p.spec_no? ' / '+p.spec_no : '') };
     });
     _pfAcData.machine = (d.machine_map||[]).map(function(m){
-        return { id:String(m.machine_id), label:m.machine_name + (m.machine_type? ' ('+m.machine_type+')':'') };
+        return { id:String(m.machine_id), label:m.machine_name + (m.field_no? ' ['+m.field_no+']':'') + (m.machine_type? ' ('+m.machine_type+')':'') };
     });
     ['vendor','partno','machine'].forEach(function(f){ _pfAcRenderList(f); _pfAcSync(f); });
 }
@@ -18558,13 +18591,23 @@ var dictTableHead = {
     'maker-main-process':    '<th>廠商大類</th><th style="width:90px;text-align:center;">操作</th>'
 };
 
-var _DICT_PART_TYPES = ['workpiece','workpiece-sub','gear','label','label-sub','process-type'];
+var _DICT_PART_TYPES = Object.keys(DICT_PERM);   // 相容既有呼叫端；實際逐型別權限見 DICT_PERM
 var _DICT_UPDATE_TYPES = ['maker-proc-label', 'maker-main-process'];
+// 新增或編輯（儲存鈕/編輯鉛筆共用此檢查——該型別的角色功能碼只要勾了新增或編輯任一項即可）
 function _canEditDict(type) {
     if (CAN_DICT_EDIT) return true;
     var t = type || _dictCurrentType;
     if (_DICT_UPDATE_TYPES.indexOf(t) >= 0) return CAN_UPDATE;
-    return CAN_DICT_PART && _DICT_PART_TYPES.indexOf(t) >= 0;
+    var p = DICT_PERM[t];
+    return !!(p && (p.add || p.edit));
+}
+// 刪除獨立判斷（角色設定頁「刪除」是跟「新增/編輯」分開勾選的，不可共用 _canEditDict）
+function _canDeleteDict(type) {
+    if (CAN_DICT_EDIT) return true;
+    var t = type || _dictCurrentType;
+    if (_DICT_UPDATE_TYPES.indexOf(t) >= 0) return CAN_DELETE_ALL;
+    var p = DICT_PERM[t];
+    return !!(p && p.delete);
 }
 var _dictCurrentType = '';
 function dictSaveBtn(type) {
@@ -19011,7 +19054,7 @@ function renderDictTable(type, data) {
             }
             html += '<td style="text-align:center;">';
             if (_canEditDict(type)) html += '<button class="btn btn-xs btn-default" onclick="editDictEntry('+idx+')" title="編輯" style="margin-right:3px;"><i class="fa fa-pencil"></i></button>';
-            var canDelThis = (type === 'maker-proc-label') ? CAN_DELETE_ALL : _canEditDict(type);
+            var canDelThis = (type === 'maker-proc-label') ? CAN_DELETE_ALL : _canDeleteDict(type);
             var lockReason = (typeof cfg.deleteLockReason === 'function') ? cfg.deleteLockReason(d) : '';
             if (canDelThis && lockReason) html += lockedDelBtn(lockReason);
             else if (canDelThis) html += '<button class="btn btn-xs btn-danger"  onclick="deleteDictEntry(\''+escAttr(String(id))+'\')" title="刪除"><i class="fa fa-trash"></i></button>';
@@ -22723,8 +22766,8 @@ function renderLabelSubsTable(subs) {
         html += '<td style="padding:3px 6px;text-align:center;white-space:nowrap;">';
         if (_canEditDict('label-sub')) html += '<button class="btn btn-xs btn-default" onclick="editLabelSub('+i+')" style="margin-right:3px;"><i class="fa fa-pencil"></i></button>';
         var subLock = labelUseLockReason(s, '子標籤');
-        if (_canEditDict('label-sub') && subLock) html += lockedDelBtn(subLock);
-        else if (_canEditDict('label-sub')) html += '<button class="btn btn-xs btn-danger" onclick="deleteLabelSub('+s.sub_id+')"><i class="fa fa-trash"></i></button>';
+        if (_canDeleteDict('label-sub') && subLock) html += lockedDelBtn(subLock);
+        else if (_canDeleteDict('label-sub')) html += '<button class="btn btn-xs btn-danger" onclick="deleteLabelSub('+s.sub_id+')"><i class="fa fa-trash"></i></button>';
         html += '</td></tr>';
     });
     // Cache for edit
@@ -23150,8 +23193,8 @@ function renderLabelDictPage() {
             html += '<button class="btn btn-xs btn-info" onclick="viewLabelSubs('+realIdx+')" title="查看子標籤" style="margin-right:2px;"><i class="fa fa-list"></i></button>';
             if (_canEditDict('label')) html += '<button class="btn btn-xs btn-default" onclick="editDictEntry('+realIdx+')" title="編輯" style="margin-right:2px;"><i class="fa fa-pencil"></i></button>';
             var lblLock = labelUseLockReason(d, '標籤');
-            if (_canEditDict('label') && lblLock) html += lockedDelBtn(lblLock);
-            else if (_canEditDict('label')) html += '<button class="btn btn-xs btn-danger" onclick="deleteDictEntry(\''+d.label_id+'\')" title="刪除"><i class="fa fa-trash"></i></button>';
+            if (_canDeleteDict('label') && lblLock) html += lockedDelBtn(lblLock);
+            else if (_canDeleteDict('label')) html += '<button class="btn btn-xs btn-danger" onclick="deleteDictEntry(\''+d.label_id+'\')" title="刪除"><i class="fa fa-trash"></i></button>';
             html += '</td></tr>';
         });
     }
