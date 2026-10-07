@@ -354,7 +354,7 @@ $db  = new DBConnection();
 $pdo = $db->getPDO();
 
 // ── Migration 版本鎖：版本符合時跳過所有 ALTER/CREATE，只跑一次 ──────────
-define('MDM_MIGRATION_VERSION', '20261006_01');   // 2026-10-06 客戶新增「是否需要對帳單／提供方式」(need_recon_stmt/recon_provide_by)
+define('MDM_MIGRATION_VERSION', '20261007_01');   // 2026-10-07 料號標籤指派稽核欄位(item_label_map/item_sub_label_map 的 created_by_id/created_by/updated_*)
 $_mdm_skip_migration = false;
 try {
     // system_settings 可能尚不存在（第一次執行），用 try 保護
@@ -4762,7 +4762,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!is_array($labels)) $labels = [];
             $labels = array_slice(array_map(function($s){ return mb_substr(trim((string)$s), 0, 12); }, $labels), 0, 12);
             $uid = $_SESSION['id'] ?? $_SESSION['user_id'] ?? 0;
+            $old_spec_btns = _get_setting($pdo, 'spec_quick_btns', '[]');
             _save_setting($pdo, 'spec_quick_btns', json_encode($labels, JSON_UNESCAPED_UNICODE), $uid, _get_operator($pdo, $uid));
+            if ($old_spec_btns !== json_encode($labels, JSON_UNESCAPED_UNICODE)) {
+                _log_audit($pdo,'update','settings','spec_quick_btns','規格快速輸入按鈕',[['field'=>'按鈕清單','old'=>$old_spec_btns,'new'=>json_encode($labels, JSON_UNESCAPED_UNICODE)]],$uid,_get_operator($pdo,$uid));
+            }
             echo json_encode(['success'=>true]);
         } catch(Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -5599,6 +5603,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         if (!$rtype || !$rid) continue;
                         $ins->execute([$main_cat_id, $rtype, $rid]);
                     }
+                }
+                if ($clear_all) {
+                    _log_audit($pdo,'update','settings','maker-main-cat-process:all','全部大類製程設定',[['field'=>'大類製程設定','old'=>'','new'=>'清空全部']],$uid,_get_operator($pdo,$uid));
+                } elseif ($main_cat_id) {
+                    $mcNameQ = $pdo->prepare("SELECT main_cat_name FROM dict_maker_main_category WHERE main_cat_id=?"); $mcNameQ->execute([$main_cat_id]); $mcName = $mcNameQ->fetchColumn() ?: ('id:'.$main_cat_id);
+                    _log_audit($pdo,'update','settings','maker-main-cat-process:'.$main_cat_id,$mcName,[['field'=>'大類製程設定','old'=>'','new'=>count($items).' 項']],$uid,_get_operator($pdo,$uid));
                 }
                 echo json_encode(['success'=>true]);
             } elseif ($op3 === 'get_vendor_tags') {
