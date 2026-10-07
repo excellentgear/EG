@@ -50,7 +50,7 @@ $canAdmin = (bool)$perms['canAdmin'];
 if (empty($_SESSION['si_csrf'])) $_SESSION['si_csrf'] = bin2hex(random_bytes(16));
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
-$WRITE = ['settings_save', 'cutoff_save', 'anomaly_confirm'];
+$WRITE = ['settings_save', 'cutoff_save', 'anomaly_confirm', 'urgent_settings_save'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['si_csrf'], $tok)) {
@@ -96,6 +96,60 @@ switch ($action) {
         try { $res['recommend'] = si_recommend($res['insights']); } catch (Throwable $e) { $res['recommend'] = []; }
         $res['perm'] = ['canAdmin' => $canAdmin ? 1 : 0, 'isAdmin' => $perms['isAdmin'] ? 1 : 0];
         siOut($res);
+    }
+
+    /* ── 交期與急件分析（2026-10-07 使用者交辦：整套比照訂單分析複製）──────
+       計算唯一實作在 order_analysis_lib.php（訂單分析頁同一支函式，資料來源是
+       order_track 本來就跟出貨無關的「下單日/交期」，兩頁問的是同一件事）。 */
+    case 'leadtime_analyze': {
+        $clients = $_POST['clients'] ?? $_GET['clients'] ?? '';
+        if (is_string($clients)) {
+            $d = json_decode($clients, true);
+            $clients = is_array($d) ? $d : array_filter(array_map('trim', explode(',', $clients)));
+        }
+        $gran = (string)($_REQUEST['gran'] ?? 'quarter');
+        $cmp  = (string)($_REQUEST['cmp']  ?? 'yoy');
+        if (!isset(oa_grans()[$gran])) siErr('不合法的期間粒度');
+        if (!isset(oa_compares()[$cmp])) siErr('不合法的比較基準');
+
+        $urgentPct = null;
+        $upRaw = $_POST['urgent_pct'] ?? $_GET['urgent_pct'] ?? '';
+        if ($upRaw !== '') {
+            $d = is_string($upRaw) ? json_decode($upRaw, true) : $upRaw;
+            if (is_array($d)) {
+                $urgentPct = [];
+                foreach (['full', 'multi', 'single'] as $k) {
+                    if (isset($d[$k]) && is_numeric($d[$k])) $urgentPct[$k] = max(1, min(100, (int)$d[$k]));
+                }
+            }
+        }
+
+        $rep = oa_leadtime_report($db, [
+            'year'           => (int)($_REQUEST['year'] ?? date('Y')),
+            'gran'           => $gran,
+            'idx'            => (int)($_REQUEST['idx'] ?? 1),
+            'cmp'            => $cmp,
+            'align'          => array_key_exists('align', $_REQUEST) ? (int)$_REQUEST['align'] : 1,
+            'clients'        => array_values((array)$clients),
+            'urgent_pct'     => $urgentPct,
+        ]);
+        $rep['insights'] = oa_urgent_insights($rep);
+        siOut($rep);
+    }
+
+    /* 急件判定設定：與訂單分析頁共用同一份管理員設定（oa_urgent_settings，system_parameters
+       群組 ORDER_ANALYSIS），刻意不存第二份——同一張 order_track 表，兩頁問的是同一件事。
+       讀取不卡管理員（本頁所有檢視者都看得到目前門檻是多少），儲存才卡 canAdmin（見上方 $WRITE）。 */
+    case 'urgent_settings_get': {
+        siOut(['settings' => oa_urgent_settings($db), 'defaults' => oa_urgent_settings_default(), 'csrf' => $_SESSION['si_csrf']]);
+    }
+    case 'urgent_settings_save': {
+        $in = json_decode((string)($_POST['urgent'] ?? 'null'), true);
+        if (!is_array($in)) siErr('設定格式不正確');
+        $uname = (string)($_SESSION['userName'] ?? $sqUser['id'] ?? '');
+        $sv = oa_urgent_settings_save($db, $in, $uname);
+        if (empty($sv['ok'])) siErr(implode("\n", $sv['errors']), 400, ['errors' => $sv['errors']]);
+        siOut(['settings' => $sv['settings']]);
     }
 
     /* ── 客戶清單（多選比較用；只列這個年度真的有出貨/訂單/退貨的客戶）─ */

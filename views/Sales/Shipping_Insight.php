@@ -210,6 +210,16 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
 .cq-sub-tabs { display:flex; gap:4px; margin-bottom:8px; }
 .cq-sub-btn { background:#F3F9FE; border:1px solid var(--line); border-radius:6px; padding:5px 14px; font-size:13px; cursor:pointer; color:var(--ink); }
 .cq-sub-btn.active { background:var(--blue); color:#fff; border-color:var(--blue-d); font-weight:700; }
+/* 頂層分頁（比照訂單分析：總覽分析／交期與急件分析，不再往下一直累加） */
+.oa-maintabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+.oa-mtab { border:1px solid var(--blue-d); background:#fff; color:var(--blue-d); font-weight:600;
+           font-size:13px; padding:7px 16px; border-radius:16px; cursor:pointer; }
+.oa-mtab:hover { background:var(--sand); }
+.oa-mtab.active { background:var(--blue-d); color:#fff; }
+.ltu-cell { padding:3px 0; border-bottom:1px dashed var(--line); }
+.ltu-cell .l1 { display:flex; justify-content:space-between; gap:8px; font-size:12px; }
+.ltu-cell .l1 .amt { color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.ltu-cell .l2 { display:flex; justify-content:space-between; gap:8px; font-size:10.5px; color:var(--muted); margin-top:1px; }
 </style>
 </head>
 <body class="nav-sm">
@@ -281,6 +291,13 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
     </div>
   </div>
 
+  <!-- ── 頂層分頁：總覽分析／交期與急件分析（比照訂單分析，不要一直往下累加）── -->
+  <div class="oa-maintabs">
+    <button type="button" class="oa-mtab active" data-tab="overview"><i class="fa fa-bar-chart"></i> 總覽分析</button>
+    <button type="button" class="oa-mtab" data-tab="leadtime"><i class="fa fa-clock-o"></i> 交期與急件分析</button>
+  </div>
+
+  <div class="oa-tabpanel" data-tab="overview">
   <div id="noteBar"></div>
   <div id="kpiAlertBar"></div>
   <div class="nav-jump">
@@ -555,6 +572,93 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
         <tbody></tbody></table></div>
     </div>
   </div>
+  </div><!-- /oa-tabpanel overview -->
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       交期與急件分析（2026-10-07 使用者交辦：整套比照訂單分析複製，資料一律即時
+       呼叫 order_analysis_lib.php 的 oa_leadtime_report()／oa_urgent_insights()，
+       跟訂單分析共用同一份管理員設定（急件百分位／排除下限），不另存一份。
+       ══════════════════════════════════════════════════════════════════ -->
+  <div class="oa-tabpanel" data-tab="leadtime" style="display:none;">
+    <div class="warm-panel">
+      <div class="oa-bar">
+        <label>急件（交期過短）判定</label>
+        <label style="font-weight:normal;">全製</label><input type="number" id="ltPctFull" class="rm-in" style="width:52px;" min="1" max="100">
+        <label style="font-weight:normal;">%　多製程</label><input type="number" id="ltPctMulti" class="rm-in" style="width:52px;" min="1" max="100">
+        <label style="font-weight:normal;">%　單製</label><input type="number" id="ltPctSingle" class="rm-in" style="width:52px;" min="1" max="100">
+        <label style="font-weight:normal;">%</label>
+        <button class="btn btn-xs btn-warm" id="btnLtApplyPct"><i class="fa fa-refresh"></i> 套用（僅本次計算）</button>
+        <button class="btn btn-xs btn-default" id="btnLtResetPct">回復管理員預設值</button>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:4px;">
+        上面欄位預設帶入管理員目前設定的值，調整後按「套用」只影響這一次計算，<b>不會更改管理員的預設設定</b>；
+        這份設定與「訂單分析」頁的「交期與急件分析」共用同一份，改其中一邊兩邊都會一起變動。
+        要改管理員預設值請按右下「急件判定設定」。
+      </div>
+    </div>
+    <div id="ltNote" class="oa-note"></div>
+    <div id="ltKpiRow" class="kpi-row"></div>
+
+    <div class="sec" id="secLtInsight">
+      <h4><i class="fa fa-lightbulb-o" style="color:var(--coral);"></i> 急件自動分析
+        <span class="hint">依「交期工作天數」短到長，依類別各自的百分位門檻自動判定是不是急件</span>
+      </h4>
+      <div id="ltInsightList" class="ins-list"></div>
+    </div>
+
+    <div class="sec" id="secLtDist">
+      <h4><i class="fa fa-bar-chart" style="color:var(--blue-d);"></i> 交期工作天數分布（全製／多製程／單製）
+        <?php if ($canAdmin): ?>
+        <span class="sec-tools"><button class="btn btn-xs btn-warm-o" id="btnUrgentSetting"><i class="fa fa-cog"></i> 急件判定設定</button></span>
+        <?php endif; ?>
+      </h4>
+      <div class="two-col">
+        <div><div id="chLtBox" class="chart-box"></div></div>
+        <div class="tbl-wrap" style="max-height:300px;">
+          <table class="oa-t" id="tblLtCls">
+            <colgroup><col style="width:24%"><col style="width:10%"><col style="width:16%"><col style="width:12%">
+                      <col style="width:14%"><col style="width:12%"><col style="width:12%"></colgroup>
+            <thead><tr><th>類別</th><th>筆數</th><th>平均工作天</th><th>中位數</th><th>急件門檻</th><th>急件數</th><th>急件比例</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec" id="secLtBand">
+      <h4><i class="fa fa-cubes" style="color:var(--blue-d);"></i> 數量區間與急件比例</h4>
+      <div id="chLtBand" class="chart-box"></div>
+    </div>
+
+    <div class="sec" id="secLtClient">
+      <h4><i class="fa fa-users" style="color:var(--blue-d);"></i> 急件客戶排行
+        <span class="hint">本期共 <span id="ltClientCount">0</span> 家客戶有急件訂單</span>
+      </h4>
+      <div class="tbl-wrap">
+        <table class="oa-t" id="tblLtClient">
+          <colgroup><col style="width:5%"><col style="width:26%"><col style="width:15%"><col style="width:17%"><col style="width:17%"><col style="width:20%"></colgroup>
+          <thead><tr><th>#</th><th>客戶</th><th>急件筆數</th><th>急件金額</th><th>佔急件總額</th><th>較基期增減</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="sec" id="secLtList">
+      <h4><i class="fa fa-list" style="color:var(--blue-d);"></i> 急件明細
+        <span class="hint">依交期工作天數由短到長排序，最多列 200 筆</span>
+      </h4>
+      <div class="tbl-wrap">
+        <table class="oa-t" id="tblLtList">
+          <colgroup><col style="width:8%"><col style="width:7%"><col style="width:7%"><col style="width:9%"><col style="width:6%">
+                    <col style="width:6%"><col style="width:6%"><col style="width:12%"><col style="width:5%"><col style="width:7%">
+                    <col style="width:10%"><col style="width:10%"><col style="width:7%"></colgroup>
+          <thead><tr><th>訂單號</th><th>KEY單業務</th><th>客戶</th><th>料號</th><th>下單日</th><th>交期</th>
+                     <th>工作天數</th><th>類別</th><th>數量</th><th>金額</th><th>實際出貨</th><th>備註</th><th>key單日期</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div><!-- /oa-tabpanel leadtime -->
 
 <?php endif; ?>
 </div><!-- /right_col -->
@@ -764,6 +868,45 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
     <div class="m-foot"><button class="btn btn-warm" data-close="anomalyMask">關閉</button></div>
   </div>
 </div>
+
+<?php if ($canAdmin): ?>
+<!-- ── 急件（交期過短）判定設定：與訂單分析頁共用同一份管理員設定 ─────── -->
+<div class="m-mask" id="urgSetMask">
+  <div class="m-win" style="width:540px;">
+    <div class="m-head">急件（交期過短）判定設定 <span class="x" data-close="urgSetMask">✕</span></div>
+    <div class="m-body">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">
+        這份設定與「訂單分析」頁「交期與急件分析」分頁共用同一份管理員設定，在這裡改，
+        訂單分析那邊也會一起變動（反之亦然）。
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">
+        依<b>全製／多製程／單製</b>各自的交期工作天數分布，取<b>最短的前 N%</b>視為急件
+        （門檻永遠用全部客戶、同一期間的資料計算，不受客戶篩選影響）。
+      </div>
+      <div class="oa-bar">
+        <label>全製</label><input type="number" id="urgPctFull" class="rm-in" style="width:60px;" min="1" max="100">
+        <label>%　多製程</label><input type="number" id="urgPctMulti" class="rm-in" style="width:60px;" min="1" max="100">
+        <label>%　單製</label><input type="number" id="urgPctSingle" class="rm-in" style="width:60px;" min="1" max="100">
+        <label>%</label>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin:10px 0 6px;">
+        <b>排除疑似誤植交期的訂單</b>：交期工作天數 ≤ 下面這個值的訂單，整段分析一律當作沒有交期資料
+        （例如全製訂單交期工作天數＝0，大多是交期日期打錯）。留空＝不排除。
+      </div>
+      <div class="oa-bar">
+        <label>排除工作天數 ≤</label>
+        <input type="number" id="urgPctFloor" class="rm-in" style="width:70px;" min="0" max="60" data-eg-hint="留空＝不排除">
+        <label>天的訂單</label>
+      </div>
+      <div class="err-txt" id="urgSetErr"></div>
+    </div>
+    <div class="m-foot">
+      <button class="btn btn-default" data-close="urgSetMask">取消</button>
+      <button class="btn btn-warm" id="btnUrgSetSave"><i class="fa fa-save"></i> 儲存設定</button>
+    </div>
+  </div>
+</div>
+<?php endif; ?>
 
 <?php if ($canAdmin): ?>
 <!-- ── 監控設定 ─────────────────────────────────────── -->
@@ -1023,6 +1166,19 @@ $('#stApplyBtn').on('click', function(){
 function stSelectedArr(){ return Object.keys(ST_SEL); }
 
 /* ── 主流程 ─────────────────────────────────────────── */
+/* ── 頂層分頁切換（總覽分析／交期與急件分析）─────── */
+var CUR_MAIN_TAB = 'overview';
+function oaSwitchMainTab(t){
+  CUR_MAIN_TAB = t;
+  $('.oa-tabpanel').hide();
+  $('.oa-tabpanel[data-tab="'+t+'"]').show();
+  $('.oa-mtab').removeClass('active');
+  $('.oa-mtab[data-tab="'+t+'"]').addClass('active');
+  if(t==='leadtime' && !LT_DATA) loadLeadtime();
+}
+$('.oa-mtab').on('click', function(){ oaSwitchMainTab($(this).data('tab')); });
+$(document).on('click', '.nav-jump a', function(){ oaSwitchMainTab('overview'); });
+
 function load(){
   var req = { action:'analyze', year:$('#fYear').val(), gran:$('#fGran').val(), idx:$('#fIdx').val(),
     cmp:$('#fCmp').val(), align:$('#cbAlign').is(':checked')?1:0, top:50,
@@ -1034,6 +1190,7 @@ function load(){
     renderNote(); renderKpiAlert(); renderKpi(); renderInsights(); renderRecommend();
     renderTrend(); renderSaleType(); renderAstag(); renderClient(); renderRank(); renderMa();
     listReload();
+    if(LT_DATA) loadLeadtime();   // 篩選條件變了，急件分析也要跟著重算
   }, 'json').fail(function(x){
     $('#noteBar').html('<div class="oa-note oa-warn">載入失敗（HTTP '+x.status+'）'
       + (x.status===403?'：權限不足或連線憑證失效，請重新整理頁面':'') + '</div>');
@@ -1041,6 +1198,219 @@ function load(){
 }
 $('#btnReload').on('click', load);
 $('#fYear, #fGran, #fIdx, #fCmp, #cbAlign').on('change', load);
+
+/* ══════════════════════════════════════════════════════════════════
+ * 交期與急件分析（2026-10-07 使用者交辦，整套比照訂單分析複製；計算唯一實作仍在
+ * order_analysis_lib.php 的 oa_leadtime_report()／oa_urgent_insights()，本頁只是
+ * 另開一個呼叫端，不重寫任何判定邏輯——鐵律4）
+ * ══════════════════════════════════════════════════════════════════ */
+var LT_DATA = null;
+var LT_PCT_INIT = false;
+function loadLeadtime(){
+  var req = {
+    action:'leadtime_analyze', year:$('#fYear').val(), gran:$('#fGran').val(), idx:$('#fIdx').val(),
+    cmp:$('#fCmp').val(), align:$('#cbAlign').is(':checked')?1:0,
+    clients:JSON.stringify(Object.keys(CLI_SEL))
+  };
+  if(LT_PCT_INIT){
+    req.urgent_pct = JSON.stringify({
+      full:   parseInt($('#ltPctFull').val(),10)   || 20,
+      multi:  parseInt($('#ltPctMulti').val(),10)  || 20,
+      single: parseInt($('#ltPctSingle').val(),10) || 20
+    });
+  }
+  $('#ltNote').html('<i class="fa fa-spinner fa-spin"></i> 計算中…');
+  $.post(SI_API, req, function(r){
+    if(!r||!r.ok){ $('#ltNote').html('<span style="color:var(--coral);">'+esc((r&&r.error)||'載入失敗')+'</span>'); return; }
+    LT_DATA = r;
+    if(!LT_PCT_INIT){
+      var d = r.settings_default.percentile;
+      $('#ltPctFull').val(d.full); $('#ltPctMulti').val(d.multi); $('#ltPctSingle').val(d.single);
+      LT_PCT_INIT = true;
+    }
+    renderLtNote(); renderLtKpi(); renderLtInsights(); renderLtDist(); renderLtBand(); renderLtClient(); renderLtList();
+  }, 'json').fail(function(x){
+    $('#ltNote').html('<span style="color:var(--coral);">載入失敗（HTTP '+x.status+'）</span>');
+  });
+}
+$('#btnLtApplyPct').on('click', loadLeadtime);
+$('#btnLtResetPct').on('click', function(){
+  var d = (LT_DATA && LT_DATA.settings_default && LT_DATA.settings_default.percentile) || {full:20,multi:20,single:20};
+  $('#ltPctFull').val(d.full); $('#ltPctMulti').val(d.multi); $('#ltPctSingle').val(d.single);
+  loadLeadtime();
+});
+function renderLtNote(){
+  var m = LT_DATA.period, c = LT_DATA.cmp_period;
+  var used = LT_DATA.settings.percentile, def = LT_DATA.settings_default.percentile;
+  var pctLine = '<b>本次使用的急件判定</b>：全製 '+used.full+'%／多製程 '+used.multi+'%／單製 '+used.single+'%'
+    + '　<span style="color:var(--muted);">（管理員預設值：全製 '+def.full+'%／多製程 '+def.multi+'%／單製 '+def.single+'%）</span>';
+  if(LT_DATA.is_override) pctLine += ' <span class="badge-warn">已修改，僅本次計算，不影響管理員預設值</span>';
+  $('#ltNote').html(pctLine + '<br>'
+    + '<b>本期</b>：'+esc(m.label)+'（'+dispDate(m.start)+'～'+dispDate(m.end)+'）　'
+    + '<b>基期</b>：'+esc(c.label)+'（'+dispDate(c.start)+'～'+dispDate(c.end)+'）<br>'
+    + '交期工作天數＝下單日到交期之間扣掉假日的工作天數（不含下單當天，同一天交貨＝0 個工作天）；'
+    + '急件門檻依「全製／多製程／單製」各自的分布百分位計算，<b>門檻用全部客戶資料算，不受上方客戶篩選影響</b>。');
+}
+function ltCard(lab, val, sub){
+  return '<div class="kpi-card"><div class="k-lab">'+lab+'</div><div class="k-val">'+val+'</div><div class="k-sub">'+(sub||'')+'</div></div>';
+}
+function renderLtKpi(){
+  var c = LT_DATA.cur, p = LT_DATA.cmp, h = '';
+  h += ltCard('急件筆數', nf(c.urgent_orders), '佔本期 '+c.urgent_order_ratio+'%（基期 '+p.urgent_order_ratio+'%）');
+  h += ltCard('急件金額佔比', c.urgent_amount_ratio+'%', money(c.urgent_amount)+' 元');
+  h += ltCard('急件客戶數', nf(c.urgent_clients), '家');
+  h += ltCard('本期訂單總數', nf(c.orders), money(c.amount)+' 元');
+  h += ltCard('出貨綁定覆蓋率', c.ship_coverage+'%', nf(c.ship_bound_n)+' / '+nf(c.orders)+' 張（多數尚未綁定）');
+  h += ltCard('平均實際出貨工作天', c.avg_ship_leadtime==null?'—':c.avg_ship_leadtime, '僅計已綁定出貨單的訂單');
+  h += ltCard('逾交期比例', c.late_ratio+'%', nf(c.late_n)+' 張逾交期'+(c.avg_delay_days==null?'':('，平均延誤 '+c.avg_delay_days+' 天')));
+  $('#ltKpiRow').html(h);
+}
+function renderLtInsights(){
+  var list = LT_DATA.insights || [];
+  var icon = {bad:'fa-exclamation-circle', warn:'fa-exclamation-triangle', good:'fa-check-circle', info:'fa-info-circle'};
+  var h = list.map(function(x){
+    var hasList = x.clients && x.clients.length;
+    var listId = hasList ? ('ltInsCli'+(_insSeq++)) : '';
+    return '<div class="ins ins-'+x.level+'"><div class="ic"><i class="fa '+(icon[x.level]||'fa-info-circle')+'"></i></div>'
+      + '<div class="bd"><div class="tt">'+esc(x.title)
+      + (hasList ? ' <span class="ins-toggle" onclick="siToggleInsList(\''+listId+'\',this)">展開名單 <i class="fa fa-caret-down"></i></span>' : '')
+      + '</div><div class="dt">'+esc(x.detail)+'</div>'
+      + (hasList ? ('<div class="ins-cli-wrap" id="'+listId+'" style="display:none;">'+ltRenderUrgentClientGrid(x.clients)+'</div>') : '')
+      + '</div>'
+      + (x.metric?('<div class="mt">'+esc(x.metric)+'</div>'):'')+'</div>';
+  }).join('');
+  $('#ltInsightList').html(h || '<div style="color:var(--muted);font-size:12px;">（沒有分析結果）</div>');
+}
+function renderLtDist(){
+  var rows = (LT_DATA.cur.by_cls||[]).slice();
+  rows.sort(function(a,b){ return b.n-a.n; });
+  chart('chLtBox', opt({
+    chart:{ type:'column' },
+    xAxis:{ categories: rows.map(function(r){ return r.label; }) },
+    yAxis:{ min:0, title:{text:'工作天數',style:{fontSize:'11px',color:'#a08a6f'}}, gridLineColor:'#F0E8DC',
+            labels:{style:{fontSize:'10px',color:'#a08a6f'}} },
+    tooltip:{ shared:true, style:{fontSize:'11px'} },
+    series:[
+      { name:'平均工作天', type:'column', data: rows.map(function(r){ return r.avg; }), color:C_BLUE, borderRadius:2 },
+      { name:'急件門檻',   type:'line',   data: rows.map(function(r){ return r.threshold; }), color:C_CORAL, marker:{enabled:true} }
+    ]
+  }));
+  var h = rows.map(function(r){
+    return '<tr><td>'+esc(r.label)+(r.is_urgent_class?'':' <span style="color:var(--muted);font-size:10px;">（不列入判定）</span>')+'</td>'
+      + '<td class="n">'+nf(r.n)+'</td><td class="n">'+(r.avg==null?'—':r.avg)+'</td>'
+      + '<td class="n">'+(r.median==null?'—':r.median)+'</td>'
+      + '<td class="n">'+(r.threshold==null?'—':nf1(r.threshold))+'</td>'
+      + '<td class="n">'+nf(r.urgent_n)+'</td><td class="n">'+r.urgent_ratio+'%</td></tr>';
+  }).join('');
+  $('#tblLtCls tbody').html(h || '<tr><td colspan="7" style="text-align:center;color:var(--muted);">（無資料）</td></tr>');
+}
+function renderLtBand(){
+  var rows = (LT_DATA.cur.by_band||[]).slice();
+  chart('chLtBand', opt({
+    chart:{ type:'column' },
+    xAxis:{ categories: rows.map(function(r){ return r.label; }) },
+    yAxis:{ min:0, title:{text:'筆數',style:{fontSize:'11px',color:'#a08a6f'}}, gridLineColor:'#F0E8DC',
+            labels:{style:{fontSize:'10px',color:'#a08a6f'}} },
+    tooltip:{ shared:true, style:{fontSize:'11px'} },
+    plotOptions:{ column:{ borderRadius:2, pointPadding:0.08, groupPadding:0.14 } },
+    series:[
+      { name:'總筆數',   data: rows.map(function(r){ return r.n; }),         color:C_LIGHT },
+      { name:'急件筆數', data: rows.map(function(r){ return r.urgent_n; }), color:C_CORAL }
+    ]
+  }));
+}
+function ltDeltaText(c){
+  if(c.delta_pct===null || c.delta_pct===undefined) return '<span style="color:var(--muted);">基期無急件</span>';
+  var v = c.delta_pct;
+  return '<span class="'+(v>=0?'up':'down')+'">'+(v>=0?'+':'')+v+'%</span>';
+}
+function renderLtClient(){
+  var rows = LT_DATA.cur.client_list || [];
+  $('#ltClientCount').text(nf(LT_DATA.cur.urgent_clients));
+  var h = rows.map(function(r,i){
+    return '<tr><td class="n">'+(i+1)+'</td><td>'+esc(r.name)+(r.bad?' <span class="badge-warn">未建主檔</span>':'')+'</td>'
+      + '<td class="n">'+nf(r.n)+'</td><td class="n">'+money(r.amount)+'</td>'
+      + '<td class="n">'+(r.pct_of_total!=null?r.pct_of_total+'%':'—')+'</td>'
+      + '<td class="n">'+ltDeltaText(r)+'</td></tr>';
+  }).join('');
+  $('#tblLtClient tbody').html(h || '<tr><td colspan="6" style="text-align:center;color:var(--muted);">（本期沒有急件）</td></tr>');
+}
+function ltRenderUrgentClientGrid(clients){
+  var cols = (clients.length > 15) ? 3 : 2;
+  var colStyle = 'grid-template-columns:repeat('+cols+',1fr);';
+  var cells = clients.map(function(c){
+    return '<div class="ltu-cell">'
+      + '<div class="l1"><span class="ins-cli-name">'+esc(c.name)+(c.bad?' <span class="badge-warn">未建主檔</span>':'')+'</span>'
+      + '<span class="amt">'+money(c.amount)+' 元</span></div>'
+      + '<div class="l2"><span>'+nf(c.n)+' 筆／佔急件總額 '+(c.pct_of_total!=null?c.pct_of_total+'%':'—')+'</span>'
+      + '<span>較基期'+ltDeltaText(c)+'</span></div>'
+      + '</div>';
+  }).join('');
+  return '<div class="ins-cli-grid" style="'+colStyle+'margin-top:6px;">'+cells+'</div>';
+}
+function ltCatCell(r){
+  var tag = r.as_label || r.label;
+  var h = '<div style="font-size:11px;font-weight:600;color:#1B4F78;">'+esc(tag)+'</div>';
+  if (r.proc) h += '<div style="font-size:10px;color:var(--muted);margin-top:1px;">'+esc(r.proc)+'</div>';
+  return h;
+}
+function ltShipCell(r){
+  if (!r.ship_date) return '<span style="color:var(--muted);">未綁定</span>';
+  var d = r.delay_days;
+  var dTxt = (d==null) ? '' : (d>0 ? ('延誤 '+d+' 天') : (d<0 ? ('提前 '+(-d)+' 天') : '準時'));
+  var dCol = (d==null) ? 'var(--muted)' : (d>0 ? 'var(--coral)' : (d<0 ? '#2E7D32' : 'var(--muted)'));
+  return '<div style="font-size:11px;">'+dispDate(r.ship_date)+'</div>'
+    + '<div style="font-size:10px;color:var(--muted);">工作天 '+(r.ship_lt==null?'—':r.ship_lt)+'</div>'
+    + (dTxt ? '<div style="font-size:10px;color:'+dCol+';">'+dTxt+'</div>' : '');
+}
+function renderLtList(){
+  var rows = LT_DATA.cur.urgent_list || [];
+  var h = rows.map(function(r){
+    return '<tr><td>'+esc(r.no)+(r.c_order?('<br><span style="font-size:10px;color:var(--muted);">'+esc(r.c_order)+'</span>'):'')+'</td>'
+      + '<td>'+esc(r.created_by_name||'—')+'</td>'
+      + '<td>'+esc(r.cname)+'</td><td>'+pnoCell(r)+'</td>'
+      + '<td>'+dispDate(r.odate)+'</td><td>'+dispDate(r.ddate)+'</td>'
+      + '<td class="n">'+r.lt+'</td>'
+      + '<td>'+ltCatCell(r)+'</td>'
+      + '<td class="n">'+nf(r.qty)+'</td><td class="n">'+money(r.amount)+'</td>'
+      + '<td>'+ltShipCell(r)+'</td>'
+      + '<td style="font-size:11px;">'+(r.order_ps?esc(r.order_ps):'<span style="color:var(--muted);">—</span>')+'</td>'
+      + '<td>'+(r.created_at?dispDate(r.created_at):'—')+'</td></tr>';
+  }).join('');
+  $('#tblLtList tbody').html(h || '<tr><td colspan="13" style="text-align:center;color:var(--muted);">（本期沒有急件）</td></tr>');
+}
+<?php if ($canAdmin): ?>
+function openUrgSetMask(){
+  $.get(SI_API, {action:'urgent_settings_get'}, function(r){
+    if(!r||!r.ok){ alert((r&&r.error)||'設定載入失敗'); return; }
+    SI_CSRF = r.csrf || SI_CSRF;
+    var u = r.settings || {percentile:{full:20,multi:20,single:20}, min_workdays_floor:null};
+    $('#urgPctFull').val(u.percentile.full); $('#urgPctMulti').val(u.percentile.multi); $('#urgPctSingle').val(u.percentile.single);
+    $('#urgPctFloor').val(u.min_workdays_floor==null?'':u.min_workdays_floor);
+    $('#urgSetErr').text('');
+    openMask('urgSetMask');
+  }, 'json');
+}
+$('#btnUrgentSetting').on('click', openUrgSetMask);
+$('#btnUrgSetSave').on('click', function(){
+  var full = parseInt($('#urgPctFull').val(),10), multi = parseInt($('#urgPctMulti').val(),10), single = parseInt($('#urgPctSingle').val(),10);
+  var errs = [];
+  [['全製',full],['多製程',multi],['單製',single]].forEach(function(p){ if(!(p[1]>=1 && p[1]<=100)) errs.push(p[0]+'的百分比必須介於 1~100'); });
+  var floorRaw = $('#urgPctFloor').val();
+  var floor = (floorRaw==='') ? null : parseInt(floorRaw,10);
+  if(floor!=null && !(floor>=0 && floor<=60)) errs.push('排除工作天數下限必須介於 0~60，或留空不排除');
+  if(errs.length){ $('#urgSetErr').text(errs.join('\n')); return; }
+  var payload = JSON.stringify({ percentile:{full:full,multi:multi,single:single}, min_workdays_floor:floor });
+  $.post(SI_API, {action:'urgent_settings_save', urgent:payload, csrf:SI_CSRF}, function(r){
+    if(!r||!r.ok){ $('#urgSetErr').text((r&&r.error)||'儲存失敗'); return; }
+    closeMask('urgSetMask'); showToast('已儲存'); if(LT_DATA) loadLeadtime();
+  }, 'json').fail(function(x){
+    var msg = '儲存失敗（HTTP '+x.status+'）';
+    try { var j = JSON.parse(x.responseText); if(j && j.error) msg = j.error; } catch(e){}
+    $('#urgSetErr').text(msg);
+  });
+});
+<?php endif; ?>
 
 function renderNote(){
   var m = DATA.meta, h = [];
