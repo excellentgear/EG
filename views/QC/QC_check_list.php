@@ -4753,6 +4753,23 @@ if ($reply_id != "") {
                 fetchAndUpdateData(qcPagination.page);
             }
         }, 30000);
+
+        // 2026-10-07 使用者回報：在線上檢驗頁驗完切回這頁時，畫面還停在舊資料要等最長30秒
+        // 才會自動更新，容易誤以為沒生效。改成「分頁重新變成可見/取得焦點」當下立即補抓一次，
+        // 不改動既有30秒輪詢、也不改「按完成才真的離開清單」的既有規則（fetchAndUpdateData
+        // 本身已有 loading/paused/modal 三道防呆，這裡不必重複判斷）；1.2 秒節流避免
+        // visibilitychange 與 focus 兩個事件在同一次切換裡重複觸發兩次請求。
+        var lastVisRefetchAt = 0;
+        function refetchOnVisible() {
+            var now = Date.now();
+            if (now - lastVisRefetchAt < 1200) return;
+            lastVisRefetchAt = now;
+            fetchAndUpdateData(qcPagination.page);
+        }
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState === 'visible') refetchOnVisible();
+        });
+        window.addEventListener('focus', refetchOnVisible);
     </script>
     <!-- === 請貼入 QC_check_list copy(自動更新改一半).php 頁面底部 (放於 </body> 前) === -->
 
