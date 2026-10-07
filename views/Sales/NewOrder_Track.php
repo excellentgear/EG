@@ -8740,7 +8740,7 @@ foreach($dCounts as $c) {
         // 廠商/客戶＝打字模糊搜尋選定後可再選/填聯絡人、其他＝手動輸入說明文字。
         var ATE_Q = { orderId: 0, logId: 0, kind: 'note', frozen: false, curUser: null, canResolve: false,
                       bizDefault: null, items: [], rows: [],
-                      cands: { user: null }, replyState: {}, contactCache: {}, tpState: {}, tpOnChange: {},
+                      cands: { user: null }, replyState: {}, contactCache: {}, tpState: {}, tpOnChange: {}, tpAllowSelf: {},
                       channels: {}, replyChannel: {} };
 
         // 製程中紀錄（2026-10-06 新增，原稱「製程中問題」後改名）與設計備註問答是兩個分開的
@@ -8764,7 +8764,7 @@ foreach($dCounts as $c) {
                          target_id: '', target_label: '', target_post: '', target_contact: '',
                          channel: '', reply_date: ATE_Q.today || '', reply_content: '',
                          replyTarget: cu
-                             ? { target_type: 'user', target_id: String(cu.id), target_label: cu.name, target_post: cu.post, target_contact: '' }
+                             ? { target_type: 'self', target_id: String(cu.id), target_label: cu.name, target_post: cu.post, target_contact: '' }
                              : { target_type: '', target_id: '', target_label: '', target_post: '', target_contact: '' } };
             }
             var d = ATE_Q.bizDefault;
@@ -8841,10 +8841,18 @@ foreach($dCounts as $c) {
             $('#ate-q-items-wrap').html(html);
         }
 
-        // 回覆對象預設值：這題本來就有指定對象就沿用（通常回覆的人跟被問的人是同一個）；
-        // 沒指定對象（純備註）才退回這張訂單的打單人員（使用者回報「沒有自動預設」，
-        // 問題本身若已有對象，優先權在那個對象，不是不分青紅皂白一律套打單人員）。
+        // 回覆對象預設值：
+        // ・設計備註問答(note)：這題本來就有指定對象就沿用（通常回覆的人跟被問的人是同一個）；
+        //   沒指定對象（純備註）才退回這張訂單的打單人員——完全沿用改動前的邏輯，不受影響。
+        // ・製程中紀錄(process)：2026-10-07 使用者回報「回覆者預設跟上面的回報來源一樣，看不出來
+        //   是已經選定還是沿用」——回報來源(誰提出這件事)跟回覆者(誰處理/回覆)是兩個不同的人，
+        //   直接沿用item自己的target_type會把回報廠商誤當成回覆者。改成一律預設「本人」
+        //   （目前登入者），要跟回報來源一樣時使用者自己手動選。
         function ateQReplyDefaultState(it) {
+            if (ATE_Q.kind === 'process' && ATE_Q.curUser) {
+                var cu = ATE_Q.curUser;
+                return { target_type: 'self', target_id: String(cu.id), target_label: cu.name, target_post: cu.post, target_contact: '' };
+            }
             if (it.target_type) {
                 return { target_type: it.target_type, target_id: it.target_id || '', target_label: it.target_label || '',
                          target_post: it.target_post || '', target_contact: it.target_contact || '' };
@@ -8877,7 +8885,9 @@ foreach($dCounts as $c) {
             var replyBoxHtml = '';
             if (!frozenView) {
                 if (!ATE_Q.replyState[it.id]) ATE_Q.replyState[it.id] = ateQReplyDefaultState(it);
-                ateQTpRegister(rns, ATE_Q.replyState[it.id], function() { ateQTpRedraw(rns); });
+                // allowSelf=true：note 的 ATE_Q.curUser 是 null，按鈕自然不會出現（鐵律：
+                // 嚴禁影響現有使用者），process 才會真的多出「本人」快選鈕。
+                ateQTpRegister(rns, ATE_Q.replyState[it.id], function() { ateQTpRedraw(rns); }, true);
                 // 回覆對象／回覆者：設計備註問答維持「回覆對象」（既有行為不變），製程中紀錄
                 // 改稱「回覆者」（2026-10-06 使用者要求，與新增紀錄 composer 的欄位名一致）。
                 var replyByLabel = (ATE_Q.kind === 'process') ? '回覆者' : '回覆對象';
@@ -8946,6 +8956,9 @@ foreach($dCounts as $c) {
         // 欄位──是誰回的只是給人看的說明，不需要像問題項那樣可被反查追蹤）
         function ateQTpComposeReplyBy(st) {
             if (!st || !st.target_type) return '';
+            // 「本人」直接用姓名，不加「本人：」前綴──事後回頭看紀錄時，這段文字只是給人看
+            // 是誰回覆的，直接印姓名最清楚，「本人」兩個字脫離當下情境後反而看不懂是誰。
+            if (st.target_type === 'self') return st.target_label || '';
             var map = { user: '業務', maker: '廠商', customer: '客戶', other: '其他' };
             var extra = '';
             if (st.target_type === 'user' && st.target_post) extra = st.target_post;
@@ -9014,10 +9027,17 @@ foreach($dCounts as $c) {
         // 按鈕/選定變動後呼叫 ATE_Q.tpOnChange[ns]()──composer 整個 composer 重繪（本來就是
         // 既有行為，不會遺失已填的問題文字），回覆則只重繪該選擇器自己這一小塊，不動旁邊
         // 正在打的回覆內容。
-        function ateQTpRegister(ns, state, onChange) { ATE_Q.tpState[ns] = state; ATE_Q.tpOnChange[ns] = onChange; }
+        // allowSelf＝這個選擇器要不要多一顆「本人」快選鈕（2026-10-07 使用者要求，只用在
+        // 製程中紀錄的「回覆者」——點一下直接帶入目前登入者的中文名稱，不必從業務課清單
+        // 裡找自己；設計備註問答與「回報來源」不開放，維持改動前的四個按鈕）。存進
+        // ATE_Q.tpAllowSelf[ns] 讓 ateQTpRedraw() 局部重繪時不必重新傳一次。
+        function ateQTpRegister(ns, state, onChange, allowSelf) {
+            ATE_Q.tpState[ns] = state; ATE_Q.tpOnChange[ns] = onChange; ATE_Q.tpAllowSelf[ns] = !!allowSelf;
+        }
 
-        function ateQTpButtonsHtml(ns, st) {
+        function ateQTpButtonsHtml(ns, st, allowSelf) {
             var opts = [['user', '業務'], ['maker', '廠商'], ['customer', '客戶'], ['other', '其他']];
+            if (allowSelf && ATE_Q.curUser) opts = [['self', '本人']].concat(opts);
             var html = '<div class="ate-tp-btns">';
             opts.forEach(function(o) {
                 html += '<button type="button" class="ate-tp-btn' + (st.target_type === o[0] ? ' active' : '') + '" '
@@ -9048,6 +9068,15 @@ foreach($dCounts as $c) {
 
         function ateQTpBodyHtml(ns, st) {
             var t = st.target_type;
+            if (t === 'self') {
+                // 「本人」是直接帶入目前登入者，不必再挑一次——既不是下拉也不是打字搜尋，
+                // 用獨立的視覺樣式（人形圖示＋「（本人）」字樣）跟廠商/客戶挑選結果明確區分
+                // 開來，避免使用者分不清這格是「廠商：原一」還是「本人：鍾惠如」
+                // （2026-10-07 使用者回報的原因：之前沒有本人選項，回覆者會被誤當成跟
+                // 回報來源一樣是廠商）。
+                return '<div class="ate-tp-picked"><span class="ate-tp-picked-chip ate-tp-self-chip">'
+                     + '<i class="fa fa-user-circle"></i> ' + escapeHtml(st.target_label || '') + '（本人）</span></div>';
+            }
             if (t === 'user') {
                 return '<select class="form-control ate-tp-sel" data-eg-filter="輸入姓名篩選…" onchange="ateQTpUserPick(\'' + ns + '\',this)">'
                      + ateQCandOptions('user', st.target_id, st.target_label, st.target_post) + '</select>';
@@ -9079,7 +9108,8 @@ foreach($dCounts as $c) {
         }
 
         function ateQTpHtml(ns, st) {
-            return '<div class="ate-tp" id="ate-tp-' + ns + '">' + ateQTpButtonsHtml(ns, st) + '<div class="ate-tp-body" id="ate-tp-body-' + ns + '">' + ateQTpBodyHtml(ns, st) + '</div></div>';
+            var allowSelf = !!ATE_Q.tpAllowSelf[ns];
+            return '<div class="ate-tp" id="ate-tp-' + ns + '">' + ateQTpButtonsHtml(ns, st, allowSelf) + '<div class="ate-tp-body" id="ate-tp-body-' + ns + '">' + ateQTpBodyHtml(ns, st) + '</div></div>';
         }
 
         function ateQTpRedraw(ns) {
@@ -9094,6 +9124,8 @@ foreach($dCounts as $c) {
             st.target_type = type; st.target_id = ''; st.target_label = ''; st.target_post = ''; st.target_contact = '';
             if (type === 'user' && ATE_Q.bizDefault) {
                 st.target_id = String(ATE_Q.bizDefault.id); st.target_label = ATE_Q.bizDefault.name; st.target_post = ATE_Q.bizDefault.post;
+            } else if (type === 'self' && ATE_Q.curUser) {
+                st.target_id = String(ATE_Q.curUser.id); st.target_label = ATE_Q.curUser.name; st.target_post = ATE_Q.curUser.post;
             }
             var fn = ATE_Q.tpOnChange[ns]; if (fn) fn();
         }
@@ -9237,8 +9269,8 @@ foreach($dCounts as $c) {
         // 兩步驟都要能用：回覆內容留白就只建立這筆紀錄，填了就連同第一筆回覆一起建立。
         function ateQRecRowHtml(r, idx) {
             var ns = 'new' + idx, rns = 'newReply' + idx;
-            ateQTpRegister(ns, r, ateQRedrawComposer);
-            ateQTpRegister(rns, r.replyTarget, ateQRedrawComposer);
+            ateQTpRegister(ns, r, ateQRedrawComposer);          // 回報來源：不開放「本人」快選（誰提出不一定是自己）
+            ateQTpRegister(rns, r.replyTarget, ateQRedrawComposer, true);  // 回覆者：開放「本人」快選
             var delBtn = ATE_Q.rows.length > 1
                 ? '<button type="button" class="btn btn-xs btn-link" onclick="ateQRowDelAt(' + idx + ')" title="移除這一條"><i class="fa fa-times"></i></button>' : '';
             var html = '<tr><td class="ate-rec-cell">';
