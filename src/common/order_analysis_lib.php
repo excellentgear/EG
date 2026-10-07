@@ -1843,13 +1843,17 @@ function oa_order_process_steps(PDO $db, array $orderIds): array
 }
 
 /**
- * 批次查「這些訂單如果被合併開在同一張製令裡，同一張製令底下其他訂單的標籤與製程」。
- * 2026-10-07 使用者明確要求：急件明細只顯示這張訂單自己的標籤/製程，看不出它其實是跟哪些
- * （甚至製程不同的）訂單一起合併開立的——生管常把好幾張訂單（不同製程也會）合併開在同一張
- * 製令裡（`OreadyReply_ForPm_BaseOfTime.php`），這張訂單自己的「交期工作天數」雖然還是只算
- * 自己的，但畫面要讓人看得出「這批其實跟哪些訂單一起做」。
+ * 批次查「這些訂單如果被合併開在同一張製令裡，同一張製令底下其他訂單的標籤/製程/交期區間」。
+ * 2026-10-07 使用者明確要求兩件事：
+ * ①急件明細只顯示這張訂單自己的標籤/製程，看不出它其實是跟哪些（甚至製程不同的）訂單一起
+ *   合併開立的——生管常把好幾張訂單合併開在同一張製令裡（`OreadyReply_ForPm_BaseOfTime.php`），
+ *   畫面要讓人看得出「這批其實跟哪些訂單一起做」。
+ * ②合併開立的訂單，「工作天數」也要合併計算（使用者拍板＝整組共用「最早下單日→最晚交期」
+ *   一個數字）——同一張製令底下的訂單是同一批生產排程，不該讓其中交期排得比較早的那幾張
+ *   各自顯示很短的工作天數而被誤判成特別急，真正的生產期限是整批最早下單到最晚交期。
  * 只對「製令底下真的綁了一張以上訂單」的才回傳（單純自己一張訂單、沒有合併的不必特別標出來，
- * 否則每一列都印一樣的東西反而是雜訊）。
+ * 否則每一列都印一樣的東西反而是雜訊；回傳的 order_n<=1 情形一律不收進陣列，呼叫端判斷
+ * isset() 就知道這張訂單是不是合併開立的）。
  */
 function oa_order_bom_group_tags(PDO $db, array $orderIds): array
 {
@@ -1891,17 +1895,22 @@ function oa_order_bom_group_tags(PDO $db, array $orderIds): array
     if (!$allOrderIds) return [];
     $oph = implode(',', array_fill(0, count($allOrderIds), '?'));
 
-    // 3) 這些訂單（含合併進來的那幾張）各自的製程原文與 AS 認定標籤
-    $st5 = $db->prepare("SELECT Order_id oid, Order_oo no, Processing_items proc FROM order_track WHERE Order_id IN ($oph)");
+    // 3) 這些訂單（含合併進來的那幾張）各自的製程原文、AS 認定標籤、下單日／交期
+    $st5 = $db->prepare("SELECT Order_id oid, Order_oo no, Processing_items proc, Order_date odate, Delivery_date ddate
+                            FROM order_track WHERE Order_id IN ($oph)");
     $st5->execute($allOrderIds);
-    $procOf = []; $noOf = [];
+    $procOf = []; $noOf = []; $odateOf = []; $ddateOf = [];
     foreach ($st5->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        $procOf[(int)$r['oid']] = trim((string)$r['proc']);
-        $noOf[(int)$r['oid']] = (string)$r['no'];
+        $oid2 = (int)$r['oid'];
+        $procOf[$oid2] = trim((string)$r['proc']);
+        $noOf[$oid2] = (string)$r['no'];
+        $odateOf[$oid2] = substr((string)$r['odate'], 0, 10);
+        $ddateOf[$oid2] = substr((string)$r['ddate'], 0, 10);
     }
     $astagOf = ot_astag_for_orders($db, $allOrderIds);
 
-    // 4) 組回「每張訂單 → 同一張製令（含自己）合計幾張訂單、有哪些相異標籤/製程/訂單號」
+    // 4) 組回「每張訂單 → 同一張製令（含自己）合計幾張訂單、有哪些相異標籤/製程/訂單號、
+    //    整批最早下單日到最晚交期的合併工作天數」
     $out = [];
     foreach ($ids as $oid) {
         $boms = array_keys($bomOfOrder[$oid] ?? []);
@@ -1911,7 +1920,7 @@ function oa_order_bom_group_tags(PDO $db, array $orderIds): array
         $siblingIds = array_keys($siblingIds);
         if (count($siblingIds) <= 1) continue;   // 製令底下只有自己，不是合併開立，不必特別標出來
 
-        $tags = []; $procs = []; $nos = [];
+        $tags = []; $procs = []; $nos = []; $minOdate = null; $maxDdate = null;
         foreach ($siblingIds as $sid) {
             $t = isset($astagOf[$sid]) ? (string)($astagOf[$sid]['label'] ?? '') : '';
             if ($t !== '') $tags[$t] = 1;
@@ -1919,9 +1928,15 @@ function oa_order_bom_group_tags(PDO $db, array $orderIds): array
             if ($p !== '') $procs[$p] = 1;
             $n = $noOf[$sid] ?? '';
             if ($n !== '') $nos[$n] = 1;
+            $od = $odateOf[$sid] ?? '';
+            $dd = $ddateOf[$sid] ?? '';
+            if ($od !== '' && ($minOdate === null || $od < $minOdate)) $minOdate = $od;
+            if ($dd !== '' && ($maxDdate === null || $dd > $maxDdate)) $maxDdate = $dd;
         }
+        $spanLt = ($minOdate !== null && $maxDdate !== null) ? oa_leadtime_workdays($db, $minOdate, $maxDdate) : null;
         $out[$oid] = ['bom' => implode('、', $boms), 'order_n' => count($siblingIds),
-                      'tags' => array_keys($tags), 'procs' => array_keys($procs), 'order_nos' => array_keys($nos)];
+                      'tags' => array_keys($tags), 'procs' => array_keys($procs), 'order_nos' => array_keys($nos),
+                      'min_odate' => $minOdate, 'max_ddate' => $maxDdate, 'span_lt' => $spanLt];
     }
     return $out;
 }
@@ -2055,18 +2070,24 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
     $floor = $usDefault['min_workdays_floor'];
     $urgentClasses = array_flip(oa_urgent_classes());
 
-    $astagMap = ot_astag_for_orders($db, array_column($rows, 'id'));
-    $bands    = oa_qty_bands($db);
-    $shipMap  = oa_actual_ship_dates($db, array_column($rows, 'id'));
-    $stepMap  = oa_order_process_steps($db, array_column($rows, 'id'));
+    $astagMap  = ot_astag_for_orders($db, array_column($rows, 'id'));
+    $bands     = oa_qty_bands($db);
+    $shipMap   = oa_actual_ship_dates($db, array_column($rows, 'id'));
+    $stepMap   = oa_order_process_steps($db, array_column($rows, 'id'));
+    $bomGroupMap = oa_order_bom_group_tags($db, array_column($rows, 'id'));
     foreach ($rows as &$r) {
         $info = $astagMap[$r['id']] ?? null;
         $r['cls']      = oa_scope_to_cls($info);
         $r['as_label'] = $info ? (string)$info['label'] : '';
         $r['band']     = oa_band_index((int)$r['qty'], $bands);
         $r['proc_steps'] = $stepMap[$r['id']] ?? null;
+        $r['bom_group']  = $bomGroupMap[$r['id']] ?? null;
 
-        $ltRaw = oa_leadtime_workdays($db, $r['odate'], $r['ddate']);
+        // 合併開立製令的訂單（同一張製令底下綁了一張以上訂單）工作天數改用整組「最早下單日→
+        // 最晚交期」合併計算（使用者明確拍板）：同一張製令是同一批生產排程，不該讓其中交期排得
+        // 比較早的那幾張各自顯示很短的工作天數而被誤判成特別急，真正的生產期限是整批的區間。
+        $g = $r['bom_group'];
+        $ltRaw = ($g && $g['span_lt'] !== null) ? $g['span_lt'] : oa_leadtime_workdays($db, $r['odate'], $r['ddate']);
         $r['lt_raw'] = $ltRaw;
         // 排除下限：交期工作天數 ≤ 設定值視為疑似誤植交期，整段分析當作沒有交期資料
         $r['lt'] = ($ltRaw !== null && $floor !== null && $ltRaw <= $floor) ? null : $ltRaw;
@@ -2153,7 +2174,7 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
                                  'amount' => $r['amount'], 'qty' => $r['qty'],
                                  'created_by_name' => $r['created_by_name'], 'created_at' => $r['created_at'],
                                  'ship_date' => $r['ship_date'], 'ship_lt' => $r['ship_lt'], 'delay_days' => $r['delay_days'],
-                                 'proc_steps' => $r['proc_steps']];
+                                 'proc_steps' => $r['proc_steps'], 'bom_group' => $r['bom_group']];
             }
             $bk = (int)$r['band'];
             if (!isset($bandAgg[$bk])) $bandAgg[$bk] = ['band' => $bk, 'label' => $bk >= 0 ? ($bands[$bk]['label'] ?? '') : '未涵蓋', 'n' => 0, 'urgent_n' => 0];
@@ -2199,12 +2220,6 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
 
     $curRes = $build($cur);
     $cmpRes = $build($cmpE);
-
-    // 急件明細只顯示自己這張訂單的標籤/製程，看不出它其實是跟哪些（甚至製程不同的）訂單
-    // 合併開在同一張製令裡——補上同一張製令底下其他訂單的標籤/製程/訂單號（使用者明確要求）。
-    $bomGroup = oa_order_bom_group_tags($db, array_column($curRes['urgent_list'], 'id'));
-    foreach ($curRes['urgent_list'] as &$ur) { $ur['bom_group'] = $bomGroup[$ur['id']] ?? null; }
-    unset($ur);
 
     // 急件客戶排行每一列再補兩個數字：①佔本期急件總額的比例（區間內總體佔比）
     // ②跟基期同一家客戶的急件金額比較之增減比例——兩者都是「使用者看了名單會立刻想問」的問題，

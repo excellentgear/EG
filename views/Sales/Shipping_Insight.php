@@ -688,18 +688,7 @@ table.oa-t th.grp-div, table.oa-t td.grp-div { border-right:3px solid var(--blue
           onclick="window.scrollTo({top:0,behavior:'smooth'});"><i class="fa fa-arrow-up"></i>頂端</button>
   <div class="qnav">
     <button type="button" class="qnav-fab" title="快速導覽（各區塊）"><i class="fa fa-compass"></i></button>
-    <div class="qnav-panel">
-      <a href="#secInsight">自動分析</a>
-      <a href="#secRecommend">建議採取</a>
-      <a href="#secTrend">相關金額趨勢</a>
-      <a href="#secSaleType">出貨性質分布</a>
-      <a href="#secAstag">AS 稽核分類</a>
-      <a href="#secClient">客戶比較</a>
-      <a href="#secRank">客戶增減排名</a>
-      <a href="#secMa">出貨淨額監控</a>
-      <a href="#secCq">客戶季度分析</a>
-      <a href="#secList">明細資料</a>
-    </div>
+    <div class="qnav-panel" id="qnavPanel"></div>
   </div>
 </div>
 
@@ -1186,6 +1175,26 @@ function stSelectedArr(){ return Object.keys(ST_SEL); }
 /* ── 主流程 ─────────────────────────────────────────── */
 /* ── 頂層分頁切換（總覽分析／交期與急件分析）─────── */
 var CUR_MAIN_TAB = 'overview';
+/* 右下角懸浮「快速導覽」原本永遠列總覽分頁的區塊連結，切到交期與急件分析時連結還是連回
+   總覽的錨點、點了沒反應（使用者回報，與訂單分析同一個問題）——改成依目前分頁動態換內容。 */
+var QNAV_SECTIONS = {
+  overview: [
+    ['#secInsight','自動分析'], ['#secRecommend','建議採取'], ['#secTrend','相關金額趨勢'],
+    ['#secSaleType','出貨性質分布'], ['#secAstag','AS 稽核分類'], ['#secClient','客戶比較'],
+    ['#secRank','客戶增減排名'], ['#secMa','出貨淨額監控'], ['#secCq','客戶季度分析'],
+    ['#secList','明細資料']
+  ],
+  leadtime: [
+    ['#secLtInsight','急件自動分析'], ['#secLtDist','交期工作天數分布'],
+    ['#secLtShipDist','實際出貨工作天數分析'], ['#secLtBand','數量區間與急件比例'],
+    ['#secLtClient','急件客戶排行'], ['#secLtList','急件明細']
+  ]
+};
+function renderQuickNav(t){
+  var list = QNAV_SECTIONS[t] || [];
+  var h = list.map(function(s){ return '<a href="'+s[0]+'" data-tab="'+t+'">'+s[1]+'</a>'; }).join('');
+  $('#qnavPanel').html(h || '<span style="font-size:11px;color:var(--muted);padding:5px 10px;display:block;">本分頁沒有可跳轉的區塊</span>');
+}
 function oaSwitchMainTab(t){
   CUR_MAIN_TAB = t;
   $('.oa-tabpanel').hide();
@@ -1193,9 +1202,14 @@ function oaSwitchMainTab(t){
   $('.oa-mtab').removeClass('active');
   $('.oa-mtab[data-tab="'+t+'"]').addClass('active');
   if(t==='leadtime' && !LT_DATA) loadLeadtime();
+  renderQuickNav(t);
 }
 $('.oa-mtab').on('click', function(){ oaSwitchMainTab($(this).data('tab')); });
-$(document).on('click', '.nav-jump a', function(){ oaSwitchMainTab('overview'); });
+renderQuickNav('overview');   // 頁面一開始就是總覽分頁，先把快速導覽填好
+$(document).on('click', '.qnav-panel a, .nav-jump a', function(){
+  var t = $(this).data('tab') || 'overview';
+  if (t !== CUR_MAIN_TAB) oaSwitchMainTab(t);
+});
 
 function load(){
   var req = { action:'analyze', year:$('#fYear').val(), gran:$('#fGran').val(), idx:$('#fIdx').val(),
@@ -1398,9 +1412,17 @@ function ltCatCell(r){
        + '<i class="fa fa-link"></i> 合併開立製令（共'+g.order_n+'張）'
        + (tagsTxt?('<br>類別：'+esc(tagsTxt)):'')
        + (procsTxt?('<br>製程：'+esc(procsTxt)):'')
+       + (g.span_lt!=null?('<br>整組工作天數：'+g.span_lt+' 天（'+dispDate(g.min_odate)+'～'+dispDate(g.max_ddate)+'）'):'')
        + '</div>';
   }
   return h;
+}
+/* 工作天數欄：合併開立製令的訂單，左方的「工作天數」是整組（最早下單日→最晚交期）合併算出來的，
+   不是這張訂單自己的（下單日→交期）區間，加個小圖示提醒去看「類別」欄的合併說明 */
+function ltLtCell(r){
+  if (!r.bom_group) return '' + r.lt;
+  return r.lt + ' <i class="fa fa-info-circle" style="color:var(--coral);font-size:9px;" '
+    + 'title="合併開立製令，工作天數＝整組最早下單日到最晚交期合併計算，非本筆訂單自己的交期區間（詳見類別欄）"></i>';
 }
 function ltShipCell(r){
   if (!r.ship_date) return '<span style="color:var(--muted);">未綁定</span>';
@@ -1423,7 +1445,7 @@ function renderLtList(){
       + '<td>'+ltKeyCell(r)+'</td>'
       + '<td>'+esc(r.cname)+'</td><td>'+pnoCell(r)+'</td>'
       + '<td>'+dispDate(r.odate)+'</td><td>'+dispDate(r.ddate)+'</td>'
-      + '<td class="n">'+r.lt+'</td>'
+      + '<td class="n">'+ltLtCell(r)+'</td>'
       + '<td class="n">'+(r.proc_steps==null?'<span style="color:var(--muted);" title="尚未開立製令（BOM），查不到製程資料">—</span>':nf(r.proc_steps))+'</td>'
       + '<td>'+ltCatCell(r)+'</td>'
       + '<td class="n">'+nf(r.qty)+'</td><td class="n">'+money(r.amount)+'</td>'

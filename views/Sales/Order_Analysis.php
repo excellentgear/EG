@@ -700,19 +700,7 @@ table.oa-t th.grp-div, table.oa-t td.grp-div { border-right:3px solid var(--ambe
           onclick="window.scrollTo({top:0,behavior:'smooth'});"><i class="fa fa-arrow-up"></i>頂端</button>
   <div class="qnav">
     <button type="button" class="qnav-fab" title="快速導覽（各區塊）"><i class="fa fa-compass"></i></button>
-    <div class="qnav-panel">
-      <a href="#secInsight">自動分析</a>
-      <a href="#secRecommend">建議採取</a>
-      <a href="#secTrend">訂單趨勢</a>
-      <a href="#secNew">新訂單（新料號）</a>
-      <a href="#secProc">全製／單製</a>
-      <a href="#secAstag">AS 稽核分類</a>
-      <a href="#secBand">數量區間</a>
-      <a href="#secClient">客戶比較</a>
-      <a href="#secRank">客戶增減排名</a>
-      <a href="#secMa">訂單量監控</a>
-      <a href="#secPart">受訂料號排名</a>
-    </div>
+    <div class="qnav-panel" id="qnavPanel"></div>
   </div>
 </div>
 
@@ -1187,6 +1175,29 @@ function opt(o){ return $.extend(true, {}, BASE_CHART, o); }
 
 /* ── 頂層分頁切換（總覽／交期與急件分析／客戶佔比報告）─────── */
 var CUR_MAIN_TAB = 'overview';
+/* 右下角懸浮「快速導覽」原本永遠列總覽分頁的區塊連結，切到交期與急件分析／客戶佔比報告時
+   連結還是連回總覽的錨點、點了沒反應（使用者回報）——改成依目前分頁動態換內容。 */
+var QNAV_SECTIONS = {
+  overview: [
+    ['#secInsight','自動分析'], ['#secRecommend','建議採取'], ['#secTrend','訂單趨勢'],
+    ['#secNew','新訂單（新料號）'], ['#secProc','全製／單製'], ['#secAstag','AS 稽核分類'],
+    ['#secBand','數量區間'], ['#secClient','客戶比較'], ['#secRank','客戶增減排名'],
+    ['#secMa','訂單量監控'], ['#secPart','受訂料號排名']
+  ],
+  leadtime: [
+    ['#secLtInsight','急件自動分析'], ['#secLtDist','交期工作天數分布'],
+    ['#secLtShipDist','實際出貨工作天數分析'], ['#secLtBand','數量區間與急件比例'],
+    ['#secLtClient','急件客戶排行'], ['#secLtList','急件明細']
+  ],
+  share: [
+    ['#secShCmp','已選客戶佔比比較'], ['#secShInsight','自動分析'], ['#shClientBlocks','各客戶詳細報告']
+  ]
+};
+function renderQuickNav(t){
+  var list = QNAV_SECTIONS[t] || [];
+  var h = list.map(function(s){ return '<a href="'+s[0]+'" data-tab="'+t+'">'+s[1]+'</a>'; }).join('');
+  $('#qnavPanel').html(h || '<span style="font-size:11px;color:var(--muted);padding:5px 10px;display:block;">本分頁沒有可跳轉的區塊</span>');
+}
 function oaSwitchMainTab(t){
   CUR_MAIN_TAB = t;
   $('.oa-tabpanel').hide();
@@ -1197,10 +1208,16 @@ function oaSwitchMainTab(t){
   if(t==='share' && !CLI_LIST.length) loadClients();
   // 「客戶篩選」只有總覽／交期與急件分析用得到，客戶佔比報告有自己的客戶挑選器，切過去就自動收起來
   $('#cliFilterBar').toggle(t !== 'share');
+  renderQuickNav(t);
 }
 $('.oa-mtab').on('click', function(){ oaSwitchMainTab($(this).data('tab')); });
-/* 浮動快速導覽的連結是跳到「總覽分析」分頁內的區塊，點之前先切回該分頁才跳得到 */
-$(document).on('click', '.qnav-panel a, .nav-jump a', function(){ oaSwitchMainTab('overview'); });
+renderQuickNav('overview');   // 頁面一開始就是總覽分頁，先把快速導覽填好
+/* 快速導覽連結本來就帶自己所屬的分頁（data-tab），點的時候才切過去；
+   nav-jump（總覽分頁內自己的常駐導覽列）沒有 data-tab，固定回總覽即可 */
+$(document).on('click', '.qnav-panel a, .nav-jump a', function(){
+  var t = $(this).data('tab') || 'overview';
+  if (t !== CUR_MAIN_TAB) oaSwitchMainTab(t);
+});
 
 function load(){
   var req = {
@@ -2114,9 +2131,17 @@ function ltCatCell(r){
        + '<i class="fa fa-link"></i> 合併開立製令（共'+g.order_n+'張）'
        + (tagsTxt?('<br>類別：'+esc(tagsTxt)):'')
        + (procsTxt?('<br>製程：'+esc(procsTxt)):'')
+       + (g.span_lt!=null?('<br>整組工作天數：'+g.span_lt+' 天（'+dispDate(g.min_odate)+'～'+dispDate(g.max_ddate)+'）'):'')
        + '</div>';
   }
   return h;
+}
+/* 工作天數欄：合併開立製令的訂單，左方的「工作天數」是整組（最早下單日→最晚交期）合併算出來的，
+   不是這張訂單自己的（下單日→交期）區間，加個小圖示提醒去看「類別」欄的合併說明 */
+function ltLtCell(r){
+  if (!r.bom_group) return '' + r.lt;
+  return r.lt + ' <i class="fa fa-info-circle" style="color:var(--coral);font-size:9px;" '
+    + 'title="合併開立製令，工作天數＝整組最早下單日到最晚交期合併計算，非本筆訂單自己的交期區間（詳見類別欄）"></i>';
 }
 /* 實際出貨欄：出貨日／實際出貨工作天／延誤天數疊三行；大多數訂單目前都還沒綁出貨單，顯示「未綁定」 */
 function ltShipCell(r){
@@ -2140,7 +2165,7 @@ function renderLtList(){
       + '<td>'+ltKeyCell(r)+'</td>'
       + '<td>'+esc(r.cname)+'</td><td>'+pnoCell(r)+'</td>'
       + '<td>'+dispDate(r.odate)+'</td><td>'+dispDate(r.ddate)+'</td>'
-      + '<td class="n">'+r.lt+'</td>'
+      + '<td class="n">'+ltLtCell(r)+'</td>'
       + '<td class="n">'+(r.proc_steps==null?'<span style="color:var(--muted);" title="尚未開立製令（BOM），查不到製程資料">—</span>':nf(r.proc_steps))+'</td>'
       + '<td>'+ltCatCell(r)+'</td>'
       + '<td class="n">'+nf(r.qty)+'</td><td class="n">'+money(r.amount)+'</td>'
