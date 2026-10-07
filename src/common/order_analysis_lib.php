@@ -1814,6 +1814,11 @@ function oa_actual_ship_dates(PDO $db, array $orderIds): array
  * bom_sn 相同的只算一次；例：BOM_SN=10,20,20,25,30 算 4 站）。
  * bom.o_order_id 是 order_track.Order_id（varchar 存整數字串，資料字典註解寫錯過一次，
  * 見 ai-rules 路由表「BOM o_order_id」，比對一律用字串避免再誤踩）。
+ * 【2026-10-07 使用者回報修正】生管合併開立製令時（`OreadyReply_ForPm_BaseOfTime.php`），
+ * 同一張製令常常綁好幾張訂單（甚至製程不同的訂單一起合併開立），`bom.o_order_id` 只會存其中
+ * 一張訂單的 id，其餘訂單是透過多對多分配表 `bom_order_process_map` 綁定的——只查 `bom.o_order_id`
+ * 會讓同一張製令底下「沒被存成 o_order_id 那幾張訂單」全部查不到製程數（看起來像沒開製令，
+ * 其實是已經合併開在別人名下的那張製令裡），故兩種綁定來源都要查，取聯集。
  */
 function oa_order_process_steps(PDO $db, array $orderIds): array
 {
@@ -1821,10 +1826,18 @@ function oa_order_process_steps(PDO $db, array $orderIds): array
     if (!$ids) return [];
     $ph  = implode(',', array_fill(0, count($ids), '?'));
     $out = [];
-    $st = $db->prepare("SELECT b.o_order_id oid, COUNT(DISTINCT bi.bom_sn) steps
-                           FROM bom b JOIN bom_ing bi ON bi.bom = b.bom
-                          WHERE b.o_order_id IN ($ph) GROUP BY b.o_order_id");
-    $st->execute(array_map('strval', $ids));
+    $st = $db->prepare(
+        "SELECT oid, COUNT(DISTINCT bom_sn) steps FROM (
+            SELECT b.o_order_id AS oid, bi.bom_sn
+              FROM bom b JOIN bom_ing bi ON bi.bom = b.bom
+             WHERE b.o_order_id IN ($ph)
+             UNION ALL
+            SELECT m.order_id AS oid, bi.bom_sn
+              FROM bom_order_process_map m JOIN bom_ing bi ON bi.bom = m.bom
+             WHERE m.order_id IN ($ph)
+         ) t GROUP BY oid"
+    );
+    $st->execute(array_merge(array_map('strval', $ids), $ids));
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) { $out[(int)$r['oid']] = (int)$r['steps']; }
     return $out;
 }
