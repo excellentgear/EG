@@ -1599,10 +1599,12 @@ try { $_mdFeats = rbac_user_features($pdo, (int)$user_id); } catch (Exception $_
 $_mdRbacAll = in_array('all', $_mdFeats, true);
 $can_view_quote = $is_admin || $_mdRbacAll || in_array('quotation_view', $_mdFeats, true);
 $_hasMdRole = false;
+$_mdRoleNames = [];
 try {
-    $_stMd = $pdo->prepare("SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id WHERE ur.user_id=? AND r.module='master_data' LIMIT 1");
+    $_stMd = $pdo->prepare("SELECT r.role_name FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id WHERE ur.user_id=? AND r.module='master_data'");
     $_stMd->execute([(int)$user_id]);
-    $_hasMdRole = (bool)$_stMd->fetchColumn();
+    $_mdRoleNames = $_stMd->fetchAll(PDO::FETCH_COLUMN);
+    $_hasMdRole = !empty($_mdRoleNames);
 } catch (Exception $_e) {}
 // 2026-10-07 使用者確認「已對會用到本頁的人員指派完 master_data 角色」，拍板停用底下的
 // 舊式過渡期回退規則（原本：完全沒被指派角色時暫時沿用舊式 CRUD 字母/一律開放）。
@@ -7536,7 +7538,15 @@ body { background:#F6F1EA; }
         <!-- Page Title -->
         <div class="page-title">
             <div class="title_left">
-                <h3>主檔管理 <small>料號 / 客戶 / 廠商 &nbsp;（權限：<?= safe_html($disp_perm) ?>）</small><i class="fa fa-question-circle perm-help-icon" onclick="showPermHelp()" title="權限說明" style="cursor:pointer;color:#aaa;font-size:13px;margin-left:5px;vertical-align:middle;"></i></h3>
+                <?php
+                // 畫面上的權限標示：CDRU 字母是「料號/客戶/廠商本體」的舊式權限，主檔管理維護設定
+                // （對帳單/結帳/標籤/各項字典…）改以 master_data 角色為準，兩者意義不同要分開顯示，
+                // 不可只印其中一種——否則角色設好了卻看不出「生效的是哪個角色」。
+                if ($is_admin || $_mdRbacAll) { $_mdRoleDisp = '系統管理員（全部權限）'; }
+                elseif (!empty($_mdRoleNames)) { $_mdRoleDisp = implode('、', $_mdRoleNames); }
+                else { $_mdRoleDisp = '尚未指派角色（維護設定將全數無法使用）'; }
+                ?>
+                <h3>主檔管理 <small>料號 / 客戶 / 廠商 &nbsp;（權限：<?= safe_html($disp_perm) ?>／角色：<?= safe_html($_mdRoleDisp) ?>）</small><i class="fa fa-question-circle perm-help-icon" onclick="showPermHelp()" title="權限說明" style="cursor:pointer;color:#aaa;font-size:13px;margin-left:5px;vertical-align:middle;"></i></h3>
             </div>
             <div class="title_right text-right">
                 <button class="btn btn-info btn-sm" onclick="openDictModal()"><i class="fa fa-book"></i> 類別字典設定</button>
@@ -9544,18 +9554,23 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 <div class="modal-content">
 <div class="modal-header" style="background:linear-gradient(135deg,#2A3F54 0%,#1d3045 100%);"><button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;">&times;</button><h4 class="modal-title" style="color:#fff;font-size:15px;"><i class="fa fa-question-circle" style="color:#1ABB9C;margin-right:6px;"></i>權限說明</h4></div>
 <div class="modal-body" style="font-size:13px;">
+<p style="color:#8a6d3b;background:#fdf6ec;border-left:3px solid #d4761a;padding:6px 10px;font-size:12px;margin-top:0;">
+本頁有<b>兩套獨立的權限</b>，標題列會同時顯示：<b>「權限」（CDRU字母）</b>管的是<b>料號／客戶／廠商本體</b>的新增/修改/刪除；
+<b>「角色」</b>管的是<b>對帳單／結帳／報價收款／銀行帳戶／料號標籤指派／各項字典與系統設定</b>等維護功能——
+這部分<b>已經不再看 CDRU 字母</b>，完全以角色為準，沒有被指派角色就什麼都不能改（管理員固定不受限）。角色由系統管理員在「角色設定」逐人指派。
+</p>
 <table class="table table-bordered table-condensed" style="font-size:12px;">
-<thead><tr style="background:#f7f9fb;"><th style="white-space:nowrap;width:140px;">權限代碼</th><th>可執行操作</th></tr></thead>
+<thead><tr style="background:#f7f9fb;"><th style="white-space:nowrap;width:140px;">權限代碼</th><th>可執行操作（僅限料號／客戶／廠商本體）</th></tr></thead>
 <tbody>
-<tr><td style="white-space:nowrap;"><strong>A</strong><br><span style="color:#aaa;font-size:11px;">超級管理員</span></td><td>所有操作，包含：刪除廠商/客戶/料號/字典、刪除齒輪規格列、編輯/新增齒輪規格、切換客戶/廠商狀態、修改系統基本設定</td></tr>
-<tr><td style="white-space:nowrap;"><strong>CDRU</strong><br><span style="color:#aaa;font-size:11px;">主管（CRUD全權限）</span></td><td>新增/修改/刪除 廠商、客戶、料號、字典設定；修改系統基本設定（預設付款條件等）。<em>注意：不可刪除齒輪規格列，不可編輯齒輪規格</em></td></tr>
-<tr><td style="white-space:nowrap;"><strong>CDR</strong><br><span style="color:#aaa;font-size:11px;">設計（含D不含U）</span></td><td>可編輯料號（含子標籤）、可刪除齒輪規格列、切換客戶/廠商狀態；字典中工件/齒輪/標籤/製程大類可新增修改刪除移序。<em>不可刪除廠商/客戶/料號/字典</em></td></tr>
-<tr><td style="white-space:nowrap;"><strong>CRU</strong><br><span style="color:#aaa;font-size:11px;">業務／生管（含U不含D）</span></td><td>新增/修改 廠商、客戶、料號；字典設定中「廠商加工限制」可新增/修改/移序，其他字典唯讀。<em>不可刪除</em></td></tr>
-<tr><td style="white-space:nowrap;"><strong>R</strong><br><span style="color:#aaa;font-size:11px;">唯讀</span></td><td>唯讀檢視所有資料。類別字典設定可瀏覽但不可修改</td></tr>
-<tr><td style="white-space:nowrap;"><strong>CR / C</strong><br><span style="color:#aaa;font-size:11px;">無字典權限</span></td><td>唯讀檢視。不具備任何新增/修改/刪除功能，字典設定無法操作</td></tr>
+<tr><td style="white-space:nowrap;"><strong>A</strong><br><span style="color:#aaa;font-size:11px;">超級管理員</span></td><td>所有操作，包含：刪除廠商/客戶/料號、刪除齒輪規格列、編輯/新增齒輪規格、切換客戶/廠商狀態；維護設定與標籤指派不受角色限制</td></tr>
+<tr><td style="white-space:nowrap;"><strong>CDRU</strong><br><span style="color:#aaa;font-size:11px;">主管（CRUD全權限）</span></td><td>新增/修改/刪除 廠商、客戶、料號。<em>注意：不可刪除齒輪規格列，不可編輯齒輪規格</em></td></tr>
+<tr><td style="white-space:nowrap;"><strong>CDR</strong><br><span style="color:#aaa;font-size:11px;">設計（含D不含U）</span></td><td>可編輯料號（含子標籤）、可刪除齒輪規格列、切換客戶/廠商狀態。<em>不可刪除廠商/客戶/料號</em></td></tr>
+<tr><td style="white-space:nowrap;"><strong>CRU</strong><br><span style="color:#aaa;font-size:11px;">業務／生管（含U不含D）</span></td><td>新增/修改 廠商、客戶、料號。<em>不可刪除</em></td></tr>
+<tr><td style="white-space:nowrap;"><strong>R</strong><br><span style="color:#aaa;font-size:11px;">唯讀</span></td><td>唯讀檢視所有資料</td></tr>
+<tr><td style="white-space:nowrap;"><strong>CR / C</strong><br><span style="color:#aaa;font-size:11px;">無新增/修改</span></td><td>唯讀檢視。不具備任何新增/修改/刪除功能</td></tr>
 </tbody>
 </table>
-<p style="color:#888;font-size:11px;margin-top:8px;">* 「類別字典設定」基礎唯讀需具備 R 權限；A 或 CDRU 可新增/修改/刪除全部；CDR 可操作工件/齒輪/標籤/製程大類；CRU 可操作廠商加工限制（新增/修改/移序，不可刪除）</p>
+<p style="color:#888;font-size:11px;margin-top:8px;">* 類別字典設定、對帳單/結帳/報價/收款/銀行帳戶、料號標籤指派等，一律改看<b>角色</b>是否勾選對應功能，與上表的 CDRU 字母無關；管理員可到「角色設定」查看/調整每個角色勾了哪些功能，並在<b>人員權限設定（user_permissions）→ 主檔管理</b>指派給使用者。</p>
 </div>
 <div class="modal-footer"><button class="btn btn-default btn-sm" data-dismiss="modal">關閉</button></div>
 </div></div></div>
