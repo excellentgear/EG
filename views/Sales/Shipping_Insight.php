@@ -105,6 +105,8 @@ table.oa-t td.n { text-align:right; font-variant-numeric:tabular-nums; }
 table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
 .tbl-wrap { max-height:420px; overflow:auto; border:1px solid var(--line); border-radius:6px; }
 .tbl-wrap table.oa-t th { position:sticky; top:0; z-index:2; }
+/* 表格裡「本期這組欄位」與「基期這組欄位」相鄰時，中間要有明顯分隔線才能一眼看出分界 */
+table.oa-t th.grp-div, table.oa-t td.grp-div { border-right:3px solid var(--blue-d); }
 .badge-new  { background:var(--coral); color:#fff; border-radius:9px; padding:1px 7px; font-size:10px; line-height:16px; display:inline-block; }
 .badge-return { background:#BFE0FF; color:#1B4F78; border-radius:9px; padding:1px 7px; font-size:10px; line-height:16px; display:inline-block; }
 .badge-lost { background:#5B7A99; color:#fff; border-radius:9px; padding:1px 7px; font-size:10px; line-height:16px; display:inline-block; }
@@ -382,7 +384,7 @@ table.oa-t tbody tr:nth-child(even) { background:#FBFDFF; }
     <table class="oa-t" id="tblAstag" style="margin-top:10px;">
       <colgroup><col style="width:24%"><col style="width:13%"><col style="width:13%"><col style="width:17%">
                 <col style="width:13%"><col style="width:20%"></colgroup>
-      <thead><tr><th>分類（AS 認定）</th><th>本期筆數</th><th>本期數量</th><th>本期出貨金額</th>
+      <thead><tr><th>分類（AS 認定）</th><th>本期筆數</th><th>本期數量</th><th class="grp-div">本期出貨金額</th>
                  <th>基期筆數</th><th>較<span class="cmpLab">基期</span>增減</th></tr></thead>
       <tbody></tbody>
     </table>
@@ -1677,7 +1679,7 @@ function renderAstagTable(){
     h += '<tr'+(isGap?' style="color:var(--muted);"':'')+'>'
        + '<td>'+astagBadge(t)+esc(t.label)+(isGap?' <span class="badge-warn">查不到分類</span>':'')+'</td>'
        + '<td class="n">'+nf(t.cur.ship_rows)+'</td><td class="n">'+nf(t.cur.ship_qty)+'</td>'
-       + '<td class="n">'+money(t.cur.ship_amount)+'</td>'
+       + '<td class="n grp-div">'+money(t.cur.ship_amount)+'</td>'
        + '<td class="n">'+nf(t.cmp.ship_rows)+'</td>'
        + '<td class="n">'+deltaHtml(t.cur.ship_amount, t.cmp.ship_amount, money)+'</td></tr>';
   });

@@ -112,6 +112,9 @@ table.oa-t td.n { text-align:right; font-variant-numeric:tabular-nums; }
 table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
 .tbl-wrap { max-height:420px; overflow:auto; border:1px solid var(--line); border-radius:6px; }
 .tbl-wrap table.oa-t th { position:sticky; top:0; z-index:2; }
+/* 表格裡「本期這組欄位」與「基期這組欄位」相鄰時，中間要有明顯分隔線才能一眼看出分界
+   （使用者回報：三欄金額數字排在一起，光看表頭文字不夠快分辨），兩邊欄位都要掛才會連貫 */
+table.oa-t th.grp-div, table.oa-t td.grp-div { border-right:3px solid var(--amber-d); }
 .badge-new  { background:var(--coral); color:#fff; border-radius:9px; padding:1px 7px; font-size:10px; line-height:16px; display:inline-block; }
 .badge-return { background:var(--amber); color:#4E2C0B; border-radius:9px; padding:1px 7px; font-size:10px; line-height:16px; display:inline-block; }
 .badge-lost { background:#7A4A34; color:#fff; border-radius:9px; padding:1px 7px; font-size:10px; line-height:16px; display:inline-block; }
@@ -430,7 +433,7 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
     <table class="oa-t" id="tblAstag" style="margin-top:10px;">
       <colgroup><col style="width:22%"><col style="width:11%"><col style="width:11%"><col style="width:15%">
                 <col style="width:11%"><col style="width:15%"><col style="width:15%"></colgroup>
-      <thead><tr><th>分類（AS 認定）</th><th><span class="curLab">本期</span>筆數</th><th><span class="curLab">本期</span>數量</th><th><span class="curLab">本期</span>金額</th>
+      <thead><tr><th>分類（AS 認定）</th><th><span class="curLab">本期</span>筆數</th><th><span class="curLab">本期</span>數量</th><th class="grp-div"><span class="curLab">本期</span>金額</th>
                  <th><span class="baseLab">基期</span>筆數</th><th><span class="baseLab">基期</span>金額</th><th>較<span class="cmpLab">基期</span>增減</th></tr></thead>
       <tbody></tbody>
     </table>
@@ -1632,7 +1635,7 @@ function renderAstagTable(){
     h += '<tr'+(isUnset?' style="color:#a08a6f;"':'')+'>'
        + '<td>'+astagBadge(t)+esc(t.label)+(isUnset?' <span class="badge-warn">尚未設定</span>':'')+'</td>'
        + '<td class="n">'+nf(t.cur.orders)+'</td><td class="n">'+nf(t.cur.qty)+'</td>'
-       + '<td class="n">'+money(t.cur.amount)+'</td>'
+       + '<td class="n grp-div">'+money(t.cur.amount)+'</td>'
        + '<td class="n">'+nf(t.cmp.orders)+'</td><td class="n">'+money(t.cmp.amount)+'</td>'
        + '<td class="n">'+deltaHtml(t.cur.amount, t.cmp.amount, money)+'</td></tr>';
   });
