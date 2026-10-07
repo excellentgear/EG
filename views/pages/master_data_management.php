@@ -7580,8 +7580,16 @@ body { background:#F6F1EA; }
                   <div style="margin-top:10px;">
                     <button class="btn btn-primary btn-sm" id="btn-save-feats"><i class="fa fa-check"></i> 儲存功能</button>
                     <button class="btn btn-default btn-sm" id="btn-rename-role">改名</button>
+                    <button class="btn btn-default btn-sm" id="btn-copy-feats"><i class="fa fa-copy"></i> 複製功能到其他角色</button>
                     <button class="btn btn-danger btn-sm pull-right" id="btn-del-role"><i class="fa fa-trash"></i> 刪除角色</button>
                     <span class="text-muted" id="rf-msg" style="margin-left:8px;"></span>
+                  </div>
+                  <div id="rf-copy-panel" style="display:none;margin-top:10px;padding:10px;background:#fdf6ec;border:1px solid #f0d9b5;border-radius:4px;">
+                    <div style="font-size:12px;color:#8a6d3b;margin-bottom:6px;">把<b>目前畫面上勾選的功能</b>（不論是否已按過儲存）複製到下面選取的角色，會<b>直接覆蓋</b>目標角色原有的功能設定：</div>
+                    <div id="rf-copy-targets" style="max-height:160px;overflow:auto;border:1px solid #e8d9bd;background:#fff;padding:6px;margin-bottom:8px;"></div>
+                    <button class="btn btn-warning btn-sm" id="btn-copy-feats-go"><i class="fa fa-copy"></i> 執行複製</button>
+                    <button class="btn btn-default btn-sm" id="btn-copy-feats-cancel">取消</button>
+                    <span class="text-muted" id="rf-copy-msg" style="margin-left:8px;"></span>
                   </div>
                 </div>
                 <div id="role-feat-empty" class="text-muted">← 請於左側選擇一個角色</div>
@@ -7703,6 +7711,7 @@ body { background:#F6F1EA; }
           function selectRole(rid, rname, isSys){
             curRole = {id:rid, name:rname, sys:isSys};
             $('#role-feat-empty').hide(); $('#role-feat-area').show(); $('#rf-role-name').text(rname); $('#rf-msg').text('');
+            $('#rf-copy-panel').hide(); $('#rf-copy-msg').text(''); // 換角色時收起複製面板，免得殘留指向上一個來源角色的目標清單
             $.get(ROLES_API, {action:'get_role_features', role_id:rid}, function(r){
               var have = (r&&r.success)? r.data : [];
               if(isSys) have = MASTERDATA_FEATURES.map(function(f){return f[0];});
@@ -7729,6 +7738,47 @@ body { background:#F6F1EA; }
           $('#btn-save-feats').on('click', function(){ if(!curRole||curRole.sys) return;
             var feats=[]; $('.rf-chk:checked').each(function(){ feats.push($(this).val()); });
             $.post(ROLES_API, {action:'save_role_features', role_id:curRole.id, features:JSON.stringify(feats)}, function(r){ $('#rf-msg').text(r&&r.success?'已儲存':(r&&r.message||'儲存失敗')); }, 'json'); });
+
+          // ── 複製功能到其他角色：目前畫面勾選的功能（不論是否已存檔）→ 覆蓋到選取的目標角色 ──
+          $('#btn-copy-feats').on('click', function(){
+            if(!curRole) return;
+            $('#rf-copy-msg').text('');
+            $('#rf-copy-targets').html('<div class="text-muted" style="font-size:12px;">載入角色清單…</div>');
+            $('#rf-copy-panel').show();
+            $.get(ROLES_API, {action:'get_roles', module:'master_data'}, function(r){
+              if(!r||!r.success){ $('#rf-copy-targets').html('<div class="text-danger">載入失敗</div>'); return; }
+              var others = r.data.filter(function(ro){ return parseInt(ro.role_id,10)!==parseInt(curRole.id,10) && parseInt(ro.is_system,10)!==1; });
+              if(!others.length){ $('#rf-copy-targets').html('<div class="text-muted" style="font-size:12px;">沒有其他可複製的角色（系統管理員角色固定全權，不可覆蓋）</div>'); return; }
+              var h='';
+              others.forEach(function(ro){
+                h += '<div class="checkbox" style="margin:2px 0;"><label style="font-weight:normal;font-size:12px;">'
+                   + '<input type="checkbox" class="rf-copy-target" value="'+ro.role_id+'"> '+escR(ro.role_name)+'</label></div>';
+              });
+              $('#rf-copy-targets').html(h);
+            }, 'json');
+          });
+          $('#btn-copy-feats-cancel').on('click', function(){ $('#rf-copy-panel').hide(); $('#rf-copy-msg').text(''); });
+          $('#btn-copy-feats-go').on('click', function(){
+            if(!curRole) return;
+            var feats=[]; $('.rf-chk:checked').each(function(){ feats.push($(this).val()); });
+            var targets=[]; $('.rf-copy-target:checked').each(function(){ targets.push({id:parseInt($(this).val(),10), name:$(this).parent().text().trim()}); });
+            if(!targets.length){ $('#rf-copy-msg').text('請至少選一個目標角色'); return; }
+            if(!confirm('確定把目前勾選的 '+feats.length+' 項功能覆蓋到「'+targets.map(function(t){return t.name;}).join('、')+'」？對方原有的功能設定會被取代。')) return;
+            $('#rf-copy-msg').text('複製中…');
+            var done=0, okCount=0, failNames=[];
+            targets.forEach(function(t){
+              $.post(ROLES_API, {action:'save_role_features', role_id:t.id, features:JSON.stringify(feats)}, function(r){
+                done++; if(r&&r.success) okCount++; else failNames.push(t.name);
+                if(done===targets.length){
+                  $('#rf-copy-msg').text('已複製到 '+okCount+' 個角色'+(failNames.length?('，失敗：'+failNames.join('、')):''));
+                  if(!failNames.length){ setTimeout(function(){ $('#rf-copy-panel').hide(); }, 1500); }
+                }
+              }, 'json').fail(function(){
+                done++; failNames.push(t.name);
+                if(done===targets.length){ $('#rf-copy-msg').text('已複製到 '+okCount+' 個角色，失敗：'+failNames.join('、')); }
+              });
+            });
+          });
         })();
         </script>
         <?php endif; ?>
