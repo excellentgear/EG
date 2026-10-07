@@ -1908,14 +1908,14 @@ function ul_threshold_defaults_flat(): array
 }
 
 /**
- * 依門檻判斷某個數值是否算「過重」。$key 用「單位.指標」風格（例如 'qc.ng_rate'）。
- * 門檻優先取 $thresholds（即 ul_settings() 回傳的 thresholds，可能是巢狀 ['qc'=>['ng_rate'=>5]]
- * 或扁平 ['qc.ng_rate'=>5] 兩種寫法都接受），查不到才退回 ul_threshold_defaults_flat()。
- * 「越低越糟」的判斷規則：鍵名以 '_rate' 結尾、但不是 ng_rate/abnormal_rate/defect_rate
- * 這幾種本來就「越高越糟」的異常比例，才視為達成率類（越低越糟）。這是簡化的經驗判斷，
- * 不追求完美，之後有需要再逐鍵指定方向。
+ * 查「單位.指標」風格的門檻數值。$key 例如 'qc.ng_rate'。門檻優先取 $thresholds
+ * （即 ul_settings() 回傳的 thresholds，可能是巢狀 ['qc'=>['ng_rate'=>5]] 或扁平
+ * ['qc.ng_rate'=>5] 兩種寫法都接受），查不到才退回 ul_threshold_defaults_flat()。
+ * 抽成獨立函式供 ul_is_overload() 與 ul_unit_overload_check() 共用，兩處都要知道
+ * 「這個指標現在的門檻是多少」，不應該各自寫一份查找優先序（鐵律4）。
+ * @return float|null 查不到任何門檻（含預設值）時回 null
  */
-function ul_is_overload(float $value, string $key, array $thresholds = []): bool
+function ul_threshold_value(string $key, array $thresholds = []): ?float
 {
     $th = null;
     if (isset($thresholds[$key]) && is_array($thresholds[$key]) && isset($thresholds[$key]['value'])) {
@@ -1933,21 +1933,310 @@ function ul_is_overload(float $value, string $key, array $thresholds = []): bool
         $def = ul_threshold_defaults_flat();
         $th = $def[$key]['value'] ?? null;
     }
-    if ($th === null) return false;
-    $th = (float)$th;
-
-    $lowBetter = false;
-    if (str_ends_with($key, '_rate')) {
-        $isBadWhenHigh = (bool)preg_match('/(ng_rate|abnormal_rate|defect_rate)$/', $key);
-        $lowBetter = !$isBadWhenHigh;
-    }
-
-    return $lowBetter ? ($value < $th) : ($value > $th);
+    return $th === null ? null : (float)$th;
 }
 
 /**
- * 吃呼叫端已經組好的五個單位摘要資料，產生一組結論文字（純文字組合，本函式不查資料庫，
- * 單一職責——跟 order_analysis_lib.php 的 oa_insights() 同一種寫法）。
+ * 「越低越糟」的判斷規則：鍵名以 '_rate' 結尾、但不是 ng_rate/abnormal_rate/defect_rate
+ * 這幾種本來就「越高越糟」的異常比例，才視為達成率類（越低越糟）。這是簡化的經驗判斷，
+ * 不追求完美，之後有需要再逐鍵指定方向。抽成獨立函式供 ul_is_overload() 與
+ * ul_unit_overload_check() 共用（後者要知道該印 '>' 還是 '<' 才能組出正確的理由文字）。
+ */
+function ul_threshold_low_is_better(string $key): bool
+{
+    if (!str_ends_with($key, '_rate')) return false;
+    $isBadWhenHigh = (bool)preg_match('/(ng_rate|abnormal_rate|defect_rate)$/', $key);
+    return !$isBadWhenHigh;
+}
+
+/**
+ * 依門檻判斷某個數值是否算「過重」。$key 用「單位.指標」風格（例如 'qc.ng_rate'）。
+ */
+function ul_is_overload(float $value, string $key, array $thresholds = []): bool
+{
+    $th = ul_threshold_value($key, $thresholds);
+    if ($th === null) return false;
+    return ul_threshold_low_is_better($key) ? ($value < $th) : ($value > $th);
+}
+
+/**
+ * 把某個指標的數值格式化成人話（供 ul_unit_overload_check() 組理由文字用）：
+ * '_rate' 結尾的一律當比例印成百分之一位小數；其餘數字若非整數印一位小數，否則印整數
+ * （千分位）。本函式只服務理由文字的可讀性，不是全站的數字格式化規則。
+ */
+function ul_fmt_metric_value(string $metric, float $value): string
+{
+    if (str_ends_with($metric, '_rate')) return round($value * 100, 1) . '%';
+    if (abs($value - round($value)) > 0.001) return number_format($value, 1);
+    return number_format($value);
+}
+
+/**
+ * 依 ul_threshold_defaults() 登記的全部「單位.指標」逐一檢查是否超過門檻，供總覽的
+ * 「部門負荷總表」小卡判斷要不要標紅、並列出具體超標理由（ai-rules/10：顏色不可是唯一
+ * 資訊，不能只給紅色沒有理由）。
+ *
+ * 吃的 $allData 結構跟 ul_insights() 完全一樣（同一次 overview 呼叫共用同一份已經組好
+ * 的資料，不重新查資料庫）：
+ * [
+ *   'design' => ['cur'=>ul_design_summary()回傳, ...],
+ *   'sales'  => ['cur'=>ul_sales_summary()回傳, ...],
+ *   'pm'     => ['cur'=>ul_pm_summary()回傳, ...],
+ *   'prod'   => ['by_process_type'=>ul_prod_by_process_type()回傳,
+ *                'untracked'=>ul_prod_untracked_reports()回傳, 'setup'=>ul_prod_setup_stats()回傳],
+ *   'qc'     => ['wait'=>ul_qc_wait_time()回傳, 'abnormal'=>ul_qc_abnormal_stats()回傳,
+ *                'adhoc'=>ul_qc_adhoc()回傳],
+ *   'packing'=> ['pending'=>int, ...],
+ * ]
+ * 本函式刻意只負責「超過門檻與否」這一件事，不產生趨勢或集中度那類結論文字——
+ * 那仍是 ul_insights() 的職責，兩者互補不是取代，而且兩者共用同一份輸入資料，
+ * 絕不會出現「總表說過重、自動分析卻沒提到」這種互相矛盾的情形。
+ * @return array [unit_key => ['overloaded'=>bool, 'reasons'=>[{metric_key,label,value,threshold,text}]]]
+ */
+function ul_unit_overload_check(array $allData, array $thresholds = []): array
+{
+    $defs = ul_threshold_defaults();
+    $out = [];
+    foreach (ul_unit_keys() as $u) $out[$u] = ['overloaded' => false, 'reasons' => []];
+
+    $check = function (string $unit, string $metric, $value) use (&$out, $defs, $thresholds) {
+        if ($value === null) return;
+        $key = $unit . '.' . $metric;
+        $val = (float)$value;
+        if (!ul_is_overload($val, $key, $thresholds)) return;
+        $th = ul_threshold_value($key, $thresholds);
+        $label = $defs[$unit][$metric]['label'] ?? $metric;
+        $sign = ul_threshold_low_is_better($key) ? '<' : '>';
+        $out[$unit]['overloaded'] = true;
+        $out[$unit]['reasons'][] = [
+            'metric_key' => $metric,
+            'label' => $label,
+            'value' => $val,
+            'threshold' => $th,
+            'text' => $label . ' ' . ul_fmt_metric_value($metric, $val) . ' ' . $sign . ' '
+                    . ($th !== null ? ul_fmt_metric_value($metric, $th) : '?'),
+        ];
+    };
+
+    if (isset($allData['design']['cur'])) {
+        $d = $allData['design']['cur'];
+        $check('design', 'batch_pending', $d['drawing_wip'] ?? null);
+        $check('design', 'avg_draw_workdays', $d['avg_draw_workdays'] ?? null);
+        $check('design', 'issue_orders', $d['issue_orders'] ?? null);
+    }
+    if (isset($allData['sales']['cur'])) {
+        $s = $allData['sales']['cur'];
+        $check('sales', 'quote_backlog', $s['quote_count'] ?? null);
+        $check('sales', 'open_issue_count', $s['open_issue_count'] ?? null);
+    }
+    if (isset($allData['pm']['cur'])) {
+        $p = $allData['pm']['cur'];
+        $check('pm', 'outsource_wip', $p['outsource_wip'] ?? null);
+        $check('pm', 'pending_recon_lines', $p['pending_recon_lines'] ?? null);
+    }
+    if (isset($allData['prod'])) {
+        $pt = $allData['prod']['by_process_type'] ?? [];
+        $check('prod', 'unassigned_count', array_sum(array_column($pt, 'unassigned')));
+        $setup = $allData['prod']['setup'] ?? null;
+        $check('prod', 'avg_setup_minutes', $setup['avg_minutes'] ?? null);
+        $untracked = $allData['prod']['untracked'] ?? null;
+        $check('prod', 'untracked_count', $untracked['total'] ?? null);
+    }
+    if (isset($allData['qc'])) {
+        $ab = $allData['qc']['abnormal'] ?? null;
+        $check('qc', 'ng_rate', $ab['avg_ng_rate'] ?? null);
+        $wait = $allData['qc']['wait'] ?? null;
+        $check('qc', 'wait_days_avg', $wait['avg_workdays'] ?? null);
+        $adhoc = $allData['qc']['adhoc'] ?? null;
+        $check('qc', 'adhoc_count', $adhoc['total'] ?? null);
+    }
+    if (isset($allData['packing'])) {
+        $check('packing', 'pending', $allData['packing']['pending'] ?? null);
+    }
+
+    return $out;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * H. 月／季趨勢分析（2026-10-07 新增）
+ *
+ * 六個單位各自選一個「累積型」代表指標（期間內新發生的量，不是現況快照），逐期算出來
+ * 供總覽畫趨勢折線圖，也讓 ul_insights() 判斷「連續兩期上升/下滑」這種單看一期比較
+ * 看不出來的趨勢型訊息。
+ *
+ * **為什麼不能直接拿總覽 KPI 卡用的那些指標**：批圖中筆數／委外加工中筆數／未指派
+ * 機台筆數／目前待驗佇列筆數／待包裝筆數這些全部是「現況快照」（processing_state 等
+ * 欄位沒有時間戳可以切期間，見 ul_pm_summary() 等函式的既有註解）——不管你問的是今年
+ * 1月還是10月，這些數字都會是「查詢當下」同一個答案，逐期疊起來只會是一條水平線，
+ * 畫趨勢圖沒有意義。所以每個單位改選一個「在那段期間內真的發生了多少」的累積型指標：
+ *   設計 → 本期轉生管筆數（order_track.pmGet 落在期間內，衡量繪圖產出量能）
+ *   業務 → 本期開立報價單張數
+ *   生管 → 本期新發包委外筆數（outsource_date 落在期間內、外包廠商）
+ *   生產 → 本期報工產出數量（pm_process_daily_report.produced_qty 加總，需設定人員）
+ *   品管 → 本期檢驗項目數（qc_check_form + qc_check 兩張表合計，不限特定人員）
+ *   包裝 → 本期包裝完成筆數（ul_prod_packing_stats() 的 daily 加總）
+ * 這些全部都是「做了多少」而不是「現在卡著多少」，才有逐期變化可言。
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * 從「今天」往回數 $buckets 期（含當期所在那一期），正確跨年度——同一年度的期別用完
+ * 就換成上一年度最後一期，逐步往回退。**不自己重算期間的起訖日**，起訖日一律呼叫
+ * order_analysis_lib.php 既有的 oa_period_buckets()／oa_period_pick()（唯一實作），
+ * 本函式只負責「決定今天落在第幾期、該往回數到哪幾期」這件事。
+ * @return array 由舊到新排序，每列同 oa_period_pick() 的回傳格式（idx/label/start/end/year）
+ */
+function ul_trend_period_list(string $gran, int $buckets, ?string $today = null): array
+{
+    if ($buckets < 1) $buckets = 1;
+    if ($buckets > 24) $buckets = 24;
+    $today = $today ?: date('Y-m-d');
+    $year = (int)substr($today, 0, 4);
+
+    $idx = 1;
+    foreach (oa_period_buckets($year, $gran) as $b) {
+        if ($today >= $b['start'] && $today <= $b['end']) { $idx = (int)$b['idx']; break; }
+    }
+
+    $picked = [];
+    for ($i = 0; $i < $buckets; $i++) {
+        $picked[] = oa_period_pick($year, $gran, $idx);
+        $idx--;
+        if ($idx < 1) {
+            $year--;
+            $idx = count(oa_period_buckets($year, $gran));
+        }
+    }
+    return array_reverse($picked);
+}
+
+/** 設計課趨勢代表指標：本期轉生管筆數（order_track.pmGet 落在期間內） */
+function ul_trend_metric_design(PDO $db, string $from, string $to, array $ids): int
+{
+    $ids = ul_ids_norm($ids);
+    if (!$ids) return 0;
+    $in = implode(',', $ids);
+    $st = $db->prepare("SELECT COUNT(*) FROM order_track
+        WHERE ate IN ({$in}) AND pmGet IS NOT NULL AND DATE(pmGet) BETWEEN ? AND ? AND Order_status<>6");
+    $st->execute([$from, $to]);
+    return (int)$st->fetchColumn();
+}
+
+/** 業務課趨勢代表指標：本期開立報價單張數 */
+function ul_trend_metric_sales(PDO $db, string $from, string $to, array $ids): int
+{
+    $ids = ul_ids_norm($ids);
+    if (!$ids) return 0;
+    $inQ = implode(',', array_map(fn($v) => "'" . $v . "'", $ids));
+    $st = $db->prepare("SELECT COUNT(*) FROM quotation_list
+        WHERE is_draft=0 AND DATE(quote_date) BETWEEN ? AND ? AND created_by IN ({$inQ})");
+    $st->execute([$from, $to]);
+    return (int)$st->fetchColumn();
+}
+
+/**
+ * 生管趨勢代表指標：本期新發包委外筆數（outsource_date 落在期間內、maker_list.internal<>1）。
+ * 跟 ul_pm_summary() 不同的是這裡刻意不篩 $pmIds——bom_ing 沒有「這張製令由哪個生管負責」
+ * 的欄位（見 ul_pm_by_person() 註解），全公司共用同一條生管工作量，沒有人員可篩。
+ */
+function ul_trend_metric_pm(PDO $db, string $from, string $to): int
+{
+    $st = $db->prepare("SELECT COUNT(*) FROM bom_ing bi
+        LEFT JOIN maker_list m ON m.maker_id_no = bi.maker_id_no
+        WHERE bi.outsource_date IS NOT NULL AND DATE(bi.outsource_date) BETWEEN ? AND ?
+          AND COALESCE(m.internal,0)<>1");
+    $st->execute([$from, $to]);
+    return (int)$st->fetchColumn();
+}
+
+/** 生產課趨勢代表指標：本期報工產出數量，直接重用 ul_prod_daily_output()（鐵律4） */
+function ul_trend_metric_prod(PDO $db, string $from, string $to, array $ids): int
+{
+    $ids = ul_ids_norm($ids);
+    if (!$ids) return 0;
+    return (int)ul_prod_daily_output($db, $from, $to, $ids)['total_qty'];
+}
+
+/**
+ * 品管趨勢代表指標：本期檢驗項目數，qc_check_form（結構化線上檢驗單）＋qc_check
+ * （現場逐批快速登記，同 ul_qc_by_person() 2026-10-07 查證到的既有缺口：現場天天在用的
+ * qc_check 表不可漏算）兩張表合計，不限特定人員——全公司共用同一條待驗流程。
+ */
+function ul_trend_metric_qc(PDO $db, string $from, string $to): int
+{
+    $st1 = $db->prepare("SELECT COUNT(*) FROM qc_check_form
+        WHERE status<>'DRAFT' AND COALESCE(check_date, DATE(created_at)) BETWEEN ? AND ?");
+    $st1->execute([$from, $to]);
+    $st2 = $db->prepare("SELECT COUNT(*) FROM qc_check
+        WHERE COALESCE(DATE(QC_check_date), DATE(created_at)) BETWEEN ? AND ?");
+    $st2->execute([$from, $to]);
+    return (int)$st1->fetchColumn() + (int)$st2->fetchColumn();
+}
+
+/** 包裝趨勢代表指標：本期包裝完成筆數，直接重用 ul_prod_packing_stats() 的 daily 加總（鐵律4） */
+function ul_trend_metric_packing(PDO $db, string $from, string $to): int
+{
+    $stats = ul_prod_packing_stats($db, $from, $to);
+    return (int)array_sum(array_column($stats['daily'], 'count'));
+}
+
+/**
+ * 六個單位的月／季趨勢序列，供總覽畫折線圖，也供 ul_insights() 判斷連續上升/下滑。
+ * @param string $gran 僅支援 'month'／'quarter'（半年/整年的「上一期」間距太粗，趨勢線
+ *               沒有意義，呼叫端若傳其他值一律視為 'month'）
+ * @param int $buckets 往回看幾期（含當期），1~24，預設 6
+ * @return array ['gran'=>, 'labels'=>[依期別由舊到新], 'periods'=>[同 labels 順序的
+ *                {label,start,end,year,idx}], 'series'=>[unit_key => [依 labels 順序的數值]],
+ *                'metric_labels'=>[unit_key => 該單位這條線代表什麼的中文說明]]
+ */
+function ul_trend_series(PDO $db, array $settings, string $gran, int $buckets = 6): array
+{
+    if (!in_array($gran, ['month', 'quarter'], true)) $gran = 'month';
+    $periods = ul_trend_period_list($gran, $buckets);
+
+    $designIds = array_column(ul_dept_user_ids($db, $settings, 'design'), 'id');
+    $salesIds  = array_column(ul_dept_user_ids($db, $settings, 'sales'), 'id');
+    $prodIds   = array_column(ul_dept_user_ids($db, $settings, 'prod'), 'id');
+
+    $labels = [];
+    $series = ['design' => [], 'sales' => [], 'pm' => [], 'prod' => [], 'qc' => [], 'packing' => []];
+    foreach ($periods as $p) {
+        $labels[] = $p['label'];
+        $series['design'][]  = ul_trend_metric_design($db, $p['start'], $p['end'], $designIds);
+        $series['sales'][]   = ul_trend_metric_sales($db, $p['start'], $p['end'], $salesIds);
+        $series['pm'][]      = ul_trend_metric_pm($db, $p['start'], $p['end']);
+        $series['prod'][]    = ul_trend_metric_prod($db, $p['start'], $p['end'], $prodIds);
+        $series['qc'][]      = ul_trend_metric_qc($db, $p['start'], $p['end']);
+        $series['packing'][] = ul_trend_metric_packing($db, $p['start'], $p['end']);
+    }
+
+    return [
+        'gran' => $gran,
+        'labels' => $labels,
+        'periods' => array_map(fn($p) => [
+            'label' => $p['label'], 'start' => $p['start'], 'end' => $p['end'],
+            'year' => $p['year'], 'idx' => $p['idx'],
+        ], $periods),
+        'series' => $series,
+        'metric_labels' => [
+            'design'  => '本期轉生管筆數',
+            'sales'   => '本期開立報價單張數',
+            'pm'      => '本期新發包委外筆數',
+            'prod'    => '本期報工產出數量',
+            'qc'      => '本期檢驗項目數',
+            'packing' => '本期包裝完成筆數',
+        ],
+    ];
+}
+
+/**
+ * 吃呼叫端已經組好的六個單位摘要資料，產生「依單位分組」的結論文字（純文字組合，本函式
+ * 不查資料庫，單一職責——跟 order_analysis_lib.php 的 oa_insights() 同一種寫法）。
+ * 2026-10-07 使用者要求「分不同部門的內容顯示」且「內容過於簡略」：
+ *   ① 回傳格式由「扁平一串」改成「依單位分組」：['design'=>[...], 'sales'=>[...], ...]，
+ *      前端用單位中文名稱當分組標題；某單位完全沒有可講的內容就回傳空陣列（不硬湊）。
+ *   ② 每個單位盡量涵蓋：現況/本期核心數字（含門檻超過與否）、與比較期增減、
+ *      （有 $trend 時）連續上升/下滑的趨勢型訊息、至少一條該單位特有的補充內容。
+ *
  * 預期輸入結構（每個單位鍵皆可省略，缺的那塊不產生結論；'cur' 底下放該單位對應函式的
  * 回傳值，'cmp' 放對比期間同一份資料可省略，'cmp_label' 預設「上一期」）：
  * [
@@ -1959,16 +2248,43 @@ function ul_is_overload(float $value, string $key, array $thresholds = []): bool
  *                'setup'=>ul_prod_setup_stats()回傳],
  *   'qc'     => ['wait'=>ul_qc_wait_time()回傳, 'abnormal'=>ul_qc_abnormal_stats()回傳,
  *                'adhoc'=>ul_qc_adhoc()回傳],
- *   'packing'=> ['pending'=>ul_prod_packing_stats()回傳的 pending 值],
+ *   'packing'=> ['pending'=>int, 'avg_workdays'=>float|null],
  * ]
+ * $trend 可選——傳入 ul_trend_series() 的回傳值時，才會多算「連續兩期以上上升/下降」這種
+ * 趨勢型訊息（仿 order_analysis_lib.php 的 oa_insights()「連續兩期下滑」寫法）；不傳就跳過
+ * 這一條，其餘結論不受影響。**trend 固定以「今天」往回推算，不一定等於呼叫端目前選的
+ * 期間篩選**（例如使用者正在看去年某個月），所以文字一律講「最近N個月/季」而不是「本期」，
+ * 避免跟上面那些真正對應目前篩選期間的結論混在一起看不出差異。
  * @param array $thresholds ul_settings() 回傳的 thresholds（巢狀或扁平皆可，見 ul_is_overload()）
- * @return array 每列 ['level'=>good|warn|bad|info, 'title'=>, 'detail'=>, 'metric'=>]
+ * @param array|null $trend ul_trend_series() 的回傳值（可選）
+ * @return array ['design'=>[每列 level/title/detail/metric], 'sales'=>[...], 'pm'=>[...],
+ *                'prod'=>[...], 'qc'=>[...], 'packing'=>[...]]
  */
-function ul_insights(array $allData, array $thresholds = []): array
+function ul_insights(array $allData, array $thresholds = [], ?array $trend = null): array
 {
-    $out = [];
-    $add = function ($level, $title, $detail, $metric = '') use (&$out) {
-        $out[] = ['level' => $level, 'title' => $title, 'detail' => $detail, 'metric' => $metric];
+    $out = ['design' => [], 'sales' => [], 'pm' => [], 'prod' => [], 'qc' => [], 'packing' => []];
+    $add = function (string $unit, string $level, string $title, string $detail, string $metric = '') use (&$out) {
+        $out[$unit][] = ['level' => $level, 'title' => $title, 'detail' => $detail, 'metric' => $metric];
+    };
+    $granName = ['month' => '月', 'quarter' => '季', 'half' => '半年', 'year' => '年'];
+    $streak = function (string $unit, string $label) use ($trend, $add, $granName) {
+        if (!$trend || empty($trend['series'][$unit])) return;
+        $series = $trend['series'][$unit];
+        $labels = $trend['labels'] ?? [];
+        $n = count($series);
+        if ($n < 3) return;
+        $a2 = (float)$series[$n - 3]; $a1 = (float)$series[$n - 2]; $a0 = (float)$series[$n - 1];
+        $gn = $granName[$trend['gran'] ?? 'month'] ?? '期';
+        if ($a0 < $a1 && $a1 < $a2 && $a2 > 0) {
+            $add($unit, 'warn', $label . '連續兩' . $gn . '下滑',
+                '最近三' . $gn . '「' . $labels[$n - 3] . '」→「' . $labels[$n - 2] . '」→「' . $labels[$n - 1]
+                . '」的' . $label . '一路往下（' . $a2 . ' → ' . $a1 . ' → ' . $a0 . '），這種趨勢單看一期是看不出來的。',
+                round(($a0 - $a2) / $a2 * 100, 1) . '%');
+        } elseif ($a0 > $a1 && $a1 > $a2 && $a2 >= 0) {
+            $add($unit, 'info', $label . '連續兩' . $gn . '上升',
+                '最近三' . $gn . '「' . $labels[$n - 3] . '」→「' . $labels[$n - 2] . '」→「' . $labels[$n - 1]
+                . '」的' . $label . '持續增加（' . $a2 . ' → ' . $a1 . ' → ' . $a0 . '）。');
+        }
     };
 
     // 設計課
@@ -1976,22 +2292,54 @@ function ul_insights(array $allData, array $thresholds = []): array
         $d = $allData['design']['cur'];
         $cl = $allData['design']['cmp_label'] ?? '上一期';
         $cmp = $allData['design']['cmp'] ?? null;
-        if (isset($d['drawing_wip']) && ul_is_overload((float)$d['drawing_wip'], 'design.batch_pending', $thresholds)) {
-            $add('bad', '設計課批圖中筆數偏高', '目前批圖中 ' . $d['drawing_wip'] . ' 筆（已分配但尚未按審圖、也尚未轉生管）。', (string)$d['drawing_wip']);
-        }
-        if ($cmp && isset($d['drawing_wip'], $cmp['drawing_wip']) && (int)$cmp['drawing_wip'] > 0) {
+
+        $wipBad = ul_is_overload((float)$d['drawing_wip'], 'design.batch_pending', $thresholds);
+        $add('design', $wipBad ? 'bad' : 'info', $wipBad ? '批圖中筆數偏高' : '批圖中現況',
+            '目前批圖中 ' . $d['drawing_wip'] . ' 筆（已分配但尚未按審圖、也尚未轉生管）'
+            . ($wipBad ? '，已超過門檻。' : '。'), (string)$d['drawing_wip']);
+
+        if ($cmp && isset($cmp['drawing_wip']) && (int)$cmp['drawing_wip'] > 0) {
             $delta = (int)$d['drawing_wip'] - (int)$cmp['drawing_wip'];
-            if ($delta > 0) {
-                $add('warn', '設計課批圖中筆數較' . $cl . '增加', '本期 ' . $d['drawing_wip'] . ' 筆，較' . $cl . '的 ' . $cmp['drawing_wip'] . ' 筆增加 ' . $delta . ' 筆。', '+' . $delta);
+            if ($delta !== 0) {
+                $add('design', $delta > 0 ? 'warn' : 'good', '批圖中筆數較' . $cl . ($delta > 0 ? '增加' : '減少'),
+                    '本期 ' . $d['drawing_wip'] . ' 筆，較' . $cl . '的 ' . $cmp['drawing_wip'] . ' 筆'
+                    . ($delta > 0 ? '增加' : '減少') . ' ' . abs($delta) . ' 筆。', ($delta > 0 ? '+' : '') . $delta);
             }
         }
-        if (isset($d['avg_draw_workdays']) && $d['avg_draw_workdays'] !== null
+
+        if ($cmp && isset($cmp['pm_get']) && (int)$cmp['pm_get'] > 0) {
+            $delta2 = (int)$d['pm_get'] - (int)$cmp['pm_get'];
+            if ($delta2 !== 0) {
+                $add('design', $delta2 < 0 ? 'warn' : 'good', '本期轉生管量較' . $cl . ($delta2 > 0 ? '增加' : '減少'),
+                    '本期轉生管 ' . $d['pm_get'] . ' 筆，較' . $cl . '的 ' . $cmp['pm_get'] . ' 筆'
+                    . ($delta2 > 0 ? '增加' : '減少') . ' ' . abs($delta2) . ' 筆（這是繪圖產出量能的指標）。',
+                    ($delta2 > 0 ? '+' : '') . $delta2);
+            }
+        }
+
+        if ($d['avg_draw_workdays'] !== null
             && ul_is_overload((float)$d['avg_draw_workdays'], 'design.avg_draw_workdays', $thresholds)) {
-            $add('warn', '設計課繪圖平均工作天偏長', '本期由業務轉設計到轉生管平均 ' . $d['avg_draw_workdays'] . ' 個工作天。', $d['avg_draw_workdays'] . ' 天');
+            $add('design', 'warn', '繪圖平均工作天偏長',
+                '本期由業務轉設計到轉生管平均 ' . $d['avg_draw_workdays'] . ' 個工作天，已超過門檻。', $d['avg_draw_workdays'] . ' 天');
         }
-        if (isset($d['issue_orders']) && ul_is_overload((float)$d['issue_orders'], 'design.issue_orders', $thresholds)) {
-            $add('warn', '設計課待回覆設計備註偏多', '目前有 ' . $d['issue_orders'] . ' 張訂單帶著開放中的設計備註問題。', (string)$d['issue_orders']);
+
+        $issBad = ul_is_overload((float)$d['issue_orders'], 'design.issue_orders', $thresholds);
+        if ($issBad || (int)$d['issue_orders'] > 0) {
+            $add('design', $issBad ? 'bad' : 'info', $issBad ? '待回覆設計備註偏多' : '待回覆設計備註',
+                '目前有 ' . $d['issue_orders'] . ' 張訂單帶著開放中的設計備註問題' . ($issBad ? '，已超過門檻。' : '。'),
+                (string)$d['issue_orders']);
         }
+
+        $nc = $d['new_case'] ?? null;
+        if ($nc && (int)$nc['total'] > 0) {
+            $add('design', 'info', '新案件（無圖面）組成',
+                '目前有效訂單中共 ' . $nc['total'] . ' 張是新案件（目前查無任何圖面），其中已轉生管 '
+                . $nc['processed'] . ' 張（' . round(($nc['processed_pct'] ?? 0) * 100, 1) . '%）、仍在批圖中 '
+                . $nc['in_progress'] . ' 張（' . round(($nc['in_progress_pct'] ?? 0) * 100, 1) . '%）。',
+                (string)$nc['total']);
+        }
+
+        $streak('design', '轉生管量');
     }
 
     // 業務課
@@ -1999,74 +2347,162 @@ function ul_insights(array $allData, array $thresholds = []): array
         $s = $allData['sales']['cur'];
         $cl = $allData['sales']['cmp_label'] ?? '上一期';
         $cmp = $allData['sales']['cmp'] ?? null;
-        if (isset($s['quote_count']) && ul_is_overload((float)$s['quote_count'], 'sales.quote_backlog', $thresholds)) {
-            $add('warn', '業務課本期報價單量偏高', '本期開立 ' . $s['quote_count'] . ' 張報價單。', (string)$s['quote_count']);
-        }
-        if ($cmp && isset($s['quote_count'], $cmp['quote_count']) && (int)$cmp['quote_count'] > 0) {
+
+        $qBad = ul_is_overload((float)$s['quote_count'], 'sales.quote_backlog', $thresholds);
+        $add('sales', $qBad ? 'bad' : 'info', $qBad ? '本期報價單量偏高' : '本期報價單現況',
+            '本期開立 ' . $s['quote_count'] . ' 張報價單，共 ' . $s['quote_item_count'] . ' 個報價項目'
+            . ($qBad ? '，已超過門檻。' : '。'), (string)$s['quote_count']);
+
+        if ($cmp && (int)$cmp['quote_count'] > 0) {
             $delta = (int)$s['quote_count'] - (int)$cmp['quote_count'];
-            if (abs($delta) >= 5) {
-                $add($delta > 0 ? 'warn' : 'info', '業務課報價單量較' . $cl . ($delta > 0 ? '增加' : '減少'),
-                    '本期 ' . $s['quote_count'] . ' 張，' . $cl . ' ' . $cmp['quote_count'] . ' 張。', ($delta > 0 ? '+' : '') . $delta);
+            if ($delta !== 0) {
+                $add('sales', $delta > 0 ? 'warn' : 'info', '報價單量較' . $cl . ($delta > 0 ? '增加' : '減少'),
+                    '本期 ' . $s['quote_count'] . ' 張，' . $cl . ' ' . $cmp['quote_count'] . ' 張，'
+                    . ($delta > 0 ? '增加' : '減少') . ' ' . abs($delta) . ' 張。', ($delta > 0 ? '+' : '') . $delta);
             }
         }
-        if (isset($s['open_issue_count']) && ul_is_overload((float)$s['open_issue_count'], 'sales.open_issue_count', $thresholds)) {
-            $add('warn', '業務課待回覆問題偏多', '目前累積 ' . $s['open_issue_count'] . ' 筆開放中設計備註問題。', (string)$s['open_issue_count']);
+
+        if ($cmp && (int)$cmp['order_count'] > 0) {
+            $deltaO = (int)$s['order_count'] - (int)$cmp['order_count'];
+            if ($deltaO !== 0) {
+                $add('sales', $deltaO < 0 ? 'warn' : 'good', '訂單建立量較' . $cl . ($deltaO > 0 ? '增加' : '減少'),
+                    '本期建立 ' . $s['order_count'] . ' 張訂單，較' . $cl . '的 ' . $cmp['order_count'] . ' 張'
+                    . ($deltaO > 0 ? '增加' : '減少') . ' ' . abs($deltaO) . ' 張。', ($deltaO > 0 ? '+' : '') . $deltaO);
+            }
         }
+
+        $oiBad = ul_is_overload((float)$s['open_issue_count'], 'sales.open_issue_count', $thresholds);
+        if ($oiBad || (int)$s['open_issue_count'] > 0) {
+            $add('sales', $oiBad ? 'bad' : 'info', $oiBad ? '待回覆問題偏多' : '待回覆問題現況',
+                '目前累積 ' . $s['open_issue_count'] . ' 筆開放中設計備註問題' . ($oiBad ? '，已超過門檻。' : '。'),
+                (string)$s['open_issue_count']);
+        }
+
+        if ((int)$s['quote_count'] > 0) {
+            $avgItems = round($s['quote_item_count'] / $s['quote_count'], 1);
+            $add('sales', 'info', '平均每張報價單項目數', '本期每張報價單平均含 ' . $avgItems . ' 個項目。', $avgItems . ' 項');
+        }
+
+        $streak('sales', '報價單量');
     }
 
     // 生管
     if (isset($allData['pm']['cur'])) {
         $p = $allData['pm']['cur'];
-        if (isset($p['outsource_wip']) && ul_is_overload((float)$p['outsource_wip'], 'pm.outsource_wip', $thresholds)) {
-            $add('warn', '生管委外加工中筆數偏高', '目前委外加工中共 ' . $p['outsource_wip'] . ' 筆。', (string)$p['outsource_wip']);
+
+        $owBad = ul_is_overload((float)$p['outsource_wip'], 'pm.outsource_wip', $thresholds);
+        $add('pm', $owBad ? 'warn' : 'info', $owBad ? '委外加工中筆數偏高' : '委外/廠內加工現況',
+            '目前委外加工中共 ' . $p['outsource_wip'] . ' 筆、廠內加工中 ' . $p['internal_wip'] . ' 筆'
+            . ($owBad ? '，委外加工已超過門檻。' : '。'), (string)$p['outsource_wip']);
+
+        $rcBad = ul_is_overload((float)$p['pending_recon_lines'], 'pm.pending_recon_lines', $thresholds);
+        if ($rcBad || (int)$p['pending_recon_lines'] > 0) {
+            $add('pm', $rcBad ? 'bad' : 'info', $rcBad ? '待對帳筆數偏高' : '待對帳現況',
+                '目前待對帳 ' . ($p['pending_recon_parties'] ?? 0) . ' 家廠商、共 ' . $p['pending_recon_lines'] . ' 筆'
+                . ($rcBad ? '，已超過門檻。' : '。'), (string)$p['pending_recon_lines']);
         }
-        if (isset($p['pending_recon_lines']) && ul_is_overload((float)$p['pending_recon_lines'], 'pm.pending_recon_lines', $thresholds)) {
-            $add('bad', '生管待對帳筆數偏高', '目前待對帳 ' . ($p['pending_recon_parties'] ?? 0) . ' 家、共 ' . $p['pending_recon_lines'] . ' 筆。', (string)$p['pending_recon_lines']);
+
+        if (isset($p['to_qc'], $p['pending_transfer'], $p['transferred'])) {
+            $add('pm', 'info', '製程流轉現況',
+                '目前待QC驗 ' . $p['to_qc'] . ' 筆、待生管移轉 ' . $p['pending_transfer'] . ' 筆、已移轉 '
+                . $p['transferred'] . ' 筆。');
         }
+
+        $streak('pm', '新發包委外量');
     }
 
     // 生產課
     if (isset($allData['prod'])) {
         $pt = $allData['prod']['by_process_type'] ?? [];
         $totalUnassigned = array_sum(array_column($pt, 'unassigned'));
-        if ($totalUnassigned > 0 && ul_is_overload((float)$totalUnassigned, 'prod.unassigned_count', $thresholds)) {
-            $add('bad', '生產課未指派機台筆數偏高', '目前進行中的製程裡有 ' . $totalUnassigned . ' 筆還沒指派機台。', (string)$totalUnassigned);
+        $totalAssigned = array_sum(array_column($pt, 'assigned'));
+
+        $uaBad = ul_is_overload((float)$totalUnassigned, 'prod.unassigned_count', $thresholds);
+        $add('prod', $uaBad ? 'bad' : 'info', $uaBad ? '未指派機台筆數偏高' : '機台指派現況',
+            '目前進行中的製程裡有 ' . $totalUnassigned . ' 筆還沒指派機台、' . $totalAssigned . ' 筆已指派'
+            . ($uaBad ? '，未指派已超過門檻。' : '。'), (string)$totalUnassigned);
+
+        if ($pt && (int)$pt[0]['unassigned'] > 0) {
+            $top = $pt[0]; // 已依 total 由大到小排序
+            $add('prod', 'warn', '未指派集中在「' . $top['process_type_name'] . '」',
+                $top['process_type_name'] . '目前有 ' . $top['unassigned'] . ' 筆未指派機台，是未指派佔比最高的製程大類。',
+                (string)$top['unassigned']);
         }
+
         $setup = $allData['prod']['setup'] ?? null;
-        if ($setup && isset($setup['avg_minutes']) && $setup['avg_minutes'] !== null
-            && ul_is_overload((float)$setup['avg_minutes'], 'prod.avg_setup_minutes', $thresholds)) {
-            $add('warn', '生產課平均架機時間偏長', '本期平均架機時間 ' . $setup['avg_minutes'] . ' 分鐘。', $setup['avg_minutes'] . ' 分');
+        if ($setup && $setup['avg_minutes'] !== null) {
+            $stBad = ul_is_overload((float)$setup['avg_minutes'], 'prod.avg_setup_minutes', $thresholds);
+            $add('prod', $stBad ? 'warn' : 'info', $stBad ? '平均架機時間偏長' : '平均架機時間現況',
+                '本期平均架機時間 ' . $setup['avg_minutes'] . ' 分鐘' . ($stBad ? '，已超過門檻。' : '。'),
+                $setup['avg_minutes'] . ' 分');
         }
+
         $untracked = $allData['prod']['untracked'] ?? null;
-        if ($untracked && isset($untracked['total']) && ul_is_overload((float)$untracked['total'], 'prod.untracked_count', $thresholds)) {
-            $add('bad', '生產課出現未正式指派卻已報工的件', '本期共 ' . $untracked['total'] . ' 筆報工對應的製程，當時沒有被正式指派機台或還沒進入正常流程。', (string)$untracked['total']);
+        if ($untracked) {
+            $utBad = ul_is_overload((float)$untracked['total'], 'prod.untracked_count', $thresholds);
+            if ($utBad || (int)$untracked['total'] > 0) {
+                $add('prod', $utBad ? 'bad' : 'warn', $utBad ? '未正式指派卻已報工偏多' : '出現未正式指派卻已報工的件',
+                    '本期共 ' . $untracked['total'] . ' 筆報工對應的製程，當時沒有被正式指派機台或還沒進入正常流程'
+                    . ($utBad ? '，已超過門檻。' : '。'), (string)$untracked['total']);
+            }
         }
+
+        $streak('prod', '報工產出數量');
     }
 
     // 品管
     if (isset($allData['qc'])) {
         $ab = $allData['qc']['abnormal'] ?? null;
-        if ($ab && isset($ab['avg_ng_rate']) && $ab['avg_ng_rate'] !== null
-            && ul_is_overload((float)$ab['avg_ng_rate'], 'qc.ng_rate', $thresholds)) {
-            $add('bad', '品管NG比例偏高', '本期平均每日NG比例約 ' . round($ab['avg_ng_rate'] * 100, 1) . '%。', round($ab['avg_ng_rate'] * 100, 1) . '%');
-        }
         $wait = $allData['qc']['wait'] ?? null;
-        if ($wait && isset($wait['avg_workdays']) && $wait['avg_workdays'] !== null
-            && ul_is_overload((float)$wait['avg_workdays'], 'qc.wait_days_avg', $thresholds)) {
-            $add('warn', '品管待驗平均等待工作天偏長', '本期完成檢驗的製程，平均等了 ' . $wait['avg_workdays'] . ' 個工作天才驗完。', $wait['avg_workdays'] . ' 天');
-        }
         $adhoc = $allData['qc']['adhoc'] ?? null;
-        if ($adhoc && isset($adhoc['total']) && ul_is_overload((float)$adhoc['total'], 'qc.adhoc_count', $thresholds)) {
-            $add('warn', '品管脫離正常待驗流程的補檢驗偏多', '本期有 ' . $adhoc['total'] . ' 筆檢驗不是掛在正常待驗佇列上完成的。', (string)$adhoc['total']);
+
+        if ($ab && $ab['avg_ng_rate'] !== null) {
+            $ngBad = ul_is_overload((float)$ab['avg_ng_rate'], 'qc.ng_rate', $thresholds);
+            $add('qc', $ngBad ? 'bad' : 'info', $ngBad ? 'NG比例偏高' : 'NG比例現況',
+                '本期平均每日NG比例約 ' . round($ab['avg_ng_rate'] * 100, 1) . '%，平均每日異常單 '
+                . $ab['avg_abnormal_per_day'] . ' 件' . ($ngBad ? '，已超過門檻。' : '。'),
+                round($ab['avg_ng_rate'] * 100, 1) . '%');
         }
+
+        if ($wait && $wait['avg_workdays'] !== null) {
+            $wBad = ul_is_overload((float)$wait['avg_workdays'], 'qc.wait_days_avg', $thresholds);
+            $add('qc', $wBad ? 'warn' : 'info', $wBad ? '待驗平均等待工作天偏長' : '待驗平均等待工作天現況',
+                '本期完成檢驗的製程，平均等了 ' . $wait['avg_workdays'] . ' 個工作天才驗完' . ($wBad ? '，已超過門檻。' : '。'),
+                $wait['avg_workdays'] . ' 天');
+            if (!empty($wait['longest'])) {
+                $lg = $wait['longest'][0];
+                $add('qc', 'warn', '等待最久的一筆',
+                    '製令 ' . $lg['bom'] . '（' . $lg['process_name'] . '）本期等了 ' . $lg['workdays'] . ' 個工作天才驗完。',
+                    $lg['workdays'] . ' 天');
+            }
+        }
+
+        if ($adhoc) {
+            $adBad = ul_is_overload((float)$adhoc['total'], 'qc.adhoc_count', $thresholds);
+            if ($adBad || (int)$adhoc['total'] > 0) {
+                $add('qc', $adBad ? 'warn' : 'info', $adBad ? '脫離正常待驗流程的補檢驗偏多' : '脫離正常待驗流程的補檢驗',
+                    '本期有 ' . $adhoc['total'] . ' 筆檢驗不是掛在正常待驗佇列上完成的' . ($adBad ? '，已超過門檻。' : '。'),
+                    (string)$adhoc['total']);
+            }
+        }
+
+        $streak('qc', '檢驗項目數');
     }
 
     // 包裝（獨立單位，2026-10-07 新增；資料來源沿用既有 ul_prod_packing_stats()）
     if (isset($allData['packing'])) {
         $pk = $allData['packing'];
-        if (isset($pk['pending']) && ul_is_overload((float)$pk['pending'], 'packing.pending', $thresholds)) {
-            $add('bad', '包裝待處理筆數偏高', '目前待包裝 ' . $pk['pending'] . ' 筆。', (string)$pk['pending']);
+
+        $pBad = ul_is_overload((float)$pk['pending'], 'packing.pending', $thresholds);
+        $add('packing', $pBad ? 'bad' : 'info', $pBad ? '待包裝筆數偏高' : '待包裝現況',
+            '目前待包裝 ' . $pk['pending'] . ' 筆' . ($pBad ? '，已超過門檻。' : '。'), (string)$pk['pending']);
+
+        if (isset($pk['avg_workdays']) && $pk['avg_workdays'] !== null) {
+            $add('packing', 'info', '平均包裝處理工作天',
+                '本期完成包裝的件，從進入待包裝到完成平均 ' . $pk['avg_workdays'] . ' 個工作天。', $pk['avg_workdays'] . ' 天');
         }
+
+        $streak('packing', '包裝完成筆數');
     }
 
     return $out;

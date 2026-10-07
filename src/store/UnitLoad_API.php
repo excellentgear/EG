@@ -192,14 +192,28 @@ switch ($action) {
         // 同一種道理，見該函式註解）
         $packingStats = ul_prod_packing_stats($db, $p['from'], $p['to']);
 
-        $insights = ul_insights([
+        // 2026-10-07 新增：unit_overload（部門負荷總表）與 insights（自動分析）共用同一份
+        // 已經組好的 $allData，不重新查資料庫，見 unit_load_lib.php 的 ul_unit_overload_check()／
+        // ul_insights() 函式註解。
+        $allData = [
             'design' => ['cur' => $designCur, 'cmp' => $designCmp, 'cmp_label' => $p['cmp_label']],
             'sales'  => ['cur' => $salesCur,  'cmp' => $salesCmp,  'cmp_label' => $p['cmp_label']],
             'pm'     => ['cur' => $pmCur,     'cmp' => $pmCmp,     'cmp_label' => $p['cmp_label']],
             'prod'   => ['by_process_type' => $prodByType, 'untracked' => $prodUntracked, 'setup' => $prodSetup],
             'qc'     => ['wait' => $qcWait, 'abnormal' => $qcAbnormal, 'adhoc' => $qcAdhoc],
-            'packing'=> ['pending' => $packingStats['pending']],
-        ], $thresholds);
+            'packing'=> ['pending' => $packingStats['pending'], 'avg_workdays' => $packingStats['avg_workdays']],
+        ];
+
+        $unitOverload = ul_unit_overload_check($allData, $thresholds);
+
+        // 趨勢型訊息（連續上升/下滑）只在期間粒度是月/季時才算得出有意義的趨勢線——
+        // 半年/整年的「上一期」間距太粗（ul_trend_series 本身也只支援 month/quarter），
+        // 其他粒度就不算，insights 其餘結論不受影響。
+        $trend = in_array($p['gran'], ['month', 'quarter'], true)
+            ? ul_trend_series($db, $settings, $p['gran'], 6)
+            : null;
+
+        $insights = ul_insights($allData, $thresholds, $trend);
 
         ulOut([
             'period'   => $p,
@@ -224,9 +238,24 @@ switch ($action) {
                 'avg_workdays' => $packingStats['avg_workdays'],
                 'people_count' => count($packingIds),
             ],
+            'unit_overload' => $unitOverload,
             'insights' => $insights,
             'canAdmin' => $canAdmin ? 1 : 0,
         ]);
+    }
+
+    /* ── 月／季趨勢分析：六個單位代表指標的走勢（獨立於 overview 的期間篩選，
+       自己的粒度與期數）─────────────────────────────────────── */
+    case 'trend': {
+        $gran = (string)($_REQUEST['gran'] ?? 'month');
+        if (!in_array($gran, ['month', 'quarter'], true)) ulErr('不合法的期間粒度（趨勢分析僅支援 month/quarter）');
+        $buckets = (int)($_REQUEST['buckets'] ?? 6);
+        if ($buckets < 1) $buckets = 1;
+        if ($buckets > 12) $buckets = 12;
+
+        $settings = ul_settings($db);
+        $trend = ul_trend_series($db, $settings, $gran, $buckets);
+        ulOut($trend);
     }
 
     /* ── 設計課逐項明細 ───────────────────────────────────────── */

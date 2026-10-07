@@ -113,12 +113,32 @@ body { background:#F3F6EC; }
           display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .sec h4 .hint { font-size:11px; color:var(--muted); font-weight:normal; }
 
-/* 自動分析清單 */
-.ins-list .ins-item { padding:8px 10px; border-left:4px solid var(--green); background:#F6F9F0;
-                       border-radius:4px; margin-bottom:6px; font-size:12.5px; line-height:1.6; }
-.ins-list .ins-item.bad { border-left-color:var(--coral); background:#FDF1EF; }
-.ins-list .ins-item.warn { border-left-color:var(--green-d); background:#F0F4E6; }
-.ins-list .ins-item b { color:var(--ink); }
+/* 自動分析清單：2026-10-07 改成依單位分組，每組一個小標題 */
+.ins-group { margin-bottom:12px; }
+.ins-group:last-child { margin-bottom:0; }
+.ins-group-h { font-size:13px; font-weight:700; color:var(--green-d); margin:0 0 6px;
+               display:flex; align-items:center; gap:6px; }
+.ins-item { padding:8px 10px; border-left:4px solid var(--green); background:#F6F9F0;
+            border-radius:4px; margin-bottom:6px; font-size:12.5px; line-height:1.6; }
+.ins-item.bad { border-left-color:var(--coral); background:#FDF1EF; }
+.ins-item.warn { border-left-color:var(--green-d); background:#F0F4E6; }
+.ins-item b { color:var(--ink); }
+
+/* 部門負荷總表（六張小卡，一眼看出誰過重） */
+.ul-load-row { display:flex; gap:10px; flex-wrap:wrap; }
+.ul-load-card { flex:1 1 150px; min-width:150px; background:#F6F9F0; border:1px solid var(--line);
+                border-radius:8px; padding:10px 12px; text-align:center; }
+.ul-load-card.ul-overload { background:var(--overload-bg); border-color:#EFC2BD; }
+.ullc-name { font-size:13px; font-weight:700; color:var(--ink); margin-bottom:4px; }
+.ullc-status { font-size:11.5px; font-weight:700; color:#2E7D32; }
+.ul-load-card.ul-overload .ullc-status { color:var(--overload-text); }
+.ullc-reasons { font-size:11px; color:var(--overload-text); margin-top:6px; text-align:left; }
+.ullc-reasons div { margin-bottom:2px; }
+.ullc-reasons i { margin-right:2px; }
+.ul-load-card .k-more { margin-top:6px; }
+
+/* 趨勢分析：粒度切換鈕 */
+.ul-trend-gran.active { background:var(--green-d); color:#fff; }
 
 /* 分頁容器（總覽／設計課／業務課／生管已有內容，生產課／品管本階段先放空殼） */
 .ul-tab-pane { }
@@ -242,17 +262,47 @@ body { background:#F3F6EC; }
     <?php endforeach; ?>
   </div>
 
-  <!-- ── 總覽分頁（本階段唯一有實際內容的分頁） ──────────── -->
+  <!-- ── 總覽分頁 ─────────────────────────────────────────── -->
   <div class="ul-tab-pane" id="tab-overview">
 
     <div id="noteBar"></div>
+
+    <!-- 部門負荷總表：一眼看出哪些部門負荷過重，紅底一定附具體理由（ai-rules/10） -->
+    <div class="sec" id="secUnitOverload">
+      <h4><i class="fa fa-thermometer-half" style="color:var(--coral);"></i> 部門負荷總表
+        <span class="hint">任一指標超過設定門檻就整張卡標紅並列出具體理由，點「查看明細 »」可切到該單位分頁</span>
+      </h4>
+      <div id="unitOverloadRow" class="ul-load-row"></div>
+    </div>
+
     <div id="kpiRow" class="kpi-row"></div>
 
     <div class="sec" id="secInsight">
       <h4><i class="fa fa-lightbulb-o" style="color:var(--coral);"></i> 自動分析
-        <span class="hint">把各單位當前數字跟門檻與上一期比，每一條都附具體數字</span>
+        <span class="hint">依單位分組，把各單位當前數字跟門檻與上一期比，每一條都附具體數字</span>
       </h4>
-      <div id="insightList" class="ins-list"></div>
+      <div id="insightList"></div>
+    </div>
+
+    <!-- 月／季趨勢分析：六個單位各自的累積型代表指標走勢（獨立於上方期間篩選） -->
+    <div class="sec" id="secTrend">
+      <h4><i class="fa fa-line-chart" style="color:var(--green-d);"></i> 趨勢分析
+        <span class="hint">六個單位各自選一個「累積型」代表指標（現況快照型指標逐期都一樣，畫不出趨勢），滑鼠移到線上看圖例說明各代表什麼</span>
+      </h4>
+      <div class="ul-bar" style="margin-bottom:8px;">
+        <label>粒度</label>
+        <button type="button" class="btn btn-xs btn-ul-o ul-trend-gran active" data-gran="month">月</button>
+        <button type="button" class="btn btn-xs btn-ul-o ul-trend-gran" data-gran="quarter">季</button>
+        <label style="margin-left:10px;">往回看幾期</label>
+        <select id="fTrendBuckets" class="form-control input-sm" style="width:72px;">
+          <option value="6" selected>6</option>
+          <option value="12">12</option>
+        </select>
+      </div>
+      <div id="trendChart" style="height:360px;"></div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px;">
+        本期（最右側那一點，若當期尚未走完）數字會比較低，那是因為那一期還沒結束，不是真的下滑。
+      </div>
     </div>
 
   </div>
@@ -446,7 +496,8 @@ body { background:#F3F6EC; }
       <ul>
         <li>把<b>設計、業務、生管、生產、品管、包裝</b>六個單位目前的工作量各自整理成一張 KPI 卡與一頁明細，
             讓主管一眼看出哪個單位現在比較吃緊。</li>
-        <li><b>總覽分頁</b>：六張 KPI 卡＋整頁自動分析（哪個單位的哪個指標偏高、跟上一期比有沒有變嚴重）。</li>
+        <li><b>總覽分頁</b>：「部門負荷總表」（六張小卡一眼看出誰過重）＋六張 KPI 卡＋依單位分組的自動分析
+            （哪個單位的哪個指標偏高、跟上一期比有沒有變嚴重、連續上升或下滑）＋月／季趨勢分析折線圖。</li>
         <li>六個單位各自的<b>詳細資料分頁</b>：逐人明細、趨勢圖、各類清單，點分頁鈕或 KPI 卡的「查看明細 »」即可切入。
             品管多了「目前待驗佇列」（依製程分組的現況筆數＋本期平均檢驗工作天數）；設計課的「新案件」拆成
             「已處理」與「批圖中」兩種子狀態並附佔比。</li>
@@ -458,11 +509,19 @@ body { background:#F3F6EC; }
       <ol>
         <li>選「年度 → 期間（月／季／半年／整年）→ 要看哪一期」，比較基準可切「上一期」或「去年同期」。</li>
         <li>按「重新計算」。</li>
-        <li>按某張 KPI 卡右下角的「查看明細 »」或上方分頁鈕，切到該單位的詳細分頁（本階段為佔位畫面）。</li>
+        <li>按某張 KPI 卡或「部門負荷總表」小卡右下角的「查看明細 »」、或上方分頁鈕，切到該單位的詳細分頁。</li>
+        <li>「趨勢分析」區塊可自行切「月／季」粒度與往回看幾期，獨立於上面的期間篩選，隨時可切換重畫。</li>
       </ol>
       <h4>重要行為／常見疑問</h4>
       <ul>
-        <li><b>卡片背景變成紅色、並標「⚠ 負荷過重」</b>：代表自動分析偵測到這個單位有指標超過設定的門檻。</li>
+        <li><b>卡片背景變成紅色、並標「⚠ 負荷過重」</b>：代表那個單位目前有指標超過設定的門檻（「部門負荷
+            總表」小卡會列出是哪個指標、現在多少、門檻多少；KPI 卡與自動分析用的是同一份判定，不會互相矛盾）。</li>
+        <li><b>趨勢分析畫的不是「批圖中筆數」「委外加工中筆數」這些 KPI 卡上的數字</b>：那些是「現況快照」
+            （查詢當下的狀態，不管選哪個月份都是同一個答案），逐期疊起來只會是一條水平線沒有意義；
+            趨勢圖改用六個「累積型」代表指標（每個期間內真的發生了多少），滑鼠移到線上看圖例完整說明，
+            例如設計課畫的是「本期轉生管筆數」、業務課是「本期開立報價單張數」。</li>
+        <li><b>趨勢圖最右側那一點忽然變低</b>：如果那一期（例如本月）還沒走完，數字自然會比完整的一期少，
+            不是真的下滑，自動分析的「連續兩期下滑」判斷也只會用已經走完的期別去判斷。</li>
         <li><b>生管沒有逐人明細</b>：製令資料表（bom_ing）沒有「這張製令由哪個生管負責」的欄位，所以生管只有
             全公司現況統計，逐人明細恆為空，這是資料結構的既有限制。</li>
         <li><b>包裝逐人明細常常是空的</b>：包裝報工（pm_process_daily_report）多半記在實際操作人員頭上，
@@ -615,19 +674,13 @@ function metricLine(label, cur, cmp, fmt){
        + '<span class="k-metric-val">'+fmt(cur)+' '+deltaHtml(cur, cmp, fmt)+'</span></div>';
 }
 
-/* ── 總覽：是否「負荷過重」目前只能靠自動分析（insights）反推——overview 這個 action
-   只回原始數字，不像 data_design 等明細 action 那樣逐指標附 overload 旗標。
-   做法：掃一遍 insights，level==='bad' 且標題以該單位中文名稱開頭的，就把整張卡標紅；
-   這是暫時的推算方式，等下一階段做詳細分頁時，若總覽也要逐指標標紅，需要 API 另外補一個
-   欄位（不要在前端重算門檻邏輯，那是 unit_load_lib.php 的 ul_is_overload() 專責的事）。 */
+/* ── 總覽：「負荷過重」改由後端 unit_overload 直接回傳逐單位的 overloaded 旗標與具體
+   理由（2026-10-07 新增，取代原本「掃一遍 insights 標題文字反推」的暫時做法——前端
+   不重算門檻邏輯，那永遠是 unit_load_lib.php 的 ul_is_overload()／ul_unit_overload_check()
+   專責的事）。 */
 function renderOverview(d){
-  var badUnit = {};
-  (d.insights||[]).forEach(function(it){
-    if(it.level !== 'bad') return;
-    Object.keys(UNIT_LABELS).forEach(function(k){
-      if(String(it.title||'').indexOf(UNIT_LABELS[k]) === 0) badUnit[k] = true;
-    });
-  });
+  var ov = d.unit_overload || {};
+  var badOf = function(k){ return !!(ov[k] && ov[k].overloaded); };
 
   var h = '';
   var dc = d.design.cur, dp = d.design.cmp;
@@ -635,20 +688,20 @@ function renderOverview(d){
        metricLine('批圖中', dc.drawing_wip, dp.drawing_wip)
      + metricLine('繪圖平均工作天', dc.avg_draw_workdays, dp.avg_draw_workdays, nf1)
      + metricLine('設計備註待回覆訂單', dc.issue_orders, dp.issue_orders),
-     !!badUnit.design);
+     badOf('design'));
 
   var sc = d.sales.cur, sp = d.sales.cmp;
   h += kpiCard('sales', UNIT_LABELS.sales, d.sales.people_count,
        metricLine('本期報價單', sc.quote_count, sp.quote_count)
      + metricLine('待回覆問題', sc.open_issue_count, sp.open_issue_count),
-     !!badUnit.sales);
+     badOf('sales'));
 
   var pc = d.pm.cur, pp = d.pm.cmp;
   h += kpiCard('pm', UNIT_LABELS.pm, d.pm.people_count,
        metricLine('委外加工中', pc.outsource_wip, pp.outsource_wip)
      + metricLine('廠內加工中', pc.internal_wip, pp.internal_wip)
      + metricLine('待對帳筆數', pc.pending_recon_lines, pp.pending_recon_lines),
-     !!badUnit.pm);
+     badOf('pm'));
 
   var prod = d.prod;
   h += kpiCard('prod', UNIT_LABELS.prod, prod.people_count,
@@ -656,37 +709,106 @@ function renderOverview(d){
      + metricLine('已指派機台', prod.assigned_total, null)
      + metricLine('未正式指派卻已報工', prod.untracked_total, null)
      + metricLine('平均架機時間（分）', prod.avg_setup_minutes, null, nf1),
-     !!badUnit.prod);
+     badOf('prod'));
 
   var qc = d.qc;
   h += kpiCard('qc', UNIT_LABELS.qc, qc.people_count,
        metricLine('待驗平均等待工作天', qc.avg_wait_workdays, null, nf1)
      + metricLine('平均NG比例', qc.avg_ng_rate!=null ? qc.avg_ng_rate*100 : null, null, pct1)
      + metricLine('脫離流程補檢驗', qc.adhoc_total, null),
-     !!badUnit.qc);
+     badOf('qc'));
 
   var pk = d.packing || {};
   h += kpiCard('packing', UNIT_LABELS.packing, pk.people_count,
        metricLine('待包裝筆數', pk.pending, null)
      + metricLine('平均處理工作天', pk.avg_workdays, null, nf1),
-     !!badUnit.packing);
+     badOf('packing'));
 
   $('#kpiRow').html(h);
-  renderInsights(d.insights || []);
+  renderUnitOverloadRow(ov);
+  renderInsights(d.insights || {});
 }
-function renderInsights(list){
-  if(!list.length){
-    $('#insightList').html('<div style="color:var(--muted);font-size:12.5px;">目前沒有需要特別留意的事項。</div>');
-    return;
-  }
+
+/** 部門負荷總表：六張小卡，過重的標紅並逐條列出「哪個指標、現在多少、門檻多少」 */
+function renderUnitOverloadRow(ov){
+  ov = ov || {};
   var h = '';
-  list.forEach(function(it){
-    var lv = it.level || 'info';
-    var icon = lv==='bad' ? 'fa-exclamation-triangle' : (lv==='warn' ? 'fa-flag' : 'fa-info-circle');
-    h += '<div class="ins-item '+esc(lv)+'"><i class="fa '+icon+'"></i> <b>'+esc(it.title)+'</b>　'+esc(it.detail)+'</div>';
+  UNIT_KEYS.forEach(function(k){
+    var u = ov[k] || {overloaded:false, reasons:[]};
+    var icon = UNIT_ICONS[k] || 'fa-circle';
+    h += '<div class="ul-load-card'+(u.overloaded?' ul-overload':'')+'">'
+       + '<div class="ullc-name"><i class="fa '+icon+'"></i> '+esc(UNIT_LABELS[k]||k)+'</div>'
+       + '<div class="ullc-status">'+(u.overloaded
+            ? '<i class="fa fa-exclamation-triangle"></i> 負荷過重'
+            : '<i class="fa fa-check-circle"></i> 正常') + '</div>';
+    if (u.overloaded && (u.reasons||[]).length){
+      h += '<div class="ullc-reasons">';
+      u.reasons.forEach(function(r){
+        h += '<div><i class="fa fa-caret-right"></i> '+esc(r.text || (r.label+' '+r.value+' > '+r.threshold))+'</div>';
+      });
+      h += '</div>';
+    }
+    h += '<div class="k-more"><a href="javascript:void(0)" class="ul-go-tab" data-tab="'+k+'">查看明細 »</a></div>'
+       + '</div>';
   });
+  $('#unitOverloadRow').html(h);
+}
+
+/** 自動分析：依單位分組顯示（2026-10-07 改版），某單位沒有可講的內容時該分組直接不輸出 */
+function renderInsights(grouped){
+  grouped = grouped || {};
+  var h = '';
+  UNIT_KEYS.forEach(function(k){
+    var list = grouped[k] || [];
+    if (!list.length) return;
+    h += '<div class="ins-group"><div class="ins-group-h"><i class="fa '
+       + (UNIT_ICONS[k]||'fa-circle') + '"></i> ' + esc(UNIT_LABELS[k]||k) + '</div>';
+    list.forEach(function(it){
+      var lv = it.level || 'info';
+      var icon = lv==='bad' ? 'fa-exclamation-triangle' : (lv==='warn' ? 'fa-flag' : 'fa-info-circle');
+      h += '<div class="ins-item '+esc(lv)+'"><i class="fa '+icon+'"></i> <b>'+esc(it.title)+'</b>　'+esc(it.detail)+'</div>';
+    });
+    h += '</div>';
+  });
+  if (!h) h = '<div style="color:var(--muted);font-size:12.5px;">目前沒有需要特別留意的事項。</div>';
   $('#insightList').html(h);
 }
+
+/* ── 趨勢分析：月／季粒度的六個單位代表指標走勢，獨立於上方期間篩選自己的粒度／期數 */
+var TREND_GRAN = 'month';
+function loadTrend(){
+  var params = {action:'trend', gran:TREND_GRAN, buckets:$('#fTrendBuckets').val()};
+  $.get(UL_API, params, function(r){
+    if(!r || !r.ok){ alert((r&&r.error)||'趨勢分析載入失敗'); return; }
+    renderTrendChart(r);
+  }, 'json').fail(function(xhr){
+    var r = xhr.responseJSON;
+    alert((r&&r.error) || ('趨勢分析載入失敗：HTTP '+xhr.status));
+  });
+}
+function renderTrendChart(d){
+  var labels = d.labels || [];
+  var series = d.series || {};
+  var metricLabels = d.metric_labels || {};
+  var sArr = UNIT_KEYS.map(function(k){
+    return { name: (UNIT_LABELS[k]||k) + '｜' + (metricLabels[k]||''), data: (series[k]||[]).map(Number) };
+  });
+  chart('trendChart', {
+    chart: { type:'line', height:340 },
+    xAxis: { categories: labels },
+    yAxis: { title:{text:null}, allowDecimals:false, min:0 },
+    tooltip: { shared:true },
+    plotOptions: { series:{ marker:{ enabled:true, radius:3 } } },
+    series: sArr
+  });
+}
+$(document).on('click', '.ul-trend-gran', function(){
+  $('.ul-trend-gran').removeClass('active');
+  $(this).addClass('active');
+  TREND_GRAN = $(this).data('gran');
+  loadTrend();
+});
+$('#fTrendBuckets').on('change', loadTrend);
 
 /* ══════════════════════════════════════════════════════════════════
  * 圖表共用：chart(id,opt) 與 sizeBox(id,px)（本階段建立，之後生產課／品管沿用，
@@ -1497,6 +1619,7 @@ $('#btnSetSave').on('click', function(){
     closeMask('setMask');
     UL_THR = null; // 部門範圍／門檻可能都變了，逐人明細表的標紅門檻快取要跟著失效
     load();
+    loadTrend(); // 部門範圍也會改變趨勢圖吃的人員 id，連帶重算
     // 正在看哪個單位的詳細分頁，部門範圍一改，那個分頁也要連帶重算（不能留著設定前的舊人員清單）
     var t = $('.ul-tab-btn.active').data('tab');
     if (UNIT_LOADERS[t]) loadUnitTab(t);
@@ -1509,6 +1632,7 @@ $('#btnSetSave').on('click', function(){
 <?php if ($canView): ?>
 fillIdx();
 load();
+loadTrend();
 <?php endif; ?>
 </script>
 </body>
