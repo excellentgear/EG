@@ -340,10 +340,15 @@ switch ($action) {
         $summary    = ul_design_summary($db, $p['from'], $p['to'], $ids);
         $summaryCmp = ul_design_summary($db, $p['cmp_from'], $p['cmp_to'], $ids);
         $byPerson   = ul_design_by_person($db, $p['from'], $p['to'], $idsFiltered, $deptIds);
-        $reviewer   = ul_design_reviewer_counts($db, $p['from'], $p['to'], $ids);
-        $dailyPmget = ul_design_daily_pmget($db, $p['from'], $p['to'], $ids);
+        // 2026-10-07 修正：以下三支原本吃未過濾的 $ids——但前端渲染時都是拿「已排除職位的
+        // by_person」去查姓名（renderDesignDailyChart()/renderDesignNoteStats() 的 nameOf()
+        // 共用邏輯），被排除的人（如職位課長的陳俊宏）仍會出現在這幾份明細裡、卻查不到姓名，
+        // 畫面上就印出「#105030101」這種異常。改用 $idsFiltered 讓「被排除職位的人不列入
+        // 逐人相關明細」這件事全站一致——不是只有主表格排除、其他地方還是漏網之魚。
+        $reviewer   = ul_design_reviewer_counts($db, $p['from'], $p['to'], $idsFiltered);
+        $dailyPmget = ul_design_daily_pmget($db, $p['from'], $p['to'], $idsFiltered);
         $tags       = ul_design_tags($db, $p['from'], $p['to'], $ids);
-        $noteStats  = ul_design_note_stats($db, $p['from'], $p['to'], $ids);
+        $noteStats  = ul_design_note_stats($db, $p['from'], $p['to'], $idsFiltered);
 
         $overload = [
             'drawing_wip'       => ul_is_overload((float)$summary['drawing_wip'], 'design.batch_pending', $thresholds),

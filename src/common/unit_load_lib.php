@@ -2866,24 +2866,14 @@ function ul_insights(array $allData, array $thresholds = [], ?array $trend = nul
         $cl = $allData['design']['cmp_label'] ?? '上一期';
         $cmp = $allData['design']['cmp'] ?? null;
 
-        $wipBad = ul_is_overload((float)$d['drawing_wip'], 'design.batch_pending', $thresholds);
-        $add('design', $wipBad ? 'bad' : 'info', $wipBad ? '批圖中筆數偏高' : '批圖中現況',
-            '目前批圖中 ' . $d['drawing_wip'] . ' 筆（已分配但尚未按審圖、也尚未轉生管）'
-            . ($wipBad ? '，已超過門檻。' : '。'), (string)$d['drawing_wip']);
-
-        if ($cmp && isset($cmp['drawing_wip']) && (int)$cmp['drawing_wip'] > 0) {
-            // drawing_wip 是「目前狀態」的即時快照（ul_design_summary() 不管傳進去的
-            // $from/$to 是什麼，查的都是同一個現況），所以 cur 跟 cmp 這裡永遠是同一個
-            // 數字、delta 永遠是 0，這條结論本來就不會觸發——不是期間長度造成的系統性
-            // 偏差（下面 pm_get 那條才是真正的「累積型」指標，才需要日均換算），刻意
-            // 不套用 ul_period_delta_calc()。
-            $delta = (int)$d['drawing_wip'] - (int)$cmp['drawing_wip'];
-            if ($delta !== 0) {
-                $add('design', $delta > 0 ? 'warn' : 'good', '批圖中筆數較' . $cl . ($delta > 0 ? '增加' : '減少'),
-                    '本期 ' . $d['drawing_wip'] . ' 筆，較' . $cl . '的 ' . $cmp['drawing_wip'] . ' 筆'
-                    . ($delta > 0 ? '增加' : '減少') . ' ' . abs($delta) . ' 筆。', ($delta > 0 ? '+' : '') . $delta);
-            }
-        }
+        // 2026-10-07 使用者明確要求：「自動分析」只分析區間內能計算的內容，不要顯示整個
+        // 即時現況（現況是「現在這一刻」，跟上面的期間篩選器完全無關，混在依區間分析的
+        // 內容裡會讓人誤以為是在講這個期間）。批圖中（drawing_wip）是即時佇列快照——
+        // bom_ing/order_track 只存「現在」的值，系統沒有保留「過去某個區間當時」的歷史
+        // 記錄，技術上做不出依區間計算的版本，所以乾脆不放進自動分析；它本來就已經在
+        // KPI 卡片上用「即時現況」標示過一次，不需要在這裡重複又混淆。下面那段原本比較
+        // drawing_wip 本期/比較期的結論也一併移除——兩次呼叫 ul_design_summary() 查的是
+        // 同一個現況，delta 恆為 0，從來不會觸發，是死碼。
 
         if ($cmp && isset($cmp['pm_get']) && (int)$cmp['pm_get'] > 0) {
             // 2026-10-07 修正：本期轉生管量是累積型指標（pmGet 落在期間內才算），本期
@@ -2909,24 +2899,9 @@ function ul_insights(array $allData, array $thresholds = [], ?array $trend = nul
                 '本期由業務轉設計到轉生管平均 ' . $d['avg_draw_workdays'] . ' 個工作天，已超過門檻。', $d['avg_draw_workdays'] . ' 天');
         }
 
-        $issBad = ul_is_overload((float)$d['issue_orders'], 'design.issue_orders', $thresholds);
-        if ($issBad || (int)$d['issue_orders'] > 0) {
-            $add('design', $issBad ? 'bad' : 'info', $issBad ? '待回覆設計備註偏多' : '待回覆設計備註',
-                '目前有 ' . $d['issue_orders'] . ' 張訂單帶著開放中的設計備註問題' . ($issBad ? '，已超過門檻。' : '。'),
-                (string)$d['issue_orders']);
-        }
-
-        $nc = $d['new_case'] ?? null;
-        if ($nc && (int)$nc['total'] > 0) {
-            // 2026-10-07 使用者回報這條文字容易被誤解成「本期（如10月）新增828張」——這是
-            // 即時現況快照（全部有效訂單裡查無圖面的累計數，不受上方期間篩選影響），不是
-            // 本期新增量，標題與內文都要明講，避免跟其他「本期」開頭的結論混在一起誤讀。
-            $add('design', 'info', '新案件（無圖面）現況，非本期新增量',
-                '【即時現況，與上方期間篩選無關】目前全部有效訂單中累計 ' . $nc['total'] . ' 張查無任何圖面，其中已轉生管 '
-                . $nc['processed'] . ' 張（' . round(($nc['processed_pct'] ?? 0) * 100, 1) . '%）、仍在批圖中 '
-                . $nc['in_progress'] . ' 張（' . round(($nc['in_progress_pct'] ?? 0) * 100, 1) . '%）。',
-                (string)$nc['total']);
-        }
+        // 待回覆設計備註（issue_orders）與新案件／無圖面（new_case）同屬即時現況快照，理由
+        // 同上一段——移除，不塞進依區間分析的「自動分析」裡；KPI 卡片上已經用「即時現況」
+        // 標示過，不重複顯示。
 
         $streak('design', '轉生管量');
     }
@@ -2975,12 +2950,9 @@ function ul_insights(array $allData, array $thresholds = [], ?array $trend = nul
             }
         }
 
-        $oiBad = ul_is_overload((float)$s['open_issue_count'], 'sales.open_issue_count', $thresholds);
-        if ($oiBad || (int)$s['open_issue_count'] > 0) {
-            $add('sales', $oiBad ? 'bad' : 'info', $oiBad ? '待回覆問題偏多' : '待回覆問題現況',
-                '目前累積 ' . $s['open_issue_count'] . ' 筆開放中設計備註問題' . ($oiBad ? '，已超過門檻。' : '。'),
-                (string)$s['open_issue_count']);
-        }
+        // 待回覆問題（open_issue_count）是即時快照（現在有多少張訂單帶著開放中的設計備註
+        // 問題，不受期間篩選影響），同理移除，不放進依區間分析的「自動分析」；KPI 卡片
+        // 已標示即時現況與過重與否。
 
         if ((int)$s['quote_count'] > 0) {
             $avgItems = round($s['quote_item_count'] / $s['quote_count'], 1);
@@ -2994,22 +2966,18 @@ function ul_insights(array $allData, array $thresholds = [], ?array $trend = nul
     if (isset($allData['pm']['cur'])) {
         $p = $allData['pm']['cur'];
 
-        $owBad = ul_is_overload((float)$p['outsource_wip'], 'pm.outsource_wip', $thresholds);
-        $add('pm', $owBad ? 'warn' : 'info', $owBad ? '委外加工中筆數偏高' : '委外/廠內加工現況',
-            '目前委外加工中共 ' . $p['outsource_wip'] . ' 筆、廠內加工中 ' . $p['internal_wip'] . ' 筆'
-            . ($owBad ? '，委外加工已超過門檻。' : '。'), (string)$p['outsource_wip']);
+        // 委外/廠內加工中、製程流轉現況（to_qc/pending_transfer/transferred）都是 bom_ing
+        // 目前狀態的即時快照，跟上一段設計課同理移除，不放進依區間分析的「自動分析」；
+        // KPI 卡片已標示即時現況與過重與否，不在這裡重複。
 
+        // 待對帳（pending_recon_lines）是唯一真正依區間計算的——依選定期間涵蓋的帳款月份
+        // 彙總 acc_recon_track 的對帳進度（ul_billing_months_between()），不是即時佇列，
+        // 標題原本寫「現況」會跟上面那些真現況混在一起，正名為「本期」。
         $rcBad = ul_is_overload((float)$p['pending_recon_lines'], 'pm.pending_recon_lines', $thresholds);
         if ($rcBad || (int)$p['pending_recon_lines'] > 0) {
-            $add('pm', $rcBad ? 'bad' : 'info', $rcBad ? '待對帳筆數偏高' : '待對帳現況',
-                '目前待對帳 ' . ($p['pending_recon_parties'] ?? 0) . ' 家廠商、共 ' . $p['pending_recon_lines'] . ' 筆'
+            $add('pm', $rcBad ? 'bad' : 'info', $rcBad ? '待對帳筆數偏高' : '本期待對帳',
+                '本期涵蓋帳款月份待對帳 ' . ($p['pending_recon_parties'] ?? 0) . ' 家廠商、共 ' . $p['pending_recon_lines'] . ' 筆'
                 . ($rcBad ? '，已超過門檻。' : '。'), (string)$p['pending_recon_lines']);
-        }
-
-        if (isset($p['to_qc'], $p['pending_transfer'], $p['transferred'])) {
-            $add('pm', 'info', '製程流轉現況',
-                '目前待QC驗 ' . $p['to_qc'] . ' 筆、待生管移轉 ' . $p['pending_transfer'] . ' 筆、已移轉 '
-                . $p['transferred'] . ' 筆。');
         }
 
         $streak('pm', '新發包委外量');
@@ -3017,26 +2985,16 @@ function ul_insights(array $allData, array $thresholds = [], ?array $trend = nul
 
     // 生產課
     if (isset($allData['prod'])) {
-        $pt = $allData['prod']['by_process_type'] ?? [];
-        $totalUnassigned = array_sum(array_column($pt, 'unassigned'));
-        $totalAssigned = array_sum(array_column($pt, 'assigned'));
-
-        $uaBad = ul_is_overload((float)$totalUnassigned, 'prod.unassigned_count', $thresholds);
-        $add('prod', $uaBad ? 'bad' : 'info', $uaBad ? '未指派機台筆數偏高' : '機台指派現況',
-            '目前進行中的製程裡有 ' . $totalUnassigned . ' 筆還沒指派機台、' . $totalAssigned . ' 筆已指派'
-            . ($uaBad ? '，未指派已超過門檻。' : '。'), (string)$totalUnassigned);
-
-        if ($pt && (int)$pt[0]['unassigned'] > 0) {
-            $top = $pt[0]; // 已依 total 由大到小排序
-            $add('prod', 'warn', '未指派集中在「' . $top['process_type_name'] . '」',
-                $top['process_type_name'] . '目前有 ' . $top['unassigned'] . ' 筆未指派機台，是未指派佔比最高的製程大類。',
-                (string)$top['unassigned']);
-        }
+        // 機台指派現況、未指派集中在哪個製程大類：都是 ul_prod_current_step_rows() 的即時
+        // 快照（現在卡在哪一關），同理移除，不放進依區間分析的「自動分析」；KPI 卡片已
+        // 標示即時現況與過重與否。
 
         $setup = $allData['prod']['setup'] ?? null;
         if ($setup && $setup['avg_minutes'] !== null) {
+            // 平均架機時間是本期內實際報工的架機紀錄算出來的，真正依區間計算，標題原本
+            // 寫「現況」容易跟上面那些真現況混在一起，正名為「本期」。
             $stBad = ul_is_overload((float)$setup['avg_minutes'], 'prod.avg_setup_minutes', $thresholds);
-            $add('prod', $stBad ? 'warn' : 'info', $stBad ? '平均架機時間偏長' : '平均架機時間現況',
+            $add('prod', $stBad ? 'warn' : 'info', $stBad ? '平均架機時間偏長' : '本期平均架機時間',
                 '本期平均架機時間 ' . $setup['avg_minutes'] . ' 分鐘' . ($stBad ? '，已超過門檻。' : '。'),
                 $setup['avg_minutes'] . ' 分');
         }
@@ -3066,7 +3024,7 @@ function ul_insights(array $allData, array $thresholds = [], ?array $trend = nul
             // 波動本來就大），不列入負荷過重判定，ul_is_overload() 一律回 false。
             $ngBad = ul_is_overload((float)$ab['avg_ng_rate'], 'qc.ng_rate', $thresholds);
             $ngNoThr = ul_threshold_no_threshold('qc.ng_rate', $thresholds);
-            $add('qc', $ngBad ? 'bad' : 'info', $ngBad ? 'NG比例偏高' : 'NG比例現況',
+            $add('qc', $ngBad ? 'bad' : 'info', $ngBad ? 'NG比例偏高' : '本期NG比例',
                 '本期NG比例約 ' . round($ab['avg_ng_rate'] * 100, 1) . '%（' . ($ab['total_ng'] ?? 0) . '/'
                 . ($ab['total_inspected'] ?? 0) . '），平均每日異常單 ' . $ab['avg_abnormal_per_day'] . ' 件'
                 . ($ngBad ? '，已超過門檻。' : ($ngNoThr ? '（僅供參考，不計入負荷過重判定）。' : '。')),
@@ -3075,7 +3033,7 @@ function ul_insights(array $allData, array $thresholds = [], ?array $trend = nul
 
         if ($wait && $wait['avg_workdays'] !== null) {
             $wBad = ul_is_overload((float)$wait['avg_workdays'], 'qc.wait_days_avg', $thresholds);
-            $add('qc', $wBad ? 'warn' : 'info', $wBad ? '待驗平均等待工作天偏長' : '待驗平均等待工作天現況',
+            $add('qc', $wBad ? 'warn' : 'info', $wBad ? '待驗平均等待工作天偏長' : '本期待驗平均等待工作天',
                 '本期完成檢驗的製程，平均等了 ' . $wait['avg_workdays'] . ' 個工作天才驗完' . ($wBad ? '，已超過門檻。' : '。'),
                 $wait['avg_workdays'] . ' 天');
             if (!empty($wait['longest'])) {
@@ -3102,9 +3060,8 @@ function ul_insights(array $allData, array $thresholds = [], ?array $trend = nul
     if (isset($allData['packing'])) {
         $pk = $allData['packing'];
 
-        $pBad = ul_is_overload((float)$pk['pending'], 'packing.pending', $thresholds);
-        $add('packing', $pBad ? 'bad' : 'info', $pBad ? '待包裝筆數偏高' : '待包裝現況',
-            '目前待包裝 ' . $pk['pending'] . ' 筆' . ($pBad ? '，已超過門檻。' : '。'), (string)$pk['pending']);
+        // 待包裝筆數是即時佇列快照，同理移除，不放進依區間分析的「自動分析」；KPI 卡片
+        // 已標示即時現況與過重與否。
 
         if (isset($pk['avg_workdays']) && $pk['avg_workdays'] !== null) {
             $add('packing', 'info', '平均包裝處理工作天',
