@@ -485,7 +485,7 @@ function oa_fetch_orders(PDO $db, string $from, string $to, array $opt = []): ar
     $sql = "SELECT ot.Order_id, ot.Order_oo, ot.C_order, ot.`$dateCol` AS dt, ot.Order_date, ot.Delivery_date,
                    ot.Client_name, ot.Client_name_ID, ot.d_id, ot.d_id_ID, ot.Qty, ot.unit_price,
                    ot.Processing_items, ot.Order_status, ds.Customer_Id AS part_cust,
-                   ot.Created_By, ot.Created_At, creator.user_cname AS creator_name
+                   ot.Created_By, ot.Created_At, creator.user_cname AS creator_name, ot.Order_ps
               FROM order_track ot
               LEFT JOIN d_setting ds ON ds.d_id = ot.d_id_ID
               LEFT JOIN user creator ON creator.id = ot.Created_By
@@ -532,6 +532,7 @@ function oa_fetch_orders(PDO $db, string $from, string $to, array $opt = []): ar
             'status'  => $r['Order_status'] === null ? '' : (string)$r['Order_status'],
             'created_by_name' => trim((string)($r['creator_name'] ?? '')) !== '' ? (string)$r['creator_name'] : '',
             'created_at'      => $r['Created_At'] ? substr((string)$r['Created_At'], 0, 10) : '',
+            'order_ps'        => trim((string)($r['Order_ps'] ?? '')),
         ];
     }
     return $out;
@@ -1775,6 +1776,59 @@ function oa_leadtime_workdays(PDO $db, string $orderDate, string $deliveryDate):
     return max(0, kpi_as_workdays_inclusive($db, $orderDate, $deliveryDate) - 1);
 }
 
+/**
+ * 批次查「這些訂單各自最早的實際出貨日期」。
+ * 出貨單↔訂單綁定有兩種來源（shipment_order_map 精確分配／is_list.Order_id 舊資料直接綁定，
+ * 見 ship_order_bind_lib.php 檔頭說明），兩者都要查，只讀其中一種會漏掉另一種方式綁上的出貨單。
+ * 刻意不逐筆呼叫該檔的 sob_bound_map()（那是單筆查詢，整批呼叫會是 N+1）。
+ * 一張訂單可能分好幾次出貨，取「最早出貨日」——與既有「準時出貨率」C 模式同一個口徑
+ * （最早出貨日不晚於交期）。
+ */
+function oa_actual_ship_dates(PDO $db, array $orderIds): array
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $orderIds))));
+    if (!$ids) return [];
+    $ph  = implode(',', array_fill(0, count($ids), '?'));
+    $out = [];
+    $upd = function (array $rows) use (&$out) {
+        foreach ($rows as $r) {
+            $oid = (int)$r['oid']; $d = substr((string)$r['d'], 0, 10);
+            if ($d === '' || $d < '2000-01-01') continue;
+            if (!isset($out[$oid]) || $d < $out[$oid]) $out[$oid] = $d;
+        }
+    };
+    $st1 = $db->prepare("SELECT som.Order_id oid, MIN(il.Order_date) d
+                            FROM shipment_order_map som JOIN is_list il ON il.IS_id = som.IS_id
+                           WHERE som.Order_id IN ($ph) GROUP BY som.Order_id");
+    $st1->execute($ids);
+    $upd($st1->fetchAll(PDO::FETCH_ASSOC));
+    $st2 = $db->prepare("SELECT Order_id oid, MIN(Order_date) d FROM is_list WHERE Order_id IN ($ph) GROUP BY Order_id");
+    $st2->execute($ids);
+    $upd($st2->fetchAll(PDO::FETCH_ASSOC));
+    return $out;
+}
+
+/**
+ * 批次查「這些訂單各自綁定的製令（BOM）有幾道相異製程站」。
+ * 製程站數＝該製令 bom_ing 的 DISTINCT bom_sn 數（同一站可能因分批報工產生好幾列 bom_ing，
+ * bom_sn 相同的只算一次；例：BOM_SN=10,20,20,25,30 算 4 站）。
+ * bom.o_order_id 是 order_track.Order_id（varchar 存整數字串，資料字典註解寫錯過一次，
+ * 見 ai-rules 路由表「BOM o_order_id」，比對一律用字串避免再誤踩）。
+ */
+function oa_order_process_steps(PDO $db, array $orderIds): array
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $orderIds))));
+    if (!$ids) return [];
+    $ph  = implode(',', array_fill(0, count($ids), '?'));
+    $out = [];
+    $st = $db->prepare("SELECT b.o_order_id oid, COUNT(DISTINCT bi.bom_sn) steps
+                           FROM bom b JOIN bom_ing bi ON bi.bom = b.bom
+                          WHERE b.o_order_id IN ($ph) GROUP BY b.o_order_id");
+    $st->execute(array_map('strval', $ids));
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) { $out[(int)$r['oid']] = (int)$r['steps']; }
+    return $out;
+}
+
 /** 稽核製程標籤 scope → 本頁通用的 cls 鍵，與 oa_analyze() 同一套對照，抽成共用避免兩處各自維護 */
 function oa_scope_to_cls(?array $astagInfo): string
 {
@@ -1814,7 +1868,10 @@ function oa_percentile(array $sortedAsc, float $pct): ?float
 /* ── 急件判定設定：逐類別百分位，管理員可調（獨立一把 key，概念上與 alert_settings 不同） ── */
 function oa_urgent_settings_default(): array
 {
-    return ['percentile' => ['full' => 20, 'multi' => 20, 'single' => 20]];
+    // min_workdays_floor：null＝不排除；設定數字後，交期工作天數 ≤ 這個值的訂單視為
+    // 「疑似誤植交期」（例：全製訂單交期工作天數＝0，大多是日期打錯，不是真的當天要交），
+    // 整段分析（平均／中位數／急件判定）一律當作沒有交期資料，不只是不算急件而已。
+    return ['percentile' => ['full' => 20, 'multi' => 20, 'single' => 20], 'min_workdays_floor' => null];
 }
 function oa_urgent_settings(PDO $db): array
 {
@@ -1827,11 +1884,17 @@ function oa_urgent_settings(PDO $db): array
             $out['percentile'][$k] = max(1, min(100, (int)$s['percentile'][$k]));
         }
     }
+    if (array_key_exists('min_workdays_floor', $s)) {
+        $out['min_workdays_floor'] = ($s['min_workdays_floor'] === null || $s['min_workdays_floor'] === '')
+            ? null : max(0, min(60, (int)$s['min_workdays_floor']));
+    }
     return $out;
 }
 function oa_urgent_settings_save(PDO $db, array $in, string $by): array
 {
-    $cur = oa_urgent_settings_default();
+    // 一定要從「目前已存檔的設定」疊加，不可以從預設值開始——否則只送一部分欄位
+    // （例如只改 min_workdays_floor）就會把沒送的欄位（percentile）安靜地打回預設值。
+    $cur = oa_urgent_settings($db);
     $errs = [];
     if (isset($in['percentile']) && is_array($in['percentile'])) {
         foreach ($cur['percentile'] as $k => $v) {
@@ -1839,6 +1902,12 @@ function oa_urgent_settings_save(PDO $db, array $in, string $by): array
             if (!is_numeric($in['percentile'][$k])) { $errs[] = '「' . oa_cls_label($k) . '」的急件百分比必須是數字'; continue; }
             $cur['percentile'][$k] = max(1, min(100, (int)$in['percentile'][$k]));
         }
+    }
+    if (array_key_exists('min_workdays_floor', $in)) {
+        $v = $in['min_workdays_floor'];
+        if ($v === null || $v === '') { $cur['min_workdays_floor'] = null; }
+        elseif (is_numeric($v)) { $cur['min_workdays_floor'] = max(0, min(60, (int)$v)); }
+        else { $errs[] = '排除下限必須是數字或留空'; }
     }
     if ($errs) return ['ok' => false, 'errors' => $errs];
     oa_param_save($db, 'urgent_settings', $cur, $by);
@@ -1870,18 +1939,11 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
     $to   = max($cur['end'], $cmpP['end']);
     $rows = oa_fetch_orders($db, $from, $to, ['basis' => 'order', 'include_paused' => $incP]);
 
-    $astagMap = ot_astag_for_orders($db, array_column($rows, 'id'));
-    $bands = oa_qty_bands($db);
-    foreach ($rows as &$r) {
-        $r['cls']  = oa_scope_to_cls($astagMap[$r['id']] ?? null);
-        $r['lt']   = oa_leadtime_workdays($db, $r['odate'], $r['ddate']);
-        $r['band'] = oa_band_index((int)$r['qty'], $bands);
-    }
-    unset($r);
-
     // 急件判定百分位：管理員預設值一律先算出來，使用者可在畫面上改成「僅本次計算」的覆寫值
     // ——兩者都要原樣回傳，畫面／報告上才能同時清楚印出「這次用的值」與「管理員預設值」，
     // 覆寫值刻意不寫回 oa_urgent_settings()，不影響管理員設定。
+    // 排除下限（min_workdays_floor）則不開放覆寫——那是資料品質門檻，不是單次試算的東西，
+    // 一律讀管理員設定本身（$usDefault），不受 urgent_pct 覆寫影響。
     $usDefault = oa_urgent_settings($db);
     $us = $usDefault;
     $override = $opt['urgent_pct'] ?? null;
@@ -1893,7 +1955,32 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
         }
     }
     $isOverride = $us['percentile'] !== $usDefault['percentile'];
+    $floor = $usDefault['min_workdays_floor'];
     $urgentClasses = array_flip(oa_urgent_classes());
+
+    $astagMap = ot_astag_for_orders($db, array_column($rows, 'id'));
+    $bands    = oa_qty_bands($db);
+    $shipMap  = oa_actual_ship_dates($db, array_column($rows, 'id'));
+    foreach ($rows as &$r) {
+        $info = $astagMap[$r['id']] ?? null;
+        $r['cls']      = oa_scope_to_cls($info);
+        $r['as_label'] = $info ? (string)$info['label'] : '';
+        $r['band']     = oa_band_index((int)$r['qty'], $bands);
+
+        $ltRaw = oa_leadtime_workdays($db, $r['odate'], $r['ddate']);
+        $r['lt_raw'] = $ltRaw;
+        // 排除下限：交期工作天數 ≤ 設定值視為疑似誤植交期，整段分析當作沒有交期資料
+        $r['lt'] = ($ltRaw !== null && $floor !== null && $ltRaw <= $floor) ? null : $ltRaw;
+
+        // 有交期的都要列入實際出貨日期（使用者明確要求，不限急件）；交期工作天數被排除下限
+        // 篩掉的（$r['lt']===null）不影響這段——實際出貨/延誤是獨立於「交期工作天數夠不夠長」的事實
+        $r['ship_date'] = $shipMap[$r['id']] ?? '';
+        $r['ship_lt']   = $r['ship_date'] !== '' ? oa_leadtime_workdays($db, $r['odate'], $r['ship_date']) : null;
+        $r['delay_days'] = ($r['ship_date'] !== '' && $r['ddate'] !== '')
+            ? (int)round((strtotime($r['ship_date']) - strtotime($r['ddate'])) / 86400)
+            : null;
+    }
+    unset($r);
 
     $build = function (array $p) use ($rows, $selMap, $us, $urgentClasses, $bands) {
         $inRange = function (array $r) use ($p) { return $r['dt'] >= $p['start'] && $r['dt'] <= $p['end']; };
@@ -1907,11 +1994,23 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
         foreach ($byClassLt as $cls => $arr) { sort($arr); $thr[$cls] = oa_percentile($arr, (float)($us['percentile'][$cls] ?? 20)); }
 
         $selAll = array_values(array_filter($all, $inSel));
-        $noLt   = count(array_filter($selAll, function ($r) { return $r['lt'] === null; }));
+        $noLt   = count(array_filter($selAll, function ($r) { return $r['lt_raw'] === null; }));
+        $noise  = count(array_filter($selAll, function ($r) { return $r['lt_raw'] !== null && $r['lt'] === null; }));
         $set    = array_values(array_filter($selAll, function ($r) { return $r['lt'] !== null; }));
 
         $byCls = []; $bandAgg = []; $clientAgg = []; $urgentList = [];
         $amountAll = 0.0; $ordersAll = 0; $urgentAmount = 0.0; $urgentN = 0;
+        // 實際出貨與延誤：對「選取範圍內、有交期資料」的全部訂單都統計（不限急件）
+        $shipBoundN = 0; $shipLtSum = 0; $shipLtN = 0; $delaySum = 0; $delayN = 0; $lateN = 0;
+        foreach ($set as $r) {
+            if ($r['ship_date'] === '') continue;
+            $shipBoundN++;
+            if ($r['ship_lt'] !== null) { $shipLtSum += $r['ship_lt']; $shipLtN++; }
+            if ($r['delay_days'] !== null) {
+                $delaySum += $r['delay_days']; $delayN++;
+                if ($r['delay_days'] > 0) $lateN++;
+            }
+        }
 
         foreach ($set as $r) {
             $cls = $r['cls']; $lt = (int)$r['lt'];
@@ -1940,8 +2039,10 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
                 $urgentList[] = ['no' => $r['no'], 'c_order' => $r['c_order'], 'cname' => $r['cname'],
                                  'pno' => $r['pno'], 'pid' => $r['pid'], 'odate' => $r['odate'], 'ddate' => $r['ddate'],
                                  'lt' => $lt, 'cls' => $cls, 'label' => oa_cls_label($cls),
+                                 'as_label' => $r['as_label'], 'proc' => $r['proc'], 'order_ps' => $r['order_ps'],
                                  'amount' => $r['amount'], 'qty' => $r['qty'],
-                                 'created_by_name' => $r['created_by_name'], 'created_at' => $r['created_at']];
+                                 'created_by_name' => $r['created_by_name'], 'created_at' => $r['created_at'],
+                                 'ship_date' => $r['ship_date'], 'ship_lt' => $r['ship_lt'], 'delay_days' => $r['delay_days']];
             }
             $bk = (int)$r['band'];
             if (!isset($bandAgg[$bk])) $bandAgg[$bk] = ['band' => $bk, 'label' => $bk >= 0 ? ($bands[$bk]['label'] ?? '') : '未涵蓋', 'n' => 0, 'urgent_n' => 0];
@@ -1963,7 +2064,7 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
         usort($urgentList, function ($a, $b) { return $a['lt'] <=> $b['lt']; });
 
         return [
-            'orders' => $ordersAll, 'amount' => $amountAll, 'no_leadtime' => $noLt,
+            'orders' => $ordersAll, 'amount' => $amountAll, 'no_leadtime' => $noLt, 'noise_excluded' => $noise,
             'urgent_orders' => $urgentN, 'urgent_amount' => $urgentAmount,
             'urgent_order_ratio'  => $ordersAll ? round($urgentN * 100 / $ordersAll, 1) : 0.0,
             'urgent_amount_ratio' => $amountAll > 0 ? round($urgentAmount * 100 / $amountAll, 1) : 0.0,
@@ -1973,6 +2074,11 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
             'by_band' => array_values($bandAgg),
             'urgent_list' => array_slice($urgentList, 0, 200),
             'threshold' => $thr,
+            // 實際出貨與延誤（使用者明確要求：目前大多資料未綁定出貨單，覆蓋率要誠實列出來）
+            'ship_bound_n' => $shipBoundN, 'ship_coverage' => $ordersAll ? round($shipBoundN * 100 / $ordersAll, 1) : 0.0,
+            'avg_ship_leadtime' => $shipLtN ? round($shipLtSum / $shipLtN, 1) : null,
+            'avg_delay_days' => $delayN ? round($delaySum / $delayN, 1) : null,
+            'late_n' => $lateN, 'late_ratio' => $shipBoundN ? round($lateN * 100 / $shipBoundN, 1) : 0.0,
         ];
     };
 
@@ -2024,6 +2130,18 @@ function oa_urgent_insights(array $rep): array
     if ($cur['no_leadtime'] > 0) {
         $add('info', '有訂單缺交期資料未納入急件判定',
              '本期 ' . $cur['no_leadtime'] . ' 張訂單缺下單日或交期（或交期早於下單日），這幾張不計入急件統計。');
+    }
+    if (!empty($cur['noise_excluded'])) {
+        $add('info', '有訂單疑似誤植交期，已依設定排除',
+             '本期 ' . $cur['noise_excluded'] . ' 張訂單的交期工作天數低於管理員設定的排除下限（多半是交期打錯日期），'
+            . '已整段不計入本次分析（平均值／急件判定都不算），設定在「急件判定設定」調整。');
+    }
+    if ($cur['ship_bound_n'] > 0) {
+        $add('info', '實際出貨與延誤（目前多半尚未綁定出貨單）',
+             '本期有綁定出貨單可查的訂單 ' . $cur['ship_bound_n'] . ' 張（覆蓋率 ' . $cur['ship_coverage'] . '%）：'
+            . '平均實際出貨工作天 ' . ($cur['avg_ship_leadtime'] === null ? '—' : $cur['avg_ship_leadtime']) . ' 天，'
+            . '逾交期 ' . $cur['late_n'] . ' 張（' . $cur['late_ratio'] . '%）'
+            . ($cur['avg_delay_days'] === null ? '。' : ('，平均延誤 ' . $cur['avg_delay_days'] . ' 天。')));
     }
 
     $d = $cur['urgent_order_ratio'] - $cmp['urgent_order_ratio'];
@@ -2101,13 +2219,18 @@ function oa_client_share(PDO $db, array $opt = []): array
     $astagMap = ot_astag_for_orders($db, array_column($rows, 'id'));
     $bands = oa_qty_bands($db);
     $us = oa_urgent_settings($db);
+    $floor = $us['min_workdays_floor'];
     $urgentClasses = array_flip(oa_urgent_classes());
+    $stepMap = oa_order_process_steps($db, array_column($rows, 'id'));
     foreach ($rows as &$r) {
         $info = $astagMap[$r['id']] ?? null;
         $r['cls']      = oa_scope_to_cls($info);
         $r['as_label'] = $info ? (string)$info['label'] : '';
-        $r['lt']       = oa_leadtime_workdays($db, $r['odate'], $r['ddate']);
-        $r['band']     = oa_band_index((int)$r['qty'], $bands);
+        // 跟 oa_leadtime_report() 同一套排除下限，兩份報告對同一批訂單的平均交期工作天才會一致
+        $ltRaw = oa_leadtime_workdays($db, $r['odate'], $r['ddate']);
+        $r['lt'] = ($ltRaw !== null && $floor !== null && $ltRaw <= $floor) ? null : $ltRaw;
+        $r['band'] = oa_band_index((int)$r['qty'], $bands);
+        $r['proc_steps'] = $stepMap[$r['id']] ?? null;
     }
     unset($r);
 
@@ -2137,7 +2260,8 @@ function oa_client_share(PDO $db, array $opt = []): array
                 $k = $r['pkey'];
                 if (!isset($parts[$k])) {
                     $parts[$k] = ['pno' => $r['pno'], 'pid' => $r['pid'], 'n' => 0, 'amount' => 0.0, 'qty' => 0,
-                                  'tags' => [], 'procs' => [], 'creators' => [], 'lt_sum' => 0, 'lt_n' => 0, 'urgent_n' => 0];
+                                  'tags' => [], 'procs' => [], 'creators' => [], 'lt_sum' => 0, 'lt_n' => 0,
+                                  'urgent_n' => 0, 'proc_steps' => null];
                 }
                 $pp = &$parts[$k];
                 $pp['n']++; $pp['amount'] += $r['amount']; $pp['qty'] += $r['qty'];
@@ -2146,6 +2270,8 @@ function oa_client_share(PDO $db, array $opt = []): array
                 if ($r['created_by_name'] !== '') $pp['creators'][$r['created_by_name']] = 1;
                 if ($r['lt'] !== null) { $pp['lt_sum'] += $r['lt']; $pp['lt_n']++; }
                 if ($isUrgent) $pp['urgent_n']++;
+                // 同一支料號可能好幾張訂單、各自不同製令，取相異製程站數最多的那一筆當代表值
+                if ($r['proc_steps'] !== null) $pp['proc_steps'] = max($pp['proc_steps'] ?? 0, $r['proc_steps']);
                 unset($pp);
             }
             $partList = array_values($parts);

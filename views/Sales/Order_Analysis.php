@@ -623,11 +623,11 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
       </h4>
       <div class="tbl-wrap">
         <table class="oa-t" id="tblLtList">
-          <colgroup><col style="width:10%"><col style="width:9%"><col style="width:11%"><col style="width:11%"><col style="width:8%">
-                    <col style="width:8%"><col style="width:8%"><col style="width:9%"><col style="width:8%"><col style="width:9%">
-                    <col style="width:9%"></colgroup>
+          <colgroup><col style="width:8%"><col style="width:7%"><col style="width:7%"><col style="width:9%"><col style="width:6%">
+                    <col style="width:6%"><col style="width:6%"><col style="width:12%"><col style="width:5%"><col style="width:7%">
+                    <col style="width:10%"><col style="width:10%"><col style="width:7%"></colgroup>
           <thead><tr><th>訂單號</th><th>KEY單業務</th><th>客戶</th><th>料號</th><th>下單日</th><th>交期</th>
-                     <th>工作天數</th><th>類別</th><th>數量</th><th>金額</th><th>key單日期</th></tr></thead>
+                     <th>工作天數</th><th>類別</th><th>數量</th><th>金額</th><th>實際出貨</th><th>備註</th><th>key單日期</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -925,6 +925,16 @@ table.oa-t tbody tr:nth-child(even) { background:#fdfbf8; }
         <label>%　多製程</label><input type="number" id="setUrgMulti" class="rm-in" style="width:60px;" min="1" max="100">
         <label>%　單製</label><input type="number" id="setUrgSingle" class="rm-in" style="width:60px;" min="1" max="100">
         <label>%</label>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin:10px 0 6px;">
+        <b>排除疑似誤植交期的訂單</b>：交期工作天數 ≤ 下面這個值的訂單，整段分析（平均／急件判定）
+        一律當作沒有交期資料（例如全製訂單交期工作天數＝0，大多是交期日期打錯，不是真的當天要交）。
+        留空＝不排除。
+      </div>
+      <div class="oa-bar">
+        <label>排除工作天數 ≤</label>
+        <input type="number" id="setUrgFloor" class="rm-in" style="width:70px;" min="0" max="60" data-eg-hint="留空＝不排除">
+        <label>天的訂單</label>
       </div>
 
       <div class="err-txt" id="setErr"></div>
@@ -1952,6 +1962,9 @@ function renderLtKpi(){
   h += ltCard('急件金額佔比', c.urgent_amount_ratio+'%', money(c.urgent_amount)+' 元');
   h += ltCard('急件客戶數', nf(c.urgent_clients), '家');
   h += ltCard('本期訂單總數', nf(c.orders), money(c.amount)+' 元');
+  h += ltCard('出貨綁定覆蓋率', c.ship_coverage+'%', nf(c.ship_bound_n)+' / '+nf(c.orders)+' 張（多數尚未綁定）');
+  h += ltCard('平均實際出貨工作天', c.avg_ship_leadtime==null?'—':c.avg_ship_leadtime, '僅計已綁定出貨單的訂單');
+  h += ltCard('逾交期比例', c.late_ratio+'%', nf(c.late_n)+' 張逾交期'+(c.avg_delay_days==null?'':('，平均延誤 '+c.avg_delay_days+' 天')));
   $('#ltKpiRow').html(h);
 }
 function renderLtInsights(){
@@ -2046,6 +2059,23 @@ function ltRenderUrgentClientGrid(clients){
   }).join('');
   return '<div class="ins-cli-grid" style="'+colStyle+'margin-top:6px;">'+cells+'</div>';
 }
+/* 類別欄：訂單標籤（AS 認定，具體到「單製齒研」這種）在上、製程內容（原始文字）在下，同一格疊兩行 */
+function ltCatCell(r){
+  var tag = r.as_label || r.label;
+  var h = '<div style="font-size:11px;font-weight:600;color:#6B4423;">'+esc(tag)+'</div>';
+  if (r.proc) h += '<div style="font-size:10px;color:var(--muted);margin-top:1px;">'+esc(r.proc)+'</div>';
+  return h;
+}
+/* 實際出貨欄：出貨日／實際出貨工作天／延誤天數疊三行；大多數訂單目前都還沒綁出貨單，顯示「未綁定」 */
+function ltShipCell(r){
+  if (!r.ship_date) return '<span style="color:var(--muted);">未綁定</span>';
+  var d = r.delay_days;
+  var dTxt = (d==null) ? '' : (d>0 ? ('延誤 '+d+' 天') : (d<0 ? ('提前 '+(-d)+' 天') : '準時'));
+  var dCol = (d==null) ? 'var(--muted)' : (d>0 ? 'var(--coral)' : (d<0 ? '#2E7D32' : 'var(--muted)'));
+  return '<div style="font-size:11px;">'+dispDate(r.ship_date)+'</div>'
+    + '<div style="font-size:10px;color:var(--muted);">工作天 '+(r.ship_lt==null?'—':r.ship_lt)+'</div>'
+    + (dTxt ? '<div style="font-size:10px;color:'+dCol+';">'+dTxt+'</div>' : '');
+}
 function renderLtList(){
   var rows = LT_DATA.cur.urgent_list || [];
   var h = rows.map(function(r){
@@ -2053,11 +2083,14 @@ function renderLtList(){
       + '<td>'+esc(r.created_by_name||'—')+'</td>'
       + '<td>'+esc(r.cname)+'</td><td>'+pnoCell(r)+'</td>'
       + '<td>'+dispDate(r.odate)+'</td><td>'+dispDate(r.ddate)+'</td>'
-      + '<td class="n">'+r.lt+'</td><td>'+esc(r.label)+'</td>'
+      + '<td class="n">'+r.lt+'</td>'
+      + '<td>'+ltCatCell(r)+'</td>'
       + '<td class="n">'+nf(r.qty)+'</td><td class="n">'+money(r.amount)+'</td>'
+      + '<td>'+ltShipCell(r)+'</td>'
+      + '<td style="font-size:11px;">'+(r.order_ps?esc(r.order_ps):'<span style="color:var(--muted);">—</span>')+'</td>'
       + '<td>'+(r.created_at?dispDate(r.created_at):'—')+'</td></tr>';
   }).join('');
-  $('#tblLtList tbody').html(h || '<tr><td colspan="11" style="text-align:center;color:var(--muted);">（本期沒有急件）</td></tr>');
+  $('#tblLtList tbody').html(h || '<tr><td colspan="13" style="text-align:center;color:var(--muted);">（本期沒有急件）</td></tr>');
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -2179,10 +2212,11 @@ function shBuildBlocks(){
       +   '<thead><tr><th>類別</th><th>本客戶筆數</th><th>本客戶金額</th><th>全體筆數</th><th>佔全體比例</th></tr></thead><tbody></tbody>'
       + '</table>'
       + '<h5 style="margin:12px 0 4px;color:var(--ink);font-size:13px;">本客戶受訂料號排名（前 10）</h5>'
-      + '<div class="tbl-wrap"><table class="oa-t" id="tblShParts_'+i+'">'
-      +   '<colgroup><col style="width:4%"><col style="width:12%"><col style="width:6%"><col style="width:7%"><col style="width:9%">'
-      +              '<col style="width:9%"><col style="width:14%"><col style="width:16%"><col style="width:11%"><col style="width:12%"></colgroup>'
-      +   '<thead><tr><th>#</th><th>料號</th><th>筆數</th><th>數量</th><th>金額</th><th>急件</th><th>訂單標籤</th><th>製程內容</th><th>接單人員</th><th>平均工作天</th></tr></thead>'
+      + '<div style="overflow-x:auto;"><table class="oa-t" id="tblShParts_'+i+'">'
+      +   '<colgroup><col style="width:4%"><col style="width:13%"><col style="width:6%"><col style="width:18%"><col style="width:8%">'
+      +              '<col style="width:10%"><col style="width:12%"><col style="width:10%"><col style="width:9%"><col style="width:10%"></colgroup>'
+      +   '<thead><tr><th>#</th><th>料號</th><th>筆數</th><th>類別</th><th>數量</th><th>金額</th>'
+      +              '<th>接單人員</th><th>平均工作天</th><th>製程數量</th><th>急件</th></tr></thead>'
       +   '<tbody></tbody></table></div>'
       + '</div>';
   }).join('');
@@ -2238,18 +2272,26 @@ function shRenderCls(i, c){
 /* 急件欄位：這支料號 n 筆訂單裡有幾筆是急件（可能只有一部份，不是整支料號都急） */
 function shUrgentBadge(r){
   if (!r.urgent_n) return '<span style="color:var(--muted);">—</span>';
-  return '<span class="badge-warn">'+r.urgent_n+'/'+r.n+' 急件</span>';
+  return '<span class="badge-warn">'+r.urgent_n+'筆急件</span>';
+}
+/* 類別欄：訂單標籤（去重）在上、製程內容（去重）在下，疊兩行——與急件明細的「類別」欄同一種排版 */
+function shCatCell(r){
+  var tags = (r.tags||[]).join('、');
+  var procs = (r.procs||[]).join('、');
+  var h = '<div style="font-size:11px;font-weight:600;color:#6B4423;">'+esc(tags||'—')+'</div>';
+  if (procs) h += '<div style="font-size:10px;color:var(--muted);margin-top:1px;">'+esc(procs)+'</div>';
+  return h;
 }
 function shRenderParts(i, c){
   var rows = c.cur.agg.top_parts || [];
   var h = rows.map(function(r, ii){
     return '<tr><td class="n">'+(ii+1)+'</td><td>'+pnoCell(r)+'</td><td class="n">'+nf(r.n)+'</td>'
+      + '<td>'+shCatCell(r)+'</td>'
       + '<td class="n">'+nf(r.qty)+'</td><td class="n">'+money(r.amount)+'</td>'
-      + '<td class="n">'+shUrgentBadge(r)+'</td>'
-      + '<td>'+esc((r.tags||[]).join('、')||'—')+'</td>'
-      + '<td>'+esc((r.procs||[]).join('、')||'—')+'</td>'
       + '<td>'+esc((r.creators||[]).join('、')||'—')+'</td>'
-      + '<td class="n">'+(r.avg_leadtime==null?'—':r.avg_leadtime)+'</td></tr>';
+      + '<td class="n">'+(r.avg_leadtime==null?'—':r.avg_leadtime)+'</td>'
+      + '<td class="n">'+(r.proc_steps==null?'—':(r.proc_steps+' 站'))+'</td>'
+      + '<td class="n">'+shUrgentBadge(r)+'</td></tr>';
   }).join('');
   $('#tblShParts_'+i+' tbody').html(h || '<tr><td colspan="10" style="text-align:center;color:var(--muted);">（無資料）</td></tr>');
 }
@@ -2675,17 +2717,19 @@ function oaClientSharePrintHtml(){
 
     var partRows = '';
     (cur.agg.top_parts||[]).forEach(function(p, ii){
+      var catTxt = esc((p.tags||[]).join('、')||'—') + (p.procs&&p.procs.length? ('<br><span style="font-size:7.5pt;color:#8a6a4a;">'+esc(p.procs.join('、'))+'</span>') : '');
       partRows += '<tr><td class="tc">'+(ii+1)+'</td><td>'+esc(p.pno)+'</td><td class="tr">'+nf(p.n)+'</td>'
+        + '<td>'+catTxt+'</td>'
         + '<td class="tr">'+nf(p.qty)+'</td><td class="tr">'+money(p.amount)+'</td>'
-        + '<td class="tc">'+(p.urgent_n?(p.urgent_n+'/'+p.n):'—')+'</td>'
-        + '<td>'+esc((p.tags||[]).join('、')||'—')+'</td><td>'+esc((p.procs||[]).join('、')||'—')+'</td>'
-        + '<td>'+esc((p.creators||[]).join('、')||'—')+'</td><td class="tr">'+(p.avg_leadtime==null?'—':p.avg_leadtime)+'</td></tr>';
+        + '<td>'+esc((p.creators||[]).join('、')||'—')+'</td><td class="tr">'+(p.avg_leadtime==null?'—':p.avg_leadtime)+'</td>'
+        + '<td class="tc">'+(p.proc_steps==null?'—':(p.proc_steps+' 站'))+'</td>'
+        + '<td class="tc">'+(p.urgent_n?(p.urgent_n+'筆'):'—')+'</td></tr>';
     });
     h += '<div style="margin:2mm 0 1.5mm;font-weight:700;color:#4A3524;font-size:10pt;">本客戶受訂料號排名（前 10）</div>'+
-      '<table><colgroup><col style="width:4%"><col style="width:11%"><col style="width:6%"><col style="width:7%"><col style="width:9%">'+
-      '<col style="width:8%"><col style="width:13%"><col style="width:16%"><col style="width:11%"><col style="width:12%"></colgroup>'+
-      '<thead><tr><th>#</th><th>料號</th><th class="tr">筆數</th><th class="tr">數量</th><th class="tr">金額</th><th>急件</th>'+
-      '<th>訂單標籤</th><th>製程內容</th><th>接單人員</th><th class="tr">平均工作天</th></tr></thead>'+
+      '<table><colgroup><col style="width:4%"><col style="width:11%"><col style="width:6%"><col style="width:18%"><col style="width:8%">'+
+      '<col style="width:9%"><col style="width:12%"><col style="width:10%"><col style="width:9%"><col style="width:9%"></colgroup>'+
+      '<thead><tr><th>#</th><th>料號</th><th class="tr">筆數</th><th>類別</th><th class="tr">數量</th><th class="tr">金額</th>'+
+      '<th>接單人員</th><th class="tr">平均工作天</th><th>製程數量</th><th>急件</th></tr></thead>'+
       '<tbody>'+(partRows||'<tr><td colspan="10" class="tc">無</td></tr>')+'</tbody></table>';
     h += '</div>';
   });
@@ -2772,6 +2816,8 @@ function renderAlertSet(){
   renderMaUserChips();
   var u = (SET.urgent && SET.urgent.percentile) || {full:20,multi:20,single:20};
   $('#setUrgFull').val(u.full); $('#setUrgMulti').val(u.multi); $('#setUrgSingle').val(u.single);
+  var floor = (SET.urgent && SET.urgent.min_workdays_floor);
+  $('#setUrgFloor').val(floor===null||floor===undefined ? '' : floor);
 }
 $('#setUrgFull,#setUrgMulti,#setUrgSingle').on('input change', function(){
   SET.urgent = SET.urgent || {percentile:{}};
@@ -2779,6 +2825,11 @@ $('#setUrgFull,#setUrgMulti,#setUrgSingle').on('input change', function(){
   SET.urgent.percentile.full   = parseInt($('#setUrgFull').val(),10)||20;
   SET.urgent.percentile.multi  = parseInt($('#setUrgMulti').val(),10)||20;
   SET.urgent.percentile.single = parseInt($('#setUrgSingle').val(),10)||20;
+});
+$('#setUrgFloor').on('input change', function(){
+  SET.urgent = SET.urgent || {percentile:{}};
+  var v = $(this).val();
+  SET.urgent.min_workdays_floor = (v==='' ? null : (parseInt(v,10)||0));
 });
 function fillMaUserPick(){
   var picked = {}; (SET.alert.ma_notify_users||[]).forEach(function(id){ picked[id]=1; });
@@ -2905,6 +2956,8 @@ function validateSet(){
       var v = SET.urgent.percentile[k];
       if(!(v>=1 && v<=100)) e.push('急件判定：'+({full:'全製',multi:'多製程',single:'單製'}[k])+'的百分比必須介於 1~100');
     });
+    var floor = SET.urgent.min_workdays_floor;
+    if(floor!=null && !(floor>=0 && floor<=60)) e.push('排除工作天數下限必須介於 0~60，或留空不排除');
   }
   $('#setErr').text(e.join('\n'));
   $('#btnSetSave').prop('disabled', e.length>0);
