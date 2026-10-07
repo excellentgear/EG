@@ -962,6 +962,14 @@ try {
     // ── item_sub_label_map 擴充欄位 (圖面/車床尺寸，舊表補欄) ─────────────────
     try { $pdo->exec("ALTER TABLE item_sub_label_map ADD COLUMN draw_dim  DECIMAL(10,4) NULL COMMENT '圖面尺寸'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE item_sub_label_map ADD COLUMN lathe_dim DECIMAL(10,4) NULL COMMENT '車床尺寸'"); } catch(Exception $e){}
+    // ── 料號標籤指派稽核欄位：記錄這一筆標籤是誰在何時指派的，供「移除自己設定的標籤」判斷所有權 ──
+    try { $pdo->exec("ALTER TABLE item_label_map ADD COLUMN created_by_id INT NULL COMMENT '指派者 user.id'"); } catch(Exception $e){}
+    try { $pdo->exec("ALTER TABLE item_label_map ADD COLUMN created_by    VARCHAR(100) NULL COMMENT '指派者姓名'"); } catch(Exception $e){}
+    try { $pdo->exec("ALTER TABLE item_label_map ADD COLUMN updated_at    DATETIME NULL COMMENT '最後修改時間'"); } catch(Exception $e){}
+    try { $pdo->exec("ALTER TABLE item_label_map ADD COLUMN updated_by_id INT NULL COMMENT '最後修改者 user.id'"); } catch(Exception $e){}
+    try { $pdo->exec("ALTER TABLE item_label_map ADD COLUMN updated_by    VARCHAR(100) NULL COMMENT '最後修改者姓名'"); } catch(Exception $e){}
+    try { $pdo->exec("ALTER TABLE item_sub_label_map ADD COLUMN created_by_id INT NULL COMMENT '指派者 user.id'"); } catch(Exception $e){}
+    try { $pdo->exec("ALTER TABLE item_sub_label_map ADD COLUMN created_by    VARCHAR(100) NULL COMMENT '指派者姓名'"); } catch(Exception $e){}
 
     // ── 範圍標籤擴充欄位 ──────────────────────────────────────────────────────
     try { $pdo->exec("ALTER TABLE dict_label ADD COLUMN is_range TINYINT NOT NULL DEFAULT 0 COMMENT '0=否 1=範圍（兩個數字輸入）'"); } catch(Exception $e){}
@@ -1308,6 +1316,8 @@ function _get_operator($pdo, $uid) {
 }
 function _log_audit($pdo, $action, $ttype, $tid, $tname, $changes, $uid, $op) {
     try { $pdo->prepare("INSERT INTO audit_log (action_type,target_type,target_id,target_name,changes,user_id,operator) VALUES (?,?,?,?,?,?,?)")->execute([$action,$ttype,(string)$tid,$tname,is_array($changes)?json_encode($changes,JSON_UNESCAPED_UNICODE):null,$uid,$op]); } catch(Throwable $e){}
+    // 順路觸發 audit_log 保留/歸檔（低機率、歸檔不刪除，見 src/common/audit_log_lib.php）
+    try { require_once __DIR__ . '/../../src/common/audit_log_lib.php'; eg_audit_log_archive_tick($pdo); } catch (Throwable $e) {}
 }
 // 取得顯示用目標名稱（用於 audit_log.target_name）
 // ttype='part'   → D_Setting_Id 本身即料號
@@ -1595,6 +1605,38 @@ try {
     $_hasMdRole = (bool)$_stMd->fetchColumn();
 } catch (Exception $_e) {}
 $can_view_other = $is_admin || $_mdRbacAll || !$_hasMdRole || in_array('md_attach_view', $_mdFeats, true);
+
+// =============================================================================
+// ── 本頁維護設定的角色化權限（唯一實作，鐵律4）────────────────────────────
+// 原則（鐵律8 零影響既有使用者）：
+//   使用者在 master_data 模組「完全沒有被指派任何角色」時 → 沿用 $legacyFallback（舊規則），
+//   行為與改版前完全相同；一旦被指派了至少一個角色 → 改以角色勾選的
+//   mdata_<group>_<action> 功能碼為準（未勾=false）。管理員固定全部通過。
+// 功能碼命名：mdata_<group>_<view|add|edit|delete>；欄位型設定（非清單）只用 view/edit。
+// =============================================================================
+function _mdPerm(string $group, string $action, bool $legacyFallback): bool {
+    global $is_admin, $_mdRbacAll, $_mdFeats, $_hasMdRole;
+    if ($is_admin || $_mdRbacAll) return true;
+    if (!$_hasMdRole) return $legacyFallback;
+    return in_array("mdata_{$group}_{$action}", $_mdFeats, true);
+}
+// 料號標籤「指派」（新增標籤到料號）／「修改他人指派」兩個獨立權限碼（與上面的維護設定
+// 群組分開命名，因為這管的是「對單一料號做的動作」而不是「維護標籤目錄本身」）。
+// 沒有「修改他人指派」權限的人，仍可修改/移除自己指派過的那一筆——所有權比對見
+// save_part 內的標籤同步段（item_label_map.created_by_id）。
+function _mdTagCan(string $action): bool {
+    global $is_admin, $_mdRbacAll, $_mdFeats, $_hasMdRole, $can_edit_gear, $can_remove_part_labels;
+    if ($is_admin || $_mdRbacAll) return true;
+    if ($action === 'assign') {
+        if (!$_hasMdRole) return $can_edit_gear;        // 舊規則：新增/編輯齒輪規格與料號標籤同一組條件
+        return in_array('mdata_tag_assign', $_mdFeats, true);
+    }
+    if ($action === 'edit_others') {
+        if (!$_hasMdRole) return $can_remove_part_labels; // 舊規則：移除料號標籤＝刪齒輪規格列同一組條件
+        return in_array('mdata_tag_edit_others', $_mdFeats, true);
+    }
+    return false;
+}
 
 define('PART_ATTACH_API_URL', '../../src/store/Part_Attachment_API.php');
 
@@ -2644,18 +2686,78 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             }
 
-            // ── 標籤 ── (先取舊標籤名稱供審計用，再刪)
-            $old_lbl_q = $pdo->prepare("SELECT dl.label_name FROM item_label_map ilm JOIN dict_label dl ON dl.label_id=ilm.label_id WHERE ilm.d_id=? ORDER BY ilm.map_id"); $old_lbl_q->execute([$d_id]); $old_label_names = $old_lbl_q->fetchAll(PDO::FETCH_COLUMN);
-            $old_map_ids_q = $pdo->prepare("SELECT map_id FROM item_label_map WHERE d_id=?");
-            $old_map_ids_q->execute([$d_id]);
-            $old_map_ids = $old_map_ids_q->fetchAll(PDO::FETCH_COLUMN);
+            // ── 標籤 ──（含指派稽核：取得舊標籤完整內容＋指派者，供下方權限比對與審計用，再刪）
+            // 權限模型（唯一實作 _mdTagCan()）：沒有「修改他人指派的標籤」權限者，
+            // 只能異動/移除自己當年指派的那一筆；他人指派的列即使沒有出現在本次送出
+            // 內容裡，也要原樣補回，不可被這次存檔連帶洗掉（鐵律8：忽略、不採信，但不報錯）。
+            // 沒有「新增標籤指派」權限者，本次送出內容裡全新的標籤指派會被忽略。
+            $old_tag_rows_q = $pdo->prepare("SELECT ilm.map_id, ilm.label_id, ilm.input_value, ilm.draw_dim, ilm.lathe_dim,
+                                                     ilm.value_min, ilm.value_max, ilm.tol_upper, ilm.tol_lower, ilm.qty,
+                                                     ilm.created_by_id, dl.label_name
+                                              FROM item_label_map ilm JOIN dict_label dl ON dl.label_id=ilm.label_id
+                                              WHERE ilm.d_id=? ORDER BY ilm.map_id");
+            $old_tag_rows_q->execute([$d_id]);
+            $old_tag_rows   = $old_tag_rows_q->fetchAll(PDO::FETCH_ASSOC);
+            $old_label_names = array_column($old_tag_rows, 'label_name');
+            $old_map_ids    = array_column($old_tag_rows, 'map_id');
+            $old_sub_by_map = [];
+            if (!empty($old_map_ids)) {
+                $ph3 = implode(',', array_fill(0, count($old_map_ids), '?'));
+                $osq = $pdo->prepare("SELECT parent_map_id, sub_id, input_value, draw_dim, lathe_dim, value_min, value_max, tol_upper, tol_lower, qty
+                                       FROM item_sub_label_map WHERE parent_map_id IN ($ph3)");
+                $osq->execute(array_values($old_map_ids));
+                foreach ($osq->fetchAll(PDO::FETCH_ASSOC) as $sr) { $old_sub_by_map[(int)$sr['parent_map_id']][] = $sr; }
+            }
+            $old_by_label = [];
+            foreach ($old_tag_rows as $r) { $old_by_label[(int)$r['label_id']][] = $r; }
+            $tagCanAssign = _mdTagCan('assign');
+            $tagCanOthers = _mdTagCan('edit_others');
+            $__consumedOldMaps = [];
+            $__finalLabelsList = [];
+            $tag_owner_plan    = []; // 與 $__finalLabelsList 一一對應：['id'=>創建者uid或null,'name'=>創建者姓名或null]
+            $__restoreRow = function($oldRow) {
+                return [
+                    'label_id'=>$oldRow['label_id'], 'input_value'=>$oldRow['input_value'], 'draw_dim'=>$oldRow['draw_dim'],
+                    'lathe_dim'=>$oldRow['lathe_dim'], 'value_min'=>$oldRow['value_min'], 'value_max'=>$oldRow['value_max'],
+                    'tol_upper'=>$oldRow['tol_upper'], 'tol_lower'=>$oldRow['tol_lower'], 'qty'=>$oldRow['qty'],
+                    'sub_labels'=>[],
+                ];
+            };
+            foreach ($labels_list as $li) {
+                $lidc = intval($li['label_id'] ?? 0);
+                if (!$lidc) continue;
+                $oldRow = null;
+                foreach (($old_by_label[$lidc] ?? []) as $pr) { if (!in_array($pr['map_id'], $__consumedOldMaps, true)) { $oldRow = $pr; break; } }
+                if ($oldRow) {
+                    $isMine = ($oldRow['created_by_id'] !== null && (int)$oldRow['created_by_id'] === (int)$uid);
+                    if (!$tagCanOthers && !$isMine) $li = $__restoreRow($oldRow); // 無權限改動他人指派：整列退回舊值
+                    $__consumedOldMaps[] = $oldRow['map_id'];
+                    $__finalLabelsList[] = $li;
+                    $tag_owner_plan[]    = ['id'=>$oldRow['created_by_id'], 'name'=>null];
+                } else {
+                    if (!$tagCanAssign) continue; // 無「新增標籤指派」權限，忽略這筆全新指派
+                    $__finalLabelsList[] = $li;
+                    $tag_owner_plan[]    = ['id'=>$uid, 'name'=>_get_operator($pdo, $uid)];
+                }
+            }
+            // 無權限移除的舊列（這次送出內容沒有它、使用者也沒有資格移除它）原樣補回
+            foreach ($old_tag_rows as $oldRow) {
+                if (in_array($oldRow['map_id'], $__consumedOldMaps, true)) continue;
+                $isMine = ($oldRow['created_by_id'] !== null && (int)$oldRow['created_by_id'] === (int)$uid);
+                if ($tagCanOthers || $isMine) continue; // 有資格移除就照使用者意思刪除（不補回）
+                $restored = $__restoreRow($oldRow);
+                $restored['sub_labels'] = $old_sub_by_map[(int)$oldRow['map_id']] ?? [];
+                $__finalLabelsList[] = $restored;
+                $tag_owner_plan[]    = ['id'=>$oldRow['created_by_id'], 'name'=>null];
+            }
+            $labels_list = $__finalLabelsList;
             if (!empty($old_map_ids)) {
                 $ph2 = implode(',', array_fill(0, count($old_map_ids), '?'));
                 $pdo->prepare("DELETE FROM item_sub_label_map WHERE parent_map_id IN ($ph2)")->execute(array_values($old_map_ids));
             }
             $pdo->prepare("DELETE FROM item_label_map WHERE d_id=?")->execute([$d_id]);
             if (!empty($labels_list)) {
-                $sl = $pdo->prepare("INSERT INTO item_label_map (d_id, label_id, input_value, draw_dim, lathe_dim, value_min, value_max, tol_upper, tol_lower, qty) VALUES (?,?,?,?,?,?,?,?,?,?)");
+                $sl = $pdo->prepare("INSERT INTO item_label_map (d_id, label_id, input_value, draw_dim, lathe_dim, value_min, value_max, tol_upper, tol_lower, qty, created_by_id, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
                 // 查各標籤的 meta 設定
                 $lmeta = [];
                 $lids  = array_unique(array_map(function($l){ return intval($l['label_id']??0); }, $labels_list));
@@ -2675,6 +2777,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     if (!$cd['calc_base_label_id'] || !$cd['calc_sub_label_id']) continue;
                     if (isset($submitted_lids[intval($cd['calc_base_label_id'])]) && isset($submitted_lids[intval($cd['calc_sub_label_id'])])) {
                         $labels_list[] = ['label_id'=>$cid,'input_value'=>'','draw_dim'=>'','lathe_dim'=>'','value_min'=>'','value_max'=>'','tol_upper'=>'','tol_lower'=>'','sub_labels'=>[]];
+                        $tag_owner_plan[] = ['id'=>$uid, 'name'=>_get_operator($pdo, $uid)]; // 系統自動補齊的計算差異標籤，視為本次操作者指派
                         if (!isset($lmeta[$cid])) {
                             $lm2 = $pdo->prepare("SELECT label_id, is_repeatable, has_draw_lathe, is_range, has_tolerance, is_calc_diff, calc_base_label_id, calc_sub_label_id, tolerance_std_upper, COALESCE(is_dimension,0) AS is_dimension, COALESCE(is_qty_dim,0) AS is_qty_dim FROM dict_label WHERE label_id=?");
                             $lm2->execute([$cid]);
@@ -2684,10 +2787,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     }
                 }
                 $seen       = [];
-                $sub_sl     = $pdo->prepare("INSERT INTO item_sub_label_map (parent_map_id, sub_id, input_value, draw_dim, lathe_dim, value_min, value_max, tol_upper, tol_lower, qty) VALUES (?,?,?,?,?,?,?,?,?,?)");
-                foreach ($labels_list as $litem) {
+                $sub_sl     = $pdo->prepare("INSERT INTO item_sub_label_map (parent_map_id, sub_id, input_value, draw_dim, lathe_dim, value_min, value_max, tol_upper, tol_lower, qty, created_by_id, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+                foreach ($labels_list as $__li_idx => $litem) {
                     $lid = intval($litem['label_id'] ?? 0);
                     if (!$lid) continue;
+                    // 保留列（既有指派）維持原指派者（可能是 NULL＝舊資料未記錄），不可因為這次重新存檔
+                    // 就把指派者改成當前操作者——那會假裝成「是我剛指派的」；只有真正全新的指派
+                    // （$tag_owner_plan 已在上面明確標成 uid）才歸屬當前操作者。
+                    $__owner     = $tag_owner_plan[$__li_idx] ?? ['id'=>null,'name'=>null];
+                    $__ownerId   = $__owner['id'] !== null ? (int)$__owner['id'] : null;
+                    $__ownerName = ($__ownerId !== null) ? ($__owner['name'] ?? _get_operator($pdo, $__ownerId)) : null;
                     $lm             = $lmeta[$lid] ?? [];
                     $is_rep         = intval($lm['is_repeatable'] ?? 0);
                     $has_draw_lathe       = intval($lm['has_draw_lathe'] ?? 0);
@@ -2708,7 +2817,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $tol_upper = ($has_tol || $is_calc) && isset($litem['tol_upper']) && is_numeric($litem['tol_upper']) ? $litem['tol_upper'] : null;
                     $tol_lower = $has_tol && isset($litem['tol_lower']) && is_numeric($litem['tol_lower']) ? $litem['tol_lower'] : null;
                     $lbl_qty   = $is_qty_dim_lbl && isset($litem['qty']) && is_numeric($litem['qty']) ? $litem['qty'] : null;
-                    $sl->execute([$d_id, $lid, $ival, $draw_dim, $lathe_dim, $value_min, $value_max, $tol_upper, $tol_lower, $lbl_qty]);
+                    $sl->execute([$d_id, $lid, $ival, $draw_dim, $lathe_dim, $value_min, $value_max, $tol_upper, $tol_lower, $lbl_qty, $__ownerId, $__ownerName]);
                     $new_map_id = (int)$pdo->lastInsertId();
                     // 計算差異新版：calc_value = draw_dim - (lathe_dim + (tol_upper - tol_std))
                     if ($is_calc && $draw_dim !== null && $lathe_dim !== null) {
@@ -2749,7 +2858,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         $s_tol_upper  = ($s_has_tol || $s_is_imperial || $s_is_countersink) && isset($sitem['tol_upper']) && is_numeric($sitem['tol_upper']) ? $sitem['tol_upper'] : null;
                         $s_tol_lower  = ($s_has_tol || $s_is_countersink) && isset($sitem['tol_lower']) && is_numeric($sitem['tol_lower']) ? $sitem['tol_lower'] : null;
                         $s_qty        = ($s_is_qtydim || $s_is_qtytriple || $s_is_imperial || $s_is_countersink) && isset($sitem['qty']) && is_numeric($sitem['qty']) ? $sitem['qty'] : null;
-                        $sub_sl->execute([$new_map_id, $sid, $sival, $s_draw_dim, $s_lathe_dim, $s_vmin, $s_vmax, $s_tol_upper, $s_tol_lower, $s_qty]);
+                        $sub_sl->execute([$new_map_id, $sid, $sival, $s_draw_dim, $s_lathe_dim, $s_vmin, $s_vmax, $s_tol_upper, $s_tol_lower, $s_qty, $__ownerId, $__ownerName]);
                     }
                 }
             }
@@ -7418,7 +7527,72 @@ body { background:#F6F1EA; }
             ['md_attach_view','其他附件—檢視分頁'],
             ['md_attach_upload','其他附件—上傳'],
             ['md_attach_delete','其他附件—刪除'],
-            ['md_attach_edit','其他附件—編輯（標籤/浮水印）']
+            ['md_attach_edit','其他附件—編輯（標籤/浮水印）'],
+            // ── 客戶/廠商表單內的設定區塊（欄位型，僅檢視/編輯兩級）──
+            ['mdata_recon_view','客戶—對帳單設定：檢視'],
+            ['mdata_recon_edit','客戶—對帳單設定：編輯'],
+            ['mdata_settle_view','客戶/廠商—結帳設定：檢視'],
+            ['mdata_settle_edit','客戶/廠商—結帳設定：編輯'],
+            ['mdata_quote_method_view','客戶—報價方式：檢視'],
+            ['mdata_quote_method_edit','客戶—報價方式：編輯'],
+            ['mdata_payterm_view','客戶/廠商—收款/付款方式：檢視'],
+            ['mdata_payterm_edit','客戶/廠商—收款/付款方式：編輯'],
+            ['mdata_bank_view','客戶—銀行帳戶：檢視'],
+            ['mdata_bank_edit','客戶—銀行帳戶：編輯'],
+            // ── 料號標籤指派（對單一料號做的動作，非維護標籤目錄本身）──
+            ['mdata_tag_assign','料號—新增標籤指派'],
+            ['mdata_tag_edit_others','料號—修改/移除他人指派的標籤'],
+            // ── 字典/維護設定（清單型，新增/編輯/刪除/檢視四級）──
+            ['mdata_label_dict_view','標籤定義管理：檢視'],
+            ['mdata_label_dict_add','標籤定義管理：新增'],
+            ['mdata_label_dict_edit','標籤定義管理：編輯'],
+            ['mdata_label_dict_delete','標籤定義管理：刪除'],
+            ['mdata_gear_quality_view','齒輪等級對照表：檢視'],
+            ['mdata_gear_quality_add','齒輪等級對照表：新增'],
+            ['mdata_gear_quality_edit','齒輪等級對照表：編輯'],
+            ['mdata_gear_quality_delete','齒輪等級對照表：刪除'],
+            ['mdata_process_note_view','製程備註：檢視'],
+            ['mdata_process_note_add','製程備註：新增'],
+            ['mdata_process_note_edit','製程備註：編輯'],
+            ['mdata_process_note_delete','製程備註：刪除'],
+            ['mdata_design_note_view','設計備註：檢視'],
+            ['mdata_design_note_add','設計備註：新增'],
+            ['mdata_design_note_edit','設計備註：編輯'],
+            ['mdata_design_note_delete','設計備註：刪除'],
+            ['mdata_workpiece_type_view','工件種類/小類：檢視'],
+            ['mdata_workpiece_type_add','工件種類/小類：新增'],
+            ['mdata_workpiece_type_edit','工件種類/小類：編輯'],
+            ['mdata_workpiece_type_delete','工件種類/小類：刪除'],
+            ['mdata_gear_type_dict_view','齒輪類型字典：檢視'],
+            ['mdata_gear_type_dict_add','齒輪類型字典：新增'],
+            ['mdata_gear_type_dict_edit','齒輪類型字典：編輯'],
+            ['mdata_gear_type_dict_delete','齒輪類型字典：刪除'],
+            ['mdata_industry_type_view','客戶產業別(含小類)：檢視'],
+            ['mdata_industry_type_add','客戶產業別(含小類)：新增'],
+            ['mdata_industry_type_edit','客戶產業別(含小類)：編輯'],
+            ['mdata_industry_type_delete','客戶產業別(含小類)：刪除'],
+            ['mdata_maker_category_view','廠商大類/小類：檢視'],
+            ['mdata_maker_category_add','廠商大類/小類：新增'],
+            ['mdata_maker_category_edit','廠商大類/小類：編輯'],
+            ['mdata_maker_category_delete','廠商大類/小類：刪除'],
+            ['mdata_maker_proc_label_view','廠商加工限制標籤：檢視'],
+            ['mdata_maker_proc_label_add','廠商加工限制標籤：新增'],
+            ['mdata_maker_proc_label_edit','廠商加工限制標籤：編輯'],
+            ['mdata_maker_proc_label_delete','廠商加工限制標籤：刪除'],
+            ['mdata_maker_main_cat_process_view','廠商大類製程設定：檢視'],
+            ['mdata_maker_main_cat_process_edit','廠商大類製程設定：編輯'],
+            ['mdata_process_type_dict_view','製程大類字典：檢視'],
+            ['mdata_process_type_dict_add','製程大類字典：新增'],
+            ['mdata_process_type_dict_edit','製程大類字典：編輯'],
+            ['mdata_process_type_dict_delete','製程大類字典：刪除'],
+            ['mdata_attach_cat_view','附件類別標籤：檢視'],
+            ['mdata_attach_cat_add','附件類別標籤：新增'],
+            ['mdata_attach_cat_edit','附件類別標籤：編輯'],
+            ['mdata_attach_cat_delete','附件類別標籤：刪除'],
+            ['mdata_sys_settings_view','系統設定(基本設定)：檢視'],
+            ['mdata_sys_settings_edit','系統設定(基本設定)：編輯'],
+            ['mdata_spec_quick_btn_view','規格快速輸入按鈕設定：檢視'],
+            ['mdata_spec_quick_btn_edit','規格快速輸入按鈕設定：編輯']
           ];
           var curRole = null;
           function loadRoles(){

@@ -20,7 +20,7 @@ function dc_db_name(PDO $pdo): string {
 
 /** 永久唯讀表：紀錄/稽核類，改了會破壞可追溯性，連設定都不給開放編輯 */
 function dc_hard_readonly_tables(): array {
-    return ['audit_log', 'login_log', 'data_console_table_cfg', 'data_console_refmap'];
+    return ['audit_log', 'audit_log_archive', 'login_log', 'data_console_table_cfg', 'data_console_refmap'];
 }
 
 /** 唯讀欄位名（正規化小寫）：主鍵與建立/修改稽核欄一律不可改 */
