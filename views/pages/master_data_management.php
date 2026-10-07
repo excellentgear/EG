@@ -3199,8 +3199,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $customer_fax    = trim($_POST['customer_fax'] ?? '');
             $customer_address= trim($_POST['customer_address'] ?? '');
             $is_inactive     = intval($_POST['is_inactive'] ?? 0);
-            $settlement_mode = trim($_POST['settlement_mode'] ?? 'FIXED');
-            $settlement_day  = ($settlement_mode === 'FIXED') ? intval($_POST['settlement_day'] ?? 25) : null;
+            // 結帳設定（settlement_mode/settlement_day/net_days/allow_deduct）／報價方式／收款方式／
+            // 銀行帳戶：改成角色可設定（原本只受「能不能存這張客戶」整張表單共用的 $can_create/$can_update
+            // 管控，沒有逐區塊區分）。無編輯權限者：新增客戶用預設值、修改客戶則保留原值（鐵律8）。
+            $canSettle     = _mdPerm('settle',       'edit', $is_new ? $can_create : $can_update);
+            $canQuoteMeth  = _mdPerm('quote_method', 'edit', $is_new ? $can_create : $can_update);
+            $canPayterm    = _mdPerm('payterm',      'edit', $is_new ? $can_create : $can_update);
+            $canBank       = _mdPerm('bank',         'edit', $is_new ? $can_create : $can_update);
+            $old_settle_block = [];
+            if (!$is_new && (!$canSettle || !$canQuoteMeth || !$canPayterm || !$canBank)) {
+                $osbQ = $pdo->prepare("SELECT settlement_mode,settlement_day,net_days,allow_deduct,quote_method,payment_method,bank_name,bank_branch,bank_account FROM customer_list WHERE customer_id=?");
+                $osbQ->execute([$customer_id]);
+                $old_settle_block = $osbQ->fetch(PDO::FETCH_ASSOC) ?: [];
+            }
+            if ($canSettle) {
+                $settlement_mode = trim($_POST['settlement_mode'] ?? 'FIXED');
+                $settlement_day  = ($settlement_mode === 'FIXED') ? intval($_POST['settlement_day'] ?? 25) : null;
+            } elseif ($is_new) {
+                $settlement_mode = 'FIXED'; $settlement_day = 25;
+            } else {
+                $settlement_mode = $old_settle_block['settlement_mode'] ?? 'FIXED';
+                $settlement_day  = $old_settle_block['settlement_day'] ?? null;
+            }
             $credit_limit    = trim($_POST['credit_limit'] ?? '') !== '' ? floatval($_POST['credit_limit']) : null;
             $payment_term    = trim($_POST['payment_term'] ?? '');
             $industries_raw  = json_decode($_POST['industries'] ?? '[]', true) ?: [];
@@ -3215,13 +3235,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
             // Extended fields
             $tax_id          = trim($_POST['tax_id'] ?? '');
-            $quote_method    = trim($_POST['quote_method'] ?? 'FOB') ?: 'FOB';
-            $payment_method  = trim($_POST['payment_method'] ?? '匯款');
-            $net_days        = trim($_POST['net_days'] ?? '') !== '' ? intval($_POST['net_days']) : null;
-            $allow_deduct    = intval($_POST['allow_deduct'] ?? 0);
-            $bank_name       = trim($_POST['bank_name'] ?? '');
-            $bank_branch     = trim($_POST['bank_branch'] ?? '');
-            $bank_account    = trim($_POST['bank_account'] ?? '');
+            if ($canSettle) {
+                $net_days     = trim($_POST['net_days'] ?? '') !== '' ? intval($_POST['net_days']) : null;
+                $allow_deduct = intval($_POST['allow_deduct'] ?? 0);
+            } elseif ($is_new) {
+                $net_days = null; $allow_deduct = 0;
+            } else {
+                $net_days     = $old_settle_block['net_days'] ?? null;
+                $allow_deduct = intval($old_settle_block['allow_deduct'] ?? 0);
+            }
+            $quote_method    = $canQuoteMeth ? (trim($_POST['quote_method'] ?? 'FOB') ?: 'FOB')
+                              : ($is_new ? 'FOB' : ($old_settle_block['quote_method'] ?? 'FOB'));
+            $payment_method  = $canPayterm ? trim($_POST['payment_method'] ?? '匯款')
+                              : ($is_new ? '匯款' : ($old_settle_block['payment_method'] ?? '匯款'));
+            if ($canBank) {
+                $bank_name    = trim($_POST['bank_name'] ?? '');
+                $bank_branch  = trim($_POST['bank_branch'] ?? '');
+                $bank_account = trim($_POST['bank_account'] ?? '');
+            } elseif ($is_new) {
+                $bank_name = ''; $bank_branch = ''; $bank_account = '';
+            } else {
+                $bank_name    = $old_settle_block['bank_name'] ?? '';
+                $bank_branch  = $old_settle_block['bank_branch'] ?? '';
+                $bank_account = $old_settle_block['bank_account'] ?? '';
+            }
             $billing_contact = trim($_POST['billing_contact'] ?? '');
             $shipping_req    = trim($_POST['shipping_req'] ?? '');
             $invoice_email   = trim($_POST['invoice_email'] ?? '');
@@ -3231,8 +3268,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $confirmed_settlement = intval($_POST['confirmed_settlement'] ?? 0);
             $confirmed_payment    = intval($_POST['confirmed_payment'] ?? 0);
             $is_own_company       = intval($_POST['is_own_company'] ?? 0);
-            // 是否需要對帳單／提供方式：僅本頁管理員可設定（鐵律8，非管理員送來的值一律忽略不採信）
-            if ($is_admin) {
+            // 是否需要對帳單／提供方式：角色可設定（舊規則＝僅本頁管理員可設定，見 _mdPerm 的 legacyFallback；
+            // 鐵律8，無權限者送來的值一律忽略不採信）
+            if (_mdPerm('recon', 'edit', $is_admin)) {
                 $need_recon_stmt  = intval($_POST['need_recon_stmt'] ?? 0);
                 $recon_provide_by = trim($_POST['recon_provide_by'] ?? '');
                 $recon_provide_by = in_array($recon_provide_by, ['customer','company'], true) ? $recon_provide_by : null;
@@ -3919,21 +3957,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (empty($mid))      throw new Exception('廠商編號不可為空');
             if (empty($maker_id)) throw new Exception('廠商簡稱不可為空');
 
-            $m_settlement_mode = trim($_POST['settlement_mode'] ?? 'FIXED');
-            if (!in_array($m_settlement_mode, ['FIXED','EOM','VARIABLE'])) $m_settlement_mode = 'FIXED';
-            $m_settlement_day  = ($m_settlement_mode === 'FIXED') ? intval($_POST['settlement_day'] ?? 0) ?: null : null;
-            $m_payment_method  = trim($_POST['payment_method'] ?? '');
-            $m_net_days        = trim($_POST['net_days'] ?? '') !== '' ? intval($_POST['net_days']) : null;
-            $m_confirmed_settlement = intval($_POST['confirmed_settlement'] ?? 0);
-            $m_confirmed_payment    = intval($_POST['confirmed_payment'] ?? 0);
-
-            // 取舊資料用於 audit diff
+            // 取舊資料用於 audit diff（提前到這裡，因為下面的結帳/付款設定權限檢查也要用到舊值）
             $old_maker_row = [];
             if (!$is_new) {
                 $oqm = $pdo->prepare("SELECT maker_id,maker_id_all,m_tel,m_tel2,m_fax,m_category,status,invoice_address,factory_address,m_note,m_process_items,limit_dia,limit_len,internal,is_qualified,quality_rating,settlement_mode,settlement_day,payment_method,net_days FROM maker_list WHERE maker_id_no=?");
                 $oqm->execute([$mid]);
                 $old_maker_row = $oqm->fetch(PDO::FETCH_ASSOC) ?: [];
             }
+            // 結帳設定／付款方式：角色可設定（與客戶表單共用同一組權限碼 settle/payterm，
+            // 無編輯權限者：新增廠商用預設值、修改廠商則保留原值，鐵律8）
+            $mdMakerSettleEdit  = _mdPerm('settle',  'edit', $is_new ? $can_create : $can_update);
+            $mdMakerPaytermEdit = _mdPerm('payterm', 'edit', $is_new ? $can_create : $can_update);
+            if ($mdMakerSettleEdit) {
+                $m_settlement_mode = trim($_POST['settlement_mode'] ?? 'FIXED');
+                if (!in_array($m_settlement_mode, ['FIXED','EOM','VARIABLE'])) $m_settlement_mode = 'FIXED';
+                $m_settlement_day  = ($m_settlement_mode === 'FIXED') ? intval($_POST['settlement_day'] ?? 0) ?: null : null;
+                $m_net_days        = trim($_POST['net_days'] ?? '') !== '' ? intval($_POST['net_days']) : null;
+            } elseif ($is_new) {
+                $m_settlement_mode = 'FIXED'; $m_settlement_day = null; $m_net_days = null;
+            } else {
+                $m_settlement_mode = $old_maker_row['settlement_mode'] ?? 'FIXED';
+                $m_settlement_day  = $old_maker_row['settlement_day'] ?? null;
+                $m_net_days        = $old_maker_row['net_days'] ?? null;
+            }
+            $m_payment_method = $mdMakerPaytermEdit ? trim($_POST['payment_method'] ?? '')
+                              : ($is_new ? '' : ($old_maker_row['payment_method'] ?? ''));
+            $m_confirmed_settlement = intval($_POST['confirmed_settlement'] ?? 0);
+            $m_confirmed_payment    = intval($_POST['confirmed_payment'] ?? 0);
 
             $limit_dia_min = trim($_POST['limit_dia_min'] ?? ''); $limit_dia_min = $limit_dia_min!=='' ? floatval($limit_dia_min) : null;
             $limit_dia_max = trim($_POST['limit_dia_max'] ?? ''); $limit_dia_max = $limit_dia_max!=='' ? floatval($limit_dia_max) : null;
@@ -8538,13 +8588,23 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
 </div><!-- /cust-tab-basic -->
 
 <!-- ② 結帳 / 付款 -->
+<?php
+// 結帳設定／報價方式／收款方式／銀行帳戶／對帳單設定：角色可設定（可檢視/可編輯兩級，
+// 唯一判定 _mdPerm()，見上方「本頁維護設定的角色化權限」區塊）
+$mdSettleView  = _mdPerm('settle','view', true);   $mdSettleEdit  = _mdPerm('settle','edit', $can_create || $can_update);
+$mdQuoteMView  = _mdPerm('quote_method','view', true); $mdQuoteMEdit = _mdPerm('quote_method','edit', $can_create || $can_update);
+$mdPaytermView = _mdPerm('payterm','view', true);  $mdPaytermEdit = _mdPerm('payterm','edit', $can_create || $can_update);
+$mdBankView    = _mdPerm('bank','view', true);     $mdBankEdit    = _mdPerm('bank','edit', $can_create || $can_update);
+$mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('recon','edit', $is_admin);
+?>
 <div class="tab-pane" id="cust-tab-payment">
-<div class="form-section-title"><i class="fa fa-calendar-check-o"></i> 結帳設定</div>
+<?php if ($mdSettleView): ?>
+<div class="form-section-title"><i class="fa fa-calendar-check-o"></i> 結帳設定<?= $mdSettleEdit ? '' : '（唯讀）' ?></div>
 <div class="row">
     <div class="col-md-3">
         <div class="form-group">
             <label>結帳模式</label>
-            <select class="form-control" id="cf-settlement_mode" name="settlement_mode" onchange="onSettlementModeChange(this.value)">
+            <select class="form-control" id="cf-settlement_mode" name="settlement_mode" onchange="onSettlementModeChange(this.value)" <?= $mdSettleEdit?'':'disabled' ?>>
                 <option value="FIXED">固定日</option>
                 <option value="EOM">月底</option>
                 <option value="VARIABLE">不固定</option>
@@ -8554,30 +8614,31 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
     <div class="col-md-3" id="cf-day-group">
         <div class="form-group">
             <label>固定結帳日 <span class="required-star">*</span></label>
-            <input type="number" class="form-control" id="cf-settlement_day" name="settlement_day" min="1" max="31" placeholder="1~31" value="25">
+            <input type="number" class="form-control" id="cf-settlement_day" name="settlement_day" min="1" max="31" placeholder="1~31" value="25" <?= $mdSettleEdit?'':'disabled' ?>>
             <div class="id-hint" id="cf-day-hint"></div>
         </div>
     </div>
     <div class="col-md-3">
         <div class="form-group">
             <label>月結天數</label>
-            <input type="number" class="form-control" id="cf-net_days" name="net_days" placeholder="例：90" min="0" max="365">
+            <input type="number" class="form-control" id="cf-net_days" name="net_days" placeholder="例：90" min="0" max="365" <?= $mdSettleEdit?'':'disabled' ?>>
         </div>
     </div>
     <div class="col-md-3">
         <div class="form-group">
             <label style="display:block;">接受扣%</label>
             <label style="font-weight:normal;cursor:pointer;padding-top:5px;">
-                <input type="checkbox" id="cf-allow_deduct" name="allow_deduct" value="1" style="margin-right:6px;">
+                <input type="checkbox" id="cf-allow_deduct" name="allow_deduct" value="1" style="margin-right:6px;" <?= $mdSettleEdit?'':'disabled' ?>>
                 同意扣款百分比
             </label>
         </div>
     </div>
 </div>
+<?php endif; ?>
 <div class="row">
     <div class="col-md-3">
         <div class="form-group" style="padding-top:24px;">
-            <?php if ($can_create || $can_update): ?>
+            <?php if ($mdSettleEdit): ?>
             <button type="button" class="btn btn-sm btn-default" onclick="openSettlementExceptionModal()" id="cf-exception-btn" style="display:none;">
                 <i class="fa fa-calendar-plus-o"></i> 臨時結帳調整
             </button>
@@ -8594,20 +8655,20 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
     </div>
 </div>
 
-<?php if ($is_admin): ?>
-<div class="form-section-title"><i class="fa fa-file-text-o"></i> 對帳單設定（僅管理員可設定）</div>
+<?php if ($mdReconView): ?>
+<div class="form-section-title"><i class="fa fa-file-text-o"></i> 對帳單設定<?= $mdReconEdit ? '' : '（唯讀）' ?></div>
 <div class="row">
     <div class="col-md-4">
         <div class="form-group">
             <label style="font-weight:normal;cursor:pointer;">
-                <input type="checkbox" id="cf-need_recon_stmt" name="need_recon_stmt" value="1" style="margin-right:6px;" onchange="onNeedReconStmtChange()">是否需要對帳單
+                <input type="checkbox" id="cf-need_recon_stmt" name="need_recon_stmt" value="1" style="margin-right:6px;" onchange="onNeedReconStmtChange()" <?= $mdReconEdit?'':'disabled' ?>>是否需要對帳單
             </label>
         </div>
     </div>
     <div class="col-md-4">
         <div class="form-group" id="cf-recon-provide-wrap" style="display:none;">
             <label>提供方式</label>
-            <select class="form-control" id="cf-recon_provide_by" name="recon_provide_by" onchange="onReconProvideByChange()">
+            <select class="form-control" id="cf-recon_provide_by" name="recon_provide_by" onchange="onReconProvideByChange()" <?= $mdReconEdit?'':'disabled' ?>>
                 <option value="customer">客戶提供</option>
                 <option value="company">本公司提供</option>
             </select>
@@ -8621,12 +8682,14 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
 </div>
 <?php endif; ?>
 
+<?php if ($mdQuoteMView || $mdPaytermView): ?>
 <div class="form-section-title"><i class="fa fa-money"></i> 報價 / 收款方式</div>
 <div class="row">
+    <?php if ($mdQuoteMView): ?>
     <div class="col-md-3">
         <div class="form-group">
-            <label>報價方式</label>
-            <select class="form-control" id="cf-quote_method" name="quote_method">
+            <label>報價方式<?= $mdQuoteMEdit ? '' : '（唯讀）' ?></label>
+            <select class="form-control" id="cf-quote_method" name="quote_method" <?= $mdQuoteMEdit?'':'disabled' ?>>
                 <option value="FOB">FOB</option>
                 <option value="CIF">CIF</option>
                 <option value="EXW">EXW</option>
@@ -8636,10 +8699,12 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
             </select>
         </div>
     </div>
+    <?php endif; ?>
+    <?php if ($mdPaytermView): ?>
     <div class="col-md-3">
         <div class="form-group">
-            <label>收款方式</label>
-            <select class="form-control" id="cf-payment_method" name="payment_method">
+            <label>收款方式<?= $mdPaytermEdit ? '' : '（唯讀）' ?></label>
+            <select class="form-control" id="cf-payment_method" name="payment_method" <?= $mdPaytermEdit?'':'disabled' ?>>
                 <option value="匯款">匯款</option>
                 <option value="支票">支票</option>
                 <option value="現金">現金</option>
@@ -8647,6 +8712,7 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
             </select>
         </div>
     </div>
+    <?php endif; ?>
 </div>
 <div class="row">
     <div class="col-md-6">
@@ -8658,28 +8724,31 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
         </div>
     </div>
 </div>
+<?php endif; ?>
 
-<div class="form-section-title"><i class="fa fa-university"></i> 銀行帳戶</div>
+<?php if ($mdBankView): ?>
+<div class="form-section-title"><i class="fa fa-university"></i> 銀行帳戶<?= $mdBankEdit ? '' : '（唯讀）' ?></div>
 <div class="row">
     <div class="col-md-4">
         <div class="form-group">
             <label>銀行名稱</label>
-            <input type="text" class="form-control" id="cf-bank_name" name="bank_name" placeholder="例：台灣企銀" maxlength="50">
+            <input type="text" class="form-control" id="cf-bank_name" name="bank_name" placeholder="例：台灣企銀" maxlength="50" <?= $mdBankEdit?'':'disabled' ?>>
         </div>
     </div>
     <div class="col-md-4">
         <div class="form-group">
             <label>分行</label>
-            <input type="text" class="form-control" id="cf-bank_branch" name="bank_branch" placeholder="例：潭子分行" maxlength="50">
+            <input type="text" class="form-control" id="cf-bank_branch" name="bank_branch" placeholder="例：潭子分行" maxlength="50" <?= $mdBankEdit?'':'disabled' ?>>
         </div>
     </div>
     <div class="col-md-4">
         <div class="form-group">
             <label>帳號</label>
-            <input type="text" class="form-control" id="cf-bank_account" name="bank_account" placeholder="例：521-12-188001" maxlength="50">
+            <input type="text" class="form-control" id="cf-bank_account" name="bank_account" placeholder="例：521-12-188001" maxlength="50" <?= $mdBankEdit?'':'disabled' ?>>
         </div>
     </div>
 </div>
+<?php endif; ?>
 </div><!-- /cust-tab-payment -->
 
 <!-- ③ 聯絡人 -->
@@ -8972,13 +9041,19 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
     </label>
 </div>
 
+<?php
+$mdMakerSettleView  = _mdPerm('settle','view', true);  $mdMakerSettleEditV  = _mdPerm('settle','edit', $can_create || $can_update);
+$mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _mdPerm('payterm','edit', $can_create || $can_update);
+?>
 <!-- ⑤ 付款設定 -->
+<?php if ($mdMakerSettleView || $mdMakerPaytermView): ?>
 <div class="form-section-title"><i class="fa fa-money"></i> 付款設定</div>
 <div class="row">
+    <?php if ($mdMakerSettleView): ?>
     <div class="col-md-3">
         <div class="form-group">
-            <label>結帳模式</label>
-            <select class="form-control" id="mf-settlement_mode" name="settlement_mode" onchange="onMakerSettlementModeChange(this.value)">
+            <label>結帳模式<?= $mdMakerSettleEditV ? '' : '（唯讀）' ?></label>
+            <select class="form-control" id="mf-settlement_mode" name="settlement_mode" onchange="onMakerSettlementModeChange(this.value)" <?= $mdMakerSettleEditV?'':'disabled' ?>>
                 <option value="FIXED">固定日</option>
                 <option value="EOM">月底</option>
                 <option value="VARIABLE">不固定</option>
@@ -8988,19 +9063,21 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
     <div class="col-md-3" id="mf-day-group">
         <div class="form-group">
             <label>固定結帳日 <span class="required-star">*</span></label>
-            <input type="number" class="form-control" id="mf-settlement_day" name="settlement_day" min="1" max="31" placeholder="1~31">
+            <input type="number" class="form-control" id="mf-settlement_day" name="settlement_day" min="1" max="31" placeholder="1~31" <?= $mdMakerSettleEditV?'':'disabled' ?>>
         </div>
     </div>
     <div class="col-md-3">
         <div class="form-group">
             <label>月結天數</label>
-            <input type="number" class="form-control" id="mf-net_days" name="net_days" placeholder="例：90" min="0" max="365">
+            <input type="number" class="form-control" id="mf-net_days" name="net_days" placeholder="例：90" min="0" max="365" <?= $mdMakerSettleEditV?'':'disabled' ?>>
         </div>
     </div>
+    <?php endif; ?>
+    <?php if ($mdMakerPaytermView): ?>
     <div class="col-md-3">
         <div class="form-group">
-            <label>付款方式</label>
-            <select class="form-control" id="mf-payment_method" name="payment_method">
+            <label>付款方式<?= $mdMakerPaytermEditV ? '' : '（唯讀）' ?></label>
+            <select class="form-control" id="mf-payment_method" name="payment_method" <?= $mdMakerPaytermEditV?'':'disabled' ?>>
                 <option value="匯款">匯款</option>
                 <option value="支票">支票</option>
                 <option value="現金">現金</option>
@@ -9008,6 +9085,7 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
             </select>
         </div>
     </div>
+    <?php endif; ?>
 </div>
 <div class="row">
     <div class="col-md-6">
@@ -9027,6 +9105,7 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
         </div>
     </div>
 </div>
+<?php endif; ?>
 
 <!-- ⑥ 歷史廠商編號（僅編輯模式顯示） -->
 <div id="mf-aliases-section" style="display:none;">
