@@ -163,11 +163,12 @@ switch ($action) {
         $settings = ul_settings($db);
         $thresholds = $settings['thresholds'];
 
-        $designIds = ulUnitIds($db, $settings, 'design');
-        $salesIds  = ulUnitIds($db, $settings, 'sales');
-        $pmIds     = ulUnitIds($db, $settings, 'pm');
-        $prodIds   = ulUnitIds($db, $settings, 'prod');
-        $qcIds     = ulUnitIds($db, $settings, 'qc');
+        $designIds  = ulUnitIds($db, $settings, 'design');
+        $salesIds   = ulUnitIds($db, $settings, 'sales');
+        $pmIds      = ulUnitIds($db, $settings, 'pm');
+        $prodIds    = ulUnitIds($db, $settings, 'prod');
+        $qcIds      = ulUnitIds($db, $settings, 'qc');
+        $packingIds = ulUnitIds($db, $settings, 'packing');
 
         $designCur = ul_design_summary($db, $p['from'], $p['to'], $designIds);
         $designCmp = ul_design_summary($db, $p['cmp_from'], $p['cmp_to'], $designIds);
@@ -186,12 +187,18 @@ switch ($action) {
         $qcAbnormal = ul_qc_abnormal_stats($db, $p['from'], $p['to'], $qcIds);
         $qcAdhoc    = ul_qc_adhoc($db, $p['from'], $p['to']);
 
+        // 包裝：輕量彙總（待包裝筆數為現況快照、平均處理工作天為本期統計，整體統計
+        // 沿用既有 ul_prod_packing_stats()，不受 $packingIds 篩選——跟製程大類現況
+        // 同一種道理，見該函式註解）
+        $packingStats = ul_prod_packing_stats($db, $p['from'], $p['to']);
+
         $insights = ul_insights([
             'design' => ['cur' => $designCur, 'cmp' => $designCmp, 'cmp_label' => $p['cmp_label']],
             'sales'  => ['cur' => $salesCur,  'cmp' => $salesCmp,  'cmp_label' => $p['cmp_label']],
             'pm'     => ['cur' => $pmCur,     'cmp' => $pmCmp,     'cmp_label' => $p['cmp_label']],
             'prod'   => ['by_process_type' => $prodByType, 'untracked' => $prodUntracked, 'setup' => $prodSetup],
             'qc'     => ['wait' => $qcWait, 'abnormal' => $qcAbnormal, 'adhoc' => $qcAdhoc],
+            'packing'=> ['pending' => $packingStats['pending']],
         ], $thresholds);
 
         ulOut([
@@ -211,6 +218,11 @@ switch ($action) {
                 'avg_ng_rate'       => $qcAbnormal['avg_ng_rate'],
                 'adhoc_total'       => $qcAdhoc['total'],
                 'people_count'      => count($qcIds),
+            ],
+            'packing'  => [
+                'pending'      => $packingStats['pending'],
+                'avg_workdays' => $packingStats['avg_workdays'],
+                'people_count' => count($packingIds),
             ],
             'insights' => $insights,
             'canAdmin' => $canAdmin ? 1 : 0,
@@ -329,9 +341,7 @@ switch ($action) {
         $setup      = ul_prod_setup_stats($db, $p['from'], $p['to'], $ids);
         $production = ul_prod_production_stats($db, $p['from'], $p['to'], $ids);
         $perCapita  = ul_prod_per_capita($db, $p['from'], $p['to'], $ids);
-        // 包裝負荷：待包裝筆數是全公司現況快照（跟 by_process_type 一樣不受 $ids 篩選），
-        // 不屬於任一品管/生產課特定人員，見 unit_load_lib.php 的函式註解。
-        $packing = ul_prod_packing_stats($db, $p['from'], $p['to']);
+        // 包裝負荷 2026-10-07 已改為獨立單位（見下方 data_packing），本分頁不再重複計算。
 
         $totalUnassigned = array_sum(array_column($byType, 'unassigned'));
         $overload = [
@@ -350,10 +360,47 @@ switch ($action) {
             'setup'          => $setup,
             'production'     => $production,
             'per_capita'     => $perCapita,
-            'packing'        => $packing,
             'overload'       => $overload,
-            'note'           => $ids ? '' : '尚未在設定頁為生產課勾選任何部門——製程大類現況與系統缺口統計、包裝負荷不受此影響'
+            'note'           => $ids ? '' : '尚未在設定頁為生產課勾選任何部門——製程大類現況與系統缺口統計不受此影響'
                                            . '（照常顯示全公司數字），但每日產出/架機與生產時間/人均負荷需要設定人員後才有數字',
+        ]);
+    }
+
+    /* ── 包裝逐項明細（獨立單位，2026-10-07 新增）─────────────── */
+    case 'data_packing': {
+        $p = ulPeriodParse($_REQUEST);
+        $settings = ul_settings($db);
+        $thresholds = $settings['thresholds'];
+        $people = ul_dept_user_ids($db, $settings, 'packing');
+        $ids = array_values(array_unique(array_map(fn($r) => (int)$r['id'], $people)));
+        $deptIds = ul_unit_dept_ids($db, $settings, 'packing');
+
+        // 待包裝筆數／每日完成數／平均處理工作天：全公司現況統計，沿用既有
+        // ul_prod_packing_stats()（不受 $ids 篩選，見該函式與下方逐人明細的區別）。
+        $stats    = ul_prod_packing_stats($db, $p['from'], $p['to']);
+        $byPerson = ul_packing_by_person($db, $p['from'], $p['to'], $ids, $deptIds);
+
+        $overload = [
+            'pending' => ul_is_overload((float)$stats['pending'], 'packing.pending', $thresholds),
+        ];
+
+        $note = '';
+        if (!$ids) {
+            $note = '尚未在設定頁為「包裝」勾選任何部門——待包裝筆數／每日完成數／平均處理工作天仍照常顯示'
+                  . '全公司現況（不受此影響），但逐人明細需要設定人員後才有數字';
+        } elseif (!$byPerson) {
+            $note = '已設定的人員名下目前查不到任何包裝報工紀錄——包裝報工（pm_process_daily_report）多半'
+                  . '記在實際操作人員頭上，可能跟目前設定的人員範圍對不起來，逐人明細暫時沒有數字可顯示；'
+                  . '整體統計（待包裝筆數／每日完成數／平均處理工作天）不受此影響，照常顯示全公司現況。';
+        }
+
+        ulOut([
+            'period'    => $p,
+            'people'    => $people,
+            'packing'   => $stats,
+            'by_person' => $byPerson,
+            'overload'  => $overload,
+            'note'      => $note,
         ]);
     }
 

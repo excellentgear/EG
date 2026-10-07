@@ -41,10 +41,12 @@ $roleLabel = $canAdmin ? '管理員' : ($canView ? '各單位負荷分析（檢�
 
 function ulEsc($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
 
-// 單位鍵與對照標籤：鍵一律呼叫 ul_unit_keys()（唯一登記處），中文標籤是本模組固定的五個單位。
+// 單位鍵與對照標籤：鍵一律呼叫 ul_unit_keys()（唯一登記處），中文標籤是本模組固定的六個單位。
+// 'packing'（包裝）2026-10-07 新增為獨立單位，人員範圍實務上多為倉管組，但判定是否為
+// 包裝工作一律看製程本身，見 unit_load_lib.php 的 ul_packing_by_person() 函式註解。
 $UNIT_KEYS = ul_unit_keys();
-$UNIT_LABELS = ['design' => '設計', 'sales' => '業務', 'pm' => '生管', 'prod' => '生產', 'qc' => '品管'];
-$UNIT_ICONS  = ['design' => 'fa-pencil', 'sales' => 'fa-handshake-o', 'pm' => 'fa-sitemap', 'prod' => 'fa-industry', 'qc' => 'fa-check-square-o'];
+$UNIT_LABELS = ['design' => '設計', 'sales' => '業務', 'pm' => '生管', 'prod' => '生產', 'qc' => '品管', 'packing' => '包裝'];
+$UNIT_ICONS  = ['design' => 'fa-pencil', 'sales' => 'fa-handshake-o', 'pm' => 'fa-sitemap', 'prod' => 'fa-industry', 'qc' => 'fa-check-square-o', 'packing' => 'fa-cube'];
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -230,7 +232,7 @@ body { background:#F3F6EC; }
     </div>
   </div>
 
-  <!-- ── 六個分頁：總覽／設計課／業務課／生管／生產課／品管 ──────── -->
+  <!-- ── 七個分頁：總覽／設計課／業務課／生管／生產課／品管／包裝 ──────── -->
   <div class="ul-tabs">
     <button type="button" class="ul-tab-btn active" data-tab="overview"><i class="fa fa-bar-chart"></i> 總覽</button>
     <?php foreach ($UNIT_KEYS as $k): ?>
@@ -258,6 +260,10 @@ body { background:#F3F6EC; }
   <!-- ── 設計課分頁 ─────────────────────────────────────── -->
   <div class="ul-tab-pane" id="tab-design" data-unit="design" style="display:none">
     <div id="dsgNote"></div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">
+      批圖中／新案件（含已處理／批圖中兩種子狀態）為<b>目前狀態</b>快照，不受上方期間篩選影響；
+      已按審圖／已按轉生管／問題訂單數／平均出圖工作天為本期數字或現況統計，詳見各卡片說明。
+    </div>
     <div id="dsgKpi" class="kpi-row"></div>
 
     <div class="sec">
@@ -326,6 +332,9 @@ body { background:#F3F6EC; }
   <!-- ── 生產課分頁 ─────────────────────────────────────── -->
   <div class="ul-tab-pane" id="tab-prod" data-unit="prod" style="display:none">
     <div id="prodNote"></div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">
+      <i class="fa fa-info-circle"></i> 包裝負荷已獨立成一個分頁，請見「<a href="javascript:void(0)" class="ul-go-tab" data-tab="packing">包裝</a>」分頁。
+    </div>
 
     <div class="sec">
       <h4><i class="fa fa-sitemap" style="color:var(--green-d);"></i> 製程大類負荷
@@ -357,12 +366,27 @@ body { background:#F3F6EC; }
       <h4><i class="fa fa-users" style="color:var(--green-d);"></i> 人均負荷</h4>
       <div id="prodPerCapita" class="kpi-row"></div>
     </div>
+  </div>
+
+  <!-- ── 包裝分頁（獨立單位，2026-10-07 新增）────────────── -->
+  <div class="ul-tab-pane" id="tab-packing" data-unit="packing" style="display:none">
+    <div id="packNote"></div>
 
     <div class="sec">
-      <h4><i class="fa fa-cube" style="color:var(--green-d);"></i> 包裝負荷</h4>
-      <div id="prodPackingKpi" class="kpi-row"></div>
-      <div class="chart-box" id="prodPackingChart" style="height:280px;"></div>
-      <div id="prodPackingExtremes"></div>
+      <h4><i class="fa fa-cube" style="color:var(--green-d);"></i> 包裝負荷
+        <span class="hint">待包裝筆數為現況快照，不受期間篩選影響；每日完成數／平均處理工作天為本期統計</span></h4>
+      <div id="packKpi" class="kpi-row"></div>
+      <div class="chart-box" id="packChart" style="height:280px;"></div>
+      <div id="packExtremes"></div>
+    </div>
+
+    <div class="sec">
+      <h4><i class="fa fa-table" style="color:var(--green-d);"></i> 逐人負荷明細
+        <span class="hint">人員範圍由設定頁「包裝」的部門範圍決定（實務上多為倉管組），但判定是否為包裝工作一律看製程本身，不是看是誰報的</span></h4>
+      <div class="table-responsive"><table class="table table-striped" id="packTable">
+        <thead><tr><th>部門</th><th>職稱</th><th>姓名</th><th>包裝完成筆數</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
     </div>
   </div>
 
@@ -420,12 +444,15 @@ body { background:#F3F6EC; }
     <div class="m-body help-doc">
       <h4>功能說明（這一頁在回答什麼）</h4>
       <ul>
-        <li>把<b>設計、業務、生管、生產、品管</b>五個單位目前的工作量各自整理成一張 KPI 卡與一頁明細，
+        <li>把<b>設計、業務、生管、生產、品管、包裝</b>六個單位目前的工作量各自整理成一張 KPI 卡與一頁明細，
             讓主管一眼看出哪個單位現在比較吃緊。</li>
-        <li><b>總覽分頁</b>：五張 KPI 卡＋整頁自動分析（哪個單位的哪個指標偏高、跟上一期比有沒有變嚴重）。</li>
-        <li>五個單位各自的<b>詳細資料分頁</b>：逐人明細、趨勢圖、各類清單，點分頁鈕或 KPI 卡的「查看明細 »」即可切入。
-            生產多了「包裝負荷」子區塊（待包裝筆數／每日完成數／平均處理工作天／處理最久與最快前5筆），
-            品管多了「目前待驗佇列」（依製程分組的現況筆數＋本期平均檢驗工作天數）。</li>
+        <li><b>總覽分頁</b>：六張 KPI 卡＋整頁自動分析（哪個單位的哪個指標偏高、跟上一期比有沒有變嚴重）。</li>
+        <li>六個單位各自的<b>詳細資料分頁</b>：逐人明細、趨勢圖、各類清單，點分頁鈕或 KPI 卡的「查看明細 »」即可切入。
+            品管多了「目前待驗佇列」（依製程分組的現況筆數＋本期平均檢驗工作天數）；設計課的「新案件」拆成
+            「已處理」與「批圖中」兩種子狀態並附佔比。</li>
+        <li><b>包裝分頁</b>：待包裝筆數／每日完成數／平均處理工作天／處理最久與最快前5筆／逐人明細。
+            人員範圍實務上多為倉管組（隸屬資材課），但判定「這是不是包裝工作」一律看製程本身
+            （製程名稱＝「包裝」），不是看是哪個部門的人報的。</li>
       </ul>
       <h4>操作步驟</h4>
       <ol>
@@ -438,6 +465,9 @@ body { background:#F3F6EC; }
         <li><b>卡片背景變成紅色、並標「⚠ 負荷過重」</b>：代表自動分析偵測到這個單位有指標超過設定的門檻。</li>
         <li><b>生管沒有逐人明細</b>：製令資料表（bom_ing）沒有「這張製令由哪個生管負責」的欄位，所以生管只有
             全公司現況統計，逐人明細恆為空，這是資料結構的既有限制。</li>
+        <li><b>包裝逐人明細常常是空的</b>：包裝報工（pm_process_daily_report）多半記在實際操作人員頭上，
+            跟設定頁勾選的部門（實務上多為倉管組）常常對不起來；對不上時逐人明細如實顯示沒有資料，
+            不勉強湊數字，整體統計（待包裝筆數／每日完成數／平均處理工作天）不受影響。</li>
         <li><b>各單位要算哪些人</b>由下方「設定」的「部門範圍設定」決定；還沒設定部門的單位，部分統計（需要
             逐人歸屬的）會顯示 0 或提示尚未設定，不影響不需要人員歸屬的現況統計。</li>
         <li><b>勾選部門的「含子部門」</b>：組織是樹狀的，勾了會連同底下所有子部門的人一起算；
@@ -635,6 +665,12 @@ function renderOverview(d){
      + metricLine('脫離流程補檢驗', qc.adhoc_total, null),
      !!badUnit.qc);
 
+  var pk = d.packing || {};
+  h += kpiCard('packing', UNIT_LABELS.packing, pk.people_count,
+       metricLine('待包裝筆數', pk.pending, null)
+     + metricLine('平均處理工作天', pk.avg_workdays, null, nf1),
+     !!badUnit.packing);
+
   $('#kpiRow').html(h);
   renderInsights(d.insights || []);
 }
@@ -693,6 +729,25 @@ function statTile(label, cur, cmp, cmpLabel, fmt, bad){
        + (cmp===undefined ? '' : '<div class="k-cmp">較'+esc(cmpLabel||'上一期')+'：'+deltaHtml(cur, cmp, fmt)+'</div>')
        + '</div>';
 }
+/** 設計課「新案件」卡片：ul_design_summary() 的 new_case 是結構（total/processed/
+    processed_pct/in_progress/in_progress_pct），不能直接套 statTile()——另外拆出
+    「已處理」「批圖中」兩種子狀態＋各自佔比，取代原本單一數字。目前狀態快照，不受
+    期間篩選影響，故不比門檻（沒有對應的 overload 旗標）。 */
+function newCaseTile(nc, cmpNc, cmpLabel){
+  nc = nc || {total:0, processed:0, processed_pct:null, in_progress:0, in_progress_pct:null};
+  var h = '<div class="kpi-card">'
+        + '<div class="k-lab">新案件</div>'
+        + '<div class="k-val">'+nf(nc.total)+'</div>';
+  if (cmpNc !== undefined && cmpNc !== null) {
+    h += '<div class="k-cmp">較'+esc(cmpLabel||'上一期')+'：'+deltaHtml(nc.total, cmpNc.total, nf)+'</div>';
+  }
+  h += '<div class="k-metric"><span class="k-metric-lab">已處理</span>'
+     + '<span class="k-metric-val">'+nf(nc.processed)+'　'+pct1(nc.processed_pct)+'</span></div>'
+     + '<div class="k-metric"><span class="k-metric-lab">批圖中</span>'
+     + '<span class="k-metric-val">'+nf(nc.in_progress)+'　'+pct1(nc.in_progress_pct)+'</span></div>'
+     + '</div>';
+  return h;
+}
 /** 由 by_person（一人一列，含 user_id/name）查姓名；查不到就印 #id，不讓畫面空白 */
 function nameOf(byPerson, uid){
   var hit = (byPerson||[]).filter(function(p){ return String(p.user_id) === String(uid); })[0];
@@ -740,13 +795,14 @@ function cellBadCls(unit, field, value){
   if (!key || !UL_THR || UL_THR[key] === undefined) return '';
   return Number(value) > Number(UL_THR[key]) ? ' class="ul-cell-bad"' : '';
 }
-/* 包裝待包裝筆數／品管目前待驗佇列總筆數／品管單一製程目前筆數：這三個是本次新增的
-   指標，unit_load_lib.php 的 ul_threshold_defaults() 尚未收錄對應門檻鍵，暫不等 lib 端
-   支援——先用這裡的合理預設值，之後若要讓管理員也能在「設定」跳窗調整，再補進
-   ul_threshold_defaults() 並改走 UL_THR。
+/* 品管目前待驗佇列總筆數／品管單一製程目前筆數：這兩個指標 unit_load_lib.php 的
+   ul_threshold_defaults() 尚未收錄對應門檻鍵，暫不等 lib 端支援——先用這裡的合理
+   預設值，之後若要讓管理員也能在「設定」跳窗調整，再補進 ul_threshold_defaults() 並
+   改走 UL_THR。（包裝待包裝筆數已正式登記為 packing.pending，overload 旗標由後端
+   data_packing 計算回傳，不再走這裡的本地預設值。）
    qc_process_pending：單一製程本身堆到這個筆數以上視為偏高（跟「目前待驗總筆數」門檻
    是不同層級的判斷——總筆數看的是全部製程加起來，這裡看的是某一個製程自己有沒有堆住）。 */
-var UL_LOCAL_THR_DEFAULT = { packing_pending: 200, qc_pending_total: 150, qc_process_pending: 30 };
+var UL_LOCAL_THR_DEFAULT = { qc_pending_total: 150, qc_process_pending: 30 };
 function localThr(key, fallbackKey){
   if (UL_THR && UL_THR[key] !== undefined) return Number(UL_THR[key]);
   return Number(UL_LOCAL_THR_DEFAULT[fallbackKey]);
@@ -790,7 +846,7 @@ function renderDesign(d){
   h += statTile('批圖中', s.drawing_wip, c.drawing_wip, L, nf, !!ov.drawing_wip);
   h += statTile('已按審圖', s.in_review, c.in_review, L, nf, false);
   h += statTile('已按轉生管', s.pm_get, c.pm_get, L, nf, false);
-  h += statTile('新案件', s.new_case, c.new_case, L, nf, false);
+  h += newCaseTile(s.new_case, c.new_case, L);
   h += statTile('問題訂單數', s.issue_orders, c.issue_orders, L, nf, !!ov.issue_orders);
   h += statTile('平均出圖工作天', s.avg_draw_workdays, c.avg_draw_workdays, L, nf1, !!ov.avg_draw_workdays);
   $('#dsgKpi').html(h);
@@ -976,7 +1032,6 @@ function renderProd(d){
   renderProdUntracked(d.untracked, !!ov.untracked_count);
   renderProdDailyChart(d.daily_output);
   renderProdTimeStats(d.setup, d.production, d.per_capita, !!ov.avg_setup_minutes);
-  renderProdPacking(d.packing);
 }
 function renderProdTypeTable(rows){
   rows = rows || [];
@@ -1063,21 +1118,36 @@ function renderProdTimeStats(setup, production, perCapita, setupBad){
     series: [{ name:'每日架機數', data: daily.map(function(r){ return r.count; }) }]
   });
 }
-function renderProdPacking(p){
-  p = p || { pending:0, daily:[], avg_workdays:null, longest:[], shortest:[] };
-  var bad = Number(p.pending||0) > localThr('prod.packing_pending', 'packing_pending');
+/* ── 包裝分頁（獨立單位，2026-10-07 新增）────────────── */
+function loadPacking(){
+  var params = $.extend({action:'data_packing'}, periodParams());
+  ensureThresholds(function(){
+    $.get(UL_API, params, function(r){
+      if(!r || !r.ok){ alert((r&&r.error)||'載入失敗'); return; }
+      renderPacking(r);
+      UNIT_LOADED.packing = true;
+    }, 'json').fail(function(xhr){
+      var r = xhr.responseJSON;
+      alert((r&&r.error) || ('載入失敗：HTTP '+xhr.status));
+    });
+  });
+}
+function renderPacking(d){
+  $('#packNote').html(d.note ? '<div class="ul-unit-note"><i class="fa fa-exclamation-circle"></i> '+esc(d.note)+'</div>' : '');
+  var ov = d.overload || {};
+  var p = d.packing || { pending:0, daily:[], avg_workdays:null, longest:[], shortest:[] };
 
   var h = '<div class="kpi-row">';
-  h += statTile('待包裝筆數', p.pending, undefined, null, nf, bad);
+  h += statTile('待包裝筆數', p.pending, undefined, null, nf, !!ov.pending);
   h += statTile('平均處理工作天', p.avg_workdays, undefined, null, nf1, false);
   h += '</div>';
-  $('#prodPackingKpi').html(h);
+  $('#packKpi').html(h);
 
   var daily = p.daily || [];
   if (!daily.length){
-    $('#prodPackingChart').html(emptyHint('本期沒有包裝完工資料。'));
+    $('#packChart').html(emptyHint('本期沒有包裝完工資料。'));
   } else {
-    chart('prodPackingChart', {
+    chart('packChart', {
       chart: { height:280 },
       xAxis: { categories: daily.map(function(r){ return r.report_date; }) },
       yAxis: [
@@ -1096,7 +1166,22 @@ function renderProdPacking(p){
     + '<div class="col-sm-6"><div style="font-size:12.5px;color:var(--ink);font-weight:700;margin-bottom:4px;">處理最久前5筆</div>'+extremesTable(p.longest,false)+'</div>'
     + '<div class="col-sm-6"><div style="font-size:12.5px;color:var(--ink);font-weight:700;margin-bottom:4px;">處理最快前5筆</div>'+extremesTable(p.shortest,false)+'</div>'
     + '</div>';
-  $('#prodPackingExtremes').html(h2);
+  $('#packExtremes').html(h2);
+
+  renderPackingTable(d.by_person);
+}
+function renderPackingTable(rows){
+  rows = rows || [];
+  if (!rows.length){
+    $('#packTable tbody').html('<tr><td colspan="4" style="text-align:center;color:var(--muted);">目前沒有資料（請見上方說明）。</td></tr>');
+    return;
+  }
+  var h = '';
+  rows.forEach(function(r){
+    h += '<tr><td>'+esc(r.dept_name)+'</td><td>'+esc(r.position_name)+'</td><td>'+esc(r.name)+'</td>'
+       + '<td>'+nf(r.packing_count)+'</td></tr>';
+  });
+  $('#packTable tbody').html(h);
 }
 
 /* ── 品管分頁 ───────────────────────────────────────── */
@@ -1242,8 +1327,8 @@ function renderQcAdhoc(ad, bad){
 }
 
 /* ── 單位分頁與期間篩選串接 ─────────────────────────── */
-var UNIT_LOADERS = { design: loadDesign, sales: loadSales, pm: loadPm, prod: loadProd, qc: loadQc };
-var UNIT_LOADED  = { design: false, sales: false, pm: false, prod: false, qc: false };
+var UNIT_LOADERS = { design: loadDesign, sales: loadSales, pm: loadPm, prod: loadProd, qc: loadQc, packing: loadPacking };
+var UNIT_LOADED  = { design: false, sales: false, pm: false, prod: false, qc: false, packing: false };
 function loadUnitTab(key){
   if (UNIT_LOADERS[key]) UNIT_LOADERS[key]();
 }

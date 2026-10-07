@@ -10,11 +10,15 @@
  * 不另建資料表——這批設定很小，而且在交易中跑 DDL 會隱式 commit（鐵律）。
  *
  * ── 資料來源，皆直接重用既有唯一實作，不重寫一份 ──
- *   期間切法／新料號判定：order_analysis_lib.php（oa_period_buckets 等／oa_first_seen）
+ *   期間切法：order_analysis_lib.php（oa_period_buckets 等）
  *   人員列表／含子部門展開：people_lib.php（eg_people_list）／org_role_lib.php（eg_dept_subtree_ids）
  *   工作日判定：leave_lib.php（eg_leave_is_workday）
- *   設計備註開放問題數：eng_log_lib.php（el_order_open_exists_sql／el_order_open_item_counts）
+ *   設計備註開放問題數：eng_log_lib.php（el_order_open_item_counts）
  *   待對帳家數/筆數（生管）：acc_track_lib.php（act_ap_rows，status='processing' 視為尚未對帳完成）
+ *   新案件（這個料號還有沒有圖面）判定：bom_dir_lib.php（eg_bom_scan_dir_auto／eg_bom_file_cache_read／
+ *     eg_bom_file_prefix_index），見下方 ul_orders_new_case_map()——與 NewOrder_Track.php 的
+ *     NEW 徽章完全同一套規則，2026-10-07 使用者釐清這才是「新案件」真正的定義，取代舊版
+ *     「系統裡首次出現的料號」（oa_first_seen，已不再使用）。
  */
 
 require_once __DIR__ . '/people_lib.php';
@@ -58,10 +62,16 @@ function ul_param_save(PDO $db, string $key, $val, string $by = ''): void
     }
 }
 
-/** 本模組目前已知的單位鍵（prod/qc 這次只佔位，計算函式留待後續階段） */
+/**
+ * 本模組目前已知的單位鍵。'packing'（包裝）2026-10-07 新增為獨立單位——人員範圍
+ * （設定頁勾選的部門，實務上多為倉管組）與「這是不是包裝工作」的判定刻意分開：
+ * 前者只決定「逐人負荷明細」要列哪些人，後者永遠看製程本身（process_no.ProcessName=
+ * '包裝'，與既有 ul_prod_packing_stats() 同一套規則），bom_ing／pm_process_daily_report
+ * 本來就沒有「負責人所屬部門」這種欄位可以拿來篩資料列。
+ */
 function ul_unit_keys(): array
 {
-    return ['design', 'sales', 'pm', 'prod', 'qc'];
+    return ['design', 'sales', 'pm', 'prod', 'qc', 'packing'];
 }
 
 /**
@@ -312,43 +322,107 @@ function ul_ids_norm(array $ids): array
 }
 
 /**
- * 這張訂單是不是「系統裡第一次出現這個料號」——薄包裝呼叫 order_analysis_lib.php 的
- * oa_first_seen()（出貨/訂單/製令/退貨四來源逐料號取最早日期的唯一實作），不要在這裡
- * 另外寫一份判定規則。
- * @param int $partDId 料號主檔 id（order_track.d_id_ID）
- * @param string $orderDate 這張訂單的下單日（order_track.Order_date）
+ * 這批料號文字「目前完全沒有任何圖面」的判定（＝訂單追蹤清單上的 NEW 徽章）。
+ * 2026-10-07 使用者釐清「新案件」＝NEW 圖示者，完全取代舊版「系統裡首次出現的料號」
+ * 那套判法（oa_first_seen，已移除呼叫）——那是另一個概念，不是使用者這次要的。
+ *
+ * **刻意用料號文字（order_track.d_id／bom.d_id，兩邊都是 varchar(30)）而不是料號主檔 id
+ * （order_track.d_id_ID）**：查證 NewOrder_Track.php 第 3325 行 NEW 徽章實際讀的是
+ * `$has_drawing_map[$order['d_id']]`（文字鍵），`$all_d_ids`（第 2815 行）也是
+ * `array_column($order_list,'d_id')` 取文字欄位；`bom.d_id` 這欄本身就是存料號文字、
+ * 不是外鍵整數，拿料號主檔 id 去比對會比不到任何東西。這跟「同一個料號文字可能分屬
+ * 不同客戶、各有一筆主檔」是已知的既有限制（見本機記憶 bom_client_name_cache），
+ * 但 NEW 徽章本身就是這樣判的——本函式的任務是跟它**完全一致**，不是另外發明一套更
+ * 嚴謹但對不起來的規則，否則清單上的 NEW 徽章跟這裡算出來的「新案件」數會兩套各算各的。
+ *
+ * 判定邏輯其餘部分逐字重用 NewOrder_Track.php 第 2919~2982 行那套：
+ * ① 查 bom 表取得每個料號文字底下的全部 BOM 編號 ② 用 bom_dir_lib.php 既有的 NAS 掃描
+ * 快取（絕不在這裡同步掃描，那個資料夾近 2 萬個檔，掃一次要一分半）比對副檔名
+ * jpg/jpeg/png/pdf 的檔案是否存在 ③ 快取還沒建好、或 NAS 資料夾無法存取時，退回
+ * 「bom 表有記錄就視為有圖面」（與 NewOrder_Track.php 同一條既有退路）。
+ *
+ * @param array $partNos 料號文字（order_track.d_id），可含重複值或空字串（會被濾掉）
+ * @return array [d_id文字 => bool] true＝這個料號目前查不到任何圖面＝新案件；
+ *               查無 bom 記錄的料號一律回 true（沒有圖面可言）。
  */
-function ul_order_is_new_case(PDO $db, int $partDId, string $orderDate): bool
+function ul_orders_new_case_map(PDO $db, array $partNos): array
 {
-    if ($partDId <= 0) return false;
-    $map = oa_first_seen($db);
-    if (!isset($map[$partDId])) return false;
-    $d = substr($orderDate, 0, 10);
-    if ($d === '') return false;
-    // 系統裡這個料號最早出現的日期不早於這張單的下單日＝這張單就是（或同一天內）首次出現
-    return $map[$partDId]['d'] >= $d;
+    $nos = array_values(array_unique(array_filter(array_map('strval', $partNos), fn($v) => $v !== '')));
+    if (!$nos) return [];
+    $out = [];
+    foreach ($nos as $no) $out[$no] = true; // 預設：查無 bom 記錄＝新案件（沒有任何圖面可言）
+
+    $ph = implode(',', array_fill(0, count($nos), '?'));
+    $st = $db->prepare("SELECT d_id, bom FROM bom WHERE d_id IN ({$ph})");
+    $st->execute($nos);
+    $bomByDid = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $bomByDid[(string)$r['d_id']][] = $r['bom'];
+    }
+    if (!$bomByDid) return $out; // 全部都查無 bom 記錄，維持預設 true（新案件）
+
+    require_once __DIR__ . '/bom_dir_lib.php';
+    $nasScanDir = eg_bom_scan_dir_auto();
+    $validExt = ['jpg', 'jpeg', 'png', 'pdf'];
+
+    if (is_dir($nasScanDir)) {
+        $age = null;
+        $nasFiles = eg_bom_file_cache_read($nasScanDir, $validExt, $age);
+        if ($nasFiles === null) {
+            // 還沒有快取：不可在這裡同步掃 NAS（絕不可卡住畫面），比照既有退路：
+            // bom 表有記錄即視為有圖面（下一次有人開過會自動建起快取）
+            foreach (array_keys($bomByDid) as $did) $out[$did] = false;
+        } else {
+            $allBomNums = array_values(array_unique(array_merge(...array_values($bomByDid))));
+            $prefixIdx = eg_bom_file_prefix_index($nasFiles, $allBomNums);
+            $bomHasFile = [];
+            foreach ($allBomNums as $bnum) {
+                $bl = strlen((string)$bnum);
+                if ($bl > 0 && isset($prefixIdx[$bl][$bnum])) $bomHasFile[$bnum] = true;
+            }
+            foreach ($bomByDid as $did => $bnums) {
+                foreach ($bnums as $bnum) {
+                    if (!empty($bomHasFile[$bnum])) { $out[$did] = false; break; }
+                }
+            }
+        }
+    } else {
+        // NAS 不可存取：bom 表有記錄即視為有圖面（同 NewOrder_Track.php 既有退路）
+        foreach (array_keys($bomByDid) as $did) $out[$did] = false;
+    }
+
+    return $out;
 }
 
 /**
  * 設計課本期彙總卡片。
- * @return array drawing_wip（批圖中：未轉生管且該訂單目前有開放中設計備註問題）
- *               in_review（本期按下審圖）／pm_get（本期轉生管）／new_case（本期 ateGet 的訂單裡
- *               屬系統首次出現料號的張數）／issue_orders（現況：有開放中設計備註問題的訂單數）
+ * @return array drawing_wip（批圖中，現況快照：2026-10-07 使用者釐清定義＝「有分配給
+ *               此部門人員的訂單，且還沒按審圖、也還沒轉生管」，與是否有開放中設計備註
+ *               問題無關——那是獨立指標 issue_orders）
+ *               in_review（本期按下審圖）／pm_get（本期轉生管）
+ *               new_case（現況快照：這批設計師名下目前有效訂單裡，料號目前完全沒有任何
+ *               圖面的張數＝NEW 圖示者，見 ul_orders_new_case_map()；拆成「已處理」=已轉
+ *               生管／「批圖中」=比照 drawing_wip 同一個定義兩種子狀態＋各自佔比）
+ *               issue_orders（現況：有開放中設計備註問題的訂單數）
  *               avg_draw_workdays（ateGet→pmGet 的平均工作天，只取 pmGet 落在本期內的）
  */
 function ul_design_summary(PDO $db, string $from, string $to, array $designerIds): array
 {
-    $out = ['drawing_wip' => 0, 'in_review' => 0, 'pm_get' => 0, 'new_case' => 0,
+    $out = ['drawing_wip' => 0, 'in_review' => 0, 'pm_get' => 0,
+            'new_case' => ['total' => 0, 'processed' => 0, 'processed_pct' => null,
+                            'in_progress' => 0, 'in_progress_pct' => null],
             'issue_orders' => 0, 'avg_draw_workdays' => null];
     $ids = ul_ids_norm($designerIds);
     if (!$ids) return $out;
     $in = implode(',', $ids);
 
-    // 批圖中：這是「目前狀態」的即時快照，刻意不受 $from/$to 限制
-    $existsSql = el_order_open_exists_sql('ot', 'order_note');
+    // 批圖中：這是「目前狀態」的即時快照，刻意不受 $from/$to 限制。2026-10-07 使用者
+    // 釐清定義＝「有分配給此部門人員的訂單，且還沒按審圖跟已轉生管」——不是舊版拿「有無
+    // 開放中設計備註問題」當判準，那會讓一張單明明還在畫、卻因為沒人提過問題就不被算進
+    // 批圖中，兩個指標混在一起反而互相誤導。
     $out['drawing_wip'] = (int)$db->query(
         "SELECT COUNT(*) FROM order_track ot
-         WHERE ot.ate IN ({$in}) AND ot.pmGet IS NULL AND ot.Order_status<>6 AND {$existsSql}"
+         WHERE ot.ate IN ({$in}) AND ot.in_review IS NULL AND ot.pmGet IS NULL AND ot.Order_status<>6"
     )->fetchColumn();
 
     $st = $db->prepare("SELECT COUNT(*) FROM order_track
@@ -361,23 +435,44 @@ function ul_design_summary(PDO $db, string $from, string $to, array $designerIds
     $st->execute([$from, $to]);
     $out['pm_get'] = (int)$st->fetchColumn();
 
-    $st = $db->prepare("SELECT Order_id, d_id_ID, Order_date FROM order_track
-        WHERE ate IN ({$in}) AND ateGet IS NOT NULL AND DATE(ateGet) BETWEEN ? AND ? AND Order_status<>6");
-    $st->execute([$from, $to]);
-    $newCnt = 0;
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        if (ul_order_is_new_case($db, (int)$r['d_id_ID'], (string)$r['Order_date'])) $newCnt++;
-    }
-    $out['new_case'] = $newCnt;
-
-    // 問題訂單數：現況快照，不受 $from/$to 限制
-    $orderIds = array_map('intval', $db->query(
-        "SELECT Order_id FROM order_track WHERE ate IN ({$in}) AND Order_status<>6"
-    )->fetchAll(PDO::FETCH_COLUMN));
+    // 問題訂單數／新案件：兩者都是「目前狀態」快照，共用同一次查詢（鐵律8的精神：
+    // 不必要的重複查詢也是要避免的浪費）。新案件的判定一律用 d_id（料號文字，與
+    // NewOrder_Track.php 的 NEW 徽章同一個鍵），不是 d_id_ID（料號主檔 id）——
+    // 見 ul_orders_new_case_map() 的函式註解。
+    $orderRows = $db->query(
+        "SELECT Order_id, d_id, pmGet, in_review FROM order_track
+         WHERE ate IN ({$in}) AND Order_status<>6"
+    )->fetchAll(PDO::FETCH_ASSOC);
+    $orderIds = array_map(fn($r) => (int)$r['Order_id'], $orderRows);
     if ($orderIds) {
         $openMap = el_order_open_item_counts($db, $orderIds, 'order_note');
         $out['issue_orders'] = count(array_filter($openMap, fn($c) => $c > 0));
     }
+
+    // 新案件：2026-10-07 使用者重新定義＝NEW 圖示者（見 ul_orders_new_case_map()），完全
+    // 取代舊版「系統裡首次出現的料號」。同樣是現況快照，不受 $from/$to 限制。拆成「已處理」
+    // （已轉生管＝pmGet 有值）與「批圖中」（比照上面 drawing_wip 同一個定義：還沒按審圖、
+    // 也還沒轉生管）兩種子狀態＋各自佔比；「已按審圖但還沒轉生管」這段過渡狀態刻意不計入
+    // 任一邊——那不屬於這兩個指標各自宣稱涵蓋的範圍，硬塞進去只會讓兩個數字本身的定義
+    // 失真，不要求 processed+in_progress 一定要等於 total。
+    $partNos = [];
+    foreach ($orderRows as $r) { $pn = (string)$r['d_id']; if ($pn !== '') $partNos[] = $pn; }
+    $newCaseMap = ul_orders_new_case_map($db, $partNos);
+    $ncTotal = 0; $ncProcessed = 0; $ncInProgress = 0;
+    foreach ($orderRows as $r) {
+        $pn = (string)$r['d_id'];
+        if ($pn === '' || empty($newCaseMap[$pn])) continue; // 查不到料號文字的訂單無法判定，不計入
+        $ncTotal++;
+        if ($r['pmGet'] !== null) $ncProcessed++;
+        elseif ($r['in_review'] === null) $ncInProgress++;
+    }
+    $out['new_case'] = [
+        'total' => $ncTotal,
+        'processed' => $ncProcessed,
+        'processed_pct' => $ncTotal > 0 ? round($ncProcessed / $ncTotal, 4) : null,
+        'in_progress' => $ncInProgress,
+        'in_progress_pct' => $ncTotal > 0 ? round($ncInProgress / $ncTotal, 4) : null,
+    ];
 
     $st = $db->prepare("SELECT ateGet, pmGet FROM order_track
         WHERE ate IN ({$in}) AND ateGet IS NOT NULL AND pmGet IS NOT NULL
@@ -425,10 +520,10 @@ function ul_design_by_person(PDO $db, string $from, string $to, array $designerI
         ];
     }
 
-    $existsSql = el_order_open_exists_sql('ot', 'order_note');
+    // 批圖中定義見 ul_design_summary() 同一段註解（還沒按審圖、也還沒轉生管）
     foreach ($db->query(
         "SELECT ot.ate k, COUNT(*) c FROM order_track ot
-         WHERE ot.ate IN ({$in}) AND ot.pmGet IS NULL AND ot.Order_status<>6 AND {$existsSql}
+         WHERE ot.ate IN ({$in}) AND ot.in_review IS NULL AND ot.pmGet IS NULL AND ot.Order_status<>6
          GROUP BY ot.ate"
     )->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $uid = (int)$r['k']; if (isset($out[$uid])) $out[$uid]['drawing_wip'] = (int)$r['c'];
@@ -1191,6 +1286,69 @@ function ul_prod_packing_stats(PDO $db, string $from, string $to): array
     return $out;
 }
 
+/**
+ * 包裝逐人負荷（獨立單位，2026-10-07 新增）。$packingUserIds 是設定頁為「包裝」勾選的
+ * 部門展開出的人員——使用者說明這實際上多半是倉管組（隸屬資材課），但判定「這是不是
+ * 包裝工作」一律看製程本身（process_no.ProcessName='包裝'，跟 ul_prod_packing_stats()
+ * 同一套規則），不是看「這個人是不是倉管組的人」：bom_ing／pm_process_daily_report
+ * 本來就沒有「負責人所屬部門」這種欄位可以拿來篩資料列，只能反過來查「這個人有沒有
+ * 真的報過包裝製程的工」。
+ *
+ * 2026-10-07 實測現場包裝報工（pm_process_daily_report.production_user_id）跟倉管組
+ * 人員 id 幾乎對不上——全庫目前只有 1 筆包裝完工報工紀錄，報工人不在倉管組編制裡；
+ * 包裝多半是現場其他線上人員順手報的工，不是記在倉管組編制名下。**如果交叉比對後
+ * 查不到任何資料，一律如實回傳空陣列，不勉強湊數字**——呼叫端（UnitLoad_API.php 的
+ * data_packing）會依是否為空另外組一句說明文字，跟 ul_pm_by_person()「沒有資料可用」
+ * 時的處理方式同一套道理：本函式只回資料列，不在這裡內嵌中文說明（保持跟其餘
+ * *_by_person 函式一致的回傳格式）。
+ * @param array $deptIds 本單位設定範圍展開後的部門 id（見 ul_unit_dept_ids()），只用於
+ *              挑人員顯示用的部門/職稱，不影響「誰報過工」這件事的判定。
+ * @return array 每列 ['user_id','name','dept_name','position_name','packing_count']，
+ *               依 packing_count 由大到小排序；交叉比對不到任何資料時回傳空陣列。
+ */
+function ul_packing_by_person(PDO $db, string $from, string $to, array $packingUserIds, array $deptIds = []): array
+{
+    $ids = ul_ids_norm($packingUserIds);
+    if (!$ids) return [];
+    $in = implode(',', $ids);
+
+    $st = $db->prepare(
+        "SELECT r.production_user_id AS person, COUNT(*) c
+         FROM pm_process_daily_report r
+         JOIN process_no pn ON pn.ProcessNo = r.process_no
+         WHERE pn.ProcessName='包裝' AND r.is_finished = 1
+           AND r.report_date BETWEEN ? AND ?
+           AND r.production_user_id IN ({$in})
+         GROUP BY r.production_user_id"
+    );
+    $st->execute([$from, $to]);
+    $counts = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $counts[(int)$r['person']] = (int)$r['c'];
+    }
+    if (!$counts) return []; // 設定的人員名下完全查不到包裝報工，如實回空，不湊數字
+
+    $uidsWithData = array_keys($counts);
+    $people = $deptIds ? eg_people_list($db, ['user_ids' => $uidsWithData, 'dept_ids' => $deptIds])
+                       : eg_people_list($db, ['user_ids' => $uidsWithData]);
+    $byId = [];
+    foreach ($people as $p) $byId[(int)$p['id']] = $p;
+
+    $out = [];
+    foreach ($counts as $uid => $c) {
+        $p = $byId[$uid] ?? null;
+        $out[] = [
+            'user_id' => $uid,
+            'name' => $p['user_cname'] ?? ('#' . $uid),
+            'dept_name' => $p['dept_name'] ?? '',
+            'position_name' => $p['position_name'] ?? '',
+            'packing_count' => $c,
+        ];
+    }
+    usort($out, fn($x, $y) => $y['packing_count'] <=> $x['packing_count']);
+    return $out;
+}
+
 /* ══════════════════════════════════════════════════════════════════
  * F. 品管
  *
@@ -1733,6 +1891,9 @@ function ul_threshold_defaults(): array
             'wait_days_avg' => ['value' => 5, 'label' => '待驗平均等待工作天'],
             'adhoc_count' => ['value' => 10, 'label' => '脫離待驗流程的補檢驗筆數'],
         ],
+        'packing' => [
+            'pending' => ['value' => 200, 'label' => '待包裝筆數'],
+        ],
     ];
 }
 
@@ -1798,6 +1959,7 @@ function ul_is_overload(float $value, string $key, array $thresholds = []): bool
  *                'setup'=>ul_prod_setup_stats()回傳],
  *   'qc'     => ['wait'=>ul_qc_wait_time()回傳, 'abnormal'=>ul_qc_abnormal_stats()回傳,
  *                'adhoc'=>ul_qc_adhoc()回傳],
+ *   'packing'=> ['pending'=>ul_prod_packing_stats()回傳的 pending 值],
  * ]
  * @param array $thresholds ul_settings() 回傳的 thresholds（巢狀或扁平皆可，見 ul_is_overload()）
  * @return array 每列 ['level'=>good|warn|bad|info, 'title'=>, 'detail'=>, 'metric'=>]
@@ -1815,7 +1977,7 @@ function ul_insights(array $allData, array $thresholds = []): array
         $cl = $allData['design']['cmp_label'] ?? '上一期';
         $cmp = $allData['design']['cmp'] ?? null;
         if (isset($d['drawing_wip']) && ul_is_overload((float)$d['drawing_wip'], 'design.batch_pending', $thresholds)) {
-            $add('bad', '設計課批圖中筆數偏高', '目前批圖中 ' . $d['drawing_wip'] . ' 筆（尚未轉生管、且設計備註仍有開放中問題）。', (string)$d['drawing_wip']);
+            $add('bad', '設計課批圖中筆數偏高', '目前批圖中 ' . $d['drawing_wip'] . ' 筆（已分配但尚未按審圖、也尚未轉生管）。', (string)$d['drawing_wip']);
         }
         if ($cmp && isset($d['drawing_wip'], $cmp['drawing_wip']) && (int)$cmp['drawing_wip'] > 0) {
             $delta = (int)$d['drawing_wip'] - (int)$cmp['drawing_wip'];
@@ -1896,6 +2058,14 @@ function ul_insights(array $allData, array $thresholds = []): array
         $adhoc = $allData['qc']['adhoc'] ?? null;
         if ($adhoc && isset($adhoc['total']) && ul_is_overload((float)$adhoc['total'], 'qc.adhoc_count', $thresholds)) {
             $add('warn', '品管脫離正常待驗流程的補檢驗偏多', '本期有 ' . $adhoc['total'] . ' 筆檢驗不是掛在正常待驗佇列上完成的。', (string)$adhoc['total']);
+        }
+    }
+
+    // 包裝（獨立單位，2026-10-07 新增；資料來源沿用既有 ul_prod_packing_stats()）
+    if (isset($allData['packing'])) {
+        $pk = $allData['packing'];
+        if (isset($pk['pending']) && ul_is_overload((float)$pk['pending'], 'packing.pending', $thresholds)) {
+            $add('bad', '包裝待處理筆數偏高', '目前待包裝 ' . $pk['pending'] . ' 筆。', (string)$pk['pending']);
         }
     }
 
