@@ -1726,6 +1726,18 @@ $can_dict_part = $dictCapWorkpiece['add'] || $dictCapWorkpiece['edit']
               || $dictCapIndustry['add'] || $dictCapIndustry['edit']
               || $dictCapProcessType['add'] || $dictCapProcessType['edit'];
 
+// 2026-10-08（二次）同一種舊旗標遺留問題，這次是「設計備註／製程分頁／附件類別標籤」：
+// 角色設定頁的 mdata_design_note_*／mdata_process_note_*／mdata_process_no_*／
+// mdata_attach_cat_* 早就各自獨立勾選（後端 _mdPerm 呼叫也已對應），但這三顆 JS 顯示
+// 旗標從未跟著拆，純用新版角色（如「設計」）指派、沒有舊式頁級權限的人，角色明明已勾
+// 「設計備註：檢視／新增」，畫面卻完全看不到設計備註欄位與按鈕。回報案例：角色是「設計」
+// 卻沒有顯示設計備註可以使用。
+$can_see_design      = _mdPerm('design_note', 'view') || _mdPerm('design_note', 'add') || _mdPerm('design_note', 'edit');
+$can_edit_design     = _mdPerm('design_note', 'add')  || _mdPerm('design_note', 'edit');
+$can_proc_edit       = _mdPerm('process_no', 'add') || _mdPerm('process_no', 'edit')
+                     || _mdPerm('process_note', 'add') || _mdPerm('process_note', 'edit');
+$can_attach_cat_edit = _mdPerm('attach_cat', 'add') || _mdPerm('attach_cat', 'edit');
+
 define('PART_ATTACH_API_URL', '../../src/store/Part_Attachment_API.php');
 
 // =============================================================================
