@@ -79,6 +79,16 @@ function ul_unit_keys(): array
  * ＋ prod_process_types（2026-10-07 新增：生產課「製程大類負荷」要列入哪些製程大類，管理員
  * 勾選的 process_type_id 清單，空陣列＝尚未設定、沿用舊行為顯示全部）＋ exclude_positions
  * （2026-10-07 新增：各單位「逐人負荷明細」要排除哪些職位，單位代碼=>position_id 陣列）。
+ *
+ * 回傳的 thresholds 裡，每個葉節點（'單位.指標'／巢狀 單位=>指標）可能是純數字（既有的
+ * 門檻覆寫值，格式不變）或一個陣列 `['value'=>數字或缺省,'no_threshold'=>0/1]`——後者是
+ * 2026-10-07 新增「不需要門檻」覆寫（見 ul_merge_no_threshold_overrides()）合併進來的
+ * 結果，讓 ul_is_overload()／ul_threshold_value() 只要拿到這份 thresholds 就查得到完整
+ * 設定，不必額外再傳一份；**刻意把 no_threshold 另外存成獨立的 `no_threshold` 參數鍵，
+ * 不直接混進 `thresholds` 參數本身**——因為設定頁可能分區塊各自送出（見下方
+ * ul_settings_save() 的 array_key_exists 規則），兩者存在一起的話，使用者只改門檻數值
+ * 存檔時就會把「不需要門檻」的勾選狀態一併洗空，讀出來時再合併成同一份結構對外呈現，
+ * 兩件事看起來像一件事、但各自獨立存取不會互相洗掉。
  * @return array ['dept_cfg'=>['design'=>[['dept_id'=>int,'include_sub'=>bool],...], 'sales'=>[...], ...],
  *                'thresholds'=>array,
  *                'prod_process_types'=>[int,...],
@@ -90,6 +100,9 @@ function ul_settings(PDO $db): array
     if (!is_array($deptCfgRaw)) $deptCfgRaw = [];
     $thresholds = ul_param_get($db, 'thresholds', []);
     if (!is_array($thresholds)) $thresholds = [];
+    $noThrRaw = ul_param_get($db, 'no_threshold', []);
+    if (!is_array($noThrRaw)) $noThrRaw = [];
+    $thresholds = ul_merge_no_threshold_overrides($thresholds, $noThrRaw);
     $pptRaw = ul_param_get($db, 'prod_process_types', []);
     $exclRaw = ul_param_get($db, 'exclude_positions', []);
     if (!is_array($exclRaw)) $exclRaw = [];
@@ -124,6 +137,36 @@ function ul_settings(PDO $db): array
 }
 
 /**
+ * 把獨立存放的「不需要門檻」覆寫（$noThrRaw，巢狀 單位=>指標=>0/1）併進 $thresholds
+ * 結構裡——見 ul_settings() 函式註解。$thresholds 的既有葉節點可能是純數字（舊版唯一
+ * 格式）或已經是陣列；有 no_threshold 覆寫的那個指標，一律轉成
+ * `['value'=>原本的數值覆寫或不設,'no_threshold'=>0/1]`，沒有覆寫的指標完全不動
+ * （維持純數字或完全不存在這個鍵，向後相容）。
+ * @param array $thresholds ul_param_get($db,'thresholds',[]) 的原始值
+ * @param array $noThrRaw ul_param_get($db,'no_threshold',[]) 的原始值
+ * @return array 合併後的 thresholds（供 ul_settings() 回傳）
+ */
+function ul_merge_no_threshold_overrides(array $thresholds, array $noThrRaw): array
+{
+    foreach (ul_unit_keys() as $u) {
+        $metrics = $noThrRaw[$u] ?? null;
+        if (!is_array($metrics)) continue;
+        foreach ($metrics as $mk => $flag) {
+            if (!is_string($mk) || $mk === '') continue;
+            $existing = $thresholds[$u][$mk] ?? null;
+            if (is_array($existing)) {
+                $thresholds[$u][$mk]['no_threshold'] = !empty($flag) ? 1 : 0;
+            } else {
+                $leaf = ['no_threshold' => !empty($flag) ? 1 : 0];
+                if ($existing !== null && is_numeric($existing)) $leaf['value'] = $existing + 0;
+                $thresholds[$u][$mk] = $leaf;
+            }
+        }
+    }
+    return $thresholds;
+}
+
+/**
  * 遞迴清洗門檔設定：只留數字型葉節點，非數字的整支直接略過（不報錯、不採信，鐵律8）。
  */
 function ul_settings_clean_thresholds(array $v): array
@@ -142,11 +185,11 @@ function ul_settings_clean_thresholds(array $v): array
  * 裡的值都正規化成正整數陣列去重。
  *
  * dept_cfg／thresholds 沿用既有行為——呼叫端（設定頁）本來就是整份表單一起送出，沒送的鍵
- * 視同空陣列整個覆蓋。但 prod_process_types／exclude_positions 是這次新增、下一階段的設定頁
- * 可能分頁簽／分區塊各自送出（例如「製程大類顯示設定」跟「各單位部門設定」不在同一個表單），
- * 比照全站「沒送這個欄位＝不要動它、送空陣列才是刻意清空」的既有規則（array_key_exists 判斷
- * 有沒有送，不是判斷值是否為空），避免管理員只改部門設定、卻把已經設定好的製程大類清單
- * 或排除職位整批洗空。
+ * 視同空陣列整個覆蓋。但 prod_process_types／exclude_positions／no_threshold（2026-10-07
+ * 新增「不需要門檻」逐指標覆寫）是之後的設定頁可能分頁簽／分區塊各自送出（例如「製程
+ * 大類顯示設定」跟「各單位部門設定」不在同一個表單），比照全站「沒送這個欄位＝不要動它、
+ * 送空陣列才是刻意清空」的既有規則（array_key_exists 判斷有沒有送，不是判斷值是否為空），
+ * 避免管理員只改部門設定、卻把已經設定好的製程大類清單或排除職位整批洗空。
  * @return array 存檔後的完整設定（即 ul_settings() 的回傳格式）
  */
 function ul_settings_save(PDO $db, array $in, int $by): array
@@ -185,6 +228,24 @@ function ul_settings_save(PDO $db, array $in, int $by): array
             $exclOut[$k] = ul_ids_norm($list);
         }
         ul_param_save($db, 'exclude_positions', $exclOut, $byStr);
+    }
+
+    // no_threshold（2026-10-07 新增，「不需要門檻」逐指標覆寫）：同 prod_process_types／
+    // exclude_positions 一樣的 array_key_exists 規則——沒送這個鍵就完全不動既有覆寫，
+    // 送了才整批覆蓋。值一律正規化成 0/1，非字串鍵（指標代碼）直接略過（鐵律8）。
+    if (array_key_exists('no_threshold', $in)) {
+        $ntIn = is_array($in['no_threshold']) ? $in['no_threshold'] : [];
+        $ntOut = [];
+        foreach (ul_unit_keys() as $k) {
+            $metrics = isset($ntIn[$k]) && is_array($ntIn[$k]) ? $ntIn[$k] : [];
+            $clean = [];
+            foreach ($metrics as $mk => $v) {
+                if (!is_string($mk) || $mk === '') continue;
+                $clean[$mk] = !empty($v) ? 1 : 0;
+            }
+            $ntOut[$k] = $clean;
+        }
+        ul_param_save($db, 'no_threshold', $ntOut, $byStr);
     }
 
     return ul_settings($db);
@@ -399,7 +460,11 @@ function ul_bom_active_cond(string $bomIngAlias = 'bi'): string
  * （少數 BOM 因拆分同時有 2 筆現在站），未指派 601／已指派 7——量級終於貼近
  * 596 這個基準，不再是 3000 多筆。
  *
- * @return array 每列 ['bom_ing_fid','bom','process_no','machine_id','processing_state']
+ * 2026-10-07：SELECT 新增 `maker_id_no`——供 `ul_pm_summary()` 統一改用本函式判定
+ * 「委外加工中／廠內加工中」時，不必再另外查一次 bom_ing 取得廠商編號（純加一欄，
+ * 既有呼叫端 `ul_prod_by_process_type()` 不受影響，多出來的欄位沒人讀）。
+ *
+ * @return array 每列 ['bom_ing_fid','bom','process_no','machine_id','processing_state','maker_id_no']
  */
 function ul_prod_current_step_rows(PDO $db): array
 {
@@ -414,7 +479,7 @@ function ul_prod_current_step_rows(PDO $db): array
         cur_sn AS (
             SELECT bom, MIN(bom_sn) AS cur_sn FROM step_done WHERE all_done = 0 GROUP BY bom
         )
-        SELECT bi.bom_ing_fid, bi.bom, bi.process_no, bi.machine_id, bi.processing_state
+        SELECT bi.bom_ing_fid, bi.bom, bi.process_no, bi.machine_id, bi.processing_state, bi.maker_id_no
         FROM bom_ing bi
         JOIN cur_sn c ON c.bom = bi.bom AND c.cur_sn = bi.bom_sn
         WHERE bi.is_consumed = 0
@@ -521,14 +586,32 @@ function ul_orders_new_case_map(PDO $db, array $partNos): array
  *               圖面的張數＝NEW 圖示者，見 ul_orders_new_case_map()；拆成「已處理」=已轉
  *               生管／「批圖中」=比照 drawing_wip 同一個定義兩種子狀態＋各自佔比）
  *               issue_orders（現況：有開放中設計備註問題的訂單數）
- *               avg_draw_workdays（ateGet→pmGet 的平均工作天，只取 pmGet 落在本期內的）
+ *               avg_draw_workdays（2026-10-07 修正：只取 order_track.need_design_draw=1
+ *               的訂單，見下方函式內註解）、draw_case_count（算進這個平均值的筆數）
+ *               avg_sample_draw_workdays／sample_draw_case_count（2026-10-07 新增：
+ *               need_sample_draw=1，由樣品繪圖，比一般繪圖更花時間，獨立另算一個平均值，
+ *               不跟一般繪圖案件混在同一個平均裡——見下方函式內註解）
+ *               period_total_days／period_elapsed_days（2026-10-07 新增：$from~$to 這個
+ *               期間總共幾天／若本期尚未結束則是到今天為止已經過了幾天，本期已經結束則
+ *               為 null——供 ul_insights() 判斷「本期 vs 比較期」要不要换算成日均比較，
+ *               不受兩個期間長度不同影響，見 ul_period_daily_ctx_from_summary()）
  */
 function ul_design_summary(PDO $db, string $from, string $to, array $designerIds): array
 {
     $out = ['drawing_wip' => 0, 'in_review' => 0, 'pm_get' => 0,
             'new_case' => ['total' => 0, 'processed' => 0, 'processed_pct' => null,
                             'in_progress' => 0, 'in_progress_pct' => null],
-            'issue_orders' => 0, 'avg_draw_workdays' => null];
+            'issue_orders' => 0, 'avg_draw_workdays' => null, 'draw_case_count' => 0,
+            'avg_sample_draw_workdays' => null, 'sample_draw_case_count' => 0,
+            'period_total_days' => null, 'period_elapsed_days' => null];
+
+    // period_total_days／period_elapsed_days：不依賴 $designerIds，先算好再判斷是否提早
+    // 回傳——即使這個單位目前沒有設定任何人員，呼叫端（ul_insights()）也還是看得到這個
+    // 期間本身的長度資訊（雖然沒有意義，但至少欄位存在、型別一致，不必額外判斷有沒有
+    // 這個鍵）。
+    $out['period_total_days'] = (int)floor((strtotime($to) - strtotime($from)) / 86400) + 1;
+    $out['period_elapsed_days'] = oa_elapsed_days(['start' => $from, 'end' => $to]);
+
     $ids = ul_ids_norm($designerIds);
     if (!$ids) return $out;
     $in = implode(',', $ids);
@@ -600,8 +683,16 @@ function ul_design_summary(PDO $db, string $from, string $to, array $designerIds
         'in_progress_pct' => $ncTotal > 0 ? round($ncInProgress / $ncTotal, 4) : null,
     ];
 
+    // 2026-10-07 修正：使用者回報「繪圖平均工作天」這個指標意義不明、「極少有繪圖案件」。
+    // 根因是舊版只要有指派 ate（設計者）就算進平均值，但指派設計者不代表這張訂單真的
+    // 需要畫圖——`NewOrder_Track.php` 已新增兩個旗標欄位分辨「這張訂單是不是真的需要
+    // 畫圖」：`need_design_draw`（一般繪圖）／`need_sample_draw`（由樣品繪圖，比一般
+    // 繪圖更花時間），才是判斷「這是不是繪圖案件」的正確依據。兩者各自獨立統計一個
+    // 平均工作天，不混在一起看——樣品繪圖本來就比較花時間，混進同一個平均會把一般繪圖
+    // 的數字拉高、也會把樣品繪圖的數字拉低，兩邊都失真。
     $st = $db->prepare("SELECT ateGet, pmGet FROM order_track ot
         WHERE ot.ate IN ({$in}) AND ot.ateGet IS NOT NULL AND ot.pmGet IS NOT NULL
+          AND ot.need_design_draw = 1
           AND DATE(ot.pmGet) BETWEEN ? AND ? AND {$ordStatOk} AND {$ordNotSplit}");
     $st->execute([$from, $to]);
     $sum = 0.0; $cnt = 0;
@@ -611,6 +702,21 @@ function ul_design_summary(PDO $db, string $from, string $to, array $designerIds
         $sum += $d; $cnt++;
     }
     $out['avg_draw_workdays'] = $cnt > 0 ? round($sum / $cnt, 2) : null;
+    $out['draw_case_count'] = $cnt;
+
+    $st2 = $db->prepare("SELECT ateGet, pmGet FROM order_track ot
+        WHERE ot.ate IN ({$in}) AND ot.ateGet IS NOT NULL AND ot.pmGet IS NOT NULL
+          AND ot.need_sample_draw = 1
+          AND DATE(ot.pmGet) BETWEEN ? AND ? AND {$ordStatOk} AND {$ordNotSplit}");
+    $st2->execute([$from, $to]);
+    $sumS = 0.0; $cntS = 0;
+    foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $d = ul_workdays_between($db, substr((string)$r['ateGet'], 0, 10), substr((string)$r['pmGet'], 0, 10));
+        if ($d === null) continue;
+        $sumS += $d; $cntS++;
+    }
+    $out['avg_sample_draw_workdays'] = $cntS > 0 ? round($sumS / $cntS, 2) : null;
+    $out['sample_draw_case_count'] = $cntS;
 
     return $out;
 }
@@ -642,7 +748,8 @@ function ul_design_by_person(PDO $db, string $from, string $to, array $designerI
             'dept_name' => $p['dept_name'] ?? '',
             'position_name' => $p['position_name'] ?? '',
             'drawing_wip' => 0, 'in_review' => 0, 'pm_get' => 0,
-            'issue_orders' => 0, 'avg_draw_workdays' => null,
+            'issue_orders' => 0, 'avg_draw_workdays' => null, 'draw_case_count' => 0,
+            'avg_sample_draw_workdays' => null, 'sample_draw_case_count' => 0,
         ];
     }
 
@@ -688,8 +795,11 @@ function ul_design_by_person(PDO $db, string $from, string $to, array $designerI
         }
     }
 
+    // 2026-10-07 修正：同 ul_design_summary() 的道理，只有 need_design_draw=1 的訂單才算
+    // 進「繪圖平均工作天」，need_sample_draw=1 另外獨立算一次（見下方），不要混在一起。
     $st = $db->prepare("SELECT ot.ate k, ot.ateGet, ot.pmGet FROM order_track ot
         WHERE ot.ate IN ({$in}) AND ot.ateGet IS NOT NULL AND ot.pmGet IS NOT NULL
+          AND ot.need_design_draw = 1
           AND DATE(ot.pmGet) BETWEEN ? AND ? AND {$ordStatOk} AND {$ordNotSplit}");
     $st->execute([$from, $to]);
     $sums = []; $cnts = [];
@@ -701,7 +811,30 @@ function ul_design_by_person(PDO $db, string $from, string $to, array $designerI
         $cnts[$uid] = ($cnts[$uid] ?? 0) + 1;
     }
     foreach ($cnts as $uid => $c) {
-        if (isset($out[$uid]) && $c > 0) $out[$uid]['avg_draw_workdays'] = round($sums[$uid] / $c, 2);
+        if (isset($out[$uid]) && $c > 0) {
+            $out[$uid]['avg_draw_workdays'] = round($sums[$uid] / $c, 2);
+            $out[$uid]['draw_case_count'] = $c;
+        }
+    }
+
+    $st2 = $db->prepare("SELECT ot.ate k, ot.ateGet, ot.pmGet FROM order_track ot
+        WHERE ot.ate IN ({$in}) AND ot.ateGet IS NOT NULL AND ot.pmGet IS NOT NULL
+          AND ot.need_sample_draw = 1
+          AND DATE(ot.pmGet) BETWEEN ? AND ? AND {$ordStatOk} AND {$ordNotSplit}");
+    $st2->execute([$from, $to]);
+    $sumsS = []; $cntsS = [];
+    foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $uid = (int)$r['k'];
+        $d = ul_workdays_between($db, substr((string)$r['ateGet'], 0, 10), substr((string)$r['pmGet'], 0, 10));
+        if ($d === null) continue;
+        $sumsS[$uid] = ($sumsS[$uid] ?? 0) + $d;
+        $cntsS[$uid] = ($cntsS[$uid] ?? 0) + 1;
+    }
+    foreach ($cntsS as $uid => $c) {
+        if (isset($out[$uid]) && $c > 0) {
+            $out[$uid]['avg_sample_draw_workdays'] = round($sumsS[$uid] / $c, 2);
+            $out[$uid]['sample_draw_case_count'] = $c;
+        }
     }
 
     return array_values($out);
@@ -844,7 +977,14 @@ function ul_design_note_stats(PDO $db, string $from, string $to, array $designer
 /** 本期彙總：報價單數量／報價單明細總筆數／訂單追蹤筆數／待回覆問題筆數（現況快照） */
 function ul_sales_summary(PDO $db, string $from, string $to, array $salesIds): array
 {
-    $out = ['quote_count' => 0, 'quote_item_count' => 0, 'order_count' => 0, 'open_issue_count' => 0];
+    $out = ['quote_count' => 0, 'quote_item_count' => 0, 'order_count' => 0, 'open_issue_count' => 0,
+            'period_total_days' => null, 'period_elapsed_days' => null];
+    // period_total_days／period_elapsed_days：2026-10-07 新增，道理與 ul_design_summary()
+    // 同一段註解——不依賴 $salesIds，先算好才判斷要不要提早回傳，讓 ul_insights() 不管
+    // 這個單位有沒有設定人員都能拿到期間長度資訊。
+    $out['period_total_days'] = (int)floor((strtotime($to) - strtotime($from)) / 86400) + 1;
+    $out['period_elapsed_days'] = oa_elapsed_days(['start' => $from, 'end' => $to]);
+
     $ids = ul_ids_norm($salesIds);
     if (!$ids) return $out;
     $inQ = implode(',', array_map(fn($v) => "'" . $v . "'", $ids));
@@ -959,7 +1099,12 @@ function ul_sales_by_person(PDO $db, string $from, string $to, array $salesIds, 
  * 生管本期彙總。
  * outsource_wip/internal_wip/to_qc/pending_transfer/transferred 這五項是「目前狀態」的
  * 即時快照（processing_state 沒有時間戳可以切期間），$from/$to 刻意不用在這五項上——
- * 跟 ul_design_summary() 的「批圖中」、「問題訂單數」是同一種道理。
+ * 跟 ul_design_summary() 的「批圖中」、「問題訂單數」是同一種道理。**2026-10-07 起
+ * 這五項一律統一取自 ul_prod_current_step_rows()／ul_qc_pending_queue()（見下方實作裡的
+ * 註解）——這三處原本各自獨立判定「現在進行中有多少」，outsource_wip 等四項只簡單篩
+ * processing_state、to_qc 只篩 'Q'，都沒有排除「整條製程路線裡還沒輪到的站」，數字因此
+ * 系統性偏高且彼此對不上；統一之後本函式與生產課「製程大類現況」、品管「目前待驗佇列」
+ * 永遠是同一份判定，不會再各算出不同答案。**
  * pending_recon_* 才是真正有日期意義的指標：依 $from/$to 跨到的每個帳款月份，
  * 呼叫既有的 act_ap_rows() 取「尚未對帳完成」的廠商家數與筆數——**要看 card_status
  * 不是原始的 status**：act_track_get_or_create() 刻意把從未操作過的狀態存成空字串
@@ -975,18 +1120,44 @@ function ul_pm_summary(PDO $db, string $from, string $to, array $pmIds): array
     $out = ['outsource_wip' => 0, 'internal_wip' => 0, 'to_qc' => 0, 'pending_transfer' => 0,
             'transferred' => 0, 'pending_recon_parties' => 0, 'pending_recon_lines' => 0];
 
-    $rows = $db->query("SELECT bi.processing_state AS st, m.internal AS internal
-                        FROM bom_ing bi
-                        LEFT JOIN maker_list m ON m.maker_id_no = bi.maker_id_no
-                        WHERE " . ul_bom_active_cond('bi'))->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($rows as $r) {
-        $st = (string)$r['st'];
-        $isInternal = (int)($r['internal'] ?? 0) === 1;
-        if ($st === 'ing') { if ($isInternal) $out['internal_wip']++; else $out['outsource_wip']++; }
-        elseif ($st === 'Q') $out['to_qc']++;
-        elseif ($st === 'P') $out['pending_transfer']++;
-        elseif ($st === 'E') $out['transferred']++;
+    // 2026-10-07 修正：outsource_wip／internal_wip／pending_transfer／transferred 改成
+    // 直接呼叫 ul_prod_current_step_rows()（「現在正卡在等這一關」，每張現役 BOM 只取
+    // 最早那個還沒走完的站），不再自己另外整表查一次 bom_ing 的 processing_state——
+    // 使用者回報總覽「目前待QC驗 290 筆」跟品管分頁「目前待驗佇列」（已對齊官方畫面的
+    // ul_qc_pending_queue()，103 筆）對不起來，查證後本函式從一開始就沒有套用
+    // ul_prod_current_step_rows() 已經建好的「只算目前這一關，不要把整條路線還沒輪到的
+    // 站也算進去」這套邏輯，而是自己另外查了一次全部 bom_ing（含還沒輪到的 N 站），
+    // 數字因此系統性偏高。改用它之後，這裡與 ul_prod_by_process_type()／
+    // ul_qc_pending_queue() 永遠是同一份資料來源，三處不會再各算出不同答案。
+    $rows = ul_prod_current_step_rows($db);
+    $makerIds = [];
+    foreach ($rows as $r) if (!empty($r['maker_id_no'])) $makerIds[] = $r['maker_id_no'];
+    $makerIds = array_values(array_unique($makerIds));
+    $internalMap = [];
+    if ($makerIds) {
+        $inM = implode(',', array_map(fn($v) => $db->quote($v), $makerIds));
+        foreach ($db->query("SELECT maker_id_no, internal FROM maker_list WHERE maker_id_no IN ({$inM})")
+                    ->fetchAll(PDO::FETCH_ASSOC) as $m) {
+            $internalMap[$m['maker_id_no']] = ((int)($m['internal'] ?? 0)) === 1;
+        }
     }
+    foreach ($rows as $r) {
+        $st = (string)$r['processing_state'];
+        if ($st === 'ing') {
+            $isInternal = !empty($r['maker_id_no']) && !empty($internalMap[$r['maker_id_no']]);
+            if ($isInternal) $out['internal_wip']++; else $out['outsource_wip']++;
+        } elseif ($st === 'P') $out['pending_transfer']++;
+        elseif ($st === 'E') $out['transferred']++;
+        // 'N'／NULL（還沒開工）不計入任何一項，與修正前的既有行為一致（修正前的
+        // if/elseif 鏈同樣只認得 ing/Q/P/E 四種，其餘狀態一樣不計入任何桶）。
+    }
+
+    // to_qc：直接取 ul_qc_pending_queue() 的 total——全站口徑最精確的「目前待驗佇列」
+    // （已對齊 QC_check_list_test.php 官方畫面並逐欄核對過，見該函式註解），不要自己
+    // 另外算一次，否則這裡跟品管分頁的「目前待驗佇列」永遠可能各算出不同的數字（本次
+    // 問題正是由此而來）。這裡只需要 total 這個現況快照，不傳 $from/$to（avg_wait_workdays
+    // 不需要算，省一次查詢）。
+    $out['to_qc'] = (int)ul_qc_pending_queue($db)['total'];
 
     $months = ul_billing_months_between($from, $to);
     $parties = [];
@@ -1875,13 +2046,21 @@ function ul_qc_wait_time(PDO $db, string $from, string $to, array $qcUserIds = [
  * 分組，排除軟刪除（deleted_at IS NOT NULL）；異常比例＝當日 NG 檢驗筆數
  * （qc_check_form.check_result='NG'，排除 DRAFT）÷ 當日總檢驗筆數，依日分組。
  * avg_abnormal_per_day 用「期間內的日曆天數」當分母（不只是有異常單的那幾天——沒異常單
- * 的日子本來就該算進分母，否則平均值會被墊高）；avg_ng_rate 是「有檢驗資料的那些天」的
- * 簡單平均（不是用總筆數加權），比較貼近「平常日子異常比例大概多少」的語感。
- * 異常單沒有欄位記著「是哪個品管驗出來的」（responsible_person_id 是缺失的責任歸屬，
- * 不是品管本人），這兩項是公司整體的品質狀況，刻意不按 $qcUserIds 篩選，保留參數只是
- * 讓本節函式介面一致。
+ * 的日子本來就該算進分母，否則平均值會被墊高）。
+ *
+ * 2026-10-07 修正：avg_ng_rate 改成「整個期間加權」（總 NG 筆數 ÷ 總檢驗筆數），不再是
+ * 舊版「逐日比例先各自算好、再對這些比例取簡單平均」。舊版在樣本量小、天與天之間檢驗
+ * 筆數差異很大時會嚴重失真——實測 2026-10 只有兩天資料：10/6（4筆檢驗、0筆NG）、
+ * 10/7（1筆檢驗、1筆NG），舊版算出 (0%+100%)/2=50%，但真正的整體比例應該是
+ * 1筆NG÷5筆總檢驗=20%；10/7 那天剛好只驗了1筆又是NG，比例就是100%，直接把平均值
+ * 拉爆，這不是「平常日子異常比例大概多少」，是統計方法本身的瑕疵（沒有用檢驗量當權重）。
+ * 改成總數相除之後，樣本量大的日子自然佔比較大的權重，單筆的極端日子不會再把整體
+ * 數字拉歪。daily_ng_rate（逐日明細，供趨勢圖用）維持不變、仍是逐日各自的比例，
+ * 只有這個整體彙總值 avg_ng_rate 改算法。新增 total_ng／total_inspected 兩個欄位，
+ * 讓畫面可以印出「20%（1/5）」這種帶分母的呈現，不是只給一個光禿禿的百分比。
  * @return array ['daily_abnormal'=>[每日：date/count],'daily_ng_rate'=>[每日：date/rate(0~1)/ng_count/total_count],
- *                'avg_abnormal_per_day'=>float,'avg_ng_rate'=>float|null]
+ *                'avg_abnormal_per_day'=>float,'avg_ng_rate'=>float|null,
+ *                'total_ng'=>int,'total_inspected'=>int]
  */
 function ul_qc_abnormal_stats(PDO $db, string $from, string $to, array $qcUserIds = []): array
 {
@@ -1910,13 +2089,14 @@ function ul_qc_abnormal_stats(PDO $db, string $from, string $to, array $qcUserId
     );
     $st2->execute([$from, $to]);
     $dailyNgRate = [];
-    $rateSum = 0.0; $rateCnt = 0;
+    $totalNg = 0; $totalInspected = 0;
     foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $cnt = (int)$r['cnt'];
         if ($cnt <= 0) continue;
-        $rate = (int)$r['ng_c'] / $cnt;
-        $dailyNgRate[] = ['date' => $r['d'], 'rate' => round($rate, 4), 'ng_count' => (int)$r['ng_c'], 'total_count' => $cnt];
-        $rateSum += $rate; $rateCnt++;
+        $ngC = (int)$r['ng_c'];
+        $rate = $ngC / $cnt;
+        $dailyNgRate[] = ['date' => $r['d'], 'rate' => round($rate, 4), 'ng_count' => $ngC, 'total_count' => $cnt];
+        $totalNg += $ngC; $totalInspected += $cnt;
     }
 
     $calendarDays = (int)round((strtotime($to) - strtotime($from)) / 86400) + 1;
@@ -1926,7 +2106,9 @@ function ul_qc_abnormal_stats(PDO $db, string $from, string $to, array $qcUserId
         'daily_abnormal' => $dailyAbnormal,
         'daily_ng_rate' => $dailyNgRate,
         'avg_abnormal_per_day' => round($totalAbnormal / $calendarDays, 2),
-        'avg_ng_rate' => $rateCnt > 0 ? round($rateSum / $rateCnt, 4) : null,
+        'avg_ng_rate' => $totalInspected > 0 ? round($totalNg / $totalInspected, 4) : null,
+        'total_ng' => $totalNg,
+        'total_inspected' => $totalInspected,
     ];
 }
 
@@ -2063,17 +2245,29 @@ function ul_qc_adhoc(PDO $db, string $from, string $to): array
  * 門檻預設值。鍵名風格「單位.指標」，之後管理員可在設定頁逐項覆寫（存進 ul_settings()
  * 的 thresholds，同一套鍵名、同一套清洗規則 ul_settings_clean_thresholds()）。
  * 數值只是給一個合理起點，不求精確，實際門檻由現場管理員調整。
+ *
+ * 2026-10-07 新增 `no_threshold`（可選，預設視為 false）：標 true 的指標純供參考顯示，
+ * 不列入「負荷過重」判定（ul_is_overload() 一律直接回 false）——使用者原話「本期報價單
+ * 筆數應該要是看當日門檻(即時)，像是 NG比例(本期每日平均)這根本不需要門檻，只是顯示用」。
+ * 這個旗標本身也可被管理員在設定頁逐指標覆寫（存／讀見 ul_settings_save()／
+ * ul_merge_no_threshold_overrides()），這裡只是預設值。
+ *
+ * `sales.quote_backlog` 2026-10-07 改成跟「日均報價單數」比較，不再是跟「本期累積總數」
+ * 比較（見 ul_sales_quote_daily_rate()／ul_unit_overload_check() 的呼叫處）——本期還沒
+ * 走完時，直接拿累積總數跟一個固定門檻比一定會失真（期初一定比較小）；預設值因此由
+ * 「30（本期累積張數）」改成「10（每天幾張）」，取自 2026 年 1~9 月實測日均約
+ * 6.5~8 張／天，10 代表「比平常明顯多」。
  */
 function ul_threshold_defaults(): array
 {
     return [
         'design' => [
             'batch_pending' => ['value' => 20, 'label' => '批圖中筆數（即時現況門檻）'],
-            'avg_draw_workdays' => ['value' => 5, 'label' => '繪圖平均工作天（每筆訂單）'],
+            'avg_draw_workdays' => ['value' => 5, 'label' => '繪圖平均工作天（每筆訂單，僅計真正需要繪圖的訂單）'],
             'issue_orders' => ['value' => 10, 'label' => '設計備註待回覆訂單數（即時現況門檻）'],
         ],
         'sales' => [
-            'quote_backlog' => ['value' => 30, 'label' => '本期報價單筆數（本期累積）'],
+            'quote_backlog' => ['value' => 10, 'label' => '本期日均報價單數（張/天，本期尚未結束時用已過天數換算）'],
             'open_issue_count' => ['value' => 20, 'label' => '待回覆問題筆數（即時現況門檻）'],
         ],
         'pm' => [
@@ -2086,7 +2280,8 @@ function ul_threshold_defaults(): array
             'untracked_count' => ['value' => 10, 'label' => '未正式指派卻已報工筆數（本期累積）'],
         ],
         'qc' => [
-            'ng_rate' => ['value' => 0.08, 'label' => 'NG比例（本期每日平均）'],
+            'ng_rate' => ['value' => 0.08, 'label' => 'NG比例（本期整體加權，僅供參考，不計入負荷過重判定）',
+                          'no_threshold' => true],
             'wait_days_avg' => ['value' => 5, 'label' => '待驗平均等待工作天（每筆）'],
             'adhoc_count' => ['value' => 10, 'label' => '脫離待驗流程的補檢驗筆數（本期累積）'],
         ],
@@ -2096,7 +2291,7 @@ function ul_threshold_defaults(): array
     ];
 }
 
-/** 把 ul_threshold_defaults() 的巢狀結構扁平成「單位.指標」=>['value'=>,'label'=>]，方便逐鍵查找 */
+/** 把 ul_threshold_defaults() 的巢狀結構扁平成「單位.指標」=>['value'=>,'label'=>,'no_threshold'=>?]，方便逐鍵查找 */
 function ul_threshold_defaults_flat(): array
 {
     $out = [];
@@ -2149,13 +2344,135 @@ function ul_threshold_low_is_better(string $key): bool
 }
 
 /**
+ * 查「單位.指標」風格的「不需要門檻」旗標（2026-10-07 新增）。優先序與 ul_threshold_value()
+ * 完全對稱：$thresholds 裡該指標的覆寫（巢狀或扁平皆可）先查，查到才算（即使管理員把
+ * 預設 true 的指標改回 false，也要讓他做得到）；沒有覆寫才退回 ul_threshold_defaults_flat()
+ * 登記的預設值；兩者都沒有就是 false（需要門檻）。
+ * @return bool true＝這個指標純供參考，不列入負荷過重判定
+ */
+function ul_threshold_no_threshold(string $key, array $thresholds = []): bool
+{
+    $leaf = null;
+    if (isset($thresholds[$key]) && is_array($thresholds[$key])) {
+        $leaf = $thresholds[$key];
+    } else {
+        [$unit, $metric] = array_pad(explode('.', $key, 2), 2, '');
+        if (isset($thresholds[$unit][$metric]) && is_array($thresholds[$unit][$metric])) {
+            $leaf = $thresholds[$unit][$metric];
+        }
+    }
+    if ($leaf !== null && array_key_exists('no_threshold', $leaf)) {
+        return !empty($leaf['no_threshold']);
+    }
+    $def = ul_threshold_defaults_flat();
+    return !empty($def[$key]['no_threshold'] ?? false);
+}
+
+/**
  * 依門檻判斷某個數值是否算「過重」。$key 用「單位.指標」風格（例如 'qc.ng_rate'）。
+ * 2026-10-07 新增：標了「不需要門檻」(ul_threshold_no_threshold()) 的指標一律直接回
+ * false——這批指標純供參考顯示，不該被標紅、也不該出現在「部門負荷總表」的超標理由裡。
  */
 function ul_is_overload(float $value, string $key, array $thresholds = []): bool
 {
+    if (ul_threshold_no_threshold($key, $thresholds)) return false;
     $th = ul_threshold_value($key, $thresholds);
     if ($th === null) return false;
     return ul_threshold_low_is_better($key) ? ($value < $th) : ($value > $th);
+}
+
+/**
+ * 「本期報價單日均張數」（quote_count÷已過天數；本期已經結束則÷整個期間總天數）。
+ * sales.quote_backlog 門檻 2026-10-07 改成跟這個值比較，不再跟「本期累積總數」比較——
+ * 累積型指標在期間還沒走完時，跟一個固定門檻比一定會失真（期初一定比較小，使用者原話
+ * 「本期報價單筆數應該要是看當日門檻(即時)」）。ul_unit_overload_check() 與 ul_insights()
+ * 共用同一支，不要各自算一次（鐵律4）。period_elapsed_days／period_total_days 由
+ * ul_sales_summary() 已經算好帶出（見該函式 2026-10-07 新增的欄位），本函式只負責
+ * 挑哪個當分母、算除法：
+ *   本期已經走完（period_elapsed_days===null）→ 分母＝period_total_days（完整期間的
+ *     真正日均，跟期間長度不同造成的偏差無關）；
+ *   本期還在進行中（period_elapsed_days 是 0~N 的整數）→ 分母＝已過天數（至少 1 天，
+ *     避免剛開始當天除以 0）。
+ * @param array $s ul_sales_summary() 的回傳值
+ * @return float 日均張數
+ */
+function ul_sales_quote_daily_rate(array $s): float
+{
+    $totalDays = (int)($s['period_total_days'] ?? 1);
+    if ($totalDays < 1) $totalDays = 1;
+    $elapsedRaw = $s['period_elapsed_days'] ?? null;
+    $denom = ($elapsedRaw === null) ? $totalDays : max(1, (int)$elapsedRaw);
+    return ((float)($s['quote_count'] ?? 0)) / $denom;
+}
+
+/**
+ * 從 ul_design_summary()／ul_sales_summary() 已經算好的 period_elapsed_days／
+ * period_total_days（2026-10-07 新增），組出「本期 vs 比較期要不要换算成日均比較」的
+ * 判斷依據——供 ul_insights() 裡多處「本期數字較上一期增減」共用（鐵律4：不要各自判斷
+ * 一次）。
+ *
+ * 使用者回報「本期轉生管量較2025/10月減少」這類結論：今天是 2026/10/7，本期（10月）
+ * 才過 7 天，卻拿去跟「整個」比較期（例如整月 31 天）比累積總數，天生就會顯得「大幅
+ * 減少」——這不是真的業績下滑，是比較基礎不公平。修法改用「日均」比較（本期累積總數÷
+ * 本期已過天數，比較期累積總數÷比較期總天數），不受兩個期間長度不同影響。
+ *
+ * 本期已經走完（period_elapsed_days===null，oa_elapsed_days() 的既有語意）時回 null——
+ * 兩個都是完整期間，直接比累積總數沒有系統性偏差，不必多算一次除法、也不必在文字裡
+ * 多講一句「已換算日均」（反而可能讓使用者誤以為平常也是這樣算的）。
+ * 本期還沒開始（period_elapsed_days===0）或任一天數缺資訊時同樣回 null（退回舊行為、
+ * 不强行换算一個除以 0 或沒有意義的比例）。
+ * @param array $cur 該單位 ul_*_summary() 的本期回傳值（需含 period_elapsed_days）
+ * @param array $cmp 該單位 ul_*_summary() 的比較期回傳值（需含 period_total_days）
+ * @return array|null ['cur_days'=>int,'cmp_days'=>int]
+ */
+function ul_period_daily_ctx_from_summary(array $cur, array $cmp): ?array
+{
+    $curElapsed = $cur['period_elapsed_days'] ?? null;
+    if ($curElapsed === null || $curElapsed < 1) return null;
+    $cmpDays = $cmp['period_total_days'] ?? null;
+    if ($cmpDays === null || $cmpDays < 1) return null;
+    return ['cur_days' => (int)$curElapsed, 'cmp_days' => (int)$cmpDays];
+}
+
+/**
+ * 計算「本期 vs 比較期」的比較基礎——配合 ul_period_daily_ctx_from_summary() 用。
+ * $dctx 為 null（本期已結束，或資訊不足）時，回傳跟修正前完全相同的「原始累積總數」
+ * 比較結果（mode='total'）；$dctx 非 null（本期尚未結束）時改用「日均」比較
+ * （mode='daily'，見上方函式註解），兩個數值的「增加/減少」判斷改依日均而非累積總數，
+ * 不會再出現「本期才過幾天就被判定大幅減少」這種系統性誤判。
+ * @return array|null null＝兩邊換算後完全沒有變化（沿用既有「無變化不產生結論」規則）；
+ *              否則 ['mode'=>'total'|'daily','cur'=>顯示用本期數值,'cmp'=>顯示用比較期數值,
+ *              'delta'=>float（正＝本期比比較期高）,'dir'=>'up'|'down',
+ *              'note'=>string（mode=daily 時才非空，補充說明換算依據）]
+ */
+function ul_period_delta_calc(?array $dctx, float $curVal, float $cmpVal): ?array
+{
+    if ($dctx === null) {
+        $delta = $curVal - $cmpVal;
+        if (abs($delta) < 0.0005) return null;
+        return ['mode' => 'total', 'cur' => $curVal, 'cmp' => $cmpVal, 'delta' => $delta,
+                'dir' => $delta > 0 ? 'up' : 'down', 'note' => ''];
+    }
+
+    $curDaily = $curVal / $dctx['cur_days'];
+    $cmpDaily = $cmpVal / $dctx['cmp_days'];
+    $delta = $curDaily - $cmpDaily;
+    if (abs($delta) < 0.0005) return null;
+    $note = '（本期才過 ' . $dctx['cur_days'] . ' 天，比較期共 ' . $dctx['cmp_days'] . ' 天，直接比累積總數會失真，'
+          . '已換算成日均比較；本期累積 ' . ul_fmt_num($curVal) . '，比較期累積 ' . ul_fmt_num($cmpVal) . '）';
+    return ['mode' => 'daily', 'cur' => $curDaily, 'cmp' => $cmpDaily, 'delta' => $delta,
+            'dir' => $delta > 0 ? 'up' : 'down', 'note' => $note];
+}
+
+/**
+ * 數字格式化，只服務 ul_period_delta_calc() 組句用（不是全站規則）：整數印成不帶千分位
+ * 的整數字串（刻意不加千分位逗號，保持跟修正前舊版直接印整數變數完全相同的外觀）；
+ * 非整數印一位小數。
+ */
+function ul_fmt_num(float $v): string
+{
+    if (abs($v - round($v)) > 0.001) return number_format($v, 1, '.', '');
+    return (string)(int)round($v);
 }
 
 /**
@@ -2225,7 +2542,9 @@ function ul_unit_overload_check(array $allData, array $thresholds = []): array
     }
     if (isset($allData['sales']['cur'])) {
         $s = $allData['sales']['cur'];
-        $check('sales', 'quote_backlog', $s['quote_count'] ?? null);
+        // 2026-10-07 修正：quote_backlog 改跟「日均報價單數」比較，不是跟本期累積總數比較
+        // ——見 ul_sales_quote_daily_rate() 函式註解；與 ul_insights() 的 KPI 顯示共用同一支。
+        $check('sales', 'quote_backlog', ul_sales_quote_daily_rate($s));
         $check('sales', 'open_issue_count', $s['open_issue_count'] ?? null);
     }
     if (isset($allData['pm']['cur'])) {
@@ -2455,6 +2774,24 @@ function ul_trend_series(PDO $db, array $settings, string $gran, int $buckets = 
  * 這一條，其餘結論不受影響。**trend 固定以「今天」往回推算，不一定等於呼叫端目前選的
  * 期間篩選**（例如使用者正在看去年某個月），所以文字一律講「最近N個月/季」而不是「本期」，
  * 避免跟上面那些真正對應目前篩選期間的結論混在一起看不出差異。
+ *
+ * ── 2026-10-07 修正：「本期還沒過完卻拿去跟完整期間比」的系統性失真 ──
+ * 使用者實測回報「本期轉生管量較2025/10月減少69→291筆」：今天是 2026/10/7，本期（10月）
+ * 才過 7 天，卻拿去跟整個 2025/10（31天）比累積總數，天生就會顯得「大幅減少」，不是真的
+ * 業績下滑。全面檢查後兩種情形都會踩到同一個問題，修法不同：
+ *   ① 「連續兩期上升/下滑」（$streak 內部）：trend 序列最後一期固定是「今天所在的那一期」
+ *      （見 ul_trend_series()），只要它還沒走完就直接排除在趨勢判斷之外（改看前三個已經
+ *      完整結束的期別），不需要呼叫端額外提供任何期間資訊——$trend 本身就帶著每一期真實
+ *      的 start/end，這段修正不依賴任何新參數，對既有（未更新的）呼叫端立即生效。
+ *   ② 設計課「本期轉生管量」、業務課「報價單量」「訂單建立量」這三個 cur-vs-cmp 的累積型
+ *      比較，改用 ul_period_delta_calc()／ul_period_daily_ctx_from_summary()：本期已經
+ *      走完時行為與修正前完全相同（直接比累積總數）；本期還在進行中時改成「日均」比較
+ *      （本期累積÷已過天數 vs 比較期累積÷比較期總天數），不受兩個期間長度不同影響。
+ *      這兩個函式讀的是 ul_design_summary()／ul_sales_summary() 2026-10-07 新增的
+ *      period_elapsed_days／period_total_days 欄位（這兩支函式本來就拿得到 $from/$to，
+ *      在函式內部直接算好附帶回傳，不需要改 ul_insights() 的參數、也不需要改呼叫端）。
+ *   業務課 sales.quote_backlog 門檻同一批改成跟「日均報價單數」比較（不是跟本期累積
+ *   總數比較），見 ul_sales_quote_daily_rate()。
  * @param array $thresholds ul_settings() 回傳的 thresholds（巢狀或扁平皆可，見 ul_is_overload()）
  * @param array|null $trend ul_trend_series() 的回傳值（可選）
  * @return array ['design'=>[每列 level/title/detail/metric], 'sales'=>[...], 'pm'=>[...],
@@ -2471,19 +2808,38 @@ function ul_insights(array $allData, array $thresholds = [], ?array $trend = nul
         if (!$trend || empty($trend['series'][$unit])) return;
         $series = $trend['series'][$unit];
         $labels = $trend['labels'] ?? [];
+        $periods = $trend['periods'] ?? [];
         $n = count($series);
-        if ($n < 3) return;
-        $a2 = (float)$series[$n - 3]; $a1 = (float)$series[$n - 2]; $a0 = (float)$series[$n - 1];
+        if ($n < 1) return;
+
+        // 2026-10-07 修正：trend 固定以「今天」往回推算（ul_trend_series() 函式註解），
+        // 最後一期永遠是「今天所在的那一期」——如果那一期還沒走完（例如今天是10/7、
+        // 最後一期是10月），它的累積值天生就會比完整期間的前幾期小，不是真的下滑。
+        // 這跟使用者回報「本期轉生管量較2025/10月減少」是同一種系統性問題，只是出現在
+        // 「連續兩期下滑/上升」這個趨勢判斷裡——而且這裡完全不需要額外的期間資訊，
+        // $trend['periods'] 本身就帶著每一期真實的 start/end，直接跟「今天」比對即可。
+        // 判定為「還沒走完」時排除最後一期，改用往前一期開始的三期判斷；排除後若不足
+        // 三期就不產生這條結論（跟原本資料不足三期時的既有行為一致）。
+        $lastEnded = true;
+        if (!empty($periods[$n - 1]['end'])) {
+            $today = date('Y-m-d');
+            $lastEnded = ($today >= $periods[$n - 1]['end']);
+        }
+        $endIdx = $lastEnded ? $n : $n - 1;
+        if ($endIdx < 3) return;
+
+        $a2 = (float)$series[$endIdx - 3]; $a1 = (float)$series[$endIdx - 2]; $a0 = (float)$series[$endIdx - 1];
         $gn = $granName[$trend['gran'] ?? 'month'] ?? '期';
+        $note = $lastEnded ? '' : '（最近一' . $gn . '尚未結束，已排除在外，改看前三個已完整結束的' . $gn . '）';
         if ($a0 < $a1 && $a1 < $a2 && $a2 > 0) {
             $add($unit, 'warn', $label . '連續兩' . $gn . '下滑',
-                '最近三' . $gn . '「' . $labels[$n - 3] . '」→「' . $labels[$n - 2] . '」→「' . $labels[$n - 1]
-                . '」的' . $label . '一路往下（' . $a2 . ' → ' . $a1 . ' → ' . $a0 . '），這種趨勢單看一期是看不出來的。',
+                '最近三' . $gn . '「' . $labels[$endIdx - 3] . '」→「' . $labels[$endIdx - 2] . '」→「' . $labels[$endIdx - 1]
+                . '」的' . $label . '一路往下（' . $a2 . ' → ' . $a1 . ' → ' . $a0 . '）' . $note . '，這種趨勢單看一期是看不出來的。',
                 round(($a0 - $a2) / $a2 * 100, 1) . '%');
         } elseif ($a0 > $a1 && $a1 > $a2 && $a2 >= 0) {
             $add($unit, 'info', $label . '連續兩' . $gn . '上升',
-                '最近三' . $gn . '「' . $labels[$n - 3] . '」→「' . $labels[$n - 2] . '」→「' . $labels[$n - 1]
-                . '」的' . $label . '持續增加（' . $a2 . ' → ' . $a1 . ' → ' . $a0 . '）。');
+                '最近三' . $gn . '「' . $labels[$endIdx - 3] . '」→「' . $labels[$endIdx - 2] . '」→「' . $labels[$endIdx - 1]
+                . '」的' . $label . '持續增加（' . $a2 . ' → ' . $a1 . ' → ' . $a0 . '）' . $note . '。');
         }
     };
 
@@ -2499,6 +2855,11 @@ function ul_insights(array $allData, array $thresholds = [], ?array $trend = nul
             . ($wipBad ? '，已超過門檻。' : '。'), (string)$d['drawing_wip']);
 
         if ($cmp && isset($cmp['drawing_wip']) && (int)$cmp['drawing_wip'] > 0) {
+            // drawing_wip 是「目前狀態」的即時快照（ul_design_summary() 不管傳進去的
+            // $from/$to 是什麼，查的都是同一個現況），所以 cur 跟 cmp 這裡永遠是同一個
+            // 數字、delta 永遠是 0，這條结論本來就不會觸發——不是期間長度造成的系統性
+            // 偏差（下面 pm_get 那條才是真正的「累積型」指標，才需要日均換算），刻意
+            // 不套用 ul_period_delta_calc()。
             $delta = (int)$d['drawing_wip'] - (int)$cmp['drawing_wip'];
             if ($delta !== 0) {
                 $add('design', $delta > 0 ? 'warn' : 'good', '批圖中筆數較' . $cl . ($delta > 0 ? '增加' : '減少'),
@@ -2508,12 +2869,20 @@ function ul_insights(array $allData, array $thresholds = [], ?array $trend = nul
         }
 
         if ($cmp && isset($cmp['pm_get']) && (int)$cmp['pm_get'] > 0) {
-            $delta2 = (int)$d['pm_get'] - (int)$cmp['pm_get'];
-            if ($delta2 !== 0) {
-                $add('design', $delta2 < 0 ? 'warn' : 'good', '本期轉生管量較' . $cl . ($delta2 > 0 ? '增加' : '減少'),
-                    '本期轉生管 ' . $d['pm_get'] . ' 筆，較' . $cl . '的 ' . $cmp['pm_get'] . ' 筆'
-                    . ($delta2 > 0 ? '增加' : '減少') . ' ' . abs($delta2) . ' 筆（這是繪圖產出量能的指標）。',
-                    ($delta2 > 0 ? '+' : '') . $delta2);
+            // 2026-10-07 修正：本期轉生管量是累積型指標（pmGet 落在期間內才算），本期
+            // 還沒走完時直接拿累積總數跟完整比較期比一定失真（使用者實測回報「本期轉
+            // 生管量較2025/10月減少69→291筆」，當時本期只過了幾天）——改用
+            // ul_period_delta_calc()，本期未結束時自動换算成日均比較。
+            $dctx = ul_period_daily_ctx_from_summary($d, $cmp);
+            $calc = ul_period_delta_calc($dctx, (float)$d['pm_get'], (float)$cmp['pm_get']);
+            if ($calc) {
+                $unitTxt = $calc['mode'] === 'daily' ? '筆/天' : '筆';
+                $add('design', $calc['dir'] === 'down' ? 'warn' : 'good',
+                    '本期轉生管量較' . $cl . ($calc['dir'] === 'up' ? '增加' : '減少'),
+                    '本期轉生管 ' . ul_fmt_num($calc['cur']) . ' ' . $unitTxt . '，較' . $cl . '的 '
+                    . ul_fmt_num($calc['cmp']) . ' ' . $unitTxt . ($calc['dir'] === 'up' ? '增加' : '減少') . ' '
+                    . ul_fmt_num(abs($calc['delta'])) . ' ' . $unitTxt . '（這是繪圖產出量能的指標）' . $calc['note'] . '。',
+                    ($calc['dir'] === 'up' ? '+' : '-') . ul_fmt_num(abs($calc['delta'])));
             }
         }
 
@@ -2548,26 +2917,41 @@ function ul_insights(array $allData, array $thresholds = [], ?array $trend = nul
         $cl = $allData['sales']['cmp_label'] ?? '上一期';
         $cmp = $allData['sales']['cmp'] ?? null;
 
-        $qBad = ul_is_overload((float)$s['quote_count'], 'sales.quote_backlog', $thresholds);
+        // 2026-10-07 修正：quote_backlog 門檻改跟「日均報價單數」比較，不是跟本期累積
+        // 總數比較——使用者原話「本期報價單筆數應該要是看當日門檻(即時)」，見
+        // ul_sales_quote_daily_rate() 函式註解（與 ul_unit_overload_check() 共用同一支）。
+        $qDaily = ul_sales_quote_daily_rate($s);
+        $qBad = ul_is_overload($qDaily, 'sales.quote_backlog', $thresholds);
         $add('sales', $qBad ? 'bad' : 'info', $qBad ? '本期報價單量偏高' : '本期報價單現況',
-            '本期開立 ' . $s['quote_count'] . ' 張報價單，共 ' . $s['quote_item_count'] . ' 個報價項目'
-            . ($qBad ? '，已超過門檻。' : '。'), (string)$s['quote_count']);
+            '本期開立 ' . $s['quote_count'] . ' 張報價單（日均 ' . round($qDaily, 1) . ' 張/天），共 '
+            . $s['quote_item_count'] . ' 個報價項目' . ($qBad ? '，日均張數已超過門檻。' : '。'),
+            round($qDaily, 1) . ' 張/天');
 
+        // 2026-10-07 修正：報價單量、訂單建立量都是累積型指標，本期還沒走完時直接拿
+        // 累積總數跟完整比較期比一定失真——跟上面設計課「本期轉生管量」同一種系統性
+        // 問題，一併改用 ul_period_delta_calc() 的日均换算（見該函式註解）。
+        $dctxS = ul_period_daily_ctx_from_summary($s, $cmp ?? []);
         if ($cmp && (int)$cmp['quote_count'] > 0) {
-            $delta = (int)$s['quote_count'] - (int)$cmp['quote_count'];
-            if ($delta !== 0) {
-                $add('sales', $delta > 0 ? 'warn' : 'info', '報價單量較' . $cl . ($delta > 0 ? '增加' : '減少'),
-                    '本期 ' . $s['quote_count'] . ' 張，' . $cl . ' ' . $cmp['quote_count'] . ' 張，'
-                    . ($delta > 0 ? '增加' : '減少') . ' ' . abs($delta) . ' 張。', ($delta > 0 ? '+' : '') . $delta);
+            $calc = ul_period_delta_calc($dctxS, (float)$s['quote_count'], (float)$cmp['quote_count']);
+            if ($calc) {
+                $unitTxt = $calc['mode'] === 'daily' ? '張/天' : '張';
+                $add('sales', $calc['dir'] === 'up' ? 'warn' : 'info', '報價單量較' . $cl . ($calc['dir'] === 'up' ? '增加' : '減少'),
+                    '本期 ' . ul_fmt_num($calc['cur']) . ' ' . $unitTxt . '，較' . $cl . '的 '
+                    . ul_fmt_num($calc['cmp']) . ' ' . $unitTxt . '，' . ($calc['dir'] === 'up' ? '增加' : '減少') . ' '
+                    . ul_fmt_num(abs($calc['delta'])) . ' ' . $unitTxt . $calc['note'] . '。',
+                    ($calc['dir'] === 'up' ? '+' : '-') . ul_fmt_num(abs($calc['delta'])));
             }
         }
 
         if ($cmp && (int)$cmp['order_count'] > 0) {
-            $deltaO = (int)$s['order_count'] - (int)$cmp['order_count'];
-            if ($deltaO !== 0) {
-                $add('sales', $deltaO < 0 ? 'warn' : 'good', '訂單建立量較' . $cl . ($deltaO > 0 ? '增加' : '減少'),
-                    '本期建立 ' . $s['order_count'] . ' 張訂單，較' . $cl . '的 ' . $cmp['order_count'] . ' 張'
-                    . ($deltaO > 0 ? '增加' : '減少') . ' ' . abs($deltaO) . ' 張。', ($deltaO > 0 ? '+' : '') . $deltaO);
+            $calcO = ul_period_delta_calc($dctxS, (float)$s['order_count'], (float)$cmp['order_count']);
+            if ($calcO) {
+                $unitTxt = $calcO['mode'] === 'daily' ? '張/天' : '張';
+                $add('sales', $calcO['dir'] === 'down' ? 'warn' : 'good', '訂單建立量較' . $cl . ($calcO['dir'] === 'up' ? '增加' : '減少'),
+                    '本期建立 ' . ul_fmt_num($calcO['cur']) . ' ' . $unitTxt . '，較' . $cl . '的 '
+                    . ul_fmt_num($calcO['cmp']) . ' ' . $unitTxt . ($calcO['dir'] === 'up' ? '增加' : '減少') . ' '
+                    . ul_fmt_num(abs($calcO['delta'])) . ' ' . $unitTxt . $calcO['note'] . '。',
+                    ($calcO['dir'] === 'up' ? '+' : '-') . ul_fmt_num(abs($calcO['delta'])));
             }
         }
 
@@ -2657,10 +3041,15 @@ function ul_insights(array $allData, array $thresholds = [], ?array $trend = nul
         $adhoc = $allData['qc']['adhoc'] ?? null;
 
         if ($ab && $ab['avg_ng_rate'] !== null) {
+            // 2026-10-07 修正：avg_ng_rate 改成整體加權算法（見 ul_qc_abnormal_stats()
+            // 函式註解），文字同步加上分子/分母；此指標預設「不需要門檻」（樣本量小、
+            // 波動本來就大），不列入負荷過重判定，ul_is_overload() 一律回 false。
             $ngBad = ul_is_overload((float)$ab['avg_ng_rate'], 'qc.ng_rate', $thresholds);
+            $ngNoThr = ul_threshold_no_threshold('qc.ng_rate', $thresholds);
             $add('qc', $ngBad ? 'bad' : 'info', $ngBad ? 'NG比例偏高' : 'NG比例現況',
-                '本期平均每日NG比例約 ' . round($ab['avg_ng_rate'] * 100, 1) . '%，平均每日異常單 '
-                . $ab['avg_abnormal_per_day'] . ' 件' . ($ngBad ? '，已超過門檻。' : '。'),
+                '本期NG比例約 ' . round($ab['avg_ng_rate'] * 100, 1) . '%（' . ($ab['total_ng'] ?? 0) . '/'
+                . ($ab['total_inspected'] ?? 0) . '），平均每日異常單 ' . $ab['avg_abnormal_per_day'] . ' 件'
+                . ($ngBad ? '，已超過門檻。' : ($ngNoThr ? '（僅供參考，不計入負荷過重判定）。' : '。')),
                 round($ab['avg_ng_rate'] * 100, 1) . '%');
         }
 
