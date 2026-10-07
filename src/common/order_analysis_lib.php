@@ -1842,6 +1842,90 @@ function oa_order_process_steps(PDO $db, array $orderIds): array
     return $out;
 }
 
+/**
+ * 批次查「這些訂單如果被合併開在同一張製令裡，同一張製令底下其他訂單的標籤與製程」。
+ * 2026-10-07 使用者明確要求：急件明細只顯示這張訂單自己的標籤/製程，看不出它其實是跟哪些
+ * （甚至製程不同的）訂單一起合併開立的——生管常把好幾張訂單（不同製程也會）合併開在同一張
+ * 製令裡（`OreadyReply_ForPm_BaseOfTime.php`），這張訂單自己的「交期工作天數」雖然還是只算
+ * 自己的，但畫面要讓人看得出「這批其實跟哪些訂單一起做」。
+ * 只對「製令底下真的綁了一張以上訂單」的才回傳（單純自己一張訂單、沒有合併的不必特別標出來，
+ * 否則每一列都印一樣的東西反而是雜訊）。
+ */
+function oa_order_bom_group_tags(PDO $db, array $orderIds): array
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $orderIds))));
+    if (!$ids) return [];
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+
+    // 1) 這些訂單各自綁定的製令編號（直接 o_order_id ＋ 多對多 map，與 oa_order_process_steps 同一套來源）
+    $bomOfOrder = [];
+    $st1 = $db->prepare("SELECT o_order_id oid, bom FROM bom WHERE o_order_id IN ($ph)");
+    $st1->execute(array_map('strval', $ids));
+    foreach ($st1->fetchAll(PDO::FETCH_ASSOC) as $r) { $bomOfOrder[(int)$r['oid']][(string)$r['bom']] = 1; }
+    $st2 = $db->prepare("SELECT order_id oid, bom FROM bom_order_process_map WHERE order_id IN ($ph)");
+    $st2->execute($ids);
+    foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) { $bomOfOrder[(int)$r['oid']][(string)$r['bom']] = 1; }
+    if (!$bomOfOrder) return [];
+
+    $bomList = [];
+    foreach ($bomOfOrder as $boms) { foreach ($boms as $b => $_) { $bomList[$b] = 1; } }
+    $bomList = array_keys($bomList);
+    if (!$bomList) return [];
+    $bph = implode(',', array_fill(0, count($bomList), '?'));
+
+    // 2) 反查這些製令底下「完整」的訂單清單（含原本不在 $ids 名單裡的其他合併訂單）
+    $ordersOfBom = [];
+    $st3 = $db->prepare("SELECT bom, o_order_id oid FROM bom WHERE bom IN ($bph)");
+    $st3->execute($bomList);
+    foreach ($st3->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        if ($r['oid'] === null || $r['oid'] === '') continue;
+        $ordersOfBom[$r['bom']][(int)$r['oid']] = 1;
+    }
+    $st4 = $db->prepare("SELECT bom, order_id oid FROM bom_order_process_map WHERE bom IN ($bph)");
+    $st4->execute($bomList);
+    foreach ($st4->fetchAll(PDO::FETCH_ASSOC) as $r) { $ordersOfBom[$r['bom']][(int)$r['oid']] = 1; }
+
+    $allOrderIds = [];
+    foreach ($ordersOfBom as $os) { foreach (array_keys($os) as $oid) { $allOrderIds[$oid] = 1; } }
+    $allOrderIds = array_keys($allOrderIds);
+    if (!$allOrderIds) return [];
+    $oph = implode(',', array_fill(0, count($allOrderIds), '?'));
+
+    // 3) 這些訂單（含合併進來的那幾張）各自的製程原文與 AS 認定標籤
+    $st5 = $db->prepare("SELECT Order_id oid, Order_oo no, Processing_items proc FROM order_track WHERE Order_id IN ($oph)");
+    $st5->execute($allOrderIds);
+    $procOf = []; $noOf = [];
+    foreach ($st5->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $procOf[(int)$r['oid']] = trim((string)$r['proc']);
+        $noOf[(int)$r['oid']] = (string)$r['no'];
+    }
+    $astagOf = ot_astag_for_orders($db, $allOrderIds);
+
+    // 4) 組回「每張訂單 → 同一張製令（含自己）合計幾張訂單、有哪些相異標籤/製程/訂單號」
+    $out = [];
+    foreach ($ids as $oid) {
+        $boms = array_keys($bomOfOrder[$oid] ?? []);
+        if (!$boms) continue;
+        $siblingIds = [];
+        foreach ($boms as $b) { foreach (array_keys($ordersOfBom[$b] ?? []) as $sid) { $siblingIds[$sid] = 1; } }
+        $siblingIds = array_keys($siblingIds);
+        if (count($siblingIds) <= 1) continue;   // 製令底下只有自己，不是合併開立，不必特別標出來
+
+        $tags = []; $procs = []; $nos = [];
+        foreach ($siblingIds as $sid) {
+            $t = isset($astagOf[$sid]) ? (string)($astagOf[$sid]['label'] ?? '') : '';
+            if ($t !== '') $tags[$t] = 1;
+            $p = $procOf[$sid] ?? '';
+            if ($p !== '') $procs[$p] = 1;
+            $n = $noOf[$sid] ?? '';
+            if ($n !== '') $nos[$n] = 1;
+        }
+        $out[$oid] = ['bom' => implode('、', $boms), 'order_n' => count($siblingIds),
+                      'tags' => array_keys($tags), 'procs' => array_keys($procs), 'order_nos' => array_keys($nos)];
+    }
+    return $out;
+}
+
 /** 稽核製程標籤 scope → 本頁通用的 cls 鍵，與 oa_analyze() 同一套對照，抽成共用避免兩處各自維護 */
 function oa_scope_to_cls(?array $astagInfo): string
 {
@@ -2062,7 +2146,7 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
                                               'bad' => $r['cbad'], 'n' => 0, 'amount' => 0.0];
                 }
                 $clientAgg[$r['ckey']]['n']++; $clientAgg[$r['ckey']]['amount'] += $r['amount'];
-                $urgentList[] = ['no' => $r['no'], 'c_order' => $r['c_order'], 'cname' => $r['cname'],
+                $urgentList[] = ['id' => $r['id'], 'no' => $r['no'], 'c_order' => $r['c_order'], 'cname' => $r['cname'],
                                  'pno' => $r['pno'], 'pid' => $r['pid'], 'odate' => $r['odate'], 'ddate' => $r['ddate'],
                                  'lt' => $lt, 'cls' => $cls, 'label' => oa_cls_label($cls),
                                  'as_label' => $r['as_label'], 'proc' => $r['proc'], 'order_ps' => $r['order_ps'],
@@ -2115,6 +2199,12 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
 
     $curRes = $build($cur);
     $cmpRes = $build($cmpE);
+
+    // 急件明細只顯示自己這張訂單的標籤/製程，看不出它其實是跟哪些（甚至製程不同的）訂單
+    // 合併開在同一張製令裡——補上同一張製令底下其他訂單的標籤/製程/訂單號（使用者明確要求）。
+    $bomGroup = oa_order_bom_group_tags($db, array_column($curRes['urgent_list'], 'id'));
+    foreach ($curRes['urgent_list'] as &$ur) { $ur['bom_group'] = $bomGroup[$ur['id']] ?? null; }
+    unset($ur);
 
     // 急件客戶排行每一列再補兩個數字：①佔本期急件總額的比例（區間內總體佔比）
     // ②跟基期同一家客戶的急件金額比較之增減比例——兩者都是「使用者看了名單會立刻想問」的問題，

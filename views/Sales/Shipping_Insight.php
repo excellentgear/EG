@@ -1388,6 +1388,18 @@ function ltCatCell(r){
   var tag = r.as_label || r.label;
   var h = '<div style="font-size:11px;font-weight:600;color:#1B4F78;">'+esc(tag)+'</div>';
   if (r.proc) h += '<div style="font-size:10px;color:var(--muted);margin-top:1px;">'+esc(r.proc)+'</div>';
+  // 生管常把好幾張訂單（甚至製程不同的）合併開在同一張製令裡——只顯示這張訂單自己的標籤/
+  // 製程看不出這件事，所以合併時另外疊一行列出同一張製令底下全部訂單的標籤與製程（與訂單分析同步）
+  if (r.bom_group) {
+    var g = r.bom_group;
+    var tagsTxt = (g.tags||[]).join('、'), procsTxt = (g.procs||[]).join('、');
+    h += '<div style="font-size:9px;color:var(--coral);margin-top:3px;border-top:1px dashed var(--line);padding-top:2px;" '
+       + 'title="製令 '+esc(g.bom)+'　合併訂單號：'+esc((g.order_nos||[]).join('、'))+'">'
+       + '<i class="fa fa-link"></i> 合併開立製令（共'+g.order_n+'張）'
+       + (tagsTxt?('<br>類別：'+esc(tagsTxt)):'')
+       + (procsTxt?('<br>製程：'+esc(procsTxt)):'')
+       + '</div>';
+  }
   return h;
 }
 function ltShipCell(r){
