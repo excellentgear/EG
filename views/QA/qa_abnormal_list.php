@@ -330,15 +330,18 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
                     而且<b>已結案的單不會被改號</b>（紙本已經印出去了）。<br>
                     <b>報工NG自動開立</b>：勾起來的那一類就是報工累積NG自動開單時要歸入的類別（<b>只能勾一個</b>，勾了別列會自動取消；
                     那一類<b>一定要同時勾「製令」</b>，因為自動開單本來就是從某一張製令的某一站累積NG來的）。<br>
-                    <b>線上檢驗NG自動開立</b>：品管在線上檢驗判定NG直接開立異常單草稿時可歸入的類別（<b>可以勾不只一個</b>，例如 IQC／FQC 都是線上檢驗來源，與「報工NG自動開立」分開設定、可以不同類別；同樣一定要同時勾「製令」）。
-                    只勾一個時開單會自動歸入該類；<b>勾了不只一個時，品管判定NG開單當下要自己選要歸入哪一類</b>。<br>
+                    <b>線上檢驗NG自動開立</b>：品管在線上檢驗判定NG時，<b>系統全自動判定</b>要歸入哪一類（不會再跳窗讓品管自己選），分三種情境、各自獨立設定（各自<b>只能勾一個</b>，同一類可以同時身兼多種情境）：
+                    <b>出貨檢驗</b>＝插出貨檢驗(SHIP)判定NG；<b>廠內製程</b>＝其餘檢驗時，該製程站登記的廠商是廠內加工廠商或完全沒登記廠商；<b>外包廠商</b>＝其餘檢驗時，該製程站登記的廠商是外包廠商（即一般認知的 IQC 進料檢驗）。
+                    三種情境同樣一定要同時勾「製令」。<br>
                     <b>已經有單在用的類別不可刪除</b>，請改成取消「啟用」——既有的單仍看得到，新單不再出現這個選項。</div>
-                <table class="cfg"><thead><tr><th style="width:28px"></th><th style="width:18%">名稱</th>
-                    <th style="width:14%">單號後綴詞</th>
-                    <th style="width:7%">綁製令</th><th style="width:8%">綁客退單</th><th style="width:7%">綁客戶</th>
-                    <th style="width:11%">報工NG自動開立</th>
-                    <th style="width:11%">線上檢驗NG自動開立</th>
-                    <th style="width:6%">啟用</th><th style="width:9%">操作</th></tr></thead>
+                <table class="cfg"><thead><tr><th style="width:28px"></th><th style="width:15%">名稱</th>
+                    <th style="width:11%">單號後綴詞</th>
+                    <th style="width:6%">綁製令</th><th style="width:7%">綁客退單</th><th style="width:6%">綁客戶</th>
+                    <th style="width:9%">報工NG<br>自動開立</th>
+                    <th style="width:8%" title="線上出貨檢驗(insp_kind=SHIP)判定NG">NG自動開立<br>：出貨檢驗</th>
+                    <th style="width:8%" title="非出貨檢驗，該製程站廠商為廠內或未登記廠商">NG自動開立<br>：廠內製程</th>
+                    <th style="width:8%" title="非出貨檢驗，該製程站廠商為外包（即IQC進料檢驗）">NG自動開立<br>：外包廠商</th>
+                    <th style="width:5%">啟用</th><th style="width:8%">操作</th></tr></thead>
                     <tbody id="cfgAbCat" data-sortgrp="abcat"></tbody></table>
                 <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
                     <button class="btn btn-warm-o btn-sm" id="btnAbCatAdd"><i class="fa fa-plus"></i> 新增一個類別</button>
@@ -491,6 +494,11 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
             <div class="fld"><label>原因 <span style="color:var(--coral)" id="delReq">*</span></label>
                 <textarea id="delReason" rows="3"></textarea>
                 <div class="muted-help">例：重複開單／料號填錯，已重開一張</div></div>
+            <div class="fld" id="delPwWrap" style="display:none;">
+                <label>操作確認密碼 <span style="color:var(--coral)">*</span></label>
+                <input type="password" id="delPw" autocomplete="off">
+                <div class="muted-help">這張單是系統自動開立的，刪除前要先輸入<b>全站管理員</b>的操作確認密碼——避免報工紀錄或線上檢驗紀錄還連著它，刪了造成資料前後不一致。</div>
+            </div>
             <div class="err" id="delErr"></div>
         </div>
         <div class="m-ft">
@@ -559,6 +567,14 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
                     <b>當時是誰簽的、印章蓋哪一天</b>；人員清單依印章日期回推當時在職者（當時在職、現已離職的人也選得到）。</li>
                 <li>補資料時的「相關單位意見」改成直接補登（填回覆人、回覆日期與內容），<b>不會發通知</b>。</li>
             </ul>
+            <h4>刪除／還原</h4>
+            <ul>
+                <li>一般的單（異常單管理員開的）<b>只要有刪除原因即可刪除</b>（軟刪除，資料留著可還原）。</li>
+                <li><b>系統自動開立的單（報工NG累積或線上檢驗NG自動判定）刪除要多一道防線</b>：
+                    這種單背後還連著報工紀錄或線上檢驗紀錄，一般刪除容易讓那邊「看起來還開著一張已經不見的單」。
+                    <b>只有系統管理員</b>可以刪，且要輸入<b>操作確認密碼</b>；刪除當下連著的報工紀錄／線上檢驗紀錄
+                    會一併解除連結，重新變回「尚未歸入」／「待開立」，還原時也會把它們接回來（除非期間已被別張新單認領走）。</li>
+            </ul>
             <h4>狀態怎麼判讀</h4>
             <ul>
                 <li><b>待品管確認說明</b>：只有自動開立（報工累積NG觸發）的單才會有這個狀態——決策者已自動帶入品管主管，
@@ -625,6 +641,7 @@ $cats    = qab_cats($db, true);        // 工具列的類別篩選只列啟用�
 var API = '../../src/store/QaAbnormal_API.php';
 var CSRF = '<?= $CSRF ?>';
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
+var IS_ADMIN = <?= $perms['isAdmin'] ? 'true' : 'false' ?>;  // 全站管理員（刪除自動開立的單需要這個身分＋操作確認密碼）
 var BF_DAYS = <?= (int)$backfillDays ?>;
 var N_BOM_OK = false;           // 開新單的製令欄位現在的值是不是「從清單選到的」
 function nSuggestSample(){
@@ -708,7 +725,7 @@ function load(){
                        + (CAN_ADMIN ? ' <button class="btn btn-warm btn-xs act-restore" data-id="' + r.id + '" data-no="' + esc(r.abnormal_order_no) + '">還原</button>' : ''))
                     : ('<a href="qa_abnormal_form.php?id=' + r.id + '" class="btn btn-warm-o btn-xs">處理</a> '
                        + '<a href="qa_abnormal_print.php?id=' + r.id + '&auto=1" target="_blank" class="btn btn-warm-o btn-xs" title="開啟列印預覽"><i class="fa fa-print"></i></a>'
-                       + (CAN_ADMIN ? ' <button class="btn btn-warm-o btn-xs act-del" data-id="' + r.id + '" data-no="' + esc(r.abnormal_order_no) + '"><i class="fa fa-trash-o"></i></button>' : '')))
+                       + (CAN_ADMIN ? ' <button class="btn btn-warm-o btn-xs act-del" data-id="' + r.id + '" data-no="' + esc(r.abnormal_order_no) + '" data-auto="' + Number(r.auto_opened) + '"><i class="fa fa-trash-o"></i></button>' : '')))
                 + '</td></tr>';
         }));
     }, 'json').fail(function(){ $('#lstBody').html('<tr><td colspan="11" class="c">連線失敗</td></tr>'); });
@@ -762,26 +779,44 @@ $('#btnSearch').on('click', load);
 $('#fYear,#fMonth,#fClosed,#fSource,#fCat,#fDeleted').on('change', load);
 
 /* ───────── 刪除／還原（軟刪除，一律留紀錄） ───────── */
-var DEL = { id:0, act:'delete' };
+// 2026-10-07 使用者交辦：自動開立的單背後還連著報工紀錄或線上檢驗紀錄，刪除容易造成資料
+// 前後不一致——只有「全站管理員」(IS_ADMIN) 輸入操作確認密碼才能刪，一般異常單管理員不行。
+var DEL = { id:0, act:'delete', auto:0 };
 $(document).on('click', '.act-del', function(){
-    DEL = { id:Number($(this).data('id')), act:'delete' };
+    DEL = { id:Number($(this).data('id')), act:'delete', auto:Number($(this).data('auto')) };
     $('#delTitle').text('刪除異常單 ' + $(this).data('no'));
-    $('#delNote').html('這張單會從清單上移除，<b>資料仍然留著</b>（勾「顯示已刪除」可以看到，必要時還原）。'
-        + '刪除一定會記下是誰、什麼時候、為什麼刪的。');
-    $('#delReq').show(); $('#delReason').val(''); $('#delErr').text('');
+    $('#delReason').val(''); $('#delPw').val(''); $('#delErr').text('');
+    if (DEL.auto && !IS_ADMIN) {
+        $('#delNote').html('<b style="color:var(--coral);">這張單是系統自動開立的，只有系統管理員可以刪除</b>（避免報工紀錄或線上檢驗紀錄還連著它，造成資料前後不一致）。請改請系統管理員操作。');
+        $('#delReq').hide(); $('#delPwWrap').hide();
+        $('#btnDelGo').prop('disabled', true);
+    } else {
+        $('#delNote').html('這張單會從清單上移除，<b>資料仍然留著</b>（勾「顯示已刪除」可以看到，必要時還原）。'
+            + '刪除一定會記下是誰、什麼時候、為什麼刪的。'
+            + (DEL.auto ? '<br><b style="color:var(--coral);">這張單是自動開立的，連著的報工紀錄／線上檢驗紀錄也會一併解除連結，重新變回待開立狀態。</b>' : ''));
+        $('#delReq').show(); $('#delPwWrap').toggle(!!DEL.auto);
+        $('#btnDelGo').prop('disabled', false);
+    }
     openMask('delMask');
 });
 $(document).on('click', '.act-restore', function(){
-    DEL = { id:Number($(this).data('id')), act:'restore' };
+    DEL = { id:Number($(this).data('id')), act:'restore', auto:0 };
     $('#delTitle').text('還原異常單 ' + $(this).data('no'));
     $('#delNote').html('把這張單放回清單。原因可留空。');
-    $('#delReq').hide(); $('#delReason').val(''); $('#delErr').text('');
+    $('#delReq').hide(); $('#delPwWrap').hide(); $('#delReason').val(''); $('#delErr').text('');
+    $('#btnDelGo').prop('disabled', false);
     openMask('delMask');
 });
 $('#btnDelGo').on('click', function(){
     var reason = $('#delReason').val().trim();
     if (DEL.act === 'delete' && !reason) { $('#delErr').text('請填寫刪除原因'); return; }
-    post(DEL.act === 'delete' ? 'order_delete' : 'order_restore', { id:DEL.id, reason:reason }, function(){
+    var payload = { id:DEL.id, reason:reason };
+    if (DEL.act === 'delete' && DEL.auto) {
+        var pw = $('#delPw').val();
+        if (!pw) { $('#delErr').text('請輸入操作確認密碼'); return; }
+        payload.confirm_password = pw;
+    }
+    post(DEL.act === 'delete' ? 'order_delete' : 'order_restore', payload, function(){
         closeMask('delMask'); load();
     }, function(msg){ $('#delErr').text(msg); });
 });
@@ -1247,7 +1282,9 @@ function abCatRow(c){
         + '<td class="c"><input type="checkbox" class="k-nir" ' + (Number(c.need_ir) ? 'checked' : '') + '></td>'
         + '<td class="c"><input type="checkbox" class="k-ncli" ' + (Number(c.need_client) ? 'checked' : '') + '></td>'
         + '<td class="c"><input type="radio" name="abcatauto" class="k-auto" ' + (Number(c.is_pm_auto) ? 'checked' : '') + '></td>'
-        + '<td class="c"><input type="checkbox" class="k-qcauto" ' + (Number(c.is_qc_auto) ? 'checked' : '') + '></td>'
+        + '<td class="c"><input type="radio" name="abcatqcship" class="k-qcship" ' + (Number(c.qc_auto_ship) ? 'checked' : '') + '></td>'
+        + '<td class="c"><input type="radio" name="abcatqcint" class="k-qcint" ' + (Number(c.qc_auto_internal) ? 'checked' : '') + '></td>'
+        + '<td class="c"><input type="radio" name="abcatqcext" class="k-qcext" ' + (Number(c.qc_auto_external) ? 'checked' : '') + '></td>'
         + '<td class="c"><input type="checkbox" class="k-act" ' + (Number(c.is_active) ? 'checked' : '') + '></td>'
         + '<td class="c"><input type="hidden" class="k-sort" value="' + (c.sort_order || 0) + '">'
         + '<button class="btn btn-warm-o btn-xs k-del">刪</button></td></tr>';
@@ -1255,7 +1292,7 @@ function abCatRow(c){
 function renderAbCat(){
     var rows = (CFG && CFG.cats) || CATS || [];
     $('#cfgAbCat').html(rows.length ? rows.map(abCatRow).join('')
-        : '<tr><td colspan="10" class="c">尚未建立任何類別（開單時類別是必填的，請至少留一個）</td></tr>');
+        : '<tr><td colspan="12" class="c">尚未建立任何類別（開單時類別是必填的，請至少留一個）</td></tr>');
     abCatPreview();
 }
 /* 後綴詞打進去當下就讓使用者看到單號長什麼樣子——只看一個「-IR」很難想像整串的結果。
@@ -1274,7 +1311,9 @@ function abCatPreview(){
 $(document).on('click', '#btnAbCatAdd', function(){
     var $tb = $('#cfgAbCat');
     if ($tb.find('td[colspan]').length) $tb.empty();
-    $tb.append(abCatRow({ cat_id:0, name:'', suffix:'', is_pm_auto:0, is_qc_auto:0, need_bom:0, need_ir:0, need_client:0, is_active:1,
+    $tb.append(abCatRow({ cat_id:0, name:'', suffix:'', is_pm_auto:0,
+                          qc_auto_ship:0, qc_auto_internal:0, qc_auto_external:0,
+                          need_bom:0, need_ir:0, need_client:0, is_active:1,
                           sort_order:nextSort((CFG && CFG.cats) || CATS) }));
     $tb.find('tr:last .k-name').focus();
 });
@@ -1286,7 +1325,9 @@ function saveAbCatRow($tr, silent){
                        need_ir:$tr.find('.k-nir').prop('checked') ? 1 : '',
                        need_client:$tr.find('.k-ncli').prop('checked') ? 1 : '',
                        is_pm_auto:$tr.find('.k-auto').prop('checked') ? 1 : '',
-                       is_qc_auto:$tr.find('.k-qcauto').prop('checked') ? 1 : '',
+                       qc_auto_ship:$tr.find('.k-qcship').prop('checked') ? 1 : '',
+                       qc_auto_internal:$tr.find('.k-qcint').prop('checked') ? 1 : '',
+                       qc_auto_external:$tr.find('.k-qcext').prop('checked') ? 1 : '',
                        sort_order:$tr.find('.k-sort').val(),
                        is_active:$tr.find('.k-act').prop('checked') ? 1 : '' },
         function(res){
@@ -1454,7 +1495,9 @@ function collectCfgRows(what){
                         need_ir:$tr.find('.k-nir').prop('checked') ? 1 : 0,
                         need_client:$tr.find('.k-ncli').prop('checked') ? 1 : 0,
                         is_pm_auto:$tr.find('.k-auto').prop('checked') ? 1 : 0,
-                        is_qc_auto:$tr.find('.k-qcauto').prop('checked') ? 1 : 0,
+                        qc_auto_ship:$tr.find('.k-qcship').prop('checked') ? 1 : 0,
+                        qc_auto_internal:$tr.find('.k-qcint').prop('checked') ? 1 : 0,
+                        qc_auto_external:$tr.find('.k-qcext').prop('checked') ? 1 : 0,
                         sort_order:$tr.find('.k-sort').val(),
                         is_active:$tr.find('.k-act').prop('checked') ? 1 : 0 });
         });

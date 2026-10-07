@@ -781,13 +781,19 @@ function qcMeasureValsText(it){
     return (it.samples || []).map(function(sv){ return (sv && sv.v != null) ? String(sv.v) : ''; })
                               .filter(function(v){ return v !== ''; }).join(', ');
 }
+// OK/NG（是非判定）項目沒有數值標準，「標準」文字只給數值型項目——2026-10-07 使用者回報：
+// OK/NG項目印出「標準 -」很怪，那個 - 只是 std 欄位沒填的佔位符，項目名稱本身就是判定標準了。
+function qcMeasureStdPart(it){
+    if (it.type === 'OKNG') return '';
+    var tol = (it.up || it.lo) ? ('（公差 ' + (it.up ? '+' + it.up : '') + (it.lo ? ' / ' + it.lo : '') + '）') : '';
+    return '　標準 ' + (it.std || '-') + tol;
+}
 function qcMeasureRenderPicker(){
     var rows = QCM_ITEMS.map(function(it, idx){
-        var tol = (it.up || it.lo) ? ('（公差 ' + (it.up ? '+' + it.up : '') + (it.lo ? ' / ' + it.lo : '') + '）') : '';
         var vals = qcMeasureValsText(it);
         return '<label style="display:block;padding:6px 8px;border-bottom:1px solid var(--line);' + (it.verdict === 'NG' ? 'background:#FFF6F4;' : '') + '">'
             + '<input type="checkbox" class="qcm-pick-chk" data-i="' + idx + '" ' + (QCM_SEL[idx] ? 'checked' : '') + '> '
-            + '<b>' + (idx + 1) + '. ' + esc(it.name || '（未命名項目）') + '</b>　標準 ' + esc(it.std || '-') + esc(tol)
+            + '<b>' + (idx + 1) + '. ' + esc(it.name || '（未命名項目）') + '</b>' + esc(qcMeasureStdPart(it))
             + (vals ? ('　實測：' + esc(vals)) : '')
             + (it.verdict === 'NG' ? ' <span style="color:#fff;background:var(--coral);border-radius:3px;padding:0 5px;font-size:11px;">NG</span>' : '')
             + '</label>';
@@ -803,8 +809,7 @@ $('#btnQcMeasureApply').on('click', function(){
     if (!sel.length) { alert('請至少勾選一個量測項目。'); return; }
     var rows = sel.map(function(idx){
         var it = QCM_ITEMS[idx] || {};
-        var tol = (it.up || it.lo) ? ('（公差 ' + (it.up ? '+' + it.up : '') + (it.lo ? ' / ' + it.lo : '') + '）') : '';
-        return { dim: (it.name || '') + '　標準 ' + (it.std || '-') + tol,
+        return { dim: (it.name || '') + qcMeasureStdPart(it),
                  vals: (it.samples || []).map(function(sv){ return (sv && sv.v != null) ? String(sv.v) : ''; }).slice(0, 12) };
     });
     mtRenderRows(rows.length);

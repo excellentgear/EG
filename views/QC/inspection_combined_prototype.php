@@ -271,7 +271,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                               COALESCE(NULLIF(ue.user_cname,''), ue.user_uname) AS last_edited_name,
                               (SELECT COUNT(*) FROM qc_inspection_edit_log el WHERE el.qc_form_id = f.qc_form_id) AS edit_log_count
                        FROM qc_check_form f
-                       LEFT JOIN qa_abnormal_order qa ON qa.id = f.abnormal_order_id
+                       LEFT JOIN qa_abnormal_order qa ON qa.id = f.abnormal_order_id AND qa.deleted_at IS NULL
                        LEFT JOIN user ui ON ui.id = COALESCE(f.inspector_by, f.created_by)
                        LEFT JOIN user ua ON ua.id = f.approved_by
                        LEFT JOIN user ue ON ue.id = f.last_edited_by
@@ -811,7 +811,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'abnormal_order_id'=>isset($form['abnormal_order_id']) ? (int)$form['abnormal_order_id'] : 0,
                     'abnormal_order_no'=>(!empty($form['abnormal_order_id'])
                         ? (function() use ($pdo, $form) {
-                              $q = $pdo->prepare("SELECT abnormal_order_no FROM qa_abnormal_order WHERE id=?");
+                              $q = $pdo->prepare("SELECT abnormal_order_no FROM qa_abnormal_order WHERE id=? AND deleted_at IS NULL");
                               $q->execute([(int)$form['abnormal_order_id']]);
                               return $q->fetchColumn() ?: null;
                           })()
@@ -1239,7 +1239,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                  FROM qc_check_form f
                  LEFT JOIN bom_ing bi ON bi.bom_ing_fid = f.bom_ing_fid
                  LEFT JOIN user u ON TRIM(COALESCE(f.inspector_by, f.created_by)) = u.id
-                 LEFT JOIN qa_abnormal_order qa ON qa.id = f.abnormal_order_id
+                 LEFT JOIN qa_abnormal_order qa ON qa.id = f.abnormal_order_id AND qa.deleted_at IS NULL
                  WHERE f.d_id = ? AND f.status <> 'DRAFT'
                  ORDER BY f.qc_form_id DESC LIMIT 300");
             $q->execute([$d_id]);

@@ -355,12 +355,21 @@ function qab_ensure_schema(PDO $db): void
         'need_bom'    => "ADD COLUMN need_bom TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=這一類的單一定要綁製令編號'",
         'need_ir'     => "ADD COLUMN need_ir TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=這一類的單一定要綁客退單(IR)'",
         'need_client' => "ADD COLUMN need_client TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=這一類的單一定要綁客戶（客戶主檔 customer_list.customer_id）'",
-        // 2026-10-06：線上檢驗NG自動開立歸哪一類，刻意與 is_pm_auto（報工NG自動開立）分開；
-        // 可以設定不只一列是1（IQC/FQC都可能來自線上檢驗），詳見 qab_cats_auto_qc()
-        'is_qc_auto'  => "ADD COLUMN is_qc_auto TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=線上檢驗NG自動開立的單可歸入這一類（可以不只一列是1）'",
+        /* 2026-10-07 使用者更正：「線上檢驗NG自動開立」不該讓品管自己選類別，要依業務規則**全自動**
+           判定——出貨檢驗(insp_kind=SHIP)→FQC；其餘依該製程站登記的廠商是否為廠內(maker_list.internal)
+           分流→廠內查無廠商或廠內=製程不良、廠外(外包)=IQC。改成三個獨立旗標，各自全站唯一（同一類
+           可以同時身兼多種情境，例如沒有特別區分廠內廠外時三個都勾同一類）。取代昨天才加的 is_qc_auto
+           （一天內還沒有人真正依賴它，直接演進不留相容殼子）。 */
+        'qc_auto_ship'     => "ADD COLUMN qc_auto_ship TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=線上出貨檢驗(insp_kind=SHIP)判定NG自動開立的單歸入這一類（全站只有一列會是1）'",
+        'qc_auto_internal' => "ADD COLUMN qc_auto_internal TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=非出貨檢驗、該製程站廠商為廠內(或未登記廠商)時判定NG自動開立的單歸入這一類（全站只有一列會是1）'",
+        'qc_auto_external' => "ADD COLUMN qc_auto_external TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=非出貨檢驗、該製程站廠商為外包(非廠內)時判定NG自動開立的單歸入這一類（全站只有一列會是1）'",
     ];
     foreach ($needCat as $c => $sql) if (!in_array($c, $catCols, true)) $addCat[] = $sql;
     if ($addCat) $db->exec("ALTER TABLE qa_abnormal_cat " . implode(', ', $addCat));
+    // 舊欄位 is_qc_auto（2026-10-06 當天上線、尚未有人依賴）已被上面三個更細的旗標取代，順手清掉
+    if (in_array('is_qc_auto', $catCols, true)) {
+        try { $db->exec("ALTER TABLE qa_abnormal_cat DROP COLUMN is_qc_auto"); } catch (Throwable $e) { /* 已經清過或正在被鎖，下次再試 */ }
+    }
 
     $cols4 = $db->query("SHOW COLUMNS FROM qa_abnormal_order")->fetchAll(PDO::FETCH_COLUMN);
     $add4 = [];
@@ -1084,13 +1093,27 @@ function qab_create_order(PDO $db, array $data): array
     /* 責任單位（製程＋廠商）在建單當下就一併帶出——2026-09-24 使用者回報：自動開立已經選好製程，
        但廠商欄卻是空的，要現場再手動選一次。同一張製令、同一個製程站在 bom_ing 上本來就已經記著
        是哪個廠商加工（外包廠商或廠內加工廠商皆同一欄位），這裡直接查那一站即可，不必等使用者
-       進表單再選一次；查不到（製程未指定/純廠內無登記廠商）時維持空白，交由使用者或管理員填。 */
+       進表單再選一次；查不到（製程未指定/純廠內無登記廠商）時維持空白，交由使用者或管理員填。
+       2026-10-07 使用者回報「BOM總覽有發包資料卻沒帶入」，查出同一個 bom+process_no（同
+       bom_sn）**可能分批發給好幾家廠商**（實測一站 3 筆、分屬 3 個不同廠商＋1 筆空廠商），原本
+       「ORDER BY bom_sn ASC LIMIT 1」在這種分批情境下撿到的不一定是這筆檢驗真正對應的那一列。
+       有明確來源列（$data['resp_bom_ing_fid']，自動開立NG路徑帶的就是這筆檢驗所屬的那一列）時
+       一律直接用那一列，查不到才退回舊的「同製程最早一筆」當保守後備（人工開單等情境沒有單一
+       來源列可用）。 */
     $respVendorId = null; $respIsInternal = 0; $respUnit = null;
     if ($respProcessNo !== null && $bomNo !== null) {
-        $stv = $db->prepare("SELECT i.maker_id_no, ml.maker_id AS vendor_name, ml.internal
-                              FROM bom_ing i LEFT JOIN maker_list ml ON ml.maker_id_no = i.maker_id_no
-                              WHERE i.bom = ? AND i.process_no = ? ORDER BY i.bom_sn ASC LIMIT 1");
-        $stv->execute([$bomNo, $respProcessNo]);
+        $respBomIngFid = $intOrNull($data['resp_bom_ing_fid'] ?? null);
+        if ($respBomIngFid) {
+            $stv = $db->prepare("SELECT i.maker_id_no, ml.maker_id AS vendor_name, ml.internal
+                                  FROM bom_ing i LEFT JOIN maker_list ml ON ml.maker_id_no = i.maker_id_no
+                                  WHERE i.bom_ing_fid = ?");
+            $stv->execute([$respBomIngFid]);
+        } else {
+            $stv = $db->prepare("SELECT i.maker_id_no, ml.maker_id AS vendor_name, ml.internal
+                                  FROM bom_ing i LEFT JOIN maker_list ml ON ml.maker_id_no = i.maker_id_no
+                                  WHERE i.bom = ? AND i.process_no = ? ORDER BY i.bom_sn ASC LIMIT 1");
+            $stv->execute([$bomNo, $respProcessNo]);
+        }
         $vrow = $stv->fetch(PDO::FETCH_ASSOC);
         $vendorNameForUnit = '';
         if ($vrow && $vrow['maker_id_no'] !== null && $vrow['maker_id_no'] !== '') {
@@ -1361,17 +1384,17 @@ function qab_notify_qc_review(PDO $db, int $orderId, string $bomNo, int $ngQty, 
  *  ②異常現象只放一句固定的簡短說明（細節看量測表），**量測尺寸與實測值一律寫進既有的
  *    qa_abnormal_measure**（表單原本就有「量測尺寸與實測值」這張表，是真正結構化的量測資料，
  *    不是塞進一段文字描述裡——鐵律4：不要另外發明一套文字格式去表達本來就有欄位的東西）；
- *  ③分類看 is_qc_auto 旗標（qab_cat_auto_qc()），與報工路徑的 is_pm_auto 分開，管理員可各自配置；
+ *  ③分類**全自動判定，不讓品管自己選**（2026-10-07 使用者更正，取代昨天「候選不只一個時手動挑」
+ *    的做法）：出貨檢驗(insp_kind=SHIP)→qc_auto_ship；其餘依該製程站登記的廠商是否為廠內
+ *    (maker_list.internal=1，或完全沒登記廠商)→qc_auto_internal，外包→qc_auto_external
+ *    （qab_cat_auto_qc_resolve()，與報工路徑的 is_pm_auto 分開，管理員三種情境可各自配置）；
  *  ④多記一筆 src_qc_form_id（回指來源檢驗紀錄）／src_qc_item_sel（目前勾選狀態，JSON陣列），
  *    供品管事後回到異常單用「由檢驗紀錄帶入」重新勾選時，picker 畫面知道上次勾了哪幾項。
  * $measures：量測列陣列，每列 ['dim_name'=>string, 'vals'=>string[]]（最多12個實測值，比照紙本）；
  * 不限筆數——qa_abnormal_measure 本來就是一張單對多列的表，不是紙本那種寫死三列的限制。
  * $selectedKeys：目前勾選的量測項目索引（對應 get_history_record 回傳 items 的順序）。
- * $catId：品管在開單跳窗指定要歸入的類別（當「線上檢驗NG自動開立」設定了不只一類時必填，
- *   前端會先用 action=cats 讀出候選清單讓品管挑，見 inspection_entry_v2.php；傳 0 ＝沒指定，
- *   只有候選類別剛好只有一個時才允許，由本函式再驗一次，不信任前端算出來的「只有一個」）。
  */
-function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array $measures, array $selectedKeys, int $catId = 0): array
+function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array $measures, array $selectedKeys): array
 {
     qab_ensure_schema($db);
     if ($qcFormId <= 0) throw new Exception('缺少 qc_form_id');
@@ -1386,7 +1409,9 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
         return ['id' => (int)$row['id'], 'no' => (string)$row['abnormal_order_no'], 'existed' => true];
     }
 
-    $st = $db->prepare("SELECT f.bom_ing_fid, f.insp_no, f.ng_qty, f.incoming_qty, f.sample_qty,
+    // 出貨檢驗(insp_kind=SHIP) 不掛 bom_ing_fid（使用者拍板「獨立為成品出貨，不需掛製程」，
+    // 見 inspection_entry_v2.php 的 ship_source 說明），BOM 號碼要讀 f.ship_bom，不是 bi.bom。
+    $st = $db->prepare("SELECT f.bom_ing_fid, f.insp_no, f.insp_kind, f.ng_qty, f.incoming_qty, f.sample_qty, f.ship_bom,
                                 bi.bom, bi.process_no
                          FROM qc_check_form f
                          LEFT JOIN bom_ing bi ON bi.bom_ing_fid = f.bom_ing_fid
@@ -1394,37 +1419,54 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
     $st->execute([$qcFormId]);
     $qc = $st->fetch(PDO::FETCH_ASSOC);
     if (!$qc) throw new Exception('找不到這筆檢驗紀錄');
-    if (empty($qc['bom'])) throw new Exception('這筆檢驗紀錄沒有連結到製令，無法自動開立異常單（請改用人工開單）');
+    $isShip = (string)($qc['insp_kind'] ?? '') === 'SHIP';
+    $bomNo = $isShip ? (string)($qc['ship_bom'] ?? '') : (string)($qc['bom'] ?? '');
+    if ($bomNo === '') throw new Exception('這筆檢驗紀錄沒有連結到製令，無法自動開立異常單（請改用人工開單）');
 
-    /* 分類：一律歸到管理員勾了「線上檢驗NG自動開立」旗標的那幾類之一。**不可以比對名稱**——
-       管理員把分類改名，自動開單就會整個開不出來（鐵律4，與報工路徑同一條規則）。
-       可以設定不只一類（IQC／FQC都可能來自線上檢驗），只有一類時自動採用，超過一類時
-       一定要由前端挑好傳進來，這裡再驗一次是不是真的在候選清單內——不信任前端的判斷。 */
-    $qcCats = qab_cats_auto_qc($db);
-    if (!$qcCats) {
-        throw new Exception('尚未設定「線上檢驗NG自動開立」要歸入哪一個異常單類別，請先到清單頁的「設定 → 異常單類別」勾選至少一個類別');
-    }
-    if ($catId > 0) {
-        $okCat = false;
-        foreach ($qcCats as $c) if ((int)$c['cat_id'] === $catId) { $okCat = true; break; }
-        if (!$okCat) throw new Exception('指定的類別不是目前設定「線上檢驗NG自動開立」的類別之一，請重新整理頁面再試');
+    /* 分類判定（2026-10-07 使用者定案的業務規則，全自動不問人）：
+       ①出貨檢驗(insp_kind=SHIP)→scope='ship'；
+       ②其餘＝依這筆檢驗所屬的那一個製程站（bom_ing_fid，不是同製程同 bom 取最早一站——
+         這裡要的是「這批到底是不是外包」，一定要用這筆檢驗實際對應的那一站）登記的廠商
+         是否為廠內加工廠商（maker_list.internal=1）或完全沒登記廠商 → scope='internal'；
+         登記了廠商且不是廠內（外包）→ scope='external'。
+       **不可以比對名稱**——管理員把分類改名，自動開單就會整個開不出來（鐵律4，與報工路徑同一條規則）。 */
+    if ($isShip) {
+        $scope = 'ship';
     } else {
-        if (count($qcCats) > 1) throw new Exception('目前有多個類別都設定為「線上檢驗NG自動開立」，請先選擇這張單要歸入哪一類');
-        $catId = (int)$qcCats[0]['cat_id'];
+        $vrow = null;
+        if (!empty($qc['bom_ing_fid'])) {
+            $stv = $db->prepare("SELECT bi.maker_id_no, ml.internal
+                                  FROM bom_ing bi LEFT JOIN maker_list ml ON ml.maker_id_no = bi.maker_id_no
+                                  WHERE bi.bom_ing_fid=?");
+            $stv->execute([(int)$qc['bom_ing_fid']]);
+            $vrow = $stv->fetch(PDO::FETCH_ASSOC);
+        }
+        $hasVendor = $vrow && $vrow['maker_id_no'] !== null && $vrow['maker_id_no'] !== '';
+        $isInternal = !$hasVendor || (int)($vrow['internal'] ?? 0) === 1;
+        $scope = $isInternal ? 'internal' : 'external';
+    }
+    $scopeMap = qab_qc_auto_scope_map();
+    $catId = qab_cat_auto_qc_resolve($db, $scope);
+    if (!$catId) {
+        throw new Exception('尚未設定「線上檢驗NG自動開立」的「' . $scopeMap[$scope]['label']
+            . '」要歸入哪一個異常單類別，請先到清單頁的「設定 → 異常單類別」勾選');
     }
 
     $autoNote = mb_substr('品管於線上檢驗判定NG時自動開立（檢驗單號 ' . (string)$qc['insp_no'] . '）', 0, 255);
-    $phenomenon = '線上檢驗判定不良（檢驗單號 ' . (string)$qc['insp_no'] . '），詳細量測數據見下方「量測尺寸與實測值」。';
+    $phenomenon = '線上檢驗判定不良（檢驗單號 ' . (string)$qc['insp_no'] . '），詳細量測數據見上方「量測尺寸與實測值」。';
 
     $data = [
         'kind' => 'bom',
-        'bom_no' => (string)$qc['bom'],
+        'bom_no' => $bomNo,
         'batch_qty' => (int)$qc['incoming_qty'],
         'insp_qty' => (int)$qc['sample_qty'],
         'ng_qty' => (int)$qc['ng_qty'],
         'abnormal_phenomenon' => $phenomenon,
         'created_by' => $createdBy,
         'resp_process_no' => $qc['process_no'] !== null ? (int)$qc['process_no'] : null,
+        // 同一站可能分批發給好幾家廠商（鐵律4以外的既有資料事實），帶上這筆檢驗實際所屬的
+        // bom_ing_fid，讓 qab_create_order() 的廠商自動帶入精準指到這一列，不是同站隨便撿一列。
+        'resp_bom_ing_fid' => (!$isShip && !empty($qc['bom_ing_fid'])) ? (int)$qc['bom_ing_fid'] : null,
         'auto_opened' => 1,
         'auto_open_note' => $autoNote,
         // 決策者自動＝品管主管，沿用管理員在「設定→決策者」已設好的品管部門那一列，
@@ -2269,7 +2311,8 @@ function qab_can_edit_form(PDO $db, array $perms, array $order): bool
 /** 分類清單；$activeOnly=false 時連停用的一起回（設定頁與舊單顯示用） */
 function qab_cats(PDO $db, bool $activeOnly = true): array
 {
-    $sql = "SELECT cat_id, name, suffix, is_pm_auto, is_qc_auto, need_bom, need_ir, need_client, sort_order, is_active
+    $sql = "SELECT cat_id, name, suffix, is_pm_auto, qc_auto_ship, qc_auto_internal, qc_auto_external,
+                   need_bom, need_ir, need_client, sort_order, is_active
             FROM qa_abnormal_cat";
     if ($activeOnly) $sql .= " WHERE is_active=1";
     $sql .= " ORDER BY sort_order, cat_id";
@@ -2278,7 +2321,9 @@ function qab_cats(PDO $db, bool $activeOnly = true): array
         $r['cat_id']      = (int)$r['cat_id'];
         $r['suffix']      = (string)($r['suffix'] ?? '');
         $r['is_pm_auto']  = (int)$r['is_pm_auto'];
-        $r['is_qc_auto']  = (int)$r['is_qc_auto'];
+        $r['qc_auto_ship']     = (int)$r['qc_auto_ship'];
+        $r['qc_auto_internal'] = (int)$r['qc_auto_internal'];
+        $r['qc_auto_external'] = (int)$r['qc_auto_external'];
         $r['need_bom']    = (int)$r['need_bom'];
         $r['need_ir']     = (int)$r['need_ir'];
         $r['need_client'] = (int)$r['need_client'];
@@ -2361,15 +2406,30 @@ function qab_cat_auto_pm(PDO $db): ?int
     return null;
 }
 
-/** 線上檢驗NG自動開立可以歸入的類別清單（旗標判定，刻意與 is_pm_auto 分開——兩種觸發來源不同，
- *  管理員應該能各自指定歸類）。2026-10-06 使用者要求：**可以設定不只一個**（IQC／FQC都可能來自
- *  品管線上檢驗，不該被迫只能歸同一類），所以這裡回傳全部符合的類別，由呼叫端（開單當下）決定
- *  只有一個就直接用、超過一個就請品管當場選。空陣列＝呼叫端自行決定要不要擋下。 */
-function qab_cats_auto_qc(PDO $db): array
+/** 線上檢驗NG自動開立的三種情境代碼 → 旗標欄名、人看得懂的說明文字（唯一對照表，開單判定與
+ *  設定頁驗證訊息都查這裡，不要各自寫一份）。2026-10-07 使用者定案的業務規則：
+ *    ship     － insp_kind='SHIP'（出貨檢驗）
+ *    internal － 非出貨檢驗，該製程站登記的廠商是廠內加工廠商(maker_list.internal=1)，或完全沒登記廠商
+ *    external － 非出貨檢驗，該製程站登記的廠商不是廠內（外包）
+ */
+function qab_qc_auto_scope_map(): array
 {
-    $out = [];
-    foreach (qab_cats($db, true) as $r) if ($r['is_qc_auto']) $out[] = $r;
-    return $out;
+    return [
+        'ship'     => ['col' => 'qc_auto_ship',     'label' => '出貨檢驗（FQC）'],
+        'internal' => ['col' => 'qc_auto_internal', 'label' => '廠內製程（無廠商或廠內加工）'],
+        'external' => ['col' => 'qc_auto_external', 'label' => '外包廠商（IQC）'],
+    ];
+}
+
+/** 這個情境代碼目前設定歸入哪一類（旗標判定，查不到回 null，呼叫端自行決定要不要擋下）。
+ *  刻意不讓使用者在開單當下挑——2026-10-07 使用者更正：判定要全自動，不要讓品管自己選。 */
+function qab_cat_auto_qc_resolve(PDO $db, string $scope): ?int
+{
+    $map = qab_qc_auto_scope_map();
+    if (!isset($map[$scope])) return null;
+    $col = $map[$scope]['col'];
+    foreach (qab_cats($db, true) as $r) if (!empty($r[$col])) return (int)$r['cat_id'];
+    return null;
 }
 
 /** 這個分類的單號後綴詞（沒有分類或沒設定後綴一律回空字串） */

@@ -129,7 +129,9 @@ case 'create': {
    qa_abnormal_form.php 讓品管接著填寫其餘欄位——寫入邏輯一律走 qab_auto_open_from_qc_ng()
    （鐵律4）。量測項目是否要重新勾選，事後就在 qa_abnormal_form.php 用同一顆「由檢驗紀錄
    帶入」picker 重新挑過（純改前端 #mtb 表格內容，照常走既有的 save_head 存檔，不必另開
-   一支 action——量測表本來就是可以逐列編修的既有欄位）。 */
+   一支 action——量測表本來就是可以逐列編修的既有欄位）。
+   2026-10-07 使用者更正：類別**全自動判定**（出貨檢驗/廠內製程/外包廠商三種情境），不再
+   讓前端傳 cat_id 來挑——判定邏輯收斂在 qab_auto_open_from_qc_ng() 一處，這裡不接收也不轉傳。 */
 case 'auto_open_from_qc': {
     if (!$perms['canCreate']) jerr('沒有開立品質異常單的權限');
     $qcFormId = (int)($_POST['qc_form_id'] ?? 0);
@@ -137,11 +139,8 @@ case 'auto_open_from_qc': {
     if (!is_array($measures)) $measures = [];
     $selected = json_decode((string)($_POST['selected'] ?? '[]'), true);
     if (!is_array($selected)) $selected = [];
-    // 「線上檢驗NG自動開立」可以設定不只一個類別（IQC/FQC皆可能來自線上檢驗），超過一個時
-    // 前端會先讓品管挑好傳 cat_id 過來；只有一個時可以不傳，由 qab_auto_open_from_qc_ng() 自動採用。
-    $catId = (int)($_POST['cat_id'] ?? 0);
     try {
-        $r = qab_auto_open_from_qc_ng($db, $qcFormId, $uid, $measures, $selected, $catId);
+        $r = qab_auto_open_from_qc_ng($db, $qcFormId, $uid, $measures, $selected);
     } catch (Throwable $e) { jerr($e->getMessage()); }
     $log($r['id'], 'create', '', $r['no'] . '（線上檢驗NG自動開立）');
     jout(true, ['id' => $r['id'], 'no' => $r['no'], 'existed' => !empty($r['existed'])]);
@@ -1331,6 +1330,13 @@ case 'order_delete': {
     if ($o['deleted_at']) jerr('這張單已經是刪除狀態');
     $reason = trim((string)($_POST['reason'] ?? ''));
     if ($reason === '') jerr('請填寫刪除原因（刪除一定要留紀錄）');
+    // 2026-10-07 使用者交辦：自動開立的單背後還連著別處的資料（報工紀錄／線上檢驗紀錄），
+    // 一般管理員刪除容易造成前後不一致，只有「全站管理員」輸入操作確認密碼才能刪。
+    if (!empty($o['auto_opened'])) {
+        if (!$perms['isAdmin']) jerr('這張單是系統自動開立的，只有系統管理員可以刪除（避免報工紀錄或線上檢驗紀錄還連著它，造成資料前後不一致）', 'NEED_ADMIN');
+        $pwChk = eg_confirm_password_verify_scoped($db, $uid, (string)($_POST['confirm_password'] ?? ''), 'qab_order_delete_auto');
+        if (empty($pwChk['ok'])) jerr($pwChk['msg'] ?? '操作確認密碼錯誤', 'NEED_PASSWORD');
+    }
     // 這張單累積歸入的報工（pm_process_daily_report.abnormal_order_id 指到它的那幾筆）刪除時一併
     // 解除連結，這批NG才會重新變成「尚未歸入」，回到補開/自動開立可以重新處理的狀態——2026-09-24
     // 使用者交辦：異常單被刪除，報工紀錄查詢頁的「異常單」欄也要跟著移除，不能繼續連著一張已刪除的單。
@@ -1339,12 +1345,16 @@ case 'order_delete': {
     $stRep = $db->prepare("SELECT report_id FROM pm_process_daily_report WHERE abnormal_order_id=?");
     $stRep->execute([$id]);
     $affectedReportIds = array_map('intval', $stRep->fetchAll(PDO::FETCH_COLUMN));
+    // 2026-10-07 使用者回報：線上檢驗NG自動開立的單刪除後，inspection_entry_v2.php 還是會
+    // 一直顯示已刪除的單號——根因是 qc_check_form.abnormal_order_id 從沒被清掉。同報工路徑
+    // 一樣解除連結＋寫進 snapshot，這筆檢驗才會重新變回「待開立」。
+    $affectedQcFormId = !empty($o['src_qc_form_id']) ? (int)$o['src_qc_form_id'] : 0;
     $snap = json_encode([
         'no' => $o['abnormal_order_no'], 'fill_date' => $o['fill_date'], 'client' => $o['client_name'],
         'part_no' => $o['part_no'], 'bom_no' => $o['bom_no'], 'ir_no' => $o['ir_no'],
         'phenomenon' => mb_substr((string)$o['abnormal_phenomenon'], 0, 500),
         'is_closed' => (int)$o['is_closed'], 'scrap_no' => $o['scrap_no'],
-        'report_ids' => $affectedReportIds,
+        'report_ids' => $affectedReportIds, 'qc_form_id' => $affectedQcFormId,
     ], JSON_UNESCAPED_UNICODE);
     $db->beginTransaction();
     try {
@@ -1354,6 +1364,10 @@ case 'order_delete': {
             $ph = implode(',', array_fill(0, count($affectedReportIds), '?'));
             $db->prepare("UPDATE pm_process_daily_report SET abnormal_order_id=NULL WHERE report_id IN ($ph)")
                ->execute($affectedReportIds);
+        }
+        if ($affectedQcFormId) {
+            $db->prepare("UPDATE qc_check_form SET abnormal_order_id=NULL, ncr_decision=NULL WHERE qc_form_id=?")
+               ->execute([$affectedQcFormId]);
         }
         $db->prepare("INSERT INTO qa_abnormal_del_log (order_id,abnormal_order_no,act,reason,snapshot,acted_by,acted_name)
                       VALUES (?,?,'delete',?,?,?,?)")
@@ -1372,13 +1386,17 @@ case 'order_restore': {
     if (!$o) jerr('找不到這張異常單');
     if (!$o['deleted_at']) jerr('這張單不是刪除狀態');
     $reason = trim((string)($_POST['reason'] ?? ''));
-    // 把刪除當下記在 snapshot 裡的報工接回來——只接「目前仍未被其他單認領」的那幾筆，
+    // 把刪除當下記在 snapshot 裡的報工／來源檢驗紀錄接回來——只接「目前仍未被其他單認領」的，
     // 已經被別張單（刪除期間新累積開立的）拿走的不搶回來。
     $stSnap = $db->prepare("SELECT snapshot FROM qa_abnormal_del_log WHERE order_id=? AND act='delete' ORDER BY id DESC LIMIT 1");
     $stSnap->execute([$id]);
     $snapJson = $stSnap->fetchColumn();
-    $reportIds = [];
-    if ($snapJson) { $snapArr = json_decode((string)$snapJson, true) ?: []; $reportIds = array_map('intval', $snapArr['report_ids'] ?? []); }
+    $reportIds = []; $qcFormId = 0;
+    if ($snapJson) {
+        $snapArr = json_decode((string)$snapJson, true) ?: [];
+        $reportIds = array_map('intval', $snapArr['report_ids'] ?? []);
+        $qcFormId = (int)($snapArr['qc_form_id'] ?? 0);
+    }
     $db->beginTransaction();
     try {
         $db->prepare("UPDATE qa_abnormal_order SET deleted_at=NULL, deleted_by=NULL, updated_by=?, updated_at=NOW() WHERE id=?")
@@ -1387,6 +1405,10 @@ case 'order_restore': {
             $ph = implode(',', array_fill(0, count($reportIds), '?'));
             $db->prepare("UPDATE pm_process_daily_report SET abnormal_order_id=? WHERE report_id IN ($ph) AND abnormal_order_id IS NULL")
                ->execute(array_merge([$id], $reportIds));
+        }
+        if ($qcFormId) {
+            $db->prepare("UPDATE qc_check_form SET abnormal_order_id=?, ncr_decision='OPEN' WHERE qc_form_id=? AND abnormal_order_id IS NULL")
+               ->execute([$id, $qcFormId]);
         }
         $db->prepare("INSERT INTO qa_abnormal_del_log (order_id,abnormal_order_no,act,reason,acted_by,acted_name)
                       VALUES (?,?,'restore',?,?,?)")
@@ -1639,12 +1661,15 @@ function qabSaveCat(PDO $db, array $in): string
         return '單號後綴詞只能用英文、數字與 - _ .（最多 10 個字元），例：-IR';
     }
     $auto   = (int)!empty($in['is_pm_auto']);
-    // 2026-10-06：線上檢驗NG自動開立歸哪一類，與報工自動開立分開獨立設定（is_qc_auto）
-    $qcAuto = (int)!empty($in['is_qc_auto']);
+    // 2026-10-07：線上檢驗NG自動開立改成三種情境各自一個旗標（出貨/廠內/外包），判定全自動、
+    // 不再是單一「線上檢驗NG自動開立」開關——見 qab_qc_auto_scope_map()／qab_cat_auto_qc_resolve()。
+    $qcShip = (int)!empty($in['qc_auto_ship']);
+    $qcInt  = (int)!empty($in['qc_auto_internal']);
+    $qcExt  = (int)!empty($in['qc_auto_external']);
     $sort   = (int)($in['sort_order'] ?? 0);
     $active = array_key_exists('is_active', $in) ? (int)!empty($in['is_active']) : 1;
     if ($auto && !$active) return '勾了「報工NG自動開立」的分類不可以停用（自動開單會整個開不出來）';
-    if ($qcAuto && !$active) return '勾了「線上檢驗NG自動開立」的分類不可以停用（自動開單會整個開不出來）';
+    if (($qcShip || $qcInt || $qcExt) && !$active) return '勾了「線上檢驗NG自動開立」任一情境的分類不可以停用（自動開單會整個開不出來）';
     /* 這一類一定要綁什麼（2026-10-02 使用者交辦）：製令／客退單／客戶，可以複選。
        報工NG自動開立的那一類**一定要綁製令**——自動開單本來就是從某一張製令的某一站累積NG來的，
        勾了自動開立卻不綁製令，開出來的單會沒有來源可以追（而且扣款金額也帶不出來）。
@@ -1653,23 +1678,27 @@ function qabSaveCat(PDO $db, array $in): string
     $nIr  = (int)!empty($in['need_ir']);
     $nCli = (int)!empty($in['need_client']);
     if ($auto && !$nBom) return '勾了「報工NG自動開立」的分類一定要勾「製令」（自動開單是從製令的某一站累積NG開出來的）';
-    if ($qcAuto && !$nBom) return '勾了「線上檢驗NG自動開立」的分類一定要勾「製令」（自動開單是從檢驗紀錄所屬的製令開出來的）';
-    $p = [mb_substr($name, 0, 40), ($suffix === '' ? null : $suffix), $auto, $qcAuto, $nBom, $nIr, $nCli, $sort, $active];
+    if (($qcShip || $qcInt || $qcExt) && !$nBom) return '勾了「線上檢驗NG自動開立」任一情境的分類一定要勾「製令」（自動開單是從檢驗紀錄所屬的製令開出來的）';
+    $p = [mb_substr($name, 0, 40), ($suffix === '' ? null : $suffix), $auto, $qcShip, $qcInt, $qcExt, $nBom, $nIr, $nCli, $sort, $active];
     if ($catId > 0) {
-        $db->prepare("UPDATE qa_abnormal_cat SET name=?, suffix=?, is_pm_auto=?, is_qc_auto=?, need_bom=?, need_ir=?, need_client=?,
+        $db->prepare("UPDATE qa_abnormal_cat SET name=?, suffix=?, is_pm_auto=?,
+                      qc_auto_ship=?, qc_auto_internal=?, qc_auto_external=?, need_bom=?, need_ir=?, need_client=?,
                       sort_order=?, is_active=?, updated_at=NOW() WHERE cat_id=?")
            ->execute(array_merge($p, [$catId]));
     } else {
-        $db->prepare("INSERT INTO qa_abnormal_cat (name,suffix,is_pm_auto,is_qc_auto,need_bom,need_ir,need_client,sort_order,is_active)
-                      VALUES (?,?,?,?,?,?,?,?,?)")
+        $db->prepare("INSERT INTO qa_abnormal_cat
+                      (name,suffix,is_pm_auto,qc_auto_ship,qc_auto_internal,qc_auto_external,need_bom,need_ir,need_client,sort_order,is_active)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?)")
            ->execute($p);
         $catId = (int)$db->lastInsertId();
     }
-    // 「報工NG自動開立」全站只能有一列是1（報工累積是系統觸發，沒有真人在場挑類別），設在這一列
-    // 就要把其他列的旗標取消，否則 qab_cat_auto_pm() 只會拿到排序最前那一個。
-    // 「線上檢驗NG自動開立」刻意不做互斥——2026-10-06 使用者要求可以設定不只一個（IQC/FQC都可能
-    // 來自線上檢驗），超過一個時由品管在開單當下挑，見 qab_cats_auto_qc()／qab_auto_open_from_qc_ng()。
-    if ($auto) $db->prepare("UPDATE qa_abnormal_cat SET is_pm_auto=0 WHERE cat_id<>?")->execute([$catId]);
+    // 每個情境旗標全站只能有一列是1（報工累積／線上檢驗自動判定都是系統觸發，沒有真人在場挑類別），
+    // 設在這一列就要把其他列的同一個旗標清掉，否則 qab_cat_auto_pm()／qab_cat_auto_qc_resolve()
+    // 只會拿到排序最前那一個。三種 qc 情境各自獨立互斥，不互相影響（同一類可以同時身兼多種情境）。
+    if ($auto)   $db->prepare("UPDATE qa_abnormal_cat SET is_pm_auto=0 WHERE cat_id<>?")->execute([$catId]);
+    if ($qcShip) $db->prepare("UPDATE qa_abnormal_cat SET qc_auto_ship=0 WHERE cat_id<>?")->execute([$catId]);
+    if ($qcInt)  $db->prepare("UPDATE qa_abnormal_cat SET qc_auto_internal=0 WHERE cat_id<>?")->execute([$catId]);
+    if ($qcExt)  $db->prepare("UPDATE qa_abnormal_cat SET qc_auto_external=0 WHERE cat_id<>?")->execute([$catId]);
     $GLOBALS['qab_last_abcat_id'] = $catId;
     return '';
 }

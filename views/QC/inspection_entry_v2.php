@@ -667,7 +667,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 "SELECT f.*, d.D_Setting_Id AS part_no, qa.abnormal_order_no
                  FROM qc_check_form f
                  LEFT JOIN d_setting d ON d.d_id = f.d_id
-                 LEFT JOIN qa_abnormal_order qa ON qa.id = f.abnormal_order_id
+                 LEFT JOIN qa_abnormal_order qa ON qa.id = f.abnormal_order_id AND qa.deleted_at IS NULL
                  WHERE f.qc_form_id=?");
             $f->execute([$qid]);
             $form = $f->fetch(PDO::FETCH_ASSOC);
@@ -2113,16 +2113,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         <div class="modal-body">
             <div class="muted-help" style="margin-bottom:8px;">
                 勾選要列入異常單「量測尺寸與實測值」的項目（預設已勾選判定不良的項目，可自行增減，
-                <b>不限筆數</b>）。確認後會直接自動開立異常單草稿，並另開分頁進去填寫其餘欄位；
-                <b>品管完成確認前</b>，隨時可以回到異常單用「由檢驗紀錄帶入」重新勾選套用。
-            </div>
-            <div id="qcAbPickCatWrap" style="display:none;margin-bottom:12px;padding:10px;background:#fff6ee;border:1px solid #f0d8bd;border-radius:4px;">
-                <label style="font-weight:600;margin-right:6px;">歸入類別：</label>
-                <select id="qcAbPickCat" class="form-control" style="width:240px;display:inline-block;"></select>
-                <div class="muted-help" style="margin-top:4px;">目前「線上檢驗NG自動開立」設定了不只一個類別（例如 IQC／FQC），請選擇這張單要歸入哪一類。</div>
-            </div>
-            <div id="qcAbPickCatWarn" class="alert alert-warning" style="display:none;margin-bottom:12px;">
-                尚未設定「線上檢驗NG自動開立」要歸入哪一個異常單類別，請先到「品質異常處理單」清單頁的「設定 → 異常單類別」勾選至少一個類別。
+                <b>不限筆數</b>）。確認後會直接自動開立異常單草稿（類別由系統依「出貨檢驗／廠內製程／
+                外包廠商」自動判定），並另開分頁進去填寫其餘欄位；<b>品管完成確認前</b>，隨時可以回到
+                異常單用「由檢驗紀錄帶入」重新勾選套用。
             </div>
             <div id="qcAbPickList" style="max-height:420px;overflow:auto;"></div>
         </div>
@@ -6156,16 +6149,13 @@ $(function(){
     });
 
     // ---------------------------------------------------------------
-    // 開立品質異常單（直接自動開立草稿，2026-10-06）：勾選要列入「量測尺寸與實測值」的
-    // 項目後，直接呼叫 QaAbnormal_API.php 的 auto_open_from_qc 建立草稿，不再經過逐欄填寫
-    // 的跳窗；建立成功後連動 set_ncr_decision（本頁既有的「這筆檢驗已綁哪張異常單」機制不變），
-    // 另開分頁進 qa_abnormal_form.php 讓品管直接在編輯畫面接著填寫其餘欄位。
+    // 開立品質異常單（直接自動開立草稿，2026-10-06；2026-10-07 類別改成全自動判定不再讓
+    // 品管挑）：勾選要列入「量測尺寸與實測值」的項目後，直接呼叫 QaAbnormal_API.php 的
+    // auto_open_from_qc 建立草稿，不再經過逐欄填寫的跳窗；建立成功後連動 set_ncr_decision
+    // （本頁既有的「這筆檢驗已綁哪張異常單」機制不變），另開分頁進 qa_abnormal_form.php
+    // 讓品管直接在編輯畫面接著填寫其餘欄位。
     // ---------------------------------------------------------------
     var qcAbPickItems=[], qcAbPickSel={}, qcAbPickDone=null, qcAbPickFormId=0;
-    // 「線上檢驗NG自動開立」可以設定不只一個類別（IQC/FQC都可能來自線上檢驗），開單當下要讓
-    // 品管自己選要歸入哪一類；只設定一個時自動採用、不打擾使用者。候選清單每次開跳窗都重新查，
-    // 管理員隨時可能改設定，不可以快取上一次的結果。
-    var qcAbPickCats=[], qcAbPickCatsLoaded=false;
     function openQcAbPick(qcFormId, items, doneCb){
         qcAbPickFormId = qcFormId;
         qcAbPickItems = items || [];
@@ -6174,52 +6164,26 @@ $(function(){
         qcAbPickItems.forEach(function(it,idx){ if(it.verdict==='NG') qcAbPickSel[idx]=true; });
         qcAbPickDone = doneCb;
         renderQcAbPick();
-        loadQcAbPickCats();
         $('#qcAbPickModal').modal('show');
     }
-    function loadQcAbPickCats(){
-        qcAbPickCats = [];
-        qcAbPickCatsLoaded = false;
-        $('#qcAbPickCatWrap').hide();
-        $('#qcAbPickCatWarn').hide();
-        $('#btnQcAbPickGo').prop('disabled', true);
-        $.get('../../src/store/QaAbnormal_API.php', { action:'cats' }, function(res){
-            qcAbPickCatsLoaded = true;
-            var all = (res && res.success && res.cats) ? res.cats : [];
-            qcAbPickCats = all.filter(function(c){ return Number(c.is_qc_auto) === 1; });
-            if (qcAbPickCats.length > 1) {
-                var opts = '<option value="">請選擇…</option>' + qcAbPickCats.map(function(c){
-                    return '<option value="' + c.cat_id + '">' + esc(c.name) + '</option>';
-                }).join('');
-                $('#qcAbPickCat').html(opts);
-                $('#qcAbPickCatWrap').show();
-                $('#btnQcAbPickGo').prop('disabled', true);
-            } else if (qcAbPickCats.length === 1) {
-                $('#btnQcAbPickGo').prop('disabled', false);
-            } else {
-                $('#qcAbPickCatWarn').show();
-                $('#btnQcAbPickGo').prop('disabled', true);
-            }
-        }, 'json').fail(function(){
-            // 候選清單查詢失敗（網路問題）不擋在前端——放行讓後端再驗一次，
-            // qcAbPickCatsLoaded 維持 false，送出時不比對候選數量、cat_id 一律傳 0 交給後端判斷
-            $('#btnQcAbPickGo').prop('disabled', false);
-        });
-    }
-    $(document).on('change', '#qcAbPickCat', function(){
-        $('#btnQcAbPickGo').prop('disabled', !$(this).val());
-    });
     function qcAbItemValsText(it){
         return (it.samples||[]).map(function(sv){ return (sv && sv.v!=null) ? String(sv.v) : ''; })
                                 .filter(function(v){ return v!==''; }).join(', ');
     }
+    // OK/NG（是非判定）項目沒有數值標準，「標準」文字只給數值型（TOL/RANGE）項目——
+    // 2026-10-07 使用者回報：OK/NG項目印出「毛邊確實清除　標準 -」看起來很怪，那個 - 只是
+    // std 欄位沒填的佔位符，OK/NG項目的「標準」本來就是項目名稱本身，不需要再印一次。
+    function qcAbStdPart(it){
+        if (it.type === 'OKNG') return '';
+        var tol=(it.up||it.lo)?('（公差 '+(it.up?'+'+it.up:'')+(it.lo?' / '+it.lo:'')+'）'):'';
+        return '　標準 '+(it.std||'-')+tol;
+    }
     function renderQcAbPick(){
         var rows = qcAbPickItems.map(function(it,idx){
-            var tol=(it.up||it.lo)?('（公差 '+(it.up?'+'+it.up:'')+(it.lo?' / '+it.lo:'')+'）'):'';
             var vals=qcAbItemValsText(it);
             return '<label class="qcab-pick-row'+(it.verdict==='NG'?' ng':'')+'">'+
                 '<input type="checkbox" class="qcab-pick-chk" data-i="'+idx+'" '+(qcAbPickSel[idx]?'checked':'')+'> '+
-                '<b>'+(idx+1)+'. '+esc(it.name||'（未命名項目）')+'</b>　標準 '+esc(it.std||'-')+esc(tol)+
+                '<b>'+(idx+1)+'. '+esc(it.name||'（未命名項目）')+'</b>'+esc(qcAbStdPart(it))+
                 (vals?('　實測：'+esc(vals)):'')+(it.verdict==='NG'?' <span class="label label-danger">NG</span>':'')+
                 '</label>';
         }).join('');
@@ -6232,26 +6196,15 @@ $(function(){
     $('#btnQcAbPickGo').on('click', function(){
         var sel = Object.keys(qcAbPickSel).map(Number).sort(function(a,b){ return a-b; });
         if(!sel.length){ alert('請至少勾選一個量測項目列入異常單。'); return; }
-        var catId = 0;
-        if (qcAbPickCatsLoaded) {
-            if (qcAbPickCats.length > 1) {
-                catId = parseInt($('#qcAbPickCat').val()) || 0;
-                if (!catId) { alert('請先選擇要歸入的類別。'); return; }
-            } else if (!qcAbPickCats.length) {
-                alert('尚未設定「線上檢驗NG自動開立」要歸入哪一個異常單類別，請先到「品質異常處理單」清單頁的「設定 → 異常單類別」勾選至少一個類別。');
-                return;
-            }
-        }
         var measures = sel.map(function(idx){
             var it=qcAbPickItems[idx]||{};
-            var tol=(it.up||it.lo)?('（公差 '+(it.up?'+'+it.up:'')+(it.lo?' / '+it.lo:'')+'）'):'';
-            return { dim_name:(it.name||'')+'　標準 '+(it.std||'-')+tol,
+            return { dim_name:(it.name||'')+qcAbStdPart(it),
                      vals:(it.samples||[]).map(function(sv){ return (sv && sv.v!=null) ? String(sv.v) : ''; }).slice(0,12) };
         });
         var $btn=$(this).prop('disabled',true);
         $.post('../../src/store/QaAbnormal_API.php', {
             action:'auto_open_from_qc', csrf:QAB_CSRF, qc_form_id:qcAbPickFormId,
-            measures: JSON.stringify(measures), selected: JSON.stringify(sel), cat_id: catId
+            measures: JSON.stringify(measures), selected: JSON.stringify(sel)
         }, function(res){
             $btn.prop('disabled',false);
             if(!res.success){ alert(res.message||'開立失敗'); return; }
