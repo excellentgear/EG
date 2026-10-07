@@ -4756,6 +4756,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
     if ($_POST['action'] === 'save_spec_quick_btns') {
         try {
+            // 這個 op 原本完全沒有權限檢查（既有缺口，本次一併補上）
+            if (!_mdPerm('spec_quick_btn', 'edit', $can_dict_edit)) throw new Exception('無修改權限（需 A 或 CDRU）');
             $labels = json_decode($_POST['labels'] ?? '[]', true);
             if (!is_array($labels)) $labels = [];
             $labels = array_slice(array_map(function($s){ return mb_substr(trim((string)$s), 0, 12); }, $labels), 0, 12);
@@ -6320,8 +6322,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 儲存製程備註 ────────────────────────────────────────────────────
     if ($_POST['action'] === 'save_process_note') {
         try {
-            if (!$can_proc_edit) throw new Exception('無備註編輯權限（需 A 或含D權限）');
             $note_id = intval($_POST['note_id'] ?? 0);
+            if (!_mdPerm('process_note', $note_id ? 'edit' : 'add', $can_proc_edit)) throw new Exception('無備註'.($note_id?'編輯':'新增').'權限（需 A 或含D權限）');
             $pno     = intval($_POST['process_no']);
             $nt      = in_array($_POST['note_type']??'', ['oper','design']) ? $_POST['note_type'] : 'oper';
             $text    = trim($_POST['note_text'] ?? '');
@@ -6354,7 +6356,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($_POST['action'] === 'set_process_note_void') {
         try {
             // 前端只對有編輯權限者顯示按鈕，這裡一定要再擋一次（鐵律8）
-            if (!$can_proc_edit) throw new Exception('無備註編輯權限（需 A 或含D權限）');
+            if (!_mdPerm('process_note', 'edit', $can_proc_edit)) throw new Exception('無備註編輯權限（需 A 或含D權限）');
             $note_id = intval($_POST['note_id'] ?? 0);
             $to_void = (string)($_POST['is_void'] ?? '') === '1';
             if (!$note_id) throw new Exception('備註不可為空');
@@ -6395,7 +6397,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 刪除製程備註 ────────────────────────────────────────────────────
     if ($_POST['action'] === 'delete_process_note') {
         try {
-            if (!$can_proc_edit) throw new Exception('無刪除備註權限');
+            if (!_mdPerm('process_note', 'delete', $can_proc_edit)) throw new Exception('無刪除備註權限');
             $note_id = intval($_POST['note_id']);
             // 只有建立者或A權限可刪除；同時取得 pno/type 供審計紀錄使用
             $ownQ3 = $pdo->prepare("SELECT created_by_id, process_no_id, note_type FROM process_notes WHERE note_id=?");
@@ -6423,7 +6425,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 複製製程備註 ────────────────────────────────────────────────────
     if ($_POST['action'] === 'copy_process_notes') {
         try {
-            if (!$can_proc_edit) throw new Exception('無備註操作權限');
+            if (!_mdPerm('process_note', 'add', $can_proc_edit)) throw new Exception('無備註操作權限');
             $src_pno   = intval($_POST['src_pno']);
             $dst_pno   = intval($_POST['dst_pno']);
             $types_raw = trim($_POST['copy_types'] ?? '');
@@ -6505,7 +6507,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $sQ->execute([$pno]);
                 echo json_encode(['success'=>true,'as_dst'=>$dQ->fetchAll(PDO::FETCH_ASSOC),'as_src'=>$sQ->fetchAll(PDO::FETCH_ASSOC)]);
             } elseif ($op_code === 'set') {
-                if (!$can_proc_edit) throw new Exception('無連動設定權限');
+                if (!_mdPerm('process_note', 'edit', $can_proc_edit)) throw new Exception('無連動設定權限');
                 $src_pno   = intval($_POST['src_pno']);
                 $dst_pno   = intval($_POST['dst_pno']);
                 $types_raw = trim($_POST['link_types'] ?? '');
@@ -6522,7 +6524,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 _log_audit($pdo,'insert','process_notes',"link:src{$src_pno}→dst{$dst_pno}","{$types_raw}",null,$uid,$op);
                 echo json_encode(['success'=>true]);
             } elseif ($op_code === 'unlink') {
-                if (!$can_proc_edit) throw new Exception('無連動設定權限');
+                if (!_mdPerm('process_note', 'edit', $can_proc_edit)) throw new Exception('無連動設定權限');
                 $link_id = intval($_POST['link_id']);
                 $dst_pno = intval($_POST['dst_pno']);
                 $lnk = $pdo->prepare("SELECT src_pno, link_type FROM process_note_links WHERE link_id=? AND dst_pno=?");
@@ -6572,8 +6574,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 儲存製程（新增/編輯 process_no）─────────────────────────────────
     if ($_POST['action'] === 'save_process') {
         try {
-            if (!$can_proc_edit) throw new Exception('無新增/修改製程權限（需 A 或含D權限）');
             $is_new       = intval($_POST['is_new'] ?? 0);
+            if (!_mdPerm('process_no', $is_new ? 'add' : 'edit', $can_proc_edit)) throw new Exception('無'.($is_new?'新增':'修改').'製程權限（需 A 或含D權限）');
             $pno          = intval($_POST['process_no']);
             $pname        = trim($_POST['process_name'] ?? '');
             $tid_raw      = trim($_POST['type_ids'] ?? '[]');
@@ -6614,7 +6616,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 刪除製程（檢查使用情況）──────────────────────────────────────────
     if ($_POST['action'] === 'delete_process') {
         try {
-            if (!$can_proc_edit) throw new Exception('無刪除製程權限（需 A 或含D權限）');
+            if (!_mdPerm('process_no', 'delete', $can_proc_edit)) throw new Exception('無刪除製程權限（需 A 或含D權限）');
             $pno = intval($_POST['process_no']);
             $blocks = [];
             $chks = [
@@ -6758,7 +6760,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 批次修改製程大類 ──────────────────────────────────────────────────
     if ($_POST['action'] === 'batch_process_type') {
         try {
-            if (!$can_proc_edit) throw new Exception('無批次修改製程大類權限（需 A 或含D權限）');
+            if (!_mdPerm('process_no', 'edit', $can_proc_edit)) throw new Exception('無批次修改製程大類權限（需 A 或含D權限）');
             $pnos    = array_values(array_filter(array_map('intval', json_decode($_POST['process_nos']??'[]', true) ?: [])));
             $add_tid = intval($_POST['add_type_id'] ?? 0);
             $rm_tid  = intval($_POST['rm_type_id']  ?? 0);
@@ -6785,7 +6787,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 上傳備註圖片（備註需先儲存取得 note_id）──────────────────────────
     if ($_POST['action'] === 'upload_note_image') {
         try {
-            if (!$can_edit_design) throw new Exception('無上傳圖片權限');
+            if (!_mdPerm('design_note', 'add', $can_edit_design)) throw new Exception('無上傳圖片權限');
             $allowed_types = ['process_oper','process_design','part_design','customer_design'];
             $nt      = trim($_POST['note_type'] ?? '');
             $note_id = intval($_POST['note_id'] ?? 0);
@@ -6812,7 +6814,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 刪除備註圖片 ────────────────────────────────────────────────────
     if ($_POST['action'] === 'delete_note_image') {
         try {
-            if (!$can_edit_design) throw new Exception('無刪除圖片權限');
+            if (!_mdPerm('design_note', 'delete', $can_edit_design)) throw new Exception('無刪除圖片權限');
             $img_id = intval($_POST['img_id']);
             $row = $pdo->prepare("SELECT file_name FROM note_images WHERE img_id=?");
             $row->execute([$img_id]);
@@ -6827,7 +6829,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 設計備註（料號/客戶）──────────────────────────────────────────
     if ($_POST['action'] === 'get_design_notes') {
         try {
-            if (!$can_see_design) throw new Exception('無查看設計備註權限');
+            if (!_mdPerm('design_note', 'view', $can_see_design)) throw new Exception('無查看設計備註權限');
             $ttype = in_array($_POST['target_type']??'', ['part','customer']) ? $_POST['target_type'] : null;
             $tid   = trim($_POST['target_id'] ?? '');
             if (!$ttype || !$tid) throw new Exception('參數不完整');
@@ -6847,8 +6849,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     if ($_POST['action'] === 'save_design_note') {
         try {
-            if (!$can_edit_design) throw new Exception('無設計備註編輯權限');
             $note_id = intval($_POST['note_id'] ?? 0);
+            if (!_mdPerm('design_note', $note_id ? 'edit' : 'add', $can_edit_design)) throw new Exception('無設計備註'.($note_id?'編輯':'新增').'權限');
             $ttype   = in_array($_POST['target_type']??'', ['part','customer']) ? $_POST['target_type'] : null;
             $tid     = trim($_POST['target_id'] ?? '');
             $text    = trim($_POST['note_text'] ?? '');
@@ -6883,7 +6885,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     if ($_POST['action'] === 'delete_design_note') {
         try {
-            if (!$can_edit_design) throw new Exception('無刪除設計備註權限');
+            if (!_mdPerm('design_note', 'delete', $can_edit_design)) throw new Exception('無刪除設計備註權限');
             $note_id = intval($_POST['note_id']);
             // 取得備註資料（含建立者與文字供通知用）
             $ownQ = $pdo->prepare("SELECT created_by_id, updated_by_id, target_id, target_type AS db_ttype, note_text FROM design_notes WHERE note_id=?");
@@ -6941,8 +6943,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing, COALESCE(is_external_doc,0) AS is_external_doc, COALESCE(external_doc_name,'') AS external_doc_name, COALESCE(show_in_other_attach,0) AS show_in_other_attach, COALESCE(is_obsolete_mark,0) AS is_obsolete_mark, COALESCE(dwg_group,'') AS dwg_group, COALESCE(dwg_trigger,1) AS dwg_trigger, COALESCE(is_photo_album,0) AS is_photo_album, COALESCE(show_in_part_viewer,0) AS show_in_part_viewer, COALESCE(quote_bindable,0) AS quote_bindable, COALESCE(need_maker,0) AS need_maker FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
                 echo json_encode(['success'=>true,'data'=>$rows]);
             } elseif ($op_code === 'save') {
-                if (!$can_attach_cat_edit) throw new Exception('無編輯附件類別標籤權限（需 A/CDR/CDRU）');
                 $cat_id       = intval($_POST['cat_id'] ?? 0);
+                if (!_mdPerm('attach_cat', $cat_id ? 'edit' : 'add', $can_attach_cat_edit)) throw new Exception('無'.($cat_id?'編輯':'新增').'附件類別標籤權限（需 A/CDR/CDRU）');
                 $name         = trim($_POST['category_name'] ?? '');
                 $order        = intval($_POST['sort_order'] ?? 0);
                 $show_in_list = intval($_POST['show_in_list'] ?? 0) ? 1 : 0;
@@ -6992,13 +6994,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     echo json_encode(['success'=>true,'message'=>'已新增','cat_id'=>$new_id]);
                 }
             } elseif ($op_code === 'deactivate') {
-                if (!$can_attach_cat_edit) throw new Exception('無停用權限');
+                if (!_mdPerm('attach_cat', 'delete', $can_attach_cat_edit)) throw new Exception('無停用權限');
                 $cat_id = intval($_POST['cat_id'] ?? 0);
                 $pdo->prepare("UPDATE quotation_file_categories SET is_active=0 WHERE id=?")->execute([$cat_id]);
                 _log_audit($pdo,'delete','dict','attach-cat:'.$cat_id,'停用',null,$uid,_get_operator($pdo,$uid));
                 echo json_encode(['success'=>true,'message'=>'已停用']);
             } elseif ($op_code === 'reorder') {
-                if (!$can_attach_cat_edit) throw new Exception('無排序權限');
+                if (!_mdPerm('attach_cat', 'edit', $can_attach_cat_edit)) throw new Exception('無排序權限');
                 $ids = json_decode($_POST['ids'] ?? '[]', true);
                 if (is_array($ids)) {
                     $stmt = $pdo->prepare("UPDATE quotation_file_categories SET sort_order=? WHERE id=?");
@@ -7035,8 +7037,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $rows = $pdo->query("SELECT * FROM dict_gear_quality_ref ORDER BY sort_order, quality_ref_id")->fetchAll(PDO::FETCH_ASSOC);
                 echo json_encode(['success'=>true,'data'=>$rows]);
             } elseif ($op_code === 'save_ref_row') {
-                if (!$can_dict_edit) throw new Exception('無修改權限（需 A 或 CDRU）');
                 $rid  = intval($_POST['quality_ref_id'] ?? 0);
+                if (!_mdPerm('gear_quality', $rid ? 'edit' : 'add', $can_dict_edit)) throw new Exception('無'.($rid?'修改':'新增').'權限（需 A 或 CDRU）');
                 $to_int_or_null = function($k) { $v = trim($_POST[$k] ?? ''); return ($v !== '' && is_numeric($v)) ? intval($v) : null; };
                 $iso  = $to_int_or_null('iso_grade');
                 $din  = $to_int_or_null('din_grade');
@@ -7053,7 +7055,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 _log_audit($pdo,'save','dict','gear-quality-ref:'.$rid,'齒輪等級對照',null,$uid,$op_name);
                 echo json_encode(['success'=>true,'quality_ref_id'=>$rid]);
             } elseif ($op_code === 'delete_ref_row') {
-                if (!$can_dict_edit) throw new Exception('無刪除權限（需 A 或 CDRU）');
+                if (!_mdPerm('gear_quality', 'delete', $can_dict_edit)) throw new Exception('無刪除權限（需 A 或 CDRU）');
                 $rid = intval($_POST['quality_ref_id'] ?? 0);
                 if ($rid) $pdo->prepare("DELETE FROM dict_gear_quality_ref WHERE quality_ref_id=?")->execute([$rid]);
                 _log_audit($pdo,'delete','dict','gear-quality-ref:'.$rid,'齒輪等級對照',null,$uid,_get_operator($pdo,$uid));
@@ -7064,7 +7066,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'grade' => _get_setting($pdo,'gear_quality_default_grade','')
                 ]]);
             } elseif ($op_code === 'save_default') {
-                if (!$can_dict_edit) throw new Exception('無修改權限（需 A 或 CDRU）');
+                if (!_mdPerm('gear_quality', 'edit', $can_dict_edit)) throw new Exception('無修改權限（需 A 或 CDRU）');
                 $std   = trim($_POST['std'] ?? '');
                 $grade = trim($_POST['grade'] ?? '');
                 if ($std !== '' && !in_array($std, ['JIS','ISO','DIN','AGMA'])) throw new Exception('無效的等級標準');
@@ -7088,7 +7090,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 foreach ($keys as $k) { $result[$k] = _get_setting($pdo, $k); }
                 echo json_encode(['success'=>true,'data'=>$result]);
             } elseif ($op_code === 'save') {
-                if (!$can_dict_edit) throw new Exception('無系統設定修改權限（需 A 或 CDRU）');
+                if (!_mdPerm('sys_settings', 'edit', $can_dict_edit)) throw new Exception('無系統設定修改權限（需 A 或 CDRU）');
                 $op = _get_operator($pdo, $uid);
                 $allowed_keys = ['notes_nas_dir','notes_url_dir','default_settlement_mode','default_settlement_day','default_payment_method','default_net_days','vendor_default_settlement_mode','vendor_default_settlement_day','vendor_default_payment_method','vendor_default_net_days','cust_default_settlement_mode','cust_default_settlement_day','cust_default_payment_method','cust_default_net_days'];
                 $label_map = ['notes_nas_dir'=>'NAS路徑','notes_url_dir'=>'URL路徑','default_settlement_mode'=>'預設結帳模式','default_settlement_day'=>'預設結帳日','default_payment_method'=>'預設付款方式','default_net_days'=>'預設月結天數','vendor_default_settlement_mode'=>'廠商預設結帳模式','vendor_default_settlement_day'=>'廠商預設結帳日','vendor_default_payment_method'=>'廠商預設付款方式','vendor_default_net_days'=>'廠商預設月結天數','cust_default_settlement_mode'=>'客戶預設結帳模式','cust_default_settlement_day'=>'客戶預設結帳日','cust_default_payment_method'=>'客戶預設付款方式','cust_default_net_days'=>'客戶預設月結天數'];
@@ -7609,6 +7611,10 @@ body { background:#F6F1EA; }
             ['mdata_process_note_add','製程備註：新增'],
             ['mdata_process_note_edit','製程備註：編輯'],
             ['mdata_process_note_delete','製程備註：刪除'],
+            ['mdata_process_no_view','製程主檔(process_no)：檢視'],
+            ['mdata_process_no_add','製程主檔(process_no)：新增'],
+            ['mdata_process_no_edit','製程主檔(process_no)：編輯'],
+            ['mdata_process_no_delete','製程主檔(process_no)：刪除'],
             ['mdata_design_note_view','設計備註：檢視'],
             ['mdata_design_note_add','設計備註：新增'],
             ['mdata_design_note_edit','設計備註：編輯'],
