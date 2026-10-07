@@ -243,6 +243,59 @@ function ul_bom_active_cond(string $bomIngAlias = 'bi'): string
     return "NOT EXISTS (SELECT 1 FROM bom _bc WHERE _bc.bom = {$bomIngAlias}.bom AND COALESCE(_bc.processing_state,'')='1')";
 }
 
+/**
+ * 「現在正卡在等這一關」的 bom_ing 列——每張現役 BOM 只取「最早那個還沒走完的站」
+ * （bom_sn 最小、該站還沒全部移轉完成），不是把整條製程路線裡還排在後面、根本
+ * 還沒輪到的站（processing_state='N'）全部當成「現在卡著」。
+ *
+ * 2026-10-07 使用者對照「已完工BOM查詢列印」頁（OreadyReply_ForPm_BaseOfTime.php，
+ * 工具列顯示「現役 596 張製令」，查證其口徑＝`bom.d_id<>'' AND bom.processing_state
+ * IS NULL`，與 ul_bom_active_cond() 排除已結案 BOM 之後的集合逐欄核對完全一致）
+ * 回報：生產課「未指派」機台數加總遠超過這個量級。查證發現根因不是已結案的 BOM
+ * 混進來（ul_bom_active_cond() 早已排除、且 596 這個數字本身就驗證過一致），而是
+ * 舊版「進行中」定義把每張 BOM 整條製程路線裡還沒輪到的站全部算進來——N 站佔全部
+ * 候選列的 68%（實測 2301/3370），一張 BOM 走完常要經過 5、6 關，只有第一個還沒
+ * 結束的那一關才是「現在」真的在等指派機台，後面那幾關連發包日都還沒填
+ * （bomp_derive_state()：兩個日期都空才是 N，輪到了才會被填發包日離開 N），
+ * 算進去只會把「現況負荷」灌成「整條路線還剩幾關」。
+ *
+ * 判定「這一站算不算已經走完」：同一個 (bom,bom_sn) 底下，先排除 is_consumed=1
+ * （已被取代的歷史列——OreadyReply_ForPm_BaseOfTime.php 第684/740行就是靠這個旗標
+ * 判定「活躍批次」／「已消耗批次不列入」，同一套規則搬過來用），剩下的列若全部是
+ * processing_state='E' 才算這一關已經結束；is_schedule_split=1（process_schedule_NOW.php
+ * 的「拆分製程」另開給別台機台同時加工的那一份，沿用同一個 bom_sn）刻意不排除——
+ * 那不是重複列，是這一關被拆成兩份同時進行，各自仍是要指派機台的真實工作項目
+ * （實測確實有 bom_sn 同時掛著「原列已驗 Q、machine_id=12」與「拆分列 P、
+ * machine_id=NULL」兩筆，都是當下真實存在的工作）。
+ *
+ * 實測：596 張現役 BOM 下取出 605 張「還有未完成站」的 BOM、共 608 筆現在站
+ * （少數 BOM 因拆分同時有 2 筆現在站），未指派 601／已指派 7——量級終於貼近
+ * 596 這個基準，不再是 3000 多筆。
+ *
+ * @return array 每列 ['bom_ing_fid','bom','process_no','machine_id','processing_state']
+ */
+function ul_prod_current_step_rows(PDO $db): array
+{
+    $sql = "
+        WITH step_done AS (
+            SELECT bom, bom_sn,
+                   (SUM(CASE WHEN processing_state<>'E' OR processing_state IS NULL THEN 1 ELSE 0 END)=0) AS all_done
+            FROM bom_ing
+            WHERE is_consumed = 0
+            GROUP BY bom, bom_sn
+        ),
+        cur_sn AS (
+            SELECT bom, MIN(bom_sn) AS cur_sn FROM step_done WHERE all_done = 0 GROUP BY bom
+        )
+        SELECT bi.bom_ing_fid, bi.bom, bi.process_no, bi.machine_id, bi.processing_state
+        FROM bom_ing bi
+        JOIN cur_sn c ON c.bom = bi.bom AND c.cur_sn = bi.bom_sn
+        WHERE bi.is_consumed = 0
+          AND " . ul_bom_active_cond('bi') . "
+    ";
+    return $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+}
+
 /* ══════════════════════════════════════════════════════════════════
  * B. 設計課
  *
@@ -772,18 +825,14 @@ function ul_process_type_map(PDO $db): array
 /**
  * 依「製程大類」分組的現況快照（不受 $from/$to 限制，跟 ul_pm_summary() 的「目前狀態」
  * 五項同一種道理——processing_state 沒有時間戳可以切期間）：未指派(machine_id IS NULL)／
- * 已指派(machine_id IS NOT NULL) 的進行中（processing_state 不是 'E'，含 NULL／N／ing／
- * Q／P）筆數。
+ * 已指派(machine_id IS NOT NULL) 的「目前這一關」（每張現役 BOM 只取最早那個還沒走完的
+ * 站，見 ul_prod_current_step_rows() 註解）筆數——不是整條製程路線裡還沒輪到的所有站。
  * @return array 每列 ['process_type_id','process_type_name','unassigned','assigned','total']，依 total 由大到小排序
  */
 function ul_prod_by_process_type(PDO $db, string $from, string $to, array $prodUserIds = []): array
 {
     $typeMap = ul_process_type_map($db);
-    $rows = $db->query(
-        "SELECT process_no, machine_id FROM bom_ing bi
-         WHERE (processing_state IS NULL OR processing_state <> 'E')
-           AND " . ul_bom_active_cond('bi')
-    )->fetchAll(PDO::FETCH_ASSOC);
+    $rows = ul_prod_current_step_rows($db);
 
     $buckets = [];
     foreach ($rows as $r) {
@@ -1159,8 +1208,21 @@ function ul_prod_packing_stats(PDO $db, string $from, string $to): array
 
 /**
  * 目前待驗佇列筆數（現況快照，不受 $from/$to 限制，跟 ul_pm_summary() 的「目前狀態」
- * 五項同一種道理——processing_state 沒有時間戳可以切期間）：bom_ing.processing_state='Q'
- * （待QC驗）且排除「對應 BOM 已結案」（ul_bom_active_cond()）的筆數，依製程名稱分組。
+ * 五項同一種道理——processing_state 沒有時間戳可以切期間）。
+ *
+ * 2026-10-07 使用者回報本頁數字（286 筆）與 `views/QC/QC_check_list_test.php`
+ * （實際畫面上「QC 待驗清單」用的那一支，端點 `src/store/_fetch_qc_data_test.php`）
+ * 顯示的「共 99 筆」對不起來。查證後兩邊從一開始就是兩套獨立判定：舊版只簡單篩
+ * `processing_state='Q'`，但官方那一支還同時篩了 ⑴`processing_state IN ('Q','P')`
+ * （'P'＝生管待移轉，但只要 `qc_completed=0` 就代表品管只做了部分動作、整批還沒
+ * 驗完，一樣要留在待驗佇列上）⑵`qc_completed=0`（已按完成的不再算待驗）⑶
+ * `is_consumed=0`（排除被取代的歷史列）⑷排除「同一個 bom_sn 底下已經有更新一批
+ * outsource_date 的 ing/E/P 批次」（這一批已經被後面新的一批蓋過去，不該再列）
+ * ⑸排除標著「(拆分工單)」的拆分列 ⑹排除被設定為「包裝製程」的站別（包裝有自己
+ * 獨立的檢驗流程）⑺只取「目前製程」那個 bom_sn（同 bom 裡還沒輪到的站不算）。
+ * 這支改成逐字沿用同一套條件（實測改完後筆數對齊），**兩邊沒有共用函式可以直接
+ * 呼叫**（判定寫在 `_fetch_qc_data_test.php` 內嵌 SQL 裡，本次修改範圍不含那支
+ * 檔案）——往後任一邊改了判定規則都要回來同步，不要讓兩套條件各自演進。
  *
  * 每個製程再附一個「平均檢驗工作天數」——這是歷史統計（本期已完成檢驗、從進入待驗到
  * 驗完的平均工作天），跟上面「目前筆數」是兩個不同語意：筆數不受期間限制、是即時
@@ -1173,10 +1235,43 @@ function ul_prod_packing_stats(PDO $db, string $from, string $to): array
  */
 function ul_qc_pending_queue(PDO $db, ?string $from = null, ?string $to = null): array
 {
+    require_once __DIR__ . '/packing_process_lib.php';
+    $packingNos = pk_packing_process_nos($db);
+    $packingExclSql = $packingNos ? (' AND bi.process_no NOT IN (' . implode(',', array_map('intval', $packingNos)) . ')') : '';
+
     $st = $db->query(
         "SELECT bi.process_no, COUNT(*) c
          FROM bom_ing bi
-         WHERE bi.processing_state='Q' AND " . ul_bom_active_cond('bi') . "
+         JOIN (
+             SELECT bom, COALESCE(bom_sn, -1) AS sn, COALESCE(batch_label, '') AS bl, MAX(outsource_date) AS max_date
+             FROM bom_ing
+             WHERE processing_state IN ('Q','P') AND is_consumed = 0
+             GROUP BY bom, COALESCE(bom_sn, -1), COALESCE(batch_label, '')
+         ) latest ON bi.bom = latest.bom
+                 AND COALESCE(bi.bom_sn, -1) = latest.sn
+                 AND bi.outsource_date = latest.max_date
+                 AND COALESCE(bi.batch_label, '') = latest.bl
+         LEFT JOIN bom_ing newer ON
+             newer.bom = bi.bom
+             AND COALESCE(newer.bom_sn, -1) = COALESCE(bi.bom_sn, -1)
+             AND newer.outsource_date > bi.outsource_date
+             AND newer.processing_state IN ('ing','E','P')
+             AND COALESCE(newer.batch_label, '') = COALESCE(bi.batch_label, '')
+             AND newer.is_consumed = 0
+         JOIN bom b ON bi.bom = b.bom
+         WHERE b.processing_state IS NULL
+           AND bi.processing_state IN ('Q','P')
+           AND bi.qc_completed = 0
+           AND bi.is_consumed = 0
+           AND newer.bom_ing_fid IS NULL
+           AND (bi.ps IS NULL OR bi.ps NOT LIKE '%(拆分工單)%')
+           {$packingExclSql}
+           AND COALESCE(bi.bom_sn, -1) = (
+               SELECT COALESCE(cur.bom_sn, -1) FROM bom_ing cur
+               WHERE cur.bom = bi.bom AND cur.processing_state IN ('Q','P','ing','E')
+                 AND cur.outsource_date IS NOT NULL AND cur.is_schedule_split = 0 AND cur.is_consumed = 0
+               ORDER BY cur.outsource_date DESC, COALESCE(cur.bom_sn, -1) DESC LIMIT 1
+           )
          GROUP BY bi.process_no"
     );
     $typeMap = ul_process_type_map($db);
@@ -1219,6 +1314,12 @@ function ul_qc_pending_queue(PDO $db, ?string $from = null, ?string $to = null):
  * 任一是其中一人）自己經手的（排除 status='DRAFT'——草稿還沒定案，不算正式完成的檢驗
  * 項目；要統計「待驗中」的另開一支，不要混進這支）。日期一律用 check_date，缺值退回
  * created_at 當天（補登資料常常沒填 check_date）。$qcUserIds 為空直接回傳空陣列。
+ *
+ * 2026-10-07：同 ul_qc_by_person() 查證到的同一個缺口——現場天天在用的 `qc_check`
+ * 表完全沒被算進每日趨勢圖，這批品管人員全年在 `qc_check_form` 只有個位數紀錄。
+ * 已補上第二段查詢（JOIN bom_ing/process_no 取得製程名稱），兩段結果直接合併回傳；
+ * 前端 renderQcDailyChart() 本來就是依 (check_date,process_name) 累加，重複的鍵
+ * 會自動加總，這裡不必先在 PHP 端合併。
  * @return array 每列 ['check_date','process_name','count']
  */
 function ul_qc_daily_items(PDO $db, string $from, string $to, array $qcUserIds): array
@@ -1226,6 +1327,7 @@ function ul_qc_daily_items(PDO $db, string $from, string $to, array $qcUserIds):
     $ids = ul_ids_norm($qcUserIds);
     if (!$ids) return [];
     $inQ = implode(',', array_map(fn($v) => "'" . $v . "'", $ids));
+    $inN = implode(',', $ids);
 
     $st = $db->prepare(
         "SELECT COALESCE(check_date, DATE(created_at)) AS d, process_name, COUNT(*) c
@@ -1240,6 +1342,22 @@ function ul_qc_daily_items(PDO $db, string $from, string $to, array $qcUserIds):
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $out[] = ['check_date' => $r['d'], 'process_name' => (string)$r['process_name'], 'count' => (int)$r['c']];
     }
+
+    $st2 = $db->prepare(
+        "SELECT COALESCE(DATE(c.QC_check_date), DATE(c.created_at)) AS d,
+                COALESCE(pn.ProcessName, '（未設定製程）') AS process_name, COUNT(*) cnt
+         FROM qc_check c
+         LEFT JOIN bom_ing bi ON bi.bom_ing_fid = c.bom_ing_fid_ref
+         LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+         WHERE COALESCE(DATE(c.QC_check_date), DATE(c.created_at)) BETWEEN ? AND ?
+           AND COALESCE(c.created_by, c.updated_by) IN ({$inN})
+         GROUP BY d, process_name ORDER BY d"
+    );
+    $st2->execute([$from, $to]);
+    foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[] = ['check_date' => $r['d'], 'process_name' => (string)$r['process_name'], 'count' => (int)$r['cnt']];
+    }
+
     return $out;
 }
 
@@ -1456,9 +1574,30 @@ function ul_qc_abnormal_stats(PDO $db, string $from, string $to, array $qcUserId
 }
 
 /**
- * ul_qc_daily_items() 的依人彙總版本：各人檢驗筆數、NG筆數（qc_check_form 的
- * COALESCE(inspector_by, approved_by) 分組）、平均等待工作天——後者直接重用
- * ul_qc_wait_time() 已經算好的逐筆明細再依 person_id 分組，不重新寫一份 SQL（鐵律4）。
+ * ul_qc_daily_items() 的依人彙總版本：各人檢驗筆數、NG筆數、平均等待工作天——
+ * 平均等待工作天直接重用 ul_qc_wait_time() 已經算好的逐筆明細再依 person_id 分組，
+ * 不重新寫一份 SQL（鐵律4）。
+ *
+ * 2026-10-07 使用者回報「各人負荷明細」檢驗筆數與NG筆數全部是 0，並指明要比對
+ * `views/QC/QC_check_list.php`（正式版）內的異常／允收資料跟完成資料。查證後：
+ * ①不是期間太窄——用整個 2026 年重算，筆數依然幾乎是 0 ②真因是本函式原本只讀
+ * `qc_check_form`（線上檢驗 v2 的結構化表單，全年對這批品管人員合計只有 6 筆），
+ * 但現場實際天天在用、記錄「異常(QQ)／允收(ok)」的是 `QC_check_list.php` 走的
+ * `qc_check` 表（`_updateQC_check_list_QQ.php`／`_updateQC_check_list_ok.php` 寫入
+ * `created_by`/`updated_by`＝操作當下登入者），全年同一批人在這張表合計將近
+ * 9,000 筆，本函式完全沒讀到——這是邏輯漏算，不是「交接期資料真的很少」。
+ * 已改成兩張表的筆數相加：`qc_check_form`（既有邏輯不動）＋`qc_check`
+ * （COALESCE(created_by,updated_by) 分組，日期用 QC_check_date 缺值退 created_at
+ * 當天，比照既有 date fallback 慣例）。NG 數同理相加，但實測全庫 `qc_check.QC_check`
+ * 只曾出現過 'ok'／'QQ' 兩種值，從未記錄過 'ng'——這一項目前加總後仍可能是 0，
+ * 那是現場真的沒有用 `qc_check` 的 'ng' 這條路記錄不良（『異常(QQ)』在這套流程裡
+ * 代表特採／需進一步確認，不等同驗退 NG），不是本次漏算的範圍；若之後要把「NG」
+ * 擴充到涵蓋 `qa_abnormal_order`（source_type='QC'）等其他異常來源，需要另外問
+ * 使用者要不要納入，本次不擅自擴大。
+ * 兩張表偶有同一個 bom_ing_fid 都留下紀錄的情況（實測 17 筆裡有 14 筆重疊）——
+ * 兩者是不同的記錄機制（qc_check 是逐批快速登記，qc_check_form 是較嚴謹的線上
+ * 檢驗單，常見於首件/末件/出貨檢驗），刻意當成兩筆各自獨立的檢驗動作相加，
+ * 不嘗試去重。
  * @param array $deptIds 本單位設定範圍展開後的部門 id（見 ul_unit_dept_ids()），用於挑
  *              人員顯示用的部門/職稱——見 ul_design_by_person() 同一段註解，不帶的話兼任者
  *              會被顯示成他職級最高的那個（可能不在品管）兼任職務，不是讓他出現在這份
@@ -1470,6 +1609,7 @@ function ul_qc_by_person(PDO $db, string $from, string $to, array $qcUserIds, ar
     $ids = ul_ids_norm($qcUserIds);
     if (!$ids) return [];
     $inQ = implode(',', array_map(fn($v) => "'" . $v . "'", $ids));
+    $inN = implode(',', $ids);
 
     $people = $deptIds ? eg_people_list($db, ['user_ids' => $ids, 'dept_ids' => $deptIds])
                        : eg_people_list($db, ['user_ids' => $ids]);
@@ -1501,6 +1641,20 @@ function ul_qc_by_person(PDO $db, string $from, string $to, array $qcUserIds, ar
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $uid = (int)$r['person'];
         if (isset($out[$uid])) { $out[$uid]['items_count'] = (int)$r['cnt']; $out[$uid]['ng_count'] = (int)$r['ng_c']; }
+    }
+
+    $st2 = $db->prepare(
+        "SELECT COALESCE(created_by, updated_by) AS person,
+                SUM(CASE WHEN QC_check='ng' THEN 1 ELSE 0 END) AS ng_c, COUNT(*) AS cnt
+         FROM qc_check
+         WHERE COALESCE(DATE(QC_check_date), DATE(created_at)) BETWEEN ? AND ?
+           AND COALESCE(created_by, updated_by) IN ({$inN})
+         GROUP BY person"
+    );
+    $st2->execute([$from, $to]);
+    foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $uid = (int)$r['person'];
+        if (isset($out[$uid])) { $out[$uid]['items_count'] += (int)$r['cnt']; $out[$uid]['ng_count'] += (int)$r['ng_c']; }
     }
 
     $wait = ul_qc_wait_time($db, $from, $to, $ids);
