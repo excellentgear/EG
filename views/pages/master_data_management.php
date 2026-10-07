@@ -354,7 +354,7 @@ $db  = new DBConnection();
 $pdo = $db->getPDO();
 
 // ── Migration 版本鎖：版本符合時跳過所有 ALTER/CREATE，只跑一次 ──────────
-define('MDM_MIGRATION_VERSION', '20261007_02');   // 2026-10-07（二次）料號專用治具/通用治具(dict_workpiece_type.is_jig_type/show_jig + d_setting_jig_map)
+define('MDM_MIGRATION_VERSION', '20261007_03');   // 2026-10-07（三次）專用機台擴充：專用機台種類(d_setting_machine_type_map)/專用機型(d_setting_machine_model_map)
 $_mdm_skip_migration = false;
 try {
     // system_settings 可能尚不存在（第一次執行），用 try 保護
@@ -587,6 +587,36 @@ try {
         UNIQUE KEY uk_d_machine (d_id, machine_id),
         INDEX idx_d_id (d_id)
     ) COMMENT='料號↔專用機台對應，對應料號表單的專用機台欄位（來源為 machine_list）'");
+    /**
+     * d_setting_machine_type_map — 料號↔專用機台種類對應（綁的是製程大類本身，不是特定機台）
+     *  使用者 2026-10-07：「專用機台」原本只能綁到特定機台編號，但很多料號只是認定「哪幾種
+     *  製程大類的機台可以用」，不必也不應該限定到特定那一台。
+     *  d_id            → d_setting.d_id（料號）
+     *  process_type_id → process_type.process_type_id（製程大類，與 machine_list.machine_type_id 同一個對照）
+     */
+    $pdo->exec("CREATE TABLE IF NOT EXISTS d_setting_machine_type_map (
+        map_id          INT AUTO_INCREMENT PRIMARY KEY           COMMENT '主鍵',
+        d_id            INT NOT NULL                             COMMENT '料號，FK → d_setting.d_id',
+        process_type_id INT NOT NULL                             COMMENT '製程大類，FK → process_type.process_type_id',
+        sort_order      INT NOT NULL DEFAULT 0                   COMMENT '顯示排序',
+        UNIQUE KEY uk_d_ptype (d_id, process_type_id),
+        INDEX idx_d_id (d_id)
+    ) COMMENT='料號↔專用機台種類對應，綁定的是製程大類本身（來源為 process_type）'");
+    /**
+     * d_setting_machine_model_map — 料號↔專用機型對應（綁的是機台型號文字，不是特定機台編號）
+     *  machine_list.machine_model 只是自由文字欄位、沒有獨立主檔，故直接存文字值
+     *  （與 machine_id 不同，這裡沒有數字 id 可用，唯一鍵改用 d_id+文字本身）。
+     *  d_id          → d_setting.d_id（料號）
+     *  machine_model → machine_list.machine_model（機型文字，如 HGH250）
+     */
+    $pdo->exec("CREATE TABLE IF NOT EXISTS d_setting_machine_model_map (
+        map_id        INT AUTO_INCREMENT PRIMARY KEY             COMMENT '主鍵',
+        d_id          INT NOT NULL                               COMMENT '料號，FK → d_setting.d_id',
+        machine_model VARCHAR(100) NOT NULL                      COMMENT '機型文字，來源為 machine_list.machine_model',
+        sort_order    INT NOT NULL DEFAULT 0                     COMMENT '顯示排序',
+        UNIQUE KEY uk_d_model (d_id, machine_model),
+        INDEX idx_d_id (d_id)
+    ) COMMENT='料號↔專用機型對應，綁定的是機台型號文字本身（來源為 machine_list.machine_model）'");
     /**
      * d_setting_jig_map — 料號↔治具料號對應（皆指向 d_setting，jig_d_id 須為 is_jig_type=1 的工件種類）
      *  d_id     → d_setting.d_id（使用治具的那一方料號）
@@ -1622,6 +1652,8 @@ require_once __DIR__ . '/../../src/common/imgedit_visibility.php';
 eg_part_alias_ensure_table($pdo);
 // 移轉綁定前「查看完整綁定清單」沿用資料急救台的關聯掃描引擎，不重寫一套
 require_once __DIR__ . '/../../src/common/data_console_lib.php';
+// 專用機台的「機台編號／機台種類／機型」兩層挑選器資料來源（唯一實作，與 sop_sip 挑設備同款操作方式）
+require_once __DIR__ . '/../../src/common/machine_pick_lib.php';
 $_mdFeats = [];
 try { $_mdFeats = rbac_user_features($pdo, (int)$user_id); } catch (Exception $_e) {}
 $_mdRbacAll = in_array('all', $_mdFeats, true);
@@ -2509,6 +2541,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $mq->execute([$d_id]);
                 $row['machine_map'] = $mq->fetchAll(PDO::FETCH_ASSOC);
             } catch (Exception $ex) { $row['machine_map'] = []; }
+            // 專用機台種類對應（綁的是製程大類本身）
+            try {
+                $mtq = $pdo->prepare("SELECT mtm.process_type_id, COALESCE(pt.process_type,'') AS process_type_name
+                                      FROM d_setting_machine_type_map mtm LEFT JOIN process_type pt ON pt.process_type_id=mtm.process_type_id
+                                      WHERE mtm.d_id=? ORDER BY mtm.sort_order, mtm.map_id");
+                $mtq->execute([$d_id]);
+                $row['machine_type_map'] = $mtq->fetchAll(PDO::FETCH_ASSOC);
+            } catch (Exception $ex) { $row['machine_type_map'] = []; }
+            // 專用機型對應（綁的是機台型號文字）
+            try {
+                $mmq = $pdo->prepare("SELECT machine_model FROM d_setting_machine_model_map WHERE d_id=? ORDER BY sort_order, map_id");
+                $mmq->execute([$d_id]);
+                $row['machine_model_map'] = $mmq->fetchAll(PDO::FETCH_ASSOC);
+            } catch (Exception $ex) { $row['machine_model_map'] = []; }
             // 專用治具／通用治具對應（同一張表按 kind 分兩組回傳，畫面各自渲染）
             try {
                 $jq = $pdo->prepare("SELECT jm.jig_d_id, jm.kind, j.D_Setting_Id AS part_id, COALESCE(j.Spec_No,'') AS spec_no,
@@ -3031,6 +3077,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if ($mid <= 0 || isset($mm_seen[$mid])) continue;
                 $mm_seen[$mid] = true;
                 $ins_mm->execute([$d_id, $mid, $k]);
+            }
+
+            // ── 專用機台種類對應 ── d_setting_machine_type_map（綁定對象＝製程大類本身）
+            $mt_raw = trim($_POST['machine_type_map'] ?? '[]');
+            $mt_arr = json_decode($mt_raw, true) ?: [];
+            $pdo->prepare("DELETE FROM d_setting_machine_type_map WHERE d_id=?")->execute([$d_id]);
+            $ins_mt = $pdo->prepare("INSERT IGNORE INTO d_setting_machine_type_map (d_id, process_type_id, sort_order) VALUES (?,?,?)");
+            $mt_seen = [];
+            foreach (array_values($mt_arr) as $k => $mt) {
+                $ptid = intval($mt['process_type_id'] ?? 0);
+                if ($ptid <= 0 || isset($mt_seen[$ptid])) continue;
+                $mt_seen[$ptid] = true;
+                $ins_mt->execute([$d_id, $ptid, $k]);
+            }
+
+            // ── 專用機型對應 ── d_setting_machine_model_map（綁定對象＝機台型號文字）
+            $mo_raw = trim($_POST['machine_model_map'] ?? '[]');
+            $mo_arr = json_decode($mo_raw, true) ?: [];
+            $pdo->prepare("DELETE FROM d_setting_machine_model_map WHERE d_id=?")->execute([$d_id]);
+            $ins_mo = $pdo->prepare("INSERT IGNORE INTO d_setting_machine_model_map (d_id, machine_model, sort_order) VALUES (?,?,?)");
+            $mo_seen = [];
+            foreach (array_values($mo_arr) as $k => $mo) {
+                $model = trim((string)($mo['machine_model'] ?? ''));
+                if ($model === '' || isset($mo_seen[$model])) continue;
+                $mo_seen[$model] = true;
+                $ins_mo->execute([$d_id, $model, $k]);
             }
 
             // ── 專用治具／通用治具對應 ── d_setting_jig_map
@@ -3700,19 +3772,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
-    // ── 專用機台自動完成（料號表單用，來源 machine_list）──────────────────────
-    if ($_POST['action'] === 'search_machines_ac') {
+    // ── 專用機台兩層挑選器（料號表單用，機台編號／機台種類／機型三種模式共用一支）──
+    // 挑選方式與顯示內容比照 views/QA/sop_sip.php 的「挑使用設備」（使用者 2026-10-07 指定）。
+    if ($_POST['action'] === 'machine_pick_groups') {
         try {
+            $mode = trim($_POST['mode'] ?? 'machine');
+            if (!in_array($mode, ['machine','model','category'], true)) $mode = 'machine';
             $kw = trim($_POST['kw'] ?? '');
-            if ($kw === '') { echo json_encode(['success'=>true,'data'=>[]]); exit; }
-            $stmt = $pdo->prepare("SELECT ml.machine_id, COALESCE(ml.machine,'') AS machine_name, COALESCE(pt.process_type,'') AS machine_type, COALESCE(ml.field_no,'') AS field_no
-                                   FROM machine_list ml
-                                   LEFT JOIN process_type pt ON pt.process_type_id = ml.machine_type_id
-                                   WHERE (ml.machine LIKE :kw OR CAST(ml.machine_id AS CHAR) LIKE :kw OR ml.field_no LIKE :kw)
-                                     AND (ml.state IS NULL OR ml.state != 1)
-                                   ORDER BY ml.machine LIMIT 15");
-            $stmt->execute([':kw'=>"%$kw%"]);
-            echo json_encode(['success'=>true,'data'=>$stmt->fetchAll(PDO::FETCH_ASSOC)]);
+            echo json_encode(['success'=>true,'groups'=>eg_machine_pick_groups($pdo, $mode, $kw)]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
     }
@@ -4552,6 +4619,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 ['stock_safety_stock', "UPDATE stock_safety_stock SET d_id=?, d_setting_id=? WHERE d_setting_id=?", [$tds,$tgt_id,$src_id]],
                 ['d_setting_jig_map',        "UPDATE d_setting_jig_map SET d_id=? WHERE d_id=?", [$tgt_id,$src_id]],
                 ['d_setting_jig_map(治具方)', "UPDATE d_setting_jig_map SET jig_d_id=? WHERE jig_d_id=?", [$tgt_id,$src_id]],
+                ['d_setting_machine_type_map',  "UPDATE d_setting_machine_type_map SET d_id=? WHERE d_id=?", [$tgt_id,$src_id]],
+                ['d_setting_machine_model_map', "UPDATE d_setting_machine_model_map SET d_id=? WHERE d_id=?", [$tgt_id,$src_id]],
             ];
             foreach ($uniqueTables as [$label,$sql,$params]) {
                 try { $pdo->prepare($sql)->execute($params); }
@@ -7478,6 +7547,28 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 .pf-ac-dropdown { position:absolute; z-index:1060; left:0; right:0; background:#fff; border:1px solid #ddd; border-top:none; max-height:200px; overflow-y:auto; border-radius:0 0 6px 6px; box-shadow:0 4px 12px rgba(0,0,0,.12); }
 .pf-ac-dropdown .pf-ac-opt:hover { background:#f0f4ff; }
 .pf-ac-list:empty { display:none; }
+/* 專用機台兩層挑選器（機台編號/機台種類/機型共用）——視覺與操作完全比照 views/QA/sop_sip.php
+   的「挑使用設備」（.eqgrid/.eq-cat/.eq-no/.eq-chip），色系沿用該頁暖色調不跟本頁 --accent 青色混用，
+   使用者 2026-10-07 明確要求「選擇方式要跟 sop_sip.php 一樣」。 */
+.mpk-grid { display:flex; flex-wrap:wrap; gap:8px; }
+.mpk-grid button { min-width:120px; min-height:50px; border:1px solid #E4D3BC; background:#fff; color:#4A3524;
+                   border-radius:8px; padding:7px 11px; font-size:14px; font-weight:bold; text-align:center; }
+.mpk-grid button:hover { background:#F7E0BD; border-color:#C77C1A; }
+.mpk-grid button small { display:block; font-weight:normal; font-size:11px; color:#8a6a45; }
+.mpk-grid button.mpk-cat.has-sel { border-color:#C77C1A; background:#FFF3E2; }
+.mpk-grid button.mpk-item.on { background:#F0A24B; border-color:#C77C1A; }
+.mpk-grid button.mpk-item.on small { color:#6B4A22; }
+.mpk-sub { font-size:12.5px; color:#6B4423; margin:0 0 6px; }
+.mpk-picked { background:#FCF7F0; border:1px solid #E4D3BC; border-radius:6px; padding:5px 8px;
+              margin-bottom:8px; display:flex; flex-wrap:wrap; gap:4px; align-items:center;
+              min-height:28px; max-height:90px; overflow:auto; }
+.mpk-picked > b { flex:0 0 auto; }
+.mpk-chip { display:inline-flex; align-items:center; gap:3px; background:#fff; border:1px solid #C77C1A;
+            border-radius:10px; padding:0 3px 0 8px; font-size:12px; color:#4A3524; line-height:1.7; }
+.mpk-chip .c { font-size:11px; font-weight:normal; color:#8a6a45; }
+.mpk-chip .x { border:0; background:transparent; color:#C0703A; font-size:13px; line-height:1; padding:0 2px; cursor:pointer; }
+.mpk-chip .x:hover { color:#DD5138; }
+.mpk-none { color:#C0703A; font-style:italic; font-size:13px; }
 #proc-type-filter-group .fc.active { background:var(--accent); color:#fff; border-color:var(--accent); }
 .fc .fc-n { font-size:10px; opacity:.7; background:rgba(255,255,255,.2); border-radius:8px; padding:0 4px; margin-left:2px; }
 .filter-sub-row {
@@ -8610,15 +8701,31 @@ body { background:#F6F1EA; }
         </div>
     </div>
     <!-- 專用機台（可多選）→ d_setting_machine_map -->
+    <!-- 專用機台：機台編號／機台種類(製程大類)／機型，三種範圍各自多選，挑選方式比照 sop_sip.php 的
+         兩層挑選器(先點分類再點項目)。機台編號＝綁到特定那一台；機台種類＝綁到製程大類本身(這一類的
+         機台都可以用，不限定哪一台)；機型＝綁到機台型號文字(同型號的機台都可以用)。 -->
     <div class="col-md-6" id="pf-machine-group" style="display:none;">
         <div class="form-group">
-            <label style="font-size:12px;"><i class="fa fa-cogs" style="color:#888;margin-right:4px;"></i>專用機台 <span style="font-weight:normal;color:#aaa;font-size:11px;">（可多選）</span></label>
-            <div style="position:relative;">
-                <input type="text" class="form-control input-sm" id="pf-ac-machine-input" placeholder="輸入機台名稱搜尋…" autocomplete="off" oninput="pfAcSearch('machine',this.value)" onkeydown="pfAcInputKey(event,'machine')">
-                <div id="pf-ac-machine-dropdown" class="pf-ac-dropdown" style="display:none;"></div>
-            </div>
-            <div id="pf-ac-machine-list" class="pf-ac-list" style="margin-top:5px;"></div>
+            <label style="font-size:12px;"><i class="fa fa-cogs" style="color:#888;margin-right:4px;"></i>專用機台 <span style="font-weight:normal;color:#aaa;font-size:11px;">（機台編號，可多選）</span></label>
+            <div id="mpk-list-machine" class="pf-ac-list" style="margin-top:2px;"></div>
+            <button type="button" class="btn btn-xs btn-default" onclick="mpkOpen('machine')" style="margin-top:4px;"><i class="fa fa-plus"></i> 挑選機台</button>
             <input type="hidden" id="pf-machine-map" name="machine_map" value="[]">
+        </div>
+    </div>
+    <div class="col-md-6" id="pf-machine-type-group" style="display:none;">
+        <div class="form-group">
+            <label style="font-size:12px;"><i class="fa fa-th-large" style="color:#888;margin-right:4px;"></i>專用機台種類 <span style="font-weight:normal;color:#aaa;font-size:11px;">（依製程大類，可多選，不限定特定機台）</span></label>
+            <div id="mpk-list-category" class="pf-ac-list" style="margin-top:2px;"></div>
+            <button type="button" class="btn btn-xs btn-default" onclick="mpkOpen('category')" style="margin-top:4px;"><i class="fa fa-plus"></i> 挑選機台種類</button>
+            <input type="hidden" id="pf-machine-type-map" name="machine_type_map" value="[]">
+        </div>
+    </div>
+    <div class="col-md-6" id="pf-machine-model-group" style="display:none;">
+        <div class="form-group">
+            <label style="font-size:12px;"><i class="fa fa-cube" style="color:#888;margin-right:4px;"></i>專用機型 <span style="font-weight:normal;color:#aaa;font-size:11px;">（依機台型號，可多選，同型號的機台都可用）</span></label>
+            <div id="mpk-list-model" class="pf-ac-list" style="margin-top:2px;"></div>
+            <button type="button" class="btn btn-xs btn-default" onclick="mpkOpen('model')" style="margin-top:4px;"><i class="fa fa-plus"></i> 挑選機型</button>
+            <input type="hidden" id="pf-machine-model-map" name="machine_model_map" value="[]">
         </div>
     </div>
     <!-- 專用治具／通用治具（可多選，來源為已標記「可被認定為治具」的現有料號）→ d_setting_jig_map -->
@@ -8842,6 +8949,23 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
     <span style="font-size:12px;color:#555;margin-right:auto;">已選 <b id="jp-sel-count">0</b> 項</span>
     <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">取消</button>
     <button type="button" class="btn btn-primary btn-sm" onclick="applyJigPick()"><i class="fa fa-check"></i> 套用</button>
+</div>
+</div></div></div>
+<!-- 專用機台的三種範圍（機台編號/機台種類/機型）共用同一個跳窗，由 mpkOpen(mode) 決定目前是哪一種。
+     操作方式＝兩層挑選器（①先點分類=製程大類 ②再點項目），打字可跨分類直接搜尋——
+     比照 views/QA/sop_sip.php 的「挑使用設備」(使用者 2026-10-07 指定要跟它一樣)。
+     機台種類模式沒有第二層：候選本身就是製程大類，一步到位列出全部。 -->
+<div class="modal fade" id="machinePickModal" tabindex="-1" style="z-index:1056;"><div class="modal-dialog" style="width:720px;max-width:96vw;"><div class="modal-content">
+<div class="modal-header" style="background:#2A3F54;color:#fff;padding:10px 16px;"><button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:1;">&times;</button><h4 class="modal-title" id="mpk-title" style="font-size:14px;"><i class="fa fa-cogs"></i> 挑選機台</h4></div>
+<div class="modal-body" style="padding:14px;">
+<div id="mpk-picked" class="mpk-picked"></div>
+<input type="text" id="mpk-kw" class="form-control input-sm" placeholder="打分類、型號、名稱或編號直接搜尋" style="margin-bottom:8px;">
+<div id="mpk-pane"><span class="muted-help">載入中…</span></div>
+</div>
+<div class="modal-footer" style="padding:8px 14px;display:flex;align-items:center;">
+    <span style="font-size:12px;color:#555;margin-right:auto;">已選 <b id="mpk-sel-count">0</b> 項</span>
+    <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">取消</button>
+    <button type="button" class="btn btn-primary btn-sm" onclick="mpkApply()"><i class="fa fa-check"></i> 套用</button>
 </div>
 </div></div></div>
 <div class="modal fade" id="customerModal" tabindex="-1">
@@ -14596,20 +14720,20 @@ function syncPartSubChips() {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// 料號表單：廠商 / 專用料號 / 專用機台 多選自動完成元件（廠商可含每廠商單價）
+// 料號表單：廠商 / 專用料號 多選自動完成元件（廠商可含每廠商單價）
 //   vendor  → d_setting_vendor_map (maker_id_no, price)
 //   partno  → d_setting_dedicated_part_map (ref_d_id，來源 d_setting)
-//   machine → d_setting_machine_map (machine_id)
-// 顯示與否由工件種類字典(partTypeMeta)的 show_vendor/show_part_no/show_machine/show_price 決定
+// 顯示與否由工件種類字典(partTypeMeta)的 show_vendor/show_part_no/show_price 決定
+// 專用機台（機台編號/機台種類/機型）2026-10-08 起改走兩層挑選器，見下方 mpk* 系列函式，
+// 不再沿用這套打字下拉自動完成（候選要能依製程大類分組，flat dropdown 無法勝任）。
 // ════════════════════════════════════════════════════════════════════════
 var _pfAcCfg = {
     vendor:  { endpoint:'search_makers_ac',   hidden:'pf-vendor-map',        input:'pf-ac-vendor-input',  dropdown:'pf-ac-vendor-dropdown',  list:'pf-ac-vendor-list' },
-    partno:  { endpoint:'search_dsetting_ac', hidden:'pf-dedicated-part-map',input:'pf-ac-partno-input',  dropdown:'pf-ac-partno-dropdown',  list:'pf-ac-partno-list' },
-    machine: { endpoint:'search_machines_ac', hidden:'pf-machine-map',       input:'pf-ac-machine-input', dropdown:'pf-ac-machine-dropdown', list:'pf-ac-machine-list' }
+    partno:  { endpoint:'search_dsetting_ac', hidden:'pf-dedicated-part-map',input:'pf-ac-partno-input',  dropdown:'pf-ac-partno-dropdown',  list:'pf-ac-partno-list' }
 };
-var _pfAcData    = { vendor:[], partno:[], machine:[] }; // 已選清單
-var _pfAcResults = { vendor:[], partno:[], machine:[] }; // 下拉暫存結果
-var _pfAcTimer   = { vendor:null, partno:null, machine:null };
+var _pfAcData    = { vendor:[], partno:[] }; // 已選清單
+var _pfAcResults = { vendor:[], partno:[] }; // 下拉暫存結果
+var _pfAcTimer   = { vendor:null, partno:null };
 var _pfAcShowPrice = false; // 廠商是否顯示價格欄（依工件種類 show_price）
 
 function _pfEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -14619,10 +14743,7 @@ function _pfAcNormalize(field, row) {
         var nm = row.maker_short || row.maker_full || '';
         return { id:String(row.maker_id_no), label:(nm? nm+' ' : '')+'['+row.maker_id_no+']', price:'' };
     }
-    if (field==='partno') {
-        return { id:String(row.d_id), label:row.part_id + (row.spec_no? ' / '+row.spec_no : '') + (row.client_name? '（'+row.client_name+'）':'') };
-    }
-    return { id:String(row.machine_id), label:row.machine_name + (row.field_no? ' ['+row.field_no+']':'') + (row.machine_type? ' ('+row.machine_type+')':'') };
+    return { id:String(row.d_id), label:row.part_id + (row.spec_no? ' / '+row.spec_no : '') + (row.client_name? '（'+row.client_name+'）':'') };
 }
 
 function pfAcSearch(field, kw) {
@@ -14725,7 +14846,7 @@ function pfAcInputKey(e, field) {
     }
 }
 
-// 依工件種類字典設定，顯示/隱藏 廠商 / 專用料號 / 專用機台 / 價格 欄位
+// 依工件種類字典設定，顯示/隱藏 廠商 / 專用料號 / 專用機台(三種範圍) / 價格 / 治具 欄位
 function applyPartExtraFieldVisibility(typeCode) {
     var meta = partTypeMeta[typeCode] || {show_vendor:false,show_part_no:false,show_machine:false,show_price:false,show_jig:false};
     _pfAcShowPrice = !!meta.show_price;
@@ -14734,29 +14855,34 @@ function applyPartExtraFieldVisibility(typeCode) {
     var vg=document.getElementById('pf-vendor-group');
     var pg=document.getElementById('pf-partno-group');
     var mg=document.getElementById('pf-machine-group');
+    var mtg=document.getElementById('pf-machine-type-group');
+    var mog=document.getElementById('pf-machine-model-group');
     var jgd=document.getElementById('pf-jig-dedicated-group');
     var jgg=document.getElementById('pf-jig-general-group');
     var wrap=document.getElementById('pf-extra-fields');
     if (vg) vg.style.display = vendorVisible ? '' : 'none';
     if (pg) pg.style.display = meta.show_part_no ? '' : 'none';
     if (mg) mg.style.display = meta.show_machine ? '' : 'none';
+    if (mtg) mtg.style.display = meta.show_machine ? '' : 'none';
+    if (mog) mog.style.display = meta.show_machine ? '' : 'none';
     if (jgd) jgd.style.display = meta.show_jig ? '' : 'none';
     if (jgg) jgg.style.display = meta.show_jig ? '' : 'none';
     if (wrap) wrap.style.display = (vendorVisible||meta.show_part_no||meta.show_machine||meta.show_jig) ? '' : 'none';
     _pfAcRenderList('vendor'); // 價格欄顯示狀態可能改變，重繪廠商清單
 }
 
-// 清空三個欄位（新增料號時呼叫）
+// 清空欄位（新增料號時呼叫）
 function pfAcReset() {
-    _pfAcData    = { vendor:[], partno:[], machine:[] };
-    _pfAcResults = { vendor:[], partno:[], machine:[] };
-    ['vendor','partno','machine'].forEach(function(f){
+    _pfAcData    = { vendor:[], partno:[] };
+    _pfAcResults = { vendor:[], partno:[] };
+    ['vendor','partno'].forEach(function(f){
         var cfg=_pfAcCfg[f];
         var inp=document.getElementById(cfg.input); if(inp) inp.value='';
         var dd=document.getElementById(cfg.dropdown); if(dd){dd.style.display='none';dd.innerHTML='';}
         _pfAcRenderList(f); _pfAcSync(f);
     });
     jigReset();
+    mpkReset();
 }
 
 // 由 get_part 回傳資料載入既有選取（編輯料號時呼叫）
@@ -14768,11 +14894,9 @@ function pfAcLoadFromPart(d) {
     _pfAcData.partno  = (d.dedicated_part_map||[]).map(function(p){
         return { id:String(p.ref_d_id), label:p.part_id + (p.spec_no? ' / '+p.spec_no : '') + (p.client_name? '（'+p.client_name+'）':'') };
     });
-    _pfAcData.machine = (d.machine_map||[]).map(function(m){
-        return { id:String(m.machine_id), label:m.machine_name + (m.field_no? ' ['+m.field_no+']':'') + (m.machine_type? ' ('+m.machine_type+')':'') };
-    });
-    ['vendor','partno','machine'].forEach(function(f){ _pfAcRenderList(f); _pfAcSync(f); });
+    ['vendor','partno'].forEach(function(f){ _pfAcRenderList(f); _pfAcSync(f); });
     jigLoadFromPart(d);
+    mpkLoadFromPart(d);
 }
 
 // ════════ 專用治具／通用治具（d_setting_jig_map） ═══════════════════════════
@@ -14915,9 +15039,182 @@ function applyJigPick() {
     $('#jigPickModal').modal('hide');
 }
 
+// ════════ 專用機台（機台編號／機台種類／機型）兩層挑選器 ══════════════════════
+// 操作方式比照 views/QA/sop_sip.php 的「挑使用設備」(ssPick)：①先點分類(製程大類)
+// ②再點項目，也可以直接打字跨分類搜尋（使用者 2026-10-07 明確指定要跟那一頁一樣）。
+// 資料來源 machine_pick_groups action（唯一實作 src/common/machine_pick_lib.php），
+// 「機台種類」模式沒有第二層——候選本身就是製程大類，一步到位列出全部。
+var MPK = { mode:'machine', groups:[], sel:{}, order:[], cat:null };
+var MPK_SEL_STORE = { machine:{}, category:{}, model:{} };  // 各範圍各自的已選清單（切換範圍不互相影響）
+var MPK_SEL_ORDER = { machine:[], category:[], model:[] };
+function mpkFieldOf(mode)   { return { machine:'pf-machine-map', category:'pf-machine-type-map', model:'pf-machine-model-map' }[mode]; }
+function mpkListBoxOf(mode) { return { machine:'mpk-list-machine', category:'mpk-list-category', model:'mpk-list-model' }[mode]; }
+function mpkTitleOf(mode)   { return { machine:'挑選機台（機台編號）', category:'挑選機台種類（製程大類）', model:'挑選機型' }[mode]; }
+
+function mpkOpen(mode) {
+    MPK = { mode:mode, groups:[], sel:{}, order:[], cat:null };
+    $.each(MPK_SEL_ORDER[mode], function(i,v){ MPK.sel[v] = MPK_SEL_STORE[mode][v]; MPK.order.push(v); });
+    document.getElementById('mpk-title').innerHTML = '<i class="fa fa-cogs"></i> ' + mpkTitleOf(mode);
+    document.getElementById('mpk-kw').value = '';
+    document.getElementById('mpk-pane').innerHTML = '<span class="muted-help">載入中…</span>';
+    $('#machinePickModal').modal('show');
+    api({ action:'machine_pick_groups', mode:mode, kw:'' }).done(function(r){
+        if (!r.success) { showToast(r.message||'查詢失敗','error'); return; }
+        if (MPK.mode !== mode) return;   // 切換過範圍，這次回應已經過期
+        MPK.groups = r.groups || [];
+        mpkRender();
+    });
+}
+function mpkHit(r, cat, words) {
+    if (!words.length) return true;
+    var hay = ((r.no||'')+' '+(r.name||'')+' '+(r.sub||'')+' '+cat).toLowerCase();
+    for (var i=0;i<words.length;i++) if (hay.indexOf(words[i])<0) return false;
+    return true;
+}
+function mpkItemBtn(r, cat) {
+    var on = !!MPK.sel[r.value];
+    return '<button type="button" class="mpk-item'+(on?' on':'')+'" data-v="'+escAttr(r.value)+'">'
+         + escHtml(r.no) + '<small>' + (on?'✔ 已選（再點一次取消）':escHtml(r.name||r.sub||cat)) + '</small></button>';
+}
+function mpkRender() {
+    var kw = String(document.getElementById('mpk-kw').value||'').trim().toLowerCase();
+    var words = kw ? kw.split(/\s+/) : [];
+    var h = '';
+    var isCategory = (MPK.mode === 'category');
+    if (words.length) {
+        var rows = [];
+        $.each(MPK.groups, function(i,g){ $.each(g.rows||[], function(j,r){ if (mpkHit(r,g.group,words)) rows.push([g,r]); }); });
+        h = '<div class="mpk-sub">符合「'+escHtml(kw)+'」<b>'+rows.length+'</b> 項（清空搜尋回到分類）</div><div class="mpk-grid">';
+        $.each(rows, function(i,x){ h += mpkItemBtn(x[1], x[0].group); });
+        h += '</div>';
+        if (!rows.length) h = '<span class="muted-help">查無符合的項目。</span>';
+    } else if (isCategory) {
+        var g0 = MPK.groups[0] || { rows:[] };
+        h = '<div class="mpk-sub">點選製程大類（可以連續點好幾項，再點一次取消）</div><div class="mpk-grid">';
+        $.each(g0.rows||[], function(i,r){ h += mpkItemBtn(r, g0.group); });
+        h += '</div>';
+        if (!(g0.rows||[]).length) h = '<span class="muted-help">目前沒有任何製程大類底下掛著機台。</span>';
+    } else if (MPK.cat === null) {
+        if (MPK.groups.every(function(g){ return !(g.rows||[]).length; })) {
+            h = '<span class="muted-help">查無資料。</span>';
+        } else {
+            h = '<div class="mpk-sub">① 先點分類</div><div class="mpk-grid">';
+            $.each(MPK.groups, function(i,g){
+                if (!g.rows || !g.rows.length) return;
+                var n = 0; $.each(g.rows, function(j,r){ if (MPK.sel[r.value]) n++; });
+                h += '<button type="button" class="mpk-cat'+(n?' has-sel':'')+'" data-i="'+i+'">'
+                   + escHtml(g.group) + '<small>' + g.rows.length + ' 項' + (n?'　已選 '+n:'') + '</small></button>';
+            });
+            h += '</div>';
+        }
+    } else {
+        var g2 = MPK.groups[MPK.cat] || { rows:[] };
+        h = '<div class="mpk-sub">② 點' + (MPK.mode==='model'?'型號':'機台')
+          + '（可以連續點好幾項，再點一次取消）　'
+          + '<button type="button" class="btn btn-xs btn-default mpk-back">← 換一個分類</button></div><div class="mpk-grid">';
+        $.each(g2.rows||[], function(i,r){ h += mpkItemBtn(r, g2.group); });
+        h += '</div>';
+    }
+    document.getElementById('mpk-pane').innerHTML = h;
+    mpkChips();
+}
+function mpkChips() {
+    var h = '';
+    $.each(MPK.order, function(i,v){
+        var s = MPK.sel[v]; if (!s) return;
+        h += '<span class="mpk-chip"><span class="c">'+escHtml(s.cat)+'</span><span>'+escHtml(s.no)+'</span>'
+           + '<button type="button" class="x mpk-rm" data-v="'+escAttr(v)+'" title="移除">×</button></span>';
+    });
+    document.getElementById('mpk-picked').innerHTML = '<b class="muted-help">已選：</b>' + (h || '<span class="mpk-none">（尚未選擇）</span>');
+    document.getElementById('mpk-sel-count').textContent = MPK.order.length;
+}
+$(document).on('click', '.mpk-cat', function(){ MPK.cat = num($(this).data('i')); mpkRender(); });
+$(document).on('click', '.mpk-back', function(){ MPK.cat = null; mpkRender(); });
+$(document).on('click', '.mpk-item', function(){
+    var v = String($(this).data('v'));
+    if (MPK.sel[v]) { delete MPK.sel[v]; MPK.order = MPK.order.filter(function(x){return x!==v;}); }
+    else {
+        var f = null;
+        $.each(MPK.groups, function(i,g){ $.each(g.rows||[], function(j,r){ if (String(r.value)===v) f=[g,r]; }); });
+        if (f) { MPK.sel[v] = { value:f[1].value, id:f[1].id||0, no:f[1].no, name:f[1].name||'', cat:f[0].group }; MPK.order.push(v); }
+    }
+    mpkRender();
+});
+$(document).on('click', '.mpk-rm', function(e){
+    e.stopPropagation();
+    var v = String($(this).data('v'));
+    delete MPK.sel[v]; MPK.order = MPK.order.filter(function(x){return x!==v;});
+    mpkRender();
+});
+$(document).on('input', '#mpk-kw', function(){
+    clearTimeout(window._mpkT);
+    window._mpkT = setTimeout(mpkRender, 150);   // 全部資料都在前端，篩選不必再打後端
+});
+function mpkApply() {
+    var mode = MPK.mode;
+    MPK_SEL_STORE[mode] = MPK.sel;
+    MPK_SEL_ORDER[mode] = MPK.order.slice();
+    mpkRenderList(mode);
+    mpkSync(mode);
+    $('#machinePickModal').modal('hide');
+}
+function mpkRenderList(mode) {
+    var box = document.getElementById(mpkListBoxOf(mode)); if (!box) return;
+    var order = MPK_SEL_ORDER[mode], sel = MPK_SEL_STORE[mode];
+    if (!order.length) { box.innerHTML = ''; return; }
+    var h = '';
+    $.each(order, function(i,v){
+        var s = sel[v]; if (!s) return;
+        h += '<span style="display:inline-flex;align-items:center;gap:5px;background:#eef2ff;color:#3949ab;border:1px solid #c5cae9;border-radius:10px;padding:2px 8px;font-size:12px;margin:0 4px 4px 0;">'
+           + escHtml(s.cat) + '：' + escHtml(s.no) + (s.name ? ' ('+escHtml(s.name)+')' : '')
+           + '<span style="cursor:pointer;color:#e74c3c;font-weight:bold;" onclick="mpkRemove(\''+mode+'\',\''+escAttr(v)+'\')" title="移除">×</span></span>';
+    });
+    box.innerHTML = h;
+}
+function mpkRemove(mode, v) {
+    delete MPK_SEL_STORE[mode][v];
+    MPK_SEL_ORDER[mode] = MPK_SEL_ORDER[mode].filter(function(x){ return x!==v; });
+    mpkRenderList(mode); mpkSync(mode);
+}
+function mpkSync(mode) {
+    var hid = document.getElementById(mpkFieldOf(mode)); if (!hid) return;
+    var order = MPK_SEL_ORDER[mode], sel = MPK_SEL_STORE[mode];
+    var out;
+    if (mode === 'machine')       out = order.map(function(v){ return { machine_id: parseInt(sel[v].id) }; });
+    else if (mode === 'category') out = order.map(function(v){ return { process_type_id: parseInt(sel[v].id) }; });
+    else                          out = order.map(function(v){ return { machine_model: sel[v].value }; });
+    hid.value = JSON.stringify(out);
+}
+function mpkReset() {
+    MPK_SEL_STORE = { machine:{}, category:{}, model:{} };
+    MPK_SEL_ORDER = { machine:[], category:[], model:[] };
+    ['machine','category','model'].forEach(function(m){ mpkRenderList(m); mpkSync(m); });
+}
+function mpkLoadFromPart(d) {
+    MPK_SEL_STORE.machine = {}; MPK_SEL_ORDER.machine = [];
+    (d.machine_map||[]).forEach(function(m){
+        var v = String(m.machine_id);
+        MPK_SEL_STORE.machine[v] = { value:v, id:m.machine_id, no:(m.field_no||m.machine_name||v), name:(m.machine_type||''), cat:(m.machine_type||'未分類') };
+        MPK_SEL_ORDER.machine.push(v);
+    });
+    MPK_SEL_STORE.category = {}; MPK_SEL_ORDER.category = [];
+    (d.machine_type_map||[]).forEach(function(t){
+        var v = String(t.process_type_id);
+        MPK_SEL_STORE.category[v] = { value:v, id:t.process_type_id, no:(t.process_type_name||v), name:'', cat:'製程大類' };
+        MPK_SEL_ORDER.category.push(v);
+    });
+    MPK_SEL_STORE.model = {}; MPK_SEL_ORDER.model = [];
+    (d.machine_model_map||[]).forEach(function(m){
+        var v = m.machine_model;
+        MPK_SEL_STORE.model[v] = { value:v, id:0, no:v, name:'', cat:'機型' };
+        MPK_SEL_ORDER.model.push(v);
+    });
+    ['machine','category','model'].forEach(function(m){ mpkRenderList(m); mpkSync(m); });
+}
+
 // 點擊輸入框與下拉以外的地方，關閉所有自動完成下拉
 document.addEventListener('mousedown', function(e){
-    ['vendor','partno','machine'].forEach(function(f){
+    ['vendor','partno'].forEach(function(f){
         var cfg=_pfAcCfg[f];
         var dd=document.getElementById(cfg.dropdown); var inp=document.getElementById(cfg.input);
         if (!dd||!inp) return;
@@ -15776,6 +16073,8 @@ function submitPartForm() {
         vendor_map:         (document.getElementById('pf-vendor-map')||{value:'[]'}).value,
         dedicated_part_map: (document.getElementById('pf-dedicated-part-map')||{value:'[]'}).value,
         machine_map:        (document.getElementById('pf-machine-map')||{value:'[]'}).value,
+        machine_type_map:   (document.getElementById('pf-machine-type-map')||{value:'[]'}).value,
+        machine_model_map:  (document.getElementById('pf-machine-model-map')||{value:'[]'}).value,
         jig_dedicated_map:  (document.getElementById('pf-jig-dedicated-map')||{value:'[]'}).value,
         jig_general_map:    (document.getElementById('pf-jig-general-map')||{value:'[]'}).value,
         tool_spec:          JSON.stringify(collectToolSpec())
