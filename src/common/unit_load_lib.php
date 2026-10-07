@@ -15,10 +15,11 @@
  *   工作日判定：leave_lib.php（eg_leave_is_workday）
  *   設計備註開放問題數：eng_log_lib.php（el_order_open_item_counts）
  *   待對帳家數/筆數（生管）：acc_track_lib.php（act_ap_rows，status='processing' 視為尚未對帳完成）
- *   新案件（這個料號還有沒有圖面）判定：bom_dir_lib.php（eg_bom_scan_dir_auto／eg_bom_file_cache_read／
- *     eg_bom_file_prefix_index），見下方 ul_orders_new_case_map()——與 NewOrder_Track.php 的
- *     NEW 徽章完全同一套規則，2026-10-07 使用者釐清這才是「新案件」真正的定義，取代舊版
- *     「系統裡首次出現的料號」（oa_first_seen，已不再使用）。
+ *   新案件判定：data_audit_lib.php（dqa_bom_open_date，BOM 編號解析日期的唯一實作），
+ *     見下方 ul_orders_new_case_map()。2026-10-07 使用者釐清這才是「新案件」真正的定義，
+ *     取代更早的「系統裡首次出現的料號」（oa_first_seen，已不再使用）；同一天稍後又再次
+ *     更正：不可以只看「NAS 現在有沒有圖面」（會被後補的圖面誤判），改成逐張訂單拿「這個
+ *     料號最早一筆 bom 的日期」跟「這張訂單自己的接單日」比較，詳見函式註解。
  */
 
 require_once __DIR__ . '/people_lib.php';
@@ -535,50 +536,88 @@ function ul_ids_norm(array $ids): array
  * @return array [d_id文字 => bool] true＝這個料號目前查不到任何圖面＝新案件；
  *               查無 bom 記錄的料號一律回 true（沒有圖面可言）。
  */
-function ul_orders_new_case_map(PDO $db, array $partNos): array
+/**
+ * 「新案件」判定（2026-10-07 第三版，使用者拍板更正）：改用 BOM 編號解析出來的日期
+ * 跟每一張訂單自己的接單日比較，取代上一版「NAS 現在有沒有圖面」的二元判斷。
+ *
+ * 【起因】NAS 現在有沒有圖面是「現在」的快照，會被「後來才補掃進 NAS 的圖面」污染——
+ * 某個料號當初下單時根本沒有圖面（現場憑經驗生產），後來有人把圖面補掃進 NAS，於是
+ * 「現在查有沒有圖面」查到「有」，連帶把這個料號歷史上所有舊訂單都誤判成「不是新案件」，
+ * 即使那些訂單下單當下圖面根本不存在。
+ *
+ * 【改法】對「這個料號文字至少有一筆 bom 紀錄」的訂單，取這個料號文字底下**最早**一筆
+ * bom 編號解析出來的日期，代表「這個料號的圖面大概是什麼時候備齊」，拿去跟**這張訂單
+ * 自己的接單日**（Order_date）比較：
+ *   訂單接單日 <= 代表日期 → 新案件（下單當下圖面可能還沒備齊，這張訂單很可能正是促成
+ *                             那筆最早製令本身的那一張）
+ *   訂單接單日 >  代表日期 → 不是新案件（下單時這個料號已經有製令紀錄在案，圖面應該
+ *                             已經備齊，是重複下單）
+ *
+ * 【為什麼代表日期要用「料號最早一筆 bom」，不是「這張訂單自己對應到的那一筆 bom」】
+ * 已用真實資料驗證過兩種算法（見 unit_load_lib 開發時的 CLI 驗證，當時取樣 bom_order_
+ * process_map／bom.o_order_id 兩種訂單↔製令直接綁定，各抽 500 組比對）：訂單自己綁定
+ * 的那一筆 bom，幾乎必然是「先有訂單、後開製令」（99%+ 的綁定裡 bom 日期都晚於或等於
+ * 訂單日期——製令本來就是為了生產這張訂單才開的），拿「這張訂單自己的製令」去比「這張
+ * 訂單自己」，答案幾乎永遠是「訂單早於製令」＝永遠判成新案件，完全沒有判別力。改用
+ * 「這個料號文字底下最早一筆 bom」才真正代表「系統裡第一次有這個料號生產紀錄」的時間
+ * 點——早於或等於這個時間點下單的那一張（通常正是促成那筆最早製令本身的訂單）才是真正
+ * 的新案件，之後重複下單的料號已經有生產履歷在先，圖面應該已經備齊。拿同一料號有多筆
+ * 跨年度 bom 紀錄的真實案例覆核：每個料號只有最早（或等於最早製令日期）那幾張訂單被
+ * 判定新案件，之後的重複下單全部判定「不是新案件」，與人工檢視結果一致。
+ *
+ * 【沒有任何 bom 紀錄的料號，判定方式完全不變】查無 bom 紀錄＝沒有任何圖面可言，一律
+ * 維持預設 true（新案件）——這批訂單從來沒有機會比對日期，過去的版本也是這樣處理。
+ *
+ * 【為什麼改成以「訂單」為單位，不再是「料號」為單位】同一個料號文字可能被橫跨好幾年
+ * 的好幾張訂單引用，新舊判定現在要逐張訂單各自跟「這個料號最早一筆 bom 的日期」比較，
+ * 同一個料號不同時期的訂單判定結果不再相同，故回傳鍵改成 Order_id（不是 d_id 料號文字）。
+ *
+ * @param array $orders [Order_id => ['d_id'=>料號文字, 'order_date'=>'Y-m-d'（接單日）]]
+ * @return array [Order_id => bool]  true=新案件
+ */
+function ul_orders_new_case_map(PDO $db, array $orders): array
 {
-    $nos = array_values(array_unique(array_filter(array_map('strval', $partNos), fn($v) => $v !== '')));
-    if (!$nos) return [];
-    $out = [];
-    foreach ($nos as $no) $out[$no] = true; // 預設：查無 bom 記錄＝新案件（沒有任何圖面可言）
+    $norm = [];
+    foreach ($orders as $oid => $info) {
+        $oid = (int)$oid;
+        if ($oid <= 0 || !is_array($info)) continue;
+        $did = isset($info['d_id']) ? trim((string)$info['d_id']) : '';
+        $odate = isset($info['order_date']) ? trim((string)$info['order_date']) : '';
+        if ($did === '') continue;
+        $norm[$oid] = ['d_id' => $did, 'order_date' => $odate];
+    }
+    if (!$norm) return [];
 
+    $out = [];
+    foreach (array_keys($norm) as $oid) $out[$oid] = true; // 預設：查無 bom 記錄＝新案件（沒有任何圖面可言）
+
+    $nos = array_values(array_unique(array_column($norm, 'd_id')));
     $ph = implode(',', array_fill(0, count($nos), '?'));
-    $st = $db->prepare("SELECT d_id, bom FROM bom WHERE d_id IN ({$ph})");
+    $st = $db->prepare("SELECT d_id, bom, Created_At FROM bom WHERE d_id IN ({$ph})");
     $st->execute($nos);
     $bomByDid = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        $bomByDid[(string)$r['d_id']][] = $r['bom'];
+        $bomByDid[(string)$r['d_id']][] = ['bom' => (string)$r['bom'], 'created_at' => $r['Created_At']];
     }
     if (!$bomByDid) return $out; // 全部都查無 bom 記錄，維持預設 true（新案件）
 
-    require_once __DIR__ . '/bom_dir_lib.php';
-    $nasScanDir = eg_bom_scan_dir_auto();
-    $validExt = ['jpg', 'jpeg', 'png', 'pdf'];
-
-    if (is_dir($nasScanDir)) {
-        $age = null;
-        $nasFiles = eg_bom_file_cache_read($nasScanDir, $validExt, $age);
-        if ($nasFiles === null) {
-            // 還沒有快取：不可在這裡同步掃 NAS（絕不可卡住畫面），比照既有退路：
-            // bom 表有記錄即視為有圖面（下一次有人開過會自動建起快取）
-            foreach (array_keys($bomByDid) as $did) $out[$did] = false;
-        } else {
-            $allBomNums = array_values(array_unique(array_merge(...array_values($bomByDid))));
-            $prefixIdx = eg_bom_file_prefix_index($nasFiles, $allBomNums);
-            $bomHasFile = [];
-            foreach ($allBomNums as $bnum) {
-                $bl = strlen((string)$bnum);
-                if ($bl > 0 && isset($prefixIdx[$bl][$bnum])) $bomHasFile[$bnum] = true;
-            }
-            foreach ($bomByDid as $did => $bnums) {
-                foreach ($bnums as $bnum) {
-                    if (!empty($bomHasFile[$bnum])) { $out[$did] = false; break; }
-                }
-            }
+    require_once __DIR__ . '/data_audit_lib.php'; // dqa_bom_open_date()：BOM 編號解析日期的唯一實作，不另寫一套
+    // 每個料號文字 → 最早一筆 bom 解析出的日期（代表「這個料號大概什麼時候有生產/圖面紀錄」）
+    $earliestByDid = [];
+    foreach ($bomByDid as $did => $rows) {
+        $min = null;
+        foreach ($rows as $r) {
+            $d = dqa_bom_open_date($r['bom'], $r['created_at']);
+            if ($d !== '' && ($min === null || $d < $min)) $min = $d;
         }
-    } else {
-        // NAS 不可存取：bom 表有記錄即視為有圖面（同 NewOrder_Track.php 既有退路）
-        foreach (array_keys($bomByDid) as $did) $out[$did] = false;
+        if ($min !== null) $earliestByDid[$did] = $min;
+    }
+
+    foreach ($norm as $oid => $r) {
+        $did = $r['d_id'];
+        if (!isset($earliestByDid[$did])) continue; // 這個料號的 bom 一筆都解不出日期，維持預設 true
+        if ($r['order_date'] === '') continue;       // 訂單沒有接單日可比，維持預設，不可亂猜
+        $out[$oid] = ($r['order_date'] <= $earliestByDid[$did]);
     }
 
     return $out;
@@ -658,7 +697,7 @@ function ul_design_summary(PDO $db, string $from, string $to, array $designerIds
     // NewOrder_Track.php 的 NEW 徽章同一個鍵），不是 d_id_ID（料號主檔 id）——
     // 見 ul_orders_new_case_map() 的函式註解。
     $orderRows = $db->query(
-        "SELECT Order_id, d_id, pmGet, in_review FROM order_track ot
+        "SELECT Order_id, d_id, Order_date, pmGet, in_review FROM order_track ot
          WHERE ot.ate IN ({$in}) AND {$ordStatOk} AND {$ordNotSplit}"
     )->fetchAll(PDO::FETCH_ASSOC);
     $orderIds = array_map(fn($r) => (int)$r['Order_id'], $orderRows);
@@ -667,18 +706,24 @@ function ul_design_summary(PDO $db, string $from, string $to, array $designerIds
         $out['issue_orders'] = count(array_filter($openMap, fn($c) => $c > 0));
     }
 
-    // 新案件：2026-10-07 使用者重新定義＝NEW 圖示者（見 ul_orders_new_case_map()），完全
-    // 取代舊版「系統裡首次出現的料號」。同樣是現況快照，不受 $from/$to 限制。拆成「已處理」
-    // （已轉生管＝pmGet 有值）與「批圖中」（比照上面修正後的 drawing_wip 同一個定義：還
-    // 沒轉生管，不管審圖狀態）兩種子狀態＋各自佔比——pmGet 非空即非空，兩者互斥又完整，
-    // processed+in_progress 恆等於 total。
-    $partNos = [];
-    foreach ($orderRows as $r) { $pn = (string)$r['d_id']; if ($pn !== '') $partNos[] = $pn; }
-    $newCaseMap = ul_orders_new_case_map($db, $partNos);
-    $ncTotal = 0; $ncProcessed = 0; $ncInProgress = 0;
+    // 新案件：2026-10-07 使用者重新定義＝NEW 圖示者，完全取代舊版「系統裡首次出現的料號」；
+    // 同一天稍後再更正為「逐張訂單拿料號最早一筆 bom 日期跟訂單自己的接單日比較」（見
+    // ul_orders_new_case_map() 函式註解，不再是單純看 NAS 現在有沒有圖面）。同樣是現況快照，
+    // 不受 $from/$to 限制。拆成「已處理」（已轉生管＝pmGet 有值）與「批圖中」（比照上面修正
+    // 後的 drawing_wip 同一個定義：還沒轉生管，不管審圖狀態）兩種子狀態＋各自佔比——pmGet
+    // 非空即非空，兩者互斥又完整，processed+in_progress 恆等於 total。
+    $ncInput = [];
     foreach ($orderRows as $r) {
         $pn = (string)$r['d_id'];
-        if ($pn === '' || empty($newCaseMap[$pn])) continue; // 查不到料號文字的訂單無法判定，不計入
+        if ($pn === '') continue;
+        $ncInput[(int)$r['Order_id']] = ['d_id' => $pn, 'order_date' => (string)$r['Order_date']];
+    }
+    $newCaseMap = ul_orders_new_case_map($db, $ncInput);
+    $ncTotal = 0; $ncProcessed = 0; $ncInProgress = 0;
+    foreach ($orderRows as $r) {
+        $oid = (int)$r['Order_id'];
+        $pn  = (string)$r['d_id'];
+        if ($pn === '' || empty($newCaseMap[$oid])) continue; // 查不到料號文字／未判定新案件的訂單不計入
         $ncTotal++;
         if ($r['pmGet'] !== null) $ncProcessed++;
         else $ncInProgress++;

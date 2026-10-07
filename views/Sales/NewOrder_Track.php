@@ -2780,6 +2780,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     $cust_dn_map     = [];   // customer_id  => ['count'=>N,'has_img'=>bool]
     $labels_map      = [];   // d_id_ID int  => [['name'=>'…','val'=>'…'],…]
     $has_drawing_map = [];   // d_id string => true（bom 圖面）
+    // NEW 徽章第三版判定覆寫（2026-10-07 使用者更正）：Order_id(int) => bool，只對「料號
+    // 有綁定 BOM」的訂單才有值，見下方 $bom_by_did 建好之後的計算區塊；沒有值的訂單仍交給
+    // 下面既有的 $has_drawing_map／$_has_draw 判斷（嚴禁影響現有的圖面/報價/附件可點開
+    // 邏輯，本覆寫只動 NEW 徽章要不要顯示）。
+    $new_case_override_map = [];
     $has_quote_map   = [];   // d_id string => true（報價單附件／報價明細）
     $has_att_map     = [];   // d_id string => true（料號其他附件）
     $has_order_map   = [];   // d_id string => true（訂單附件）
@@ -2970,6 +2975,31 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                 foreach ($dr->fetchAll(PDO::FETCH_ASSOC) as $brow) {
                     $bom_by_did[$brow['d_id']][] = $brow['bom'];
                 }
+
+                // NEW 徽章第三版判定（2026-10-07 使用者更正，取代「NAS 現在有沒有圖面」）：
+                // 有綁定 BOM（即這裡 $bom_by_did 查得到）的料號，改用「這個料號最早一筆 BOM
+                // 編號解析出的日期」跟「這張訂單自己的接單日 Order_date」比較，不受 NAS 是否
+                // 可存取影響（唯一實作見 unit_load_lib.php 的 ul_orders_new_case_map()，與各
+                // 單位負荷分析模組「新案件」卡片同一套規則，已用真實資料驗證過，不另寫一次）。
+                // 查無 BOM 紀錄的料號完全不受影響，$new_case_override_map 不會有它的鍵，仍交
+                // 由下方既有的 $has_drawing_map／$_has_draw 判斷（嚴禁動到這段既有邏輯本身，
+                // 它同時還決定圖面/報價/附件要不要可以點開，不是只管 NEW 徽章）。
+                if (!empty($bom_by_did)) {
+                    try {
+                        require_once __DIR__ . '/../../src/common/unit_load_lib.php';
+                        $__ncInput = [];
+                        foreach ($order_list as $__ncO) {
+                            $__ncDid = $__ncO['d_id'] ?? '';
+                            if ($__ncDid === '' || !isset($bom_by_did[$__ncDid])) continue;
+                            $__ncInput[(int)$__ncO['Order_id']] = [
+                                'd_id' => $__ncDid,
+                                'order_date' => (string)($__ncO['Order_date'] ?? ''),
+                            ];
+                        }
+                        if ($__ncInput) $new_case_override_map = ul_orders_new_case_map($pdo, $__ncInput);
+                    } catch (Throwable $__ncE) { $new_case_override_map = []; }
+                }
+
                 if (!empty($bom_by_did)) {
                     require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
                     $nas_scan_dir = eg_bom_scan_dir_auto();
@@ -3364,6 +3394,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     $_cust_dn    = ($is_perm_a && $__cid) ? ($cust_dn_map[$__cid] ?? null) : null;
                     $_order_lbls = $labels_map[(int)($order['d_id_ID'] ?? 0)] ?? [];
                     $_has_draw   = $has_drawing_map[$order['d_id']] ?? false;
+                    // NEW 徽章第三版判定（2026-10-07）：有綁定 BOM 的訂單改用
+                    // $new_case_override_map（逐張訂單，見上方計算區塊），查不到（沒綁定
+                    // BOM）才退回原本的 !$_has_draw；$_has_draw 本身維持原樣，不影響下面
+                    // 圖面/報價/附件可點開的既有判斷。
+                    $_nc_overridden = array_key_exists((int)$order['Order_id'], $new_case_override_map);
+                    $_is_new_case   = $_nc_overridden ? $new_case_override_map[(int)$order['Order_id']] : !$_has_draw;
                     $_has_quote  = $has_quote_map[$order['d_id']]   ?? false;
                     $_has_att    = $has_att_map[$order['d_id']]     ?? false;
                     $_has_ordatt = $has_order_map[$order['d_id']]  ?? false;
@@ -3474,13 +3510,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                             onclick="openQuickBind('<?= $order['Order_id'] ?>','<?= safe_html($order['Client_name'] ?? '') ?>','<?= safe_html($order['d_id']) ?>')"
                             title="料號未綁定主檔，點此先綁定"><i class="fa fa-cog"></i><i class="fa fa-exclamation" style="font-size:8px;margin-left:1px;"></i></button>
                         <?php endif; ?>
-                        <?php /* NEW 徽章（2026-10-06 使用者要求）：這個料號在圖面查閱（bom_viewer.php）
-                                 裡還查不到任何圖面，放在「前往料號主檔編輯」齒輪圖示右邊提醒要補圖。
-                                 判定沿用同一份 $has_drawing_map（即 bom_viewer.php 圖面查閱分頁的資料來源），
-                                 不另外算一次，兩邊才不會對不起來。 */ ?>
-                        <?php if (!$_has_draw): ?>
+                        <?php /* NEW 徽章（2026-10-06 使用者要求，2026-10-07 第三版更正判定邏輯）：
+                                 放在「前往料號主檔編輯」齒輪圖示右邊提醒這是新案件。有綁定 BOM 的料號
+                                 改用「料號最早一筆 BOM 日期 vs 這張訂單自己的接單日」判定（避免被後補
+                                 進 NAS 的圖面誤判成不是新案件），沒有綁定 BOM 的料號才退回「圖面查閱
+                                 裡還查不到任何圖面」（$has_drawing_map，與 bom_viewer.php 圖面查閱分頁
+                                 同一份資料來源），見 $_is_new_case 計算處註解。 */ ?>
+                        <?php if ($_is_new_case): ?>
                         <span style="background:#e67e22;color:#fff;border-radius:3px;padding:0 4px;font-size:9px;line-height:15px;flex-shrink:0;white-space:nowrap;cursor:default;font-weight:700;"
-                              title="這個料號在圖面查閱裡還沒有任何圖面資料">NEW</span>
+                              title="<?= $_nc_overridden ? '新案件：這個料號下單當下還查不到更早的製令記錄（依接單日與最早一筆製令日期比對）' : '這個料號在圖面查閱裡還沒有任何圖面資料' ?>">NEW</span>
                         <?php endif; ?>
                         <?php endif; ?>
                         <?php if ($_stk_t > 0): ?>
