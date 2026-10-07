@@ -56,6 +56,17 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
         // 圖面是唯一例外：bom.d_setting_id 有 82% 是空的，沒綁的仍列出但標示（見 part_scope_lib 說明）。
         $scope = eg_part_scope_resolve($pdo2, $pk, $did);
         $bom_rows = eg_part_scope_bom_rows($pdo2, $scope);
+        // 2026-10-07 使用者要求：圖面查閱預設只載最新10筆BOM，超過的要按翻頁才載更多——
+        // 實測有料號累積到 559 筆 BOM，逐筆跟 NAS 上萬個檔名比對（下方雙層迴圈）會慢到分鐘級。
+        // $bom_rows 本來就是 Created_At DESC（最新在前），直接切頁即可，不必重新排序；
+        // 只切「要掃描比對的這一頁」，不影響 $bom_rows 本身供其他用途（目前只有這裡用到）。
+        $perPage = 10;
+        $totalBoms = count($bom_rows);
+        $totalPages = $totalBoms > 0 ? (int)ceil($totalBoms / $perPage) : 1;
+        $drawPage = (int)($_POST['page'] ?? 1);
+        if ($drawPage < 1) $drawPage = 1;
+        if ($drawPage > $totalPages) $drawPage = $totalPages;
+        $pageRows = array_slice($bom_rows, ($drawPage - 1) * $perPage, $perPage);
         // BOM 圖檔資料夾一律走設定鍵 bom_scan_dir（唯一實作 src/common/bom_dir_lib.php）。
         // 2026-08-25 起預設值改成 UNC `\\excellentnas\生產課\BOM\`：原本寫死的 Z: 是使用者
         // session 層級的持續連線，實測 `net use` 會變成「無法使用」，造成圖面時好時壞。
@@ -82,12 +93,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
             return $tags;
         };
 
-        if (is_dir($scan_dir) && !empty($bom_rows)) {
+        if (is_dir($scan_dir) && !empty($pageRows)) {
             // 檔名一律經 bom_dir_lib 轉回 UTF-8（UNC 中文路徑在 Windows 可能是 Big5，
             // 漏轉不會報錯、只會整批比對不到＝畫面變成「沒有圖面」）；
             // withMtime=false：這個資料夾有 1.9 萬個檔又在網路磁碟上，逐檔 stat 會慢到分鐘級
             $allF = array_column(eg_bom_scan($scan_dir, [], '', false), 'name');
-            foreach ($bom_rows as $row) {
+            foreach ($pageRows as $row) {
                 $bname = $row['bom']; $sqty = $row['sqty'];
                 $bindFrom = $row['bind_from'] ?? null;
                 $unbound  = !empty($row['unbound']);
@@ -116,7 +127,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
                 return strcmp($a['name'], $b['name']);
             });
         }
-        echo json_encode(['success'=>true, 'files'=>$files, 'erp_files'=>[]]);
+        echo json_encode(['success'=>true, 'files'=>$files, 'erp_files'=>[],
+            'total_boms'=>$totalBoms, 'page'=>$drawPage, 'per_page'=>$perPage, 'total_pages'=>$totalPages]);
     } catch (Exception $e) {
         echo json_encode(['success'=>false, 'message'=>$e->getMessage()]);
     }
@@ -1336,7 +1348,10 @@ var _tabMeta = {
 function tabCount(tab) {
     if (tab === 'drawing') {
         var d = _tabData.drawing || {};
-        return (d.files ? d.files.length : 0) + (d.erp_files ? d.erp_files.length : 0);
+        // 只有真的超過10筆、需要分頁的料號才改顯示「總批次數」，否則換頁時徽章數字會忽大忽小；
+        // 絕大多數料號只有1頁，維持原本「這一頁實際檔案筆數」，不改變既有使用者看到的數字。
+        var base = (d.total_pages && d.total_pages > 1 && d.total_boms != null) ? d.total_boms : (d.files ? d.files.length : 0);
+        return base + (d.erp_files ? d.erp_files.length : 0);
     }
     if (tab === 'order_attach') {
         var g = buildOrderQuoteGroups();
@@ -1524,6 +1539,27 @@ function applyObsoleteOverlay(isObs) {
     }
 }
 
+// 分頁控制列（d.total_pages>1 才顯示；bom 模式沒有分頁資訊故 total_pages 為空，不受影響）
+function buildDrawingPagerHtml(d) {
+    var tp = d.total_pages || 1;
+    if (tp <= 1) return '';
+    var page = d.page || 1;
+    var prevDisabled = page <= 1;
+    var nextDisabled = page >= tp;
+    return '<li class="list-group-item" style="cursor:default;background:#fbf7ef;border-top:2px solid #e6c9a0;">'
+        +  '<div style="font-size:11px;color:#8a5a2b;text-align:center;margin-bottom:5px;">'
+        +  '第 ' + page + ' / ' + tp + ' 頁（共 ' + (d.total_boms || 0) + ' 筆批次，每頁 ' + (d.per_page || 10) + ' 筆；預設只載最新批次以加快載入）</div>'
+        +  '<div style="display:flex;gap:6px;justify-content:center;">'
+        +  '<button type="button" class="btn btn-default btn-xs bom-draw-page-btn" data-page="' + (page - 1) + '"' + (prevDisabled ? ' disabled' : '') + '><i class="fa fa-chevron-left"></i> 較新批次</button>'
+        +  '<button type="button" class="btn btn-default btn-xs bom-draw-page-btn" data-page="' + (page + 1) + '"' + (nextDisabled ? ' disabled' : '') + '>較舊批次 <i class="fa fa-chevron-right"></i></button>'
+        +  '</div></li>';
+}
+$(document).on('click', '.bom-draw-page-btn', function() {
+    if ($(this).is(':disabled')) return;
+    var p = parseInt($(this).data('page'), 10) || 1;
+    loadDrawingPage(p, function() { renderTabbar(); if (_activeTab === 'drawing') renderDrawingList(); });
+});
+
 function renderDrawingList() {
     var d = _tabData.drawing || {};
     var listHtml = '', first = null;
@@ -1544,8 +1580,10 @@ function renderDrawingList() {
             didM.forEach(function(f, i) { var a = (noBom && !bomM.length && i === 0); if (a && !first) first = f; listHtml += makeItem(f, a); });
         }
     }
-    if (!listHtml) { $('#bom-file-list').html('<div class="alert alert-warning" style="margin:10px;">無相關圖檔</div>'); showEmpty('無相關圖檔'); return; }
-    $('#bom-file-list').html(listHtml);
+    var pagerHtml = buildDrawingPagerHtml(d);
+    if (!listHtml && !pagerHtml) { $('#bom-file-list').html('<div class="alert alert-warning" style="margin:10px;">無相關圖檔</div>'); showEmpty('無相關圖檔'); return; }
+    if (!listHtml) { showEmpty('此頁沒有圖檔，請翻頁查看其他批次'); }
+    $('#bom-file-list').html(listHtml + pagerHtml);
     if (first) showFile(first.path, first.type, first.name);
 }
 
@@ -1921,16 +1959,30 @@ function loadBomMode() {
     });
 }
 
+// 圖面分頁（did 模式專用）：預設只載最新10筆BOM批次，超過的要按「較舊批次」才載入，
+// 避免累積批次很多的料號（實測有556筆）每次開頁都要掃整個NAS資料夾比對全部批次。
+function loadDrawingPage(page, afterLoad) {
+    $.post('', { action: 'get_files_by_did', d_id: _d_id, pk: _pk, page: page || 1 }, function(res) {
+        _tabData.drawing = {
+            files:       (res && res.success && res.files)       ? res.files       : [],
+            erp_files:   (res && res.success && res.erp_files)   ? res.erp_files   : [],
+            total_boms:  (res && res.success && res.total_boms  != null) ? res.total_boms  : null,
+            page:        (res && res.success && res.page        != null) ? res.page        : 1,
+            per_page:    (res && res.success && res.per_page    != null) ? res.per_page    : 10,
+            total_pages: (res && res.success && res.total_pages != null) ? res.total_pages : 1
+        };
+        if (afterLoad) afterLoad();
+    }, 'json').fail(function() {
+        _tabData.drawing = { files: [], erp_files: [], total_boms: null, page: 1, per_page: 10, total_pages: 1 };
+        if (afterLoad) afterLoad();
+    });
+}
+
 function loadDidMode() {
     var pending = 1 + (_tabEnabled.other ? 1 : 0) + (_tabEnabled.order_attach ? 1 : 0);
     var done = function() { if (--pending <= 0) finishDidLoad(); };
-    // 圖面（一律載入）
-    $.post('', { action: 'get_files_by_did', d_id: _d_id, pk: _pk }, function(res) {
-        _tabData.drawing = {
-            files:     (res && res.success && res.files)     ? res.files     : [],
-            erp_files: (res && res.success && res.erp_files) ? res.erp_files : []
-        };
-    }, 'json').always(function() { renderTabbar(); done(); });
+    // 圖面（一律載入，預設第1頁＝最新10筆批次）
+    loadDrawingPage(1, function() { renderTabbar(); done(); });
     // 其他附件
     if (_tabEnabled.other) {
         $.post('', { action: 'get_attachments_by_did', d_id: _d_id, pk: _pk }, function(res) {
