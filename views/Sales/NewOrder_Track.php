@@ -170,6 +170,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'datepicker_ate'     => $row['datepicker_ate'] ?? '',
                 'Order_status'       => $row['Order_status'] ?? null,
                 'is_urgent'          => (int)($row['is_urgent'] ?? 0),
+                // 需設計繪圖／由樣品繪圖（2026-10-07）：純標記旗標，SELECT ot.* 本來就撈到了。
+                'need_design_draw'   => (int)($row['need_design_draw'] ?? 0),
+                'need_sample_draw'   => (int)($row['need_sample_draw'] ?? 0),
                 // 稽核製程標籤（2026-10-02）：SELECT ot.* 本來就撈到了，這裡只是帶給跳窗把原本選的標上
                 'as_tag_id'          => (int)($row['as_tag_id'] ?? 0),
                 'as_tag_scope'       => (string)($row['as_tag_scope'] ?? ''),
@@ -1652,6 +1655,10 @@ $can_view_amount           = true;                                      // 金�
 $can_keyway_calc           = true;                                      // 鍵槽計算（舊制從未限制過，一律可見）
 $can_designer_assign_cog   = ($permission_code === 'A');                // 指派設計旁的設定齒輪（無專屬功能碼，沿用管理員門檻）
 $can_master_edit           = ($permission_code === 'A');                // 前往料號主檔編輯按鈕（舊制沿用管理員門檻；RBAC 啟用後改走 ot_master_edit）
+// 需設計繪圖／由樣品繪圖按鈕（2026-10-07 新增）：全新功能，舊制沒有對應權限碼，一律預設關閉
+// （不改變任何現有使用者看到的畫面；要用請由管理員在「角色設定」勾選對應功能碼）。
+$can_need_design_draw      = false;
+$can_sample_draw           = false;
 
 // 是否顯示操作欄位 (只有 R 權限時不顯示)
 $show_op_col = ($can_create || $can_update);
@@ -1769,6 +1776,10 @@ $OT_PAGE_FEATURES = [
     // （新增問題／回覆）沿用上面的 ot_edit；這裡只新增「標記已處理」的設計身分門檻，
     // 刻意與 ot_design_note（舊 textarea 能不能打字）分開，不自動套用在既有「設計」角色上。
     ['group'=>'設計與批圖',   'code'=>'ot_design_note_resolve',  'label'=>'設計備註問題（標記已處理／代填任何對象）'],
+    // 2026-10-07 使用者要求：新增/編輯訂單跳窗標題右側新增兩顆標記按鈕，純標記不影響任何既有
+    // 流程，效果是清單「製程」欄的訂單標籤（AS 認定）下方多一行提示。各自獨立指派角色。
+    ['group'=>'設計與批圖',   'code'=>'ot_need_design_draw',     'label'=>'需設計繪圖按鈕（標記需設計重新繪圖，製程欄下方顯示提示）'],
+    ['group'=>'設計與批圖',   'code'=>'ot_sample_draw',          'label'=>'由樣品繪圖按鈕（標記依樣品繪圖，製程欄下方顯示提示）'],
 ];
 
 // ── RBAC 權限檢查（$OT_USE_RBAC = true 時生效）───────────────────────────
@@ -1797,6 +1808,8 @@ if ($OT_USE_RBAC) {
     $can_design_qa_resolve     = ot_hasF('ot_design_note_resolve');
     $can_designer_assign_cog   = $IS_OT_RBAC_ADMIN;
     $can_master_edit           = ot_hasF('ot_master_edit');
+    $can_need_design_draw      = ot_hasF('ot_need_design_draw');
+    $can_sample_draw           = ot_hasF('ot_sample_draw');
     $show_op_col      = ($can_create || $can_update);
     $show_gear_tool   = $IS_OT_RBAC_ADMIN || ot_hasF('ot_gear_calc'); // 齒輪計算改由角色控制
     if (!$IS_OT_RBAC_ADMIN && !ot_hasF('ot_view')) {
@@ -2422,6 +2435,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     try { $pdo->query("SELECT is_urgent FROM order_track LIMIT 1"); }
     catch (Exception $_eUrg) {
         try { $pdo->exec("ALTER TABLE order_track ADD COLUMN is_urgent TINYINT(1) NOT NULL DEFAULT 0 COMMENT '急件=1；篩選批圖中時排最上方(多筆依接單日新到舊)，清單以淺暖粉紅底色標示'"); } catch (Exception $_eUrg2) {}
+    }
+    // 相容舊表：need_design_draw／need_sample_draw（需設計繪圖／由樣品繪圖旗標）首次執行自動補欄（2026-10-07）
+    try { $pdo->query("SELECT need_design_draw, need_sample_draw FROM order_track LIMIT 1"); }
+    catch (Exception $_eNd) {
+        try { $pdo->exec("ALTER TABLE order_track ADD COLUMN need_design_draw TINYINT(1) NOT NULL DEFAULT 0 COMMENT '需設計繪圖=1；清單製程欄下方顯示提示'"); } catch (Exception $_eNd2) {}
+        try { $pdo->exec("ALTER TABLE order_track ADD COLUMN need_sample_draw TINYINT(1) NOT NULL DEFAULT 0 COMMENT '由樣品繪圖=1；清單製程欄下方顯示提示'"); } catch (Exception $_eNd3) {}
     }
 
     $whereClauses = ["1=1", "(ot.parent_order_id IS NULL OR ot.parent_order_id = 0)"];
@@ -3547,6 +3566,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     ?><br><span class="as-tag-cell<?= $_asFx ? ' fx' : '' ?>" title="製程標籤（AS 認定）：<?= safe_html($_asLbl) ?>"><?= safe_html($_asLbl) ?></span><?php
                         endif;
                     endif;
+                    // 需設計繪圖／由樣品繪圖（2026-10-07 使用者要求）：顯示在訂單標籤（AS 認定）下方的小提示。
+                    if (!empty($order['need_design_draw'])): ?><br><span class="proc-hint-badge pb-design" title="需設計繪圖">需設計繪圖</span><?php endif;
+                    if (!empty($order['need_sample_draw'])): ?><br><span class="proc-hint-badge pb-sample" title="由樣品繪圖">由樣品繪圖</span><?php endif;
                 ?></td>
                 <td class="col-qty"><?= number_format($order['Qty'] ?? 0) ?><?php if (!empty($order['qty_over_range'])): ?><br><span style="color:#DD5138;font-size:10px;font-weight:600;white-space:nowrap;" title="OP轉訂單時輸入的數量超出報價階梯區間（含容差後區間），請補報價單">數量超出區間</span><?php endif; ?><?php if (!empty($order['is_repeat_conversion'])): ?><br><span style="color:#F0A24B;font-size:10px;font-weight:600;white-space:nowrap;" title="同一報價項目先前已轉過訂單，這是同一組合的追加訂單">追加訂單</span><?php endif; ?></td>
                 <?php
@@ -3823,6 +3845,12 @@ catch (Exception $_eRep) {
 try { $conn->getPDO()->query("SELECT is_urgent FROM order_track LIMIT 1"); }
 catch (Exception $_eUrg) {
     try { $conn->getPDO()->exec("ALTER TABLE order_track ADD COLUMN is_urgent TINYINT(1) NOT NULL DEFAULT 0 COMMENT '急件=1；篩選批圖中時排最上方(多筆依接單日新到舊)，清單以淺暖粉紅底色標示'"); } catch (Exception $_eUrg2) {}
+}
+// 相容舊表：need_design_draw／need_sample_draw（需設計繪圖／由樣品繪圖旗標）首次載入自動補欄（2026-10-07）
+try { $conn->getPDO()->query("SELECT need_design_draw, need_sample_draw FROM order_track LIMIT 1"); }
+catch (Exception $_eNd) {
+    try { $conn->getPDO()->exec("ALTER TABLE order_track ADD COLUMN need_design_draw TINYINT(1) NOT NULL DEFAULT 0 COMMENT '需設計繪圖=1；清單製程欄下方顯示提示'"); } catch (Exception $_eNd2) {}
+    try { $conn->getPDO()->exec("ALTER TABLE order_track ADD COLUMN need_sample_draw TINYINT(1) NOT NULL DEFAULT 0 COMMENT '由樣品繪圖=1；清單製程欄下方顯示提示'"); } catch (Exception $_eNd3) {}
 }
 // 相容舊表：BOSS 審圖（客戶名單表＋order_track 的 boss_review_at/boss_ok_at 等四欄）首次載入自動補建
 // 只在「真的開頁面」時跑一次（AJAX 清單不跑，避免每次翻頁都 SHOW COLUMNS）
@@ -4301,6 +4329,15 @@ foreach($dCounts as $c) {
             background: #FFF3E2; border: 1px solid #E4D3BC; color: #8a5a2b;
         }
         .as-tag-cell.fx { background: #F3EDE7; border-color: #D8C7B8; color: #6B513C; }
+        /* 需設計繪圖／由樣品繪圖提示（2026-10-07）：顯示在「製程」欄的訂單標籤（.as-tag-cell）下方，
+           與它同一套規則——同樣**要自己指定 line-height**，否則被 td span{line-height:28px} 撐高。 */
+        .proc-hint-badge {
+            display: inline-block; margin-top: 2px; padding: 0 5px; border-radius: 3px;
+            font-size: 10px; line-height: 14px; white-space: nowrap; max-width: 100%;
+            overflow: hidden; text-overflow: ellipsis; vertical-align: top; font-weight: 600;
+        }
+        .proc-hint-badge.pb-design { background: #EBD3A8; border: 1px solid #C9A877; color: #6B471A; }
+        .proc-hint-badge.pb-sample { background: #D98A5F; border: 1px solid #B5693F; color: #3A2C1A; }
         /* 稽核製程標籤－舊資料批次補設定：框選列（2026-10-06，見同名 JS 區塊 ASTAGDRAG）。
            同一列的文字格仍可正常選字/雙擊，只有跨列拖曳或點中勾選欄整格才會換底色；
            色票沿用 KPI 明細頁（views/news/KPI.php tr.sel）同一套暖色系，全站一致。 */
@@ -4721,6 +4758,18 @@ foreach($dCounts as $c) {
                     <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
                     <button type="button" id="btn-toggle-closed" class="btn btn-xs pull-right" style="display:none;margin-right:8px;margin-top:2px;" onclick="toggleOrderStatus('closed')"></button>
                     <button type="button" id="btn-toggle-urgent" class="btn btn-xs pull-right" style="margin-right:8px;margin-top:2px;" onclick="toggleUrgentFlag()" title="標記為急件：篩選「批圖中」時會排在最上方，清單以淺暖粉紅底色標示"></button>
+                    <?php /* 需設計繪圖／由樣品繪圖（2026-10-07 使用者要求）：純標記，不影響任何既有流程，
+                             效果是清單「製程」欄的訂單標籤（AS 認定）下方多一行提示。各自獨立指派角色，
+                             沒有該功能碼的人連按鈕都不會出現（鐵律8，後端 or_new/or_update 一律照收不驗權限
+                             ——這兩個欄位本身不是危險操作，跟急件旗標同一種「純標記」性質，顯示才是權限管控重點）。
+                             DOM 順序刻意放在急件鈕之後：pull-right 浮動元素先出現者先佔右側，後出現者疊在其左側，
+                             所以「需設計繪圖」才會顯示在「設為急件」左側、「由樣品繪圖」又在「需設計繪圖」左側。 */ ?>
+                    <?php if ($can_need_design_draw): ?>
+                    <button type="button" id="btn-toggle-need-design" class="btn btn-xs pull-right" style="margin-right:8px;margin-top:2px;" onclick="toggleNeedDesignDrawFlag()" title="標記需設計重新繪圖：清單製程欄下方會顯示提示"></button>
+                    <?php endif; ?>
+                    <?php if ($can_sample_draw): ?>
+                    <button type="button" id="btn-toggle-sample-draw" class="btn btn-xs pull-right" style="margin-right:8px;margin-top:2px;" onclick="toggleSampleDrawFlag()" title="標記由樣品繪圖：清單製程欄下方會顯示提示"></button>
+                    <?php endif; ?>
                     <?php /* 標題與「製程標籤」要並排，所以標題改 inline-block。
                              注意：切換新增／編輯模式時會重寫 modal-title
                              （2026-10-02 已全改成只限定 #newOrderModal：原本寫全頁共用選擇器，
@@ -4761,6 +4810,9 @@ foreach($dCounts as $c) {
                                 <input type="hidden" name="quote_no"            id="hidden_quote_no">
                                 <input type="hidden" name="batch_key"           id="order_attach_batch_key">
                                 <input type="hidden" name="is_urgent"           id="hidden_is_urgent" value="0">
+                                <?php // 需設計繪圖／由樣品繪圖（2026-10-07）：同樣隨既有 or_new/or_update 一起存，不另開 API。 ?>
+                                <input type="hidden" name="need_design_draw"    id="hidden_need_design_draw" value="0">
+                                <input type="hidden" name="need_sample_draw"    id="hidden_need_sample_draw" value="0">
                                 <?php /* 稽核製程標籤（2026-10-02）：隨既有的 or_new/or_update 一起存，
                                          不另開 API——那樣標籤才跟訂單內容在同一次存檔，不會出現
                                          「訂單存進去了、標籤沒跟上」。後端 _NewOrder_Track.php 會再驗一次。 */ ?>
@@ -9787,6 +9839,8 @@ foreach($dCounts as $c) {
             $('input[name="datepicker_ate"]').val(today);
 
             setUrgentFlag(false);
+            setNeedDesignDrawFlag(false);
+            setSampleDrawFlag(false);
 
             // 附件：新增模式尚無 Order_id，先產生暫存批次碼，存檔後由後端歸屬到新訂單
             $('#order_attach_batch_key').val(orderAttachNewBatchKey());
@@ -9811,6 +9865,36 @@ foreach($dCounts as $c) {
             }
         }
         function toggleUrgentFlag() { setUrgentFlag($('#hidden_is_urgent').val() !== '1'); }
+
+        // 需設計繪圖／由樣品繪圖（使用者明確要求，2026-10-07）：跟急件旗標同一種「純標記」性質，
+        // 不影響任何既有流程；效果是清單「製程」欄的訂單標籤（AS 認定）下方多一行提示。
+        // 按鈕本身有沒有出現由後端 $can_need_design_draw／$can_sample_draw 控制（鐵律8），
+        // 這裡的 $('#btn-toggle-...') 找不到元素時 jQuery 安全地什麼都不做，不必另外判斷。
+        function setNeedDesignDrawFlag(on) {
+            $('#hidden_need_design_draw').val(on ? '1' : '0');
+            var $b = $('#btn-toggle-need-design');
+            if (on) {
+                $b.css({ 'background': '#B06F27', 'border-color': '#8a5420', 'color': '#fff', 'font-weight': '700' })
+                  .html('<i class="fa fa-pencil-square-o"></i> 需設計繪圖（點此取消）');
+            } else {
+                $b.css({ 'background': '#fff', 'border-color': '#ccc', 'color': '#777', 'font-weight': '400' })
+                  .html('<i class="fa fa-pencil-square-o"></i> 需設計繪圖');
+            }
+        }
+        function toggleNeedDesignDrawFlag() { setNeedDesignDrawFlag($('#hidden_need_design_draw').val() !== '1'); }
+
+        function setSampleDrawFlag(on) {
+            $('#hidden_need_sample_draw').val(on ? '1' : '0');
+            var $b = $('#btn-toggle-sample-draw');
+            if (on) {
+                $b.css({ 'background': '#8A5A2B', 'border-color': '#6b4620', 'color': '#fff', 'font-weight': '700' })
+                  .html('<i class="fa fa-cube"></i> 由樣品繪圖（點此取消）');
+            } else {
+                $b.css({ 'background': '#fff', 'border-color': '#ccc', 'color': '#777', 'font-weight': '400' })
+                  .html('<i class="fa fa-cube"></i> 由樣品繪圖');
+            }
+        }
+        function toggleSampleDrawFlag() { setSampleDrawFlag($('#hidden_need_sample_draw').val() !== '1'); }
 
         // ══════════════════════════════════════════════════════════════════════
         // 稽核製程標籤（唯一實作 src/common/order_as_tag_lib.php；2026-10-02 使用者交辦）
@@ -10976,6 +11060,8 @@ foreach($dCounts as $c) {
                 if (data.ate)            form.find('select[name="ate"]').val(data.ate);
                 if (data.datepicker_ate) form.find('input[name="datepicker_ate"]').val(data.datepicker_ate);
                 setUrgentFlag(parseInt(data.is_urgent || 0) === 1);
+                setNeedDesignDrawFlag(parseInt(data.need_design_draw || 0) === 1);
+                setSampleDrawFlag(parseInt(data.need_sample_draw || 0) === 1);
 
                 $('#btn-save-copy').text('更新並複製');
                 $('#btn-save').text('確認更新');
@@ -11543,8 +11629,10 @@ foreach($dCounts as $c) {
                 $('#price-lock-icon').hide(); $('#price-source').text(''); $('#qty-warn').hide();
                 $('#panel-right-content').hide(); $('#panel-quotes-placeholder').show();
                 _lastLoadedPart = '';
-                // 複製為新訂單，不繼承狀態（急件旗標同樣不繼承），重置狀態按鈕與欄位
+                // 複製為新訂單，不繼承狀態（急件旗標／需設計繪圖／由樣品繪圖同樣不繼承），重置狀態按鈕與欄位
                 setUrgentFlag(false);
+                setNeedDesignDrawFlag(false);
+                setSampleDrawFlag(false);
                 $('#btn-toggle-paused').hide();
                 $('#btn-toggle-closed').hide();
                 $('#newOrderForm').find('input, textarea, select').prop('readonly', false).prop('disabled', false);

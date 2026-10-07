@@ -225,6 +225,18 @@ try {
     // 急件旗標（使用者明確要求，2026-09-03）：只收 0/1，權限沿用本區塊上方的 ot_edit 守門。
     $isUrgent = (!empty($_POST['is_urgent']) && $_POST['is_urgent'] !== '0') ? 1 : 0;
 
+    // 相容舊表：need_design_draw／need_sample_draw（需設計繪圖／由樣品繪圖旗標）自動補欄（2026-10-07）。
+    try { $db->query("SELECT need_design_draw, need_sample_draw FROM order_track LIMIT 1"); }
+    catch (Exception $_eNd) {
+        try { $db->exec("ALTER TABLE order_track ADD COLUMN need_design_draw TINYINT(1) NOT NULL DEFAULT 0 COMMENT '需設計繪圖=1；清單製程欄下方顯示提示'"); } catch (Exception $_eNd2) {}
+        try { $db->exec("ALTER TABLE order_track ADD COLUMN need_sample_draw TINYINT(1) NOT NULL DEFAULT 0 COMMENT '由樣品繪圖=1；清單製程欄下方顯示提示'"); } catch (Exception $_eNd3) {}
+    }
+    // 需設計繪圖／由樣品繪圖：與急件旗標同一種「純標記」性質，只收 0/1，不另驗權限
+    // （按鈕本身有沒有出現才是權限控管重點，見 views/Sales/NewOrder_Track.php 的
+    //  $can_need_design_draw／$can_sample_draw；未勾功能碼的人前端連按鈕都看不到）。
+    $needDesignDraw = (!empty($_POST['need_design_draw']) && $_POST['need_design_draw'] !== '0') ? 1 : 0;
+    $needSampleDraw = (!empty($_POST['need_sample_draw']) && $_POST['need_sample_draw'] !== '0') ? 1 : 0;
+
     // ── 稽核製程標籤（2026-10-02 使用者交辦）──────────────────────────────
     // 前端在跳窗標題右側讓使用者點選，這裡用同一套規則再驗一次（鐵律8）。
     // 兩個刻意這樣做的地方：
@@ -281,6 +293,8 @@ try {
                     Created_By       = :Created_By,
                     Client_name_ID   = :Client_name_ID,
                     is_urgent        = :is_urgent,
+                    need_design_draw = :need_design_draw,
+                    need_sample_draw = :need_sample_draw,
                     d_id_ID          = :d_id_ID";
         $stmt = $db->prepare($sql);
         $stmt->bindParam(':OrderNo',          $_POST['OrderNo']);
@@ -305,6 +319,8 @@ try {
         $stmt->bindValue(':quote_no',         $quoteNo);
         $stmt->bindValue(':quote_item_id',    $quoteItemId);
         $stmt->bindValue(':is_urgent',        $isUrgent, PDO::PARAM_INT);
+        $stmt->bindValue(':need_design_draw', $needDesignDraw, PDO::PARAM_INT);
+        $stmt->bindValue(':need_sample_draw', $needSampleDraw, PDO::PARAM_INT);
         $stmt->execute();
         $newId = $db->lastInsertId();
         // 稽核製程標籤：寫入一律走 ot_astag_apply_to_order()（唯一寫入點，順便留下設定人與時間）
@@ -369,7 +385,8 @@ try {
                        unit_price=:unit_price, quote_no=:quote_no, quote_item_id=:quote_item_id,
                        Modified_By=:Modified_By, Modified_At=NOW(),
                        Client_name_ID=:Client_name_ID, d_id_ID=:d_id_ID,
-                       is_urgent=:is_urgent";
+                       is_urgent=:is_urgent,
+                       need_design_draw=:need_design_draw, need_sample_draw=:need_sample_draw";
 
         if ($_POST['orderDdate'] !== $curDel) {
             $sql = "UPDATE order_track SET $baseFields,
@@ -407,6 +424,8 @@ try {
         $stmt->bindValue(':quote_no',         $quoteNo);
         $stmt->bindValue(':quote_item_id',    $quoteItemId);
         $stmt->bindValue(':is_urgent',        $isUrgent, PDO::PARAM_INT);
+        $stmt->bindValue(':need_design_draw', $needDesignDraw, PDO::PARAM_INT);
+        $stmt->bindValue(':need_sample_draw', $needSampleDraw, PDO::PARAM_INT);
 
         if ($_POST['orderDdate'] !== $curDel) {
             $stmt->bindParam(':newDel',  $newDel);
