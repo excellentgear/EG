@@ -2453,8 +2453,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             } catch (Exception $ex) { $row['vendor_map'] = []; }
             // 專用料號對應（指向其他 d_setting）
             try {
-                $pq = $pdo->prepare("SELECT dm.ref_d_id, d.D_Setting_Id AS part_id, COALESCE(d.Spec_No,'') AS spec_no
+                $pq = $pdo->prepare("SELECT dm.ref_d_id, d.D_Setting_Id AS part_id, COALESCE(d.Spec_No,'') AS spec_no, COALESCE(c.customer,'') AS client_name
                                      FROM d_setting_dedicated_part_map dm JOIN d_setting d ON d.d_id=dm.ref_d_id
+                                     LEFT JOIN customer_list c ON d.Customer_Id=c.customer_id
                                      WHERE dm.d_id=? ORDER BY dm.sort_order, dm.map_id");
                 $pq->execute([$d_id]);
                 $row['dedicated_part_map'] = $pq->fetchAll(PDO::FETCH_ASSOC);
@@ -3647,10 +3648,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $kw = trim($_POST['kw'] ?? '');
             $exclude = intval($_POST['exclude_d_id'] ?? 0); // 排除自己，避免自我關聯
             if ($kw === '') { echo json_encode(['success'=>true,'data'=>[]]); exit; }
-            $sql = "SELECT d_id, D_Setting_Id AS part_id, COALESCE(Spec_No,'') AS spec_no FROM d_setting WHERE (D_Setting_Id LIKE :kw OR Spec_No LIKE :kw OR Drawing_No LIKE :kw)";
+            $sql = "SELECT d.d_id, d.D_Setting_Id AS part_id, COALESCE(d.Spec_No,'') AS spec_no, COALESCE(c.customer,'') AS client_name
+                    FROM d_setting d LEFT JOIN customer_list c ON d.Customer_Id=c.customer_id
+                    WHERE (d.D_Setting_Id LIKE :kw OR d.Spec_No LIKE :kw OR d.Drawing_No LIKE :kw OR c.customer LIKE :kw)";
             $params = [':kw'=>"%$kw%"];
-            if ($exclude > 0) { $sql .= " AND d_id <> :exid"; $params[':exid'] = $exclude; }
-            $sql .= " ORDER BY D_Setting_Id LIMIT 15";
+            if ($exclude > 0) { $sql .= " AND d.d_id <> :exid"; $params[':exid'] = $exclude; }
+            $sql .= " ORDER BY d.D_Setting_Id LIMIT 15";
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
             echo json_encode(['success'=>true,'data'=>$stmt->fetchAll(PDO::FETCH_ASSOC)]);
@@ -14414,7 +14417,7 @@ function _pfAcNormalize(field, row) {
         return { id:String(row.maker_id_no), label:(nm? nm+' ' : '')+'['+row.maker_id_no+']', price:'' };
     }
     if (field==='partno') {
-        return { id:String(row.d_id), label:row.part_id + (row.spec_no? ' / '+row.spec_no : '') };
+        return { id:String(row.d_id), label:row.part_id + (row.spec_no? ' / '+row.spec_no : '') + (row.client_name? '（'+row.client_name+'）':'') };
     }
     return { id:String(row.machine_id), label:row.machine_name + (row.field_no? ' ['+row.field_no+']':'') + (row.machine_type? ' ('+row.machine_type+')':'') };
 }
@@ -14555,7 +14558,7 @@ function pfAcLoadFromPart(d) {
         return { id:String(v.maker_id_no), label:(nm?nm+' ':'')+'['+v.maker_id_no+']', price:(v.price==null?'':String(v.price)) };
     });
     _pfAcData.partno  = (d.dedicated_part_map||[]).map(function(p){
-        return { id:String(p.ref_d_id), label:p.part_id + (p.spec_no? ' / '+p.spec_no : '') };
+        return { id:String(p.ref_d_id), label:p.part_id + (p.spec_no? ' / '+p.spec_no : '') + (p.client_name? '（'+p.client_name+'）':'') };
     });
     _pfAcData.machine = (d.machine_map||[]).map(function(m){
         return { id:String(m.machine_id), label:m.machine_name + (m.field_no? ' ['+m.field_no+']':'') + (m.machine_type? ' ('+m.machine_type+')':'') };
