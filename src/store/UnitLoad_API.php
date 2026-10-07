@@ -327,6 +327,9 @@ switch ($action) {
         $setup      = ul_prod_setup_stats($db, $p['from'], $p['to'], $ids);
         $production = ul_prod_production_stats($db, $p['from'], $p['to'], $ids);
         $perCapita  = ul_prod_per_capita($db, $p['from'], $p['to'], $ids);
+        // 包裝負荷：待包裝筆數是全公司現況快照（跟 by_process_type 一樣不受 $ids 篩選），
+        // 不屬於任一品管/生產課特定人員，見 unit_load_lib.php 的函式註解。
+        $packing = ul_prod_packing_stats($db, $p['from'], $p['to']);
 
         $totalUnassigned = array_sum(array_column($byType, 'unassigned'));
         $overload = [
@@ -345,8 +348,9 @@ switch ($action) {
             'setup'          => $setup,
             'production'     => $production,
             'per_capita'     => $perCapita,
+            'packing'        => $packing,
             'overload'       => $overload,
-            'note'           => $ids ? '' : '尚未在設定頁為生產課勾選任何部門——製程大類現況與系統缺口統計不受此影響'
+            'note'           => $ids ? '' : '尚未在設定頁為生產課勾選任何部門——製程大類現況與系統缺口統計、包裝負荷不受此影響'
                                            . '（照常顯示全公司數字），但每日產出/架機與生產時間/人均負荷需要設定人員後才有數字',
         ]);
     }
@@ -364,6 +368,8 @@ switch ($action) {
         $abnormal   = ul_qc_abnormal_stats($db, $p['from'], $p['to'], $ids);
         $byPerson   = ul_qc_by_person($db, $p['from'], $p['to'], $ids);
         $adhoc      = ul_qc_adhoc($db, $p['from'], $p['to']);
+        // 目前待驗佇列：現況快照，不吃 $from/$to、不受 $ids 篩選（全公司共用同一條佇列）。
+        $pendingQueue = ul_qc_pending_queue($db);
 
         // 待驗逐筆明細（rows）只用於畫面上的「最長/最短前5筆」，完整逐筆清單不回傳避免payload過大
         $waitOut = $wait;
@@ -378,15 +384,16 @@ switch ($action) {
         ];
 
         ulOut([
-            'period'      => $p,
-            'people'      => $people,
-            'daily_items' => $dailyItems,
-            'wait'        => $waitOut,
-            'abnormal'    => $abnormal,
-            'by_person'   => $byPerson,
-            'adhoc'       => $adhoc,
-            'overload'    => $overload,
-            'note'        => $ids ? '' : '尚未在設定頁為品管勾選任何部門——待驗等待工作天/異常比例/脫離流程補檢驗'
+            'period'        => $p,
+            'people'        => $people,
+            'daily_items'   => $dailyItems,
+            'wait'          => $waitOut,
+            'abnormal'      => $abnormal,
+            'by_person'     => $byPerson,
+            'adhoc'         => $adhoc,
+            'pending_queue' => $pendingQueue,
+            'overload'      => $overload,
+            'note'          => $ids ? '' : '尚未在設定頁為品管勾選任何部門——待驗等待工作天/異常比例/脫離流程補檢驗/目前待驗佇列'
                                         . '不受此影響（照常顯示全公司現況），但每日檢驗項目數/逐人明細需要設定人員後才有數字',
         ]);
     }

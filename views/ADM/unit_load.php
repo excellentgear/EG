@@ -311,15 +311,91 @@ body { background:#F3F6EC; }
     </div>
   </div>
 
-  <!-- ── 生產課／品管：下一階段補內容，本階段先留空殼 ─────── -->
-  <?php foreach (['prod', 'qc'] as $k): ?>
-  <div class="ul-tab-pane" id="tab-<?= ulEsc($k) ?>" data-unit="<?= ulEsc($k) ?>" style="display:none">
-    <div class="ul-placeholder">
-      <i class="fa <?= ulEsc($UNIT_ICONS[$k] ?? 'fa-circle') ?>"></i>
-      <?= ulEsc($UNIT_LABELS[$k] ?? $k) ?>的詳細資料即將顯示（下一階段補上）
+  <!-- ── 生產課分頁 ─────────────────────────────────────── -->
+  <div class="ul-tab-pane" id="tab-prod" data-unit="prod" style="display:none">
+    <div id="prodNote"></div>
+
+    <div class="sec">
+      <h4><i class="fa fa-sitemap" style="color:var(--green-d);"></i> 製程大類負荷
+        <span class="hint">目前進行中（尚未移轉）的製程逐大類統計，非本期累積，不受期間篩選影響</span></h4>
+      <div class="table-responsive"><table class="table table-striped" id="prodTypeTable">
+        <thead><tr><th>製程大類</th><th>未指派機台</th><th>已指派機台</th><th>合計</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+
+    <div class="sec">
+      <h4><i class="fa fa-exclamation-triangle" style="color:var(--coral);"></i> 未正式指派卻已報工
+        <span class="hint">本期內：報工對應的製程當時沒有被正式指派機台、或仍停在最初狀態（系統流程缺口）</span></h4>
+      <div id="prodUntracked"></div>
+    </div>
+
+    <div class="sec">
+      <h4><i class="fa fa-line-chart" style="color:var(--green-d);"></i> 每日報工加工數量</h4>
+      <div class="chart-box" id="prodDailyChart" style="height:320px;"></div>
+    </div>
+
+    <div class="sec">
+      <h4><i class="fa fa-wrench" style="color:var(--green-d);"></i> 架機與生產時間</h4>
+      <div id="prodTimeKpi" class="kpi-row"></div>
+      <div class="chart-box" id="prodSetupChart" style="height:280px;"></div>
+    </div>
+
+    <div class="sec">
+      <h4><i class="fa fa-users" style="color:var(--green-d);"></i> 人均負荷</h4>
+      <div id="prodPerCapita" class="kpi-row"></div>
+    </div>
+
+    <div class="sec">
+      <h4><i class="fa fa-cube" style="color:var(--green-d);"></i> 包裝負荷</h4>
+      <div id="prodPackingKpi" class="kpi-row"></div>
+      <div class="chart-box" id="prodPackingChart" style="height:280px;"></div>
+      <div id="prodPackingExtremes"></div>
     </div>
   </div>
-  <?php endforeach; ?>
+
+  <!-- ── 品管分頁 ───────────────────────────────────────── -->
+  <div class="ul-tab-pane" id="tab-qc" data-unit="qc" style="display:none">
+    <div id="qcNote"></div>
+
+    <div class="sec">
+      <h4><i class="fa fa-list-ol" style="color:var(--green-d);"></i> 目前待驗佇列
+        <span class="hint">現況快照，不受期間篩選影響</span></h4>
+      <div id="qcPendingKpi" class="kpi-row"></div>
+      <div id="qcPendingTable"></div>
+    </div>
+
+    <div class="sec">
+      <h4><i class="fa fa-line-chart" style="color:var(--green-d);"></i> 每日檢驗項目數</h4>
+      <div class="chart-box" id="qcDailyChart" style="height:320px;"></div>
+    </div>
+
+    <div class="sec">
+      <h4><i class="fa fa-clock-o" style="color:var(--green-d);"></i> 待驗等待工作天
+        <span class="hint">本期完成檢驗的製程，自進入待驗到驗完之間的工作天數</span></h4>
+      <div id="qcWaitKpi" class="kpi-row"></div>
+      <div id="qcWaitExtremes"></div>
+    </div>
+
+    <div class="sec">
+      <h4><i class="fa fa-exclamation-circle" style="color:var(--green-d);"></i> 異常單與NG比例趨勢</h4>
+      <div id="qcAbnormalKpi" class="kpi-row"></div>
+      <div class="chart-box" id="qcAbnormalChart" style="height:320px;"></div>
+    </div>
+
+    <div class="sec">
+      <h4><i class="fa fa-table" style="color:var(--green-d);"></i> 各人負荷明細</h4>
+      <div class="table-responsive"><table class="table table-striped" id="qcPersonTable">
+        <thead><tr><th>部門</th><th>職稱</th><th>姓名</th><th>檢驗筆數</th><th>NG筆數</th><th>平均等待工作天</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+
+    <div class="sec">
+      <h4><i class="fa fa-random" style="color:var(--green-d);"></i> 脫離正常待驗流程的補檢驗</h4>
+      <div id="qcAdhoc"></div>
+    </div>
+  </div>
 
 <?php endif; ?>
 </div><!-- /right_col -->
@@ -335,7 +411,9 @@ body { background:#F3F6EC; }
         <li>把<b>設計課、業務課、生管、生產課、品管</b>五個單位目前的工作量各自整理成一張 KPI 卡與一頁明細，
             讓主管一眼看出哪個單位現在比較吃緊。</li>
         <li><b>總覽分頁</b>：五張 KPI 卡＋整頁自動分析（哪個單位的哪個指標偏高、跟上一期比有沒有變嚴重）。</li>
-        <li>五個單位各自的<b>詳細資料分頁</b>（逐人明細、趨勢圖等）將於下一階段補上，本階段先看得到分頁、按得下去，內容稍後顯示。</li>
+        <li>五個單位各自的<b>詳細資料分頁</b>：逐人明細、趨勢圖、各類清單，點分頁鈕或 KPI 卡的「查看明細 »」即可切入。
+            生產課多了「包裝負荷」子區塊（待包裝筆數／每日完成數／平均處理工作天／處理最久與最快前5筆），
+            品管多了「目前待驗佇列」（依製程分組的現況筆數）。</li>
       </ul>
       <h4>操作步驟</h4>
       <ol>
@@ -638,13 +716,41 @@ function ensureThresholds(cb){
 var UL_METRIC_THR_KEY = {
   design: { drawing_wip:'design.batch_pending', avg_draw_workdays:'design.avg_draw_workdays', issue_orders:'design.issue_orders' },
   sales:  { quote_count:'sales.quote_backlog', open_issue_count:'sales.open_issue_count' },
-  pm:     { outsource_wip:'pm.outsource_wip', pending_recon_lines:'pm.pending_recon_lines' }
+  pm:     { outsource_wip:'pm.outsource_wip', pending_recon_lines:'pm.pending_recon_lines' },
+  /* prod.unassigned 沿用全單位門檻「未指派機台筆數」(prod.unassigned_count)，逐製程大類那一格
+     超過同一個門檻就標紅——這是粗略的沿用，不是另外替每個大類各自訂一個門檻。 */
+  prod:   { unassigned:'prod.unassigned_count' },
+  qc:     { avg_wait_workdays:'qc.wait_days_avg' }
 };
 function cellBadCls(unit, field, value){
   if (value === null || value === undefined) return '';
   var key = (UL_METRIC_THR_KEY[unit]||{})[field];
   if (!key || !UL_THR || UL_THR[key] === undefined) return '';
   return Number(value) > Number(UL_THR[key]) ? ' class="ul-cell-bad"' : '';
+}
+/* 包裝待包裝筆數／品管目前待驗佇列總筆數：這兩個是本次新增的指標，unit_load_lib.php 的
+   ul_threshold_defaults() 尚未收錄對應門檻鍵，暫不等 lib 端支援——先用這裡的合理預設值，
+   之後若要讓管理員也能在「設定」跳窗調整，再補進 ul_threshold_defaults() 並改走 UL_THR。 */
+var UL_LOCAL_THR_DEFAULT = { packing_pending: 200, qc_pending_total: 150 };
+function localThr(key, fallbackKey){
+  if (UL_THR && UL_THR[key] !== undefined) return Number(UL_THR[key]);
+  return Number(UL_LOCAL_THR_DEFAULT[fallbackKey]);
+}
+/** 把 YYYY-MM-DD HH:MM:SS 或純日期字串只取日期部分，空值印破折號 */
+function dOnly(s){ return s ? String(s).substring(0,10) : '—'; }
+/** 待驗/包裝「最長/最短前5筆」小表格，withProcess=true 時多印一欄製程名稱 */
+function extremesTable(rows, withProcess){
+  rows = rows || [];
+  if (!rows.length) return '<div class="ul-empty-hint" style="padding:6px 0;">（無資料）</div>';
+  var h = '<table class="table table-condensed" style="margin-bottom:0;"><thead><tr><th>製令</th>'
+        + (withProcess ? '<th>製程</th>' : '') + '<th>工作天</th><th>進入</th><th>完成</th></tr></thead><tbody>';
+  rows.forEach(function(r){
+    h += '<tr><td>'+esc(r.bom)+'</td>'
+       + (withProcess ? '<td>'+esc(r.process_name)+'</td>' : '')
+       + '<td>'+nf1(r.workdays)+'</td><td>'+esc(dOnly(r.enter_at))+'</td><td>'+esc(dOnly(r.finish_at))+'</td></tr>';
+  });
+  h += '</tbody></table>';
+  return h;
 }
 
 /* ── 設計課分頁 ─────────────────────────────────────── */
@@ -833,9 +939,284 @@ function renderPm(d){
   $('#pmKpi').html(h);
 }
 
+/* ── 生產課分頁 ─────────────────────────────────────── */
+function loadProd(){
+  var params = $.extend({action:'data_prod'}, periodParams());
+  ensureThresholds(function(){
+    $.get(UL_API, params, function(r){
+      if(!r || !r.ok){ alert((r&&r.error)||'載入失敗'); return; }
+      renderProd(r);
+      UNIT_LOADED.prod = true;
+    }, 'json').fail(function(xhr){
+      var r = xhr.responseJSON;
+      alert((r&&r.error) || ('載入失敗：HTTP '+xhr.status));
+    });
+  });
+}
+function renderProd(d){
+  $('#prodNote').html(d.note ? '<div class="ul-unit-note"><i class="fa fa-exclamation-circle"></i> '+esc(d.note)+'</div>' : '');
+  var ov = d.overload || {};
+
+  renderProdTypeTable(d.by_process_type);
+  renderProdUntracked(d.untracked, !!ov.untracked_count);
+  renderProdDailyChart(d.daily_output);
+  renderProdTimeStats(d.setup, d.production, d.per_capita, !!ov.avg_setup_minutes);
+  renderProdPacking(d.packing);
+}
+function renderProdTypeTable(rows){
+  rows = rows || [];
+  if (!rows.length){
+    $('#prodTypeTable tbody').html('<tr><td colspan="4" style="text-align:center;color:var(--muted);">目前沒有進行中的製程。</td></tr>');
+    return;
+  }
+  var h = '';
+  rows.forEach(function(r){
+    h += '<tr><td>'+esc(r.process_type_name)+'</td>'
+       + '<td'+cellBadCls('prod','unassigned',r.unassigned)+'>'+nf(r.unassigned)+'</td>'
+       + '<td>'+nf(r.assigned)+'</td>'
+       + '<td>'+nf(r.total)+'</td></tr>';
+  });
+  $('#prodTypeTable tbody').html(h);
+}
+function renderProdUntracked(u, bad){
+  u = u || { by_process_type:[], examples:[], total:0 };
+  if (!u.total){ $('#prodUntracked').html(emptyHint('本期沒有偵測到這類筆數。')); return; }
+  var h = '<div class="kpi-row">' + statTile('本期筆數', u.total, undefined, null, nf, bad) + '</div>';
+  if ((u.by_process_type||[]).length){
+    h += '<div class="table-responsive"><table class="table table-striped"><thead><tr><th>製程大類</th><th>筆數</th></tr></thead><tbody>';
+    u.by_process_type.forEach(function(r){ h += '<tr><td>'+esc(r.process_type_name)+'</td><td>'+nf(r.count)+'</td></tr>'; });
+    h += '</tbody></table></div>';
+  }
+  if ((u.examples||[]).length){
+    h += '<div style="font-size:12px;color:var(--muted);margin-bottom:4px;">範例（最多20筆）：</div>';
+    h += '<div class="table-responsive"><table class="table table-condensed"><thead><tr><th>製令</th><th>製程</th><th>報工日期</th></tr></thead><tbody>';
+    u.examples.forEach(function(r){ h += '<tr><td>'+esc(r.bom)+'</td><td>'+esc(r.process_name)+'</td><td>'+esc(dOnly(r.report_date))+'</td></tr>'; });
+    h += '</tbody></table></div>';
+  }
+  $('#prodUntracked').html(h);
+}
+function renderProdDailyChart(out){
+  var rows = (out && out.rows) || [];
+  if (!rows.length){ $('#prodDailyChart').html(emptyHint('本期沒有報工資料。')); return; }
+  var dates = [], seen = {};
+  rows.forEach(function(r){ if(!seen[r.report_date]){ seen[r.report_date]=1; dates.push(r.report_date); } });
+  dates.sort();
+  var byType = {};
+  rows.forEach(function(r){
+    var k = String(r.process_type_name);
+    if(!byType[k]) byType[k] = {};
+    byType[k][r.report_date] = (byType[k][r.report_date]||0) + Number(r.qty||0);
+  });
+  var series = Object.keys(byType).map(function(k){
+    return { name:k, data: dates.map(function(d){ return byType[k][d] || 0; }) };
+  });
+  chart('prodDailyChart', {
+    chart: { type:'column', height:320 },
+    xAxis: { categories: dates },
+    yAxis: { title:{text:null}, allowDecimals:false, min:0 },
+    tooltip: { shared:true },
+    series: series
+  });
+}
+function renderProdTimeStats(setup, production, perCapita, setupBad){
+  setup = setup || { avg_minutes:null, daily:[], valid_count:0 };
+  production = production || { avg_minutes:null, daily:[], valid_count:0 };
+  perCapita = perCapita || {};
+
+  var h = '<div class="kpi-row">';
+  h += statTile('平均架機時間（分）', setup.avg_minutes, undefined, null, nf1, setupBad);
+  h += statTile('有效架機筆數', setup.valid_count, undefined, null, nf, false);
+  h += statTile('平均生產時間（分）', production.avg_minutes, undefined, null, nf1, false);
+  h += statTile('有效生產筆數', production.valid_count, undefined, null, nf, false);
+  h += '</div>';
+  $('#prodTimeKpi').html(h);
+
+  var h2 = '<div class="kpi-row">';
+  h2 += statTile('報工人數', perCapita.worker_count, undefined, null, nf, false);
+  h2 += statTile('人均產量', perCapita.avg_output_per_person, undefined, null, nf1, false);
+  h2 += statTile('人均架機時間（分）', perCapita.avg_setup_minutes_per_person, undefined, null, nf1, false);
+  h2 += statTile('人均生產時間（分）', perCapita.avg_production_minutes_per_person, undefined, null, nf1, false);
+  h2 += '</div>';
+  $('#prodPerCapita').html(h2);
+
+  var daily = setup.daily || [];
+  if (!daily.length){ $('#prodSetupChart').html(emptyHint('本期沒有架機時間資料。')); return; }
+  chart('prodSetupChart', {
+    chart: { type:'line', height:280 },
+    xAxis: { categories: daily.map(function(r){ return r.report_date; }) },
+    yAxis: { title:{text:null}, allowDecimals:false, min:0 },
+    series: [{ name:'每日架機數', data: daily.map(function(r){ return r.count; }) }]
+  });
+}
+function renderProdPacking(p){
+  p = p || { pending:0, daily:[], avg_workdays:null, longest:[], shortest:[] };
+  var bad = Number(p.pending||0) > localThr('prod.packing_pending', 'packing_pending');
+
+  var h = '<div class="kpi-row">';
+  h += statTile('待包裝筆數', p.pending, undefined, null, nf, bad);
+  h += statTile('平均處理工作天', p.avg_workdays, undefined, null, nf1, false);
+  h += '</div>';
+  $('#prodPackingKpi').html(h);
+
+  var daily = p.daily || [];
+  if (!daily.length){
+    $('#prodPackingChart').html(emptyHint('本期沒有包裝完工資料。'));
+  } else {
+    chart('prodPackingChart', {
+      chart: { height:280 },
+      xAxis: { categories: daily.map(function(r){ return r.report_date; }) },
+      yAxis: [
+        { title:{text:null}, allowDecimals:false, min:0 },
+        { title:{text:null}, opposite:true, min:0 }
+      ],
+      tooltip: { shared:true },
+      series: [
+        { name:'每日完成筆數', type:'column', yAxis:0, data: daily.map(function(r){ return r.count; }) },
+        { name:'平均處理工作天', type:'line', yAxis:1, data: daily.map(function(r){ return r.avg_workdays; }) }
+      ]
+    });
+  }
+
+  var h2 = '<div class="row">'
+    + '<div class="col-sm-6"><div style="font-size:12.5px;color:var(--ink);font-weight:700;margin-bottom:4px;">處理最久前5筆</div>'+extremesTable(p.longest,false)+'</div>'
+    + '<div class="col-sm-6"><div style="font-size:12.5px;color:var(--ink);font-weight:700;margin-bottom:4px;">處理最快前5筆</div>'+extremesTable(p.shortest,false)+'</div>'
+    + '</div>';
+  $('#prodPackingExtremes').html(h2);
+}
+
+/* ── 品管分頁 ───────────────────────────────────────── */
+function loadQc(){
+  var params = $.extend({action:'data_qc'}, periodParams());
+  ensureThresholds(function(){
+    $.get(UL_API, params, function(r){
+      if(!r || !r.ok){ alert((r&&r.error)||'載入失敗'); return; }
+      renderQc(r);
+      UNIT_LOADED.qc = true;
+    }, 'json').fail(function(xhr){
+      var r = xhr.responseJSON;
+      alert((r&&r.error) || ('載入失敗：HTTP '+xhr.status));
+    });
+  });
+}
+function renderQc(d){
+  $('#qcNote').html(d.note ? '<div class="ul-unit-note"><i class="fa fa-exclamation-circle"></i> '+esc(d.note)+'</div>' : '');
+  var ov = d.overload || {};
+
+  renderQcPending(d.pending_queue);
+  renderQcDailyChart(d.daily_items);
+  renderQcWait(d.wait, !!ov.wait_days_avg);
+  renderQcAbnormal(d.abnormal, !!ov.ng_rate);
+  renderQcPersonTable(d.by_person);
+  renderQcAdhoc(d.adhoc, !!ov.adhoc_count);
+}
+function renderQcPending(pq){
+  pq = pq || { by_process:[], total:0 };
+  var bad = Number(pq.total||0) > localThr('qc.pending_queue_total', 'qc_pending_total');
+  $('#qcPendingKpi').html('<div class="kpi-row">' + statTile('目前待驗總筆數', pq.total, undefined, null, nf, bad) + '</div>');
+
+  var rows = pq.by_process || [];
+  if (!rows.length){ $('#qcPendingTable').html(emptyHint('目前沒有待驗中的製程。')); return; }
+  var h = '<div class="table-responsive"><table class="table table-striped"><thead><tr><th>製程</th><th>筆數</th></tr></thead><tbody>';
+  rows.forEach(function(r){ h += '<tr><td>'+esc(r.process_name)+'</td><td>'+nf(r.count)+'</td></tr>'; });
+  h += '</tbody></table></div>';
+  $('#qcPendingTable').html(h);
+}
+function renderQcDailyChart(rows){
+  rows = rows || [];
+  if (!rows.length){ $('#qcDailyChart').html(emptyHint('本期沒有檢驗項目資料。')); return; }
+  var dates = [], seen = {};
+  rows.forEach(function(r){ if(!seen[r.check_date]){ seen[r.check_date]=1; dates.push(r.check_date); } });
+  dates.sort();
+  var byProc = {};
+  rows.forEach(function(r){
+    var k = String(r.process_name);
+    if(!byProc[k]) byProc[k] = {};
+    byProc[k][r.check_date] = (byProc[k][r.check_date]||0) + Number(r.count||0);
+  });
+  var series = Object.keys(byProc).map(function(k){
+    return { name:k, data: dates.map(function(d){ return byProc[k][d] || 0; }) };
+  });
+  chart('qcDailyChart', {
+    chart: { type:'column', height:320 },
+    xAxis: { categories: dates },
+    yAxis: { title:{text:null}, allowDecimals:false, min:0 },
+    tooltip: { shared:true },
+    series: series
+  });
+}
+function renderQcWait(w, bad){
+  w = w || { avg_workdays:null, longest:[], shortest:[], per_capita_workdays:null };
+  var h = '<div class="kpi-row">';
+  h += statTile('平均等待工作天', w.avg_workdays, undefined, null, nf1, bad);
+  h += statTile('人均檢驗天數', w.per_capita_workdays, undefined, null, nf1, false);
+  h += '</div>';
+  $('#qcWaitKpi').html(h);
+
+  var h2 = '<div class="row">'
+    + '<div class="col-sm-6"><div style="font-size:12.5px;color:var(--ink);font-weight:700;margin-bottom:4px;">等待最久前5筆</div>'+extremesTable(w.longest,true)+'</div>'
+    + '<div class="col-sm-6"><div style="font-size:12.5px;color:var(--ink);font-weight:700;margin-bottom:4px;">等待最短前5筆</div>'+extremesTable(w.shortest,true)+'</div>'
+    + '</div>';
+  $('#qcWaitExtremes').html(h2);
+}
+function renderQcAbnormal(ab, bad){
+  ab = ab || { daily_abnormal:[], daily_ng_rate:[], avg_abnormal_per_day:0, avg_ng_rate:null };
+  var h = '<div class="kpi-row">';
+  h += statTile('平均每日異常單數', ab.avg_abnormal_per_day, undefined, null, nf1, false);
+  h += statTile('平均每日NG比例', ab.avg_ng_rate!=null ? ab.avg_ng_rate*100 : null, undefined, null, pct1, bad);
+  h += '</div>';
+  $('#qcAbnormalKpi').html(h);
+
+  var dates = [], seen = {};
+  (ab.daily_abnormal||[]).forEach(function(r){ if(!seen[r.date]){ seen[r.date]=1; dates.push(r.date); } });
+  (ab.daily_ng_rate||[]).forEach(function(r){ if(!seen[r.date]){ seen[r.date]=1; dates.push(r.date); } });
+  dates.sort();
+  if (!dates.length){ $('#qcAbnormalChart').html(emptyHint('本期沒有異常單或檢驗資料。')); return; }
+  var abMap = {}; (ab.daily_abnormal||[]).forEach(function(r){ abMap[r.date]=r.count; });
+  var ngMap = {}; (ab.daily_ng_rate||[]).forEach(function(r){ ngMap[r.date]=r.rate; });
+  chart('qcAbnormalChart', {
+    chart: { height:320 },
+    xAxis: { categories: dates },
+    yAxis: [
+      { title:{text:null}, allowDecimals:false, min:0 },
+      { title:{text:null}, opposite:true, min:0, labels:{ formatter:function(){ return this.value+'%'; } } }
+    ],
+    tooltip: { shared:true },
+    series: [
+      { name:'每日異常單數', type:'column', yAxis:0, data: dates.map(function(d){ return abMap[d]||0; }) },
+      { name:'每日NG比例(%)', type:'line', yAxis:1, data: dates.map(function(d){ return ngMap[d]!=null ? Math.round(ngMap[d]*1000)/10 : null; }) }
+    ]
+  });
+}
+function renderQcPersonTable(rows){
+  rows = rows || [];
+  if (!rows.length){
+    $('#qcPersonTable tbody').html('<tr><td colspan="6" style="text-align:center;color:var(--muted);">尚未設定部門範圍</td></tr>');
+    return;
+  }
+  var h = '';
+  rows.forEach(function(r){
+    h += '<tr><td>'+esc(r.dept_name)+'</td><td>'+esc(r.position_name)+'</td><td>'+esc(r.name)+'</td>'
+       + '<td>'+nf(r.items_count)+'</td>'
+       + '<td>'+nf(r.ng_count)+'</td>'
+       + '<td'+cellBadCls('qc','avg_wait_workdays',r.avg_wait_workdays)+'>'+nf1(r.avg_wait_workdays)+'</td></tr>';
+  });
+  $('#qcPersonTable tbody').html(h);
+}
+function renderQcAdhoc(ad, bad){
+  ad = ad || { by_process:[], total:0 };
+  var h = '<div class="kpi-row">' + statTile('本期筆數', ad.total, undefined, null, nf, bad) + '</div>';
+  var rows = ad.by_process || [];
+  if (rows.length){
+    h += '<div class="table-responsive"><table class="table table-striped"><thead><tr><th>製程</th><th>筆數</th></tr></thead><tbody>';
+    rows.forEach(function(r){ h += '<tr><td>'+esc(r.process_name)+'</td><td>'+nf(r.count)+'</td></tr>'; });
+    h += '</tbody></table></div>';
+  }
+  $('#qcAdhoc').html(h);
+}
+
 /* ── 單位分頁與期間篩選串接 ─────────────────────────── */
-var UNIT_LOADERS = { design: loadDesign, sales: loadSales, pm: loadPm };
-var UNIT_LOADED  = { design: false, sales: false, pm: false };
+var UNIT_LOADERS = { design: loadDesign, sales: loadSales, pm: loadPm, prod: loadProd, qc: loadQc };
+var UNIT_LOADED  = { design: false, sales: false, pm: false, prod: false, qc: false };
 function loadUnitTab(key){
   if (UNIT_LOADERS[key]) UNIT_LOADERS[key]();
 }
