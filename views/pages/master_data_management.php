@@ -7552,6 +7552,13 @@ body { background:#F6F1EA; }
 
         <?php if ($is_admin): ?>
         <!-- 角色設定 Modal（主檔管理 module=master_data；僅管理員可見，仿異常矯正單） -->
+        <style>
+          #rf-checks .rf-group{ margin-bottom:14px; }
+          #rf-checks .rf-group-title{ font-size:12px; font-weight:700; color:#8a6d3b; background:#fdf6ec; border-left:3px solid #d4761a; padding:4px 8px; margin-bottom:4px; }
+          #rf-checks .rf-group-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); column-gap:10px; }
+          #rf-checks .rf-item{ margin:2px 0; }
+          #rf-checks .rf-item label{ font-weight:normal; font-size:12px; }
+        </style>
         <div class="modal fade" id="roleModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content">
           <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
             <h4 class="modal-title"><i class="fa fa-key"></i> 主檔管理 — 角色設定</h4></div>
@@ -7588,82 +7595,97 @@ body { background:#F6F1EA; }
           var $ = jQuery;
           var ROLES_API = '../../src/store/Roles_API.php';
           var escR = function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
-          var MASTERDATA_FEATURES = [
-            ['md_open','開啟主檔管理頁'],
-            ['md_attach_view','其他附件—檢視分頁'],
-            ['md_attach_upload','其他附件—上傳'],
-            ['md_attach_delete','其他附件—刪除'],
-            ['md_attach_edit','其他附件—編輯（標籤/浮水印）'],
-            // ── 客戶/廠商表單內的設定區塊（欄位型，僅檢視/編輯兩級）──
-            ['mdata_recon_view','客戶—對帳單設定：檢視'],
-            ['mdata_recon_edit','客戶—對帳單設定：編輯'],
-            ['mdata_settle_view','客戶/廠商—結帳設定：檢視'],
-            ['mdata_settle_edit','客戶/廠商—結帳設定：編輯'],
-            ['mdata_quote_method_view','客戶—報價方式：檢視'],
-            ['mdata_quote_method_edit','客戶—報價方式：編輯'],
-            ['mdata_payterm_view','客戶/廠商—收款/付款方式：檢視'],
-            ['mdata_payterm_edit','客戶/廠商—收款/付款方式：編輯'],
-            ['mdata_bank_view','客戶—銀行帳戶：檢視'],
-            ['mdata_bank_edit','客戶—銀行帳戶：編輯'],
-            // ── 料號標籤指派（對單一料號做的動作，非維護標籤目錄本身）──
-            ['mdata_tag_assign','料號—新增標籤指派'],
-            ['mdata_tag_edit_others','料號—修改/移除他人指派的標籤'],
-            // ── 字典/維護設定（清單型，新增/編輯/刪除/檢視四級）──
-            ['mdata_label_dict_view','標籤定義管理：檢視'],
-            ['mdata_label_dict_add','標籤定義管理：新增'],
-            ['mdata_label_dict_edit','標籤定義管理：編輯'],
-            ['mdata_label_dict_delete','標籤定義管理：刪除'],
-            ['mdata_gear_quality_view','齒輪等級對照表：檢視'],
-            ['mdata_gear_quality_add','齒輪等級對照表：新增'],
-            ['mdata_gear_quality_edit','齒輪等級對照表：編輯'],
-            ['mdata_gear_quality_delete','齒輪等級對照表：刪除'],
-            ['mdata_process_note_view','製程備註：檢視'],
-            ['mdata_process_note_add','製程備註：新增'],
-            ['mdata_process_note_edit','製程備註：編輯'],
-            ['mdata_process_note_delete','製程備註：刪除'],
-            ['mdata_process_no_view','製程主檔(process_no)：檢視'],
-            ['mdata_process_no_add','製程主檔(process_no)：新增'],
-            ['mdata_process_no_edit','製程主檔(process_no)：編輯'],
-            ['mdata_process_no_delete','製程主檔(process_no)：刪除'],
-            ['mdata_design_note_view','設計備註：檢視'],
-            ['mdata_design_note_add','設計備註：新增'],
-            ['mdata_design_note_edit','設計備註：編輯'],
-            ['mdata_design_note_delete','設計備註：刪除'],
-            ['mdata_workpiece_type_view','工件種類/小類：檢視'],
-            ['mdata_workpiece_type_add','工件種類/小類：新增'],
-            ['mdata_workpiece_type_edit','工件種類/小類：編輯'],
-            ['mdata_workpiece_type_delete','工件種類/小類：刪除'],
-            ['mdata_gear_type_dict_view','齒輪類型字典：檢視'],
-            ['mdata_gear_type_dict_add','齒輪類型字典：新增'],
-            ['mdata_gear_type_dict_edit','齒輪類型字典：編輯'],
-            ['mdata_gear_type_dict_delete','齒輪類型字典：刪除'],
-            ['mdata_industry_type_view','客戶產業別(含小類)：檢視'],
-            ['mdata_industry_type_add','客戶產業別(含小類)：新增'],
-            ['mdata_industry_type_edit','客戶產業別(含小類)：編輯'],
-            ['mdata_industry_type_delete','客戶產業別(含小類)：刪除'],
-            ['mdata_maker_category_view','廠商大類/小類：檢視'],
-            ['mdata_maker_category_add','廠商大類/小類：新增'],
-            ['mdata_maker_category_edit','廠商大類/小類：編輯'],
-            ['mdata_maker_category_delete','廠商大類/小類：刪除'],
-            ['mdata_maker_proc_label_view','廠商加工限制標籤：檢視'],
-            ['mdata_maker_proc_label_add','廠商加工限制標籤：新增'],
-            ['mdata_maker_proc_label_edit','廠商加工限制標籤：編輯'],
-            ['mdata_maker_proc_label_delete','廠商加工限制標籤：刪除'],
-            ['mdata_maker_main_cat_process_view','廠商大類製程設定：檢視'],
-            ['mdata_maker_main_cat_process_edit','廠商大類製程設定：編輯'],
-            ['mdata_process_type_dict_view','製程大類字典：檢視'],
-            ['mdata_process_type_dict_add','製程大類字典：新增'],
-            ['mdata_process_type_dict_edit','製程大類字典：編輯'],
-            ['mdata_process_type_dict_delete','製程大類字典：刪除'],
-            ['mdata_attach_cat_view','附件類別標籤：檢視'],
-            ['mdata_attach_cat_add','附件類別標籤：新增'],
-            ['mdata_attach_cat_edit','附件類別標籤：編輯'],
-            ['mdata_attach_cat_delete','附件類別標籤：刪除'],
-            ['mdata_sys_settings_view','系統設定(基本設定)：檢視'],
-            ['mdata_sys_settings_edit','系統設定(基本設定)：編輯'],
-            ['mdata_spec_quick_btn_view','規格快速輸入按鈕設定：檢視'],
-            ['mdata_spec_quick_btn_edit','規格快速輸入按鈕設定：編輯']
+          // 分類顯示（鐵律7精神：介面要看得懂）——每一組一個標題＋底下checkbox，
+          // 不再把 75 個功能碼攤成一條長列表；功能碼本身仍是 value，只是不印在畫面上。
+          var MASTERDATA_FEATURE_GROUPS = [
+            { title: '基本功能', items: [
+              ['md_open','開啟主檔管理頁'],
+              ['md_attach_view','其他附件—檢視分頁'],
+              ['md_attach_upload','其他附件—上傳'],
+              ['md_attach_delete','其他附件—刪除'],
+              ['md_attach_edit','其他附件—編輯（標籤/浮水印）']
+            ]},
+            { title: '客戶／廠商表單內的設定欄位', items: [
+              ['mdata_recon_view','對帳單設定（客戶）：檢視'],
+              ['mdata_recon_edit','對帳單設定（客戶）：編輯'],
+              ['mdata_settle_view','結帳設定：檢視'],
+              ['mdata_settle_edit','結帳設定：編輯'],
+              ['mdata_quote_method_view','報價方式（客戶）：檢視'],
+              ['mdata_quote_method_edit','報價方式（客戶）：編輯'],
+              ['mdata_payterm_view','收款／付款方式：檢視'],
+              ['mdata_payterm_edit','收款／付款方式：編輯'],
+              ['mdata_bank_view','銀行帳戶（客戶）：檢視'],
+              ['mdata_bank_edit','銀行帳戶（客戶）：編輯']
+            ]},
+            { title: '料號標籤指派', items: [
+              ['mdata_tag_assign','新增標籤指派'],
+              ['mdata_tag_edit_others','修改／移除他人指派的標籤']
+            ]},
+            { title: '標籤與字典維護', items: [
+              ['mdata_label_dict_view','標籤定義管理：檢視'],
+              ['mdata_label_dict_add','標籤定義管理：新增'],
+              ['mdata_label_dict_edit','標籤定義管理：編輯'],
+              ['mdata_label_dict_delete','標籤定義管理：刪除'],
+              ['mdata_workpiece_type_view','工件種類／小類：檢視'],
+              ['mdata_workpiece_type_add','工件種類／小類：新增'],
+              ['mdata_workpiece_type_edit','工件種類／小類：編輯'],
+              ['mdata_workpiece_type_delete','工件種類／小類：刪除'],
+              ['mdata_gear_type_dict_view','齒輪類型字典：檢視'],
+              ['mdata_gear_type_dict_add','齒輪類型字典：新增'],
+              ['mdata_gear_type_dict_edit','齒輪類型字典：編輯'],
+              ['mdata_gear_type_dict_delete','齒輪類型字典：刪除'],
+              ['mdata_gear_quality_view','齒輪等級對照表：檢視'],
+              ['mdata_gear_quality_add','齒輪等級對照表：新增'],
+              ['mdata_gear_quality_edit','齒輪等級對照表：編輯'],
+              ['mdata_gear_quality_delete','齒輪等級對照表：刪除'],
+              ['mdata_industry_type_view','客戶產業別(含小類)：檢視'],
+              ['mdata_industry_type_add','客戶產業別(含小類)：新增'],
+              ['mdata_industry_type_edit','客戶產業別(含小類)：編輯'],
+              ['mdata_industry_type_delete','客戶產業別(含小類)：刪除'],
+              ['mdata_process_type_dict_view','製程大類字典：檢視'],
+              ['mdata_process_type_dict_add','製程大類字典：新增'],
+              ['mdata_process_type_dict_edit','製程大類字典：編輯'],
+              ['mdata_process_type_dict_delete','製程大類字典：刪除'],
+              ['mdata_process_no_view','製程主檔：檢視'],
+              ['mdata_process_no_add','製程主檔：新增'],
+              ['mdata_process_no_edit','製程主檔：編輯'],
+              ['mdata_process_no_delete','製程主檔：刪除']
+            ]},
+            { title: '廠商分類維護', items: [
+              ['mdata_maker_category_view','廠商大類／小類：檢視'],
+              ['mdata_maker_category_add','廠商大類／小類：新增'],
+              ['mdata_maker_category_edit','廠商大類／小類：編輯'],
+              ['mdata_maker_category_delete','廠商大類／小類：刪除'],
+              ['mdata_maker_proc_label_view','廠商加工限制標籤：檢視'],
+              ['mdata_maker_proc_label_add','廠商加工限制標籤：新增'],
+              ['mdata_maker_proc_label_edit','廠商加工限制標籤：編輯'],
+              ['mdata_maker_proc_label_delete','廠商加工限制標籤：刪除'],
+              ['mdata_maker_main_cat_process_view','廠商大類製程設定：檢視'],
+              ['mdata_maker_main_cat_process_edit','廠商大類製程設定：編輯']
+            ]},
+            { title: '備註與附件設定', items: [
+              ['mdata_process_note_view','製程備註：檢視'],
+              ['mdata_process_note_add','製程備註：新增'],
+              ['mdata_process_note_edit','製程備註：編輯'],
+              ['mdata_process_note_delete','製程備註：刪除'],
+              ['mdata_design_note_view','設計備註：檢視'],
+              ['mdata_design_note_add','設計備註：新增'],
+              ['mdata_design_note_edit','設計備註：編輯'],
+              ['mdata_design_note_delete','設計備註：刪除'],
+              ['mdata_attach_cat_view','附件類別標籤：檢視'],
+              ['mdata_attach_cat_add','附件類別標籤：新增'],
+              ['mdata_attach_cat_edit','附件類別標籤：編輯'],
+              ['mdata_attach_cat_delete','附件類別標籤：刪除']
+            ]},
+            { title: '系統設定', items: [
+              ['mdata_sys_settings_view','基本設定：檢視'],
+              ['mdata_sys_settings_edit','基本設定：編輯'],
+              ['mdata_spec_quick_btn_view','規格快速輸入按鈕：檢視'],
+              ['mdata_spec_quick_btn_edit','規格快速輸入按鈕：編輯']
+            ]}
           ];
+          // 攤平版給舊邏輯（check-all / 存檔收集等）沿用，不必逐處改寫
+          var MASTERDATA_FEATURES = [].concat.apply([], MASTERDATA_FEATURE_GROUPS.map(function(g){ return g.items; }));
           var curRole = null;
           function loadRoles(){
             $.get(ROLES_API, {action:'get_roles', module:'master_data'}, function(r){
@@ -7684,9 +7706,14 @@ body { background:#F6F1EA; }
             $.get(ROLES_API, {action:'get_role_features', role_id:rid}, function(r){
               var have = (r&&r.success)? r.data : [];
               if(isSys) have = MASTERDATA_FEATURES.map(function(f){return f[0];});
-              var h=''; MASTERDATA_FEATURES.forEach(function(f){
-                h += '<div class="checkbox"><label><input type="checkbox" class="rf-chk" value="'+f[0]+'" '
-                   + (have.indexOf(f[0])>=0?'checked':'') + (isSys?' disabled':'') + '> '+escR(f[1])+' <code>'+f[0]+'</code></label></div>';
+              var h=''; MASTERDATA_FEATURE_GROUPS.forEach(function(g){
+                h += '<div class="rf-group"><div class="rf-group-title">'+escR(g.title)+'</div>'
+                   + '<div class="rf-group-grid">';
+                g.items.forEach(function(f){
+                  h += '<div class="checkbox rf-item"><label><input type="checkbox" class="rf-chk" value="'+f[0]+'" '
+                     + (have.indexOf(f[0])>=0?'checked':'') + (isSys?' disabled':'') + '> '+escR(f[1])+'</label></div>';
+                });
+                h += '</div></div>';
               });
               $('#rf-checks').html(h);
               $('#btn-save-feats,#btn-del-role,#btn-rename-role').prop('disabled', isSys);
