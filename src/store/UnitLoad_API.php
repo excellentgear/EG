@@ -224,10 +224,11 @@ switch ($action) {
         $thresholds = $settings['thresholds'];
         $people = ul_dept_user_ids($db, $settings, 'design');
         $ids = array_values(array_unique(array_map(fn($r) => (int)$r['id'], $people)));
+        $deptIds = ul_unit_dept_ids($db, $settings, 'design');
 
         $summary    = ul_design_summary($db, $p['from'], $p['to'], $ids);
         $summaryCmp = ul_design_summary($db, $p['cmp_from'], $p['cmp_to'], $ids);
-        $byPerson   = ul_design_by_person($db, $p['from'], $p['to'], $ids);
+        $byPerson   = ul_design_by_person($db, $p['from'], $p['to'], $ids, $deptIds);
         $reviewer   = ul_design_reviewer_counts($db, $p['from'], $p['to'], $ids);
         $dailyPmget = ul_design_daily_pmget($db, $p['from'], $p['to'], $ids);
         $tags       = ul_design_tags($db, $p['from'], $p['to'], $ids);
@@ -262,10 +263,11 @@ switch ($action) {
         $thresholds = $settings['thresholds'];
         $people = ul_dept_user_ids($db, $settings, 'sales');
         $ids = array_values(array_unique(array_map(fn($r) => (int)$r['id'], $people)));
+        $deptIds = ul_unit_dept_ids($db, $settings, 'sales');
 
         $summary    = ul_sales_summary($db, $p['from'], $p['to'], $ids);
         $summaryCmp = ul_sales_summary($db, $p['cmp_from'], $p['cmp_to'], $ids);
-        $byPerson   = ul_sales_by_person($db, $p['from'], $p['to'], $ids);
+        $byPerson   = ul_sales_by_person($db, $p['from'], $p['to'], $ids, $deptIds);
 
         $overload = [
             'quote_count'      => ul_is_overload((float)$summary['quote_count'], 'sales.quote_backlog', $thresholds),
@@ -362,14 +364,16 @@ switch ($action) {
         $thresholds = $settings['thresholds'];
         $people = ul_dept_user_ids($db, $settings, 'qc');
         $ids = array_values(array_unique(array_map(fn($r) => (int)$r['id'], $people)));
+        $deptIds = ul_unit_dept_ids($db, $settings, 'qc');
 
         $dailyItems = ul_qc_daily_items($db, $p['from'], $p['to'], $ids);
         $wait       = ul_qc_wait_time($db, $p['from'], $p['to'], $ids);
         $abnormal   = ul_qc_abnormal_stats($db, $p['from'], $p['to'], $ids);
-        $byPerson   = ul_qc_by_person($db, $p['from'], $p['to'], $ids);
+        $byPerson   = ul_qc_by_person($db, $p['from'], $p['to'], $ids, $deptIds);
         $adhoc      = ul_qc_adhoc($db, $p['from'], $p['to']);
-        // 目前待驗佇列：現況快照，不吃 $from/$to、不受 $ids 篩選（全公司共用同一條佇列）。
-        $pendingQueue = ul_qc_pending_queue($db);
+        // 目前待驗佇列：筆數是現況快照，不吃 $from/$to、不受 $ids 篩選（全公司共用同一條
+        // 佇列）；平均檢驗工作天數才吃本期 $from/$to（見 ul_qc_pending_queue() 函式註解）。
+        $pendingQueue = ul_qc_pending_queue($db, $p['from'], $p['to']);
 
         // 待驗逐筆明細（rows）只用於畫面上的「最長/最短前5筆」，完整逐筆清單不回傳避免payload過大
         $waitOut = $wait;

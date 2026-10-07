@@ -141,7 +141,14 @@ function ul_settings_save(PDO $db, array $in, int $by): array
  * （all_posts=true：兼任者每個職務各一列，這裡只是給呼叫端挑人用，不是要「代表身分」）。
  * @return array eg_people_list() 的回傳格式（每列含 id/user_cname/dept_name/position_name 等）
  */
-function ul_dept_user_ids(PDO $db, array $settings, string $unitKey): array
+/**
+ * 這個單位鍵在設定裡勾選的部門，展開（含「含子部門」）後的部門 id 扁平清單。
+ * 從 ul_dept_user_ids() 抽出來單獨一支（唯一實作），讓「這個單位的部門範圍是什麼」
+ * 這件事只算一次、只存在一個地方——逐人明細（ul_design_by_person／ul_sales_by_person／
+ * ul_qc_by_person）要用同一份部門範圍去挑「這個人在範圍內的哪一筆職務」，不可以各自
+ * 重新解析設定，否則範圍解析規則（含子部門展開）遲早會跟 ul_dept_user_ids() 走鐘。
+ */
+function ul_unit_dept_ids(PDO $db, array $settings, string $unitKey): array
 {
     $cfgList = $settings['dept_cfg'][$unitKey] ?? [];
     if (!is_array($cfgList) || !$cfgList) return [];
@@ -156,7 +163,12 @@ function ul_dept_user_ids(PDO $db, array $settings, string $unitKey): array
             $deptIds[] = $did;
         }
     }
-    $deptIds = array_values(array_unique(array_filter($deptIds, fn($v) => $v > 0)));
+    return array_values(array_unique(array_filter($deptIds, fn($v) => $v > 0)));
+}
+
+function ul_dept_user_ids(PDO $db, array $settings, string $unitKey): array
+{
+    $deptIds = ul_unit_dept_ids($db, $settings, $unitKey);
     if (!$deptIds) return [];
 
     return eg_people_list($db, ['dept_ids' => $deptIds, 'all_posts' => true]);
@@ -330,13 +342,20 @@ function ul_design_summary(PDO $db, string $from, string $to, array $designerIds
 }
 
 /** ul_design_summary() 的逐人版本，同一批指標各自依設計師（order_track.ate）分組 */
-function ul_design_by_person(PDO $db, string $from, string $to, array $designerIds): array
+function ul_design_by_person(PDO $db, string $from, string $to, array $designerIds, array $deptIds = []): array
 {
     $ids = ul_ids_norm($designerIds);
     if (!$ids) return [];
     $in = implode(',', $ids);
 
-    $people = eg_people_list($db, ['user_ids' => $ids]);
+    // $deptIds（本單位設定範圍展開後的部門 id，見 ul_unit_dept_ids()）要一起傳進去——
+    // eg_people_list() 不給 dept_ids 時，一人多職務會挑「職級最高」那一筆顯示（全站通用
+    // 預設），兼任者因此會被顯示成他在別的部門的高階兼職（例：主職技術課工程師、兼任
+    // 生管組組長，會被印成「生管組／組長」），而不是「讓他出現在這份設計課名單裡的那一
+    // 筆職務」。帶上 dept_ids 後 eg_people_list() 的揀選順序會優先取「部門落在此範圍內」
+    // 的那一筆，才會正確顯示「技術課／工程師」。
+    $people = $deptIds ? eg_people_list($db, ['user_ids' => $ids, 'dept_ids' => $deptIds])
+                       : eg_people_list($db, ['user_ids' => $ids]);
     $byId = [];
     foreach ($people as $p) $byId[(int)$p['id']] = $p;
 
@@ -574,13 +593,16 @@ function ul_sales_summary(PDO $db, string $from, string $to, array $salesIds): a
 }
 
 /** ul_sales_summary() 的逐人版本，依 order_track.Created_By／quotation_list.created_by 分組 */
-function ul_sales_by_person(PDO $db, string $from, string $to, array $salesIds): array
+function ul_sales_by_person(PDO $db, string $from, string $to, array $salesIds, array $deptIds = []): array
 {
     $ids = ul_ids_norm($salesIds);
     if (!$ids) return [];
     $inQ = implode(',', array_map(fn($v) => "'" . $v . "'", $ids));
 
-    $people = eg_people_list($db, ['user_ids' => $ids]);
+    // $deptIds：見 ul_design_by_person() 同一段註解，兼任者要顯示「讓他出現在業務課這份
+    // 名單裡的那一筆職務」，不是他職級最高的那一筆（可能是別的部門）。
+    $people = $deptIds ? eg_people_list($db, ['user_ids' => $ids, 'dept_ids' => $deptIds])
+                       : eg_people_list($db, ['user_ids' => $ids]);
     $byId = [];
     foreach ($people as $p) $byId[(int)$p['id']] = $p;
 
@@ -1139,9 +1161,17 @@ function ul_prod_packing_stats(PDO $db, string $from, string $to): array
  * 目前待驗佇列筆數（現況快照，不受 $from/$to 限制，跟 ul_pm_summary() 的「目前狀態」
  * 五項同一種道理——processing_state 沒有時間戳可以切期間）：bom_ing.processing_state='Q'
  * （待QC驗）且排除「對應 BOM 已結案」（ul_bom_active_cond()）的筆數，依製程名稱分組。
- * @return array ['by_process'=>[每製程：process_name/count，依 count 由大到小], 'total'=>int]
+ *
+ * 每個製程再附一個「平均檢驗工作天數」——這是歷史統計（本期已完成檢驗、從進入待驗到
+ * 驗完的平均工作天），跟上面「目前筆數」是兩個不同語意：筆數不受期間限制、是即時
+ * 快照；平均工作天數才受 $from/$to 限制。直接重用 ul_qc_wait_time() 已經算好的逐筆
+ * 明細依 process_no 分組平均，不重新寫一次 SQL（鐵律4）。$from/$to 任一個沒傳（或空）
+ * 時，整支函式的「目前筆數」行為完全不變，只是每個製程的 avg_wait_workdays 回 null
+ * （沒有期間就不硬湊一個平均值）。
+ * @return array ['by_process'=>[每製程：process_no/process_name/count/avg_wait_workdays，
+ *                依 count 由大到小], 'total'=>int]
  */
-function ul_qc_pending_queue(PDO $db): array
+function ul_qc_pending_queue(PDO $db, ?string $from = null, ?string $to = null): array
 {
     $st = $db->query(
         "SELECT bi.process_no, COUNT(*) c
@@ -1156,9 +1186,30 @@ function ul_qc_pending_queue(PDO $db): array
         $pno = $r['process_no'] !== null ? (int)$r['process_no'] : 0;
         $cnt = (int)$r['c'];
         $info = $typeMap[$pno] ?? ['process_name' => '（未設定製程）'];
-        $byProcess[] = ['process_name' => $info['process_name'] ?? ('#' . $pno), 'count' => $cnt];
+        $byProcess[] = [
+            'process_no' => $pno,
+            'process_name' => $info['process_name'] ?? ('#' . $pno),
+            'count' => $cnt,
+            'avg_wait_workdays' => null,
+        ];
         $total += $cnt;
     }
+
+    if ($byProcess && $from !== null && $to !== null && $from !== '' && $to !== '') {
+        $wait = ul_qc_wait_time($db, $from, $to, []);
+        $sums = []; $cnts = [];
+        foreach ($wait['rows'] as $r) {
+            $pno = (int)$r['process_no'];
+            $sums[$pno] = ($sums[$pno] ?? 0) + $r['workdays'];
+            $cnts[$pno] = ($cnts[$pno] ?? 0) + 1;
+        }
+        foreach ($byProcess as &$bp) {
+            $pno = $bp['process_no'];
+            if (($cnts[$pno] ?? 0) > 0) $bp['avg_wait_workdays'] = round($sums[$pno] / $cnts[$pno], 2);
+        }
+        unset($bp);
+    }
+
     usort($byProcess, fn($x, $y) => $y['count'] <=> $x['count']);
     return ['by_process' => $byProcess, 'total' => $total];
 }
@@ -1408,15 +1459,20 @@ function ul_qc_abnormal_stats(PDO $db, string $from, string $to, array $qcUserId
  * ul_qc_daily_items() 的依人彙總版本：各人檢驗筆數、NG筆數（qc_check_form 的
  * COALESCE(inspector_by, approved_by) 分組）、平均等待工作天——後者直接重用
  * ul_qc_wait_time() 已經算好的逐筆明細再依 person_id 分組，不重新寫一份 SQL（鐵律4）。
+ * @param array $deptIds 本單位設定範圍展開後的部門 id（見 ul_unit_dept_ids()），用於挑
+ *              人員顯示用的部門/職稱——見 ul_design_by_person() 同一段註解，不帶的話兼任者
+ *              會被顯示成他職級最高的那個（可能不在品管）兼任職務，不是讓他出現在這份
+ *              品管名單裡的那一筆。
  * @return array 每列 ['user_id','name','dept_name','position_name','items_count','ng_count','avg_wait_workdays']
  */
-function ul_qc_by_person(PDO $db, string $from, string $to, array $qcUserIds): array
+function ul_qc_by_person(PDO $db, string $from, string $to, array $qcUserIds, array $deptIds = []): array
 {
     $ids = ul_ids_norm($qcUserIds);
     if (!$ids) return [];
     $inQ = implode(',', array_map(fn($v) => "'" . $v . "'", $ids));
 
-    $people = eg_people_list($db, ['user_ids' => $ids]);
+    $people = $deptIds ? eg_people_list($db, ['user_ids' => $ids, 'dept_ids' => $deptIds])
+                       : eg_people_list($db, ['user_ids' => $ids]);
     $byId = [];
     foreach ($people as $p) $byId[(int)$p['id']] = $p;
 

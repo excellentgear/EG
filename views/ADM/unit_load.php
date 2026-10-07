@@ -43,7 +43,7 @@ function ulEsc($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
 
 // 單位鍵與對照標籤：鍵一律呼叫 ul_unit_keys()（唯一登記處），中文標籤是本模組固定的五個單位。
 $UNIT_KEYS = ul_unit_keys();
-$UNIT_LABELS = ['design' => '設計課', 'sales' => '業務課', 'pm' => '生管', 'prod' => '生產課', 'qc' => '品管'];
+$UNIT_LABELS = ['design' => '設計', 'sales' => '業務', 'pm' => '生管', 'prod' => '生產', 'qc' => '品管'];
 $UNIT_ICONS  = ['design' => 'fa-pencil', 'sales' => 'fa-handshake-o', 'pm' => 'fa-sitemap', 'prod' => 'fa-industry', 'qc' => 'fa-check-square-o'];
 ?>
 <!DOCTYPE html>
@@ -131,6 +131,18 @@ body { background:#F3F6EC; }
 .ul-cell-bad { background:var(--overload-bg); color:var(--overload-text); font-weight:700; }
 .ul-unit-note { color:var(--coral); border:1px solid #EFC2BD; background:var(--overload-bg);
                  border-radius:6px; padding:8px 12px; font-size:12.5px; margin-bottom:12px; }
+
+/* 品管「目前待驗佇列」四欄網格（原本單欄直向列到很長，改成一次看到更多製程） */
+.ul-pq-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+.ul-pq-item { border:1px solid var(--line); border-radius:6px; padding:8px 10px; background:#F6F9F0; }
+.ul-pq-item.ul-overload { background:var(--overload-bg); border-color:#EFC2BD; }
+.ul-pq-name { font-size:12.5px; font-weight:700; color:var(--ink); margin-bottom:4px;
+              overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ul-pq-row { display:flex; justify-content:space-between; font-size:11.5px; color:var(--muted); }
+.ul-pq-row b { color:var(--ink); font-variant-numeric:tabular-nums; }
+.ul-pq-item.ul-overload .ul-pq-row b { color:var(--overload-text); }
+@media (max-width: 1200px) { .ul-pq-grid { grid-template-columns:repeat(2,1fr); } }
+@media (max-width: 700px)  { .ul-pq-grid { grid-template-columns:1fr; } }
 .ul-empty-hint { color:var(--muted); font-size:12.5px; padding:16px 0; text-align:center; }
 
 /* 使用說明 / 設定 跳窗（全站共用的 .m-mask/.m-win 疊層慣例） */
@@ -250,7 +262,7 @@ body { background:#F3F6EC; }
 
     <div class="sec">
       <h4><i class="fa fa-user-circle-o" style="color:var(--green-d);"></i> 審圖人統計
-        <span class="hint">僅設計課恰好 2 人時可判定（制度上按審圖視為「對方審圖」）</span></h4>
+        <span class="hint">僅設計恰好 2 人時可判定（制度上按審圖視為「對方審圖」）</span></h4>
       <div id="dsgReviewer"></div>
     </div>
 
@@ -360,7 +372,7 @@ body { background:#F3F6EC; }
 
     <div class="sec">
       <h4><i class="fa fa-list-ol" style="color:var(--green-d);"></i> 目前待驗佇列
-        <span class="hint">現況快照，不受期間篩選影響</span></h4>
+        <span class="hint">筆數為現況快照不受期間篩選影響；平均檢驗工作天數為本期已完成檢驗的歷史平均，受期間篩選影響</span></h4>
       <div id="qcPendingKpi" class="kpi-row"></div>
       <div id="qcPendingTable"></div>
     </div>
@@ -408,12 +420,12 @@ body { background:#F3F6EC; }
     <div class="m-body help-doc">
       <h4>功能說明（這一頁在回答什麼）</h4>
       <ul>
-        <li>把<b>設計課、業務課、生管、生產課、品管</b>五個單位目前的工作量各自整理成一張 KPI 卡與一頁明細，
+        <li>把<b>設計、業務、生管、生產、品管</b>五個單位目前的工作量各自整理成一張 KPI 卡與一頁明細，
             讓主管一眼看出哪個單位現在比較吃緊。</li>
         <li><b>總覽分頁</b>：五張 KPI 卡＋整頁自動分析（哪個單位的哪個指標偏高、跟上一期比有沒有變嚴重）。</li>
         <li>五個單位各自的<b>詳細資料分頁</b>：逐人明細、趨勢圖、各類清單，點分頁鈕或 KPI 卡的「查看明細 »」即可切入。
-            生產課多了「包裝負荷」子區塊（待包裝筆數／每日完成數／平均處理工作天／處理最久與最快前5筆），
-            品管多了「目前待驗佇列」（依製程分組的現況筆數）。</li>
+            生產多了「包裝負荷」子區塊（待包裝筆數／每日完成數／平均處理工作天／處理最久與最快前5筆），
+            品管多了「目前待驗佇列」（依製程分組的現況筆數＋本期平均檢驗工作天數）。</li>
       </ul>
       <h4>操作步驟</h4>
       <ol>
@@ -728,10 +740,13 @@ function cellBadCls(unit, field, value){
   if (!key || !UL_THR || UL_THR[key] === undefined) return '';
   return Number(value) > Number(UL_THR[key]) ? ' class="ul-cell-bad"' : '';
 }
-/* 包裝待包裝筆數／品管目前待驗佇列總筆數：這兩個是本次新增的指標，unit_load_lib.php 的
-   ul_threshold_defaults() 尚未收錄對應門檻鍵，暫不等 lib 端支援——先用這裡的合理預設值，
-   之後若要讓管理員也能在「設定」跳窗調整，再補進 ul_threshold_defaults() 並改走 UL_THR。 */
-var UL_LOCAL_THR_DEFAULT = { packing_pending: 200, qc_pending_total: 150 };
+/* 包裝待包裝筆數／品管目前待驗佇列總筆數／品管單一製程目前筆數：這三個是本次新增的
+   指標，unit_load_lib.php 的 ul_threshold_defaults() 尚未收錄對應門檻鍵，暫不等 lib 端
+   支援——先用這裡的合理預設值，之後若要讓管理員也能在「設定」跳窗調整，再補進
+   ul_threshold_defaults() 並改走 UL_THR。
+   qc_process_pending：單一製程本身堆到這個筆數以上視為偏高（跟「目前待驗總筆數」門檻
+   是不同層級的判斷——總筆數看的是全部製程加起來，這裡看的是某一個製程自己有沒有堆住）。 */
+var UL_LOCAL_THR_DEFAULT = { packing_pending: 200, qc_pending_total: 150, qc_process_pending: 30 };
 function localThr(key, fallbackKey){
   if (UL_THR && UL_THR[key] !== undefined) return Number(UL_THR[key]);
   return Number(UL_LOCAL_THR_DEFAULT[fallbackKey]);
@@ -1116,9 +1131,21 @@ function renderQcPending(pq){
 
   var rows = pq.by_process || [];
   if (!rows.length){ $('#qcPendingTable').html(emptyHint('目前沒有待驗中的製程。')); return; }
-  var h = '<div class="table-responsive"><table class="table table-striped"><thead><tr><th>製程</th><th>筆數</th></tr></thead><tbody>';
-  rows.forEach(function(r){ h += '<tr><td>'+esc(r.process_name)+'</td><td>'+nf(r.count)+'</td></tr>'; });
-  h += '</tbody></table></div>';
+  // 四欄網格：每格顯示「製程名稱／目前筆數／平均檢驗工作天數」，筆數或平均工作天數
+  // 任一項超過門檻就標紅（qc_process_pending／qc.wait_days_avg，後者沿用「待驗等待
+  // 工作天」區塊已有、管理員可調的同一個門檻，不是另外替每個製程各訂一個）。
+  var pendThr = localThr('qc.pending_queue_process', 'qc_process_pending');
+  var h = '<div class="ul-pq-grid">';
+  rows.forEach(function(r){
+    var avg = (r.avg_wait_workdays===null || r.avg_wait_workdays===undefined) ? null : Number(r.avg_wait_workdays);
+    var rowBad = Number(r.count||0) > pendThr || (avg !== null && UL_THR && UL_THR['qc.wait_days_avg'] !== undefined && avg > Number(UL_THR['qc.wait_days_avg']));
+    h += '<div class="ul-pq-item'+(rowBad?' ul-overload':'')+'">'
+       + '<div class="ul-pq-name" title="'+esc(r.process_name)+'">'+esc(r.process_name)+'</div>'
+       + '<div class="ul-pq-row"><span>目前筆數</span><b>'+nf(r.count)+'</b></div>'
+       + '<div class="ul-pq-row"><span>平均檢驗工作天</span><b>'+(avg===null?'—':nf1(avg))+'</b></div>'
+       + '</div>';
+  });
+  h += '</div>';
   $('#qcPendingTable').html(h);
 }
 function renderQcDailyChart(rows){
