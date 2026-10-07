@@ -118,11 +118,20 @@ body { background:#F3F6EC; }
 .ins-list .ins-item.warn { border-left-color:var(--green-d); background:#F0F4E6; }
 .ins-list .ins-item b { color:var(--ink); }
 
-/* 分頁容器（總覽是唯一有內容的，其餘先放空殼） */
+/* 分頁容器（總覽／設計課／業務課／生管已有內容，生產課／品管本階段先放空殼） */
 .ul-tab-pane { }
 .ul-placeholder { background:#fff; border:1px dashed var(--line); border-radius:8px; padding:40px 20px;
                   text-align:center; color:var(--muted); font-size:13px; }
 .ul-placeholder i { font-size:26px; display:block; margin-bottom:10px; color:var(--green); }
+
+/* 單位詳細分頁共用：小型統計卡數字／小卡（審圖人次等）／表格內逐格超門檻標紅 */
+.k-val { font-size:21px; font-weight:700; color:var(--ink); font-variant-numeric:tabular-nums; }
+.k-cmp { font-size:11.5px; color:var(--muted); margin-top:2px; }
+.kpi-card.ul-mini { flex:0 0 190px; min-width:160px; }
+.ul-cell-bad { background:var(--overload-bg); color:var(--overload-text); font-weight:700; }
+.ul-unit-note { color:var(--coral); border:1px solid #EFC2BD; background:var(--overload-bg);
+                 border-radius:6px; padding:8px 12px; font-size:12.5px; margin-bottom:12px; }
+.ul-empty-hint { color:var(--muted); font-size:12.5px; padding:16px 0; text-align:center; }
 
 /* 使用說明 / 設定 跳窗（全站共用的 .m-mask/.m-win 疊層慣例） */
 .m-mask { position:fixed; inset:0; background:rgba(60,74,46,.45); z-index:10300; display:none; }
@@ -234,8 +243,76 @@ body { background:#F3F6EC; }
 
   </div>
 
-  <!-- ── 五個單位的詳細資料分頁（下一階段補內容，本階段先留空殼） ─ -->
-  <?php foreach ($UNIT_KEYS as $k): ?>
+  <!-- ── 設計課分頁 ─────────────────────────────────────── -->
+  <div class="ul-tab-pane" id="tab-design" data-unit="design" style="display:none">
+    <div id="dsgNote"></div>
+    <div id="dsgKpi" class="kpi-row"></div>
+
+    <div class="sec">
+      <h4><i class="fa fa-user-circle-o" style="color:var(--green-d);"></i> 審圖人統計
+        <span class="hint">僅設計課恰好 2 人時可判定（制度上按審圖視為「對方審圖」）</span></h4>
+      <div id="dsgReviewer"></div>
+    </div>
+
+    <div class="sec">
+      <h4><i class="fa fa-line-chart" style="color:var(--green-d);"></i> 每日完成數（已按轉生管）趨勢</h4>
+      <div class="chart-box" id="dsgDailyChart" style="height:320px;"></div>
+    </div>
+
+    <div class="sec">
+      <h4><i class="fa fa-tags" style="color:var(--green-d);"></i> 訂單標籤分布</h4>
+      <div id="dsgTags"></div>
+    </div>
+
+    <div class="sec">
+      <h4><i class="fa fa-comments-o" style="color:var(--green-d);"></i> 設計備註問題與回覆工作天
+        <span class="hint">開放問題總數為現況快照；平均回覆工作天為本期內完成回覆者</span></h4>
+      <div id="dsgNoteStats"></div>
+    </div>
+
+    <div class="sec">
+      <h4><i class="fa fa-table" style="color:var(--green-d);"></i> 逐人負荷明細</h4>
+      <div class="table-responsive"><table class="table table-striped" id="dsgTable">
+        <thead><tr><th>部門</th><th>職稱</th><th>姓名</th><th>批圖中</th><th>已按審圖</th><th>已按轉生管</th>
+          <th>問題訂單數</th><th>平均出圖工作天</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- ── 業務課分頁 ─────────────────────────────────────── -->
+  <div class="ul-tab-pane" id="tab-sales" data-unit="sales" style="display:none">
+    <div id="salNote"></div>
+    <div id="salKpi" class="kpi-row"></div>
+
+    <div class="sec">
+      <h4><i class="fa fa-table" style="color:var(--green-d);"></i> 逐人負荷明細</h4>
+      <div class="table-responsive"><table class="table table-striped" id="salTable">
+        <thead><tr><th>部門</th><th>職稱</th><th>姓名</th><th>報價單數</th><th>報價明細筆數</th>
+          <th>訂單追蹤筆數</th><th>待回覆問題筆數</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- ── 生管分頁 ───────────────────────────────────────── -->
+  <div class="ul-tab-pane" id="tab-pm" data-unit="pm" style="display:none">
+    <div id="pmNote"></div>
+
+    <div class="sec">
+      <h4><i class="fa fa-sitemap" style="color:var(--green-d);"></i> 現況快照
+        <span class="hint">目前狀態，非本期累積——除「待對帳」外，不受上方期間篩選影響</span></h4>
+      <div id="pmKpi" class="kpi-row"></div>
+    </div>
+
+    <div class="sec">
+      <div class="ul-empty-hint"><i class="fa fa-info-circle"></i>
+        目前資料庫沒有記錄生管逐人負責製令的欄位（bom_ing 沒有「這張製令由哪個生管負責」這項資料），暫不提供逐人負荷。</div>
+    </div>
+  </div>
+
+  <!-- ── 生產課／品管：下一階段補內容，本階段先留空殼 ─────── -->
+  <?php foreach (['prod', 'qc'] as $k): ?>
   <div class="ul-tab-pane" id="tab-<?= ulEsc($k) ?>" data-unit="<?= ulEsc($k) ?>" style="display:none">
     <div class="ul-placeholder">
       <i class="fa <?= ulEsc($UNIT_ICONS[$k] ?? 'fa-circle') ?>"></i>
@@ -388,10 +465,13 @@ function defaultIdx(g){
 $('#fGran, #fYear').on('change', function(){ fillIdx(); });
 
 /* ── 分頁切換（總覽／五個單位） ─────────────────────── */
+/* 設計課／業務課／生管：第一次點開才呼叫對應的 data_* action（UNIT_LOADERS/UNIT_LOADED
+   定義在下方「單位分頁與期間篩選串接」區塊）；已經載過的分頁直接顯示快取內容，不重打。 */
 $(document).on('click', '.ul-tab-btn', function(){
   var t = $(this).data('tab');
   $('.ul-tab-btn').removeClass('active'); $(this).addClass('active');
   $('.ul-tab-pane').hide(); $('#tab-'+t).show();
+  if (typeof UNIT_LOADERS !== 'undefined' && UNIT_LOADERS[t] && !UNIT_LOADED[t]) loadUnitTab(t);
 });
 $(document).on('click', '.ul-go-tab', function(){
   var t = $(this).data('tab');
@@ -482,6 +562,284 @@ function renderInsights(list){
   $('#insightList').html(h);
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ * 圖表共用：chart(id,opt) 與 sizeBox(id,px)（本階段建立，之後生產課／品管沿用，
+ * 不要再各自寫一份）。比照 views/Sales/Order_Analysis.php 的同名函式風格，
+ * 但改用本頁的暖淺綠色盤（UL_PALETTE），不要混用那邊的暖色盤——同一頁只能有
+ * 一套配色語彙（ai-rules/10）。
+ * ══════════════════════════════════════════════════════════════════ */
+var UL_PALETTE = ['#8FA86B', '#5E7A3D', '#B9CB9E', '#3C4A2E', '#A9C47F', '#4B6134'];
+var UL_CHARTS = {};
+function chart(id, opt){
+  try { if (UL_CHARTS[id]) { UL_CHARTS[id].destroy(); UL_CHARTS[id] = null; } } catch(e){}
+  var el = document.getElementById(id);
+  if (!el) return null;
+  UL_CHARTS[id] = Highcharts.chart(id, $.extend(true, {
+    chart: { backgroundColor:'#fff', style:{fontFamily:'"Microsoft JhengHei",sans-serif'}, spacing:[8,8,6,8] },
+    title: { text:null }, credits: { enabled:false }, colors: UL_PALETTE,
+    xAxis:  { lineColor:'#D8E2C4', tickColor:'#D8E2C4', labels:{ style:{fontSize:'11px', color:'#5E7A3D'} } },
+    legend: { itemStyle:{fontSize:'11px', fontWeight:'400', color:'#5E7A3D'}, symbolRadius:3 }
+  }, opt));
+  return UL_CHARTS[id];
+}
+/* 條列很多的橫條圖要自己把「容器」撐高——只給 chart.height 不夠，.chart-box 的 CSS
+   固定高度會把容器壓回去（ai-rules 已記過這個坑：Order_Analysis.php 排名圖曾因此
+   整段看不到也不報錯）。生產課／品管若要畫長條排名圖，記得搭配呼叫這支。 */
+function sizeBox(id, px){ var e = document.getElementById(id); if (e) e.style.height = Math.round(px) + 'px'; }
+
+/* ══════════════════════════════════════════════════════════════════
+ * 單位詳細分頁：共用小工具
+ * ══════════════════════════════════════════════════════════════════ */
+function periodParams(){
+  return { year:$('#fYear').val(), gran:$('#fGran').val(), period_idx:$('#fIdx').val(), cmp:$('#fCmp').val() };
+}
+/** 小型統計卡（重用 .kpi-card 版面，但沒有「查看明細 »」連結——本身就在明細分頁上） */
+function statTile(label, cur, cmp, cmpLabel, fmt, bad){
+  fmt = fmt || nf;
+  return '<div class="kpi-card'+(bad?' ul-overload':'')+'">'
+       + (bad ? '<div class="kpi-bad-tag"><i class="fa fa-exclamation-triangle"></i>負荷過重</div>' : '')
+       + '<div class="k-lab">'+esc(label)+'</div>'
+       + '<div class="k-val">'+fmt(cur)+'</div>'
+       + (cmp===undefined ? '' : '<div class="k-cmp">較'+esc(cmpLabel||'上一期')+'：'+deltaHtml(cur, cmp, fmt)+'</div>')
+       + '</div>';
+}
+/** 由 by_person（一人一列，含 user_id/name）查姓名；查不到就印 #id，不讓畫面空白 */
+function nameOf(byPerson, uid){
+  var hit = (byPerson||[]).filter(function(p){ return String(p.user_id) === String(uid); })[0];
+  return hit ? hit.name : ('#' + uid);
+}
+function emptyHint(msg){ return '<div class="ul-empty-hint"><i class="fa fa-info-circle"></i> '+esc(msg)+'</div>'; }
+
+/* 門檻值：settings_get 任何有檢視權的人都能讀（本頁 API 沒有在這個 action 上加 canAdmin 限制），
+   用來給「逐人負荷明細表」逐格判斷要不要標紅——只取數字，不在前端重新發明判斷邏輯：
+   design/sales/pm 這三組指標全部是「數字越大越吃緊」（沒有 _rate 結尾的比率型指標），
+   所以比較規則就是單純 value > threshold，跟 ul_is_overload() 對這幾個鍵實際算出來的
+   結果一致；要是之後這幾個單位也有比率型門檻，要連這裡的方向判斷一起補，不可以照抄。
+   設定一旦被管理員改過（btnSetSave 成功後）要清快取重抓，否則標紅會沿用舊門檻。 */
+var UL_THR = null;
+function ensureThresholds(cb){
+  if (UL_THR){ cb(); return; }
+  $.get(UL_API, {action:'settings_get'}, function(r){
+    var flat = {};
+    if (r && r.ok){
+      Object.keys(r.threshold_defaults||{}).forEach(function(unit){
+        Object.keys(r.threshold_defaults[unit]).forEach(function(mk){
+          var def = r.threshold_defaults[unit][mk].value;
+          var cur = (r.thresholds[unit]||{})[mk];
+          flat[unit+'.'+mk] = Number((cur===undefined||cur===null) ? def : cur);
+        });
+      });
+    }
+    UL_THR = flat;
+    cb();
+  }, 'json').fail(function(){ UL_THR = {}; cb(); });
+}
+/** 哪個單位的哪個「明細欄位名」對應哪個門檻鍵（比照 UnitLoad_API.php 的 ul_is_overload() 呼叫處整理） */
+var UL_METRIC_THR_KEY = {
+  design: { drawing_wip:'design.batch_pending', avg_draw_workdays:'design.avg_draw_workdays', issue_orders:'design.issue_orders' },
+  sales:  { quote_count:'sales.quote_backlog', open_issue_count:'sales.open_issue_count' },
+  pm:     { outsource_wip:'pm.outsource_wip', pending_recon_lines:'pm.pending_recon_lines' }
+};
+function cellBadCls(unit, field, value){
+  if (value === null || value === undefined) return '';
+  var key = (UL_METRIC_THR_KEY[unit]||{})[field];
+  if (!key || !UL_THR || UL_THR[key] === undefined) return '';
+  return Number(value) > Number(UL_THR[key]) ? ' class="ul-cell-bad"' : '';
+}
+
+/* ── 設計課分頁 ─────────────────────────────────────── */
+function loadDesign(){
+  var params = $.extend({action:'data_design'}, periodParams());
+  ensureThresholds(function(){
+    $.get(UL_API, params, function(r){
+      if(!r || !r.ok){ alert((r&&r.error)||'載入失敗'); return; }
+      renderDesign(r);
+      UNIT_LOADED.design = true;
+    }, 'json').fail(function(xhr){
+      var r = xhr.responseJSON;
+      alert((r&&r.error) || ('載入失敗：HTTP '+xhr.status));
+    });
+  });
+}
+function renderDesign(d){
+  $('#dsgNote').html(d.note ? '<div class="ul-unit-note"><i class="fa fa-exclamation-circle"></i> '+esc(d.note)+'</div>' : '');
+
+  var s = d.summary, c = d.summary_cmp, ov = d.overload || {}, L = d.period.cmp_label;
+  var h = '';
+  h += statTile('批圖中', s.drawing_wip, c.drawing_wip, L, nf, !!ov.drawing_wip);
+  h += statTile('已按審圖', s.in_review, c.in_review, L, nf, false);
+  h += statTile('已按轉生管', s.pm_get, c.pm_get, L, nf, false);
+  h += statTile('新案件', s.new_case, c.new_case, L, nf, false);
+  h += statTile('問題訂單數', s.issue_orders, c.issue_orders, L, nf, !!ov.issue_orders);
+  h += statTile('平均出圖工作天', s.avg_draw_workdays, c.avg_draw_workdays, L, nf1, !!ov.avg_draw_workdays);
+  $('#dsgKpi').html(h);
+
+  renderDesignReviewer(d.reviewer, d.by_person);
+  renderDesignDailyChart(d.daily_pmget, d.by_person);
+  renderDesignTags(d.tags);
+  renderDesignNoteStats(d.note_stats, d.by_person);
+  renderDesignTable(d.by_person);
+}
+function renderDesignReviewer(rv, byPerson){
+  if (!rv || !rv.supported){
+    $('#dsgReviewer').html(emptyHint((rv && rv.note) || '尚無法判定。'));
+    return;
+  }
+  var h = '<div class="kpi-row">';
+  Object.keys(rv.by_user).forEach(function(uid){
+    h += '<div class="kpi-card ul-mini"><div class="k-lab">'+esc(nameOf(byPerson, uid))+'</div>'
+       + '<div class="k-val">'+nf(rv.by_user[uid])+' 次</div></div>';
+  });
+  h += '</div>';
+  $('#dsgReviewer').html(h);
+}
+function renderDesignDailyChart(rows, byPerson){
+  rows = rows || [];
+  if (!rows.length){
+    $('#dsgDailyChart').html(emptyHint('本期沒有已按轉生管的資料。'));
+    return;
+  }
+  var dates = [], seen = {};
+  rows.forEach(function(r){ if(!seen[r.d]){ seen[r.d]=1; dates.push(r.d); } });
+  dates.sort();
+  var byAte = {};
+  rows.forEach(function(r){
+    var k = String(r.ate);
+    if (!byAte[k]) byAte[k] = {};
+    byAte[k][r.d] = r.c;
+  });
+  var series = Object.keys(byAte).map(function(k){
+    return { name: nameOf(byPerson, k), data: dates.map(function(d){ return byAte[k][d] || 0; }) };
+  });
+  chart('dsgDailyChart', {
+    chart: { type:'line', height:320 },
+    xAxis: { categories: dates },
+    yAxis: { title:{text:null}, allowDecimals:false, min:0 },
+    tooltip: { shared:true },
+    series: series
+  });
+}
+function renderDesignTags(rows){
+  rows = rows || [];
+  if (!rows.length){ $('#dsgTags').html(emptyHint('本期沒有標籤資料。')); return; }
+  var h = '<div class="table-responsive"><table class="table table-striped"><thead><tr><th>標籤</th><th>筆數</th></tr></thead><tbody>';
+  rows.forEach(function(r){ h += '<tr><td>'+esc(r.tag_name)+'</td><td>'+nf(r.c)+'</td></tr>'; });
+  h += '</tbody></table></div>';
+  $('#dsgTags').html(h);
+}
+function renderDesignNoteStats(ns, byPerson){
+  ns = ns || { open_count:0, avg_reply_workdays:null, by_designer:{} };
+  var h = '<div class="kpi-row">';
+  h += '<div class="kpi-card ul-mini"><div class="k-lab">開放問題總數</div><div class="k-val">'+nf(ns.open_count)+'</div></div>';
+  h += '<div class="kpi-card ul-mini"><div class="k-lab">平均回覆工作天</div><div class="k-val">'+nf1(ns.avg_reply_workdays)+'</div></div>';
+  h += '</div>';
+  var keys = Object.keys(ns.by_designer || {});
+  if (keys.length){
+    h += '<div class="table-responsive"><table class="table table-striped"><thead><tr><th>姓名</th><th>開放問題數</th><th>平均回覆工作天</th></tr></thead><tbody>';
+    keys.forEach(function(uid){
+      var row = ns.by_designer[uid];
+      h += '<tr><td>'+esc(nameOf(byPerson, uid))+'</td><td>'+nf(row.open)+'</td><td>'+nf1(row.avg_days)+'</td></tr>';
+    });
+    h += '</tbody></table></div>';
+  }
+  $('#dsgNoteStats').html(h);
+}
+function renderDesignTable(rows){
+  rows = rows || [];
+  if (!rows.length){
+    $('#dsgTable tbody').html('<tr><td colspan="8" style="text-align:center;color:var(--muted);">尚未設定部門範圍</td></tr>');
+    return;
+  }
+  var h = '';
+  rows.forEach(function(r){
+    h += '<tr><td>'+esc(r.dept_name)+'</td><td>'+esc(r.position_name)+'</td><td>'+esc(r.name)+'</td>'
+       + '<td'+cellBadCls('design','drawing_wip',r.drawing_wip)+'>'+nf(r.drawing_wip)+'</td>'
+       + '<td>'+nf(r.in_review)+'</td>'
+       + '<td>'+nf(r.pm_get)+'</td>'
+       + '<td'+cellBadCls('design','issue_orders',r.issue_orders)+'>'+nf(r.issue_orders)+'</td>'
+       + '<td'+cellBadCls('design','avg_draw_workdays',r.avg_draw_workdays)+'>'+nf1(r.avg_draw_workdays)+'</td></tr>';
+  });
+  $('#dsgTable tbody').html(h);
+}
+
+/* ── 業務課分頁 ─────────────────────────────────────── */
+function loadSales(){
+  var params = $.extend({action:'data_sales'}, periodParams());
+  ensureThresholds(function(){
+    $.get(UL_API, params, function(r){
+      if(!r || !r.ok){ alert((r&&r.error)||'載入失敗'); return; }
+      renderSales(r);
+      UNIT_LOADED.sales = true;
+    }, 'json').fail(function(xhr){
+      var r = xhr.responseJSON;
+      alert((r&&r.error) || ('載入失敗：HTTP '+xhr.status));
+    });
+  });
+}
+function renderSales(d){
+  $('#salNote').html(d.note ? '<div class="ul-unit-note"><i class="fa fa-exclamation-circle"></i> '+esc(d.note)+'</div>' : '');
+
+  var s = d.summary, c = d.summary_cmp, ov = d.overload || {}, L = d.period.cmp_label;
+  var h = '';
+  h += statTile('本期報價單數', s.quote_count, c.quote_count, L, nf, !!ov.quote_count);
+  h += statTile('報價明細筆數', s.quote_item_count, c.quote_item_count, L, nf, false);
+  h += statTile('訂單追蹤筆數', s.order_count, c.order_count, L, nf, false);
+  h += statTile('待回覆問題筆數', s.open_issue_count, c.open_issue_count, L, nf, !!ov.open_issue_count);
+  $('#salKpi').html(h);
+
+  renderSalesTable(d.by_person);
+}
+function renderSalesTable(rows){
+  rows = rows || [];
+  if (!rows.length){
+    $('#salTable tbody').html('<tr><td colspan="7" style="text-align:center;color:var(--muted);">尚未設定部門範圍</td></tr>');
+    return;
+  }
+  var h = '';
+  rows.forEach(function(r){
+    h += '<tr><td>'+esc(r.dept_name)+'</td><td>'+esc(r.position_name)+'</td><td>'+esc(r.name)+'</td>'
+       + '<td'+cellBadCls('sales','quote_count',r.quote_count)+'>'+nf(r.quote_count)+'</td>'
+       + '<td>'+nf(r.quote_item_count)+'</td>'
+       + '<td>'+nf(r.order_count)+'</td>'
+       + '<td'+cellBadCls('sales','open_issue_count',r.open_issue_count)+'>'+nf(r.open_issue_count)+'</td></tr>';
+  });
+  $('#salTable tbody').html(h);
+}
+
+/* ── 生管分頁 ───────────────────────────────────────── */
+function loadPm(){
+  var params = $.extend({action:'data_pm'}, periodParams());
+  $.get(UL_API, params, function(r){
+    if(!r || !r.ok){ alert((r&&r.error)||'載入失敗'); return; }
+    renderPm(r);
+    UNIT_LOADED.pm = true;
+  }, 'json').fail(function(xhr){
+    var r = xhr.responseJSON;
+    alert((r&&r.error) || ('載入失敗：HTTP '+xhr.status));
+  });
+}
+function renderPm(d){
+  $('#pmNote').html(d.note ? '<div class="ul-unit-note"><i class="fa fa-exclamation-circle"></i> '+esc(d.note)+'</div>' : '');
+
+  var s = d.summary, c = d.summary_cmp, ov = d.overload || {}, L = d.period.cmp_label;
+  var h = '';
+  h += statTile('外包未回筆數', s.outsource_wip, c.outsource_wip, L, nf, !!ov.outsource_wip);
+  h += statTile('廠內在製筆數', s.internal_wip, c.internal_wip, L, nf, false);
+  h += statTile('已轉QC筆數', s.to_qc, c.to_qc, L, nf, false);
+  h += statTile('待移轉筆數', s.pending_transfer, c.pending_transfer, L, nf, false);
+  h += statTile('已移轉筆數', s.transferred, c.transferred, L, nf, false);
+  h += statTile('待對帳家數', s.pending_recon_parties, c.pending_recon_parties, L, nf, false);
+  h += statTile('待對帳筆數', s.pending_recon_lines, c.pending_recon_lines, L, nf, !!ov.pending_recon_lines);
+  $('#pmKpi').html(h);
+}
+
+/* ── 單位分頁與期間篩選串接 ─────────────────────────── */
+var UNIT_LOADERS = { design: loadDesign, sales: loadSales, pm: loadPm };
+var UNIT_LOADED  = { design: false, sales: false, pm: false };
+function loadUnitTab(key){
+  if (UNIT_LOADERS[key]) UNIT_LOADERS[key]();
+}
+
 /* ── 主流程：載入總覽資料 ───────────────────────────── */
 function load(){
   var params = {action:'overview', year:$('#fYear').val(), gran:$('#fGran').val(),
@@ -494,7 +852,13 @@ function load(){
     alert((r&&r.error) || ('載入失敗：HTTP '+xhr.status));
   });
 }
-$('#btnReload').on('click', load);
+/* 重新計算：總覽一律重算；目前若正開著某個單位的詳細分頁，那個分頁也要連帶重算
+  （鐵律：改了期間篩選，正在看的那個分頁不能還是舊資料）。 */
+$('#btnReload').on('click', function(){
+  load();
+  var t = $('.ul-tab-btn.active').data('tab');
+  if (UNIT_LOADERS[t]) loadUnitTab(t);
+});
 
 /* ── 設定跳窗：部門範圍設定／門檻設定 ───────────────── */
 var DEPT_NODES = null;   // dept_tree 回傳，快取一次即可
@@ -638,7 +1002,11 @@ $('#btnSetSave').on('click', function(){
     if(!r || !r.ok){ alert((r&&r.error)||'儲存失敗'); return; }
     showToast('設定已儲存');
     closeMask('setMask');
+    UL_THR = null; // 部門範圍／門檻可能都變了，逐人明細表的標紅門檻快取要跟著失效
     load();
+    // 正在看哪個單位的詳細分頁，部門範圍一改，那個分頁也要連帶重算（不能留著設定前的舊人員清單）
+    var t = $('.ul-tab-btn.active').data('tab');
+    if (UNIT_LOADERS[t]) loadUnitTab(t);
   }, 'json').fail(function(xhr){
     var r = xhr.responseJSON;
     alert((r&&r.error) || ('儲存失敗：HTTP '+xhr.status));
