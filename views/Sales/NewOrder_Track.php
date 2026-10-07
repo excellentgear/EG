@@ -4758,18 +4758,9 @@ foreach($dCounts as $c) {
                     <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
                     <button type="button" id="btn-toggle-closed" class="btn btn-xs pull-right" style="display:none;margin-right:8px;margin-top:2px;" onclick="toggleOrderStatus('closed')"></button>
                     <button type="button" id="btn-toggle-urgent" class="btn btn-xs pull-right" style="margin-right:8px;margin-top:2px;" onclick="toggleUrgentFlag()" title="標記為急件：篩選「批圖中」時會排在最上方，清單以淺暖粉紅底色標示"></button>
-                    <?php /* 需設計繪圖／由樣品繪圖（2026-10-07 使用者要求）：純標記，不影響任何既有流程，
-                             效果是清單「製程」欄的訂單標籤（AS 認定）下方多一行提示。各自獨立指派角色，
-                             沒有該功能碼的人連按鈕都不會出現（鐵律8，後端 or_new/or_update 一律照收不驗權限
-                             ——這兩個欄位本身不是危險操作，跟急件旗標同一種「純標記」性質，顯示才是權限管控重點）。
-                             DOM 順序刻意放在急件鈕之後：pull-right 浮動元素先出現者先佔右側，後出現者疊在其左側，
-                             所以「需設計繪圖」才會顯示在「設為急件」左側、「由樣品繪圖」又在「需設計繪圖」左側。 */ ?>
-                    <?php if ($can_need_design_draw): ?>
-                    <button type="button" id="btn-toggle-need-design" class="btn btn-xs pull-right" style="margin-right:8px;margin-top:2px;" onclick="toggleNeedDesignDrawFlag()" title="標記需設計重新繪圖：清單製程欄下方會顯示提示"></button>
-                    <?php endif; ?>
-                    <?php if ($can_sample_draw): ?>
-                    <button type="button" id="btn-toggle-sample-draw" class="btn btn-xs pull-right" style="margin-right:8px;margin-top:2px;" onclick="toggleSampleDrawFlag()" title="標記由樣品繪圖：清單製程欄下方會顯示提示"></button>
-                    <?php endif; ?>
+                    <?php /* 需設計繪圖／由樣品繪圖按鈕（2026-10-07）已改放到左側表單「指派設計」欄位旁
+                             （使用者回報標題列已被 AS 標籤 chips 擠得很擠，2026-10-07 二次交辦改位置），
+                             見下方 Row 5。 */ ?>
                     <?php /* 標題與「製程標籤」要並排，所以標題改 inline-block。
                              注意：切換新增／編輯模式時會重寫 modal-title
                              （2026-10-02 已全改成只限定 #newOrderModal：原本寫全頁共用選擇器，
@@ -4916,6 +4907,17 @@ foreach($dCounts as $c) {
                                     <!-- Row 5: 指派設計 | 設計接收日 -->
                                     <div class="col-xs-6 form-group" style="padding:0 5px;">
                                         <label class="ctrl-label">指派設計
+                                            <?php /* 需設計繪圖／由樣品繪圖（2026-10-07 使用者要求）：純標記，不影響任何既有流程，
+                                                     效果是清單「製程」欄的訂單標籤（AS 認定）下方多一行提示。各自獨立指派角色，
+                                                     沒有該功能碼的人連按鈕都不會出現（鐵律8）。原本放在跳窗標題列，使用者回報
+                                                     標題列已被 AS 標籤 chips 擠得很擠，2026-10-07 二次交辦改放到「指派設計」
+                                                     字樣右方——這兩個標記本來就是給設計參考的資訊，放在這裡語意也更貼合。 */ ?>
+                                            <?php if ($can_need_design_draw): ?>
+                                            <button type="button" id="btn-toggle-need-design" class="btn btn-xs" style="margin-left:4px;padding:0 6px;font-size:11px;" onclick="toggleNeedDesignDrawFlag()" title="標記需設計重新繪圖：清單製程欄下方會顯示提示"></button>
+                                            <?php endif; ?>
+                                            <?php if ($can_sample_draw): ?>
+                                            <button type="button" id="btn-toggle-sample-draw" class="btn btn-xs" style="margin-left:4px;padding:0 6px;font-size:11px;" onclick="toggleSampleDrawFlag()" title="標記由樣品繪圖：清單製程欄下方會顯示提示"></button>
+                                            <?php endif; ?>
                                             <?php if ($can_designer_assign_cog): ?>
                                             <button type="button" class="btn btn-xs btn-default" onclick="openDesignerSetting()" style="margin-left:3px;padding:0 3px;"><i class="fa fa-cog"></i></button>
                                             <?php endif; ?>
