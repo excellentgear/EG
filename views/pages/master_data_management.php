@@ -1637,6 +1637,28 @@ function _mdTagCan(string $action): bool {
     return false;
 }
 
+// 2026-10-07 使用者再次確認：料號/客戶/廠商「本體」的新增/修改/刪除/狀態切換，以及齒輪
+// 規格列的編輯/刪除，一併改成完全以角色為準、停用 CDRU 字母判定（原本只有維護設定/標籤
+// 指派改了，本體CRUD還留著舊規則，才會出現「CDRU改R之後，角色設定的人卻顯示無權限」）。
+// 刻意沿用 CDRU 原本的granularity（料號/客戶/廠商三者共用同一組「本體操作」權限碼，不像
+// 維護設定那樣逐項拆開）——這是 1:1 複製舊規則的語意，不是新設計，三者原本就是同一套字母。
+// 新功能碼：mdata_entity_add/edit/delete/status（本體），mdata_gear_edit/delete/
+// modify_existing（齒輪規格列，CDRU與齒輪規格本來就是不同條件，維持分開）。
+// 料號附件沿用既有 md_attach_upload/edit/delete（與「其他附件」分頁同一組功能碼，
+// 不另外發明新代碼——那三個碼本來就是「對料號附件能做什麼」）。
+$can_create     = _mdPerm('entity', 'add');
+$can_update     = _mdPerm('entity', 'edit');
+$can_delete_all = _mdPerm('entity', 'delete');
+$can_set_status = _mdPerm('entity', 'status');
+$can_edit_gear  = _mdPerm('gear', 'edit');
+$can_delete_gear= _mdPerm('gear', 'delete');
+$can_modify_existing_gear = _mdPerm('gear', 'modify_existing');
+$can_remove_part_labels   = _mdTagCan('edit_others');
+$can_part_attach = $is_admin || $_mdRbacAll
+    || in_array('md_attach_upload', $_mdFeats, true)
+    || in_array('md_attach_edit',   $_mdFeats, true)
+    || in_array('md_attach_delete', $_mdFeats, true);
+
 define('PART_ATTACH_API_URL', '../../src/store/Part_Attachment_API.php');
 
 // =============================================================================
@@ -3449,7 +3471,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // 結帳例外 儲存
     if ($_POST['action'] === 'save_settlement_exception') {
         try {
-            if (!($can_create||$can_update)) throw new Exception('無權限');
+            if (!_mdPerm('settle', 'edit')) throw new Exception('無權限（需要「結帳設定：編輯」角色功能）');
             // 唯一實作在 acc_lib：這裡與對帳頁的「對象設定」共用同一支，
             // 兩邊各寫一份驗證規則必定走鐘（鐵律4）。填的值會直接影響帳款月份歸屬。
             require_once __DIR__ . '/../../src/common/acc_lib.php';
@@ -3467,7 +3489,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // 刪除結帳例外
     if ($_POST['action'] === 'delete_settlement_exception') {
         try {
-            if (!$can_delete) throw new Exception('無刪除權限');
+            if (!_mdPerm('settle', 'edit')) throw new Exception('無刪除權限（需要「結帳設定：編輯」角色功能）');
             require_once __DIR__ . '/../../src/common/acc_lib.php';   // 唯一實作（同上）
             $r = acc_settle_ex_delete($pdo, intval($_POST['exception_id'] ?? 0), acc_current_user($pdo));
             if (!$r['success']) throw new Exception($r['message']);
@@ -7539,14 +7561,15 @@ body { background:#F6F1EA; }
         <div class="page-title">
             <div class="title_left">
                 <?php
-                // 畫面上的權限標示：CDRU 字母是「料號/客戶/廠商本體」的舊式權限，主檔管理維護設定
-                // （對帳單/結帳/標籤/各項字典…）改以 master_data 角色為準，兩者意義不同要分開顯示，
-                // 不可只印其中一種——否則角色設好了卻看不出「生效的是哪個角色」。
+                // 2026-10-07 本頁的料號/客戶/廠商本體CRUD、齒輪規格、維護設定、標籤指派，
+                // 已全面改成完全以 master_data 角色為準，CDRU 字母不再governs任何功能——
+                // 畫面上只顯示角色，不再顯示已經沒有作用的 CDRU 字母，避免像這次一樣造成
+                // 「字母改R、角色卻顯示設計生管」的誤解。
                 if ($is_admin || $_mdRbacAll) { $_mdRoleDisp = '系統管理員（全部權限）'; }
                 elseif (!empty($_mdRoleNames)) { $_mdRoleDisp = implode('、', $_mdRoleNames); }
-                else { $_mdRoleDisp = '尚未指派角色（維護設定將全數無法使用）'; }
+                else { $_mdRoleDisp = '尚未指派角色（本頁所有功能將無法使用）'; }
                 ?>
-                <h3>主檔管理 <small>料號 / 客戶 / 廠商 &nbsp;（權限：<?= safe_html($disp_perm) ?>／角色：<?= safe_html($_mdRoleDisp) ?>）</small><i class="fa fa-question-circle perm-help-icon" onclick="showPermHelp()" title="權限說明" style="cursor:pointer;color:#aaa;font-size:13px;margin-left:5px;vertical-align:middle;"></i></h3>
+                <h3>主檔管理 <small>料號 / 客戶 / 廠商 &nbsp;（角色：<?= safe_html($_mdRoleDisp) ?>）</small><i class="fa fa-question-circle perm-help-icon" onclick="showPermHelp()" title="權限說明" style="cursor:pointer;color:#aaa;font-size:13px;margin-left:5px;vertical-align:middle;"></i></h3>
             </div>
             <div class="title_right text-right">
                 <button class="btn btn-info btn-sm" onclick="openDictModal()"><i class="fa fa-book"></i> 類別字典設定</button>
@@ -7619,6 +7642,15 @@ body { background:#F6F1EA; }
               ['md_attach_upload','其他附件—上傳'],
               ['md_attach_delete','其他附件—刪除'],
               ['md_attach_edit','其他附件—編輯（標籤/浮水印）']
+            ]},
+            { title: '料號／客戶／廠商本體操作', items: [
+              ['mdata_entity_add','新增料號／客戶／廠商'],
+              ['mdata_entity_edit','編輯料號／客戶／廠商（含業務設定、產業別、批次修改、廠商別名）'],
+              ['mdata_entity_delete','刪除料號／客戶／廠商（含綁定移轉，不可逆）'],
+              ['mdata_entity_status','切換客戶／廠商停用狀態'],
+              ['mdata_gear_edit','新增／編輯齒輪規格'],
+              ['mdata_gear_delete','刪除齒輪規格列'],
+              ['mdata_gear_modify_existing','修改既有齒輪規格列（區分新增中與既有的列）']
             ]},
             { title: '客戶／廠商表單內的設定欄位', items: [
               ['mdata_recon_view','對帳單設定（客戶）：檢視'],
@@ -8938,7 +8970,7 @@ $mdReconView   = _mdPerm('recon','view', $is_admin); $mdReconEdit  = _mdPerm('re
 </div>
 <div class="modal-footer">
     <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
-    <?php if ($can_create || $can_update): ?>
+    <?php if ($mdSettleEdit): ?>
     <button type="button" class="btn btn-warning" onclick="submitSettlementException()"><i class="fa fa-save"></i> 儲存調整</button>
     <?php endif; ?>
 </div>
@@ -9555,22 +9587,22 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 <div class="modal-header" style="background:linear-gradient(135deg,#2A3F54 0%,#1d3045 100%);"><button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;">&times;</button><h4 class="modal-title" style="color:#fff;font-size:15px;"><i class="fa fa-question-circle" style="color:#1ABB9C;margin-right:6px;"></i>權限說明</h4></div>
 <div class="modal-body" style="font-size:13px;">
 <p style="color:#8a6d3b;background:#fdf6ec;border-left:3px solid #d4761a;padding:6px 10px;font-size:12px;margin-top:0;">
-本頁有<b>兩套獨立的權限</b>，標題列會同時顯示：<b>「權限」（CDRU字母）</b>管的是<b>料號／客戶／廠商本體</b>的新增/修改/刪除；
-<b>「角色」</b>管的是<b>對帳單／結帳／報價收款／銀行帳戶／料號標籤指派／各項字典與系統設定</b>等維護功能——
-這部分<b>已經不再看 CDRU 字母</b>，完全以角色為準，沒有被指派角色就什麼都不能改（管理員固定不受限）。角色由系統管理員在「角色設定」逐人指派。
+本頁<b>完全以角色為準</b>（2026-10-07起，CDRU 字母已經停用、不再管任何功能）：沒有被指派任何角色，就什麼都不能改，只能唯讀檢視（管理員固定不受限）。
+角色由系統管理員在右上角「角色設定」建立與勾選功能，再到<b>人員權限設定（user_permissions）→ 主檔管理</b>逐人指派。
 </p>
 <table class="table table-bordered table-condensed" style="font-size:12px;">
-<thead><tr style="background:#f7f9fb;"><th style="white-space:nowrap;width:140px;">權限代碼</th><th>可執行操作（僅限料號／客戶／廠商本體）</th></tr></thead>
+<thead><tr style="background:#f7f9fb;"><th style="white-space:nowrap;width:160px;">功能分類</th><th>說明</th></tr></thead>
 <tbody>
-<tr><td style="white-space:nowrap;"><strong>A</strong><br><span style="color:#aaa;font-size:11px;">超級管理員</span></td><td>所有操作，包含：刪除廠商/客戶/料號、刪除齒輪規格列、編輯/新增齒輪規格、切換客戶/廠商狀態；維護設定與標籤指派不受角色限制</td></tr>
-<tr><td style="white-space:nowrap;"><strong>CDRU</strong><br><span style="color:#aaa;font-size:11px;">主管（CRUD全權限）</span></td><td>新增/修改/刪除 廠商、客戶、料號。<em>注意：不可刪除齒輪規格列，不可編輯齒輪規格</em></td></tr>
-<tr><td style="white-space:nowrap;"><strong>CDR</strong><br><span style="color:#aaa;font-size:11px;">設計（含D不含U）</span></td><td>可編輯料號（含子標籤）、可刪除齒輪規格列、切換客戶/廠商狀態。<em>不可刪除廠商/客戶/料號</em></td></tr>
-<tr><td style="white-space:nowrap;"><strong>CRU</strong><br><span style="color:#aaa;font-size:11px;">業務／生管（含U不含D）</span></td><td>新增/修改 廠商、客戶、料號。<em>不可刪除</em></td></tr>
-<tr><td style="white-space:nowrap;"><strong>R</strong><br><span style="color:#aaa;font-size:11px;">唯讀</span></td><td>唯讀檢視所有資料</td></tr>
-<tr><td style="white-space:nowrap;"><strong>CR / C</strong><br><span style="color:#aaa;font-size:11px;">無新增/修改</span></td><td>唯讀檢視。不具備任何新增/修改/刪除功能</td></tr>
+<tr><td style="white-space:nowrap;"><strong>料號／客戶／廠商本體操作</strong></td><td>新增、編輯（含業務設定/產業別/批次修改/廠商別名連結）、刪除（含不可逆的綁定移轉）、客戶/廠商停用狀態切換、齒輪規格的新增/編輯/刪除/修改既有列</td></tr>
+<tr><td style="white-space:nowrap;"><strong>客戶／廠商表單設定欄位</strong></td><td>對帳單設定、結帳設定（含臨時結帳調整）、報價方式、收款/付款方式、銀行帳戶，各自可設檢視/編輯</td></tr>
+<tr><td style="white-space:nowrap;"><strong>料號標籤指派</strong></td><td>新增標籤指派／修改或移除他人指派的標籤——沒有後者的人仍可改動/移除自己指派過的那一筆</td></tr>
+<tr><td style="white-space:nowrap;"><strong>標籤與字典維護</strong></td><td>標籤定義、工件種類、齒輪類型、齒輪等級對照、客戶產業別、製程大類與製程主檔，各自可設新增/編輯/刪除/檢視</td></tr>
+<tr><td style="white-space:nowrap;"><strong>廠商分類維護</strong></td><td>廠商大類/小類、加工限制標籤、大類製程設定</td></tr>
+<tr><td style="white-space:nowrap;"><strong>備註與附件設定</strong></td><td>製程備註、設計備註、附件類別標籤（NAS 儲存路徑設定仍僅限系統管理員）</td></tr>
+<tr><td style="white-space:nowrap;"><strong>其他附件 / 系統設定</strong></td><td>其他附件分頁的檢視/上傳/刪除/編輯，以及系統基本設定、規格快速輸入按鈕</td></tr>
 </tbody>
 </table>
-<p style="color:#888;font-size:11px;margin-top:8px;">* 類別字典設定、對帳單/結帳/報價/收款/銀行帳戶、料號標籤指派等，一律改看<b>角色</b>是否勾選對應功能，與上表的 CDRU 字母無關；管理員可到「角色設定」查看/調整每個角色勾了哪些功能，並在<b>人員權限設定（user_permissions）→ 主檔管理</b>指派給使用者。</p>
+<p style="color:#888;font-size:11px;margin-top:8px;">* 每一類實際包含哪些功能碼，請點右上角「角色設定」展開查看；新建立的角色預設一項都沒勾，記得逐一確認。</p>
 </div>
 <div class="modal-footer"><button class="btn btn-default btn-sm" data-dismiss="modal">關閉</button></div>
 </div></div></div>
@@ -10728,7 +10760,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 // ─── Permission flags from PHP ─────────────────────
 var CAN_CREATE      = <?= json_encode($can_create) ?>;
 var CAN_UPDATE      = <?= json_encode($can_update) ?>;
-var CAN_DELETE      = <?= json_encode($can_delete) ?>;
+var CAN_DELETE      = <?= json_encode($mdSettleEdit) ?>;   // 唯一用途：結帳例外列的刪除鈕，對應 settle 群組編輯權（見 save/delete_settlement_exception）
 var CAN_DELETE_ALL  = <?= json_encode($can_delete_all) ?>;   // 刪除廠商/客戶/料號/字典（A或CDRU）
 var CAN_DELETE_GEAR     = <?= json_encode($can_delete_gear) ?>;         // 刪除齒輪規格列（A或CDR）
 var CAN_EDIT_GEAR       = <?= json_encode($can_edit_gear) ?>;           // 新增/編輯齒輪規格欄位與料號標籤（A,CRU,CRD,CDRU）

@@ -31,6 +31,8 @@ $roleCode = 'TEST_MDTAG_' . bin2hex(random_bytes(3));
 $pdo->prepare("INSERT INTO roles (role_code, role_name, module, is_system) VALUES (?,?,'master_data',0)")->execute([$roleCode, '測試用-勿留']);
 $roleId = (int)$pdo->lastInsertId();
 $pdo->prepare("INSERT INTO role_features (role_id, feature_code) VALUES (?, 'mdata_tag_assign')")->execute([$roleId]);
+// 2026-10-07 起料號本體CRUD也改成角色制了，測標籤合併邏輯仍要先給 entity_edit 才存得進 save_part
+$pdo->prepare("INSERT INTO role_features (role_id, feature_code) VALUES (?, 'mdata_entity_edit')")->execute([$roleId]);
 $pdo->prepare("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)")->execute([$USER_A, $roleId]);
 $pdo->prepare("INSERT INTO user_module_permissions (user_id, module_code, permission, scope) VALUES (?, '76', 'CDRU', 'page')")->execute([$USER_A]);
 $legacyPermId = (int)$pdo->lastInsertId();
