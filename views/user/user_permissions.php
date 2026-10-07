@@ -701,13 +701,41 @@ $_quotDepts = array_keys($_deptSet);
             text-align: left !important;
         }
 
-        .scroll-to-top {
-            position: fixed; bottom: 20px; right: 20px; width: 50px; height: 50px;
-            background-color: rgba(255,255,255,0.5); color: #000; border: none; border-radius: 50%;
-            text-align: center; line-height: 50px; cursor: pointer; font-size: 12px; font-weight: bold;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.2); transition: all 0.3s; z-index: 1000;
-        }
-        .scroll-to-top:hover { background-color: rgba(255,255,255,0.7); }
+        /* 右下角懸浮工具：回頂端／快速導覽（仿 Order_Analysis.php，取代原本貼頂的「快速切換」列） */
+        .float-tools { position:fixed; right:18px; bottom:18px; z-index:9000;
+                        display:flex; flex-direction:column-reverse; align-items:flex-end; gap:10px; }
+        @media print { .float-tools { display:none !important; } }
+        .float-btn { width:50px; height:50px; border-radius:50%; border:none; cursor:pointer;
+                     display:flex; flex-direction:column; align-items:center; justify-content:center;
+                     color:#fff; font-size:10px; font-weight:600; line-height:1.1;
+                     background:linear-gradient(135deg,#8a5a2b,#F0A24B); box-shadow:0 4px 14px rgba(0,0,0,.22);
+                     opacity:.55; transition:opacity .15s,filter .15s; }
+        .float-btn i { font-size:17px; margin-bottom:1px; }
+        .float-btn:hover, .float-btn:focus { color:#fff; text-decoration:none; opacity:1; filter:brightness(1.08); }
+        .float-btn.totop { display:none; }
+        /* 快速導覽：縮成圖示，滑鼠移過才展開清單（區塊很多，面板本身可再捲動＋可打字篩選） */
+        .qnav { position:relative; }
+        .qnav-fab { width:50px; height:50px; border-radius:50%; border:1px solid #E4D3BC; cursor:pointer;
+                    background:#fff; color:#8a5a2b; box-shadow:0 4px 12px rgba(0,0,0,.18); font-size:18px;
+                    opacity:.6; transition:opacity .15s; display:flex; align-items:center; justify-content:center; }
+        .qnav:hover .qnav-fab, .qnav-fab:focus { opacity:1; }
+        .qnav-panel { position:absolute; right:58px; bottom:0; width:300px; max-height:76vh; overflow:hidden;
+                      background:rgba(255,253,250,.98); border:1px solid #E4D3BC; border-radius:10px;
+                      box-shadow:0 6px 20px rgba(0,0,0,.22); padding:10px; display:flex; flex-direction:column; gap:3px;
+                      opacity:0; pointer-events:none; transform:translateX(6px); transition:opacity .15s,transform .15s; }
+        .qnav:hover .qnav-panel, .qnav-panel:hover { opacity:1; pointer-events:auto; transform:translateX(0); }
+        .qnav-panel .qnp-search { width:100%; font-size:12px; padding:5px 8px; border:1px solid #E4D3BC;
+                      border-radius:6px; margin-bottom:4px; box-sizing:border-box; flex:0 0 auto; }
+        /* 搜尋框釘在面板頂端不隨內容捲動，只有下方清單本身捲動 */
+        .qnav-panel .qnp-list { flex:1 1 auto; min-height:0; overflow-y:auto; }
+        .qnav-panel .qnp-group { font-size:11px; color:#8a5a2b; background:#FFF3E2; border:1px solid #E4D3BC;
+                      border-radius:3px; padding:2px 7px; margin-top:5px; }
+        .qnav-panel .qnp-group:first-child { margin-top:0; }
+        .qnav-panel a.quick-nav-link { font-size:12px; color:#6B4423; padding:5px 10px; border-radius:6px;
+                      text-decoration:none; white-space:normal; line-height:1.3; display:block; }
+        .qnav-panel a.quick-nav-link:hover { background:#FBEFE0; }
+        .qnav-panel a.quick-nav-link.qnp-hide { display:none; }
+        .qnav-panel .qnp-empty { font-size:12px; color:#999; padding:6px 10px; display:none; }
     </style>
 </head>
 
@@ -723,65 +751,37 @@ $_quotDepts = array_keys($_deptSet);
             <div class="right_col" role="main">
                 <div class="">
 
-                    <!-- ══ 快速切換：跳至各設定區塊（Excel 凍結窗格式：捲過後固定貼齊視窗頂端）══ -->
-                    <div class="row" id="quick-nav-block">
-                        <div class="col-md-12">
-                            <div class="x_panel" style="padding:8px 12px;margin-bottom:10px;">
-                                <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
-                                    <strong><i class="fa fa-compass"></i> 快速切換</strong>
-                                    <span class="text-muted" style="font-size:11px;">分類依「子頁面設定」的主項目歸屬，在該頁調整後這裡會自動跟著變</span>
-                                    <a href="#" id="qn-toggle" onclick="qnToggle();return false;" style="font-size:11px;margin-left:auto;"><i class="fa fa-angle-double-down"></i> 展開全部</a>
-                                </div>
-                                <?php
-                                // 常用／不屬於任何模組的區塊（固定放最前面）
-                                $_navFixed = [
-                                    'perm-matrix-section' => '人員權限設定',
-                                    'person-view-section' => '人員權限總覽',
-                                    'dp-role-section'     => '部門×職稱角色',
-                                ];
-                                // 模組區塊：依「主項目」分群，名稱與分群都取自唯一來源 $EG_ROLE_MODULES / $EG_MODULE_GROUP
-                                $_navGroups = [];
-                                foreach ($EG_ROLE_MODULES as $_mk => $_mv) {
-                                    $_navGroups[$EG_MODULE_GROUP[$_mk] ?? '其他'][] = [
-                                        'id'    => $_mv['prefix'] . '-role-section',
-                                        'label' => $_mv['label'],
-                                    ];
-                                }
-                                // 主項目排序：照 system_module_groups 的 sort_order，「其他」永遠最後
-                                uksort($_navGroups, function($a, $b) use ($_grpSort) {
-                                    if ($a === '其他') return 1;
-                                    if ($b === '其他') return -1;
-                                    $sa = $_grpSort[$a] ?? 9999; $sb = $_grpSort[$b] ?? 9999;
-                                    return $sa === $sb ? strcmp($a, $b) : $sa - $sb;
-                                });
-                                // 其他非模組的設定區塊
-                                $_navTail = [
-                                    'asdoc-pos-role-section'    => 'AS文件·職稱權限',
-                                    'imgedit-label-dir-section' => '批圖標籤路徑',
-                                    'asdoc-nas-dir-section'     => 'AS文件儲存路徑',
-                                ];
-                                ?>
-                                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid #eee;">
-                                    <?php foreach ($_navFixed as $_nid => $_nlabel): ?>
-                                        <a href="#<?= $_nid ?>" class="btn btn-xs btn-warning quick-nav-link" data-target="<?= $_nid ?>"><?= htmlspecialchars($_nlabel) ?></a>
-                                    <?php endforeach; ?>
-                                </div>
-                                <div id="qn-groups" style="display:flex;align-items:center;gap:4px 6px;flex-wrap:wrap;max-height:60px;overflow-y:auto;">
-                                    <?php foreach ($_navGroups as $_gname => $_items): ?>
-                                        <span style="display:inline-block;font-size:11px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:1px 6px;line-height:18px;white-space:nowrap;margin-left:2px;"><?= htmlspecialchars($_gname) ?></span>
-                                        <?php foreach ($_items as $_it): ?>
-                                            <a href="#<?= $_it['id'] ?>" class="btn btn-xs btn-default quick-nav-link" data-target="<?= $_it['id'] ?>"><?= htmlspecialchars($_it['label']) ?></a>
-                                        <?php endforeach; ?>
-                                    <?php endforeach; ?>
-                                    <span style="display:inline-block;font-size:11px;color:#999;background:#f5f5f5;border:1px solid #e5e5e5;border-radius:3px;padding:1px 6px;line-height:18px;white-space:nowrap;margin-left:2px;">其他設定</span>
-                                    <?php foreach ($_navTail as $_nid => $_nlabel): ?>
-                                        <a href="#<?= $_nid ?>" class="btn btn-xs btn-default quick-nav-link" data-target="<?= $_nid ?>"><?= htmlspecialchars($_nlabel) ?></a>
-                                    <?php endforeach; ?>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <!-- ／快速切換 ══ -->
+                    <?php
+                    // ══ 快速導覽資料準備（圖示在右下角，滑鼠移過才展開，不佔用畫面版面；
+                    //    取代原本貼頂又要展開/收合的「快速切換」列——區塊一多，貼頂的版本既擠占版面又不好找）══
+                    // 常用／不屬於任何模組的區塊（固定放最前面）
+                    $_navFixed = [
+                        'perm-matrix-section' => '人員權限設定',
+                        'person-view-section' => '人員權限總覽',
+                        'dp-role-section'     => '部門×職稱角色',
+                    ];
+                    // 模組區塊：依「主項目」分群，名稱與分群都取自唯一來源 $EG_ROLE_MODULES / $EG_MODULE_GROUP
+                    $_navGroups = [];
+                    foreach ($EG_ROLE_MODULES as $_mk => $_mv) {
+                        $_navGroups[$EG_MODULE_GROUP[$_mk] ?? '其他'][] = [
+                            'id'    => $_mv['prefix'] . '-role-section',
+                            'label' => $_mv['label'],
+                        ];
+                    }
+                    // 主項目排序：照 system_module_groups 的 sort_order，「其他」永遠最後
+                    uksort($_navGroups, function($a, $b) use ($_grpSort) {
+                        if ($a === '其他') return 1;
+                        if ($b === '其他') return -1;
+                        $sa = $_grpSort[$a] ?? 9999; $sb = $_grpSort[$b] ?? 9999;
+                        return $sa === $sb ? strcmp($a, $b) : $sa - $sb;
+                    });
+                    // 其他非模組的設定區塊
+                    $_navTail = [
+                        'asdoc-pos-role-section'    => 'AS文件·職稱權限',
+                        'imgedit-label-dir-section' => '批圖標籤路徑',
+                        'asdoc-nas-dir-section'     => 'AS文件儲存路徑',
+                    ];
+                    ?>
 
                     <?php if ($canEdit): ?>
                     <!-- ══ 複製其他員工的權限設定（角色指派＋選單群組/頁面權限，一次複製）══ -->
@@ -2537,70 +2537,64 @@ $_quotDepts = array_keys($_deptSet);
                 $('#' + p + '-filter-count').text('共 ' + EG_ROLE_ADMINS.length + ' 人');
             });
 
-            // 快速切換：平滑捲動至各設定區塊（避開凍結的快速切換列本身）
-            // 快速切換列自動補漏：頁面上任何 id 結尾為 -role-section 的區塊，若上面的 $_navItems 沒登記，
-            // 就自動補一顆按鈕。（新模組自動長出的角色區塊也吃這條，不必回頭維護那份清單＝鐵律4）
+            // 快速導覽（右下角羅盤圖示）自動補漏：頁面上任何 id 結尾為 -role-section 的區塊，
+            // 若上面的 $_navGroups 沒登記，就自動補一顆連結。（新模組自動長出的角色區塊也吃這條，不必回頭維護那份清單＝鐵律4）
             (function autoFillQuickNav() {
-                var $bar = $('#quick-nav-block .x_panel > div');
-                if (!$bar.length) return;
+                var $list = $('#qnpList');
+                if (!$list.length) return;
                 var have = {};
-                $bar.find('.quick-nav-link').each(function(){ have[$(this).data('target')] = 1; });
+                $list.find('.quick-nav-link').each(function(){ have[$(this).data('target')] = 1; });
                 $('[id$="-role-section"]').each(function() {
                     var id = this.id;
                     if (have[id]) return;
                     var label = $.trim($(this).find('.x_title h2').first().clone().children('small').remove().end().text()) || id;
-                    $bar.append($('<a class="btn btn-xs btn-default quick-nav-link"></a>')
-                        .attr('href', '#' + id).attr('data-target', id).text(label));
+                    $list.append($('<a class="quick-nav-link"></a>')
+                        .attr('href', '#' + id).attr('data-target', id).attr('data-kw', label.toLowerCase()).text(label));
                     have[id] = 1;
                 });
             })();
 
-            // 快速切換列預設壓成兩行：它是黏在視窗頂端的，太高會把要看的內容擠出畫面
-            window.qnToggle = function() {
-                var $g = $('#qn-groups'), open = $g.data('open') ? false : true;
-                $g.data('open', open).css('max-height', open ? '300px' : '60px');
-                $('#qn-toggle').html(open ? '<i class="fa fa-angle-double-up"></i> 收合'
-                                          : '<i class="fa fa-angle-double-down"></i> 展開全部');
-            };
-
-            $(document).on('click', '.quick-nav-link', function(e) {
-                e.preventDefault();
-                var target = $('#' + $(this).data('target'));
-                if (target.length) {
-                    var stickyH = $('#quick-nav-block').outerHeight() || 50;
-                    $('html, body').stop().animate({ scrollTop: target.offset().top - stickyH - 10 }, 500);
-                }
+            // 快速導覽面板：打字即時篩選（區塊有 60 幾個，用眼睛找不如直接打關鍵字）
+            $('#qnpSearch').on('input', function() {
+                var kw = $(this).val().toLowerCase().trim();
+                var anyVisible = false;
+                $('#qnpList .quick-nav-link').each(function() {
+                    var hit = !kw || ($(this).data('kw') || '').indexOf(kw) !== -1;
+                    $(this).toggleClass('qnp-hide', !hit);
+                    if (hit) anyVisible = true;
+                });
+                $('#qnpList .qnp-group').each(function() {
+                    var $g = $(this), has = false;
+                    $g.nextUntil('.qnp-group').each(function() {
+                        if ($(this).hasClass('quick-nav-link') && !$(this).hasClass('qnp-hide')) has = true;
+                    });
+                    $g.toggle(has);
+                });
+                $('#qnpEmpty').toggle(!anyVisible);
             });
 
-            // Excel 凍結窗格式固定：捲過原位置後 fixed 貼齊視窗頂端，原位放佔位元素避免內容跳動
-            var $qn = $('#quick-nav-block');
-            if ($qn.length) {
-                var $qnPh = $('<div id="quick-nav-placeholder" style="display:none;"></div>').insertAfter($qn);
-                var qnFixed = false;
-                function qnGetTop() { return (qnFixed ? $qnPh : $qn).offset().top; }
-                function qnUpdate() {
-                    var shouldFix = $(window).scrollTop() > qnGetTop();
-                    if (shouldFix && !qnFixed) {
-                        qnFixed = true;
-                        $qnPh.height($qn.outerHeight(true)).show();
-                        $qn.css({
-                            position: 'fixed', top: 0, zIndex: 1050,
-                            left: $qnPh.offset().left - $(window).scrollLeft(),
-                            width: $qnPh.outerWidth(), margin: 0
-                        }).find('.x_panel').css('box-shadow', '0 2px 8px rgba(0,0,0,.25)');
-                    } else if (!shouldFix && qnFixed) {
-                        qnFixed = false;
-                        $qn.css({ position: '', top: '', zIndex: '', left: '', width: '', margin: '' })
-                           .find('.x_panel').css('box-shadow', '');
-                        $qnPh.hide();
-                    } else if (qnFixed) {
-                        // 視窗寬度改變時跟著佔位元素調整
-                        $qn.css({ left: $qnPh.offset().left - $(window).scrollLeft(), width: $qnPh.outerWidth() });
-                    }
+            // 點擊快速導覽連結：平滑捲動到該設定區塊。
+            // 修正「同一顆按鈕要點很多次才跳得到正確位置」：角色表格是捲到附近才建立（IntersectionObserver，
+            // 見下方 egBuildRoleTable），若在捲動動畫「進行中」才長出表格，畫面高度會中途變動，導致動畫結束時
+            // 落點已經偏移；點第二、三次才會因為沿途區塊都已建好而剛好對準。改成跳之前先把全部待建區塊一次建完
+            // （egBuildRoleTable 本身已判斷「已建過就跳出」，重複呼叫零成本），畫面高度先穩定下來，一次就跳得準。
+            $(document).on('click', '.quick-nav-link', function(e) {
+                e.preventDefault();
+                var targetId = $(this).data('target');
+                var $target = $('#' + targetId);
+                if (!$target.length) return;
+                if (typeof EG_ROLE_SECTIONS === 'object') {
+                    Object.keys(EG_ROLE_SECTIONS).forEach(function(p) { egBuildRoleTable(p); });
                 }
-                $(window).on('scroll resize', qnUpdate);
-                qnUpdate();
-            }
+                requestAnimationFrame(function() {
+                    $('html, body').stop().animate({ scrollTop: $target.offset().top - 10 }, 450);
+                });
+            });
+
+            // 回頂端：捲動超過一定距離才顯示（仿 Order_Analysis.php）
+            $(window).on('scroll', function() {
+                $('#btnToTop').toggle($(window).scrollTop() > 200);
+            });
         });
 
         // ══ 人員權限總覽（依人員查看）══
@@ -3039,7 +3033,38 @@ $_quotDepts = array_keys($_deptSet);
         }
         // ══════════════════════════════════════════════════════════════
     </script>
-    <button class="scroll-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})">回頂端</button>
+    <!-- 右下角懸浮工具：回頂端／快速導覽（仿 Order_Analysis.php）──
+         快速導覽放在回頂端「上方」（.float-tools 用 column-reverse，DOM 後面的子元素排在視覺上方） -->
+    <div class="float-tools">
+        <button type="button" class="float-btn totop" id="btnToTop" title="回頂端"
+                onclick="window.scrollTo({top:0,behavior:'smooth'});"><i class="fa fa-arrow-up"></i>頂端</button>
+        <div class="qnav">
+            <button type="button" class="qnav-fab" title="快速導覽（各設定區塊）"><i class="fa fa-compass"></i></button>
+            <div class="qnav-panel" id="qnavPanel">
+                <input type="text" class="qnp-search" id="qnpSearch" placeholder="輸入關鍵字篩選區塊…" data-eg-skip>
+                <div class="qnp-empty" id="qnpEmpty">沒有符合的區塊</div>
+                <div class="qnp-list" id="qnpList">
+                    <?php foreach ($_navFixed as $_nid => $_nlabel): ?>
+                        <a href="#<?= $_nid ?>" class="quick-nav-link" data-target="<?= $_nid ?>"
+                           data-kw="<?= htmlspecialchars(strtolower($_nlabel)) ?>"
+                           style="font-weight:600;"><i class="fa fa-star" style="color:#C9961F;font-size:10px;margin-right:4px;"></i><?= htmlspecialchars($_nlabel) ?></a>
+                    <?php endforeach; ?>
+                    <?php foreach ($_navGroups as $_gname => $_items): ?>
+                        <div class="qnp-group"><?= htmlspecialchars($_gname) ?></div>
+                        <?php foreach ($_items as $_it): ?>
+                            <a href="#<?= $_it['id'] ?>" class="quick-nav-link" data-target="<?= $_it['id'] ?>"
+                               data-kw="<?= htmlspecialchars(strtolower($_it['label'] . ' ' . $_gname)) ?>"><?= htmlspecialchars($_it['label']) ?></a>
+                        <?php endforeach; ?>
+                    <?php endforeach; ?>
+                    <div class="qnp-group">其他設定</div>
+                    <?php foreach ($_navTail as $_nid => $_nlabel): ?>
+                        <a href="#<?= $_nid ?>" class="quick-nav-link" data-target="<?= $_nid ?>"
+                           data-kw="<?= htmlspecialchars(strtolower($_nlabel)) ?>"><?= htmlspecialchars($_nlabel) ?></a>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        </div>
+    </div>
 </body>
 
 </html>
