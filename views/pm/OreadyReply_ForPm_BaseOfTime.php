@@ -10556,16 +10556,48 @@ echo "</script>\n";
     // 並允許換行（flex-wrap），按鈕欄加寬一成（2→3 欄），製程中文欄對應縮窄（5→4 欄）補足，
     // 兩欄總寬不變，只是重新分配；真的還是放不下時 flex-wrap 讓按鈕自己換行，不會再溢出容器。
     function _buildProcItemDiv(proc, rowData, showTransfer) {
+        // 2026-10-07 使用者回報「BOM 製程列表顯示太過壅擠」：根因是本函式原本用 Bootstrap
+        // col-md-*／col-xs-* 百分比欄寬，但這張清單不是鋪滿整個視窗的 .row，而是夾在「修改BOM
+        // 資料」面板右半邊（_renderProcList 製程≥6筆時還會再對半分兩欄）——Bootstrap 的 col-md-*
+        // 是依「視窗寬度」觸發斷點，不會隨容器實際變窄而跟著變窄，容器被壓到剩 300 多px 時，
+        // 按鈕欄仍想要拿 25% 的「視窗」寬度，擠不下只好逐顆往下疊成一落小方塊。
+        // 改法：整段不再用 col-md-* 百分比格線，改用真正依容器實際寬度計算的 flex——
+        // 「製程資訊」自己佔一行、「操作按鈕」另起一行靠右對齊，不論容器多窄都不會互相擠壓。
         var div = document.createElement('div');
-        div.className = 'form-group row';
-        div.style.cssText = 'margin-bottom:4px;margin-left:0;margin-right:0;display:flex;align-items:center;flex-wrap:wrap;';
+        div.className = 'bom-proc-row';
+        div.style.cssText = 'margin-bottom:6px;padding:4px 6px;border-bottom:1px solid #eee;border-radius:3px;';
 
         var isIng = (proc.processing_state === 'ing');
 
-        // 按鈕欄
-        var btnCol = document.createElement('div');
-        btnCol.className = 'col-md-3 col-sm-3 col-xs-4 text-right';
-        btnCol.style.cssText = 'display:flex;gap:3px;justify-content:flex-end;flex-wrap:wrap;padding-left:2px;padding-right:2px;';
+        // 第一行：SN／製程代號／製程中文（+廠商）
+        var infoRow = document.createElement('div');
+        infoRow.style.cssText = 'display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;';
+
+        var snSpan = document.createElement('b');
+        snSpan.style.cssText = 'font-size:12px;min-width:16px;';
+        snSpan.textContent = proc.bom_sn || '';
+        infoRow.appendChild(snSpan);
+
+        var pnoSpan = document.createElement('span');
+        pnoSpan.style.cssText = 'font-size:11px;color:#999;';
+        pnoSpan.textContent = proc.process_no || '';
+        infoRow.appendChild(pnoSpan);
+
+        var nameSpan = document.createElement('span');
+        nameSpan.style.cssText = 'font-size:12px;flex:1 1 auto;min-width:50px;';
+        nameSpan.textContent = proc.ProcessName || '';
+        if (isIng && proc.maker_id) {
+            var ms = document.createElement('small');
+            ms.style.cssText = 'color:orange;margin-left:4px;';
+            ms.textContent = proc.maker_id;
+            nameSpan.appendChild(ms);
+        }
+        infoRow.appendChild(nameSpan);
+        div.appendChild(infoRow);
+
+        // 第二行：操作按鈕，靠右對齊、自己換行，不跟資訊欄搶同一行空間
+        var btnRow = document.createElement('div');
+        btnRow.style.cssText = 'display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap;margin-top:3px;';
 
         if (showTransfer) {
 
@@ -10576,7 +10608,7 @@ echo "</script>\n";
                 transferBtn.setAttribute('data-target', '#transferProcessModal_' + proc.bom_ing_fid);
                 transferBtn.title = '移轉此製程';
                 transferBtn.textContent = '移';
-                btnCol.appendChild(transferBtn);
+                btnRow.appendChild(transferBtn);
 
                 // 回廠／報廢：這一關已經送出去過（曾指定廠商）才顯示，記錄回廠數量／報廢數量到
                 // 加工單流水帳（2026-10-07 使用者交辦，比照 OreadyReply_ForPm_BaseOfTime2.php
@@ -10589,52 +10621,23 @@ echo "</script>\n";
                     returnBtn.title = '記錄回廠數量／報廢數量';
                     returnBtn.textContent = '回廠';
                     (function(p, rd){ returnBtn.onclick = function(){ openOutsourceReturnModal(p, rd); }; })(proc, rowData);
-                    btnCol.appendChild(returnBtn);
+                    btnRow.appendChild(returnBtn);
                 }
 
         }
-        div.appendChild(btnCol);
-
-        // SN
-        var snCol = document.createElement('div');
-        snCol.className = 'col-md-1 col-sm-1 col-xs-2';
-        snCol.style.cssText = 'padding-top:5px;font-weight:bold;font-size:12px;';
-        snCol.textContent = proc.bom_sn || '';
-        div.appendChild(snCol);
-
-        // 製程代號
-        var pnoCol = document.createElement('div');
-        pnoCol.className = 'col-md-1 col-sm-1 col-xs-2';
-        pnoCol.style.cssText = 'padding-top:5px;font-size:12px;';
-        pnoCol.textContent = proc.process_no || '';
-        div.appendChild(pnoCol);
-
-        // 製程中文 + 廠商
-        var nameCol = document.createElement('div');
-        nameCol.className = 'col-md-4 col-sm-4 col-xs-3';
-        nameCol.style.cssText = 'padding-top:5px;font-size:12px;';
-        nameCol.textContent = proc.ProcessName || '';
-        if (isIng && proc.maker_id) {
-            var ms = document.createElement('small');
-            ms.style.cssText = 'color:orange;margin-left:4px;';
-            ms.textContent = proc.maker_id;
-            nameCol.appendChild(ms);
-        }
-        div.appendChild(nameCol);
 
         // 刪除
         if (window.canDelete && window.displayPermissionCode !== 'D+R') {
-            var delCol = document.createElement('div');
-            delCol.className = 'col-md-1 col-sm-1 col-xs-1 text-right';
             var delBtn = document.createElement('button');
             delBtn.type = 'button'; delBtn.className = 'btn btn-danger btn-xs';
             delBtn.title = '刪除'; delBtn.textContent = 'X';
             (function(f, bom, bsn, pn) {
                 delBtn.onclick = function(){ confirmDeleteBomIng(f, bom, bsn, pn); };
             })(proc.bom_ing_fid, rowData.bom, rowData.bom_sn, proc.ProcessName||'');
-            delCol.appendChild(delBtn);
-            div.appendChild(delCol);
+            btnRow.appendChild(delBtn);
         }
+
+        if (btnRow.hasChildNodes()) div.appendChild(btnRow);
 
         if (String(proc.bom_sn) === String(rowData.bom_sn)) {
             div.style.backgroundColor = '#e6f2ff';
@@ -13748,13 +13751,13 @@ echo "</script>\n";
         }).fail(function(){ _renderProcList(); });
 
         function _buildProcRow(proc) {
+            // 2026-10-07 使用者回報「BOM 製程列表顯示太過壅擠」：與 _buildProcItemDiv 同一個根因
+            // （Bootstrap col-md-* 依視窗斷點算寬度，不會隨容器被 _renderProcList 對半分欄而縮小，
+            // 按鈕擠不進去只能逐顆往下疊）。改法同步：資訊一行、按鈕另起一行靠右，改用真正依容器
+            // 實際寬度計算的 flex，不再用 col-md-* 百分比格線。
             var div = document.createElement('div');
-            div.className = 'form-group row';
-            div.style.marginBottom = '5px';
-            div.style.marginLeft = '0';
-            div.style.marginRight = '0';
-            div.style.alignItems = 'center';
-            div.style.flexWrap = 'wrap';
+            div.className = 'bom-proc-row';
+            div.style.cssText = 'margin-bottom:6px;padding:4px 6px;border-bottom:1px solid #eee;border-radius:3px;';
 
             var priceInfo = priceMap[String(proc.bom_sn)];
             var priceDisplay = '';
@@ -13775,26 +13778,23 @@ echo "</script>\n";
             var returnBtnHtml = (canTransfer && proc.maker_id_no)
                 ? `<button type="button" class="btn btn-default btn-xs" style="background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;" title="記錄回廠數量／報廢數量" onclick="openOutsourceReturnModalByFid('${proc.bom_ing_fid}','${escapeHtml(proc.maker_id_no||'')}','${escapeHtml(proc.maker_id||'')}','${escapeHtml(bomIdForModal)}','${escapeHtml(String(mainProcessBomSnForHighlighting))}','${escapeHtml(String(proc.process_no||''))}','${escapeHtml(proc.ProcessName||'')}')">回廠</button>`
                 : '';
+            var skipBtnHtml = (canSkip && String(proc.processing_state||'') === 'N')
+                ? `<button type="button" class="btn btn-default btn-xs" style="color:#e67e22;border-color:#e67e22;" title="標記跳過（此製程確定不加工）" onclick="confirmMarkSkip('${proc.bom_ing_fid}','${bomIdForModal}','${mainProcessBomSnForHighlighting}','${escapeHtml(proc.ProcessName||'')}')">跳過</button>`
+                : '';
+            var delBtnHtml = (window.canDelete && window.displayPermissionCode !== 'D+R' && window.displayPermissionCode !== 'R+U' && window.displayPermissionCode !== 'R')
+                ? `<button type="button" class="btn btn-danger btn-xs" title="刪除" onclick="confirmDeleteBomIng('${proc.bom_ing_fid}','${bomIdForModal}','${mainProcessBomSnForHighlighting}','${escapeHtml(proc.ProcessName||'')}')">X</button>`
+                : '';
+            var buttonsHtml = transferBtnHtml + returnBtnHtml + skipBtnHtml + delBtnHtml;
 
             div.innerHTML = `
-                <div class="col-md-3 col-sm-3 col-xs-4 text-right" style="display:flex;gap:3px;justify-content:flex-end;flex-wrap:wrap;padding-left:2px;padding-right:2px;">
-                    ${transferBtnHtml}${returnBtnHtml}
+                <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;">
+                    <b style="font-size:12px;min-width:16px;">${escapeHtml(proc.bom_sn)}</b>
+                    <span style="font-size:11px;color:#999;">${escapeHtml(proc.process_no)}</span>
+                    <span style="font-size:12px;flex:1 1 auto;min-width:50px;">${escapeHtml(proc.ProcessName||'')}${priceDisplay}</span>
                 </div>
-                <div class="col-md-2 col-sm-2 col-xs-2" style="padding-top:7px;font-weight:bold;">${escapeHtml(proc.bom_sn)}</div>
-                <div class="col-md-2 col-sm-2 col-xs-2" style="padding-top:7px;">${escapeHtml(proc.process_no)}</div>
-                <div class="col-md-3 col-sm-3 col-xs-3" style="padding-top:7px;">${escapeHtml(proc.ProcessName||'')}${priceDisplay}</div>
+                ${buttonsHtml ? '<div style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap;margin-top:3px;">' + buttonsHtml + '</div>' : ''}
             `;
 
-            if (canSkip && String(proc.processing_state||'') === 'N') {
-                div.innerHTML += `<div class="col-md-1 col-sm-1 col-xs-1 text-right">
-                    <button type="button" class="btn btn-default btn-xs" style="color:#e67e22;border-color:#e67e22;" title="標記跳過（此製程確定不加工）" onclick="confirmMarkSkip('${proc.bom_ing_fid}','${bomIdForModal}','${mainProcessBomSnForHighlighting}','${escapeHtml(proc.ProcessName||'')}')">跳過</button>
-                </div>`;
-            }
-            if (window.canDelete && window.displayPermissionCode !== 'D+R' && window.displayPermissionCode !== 'R+U' && window.displayPermissionCode !== 'R') {
-                div.innerHTML += `<div class="col-md-1 col-sm-1 col-xs-1 text-right">
-                    <button type="button" class="btn btn-danger btn-xs" onclick="confirmDeleteBomIng('${proc.bom_ing_fid}','${bomIdForModal}','${mainProcessBomSnForHighlighting}','${escapeHtml(proc.ProcessName||'')}')">X</button>
-                </div>`;
-            }
             if (String(proc.bom_sn) === String(mainProcessBomSnForHighlighting)) {
                 div.style.backgroundColor = '#e6f2ff';
                 div.title = '目前製程';
