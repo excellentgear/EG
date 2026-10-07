@@ -2026,6 +2026,28 @@ function ot_note_frozen_for_order(PDO $pdo, int $orderId): bool {
     } catch (Throwable $e) { return false; }
 }
 
+/** 設計備註問答預覽文字的「【類別 對象】」前綴（2026-10-07 使用者要求統一格式；JS 端
+ *  同規則見 otDnPreviewPrefix()，兩邊都是從 el_order_item_summary() 回傳值組出同一種文字，
+ *  不可各自走鐘）：類別與對象之間一律用空格、不用冒號；target_type==='user'（廠內人員）
+ *  時對象只顯示姓名最後兩個中文字（與本頁既有「指派設計」欄位 $shortName 同一種縮寫，
+ *  mb_substr(-2,2,'UTF-8') 對剛好兩個字的姓名本來就會原樣回傳，不必另外判斷字數）；
+ *  客戶／廠商／其他維持完整名稱——那些是公司或單位名稱，縮寫會認不出是誰。
+ *  $askedAt（YYYY-MM-DD）有值時最前面加 M/D 提出日期，方便掃一眼列表就看得到是哪天提出
+ *  的問題；格式沿用本頁既有「設計/日期」欄同一種縮寫（DATE_FORMAT(...,'%c/%e')），
+ *  不是 ai-rules/20 的 YYYY.MM.DD 全站規則——那是給正式文件用的，這裡是極窄欄位的掃視用途。 */
+function ot_dn_preview_prefix(?string $targetType, ?string $targetLabel, ?string $askedAt = null): string {
+    $map = ['customer' => '客戶', 'maker' => '廠商', 'user' => '業務', 'other' => '其他'];
+    $datePart = '';
+    if ($askedAt) {
+        $ts = strtotime($askedAt);
+        if ($ts) $datePart = date('n/j', $ts) . ' ';
+    }
+    if (!$targetType) return $datePart . '【PS】';
+    $label = $targetLabel !== null && $targetLabel !== '' ? (string)$targetLabel : '（未指定）';
+    if ($targetType === 'user' && $label !== '（未指定）') $label = mb_substr($label, -2, 2, 'UTF-8');
+    return $datePart . '【' . ($map[$targetType] ?? $targetType) . ' ' . $label . '】';
+}
+
 if (isset($_POST['action']) && $_POST['action'] === 'ate_note_done') {
     header('Content-Type: application/json');
     $pdo = $conn->getPDO();
@@ -3631,10 +3653,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     <div class="ate-q-cell">
                         <?php if ($_ateQRow): ?>
                         <?php
-                        // PS＝純備註的前端簡寫（使用者要求），其餘對象維持完整名稱＋人名/客戶/廠商
-                        $_ateQTMap = ['customer' => '客戶', 'maker' => '廠商', 'user' => '業務', 'other' => '其他'];
-                        $_ateQTT = $_ateQRow['target_type'];
-                        $_ateQPrefix = $_ateQTT ? ('【' . ($_ateQTMap[$_ateQTT] ?? $_ateQTT) . '：' . (string)$_ateQRow['target_label'] . '】') : '【PS】';
+                        // PS＝純備註的前端簡寫（使用者要求）；前綴格式／廠內人員縮短姓名／M-D提出
+                        // 日期統一走 ot_dn_preview_prefix()（2026-10-07），不要在這裡再組一次。
+                        $_ateQPrefix = ot_dn_preview_prefix($_ateQRow['target_type'], $_ateQRow['target_label'], $_ateQRow['asked_at'] ?? null);
                         $_ateQText = (string)$_ateQRow['question'];
                         $_ateQFull = $_ateQPrefix . $_ateQText;
                         $_ateQDone = ($_ateQOpen === 0);
@@ -9428,6 +9449,28 @@ foreach($dCounts as $c) {
             }, 'json').fail(function() { $('#ate-q-submit-new').prop('disabled', false); $('.ate-q-qtext').css('background-color', ''); showToast('新增失敗，請重試'); });
         }
 
+        // 設計備註預覽文字的短名／M-D日期縮寫（2026-10-07 使用者要求；與 PHP 端
+        // ot_dn_preview_prefix() 同一套規則，兩邊不可各自走鐘）：姓名超過兩個中文字才取
+        // 最後兩個字（剛好兩個字就原樣顯示，站上常見的中文姓名在 JS 字串長度下直接比對
+        // 字元數即可，不需要特別處理多位元組）。
+        function otShortName(name) {
+            name = String(name || '');
+            return name.length > 2 ? name.slice(-2) : name;
+        }
+        // 前綴格式：類別與對象之間用空格不用冒號；target_type==='user'（廠內人員）對象只顯示
+        // 短名；帶 asked_at（YYYY-MM-DD）時最前面加 M/D 提出日期，與本頁「設計/日期」欄同一種
+        // 縮寫（不是 ai-rules/20 全站的 YYYY.MM.DD，這裡是極窄欄位的掃視用途）。
+        function otDnPreviewPrefix(targetType, targetLabel, askedAt) {
+            var tMap = { customer: '客戶', maker: '廠商', user: '業務', other: '其他' };
+            var datePart = '';
+            var m = askedAt ? /^(\d{4})-(\d{2})-(\d{2})/.exec(String(askedAt)) : null;
+            if (m) datePart = parseInt(m[2], 10) + '/' + parseInt(m[3], 10) + ' ';
+            if (!targetType) return datePart + '【PS】';
+            var label = targetLabel || '（未指定）';
+            if (targetType === 'user' && label !== '（未指定）') label = otShortName(label);
+            return datePart + '【' + (tMap[targetType] || targetType) + ' ' + label + '】';
+        }
+
         // 只局部更新這一列的徽章+預覽文字，不整頁重載（比照 applySyncedCustomerToRow 既有模式）
         // preview 的 target_type 為 null 時顯示【PS】（純備註前端簡寫，使用者要求）；
         // 全部已處理完（openCount=0 但 preview 仍有內容）要顯示「已完成」卡片，不可以
@@ -9441,10 +9484,7 @@ foreach($dCounts as $c) {
             if (!$cell.length) return;
             openCount = parseInt(openCount, 10) || 0;
             if (preview) {
-                var tMap = { customer: '客戶', maker: '廠商', user: '業務', other: '其他' };
-                var prefix = preview.target_type
-                    ? ('【' + (tMap[preview.target_type] || preview.target_type) + '：' + (preview.target_label || '（未指定）') + '】')
-                    : '【PS】';
+                var prefix = otDnPreviewPrefix(preview.target_type, preview.target_label, preview.asked_at);
                 var full = prefix + (preview.question || '');
                 var done = openCount === 0;
                 var badge = done

@@ -1140,8 +1140,8 @@ function el_order_item_summary(PDO $db, array $orderIds, string $logType = 'orde
     $out = [];
     try {
         $st = $db->prepare("
-            SELECT order_id, question, status, target_type, target_label, total_cnt, open_cnt FROM (
-                SELECT b.bind_id AS order_id, i.question, i.status, i.target_type, i.target_label,
+            SELECT order_id, question, status, target_type, target_label, asked_at, total_cnt, open_cnt FROM (
+                SELECT b.bind_id AS order_id, i.question, i.status, i.target_type, i.target_label, i.asked_at,
                        COUNT(*) OVER (PARTITION BY b.bind_id) AS total_cnt,
                        SUM(CASE WHEN i.status NOT IN ('resolved','dropped') THEN 1 ELSE 0 END)
                            OVER (PARTITION BY b.bind_id) AS open_cnt,
@@ -1163,6 +1163,7 @@ function el_order_item_summary(PDO $db, array $orderIds, string $logType = 'orde
                 'status'       => (string)$r['status'],
                 'target_type'  => $r['target_type'] !== null ? (string)$r['target_type'] : null,
                 'target_label' => $r['target_label'] !== null ? (string)$r['target_label'] : null,
+                'asked_at'     => $r['asked_at'] !== null ? (string)$r['asked_at'] : null,
             ];
         }
     } catch (Throwable $e) {}
