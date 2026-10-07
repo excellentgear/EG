@@ -1191,6 +1191,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         // =====================================================================
+        // 9-1) 依任意送驗數即時查建議抽驗數（2026-10-07 使用者回報：改了「本次檢驗數」
+        //      之後「建議抽驗」沒有跟著變——那是因為 load_context 當下只算過一次，固定在
+        //      ctx.sample_qty 裡；改用這支讓前端在 #inp-qty 變動時重新查，純讀不寫，唯一
+        //      實作仍是 qc_suggest_sample_qty()，不在這裡另算一次規則比對）
+        // =====================================================================
+        if ($_POST['action'] === 'suggest_sample') {
+            $qty = (int)($_POST['qty'] ?? 0);
+            echo json_encode(['success'=>true, 'sample_qty'=>qc_suggest_sample_qty($pdo, $qty)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // =====================================================================
         // 10) 設定：抽樣規則（qc_sampling_rule CRUD；load_context 的建議抽驗數依此計算）
         // =====================================================================
         if ($_POST['action'] === 'manage_sampling_rules') {

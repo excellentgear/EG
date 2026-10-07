@@ -3988,6 +3988,7 @@ $(function(){
     }
     $('#inp-qty,#inp-remark').on('input', scheduleDraftSave);
     $('#inp-qty').on('input', updateQtyLive);
+    $('#inp-qty').on('input', updateSuggestSampleLive);
     // 選了任一容器、或補上箱數，就立刻撤掉對應的紅框，不必等下一次按儲存才知道已經補填
     // （存檔前的實際把關仍在 doSave 本身，這裡只是即時回饋）。
     $('#insp-container-1,#insp-container-2').on('change', function(){
@@ -4599,7 +4600,7 @@ $(function(){
                 // 不是已確認合格的數量；tooltip 不再省略「已扣報廐」那句，沒報廐時也講清楚口徑）
                 : '<div><b>尚未檢驗 / 良品上限 / BOM總數</b><span class="cv" id="ctx-pending" title="BOM總數 '+ps.order+' 件，已報廐 '+(ps.order-ps.good)+' 件，良品上限（可送驗）'+ps.good+' 件，已送驗 '+ps.used+' 件">'+ps.left+' / '+ps.good+' / '+ps.order+'pcs</span>'+
                   '<span id="ctx-pending-warn" style="'+(ps.left<=0?'':'display:none;')+'color:var(--coral);font-weight:bold;font-size:12px;margin-left:6px;"><i class="fa fa-exclamation-triangle"></i> 無待驗數量</span></div>')+
-            '<div><b>'+(ctx.adhoc?'抽驗數':'建議抽驗')+'</b><span class="cv">'+(ctx.sample_qty||0)+' 件</span></div>'+
+            '<div><b>'+(ctx.adhoc?'抽驗數':'建議抽驗')+'</b><span class="cv" id="ctx-sample-live">'+(ctx.sample_qty||0)+' 件</span></div>'+
             (ctx.ship ? '' : '<div id="kind-box"><b>檢驗性質</b><span class="cv"><span class="ki-btns">'+
                 ['NORMAL','FIRST','LAST'].map(function(k){
                     var lbl = k==='NORMAL'?'一般':(k==='FIRST'?'首件':'末件');
@@ -4621,6 +4622,24 @@ $(function(){
     function updateQtyLive(){
         if($('#ctx-qty-live-val input').length) return;
         $('#ctx-qty-live-val').text(parseInt($('#inp-qty').val())||0);
+    }
+    // 「建議抽驗」依「本次檢驗數」(#inp-qty) 即時重算（2026-10-07 使用者回報：改了檢驗數，
+    // 建議抽驗數沒有跟著變——load_context 當下只算過一次存進 ctx.sample_qty，不會自動跟著變）。
+    // 只更新畫面上的建議值顯示，**不動 #inp-sample 本身**——那是使用者真正要送出的抽驗數，
+    // 改它會觸發既有的「抽驗數變更要填理由」跳窗（qc_sample_change_log），系統自動重算不該
+    // 觸發那個流程；adhoc（臨時檢驗）與出貨檢驗(ship) 的抽驗數另有算法，不走這支。
+    var sampleLiveTimer = null;
+    function updateSuggestSampleLive(){
+        if(!ctx || ctx.adhoc || ctx.ship) return;
+        var qty = parseInt($('#inp-qty').val()) || 0;
+        clearTimeout(sampleLiveTimer);
+        sampleLiveTimer = setTimeout(function(){
+            $.post(API, { action:'suggest_sample', qty:qty }, function(res){
+                if(!res || !res.success) return;
+                ctx.sample_qty = res.sample_qty;
+                $('#ctx-sample-live').text((res.sample_qty||0)+' 件');
+            }, 'json');
+        }, 400);
     }
     // 「本次檢驗數」雙擊直接修改（2026-10-06 使用者要求）：編輯的就是 #inp-qty 本身，改完
     // 直接寫回並觸發既有的 input 事件（草稿自動存檔／首件末件全檢同步件數都沿用原邏輯，
