@@ -2021,12 +2021,23 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
                 $byCls[$cls] = ['cls' => $cls, 'label' => oa_cls_label($cls), 'n' => 0, 'sum_lt' => 0,
                                 'min' => null, 'max' => null, 'vals' => [], 'amount' => 0.0,
                                 'threshold' => $thr[$cls] ?? null, 'urgent_n' => 0, 'urgent_amount' => 0.0,
-                                'is_urgent_class' => isset($urgentClasses[$cls]) ? 1 : 0];
+                                'is_urgent_class' => isset($urgentClasses[$cls]) ? 1 : 0,
+                                // 實際出貨與延誤也要依「全製／多製程／單製」拆開看，不是只有整體一個數字
+                                'ship_bound_n' => 0, 'ship_lt_sum' => 0, 'ship_lt_n' => 0,
+                                'delay_sum' => 0, 'delay_n' => 0, 'late_n' => 0];
             }
             $b = &$byCls[$cls];
             $b['n']++; $b['sum_lt'] += $lt; $b['vals'][] = $lt; $b['amount'] += $r['amount'];
             $b['min'] = $b['min'] === null ? $lt : min($b['min'], $lt);
             $b['max'] = $b['max'] === null ? $lt : max($b['max'], $lt);
+            if ($r['ship_date'] !== '') {
+                $b['ship_bound_n']++;
+                if ($r['ship_lt'] !== null) { $b['ship_lt_sum'] += $r['ship_lt']; $b['ship_lt_n']++; }
+                if ($r['delay_days'] !== null) {
+                    $b['delay_sum'] += $r['delay_days']; $b['delay_n']++;
+                    if ($r['delay_days'] > 0) $b['late_n']++;
+                }
+            }
 
             $t = $thr[$cls] ?? null;
             $isUrgent = isset($urgentClasses[$cls]) && $t !== null && $lt <= $t;
@@ -2058,6 +2069,10 @@ function oa_leadtime_report(PDO $db, array $opt = []): array
             $b['avg']          = $b['n'] ? round($b['sum_lt'] / $b['n'], 1) : null;
             $b['median']       = oa_percentile($b['vals'], 50);
             $b['urgent_ratio'] = $b['n'] ? round($b['urgent_n'] * 100 / $b['n'], 1) : 0.0;
+            $b['ship_coverage']    = $b['n'] ? round($b['ship_bound_n'] * 100 / $b['n'], 1) : 0.0;
+            $b['avg_ship_leadtime'] = $b['ship_lt_n'] ? round($b['ship_lt_sum'] / $b['ship_lt_n'], 1) : null;
+            $b['avg_delay_days']    = $b['delay_n'] ? round($b['delay_sum'] / $b['delay_n'], 1) : null;
+            $b['late_ratio']        = $b['ship_bound_n'] ? round($b['late_n'] * 100 / $b['ship_bound_n'], 1) : 0.0;
             unset($b['vals']);
         }
         unset($b);

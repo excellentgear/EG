@@ -600,6 +600,21 @@ table.oa-t th.grp-div, table.oa-t td.grp-div { border-right:3px solid var(--ambe
       </div>
     </div>
 
+    <div class="sec" id="secLtShipDist">
+      <h4><i class="fa fa-truck" style="color:var(--amber-d);"></i> 實際出貨工作天數分析（全製／多製程／單製）
+        <span class="hint">依類別比較「承諾交期工作天」與「實際出貨工作天」；目前多數訂單尚未綁定出貨單，覆蓋率會誠實反映</span>
+      </h4>
+      <div class="tbl-wrap" style="max-height:300px;">
+        <table class="oa-t" id="tblLtShipCls">
+          <colgroup><col style="width:20%"><col style="width:10%"><col style="width:14%"><col style="width:14%">
+                    <col style="width:16%"><col style="width:13%"><col style="width:13%"></colgroup>
+          <thead><tr><th>類別</th><th>筆數</th><th>出貨綁定覆蓋率</th><th>平均交期工作天</th>
+                     <th>平均實際出貨工作天</th><th>平均延誤天數</th><th>逾交期比例</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="sec" id="secLtBand">
       <h4><i class="fa fa-cubes" style="color:var(--amber-d);"></i> 數量區間與急件比例
         <span class="hint">區間設定與「總覽分析」的數量區間共用</span>
@@ -630,7 +645,8 @@ table.oa-t th.grp-div, table.oa-t td.grp-div { border-right:3px solid var(--ambe
                     <col style="width:6%"><col style="width:6%"><col style="width:5%"><col style="width:11%"><col style="width:5%"><col style="width:7%">
                     <col style="width:10%"><col style="width:10%"></colgroup>
           <thead><tr><th>訂單號</th><th>KEY單日期/業務</th><th>客戶</th><th>料號</th><th>下單日</th><th>交期</th>
-                     <th>工作天數</th><th>製程數</th><th>類別</th><th>數量</th><th>金額</th><th>實際出貨</th><th>備註</th></tr></thead>
+                     <th>工作天數</th><th title="去BOM_ING抓取不重複的製程站（bom_sn）數量；這張訂單還沒開立製令（BOM）時查不到，顯示「—」">製程數</th>
+                     <th>類別</th><th>數量</th><th>金額</th><th>實際出貨</th><th>備註</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -1935,7 +1951,7 @@ function loadLeadtime(){
       $('#ltPctFull').val(d.full); $('#ltPctMulti').val(d.multi); $('#ltPctSingle').val(d.single);
       LT_PCT_INIT = true;
     }
-    renderLtNote(); renderLtKpi(); renderLtInsights(); renderLtDist(); renderLtBand(); renderLtClient(); renderLtList();
+    renderLtNote(); renderLtKpi(); renderLtInsights(); renderLtDist(); renderLtShipDist(); renderLtBand(); renderLtClient(); renderLtList();
   }, 'json').fail(function(x){
     $('#ltNote').html('<span style="color:var(--coral);">載入失敗（HTTP '+x.status+'）</span>');
   });
@@ -2014,6 +2030,23 @@ function renderLtDist(){
       + '<td class="n">'+nf(r.urgent_n)+'</td><td class="n">'+r.urgent_ratio+'%</td></tr>';
   }).join('');
   $('#tblLtCls tbody').html(h || '<tr><td colspan="7" style="text-align:center;color:var(--muted);">（無資料）</td></tr>');
+}
+/* 實際出貨工作天數：跟上面「交期工作天數」同一組類別，逐類別比較承諾交期與實際出貨落差——
+   出貨綁定覆蓋率低時其餘欄位（平均實際出貨工作天／平均延誤天數／逾交期比例）顯示「—」，
+   不可以把「沒有資料」誤算成「0 天」或「0%」。 */
+function renderLtShipDist(){
+  var rows = (LT_DATA.cur.by_cls||[]).slice();
+  rows.sort(function(a,b){ return b.n-a.n; });
+  var h = rows.map(function(r){
+    return '<tr><td>'+esc(r.label)+(r.is_urgent_class?'':' <span style="color:var(--muted);font-size:10px;">（不列入判定）</span>')+'</td>'
+      + '<td class="n">'+nf(r.n)+'</td>'
+      + '<td class="n">'+r.ship_coverage+'%<span style="color:var(--muted);font-size:10px;">（'+nf(r.ship_bound_n)+'）</span></td>'
+      + '<td class="n">'+(r.avg==null?'—':r.avg)+'</td>'
+      + '<td class="n">'+(r.avg_ship_leadtime==null?'—':r.avg_ship_leadtime)+'</td>'
+      + '<td class="n">'+(r.avg_delay_days==null?'—':r.avg_delay_days)+'</td>'
+      + '<td class="n">'+(r.ship_bound_n?r.late_ratio+'%':'—')+'</td></tr>';
+  }).join('');
+  $('#tblLtShipCls tbody').html(h || '<tr><td colspan="7" style="text-align:center;color:var(--muted);">（無資料）</td></tr>');
 }
 function renderLtBand(){
   var rows = (LT_DATA.cur.by_band||[]).slice();
@@ -2096,7 +2129,7 @@ function renderLtList(){
       + '<td>'+esc(r.cname)+'</td><td>'+pnoCell(r)+'</td>'
       + '<td>'+dispDate(r.odate)+'</td><td>'+dispDate(r.ddate)+'</td>'
       + '<td class="n">'+r.lt+'</td>'
-      + '<td class="n">'+(r.proc_steps==null?'—':nf(r.proc_steps))+'</td>'
+      + '<td class="n">'+(r.proc_steps==null?'<span style="color:var(--muted);" title="尚未開立製令（BOM），查不到製程資料">—</span>':nf(r.proc_steps))+'</td>'
       + '<td>'+ltCatCell(r)+'</td>'
       + '<td class="n">'+nf(r.qty)+'</td><td class="n">'+money(r.amount)+'</td>'
       + '<td>'+ltShipCell(r)+'</td>'
