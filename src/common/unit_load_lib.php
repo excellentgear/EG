@@ -468,6 +468,13 @@ function ul_bom_active_cond(string $bomIngAlias = 'bi'): string
  */
 function ul_prod_current_step_rows(PDO $db): array
 {
+    // 2026-10-07 效能修正：這是「現況快照」查詢（不吃 $from/$to），但 ul_pm_summary() 同一次
+    // request 內會被呼叫兩次（本期＋比較期，兩次結果本來就該一樣），overview 又把 ul_pm_summary()
+    // 呼叫兩次——等於同一個 CTE 查詢在一次頁面載入裡重複跑 4 次。實測這條查詢單次約 0.3 秒，
+    // 用 request 內靜態快取（同一支 PHP 行程/請求內共用，不跨請求）省掉重複開銷，絕不改變回傳
+    // 內容（純記憶化，無副作用）。
+    static $cache = null;
+    if ($cache !== null) return $cache;
     $sql = "
         WITH step_done AS (
             SELECT bom, bom_sn,
@@ -485,7 +492,8 @@ function ul_prod_current_step_rows(PDO $db): array
         WHERE bi.is_consumed = 0
           AND " . ul_bom_active_cond('bi') . "
     ";
-    return $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+    $cache = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+    return $cache;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -1737,6 +1745,14 @@ function ul_packing_by_person(PDO $db, string $from, string $to, array $packingU
  */
 function ul_qc_pending_queue(PDO $db, ?string $from = null, ?string $to = null): array
 {
+    // 2026-10-07 效能修正：這支查詢本身較重（相關子查詢＋自我 JOIN），ul_pm_summary()
+    // 一次 request 內會呼叫兩次（本期/比較期，snapshot 部分結果本該相同），overview 又把
+    // ul_pm_summary() 呼叫兩次，同一支查詢因此可能重複跑 4 次。純記憶化（同一次請求內
+    // 共用、依 $from/$to 組合分別快取，不跨請求），不改變任何回傳內容。
+    static $cache = [];
+    $key = ($from ?? '') . '|' . ($to ?? '');
+    if (array_key_exists($key, $cache)) return $cache[$key];
+
     require_once __DIR__ . '/packing_process_lib.php';
     $packingNos = pk_packing_process_nos($db);
     $packingExclSql = $packingNos ? (' AND bi.process_no NOT IN (' . implode(',', array_map('intval', $packingNos)) . ')') : '';
@@ -1808,7 +1824,8 @@ function ul_qc_pending_queue(PDO $db, ?string $from = null, ?string $to = null):
     }
 
     usort($byProcess, fn($x, $y) => $y['count'] <=> $x['count']);
-    return ['by_process' => $byProcess, 'total' => $total];
+    $cache[$key] = ['by_process' => $byProcess, 'total' => $total];
+    return $cache[$key];
 }
 
 /**
