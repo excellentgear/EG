@@ -351,8 +351,10 @@ body { background:#F3F6EC; }
 
     <div class="sec">
       <h4><i class="fa fa-tags" style="color:var(--green-d);"></i> 訂單標籤分布</h4>
-      <div class="chart-box" id="dsgTagsChart" style="height:300px;"></div>
-      <div id="dsgTags"></div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">
+        <div class="chart-box" id="dsgTagsChart" style="height:300px;flex:1 1 320px;min-width:280px;"></div>
+        <div id="dsgTags" style="flex:1 1 280px;min-width:240px;"></div>
+      </div>
     </div>
 
     <div class="sec">

@@ -2918,8 +2918,11 @@ function ul_insights(array $allData, array $thresholds = [], ?array $trend = nul
 
         $nc = $d['new_case'] ?? null;
         if ($nc && (int)$nc['total'] > 0) {
-            $add('design', 'info', '新案件（無圖面）組成',
-                '目前有效訂單中共 ' . $nc['total'] . ' 張是新案件（目前查無任何圖面），其中已轉生管 '
+            // 2026-10-07 使用者回報這條文字容易被誤解成「本期（如10月）新增828張」——這是
+            // 即時現況快照（全部有效訂單裡查無圖面的累計數，不受上方期間篩選影響），不是
+            // 本期新增量，標題與內文都要明講，避免跟其他「本期」開頭的結論混在一起誤讀。
+            $add('design', 'info', '新案件（無圖面）現況，非本期新增量',
+                '【即時現況，與上方期間篩選無關】目前全部有效訂單中累計 ' . $nc['total'] . ' 張查無任何圖面，其中已轉生管 '
                 . $nc['processed'] . ' 張（' . round(($nc['processed_pct'] ?? 0) * 100, 1) . '%）、仍在批圖中 '
                 . $nc['in_progress'] . ' 張（' . round(($nc['in_progress_pct'] ?? 0) * 100, 1) . '%）。',
                 (string)$nc['total']);
