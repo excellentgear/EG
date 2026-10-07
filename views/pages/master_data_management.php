@@ -1604,20 +1604,23 @@ try {
     $_stMd->execute([(int)$user_id]);
     $_hasMdRole = (bool)$_stMd->fetchColumn();
 } catch (Exception $_e) {}
-$can_view_other = $is_admin || $_mdRbacAll || !$_hasMdRole || in_array('md_attach_view', $_mdFeats, true);
+// 2026-10-07 使用者確認「已對會用到本頁的人員指派完 master_data 角色」，拍板停用底下的
+// 舊式過渡期回退規則（原本：完全沒被指派角色時暫時沿用舊式 CRUD 字母/一律開放）。
+// 自此一律以角色勾選的功能碼為準，沒有角色或角色未勾選該功能＝一律不給。
+// 確認當下唯一受影響者是林郁婷(uid 109110202，舊式頁級CRU、尚未指派master_data角色)，
+// 使用者選擇「直接停用，之後再補角色」，故未在程式裡另外幫她補償。
+$can_view_other = $is_admin || $_mdRbacAll || in_array('md_attach_view', $_mdFeats, true);
 
 // =============================================================================
 // ── 本頁維護設定的角色化權限（唯一實作，鐵律4）────────────────────────────
-// 原則（鐵律8 零影響既有使用者）：
-//   使用者在 master_data 模組「完全沒有被指派任何角色」時 → 沿用 $legacyFallback（舊規則），
-//   行為與改版前完全相同；一旦被指派了至少一個角色 → 改以角色勾選的
-//   mdata_<group>_<action> 功能碼為準（未勾=false）。管理員固定全部通過。
+// 原則：management者已完成角色指派，一律以角色勾選的 mdata_<group>_<action>
+//   功能碼為準（未勾=false）；管理員固定全部通過。$legacyFallback 參數保留在
+//   簽名只是為了不必逐一修改現有呼叫端（呼叫端仍會算出該值但已不再被使用）。
 // 功能碼命名：mdata_<group>_<view|add|edit|delete>；欄位型設定（非清單）只用 view/edit。
 // =============================================================================
-function _mdPerm(string $group, string $action, bool $legacyFallback): bool {
-    global $is_admin, $_mdRbacAll, $_mdFeats, $_hasMdRole;
+function _mdPerm(string $group, string $action, bool $legacyFallback = false): bool {
+    global $is_admin, $_mdRbacAll, $_mdFeats;
     if ($is_admin || $_mdRbacAll) return true;
-    if (!$_hasMdRole) return $legacyFallback;
     return in_array("mdata_{$group}_{$action}", $_mdFeats, true);
 }
 // 料號標籤「指派」（新增標籤到料號）／「修改他人指派」兩個獨立權限碼（與上面的維護設定
@@ -1625,16 +1628,10 @@ function _mdPerm(string $group, string $action, bool $legacyFallback): bool {
 // 沒有「修改他人指派」權限的人，仍可修改/移除自己指派過的那一筆——所有權比對見
 // save_part 內的標籤同步段（item_label_map.created_by_id）。
 function _mdTagCan(string $action): bool {
-    global $is_admin, $_mdRbacAll, $_mdFeats, $_hasMdRole, $can_edit_gear, $can_remove_part_labels;
+    global $is_admin, $_mdRbacAll, $_mdFeats;
     if ($is_admin || $_mdRbacAll) return true;
-    if ($action === 'assign') {
-        if (!$_hasMdRole) return $can_edit_gear;        // 舊規則：新增/編輯齒輪規格與料號標籤同一組條件
-        return in_array('mdata_tag_assign', $_mdFeats, true);
-    }
-    if ($action === 'edit_others') {
-        if (!$_hasMdRole) return $can_remove_part_labels; // 舊規則：移除料號標籤＝刪齒輪規格列同一組條件
-        return in_array('mdata_tag_edit_others', $_mdFeats, true);
-    }
+    if ($action === 'assign') return in_array('mdata_tag_assign', $_mdFeats, true);
+    if ($action === 'edit_others') return in_array('mdata_tag_edit_others', $_mdFeats, true);
     return false;
 }
 

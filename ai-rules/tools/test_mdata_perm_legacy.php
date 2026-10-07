@@ -1,6 +1,9 @@
 <?php
-// 補充測試：完全沒有被指派 master_data 角色的使用者，行為應與改版前完全相同
-// （對帳單設定僅管理員可設、結帳/報價/收款/銀行帳戶則看舊式 CRUD 字母）。
+// 2026-10-07 改版：使用者確認已對會用到本頁的人員指派完 master_data 角色，拍板停用
+// 「完全沒被指派角色時暫時沿用舊式 CRUD 字母」這條過渡期回退規則。
+// 本測試原本驗證「過渡期回退」，現在改驗證「回退已停用」：完全沒有 master_data 角色的
+// 使用者，即使舊式權限字母是 CDRU（本來全部欄位可編輯），現在對帳單/結帳/報價/收款/
+// 銀行帳戶一律被擋下（除非被指派角色且角色裡有勾該功能）。
 chdir(__DIR__);
 require_once '../../src/common/DBConnection.php';
 $db = new DBConnection();
@@ -26,27 +29,28 @@ $chkRole = $pdo->prepare("SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.r
 $chkRole->execute([$TEST_UID]);
 if ((int)$chkRole->fetchColumn() > 0) { echo "測試使用者目前已有 master_data 角色，為避免干擾不執行本測試\n"; exit(1); }
 
-// 給予舊式 CDRU（非 A）權限：代表「一般可編輯的使用者，但不是本頁管理員」
+// 給予舊式 CDRU（非 A）權限：代表「一般可編輯的使用者，但不是本頁管理員」，
+// 且刻意不給任何 master_data 角色——驗證回退規則已停用。
 $pdo->prepare("INSERT INTO user_module_permissions (user_id, module_code, permission, scope) VALUES (?, '76', 'CDRU', 'page')")->execute([$TEST_UID]);
 $legacyPermId = (int)$pdo->lastInsertId();
 
 $r1 = call_md2($RUNNER, $SCRIPT, $TEST_UID, [
     'action' => 'save_customer', 'is_new' => 1,
-    'customer_id' => $CUST_ID, 'customer' => '測試客戶勿留(舊規則)',
-    'need_recon_stmt' => 1, 'recon_provide_by' => 'company', // 非admin，應被擋
-    'settlement_mode' => 'EOM', 'settlement_day' => '', 'net_days' => '60', // CDRU可編輯，應成功
+    'customer_id' => $CUST_ID, 'customer' => '測試客戶勿留(回退停用)',
+    'need_recon_stmt' => 1, 'recon_provide_by' => 'company',
+    'settlement_mode' => 'EOM', 'settlement_day' => '', 'net_days' => '60',
     'quote_method' => 'CIF', 'payment_method' => '支票',
     'bank_name' => '測試銀行', 'bank_branch' => '測試分行', 'bank_account' => '888888',
 ]);
-check('①-0 新增客戶的 API 呼叫成功', is_array($r1) && !empty($r1['success']));
+check('①-0 新增客戶的 API 呼叫成功（存檔本身不受此權限門擋）', is_array($r1) && !empty($r1['success']));
 
 $row = $pdo->prepare("SELECT * FROM customer_list WHERE customer_id=?"); $row->execute([$CUST_ID]); $cust = $row->fetch(PDO::FETCH_ASSOC);
-check('①-1 完全沒有master_data角色、非本頁管理員 → 對帳單設定依舊規則被擋下(need_recon_stmt仍是0)', $cust && (int)$cust['need_recon_stmt'] === 0);
-check('①-2 結帳設定依舊規則(CDRU可編輯) → settlement_mode 真的改成EOM', $cust && $cust['settlement_mode'] === 'EOM');
-check('①-3 報價方式依舊規則可編輯 → quote_method 真的改成CIF', $cust && $cust['quote_method'] === 'CIF');
-check('①-4 收款方式依舊規則可編輯 → payment_method 真的改成支票', $cust && $cust['payment_method'] === '支票');
-check('①-5 銀行帳戶依舊規則可編輯 → bank_name 真的存入', $cust && $cust['bank_name'] === '測試銀行');
-check('①-6 月結天數依舊規則可編輯 → net_days 真的改成60', $cust && (int)$cust['net_days'] === 60);
+check('①-1 完全沒有master_data角色 → 對帳單設定被擋下(need_recon_stmt仍是0)', $cust && (int)$cust['need_recon_stmt'] === 0);
+check('①-2 完全沒有master_data角色 → 結帳設定被擋下，settlement_mode退回預設FIXED（即使舊式CDRU本來可編輯）', $cust && $cust['settlement_mode'] === 'FIXED');
+check('①-3 完全沒有master_data角色 → 報價方式被擋下，退回預設FOB', $cust && $cust['quote_method'] === 'FOB');
+check('①-4 完全沒有master_data角色 → 收款方式被擋下，退回預設匯款', $cust && $cust['payment_method'] === '匯款');
+check('①-5 完全沒有master_data角色 → 銀行帳戶被擋下，仍是空的', $cust && $cust['bank_name'] === '');
+check('①-6 完全沒有master_data角色 → 月結天數被擋下，仍是NULL', $cust && $cust['net_days'] === null);
 
 echo "\n==== 結果：PASS=$pass FAIL=$fail ====\n";
 
