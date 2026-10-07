@@ -108,6 +108,12 @@ switch ($action) {
                 mb_stripos((string)($r['party_short'] ?? ''), $kw) !== false ||
                 mb_stripos((string)($r['party_id'] ?? ''), $kw) !== false));
         }
+        // 負責人篩選（僅應收）：owner_id=0 代表「未指派」，不傳則不篩
+        if (isset($_GET['owner_id']) && $_GET['owner_id'] !== '') {
+            $ownerFilter = (int)$_GET['owner_id'];
+            $rows = array_values(array_filter($rows, fn($r) =>
+                $ownerFilter === 0 ? empty($r['owner_id']) : (int)($r['owner_id'] ?? 0) === $ownerFilter));
+        }
 
         actOut(['rows' => $rows, 'total' => count($rows), 'counts' => $counts, 'bm' => $bm, 'side' => $side]);
     }

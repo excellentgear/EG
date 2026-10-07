@@ -231,6 +231,7 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
             <button class="btn btn-xs btn-warm-o" onclick="shiftBm(1)"><i class="fa fa-chevron-right"></i></button>
           </div>
           <input type="text" id="fKw" class="form-control input-sm" style="width:160px;" placeholder="搜尋客戶/廠商名稱…" onkeyup="if(event.key==='Enter')loadList()">
+          <select id="fOwner" class="form-control input-sm" style="width:130px;display:none;" onchange="loadList()"><option value="">— 全部負責人 —</option></select>
           <button class="btn btn-sm btn-warm-o" onclick="loadList()"><i class="fa fa-search"></i> 查詢</button>
         </div>
       </h4>
@@ -530,6 +531,8 @@ function setSide(s){
     document.getElementById('sideAr').classList.toggle('on', s==='ar');
     document.getElementById('sideAp').classList.toggle('on', s==='ap');
     document.getElementById('listTitle').textContent = (s==='ar' ? '應收' : '應付') + ' 進度清單';
+    document.getElementById('fOwner').style.display = (s==='ar') ? '' : 'none';
+    document.getElementById('fOwner').value = '';
     clearSelection();
     LIST_PAGE = 1;
     loadList();
@@ -577,7 +580,9 @@ function allowedTargets(row){
     var curIdx = row.status === '' ? -1 : order.indexOf(row.status);
     var skip = ALLOW_SKIP[row.side];
     var candidates = skip ? order.slice(curIdx+1) : order.slice(curIdx+1, curIdx+2);
-    if (PERMS.canAdmin) return candidates;
+    // 只有全站管理員(isAll)看得到所有按鈕；本頁管理員(art_admin)的快速按鈕也要依生管/業務/會計角色顯示
+    // （使用者明確要求）——art_admin 若本身也兼任那些角色，一樣看得到對應按鈕；若沒有，改用「管理員改派」下拉操作。
+    if (PERMS.isAll) return candidates;
     var out = [];
     candidates.forEach(function(s){
         var allowed = (MATRIX[row.side] && MATRIX[row.side][s]) || [];
@@ -590,7 +595,8 @@ function loadList(){
     var bm = document.getElementById('fBm').value || defaultBm();
     document.getElementById('fBm').value = bm;
     var kw = document.getElementById('fKw').value.trim();
-    apiGet('list', {side:SIDE, bm:bm, status:ST_FILTER, kw:kw, _:Date.now()}).done(function(r){
+    var ownerId = (SIDE==='ar') ? document.getElementById('fOwner').value : '';
+    apiGet('list', {side:SIDE, bm:bm, status:ST_FILTER, kw:kw, owner_id:ownerId, _:Date.now()}).done(function(r){
         if (!r || !r.ok) return;
         LAST_ROWS = r.rows;
         renderStCards(r.counts);
@@ -718,7 +724,15 @@ function saveOwnerAssign(){
     });
 }
 function loadOwnerPool(){
-    apiGet('owner_pool_list', {}).done(function(r){ if (r && r.ok) OWNER_POOL = r.rows; });
+    apiGet('owner_pool_list', {}).done(function(r){
+        if (!r || !r.ok) return;
+        OWNER_POOL = r.rows;
+        var sel = document.getElementById('fOwner');
+        var keep = sel.value;
+        sel.innerHTML = '<option value="">— 全部負責人 —</option><option value="0">（未指派）</option>' +
+            OWNER_POOL.map(function(p){ return '<option value="'+p.user_id+'">'+esc(p.dept_name||'')+' '+esc(p.user_name)+'</option>'; }).join('');
+        sel.value = keep;
+    });
 }
 
 /* ── 結帳日快速修改 ──────────────────────────────────────────── */
@@ -992,6 +1006,11 @@ function renderPool(){
             return '<tr><td>' + esc(p.dept_name||'') + '</td><td>' + esc(p.user_name) + '</td>' +
                 '<td><button class="icon-btn" onclick="removeFromPool(' + p.id + ')"><i class="fa fa-trash"></i></button></td></tr>';
         }).join('') : '<tr><td colspan="3" class="c">尚未設定候選名單</td></tr>';
+        var sel = document.getElementById('fOwner');
+        var keep = sel.value;
+        sel.innerHTML = '<option value="">— 全部負責人 —</option><option value="0">（未指派）</option>' +
+            OWNER_POOL.map(function(p){ return '<option value="'+p.user_id+'">'+esc(p.dept_name||'')+' '+esc(p.user_name)+'</option>'; }).join('');
+        sel.value = keep;
     });
 }
 function removeFromPool(id){
