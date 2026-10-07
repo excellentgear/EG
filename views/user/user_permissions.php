@@ -392,6 +392,7 @@ $EG_ROLE_MODULES = [
     'proc_transfer'       => ['prefix'=>'ptl',     'label'=>'製程移轉一覽表',      'page'=>'Transfer_Log_Analysis.php'],
     'project'             => ['prefix'=>'prj',     'label'=>'專案管理',            'page'=>'project_mgmt.php'],
     'packing_schedule'    => ['prefix'=>'pk',      'label'=>'包裝製程排程',        'page'=>'packing_schedule.php'],
+    'unit_load'           => ['prefix'=>'unit_load','label'=>'各單位負荷分析',      'page'=>'unit_load.php'],
 ];
 
 /** 模組代碼 → 中文名（查不到就回代碼本身，至少不會顯示空白） */
