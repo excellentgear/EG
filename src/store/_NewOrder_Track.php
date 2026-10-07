@@ -236,6 +236,9 @@ try {
     //  $can_need_design_draw／$can_sample_draw；未勾功能碼的人前端連按鈕都看不到）。
     $needDesignDraw = (!empty($_POST['need_design_draw']) && $_POST['need_design_draw'] !== '0') ? 1 : 0;
     $needSampleDraw = (!empty($_POST['need_sample_draw']) && $_POST['need_sample_draw'] !== '0') ? 1 : 0;
+    // 兩者互斥（使用者要求「是則一點選，也可不點選」）：前端已做單向關閉，這裡同規則再擋一次
+    // （鐵律8），萬一兩個都送 1（例如繞過前端直打 API），一律保留「需設計繪圖」優先。
+    if ($needDesignDraw && $needSampleDraw) { $needSampleDraw = 0; }
 
     // ── 稽核製程標籤（2026-10-02 使用者交辦）──────────────────────────────
     // 前端在跳窗標題右側讓使用者點選，這裡用同一套規則再驗一次（鐵律8）。

@@ -9870,12 +9870,16 @@ foreach($dCounts as $c) {
         // 不影響任何既有流程；效果是清單「製程」欄的訂單標籤（AS 認定）下方多一行提示。
         // 按鈕本身有沒有出現由後端 $can_need_design_draw／$can_sample_draw 控制（鐵律8），
         // 這裡的 $('#btn-toggle-...') 找不到元素時 jQuery 安全地什麼都不做，不必另外判斷。
+        // 兩者互斥（使用者 2026-10-07 明確要求「是則一點選，也可不點選」）：點其中一顆變成選取時，
+        // 自動把另一顆關掉；兩顆都可以是「不選」。互斥只做單向關閉（呼叫對方的 set…(false)，
+        // 不是 toggle…()），避免兩邊互相呼叫形成無窮遞迴。
         function setNeedDesignDrawFlag(on) {
             $('#hidden_need_design_draw').val(on ? '1' : '0');
             var $b = $('#btn-toggle-need-design');
             if (on) {
                 $b.css({ 'background': '#B06F27', 'border-color': '#8a5420', 'color': '#fff', 'font-weight': '700' })
                   .html('<i class="fa fa-pencil-square-o"></i> 需設計繪圖（點此取消）');
+                setSampleDrawFlag(false);
             } else {
                 $b.css({ 'background': '#fff', 'border-color': '#ccc', 'color': '#777', 'font-weight': '400' })
                   .html('<i class="fa fa-pencil-square-o"></i> 需設計繪圖');
@@ -9889,6 +9893,7 @@ foreach($dCounts as $c) {
             if (on) {
                 $b.css({ 'background': '#8A5A2B', 'border-color': '#6b4620', 'color': '#fff', 'font-weight': '700' })
                   .html('<i class="fa fa-cube"></i> 由樣品繪圖（點此取消）');
+                setNeedDesignDrawFlag(false);
             } else {
                 $b.css({ 'background': '#fff', 'border-color': '#ccc', 'color': '#777', 'font-weight': '400' })
                   .html('<i class="fa fa-cube"></i> 由樣品繪圖');
