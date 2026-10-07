@@ -52,6 +52,16 @@ function ulUnitIds(PDO $db, array $settings, string $unitKey): array {
 }
 
 /**
+ * 同 ulUnitIds()，但多一層「排除特定職位」過濾（2026-10-07 新增，見 unit_load_lib.php 的
+ * ul_dept_user_ids_filtered() 函式註解）——只給「逐人負荷明細」這一類輸出用，彙總統計
+ * 一律還是用上面那支不排除的 ulUnitIds()。
+ */
+function ulUnitIdsFiltered(PDO $db, array $settings, string $unitKey): array {
+    $rows = ul_dept_user_ids_filtered($db, $settings, $unitKey);
+    return array_values(array_unique(array_map(fn($r) => (int)$r['id'], $rows)));
+}
+
+/**
  * 解析期間參數（比照 order_analysis_lib.php 的 oa_period_buckets/oa_period_pick/oa_compare_period，
  * 這五個 data_* action 與 overview 共用同一套解析，不要各自重複解析一次）。
  * 口徑參數一律過白名單——不吃前端隨便送的字串（會被拼進別處的查詢/判斷）。
@@ -127,13 +137,20 @@ switch ($action) {
         ulOut(['depts' => $out]);
     }
 
-    /* ── 設定讀取（部門勾選＋過重門檻）─────────────────────────── */
+    /* ── 設定讀取（部門勾選＋過重門檻＋製程大類白名單＋排除職位）──────── */
     case 'settings_get': {
         $s = ul_settings($db);
+        // process_type 全表很小（十幾筆），整張撈起來給設定頁的「要列入哪些製程大類」勾選清單用。
+        $processTypes = $db->query(
+            "SELECT process_type_id, process_type FROM process_type ORDER BY process_type_id"
+        )->fetchAll(PDO::FETCH_ASSOC);
         ulOut([
             'dept_cfg'          => $s['dept_cfg'],
             'thresholds'        => $s['thresholds'],
             'threshold_defaults'=> ul_threshold_defaults(),
+            'prod_process_types'=> $s['prod_process_types'],
+            'exclude_positions' => $s['exclude_positions'],
+            'process_types'     => $processTypes,
             'unit_keys'         => ul_unit_keys(),
             'canAdmin'          => $canAdmin ? 1 : 0,
             'csrf'              => $_SESSION['ul_csrf'],
@@ -149,12 +166,57 @@ switch ($action) {
         if (!is_array($deptCfg)) ulErr('部門設定格式不正確');
         if (!is_array($thr))     ulErr('門檻設定格式不正確');
 
-        $saved = ul_settings_save($db, ['dept_cfg' => $deptCfg, 'thresholds' => $thr], $uid);
+        $in = ['dept_cfg' => $deptCfg, 'thresholds' => $thr];
+
+        // prod_process_types／exclude_positions／no_threshold：本頁設定跳窗一次送出全部
+        // 欄位，但 ul_settings_save() 仍是用 array_key_exists 判「有沒有送這個鍵」（鐵律8：
+        // 沒送＝不要動既有設定，送了才整批覆蓋），本頁一律整批送所以這裡只要「有送就轉交」。
+        if (array_key_exists('prod_process_types', $_POST)) {
+            $pptRaw = $_POST['prod_process_types'];
+            $ppt = is_string($pptRaw) ? json_decode($pptRaw, true) : $pptRaw;
+            $in['prod_process_types'] = is_array($ppt) ? $ppt : [];
+        }
+        if (array_key_exists('exclude_positions', $_POST)) {
+            $exRaw = $_POST['exclude_positions'];
+            $ex = is_string($exRaw) ? json_decode($exRaw, true) : $exRaw;
+            $in['exclude_positions'] = is_array($ex) ? $ex : [];
+        }
+        if (array_key_exists('no_threshold', $_POST)) {
+            $ntRaw = $_POST['no_threshold'];
+            $nt = is_string($ntRaw) ? json_decode($ntRaw, true) : $ntRaw;
+            $in['no_threshold'] = is_array($nt) ? $nt : [];
+        }
+
+        $saved = ul_settings_save($db, $in, $uid);
         ulOut([
             'dept_cfg'          => $saved['dept_cfg'],
             'thresholds'        => $saved['thresholds'],
             'threshold_defaults'=> ul_threshold_defaults(),
+            'prod_process_types'=> $saved['prod_process_types'],
+            'exclude_positions' => $saved['exclude_positions'],
         ]);
+    }
+
+    /* ── 設定頁「排除職位」勾選清單：給某個單位目前工作中的部門勾選（尚未存檔）即時算出
+       候選職位（2026-10-07 新增）。吃的是前端送來的 dept_cfg（該單位目前勾選狀態，未必
+       已存檔），不是已存檔的設定——這樣使用者在設定跳窗裡邊勾部門邊看得到候選職位會
+       跟著變，不必先存檔才看得到。─────────────────────────────── */
+    case 'positions_for_unit': {
+        $unitKey = (string)($_REQUEST['unit'] ?? '');
+        if (!in_array($unitKey, ul_unit_keys(), true)) ulErr('不合法的單位代碼');
+        $cfgRaw = $_REQUEST['dept_cfg'] ?? '[]';
+        $cfg = is_string($cfgRaw) ? json_decode($cfgRaw, true) : $cfgRaw;
+        if (!is_array($cfg)) $cfg = [];
+        $clean = [];
+        foreach ($cfg as $r) {
+            if (!is_array($r)) continue;
+            $did = (int)($r['dept_id'] ?? 0);
+            if ($did <= 0) continue;
+            $clean[] = ['dept_id' => $did, 'include_sub' => !empty($r['include_sub'])];
+        }
+        $deptIds = ul_unit_dept_ids($db, ['dept_cfg' => [$unitKey => $clean]], $unitKey);
+        $positions = ul_positions_in_depts($db, $deptIds);
+        ulOut(['positions' => $positions, 'dept_ids' => $deptIds]);
     }
 
     /* ── 總覽：五張 KPI 卡的核心數字＋整頁自動分析 ─────────────── */
@@ -179,8 +241,12 @@ switch ($action) {
         $pmCur = ul_pm_summary($db, $p['from'], $p['to'], $pmIds);
         $pmCmp = ul_pm_summary($db, $p['cmp_from'], $p['cmp_to'], $pmIds);
 
-        $prodByType    = ul_prod_by_process_type($db, $p['from'], $p['to'], $prodIds);
-        $prodUntracked = ul_prod_untracked_reports($db, $p['from'], $p['to'], $prodIds);
+        // 2026-10-07 新增：生產課「製程大類負荷」要列入哪些製程大類的管理員白名單
+        // （settings['prod_process_types']，空陣列＝沿用舊行為顯示全部）。總覽的 KPI 卡／
+        // 部門負荷總表跟「生產課」詳細分頁（data_prod）要是同一份口徑，否則兩處數字會對不起來。
+        $allowedTypes = $settings['prod_process_types'] ?? [];
+        $prodByType    = ul_prod_by_process_type($db, $p['from'], $p['to'], $prodIds, $allowedTypes);
+        $prodUntracked = ul_prod_untracked_reports($db, $p['from'], $p['to'], $prodIds, $allowedTypes);
         $prodSetup     = ul_prod_setup_stats($db, $p['from'], $p['to'], $prodIds);
 
         $qcWait     = ul_qc_wait_time($db, $p['from'], $p['to'], $qcIds);
@@ -266,10 +332,14 @@ switch ($action) {
         $people = ul_dept_user_ids($db, $settings, 'design');
         $ids = array_values(array_unique(array_map(fn($r) => (int)$r['id'], $people)));
         $deptIds = ul_unit_dept_ids($db, $settings, 'design');
+        // 逐人負荷明細才套「排除職位」過濾（2026-10-07 新增），彙總統計（$summary／
+        // $summaryCmp）仍用未過濾的 $ids——這些人即使被排除在明細表之外，工作量還是要
+        // 算進整個設計課的彙總數字。
+        $idsFiltered = ulUnitIdsFiltered($db, $settings, 'design');
 
         $summary    = ul_design_summary($db, $p['from'], $p['to'], $ids);
         $summaryCmp = ul_design_summary($db, $p['cmp_from'], $p['cmp_to'], $ids);
-        $byPerson   = ul_design_by_person($db, $p['from'], $p['to'], $ids, $deptIds);
+        $byPerson   = ul_design_by_person($db, $p['from'], $p['to'], $idsFiltered, $deptIds);
         $reviewer   = ul_design_reviewer_counts($db, $p['from'], $p['to'], $ids);
         $dailyPmget = ul_design_daily_pmget($db, $p['from'], $p['to'], $ids);
         $tags       = ul_design_tags($db, $p['from'], $p['to'], $ids);
@@ -305,10 +375,11 @@ switch ($action) {
         $people = ul_dept_user_ids($db, $settings, 'sales');
         $ids = array_values(array_unique(array_map(fn($r) => (int)$r['id'], $people)));
         $deptIds = ul_unit_dept_ids($db, $settings, 'sales');
+        $idsFiltered = ulUnitIdsFiltered($db, $settings, 'sales');
 
         $summary    = ul_sales_summary($db, $p['from'], $p['to'], $ids);
         $summaryCmp = ul_sales_summary($db, $p['cmp_from'], $p['cmp_to'], $ids);
-        $byPerson   = ul_sales_by_person($db, $p['from'], $p['to'], $ids, $deptIds);
+        $byPerson   = ul_sales_by_person($db, $p['from'], $p['to'], $idsFiltered, $deptIds);
 
         $overload = [
             'quote_count'      => ul_is_overload((float)$summary['quote_count'], 'sales.quote_backlog', $thresholds),
@@ -364,8 +435,9 @@ switch ($action) {
         $people = ul_dept_user_ids($db, $settings, 'prod');
         $ids = array_values(array_unique(array_map(fn($r) => (int)$r['id'], $people)));
 
-        $byType     = ul_prod_by_process_type($db, $p['from'], $p['to'], $ids);
-        $untracked  = ul_prod_untracked_reports($db, $p['from'], $p['to'], $ids);
+        $allowedTypes = $settings['prod_process_types'] ?? [];
+        $byType     = ul_prod_by_process_type($db, $p['from'], $p['to'], $ids, $allowedTypes);
+        $untracked  = ul_prod_untracked_reports($db, $p['from'], $p['to'], $ids, $allowedTypes);
         $dailyOut   = ul_prod_daily_output($db, $p['from'], $p['to'], $ids);
         $setup      = ul_prod_setup_stats($db, $p['from'], $p['to'], $ids);
         $production = ul_prod_production_stats($db, $p['from'], $p['to'], $ids);
@@ -400,7 +472,10 @@ switch ($action) {
         $p = ulPeriodParse($_REQUEST);
         $settings = ul_settings($db);
         $thresholds = $settings['thresholds'];
-        $people = ul_dept_user_ids($db, $settings, 'packing');
+        // 本分頁的人員清單只用在逐人明細（ul_packing_by_person），全部直接走過濾後的清單
+        // （2026-10-07 新增「排除職位」）——不像設計/業務/品管同時還要供彙總統計用未過濾的
+        // 清單，包裝沒有獨立於逐人明細之外的「依人彙總」用途。
+        $people = ul_dept_user_ids_filtered($db, $settings, 'packing');
         $ids = array_values(array_unique(array_map(fn($r) => (int)$r['id'], $people)));
         $deptIds = ul_unit_dept_ids($db, $settings, 'packing');
 
@@ -442,10 +517,12 @@ switch ($action) {
         $ids = array_values(array_unique(array_map(fn($r) => (int)$r['id'], $people)));
         $deptIds = ul_unit_dept_ids($db, $settings, 'qc');
 
+        $idsFiltered = ulUnitIdsFiltered($db, $settings, 'qc');
+
         $dailyItems = ul_qc_daily_items($db, $p['from'], $p['to'], $ids);
         $wait       = ul_qc_wait_time($db, $p['from'], $p['to'], $ids);
         $abnormal   = ul_qc_abnormal_stats($db, $p['from'], $p['to'], $ids);
-        $byPerson   = ul_qc_by_person($db, $p['from'], $p['to'], $ids, $deptIds);
+        $byPerson   = ul_qc_by_person($db, $p['from'], $p['to'], $idsFiltered, $deptIds);
         $adhoc      = ul_qc_adhoc($db, $p['from'], $p['to']);
         // 目前待驗佇列：筆數是現況快照，不吃 $from/$to、不受 $ids 篩選（全公司共用同一條
         // 佇列）；平均檢驗工作天數才吃本期 $from/$to（見 ul_qc_pending_queue() 函式註解）。
