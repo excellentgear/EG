@@ -10613,8 +10613,30 @@ echo "</script>\n";
     function oreadyTestModeChangeState(fid, newState, bom, bomSn) {
         $.post('', { action: 'oready_test_mode_set_state', bom_ing_fid: fid, new_state: newState }, function(r) {
             showTemporaryMessage((r && r.message) || (r && r.success ? '已修改' : '失敗'), !!(r && r.success));
-            if (r && r.success && typeof refreshEditModalProcessList === 'function') {
-                refreshEditModalProcessList(bom, bomSn);
+            if (r && r.success) {
+                // 2026-10-08 使用者回報「畫面上沒有AJAX更新狀態」：根因是 refreshEditModalProcessList()
+                // 只是從「前端快取」window.bomPSList 重畫面板，後端寫入成功了，但快取裡還是舊值，
+                // 重畫出來的下拉自然看起來像沒變。比照既有「本關已移轉」(mark_process_transferred)
+                // 成功後的做法：先樂觀更新三份前端快取，再重畫面板＋主表格，最後再跟後端要一次
+                // 最新資料做最終核對，三者缺一都會出現「看起來沒更新」的情況。
+                if (Array.isArray(window.bomPSList)) window.bomPSList.forEach(function(p) {
+                    if (String(p.bom_ing_fid || '') === String(fid)) p.processing_state = newState;
+                });
+                if (window.ingActiveMap && Array.isArray(window.ingActiveMap[bom])) {
+                    window.ingActiveMap[bom].forEach(function(p) {
+                        if (String(p.bom_ing_fid || '') === String(fid)) p.processing_state = newState;
+                    });
+                }
+                if (Array.isArray(fullDataset)) fullDataset.forEach(function(item) {
+                    if (item && item.bom_ing_fid && String(item.bom_ing_fid).split(',').some(function(id) { return String(id).trim() === String(fid); })) {
+                        item.processing_state = newState;
+                        delete _rowDetailCache[item.bom];
+                    }
+                });
+                delete _rowDetailCache[bom];
+                if (typeof refreshEditModalProcessList === 'function') refreshEditModalProcessList(bom, bomSn);
+                if (typeof processAndRenderData === 'function') processAndRenderData();
+                if (typeof fetchDataAndFilter === 'function') fetchDataAndFilter();
             }
         }, 'json');
     }
