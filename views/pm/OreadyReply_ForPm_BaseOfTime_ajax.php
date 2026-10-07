@@ -2418,6 +2418,93 @@ else if (isset($_POST['action']) && $_POST['action'] === 'oready_or_save_toggle'
     exit;
 }
 
+// ── 管理員測試模式：進入（需操作確認密碼）/離開（不需要）/直接修改製程整體狀態 ─────
+// 2026-10-07 使用者交辦：方便測試不必真的跑完整個移轉/報工/QC流程；進入與離開只是旗標放
+// $_SESSION，不影響已經改過的資料（離開模式不會還原）；直接修改狀態一律留稽核紀錄
+// （audit_log，target_type='oready_test_mode_state'）。僅限本頁判定的系統管理員(permission A)。
+else if (isset($_POST['action']) && $_POST['action'] === 'oready_test_mode_enter') {
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    include_once '../../src/common/role_features_helper.php';
+    require_once '../../src/common/confirm_password_lib.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    $uid = (int)($_SESSION['id'] ?? 0);
+    if (!$uid) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
+    if (!oready_resolve_is_admin($db, $uid, $_SERVER['PHP_SELF'])) {
+        echo json_encode(['success'=>false,'message'=>'只有系統管理員可以使用測試模式']); exit;
+    }
+    $pw = (string)($_POST['password'] ?? '');
+    try {
+        $r = eg_confirm_password_verify_scoped($db, $uid, $pw, 'oready_test_mode');
+        if (!$r['ok']) { echo json_encode(['success'=>false,'message'=>$r['msg']]); exit; }
+        $_SESSION['oready_test_mode'] = 1;
+        $name = $_SESSION['user_cname'] ?? ($_SESSION['userName'] ?? (string)$uid);
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                      VALUES ('enable','oready_test_mode','0','OreadyReply_ForPm_BaseOfTime 測試模式',NULL,?,?,NOW())")
+           ->execute([$uid, $name]);
+        echo json_encode(['success'=>true]);
+    } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+else if (isset($_POST['action']) && $_POST['action'] === 'oready_test_mode_exit') {
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    include_once '../../src/common/role_features_helper.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    $uid = (int)($_SESSION['id'] ?? 0);
+    if (!$uid) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
+    if (!oready_resolve_is_admin($db, $uid, $_SERVER['PHP_SELF'])) {
+        echo json_encode(['success'=>false,'message'=>'只有系統管理員可以使用測試模式']); exit;
+    }
+    unset($_SESSION['oready_test_mode']);
+    try {
+        $name = $_SESSION['user_cname'] ?? ($_SESSION['userName'] ?? (string)$uid);
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                      VALUES ('disable','oready_test_mode','0','OreadyReply_ForPm_BaseOfTime 測試模式',NULL,?,?,NOW())")
+           ->execute([$uid, $name]);
+    } catch (Exception $e) { /* 稽核寫入失敗不擋主要作業 */ }
+    echo json_encode(['success'=>true]);
+    exit;
+}
+else if (isset($_POST['action']) && $_POST['action'] === 'oready_test_mode_set_state') {
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    include_once '../../src/common/role_features_helper.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    $uid = (int)($_SESSION['id'] ?? 0);
+    if (!$uid) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
+    if (!oready_resolve_is_admin($db, $uid, $_SERVER['PHP_SELF'])) {
+        echo json_encode(['success'=>false,'message'=>'只有系統管理員可以使用測試模式']); exit;
+    }
+    if (empty($_SESSION['oready_test_mode'])) {
+        echo json_encode(['success'=>false,'message'=>'尚未進入測試模式']); exit;
+    }
+    $fid = (int)($_POST['bom_ing_fid'] ?? 0);
+    $newState = trim((string)($_POST['new_state'] ?? ''));
+    $allowedStates = ['N', 'Q', 'P', 'ing', 'E', '1', 'skip'];
+    if (!$fid) { echo json_encode(['success'=>false,'message'=>'缺少 bom_ing_fid']); exit; }
+    if (!in_array($newState, $allowedStates, true)) { echo json_encode(['success'=>false,'message'=>'不合法的狀態代碼']); exit; }
+    try {
+        $st = $db->prepare("SELECT bom, bom_sn, process_no, processing_state FROM bom_ing WHERE bom_ing_fid=?");
+        $st->execute([$fid]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row) { echo json_encode(['success'=>false,'message'=>'找不到這筆製程']); exit; }
+        $oldState = (string)$row['processing_state'];
+        $db->prepare("UPDATE bom_ing SET processing_state=? WHERE bom_ing_fid=?")->execute([$newState, $fid]);
+        $name = $_SESSION['user_cname'] ?? ($_SESSION['userName'] ?? (string)$uid);
+        $chg = json_encode([['field'=>'processing_state','old'=>$oldState,'new'=>$newState]], JSON_UNESCAPED_UNICODE);
+        $targetName = $row['bom'] . ' / SN' . $row['bom_sn'] . ' / ' . $row['process_no'];
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                      VALUES ('update','oready_test_mode_state',?,?,?,?,?,NOW())")
+           ->execute([(string)$fid, $targetName, $chg, $uid, $name]);
+        echo json_encode(['success'=>true, 'message'=>'已將「'.$targetName.'」狀態由 '.$oldState.' 改為 '.$newState]);
+    } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
 else if (isset($_POST['action']) && $_POST['action'] === 'search_process') {
     session_write_close();
     include_once '../../src/common/DBConnection.php';

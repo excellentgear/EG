@@ -1546,6 +1546,11 @@ $_or_adjustable = eg_oready_or_toggle($conn->getPDO(), 'oready_return_qty_adjust
 echo "    window.EG_OR_QTY_SETTABLE = " . json_encode((bool)$_or_settable) . "; // 回廠是否可設定數量（跳窗）\n";
 echo "    window.EG_OR_QTY_ADJUSTABLE = " . json_encode((bool)$_or_adjustable) . "; // 是否開放「直接修正報廢總數」\n";
 echo "    window.EG_OR_QTY_CAN_SET = " . json_encode($permission_code === 'A') . "; // 只有系統管理員能改這兩個開關\n";
+// 2026-10-07 使用者交辦：管理員「測試模式」——開啟後可在 BOM 製程列表直接改製程的整體狀態
+// (processing_state)，方便測試不必真的跑完整個移轉/報工/QC流程；進入需輸入操作確認密碼，
+// 離開不需要；改過的資料不會因為離開測試模式而還原，且每一次直接修改都留稽核紀錄。
+// 旗標只放在 $_SESSION，同一個瀏覽器分頁內持續有效到登出或手動離開為止。
+echo "    window.EG_TEST_MODE_ACTIVE = " . json_encode(!empty($_SESSION['oready_test_mode'])) . "; // 管理員測試模式目前是否開啟\n";
 echo "    window.currentUserStatus = " . json_encode($user_status ?? null) . ";\n";
 echo "    window.canCreate = " . json_encode($can_create) . ";\n";
 echo "    window.canUpdate = " . json_encode($can_update) . ";\n";
@@ -10550,6 +10555,70 @@ echo "</script>\n";
         xhr.send('action=cancel_transfer&bom_ing_fid=' + encodeURIComponent(fid));
     }
 
+    // ── 管理員測試模式：直接修改製程整體狀態（processing_state），方便測試不必真的跑完整個
+    // 移轉/報工/QC流程（2026-10-07 使用者交辦）。進入需輸入操作確認密碼，離開不需要，離開後
+    // 已修改的資料不會還原；每一次直接修改都在後端留稽核紀錄（qab_test_mode 操作鍵）。
+    // 狀態清單與全站既有顯示慣例（stMap）同一套代碼，但標籤加註代碼避免 E/1 都叫「已結」看不出差異。
+    var OREADY_TEST_STATES = [
+        {v:'N',    label:'待發包(N)'},
+        {v:'Q',    label:'QC待驗/加工中(Q)'},
+        {v:'P',    label:'待移轉(P)'},
+        {v:'ing',  label:'加工中(ing)'},
+        {v:'E',    label:'已移轉(E)'},
+        {v:'1',    label:'已結案(1)'},
+        {v:'skip', label:'跳過(skip)'}
+    ];
+
+    function oreadyRenderTestModeBtn(bom, bomSn) {
+        var btn = document.getElementById('oready-tm-toggle');
+        if (!btn) return;
+        var active = !!window.EG_TEST_MODE_ACTIVE;
+        btn.textContent = active ? '離開測試模式' : '測試模式';
+        btn.className = 'btn btn-xs ' + (active ? 'btn-danger' : 'btn-default');
+        btn.title = active
+            ? '離開測試模式（已修改的資料不會還原）'
+            : '開啟後可直接改製程的整體狀態，方便測試用，需輸入操作確認密碼';
+        btn.onclick = function(){ oreadyToggleTestMode(bom, bomSn); };
+    }
+
+    function oreadyToggleTestMode(bom, bomSn) {
+        if (window.EG_TEST_MODE_ACTIVE) {
+            $.post('', { action: 'oready_test_mode_exit' }, function(r) {
+                if (r && r.success) {
+                    window.EG_TEST_MODE_ACTIVE = false;
+                    oreadyRenderTestModeBtn(bom, bomSn);
+                    showTemporaryMessage('已離開測試模式', true);
+                    if (typeof refreshEditModalProcessList === 'function') refreshEditModalProcessList(bom, bomSn);
+                } else {
+                    showTemporaryMessage((r && r.message) || '操作失敗', false);
+                }
+            }, 'json');
+            return;
+        }
+        var pw = prompt('請輸入操作確認密碼以進入測試模式：\n（進入後可直接修改製程狀態，離開不會還原已修改的資料，每次修改皆留稽核紀錄）');
+        if (pw === null) return;
+        if (pw === '') { showTemporaryMessage('請輸入密碼', false); return; }
+        $.post('', { action: 'oready_test_mode_enter', password: pw }, function(r) {
+            if (r && r.success) {
+                window.EG_TEST_MODE_ACTIVE = true;
+                oreadyRenderTestModeBtn(bom, bomSn);
+                showTemporaryMessage('已進入測試模式', true);
+                if (typeof refreshEditModalProcessList === 'function') refreshEditModalProcessList(bom, bomSn);
+            } else {
+                showTemporaryMessage((r && r.message) || '密碼錯誤', false);
+            }
+        }, 'json');
+    }
+
+    function oreadyTestModeChangeState(fid, newState, bom, bomSn) {
+        $.post('', { action: 'oready_test_mode_set_state', bom_ing_fid: fid, new_state: newState }, function(r) {
+            showTemporaryMessage((r && r.message) || (r && r.success ? '已修改' : '失敗'), !!(r && r.success));
+            if (r && r.success && typeof refreshEditModalProcessList === 'function') {
+                refreshEditModalProcessList(bom, bomSn);
+            }
+        }, 'json');
+    }
+
     // ── 建立製程列表項目（共用）────────────────────────────────────────────
     // 2026-10-07 使用者回報「BOM 製程列表上面按鈕已經超過區塊」：根因是 Bootstrap .row 的
     // -15px 負外距沒被蓋掉、按鈕欄只有 16.67% 寬卻要塞兩顆中文按鈕。修法：行本身蓋掉負外距
@@ -10593,6 +10662,24 @@ echo "</script>\n";
             nameSpan.appendChild(ms);
         }
         infoRow.appendChild(nameSpan);
+
+        // 測試模式：直接改整體狀態（僅管理員，且已進入測試模式才顯示）
+        if (window.oreadyIsAdmin && window.EG_TEST_MODE_ACTIVE) {
+            var tmSel = document.createElement('select');
+            tmSel.className = 'form-control input-sm';
+            tmSel.style.cssText = 'display:inline-block;width:auto;font-size:11px;padding:1px 4px;height:22px;border:1px solid #DD5138;color:#DD5138;';
+            tmSel.title = '測試模式：直接修改整體狀態（processing_state）';
+            OREADY_TEST_STATES.forEach(function(s){
+                var opt = document.createElement('option');
+                opt.value = s.v; opt.textContent = s.label;
+                if (String(proc.processing_state||'') === s.v) opt.selected = true;
+                tmSel.appendChild(opt);
+            });
+            (function(f, bom, bsn){
+                tmSel.onchange = function(){ oreadyTestModeChangeState(f, this.value, bom, bsn); };
+            })(proc.bom_ing_fid, rowData.bom, rowData.bom_sn);
+            infoRow.appendChild(tmSel);
+        }
         div.appendChild(infoRow);
 
         // 第二行：操作按鈕，靠右對齊、自己換行，不跟資訊欄搶同一行空間
@@ -11869,7 +11956,15 @@ echo "</script>\n";
         // If editing the main item's process_no is still required, it would need a different UI approach.
 
         // 新右欄 - 動態製程列表
-        rightColProcesses.innerHTML += `<h5 style="margin-top:15px; margin-bottom:10px;">BOM 製程列表<small style="color: #777;"> (SN 製程編號 製程)</small></h5>`;
+        // 2026-10-07 使用者交辦：管理員（permission A）可開啟「測試模式」直接改製程的整體狀態
+        // (processing_state) 方便測試，不必真的跑完整個移轉/報工/QC流程；只有管理員看得到這顆鈕。
+        const _tmBtnHtml = window.oreadyIsAdmin
+            ? `<button type="button" id="oready-tm-toggle" class="btn btn-xs" style="margin-left:10px;"></button>`
+            : '';
+        rightColProcesses.innerHTML += `<h5 style="margin-top:15px; margin-bottom:10px;display:flex;align-items:center;flex-wrap:wrap;">BOM 製程列表<small style="color: #777;"> (SN 製程編號 製程)</small>${_tmBtnHtml}</h5>`;
+        if (window.oreadyIsAdmin) {
+            setTimeout(function(){ oreadyRenderTestModeBtn(rowData.bom, rowData.bom_sn); }, 0);
+        }
         const processListDiv = document.createElement('div');
         processListDiv.id = `dynamic-process-list-${rowData.bom}`;
         // processListDiv.style.maxHeight = '200px'; // Removed for auto height
@@ -13786,11 +13881,21 @@ echo "</script>\n";
                 : '';
             var buttonsHtml = transferBtnHtml + returnBtnHtml + skipBtnHtml + delBtnHtml;
 
+            // 測試模式：直接改整體狀態（僅管理員，且已進入測試模式才顯示）
+            var tmSelectHtml = '';
+            if (window.oreadyIsAdmin && window.EG_TEST_MODE_ACTIVE) {
+                var tmOptsHtml = OREADY_TEST_STATES.map(function(s){
+                    return '<option value="' + s.v + '"' + (String(proc.processing_state||'')===s.v ? ' selected' : '') + '>' + escapeHtml(s.label) + '</option>';
+                }).join('');
+                tmSelectHtml = '<select class="form-control input-sm" style="display:inline-block;width:auto;font-size:11px;padding:1px 4px;height:22px;border:1px solid #DD5138;color:#DD5138;" title="測試模式：直接修改整體狀態（processing_state）" onchange="oreadyTestModeChangeState(\'' + proc.bom_ing_fid + '\',this.value,\'' + bomIdForModal + '\',\'' + mainProcessBomSnForHighlighting + '\')">' + tmOptsHtml + '</select>';
+            }
+
             div.innerHTML = `
                 <div style="display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;">
                     <b style="font-size:12px;min-width:16px;">${escapeHtml(proc.bom_sn)}</b>
                     <span style="font-size:11px;color:#999;">${escapeHtml(proc.process_no)}</span>
                     <span style="font-size:12px;flex:1 1 auto;min-width:50px;">${escapeHtml(proc.ProcessName||'')}${priceDisplay}</span>
+                    ${tmSelectHtml}
                 </div>
                 ${buttonsHtml ? '<div style="display:flex;gap:4px;justify-content:flex-end;flex-wrap:wrap;margin-top:3px;">' + buttonsHtml + '</div>' : ''}
             `;
