@@ -212,6 +212,25 @@ function ul_billing_months_between(string $from, string $to): array
     return $out;
 }
 
+/**
+ * 「這張 bom_ing 對應的 BOM（製令）還沒結案」條件，供任何「現況快照型」的
+ * bom_ing.processing_state 計數共用拼進 WHERE（AND 接上即可）——已結案的 BOM
+ * 底下常有殘留的 bom_ing 製程列（歷史原因沒有同步清掉 processing_state），
+ * 不排除的話會被誤算成「還在加工中／還沒指派」，把現況負荷灌水。
+ *
+ * 判斷「這張 BOM 是否已結案」一律用 bom.processing_state='1'，不是 bom.closed_at
+ * ——closed_at 只有 2026-05-22 之後手動結案才會填，92% 已結案的舊資料這欄是 NULL，
+ * 用它判斷會漏掉大量已結案 BOM（見本機記憶 bom_closed_at_gap.md）。
+ * 實測全庫 bom.processing_state 只有 '1'（已結案）或 NULL（未結案）兩種值。
+ *
+ * @param string $bomIngAlias bom_ing 在該查詢裡的別名（預設 'bi'）
+ * @return string 可直接用 "AND " . ul_bom_active_cond('bi') 接進 WHERE 子句的條件字串
+ */
+function ul_bom_active_cond(string $bomIngAlias = 'bi'): string
+{
+    return "NOT EXISTS (SELECT 1 FROM bom _bc WHERE _bc.bom = {$bomIngAlias}.bom AND COALESCE(_bc.processing_state,'')='1')";
+}
+
 /* ══════════════════════════════════════════════════════════════════
  * B. 設計課
  *
@@ -648,7 +667,8 @@ function ul_pm_summary(PDO $db, string $from, string $to, array $pmIds): array
 
     $rows = $db->query("SELECT bi.processing_state AS st, m.internal AS internal
                         FROM bom_ing bi
-                        LEFT JOIN maker_list m ON m.maker_id_no = bi.maker_id_no")->fetchAll(PDO::FETCH_ASSOC);
+                        LEFT JOIN maker_list m ON m.maker_id_no = bi.maker_id_no
+                        WHERE " . ul_bom_active_cond('bi'))->fetchAll(PDO::FETCH_ASSOC);
     foreach ($rows as $r) {
         $st = (string)$r['st'];
         $isInternal = (int)($r['internal'] ?? 0) === 1;
@@ -738,7 +758,9 @@ function ul_prod_by_process_type(PDO $db, string $from, string $to, array $prodU
 {
     $typeMap = ul_process_type_map($db);
     $rows = $db->query(
-        "SELECT process_no, machine_id FROM bom_ing WHERE processing_state IS NULL OR processing_state <> 'E'"
+        "SELECT process_no, machine_id FROM bom_ing bi
+         WHERE (processing_state IS NULL OR processing_state <> 'E')
+           AND " . ul_bom_active_cond('bi')
     )->fetchAll(PDO::FETCH_ASSOC);
 
     $buckets = [];
@@ -780,7 +802,8 @@ function ul_prod_untracked_reports(PDO $db, string $from, string $to, array $pro
          LEFT JOIN bom_ing bi ON bi.bom_ing_fid = r.bom_ing_fid
          WHERE r.report_date BETWEEN ? AND ?
            AND (bi.bom_ing_fid IS NULL OR bi.machine_id IS NULL
-                OR bi.processing_state IS NULL OR bi.processing_state = 'N')"
+                OR bi.processing_state IS NULL OR bi.processing_state = 'N')
+           AND (bi.bom_ing_fid IS NULL OR " . ul_bom_active_cond('bi') . ")"
     );
     $st->execute([$from, $to]);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -969,6 +992,134 @@ function ul_prod_per_capita(PDO $db, string $from, string $to, array $prodUserId
     return $out;
 }
 
+/**
+ * 包裝負荷：判定「包裝製程」一律用 process_no.ProcessName='包裝'（實測全庫對應
+ * ProcessNo 168／169，皆屬 process_type_id=16「雷刻與包裝」；該大類底下的 ProcessNo=16
+ * 「雷刻」不是包裝，不可用 process_type_id 當判準，否則會把雷刻一起算進去）——優先用
+ * 名稱比對不寫死製程代號，現場往後加新的包裝代號只要掛進同一個 ProcessName 就自動算進來。
+ *
+ *  ①待包裝筆數：現況快照（不受 $from/$to 限制，跟 ul_pm_summary() 的「目前狀態」同一種
+ *    道理），bom_ing 的包裝這一關還沒有任何 is_finished=1 完工報工、且排除對應 BOM 已結案
+ *    （ul_bom_active_cond()）。
+ *  ②每日包裝完成筆數與平均處理工作天數：對期間內（report_date 落在區間）包裝完工
+ *    （is_finished=1）的報工逐筆回推「進入待包裝」到「完成包裝」的工作天數——
+ *    完成時間＝production_end_time（缺值退 report_date）；進入時間＝同一張 BOM（bom_ing.bom）
+ *    裡 bom_sn 小於這一關、且最接近（最大）的前一關，取該關最新一筆 is_finished=1 的
+ *    production_end_time（缺值退 report_date）；包裝是這張 BOM 第一關（找不到更小 bom_sn
+ *    的已完工前一關）時退回 bom_ing.Created_At，查無該值才再退回 bom.Created_At（這張
+ *    製令本身的建立時間，比完全算不出來合理）。這一段是歷史資料統計不是現況快照，
+ *    刻意不加 ul_bom_active_cond()（已結案的 BOM 一樣有真實發生過的包裝歷程要算）。
+ * @return array ['pending'=>int,
+ *                'daily'=>[每日：report_date/count/avg_workdays，依日期由舊到新],
+ *                'avg_workdays'=>float|null,
+ *                'longest'=>最多5筆[bom/bom_ing_fid/report_date/enter_at/finish_at/workdays]，
+ *                'shortest'=>同結構最多5筆]
+ */
+function ul_prod_packing_stats(PDO $db, string $from, string $to): array
+{
+    $out = ['pending' => 0, 'daily' => [], 'avg_workdays' => null, 'longest' => [], 'shortest' => []];
+
+    $stPending = $db->query(
+        "SELECT COUNT(*) FROM bom_ing bi
+         JOIN process_no pn ON pn.ProcessNo = bi.process_no
+         WHERE pn.ProcessName='包裝'
+           AND NOT EXISTS (
+               SELECT 1 FROM pm_process_daily_report pdr
+               WHERE pdr.bom_ing_fid = bi.bom_ing_fid AND pdr.process_no = bi.process_no AND pdr.is_finished = 1
+           )
+           AND " . ul_bom_active_cond('bi')
+    );
+    $out['pending'] = (int)$stPending->fetchColumn();
+
+    $st = $db->prepare(
+        "SELECT r.bom_ing_fid, r.report_date, r.production_end_time,
+                bi.bom AS bom_no, bi.bom_sn AS bom_sn, bi.Created_At AS bi_created_at
+         FROM pm_process_daily_report r
+         JOIN bom_ing bi ON bi.bom_ing_fid = r.bom_ing_fid
+         JOIN process_no pn ON pn.ProcessNo = r.process_no
+         WHERE pn.ProcessName='包裝' AND r.is_finished = 1
+           AND r.report_date BETWEEN ? AND ?
+         ORDER BY r.report_date"
+    );
+    $st->execute([$from, $to]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return $out;
+
+    $prevStmt = $db->prepare(
+        "SELECT bi2.bom_ing_fid
+         FROM bom_ing bi2
+         WHERE bi2.bom = ? AND bi2.bom_sn < ? AND bi2.bom_sn IS NOT NULL
+           AND EXISTS (SELECT 1 FROM pm_process_daily_report pdr2
+                       WHERE pdr2.bom_ing_fid = bi2.bom_ing_fid AND pdr2.is_finished = 1)
+         ORDER BY bi2.bom_sn DESC LIMIT 1"
+    );
+    $finishStmt = $db->prepare(
+        "SELECT production_end_time, report_date FROM pm_process_daily_report
+         WHERE bom_ing_fid = ? AND is_finished = 1
+         ORDER BY COALESCE(production_end_time, report_date) DESC LIMIT 1"
+    );
+    $bomCreatedStmt = $db->prepare("SELECT Created_At FROM bom WHERE bom = ? LIMIT 1");
+
+    $dailyAgg = [];
+    $wdRows = [];
+    foreach ($rows as $r) {
+        $finishAt = $r['production_end_time'] ?: $r['report_date'];
+        $bomSn = $r['bom_sn'] !== null ? (int)$r['bom_sn'] : null;
+
+        $enterAt = null;
+        if ($bomSn !== null) {
+            $prevStmt->execute([$r['bom_no'], $bomSn]);
+            $prevFid = $prevStmt->fetchColumn();
+            if ($prevFid) {
+                $finishStmt->execute([$prevFid]);
+                $pf = $finishStmt->fetch(PDO::FETCH_ASSOC);
+                if ($pf) $enterAt = $pf['production_end_time'] ?: $pf['report_date'];
+            }
+        }
+        if ($enterAt === null) {
+            $enterAt = $r['bi_created_at'] ?: null;
+            if (!$enterAt) {
+                $bomCreatedStmt->execute([$r['bom_no']]);
+                $enterAt = $bomCreatedStmt->fetchColumn() ?: null;
+            }
+        }
+        if (!$enterAt) continue; // 連製令建立時間都查不到，不勉強算成 0 天，直接不計入
+
+        $days = ul_workdays_between($db, substr((string)$enterAt, 0, 10), substr((string)$finishAt, 0, 10));
+        if ($days === null) continue;
+
+        $d = (string)$r['report_date'];
+        if (!isset($dailyAgg[$d])) $dailyAgg[$d] = ['count' => 0, 'sum' => 0];
+        $dailyAgg[$d]['count']++;
+        $dailyAgg[$d]['sum'] += $days;
+
+        $wdRows[] = [
+            'bom' => $r['bom_no'], 'bom_ing_fid' => (int)$r['bom_ing_fid'], 'report_date' => $d,
+            'enter_at' => $enterAt, 'finish_at' => $finishAt, 'workdays' => $days,
+        ];
+    }
+
+    if (!$wdRows) return $out;
+
+    $dailyOut = [];
+    foreach ($dailyAgg as $d => $v) {
+        $dailyOut[] = ['report_date' => $d, 'count' => $v['count'], 'avg_workdays' => round($v['sum'] / $v['count'], 2)];
+    }
+    usort($dailyOut, fn($x, $y) => strcmp($x['report_date'], $y['report_date']));
+    $out['daily'] = $dailyOut;
+
+    $sum = array_sum(array_column($wdRows, 'workdays'));
+    $cnt = count($wdRows);
+    $out['avg_workdays'] = $cnt > 0 ? round($sum / $cnt, 2) : null;
+
+    $byDesc = $wdRows; usort($byDesc, fn($x, $y) => $y['workdays'] <=> $x['workdays']);
+    $out['longest'] = array_slice($byDesc, 0, 5);
+    $byAsc = $wdRows; usort($byAsc, fn($x, $y) => $x['workdays'] <=> $y['workdays']);
+    $out['shortest'] = array_slice($byAsc, 0, 5);
+
+    return $out;
+}
+
 /* ══════════════════════════════════════════════════════════════════
  * F. 品管
  *
@@ -983,6 +1134,34 @@ function ul_prod_per_capita(PDO $db, string $from, string $to, array $prodUserId
  * 算人均檢驗天數的分母）；真正要看「這個人今天做了多少」的 ul_qc_daily_items／
  * ul_qc_by_person 才會篩。
  * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * 目前待驗佇列筆數（現況快照，不受 $from/$to 限制，跟 ul_pm_summary() 的「目前狀態」
+ * 五項同一種道理——processing_state 沒有時間戳可以切期間）：bom_ing.processing_state='Q'
+ * （待QC驗）且排除「對應 BOM 已結案」（ul_bom_active_cond()）的筆數，依製程名稱分組。
+ * @return array ['by_process'=>[每製程：process_name/count，依 count 由大到小], 'total'=>int]
+ */
+function ul_qc_pending_queue(PDO $db): array
+{
+    $st = $db->query(
+        "SELECT bi.process_no, COUNT(*) c
+         FROM bom_ing bi
+         WHERE bi.processing_state='Q' AND " . ul_bom_active_cond('bi') . "
+         GROUP BY bi.process_no"
+    );
+    $typeMap = ul_process_type_map($db);
+    $byProcess = [];
+    $total = 0;
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $pno = $r['process_no'] !== null ? (int)$r['process_no'] : 0;
+        $cnt = (int)$r['c'];
+        $info = $typeMap[$pno] ?? ['process_name' => '（未設定製程）'];
+        $byProcess[] = ['process_name' => $info['process_name'] ?? ('#' . $pno), 'count' => $cnt];
+        $total += $cnt;
+    }
+    usort($byProcess, fn($x, $y) => $y['count'] <=> $x['count']);
+    return ['by_process' => $byProcess, 'total' => $total];
+}
 
 /**
  * 每日檢驗項目數與製程名稱，只算這批 $qcUserIds（品管人員，inspector_by 或 approved_by
