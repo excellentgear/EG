@@ -75,9 +75,14 @@ function ul_unit_keys(): array
 }
 
 /**
- * 讀出設定：dept_cfg（每個單位對應的部門清單，可勾「含子部門」）＋ thresholds（之後各單位的門檻值）。
+ * 讀出設定：dept_cfg（每個單位對應的部門清單，可勾「含子部門」）＋ thresholds（之後各單位的門檻值）
+ * ＋ prod_process_types（2026-10-07 新增：生產課「製程大類負荷」要列入哪些製程大類，管理員
+ * 勾選的 process_type_id 清單，空陣列＝尚未設定、沿用舊行為顯示全部）＋ exclude_positions
+ * （2026-10-07 新增：各單位「逐人負荷明細」要排除哪些職位，單位代碼=>position_id 陣列）。
  * @return array ['dept_cfg'=>['design'=>[['dept_id'=>int,'include_sub'=>bool],...], 'sales'=>[...], ...],
- *                'thresholds'=>array]
+ *                'thresholds'=>array,
+ *                'prod_process_types'=>[int,...],
+ *                'exclude_positions'=>['design'=>[int,...], 'sales'=>[...], ...]]
  */
 function ul_settings(PDO $db): array
 {
@@ -85,6 +90,9 @@ function ul_settings(PDO $db): array
     if (!is_array($deptCfgRaw)) $deptCfgRaw = [];
     $thresholds = ul_param_get($db, 'thresholds', []);
     if (!is_array($thresholds)) $thresholds = [];
+    $pptRaw = ul_param_get($db, 'prod_process_types', []);
+    $exclRaw = ul_param_get($db, 'exclude_positions', []);
+    if (!is_array($exclRaw)) $exclRaw = [];
 
     $deptCfg = [];
     foreach (ul_unit_keys() as $k) {
@@ -98,7 +106,21 @@ function ul_settings(PDO $db): array
         }
         $deptCfg[$k] = $clean;
     }
-    return ['dept_cfg' => $deptCfg, 'thresholds' => $thresholds];
+
+    $prodProcessTypes = is_array($pptRaw) ? ul_ids_norm($pptRaw) : [];
+
+    $exclPositions = [];
+    foreach (ul_unit_keys() as $k) {
+        $list = isset($exclRaw[$k]) && is_array($exclRaw[$k]) ? $exclRaw[$k] : [];
+        $exclPositions[$k] = ul_ids_norm($list);
+    }
+
+    return [
+        'dept_cfg' => $deptCfg,
+        'thresholds' => $thresholds,
+        'prod_process_types' => $prodProcessTypes,
+        'exclude_positions' => $exclPositions,
+    ];
 }
 
 /**
@@ -116,7 +138,15 @@ function ul_settings_clean_thresholds(array $v): array
 
 /**
  * 存檔：驗證 dept_cfg 裡的 dept_id 都是正整數、include_sub 正規化成 0/1；
- * thresholds 裡的葉節點值都要是數字，非數字的整支略過。
+ * thresholds 裡的葉節點值都要是數字，非數字的整支略過；prod_process_types／exclude_positions
+ * 裡的值都正規化成正整數陣列去重。
+ *
+ * dept_cfg／thresholds 沿用既有行為——呼叫端（設定頁）本來就是整份表單一起送出，沒送的鍵
+ * 視同空陣列整個覆蓋。但 prod_process_types／exclude_positions 是這次新增、下一階段的設定頁
+ * 可能分頁簽／分區塊各自送出（例如「製程大類顯示設定」跟「各單位部門設定」不在同一個表單），
+ * 比照全站「沒送這個欄位＝不要動它、送空陣列才是刻意清空」的既有規則（array_key_exists 判斷
+ * 有沒有送，不是判斷值是否為空），避免管理員只改部門設定、卻把已經設定好的製程大類清單
+ * 或排除職位整批洗空。
  * @return array 存檔後的完整設定（即 ul_settings() 的回傳格式）
  */
 function ul_settings_save(PDO $db, array $in, int $by): array
@@ -141,6 +171,21 @@ function ul_settings_save(PDO $db, array $in, int $by): array
     $byStr = (string)$by;
     ul_param_save($db, 'dept_cfg', $deptCfgOut, $byStr);
     ul_param_save($db, 'thresholds', $thrOut, $byStr);
+
+    if (array_key_exists('prod_process_types', $in)) {
+        $pptOut = is_array($in['prod_process_types']) ? ul_ids_norm($in['prod_process_types']) : [];
+        ul_param_save($db, 'prod_process_types', $pptOut, $byStr);
+    }
+
+    if (array_key_exists('exclude_positions', $in)) {
+        $exclIn = is_array($in['exclude_positions']) ? $in['exclude_positions'] : [];
+        $exclOut = [];
+        foreach (ul_unit_keys() as $k) {
+            $list = isset($exclIn[$k]) && is_array($exclIn[$k]) ? $exclIn[$k] : [];
+            $exclOut[$k] = ul_ids_norm($list);
+        }
+        ul_param_save($db, 'exclude_positions', $exclOut, $byStr);
+    }
 
     return ul_settings($db);
 }
@@ -182,6 +227,78 @@ function ul_dept_user_ids(PDO $db, array $settings, string $unitKey): array
     if (!$deptIds) return [];
 
     return eg_people_list($db, ['dept_ids' => $deptIds, 'all_posts' => true]);
+}
+
+/**
+ * ul_dept_user_ids() 之上多一層「排除特定職位」的過濾（2026-10-07 新增）——使用者希望某個
+ * 單位的部門範圍勾了一整個部門（例如技術課），但逐人負荷明細不想列出某些職位的人（例如
+ * 課長、經理這種不實際動手畫圖的管理職）。
+ *
+ * **不是取代 ul_dept_user_ids()，是多一層過濾**：呼叫端把「逐人負荷明細」原本呼叫
+ * ul_dept_user_ids() 的地方改成呼叫這支即可，其餘所有呼叫端（彙總卡片的人數篩選等）
+ * 不受影響，繼續用原本那支。
+ *
+ * **不需要另外查 user_department_position_map 交叉比對**：ul_dept_user_ids() 內部是用
+ * eg_people_list(['dept_ids'=>...,'all_posts'=>true]) 取得「一個職務一列」的展開結果
+ * （見 people_lib.php 的 eg_people_expand_posts()），每一列天生就帶著 position_id，而且
+ * eg_people_expand_posts() 已經把每個人的職務限定在 $deptIds 範圍內（濾掉同一人在範圍外
+ * 的其他兼任職務）——這份清單本身就是「這個單位部門範圍內的職務列表」，直接濾掉
+ * position_id 落在排除清單裡的列即可。
+ *
+ * @param array $settings ul_settings() 回傳的完整設定
+ * @param string $unitKey 單位代碼（design/sales/pm/prod/qc/packing）
+ * @return array 同 ul_dept_user_ids() 的回傳格式，已濾掉 settings['exclude_positions'][$unitKey]
+ *               裡列出的職位；該單位沒有設定排除職位時原樣回傳（不複製、零額外成本）。
+ */
+function ul_dept_user_ids_filtered(PDO $db, array $settings, string $unitKey): array
+{
+    $rows = ul_dept_user_ids($db, $settings, $unitKey);
+    if (!$rows) return $rows;
+
+    $exclRaw = $settings['exclude_positions'][$unitKey] ?? [];
+    $excl = is_array($exclRaw) ? ul_ids_norm($exclRaw) : [];
+    if (!$excl) return $rows;
+
+    $exclSet = array_flip($excl);
+    return array_values(array_filter($rows, function ($r) use ($exclSet) {
+        $pid = $r['position_id'] ?? null;
+        return $pid === null || !isset($exclSet[(int)$pid]);
+    }));
+}
+
+/**
+ * 給設定頁「要排除哪些職位」的勾選清單用（2026-10-07 新增）：$deptIds（已展開含子部門）
+ * 這些部門底下實際存在哪些職位——**只列「這個範圍內真的有人掛著」的職位，不是列出全公司的
+ * 職位**，否則勾選清單會長到沒意義（全公司可能有幾十種職位，這個單位可能只用得到三五種）。
+ * 在職判定比照 eg_people_list() 的既有規則（排除離職／特殊帳號／最高權限帳號），已經沒有
+ * 真人掛著的舊職位不列入候選。
+ * @param array $deptIds 部門 id（通常是 ul_unit_dept_ids() 展開後的結果，含子部門）
+ * @return array 每列 ['position_id'=>int,'position_name'=>string]，依 sort_order／名稱排序、去重
+ */
+function ul_positions_in_depts(PDO $db, array $deptIds): array
+{
+    $ids = ul_ids_norm($deptIds);
+    if (!$ids) return [];
+    $in = implode(',', $ids);
+
+    $rows = $db->query(
+        "SELECT DISTINCT m.position_id, p.name AS position_name, COALESCE(p.sort_order, 999) AS position_sort
+         FROM user_department_position_map m
+         JOIN `user` u ON u.id = m.user_id
+         LEFT JOIN position p ON p.id = m.position_id
+         WHERE m.department_id IN ({$in}) AND u.state NOT IN (" . EG_PEOPLE_EXCLUDE_STATES . ")
+         ORDER BY position_sort, position_name"
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $out = [];
+    foreach ($rows as $r) {
+        if ($r['position_id'] === null) continue; // 沒有設定職稱的職務列，無法勾選排除，略過
+        $out[] = [
+            'position_id' => (int)$r['position_id'],
+            'position_name' => (string)($r['position_name'] ?: ('#' . $r['position_id'])),
+        ];
+    }
+    return $out;
 }
 
 /**
@@ -945,18 +1062,27 @@ function ul_process_type_map(PDO $db): array
  * 五項同一種道理——processing_state 沒有時間戳可以切期間）：未指派(machine_id IS NULL)／
  * 已指派(machine_id IS NOT NULL) 的「目前這一關」（每張現役 BOM 只取最早那個還沒走完的
  * 站，見 ul_prod_current_step_rows() 註解）筆數——不是整條製程路線裡還沒輪到的所有站。
+ *
+ * $allowedTypes（2026-10-07 新增）：管理員在設定頁勾選「要列入哪些製程大類」
+ * （見 ul_settings() 的 prod_process_types，通常由呼叫端直接把那份設定傳進來），只有
+ * process_type_id 落在這份清單裡的才計入／回傳。**空陣列（預設）＝沿用舊行為顯示全部**，
+ * 向後相容——原本的四個呼叫端（UnitLoad_API.php）不傳這個參數時行為完全不變。
+ * @param array $allowedTypes 要列入的 process_type_id 清單，空陣列＝不篩選（顯示全部）
  * @return array 每列 ['process_type_id','process_type_name','unassigned','assigned','total']，依 total 由大到小排序
  */
-function ul_prod_by_process_type(PDO $db, string $from, string $to, array $prodUserIds = []): array
+function ul_prod_by_process_type(PDO $db, string $from, string $to, array $prodUserIds = [], array $allowedTypes = []): array
 {
     $typeMap = ul_process_type_map($db);
     $rows = ul_prod_current_step_rows($db);
+    $allowed = ul_ids_norm($allowedTypes);
+    $allowedSet = $allowed ? array_flip($allowed) : null;
 
     $buckets = [];
     foreach ($rows as $r) {
         $pno = $r['process_no'] !== null ? (int)$r['process_no'] : 0;
         $info = $typeMap[$pno] ?? ['process_type_id' => 0, 'process_type_name' => '（未設定製程大類）'];
         $ptid = $info['process_type_id'];
+        if ($allowedSet !== null && !isset($allowedSet[$ptid])) continue;
         if (!isset($buckets[$ptid])) $buckets[$ptid] = ['name' => $info['process_type_name'], 'unassigned' => 0, 'assigned' => 0];
         if ($r['machine_id'] === null) $buckets[$ptid]['unassigned']++;
         else $buckets[$ptid]['assigned']++;
@@ -980,9 +1106,15 @@ function ul_prod_by_process_type(PDO $db, string $from, string $to, array $prodU
  * 分組用「報工自己登記的 process_no」而不是 bom_ing.process_no——報工跟 bom_ing 對不起來
  * 正是本函式要抓的情況，拿對不起來的那一邊分組沒有意義。
  * 這是「系統流程哪裡斷掉」的缺口偵測，不是某個人的工作量，刻意不按 $prodUserIds 篩選。
+ *
+ * $allowedTypes（2026-10-07 新增，與 ul_prod_by_process_type() 同一套規則）：只有
+ * process_type_id 落在清單裡的才計入 by_process_type／examples／total；**examples 一併
+ * 套用篩選**（而不是只篩 by_process_type 的彙總），否則開了白名單之後範例清單還是會混進
+ * 被排除的製程大類，看起來像篩選沒生效。空陣列（預設）＝不篩選，向後相容既有呼叫端。
+ * @param array $allowedTypes 要列入的 process_type_id 清單，空陣列＝不篩選（顯示全部）
  * @return array ['by_process_type'=>[每類筆數，依數量由大到小], 'examples'=>最多20筆範例, 'total'=>int]
  */
-function ul_prod_untracked_reports(PDO $db, string $from, string $to, array $prodUserIds = []): array
+function ul_prod_untracked_reports(PDO $db, string $from, string $to, array $prodUserIds = [], array $allowedTypes = []): array
 {
     $typeMap = ul_process_type_map($db);
     $st = $db->prepare(
@@ -997,12 +1129,18 @@ function ul_prod_untracked_reports(PDO $db, string $from, string $to, array $pro
     $st->execute([$from, $to]);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
 
+    $allowed = ul_ids_norm($allowedTypes);
+    $allowedSet = $allowed ? array_flip($allowed) : null;
+
     $buckets = [];
     $examples = [];
+    $total = 0;
     foreach ($rows as $r) {
         $pno = (int)$r['process_no'];
         $info = $typeMap[$pno] ?? ['process_type_id' => 0, 'process_type_name' => '（未設定製程大類）', 'process_name' => '#' . $pno];
         $ptid = $info['process_type_id'];
+        if ($allowedSet !== null && !isset($allowedSet[$ptid])) continue;
+        $total++;
         if (!isset($buckets[$ptid])) $buckets[$ptid] = ['name' => $info['process_type_name'], 'count' => 0];
         $buckets[$ptid]['count']++;
         if (count($examples) < 20) {
@@ -1018,7 +1156,7 @@ function ul_prod_untracked_reports(PDO $db, string $from, string $to, array $pro
     foreach ($buckets as $ptid => $b) $out[] = ['process_type_id' => $ptid, 'process_type_name' => $b['name'], 'count' => $b['count']];
     usort($out, fn($x, $y) => $y['count'] <=> $x['count']);
 
-    return ['by_process_type' => $out, 'examples' => $examples, 'total' => count($rows)];
+    return ['by_process_type' => $out, 'examples' => $examples, 'total' => $total];
 }
 
 /**
@@ -1182,10 +1320,15 @@ function ul_prod_per_capita(PDO $db, string $from, string $to, array $prodUserId
 }
 
 /**
- * 包裝負荷：判定「包裝製程」一律用 process_no.ProcessName='包裝'（實測全庫對應
- * ProcessNo 168／169，皆屬 process_type_id=16「雷刻與包裝」；該大類底下的 ProcessNo=16
- * 「雷刻」不是包裝，不可用 process_type_id 當判準，否則會把雷刻一起算進去）——優先用
- * 名稱比對不寫死製程代號，現場往後加新的包裝代號只要掛進同一個 ProcessName 就自動算進來。
+ * 包裝負荷：判定「包裝製程」改用全站唯一實作 `packing_process_lib.php` 的
+ * `pk_packing_process_nos()`（2026-10-07 改用；管理員在 `views/pm/packing_schedule.php`
+ * 「包裝製程設定」勾選的 process_no 清單，存在 `pm_packing_process_setting`）——
+ * **本函式原本自己寫死 `process_no.ProcessName='包裝'` 比對，管理員在包裝排程頁改了設定
+ * 完全不會跟著變**，本次收斂成同一個來源（鐵律4）。實測目前設定恰好就是 ProcessNo
+ * 168／169（與舊的 ProcessName='包裝' 判定結果一致），改用共用函式後數字不變；往後
+ * 管理員若調整這份設定，本函式與包裝排程頁、線上檢驗的「包裝製程」認定會自動保持一致。
+ * **尚未設定任何包裝製程時**（`pk_packing_process_nos()` 回傳空陣列）回傳空結果並在
+ * `note` 說明原因，不可以查全部製程或丟例外。
  *
  *  ①待包裝筆數：現況快照（不受 $from/$to 限制，跟 ul_pm_summary() 的「目前狀態」同一種
  *    道理），bom_ing 的包裝這一關還沒有任何 is_finished=1 完工報工、且排除對應 BOM 已結案
@@ -1202,16 +1345,24 @@ function ul_prod_per_capita(PDO $db, string $from, string $to, array $prodUserId
  *                'daily'=>[每日：report_date/count/avg_workdays，依日期由舊到新],
  *                'avg_workdays'=>float|null,
  *                'longest'=>最多5筆[bom/bom_ing_fid/report_date/enter_at/finish_at/workdays]，
- *                'shortest'=>同結構最多5筆]
+ *                'shortest'=>同結構最多5筆,
+ *                'note'=>string（尚未設定包裝製程時才非空，說明原因）]
  */
 function ul_prod_packing_stats(PDO $db, string $from, string $to): array
 {
-    $out = ['pending' => 0, 'daily' => [], 'avg_workdays' => null, 'longest' => [], 'shortest' => []];
+    $out = ['pending' => 0, 'daily' => [], 'avg_workdays' => null, 'longest' => [], 'shortest' => [], 'note' => ''];
+
+    require_once __DIR__ . '/packing_process_lib.php';
+    $packingNos = pk_packing_process_nos($db);
+    if (!$packingNos) {
+        $out['note'] = '尚未設定「包裝製程」（包裝排程頁的「包裝製程設定」目前一個製程都沒勾），本項無資料可算。';
+        return $out;
+    }
+    $pNoIn = implode(',', array_map('intval', $packingNos));
 
     $stPending = $db->query(
         "SELECT COUNT(*) FROM bom_ing bi
-         JOIN process_no pn ON pn.ProcessNo = bi.process_no
-         WHERE pn.ProcessName='包裝'
+         WHERE bi.process_no IN ({$pNoIn})
            AND NOT EXISTS (
                SELECT 1 FROM pm_process_daily_report pdr
                WHERE pdr.bom_ing_fid = bi.bom_ing_fid AND pdr.process_no = bi.process_no AND pdr.is_finished = 1
@@ -1225,8 +1376,7 @@ function ul_prod_packing_stats(PDO $db, string $from, string $to): array
                 bi.bom AS bom_no, bi.bom_sn AS bom_sn, bi.Created_At AS bi_created_at
          FROM pm_process_daily_report r
          JOIN bom_ing bi ON bi.bom_ing_fid = r.bom_ing_fid
-         JOIN process_no pn ON pn.ProcessNo = r.process_no
-         WHERE pn.ProcessName='包裝' AND r.is_finished = 1
+         WHERE r.process_no IN ({$pNoIn}) AND r.is_finished = 1
            AND r.report_date BETWEEN ? AND ?
          ORDER BY r.report_date"
     );
@@ -1557,8 +1707,15 @@ function ul_qc_daily_items(PDO $db, string $from, string $to, array $qcUserIds):
  * 「人均檢驗天數」這一項分母（供 ul_qc_by_person() 重用逐筆明細再依人分組）。
  * $internalMakerFlagJoin：可選的 [maker_id_no=>bool internal] 覆寫對照表，呼叫端已經
  * 查過一次 maker_list 時可以直接傳進來省一次查詢；留空（預設）時自己查。
- * @return array ['rows'=>逐筆明細（含 person_id，供 ul_qc_by_person() 分組重用）,
- *                'avg_workdays'=>float|null,'longest'=>最長前5筆,'shortest'=>最短前5筆,
+ *
+ * 2026-10-07 新增：每筆逐筆明細（rows／longest／shortest）補上 'd_id'（料號文字，由
+ * bom_ing.bom 回查 bom.d_id）——使用者要求最長/最短清單要看得到卡住的是哪支料號，不必
+ * 再點進製令反查；查無對應 bom 紀錄時為空字串，不報錯。
+ * @return array ['rows'=>逐筆明細（含 person_id／d_id，供 ul_qc_by_person() 分組重用）,
+ *                'avg_workdays'=>float|null,
+ *                'longest'=>最長前5筆[bom/bom_ing_fid/process_no/process_name/d_id/
+ *                           enter_at/finish_at/workdays/person_id]，
+ *                'shortest'=>最短前5筆（同結構）,
  *                'per_capita_workdays'=>float|null]
  */
 function ul_qc_wait_time(PDO $db, string $from, string $to, array $qcUserIds = [], ?array $internalMakerFlagJoin = null): array
@@ -1677,6 +1834,25 @@ function ul_qc_wait_time(PDO $db, string $from, string $to, array $qcUserIds = [
     }
 
     if (!$rowsOut) return $out;
+
+    // 補上料號文字（2026-10-07 新增：待驗等待工作天的最長/最短清單要顯示料號，方便一眼看出
+    // 卡住的是哪支料號，不必再點進製令反查）。bom.d_id 是料號文字（與 bom_ing.bom 一對一
+    // 綁定同一張製令），直接用 bom_ing.bom 回查即可——不像 order_track 那邊「料號文字」與
+    // 「料號主檔 id」要分兩段處理（見本機記憶 bom_client_name_cache），這裡 bom 表本身就是
+    // 以製令編號為鍵、每張製令只會對到一個固定的料號文字。
+    $bomNos = array_values(array_unique(array_column($rowsOut, 'bom')));
+    $dIdMap = [];
+    if ($bomNos) {
+        $inB = implode(',', array_map(fn($v) => $db->quote($v), $bomNos));
+        foreach ($db->query("SELECT bom, d_id FROM bom WHERE bom IN ({$inB})")->fetchAll(PDO::FETCH_ASSOC) as $b) {
+            $dIdMap[$b['bom']] = (string)($b['d_id'] ?? '');
+        }
+    }
+    foreach ($rowsOut as &$r) {
+        $r['d_id'] = $dIdMap[$r['bom']] ?? '';
+    }
+    unset($r);
+
     $out['rows'] = $rowsOut;
 
     $sum = array_sum(array_column($rowsOut, 'workdays'));
