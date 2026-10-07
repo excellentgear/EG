@@ -105,12 +105,22 @@ body { background:#F6F1EA; }
 .bm-nav { display:flex; align-items:center; gap:3px; }
 .bm-nav .btn { padding:3px 7px; }
 /* 狀態卡片／籤 */
+.kw-wrap { position:relative; display:inline-block; }
+.kw-suggest { display:none; position:absolute; top:100%; left:0; z-index:50; min-width:220px; max-height:260px; overflow:auto;
+              background:#fff; border:1px solid var(--line); border-radius:6px; box-shadow:0 6px 18px rgba(0,0,0,.18); margin-top:2px; }
+.kw-suggest.show { display:block; }
+.kw-suggest .it { padding:6px 10px; font-size:12px; color:#6B4423; cursor:pointer; display:flex; gap:8px; align-items:baseline; }
+.kw-suggest .it:hover, .kw-suggest .it.hl { background:var(--sand); }
+.kw-suggest .it .id { font-weight:700; color:var(--amber-d); flex:0 0 auto; }
+.kw-suggest .it .nm { flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.kw-suggest .empty { padding:8px 10px; font-size:12px; color:var(--muted); }
 .st-cards { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
 .st-card { flex:1 1 110px; min-width:110px; background:#fff; border:1px solid var(--line); border-top:3px solid var(--muted);
            border-radius:8px; padding:8px 10px; cursor:pointer; user-select:none; }
 .st-card.on { outline:2px solid var(--amber-d); }
 .st-card .lab { font-size:11px; color:var(--muted); }
 .st-card .val { font-size:22px; font-weight:700; color:var(--ink); }
+.st-card[data-st="all"]          { border-top-color:var(--ink); }
 .st-card[data-st="not_due"]      { border-top-color:#C9BBA3; }
 .st-card[data-st="need_recon"]   { border-top-color:var(--coral); }
 .st-card[data-st="processing"]   { border-top-color:#a08a6f; }
@@ -230,9 +240,13 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
             <input type="month" id="fBm" class="form-control input-sm" style="width:130px;" onchange="loadList()">
             <button class="btn btn-xs btn-warm-o" onclick="shiftBm(1)"><i class="fa fa-chevron-right"></i></button>
           </div>
-          <input type="text" id="fKw" class="form-control input-sm" style="width:160px;" placeholder="搜尋客戶/廠商名稱…" onkeyup="if(event.key==='Enter')loadList()">
-          <select id="fOwner" class="form-control input-sm" style="width:130px;display:none;" onchange="loadList()"><option value="">— 全部負責人 —</option></select>
-          <button class="btn btn-sm btn-warm-o" onclick="loadList()"><i class="fa fa-search"></i> 查詢</button>
+          <div class="kw-wrap">
+            <input type="text" id="fKw" class="form-control input-sm" style="width:180px;" placeholder="模糊搜尋客戶/廠商編號或名稱…" autocomplete="off"
+                   oninput="onKwInput()" onfocus="onKwInput()" onblur="setTimeout(hideKwSuggest,150)">
+            <div class="kw-suggest" id="kwSuggest"></div>
+          </div>
+          <select id="fOwner" class="form-control input-sm" style="width:130px;display:none;" onchange="applyFilters()"><option value="">— 全部負責人 —</option></select>
+          <button class="btn btn-sm btn-warm-o" onclick="clearFilters()"><i class="fa fa-times"></i> 取消篩選</button>
         </div>
       </h4>
       <div class="st-cards" id="stCards"></div>
@@ -433,20 +447,26 @@ table.art-t tbody tr:nth-child(even) { background:#fdfbf8; }
         <li>應付：自動抓出該結帳月份有加工移轉憑單的廠商（與「製程移轉一覽表」同一套廠商結帳日口徑）。</li>
         <li>狀態預設留空（尚未開始），要有人實際按過狀態按鈕才會改變，不會自動顯示「處理中」。</li>
       </ul>
+      <h4>搜尋與篩選</h4>
+      <ul>
+        <li>搜尋框打字即時篩選（不用按查詢鍵），可用客戶/廠商編號或名稱模糊搜尋，並會即時列出符合的選項可直接點選。</li>
+        <li>狀態卡片最左側「顯示全部」可一鍵清掉狀態篩選；也可以按「取消篩選」一次清空搜尋字串、負責人與狀態篩選。</li>
+        <li>所有篩選（狀態卡片／搜尋／負責人）都只影響畫面顯示，不會重新打後端，換頁也不會跑掉。</li>
+      </ul>
       <h4>狀態按鈕</h4>
       <ul>
         <li>操作欄顯示目前這個人可以按的所有狀態（可能不只一個），可以跳過中間階段直接按較後面的狀態——跳過的階段日期會自動帶入與實際按下那格相同的時間，工作天數統計才算得出來。</li>
-        <li>是否允許跳過順序，應收／應付可在「設定」分開開關，關閉後只能依序一步一步按（本頁管理員不受此限）。</li>
-        <li>操作欄位的下拉選單只用來補按鈕涵蓋不到的狀態（例如回復到較早狀態），已經有按鈕的狀態不會在下拉裡重複出現。</li>
+        <li>是否允許跳過順序，應收／應付可在「設定」分開開關，關閉後只能依序一步一步按。</li>
+        <li>快速按鈕只有全站管理員才會看到全部狀態；本頁管理員（art_admin）與生管／業務／會計一樣，按鈕依「設定→角色權限矩陣」決定——本身兼任哪個角色就看得到該角色能按的狀態，若都沒有則該列不會出現任何快速按鈕。</li>
+        <li>「改派」下拉選單（可回復到較早的狀態、或跳過順序被關閉時用來補按鈕涵蓋不到的狀態）只有全站管理員看得到。</li>
         <li>每個狀態能不能由哪個角色按，由管理員在「設定→角色權限矩陣」調整（同一個狀態可以同時勾生管與業務）。</li>
-        <li>往回退到較早的狀態僅本頁管理員（art_admin）可做。</li>
       </ul>
       <h4>結帳日快速修改</h4>
       <p>管理員可在清單上直接修改客戶/廠商的結帳模式與固定結帳日，會同步寫回主檔管理（客戶/廠商分頁），並留下修改紀錄，可到「修改紀錄」分頁查看與一鍵復原。</p>
       <h4>臨時結帳調整（僅應收）</h4>
       <p>某客戶某個月結帳日臨時提前或延後，可在清單每一列的「臨時調整」按鈕設定，與主檔管理→客戶編輯的設定是同一份資料。</p>
       <h4>應收負責人</h4>
-      <p>管理員在「設定」先選部門、從部門人員裡挑人加入候選名單；進度清單勾選多筆客戶後按「批次設定負責人」即可一次指派。</p>
+      <p>管理員在「設定」先選部門、從部門人員裡挑人加入候選名單；進度清單勾選多筆客戶後按「批次設定負責人」即可一次指派。<strong>指派是從「目前正在看的那個結帳月份」往後自動套用相同設定，不會往前更改已經過去月份的負責人</strong>——例如在 10 月畫面指派了新的負責人，10 月（含）以後都會沿用，9 月以前維持原本的設定不變。負責人篩選下拉只列出目前這個月資料裡實際有出現的負責人，不是全部候選名單。</p>
       <h4>統計分析</h4>
       <p>按月/季/半年/年切換期間，看各分組（如「結帳日→已送會計」）的平均工作天數、本期自動分析（與上一期比較），以及本年度各期別的趨勢圖。分組可在「設定」新增/修改。</p>
       <h4>權限角色</h4>
@@ -473,7 +493,6 @@ var PERMS = <?= json_encode($perms) ?>;
 var STATUSES = {}, ANCHORS = {}, MATRIX = {}, GROUPS = [];
 var ALLOW_SKIP = {ar:true, ap:true}, SHOW_AMOUNT = true, DEFAULT_PER_PAGE = 6;
 var SIDE = 'ar';
-var LAST_ROWS = [];
 var SELECTED = {};   // track_id => true（跨換頁保留）
 var OWNER_POOL = [];
 
@@ -491,6 +510,7 @@ function showToast(msg, type){
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function fmtMoney(v){ v = Number(v||0); return v.toLocaleString('en-US', {maximumFractionDigits:0}); }
 function statusLabel(k){
+    if (k === 'all') return '顯示全部';
     if (k === 'not_due') return '未到結帳日';
     if (k === 'need_recon') return '需對帳';
     return (k==='' || k==null) ? '需對帳' : (STATUSES[k] || k);
@@ -533,6 +553,7 @@ function setSide(s){
     document.getElementById('listTitle').textContent = (s==='ar' ? '應收' : '應付') + ' 進度清單';
     document.getElementById('fOwner').style.display = (s==='ar') ? '' : 'none';
     document.getElementById('fOwner').value = '';
+    hideKwSuggest();
     clearSelection();
     LIST_PAGE = 1;
     loadList();
@@ -563,15 +584,24 @@ function shiftBm(delta){
 }
 var ST_FILTER = '';
 var CARD_ORDER = [];
+var LIST_CARD_ORDER = [];   // 進度清單的卡片比 CARD_ORDER 多一個最左側的「顯示全部」，統計分析的 KPI 卡不要這個
+var LAST_COUNTS = {};
 function renderStCards(counts){
+    LAST_COUNTS = counts;
+    var total = 0; Object.keys(counts).forEach(function(k){ total += counts[k]; });
     var html = '';
-    CARD_ORDER.forEach(function(k){
-        html += '<div class="st-card' + (ST_FILTER===k?' on':'') + '" data-st="' + k + '" onclick="toggleStFilter(\'' + k + '\')">' +
-            '<div class="lab">' + esc(statusLabel(k)) + '</div><div class="val">' + (counts[k]||0) + '</div></div>';
+    LIST_CARD_ORDER.forEach(function(k){
+        var val = (k==='all') ? total : (counts[k]||0);
+        html += '<div class="st-card' + ((k==='all'?ST_FILTER==='':ST_FILTER===k)?' on':'') + '" data-st="' + k + '" onclick="toggleStFilter(\'' + k + '\')">' +
+            '<div class="lab">' + esc(statusLabel(k)) + '</div><div class="val">' + val + '</div></div>';
     });
     document.getElementById('stCards').innerHTML = html;
 }
-function toggleStFilter(k){ ST_FILTER = (ST_FILTER===k) ? '' : k; loadList(); }
+function toggleStFilter(k){
+    if (k === 'all') { ST_FILTER = ''; } else { ST_FILTER = (ST_FILTER===k) ? '' : k; }
+    renderStCards(LAST_COUNTS);
+    applyFilters();
+}
 
 function allowedTargets(row){
     // 結帳日還沒到、狀態還空白時，非本頁管理員不給操作（使用者要求：結帳開始後才顯示為「需對帳」，這時才可點選其他操作）
@@ -591,19 +621,86 @@ function allowedTargets(row){
     return out;
 }
 
+var ALL_ROWS = [];        // 這個月份／側別撈回來的全部資料（不受篩選影響）
+var FILTERED_ROWS = [];   // 套用狀態卡片／搜尋／負責人篩選後的結果，renderListTbl() 只讀這個
+
 function loadList(){
     var bm = document.getElementById('fBm').value || defaultBm();
     document.getElementById('fBm').value = bm;
-    var kw = document.getElementById('fKw').value.trim();
-    var ownerId = (SIDE==='ar') ? document.getElementById('fOwner').value : '';
-    apiGet('list', {side:SIDE, bm:bm, status:ST_FILTER, kw:kw, owner_id:ownerId, _:Date.now()}).done(function(r){
+    // 篩選一律即時在前端做（不需要查詢按鈕）：這裡只在換結帳月份／側別時才打後端拿整個月的資料
+    apiGet('list', {side:SIDE, bm:bm, _:Date.now()}).done(function(r){
         if (!r || !r.ok) return;
-        LAST_ROWS = r.rows;
+        ALL_ROWS = r.rows;
         renderStCards(r.counts);
-        LIST_PAGE = 1;
-        renderListTbl();
+        rebuildOwnerFilterOptions();
+        applyFilters();
     });
 }
+
+/* 依狀態卡片／搜尋框／負責人下拉，即時過濾 ALL_ROWS（全部在前端做，不打後端） */
+function applyFilters(){
+    var rows = ALL_ROWS;
+    if (ST_FILTER) rows = rows.filter(function(r){ return r.card_status === ST_FILTER; });
+    var kw = document.getElementById('fKw').value.trim();
+    if (kw) rows = rows.filter(function(r){ return rowMatchesKw(r, kw); });
+    var ownerSel = (SIDE==='ar') ? document.getElementById('fOwner').value : '';
+    if (ownerSel !== '') {
+        var ownerNum = parseInt(ownerSel, 10);
+        rows = rows.filter(function(r){ return ownerNum === 0 ? !r.owner_id : (r.owner_id === ownerNum); });
+    }
+    FILTERED_ROWS = rows;
+    LIST_PAGE = 1;
+    renderListTbl();
+}
+function rowMatchesKw(r, kw){
+    kw = kw.toLowerCase();
+    return (r.party_name||'').toLowerCase().indexOf(kw) >= 0 ||
+           (r.party_short||'').toLowerCase().indexOf(kw) >= 0 ||
+           (r.party_id||'').toLowerCase().indexOf(kw) >= 0;
+}
+function clearFilters(){
+    ST_FILTER = '';
+    document.getElementById('fKw').value = '';
+    document.getElementById('fOwner').value = '';
+    hideKwSuggest();
+    renderStCards(LAST_COUNTS);
+    applyFilters();
+}
+
+/* 負責人篩選下拉：只列出這個月份資料裡實際有出現的負責人（使用者要求），不是候選名單全部 */
+function rebuildOwnerFilterOptions(){
+    var sel = document.getElementById('fOwner');
+    var keep = sel.value;
+    var seen = {}, opts = [];
+    ALL_ROWS.forEach(function(r){
+        if (r.owner_id && !seen[r.owner_id]) { seen[r.owner_id] = true; opts.push({id:r.owner_id, name:r.owner_name}); }
+    });
+    opts.sort(function(a,b){ return String(a.name).localeCompare(String(b.name)); });
+    sel.innerHTML = '<option value="">— 全部負責人 —</option><option value="0">（未指派）</option>' +
+        opts.map(function(o){ return '<option value="'+o.id+'">'+esc(o.name)+'</option>'; }).join('');
+    if (opts.some(function(o){ return String(o.id)===keep; }) || keep==='0' || keep==='') sel.value = keep;
+}
+
+/* 搜尋框模糊比對自動完成：從 ALL_ROWS 即時找出符合的客戶/廠商，列成下拉可點選 */
+function onKwInput(){
+    var kw = document.getElementById('fKw').value.trim();
+    applyFilters();
+    var box = document.getElementById('kwSuggest');
+    if (!kw) { box.classList.remove('show'); return; }
+    var matches = ALL_ROWS.filter(function(r){ return rowMatchesKw(r, kw); }).slice(0, 10);
+    if (!matches.length) { box.innerHTML = '<div class="empty">沒有符合的客戶/廠商</div>'; box.classList.add('show'); return; }
+    box.innerHTML = matches.map(function(r){
+        return '<div class="it" onmousedown="selectKwSuggest(\''+esc(r.party_name).replace(/'/g,"\\'")+'\')">' +
+            '<span class="id">' + esc(r.party_id||'—') + '</span><span class="nm">' + esc(r.party_name) + '</span></div>';
+    }).join('');
+    box.classList.add('show');
+}
+function selectKwSuggest(name){
+    document.getElementById('fKw').value = name;
+    hideKwSuggest();
+    applyFilters();
+}
+function hideKwSuggest(){ document.getElementById('kwSuggest').classList.remove('show'); }
 
 /* 頁內分頁（換頁鈕在表格右上角，預設每頁筆數由管理員在設定調整） */
 var LIST_PAGE = 1, LIST_PER_PAGE = 6;
@@ -611,7 +708,7 @@ function listPagePrev(){ if (LIST_PAGE>1) { LIST_PAGE--; renderListTbl(); } }
 function listPageNext(){ LIST_PAGE++; renderListTbl(); }
 
 function renderListTbl(){
-    var rows = LAST_ROWS;
+    var rows = FILTERED_ROWS;
     var isAr = (SIDE==='ar');
     var canBatch = isAr && (PERMS.canAdmin || PERMS.isSales);
 
@@ -1056,6 +1153,7 @@ $(function(){
         ALLOW_SKIP = r.allow_skip || {ar:true, ap:true}; SHOW_AMOUNT = !!r.show_amount;
         DEFAULT_PER_PAGE = r.default_per_page || 6;
         CARD_ORDER = ['not_due', 'need_recon'].concat(Object.keys(STATUSES));
+        LIST_CARD_ORDER = ['all'].concat(CARD_ORDER);
         rebuildPerPageOptions();
         fillGranYear(r.years);
         loadOwnerPool();

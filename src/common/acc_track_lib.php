@@ -135,6 +135,20 @@ function act_ensure_schema(PDO $db): void
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
           COMMENT='應收負責人候選名單：管理員在設定頁挑部門、從部門人員裡選入'");
 
+        $db->exec("CREATE TABLE IF NOT EXISTS acc_recon_track_owner_assign (
+            id              INT AUTO_INCREMENT PRIMARY KEY,
+            party_key       VARCHAR(30) NOT NULL COMMENT '同 acc_recon_track.party_key（目前僅應收使用）',
+            owner_id        INT NULL COMMENT 'NULL=從這個月起清空負責人',
+            owner_name      VARCHAR(50) NULL,
+            effective_from  CHAR(7) NOT NULL COMMENT '從這個結帳月份(YYYY-MM)起生效，之前的月份不受影響',
+            created_by      INT NULL,
+            created_by_name VARCHAR(50) NULL,
+            created_at      DATETIME NOT NULL,
+            INDEX idx_party (party_key, effective_from)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+          COMMENT='應收負責人指派歷程：只新增不覆寫，使用者要求「由設定當下的結帳月份往後自動套用、不往前更改」——
+                   每次指派都是新插入一列，某個月份的有效負責人＝該月之前（含）最新的一列，之前的月份維持原狀'");
+
         // 預設矩陣：只在整張表還是空的（第一次建立）時種入，管理員調整過後不會被蓋回來
         $cnt = (int)$db->query("SELECT COUNT(*) FROM acc_recon_track_role_matrix")->fetchColumn();
         if ($cnt === 0) {
@@ -534,6 +548,7 @@ function act_ar_rows(PDO $db, string $billingMonth): array
         $partyName = $r['customer'] ?: $r['customer_full'];   // 顯示簡稱（使用者指定），全名只在查無簡稱時退回
         $cutoff    = act_cutoff_date_ar($db, $c, $billingMonth);
         $track     = act_track_get_or_create($db, 'ar', $partyKey, $partyName, $billingMonth, $cutoff);
+        $owner     = act_owner_for($db, $partyKey, $billingMonth);
         $out[] = [
             'track_id'        => (int)$track['id'],
             'side'            => 'ar',
@@ -546,8 +561,8 @@ function act_ar_rows(PDO $db, string $billingMonth): array
             'cutoff_date'     => $track['cutoff_date'],
             'status'          => $track['status'],
             'card_status'     => act_card_status($db, (string)$track['status'], $track['cutoff_date']),
-            'owner_id'        => $track['owner_id'] ?? null,
-            'owner_name'      => $track['owner_name'] ?? null,
+            'owner_id'        => $owner['owner_id'],
+            'owner_name'      => $owner['owner_name'],
             'ship_amt'        => (float)$r['ship_amt'],
             'ret_amt'         => (float)$r['ret_amt'],
             'net_amt'         => (float)$r['net_amt'],
@@ -962,14 +977,65 @@ function act_owner_pool_remove(PDO $db, int $id): array
     $db->prepare("DELETE FROM acc_recon_track_owner_pool WHERE id=?")->execute([$id]);
     return ['success' => true];
 }}
+if (!function_exists('act_owner_assign_map')) {
+/**
+ * 負責人指派歷程：party_key => 依 effective_from 新到舊排序的列表。
+ * 靜態快取只活在單一請求內（act_ar_rows 一次列表會呼叫很多次 act_owner_for，
+ * 這裡先批次撈一次，避免每個客戶各查一次 DB）。
+ */
+function act_owner_assign_map(PDO $db): array
+{
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $cache = [];
+    try {
+        $rows = $db->query("SELECT party_key, owner_id, owner_name, effective_from
+                            FROM acc_recon_track_owner_assign ORDER BY effective_from DESC, id DESC")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $r) $cache[$r['party_key']][] = $r;
+    } catch (Throwable $e) {}
+    return $cache;
+}}
+if (!function_exists('act_owner_for')) {
+/** 某客戶在某結帳月份的有效負責人＝該月（含）之前最新一筆指派；沒有任何指派過就是未指派 */
+function act_owner_for(PDO $db, string $partyKey, string $billingMonth): array
+{
+    foreach (act_owner_assign_map($db)[$partyKey] ?? [] as $r) {
+        if ($r['effective_from'] <= $billingMonth) {
+            return ['owner_id' => $r['owner_id'] ? (int)$r['owner_id'] : null, 'owner_name' => $r['owner_name']];
+        }
+    }
+    return ['owner_id' => null, 'owner_name' => null];
+}}
+
 if (!function_exists('act_owner_set_batch')) {
-/** 批次指派負責人（目前僅應收使用；AP 的 track_id 若誤送一併忽略不處理） */
-function act_owner_set_batch(PDO $db, array $trackIds, ?int $ownerId, ?string $ownerName): array
+/**
+ * 批次指派負責人（目前僅應收使用；AP 的 track_id 若誤送一併忽略不處理）。
+ * 使用者明確要求：「負責人的設定由設定日期往後自動＝相同設定，不往前更改設定」——
+ * 不是直接改掉某一列的負責人欄位，而是在「指派當下正在看的那個結帳月份」插入一筆新的
+ * 指派歷程，該月（含）以後都沿用這筆，該月之前的月份維持原本已經生效的指派不受影響。
+ */
+function act_owner_set_batch(PDO $db, array $trackIds, ?int $ownerId, ?string $ownerName, array $perms): array
 {
     $trackIds = array_values(array_filter(array_map('intval', $trackIds)));
     if (!$trackIds) return ['success' => false, 'message' => '沒有選取任何列'];
     $in = implode(',', array_fill(0, count($trackIds), '?'));
-    $args = array_merge([$ownerId ?: null, $ownerId ? $ownerName : null], $trackIds, ['ar']);
-    $db->prepare("UPDATE acc_recon_track SET owner_id=?, owner_name=? WHERE id IN ($in) AND side=?")->execute($args);
-    return ['success' => true, 'updated' => count($trackIds)];
+    $st = $db->prepare("SELECT id, party_key, billing_month FROM acc_recon_track WHERE id IN ($in) AND side='ar'");
+    $st->execute($trackIds);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return ['success' => false, 'message' => '沒有選取任何應收列'];
+
+    $now = date('Y-m-d H:i:s');
+    $ins = $db->prepare("INSERT INTO acc_recon_track_owner_assign
+                         (party_key, owner_id, owner_name, effective_from, created_by, created_by_name, created_at)
+                         VALUES (?,?,?,?,?,?,?)");
+    // 同一批可能選了同一個客戶在同一個月份（理論上清單一個客戶一個月只有一列，仍保險去重）
+    $seen = [];
+    foreach ($rows as $r) {
+        $key = $r['party_key'] . '|' . $r['billing_month'];
+        if (isset($seen[$key])) continue;
+        $seen[$key] = true;
+        $ins->execute([$r['party_key'], $ownerId ?: null, $ownerId ? $ownerName : null, $r['billing_month'],
+                        $perms['uid'] ?? null, $perms['uname'] ?? '', $now]);
+    }
+    return ['success' => true, 'updated' => count($seen)];
 }}

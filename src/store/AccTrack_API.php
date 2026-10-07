@@ -300,7 +300,7 @@ switch ($action) {
         if (!is_array($ids)) actErr('格式錯誤');
         $ownerId = (int)($_POST['owner_id'] ?? 0) ?: null;
         $ownerName = trim((string)($_POST['owner_name'] ?? ''));
-        $r = act_owner_set_batch($db, $ids, $ownerId, $ownerName);
+        $r = act_owner_set_batch($db, $ids, $ownerId, $ownerName, $perms);
         if (!$r['success']) actErr($r['message']);
         actOut($r);
     }
