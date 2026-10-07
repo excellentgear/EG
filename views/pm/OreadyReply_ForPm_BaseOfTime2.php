@@ -9972,17 +9972,20 @@ echo "</script>\n";
     }
 
     // ── 建立製程列表項目（共用）────────────────────────────────────────────
+    // 2026-10-07 使用者回報「BOM 製程列表上面按鈕已經超過區塊」：根因是 Bootstrap .row 的
+    // -15px 負外距沒被蓋掉、按鈕欄只有 16.67% 寬卻要塞兩顆中文按鈕（移/回廠）。只修版面，
+    // 不動任何既有行為——按鈕欄加寬（2→3欄）、製程中文欄對應縮窄（5→4欄）補足，並允許換行保底。
     function _buildProcItemDiv(proc, rowData, showTransfer) {
         var div = document.createElement('div');
         div.className = 'form-group row';
-        div.style.cssText = 'margin-bottom:4px;display:flex;align-items:center;';
+        div.style.cssText = 'margin-bottom:4px;margin-left:0;margin-right:0;display:flex;align-items:center;flex-wrap:wrap;';
 
         var isIng = (proc.processing_state === 'ing');
 
         // 按鈕欄
         var btnCol = document.createElement('div');
-        btnCol.className = 'col-md-2 col-sm-2 col-xs-3 text-right';
-        btnCol.style.cssText = 'display:flex;gap:3px;justify-content:flex-end;';
+        btnCol.className = 'col-md-3 col-sm-3 col-xs-4 text-right';
+        btnCol.style.cssText = 'display:flex;gap:3px;justify-content:flex-end;flex-wrap:wrap;padding-left:2px;padding-right:2px;';
 
         if (showTransfer) {
 
@@ -10026,7 +10029,7 @@ echo "</script>\n";
 
         // 製程中文 + 廠商
         var nameCol = document.createElement('div');
-        nameCol.className = 'col-md-5 col-sm-5 col-xs-4';
+        nameCol.className = 'col-md-4 col-sm-4 col-xs-3';
         nameCol.style.cssText = 'padding-top:5px;font-size:12px;';
         nameCol.textContent = proc.ProcessName || '';
         if (isIng && proc.maker_id) {

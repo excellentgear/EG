@@ -1199,10 +1199,17 @@ if ($reply_id != "") {
                  + (parseFloat(item.QC_aod_sqty) || 0);
         };
         window.qcProgress = function(item) {
-            var total = parseFloat(item && item.sqty) || 0;
+            // 2026-10-07 使用者交辦：外包廠商回廠回報的報廢量要扣掉才算「這一站真正要驗的量」，
+            // 不用等異常單結案配發報廐單號——否則報廢掉的量永遠驗不滿，「已驗滿」永遠不會出現。
+            // sqty 本身（BOM發包量）不動，只在算進度時扣，兩個數字分開顯示不要混在一起。
+            var rawTotal = parseFloat(item && item.sqty) || 0;
+            var scrapQty = parseFloat(item && item.outsource_scrap_qty) || 0;
+            var total = Math.max(0, rawTotal - scrapQty);
             var done  = window.qcInspectedQty(item);
             return {
                 total: total,
+                rawTotal: rawTotal,
+                scrapQty: scrapQty,
                 done:  done,
                 short: Math.max(0, total - done),
                 full:  (total > 0 && done >= total),   // 已驗滿，只差按完成
@@ -2342,10 +2349,18 @@ if ($reply_id != "") {
                     // ── 報工進度／補按回廠 徽章（純顯示，不影響任何既有判定）──
                     var _prog = window.qcProgress(item);
                     var _badges = '';
+                    // 2026-10-07：有扣外包回廠報廢時，提示裡要講清楚是哪家廠商回報的，
+                    // 品管看到總數跟BOM發包量對不上才找得到人問原因。
+                    var _scrapNote = _prog.scrapQty > 0
+                        ? `（發包量 ${he(String(_prog.rawTotal))} 已扣外包回廠報廢 ${he(String(_prog.scrapQty))} 件：${he(String(item.outsource_scrap_vendors || ''))}）`
+                        : '';
                     if (_prog.full) {
-                        _badges += `<span class="qc-prog-badge qc-prog-full" title="報工已達總數 ${he(String(_prog.total))}，只差按【完成】。按了才會離開待驗清單並寫進 QC完工紀錄">✓ 已驗滿·待按完成</span>`;
+                        _badges += `<span class="qc-prog-badge qc-prog-full" title="報工已達總數 ${he(String(_prog.total))}${_scrapNote}，只差按【完成】。按了才會離開待驗清單並寫進 QC完工紀錄">✓ 已驗滿·待按完成</span>`;
                     } else if (_prog.part) {
-                        _badges += `<span class="qc-prog-badge qc-prog-part" title="已報工 ${he(String(_prog.done))}，總數 ${he(String(_prog.total))}，還差 ${he(String(_prog.short))} 沒驗">已驗 ${he(String(_prog.done))}/${he(String(_prog.total))}</span>`;
+                        _badges += `<span class="qc-prog-badge qc-prog-part" title="已報工 ${he(String(_prog.done))}，總數 ${he(String(_prog.total))}${_scrapNote}，還差 ${he(String(_prog.short))} 沒驗">已驗 ${he(String(_prog.done))}/${he(String(_prog.total))}</span>`;
+                    }
+                    if (_prog.scrapQty > 0) {
+                        _badges += `<span class="qc-prog-badge" style="background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;" title="${_scrapNote}"><i class="fa fa-truck"></i> 已扣外包報廢 ${he(String(_prog.scrapQty))}</span>`;
                     }
                     if (+item.next_started) {
                         var _ni = String(item.next_started_info || '').split('|');

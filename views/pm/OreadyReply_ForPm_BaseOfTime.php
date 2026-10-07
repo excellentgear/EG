@@ -1535,6 +1535,17 @@ try {
 } catch (Exception $e) { /* 沒設定過就用 none，不影響任何人 */ }
 echo "    window.EG_BV_DEFAULT = " . json_encode($_bv_default) . "; // 批次檢視公司預設\n";
 echo "    window.EG_BV_CAN_SET_DEFAULT = " . json_encode($display_permission_code === 'A') . "; // 只有系統管理員能改公司預設\n";
+// 2026-10-07 使用者交辦：回廠／報廢數量功能的兩個全站開關（管理員設定，比照 batch_view_default
+// 同一套 system_parameters 讀寫慣例）。只套用在本頁新加的回廠跳窗，刻意不影響 BaseOfTime2.php
+// 既有流程（那頁僅供測試、之後會廢棄，不要去動它現有的使用者）。
+//  oready_return_qty_settable  ＝回廠按鈕按下去要不要跳窗讓人設定數量（關＝直接用預設值送出）
+//  oready_return_qty_adjustable＝要不要顯示「直接修正報廢總數」的訂正功能（覆蓋式，比累加更危險）
+require_once __DIR__ . '/../../src/common/bom_outsource_lib.php';
+$_or_settable = eg_oready_or_toggle($conn->getPDO(), 'oready_return_qty_settable');
+$_or_adjustable = eg_oready_or_toggle($conn->getPDO(), 'oready_return_qty_adjustable');
+echo "    window.EG_OR_QTY_SETTABLE = " . json_encode((bool)$_or_settable) . "; // 回廠是否可設定數量（跳窗）\n";
+echo "    window.EG_OR_QTY_ADJUSTABLE = " . json_encode((bool)$_or_adjustable) . "; // 是否開放「直接修正報廢總數」\n";
+echo "    window.EG_OR_QTY_CAN_SET = " . json_encode($permission_code === 'A') . "; // 只有系統管理員能改這兩個開關\n";
 echo "    window.currentUserStatus = " . json_encode($user_status ?? null) . ";\n";
 echo "    window.canCreate = " . json_encode($can_create) . ";\n";
 echo "    window.canUpdate = " . json_encode($can_update) . ";\n";
@@ -10540,17 +10551,21 @@ echo "</script>\n";
     }
 
     // ── 建立製程列表項目（共用）────────────────────────────────────────────
+    // 2026-10-07 使用者回報「BOM 製程列表上面按鈕已經超過區塊」：根因是 Bootstrap .row 的
+    // -15px 負外距沒被蓋掉、按鈕欄只有 16.67% 寬卻要塞兩顆中文按鈕。修法：行本身蓋掉負外距
+    // 並允許換行（flex-wrap），按鈕欄加寬一成（2→3 欄），製程中文欄對應縮窄（5→4 欄）補足，
+    // 兩欄總寬不變，只是重新分配；真的還是放不下時 flex-wrap 讓按鈕自己換行，不會再溢出容器。
     function _buildProcItemDiv(proc, rowData, showTransfer) {
         var div = document.createElement('div');
         div.className = 'form-group row';
-        div.style.cssText = 'margin-bottom:4px;display:flex;align-items:center;';
+        div.style.cssText = 'margin-bottom:4px;margin-left:0;margin-right:0;display:flex;align-items:center;flex-wrap:wrap;';
 
         var isIng = (proc.processing_state === 'ing');
 
         // 按鈕欄
         var btnCol = document.createElement('div');
-        btnCol.className = 'col-md-2 col-sm-2 col-xs-3 text-right';
-        btnCol.style.cssText = 'display:flex;gap:3px;justify-content:flex-end;';
+        btnCol.className = 'col-md-3 col-sm-3 col-xs-4 text-right';
+        btnCol.style.cssText = 'display:flex;gap:3px;justify-content:flex-end;flex-wrap:wrap;padding-left:2px;padding-right:2px;';
 
         if (showTransfer) {
 
@@ -10562,6 +10577,20 @@ echo "</script>\n";
                 transferBtn.title = '移轉此製程';
                 transferBtn.textContent = '移';
                 btnCol.appendChild(transferBtn);
+
+                // 回廠／報廢：這一關已經送出去過（曾指定廠商）才顯示，記錄回廠數量／報廢數量到
+                // 加工單流水帳（2026-10-07 使用者交辦，比照 OreadyReply_ForPm_BaseOfTime2.php
+                // 既有功能port過來；回廠跳窗/開關邏輯見 openOutsourceReturnModal()）。
+                if (proc.maker_id_no) {
+                    var returnBtn = document.createElement('button');
+                    returnBtn.type = 'button';
+                    returnBtn.className = 'btn btn-default btn-xs';
+                    returnBtn.style.cssText = 'background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;';
+                    returnBtn.title = '記錄回廠數量／報廢數量';
+                    returnBtn.textContent = '回廠';
+                    (function(p, rd){ returnBtn.onclick = function(){ openOutsourceReturnModal(p, rd); }; })(proc, rowData);
+                    btnCol.appendChild(returnBtn);
+                }
 
         }
         div.appendChild(btnCol);
@@ -10582,7 +10611,7 @@ echo "</script>\n";
 
         // 製程中文 + 廠商
         var nameCol = document.createElement('div');
-        nameCol.className = 'col-md-5 col-sm-5 col-xs-4';
+        nameCol.className = 'col-md-4 col-sm-4 col-xs-3';
         nameCol.style.cssText = 'padding-top:5px;font-size:12px;';
         nameCol.textContent = proc.ProcessName || '';
         if (isIng && proc.maker_id) {
@@ -10612,6 +10641,145 @@ echo "</script>\n";
             div.title = '目前製程';
         }
         return div;
+    }
+
+    // ── 回廠／報廢 Modal（2026-10-07，port自 OreadyReply_ForPm_BaseOfTime2.php 並加強）──────
+    // 加工單流水帳唯一實作：src/common/bom_outsource_lib.php，要送出/回廠/報廢一律呼叫那支庫。
+    // 與 BaseOfTime2.php 的差異（使用者交辦）：
+    //  ①「本次回廠數量」改成自動帶入智慧預設值（上一關QC檢驗或報工後的良品數），不是固定 0；
+    //  ②兩個管理員開關：EG_OR_QTY_SETTABLE（回廠按鈕是否跳窗讓人設定數量，關＝簡化成一句確認）、
+    //    EG_OR_QTY_ADJUSTABLE（是否顯示「直接修正報廢總數」這個較危險的覆蓋功能）；
+    //  ③送出報廢數量>0時，後端會自動開立品質異常單提醒品管，回應裡若有 abnormal_order 就顯示連結。
+    // 這兩個開關與自動開單**只套用在這裡**，刻意不影響 BaseOfTime2.php 既有流程（那頁僅供測試、
+    // 之後會廢棄，不要去動它現有的使用者——2026-10-07 使用者明確拍板）。
+    function openOutsourceReturnModalByFid(fid, makerIdNo, makerId, bom, bomSn, processNo, processName) {
+        openOutsourceReturnModal(
+            { bom_ing_fid: fid, maker_id_no: makerIdNo, maker_id: makerId, process_no: processNo, ProcessName: processName },
+            { bom: bom, bom_sn: bomSn }
+        );
+    }
+    function openOutsourceReturnModal(proc, rowData) {
+        // 開關關閉時不跳窗，改成簡化的一句話確認（可回廠但不能自訂報廢數量——要報廢請管理員開啟設定）
+        if (!window.EG_OR_QTY_SETTABLE) {
+            $.post('', { action: 'get_outsource_batch', bom_ing_fid: proc.bom_ing_fid }, function(r) {
+                var prevQty = (r && r.success) ? (parseFloat(r.prev_qty) || 0) : 0;
+                var prevLabel = (r && r.success) ? (r.prev_label || '') : '';
+                if (!confirm('確認回廠數量為 ' + prevQty + ' 件？（' + prevLabel + '；如需回報報廢數量，請洽系統管理員開啟「回廠可設定數量」功能）')) return;
+                $.post('', { action: 'record_outsource_return', mode: 'add', bom_ing_fid: proc.bom_ing_fid, return_qty: prevQty, scrap_qty: 0 }, function(rr) {
+                    showTemporaryMessage(rr.message || (rr.success ? '已記錄' : '失敗'), !!rr.success);
+                    if (rr.success && typeof refreshEditModalProcessList === 'function' && rowData && rowData.bom) {
+                        refreshEditModalProcessList(rowData.bom, rowData.bom_sn);
+                    }
+                }, 'json');
+            }, 'json');
+            return;
+        }
+
+        var ex = document.getElementById('outsource-return-modal');
+        if (ex) ex.remove();
+        var overlay = document.createElement('div');
+        overlay.id = 'outsource-return-modal';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;justify-content:center;align-items:flex-start;z-index:10070;padding:40px 0;overflow-y:auto;';
+        overlay.onclick = function(e){ if (e.target === overlay) overlay.remove(); };
+        var box = document.createElement('div');
+        box.style.cssText = 'background:#fff;padding:20px;border-radius:6px;box-shadow:0 4px 20px rgba(0,0,0,.3);width:440px;max-width:95%;';
+        box.onclick = function(e){ e.stopPropagation(); };
+        var fixSectionHtml = window.EG_OR_QTY_ADJUSTABLE ? (
+            '<hr style="margin:14px 0;">'
+          + '<div style="font-size:13px;font-weight:bold;color:#555;margin-bottom:6px;">直接修正報廢總數 <small style="font-weight:normal;color:#aaa;">（訂正填錯用，覆蓋不累加，不影響回廠數量）</small></div>'
+          + '<div style="display:flex;gap:8px;align-items:flex-end;">'
+          + '  <div style="flex:1;"><label style="font-size:12px;">報廢總數應為</label><input type="number" min="0" id="orm-scrap-fix" class="form-control"></div>'
+          + '  <button type="button" class="btn btn-warning btn-sm" id="orm-submit-fix">確認修正</button>'
+          + '</div>'
+        ) : '';
+        box.innerHTML =
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #E4D3BC;">'
+          + '  <h4 style="margin:0;color:#6B4423;">回廠／報廢：' + escapeHtml(rowData.bom) + ' / ' + escapeHtml(proc.process_no) + ' ' + escapeHtml(proc.ProcessName||'') + '</h4>'
+          + '  <button type="button" id="orm-close" style="background:none;border:none;font-size:1.6rem;cursor:pointer;color:#aaa;line-height:1;">&times;</button>'
+          + '</div>'
+          + '<div id="orm-status" style="font-size:12px;color:#888;margin-bottom:10px;">載入中…</div>'
+          + '<div id="orm-prev-hint" style="font-size:12px;color:#6B4423;margin-bottom:10px;display:none;"></div>'
+          + '<div style="font-size:13px;font-weight:bold;color:#555;margin-bottom:6px;">本次回廠／報廢（累加）</div>'
+          + '<div style="display:flex;gap:8px;margin-bottom:10px;">'
+          + '  <div style="flex:1;"><label style="font-size:12px;">本次回廠數量</label><input type="number" min="0" id="orm-return-qty" class="form-control" value="0"></div>'
+          + '  <div style="flex:1;"><label style="font-size:12px;">本次報廢數量</label><input type="number" min="0" id="orm-scrap-qty" class="form-control" value="0"></div>'
+          + '</div>'
+          + '<div style="font-size:11px;color:#999;margin-bottom:8px;">填了報廢數量，送出後系統會自動開立品質異常單提醒品管確認原因。</div>'
+          + '<button type="button" class="btn btn-primary btn-sm" id="orm-submit-add">確認記錄</button>'
+          + '<div id="orm-nc-result" style="margin-top:8px;"></div>'
+          + fixSectionHtml;
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+        document.getElementById('orm-close').onclick = function(){ overlay.remove(); };
+
+        function _refreshStatus() {
+            $.post('', { action: 'get_outsource_batch', bom_ing_fid: proc.bom_ing_fid }, function(r) {
+                var el = document.getElementById('orm-status');
+                if (!el) return;
+                if (!r.success) { el.textContent = '讀取失敗：' + (r.message||''); return; }
+                var ob = r.open_batch;
+                if (!ob) { el.textContent = '尚無流水帳資料（下方送出/回廠功能仍可使用，送出時會自動補建）。'; }
+                else {
+                    el.innerHTML = '送出數量 <b>' + ob.send_qty + '</b>　已回廠 <b>' + ob.return_qty + '</b>　已報廢 <b>' + ob.scrap_qty
+                                  + '</b>　狀態 <b>' + (ob.status === 'closed' ? '已結清' : '未結清') + '</b>　剩餘良品數量預估 <b>' + r.remaining_good_qty + '</b>';
+                    var fixInp = document.getElementById('orm-scrap-fix');
+                    if (fixInp && fixInp.value === '') fixInp.placeholder = '目前 ' + ob.scrap_qty;
+                }
+                // 智慧預設：本次回廠數量自動帶入「上一關」依報工/QC檢驗結果算出的良品數
+                // （2026-10-07 使用者交辦），操作人員仍可自行修改，不是鎖死的值。
+                var qtyInp = document.getElementById('orm-return-qty');
+                var hintEl = document.getElementById('orm-prev-hint');
+                if (qtyInp && qtyInp.value === '0' && r.prev_qty != null) {
+                    qtyInp.value = r.prev_qty;
+                    if (hintEl) { hintEl.style.display = ''; hintEl.innerHTML = '<i class="fa fa-info-circle"></i> 已自動帶入 ' + r.prev_qty + ' 件（' + escapeHtml(r.prev_label||'') + '），可自行修改。'; }
+                }
+            }, 'json');
+        }
+        _refreshStatus();
+
+        document.getElementById('orm-submit-add').onclick = function(){
+            var rq = parseFloat(document.getElementById('orm-return-qty').value) || 0;
+            var sq = parseFloat(document.getElementById('orm-scrap-qty').value) || 0;
+            if (rq <= 0 && sq <= 0) { showTemporaryMessage('回廠數量與報廢數量至少要填一個', false); return; }
+            $.post('', { action: 'record_outsource_return', mode: 'add', bom_ing_fid: proc.bom_ing_fid, return_qty: rq, scrap_qty: sq }, function(r) {
+                showTemporaryMessage(r.message || (r.success ? '已記錄' : '失敗'), !!r.success);
+                if (r.success) {
+                    document.getElementById('orm-return-qty').value = 0;
+                    document.getElementById('orm-scrap-qty').value = 0;
+                    var ncEl = document.getElementById('orm-nc-result');
+                    if (ncEl) {
+                        if (r.abnormal_order && r.abnormal_order.no) {
+                            ncEl.innerHTML = '<div class="alert alert-warning" style="padding:6px 10px;margin:0;font-size:12px;"><i class="fa fa-exclamation-triangle"></i> 已自動開立品質異常單 <b>' + escapeHtml(r.abnormal_order.no) + '</b> 提醒品管確認報廢原因。</div>';
+                        } else { ncEl.innerHTML = ''; }
+                    }
+                    _refreshStatus();
+                    if (typeof refreshEditModalProcessList === 'function' && rowData && rowData.bom) {
+                        refreshEditModalProcessList(rowData.bom, rowData.bom_sn);
+                    }
+                }
+            }, 'json');
+        };
+        var fixBtn = document.getElementById('orm-submit-fix');
+        if (fixBtn) {
+            fixBtn.onclick = function(){
+                var abs = document.getElementById('orm-scrap-fix').value;
+                if (abs === '' || parseFloat(abs) < 0) { showTemporaryMessage('請輸入報廢總數', false); return; }
+                if (!confirm('確定要把報廢總數直接修正為 ' + abs + '？（覆蓋，不是累加）')) return;
+                $.post('', { action: 'record_outsource_return', mode: 'fix', bom_ing_fid: proc.bom_ing_fid, scrap_qty_abs: abs }, function(r) {
+                    showTemporaryMessage(r.message || (r.success ? '已修正' : '失敗'), !!r.success);
+                    if (r.success) {
+                        document.getElementById('orm-scrap-fix').value = '';
+                        var ncEl = document.getElementById('orm-nc-result');
+                        if (ncEl) {
+                            if (r.abnormal_order && r.abnormal_order.no) {
+                                ncEl.innerHTML = '<div class="alert alert-warning" style="padding:6px 10px;margin:0;font-size:12px;"><i class="fa fa-exclamation-triangle"></i> 已自動開立品質異常單 <b>' + escapeHtml(r.abnormal_order.no) + '</b> 提醒品管確認報廢原因。</div>';
+                            } else { ncEl.innerHTML = ''; }
+                        }
+                        _refreshStatus();
+                    }
+                }, 'json');
+            };
+        }
     }
 
     // ── 新增 BOM Modal ───────────────────────────────────────────────────────
@@ -13583,7 +13751,10 @@ echo "</script>\n";
             var div = document.createElement('div');
             div.className = 'form-group row';
             div.style.marginBottom = '5px';
+            div.style.marginLeft = '0';
+            div.style.marginRight = '0';
             div.style.alignItems = 'center';
+            div.style.flexWrap = 'wrap';
 
             var priceInfo = priceMap[String(proc.bom_sn)];
             var priceDisplay = '';
@@ -13597,14 +13768,21 @@ echo "</script>\n";
             var transferBtnHtml = canTransfer
                 ? `<button type="button" class="btn btn-warning btn-xs" data-toggle="modal" data-target="#transferProcessModal_${proc.bom_ing_fid}" title="移轉">移</button>`
                 : '';
+            // 回廠／報廢按鈕：refreshEditModalProcessList() 是移轉/刪除/跳過之後重畫這張列表時
+            // 走的另一條路徑（與初次渲染的 _buildProcItemDiv 各自維護，2026-10-07 發現這裡原本
+            // 完全沒有回廠按鈕——只改 _buildProcItemDiv 的話，按過一次移轉/跳過，回廠按鈕就會
+            // 消失，故這裡要同步加一份）。用全域包裝函式把物件拆成參數傳遞，避免整個 proc 序列化進 onclick。
+            var returnBtnHtml = (canTransfer && proc.maker_id_no)
+                ? `<button type="button" class="btn btn-default btn-xs" style="background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;" title="記錄回廠數量／報廢數量" onclick="openOutsourceReturnModalByFid('${proc.bom_ing_fid}','${escapeHtml(proc.maker_id_no||'')}','${escapeHtml(proc.maker_id||'')}','${escapeHtml(bomIdForModal)}','${escapeHtml(String(mainProcessBomSnForHighlighting))}','${escapeHtml(String(proc.process_no||''))}','${escapeHtml(proc.ProcessName||'')}')">回廠</button>`
+                : '';
 
             div.innerHTML = `
-                <div class="col-md-2 col-sm-2 col-xs-3 text-right">
-                    ${transferBtnHtml}
+                <div class="col-md-3 col-sm-3 col-xs-4 text-right" style="display:flex;gap:3px;justify-content:flex-end;flex-wrap:wrap;padding-left:2px;padding-right:2px;">
+                    ${transferBtnHtml}${returnBtnHtml}
                 </div>
                 <div class="col-md-2 col-sm-2 col-xs-2" style="padding-top:7px;font-weight:bold;">${escapeHtml(proc.bom_sn)}</div>
                 <div class="col-md-2 col-sm-2 col-xs-2" style="padding-top:7px;">${escapeHtml(proc.process_no)}</div>
-                <div class="col-md-4 col-sm-4 col-xs-4" style="padding-top:7px;">${escapeHtml(proc.ProcessName||'')}${priceDisplay}</div>
+                <div class="col-md-3 col-sm-3 col-xs-3" style="padding-top:7px;">${escapeHtml(proc.ProcessName||'')}${priceDisplay}</div>
             `;
 
             if (canSkip && String(proc.processing_state||'') === 'N') {
@@ -15551,6 +15729,18 @@ echo "</script>\n";
                                     <label>此角色可使用的功能</label>
                                     <div id="oready-feature-box" style="max-height:260px;overflow-y:auto;"></div>
                                     <p style="font-size:11px;color:#888;margin-top:8px;">說明：這裡的功能碼與原本的 C/R/U/D/A 權限並存（任一成立即可使用該功能），不會取代原有權限設定。到「使用者權限管理」頁面可將角色指派給使用者。</p>
+                                    <hr>
+                                    <label>回廠／報廢數量設定（2026-10-07，只影響本頁的回廠跳窗）</label>
+                                    <div class="checkbox"><label>
+                                        <input type="checkbox" id="oready-or-settable" <?= $_or_settable ? 'checked' : '' ?>>
+                                        回廠是否可設定數量（關閉時按回廠只跳出一句確認，直接用系統算好的預設數量回廠，不能填報廢數量）
+                                    </label></div>
+                                    <div class="checkbox"><label>
+                                        <input type="checkbox" id="oready-or-adjustable" <?= $_or_adjustable ? 'checked' : '' ?>>
+                                        開放「直接修正報廢總數」（訂正數量填錯用，覆蓋式，比累加更危險）
+                                    </label></div>
+                                    <button type="button" class="btn btn-default btn-xs" id="oready-or-save">儲存回廠設定</button>
+                                    <span id="oready-or-save-tip" style="font-size:11px;color:#2a8;margin-left:6px;display:none;">已儲存</span>
                                 </div>
                                 <div class="modal-footer">
                                     <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
@@ -16465,6 +16655,22 @@ echo "</script>\n";
             oreadyLoadRoles();
             $('#oreadyRoleSettingModal').modal('show');
         }
+
+        // 回廠／報廢數量兩個全站開關（2026-10-07）：比照 batch_view_default 同一套
+        // system_parameters 讀寫慣例，唯一寫入點 oready_or_save_toggle（後端再驗一次管理員身分）。
+        $(document).on('click', '#oready-or-save', function(){
+            var $btn = $(this).prop('disabled', true);
+            var settable = $('#oready-or-settable').is(':checked');
+            var adjustable = $('#oready-or-adjustable').is(':checked');
+            $.post('', { action: 'oready_or_save_toggle', settable: settable ? 1 : 0, adjustable: adjustable ? 1 : 0 }, function(res){
+                $btn.prop('disabled', false);
+                if (!res || !res.success) { alert((res && res.message) || '儲存失敗'); return; }
+                window.EG_OR_QTY_SETTABLE = settable;
+                window.EG_OR_QTY_ADJUSTABLE = adjustable;
+                $('#oready-or-save-tip').show();
+                setTimeout(function(){ $('#oready-or-save-tip').fadeOut(); }, 2000);
+            }, 'json').fail(function(){ $btn.prop('disabled', false); alert('與伺服器通訊失敗'); });
+        });
 
         function oreadyLoadRoles() {
             $.get(OREADY_ROLES_API, {action:'get_roles', module:'oready'}, function(res) {

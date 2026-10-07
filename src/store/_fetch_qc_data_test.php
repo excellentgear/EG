@@ -154,6 +154,8 @@ SELECT SQL_CALC_FOUND_ROWS
     bi.single_bet_ps,
     bi.ps,
     bi.sqty,
+    COALESCE(ob.scrap_qty,0) AS outsource_scrap_qty,
+    ob.scrap_vendors AS outsource_scrap_vendors,
     pn.ProcessNo,
     pn.ProcessName,
     pn.process_type_id,
@@ -190,6 +192,13 @@ LEFT JOIN bom_ing newer ON
     AND newer.is_consumed = 0
 JOIN bom b ON bi.bom = b.bom
 LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+LEFT JOIN (
+    SELECT bom_ing_fid, SUM(scrap_qty) AS scrap_qty,
+           GROUP_CONCAT(DISTINCT NULLIF(maker_id,'') SEPARATOR '、') AS scrap_vendors
+    FROM bom_ing_outsource_batch
+    WHERE scrap_qty > 0
+    GROUP BY bom_ing_fid
+) ob ON ob.bom_ing_fid = bi.bom_ing_fid
 LEFT JOIN (
     SELECT
         bom_ing_fid_ref,

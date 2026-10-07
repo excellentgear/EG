@@ -2288,6 +2288,136 @@ else if (isset($_POST['action']) && $_POST['action'] === 'bv_save_default') {
     exit;
 }
 
+// ── 加工單流水帳：查詢目前這筆製程的送出/回廠/報廢累積數量（回廠按鈕開窗用）＋智慧預設值 ──────
+// 2026-10-07 port 自 OreadyReply_ForPm_BaseOfTime2.php 並加強：多回傳 prev_qty/prev_label，
+// 讓前端「本次回廠數量」自動帶入上一關依報工/QC檢驗結果算出的良品數（唯一實作
+// eg_bom_outsource_prev_station_qty()，不在這裡另算一次）。
+else if (isset($_POST['action']) && $_POST['action'] === 'get_outsource_batch') {
+    session_write_close();
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    require_once '../../src/common/bom_outsource_lib.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    if (!isset($_SESSION['id'])) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
+    $fid = (int)($_POST['bom_ing_fid'] ?? 0);
+    if (!$fid) { echo json_encode(['success'=>false,'message'=>'缺少fid']); exit; }
+    try {
+        $open = eg_bom_outsource_latest_open_batch($db, $fid);
+        $biSt = $db->prepare("SELECT bom, bom_sn FROM bom_ing WHERE bom_ing_fid=?");
+        $biSt->execute([$fid]);
+        $biRow = $biSt->fetch(PDO::FETCH_ASSOC);
+        $prev = ['qty' => 0, 'source' => 'fallback', 'label' => ''];
+        if ($biRow) {
+            $prev = eg_bom_outsource_prev_station_qty($db, (string)$biRow['bom'], (int)$biRow['bom_sn']);
+        }
+        echo json_encode(['success'=>true, 'open_batch'=>$open,
+                          'remaining_good_qty'=>eg_bom_outsource_remaining_good_qty($db, $fid),
+                          'prev_qty'=>$prev['qty'], 'prev_source'=>$prev['source'], 'prev_label'=>$prev['label']]);
+    } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
+// ── 加工單流水帳：回廠按鈕──記錄本次回廠數量／報廢數量（累加），或直接修正報廢總數 ────
+// 2026-10-07 port 自 OreadyReply_ForPm_BaseOfTime2.php 並加強：①補上權限檢查（原版完全沒有，
+// 鐵律8缺口）②兩個管理員開關（settable/adjustable，只套用在這支，見主頁面讀取處）③報廢數量
+// >0 時自動呼叫 qab_auto_open_from_outsource_return() 開立品質異常單提醒品管，回傳 abnormal_order
+// 供前端顯示連結——這個自動開單**刻意不套用到 OreadyReply_ForPm_BaseOfTime2.php**（那頁仍呼叫
+// 它自己原本的 record_outsource_return，2026-10-07 使用者拍板不動那頁既有流程）。
+else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_return') {
+    session_write_close();
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    include_once '../../src/common/role_features_helper.php';
+    require_once '../../src/common/bom_outsource_lib.php';
+    require_once '../../src/common/qa_abnormal_lib.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    $uid = (int)($_SESSION['id'] ?? 0);
+    if (!$uid) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
+    // 權限：與頁面上「移轉」按鈕同一組功能碼（回廠本來就是移轉製程後續的動作），
+    // 不另外新增角色——沒有這兩個功能碼的人在畫面上本來就看不到回廠按鈕，這裡是後端再擋一次。
+    try {
+        $feats = rf_load_user_features($db, $uid);
+        if (!rf_has_feature($feats, 'oready_mark_returned') && !rf_has_feature($feats, 'oready_transfer')) {
+            echo json_encode(['success'=>false,'message'=>'沒有回廠／移轉的操作權限']); exit;
+        }
+    } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>'權限檢查失敗']); exit; }
+
+    $fid = (int)($_POST['bom_ing_fid'] ?? 0);
+    if (!$fid) { echo json_encode(['success'=>false,'message'=>'缺少fid']); exit; }
+    try {
+        $mode = ($_POST['mode'] ?? 'add') === 'fix' ? 'fix' : 'add';
+        if ($mode === 'fix') {
+            // 管理員開關：是否開放「直接修正報廢總數」這個覆蓋式訂正功能
+            if (!eg_oready_or_toggle($db, 'oready_return_qty_adjustable')) {
+                echo json_encode(['success'=>false,'message'=>'管理員尚未開放「直接修正報廢總數」功能']); exit;
+            }
+            $scrapAbs = (float)($_POST['scrap_qty_abs'] ?? -1);
+            if ($scrapAbs < 0) { echo json_encode(['success'=>false,'message'=>'請輸入報廢總數']); exit; }
+            $r = eg_bom_outsource_set_scrap($db, $fid, $scrapAbs, $uid);
+            if (!$r) { echo json_encode(['success'=>false,'message'=>'找不到這筆製程的加工單流水帳，無法修正']); exit; }
+            $resp = ['success'=>true, 'message'=>'報廢總數已修正為 '.$scrapAbs, 'result'=>$r];
+        } else {
+            $returnQty = (float)($_POST['return_qty'] ?? 0);
+            $scrapQty  = (float)($_POST['scrap_qty'] ?? 0);
+            if ($returnQty <= 0 && $scrapQty <= 0) { echo json_encode(['success'=>false,'message'=>'回廠數量與報廢數量至少要填一個']); exit; }
+            $r = eg_bom_outsource_record_return($db, $fid, $returnQty, $scrapQty, $uid);
+            $msg = '已記錄回廠 '.$returnQty.'、報廢 '.$scrapQty.'（累積回廠 '.$r['return_qty'].'、累積報廢 '.$r['scrap_qty'].' / 送出 '.$r['send_qty'].'）';
+            if ($r['closed']) $msg .= '，此批已結清。';
+            $resp = ['success'=>true, 'message'=>$msg, 'result'=>$r];
+        }
+        // 2026-10-07 使用者交辦：本次報廢數量認定為外包廠商回報的報廢，應自動建立異常單提醒品管。
+        // 失敗不可擋住回廠本身的記錄（已經成功寫進流水帳），開單失敗只在回應裡安靜略過。
+        try {
+            $batch = eg_bom_outsource_latest_open_batch($db, $fid);
+            if (!$batch) {
+                $st = $db->prepare("SELECT batch_id FROM bom_ing_outsource_batch WHERE bom_ing_fid=? ORDER BY batch_id DESC LIMIT 1");
+                $st->execute([$fid]);
+                $bidOnly = $st->fetchColumn();
+                if ($bidOnly) $batch = ['batch_id' => $bidOnly];
+            }
+            if ($batch) {
+                $nc = qab_auto_open_from_outsource_return($db, (int)$batch['batch_id'], $uid);
+                if ($nc) $resp['abnormal_order'] = ['id' => $nc['id'], 'no' => $nc['no'], 'existed' => !empty($nc['existed'])];
+            }
+        } catch (Throwable $e) { /* 自動開單失敗不影響回廠記錄本身已經成功 */ }
+        echo json_encode($resp);
+    } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
+// ── 回廠／報廢數量兩個全站開關：只有系統管理員可以改（2026-10-07）─────────
+// 比照 bv_save_default 同一套 system_parameters 讀寫慣例；只套用在本頁的回廠跳窗，
+// 刻意不影響 OreadyReply_ForPm_BaseOfTime2.php（那頁仍一律可用，不讀這兩個鍵）。
+else if (isset($_POST['action']) && $_POST['action'] === 'oready_or_save_toggle') {
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    include_once '../../src/common/role_features_helper.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    if (!isset($_SESSION['id'])) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
+    if (!oready_resolve_is_admin($db, (int)$_SESSION['id'], $_SERVER['PHP_SELF'])) {
+        echo json_encode(['success'=>false,'message'=>'只有系統管理員可以變更這個設定']); exit;
+    }
+    $settable = !empty($_POST['settable']) ? 1 : 0;
+    $adjustable = !empty($_POST['adjustable']) ? 1 : 0;
+    try {
+        $sJson = json_encode(['enabled' => (bool)$settable], JSON_UNESCAPED_UNICODE);
+        $aJson = json_encode(['enabled' => (bool)$adjustable], JSON_UNESCAPED_UNICODE);
+        $up = $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description)
+                             VALUES ('BOM_SETTING', 'oready_return_qty_settable', :v, '回廠是否可設定數量（跳窗）')
+                             ON DUPLICATE KEY UPDATE param_value = :v2");
+        $up->execute([':v'=>$sJson, ':v2'=>$sJson]);
+        $up2 = $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description)
+                              VALUES ('BOM_SETTING', 'oready_return_qty_adjustable', :v, '是否開放直接修正報廢總數')
+                              ON DUPLICATE KEY UPDATE param_value = :v2");
+        $up2->execute([':v'=>$aJson, ':v2'=>$aJson]);
+        echo json_encode(['success'=>true]);
+    } catch (PDOException $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
 else if (isset($_POST['action']) && $_POST['action'] === 'search_process') {
     session_write_close();
     include_once '../../src/common/DBConnection.php';

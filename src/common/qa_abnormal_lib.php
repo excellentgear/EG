@@ -380,6 +380,9 @@ function qab_ensure_schema(PDO $db): void
         // （不可挪用既有 source_type/source_id，那是 IR/BOM/CS 業務實體綁定的既有語意）
         'src_qc_form_id'  => "ADD COLUMN src_qc_form_id INT NULL COMMENT '由哪一筆線上檢驗紀錄(qc_check_form.qc_form_id)自動開立，非此來源則為NULL'",
         'src_qc_item_sel' => "ADD COLUMN src_qc_item_sel TEXT NULL COMMENT '目前列入異常現象內容的量測項目索引(JSON陣列)，品管確認前可重新勾選套用'",
+        // 2026-10-07：外包廠商回廠回報報廢數量自動開立——回指來源加工單流水帳，同一批流水帳
+        // 累加報廢好幾次也只開一張單（存在就更新數量，不重複開單，見 qab_auto_open_from_outsource_return()）
+        'src_outsource_batch_id' => "ADD COLUMN src_outsource_batch_id INT NULL COMMENT '由哪一筆加工單流水帳(bom_ing_outsource_batch.batch_id)回廠報廐自動開立，非此來源則為NULL'",
     ];
     foreach ($need4 as $c => $sql) if (!in_array($c, $cols4, true)) $add4[] = $sql;
     if ($add4) $db->exec("ALTER TABLE qa_abnormal_order " . implode(', ', $add4));
@@ -1496,6 +1499,100 @@ function qab_auto_open_from_qc_ng(PDO $db, int $qcFormId, int $createdBy, array 
     try {
         $desc = '線上檢驗（檢驗單號 ' . (string)$qc['insp_no'] . '）判定製令 ' . (string)$qc['bom'] . ' 不良 ' . (int)$qc['ng_qty'] . ' 件';
         qab_notify_qc_review($db, $id, (string)$qc['bom'], (int)$qc['ng_qty'], $desc);
+    } catch (Throwable $e) {}
+
+    return ['id' => $id, 'no' => $created['no'], 'existed' => false];
+}
+
+/**
+ * 外包廠商回廠時回報報廢數量，自動開立品質異常單草稿提醒品管填寫（2026-10-07 使用者交辦）。
+ * 比照 qab_auto_open_from_qc_ng() 同一套「草稿＋品管確認」模式與分類判定規則（廠內/廠外看
+ * maker_list.internal，刻意不另寫一套邏輯——與線上檢驗NG路徑判定同一個業務事實，只是這裡
+ * 一定拿得到明確的廠商代號，不像那邊還要分 SHIP/未登記廠商兩種退路）。
+ * **只接在 OreadyReply_ForPm_BaseOfTime.php 新加的回廠跳窗**，刻意不套用到 OreadyReply_ForPm_
+ * BaseOfTime2.php 既有流程（使用者拍板：那頁僅供測試，之後會廢棄，不動它的既有行為）。
+ * $batchId：bom_ing_outsource_batch.batch_id。同一批流水帳可能分好幾次累加報廢數量，
+ * 已經開過單且尚未被品管確認/結案的，直接把數量更新成最新累積值而不重複開單；已確認或已
+ * 結案的單不再覆蓋（人工已經介入過的內容，不可被系統自動改掉）。
+ */
+function qab_auto_open_from_outsource_return(PDO $db, int $batchId, int $createdBy): ?array
+{
+    qab_ensure_schema($db);
+    if ($batchId <= 0) throw new Exception('缺少 batch_id');
+    if ($createdBy <= 0) throw new Exception('缺少開單人');
+
+    $st = $db->prepare("SELECT b.bom_ing_fid, b.maker_id_no, b.maker_id, b.scrap_qty AS total_scrap,
+                                bi.bom, bi.process_no
+                         FROM bom_ing_outsource_batch b
+                         LEFT JOIN bom_ing bi ON bi.bom_ing_fid = b.bom_ing_fid
+                         WHERE b.batch_id=?");
+    $st->execute([$batchId]);
+    $ob = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$ob) throw new Exception('找不到這筆加工單流水帳');
+    $scrapTotal = (float)($ob['total_scrap'] ?? 0);
+    if ($scrapTotal <= 0) return null;   // 這一批目前沒有報廢數量，不用開單
+    if (empty($ob['bom'])) throw new Exception('這筆加工單流水帳沒有連結到製令，無法自動開立異常單');
+
+    $scrapQty = (int)round($scrapTotal);
+
+    // 同一批加工單流水帳不可重複自動開立——已經開過單的，若尚未被品管確認/結案，更新成最新
+    // 累積報廢數量（分批累加時數字才不會停在第一次）；已確認或已結案一律不再覆蓋。
+    $exist = $db->prepare("SELECT id, abnormal_order_no, qc_review_at, is_closed FROM qa_abnormal_order WHERE src_outsource_batch_id=? AND deleted_at IS NULL LIMIT 1");
+    $exist->execute([$batchId]);
+    if ($row = $exist->fetch(PDO::FETCH_ASSOC)) {
+        if (empty($row['qc_review_at']) && empty($row['is_closed'])) {
+            $db->prepare("UPDATE qa_abnormal_order SET batch_qty=?, insp_qty=?, ng_qty=? WHERE id=?")
+               ->execute([$scrapQty, $scrapQty, $scrapQty, (int)$row['id']]);
+        }
+        return ['id' => (int)$row['id'], 'no' => (string)$row['abnormal_order_no'], 'existed' => true];
+    }
+
+    /* 分類判定：外包回廠一定看這一站登記的廠商是否為廠內加工廠商（與線上檢驗NG路徑同一套
+       判斷依據，鐵律4）；查不到廠商或廠商是廠內加工廠商都算 internal，其餘算 external。
+       outsource 回廠不會是 'ship'（出貨檢驗沒有加工單流水帳）。 */
+    $makerIdNo = trim((string)($ob['maker_id_no'] ?? ''));
+    $isInternal = true;
+    if ($makerIdNo !== '') {
+        $stv = $db->prepare("SELECT internal FROM maker_list WHERE maker_id_no=?");
+        $stv->execute([$makerIdNo]);
+        $isInternal = ((int)$stv->fetchColumn() === 1);
+    }
+    $scope = $isInternal ? 'internal' : 'external';
+    $scopeMap = qab_qc_auto_scope_map();
+    $catId = qab_cat_auto_qc_resolve($db, $scope);
+    if (!$catId) {
+        throw new Exception('尚未設定「線上檢驗NG自動開立」的「' . $scopeMap[$scope]['label']
+            . '」要歸入哪一個異常單類別，請先到「品質異常處理單」清單頁的「設定 → 異常單類別」勾選');
+    }
+
+    $vendorTxt = ($ob['maker_id'] !== null && $ob['maker_id'] !== '') ? (string)$ob['maker_id'] : '（未登記廠商）';
+    $autoNote = mb_substr('外包廠商回廠回報報廢（' . $vendorTxt . '，累積報廢 ' . $scrapQty . ' 件）', 0, 255);
+    $phenomenon = $vendorTxt . ' 回廠時回報報廢 ' . $scrapQty . ' 件，請確認不良原因並填寫異常原因分類。';
+
+    $data = [
+        'kind' => 'bom',
+        'bom_no' => (string)$ob['bom'],
+        'batch_qty' => $scrapQty,
+        'insp_qty' => $scrapQty,
+        'ng_qty' => $scrapQty,
+        'abnormal_phenomenon' => $phenomenon,
+        'created_by' => $createdBy,
+        'resp_process_no' => $ob['process_no'] !== null ? (int)$ob['process_no'] : null,
+        'resp_bom_ing_fid' => (int)$ob['bom_ing_fid'],
+        'auto_opened' => 1,
+        'auto_open_note' => $autoNote,
+        'decider_cfg_id' => qab_decider_cfg_id_for_dept($db, 'qc_dept'),
+        'auto_phenomenon_base' => $phenomenon,
+        'cat_id' => $catId,
+    ];
+    $created = qab_create_order($db, $data);
+    $id = $created['id'];
+
+    $db->prepare("UPDATE qa_abnormal_order SET src_outsource_batch_id=? WHERE id=?")->execute([$batchId, $id]);
+
+    try {
+        $desc = $vendorTxt . '（製令 ' . (string)$ob['bom'] . '）回廠回報報廢 ' . $scrapQty . ' 件';
+        qab_notify_qc_review($db, $id, (string)$ob['bom'], $scrapQty, $desc);
     } catch (Throwable $e) {}
 
     return ['id' => $id, 'no' => $created['no'], 'existed' => false];

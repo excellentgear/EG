@@ -4598,7 +4598,10 @@ $(function(){
                 // 「良品數」正名為「良品上限」（2026-10-06 使用者回報：還沒驗過任何一件時這欄跟
                 // 「尚未檢驗」數字相同，誤以為是「已驗合格60件」——其實是 BOM總數扣報廐後的上限，
                 // 不是已確認合格的數量；tooltip 不再省略「已扣報廐」那句，沒報廐時也講清楚口徑）
-                : '<div><b>尚未檢驗 / 良品上限 / BOM總數</b><span class="cv" id="ctx-pending" title="BOM總數 '+ps.order+' 件，已報廐 '+(ps.order-ps.good)+' 件，良品上限（可送驗）'+ps.good+' 件，已送驗 '+ps.used+' 件">'+ps.left+' / '+ps.good+' / '+ps.order+'pcs</span>'+
+                // 2026-10-07：良品上限也會扣外包廠商回廠回報的報廢量，tooltip 額外標出是哪家廠商
+                // 回報的（使用者交辦：扣了數量品管卻不知道原因/找不到人問，一定要連廠商一起顯示）。
+                : '<div><b>尚未檢驗 / 良品上限 / BOM總數</b><span class="cv" id="ctx-pending" title="BOM總數 '+ps.order+' 件，已報廐 '+(ps.order-ps.good-(ctx.outsource_scrap_qty||0))+' 件，良品上限（可送驗）'+ps.good+' 件，已送驗 '+ps.used+' 件'+((ctx.outsource_scrap_qty||0)>0?('；已扣外包回廠報廢 '+ctx.outsource_scrap_qty+' 件（'+esc(ctx.outsource_scrap_vendors||'')+'）'):'')+'">'+ps.left+' / '+ps.good+' / '+ps.order+'pcs</span>'+
+                  ((ctx.outsource_scrap_qty||0)>0 ? '<span style="margin-left:6px;font-size:11px;color:var(--amber-d);"><i class="fa fa-truck"></i> 已扣外包報廢 '+ctx.outsource_scrap_qty+' 件（'+esc(ctx.outsource_scrap_vendors||'')+'）</span>' : '')+
                   '<span id="ctx-pending-warn" style="'+(ps.left<=0?'':'display:none;')+'color:var(--coral);font-weight:bold;font-size:12px;margin-left:6px;"><i class="fa fa-exclamation-triangle"></i> 無待驗數量</span></div>')+
             '<div><b>'+(ctx.adhoc?'抽驗數':'建議抽驗')+'</b><span class="cv" id="ctx-sample-live">'+(ctx.sample_qty||0)+' 件</span></div>'+
             (ctx.ship ? '' : '<div id="kind-box"><b>檢驗性質</b><span class="cv"><span class="ki-btns">'+

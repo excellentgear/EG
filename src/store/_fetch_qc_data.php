@@ -151,6 +151,10 @@ if ($filterSearch !== '') {
 // 已檢驗數量的唯一算法：允收＋異常＋驗退＋特採。前端的徽章與「一鍵完成」
 // 用同一個算法（qcInspectedQty()），兩邊要一致，不可各寫一份。
 const QC_DONE_SUM = "(COALESCE(qc.QC_ok_sqty,0)+COALESCE(qc.QC_QQ_sqty,0)+COALESCE(qc.QC_ng_sqty,0)+COALESCE(qc.QC_aod_sqty,0))";
+// 2026-10-07 使用者交辦：外包廠商回廠回報的報廢量要反映在「已驗滿」判定上——這一站真正要驗的量
+// 等於發包量扣掉已回報報廢（不用等異常單結案配發報廐單號），否則報廢掉的量永遠驗不滿、「已驗滿」
+// 永遠不會出現。唯一資料來源 bom_ing_outsource_batch（下方 LEFT JOIN ob），不在這裡另算一次。
+const QC_EFFECTIVE_SQTY = "(bi.sqty - COALESCE(ob.scrap_qty,0))";
 // 後站已開工：同一個 BOM 裡 bom_sn 更後面的站已經發過單且在進行中／已回廠。
 // 用來標出「其實早就跑到下一關、只是前站補按回廠」的那些列。
 const QC_NEXT_STARTED_SQL = "EXISTS (
@@ -169,11 +173,11 @@ if ($filterQC === 'gray') {
 } elseif ($filterQC === 'green') {
     $extraParts[] = "COALESCE(qc.QC_ok_sqty,0) > 0";
 } elseif ($filterQC === 'full') {
-    // 已經報工驗滿、只差沒人按「完成」
-    $extraParts[] = "bi.sqty > 0 AND " . QC_DONE_SUM . " >= bi.sqty";
+    // 已經報工驗滿、只差沒人按「完成」（扣外包回廠報廢後的有效量）
+    $extraParts[] = QC_EFFECTIVE_SQTY . " > 0 AND " . QC_DONE_SUM . " >= " . QC_EFFECTIVE_SQTY;
 } elseif ($filterQC === 'part') {
     // 報了一部分（例：1500 只驗了 130）
-    $extraParts[] = QC_DONE_SUM . " > 0 AND (bi.sqty <= 0 OR " . QC_DONE_SUM . " < bi.sqty)";
+    $extraParts[] = QC_DONE_SUM . " > 0 AND (" . QC_EFFECTIVE_SQTY . " <= 0 OR " . QC_DONE_SUM . " < " . QC_EFFECTIVE_SQTY . ")";
 } elseif ($filterQC === 'nextstarted') {
     $extraParts[] = QC_NEXT_STARTED_SQL;
 }
@@ -202,6 +206,8 @@ SELECT SQL_CALC_FOUND_ROWS
     bi.single_bet_ps,
     bi.ps,
     bi.sqty,
+    COALESCE(ob.scrap_qty,0) AS outsource_scrap_qty,
+    ob.scrap_vendors AS outsource_scrap_vendors,
     pn.ProcessNo,
     pn.ProcessName,
     pn.process_type_id,
@@ -250,6 +256,13 @@ LEFT JOIN bom_ing newer ON
 JOIN bom b ON bi.bom = b.bom
 " . eg_bom_client_join('b') . "
 LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+LEFT JOIN (
+    SELECT bom_ing_fid, SUM(scrap_qty) AS scrap_qty,
+           GROUP_CONCAT(DISTINCT NULLIF(maker_id,'') SEPARATOR '、') AS scrap_vendors
+    FROM bom_ing_outsource_batch
+    WHERE scrap_qty > 0
+    GROUP BY bom_ing_fid
+) ob ON ob.bom_ing_fid = bi.bom_ing_fid
 LEFT JOIN (
     SELECT
         bom_ing_fid_ref,

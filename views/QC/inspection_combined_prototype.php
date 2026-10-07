@@ -16,6 +16,7 @@ include_once '../../src/common/rbac.php'; // #1 fail-closed：共用 RBAC bootst
 include_once '../../src/common/qc_inspection_lib.php'; // #3/#10/#12：後端重算/多量具/共用寫入
 include_once '../../src/common/qc_tool_display_lib.php'; // 量具顯示名稱統一格式（ai-rules/25，唯一實作）
 include_once '../../src/common/qa_abnormal_lib.php'; // 報廢扣減唯一實作 qab_bom_scrap_qty()（2026-09-24）
+include_once '../../src/common/bom_outsource_lib.php'; // 外包回廠報廢扣減唯一實作 eg_bom_outsource_scrap_qty()（2026-10-07）
 include_once '../../src/common/packing_process_lib.php'; // 包裝製程不列入線上檢驗（2026-09-24，已獨立到包裝排程頁）
 include_once '../../src/common/qc_container_lib.php'; // 容器代碼/格式唯一實作（2026-10-06：每輪檢驗紀錄自己的容器要跟畫面「允收」寫入 bom_ing.QC_ps 同一套打包/解析規則，不可另寫一份）
 
@@ -247,11 +248,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 品質異常處理單的「檢驗數」也呼叫同一支，兩邊不會算出不同的建議值
             $sample_qty = qc_suggest_sample_qty($pdo, (int)$ctx['sqty']);
 
-            // 良品數＝訂單數扣掉「這一站（含）之前已結案配發報廐單號」的確認報廐量（2026-09-24 使用者交辦）；
-            // 沒有任何確認報廐時就等於訂單數，唯一實作 qab_bom_scrap_qty() 不在這裡另算一份
+            // 良品數＝訂單數扣掉「這一站（含）之前已結案配發報廐單號」的確認報廐量（2026-09-24 使用者交辦）
+            // 再扣掉「這一站（含）之前外包廠商回廠回報的報廢量」（2026-10-07 使用者交辦：回廠當下就
+            // 要先反映，不必等異常單結案配發報廐單號；唯一實作 eg_bom_outsource_scrap_qty()，不在這裡
+            // 另算一份）——兩種扣減來源分開算、分開顯示，不要合併成同一個數字，才看得出各自是什麼。
             $good_qty = (int)$ctx['sqty'];
+            $outsource_scrap_qty = 0;
+            $outsource_scrap_vendors = '';
             try {
-                $good_qty = max(0, (int)$ctx['sqty'] - qab_bom_scrap_qty($pdo, (string)$ctx['bom'], (int)$ctx['bom_sn']));
+                $confirmedScrap = qab_bom_scrap_qty($pdo, (string)$ctx['bom'], (int)$ctx['bom_sn']);
+                $outsource_scrap_qty = (int)round(eg_bom_outsource_scrap_qty($pdo, (string)$ctx['bom'], (int)$ctx['bom_sn']));
+                $good_qty = max(0, (int)$ctx['sqty'] - $confirmedScrap - $outsource_scrap_qty);
+                if ($outsource_scrap_qty > 0) {
+                    $outsource_scrap_vendors = eg_bom_outsource_scrap_vendors_text($pdo, (string)$ctx['bom'], (int)$ctx['bom_sn']);
+                }
             } catch (Throwable $e) { /* 算不出來就先當作沒有報廢，不擋畫面 */ }
 
             // 既有檢驗歷程（批次/複驗，含異常單決定）
@@ -304,6 +314,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'client'      => $ctx['Client_Name'],
                     'order_qty'   => (int)$ctx['sqty'],
                     'good_qty'    => $good_qty,
+                    // 外包回廠報廢扣減明細（2026-10-07）：良品上限已經扣掉這個數字，這裡另外帶出來
+                    // 給畫面提示用，讓品管知道「是被誰扣的」，不用在良品數對不上時去翻資料庫找廠商
+                    'outsource_scrap_qty'     => $outsource_scrap_qty,
+                    'outsource_scrap_vendors' => $outsource_scrap_vendors,
                     'process'     => $process,
                     'maker'       => trim((string)($ctx['maker_id'] ?? '')),  // 這一站登記的廠商（ai-rules 說明見下方 buildPrintHtml，2026-09-24）
                     'batch_label' => $ctx['batch_label'],  // 拆批時的批次代號，同製程有多批送驗要能分辨是哪一批
