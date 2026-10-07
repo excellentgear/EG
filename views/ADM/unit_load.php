@@ -662,7 +662,6 @@ $(document).on('click', '.ul-go-tab', function(){
 function kpiCard(key, title, peopleCount, metricsHtml, bad){
   var icon = UNIT_ICONS[key] || 'fa-circle';
   return '<div class="kpi-card'+(bad?' ul-overload':'')+'" data-unit="'+key+'">'
-       + (bad ? '<div class="kpi-bad-tag"><i class="fa fa-exclamation-triangle"></i>負荷過重</div>' : '')
        + '<div class="k-lab"><i class="fa '+icon+'"></i> '+esc(title)+'　<span class="k-ppl">('+nf(peopleCount)+' 人)</span></div>'
        + metricsHtml
        + '<div class="k-more"><a href="javascript:void(0)" class="ul-go-tab" data-tab="'+key+'">查看明細 »</a></div>'
@@ -845,7 +844,6 @@ function periodParams(){
 function statTile(label, cur, cmp, cmpLabel, fmt, bad){
   fmt = fmt || nf;
   return '<div class="kpi-card'+(bad?' ul-overload':'')+'">'
-       + (bad ? '<div class="kpi-bad-tag"><i class="fa fa-exclamation-triangle"></i>負荷過重</div>' : '')
        + '<div class="k-lab">'+esc(label)+'</div>'
        + '<div class="k-val">'+fmt(cur)+'</div>'
        + (cmp===undefined ? '' : '<div class="k-cmp">較'+esc(cmpLabel||'上一期')+'：'+deltaHtml(cur, cmp, fmt)+'</div>')

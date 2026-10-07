@@ -416,22 +416,32 @@ function ul_design_summary(PDO $db, string $from, string $to, array $designerIds
     if (!$ids) return $out;
     $in = implode(',', $ids);
 
-    // 批圖中：這是「目前狀態」的即時快照，刻意不受 $from/$to 限制。2026-10-07 使用者
-    // 釐清定義＝「有分配給此部門人員的訂單，且還沒按審圖跟已轉生管」——不是舊版拿「有無
-    // 開放中設計備註問題」當判準，那會讓一張單明明還在畫、卻因為沒人提過問題就不被算進
-    // 批圖中，兩個指標混在一起反而互相誤導。
+    // 批圖中：這是「目前狀態」的即時快照，刻意不受 $from/$to 限制。2026-10-07 使用者回報
+    // 這裡的數字跟 NewOrder_Track.php 自己的「批圖中」KPI 卡（59筆）對不起來，查證後發現
+    // 兩個錯誤：①這裡誤加了 in_review IS NULL 當條件——但官方頁面（NewOrder_Track.php 第
+    // 2547 行 $mainStatsSql 的 processing 欄）真正的定義只是「還沒轉生管、且不是暫停/取消」，
+    // 完全不管審圖狀態，已按審圖但還沒轉生管的單依然算「批圖中」；②`Order_status<>6` 在
+    // MySQL 裡 Order_status 為 NULL（=進行中，最常見的狀態）時整個條件判為 NULL（視同
+    // false），等於把幾乎所有正常進行中的訂單都排除掉——這才是 0 筆的真正原因。官方頁面
+    // 用的是 `(Order_status IS NULL OR Order_status<>6)`，以下全部比照這個寫法。
+    // ③同一次查證另外發現：官方頁面的基準 WHERE 還固定排除拆批子單（parent_order_id 非空
+    // 的列是從某張母單拆出來的子單，`NewOrder_Track.php` 第 2427 行每一次統計都排除，不是
+    // 可選篩選），不排除會把拆批的子單重複算進「批圖中」——實測全公司批圖中數字因此從
+    // 130 筆錯算成誤差值，加回這條才對回官方頁面的 59 筆。
+    $ordStatOk = "(ot.Order_status IS NULL OR ot.Order_status<>6)";
+    $ordNotSplit = "(ot.parent_order_id IS NULL OR ot.parent_order_id=0)";
     $out['drawing_wip'] = (int)$db->query(
         "SELECT COUNT(*) FROM order_track ot
-         WHERE ot.ate IN ({$in}) AND ot.in_review IS NULL AND ot.pmGet IS NULL AND ot.Order_status<>6"
+         WHERE ot.ate IN ({$in}) AND ot.pmGet IS NULL AND {$ordStatOk} AND {$ordNotSplit}"
     )->fetchColumn();
 
-    $st = $db->prepare("SELECT COUNT(*) FROM order_track
-        WHERE ate IN ({$in}) AND in_review IS NOT NULL AND DATE(in_review) BETWEEN ? AND ? AND Order_status<>6");
+    $st = $db->prepare("SELECT COUNT(*) FROM order_track ot
+        WHERE ot.ate IN ({$in}) AND ot.in_review IS NOT NULL AND DATE(ot.in_review) BETWEEN ? AND ? AND {$ordStatOk} AND {$ordNotSplit}");
     $st->execute([$from, $to]);
     $out['in_review'] = (int)$st->fetchColumn();
 
-    $st = $db->prepare("SELECT COUNT(*) FROM order_track
-        WHERE ate IN ({$in}) AND pmGet IS NOT NULL AND DATE(pmGet) BETWEEN ? AND ? AND Order_status<>6");
+    $st = $db->prepare("SELECT COUNT(*) FROM order_track ot
+        WHERE ot.ate IN ({$in}) AND ot.pmGet IS NOT NULL AND DATE(ot.pmGet) BETWEEN ? AND ? AND {$ordStatOk} AND {$ordNotSplit}");
     $st->execute([$from, $to]);
     $out['pm_get'] = (int)$st->fetchColumn();
 
@@ -440,8 +450,8 @@ function ul_design_summary(PDO $db, string $from, string $to, array $designerIds
     // NewOrder_Track.php 的 NEW 徽章同一個鍵），不是 d_id_ID（料號主檔 id）——
     // 見 ul_orders_new_case_map() 的函式註解。
     $orderRows = $db->query(
-        "SELECT Order_id, d_id, pmGet, in_review FROM order_track
-         WHERE ate IN ({$in}) AND Order_status<>6"
+        "SELECT Order_id, d_id, pmGet, in_review FROM order_track ot
+         WHERE ot.ate IN ({$in}) AND {$ordStatOk} AND {$ordNotSplit}"
     )->fetchAll(PDO::FETCH_ASSOC);
     $orderIds = array_map(fn($r) => (int)$r['Order_id'], $orderRows);
     if ($orderIds) {
@@ -451,10 +461,9 @@ function ul_design_summary(PDO $db, string $from, string $to, array $designerIds
 
     // 新案件：2026-10-07 使用者重新定義＝NEW 圖示者（見 ul_orders_new_case_map()），完全
     // 取代舊版「系統裡首次出現的料號」。同樣是現況快照，不受 $from/$to 限制。拆成「已處理」
-    // （已轉生管＝pmGet 有值）與「批圖中」（比照上面 drawing_wip 同一個定義：還沒按審圖、
-    // 也還沒轉生管）兩種子狀態＋各自佔比；「已按審圖但還沒轉生管」這段過渡狀態刻意不計入
-    // 任一邊——那不屬於這兩個指標各自宣稱涵蓋的範圍，硬塞進去只會讓兩個數字本身的定義
-    // 失真，不要求 processed+in_progress 一定要等於 total。
+    // （已轉生管＝pmGet 有值）與「批圖中」（比照上面修正後的 drawing_wip 同一個定義：還
+    // 沒轉生管，不管審圖狀態）兩種子狀態＋各自佔比——pmGet 非空即非空，兩者互斥又完整，
+    // processed+in_progress 恆等於 total。
     $partNos = [];
     foreach ($orderRows as $r) { $pn = (string)$r['d_id']; if ($pn !== '') $partNos[] = $pn; }
     $newCaseMap = ul_orders_new_case_map($db, $partNos);
@@ -464,7 +473,7 @@ function ul_design_summary(PDO $db, string $from, string $to, array $designerIds
         if ($pn === '' || empty($newCaseMap[$pn])) continue; // 查不到料號文字的訂單無法判定，不計入
         $ncTotal++;
         if ($r['pmGet'] !== null) $ncProcessed++;
-        elseif ($r['in_review'] === null) $ncInProgress++;
+        else $ncInProgress++;
     }
     $out['new_case'] = [
         'total' => $ncTotal,
@@ -474,9 +483,9 @@ function ul_design_summary(PDO $db, string $from, string $to, array $designerIds
         'in_progress_pct' => $ncTotal > 0 ? round($ncInProgress / $ncTotal, 4) : null,
     ];
 
-    $st = $db->prepare("SELECT ateGet, pmGet FROM order_track
-        WHERE ate IN ({$in}) AND ateGet IS NOT NULL AND pmGet IS NOT NULL
-          AND DATE(pmGet) BETWEEN ? AND ? AND Order_status<>6");
+    $st = $db->prepare("SELECT ateGet, pmGet FROM order_track ot
+        WHERE ot.ate IN ({$in}) AND ot.ateGet IS NOT NULL AND ot.pmGet IS NOT NULL
+          AND DATE(ot.pmGet) BETWEEN ? AND ? AND {$ordStatOk} AND {$ordNotSplit}");
     $st->execute([$from, $to]);
     $sum = 0.0; $cnt = 0;
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -520,32 +529,36 @@ function ul_design_by_person(PDO $db, string $from, string $to, array $designerI
         ];
     }
 
-    // 批圖中定義見 ul_design_summary() 同一段註解（還沒按審圖、也還沒轉生管）
+    // 批圖中定義見 ul_design_summary() 同一段註解（還沒轉生管即算批圖中，不管審圖狀態；
+    // Order_status 用 IS NULL OR <>6，NULL=最常見的進行中狀態，不可只寫 <>6；還要排除
+    // parent_order_id 非空的拆批子單，否則同一張母單拆出的子單會被重複算）
+    $ordStatOk = "(ot.Order_status IS NULL OR ot.Order_status<>6)";
+    $ordNotSplit = "(ot.parent_order_id IS NULL OR ot.parent_order_id=0)";
     foreach ($db->query(
         "SELECT ot.ate k, COUNT(*) c FROM order_track ot
-         WHERE ot.ate IN ({$in}) AND ot.in_review IS NULL AND ot.pmGet IS NULL AND ot.Order_status<>6
+         WHERE ot.ate IN ({$in}) AND ot.pmGet IS NULL AND {$ordStatOk} AND {$ordNotSplit}
          GROUP BY ot.ate"
     )->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $uid = (int)$r['k']; if (isset($out[$uid])) $out[$uid]['drawing_wip'] = (int)$r['c'];
     }
 
-    $st = $db->prepare("SELECT ate k, COUNT(*) c FROM order_track
-        WHERE ate IN ({$in}) AND in_review IS NOT NULL AND DATE(in_review) BETWEEN ? AND ? AND Order_status<>6
-        GROUP BY ate");
+    $st = $db->prepare("SELECT ot.ate k, COUNT(*) c FROM order_track ot
+        WHERE ot.ate IN ({$in}) AND ot.in_review IS NOT NULL AND DATE(ot.in_review) BETWEEN ? AND ? AND {$ordStatOk} AND {$ordNotSplit}
+        GROUP BY ot.ate");
     $st->execute([$from, $to]);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $uid = (int)$r['k']; if (isset($out[$uid])) $out[$uid]['in_review'] = (int)$r['c'];
     }
 
-    $st = $db->prepare("SELECT ate k, COUNT(*) c FROM order_track
-        WHERE ate IN ({$in}) AND pmGet IS NOT NULL AND DATE(pmGet) BETWEEN ? AND ? AND Order_status<>6
-        GROUP BY ate");
+    $st = $db->prepare("SELECT ot.ate k, COUNT(*) c FROM order_track ot
+        WHERE ot.ate IN ({$in}) AND ot.pmGet IS NOT NULL AND DATE(ot.pmGet) BETWEEN ? AND ? AND {$ordStatOk} AND {$ordNotSplit}
+        GROUP BY ot.ate");
     $st->execute([$from, $to]);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $uid = (int)$r['k']; if (isset($out[$uid])) $out[$uid]['pm_get'] = (int)$r['c'];
     }
 
-    $orderRows = $db->query("SELECT Order_id, ate FROM order_track WHERE ate IN ({$in}) AND Order_status<>6")
+    $orderRows = $db->query("SELECT Order_id, ate FROM order_track ot WHERE ot.ate IN ({$in}) AND {$ordStatOk} AND {$ordNotSplit}")
                     ->fetchAll(PDO::FETCH_ASSOC);
     $orderIds = []; $ateByOrder = [];
     foreach ($orderRows as $r) { $oid = (int)$r['Order_id']; $orderIds[] = $oid; $ateByOrder[$oid] = (int)$r['ate']; }
@@ -558,9 +571,9 @@ function ul_design_by_person(PDO $db, string $from, string $to, array $designerI
         }
     }
 
-    $st = $db->prepare("SELECT ate k, ateGet, pmGet FROM order_track
-        WHERE ate IN ({$in}) AND ateGet IS NOT NULL AND pmGet IS NOT NULL
-          AND DATE(pmGet) BETWEEN ? AND ? AND Order_status<>6");
+    $st = $db->prepare("SELECT ot.ate k, ot.ateGet, ot.pmGet FROM order_track ot
+        WHERE ot.ate IN ({$in}) AND ot.ateGet IS NOT NULL AND ot.pmGet IS NOT NULL
+          AND DATE(ot.pmGet) BETWEEN ? AND ? AND {$ordStatOk} AND {$ordNotSplit}");
     $st->execute([$from, $to]);
     $sums = []; $cnts = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -596,6 +609,7 @@ function ul_design_reviewer_counts(PDO $db, string $from, string $to, array $des
     $in = implode(',', $ids);
     $st = $db->prepare("SELECT ate k, COUNT(*) c FROM order_track
         WHERE in_review IS NOT NULL AND DATE(in_review) BETWEEN ? AND ? AND ate IN ({$in})
+          AND (Order_status IS NULL OR Order_status<>6) AND (parent_order_id IS NULL OR parent_order_id=0)
         GROUP BY ate");
     $st->execute([$from, $to]);
     $byUser = [];
@@ -612,6 +626,7 @@ function ul_design_daily_pmget(PDO $db, string $from, string $to, array $designe
     $in = implode(',', $ids);
     $st = $db->prepare("SELECT DATE(pmGet) d, ate, COUNT(*) c FROM order_track
         WHERE pmGet IS NOT NULL AND DATE(pmGet) BETWEEN ? AND ? AND ate IN ({$in})
+          AND (Order_status IS NULL OR Order_status<>6) AND (parent_order_id IS NULL OR parent_order_id=0)
         GROUP BY d, ate ORDER BY d");
     $st->execute([$from, $to]);
     return $st->fetchAll(PDO::FETCH_ASSOC);
@@ -631,7 +646,8 @@ function ul_design_tags(PDO $db, string $from, string $to, array $designerIds): 
         FROM order_track ot
         LEFT JOIN ot_as_proc_tag t ON t.tag_id = ot.as_tag_id
         WHERE ot.ate IN ({$in}) AND ot.as_tag_id IS NOT NULL
-          AND ot.Order_date BETWEEN ? AND ? AND ot.Order_status<>6
+          AND ot.Order_date BETWEEN ? AND ? AND (ot.Order_status IS NULL OR ot.Order_status<>6)
+          AND (ot.parent_order_id IS NULL OR ot.parent_order_id=0)
         GROUP BY t.tag_id, tag_name
         ORDER BY c DESC");
     $st->execute([$from, $to]);
@@ -652,7 +668,9 @@ function ul_design_note_stats(PDO $db, string $from, string $to, array $designer
     $in = implode(',', $ids);
     foreach ($ids as $uid) $out['by_designer'][$uid] = ['open' => 0, 'avg_days' => null];
 
-    $orderRows = $db->query("SELECT Order_id, ate FROM order_track WHERE ate IN ({$in})")->fetchAll(PDO::FETCH_ASSOC);
+    $orderRows = $db->query("SELECT Order_id, ate FROM order_track
+        WHERE ate IN ({$in}) AND (Order_status IS NULL OR Order_status<>6) AND (parent_order_id IS NULL OR parent_order_id=0)"
+    )->fetchAll(PDO::FETCH_ASSOC);
     $orderIds = []; $ateByOrder = [];
     foreach ($orderRows as $r) { $oid = (int)$r['Order_id']; $orderIds[] = $oid; $ateByOrder[$oid] = (int)$r['ate']; }
 
@@ -673,7 +691,8 @@ function ul_design_note_stats(PDO $db, string $from, string $to, array $designer
         WHERE b.bind_type='order' AND g.log_type='order_note'
           AND i.status IN ('resolved','dropped') AND i.updated_at IS NOT NULL
           AND DATE(i.updated_at) BETWEEN ? AND ?
-          AND ot.ate IN ({$in})");
+          AND ot.ate IN ({$in}) AND (ot.Order_status IS NULL OR ot.Order_status<>6)
+          AND (ot.parent_order_id IS NULL OR ot.parent_order_id=0)");
     $st->execute([$from, $to]);
 
     $sum = 0.0; $cnt = 0; $perUser = [];
@@ -725,12 +744,14 @@ function ul_sales_summary(PDO $db, string $from, string $to, array $salesIds): a
     $out['quote_item_count'] = (int)$st->fetchColumn();
 
     $st = $db->prepare("SELECT COUNT(*) FROM order_track
-        WHERE Order_status<>6 AND DATE(Created_At) BETWEEN ? AND ? AND Created_By IN ({$inQ})");
+        WHERE (Order_status IS NULL OR Order_status<>6) AND (parent_order_id IS NULL OR parent_order_id=0)
+          AND DATE(Created_At) BETWEEN ? AND ? AND Created_By IN ({$inQ})");
     $st->execute([$from, $to]);
     $out['order_count'] = (int)$st->fetchColumn();
 
     $orderIds = array_map('intval', $db->query(
-        "SELECT Order_id FROM order_track WHERE Order_status<>6 AND Created_By IN ({$inQ})"
+        "SELECT Order_id FROM order_track WHERE (Order_status IS NULL OR Order_status<>6)
+          AND (parent_order_id IS NULL OR parent_order_id=0) AND Created_By IN ({$inQ})"
     )->fetchAll(PDO::FETCH_COLUMN));
     if ($orderIds) {
         $openMap = el_order_open_item_counts($db, $orderIds, 'order_note');
@@ -784,7 +805,8 @@ function ul_sales_by_person(PDO $db, string $from, string $to, array $salesIds, 
     }
 
     $st = $db->prepare("SELECT Created_By k, COUNT(*) c FROM order_track
-        WHERE Order_status<>6 AND DATE(Created_At) BETWEEN ? AND ? AND Created_By IN ({$inQ})
+        WHERE (Order_status IS NULL OR Order_status<>6) AND (parent_order_id IS NULL OR parent_order_id=0)
+          AND DATE(Created_At) BETWEEN ? AND ? AND Created_By IN ({$inQ})
         GROUP BY Created_By");
     $st->execute([$from, $to]);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -792,7 +814,8 @@ function ul_sales_by_person(PDO $db, string $from, string $to, array $salesIds, 
     }
 
     $orderRows = $db->query(
-        "SELECT Order_id, Created_By FROM order_track WHERE Order_status<>6 AND Created_By IN ({$inQ})"
+        "SELECT Order_id, Created_By FROM order_track WHERE (Order_status IS NULL OR Order_status<>6)
+          AND (parent_order_id IS NULL OR parent_order_id=0) AND Created_By IN ({$inQ})"
     )->fetchAll(PDO::FETCH_ASSOC);
     $orderIds = []; $createdByOf = [];
     foreach ($orderRows as $r) { $oid = (int)$r['Order_id']; $orderIds[] = $oid; $createdByOf[$oid] = (int)$r['Created_By']; }
@@ -1869,30 +1892,30 @@ function ul_threshold_defaults(): array
 {
     return [
         'design' => [
-            'batch_pending' => ['value' => 20, 'label' => '批圖中筆數（目前狀態，非每日平均、非本期累積）'],
-            'avg_draw_workdays' => ['value' => 5, 'label' => '繪圖平均工作天（每筆訂單平均，非每日）'],
-            'issue_orders' => ['value' => 10, 'label' => '設計備註待回覆訂單數（目前狀態）'],
+            'batch_pending' => ['value' => 20, 'label' => '批圖中筆數（即時現況門檻）'],
+            'avg_draw_workdays' => ['value' => 5, 'label' => '繪圖平均工作天（每筆訂單）'],
+            'issue_orders' => ['value' => 10, 'label' => '設計備註待回覆訂單數（即時現況門檻）'],
         ],
         'sales' => [
-            'quote_backlog' => ['value' => 30, 'label' => '本期報價單筆數（本期累積總數，非每日平均）'],
-            'open_issue_count' => ['value' => 20, 'label' => '待回覆問題筆數（目前狀態）'],
+            'quote_backlog' => ['value' => 30, 'label' => '本期報價單筆數（本期累積）'],
+            'open_issue_count' => ['value' => 20, 'label' => '待回覆問題筆數（即時現況門檻）'],
         ],
         'pm' => [
-            'outsource_wip' => ['value' => 100, 'label' => '委外加工中筆數（目前狀態）'],
-            'pending_recon_lines' => ['value' => 50, 'label' => '待對帳筆數（目前狀態）'],
+            'outsource_wip' => ['value' => 100, 'label' => '委外加工中筆數（即時現況門檻）'],
+            'pending_recon_lines' => ['value' => 50, 'label' => '待對帳筆數（即時現況門檻）'],
         ],
         'prod' => [
-            'unassigned_count' => ['value' => 30, 'label' => '未指派機台筆數（目前狀態）'],
-            'avg_setup_minutes' => ['value' => 60, 'label' => '平均架機時間（分，每次架機平均，非每日）'],
-            'untracked_count' => ['value' => 10, 'label' => '未正式指派卻已報工筆數（本期累積總數）'],
+            'unassigned_count' => ['value' => 30, 'label' => '未指派機台筆數（即時現況門檻）'],
+            'avg_setup_minutes' => ['value' => 60, 'label' => '平均架機時間（分，每次架機）'],
+            'untracked_count' => ['value' => 10, 'label' => '未正式指派卻已報工筆數（本期累積）'],
         ],
         'qc' => [
-            'ng_rate' => ['value' => 0.08, 'label' => 'NG比例（本期內「每日NG比例」的平均值，非總筆數比例）'],
-            'wait_days_avg' => ['value' => 5, 'label' => '待驗平均等待工作天（每筆平均，非每日）'],
-            'adhoc_count' => ['value' => 10, 'label' => '脫離待驗流程的補檢驗筆數（本期累積總數）'],
+            'ng_rate' => ['value' => 0.08, 'label' => 'NG比例（本期每日平均）'],
+            'wait_days_avg' => ['value' => 5, 'label' => '待驗平均等待工作天（每筆）'],
+            'adhoc_count' => ['value' => 10, 'label' => '脫離待驗流程的補檢驗筆數（本期累積）'],
         ],
         'packing' => [
-            'pending' => ['value' => 200, 'label' => '待包裝筆數（目前狀態）'],
+            'pending' => ['value' => 200, 'label' => '待包裝筆數（即時現況門檻）'],
         ],
     ];
 }
@@ -2116,7 +2139,8 @@ function ul_trend_metric_design(PDO $db, string $from, string $to, array $ids): 
     if (!$ids) return 0;
     $in = implode(',', $ids);
     $st = $db->prepare("SELECT COUNT(*) FROM order_track
-        WHERE ate IN ({$in}) AND pmGet IS NOT NULL AND DATE(pmGet) BETWEEN ? AND ? AND Order_status<>6");
+        WHERE ate IN ({$in}) AND pmGet IS NOT NULL AND DATE(pmGet) BETWEEN ? AND ? AND (Order_status IS NULL OR Order_status<>6)
+          AND (parent_order_id IS NULL OR parent_order_id=0)");
     $st->execute([$from, $to]);
     return (int)$st->fetchColumn();
 }
