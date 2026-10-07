@@ -1869,30 +1869,30 @@ function ul_threshold_defaults(): array
 {
     return [
         'design' => [
-            'batch_pending' => ['value' => 20, 'label' => '批圖中筆數'],
-            'avg_draw_workdays' => ['value' => 5, 'label' => '繪圖平均工作天'],
-            'issue_orders' => ['value' => 10, 'label' => '設計備註待回覆訂單數'],
+            'batch_pending' => ['value' => 20, 'label' => '批圖中筆數（目前狀態，非每日平均、非本期累積）'],
+            'avg_draw_workdays' => ['value' => 5, 'label' => '繪圖平均工作天（每筆訂單平均，非每日）'],
+            'issue_orders' => ['value' => 10, 'label' => '設計備註待回覆訂單數（目前狀態）'],
         ],
         'sales' => [
-            'quote_backlog' => ['value' => 30, 'label' => '本期報價單筆數'],
-            'open_issue_count' => ['value' => 20, 'label' => '待回覆問題筆數'],
+            'quote_backlog' => ['value' => 30, 'label' => '本期報價單筆數（本期累積總數，非每日平均）'],
+            'open_issue_count' => ['value' => 20, 'label' => '待回覆問題筆數（目前狀態）'],
         ],
         'pm' => [
-            'outsource_wip' => ['value' => 100, 'label' => '委外加工中筆數'],
-            'pending_recon_lines' => ['value' => 50, 'label' => '待對帳筆數'],
+            'outsource_wip' => ['value' => 100, 'label' => '委外加工中筆數（目前狀態）'],
+            'pending_recon_lines' => ['value' => 50, 'label' => '待對帳筆數（目前狀態）'],
         ],
         'prod' => [
-            'unassigned_count' => ['value' => 30, 'label' => '未指派機台筆數'],
-            'avg_setup_minutes' => ['value' => 60, 'label' => '平均架機時間（分）'],
-            'untracked_count' => ['value' => 10, 'label' => '未正式指派卻已報工筆數'],
+            'unassigned_count' => ['value' => 30, 'label' => '未指派機台筆數（目前狀態）'],
+            'avg_setup_minutes' => ['value' => 60, 'label' => '平均架機時間（分，每次架機平均，非每日）'],
+            'untracked_count' => ['value' => 10, 'label' => '未正式指派卻已報工筆數（本期累積總數）'],
         ],
         'qc' => [
-            'ng_rate' => ['value' => 0.08, 'label' => 'NG比例'],
-            'wait_days_avg' => ['value' => 5, 'label' => '待驗平均等待工作天'],
-            'adhoc_count' => ['value' => 10, 'label' => '脫離待驗流程的補檢驗筆數'],
+            'ng_rate' => ['value' => 0.08, 'label' => 'NG比例（本期內「每日NG比例」的平均值，非總筆數比例）'],
+            'wait_days_avg' => ['value' => 5, 'label' => '待驗平均等待工作天（每筆平均，非每日）'],
+            'adhoc_count' => ['value' => 10, 'label' => '脫離待驗流程的補檢驗筆數（本期累積總數）'],
         ],
         'packing' => [
-            'pending' => ['value' => 200, 'label' => '待包裝筆數'],
+            'pending' => ['value' => 200, 'label' => '待包裝筆數（目前狀態）'],
         ],
     ];
 }
