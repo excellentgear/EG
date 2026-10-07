@@ -5229,8 +5229,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 unset($row);
                 echo json_encode(['success'=>true, 'data'=>$rows]);
             } elseif ($op === 'save') {
-                if (!$can_dict_edit) throw new Exception('無權限（需要 A 或 CRUD 權限）');
                 $id   = intval($_POST['industry_id'] ?? 0);
+                if (!_mdPerm('industry_type', $id ? 'edit' : 'add', $can_dict_edit)) throw new Exception('無'.($id?'修改':'新增').'權限（需要 A 或 CRUD 權限）');
                 $name = trim($_POST['industry_name'] ?? '');
                 $note = trim($_POST['industry_note'] ?? '');
                 if (empty($name)) throw new Exception('產業別名稱不可為空');
@@ -5251,7 +5251,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $cnt = (int)$chk->fetchColumn();
                 echo json_encode($cnt > 0 ? ['can_delete'=>false,'reason'=>'此產業別已有客戶使用，無法刪除'] : ['can_delete'=>true]);
             } elseif ($op === 'delete') {
-                if (!$can_delete_all) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
+                if (!_mdPerm('industry_type', 'delete', $can_delete_all)) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
                 $id = intval($_POST['id'] ?? 0);
                 $chk = $pdo->prepare("SELECT COUNT(*) FROM customer_industry_mapping WHERE industry_id=?");
                 $chk->execute([$id]);
@@ -5261,7 +5261,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 _log_audit($pdo,'delete','dict','industry:'.$id,$del_ind_name?:('id:'.$id),null,$_SESSION['user_id']??null,_get_operator($pdo,$_SESSION['user_id']??null));
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'reorder') {
-                if (!$can_update) throw new Exception('無修改權限');
+                if (!_mdPerm('industry_type', 'edit', $can_update)) throw new Exception('無修改權限');
                 $ids = array_filter(array_map('intval', explode(',', $_POST['ids']??'')));
                 $upd = $pdo->prepare("UPDATE dict_industry_type SET sort_order=? WHERE industry_id=?");
                 foreach (array_values($ids) as $k => $id) { $upd->execute([$k, $id]); }
@@ -5291,8 +5291,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 unset($row);
                 echo json_encode(['success'=>true, 'data'=>$rows]);
             } elseif ($op === 'save') {
-                if (!$can_dict_edit) throw new Exception('無權限（需要 A 或 CRUD 權限）');
                 $id = intval($_POST['main_cat_id'] ?? 0);
+                if (!_mdPerm('maker_category', $id ? 'edit' : 'add', $can_dict_edit)) throw new Exception('無'.($id?'修改':'新增').'權限（需要 A 或 CRUD 權限）');
                 $name = trim($_POST['main_cat_name'] ?? '');
                 if (empty($name)) throw new Exception('大類名稱不可為空');
                 $dup = $pdo->prepare("SELECT COUNT(*) FROM dict_maker_main_category WHERE LOWER(main_cat_name)=LOWER(?) AND is_active=1 AND main_cat_id<>?");
@@ -5322,7 +5322,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             } elseif ($op === 'check_delete') {
                 echo json_encode(['can_delete'=>true]);
             } elseif ($op === 'delete') {
-                if (!$can_delete_all) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
+                if (!_mdPerm('maker_category', 'delete', $can_delete_all)) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
                 $id = intval($_POST['id'] ?? 0);
                 $del_mc = $pdo->prepare("SELECT main_cat_name FROM dict_maker_main_category WHERE main_cat_id=?"); $del_mc->execute([$id]); $del_mc_name = $del_mc->fetchColumn();
                 $pdo->prepare("DELETE FROM maker_category_hierarchy WHERE main_cat_id=?")->execute([$id]);
@@ -5331,14 +5331,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'reorder') {
                 // ids = comma-separated new order of main_cat_id
-                if (!$can_update) throw new Exception('無修改權限');
+                if (!_mdPerm('maker_category', 'edit', $can_update)) throw new Exception('無修改權限');
                 $ids = array_filter(array_map('intval', explode(',', $_POST['ids']??'')));
                 $upd = $pdo->prepare("UPDATE dict_maker_main_category SET sort_order=? WHERE main_cat_id=?");
                 foreach (array_values($ids) as $k => $mid) { $upd->execute([$k, $mid]); }
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'reorder_sub') {
                 // Reorder sub bindings within a main cat
-                if (!$can_update) throw new Exception('無修改權限');
+                if (!_mdPerm('maker_category', 'edit', $can_update)) throw new Exception('無修改權限');
                 $main_id = intval($_POST['main_cat_id']??0);
                 $ids = array_filter(array_map('intval', explode(',', $_POST['ids']??'')));
                 $upd = $pdo->prepare("UPDATE maker_category_hierarchy SET sort_order=? WHERE main_cat_id=? AND sub_cat_id=?");
@@ -5376,8 +5376,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $stmt->execute($params);
                 echo json_encode(['success'=>true, 'data'=>$stmt->fetchAll(PDO::FETCH_ASSOC)]);
             } elseif ($op === 'save') {
-                if (!$can_dict_edit) throw new Exception('無權限（需要 A 或 CRUD 權限）');
                 $id       = intval($_POST['sub_cat_id'] ?? 0);
+                if (!_mdPerm('maker_category', $id ? 'edit' : 'add', $can_dict_edit)) throw new Exception('無'.($id?'修改':'新增').'權限（需要 A 或 CRUD 權限）');
                 $name     = trim($_POST['sub_cat_name'] ?? '');
                 $group    = trim($_POST['sub_cat_group'] ?? 'PROCESS');
                 $ref_pt   = trim($_POST['ref_process_type_id'] ?? '') !== '' ? intval($_POST['ref_process_type_id']) : null;
@@ -5426,7 +5426,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             } elseif ($op === 'check_delete') {
                 echo json_encode(['can_delete'=>true]);
             } elseif ($op === 'delete') {
-                if (!$can_delete_all) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
+                if (!_mdPerm('maker_category', 'delete', $can_delete_all)) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
                 $id = intval($_POST['id'] ?? 0);
                 // 禁止實體刪除：改用 is_active=0 以維護 AI 數據完整性
                 // 先檢查是否有廠商綁定
@@ -5448,7 +5448,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     : '已停用';
                 echo json_encode(['success'=>true,'message'=>$msg,'was_mapped'=>$mapped]);
             } elseif ($op === 'reorder') {
-                if (!$can_update) throw new Exception('無修改權限');
+                if (!_mdPerm('maker_category', 'edit', $can_update)) throw new Exception('無修改權限');
                 $ids = array_values(array_filter(array_map('intval', explode(',', $_POST['ids']??''))));
                 $upd = $pdo->prepare("UPDATE dict_maker_sub_category SET sort_order=? WHERE sub_cat_id=?");
                 foreach ($ids as $k => $sid) { $upd->execute([$k, $sid]); }
@@ -5478,8 +5478,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
                 echo json_encode(['success'=>true,'data'=>$data]);
             } elseif ($op2 === 'save') {
-                if (!$can_update) throw new Exception('無修改權限（需 A/CDRU/CRU）');
                 $id    = intval($_POST['proc_label_id'] ?? 0);
+                if (!_mdPerm('maker_proc_label', $id ? 'edit' : 'add', $can_update)) throw new Exception('無'.($id?'修改':'新增').'權限（需 A/CDRU/CRU）');
                 $name  = trim($_POST['label_name'] ?? '');
                 $itype = in_array($_POST['input_type']??'', ['none','numeric','text']) ? $_POST['input_type'] : 'none';
                 $ntype = in_array($_POST['numeric_type']??'', ['range','MAX','MIN']) ? $_POST['numeric_type'] : 'range';
@@ -5528,7 +5528,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     echo json_encode(['can_delete'=>true]);
                 }
             } elseif ($op2 === 'delete') {
-                if (!$can_delete_all) throw new Exception('無刪除權限（需 A 或 CDRU）');
+                if (!_mdPerm('maker_proc_label', 'delete', $can_delete_all)) throw new Exception('無刪除權限（需 A 或 CDRU）');
                 $id = intval($_POST['id'] ?? 0);
                 $chk = $pdo->prepare("SELECT COUNT(*) FROM maker_proc_label_map WHERE proc_label_id=?"); $chk->execute([$id]); $mapped = (int)$chk->fetchColumn();
                 if ($mapped > 0) throw new Exception("此標籤已有 {$mapped} 筆廠商資料使用，無法刪除");
@@ -5537,7 +5537,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 _log_audit($pdo,'delete','dict','maker-proc-label:'.$id,$nm_val?:('id:'.$id),null,$_SESSION['user_id']??null,_get_operator($pdo,$_SESSION['user_id']??null));
                 echo json_encode(['success'=>true,'message'=>'已刪除']);
             } elseif ($op2 === 'reorder') {
-                if (!$can_update) throw new Exception('無修改權限');
+                if (!_mdPerm('maker_proc_label', 'edit', $can_update)) throw new Exception('無修改權限');
                 $ids = array_values(array_filter(array_map('intval', explode(',', $_POST['ids']??''))));
                 $upd = $pdo->prepare("UPDATE dict_maker_proc_label SET sort_order=? WHERE proc_label_id=?");
                 foreach ($ids as $k => $sid) { $upd->execute([$k, $sid]); }
@@ -5580,7 +5580,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $all_pnos   = $pdo->query("SELECT pn.ProcessNo, pn.ProcessName, pn.process_type_id, GROUP_CONCAT(DISTINCT pm.process_type_id ORDER BY pm.process_type_id SEPARATOR ',') AS extra_type_ids FROM process_no pn LEFT JOIN process_type_process_map pm ON pm.process_no_id=pn.ProcessNo WHERE pn.ProcessName IS NOT NULL GROUP BY pn.ProcessNo ORDER BY pn.ProcessNo")->fetchAll(PDO::FETCH_ASSOC);
                 echo json_encode(['success'=>true,'main_cats'=>$main_cats,'process_types'=>$all_ptypes,'process_nos'=>$all_pnos]);
             } elseif ($op3 === 'save_config') {
-                if (!$can_update) throw new Exception('無修改權限');
+                if (!_mdPerm('maker_main_cat_process', 'edit', $can_update)) throw new Exception('無修改權限');
                 $main_cat_id = intval($_POST['main_cat_id'] ?? 0);
                 $clear_all   = intval($_POST['clear_all'] ?? 0);
                 $items = json_decode(trim($_POST['config_items'] ?? '[]'), true) ?: [];
@@ -6048,6 +6048,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 echo json_encode(['success'=>true,'data'=>$stmt->fetchAll(PDO::FETCH_ASSOC)]);
             } elseif ($op === 'save') {
                 $id  = intval($_POST['sub_id'] ?? 0);
+                // 這個 op 原本完全沒有權限檢查（既有缺口，本次一併補上）
+                if (!_mdPerm('industry_type', $id ? 'edit' : 'add', $can_dict_edit)) throw new Exception('無'.($id?'修改':'新增').'權限（需要 A 或 CRUD 權限）');
                 $iid = intval($_POST['industry_id']);
                 $nm  = trim($_POST['sub_name'] ?? '');
                 if (!$nm) throw new Exception('小類名稱不可為空');
@@ -6058,6 +6060,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'delete') {
+                // 這個 op 原本完全沒有權限檢查（既有缺口，本次一併補上）
+                if (!_mdPerm('industry_type', 'delete', $can_delete_all)) throw new Exception('無刪除權限（需要 A 或 CRUD 權限）');
                 $id = intval($_POST['id']);
                 $pdo->prepare("UPDATE dict_industry_sub_type SET is_active=0 WHERE sub_id=?")->execute([$id]);
                 echo json_encode(['success'=>true]);
