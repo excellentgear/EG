@@ -687,3 +687,828 @@ function ul_pm_by_person(PDO $db, array $pmIds): array
 {
     return [];
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * E. 生產課
+ *
+ * 資料來源：bom_ing（processing_state：N未發包／ing加工中／Q待QC驗／P生管待移轉／
+ *          E已移轉，排除 E 才算「進行中」——規則同 bom_process_date_lib.php 的狀態推導
+ *          註解）JOIN process_no／process_type（製程大類）、pm_process_daily_report
+ *          （報工紀錄：setup_user_id＝架機人員、production_user_id＝生產人員，兩者可能
+ *          是不同人）。
+ *
+ * $prodUserIds 的用法並不統一：①由製程大類彙總現況（ul_prod_by_process_type）與抓
+ * 系統缺口（ul_prod_untracked_reports）兩種是「這批工作目前的狀態／系統流程哪裡斷掉」，
+ * 跟哪個人報的無關，刻意不按人員篩選（$prodUserIds 保留只是讓六支函式介面一致，
+ * 同 ul_pm_summary() 的 $pmIds 先例）②真正算工作量（每日產出／架機與生產時間／人均）
+ * 的三支一定要篩，否則算出來的是全公司的量不是這個單位的量。
+ * ══════════════════════════════════════════════════════════════════ */
+
+if (!defined('UL_PROD_SETUP_MAX_MINUTES')) define('UL_PROD_SETUP_MAX_MINUTES', 1440);
+if (!defined('UL_PROD_PRODUCTION_MAX_MINUTES')) define('UL_PROD_PRODUCTION_MAX_MINUTES', 1440);
+
+/**
+ * 製程編號→（製程名稱／製程大類 id／製程大類名稱）對照，全站這兩張表都很小，
+ * 整張撈起來在記憶體裡查，不逐筆各查一次。
+ */
+function ul_process_type_map(PDO $db): array
+{
+    $out = [];
+    foreach ($db->query(
+        "SELECT pn.ProcessNo pno, pn.ProcessName pname, pt.process_type_id ptid, pt.process_type ptname
+         FROM process_no pn LEFT JOIN process_type pt ON pt.process_type_id = pn.process_type_id"
+    )->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[(int)$r['pno']] = [
+            'process_name' => (string)$r['pname'],
+            'process_type_id' => $r['ptid'] !== null ? (int)$r['ptid'] : 0,
+            'process_type_name' => $r['ptname'] !== null && $r['ptname'] !== '' ? (string)$r['ptname'] : '（未設定製程大類）',
+        ];
+    }
+    return $out;
+}
+
+/**
+ * 依「製程大類」分組的現況快照（不受 $from/$to 限制，跟 ul_pm_summary() 的「目前狀態」
+ * 五項同一種道理——processing_state 沒有時間戳可以切期間）：未指派(machine_id IS NULL)／
+ * 已指派(machine_id IS NOT NULL) 的進行中（processing_state 不是 'E'，含 NULL／N／ing／
+ * Q／P）筆數。
+ * @return array 每列 ['process_type_id','process_type_name','unassigned','assigned','total']，依 total 由大到小排序
+ */
+function ul_prod_by_process_type(PDO $db, string $from, string $to, array $prodUserIds = []): array
+{
+    $typeMap = ul_process_type_map($db);
+    $rows = $db->query(
+        "SELECT process_no, machine_id FROM bom_ing WHERE processing_state IS NULL OR processing_state <> 'E'"
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $buckets = [];
+    foreach ($rows as $r) {
+        $pno = $r['process_no'] !== null ? (int)$r['process_no'] : 0;
+        $info = $typeMap[$pno] ?? ['process_type_id' => 0, 'process_type_name' => '（未設定製程大類）'];
+        $ptid = $info['process_type_id'];
+        if (!isset($buckets[$ptid])) $buckets[$ptid] = ['name' => $info['process_type_name'], 'unassigned' => 0, 'assigned' => 0];
+        if ($r['machine_id'] === null) $buckets[$ptid]['unassigned']++;
+        else $buckets[$ptid]['assigned']++;
+    }
+
+    $out = [];
+    foreach ($buckets as $ptid => $b) {
+        $out[] = [
+            'process_type_id' => $ptid, 'process_type_name' => $b['name'],
+            'unassigned' => $b['unassigned'], 'assigned' => $b['assigned'],
+            'total' => $b['unassigned'] + $b['assigned'],
+        ];
+    }
+    usort($out, fn($x, $y) => $y['total'] <=> $x['total']);
+    return $out;
+}
+
+/**
+ * 生管沒有正式指派/移轉、但現場已經直接報工的筆數：報工紀錄（pm_process_daily_report）
+ * 存在，但對應的 bom_ing 當時查無此筆、或完全沒指派機台、或仍停在最初狀態（N／NULL）。
+ * 分組用「報工自己登記的 process_no」而不是 bom_ing.process_no——報工跟 bom_ing 對不起來
+ * 正是本函式要抓的情況，拿對不起來的那一邊分組沒有意義。
+ * 這是「系統流程哪裡斷掉」的缺口偵測，不是某個人的工作量，刻意不按 $prodUserIds 篩選。
+ * @return array ['by_process_type'=>[每類筆數，依數量由大到小], 'examples'=>最多20筆範例, 'total'=>int]
+ */
+function ul_prod_untracked_reports(PDO $db, string $from, string $to, array $prodUserIds = []): array
+{
+    $typeMap = ul_process_type_map($db);
+    $st = $db->prepare(
+        "SELECT r.process_no, r.report_date, bi.bom AS bom_no
+         FROM pm_process_daily_report r
+         LEFT JOIN bom_ing bi ON bi.bom_ing_fid = r.bom_ing_fid
+         WHERE r.report_date BETWEEN ? AND ?
+           AND (bi.bom_ing_fid IS NULL OR bi.machine_id IS NULL
+                OR bi.processing_state IS NULL OR bi.processing_state = 'N')"
+    );
+    $st->execute([$from, $to]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    $buckets = [];
+    $examples = [];
+    foreach ($rows as $r) {
+        $pno = (int)$r['process_no'];
+        $info = $typeMap[$pno] ?? ['process_type_id' => 0, 'process_type_name' => '（未設定製程大類）', 'process_name' => '#' . $pno];
+        $ptid = $info['process_type_id'];
+        if (!isset($buckets[$ptid])) $buckets[$ptid] = ['name' => $info['process_type_name'], 'count' => 0];
+        $buckets[$ptid]['count']++;
+        if (count($examples) < 20) {
+            $examples[] = [
+                'bom' => $r['bom_no'] ?: '（找不到對應製令）',
+                'process_name' => $info['process_name'] ?? ('#' . $pno),
+                'report_date' => $r['report_date'],
+            ];
+        }
+    }
+
+    $out = [];
+    foreach ($buckets as $ptid => $b) $out[] = ['process_type_id' => $ptid, 'process_type_name' => $b['name'], 'count' => $b['count']];
+    usort($out, fn($x, $y) => $y['count'] <=> $x['count']);
+
+    return ['by_process_type' => $out, 'examples' => $examples, 'total' => count($rows)];
+}
+
+/**
+ * 每日報工加工數量，依製程大類分組；只算這批 $prodUserIds（生產課人員）裡「實際生產」
+ * 的那個人報的工（production_user_id——跟負責架機的 setup_user_id 是不同角色，架機時間
+ * 另見 ul_prod_setup_stats()）。$prodUserIds 為空直接回傳空結構（跟其他「沒有人員就沒有
+ * 數字」的既有函式同規則，例如 ul_design_summary()）。
+ * @return array ['rows'=>[每日×製程大類：report_date/process_type_id/process_type_name/qty/cnt],
+ *                'total_qty'=>int,'total_cnt'=>int]
+ */
+function ul_prod_daily_output(PDO $db, string $from, string $to, array $prodUserIds): array
+{
+    $empty = ['rows' => [], 'total_qty' => 0, 'total_cnt' => 0];
+    $ids = ul_ids_norm($prodUserIds);
+    if (!$ids) return $empty;
+    $in = implode(',', $ids);
+    $typeMap = ul_process_type_map($db);
+
+    $st = $db->prepare(
+        "SELECT report_date, process_no, SUM(produced_qty) qty, COUNT(*) cnt
+         FROM pm_process_daily_report
+         WHERE report_date BETWEEN ? AND ? AND production_user_id IN ({$in})
+         GROUP BY report_date, process_no ORDER BY report_date"
+    );
+    $st->execute([$from, $to]);
+
+    $rows = []; $totalQty = 0; $totalCnt = 0;
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $pno = (int)$r['process_no'];
+        $info = $typeMap[$pno] ?? ['process_type_id' => 0, 'process_type_name' => '（未設定製程大類）'];
+        $qty = (int)$r['qty']; $cnt = (int)$r['cnt'];
+        $rows[] = [
+            'report_date' => $r['report_date'],
+            'process_type_id' => $info['process_type_id'], 'process_type_name' => $info['process_type_name'],
+            'qty' => $qty, 'cnt' => $cnt,
+        ];
+        $totalQty += $qty; $totalCnt += $cnt;
+    }
+    return ['rows' => $rows, 'total_qty' => $totalQty, 'total_cnt' => $totalCnt];
+}
+
+/**
+ * 每日架機數與平均架機時間（setup_start_time~setup_end_time），篩 setup_user_id（架機
+ * 人員，跟實際生產的 production_user_id 是不同角色）。平均只算頭尾都有填、且落在
+ * 0~UL_PROD_SETUP_MAX_MINUTES 分鐘（預設 1440＝24小時，常數方便之後調整）之間的紀錄，
+ * 排除資料異常的離群值（例如忘了填結束時間被系統預設成隔天的髒資料）。
+ * @return array ['daily'=>[每日：report_date/count], 'avg_minutes'=>float|null,
+ *                'total_minutes'=>float,'valid_count'=>int]
+ */
+function ul_prod_setup_stats(PDO $db, string $from, string $to, array $prodUserIds): array
+{
+    $empty = ['daily' => [], 'avg_minutes' => null, 'total_minutes' => 0.0, 'valid_count' => 0];
+    $ids = ul_ids_norm($prodUserIds);
+    if (!$ids) return $empty;
+    $in = implode(',', $ids);
+
+    $st = $db->prepare(
+        "SELECT report_date, setup_start_time, setup_end_time
+         FROM pm_process_daily_report
+         WHERE report_date BETWEEN ? AND ? AND setup_user_id IN ({$in})
+           AND setup_start_time IS NOT NULL AND setup_end_time IS NOT NULL"
+    );
+    $st->execute([$from, $to]);
+
+    $dailyCount = [];
+    $sumMin = 0.0; $validCnt = 0;
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $d = (string)$r['report_date'];
+        $dailyCount[$d] = ($dailyCount[$d] ?? 0) + 1;
+        $mins = (strtotime((string)$r['setup_end_time']) - strtotime((string)$r['setup_start_time'])) / 60;
+        if ($mins >= 0 && $mins <= UL_PROD_SETUP_MAX_MINUTES) { $sumMin += $mins; $validCnt++; }
+    }
+    $daily = [];
+    foreach ($dailyCount as $d => $c) $daily[] = ['report_date' => $d, 'count' => $c];
+    usort($daily, fn($x, $y) => strcmp($x['report_date'], $y['report_date']));
+
+    return [
+        'daily' => $daily,
+        'avg_minutes' => $validCnt > 0 ? round($sumMin / $validCnt, 1) : null,
+        'total_minutes' => round($sumMin, 1),
+        'valid_count' => $validCnt,
+    ];
+}
+
+/**
+ * 平均生產時間（production_start_time~production_end_time），邏輯與 ul_prod_setup_stats()
+ * 完全對稱，只是角色換成實際生產的人（production_user_id）、常數換成
+ * UL_PROD_PRODUCTION_MAX_MINUTES（預設一樣 1440 分鐘，獨立開一個常數方便之後分開調整）。
+ * @return array ['daily'=>[每日：report_date/count], 'avg_minutes'=>float|null,
+ *                'total_minutes'=>float,'valid_count'=>int]
+ */
+function ul_prod_production_stats(PDO $db, string $from, string $to, array $prodUserIds): array
+{
+    $empty = ['daily' => [], 'avg_minutes' => null, 'total_minutes' => 0.0, 'valid_count' => 0];
+    $ids = ul_ids_norm($prodUserIds);
+    if (!$ids) return $empty;
+    $in = implode(',', $ids);
+
+    $st = $db->prepare(
+        "SELECT report_date, production_start_time, production_end_time
+         FROM pm_process_daily_report
+         WHERE report_date BETWEEN ? AND ? AND production_user_id IN ({$in})
+           AND production_start_time IS NOT NULL AND production_end_time IS NOT NULL"
+    );
+    $st->execute([$from, $to]);
+
+    $dailyCount = [];
+    $sumMin = 0.0; $validCnt = 0;
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $d = (string)$r['report_date'];
+        $dailyCount[$d] = ($dailyCount[$d] ?? 0) + 1;
+        $mins = (strtotime((string)$r['production_end_time']) - strtotime((string)$r['production_start_time'])) / 60;
+        if ($mins >= 0 && $mins <= UL_PROD_PRODUCTION_MAX_MINUTES) { $sumMin += $mins; $validCnt++; }
+    }
+    $daily = [];
+    foreach ($dailyCount as $d => $c) $daily[] = ['report_date' => $d, 'count' => $c];
+    usort($daily, fn($x, $y) => strcmp($x['report_date'], $y['report_date']));
+
+    return [
+        'daily' => $daily,
+        'avg_minutes' => $validCnt > 0 ? round($sumMin / $validCnt, 1) : null,
+        'total_minutes' => round($sumMin, 1),
+        'valid_count' => $validCnt,
+    ];
+}
+
+/**
+ * 人均負荷：分母＝期間內這批 $prodUserIds 裡「真的有報工」的人數（COUNT DISTINCT
+ * production_user_id，忽略 NULL，限定在 $prodUserIds 之內——不限定的話會把全公司任何人
+ * 都算進分母，跟本函式「這個單位人均負荷多少」的語意不合）；分子直接重用
+ * ul_prod_daily_output()／ul_prod_setup_stats()／ul_prod_production_stats() 已經算好的
+ * 加總值，不重新寫一份查詢（單一職責，三支各自的規則改了這裡自動跟上）。
+ * @return array ['worker_count'=>int,'avg_output_per_person'=>float|null,
+ *                'avg_setup_minutes_per_person'=>float|null,'avg_production_minutes_per_person'=>float|null]
+ */
+function ul_prod_per_capita(PDO $db, string $from, string $to, array $prodUserIds): array
+{
+    $out = ['worker_count' => 0, 'avg_output_per_person' => null,
+            'avg_setup_minutes_per_person' => null, 'avg_production_minutes_per_person' => null];
+    $ids = ul_ids_norm($prodUserIds);
+    if (!$ids) return $out;
+    $in = implode(',', $ids);
+
+    $st = $db->prepare(
+        "SELECT COUNT(DISTINCT production_user_id) FROM pm_process_daily_report
+         WHERE report_date BETWEEN ? AND ? AND production_user_id IN ({$in})"
+    );
+    $st->execute([$from, $to]);
+    $workerCount = (int)$st->fetchColumn();
+    $out['worker_count'] = $workerCount;
+    if ($workerCount <= 0) return $out;
+
+    $output = ul_prod_daily_output($db, $from, $to, $ids);
+    $setup = ul_prod_setup_stats($db, $from, $to, $ids);
+    $prod = ul_prod_production_stats($db, $from, $to, $ids);
+
+    $out['avg_output_per_person'] = round($output['total_qty'] / $workerCount, 1);
+    $out['avg_setup_minutes_per_person'] = round($setup['total_minutes'] / $workerCount, 1);
+    $out['avg_production_minutes_per_person'] = round($prod['total_minutes'] / $workerCount, 1);
+    return $out;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * F. 品管
+ *
+ * 資料來源：qc_check_form（檢驗單，inspector_by／approved_by 是 char(11) 存 user.id
+ *          字串，比照 bom_ing.Created_By 同一種存法）、bom_ing（qc_completed／
+ *          qc_completed_at／qc_completed_by）、qa_abnormal_order（異常單，deleted_at
+ *          IS NOT NULL 一律排除軟刪除）。
+ *
+ * $qcUserIds 的用法同樣不統一：待驗等待工作天（ul_qc_wait_time）跟異常單／NG比例
+ * （ul_qc_abnormal_stats）、脫離流程的補檢驗（ul_qc_adhoc）都是「這批工作項目本身的
+ * 狀態」，不是某個品管的工作量，刻意不按人篩選（ul_qc_wait_time 的 $qcUserIds 只用在
+ * 算人均檢驗天數的分母）；真正要看「這個人今天做了多少」的 ul_qc_daily_items／
+ * ul_qc_by_person 才會篩。
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * 每日檢驗項目數與製程名稱，只算這批 $qcUserIds（品管人員，inspector_by 或 approved_by
+ * 任一是其中一人）自己經手的（排除 status='DRAFT'——草稿還沒定案，不算正式完成的檢驗
+ * 項目；要統計「待驗中」的另開一支，不要混進這支）。日期一律用 check_date，缺值退回
+ * created_at 當天（補登資料常常沒填 check_date）。$qcUserIds 為空直接回傳空陣列。
+ * @return array 每列 ['check_date','process_name','count']
+ */
+function ul_qc_daily_items(PDO $db, string $from, string $to, array $qcUserIds): array
+{
+    $ids = ul_ids_norm($qcUserIds);
+    if (!$ids) return [];
+    $inQ = implode(',', array_map(fn($v) => "'" . $v . "'", $ids));
+
+    $st = $db->prepare(
+        "SELECT COALESCE(check_date, DATE(created_at)) AS d, process_name, COUNT(*) c
+         FROM qc_check_form
+         WHERE status<>'DRAFT'
+           AND COALESCE(check_date, DATE(created_at)) BETWEEN ? AND ?
+           AND (inspector_by IN ({$inQ}) OR approved_by IN ({$inQ}))
+         GROUP BY d, process_name ORDER BY d"
+    );
+    $st->execute([$from, $to]);
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[] = ['check_date' => $r['d'], 'process_name' => (string)$r['process_name'], 'count' => (int)$r['c']];
+    }
+    return $out;
+}
+
+/**
+ * 待驗等待工作天（重點函式）：對期間內「驗完」的每一筆 bom_ing，算「進入待驗」到
+ * 「驗完」之間的工作天數。
+ *   驗完時間：優先 bom_ing.qc_completed_at；缺值時退回該 bom_ing_fid 名下
+ *             qc_check_form 狀態=LOCKED 的最新 approved_at（補舊資料、或沒有走
+ *             qc_completed 流程留下紀錄的單據）。
+ *   進入待驗時間：外包（maker_list.internal<>1）用 bom_ing.return_date（回廠日）；
+ *                 廠內（internal=1，或查無對照廠商資訊時保守當廠內）用該
+ *                 bom_ing_fid+process_no 名下最後一筆 is_finished=1 報工的
+ *                 production_end_time（缺值退 Created_At）。
+ * 這是「這一筆製令在品管手上排了多久」的指標，跟是哪一位品管驗的沒有關係——公司目前
+ * 只有一個共用的待驗佇列，所以刻意不按 $qcUserIds 篩掉任何一列；$qcUserIds 只用來算
+ * 「人均檢驗天數」這一項分母（供 ul_qc_by_person() 重用逐筆明細再依人分組）。
+ * $internalMakerFlagJoin：可選的 [maker_id_no=>bool internal] 覆寫對照表，呼叫端已經
+ * 查過一次 maker_list 時可以直接傳進來省一次查詢；留空（預設）時自己查。
+ * @return array ['rows'=>逐筆明細（含 person_id，供 ul_qc_by_person() 分組重用）,
+ *                'avg_workdays'=>float|null,'longest'=>最長前5筆,'shortest'=>最短前5筆,
+ *                'per_capita_workdays'=>float|null]
+ */
+function ul_qc_wait_time(PDO $db, string $from, string $to, array $qcUserIds = [], ?array $internalMakerFlagJoin = null): array
+{
+    $out = ['rows' => [], 'avg_workdays' => null, 'longest' => [], 'shortest' => [], 'per_capita_workdays' => null];
+
+    $st = $db->prepare(
+        "SELECT bom_ing_fid, bom, process_no, maker_id_no, return_date, qc_completed_at, qc_completed_by
+         FROM bom_ing
+         WHERE qc_completed=1 AND qc_completed_at IS NOT NULL
+           AND DATE(qc_completed_at) BETWEEN ? AND ?"
+    );
+    $st->execute([$from, $to]);
+    $candidates = [];
+    $seenFid = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $fid = (int)$r['bom_ing_fid'];
+        $seenFid[$fid] = true;
+        $candidates[$fid] = [
+            'fid' => $fid, 'bom' => $r['bom'], 'process_no' => (int)$r['process_no'],
+            'maker_id_no' => $r['maker_id_no'], 'return_date' => $r['return_date'],
+            'finish_at' => $r['qc_completed_at'],
+            'person_id' => $r['qc_completed_by'] !== null ? (int)$r['qc_completed_by'] : null,
+        ];
+    }
+
+    // 補：qc_completed_at 缺值的，退回同一張 bom_ing 名下 qc_check_form LOCKED 最新的 approved_at
+    $st2 = $db->query(
+        "SELECT qf.bom_ing_fid, qf.approved_at, qf.approved_by, qf.inspector_by
+         FROM qc_check_form qf
+         JOIN bom_ing bi ON bi.bom_ing_fid = qf.bom_ing_fid
+         WHERE qf.status='LOCKED' AND qf.approved_at IS NOT NULL AND qf.bom_ing_fid>0
+           AND bi.qc_completed_at IS NULL"
+    );
+    $fallbackBest = [];
+    foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $fid = (int)$r['bom_ing_fid'];
+        if (isset($seenFid[$fid])) continue;
+        if (!isset($fallbackBest[$fid]) || (string)$r['approved_at'] > (string)$fallbackBest[$fid]['approved_at']) {
+            $fallbackBest[$fid] = $r;
+        }
+    }
+    $fallbackFids = [];
+    foreach ($fallbackBest as $fid => $r) {
+        $d = substr((string)$r['approved_at'], 0, 10);
+        if ($d >= $from && $d <= $to) $fallbackFids[] = $fid;
+    }
+    if ($fallbackFids) {
+        $in2 = implode(',', $fallbackFids);
+        foreach ($db->query(
+            "SELECT bom_ing_fid, bom, process_no, maker_id_no, return_date FROM bom_ing WHERE bom_ing_fid IN ({$in2})"
+        )->fetchAll(PDO::FETCH_ASSOC) as $bi) {
+            $fid = (int)$bi['bom_ing_fid'];
+            $fb = $fallbackBest[$fid];
+            $personRaw = ($fb['approved_by'] !== null && $fb['approved_by'] !== '') ? $fb['approved_by'] : $fb['inspector_by'];
+            $candidates[$fid] = [
+                'fid' => $fid, 'bom' => $bi['bom'], 'process_no' => (int)$bi['process_no'],
+                'maker_id_no' => $bi['maker_id_no'], 'return_date' => $bi['return_date'],
+                'finish_at' => $fb['approved_at'],
+                'person_id' => ($personRaw !== null && $personRaw !== '' && ctype_digit((string)$personRaw)) ? (int)$personRaw : null,
+            ];
+        }
+    }
+
+    if (!$candidates) return $out;
+
+    $makerIds = array_values(array_unique(array_filter(array_column($candidates, 'maker_id_no'))));
+    $internalMap = $internalMakerFlagJoin;
+    if ($internalMap === null) {
+        $internalMap = [];
+        if ($makerIds) {
+            $inM = implode(',', array_map(fn($v) => $db->quote($v), $makerIds));
+            foreach ($db->query("SELECT maker_id_no, internal FROM maker_list WHERE maker_id_no IN ({$inM})")->fetchAll(PDO::FETCH_ASSOC) as $m) {
+                $internalMap[$m['maker_id_no']] = ((int)($m['internal'] ?? 0)) === 1;
+            }
+        }
+    }
+
+    $typeMap = ul_process_type_map($db);
+    $rowsOut = [];
+    foreach ($candidates as $c) {
+        $hasMaker = !empty($c['maker_id_no']);
+        if (!$hasMaker) {
+            $isInternal = true; // 查無廠商資訊，保守當廠內製程，不猜成外包
+        } elseif (array_key_exists($c['maker_id_no'], $internalMap)) {
+            $isInternal = (bool)$internalMap[$c['maker_id_no']];
+        } else {
+            $isInternal = true; // 有廠商編號但查不到對照資料，同樣保守當廠內
+        }
+
+        $enterAt = null;
+        if (!$isInternal) {
+            $enterAt = $c['return_date'];
+        } else {
+            $stp = $db->prepare(
+                "SELECT production_end_time, Created_At FROM pm_process_daily_report
+                 WHERE bom_ing_fid=? AND process_no=? AND is_finished=1
+                 ORDER BY COALESCE(production_end_time, Created_At) DESC LIMIT 1"
+            );
+            $stp->execute([$c['fid'], $c['process_no']]);
+            $pr = $stp->fetch(PDO::FETCH_ASSOC);
+            if ($pr) $enterAt = $pr['production_end_time'] ?: $pr['Created_At'];
+        }
+        if (!$enterAt) continue; // 查不到進入待驗時間，不勉強算成 0 天，直接不計入
+
+        $days = ul_workdays_between($db, substr((string)$enterAt, 0, 10), substr((string)$c['finish_at'], 0, 10));
+        if ($days === null) continue;
+
+        $info = $typeMap[$c['process_no']] ?? ['process_name' => '#' . $c['process_no']];
+        $rowsOut[] = [
+            'bom_ing_fid' => $c['fid'], 'bom' => $c['bom'],
+            'process_no' => $c['process_no'], 'process_name' => $info['process_name'] ?? ('#' . $c['process_no']),
+            'enter_at' => $enterAt, 'finish_at' => $c['finish_at'],
+            'workdays' => $days, 'person_id' => $c['person_id'],
+        ];
+    }
+
+    if (!$rowsOut) return $out;
+    $out['rows'] = $rowsOut;
+
+    $sum = array_sum(array_column($rowsOut, 'workdays'));
+    $cnt = count($rowsOut);
+    $out['avg_workdays'] = $cnt > 0 ? round($sum / $cnt, 2) : null;
+
+    $byDesc = $rowsOut; usort($byDesc, fn($x, $y) => $y['workdays'] <=> $x['workdays']);
+    $out['longest'] = array_slice($byDesc, 0, 5);
+    $byAsc = $rowsOut; usort($byAsc, fn($x, $y) => $x['workdays'] <=> $y['workdays']);
+    $out['shortest'] = array_slice($byAsc, 0, 5);
+
+    $qcIds = ul_ids_norm($qcUserIds);
+    $out['per_capita_workdays'] = count($qcIds) > 0 ? round($sum / count($qcIds), 2) : null;
+
+    return $out;
+}
+
+/**
+ * 每日/每週異常單數量與異常比例。異常單數依 occurrence_date（缺值退 created_at 當天）
+ * 分組，排除軟刪除（deleted_at IS NOT NULL）；異常比例＝當日 NG 檢驗筆數
+ * （qc_check_form.check_result='NG'，排除 DRAFT）÷ 當日總檢驗筆數，依日分組。
+ * avg_abnormal_per_day 用「期間內的日曆天數」當分母（不只是有異常單的那幾天——沒異常單
+ * 的日子本來就該算進分母，否則平均值會被墊高）；avg_ng_rate 是「有檢驗資料的那些天」的
+ * 簡單平均（不是用總筆數加權），比較貼近「平常日子異常比例大概多少」的語感。
+ * 異常單沒有欄位記著「是哪個品管驗出來的」（responsible_person_id 是缺失的責任歸屬，
+ * 不是品管本人），這兩項是公司整體的品質狀況，刻意不按 $qcUserIds 篩選，保留參數只是
+ * 讓本節函式介面一致。
+ * @return array ['daily_abnormal'=>[每日：date/count],'daily_ng_rate'=>[每日：date/rate(0~1)/ng_count/total_count],
+ *                'avg_abnormal_per_day'=>float,'avg_ng_rate'=>float|null]
+ */
+function ul_qc_abnormal_stats(PDO $db, string $from, string $to, array $qcUserIds = []): array
+{
+    $st = $db->prepare(
+        "SELECT COALESCE(occurrence_date, DATE(created_at)) AS d, COUNT(*) c
+         FROM qa_abnormal_order
+         WHERE deleted_at IS NULL
+           AND COALESCE(occurrence_date, DATE(created_at)) BETWEEN ? AND ?
+         GROUP BY d ORDER BY d"
+    );
+    $st->execute([$from, $to]);
+    $dailyAbnormal = [];
+    $totalAbnormal = 0;
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $dailyAbnormal[] = ['date' => $r['d'], 'count' => (int)$r['c']];
+        $totalAbnormal += (int)$r['c'];
+    }
+
+    $st2 = $db->prepare(
+        "SELECT COALESCE(check_date, DATE(created_at)) AS d,
+                SUM(CASE WHEN check_result='NG' THEN 1 ELSE 0 END) AS ng_c, COUNT(*) AS cnt
+         FROM qc_check_form
+         WHERE status<>'DRAFT'
+           AND COALESCE(check_date, DATE(created_at)) BETWEEN ? AND ?
+         GROUP BY d ORDER BY d"
+    );
+    $st2->execute([$from, $to]);
+    $dailyNgRate = [];
+    $rateSum = 0.0; $rateCnt = 0;
+    foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $cnt = (int)$r['cnt'];
+        if ($cnt <= 0) continue;
+        $rate = (int)$r['ng_c'] / $cnt;
+        $dailyNgRate[] = ['date' => $r['d'], 'rate' => round($rate, 4), 'ng_count' => (int)$r['ng_c'], 'total_count' => $cnt];
+        $rateSum += $rate; $rateCnt++;
+    }
+
+    $calendarDays = (int)round((strtotime($to) - strtotime($from)) / 86400) + 1;
+    if ($calendarDays < 1) $calendarDays = 1;
+
+    return [
+        'daily_abnormal' => $dailyAbnormal,
+        'daily_ng_rate' => $dailyNgRate,
+        'avg_abnormal_per_day' => round($totalAbnormal / $calendarDays, 2),
+        'avg_ng_rate' => $rateCnt > 0 ? round($rateSum / $rateCnt, 4) : null,
+    ];
+}
+
+/**
+ * ul_qc_daily_items() 的依人彙總版本：各人檢驗筆數、NG筆數（qc_check_form 的
+ * COALESCE(inspector_by, approved_by) 分組）、平均等待工作天——後者直接重用
+ * ul_qc_wait_time() 已經算好的逐筆明細再依 person_id 分組，不重新寫一份 SQL（鐵律4）。
+ * @return array 每列 ['user_id','name','dept_name','position_name','items_count','ng_count','avg_wait_workdays']
+ */
+function ul_qc_by_person(PDO $db, string $from, string $to, array $qcUserIds): array
+{
+    $ids = ul_ids_norm($qcUserIds);
+    if (!$ids) return [];
+    $inQ = implode(',', array_map(fn($v) => "'" . $v . "'", $ids));
+
+    $people = eg_people_list($db, ['user_ids' => $ids]);
+    $byId = [];
+    foreach ($people as $p) $byId[(int)$p['id']] = $p;
+
+    $out = [];
+    foreach ($ids as $uid) {
+        $p = $byId[$uid] ?? null;
+        $out[$uid] = [
+            'user_id' => $uid,
+            'name' => $p['user_cname'] ?? ('#' . $uid),
+            'dept_name' => $p['dept_name'] ?? '',
+            'position_name' => $p['position_name'] ?? '',
+            'items_count' => 0, 'ng_count' => 0, 'avg_wait_workdays' => null,
+        ];
+    }
+
+    $st = $db->prepare(
+        "SELECT COALESCE(inspector_by, approved_by) AS person,
+                SUM(CASE WHEN check_result='NG' THEN 1 ELSE 0 END) AS ng_c, COUNT(*) AS cnt
+         FROM qc_check_form
+         WHERE status<>'DRAFT'
+           AND COALESCE(check_date, DATE(created_at)) BETWEEN ? AND ?
+           AND COALESCE(inspector_by, approved_by) IN ({$inQ})
+         GROUP BY person"
+    );
+    $st->execute([$from, $to]);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $uid = (int)$r['person'];
+        if (isset($out[$uid])) { $out[$uid]['items_count'] = (int)$r['cnt']; $out[$uid]['ng_count'] = (int)$r['ng_c']; }
+    }
+
+    $wait = ul_qc_wait_time($db, $from, $to, $ids);
+    $sums = []; $cnts = [];
+    foreach ($wait['rows'] as $r) {
+        $uid = $r['person_id'];
+        if ($uid === null || !in_array($uid, $ids, true)) continue;
+        $sums[$uid] = ($sums[$uid] ?? 0) + $r['workdays'];
+        $cnts[$uid] = ($cnts[$uid] ?? 0) + 1;
+    }
+    foreach ($cnts as $uid => $c) {
+        if (isset($out[$uid]) && $c > 0) $out[$uid]['avg_wait_workdays'] = round($sums[$uid] / $c, 2);
+    }
+
+    return array_values($out);
+}
+
+/**
+ * 未列入待驗由品管手動補檢驗：qc_check_form.bom_ing_fid=0（沒有掛在任何製程待驗佇列上）
+ * AND status<>'DRAFT'，依 process_name 分組計數。日期用 check_date（缺值退 created_at
+ * 當天）——這類單多半是補登或臨時抽驗，check_date 才是使用者認定的檢驗日，不是系統建檔
+ * 時間。這是「有多少檢驗脫離了正常待驗流程」的系統缺口指標，跟是哪個品管做的無關，
+ * 刻意不按人員篩選（同 ul_qc_abnormal_stats() 的道理）。
+ * @return array ['by_process'=>[每項製程名稱：process_name/count，依數量由大到小], 'total'=>int]
+ */
+function ul_qc_adhoc(PDO $db, string $from, string $to): array
+{
+    $st = $db->prepare(
+        "SELECT process_name, COUNT(*) c
+         FROM qc_check_form
+         WHERE bom_ing_fid=0 AND status<>'DRAFT'
+           AND COALESCE(check_date, DATE(created_at)) BETWEEN ? AND ?
+         GROUP BY process_name ORDER BY c DESC"
+    );
+    $st->execute([$from, $to]);
+    $out = []; $total = 0;
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[] = ['process_name' => (string)$r['process_name'], 'count' => (int)$r['c']];
+        $total += (int)$r['c'];
+    }
+    return ['by_process' => $out, 'total' => $total];
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * G. 整頁自動分析與負荷門檻（通用，不綁定單一部門）
+ * ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * 門檻預設值。鍵名風格「單位.指標」，之後管理員可在設定頁逐項覆寫（存進 ul_settings()
+ * 的 thresholds，同一套鍵名、同一套清洗規則 ul_settings_clean_thresholds()）。
+ * 數值只是給一個合理起點，不求精確，實際門檻由現場管理員調整。
+ */
+function ul_threshold_defaults(): array
+{
+    return [
+        'design' => [
+            'batch_pending' => ['value' => 20, 'label' => '批圖中筆數'],
+            'avg_draw_workdays' => ['value' => 5, 'label' => '繪圖平均工作天'],
+            'issue_orders' => ['value' => 10, 'label' => '設計備註待回覆訂單數'],
+        ],
+        'sales' => [
+            'quote_backlog' => ['value' => 30, 'label' => '本期報價單筆數'],
+            'open_issue_count' => ['value' => 20, 'label' => '待回覆問題筆數'],
+        ],
+        'pm' => [
+            'outsource_wip' => ['value' => 100, 'label' => '委外加工中筆數'],
+            'pending_recon_lines' => ['value' => 50, 'label' => '待對帳筆數'],
+        ],
+        'prod' => [
+            'unassigned_count' => ['value' => 30, 'label' => '未指派機台筆數'],
+            'avg_setup_minutes' => ['value' => 60, 'label' => '平均架機時間（分）'],
+            'untracked_count' => ['value' => 10, 'label' => '未正式指派卻已報工筆數'],
+        ],
+        'qc' => [
+            'ng_rate' => ['value' => 0.08, 'label' => 'NG比例'],
+            'wait_days_avg' => ['value' => 5, 'label' => '待驗平均等待工作天'],
+            'adhoc_count' => ['value' => 10, 'label' => '脫離待驗流程的補檢驗筆數'],
+        ],
+    ];
+}
+
+/** 把 ul_threshold_defaults() 的巢狀結構扁平成「單位.指標」=>['value'=>,'label'=>]，方便逐鍵查找 */
+function ul_threshold_defaults_flat(): array
+{
+    $out = [];
+    foreach (ul_threshold_defaults() as $unit => $items) {
+        foreach ($items as $k => $v) $out[$unit . '.' . $k] = $v;
+    }
+    return $out;
+}
+
+/**
+ * 依門檻判斷某個數值是否算「過重」。$key 用「單位.指標」風格（例如 'qc.ng_rate'）。
+ * 門檻優先取 $thresholds（即 ul_settings() 回傳的 thresholds，可能是巢狀 ['qc'=>['ng_rate'=>5]]
+ * 或扁平 ['qc.ng_rate'=>5] 兩種寫法都接受），查不到才退回 ul_threshold_defaults_flat()。
+ * 「越低越糟」的判斷規則：鍵名以 '_rate' 結尾、但不是 ng_rate/abnormal_rate/defect_rate
+ * 這幾種本來就「越高越糟」的異常比例，才視為達成率類（越低越糟）。這是簡化的經驗判斷，
+ * 不追求完美，之後有需要再逐鍵指定方向。
+ */
+function ul_is_overload(float $value, string $key, array $thresholds = []): bool
+{
+    $th = null;
+    if (isset($thresholds[$key]) && is_array($thresholds[$key]) && isset($thresholds[$key]['value'])) {
+        $th = $thresholds[$key]['value'];
+    } elseif (isset($thresholds[$key]) && is_numeric($thresholds[$key])) {
+        $th = $thresholds[$key];
+    } else {
+        [$unit, $metric] = array_pad(explode('.', $key, 2), 2, '');
+        if (isset($thresholds[$unit][$metric])) {
+            $v = $thresholds[$unit][$metric];
+            $th = is_array($v) ? ($v['value'] ?? null) : $v;
+        }
+    }
+    if ($th === null) {
+        $def = ul_threshold_defaults_flat();
+        $th = $def[$key]['value'] ?? null;
+    }
+    if ($th === null) return false;
+    $th = (float)$th;
+
+    $lowBetter = false;
+    if (str_ends_with($key, '_rate')) {
+        $isBadWhenHigh = (bool)preg_match('/(ng_rate|abnormal_rate|defect_rate)$/', $key);
+        $lowBetter = !$isBadWhenHigh;
+    }
+
+    return $lowBetter ? ($value < $th) : ($value > $th);
+}
+
+/**
+ * 吃呼叫端已經組好的五個單位摘要資料，產生一組結論文字（純文字組合，本函式不查資料庫，
+ * 單一職責——跟 order_analysis_lib.php 的 oa_insights() 同一種寫法）。
+ * 預期輸入結構（每個單位鍵皆可省略，缺的那塊不產生結論；'cur' 底下放該單位對應函式的
+ * 回傳值，'cmp' 放對比期間同一份資料可省略，'cmp_label' 預設「上一期」）：
+ * [
+ *   'design' => ['cur'=>ul_design_summary()回傳, 'cmp'=>?, 'cmp_label'=>?],
+ *   'sales'  => ['cur'=>ul_sales_summary()回傳, 'cmp'=>?, 'cmp_label'=>?],
+ *   'pm'     => ['cur'=>ul_pm_summary()回傳, 'cmp'=>?, 'cmp_label'=>?],
+ *   'prod'   => ['by_process_type'=>ul_prod_by_process_type()回傳,
+ *                'untracked'=>ul_prod_untracked_reports()回傳,
+ *                'setup'=>ul_prod_setup_stats()回傳],
+ *   'qc'     => ['wait'=>ul_qc_wait_time()回傳, 'abnormal'=>ul_qc_abnormal_stats()回傳,
+ *                'adhoc'=>ul_qc_adhoc()回傳],
+ * ]
+ * @param array $thresholds ul_settings() 回傳的 thresholds（巢狀或扁平皆可，見 ul_is_overload()）
+ * @return array 每列 ['level'=>good|warn|bad|info, 'title'=>, 'detail'=>, 'metric'=>]
+ */
+function ul_insights(array $allData, array $thresholds = []): array
+{
+    $out = [];
+    $add = function ($level, $title, $detail, $metric = '') use (&$out) {
+        $out[] = ['level' => $level, 'title' => $title, 'detail' => $detail, 'metric' => $metric];
+    };
+
+    // 設計課
+    if (isset($allData['design']['cur'])) {
+        $d = $allData['design']['cur'];
+        $cl = $allData['design']['cmp_label'] ?? '上一期';
+        $cmp = $allData['design']['cmp'] ?? null;
+        if (isset($d['drawing_wip']) && ul_is_overload((float)$d['drawing_wip'], 'design.batch_pending', $thresholds)) {
+            $add('bad', '設計課批圖中筆數偏高', '目前批圖中 ' . $d['drawing_wip'] . ' 筆（尚未轉生管、且設計備註仍有開放中問題）。', (string)$d['drawing_wip']);
+        }
+        if ($cmp && isset($d['drawing_wip'], $cmp['drawing_wip']) && (int)$cmp['drawing_wip'] > 0) {
+            $delta = (int)$d['drawing_wip'] - (int)$cmp['drawing_wip'];
+            if ($delta > 0) {
+                $add('warn', '設計課批圖中筆數較' . $cl . '增加', '本期 ' . $d['drawing_wip'] . ' 筆，較' . $cl . '的 ' . $cmp['drawing_wip'] . ' 筆增加 ' . $delta . ' 筆。', '+' . $delta);
+            }
+        }
+        if (isset($d['avg_draw_workdays']) && $d['avg_draw_workdays'] !== null
+            && ul_is_overload((float)$d['avg_draw_workdays'], 'design.avg_draw_workdays', $thresholds)) {
+            $add('warn', '設計課繪圖平均工作天偏長', '本期由業務轉設計到轉生管平均 ' . $d['avg_draw_workdays'] . ' 個工作天。', $d['avg_draw_workdays'] . ' 天');
+        }
+        if (isset($d['issue_orders']) && ul_is_overload((float)$d['issue_orders'], 'design.issue_orders', $thresholds)) {
+            $add('warn', '設計課待回覆設計備註偏多', '目前有 ' . $d['issue_orders'] . ' 張訂單帶著開放中的設計備註問題。', (string)$d['issue_orders']);
+        }
+    }
+
+    // 業務課
+    if (isset($allData['sales']['cur'])) {
+        $s = $allData['sales']['cur'];
+        $cl = $allData['sales']['cmp_label'] ?? '上一期';
+        $cmp = $allData['sales']['cmp'] ?? null;
+        if (isset($s['quote_count']) && ul_is_overload((float)$s['quote_count'], 'sales.quote_backlog', $thresholds)) {
+            $add('warn', '業務課本期報價單量偏高', '本期開立 ' . $s['quote_count'] . ' 張報價單。', (string)$s['quote_count']);
+        }
+        if ($cmp && isset($s['quote_count'], $cmp['quote_count']) && (int)$cmp['quote_count'] > 0) {
+            $delta = (int)$s['quote_count'] - (int)$cmp['quote_count'];
+            if (abs($delta) >= 5) {
+                $add($delta > 0 ? 'warn' : 'info', '業務課報價單量較' . $cl . ($delta > 0 ? '增加' : '減少'),
+                    '本期 ' . $s['quote_count'] . ' 張，' . $cl . ' ' . $cmp['quote_count'] . ' 張。', ($delta > 0 ? '+' : '') . $delta);
+            }
+        }
+        if (isset($s['open_issue_count']) && ul_is_overload((float)$s['open_issue_count'], 'sales.open_issue_count', $thresholds)) {
+            $add('warn', '業務課待回覆問題偏多', '目前累積 ' . $s['open_issue_count'] . ' 筆開放中設計備註問題。', (string)$s['open_issue_count']);
+        }
+    }
+
+    // 生管
+    if (isset($allData['pm']['cur'])) {
+        $p = $allData['pm']['cur'];
+        if (isset($p['outsource_wip']) && ul_is_overload((float)$p['outsource_wip'], 'pm.outsource_wip', $thresholds)) {
+            $add('warn', '生管委外加工中筆數偏高', '目前委外加工中共 ' . $p['outsource_wip'] . ' 筆。', (string)$p['outsource_wip']);
+        }
+        if (isset($p['pending_recon_lines']) && ul_is_overload((float)$p['pending_recon_lines'], 'pm.pending_recon_lines', $thresholds)) {
+            $add('bad', '生管待對帳筆數偏高', '目前待對帳 ' . ($p['pending_recon_parties'] ?? 0) . ' 家、共 ' . $p['pending_recon_lines'] . ' 筆。', (string)$p['pending_recon_lines']);
+        }
+    }
+
+    // 生產課
+    if (isset($allData['prod'])) {
+        $pt = $allData['prod']['by_process_type'] ?? [];
+        $totalUnassigned = array_sum(array_column($pt, 'unassigned'));
+        if ($totalUnassigned > 0 && ul_is_overload((float)$totalUnassigned, 'prod.unassigned_count', $thresholds)) {
+            $add('bad', '生產課未指派機台筆數偏高', '目前進行中的製程裡有 ' . $totalUnassigned . ' 筆還沒指派機台。', (string)$totalUnassigned);
+        }
+        $setup = $allData['prod']['setup'] ?? null;
+        if ($setup && isset($setup['avg_minutes']) && $setup['avg_minutes'] !== null
+            && ul_is_overload((float)$setup['avg_minutes'], 'prod.avg_setup_minutes', $thresholds)) {
+            $add('warn', '生產課平均架機時間偏長', '本期平均架機時間 ' . $setup['avg_minutes'] . ' 分鐘。', $setup['avg_minutes'] . ' 分');
+        }
+        $untracked = $allData['prod']['untracked'] ?? null;
+        if ($untracked && isset($untracked['total']) && ul_is_overload((float)$untracked['total'], 'prod.untracked_count', $thresholds)) {
+            $add('bad', '生產課出現未正式指派卻已報工的件', '本期共 ' . $untracked['total'] . ' 筆報工對應的製程，當時沒有被正式指派機台或還沒進入正常流程。', (string)$untracked['total']);
+        }
+    }
+
+    // 品管
+    if (isset($allData['qc'])) {
+        $ab = $allData['qc']['abnormal'] ?? null;
+        if ($ab && isset($ab['avg_ng_rate']) && $ab['avg_ng_rate'] !== null
+            && ul_is_overload((float)$ab['avg_ng_rate'], 'qc.ng_rate', $thresholds)) {
+            $add('bad', '品管NG比例偏高', '本期平均每日NG比例約 ' . round($ab['avg_ng_rate'] * 100, 1) . '%。', round($ab['avg_ng_rate'] * 100, 1) . '%');
+        }
+        $wait = $allData['qc']['wait'] ?? null;
+        if ($wait && isset($wait['avg_workdays']) && $wait['avg_workdays'] !== null
+            && ul_is_overload((float)$wait['avg_workdays'], 'qc.wait_days_avg', $thresholds)) {
+            $add('warn', '品管待驗平均等待工作天偏長', '本期完成檢驗的製程，平均等了 ' . $wait['avg_workdays'] . ' 個工作天才驗完。', $wait['avg_workdays'] . ' 天');
+        }
+        $adhoc = $allData['qc']['adhoc'] ?? null;
+        if ($adhoc && isset($adhoc['total']) && ul_is_overload((float)$adhoc['total'], 'qc.adhoc_count', $thresholds)) {
+            $add('warn', '品管脫離正常待驗流程的補檢驗偏多', '本期有 ' . $adhoc['total'] . ' 筆檢驗不是掛在正常待驗佇列上完成的。', (string)$adhoc['total']);
+        }
+    }
+
+    return $out;
+}
