@@ -4617,16 +4617,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 unset($row);
                 echo json_encode(['success'=>true, 'data'=>$rows]);
             } elseif ($op === 'save') {
-                if (!$can_dict_part) throw new Exception('無權限（需要 A、CDR 或 CDRU 權限）');
                 $code = trim($_POST['type_code'] ?? '');
                 $name = trim($_POST['type_name'] ?? '');
                 if (empty($code) || empty($name)) throw new Exception('代碼與名稱不可為空');
+                $old_wt = $pdo->prepare("SELECT type_name, show_vendor, show_part_no, show_machine, show_price FROM dict_workpiece_type WHERE type_code=?"); $old_wt->execute([$code]); $old_wt_row = $old_wt->fetch(PDO::FETCH_ASSOC);
+                if (!_mdPerm('workpiece_type', $old_wt_row ? 'edit' : 'add', $can_dict_part)) throw new Exception('無'.($old_wt_row?'修改':'新增').'權限（需要 A、CDR 或 CDRU 權限）');
                 // 料號表單欄位顯示開關（依工件種類）
                 $sv = !empty($_POST['show_vendor'])  ? 1 : 0;
                 $sp = !empty($_POST['show_part_no']) ? 1 : 0;
                 $sm = !empty($_POST['show_machine']) ? 1 : 0;
                 $spr= !empty($_POST['show_price'])   ? 1 : 0;
-                $old_wt = $pdo->prepare("SELECT type_name, show_vendor, show_part_no, show_machine, show_price FROM dict_workpiece_type WHERE type_code=?"); $old_wt->execute([$code]); $old_wt_row = $old_wt->fetch(PDO::FETCH_ASSOC);
                 $pdo->prepare("INSERT INTO dict_workpiece_type (type_code, type_name, show_vendor, show_part_no, show_machine, show_price) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE type_name=VALUES(type_name), show_vendor=VALUES(show_vendor), show_part_no=VALUES(show_part_no), show_machine=VALUES(show_machine), show_price=VALUES(show_price)")->execute([$code, $name, $sv, $sp, $sm, $spr]);
                 $uid = $_SESSION['user_id']??null; $op_name = _get_operator($pdo,$uid);
                 $newRow = ['type_name'=>$name,'show_vendor'=>$sv,'show_part_no'=>$sp,'show_machine'=>$sm,'show_price'=>$spr];
@@ -4640,7 +4640,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $cnt = (int)$chk->fetchColumn();
                 echo json_encode($cnt > 0 ? ['can_delete'=>false,'reason'=>"此工件種類已有 {$cnt} 筆料號使用，無法刪除（請先修改那些料號的工件種類）"] : ['can_delete'=>true]);
             } elseif ($op === 'delete') {
-                if (!$can_dict_part) throw new Exception('無刪除權限（需要 A、CDR 或 CDRU 權限）');
+                if (!_mdPerm('workpiece_type', 'delete', $can_dict_part)) throw new Exception('無刪除權限（需要 A、CDR 或 CDRU 權限）');
                 $code = trim($_POST['id'] ?? '');
                 // G 種類不可刪除（對應齒輪類型）
                 if (strtoupper($code) === 'G') throw new Exception("「G — 齒輪」種類不可刪除，因為對應齒輪類型(dict_gear_type)與齒輪規格表(d_setting_gear)");
@@ -4656,7 +4656,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 _log_audit($pdo,'delete','dict','workpiece:'.$code,$del_wt_name?:$code,null,$_SESSION['user_id']??null,_get_operator($pdo,$_SESSION['user_id']??null));
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'reorder') {
-                if (!$can_dict_part) throw new Exception('無修改權限（需要 A、CDR 或 CDRU 權限）');
+                if (!_mdPerm('workpiece_type', 'edit', $can_dict_part)) throw new Exception('無修改權限（需要 A、CDR 或 CDRU 權限）');
                 $ids = array_filter(explode(',', $_POST['ids'] ?? ''));
                 $upd = $pdo->prepare("UPDATE dict_workpiece_type SET sort_order=? WHERE type_code=?");
                 foreach (array_values($ids) as $k => $code) { $upd->execute([$k, $code]); }
@@ -4685,11 +4685,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     echo json_encode(['success'=>true, 'data'=>$stmt->fetchAll(PDO::FETCH_ASSOC)]);
                 }
             } elseif ($op === 'save') {
-                if (!$can_dict_part) throw new Exception('無權限（需要 A、CDR 或 CDRU 權限）');
                 $id        = intval($_POST['sub_type_id'] ?? 0);
                 $type_code = trim($_POST['type_code'] ?? '');
                 $name      = trim($_POST['sub_type_name'] ?? '');
                 if (empty($name) || empty($type_code)) throw new Exception('種類代碼與小類名稱不可為空');
+                if (!_mdPerm('workpiece_type', $id ? 'edit' : 'add', $can_dict_part)) throw new Exception('無'.($id?'修改':'新增').'權限（需要 A、CDR 或 CDRU 權限）');
                 $uid = $_SESSION['user_id']??null; $op_name = _get_operator($pdo,$uid);
                 if ($id) {
                     $old_wst = $pdo->prepare("SELECT sub_type_name FROM dict_workpiece_sub_type WHERE sub_type_id=?"); $old_wst->execute([$id]); $old_wst_row = $old_wst->fetch(PDO::FETCH_ASSOC);
@@ -4708,7 +4708,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $cnt = (int)$chk->fetchColumn();
                 echo json_encode($cnt > 0 ? ['can_delete'=>false,'reason'=>"此工件小類已有 {$cnt} 筆料號使用，無法刪除"] : ['can_delete'=>true]);
             } elseif ($op === 'delete') {
-                if (!$can_dict_part) throw new Exception('無刪除權限（需要 A、CDR 或 CDRU 權限）');
+                if (!_mdPerm('workpiece_type', 'delete', $can_dict_part)) throw new Exception('無刪除權限（需要 A、CDR 或 CDRU 權限）');
                 $id = intval($_POST['id'] ?? 0);
                 // 檢查是否有料號使用此小類
                 $chk = $pdo->prepare("SELECT COUNT(*) FROM d_setting WHERE workpiece_sub_type_id=?");
@@ -4720,7 +4720,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 _log_audit($pdo,'delete','dict','workpiece-sub:'.$id,$del_wsn?:('id:'.$id),null,$_SESSION['user_id']??null,_get_operator($pdo,$_SESSION['user_id']??null));
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'reorder') {
-                if (!$can_dict_part) throw new Exception('無修改權限（需要 A、CDR 或 CDRU 權限）');
+                if (!_mdPerm('workpiece_type', 'edit', $can_dict_part)) throw new Exception('無修改權限（需要 A、CDR 或 CDRU 權限）');
                 $ids = array_filter(array_map('intval', explode(',', $_POST['ids'] ?? '')));
                 $upd = $pdo->prepare("UPDATE dict_workpiece_sub_type SET sort_order=? WHERE sub_type_id=?");
                 foreach (array_values($ids) as $k => $id) { $upd->execute([$k, $id]); }
@@ -4850,19 +4850,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 require_once __DIR__ . '/../../src/common/gear_spec_lib.php';
                 echo json_encode(['success'=>true, 'data'=>eg_gear_type_rows($pdo)]);
             } elseif ($op === 'reorder') {
-                if (!$can_dict_part) throw new Exception('無修改權限（需要 A、CDR 或 CDRU 權限）');
+                if (!_mdPerm('gear_type_dict', 'edit', $can_dict_part)) throw new Exception('無修改權限（需要 A、CDR 或 CDRU 權限）');
                 $ids = array_filter(array_map('intval', explode(',', $_POST['ids']??'')));
                 $upd = $pdo->prepare("UPDATE dict_gear_type SET sort_order=? WHERE gear_type_id=?");
                 foreach (array_values($ids) as $k => $id) { $upd->execute([$k, $id]); }
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'save') {
-                if (!$can_dict_part) throw new Exception('無權限（需要 A、CDR 或 CDRU 權限）');
                 $id        = intval($_POST['gear_type_id'] ?? 0);
                 $name      = trim($_POST['type_name'] ?? '');
                 $has_helix = intval($_POST['has_helix_angle'] ?? 0);
                 $spec_cat  = trim($_POST['spec_category'] ?? 'standard') ?: 'standard';
                 $tmpl      = trim($_POST['display_template'] ?? '') ?: null;
                 if (empty($name)) throw new Exception('齒輪類型名稱不可為空');
+                if (!_mdPerm('gear_type_dict', $id ? 'edit' : 'add', $can_dict_part)) throw new Exception('無'.($id?'修改':'新增').'權限（需要 A、CDR 或 CDRU 權限）');
                 $uid = $_SESSION['user_id']??null; $op_name = _get_operator($pdo,$uid);
                 if ($id) {
                     $old_gt = $pdo->prepare("SELECT type_name, has_helix_angle FROM dict_gear_type WHERE gear_type_id=?"); $old_gt->execute([$id]); $old_gt_row = $old_gt->fetch(PDO::FETCH_ASSOC);
@@ -4878,7 +4878,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             } elseif ($op === 'check_delete') {
                 echo json_encode(['can_delete'=>true]);
             } elseif ($op === 'delete') {
-                if (!$can_dict_part) throw new Exception('無刪除權限（需要 A、CDR 或 CDRU 權限）');
+                if (!_mdPerm('gear_type_dict', 'delete', $can_dict_part)) throw new Exception('無刪除權限（需要 A、CDR 或 CDRU 權限）');
                 $id = intval($_POST['id'] ?? 0);
                 $del_gt = $pdo->prepare("SELECT type_name FROM dict_gear_type WHERE gear_type_id=?"); $del_gt->execute([$id]); $del_gt_name = $del_gt->fetchColumn();
                 $pdo->prepare("UPDATE dict_gear_type SET is_active=0 WHERE gear_type_id=?")->execute([$id]);
@@ -4947,8 +4947,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $simRows = $sim->fetchAll(PDO::FETCH_ASSOC);
                 echo json_encode(['success'=>true,'exact'=>count($exactRows)>0,'exact_rows'=>$exactRows,'similar'=>$simRows]);
             } elseif ($op === 'save') {
-                if (!$can_dict_part) throw new Exception('無權限（需要 A、CDR 或 CDRU 權限）');
                 $id             = intval($_POST['label_id'] ?? 0);
+                if (!_mdPerm('label_dict', $id ? 'edit' : 'add', $can_dict_part)) throw new Exception('無'.($id?'修改':'新增').'權限（需要 A、CDR 或 CDRU 權限）');
                 $name           = trim($_POST['label_name'] ?? '');
                 $type_code      = trim($_POST['type_code'] ?? '');
                 $is_rep         = intval($_POST['is_repeatable'] ?? 0);
@@ -5050,7 +5050,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $us = _label_usage($pdo, 'option', $opt_id);
                 echo json_encode($us['used'] ? ['can_delete'=>false,'reason'=>$us['reason']] : ['can_delete'=>true]);
             } elseif ($op === 'delete') {
-                if (!$can_dict_part) throw new Exception('無刪除權限（需要 A、CDR 或 CDRU 權限）');
+                if (!_mdPerm('label_dict', 'delete', $can_dict_part)) throw new Exception('無刪除權限（需要 A、CDR 或 CDRU 權限）');
                 $id = intval($_POST['id'] ?? 0);
                 $us = _label_usage($pdo, 'label', $id);
                 if ($us['used']) throw new Exception($us['reason']);
@@ -5059,7 +5059,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 _log_audit($pdo,'delete','dict','label:'.$id,$del_lbl_name?:('id:'.$id),null,$_SESSION['user_id']??null,_get_operator($pdo,$_SESSION['user_id']??null));
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'reorder') {
-                if (!$can_dict_part) throw new Exception('無修改權限（需要 A、CDR 或 CDRU 權限）');
+                if (!_mdPerm('label_dict', 'edit', $can_dict_part)) throw new Exception('無修改權限（需要 A、CDR 或 CDRU 權限）');
                 $ids = array_filter(array_map('intval', explode(',', $_POST['ids']??'')));
                 $upd = $pdo->prepare("UPDATE dict_label SET sort_order=? WHERE label_id=?");
                 foreach (array_values($ids) as $k => $id) { $upd->execute([$k, $id]); }
@@ -5111,9 +5111,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 unset($_op);
                 echo json_encode(['success'=>true,'data'=>$opt_rows]);
             } elseif ($op === 'save_sub_option') {
-                if (!$can_dict_part) throw new Exception('無權限');
                 $sub_id_q = intval($_POST['sub_id'] ?? 0);
                 $opt_id   = intval($_POST['option_id'] ?? 0);
+                if (!_mdPerm('label_dict', $opt_id ? 'edit' : 'add', $can_dict_part)) throw new Exception('無'.($opt_id?'修改':'新增').'權限');
                 $opt_val  = trim($_POST['option_value'] ?? '');
                 if (!$sub_id_q || !$opt_val) { echo json_encode(['success'=>false,'message'=>'invalid']); exit; }
                 if ($opt_id > 0) {
@@ -5124,7 +5124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'delete_sub_option') {
-                if (!$can_dict_part) throw new Exception('無權限');
+                if (!_mdPerm('label_dict', 'delete', $can_dict_part)) throw new Exception('無刪除權限');
                 $opt_id = intval($_POST['option_id'] ?? 0);
                 if (!$opt_id) { echo json_encode(['success'=>false,'message'=>'invalid']); exit; }
                 // 已被料號使用的孫子標籤不可刪除（鐵律8：前端擋一次、後端同規則再擋一次）
@@ -5135,14 +5135,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 _log_audit($pdo,'delete','dict','label-sub-option:'.$opt_id,$del_opt_val?:('id:'.$opt_id),null,$_SESSION['user_id']??null,_get_operator($pdo,$_SESSION['user_id']??null));
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'reorder_sub_options') {
-                if (!$can_dict_part) throw new Exception('無權限');
+                if (!_mdPerm('label_dict', 'edit', $can_dict_part)) throw new Exception('無修改權限');
                 $ids = json_decode(trim($_POST['ids'] ?? ''), true) ?: [];
                 $upd2 = $pdo->prepare("UPDATE dict_label_sub_option SET sort_order=? WHERE option_id=?");
                 foreach ($ids as $i => $id) { $upd2->execute([$i, intval($id)]); }
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'save_sub') {
-                if (!$can_dict_part) throw new Exception('無權限（需要 A、CDR 或 CDRU 權限）');
                 $sub_id         = intval($_POST['sub_id'] ?? 0);
+                if (!_mdPerm('label_dict', $sub_id ? 'edit' : 'add', $can_dict_part)) throw new Exception('無'.($sub_id?'修改':'新增').'權限（需要 A、CDR 或 CDRU 權限）');
                 $label_id       = intval($_POST['label_id'] ?? 0);
                 $sub_name       = trim($_POST['sub_name'] ?? '');
                 $input_type     = trim($_POST['input_type'] ?? 'none');
@@ -5196,7 +5196,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'delete_sub') {
-                if (!$can_dict_part) throw new Exception('無刪除權限（需要 A、CDR 或 CDRU 權限）');
+                if (!_mdPerm('label_dict', 'delete', $can_dict_part)) throw new Exception('無刪除權限（需要 A、CDR 或 CDRU 權限）');
                 $sub_id = intval($_POST['sub_id'] ?? 0);
                 $us = _label_usage($pdo, 'sub', $sub_id);
                 if ($us['used']) throw new Exception($us['reason']);
@@ -5205,7 +5205,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 _log_audit($pdo,'delete','dict','label-sub:'.$sub_id,$del_ls_name?:('id:'.$sub_id),null,$_SESSION['user_id']??null,_get_operator($pdo,$_SESSION['user_id']??null));
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'reorder_subs') {
-                if (!$can_dict_part) throw new Exception('無修改權限（需要 A、CDR 或 CDRU 權限）');
+                if (!_mdPerm('label_dict', 'edit', $can_dict_part)) throw new Exception('無修改權限（需要 A、CDR 或 CDRU 權限）');
                 $ids = array_filter(array_map('intval', explode(',', $_POST['ids']??'')));
                 $upd = $pdo->prepare("UPDATE dict_label_sub SET sort_order=? WHERE sub_id=?");
                 foreach (array_values($ids) as $k => $id) { $upd->execute([$k, $id]); }
@@ -6657,8 +6657,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $q = $pdo->query("SELECT pt.process_type_id, pt.process_type, COALESCE(pt.sort_order,0) AS sort_order, COALESCE(pt.is_active,1) AS is_active, COUNT(DISTINCT ppm.process_no_id) AS process_count FROM process_type pt LEFT JOIN process_type_process_map ppm ON ppm.process_type_id=pt.process_type_id GROUP BY pt.process_type_id ORDER BY COALESCE(pt.sort_order,0), pt.process_type_id");
                 echo json_encode(['success'=>true,'data'=>$q->fetchAll(PDO::FETCH_ASSOC)]);
             } elseif ($op === 'save') {
-                if (!$can_dict_part) throw new Exception('無字典編輯權限（需要 A、CDR 或 CDRU 權限）');
                 $id   = intval($_POST['id'] ?? 0);
+                if (!_mdPerm('process_type_dict', $id ? 'edit' : 'add', $can_dict_part)) throw new Exception('無字典'.($id?'編輯':'新增').'權限（需要 A、CDR 或 CDRU 權限）');
                 $name = trim($_POST['name'] ?? '');
                 if (!$name) throw new Exception('名稱不可為空');
                 $op_name = _get_operator($pdo, $uid);
@@ -6696,7 +6696,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $c2 = $pdo->prepare("SELECT COUNT(*) FROM process_no WHERE process_type_id=?"); $c2->execute([$id]);
                 echo json_encode((int)$c2->fetchColumn() > 0 ? ['can_delete'=>false,'reason'=>'此製程大類被製程的主類型使用，無法刪除'] : ['can_delete'=>true]);
             } elseif ($op === 'delete') {
-                if (!$can_dict_part) throw new Exception('無字典編輯權限（需要 A、CDR 或 CDRU 權限）');
+                if (!_mdPerm('process_type_dict', 'delete', $can_dict_part)) throw new Exception('無字典刪除權限（需要 A、CDR 或 CDRU 權限）');
                 $id = intval($_POST['id']);
                 $c1 = $pdo->prepare("SELECT COUNT(*) FROM process_type_process_map WHERE process_type_id=?"); $c1->execute([$id]);
                 if ((int)$c1->fetchColumn() > 0) throw new Exception("此製程大類已有製程綁定，無法刪除");
@@ -6707,7 +6707,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 _log_audit($pdo,'delete','process','process-type:'.$id,$del_pt_name?:('id:'.$id),null,$uid,_get_operator($pdo,$uid));
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'reorder') {
-                if (!$can_dict_part) throw new Exception('無字典編輯權限（需要 A、CDR 或 CDRU 權限）');
+                if (!_mdPerm('process_type_dict', 'edit', $can_dict_part)) throw new Exception('無字典編輯權限（需要 A、CDR 或 CDRU 權限）');
                 $ids = array_values(array_filter(explode(',', $_POST['ids'] ?? '')));
                 $upd = $pdo->prepare("UPDATE process_type SET sort_order=? WHERE process_type_id=?");
                 foreach ($ids as $i => $tid) { $upd->execute([$i, intval($tid)]); }
