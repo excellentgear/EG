@@ -26,6 +26,11 @@
 
 if (!function_exists('eg_dwg_preview_accoreconsole')) {
 
+// 轉檔配方（PLOT 腳本內容、樣式）有實質改動時遞增——快取鍵帶著這個版號，
+// 舊配方轉出的快取會自動被視為過期重轉，不必手動清快取資料夾。
+// （const 在條件區塊內不合法，這裡一律用 define）
+if (!defined('EG_DWG_PREVIEW_RENDER_VER')) define('EG_DWG_PREVIEW_RENDER_VER', 2);   // v2：改用 monochrome.ctb 全黑出圖
+
 /** accoreconsole.exe 路徑，可在 system_settings 覆寫（設定鍵 dwg_accoreconsole_exe） */
 function eg_dwg_preview_accoreconsole(PDO $db): string {
     try {
@@ -40,6 +45,21 @@ function eg_dwg_preview_accoreconsole(PDO $db): string {
 /** 這台機器有沒有裝轉檔引擎（供畫面判斷要不要顯示 DWG 預覽入口） */
 function eg_dwg_preview_available(PDO $db): bool {
     return is_file(eg_dwg_preview_accoreconsole($db));
+}
+
+/** 全黑出圖樣式表路徑，可在 system_settings 覆寫（設定鍵 dwg_monochrome_ctb）——
+ *  圖面原本的圖層顏色（黃/綠/青等 ACI 色）拿來螢幕上看沒問題，直接印成 PDF 卻會
+ *  淺色線條在白底幾乎看不見；monochrome.ctb 是 AutoCAD 內建、把所有顏色統一印成
+ *  黑色的出圖樣式表，各版 AutoCAD 安裝都會自動產生一份，一般不必調整這個設定。
+ *  找不到就退回不套用（沿用原圖層顏色），不會因此讓轉檔整個失敗。 */
+function eg_dwg_preview_monochrome_ctb(PDO $db): string {
+    try {
+        $st = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key='dwg_monochrome_ctb'");
+        $st->execute();
+        $v = $st->fetchColumn();
+        if ($v !== false && $v !== null && trim((string)$v) !== '') return trim((string)$v);
+    } catch (Throwable $e) {}
+    return 'C:\\Users\\Ellen\\AppData\\Roaming\\Autodesk\\AutoCAD 2025\\R25.0\\cht\\Plotters\\Plot Styles\\monochrome.ctb';
 }
 
 /** PHP CLI 執行檔路徑，可在 system_settings 覆寫（設定鍵 dwg_php_cli_exe） */
@@ -97,7 +117,7 @@ function eg_dwg_preview_pdf(PDO $db, string $dwgFsPath): ?string {
 
     $mtime = @filemtime($dwgFsPath) ?: 0;
     $sig   = sha1($dwgFsPath);
-    $key   = $sig . '_' . $mtime;
+    $key   = $sig . '_' . $mtime . '_v' . EG_DWG_PREVIEW_RENDER_VER;
     $dir   = eg_dwg_preview_cache_dir();
     $pdf   = $dir . DIRECTORY_SEPARATOR . $key . '.pdf';
     if (is_file($pdf) && filesize($pdf) > 0) return $pdf;
@@ -110,11 +130,13 @@ function eg_dwg_preview_pdf(PDO $db, string $dwgFsPath): ?string {
         if (!flock($lh, LOCK_EX)) return null;
         // 拿到鎖之後有可能別人剛好轉完了
         if (is_file($pdf) && filesize($pdf) > 0) return $pdf;
-        // 來源檔已換版（mtime 不同）的舊快取清掉，避免累積
+        // 來源檔換版（mtime 不同）或轉檔配方改版（EG_DWG_PREVIEW_RENDER_VER 不同）
+        // 的舊快取一律清掉，避免累積，也避免配方改了還讀到舊樣式的快取
         foreach (@glob($dir . DIRECTORY_SEPARATOR . $sig . '_*.pdf') ?: [] as $old) {
             if ($old !== $pdf) @unlink($old);
         }
-        $ok = eg_dwg_preview_run($exe, $dwgFsPath, $pdf);
+        $ctb = eg_dwg_preview_monochrome_ctb($db);
+        $ok = eg_dwg_preview_run($exe, $dwgFsPath, $pdf, $ctb);
         return ($ok && is_file($pdf) && filesize($pdf) > 0) ? $pdf : null;
     } finally {
         flock($lh, LOCK_UN);
@@ -129,13 +151,17 @@ function eg_dwg_preview_pdf(PDO $db, string $dwgFsPath): ?string {
  * 原始尺寸；每一步提示的回答順序與確切字串是用這台機器實測對過的，換了
  * AutoCAD 版本或語系要重新核對（見本檔案最上方說明）。
  */
-function eg_dwg_preview_run(string $exe, string $dwgFsPath, string $outPdf): bool {
+function eg_dwg_preview_run(string $exe, string $dwgFsPath, string $outPdf, string $ctb = ''): bool {
     $dir = eg_dwg_preview_cache_dir();
     $scr = $dir . DIRECTORY_SEPARATOR . 'p_' . bin2hex(random_bytes(6)) . '.scr';
+    // 出圖型式表（第 13 個答案）：圖面原本的圖層顏色（黃/綠/青等）直接印出來在白底
+    // PDF 上太淺看不清楚，給 monochrome.ctb 會把所有顏色統一印成黑色；找不到檔案
+    // 就退回「.」＝不套用、維持原圖層顏色（寧可可讀性差一點也不要讓轉檔整個失敗）。
+    $plotStyle = ($ctb !== '' && is_file($ctb)) ? $ctb : '.';
     $lines = [
         'FILEDIA 0', '-PLOT', 'Y', 'Model', 'DWG To PDF.pc3',
         'ISO A4 (210.00 x 297.00 公釐)', 'M', 'L', 'N', 'Extents',
-        'F', 'C', 'Y', '.', 'Y', 'A', $outPdf, 'Y',
+        'F', 'C', 'Y', $plotStyle, 'Y', 'A', $outPdf, 'Y',
     ];
     // 結尾一定要有一個空白行（Enter）給最後「繼續出圖 <Y>」那個預設值提示——
     // implode() 不會像逐行寫檔那樣幫最後一個空字串元素補換行，少了這一行腳本檔

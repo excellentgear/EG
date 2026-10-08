@@ -799,6 +799,8 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
             <button id="btn-rot-cw"     class="btn btn-warning btn-xs" style="display:none;" title="向右轉 90°（會直接覆蓋原檔，所有人看到的都是轉正後的圖）"><i class="fa fa-repeat"></i> 右轉</button>
             <button id="btn-paint"      class="btn btn-info    btn-xs" style="display:none;" title="用小畫家開啟（需一次性安裝）"><i class="fa fa-paint-brush"></i> 小畫家</button>
             <button id="btn-save"       class="btn btn-success btn-xs" style="display:none;" title="儲存檔案"><i class="fa fa-floppy-o"></i> 儲存</button>
+            <!-- 只有 DWG 轉出來的預覽才需要「另存 PDF」——原檔下載已經在「儲存」鈕 -->
+            <button id="btn-save-pdf"   class="btn btn-success btn-xs" style="display:none;" title="下載轉檔後的 PDF（原始 DWG 另有「儲存」鈕可下載）"><i class="fa fa-file-pdf-o"></i> 下載 PDF</button>
             <button id="btn-print"      class="btn btn-default btn-xs" style="display:none;" title="列印"><i class="fa fa-print"></i> 列印</button>
             <button id="btn-tags-setting" class="btn btn-info btn-xs" onclick="openFileTagsSetting()" title="設定檔名標籤"><i class="fa fa-tags"></i> 設定標籤</button>
             <?php if ($imgeditCanUse): ?>
@@ -985,6 +987,7 @@ if (_initTab === 'quote') _initTab = 'order_attach';         // 舊版分頁鍵�
 var _sc         = 1, _tx = 0, _ty = 0;
 var _currentType = '';
 var _currentPath = '';
+var _dwgPdfUrl   = '';   // DWG 轉檔成功後的預覽網址，供「下載 PDF」鈕使用
 var _currentName = '';
 var _rotBust     = {};   // 剛旋轉過的檔案 → 新的 mtime（重新載入時當破快取參數用）
 
@@ -1002,6 +1005,12 @@ function applyTransform() {
     if (img) img.style.transform = 'translate('+_tx+'px,'+_ty+'px) scale('+_sc+')';
 }
 function resetTransform() { _sc = 1; _tx = 0; _ty = 0; applyTransform(); }
+
+// DWG 的「下載」網址 → 轉檔後 PDF 預覽網址（同一支附件 API 多一個動作，參數相同，
+// 只換動作名稱）；預覽畫面與批圖編輯器共用同一份轉換規則，不要各寫一次。
+function dwgToPreviewUrl(downloadUrl) {
+    return downloadUrl.replace('action=download', 'action=preview_dwg');
+}
 
 // ── 檔案切換顯示 ─────────────────────────────────────────────────────────
 function showFile(path, type, name) {
@@ -1022,7 +1031,8 @@ function showFile(path, type, name) {
 
     $('#viewer-title').text(_currentName);
     $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder, #bom-quote-detail, #album-grid-wrap').hide();
-    $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint, #btn-rot-ccw, #btn-rot-cw').hide();
+    $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-save-pdf, #btn-paint, #btn-rot-ccw, #btn-rot-cw').hide();
+    _dwgPdfUrl = '';   // 切檔案時先清掉，避免「下載PDF」按到上一份檔案轉出來的結果
     resetTransform();
 
     // 小畫家吃得下的格式（**不含 pdf**：mspaint 開不了 PDF，按了只會下載一個開不起來的檔；
@@ -1038,7 +1048,7 @@ function showFile(path, type, name) {
         // 見 src/common/dwg_preview_lib.php）；viewPath 是原本「下載」的網址，preview_dwg
         // 是同一支 API 多加的動作，兩者參數完全相同，只換動作名稱即可。
         // 下載鈕仍指向「原始 DWG」（viewPath，不是轉出來的 PDF）——使用者要的是原檔。
-        var dwgPreviewUrl = viewPath.replace('action=download', 'action=preview_dwg');
+        var dwgPreviewUrl = dwgToPreviewUrl(viewPath);
         $('#viewer-placeholder').html('<i class="fa fa-spinner fa-spin"></i> 正在轉換 DWG 圖面，請稍候…').show();
         $('#btn-save').show();
         var _reqPath = _currentPath;
@@ -1048,7 +1058,8 @@ function showFile(path, type, name) {
                 var blobUrl = URL.createObjectURL(blob);
                 $('#viewer-placeholder').hide();
                 $('#bom-pdf-frame').attr('src', blobUrl).show();
-                $('#btn-print, #btn-save').show();
+                _dwgPdfUrl = dwgPreviewUrl;
+                $('#btn-print, #btn-save, #btn-save-pdf').show();
             })
             .fail(function() {
                 if (_currentPath !== _reqPath) return;
@@ -1073,15 +1084,19 @@ function showFile(path, type, name) {
 function openImageEditor() {
     var url = '../Sales/image_editor.php';
     var params = [];
-    // 圖片直接帶入；PDF 也帶入（編輯器端會用 pdf.js 轉成圖檔，多頁會跳窗問要開哪幾頁）；其他格式開空白編輯器
+    // 圖片直接帶入；PDF 也帶入（編輯器端會用 pdf.js 轉成圖檔，多頁會跳窗問要開哪幾頁）；
+    // DWG 瀏覽器讀不懂、編輯器更不可能處理，改帶「轉檔後的 PDF 預覽網址」比照 PDF
+    // 處理（唯一轉檔實作見 dwg_preview_lib.php，與本頁預覽共用同一份快取，多半已經
+    // 轉好直接命中）；其他格式開空白編輯器。
     var _type = (_currentType || '').toLowerCase();
     var _imgTypes = ['jpg','jpeg','png','gif','bmp'];
-    if (_currentPath && (_imgTypes.indexOf(_type) !== -1 || _type === 'pdf')) {
+    if (_currentPath && (_imgTypes.indexOf(_type) !== -1 || _type === 'pdf' || _type === 'dwg')) {
         // 本頁在 views/pm/，編輯器在 views/Sales/，相對路徑無法共用；一律換算成絕對 URL 再傳
-        var absSrc = new URL(_currentPath, window.location.href).href;
+        var _srcPath = (_type === 'dwg') ? dwgToPreviewUrl(_currentPath) : _currentPath;
+        var absSrc = new URL(_srcPath, window.location.href).href;
         params.push('preload=' + encodeURIComponent(absSrc));
-        params.push('preload_name=' + encodeURIComponent(_currentName || ''));
-        if (_type === 'pdf') params.push('preload_type=pdf');   // 走 API 下載端點的網址不一定有 .pdf 副檔名，型別直接註明
+        params.push('preload_name=' + encodeURIComponent((_currentName || '').replace(/\.dwg$/i, '.pdf')));
+        if (_type === 'pdf' || _type === 'dwg') params.push('preload_type=pdf');   // 走 API 下載端點的網址不一定有 .pdf 副檔名，型別直接註明
     }
     // 本頁看的就是這個料號，編輯器那邊「料號附件」存檔跳窗開啟時自動選好這個料號、
     // 檔名也預設帶入，不用使用者自己再打一次（見 image_editor.php 的 PRELOAD_PART_NO）
@@ -1276,6 +1291,14 @@ $('#btn-rot-cw').on('click',  function() { doRotate(90);  });
 // ── 使用說明（鐵律7）──
 $('#btnPageHelp').on('click', function() { $('#helpUseMask').css('display', 'flex'); });
 $('#helpUseMask').on('click', function(e) { if (e.target === this) this.style.display = 'none'; });
+
+// ── 下載 PDF（只有 DWG 轉出來的預覽會用到；直接下載不開「另存」對話框，
+//    因為檔名/格式已經固定）───────────────────────────────────────────────
+$('#btn-save-pdf').on('click', function() {
+    if (!_dwgPdfUrl) return;
+    var pdfName = (_currentName || _bom || 'file').replace(/\.dwg$/i, '') + '.pdf';
+    doDownload(_dwgPdfUrl, pdfName);
+});
 
 // ── 儲存：開啟頁內對話框 ──────────────────────────────────────────────────
 $('#btn-save').on('click', function() {
@@ -1472,7 +1495,7 @@ function showAlbumGrid(key) {
     var g = _albumPhotos[String(key)];
     if (!g) return;
     $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder, #bom-quote-detail').hide();
-    $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint').hide();
+    $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-save-pdf, #btn-paint').hide();
     $('#viewer-content .bom-obsolete-overlay').remove();
     $('#viewer-title').text((key === '__none__' ? '未分相簿' : g.name) + '（' + g.photos.length + ' 張）');
     $('#album-grid-wrap').show();
@@ -1546,7 +1569,7 @@ function makeAttItem(att, showSource, hideName) {
 
 function showEmpty(msg) {
     $('#img-zoom-wrap, #bom-pdf-frame, #bom-quote-detail, #album-grid-wrap').hide();
-    $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint').hide();
+    $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-save-pdf, #btn-paint').hide();
     $('#viewer-content .bom-obsolete-overlay').remove();
     $('#viewer-title').text('');
     $('#viewer-placeholder').text(msg).show();
@@ -1799,7 +1822,7 @@ function showQuoteDetail(qno) {
     $('#bom-file-list .bom-quote-head[data-qno="' + qno + '"]').css('background', '#f2dcb8');
     $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder').hide();
     $('#viewer-content .bom-obsolete-overlay').remove();
-    $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint').hide();
+    $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-save-pdf, #btn-paint').hide();
     $('#viewer-title').text(qno === '__unknown__' ? '（未知報價單）' : qno);
 
     var html = '<div style="width:100%;height:100%;overflow-y:auto;padding:16px;background:#fff;">';

@@ -10864,6 +10864,8 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
         <div id="pav-actions" style="display:none;padding:6px 10px;background:#f5f5f5;border-bottom:1px solid #e4e8ed;display:flex;gap:6px;align-items:center;flex-shrink:0;">
             <span id="pav-file-name-bar" style="font-size:11px;color:#555;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
             <a id="pav-btn-save" href="#" target="_blank" download class="btn btn-xs btn-default" style="white-space:nowrap;" title="另存新檔"><i class="fa fa-download"></i> 另存</a>
+            <!-- 只有 DWG 轉出來的預覽才需要「下載 PDF」——原檔下載已經在「另存」鈕 -->
+            <a id="pav-btn-save-pdf" href="#" target="_blank" download class="btn btn-xs btn-default" style="white-space:nowrap;display:none;" title="下載轉檔後的 PDF（原始 DWG 另有「另存」鈕可下載）"><i class="fa fa-file-pdf-o"></i> 下載PDF</a>
             <button type="button" class="btn btn-xs btn-default" onclick="pavPrint()" title="列印"><i class="fa fa-print"></i> 列印</button>
             <span id="pav-zoom-controls" style="display:none;align-items:center;gap:2px;">
                 <button type="button" class="btn btn-xs btn-default" onclick="pavZoomOut()" title="縮小（滾輪）" style="font-size:13px;line-height:1;padding:1px 7px;">－</button>
@@ -21342,6 +21344,8 @@ function pavSelectFile(idx) {
     if (nameBar) nameBar.textContent = file.original_name || file.filename || '';
     var btnSave = document.getElementById('pav-btn-save');
     if (btnSave) { btnSave.href = file.url; btnSave.download = file.original_name || file.filename || 'file'; }
+    var btnSavePdf = document.getElementById('pav-btn-save-pdf');
+    if (btnSavePdf) btnSavePdf.style.display = 'none';   // dwg 分支轉檔成功後才顯示並補 href
     var ext = (file.filename||'').split('.').pop().toLowerCase();
     var imgExts = ['jpg','jpeg','png','gif','webp','bmp','svg'];
     var isImg = imgExts.indexOf(ext) >= 0;
@@ -21391,6 +21395,12 @@ function pavSelectFile(idx) {
                 if (!preview.isConnected || (_pav.currentFile && _pav.currentFile.id !== _dwgReqId)) return;
                 var blobUrl = URL.createObjectURL(blob);
                 preview.innerHTML = '<iframe id="pav-preview-frame" src="'+blobUrl+'" style="width:100%;height:100%;border:none;"></iframe>';
+                var btnSavePdf2 = document.getElementById('pav-btn-save-pdf');
+                if (btnSavePdf2) {
+                    btnSavePdf2.href = blobUrl;
+                    btnSavePdf2.download = (file.original_name||file.filename||'file').replace(/\.dwg$/i,'') + '.pdf';
+                    btnSavePdf2.style.display = '';
+                }
             })
             .catch(function() {
                 if (!preview.isConnected || (_pav.currentFile && _pav.currentFile.id !== _dwgReqId)) return;
