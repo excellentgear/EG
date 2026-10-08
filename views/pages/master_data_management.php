@@ -1826,7 +1826,7 @@ $can_edit_gear  = _mdPerm('gear', 'edit');
 $can_delete_gear= _mdPerm('gear', 'delete');
 $can_modify_existing_gear = _mdPerm('gear', 'modify_existing');
 $can_remove_part_labels   = _mdTagCan('edit_others');
-$can_tag_required_edit    = _mdPerm('tag', 'required_edit');   // 編輯「必填標籤」——獨立細權限，不等同標籤定義管理編輯
+$can_tag_required_delete  = _mdPerm('tag', 'required_delete'); // 刪除「已指派給料號」的必填標籤——獨立細權限，與標籤定義本身是否必填(is_required)無關
 $can_part_attach = $is_admin || $_mdRbacAll
     || in_array('md_attach_upload', $_mdFeats, true)
     || in_array('md_attach_edit',   $_mdFeats, true)
@@ -2966,7 +2966,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 沒有「新增標籤指派」權限者，本次送出內容裡全新的標籤指派會被忽略。
             $old_tag_rows_q = $pdo->prepare("SELECT ilm.map_id, ilm.label_id, ilm.input_value, ilm.draw_dim, ilm.lathe_dim,
                                                      ilm.value_min, ilm.value_max, ilm.tol_upper, ilm.tol_lower, ilm.qty,
-                                                     ilm.created_by_id, dl.label_name
+                                                     ilm.created_by_id, dl.label_name, COALESCE(dl.is_required,0) AS is_required
                                               FROM item_label_map ilm JOIN dict_label dl ON dl.label_id=ilm.label_id
                                               WHERE ilm.d_id=? ORDER BY ilm.map_id");
             $old_tag_rows_q->execute([$d_id]);
@@ -2985,6 +2985,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             foreach ($old_tag_rows as $r) { $old_by_label[(int)$r['label_id']][] = $r; }
             $tagCanAssign = _mdTagCan('assign');
             $tagCanOthers = _mdTagCan('edit_others');
+            // 2026-10-08 使用者更正：「刪除必填標籤」管的是「移除已指派給料號的必填標籤」，
+            // 跟標籤定義本身是否必填(is_required)無關（那格由一般的標籤定義編輯權限管）。
+            // 可新增標籤指派者本來就能編輯自己指派的值，不必另外授權；唯獨「刪除」已指派
+            // 的必填標籤要多這一道——不管是不是本人指派、不管有沒有「修改/移除他人標籤」權限。
+            $canTagRequiredDelete = _mdPerm('tag', 'required_delete');
             $__consumedOldMaps = [];
             $__finalLabelsList = [];
             $tag_owner_plan    = []; // 與 $__finalLabelsList 一一對應：['id'=>創建者uid或null,'name'=>創建者姓名或null]
@@ -3016,8 +3021,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 無權限移除的舊列（這次送出內容沒有它、使用者也沒有資格移除它）原樣補回
             foreach ($old_tag_rows as $oldRow) {
                 if (in_array($oldRow['map_id'], $__consumedOldMaps, true)) continue;
-                $isMine = ($oldRow['created_by_id'] !== null && (int)$oldRow['created_by_id'] === (int)$uid);
-                if ($tagCanOthers || $isMine) continue; // 有資格移除就照使用者意思刪除（不補回）
+                $isMine     = ($oldRow['created_by_id'] !== null && (int)$oldRow['created_by_id'] === (int)$uid);
+                $isReqLabel = !empty($oldRow['is_required']);
+                $canRemoveThis = ($tagCanOthers || $isMine) && (!$isReqLabel || $canTagRequiredDelete);
+                if ($canRemoveThis) continue; // 有資格移除就照使用者意思刪除（不補回）
                 $restored = $__restoreRow($oldRow);
                 $restored['sub_labels'] = $old_sub_by_map[(int)$oldRow['map_id']] ?? [];
                 $__finalLabelsList[] = $restored;
@@ -5453,11 +5460,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $prefix_char    = trim($_POST['prefix_char'] ?? '');
                 $suffix_char    = trim($_POST['suffix_char'] ?? '');
                 $is_hidden_fe   = intval($_POST['is_hidden_frontend'] ?? 0);
-                $is_required_sv = intval($_POST['is_required'] ?? 0);   // 新增料號時必填
-                // 「必填」是獨立的細權限(mdata_tag_required_edit)，跟一般的標籤定義新增/編輯(label_dict)
-                // 分開——沒有這個權限的人即使能改標籤名稱/型態等其他欄位，也不可以更動必填這個旗標
-                // （鐵律8：前端已把這格鎖住，這裡再擋一次，不然直打 API 還是能把任何標籤改成必填）。
-                $canTagRequiredEdit = _mdPerm('tag', 'required_edit');
+                $is_required_sv = intval($_POST['is_required'] ?? 0);   // 新增料號時必填——跟其他欄位一樣，由一般的標籤定義新增/編輯(label_dict)權限把關，不另設細權限
                 $lathe_optional      = intval($_POST['lathe_optional'] ?? 0);
                 $has_draw_lathe_depth= intval($_POST['has_draw_lathe_depth'] ?? 0);
                 $is_triple_dim_sv    = intval($_POST['is_triple_dim'] ?? 0);
@@ -5494,13 +5497,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $uid = $_SESSION['user_id']??null; $op_name = _get_operator($pdo,$uid);
                 if ($id) {
                     $old_lbl = $pdo->prepare("SELECT label_name,type_code,input_type,is_repeatable,has_draw_lathe,is_range,has_tolerance,is_calc_diff,calc_base_label_id,calc_sub_label_id,tolerance_std_upper,is_exclude_calc,COALESCE(is_dimension,0) AS is_dimension,COALESCE(is_qty_dim,0) AS is_qty_dim,COALESCE(prefix_char,'') AS prefix_char,COALESCE(suffix_char,'') AS suffix_char,COALESCE(is_hidden_frontend,0) AS is_hidden_frontend,COALESCE(is_required,0) AS is_required FROM dict_label WHERE label_id=?"); $old_lbl->execute([$id]); $old_lbl_row = $old_lbl->fetch(PDO::FETCH_ASSOC);
-                    if (!$canTagRequiredEdit) $is_required_sv = (int)($old_lbl_row['is_required'] ?? 0); // 無細權限者：必填維持原值，不信任送來的值
                     $pdo->prepare("UPDATE dict_label SET label_name=?, type_code=?, is_repeatable=?, input_type=?, has_draw_lathe=?, is_range=?, has_tolerance=?, is_calc_diff=?, calc_base_label_id=?, calc_sub_label_id=?, tolerance_std_upper=?, is_exclude_calc=?, is_dimension=?, is_qty_dim=?, prefix_char=?, suffix_char=?, is_hidden_frontend=?, lathe_optional=?, has_draw_lathe_depth=?, is_triple_dim=?, calc_base_name=?, calc_sub_name=?, is_required=? WHERE label_id=?")
                         ->execute([$name, $type_code, $is_rep, $input_type, $has_draw_lathe, $is_range_v, $has_tolerance, $is_calc_diff, $calc_base_id, $calc_sub_id, $tol_std_upper, $is_excl_calc, $is_dim, $is_qty_dim, $prefix_char ?: null, $suffix_char ?: null, $is_hidden_fe, $lathe_optional, $has_draw_lathe_depth, $is_triple_dim_sv, $calc_base_name_sv ?: null, $calc_sub_name_sv ?: null, $is_required_sv, $id]);
                     $new_id = $id;
                     $ch=_diff_rows($old_lbl_row??[],['label_name'=>$name,'type_code'=>$type_code,'input_type'=>$input_type,'is_repeatable'=>(string)$is_rep,'has_draw_lathe'=>(string)$has_draw_lathe,'is_range'=>(string)$is_range_v,'has_tolerance'=>(string)$has_tolerance,'is_calc_diff'=>(string)$is_calc_diff,'calc_base_label_id'=>(string)($calc_base_id??''),'calc_sub_label_id'=>(string)($calc_sub_id??''),'tolerance_std_upper'=>(string)($tol_std_upper??''),'is_exclude_calc'=>(string)$is_excl_calc,'is_dimension'=>(string)$is_dim,'is_qty_dim'=>(string)$is_qty_dim,'prefix_char'=>$prefix_char,'suffix_char'=>$suffix_char,'is_hidden_frontend'=>(string)$is_hidden_fe,'is_required'=>(string)$is_required_sv],array_keys($old_lbl_row??[])); if(!empty($ch)) _log_audit($pdo,'update','dict','label:'.$id,$name,$ch,$uid,$op_name);
                 } else {
-                    if (!$canTagRequiredEdit) $is_required_sv = 0; // 無細權限者：新標籤一律不給一開始就是必填
                     $pdo->prepare("INSERT INTO dict_label (label_name, type_code, is_repeatable, input_type, has_draw_lathe, is_range, has_tolerance, is_calc_diff, calc_base_label_id, calc_sub_label_id, tolerance_std_upper, is_exclude_calc, is_dimension, is_qty_dim, prefix_char, suffix_char, is_hidden_frontend, lathe_optional, has_draw_lathe_depth, is_triple_dim, calc_base_name, calc_sub_name, is_required, sort_order) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE((SELECT MAX(sort_order)+1 FROM dict_label AS _t2),0))")
                         ->execute([$name, $type_code, $is_rep, $input_type, $has_draw_lathe, $is_range_v, $has_tolerance, $is_calc_diff, $calc_base_id, $calc_sub_id, $tol_std_upper, $is_excl_calc, $is_dim, $is_qty_dim, $prefix_char ?: null, $suffix_char ?: null, $is_hidden_fe, $lathe_optional, $has_draw_lathe_depth, $is_triple_dim_sv, $calc_base_name_sv ?: null, $calc_sub_name_sv ?: null, $is_required_sv]);
                     $new_id = (int)$pdo->lastInsertId();
@@ -5532,27 +5533,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     }
                 }
                 echo json_encode(['success'=>true,'label_id'=>$new_id]);
-            } elseif ($op === 'set_required') {
-                // 2026-10-08 獨立輕量端點：使用者實測發現「編輯必填標籤」這個細權限
-                // 單獨指派時完全沒用——角色若沒有一般的 mdata_label_dict_edit/add，
-                // 連編輯鉛筆都不會出現（_canEditDict 擋在外層），更別說打開表單去勾那格。
-                // 這支端點不要求一般編輯/新增權限，只檢查 mdata_tag_required_edit，
-                // 搭配清單列上新增的「必填」徽章（點擊即切換），讓這個權限真正獨立生效，
-                // 不再綁死一定要同時擁有標籤定義管理的編輯權才能用。
-                $id = intval($_POST['label_id'] ?? 0);
-                if (!$id) throw new Exception('缺少 label_id');
-                if (!_mdPerm('tag', 'required_edit')) throw new Exception('無「編輯必填標籤」權限');
-                $is_required_sv = intval($_POST['is_required'] ?? 0) ? 1 : 0;
-                $old = $pdo->prepare("SELECT label_name, COALESCE(is_required,0) AS is_required FROM dict_label WHERE label_id=? AND is_active=1");
-                $old->execute([$id]);
-                $row = $old->fetch(PDO::FETCH_ASSOC);
-                if (!$row) throw new Exception('找不到此標籤，可能已被刪除');
-                $pdo->prepare("UPDATE dict_label SET is_required=? WHERE label_id=?")->execute([$is_required_sv, $id]);
-                if ((int)$row['is_required'] !== $is_required_sv) {
-                    $uid = $_SESSION['user_id']??null; $op_name = _get_operator($pdo,$uid);
-                    _log_audit($pdo,'update','dict','label:'.$id,$row['label_name'],['is_required'=>[(string)(int)$row['is_required'],(string)$is_required_sv]],$uid,$op_name);
-                }
-                echo json_encode(['success'=>true,'is_required'=>$is_required_sv]);
             } elseif ($op === 'check_delete') {
                 $id = intval($_POST['id'] ?? 0);
                 $us = _label_usage($pdo, 'label', $id);
@@ -8192,7 +8172,7 @@ body { background:#F6F1EA; }
             { title: '料號標籤指派', items: [
               ['mdata_tag_assign','新增標籤指派'],
               ['mdata_tag_edit_others','修改／移除他人指派的標籤'],
-              ['mdata_tag_required_edit','編輯必填標籤']
+              ['mdata_tag_required_delete','刪除必填標籤']
             ]},
             { title: '標籤與字典維護', items: [
               ['mdata_label_dict_view','標籤定義管理：檢視'],
@@ -10211,7 +10191,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 <tr><td style="white-space:nowrap;"><strong>廠商本體操作</strong></td><td>新增、編輯（含批次修改/廠商別名連結）、刪除（含不可逆的綁定移轉）、停用狀態切換</td></tr>
 <tr><td style="white-space:nowrap;"><strong>齒輪規格操作</strong></td><td>新增/編輯齒輪規格、刪除齒輪規格列、修改既有齒輪規格列</td></tr>
 <tr><td style="white-space:nowrap;"><strong>客戶／廠商表單設定欄位</strong></td><td>對帳單設定、結帳設定（含臨時結帳調整）、報價方式、收款/付款方式、銀行帳戶，各自可設檢視/編輯</td></tr>
-<tr><td style="white-space:nowrap;"><strong>料號標籤指派</strong></td><td>新增標籤指派／修改或移除他人指派的標籤（沒有後者的人仍可改動/移除自己指派過的那一筆）／編輯必填標籤——這格<b>獨立生效、不需要下面「標籤與字典維護」的編輯權限</b>：有這個權限的人直接在字典設定→料號標籤的清單上點「必填」徽章即可切換，不必打得開編輯表單</td></tr>
+<tr><td style="white-space:nowrap;"><strong>料號標籤指派</strong></td><td>新增標籤指派／修改或移除他人指派的標籤（沒有後者的人仍可改動/移除自己指派過的那一筆）／刪除已指派的必填標籤——料號上已經選了的「必填」標籤（字典設定裡勾選「新增料號時必填」的那種）<b>預設不給移除</b>，就算有上面「修改或移除他人指派的標籤」權限也一樣；要有這格權限才能把已指派的必填標籤從料號上刪掉</td></tr>
 <tr><td style="white-space:nowrap;"><strong>標籤與字典維護</strong></td><td>標籤定義、工件種類、齒輪類型、齒輪等級對照、客戶產業別、製程大類與製程主檔，各自可設新增/編輯/刪除/檢視</td></tr>
 <tr><td style="white-space:nowrap;"><strong>廠商分類維護</strong></td><td>廠商大類/小類、加工限制標籤、大類製程設定</td></tr>
 <tr><td style="white-space:nowrap;"><strong>備註與附件設定</strong></td><td>製程備註、設計備註、附件類別標籤（NAS 儲存路徑設定仍僅限系統管理員）</td></tr>
@@ -11395,7 +11375,7 @@ var CAN_DELETE_GEAR     = <?= json_encode($can_delete_gear) ?>;         // 刪�
 var CAN_EDIT_GEAR       = <?= json_encode($can_edit_gear) ?>;           // 新增/編輯齒輪規格欄位與料號標籤（A,CRU,CRD,CDRU）
 var CAN_MODIFY_EXISTING_GEAR = <?= json_encode($can_modify_existing_gear) ?>; // 修改既有齒型列（A或含D；CRU不可）
 var CAN_REMOVE_LABELS   = <?= json_encode($can_remove_part_labels) ?>;  // 移除料號標籤（A或CDR）
-var CAN_TAG_REQUIRED_EDIT = <?= json_encode($can_tag_required_edit) ?>; // 編輯必填標籤（獨立細權限，見角色設定「料號標籤指派」）
+var CAN_TAG_REQUIRED_DELETE = <?= json_encode($can_tag_required_delete) ?>; // 刪除已指派的必填標籤（獨立細權限，見角色設定「料號標籤指派」）
 var CAN_SET_STATUS      = <?= json_encode($can_set_status) ?>;          // 切換客戶/廠商狀態（A或CDRU）
 var CAN_DICT_EDIT       = <?= json_encode($can_dict_edit) ?>;           // 字典設定編輯（A或CDRU）
 var CAN_DICT_PART       = <?= json_encode($can_dict_part) ?>;           // 工件/齒輪/標籤/製程大類字典（A/CDR/CDRU）——舊式聯集旗標，僅供尚未拆開的 PHP 端渲染判斷用，JS 按鈕顯示請用下面 DICT_PERM
@@ -14236,6 +14216,11 @@ function renderPartLabelChips(labelDefs, existing) {
 }
 
 function _makeLabelGrp(ldef, ei, canEdit, onChange) {
+    // 2026-10-08 使用者要求：已指派給料號的「必填」標籤，就算有一般的移除權限，
+    // 也要再多一道「刪除必填標籤」(mdata_tag_required_delete) 授權才能真的移除掉；
+    // 沒有這道授權的人看得到鎖頭圖示（知道為什麼拿掉不了），不是直接看不到移除鈕。
+    var isReqLdef = (ldef.is_required=='1'||ldef.is_required===1);
+    var canActuallyRemove = canEdit && (!isReqLdef || (typeof CAN_TAG_REQUIRED_DELETE !== 'undefined' && CAN_TAG_REQUIRED_DELETE));
     var hasDl        = (ldef.has_draw_lathe=='1'||ldef.has_draw_lathe===1);
     var hasDlDepth   = (ldef.has_draw_lathe_depth=='1'||ldef.has_draw_lathe_depth===1);
     var isTripleDimM = (ldef.is_triple_dim=='1'||ldef.is_triple_dim===1);
@@ -14325,7 +14310,7 @@ function _makeLabelGrp(ldef, ei, canEdit, onChange) {
     chip.dataset.qty        = (ei.qty != null ? String(ei.qty) : '');
     chip.innerHTML = labelText;
 
-    if (canEdit) {
+    if (canActuallyRemove) {
         var rm = document.createElement('span');
         rm.style.cssText = 'margin-left:4px;cursor:pointer;color:#ccc;font-size:11px;';
         rm.textContent = '×';
@@ -14342,6 +14327,12 @@ function _makeLabelGrp(ldef, ei, canEdit, onChange) {
             if (onChange) onChange();
         };
         chip.appendChild(rm);
+    } else if (canEdit && isReqLdef) {
+        var lk = document.createElement('span');
+        lk.style.cssText = 'margin-left:4px;color:#c0392b;font-size:10px;cursor:not-allowed;';
+        lk.title = '必填標籤，需要「刪除必填標籤」權限才能移除（見角色設定→料號標籤指派）';
+        lk.innerHTML = '<i class="fa fa-lock"></i>';
+        chip.appendChild(lk);
     }
     grp.appendChild(chip);
     return grp;
@@ -18757,35 +18748,13 @@ function labelUsedBadge(d) {
     if (refs.length) tip.push(refs.join('、'));
     return '<span title="' + escAttr(tip.join('；') + '　使用中，不可刪除') + '" style="font-size:10px;background:#F7E0BD;color:#8a5a1a;border:1px solid #e6c48f;border-radius:3px;padding:0 4px;margin-left:4px;">用 ' + (n || refs.length) + '</span>';
 }
-// 2026-10-08：「必填」徽章──使用者實測指出「編輯必填標籤」權限單獨指派時完全沒用，
-// 因為原本必填勾選只藏在編輯表單裡，而打開編輯表單需要另一個權限(標籤定義管理：編輯)，
-// 兩者沒有分開的角色根本打不開表單。改成清單列上獨立的徽章：有 mdata_tag_required_edit
-// 的人直接點一下徽章就能切換（走獨立端點 set_required，不吃一般編輯/新增權限），
-// 沒有這個權限的人仍看得到目前是否必填（唯讀徽章），兩者是同一支函式依權限分流顯示。
+// 唯讀「必填」徽章──單純顯示這個標籤目前是否「新增料號時必填」，不提供點擊切換
+// （2026-10-08 使用者更正：這格要不要必填本來就跟著一般的標籤編輯權限走，不需要
+// 另外的點擊切換功能；真正需要獨立授權的是下面的「刪除已指派的必填標籤」）。
 function labelRequiredBadge(d) {
     var isReq = (d && (d.is_required=='1'||d.is_required===1));
-    if (typeof CAN_TAG_REQUIRED_EDIT !== 'undefined' && CAN_TAG_REQUIRED_EDIT) {
-        return '<span onclick="toggleLabelRequired(event,\''+d.label_id+'\','+(isReq?0:1)+',\''+escAttr(d.label_name||'')+'\')"'
-             + ' title="點一下切換「新增料號時必填」（目前：'+(isReq?'必填':'非必填')+'）"'
-             + ' style="cursor:pointer;font-size:10px;background:'+(isReq?'#fdecea':'#eceff1')+';color:'+(isReq?'#c0392b':'#90a4ae')+';border:1px solid '+(isReq?'#f5c6cb':'#cfd8dc')+';border-radius:3px;padding:0 4px;margin-left:2px;">'+(isReq?'必填 ✓':'必填 ✗')+'</span>';
-    }
-    if (isReq) return '<span style="font-size:10px;background:#fdecea;color:#c0392b;border-radius:3px;padding:0 4px;margin-left:2px;">必填</span>';
-    return '';
-}
-function toggleLabelRequired(ev, id, newVal, name) {
-    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
-    if (typeof CAN_TAG_REQUIRED_EDIT === 'undefined' || !CAN_TAG_REQUIRED_EDIT) { showToast('需要「編輯必填標籤」權限', 'error'); return; }
-    if (!confirm('確定要把「' + (name||'') + '」' + (newVal ? '設為「新增料號時必填」' : '取消必填') + '？')) return;
-    api({ action:'manage_labels', op:'set_required', label_id:id, is_required:newVal }).done(function(r) {
-        if (r.success) {
-            var d = (_labelDictAllData||[]).filter(function(x){ return String(x.label_id)===String(id); })[0];
-            if (d) d.is_required = newVal;
-            showToast('已更新', 'success');
-            renderLabelDictPage();
-        } else {
-            showToast(r.message || '更新失敗', 'error');
-        }
-    });
+    if (!isReq) return '';
+    return '<span title="新增料號時必填" style="font-size:10px;background:#fdecea;color:#c0392b;border-radius:3px;padding:0 4px;margin-left:2px;">必填</span>';
 }
 function labelUseLockReason(d, what) {
     var n = labelUseCnt(d), refs = labelUseRefs(d);
@@ -19055,9 +19024,8 @@ var dictConfig = {
             html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#1565C0;;display:none;"><input type="checkbox" id="dict-f-lbl-dim" style="margin-right:3px;" onchange="onLblDimChange(this.checked)"> 長×寬(圓×深)</label>';
             html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#6a1a9a;;display:none;"><input type="checkbox" id="dict-f-lbl-qty-dim" style="margin-right:3px;" onchange="onLblQtyDimChange(this.checked)"> 數量-長×寬</label>';
             html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#546e7a;"><input type="checkbox" id="dict-f-lbl-hidden-fe" style="margin-right:3px;"> 不顯示於前端</label>';
-            html += '<label style="font-weight:normal;' + (CAN_TAG_REQUIRED_EDIT?'cursor:pointer;':'cursor:not-allowed;opacity:.6;') + 'font-size:12px;white-space:nowrap;margin:0;color:#c0392b;" '
-                  + 'title="' + (CAN_TAG_REQUIRED_EDIT ? '勾選後，新增料號時一定要填這個標籤才存得了檔（修改既有料號不擋）' : '需要「編輯必填標籤」權限才能更動（見角色設定→料號標籤指派）') + '">'
-                  + '<input type="checkbox" id="dict-f-lbl-required" style="margin-right:3px;"' + (CAN_TAG_REQUIRED_EDIT?'':' disabled') + '> 新增料號時必填</label>';
+            html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#c0392b;" title="勾選後，新增料號時一定要填這個標籤才存得了檔（修改既有料號不擋）">'
+                  + '<input type="checkbox" id="dict-f-lbl-required" style="margin-right:3px;"> 新增料號時必填</label>';
             html += '</div>';
             html += '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:flex-end;margin-bottom:4px;">';
             html += '<div><label style="font-size:10px;color:#888;margin-bottom:2px;">前綴字元 <span style="font-size:9px;color:#aaa;">(適用長×寬/數量-長×寬)</span></label>';
