@@ -2035,12 +2035,21 @@ function ot_note_frozen_for_order(PDO $pdo, int $orderId): bool {
  *  $askedAt（YYYY-MM-DD）有值時最前面加 M/D 提出日期，方便掃一眼列表就看得到是哪天提出
  *  的問題；格式沿用本頁既有「設計/日期」欄同一種縮寫（DATE_FORMAT(...,'%c/%e')），
  *  不是 ai-rules/20 的 YYYY.MM.DD 全站規則——那是給正式文件用的，這裡是極窄欄位的掃視用途。 */
-function ot_dn_preview_prefix(?string $targetType, ?string $targetLabel, ?string $askedAt = null): string {
+// $isNote＝使用者勾選的「設為備註(PS)」（2026-10-08 新增，與 $targetType===null 的既有
+// 「沒有指定對象」語意分開——PS 既有簡寫維持給「沒有對象」用，備註改標「【備註】」，
+// 避免同一個【PS】標籤混到兩種不同意思（有沒有對象 vs. 算不算問題）。
+function ot_dn_preview_prefix(?string $targetType, ?string $targetLabel, ?string $askedAt = null, bool $isNote = false): string {
     $map = ['customer' => '客戶', 'maker' => '廠商', 'user' => '業務', 'other' => '其他'];
     $datePart = '';
     if ($askedAt) {
         $ts = strtotime($askedAt);
         if ($ts) $datePart = date('n/j', $ts) . ' ';
+    }
+    if ($isNote) {
+        if (!$targetType) return $datePart . '【備註】';
+        $label = $targetLabel !== null && $targetLabel !== '' ? (string)$targetLabel : '（未指定）';
+        if ($targetType === 'user' && $label !== '（未指定）') $label = mb_substr($label, -2, 2, 'UTF-8');
+        return $datePart . '【備註｜' . ($map[$targetType] ?? $targetType) . ' ' . $label . '】';
     }
     if (!$targetType) return $datePart . '【PS】';
     $label = $targetLabel !== null && $targetLabel !== '' ? (string)$targetLabel : '（未指定）';
@@ -2248,7 +2257,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'ate_q_list') {
                                    WHERE r.item_id IN ({$ids}) ORDER BY r.replied_on, r.id")->fetchAll(PDO::FETCH_ASSOC);
                 $rmap = [];
                 foreach ($rp as $r) $rmap[(int)$r['item_id']][] = $r;
-                foreach ($items as &$x) { $x['replies'] = $rmap[(int)$x['id']] ?? []; }
+                // is_note 從 PDO 取出來是字串 "0"/"1"，字串 "0" 在 JS 是 truthy，一定要轉成
+                // 真正的數字型別，json_encode 才會輸出 JSON number 給前端用 !!it.is_note 判斷。
+                foreach ($items as &$x) { $x['replies'] = $rmap[(int)$x['id']] ?? []; $x['is_note'] = (int)($x['is_note'] ?? 0); }
                 unset($x);
             }
         }
@@ -3693,7 +3704,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         <?php
                         // PS＝純備註的前端簡寫（使用者要求）；前綴格式／廠內人員縮短姓名／M-D提出
                         // 日期統一走 ot_dn_preview_prefix()（2026-10-07），不要在這裡再組一次。
-                        $_ateQPrefix = ot_dn_preview_prefix($_ateQRow['target_type'], $_ateQRow['target_label'], $_ateQRow['asked_at'] ?? null);
+                        $_ateQPrefix = ot_dn_preview_prefix($_ateQRow['target_type'], $_ateQRow['target_label'], $_ateQRow['asked_at'] ?? null, !empty($_ateQRow['is_note']));
                         $_ateQText = (string)$_ateQRow['question'];
                         $_ateQFull = $_ateQPrefix . $_ateQText;
                         $_ateQDone = ($_ateQOpen === 0);
@@ -4219,6 +4230,8 @@ foreach($dCounts as $c) {
             background:#fff; padding:8px 10px; margin-bottom:8px; }
         .ate-q-item-head { display:flex; align-items:center; gap:7px; margin-bottom:4px; }
         .ate-q-stbadge { font-size:10px; color:#fff; border-radius:3px; padding:1px 6px; }
+        .ate-q-note-badge { font-size:10px; color:#8a4b12; background:#FDF1E3; border:1px solid #E0A46A;
+            border-radius:3px; padding:0 6px; line-height:1.6; white-space:nowrap; }
         .ate-q-target { font-size:11px; color:#8a7355; }
         .ate-q-asked { font-size:10px; color:#aaa; margin-left:auto; white-space:nowrap; }
         .ate-q-question { font-size:13px; color:#333; white-space:pre-wrap; word-break:break-word; margin-bottom:4px; }
@@ -4254,6 +4267,9 @@ foreach($dCounts as $c) {
         .ate-q-add-table textarea.ate-q-qtext { width:100%; font-size:12px; }
         .ate-q-add-table select { width:100%; font-size:12px; }
         .ate-q-add-table input[type=date] { width:100%; font-size:12px; height:30px; }
+        .ate-q-note-chk { display:block; font-size:10.5px; color:#8a4b12; font-weight:400; margin-top:3px;
+            white-space:nowrap; cursor:pointer; }
+        .ate-q-note-chk input { margin-right:3px; vertical-align:-1px; }
         .ate-q-add-foot { display:flex; justify-content:space-between; margin-top:6px; }
 
         /* 2026-10-06：對象選擇器（業務/廠商/客戶/其他，按鈕式），新增問題與回覆共用同一套
@@ -8883,7 +8899,7 @@ foreach($dCounts as $c) {
             var d = ATE_Q.bizDefault;
             return { question: '', target_type: 'user', asked_at: ATE_Q.today || '',
                      target_id: d ? String(d.id) : '', target_label: d ? d.name : '', target_post: d ? d.post : '',
-                     target_contact: '' };
+                     target_contact: '', is_note: false };
         }
 
         function ateQOpen(orderId, kind) {
@@ -9019,8 +9035,11 @@ foreach($dCounts as $c) {
                     +   '<button type="button" class="btn btn-xs btn-warm" onclick="ateQSubmitReply(' + it.id + ')"><i class="fa fa-paper-plane"></i> 送出回覆</button>'
                     + '</div>';
             }
+            // 備註(PS) 徽章：is_note=1 時這一條不列入待處理問題計數，純粹記錄內容
+            // （2026-10-08 使用者要求），與 ateQStatusBadge() 的狀態徽章並列顯示。
+            var noteBadge = it.is_note ? '<span class="ate-q-note-badge" title="備註：不列入待處理問題計數"><i class="fa fa-sticky-note-o"></i> 備註</span>' : '';
             return '<div class="ate-q-item">'
-                + '<div class="ate-q-item-head">' + ateQStatusBadge(it.status) + '<span class="ate-q-target">' + escapeHtml(ateQTargetLabel(it)) + '</span>'
+                + '<div class="ate-q-item-head">' + ateQStatusBadge(it.status) + noteBadge + '<span class="ate-q-target">' + escapeHtml(ateQTargetLabel(it)) + '</span>'
                 + (askedTxt ? '<span class="ate-q-asked">' + escapeHtml(askedTxt) + ' 提出</span>' : '') + '</div>'
                 + '<div class="ate-q-question">' + escapeHtml(it.question || '') + '</div>'
                 + repliesHtml
@@ -9371,7 +9390,9 @@ foreach($dCounts as $c) {
                 + '<td style="width:32%;"><textarea class="form-control ate-q-qtext" rows="2" placeholder="輸入問題內容…按 Enter 直接送出，Shift+Enter 換行，↓可新增下一條" '
                 +   'oninput="ateQRowQChange(' + idx + ',this.value)" onkeydown="ateQRowKeyDown(event,' + idx + ')">' + escapeHtml(r.question) + '</textarea></td>'
                 + '<td style="width:13%;"><input type="date" class="form-control" value="' + escapeHtml(r.asked_at || ATE_Q.today || '') + '" '
-                +   'max="' + escapeHtml(ATE_Q.today || '') + '" onchange="ateQRowDateChange(' + idx + ',this.value)"></td>'
+                +   'max="' + escapeHtml(ATE_Q.today || '') + '" onchange="ateQRowDateChange(' + idx + ',this.value)">'
+                +   '<label class="ate-q-note-chk" title="勾選後這一條只是記錄內容，不列入待處理問題計數">'
+                +     '<input type="checkbox"' + (r.is_note ? ' checked' : '') + ' onchange="ateQRowNoteChange(' + idx + ',this.checked)"> 設為備註(PS)</label></td>'
                 + '<td style="width:47%;">' + ateQTpHtml(ns, r) + '</td>'
                 + '<td style="width:8%;text-align:center;">' + delBtn + '</td>'
                 + '</tr>';
@@ -9434,6 +9455,8 @@ foreach($dCounts as $c) {
 
         function ateQRowQChange(idx, val) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].question = val; }
         function ateQRowDateChange(idx, val) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].asked_at = val; }
+        // 設為備註(PS)：不列入待處理問題計數，純粹記錄內容（2026-10-08 使用者要求）。
+        function ateQRowNoteChange(idx, checked) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].is_note = !!checked; }
         // 共用檔 eg_input_rules.js 規則6要求：不帶參數，呼叫後多一列/少一列並自己重繪
         function ateQRowAdd() { ATE_Q.rows.push(ateQNewRow()); ateQRedrawComposer(); }
         function ateQRowDel() { if (ATE_Q.rows.length > 1) { ATE_Q.rows.pop(); ateQRedrawComposer(); } }
@@ -9458,7 +9481,8 @@ foreach($dCounts as $c) {
                     if (!$.trim(r.target_label || '')) { bad = true; return; }
                 } else if (r.target_type && !r.target_id) { bad = true; return; }
                 var row = { question: q, target_type: r.target_type, target_id: r.target_id, target_label: r.target_label,
-                            target_post: r.target_post, target_contact: r.target_contact, asked_at: r.asked_at };
+                            target_post: r.target_post, target_contact: r.target_contact, asked_at: r.asked_at,
+                            is_note: r.is_note ? 1 : 0 };
                 // 製程中紀錄：回覆內容有填才一併建立第一筆回覆，留白只建立這筆紀錄本身
                 if (ATE_Q.kind === 'process') {
                     var rc = $.trim(r.reply_content || '');
@@ -9498,11 +9522,20 @@ foreach($dCounts as $c) {
         // 前綴格式：類別與對象之間用空格不用冒號；target_type==='user'（廠內人員）對象只顯示
         // 短名；帶 asked_at（YYYY-MM-DD）時最前面加 M/D 提出日期，與本頁「設計/日期」欄同一種
         // 縮寫（不是 ai-rules/20 全站的 YYYY.MM.DD，這裡是極窄欄位的掃視用途）。
-        function otDnPreviewPrefix(targetType, targetLabel, askedAt) {
+        // isNote（2026-10-08 新增）：使用者勾選的「設為備註(PS)」，與 targetType===null 的
+        // 既有「沒有對象」語意分開——PS 簡寫維持給沒有對象用，備註改標「【備註】」，
+        // 與 PHP 端 ot_dn_preview_prefix() 同一套規則，不可各自走鐘。
+        function otDnPreviewPrefix(targetType, targetLabel, askedAt, isNote) {
             var tMap = { customer: '客戶', maker: '廠商', user: '業務', other: '其他' };
             var datePart = '';
             var m = askedAt ? /^(\d{4})-(\d{2})-(\d{2})/.exec(String(askedAt)) : null;
             if (m) datePart = parseInt(m[2], 10) + '/' + parseInt(m[3], 10) + ' ';
+            if (isNote) {
+                if (!targetType) return datePart + '【備註】';
+                var nLabel = targetLabel || '（未指定）';
+                if (targetType === 'user' && nLabel !== '（未指定）') nLabel = otShortName(nLabel);
+                return datePart + '【備註｜' + (tMap[targetType] || targetType) + ' ' + nLabel + '】';
+            }
             if (!targetType) return datePart + '【PS】';
             var label = targetLabel || '（未指定）';
             if (targetType === 'user' && label !== '（未指定）') label = otShortName(label);
@@ -9522,7 +9555,7 @@ foreach($dCounts as $c) {
             if (!$cell.length) return;
             openCount = parseInt(openCount, 10) || 0;
             if (preview) {
-                var prefix = otDnPreviewPrefix(preview.target_type, preview.target_label, preview.asked_at);
+                var prefix = otDnPreviewPrefix(preview.target_type, preview.target_label, preview.asked_at, !!preview.is_note);
                 var full = prefix + (preview.question || '');
                 var done = openCount === 0;
                 var badge = done

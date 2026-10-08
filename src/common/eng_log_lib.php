@@ -294,6 +294,10 @@ function el_ensure_schema(PDO $db): void
         "ALTER TABLE eng_log ADD COLUMN proposer_id VARCHAR(30) NULL",
         "ALTER TABLE eng_log ADD COLUMN proposer_label VARCHAR(120) NULL",
         "ALTER TABLE eng_log ADD COLUMN proposer_post VARCHAR(80) NULL COMMENT '公司內部提案人的部門＋職稱'",
+        // 純備註（PS）：使用者新增問題時可勾選，代表這一條只是記錄內容，不是需要跟催的
+        // 問題——與 target_type 是否有值無關（target_type=NULL 原本就是「沒有指定對象」
+        // 的既有語意，兩者刻意分開，見 el_order_open_exists_sql() 等處的用法說明）。
+        "ALTER TABLE eng_log_item ADD COLUMN is_note TINYINT NOT NULL DEFAULT 0 COMMENT '1=純備註，不列入待處理問題計數／不發催回覆提醒' AFTER target_contact",
     ] as $sql) { try { $db->exec($sql); } catch (Throwable $e) {} }
 
     $db->exec("CREATE TABLE IF NOT EXISTS eng_log_step (
@@ -883,6 +887,10 @@ function el_item_upsert(PDO $db, int $logId, int $itemId, array $in, string $now
     if ($asked > $today) throw new InvalidArgumentException('提出日期不可以是未來日期');
     $fud = el_norm_int($in['follow_up_days'] ?? '');
     if ($fud !== null && ($fud < 1 || $fud > 365)) throw new InvalidArgumentException('催回覆天數請填 1～365');
+    // 純備註（PS）：使用者勾選時傳 1，代表這一條不列入待處理問題計數、也不發催回覆提醒
+    // （見 el_order_open_exists_sql()／el_order_item_summary()／el_process_due_reminders()
+    // 三處的 is_note=0 條件，與 target_type 是否有值是兩回事，不可混用判斷）。
+    $isNote = !empty($in['is_note']) ? 1 : 0;
 
     if ($itemId > 0) {
         $st = $db->prepare("SELECT * FROM eng_log_item WHERE id=? AND log_id=?");
@@ -892,9 +900,9 @@ function el_item_upsert(PDO $db, int $logId, int $itemId, array $in, string $now
         $resend = ((string)$cur['asked_at'] !== (string)$asked || (string)$cur['follow_up_days'] !== (string)$fud) ? 0 : (int)$cur['remind_sent'];
         $db->prepare("UPDATE eng_log_item SET question=?, target_type=?, target_id=?, target_label=?,
                       target_post=?, target_contact=?, asked_at=?, follow_up_days=?, remind_sent=?,
-                      updated_at=? WHERE id=?")
+                      is_note=?, updated_at=? WHERE id=?")
            ->execute([$q, $tt, ($ti === '' ? null : $ti), ($tl === '' ? null : $tl), ($tp === '' ? null : $tp),
-                      ($tc === '' ? null : $tc), $asked, $fud, $resend, $now, $itemId]);
+                      ($tc === '' ? null : $tc), $asked, $fud, $resend, $isNote, $now, $itemId]);
         return $itemId;
     }
 
@@ -907,10 +915,10 @@ function el_item_upsert(PDO $db, int $logId, int $itemId, array $in, string $now
         if (!$pc->fetchColumn()) throw new InvalidArgumentException('要延伸的那一條問題不存在，請重新整理');
     }
     $db->prepare("INSERT INTO eng_log_item (log_id, parent_item_id, seq, question, target_type, target_id,
-                  target_label, target_post, target_contact, asked_at, status, follow_up_days, remind_sent, created_at)
-                  VALUES (?,?,?,?,?,?,?,?,?,?, 'waiting', ?, 0, ?)")
+                  target_label, target_post, target_contact, is_note, asked_at, status, follow_up_days, remind_sent, created_at)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?, 'waiting', ?, 0, ?)")
        ->execute([$logId, $parent, (int)$mx->fetchColumn(), $q, $tt, ($ti === '' ? null : $ti),
-                  ($tl === '' ? null : $tl), ($tp === '' ? null : $tp), ($tc === '' ? null : $tc),
+                  ($tl === '' ? null : $tl), ($tp === '' ? null : $tp), ($tc === '' ? null : $tc), $isNote,
                   $asked, $fud, $now]);
     return (int)$db->lastInsertId();
 }
@@ -1100,7 +1108,8 @@ function el_order_process_sync_binds(PDO $db, int $logId, int $orderId): void
  */
 function el_order_case_sync_status(PDO $db, int $logId, string $now): void
 {
-    $st = $db->prepare("SELECT COUNT(*) FROM eng_log_item WHERE log_id=? AND status NOT IN ('resolved','dropped')");
+    // is_note=1（純備註）一律不算「未處理」——本來就不是需要跟催的問題，見 el_item_upsert() 說明。
+    $st = $db->prepare("SELECT COUNT(*) FROM eng_log_item WHERE log_id=? AND is_note=0 AND status NOT IN ('resolved','dropped')");
     $st->execute([$logId]);
     $hasOpen = (int)$st->fetchColumn() > 0;
     if ($hasOpen) {
@@ -1139,14 +1148,16 @@ function el_order_item_summary(PDO $db, array $orderIds, string $logType = 'orde
     $in = implode(',', $ids);
     $out = [];
     try {
+        // is_note=1（純備註）一律不算進 open_cnt，也不優先被挑成預覽（排序鍵一併排除），
+        // 但仍計入 total_cnt——純備註還是這張訂單底下的一條紀錄，只是不算「待處理問題」。
         $st = $db->prepare("
-            SELECT order_id, question, status, target_type, target_label, asked_at, total_cnt, open_cnt FROM (
-                SELECT b.bind_id AS order_id, i.question, i.status, i.target_type, i.target_label, i.asked_at,
+            SELECT order_id, question, status, target_type, target_label, asked_at, is_note, total_cnt, open_cnt FROM (
+                SELECT b.bind_id AS order_id, i.question, i.status, i.target_type, i.target_label, i.asked_at, i.is_note,
                        COUNT(*) OVER (PARTITION BY b.bind_id) AS total_cnt,
-                       SUM(CASE WHEN i.status NOT IN ('resolved','dropped') THEN 1 ELSE 0 END)
+                       SUM(CASE WHEN i.is_note=0 AND i.status NOT IN ('resolved','dropped') THEN 1 ELSE 0 END)
                            OVER (PARTITION BY b.bind_id) AS open_cnt,
                        ROW_NUMBER() OVER (PARTITION BY b.bind_id
-                           ORDER BY (i.status NOT IN ('resolved','dropped')) DESC, i.id DESC) AS rn
+                           ORDER BY (i.is_note=0 AND i.status NOT IN ('resolved','dropped')) DESC, i.id DESC) AS rn
                 FROM eng_log_bind b
                 JOIN eng_log g ON g.id = b.log_id
                 JOIN eng_log_item i ON i.log_id = b.log_id
@@ -1164,6 +1175,7 @@ function el_order_item_summary(PDO $db, array $orderIds, string $logType = 'orde
                 'target_type'  => $r['target_type'] !== null ? (string)$r['target_type'] : null,
                 'target_label' => $r['target_label'] !== null ? (string)$r['target_label'] : null,
                 'asked_at'     => $r['asked_at'] !== null ? (string)$r['asked_at'] : null,
+                'is_note'      => (int)$r['is_note'],
             ];
         }
     } catch (Throwable $e) {}
@@ -1215,11 +1227,13 @@ function el_order_open_exists_sql(string $orderAlias = 'ot', string $logType = '
     // 「批圖溝通中」指的是訂單階段的設計備註未處理，轉生管之後才會有的「製程中紀錄」
     // (order_process) 不該被算進這個統計，否則既有的卡片數字會被不相干的新資料灌水。
     if (!in_array($logType, ['order_note', 'order_process'], true)) $logType = 'order_note';
+    // is_note=1（純備註）排除在外：那是使用者勾選「不列入問題」的紀錄，不算批圖溝通中。
     return "EXISTS (SELECT 1 FROM eng_log_bind elb
         JOIN eng_log elg ON elg.id = elb.log_id
         JOIN eng_log_item eli ON eli.log_id = elb.log_id
         WHERE elb.bind_type='order' AND elb.bind_id = {$orderAlias}.Order_id
         AND elg.log_type = '{$logType}'
+        AND eli.is_note = 0
         AND eli.status NOT IN ('resolved','dropped'))";
 }
 
@@ -1343,7 +1357,7 @@ function el_process_due_reminders(PDO $db): int
                    COALESCE(i.follow_up_days, {$def}) AS fud,
                    t.user_id, t.log_no, t.title
             FROM eng_log_item i JOIN eng_log t ON t.id = i.log_id
-            WHERE i.status = 'waiting' AND i.remind_sent = 0 AND t.status = 'open'
+            WHERE i.status = 'waiting' AND i.remind_sent = 0 AND t.status = 'open' AND i.is_note = 0
               AND i.asked_at IS NOT NULL
               AND i.asked_at <= DATE_SUB(CURDATE(), INTERVAL COALESCE(i.follow_up_days, {$def}) DAY)
         ")->fetchAll(PDO::FETCH_ASSOC);
