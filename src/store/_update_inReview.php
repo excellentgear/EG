@@ -40,23 +40,40 @@ if (!ot_can_operate_design($pdo, $uid, (int)$orderId, 'ot_batch_draw')) {
 
 if ($action === 'set_in_review') {
     try {
-        $stmt = $pdo->prepare("UPDATE order_track SET in_review = CURDATE() WHERE Order_id = ?");
-        $stmt->execute([$orderId]);
-        if ($stmt->rowCount() > 0) {
-            $stmt_fetch = $pdo->prepare("SELECT DATE_FORMAT(in_review, '%c/%e') AS in_review_date FROM order_track WHERE Order_id = ?");
-            $stmt_fetch->execute([$orderId]);
-            $result = $stmt_fetch->fetch(PDO::FETCH_ASSOC);
-            echo json_encode(['success' => true, 'message' => '審圖中狀態已設定。', 'in_review_date' => $result['in_review_date'], 'state' => ot_boss_cell_state($pdo, (int)$orderId)]);
-        } else {
-            // If no rows affected, it might be already set to today. Fetch current date to be sure.
-            $stmt_fetch = $pdo->prepare("SELECT DATE_FORMAT(in_review, '%c/%e') AS in_review_date FROM order_track WHERE Order_id = ? AND in_review = CURDATE()");
-            $stmt_fetch->execute([$orderId]);
-            $result = $stmt_fetch->fetch(PDO::FETCH_ASSOC);
-            if ($result) {
-                 echo json_encode(['success' => true, 'message' => '審圖中狀態已是今日。', 'in_review_date' => $result['in_review_date'], 'state' => ot_boss_cell_state($pdo, (int)$orderId)]);
-            } else {
-                echo json_encode(['success' => false, 'message' => '設定審圖中狀態失敗或無變更。']);
+        $pdo->prepare("UPDATE order_track SET in_review = CURDATE() WHERE Order_id = ?")
+            ->execute([$orderId]);
+
+        // 不再靠 UPDATE 的 rowCount 判斷「有沒有設定成功」——同一天重複按本來就 rowCount=0，
+        // 一律重新查目前狀態，順便把下面的 BOSS 審圖判斷接進同一次查詢（唯一一份即時狀態）。
+        $stmt_fetch = $pdo->prepare("SELECT in_review, DATE_FORMAT(in_review, '%c/%e') AS in_review_date,
+                                             Client_name_ID, ate, boss_review_at, boss_ok_at
+                                      FROM order_track WHERE Order_id = ?");
+        $stmt_fetch->execute([$orderId]);
+        $row = $stmt_fetch->fetch(PDO::FETCH_ASSOC);
+
+        if ($row && !empty($row['in_review_date'])) {
+            // 2026-10-08 使用者要求：客戶在「需給 BOSS 審圖」名單內時，按下【審圖】的當下就直接
+            // 送出 BOSS 審圖（不必等再按一次【轉生管】才送）——否則提示與「BOSS審圖中」會晚一步
+            // 才出現，使用者會以為按了審圖沒反應。只在「這張單還沒送過、也還沒 BOSS OK 過」時才送，
+            // 避免覆蓋既有的送審/審核紀錄；轉生管那邊原本的判斷（simple_update_pmGet.php）照常保留，
+            // 當成舊資料（審圖早就按過、名單後來才加這家客戶）的退路，兩邊同時存在不衝突。
+            $bossMsg = null;
+            if (empty($row['boss_review_at']) && empty($row['boss_ok_at'])
+                && ot_boss_required($pdo, $row['Client_name_ID'] ?? '', $row['ate'] ?? 0, $row['in_review'])) {
+                $pdo->prepare("UPDATE order_track SET boss_review_at = CURDATE(), boss_review_by = ? WHERE Order_id = ?")
+                    ->execute([$uid, $orderId]);
+                $bossMsg = '本客戶的訂單需給 BOSS 審圖，已記錄今日送 BOSS 審圖；等 BOSS 審核 OK 後才能轉生管。';
             }
+            $resp = [
+                'success' => true,
+                'message' => $bossMsg !== null ? $bossMsg : '審圖中狀態已設定。',
+                'in_review_date' => $row['in_review_date'],
+                'state' => ot_boss_cell_state($pdo, (int)$orderId),
+            ];
+            if ($bossMsg !== null) $resp['boss_review'] = true;
+            echo json_encode($resp);
+        } else {
+            echo json_encode(['success' => false, 'message' => '設定審圖中狀態失敗或無變更。']);
         }
     } catch (PDOException $e) {
         error_log("Error setting in_review: " . $e->getMessage());
@@ -64,7 +81,13 @@ if ($action === 'set_in_review') {
     }
 } elseif ($action === 'cancel_in_review') {
     try {
-        $stmt = $pdo->prepare("UPDATE order_track SET in_review = NULL WHERE Order_id = ?");
+        // 2026-10-08 使用者要求：取消審圖要把 BOSS 審圖的送審/審核紀錄一起清掉，回到「完全沒按過
+        // 審圖」的狀態——否則 boss_review_at／boss_ok_at 留著舊值，下次再按審圖時，會因為這裡已經
+        // 有紀錄而直接跳成「BOSS審圖中」（甚至「BOSS OK」），不會重新走一次送審提示。
+        $stmt = $pdo->prepare("UPDATE order_track SET in_review = NULL,
+                               boss_review_at = NULL, boss_review_by = NULL,
+                               boss_ok_at = NULL, boss_ok_by = NULL
+                               WHERE Order_id = ?");
         $stmt->execute([$orderId]);
         if ($stmt->rowCount() > 0) {
             echo json_encode(['success' => true, 'message' => '審圖中狀態已取消。', 'state' => ot_boss_cell_state($pdo, (int)$orderId)]);

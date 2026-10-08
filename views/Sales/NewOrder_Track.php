@@ -9635,6 +9635,11 @@ foreach($dCounts as $c) {
                 var data = (typeof res === 'object') ? res : JSON.parse(res);
                 if (data.success) {
                     otPmCellApply(orderId, data.state || { in_review_date: data.in_review_date });
+                    // 客戶在「需給 BOSS 審圖」名單內時，按審圖的當下就已經直接送出 BOSS 審圖了，要講清楚
+                    if (data.boss_review) {
+                        if (typeof showToast === 'function') showToast(data.message);
+                        else alert(data.message);
+                    }
                 } else {
                     alert('Error: ' + data.message);
                     location.reload();
@@ -13795,10 +13800,12 @@ foreach($dCounts as $c) {
             <div class="main-card" style="margin-top:10px;border:1px solid #E4D3BC;">
               <div style="font-weight:700;color:#8a5a2b;margin-bottom:6px;"><i class="fa fa-eye"></i> 需給 BOSS 審圖的客戶</div>
               <div style="font-size:11px;color:#8a5a2b;background:#FFF9F0;border:1px solid #F0E2CC;border-radius:4px;padding:6px 8px;margin-bottom:8px;line-height:1.7;">
-                這裡綁定的客戶，他們的訂單<b>按過「審圖」之後</b>再按【轉生管】時<b>不會直接轉生管</b>，
-                而是先記下「今天送 BOSS 審圖」，清單上顯示 <b>BOSS審圖中</b> 並長出【BOSS審核OK】鈕；
-                按下【BOSS審核OK】＝系統認定<b>當天</b> BOSS 完成審核，【轉生管】鈕才會回來，之後所有動作都與原本相同。<br>
+                這裡綁定的客戶，他們的訂單<b>按下【審圖】的當下</b>就會<b>直接送出 BOSS 審圖</b>，
+                清單上立刻顯示 <b>BOSS審圖中</b> 並長出【BOSS審核OK】鈕；
+                按下【BOSS審核OK】＝系統認定<b>當天</b> BOSS 完成審核，【轉生管】鈕才會出現，之後所有動作都與原本相同。<br>
                 ・<b>沒有按過「審圖」就直接按【轉生管】的一律不擋</b>——那種通常本來就已經有圖面，不需要再送 BOSS。<br>
+                ・<b>取消 BOSS 審圖紀錄、或取消審圖，都會回到「完全沒按過審圖」的狀態</b>——再按一次【審圖】
+                會重新走一次完整的送審流程，不會因為留著舊紀錄而直接跳成已送審或已審核。<br>
                 ・<b>原本設定為「存檔自動轉生管」的設計對象完全不受影響</b>（那種訂單一存檔就已經是已轉生管，本設定不會介入）。<br>
                 ・誰能按【BOSS審核OK】＝誰能按【轉生管】（角色功能碼 <code>ot_to_pm</code>，且只能操作自己被指定的訂單）。<br>
                 ・<b>每次儲存（新增／修改／刪除）都必須填寫修改原因</b>；一次改好幾家只要填一次。系統會記錄是誰、什麼時候改的。
@@ -15388,11 +15395,14 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
 <h4>六之二、需給 BOSS 審圖的客戶</h4>
 <ul>
     <li>在【<b>設定</b>】跳窗最下方的「<b>需給 BOSS 審圖的客戶</b>」綁定客戶（打<b>客戶名稱或客戶ID</b>模糊搜尋後點選，可綁多家）。</li>
-    <li>綁定之後，這些客戶的訂單<b>在按過「審圖」之後</b>再按【<b>轉生管</b>】時<b>不會直接轉生管</b>，
-        而是記下「<b>今天</b>送 BOSS 審圖」，該列顯示 <b>BOSS審圖中</b> 並長出【<b>BOSS審核OK</b>】鈕。</li>
+    <li>綁定之後，這些客戶的訂單<b>按下【審圖】的當下</b>就會<b>直接送出 BOSS 審圖</b>，
+        該列立刻顯示「<b>今天</b>送 BOSS 審圖」的 <b>BOSS審圖中</b> 並長出【<b>BOSS審核OK</b>】鈕
+        （不必像以前一樣再多按一次【<b>轉生管</b>】才送）。</li>
     <li><b>沒有按過「審圖」就直接按【轉生管】的一律不擋</b>——那種訂單通常本來就已經有圖面，不需要再送 BOSS。</li>
     <li>按【<b>BOSS審核OK</b>】＝系統認定<b>當天</b> BOSS 完成審核，該列顯示 <b>BOSS OK</b>，
-        【<b>轉生管</b>】鈕回來，之後所有動作都與原本完全相同。按錯了可用旁邊的 <b>X</b> 把 BOSS 審圖紀錄整個清掉重來。</li>
+        【<b>轉生管</b>】鈕才會出現，之後所有動作都與原本完全相同。
+        按錯了可用旁邊的 <b>X</b> 把 BOSS 審圖紀錄清掉重來；<b>連「審圖」本身一起取消的話，BOSS 審圖紀錄也會一起清空</b>——
+        回到完全沒按過審圖的狀態，不會下次一按審圖就直接跳成已送審或已審核。</li>
     <li><b>原本設定為「存檔自動轉生管」的設計對象不受影響</b>——那種訂單一存檔就已經是已轉生管，本設定不會介入。</li>
     <li>誰能按【BOSS審核OK】＝誰能按【轉生管】（同一個角色功能碼，且一樣只能操作自己被指定的訂單）。</li>
     <li>要維護這份名單需要角色勾選「<b>設定「需給 BOSS 審圖」的客戶名單</b>」。
