@@ -1058,7 +1058,7 @@ function showFile(path, type, name) {
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-save-pdf, #btn-paint, #btn-rot-ccw, #btn-rot-cw').hide();
     $('#bom-3d-color-group').hide();
     _bom3dColorMode = false;
-    $('#btn-3d-color').removeClass('active-mode');
+    $('#btn-3d-color').removeClass('btn-success').html('<i class="fa fa-paint-brush"></i> 上色');
     _dwgPdfUrl = '';   // 切檔案時先清掉，避免「下載PDF」按到上一份檔案轉出來的結果
     resetTransform();
 
@@ -1102,7 +1102,7 @@ function showFile(path, type, name) {
         _bom3dViewer = null;
         _bom3dColorState = new EG3DTools.ColorState();
         _bom3dColorMode = false;
-        $('#btn-3d-color').removeClass('active-mode');
+        $('#btn-3d-color').removeClass('btn-success').html('<i class="fa fa-paint-brush"></i> 上色');
         $('#bom-3d-color-group').css('display', 'inline-flex');
         $('#btn-print, #btn-image-editor').show();
         var _need3dConvert = _d3NeedConvertExts.indexOf(_currentType) !== -1;
@@ -1204,22 +1204,19 @@ function openImageEditor() {
 }
 
 // ── 3D 上色模式（唯一實作見 resource/js/eg_3d_viewer_tools.js）──────────────
+// 點一下＝自動判定「同一面」整面上色；拖曳成一個框＝框選範圍內全部面（各自延伸到
+// 整面）一次上色（使用者 2026-10-08 要求）。互動邏輯整支在共用檔，這裡只接上當下
+// 狀態的 getter，換檔案時 _bom3dViewer/_bom3dColorState 本來就會重建，不必重新綁定。
 $('#btn-3d-color').on('click', function() {
     _bom3dColorMode = !_bom3dColorMode;
     $(this).toggleClass('btn-warning', !_bom3dColorMode).toggleClass('btn-success', _bom3dColorMode)
-        .html('<i class="fa fa-paint-brush"></i> ' + (_bom3dColorMode ? '上色中（點一下即可上色該面）' : '上色'));
+        .html('<i class="fa fa-paint-brush"></i> ' + (_bom3dColorMode ? '上色中（點一下上色整面／拖曳框選）' : '上色'));
 });
-// 點一下只上色「該三角面」，不是整個零件（使用者 2026-10-08 要求）；見 eg_3d_viewer_tools.js。
-$('#bom-3d-viewer').on('click', function(e) {
-    if (!_bom3dColorMode || !_bom3dViewer || !_bom3dColorState) return;
-    var canvasEl = this.querySelector('canvas');
-    if (!canvasEl) return;
-    var hit = EG3DTools.pickMesh(_bom3dViewer, canvasEl, e.clientX, e.clientY);
-    if (!hit || !hit.object || !hit.face) return;
-    var hexColor = $('#bom-3d-color-pick').val() || '#e67e22';
-    _bom3dColorState.paintFace(hit.object, hit.face, hexColor);
-    _bom3dViewer.GetViewer().Render();
-});
+EG3DTools.attachColorInteraction(
+    document.getElementById('bom-3d-wrap'), '#bom-3d-viewer canvas',
+    function () { return { embeddedViewer: _bom3dViewer, colorState: _bom3dColorState, hexColor: $('#bom-3d-color-pick').val() || '#e67e22' }; },
+    function () { return _bom3dColorMode; }
+);
 $('#btn-3d-color-reset').on('click', function() {
     if (!_bom3dColorState || !_bom3dColorState.hasAny()) return;
     if (!confirm('確定要清除全部上色，恢復模型原始顏色？')) return;

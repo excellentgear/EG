@@ -21378,7 +21378,7 @@ function pavSelectFile(idx) {
     if (pav3dColorGroup) pav3dColorGroup.style.display = 'none';
     _pav3dColorMode = false;
     var pav3dColorBtn = document.getElementById('pav-btn-3d-color');
-    if (pav3dColorBtn) pav3dColorBtn.classList.remove('btn-success');
+    if (pav3dColorBtn) { pav3dColorBtn.classList.remove('btn-success'); pav3dColorBtn.innerHTML = '<i class="fa fa-paint-brush"></i> 上色'; }
     // 報價附件唯讀：隱藏刪除/編輯鈕
     var isQuote = file.source === 'quote';
     var btnDel  = document.getElementById('pav-btn-delete');
@@ -21633,22 +21633,19 @@ function _pavLogPrint(f, isObs) {
 }
 
 // ── 3D 上色模式（唯一實作見 resource/js/eg_3d_viewer_tools.js，與 bom_viewer.php 共用）──
+// 點一下＝自動判定「同一面」整面上色；拖曳成一個框＝框選範圍內全部面一次上色。
+// #pav-3d-viewer 每次切檔案都會被 innerHTML 整個換新（見 pavSelectFile），所以框選
+// 互動要綁在「不會被換掉的外層容器」#pav-preview 上，由共用檔內部用事件代理處理。
 $(document).on('click', '#pav-btn-3d-color', function() {
     _pav3dColorMode = !_pav3dColorMode;
     $(this).toggleClass('btn-warning', !_pav3dColorMode).toggleClass('btn-success', _pav3dColorMode)
-        .html('<i class="fa fa-paint-brush"></i> ' + (_pav3dColorMode ? '上色中（點一下即可上色該面）' : '上色'));
+        .html('<i class="fa fa-paint-brush"></i> ' + (_pav3dColorMode ? '上色中（點一下上色整面／拖曳框選）' : '上色'));
 });
-// 點一下只上色「該三角面」，不是整個零件（使用者 2026-10-08 要求）。
-$(document).on('click', '#pav-3d-viewer', function(e) {
-    if (!_pav3dColorMode || !_pav3dViewer || !_pav3dColorState) return;
-    var canvasEl = this.querySelector('canvas');
-    if (!canvasEl) return;
-    var hit = EG3DTools.pickMesh(_pav3dViewer, canvasEl, e.clientX, e.clientY);
-    if (!hit || !hit.object || !hit.face) return;
-    var hexColor = document.getElementById('pav-3d-color-pick').value || '#e67e22';
-    _pav3dColorState.paintFace(hit.object, hit.face, hexColor);
-    _pav3dViewer.GetViewer().Render();
-});
+EG3DTools.attachColorInteraction(
+    document.getElementById('pav-preview'), '#pav-3d-viewer canvas',
+    function () { return { embeddedViewer: _pav3dViewer, colorState: _pav3dColorState, hexColor: (document.getElementById('pav-3d-color-pick')||{}).value || '#e67e22' }; },
+    function () { return _pav3dColorMode; }
+);
 $(document).on('click', '#pav-btn-3d-color-reset', function() {
     if (!_pav3dColorState || !_pav3dColorState.hasAny()) return;
     if (!confirm('確定要清除全部上色，恢復模型原始顏色？')) return;
