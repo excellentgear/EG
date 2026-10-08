@@ -2063,6 +2063,14 @@ try {
             $response = ['success' => true, 'data' => $stmt->fetchAll(PDO::FETCH_ASSOC)];
             break;
 
+        case 'get_workpiece_types':
+            // 「新增料號」工件種類下拉：與主檔管理（views/pages/master_data_management.php）
+            // 新增料號同一份字典（dict_workpiece_type），唯一讀取實作見 workpiece_type_lib.php，
+            // 不可在這裡寫死 N/G/H——管理員在主檔管理新增的種類要在這裡也挑得到。
+            require_once __DIR__ . '/../common/workpiece_type_lib.php';
+            $response = ['success' => true, 'data' => eg_workpiece_types_active($pdo)];
+            break;
+
         case 'get_all_customers':
             $stmt = $pdo->prepare("SELECT * FROM customer_list WHERE is_inactive=0 ORDER BY customer_id ASC");
             $stmt->execute();

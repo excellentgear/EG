@@ -5088,7 +5088,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $op = $_POST['op'];
             if ($op === 'list') {
                 // 同時帶出每個種類的小類列表
-                $rows = $pdo->query("SELECT * FROM dict_workpiece_type WHERE is_active=1 ORDER BY sort_order, type_code")->fetchAll(PDO::FETCH_ASSOC);
+                require_once __DIR__ . '/../../src/common/workpiece_type_lib.php';   // 唯一實作，與報價單新增料號共用同一份查詢
+                $rows = eg_workpiece_types_active($pdo);
                 foreach ($rows as &$row) {
                     $sq = $pdo->prepare("SELECT sub_type_id, sub_type_name, sort_order FROM dict_workpiece_sub_type WHERE type_code=? AND is_active=1 ORDER BY sort_order, sub_type_id");
                     $sq->execute([$row['type_code']]);

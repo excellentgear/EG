@@ -1580,10 +1580,11 @@ body { background:var(--bg); }
           </div>
           <div class="col-md-6 form-group">
             <label>工件種類</label>
+            <!-- 選項由 _loadQuotePartTypeOptions() 動態從 dict_workpiece_type 帶入，
+                 與主檔管理「新增/編輯料號」同一份字典（鐵律4，禁寫死）；這裡留的是
+                 JS 載入前的暫時內容，開跳窗時一律會被覆蓋。 -->
             <select class="form-control" id="part_type_modal">
-              <option value="N">一般 (General)</option>
-              <option value="G">齒輪 (Gear)</option>
-              <option value="H">滾刀 (Hob)</option>
+              <option value="N">N — 一般</option>
             </select>
           </div>
         </div>
@@ -10019,6 +10020,20 @@ function searchPartMgmt() {
         $('#partMgmtTbody').html(html || '<tr><td colspan="5" class="text-center text-muted">無資料</td></tr>');
     });
 }
+// 工件種類下拉：與主檔管理「新增/編輯料號」讀同一份字典 dict_workpiece_type（鐵律4，禁寫死 N/G/H），
+// 管理員在主檔管理新增的工件種類，這裡要自動挑得到。currentVal 留空則挑第一筆（新增料號情境）。
+function _loadQuotePartTypeOptions(currentVal, callback) {
+    $.get(API_URL, { action: 'get_workpiece_types' }, res => {
+        const $sel = $('#part_type_modal');
+        const cur = currentVal || $sel.val() || 'N';
+        $sel.empty();
+        const list = (res.success && res.data && res.data.length) ? res.data : [{type_code:'N',type_name:'一般'}];
+        list.forEach(t => $sel.append(new Option(t.type_code + ' — ' + t.type_name, t.type_code)));
+        $sel.val(cur);
+        if (!$sel.val() && $sel.find('option').length) $sel.prop('selectedIndex', 0);
+        if (callback) callback();
+    });
+}
 function loadPartToModal(d_id) {
     $.get(API_URL, { action: 'get_part_detail', d_id }, res => {
         if (!res.success) { Swal.fire('錯誤', res.message, 'error'); return; }
@@ -10026,7 +10041,7 @@ function loadPartToModal(d_id) {
         $('#partFormTitle').text('修改料號');
         $('#part_d_id_modal').val(p.d_id);
         $('#part_no_modal').val(p.D_Setting_Id||'');
-        $('#part_type_modal').val(p.Type||'N').trigger('change');
+        _loadQuotePartTypeOptions(p.Type||'N', () => $('#part_type_modal').trigger('change'));
         $('#part_client_search_modal').val(p.Client_Name||'');
         $('#part_customer_id_modal').val(p.Customer_Id||'');
         $('#part_revision_modal').val(p.Revision||'');
@@ -10045,7 +10060,7 @@ function editPart(d_id) { loadPartToModal(d_id); }
 function resetPartForm() {
     $('#partFormTitle').text('新增料號');
     $('#part_d_id_modal,#part_no_modal,#part_revision_modal,#part_issue_date_modal,#part_remark_modal,#part_workpiece_len_modal').val('');
-    $('#part_type_modal').val('N').trigger('change');
+    _loadQuotePartTypeOptions('N', () => $('#part_type_modal').trigger('change'));
     $('#part_client_search_modal').val('');
     $('#part_customer_id_modal').val('');
     $('#part-btn-delete').hide();
