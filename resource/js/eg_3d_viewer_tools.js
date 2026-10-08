@@ -455,8 +455,19 @@ var EG3DTools = (function () {
         var cx=a[0]+abx*t, cy=a[1]+aby*t, cz=a[2]+abz*t;
         return _vlen(p, [cx,cy,cz]);
     }
-    // 兩條三維線段之間的最短距離（經典解法：先求無限直線的最近參數，再夾到 [0,1]）
-    function _segmentToSegmentDistance(p1, p2, p3, p4) {
+    // 同上，但回傳線段上最近的那個點（給水平/垂直分量分解用，不只是距離純量）
+    function _pointToSegmentClosestPoint(p, a, b) {
+        var abx=b[0]-a[0], aby=b[1]-a[1], abz=b[2]-a[2];
+        var apx=p[0]-a[0], apy=p[1]-a[1], apz=p[2]-a[2];
+        var abLenSq = abx*abx+aby*aby+abz*abz;
+        var t = abLenSq > 1e-12 ? (apx*abx+apy*aby+apz*abz)/abLenSq : 0;
+        t = Math.max(0, Math.min(1, t));
+        return [a[0]+abx*t, a[1]+aby*t, a[2]+abz*t];
+    }
+    // 兩條三維線段之間的最短距離（經典解法：先求無限直線的最近參數，再夾到 [0,1]）；
+    // 回傳 {c1,c2,dist}——c1/c2 是兩條線段上最近的那兩個點，供水平/垂直分量分解用
+    // （量測結果不是只給一個斜邊總距離，使用者要能看出左右差多少、上下差多少）。
+    function _segmentToSegmentClosest(p1, p2, p3, p4) {
         var d1=[p2[0]-p1[0],p2[1]-p1[1],p2[2]-p1[2]];
         var d2=[p4[0]-p3[0],p4[1]-p3[1],p4[2]-p3[2]];
         var r=[p1[0]-p3[0],p1[1]-p3[1],p1[2]-p3[2]];
@@ -479,7 +490,20 @@ var EG3DTools = (function () {
         }
         var c1=[p1[0]+d1[0]*s,p1[1]+d1[1]*s,p1[2]+d1[2]*s];
         var c2=[p3[0]+d2[0]*t,p3[1]+d2[1]*t,p3[2]+d2[2]*t];
-        return _vlen(c1,c2);
+        return { c1: c1, c2: c2, dist: _vlen(c1, c2) };
+    }
+    // 把兩個世界座標點的向量差拆成「水平距離」（XZ 平面，sqrt(ΔX²+ΔZ²)）與「垂直距離」
+    // （|ΔY|）——比照 Inventor 的量測習慣，水平/垂直比單純的空間直線距離更實用（例如
+    // 「這兩個孔左右差多少、上下差多少」）。本檢視器的相機 up 向量固定是 Y 軸（無論
+    // 來源模型原始座標系為何，載入後一律以 Y 為垂直方向顯示），故此處一律用 Y 分量
+    // 當「垂直」，不隨模型而異。
+    function _horizVertBreakdown(p1, p2) {
+        var dx = p2[0]-p1[0], dy = p2[1]-p1[1], dz = p2[2]-p1[2];
+        return {
+            dx: dx, dy: dy, dz: dz,
+            horizontal: Math.sqrt(dx*dx + dz*dz),
+            vertical: Math.abs(dy)
+        };
     }
     // 點到三角形的最近距離（精確，含投影落在三角形外要夾到最近邊/頂點的情況）
     function _pointToTriangleDistance(p, a, b, c) {
@@ -792,11 +816,18 @@ var EG3DTools = (function () {
         });
         if (this.picks.length === 2) {
             var A = this.picks[0], B = this.picks[1];
-            var approx = false, dist;
-            if (A.kind === 'point' && B.kind === 'point') { dist = _vlen(A.worldPoint, B.worldPoint); }
+            var approx = false, dist, hv = null;   // hv＝{horizontal,vertical,dx,dy,dz}，只有點對點／線對線才算（精確值才拆分量，概略值拆了也沒有意義）
+            if (A.kind === 'point' && B.kind === 'point') {
+                dist = _vlen(A.worldPoint, B.worldPoint);
+                hv = _horizVertBreakdown(A.worldPoint, B.worldPoint);
+            }
             else if (A.kind === 'point' && B.kind === 'edge') { dist = _pointToSegmentDistance(A.worldPoint, B.a, B.b); }
             else if (A.kind === 'edge' && B.kind === 'point') { dist = _pointToSegmentDistance(B.worldPoint, A.a, A.b); }
-            else if (A.kind === 'edge' && B.kind === 'edge') { dist = _segmentToSegmentDistance(A.a, A.b, B.a, B.b); }
+            else if (A.kind === 'edge' && B.kind === 'edge') {
+                var cs = _segmentToSegmentClosest(A.a, A.b, B.a, B.b);
+                dist = cs.dist;
+                hv = _horizVertBreakdown(cs.c1, cs.c2);
+            }
             else if (A.kind === 'point' && B.kind === 'face') { dist = _distancePointToTriSet(A.worldPoint, B.tris); }
             else if (A.kind === 'face' && B.kind === 'point') { dist = _distancePointToTriSet(B.worldPoint, A.tris); }
             else if (A.kind === 'face' && B.kind === 'face') { dist = _approxMinDistanceTriSets(A.tris, B.tris); approx = true; }
@@ -808,6 +839,12 @@ var EG3DTools = (function () {
                 approx = true;
             }
             lines.push((approx ? '≈ ' : '') + '兩者距離：' + _fmtMm(dist) + ' mm' + (approx ? '（概略值，含面的量測無法做到完全精確）' : ''));
+            // 水平/垂直分量——比照 Inventor 的量測習慣，不是只給一個直線斜邊距離（本檢視器
+            // 一律以 Y 軸當垂直方向，XZ 平面當水平面，見 _horizVertBreakdown 說明）
+            if (hv) {
+                lines.push('　水平距離 = ' + _fmtMm(hv.horizontal) + ' mm　|　垂直距離 = ' + _fmtMm(hv.vertical) + ' mm');
+                lines.push('　ΔX = ' + _fmtMm(hv.dx) + '　ΔY = ' + _fmtMm(hv.dy) + '　ΔZ = ' + _fmtMm(hv.dz) + ' (mm)');
+            }
         }
         return lines.join('<br>');
     };
