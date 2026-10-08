@@ -3469,6 +3469,11 @@ function refreshDimDistControls(e) {
     // 可拖曳，跟直線/箭頭「只顯示頭尾圓點」是同一種設計
     if (obj && obj.type === 'group' && obj.dimKind === 'distance' && !obj.locked && !obj.__dimDistCtrls) {
         obj.controls = buildDimDistControls();
+        // 延伸線長度為 0 時那顆控制點跟端點控制點座標完全重疊：fabric 的 _findTargetCorner 是反向
+        // 逐一比對控制點，點下去永遠先命中「後加入」的那個（延伸線），使用者會以為在拖端點、實際上
+        // 拖到的是看不見的延伸線控制點——拉不動量測長度、延伸線還莫名其妙被拖出去（使用者回報
+        // 2026-10-08：兩角無法拉長）。沒有延伸線時乾脆連同命中測試一起關掉，兩顆控制點就不會疊在一起
+        obj.setControlsVisibility({ dimstubL: (obj.distExtLeft || 0) > 0, dimstubR: (obj.distExtRight || 0) > 0 });
         obj.__dimDistCtrls = true;
     }
 }
@@ -8277,6 +8282,23 @@ zoomFit();
 pushState();  // 初始狀態
 // 開啟編輯器不再自動詢問暫存檔（使用者要求取消）；要接續編輯請按頂列「暫存」自行選擇開啟
 setTool('select');
+
+/* ── 由 3D 檢視器帶入截圖：?preload_blob_key=<localStorage鍵> ──────────────
+   截圖是前端 canvas 即時截出來的 dataURL，動輒數十萬字元，放不進網址參數
+   （遠超過 Apache LimitRequestLine／瀏覽器網址長度限制），改用 localStorage
+   當同源分頁間的傳遞管道（唯一實作見 resource/js/eg_3d_viewer_tools.js 的
+   openInImageEditor()）；讀到就立刻刪除，不會越積越多。 */
+(function () {
+    var qs = new URLSearchParams(window.location.search);
+    var blobKey = qs.get('preload_blob_key');
+    if (!blobKey) return;
+    var dataUrl = null;
+    try { dataUrl = localStorage.getItem(blobKey); localStorage.removeItem(blobKey); } catch (e) {}
+    if (!dataUrl) { toast('截圖資料已遺失，請回原頁面重新操作'); return; }
+    var name3d = qs.get('preload_name') || '3D截圖.png';
+    toast('帶入 3D 截圖：' + name3d);
+    addImageFromURL(dataUrl, 0);
+})();
 
 /* ── 由 BOM 檢視器等頁面帶入圖檔：?preload=<絕對URL> 則自動載入該圖 ── */
 (function () {
