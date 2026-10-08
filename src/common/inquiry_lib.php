@@ -201,10 +201,12 @@ function inq_perms(PDO $db, int $uid): array {
     $isAdmin  = $uid === 1 || $has(['admin','superadmin']);
     $canAdmin = $isAdmin || $has(['inquiry_admin']);
     $myDepts  = inq_user_dept_keys($db, $uid);
-    // 新增詢價單一律只看「實際任職或兼任於業務／生管／採購」，管理員身分不豁免這一條
-    // （使用者明確要求：不在這三個部門就不可以新增——新增詢價單是在代表一個真實業務角色去問價）。
-    $canCreate = !empty($myDepts);
-    $canView   = $canCreate || $canAdmin || $has(['inquiry_view']);
+    // 一般使用者新增詢價單一律只看「實際任職或兼任於業務／生管／採購」——新增詢價單是在
+    // 代表一個真實業務角色去問價，不在這三個部門就不可以新增。
+    // 管理員（含全站管理者）不受此限制，一律可新增任何部門身分的詢價單——使用者明確要求，
+    // 避免管理員帳號本身不在這三個部門時完全無法測試/補登。
+    $canCreate = $canAdmin || !empty($myDepts);
+    $canView   = $canCreate || $has(['inquiry_view']);
 
     return ['uid'=>$uid, 'name'=>(string)($u['user_cname'] ?: $u['user_uname']),
             'isAdmin'=>$isAdmin, 'canAdmin'=>$canAdmin, 'canCreate'=>$canCreate, 'canView'=>$canView, 'myDepts'=>$myDepts];

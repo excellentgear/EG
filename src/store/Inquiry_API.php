@@ -87,8 +87,9 @@ case 'create': {
     if (!$perms['canCreate']) jerr('不是業務／生管／採購的任職或兼任人員，不能新增詢價單');
     $dept = (string)($_POST['source_dept'] ?? '');
     // 詢價人員／詢價日期一律不採信前端送來的值（inq_group_create 內部固定用本人與今天），
-    // 來源部門一律要在使用者實際任職/兼任的部門範圍內——這裡**不給管理員身分豁免**。
-    if (!in_array($dept, $perms['myDepts'], true)) {
+    // 來源部門一律要在使用者實際任職/兼任的部門範圍內——管理員不受此限（避免管理員帳號本身
+    // 不在這三個部門時完全無法測試/補登，使用者明確要求）。
+    if (!$perms['canAdmin'] && !in_array($dept, $perms['myDepts'], true)) {
         jerr('不是這個部門的任職或兼任人員，不能用這個部門身分建立詢價單');
     }
     $items = json_decode((string)($_POST['items'] ?? '[]'), true) ?: [];

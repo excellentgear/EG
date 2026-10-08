@@ -311,7 +311,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         以及是否允許自訂規格（不是由料號主檔帶出的唯讀文字）。兩者預設都關閉（要求綁真實料號、規格由主檔帶出）。</p>
         <h4>詢價人員／詢價日期／來源部門</h4>
         <p>詢價人員固定是目前登入者本人、詢價日期固定是今天，建立後都不能再改。來源部門只會列出自己實際任職或兼任的部門——
-        不屬於業務／生管／採購任何一個部門的帳號，無法新增詢價單（只能視權限檢視或設定）。</p>
+        不屬於業務／生管／採購任何一個部門的帳號，無法新增詢價單（只能視權限檢視或設定）；<b>管理者不受此限制</b>，可用任一部門身分新增，確保隨時都能測試或補登。</p>
         <h4>廠商篩選</h4>
         <p>廠商清單可以依「加工類別」標籤（與主檔管理廠商分頁同一套分類）點選縮小範圍，也可以同時打關鍵字篩選；
         篩選只是「目前看得到誰」，換篩選條件或清空篩選，已經勾選的廠商不會被取消。</p>
@@ -616,7 +616,9 @@ function renderCatChips($wrap, $box, $kwInput){
 /* ───────────────────── 新增 / 編輯 詢價案 ───────────────────── */
 function fillDeptOptions($sel){
     $sel.empty();
-    (PERM.myDepts||[]).forEach(function(d){ $sel.append('<option value="'+d+'">'+DEPT_LABEL[d]+'</option>'); });
+    // 管理員不受部門限制（可用任何部門身分新增，方便測試/補登）；一般使用者只列自己實際所屬的部門
+    var depts = PERM.canAdmin ? ['sales','pmc','purchase'] : (PERM.myDepts||[]);
+    depts.forEach(function(d){ $sel.append('<option value="'+d+'">'+DEPT_LABEL[d]+'</option>'); });
 }
 function openNewGroup(){
     CUR_GROUP = null; CUR_BIND = null;
