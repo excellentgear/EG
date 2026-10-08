@@ -5531,6 +5531,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     }
                 }
                 echo json_encode(['success'=>true,'label_id'=>$new_id]);
+            } elseif ($op === 'set_required') {
+                // 2026-10-08 獨立輕量端點：使用者實測發現「編輯必填標籤」這個細權限
+                // 單獨指派時完全沒用——角色若沒有一般的 mdata_label_dict_edit/add，
+                // 連編輯鉛筆都不會出現（_canEditDict 擋在外層），更別說打開表單去勾那格。
+                // 這支端點不要求一般編輯/新增權限，只檢查 mdata_tag_required_edit，
+                // 搭配清單列上新增的「必填」徽章（點擊即切換），讓這個權限真正獨立生效，
+                // 不再綁死一定要同時擁有標籤定義管理的編輯權才能用。
+                $id = intval($_POST['label_id'] ?? 0);
+                if (!$id) throw new Exception('缺少 label_id');
+                if (!_mdPerm('tag', 'required_edit')) throw new Exception('無「編輯必填標籤」權限');
+                $is_required_sv = intval($_POST['is_required'] ?? 0) ? 1 : 0;
+                $old = $pdo->prepare("SELECT label_name, COALESCE(is_required,0) AS is_required FROM dict_label WHERE label_id=? AND is_active=1");
+                $old->execute([$id]);
+                $row = $old->fetch(PDO::FETCH_ASSOC);
+                if (!$row) throw new Exception('找不到此標籤，可能已被刪除');
+                $pdo->prepare("UPDATE dict_label SET is_required=? WHERE label_id=?")->execute([$is_required_sv, $id]);
+                if ((int)$row['is_required'] !== $is_required_sv) {
+                    $uid = $_SESSION['user_id']??null; $op_name = _get_operator($pdo,$uid);
+                    _log_audit($pdo,'update','dict','label:'.$id,$row['label_name'],['is_required'=>[(string)(int)$row['is_required'],(string)$is_required_sv]],$uid,$op_name);
+                }
+                echo json_encode(['success'=>true,'is_required'=>$is_required_sv]);
             } elseif ($op === 'check_delete') {
                 $id = intval($_POST['id'] ?? 0);
                 $us = _label_usage($pdo, 'label', $id);
@@ -10189,7 +10210,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 <tr><td style="white-space:nowrap;"><strong>廠商本體操作</strong></td><td>新增、編輯（含批次修改/廠商別名連結）、刪除（含不可逆的綁定移轉）、停用狀態切換</td></tr>
 <tr><td style="white-space:nowrap;"><strong>齒輪規格操作</strong></td><td>新增/編輯齒輪規格、刪除齒輪規格列、修改既有齒輪規格列</td></tr>
 <tr><td style="white-space:nowrap;"><strong>客戶／廠商表單設定欄位</strong></td><td>對帳單設定、結帳設定（含臨時結帳調整）、報價方式、收款/付款方式、銀行帳戶，各自可設檢視/編輯</td></tr>
-<tr><td style="white-space:nowrap;"><strong>料號標籤指派</strong></td><td>新增標籤指派／修改或移除他人指派的標籤——沒有後者的人仍可改動/移除自己指派過的那一筆</td></tr>
+<tr><td style="white-space:nowrap;"><strong>料號標籤指派</strong></td><td>新增標籤指派／修改或移除他人指派的標籤（沒有後者的人仍可改動/移除自己指派過的那一筆）／編輯必填標籤——這格<b>獨立生效、不需要下面「標籤與字典維護」的編輯權限</b>：有這個權限的人直接在字典設定→料號標籤的清單上點「必填」徽章即可切換，不必打得開編輯表單</td></tr>
 <tr><td style="white-space:nowrap;"><strong>標籤與字典維護</strong></td><td>標籤定義、工件種類、齒輪類型、齒輪等級對照、客戶產業別、製程大類與製程主檔，各自可設新增/編輯/刪除/檢視</td></tr>
 <tr><td style="white-space:nowrap;"><strong>廠商分類維護</strong></td><td>廠商大類/小類、加工限制標籤、大類製程設定</td></tr>
 <tr><td style="white-space:nowrap;"><strong>備註與附件設定</strong></td><td>製程備註、設計備註、附件類別標籤（NAS 儲存路徑設定仍僅限系統管理員）</td></tr>
@@ -18735,6 +18756,36 @@ function labelUsedBadge(d) {
     if (refs.length) tip.push(refs.join('、'));
     return '<span title="' + escAttr(tip.join('；') + '　使用中，不可刪除') + '" style="font-size:10px;background:#F7E0BD;color:#8a5a1a;border:1px solid #e6c48f;border-radius:3px;padding:0 4px;margin-left:4px;">用 ' + (n || refs.length) + '</span>';
 }
+// 2026-10-08：「必填」徽章──使用者實測指出「編輯必填標籤」權限單獨指派時完全沒用，
+// 因為原本必填勾選只藏在編輯表單裡，而打開編輯表單需要另一個權限(標籤定義管理：編輯)，
+// 兩者沒有分開的角色根本打不開表單。改成清單列上獨立的徽章：有 mdata_tag_required_edit
+// 的人直接點一下徽章就能切換（走獨立端點 set_required，不吃一般編輯/新增權限），
+// 沒有這個權限的人仍看得到目前是否必填（唯讀徽章），兩者是同一支函式依權限分流顯示。
+function labelRequiredBadge(d) {
+    var isReq = (d && (d.is_required=='1'||d.is_required===1));
+    if (typeof CAN_TAG_REQUIRED_EDIT !== 'undefined' && CAN_TAG_REQUIRED_EDIT) {
+        return '<span onclick="toggleLabelRequired(event,\''+d.label_id+'\','+(isReq?0:1)+',\''+escAttr(d.label_name||'')+'\')"'
+             + ' title="點一下切換「新增料號時必填」（目前：'+(isReq?'必填':'非必填')+'）"'
+             + ' style="cursor:pointer;font-size:10px;background:'+(isReq?'#fdecea':'#eceff1')+';color:'+(isReq?'#c0392b':'#90a4ae')+';border:1px solid '+(isReq?'#f5c6cb':'#cfd8dc')+';border-radius:3px;padding:0 4px;margin-left:2px;">'+(isReq?'必填 ✓':'必填 ✗')+'</span>';
+    }
+    if (isReq) return '<span style="font-size:10px;background:#fdecea;color:#c0392b;border-radius:3px;padding:0 4px;margin-left:2px;">必填</span>';
+    return '';
+}
+function toggleLabelRequired(ev, id, newVal, name) {
+    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+    if (typeof CAN_TAG_REQUIRED_EDIT === 'undefined' || !CAN_TAG_REQUIRED_EDIT) { showToast('需要「編輯必填標籤」權限', 'error'); return; }
+    if (!confirm('確定要把「' + (name||'') + '」' + (newVal ? '設為「新增料號時必填」' : '取消必填') + '？')) return;
+    api({ action:'manage_labels', op:'set_required', label_id:id, is_required:newVal }).done(function(r) {
+        if (r.success) {
+            var d = (_labelDictAllData||[]).filter(function(x){ return String(x.label_id)===String(id); })[0];
+            if (d) d.is_required = newVal;
+            showToast('已更新', 'success');
+            renderLabelDictPage();
+        } else {
+            showToast(r.message || '更新失敗', 'error');
+        }
+    });
+}
 function labelUseLockReason(d, what) {
     var n = labelUseCnt(d), refs = labelUseRefs(d);
     if (!n && !refs.length) return '';
@@ -18972,7 +19023,7 @@ var dictConfig = {
                 ? '<span style="font-size:10px;background:#eceff1;color:#78909c;border-radius:3px;padding:1px 4px;margin-left:3px;">隱藏</span>' : '';
             var pfxBadge  = (d.prefix_char) ? '<span style="font-size:10px;background:#f9fbe7;color:#827717;border-radius:3px;padding:1px 4px;margin-left:2px;">前'+escHtml(d.prefix_char)+'</span>' : '';
             var sfxBadge  = (d.suffix_char) ? '<span style="font-size:10px;background:#f9fbe7;color:#827717;border-radius:3px;padding:1px 4px;margin-left:2px;">後'+escHtml(d.suffix_char)+'</span>' : '';
-            return '<strong style="font-size:12px;">'+escHtml(d.label_name||'')+'</strong>' + itBadge + repBadge + dlBadge + latheOptBadge + rngBadge + tolBadge + calcBadge + exclBadge + dimBadge + qtyDimBadge + pfxBadge + sfxBadge + hiddenBadge + labelUsedBadge(d);
+            return '<strong style="font-size:12px;">'+escHtml(d.label_name||'')+'</strong>' + itBadge + repBadge + dlBadge + latheOptBadge + rngBadge + tolBadge + calcBadge + exclBadge + dimBadge + qtyDimBadge + pfxBadge + sfxBadge + hiddenBadge + labelRequiredBadge(d) + labelUsedBadge(d);
         },
         // 已被使用的標籤不可刪除（回傳原因字串＝鎖住；空字串＝可刪）。
         // 標籤清單目前走自己的 renderLabelDictPage()，這裡是給共用的 renderDictTable() 用的，
@@ -24247,7 +24298,7 @@ function renderLabelDictPage() {
             }
             html += '<tr data-row-id="'+d.label_id+'"'+(isHiddenRow?' style="opacity:0.7;"':'')+'>';
             html += '<td style="padding:3px 6px;vertical-align:middle;">'+(typeBadges||'<span style="color:#ccc;font-size:10px;">—</span>')+'</td>';
-            html += '<td style="padding:3px 6px;vertical-align:middle;"><strong style="font-size:12px;">'+escHtml(d.label_name||'')+'</strong>'+itBadge+repBadge+dlBadge+rngBadge+tolBadge+calcBadge+exclBadge+dimBadge2+qtyDimBadge2+pfxBadge2+sfxBadge2+hidBadge2+labelUsedBadge(d)+'</td>';
+            html += '<td style="padding:3px 6px;vertical-align:middle;"><strong style="font-size:12px;">'+escHtml(d.label_name||'')+'</strong>'+itBadge+repBadge+dlBadge+rngBadge+tolBadge+calcBadge+exclBadge+dimBadge2+qtyDimBadge2+pfxBadge2+sfxBadge2+hidBadge2+labelRequiredBadge(d)+labelUsedBadge(d)+'</td>';
             html += '<td style="padding:3px 6px;text-align:center;white-space:nowrap;">';
             html += '<button class="btn btn-xs btn-info" onclick="viewLabelSubs('+realIdx+')" title="查看子標籤" style="margin-right:2px;"><i class="fa fa-list"></i></button>';
             if (_canEditDict('label')) html += '<button class="btn btn-xs btn-default" onclick="editDictEntry('+realIdx+')" title="編輯" style="margin-right:2px;"><i class="fa fa-pencil"></i></button>';
