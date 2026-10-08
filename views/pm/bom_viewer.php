@@ -802,6 +802,12 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
             <!-- 只有 DWG 轉出來的預覽才需要「另存 PDF」——原檔下載已經在「儲存」鈕 -->
             <button id="btn-save-pdf"   class="btn btn-success btn-xs" style="display:none;" title="下載轉檔後的 PDF（原始 DWG 另有「儲存」鈕可下載）"><i class="fa fa-file-pdf-o"></i> 下載 PDF</button>
             <button id="btn-print"      class="btn btn-default btn-xs" style="display:none;" title="列印"><i class="fa fa-print"></i> 列印</button>
+            <!-- 3D 專用：上色（唯一實作見 resource/js/eg_3d_viewer_tools.js，兩頁共用）-->
+            <span id="bom-3d-color-group" style="display:none;align-items:center;gap:4px;">
+                <button id="btn-3d-color" type="button" class="btn btn-warning btn-xs" title="上色模式：開啟後點一下模型上的零件即可換色，方便標示"><i class="fa fa-paint-brush"></i> 上色</button>
+                <input id="bom-3d-color-pick" type="color" value="#e67e22" style="width:28px;height:22px;padding:0;border:1px solid #ccc;vertical-align:middle;" title="選擇要塗的顏色">
+                <button id="btn-3d-color-reset" type="button" class="btn btn-default btn-xs" title="清除全部上色，恢復原始顏色"><i class="fa fa-eraser"></i> 恢復原色</button>
+            </span>
             <button id="btn-tags-setting" class="btn btn-info btn-xs" onclick="openFileTagsSetting()" title="設定檔名標籤"><i class="fa fa-tags"></i> 設定標籤</button>
             <?php if ($imgeditCanUse): ?>
             <!-- 批圖編輯器：獨立跳窗（未被指派 imgedit 角色者不顯示此鈕，見上方 $imgeditCanUse） -->
@@ -968,6 +974,7 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+<script src="../../resource/js/eg_3d_viewer_tools.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_3d_viewer_tools.js') ?>"></script>
 <!-- 照片相簿：九宮格＋點開放大（三頁共用同一份，禁止各頁自刻）-->
 <script src="../../resource/js/eg_photo_album.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_photo_album.js') ?>"></script>
 <script src="../../resource/js/eg_quote_tier.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_quote_tier.js') ?>"></script>
@@ -1003,6 +1010,8 @@ var _dwgPdfUrl   = '';   // DWG 轉檔成功後的預覽網址，供「下載 PD
 var _d3Exts      = ['stp','step','stl','obj','igs','iges'];   // 3D 模型副檔名（與 master_data_management.php 同一份清單）
 var _d3NeedConvertExts = ['ipt','x_t'];   // 這些副檔名瀏覽器讀不懂，要先轉成 STEP（唯一轉檔實作見 inventor_preview_lib.php）
 var _bom3dViewer = null;
+var _bom3dColorState = null;   // EG3DTools.ColorState，每次切換檔案重建一份（見 showFile 3D 分支）
+var _bom3dColorMode  = false;  // 上色模式開關：開啟時點模型上的零件即換色
 var _currentName = '';
 var _rotBust     = {};   // 剛旋轉過的檔案 → 新的 mtime（重新載入時當破快取參數用）
 
@@ -1047,6 +1056,9 @@ function showFile(path, type, name) {
     $('#viewer-title').text(_currentName);
     $('#img-zoom-wrap, #bom-pdf-frame, #bom-3d-wrap, #viewer-placeholder, #bom-quote-detail, #album-grid-wrap').hide();
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-save-pdf, #btn-paint, #btn-rot-ccw, #btn-rot-cw').hide();
+    $('#bom-3d-color-group').hide();
+    _bom3dColorMode = false;
+    $('#btn-3d-color').removeClass('active-mode');
     _dwgPdfUrl = '';   // 切檔案時先清掉，避免「下載PDF」按到上一份檔案轉出來的結果
     resetTransform();
 
@@ -1088,6 +1100,11 @@ function showFile(path, type, name) {
         // 慢很多〈約9~10秒〉，上傳當下已背景預轉過，這裡多半直接命中快取）都用同一套
         // o3dv.min.js（開源，本機內建檔案，不走 CDN，與 master_data_management.php 同版本）。
         _bom3dViewer = null;
+        _bom3dColorState = new EG3DTools.ColorState();
+        _bom3dColorMode = false;
+        $('#btn-3d-color').removeClass('active-mode');
+        $('#bom-3d-color-group').css('display', 'inline-flex');
+        $('#btn-print, #btn-image-editor').show();
         var _need3dConvert = _d3NeedConvertExts.indexOf(_currentType) !== -1;
         var _fetchUrl3d = _need3dConvert ? viewPath.replace('action=download', 'action=preview_3d') : viewPath;
         $('#bom-3d-loading').html(_need3dConvert
@@ -1164,6 +1181,17 @@ function openImageEditor() {
     // 本頁看的就是這個料號，編輯器那邊「料號附件」存檔跳窗開啟時自動選好這個料號、
     // 檔名也預設帶入，不用使用者自己再打一次（見 image_editor.php 的 PRELOAD_PART_NO）
     var _partNo = (_mode === 'did') ? _d_id : _bom;
+    // 3D 模型：不走上面網址帶參數那一套（批圖編輯器讀不懂 3D 檔），改用共用元件把「目前畫面
+    // 截圖」（含目前上色結果）寄進 localStorage 再開新分頁，與列印同一套截圖機制
+    // （見 resource/js/eg_3d_viewer_tools.js，兩頁共用，不要各寫一份）。
+    if ((_d3Exts.indexOf(_currentType) !== -1 || _d3NeedConvertExts.indexOf(_currentType) !== -1) && _bom3dViewer) {
+        EG3DTools.openInImageEditor(_bom3dViewer, {
+            fileName: (_currentName || '3D模型') + '截圖.png',
+            partNo: _partNo || '',
+            partDId: (_mode === 'did' && _pk > 0) ? _pk : ''
+        });
+        return;
+    }
     if (_partNo) params.push('part_no=' + encodeURIComponent(_partNo));
     // ★料號主檔 PK（d_setting.d_id）＝真正的歸戶鍵，一定要一起帶過去。
     //   同一個料號文字在主檔常常有好幾筆（不同客戶）——例 OB321500200 有旻成 #440、松田 #19799，
@@ -1174,6 +1202,29 @@ function openImageEditor() {
     window.open(url, 'egImgEditor_' + Date.now(),
         'width=1280,height=860,menubar=no,toolbar=no,location=no,status=no,resizable=yes');
 }
+
+// ── 3D 上色模式（唯一實作見 resource/js/eg_3d_viewer_tools.js）──────────────
+$('#btn-3d-color').on('click', function() {
+    _bom3dColorMode = !_bom3dColorMode;
+    $(this).toggleClass('btn-warning', !_bom3dColorMode).toggleClass('btn-success', _bom3dColorMode)
+        .html('<i class="fa fa-paint-brush"></i> ' + (_bom3dColorMode ? '上色中（點零件上色）' : '上色'));
+});
+$('#bom-3d-viewer').on('click', function(e) {
+    if (!_bom3dColorMode || !_bom3dViewer || !_bom3dColorState) return;
+    var canvasEl = this.querySelector('canvas');
+    if (!canvasEl) return;
+    var hit = EG3DTools.pickMesh(_bom3dViewer, canvasEl, e.clientX, e.clientY);
+    if (!hit || !hit.object) return;
+    var hexColor = $('#bom-3d-color-pick').val() || '#e67e22';
+    _bom3dColorState.applyColor(hit.object, hexColor);
+    _bom3dViewer.GetViewer().Render();
+});
+$('#btn-3d-color-reset').on('click', function() {
+    if (!_bom3dColorState || !_bom3dColorState.hasAny()) return;
+    if (!confirm('確定要清除全部上色，恢復模型原始顏色？')) return;
+    _bom3dColorState.resetAll();
+    if (_bom3dViewer) _bom3dViewer.GetViewer().Render();
+});
 
 // ── 圖片縮放與拖曳 ────────────────────────────────────────────────────────
 (function() {
@@ -1261,6 +1312,13 @@ function _logPrintCurrent(isObs) {
 $('#btn-print').on('click', function() {
     var isObs = $('.bom-file-item.active').data('obsolete') === '1' || $('.bom-file-item.active').data('obsolete') === 1;
     _logPrintCurrent(isObs);
+    // 3D 模型：截圖目前畫面（含目前上色結果）＋料號名稱＋列印日期，純前端列印、無暫存檔
+    // （見 resource/js/eg_3d_viewer_tools.js）。
+    if ((_d3Exts.indexOf(_currentType) !== -1 || _d3NeedConvertExts.indexOf(_currentType) !== -1) && _bom3dViewer) {
+        if (isObs && !confirm('此為「作廢」附件，確定要列印？')) return;
+        EG3DTools.printCurrentView(_bom3dViewer, { partName: _currentName || '3D 模型' });
+        return;
+    }
     if (_currentType === 'pdf' || _currentType === 'dwg') {
         if (isObs && !confirm('此為「作廢」附件，確定要列印？')) return;
         var frame = document.getElementById('bom-pdf-frame');
