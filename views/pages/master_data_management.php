@@ -3023,7 +3023,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (in_array($oldRow['map_id'], $__consumedOldMaps, true)) continue;
                 $isMine     = ($oldRow['created_by_id'] !== null && (int)$oldRow['created_by_id'] === (int)$uid);
                 $isReqLabel = !empty($oldRow['is_required']);
-                $canRemoveThis = ($tagCanOthers || $isMine) && (!$isReqLabel || $canTagRequiredDelete);
+                // 必填標籤的刪除資格「改用」mdata_tag_required_delete 單獨判定，不是疊加在
+                // 原本的 isMine/edit_others 之上——使用者實測發現疊加會變成「兩個權限都要有
+                // 才刪得掉」，但這格權限的設計本意是獨立就夠用（跟 tag_assign/edit_others
+                // 平行的獨立授權，不是它們的附加條件）。非必填標籤規則完全不變。
+                $canRemoveThis = $isReqLabel ? $canTagRequiredDelete : ($tagCanOthers || $isMine);
                 if ($canRemoveThis) continue; // 有資格移除就照使用者意思刪除（不補回）
                 $restored = $__restoreRow($oldRow);
                 $restored['sub_labels'] = $old_sub_by_map[(int)$oldRow['map_id']] ?? [];
@@ -14216,11 +14220,14 @@ function renderPartLabelChips(labelDefs, existing) {
 }
 
 function _makeLabelGrp(ldef, ei, canEdit, onChange) {
-    // 2026-10-08 使用者要求：已指派給料號的「必填」標籤，就算有一般的移除權限，
-    // 也要再多一道「刪除必填標籤」(mdata_tag_required_delete) 授權才能真的移除掉；
-    // 沒有這道授權的人看得到鎖頭圖示（知道為什麼拿掉不了），不是直接看不到移除鈕。
+    // 2026-10-08（二次）使用者更正：必填標籤的移除資格改用「刪除必填標籤」
+    // (mdata_tag_required_delete) 單獨判定，不是疊加在一般移除權限(canEdit)之上——
+    // 只有這格權限就夠用，不必同時還要有「修改/移除他人指派的標籤」或是本人指派。
+    // 非必填標籤完全不受影響，仍然只看 canEdit。
     var isReqLdef = (ldef.is_required=='1'||ldef.is_required===1);
-    var canActuallyRemove = canEdit && (!isReqLdef || (typeof CAN_TAG_REQUIRED_DELETE !== 'undefined' && CAN_TAG_REQUIRED_DELETE));
+    var canActuallyRemove = isReqLdef
+        ? (typeof CAN_TAG_REQUIRED_DELETE !== 'undefined' && CAN_TAG_REQUIRED_DELETE)
+        : canEdit;
     var hasDl        = (ldef.has_draw_lathe=='1'||ldef.has_draw_lathe===1);
     var hasDlDepth   = (ldef.has_draw_lathe_depth=='1'||ldef.has_draw_lathe_depth===1);
     var isTripleDimM = (ldef.is_triple_dim=='1'||ldef.is_triple_dim===1);
@@ -14327,7 +14334,7 @@ function _makeLabelGrp(ldef, ei, canEdit, onChange) {
             if (onChange) onChange();
         };
         chip.appendChild(rm);
-    } else if (canEdit && isReqLdef) {
+    } else if (isReqLdef) {
         var lk = document.createElement('span');
         lk.style.cssText = 'margin-left:4px;color:#c0392b;font-size:10px;cursor:not-allowed;';
         lk.title = '必填標籤，需要「刪除必填標籤」權限才能移除（見角色設定→料號標籤指派）';
