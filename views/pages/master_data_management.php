@@ -8251,7 +8251,15 @@ body { background:#F6F1EA; }
               var have = (r&&r.success)? r.data : [];
               if(isSys) have = MASTERDATA_FEATURES.map(function(f){return f[0];});
               var h=''; MASTERDATA_FEATURE_GROUPS.forEach(function(g){
-                h += '<div class="rf-group"><div class="rf-group-title">'+escR(g.title)+'</div>'
+                // 「必填料號標籤」是標籤定義本身的設定(dict_label.is_required)，不分哪個角色指派
+                // 都是同一份規則——不是角色功能碼，不會存進 role_features，純粹在這裡擺一顆
+                // 捷徑按鈕方便直接跳去「標籤定義管理」設定，省得使用者自己去找在哪裡改。
+                var tagShortcut = (g.title === '料號標籤指派')
+                  ? ' <button type="button" class="btn btn-xs btn-default pull-right" style="margin-top:-2px;" '
+                  + 'onclick="$(\'#roleModal\').modal(\'hide\');openDictModal(\'label\');" '
+                  + 'title="設定哪些標籤是必填——這是標籤本身的設定，不分哪個角色指派都一樣"><i class="fa fa-cog"></i> 設定必填標籤</button>'
+                  : '';
+                h += '<div class="rf-group"><div class="rf-group-title">'+escR(g.title)+tagShortcut+'</div>'
                    + '<div class="rf-group-grid">';
                 g.items.forEach(function(f){
                   h += '<div class="checkbox rf-item"><label><input type="checkbox" class="rf-chk" value="'+f[0]+'" '
@@ -10217,7 +10225,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
                 <li><button class="dict-nav-btn" onclick="loadDict('workpiece-sub',this)"><i class="fa fa-tag"></i> 工件小類</button></li>
                 <li><button class="dict-nav-btn" onclick="loadDict('gear',this)"><i class="fa fa-cog"></i> 齒輪類型</button></li>
                 <li><button class="dict-nav-btn" onclick="loadDict('gear-quality',this)"><i class="fa fa-star-o"></i> 齒輪等級</button></li>
-                <li><button class="dict-nav-btn" onclick="loadDict('label',this)"><i class="fa fa-tags"></i> 料號標籤</button></li>
+                <li><button class="dict-nav-btn" id="dictNavBtn-label" onclick="loadDict('label',this)"><i class="fa fa-tags"></i> 料號標籤</button></li>
                 <li><button class="dict-nav-btn" onclick="loadDict('attach-cat',this)"><i class="fa fa-paperclip"></i> 附件類別標籤</button></li>
                 <li><button class="dict-nav-btn" onclick="loadDict('industry',this)"><i class="fa fa-building"></i> 客戶產業別</button></li>
                 <li><button class="dict-nav-btn" onclick="loadDict('maker-main',this)"><i class="fa fa-folder"></i> 廠商大類</button></li>
@@ -19836,9 +19844,13 @@ function saveMakerMainProcessConfig() {
     });
 }
 
-function openDictModal() {
+// type 選填：指定要直接跳到哪一個分頁（例如從角色設定的「料號標籤指派」快速連過來設定必填標籤），
+// 預設仍是第一個分頁(工件種類)，行為與原本完全相同。
+function openDictModal(type) {
+    type = type || 'workpiece';
     $('#dictModal').modal('show');
-    loadDict('workpiece', document.querySelector('.dict-nav-btn'));
+    var btn = document.getElementById('dictNavBtn-'+type) || document.querySelector('.dict-nav-btn');
+    loadDict(type, btn);
 }
 
 // Init row reorder on dict table for main/sub
