@@ -342,6 +342,7 @@ $EG_ROLE_MODULES = [
     'qc'                  => ['prefix'=>'qc',      'label'=>'QC檢驗',              'page'=>'inspection_entry_v2.php'],
     'car'                 => ['prefix'=>'car',     'label'=>'異常矯正單',          'page'=>'correction_order.php'],
     'master_data'         => ['prefix'=>'mdata',   'label'=>'主檔管理',            'page'=>'master_data_management.php'],
+    'attach_dl'           => ['prefix'=>'adl',     'label'=>'附件下載權限',        'page'=>'master_data_management.php'],
     'imgedit'             => ['prefix'=>'imgedit', 'label'=>'批圖編輯器',          'page'=>''],   // 未登記進選單（帶參數才進得去）
     'review_form'         => ['prefix'=>'rvf',     'label'=>'審核表單',            'page'=>'review_form.php'],
     'hr_form'             => ['prefix'=>'hrf',     'label'=>'人資職務表單',        'page'=>'hr_position_forms.php'],
@@ -1440,6 +1441,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('mdata', 'master_data', '主檔管理（附件 / 圖面查閱 / 維護設定）', 'fa-database', '#d4761a',
                         '為每位使用者指派主檔管理頁的操作角色：①「其他附件」分頁（檢視、上傳、刪除、編輯標籤/浮水印）②客戶/廠商表單內的對帳單設定、結帳設定、報價方式、收款方式、銀行帳戶（各自檢視/編輯）③料號標籤指派（新增標籤到料號／修改或移除他人指派過的標籤——沒有後者的人仍可改動或移除自己當年指派的那一筆）④本頁其他維護設定（標籤定義、工件種類、齒輪類型與等級對照、客戶產業別、廠商大類/小類與加工限制標籤、製程大類與製程主檔、製程備註、設計備註、附件類別標籤、系統設定、規格快速輸入按鈕——各自新增/編輯/刪除/檢視）。「報價資料」分頁沿用報價單「檢視」權限（quotation_view）；「圖面查閱」對所有登入者開放。<strong>過渡期：尚未指派 master_data 角色前，每一項都暫時沿用主檔管理頁原有規則（舊式CRUD字母或僅管理員），不會鎖住任何人；一旦指派了第一位，未被指派者即改以角色為準。</strong>角色與功能定義請至 <strong>主檔管理頁 → 角色設定（僅管理員可見）</strong>。管理者固定可用。',
                         rs_of('master_data'), rsu_of('master_data'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('adl', 'attach_dl', '附件下載權限（2D／3D × 客供／內部）', 'fa-download', '#b2451a',
+                        '為每位使用者指派「另存/下載」料號/訂單/報價附件的權限，分四種組合：下載2D客供、下載2D內部、下載3D客供、下載3D內部（2D/3D依副檔名判定；客供/內部依附件標籤是否被管理員標記為「客戶提供的標籤」判定，未標記一律視為公司內部）。<strong>這個權限只擋真正的下載/另存，不擋平常在圖面查閱頁內嵌檢視。</strong><strong>過渡期：完全沒被指派這個模組任何角色的人，下載不受限制；一旦被指派了角色，就只能下載角色勾選到的那幾種組合。</strong>標籤分類設定與角色功能勾選請至 <strong>主檔管理頁 → 附件類別標籤設定 / 下載權限角色設定（僅管理員可見）</strong>。管理者固定可用。',
+                        rs_of('attach_dl'), rsu_of('attach_dl'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('imgedit', 'imgedit', '批圖編輯器', 'fa-paint-brush', '#ab47bc',
                         '為每位使用者指派「批圖使用者」角色（批圖編輯器：訂單追蹤頁「批圖」按鈕開啟的圖面編輯跳窗）。<strong>尚未指派任何人之前，暫時開放所有登入者使用；一旦指派了第一位，未被指派者即無法開啟。</strong>管理者固定可用。',

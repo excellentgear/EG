@@ -7454,7 +7454,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 // quote_bindable＝可綁定報價單、need_maker＝要填廠商（唯一實作 part_attach_link_lib）
                 require_once __DIR__ . '/../../src/common/part_attach_link_lib.php';
                 pal_ensure_schema($pdo);
-                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing, COALESCE(is_external_doc,0) AS is_external_doc, COALESCE(external_doc_name,'') AS external_doc_name, COALESCE(show_in_other_attach,0) AS show_in_other_attach, COALESCE(is_obsolete_mark,0) AS is_obsolete_mark, COALESCE(dwg_group,'') AS dwg_group, COALESCE(dwg_trigger,1) AS dwg_trigger, COALESCE(is_photo_album,0) AS is_photo_album, COALESCE(show_in_part_viewer,0) AS show_in_part_viewer, COALESCE(quote_bindable,0) AS quote_bindable, COALESCE(need_maker,0) AS need_maker FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+                // is_customer_tag＝客戶提供的標籤（唯一實作 attach_download_perm_lib，供 2D/3D 下載權限判定
+                // 這個檔案是「客供」還是「公司內部」——未勾此項的標籤一律視為公司內部，見該檔頂端說明）
+                require_once __DIR__ . '/../../src/common/attach_download_perm_lib.php';
+                eg_adp_ensure_schema($pdo);
+                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing, COALESCE(is_external_doc,0) AS is_external_doc, COALESCE(external_doc_name,'') AS external_doc_name, COALESCE(show_in_other_attach,0) AS show_in_other_attach, COALESCE(is_obsolete_mark,0) AS is_obsolete_mark, COALESCE(dwg_group,'') AS dwg_group, COALESCE(dwg_trigger,1) AS dwg_trigger, COALESCE(is_photo_album,0) AS is_photo_album, COALESCE(show_in_part_viewer,0) AS show_in_part_viewer, COALESCE(quote_bindable,0) AS quote_bindable, COALESCE(need_maker,0) AS need_maker, COALESCE(is_customer_tag,0) AS is_customer_tag FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
                 echo json_encode(['success'=>true,'data'=>$rows]);
             } elseif ($op_code === 'save') {
                 $cat_id       = intval($_POST['cat_id'] ?? 0);
@@ -7488,6 +7492,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 pal_ensure_schema($pdo);
                 $quote_bind   = intval($_POST['quote_bindable'] ?? 0) ? 1 : 0;
                 $need_maker   = intval($_POST['need_maker'] ?? 0) ? 1 : 0;
+                // 客戶提供的標籤（下載權限分類用，唯一實作 attach_download_perm_lib）：
+                // 僅本頁管理員可改（_mdPerm 下面已擋一般編輯者，見 $can_attach_cat_edit 同一組
+                // 權限；但這個欄位牽涉到下載權限分類，額外再限定系統管理員等級，避免一般
+                // 「附件類別標籤編輯」角色就能把內部標籤悄悄改成客供標籤）。
+                $customer_tag = ($is_admin || $_mdRbacAll) ? (intval($_POST['is_customer_tag'] ?? 0) ? 1 : 0) : null;
                 $reactivate   = intval($_POST['reactivate'] ?? 0);
                 $op_name      = _get_operator($pdo, $uid);
                 if ($cat_id && $reactivate) {
@@ -7497,12 +7506,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     if (!$name) throw new Exception('類別名稱不可為空');
                     $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_own_drawing=?,is_external_doc=?,external_doc_name=?,show_in_other_attach=?,is_obsolete_mark=?,dwg_group=?,dwg_trigger=?,is_photo_album=?,show_in_part_viewer=?,quote_bindable=?,need_maker=? WHERE id=?")
                         ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album, $part_viewer, $quote_bind, $need_maker, $cat_id]);
+                    if ($customer_tag !== null) {
+                        $pdo->prepare("UPDATE quotation_file_categories SET is_customer_tag=? WHERE id=?")->execute([$customer_tag, $cat_id]);
+                    }
                     _log_audit($pdo,'update','dict','attach-cat:'.$cat_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已更新','cat_id'=>$cat_id]);
                 } else {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing,is_external_doc,external_doc_name,show_in_other_attach,is_obsolete_mark,dwg_group,dwg_trigger,is_photo_album,show_in_part_viewer,quote_bindable,need_maker) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album, $part_viewer, $quote_bind, $need_maker]);
+                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing,is_external_doc,external_doc_name,show_in_other_attach,is_obsolete_mark,dwg_group,dwg_trigger,is_photo_album,show_in_part_viewer,quote_bindable,need_maker,is_customer_tag) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album, $part_viewer, $quote_bind, $need_maker, $customer_tag ?? 0]);
                     $new_id = (int)$pdo->lastInsertId();
                     _log_audit($pdo,'insert','dict','attach-cat:'.$new_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已新增','cat_id'=>$new_id]);
@@ -7540,6 +7552,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 echo json_encode(['success'=>true,'nas_dir'=>$nas,'url_dir'=>$url]);
             } else { throw new Exception('未知操作'); }
         } catch(Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    // ── 附件下載權限：解鎖下載分類／本頁管理員的確認密碼（唯一實作 attach_download_perm_lib）──
+    // 解鎖是「本頁管理員（master_data 的 A 或 all）或全站系統管理員」才能做的動作，沿用全站
+    // 共用的操作確認密碼（confirm_password_lib），不是另外做一套密碼系統；本頁管理員原本
+    // 不在授權名單裡，第一次要設定/解鎖時自動授權資格（見 eg_adp_auto_grant_page_admin）。
+    if ($_POST['action'] === 'manage_attach_dl') {
+        require_once __DIR__ . '/../../src/common/attach_download_perm_lib.php';
+        require_once __DIR__ . '/../../src/common/confirm_password_lib.php';
+        eg_adp_ensure_schema($pdo);
+        $op_code = trim($_POST['op'] ?? '');
+        $isPageOrSiteAdmin = $is_admin || $_mdRbacAll; // 本頁等效全權（master_data 的 A/all）；全站系統管理員也會落在這裡（isAdmin → A）
+        if (!$isPageOrSiteAdmin) { echo json_encode(['success'=>false,'message'=>'僅限本頁管理員或系統管理員']); exit; }
+        if ($op_code === 'unlock_status') {
+            echo json_encode(['success'=>true, 'remaining'=>eg_adp_unlock_remaining((int)$uid),
+                               'confirm_pw_ready'=>eg_confirm_password_allowed($pdo,(int)$uid)]);
+        } elseif ($op_code === 'ensure_confirm_pw_access') {
+            eg_adp_auto_grant_page_admin($pdo, (int)$uid, _get_operator($pdo,$uid));
+            echo json_encode(['success'=>true]);
+        } elseif ($op_code === 'set_confirm_password') {
+            $pw = (string)($_POST['password'] ?? '');
+            $r = eg_confirm_password_set($pdo, (int)$uid, $pw, _get_operator($pdo,$uid));
+            echo json_encode($r);
+        } elseif ($op_code === 'unlock') {
+            $pw = (string)($_POST['password'] ?? '');
+            $r = eg_confirm_password_verify_scoped($pdo, (int)$uid, $pw, EG_ADP_CONFIRM_ACTION_KEY);
+            if ($r['ok']) { eg_adp_unlock_mark((int)$uid); }
+            echo json_encode($r + ['remaining'=>eg_adp_unlock_valid((int)$uid) ? eg_adp_unlock_remaining((int)$uid) : 0]);
+        } else { echo json_encode(['success'=>false,'message'=>'未知操作']); }
         exit;
     }
 
@@ -8080,6 +8122,7 @@ body { background:#F6F1EA; }
                 <button class="btn btn-info btn-sm" onclick="openDictModal()"><i class="fa fa-book"></i> 類別字典設定</button>
                 <?php if ($is_admin): ?>
                 <button class="btn btn-warning btn-sm" id="btn-role-setting" title="設定主檔管理（附件）操作角色與功能"><i class="fa fa-key"></i> 角色設定</button>
+                <button class="btn btn-danger btn-sm" id="btn-adl-role-setting" title="設定附件下載權限角色（2D／3D × 客供／內部）"><i class="fa fa-download"></i> 下載權限角色</button>
                 <?php endif; ?>
             </div>
         </div>
@@ -8337,6 +8380,116 @@ body { background:#F6F1EA; }
               });
             });
           });
+        })();
+        </script>
+
+        <!-- 附件下載權限角色設定 Modal（module=attach_dl；唯一實作見 attach_download_perm_lib.php。
+             刻意不重用上面 master_data 角色設定那套 JS——那套的 module/功能清單是寫死
+             'master_data'/MASTERDATA_FEATURE_GROUPS，牽動既有正常運作的程式碼，另外自成一支
+             較簡單版本更安全，鐵律「只新增不重構」） -->
+        <div class="modal fade" id="adlRoleModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-md"><div class="modal-content">
+          <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title"><i class="fa fa-download"></i> 附件下載權限 — 角色設定</h4></div>
+          <div class="modal-body">
+            <p class="text-muted" style="font-size:12px;">在此建立/命名角色並勾選其下載權限；使用者與角色的對應請至 <b>人員權限設定（user_permissions）→ 附件下載權限</b>。
+              <strong>過渡期：完全沒被指派這個模組任何角色的人，下載不受限制；一旦被指派了角色，就只能下載角色勾選到的那幾種組合。</strong>
+              系統管理員角色(admin)固定擁有全部權限，不可修改。</p>
+            <div class="row">
+              <div class="col-md-5">
+                <div class="input-group input-group-sm" style="margin-bottom:6px;">
+                  <input type="text" id="adl-new-role-name" class="form-control" placeholder="新角色名稱…">
+                  <span class="input-group-btn"><button class="btn btn-success" id="adl-btn-add-role">新增</button></span>
+                </div>
+                <div class="list-group" id="adl-role-list" style="max-height:280px;overflow:auto;"></div>
+              </div>
+              <div class="col-md-7">
+                <div id="adl-role-feat-area" style="display:none;">
+                  <h5>角色「<span id="adl-rf-role-name"></span>」的下載權限</h5>
+                  <div id="adl-rf-checks" style="font-size:12px;">
+                    <div class="checkbox"><label><input type="checkbox" class="adl-feat" value="dl_2d_customer"> 下載 2D 圖面——客戶提供</label></div>
+                    <div class="checkbox"><label><input type="checkbox" class="adl-feat" value="dl_2d_internal"> 下載 2D 圖面——公司內部</label></div>
+                    <div class="checkbox"><label><input type="checkbox" class="adl-feat" value="dl_3d_customer"> 下載 3D 模型——客戶提供</label></div>
+                    <div class="checkbox"><label><input type="checkbox" class="adl-feat" value="dl_3d_internal"> 下載 3D 模型——公司內部</label></div>
+                  </div>
+                  <div style="margin-top:10px;">
+                    <button class="btn btn-primary btn-sm" id="adl-btn-save-feats"><i class="fa fa-check"></i> 儲存功能</button>
+                    <button class="btn btn-default btn-sm" id="adl-btn-rename-role">改名</button>
+                    <button class="btn btn-danger btn-sm pull-right" id="adl-btn-del-role"><i class="fa fa-trash"></i> 刪除角色</button>
+                    <span class="text-muted" id="adl-rf-msg" style="margin-left:8px;"></span>
+                  </div>
+                </div>
+                <div id="adl-role-feat-empty" class="text-muted">← 請於左側選擇一個角色</div>
+              </div>
+            </div>
+          </div>
+        </div></div></div>
+        <script>
+        (function initAdlRoleSetting(){
+          if (typeof jQuery === 'undefined') { return setTimeout(initAdlRoleSetting, 50); }
+          var $ = jQuery;
+          var ROLES_API = '../../src/store/Roles_API.php';
+          var escR = function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
+          var curRole = null;
+          function loadRoles(){
+            $.get(ROLES_API, {action:'get_roles', module:'attach_dl'}, function(r){
+              if(!r||!r.success){ $('#adl-role-list').html('<div class="text-danger">'+escR(r&&r.message||'載入失敗')+'</div>'); return; }
+              var h=''; r.data.forEach(function(ro){
+                var sys = parseInt(ro.is_system,10)===1;
+                h += '<a href="#" class="list-group-item adl-role-item" data-id="'+ro.role_id+'" data-name="'+escR(ro.role_name)+'" data-sys="'+(sys?1:0)+'">'
+                   + escR(ro.role_name) + (sys?' <span class="label label-info pull-right">系統(全權)</span>':'') + '</a>';
+              });
+              $('#adl-role-list').html(h || '<div class="text-muted" style="padding:6px;">尚無角色</div>');
+            }, 'json');
+          }
+          $(document).on('click', '.adl-role-item', function(e){
+            e.preventDefault();
+            $('.adl-role-item').removeClass('active'); $(this).addClass('active');
+            curRole = { id: parseInt($(this).data('id'),10), name: $(this).data('name'), sys: parseInt($(this).data('sys'),10)===1 };
+            $('#adl-rf-role-name').text(curRole.name);
+            $('#adl-role-feat-empty').hide(); $('#adl-role-feat-area').show();
+            $('#adl-rf-msg').text('');
+            $('#adl-btn-save-feats, #adl-btn-rename-role, #adl-btn-del-role').prop('disabled', curRole.sys);
+            if (curRole.sys) { $('.adl-feat').prop('checked', true).prop('disabled', true); return; }
+            $('.adl-feat').prop('disabled', false);
+            $.get(ROLES_API, {action:'get_role_features', role_id:curRole.id}, function(r){
+              var feats = (r&&r.success) ? (r.data||[]) : [];
+              $('.adl-feat').each(function(){ $(this).prop('checked', feats.indexOf($(this).val())>=0); });
+            }, 'json');
+          });
+          $('#adl-btn-add-role').on('click', function(){
+            var name = ($('#adl-new-role-name').val()||'').trim();
+            if (!name) { showToast('請輸入角色名稱','error'); return; }
+            $.post(ROLES_API, {action:'save_role', role_name:name, module:'attach_dl'}, function(r){
+              if (r&&r.success) { $('#adl-new-role-name').val(''); loadRoles(); showToast('已新增角色'); }
+              else showToast((r&&r.message)||'新增失敗','error');
+            }, 'json');
+          });
+          $('#adl-btn-rename-role').on('click', function(){
+            if (!curRole || curRole.sys) return;
+            var name = prompt('角色新名稱：', curRole.name);
+            if (!name || !name.trim()) return;
+            $.post(ROLES_API, {action:'save_role', role_id:curRole.id, role_name:name.trim(), module:'attach_dl'}, function(r){
+              if (r&&r.success) { loadRoles(); showToast('已改名'); }
+              else showToast((r&&r.message)||'改名失敗','error');
+            }, 'json');
+          });
+          $('#adl-btn-del-role').on('click', function(){
+            if (!curRole || curRole.sys) return;
+            if (!confirm('確定刪除角色「'+curRole.name+'」？已指派此角色的人員會一併失去這個角色。')) return;
+            $.post(ROLES_API, {action:'delete_role', role_id:curRole.id}, function(r){
+              if (r&&r.success) { curRole=null; $('#adl-role-feat-area').hide(); $('#adl-role-feat-empty').show(); loadRoles(); showToast('已刪除'); }
+              else showToast((r&&r.message)||'刪除失敗（可能仍有人員指派，請至人員權限設定先移除）','error');
+            }, 'json');
+          });
+          $('#adl-btn-save-feats').on('click', function(){
+            if (!curRole || curRole.sys) return;
+            var feats = []; $('.adl-feat:checked').each(function(){ feats.push($(this).val()); });
+            $.post(ROLES_API, {action:'save_role_features', role_id:curRole.id, features:JSON.stringify(feats)}, function(r){
+              if (r&&r.success) { $('#adl-rf-msg').text('已儲存'); setTimeout(function(){$('#adl-rf-msg').text('');},1500); }
+              else $('#adl-rf-msg').text((r&&r.message)||'儲存失敗');
+            }, 'json');
+          });
+          $('#btn-adl-role-setting').on('click', function(e){ e.preventDefault(); $('#adl-role-feat-area').hide(); $('#adl-role-feat-empty').show(); loadRoles(); $('#adlRoleModal').modal('show'); });
         })();
         </script>
         <?php endif; ?>
@@ -10355,6 +10508,33 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
                         <?php if($permission_code!=='A'):?><br><span style="color:#aaa;">需 A 等級才可修改路徑</span><?php endif;?>
                     </div>
                 </div>
+                <?php if ($is_admin || $_mdRbacAll): ?>
+                <!-- 下載權限分類解鎖（唯一實作 attach_download_perm_lib）：僅本頁管理員/系統管理員可見。
+                     已上傳附件的客供/內部分類改掉要先在這裡用確認密碼解鎖（10分鐘內有效）。 -->
+                <div id="adl-unlock-box" style="margin-bottom:16px;background:#fdf0ec;padding:12px;border-radius:6px;border:1px solid #e6bba8;">
+                    <div style="font-size:12px;font-weight:700;color:#a43;margin-bottom:8px;"><i class="fa fa-unlock-alt"></i> 下載權限分類解鎖</div>
+                    <div style="font-size:11px;color:#8a6d3b;margin-bottom:8px;line-height:1.5;">
+                        已上傳附件的「客戶提供／公司內部」分類一旦確立即鎖定，要改需先在此輸入<b>本頁管理員確認密碼</b>解鎖，
+                        解鎖後 <b>10 分鐘內</b>可改任何附件的分類，超過時間自動重新上鎖。<b>與一般登入密碼不同</b>，是獨立設定的確認密碼。
+                    </div>
+                    <div id="adl-unlock-status" style="font-size:12px;font-weight:700;color:#27ae60;margin-bottom:8px;display:none;"></div>
+                    <div id="adl-unlock-form" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <input type="password" id="adl-unlock-pw" class="form-control input-sm" style="width:220px;" placeholder="輸入確認密碼解鎖" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other">
+                        <button type="button" class="btn btn-xs btn-danger" onclick="adlUnlock()"><i class="fa fa-unlock"></i> 解鎖 10 分鐘</button>
+                        <span style="font-size:11px;color:#a43;" id="adl-unlock-msg"></span>
+                    </div>
+                    <div style="font-size:11px;color:#8a6d3b;margin-top:8px;">
+                        還沒設定過確認密碼？
+                        <a href="#" onclick="adlShowSetPw();return false;">點此設定本頁管理員確認密碼</a>
+                        <div id="adl-setpw-form" style="display:none;margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                            <input type="password" id="adl-newpw1" class="form-control input-sm" style="width:180px;" placeholder="新確認密碼（至少6碼）" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other">
+                            <input type="password" id="adl-newpw2" class="form-control input-sm" style="width:180px;" placeholder="再輸入一次確認" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other">
+                            <button type="button" class="btn btn-xs btn-warning" onclick="adlSetPassword()"><i class="fa fa-key"></i> 設定</button>
+                            <span style="font-size:11px;color:#a43;" id="adl-setpw-msg"></span>
+                        </div>
+                    </div>
+                </div>
+                <?php endif; ?>
                 <!-- 類別清單 + 編輯表單 -->
                 <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;">
                     <!-- 左：清單 -->
@@ -10386,6 +10566,20 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
                                 <input type="checkbox" id="acat-show-in-list"> 在料號列表顯示最新附件
                             </label>
                             <div style="font-size:10px;color:#aaa;margin-top:2px;">勾選後料號列表中會顯示此類別的最新附件</div>
+                        </div>
+                        <!-- 客戶提供的標籤（2026-10-08 使用者要求，下載權限分類用，唯一實作 attach_download_perm_lib）：
+                             未勾此項的標籤一律視為公司內部。已上傳附件的客供/內部分類一旦確立就鎖定，要改需管理員
+                             先在下方「解鎖下載分類」輸入確認密碼。僅系統管理員可改此欄（風險較高，避免一般附件
+                             類別編輯角色就能把內部標籤悄悄改成客供標籤）。 -->
+                        <div class="form-group" style="margin-bottom:8px;background:#fdf0ec;border:1px solid #e6bba8;border-radius:4px;padding:8px;">
+                            <label style="font-size:11px;color:#a43;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;<?php if(!($is_admin||$_mdRbacAll)):?>opacity:.5;cursor:not-allowed;<?php endif;?>">
+                                <input type="checkbox" id="acat-customer-tag" <?php if(!($is_admin||$_mdRbacAll)):?>disabled<?php endif;?>> <i class="fa fa-shield"></i> 這是「客戶提供的」標籤（下載權限分類）
+                            </label>
+                            <div style="font-size:10px;color:#a43;margin-top:2px;">
+                                勾選後，掛上此標籤的附件在「下載權限」角色判定上算<b>客戶提供</b>；未勾選的標籤一律視為<b>公司內部</b>。<br>
+                                <b>上傳後分類會被鎖定</b>，要把某份附件改成不同分類，需先在下方「解鎖下載分類」輸入本頁管理員確認密碼（10分鐘內有效）。
+                                <?php if(!($is_admin||$_mdRbacAll)):?>僅系統管理員可修改此設定。<?php endif;?>
+                            </div>
                         </div>
                         <div class="form-group" style="margin-bottom:8px;">
                             <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
@@ -20281,6 +20475,81 @@ function loadAttachCatPanel() {
         }
     });
     loadAttachCatTable();
+    adlRefreshUnlockStatus();
+}
+
+// ── 下載權限分類解鎖（唯一實作見 attach_download_perm_lib.php 的 manage_attach_dl 動作）──
+var _adlCountdownTimer = null;
+function adlRefreshUnlockStatus() {
+    if (!document.getElementById('adl-unlock-box')) return;   // 非管理員本來就不輸出這個區塊
+    api({ action:'manage_attach_dl', op:'unlock_status' }).done(function(r) {
+        if (!r.success) return;
+        var form = document.getElementById('adl-unlock-form');
+        var status = document.getElementById('adl-unlock-status');
+        if (_adlCountdownTimer) { clearInterval(_adlCountdownTimer); _adlCountdownTimer = null; }
+        if (r.remaining > 0) {
+            if (form) form.style.display = 'none';
+            if (status) status.style.display = '';
+            var left = r.remaining;
+            var tick = function() {
+                if (left <= 0) {
+                    if (status) status.style.display = 'none';
+                    if (form) form.style.display = '';
+                    if (_adlCountdownTimer) { clearInterval(_adlCountdownTimer); _adlCountdownTimer = null; }
+                    return;
+                }
+                var m = Math.floor(left/60), s = left%60;
+                if (status) status.innerHTML = '<i class="fa fa-unlock"></i> 下載分類已解鎖，剩餘 ' + m + ':' + (s<10?'0':'') + s + '（時間到自動重新上鎖）';
+                left--;
+            };
+            tick();
+            _adlCountdownTimer = setInterval(tick, 1000);
+        } else {
+            if (form) form.style.display = '';
+            if (status) status.style.display = 'none';
+        }
+        // 還沒有確認密碼使用資格（本頁管理員第一次使用，自動授權資格供下方「設定」連結使用）
+        if (!r.confirm_pw_ready) {
+            api({ action:'manage_attach_dl', op:'ensure_confirm_pw_access' });
+        }
+    });
+}
+function adlUnlock() {
+    var pw = (document.getElementById('adl-unlock-pw')||{}).value || '';
+    if (!pw) { showToast('請輸入確認密碼','error'); return; }
+    api({ action:'manage_attach_dl', op:'unlock', password:pw }).done(function(r) {
+        var msg = document.getElementById('adl-unlock-msg');
+        if (r.ok) {
+            document.getElementById('adl-unlock-pw').value = '';
+            if (msg) msg.textContent = '';
+            showToast('已解鎖，10 分鐘內可修改下載分類');
+            adlRefreshUnlockStatus();
+        } else {
+            if (msg) msg.textContent = r.msg || '解鎖失敗';
+        }
+    });
+}
+function adlShowSetPw() {
+    var f = document.getElementById('adl-setpw-form');
+    if (f) f.style.display = (f.style.display==='none'||!f.style.display) ? 'flex' : 'none';
+}
+function adlSetPassword() {
+    var p1 = (document.getElementById('adl-newpw1')||{}).value || '';
+    var p2 = (document.getElementById('adl-newpw2')||{}).value || '';
+    var msg = document.getElementById('adl-setpw-msg');
+    if (p1.length < 6) { if (msg) msg.textContent = '密碼至少需 6 碼'; return; }
+    if (p1 !== p2) { if (msg) msg.textContent = '兩次輸入不一致'; return; }
+    api({ action:'manage_attach_dl', op:'set_confirm_password', password:p1 }).done(function(r) {
+        if (r.ok || r.success) {
+            document.getElementById('adl-newpw1').value = '';
+            document.getElementById('adl-newpw2').value = '';
+            if (msg) msg.textContent = '';
+            document.getElementById('adl-setpw-form').style.display = 'none';
+            showToast('確認密碼已設定');
+        } else {
+            if (msg) msg.textContent = r.msg || r.message || '設定失敗';
+        }
+    });
 }
 
 function loadAttachCatTable() {
@@ -20318,7 +20587,9 @@ function loadAttachCatTable() {
             // （否則使用者不會知道為什麼有些人看不到那份附件），配色走 ai-rules/10 暖色系
             var pvBadge = (c.show_in_part_viewer=='1'||c.show_in_part_viewer===1)
                 ? '<span style="font-size:9px;background:#DD5138;color:#fff;border-radius:3px;padding:1px 4px;margin-left:3px;" title="優選顯示在 BOM 總覽的料號查閱畫面；僅限在 BOM 總表看得到加工單價的人">優選/限單價權限</span>' : '';
-            html += '<td>'+escHtml(c.category_name)+varBadge+odBadge+grpBadge+trgBadge+albBadge+extBadge+otherBadge+pvBadge+'&nbsp;'+badge+'</td>';
+            var ctBadge = (c.is_customer_tag=='1'||c.is_customer_tag===1)
+                ? '<span style="font-size:9px;background:#a43;color:#fff;border-radius:3px;padding:1px 4px;margin-left:3px;" title="客戶提供的標籤：掛此標籤的附件在下載權限上算客供（未勾一律算公司內部）">客供</span>' : '';
+            html += '<td>'+escHtml(c.category_name)+varBadge+odBadge+grpBadge+trgBadge+albBadge+extBadge+otherBadge+pvBadge+ctBadge+'&nbsp;'+badge+'</td>';
             html += '<td style="text-align:center;">'+showBadge+'</td>';
             html += '<td style="text-align:right;">'+badge+'</td>';
             if (CAN_ATTACH_CAT_EDIT) {
@@ -20412,6 +20683,8 @@ function editAttachCat(id) {
     if (qbChk) qbChk.checked = (c.quote_bindable=='1'||c.quote_bindable===1);
     var mkChk = document.getElementById('acat-need-maker');
     if (mkChk) mkChk.checked = (c.need_maker=='1'||c.need_maker===1);
+    var ctChk = document.getElementById('acat-customer-tag');
+    if (ctChk) ctChk.checked = (c.is_customer_tag=='1'||c.is_customer_tag===1);
     var obsChk = document.getElementById('acat-obsolete-mark');
     if (obsChk) obsChk.checked = (c.is_obsolete_mark=='1'||c.is_obsolete_mark===1);
     var dgIn = document.getElementById('acat-dwg-group');
@@ -20454,6 +20727,8 @@ function resetAttachCatForm() {
     if (qbChk) qbChk.checked = false;
     var mkChk = document.getElementById('acat-need-maker');
     if (mkChk) mkChk.checked = false;
+    var ctChk = document.getElementById('acat-customer-tag');
+    if (ctChk) ctChk.checked = false;
     var obsChk = document.getElementById('acat-obsolete-mark');
     if (obsChk) obsChk.checked = false;
     var dgIn = document.getElementById('acat-dwg-group');
@@ -20518,7 +20793,8 @@ function saveAttachCategory() {
             is_photo_album:(document.getElementById('acat-photo-album')||{}).checked ? 1 : 0,
             show_in_part_viewer:(document.getElementById('acat-part-viewer')||{}).checked ? 1 : 0,
             quote_bindable:(document.getElementById('acat-quote-bindable')||{}).checked ? 1 : 0,
-            need_maker:(document.getElementById('acat-need-maker')||{}).checked ? 1 : 0 }).done(function(r) {
+            need_maker:(document.getElementById('acat-need-maker')||{}).checked ? 1 : 0,
+            is_customer_tag:(document.getElementById('acat-customer-tag')||{}).checked ? 1 : 0 }).done(function(r) {
         if (r.success) { _attachCatsCache = null; showToast(r.message||'已儲存'); resetAttachCatForm(); loadAttachCatTable(); }
         else showToast(r.message||'儲存失敗','error');
     });

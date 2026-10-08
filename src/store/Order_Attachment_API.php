@@ -232,14 +232,18 @@ switch ($action) {
         $fname = date('Ymd_His_') . bin2hex(random_bytes(4)) . '.' . $ext;
         if (!move_uploaded_file($_FILES['file']['tmp_name'], $dir . $fname)) { echo json_encode(['success'=>false,'message'=>'檔案寫入失敗']); break; }
         $sizeStr = oaFmtSize((int)$_FILES['file']['size']);
+        // 下載權限初始分類（唯一實作 attach_download_perm_lib）：見 Part_Attachment_API.php
+        // upload 同一處註解，規則完全一致。
+        require_once __DIR__ . '/../common/attach_download_perm_lib.php';
+        $upDlCust = eg_adp_initial_is_customer($pdo, $catStr);
         if ($orderId > 0) {
-            $pdo->prepare("INSERT INTO order_attachments (order_id, linked_part_no, category_ids, filename, original_name, file_size, uploaded_by, status)
-                           VALUES (?,?,?,?,?,?,?,'active')")
-                ->execute([$orderId, $linkPart, $catStr, $fname, $orig, $sizeStr, $uid]);
+            $pdo->prepare("INSERT INTO order_attachments (order_id, linked_part_no, category_ids, filename, original_name, file_size, uploaded_by, status, dl_is_customer)
+                           VALUES (?,?,?,?,?,?,?,'active',?)")
+                ->execute([$orderId, $linkPart, $catStr, $fname, $orig, $sizeStr, $uid, $upDlCust]);
         } else {
-            $pdo->prepare("INSERT INTO order_attachments (order_id, batch_key, linked_part_no, category_ids, filename, original_name, file_size, uploaded_by, status, expire_at)
-                           VALUES (0,?,?,?,?,?,?,?,'temp', DATE_ADD(NOW(), INTERVAL 3 DAY))")
-                ->execute([$batchKey, $linkPart, $catStr, $fname, $orig, $sizeStr, $uid]);
+            $pdo->prepare("INSERT INTO order_attachments (order_id, batch_key, linked_part_no, category_ids, filename, original_name, file_size, uploaded_by, status, expire_at, dl_is_customer)
+                           VALUES (0,?,?,?,?,?,?,?,'temp', DATE_ADD(NOW(), INTERVAL 3 DAY),?)")
+                ->execute([$batchKey, $linkPart, $catStr, $fname, $orig, $sizeStr, $uid, $upDlCust]);
         }
         if ($ext === 'dwg') {
             require_once __DIR__ . '/../common/dwg_preview_lib.php';
@@ -332,8 +336,17 @@ switch ($action) {
             }
         }
         $catStr = implode(',', $catIds);
-        $pdo->prepare("UPDATE order_attachments SET category_ids=?, linked_part_no=? WHERE id=?")
-            ->execute([$catStr, eg_oa_parts_encode($parts), $attId]);
+        // 下載權限分類鎖定（唯一實作 attach_download_perm_lib）：見 Part_Attachment_API.php
+        // update_meta 同一處註解，規則完全一致。
+        require_once __DIR__ . '/../common/attach_download_perm_lib.php';
+        $qCur = $pdo->prepare("SELECT dl_is_customer FROM order_attachments WHERE id=?");
+        $qCur->execute([$attId]);
+        $curDlCust = $qCur->fetchColumn();
+        $curDlCust = ($curDlCust === false || $curDlCust === null) ? null : (int)$curDlCust;
+        $lockChk = eg_adp_check_classification_lock($pdo, $uid, $curDlCust, $catStr);
+        if (!$lockChk['ok']) { echo json_encode(['success'=>false,'message'=>$lockChk['msg'],'dl_locked'=>true]); break; }
+        $pdo->prepare("UPDATE order_attachments SET category_ids=?, linked_part_no=?, dl_is_customer=? WHERE id=?")
+            ->execute([$catStr, eg_oa_parts_encode($parts), $lockChk['new_is_customer'], $attId]);
         echo json_encode(['success' => true]);
         break;
     }
@@ -602,12 +615,19 @@ switch ($action) {
     case 'download': {
         $attId = intval($_GET['id'] ?? 0);
         if (!$attId) { http_response_code(404); echo '參數錯誤'; exit; }
-        $st = $pdo->prepare("SELECT filename, original_name FROM order_attachments WHERE id=?");
+        $st = $pdo->prepare("SELECT filename, original_name, category_ids FROM order_attachments WHERE id=?");
         $st->execute([$attId]);
         $row = $st->fetch(PDO::FETCH_ASSOC);
         if (!$row) { http_response_code(404); echo '檔案不存在'; exit; }
         $fp = $dir . $row['filename'];
         if (!is_file($fp)) { http_response_code(404); echo '檔案不存在'; exit; }
+        // 下載權限（唯一實作 attach_download_perm_lib）：只擋真正的「另存/下載」（?dl=1），
+        // 一般內嵌預覽（inline，不帶 dl）完全不受影響。
+        if (!empty($_GET['dl'])) {
+            require_once __DIR__ . '/../common/attach_download_perm_lib.php';
+            $gate = eg_adp_gate_download($pdo, $uid, false, $row['filename'], $row['category_ids']);
+            if (!$gate['ok']) { http_response_code(403); echo $gate['msg']; exit; }
+        }
         while (ob_get_level()) ob_end_clean();
         $ext  = strtolower(pathinfo($row['filename'], PATHINFO_EXTENSION));
         $mime = match($ext) {

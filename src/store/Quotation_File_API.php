@@ -483,12 +483,20 @@ switch ($action) {
         // ── 廠商（2026-09-15 使用者要求）────────────────────────────────────
         // `array_key_exists` 而不是 `!empty`：**沒送這個欄位＝舊的呼叫端（例如補件送審時
         // 那支只改類別與料號的儲存），不可以把已填的廠商洗掉**；送了空字串才是真的要清掉。
-        $curRow = $pdo->prepare("SELECT category_ids, category_id, COALESCE(maker_no,'') AS maker_no FROM quotation_attachments WHERE id=? LIMIT 1");
+        $curRow = $pdo->prepare("SELECT category_ids, category_id, COALESCE(maker_no,'') AS maker_no, dl_is_customer FROM quotation_attachments WHERE id=? LIMIT 1");
         $curRow->execute([$attachId]);
         $cur = $curRow->fetch(PDO::FETCH_ASSOC);
         if (!$cur) { echo json_encode(['success'=>false,'message'=>'找不到此附件']); exit; }
         $oldCats  = (string)($cur['category_ids'] ?: ($cur['category_id'] ? (string)$cur['category_id'] : ''));
         $oldMaker = (string)$cur['maker_no'];
+        // 下載權限分類鎖定（唯一實作 attach_download_perm_lib）：見 Part_Attachment_API.php
+        // update_meta 同一處註解，規則完全一致。報價附件上傳當下不帶標籤（curDlCust 為
+        // NULL），所以第一次掛標籤時會直接按新值分類、不視為「變更」，不需要解鎖。
+        require_once __DIR__ . '/../common/attach_download_perm_lib.php';
+        $curDlCustQ = $cur['dl_is_customer'];
+        $curDlCustQ = ($curDlCustQ === null) ? null : (int)$curDlCustQ;
+        $lockChkQ = eg_adp_check_classification_lock($pdo, _quotUid(), $curDlCustQ, $catIdsStr);
+        if (!$lockChkQ['ok']) { echo json_encode(['success'=>false,'message'=>$lockChkQ['msg'],'dl_locked'=>true]); exit; }
 
         $makerSent = array_key_exists('maker_no', $_POST);
         $makerNo   = $oldMaker;
@@ -515,9 +523,9 @@ switch ($action) {
 
         $pdo->prepare("
             UPDATE quotation_attachments
-            SET category_id=?, category_ids=?, linked_parts=?, maker_no=?, updated_at=NOW()
+            SET category_id=?, category_ids=?, linked_parts=?, maker_no=?, dl_is_customer=?, updated_at=NOW()
             WHERE id=?
-        ")->execute([$firstCatId, $catIdsStr, $linkedParts, ($makerNo !== '' ? $makerNo : null), $attachId]);
+        ")->execute([$firstCatId, $catIdsStr, $linkedParts, ($makerNo !== '' ? $makerNo : null), $lockChkQ['new_is_customer'], $attachId]);
         $mkName = '';
         if ($makerNo !== '') {
             $nm = pal_maker_names($pdo, [$makerNo]);
@@ -602,6 +610,15 @@ switch ($action) {
         $expectedDir = realpath(rtrim($base, '/\\') . DIRECTORY_SEPARATOR . $quoteNo);
         if (!$realPath || !$expectedDir || strpos($realPath, $expectedDir) !== 0 || !is_file($realPath)) {
             http_response_code(404); echo '檔案不存在'; exit;
+        }
+        // 下載權限（唯一實作 attach_download_perm_lib）：只擋真正的「另存/下載」（?dl=1），
+        // 一般內嵌預覽（inline，不帶 dl）完全不受影響。
+        if (!empty($_GET['dl'])) {
+            require_once __DIR__ . '/../common/attach_download_perm_lib.php';
+            $qCat = $pdo->prepare("SELECT category_ids FROM quotation_attachments WHERE quote_no=? AND filename=? LIMIT 1");
+            $qCat->execute([$quoteNo, $filename]);
+            $gate = eg_adp_gate_download($pdo, _quotUid(), false, $filename, (string)$qCat->fetchColumn());
+            if (!$gate['ok']) { http_response_code(403); echo $gate['msg']; exit; }
         }
         while (ob_get_level()) ob_end_clean();
         $ext  = strtolower(pathinfo($filename, PATHINFO_EXTENSION));

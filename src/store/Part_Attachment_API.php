@@ -183,9 +183,13 @@ switch ($action) {
             @unlink($dir . $fname);
             echo json_encode(['success'=>false,'message'=>$e->getMessage()]); exit;
         }
+        // 下載權限初始分類（唯一實作 attach_download_perm_lib）：上傳當下自由決定一次，
+        // 之後要改「客供／內部」這個分類本身就會被鎖定，需管理員解鎖才能改。
+        require_once __DIR__ . '/../common/attach_download_perm_lib.php';
+        $upDlCust = eg_adp_initial_is_customer($pdo, $catIds);
         try {
-            $pdo->prepare("INSERT INTO part_attachments (d_id,filename,original_name,category_ids,tag_var_values,file_size,note,revision,issue_stamp_date,process_tag,album_id,quote_no,maker_no,uploaded_by,uploaded_by_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-                ->execute([$dId, $fname, $orig, $catIds, $tagVarVals, $sz, $note, $revision, $upIssue, ($upProc !== '' ? $upProc : null), ($upAlbum ?: null), $upQuoteNo, $upMakerNo, $uploadedByName, $uploadedById]);
+            $pdo->prepare("INSERT INTO part_attachments (d_id,filename,original_name,category_ids,tag_var_values,file_size,note,revision,issue_stamp_date,process_tag,album_id,quote_no,maker_no,uploaded_by,uploaded_by_id,dl_is_customer) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                ->execute([$dId, $fname, $orig, $catIds, $tagVarVals, $sz, $note, $revision, $upIssue, ($upProc !== '' ? $upProc : null), ($upAlbum ?: null), $upQuoteNo, $upMakerNo, $uploadedByName, $uploadedById, $upDlCust]);
             $newAttachId = (int)$pdo->lastInsertId();
             // DWG 上傳成功就背景觸發一次轉檔（不等它跑完，不拖慢這次上傳的回應）——
             // 之後使用者點開預覽多半已經轉好，直接命中快取；唯一轉檔實作見 dwg_preview_lib
@@ -780,6 +784,16 @@ switch ($action) {
         }
         $mCatIds = array_values(array_filter(array_map('intval', explode(',', (string)($_POST['category_ids'] ?? '')))));
         if (!$mCatIds) { echo json_encode(['success'=>false,'message'=>'請至少選擇一個附件類別標籤']); exit; }
+        // 下載權限分類鎖定（唯一實作 attach_download_perm_lib）：若這次改標籤會牽動「客供／
+        // 內部」這個分類本身，整次存檔一律擋下，需管理員先解鎖才能改——不可只擋分類那一截、
+        // 其餘標籤照存，否則等於被拆成兩步繞過鎖定。
+        require_once __DIR__ . '/../common/attach_download_perm_lib.php';
+        $qCur = $pdo->prepare("SELECT dl_is_customer FROM part_attachments WHERE id=?");
+        $qCur->execute([$id]);
+        $curDlCust = $qCur->fetchColumn();
+        $curDlCust = ($curDlCust === false || $curDlCust === null) ? null : (int)$curDlCust;
+        $lockChk = eg_adp_check_classification_lock($pdo, (int)($_SESSION['id'] ?? 0), $curDlCust, $catIds);
+        if (!$lockChk['ok']) { echo json_encode(['success'=>false,'message'=>$lockChk['msg'],'dl_locked'=>true]); exit; }
         if (dwg_needs_issue_date($pdo, $mCatIds)) {
             // 標籤是（或被改成）「自家出的圖」時一定要有日期；這次沒送就看資料庫原本有沒有
             $cur = $mIssue;
@@ -803,8 +817,8 @@ switch ($action) {
                 if ($hasMaker) $mMaker = pal_check_maker_no($pdo, (string)$_POST['maker_no']);
             } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); exit; }
         }
-        $sets = ['category_ids=?','tag_var_values=?','note=?','revision=?'];
-        $vals = [$catIds, $tagVals, $note, $revision];
+        $sets = ['category_ids=?','tag_var_values=?','note=?','revision=?','dl_is_customer=?'];
+        $vals = [$catIds, $tagVals, $note, $revision, $lockChk['new_is_customer']];
         if ($hasIssue) { $sets[] = 'issue_stamp_date=?'; $vals[] = ($mIssue !== '' ? $mIssue : null); }
         if ($hasProc)  { $sets[] = 'process_tag=?';      $vals[] = ($mProc  !== '' ? $mProc  : null); }
         if ($hasQuote) { $sets[] = 'quote_no=?';         $vals[] = $mQuote; }
@@ -1007,7 +1021,7 @@ switch ($action) {
     case 'download':
         $id = intval($_GET['id'] ?? 0);
         if (!$id) { http_response_code(404); exit; }
-        $row = $pdo->prepare("SELECT filename, original_name, d_id FROM part_attachments WHERE id=?");
+        $row = $pdo->prepare("SELECT filename, original_name, d_id, category_ids FROM part_attachments WHERE id=?");
         $row->execute([$id]);
         $rec = $row->fetch(PDO::FETCH_ASSOC);
         if (!$rec) { http_response_code(404); exit; }
@@ -1015,6 +1029,15 @@ switch ($action) {
         $fp   = rtrim($base,'/\\') . DIRECTORY_SEPARATOR . $rec['d_id'] . DIRECTORY_SEPARATOR . $rec['filename'];
         if (!file_exists($fp)) { http_response_code(404); exit; }
         $ext2 = strtolower(pathinfo($fp, PATHINFO_EXTENSION));
+        // 下載權限（唯一實作 attach_download_perm_lib）：只擋真正的「另存/下載」（?dl=1），
+        // 縮圖(thumb)與一般內嵌預覽（inline，不帶 dl）完全不受影響。
+        if (!empty($_GET['thumb'])) {
+            // 縮圖走下面既有邏輯，不經過下載權限（九宮格相簿預覽用，不是另存下載）
+        } elseif (!empty($_GET['dl'])) {
+            require_once __DIR__ . '/../common/attach_download_perm_lib.php';
+            $gate = eg_adp_gate_download($pdo, (int)($_SESSION['id'] ?? 0), false, $rec['filename'], $rec['category_ids']);
+            if (!$gate['ok']) { http_response_code(403); header('Content-Type: text/plain; charset=utf-8'); echo $gate['msg']; exit; }
+        }
         // 縮圖（相簿九宮格用）：一張手機照片動輒數 MB，九張原圖一次載會卡住整個跳窗。
         // 產不出縮圖（非圖片檔／GD 讀不動）時直接落回原圖，不讓格子破圖。
         if (!empty($_GET['thumb'])) {
