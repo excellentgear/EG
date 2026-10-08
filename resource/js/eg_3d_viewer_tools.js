@@ -134,7 +134,13 @@ var EG3DTools = (function () {
                 }
             }
         });
-        var graph = { triCount: triCount, getTri: getTri, normals: normals, adjacency: adjacency };
+        // vertKey 一併存進 graph 讓外部（如 _collectFeatureEdges）共用同一套「同一個頂點」
+        // 判定——不可以在別處用原始陣列索引做 .indexOf() 比對代替，non-indexed 幾何每個
+        // 三角形的頂點都是各自獨立複製的陣列位置，原始索引永遠不會重複，那樣比對永遠比
+        // 不到，等於完全比不出「這條邊是不是跟群組內的鄰居共用」（2026-10-08 實測踩到：
+        // 整個模型 3186 個三角形被誤判成 9540 條「特徵邊」，幾乎等於全部原始邊一條都沒
+        // 被濾掉，畫出來的透視線框因此變成蜘蛛網——不是角度門檻的問題，是這裡比對錯了）。
+        var graph = { triCount: triCount, getTri: getTri, normals: normals, adjacency: adjacency, vertKey: vertKey };
         _faceGraphCache.set(mesh, graph);
         return graph;
     }
@@ -568,12 +574,17 @@ var EG3DTools = (function () {
             var edges = [[v[0],v[1]],[v[1],v[2]],[v[2],v[0]]];
             var neighbors = graph.adjacency[ti];
             edges.forEach(function (edge) {
+                // 一定要用 graph.vertKey 比對「同一個頂點」，不可以直接比較原始陣列索引——
+                // non-indexed 幾何每個三角形的頂點都是各自獨立複製的陣列位置，原始索引
+                // 永遠不會重複，用 .indexOf() 比對會讓每一條邊都被誤判成「沒有共用鄰居」。
+                var ka = graph.vertKey(edge[0]), kb = graph.vertKey(edge[1]);
                 var sharedInGroup = false;
                 for (var k = 0; k < neighbors.length; k++) {
                     var nb = neighbors[k];
                     if (!groupSet.has(nb)) continue;
                     var nv = graph.getTri(nb);
-                    if (nv.indexOf(edge[0]) >= 0 && nv.indexOf(edge[1]) >= 0) { sharedInGroup = true; break; }
+                    var nk0 = graph.vertKey(nv[0]), nk1 = graph.vertKey(nv[1]), nk2 = graph.vertKey(nv[2]);
+                    if ((nk0===ka||nk1===ka||nk2===ka) && (nk0===kb||nk1===kb||nk2===kb)) { sharedInGroup = true; break; }
                 }
                 if (sharedInGroup) return;   // 群組內部邊，不是特徵邊
                 var key = edge[0] < edge[1] ? (edge[0]+'_'+edge[1]) : (edge[1]+'_'+edge[0]);
@@ -590,6 +601,7 @@ var EG3DTools = (function () {
     // 處就停止，避免誤接成不相關的另一段）。回傳 {a,b}＝最近那一小段（給標記點定位用）、
     // totalLen＝整條邊鏈/迴圈的總長度、closed＝是否形成封閉迴圈。
     function _nearestFeatureEdgeLoop(mesh, groupTriIndices, worldPoint) {
+        var graph = _buildFaceGraph(mesh);
         var edges = _collectFeatureEdges(mesh, groupTriIndices);
         if (!edges.length) return null;
         var bestIdx = -1, bestDist = Infinity;
@@ -598,29 +610,33 @@ var EG3DTools = (function () {
             if (d < bestDist) { bestDist = d; bestIdx = i; }
         });
         var nearest = edges[bestIdx];
-        // 建「頂點 → 牽到哪幾條邊（邊陣列索引）」，供沿鏈延伸用
+        // 建「頂點 → 牽到哪幾條邊（邊陣列索引）」，供沿鏈延伸用；鍵一定要用 graph.vertKey
+        // （空間位置）不是原始索引——non-indexed 幾何同一個空間頂點在不同邊線物件上的
+        // va/vb 原始索引不會相同，用原始索引當鍵永遠串不起來，走沒兩步就斷掉。
         var vertEdges = new Map();
         edges.forEach(function (e, i) {
-            [e.va, e.vb].forEach(function (vi) {
-                if (!vertEdges.has(vi)) vertEdges.set(vi, []);
-                vertEdges.get(vi).push(i);
+            [graph.vertKey(e.va), graph.vertKey(e.vb)].forEach(function (vk) {
+                if (!vertEdges.has(vk)) vertEdges.set(vk, []);
+                vertEdges.get(vk).push(i);
             });
         });
         var usedIdx = new Set([bestIdx]);
         var totalLen = nearest.len;
         var closed = false;
+        var startKeyA = graph.vertKey(nearest.va), startKeyB = graph.vertKey(nearest.vb);
         // 分別往 va 端、vb 端延伸
-        [nearest.va, nearest.vb].forEach(function (startVert) {
-            var curVert = startVert;
+        [startKeyA, startKeyB].forEach(function (startKey) {
+            var curKey = startKey;
             for (var guard = 0; guard < edges.length + 1; guard++) {
-                var candidates = (vertEdges.get(curVert) || []).filter(function (i) { return !usedIdx.has(i); });
+                var candidates = (vertEdges.get(curKey) || []).filter(function (i) { return !usedIdx.has(i); });
                 if (candidates.length !== 1) break;   // 端點（0）或分岔（>1）都停止，分岔不猜著接
                 var idx = candidates[0];
                 usedIdx.add(idx);
                 var e = edges[idx];
                 totalLen += e.len;
-                curVert = e.va === curVert ? e.vb : e.va;
-                if (curVert === nearest.va || curVert === nearest.vb) { closed = true; break; }   // 繞回起點，封閉迴圈
+                var eka = graph.vertKey(e.va), ekb = graph.vertKey(e.vb);
+                curKey = eka === curKey ? ekb : eka;
+                if (curKey === startKeyA || curKey === startKeyB) { closed = true; break; }   // 繞回起點，封閉迴圈
             }
         });
         return { a: nearest.a, b: nearest.b, totalLen: totalLen, closed: closed, segCount: usedIdx.size };
@@ -822,56 +838,138 @@ var EG3DTools = (function () {
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // 透視（隱藏線）顯示：被遮蔽的部份用「較淡的線條」表示，不是整片灰色實體
+    // 透視（隱藏線）顯示：可見邊實線、被遮蔽邊真正的虛線（2026-10-08 使用者兩輪
+    // 回饋定案：①一定要是真虛線，不接受顏色深淺替代 ②圓弧面不可以把三角化網格的
+    // 每一條小三角邊都畫出來，只能畫真正的面與面交界）
     // ══════════════════════════════════════════════════════════════════════
-    // 使用者原始要求是「像 Inventor 那樣，被遮蔽的部份用虛線表示」。查證後決定改用
-    // 「深色實線（可見邊）＋淺灰實線（被遮蔽邊）」兩色呈現，不是真正的虛線，原因：
-    // Three.js 的虛線需要 LineDashedMaterial（內部有另一套 shader，判斷依據是
-    // material.isLineDashedMaterial，不是隨便一個材質設個 dashSize 屬性就會變虛線）；
-    // 已查證 o3dv.min.js 內部雖然打包了 LineDashedMaterial 的程式碼（dashSize/gapSize/
-    // computeLineDistances 都在），但函式庫自己從來沒有實際建立過這個類別的實例，所以
-    // 没有「借既有實例的建構子」這條路可走（上色/標記點都是靠這招才不需要全域 THREE，
-    // 這裡沒有現成實例可借）。真要做到位需要自己手刻一段客製 shader（material.
-    // onBeforeCompile 注入 GLSL），風險與工時都高出一截；改用「顏色深淺」區分可見／
-    // 被遮蔽的邊，視覺上一樣能清楚看穿模型內部，且技術上更穩健（純粹材質屬性操作，
-    // 跟上色/量測標記同一套已驗證可行的手法），已實測確認效果清楚可用。
+    // 【乾淨邊線】直接重用上色功能的「同一面」判定（_buildFaceGraph／sameFaceTriangles／
+    // _collectFeatureEdges）——把整個 mesh 的三角形做完整分割（逐一 flood fill 直到每個
+    // 三角形都歸類到某個面群組），取每個群組的特徵邊（邊界／與相鄰群組的交界）去重合併，
+    // 完全不使用函式庫內建的 EdgesGeometry（那只看「相鄰三角形法向量夾角」，曲面只要
+    // 三角化不夠細、每片小三角形都超過角度門檻，就會整圈都被判成「邊」，正是使用者截圖
+    // 看到的那種一條一條的雜線；同一面判定是看「整個連續曲面」，面本身內部再多小三角形
+    // 都不會畫出邊界，只有真正跟別的面交界的地方才算）。
     //
-    // 做法：①開啟函式庫內建的邊線產生（EdgeSettings，依法向量夾角門檻抓出硬邊，
-    // 回傳真正的 THREE.LineSegments）②複製兩份：一份正常深度測試（可見邊，深色）、
-    // 一份深度測試反轉成「只有在既有深度更淺時才畫」＝GreaterDepth（6，Three.js 的
-    // 深度函式列舉值，被遮蔽邊，淺灰）③原本的實體面材質只關閉 colorWrite（不關閉
-    // depthWrite／不隱藏 mesh），面本身仍正常寫入深度緩衝供②的遮蔽判斷用、也不擋
-    // 滑鼠 raycast（上色/量測在透視模式下一樣點得到），畫面上只是不會畫出灰色實體。
-    // 兩份邊線物件透過 viewer.AddExtraObject() 疊加——**刻意不呼叫 viewer.ClearExtra()
-    // 清除**，因為那會把量測標記也一併清掉；關閉透視模式時改用 extraModel.
-    // GetRootObject().remove(...) 只移除這兩個物件本身，不影響量測/上色的其他疊加物件。
+    // 【真虛線】Three.js 的虛線需要 LineDashedMaterial 專屬 shader（material.
+    // isLineDashedMaterial 判斷），但已查證函式庫從未實際建立過這個類別的實例，沒有
+    // 現成實例可借（上色/標記點能不靠全域 THREE 全都是靠「借既有實例的建構子」這招）。
+    // 改用 material.onBeforeCompile 直接在任何一個既有材質（借 LineBasicMaterial 實例
+    // 複製）的編譯前 shader 原始碼字串裡注入：①自訂頂點屬性 `lineDistance`（每一小段
+    // 邊線各自獨立算「沿線距離」，起點 0、終點＝線段長度，不是整條折線累加，段落之間
+    // 虛線節奏才不會對不齊）②fragment shader 用 `mod(vLineDistance, dash+gap) > dash`
+    // 做 discard——這是標準 Three.js 自訂 shader 擴充點（供第三方套件掛虛線/漸層等效果
+    // 用的機制），不是魔改函式庫本身。注入點選 `#include <fog_vertex>`（頂點）與
+    // `#include <clipping_planes_fragment>`（片段，與系統既有的裁切剖面功能同一個掛點，
+    // 兩者疊加互不干擾）。
+    //
+    // 做法：①實體面材質只關閉 colorWrite（不關閉 depthWrite、不隱藏 mesh），面仍正常
+    // 寫入深度緩衝、也不擋滑鼠 raycast ②每個 mesh 各建一份「可見邊」（一般深度測試，
+    // 實線深色）與一份「被遮蔽邊」（深度測試反轉成 GreaterDepth=6，Three.js 深度函式
+    // 列舉值；虛線，淺灰）③兩者皆透過 viewer.AddExtraObject() 疊加——**刻意不呼叫
+    // viewer.ClearExtra() 整個清空**，那會把量測標記也一併清掉；關閉透視時改用
+    // extraModel.GetRootObject().remove() 只移除透視模式自己建立的物件。
     var _GREATER_DEPTH = 6;   // Three.js 的 DepthModes 列舉值（NeverDepth=0...GreaterDepth=6），無全域 THREE 可借，直接用數字
+
+    // 把一個 mesh 的三角形完整分割成多個「同一面」群組，合併各群組的特徵邊、去重，
+    // 建成一份 WORLD 座標的 LineSegments 幾何＋每個端點各自的 lineDistance 屬性。
+    function _buildCleanEdgeGeometry(mesh, angleDeg) {
+        var graph = _buildFaceGraph(mesh);
+        if (!graph.triCount) return null;
+        var visited = new Uint8Array(graph.triCount);
+        var edgeMap = new Map();   // "va_vb"(小到大) → {a,b}（世界座標兩端點）
+        for (var t = 0; t < graph.triCount; t++) {
+            if (visited[t]) continue;
+            var group = sameFaceTriangles(mesh, t, angleDeg);
+            for (var gi = 0; gi < group.length; gi++) visited[group[gi]] = 1;
+            var feats = _collectFeatureEdges(mesh, group);
+            feats.forEach(function (e) {
+                // 去重鍵要用 vertKey（空間位置）不是原始索引——同一條邊界邊會被相鄰兩個
+                // 群組各自列舉一次，non-indexed 幾何兩邊看到的原始索引不同（各自獨立複製
+                // 的陣列位置），不轉成 vertKey 比對會把同一條邊畫兩次（不是錯但多餘）。
+                var ka = graph.vertKey(e.va), kb = graph.vertKey(e.vb);
+                var key = ka < kb ? (ka + '_' + kb) : (kb + '_' + ka);
+                if (!edgeMap.has(key)) edgeMap.set(key, e);
+            });
+        }
+        if (!edgeMap.size) return null;
+        var verts = [], dists = [];
+        edgeMap.forEach(function (e) {
+            verts.push(e.a[0], e.a[1], e.a[2], e.b[0], e.b[1], e.b[2]);
+            var segLen = _vlen(e.a, e.b);
+            dists.push(0, segLen);   // 每小段獨立歸零，不整條邊線累加
+        });
+        var GeoCtor = mesh.geometry.constructor;
+        var geo = new GeoCtor();
+        var PosAttrCtor = mesh.geometry.attributes.position.constructor;
+        geo.setAttribute('position', new PosAttrCtor(new Float32Array(verts), 3));
+        geo.setAttribute('lineDistance', new PosAttrCtor(new Float32Array(dists), 1));
+        return geo;
+    }
+    // 真虛線材質：複製一份既有 LineBasicMaterial 實例，用 onBeforeCompile 注入
+    // dash/gap 判斷用的 GLSL（標準 Three.js 自訂 shader 擴充點，不是改函式庫本身）。
+    function _buildDashedLineMaterial(baseLineMat, hexColor, dashSize, gapSize) {
+        var mat = baseLineMat.clone();
+        mat.color.set(hexColor);
+        mat.onBeforeCompile = function (shader) {
+            shader.uniforms.dashSize = { value: dashSize };
+            shader.uniforms.gapSize = { value: gapSize };
+            shader.vertexShader = shader.vertexShader
+                .replace('#include <common>', '#include <common>\nattribute float lineDistance;\nvarying float vLineDistance;')
+                .replace('#include <fog_vertex>', 'vLineDistance = lineDistance;\n#include <fog_vertex>');
+            shader.fragmentShader = shader.fragmentShader
+                .replace('#include <common>', '#include <common>\nuniform float dashSize;\nuniform float gapSize;\nvarying float vLineDistance;')
+                .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\nif ( mod( vLineDistance, dashSize + gapSize ) > dashSize ) discard;');
+        };
+        mat.needsUpdate = true;
+        return mat;
+    }
     function setHiddenLineMode(embeddedViewer) {
         var viewer = embeddedViewer.GetViewer();
         var mm = viewer.mainModel;
-        var settings = new OV.EdgeSettings(true, new OV.RGBColor(26, 26, 26), 1);
-        mm.SetEdgeSettings(settings);
+        // 短暫開啟函式庫內建邊線只是為了借一份真正的 LineBasicMaterial 實例（建構子
+        // 外借技巧需要現成實例），實際幾何改用自己重建的乾淨版本，借到材質後立刻關掉
+        // 內建邊線，否則使用者會同時看到內建的雜亂版本疊在乾淨版本上面。
+        mm.SetEdgeSettings(new OV.EdgeSettings(true, new OV.RGBColor(26, 26, 26), 1));
         var edgeObj = null;
         mm.EnumerateEdges(function (o) { if (!edgeObj) edgeObj = o; });
+        mm.SetEdgeSettings(new OV.EdgeSettings(false, new OV.RGBColor(0, 0, 0), 1));
         if (!edgeObj) return null;   // 這個模型沒有偵測到任何硬邊（極少見，例如完全平滑的球體）
-
         var LineCtor = edgeObj.constructor;
-        var frontMat = edgeObj.material.clone();
-        frontMat.color.set('#1a1a1a');
-        frontMat.needsUpdate = true;
-        var frontObj = new LineCtor(edgeObj.geometry, frontMat);
-        frontObj.renderOrder = 10;
+        var baseLineMat = edgeObj.material;
 
-        var backMat = edgeObj.material.clone();
-        backMat.color.set('#c7c7c7');
-        backMat.depthFunc = _GREATER_DEPTH;
-        backMat.depthWrite = false;
-        backMat.needsUpdate = true;
-        var backObj = new LineCtor(edgeObj.geometry, backMat);
-        backObj.renderOrder = 5;
+        var frontObjs = [], backObjs = [];
+        mm.EnumerateMeshes(function (mesh) {
+            // 角度門檻刻意用 20 度，比上色功能的預設 12 度更寬鬆——這裡只是要畫「視覺輪廓」
+            // 不是要精準選出單一 CAD 面，兩者目的不同。已用真實模型做角度掃描實測校準：
+            // 12 度把整個模型切成 344 個群組（318 個只有 1~2 個三角形，曲面三角化較粗的
+            // 地方——例如小孔的圓柱面——每一小塊facet 都超過 12 度被判成獨立群組，畫出來
+            // 反而是一團蜘蛛網）；20～30 度之間穩定收斂到 44 個群組（只剩 6 個小群組）；
+            // 到 45 度以上開始過度合併（群組數驟減、最大群組暴增到 1000+，代表把真正不同
+            // 的 CAD 面誤連在一起）。20 度正好落在「雜線消失、尚未開始誤併」的穩定區間，
+            // 不要再往上調（上色功能的 12 度是刻意偏嚴格，不要跟著改，兩處用途不同）。
+            var geo = _buildCleanEdgeGeometry(mesh, 20);
+            if (!geo) return;
+            mesh.geometry.computeBoundingSphere();
+            var r = (mesh.geometry.boundingSphere && mesh.geometry.boundingSphere.radius) || 20;
+            var dashSize = Math.max(0.3, r * 0.018), gapSize = Math.max(0.2, r * 0.012);
 
-        viewer.AddExtraObject(frontObj);
-        viewer.AddExtraObject(backObj);
+            var frontMat = baseLineMat.clone();
+            frontMat.color.set('#1a1a1a');
+            frontMat.needsUpdate = true;
+            var frontObj = new LineCtor(geo, frontMat);
+            frontObj.renderOrder = 10;
+            viewer.AddExtraObject(frontObj);
+            frontObjs.push(frontObj);
+
+            var backMat = _buildDashedLineMaterial(baseLineMat, '#8a8a8a', dashSize, gapSize);
+            backMat.depthFunc = _GREATER_DEPTH;
+            backMat.depthWrite = false;
+            var backObj = new LineCtor(geo, backMat);
+            backObj.renderOrder = 5;
+            viewer.AddExtraObject(backObj);
+            backObjs.push(backObj);
+        });
+        if (!frontObjs.length) return null;
 
         var touchedMats = [];
         mm.EnumerateMeshes(function (o) {
@@ -884,16 +982,14 @@ var EG3DTools = (function () {
             });
         });
         viewer.Render();
-        return { frontObj: frontObj, backObj: backObj, touchedMats: touchedMats };
+        return { frontObjs: frontObjs, backObjs: backObjs, touchedMats: touchedMats };
     }
     function clearHiddenLineMode(embeddedViewer, state) {
         if (!embeddedViewer || !state) return;
         var viewer = embeddedViewer.GetViewer();
-        var mm = viewer.mainModel;
         var root = viewer.extraModel.GetRootObject();
-        if (state.frontObj) root.remove(state.frontObj);
-        if (state.backObj) root.remove(state.backObj);
-        mm.SetEdgeSettings(new OV.EdgeSettings(false, new OV.RGBColor(0, 0, 0), 1));
+        (state.frontObjs || []).forEach(function (o) { root.remove(o); });
+        (state.backObjs || []).forEach(function (o) { root.remove(o); });
         (state.touchedMats || []).forEach(function (mt) { mt.colorWrite = true; mt.needsUpdate = true; });
         viewer.Render();
     }
