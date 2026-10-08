@@ -1,0 +1,775 @@
+<?php
+/**
+ * 詢價單（inquiry）—— 業務詢外包加工／生管詢外包材料／採購詢相關採購　三部門共用唯一實作
+ *
+ * 格式參照 FOR CODEING 說明文件/詢價單.xlsx（超正齒輪科技有限公司既有紙本：
+ * 廠商名稱／聯絡人員／聯絡電話／幣別｜單號／詢價人員／傳真號碼／詢價日期｜
+ * 項次／產品編號／規格／數量／單價｜備註｜經辦／審核／簽收，AS 編號 3-OB-01-05）。
+ *
+ * 一次詢價常常要同時問好幾家廠商：建立時可指定多家，系統自動展開成多張「子單」（一家一張，
+ * 各自獨立單號／聯絡資料／單價欄）；子單預設「跟隨母單」——改母單的項目/數量/規格會自動同步
+ * 到每一張跟隨中的子單，直接改某一張子單的項目內容則該張自動脫離跟隨（之後母單再怎麼改都不會
+ * 動到它），兩種編輯方式並存，互不干擾。單價永遠只存在子單（那是廠商回覆的資料，母單本身
+ * 不是要發給任何人的文件，不會有單價）。
+ *
+ * 綁定對象三種，全部「可選、可後補」：
+ *   - 料號（d_setting）：掛在**項目列**（一張單可能問好幾支料號）
+ *   - BOM（bom）／請購單（purchase_request）：掛在**母單**（整次詢價對應同一張 BOM 或同一張請購單）
+ * 任一種綁不綁都不影響詢價單本身的建立與列印，之後隨時可以補上或改掉。
+ *
+ * 管理員可逐部門（業務／生管／採購）設定：
+ *   allow_free_part   —— 允許用「非實際存在的料號」詢價（產品編號可以不綁料號主檔，純打字）
+ *   allow_custom_spec —— 允許自訂規格（不是由料號主檔帶出的唯讀文字，使用者自己打規格）
+ * 兩者都預設關閉（嚴格：要求綁真實料號、規格由料號帶出），管理員可視需要逐部門放寬。
+ */
+if (!defined('EG_INQUIRY_LIB')) {
+define('EG_INQUIRY_LIB', 1);
+
+require_once __DIR__ . '/org_role_lib.php';
+require_once __DIR__ . '/date_fmt_lib.php';
+
+/** 三個來源部門：內部代碼 => [顯示名稱, org_role_lib 綁定鍵] */
+function inq_depts(): array {
+    return [
+        'sales'    => ['業務', 'sales_dept'],
+        'pmc'      => ['生管', 'pm_dept'],
+        'purchase' => ['採購', 'purchase_dept'],
+    ];
+}
+function inq_dept_label(string $key): string {
+    $d = inq_depts();
+    return $d[$key][0] ?? $key;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   資料表（⚠ DDL 會造成隱式 commit，一律先確認不存在、且不在交易中才下）
+   ════════════════════════════════════════════════════════════════════════ */
+function inq_ensure_schema(PDO $db): void {
+    static $done = false;
+    if ($done) return;
+    if ($db->inTransaction()) return;
+    $exists = function (PDO $db, string $t): bool {
+        $st = $db->prepare("SHOW TABLES LIKE ?"); $st->execute([$t]);
+        return $st->fetchColumn() !== false;
+    };
+    try {
+        if (!$exists($db, 'inq_group')) {
+            $db->exec("CREATE TABLE inq_group (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                source_dept VARCHAR(20) NOT NULL COMMENT 'sales/pmc/purchase',
+                bind_type VARCHAR(20) NULL COMMENT 'bom/purchase_request，可為空',
+                bind_ref VARCHAR(100) NULL COMMENT 'bom=bom.bom文字；purchase_request=purchase_request.req_no',
+                bind_label VARCHAR(150) NULL COMMENT '綁定對象的快照顯示文字（對象被刪除時仍看得出原本綁的是什麼）',
+                requester_id INT NOT NULL,
+                requester_name VARCHAR(60) NOT NULL,
+                inquiry_date DATE NOT NULL,
+                currency VARCHAR(10) NOT NULL DEFAULT 'NTD',
+                note VARCHAR(255) NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'open' COMMENT 'open/closed',
+                created_by INT NULL, created_at DATETIME NULL,
+                modified_by INT NULL, modified_at DATETIME NULL,
+                deleted_at DATETIME NULL, deleted_by INT NULL,
+                INDEX idx_dept (source_dept), INDEX idx_bind (bind_type, bind_ref)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='詢價單·母單（詢價案）'");
+        }
+        if (!$exists($db, 'inq_group_item')) {
+            $db->exec("CREATE TABLE inq_group_item (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                group_id INT NOT NULL,
+                seq INT NOT NULL DEFAULT 1,
+                part_id INT NULL COMMENT 'd_setting.d_id，綁實際料號',
+                part_no_text VARCHAR(100) NULL COMMENT '未綁料號主檔時的自填產品編號',
+                spec_text VARCHAR(255) NULL,
+                qty DECIMAL(14,3) NULL,
+                note VARCHAR(255) NULL,
+                INDEX idx_group (group_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='詢價單·母單項目（範本列）'");
+        }
+        if (!$exists($db, 'inq_doc')) {
+            $db->exec("CREATE TABLE inq_doc (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                group_id INT NOT NULL,
+                doc_no VARCHAR(30) NOT NULL,
+                vendor_id VARCHAR(11) NOT NULL COMMENT 'maker_list.maker_id_no',
+                vendor_name VARCHAR(120) NULL,
+                contact_person VARCHAR(100) NULL,
+                contact_phone VARCHAR(50) NULL,
+                contact_fax VARCHAR(50) NULL,
+                follow_parent TINYINT(1) NOT NULL DEFAULT 1,
+                status VARCHAR(20) NOT NULL DEFAULT 'open' COMMENT 'open/replied/void',
+                created_by INT NULL, created_at DATETIME NULL,
+                modified_by INT NULL, modified_at DATETIME NULL,
+                printed_at DATETIME NULL,
+                deleted_at DATETIME NULL, deleted_by INT NULL,
+                UNIQUE KEY uk_doc_no (doc_no),
+                INDEX idx_group (group_id), INDEX idx_vendor (vendor_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='詢價單·子單（一家廠商一張）'");
+        }
+        if (!$exists($db, 'inq_doc_item')) {
+            $db->exec("CREATE TABLE inq_doc_item (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                doc_id INT NOT NULL,
+                group_item_id INT NULL COMMENT '對應母單項目 id；NULL＝只存在這張子單自己加的列（已脫離同步）',
+                seq INT NOT NULL DEFAULT 1,
+                part_id INT NULL,
+                part_no_text VARCHAR(100) NULL,
+                spec_text VARCHAR(255) NULL,
+                qty DECIMAL(14,3) NULL,
+                unit_price DECIMAL(14,4) NULL COMMENT '廠商回覆單價，只存在子單',
+                note VARCHAR(255) NULL,
+                INDEX idx_doc (doc_id), INDEX idx_gitem (group_item_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='詢價單·子單項目'");
+        }
+        if (!$exists($db, 'inq_doc_seq')) {
+            $db->exec("CREATE TABLE inq_doc_seq (
+                seq_key VARCHAR(40) NOT NULL PRIMARY KEY COMMENT 'vendor_id+yyyymmdd',
+                seq_no INT NOT NULL DEFAULT 0
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='詢價單子單編號配號計數器'");
+        }
+        if (!$exists($db, 'inq_dept_setting')) {
+            $db->exec("CREATE TABLE inq_dept_setting (
+                dept_key VARCHAR(20) NOT NULL PRIMARY KEY,
+                allow_free_part TINYINT(1) NOT NULL DEFAULT 0,
+                allow_custom_spec TINYINT(1) NOT NULL DEFAULT 0,
+                updated_by INT NULL, updated_at DATETIME NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='詢價單·各部門使用規則'");
+            foreach (array_keys(inq_depts()) as $k) {
+                $db->prepare("INSERT INTO inq_dept_setting (dept_key) VALUES (?)")->execute([$k]);
+            }
+        }
+        $done = true;
+    } catch (Throwable $e) { error_log('[inq] ensure_schema: ' . $e->getMessage()); }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   權限
+   ════════════════════════════════════════════════════════════════════════ */
+function inq_user_dept_keys(PDO $db, int $uid): array {
+    if ($uid <= 0) return [];
+    try {
+        $st = $db->prepare("SELECT DISTINCT department_id FROM user_department_position_map WHERE user_id=? AND department_id IS NOT NULL");
+        $st->execute([$uid]);
+        $ids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN) ?: []);
+    } catch (Throwable $e) { return []; }
+    $out = [];
+    foreach (inq_depts() as $k => $d) {
+        foreach ($ids as $did) { if (eg_org_in_dept($db, $d[1], $did)) { $out[] = $k; break; } }
+    }
+    return $out;
+}
+
+function inq_perms(PDO $db, int $uid): array {
+    $none = ['uid'=>0,'name'=>'','isAdmin'=>false,'canAdmin'=>false,'canCreate'=>false,'canView'=>false,'myDepts'=>[]];
+    if ($uid <= 0) return $none;
+    $st = $db->prepare("SELECT id, user_cname, user_uname, state, user_status FROM `user` WHERE id=?");
+    $st->execute([$uid]);
+    $u = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$u) return $none;
+    if ((int)$u['state'] === 0 || (int)$u['user_status'] === 90) return $none;
+
+    $codes = [];
+    try {
+        $q = $db->prepare("SELECT r.role_code FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id WHERE ur.user_id=?");
+        $q->execute([$uid]);
+        $codes = $q->fetchAll(PDO::FETCH_COLUMN) ?: [];
+    } catch (Throwable $e) {}
+    $has = function (array $c) use ($codes) { return (bool)array_intersect($c, $codes); };
+    $isAdmin  = $uid === 1 || $has(['admin','superadmin']);
+    $canAdmin = $isAdmin || $has(['inquiry_admin']);
+    $myDepts  = inq_user_dept_keys($db, $uid);
+    $canCreate = $canAdmin || !empty($myDepts) || $has(['inquiry_create']);
+    $canView   = $canCreate || $has(['inquiry_view']);
+
+    return ['uid'=>$uid, 'name'=>(string)($u['user_cname'] ?: $u['user_uname']),
+            'isAdmin'=>$isAdmin, 'canAdmin'=>$canAdmin, 'canCreate'=>$canCreate, 'canView'=>$canView, 'myDepts'=>$myDepts];
+}
+
+/** 這筆詢價案／子單，這個人能不能編輯（本人、同來源部門的同事、或管理員） */
+function inq_can_edit_dept(array $perm, string $sourceDept): bool {
+    return $perm['canAdmin'] || in_array($sourceDept, $perm['myDepts'] ?? [], true);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   部門使用規則設定
+   ════════════════════════════════════════════════════════════════════════ */
+function inq_dept_settings_all(PDO $db): array {
+    inq_ensure_schema($db);
+    $out = [];
+    foreach (array_keys(inq_depts()) as $k) { $out[$k] = ['allow_free_part'=>0, 'allow_custom_spec'=>0]; }
+    try {
+        foreach ($db->query("SELECT dept_key, allow_free_part, allow_custom_spec FROM inq_dept_setting") as $r) {
+            $out[$r['dept_key']] = ['allow_free_part'=>(int)$r['allow_free_part'], 'allow_custom_spec'=>(int)$r['allow_custom_spec']];
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+function inq_dept_setting(PDO $db, string $key): array {
+    $all = inq_dept_settings_all($db);
+    return $all[$key] ?? ['allow_free_part'=>0, 'allow_custom_spec'=>0];
+}
+function inq_dept_setting_save(PDO $db, string $key, bool $allowFreePart, bool $allowCustomSpec, int $by): bool {
+    if (!isset(inq_depts()[$key])) return false;
+    inq_ensure_schema($db);
+    try {
+        $st = $db->prepare("UPDATE inq_dept_setting SET allow_free_part=?, allow_custom_spec=?, updated_by=?, updated_at=NOW() WHERE dept_key=?");
+        $st->execute([$allowFreePart?1:0, $allowCustomSpec?1:0, $by, $key]);
+        if ($st->rowCount() === 0) {
+            $db->prepare("INSERT INTO inq_dept_setting (dept_key, allow_free_part, allow_custom_spec, updated_by, updated_at) VALUES (?,?,?,?,NOW())")
+               ->execute([$key, $allowFreePart?1:0, $allowCustomSpec?1:0, $by]);
+        }
+        return true;
+    } catch (Throwable $e) { return false; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   子單編號：廠商代號＋民國年3碼＋MM＋DD＋流水3碼（同一天同一家廠商各自接續）
+   ════════════════════════════════════════════════════════════════════════ */
+function inq_next_doc_no(PDO $db, string $vendorIdNo, string $date): string {
+    $d = $date !== '' ? $date : date('Y-m-d');
+    $roc = str_pad((string)((int)substr($d, 0, 4) - 1911), 3, '0', STR_PAD_LEFT);
+    $mm  = substr($d, 5, 2);
+    $dd  = substr($d, 8, 2);
+    $key = $vendorIdNo . $roc . $mm . $dd;
+    $db->prepare("INSERT INTO inq_doc_seq (seq_key, seq_no) VALUES (?, 1) ON DUPLICATE KEY UPDATE seq_no = seq_no + 1")
+       ->execute([$key]);
+    $st = $db->prepare("SELECT seq_no FROM inq_doc_seq WHERE seq_key=?");
+    $st->execute([$key]);
+    $seq = (int)$st->fetchColumn();
+    return $key . str_pad((string)$seq, 3, '0', STR_PAD_LEFT);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   廠商／料號／BOM／請購單　查詢
+   ════════════════════════════════════════════════════════════════════════ */
+function inq_vendor_list(PDO $db): array {
+    try {
+        return $db->query("SELECT maker_id_no, maker_id, contact_person, contact_title, m_tel, m_tel2, m_fax
+                            FROM maker_list WHERE status IS NULL OR status<>'X' ORDER BY maker_id_no")
+                   ->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+function inq_vendor_snapshot(PDO $db, string $vendorIdNo): ?array {
+    try {
+        $st = $db->prepare("SELECT maker_id_no, maker_id, contact_person, m_tel, m_tel2, m_fax
+                            FROM maker_list WHERE maker_id_no=? LIMIT 1");
+        $st->execute([$vendorIdNo]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) return null;
+        return [
+            'vendor_id'      => $r['maker_id_no'],
+            'vendor_name'    => $r['maker_id'],
+            'contact_person' => (string)($r['contact_person'] ?? ''),
+            'contact_phone'  => (string)($r['m_tel'] ?: $r['m_tel2'] ?: ''),
+            'contact_fax'    => (string)($r['m_fax'] ?? ''),
+        ];
+    } catch (Throwable $e) { return null; }
+}
+
+function inq_part_search(PDO $db, string $kw, int $limit = 20): array {
+    $kw = trim($kw);
+    if ($kw === '') return [];
+    try {
+        $st = $db->prepare("SELECT d_id, D_Setting_Id, Drawing_No, Customer_Id, Remark
+                            FROM d_setting WHERE D_Setting_Id LIKE ? OR Drawing_No LIKE ?
+                            ORDER BY d_id DESC LIMIT ?");
+        $kwLike = '%' . $kw . '%';
+        $st->bindValue(1, $kwLike, PDO::PARAM_STR);
+        $st->bindValue(2, $kwLike, PDO::PARAM_STR);
+        $st->bindValue(3, $limit, PDO::PARAM_INT);
+        $st->execute();
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        $out = [];
+        foreach ($rows as $r) {
+            $out[] = [
+                'part_id' => (int)$r['d_id'],
+                'part_no' => $r['D_Setting_Id'],
+                'label'   => $r['D_Setting_Id'] . ($r['Customer_Id'] ? '（' . $r['Customer_Id'] . '）' : '') . ' #' . $r['d_id'],
+                'spec'    => (string)($r['Remark'] ?? ''),
+            ];
+        }
+        return $out;
+    } catch (Throwable $e) { return []; }
+}
+function inq_part_get(PDO $db, int $partId): ?array {
+    if ($partId <= 0) return null;
+    try {
+        $st = $db->prepare("SELECT d_id, D_Setting_Id, Remark FROM d_setting WHERE d_id=? LIMIT 1");
+        $st->execute([$partId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return $r ? ['part_id'=>(int)$r['d_id'], 'part_no'=>$r['D_Setting_Id'], 'spec'=>(string)($r['Remark']??'')] : null;
+    } catch (Throwable $e) { return null; }
+}
+
+function inq_bom_search(PDO $db, string $kw, int $limit = 20): array {
+    $kw = trim($kw);
+    if ($kw === '') return [];
+    try {
+        $st = $db->prepare("SELECT bom, Client_Name, specification, sqty FROM bom WHERE bom LIKE ? ORDER BY bom DESC LIMIT ?");
+        $st->bindValue(1, '%' . $kw . '%', PDO::PARAM_STR);
+        $st->bindValue(2, $limit, PDO::PARAM_INT);
+        $st->execute();
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $out[] = ['bom'=>$r['bom'], 'label'=>$r['bom'] . '（' . $r['Client_Name'] . '／' . $r['specification'] . '×' . $r['sqty'] . '）'];
+        }
+        return $out;
+    } catch (Throwable $e) { return []; }
+}
+
+function inq_preq_search(PDO $db, string $kw, int $limit = 20): array {
+    $kw = trim($kw);
+    try {
+        $sql = "SELECT req_id, req_no, title, requester_name FROM purchase_request WHERE is_active=1";
+        $params = [];
+        if ($kw !== '') { $sql .= " AND (req_no LIKE ? OR title LIKE ?)"; $params = ['%'.$kw.'%', '%'.$kw.'%']; }
+        $sql .= " ORDER BY req_id DESC LIMIT ?";
+        $st = $db->prepare($sql);
+        foreach ($params as $i => $p) { $st->bindValue($i+1, $p, PDO::PARAM_STR); }
+        $st->bindValue(count($params)+1, $limit, PDO::PARAM_INT);
+        $st->execute();
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $out[] = ['ref'=>$r['req_no'], 'label'=>$r['req_no'] . '　' . $r['title'] . '（' . $r['requester_name'] . '）'];
+        }
+        return $out;
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 綁定對象的顯示文字快照（供 bind_label）。
+ * bom 沒有整數主鍵（資料表本身沒有 PK），purchase_request.req_no 本身就是 UNIQUE——
+ * 兩種綁定一律以**文字**當參照鍵（bind_ref），不勉強湊一個整數 id。
+ */
+function inq_bind_label(PDO $db, string $type, string $ref): string {
+    if ($ref === '') return '';
+    try {
+        if ($type === 'bom') {
+            $st = $db->prepare("SELECT bom, Client_Name, specification FROM bom WHERE bom=? LIMIT 1");
+            $st->execute([$ref]);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+            return $r ? ($r['bom'] . '（' . $r['Client_Name'] . '／' . $r['specification'] . '）') : $ref;
+        }
+        if ($type === 'purchase_request') {
+            $st = $db->prepare("SELECT req_no, title FROM purchase_request WHERE req_no=? LIMIT 1");
+            $st->execute([$ref]);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+            return $r ? ($r['req_no'] . '　' . (string)$r['title']) : $ref;
+        }
+    } catch (Throwable $e) {}
+    return $ref;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   項目列正規化（套用部門使用規則，決定 part_id / part_no_text / spec_text 怎麼存）
+   ════════════════════════════════════════════════════════════════════════ */
+function inq_normalize_item(PDO $db, array $it, array $deptSet): array {
+    $partId = (int)($it['part_id'] ?? 0);
+    $partNo = trim((string)($it['part_no_text'] ?? ''));
+    $spec   = trim((string)($it['spec_text'] ?? ''));
+    $qty    = isset($it['qty']) && $it['qty'] !== '' ? (float)$it['qty'] : null;
+    $note   = trim((string)($it['note'] ?? ''));
+
+    if ($partId > 0) {
+        $p = inq_part_get($db, $partId);
+        if (!$p) { $partId = 0; }
+        else {
+            $partNo = $p['part_no'];
+            if (!$deptSet['allow_custom_spec']) { $spec = $p['spec']; }   // 規格由料號帶出，不給自訂時覆寫成主檔內容
+        }
+    } else {
+        if (!$deptSet['allow_free_part']) {
+            // 不允許非實際存在之料號：這一列若填了產品編號但沒綁到真實主檔，視為不合法（由呼叫端擋下，這裡回傳標記）
+            if ($partNo !== '') { return ['_invalid' => '產品編號「' . $partNo . '」未綁定實際料號主檔（本部門不允許自訂料號）']; }
+        }
+    }
+    return ['part_id'=>$partId ?: null, 'part_no_text'=>$partNo, 'spec_text'=>$spec, 'qty'=>$qty, 'note'=>$note ?: null];
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   建立詢價案（母單＋項目＋一家或多家廠商＝自動展開成多張子單）
+   ════════════════════════════════════════════════════════════════════════ */
+function inq_group_create(PDO $db, array $p, int $uid, string $uname): array {
+    inq_ensure_schema($db);
+    $dept = (string)($p['source_dept'] ?? '');
+    if (!isset(inq_depts()[$dept])) return ['success'=>false, 'message'=>'來源部門不合法'];
+    $items = is_array($p['items'] ?? null) ? $p['items'] : [];
+    $vendorIds = is_array($p['vendor_ids'] ?? null) ? array_values(array_unique(array_filter(array_map('strval', $p['vendor_ids'])))) : [];
+    if (!$items) return ['success'=>false, 'message'=>'至少要有一列詢價項目'];
+    if (!$vendorIds) return ['success'=>false, 'message'=>'至少要選一家廠商'];
+
+    $deptSet = inq_dept_setting($db, $dept);
+    $normItems = [];
+    foreach ($items as $it) {
+        $n = inq_normalize_item($db, $it, $deptSet);
+        if (!empty($n['_invalid'])) return ['success'=>false, 'message'=>$n['_invalid']];
+        if ($n['part_id'] === null && $n['part_no_text'] === '' && $n['spec_text'] === '') continue; // 空列略過
+        $normItems[] = $n;
+    }
+    if (!$normItems) return ['success'=>false, 'message'=>'至少要有一列詢價項目'];
+
+    $bindType = (string)($p['bind_type'] ?? '');
+    $bindRef  = trim((string)($p['bind_ref'] ?? ''));
+    $bindLabel = ($bindType && $bindRef) ? inq_bind_label($db, $bindType, $bindRef) : null;
+
+    $date = (string)($p['inquiry_date'] ?? date('Y-m-d'));
+    $reqId   = (int)($p['requester_id'] ?? $uid) ?: $uid;
+    $reqName = trim((string)($p['requester_name'] ?? '')) ?: $uname;
+
+    $db->beginTransaction();
+    try {
+        $db->prepare("INSERT INTO inq_group
+            (source_dept, bind_type, bind_ref, bind_label, requester_id, requester_name, inquiry_date, currency, note, created_by, created_at, modified_by, modified_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,NOW(),?,NOW())")
+           ->execute([$dept, $bindType ?: null, $bindRef ?: null, $bindLabel, $reqId, $reqName, $date,
+                      (string)($p['currency'] ?? 'NTD') ?: 'NTD', trim((string)($p['note'] ?? '')) ?: null, $uid, $uid]);
+        $groupId = (int)$db->lastInsertId();
+
+        $giIns = $db->prepare("INSERT INTO inq_group_item (group_id, seq, part_id, part_no_text, spec_text, qty, note) VALUES (?,?,?,?,?,?,?)");
+        $gItems = [];
+        $seq = 1;
+        foreach ($normItems as $n) {
+            $giIns->execute([$groupId, $seq, $n['part_id'], $n['part_no_text'], $n['spec_text'], $n['qty'], $n['note']]);
+            $gItems[] = ['id'=>(int)$db->lastInsertId()] + $n;
+            $seq++;
+        }
+
+        $docIns  = $db->prepare("INSERT INTO inq_doc (group_id, doc_no, vendor_id, vendor_name, contact_person, contact_phone, contact_fax, created_by, created_at, modified_by, modified_at)
+                                  VALUES (?,?,?,?,?,?,?,?,NOW(),?,NOW())");
+        $diIns   = $db->prepare("INSERT INTO inq_doc_item (doc_id, group_item_id, seq, part_id, part_no_text, spec_text, qty, note) VALUES (?,?,?,?,?,?,?,?)");
+        $docIds  = [];
+        foreach ($vendorIds as $vid) {
+            $snap = inq_vendor_snapshot($db, $vid);
+            if (!$snap) continue;   // 不存在的廠商代號直接略過
+            $docNo = inq_next_doc_no($db, $vid, $date);
+            $docIns->execute([$groupId, $docNo, $snap['vendor_id'], $snap['vendor_name'], $snap['contact_person'], $snap['contact_phone'], $snap['contact_fax'], $uid, $uid]);
+            $docId = (int)$db->lastInsertId();
+            $docIds[] = $docId;
+            $s = 1;
+            foreach ($gItems as $gi) {
+                $diIns->execute([$docId, $gi['id'], $s, $gi['part_id'], $gi['part_no_text'], $gi['spec_text'], $gi['qty'], $gi['note']]);
+                $s++;
+            }
+        }
+        if (!$docIds) { $db->rollBack(); return ['success'=>false, 'message'=>'選擇的廠商代號皆不存在'];}
+        $db->commit();
+        return ['success'=>true, 'group_id'=>$groupId, 'doc_ids'=>$docIds];
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        error_log('[inq] group_create: ' . $e->getMessage());
+        return ['success'=>false, 'message'=>'建立失敗'];
+    }
+}
+
+/** 既有詢價案追加一家（或多家）廠商：由母單目前的項目複製成新的子單 */
+function inq_group_add_vendors(PDO $db, int $groupId, array $vendorIds, int $uid): array {
+    $g = inq_group_row($db, $groupId);
+    if (!$g) return ['success'=>false, 'message'=>'找不到這個詢價案'];
+    $gItems = inq_group_items($db, $groupId);
+    $vendorIds = array_values(array_unique(array_filter(array_map('strval', $vendorIds))));
+    if (!$vendorIds) return ['success'=>false, 'message'=>'至少要選一家廠商'];
+    // 這個詢價案裡已經有的廠商不重複展開（直打 API 繞過畫面的 disabledIds 時的第二道防線）
+    $already = array_column(inq_group_docs($db, $groupId), 'vendor_id');
+    $vendorIds = array_values(array_diff($vendorIds, $already));
+    if (!$vendorIds) return ['success'=>false, 'message'=>'選擇的廠商都已經在這個詢價案裡了'];
+
+    $db->beginTransaction();
+    try {
+        $docIns = $db->prepare("INSERT INTO inq_doc (group_id, doc_no, vendor_id, vendor_name, contact_person, contact_phone, contact_fax, created_by, created_at, modified_by, modified_at)
+                                 VALUES (?,?,?,?,?,?,?,?,NOW(),?,NOW())");
+        $diIns  = $db->prepare("INSERT INTO inq_doc_item (doc_id, group_item_id, seq, part_id, part_no_text, spec_text, qty, note) VALUES (?,?,?,?,?,?,?,?)");
+        $newIds = [];
+        foreach ($vendorIds as $vid) {
+            $snap = inq_vendor_snapshot($db, $vid);
+            if (!$snap) continue;
+            $docNo = inq_next_doc_no($db, $vid, $g['inquiry_date']);
+            $docIns->execute([$groupId, $docNo, $snap['vendor_id'], $snap['vendor_name'], $snap['contact_person'], $snap['contact_phone'], $snap['contact_fax'], $uid, $uid]);
+            $docId = (int)$db->lastInsertId();
+            $newIds[] = $docId;
+            $s = 1;
+            foreach ($gItems as $gi) {
+                $diIns->execute([$docId, $gi['id'], $s, $gi['part_id'], $gi['part_no_text'], $gi['spec_text'], $gi['qty'], $gi['note']]);
+                $s++;
+            }
+        }
+        if (!$newIds) { $db->rollBack(); return ['success'=>false, 'message'=>'選擇的廠商代號皆不存在或已經在這個詢價案裡']; }
+        $db->commit();
+        return ['success'=>true, 'doc_ids'=>$newIds];
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        error_log('[inq] add_vendors: ' . $e->getMessage());
+        return ['success'=>false, 'message'=>'新增廠商失敗'];
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   讀取
+   ════════════════════════════════════════════════════════════════════════ */
+function inq_group_row(PDO $db, int $groupId): ?array {
+    $st = $db->prepare("SELECT * FROM inq_group WHERE id=? AND deleted_at IS NULL");
+    $st->execute([$groupId]);
+    return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+}
+function inq_group_items(PDO $db, int $groupId): array {
+    $st = $db->prepare("SELECT * FROM inq_group_item WHERE group_id=? ORDER BY seq, id");
+    $st->execute([$groupId]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+function inq_doc_row(PDO $db, int $docId): ?array {
+    $st = $db->prepare("SELECT * FROM inq_doc WHERE id=? AND deleted_at IS NULL");
+    $st->execute([$docId]);
+    return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+}
+function inq_doc_items(PDO $db, int $docId): array {
+    $st = $db->prepare("SELECT * FROM inq_doc_item WHERE doc_id=? ORDER BY seq, id");
+    $st->execute([$docId]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+function inq_group_docs(PDO $db, int $groupId): array {
+    $st = $db->prepare("SELECT * FROM inq_doc WHERE group_id=? AND deleted_at IS NULL ORDER BY id");
+    $st->execute([$groupId]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/** 詢價案完整內容（母單＋項目＋全部子單＋各自項目），給編輯畫面與列印用 */
+function inq_group_full(PDO $db, int $groupId): ?array {
+    $g = inq_group_row($db, $groupId);
+    if (!$g) return null;
+    $g['items'] = inq_group_items($db, $groupId);
+    $docs = inq_group_docs($db, $groupId);
+    foreach ($docs as &$d) { $d['items'] = inq_doc_items($db, (int)$d['id']); }
+    $g['docs'] = $docs;
+    return $g;
+}
+
+/** 清單（供主頁面列表用） */
+function inq_group_list(PDO $db, array $opt = []): array {
+    inq_ensure_schema($db);
+    $where = ['g.deleted_at IS NULL'];
+    $params = [];
+    if (!empty($opt['dept'])) { $where[] = 'g.source_dept=?'; $params[] = $opt['dept']; }
+    if (!empty($opt['status'])) { $where[] = 'g.status=?'; $params[] = $opt['status']; }
+    if (!empty($opt['date_from'])) { $where[] = 'g.inquiry_date>=?'; $params[] = $opt['date_from']; }
+    if (!empty($opt['date_to']))   { $where[] = 'g.inquiry_date<=?'; $params[] = $opt['date_to']; }
+    if (!empty($opt['kw'])) {
+        $where[] = '(g.requester_name LIKE ? OR g.note LIKE ? OR g.bind_label LIKE ?
+                     OR EXISTS(SELECT 1 FROM inq_doc d2 WHERE d2.group_id=g.id AND d2.deleted_at IS NULL
+                               AND (d2.vendor_name LIKE ? OR d2.doc_no LIKE ?))
+                     OR EXISTS(SELECT 1 FROM inq_group_item gi2 WHERE gi2.group_id=g.id
+                               AND (gi2.part_no_text LIKE ? OR gi2.spec_text LIKE ?)))';
+        $kw = '%' . $opt['kw'] . '%';
+        array_push($params, $kw, $kw, $kw, $kw, $kw, $kw, $kw);
+    }
+    $sql = "SELECT g.*,
+                   (SELECT COUNT(*) FROM inq_doc d WHERE d.group_id=g.id AND d.deleted_at IS NULL) AS doc_count,
+                   (SELECT GROUP_CONCAT(d.vendor_name SEPARATOR '、') FROM inq_doc d WHERE d.group_id=g.id AND d.deleted_at IS NULL) AS vendor_names
+            FROM inq_group g WHERE " . implode(' AND ', $where) . " ORDER BY g.id DESC LIMIT 500";
+    $st = $db->prepare($sql);
+    $st->execute($params);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   編輯母單（會同步到所有 follow_parent=1 的子單）
+   ════════════════════════════════════════════════════════════════════════ */
+function inq_group_update(PDO $db, int $groupId, array $p, int $uid): array {
+    $g = inq_group_row($db, $groupId);
+    if (!$g) return ['success'=>false, 'message'=>'找不到這個詢價案'];
+    $deptSet = inq_dept_setting($db, $g['source_dept']);
+    $items = is_array($p['items'] ?? null) ? $p['items'] : null;
+
+    $db->beginTransaction();
+    try {
+        // 表頭（不含來源部門／廠商；那些建立後不給改，要改部門等於是另一筆業務事實）
+        $date    = (string)($p['inquiry_date'] ?? $g['inquiry_date']);
+        $curr    = (string)($p['currency'] ?? $g['currency']) ?: 'NTD';
+        $note    = array_key_exists('note', $p) ? (trim((string)$p['note']) ?: null) : $g['note'];
+        $reqName = array_key_exists('requester_name', $p) ? (trim((string)$p['requester_name']) ?: $g['requester_name']) : $g['requester_name'];
+        $db->prepare("UPDATE inq_group SET inquiry_date=?, currency=?, note=?, requester_name=?, modified_by=?, modified_at=NOW() WHERE id=?")
+           ->execute([$date, $curr, $note, $reqName, $uid, $groupId]);
+
+        if ($items !== null) {
+            $normItems = [];
+            foreach ($items as $it) {
+                $n = inq_normalize_item($db, $it, $deptSet);
+                if (!empty($n['_invalid'])) { $db->rollBack(); return ['success'=>false, 'message'=>$n['_invalid']]; }
+                if ($n['part_id'] === null && $n['part_no_text'] === '' && $n['spec_text'] === '') continue;
+                $normItems[] = $n;
+            }
+            if (!$normItems) { $db->rollBack(); return ['success'=>false, 'message'=>'至少要有一列詢價項目']; }
+
+            // 母單項目整批重建（簡單可靠；項目列數通常不多）
+            $oldIds = array_column(inq_group_items($db, $groupId), 'id');
+            $db->prepare("DELETE FROM inq_group_item WHERE group_id=?")->execute([$groupId]);
+            $giIns = $db->prepare("INSERT INTO inq_group_item (group_id, seq, part_id, part_no_text, spec_text, qty, note) VALUES (?,?,?,?,?,?,?)");
+            $newGItems = [];
+            $seq = 1;
+            foreach ($normItems as $n) {
+                $giIns->execute([$groupId, $seq, $n['part_id'], $n['part_no_text'], $n['spec_text'], $n['qty'], $n['note']]);
+                $newGItems[] = ['id'=>(int)$db->lastInsertId()] + $n;
+                $seq++;
+            }
+
+            // 同步到所有「跟隨母單」的子單：整批重建那些子單的項目（脫離跟隨的子單完全不動）
+            $docs = $db->prepare("SELECT id FROM inq_doc WHERE group_id=? AND deleted_at IS NULL AND follow_parent=1");
+            $docs->execute([$groupId]);
+            $diIns = $db->prepare("INSERT INTO inq_doc_item (doc_id, group_item_id, seq, part_id, part_no_text, spec_text, qty, note) VALUES (?,?,?,?,?,?,?,?)");
+            foreach ($docs->fetchAll(PDO::FETCH_COLUMN) as $docId) {
+                $db->prepare("DELETE FROM inq_doc_item WHERE doc_id=?")->execute([$docId]);
+                $s = 1;
+                foreach ($newGItems as $gi) {
+                    $diIns->execute([$docId, $gi['id'], $s, $gi['part_id'], $gi['part_no_text'], $gi['spec_text'], $gi['qty'], $gi['note']]);
+                    $s++;
+                }
+            }
+        }
+        $db->commit();
+        return ['success'=>true];
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        error_log('[inq] group_update: ' . $e->getMessage());
+        return ['success'=>false, 'message'=>'儲存失敗'];
+    }
+}
+
+/** 後補／改掉綁定對象（bom／purchase_request），或清空（$bindRef=''＝解除綁定） */
+function inq_group_bind(PDO $db, int $groupId, string $bindType, string $bindRef, int $uid): array {
+    $g = inq_group_row($db, $groupId);
+    if (!$g) return ['success'=>false, 'message'=>'找不到這個詢價案'];
+    if ($bindType !== '' && !in_array($bindType, ['bom','purchase_request'], true)) {
+        return ['success'=>false, 'message'=>'綁定類型不合法'];
+    }
+    $bindRef = trim($bindRef);
+    $label = ($bindType && $bindRef) ? inq_bind_label($db, $bindType, $bindRef) : null;
+    try {
+        $db->prepare("UPDATE inq_group SET bind_type=?, bind_ref=?, bind_label=?, modified_by=?, modified_at=NOW() WHERE id=?")
+           ->execute([$bindType ?: null, $bindRef ?: null, $label, $uid, $groupId]);
+        return ['success'=>true, 'bind_label'=>$label];
+    } catch (Throwable $e) { return ['success'=>false, 'message'=>'儲存失敗']; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   編輯子單（直接改內容＝脫離跟隨；只改單價或狀態不影響跟隨關係）
+   ════════════════════════════════════════════════════════════════════════ */
+function inq_doc_update(PDO $db, int $docId, array $p, int $uid): array {
+    $d = inq_doc_row($db, $docId);
+    if (!$d) return ['success'=>false, 'message'=>'找不到這張子單'];
+    $g = inq_group_row($db, (int)$d['group_id']);
+    $deptSet = $g ? inq_dept_setting($db, $g['source_dept']) : ['allow_free_part'=>0,'allow_custom_spec'=>0];
+
+    $items = is_array($p['items'] ?? null) ? $p['items'] : null;
+    $db->beginTransaction();
+    try {
+        if ($items !== null) {
+            $normItems = [];
+            foreach ($items as $it) {
+                $n = inq_normalize_item($db, $it, $deptSet);
+                if (!empty($n['_invalid'])) { $db->rollBack(); return ['success'=>false, 'message'=>$n['_invalid']]; }
+                $price = isset($it['unit_price']) && $it['unit_price'] !== '' ? (float)$it['unit_price'] : null;
+                if ($n['part_id'] === null && $n['part_no_text'] === '' && $n['spec_text'] === '' && $price === null) continue;
+                $n['unit_price'] = $price;
+                $n['group_item_id'] = isset($it['group_item_id']) ? (int)$it['group_item_id'] ?: null : null;
+                $normItems[] = $n;
+            }
+            $old = inq_doc_items($db, $docId);
+            $oldSig = array_map(function ($r) { return $r['part_id'].'|'.$r['part_no_text'].'|'.$r['spec_text'].'|'.$r['qty']; }, $old);
+            $newSig = array_map(function ($n) { return $n['part_id'].'|'.$n['part_no_text'].'|'.$n['spec_text'].'|'.$n['qty']; }, $normItems);
+            $contentChanged = ($oldSig !== $newSig);
+
+            $db->prepare("DELETE FROM inq_doc_item WHERE doc_id=?")->execute([$docId]);
+            $diIns = $db->prepare("INSERT INTO inq_doc_item (doc_id, group_item_id, seq, part_id, part_no_text, spec_text, qty, unit_price, note) VALUES (?,?,?,?,?,?,?,?,?)");
+            $seq = 1;
+            foreach ($normItems as $n) {
+                $diIns->execute([$docId, $n['group_item_id'], $seq, $n['part_id'], $n['part_no_text'], $n['spec_text'], $n['qty'], $n['unit_price'], $n['note']]);
+                $seq++;
+            }
+            // 內容（料號/規格/數量/列數）真的不同才脫離跟隨；只改單價不算
+            if ($contentChanged && (int)$d['follow_parent'] === 1) {
+                $db->prepare("UPDATE inq_doc SET follow_parent=0 WHERE id=?")->execute([$docId]);
+            }
+        }
+        $status = (string)($p['status'] ?? '');
+        if (in_array($status, ['open','replied','void'], true)) {
+            $db->prepare("UPDATE inq_doc SET status=? WHERE id=?")->execute([$status, $docId]);
+        }
+        $db->prepare("UPDATE inq_doc SET modified_by=?, modified_at=NOW() WHERE id=?")->execute([$uid, $docId]);
+        $db->commit();
+        return ['success'=>true];
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        error_log('[inq] doc_update: ' . $e->getMessage());
+        return ['success'=>false, 'message'=>'儲存失敗'];
+    }
+}
+
+/** 手動把子單重新接回跟隨母單（會立刻依母單目前內容整批覆蓋這張子單的項目，單價一併清空） */
+function inq_doc_refollow(PDO $db, int $docId, int $uid): array {
+    $d = inq_doc_row($db, $docId);
+    if (!$d) return ['success'=>false, 'message'=>'找不到這張子單'];
+    $gItems = inq_group_items($db, (int)$d['group_id']);
+    $db->beginTransaction();
+    try {
+        $db->prepare("DELETE FROM inq_doc_item WHERE doc_id=?")->execute([$docId]);
+        $diIns = $db->prepare("INSERT INTO inq_doc_item (doc_id, group_item_id, seq, part_id, part_no_text, spec_text, qty, note) VALUES (?,?,?,?,?,?,?,?)");
+        $s = 1;
+        foreach ($gItems as $gi) {
+            $diIns->execute([$docId, $gi['id'], $s, $gi['part_id'], $gi['part_no_text'], $gi['spec_text'], $gi['qty'], $gi['note']]);
+            $s++;
+        }
+        $db->prepare("UPDATE inq_doc SET follow_parent=1, modified_by=?, modified_at=NOW() WHERE id=?")->execute([$uid, $docId]);
+        $db->commit();
+        return ['success'=>true];
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success'=>false, 'message'=>'操作失敗'];
+    }
+}
+
+function inq_doc_delete(PDO $db, int $docId, int $uid): array {
+    $d = inq_doc_row($db, $docId);
+    if (!$d) return ['success'=>false, 'message'=>'找不到這張子單'];
+    try {
+        $db->prepare("UPDATE inq_doc SET deleted_at=NOW(), deleted_by=? WHERE id=?")->execute([$uid, $docId]);
+        return ['success'=>true];
+    } catch (Throwable $e) { return ['success'=>false, 'message'=>'刪除失敗']; }
+}
+
+function inq_group_delete(PDO $db, int $groupId, int $uid): array {
+    $g = inq_group_row($db, $groupId);
+    if (!$g) return ['success'=>false, 'message'=>'找不到這個詢價案'];
+    try {
+        $db->prepare("UPDATE inq_group SET deleted_at=NOW(), deleted_by=? WHERE id=?")->execute([$uid, $groupId]);
+        $db->prepare("UPDATE inq_doc SET deleted_at=NOW(), deleted_by=? WHERE group_id=? AND deleted_at IS NULL")->execute([$uid, $groupId]);
+        return ['success'=>true];
+    } catch (Throwable $e) { return ['success'=>false, 'message'=>'刪除失敗']; }
+}
+
+function inq_group_set_status(PDO $db, int $groupId, string $status, int $uid): array {
+    if (!in_array($status, ['open','closed'], true)) return ['success'=>false, 'message'=>'狀態不合法'];
+    try {
+        $db->prepare("UPDATE inq_group SET status=?, modified_by=?, modified_at=NOW() WHERE id=?")->execute([$status, $uid, $groupId]);
+        return ['success'=>true];
+    } catch (Throwable $e) { return ['success'=>false, 'message'=>'操作失敗']; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   公司資料（發票全名/地址/電話/傳真，動態取，禁寫死——ai-rules/16）
+   ════════════════════════════════════════════════════════════════════════ */
+function inq_own_company(PDO $db): array {
+    try {
+        $r = $db->query("SELECT customer_full, customer_tel, customer_fax, customer_address
+                          FROM customer_list WHERE is_own_company=1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        return $r ?: ['customer_full'=>'', 'customer_tel'=>'', 'customer_fax'=>'', 'customer_address'=>''];
+    } catch (Throwable $e) { return ['customer_full'=>'', 'customer_tel'=>'', 'customer_fax'=>'', 'customer_address'=>'']; }
+}
+
+/** 列印一張子單所需的全部資料（公司資訊／詢價案表頭／廠商／項目／AS 文件編號） */
+function inq_print_doc_data(PDO $db, int $docId): ?array {
+    $d = inq_doc_row($db, $docId);
+    if (!$d) return null;
+    $g = inq_group_row($db, (int)$d['group_id']);
+    if (!$g) return null;
+    $d['items'] = inq_doc_items($db, $docId);
+    return ['doc'=>$d, 'group'=>$g, 'company'=>inq_own_company($db)];
+}
+
+}

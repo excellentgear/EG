@@ -52,7 +52,10 @@ function eg_asdoc_linked_modules(): array {
         'packaging_inspection' => ['name' => '包裝出貨檢驗表',        'url' => 'pm/packing_schedule.php'],
         'purchase_order'       => ['name' => '申請採購 · 廠商採購單', 'url' => 'pages/purchase_request.php'],
         'purchase_request'     => ['name' => '申請採購 · 請購單',     'url' => 'pages/purchase_request.php'],
-        'purchase_inquiry'     => ['name' => '申請採購 · 詢價單',     'url' => 'pages/purchase_request.php'],
+        // 2026-10-08：詢價單改做成業務／生管／採購共用的獨立頁面，原本掛在 as_document.id=94
+        // 的 'purchase_inquiry'（指向申請採購頁內的「採購詢價」步驟）已改存成 'inquiry'，
+        // 兩者不並存——申請採購頁那個步驟仍在（補登最終成交價用），只是它不再是這份 AS 文件的網頁化頁面。
+        'inquiry'              => ['name' => '詢價單',               'url' => 'pm/inquiry_sheet.php'],
     ];
 }
 
