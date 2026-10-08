@@ -63,6 +63,10 @@ case 'vendors': {
     jout(true, ['rows' => inq_vendor_list($db)]);
 }
 
+case 'vendor_categories': {
+    jout(true, ['rows' => inq_vendor_categories($db)]);
+}
+
 case 'part_search': {
     jout(true, ['rows' => inq_part_search($db, (string)($_GET['kw'] ?? ''))]);
 }
@@ -80,24 +84,23 @@ case 'dept_settings': {
 }
 
 case 'create': {
-    if (!$perms['canCreate']) jerr('沒有建立詢價單的權限');
+    if (!$perms['canCreate']) jerr('不是業務／生管／採購的任職或兼任人員，不能新增詢價單');
     $dept = (string)($_POST['source_dept'] ?? '');
-    if (!$perms['canAdmin'] && !in_array($dept, $perms['myDepts'], true)) {
-        jerr('不是這個部門的人員，不能用這個部門身分建立詢價單');
+    // 詢價人員／詢價日期一律不採信前端送來的值（inq_group_create 內部固定用本人與今天），
+    // 來源部門一律要在使用者實際任職/兼任的部門範圍內——這裡**不給管理員身分豁免**。
+    if (!in_array($dept, $perms['myDepts'], true)) {
+        jerr('不是這個部門的任職或兼任人員，不能用這個部門身分建立詢價單');
     }
     $items = json_decode((string)($_POST['items'] ?? '[]'), true) ?: [];
     $vendorIds = json_decode((string)($_POST['vendor_ids'] ?? '[]'), true) ?: [];
     $p = [
-        'source_dept'   => $dept,
-        'items'         => $items,
-        'vendor_ids'    => $vendorIds,
-        'bind_type'     => (string)($_POST['bind_type'] ?? ''),
-        'bind_ref'      => (string)($_POST['bind_ref'] ?? ''),
-        'requester_id'  => (int)($_POST['requester_id'] ?? $uid),
-        'requester_name'=> (string)($_POST['requester_name'] ?? ''),
-        'inquiry_date'  => (string)($_POST['inquiry_date'] ?? date('Y-m-d')),
-        'currency'      => (string)($_POST['currency'] ?? 'NTD'),
-        'note'          => (string)($_POST['note'] ?? ''),
+        'source_dept' => $dept,
+        'items'       => $items,
+        'vendor_ids'  => $vendorIds,
+        'bind_type'   => (string)($_POST['bind_type'] ?? ''),
+        'bind_ref'    => (string)($_POST['bind_ref'] ?? ''),
+        'currency'    => (string)($_POST['currency'] ?? 'NTD'),
+        'note'        => (string)($_POST['note'] ?? ''),
     ];
     $res = inq_group_create($db, $p, $uid, $perms['name']);
     if (!$res['success']) jerr($res['message']);
@@ -109,13 +112,12 @@ case 'update_group': {
     $g = inq_group_row($db, $gid);
     if (!$g) jerr('找不到這個詢價案');
     if (!inq_can_edit_dept($perms, $g['source_dept'])) jerr('沒有這個部門的編輯權限');
+    // 詢價人員／詢價日期不可改，inq_group_update() 內部一律沿用原值，這裡不接受也不往下傳
     $items = json_decode((string)($_POST['items'] ?? 'null'), true);
     $p = [
-        'inquiry_date'    => (string)($_POST['inquiry_date'] ?? $g['inquiry_date']),
-        'currency'        => (string)($_POST['currency'] ?? $g['currency']),
-        'note'            => (string)($_POST['note'] ?? ($g['note'] ?? '')),
-        'requester_name'  => (string)($_POST['requester_name'] ?? $g['requester_name']),
-        'items'           => is_array($items) ? $items : null,
+        'currency' => (string)($_POST['currency'] ?? $g['currency']),
+        'note'     => (string)($_POST['note'] ?? ($g['note'] ?? '')),
+        'items'    => is_array($items) ? $items : null,
     ];
     $res = inq_group_update($db, $gid, $p, $uid);
     if (!$res['success']) jerr($res['message']);
@@ -240,6 +242,23 @@ case 'dept_setting_save': {
     $ok = inq_dept_setting_save($db, $key, (bool)($_POST['allow_free_part'] ?? 0), (bool)($_POST['allow_custom_spec'] ?? 0), $uid);
     if (!$ok) jerr('儲存失敗');
     jout(true, ['dept_set' => inq_dept_settings_all($db)]);
+}
+
+/* ── 備註常用用語：只要能新增詢價單就能新增/編輯/刪除自己設定的，管理員額外可管別人的 ── */
+case 'note_tpl_list': {
+    jout(true, ['rows' => inq_note_tpl_list($db, $perms['myDepts'], $uid, $perms['canAdmin'])]);
+}
+case 'note_tpl_save': {
+    if (!$perms['canCreate'] && !$perms['canAdmin']) jerr('不是業務／生管／採購的任職或兼任人員，不能設定常用用語');
+    $res = inq_note_tpl_save($db, (int)($_POST['id'] ?? 0), (string)($_POST['scope'] ?? ''), (string)($_POST['dept_key'] ?? ''),
+                              (string)($_POST['content'] ?? ''), $perms['myDepts'], $uid, $perms['name'], $perms['canAdmin']);
+    if (!$res['success']) jerr($res['message']);
+    jout(true, ['id' => $res['id'], 'rows' => inq_note_tpl_list($db, $perms['myDepts'], $uid, $perms['canAdmin'])]);
+}
+case 'note_tpl_delete': {
+    $res = inq_note_tpl_delete($db, (int)($_POST['id'] ?? 0), $uid, $perms['canAdmin']);
+    if (!$res['success']) jerr($res['message']);
+    jout(true, ['rows' => inq_note_tpl_list($db, $perms['myDepts'], $uid, $perms['canAdmin'])]);
 }
 
 default:

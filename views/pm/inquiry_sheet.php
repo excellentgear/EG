@@ -95,8 +95,21 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         .m-body input[type=text], .m-body input[type=date], .m-body input[type=number], .m-body select, .m-body textarea {
             width:100%; border:1px solid #D8BE93; border-radius:4px; padding:5px 8px; font-size:13px; color:#5b3a1e; box-sizing:border-box; }
         .m-body textarea { resize:vertical; }
-        .ro-auto { background:#F3EADB !important; color:#7a6446; }
+        .ro-auto, .m-body input:disabled, .m-body input[readonly] { background:#F3EADB !important; color:#7a6446; cursor:not-allowed; }
         .iq-hint { font-size:12px; color:#8a6d45; line-height:1.7; margin:4px 0 8px; }
+        .iq-cat-wrap { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:6px; }
+        .iq-cat-grp { font-size:11px; color:#999; align-self:center; margin-right:-2px; }
+        .iq-chip { display:inline-block; padding:2px 10px; border-radius:11px; font-size:12px; border:1px solid #D8BE93;
+            background:#fff; color:#5b3a1e; cursor:pointer; user-select:none; }
+        .iq-chip:hover { background:#FDF3E3; }
+        .iq-chip.on { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        .iq-note-tpl { display:flex; flex-wrap:wrap; gap:5px; align-items:center; margin-top:6px; }
+        .iq-note-tpl .iq-chip { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .iq-note-manage { font-size:12px; color:#b5762a; cursor:pointer; text-decoration:underline; }
+        .iq-tpl-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #EADFC8; font-size:13px; }
+        .iq-tpl-row .ct { flex:1; }
+        .iq-tpl-row .badge { font-size:11px; padding:1px 8px; border-radius:10px; background:#F7E0BD; color:#8A5A2B; white-space:nowrap; }
+        .iq-tpl-row .by { font-size:11px; color:#999; white-space:nowrap; }
         .iq-err { color:#DD5138; font-size:12px; margin-top:2px; min-height:16px; }
         table.item-tbl { width:100%; border-collapse:collapse; font-size:13px; }
         table.item-tbl th, table.item-tbl td { border:1px solid #EADFC8; padding:4px 5px; text-align:center; position:relative; }
@@ -167,8 +180,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
     <div class="m-body">
         <div class="grid4">
             <div><label>來源部門</label><select id="gDept"></select></div>
-            <div><label>詢價人員</label><input type="text" id="gReq"></div>
-            <div><label>詢價日期</label><input type="date" id="gDate"></div>
+            <div><label>詢價人員</label><input type="text" id="gReq" readonly class="ro-auto" title="固定為目前登入者，不可修改"></div>
+            <div><label>詢價日期</label><input type="date" id="gDate" disabled class="ro-auto" title="固定為今天，不可修改"></div>
             <div><label>幣別</label><select id="gCurr"><option>NTD</option><option>USD</option><option>CNY</option><option>JPY</option><option>EUR</option></select></div>
         </div>
         <div style="margin-top:10px;">
@@ -190,10 +203,15 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         </div>
         <div id="gVendorWrap" style="margin-top:12px;">
             <label>廠商（可多選，建立後自動展開成多張詢價單）</label>
+            <div class="iq-cat-wrap" id="gVendorCats"></div>
             <input type="text" id="gVendorKw" placeholder="輸入廠商名稱或代號篩選…" style="margin-bottom:6px;">
             <div class="vendor-box" id="gVendorBox"></div>
         </div>
-        <div style="margin-top:12px;"><label>備註</label><textarea id="gNote" rows="2"></textarea></div>
+        <div style="margin-top:12px;">
+            <label>備註</label>
+            <textarea id="gNote" rows="2"></textarea>
+            <div class="iq-note-tpl" id="gNoteTpl"><span class="iq-note-manage" id="btnNoteManage">管理常用用語</span></div>
+        </div>
         <div class="iq-err" id="gErr"></div>
     </div>
     <div class="m-foot"><button onclick="closeMask('gMask')">取消</button><button class="b-ok" id="gSave">儲存</button></div>
@@ -204,6 +222,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
     <div class="m-head"><span>新增廠商</span><span class="m-close" onclick="closeMask('avMask')">✕</span></div>
     <div class="m-body">
         <div class="iq-hint">會依這個詢價案目前的項目內容，各自展開成一張新的詢價單（跟隨母單）。</div>
+        <div class="iq-cat-wrap" id="avVendorCats"></div>
         <input type="text" id="avVendorKw" placeholder="輸入廠商名稱或代號篩選…" style="margin-bottom:6px;">
         <div class="vendor-box" id="avVendorBox"></div>
         <div class="iq-err" id="avErr"></div>
@@ -253,6 +272,26 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
     <div class="m-foot"><button class="b-ok" onclick="closeMask('setMask')">關閉</button></div>
 </div></div>
 
+<!-- ══ 備註常用用語管理 ══ -->
+<div class="iq-mask" id="tplMask"><div class="iq-modal narrow">
+    <div class="m-head"><span>備註常用用語</span><span class="m-close" onclick="closeMask('tplMask')">✕</span></div>
+    <div class="m-body">
+        <div class="iq-hint">任何能新增詢價單的人都可以新增，並編輯／刪除<b>自己設定</b>的項目；「部門」只有同部門的人看得到可以選用，「公開」所有來源部門都看得到。</div>
+        <div id="tplList"></div>
+        <div style="margin-top:12px;border-top:1px solid #EADFC8;padding-top:10px;">
+            <label>新增用語</label>
+            <textarea id="tplContent" rows="2" placeholder="輸入常用備註內容…"></textarea>
+            <div class="grid2" style="margin-top:6px;">
+                <div><label>適用範圍</label><select id="tplScope"><option value="public">公開（所有部門）</option><option value="dept">部門限定</option></select></div>
+                <div id="tplDeptWrap" style="display:none;"><label>部門</label><select id="tplDeptSel"></select></div>
+            </div>
+            <div class="iq-err" id="tplErr"></div>
+            <div style="text-align:right;margin-top:8px;"><button type="button" class="b-ok" id="tplAdd" style="height:32px;border-radius:4px;border:1px solid #d98a33;background:#F0A24B;color:#fff;cursor:pointer;">新增</button></div>
+        </div>
+    </div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('tplMask')">關閉</button></div>
+</div></div>
+
 <!-- ══ 使用說明 ══ -->
 <div class="iq-mask" id="helpUseMask"><div class="iq-modal">
     <div class="m-head"><span>使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
@@ -270,6 +309,15 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         <h4>部門使用規則（管理員可設定）</h4>
         <p>管理員可以在「模組設定」逐部門（業務／生管／採購）決定：是否允許用「非實際存在的料號」詢價（產品編號可以純打字不綁主檔），
         以及是否允許自訂規格（不是由料號主檔帶出的唯讀文字）。兩者預設都關閉（要求綁真實料號、規格由主檔帶出）。</p>
+        <h4>詢價人員／詢價日期／來源部門</h4>
+        <p>詢價人員固定是目前登入者本人、詢價日期固定是今天，建立後都不能再改。來源部門只會列出自己實際任職或兼任的部門——
+        不屬於業務／生管／採購任何一個部門的帳號，無法新增詢價單（只能視權限檢視或設定）。</p>
+        <h4>廠商篩選</h4>
+        <p>廠商清單可以依「加工類別」標籤（與主檔管理廠商分頁同一套分類）點選縮小範圍，也可以同時打關鍵字篩選；
+        篩選只是「目前看得到誰」，換篩選條件或清空篩選，已經勾選的廠商不會被取消。</p>
+        <h4>備註常用用語</h4>
+        <p>備註欄下方可以點選常用用語直接帶入（可多次點選疊加），不會強制套用。任何能新增詢價單的人都可以在「管理常用用語」
+        新增自己的用語，並編輯／刪除<b>自己設定的</b>項目；用語分「部門」（僅同部門看得到）與「公開」（所有部門都看得到）兩種。</p>
         <h4>列印</h4>
         <p>每張子單可以單獨列印，也可以在詢價案列表按「列印全部」把這個詢價案展開的所有子單一次印出（各佔一頁）。
         列印版會動態帶出公司全名、地址、電話、傳真，右下角印綁定的 AS 文件編號（依詢價日期回推版次）。</p>
@@ -516,22 +564,59 @@ function renderVendorBox($box, rows, checkedIds, disabledIds){
     rows.forEach(function(v){
         var dis = disabledIds.indexOf(v.maker_id_no) >= 0;
         var chk = checkedIds.indexOf(v.maker_id_no) >= 0;
-        var lb = $('<label></label>').append(
+        var lb = $('<label></label>').attr('data-cats', (v.sub_cat_ids||[]).join(',')).append(
             $('<input type="checkbox">').val(v.maker_id_no).prop('checked', chk).prop('disabled', dis)
         ).append(' ' + v.maker_id_no + '　' + esc(v.maker_id) + (dis ? '（已在詢價案內）' : ''));
         $box.append(lb);
     });
 }
-function filterVendorBox($box, kw){
+/* 關鍵字與加工類別標籤一起篩（AND）；標籤本身是「符合任一個已選標籤」（OR）。
+   不要求一次篩選就要勾選完——這裡只是顯示/隱藏，已勾選的 checkbox 狀態完全不受影響。 */
+function filterVendorBox($box, kw, selCats){
     kw = (kw||'').toLowerCase();
-    $box.find('label').each(function(){ var t=$(this).text().toLowerCase(); $(this).toggle(t.indexOf(kw)>=0); });
+    selCats = selCats || [];
+    $box.find('label').each(function(){
+        var $lb = $(this);
+        var okKw = !kw || $lb.text().toLowerCase().indexOf(kw) >= 0;
+        var okCat = true;
+        if (selCats.length) {
+            var cats = ($lb.attr('data-cats')||'').split(',').filter(function(x){return x;});
+            okCat = cats.some(function(c){ return selCats.indexOf(c) >= 0; });
+        }
+        $lb.toggle(okKw && okCat);
+    });
+}
+/* 加工類別標籤篩選區：點擊切換 .on，重新套用篩選（跟關鍵字共用 filterVendorBox）。
+   目前已選的標籤一律**當場從畫面上的 .on 讀出**，不額外存一份陣列，避免兩邊對不起來。 */
+var VENDOR_CATS = null;
+function loadVendorCats(cb){
+    if (VENDOR_CATS) { cb(VENDOR_CATS); return; }
+    $.getJSON(API, {action:'vendor_categories'}, function(res){ VENDOR_CATS = res.rows||[]; cb(VENDOR_CATS); });
+}
+function selectedCats($wrap){ return $wrap.find('.iq-chip.on').map(function(){ return String($(this).data('id')); }).get(); }
+function renderCatChips($wrap, $box, $kwInput){
+    loadVendorCats(function(groups){
+        $wrap.empty();
+        if (!groups.length) return;
+        groups.forEach(function(g){
+            $wrap.append('<span class="iq-cat-grp">'+esc(g.main_cat_name)+'：</span>');
+            g.subs.forEach(function(s){
+                var chip = $('<span class="iq-chip"></span>').text(s.sub_cat_name).data('id', s.sub_cat_id);
+                chip.on('click', function(){
+                    chip.toggleClass('on');
+                    filterVendorBox($box, $kwInput.val(), selectedCats($wrap));
+                });
+                $wrap.append(chip);
+            });
+        });
+    });
+    $kwInput.off('input.cat').on('input.cat', function(){ filterVendorBox($box, $(this).val(), selectedCats($wrap)); });
 }
 
 /* ───────────────────── 新增 / 編輯 詢價案 ───────────────────── */
 function fillDeptOptions($sel){
     $sel.empty();
-    var depts = PERM.canAdmin ? ['sales','pmc','purchase'] : (PERM.myDepts||[]);
-    depts.forEach(function(d){ $sel.append('<option value="'+d+'">'+DEPT_LABEL[d]+'</option>'); });
+    (PERM.myDepts||[]).forEach(function(d){ $sel.append('<option value="'+d+'">'+DEPT_LABEL[d]+'</option>'); });
 }
 function openNewGroup(){
     CUR_GROUP = null; CUR_BIND = null;
@@ -547,11 +632,17 @@ function openNewGroup(){
     $('#gBindTag').hide(); $('#gBindClear').hide();
     $('#gVendorWrap').show();
     $('#gErr').text('');
+    $('#gVendorKw').val('');
+    $('#gNoteTpl').show();
     var $tb = $('#gItemTbl tbody').empty();
     loadDeptSettings(function(){
         addItemRow($tb, DEPT_SET[$('#gDept').val()]||{}, false);
-        loadVendors(function(rows){ renderVendorBox($('#gVendorBox'), rows, [], []); });
+        loadVendors(function(rows){
+            renderVendorBox($('#gVendorBox'), rows, [], []);
+            renderCatChips($('#gVendorCats'), $('#gVendorBox'), $('#gVendorKw'));
+        });
     });
+    renderNoteTplChips();
     $('#gSave').off('click').on('click', saveNewGroup);
     openMask('gMask');
 }
@@ -561,6 +652,7 @@ function refreshGDeptUI(){
         var $tr = $(this);
         $tr.find('.it-spec').prop('readonly', !ds.allow_custom_spec && ($tr.attr('data-part-id')||$tr.find('.it-part').val())).toggleClass('ro-auto', !ds.allow_custom_spec);
     });
+    renderNoteTplChips();
 }
 function saveNewGroup(){
     var items = collectItems($('#gItemTbl tbody'), false);
@@ -571,7 +663,7 @@ function saveNewGroup(){
     post('create', {
         source_dept: $('#gDept').val(), items: JSON.stringify(items), vendor_ids: JSON.stringify(vendorIds),
         bind_type: $('#gBindType').val(), bind_ref: CUR_BIND ? CUR_BIND.ref : '',
-        requester_name: $('#gReq').val(), inquiry_date: $('#gDate').val(), currency: $('#gCurr').val(), note: $('#gNote').val()
+        currency: $('#gCurr').val(), note: $('#gNote').val()
     }, function(res){ closeMask('gMask'); loadList(); alert('已建立，展開成 '+res.doc_ids.length+' 張詢價單'); });
 }
 function openGroupEdit(gid){
@@ -590,6 +682,8 @@ function openGroupEdit(gid){
         if (g.bind_label) { $('#gBindTag').text((g.bind_type==='bom'?'BOM：':'請購單：')+g.bind_label).show(); } else { $('#gBindTag').hide(); }
         $('#gBindClear').hide();
         $('#gVendorWrap').hide();
+        $('#gNoteTpl').show();
+        renderNoteTplChips(g.source_dept);
         $('#gErr').text('');
         loadDeptSettings(function(){
             var ds = DEPT_SET[g.source_dept] || {};
@@ -609,8 +703,7 @@ function saveGroupEdit(gid){
     if (!items.length) { $('#gErr').text('至少要有一列詢價項目'); return; }
     $('#gErr').text('');
     post('update_group', {
-        id: gid, items: JSON.stringify(items), requester_name: $('#gReq').val(),
-        inquiry_date: $('#gDate').val(), currency: $('#gCurr').val(), note: $('#gNote').val()
+        id: gid, items: JSON.stringify(items), currency: $('#gCurr').val(), note: $('#gNote').val()
     }, function(){ closeMask('gMask'); loadList(); });
 }
 
@@ -625,15 +718,16 @@ function openBind(gid){
     // 重用新增詢價的綑定輸入格，但這裡是獨立動作：改標題與儲存行為
     $('#gTitle').text('詢價案 #'+gid+'　綑定對象');
     $('#gDept').empty().append('<option>'+DEPT_LABEL[g.source_dept]+'</option>').prop('disabled', true).off('change');
-    $('#gReq').val(g.requester_name).prop('disabled', true);
-    $('#gDate').val(g.inquiry_date).prop('disabled', true);
+    $('#gReq').val(g.requester_name);   // 一律 readonly，不需要再切換
+    $('#gDate').val(g.inquiry_date);    // 一律 disabled，不需要再切換
     $('#gCurr').val(g.currency).prop('disabled', true);
     $('#gNote').val(g.note||'').prop('disabled', true);
+    $('#gNoteTpl').hide();
     $('#gItemTbl').closest('div').hide();
     $('#gSave').off('click').on('click', function(){
         post('bind', {id:gid, bind_type:$('#gBindType').val(), bind_ref: CUR_BIND ? CUR_BIND.ref : ''}, function(){
             closeMask('gMask'); loadList();
-            $('#gReq,#gDate,#gCurr,#gNote').prop('disabled', false); $('#gItemTbl').closest('div').show();
+            $('#gCurr,#gNote').prop('disabled', false); $('#gNoteTpl').show(); $('#gItemTbl').closest('div').show();
         });
     });
     openMask('gMask');
@@ -681,11 +775,13 @@ function openAddVendor(gid){
     $('#avErr').text('');
     var g = GROUPS.find(function(x){return x.id===gid;});
     var existing = (g.docs||[]).map(function(d){return d.vendor_id;});
-    loadVendors(function(rows){ renderVendorBox($('#avVendorBox'), rows, [], existing); });
+    loadVendors(function(rows){
+        renderVendorBox($('#avVendorBox'), rows, [], existing);
+        $('#avVendorKw').val('');
+        renderCatChips($('#avVendorCats'), $('#avVendorBox'), $('#avVendorKw'));
+    });
     openMask('avMask');
 }
-$('#avVendorKw').on('input', function(){ filterVendorBox($('#avVendorBox'), $(this).val()); });
-$('#gVendorKw').on('input', function(){ filterVendorBox($('#gVendorBox'), $(this).val()); });
 $('#avSave').on('click', function(){
     var vendorIds = $('#avVendorBox input:checked').map(function(){return $(this).val();}).get();
     if (!vendorIds.length) { $('#avErr').text('至少要選一家廠商'); return; }
@@ -812,6 +908,67 @@ function printAllDocs(gid){
         });
     });
 }
+
+/* ───────────────────── 備註常用用語 ───────────────────── */
+var NOTE_TPLS = null;
+function loadNoteTpls(cb){ $.getJSON(API, {action:'note_tpl_list'}, function(res){ NOTE_TPLS = res.rows||[]; cb && cb(NOTE_TPLS); }); }
+/* 建立模式沒給 deptKey 時用目前選的 #gDept；編輯模式呼叫端直接傳該詢價案的 source_dept */
+function renderNoteTplChips(deptKey){
+    deptKey = deptKey || $('#gDept').val();
+    loadNoteTpls(function(rows){
+        var $wrap = $('#gNoteTpl').empty();
+        rows.filter(function(r){ return r.scope==='public' || r.dept_key===deptKey; }).forEach(function(r){
+            var chip = $('<span class="iq-chip"></span>').text(r.content).attr('title', r.content + (r.scope==='dept' ? '（'+DEPT_LABEL[r.dept_key]+'限定）' : '（公開）'));
+            chip.on('click', function(){
+                var cur = $('#gNote').val();
+                $('#gNote').val(cur ? (cur + '\n' + r.content) : r.content);
+            });
+            $wrap.append(chip);
+        });
+        $wrap.append('<span class="iq-note-manage" id="btnNoteManage">管理常用用語</span>');
+        $('#btnNoteManage').off('click').on('click', openNoteTplManage);
+    });
+}
+function tplDeptSelFill(){
+    var $sel = $('#tplDeptSel').empty();
+    (PERM.myDepts||[]).forEach(function(d){ $sel.append('<option value="'+d+'">'+DEPT_LABEL[d]+'</option>'); });
+}
+function renderTplList(){
+    loadNoteTpls(function(rows){
+        var box = $('#tplList').empty();
+        if (!rows.length) { box.append('<div class="iq-hint">目前還沒有任何常用用語。</div>'); return; }
+        rows.forEach(function(r){
+            var badge = r.scope==='public' ? '公開' : ('部門：'+DEPT_LABEL[r.dept_key]);
+            var row = $('<div class="iq-tpl-row"></div>')
+                .append('<span class="ct">'+esc(r.content)+'</span>')
+                .append('<span class="badge">'+badge+'</span>')
+                .append('<span class="by">'+esc(r.created_by_name||'')+'</span>');
+            if (r.can_edit) {
+                row.append($('<span class="iq-op" style="color:#DD5138;">刪除</span>').on('click', function(){
+                    if (!confirm('確定要刪除這個常用用語？')) return;
+                    post('note_tpl_delete', {id:r.id}, function(res){ NOTE_TPLS=res.rows; renderTplList(); renderNoteTplChips(); });
+                }));
+            }
+            box.append(row);
+        });
+    });
+}
+function openNoteTplManage(){
+    $('#tplContent').val(''); $('#tplScope').val('public'); $('#tplDeptWrap').hide(); $('#tplErr').text('');
+    tplDeptSelFill();
+    renderTplList();
+    openMask('tplMask');
+}
+$('#tplScope').on('change', function(){ $('#tplDeptWrap').toggle($(this).val()==='dept'); });
+$('#tplAdd').on('click', function(){
+    var content = $('#tplContent').val().trim();
+    if (!content) { $('#tplErr').text('請輸入內容'); return; }
+    var scope = $('#tplScope').val();
+    post('note_tpl_save', {content:content, scope:scope, dept_key: scope==='dept' ? $('#tplDeptSel').val() : ''}, function(res){
+        $('#tplContent').val(''); $('#tplErr').text('');
+        NOTE_TPLS = res.rows; renderTplList(); renderNoteTplChips();
+    });
+});
 
 /* ───────────────────── 模組設定（AS 文件綁定＋部門規則） ───────────────────── */
 var AS_DOC = null, AS_DOCS = [];

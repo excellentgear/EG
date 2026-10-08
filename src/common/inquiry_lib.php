@@ -21,6 +21,18 @@
  *   allow_free_part   —— 允許用「非實際存在的料號」詢價（產品編號可以不綁料號主檔，純打字）
  *   allow_custom_spec —— 允許自訂規格（不是由料號主檔帶出的唯讀文字，使用者自己打規格）
  * 兩者都預設關閉（嚴格：要求綁真實料號、規格由料號帶出），管理員可視需要逐部門放寬。
+ *
+ * 2026-10-08 使用者再次交辦收斂的規則（皆前後端雙重把關，鐵律8）：
+ *   - 詢價人員一律＝目前登入者本人，不可修改、也不接受前端送來的值；詢價日期一律＝伺服器今天，
+ *     建立後不可再改（不接受前端送來的值）——這兩項是「這是誰、哪天問的」的事實，不是可編輯欄位。
+ *   - 能不能「新增詢價單」完全看使用者**實際任職或兼任**於業務／生管／採購哪些部門（含管理員，
+ *     管理員若本身不在這三個部門一樣不能新增，只能設定/檢視），來源部門下拉也只列這些。
+ *   - 廠商可依「加工類別」標籤（既有 dict_maker_main_category／dict_maker_sub_category／
+ *     maker_sub_category_mapping，master_data 廠商分頁同一套，不另建新的分類系統）篩選縮小勾選清單，
+ *     篩選只影響「目前看得到誰」，已勾選的廠商換篩選條件也不會被洗掉。
+ *   - 備註可選用「常用用語」範本（inq_note_tpl）：分「部門」（僅同部門語境可見可用）與「公開」
+ *     （所有來源部門都看得到）兩種；任何可以新增詢價單的人都能新增/編輯/刪除**自己**設定的範本
+ *     （管理員額外可編輯/刪除別人的，供日常維護），點選是「帶入」備註欄而不是強制套用。
  */
 if (!defined('EG_INQUIRY_LIB')) {
 define('EG_INQUIRY_LIB', 1);
@@ -137,6 +149,18 @@ function inq_ensure_schema(PDO $db): void {
                 $db->prepare("INSERT INTO inq_dept_setting (dept_key) VALUES (?)")->execute([$k]);
             }
         }
+        if (!$exists($db, 'inq_note_tpl')) {
+            $db->exec("CREATE TABLE inq_note_tpl (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                scope VARCHAR(10) NOT NULL COMMENT 'dept/public',
+                dept_key VARCHAR(20) NULL COMMENT 'scope=dept 時適用的部門',
+                content VARCHAR(255) NOT NULL,
+                created_by INT NOT NULL,
+                created_by_name VARCHAR(60) NULL,
+                created_at DATETIME NULL,
+                INDEX idx_scope (scope, dept_key)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='詢價單·備註常用用語'");
+        }
         $done = true;
     } catch (Throwable $e) { error_log('[inq] ensure_schema: ' . $e->getMessage()); }
 }
@@ -177,8 +201,10 @@ function inq_perms(PDO $db, int $uid): array {
     $isAdmin  = $uid === 1 || $has(['admin','superadmin']);
     $canAdmin = $isAdmin || $has(['inquiry_admin']);
     $myDepts  = inq_user_dept_keys($db, $uid);
-    $canCreate = $canAdmin || !empty($myDepts) || $has(['inquiry_create']);
-    $canView   = $canCreate || $has(['inquiry_view']);
+    // 新增詢價單一律只看「實際任職或兼任於業務／生管／採購」，管理員身分不豁免這一條
+    // （使用者明確要求：不在這三個部門就不可以新增——新增詢價單是在代表一個真實業務角色去問價）。
+    $canCreate = !empty($myDepts);
+    $canView   = $canCreate || $canAdmin || $has(['inquiry_view']);
 
     return ['uid'=>$uid, 'name'=>(string)($u['user_cname'] ?: $u['user_uname']),
             'isAdmin'=>$isAdmin, 'canAdmin'=>$canAdmin, 'canCreate'=>$canCreate, 'canView'=>$canView, 'myDepts'=>$myDepts];
@@ -243,9 +269,39 @@ function inq_next_doc_no(PDO $db, string $vendorIdNo, string $date): string {
    ════════════════════════════════════════════════════════════════════════ */
 function inq_vendor_list(PDO $db): array {
     try {
-        return $db->query("SELECT maker_id_no, maker_id, contact_person, contact_title, m_tel, m_tel2, m_fax
+        $rows = $db->query("SELECT maker_id_no, maker_id, contact_person, contact_title, m_tel, m_tel2, m_fax
                             FROM maker_list WHERE status IS NULL OR status<>'X' ORDER BY maker_id_no")
                    ->fetchAll(PDO::FETCH_ASSOC);
+        // 每家廠商附上「加工類別」sub_cat_id 清單，前端依此做標籤篩選（既有 master_data 廠商分頁同一套分類）
+        $cat = [];
+        foreach ($db->query("SELECT maker_id_no, sub_cat_id FROM maker_sub_category_mapping") as $r) {
+            $cat[$r['maker_id_no']][] = (int)$r['sub_cat_id'];
+        }
+        foreach ($rows as &$r) { $r['sub_cat_ids'] = $cat[$r['maker_id_no']] ?? []; }
+        return $rows;
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 廠商「加工類別」標籤階層（既有 dict_maker_main_category／dict_maker_sub_category／
+ * maker_category_hierarchy，master_data 廠商分頁同一套，不另建分類系統）。
+ * @return array [{main_cat_id, main_cat_name, subs:[{sub_cat_id, sub_cat_name, sub_cat_group}]}]
+ */
+function inq_vendor_categories(PDO $db): array {
+    try {
+        $main = $db->query("SELECT main_cat_id, main_cat_name FROM dict_maker_main_category WHERE is_active=1 ORDER BY sort_order")
+                   ->fetchAll(PDO::FETCH_ASSOC);
+        $out = [];
+        foreach ($main as $m) {
+            $st = $db->prepare("SELECT s.sub_cat_id, s.sub_cat_name, s.sub_cat_group
+                                FROM maker_category_hierarchy h
+                                JOIN dict_maker_sub_category s ON s.sub_cat_id=h.sub_cat_id AND s.is_active=1
+                                WHERE h.main_cat_id=? ORDER BY h.sort_order");
+            $st->execute([$m['main_cat_id']]);
+            $subs = $st->fetchAll(PDO::FETCH_ASSOC);
+            if ($subs) { $out[] = ['main_cat_id'=>(int)$m['main_cat_id'], 'main_cat_name'=>$m['main_cat_name'], 'subs'=>$subs]; }
+        }
+        return $out;
     } catch (Throwable $e) { return []; }
 }
 function inq_vendor_snapshot(PDO $db, string $vendorIdNo): ?array {
@@ -411,9 +467,10 @@ function inq_group_create(PDO $db, array $p, int $uid, string $uname): array {
     $bindRef  = trim((string)($p['bind_ref'] ?? ''));
     $bindLabel = ($bindType && $bindRef) ? inq_bind_label($db, $bindType, $bindRef) : null;
 
-    $date = (string)($p['inquiry_date'] ?? date('Y-m-d'));
-    $reqId   = (int)($p['requester_id'] ?? $uid) ?: $uid;
-    $reqName = trim((string)($p['requester_name'] ?? '')) ?: $uname;
+    // 詢價人員＝本人、詢價日期＝伺服器今天，一律不採信前端送來的值（使用者明確要求不可修改）
+    $date    = date('Y-m-d');
+    $reqId   = $uid;
+    $reqName = $uname;
 
     $db->beginTransaction();
     try {
@@ -579,13 +636,12 @@ function inq_group_update(PDO $db, int $groupId, array $p, int $uid): array {
 
     $db->beginTransaction();
     try {
-        // 表頭（不含來源部門／廠商；那些建立後不給改，要改部門等於是另一筆業務事實）
-        $date    = (string)($p['inquiry_date'] ?? $g['inquiry_date']);
-        $curr    = (string)($p['currency'] ?? $g['currency']) ?: 'NTD';
-        $note    = array_key_exists('note', $p) ? (trim((string)$p['note']) ?: null) : $g['note'];
-        $reqName = array_key_exists('requester_name', $p) ? (trim((string)$p['requester_name']) ?: $g['requester_name']) : $g['requester_name'];
-        $db->prepare("UPDATE inq_group SET inquiry_date=?, currency=?, note=?, requester_name=?, modified_by=?, modified_at=NOW() WHERE id=?")
-           ->execute([$date, $curr, $note, $reqName, $uid, $groupId]);
+        // 表頭：來源部門／廠商／詢價人員／詢價日期一律不給改（前端已鎖，這裡再擋一次，鐵律8）——
+        // 詢價人員＝建立者本人、詢價日期＝建立當天的事實，不是可回頭編輯的欄位。
+        $curr = (string)($p['currency'] ?? $g['currency']) ?: 'NTD';
+        $note = array_key_exists('note', $p) ? (trim((string)$p['note']) ?: null) : $g['note'];
+        $db->prepare("UPDATE inq_group SET currency=?, note=?, modified_by=?, modified_at=NOW() WHERE id=?")
+           ->execute([$curr, $note, $uid, $groupId]);
 
         if ($items !== null) {
             $normItems = [];
@@ -770,6 +826,72 @@ function inq_print_doc_data(PDO $db, int $docId): ?array {
     if (!$g) return null;
     $d['items'] = inq_doc_items($db, $docId);
     return ['doc'=>$d, 'group'=>$g, 'company'=>inq_own_company($db)];
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   備註常用用語（分「部門」／「公開」；任何能新增詢價單的人可管理自己設定的項目，
+   管理員額外可編輯/刪除別人的——使用者 2026-10-08 明確要求）
+   ════════════════════════════════════════════════════════════════════════ */
+
+/** 給這個人看（可選用）的範本：公開的全部 + 他自己任職/兼任部門的「部門」範本 */
+function inq_note_tpl_list(PDO $db, array $myDepts, int $uid, bool $isAdmin): array {
+    inq_ensure_schema($db);
+    try {
+        $where = ["scope='public'"];
+        $params = [];
+        if ($myDepts) {
+            $ph = implode(',', array_fill(0, count($myDepts), '?'));
+            $where[] = "(scope='dept' AND dept_key IN ($ph))";
+            $params = $myDepts;
+        }
+        $sql = "SELECT * FROM inq_note_tpl WHERE " . implode(' OR ', $where) . " ORDER BY scope, dept_key, id DESC";
+        $st = $db->prepare($sql);
+        $st->execute($params);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as &$r) { $r['can_edit'] = $isAdmin || (int)$r['created_by'] === $uid; }
+        return $rows;
+    } catch (Throwable $e) { return []; }
+}
+
+/** $id=0 新增，否則編輯；編輯只能是本人設定的或管理員 */
+function inq_note_tpl_save(PDO $db, int $id, string $scope, string $deptKey, string $content, array $myDepts, int $uid, string $uname, bool $isAdmin): array {
+    $content = trim($content);
+    if ($content === '') return ['success'=>false, 'message'=>'內容不可空白'];
+    if (!in_array($scope, ['dept','public'], true)) return ['success'=>false, 'message'=>'範圍不合法'];
+    if ($scope === 'dept') {
+        if (!isset(inq_depts()[$deptKey])) return ['success'=>false, 'message'=>'部門不合法'];
+        if (!$isAdmin && !in_array($deptKey, $myDepts, true)) return ['success'=>false, 'message'=>'不是這個部門的人員，不能設定這個部門的用語'];
+    } else { $deptKey = ''; }
+
+    inq_ensure_schema($db);
+    try {
+        if ($id > 0) {
+            $st = $db->prepare("SELECT created_by FROM inq_note_tpl WHERE id=?");
+            $st->execute([$id]);
+            $owner = $st->fetchColumn();
+            if ($owner === false) return ['success'=>false, 'message'=>'找不到這個範本'];
+            if (!$isAdmin && (int)$owner !== $uid) return ['success'=>false, 'message'=>'只能編輯自己設定的範本'];
+            $db->prepare("UPDATE inq_note_tpl SET scope=?, dept_key=?, content=? WHERE id=?")
+               ->execute([$scope, $deptKey ?: null, $content, $id]);
+        } else {
+            $db->prepare("INSERT INTO inq_note_tpl (scope, dept_key, content, created_by, created_by_name, created_at) VALUES (?,?,?,?,?,NOW())")
+               ->execute([$scope, $deptKey ?: null, $content, $uid, $uname]);
+            $id = (int)$db->lastInsertId();
+        }
+        return ['success'=>true, 'id'=>$id];
+    } catch (Throwable $e) { return ['success'=>false, 'message'=>'儲存失敗']; }
+}
+
+function inq_note_tpl_delete(PDO $db, int $id, int $uid, bool $isAdmin): array {
+    try {
+        $st = $db->prepare("SELECT created_by FROM inq_note_tpl WHERE id=?");
+        $st->execute([$id]);
+        $owner = $st->fetchColumn();
+        if ($owner === false) return ['success'=>false, 'message'=>'找不到這個範本'];
+        if (!$isAdmin && (int)$owner !== $uid) return ['success'=>false, 'message'=>'只能刪除自己設定的範本'];
+        $db->prepare("DELETE FROM inq_note_tpl WHERE id=?")->execute([$id]);
+        return ['success'=>true];
+    } catch (Throwable $e) { return ['success'=>false, 'message'=>'刪除失敗']; }
 }
 
 }
