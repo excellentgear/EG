@@ -971,45 +971,65 @@ function ul_design_daily_pmget(PDO $db, string $from, string $to, array $designe
  * 訂單標籤分布（AS 認定的稽核製程標籤，order_track.as_tag_id → ot_as_proc_tag 唯一定義表）。
  * 依下單日歸屬期間——標籤是訂單的屬性，用下單日判斷「這張單算不算這一期」最直觀；
  * 若要改成依「貼標籤當下」(as_tag_at) 篩選，留給下一階段依使用者意見再調。
+ *
+ * 2026-10-08 修正：使用者回報本頁顯示的標籤名稱跟訂單追蹤設定的標籤「好像不同」——
+ * 查證發現根因是**顯示文字沒有呼叫唯一實作 `ot_astag_make_label()`**，直接拿
+ * `ot_as_proc_tag.proc_name` 原始值當名稱：kind='process' 的稽核製程標籤（如「齒研」）
+ * 依 `order_track.as_tag_scope` 不同，正式顯示文字其實是「單製齒研」或「全製含齒研」
+ * （kind='fixed'/'other' 如「全製」「廠內治具」才是裸名稱本身）；GROUP BY 也只用
+ * `tag_id` 沒有連 `as_tag_scope` 一起分組，同一個 tag_id 若曾被用在不同 scope 會被
+ * 誤併成一列。全站顯示「這個標籤叫什麼」只能呼叫 `ot_astag_label_map()`（唯一實作，
+ * `order_as_tag_lib.php`），不可以再各自拼 proc_name。
  */
 function ul_design_tags(PDO $db, string $from, string $to, array $designerIds): array
 {
     $ids = ul_ids_norm($designerIds);
     if (!$ids) return [];
     $in = implode(',', $ids);
-    $st = $db->prepare("SELECT t.tag_id, COALESCE(t.proc_name,'（未命名標籤）') AS tag_name, COUNT(*) c
+    require_once __DIR__ . '/order_as_tag_lib.php';
+    $labelMap = ot_astag_label_map($db);
+    $st = $db->prepare("SELECT ot.as_tag_id tid, ot.as_tag_scope sc, COUNT(*) c
         FROM order_track ot
-        LEFT JOIN ot_as_proc_tag t ON t.tag_id = ot.as_tag_id
         WHERE ot.ate IN ({$in}) AND ot.as_tag_id IS NOT NULL
           AND ot.Order_date BETWEEN ? AND ? AND (ot.Order_status IS NULL OR ot.Order_status<>6)
           AND (ot.parent_order_id IS NULL OR ot.parent_order_id=0)
-        GROUP BY t.tag_id, tag_name
+        GROUP BY ot.as_tag_id, ot.as_tag_scope
         ORDER BY c DESC");
     $st->execute([$from, $to]);
-    return $st->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $tid = (int)$r['tid']; $sc = (string)($r['sc'] ?? '');
+        $label = $labelMap[$tid . ':' . $sc] ?? ('（標籤#' . $tid . '）');
+        $out[] = ['tag_id' => $tid, 'tag_name' => $label, 'c' => (int)$r['c']];
+    }
+    return $out;
 }
 
-/** ul_design_tags() 的逐人版本（2026-10-08 新增），GROUP BY 多一欄 ate。
+/** ul_design_tags() 的逐人版本（2026-10-08 新增），GROUP BY 多一欄 ate；標籤文字修正見
+ * ul_design_tags() 函式註解，同樣改用 ot_astag_label_map()、同樣連 as_tag_scope 一起分組。
  * @return array uid => [{tag_id,tag_name,c}, ...]（依該人該標籤筆數由大到小） */
 function ul_design_tags_by_person(PDO $db, string $from, string $to, array $designerIds): array
 {
     $ids = ul_ids_norm($designerIds);
     if (!$ids) return [];
     $in = implode(',', $ids);
-    $st = $db->prepare("SELECT ot.ate k, t.tag_id, COALESCE(t.proc_name,'（未命名標籤）') AS tag_name, COUNT(*) c
+    require_once __DIR__ . '/order_as_tag_lib.php';
+    $labelMap = ot_astag_label_map($db);
+    $st = $db->prepare("SELECT ot.ate k, ot.as_tag_id tid, ot.as_tag_scope sc, COUNT(*) c
         FROM order_track ot
-        LEFT JOIN ot_as_proc_tag t ON t.tag_id = ot.as_tag_id
         WHERE ot.ate IN ({$in}) AND ot.as_tag_id IS NOT NULL
           AND ot.Order_date BETWEEN ? AND ? AND (ot.Order_status IS NULL OR ot.Order_status<>6)
           AND (ot.parent_order_id IS NULL OR ot.parent_order_id=0)
-        GROUP BY ot.ate, t.tag_id, tag_name
+        GROUP BY ot.ate, ot.as_tag_id, ot.as_tag_scope
         ORDER BY ot.ate, c DESC");
     $st->execute([$from, $to]);
     $out = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $uid = (int)$r['k'];
+        $tid = (int)$r['tid']; $sc = (string)($r['sc'] ?? '');
+        $label = $labelMap[$tid . ':' . $sc] ?? ('（標籤#' . $tid . '）');
         if (!isset($out[$uid])) $out[$uid] = [];
-        $out[$uid][] = ['tag_id' => $r['tag_id'], 'tag_name' => (string)$r['tag_name'], 'c' => (int)$r['c']];
+        $out[$uid][] = ['tag_id' => $tid, 'tag_name' => $label, 'c' => (int)$r['c']];
     }
     return $out;
 }
@@ -1059,6 +1079,62 @@ function ul_design_daily_detail(PDO $db, string $from, string $to, array $design
             'd' => $e['d'], 'ate' => $e['ate'], 'metric' => $e['metric'],
             'is_new' => !empty($newCaseMap[$e['oid']]),
         ];
+    }
+    return $out;
+}
+
+if (!defined('UL_WIP_ASOF_MAX_DAYS')) define('UL_WIP_ASOF_MAX_DAYS', 366);
+
+/**
+ * 設計課「累積待批圖數量」（2026-10-08 新增，使用者交辦）：重建「統計日當日」還卡在
+ * 批圖中、尚未轉生管的筆數——這是**存量**（某一天結束時還積著多少），跟
+ * ul_design_daily_detail() 的 batch_in（**流量**：那一天新進了幾筆）是完全不同的兩件事，
+ * 不能互相替代；ul_design_summary() 的 drawing_wip 也只有「現在」這一個時間點的存量，
+ * 沒有歷史序列，所以在這裡另外重建。
+ *
+ * 做法：先抓「這段期間內任何一天都可能算在製中」的訂單——進入批圖的日期(ateGet)不晚於
+ * 期末、且轉生管日期(pmGet)是空值或不早於期初，這樣就涵蓋了「期間開始前就已經在批圖中、
+ * 拖到期間內才轉出」與「期間內才新進、可能拖到期間結束都還沒轉出」兩種情況；再逐日逐人
+ * 數「ateGet<=當天 且 (pmGet 是空值 或 pmGet>當天)」有幾筆。
+ *
+ * 效能：天數×訂單數的雙迴圈，全在 PHP 記憶體裡跑（不逐日查一次 DB）；UL_WIP_ASOF_MAX_DAYS
+ * 限制最長一年，超過就不逐日重建（避免「整年」篩選時被要求跑 365×N 筆的無謂運算），
+ * 改回傳空陣列，前端這個欄位會顯示「—」。
+ * @return array 每列一筆：['d'=>日期,'ate'=>設計者id,'wip'=>截至當天還在批圖中的筆數]
+ */
+function ul_design_wip_daily(PDO $db, string $from, string $to, array $designerIds): array
+{
+    $ids = ul_ids_norm($designerIds);
+    if (!$ids) return [];
+    $dayCount = (int)floor((strtotime($to) - strtotime($from)) / 86400) + 1;
+    if ($dayCount < 1 || $dayCount > UL_WIP_ASOF_MAX_DAYS) return [];
+
+    $in = implode(',', $ids);
+    $ordStatOk = "(ot.Order_status IS NULL OR ot.Order_status<>6)";
+    $ordNotSplit = "(ot.parent_order_id IS NULL OR ot.parent_order_id=0)";
+    $st = $db->prepare("SELECT ot.ate k, DATE(ot.ateGet) ag, DATE(ot.pmGet) pg
+        FROM order_track ot
+        WHERE ot.ate IN ({$in}) AND ot.ateGet IS NOT NULL AND DATE(ot.ateGet) <= ?
+          AND (ot.pmGet IS NULL OR DATE(ot.pmGet) >= ?)
+          AND {$ordStatOk} AND {$ordNotSplit}");
+    $st->execute([$to, $from]);
+    $orders = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$orders) return [];
+
+    $out = [];
+    $cur = strtotime($from);
+    $endTs = strtotime($to);
+    while ($cur <= $endTs) {
+        $d = date('Y-m-d', $cur);
+        $cnt = [];
+        foreach ($orders as $o) {
+            if ($o['ag'] <= $d && ($o['pg'] === null || $o['pg'] > $d)) {
+                $uid = (int)$o['k'];
+                $cnt[$uid] = ($cnt[$uid] ?? 0) + 1;
+            }
+        }
+        foreach ($cnt as $uid => $c) $out[] = ['d' => $d, 'ate' => $uid, 'wip' => $c];
+        $cur = strtotime('+1 day', $cur);
     }
     return $out;
 }

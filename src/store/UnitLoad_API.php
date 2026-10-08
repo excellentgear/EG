@@ -252,6 +252,13 @@ switch ($action) {
         $qcWait     = ul_qc_wait_time($db, $p['from'], $p['to'], $qcIds);
         $qcAbnormal = ul_qc_abnormal_stats($db, $p['from'], $p['to'], $qcIds);
         $qcAdhoc    = ul_qc_adhoc($db, $p['from'], $p['to']);
+        // 2026-10-08 新增：使用者交辦總覽要看「待驗」與「檢驗」——待驗＝目前待驗佇列現況
+        // 快照（跟單位詳細分頁的「目前待驗佇列」同一份資料，全公司共用同一條佇列，不受
+        // $qcIds 篩選，見 ul_qc_pending_queue() 函式註解）；檢驗＝本期內這批品管人員實際
+        // 完成的檢驗項目數（ul_qc_daily_items() 逐日逐製程的加總）。
+        $qcPending  = ul_qc_pending_queue($db, $p['from'], $p['to']);
+        $qcDaily    = ul_qc_daily_items($db, $p['from'], $p['to'], $qcIds);
+        $qcItemsTotal = array_sum(array_column($qcDaily, 'count'));
 
         // 包裝：輕量彙總（待包裝筆數為現況快照、平均處理工作天為本期統計，整體統計
         // 沿用既有 ul_prod_packing_stats()，不受 $packingIds 篩選——跟製程大類現況
@@ -266,7 +273,7 @@ switch ($action) {
             'sales'  => ['cur' => $salesCur,  'cmp' => $salesCmp,  'cmp_label' => $p['cmp_label']],
             'pm'     => ['cur' => $pmCur,     'cmp' => $pmCmp,     'cmp_label' => $p['cmp_label']],
             'prod'   => ['by_process_type' => $prodByType, 'untracked' => $prodUntracked, 'setup' => $prodSetup],
-            'qc'     => ['wait' => $qcWait, 'abnormal' => $qcAbnormal, 'adhoc' => $qcAdhoc],
+            'qc'     => ['wait' => $qcWait, 'abnormal' => $qcAbnormal, 'adhoc' => $qcAdhoc, 'pending' => $qcPending],
             'packing'=> ['pending' => $packingStats['pending'], 'avg_workdays' => $packingStats['avg_workdays']],
         ];
 
@@ -289,6 +296,12 @@ switch ($action) {
             'prod'     => [
                 'unassigned_total' => array_sum(array_column($prodByType, 'unassigned')),
                 'assigned_total'   => array_sum(array_column($prodByType, 'assigned')),
+                // 2026-10-08 新增：使用者交辦總覽要有「待生產數」。定義＝目前每張現役製令
+                // 「正卡著的那一關」全部加總（未指派機台＋已指派機台，見 ul_prod_by_process_type()
+                // 函式註解；二者原本就各自是正確數字，這裡純粹加總不是另一套新邏輯，故可以
+                // 直接確認計算正確——不含已結案/已移轉(processing_state='E')的站）。
+                'pending_production_total' => array_sum(array_column($prodByType, 'unassigned'))
+                                             + array_sum(array_column($prodByType, 'assigned')),
                 'untracked_total'  => $prodUntracked['total'],
                 'avg_setup_minutes'=> $prodSetup['avg_minutes'],
                 'people_count'     => count($prodIds),
@@ -297,6 +310,8 @@ switch ($action) {
                 'avg_wait_workdays' => $qcWait['avg_workdays'],
                 'avg_ng_rate'       => $qcAbnormal['avg_ng_rate'],
                 'adhoc_total'       => $qcAdhoc['total'],
+                'pending_total'     => $qcPending['total'],
+                'items_total'       => $qcItemsTotal,
                 'people_count'      => count($qcIds),
             ],
             'packing'  => [
@@ -353,6 +368,9 @@ switch ($action) {
         // 2026-10-08 新增：逐人每日工作量明細（批圖中新進／審圖／已轉生管＋其中新料號數），
         // 使用者交辦——與上面逐人彙總表（$byPerson）用同一份已排除職位的人員範圍。
         $dailyDetail = ul_design_daily_detail($db, $p['from'], $p['to'], $idsFiltered);
+        // 2026-10-08 新增：累積待批圖數量（存量，依統計日重建），跟 $dailyDetail 的
+        // batch_in（流量，當天新進幾筆）互補，不要混為一談——見 ul_design_wip_daily() 註解。
+        $wipDaily = ul_design_wip_daily($db, $p['from'], $p['to'], $idsFiltered);
 
         // 2026-10-08 修正：issue_orders 的過重判定改比「近90天下單仍未回覆」
         // （issue_orders_recent），不是全歷史總量——道理與 ul_unit_overload_check() 的
@@ -375,6 +393,7 @@ switch ($action) {
             'reviewer'     => $reviewer,
             'daily_pmget'  => $dailyPmget,
             'daily_detail' => $dailyDetail,
+            'wip_daily'    => $wipDaily,
             'tags'         => $tags,
             'tags_by_person' => $tagsByPerson,
             'note_stats'   => $noteStats,

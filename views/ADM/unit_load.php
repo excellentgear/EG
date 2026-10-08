@@ -178,6 +178,16 @@ body { background:#F3F6EC; }
 @media (max-width: 1100px) { .ul-pt3-grid { grid-template-columns:repeat(2,1fr); } }
 @media (max-width: 700px)  { .ul-pt3-grid { grid-template-columns:1fr; } }
 
+/* 2026-10-08 新增：設計課「逐人每日工作量」改成橫向依人分組的表格（原本一天兩列一人
+   一列的版面使用者回報很難讀，改成一天一列、同一天的人橫向並排方便左右比較）。 */
+.ul-wip-table { font-size:12px; }
+.ul-wip-table th, .ul-wip-table td { text-align:center; padding:4px 6px; white-space:nowrap; }
+.ul-wip-table thead th { background:#F6F9F0; color:var(--ink); font-weight:700; }
+.ul-wip-table .ul-wip-grp { border-left:2px solid var(--green-d); }
+.ul-wip-table .ul-wip-total-grp { background:var(--sand); }
+.ul-wip-table thead tr:first-child th.ul-wip-grp { font-size:12.5px; }
+.ul-wip-table tbody td:first-child { text-align:left; white-space:nowrap; }
+
 /* KPI 卡內嵌的「過重理由」（2026-10-07 取代獨立的「部門負荷總表」，理由直接併進卡片本身） */
 .kpi-reasons { font-size:11px; color:var(--overload-text); margin-top:6px; text-align:left; }
 .kpi-reasons div { margin-bottom:2px; }
@@ -404,12 +414,18 @@ body { background:#F3F6EC; }
     <!-- 2026-10-08 新增：逐人每日工作量（使用者交辦） -->
     <div class="sec">
       <h4><i class="fa fa-calendar-check-o" style="color:var(--green-d);"></i> 逐人每日工作量
-        <span class="hint">依期間長度自動依日／週／月彙總，同一人同一桶若三項都是 0 不列出</span></h4>
+        <span class="hint">依期間長度自動依日／週／月彙總，每一桶一列、每人一組欄位橫向並排方便比較；
+          同一桶所有人都沒動作就不列出</span></h4>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">
+        「新進批圖」是<b>流量</b>（這一桶新增了幾筆）；「累積待批圖」是<b>存量</b>（這一桶結束時還卡著
+        幾筆沒轉生管），兩者不可相加——滑鼠停在表頭文字上可看說明。
+      </div>
       <div id="dsgDailyDetailTable"></div>
       <div style="font-size:12.5px;color:var(--ink);font-weight:700;margin:10px 0 4px;">週平均／月平均彙總（逐人＋部門合計）</div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">
         週/月平均一律用「本期總天數」換算日均後再乘以 7 或 30，不是只對有資料的桶取平均——
-        本期還沒走完或中間有空桶時，直接取平均會失真。
+        本期還沒走完或中間有空桶時，直接取平均會失真；累積待批圖是存量不算平均，改顯示
+        「本期最後一天」的存量。
       </div>
       <div id="dsgDailyDetailAvg"></div>
     </div>
@@ -614,8 +630,18 @@ body { background:#F3F6EC; }
             是有設定的，只是這個單位目前的人全被「設定→排除職位」濾掉了（例如設計課的課長不列入逐人
             明細，但仍算進單位整體彙總數字）；顯示「尚未設定部門範圍」才是真的連部門都還沒勾。</li>
         <li><b>設計課新增「逐人每日工作量」與「逐人標籤分布」</b>：依期間長度自動依日／週／月彙總每個人
-            新進批圖中／審圖／已轉生管的量，並標出其中有多少是新料號；下方另有週平均／月平均彙總
-            （逐人＋部門合計）與逐人的訂單標籤分布。</li>
+            新進批圖（流量）／審圖／已轉生管的量，並另外重建「累積待批圖」（存量——統計當天結束時
+            還卡著幾筆沒轉生管，跟新進批圖是兩回事，不可相加），標出其中有多少是新料號；每一桶一列、
+            每人一組欄位橫向並排，不再是一天好幾列。下方週平均／月平均彙總改成逐人＋部門合計的卡片；
+            逐人的訂單標籤分布見下一個項目。</li>
+        <li><b>逐人標籤分布的名稱為什麼帶「單製」「全製含」前綴</b>：標籤文字一律呼叫全站唯一的
+            <code>ot_astag_make_label()</code>——像「齒研」這種稽核製程標籤，依訂單當初貼的範圍是
+            「單製」還是「全製」，正式顯示文字是「單製齒研」或「全製含齒研」，不是裸名稱，跟訂單追蹤
+            本身「設定稽核製程標籤」看到的文字完全一致（2026-10-08 修正了先前漏掉這個前綴的問題）。</li>
+        <li><b>總覽卡片新增的幾個指標</b>：設計課「批圖中」已標明是即時工作量（已轉生管是處理完的量，
+            看不出現在卡著多少）、旁邊補上「其中新料號比例」；業務課補上「本期訂單張數」；品管補上
+            「待驗筆數」（現況快照）與「本期檢驗項目數」；生產課補上「待生產數」＝未指派機台＋已指派
+            機台的合計（這兩個數字本來就各自正確，這裡純粹加總，口徑與下方詳細分頁一致）。</li>
         <li><b>各單位要算哪些人</b>由下方「設定」的「部門範圍設定」決定；還沒設定部門的單位，部分統計（需要
             逐人歸屬的）會顯示 0 或提示尚未設定，不影響不需要人員歸屬的現況統計。</li>
         <li><b>勾選部門的「含子部門」</b>：組織是樹狀的，勾了會連同底下所有子部門的人一起算；
@@ -812,15 +838,26 @@ function renderOverview(d){
 
   // 依固定順序先組好每張卡片的 html，sort 時才用 badOf() 決定顯示順序——badOf() 需要
   // 用到的資料（dc/sc/pc/...）都已經在上面備妥，卡片本身的內容順序完全不受排序影響。
+  // 2026-10-08 使用者回報：設計課要看「批圖中」才看得出即時工作量（已轉生管是已處理完的
+  // 量，看不出現在卡著多少），批圖中本來就已經是第一行；這裡補上「新料號比例」——
+  // 目前批圖中的這批訂單裡，有多少比例帶著 NEW 標籤（new_case.in_progress／drawing_wip，
+  // 兩者都是同一支 ul_design_summary() 算出來的現況快照，口徑一致）。
+  var dNewRatio = (dc.drawing_wip > 0 && dc.new_case) ? (dc.new_case.in_progress / dc.drawing_wip) : null;
+  // 品管「待驗」「檢驗」：待驗＝現況快照（跟單位詳細分頁「目前待驗佇列」同一份資料，
+  // 全公司共用同一條佇列不分單位）、檢驗＝本期這批品管人員實際完成的檢驗項目數。
+  var qcPending = qc.pending_total, qcItems = qc.items_total;
+
   var cards = [
     { key:'design', html: kpiCard('design', UNIT_LABELS.design, d.design.people_count,
-        metricLine('批圖中', dc.drawing_wip, dp.drawing_wip)
+        metricLine('批圖中（即時工作量）', dc.drawing_wip, dp.drawing_wip)
+      + metricLine('其中新料號比例', dNewRatio!=null ? dNewRatio*100 : null, null, pct1)
       + metricLine('繪圖平均工作天', dc.avg_draw_workdays, dp.avg_draw_workdays, nf1)
       + metricLine('設計備註待回覆訂單（近90天）', dc.issue_orders_recent, dp.issue_orders_recent)
       + backlogNote(dc.issue_orders, dc.issue_orders_recent),
       badOf('design'), reasonsOf('design')) },
     { key:'sales', html: kpiCard('sales', UNIT_LABELS.sales, d.sales.people_count,
         metricLine('本期報價單', sc.quote_count, sp.quote_count)
+      + metricLine('本期訂單張數', sc.order_count, sp.order_count)
       + metricLine('待回覆問題（近90天）', sc.open_issue_count_recent, sp.open_issue_count_recent)
       + backlogNote(sc.open_issue_count, sc.open_issue_count_recent),
       badOf('sales'), reasonsOf('sales')) },
@@ -830,13 +867,16 @@ function renderOverview(d){
       + metricLine('待對帳筆數', pc.pending_recon_lines, pp.pending_recon_lines),
       badOf('pm'), reasonsOf('pm')) },
     { key:'prod', html: kpiCard('prod', UNIT_LABELS.prod, prod.people_count,
-        metricLine('未指派機台', prod.unassigned_total, null)
-      + metricLine('已指派機台', prod.assigned_total, null)
+        metricLine('待生產數（未指派＋已指派）', prod.pending_production_total, null)
+      + metricLine('　其中未指派機台', prod.unassigned_total, null)
+      + metricLine('　其中已指派機台', prod.assigned_total, null)
       + metricLine('未正式指派卻已報工', prod.untracked_total, null)
       + metricLine('平均架機時間（分）', prod.avg_setup_minutes, null, nf1),
       badOf('prod'), reasonsOf('prod')) },
     { key:'qc', html: kpiCard('qc', UNIT_LABELS.qc, qc.people_count,
-        metricLine('待驗平均等待工作天', qc.avg_wait_workdays, null, nf1)
+        metricLine('待驗筆數', qcPending, null)
+      + metricLine('本期檢驗項目數', qcItems, null)
+      + metricLine('待驗平均等待工作天', qc.avg_wait_workdays, null, nf1)
       + metricLine('平均NG比例', qc.avg_ng_rate!=null ? qc.avg_ng_rate*100 : null, null, pct1)
       + metricLine('脫離流程補檢驗', qc.adhoc_total, null),
       badOf('qc'), reasonsOf('qc')) },
@@ -1159,7 +1199,7 @@ function renderDesign(d){
   renderDesignTags(d.tags);
   renderDesignNoteStats(d.note_stats, d.by_person);
   renderDesignTable(d.by_person, (d.people||[]).length);
-  renderDesignDailyDetail(d.daily_detail, d.by_person, d.period);
+  renderDesignDailyDetail(d.daily_detail, d.wip_daily, d.by_person, d.period);
   renderDesignTagsByPerson(d.tags_by_person, d.by_person);
 }
 function renderDesignReviewer(rv, byPerson){
@@ -1296,10 +1336,17 @@ function renderDesignTable(rows, peopleCount){
    「週平均」「月平均」兩個彙總數字（不管目前收合成哪個粒度，平均值一律換算成
    「每一週／每一個月大概是多少」，方便跟别的月份心裡比較基準一致）。 */
 var DSG_METRIC_LABEL = { batch_in:'批圖中（新進）', review:'審圖', pm_get:'已轉生管' };
-function renderDesignDailyDetail(events, byPerson, period){
+/** 2026-10-08 改版：使用者回報原本「一天兩列（一人一列）」的表格很難讀、也要求加上
+    「累積待批圖數量」。改成**每天／每桶只佔一列**，橫向依人分組（每人一組欄位，
+    最右側再加「部門合計」一組）——同一天不同人的量要比較時左右看就好，不必上下對照
+    好幾列；累積待批圖是「存量」（統計當天結束時還卡著多少），跟「新進批圖」這個
+    「流量」（當天新增多少）並列成兩個獨立欄位，不要混在一起看。 */
+function renderDesignDailyDetail(events, wipDaily, byPerson, period){
   events = events || [];
-  if (!events.length){ $('#dsgDailyDetailTable').html(emptyHint('本期沒有批圖中／審圖／已轉生管的資料。')); return; }
+  wipDaily = wipDaily || [];
+  if (!events.length){ $('#dsgDailyDetailTable').html(emptyHint('本期沒有批圖中／審圖／已轉生管的資料。')); $('#dsgDailyDetailAvg').html(''); return; }
   var gran = pickTimeGran(period);
+  var granLabel = gran==='day' ? '日期' : (gran==='week' ? '週（週一起算）' : '月份');
   // d.period（ulPeriodParse() 的回傳）本身沒有 period_total_days 這個鍵（那是 summary/
   // summary_cmp 裡才有的欄位），直接算 from~to 天數最保險，跟 pickTimeGran() 算 span
   // 用同一種算法。
@@ -1321,50 +1368,87 @@ function renderDesignDailyDetail(events, byPerson, period){
     if (e.is_new) data[bk][e.ate][e.metric+'_new']++;
   });
   buckets.sort();
-  var ateIds = Object.keys(ates);
+  var ateIds = Object.keys(ates).sort(function(a,b){ return nameOf(byPerson,a).localeCompare(nameOf(byPerson,b),'zh-Hant'); });
 
-  var h = '<div class="table-responsive"><table class="table table-striped" style="margin-bottom:10px;">'
-        + '<thead><tr><th>'+(gran==='day'?'日期':(gran==='week'?'週（週一起算）':'月份'))+'</th><th>姓名</th>'
-        + '<th>批圖中（新進）</th><th>審圖</th><th>已轉生管</th><th>其中新料號</th></tr></thead><tbody>';
-  var grand = {}; // ate -> sums，給週/月平均用
+  // 累積待批圖（存量）：wip_daily 一律是逐日資料、且後端是依日期由舊到新產生，依序寫進
+  // bucketKey 會讓同一桶內較晚的日期蓋掉較早的，正好等於「以桶內最後一天的存量代表整桶」
+  // ——不可以把多天的存量加總或平均，那是沒有意義的（存量不是流量）。
+  var wipBucket = {};
+  wipDaily.forEach(function(r){
+    var bk = bucketKeyFor(r.d, gran);
+    if (!wipBucket[bk]) wipBucket[bk] = {};
+    wipBucket[bk][r.ate] = r.wip;
+  });
+  // 期末存量（供下面的彙總卡片用）：wip_daily 最後一筆（資料本身依日期由舊到新）就是
+  // 整個期間最後一天的存量。
+  var wipEnd = {};
+  wipDaily.forEach(function(r){ wipEnd[r.ate] = r.wip; });
+
+  var groupCols = ['batch_in','wip','review','pm_get','new'];
+  var colLabel = { batch_in:'新進批圖', wip:'累積待批圖', review:'審圖', pm_get:'已轉生管', new:'其中新料號' };
+  var colHint = {
+    batch_in:'這一桶內新進入批圖中的筆數（流量）', wip:'桶內最後一天結束時，還卡在批圖中尚未轉生管的累積筆數（存量，不可與新進批圖相加）',
+    review:'這一桶內按下審圖的筆數', pm_get:'這一桶內轉生管的筆數', new:'新進批圖／審圖／已轉生管三項裡，屬於新料號(NEW)的筆數合計'
+  };
+
+  var h = '<div class="table-responsive"><table class="table table-bordered table-condensed ul-wip-table" style="margin-bottom:10px;"><thead>';
+  h += '<tr><th rowspan="2" style="vertical-align:middle;">'+esc(granLabel)+'</th>';
+  ateIds.forEach(function(ate){ h += '<th colspan="'+groupCols.length+'" class="ul-wip-grp">'+esc(nameOf(byPerson, ate))+'</th>'; });
+  h += '<th colspan="'+groupCols.length+'" class="ul-wip-grp ul-wip-total-grp">部門合計</th></tr><tr>';
+  (ateIds.length ? ateIds : ['_']).forEach(function(){
+    groupCols.forEach(function(c){ h += '<th title="'+esc(colHint[c])+'">'+esc(colLabel[c])+'</th>'; });
+  });
+  groupCols.forEach(function(c){ h += '<th class="ul-wip-total-grp" title="'+esc(colHint[c])+'">'+esc(colLabel[c])+'</th>'; });
+  h += '</tr></thead><tbody>';
+
+  var grand = {}; // ate -> sums，給下面的週/月平均彙總卡片用
   buckets.forEach(function(bk){
+    var rowHasData = ateIds.some(function(ate){ var r=(data[bk]&&data[bk][ate]); return r && (r.batch_in||r.review||r.pm_get); });
+    if (!rowHasData) return; // 這一桶所有人都完全沒動作就不列（表格不被灌爆）
+    h += '<tr><td><b>'+esc(bk)+'</b></td>';
+    var tot = { batch_in:0, wip:0, review:0, pm_get:0, new:0 };
     ateIds.forEach(function(ate){
       var row = (data[bk] && data[bk][ate]) || { batch_in:0, batch_in_new:0, review:0, review_new:0, pm_get:0, pm_get_new:0 };
-      if (!row.batch_in && !row.review && !row.pm_get) return; // 這個人這一桶完全沒動作就不列一行，表格不會被灌爆
-      if (!grand[ate]) grand[ate] = { batch_in:0, review:0, pm_get:0, new_total:0, buckets:0 };
-      grand[ate].batch_in += row.batch_in; grand[ate].review += row.review; grand[ate].pm_get += row.pm_get;
-      grand[ate].new_total += (row.batch_in_new||0) + (row.review_new||0) + (row.pm_get_new||0);
-      grand[ate].buckets++;
+      var wip = (wipBucket[bk] && wipBucket[bk][ate] !== undefined) ? wipBucket[bk][ate] : null;
       var newTotal = (row.batch_in_new||0) + (row.review_new||0) + (row.pm_get_new||0);
-      h += '<tr><td>'+esc(bk)+'</td><td>'+esc(nameOf(byPerson, ate))+'</td>'
-         + '<td>'+nf(row.batch_in)+'</td><td>'+nf(row.review)+'</td><td>'+nf(row.pm_get)+'</td>'
-         + '<td>'+nf(newTotal)+'</td></tr>';
+      h += '<td>'+nf(row.batch_in)+'</td><td>'+(wip===null?'—':nf(wip))+'</td><td>'+nf(row.review)+'</td><td>'+nf(row.pm_get)+'</td><td>'+nf(newTotal)+'</td>';
+      tot.batch_in += row.batch_in; tot.wip += (wip||0); tot.review += row.review; tot.pm_get += row.pm_get; tot.new += newTotal;
+      if (!grand[ate]) grand[ate] = { batch_in:0, review:0, pm_get:0, new_total:0 };
+      grand[ate].batch_in += row.batch_in; grand[ate].review += row.review; grand[ate].pm_get += row.pm_get; grand[ate].new_total += newTotal;
     });
+    h += '<td class="ul-wip-total-grp"><b>'+nf(tot.batch_in)+'</b></td><td class="ul-wip-total-grp"><b>'+nf(tot.wip)+'</b></td>'
+       + '<td class="ul-wip-total-grp"><b>'+nf(tot.review)+'</b></td><td class="ul-wip-total-grp"><b>'+nf(tot.pm_get)+'</b></td>'
+       + '<td class="ul-wip-total-grp"><b>'+nf(tot.new)+'</b></td></tr>';
   });
   h += '</tbody></table></div>';
+  $('#dsgDailyDetailTable').html(h);
 
-  // 週/月平均彙總（逐人＋部門合計），一律用「期間總天數」換算日均，再乘以 7 或 30——
-  // 不是直接對「有資料的桶數」取平均，那樣遇到「本期還沒走完」或中間有空桶的月份會
-  // 失真（比照 ul_period_delta_calc() 日均換算同樣的道理）。
+  // 週/月平均彙總改成卡片（原本的 7 欄大表格使用者回報不好讀）：每人一張卡＋部門合計一張，
+  // 新進批圖／審圖／已轉生管各一行把週平均與月平均並排顯示；累積待批圖是存量，不可以
+  // 平均，改顯示「期末（本期最後一天）存量」。一律用「期間總天數」換算日均再乘以 7
+  // 或 30，不是對桶數取平均——本期還沒走完或中間有空桶時，直接平均會失真。
   var deptSum = { batch_in:0, review:0, pm_get:0, new_total:0 };
-  var h2 = '<div class="table-responsive"><table class="table table-striped"><thead><tr><th>姓名</th>'
-         + '<th>批圖中（新進）週平均</th><th>審圖週平均</th><th>已轉生管週平均</th>'
-         + '<th>批圖中（新進）月平均</th><th>審圖月平均</th><th>已轉生管月平均</th><th>其中新料號（本期合計）</th></tr></thead><tbody>';
+  var deptWipEnd = 0;
+  var h2 = '<div class="ul-pq-grid">';
+  var cardHtml = function(label, g, wipE){
+    return '<div class="ul-pq-item">'
+      + '<div class="ul-pq-name">'+esc(label)+'</div>'
+      + '<div class="ul-pq-row"><span>新進批圖 週／月平均</span><b>'+nf1(g.batch_in/totalDays*7)+' ／ '+nf1(g.batch_in/totalDays*30)+'</b></div>'
+      + '<div class="ul-pq-row"><span>審圖 週／月平均</span><b>'+nf1(g.review/totalDays*7)+' ／ '+nf1(g.review/totalDays*30)+'</b></div>'
+      + '<div class="ul-pq-row"><span>已轉生管 週／月平均</span><b>'+nf1(g.pm_get/totalDays*7)+' ／ '+nf1(g.pm_get/totalDays*30)+'</b></div>'
+      + '<div class="ul-pq-row"><span>累積待批圖（期末存量）</span><b>'+(wipE===null?'—':nf(wipE))+'</b></div>'
+      + '<div class="ul-pq-row"><span>其中新料號（本期合計）</span><b>'+nf(g.new_total)+'</b></div>'
+      + '</div>';
+  };
   ateIds.forEach(function(ate){
     var g = grand[ate] || { batch_in:0, review:0, pm_get:0, new_total:0 };
+    var wipE = (wipEnd[ate] !== undefined) ? wipEnd[ate] : null;
     deptSum.batch_in += g.batch_in; deptSum.review += g.review; deptSum.pm_get += g.pm_get; deptSum.new_total += g.new_total;
-    h2 += '<tr><td>'+esc(nameOf(byPerson, ate))+'</td>'
-       + '<td>'+nf1(g.batch_in/totalDays*7)+'</td><td>'+nf1(g.review/totalDays*7)+'</td><td>'+nf1(g.pm_get/totalDays*7)+'</td>'
-       + '<td>'+nf1(g.batch_in/totalDays*30)+'</td><td>'+nf1(g.review/totalDays*30)+'</td><td>'+nf1(g.pm_get/totalDays*30)+'</td>'
-       + '<td>'+nf(g.new_total)+'</td></tr>';
+    deptWipEnd += (wipE || 0);
+    h2 += cardHtml(nameOf(byPerson, ate), g, wipE);
   });
-  h2 += '<tr style="font-weight:700;background:var(--sand);"><td>部門合計</td>'
-      + '<td>'+nf1(deptSum.batch_in/totalDays*7)+'</td><td>'+nf1(deptSum.review/totalDays*7)+'</td><td>'+nf1(deptSum.pm_get/totalDays*7)+'</td>'
-      + '<td>'+nf1(deptSum.batch_in/totalDays*30)+'</td><td>'+nf1(deptSum.review/totalDays*30)+'</td><td>'+nf1(deptSum.pm_get/totalDays*30)+'</td>'
-      + '<td>'+nf(deptSum.new_total)+'</td></tr>';
-  h2 += '</tbody></table></div>';
-
-  $('#dsgDailyDetailTable').html(h);
+  h2 += cardHtml('部門合計', deptSum, ateIds.length ? deptWipEnd : null);
+  h2 += '</div>';
   $('#dsgDailyDetailAvg').html(h2);
 }
 
