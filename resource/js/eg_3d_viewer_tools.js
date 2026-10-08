@@ -1170,9 +1170,8 @@ var EG3DTools = (function () {
     // `.normal`（再丟給 Vector3.copy 讀 .x/.y/.z）與 `.constant` 兩個屬性，純粹鴨子定型，
     // 所以傳一個「長得像」的陽春物件 `{normal:{x,y,z}, constant:N}` 完全可行（已實測確認：
     // 一個三角錐模型乾淨被切開，不需要借任何既有實例的建構子）。
-    // 限制（已知、刻意不做）：這是單純裁切，不是「封頂」剖面——切開的剖面是鏤空的，看得
-    // 到內部中空結構，但不會在切口處畫一個實心色塊；真正的封頂需要額外的模板緩衝兩階段
-    // 算法，工時與風險都高出一截，鏤空版已足以達成「看到內部」的實際需求。
+    // 2026-10-08 使用者回報：剖面切開後斷面應該呈現「實心填滿」，不該是「鏤空看穿到對面」
+    // ——已改用真正的幾何封頂（見下方「剖面封頂」區塊），不再是單純裁切鏤空版。
     //
     // ★符號陷阱（已實測踩到、務必記住）：Three.js 的 Plane 不是「normal·point = constant」
     // 這種直覺寫法，而是「normal·point + constant = 0」——也就是 **constant 的符號跟直覺
@@ -1181,6 +1180,326 @@ var EG3DTools = (function () {
     // Y 軸（包圍盒是 0~34.9，不對稱）就整個不會動——这是由 50%、extreme 值一路二分搜尋
     // 才揪出來的，純看程式碼或 shader 原始碼推不出來。正確公式是 `constant = -planePos
     // * normalSign`（normalSign 即 normal[axis] 的 ±1），兩個方向都已實測驗證正確。
+    // ══════════════════════════════════════════════════════════════════════
+    // 剖面封頂（實心斷面，2026-10-08 使用者回報剖面應呈現實心填滿、不是鏤空殼狀後新增）
+    // ══════════════════════════════════════════════════════════════════════
+    // 原因：Three.js 的 clippingPlanes 只是幾何裁切（丟棄超出範圍的三角形片段），模型本身
+    // 是一層零厚度的外殼網格；查證過這個模型的材質是 DoubleSide（side=2，STEP/IPT 轉檔
+    // 常見，確保纏繞方向不一致時仍整面可見），裁切後露出的是殼內側、對面內壁的背面，
+    // 看起來就是使用者說的「鏤空殼狀」而不是「實心材料被切開」。
+    // 查證：這個函式庫內部 WebGLRenderer 建立時沒有要求 `stencil:true`（已用 CDP 直接讀
+    // `renderer.getContext().getContextAttributes()` 確認 `stencil:false`），所以無法
+    // 沿用 Three.js 官方 webgl_clipping_stencil 範例那套「模板緩衝兩階段算法」（這招需要
+    // 畫面已經有 stencil buffer 才能用，拿不到就整段失效，不能硬套）。
+    // 改用**真正的幾何封頂**：直接算出剖切平面與整個 mesh 表面的交線（逐三角形求交），
+    // 把交線接成封閉迴圈，再用「挖洞耳切法」（ear clipping with hole bridging，與
+    // Mapbox earcut.js 同一種演算法思路）三角化成實心面片，鋪在剖切位置——這是純幾何
+    // 運算，不依賴 stencil 緩衝區，天生正確處理「洞中有洞」（例如剖面剛好切過螺絲孔，
+    // 孔要維持中空不能被誤填）：用每個迴圈的重心做 point-in-polygon 巢狀層數判定——
+    // 被其他迴圈包住**偶數**次＝實心邊界（含它自己的洞）、**奇數**次＝洞的邊界，不限定
+    // 只處理一層洞。
+    function _vecLen3(v) { return Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]) || 1; }
+    function _vcross3(a, b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+    // 平面的正交基底：origin＝平面上離世界原點最近的點（Three.js Plane 慣例 normal·p+constant=0
+    // 時，p=-constant*normal 正好滿足：dot(-c*n,n)+c = -c*|n|² +c = -c+c = 0，因為 n 是單位向量）；
+    // u／v 是平面內互相垂直的單位切向量，供 3D↔2D 投影互轉用。
+    function _planeBasis3d(plane) {
+        var n = [plane.normal.x, plane.normal.y, plane.normal.z];
+        var ref = Math.abs(n[0]) < 0.9 ? [1,0,0] : [0,1,0];
+        var u = _vcross3(ref, n); var ul = _vecLen3(u); u = [u[0]/ul, u[1]/ul, u[2]/ul];
+        var v = _vcross3(n, u);
+        var origin = [-plane.constant*n[0], -plane.constant*n[1], -plane.constant*n[2]];
+        return { origin: origin, u: u, v: v, n: n };
+    }
+    // 單一三角形與剖切平面求交，回傳「有方向性」的線段（方向沿三角形原本頂點順序，由
+    // 「保留側→剪掉側」的那個交點指向「剪掉側→保留側」的交點）——這個定向規則是標準封頂
+    // 演算法的作法，讓收集到的全部線段接起來的迴圈，面向剖面法向量那一側時自然是正確的
+    // 外圍方向；本實作另外把封頂材質設成 DoubleSide（見下方），即使定向方向不如預期也
+    // 不影響可不可見，只有「偶數層/奇數層」這個分類邏輯需要迴圈方向一致，而不是要求
+    // CCW/CW 對應特定的可見面。
+    function _triPlaneIntersectSeg(v0, v1, v2, plane) {
+        var nx = plane.normal.x, ny = plane.normal.y, nz = plane.normal.z, c = plane.constant;
+        function side(p) { return p[0]*nx + p[1]*ny + p[2]*nz + c; }
+        var verts = [v0, v1, v2], d = [side(v0), side(v1), side(v2)];
+        var crossPts = [];
+        for (var i = 0; i < 3; i++) {
+            var a = verts[i], b = verts[(i+1)%3];
+            var da = d[i], db = d[(i+1)%3];
+            if ((da <= 0) !== (db <= 0) && Math.abs(da - db) > 1e-12) {
+                var t = da / (da - db);
+                crossPts.push({ p: [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t], fromKeep: da <= 0 });
+            }
+        }
+        if (crossPts.length !== 2) return null;   // 三角形沒有真的跨過平面，或貼在面上的退化情形
+        return crossPts[0].fromKeep ? { a: crossPts[0].p, b: crossPts[1].p } : { a: crossPts[1].p, b: crossPts[0].p };
+    }
+    // 整個模型與一個剖切平面求交，把所有三角形各自算出的小線段接成一條條封閉迴圈（世界座標）
+    function _buildCapLoops3d(mm, plane) {
+        var segs = [];
+        mm.EnumerateMeshes(function (mesh) {
+            var geo = mesh.geometry;
+            var posAttr = geo.attributes.position;
+            var posArr = posAttr.array;
+            var idxAttr = geo.index;
+            mesh.updateMatrixWorld(true);
+            var m = mesh.matrixWorld.elements;
+            function toWorld(vi) {
+                var lx = posArr[vi*3], ly = posArr[vi*3+1], lz = posArr[vi*3+2];
+                return [ m[0]*lx+m[4]*ly+m[8]*lz+m[12], m[1]*lx+m[5]*ly+m[9]*lz+m[13], m[2]*lx+m[6]*ly+m[10]*lz+m[14] ];
+            }
+            var triCount, getTri;
+            if (idxAttr) { var ia = idxAttr.array; triCount = Math.floor(ia.length/3); getTri = function (i) { return [ia[i*3], ia[i*3+1], ia[i*3+2]]; }; }
+            else { triCount = Math.floor(posAttr.count/3); getTri = function (i) { return [i*3, i*3+1, i*3+2]; }; }
+            for (var t = 0; t < triCount; t++) {
+                var v = getTri(t);
+                var seg = _triPlaneIntersectSeg(toWorld(v[0]), toWorld(v[1]), toWorld(v[2]), plane);
+                if (seg) segs.push(seg);
+            }
+        });
+        if (!segs.length) return [];
+        function key3(p) { return Math.round(p[0]*1e3)+','+Math.round(p[1]*1e3)+','+Math.round(p[2]*1e3); }
+        var startMap = new Map();
+        segs.forEach(function (s, i) { var k = key3(s.a); if (!startMap.has(k)) startMap.set(k, []); startMap.get(k).push(i); });
+        var used = new Uint8Array(segs.length);
+        var loops = [];
+        for (var i = 0; i < segs.length; i++) {
+            if (used[i]) continue;
+            used[i] = 1;
+            var loopPts = [segs[i].a.slice(), segs[i].b.slice()];
+            var curB = segs[i].b;
+            var startKey = key3(segs[i].a);
+            var guard = 0;
+            while (guard++ < segs.length + 5) {
+                if (key3(curB) === startKey) break;   // 封閉
+                var cands = startMap.get(key3(curB));
+                var found = -1;
+                if (cands) { for (var j = 0; j < cands.length; j++) { if (!used[cands[j]]) { found = cands[j]; break; } } }
+                if (found < 0) break;   // 斷鏈（理論上不該發生在封閉實體網格，容錯直接結束這條不強求）
+                used[found] = 1;
+                loopPts.push(segs[found].b.slice());
+                curB = segs[found].b;
+            }
+            if (loopPts.length >= 4 && key3(loopPts[0]) === key3(loopPts[loopPts.length-1])) {
+                loopPts.pop();   // 收尾那點跟起點重複，去掉
+                loops.push(loopPts);
+            }
+        }
+        return loops;
+    }
+    function _loop3dTo2d(loop3d, basis) {
+        return loop3d.map(function (p) {
+            var dx = p[0]-basis.origin[0], dy = p[1]-basis.origin[1], dz = p[2]-basis.origin[2];
+            return [dx*basis.u[0]+dy*basis.u[1]+dz*basis.u[2], dx*basis.v[0]+dy*basis.v[1]+dz*basis.v[2]];
+        });
+    }
+    function _signedArea2d(pts) {
+        var a = 0;
+        for (var i = 0; i < pts.length; i++) { var p = pts[i], q = pts[(i+1)%pts.length]; a += p[0]*q[1] - q[0]*p[1]; }
+        return a / 2;
+    }
+    function _centroid2d(pts) {
+        var cx = 0, cy = 0; pts.forEach(function (p) { cx += p[0]; cy += p[1]; });
+        return [cx/pts.length, cy/pts.length];
+    }
+    function _pointInPoly2d(pt, poly) {
+        var x = pt[0], y = pt[1], inside = false;
+        for (var i = 0, j = poly.length-1; i < poly.length; j = i++) {
+            var xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+            if (((yi > y) !== (yj > y)) && (x < (xj-xi)*(y-yi)/(yj-yi) + xi)) inside = !inside;
+        }
+        return inside;
+    }
+    function _pts2dEq(a, b) { return Math.abs(a[0]-b[0]) < 1e-9 && Math.abs(a[1]-b[1]) < 1e-9; }
+    function _seg2dIntersect(p1, p2, p3, p4) {
+        function cross(o, a, b) { return (a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0]); }
+        var d1 = cross(p3,p4,p1), d2 = cross(p3,p4,p2), d3 = cross(p1,p2,p3), d4 = cross(p1,p2,p4);
+        return ((d1>0&&d2<0)||(d1<0&&d2>0)) && ((d3>0&&d4<0)||(d3<0&&d4>0));
+    }
+    // 把洞的迴圈「橋接」併入外圍迴圈，變成一條沒有自我交叉的簡單多邊形（挖洞耳切法的前置
+    // 步驟，思路與 Mapbox earcut.js 的 hole-linking 相同）：每個洞找它最右邊（u 最大）的
+    // 頂點當進入點，往外圍找「距離最近、橋接線段不會跟任何既有邊相交」的頂點搭橋，把洞
+    // 整圈插進外圍序列（去程橋＋整圈洞＋回到洞起點＋回程橋）。
+    function _bridgeHolesInto(outer, holes) {
+        var ring = outer.slice();
+        var holesSorted = holes.slice().sort(function (a, b) {
+            var maxA = Math.max.apply(null, a.map(function (p) { return p[0]; }));
+            var maxB = Math.max.apply(null, b.map(function (p) { return p[0]; }));
+            return maxB - maxA;
+        });
+        holesSorted.forEach(function (hole) {
+            var ei = 0;
+            for (var k = 1; k < hole.length; k++) { if (hole[k][0] > hole[ei][0]) ei = k; }
+            var entry = hole[ei];
+            var cand = ring.map(function (p, idx) { return { idx: idx, d: (p[0]-entry[0])*(p[0]-entry[0]) + (p[1]-entry[1])*(p[1]-entry[1]) }; })
+                            .sort(function (a, b) { return a.d - b.d; });
+            var bridgeIdx = -1;
+            for (var c = 0; c < cand.length; c++) {
+                var idx = cand[c].idx;
+                var ok = true;
+                for (var e = 0; e < ring.length; e++) {
+                    var a = ring[e], b = ring[(e+1)%ring.length];
+                    if (_pts2dEq(a,ring[idx]) || _pts2dEq(b,ring[idx]) || _pts2dEq(a,entry) || _pts2dEq(b,entry)) continue;
+                    if (_seg2dIntersect(ring[idx], entry, a, b)) { ok = false; break; }
+                }
+                if (ok) { bridgeIdx = idx; break; }
+            }
+            if (bridgeIdx < 0) bridgeIdx = 0;   // 保底：極少數退化情形找不到乾淨的橋，寧可可能略醜也不整個洞放棄不處理
+            var reordered = hole.slice(ei).concat(hole.slice(0, ei));
+            var insertPts = reordered.concat([reordered[0]], [ring[bridgeIdx]]);
+            ring = ring.slice(0, bridgeIdx+1).concat(insertPts).concat(ring.slice(bridgeIdx+1));
+        });
+        return ring;
+    }
+    function _pointInTri2d(p, a, b, c) {
+        function sign(p1, p2, p3) { return (p1[0]-p3[0])*(p2[1]-p3[1]) - (p2[0]-p3[0])*(p1[1]-p3[1]); }
+        var d1 = sign(p,a,b), d2 = sign(p,b,c), d3 = sign(p,c,a);
+        var hasNeg = (d1<0)||(d2<0)||(d3<0), hasPos = (d1>0)||(d2>0)||(d3>0);
+        return !(hasNeg && hasPos);
+    }
+    // 標準耳切三角化（ear clipping）：逐一找「凸角且三角形內不含其他頂點」的耳朵剪掉，
+    // 直到剩 3 點。輸入務必先經過 _bridgeHolesInto 處理成不自交的簡單多邊形。
+    function _earClipTriangulate(poly) {
+        var pts = poly.slice();
+        for (var i = pts.length-1; i > 0; i--) { if (_pts2dEq(pts[i], pts[i-1])) pts.splice(i,1); }
+        if (pts.length > 1 && _pts2dEq(pts[0], pts[pts.length-1])) pts.pop();
+        if (pts.length < 3) return [];
+        if (_signedArea2d(pts) < 0) pts.reverse();   // 統一成 CCW，耳切的凸角判斷才一致
+        var idx = pts.map(function (_, i) { return i; });
+        var tris = [];
+        var guard = 0;
+        while (idx.length > 3 && guard++ < pts.length*pts.length + 20) {
+            var earFound = false;
+            for (var i = 0; i < idx.length; i++) {
+                var i0 = idx[(i-1+idx.length)%idx.length], i1 = idx[i], i2 = idx[(i+1)%idx.length];
+                var a = pts[i0], b = pts[i1], c = pts[i2];
+                var cr = (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]);
+                if (cr <= 1e-12) continue;   // 非凸角，不能當耳朵
+                var isEar = true;
+                for (var k = 0; k < idx.length; k++) {
+                    var pk = idx[k];
+                    if (pk===i0 || pk===i1 || pk===i2) continue;
+                    if (_pointInTri2d(pts[pk], a, b, c)) { isEar = false; break; }
+                }
+                if (!isEar) continue;
+                tris.push([a,b,c]);
+                idx.splice(i,1);
+                earFound = true;
+                break;
+            }
+            if (!earFound) break;   // 數值精度或退化多邊形導致找不到耳朵，放棄剩餘部份不強求
+        }
+        if (idx.length === 3) tris.push([pts[idx[0]], pts[idx[1]], pts[idx[2]]]);
+        return tris;
+    }
+    // 把所有迴圈依「被包住幾層」分出實心邊界與洞（偶數層=填、奇數層=洞），各自的洞橋接
+    // 併入直屬的那個偶數層邊界後耳切三角化，彙總成整個封頂面的 2D 三角形清單。
+    function _buildCapTriangles2d(loops2d) {
+        var n = loops2d.length;
+        if (!n) return [];
+        var centroids = loops2d.map(_centroid2d);
+        var containCount = new Array(n).fill(0);
+        var containers = [];
+        for (var i = 0; i < n; i++) containers.push([]);
+        for (var i = 0; i < n; i++) {
+            for (var j = 0; j < n; j++) {
+                if (i === j) continue;
+                if (_pointInPoly2d(centroids[i], loops2d[j])) { containCount[i]++; containers[i].push(j); }
+            }
+        }
+        var tris = [];
+        for (var i = 0; i < n; i++) {
+            if (containCount[i] % 2 !== 0) continue;   // 奇數層＝洞的邊界，併到它的直屬實心層處理，這裡跳過
+            var myHoles = [];
+            for (var h = 0; h < n; h++) {
+                if (containCount[h] % 2 === 0) continue;
+                if (containers[h].indexOf(i) < 0) continue;
+                var evenContainers = containers[h].filter(function (k) { return containCount[k] % 2 === 0; });
+                var parent = evenContainers.reduce(function (best, k) {
+                    return (best === null || Math.abs(_signedArea2d(loops2d[k])) < Math.abs(_signedArea2d(loops2d[best]))) ? k : best;
+                }, null);
+                if (parent === i) myHoles.push(loops2d[h]);
+            }
+            var simple = myHoles.length ? _bridgeHolesInto(loops2d[i], myHoles) : loops2d[i].slice();
+            tris = tris.concat(_earClipTriangulate(simple));
+        }
+        return tris;
+    }
+    // 整合：給一個剖切平面與整個模型，算出封頂幾何（世界座標 BufferGeometry），沒有交線
+    // （平面完全沒切到模型）或三角化不出結果時回傳 null，呼叫端就不加這個封頂物件。
+    function _buildCapGeometry(mm, plane) {
+        var loops3d = _buildCapLoops3d(mm, plane);
+        if (!loops3d.length) return null;
+        var basis = _planeBasis3d(plane);
+        var loops2d = loops3d.map(function (l) { return _loop3dTo2d(l, basis); });
+        var tris2d = _buildCapTriangles2d(loops2d);
+        if (!tris2d.length) return null;
+        var verts = [], normals = [];
+        tris2d.forEach(function (tri) {
+            tri.forEach(function (p2) {
+                verts.push(
+                    basis.origin[0] + p2[0]*basis.u[0] + p2[1]*basis.v[0],
+                    basis.origin[1] + p2[0]*basis.u[1] + p2[1]*basis.v[1],
+                    basis.origin[2] + p2[0]*basis.u[2] + p2[1]*basis.v[2]
+                );
+                normals.push(basis.n[0], basis.n[1], basis.n[2]);
+            });
+        });
+        var sampleMesh = null;
+        mm.EnumerateMeshes(function (m) { if (!sampleMesh) sampleMesh = m; });
+        if (!sampleMesh) return null;
+        var GeoCtor = sampleMesh.geometry.constructor;
+        var PosAttrCtor = sampleMesh.geometry.attributes.position.constructor;
+        var geo = new GeoCtor();
+        geo.setAttribute('position', new PosAttrCtor(new Float32Array(verts), 3));
+        geo.setAttribute('normal', new PosAttrCtor(new Float32Array(normals), 3));
+        return geo;
+    }
+    // 封頂面材質固定用暖色調（ai-rules/10），DoubleSide（已用 CDP 直接查證這個模型本身材質
+    // side=2=DoubleSide，封頂沿用同一慣例，三角形纏繞方向不管是哪一面朝鏡頭都看得見，不
+    // 依賴 _earClipTriangulate 的 CCW 統一方向一定對應到「鏡頭這一面」）。
+    function _buildCapMaterial(sampleMesh) {
+        var baseMat = Array.isArray(sampleMesh.material) ? sampleMesh.material[0] : sampleMesh.material;
+        // 這時候 baseMat.clippingPlanes 已經被 setSectionMode 設成本檔鴨子定型的陽春物件
+        // （{normal:{x,y,z},constant}，不是真正的 THREE.Plane 實例）——Three.js 的
+        // Material.clone() 內部會對 clippingPlanes 陣列逐一呼叫 .clone()，陽春物件沒有
+        // 這個方法會直接丟例外；clone 前先暫時清空、clone 完再還原，不影響原本材質的裁切。
+        var savedPlanes = baseMat.clippingPlanes;
+        baseMat.clippingPlanes = null;
+        var mat = baseMat.clone();
+        baseMat.clippingPlanes = savedPlanes;
+        // 封頂色刻意選偏亮、飽和度較高的暖橘色（ai-rules/10 暖色系），跟模型本身的灰色調
+        // 明顯區隔，使用者一眼就能認出「這塊是斷面封頂、不是原本的灰色材質背面」。
+        mat.color.set('#E8742E');
+        if (mat.specular) mat.specular.set('#332211');   // Phong 材質若保留原本高反光度，封頂色會被鏡面反射洗淡，降低一點
+        mat.shininess = 8;
+        mat.side = 2;   // THREE.DoubleSide（已用 CDP 實測確認此數值，函式庫未暴露全域 THREE 列舉）
+        mat.clippingPlanes = null;
+        mat.clipIntersection = false;
+        mat.needsUpdate = true;
+        return mat;
+    }
+    // 依目前啟用中的剖切平面陣列，逐一建立封頂物件（雙軸時每個平面各自的封頂要再被「另一
+    // 個」平面裁掉超出範圍的部份，否則雙軸剖面的封頂會畫出整個無限大截面、超出實際只保留
+    // 3/4 的那個象限範圍）。回傳新建立的封頂物件陣列，供呼叫端存進 state 以利之後移除。
+    function _rebuildCaps(viewer, mm, planes) {
+        var sampleMesh = null;
+        mm.EnumerateMeshes(function (m) { if (!sampleMesh) sampleMesh = m; });
+        if (!sampleMesh) return [];
+        var MeshCtor = sampleMesh.constructor;
+        var caps = [];
+        planes.forEach(function (plane, i) {
+            var geo = _buildCapGeometry(mm, plane);
+            if (!geo) return;
+            var mat = _buildCapMaterial(sampleMesh);
+            var others = planes.filter(function (_, j) { return j !== i; });
+            if (others.length) mat.clippingPlanes = others;
+            var capObj = new MeshCtor(geo, mat);
+            capObj.renderOrder = 6;   // 比透視模式的可見邊(10)低、比背面虛線邊(5)高，封頂面本身不需要跟邊線搶深度排序
+            viewer.AddExtraObject(capObj);
+            caps.push(capObj);
+        });
+        return caps;
+    }
     function _buildClipPlane(bbox, axis, ratio, flip) {
         var min = bbox.min[axis], max = bbox.max[axis];
         var planePos = min + (max - min) * ratio;
@@ -1228,8 +1547,9 @@ var EG3DTools = (function () {
                 touchedMats.push(mt);
             });
         });
+        var capObjs = _rebuildCaps(viewer, mm, planes);
         viewer.Render();
-        return { touchedMats: touchedMats, plane: plane, plane2: plane2, dual: dual, bbox: { min: { x: bbox.min.x, y: bbox.min.y, z: bbox.min.z }, max: { x: bbox.max.x, y: bbox.max.y, z: bbox.max.z } } };
+        return { touchedMats: touchedMats, plane: plane, plane2: plane2, dual: dual, capObjs: capObjs, bbox: { min: { x: bbox.min.x, y: bbox.min.y, z: bbox.min.z }, max: { x: bbox.max.x, y: bbox.max.y, z: bbox.max.z } } };
     }
     // 調整現有剖面（換軸／拖曳位置／翻轉保留側／切換雙軸）不必重新掃描全部 mesh，但**一定
     // 要建一組全新的 plane 物件、重新指派整個 clippingPlanes 陣列**，不可以沿用舊物件只
@@ -1259,12 +1579,19 @@ var EG3DTools = (function () {
             mt.clipIntersection = dual;
             mt.needsUpdate = true;
         });
-        embeddedViewer.GetViewer().Render();
+        var viewer = embeddedViewer.GetViewer();
+        var root = viewer.extraModel.GetRootObject();
+        (state.capObjs || []).forEach(function (o) { root.remove(o); });
+        state.capObjs = _rebuildCaps(viewer, viewer.mainModel, planes);
+        viewer.Render();
     }
     function clearSectionMode(embeddedViewer, state) {
         if (!embeddedViewer || !state) return;
         (state.touchedMats || []).forEach(function (mt) { mt.clippingPlanes = null; mt.clipIntersection = false; mt.needsUpdate = true; });
-        embeddedViewer.GetViewer().Render();
+        var viewer = embeddedViewer.GetViewer();
+        var root = viewer.extraModel.GetRootObject();
+        (state.capObjs || []).forEach(function (o) { root.remove(o); });
+        viewer.Render();
     }
 
     function escHtml3d(s) {
