@@ -354,7 +354,7 @@ $db  = new DBConnection();
 $pdo = $db->getPDO();
 
 // ── Migration 版本鎖：版本符合時跳過所有 ALTER/CREATE，只跑一次 ──────────
-define('MDM_MIGRATION_VERSION', '20261007_04');   // 2026-10-07（四次）治具「整組」(dict_workpiece_type.is_jig_set)
+define('MDM_MIGRATION_VERSION', '20261008_01');   // 2026-10-08 治具「整組」改版：d_setting_jig_set(可多筆) 取代 is_jig_set 單一旗標，d_setting_jig_map 改指向 jig_set_id
 $_mdm_skip_migration = false;
 try {
     // system_settings 可能尚不存在（第一次執行），用 try 保護
@@ -546,15 +546,14 @@ try {
      */
     try { $pdo->exec("ALTER TABLE dict_workpiece_type ADD COLUMN is_jig_type TINYINT(1) NOT NULL DEFAULT 0 COMMENT '此工件種類的料號是否可被認定為治具(可被其他料號挑選為專用/通用治具)'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE dict_workpiece_type ADD COLUMN show_jig    TINYINT(1) NOT NULL DEFAULT 0 COMMENT '料號表單是否顯示專用治具/通用治具欄位(多選已標記is_jig_type的現有d_setting料號 → d_setting_jig_map)'"); } catch(Exception $e){}
-    /**
-     * is_jig_set（2026-10-08，「整組」）：使用者原話「有點類似組合件的概念，但不希望多設定料號」——
-     * 治具料號不必像組合件那樣拆成一堆子件料號，只要能記「配哪台機台用／搭配哪個既有料號」就夠辨識，
-     * 沒綁的話就用它自己的規格/名稱當自訂名稱。技術上就是「專用料號」＋「專用機台」這兩個早就做好的
-     * 欄位（d_setting_dedicated_part_map／d_setting_machine_map），這顆旗標純粹是把「勾這個=同時打開
-     * 那兩個欄位」做成一個好懂、好找的單一動作，存檔時會一併把 show_part_no／show_machine 打開
-     * （只會自動打開、不會自動關閉——管理員若有其他理由另外開著，不該被這顆旗標關掉）。
-     */
-    try { $pdo->exec("ALTER TABLE dict_workpiece_type ADD COLUMN is_jig_set  TINYINT(1) NOT NULL DEFAULT 0 COMMENT '整組：此工件種類的料號可設定使用料號/使用機台(等同自動打開show_part_no+show_machine)，不必另建組合件子件'"); } catch(Exception $e){}
+    // is_jig_set（2026-10-08 曾經加過又移除）：第一版把「整組」做成工件種類層級的單一旗標，
+    // 直接重用「專用料號」「專用機台」這兩個欄位——使用者實際測試後指出這是錯的模型：
+    // 「相同治具要可以被跟不同組合設定為不同的整組」，同一支治具料號要能建很多筆不同組合
+    // （配哪台機台＋配哪個料號），不是一支治具只能有一組。已改用 d_setting_jig_set（見下）
+    // 這張真正的「組合記錄」表，一支治具可以掛很多筆。欄位本身保留不主動刪除（舊版曾經寫入過，
+    // DROP COLUMN 對已上線環境風險較高且此表是這次才新增、尚無正式資料依賴它），但此後任何
+    // 程式碼都不再讀寫 is_jig_set。
+    try { $pdo->exec("ALTER TABLE dict_workpiece_type DROP COLUMN is_jig_set"); } catch (Exception $e) {}
     /**
      * d_setting_vendor_map — 料號↔廠商對應（含每廠商單價）
      *  d_id        → d_setting.d_id（料號）
@@ -627,23 +626,58 @@ try {
         INDEX idx_d_id (d_id)
     ) COMMENT='料號↔專用機型對應，綁定的是機台型號文字本身（來源為 machine_list.machine_model）'");
     /**
-     * d_setting_jig_map — 料號↔治具料號對應（皆指向 d_setting，jig_d_id 須為 is_jig_type=1 的工件種類）
-     *  d_id     → d_setting.d_id（使用治具的那一方料號）
-     *  jig_d_id → d_setting.d_id（被挑選的治具料號）
-     *  kind     → dedicated=專用治具　general=通用治具
-     * 同一列資料天生可雙向查詢（WHERE d_id=? 查「我挑了哪些治具」／WHERE jig_d_id=? 查「哪些料號
-     * 在用這把治具」），不需要為了「從治具那邊也看得到」另外寫一次反向資料（鐵律4）。
+     * d_setting_jig_set — 治具「整組」（2026-10-08 新建）
+     * 使用者指出「相同治具要可以被跟不同組合設定為不同的整組」——同一支治具料號（物理上同一把
+     * 夾頭/夾爪…）常常配不同機台、搭配不同既有料號使用，每一種搭配要各自可以被挑選，不是一支
+     * 治具只能有一種配置。「整組」因此是獨立的組合記錄，不是治具料號自己的欄位：
+     *  set_id      → 主鍵
+     *  jig_d_id    → 這組所屬的治具料號，FK → d_setting.d_id（建立後固定，不可改指到別支治具；
+     *                要換治具請新增一筆、刪掉舊的）
+     *  ref_d_id    → 使用料號（選填）：這組是配哪個既有料號用的，FK → d_setting.d_id
+     *  custom_name → 自訂名稱（選填）：沒綁使用料號時用來辨識這一組是做什麼用的
+     * 「使用機台」可多選，另存子表 d_setting_jig_set_machine。
      */
+    $pdo->exec("CREATE TABLE IF NOT EXISTS d_setting_jig_set (
+        set_id      INT AUTO_INCREMENT PRIMARY KEY             COMMENT '主鍵',
+        jig_d_id    INT NOT NULL                                COMMENT '所屬治具料號，FK → d_setting.d_id',
+        ref_d_id    INT NULL                                    COMMENT '使用料號(選填)，FK → d_setting.d_id',
+        custom_name VARCHAR(100) NULL                           COMMENT '自訂名稱(選填)，沒綁使用料號時用來辨識',
+        sort_order  INT NOT NULL DEFAULT 0                      COMMENT '顯示排序(同一支治具底下的組合排序)',
+        created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_by  VARCHAR(11) NULL,
+        INDEX idx_jig_d_id (jig_d_id),
+        INDEX idx_ref_d_id (ref_d_id)
+    ) COMMENT='治具整組：同一支治具可建多筆不同組合(配哪個料號+配哪幾台機台)，是「專用治具/通用治具」實際挑選的對象'");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS d_setting_jig_set_machine (
+        id         INT AUTO_INCREMENT PRIMARY KEY               COMMENT '主鍵',
+        set_id     INT NOT NULL                                 COMMENT '所屬整組，FK → d_setting_jig_set.set_id',
+        machine_id INT NOT NULL                                 COMMENT '機台，FK → machine_list.machine_id',
+        UNIQUE KEY uk_set_machine (set_id, machine_id),
+        INDEX idx_set_id (set_id)
+    ) COMMENT='治具整組↔使用機台對應（一組可綁多台機台）'");
+    /**
+     * d_setting_jig_map — 料號↔治具整組對應。
+     * 2026-10-08 改版：原本直接指向治具料號本身(jig_d_id)，使用者指出一支治具要能有多種整組組合，
+     * 改指向 d_setting_jig_set.set_id；這張表上線以來一直是 0 筆正式資料（只有測試時寫入又清空過），
+     * 直接整張表重建最乾淨，不必寫欄位搬遷邏輯。
+     *  d_id       → d_setting.d_id（使用治具的那一方料號）
+     *  jig_set_id → d_setting_jig_set.set_id（被挑選的那一筆整組）
+     *  kind       → dedicated=專用治具　general=通用治具
+     */
+    try {
+        $chkCol = $pdo->query("SHOW COLUMNS FROM d_setting_jig_map LIKE 'jig_d_id'")->fetch();
+        if ($chkCol) $pdo->exec("DROP TABLE d_setting_jig_map");
+    } catch (Exception $e) {}
     $pdo->exec("CREATE TABLE IF NOT EXISTS d_setting_jig_map (
         map_id     INT AUTO_INCREMENT PRIMARY KEY               COMMENT '主鍵',
         d_id       INT NOT NULL                                 COMMENT '使用治具的料號，FK → d_setting.d_id',
-        jig_d_id   INT NOT NULL                                 COMMENT '治具料號，FK → d_setting.d_id',
+        jig_set_id INT NOT NULL                                 COMMENT '治具整組，FK → d_setting_jig_set.set_id',
         kind       ENUM('dedicated','general') NOT NULL         COMMENT 'dedicated=專用治具 general=通用治具',
         sort_order INT NOT NULL DEFAULT 0                       COMMENT '顯示排序',
-        UNIQUE KEY uk_d_jig_kind (d_id, jig_d_id, kind),
+        UNIQUE KEY uk_d_jigset_kind (d_id, jig_set_id, kind),
         INDEX idx_d_id (d_id),
-        INDEX idx_jig_d_id (jig_d_id)
-    ) COMMENT='料號↔治具料號對應(專用/通用)，對應料號表單的專用治具/通用治具欄位（來源為已標記is_jig_type的現有d_setting料號）'");
+        INDEX idx_jig_set_id (jig_set_id)
+    ) COMMENT='料號↔治具整組對應(專用/通用)，對應料號表單的專用治具/通用治具欄位（來源為 d_setting_jig_set）'");
     try { $pdo->exec("ALTER TABLE maker_category_hierarchy ADD COLUMN sort_order INT NOT NULL DEFAULT 0"); } catch(Exception $e){}
     $pdo->exec("CREATE TABLE IF NOT EXISTS dict_gear_type (gear_type_id INT AUTO_INCREMENT PRIMARY KEY, type_name VARCHAR(50) NOT NULL, has_helix_angle TINYINT DEFAULT 0, sort_order INT DEFAULT 1, is_active TINYINT DEFAULT 1, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) COMMENT='齒輪類型字典：決定前端UI顯示邏輯與後端AI計算模型分類'");
     try { $pdo->exec("ALTER TABLE dict_gear_type COMMENT='齒輪類型字典：決定前端UI顯示邏輯與後端AI計算模型分類'"); } catch(Exception $e){}
@@ -1663,6 +1697,61 @@ eg_part_alias_ensure_table($pdo);
 require_once __DIR__ . '/../../src/common/data_console_lib.php';
 // 專用機台的「機台編號／機台種類／機型」兩層挑選器資料來源（唯一實作，與 sop_sip 挑設備同款操作方式）
 require_once __DIR__ . '/../../src/common/machine_pick_lib.php';
+
+/**
+ * 治具「整組」批次組出完整顯示資料（唯一實作，get_part／jig_pick_search／jig_set_list 共用，
+ * 禁止各自再拼一次——欄位組成遲早走鐘）。回傳 [set_id => 完整資料]，包含治具本身的料號/規格/
+ * 工件小類/是否組合件(若是組合件再附子件料號)、使用料號(ref_d_id，若有)、自訂名稱、使用機台清單。
+ */
+function eg_jig_set_build(PDO $pdo, array $setIds): array {
+    $setIds = array_values(array_unique(array_filter(array_map('intval', $setIds), fn($v) => $v > 0)));
+    if (!$setIds) return [];
+    $ph = implode(',', array_fill(0, count($setIds), '?'));
+    $st = $pdo->prepare("SELECT s.set_id, s.jig_d_id, j.D_Setting_Id AS jig_part_id, COALESCE(j.Spec_No,'') AS jig_spec_no,
+                                 COALESCE(jst.sub_type_name,'') AS jig_sub_type_name, j.Is_Assembly AS jig_is_assembly,
+                                 s.ref_d_id, r.D_Setting_Id AS ref_part_id, COALESCE(r.Spec_No,'') AS ref_spec_no,
+                                 s.custom_name
+                          FROM d_setting_jig_set s
+                          JOIN d_setting j ON j.d_id = s.jig_d_id
+                          LEFT JOIN dict_workpiece_sub_type jst ON jst.sub_type_id = j.workpiece_sub_type_id
+                          LEFT JOIN d_setting r ON r.d_id = s.ref_d_id
+                          WHERE s.set_id IN ($ph)");
+    $st->execute($setIds);
+    $out = [];
+    $jigIds = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $r['is_assembly'] = ((int)$r['jig_is_assembly'] === 1) ? 1 : 0;
+        $r['machines'] = [];
+        $r['child_part_nos'] = [];
+        $out[(int)$r['set_id']] = $r;
+        if ($r['is_assembly']) $jigIds[] = (int)$r['jig_d_id'];
+    }
+    if (!$out) return [];
+    // 使用機台（批次）
+    $mq = $pdo->prepare("SELECT jsm.set_id, COALESCE(ml.machine,'') AS machine_name, COALESCE(ml.field_no,'') AS field_no
+                          FROM d_setting_jig_set_machine jsm LEFT JOIN machine_list ml ON ml.machine_id=jsm.machine_id
+                          WHERE jsm.set_id IN ($ph) ORDER BY jsm.id");
+    $mq->execute($setIds);
+    foreach ($mq->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $sid = (int)$r['set_id'];
+        if (isset($out[$sid])) $out[$sid]['machines'][] = $r['machine_name'] . ($r['field_no'] ? ' [' . $r['field_no'] . ']' : '');
+    }
+    // 組合件治具的子件料號（批次，只供畫面辨識用）
+    if ($jigIds) {
+        $jigIds = array_values(array_unique($jigIds));
+        $ph2 = implode(',', array_fill(0, count($jigIds), '?'));
+        $bq = $pdo->prepare("SELECT b.parent_d_id, cd.D_Setting_Id AS child_part_no
+                              FROM d_setting_bom b JOIN d_setting cd ON cd.d_id=b.child_d_id
+                              WHERE b.parent_d_id IN ($ph2) ORDER BY b.bom_id");
+        $bq->execute($jigIds);
+        $childMap = [];
+        foreach ($bq->fetchAll(PDO::FETCH_ASSOC) as $r) $childMap[(int)$r['parent_d_id']][] = $r['child_part_no'];
+        foreach ($out as $sid => &$row) $row['child_part_nos'] = $childMap[(int)$row['jig_d_id']] ?? [];
+        unset($row);
+    }
+    return $out;
+}
+
 $_mdFeats = [];
 try { $_mdFeats = rbac_user_features($pdo, (int)$user_id); } catch (Exception $_e) {}
 $_mdRbacAll = in_array('all', $_mdFeats, true);
@@ -2564,17 +2653,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $mmq->execute([$d_id]);
                 $row['machine_model_map'] = $mmq->fetchAll(PDO::FETCH_ASSOC);
             } catch (Exception $ex) { $row['machine_model_map'] = []; }
-            // 專用治具／通用治具對應（同一張表按 kind 分兩組回傳，畫面各自渲染）
+            // 專用治具／通用治具對應（指向治具「整組」set_id，同一張表按 kind 分兩組回傳，畫面各自渲染）
             try {
-                $jq = $pdo->prepare("SELECT jm.jig_d_id, jm.kind, j.D_Setting_Id AS part_id, COALESCE(j.Spec_No,'') AS spec_no,
-                                            COALESCE(c.customer,'') AS client_name
-                                     FROM d_setting_jig_map jm JOIN d_setting j ON j.d_id=jm.jig_d_id
-                                     LEFT JOIN customer_list c ON j.Customer_Id=c.customer_id
-                                     WHERE jm.d_id=? ORDER BY jm.sort_order, jm.map_id");
+                $jq = $pdo->prepare("SELECT jm.jig_set_id, jm.kind FROM d_setting_jig_map jm WHERE jm.d_id=? ORDER BY jm.sort_order, jm.map_id");
                 $jq->execute([$d_id]);
                 $jigRows = $jq->fetchAll(PDO::FETCH_ASSOC);
-                $row['jig_dedicated_map'] = array_values(array_filter($jigRows, function($r){ return $r['kind']==='dedicated'; }));
-                $row['jig_general_map']   = array_values(array_filter($jigRows, function($r){ return $r['kind']==='general'; }));
+                $jigSetData = eg_jig_set_build($pdo, array_column($jigRows, 'jig_set_id'));
+                $mkRows = function(array $rows, string $kind) use ($jigSetData) {
+                    $out = [];
+                    foreach ($rows as $r) {
+                        if ($r['kind'] !== $kind) continue;
+                        $sid = (int)$r['jig_set_id'];
+                        if (isset($jigSetData[$sid])) $out[] = $jigSetData[$sid];
+                    }
+                    return $out;
+                };
+                $row['jig_dedicated_map'] = $mkRows($jigRows, 'dedicated');
+                $row['jig_general_map']   = $mkRows($jigRows, 'general');
             } catch (Exception $ex) { $row['jig_dedicated_map'] = []; $row['jig_general_map'] = []; }
             echo json_encode(['success'=>true,'data'=>$row]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
@@ -3114,26 +3209,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $ins_mo->execute([$d_id, $model, $k]);
             }
 
-            // ── 專用治具／通用治具對應 ── d_setting_jig_map
-            // 後端一律重新驗證 jig_d_id 真的屬於已勾「可被認定為治具」的工件種類（鐵律8：
-            // 前端挑選器已經篩過，但直打 API 仍不可信任送來的 d_id，避免把任意料號塞進治具欄位）。
+            // ── 專用治具／通用治具對應 ── d_setting_jig_map（綁定的對象是治具「整組」set_id）
+            // 後端一律重新驗證 set_id 真的存在（鐵律8：前端挑選器已經篩過，但直打 API 仍不可信任
+            // 送來的 id；set_id 本身建立當下就已限定只能掛在 is_jig_type=1 的治具料號下，不必在
+            // 這裡重複檢查工件種類）。
             $jig_raw_d = trim($_POST['jig_dedicated_map'] ?? '[]');
             $jig_raw_g = trim($_POST['jig_general_map']   ?? '[]');
             $jig_arr_d = json_decode($jig_raw_d, true) ?: [];
             $jig_arr_g = json_decode($jig_raw_g, true) ?: [];
             $pdo->prepare("DELETE FROM d_setting_jig_map WHERE d_id=?")->execute([$d_id]);
-            $ins_jm = $pdo->prepare("INSERT IGNORE INTO d_setting_jig_map (d_id, jig_d_id, kind, sort_order) VALUES (?,?,?,?)");
-            $jigValid = $pdo->prepare("SELECT 1 FROM d_setting d2 JOIN dict_workpiece_type t2 ON t2.type_code=d2.Type AND t2.is_jig_type=1 WHERE d2.d_id=? LIMIT 1");
+            $ins_jm = $pdo->prepare("INSERT IGNORE INTO d_setting_jig_map (d_id, jig_set_id, kind, sort_order) VALUES (?,?,?,?)");
+            $jigSetValid = $pdo->prepare("SELECT jig_d_id FROM d_setting_jig_set WHERE set_id=? LIMIT 1");
             foreach ([['dedicated',$jig_arr_d], ['general',$jig_arr_g]] as $jg) {
                 list($kind, $arr) = $jg;
                 $seen = [];
                 foreach (array_values($arr) as $k => $jm) {
-                    $jid = intval($jm['ref_d_id'] ?? $jm['jig_d_id'] ?? 0);
-                    if ($jid <= 0 || $jid === $d_id || isset($seen[$jid])) continue;
-                    $jigValid->execute([$jid]);
-                    if (!$jigValid->fetchColumn()) continue; // 不是被標記為治具的料號，一律不寫入
-                    $seen[$jid] = true;
-                    $ins_jm->execute([$d_id, $jid, $kind, $k]);
+                    $sid = intval($jm['set_id'] ?? 0);
+                    if ($sid <= 0 || isset($seen[$sid])) continue;
+                    $jigSetValid->execute([$sid]);
+                    $jigOwner = $jigSetValid->fetchColumn();
+                    if ($jigOwner === false || (int)$jigOwner === $d_id) continue; // 整組不存在，或治具自己掛自己（自我關聯）
+                    $seen[$sid] = true;
+                    $ins_jm->execute([$d_id, $sid, $kind, $k]);
                 }
             }
 
@@ -3812,70 +3909,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
-    // ── 治具料號挑選（專用治具／通用治具共用，候選＝工件種類字典已勾 is_jig_type 的料號）──
+    // ── 治具整組挑選（專用治具／通用治具共用，候選＝d_setting_jig_set 整組記錄，不是治具料號本身）──
+    // 同一支治具可能有好幾筆不同整組（配不同機台/料號），挑選器挑的是「整組」，不是「治具料號」。
     // 關鍵字／規格／工件小類任一條件都沒給時不查（候選量未知，不可能無條件撈全部）。
     if ($_POST['action'] === 'jig_pick_search') {
         try {
             $kw    = trim($_POST['kw'] ?? '');
             $spec  = trim($_POST['spec'] ?? '');
             $subId = intval($_POST['sub_type_id'] ?? 0);
-            $exclude = intval($_POST['exclude_d_id'] ?? 0); // 排除自己，避免自我關聯
+            $exclude = intval($_POST['exclude_d_id'] ?? 0); // 排除自己當自己的治具（比對治具料號本身）
             if ($kw === '' && $spec === '' && $subId <= 0) { echo json_encode(['success'=>true,'data'=>[]]); exit; }
-            $w = ["d.Type IN (SELECT type_code FROM dict_workpiece_type WHERE is_jig_type=1)"];
+            $w = ["j.Type IN (SELECT type_code FROM dict_workpiece_type WHERE is_jig_type=1)"];
             $p = [];
-            if ($kw !== '')   { $w[] = "(d.D_Setting_Id LIKE :kw OR d.Spec_No LIKE :kw OR d.Drawing_No LIKE :kw OR c.customer LIKE :kw)"; $p[':kw'] = "%$kw%"; }
-            if ($spec !== '') { $w[] = "d.Spec_No LIKE :spec"; $p[':spec'] = "%$spec%"; }
-            if ($subId > 0)   { $w[] = "d.workpiece_sub_type_id = :sub"; $p[':sub'] = $subId; }
-            if ($exclude > 0) { $w[] = "d.d_id <> :exid"; $p[':exid'] = $exclude; }
-            $sql = "SELECT d.d_id, d.D_Setting_Id AS part_id, COALESCE(d.Spec_No,'') AS spec_no,
-                           COALESCE(st.sub_type_name,'') AS sub_type_name, COALESCE(c.customer,'') AS client_name,
-                           d.Is_Assembly
-                    FROM d_setting d
-                    LEFT JOIN customer_list c ON d.Customer_Id=c.customer_id
-                    LEFT JOIN dict_workpiece_sub_type st ON st.sub_type_id=d.workpiece_sub_type_id
+            if ($kw !== '') {
+                $w[] = "(j.D_Setting_Id LIKE :kw OR j.Spec_No LIKE :kw OR j.Drawing_No LIKE :kw OR c.customer LIKE :kw
+                          OR r.D_Setting_Id LIKE :kw OR s.custom_name LIKE :kw
+                          OR EXISTS (SELECT 1 FROM d_setting_jig_set_machine jsm2 LEFT JOIN machine_list ml2 ON ml2.machine_id=jsm2.machine_id
+                                     WHERE jsm2.set_id=s.set_id AND (ml2.machine LIKE :kw OR ml2.field_no LIKE :kw)))";
+                $p[':kw'] = "%$kw%";
+            }
+            if ($spec !== '') { $w[] = "j.Spec_No LIKE :spec"; $p[':spec'] = "%$spec%"; }
+            if ($subId > 0)   { $w[] = "j.workpiece_sub_type_id = :sub"; $p[':sub'] = $subId; }
+            if ($exclude > 0) { $w[] = "j.d_id <> :exid"; $p[':exid'] = $exclude; }
+            $sql = "SELECT s.set_id
+                    FROM d_setting_jig_set s
+                    JOIN d_setting j ON j.d_id = s.jig_d_id
+                    LEFT JOIN customer_list c ON j.Customer_Id=c.customer_id
+                    LEFT JOIN d_setting r ON r.d_id = s.ref_d_id
                     WHERE " . implode(' AND ', $w) . "
-                    ORDER BY d.D_Setting_Id LIMIT 100";
+                    ORDER BY j.D_Setting_Id, s.sort_order LIMIT 100";
             $stmt = $pdo->prepare($sql);
             $stmt->execute($p);
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            $allIds = array_column($rows, 'd_id');
-            $asmIds = array_column(array_filter($rows, function($r){ return (int)$r['Is_Assembly']===1; }), 'd_id');
-            // 組合件補子件料號（只供畫面辨識用，不影響綁定本身）
-            $childMap = [];
-            if ($asmIds) {
-                $ph = implode(',', array_fill(0, count($asmIds), '?'));
-                $sb = $pdo->prepare("SELECT b.parent_d_id, cd.D_Setting_Id AS child_part_no
-                                     FROM d_setting_bom b JOIN d_setting cd ON cd.d_id=b.child_d_id
-                                     WHERE b.parent_d_id IN ($ph) ORDER BY b.bom_id");
-                $sb->execute($asmIds);
-                foreach ($sb->fetchAll(PDO::FETCH_ASSOC) as $r2) $childMap[$r2['parent_d_id']][] = $r2['child_part_no'];
-            }
-            // 「使用機台／使用料號」：治具自己用現有的專用機台/專用料號欄位記錄，顯示出來幫助辨識
-            // 同名治具是配哪一台機器的（使用者 2026-10-07：綁定使用料號/使用機台或自訂名稱可供搜索辨識）。
-            $machMap = []; $usedPartMap = [];
-            if ($allIds) {
-                $ph2 = implode(',', array_fill(0, count($allIds), '?'));
-                $mq = $pdo->prepare("SELECT mm.d_id, COALESCE(ml.machine,'') AS machine_name, COALESCE(ml.field_no,'') AS field_no
-                                     FROM d_setting_machine_map mm LEFT JOIN machine_list ml ON ml.machine_id=mm.machine_id
-                                     WHERE mm.d_id IN ($ph2) ORDER BY mm.sort_order, mm.map_id");
-                $mq->execute($allIds);
-                foreach ($mq->fetchAll(PDO::FETCH_ASSOC) as $r3) {
-                    $machMap[$r3['d_id']][] = $r3['machine_name'] . ($r3['field_no'] ? ' [' . $r3['field_no'] . ']' : '');
-                }
-                $upq = $pdo->prepare("SELECT dm.d_id, pd.D_Setting_Id AS used_part_no
-                                      FROM d_setting_dedicated_part_map dm JOIN d_setting pd ON pd.d_id=dm.ref_d_id
-                                      WHERE dm.d_id IN ($ph2) ORDER BY dm.sort_order, dm.map_id");
-                $upq->execute($allIds);
-                foreach ($upq->fetchAll(PDO::FETCH_ASSOC) as $r4) $usedPartMap[$r4['d_id']][] = $r4['used_part_no'];
-            }
-            foreach ($rows as &$r) {
-                $r['is_assembly']     = ((int)$r['Is_Assembly']===1) ? 1 : 0;
-                $r['child_part_nos']  = $r['is_assembly'] ? ($childMap[$r['d_id']] ?? []) : [];
-                $r['used_machines']   = $machMap[$r['d_id']] ?? [];
-                $r['used_part_nos']   = $usedPartMap[$r['d_id']] ?? [];
-                unset($r['Is_Assembly']);
-            }
-            unset($r);
+            $setIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
+            $data = eg_jig_set_build($pdo, $setIds);
+            $rows = [];
+            foreach ($setIds as $sid) { if (isset($data[$sid])) $rows[] = $data[$sid]; } // 保留 SQL 排好的順序
             echo json_encode(['success'=>true,'data'=>$rows]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -3891,6 +3959,107 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                   ORDER BY st.sort_order, st.sub_type_id")->fetchAll(PDO::FETCH_ASSOC);
             echo json_encode(['success'=>true,'data'=>$rows]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    // ── 治具「整組」清單（某支治具底下的所有組合，供該治具自己的編輯畫面管理用）──────
+    if ($_POST['action'] === 'jig_set_list') {
+        try {
+            $jigDid = intval($_POST['jig_d_id'] ?? 0);
+            if ($jigDid <= 0) { echo json_encode(['success'=>true,'data'=>[]]); exit; }
+            $st = $pdo->prepare("SELECT set_id FROM d_setting_jig_set WHERE jig_d_id=? ORDER BY sort_order, set_id");
+            $st->execute([$jigDid]);
+            $setIds = $st->fetchAll(PDO::FETCH_COLUMN);
+            $data = eg_jig_set_build($pdo, $setIds);
+            $rows = [];
+            foreach ($setIds as $sid) { if (isset($data[$sid])) $rows[] = $data[$sid]; }
+            echo json_encode(['success'=>true,'data'=>$rows]);
+        } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    // ── 治具「整組」新增／編輯 ───────────────────────────────────────────────
+    // 「相同治具要可以被跟不同組合設定為不同的整組」——一支治具可以建很多筆，每筆各自綁
+    // 使用料號(選填)＋使用機台(可多選)＋自訂名稱(選填，沒選使用料號時用來辨識)。
+    if ($_POST['action'] === 'jig_set_save') {
+        try {
+            $jigDid = intval($_POST['jig_d_id'] ?? 0);
+            $setId  = intval($_POST['set_id'] ?? 0);
+            $refDidRaw = intval($_POST['ref_d_id'] ?? 0);
+            $customName = trim($_POST['custom_name'] ?? '');
+            // 沒送 machine_ids（使用者這次沒動「挑選機台」）＝維持既有機台清單不動；
+            // 送了（含空陣列＝刻意清空）才覆蓋。鐵律8：沒送≠清空，兩種是不同語意。
+            $hasMachineIds = array_key_exists('machine_ids', $_POST);
+            $machineIds = $hasMachineIds ? (json_decode($_POST['machine_ids'], true) ?: []) : [];
+            if ($jigDid <= 0) throw new Exception('缺少治具料號');
+            // 後端重新驗證：這支料號真的屬於已勾「可被認定為治具」的工件種類（鐵律8）
+            $chk = $pdo->prepare("SELECT 1 FROM d_setting d JOIN dict_workpiece_type t ON t.type_code=d.Type AND t.is_jig_type=1 WHERE d.d_id=? LIMIT 1");
+            $chk->execute([$jigDid]);
+            if (!$chk->fetchColumn()) throw new Exception('這支料號所屬的工件種類尚未勾選「可被認定為治具」');
+            $refDid = null;
+            if ($refDidRaw > 0) {
+                if ($refDidRaw === $jigDid) throw new Exception('使用料號不可以是治具自己');
+                $chk2 = $pdo->prepare("SELECT 1 FROM d_setting WHERE d_id=? LIMIT 1");
+                $chk2->execute([$refDidRaw]);
+                if (!$chk2->fetchColumn()) throw new Exception('使用料號不存在');
+                $refDid = $refDidRaw;
+            }
+            if ($refDid === null && $customName === '') throw new Exception('使用料號與自訂名稱至少要填一個，才能辨識這一組是做什麼用的');
+            $machineIds = array_values(array_unique(array_filter(array_map('intval',$machineIds), fn($v) => $v > 0)));
+
+            $pdo->beginTransaction();
+            if ($setId > 0) {
+                // 編輯：確認這一筆真的屬於這支治具，不可能跨治具改（要換治具請新增一筆、刪掉舊的）
+                $own = $pdo->prepare("SELECT jig_d_id FROM d_setting_jig_set WHERE set_id=? LIMIT 1");
+                $own->execute([$setId]);
+                $ownerJig = $own->fetchColumn();
+                if ($ownerJig === false) throw new Exception('整組不存在');
+                if ((int)$ownerJig !== $jigDid) throw new Exception('這一筆整組不屬於這支治具');
+                $pdo->prepare("UPDATE d_setting_jig_set SET ref_d_id=?, custom_name=? WHERE set_id=?")
+                    ->execute([$refDid, ($customName !== '' ? $customName : null), $setId]);
+            } else {
+                $ordSt = $pdo->prepare("SELECT COALESCE(MAX(sort_order),-1) FROM d_setting_jig_set WHERE jig_d_id=?");
+                $ordSt->execute([$jigDid]);
+                $maxOrd = (int)$ordSt->fetchColumn();
+                $ins = $pdo->prepare("INSERT INTO d_setting_jig_set (jig_d_id, ref_d_id, custom_name, sort_order, created_by) VALUES (?,?,?,?,?)");
+                $ins->execute([$jigDid, $refDid, ($customName !== '' ? $customName : null), $maxOrd + 1, $user_id ?: null]);
+                $setId = (int)$pdo->lastInsertId();
+            }
+            if ($hasMachineIds) {
+                $pdo->prepare("DELETE FROM d_setting_jig_set_machine WHERE set_id=?")->execute([$setId]);
+                if ($machineIds) {
+                    $insM = $pdo->prepare("INSERT IGNORE INTO d_setting_jig_set_machine (set_id, machine_id) VALUES (?,?)");
+                    foreach ($machineIds as $mid) $insM->execute([$setId, $mid]);
+                }
+            }
+            $pdo->commit();
+            $data = eg_jig_set_build($pdo, [$setId]);
+            echo json_encode(['success'=>true,'set_id'=>$setId,'row'=>$data[$setId] ?? null]);
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            echo json_encode(['success'=>false,'message'=>$e->getMessage()]);
+        }
+        exit;
+    }
+
+    // ── 治具「整組」刪除 ─────────────────────────────────────────────────────
+    if ($_POST['action'] === 'jig_set_delete') {
+        try {
+            $setId = intval($_POST['set_id'] ?? 0);
+            if ($setId <= 0) throw new Exception('缺少整組編號');
+            $chk = $pdo->prepare("SELECT d.D_Setting_Id FROM d_setting_jig_map jm JOIN d_setting d ON d.d_id=jm.d_id WHERE jm.jig_set_id=?");
+            $chk->execute([$setId]);
+            $usedBy = $chk->fetchAll(PDO::FETCH_COLUMN);
+            if ($usedBy) throw new Exception('這組已經被以下料號設為治具，無法刪除：' . implode('、', array_slice($usedBy, 0, 10)) . (count($usedBy) > 10 ? ' 等' : ''));
+            $pdo->beginTransaction();
+            $pdo->prepare("DELETE FROM d_setting_jig_set_machine WHERE set_id=?")->execute([$setId]);
+            $pdo->prepare("DELETE FROM d_setting_jig_set WHERE set_id=?")->execute([$setId]);
+            $pdo->commit();
+            echo json_encode(['success'=>true]);
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            echo json_encode(['success'=>false,'message'=>$e->getMessage()]);
+        }
         exit;
     }
 
@@ -4626,8 +4795,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 ['d_setting_old_part_links(舊料號)', "UPDATE d_setting_old_part_links SET old_d_id=? WHERE old_d_id=?", [$tgt_id,$src_id]],
                 ['stock_item_units', "UPDATE stock_item_units SET d_setting_id=? WHERE d_setting_id=?", [$tgt_id,$src_id]],
                 ['stock_safety_stock', "UPDATE stock_safety_stock SET d_id=?, d_setting_id=? WHERE d_setting_id=?", [$tds,$tgt_id,$src_id]],
-                ['d_setting_jig_map',        "UPDATE d_setting_jig_map SET d_id=? WHERE d_id=?", [$tgt_id,$src_id]],
-                ['d_setting_jig_map(治具方)', "UPDATE d_setting_jig_map SET jig_d_id=? WHERE jig_d_id=?", [$tgt_id,$src_id]],
+                ['d_setting_jig_map',              "UPDATE d_setting_jig_map SET d_id=? WHERE d_id=?", [$tgt_id,$src_id]],
+                ['d_setting_jig_set(治具方)',       "UPDATE d_setting_jig_set SET jig_d_id=? WHERE jig_d_id=?", [$tgt_id,$src_id]],
+                ['d_setting_jig_set(使用料號方)',   "UPDATE d_setting_jig_set SET ref_d_id=? WHERE ref_d_id=?", [$tgt_id,$src_id]],
                 ['d_setting_machine_type_map',  "UPDATE d_setting_machine_type_map SET d_id=? WHERE d_id=?", [$tgt_id,$src_id]],
                 ['d_setting_machine_model_map', "UPDATE d_setting_machine_model_map SET d_id=? WHERE d_id=?", [$tgt_id,$src_id]],
             ];
@@ -4920,23 +5090,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $code = trim($_POST['type_code'] ?? '');
                 $name = trim($_POST['type_name'] ?? '');
                 if (empty($code) || empty($name)) throw new Exception('代碼與名稱不可為空');
-                $old_wt = $pdo->prepare("SELECT type_name, show_vendor, show_part_no, show_machine, show_price, is_jig_type, show_jig, is_jig_set FROM dict_workpiece_type WHERE type_code=?"); $old_wt->execute([$code]); $old_wt_row = $old_wt->fetch(PDO::FETCH_ASSOC);
+                $old_wt = $pdo->prepare("SELECT type_name, show_vendor, show_part_no, show_machine, show_price, is_jig_type, show_jig FROM dict_workpiece_type WHERE type_code=?"); $old_wt->execute([$code]); $old_wt_row = $old_wt->fetch(PDO::FETCH_ASSOC);
                 if (!_mdPerm('workpiece_type', $old_wt_row ? 'edit' : 'add', $can_dict_part)) throw new Exception('無'.($old_wt_row?'修改':'新增').'權限（需要 A、CDR 或 CDRU 權限）');
                 // 料號表單欄位顯示開關（依工件種類）
                 $sv = !empty($_POST['show_vendor'])  ? 1 : 0;
                 $sp = !empty($_POST['show_part_no']) ? 1 : 0;
                 $sm = !empty($_POST['show_machine']) ? 1 : 0;
                 $spr= !empty($_POST['show_price'])   ? 1 : 0;
-                $sjt= !empty($_POST['is_jig_type'])  ? 1 : 0;   // 此種類的料號可被認定為治具（可被挑選）
+                $sjt= !empty($_POST['is_jig_type'])  ? 1 : 0;   // 此種類的料號可被認定為治具（可被挑選，見 d_setting_jig_set）
                 $sj = !empty($_POST['show_jig'])     ? 1 : 0;   // 料號表單顯示專用/通用治具欄位（可挑治具）
-                $sjs= !empty($_POST['is_jig_set'])   ? 1 : 0;   // 整組：可設定使用料號/使用機台
-                // 「整組」只會自動打開 show_part_no/show_machine，不會自動關掉——管理員若有其他理由
-                // 另外開著這兩個欄位，不該因為沒勾整組就被這裡關掉。
-                if ($sjs) { $sp = 1; $sm = 1; }
-                $pdo->prepare("INSERT INTO dict_workpiece_type (type_code, type_name, show_vendor, show_part_no, show_machine, show_price, is_jig_type, show_jig, is_jig_set) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE type_name=VALUES(type_name), show_vendor=VALUES(show_vendor), show_part_no=VALUES(show_part_no), show_machine=VALUES(show_machine), show_price=VALUES(show_price), is_jig_type=VALUES(is_jig_type), show_jig=VALUES(show_jig), is_jig_set=VALUES(is_jig_set)")->execute([$code, $name, $sv, $sp, $sm, $spr, $sjt, $sj, $sjs]);
+                $pdo->prepare("INSERT INTO dict_workpiece_type (type_code, type_name, show_vendor, show_part_no, show_machine, show_price, is_jig_type, show_jig) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE type_name=VALUES(type_name), show_vendor=VALUES(show_vendor), show_part_no=VALUES(show_part_no), show_machine=VALUES(show_machine), show_price=VALUES(show_price), is_jig_type=VALUES(is_jig_type), show_jig=VALUES(show_jig)")->execute([$code, $name, $sv, $sp, $sm, $spr, $sjt, $sj]);
                 $uid = $_SESSION['user_id']??null; $op_name = _get_operator($pdo,$uid);
-                $newRow = ['type_name'=>$name,'show_vendor'=>$sv,'show_part_no'=>$sp,'show_machine'=>$sm,'show_price'=>$spr,'is_jig_type'=>$sjt,'show_jig'=>$sj,'is_jig_set'=>$sjs];
-                if ($old_wt_row) { $ch=_diff_rows($old_wt_row,$newRow,['type_name','show_vendor','show_part_no','show_machine','show_price','is_jig_type','show_jig','is_jig_set']); if(!empty($ch)) _log_audit($pdo,'update','dict','workpiece:'.$code,$name,$ch,$uid,$op_name); }
+                $newRow = ['type_name'=>$name,'show_vendor'=>$sv,'show_part_no'=>$sp,'show_machine'=>$sm,'show_price'=>$spr,'is_jig_type'=>$sjt,'show_jig'=>$sj];
+                if ($old_wt_row) { $ch=_diff_rows($old_wt_row,$newRow,['type_name','show_vendor','show_part_no','show_machine','show_price','is_jig_type','show_jig']); if(!empty($ch)) _log_audit($pdo,'update','dict','workpiece:'.$code,$name,$ch,$uid,$op_name); }
                 else _log_audit($pdo,'insert','dict','workpiece:'.$code,$name,null,$uid,$op_name);
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'check_delete') {
@@ -8704,7 +8870,7 @@ body { background:#F6F1EA; }
     <!-- 專用料號（可多選現有料號）→ d_setting_dedicated_part_map -->
     <div class="col-md-6" id="pf-partno-group" style="display:none;">
         <div class="form-group">
-            <label style="font-size:12px;"><i class="fa fa-barcode" style="color:#888;margin-right:4px;"></i><span id="pf-partno-label-txt">專用料號</span> <span style="font-weight:normal;color:#aaa;font-size:11px;">（可多選，來源為現有料號）</span></label>
+            <label style="font-size:12px;"><i class="fa fa-barcode" style="color:#888;margin-right:4px;"></i>專用料號 <span style="font-weight:normal;color:#aaa;font-size:11px;">（可多選，來源為現有料號）</span></label>
             <div style="position:relative;">
                 <input type="text" class="form-control input-sm" id="pf-ac-partno-input" placeholder="輸入料號或規格搜尋…" autocomplete="off" oninput="pfAcSearch('partno',this.value)" onkeydown="pfAcInputKey(event,'partno')">
                 <div id="pf-ac-partno-dropdown" class="pf-ac-dropdown" style="display:none;"></div>
@@ -8719,7 +8885,7 @@ body { background:#F6F1EA; }
          機台都可以用，不限定哪一台)；機型＝綁到機台型號文字(同型號的機台都可以用)。 -->
     <div class="col-md-6" id="pf-machine-group" style="display:none;">
         <div class="form-group">
-            <label style="font-size:12px;"><i class="fa fa-cogs" style="color:#888;margin-right:4px;"></i><span id="pf-machine-label-txt">專用機台</span> <span style="font-weight:normal;color:#aaa;font-size:11px;">（機台編號，可多選）</span></label>
+            <label style="font-size:12px;"><i class="fa fa-cogs" style="color:#888;margin-right:4px;"></i>專用機台 <span style="font-weight:normal;color:#aaa;font-size:11px;">（機台編號，可多選）</span></label>
             <div id="mpk-list-machine" class="pf-ac-list" style="margin-top:2px;"></div>
             <button type="button" class="btn btn-xs btn-default" onclick="mpkOpen('machine')" style="margin-top:4px;"><i class="fa fa-plus"></i> 挑選機台</button>
             <input type="hidden" id="pf-machine-map" name="machine_map" value="[]">
@@ -8758,6 +8924,15 @@ body { background:#F6F1EA; }
             <input type="hidden" id="pf-jig-general-map" name="jig_general_map" value="[]">
         </div>
     </div>
+</div>
+
+<!-- 治具「整組」清單：只有這支料號所屬的工件種類已勾「可被認定為治具」且料號已存檔(有 d_id)
+     時才出現。每一筆整組是獨立的真實記錄(d_setting_jig_set)，各自即時存檔，不隨著整張料號
+     表單一起送出——相同治具可以建很多筆不同組合(配不同機台/料號)，不是一支治具只有一組。 -->
+<div id="pf-jigset-wrap" style="display:none;margin-bottom:10px;border-top:1px dashed #ddd;padding-top:8px;">
+    <label style="font-size:12px;color:#888;margin-bottom:4px;display:block;"><i class="fa fa-cubes" style="color:#888;margin-right:4px;"></i>整組清單 <span style="font-weight:normal;color:#aaa;">（這支治具可以配不同機台／料號，各自存成一組；其他料號的「專用治具／通用治具」就是在挑這些組合）</span></label>
+    <div id="pf-jigset-list"></div>
+    <button type="button" class="btn btn-xs btn-default" onclick="jigSetAddRow()" style="margin-top:4px;"><i class="fa fa-plus"></i> 新增一組</button>
 </div>
 
 <div class="row">
@@ -8944,7 +9119,7 @@ eg_gear_spec_section(['section_id' => 'gear-section', 'wrap_id' => 'gear-rows-wr
 <div class="modal fade" id="jigPickModal" tabindex="-1" style="z-index:1056;"><div class="modal-dialog" style="width:860px;max-width:96vw;"><div class="modal-content">
 <div class="modal-header" style="background:#2A3F54;color:#fff;padding:10px 16px;"><button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:1;">&times;</button><h4 class="modal-title" id="jigPick-title" style="font-size:14px;"><i class="fa fa-wrench"></i> 挑選治具</h4></div>
 <div class="modal-body" style="padding:14px;">
-<div style="font-size:12px;color:#888;margin-bottom:10px;">候選範圍是「工件種類字典」已勾選「可被認定為治具」的那些工件種類底下的料號；打字搜尋料號/規格/圖號/客戶名稱，或用下面兩個欄位快速過濾，勾選後按「套用」。</div>
+<div style="font-size:12px;color:#888;margin-bottom:10px;">候選是治具料號底下建立的「整組」（配哪個使用料號／使用機台），不是治具料號本身——同一支治具可能有好幾組不同配置。打字搜尋治具料號/規格/圖號/客戶名稱/使用料號/自訂名稱/機台，或用下面兩個欄位快速過濾，勾選後按「套用」；要先到治具料號自己的編輯畫面建立「整組」才挑得到。</div>
 <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:flex-end;">
     <div style="flex:2;min-width:160px;"><label style="font-size:11px;color:#888;display:block;">關鍵字（料號／規格／圖號／客戶）</label>
         <input type="text" id="jp-kw" class="form-control input-sm" placeholder="輸入關鍵字…" oninput="debouncedJigPickSearch()" onkeydown="if(event.key==='Enter'){event.preventDefault();jigPickSearch();}"></div>
@@ -14882,13 +15057,11 @@ function applyPartExtraFieldVisibility(typeCode) {
     if (jgg) jgg.style.display = meta.show_jig ? '' : 'none';
     if (wrap) wrap.style.display = (vendorVisible||meta.show_part_no||meta.show_machine||meta.show_jig) ? '' : 'none';
     _pfAcRenderList('vendor'); // 價格欄顯示狀態可能改變，重繪廠商清單
-    // 「整組」工件種類（如治具 J）：專用料號/專用機台改稱「使用料號」「使用機台」——對一般料號來說
-    // 這兩個欄位是「我需要什麼」，但對治具整組來說是「我自己是配哪個料號/哪台機台用的」，意思相反，
-    // 換個名字才不會混淆（使用者 2026-10-08：治具整組要能依使用料號/使用機台辨識）。
-    var ptxt = document.getElementById('pf-partno-label-txt');
-    var mtxt = document.getElementById('pf-machine-label-txt');
-    if (ptxt) ptxt.textContent = meta.is_jig_set ? '使用料號' : '專用料號';
-    if (mtxt) mtxt.textContent = meta.is_jig_set ? '使用機台' : '專用機台';
+    // 治具「整組清單」區塊：只有工件種類已勾「可被認定為治具」且料號已存檔(有 d_id)才顯示
+    // （整組紀錄要掛在一個真實存在的治具料號下面，新增中、還沒存檔的料號沒有 d_id 掛不了）。
+    var jsw = document.getElementById('pf-jigset-wrap');
+    var pfDid = parseInt((document.getElementById('pf-d_id')||{value:'0'}).value || 0);
+    if (jsw) jsw.style.display = (meta.is_jig_type && pfDid > 0) ? '' : 'none';
 }
 
 // 清空欄位（新增料號時呼叫）
@@ -14919,24 +15092,26 @@ function pfAcLoadFromPart(d) {
     mpkLoadFromPart(d);
 }
 
-// ════════ 專用治具／通用治具（d_setting_jig_map） ═══════════════════════════
-// 候選範圍＝工件種類字典已勾「可被認定為治具」的料號；挑選走獨立的搜尋＋篩選＋多選跳窗
-// （不是簡單的打字下拉——使用者要求同時看得到規格/工件小類/組合件子件料號/使用機台/使用料號，
-// 方便在一堆長得很像的治具料號裡找到正確那一個），故不沿用 _pfAcCfg 那套下拉自動完成。
-var _jigSel = { dedicated:[], general:[] };   // 已選清單：{id,part_id,spec_no,client_name,sub_type_name,child_part_nos,used_machines,used_part_nos}
+// ════════ 專用治具／通用治具（d_setting_jig_map，綁定對象是「整組」set_id） ════════════
+// 候選不是治具料號本身，是治具底下建立的「整組」(d_setting_jig_set)——同一支治具可能有好幾筆
+// 不同組合(配不同機台/料號)，要分得出來是哪一組才挑得準。挑選走獨立的搜尋＋篩選＋多選跳窗
+// （不是簡單的打字下拉——同時看得到治具本身的規格/工件小類/組合件子件料號，加上這一組綁的
+// 使用料號/使用機台/自訂名稱，才找得到正確那一組），故不沿用 _pfAcCfg 那套下拉自動完成。
+var _jigSel = { dedicated:[], general:[] };   // 已選清單：eg_jig_set_build() 回傳的整組資料列
 var _jigPickKind = 'dedicated';               // 目前跳窗正在挑哪一種
 var _jigPickResults = [];                     // 最近一次搜尋結果（勾選狀態對照用）
 var _jigSubTypeLoaded = false;
 
 function _jigChipLabel(it) {
-    return it.part_id + (it.spec_no ? ' / '+it.spec_no : '') + (it.client_name ? '（'+it.client_name+'）' : '');
+    return it.jig_part_id + (it.jig_spec_no ? ' / '+it.jig_spec_no : '');
 }
 function _jigChipSub(it) {
     var bits = [];
-    if (it.sub_type_name) bits.push(it.sub_type_name);
+    if (it.jig_sub_type_name) bits.push(it.jig_sub_type_name);
+    if (it.ref_part_id) bits.push('使用料號:'+it.ref_part_id + (it.ref_spec_no ? ' / '+it.ref_spec_no : ''));
+    if (it.custom_name) bits.push('名稱:'+it.custom_name);
+    if (it.machines && it.machines.length) bits.push('機台:'+it.machines.join('、'));
     if (it.child_part_nos && it.child_part_nos.length) bits.push('子件:'+it.child_part_nos.join('、'));
-    if (it.used_machines  && it.used_machines.length)  bits.push('機台:'+it.used_machines.join('、'));
-    if (it.used_part_nos  && it.used_part_nos.length)  bits.push('用料:'+it.used_part_nos.join('、'));
     return bits.join('　');
 }
 function _jigRenderList(kind) {
@@ -14954,7 +15129,7 @@ function _jigRenderList(kind) {
 }
 function _jigSync(kind) {
     var hid = document.getElementById('pf-jig-'+kind+'-map'); if (!hid) return;
-    hid.value = JSON.stringify(_jigSel[kind].map(function(it){ return { ref_d_id: parseInt(it.id) }; }));
+    hid.value = JSON.stringify(_jigSel[kind].map(function(it){ return { set_id: parseInt(it.set_id) }; }));
 }
 function _jigRemove(kind, idx) {
     _jigSel[kind].splice(idx,1);
@@ -14965,12 +15140,10 @@ function jigReset() {
     ['dedicated','general'].forEach(function(k){ _jigRenderList(k); _jigSync(k); });
 }
 function jigLoadFromPart(d) {
+    // get_part 回傳的 jig_dedicated_map/jig_general_map 已經是 eg_jig_set_build() 整理好的
+    // 整組資料列，跟 jig_pick_search 的結果同一個形狀，不必重新組一次。
     ['dedicated','general'].forEach(function(k){
-        var src = d['jig_'+k+'_map'] || [];
-        _jigSel[k] = src.map(function(r){
-            return { id:String(r.jig_d_id), part_id:r.part_id, spec_no:r.spec_no, client_name:r.client_name,
-                     sub_type_name:'', child_part_nos:[], used_machines:[], used_part_nos:[] };
-        });
+        _jigSel[k] = (d['jig_'+k+'_map'] || []).slice();
         _jigRenderList(k); _jigSync(k);
     });
 }
@@ -15011,40 +15184,38 @@ function jigPickSearch() {
         _jigRenderResults();
     });
 }
-function _jigIsSelected(did) { return _jigSel[_jigPickKind].some(function(x){ return x.id===String(did); }); }
+function _jigIsSelected(setId) { return _jigSel[_jigPickKind].some(function(x){ return String(x.set_id)===String(setId); }); }
 function _jigRenderResults() {
     var box = document.getElementById('jp-results');
-    if (!_jigPickResults.length) { box.innerHTML = '<div style="padding:20px;text-align:center;color:#aaa;font-size:13px;">查無符合的料號</div>'; return; }
+    if (!_jigPickResults.length) { box.innerHTML = '<div style="padding:20px;text-align:center;color:#aaa;font-size:13px;">查無符合的整組，請先到治具料號自己的編輯畫面建立「整組」</div>'; return; }
     var h = '<table class="table table-condensed" style="margin:0;font-size:12px;"><thead><tr>'
-          + '<th style="width:28px;"></th><th>料號</th><th>規格</th><th>工件小類</th><th>說明</th>'
+          + '<th style="width:28px;"></th><th>治具料號</th><th>規格</th><th>工件小類</th><th>說明</th>'
           + '</tr></thead><tbody>';
     _jigPickResults.forEach(function(row){
-        var checked = _jigIsSelected(row.d_id) ? 'checked' : '';
+        var checked = _jigIsSelected(row.set_id) ? 'checked' : '';
         var extra = [];
         if (row.is_assembly && row.child_part_nos && row.child_part_nos.length) extra.push('子件：'+row.child_part_nos.join('、'));
-        if (row.used_machines && row.used_machines.length) extra.push('機台：'+row.used_machines.join('、'));
-        if (row.used_part_nos && row.used_part_nos.length) extra.push('用料：'+row.used_part_nos.join('、'));
-        if (row.client_name) extra.push('客戶：'+row.client_name);
+        if (row.ref_part_id) extra.push('使用料號：'+row.ref_part_id + (row.ref_spec_no ? ' / '+row.ref_spec_no : ''));
+        if (row.custom_name) extra.push('名稱：'+row.custom_name);
+        if (row.machines && row.machines.length) extra.push('機台：'+row.machines.join('、'));
         h += '<tr>'
-           + '<td><input type="checkbox" '+checked+' onchange="_jigToggle('+row.d_id+',this.checked)"></td>'
-           + '<td>'+escHtml(row.part_id)+(row.is_assembly ? ' <span style="font-size:10px;color:#5856d6;">[組合件]</span>' : '')+'</td>'
-           + '<td>'+escHtml(row.spec_no||'')+'</td>'
-           + '<td>'+escHtml(row.sub_type_name||'')+'</td>'
+           + '<td><input type="checkbox" '+checked+' onchange="_jigToggle('+row.set_id+',this.checked)"></td>'
+           + '<td>'+escHtml(row.jig_part_id)+(row.is_assembly ? ' <span style="font-size:10px;color:#5856d6;">[組合件]</span>' : '')+'</td>'
+           + '<td>'+escHtml(row.jig_spec_no||'')+'</td>'
+           + '<td>'+escHtml(row.jig_sub_type_name||'')+'</td>'
            + '<td style="color:#888;font-size:11px;">'+escHtml(extra.join('　')||'—')+'</td>'
            + '</tr>';
     });
     h += '</tbody></table>';
     box.innerHTML = h;
 }
-function _jigToggle(did, checked) {
+function _jigToggle(setId, checked) {
     var kind = _jigPickKind;
-    var idx = _jigSel[kind].findIndex(function(x){ return x.id===String(did); });
+    var idx = _jigSel[kind].findIndex(function(x){ return String(x.set_id)===String(setId); });
     if (checked) {
         if (idx<0) {
-            var row = _jigPickResults.find(function(r){ return r.d_id===did; });
-            if (row) _jigSel[kind].push({ id:String(did), part_id:row.part_id, spec_no:row.spec_no, client_name:row.client_name,
-                                           sub_type_name:row.sub_type_name, child_part_nos:row.child_part_nos||[],
-                                           used_machines:row.used_machines||[], used_part_nos:row.used_part_nos||[] });
+            var row = _jigPickResults.find(function(r){ return r.set_id===setId; });
+            if (row) _jigSel[kind].push(row);
         }
     } else if (idx>=0) { _jigSel[kind].splice(idx,1); }
     _jigUpdateSelCount();
@@ -15071,10 +15242,18 @@ function mpkFieldOf(mode)   { return { machine:'pf-machine-map', category:'pf-ma
 function mpkListBoxOf(mode) { return { machine:'mpk-list-machine', category:'mpk-list-category', model:'mpk-list-model' }[mode]; }
 function mpkTitleOf(mode)   { return { machine:'挑選機台（機台編號）', category:'挑選機台種類（製程大類）', model:'挑選機型' }[mode]; }
 
-function mpkOpen(mode) {
-    MPK = { mode:mode, groups:[], sel:{}, order:[], cat:null };
-    $.each(MPK_SEL_ORDER[mode], function(i,v){ MPK.sel[v] = MPK_SEL_STORE[mode][v]; MPK.order.push(v); });
-    document.getElementById('mpk-title').innerHTML = '<i class="fa fa-cogs"></i> ' + mpkTitleOf(mode);
+// opts.onApply 選填：給非「料號本身三個固定欄位」的呼叫端用（例如治具整組某一列的使用機台）——
+// 給了就不寫回 pf-machine-map 等固定欄位、也不影響 MPK_SEL_STORE，純粹把結果丟回 callback；
+// opts.sel 選填：預先勾選的既有清單（格式同 MPK.sel 的值），用於「重開跳窗時帶出目前已選」。
+function mpkOpen(mode, opts) {
+    opts = opts || {};
+    MPK = { mode:mode, groups:[], sel:{}, order:[], cat:null, onApply:opts.onApply||null };
+    if (opts.sel) {
+        $.each(opts.sel, function(k,s){ MPK.sel[k] = s; MPK.order.push(k); });
+    } else {
+        $.each(MPK_SEL_ORDER[mode], function(i,v){ MPK.sel[v] = MPK_SEL_STORE[mode][v]; MPK.order.push(v); });
+    }
+    document.getElementById('mpk-title').innerHTML = '<i class="fa fa-cogs"></i> ' + (opts.title || mpkTitleOf(mode));
     document.getElementById('mpk-kw').value = '';
     document.getElementById('mpk-pane').innerHTML = '<span class="muted-help">載入中…</span>';
     $('#machinePickModal').modal('show');
@@ -15091,9 +15270,14 @@ function mpkHit(r, cat, words) {
     for (var i=0;i<words.length;i++) if (hay.indexOf(words[i])<0) return false;
     return true;
 }
+// 選取用的鍵一律「有數字 id 就用 id、沒有(機型沒有獨立主檔)才退回 value 文字」——
+// 不可以一律用 value：機台/機台種類改名或 value 組成規則調整時舊的已選清單會對不上，
+// 且「編輯已存檔料號時從 machine_id 預先勾選」與「畫面上點擊勾選」兩條路徑才會是同一把鍵
+// （先前混用 value/id 當鍵，已選機台重開跳窗不會顯示勾選狀態，是已知修正過的坑）。
+function mpkKeyOf(r) { return r.id ? String(r.id) : String(r.value); }
 function mpkItemBtn(r, cat) {
-    var on = !!MPK.sel[r.value];
-    return '<button type="button" class="mpk-item'+(on?' on':'')+'" data-v="'+escAttr(r.value)+'">'
+    var on = !!MPK.sel[mpkKeyOf(r)];
+    return '<button type="button" class="mpk-item'+(on?' on':'')+'" data-v="'+escAttr(mpkKeyOf(r))+'">'
          + escHtml(r.no) + '<small>' + (on?'✔ 已選（再點一次取消）':escHtml(r.name||r.sub||cat)) + '</small></button>';
 }
 function mpkRender() {
@@ -15121,7 +15305,7 @@ function mpkRender() {
             h = '<div class="mpk-sub">① 先點分類</div><div class="mpk-grid">';
             $.each(MPK.groups, function(i,g){
                 if (!g.rows || !g.rows.length) return;
-                var n = 0; $.each(g.rows, function(j,r){ if (MPK.sel[r.value]) n++; });
+                var n = 0; $.each(g.rows, function(j,r){ if (MPK.sel[mpkKeyOf(r)]) n++; });
                 h += '<button type="button" class="mpk-cat'+(n?' has-sel':'')+'" data-i="'+i+'">'
                    + escHtml(g.group) + '<small>' + g.rows.length + ' 項' + (n?'　已選 '+n:'') + '</small></button>';
             });
@@ -15155,7 +15339,7 @@ $(document).on('click', '.mpk-item', function(){
     if (MPK.sel[v]) { delete MPK.sel[v]; MPK.order = MPK.order.filter(function(x){return x!==v;}); }
     else {
         var f = null;
-        $.each(MPK.groups, function(i,g){ $.each(g.rows||[], function(j,r){ if (String(r.value)===v) f=[g,r]; }); });
+        $.each(MPK.groups, function(i,g){ $.each(g.rows||[], function(j,r){ if (mpkKeyOf(r)===v) f=[g,r]; }); });
         if (f) { MPK.sel[v] = { value:f[1].value, id:f[1].id||0, no:f[1].no, name:f[1].name||'', cat:f[0].group }; MPK.order.push(v); }
     }
     mpkRender();
@@ -15171,6 +15355,11 @@ $(document).on('input', '#mpk-kw', function(){
     window._mpkT = setTimeout(mpkRender, 150);   // 全部資料都在前端，篩選不必再打後端
 });
 function mpkApply() {
+    if (MPK.onApply) {
+        MPK.onApply(MPK.order.slice(), MPK.sel);
+        $('#machinePickModal').modal('hide');
+        return;
+    }
     var mode = MPK.mode;
     MPK_SEL_STORE[mode] = MPK.sel;
     MPK_SEL_ORDER[mode] = MPK.order.slice();
@@ -15232,12 +15421,144 @@ function mpkLoadFromPart(d) {
     ['machine','category','model'].forEach(function(m){ mpkRenderList(m); mpkSync(m); });
 }
 
+// ════════ 治具「整組清單」（d_setting_jig_set） ═══════════════════════════════
+// 只在編輯已標記「可被認定為治具」(is_jig_type) 的治具料號時出現（見 applyPartExtraFieldVisibility
+// 對 #pf-jigset-wrap 的顯示判斷）。每一筆整組都是獨立存在的真實記錄，各自即時呼叫 jig_set_save/
+// jig_set_delete，不隨整張料號表單一起送出——相同治具可以建很多筆不同組合(配不同機台/料號)。
+var JIGSETS = [];   // 目前這支治具底下的整組清單（含尚未儲存的草稿列，set_id=0）
+
+function loadJigSets() {
+    var did = parseInt((document.getElementById('pf-d_id')||{value:'0'}).value || 0);
+    if (!did) { JIGSETS = []; renderJigSets(); return; }
+    api({ action:'jig_set_list', jig_d_id: did }).done(function(r){
+        if (!r.success) { showToast(r.message||'載入整組清單失敗','error'); return; }
+        // _machineIds：null＝這次畫面還沒動過機台，沿用伺服器回傳的 machines 文字顯示；
+        // 一旦透過「挑選機台」改過，才換成實際的 id 陣列（存檔時才送 machine_ids 覆蓋）。
+        JIGSETS = (r.data||[]).map(function(row){ row._machineIds = null; row._machineLabels = null; return row; });
+        renderJigSets();
+    });
+}
+function jigSetAddRow() {
+    JIGSETS.push({ set_id:0, ref_d_id:0, ref_part_id:'', ref_spec_no:'', custom_name:'', machines:[], _machineIds:[], _machineLabels:[] });
+    renderJigSets();
+}
+function renderJigSets() {
+    var box = document.getElementById('pf-jigset-list'); if (!box) return;
+    if (!JIGSETS.length) { box.innerHTML = '<span style="font-size:12px;color:#aaa;">（尚未建立任何整組）</span>'; return; }
+    var h = '';
+    JIGSETS.forEach(function(row, idx){
+        var refLabel = row.ref_part_id ? (row.ref_part_id + (row.ref_spec_no ? ' / '+row.ref_spec_no : '')) : '';
+        var machLabel = (row._machineIds !== null ? row._machineLabels : row.machines) || [];
+        h += '<div class="jigset-card" data-idx="'+idx+'" style="border:1px solid #e5e5e5;border-radius:6px;padding:8px 10px;margin-bottom:6px;background:#fafbfc;">';
+        h += '  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">';
+        h += '    <div style="flex:1;min-width:160px;position:relative;"><label style="font-size:10px;color:#888;">使用料號（選填，這組是配哪個料號用的）</label>';
+        h += '      <input type="text" class="form-control input-sm js-ref-input" placeholder="輸入料號搜尋…" value="'+escAttr(refLabel)+'" autocomplete="off">';
+        h += '      <div class="js-ref-dropdown pf-ac-dropdown" style="display:none;"></div></div>';
+        h += '    <div style="flex:1;min-width:140px;"><label style="font-size:10px;color:#888;">自訂名稱（選填，沒填使用料號時用來辨識）</label>';
+        h += '      <input type="text" class="form-control input-sm js-custom-name" maxlength="100" value="'+escAttr(row.custom_name||'')+'"></div>';
+        h += '  </div>';
+        h += '  <div style="margin-top:6px;font-size:12px;"><label style="font-size:10px;color:#888;display:block;">使用機台（可多選）</label>';
+        h += '    <span class="js-mach-chips">'+(machLabel.length ? escHtml(machLabel.join('、')) : '<span style="color:#aaa;">（未選）</span>')+'</span>';
+        h += '    <button type="button" class="btn btn-xs btn-default js-pick-mach" style="margin-left:6px;"><i class="fa fa-plus"></i> 挑選機台</button></div>';
+        h += '  <div style="margin-top:8px;">';
+        h += '    <button type="button" class="btn btn-xs btn-primary js-save-row"><i class="fa fa-save"></i> 儲存</button>';
+        h += row.set_id
+            ? ' <button type="button" class="btn btn-xs btn-danger js-del-row" style="margin-left:4px;"><i class="fa fa-trash"></i> 刪除</button>'
+            : ' <button type="button" class="btn btn-xs btn-default js-cancel-row" style="margin-left:4px;">取消</button>';
+        h += '  </div></div>';
+    });
+    box.innerHTML = h;
+}
+$(document).on('input', '#pf-jigset-list .js-ref-input', function(){
+    var $inp = $(this);
+    $inp.removeData('picked-id'); // 打字就視為尚未重新選定，要從下拉點才算選到
+    var kw = $inp.val().trim();
+    var $dd = $inp.siblings('.js-ref-dropdown');
+    clearTimeout(window._jigRefT);
+    if (!kw) { $dd.hide().empty(); return; }
+    window._jigRefT = setTimeout(function(){
+        var curDid = parseInt((document.getElementById('pf-d_id')||{value:'0'}).value || 0);
+        api({ action:'search_dsetting_ac', kw:kw, exclude_d_id: curDid }).done(function(r){
+            if (!r.success || !r.data || !r.data.length) { $dd.html('<div style="padding:6px 10px;color:#999;font-size:12px;">查無資料</div>').show(); return; }
+            var h = '';
+            r.data.forEach(function(d2){
+                var label = d2.part_id + (d2.spec_no ? ' / '+d2.spec_no : '') + (d2.client_name ? '（'+d2.client_name+'）' : '');
+                h += '<div class="pf-ac-opt" style="padding:5px 10px;font-size:12px;cursor:pointer;" data-id="'+d2.d_id+'" data-label="'+escAttr(label)+'">'+escHtml(label)+'</div>';
+            });
+            $dd.html(h).show();
+        });
+    }, 250);
+});
+$(document).on('mousedown', '#pf-jigset-list .js-ref-dropdown .pf-ac-opt', function(e){
+    e.preventDefault();
+    var $opt = $(this), $card = $opt.closest('.jigset-card'), $inp = $card.find('.js-ref-input');
+    $inp.val($opt.data('label')).data('picked-id', $opt.data('id'));
+    $opt.closest('.js-ref-dropdown').hide().empty();
+});
+$(document).on('click', '#pf-jigset-list .js-pick-mach', function(){
+    var $card = $(this).closest('.jigset-card'), idx = $card.data('idx');
+    var row = JIGSETS[idx]; if (!row) return;
+    var preSel = {};
+    if (row._machineIds !== null) {
+        row._machineIds.forEach(function(mid, i){ preSel[String(mid)] = { value:String(mid), id:mid, no:(row._machineLabels[i]||String(mid)), name:'', cat:'使用機台' }; });
+    }
+    mpkOpen('machine', {
+        title: '挑選使用機台',
+        sel: preSel,
+        onApply: function(order, sel) {
+            var ids = [], labels = [];
+            order.forEach(function(v){ var s = sel[v]; if (s) { ids.push(parseInt(s.id)); labels.push(s.no + (s.name ? ' ('+s.name+')' : '')); } });
+            row._machineIds = ids;
+            row._machineLabels = labels;
+            renderJigSets();
+        }
+    });
+});
+$(document).on('click', '#pf-jigset-list .js-cancel-row', function(){
+    var idx = $(this).closest('.jigset-card').data('idx');
+    JIGSETS.splice(idx, 1);
+    renderJigSets();
+});
+$(document).on('click', '#pf-jigset-list .js-del-row', function(){
+    var idx = $(this).closest('.jigset-card').data('idx');
+    var row = JIGSETS[idx]; if (!row || !row.set_id) return;
+    if (!confirm('確定刪除這一組整組？（已經被其他料號設為治具的整組無法刪除）')) return;
+    api({ action:'jig_set_delete', set_id: row.set_id }).done(function(r){
+        if (!r.success) { showToast(r.message||'刪除失敗','error'); return; }
+        showToast('已刪除','success');
+        loadJigSets();
+    });
+});
+$(document).on('click', '#pf-jigset-list .js-save-row', function(){
+    var $card = $(this).closest('.jigset-card'), idx = $card.data('idx');
+    var row = JIGSETS[idx]; if (!row) return;
+    var $inp = $card.find('.js-ref-input');
+    var typedEmpty = ($inp.val().trim() === '');
+    var refId = typedEmpty ? 0 : parseInt($inp.data('picked-id') || row.ref_d_id || 0);
+    var customName = $card.find('.js-custom-name').val().trim();
+    var jigDid = parseInt((document.getElementById('pf-d_id')||{value:'0'}).value || 0);
+    if (!jigDid) { showToast('請先儲存料號後才能設定整組','error'); return; }
+    if (!refId && !customName) { showToast('使用料號與自訂名稱至少要填一個','error'); return; }
+    var payload = { action:'jig_set_save', jig_d_id: jigDid, set_id: row.set_id||0, ref_d_id: refId, custom_name: customName };
+    if (row._machineIds !== null) payload.machine_ids = JSON.stringify(row._machineIds); // 沒動過機台就不送，後端維持原狀
+    api(payload).done(function(r){
+        if (!r.success) { showToast(r.message||'儲存失敗','error'); return; }
+        showToast('已儲存','success');
+        loadJigSets();
+    });
+});
+
 // 點擊輸入框與下拉以外的地方，關閉所有自動完成下拉
 document.addEventListener('mousedown', function(e){
     ['vendor','partno'].forEach(function(f){
         var cfg=_pfAcCfg[f];
         var dd=document.getElementById(cfg.dropdown); var inp=document.getElementById(cfg.input);
         if (!dd||!inp) return;
+        if (e.target!==inp && !dd.contains(e.target)) dd.style.display='none';
+    });
+    // 整組清單每一列自己的「使用料號」下拉（動態列，用 class 選取逐一關閉）
+    document.querySelectorAll('#pf-jigset-list .js-ref-dropdown').forEach(function(dd){
+        var inp = dd.previousElementSibling;
         if (e.target!==inp && !dd.contains(e.target)) dd.style.display='none';
     });
 });
@@ -15870,7 +16191,7 @@ function _loadPartTypeOptions(currentVal, callback) {
                     show_machine: Number(t.show_machine)===1,
                     show_price:   Number(t.show_price)===1,
                     show_jig:     Number(t.show_jig)===1,
-                    is_jig_set:   Number(t.is_jig_set)===1
+                    is_jig_type:  Number(t.is_jig_type)===1
                 };
             });
         } else {
@@ -15956,6 +16277,8 @@ function openPartModal(d_id) {
                 loadPartLabels(d.Type||'N', d.labels||[]);
                 // 載入此料號既有的 廠商 / 專用料號 / 專用機台 / 價格
                 pfAcLoadFromPart(d);
+                // 若這支料號是治具（is_jig_type），載入它自己的整組清單
+                loadJigSets();
             });
             document.getElementById('pf-Is_Assembly').checked  = (d.Is_Assembly=='1');
             document.getElementById('pf-Remark').value         = d.Remark||'';
@@ -16001,6 +16324,7 @@ function openPartModal(d_id) {
         _setWeightUnit('g');
         document.getElementById('pf-d_id').value = '0';
         pfAcReset();   // 清空 廠商 / 專用料號 / 專用機台 / 價格
+        JIGSETS = []; renderJigSets();   // 新增中還沒有 d_id，整組清單一律收起來（見 applyPartExtraFieldVisibility）
         _loadPartTypeOptions('N', function(){ onTypeChange('N'); });
         document.getElementById('pf-Customer_Id').value = '';
         _specSuggestLast = '';
@@ -18408,8 +18732,7 @@ var dictConfig = {
             if (Number(d.show_jig))     f.push('專用/通用治具');
             if (f.length) badges = ' <span style="font-size:10px;color:#3949ab;background:#e8eaf6;border-radius:3px;padding:1px 5px;margin-left:4px;">'+f.join('、')+'</span>';
             var jigBadge = Number(d.is_jig_type) ? ' <span style="font-size:10px;color:#a0522d;background:#fdf0e3;border-radius:3px;padding:1px 5px;margin-left:4px;">可被認定為治具</span>' : '';
-            var jigSetBadge = Number(d.is_jig_set) ? ' <span style="font-size:10px;color:#a0522d;background:#fdf0e3;border-radius:3px;padding:1px 5px;margin-left:4px;">整組</span>' : '';
-            return '<span class="dict-code-badge">'+escHtml(d.type_code)+'</span>'+escHtml(d.type_name)+badges+jigBadge+jigSetBadge;
+            return '<span class="dict-code-badge">'+escHtml(d.type_code)+'</span>'+escHtml(d.type_name)+badges+jigBadge;
         },
         renderForm: function() {
             var html = '';
@@ -18432,10 +18755,8 @@ var dictConfig = {
             // 夠不夠格被別的料號挑去當治具」，不是「這個種類自己要不要挑治具」（那是上面 show_jig）。
             html += '<div style="width:100%;flex-basis:100%;margin-top:8px;border-top:1px dashed #ddd;padding-top:8px;">';
             html += '<label style="font-weight:normal;cursor:pointer;font-size:13px;color:#a0522d;"><input type="checkbox" id="dict-f-is_jig_type" style="vertical-align:-1px;margin-right:4px;">可被認定為治具'
-                  + '<span style="color:#aaa;font-weight:normal;">（勾選後，此工件種類底下的料號可以被其他任何料號挑選為「專用治具」或「通用治具」；全站共用同一份清單，不分是哪個種類在挑）</span></label>';
-            html += '<label style="font-weight:normal;cursor:pointer;font-size:13px;color:#a0522d;display:block;margin-top:6px;"><input type="checkbox" id="dict-f-is_jig_set" style="vertical-align:-1px;margin-right:4px;">整組（可設定使用料號／使用機台）'
-                  + '<span style="color:#aaa;font-weight:normal;">（這個治具不必另外拆成一堆子件料號，就是一個整組——勾選後自動打開「專用料號」「專用機台」兩個欄位讓它綁定「使用料號」與「使用機台」，'
-                  + '沒綁的話就用它自己的規格/名稱當自訂名稱；取消勾選不會把已經打開的那兩個欄位關掉）</span></label>';
+                  + '<span style="color:#aaa;font-weight:normal;">（勾選後，此工件種類底下的料號可以在它自己的編輯畫面設定「整組」（配哪個料號／配哪幾台機台），'
+                  + '並可以被其他任何料號挑選為「專用治具」或「通用治具」；全站共用同一份清單，不分是哪個種類在挑）</span></label>';
             html += '</div>';
             return html;
         },
@@ -18448,7 +18769,6 @@ var dictConfig = {
             $('#dict-f-show_price').prop('checked', Number(d.show_price)===1);
             $('#dict-f-show_jig').prop('checked', Number(d.show_jig)===1);
             $('#dict-f-is_jig_type').prop('checked', Number(d.is_jig_type)===1);
-            $('#dict-f-is_jig_set').prop('checked', Number(d.is_jig_set)===1);
         },
         getData: function() {
             var code = $('#dict-f-code').val().trim();
@@ -18462,8 +18782,7 @@ var dictConfig = {
                 show_machine: $('#dict-f-show_machine').prop('checked') ? 1 : 0,
                 show_price:   $('#dict-f-show_price').prop('checked')   ? 1 : 0,
                 show_jig:     $('#dict-f-show_jig').prop('checked')     ? 1 : 0,
-                is_jig_type:  $('#dict-f-is_jig_type').prop('checked')  ? 1 : 0,
-                is_jig_set:   $('#dict-f-is_jig_set').prop('checked')   ? 1 : 0
+                is_jig_type:  $('#dict-f-is_jig_type').prop('checked')  ? 1 : 0
             };
         },
         getDeleteId: function(d){ return d.type_code; }
@@ -23956,7 +24275,7 @@ function clearDictForm() {
     }
     if (currentDictType==='workpiece') {
         $('#dict-f-code').val('').prop('readonly',false).css('background','');
-        $('#dict-f-show_vendor,#dict-f-show_part_no,#dict-f-show_machine,#dict-f-show_price,#dict-f-show_jig,#dict-f-is_jig_type,#dict-f-is_jig_set').prop('checked',false);
+        $('#dict-f-show_vendor,#dict-f-show_part_no,#dict-f-show_machine,#dict-f-show_price,#dict-f-show_jig,#dict-f-is_jig_type').prop('checked',false);
     }
     if (currentDictType==='gear') {
         $('#dict-f-helix').prop('checked',false);
