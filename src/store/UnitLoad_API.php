@@ -371,6 +371,9 @@ switch ($action) {
         // 2026-10-08 新增：累積待批圖數量（存量，依統計日重建），跟 $dailyDetail 的
         // batch_in（流量，當天新進幾筆）互補，不要混為一談——見 ul_design_wip_daily() 註解。
         $wipDaily = ul_design_wip_daily($db, $p['from'], $p['to'], $idsFiltered);
+        // 2026-10-08 新增：當天狀態（會議／外出／請假），使用者交辦。超過 31 天自動回空
+        // 陣列（見 ul_person_day_status() 註解），前端沒有資料時不顯示「狀態」欄。
+        $dayStatus = ul_person_day_status($db, $idsFiltered, $p['from'], $p['to']);
 
         // 2026-10-08 修正：issue_orders 的過重判定改比「近90天下單仍未回覆」
         // （issue_orders_recent），不是全歷史總量——道理與 ul_unit_overload_check() 的
@@ -394,6 +397,7 @@ switch ($action) {
             'daily_pmget'  => $dailyPmget,
             'daily_detail' => $dailyDetail,
             'wip_daily'    => $wipDaily,
+            'day_status'   => $dayStatus,
             'tags'         => $tags,
             'tags_by_person' => $tagsByPerson,
             'note_stats'   => $noteStats,
@@ -570,6 +574,12 @@ switch ($action) {
         $waitOut = $wait;
         unset($waitOut['rows']);
 
+        // 2026-10-08 新增：逐人每日工作量（檢驗筆數／NG筆數）＋當天狀態（會議／外出／
+        // 請假），使用者交辦，跟設計課同一種做法——與逐人彙總表（$byPerson）用同一份
+        // 已排除職位的人員範圍。
+        $qcDailyDetail = ul_qc_daily_detail($db, $p['from'], $p['to'], $idsFiltered);
+        $qcDayStatus   = ul_person_day_status($db, $idsFiltered, $p['from'], $p['to']);
+
         $overload = [
             'ng_rate'       => $abnormal['avg_ng_rate'] !== null
                                 && ul_is_overload((float)$abnormal['avg_ng_rate'], 'qc.ng_rate', $thresholds),
@@ -587,6 +597,8 @@ switch ($action) {
             'by_person'     => $byPerson,
             'adhoc'         => $adhoc,
             'pending_queue' => $pendingQueue,
+            'daily_detail'  => $qcDailyDetail,
+            'day_status'    => $qcDayStatus,
             'overload'      => $overload,
             'note'          => $ids ? '' : '尚未在設定頁為品管勾選任何部門——待驗等待工作天/異常比例/脫離流程補檢驗/目前待驗佇列'
                                         . '不受此影響（照常顯示全公司現況），但每日檢驗項目數/逐人明細需要設定人員後才有數字',

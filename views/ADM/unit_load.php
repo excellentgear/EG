@@ -188,6 +188,13 @@ body { background:#F3F6EC; }
 .ul-wip-table thead tr:first-child th.ul-wip-grp { font-size:12.5px; }
 .ul-wip-table tbody td:first-child { text-align:left; white-space:nowrap; }
 
+/* 2026-10-08 新增：逐人每日工作量裡的「當天狀態」徽章（請假／外出／會議） */
+.ul-status-cell { white-space:normal !important; text-align:left !important; min-width:110px; }
+.ul-status-badge { display:inline-block; font-size:10.5px; line-height:16px; padding:0 6px; border-radius:9px;
+                    margin:1px 2px 1px 0; white-space:nowrap; }
+.ul-status-badge.leave { background:var(--overload-bg); color:var(--overload-text); }
+.ul-status-badge.trip, .ul-status-badge.training, .ul-status-badge.meeting { background:#F0F4E6; color:var(--green-d); }
+
 /* KPI 卡內嵌的「過重理由」（2026-10-07 取代獨立的「部門負荷總表」，理由直接併進卡片本身） */
 .kpi-reasons { font-size:11px; color:var(--overload-text); margin-top:6px; text-align:left; }
 .kpi-reasons div { margin-bottom:2px; }
@@ -567,6 +574,14 @@ body { background:#F3F6EC; }
       </table></div>
     </div>
 
+    <!-- 2026-10-08 新增：逐人每日工作量（使用者交辦，跟設計課同一種清楚版面＋當天狀態） -->
+    <div class="sec">
+      <h4><i class="fa fa-calendar-check-o" style="color:var(--green-d);"></i> 逐人每日工作量
+        <span class="hint">依期間長度自動依日／週／月彙總，每一桶一列、每人一組欄位橫向並排；
+          期間≤31天時另外顯示當天有沒有會議／外出／請假</span></h4>
+      <div id="qcDailyDetailTable"></div>
+    </div>
+
     <div class="sec">
       <h4><i class="fa fa-random" style="color:var(--green-d);"></i> 脫離正常待驗流程的補檢驗</h4>
       <div id="qcAdhoc"></div>
@@ -637,7 +652,22 @@ body { background:#F3F6EC; }
         <li><b>逐人標籤分布的名稱為什麼帶「單製」「全製含」前綴</b>：標籤文字一律呼叫全站唯一的
             <code>ot_astag_make_label()</code>——像「齒研」這種稽核製程標籤，依訂單當初貼的範圍是
             「單製」還是「全製」，正式顯示文字是「單製齒研」或「全製含齒研」，不是裸名稱，跟訂單追蹤
-            本身「設定稽核製程標籤」看到的文字完全一致（2026-10-08 修正了先前漏掉這個前綴的問題）。</li>
+            本身「設定稽核製程標籤」看到的文字完全一致（2026-10-08 修正了先前漏掉這個前綴的問題）；
+            <b>欄位順序也改成跟訂單追蹤「設定→稽核製程標籤（AS 認定）」那個設定畫面裡看到的順序完全
+            一致</b>（依管理員設定的排序值），不再是依筆數多寡排序。</li>
+        <li><b>設計課／品管「逐人每日工作量」多了「狀態」欄</b>：期間在 31 天以內（逐日顯示）時，
+            每個人每天那一格會額外看到當天有沒有<b>會議</b>／<b>公出外出</b>／<b>請假</b>（淡綠色徽章；
+            請假用暖色警示色，因為那會直接影響這個人當天有沒有在崗位上），滑鼠停在徽章上可看完整說明
+            （例如幾點到幾點、什麼事由）；這份資料跟會議紀錄挑出席人員用的是同一套來源，哪些來源要不要
+            顯示可在會議紀錄管理的模組設定調整。超過 31 天（週／月分桶）時這一欄不會出現——一列代表
+            好幾天，沒有「當天」這回事。</li>
+        <li><b>品管新增「逐人每日工作量」</b>：跟設計課同一種版面（每桶一列、每人一組欄位橫向並排），
+            欄位是檢驗筆數與其中 NG 筆數——品管的待驗佇列是全公司共用、不屬於特定某個人，所以沒有像
+            設計課「累積待批圖」那種存量欄。</li>
+        <li><b>趨勢分析的設計課改畫 3 條線</b>：本期轉生管（既有）、本期新進批圖、期末累積待批圖——
+            前兩條是流量（進/出），最後一條是存量，量級差很多所以存量線改用虛線＋右側副座標軸，
+            一次看出「最近是進得比出得快還是出得比進得快」跟「存量有沒有愈積愈多」。其餘五個單位
+            維持單線不變。</li>
         <li><b>總覽卡片新增的幾個指標</b>：設計課「批圖中」已標明是即時工作量（已轉生管是處理完的量，
             看不出現在卡著多少）、旁邊補上「其中新料號比例」；業務課補上「本期訂單張數」；品管補上
             「待驗筆數」（現況快照）與「本期檢驗項目數」；生產課補上「待生產數」＝未指派機台＋已指派
@@ -953,6 +983,11 @@ var UL_TREND_PALETTE = ['#E8702A', '#8B2E22', '#D9A440', '#5E3A22', '#C14C3B', '
     同一張圖共用一個 Y 軸——量級差很多的指標硬疊在一起時，量小的單位那條線會被壓在
     底部完全看不出起伏（見使用說明同一段）。容器 `<div>` 由這裡動態產生，每次重畫先
     整批清空再重建，避免切換粒度/期數時留下舊的 Highcharts 容器。 */
+/** 2026-10-08 新增：設計課的趨勢小圖改畫 3 條線（使用者交辦）——本期轉生管（既有，
+    流程出口）、本期新進批圖（流程入口）、期末累積待批圖（存量），一次看出「進得比出得
+    快還是出得比進得快」以及「存量有沒有愈積愈多」。累積待批圖是存量、數字量級跟另外
+    兩條流量線差很多（通常是幾十 vs 幾百），放同一個 Y 軸會被壓在底部看不出起伏，改用
+    副座標軸（跟 renderPacking() 的雙軸做法同一套）；其餘五個單位維持單線不動。 */
 function renderTrendChart(d){
   var labels = d.labels || [];
   var series = d.series || {};
@@ -960,14 +995,36 @@ function renderTrendChart(d){
 
   var h = '';
   UNIT_KEYS.forEach(function(k, i){
+    var extraLabel = (k === 'design')
+      ? '　<span style="font-weight:normal;color:var(--muted);">／新進批圖／累積待批圖</span>' : '';
     h += '<div class="ul-trend-cell"><div class="ul-trend-cell-h">'
        + '<i class="fa '+(UNIT_ICONS[k]||'fa-circle')+'"></i> '+esc(UNIT_LABELS[k]||k)
-       + '　<span style="font-weight:normal;color:var(--muted);">'+esc(metricLabels[k]||'')+'</span></div>'
+       + '　<span style="font-weight:normal;color:var(--muted);">'+esc(metricLabels[k]||'')+'</span>' + extraLabel + '</div>'
        + '<div id="trendChart_'+k+'" style="height:150px;"></div></div>';
   });
   $('#trendChart').html(h);
 
   UNIT_KEYS.forEach(function(k, i){
+    if (k === 'design'){
+      chart('trendChart_'+k, {
+        chart: { type:'line', height:150, spacing:[4,4,2,4] },
+        colors: [UL_TREND_PALETTE[i % UL_TREND_PALETTE.length], '#5E7A3D', '#B9CB9E'],
+        xAxis: { categories: labels, labels:{ style:{fontSize:'10px'} } },
+        yAxis: [
+          { title:{text:null}, allowDecimals:false, min:0 },
+          { title:{text:null}, allowDecimals:false, min:0, opposite:true, gridLineWidth:0 }
+        ],
+        legend: { enabled:true, itemStyle:{fontSize:'10px'} },
+        tooltip: { shared:true },
+        plotOptions: { series:{ marker:{ enabled:true, radius:2.5 } } },
+        series: [
+          { name: '轉生管', yAxis:0, data: (series.design||[]).map(Number) },
+          { name: '新進批圖', yAxis:0, data: (series.design_batch_in||[]).map(Number) },
+          { name: '累積待批圖', yAxis:1, dashStyle:'ShortDot', data: (series.design_wip_end||[]).map(Number) }
+        ]
+      });
+      return;
+    }
     chart('trendChart_'+k, {
       chart: { type:'line', height:150, spacing:[4,4,2,4] },
       colors: [UL_TREND_PALETTE[i % UL_TREND_PALETTE.length]],
@@ -1124,6 +1181,18 @@ function localThr(key, fallbackKey){
 }
 /** 把 YYYY-MM-DD HH:MM:SS 或純日期字串只取日期部分，空值印破折號 */
 function dOnly(s){ return s ? String(s).substring(0,10) : '—'; }
+/** 2026-10-08 新增：把 ul_person_day_status()／eg_psched_for_users() 回傳的那份清單轉成
+    小徽章 html（請假/外出/會議），設計課與品管的「逐人每日工作量」共用這支，不要各自
+    刻一份——請假用跟過重同一組暖色警示色（會擋流程，比較需要注意），外出/會議用淡綠。
+    items 可能是 undefined（day_status 沒有這一天的資料，例如期間超過 31 天時整個沒查）
+    或空陣列（查過了、當天沒事），兩者都回空字串，呼叫端用 '—' 或空白區分即可。 */
+function statusBadgeHtml(items){
+  if (!items || !items.length) return '';
+  return items.map(function(it){
+    var cls = (it.source==='leave') ? 'leave' : (it.source||'');
+    return '<span class="ul-status-badge '+esc(cls)+'" title="'+esc(it.text||'')+'">'+esc(it.label||'')+'</span>';
+  }).join('');
+}
 /** 待驗/包裝「最長/最短前5筆」小表格，withProcess=true 時多印一欄製程名稱。
     2026-10-07 新增「料號」欄（ul_qc_wait_time() 的 rows/longest/shortest 已補上 d_id）
     ——包裝那邊的 longest/shortest 目前沒有這個欄位，r.d_id 會是 undefined，顯示「—」，
@@ -1199,8 +1268,8 @@ function renderDesign(d){
   renderDesignTags(d.tags);
   renderDesignNoteStats(d.note_stats, d.by_person);
   renderDesignTable(d.by_person, (d.people||[]).length);
-  renderDesignDailyDetail(d.daily_detail, d.wip_daily, d.by_person, d.period);
-  renderDesignTagsByPerson(d.tags_by_person, d.by_person);
+  renderDesignDailyDetail(d.daily_detail, d.wip_daily, d.day_status, d.by_person, d.period);
+  renderDesignTagsByPerson(d.tags_by_person, d.by_person, d.tags);
 }
 function renderDesignReviewer(rv, byPerson){
   if (!rv || !rv.supported){
@@ -1341,9 +1410,10 @@ var DSG_METRIC_LABEL = { batch_in:'批圖中（新進）', review:'審圖', pm_g
     最右側再加「部門合計」一組）——同一天不同人的量要比較時左右看就好，不必上下對照
     好幾列；累積待批圖是「存量」（統計當天結束時還卡著多少），跟「新進批圖」這個
     「流量」（當天新增多少）並列成兩個獨立欄位，不要混在一起看。 */
-function renderDesignDailyDetail(events, wipDaily, byPerson, period){
+function renderDesignDailyDetail(events, wipDaily, dayStatus, byPerson, period){
   events = events || [];
   wipDaily = wipDaily || [];
+  dayStatus = dayStatus || {};
   if (!events.length){ $('#dsgDailyDetailTable').html(emptyHint('本期沒有批圖中／審圖／已轉生管的資料。')); $('#dsgDailyDetailAvg').html(''); return; }
   var gran = pickTimeGran(period);
   var granLabel = gran==='day' ? '日期' : (gran==='week' ? '週（週一起算）' : '月份');
@@ -1384,21 +1454,29 @@ function renderDesignDailyDetail(events, wipDaily, byPerson, period){
   var wipEnd = {};
   wipDaily.forEach(function(r){ wipEnd[r.ate] = r.wip; });
 
+  // 2026-10-08 新增：當天狀態（會議／外出／請假）只有在「逐日」顯示粒度才加這一欄——
+  // 週/月分桶時一列代表好幾天，沒有「當天」這回事；day_status 本來後端也只在期間
+  // ≤31天（跟逐日顯示的門檻一致）才會有資料，見 ul_person_day_status() 註解。
+  var hasStatus = (gran === 'day') && Object.keys(dayStatus).length > 0;
+
   var groupCols = ['batch_in','wip','review','pm_get','new'];
   var colLabel = { batch_in:'新進批圖', wip:'累積待批圖', review:'審圖', pm_get:'已轉生管', new:'其中新料號' };
   var colHint = {
     batch_in:'這一桶內新進入批圖中的筆數（流量）', wip:'桶內最後一天結束時，還卡在批圖中尚未轉生管的累積筆數（存量，不可與新進批圖相加）',
     review:'這一桶內按下審圖的筆數', pm_get:'這一桶內轉生管的筆數', new:'新進批圖／審圖／已轉生管三項裡，屬於新料號(NEW)的筆數合計'
   };
+  var groupSize = groupCols.length + (hasStatus ? 1 : 0);
 
   var h = '<div class="table-responsive"><table class="table table-bordered table-condensed ul-wip-table" style="margin-bottom:10px;"><thead>';
   h += '<tr><th rowspan="2" style="vertical-align:middle;">'+esc(granLabel)+'</th>';
-  ateIds.forEach(function(ate){ h += '<th colspan="'+groupCols.length+'" class="ul-wip-grp">'+esc(nameOf(byPerson, ate))+'</th>'; });
-  h += '<th colspan="'+groupCols.length+'" class="ul-wip-grp ul-wip-total-grp">部門合計</th></tr><tr>';
+  ateIds.forEach(function(ate){ h += '<th colspan="'+groupSize+'" class="ul-wip-grp">'+esc(nameOf(byPerson, ate))+'</th>'; });
+  h += '<th colspan="'+groupSize+'" class="ul-wip-grp ul-wip-total-grp">部門合計</th></tr><tr>';
   (ateIds.length ? ateIds : ['_']).forEach(function(){
     groupCols.forEach(function(c){ h += '<th title="'+esc(colHint[c])+'">'+esc(colLabel[c])+'</th>'; });
+    if (hasStatus) h += '<th title="當天是否有會議／外出／請假（資料來源：請假單／公出單／教育訓練／會議紀錄）">狀態</th>';
   });
   groupCols.forEach(function(c){ h += '<th class="ul-wip-total-grp" title="'+esc(colHint[c])+'">'+esc(colLabel[c])+'</th>'; });
+  if (hasStatus) h += '<th class="ul-wip-total-grp">狀態</th>';
   h += '</tr></thead><tbody>';
 
   var grand = {}; // ate -> sums，給下面的週/月平均彙總卡片用
@@ -1412,13 +1490,17 @@ function renderDesignDailyDetail(events, wipDaily, byPerson, period){
       var wip = (wipBucket[bk] && wipBucket[bk][ate] !== undefined) ? wipBucket[bk][ate] : null;
       var newTotal = (row.batch_in_new||0) + (row.review_new||0) + (row.pm_get_new||0);
       h += '<td>'+nf(row.batch_in)+'</td><td>'+(wip===null?'—':nf(wip))+'</td><td>'+nf(row.review)+'</td><td>'+nf(row.pm_get)+'</td><td>'+nf(newTotal)+'</td>';
+      if (hasStatus){
+        var badges = statusBadgeHtml((dayStatus[bk]||{})[ate]);
+        h += '<td class="ul-status-cell">'+(badges || '—')+'</td>';
+      }
       tot.batch_in += row.batch_in; tot.wip += (wip||0); tot.review += row.review; tot.pm_get += row.pm_get; tot.new += newTotal;
       if (!grand[ate]) grand[ate] = { batch_in:0, review:0, pm_get:0, new_total:0 };
       grand[ate].batch_in += row.batch_in; grand[ate].review += row.review; grand[ate].pm_get += row.pm_get; grand[ate].new_total += newTotal;
     });
     h += '<td class="ul-wip-total-grp"><b>'+nf(tot.batch_in)+'</b></td><td class="ul-wip-total-grp"><b>'+nf(tot.wip)+'</b></td>'
        + '<td class="ul-wip-total-grp"><b>'+nf(tot.review)+'</b></td><td class="ul-wip-total-grp"><b>'+nf(tot.pm_get)+'</b></td>'
-       + '<td class="ul-wip-total-grp"><b>'+nf(tot.new)+'</b></td></tr>';
+       + '<td class="ul-wip-total-grp"><b>'+nf(tot.new)+'</b></td>' + (hasStatus ? '<td class="ul-wip-total-grp">—</td>' : '') + '</tr>';
   });
   h += '</tbody></table></div>';
   $('#dsgDailyDetailTable').html(h);
@@ -1454,36 +1536,43 @@ function renderDesignDailyDetail(events, wipDaily, byPerson, period){
 
 /** 設計課「逐人標籤分布」：橫向展開成動態欄（每個出現過的標籤各一欄），不固定欄數——
     依本期實際出現的標籤決定要列幾欄，不會因為加了新標籤就要改程式。 */
-function renderDesignTagsByPerson(byPersonTags, byPerson){
+/** 2026-10-08 修正：欄位順序改依部門層級的 d.tags（ul_design_tags() 已經依「訂單追蹤→
+    設定→稽核製程標籤（AS 認定）」的官方順序排好，見 unit_load_lib.php 的
+    ul_design_tag_order_map() 註解），不再各自從「逐人清單裡第一次出現的順序」推——那樣
+    如果某個標籤只有後面那位設計師用過、排序順序就會被推到最後面，跟官方順序對不起來。
+    欄位識別改用 tag_name（已經是唯一、正式顯示文字）而不是 tag_id，避免同一個 tag_id
+    不同 scope 時被誤併成一欄。 */
+function renderDesignTagsByPerson(byPersonTags, byPerson, deptTags){
   byPersonTags = byPersonTags || {};
   var ateIds = Object.keys(byPersonTags);
   if (!ateIds.length){ $('#dsgTagsByPerson').html(emptyHint('本期沒有標籤資料。')); return; }
 
-  var tagOrder = [], tagSeen = {}, tagNameOf = {};
+  var tagOrder = (deptTags || []).map(function(t){ return t.tag_name; });
+  // 保險：deptTags 理論上涵蓋逐人清單的聯集，但萬一有遺漏，照樣把沒排到的標籤加在最後，
+  // 不要讓資料憑空消失不顯示。
+  var seen = {}; tagOrder.forEach(function(n){ seen[n]=1; });
   ateIds.forEach(function(ate){
-    (byPersonTags[ate]||[]).forEach(function(t){
-      if (!tagSeen[t.tag_id]){ tagSeen[t.tag_id]=1; tagOrder.push(t.tag_id); tagNameOf[t.tag_id]=t.tag_name; }
-    });
+    (byPersonTags[ate]||[]).forEach(function(t){ if (!seen[t.tag_name]){ seen[t.tag_name]=1; tagOrder.push(t.tag_name); } });
   });
 
   var h = '<div class="table-responsive"><table class="table table-striped"><thead><tr><th>姓名</th>';
-  tagOrder.forEach(function(tid){ h += '<th>'+esc(tagNameOf[tid])+'</th>'; });
+  tagOrder.forEach(function(name){ h += '<th>'+esc(name)+'</th>'; });
   h += '<th>合計</th></tr></thead><tbody>';
   var colTotal = {};
   ateIds.forEach(function(ate){
     var byTag = {}; var rowTotal = 0;
-    (byPersonTags[ate]||[]).forEach(function(t){ byTag[t.tag_id] = t.c; });
+    (byPersonTags[ate]||[]).forEach(function(t){ byTag[t.tag_name] = t.c; });
     h += '<tr><td>'+esc(nameOf(byPerson, ate))+'</td>';
-    tagOrder.forEach(function(tid){
-      var v = byTag[tid] || 0; rowTotal += v;
-      colTotal[tid] = (colTotal[tid]||0) + v;
+    tagOrder.forEach(function(name){
+      var v = byTag[name] || 0; rowTotal += v;
+      colTotal[name] = (colTotal[name]||0) + v;
       h += '<td>'+nf(v)+'</td>';
     });
     h += '<td><b>'+nf(rowTotal)+'</b></td></tr>';
   });
   h += '<tr style="font-weight:700;background:var(--sand);"><td>部門合計</td>';
   var grandTotal = 0;
-  tagOrder.forEach(function(tid){ grandTotal += (colTotal[tid]||0); h += '<td>'+nf(colTotal[tid]||0)+'</td>'; });
+  tagOrder.forEach(function(name){ grandTotal += (colTotal[name]||0); h += '<td>'+nf(colTotal[name]||0)+'</td>'; });
   h += '<td>'+nf(grandTotal)+'</td></tr>';
   h += '</tbody></table></div>';
   $('#dsgTagsByPerson').html(h);
@@ -1792,7 +1881,73 @@ function renderQc(d){
   renderQcWait(d.wait, !!ov.wait_days_avg);
   renderQcAbnormal(d.abnormal, !!ov.ng_rate);
   renderQcPersonTable(d.by_person, (d.people||[]).length);
+  renderQcDailyDetail(d.daily_detail, d.day_status, d.by_person, d.period);
   renderQcAdhoc(d.adhoc, !!ov.adhoc_count);
+}
+/** 品管「逐人每日工作量」（2026-10-08 新增，使用者交辦）：跟設計課的 renderDesignDailyDetail()
+    版面規則完全一致（每桶一列、每人一組欄位橫向並排、同一套 .ul-wip-table 樣式、
+    ≤31天才加「狀態」欄）——只是欄位換成檢驗筆數／NG筆數，沒有「新進/存量」這種流量
+    存量之分（品管的待驗佇列是全公司共用的，不屬於特定一個人，見 ul_qc_pending_queue()
+    函式註解），所以不比照設計課做累積存量欄。 */
+function renderQcDailyDetail(rows, dayStatus, byPerson, period){
+  rows = rows || [];
+  dayStatus = dayStatus || {};
+  if (!rows.length){ $('#qcDailyDetailTable').html(emptyHint('本期沒有檢驗資料。')); return; }
+  var gran = pickTimeGran(period);
+  var granLabel = gran==='day' ? '日期' : (gran==='week' ? '週（週一起算）' : '月份');
+  var hasStatus = (gran === 'day') && Object.keys(dayStatus).length > 0;
+
+  // bucketKey -> uid -> {items, ng}（同一天同一人可能有 qc_check_form／qc_check 兩筆來源，
+  // 見 ul_qc_daily_detail() 註解，這裡逐筆累加）
+  var data = {}, buckets = [], seen = {}, uids = {};
+  rows.forEach(function(r){
+    var bk = bucketKeyFor(r.d, gran);
+    if (!seen[bk]){ seen[bk]=1; buckets.push(bk); }
+    uids[r.uid] = 1;
+    if (!data[bk]) data[bk] = {};
+    if (!data[bk][r.uid]) data[bk][r.uid] = { items:0, ng:0 };
+    data[bk][r.uid].items += r.items;
+    data[bk][r.uid].ng += r.ng;
+  });
+  buckets.sort();
+  var uidList = Object.keys(uids).sort(function(a,b){ return nameOf(byPerson,a).localeCompare(nameOf(byPerson,b),'zh-Hant'); });
+
+  var groupCols = ['items','ng'];
+  var colLabel = { items:'檢驗筆數', ng:'NG筆數' };
+  var colHint = { items:'這一桶內完成的檢驗筆數', ng:'其中判定為 NG 的筆數' };
+  var groupSize = groupCols.length + (hasStatus ? 1 : 0);
+
+  var h = '<div class="table-responsive"><table class="table table-bordered table-condensed ul-wip-table" style="margin-bottom:10px;"><thead>';
+  h += '<tr><th rowspan="2" style="vertical-align:middle;">'+esc(granLabel)+'</th>';
+  uidList.forEach(function(uid){ h += '<th colspan="'+groupSize+'" class="ul-wip-grp">'+esc(nameOf(byPerson, uid))+'</th>'; });
+  h += '<th colspan="'+groupSize+'" class="ul-wip-grp ul-wip-total-grp">部門合計</th></tr><tr>';
+  (uidList.length ? uidList : ['_']).forEach(function(){
+    groupCols.forEach(function(c){ h += '<th title="'+esc(colHint[c])+'">'+esc(colLabel[c])+'</th>'; });
+    if (hasStatus) h += '<th title="當天是否有會議／外出／請假">狀態</th>';
+  });
+  groupCols.forEach(function(c){ h += '<th class="ul-wip-total-grp" title="'+esc(colHint[c])+'">'+esc(colLabel[c])+'</th>'; });
+  if (hasStatus) h += '<th class="ul-wip-total-grp">狀態</th>';
+  h += '</tr></thead><tbody>';
+
+  buckets.forEach(function(bk){
+    var rowHasData = uidList.some(function(uid){ var r=(data[bk]&&data[bk][uid]); return r && r.items; });
+    if (!rowHasData) return;
+    h += '<tr><td><b>'+esc(bk)+'</b></td>';
+    var tot = { items:0, ng:0 };
+    uidList.forEach(function(uid){
+      var r = (data[bk] && data[bk][uid]) || { items:0, ng:0 };
+      h += '<td>'+nf(r.items)+'</td><td'+(r.ng>0?' class="ul-cell-bad"':'')+'>'+nf(r.ng)+'</td>';
+      if (hasStatus){
+        var badges = statusBadgeHtml((dayStatus[bk]||{})[uid]);
+        h += '<td class="ul-status-cell">'+(badges || '—')+'</td>';
+      }
+      tot.items += r.items; tot.ng += r.ng;
+    });
+    h += '<td class="ul-wip-total-grp"><b>'+nf(tot.items)+'</b></td><td class="ul-wip-total-grp"><b>'+nf(tot.ng)+'</b></td>'
+       + (hasStatus ? '<td class="ul-wip-total-grp">—</td>' : '') + '</tr>';
+  });
+  h += '</tbody></table></div>';
+  $('#qcDailyDetailTable').html(h);
 }
 function renderQcPending(pq){
   pq = pq || { by_process:[], total:0 };

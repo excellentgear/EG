@@ -28,6 +28,7 @@ require_once __DIR__ . '/leave_lib.php';
 require_once __DIR__ . '/eng_log_lib.php';
 require_once __DIR__ . '/order_analysis_lib.php';
 require_once __DIR__ . '/acc_track_lib.php';
+require_once __DIR__ . '/person_schedule_lib.php';
 
 if (!defined('UL_PARAM_GROUP')) define('UL_PARAM_GROUP', 'UNIT_LOAD');
 
@@ -398,6 +399,40 @@ function ul_workdays_between(PDO $db, ?string $from, ?string $to): ?int
         $cur = strtotime('+1 day', $cur);
     }
     return $count;
+}
+
+if (!defined('UL_PSCHED_MAX_DAYS')) define('UL_PSCHED_MAX_DAYS', 31);
+
+/**
+ * 批次版「某批人在這段期間，每一天各自有沒有會議／外出／請假」（2026-10-08 新增，
+ * 使用者交辦：設計課／品管的逐人每日工作量要能看到當天狀態）。**一律轉呼叫全站唯一
+ * 實作** `person_schedule_lib.php` 的 `eg_psched_for_users()`（會議紀錄挑出席人員已經
+ * 在用的同一支），不自己另外判斷請假/公出/會議——這裡只是把它包成「逐日呼叫一次、
+ * 整段期間一次要齊」的批次版本。
+ *
+ * 只在期間不超過 UL_PSCHED_MAX_DAYS 天時才展開（跟畫面「逐日」顯示粒度用的門檻一致，
+ * 見前端 pickTimeGran() 的 31 天），超過就回空陣列——拉長到一整年份還要逐日查 4 張表，
+ * 對這個「附加提示」功能而言不划算，而且那種長期間本來就會改用週/月分桶，不是逐日
+ * 一列，看不到「當天」這件事也沒有意義。
+ *
+ * @return array 'YYYY-MM-DD' => uid => eg_psched_for_users() 的那份清單（可能是空陣列）
+ */
+function ul_person_day_status(PDO $db, array $userIds, string $from, string $to): array
+{
+    $ids = ul_ids_norm($userIds);
+    if (!$ids) return [];
+    $dayCount = (int)floor((strtotime($to) - strtotime($from)) / 86400) + 1;
+    if ($dayCount < 1 || $dayCount > UL_PSCHED_MAX_DAYS) return [];
+
+    $out = [];
+    $cur = strtotime($from);
+    $endTs = strtotime($to);
+    while ($cur <= $endTs) {
+        $d = date('Y-m-d', $cur);
+        $out[$d] = eg_psched_for_users($db, $ids, $d);
+        $cur = strtotime('+1 day', $cur);
+    }
+    return $out;
 }
 
 /** 本頁管理員（canAdmin）：$feat 含 'all'（全站超級管理員）或本模組的 'unit_load_admin' */
@@ -968,9 +1003,47 @@ function ul_design_daily_pmget(PDO $db, string $from, string $to, array $designe
 }
 
 /**
+ * 稽核製程標籤的「正式顯示順序」（2026-10-08 新增，使用者交辦：逐人標籤分布的順序要跟
+ * 訂單追蹤「設定→稽核製程標籤（AS 認定）」區塊看到的順序一致）。**不自己另訂一套排序
+ * 規則**——直接重用 `order_as_tag_lib.php` 既有的 `ot_astag_defs()`（依 sort_order 排序，
+ * 含停用的也要給順序，否則舊資料裡停用標籤的那幾列會被排到不可預期的位置）＋
+ * `ot_astag_variants()`（同一個定義展開成幾個 scope 變體時，變體之間的先後順序），
+ * 兩者都是該檔唯一實作，這裡只是照抄官方順序組一份 'tagid:scope' => 排序索引的對照表。
+ * @return array 'tagid:scope' => 排序索引（數字愈小排愈前面）
+ */
+function ul_design_tag_order_map(PDO $db): array
+{
+    require_once __DIR__ . '/order_as_tag_lib.php';
+    $map = []; $i = 0;
+    foreach (ot_astag_defs($db, false) as $def) {
+        foreach (ot_astag_variants($def) as $sc) {
+            $map[$def['tag_id'] . ':' . $sc] = $i++;
+        }
+    }
+    return $map;
+}
+
+/** ul_design_tag_order_map() 排序用：查不到的（理論上不會發生，defs 已含全部定義）排最後 */
+function ul_design_tags_sort(array $rows, array $orderMap): array
+{
+    usort($rows, function ($a, $b) use ($orderMap) {
+        $ka = $a['tag_id'] . ':' . ($a['_scope'] ?? '');
+        $kb = $b['tag_id'] . ':' . ($b['_scope'] ?? '');
+        $oa = $orderMap[$ka] ?? PHP_INT_MAX;
+        $ob = $orderMap[$kb] ?? PHP_INT_MAX;
+        return $oa <=> $ob;
+    });
+    foreach ($rows as &$r) unset($r['_scope']); // 排序用的內部欄位，回傳前拿掉
+    return $rows;
+}
+
+/**
  * 訂單標籤分布（AS 認定的稽核製程標籤，order_track.as_tag_id → ot_as_proc_tag 唯一定義表）。
  * 依下單日歸屬期間——標籤是訂單的屬性，用下單日判斷「這張單算不算這一期」最直觀；
  * 若要改成依「貼標籤當下」(as_tag_at) 篩選，留給下一階段依使用者意見再調。
+ *
+ * 2026-10-08 修正：順序依「訂單追蹤設定→稽核製程標籤（AS 認定）」官方順序（sort_order），
+ * 不再依筆數由大到小排——使用者明確要求順序要跟那個設定畫面一致，方便對照。
  *
  * 2026-10-08 修正：使用者回報本頁顯示的標籤名稱跟訂單追蹤設定的標籤「好像不同」——
  * 查證發現根因是**顯示文字沒有呼叫唯一實作 `ot_astag_make_label()`**，直接拿
@@ -988,21 +1061,21 @@ function ul_design_tags(PDO $db, string $from, string $to, array $designerIds): 
     $in = implode(',', $ids);
     require_once __DIR__ . '/order_as_tag_lib.php';
     $labelMap = ot_astag_label_map($db);
+    $orderMap = ul_design_tag_order_map($db);
     $st = $db->prepare("SELECT ot.as_tag_id tid, ot.as_tag_scope sc, COUNT(*) c
         FROM order_track ot
         WHERE ot.ate IN ({$in}) AND ot.as_tag_id IS NOT NULL
           AND ot.Order_date BETWEEN ? AND ? AND (ot.Order_status IS NULL OR ot.Order_status<>6)
           AND (ot.parent_order_id IS NULL OR ot.parent_order_id=0)
-        GROUP BY ot.as_tag_id, ot.as_tag_scope
-        ORDER BY c DESC");
+        GROUP BY ot.as_tag_id, ot.as_tag_scope");
     $st->execute([$from, $to]);
     $out = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $tid = (int)$r['tid']; $sc = (string)($r['sc'] ?? '');
         $label = $labelMap[$tid . ':' . $sc] ?? ('（標籤#' . $tid . '）');
-        $out[] = ['tag_id' => $tid, 'tag_name' => $label, 'c' => (int)$r['c']];
+        $out[] = ['tag_id' => $tid, 'tag_name' => $label, 'c' => (int)$r['c'], '_scope' => $sc];
     }
-    return $out;
+    return ul_design_tags_sort($out, $orderMap);
 }
 
 /** ul_design_tags() 的逐人版本（2026-10-08 新增），GROUP BY 多一欄 ate；標籤文字修正見
@@ -1015,13 +1088,13 @@ function ul_design_tags_by_person(PDO $db, string $from, string $to, array $desi
     $in = implode(',', $ids);
     require_once __DIR__ . '/order_as_tag_lib.php';
     $labelMap = ot_astag_label_map($db);
+    $orderMap = ul_design_tag_order_map($db);
     $st = $db->prepare("SELECT ot.ate k, ot.as_tag_id tid, ot.as_tag_scope sc, COUNT(*) c
         FROM order_track ot
         WHERE ot.ate IN ({$in}) AND ot.as_tag_id IS NOT NULL
           AND ot.Order_date BETWEEN ? AND ? AND (ot.Order_status IS NULL OR ot.Order_status<>6)
           AND (ot.parent_order_id IS NULL OR ot.parent_order_id=0)
-        GROUP BY ot.ate, ot.as_tag_id, ot.as_tag_scope
-        ORDER BY ot.ate, c DESC");
+        GROUP BY ot.ate, ot.as_tag_id, ot.as_tag_scope");
     $st->execute([$from, $to]);
     $out = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -1029,8 +1102,9 @@ function ul_design_tags_by_person(PDO $db, string $from, string $to, array $desi
         $tid = (int)$r['tid']; $sc = (string)($r['sc'] ?? '');
         $label = $labelMap[$tid . ':' . $sc] ?? ('（標籤#' . $tid . '）');
         if (!isset($out[$uid])) $out[$uid] = [];
-        $out[$uid][] = ['tag_id' => $tid, 'tag_name' => $label, 'c' => (int)$r['c']];
+        $out[$uid][] = ['tag_id' => $tid, 'tag_name' => $label, 'c' => (int)$r['c'], '_scope' => $sc];
     }
+    foreach ($out as $uid => $rows) $out[$uid] = ul_design_tags_sort($rows, $orderMap);
     return $out;
 }
 
@@ -2478,6 +2552,51 @@ function ul_qc_by_person(PDO $db, string $from, string $to, array $qcUserIds, ar
 }
 
 /**
+ * 品管「逐人每日工作量」明細（2026-10-08 新增，使用者交辦，仿設計課同一種做法）：逐日
+ * 逐人的檢驗筆數與其中 NG 筆數。**資料來源與 ul_qc_by_person() 完全一致**（qc_check_form
+ * 的 inspector_by/approved_by ＋ qc_check 的 created_by/updated_by 兩個來源都要算，只算
+ * 其中一個會跟「各人負荷明細」裡期間彙總的數字對不起來），這裡只是多了「依日期分組」
+ * 這一層，不彙總——同一天同一人若兩個來源都有資料會各自一列，呼叫端自己加總。
+ * @return array 每列一筆：['d'=>日期,'uid'=>品管人員id,'items'=>當天這個來源的筆數,'ng'=>其中NG筆數]
+ */
+function ul_qc_daily_detail(PDO $db, string $from, string $to, array $qcUserIds): array
+{
+    $ids = ul_ids_norm($qcUserIds);
+    if (!$ids) return [];
+    $inQ = implode(',', array_map(fn($v) => "'" . $v . "'", $ids));
+    $inN = implode(',', $ids);
+    $out = [];
+
+    $st = $db->prepare(
+        "SELECT COALESCE(check_date, DATE(created_at)) AS d, COALESCE(inspector_by, approved_by) AS person,
+                SUM(CASE WHEN check_result='NG' THEN 1 ELSE 0 END) AS ng_c, COUNT(*) AS cnt
+         FROM qc_check_form
+         WHERE status<>'DRAFT'
+           AND COALESCE(check_date, DATE(created_at)) BETWEEN ? AND ?
+           AND COALESCE(inspector_by, approved_by) IN ({$inQ})
+         GROUP BY d, person"
+    );
+    $st->execute([$from, $to]);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[] = ['d' => (string)$r['d'], 'uid' => (int)$r['person'], 'items' => (int)$r['cnt'], 'ng' => (int)$r['ng_c']];
+    }
+
+    $st2 = $db->prepare(
+        "SELECT COALESCE(DATE(QC_check_date), DATE(created_at)) AS d, COALESCE(created_by, updated_by) AS person,
+                SUM(CASE WHEN QC_check='ng' THEN 1 ELSE 0 END) AS ng_c, COUNT(*) AS cnt
+         FROM qc_check
+         WHERE COALESCE(DATE(QC_check_date), DATE(created_at)) BETWEEN ? AND ?
+           AND COALESCE(created_by, updated_by) IN ({$inN})
+         GROUP BY d, person"
+    );
+    $st2->execute([$from, $to]);
+    foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[] = ['d' => (string)$r['d'], 'uid' => (int)$r['person'], 'items' => (int)$r['cnt'], 'ng' => (int)$r['ng_c']];
+    }
+    return $out;
+}
+
+/**
  * 未列入待驗由品管手動補檢驗：qc_check_form.bom_ing_fid=0（沒有掛在任何製程待驗佇列上）
  * AND status<>'DRAFT'，依 process_name 分組計數。日期用 check_date（缺值退 created_at
  * 當天）——這類單多半是補登或臨時抽驗，check_date 才是使用者認定的檢驗日，不是系統建檔
@@ -2910,6 +3029,37 @@ function ul_trend_metric_design(PDO $db, string $from, string $to, array $ids): 
     return (int)$st->fetchColumn();
 }
 
+/** 設計課趨勢代表指標（2026-10-08 新增，使用者交辦）：本期新進批圖筆數（ateGet 落在
+ * 期間內）——與 ul_trend_metric_design() 的「本期轉生管」是流程的一進一出兩端，兩條線
+ * 一起看才看得出「進得比出得快」還是「出得比進得快」。 */
+function ul_trend_metric_design_batch_in(PDO $db, string $from, string $to, array $ids): int
+{
+    $ids = ul_ids_norm($ids);
+    if (!$ids) return 0;
+    $in = implode(',', $ids);
+    $st = $db->prepare("SELECT COUNT(*) FROM order_track
+        WHERE ate IN ({$in}) AND ateGet IS NOT NULL AND DATE(ateGet) BETWEEN ? AND ? AND (Order_status IS NULL OR Order_status<>6)
+          AND (parent_order_id IS NULL OR parent_order_id=0)");
+    $st->execute([$from, $to]);
+    return (int)$st->fetchColumn();
+}
+
+/** 設計課趨勢代表指標（2026-10-08 新增，使用者交辦）：累積待批圖存量，重建「這一期
+ * 結束那一天」還卡著多少（跟 ul_design_wip_daily() 同一套存量重建邏輯，只是這裡只評估
+ * 單一天——每期的期末——不是逐日展開，成本低很多）。 */
+function ul_trend_metric_design_wip_end(PDO $db, string $periodEnd, array $ids): int
+{
+    $ids = ul_ids_norm($ids);
+    if (!$ids) return 0;
+    $in = implode(',', $ids);
+    $st = $db->prepare("SELECT COUNT(*) FROM order_track ot
+        WHERE ot.ate IN ({$in}) AND ot.ateGet IS NOT NULL AND DATE(ot.ateGet) <= ?
+          AND (ot.pmGet IS NULL OR DATE(ot.pmGet) > ?)
+          AND (ot.Order_status IS NULL OR ot.Order_status<>6) AND (ot.parent_order_id IS NULL OR ot.parent_order_id=0)");
+    $st->execute([$periodEnd, $periodEnd]);
+    return (int)$st->fetchColumn();
+}
+
 /** 業務課趨勢代表指標：本期開立報價單張數 */
 function ul_trend_metric_sales(PDO $db, string $from, string $to, array $ids): int
 {
@@ -2987,7 +3137,12 @@ function ul_trend_series(PDO $db, array $settings, string $gran, int $buckets = 
     $prodIds   = array_column(ul_dept_user_ids($db, $settings, 'prod'), 'id');
 
     $labels = [];
-    $series = ['design' => [], 'sales' => [], 'pm' => [], 'prod' => [], 'qc' => [], 'packing' => []];
+    // 2026-10-08 新增：design_batch_in（新進批圖）／design_wip_end（期末累積待批圖存量）
+    // 兩條額外的設計課序列（使用者交辦），**不取代** design（本期轉生管）這個既有序列——
+    // ul_insights() 的 $streak() 只認 series['design']（轉生管量連續上升/下滑），拿掉或
+    // 改掉它會讓那段既有判斷跟著壞掉；新序列用新的鍵名並列存在。
+    $series = ['design' => [], 'sales' => [], 'pm' => [], 'prod' => [], 'qc' => [], 'packing' => [],
+               'design_batch_in' => [], 'design_wip_end' => []];
     foreach ($periods as $p) {
         $labels[] = $p['label'];
         $series['design'][]  = ul_trend_metric_design($db, $p['start'], $p['end'], $designIds);
@@ -2996,6 +3151,8 @@ function ul_trend_series(PDO $db, array $settings, string $gran, int $buckets = 
         $series['prod'][]    = ul_trend_metric_prod($db, $p['start'], $p['end'], $prodIds);
         $series['qc'][]      = ul_trend_metric_qc($db, $p['start'], $p['end']);
         $series['packing'][] = ul_trend_metric_packing($db, $p['start'], $p['end']);
+        $series['design_batch_in'][] = ul_trend_metric_design_batch_in($db, $p['start'], $p['end'], $designIds);
+        $series['design_wip_end'][]  = ul_trend_metric_design_wip_end($db, $p['end'], $designIds);
     }
 
     return [
@@ -3013,6 +3170,8 @@ function ul_trend_series(PDO $db, array $settings, string $gran, int $buckets = 
             'prod'    => '本期報工產出數量',
             'qc'      => '本期檢驗項目數',
             'packing' => '本期包裝完成筆數',
+            'design_batch_in' => '本期新進批圖筆數',
+            'design_wip_end'  => '期末累積待批圖存量',
         ],
     ];
 }
