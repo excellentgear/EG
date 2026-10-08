@@ -808,6 +808,13 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
                 <input id="bom-3d-color-pick" type="color" value="#e67e22" style="width:28px;height:22px;padding:0;border:1px solid #ccc;vertical-align:middle;" title="選擇要塗的顏色">
                 <button id="btn-3d-color-reset" type="button" class="btn btn-default btn-xs" title="清除全部上色，恢復原始顏色"><i class="fa fa-eraser"></i> 恢復原色</button>
             </span>
+            <!-- 3D 專用：尺寸量測（點/線/面，數值單位 mm；唯一實作見 resource/js/eg_3d_viewer_tools.js）-->
+            <span id="bom-3d-measure-group" style="display:none;align-items:center;gap:3px;">
+                <button id="btn-3d-measure-point" type="button" class="btn btn-default btn-xs" title="量測模式：點一下即記錄該點座標，與上一筆量測算距離（單位 mm，假設模型以 mm 建立）"><i class="fa fa-crosshairs"></i> 點</button>
+                <button id="btn-3d-measure-edge" type="button" class="btn btn-default btn-xs" title="量測模式：點一下自動抓最近的邊線，顯示該線長度，並與上一筆量測算距離"><i class="fa fa-minus"></i> 線</button>
+                <button id="btn-3d-measure-face" type="button" class="btn btn-default btn-xs" title="量測模式：點一下自動判定整個面，顯示該面面積，並與上一筆量測算距離"><i class="fa fa-square-o"></i> 面</button>
+                <button id="btn-3d-measure-clear" type="button" class="btn btn-default btn-xs" title="清除目前量測標記"><i class="fa fa-eraser"></i> 清除量測</button>
+            </span>
             <button id="btn-tags-setting" class="btn btn-info btn-xs" onclick="openFileTagsSetting()" title="設定檔名標籤"><i class="fa fa-tags"></i> 設定標籤</button>
             <?php if ($imgeditCanUse): ?>
             <!-- 批圖編輯器：獨立跳窗（未被指派 imgedit 角色者不顯示此鈕，見上方 $imgeditCanUse） -->
@@ -843,6 +850,8 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
                     <i class="fa fa-spinner fa-spin" style="margin-right:6px;"></i>載入中...</div>
                 <div style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.45);color:#fff;font-size:11px;padding:3px 10px;border-radius:4px;pointer-events:none;white-space:nowrap;z-index:1;">
                     <i class="fa fa-mouse-pointer"></i> 左鍵旋轉 &nbsp;|&nbsp; 右鍵平移 &nbsp;|&nbsp; 滾輪縮放</div>
+                <!-- 量測結果面板（唯一實作見 resource/js/eg_3d_viewer_tools.js，與 master_data_management.php 共用）-->
+                <div id="bom-3d-measure-result" style="display:none;position:absolute;top:8px;left:8px;background:rgba(0,0,0,.6);color:#fff;font-size:12px;line-height:1.6;padding:8px 12px;border-radius:4px;pointer-events:none;z-index:3;max-width:70%;">尚未量測</div>
             </div>
             <div id="viewer-placeholder"><i class="fa fa-arrow-left"></i> 從左側選擇檔案</div>
         </div>
@@ -1012,6 +1021,8 @@ var _d3NeedConvertExts = ['ipt','x_t'];   // 這些副檔名瀏覽器讀不懂�
 var _bom3dViewer = null;
 var _bom3dColorState = null;   // EG3DTools.ColorState，每次切換檔案重建一份（見 showFile 3D 分支）
 var _bom3dColorMode  = false;  // 上色模式開關：開啟時點模型上的零件即換色
+var _bom3dMeasureState = null; // EG3DTools.MeasureState，每次切換檔案重建一份
+var _bom3dMeasureMode  = null; // 量測模式：null|'point'|'edge'|'face'，與上色模式互斥
 var _currentName = '';
 var _rotBust     = {};   // 剛旋轉過的檔案 → 新的 mtime（重新載入時當破快取參數用）
 
@@ -1056,9 +1067,12 @@ function showFile(path, type, name) {
     $('#viewer-title').text(_currentName);
     $('#img-zoom-wrap, #bom-pdf-frame, #bom-3d-wrap, #viewer-placeholder, #bom-quote-detail, #album-grid-wrap').hide();
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-save-pdf, #btn-paint, #btn-rot-ccw, #btn-rot-cw').hide();
-    $('#bom-3d-color-group').hide();
+    $('#bom-3d-color-group, #bom-3d-measure-group').hide();
+    $('#bom-3d-measure-result').hide();
     _bom3dColorMode = false;
     $('#btn-3d-color').removeClass('btn-success').html('<i class="fa fa-paint-brush"></i> 上色');
+    _bom3dMeasureMode = null;
+    $('#btn-3d-measure-point, #btn-3d-measure-edge, #btn-3d-measure-face').removeClass('btn-info');
     _dwgPdfUrl = '';   // 切檔案時先清掉，避免「下載PDF」按到上一份檔案轉出來的結果
     resetTransform();
 
@@ -1104,6 +1118,10 @@ function showFile(path, type, name) {
         _bom3dColorMode = false;
         $('#btn-3d-color').removeClass('btn-success').html('<i class="fa fa-paint-brush"></i> 上色');
         $('#bom-3d-color-group').css('display', 'inline-flex');
+        _bom3dMeasureState = new EG3DTools.MeasureState();
+        _bom3dMeasureMode = null;
+        $('#btn-3d-measure-point, #btn-3d-measure-edge, #btn-3d-measure-face').removeClass('btn-info');
+        $('#bom-3d-measure-group').css('display', 'inline-flex');
         $('#btn-print, #btn-image-editor').show();
         var _need3dConvert = _d3NeedConvertExts.indexOf(_currentType) !== -1;
         var _fetchUrl3d = _need3dConvert ? viewPath.replace('action=download', 'action=preview_3d') : viewPath;
@@ -1211,6 +1229,7 @@ $('#btn-3d-color').on('click', function() {
     _bom3dColorMode = !_bom3dColorMode;
     $(this).toggleClass('btn-warning', !_bom3dColorMode).toggleClass('btn-success', _bom3dColorMode)
         .html('<i class="fa fa-paint-brush"></i> ' + (_bom3dColorMode ? '上色中（點一下上色整面／拖曳框選）' : '上色'));
+    if (_bom3dColorMode) _bom3dSetMeasureMode(null);   // 上色與量測互斥，開一個要關掉另一個
 });
 EG3DTools.attachColorInteraction(
     document.getElementById('bom-3d-wrap'), '#bom-3d-viewer canvas',
@@ -1223,6 +1242,37 @@ $('#btn-3d-color-reset').on('click', function() {
     _bom3dColorState.resetAll();
     if (_bom3dViewer) _bom3dViewer.GetViewer().Render();
 });
+
+// ── 3D 尺寸量測（唯一實作見 resource/js/eg_3d_viewer_tools.js）─────────────
+// 點一下依目前模式記錄一筆（點/線/面），與「最近一筆」自動算距離並顯示在左上角結果
+// 面板；單位一律標 mm（STEP/IPT 轉檔後沒有保留原始比例資訊，假設本廠繪圖慣例是 mm，
+// 若與圖面已知尺寸對不上代表來源模型比例不是 mm）。與上色模式互斥。
+function _bom3dSetMeasureMode(mode) {
+    _bom3dMeasureMode = mode;
+    $('#btn-3d-measure-point, #btn-3d-measure-edge, #btn-3d-measure-face').removeClass('btn-info');
+    if (mode === 'point') $('#btn-3d-measure-point').addClass('btn-info');
+    else if (mode === 'edge') $('#btn-3d-measure-edge').addClass('btn-info');
+    else if (mode === 'face') $('#btn-3d-measure-face').addClass('btn-info');
+    if (mode) {
+        _bom3dColorMode = false;
+        $('#btn-3d-color').removeClass('btn-success').html('<i class="fa fa-paint-brush"></i> 上色');
+        $('#bom-3d-measure-result').show();
+    }
+}
+$('#btn-3d-measure-point').on('click', function() { _bom3dSetMeasureMode(_bom3dMeasureMode === 'point' ? null : 'point'); });
+$('#btn-3d-measure-edge').on('click',  function() { _bom3dSetMeasureMode(_bom3dMeasureMode === 'edge'  ? null : 'edge');  });
+$('#btn-3d-measure-face').on('click',  function() { _bom3dSetMeasureMode(_bom3dMeasureMode === 'face'  ? null : 'face');  });
+$('#btn-3d-measure-clear').on('click', function() {
+    if (!_bom3dMeasureState) return;
+    _bom3dMeasureState.clearAll(_bom3dViewer);
+    $('#bom-3d-measure-result').html('尚未量測');
+});
+EG3DTools.attachMeasureInteraction(
+    document.getElementById('bom-3d-wrap'), '#bom-3d-viewer canvas',
+    function () { return { embeddedViewer: _bom3dViewer, measureState: _bom3dMeasureState }; },
+    function () { return _bom3dMeasureMode; },
+    function (measureState) { $('#bom-3d-measure-result').html(measureState.getSummaryHtml()); }
+);
 
 // ── 圖片縮放與拖曳 ────────────────────────────────────────────────────────
 (function() {

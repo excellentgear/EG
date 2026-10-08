@@ -20,6 +20,12 @@
  *   viewer.GetImageAsDataUrl(w,h,isTransparent)        → 目前畫面截圖（含目前上色/角度）
  *   viewer.Render()                                    → 強制重繪
  *   OV.IntersectionMode.MeshOnly                       → 只打到實體面，不含線段
+ *   viewer.AddExtraObject(obj) / viewer.ClearExtra()   → 疊加自訂 Three.js 物件的官方管道
+ *     （量測標記點/連線用這個，不要自己 mesh.parent.add(...)——實測過那條路徑物件雖然
+ *      真的進了場景圖、draw call 也真的送出去，但沒特別處理深度測試時常被模型本體整個
+ *      擋住、肉眼完全看不到；AddExtraObject 是函式庫自己留的擴充點，且與 mainModel 分開
+ *      管理，ClearExtra() 可只清掉標記不動到主模型的材質/上色狀態）。疊加物件材質務必設
+ *      depthTest:false＋高 renderOrder，量測標記才會穩定蓋在模型表面之上。
  *
  * 上色做成「自動判定同一面＋可框選」（2026-10-08 使用者兩輪要求：①不要整個零件一次
  * 換色，要單面 ②能不能自動判定哪些三角形屬於同一面 ③框選也要做）：
@@ -411,6 +417,410 @@ var EG3DTools = (function () {
         window.open(url, 'egImgEditor_' + Date.now(), 'width=1280,height=860,menubar=no,toolbar=no,location=no,status=no,resizable=yes');
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    // 尺寸量測：點／線／面，兩兩距離，顯示單位（2026-10-08 使用者要求）
+    // ══════════════════════════════════════════════════════════════════════
+    // 單位假設：STEP/IPT 轉檔後的三角網格本身沒有附帶任何「這個模型是用什麼單位建的」
+    // 資訊（occt-import-js／Online3DViewer 都不處理比例），本廠 Inventor 繪圖慣例一律
+    // 用毫米(mm)，故本工具的數值一律標示 mm；這是「假設」不是「已驗證」，若量到的數字
+    // 與圖面標註的已知尺寸對不上，代表來源模型本身的比例不是 mm，需要另外處理。
+    //
+    // 「線」＝三角網格沒有保留 CAD 的邊/面拓樸資料，用 _buildFaceGraph() 的鄰接關係反推
+    // 「特徵邊」：一條邊只被一個三角形使用＝網格邊界，或邊兩側的三角形分屬不同「同一面」
+    // 群組＝兩個 CAD 面的交界，兩者都算特徵邊；點一下時只在「點到的這個面群組」範圍內
+    // 找最近的特徵邊，不用掃整個模型。
+    //
+    // 點-點／點-線（點到線段）為精確公式；點-面＝對該面群組全部三角形做逐三角形最近點
+    // 比對，曲面也精確；線-線為精確的三維線段最近距離；凡是「面-面」或「線-面」因為
+    // 沒有做真正的連續曲面最近距離最佳化，改用兩邊頂點兩兩比對取最小值當近似值，結果
+    // 一律標示「≈」，不假裝是精確值。
+    var _measureMarkerColor = '#00b0ff', _measureRodColor = '#ff6d00';
+
+    function _vlen(a, b) {
+        var dx = a[0]-b[0], dy = a[1]-b[1], dz = a[2]-b[2];
+        return Math.sqrt(dx*dx+dy*dy+dz*dz);
+    }
+    function _pointToSegmentDistance(p, a, b) {
+        var abx=b[0]-a[0], aby=b[1]-a[1], abz=b[2]-a[2];
+        var apx=p[0]-a[0], apy=p[1]-a[1], apz=p[2]-a[2];
+        var abLenSq = abx*abx+aby*aby+abz*abz;
+        var t = abLenSq > 1e-12 ? (apx*abx+apy*aby+apz*abz)/abLenSq : 0;
+        t = Math.max(0, Math.min(1, t));
+        var cx=a[0]+abx*t, cy=a[1]+aby*t, cz=a[2]+abz*t;
+        return _vlen(p, [cx,cy,cz]);
+    }
+    // 兩條三維線段之間的最短距離（經典解法：先求無限直線的最近參數，再夾到 [0,1]）
+    function _segmentToSegmentDistance(p1, p2, p3, p4) {
+        var d1=[p2[0]-p1[0],p2[1]-p1[1],p2[2]-p1[2]];
+        var d2=[p4[0]-p3[0],p4[1]-p3[1],p4[2]-p3[2]];
+        var r=[p1[0]-p3[0],p1[1]-p3[1],p1[2]-p3[2]];
+        function dot(a,b){ return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+        var a=dot(d1,d1), e=dot(d2,d2), f=dot(d2,r);
+        var s, t;
+        if (a <= 1e-12 && e <= 1e-12) { s=0; t=0; }
+        else if (a <= 1e-12) { s=0; t=Math.max(0,Math.min(1, f/e)); }
+        else {
+            var c = dot(d1,r);
+            if (e <= 1e-12) { t=0; s=Math.max(0,Math.min(1, -c/a)); }
+            else {
+                var b = dot(d1,d2);
+                var denom = a*e-b*b;
+                s = denom > 1e-12 ? Math.max(0,Math.min(1,(b*f-c*e)/denom)) : 0;
+                t = (b*s+f)/e;
+                if (t < 0) { t=0; s=Math.max(0,Math.min(1,-c/a)); }
+                else if (t > 1) { t=1; s=Math.max(0,Math.min(1,(b-c)/a)); }
+            }
+        }
+        var c1=[p1[0]+d1[0]*s,p1[1]+d1[1]*s,p1[2]+d1[2]*s];
+        var c2=[p3[0]+d2[0]*t,p3[1]+d2[1]*t,p3[2]+d2[2]*t];
+        return _vlen(c1,c2);
+    }
+    // 點到三角形的最近距離（精確，含投影落在三角形外要夾到最近邊/頂點的情況）
+    function _pointToTriangleDistance(p, a, b, c) {
+        function sub(u,v){ return [u[0]-v[0],u[1]-v[1],u[2]-v[2]]; }
+        function dot(u,v){ return u[0]*v[0]+u[1]*v[1]+u[2]*v[2]; }
+        var ab=sub(b,a), ac=sub(c,a), ap=sub(p,a);
+        var d1=dot(ab,ap), d2=dot(ac,ap);
+        if (d1<=0 && d2<=0) return _vlen(p,a);
+        var bp=sub(p,b);
+        var d3=dot(ab,bp), d4=dot(ac,bp);
+        if (d3>=0 && d4<=d3) return _vlen(p,b);
+        var vc=d1*d4-d3*d2;
+        if (vc<=0 && d1>=0 && d3<=0) { var v=d1/(d1-d3); return _vlen(p,[a[0]+ab[0]*v,a[1]+ab[1]*v,a[2]+ab[2]*v]); }
+        var cp=sub(p,c);
+        var d5=dot(ab,cp), d6=dot(ac,cp);
+        if (d6>=0 && d5<=d6) return _vlen(p,c);
+        var vb=d5*d2-d1*d6;
+        if (vb<=0 && d2>=0 && d6<=0) { var w=d2/(d2-d6); return _vlen(p,[a[0]+ac[0]*w,a[1]+ac[1]*w,a[2]+ac[2]*w]); }
+        var va=d3*d6-d5*d4;
+        if (va<=0 && (d4-d3)>=0 && (d5-d6)>=0) {
+            var w2=(d4-d3)/((d4-d3)+(d5-d6));
+            return _vlen(p,[b[0]+(c[0]-b[0])*w2, b[1]+(c[1]-b[1])*w2, b[2]+(c[2]-b[2])*w2]);
+        }
+        var denom=1/(va+vb+vc), v2=vb*denom, w3=vc*denom;
+        return _vlen(p,[a[0]+ab[0]*v2+ac[0]*w3, a[1]+ab[1]*v2+ac[1]*w3, a[2]+ab[2]*v2+ac[2]*w3]);
+    }
+
+    // 某個 mesh 上一組三角形（同一面群組）在「世界座標」下的三角形頂點清單＋面積＋重心
+    function _groupWorldTriangles(mesh, triIndices) {
+        var graph = _buildFaceGraph(mesh);
+        var posArr = mesh.geometry.attributes.position.array;
+        mesh.updateMatrixWorld(true);
+        var m = mesh.matrixWorld.elements;
+        function toWorld(lx,ly,lz) {
+            return [
+                m[0]*lx+m[4]*ly+m[8]*lz+m[12],
+                m[1]*lx+m[5]*ly+m[9]*lz+m[13],
+                m[2]*lx+m[6]*ly+m[10]*lz+m[14]
+            ];
+        }
+        var tris = [], area = 0, cx=0, cy=0, cz=0, wsum=0;
+        triIndices.forEach(function (ti) {
+            var v = graph.getTri(ti);
+            var a = toWorld(posArr[v[0]*3],posArr[v[0]*3+1],posArr[v[0]*3+2]);
+            var b = toWorld(posArr[v[1]*3],posArr[v[1]*3+1],posArr[v[1]*3+2]);
+            var c = toWorld(posArr[v[2]*3],posArr[v[2]*3+1],posArr[v[2]*3+2]);
+            var ab=[b[0]-a[0],b[1]-a[1],b[2]-a[2]], ac=[c[0]-a[0],c[1]-a[1],c[2]-a[2]];
+            var cxp=ab[1]*ac[2]-ab[2]*ac[1], cyp=ab[2]*ac[0]-ab[0]*ac[2], czp=ab[0]*ac[1]-ab[1]*ac[0];
+            var triArea = 0.5*Math.sqrt(cxp*cxp+cyp*cyp+czp*czp);
+            area += triArea;
+            var tcx=(a[0]+b[0]+c[0])/3, tcy=(a[1]+b[1]+c[1])/3, tcz=(a[2]+b[2]+c[2])/3;
+            cx += tcx*triArea; cy += tcy*triArea; cz += tcz*triArea; wsum += triArea;
+            tris.push([a,b,c]);
+        });
+        var centroid = wsum > 1e-9 ? [cx/wsum, cy/wsum, cz/wsum] : (tris.length ? [(tris[0][0][0]+tris[0][1][0]+tris[0][2][0])/3,(tris[0][0][1]+tris[0][1][1]+tris[0][2][1])/3,(tris[0][0][2]+tris[0][1][2]+tris[0][2][2])/3] : [0,0,0]);
+        return { tris: tris, area: area, centroid: centroid };
+    }
+    function _distancePointToTriSet(p, triSet) {
+        var best = Infinity;
+        triSet.forEach(function (t) { best = Math.min(best, _pointToTriangleDistance(p, t[0], t[1], t[2])); });
+        return best;
+    }
+    // 近似值：兩組三角形的頂點兩兩比較取最小（face-face／edge-face 用，標「≈」）
+    function _approxMinDistanceTriSets(triSetA, triSetB) {
+        var best = Infinity;
+        var vertsA = [], vertsB = [];
+        triSetA.forEach(function (t) { vertsA.push(t[0], t[1], t[2]); });
+        triSetB.forEach(function (t) { vertsB.push(t[0], t[1], t[2]); });
+        for (var i = 0; i < vertsA.length; i++) {
+            for (var j = 0; j < vertsB.length; j++) { best = Math.min(best, _vlen(vertsA[i], vertsB[j])); }
+        }
+        return best;
+    }
+
+    // 在「點到的那個同面群組」範圍內，收集全部「特徵邊」（網格邊界，或與相鄰群組的交界）
+    // ——三角網格沒有保留 CAD 的邊/面拓樸，這是唯一能反推出「這算一條邊」的依據。
+    // 回傳 [{va,vb,a,b,len}]，va/vb 是頂點索引、a/b 是世界座標、len 是該小段本身長度。
+    function _collectFeatureEdges(mesh, groupTriIndices) {
+        var graph = _buildFaceGraph(mesh);
+        var groupSet = new Set(groupTriIndices);
+        var posArr = mesh.geometry.attributes.position.array;
+        mesh.updateMatrixWorld(true);
+        var m = mesh.matrixWorld.elements;
+        function toWorld(vi) {
+            var lx=posArr[vi*3], ly=posArr[vi*3+1], lz=posArr[vi*3+2];
+            return [ m[0]*lx+m[4]*ly+m[8]*lz+m[12], m[1]*lx+m[5]*ly+m[9]*lz+m[13], m[2]*lx+m[6]*ly+m[10]*lz+m[14] ];
+        }
+        var seen = new Set();   // 同一條邊在相鄰兩三角形各自列舉時只收一次
+        var out = [];
+        groupTriIndices.forEach(function (ti) {
+            var v = graph.getTri(ti);
+            var edges = [[v[0],v[1]],[v[1],v[2]],[v[2],v[0]]];
+            var neighbors = graph.adjacency[ti];
+            edges.forEach(function (edge) {
+                var sharedInGroup = false;
+                for (var k = 0; k < neighbors.length; k++) {
+                    var nb = neighbors[k];
+                    if (!groupSet.has(nb)) continue;
+                    var nv = graph.getTri(nb);
+                    if (nv.indexOf(edge[0]) >= 0 && nv.indexOf(edge[1]) >= 0) { sharedInGroup = true; break; }
+                }
+                if (sharedInGroup) return;   // 群組內部邊，不是特徵邊
+                var key = edge[0] < edge[1] ? (edge[0]+'_'+edge[1]) : (edge[1]+'_'+edge[0]);
+                if (seen.has(key)) return;
+                seen.add(key);
+                var a = toWorld(edge[0]), b = toWorld(edge[1]);
+                out.push({ va: edge[0], vb: edge[1], a: a, b: b, len: _vlen(a, b) });
+            });
+        });
+        return out;
+    }
+    // 找離 worldPoint 最近的特徵邊，並沿著頂點度數=2 的連續邊鏈往兩端延伸，直到形成封閉
+    // 迴圈（例如一個圓孔的完整圓周）或遇到端點/分岔（開放邊界，或這條邊牽到別的特徵交會
+    // 處就停止，避免誤接成不相關的另一段）。回傳 {a,b}＝最近那一小段（給標記點定位用）、
+    // totalLen＝整條邊鏈/迴圈的總長度、closed＝是否形成封閉迴圈。
+    function _nearestFeatureEdgeLoop(mesh, groupTriIndices, worldPoint) {
+        var edges = _collectFeatureEdges(mesh, groupTriIndices);
+        if (!edges.length) return null;
+        var bestIdx = -1, bestDist = Infinity;
+        edges.forEach(function (e, i) {
+            var d = _pointToSegmentDistance(worldPoint, e.a, e.b);
+            if (d < bestDist) { bestDist = d; bestIdx = i; }
+        });
+        var nearest = edges[bestIdx];
+        // 建「頂點 → 牽到哪幾條邊（邊陣列索引）」，供沿鏈延伸用
+        var vertEdges = new Map();
+        edges.forEach(function (e, i) {
+            [e.va, e.vb].forEach(function (vi) {
+                if (!vertEdges.has(vi)) vertEdges.set(vi, []);
+                vertEdges.get(vi).push(i);
+            });
+        });
+        var usedIdx = new Set([bestIdx]);
+        var totalLen = nearest.len;
+        var closed = false;
+        // 分別往 va 端、vb 端延伸
+        [nearest.va, nearest.vb].forEach(function (startVert) {
+            var curVert = startVert;
+            for (var guard = 0; guard < edges.length + 1; guard++) {
+                var candidates = (vertEdges.get(curVert) || []).filter(function (i) { return !usedIdx.has(i); });
+                if (candidates.length !== 1) break;   // 端點（0）或分岔（>1）都停止，分岔不猜著接
+                var idx = candidates[0];
+                usedIdx.add(idx);
+                var e = edges[idx];
+                totalLen += e.len;
+                curVert = e.va === curVert ? e.vb : e.va;
+                if (curVert === nearest.va || curVert === nearest.vb) { closed = true; break; }   // 繞回起點，封閉迴圈
+            }
+        });
+        return { a: nearest.a, b: nearest.b, totalLen: totalLen, closed: closed, segCount: usedIdx.size };
+    }
+
+    function _fmtMm(v) { return (Math.round(v * 100) / 100).toString(); }
+
+    // ── 標記幾何（八面體小點／連接細桿），一樣用借用建構子那招，不靠全域 THREE ────────
+    function _buildMarkerGeom(refMesh, size) {
+        var GeoCtor = refMesh.geometry.constructor;
+        var geo = new GeoCtor();
+        var s = size;
+        var verts = new Float32Array([ s,0,0, -s,0,0, 0,s,0, 0,-s,0, 0,0,s, 0,0,-s ]);
+        var PosAttrCtor = refMesh.geometry.attributes.position.constructor;
+        geo.setAttribute('position', new PosAttrCtor(verts, 3));
+        geo.computeVertexNormals();
+        return geo;
+    }
+    function _buildRodGeom(refMesh, p1, p2, thickness) {
+        var GeoCtor = refMesh.geometry.constructor;
+        var geo = new GeoCtor();
+        var dx=p2[0]-p1[0], dy=p2[1]-p1[1], dz=p2[2]-p1[2];
+        var len = Math.sqrt(dx*dx+dy*dy+dz*dz) || 1;
+        var ux=dx/len, uy=dy/len, uz=dz/len;
+        // 找一個跟方向不平行的參考軸算出垂直基底，建一根細長方柱當「桿」
+        var ref = Math.abs(uy) < 0.9 ? [0,1,0] : [1,0,0];
+        var perp1 = [ uy*ref[2]-uz*ref[1], uz*ref[0]-ux*ref[2], ux*ref[1]-uy*ref[0] ];
+        var pl = Math.sqrt(perp1[0]*perp1[0]+perp1[1]*perp1[1]+perp1[2]*perp1[2]) || 1;
+        perp1 = [perp1[0]/pl, perp1[1]/pl, perp1[2]/pl];
+        var perp2 = [ uy*perp1[2]-uz*perp1[1], uz*perp1[0]-ux*perp1[2], ux*perp1[1]-uy*perp1[0] ];
+        var t = thickness;
+        function off(base, s1, s2) {
+            return [ base[0]+perp1[0]*s1+perp2[0]*s2, base[1]+perp1[1]*s1+perp2[1]*s2, base[2]+perp1[2]*s1+perp2[2]*s2 ];
+        }
+        var v = [
+            off(p1,-t,-t), off(p1,t,-t), off(p1,t,t), off(p1,-t,t),
+            off(p2,-t,-t), off(p2,t,-t), off(p2,t,t), off(p2,-t,t)
+        ];
+        var faces = [
+            [0,1,2],[0,2,3], [4,6,5],[4,7,6],
+            [0,4,5],[0,5,1], [1,5,6],[1,6,2],
+            [2,6,7],[2,7,3], [3,7,4],[3,4,0]
+        ];
+        var verts = new Float32Array(v.length * 3);
+        v.forEach(function (p, i) { verts[i*3]=p[0]; verts[i*3+1]=p[1]; verts[i*3+2]=p[2]; });
+        var idxArr = [];
+        faces.forEach(function (f) { idxArr.push(f[0], f[1], f[2]); });
+        var PosAttrCtor = refMesh.geometry.attributes.position.constructor;
+        geo.setAttribute('position', new PosAttrCtor(verts, 3));
+        geo.setIndex(idxArr);
+        geo.computeVertexNormals();
+        return geo;
+    }
+    function _buildMarkerMaterial(refMesh, hexColor) {
+        var baseMat = Array.isArray(refMesh.material) ? refMesh.material[0] : refMesh.material;
+        var mat = baseMat.clone();
+        mat.vertexColors = false;
+        mat.color.set(hexColor);
+        mat.side = 2;              // DoubleSide：量測標記本來就不該有「背面看不到」的問題
+        mat.depthTest = false;     // 一律蓋在模型之上，不會被模型本體擋住（已實測驗證必要）
+        mat.depthWrite = false;
+        mat.needsUpdate = true;
+        return mat;
+    }
+
+    // ── MeasureState：點／線／面量測狀態機，滑動視窗保留「最近兩筆」算兩者距離 ─────────
+    function MeasureState() {
+        this.picks = [];          // 最多保留 2 筆：{kind:'point'|'edge'|'face', worldPoint, selfValue, selfLabel, mesh}
+        this.extraObjs = [];      // 目前加進 viewer 的標記物件（供之後清除參考用，實際清除交給 ClearExtra）
+    }
+    MeasureState.prototype._pushPick = function (pick) {
+        this.picks.push(pick);
+        if (this.picks.length > 2) this.picks.shift();
+    };
+    MeasureState.prototype.pickPoint = function (embeddedViewer, canvasEl, clientX, clientY) {
+        var hit = pickMesh(embeddedViewer, canvasEl, clientX, clientY);
+        if (!hit || !hit.object || !hit.point) return false;
+        this._pushPick({ kind: 'point', worldPoint: [hit.point.x, hit.point.y, hit.point.z], mesh: hit.object });
+        this._render(embeddedViewer);
+        return true;
+    };
+    MeasureState.prototype.pickEdge = function (embeddedViewer, canvasEl, clientX, clientY, angleDeg) {
+        var hit = pickMesh(embeddedViewer, canvasEl, clientX, clientY);
+        if (!hit || !hit.object || hit.faceIndex == null) return false;
+        var group = sameFaceTriangles(hit.object, hit.faceIndex, angleDeg);
+        var edge = _nearestFeatureEdgeLoop(hit.object, group, [hit.point.x, hit.point.y, hit.point.z]);
+        if (!edge) return false;
+        var mid = [(edge.a[0]+edge.b[0])/2, (edge.a[1]+edge.b[1])/2, (edge.a[2]+edge.b[2])/2];
+        // 沿著連續特徵邊走一圈算出的總長度（例如一個圓孔的完整圓周，不是只有點到的那一小段
+        // 三角化線段）；selfLabel 依是否繞成封閉迴圈標示清楚，三角化愈細誤差愈小。
+        this._pushPick({
+            kind: 'edge', worldPoint: mid, a: edge.a, b: edge.b, selfValue: edge.totalLen,
+            selfLabel: edge.closed ? '邊線總長（封閉迴圈，如圓孔周長）' : '邊線總長（開放端）',
+            mesh: hit.object
+        });
+        this._render(embeddedViewer);
+        return true;
+    };
+    MeasureState.prototype.pickFace = function (embeddedViewer, canvasEl, clientX, clientY, angleDeg) {
+        var hit = pickMesh(embeddedViewer, canvasEl, clientX, clientY);
+        if (!hit || !hit.object || hit.faceIndex == null) return false;
+        var group = sameFaceTriangles(hit.object, hit.faceIndex, angleDeg);
+        var gw = _groupWorldTriangles(hit.object, group);
+        this._pushPick({ kind: 'face', worldPoint: gw.centroid, tris: gw.tris, selfValue: gw.area, selfLabel: '面積', mesh: hit.object, areaUnit: 'mm²' });
+        this._render(embeddedViewer);
+        return true;
+    };
+    MeasureState.prototype.clearAll = function (embeddedViewer) {
+        this.picks = [];
+        this.extraObjs = [];
+        if (embeddedViewer) embeddedViewer.GetViewer().ClearExtra();
+    };
+    // 畫面上的標記：每一筆各一顆小標記點，兩筆之間再加一根連接桿
+    MeasureState.prototype._render = function (embeddedViewer) {
+        var viewer = embeddedViewer.GetViewer();
+        viewer.ClearExtra();
+        this.extraObjs = [];
+        if (!this.picks.length) { viewer.Render(); return; }
+        var refMesh = this.picks[this.picks.length - 1].mesh;
+        refMesh.geometry.computeBoundingSphere();
+        var modelScale = Math.max(1, (refMesh.geometry.boundingSphere ? refMesh.geometry.boundingSphere.radius : 20) * 0.015);
+        var self = this;
+        this.picks.forEach(function (p) {
+            var geo = _buildMarkerGeom(refMesh, modelScale);
+            var mat = _buildMarkerMaterial(refMesh, _measureMarkerColor);
+            var MeshCtor = refMesh.constructor;
+            var marker = new MeshCtor(geo, mat);
+            marker.position.set(p.worldPoint[0], p.worldPoint[1], p.worldPoint[2]);
+            marker.renderOrder = 9999;
+            viewer.AddExtraObject(marker);
+            self.extraObjs.push(marker);
+        });
+        if (this.picks.length === 2) {
+            var geoR = _buildRodGeom(refMesh, this.picks[0].worldPoint, this.picks[1].worldPoint, modelScale * 0.18);
+            var matR = _buildMarkerMaterial(refMesh, _measureRodColor);
+            var MeshCtor2 = refMesh.constructor;
+            var rod = new MeshCtor2(geoR, matR);
+            rod.renderOrder = 9998;
+            viewer.AddExtraObject(rod);
+            this.extraObjs.push(rod);
+        }
+        viewer.Render();
+    };
+    // 計算「最近兩筆」之間的距離（exact／≈），回傳 {text, html}；picks 不足兩筆時回傳每一筆的自身量測
+    MeasureState.prototype.getSummaryHtml = function () {
+        if (!this.picks.length) return '尚未量測，請點選模型上的點／線／面';
+        var lines = [];
+        var kindLabel = { point: '點', edge: '線', face: '面' };
+        this.picks.forEach(function (p, i) {
+            var s = '第' + (i+1) + '筆（' + kindLabel[p.kind] + '）';
+            if (p.selfValue != null) s += '：' + p.selfLabel + ' = ' + _fmtMm(p.selfValue) + ' ' + (p.areaUnit || 'mm');
+            lines.push(s);
+        });
+        if (this.picks.length === 2) {
+            var A = this.picks[0], B = this.picks[1];
+            var approx = false, dist;
+            if (A.kind === 'point' && B.kind === 'point') { dist = _vlen(A.worldPoint, B.worldPoint); }
+            else if (A.kind === 'point' && B.kind === 'edge') { dist = _pointToSegmentDistance(A.worldPoint, B.a, B.b); }
+            else if (A.kind === 'edge' && B.kind === 'point') { dist = _pointToSegmentDistance(B.worldPoint, A.a, A.b); }
+            else if (A.kind === 'edge' && B.kind === 'edge') { dist = _segmentToSegmentDistance(A.a, A.b, B.a, B.b); }
+            else if (A.kind === 'point' && B.kind === 'face') { dist = _distancePointToTriSet(A.worldPoint, B.tris); }
+            else if (A.kind === 'face' && B.kind === 'point') { dist = _distancePointToTriSet(B.worldPoint, A.tris); }
+            else if (A.kind === 'face' && B.kind === 'face') { dist = _approxMinDistanceTriSets(A.tris, B.tris); approx = true; }
+            else {
+                // edge-face 兩種排列：用邊的兩端點到面三角形集合的最短距離，近似值
+                var edgeSide = A.kind === 'edge' ? A : B;
+                var faceSide = A.kind === 'face' ? A : B;
+                dist = Math.min(_distancePointToTriSet(edgeSide.a, faceSide.tris), _distancePointToTriSet(edgeSide.b, faceSide.tris));
+                approx = true;
+            }
+            lines.push((approx ? '≈ ' : '') + '兩者距離：' + _fmtMm(dist) + ' mm' + (approx ? '（概略值，含面的量測無法做到完全精確）' : ''));
+        }
+        return lines.join('<br>');
+    };
+
+    // ── 整合滑鼠互動：點一下＝依目前模式（點/線/面）記錄一筆並更新畫面與結果文字 ──────
+    // containerEl／canvasSelector 與 attachColorInteraction 同一套規則（見上方）。
+    // getCtx() 回傳 {embeddedViewer, measureState}；getModeFn() 回傳 'point'|'edge'|'face'|null。
+    function attachMeasureInteraction(containerEl, canvasSelector, getCtx, getModeFn, onUpdate) {
+        if (!containerEl) return;
+        containerEl.addEventListener('mousedown', function (e) {
+            if (!getModeFn() || e.button !== 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+        }, true);
+        containerEl.addEventListener('click', function (e) {
+            var mode = getModeFn();
+            if (!mode) return;
+            var ctx = getCtx();
+            if (!ctx || !ctx.embeddedViewer || !ctx.measureState) return;
+            var canvasEl = containerEl.querySelector(canvasSelector);
+            if (!canvasEl) return;
+            var ok = false;
+            if (mode === 'point') ok = ctx.measureState.pickPoint(ctx.embeddedViewer, canvasEl, e.clientX, e.clientY);
+            else if (mode === 'edge') ok = ctx.measureState.pickEdge(ctx.embeddedViewer, canvasEl, e.clientX, e.clientY);
+            else if (mode === 'face') ok = ctx.measureState.pickFace(ctx.embeddedViewer, canvasEl, e.clientX, e.clientY);
+            if (ok && typeof onUpdate === 'function') onUpdate(ctx.measureState);
+        });
+    }
+
     function escHtml3d(s) {
         return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
@@ -424,6 +834,8 @@ var EG3DTools = (function () {
         ColorState: ColorState,
         screenshot: screenshot,
         printCurrentView: printCurrentView,
-        openInImageEditor: openInImageEditor
+        openInImageEditor: openInImageEditor,
+        MeasureState: MeasureState,
+        attachMeasureInteraction: attachMeasureInteraction
     };
 })();

@@ -10885,6 +10885,13 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
                 <button type="button" id="pav-btn-3d-image-editor" onclick="pavOpenImageEditorFor3D()" title="批圖編輯器：帶入目前畫面（含上色結果）的截圖方便直接編輯" class="btn btn-xs" style="background:linear-gradient(135deg,#6a1b9a,#ab47bc);color:#fff;border:none;font-weight:600;white-space:nowrap;"><i class="fa fa-paint-brush"></i> 批圖編輯器</button>
                 <?php endif; ?>
             </span>
+            <!-- 3D 專用：尺寸量測（點/線/面，數值單位 mm；唯一實作見 resource/js/eg_3d_viewer_tools.js）-->
+            <span id="pav-3d-measure-group" style="display:none;align-items:center;gap:3px;">
+                <button type="button" id="pav-btn-3d-measure-point" class="btn btn-default btn-xs" title="量測模式：點一下即記錄該點座標，與上一筆量測算距離（單位 mm，假設模型以 mm 建立）"><i class="fa fa-crosshairs"></i> 點</button>
+                <button type="button" id="pav-btn-3d-measure-edge" class="btn btn-default btn-xs" title="量測模式：點一下自動抓最近的邊線，顯示該線長度，並與上一筆量測算距離"><i class="fa fa-minus"></i> 線</button>
+                <button type="button" id="pav-btn-3d-measure-face" class="btn btn-default btn-xs" title="量測模式：點一下自動判定整個面，顯示該面面積，並與上一筆量測算距離"><i class="fa fa-square-o"></i> 面</button>
+                <button type="button" id="pav-btn-3d-measure-clear" class="btn btn-default btn-xs" title="清除目前量測標記"><i class="fa fa-eraser"></i> 清除量測</button>
+            </span>
             <span id="pav-zoom-controls" style="display:none;align-items:center;gap:2px;">
                 <button type="button" class="btn btn-xs btn-default" onclick="pavZoomOut()" title="縮小（滾輪）" style="font-size:13px;line-height:1;padding:1px 7px;">－</button>
                 <span id="pav-zoom-label" style="font-size:11px;color:#555;min-width:36px;text-align:center;">100%</span>
@@ -20533,6 +20540,8 @@ var _pav = { dId:0, partNo:'', mode:'all', catId:0, allFiles:[], filteredFiles:[
 var _pav3dViewer = null;
 var _pav3dColorState = null;   // EG3DTools.ColorState，每次切換檔案重建一份（見 pavSelectFile 3D 分支）
 var _pav3dColorMode  = false;  // 上色模式開關：開啟時點模型表面即幫該面上色
+var _pav3dMeasureState = null; // EG3DTools.MeasureState，每次切換檔案重建一份
+var _pav3dMeasureMode  = null; // 量測模式：null|'point'|'edge'|'face'，與上色模式互斥
 
 function _pavShowUploadBtn(show) {
     var upLabel = document.querySelector('#partAttachViewModal label[title="上傳附件"]');
@@ -21379,6 +21388,10 @@ function pavSelectFile(idx) {
     _pav3dColorMode = false;
     var pav3dColorBtn = document.getElementById('pav-btn-3d-color');
     if (pav3dColorBtn) { pav3dColorBtn.classList.remove('btn-success'); pav3dColorBtn.innerHTML = '<i class="fa fa-paint-brush"></i> 上色'; }
+    var pav3dMeasureGroupReset = document.getElementById('pav-3d-measure-group');
+    if (pav3dMeasureGroupReset) pav3dMeasureGroupReset.style.display = 'none';
+    _pav3dMeasureMode = null;
+    $('#pav-btn-3d-measure-point, #pav-btn-3d-measure-edge, #pav-btn-3d-measure-face').removeClass('btn-info');
     // 報價附件唯讀：隱藏刪除/編輯鈕
     var isQuote = file.source === 'quote';
     var btnDel  = document.getElementById('pav-btn-delete');
@@ -21441,6 +21454,11 @@ function pavSelectFile(idx) {
         var need3dConvert = d3NeedConvertExts.indexOf(ext) >= 0;
         _pav3dColorState = new EG3DTools.ColorState();
         if (pav3dColorGroup) pav3dColorGroup.style.display = 'inline-flex';
+        _pav3dMeasureState = new EG3DTools.MeasureState();
+        _pav3dMeasureMode = null;
+        var pav3dMeasureGroup = document.getElementById('pav-3d-measure-group');
+        if (pav3dMeasureGroup) pav3dMeasureGroup.style.display = 'inline-flex';
+        $('#pav-btn-3d-measure-point, #pav-btn-3d-measure-edge, #pav-btn-3d-measure-face').removeClass('btn-info');
         preview.style.display = 'block';
         preview.style.position = 'relative';
         preview.innerHTML = '<div id="pav-3d-viewer" style="position:absolute;top:0;left:0;right:0;bottom:0;"></div>'
@@ -21449,7 +21467,8 @@ function pavSelectFile(idx) {
             + (need3dConvert ? ('正在轉換 ' + ext.toUpperCase() + '，可能需要 10~20 秒，請稍候…') : '載入中...') + '</div>'
             + '<div style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.45);color:#fff;font-size:11px;padding:3px 10px;border-radius:4px;pointer-events:none;white-space:nowrap;z-index:1;">'
             + '<i class="fa fa-mouse-pointer"></i> 左鍵旋轉 &nbsp;|&nbsp; 右鍵平移 &nbsp;|&nbsp; 滾輪縮放'
-            + '</div>';
+            + '</div>'
+            + '<div id="pav-3d-measure-result" style="display:none;position:absolute;top:8px;left:8px;background:rgba(0,0,0,.6);color:#fff;font-size:12px;line-height:1.6;padding:8px 12px;border-radius:4px;pointer-events:none;z-index:3;max-width:70%;">尚未量測</div>';
         if (typeof OV !== 'undefined') {
             var container3d = document.getElementById('pav-3d-viewer');
             _pav3dViewer = new OV.EmbeddedViewer(container3d, {
@@ -21640,6 +21659,7 @@ $(document).on('click', '#pav-btn-3d-color', function() {
     _pav3dColorMode = !_pav3dColorMode;
     $(this).toggleClass('btn-warning', !_pav3dColorMode).toggleClass('btn-success', _pav3dColorMode)
         .html('<i class="fa fa-paint-brush"></i> ' + (_pav3dColorMode ? '上色中（點一下上色整面／拖曳框選）' : '上色'));
+    if (_pav3dColorMode) _pav3dSetMeasureMode(null);   // 上色與量測互斥
 });
 EG3DTools.attachColorInteraction(
     document.getElementById('pav-preview'), '#pav-3d-viewer canvas',
@@ -21652,6 +21672,35 @@ $(document).on('click', '#pav-btn-3d-color-reset', function() {
     _pav3dColorState.resetAll();
     if (_pav3dViewer) _pav3dViewer.GetViewer().Render();
 });
+
+// ── 3D 尺寸量測（唯一實作見 resource/js/eg_3d_viewer_tools.js，與 bom_viewer.php 共用）──
+// 單位一律標 mm（假設本廠繪圖慣例，見共用檔開頭說明）；與上色模式互斥。
+function _pav3dSetMeasureMode(mode) {
+    _pav3dMeasureMode = mode;
+    $('#pav-btn-3d-measure-point, #pav-btn-3d-measure-edge, #pav-btn-3d-measure-face').removeClass('btn-info');
+    if (mode === 'point') $('#pav-btn-3d-measure-point').addClass('btn-info');
+    else if (mode === 'edge') $('#pav-btn-3d-measure-edge').addClass('btn-info');
+    else if (mode === 'face') $('#pav-btn-3d-measure-face').addClass('btn-info');
+    if (mode) {
+        _pav3dColorMode = false;
+        $('#pav-btn-3d-color').removeClass('btn-success').html('<i class="fa fa-paint-brush"></i> 上色');
+        $('#pav-3d-measure-result').show();
+    }
+}
+$(document).on('click', '#pav-btn-3d-measure-point', function() { _pav3dSetMeasureMode(_pav3dMeasureMode === 'point' ? null : 'point'); });
+$(document).on('click', '#pav-btn-3d-measure-edge',  function() { _pav3dSetMeasureMode(_pav3dMeasureMode === 'edge'  ? null : 'edge');  });
+$(document).on('click', '#pav-btn-3d-measure-face',  function() { _pav3dSetMeasureMode(_pav3dMeasureMode === 'face'  ? null : 'face');  });
+$(document).on('click', '#pav-btn-3d-measure-clear', function() {
+    if (!_pav3dMeasureState) return;
+    _pav3dMeasureState.clearAll(_pav3dViewer);
+    $('#pav-3d-measure-result').html('尚未量測');
+});
+EG3DTools.attachMeasureInteraction(
+    document.getElementById('pav-preview'), '#pav-3d-viewer canvas',
+    function () { return { embeddedViewer: _pav3dViewer, measureState: _pav3dMeasureState }; },
+    function () { return _pav3dMeasureMode; },
+    function (measureState) { $('#pav-3d-measure-result').html(measureState.getSummaryHtml()); }
+);
 // 批圖編輯器（3D 專用）：截圖目前畫面（含目前上色結果）寄進 localStorage 帶入新分頁，
 // 與 bom_viewer.php 共用同一套機制（見 eg_3d_viewer_tools.js）。
 function pavOpenImageEditorFor3D() {
