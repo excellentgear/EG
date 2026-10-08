@@ -804,7 +804,7 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
             <button id="btn-print"      class="btn btn-default btn-xs" style="display:none;" title="列印"><i class="fa fa-print"></i> 列印</button>
             <!-- 3D 專用：上色（唯一實作見 resource/js/eg_3d_viewer_tools.js，兩頁共用）-->
             <span id="bom-3d-color-group" style="display:none;align-items:center;gap:4px;">
-                <button id="btn-3d-color" type="button" class="btn btn-warning btn-xs" title="上色模式：開啟後點一下模型上的零件即可換色，方便標示"><i class="fa fa-paint-brush"></i> 上色</button>
+                <button id="btn-3d-color" type="button" class="btn btn-warning btn-xs" title="上色模式：開啟後點一下模型表面即可幫該面上色（單一三角面，不是整個零件），方便標示"><i class="fa fa-paint-brush"></i> 上色</button>
                 <input id="bom-3d-color-pick" type="color" value="#e67e22" style="width:28px;height:22px;padding:0;border:1px solid #ccc;vertical-align:middle;" title="選擇要塗的顏色">
                 <button id="btn-3d-color-reset" type="button" class="btn btn-default btn-xs" title="清除全部上色，恢復原始顏色"><i class="fa fa-eraser"></i> 恢復原色</button>
             </span>
@@ -1207,16 +1207,17 @@ function openImageEditor() {
 $('#btn-3d-color').on('click', function() {
     _bom3dColorMode = !_bom3dColorMode;
     $(this).toggleClass('btn-warning', !_bom3dColorMode).toggleClass('btn-success', _bom3dColorMode)
-        .html('<i class="fa fa-paint-brush"></i> ' + (_bom3dColorMode ? '上色中（點零件上色）' : '上色'));
+        .html('<i class="fa fa-paint-brush"></i> ' + (_bom3dColorMode ? '上色中（點一下即可上色該面）' : '上色'));
 });
+// 點一下只上色「該三角面」，不是整個零件（使用者 2026-10-08 要求）；見 eg_3d_viewer_tools.js。
 $('#bom-3d-viewer').on('click', function(e) {
     if (!_bom3dColorMode || !_bom3dViewer || !_bom3dColorState) return;
     var canvasEl = this.querySelector('canvas');
     if (!canvasEl) return;
     var hit = EG3DTools.pickMesh(_bom3dViewer, canvasEl, e.clientX, e.clientY);
-    if (!hit || !hit.object) return;
+    if (!hit || !hit.object || !hit.face) return;
     var hexColor = $('#bom-3d-color-pick').val() || '#e67e22';
-    _bom3dColorState.applyColor(hit.object, hexColor);
+    _bom3dColorState.paintFace(hit.object, hit.face, hexColor);
     _bom3dViewer.GetViewer().Render();
 });
 $('#btn-3d-color-reset').on('click', function() {

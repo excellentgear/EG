@@ -12,18 +12,29 @@
  * 用到的函式庫底層 API（皆已查證 GitHub 原始碼＋本機 o3dv.min.js 確認存在）：
  *   embeddedViewer.GetViewer()                        → 內部 Viewer 物件
  *   viewer.GetCanvasSize()                             → {width,height}
- *   viewer.GetMeshIntersectionUnderMouse(mode, {x,y})  → {object:THREE.Mesh,...}|null
- *     （mouseCoords 是「畫布像素座標」不是標準化座標，要自己從 clientX/Y 換算）
+ *   viewer.GetMeshIntersectionUnderMouse(mode, {x,y})  → 標準 Three.js raycast 結果｜null
+ *     （已查證 o3dv.min.js 內部是直接呼叫 raycaster.intersectObject() 把整筆結果原樣回傳，
+ *      所以除了 .object 之外，.face（含 a/b/c 三個頂點索引）與 .faceIndex 本來就在，
+ *      不需要函式庫額外支援；mouseCoords 是「畫布像素座標」不是標準化座標，要自己從
+ *      clientX/Y 換算）
  *   viewer.GetImageAsDataUrl(w,h,isTransparent)        → 目前畫面截圖（含目前上色/角度）
  *   viewer.Render()                                    → 強制重繪
  *   OV.IntersectionMode.MeshOnly                       → 只打到實體面，不含線段
  *
- * 點選上色只能做到「整個 mesh（零件/實體）」上色，不是真正逐三角面——STEP 匯入後
- * 的面材質分組不保證保留，這是函式庫的限制，已經跟使用者說明過。
+ * 上色做成「單面」（2026-10-08 使用者要求：不要整個零件一次換色，要單個面）：
+ * 用頂點色（vertex colors）而不是整個 mesh 換材質——mesh.geometry.attributes.position
+ * 本身就是真正的 THREE.BufferAttribute 實例，借它的 .constructor 現場 new 一份「color」
+ * 屬性，完全不需要全域 THREE（已查證 o3dv.min.js 不會把 THREE 掛在 window 上）。
+ * 最終顏色＝材質色×頂點色，做法：材質色固定白色、沒上色的頂點預設值＝原始材質色
+ * （相乘＝原色不變）、上色的三個頂點直接寫使用者選的顏色（相乘白色＝原色不失真，
+ * 不會被材質本身的灰色底再乘一次變得混濁）。
+ * 風險已知：若該幾何是 indexed（共用頂點、平滑著色），上色的三角形邊界會跟相鄰
+ * 未上色面之間出現漸層（因為共用頂點的色是內插的），不是銳利分界——CAD 匯入的
+ * 三角化網格多為非共用頂點（硬邊平面著色），實務上多半不會遇到，仍無法保證。
  */
 var EG3DTools = (function () {
 
-    // ── 滑鼠座標 → 畫布像素座標 → 命中的 mesh ──────────────────────────────
+    // ── 滑鼠座標 → 畫布像素座標 → 命中結果（含 .object/.face/.faceIndex）────────
     function pickMesh(embeddedViewer, canvasEl, clientX, clientY) {
         if (!embeddedViewer || typeof OV === 'undefined') return null;
         var viewer = embeddedViewer.GetViewer();
@@ -35,38 +46,67 @@ var EG3DTools = (function () {
         return viewer.GetMeshIntersectionUnderMouse(OV.IntersectionMode.MeshOnly, { x: x, y: y });
     }
 
-    // ── 上色：記住每個 mesh 原始材質，才能「恢復預設色」─────────────────────
-    // _origMats 用 mesh 物件本身當 key（ES6 Map，不會跟 DOM id 衝突也不用擔心垃圾回收）
+    // ── 上色（單面）：記住每個 mesh 的頂點色資料＋原始材質，才能「恢復預設色」────
     function ColorState() {
-        this.origMats = new Map();
+        this.meshStates = new Map();   // mesh → {origMaterial, colorAttr, baseColor, paintedKeys}
     }
-    ColorState.prototype.applyColor = function (mesh, hexColor) {
-        if (!this.origMats.has(mesh)) {
-            this.origMats.set(mesh, mesh.material);
+    ColorState.prototype._ensureMeshState = function (mesh) {
+        if (this.meshStates.has(mesh)) return this.meshStates.get(mesh);
+        var geo = mesh.geometry;
+        var posAttr = geo.attributes.position;
+        var baseMat = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+        var baseColor = baseMat.color.clone();   // 原始材質色＝尚未上色頂點的預設值
+        var colorAttr = geo.attributes.color;
+        if (!colorAttr) {
+            var AttrCtor = posAttr.constructor;   // 借用既有屬性的建構子，不靠全域 THREE
+            var arr = new Float32Array(posAttr.count * 3);
+            for (var i = 0; i < arr.length; i += 3) {
+                arr[i] = baseColor.r; arr[i + 1] = baseColor.g; arr[i + 2] = baseColor.b;
+            }
+            colorAttr = new AttrCtor(arr, 3);
+            geo.setAttribute('color', colorAttr);
         }
-        var orig = this.origMats.get(mesh);
-        var mats = Array.isArray(orig) ? orig : [orig];
+        var origMaterial = mesh.material;
+        var mats = Array.isArray(origMaterial) ? origMaterial : [origMaterial];
         var newMats = mats.map(function (m) {
-            // 不依賴全域 THREE（o3dv.min.js 把 Three.js 打包在內部，不會掛在 window 上）；
-            // 複製出來的材質本身的 .color 已經是 Three.js Color 實例，用它自己的 .set() 改色即可
             var clone = m.clone();
-            clone.color.set(hexColor);
+            clone.vertexColors = true;
+            clone.color.set(0xffffff);   // 材質色固定白色，顏色完全交給頂點色決定
+            clone.needsUpdate = true;    // 切換 vertexColors 要重新編譯 shader
             return clone;
         });
-        mesh.material = Array.isArray(orig) ? newMats : newMats[0];
+        mesh.material = Array.isArray(origMaterial) ? newMats : newMats[0];
+        var state = { origMaterial: origMaterial, colorAttr: colorAttr, baseColor: baseColor, paintedKeys: new Set() };
+        this.meshStates.set(mesh, state);
+        return state;
+    };
+    // face：GetMeshIntersectionUnderMouse 回傳結果裡的 .face（{a,b,c,normal}）
+    ColorState.prototype.paintFace = function (mesh, face, hexColor) {
+        if (!mesh || !face) return;
+        var state = this._ensureMeshState(mesh);
+        var c = state.baseColor.clone();
+        c.set(hexColor);
+        var arr = state.colorAttr.array;
+        [face.a, face.b, face.c].forEach(function (vi) {
+            arr[vi * 3] = c.r; arr[vi * 3 + 1] = c.g; arr[vi * 3 + 2] = c.b;
+        });
+        state.colorAttr.needsUpdate = true;
+        state.paintedKeys.add(face.a + '_' + face.b + '_' + face.c);
     };
     ColorState.prototype.resetMesh = function (mesh) {
-        if (this.origMats.has(mesh)) {
-            mesh.material = this.origMats.get(mesh);
-            this.origMats.delete(mesh);
-        }
+        var state = this.meshStates.get(mesh);
+        if (!state) return;
+        mesh.material = state.origMaterial;
+        var arr = state.colorAttr.array, bc = state.baseColor;
+        for (var i = 0; i < arr.length; i += 3) { arr[i] = bc.r; arr[i + 1] = bc.g; arr[i + 2] = bc.b; }
+        state.colorAttr.needsUpdate = true;
+        this.meshStates.delete(mesh);
     };
     ColorState.prototype.resetAll = function () {
         var self = this;
-        this.origMats.forEach(function (orig, mesh) { mesh.material = orig; });
-        this.origMats.clear();
+        Array.from(this.meshStates.keys()).forEach(function (mesh) { self.resetMesh(mesh); });
     };
-    ColorState.prototype.hasAny = function () { return this.origMats.size > 0; };
+    ColorState.prototype.hasAny = function () { return this.meshStates.size > 0; };
 
     // ── 截圖：回傳目前畫面（含目前上色/角度/縮放）的 PNG dataURL ─────────────
     // 尺寸刻意用畫布目前的實際像素大小（不是固定值），縮放/視窗大小不同截出來的

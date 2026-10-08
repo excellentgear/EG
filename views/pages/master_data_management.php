@@ -1831,6 +1831,15 @@ $can_part_attach = $is_admin || $_mdRbacAll
     || in_array('md_attach_upload', $_mdFeats, true)
     || in_array('md_attach_edit',   $_mdFeats, true)
     || in_array('md_attach_delete', $_mdFeats, true);
+// ── 批圖編輯器按鈕權限（imgedit 模組；與 bom_viewer.php／image_editor.php 進入時同一套判定）──
+// 未被指派「批圖使用者」角色者不顯示按鈕；判定失敗預設不顯示（editor 進入時仍有自身閘門）。
+$imgeditCanUse = false;
+try {
+    require_once __DIR__ . '/../../src/common/imgedit_permission.php';
+    $imgeditCanUse = imgedit_can_use($pdo, (int)($_SESSION['id'] ?? $_SESSION['user_id'] ?? 0), in_array((int)($_SESSION['status'] ?? 0), [9, 90], true));
+} catch (Exception $e) {
+    $imgeditCanUse = false;
+}
 // 以下四個舊變數已不再用於任何「料號／客戶／廠商」本體CRUD的判定（全部呼叫點已
 // 於 2026-10-07 三次改版逐一換成上面的 $canPartXxx/$canCustXxx/$canMakerXxx）。
 // 保留只因為：①字典維護群組（industry_type/maker_category/maker_proc_label/
@@ -10867,6 +10876,15 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
             <!-- 只有 DWG 轉出來的預覽才需要「下載 PDF」——原檔下載已經在「另存」鈕 -->
             <a id="pav-btn-save-pdf" href="#" target="_blank" download class="btn btn-xs btn-default" style="white-space:nowrap;display:none;" title="下載轉檔後的 PDF（原始 DWG 另有「另存」鈕可下載）"><i class="fa fa-file-pdf-o"></i> 下載PDF</a>
             <button type="button" class="btn btn-xs btn-default" onclick="pavPrint()" title="列印"><i class="fa fa-print"></i> 列印</button>
+            <!-- 3D 專用：上色＋批圖編輯器（唯一實作見 resource/js/eg_3d_viewer_tools.js，與 bom_viewer.php 共用）-->
+            <span id="pav-3d-color-group" style="display:none;align-items:center;gap:4px;">
+                <button type="button" id="pav-btn-3d-color" class="btn btn-warning btn-xs" title="上色模式：開啟後點一下模型表面即可幫該面上色（單一三角面，不是整個零件），方便標示"><i class="fa fa-paint-brush"></i> 上色</button>
+                <input id="pav-3d-color-pick" type="color" value="#e67e22" style="width:28px;height:22px;padding:0;border:1px solid #ccc;vertical-align:middle;" title="選擇要塗的顏色">
+                <button type="button" id="pav-btn-3d-color-reset" class="btn btn-default btn-xs" title="清除全部上色，恢復原始顏色"><i class="fa fa-eraser"></i> 恢復原色</button>
+                <?php if ($imgeditCanUse): ?>
+                <button type="button" id="pav-btn-3d-image-editor" onclick="pavOpenImageEditorFor3D()" title="批圖編輯器：帶入目前畫面（含上色結果）的截圖方便直接編輯" class="btn btn-xs" style="background:linear-gradient(135deg,#6a1b9a,#ab47bc);color:#fff;border:none;font-weight:600;white-space:nowrap;"><i class="fa fa-paint-brush"></i> 批圖編輯器</button>
+                <?php endif; ?>
+            </span>
             <span id="pav-zoom-controls" style="display:none;align-items:center;gap:2px;">
                 <button type="button" class="btn btn-xs btn-default" onclick="pavZoomOut()" title="縮小（滾輪）" style="font-size:13px;line-height:1;padding:1px 7px;">－</button>
                 <span id="pav-zoom-label" style="font-size:11px;color:#555;min-width:36px;text-align:center;">100%</span>
@@ -11345,6 +11363,7 @@ $mdMakerPaytermView = _mdPerm('payterm','view', true); $mdMakerPaytermEditV = _m
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+<script src="../../resource/js/eg_3d_viewer_tools.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_3d_viewer_tools.js') ?>"></script>
 <!-- 2026-08-24 使用者要求「輸入框內按 Enter 要自動跳下一個輸入框」。
      本頁原本只對料號 modal 的 6 個欄位自刻了 Enter 跳欄，其餘欄位按 Enter 沒反應。
      依 CLAUDE.md UI 規則改載共用檔（禁止各頁自刻）；共用檔有 e.defaultPrevented 防護，
@@ -20512,6 +20531,8 @@ function loadActiveCatsForUpload(cb) {
 var _pav = { dId:0, partNo:'', mode:'all', catId:0, allFiles:[], filteredFiles:[], currentFile:null, quoteSummaries:{},
              albums:[], albumCatIds:[], canAlbumEdit:false, albumKey:null, albumSelMode:false };
 var _pav3dViewer = null;
+var _pav3dColorState = null;   // EG3DTools.ColorState，每次切換檔案重建一份（見 pavSelectFile 3D 分支）
+var _pav3dColorMode  = false;  // 上色模式開關：開啟時點模型表面即幫該面上色
 
 function _pavShowUploadBtn(show) {
     var upLabel = document.querySelector('#partAttachViewModal label[title="上傳附件"]');
@@ -21353,6 +21374,11 @@ function pavSelectFile(idx) {
     var btnMarkup = document.getElementById('pav-btn-markup');
     if (btnPaint)  { btnPaint.href = file.url; btnPaint.style.display  = isImg ? '' : 'none'; }
     if (btnMarkup) { btnMarkup.style.display = isImg ? '' : 'none'; }
+    var pav3dColorGroup = document.getElementById('pav-3d-color-group');
+    if (pav3dColorGroup) pav3dColorGroup.style.display = 'none';
+    _pav3dColorMode = false;
+    var pav3dColorBtn = document.getElementById('pav-btn-3d-color');
+    if (pav3dColorBtn) pav3dColorBtn.classList.remove('btn-success');
     // 報價附件唯讀：隱藏刪除/編輯鈕
     var isQuote = file.source === 'quote';
     var btnDel  = document.getElementById('pav-btn-delete');
@@ -21413,6 +21439,8 @@ function pavSelectFile(idx) {
             });
     } else if (d3Exts.indexOf(ext) >= 0 || d3NeedConvertExts.indexOf(ext) >= 0) {
         var need3dConvert = d3NeedConvertExts.indexOf(ext) >= 0;
+        _pav3dColorState = new EG3DTools.ColorState();
+        if (pav3dColorGroup) pav3dColorGroup.style.display = 'inline-flex';
         preview.style.display = 'block';
         preview.style.position = 'relative';
         preview.innerHTML = '<div id="pav-3d-viewer" style="position:absolute;top:0;left:0;right:0;bottom:0;"></div>'
@@ -21604,9 +21632,52 @@ function _pavLogPrint(f, isObs) {
     } catch (e) {}
 }
 
+// ── 3D 上色模式（唯一實作見 resource/js/eg_3d_viewer_tools.js，與 bom_viewer.php 共用）──
+$(document).on('click', '#pav-btn-3d-color', function() {
+    _pav3dColorMode = !_pav3dColorMode;
+    $(this).toggleClass('btn-warning', !_pav3dColorMode).toggleClass('btn-success', _pav3dColorMode)
+        .html('<i class="fa fa-paint-brush"></i> ' + (_pav3dColorMode ? '上色中（點一下即可上色該面）' : '上色'));
+});
+// 點一下只上色「該三角面」，不是整個零件（使用者 2026-10-08 要求）。
+$(document).on('click', '#pav-3d-viewer', function(e) {
+    if (!_pav3dColorMode || !_pav3dViewer || !_pav3dColorState) return;
+    var canvasEl = this.querySelector('canvas');
+    if (!canvasEl) return;
+    var hit = EG3DTools.pickMesh(_pav3dViewer, canvasEl, e.clientX, e.clientY);
+    if (!hit || !hit.object || !hit.face) return;
+    var hexColor = document.getElementById('pav-3d-color-pick').value || '#e67e22';
+    _pav3dColorState.paintFace(hit.object, hit.face, hexColor);
+    _pav3dViewer.GetViewer().Render();
+});
+$(document).on('click', '#pav-btn-3d-color-reset', function() {
+    if (!_pav3dColorState || !_pav3dColorState.hasAny()) return;
+    if (!confirm('確定要清除全部上色，恢復模型原始顏色？')) return;
+    _pav3dColorState.resetAll();
+    if (_pav3dViewer) _pav3dViewer.GetViewer().Render();
+});
+// 批圖編輯器（3D 專用）：截圖目前畫面（含目前上色結果）寄進 localStorage 帶入新分頁，
+// 與 bom_viewer.php 共用同一套機制（見 eg_3d_viewer_tools.js）。
+function pavOpenImageEditorFor3D() {
+    if (!_pav3dViewer) return;
+    var f = _pav.currentFile;
+    EG3DTools.openInImageEditor(_pav3dViewer, {
+        fileName: (f && (f.original_name || f.filename) || '3D模型') + '截圖.png',
+        partNo: _pav.partNo || '',
+        partDId: _pav.dId || ''
+    });
+}
+
 function pavPrint() {
     var frame = document.getElementById('pav-preview-frame');
     var img   = document.getElementById('pav-preview-img');
+    // 3D 模型：截圖目前畫面（含目前上色結果）＋料號名稱＋列印日期，純前端列印、無暫存檔。
+    if (_pav3dViewer) {
+        if (_pavIsObsolete(_pav.currentFile) && !confirm('此為「作廢」附件，確定要列印？')) return;
+        _pavLogPrint(_pav.currentFile, _pavIsObsolete(_pav.currentFile));
+        var f3 = _pav.currentFile;
+        EG3DTools.printCurrentView(_pav3dViewer, { partName: (f3 && (f3.original_name || f3.filename)) || _pav.partNo || '3D 模型' });
+        return;
+    }
     if (frame) {
         // PDF 列印：嘗試在新視窗加浮水印（PDF 本身限制，僅顯示提示）
         if (_pavIsObsolete(_pav.currentFile)) {
