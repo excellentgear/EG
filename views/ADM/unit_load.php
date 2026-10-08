@@ -194,6 +194,28 @@ body { background:#F3F6EC; }
 .ul-excl-list label, .ul-ptype-list label { display:inline-block; margin:2px 10px 2px 0; }
 .ul-nothr-lab { font-size:11px; color:var(--muted); font-weight:normal; margin-left:8px; white-space:nowrap; }
 
+/* 2026-10-08 新增：切分頁時的「載入中」提示。六個單位詳細分頁一開始骨架都是空
+   `<div>`，資料回來才會填滿——背景預先載入通常來得及，但第一次點開或網路慢時，
+   點下分頁鈕那一瞬間會看到一片空白、像頁面壞了。這裡只用極輕量的文字提示，不做
+   spinner 動畫。 */
+.ul-loading-banner { color:var(--muted); font-size:12.5px; padding:30px 0; text-align:center; }
+.ul-loading-banner i { margin-right:5px; }
+
+/* 2026-10-08 新增：總覽頁頂端「本日摘要」橫幅——一行列出目前有哪幾個單位負荷過重，
+   不必捲到下面逐張 KPI 卡才知道。全部正常時改綠底。 */
+.ul-summary-banner { border-radius:8px; padding:10px 14px; margin-bottom:12px; font-size:13px; font-weight:700; }
+.ul-summary-banner.bad { background:var(--overload-bg); color:var(--overload-text); border:1px solid #EFC2BD; }
+.ul-summary-banner.ok  { background:#E8F3E3; color:#2E7D32; border:1px solid #C9E4BE; }
+.ul-summary-banner a { font-weight:normal; text-decoration:underline; cursor:pointer; margin-left:4px; }
+.ul-summary-banner a:first-of-type { margin-left:8px; }
+
+/* 2026-10-08 新增：趨勢分析改成六張小圖（small multiples），各自獨立 Y 軸避免互相遮蔽 */
+.ul-trend-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
+.ul-trend-cell { border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
+.ul-trend-cell-h { font-size:12px; font-weight:700; color:var(--ink); margin-bottom:2px; }
+@media (max-width: 1100px) { .ul-trend-grid { grid-template-columns:repeat(2, 1fr); } }
+@media (max-width: 700px)  { .ul-trend-grid { grid-template-columns:1fr; } }
+
 /* 使用說明 / 設定 跳窗（全站共用的 .m-mask/.m-win 疊層慣例） */
 .m-mask { position:fixed; inset:0; background:rgba(60,74,46,.45); z-index:10300; display:none; }
 .m-win  { background:#fff; border-radius:8px; width:760px; max-width:95vw; margin:4vh auto;
@@ -271,7 +293,7 @@ body { background:#F3F6EC; }
         <?php endforeach; ?>
       </select>
       <span class="sec-tools" style="margin-left:auto;display:flex;gap:6px;">
-        <button class="btn btn-sm btn-ul" id="btnReload"><i class="fa fa-refresh"></i> 重新計算</button>
+        <button class="btn btn-sm btn-ul" id="btnReload" title="套用上面選好的篩選條件；頁面一開啟就已經是即時資料，不是舊的快取"><i class="fa fa-refresh"></i> 套用篩選</button>
         <?php if ($canAdmin): ?>
         <button class="btn btn-sm btn-ul-o" id="btnSetting"><i class="fa fa-cog"></i> 設定</button>
         <?php endif; ?>
@@ -296,6 +318,8 @@ body { background:#F3F6EC; }
 
     <!-- 2026-10-07：「部門負荷總表」獨立區塊已移除，過重理由直接併進下方每張 KPI 卡片本身
          （以單位 KPI 卡為主），不再有兩處各顯示一份過重資訊。 -->
+    <!-- 2026-10-08 新增：本日摘要橫幅，一行列出目前有哪幾個單位負荷過重 -->
+    <div id="overviewBanner" class="ul-summary-banner ok"></div>
     <div id="kpiRow" class="kpi-row"></div>
 
     <div class="sec" id="secInsight">
@@ -320,7 +344,10 @@ body { background:#F3F6EC; }
           <option value="12">12</option>
         </select>
       </div>
-      <div id="trendChart" style="height:360px;"></div>
+      <!-- 2026-10-08 改版：由「六條線疊在同一張圖、共用同一個 Y 軸」改成六張小圖各自獨立
+           Y 軸——量級差很多的指標（業務課報價單張數 vs 品管檢驗項目數）疊在一起時，量小的
+           單位那條線會被壓在底部看不出起伏，見 renderTrendChart() 與使用說明同一段。 -->
+      <div id="trendChart" class="ul-trend-grid"></div>
       <div style="font-size:11px;color:var(--muted);margin-top:4px;">
         本期（最右側那一點，若當期尚未走完）數字會比較低，那是因為那一期還沒結束，不是真的下滑。
       </div>
@@ -331,6 +358,7 @@ body { background:#F3F6EC; }
   <!-- ── 設計課分頁 ─────────────────────────────────────── -->
   <div class="ul-tab-pane" id="tab-design" data-unit="design" style="display:none">
     <div id="dsgNote"></div>
+    <div class="ul-loading-banner" style="display:none;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">
       批圖中／新案件（含已處理／批圖中兩種子狀態）為<b>目前狀態</b>快照，不受上方期間篩選影響；
       已按審圖／已按轉生管／問題訂單數／平均出圖工作天為本期數字或現況統計，詳見各卡片說明。
@@ -368,15 +396,35 @@ body { background:#F3F6EC; }
       <div class="ul-time-basis-note"><i class="fa fa-info-circle"></i> 標示＊的欄位為<b>即時現況</b>，不受上方期間篩選影響；其餘為<b>本期累積</b>。</div>
       <div class="table-responsive"><table class="table table-striped" id="dsgTable">
         <thead><tr><th>部門</th><th>職稱</th><th>姓名</th><th>批圖中＊</th><th>已按審圖</th><th>已按轉生管</th>
-          <th>問題訂單數＊</th><th>平均出圖工作天</th></tr></thead>
+          <th>問題訂單數（近90天）＊</th><th>平均出圖工作天</th></tr></thead>
         <tbody></tbody>
       </table></div>
+    </div>
+
+    <!-- 2026-10-08 新增：逐人每日工作量（使用者交辦） -->
+    <div class="sec">
+      <h4><i class="fa fa-calendar-check-o" style="color:var(--green-d);"></i> 逐人每日工作量
+        <span class="hint">依期間長度自動依日／週／月彙總，同一人同一桶若三項都是 0 不列出</span></h4>
+      <div id="dsgDailyDetailTable"></div>
+      <div style="font-size:12.5px;color:var(--ink);font-weight:700;margin:10px 0 4px;">週平均／月平均彙總（逐人＋部門合計）</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">
+        週/月平均一律用「本期總天數」換算日均後再乘以 7 或 30，不是只對有資料的桶取平均——
+        本期還沒走完或中間有空桶時，直接取平均會失真。
+      </div>
+      <div id="dsgDailyDetailAvg"></div>
+    </div>
+
+    <!-- 2026-10-08 新增：逐人標籤分布（部門層級的訂單標籤分布見上方「訂單標籤分布」） -->
+    <div class="sec">
+      <h4><i class="fa fa-tags" style="color:var(--green-d);"></i> 逐人標籤分布</h4>
+      <div id="dsgTagsByPerson"></div>
     </div>
   </div>
 
   <!-- ── 業務課分頁 ─────────────────────────────────────── -->
   <div class="ul-tab-pane" id="tab-sales" data-unit="sales" style="display:none">
     <div id="salNote"></div>
+    <div class="ul-loading-banner" style="display:none;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>
     <div id="salKpi" class="kpi-row"></div>
 
     <div class="sec">
@@ -384,7 +432,7 @@ body { background:#F3F6EC; }
       <div class="ul-time-basis-note"><i class="fa fa-info-circle"></i> 標示＊的欄位為<b>即時現況</b>，不受上方期間篩選影響；其餘為<b>本期累積</b>。</div>
       <div class="table-responsive"><table class="table table-striped" id="salTable">
         <thead><tr><th>部門</th><th>職稱</th><th>姓名</th><th>報價單數</th><th>報價明細筆數</th>
-          <th>訂單追蹤筆數</th><th>待回覆問題筆數＊</th></tr></thead>
+          <th>訂單追蹤筆數</th><th>待回覆問題筆數（近90天）＊</th></tr></thead>
         <tbody></tbody>
       </table></div>
     </div>
@@ -393,6 +441,7 @@ body { background:#F3F6EC; }
   <!-- ── 生管分頁 ───────────────────────────────────────── -->
   <div class="ul-tab-pane" id="tab-pm" data-unit="pm" style="display:none">
     <div id="pmNote"></div>
+    <div class="ul-loading-banner" style="display:none;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>
 
     <div class="sec">
       <h4><i class="fa fa-sitemap" style="color:var(--green-d);"></i> 現況快照
@@ -409,6 +458,7 @@ body { background:#F3F6EC; }
   <!-- ── 生產課分頁 ─────────────────────────────────────── -->
   <div class="ul-tab-pane" id="tab-prod" data-unit="prod" style="display:none">
     <div id="prodNote"></div>
+    <div class="ul-loading-banner" style="display:none;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">
       <i class="fa fa-info-circle"></i> 包裝負荷已獨立成一個分頁，請見「<a href="javascript:void(0)" class="ul-go-tab" data-tab="packing">包裝</a>」分頁。
     </div>
@@ -445,6 +495,7 @@ body { background:#F3F6EC; }
   <!-- ── 包裝分頁（獨立單位，2026-10-07 新增）────────────── -->
   <div class="ul-tab-pane" id="tab-packing" data-unit="packing" style="display:none">
     <div id="packNote"></div>
+    <div class="ul-loading-banner" style="display:none;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>
 
     <div class="sec">
       <h4><i class="fa fa-cube" style="color:var(--green-d);"></i> 包裝負荷
@@ -464,6 +515,7 @@ body { background:#F3F6EC; }
   <!-- ── 品管分頁 ───────────────────────────────────────── -->
   <div class="ul-tab-pane" id="tab-qc" data-unit="qc" style="display:none">
     <div id="qcNote"></div>
+    <div class="ul-loading-banner" style="display:none;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>
 
     <div class="sec">
       <h4><i class="fa fa-list-ol" style="color:var(--green-d);"></i> 目前待驗佇列
@@ -529,19 +581,28 @@ body { background:#F3F6EC; }
       </ul>
       <h4>操作步驟</h4>
       <ol>
-        <li>選「年度 → 期間（月／季／半年／整年）→ 要看哪一期」，比較基準可切「上一期」或「去年同期」。</li>
-        <li>按「重新計算」。</li>
-        <li>按某張 KPI 卡或「部門負荷總表」小卡右下角的「查看明細 »」、或上方分頁鈕，切到該單位的詳細分頁。</li>
+        <li>頁面一開啟就會自動載入目前的即時資料（不是快取），不必先按按鈕才有東西。</li>
+        <li>要看別的年度/期間，選好「年度 → 期間（月／季／半年／整年）→ 要看哪一期」、比較基準（「上一期」或「去年同期」）後，按「套用篩選」。</li>
+        <li>按某張 KPI 卡片右下角的「查看明細 »」、或上方分頁鈕，切到該單位的詳細分頁。</li>
         <li>「趨勢分析」區塊可自行切「月／季」粒度與往回看幾期，獨立於上面的期間篩選，隨時可切換重畫。</li>
       </ol>
       <h4>重要行為／常見疑問</h4>
       <ul>
-        <li><b>卡片背景變成紅色、並標「⚠ 負荷過重」</b>：代表那個單位目前有指標超過設定的門檻（「部門負荷
-            總表」小卡會列出是哪個指標、現在多少、門檻多少；KPI 卡與自動分析用的是同一份判定，不會互相矛盾）。</li>
+        <li><b>卡片背景變成紅色、並標「⚠ 負荷過重」</b>：代表那個單位目前有指標超過設定的門檻（卡片內會
+            直接列出是哪個指標、現在多少、門檻多少；最上方「本日摘要」橫幅也會列出目前有哪幾個單位過重，
+            點名字可直接跳到該單位詳細分頁；KPI 卡、自動分析與逐人明細表標紅用的是同一份判定，不會互相矛盾）。
+            <b>過重的卡片會自動排到最前面</b>，不是固定「設計→業務→生管→生產→品管→包裝」這個順序。</li>
+        <li><b>「設計備註待回覆訂單」「待回覆問題」只看近90天下單的</b>：這兩個指標過去是算「全部歷史累積
+            未回覆」，但 2026-10-05 工程處理紀錄模組上線時把舊有「只要還沒按已處理就不會清空」的自由文字
+            一次搬成問題項，裡面絕大多數都是半年、一年以上的舊訂單——算進去只會讓這兩個單位永遠卡在
+            「負荷過重」、紅色警示失去意義。現在卡片上顯示的數字只算「最近90天內下單、目前仍未回覆」的，
+            真正算得上是近期工作量；更久以前遺留的舊訂單數量仍會以小字顯示在卡片下方僅供參考，不計入判定。</li>
         <li><b>趨勢分析畫的不是「批圖中筆數」「委外加工中筆數」這些 KPI 卡上的數字</b>：那些是「現況快照」
             （查詢當下的狀態，不管選哪個月份都是同一個答案），逐期疊起來只會是一條水平線沒有意義；
-            趨勢圖改用六個「累積型」代表指標（每個期間內真的發生了多少），滑鼠移到線上看圖例完整說明，
-            例如設計課畫的是「本期轉生管筆數」、業務課是「本期開立報價單張數」。</li>
+            趨勢圖改用六個「累積型」代表指標（每個期間內真的發生了多少），例如設計課畫的是「本期轉生管
+            筆數」、業務課是「本期開立報價單張數」。<b>六個單位各自一張小圖、各自的 Y 軸刻度</b>（不是六條
+            線疊在同一張圖上）——量級差很多的指標（像業務課的報價單張數 vs 品管的檢驗項目數）硬疊在
+            一起，量小的單位那條線會被壓在底部完全看不出起伏。</li>
         <li><b>趨勢圖最右側那一點忽然變低</b>：如果那一期（例如本月）還沒走完，數字自然會比完整的一期少，
             不是真的下滑，自動分析的「連續兩期下滑」判斷也只會用已經走完的期別去判斷。</li>
         <li><b>生管沒有逐人明細</b>：製令資料表（bom_ing）沒有「這張製令由哪個生管負責」的欄位，所以生管只有
@@ -549,6 +610,12 @@ body { background:#F3F6EC; }
         <li><b>包裝逐人明細常常是空的</b>：包裝報工（pm_process_daily_report）多半記在實際操作人員頭上，
             跟設定頁勾選的部門（實務上多為倉管組）常常對不起來；對不上時逐人明細如實顯示沒有資料，
             不勉強湊數字，整體統計（待包裝筆數／每日完成數／平均處理工作天）不受影響。</li>
+        <li><b>逐人負荷明細表顯示「本單位目前沒有符合條件（未被排除職位）的人員」</b>：代表部門範圍其實
+            是有設定的，只是這個單位目前的人全被「設定→排除職位」濾掉了（例如設計課的課長不列入逐人
+            明細，但仍算進單位整體彙總數字）；顯示「尚未設定部門範圍」才是真的連部門都還沒勾。</li>
+        <li><b>設計課新增「逐人每日工作量」與「逐人標籤分布」</b>：依期間長度自動依日／週／月彙總每個人
+            新進批圖中／審圖／已轉生管的量，並標出其中有多少是新料號；下方另有週平均／月平均彙總
+            （逐人＋部門合計）與逐人的訂單標籤分布。</li>
         <li><b>各單位要算哪些人</b>由下方「設定」的「部門範圍設定」決定；還沒設定部門的單位，部分統計（需要
             逐人歸屬的）會顯示 0 或提示尚未設定，不影響不需要人員歸屬的現況統計。</li>
         <li><b>勾選部門的「含子部門」</b>：組織是樹狀的，勾了會連同底下所有子部門的人一起算；
@@ -629,6 +696,17 @@ function showToast(msg, kind){
   }).appendTo('body');
   $t.animate({opacity:1}, 150).delay(2200).animate({opacity:0}, 300, function(){ $t.remove(); });
 }
+/** 2026-10-08 新增：設計課「設計備註待回覆訂單」／業務課「待回覆問題」這兩個指標改用
+    「近90天下單仍未回覆」驅動負荷過重判定（見 unit_load_lib.php 的 UL_RECENT_ORDER_DAYS
+    常數註解），但全歷史總量還是有參考價值（例如知道有多少舊訂單需要排時間清理），故
+    headline 顯示近期數字、底下補一行淡灰字講「另外還有幾筆是更久以前遺留的」，不要把
+    它藏起來變成完全看不到。 */
+function backlogNote(total, recent){
+  if (total===null||total===undefined||recent===null||recent===undefined) return '';
+  var old = Number(total) - Number(recent);
+  if (old <= 0) return '';
+  return '<div style="font-size:10.5px;color:var(--muted);margin:-2px 0 4px;">（另有 '+nf(old)+' 筆為90天前的較舊訂單遺留，僅供參考、不計入負荷過重判定）</div>';
+}
 function deltaHtml(cur, prev, fmt){
   fmt = fmt || nf;
   if(cur===null||cur===undefined||prev===null||prev===undefined) return '';
@@ -668,11 +746,16 @@ $('#fGran, #fYear').on('change', function(){ fillIdx(); });
 /* ── 分頁切換（總覽／五個單位） ─────────────────────── */
 /* 設計課／業務課／生管：第一次點開才呼叫對應的 data_* action（UNIT_LOADERS/UNIT_LOADED
    定義在下方「單位分頁與期間篩選串接」區塊）；已經載過的分頁直接顯示快取內容，不重打。 */
+/** 2026-10-08 新增：切到某單位分頁、資料還沒載好時顯示「載入中」，由各 renderXxx()
+    函式第一行呼叫 hideLoading() 隱藏——背景預載通常已經載好了（不會看到這個提示一閃
+    而過），只有第一次點開手腳快、或網路慢時才看得到，避免空白區塊看起來像壞掉。 */
+function showLoading(unit){ $('.ul-tab-pane[data-unit="'+unit+'"] > .ul-loading-banner').show(); }
+function hideLoading(unit){ $('.ul-tab-pane[data-unit="'+unit+'"] > .ul-loading-banner').hide(); }
 $(document).on('click', '.ul-tab-btn', function(){
   var t = $(this).data('tab');
   $('.ul-tab-btn').removeClass('active'); $(this).addClass('active');
   $('.ul-tab-pane').hide(); $('#tab-'+t).show();
-  if (typeof UNIT_LOADERS !== 'undefined' && UNIT_LOADERS[t] && !UNIT_LOADED[t]) loadUnitTab(t);
+  if (typeof UNIT_LOADERS !== 'undefined' && UNIT_LOADERS[t] && !UNIT_LOADED[t]) { showLoading(t); loadUnitTab(t); }
 });
 $(document).on('click', '.ul-go-tab', function(){
   var t = $(this).data('tab');
@@ -711,55 +794,81 @@ function metricLine(label, cur, cmp, fmt){
    理由（2026-10-07 新增，取代原本「掃一遍 insights 標題文字反推」的暫時做法——前端
    不重算門檻邏輯，那永遠是 unit_load_lib.php 的 ul_is_overload()／ul_unit_overload_check()
    專責的事）。 */
+/** 2026-10-08 改版：KPI 卡片改成「過重的排最前面」，不再固定印出設計→業務→生管→
+    生產→品管→包裝這個順序——不管誰在燒誰在涼，原本每次都要重新掃過 6 張卡才知道
+    誰紅誰綠；同時在卡片列上方加一行「本日摘要」橫幅，一眼看出目前有幾個單位過重、
+    是哪幾個，不用捲到卡片逐張看過去才拼得出結論。 */
 function renderOverview(d){
   var ov = d.unit_overload || {};
   var badOf = function(k){ return !!(ov[k] && ov[k].overloaded); };
   var reasonsOf = function(k){ return (ov[k] && ov[k].reasons) || []; };
 
-  var h = '';
   var dc = d.design.cur, dp = d.design.cmp;
-  h += kpiCard('design', UNIT_LABELS.design, d.design.people_count,
-       metricLine('批圖中', dc.drawing_wip, dp.drawing_wip)
-     + metricLine('繪圖平均工作天', dc.avg_draw_workdays, dp.avg_draw_workdays, nf1)
-     + metricLine('設計備註待回覆訂單', dc.issue_orders, dp.issue_orders),
-     badOf('design'), reasonsOf('design'));
-
   var sc = d.sales.cur, sp = d.sales.cmp;
-  h += kpiCard('sales', UNIT_LABELS.sales, d.sales.people_count,
-       metricLine('本期報價單', sc.quote_count, sp.quote_count)
-     + metricLine('待回覆問題', sc.open_issue_count, sp.open_issue_count),
-     badOf('sales'), reasonsOf('sales'));
-
   var pc = d.pm.cur, pp = d.pm.cmp;
-  h += kpiCard('pm', UNIT_LABELS.pm, d.pm.people_count,
-       metricLine('委外加工中', pc.outsource_wip, pp.outsource_wip)
-     + metricLine('廠內加工中', pc.internal_wip, pp.internal_wip)
-     + metricLine('待對帳筆數', pc.pending_recon_lines, pp.pending_recon_lines),
-     badOf('pm'), reasonsOf('pm'));
-
   var prod = d.prod;
-  h += kpiCard('prod', UNIT_LABELS.prod, prod.people_count,
-       metricLine('未指派機台', prod.unassigned_total, null)
-     + metricLine('已指派機台', prod.assigned_total, null)
-     + metricLine('未正式指派卻已報工', prod.untracked_total, null)
-     + metricLine('平均架機時間（分）', prod.avg_setup_minutes, null, nf1),
-     badOf('prod'), reasonsOf('prod'));
-
   var qc = d.qc;
-  h += kpiCard('qc', UNIT_LABELS.qc, qc.people_count,
-       metricLine('待驗平均等待工作天', qc.avg_wait_workdays, null, nf1)
-     + metricLine('平均NG比例', qc.avg_ng_rate!=null ? qc.avg_ng_rate*100 : null, null, pct1)
-     + metricLine('脫離流程補檢驗', qc.adhoc_total, null),
-     badOf('qc'), reasonsOf('qc'));
-
   var pk = d.packing || {};
-  h += kpiCard('packing', UNIT_LABELS.packing, pk.people_count,
-       metricLine('待包裝筆數', pk.pending, null)
-     + metricLine('平均處理工作天', pk.avg_workdays, null, nf1),
-     badOf('packing'), reasonsOf('packing'));
 
-  $('#kpiRow').html(h);
+  // 依固定順序先組好每張卡片的 html，sort 時才用 badOf() 決定顯示順序——badOf() 需要
+  // 用到的資料（dc/sc/pc/...）都已經在上面備妥，卡片本身的內容順序完全不受排序影響。
+  var cards = [
+    { key:'design', html: kpiCard('design', UNIT_LABELS.design, d.design.people_count,
+        metricLine('批圖中', dc.drawing_wip, dp.drawing_wip)
+      + metricLine('繪圖平均工作天', dc.avg_draw_workdays, dp.avg_draw_workdays, nf1)
+      + metricLine('設計備註待回覆訂單（近90天）', dc.issue_orders_recent, dp.issue_orders_recent)
+      + backlogNote(dc.issue_orders, dc.issue_orders_recent),
+      badOf('design'), reasonsOf('design')) },
+    { key:'sales', html: kpiCard('sales', UNIT_LABELS.sales, d.sales.people_count,
+        metricLine('本期報價單', sc.quote_count, sp.quote_count)
+      + metricLine('待回覆問題（近90天）', sc.open_issue_count_recent, sp.open_issue_count_recent)
+      + backlogNote(sc.open_issue_count, sc.open_issue_count_recent),
+      badOf('sales'), reasonsOf('sales')) },
+    { key:'pm', html: kpiCard('pm', UNIT_LABELS.pm, d.pm.people_count,
+        metricLine('委外加工中', pc.outsource_wip, pp.outsource_wip)
+      + metricLine('廠內加工中', pc.internal_wip, pp.internal_wip)
+      + metricLine('待對帳筆數', pc.pending_recon_lines, pp.pending_recon_lines),
+      badOf('pm'), reasonsOf('pm')) },
+    { key:'prod', html: kpiCard('prod', UNIT_LABELS.prod, prod.people_count,
+        metricLine('未指派機台', prod.unassigned_total, null)
+      + metricLine('已指派機台', prod.assigned_total, null)
+      + metricLine('未正式指派卻已報工', prod.untracked_total, null)
+      + metricLine('平均架機時間（分）', prod.avg_setup_minutes, null, nf1),
+      badOf('prod'), reasonsOf('prod')) },
+    { key:'qc', html: kpiCard('qc', UNIT_LABELS.qc, qc.people_count,
+        metricLine('待驗平均等待工作天', qc.avg_wait_workdays, null, nf1)
+      + metricLine('平均NG比例', qc.avg_ng_rate!=null ? qc.avg_ng_rate*100 : null, null, pct1)
+      + metricLine('脫離流程補檢驗', qc.adhoc_total, null),
+      badOf('qc'), reasonsOf('qc')) },
+    { key:'packing', html: kpiCard('packing', UNIT_LABELS.packing, pk.people_count,
+        metricLine('待包裝筆數', pk.pending, null)
+      + metricLine('平均處理工作天', pk.avg_workdays, null, nf1),
+      badOf('packing'), reasonsOf('packing')) }
+  ];
+
+  var badKeys = UNIT_KEYS.filter(function(k){ return badOf(k); });
+  // Array#sort 在現代瀏覽器（含本站支援的版本）是穩定排序，同為過重/同為正常的卡片
+  // 會維持原本「設計→業務→生管→生產→品管→包裝」的相對順序，只有「過重排到前面」
+  // 這一件事會改變排列。
+  cards.sort(function(a,b){ return (badOf(b.key)?1:0) - (badOf(a.key)?1:0); });
+
+  $('#kpiRow').html(cards.map(function(c){ return c.html; }).join(''));
+  renderSummaryBanner(badKeys);
   renderInsights(d.insights || {});
+}
+/** 本日摘要橫幅：目前有幾個單位負荷過重，點名字直接跳到該單位的詳細分頁 */
+function renderSummaryBanner(badKeys){
+  var $el = $('#overviewBanner');
+  if (!badKeys.length){
+    $el.attr('class','ul-summary-banner ok').html('<i class="fa fa-check-circle"></i> 目前 6 個單位皆未超過設定的負荷門檻。');
+    return;
+  }
+  var links = badKeys.map(function(k){
+    return '<a href="javascript:void(0)" class="ul-go-tab" data-tab="'+k+'">'+esc(UNIT_LABELS[k]||k)+'</a>';
+  }).join('、');
+  $el.attr('class','ul-summary-banner bad').html(
+    '<i class="fa fa-exclamation-triangle"></i> 目前 '+badKeys.length+' 個單位負荷過重：'+links
+  );
 }
 
 /** 自動分析：依單位分組顯示（2026-10-07 改版），某單位沒有可講的內容時該分組直接不輸出 */
@@ -800,21 +909,35 @@ function loadTrend(){
    任何藍/青/紫這類冷色。只在這張圖覆寫 colors，其餘沿用 UL_PALETTE 的長條圖/圓餅圖
    不受影響。 */
 var UL_TREND_PALETTE = ['#E8702A', '#8B2E22', '#D9A440', '#5E3A22', '#C14C3B', '#B8891F'];
+/** 2026-10-08 改版：六個單位各自一張小圖、各自獨立 Y 軸（small multiples），不再疊在
+    同一張圖共用一個 Y 軸——量級差很多的指標硬疊在一起時，量小的單位那條線會被壓在
+    底部完全看不出起伏（見使用說明同一段）。容器 `<div>` 由這裡動態產生，每次重畫先
+    整批清空再重建，避免切換粒度/期數時留下舊的 Highcharts 容器。 */
 function renderTrendChart(d){
   var labels = d.labels || [];
   var series = d.series || {};
   var metricLabels = d.metric_labels || {};
-  var sArr = UNIT_KEYS.map(function(k){
-    return { name: (UNIT_LABELS[k]||k) + '｜' + (metricLabels[k]||''), data: (series[k]||[]).map(Number) };
+
+  var h = '';
+  UNIT_KEYS.forEach(function(k, i){
+    h += '<div class="ul-trend-cell"><div class="ul-trend-cell-h">'
+       + '<i class="fa '+(UNIT_ICONS[k]||'fa-circle')+'"></i> '+esc(UNIT_LABELS[k]||k)
+       + '　<span style="font-weight:normal;color:var(--muted);">'+esc(metricLabels[k]||'')+'</span></div>'
+       + '<div id="trendChart_'+k+'" style="height:150px;"></div></div>';
   });
-  chart('trendChart', {
-    chart: { type:'line', height:340 },
-    colors: UL_TREND_PALETTE,
-    xAxis: { categories: labels },
-    yAxis: { title:{text:null}, allowDecimals:false, min:0 },
-    tooltip: { shared:true },
-    plotOptions: { series:{ marker:{ enabled:true, radius:3 } } },
-    series: sArr
+  $('#trendChart').html(h);
+
+  UNIT_KEYS.forEach(function(k, i){
+    chart('trendChart_'+k, {
+      chart: { type:'line', height:150, spacing:[4,4,2,4] },
+      colors: [UL_TREND_PALETTE[i % UL_TREND_PALETTE.length]],
+      xAxis: { categories: labels, labels:{ style:{fontSize:'10px'} } },
+      yAxis: { title:{text:null}, allowDecimals:false, min:0 },
+      legend: { enabled:false },
+      tooltip: { shared:true },
+      plotOptions: { series:{ marker:{ enabled:true, radius:2.5 } } },
+      series: [{ name: UNIT_LABELS[k]||k, data: (series[k]||[]).map(Number) }]
+    });
   });
 }
 $(document).on('click', '.ul-trend-gran', function(){
@@ -1002,6 +1125,7 @@ function loadDesign(silent, done){
   });
 }
 function renderDesign(d){
+  hideLoading('design');
   $('#dsgNote').html(d.note ? '<div class="ul-unit-note"><i class="fa fa-exclamation-circle"></i> '+esc(d.note)+'</div>' : '');
 
   var s = d.summary, c = d.summary_cmp, ov = d.overload || {}, L = d.period.cmp_label;
@@ -1010,7 +1134,12 @@ function renderDesign(d){
   h += statTile('已按審圖', s.in_review, c.in_review, L, nf, false);
   h += statTile('已按轉生管', s.pm_get, c.pm_get, L, nf, false);
   h += newCaseTile(s.new_case, c.new_case, L);
-  h += statTile('問題訂單數', s.issue_orders, c.issue_orders, L, nf, !!ov.issue_orders);
+  // 2026-10-08 修正：headline 改顯示「近90天下單仍未回覆」的數字（驅動負荷過重判定），
+  // 全歷史總量改成卡片內一行小字參考，不要讓歷史累積的舊訂單淹沒本期真正要處理的量
+  // ——道理見 backlogNote() 函式註解與 unit_load_lib.php 的 UL_RECENT_ORDER_DAYS 常數。
+  var issueOld = Math.max(0, Number(s.issue_orders||0) - Number(s.issue_orders_recent||0));
+  h += statTile('問題訂單數（近90天）', s.issue_orders_recent, c.issue_orders_recent, L, nf, !!ov.issue_orders,
+       issueOld > 0 ? ('另有 '+nf(issueOld)+' 筆90天前的較舊訂單遺留，僅供參考') : null);
   // 2026-10-07 新增：平均出圖工作天旁補上「基於幾筆真正需要繪圖的案件」；另外補一張
   // 「樣品繪圖平均工作天」卡片（avg_sample_draw_workdays／sample_draw_case_count），
   // 完全沒有樣品繪圖案件時顯示明確提示，不要留一個空白或 null 的尷尬格子。
@@ -1029,7 +1158,9 @@ function renderDesign(d){
   renderDesignDailyChart(d.daily_pmget, d.by_person, d.period);
   renderDesignTags(d.tags);
   renderDesignNoteStats(d.note_stats, d.by_person);
-  renderDesignTable(d.by_person);
+  renderDesignTable(d.by_person, (d.people||[]).length);
+  renderDesignDailyDetail(d.daily_detail, d.by_person, d.period);
+  renderDesignTagsByPerson(d.tags_by_person, d.by_person);
 }
 function renderDesignReviewer(rv, byPerson){
   if (!rv || !rv.supported){
@@ -1133,10 +1264,17 @@ function renderDesignNoteStats(ns, byPerson){
   }
   $('#dsgNoteStats').html(h);
 }
-function renderDesignTable(rows){
+/** 2026-10-08 修正：「尚未設定部門範圍」這句話在「部門確實有設、但全部人都被設定頁的
+    『排除職位』濾光」時仍然會顯示，會讓管理員誤以為部門範圍沒設好、跑去設定頁對照
+    老半天——其實該去看的是「排除職位」清單。改用 peopleCount（d.people，排除前的部門
+    人員總數）區分這兩種空狀態。 */
+function emptyRowMsg(peopleCount){
+  return (peopleCount > 0) ? '本單位目前沒有符合條件（未被排除職位）的人員' : '尚未設定部門範圍';
+}
+function renderDesignTable(rows, peopleCount){
   rows = rows || [];
   if (!rows.length){
-    $('#dsgTable tbody').html('<tr><td colspan="8" style="text-align:center;color:var(--muted);">尚未設定部門範圍</td></tr>');
+    $('#dsgTable tbody').html('<tr><td colspan="8" style="text-align:center;color:var(--muted);">'+esc(emptyRowMsg(peopleCount))+'</td></tr>');
     return;
   }
   var h = '';
@@ -1145,10 +1283,126 @@ function renderDesignTable(rows){
        + '<td'+cellBadCls('design','drawing_wip',r.drawing_wip)+'>'+nf(r.drawing_wip)+'</td>'
        + '<td>'+nf(r.in_review)+'</td>'
        + '<td>'+nf(r.pm_get)+'</td>'
-       + '<td'+cellBadCls('design','issue_orders',r.issue_orders)+'>'+nf(r.issue_orders)+'</td>'
+       + '<td'+cellBadCls('design','issue_orders',r.issue_orders_recent)+'>'+nf(r.issue_orders_recent)+'</td>'
        + '<td'+cellBadCls('design','avg_draw_workdays',r.avg_draw_workdays)+'>'+nf1(r.avg_draw_workdays)+'</td></tr>';
   });
   $('#dsgTable tbody').html(h);
+}
+
+/* ── 設計課「逐人每日工作量」（2026-10-08 新增，使用者交辦）──────────────
+   資料來源 d.daily_detail 是最細的逐筆事件（見 ul_design_daily_detail() 註解），
+   這裡依期間長度自動收合成日／週／月（沿用既有 pickTimeGran()/bucketKeyFor()，
+   跟上面「每日完成數趨勢圖」同一套規則，不另外發明第二套時間分桶），並且額外算出
+   「週平均」「月平均」兩個彙總數字（不管目前收合成哪個粒度，平均值一律換算成
+   「每一週／每一個月大概是多少」，方便跟别的月份心裡比較基準一致）。 */
+var DSG_METRIC_LABEL = { batch_in:'批圖中（新進）', review:'審圖', pm_get:'已轉生管' };
+function renderDesignDailyDetail(events, byPerson, period){
+  events = events || [];
+  if (!events.length){ $('#dsgDailyDetailTable').html(emptyHint('本期沒有批圖中／審圖／已轉生管的資料。')); return; }
+  var gran = pickTimeGran(period);
+  // d.period（ulPeriodParse() 的回傳）本身沒有 period_total_days 這個鍵（那是 summary/
+  // summary_cmp 裡才有的欄位），直接算 from~to 天數最保險，跟 pickTimeGran() 算 span
+  // 用同一種算法。
+  var totalDays = 30;
+  if (period && period.from && period.to){
+    totalDays = Math.round((new Date(period.to+'T00:00:00') - new Date(period.from+'T00:00:00')) / 86400000) + 1;
+  }
+  if (!totalDays || totalDays < 1) totalDays = 1;
+
+  // bucketKey -> ate -> metric -> {c, newC}
+  var data = {}, buckets = [], seen = {}, ates = {}, atesSeen = {};
+  events.forEach(function(e){
+    var bk = bucketKeyFor(e.d, gran);
+    if (!seen[bk]){ seen[bk]=1; buckets.push(bk); }
+    if (!atesSeen[e.ate]){ atesSeen[e.ate]=1; ates[e.ate]=1; }
+    if (!data[bk]) data[bk] = {};
+    if (!data[bk][e.ate]) data[bk][e.ate] = { batch_in:0, batch_in_new:0, review:0, review_new:0, pm_get:0, pm_get_new:0 };
+    data[bk][e.ate][e.metric]++;
+    if (e.is_new) data[bk][e.ate][e.metric+'_new']++;
+  });
+  buckets.sort();
+  var ateIds = Object.keys(ates);
+
+  var h = '<div class="table-responsive"><table class="table table-striped" style="margin-bottom:10px;">'
+        + '<thead><tr><th>'+(gran==='day'?'日期':(gran==='week'?'週（週一起算）':'月份'))+'</th><th>姓名</th>'
+        + '<th>批圖中（新進）</th><th>審圖</th><th>已轉生管</th><th>其中新料號</th></tr></thead><tbody>';
+  var grand = {}; // ate -> sums，給週/月平均用
+  buckets.forEach(function(bk){
+    ateIds.forEach(function(ate){
+      var row = (data[bk] && data[bk][ate]) || { batch_in:0, batch_in_new:0, review:0, review_new:0, pm_get:0, pm_get_new:0 };
+      if (!row.batch_in && !row.review && !row.pm_get) return; // 這個人這一桶完全沒動作就不列一行，表格不會被灌爆
+      if (!grand[ate]) grand[ate] = { batch_in:0, review:0, pm_get:0, new_total:0, buckets:0 };
+      grand[ate].batch_in += row.batch_in; grand[ate].review += row.review; grand[ate].pm_get += row.pm_get;
+      grand[ate].new_total += (row.batch_in_new||0) + (row.review_new||0) + (row.pm_get_new||0);
+      grand[ate].buckets++;
+      var newTotal = (row.batch_in_new||0) + (row.review_new||0) + (row.pm_get_new||0);
+      h += '<tr><td>'+esc(bk)+'</td><td>'+esc(nameOf(byPerson, ate))+'</td>'
+         + '<td>'+nf(row.batch_in)+'</td><td>'+nf(row.review)+'</td><td>'+nf(row.pm_get)+'</td>'
+         + '<td>'+nf(newTotal)+'</td></tr>';
+    });
+  });
+  h += '</tbody></table></div>';
+
+  // 週/月平均彙總（逐人＋部門合計），一律用「期間總天數」換算日均，再乘以 7 或 30——
+  // 不是直接對「有資料的桶數」取平均，那樣遇到「本期還沒走完」或中間有空桶的月份會
+  // 失真（比照 ul_period_delta_calc() 日均換算同樣的道理）。
+  var deptSum = { batch_in:0, review:0, pm_get:0, new_total:0 };
+  var h2 = '<div class="table-responsive"><table class="table table-striped"><thead><tr><th>姓名</th>'
+         + '<th>批圖中（新進）週平均</th><th>審圖週平均</th><th>已轉生管週平均</th>'
+         + '<th>批圖中（新進）月平均</th><th>審圖月平均</th><th>已轉生管月平均</th><th>其中新料號（本期合計）</th></tr></thead><tbody>';
+  ateIds.forEach(function(ate){
+    var g = grand[ate] || { batch_in:0, review:0, pm_get:0, new_total:0 };
+    deptSum.batch_in += g.batch_in; deptSum.review += g.review; deptSum.pm_get += g.pm_get; deptSum.new_total += g.new_total;
+    h2 += '<tr><td>'+esc(nameOf(byPerson, ate))+'</td>'
+       + '<td>'+nf1(g.batch_in/totalDays*7)+'</td><td>'+nf1(g.review/totalDays*7)+'</td><td>'+nf1(g.pm_get/totalDays*7)+'</td>'
+       + '<td>'+nf1(g.batch_in/totalDays*30)+'</td><td>'+nf1(g.review/totalDays*30)+'</td><td>'+nf1(g.pm_get/totalDays*30)+'</td>'
+       + '<td>'+nf(g.new_total)+'</td></tr>';
+  });
+  h2 += '<tr style="font-weight:700;background:var(--sand);"><td>部門合計</td>'
+      + '<td>'+nf1(deptSum.batch_in/totalDays*7)+'</td><td>'+nf1(deptSum.review/totalDays*7)+'</td><td>'+nf1(deptSum.pm_get/totalDays*7)+'</td>'
+      + '<td>'+nf1(deptSum.batch_in/totalDays*30)+'</td><td>'+nf1(deptSum.review/totalDays*30)+'</td><td>'+nf1(deptSum.pm_get/totalDays*30)+'</td>'
+      + '<td>'+nf(deptSum.new_total)+'</td></tr>';
+  h2 += '</tbody></table></div>';
+
+  $('#dsgDailyDetailTable').html(h);
+  $('#dsgDailyDetailAvg').html(h2);
+}
+
+/** 設計課「逐人標籤分布」：橫向展開成動態欄（每個出現過的標籤各一欄），不固定欄數——
+    依本期實際出現的標籤決定要列幾欄，不會因為加了新標籤就要改程式。 */
+function renderDesignTagsByPerson(byPersonTags, byPerson){
+  byPersonTags = byPersonTags || {};
+  var ateIds = Object.keys(byPersonTags);
+  if (!ateIds.length){ $('#dsgTagsByPerson').html(emptyHint('本期沒有標籤資料。')); return; }
+
+  var tagOrder = [], tagSeen = {}, tagNameOf = {};
+  ateIds.forEach(function(ate){
+    (byPersonTags[ate]||[]).forEach(function(t){
+      if (!tagSeen[t.tag_id]){ tagSeen[t.tag_id]=1; tagOrder.push(t.tag_id); tagNameOf[t.tag_id]=t.tag_name; }
+    });
+  });
+
+  var h = '<div class="table-responsive"><table class="table table-striped"><thead><tr><th>姓名</th>';
+  tagOrder.forEach(function(tid){ h += '<th>'+esc(tagNameOf[tid])+'</th>'; });
+  h += '<th>合計</th></tr></thead><tbody>';
+  var colTotal = {};
+  ateIds.forEach(function(ate){
+    var byTag = {}; var rowTotal = 0;
+    (byPersonTags[ate]||[]).forEach(function(t){ byTag[t.tag_id] = t.c; });
+    h += '<tr><td>'+esc(nameOf(byPerson, ate))+'</td>';
+    tagOrder.forEach(function(tid){
+      var v = byTag[tid] || 0; rowTotal += v;
+      colTotal[tid] = (colTotal[tid]||0) + v;
+      h += '<td>'+nf(v)+'</td>';
+    });
+    h += '<td><b>'+nf(rowTotal)+'</b></td></tr>';
+  });
+  h += '<tr style="font-weight:700;background:var(--sand);"><td>部門合計</td>';
+  var grandTotal = 0;
+  tagOrder.forEach(function(tid){ grandTotal += (colTotal[tid]||0); h += '<td>'+nf(colTotal[tid]||0)+'</td>'; });
+  h += '<td>'+nf(grandTotal)+'</td></tr>';
+  h += '</tbody></table></div>';
+  $('#dsgTagsByPerson').html(h);
 }
 
 /* ── 業務課分頁 ─────────────────────────────────────── */
@@ -1171,6 +1425,7 @@ function loadSales(silent, done){
   });
 }
 function renderSales(d){
+  hideLoading('sales');
   $('#salNote').html(d.note ? '<div class="ul-unit-note"><i class="fa fa-exclamation-circle"></i> '+esc(d.note)+'</div>' : '');
 
   var s = d.summary, c = d.summary_cmp, ov = d.overload || {}, L = d.period.cmp_label;
@@ -1178,15 +1433,18 @@ function renderSales(d){
   h += statTile('本期報價單數', s.quote_count, c.quote_count, L, nf, !!ov.quote_count);
   h += statTile('報價明細筆數', s.quote_item_count, c.quote_item_count, L, nf, false);
   h += statTile('訂單追蹤筆數', s.order_count, c.order_count, L, nf, false);
-  h += statTile('待回覆問題筆數', s.open_issue_count, c.open_issue_count, L, nf, !!ov.open_issue_count);
+  // 2026-10-08 修正：同設計課，headline 改顯示近90天數字，歷史總量併入卡片內小字參考。
+  var issueOldS = Math.max(0, Number(s.open_issue_count||0) - Number(s.open_issue_count_recent||0));
+  h += statTile('待回覆問題筆數（近90天）', s.open_issue_count_recent, c.open_issue_count_recent, L, nf, !!ov.open_issue_count,
+       issueOldS > 0 ? ('另有 '+nf(issueOldS)+' 筆90天前的較舊訂單遺留，僅供參考') : null);
   $('#salKpi').html(h);
 
-  renderSalesTable(d.by_person);
+  renderSalesTable(d.by_person, (d.people||[]).length);
 }
-function renderSalesTable(rows){
+function renderSalesTable(rows, peopleCount){
   rows = rows || [];
   if (!rows.length){
-    $('#salTable tbody').html('<tr><td colspan="7" style="text-align:center;color:var(--muted);">尚未設定部門範圍</td></tr>');
+    $('#salTable tbody').html('<tr><td colspan="7" style="text-align:center;color:var(--muted);">'+esc(emptyRowMsg(peopleCount))+'</td></tr>');
     return;
   }
   var h = '';
@@ -1195,7 +1453,7 @@ function renderSalesTable(rows){
        + '<td'+cellBadCls('sales','quote_count',r.quote_count)+'>'+nf(r.quote_count)+'</td>'
        + '<td>'+nf(r.quote_item_count)+'</td>'
        + '<td>'+nf(r.order_count)+'</td>'
-       + '<td'+cellBadCls('sales','open_issue_count',r.open_issue_count)+'>'+nf(r.open_issue_count)+'</td></tr>';
+       + '<td'+cellBadCls('sales','open_issue_count',r.open_issue_count_recent)+'>'+nf(r.open_issue_count_recent)+'</td></tr>';
   });
   $('#salTable tbody').html(h);
 }
@@ -1218,6 +1476,7 @@ function loadPm(silent, done){
   });
 }
 function renderPm(d){
+  hideLoading('pm');
   $('#pmNote').html(d.note ? '<div class="ul-unit-note"><i class="fa fa-exclamation-circle"></i> '+esc(d.note)+'</div>' : '');
 
   var s = d.summary, c = d.summary_cmp, ov = d.overload || {}, L = d.period.cmp_label;
@@ -1252,6 +1511,7 @@ function loadProd(silent, done){
   });
 }
 function renderProd(d){
+  hideLoading('prod');
   $('#prodNote').html(d.note ? '<div class="ul-unit-note"><i class="fa fa-exclamation-circle"></i> '+esc(d.note)+'</div>' : '');
   var ov = d.overload || {};
 
@@ -1378,6 +1638,7 @@ function loadPacking(silent, done){
   });
 }
 function renderPacking(d){
+  hideLoading('packing');
   $('#packNote').html(d.note ? '<div class="ul-unit-note"><i class="fa fa-exclamation-circle"></i> '+esc(d.note)+'</div>' : '');
   var ov = d.overload || {};
   var p = d.packing || { pending:0, daily:[], avg_workdays:null, longest:[], shortest:[] };
@@ -1438,6 +1699,7 @@ function loadQc(silent, done){
   });
 }
 function renderQc(d){
+  hideLoading('qc');
   $('#qcNote').html(d.note ? '<div class="ul-unit-note"><i class="fa fa-exclamation-circle"></i> '+esc(d.note)+'</div>' : '');
   var ov = d.overload || {};
 
@@ -1445,7 +1707,7 @@ function renderQc(d){
   renderQcDailyChart(d.daily_items);
   renderQcWait(d.wait, !!ov.wait_days_avg);
   renderQcAbnormal(d.abnormal, !!ov.ng_rate);
-  renderQcPersonTable(d.by_person);
+  renderQcPersonTable(d.by_person, (d.people||[]).length);
   renderQcAdhoc(d.adhoc, !!ov.adhoc_count);
 }
 function renderQcPending(pq){
@@ -1546,10 +1808,10 @@ function renderQcAbnormal(ab, bad){
     ]
   });
 }
-function renderQcPersonTable(rows){
+function renderQcPersonTable(rows, peopleCount){
   rows = rows || [];
   if (!rows.length){
-    $('#qcPersonTable tbody').html('<tr><td colspan="6" style="text-align:center;color:var(--muted);">尚未設定部門範圍</td></tr>');
+    $('#qcPersonTable tbody').html('<tr><td colspan="6" style="text-align:center;color:var(--muted);">'+esc(emptyRowMsg(peopleCount))+'</td></tr>');
     return;
   }
   var h = '';

@@ -348,27 +348,37 @@ switch ($action) {
         $reviewer   = ul_design_reviewer_counts($db, $p['from'], $p['to'], $idsFiltered);
         $dailyPmget = ul_design_daily_pmget($db, $p['from'], $p['to'], $idsFiltered);
         $tags       = ul_design_tags($db, $p['from'], $p['to'], $ids);
+        $tagsByPerson = ul_design_tags_by_person($db, $p['from'], $p['to'], $idsFiltered);
         $noteStats  = ul_design_note_stats($db, $p['from'], $p['to'], $idsFiltered);
+        // 2026-10-08 新增：逐人每日工作量明細（批圖中新進／審圖／已轉生管＋其中新料號數），
+        // 使用者交辦——與上面逐人彙總表（$byPerson）用同一份已排除職位的人員範圍。
+        $dailyDetail = ul_design_daily_detail($db, $p['from'], $p['to'], $idsFiltered);
 
+        // 2026-10-08 修正：issue_orders 的過重判定改比「近90天下單仍未回覆」
+        // （issue_orders_recent），不是全歷史總量——道理與 ul_unit_overload_check() 的
+        // design 區塊同一處修正完全一致，本頁（單位詳細分頁）跟總覽頁的紅綠燈不可以各算
+        // 一套、對不起來。
         $overload = [
             'drawing_wip'       => ul_is_overload((float)$summary['drawing_wip'], 'design.batch_pending', $thresholds),
             'avg_draw_workdays' => $summary['avg_draw_workdays'] !== null
                                    && ul_is_overload((float)$summary['avg_draw_workdays'], 'design.avg_draw_workdays', $thresholds),
-            'issue_orders'      => ul_is_overload((float)$summary['issue_orders'], 'design.issue_orders', $thresholds),
+            'issue_orders'      => ul_is_overload((float)$summary['issue_orders_recent'], 'design.issue_orders', $thresholds),
         ];
 
         ulOut([
-            'period'      => $p,
-            'people'      => $people,
-            'summary'     => $summary,
-            'summary_cmp' => $summaryCmp,
-            'overload'    => $overload,
-            'by_person'   => $byPerson,
-            'reviewer'    => $reviewer,
-            'daily_pmget' => $dailyPmget,
-            'tags'        => $tags,
-            'note_stats'  => $noteStats,
-            'note'        => $ids ? '' : '尚未在設定頁為設計課勾選任何部門，以下數字皆為 0',
+            'period'       => $p,
+            'people'       => $people,
+            'summary'      => $summary,
+            'summary_cmp'  => $summaryCmp,
+            'overload'     => $overload,
+            'by_person'    => $byPerson,
+            'reviewer'     => $reviewer,
+            'daily_pmget'  => $dailyPmget,
+            'daily_detail' => $dailyDetail,
+            'tags'         => $tags,
+            'tags_by_person' => $tagsByPerson,
+            'note_stats'   => $noteStats,
+            'note'         => $ids ? '' : '尚未在設定頁為設計課勾選任何部門，以下數字皆為 0',
         ]);
     }
 
@@ -386,9 +396,13 @@ switch ($action) {
         $summaryCmp = ul_sales_summary($db, $p['cmp_from'], $p['cmp_to'], $ids);
         $byPerson   = ul_sales_by_person($db, $p['from'], $p['to'], $idsFiltered, $deptIds);
 
+        // 2026-10-08 修正：quote_count 改比「日均報價單數」（跟總覽頁 ul_unit_overload_check()
+        // 的 sales 區塊、2026-10-07 已經定案的規則同一套，本頁先前還是比本期累積總數，本期
+        // 未走完時會失真——沒跟上游的規則一起更新）；open_issue_count 改比近90天下單仍未
+        // 回覆的 open_issue_count_recent，不是全歷史總量，道理同設計課 issue_orders。
         $overload = [
-            'quote_count'      => ul_is_overload((float)$summary['quote_count'], 'sales.quote_backlog', $thresholds),
-            'open_issue_count' => ul_is_overload((float)$summary['open_issue_count'], 'sales.open_issue_count', $thresholds),
+            'quote_count'      => ul_is_overload(ul_sales_quote_daily_rate($summary), 'sales.quote_backlog', $thresholds),
+            'open_issue_count' => ul_is_overload((float)$summary['open_issue_count_recent'], 'sales.open_issue_count', $thresholds),
         ];
 
         ulOut([

@@ -31,6 +31,19 @@ require_once __DIR__ . '/acc_track_lib.php';
 
 if (!defined('UL_PARAM_GROUP')) define('UL_PARAM_GROUP', 'UNIT_LOAD');
 
+/**
+ * 2026-10-08 新增：設計課「待回覆設計備註」／業務課「待回覆問題」這兩個「即時現況」指標
+ * 查證後發現全部都是 2026-10-05 工程處理紀錄模組上線時，把訂單追蹤舊自由文字欄位
+ * `ateNote`（只要還沒按「已處理」就永遠不會清空）整批搬成 eng_log 問題項的歷史遺留
+ * 結果——實測 929 張設計課名下「待回覆」的訂單裡，只有 119 張（13%）是最近 90 天內
+ * 下單的，810 張都是半年、一年以上的舊訂單，根本不是「這幾天的工作量」，門檻卻是照
+ * 「本期應該有多少」的尺度設的（10／20），於是這兩個單位永遠卡在「負荷過重」，紅色
+ * 警示因此失去信號意義。故把這兩個指標拆成「近 N 天下單、仍未回覆」（計入負荷過重
+ * 判定）與「全部歷史總量」（只做參考，不計入判定）兩個數字，見 ul_design_summary()／
+ * ul_sales_summary() 的 issue_orders_recent／open_issue_count_recent。
+ */
+if (!defined('UL_RECENT_ORDER_DAYS')) define('UL_RECENT_ORDER_DAYS', 90);
+
 /* ══════════════════════════════════════════════════════════════════
  * A. 基礎設施
  * ══════════════════════════════════════════════════════════════════ */
@@ -648,7 +661,8 @@ function ul_design_summary(PDO $db, string $from, string $to, array $designerIds
     $out = ['drawing_wip' => 0, 'in_review' => 0, 'pm_get' => 0,
             'new_case' => ['total' => 0, 'processed' => 0, 'processed_pct' => null,
                             'in_progress' => 0, 'in_progress_pct' => null],
-            'issue_orders' => 0, 'avg_draw_workdays' => null, 'draw_case_count' => 0,
+            'issue_orders' => 0, 'issue_orders_recent' => 0,
+            'avg_draw_workdays' => null, 'draw_case_count' => 0,
             'avg_sample_draw_workdays' => null, 'sample_draw_case_count' => 0,
             'period_total_days' => null, 'period_elapsed_days' => null];
 
@@ -697,13 +711,24 @@ function ul_design_summary(PDO $db, string $from, string $to, array $designerIds
     // NewOrder_Track.php 的 NEW 徽章同一個鍵），不是 d_id_ID（料號主檔 id）——
     // 見 ul_orders_new_case_map() 的函式註解。
     $orderRows = $db->query(
-        "SELECT Order_id, d_id, Order_date, pmGet, in_review FROM order_track ot
+        "SELECT Order_id, d_id, Order_date, pmGet, in_review, Created_At FROM order_track ot
          WHERE ot.ate IN ({$in}) AND {$ordStatOk} AND {$ordNotSplit}"
     )->fetchAll(PDO::FETCH_ASSOC);
     $orderIds = array_map(fn($r) => (int)$r['Order_id'], $orderRows);
     if ($orderIds) {
         $openMap = el_order_open_item_counts($db, $orderIds, 'order_note');
         $out['issue_orders'] = count(array_filter($openMap, fn($c) => $c > 0));
+        // issue_orders_recent：同一批「目前仍有未回覆問題」的訂單裡，只算「下單日期在最近
+        // UL_RECENT_ORDER_DAYS 天內」的——見本檔頂部常數註解，這才是真正代表「本期工作量」
+        // 的數字，用來驅動負荷過重判定；issue_orders（總量）純粹留著當參考，不再直接比門檻。
+        $recentCutoff = date('Y-m-d', strtotime('-' . UL_RECENT_ORDER_DAYS . ' days'));
+        $createdByOid = [];
+        foreach ($orderRows as $r) $createdByOid[(int)$r['Order_id']] = substr((string)$r['Created_At'], 0, 10);
+        $recentCnt = 0;
+        foreach ($openMap as $oid => $cnt) {
+            if ($cnt > 0 && ($createdByOid[$oid] ?? '') >= $recentCutoff) $recentCnt++;
+        }
+        $out['issue_orders_recent'] = $recentCnt;
     }
 
     // 新案件：2026-10-07 使用者重新定義＝NEW 圖示者，完全取代舊版「系統裡首次出現的料號」；
@@ -801,7 +826,8 @@ function ul_design_by_person(PDO $db, string $from, string $to, array $designerI
             'dept_name' => $p['dept_name'] ?? '',
             'position_name' => $p['position_name'] ?? '',
             'drawing_wip' => 0, 'in_review' => 0, 'pm_get' => 0,
-            'issue_orders' => 0, 'avg_draw_workdays' => null, 'draw_case_count' => 0,
+            'issue_orders' => 0, 'issue_orders_recent' => 0,
+            'avg_draw_workdays' => null, 'draw_case_count' => 0,
             'avg_sample_draw_workdays' => null, 'sample_draw_case_count' => 0,
         ];
     }
@@ -835,16 +861,22 @@ function ul_design_by_person(PDO $db, string $from, string $to, array $designerI
         $uid = (int)$r['k']; if (isset($out[$uid])) $out[$uid]['pm_get'] = (int)$r['c'];
     }
 
-    $orderRows = $db->query("SELECT Order_id, ate FROM order_track ot WHERE ot.ate IN ({$in}) AND {$ordStatOk} AND {$ordNotSplit}")
+    $orderRows = $db->query("SELECT Order_id, ate, Created_At FROM order_track ot WHERE ot.ate IN ({$in}) AND {$ordStatOk} AND {$ordNotSplit}")
                     ->fetchAll(PDO::FETCH_ASSOC);
-    $orderIds = []; $ateByOrder = [];
-    foreach ($orderRows as $r) { $oid = (int)$r['Order_id']; $orderIds[] = $oid; $ateByOrder[$oid] = (int)$r['ate']; }
+    $orderIds = []; $ateByOrder = []; $createdByOrder = [];
+    foreach ($orderRows as $r) {
+        $oid = (int)$r['Order_id']; $orderIds[] = $oid; $ateByOrder[$oid] = (int)$r['ate'];
+        $createdByOrder[$oid] = substr((string)$r['Created_At'], 0, 10);
+    }
     if ($orderIds) {
         $openMap = el_order_open_item_counts($db, $orderIds, 'order_note');
+        $recentCutoff = date('Y-m-d', strtotime('-' . UL_RECENT_ORDER_DAYS . ' days'));
         foreach ($openMap as $oid => $cnt) {
             if ($cnt <= 0) continue;
             $uid = $ateByOrder[$oid] ?? 0;
-            if (isset($out[$uid])) $out[$uid]['issue_orders']++;
+            if (!isset($out[$uid])) continue;
+            $out[$uid]['issue_orders']++;
+            if (($createdByOrder[$oid] ?? '') >= $recentCutoff) $out[$uid]['issue_orders_recent']++;
         }
     }
 
@@ -957,6 +989,80 @@ function ul_design_tags(PDO $db, string $from, string $to, array $designerIds): 
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
+/** ul_design_tags() 的逐人版本（2026-10-08 新增），GROUP BY 多一欄 ate。
+ * @return array uid => [{tag_id,tag_name,c}, ...]（依該人該標籤筆數由大到小） */
+function ul_design_tags_by_person(PDO $db, string $from, string $to, array $designerIds): array
+{
+    $ids = ul_ids_norm($designerIds);
+    if (!$ids) return [];
+    $in = implode(',', $ids);
+    $st = $db->prepare("SELECT ot.ate k, t.tag_id, COALESCE(t.proc_name,'（未命名標籤）') AS tag_name, COUNT(*) c
+        FROM order_track ot
+        LEFT JOIN ot_as_proc_tag t ON t.tag_id = ot.as_tag_id
+        WHERE ot.ate IN ({$in}) AND ot.as_tag_id IS NOT NULL
+          AND ot.Order_date BETWEEN ? AND ? AND (ot.Order_status IS NULL OR ot.Order_status<>6)
+          AND (ot.parent_order_id IS NULL OR ot.parent_order_id=0)
+        GROUP BY ot.ate, t.tag_id, tag_name
+        ORDER BY ot.ate, c DESC");
+    $st->execute([$from, $to]);
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $uid = (int)$r['k'];
+        if (!isset($out[$uid])) $out[$uid] = [];
+        $out[$uid][] = ['tag_id' => $r['tag_id'], 'tag_name' => (string)$r['tag_name'], 'c' => (int)$r['c']];
+    }
+    return $out;
+}
+
+/**
+ * 設計課「逐人每日工作量」明細（2026-10-08 新增，使用者交辦：要能看到每個人每天處理的
+ * 批圖中／審圖／已轉生管量，並知道其中有多少是新料號）。同一批訂單依三個時間點各自
+ * 統計：ateGet＝新進批圖中（業務轉設計日）、in_review＝審圖、pmGet＝已轉生管，三者是
+ * 同一條流程的三個不同站點，各自可能落在不同天，所以分開各查一次。
+ * 回傳最細的逐筆事件列表（不預先彙總），日/週/月的收合與週/月平均都交給前端
+ * bucketKeyFor()／pickTimeGran()（既有的每日完成數趨勢圖已經在用同一套邏輯，這裡沿用
+ * 不重寫第二套時間分桶規則）。
+ * 新料號判定與 ul_design_summary() 的 new_case 完全同一套（ul_orders_new_case_map()），
+ * 同一張訂單在三個事件裡都可能出現，但新料號與否是訂單本身的屬性，判一次即可。
+ * @return array 每列一筆事件：['d'=>日期,'ate'=>設計者id,'metric'=>batch_in|review|pm_get,
+ *               'is_new'=>bool]
+ */
+function ul_design_daily_detail(PDO $db, string $from, string $to, array $designerIds): array
+{
+    $ids = ul_ids_norm($designerIds);
+    if (!$ids) return [];
+    $in = implode(',', $ids);
+    $ordStatOk = "(ot.Order_status IS NULL OR ot.Order_status<>6)";
+    $ordNotSplit = "(ot.parent_order_id IS NULL OR ot.parent_order_id=0)";
+
+    $metricCols = ['batch_in' => 'ateGet', 'review' => 'in_review', 'pm_get' => 'pmGet'];
+    $raw = [];    // oid => ['d_id'=>, 'order_date'=>]（供 new_case 判定用）
+    $events = []; // [d, ate, oid, metric]
+    foreach ($metricCols as $metric => $col) {
+        $st = $db->prepare("SELECT ot.Order_id oid, ot.ate k, DATE(ot.{$col}) d, ot.d_id, ot.Order_date
+            FROM order_track ot
+            WHERE ot.ate IN ({$in}) AND ot.{$col} IS NOT NULL AND DATE(ot.{$col}) BETWEEN ? AND ?
+              AND {$ordStatOk} AND {$ordNotSplit}");
+        $st->execute([$from, $to]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $oid = (int)$r['oid'];
+            $raw[$oid] = ['d_id' => (string)$r['d_id'], 'order_date' => (string)$r['Order_date']];
+            $events[] = ['d' => (string)$r['d'], 'ate' => (int)$r['k'], 'oid' => $oid, 'metric' => $metric];
+        }
+    }
+    if (!$events) return [];
+
+    $newCaseMap = ul_orders_new_case_map($db, $raw);
+    $out = [];
+    foreach ($events as $e) {
+        $out[] = [
+            'd' => $e['d'], 'ate' => $e['ate'], 'metric' => $e['metric'],
+            'is_new' => !empty($newCaseMap[$e['oid']]),
+        ];
+    }
+    return $out;
+}
+
 /**
  * 設計備註問題數與回覆工作日數。
  * open_count：這批設計師名下目前（現況快照）全部訂單的開放中設計備註問題總數。
@@ -1031,6 +1137,7 @@ function ul_design_note_stats(PDO $db, string $from, string $to, array $designer
 function ul_sales_summary(PDO $db, string $from, string $to, array $salesIds): array
 {
     $out = ['quote_count' => 0, 'quote_item_count' => 0, 'order_count' => 0, 'open_issue_count' => 0,
+            'open_issue_count_recent' => 0,
             'period_total_days' => null, 'period_elapsed_days' => null];
     // period_total_days／period_elapsed_days：2026-10-07 新增，道理與 ul_design_summary()
     // 同一段註解——不依賴 $salesIds，先算好才判斷要不要提早回傳，讓 ul_insights() 不管
@@ -1059,13 +1166,27 @@ function ul_sales_summary(PDO $db, string $from, string $to, array $salesIds): a
     $st->execute([$from, $to]);
     $out['order_count'] = (int)$st->fetchColumn();
 
-    $orderIds = array_map('intval', $db->query(
-        "SELECT Order_id FROM order_track WHERE (Order_status IS NULL OR Order_status<>6)
+    $ordRows = $db->query(
+        "SELECT Order_id, Created_At FROM order_track WHERE (Order_status IS NULL OR Order_status<>6)
           AND (parent_order_id IS NULL OR parent_order_id=0) AND Created_By IN ({$inQ})"
-    )->fetchAll(PDO::FETCH_COLUMN));
+    )->fetchAll(PDO::FETCH_ASSOC);
+    $orderIds = []; $createdAtOf = [];
+    foreach ($ordRows as $r) {
+        $oid = (int)$r['Order_id']; $orderIds[] = $oid;
+        $createdAtOf[$oid] = substr((string)$r['Created_At'], 0, 10);
+    }
     if ($orderIds) {
         $openMap = el_order_open_item_counts($db, $orderIds, 'order_note');
         $out['open_issue_count'] = array_sum($openMap);
+        // open_issue_count_recent：同 ul_design_summary() 的 issue_orders_recent，只算
+        // 下單日期在最近 UL_RECENT_ORDER_DAYS 天內的那一部分，驅動負荷過重判定；
+        // open_issue_count（總量）留著參考，不再直接比門檻。
+        $recentCutoff = date('Y-m-d', strtotime('-' . UL_RECENT_ORDER_DAYS . ' days'));
+        $recentSum = 0;
+        foreach ($openMap as $oid => $cnt) {
+            if ($cnt > 0 && ($createdAtOf[$oid] ?? '') >= $recentCutoff) $recentSum += $cnt;
+        }
+        $out['open_issue_count_recent'] = $recentSum;
     }
 
     return $out;
@@ -1094,6 +1215,7 @@ function ul_sales_by_person(PDO $db, string $from, string $to, array $salesIds, 
             'dept_name' => $p['dept_name'] ?? '',
             'position_name' => $p['position_name'] ?? '',
             'quote_count' => 0, 'quote_item_count' => 0, 'order_count' => 0, 'open_issue_count' => 0,
+            'open_issue_count_recent' => 0,
         ];
     }
 
@@ -1124,17 +1246,23 @@ function ul_sales_by_person(PDO $db, string $from, string $to, array $salesIds, 
     }
 
     $orderRows = $db->query(
-        "SELECT Order_id, Created_By FROM order_track WHERE (Order_status IS NULL OR Order_status<>6)
+        "SELECT Order_id, Created_By, Created_At FROM order_track WHERE (Order_status IS NULL OR Order_status<>6)
           AND (parent_order_id IS NULL OR parent_order_id=0) AND Created_By IN ({$inQ})"
     )->fetchAll(PDO::FETCH_ASSOC);
-    $orderIds = []; $createdByOf = [];
-    foreach ($orderRows as $r) { $oid = (int)$r['Order_id']; $orderIds[] = $oid; $createdByOf[$oid] = (int)$r['Created_By']; }
+    $orderIds = []; $createdByOf = []; $createdAtOf = [];
+    foreach ($orderRows as $r) {
+        $oid = (int)$r['Order_id']; $orderIds[] = $oid; $createdByOf[$oid] = (int)$r['Created_By'];
+        $createdAtOf[$oid] = substr((string)$r['Created_At'], 0, 10);
+    }
     if ($orderIds) {
         $openMap = el_order_open_item_counts($db, $orderIds, 'order_note');
+        $recentCutoff = date('Y-m-d', strtotime('-' . UL_RECENT_ORDER_DAYS . ' days'));
         foreach ($openMap as $oid => $cnt) {
             if ($cnt <= 0) continue;
             $uid = $createdByOf[$oid] ?? 0;
-            if (isset($out[$uid])) $out[$uid]['open_issue_count'] += $cnt;
+            if (!isset($out[$uid])) continue;
+            $out[$uid]['open_issue_count'] += $cnt;
+            if (($createdAtOf[$oid] ?? '') >= $recentCutoff) $out[$uid]['open_issue_count_recent'] += $cnt;
         }
     }
 
@@ -2326,11 +2454,11 @@ function ul_threshold_defaults(): array
         'design' => [
             'batch_pending' => ['value' => 20, 'label' => '批圖中筆數（即時現況門檻）'],
             'avg_draw_workdays' => ['value' => 5, 'label' => '繪圖平均工作天（每筆訂單，僅計真正需要繪圖的訂單）'],
-            'issue_orders' => ['value' => 10, 'label' => '設計備註待回覆訂單數（即時現況門檻）'],
+            'issue_orders' => ['value' => 10, 'label' => '設計備註待回覆訂單數（近' . UL_RECENT_ORDER_DAYS . '天下單者，即時現況門檻）'],
         ],
         'sales' => [
             'quote_backlog' => ['value' => 10, 'label' => '本期日均報價單數（張/天，本期尚未結束時用已過天數換算）'],
-            'open_issue_count' => ['value' => 20, 'label' => '待回覆問題筆數（即時現況門檻）'],
+            'open_issue_count' => ['value' => 20, 'label' => '待回覆問題筆數（近' . UL_RECENT_ORDER_DAYS . '天下單者，即時現況門檻）'],
         ],
         'pm' => [
             'outsource_wip' => ['value' => 100, 'label' => '委外加工中筆數（即時現況門檻）'],
@@ -2600,14 +2728,18 @@ function ul_unit_overload_check(array $allData, array $thresholds = []): array
         $d = $allData['design']['cur'];
         $check('design', 'batch_pending', $d['drawing_wip'] ?? null);
         $check('design', 'avg_draw_workdays', $d['avg_draw_workdays'] ?? null);
-        $check('design', 'issue_orders', $d['issue_orders'] ?? null);
+        // 2026-10-08 修正：issue_orders 改比「近 90 天下單仍未回覆」的 issue_orders_recent，
+        // 不是全歷史總量——見本檔頂部 UL_RECENT_ORDER_DAYS 常數註解，全歷史總量永遠遠
+        // 高於門檻、會讓紅色警示失去信號意義。
+        $check('design', 'issue_orders', $d['issue_orders_recent'] ?? null);
     }
     if (isset($allData['sales']['cur'])) {
         $s = $allData['sales']['cur'];
         // 2026-10-07 修正：quote_backlog 改跟「日均報價單數」比較，不是跟本期累積總數比較
         // ——見 ul_sales_quote_daily_rate() 函式註解；與 ul_insights() 的 KPI 顯示共用同一支。
         $check('sales', 'quote_backlog', ul_sales_quote_daily_rate($s));
-        $check('sales', 'open_issue_count', $s['open_issue_count'] ?? null);
+        // 2026-10-08 修正：同上，open_issue_count 改比近 90 天內的 open_issue_count_recent。
+        $check('sales', 'open_issue_count', $s['open_issue_count_recent'] ?? null);
     }
     if (isset($allData['pm']['cur'])) {
         $p = $allData['pm']['cur'];
