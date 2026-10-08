@@ -103,6 +103,14 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
             background:#fff; color:#5b3a1e; cursor:pointer; user-select:none; }
         .iq-chip:hover { background:#FDF3E3; }
         .iq-chip.on { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        /* 廠商加工類別：先選大類、才展開小類，避免一次塞幾十個標籤把畫面擠亂 */
+        .iq-cat-main-row { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:4px; }
+        .iq-cat-main-chip { display:inline-block; padding:4px 13px; border-radius:4px; font-size:12.5px; font-weight:bold;
+            border:1.5px solid #D8BE93; background:#FDF8EF; color:#8A5A2B; cursor:pointer; user-select:none; }
+        .iq-cat-main-chip:hover { background:#F7E0BD; }
+        .iq-cat-main-chip.act { background:#8A5A2B; color:#fff; border-color:#6b4520; }
+        .iq-cat-main-chip.act:after { content:" ▾"; }
+        .iq-cat-sub-row:empty { display:none; }
         .iq-note-tpl { display:flex; flex-wrap:wrap; gap:5px; align-items:center; margin-top:6px; }
         .iq-note-tpl .iq-chip { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .iq-note-manage { font-size:12px; color:#b5762a; cursor:pointer; text-decoration:underline; }
@@ -594,23 +602,40 @@ function loadVendorCats(cb){
     $.getJSON(API, {action:'vendor_categories'}, function(res){ VENDOR_CATS = res.rows||[]; cb(VENDOR_CATS); });
 }
 function selectedCats($wrap){ return $wrap.find('.iq-chip.on').map(function(){ return String($(this).data('id')); }).get(); }
+/* 先選大類（加工廠／耗材供應商…）才展開該大類底下的小類可勾，避免 50 幾個小類一次攤開把畫面擠亂。
+   切換大類會清掉上一個大類已勾的小類（兩個大類的標籤同時攤在畫面上、卻只有其中一組在起作用，
+   使用者分不出來）；再點一次已展開的大類＝收合、回到沒有類別篩選的狀態。 */
 function renderCatChips($wrap, $box, $kwInput){
     loadVendorCats(function(groups){
         $wrap.empty();
         if (!groups.length) return;
+        var $mainRow = $('<div class="iq-cat-main-row"></div>');
+        var $subRow  = $('<div class="iq-cat-wrap iq-cat-sub-row" style="margin-top:4px;"></div>');
         groups.forEach(function(g){
-            $wrap.append('<span class="iq-cat-grp">'+esc(g.main_cat_name)+'：</span>');
-            g.subs.forEach(function(s){
-                var chip = $('<span class="iq-chip"></span>').text(s.sub_cat_name).data('id', s.sub_cat_id);
-                chip.on('click', function(){
-                    chip.toggleClass('on');
-                    filterVendorBox($box, $kwInput.val(), selectedCats($wrap));
-                });
-                $wrap.append(chip);
+            var pill = $('<span class="iq-cat-main-chip"></span>').text(g.main_cat_name);
+            pill.on('click', function(){
+                var wasActive = pill.hasClass('act');
+                $mainRow.find('.iq-cat-main-chip').removeClass('act');
+                $subRow.empty();
+                if (!wasActive) {
+                    pill.addClass('act');
+                    g.subs.forEach(function(s){
+                        var chip = $('<span class="iq-chip"></span>').text(s.sub_cat_name).data('id', s.sub_cat_id);
+                        chip.on('click', function(e){
+                            e.stopPropagation();
+                            chip.toggleClass('on');
+                            filterVendorBox($box, $kwInput.val(), selectedCats($subRow));
+                        });
+                        $subRow.append(chip);
+                    });
+                }
+                filterVendorBox($box, $kwInput.val(), selectedCats($subRow));   // 剛切換大類還沒勾小類＝不篩
             });
+            $mainRow.append(pill);
         });
+        $wrap.append($mainRow).append($subRow);
+        $kwInput.off('input.cat').on('input.cat', function(){ filterVendorBox($box, $(this).val(), selectedCats($subRow)); });
     });
-    $kwInput.off('input.cat').on('input.cat', function(){ filterVendorBox($box, $(this).val(), selectedCats($wrap)); });
 }
 
 /* ───────────────────── 新增 / 編輯 詢價案 ───────────────────── */

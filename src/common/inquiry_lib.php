@@ -362,13 +362,19 @@ function inq_bom_search(PDO $db, string $kw, int $limit = 20): array {
     $kw = trim($kw);
     if ($kw === '') return [];
     try {
-        $st = $db->prepare("SELECT bom, Client_Name, specification, sqty FROM bom WHERE bom LIKE ? ORDER BY bom DESC LIMIT ?");
-        $st->bindValue(1, '%' . $kw . '%', PDO::PARAM_STR);
-        $st->bindValue(2, $limit, PDO::PARAM_INT);
+        // d_id 是這張製令實際對應的料號文字（使用者要求選單要能看到料號方便確認是不是選對那一張），
+        // 同時也開放用料號本身搜尋
+        $st = $db->prepare("SELECT bom, d_id, Client_Name, specification, sqty FROM bom WHERE bom LIKE ? OR d_id LIKE ? ORDER BY bom DESC LIMIT ?");
+        $kwLike = '%' . $kw . '%';
+        $st->bindValue(1, $kwLike, PDO::PARAM_STR);
+        $st->bindValue(2, $kwLike, PDO::PARAM_STR);
+        $st->bindValue(3, $limit, PDO::PARAM_INT);
         $st->execute();
         $out = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $out[] = ['bom'=>$r['bom'], 'label'=>$r['bom'] . '（' . $r['Client_Name'] . '／' . $r['specification'] . '×' . $r['sqty'] . '）'];
+            $spec = (string)($r['specification'] ?? '');
+            $out[] = ['bom'=>$r['bom'], 'label'=>$r['bom'] . '　料號:' . (string)($r['d_id'] ?? '')
+                . '（' . $r['Client_Name'] . ($spec !== '' ? '／'.$spec : '') . '×' . $r['sqty'] . '）'];
         }
         return $out;
     } catch (Throwable $e) { return []; }
