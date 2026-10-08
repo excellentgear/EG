@@ -4267,9 +4267,6 @@ foreach($dCounts as $c) {
         .ate-q-add-table textarea.ate-q-qtext { width:100%; font-size:12px; }
         .ate-q-add-table select { width:100%; font-size:12px; }
         .ate-q-add-table input[type=date] { width:100%; font-size:12px; height:30px; }
-        .ate-q-note-chk { display:block; font-size:10.5px; color:#8a4b12; font-weight:400; margin-top:3px;
-            white-space:nowrap; cursor:pointer; }
-        .ate-q-note-chk input { margin-right:3px; vertical-align:-1px; }
         .ate-q-add-foot { display:flex; justify-content:space-between; margin-top:6px; }
 
         /* 2026-10-06：對象選擇器（業務/廠商/客戶/其他，按鈕式），新增問題與回覆共用同一套
@@ -4279,6 +4276,10 @@ foreach($dCounts as $c) {
             font-size:11px; padding:2px 9px; cursor:pointer; }
         .ate-tp-btn:hover { background:#F1E8D9; }
         .ate-tp-btn.active { background:#F0A24B; border-color:#DD6B2C; color:#fff; font-weight:700; }
+        /* 「備註(PS)」切換鈕（2026-10-08）：顯示在對象按鈕列最右側，獨立的開關不是互斥選項，
+           左邊加一道分隔線、用不同的暖色（深棕）跟對象按鈕的橘色區分開。 */
+        .ate-tp-note-btn { margin-left:6px; padding-left:10px; border-left:1px dashed #D8CBB8; }
+        .ate-tp-note-btn.active { background:#8a4b12; border-color:#6b3a0e; color:#fff; font-weight:700; }
         .ate-tp-body { min-height:24px; }
         .ate-tp-body select.ate-tp-sel { width:100%; font-size:12px; height:28px; }
         .ate-tp-search input { width:100%; font-size:12px; height:28px; padding:2px 6px; }
@@ -8870,7 +8871,7 @@ foreach($dCounts as $c) {
         var ATE_Q = { orderId: 0, logId: 0, kind: 'note', frozen: false, curUser: null, canResolve: false,
                       bizDefault: null, items: [], rows: [],
                       cands: { user: null }, replyState: {}, contactCache: {}, tpState: {}, tpOnChange: {}, tpAllowSelf: {},
-                      channels: {}, replyChannel: {} };
+                      tpNoteToggle: {}, channels: {}, replyChannel: {} };
 
         // 製程中紀錄（2026-10-06 新增，原稱「製程中問題」後改名）與設計備註問答是兩個分開的
         // eng_log 案件，但共用同一套跳窗與互動邏輯（打字→選對象→多題→多輪回覆→標記已處理），
@@ -9163,11 +9164,17 @@ foreach($dCounts as $c) {
         // 製程中紀錄的「回覆者」——點一下直接帶入目前登入者的中文名稱，不必從業務課清單
         // 裡找自己；設計備註問答與「回報來源」不開放，維持改動前的四個按鈕）。存進
         // ATE_Q.tpAllowSelf[ns] 讓 ateQTpRedraw() 局部重繪時不必重新傳一次。
-        function ateQTpRegister(ns, state, onChange, allowSelf) {
+        // noteToggle＝這個選擇器要不要多一顆「備註(PS)」切換鈕（2026-10-08 使用者要求：按鈕
+        // 顯示在對象按鈕列的右側，不是獨立的勾選框）——只用在設計備註問答「新增問題」的
+        // composer（此時 state 就是 r，直接讀寫 r.is_note，不另存一份），回覆選擇器不開放
+        // （回覆是對既有問題的回覆，不是在建立新的備註項目）。存進 ATE_Q.tpNoteToggle[ns]
+        // 讓 ateQTpRedraw() 局部重繪時不必重新傳一次。
+        function ateQTpRegister(ns, state, onChange, allowSelf, noteToggle) {
             ATE_Q.tpState[ns] = state; ATE_Q.tpOnChange[ns] = onChange; ATE_Q.tpAllowSelf[ns] = !!allowSelf;
+            ATE_Q.tpNoteToggle[ns] = !!noteToggle;
         }
 
-        function ateQTpButtonsHtml(ns, st, allowSelf) {
+        function ateQTpButtonsHtml(ns, st, allowSelf, noteToggle) {
             var opts = [['user', '業務'], ['maker', '廠商'], ['customer', '客戶'], ['other', '其他']];
             if (allowSelf && ATE_Q.curUser) opts = [['self', '本人']].concat(opts);
             var html = '<div class="ate-tp-btns">';
@@ -9175,8 +9182,21 @@ foreach($dCounts as $c) {
                 html += '<button type="button" class="ate-tp-btn' + (st.target_type === o[0] ? ' active' : '') + '" '
                       + 'onclick="ateQTpSetType(\'' + ns + '\',\'' + o[0] + '\')">' + o[1] + '</button>';
             });
+            if (noteToggle) {
+                html += '<button type="button" class="ate-tp-btn ate-tp-note-btn' + (st.is_note ? ' active' : '') + '" '
+                      + 'title="設定後這一條只是記錄內容，不列入待處理問題計數" '
+                      + 'onclick="ateQNoteToggleClick(\'' + ns + '\')"><i class="fa fa-sticky-note-o"></i> 備註(PS)</button>';
+            }
             html += '</div>';
             return html;
+        }
+
+        // 切換「備註(PS)」：composer 的 state 就是 r，直接改 r.is_note 再呼叫 onChange
+        // （composer 是 ateQRedrawComposer，整個重繪一次，與其他對象按鈕的既有行為一致）。
+        function ateQNoteToggleClick(ns) {
+            var st = ATE_Q.tpState[ns]; if (!st) return;
+            st.is_note = !st.is_note;
+            var fn = ATE_Q.tpOnChange[ns]; if (fn) fn();
         }
 
         // 候選清單一律從清單挑（打名字日後對方改名就對不到了），但目前已選定的值萬一不在
@@ -9241,7 +9261,8 @@ foreach($dCounts as $c) {
 
         function ateQTpHtml(ns, st) {
             var allowSelf = !!ATE_Q.tpAllowSelf[ns];
-            return '<div class="ate-tp" id="ate-tp-' + ns + '">' + ateQTpButtonsHtml(ns, st, allowSelf) + '<div class="ate-tp-body" id="ate-tp-body-' + ns + '">' + ateQTpBodyHtml(ns, st) + '</div></div>';
+            var noteToggle = !!ATE_Q.tpNoteToggle[ns];
+            return '<div class="ate-tp" id="ate-tp-' + ns + '">' + ateQTpButtonsHtml(ns, st, allowSelf, noteToggle) + '<div class="ate-tp-body" id="ate-tp-body-' + ns + '">' + ateQTpBodyHtml(ns, st) + '</div></div>';
         }
 
         function ateQTpRedraw(ns) {
@@ -9383,16 +9404,16 @@ foreach($dCounts as $c) {
         function ateQRowHtml(r, idx) {
             if (ATE_Q.kind === 'process') return ateQRecRowHtml(r, idx);
             var ns = 'new' + idx;
-            ateQTpRegister(ns, r, ateQRedrawComposer);
+            // 「備註(PS)」按鈕顯示在對象按鈕列的右側（2026-10-08 使用者要求），走 ateQTpHtml
+            // 共用元件的 noteToggle 參數，不在這裡另外畫一個勾選框。
+            ateQTpRegister(ns, r, ateQRedrawComposer, false, true);
             var delBtn = ATE_Q.rows.length > 1
                 ? '<button type="button" class="btn btn-xs btn-link" onclick="ateQRowDelAt(' + idx + ')" title="移除這一條"><i class="fa fa-times"></i></button>' : '';
             return '<tr>'
                 + '<td style="width:32%;"><textarea class="form-control ate-q-qtext" rows="2" placeholder="輸入問題內容…按 Enter 直接送出，Shift+Enter 換行，↓可新增下一條" '
                 +   'oninput="ateQRowQChange(' + idx + ',this.value)" onkeydown="ateQRowKeyDown(event,' + idx + ')">' + escapeHtml(r.question) + '</textarea></td>'
                 + '<td style="width:13%;"><input type="date" class="form-control" value="' + escapeHtml(r.asked_at || ATE_Q.today || '') + '" '
-                +   'max="' + escapeHtml(ATE_Q.today || '') + '" onchange="ateQRowDateChange(' + idx + ',this.value)">'
-                +   '<label class="ate-q-note-chk" title="勾選後這一條只是記錄內容，不列入待處理問題計數">'
-                +     '<input type="checkbox"' + (r.is_note ? ' checked' : '') + ' onchange="ateQRowNoteChange(' + idx + ',this.checked)"> 設為備註(PS)</label></td>'
+                +   'max="' + escapeHtml(ATE_Q.today || '') + '" onchange="ateQRowDateChange(' + idx + ',this.value)"></td>'
                 + '<td style="width:47%;">' + ateQTpHtml(ns, r) + '</td>'
                 + '<td style="width:8%;text-align:center;">' + delBtn + '</td>'
                 + '</tr>';
@@ -9455,8 +9476,6 @@ foreach($dCounts as $c) {
 
         function ateQRowQChange(idx, val) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].question = val; }
         function ateQRowDateChange(idx, val) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].asked_at = val; }
-        // 設為備註(PS)：不列入待處理問題計數，純粹記錄內容（2026-10-08 使用者要求）。
-        function ateQRowNoteChange(idx, checked) { if (ATE_Q.rows[idx]) ATE_Q.rows[idx].is_note = !!checked; }
         // 共用檔 eg_input_rules.js 規則6要求：不帶參數，呼叫後多一列/少一列並自己重繪
         function ateQRowAdd() { ATE_Q.rows.push(ateQNewRow()); ateQRedrawComposer(); }
         function ateQRowDel() { if (ATE_Q.rows.length > 1) { ATE_Q.rows.pop(); ateQRedrawComposer(); } }
@@ -15337,7 +15356,7 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
 <h4>一、上方統計卡片＝篩選</h4>
 <ul>
     <li><b>全部訂單</b>／<b>處理中</b>（還沒轉生管）／<b>已轉生管</b>／<b>批圖溝通中</b>。</li>
-    <li><b>批圖溝通中</b>的定義：這張訂單<b>有設計備註、而且還沒轉生管</b>。所以在設計備註按下【已處理】把內容轉成溝通紀錄之後，它就會自動從這張卡片消失。新增問題時若勾選<b>「設為備註(PS)」</b>，這一條從一開始就不會被算進待處理問題，純粹是記錄內容用。</li>
+    <li><b>批圖溝通中</b>的定義：這張訂單<b>有設計備註、而且還沒轉生管</b>。所以在設計備註按下【已處理】把內容轉成溝通紀錄之後，它就會自動從這張卡片消失。新增問題時若按下對象按鈕列右側的<b>「備註(PS)」</b>切換成開啟，這一條從一開始就不會被算進待處理問題，純粹是記錄內容用。</li>
     <li><b>訂單待確認</b>（紅色）：這張訂單有<b>客戶提醒</b>被設為待處理、還沒標記完成，詳見下方「四之二、客戶提醒」。</li>
     <li>卡片下方若出現「N 筆訂單已暫停/取消」是提醒，不影響其他統計。</li>
 </ul>
