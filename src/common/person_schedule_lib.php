@@ -92,8 +92,10 @@ if (!function_exists('eg_psched_for_users')) {
      * @param string $start  表單開始時間 HH:MM（空＝視同全天 00:00）
      * @param string $end    表單結束時間 HH:MM（空＝視同全天 23:59）
      * @param array  $opt    exclude_meeting_id：編輯既有會議時，不要把「這場會議自己」算成衝突
-     * @return array user_id => [ ['source','label','time','text','allday','overlap','blocks'], ... ]
-     *               overlap=1 表示與表單時段重疊；blocks=1 表示重疊且此來源不可勾選
+     * @return array user_id => [ ['source','label','time','text','allday','overlap','blocks','conflict'], ... ]
+     *               overlap=1 表示與**呼叫端傳進來的表單時段**重疊；blocks=1 表示重疊且此
+     *               來源不可勾選；conflict=1（2026-10-08 新增）表示跟**同一人同一天的其他
+     *               項目彼此之間**時段重疊，是另一種獨立的比對，不要跟 overlap 搞混。
      */
     function eg_psched_for_users(PDO $db, array $userIds, string $date, string $start = '', string $end = '', array $opt = []): array {
         $out = [];
@@ -107,19 +109,28 @@ if (!function_exists('eg_psched_for_users')) {
         if ($mE <= $mS) $mE = '23:59';                    // 時間填反／只填一邊時當全天，寧可多提示不要漏提示
         $in   = implode(',', $ids);
 
-        $push = function (int $uid, string $src, string $s, string $e, bool $allday, string $what) use (&$out, $defs, $mS, $mE) {
+        // $matchTitle（2026-10-08 新增）：只有「會議」與「一般行事曆事件」這兩種來源才給值
+        // ——用來判斷「這是不是同一場會議被兩邊各記一次」（見下面合併那段），其餘來源留空
+        // 字串表示不參與合併比對。$labelOverride 給一般行事曆事件用，顯示事件類別（如
+        // 「會議」「課程(內訓)」）取代來源固定的通用標籤「行事曆事件」——使用者明確要求
+        // 要看得出類別，不是只看到一個通用名稱。
+        $push = function (int $uid, string $src, string $s, string $e, bool $allday, string $what,
+                           string $matchTitle = '', string $labelOverride = '') use (&$out, $defs, $mS, $mE) {
             $s = eg_psched_hhmm($s, '00:00'); $e = eg_psched_hhmm($e, '23:59');
             if ($allday) { $s = '00:00'; $e = '23:59'; }
             $overlap = ($s < $mE && $e > $mS) ? 1 : 0;     // 半開區間：09:00~10:00 與 10:00~11:00 不算重疊
             $time    = $allday ? '全天' : ($s . '~' . $e);
             $out[$uid][] = [
                 'source'  => $src,
-                'label'   => $defs[$src]['label'],
+                'label'   => $labelOverride !== '' ? $labelOverride : $defs[$src]['label'],
                 'time'    => $time,
                 'text'    => $time . ' ' . $what,          // 例：10:00~11:00 會議（產銷協調會議）
                 'allday'  => $allday ? 1 : 0,
                 'overlap' => $overlap,
                 'blocks'  => ($overlap && (int)$defs[$src]['blocks'] === 1) ? 1 : 0,
+                'conflict' => 0,                            // 下面合併/衝突偵測那段才會真的填值
+                '_s' => $s, '_e' => $e,                     // 內部用：合併/衝突偵測比較實際時段，回傳前會拿掉
+                '_mt' => trim($matchTitle),                 // 內部用：同上
             ];
         };
 
@@ -201,7 +212,7 @@ if (!function_exists('eg_psched_for_users')) {
                     $s = (string)$r['start_time']; $e = (string)$r['end_time'];
                     $subj = trim((string)$r['subject']);
                     $push((int)$r['user_id'], 'meeting', $s, $e, ($s === '' && $e === ''),
-                          '會議' . ($subj !== '' ? '（' . $subj . '）' : ''));
+                          '會議' . ($subj !== '' ? '（' . $subj . '）' : ''), $subj);
                 }
             } catch (Throwable $e) { }
         }
@@ -227,16 +238,58 @@ if (!function_exists('eg_psched_for_users')) {
                     $push((int)$r['user_id'], 'calendar',
                           $ds === $date ? substr((string)$r['start'], 11, 5) : '00:00',
                           $de === $date ? substr((string)$r['end'],   11, 5) : '23:59',
-                          $allday, $cat . ($title !== '' ? '：' . $title : ''));
+                          $allday, $cat . ($title !== '' ? '：' . $title : ''), $title, $cat);
                 }
             } catch (Throwable $e) { }
         }
 
-        // 同一人多筆：先列與表單時段重疊的，再依開始時間排序（讓最該注意的排最前面）
+        // ── ①合併「同一場會議被兩邊各記一次」（2026-10-08 新增，使用者實測發現：
+        // 「產銷會議」同一天同時出現在正式會議紀錄（15:00~16:30）跟一般行事曆（14:00~
+        // 16:00）——現場習慣是先在行事曆占個時段、之後才正式建會議紀錄，兩邊時間常沒
+        // 同步更新，顯示成兩筆會讓人誤以為當天排了兩場會）。判定＝'meeting' 與
+        // 'calendar' 來源、標題（去頭尾空白）完全相同，視為同一件事：**只留 'meeting'
+        // 那筆**（正式會議紀錄是事後確認過的，比行事曆上隨手記的時段更準），且不列入
+        // 下面②的衝突偵測（它們本來就是同一件事，不是「撞期」）。只有 calendar、沒有
+        // 對應 meeting 時維持原樣顯示。
+        foreach ($out as $uid => $list) {
+            $meetingTitles = [];
+            foreach ($list as $it) {
+                if ($it['source'] === 'meeting' && $it['_mt'] !== '') $meetingTitles[$it['_mt']] = true;
+            }
+            if ($meetingTitles) {
+                $list = array_values(array_filter($list, function ($it) use ($meetingTitles) {
+                    return !($it['source'] === 'calendar' && $it['_mt'] !== '' && isset($meetingTitles[$it['_mt']]));
+                }));
+            }
+            $out[$uid] = $list;
+        }
+
+        // ── ②偵測「不同件事、時段卻重疊」（2026-10-08 新增，使用者交辦）：逐兩兩比對
+        // 同一人同一天剩下的項目（①已經把「同一件事」的重複筆數收掉），只要時段有交集
+        // 就雙方都標記 conflict=1——這跟 overlap 是不同概念，overlap 比的是跟**呼叫端
+        // 傳進來的表單時段**，conflict 比的是**這些項目互相之間**；全天項目（00:00~
+        // 23:59）天生會跟當天任何有時間的項目重疊，這是合理的（整天在忙別的事，當然算
+        // 跟一場特定會議撞期）。
+        foreach ($out as $uid => $list) {
+            $n = count($list);
+            for ($i = 0; $i < $n; $i++) {
+                for ($j = $i + 1; $j < $n; $j++) {
+                    if ($list[$i]['_s'] < $list[$j]['_e'] && $list[$i]['_e'] > $list[$j]['_s']) {
+                        $list[$i]['conflict'] = 1; $list[$j]['conflict'] = 1;
+                    }
+                }
+            }
+            $out[$uid] = $list;
+        }
+
+        // 同一人多筆：先列與表單時段重疊的，再依開始時間排序（讓最該注意的排最前面）；
+        // 內部欄位（_s/_e/_mt）只給上面兩段合併/衝突偵測用，回傳前拿掉。
         foreach ($out as $uid => $list) {
             usort($list, function ($a, $b) {
                 return [$b['overlap'], $a['time']] <=> [$a['overlap'], $b['time']];
             });
+            foreach ($list as &$it) { unset($it['_s'], $it['_e'], $it['_mt']); }
+            unset($it);
             $out[$uid] = $list;
         }
         return $out;

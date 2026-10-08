@@ -194,6 +194,9 @@ body { background:#F3F6EC; }
                     margin:1px 2px 1px 0; white-space:nowrap; }
 .ul-status-badge.leave { background:var(--overload-bg); color:var(--overload-text); }
 .ul-status-badge.trip, .ul-status-badge.training, .ul-status-badge.meeting, .ul-status-badge.calendar { background:#F0F4E6; color:var(--green-d); }
+/* 2026-10-08 新增：時段互相重疊（撞期）用警示色蓋掉來源本身的顏色，放在後面靠 CSS
+   撰寫順序覆蓋同特異度的來源色規則，不用 !important */
+.ul-status-badge.conflict { background:var(--overload-bg); color:var(--overload-text); font-weight:700; border:1px solid #EFC2BD; }
 
 /* KPI 卡內嵌的「過重理由」（2026-10-07 取代獨立的「部門負荷總表」，理由直接併進卡片本身） */
 .kpi-reasons { font-size:11px; color:var(--overload-text); margin-top:6px; text-align:left; }
@@ -656,11 +659,23 @@ body { background:#F3F6EC; }
             <b>欄位順序也改成跟訂單追蹤「設定→稽核製程標籤（AS 認定）」那個設定畫面裡看到的順序完全
             一致</b>（依管理員設定的排序值），不再是依筆數多寡排序。</li>
         <li><b>設計課／品管「逐人每日工作量」多了「狀態」欄</b>：期間在 31 天以內（逐日顯示）時，
-            每個人每天那一格會額外看到當天有沒有<b>會議</b>／<b>公出外出</b>／<b>請假</b>（淡綠色徽章；
-            請假用暖色警示色，因為那會直接影響這個人當天有沒有在崗位上），滑鼠停在徽章上可看完整說明
-            （例如幾點到幾點、什麼事由）；這份資料跟會議紀錄挑出席人員用的是同一套來源，哪些來源要不要
-            顯示可在會議紀錄管理的模組設定調整。超過 31 天（週／月分桶）時這一欄不會出現——一列代表
-            好幾天，沒有「當天」這回事。</li>
+            每個人每天那一格會額外看到當天有沒有<b>會議</b>／<b>公出外出</b>／<b>請假</b>／<b>一般行事曆
+            事件</b>（淡綠色徽章，直接印出時間長度如「會議　14:00~16:00」；請假用暖色警示色，因為那會
+            直接影響這個人當天有沒有在崗位上），滑鼠停在徽章上可看完整說明（事由）；這份資料跟會議紀錄
+            挑出席人員用的是同一套來源，哪些來源要不要顯示可在會議紀錄管理的模組設定調整。超過 31 天
+            （週／月分桶）時這一欄不會出現——一列代表好幾天，沒有「當天」這回事。</li>
+        <li><b>「一般行事曆事件」為什麼顯示的是事件類別不是固定文字</b>：這個來源涵蓋行事曆上除了
+            「休假」以外的所有事件（會議／課程／公出／客戶來訪…），徽章會直接顯示那個事件在行事曆設定裡
+            登記的<b>分類名稱</b>（例如「會議」「課程(內訓)」），不是一律印「一般行事曆事件」這種看不出
+            類別的通用文字。</li>
+        <li><b>同一場會議被記在行事曆又記在正式會議紀錄，只會顯示一筆</b>：現場習慣常是先在行事曆占一個
+            時段、之後才正式建立會議紀錄，兩邊時間常常沒跟著一起改（例如行事曆記 14:00~16:00、正式會議
+            紀錄後來改成 15:00~16:30）。系統判定「標題完全相同」就視為同一件事，<b>只顯示正式會議紀錄
+            那一筆</b>（比較晚建立、比較可信），行事曆那一筆不會重複列出，不會讓人誤以為當天排了兩場會。</li>
+        <li><b>徽章變成紅色並多一個「⚠」</b>：代表這個人同一天<b>兩筆不同的事項時段真的重疊</b>（例如半天
+            請假又排了一場會議、或兩場不同的會議撞期），兩筆都會標起來；這跟上一項「同一場會議被記兩次」
+            是不同情況——那個是判定成同一件事直接合併不顯示重複，這個是確認過<b>真的是兩件不同的事</b>
+            才會標成撞期警示。</li>
         <li><b>品管新增「逐人每日工作量」</b>：跟設計課同一種版面（每桶一列、每人一組欄位橫向並排），
             欄位是檢驗筆數與其中 NG 筆數——品管的待驗佇列是全公司共用、不屬於特定某個人，所以沒有像
             設計課「累積待批圖」那種存量欄。</li>
@@ -1194,7 +1209,13 @@ function statusBadgeHtml(items){
     // 開了多久——改把 it.time（'全天' 或 'HH:MM~HH:MM'，eg_psched_for_users() 已經算好）
     // 直接印在徽章上，完整說明（含事由）仍保留在 title。
     var timeTxt = it.time ? '　' + it.time : '';
-    return '<span class="ul-status-badge '+esc(cls)+'" title="'+esc(it.text||'')+'">'+esc(it.label||'')+esc(timeTxt)+'</span>';
+    // 2026-10-08 新增：conflict=1 表示這一筆跟同一人同一天的其他項目時段重疊（不是跟同一
+    // 件事來源不同重複顯示那種——那種已經在後端合併成一筆了，見 eg_psched_for_users()
+    // 的合併/衝突偵測那兩段），改用警示色＋驚嘆號，一眼看出「這天真的撞期了」。
+    var cls2 = cls + (it.conflict ? ' conflict' : '');
+    var warn = it.conflict ? '⚠ ' : '';
+    var title = (it.text||'') + (it.conflict ? '（與同一天其他項目時段重疊）' : '');
+    return '<span class="ul-status-badge '+esc(cls2)+'" title="'+esc(title)+'">'+warn+esc(it.label||'')+esc(timeTxt)+'</span>';
   }).join('');
 }
 /** 待驗/包裝「最長/最短前5筆」小表格，withProcess=true 時多印一欄製程名稱。
