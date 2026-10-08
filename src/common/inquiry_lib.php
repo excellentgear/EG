@@ -986,9 +986,16 @@ function inq_doc_update(PDO $db, int $docId, array $p, int $uid): array {
             $catErr = inq_items_same_main_cat_check($normItems);
             if ($catErr !== '') { $db->rollBack(); return ['success'=>false, 'message'=>$catErr]; }
 
+            // 內容簽章：qty 兩邊都要過同一種格式化（DB 的 DECIMAL 欄位讀回來是固定小數位的字串如
+            // "5.000"，normalize 後的新值是 PHP float 轉字串會變成 "5"，直接比字串一定會判成「有改」
+            // ——這是只登記單價、沒動內容卻還是被判定脫離跟隨的根因，兩邊一律先轉 float 再比）。
+            $sigOf = function ($r) {
+                $q = isset($r['qty']) && $r['qty'] !== null && $r['qty'] !== '' ? (string)(float)$r['qty'] : '';
+                return $r['part_id'] . '|' . $r['part_no_text'] . '|' . $r['spec_text'] . '|' . $q . '|' . ($r['bom'] ?? '') . '|' . ($r['bom_ing_fid'] ?? '');
+            };
             $old = inq_doc_items($db, $docId);
-            $oldSig = array_map(function ($r) { return $r['part_id'].'|'.$r['part_no_text'].'|'.$r['spec_text'].'|'.$r['qty']; }, $old);
-            $newSig = array_map(function ($n) { return $n['part_id'].'|'.$n['part_no_text'].'|'.$n['spec_text'].'|'.$n['qty']; }, $normItems);
+            $oldSig = array_map($sigOf, $old);
+            $newSig = array_map($sigOf, $normItems);
             $contentChanged = ($oldSig !== $newSig);
 
             $db->prepare("DELETE FROM inq_doc_item WHERE doc_id=?")->execute([$docId]);
