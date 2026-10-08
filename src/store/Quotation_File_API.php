@@ -10,7 +10,7 @@ if (!isset($_SESSION['userName'])) {
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
-if ($action !== 'download') {
+if ($action !== 'download' && $action !== 'preview_dwg') {
     header('Content-Type: application/json; charset=utf-8');
 }
 
@@ -350,6 +350,10 @@ switch ($action) {
             ");
             $ins->execute([$quoteNo, $safeName, $originalName, $sizeStr, $uploadedBy, $tempDays]);
             $attachId = (int)$pdo->lastInsertId();
+            if (strtolower(pathinfo($safeName, PATHINFO_EXTENSION)) === 'dwg') {
+                require_once __DIR__ . '/../common/dwg_preview_lib.php';
+                eg_dwg_preview_trigger_async($pdo, $dir . $safeName);
+            }
             echo json_encode([
                 'success'       => true,
                 'attachment_id' => $attachId,
@@ -613,6 +617,33 @@ switch ($action) {
         header('Content-Length: ' . filesize($realPath));
         readfile($realPath);
         exit;
+
+    // ── DWG 預覽（轉成 PDF 給瀏覽器內嵌，唯一轉檔實作見 dwg_preview_lib）────
+    case 'preview_dwg': {
+        if (!_quotCanView($pdo)) { http_response_code(403); exit; }
+        $quoteNo  = safeQuoteNo($_GET['quote_no'] ?? '');
+        $filename = basename($_GET['filename'] ?? '');
+        $base     = getUploadBase($pdo);
+        if (empty($quoteNo) || empty($filename) || empty($base) || strtolower(pathinfo($filename, PATHINFO_EXTENSION)) !== 'dwg') {
+            http_response_code(400); exit;
+        }
+        $filepath    = quoteDir($base, $quoteNo) . $filename;
+        $realPath    = realpath($filepath);
+        $expectedDir = realpath(rtrim($base, '/\\') . DIRECTORY_SEPARATOR . $quoteNo);
+        if (!$realPath || !$expectedDir || strpos($realPath, $expectedDir) !== 0 || !is_file($realPath)) {
+            http_response_code(404); exit;
+        }
+        require_once __DIR__ . '/../common/dwg_preview_lib.php';
+        $pdfFp = eg_dwg_preview_pdf($pdo, $realPath);
+        if (!$pdfFp) { http_response_code(503); echo 'DWG 轉檔失敗或暫時無法使用'; exit; }
+        require_once __DIR__ . '/../common/attach_lib.php';
+        header('Content-Type: application/pdf');
+        header('Cache-Control: private, max-age=300');
+        eg_attach_send_disposition(pathinfo($filename, PATHINFO_FILENAME) . '.pdf');
+        header('Content-Length: ' . filesize($pdfFp));
+        readfile($pdfFp);
+        exit;
+    }
 
     // ── 旋轉影像附件並覆寫存檔（永久生效；需編輯權限）──
     // 只處理圖片檔(90/180/270)；PDF/Office 檔不支援(請用原軟體轉正後重新上傳)。

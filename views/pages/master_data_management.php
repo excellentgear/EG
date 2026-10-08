@@ -21377,6 +21377,29 @@ function pavSelectFile(idx) {
         setTimeout(_pavInitImgZoom, 30);
     } else if (ext === 'pdf') {
         preview.innerHTML = '<iframe id="pav-preview-frame" src="'+escHtml(file.url)+'" style="width:100%;height:100%;border:none;"></iframe>';
+    } else if (ext === 'dwg') {
+        // DWG 瀏覽器讀不懂，伺服器端先轉成 PDF 再用同一個 PDF 檢視器顯示
+        // （唯一轉檔實作見 src/common/dwg_preview_lib.php）；preview_dwg 是同一支附件 API
+        // 多加的動作，參數跟原本「下載」完全相同，只換動作名稱。
+        var dwgUrl = file.url.replace('action=download', 'action=preview_dwg');
+        var dwgOrigUrl = file.url;
+        preview.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:13px;"><i class="fa fa-spinner fa-spin" style="margin-right:6px;"></i>正在轉換 DWG 圖面，請稍候…</div>';
+        var _dwgReqId = file.id;
+        fetch(dwgUrl, { credentials: 'same-origin' })
+            .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+            .then(function(blob) {
+                if (!preview.isConnected || (_pav.currentFile && _pav.currentFile.id !== _dwgReqId)) return;
+                var blobUrl = URL.createObjectURL(blob);
+                preview.innerHTML = '<iframe id="pav-preview-frame" src="'+blobUrl+'" style="width:100%;height:100%;border:none;"></iframe>';
+            })
+            .catch(function() {
+                if (!preview.isConnected || (_pav.currentFile && _pav.currentFile.id !== _dwgReqId)) return;
+                preview.innerHTML = '<div style="text-align:center;color:#888;">'
+                    + '<i class="fa fa-exclamation-triangle" style="font-size:40px;color:#e0a84b;display:block;margin-bottom:10px;"></i>'
+                    + '<div style="font-size:13px;">DWG 轉檔暫時無法使用</div>'
+                    + '<a href="'+escHtml(dwgOrigUrl)+'" target="_blank" download="'+escHtml(file.original_name||file.filename||'')+'" class="btn btn-sm btn-default" style="margin-top:8px;"><i class="fa fa-download"></i> 下載原始檔</a>'
+                    + '</div>';
+            });
     } else if (d3Exts.indexOf(ext) >= 0) {
         preview.style.display = 'block';
         preview.style.position = 'relative';

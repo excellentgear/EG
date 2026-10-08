@@ -1033,6 +1033,29 @@ function showFile(path, type, name) {
     if (_currentType === 'pdf') {
         $('#bom-pdf-frame').attr('src', viewPath).show();
         $('#btn-save, #btn-print, #btn-rot-ccw, #btn-rot-cw').show();
+    } else if (_currentType === 'dwg') {
+        // DWG 瀏覽器讀不懂，伺服器端先轉成 PDF 再用同一個 PDF 檢視器顯示（唯一轉檔實作
+        // 見 src/common/dwg_preview_lib.php）；viewPath 是原本「下載」的網址，preview_dwg
+        // 是同一支 API 多加的動作，兩者參數完全相同，只換動作名稱即可。
+        // 下載鈕仍指向「原始 DWG」（viewPath，不是轉出來的 PDF）——使用者要的是原檔。
+        var dwgPreviewUrl = viewPath.replace('action=download', 'action=preview_dwg');
+        $('#viewer-placeholder').html('<i class="fa fa-spinner fa-spin"></i> 正在轉換 DWG 圖面，請稍候…').show();
+        $('#btn-save').show();
+        var _reqPath = _currentPath;
+        $.ajax({ url: dwgPreviewUrl, method: 'GET', xhrFields: { responseType: 'blob' } })
+            .done(function(blob) {
+                if (_currentPath !== _reqPath) return;   // 使用者已經切到別的檔案，這份結果不要了
+                var blobUrl = URL.createObjectURL(blob);
+                $('#viewer-placeholder').hide();
+                $('#bom-pdf-frame').attr('src', blobUrl).show();
+                $('#btn-print, #btn-save').show();
+            })
+            .fail(function() {
+                if (_currentPath !== _reqPath) return;
+                $('#viewer-placeholder')
+                    .html('<i class="fa fa-exclamation-triangle"></i> DWG 轉檔暫時無法使用，<a href="'+escapeHtml(viewPath)+'" target="_blank">點此下載原始檔</a>')
+                    .show();
+            });
     } else if (_isImg) {
         $('#bom-zoom-img').attr('src', viewPath);
         $('#img-zoom-wrap').css('display', 'flex');
@@ -1160,7 +1183,7 @@ function _logPrintCurrent(isObs) {
 $('#btn-print').on('click', function() {
     var isObs = $('.bom-file-item.active').data('obsolete') === '1' || $('.bom-file-item.active').data('obsolete') === 1;
     _logPrintCurrent(isObs);
-    if (_currentType === 'pdf') {
+    if (_currentType === 'pdf' || _currentType === 'dwg') {
         if (isObs && !confirm('此為「作廢」附件，確定要列印？')) return;
         var frame = document.getElementById('bom-pdf-frame');
         try { frame.contentWindow.print(); } catch(e) { window.print(); }

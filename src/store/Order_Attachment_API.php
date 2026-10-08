@@ -11,7 +11,7 @@ if (!isset($_SESSION['userName'])) {
 }
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
-if ($action !== 'download') {
+if ($action !== 'download' && $action !== 'preview_dwg') {
     header('Content-Type: application/json; charset=utf-8');
 }
 
@@ -240,6 +240,10 @@ switch ($action) {
             $pdo->prepare("INSERT INTO order_attachments (order_id, batch_key, linked_part_no, category_ids, filename, original_name, file_size, uploaded_by, status, expire_at)
                            VALUES (0,?,?,?,?,?,?,?,'temp', DATE_ADD(NOW(), INTERVAL 3 DAY))")
                 ->execute([$batchKey, $linkPart, $catStr, $fname, $orig, $sizeStr, $uid]);
+        }
+        if ($ext === 'dwg') {
+            require_once __DIR__ . '/../common/dwg_preview_lib.php';
+            eg_dwg_preview_trigger_async($pdo, $dir . $fname);
         }
         echo json_encode(['success' => true, 'id' => (int)$pdo->lastInsertId()]);
         break;
@@ -618,6 +622,27 @@ switch ($action) {
         eg_attach_send_disposition($dispName);
         header('Content-Length: ' . filesize($fp));
         readfile($fp);
+        exit;
+    }
+
+    // ── DWG 預覽（轉成 PDF 給瀏覽器內嵌，唯一轉檔實作見 dwg_preview_lib）────
+    case 'preview_dwg': {
+        $attId = intval($_GET['id'] ?? 0);
+        if (!$attId) { http_response_code(404); exit; }
+        $st = $pdo->prepare("SELECT filename, original_name FROM order_attachments WHERE id=?");
+        $st->execute([$attId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row) { http_response_code(404); exit; }
+        $fp = $dir . $row['filename'];
+        if (!is_file($fp) || strtolower(pathinfo($fp, PATHINFO_EXTENSION)) !== 'dwg') { http_response_code(404); exit; }
+        require_once __DIR__ . '/../common/dwg_preview_lib.php';
+        $pdfFp = eg_dwg_preview_pdf($pdo, $fp);
+        if (!$pdfFp) { http_response_code(503); echo 'DWG 轉檔失敗或暫時無法使用'; exit; }
+        header('Content-Type: application/pdf');
+        header('Cache-Control: private, max-age=300');
+        eg_attach_send_disposition(pathinfo($row['original_name'] ?: $row['filename'], PATHINFO_FILENAME) . '.pdf');
+        header('Content-Length: ' . filesize($pdfFp));
+        readfile($pdfFp);
         exit;
     }
 
