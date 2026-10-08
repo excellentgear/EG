@@ -58,43 +58,59 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
         .btn-danger-o { background:#DD5138 !important; color:#fff !important; border-color:#C4442D !important; }
         .btn-danger-o:hover { background:#C4442D !important; }
         .iq-table-wrap { overflow-x:auto; }
-        /* 每個詢價案是一張獨立的卡片：單行標頭（案號／分類／人／日期／狀態／操作選單）＋一行摘要，
-           子單清單直接列出（不摺疊）。盡量少用重複的粗體標籤字樣、少用滿版表格框線，資訊密度降低。 */
-        .iq-card { border:1px solid #E8D5B5; border-radius:6px; background:#fff; margin-bottom:10px; overflow:visible; }
-        .iq-card-hd { display:flex; align-items:center; gap:10px; padding:9px 12px; flex-wrap:wrap; }
-        .iq-card-id { flex:none; font-size:13px; font-weight:bold; color:#b5762a; }
-        .iq-card-cat { flex:none; font-size:11.5px; font-weight:bold; color:#fff; background:#8A5A2B;
+        /* 每一張「詢價單」卡片＝一家廠商的子單（扁平化，不再以詢價案分組顯示）。
+           標頭：單號+日期（左）／廠商／電話傳真／聯絡人／分類／詢價人（依序往右）／操作鈕（最右）；
+           分隔線下方是項目表（料號/規格/數量/回填價格）；最下方是備註（可切換顯示）。 */
+        #gList { display:flex; flex-direction:column; gap:8px; }
+        #gList.compact { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; align-items:start; }
+        #gList.compact .iq-doc-card { font-size:12px; }
+        #gList.compact .iq-doc-hd { padding:6px 8px; gap:7px; }
+        #gList.compact .iq-doc-no .l1 { font-size:12px; }
+        #gList.compact .iq-doc-vendor { font-size:12px; max-width:110px; }
+        #gList.compact table.iq-doc-items th, #gList.compact table.iq-doc-items td { padding:3px 6px; font-size:11px; }
+        #gList.compact .iq-doc-ops .iq-op { padding:2px 6px; font-size:11px; }
+        #gList.hide-note .iq-doc-note { display:none; }
+        .iq-doc-card { border:1px solid #E8D5B5; border-radius:6px; background:#fff; overflow:visible; }
+        .iq-doc-hd { display:flex; align-items:center; gap:14px; padding:8px 12px; flex-wrap:wrap; }
+        .iq-doc-no { flex:none; line-height:1.3; }
+        .iq-doc-no .l1 { font-size:13.5px; font-weight:bold; color:#b5762a; white-space:nowrap; }
+        .iq-doc-no .l2 { font-size:11px; color:#999; }
+        .iq-doc-vendor { flex:none; font-size:13.5px; font-weight:bold; color:#5b3a1e; max-width:170px;
+            overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .iq-doc-telfax { flex:none; line-height:1.25; }
+        .iq-doc-telfax .l1, .iq-doc-telfax .l2 { font-size:11px; color:#8a6d45; white-space:nowrap; }
+        .iq-doc-contact { flex:none; font-size:12px; color:#5b3a1e; }
+        .iq-doc-cat { flex:none; font-size:11px; font-weight:bold; color:#fff; background:#8A5A2B;
             border-radius:3px; padding:2px 8px; white-space:nowrap; }
-        .iq-card-who { flex:none; font-size:13.5px; font-weight:bold; color:#5b3a1e; }
-        .iq-card-dt { flex:none; font-size:12px; color:#999; }
-        .iq-card-hd .iq-badge { flex:none; }
-        .iq-card-sub { flex:1 1 100%; font-size:12px; color:#8a6d45; line-height:1.5; order:5; }
-        .iq-card-sub .sep { color:#D8BE93; margin:0 2px; }
-        .iq-dd { position:relative; flex:none; margin-left:auto; }
-        .iq-dd-btn { height:26px; padding:0 10px; font-size:12px; border:1px solid #D8BE93; background:#fff;
+        .iq-doc-who { flex:none; font-size:12px; color:#5b3a1e; }
+        .iq-doc-hd .iq-badge { flex:none; }
+        .iq-doc-ops { margin-left:auto; display:flex; gap:5px; flex:none; align-items:center; }
+        .iq-doc-divider { border-top:1px solid #F2EAD9; }
+        .iq-dd { position:relative; flex:none; }
+        .iq-dd-btn { height:24px; padding:0 9px; font-size:12px; border:1px solid #D8BE93; background:#fff;
             color:#8A5A2B; border-radius:4px; cursor:pointer; }
         .iq-dd-btn:hover { background:#F7E0BD; }
         .iq-dd-menu { display:none; position:absolute; right:0; top:100%; margin-top:4px; background:#fff;
-            border:1px solid #D8BE93; border-radius:5px; box-shadow:0 4px 14px rgba(0,0,0,.15); z-index:60; min-width:110px; }
+            border:1px solid #D8BE93; border-radius:5px; box-shadow:0 4px 14px rgba(0,0,0,.15); z-index:60; min-width:130px; }
         .iq-dd-menu.show { display:block; }
         .iq-dd-menu a { display:block; padding:7px 13px; font-size:12.5px; color:#5b3a1e; cursor:pointer; white-space:nowrap; }
         .iq-dd-menu a:hover { background:#F7E0BD; }
         .iq-dd-menu a.danger { color:#DD5138; }
-        .iq-card-body { border-top:1px solid #F2EAD9; }
-        table.iq-d { width:100%; border-collapse:collapse; font-size:12.5px; }
-        table.iq-d td { padding:7px 10px; border-top:1px solid #F2EAD9; vertical-align:middle; }
-        table.iq-d tr:first-child td { border-top:none; }
-        table.iq-d .vn { font-weight:bold; color:#5b3a1e; }
-        table.iq-d .vn small { font-weight:normal; color:#999; display:block; margin-top:1px; }
-        table.iq-d .opcell { display:flex; flex-wrap:nowrap; justify-content:flex-end; gap:5px; }
+        .iq-dd-menu .sep { border-top:1px solid #EADFC8; margin:3px 0; }
+        table.iq-doc-items { width:100%; border-collapse:collapse; font-size:12.5px; }
+        table.iq-doc-items th { background:#FDF3E3; color:#8a6d45; font-weight:normal; font-size:11.5px; padding:4px 10px; text-align:left; }
+        table.iq-doc-items th.num, table.iq-doc-items td.num { text-align:right; }
+        table.iq-doc-items td { padding:5px 10px; border-top:1px solid #F8F1E3; }
+        .iq-doc-note { padding:6px 12px; font-size:12px; color:#8a6d45; border-top:1px solid #F2EAD9; }
+        .iq-doc-note:empty { display:none; }
+        .iq-doc-fillinfo { padding:4px 12px 0; font-size:11px; color:#999; }
+        .iq-doc-fillinfo:empty { display:none; }
         .iq-op { color:#b5762a; cursor:pointer; white-space:nowrap; padding:3px 9px; border:1px solid #D8BE93; border-radius:3px; background:#fff; }
         .iq-op:hover { background:#F7E0BD; color:#8A5A2B; }
         .iq-op.danger { color:#DD5138; border-color:#E8BDB3; }
         .iq-op.danger:hover { background:#FBEAE6; }
         .iq-op.warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
         .iq-op.warm:hover { background:#d98a33; }
-        .iq-card-foot { padding:8px 12px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; border-top:1px solid #F2EAD9; }
-        .iq-card-foot button { height:26px; padding:0 11px; font-size:12px; border-radius:4px; cursor:pointer; }
         .iq-badge { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; }
         .iq-badge.follow { display:none; }
         .iq-badge.detach { background:#F3EADB; color:#8a6d45; }
@@ -216,8 +232,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
             <input type="date" id="fFrom" style="width:130px;"><span>～</span><input type="date" id="fTo" style="width:130px;">
             <input type="text" id="fKw" placeholder="關鍵字：廠商／料號／單號／規格…" style="width:220px;">
             <button id="btnSearch" class="btn-warm"><i class="fa fa-search"></i> 查詢</button>
+            <label style="font-weight:normal;"><input type="checkbox" id="chkShowNote" checked> 顯示備註</label>
             <?php if ($perms['canCreate']): ?><button id="btnNew" class="btn-warm" style="margin-left:auto;"><i class="fa fa-plus"></i> 新增詢價</button><?php endif; ?>
-            <span class="iq-role"><?= htmlspecialchars($roleLabel) ?></span>
+            <span class="iq-role"<?= $perms['canCreate'] ? '' : ' style="margin-left:auto;"' ?>><?= htmlspecialchars($roleLabel) ?></span>
         </div>
 
         <div id="gList"><div style="text-align:center;color:#999;padding:20px;">載入中…</div></div>
@@ -332,19 +349,27 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '詢價單�
     </div>
 </div></div>
 
-<!-- ══ 登記報價（只填單價，不動詢價內容） ══ -->
-<div class="iq-mask" id="priceMask"><div class="iq-modal narrow">
-    <div class="m-head"><span id="pfTitle">登記報價</span><span class="m-close" onclick="closeMask('priceMask')">✕</span></div>
+<!-- ══ 回填價格（詢價單內容唯讀，只能填單價與廠商報價備註） ══ -->
+<div class="iq-mask" id="priceMask"><div class="iq-modal">
+    <div class="m-head"><span id="pfTitle">回填價格</span><span class="m-close" onclick="closeMask('priceMask')">✕</span></div>
     <div class="m-body">
-        <div class="iq-hint" id="pfVendor"></div>
-        <table class="item-tbl" id="pfItemTbl">
-            <thead><tr><th style="width:26px;">項次</th><th>產品編號</th><th>規格</th><th style="width:70px;">數量</th><th style="width:110px;">單價</th></tr></thead>
+        <div class="grid4">
+            <div><label>詢價單號</label><input type="text" id="pfDocNo" disabled></div>
+            <div><label>詢價日期</label><input type="text" id="pfDate" disabled></div>
+            <div><label>分類</label><input type="text" id="pfDept" disabled></div>
+            <div><label>詢價人員</label><input type="text" id="pfWho" disabled></div>
+            <div><label>廠商</label><input type="text" id="pfVendorName" disabled></div>
+            <div><label>聯絡人</label><input type="text" id="pfContact" disabled></div>
+            <div><label>電話</label><input type="text" id="pfTel" disabled></div>
+            <div><label>傳真</label><input type="text" id="pfFax" disabled></div>
+        </div>
+        <table class="item-tbl" id="pfItemTbl" style="margin-top:10px;">
+            <thead><tr><th style="width:26px;">項次</th><th>產品編號</th><th>規格</th><th style="width:60px;">數量</th>
+                <th style="width:100px;">單價</th><th>廠商報價備註</th></tr></thead>
             <tbody></tbody>
         </table>
-        <div class="grid2" style="margin-top:10px;">
-            <div><label>狀態</label><select id="pfStatus"><option value="open">等待報價</option><option value="replied">已回覆單價</option><option value="void">不再使用</option></select></div>
-        </div>
         <div class="iq-err" id="pfErr"></div>
+        <div class="iq-hint" id="pfFillInfo" style="margin-top:8px;"></div>
     </div>
     <div class="m-foot"><button onclick="closeMask('priceMask')">取消</button><button class="b-ok" id="pfSave">儲存</button></div>
 </div></div>
@@ -499,13 +524,19 @@ function itemSummary(items){
     });
     return s.slice(0,4).join('、') + (s.length>4 ? '…共'+s.length+'項' : '');
 }
+function qtyDisp(q){ return (q!=null && q!=='') ? ('×'+money(q)) : '—'; }
+function priceDisp(v){ return (v!=null && v!=='') ? money(v) : '—'; }
+
 function renderList(){
     var $list = $('#gList').empty();
-    if (!GROUPS.length) { $list.append('<div style="text-align:center;color:#999;padding:20px;">沒有符合條件的詢價案</div>'); $('#pager').empty(); return; }
-    var total = GROUPS.length, pages = Math.max(1, Math.ceil(total/PSIZE));
+    var flat = [];
+    GROUPS.forEach(function(g){ (g.docs||[]).forEach(function(d){ flat.push({d:d, g:g}); }); });
+    if (!flat.length) { $list.append('<div style="text-align:center;color:#999;padding:20px;">沒有符合條件的詢價單</div>'); $('#pager').empty(); return; }
+    $list.toggleClass('compact', flat.length > 4);
+    var total = flat.length, pages = Math.max(1, Math.ceil(total/PSIZE));
     if (PAGE > pages) PAGE = pages;
-    var slice = GROUPS.slice((PAGE-1)*PSIZE, PAGE*PSIZE);
-    slice.forEach(function(g){ $list.append(renderGroupCard(g)); });
+    var slice = flat.slice((PAGE-1)*PSIZE, PAGE*PSIZE);
+    slice.forEach(function(x){ $list.append(renderDocCard(x.d, x.g)); });
     var pg = $('#pager').empty();
     for (var i=1;i<=pages;i++){ (function(i){ var b=$('<button>'+i+'</button>').toggleClass('on', i===PAGE).on('click', function(){ PAGE=i; renderList(); }); pg.append(b); })(i); }
 }
@@ -518,78 +549,67 @@ $(document).on('click', '.iq-dd-btn', function(e){
     if (!open) $menu.addClass('show');
 });
 $(document).on('click', function(){ $('.iq-dd-menu.show').removeClass('show'); });
+$('#chkShowNote').on('change', function(){ $('#gList').toggleClass('hide-note', !this.checked); });
 
-function renderGroupCard(g){
+/* 每張卡片＝一家廠商的子單（扁平化）：標頭帶出所屬詢價案(母單)的分類/詢價人／本單自己的廠商資料，
+   操作選單同時收「此單」與「此案(母單)」兩種動作——使用者的設計改成以子單為主視覺單位，
+   但新增廠商/綁定對象/結案/刪除整案這些母單層級動作仍要有地方可以按，就收進同一個下拉選單。 */
+function renderDocCard(d, g){
     var canEdit = PERM.canAdmin || (PERM.myDepts||[]).indexOf(g.source_dept) >= 0;
-    var card = $('<div class="iq-card"></div>');
-    var hd = $('<div class="iq-card-hd"></div>');
-    hd.append('<span class="iq-card-id">#'+g.id+'</span>');
-    hd.append('<span class="iq-card-cat">'+DEPT_LABEL[g.source_dept]+'</span>');
-    hd.append('<span class="iq-card-who">'+esc(g.requester_name)+'</span>');
-    hd.append('<span class="iq-card-dt">'+esc(g.inquiry_date)+'</span>');
-    hd.append('<span class="iq-badge '+(g.status==='closed'?'closed':'open')+'">'+(g.status==='closed'?'已結案':'進行中')+'</span>');
+    var card = $('<div class="iq-doc-card"></div>');
+    var hd = $('<div class="iq-doc-hd"></div>');
+    hd.append('<div class="iq-doc-no"><div class="l1">'+esc(d.doc_no)+'</div><div class="l2">'+esc(egFmtDate(g.inquiry_date))+'</div></div>');
+    hd.append('<div class="iq-doc-vendor" title="'+esc(d.vendor_name||'')+'">'+esc(d.vendor_name||'')+'</div>');
+    hd.append('<div class="iq-doc-telfax"><div class="l1">'+esc(d.contact_phone||'')+'</div><div class="l2">'+esc(d.contact_fax||'')+'</div></div>');
+    hd.append('<div class="iq-doc-contact">'+esc(d.contact_person||'')+'</div>');
+    hd.append('<span class="iq-doc-cat">'+DEPT_LABEL[g.source_dept]+'</span>');
+    hd.append('<div class="iq-doc-who">'+esc(g.requester_name)+'</div>');
+    if (!d.follow_parent) hd.append('<span class="iq-badge detach">已脫離母單</span>');
+    hd.append('<span class="iq-badge '+d.status+'">'+({open:'等待報價',replied:'已回覆',void:'不再使用'}[d.status]||d.status)+'</span>');
 
-    var subBits = [esc(itemSummary(g.items))];
-    if (g.bind_label) subBits.push((g.bind_type==='bom'?'BOM':'請購單')+'：'+esc(g.bind_label));
-    if (g.note) subBits.push(esc(g.note));
-    hd.append('<div class="iq-card-sub">'+subBits.join('<span class="sep">｜</span>')+'</div>');
-
+    var ops = $('<div class="iq-doc-ops"></div>');
+    ops.append('<span class="iq-op warm" data-act="price">回填價格</span>');
+    ops.append('<span class="iq-op" data-act="print">列印</span>');
     if (canEdit) {
         var dd = $('<div class="iq-dd"></div>');
-        dd.append('<button type="button" class="iq-dd-btn">操作 <i class="fa fa-caret-down"></i></button>');
+        dd.append('<button type="button" class="iq-dd-btn">⋯</button>');
         var menu = $('<div class="iq-dd-menu"></div>');
-        menu.append('<a data-act="edit">編輯內容</a>');
-        menu.append('<a data-act="bind">綁定對象</a>');
-        menu.append('<a data-act="addv">新增廠商</a>');
-        menu.append('<a data-act="toggle">'+(g.status==='closed'?'重新開啟':'結案')+'</a>');
-        menu.append('<a class="danger" data-act="del">刪除</a>');
-        menu.find('a').on('click', function(){ groupOp($(this).data('act'), g.id); });
+        menu.append('<a data-act="edit">編輯內容（此單）</a>');
+        if (!d.follow_parent) menu.append('<a data-act="refollow">重新跟隨母單</a>');
+        menu.append('<div class="sep"></div>');
+        menu.append('<a data-act="g-bind">綁定對象（此案）</a>');
+        menu.append('<a data-act="g-addv">新增廠商（此案）</a>');
+        menu.append('<a data-act="g-toggle">'+(g.status==='closed'?'重新開啟（此案）':'結案（此案）')+'</a>');
+        menu.append('<div class="sep"></div>');
+        menu.append('<a class="danger" data-act="del">刪除此單</a>');
+        menu.append('<a class="danger" data-act="g-del">刪除整個詢價案</a>');
+        menu.find('a').on('click', function(){ docOp($(this).data('act'), d.id, g.id); });
         dd.append(menu);
-        hd.append(dd);
+        ops.append(dd);
     }
-
+    ops.find('.iq-op').on('click', function(){ docOp($(this).data('act'), d.id, g.id); });
+    hd.append(ops);
     card.append(hd);
-    card.append(renderDocsTable(g));
-    return card;
-}
-function renderDocsTable(g){
-    var canEdit = PERM.canAdmin || (PERM.myDepts||[]).indexOf(g.source_dept) >= 0;
-    var body = $('<div class="iq-card-body"></div>');
-    var tbl = $('<table class="iq-d"></table>');
+    card.append('<div class="iq-doc-divider"></div>');
+
+    var tbl = $('<table class="iq-doc-items"></table>');
+    tbl.append('<thead><tr><th>料號</th><th>規格</th><th class="num">數量</th><th class="num">回填價格</th></tr></thead>');
     var tb = $('<tbody></tbody>').appendTo(tbl);
-    (g.docs||[]).forEach(function(d){
-        var total = 0, hasPrice = false;
-        (d.items||[]).forEach(function(it){ if (it.unit_price!=null && it.unit_price!=='') { hasPrice = true; total += parseFloat(it.unit_price) * (parseFloat(it.qty)||0); } });
+    (d.items||[]).forEach(function(it){
         var row = $('<tr></tr>');
-        row.append('<td style="width:150px;color:#999;">'+esc(d.doc_no)+(d.follow_parent?'':' <span class="iq-badge detach">已脫離</span>')+'</td>');
-        row.append('<td class="vn" title="'+esc(itemSummary(d.items))+'">'+esc(d.vendor_name)+(d.contact_person?('<small>'+esc(d.contact_person)+'</small>'):'')+'</td>');
-        row.append('<td style="width:80px;"><span class="iq-badge '+d.status+'">'+({open:'等待報價',replied:'已回覆',void:'不再使用'}[d.status]||d.status)+'</span></td>');
-        row.append('<td style="width:90px;text-align:right;">'+(hasPrice ? money(total) : '—')+'</td>');
-        var opTd = $('<td style="width:200px;"><div class="opcell"></div></td>');
-        var opcell = opTd.find('.opcell');
-        opcell.append('<span class="iq-op warm" data-act="price">登記報價</span>');
-        opcell.append('<span class="iq-op" data-act="print">列印</span>');
-        if (canEdit) {
-            var dd2 = $('<div class="iq-dd"></div>');
-            dd2.append('<button type="button" class="iq-dd-btn">⋯</button>');
-            var m2 = $('<div class="iq-dd-menu"></div>');
-            m2.append('<a data-act="edit">編輯內容</a>');
-            if (!d.follow_parent) m2.append('<a data-act="refollow">重新跟隨母單</a>');
-            m2.append('<a class="danger" data-act="del">刪除</a>');
-            m2.find('a').on('click', function(){ docOp($(this).data('act'), d.id); });
-            dd2.append(m2);
-            opcell.append(dd2);
-        }
-        opcell.find('.iq-op').on('click', function(){ docOp($(this).data('act'), d.id); });
-        row.append(opTd);
+        row.append('<td>'+esc(it.part_no_text || (it.bom?('BOM:'+it.bom):'（未填料號）'))+'</td>');
+        row.append('<td>'+esc(it.spec_text||'')+'</td>');
+        row.append('<td class="num">'+qtyDisp(it.qty)+'</td>');
+        row.append('<td class="num" title="'+esc(it.vendor_note||'')+'">'+priceDisp(it.unit_price)+'</td>');
         tb.append(row);
     });
-    body.append(tbl);
-    var foot = $('<div class="iq-card-foot"></div>');
-    if (canEdit) foot.append('<button class="btn-warm" onclick="openAddVendor('+g.id+')">新增廠商</button>');
-    foot.append('<button style="border:1px solid #D8BE93;background:#fff;color:#8A5A2B;" onclick="printAllDocs('+g.id+')">列印全部（展開一次列印）</button>');
-    body.append(foot);
-    return body;
+    card.append(tbl);
+
+    if (d.price_filled_at) {
+        card.append('<div class="iq-doc-fillinfo">回填：'+esc(d.price_filled_by_name||'')+'　'+esc(egFmtDate(d.price_filled_at))+'</div>');
+    }
+    card.append('<div class="iq-doc-note">'+(g.note ? ('備註：'+esc(g.note)) : '')+'</div>');
+    return card;
 }
 
 function groupOp(act, gid){
@@ -604,12 +624,16 @@ function groupOp(act, gid){
         post('group_delete', {id:gid}, loadList);
     }
 }
-function docOp(act, did){
+function docOp(act, did, gid){
     if (act==='edit') openDocEdit(did);
     else if (act==='price') openPriceFill(did);
     else if (act==='print') printOneDoc(did);
     else if (act==='refollow') { if (confirm('重新跟隨母單會用母單目前的內容整批覆蓋這張子單，單價會被清空，確定？')) post('doc_refollow', {id:did}, loadList); }
     else if (act==='del') { if (confirm('確定要刪除這張子單？')) post('doc_delete', {id:did}, loadList); }
+    else if (act==='g-bind') openBind(gid);
+    else if (act==='g-addv') openAddVendor(gid);
+    else if (act==='g-toggle') groupOp('toggle', gid);
+    else if (act==='g-del') groupOp('del', gid);
 }
 
 /* ───────────────────── 項目列表編輯（共用於新增/母單編輯/子單編輯） ───────────────────── */
@@ -1216,28 +1240,35 @@ function saveDocEdit(did){
     post('update_doc', {id:did, items: JSON.stringify(items), status: $('#dStatus').val()}, function(){ closeMask('dMask'); loadList(); });
 }
 
-/* ───────────────────── 登記報價（使用者明確要求：填廠商回覆的單價不應該要先進「編輯」，
-   這裡只動得了單價，料號/規格/數量/BOM綁定一律唯讀照抄回去，不會因為填價格而被誤改） ───────────────────── */
+/* ───────────────────── 回填價格（使用者明確要求：跳窗顯示整張詢價單內容，但只有單價與
+   廠商報價備註可以填，其他一律反灰唯讀；儲存時只走 price_fill，完全不經過內容簽章判斷，
+   絕對不會影響母單跟隨關係；一律記錄回填人與回填時間） ───────────────────── */
 var PF_DOC_ID = 0;
 function openPriceFill(did){
     var found = null, parentG = null;
     GROUPS.forEach(function(g){ (g.docs||[]).forEach(function(d){ if (d.id===did) { found=d; parentG=g; } }); });
     if (!found) return;
     PF_DOC_ID = did;
-    $('#pfTitle').text('登記報價　'+found.doc_no);
-    $('#pfVendor').text('廠商：'+found.vendor_name+(found.contact_person?('（'+found.contact_person+'）'):''));
-    $('#pfStatus').val(found.status);
+    $('#pfTitle').text('回填價格　'+found.doc_no);
+    $('#pfDocNo').val(found.doc_no);
+    $('#pfDate').val(egFmtDate(parentG.inquiry_date));
+    $('#pfDept').val(DEPT_LABEL[parentG.source_dept]);
+    $('#pfWho').val(parentG.requester_name);
+    $('#pfVendorName').val(found.vendor_name||'');
+    $('#pfContact').val(found.contact_person||'');
+    $('#pfTel').val(found.contact_phone||'');
+    $('#pfFax').val(found.contact_fax||'');
     $('#pfErr').text('');
+    $('#pfFillInfo').text(found.price_filled_at ? ('上次回填：'+(found.price_filled_by_name||'')+'　'+egFmtDate(found.price_filled_at)) : '尚未回填過價格');
     var $tb = $('#pfItemTbl tbody').empty();
     (found.items||[]).forEach(function(it, i){
-        var row = $('<tr></tr>')
-            .attr('data-part-id', it.part_id||'').attr('data-bom', it.bom||'').attr('data-bom-ing-fid', it.bom_ing_fid||'')
+        var row = $('<tr></tr>').attr('data-item-id', it.id)
             .append('<td>'+(i+1)+'</td>')
-            .append('<td style="text-align:left;">'+esc(it.part_no_text||'')+'</td>')
+            .append('<td style="text-align:left;">'+esc(it.part_no_text || (it.bom?('BOM:'+it.bom):''))+'</td>')
             .append('<td style="text-align:left;">'+esc(it.spec_text||'')+'</td>')
-            .append('<td>'+(it.qty!=null?money(it.qty):'')+'</td>')
-            .append('<td><input type="number" step="0.0001" class="pf-price" value="'+(it.unit_price!=null?it.unit_price:'')+'"></td>');
-        row.data('item', it);
+            .append('<td>'+qtyDisp(it.qty)+'</td>')
+            .append('<td><input type="number" step="0.0001" class="pf-price" value="'+(it.unit_price!=null?it.unit_price:'')+'"></td>')
+            .append('<td><input type="text" class="pf-note" value="'+esc(it.vendor_note||'')+'" placeholder="廠商報價備註"></td>');
         $tb.append(row);
     });
     openMask('priceMask');
@@ -1246,15 +1277,10 @@ function openPriceFill(did){
 $('#pfSave').on('click', function(){
     var items = [];
     $('#pfItemTbl tbody tr').each(function(){
-        var $tr = $(this), it = $tr.data('item') || {};
-        items.push({
-            part_id: it.part_id || '', part_no_text: it.part_no_text || '', spec_text: it.spec_text || '',
-            qty: it.qty!=null ? it.qty : '', group_item_id: it.group_item_id || '',
-            bom: it.bom || '', bom_ing_fid: it.bom_ing_fid || '',
-            unit_price: $tr.find('.pf-price').val()
-        });
+        var $tr = $(this);
+        items.push({ id: $tr.data('item-id'), unit_price: $tr.find('.pf-price').val(), vendor_note: $tr.find('.pf-note').val() });
     });
-    post('update_doc', {id:PF_DOC_ID, items: JSON.stringify(items), status: $('#pfStatus').val()}, function(){ closeMask('priceMask'); loadList(); });
+    post('price_fill', {id:PF_DOC_ID, items: JSON.stringify(items)}, function(){ closeMask('priceMask'); loadList(); });
 });
 
 /* ───────────────────── 列印 ───────────────────── */

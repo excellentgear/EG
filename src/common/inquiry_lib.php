@@ -182,6 +182,10 @@ function inq_ensure_schema(PDO $db): void {
         $addCol('inq_group_item', 'bom_ing_fid', "INT NULL COMMENT '綁定 BOM 內的哪一個製程'");
         $addCol('inq_doc_item', 'bom', "VARCHAR(30) NULL");
         $addCol('inq_doc_item', 'bom_ing_fid', "INT NULL");
+        $addCol('inq_doc_item', 'vendor_note', "VARCHAR(255) NULL COMMENT '廠商報價備註'");
+        $addCol('inq_doc', 'price_filled_by', "INT NULL COMMENT '回填價格者'");
+        $addCol('inq_doc', 'price_filled_by_name', "VARCHAR(60) NULL");
+        $addCol('inq_doc', 'price_filled_at', "DATETIME NULL COMMENT '回填價格時間'");
         $done = true;
     } catch (Throwable $e) { error_log('[inq] ensure_schema: ' . $e->getMessage()); }
 }
@@ -1020,6 +1024,41 @@ function inq_doc_update(PDO $db, int $docId, array $p, int $uid): array {
     } catch (Throwable $e) {
         if ($db->inTransaction()) $db->rollBack();
         error_log('[inq] doc_update: ' . $e->getMessage());
+        return ['success'=>false, 'message'=>'儲存失敗'];
+    }
+}
+
+/** 回填廠商報價：跳窗只能改「單價」與「廠商報價備註」，其餘欄位（料號/規格/數量/綁定）
+ * 完全不經過 inq_normalize_item／內容簽章判斷，絕對不會影響 follow_parent 跟隨狀態；
+ * 一律記錄回填人與回填時間（inq_doc.price_filled_by/_by_name/_at）。 */
+function inq_doc_price_fill(PDO $db, int $docId, array $items, int $uid, string $uname): array {
+    $d = inq_doc_row($db, $docId);
+    if (!$d) return ['success'=>false, 'message'=>'找不到這張子單'];
+    $existing = inq_doc_items($db, $docId);
+    $byId = [];
+    foreach ($existing as $r) { $byId[(int)$r['id']] = true; }
+    $anyPrice = false;
+    $db->beginTransaction();
+    try {
+        $upd = $db->prepare("UPDATE inq_doc_item SET unit_price=?, vendor_note=? WHERE id=? AND doc_id=?");
+        foreach ($items as $it) {
+            $itemId = (int)($it['id'] ?? 0);
+            if ($itemId <= 0 || !isset($byId[$itemId])) continue; // 只能動這張子單自己的項目
+            $price = (isset($it['unit_price']) && $it['unit_price'] !== '' && $it['unit_price'] !== null) ? (float)$it['unit_price'] : null;
+            if ($price !== null) $anyPrice = true;
+            $note = isset($it['vendor_note']) ? (trim((string)$it['vendor_note']) ?: null) : null;
+            $upd->execute([$price, $note, $itemId, $docId]);
+        }
+        // 有填任一單價，且這張單還停在「等待報價」時，自動帶成「已回覆」——回填價格就是收到報價了，
+        // 不應該還要使用者另外再手動切換狀態（void 這種特殊狀態不自動覆蓋）。
+        $statusSql = ($anyPrice && $d['status'] === 'open') ? ", status='replied'" : '';
+        $db->prepare("UPDATE inq_doc SET price_filled_by=?, price_filled_by_name=?, price_filled_at=NOW(), modified_by=?, modified_at=NOW()$statusSql WHERE id=?")
+           ->execute([$uid, $uname, $uid, $docId]);
+        $db->commit();
+        return ['success'=>true];
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        error_log('[inq] doc_price_fill: ' . $e->getMessage());
         return ['success'=>false, 'message'=>'儲存失敗'];
     }
 }

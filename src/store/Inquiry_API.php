@@ -181,6 +181,19 @@ case 'update_doc': {
     jout(true, $res);
 }
 
+case 'price_fill': {
+    $did = (int)($_POST['id'] ?? 0);
+    $d = inq_doc_row($db, $did);
+    if (!$d) jerr('找不到這張子單');
+    $g = inq_group_row($db, (int)$d['group_id']);
+    if (!$g || !inq_can_edit_dept($perms, $g['source_dept'])) jerr('沒有這個部門的編輯權限');
+    $items = json_decode((string)($_POST['items'] ?? 'null'), true);
+    if (!is_array($items)) jerr('缺少項目資料');
+    $res = inq_doc_price_fill($db, $did, $items, $uid, $perms['name']);
+    if (!$res['success']) jerr($res['message']);
+    jout(true, $res);
+}
+
 case 'doc_refollow': {
     $did = (int)($_POST['id'] ?? 0);
     $d = inq_doc_row($db, $did);
