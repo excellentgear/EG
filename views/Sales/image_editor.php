@@ -3339,9 +3339,12 @@ canvas.on('selection:updated', refreshLineEndControls);
 canvas.on('selection:cleared', function (e) {
     ((e && e.deselected) || []).forEach(o => { if (o.__lineEndCtrls) { delete o.controls; delete o.__lineEndCtrls; } });
 });
-/* ── 距離標註「延伸線」控制點：選取標註後，兩端各出現一個可拖曳小圓點，只改那一端延伸線的
-   長度，不動箭頭/主線/文字/另一端（使用者要求 2026-10-08）。延伸線 x1,y1 固定＝量測端點（建立時
-   就這樣約定，之後只改 x2,y2），所以外側端一律取該延伸線自己的第二個端點。 ── */
+/* ── 距離標註改成「頭尾兩端點＋延伸線兩端各一個」共四個控制點，取代預設的四角縮放／旋轉
+   （使用者回報 2026-10-08：用原本的四角縮放拉長，箭頭會被非等比拉扯歪斜、延伸線也會被整組拉扯
+   跟著走樣；標準 CAD 作法是直接拖端點改變量測長度，兩端各自獨立、可以一長一短，不是整個縮放）。
+   這跟直線/箭頭已有的「只顯示頭尾兩個圓點」是同一種精神，只是距離標註還多帶著刻度/延伸線/文字，
+   不能只搬線段座標了事，要連同這些一起依新端點重建（文字物件沿用同一個、保留使用者已輸入的數值，
+   只重算位置角度；延伸線長度維持使用者原本設定的值，只是改接到新端點）。 ── */
 function dimStubTip(g, side) {
     const stub = g.getObjects().find(c => c.type === 'line' && c.__dimStubSide === side);
     if (stub) return lineAbsEndpoints(stub)[1];
@@ -3383,8 +3386,66 @@ function dimStubActionHandler(side) {
         return true;
     };
 }
-function buildDimStubControls() {
+/* 依新的兩個端點整支重建距離標註：main line／頭尾箭頭／刻度／延伸線全部用 makeDimDistanceGeometry
+   重畫（延伸線沿用原本的長度，只是改接到新端點與新方向），文字物件保留原本實體（不重新建立、
+   不洗掉使用者已輸入的量測數值），只依新端點重新定位；寫法沿用 reshapeArrowGroup 同一招
+  （用絕對座標組一個全新的暫時 Group，偷它已經算好的 _objects／left/top/width/height，
+   原物件角度/縮放歸零但視覺完全不變）。 */
+function rebuildDimDistanceInPlace(g, p0, p1) {
+    if (Math.hypot(p1.x - p0.x, p1.y - p0.y) < 1) return false;   // 兩端重疊，方向算不出來
+    const mainLine = g.getObjects().find(c => c.type === 'line' && c.__dimMain) || g.getObjects().find(c => c.type === 'line');
+    const textObj = g.getObjects().find(c => c.type === 'i-text');
+    const color = mainLine ? mainLine.stroke : document.getElementById('p-stroke').value;
+    const width = mainLine ? (mainLine.strokeWidth || 3) : 3;
+    const dash = mainLine ? (mainLine.strokeDashArray || null) : null;
+    const dir = (g.distDir === 'in') ? 'in' : 'out';
+    const items = makeDimDistanceGeometry(p0.x, p0.y, p1.x, p1.y, color, width, dash, true, dir, g.distExtLeft || 0, g.distExtRight || 0);
+    const pose = dimTextPose(p0.x, p0.y, p1.x, p1.y, width);
+    if (textObj) { textObj.set({ left: pose.x, top: pose.y, angle: pose.angle, group: null }); items.push(textObj); }
+    else items.push(makeDimText(pose.x, pose.y, '', pose.angle));
+    const tmp = new fabric.Group(items, {});
+    g._objects.forEach(c => { c.group = null; });
+    g._objects = tmp._objects;
+    g._objects.forEach(c => { c.group = g; });
+    g.set({ left: tmp.left, top: tmp.top, width: tmp.width, height: tmp.height,
+            scaleX: 1, scaleY: 1, angle: 0, flipX: false, flipY: false });
+    g.dirty = true;
+    g.setCoords();
+    return true;
+}
+function dimEndPositionHandler(which) {
+    return function (dim, finalMatrix, g) {
+        if (!g.canvas) return new fabric.Point(-99999, -99999);
+        const p = trueArrowEndpoints(g)[which];
+        return fabric.util.transformPoint(new fabric.Point(p.x, p.y), g.canvas.viewportTransform);
+    };
+}
+function dimEndActionHandler(which) {
+    return function (eventData, transform, x, y) {
+        const g = transform.target;
+        const pts = trueArrowEndpoints(g);
+        const p0 = (which === 0) ? { x, y } : pts[0];
+        const p1 = (which === 1) ? { x, y } : pts[1];
+        if (!isFinite(p0.x) || !isFinite(p0.y) || !isFinite(p1.x) || !isFinite(p1.y)) return false;
+        return rebuildDimDistanceInPlace(g, p0, p1);
+    };
+}
+function buildDimDistControls() {
     const controls = {};
+    [0, 1].forEach(which => {
+        controls['dimend' + which] = new fabric.Control({
+            positionHandler: dimEndPositionHandler(which),
+            actionHandler: dimEndActionHandler(which),
+            actionName: 'modifyDimEnd',
+            cursorStyle: 'crosshair',
+            render: function (ctx, left, top) {
+                ctx.save();
+                ctx.fillStyle = '#2779bd'; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+                ctx.beginPath(); ctx.arc(left, top, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+                ctx.restore();
+            }
+        });
+    });
     ['L', 'R'].forEach(side => {
         controls['dimstub' + side] = new fabric.Control({
             positionHandler: dimStubPositionHandler(side),
@@ -3401,19 +3462,20 @@ function buildDimStubControls() {
     });
     return controls;
 }
-function refreshDimStubControls(e) {
-    ((e && e.deselected) || []).forEach(o => { if (o.__dimStubCtrls) { delete o.controls; delete o.__dimStubCtrls; } });
+function refreshDimDistControls(e) {
+    ((e && e.deselected) || []).forEach(o => { if (o.__dimDistCtrls) { delete o.controls; delete o.__dimDistCtrls; } });
     const obj = canvas.getActiveObject();
-    // 只補兩個小圓點，不取代原本的四角縮放/旋轉控制（距離標註整體縮放/旋轉的行為維持不變）
-    if (obj && obj.type === 'group' && obj.dimKind === 'distance' && !obj.locked && !obj.__dimStubCtrls) {
-        obj.controls = Object.assign({}, fabric.Group.prototype.controls, buildDimStubControls());
-        obj.__dimStubCtrls = true;
+    // 完全取代預設的四角縮放/旋轉（那是造成「拉一下整組非等比例歪斜」的根因），改成只有端點／延伸線
+    // 可拖曳，跟直線/箭頭「只顯示頭尾圓點」是同一種設計
+    if (obj && obj.type === 'group' && obj.dimKind === 'distance' && !obj.locked && !obj.__dimDistCtrls) {
+        obj.controls = buildDimDistControls();
+        obj.__dimDistCtrls = true;
     }
 }
-canvas.on('selection:created', refreshDimStubControls);
-canvas.on('selection:updated', refreshDimStubControls);
+canvas.on('selection:created', refreshDimDistControls);
+canvas.on('selection:updated', refreshDimDistControls);
 canvas.on('selection:cleared', function (e) {
-    ((e && e.deselected) || []).forEach(o => { if (o.__dimStubCtrls) { delete o.controls; delete o.__dimStubCtrls; } });
+    ((e && e.deselected) || []).forEach(o => { if (o.__dimDistCtrls) { delete o.controls; delete o.__dimDistCtrls; } });
 });
 function toEditablePolyline(obj) {
     if (obj.type === 'polyline' || obj.type === 'polygon') return obj;
@@ -7289,12 +7351,13 @@ canvas.on('object:modified', (e) => {
         const invSelM = fabric.util.invertTransform(t.calcTransformMatrix());
         let fixedAny = false;
         t.getObjects().forEach(child => {
-            if (child.type === 'group' && child.isArrowGroup &&
-                (Math.abs((child.scaleX || 1) - 1) > 1e-4 || Math.abs((child.scaleY || 1) - 1) > 1e-4)) {
-                const absPts = trueArrowEndpoints(child);
-                const localPts = absPts.map(p => fabric.util.transformPoint(p, invSelM));
-                if (reshapeArrowGroup(child, localPts[0], localPts[1])) fixedAny = true;
-            }
+            const isSkewed = child.type === 'group' &&
+                (Math.abs((child.scaleX || 1) - 1) > 1e-4 || Math.abs((child.scaleY || 1) - 1) > 1e-4);
+            if (!isSkewed) return;
+            const absPts = trueArrowEndpoints(child);
+            const localPts = absPts.map(p => fabric.util.transformPoint(p, invSelM));
+            if (child.isArrowGroup) { if (reshapeArrowGroup(child, localPts[0], localPts[1])) fixedAny = true; }
+            else if (child.dimKind === 'distance') { if (rebuildDimDistanceInPlace(child, localPts[0], localPts[1])) fixedAny = true; }
         });
         if (fixedAny) { t.setCoords(); canvas.requestRenderAll(); }
     }
