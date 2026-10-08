@@ -11,7 +11,7 @@ if (!isset($_SESSION['userName'])) {
 }
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
-if ($action !== 'download' && $action !== 'preview_dwg') {
+if ($action !== 'download' && $action !== 'preview_dwg' && $action !== 'preview_3d') {
     header('Content-Type: application/json; charset=utf-8');
 }
 
@@ -244,6 +244,9 @@ switch ($action) {
         if ($ext === 'dwg') {
             require_once __DIR__ . '/../common/dwg_preview_lib.php';
             eg_dwg_preview_trigger_async($pdo, $dir . $fname);
+        } elseif ($ext === 'ipt' || $ext === 'x_t') {
+            require_once __DIR__ . '/../common/inventor_preview_lib.php';
+            eg_inventor_preview_trigger_async($pdo, $dir . $fname);
         }
         echo json_encode(['success' => true, 'id' => (int)$pdo->lastInsertId()]);
         break;
@@ -643,6 +646,28 @@ switch ($action) {
         eg_attach_send_disposition(pathinfo($row['original_name'] ?: $row['filename'], PATHINFO_FILENAME) . '.pdf');
         header('Content-Length: ' . filesize($pdfFp));
         readfile($pdfFp);
+        exit;
+    }
+
+    // ── IPT/X_T 預覽（轉成 STEP 給既有 3D 檢視器用，唯一轉檔實作見 inventor_preview_lib）─
+    case 'preview_3d': {
+        $attId = intval($_GET['id'] ?? 0);
+        if (!$attId) { http_response_code(404); exit; }
+        $st = $pdo->prepare("SELECT filename, original_name FROM order_attachments WHERE id=?");
+        $st->execute([$attId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row) { http_response_code(404); exit; }
+        $fp = $dir . $row['filename'];
+        $ext3d = strtolower(pathinfo($fp, PATHINFO_EXTENSION));
+        if (!is_file($fp) || !in_array($ext3d, ['ipt','x_t'], true)) { http_response_code(404); exit; }
+        require_once __DIR__ . '/../common/inventor_preview_lib.php';
+        $stepFp = eg_inventor_preview_step($pdo, $fp);
+        if (!$stepFp) { http_response_code(503); echo 'IPT/X_T 轉檔失敗或暫時無法使用'; exit; }
+        header('Content-Type: application/step');
+        header('Cache-Control: private, max-age=300');
+        eg_attach_send_disposition(pathinfo($row['original_name'] ?: $row['filename'], PATHINFO_FILENAME) . '.stp');
+        header('Content-Length: ' . filesize($stepFp));
+        readfile($stepFp);
         exit;
     }
 

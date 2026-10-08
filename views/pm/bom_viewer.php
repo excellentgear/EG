@@ -1001,6 +1001,7 @@ var _currentType = '';
 var _currentPath = '';
 var _dwgPdfUrl   = '';   // DWG 轉檔成功後的預覽網址，供「下載 PDF」鈕使用
 var _d3Exts      = ['stp','step','stl','obj','igs','iges'];   // 3D 模型副檔名（與 master_data_management.php 同一份清單）
+var _d3NeedConvertExts = ['ipt','x_t'];   // 這些副檔名瀏覽器讀不懂，要先轉成 STEP（唯一轉檔實作見 inventor_preview_lib.php）
 var _bom3dViewer = null;
 var _currentName = '';
 var _rotBust     = {};   // 剛旋轉過的檔案 → 新的 mtime（重新載入時當破快取參數用）
@@ -1081,11 +1082,17 @@ function showFile(path, type, name) {
                     .html('<i class="fa fa-exclamation-triangle"></i> DWG 轉檔暫時無法使用，<a href="'+escapeHtml(viewPath)+'" target="_blank">點此下載原始檔</a>')
                     .show();
             });
-    } else if (_d3Exts.indexOf(_currentType) !== -1) {
-        // 3D 模型（STP/STEP/STL/OBJ/IGS/IGES）：與 master_data_management.php 同一套
-        // o3dv.min.js（開源，本機內建檔案，不走 CDN），寫法完全比照那邊已經驗證過的版本。
+    } else if (_d3Exts.indexOf(_currentType) !== -1 || _d3NeedConvertExts.indexOf(_currentType) !== -1) {
+        // 3D 模型（STP/STEP/STL/OBJ/IGS/IGES 直接讀；IPT/X_T 瀏覽器讀不懂，先轉成 STEP——
+        // 唯一轉檔實作見 inventor_preview_lib.php，用 Inventor COM 自動化，比 DWG 轉 PDF
+        // 慢很多〈約9~10秒〉，上傳當下已背景預轉過，這裡多半直接命中快取）都用同一套
+        // o3dv.min.js（開源，本機內建檔案，不走 CDN，與 master_data_management.php 同版本）。
         _bom3dViewer = null;
-        $('#bom-3d-loading').show();
+        var _need3dConvert = _d3NeedConvertExts.indexOf(_currentType) !== -1;
+        var _fetchUrl3d = _need3dConvert ? viewPath.replace('action=download', 'action=preview_3d') : viewPath;
+        $('#bom-3d-loading').html(_need3dConvert
+            ? '<i class="fa fa-spinner fa-spin"></i> 正在轉換 ' + _currentType.toUpperCase() + '，可能需要 10~20 秒，請稍候…'
+            : '<i class="fa fa-spinner fa-spin"></i> 載入中...').show();
         $('#bom-3d-wrap').show();
         $('#btn-save').show();
         if (typeof OV !== 'undefined') {
@@ -1095,9 +1102,16 @@ function showFile(path, type, name) {
                 defaultColor:    new OV.RGBColor(180, 180, 180),
                 edgeSettings:    new OV.EdgeSettings(false, new OV.RGBColor(0,0,0), 1)
             });
+            // 保險：容器剛顯示、排版可能還沒穩定時建立的畫布會量到錯的尺寸（已在
+            // master_data_management.php 實測踩到連原生 STP 都中招的同一個問題），
+            // 延遲重新 Resize() 一次以防萬一。
+            var _v3refResize = _bom3dViewer;
+            setTimeout(function(){ if (_v3refResize === _bom3dViewer && _bom3dViewer.Resize) _bom3dViewer.Resize(); }, 150);
             var _v3ref = _bom3dViewer;
-            var fname3d = _currentName || ('model.' + _currentType);
-            fetch(viewPath, { credentials: 'same-origin' })
+            var fname3d = _need3dConvert
+                ? (_currentName || 'model').replace(/\.(ipt|x_t)$/i, '') + '.stp'
+                : (_currentName || ('model.' + _currentType));
+            fetch(_fetchUrl3d, { credentials: 'same-origin' })
                 .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
                 .then(function(blob) {
                     if (_v3ref !== _bom3dViewer) return;   // 使用者已經切到別的檔案
@@ -1109,8 +1123,8 @@ function showFile(path, type, name) {
                     $('#bom-3d-loading').hide();
                     $('#bom-3d-viewer').html('<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:10px;color:#888;">'
                         + '<i class="fa fa-exclamation-triangle" style="font-size:30px;color:#e74c3c;"></i>'
-                        + '<div style="font-size:13px;">3D 模型載入失敗</div>'
-                        + '<a href="'+escapeHtml(viewPath)+'" target="_blank">點此下載</a></div>');
+                        + '<div style="font-size:13px;">3D 模型載入失敗' + (_need3dConvert ? '（轉檔暫時無法使用）' : '') + '</div>'
+                        + '<a href="'+escapeHtml(viewPath)+'" target="_blank">點此下載原始檔</a></div>');
                 });
         } else {
             $('#bom-3d-loading').hide();

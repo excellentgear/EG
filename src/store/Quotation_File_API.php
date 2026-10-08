@@ -10,7 +10,7 @@ if (!isset($_SESSION['userName'])) {
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
-if ($action !== 'download' && $action !== 'preview_dwg') {
+if ($action !== 'download' && $action !== 'preview_dwg' && $action !== 'preview_3d') {
     header('Content-Type: application/json; charset=utf-8');
 }
 
@@ -350,9 +350,13 @@ switch ($action) {
             ");
             $ins->execute([$quoteNo, $safeName, $originalName, $sizeStr, $uploadedBy, $tempDays]);
             $attachId = (int)$pdo->lastInsertId();
-            if (strtolower(pathinfo($safeName, PATHINFO_EXTENSION)) === 'dwg') {
+            $extUp = strtolower(pathinfo($safeName, PATHINFO_EXTENSION));
+            if ($extUp === 'dwg') {
                 require_once __DIR__ . '/../common/dwg_preview_lib.php';
                 eg_dwg_preview_trigger_async($pdo, $dir . $safeName);
+            } elseif ($extUp === 'ipt' || $extUp === 'x_t') {
+                require_once __DIR__ . '/../common/inventor_preview_lib.php';
+                eg_inventor_preview_trigger_async($pdo, $dir . $safeName);
             }
             echo json_encode([
                 'success'       => true,
@@ -642,6 +646,34 @@ switch ($action) {
         eg_attach_send_disposition(pathinfo($filename, PATHINFO_FILENAME) . '.pdf');
         header('Content-Length: ' . filesize($pdfFp));
         readfile($pdfFp);
+        exit;
+    }
+
+    // ── IPT/X_T 預覽（轉成 STEP 給既有 3D 檢視器用，唯一轉檔實作見 inventor_preview_lib）─
+    case 'preview_3d': {
+        if (!_quotCanView($pdo)) { http_response_code(403); exit; }
+        $quoteNo  = safeQuoteNo($_GET['quote_no'] ?? '');
+        $filename = basename($_GET['filename'] ?? '');
+        $base     = getUploadBase($pdo);
+        $ext3d = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+        if (empty($quoteNo) || empty($filename) || empty($base) || !in_array($ext3d, ['ipt','x_t'], true)) {
+            http_response_code(400); exit;
+        }
+        $filepath    = quoteDir($base, $quoteNo) . $filename;
+        $realPath    = realpath($filepath);
+        $expectedDir = realpath(rtrim($base, '/\\') . DIRECTORY_SEPARATOR . $quoteNo);
+        if (!$realPath || !$expectedDir || strpos($realPath, $expectedDir) !== 0 || !is_file($realPath)) {
+            http_response_code(404); exit;
+        }
+        require_once __DIR__ . '/../common/inventor_preview_lib.php';
+        $stepFp = eg_inventor_preview_step($pdo, $realPath);
+        if (!$stepFp) { http_response_code(503); echo 'IPT/X_T 轉檔失敗或暫時無法使用'; exit; }
+        require_once __DIR__ . '/../common/attach_lib.php';
+        header('Content-Type: application/step');
+        header('Cache-Control: private, max-age=300');
+        eg_attach_send_disposition(pathinfo($filename, PATHINFO_FILENAME) . '.stp');
+        header('Content-Length: ' . filesize($stepFp));
+        readfile($stepFp);
         exit;
     }
 

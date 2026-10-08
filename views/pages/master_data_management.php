@@ -21364,6 +21364,7 @@ function pavSelectFile(idx) {
     if (!preview) return;
     if (_pav3dViewer) { try { _pav3dViewer.Destroy(); } catch(e){} _pav3dViewer = null; }
     var d3Exts = ['stp','step','stl','obj','igs','iges'];
+    var d3NeedConvertExts = ['ipt','x_t'];   // 瀏覽器讀不懂，要先轉成 STEP（唯一轉檔實作見 inventor_preview_lib.php）
     // Reset any 3D-mode style overrides（還原為置中的 flex；3D 模式才會改成 block）
     preview.style.display = 'flex';
     preview.style.position = '';
@@ -21410,12 +21411,14 @@ function pavSelectFile(idx) {
                     + '<a href="'+escHtml(dwgOrigUrl)+'" target="_blank" download="'+escHtml(file.original_name||file.filename||'')+'" class="btn btn-sm btn-default" style="margin-top:8px;"><i class="fa fa-download"></i> 下載原始檔</a>'
                     + '</div>';
             });
-    } else if (d3Exts.indexOf(ext) >= 0) {
+    } else if (d3Exts.indexOf(ext) >= 0 || d3NeedConvertExts.indexOf(ext) >= 0) {
+        var need3dConvert = d3NeedConvertExts.indexOf(ext) >= 0;
         preview.style.display = 'block';
         preview.style.position = 'relative';
         preview.innerHTML = '<div id="pav-3d-viewer" style="position:absolute;top:0;left:0;right:0;bottom:0;"></div>'
             + '<div id="pav-3d-loading" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#aaa;font-size:13px;z-index:2;pointer-events:none;">'
-            + '<i class="fa fa-spinner fa-spin" style="margin-right:6px;"></i>載入中...</div>'
+            + '<i class="fa fa-spinner fa-spin" style="margin-right:6px;"></i>'
+            + (need3dConvert ? ('正在轉換 ' + ext.toUpperCase() + '，可能需要 10~20 秒，請稍候…') : '載入中...') + '</div>'
             + '<div style="position:absolute;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.45);color:#fff;font-size:11px;padding:3px 10px;border-radius:4px;pointer-events:none;white-space:nowrap;z-index:1;">'
             + '<i class="fa fa-mouse-pointer"></i> 左鍵旋轉 &nbsp;|&nbsp; 右鍵平移 &nbsp;|&nbsp; 滾輪縮放'
             + '</div>';
@@ -21426,9 +21429,22 @@ function pavSelectFile(idx) {
                 defaultColor:    new OV.RGBColor(180, 180, 180),
                 edgeSettings:    new OV.EdgeSettings(false, new OV.RGBColor(0,0,0), 1)
             });
+            // 既有缺陷（與本次 IPT/X_T 改動無關，連原生 STP 都中招，一併修掉）：這個
+            // 容器是跳窗剛顯示、innerHTML 剛插入的當下才建立檢視器，瀏覽器還沒排版完成，
+            // EmbeddedViewer 建立當下量到的容器尺寸是 0x0，畫布因此永遠是空的（模型其實
+            // 有正確載入，只是畫在一塊 0 大小的範圍裡）。延遲一小段時間後重新 Resize()，
+            // 等排版穩定後用正確尺寸重新量一次（已實測確認修正前後的差異）。
+            var _v3refResize = _pav3dViewer;
+            setTimeout(function(){ if (_v3refResize === _pav3dViewer && _pav3dViewer.Resize) _pav3dViewer.Resize(); }, 150);
             var _v3ref = _pav3dViewer;
-            var fname3d = file.original_name || file.filename || 'model.stp';
-            var url3d = file.url;
+            // IPT/X_T 轉完是 STEP，副檔名跟著換，否則編輯器/系統看檔名猜格式會猜錯
+            var fname3d = need3dConvert
+                ? (file.original_name || file.filename || 'model').replace(/\.(ipt|x_t)$/i, '') + '.stp'
+                : (file.original_name || file.filename || 'model.stp');
+            // IPT/X_T 瀏覽器讀不懂，伺服器端先轉成 STEP（唯一轉檔實作見
+            // src/common/inventor_preview_lib.php）；preview_3d 是同一支附件 API 多加的
+            // 動作，參數跟原本「下載」完全相同，只換動作名稱——與 DWG 轉 PDF 同一套做法。
+            var url3d = need3dConvert ? file.url.replace('action=download', 'action=preview_3d') : file.url;
             fetch(url3d, { credentials: 'same-origin' })
                 .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
                 .then(function(blob) {
@@ -21441,8 +21457,8 @@ function pavSelectFile(idx) {
                     var el = document.getElementById('pav-3d-viewer');
                     if (el) el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:10px;color:#888;">'
                         + '<i class="fa fa-exclamation-triangle" style="font-size:30px;color:#e74c3c;"></i>'
-                        + '<div style="font-size:13px;">3D 模型載入失敗</div>'
-                        + '<a href="'+escHtml(url3d)+'" target="_blank" download="'+escHtml(fname3d)+'" class="btn btn-sm btn-default"><i class="fa fa-download"></i> 下載開啟</a>'
+                        + '<div style="font-size:13px;">3D 模型載入失敗' + (need3dConvert ? '（轉檔暫時無法使用）' : '') + '</div>'
+                        + '<a href="'+escHtml(file.url)+'" target="_blank" download="'+escHtml(file.original_name||file.filename||'')+'" class="btn btn-sm btn-default"><i class="fa fa-download"></i> 下載原始檔</a>'
                         + '</div>';
                 });
         } else {
