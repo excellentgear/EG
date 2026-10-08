@@ -884,7 +884,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 白名單欄位，避免被塞進奇怪的東西
             $allowed = ['stroke', 'width', 'lineEnds', 'lineStyle', 'fill', 'fillOn', 'textColor', 'fontSize', 'bold', 'underline',
                         'textBg', 'textBgOn', 'balloonSize', 'dcShape', 'dcSize', 'stampSize', 'maskColor', 'cropTransparent',
-                        'connectKind', 'dimStyle', 'frameClip'];   // frameClip 原本漏在白名單外＝圖框裁切的開關一直存不起來
+                        'connectKind', 'dimStyle', 'frameClip', 'distDir', 'distSides'];   // frameClip 原本漏在白名單外＝圖框裁切的開關一直存不起來
             $clean = [];
             foreach ($allowed as $k) if (array_key_exists($k, $prefs)) $clean[$k] = $prefs[$k];
             // 每個繪圖工具各自的線條設定（畫筆/直線/兩點連線/矩形/橢圓/標註各記各的，互不覆蓋）
@@ -1218,7 +1218,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <button class="tool-btn" id="tool-rect" onclick="setTool('rect')" title="矩形"><i class="fa fa-square-o"></i><span class="kbd">R</span></button>
         <button class="tool-btn" id="tool-ellipse" onclick="setTool('ellipse')" title="橢圓"><i class="fa fa-circle-o"></i><span class="kbd">O</span></button>
         <div class="tool-group-sep"></div>
-        <button class="tool-btn" id="tool-dimdist" onclick="setTool('dimdist')" title="快速標註：距離（拖曳兩點畫出標註線，中間自動出現輸入框，可輸入實際量測數值）" style="font-size:15px;font-weight:700;">↔</button>
+        <button class="tool-btn" id="tool-dimdist" onclick="setTool('dimdist')" title="快速標註：距離（拖曳兩點畫出標註線，中間自動出現輸入框，可輸入實際量測數值；屬性列可選箭頭向外/向內、延伸線哪一端要加，畫好後選取標註，兩端會各出現一個小圓點控制點，可單獨拖曳調整延伸線長度）" style="font-size:15px;font-weight:700;">↔</button>
         <button class="tool-btn" id="tool-dimcircle" onclick="setTool('dimcircle')" title="快速標註：直徑（拖曳兩點畫出標註線，中間自動出現帶「⌀」符號的輸入框；不會另外畫圓，適合標在既有的圓/孔上）" style="font-size:15px;font-weight:700;">⌀</button>
         <button class="tool-btn" id="tool-dimangle" onclick="setTool('dimangle')" title="快速標註：角度（點一下產生角度標示＋兩條虛擬輔助線；拖曳虛線頭尾的圓點各自對齊要量的兩條邊，兩條線可分開放；虛線平常自動隱藏，點選角度標示才會出現；刪除標示時輔助線自動一併刪除）" style="font-size:15px;font-weight:700;">∠</button>
         <div class="tool-group-sep"></div>
@@ -1281,6 +1281,24 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                     </select>
                 </label>
                 <span style="color:#8b949e;font-size:11px;">延伸式：線越過拖曳結束端往外延伸，尺寸文字沿斜線顯示在外側（如 (Ø61.12)）</span>
+            </span>
+            <!-- 距離標註樣式 -->
+            <span class="prop-sec" id="sec-diststyle">
+                <label>箭頭方向
+                    <select id="p-dist-dir" title="距離標註的箭頭指向" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;">
+                        <option value="out" selected>↔ 向外（標準）</option>
+                        <option value="in">⇥⇤ 向內</option>
+                    </select>
+                </label>
+                <label id="wrap-dist-sides">延伸線
+                    <select id="p-dist-sides" title="向外樣式才能選：哪一邊要加延伸線（沿標註線方向往外，畫完可選取標註各自拖曳調整長度）" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;">
+                        <option value="none" selected>不加</option>
+                        <option value="left">只開始端</option>
+                        <option value="right">只結束端</option>
+                        <option value="both">兩端都加</option>
+                    </select>
+                </label>
+                <span style="color:#8b949e;font-size:11px;">向內樣式：箭頭仍在拖曳的兩個端點上，只是方向反過來，兩端一定各帶一段延伸線。畫好後選取標註，兩端會各出現一個小圓點控制點，拖曳可單獨調整那一端延伸線的長度，不影響箭頭與整體標註</span>
             </span>
             <!-- 文字 -->
             <span class="prop-sec" id="sec-text">
@@ -2583,6 +2601,8 @@ function setTool(t) {
     document.getElementById('wrap-line-ends').style.display = ['line', 'draw', 'connect'].includes(t) ? '' : 'none';
     document.getElementById('sec-connect').classList.toggle('show', t === 'connect');
     document.getElementById('sec-dimstyle').classList.toggle('show', t === 'dimcircle');
+    document.getElementById('sec-diststyle').classList.toggle('show', t === 'dimdist');
+    if (t === 'dimdist') syncDistSidesVisibility();
     document.getElementById('sec-crop').classList.toggle('show', isCropTool);
     document.getElementById('sec-text').classList.toggle('show', ['text','label'].includes(t));
     document.getElementById('sec-mask').classList.toggle('show', ['maskrect','masklasso'].includes(t));
@@ -2593,6 +2613,12 @@ function setTool(t) {
     if (t === 'dc') document.getElementById('p-dc-num').value = nextDcNumber();
     canvas.requestRenderAll();
 }
+/* 「向內」樣式兩端一定各帶延伸線，不必再選「哪一邊有線」；只有「向外」才需要這顆下拉 */
+function syncDistSidesVisibility() {
+    document.getElementById('wrap-dist-sides').style.display =
+        (document.getElementById('p-dist-dir').value === 'in') ? 'none' : '';
+}
+document.getElementById('p-dist-dir').addEventListener('change', syncDistSidesVisibility);
 
 /* ── 滑鼠操作：平移 / 形狀繪製 / 遮蓋 / 框選複製 / 文字 ── */
 let isPanning = false, lastPan = null;
@@ -2769,7 +2795,17 @@ canvas.on('mouse:up', function (opt) {
     if (d.type === 'dimdist' || d.type === 'dimcircle') {
         const isDia = (d.type === 'dimcircle');
         const extendOut = isDia && document.getElementById('p-dim-style').value === 'extend';
-        const shape = makeDimDistanceShape(d.startX, d.startY, p.x, p.y, color, width, dash, !isDia, isDia ? '⌀' : '', extendOut);
+        let distOpts = null;
+        if (!isDia) {
+            const dir = document.getElementById('p-dist-dir').value === 'in' ? 'in' : 'out';
+            const sides = document.getElementById('p-dist-sides').value;
+            const defExt = distStubDefaultLen(width);
+            distOpts = (dir === 'in')
+                ? { dir, extLeft: defExt, extRight: defExt }
+                : { dir, extLeft: (sides === 'left' || sides === 'both') ? defExt : 0,
+                         extRight: (sides === 'right' || sides === 'both') ? defExt : 0 };
+        }
+        const shape = makeDimDistanceShape(d.startX, d.startY, p.x, p.y, color, width, dash, !isDia, isDia ? '⌀' : '', extendOut, distOpts);
         shape.dimKind = isDia ? 'diameter' : 'distance';
         canvas.add(shape);
         finishNewObject(shape);
@@ -3303,6 +3339,82 @@ canvas.on('selection:updated', refreshLineEndControls);
 canvas.on('selection:cleared', function (e) {
     ((e && e.deselected) || []).forEach(o => { if (o.__lineEndCtrls) { delete o.controls; delete o.__lineEndCtrls; } });
 });
+/* ── 距離標註「延伸線」控制點：選取標註後，兩端各出現一個可拖曳小圓點，只改那一端延伸線的
+   長度，不動箭頭/主線/文字/另一端（使用者要求 2026-10-08）。延伸線 x1,y1 固定＝量測端點（建立時
+   就這樣約定，之後只改 x2,y2），所以外側端一律取該延伸線自己的第二個端點。 ── */
+function dimStubTip(g, side) {
+    const stub = g.getObjects().find(c => c.type === 'line' && c.__dimStubSide === side);
+    if (stub) return lineAbsEndpoints(stub)[1];
+    const pts = trueArrowEndpoints(g);
+    return pts[side === 'L' ? 0 : 1];
+}
+function dimStubPositionHandler(side) {
+    return function (dim, finalMatrix, g) {
+        if (!g.canvas) return new fabric.Point(-99999, -99999);
+        const tip = dimStubTip(g, side);
+        return fabric.util.transformPoint(new fabric.Point(tip.x, tip.y), g.canvas.viewportTransform);
+    };
+}
+function dimStubActionHandler(side) {
+    return function (eventData, transform, x, y) {
+        const g = transform.target;
+        const pts = trueArrowEndpoints(g);                        // [x1 側端點, x2 側端點]（絕對座標，含目前角度/縮放）
+        const anchor = (side === 'L') ? pts[0] : pts[1];
+        const other = (side === 'L') ? pts[1] : pts[0];
+        const dx = anchor.x - other.x, dy = anchor.y - other.y;
+        const baseLen = Math.hypot(dx, dy) || 1;
+        const ux = dx / baseLen, uy = dy / baseLen;                // 這一端「遠離對端」的方向
+        const projLen = Math.max(0, (x - anchor.x) * ux + (y - anchor.y) * uy);
+        if (!isFinite(projLen)) return false;
+        // 把群組攤平成絕對座標再直接改那一條延伸線（沿用 fabric Group.addWithUpdate 內部同一套流程），
+        // 其餘成員（箭頭/主線/文字）完全不動，收尾群組角度/縮放自動歸零但視覺不變
+        g._restoreObjectsState();
+        fabric.util.resetObjectTransform(g);
+        const stub = g.getObjects().find(c => c.type === 'line' && c.__dimStubSide === side);
+        if (stub) {
+            stub.set({ x1: anchor.x, y1: anchor.y, x2: anchor.x + ux * projLen, y2: anchor.y + uy * projLen });
+            stub.setCoords();
+        }
+        g._calcBounds();
+        g._updateObjectsCoords();
+        g.setCoords();
+        g.dirty = true;
+        if (side === 'L') g.distExtLeft = projLen; else g.distExtRight = projLen;
+        return true;
+    };
+}
+function buildDimStubControls() {
+    const controls = {};
+    ['L', 'R'].forEach(side => {
+        controls['dimstub' + side] = new fabric.Control({
+            positionHandler: dimStubPositionHandler(side),
+            actionHandler: dimStubActionHandler(side),
+            actionName: 'modifyDimStub',
+            cursorStyle: 'ew-resize',
+            render: function (ctx, left, top) {
+                ctx.save();
+                ctx.fillStyle = '#f4511e'; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+                ctx.beginPath(); ctx.arc(left, top, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+                ctx.restore();
+            }
+        });
+    });
+    return controls;
+}
+function refreshDimStubControls(e) {
+    ((e && e.deselected) || []).forEach(o => { if (o.__dimStubCtrls) { delete o.controls; delete o.__dimStubCtrls; } });
+    const obj = canvas.getActiveObject();
+    // 只補兩個小圓點，不取代原本的四角縮放/旋轉控制（距離標註整體縮放/旋轉的行為維持不變）
+    if (obj && obj.type === 'group' && obj.dimKind === 'distance' && !obj.locked && !obj.__dimStubCtrls) {
+        obj.controls = Object.assign({}, fabric.Group.prototype.controls, buildDimStubControls());
+        obj.__dimStubCtrls = true;
+    }
+}
+canvas.on('selection:created', refreshDimStubControls);
+canvas.on('selection:updated', refreshDimStubControls);
+canvas.on('selection:cleared', function (e) {
+    ((e && e.deselected) || []).forEach(o => { if (o.__dimStubCtrls) { delete o.controls; delete o.__dimStubCtrls; } });
+});
 function toEditablePolyline(obj) {
     if (obj.type === 'polyline' || obj.type === 'polygon') return obj;
     if (obj.type === 'rect') {
@@ -3740,25 +3852,74 @@ function makeDimText(x, y, str, angleDeg) {
     t.dimKind = 'label';
     return t;
 }
-/* withTicks：距離標註兩端有垂直小刻度線（CAD 尺寸界線收尾），直徑標註不要（會看起來像多出兩條線） */
-function makeDimDistanceShape(x1, y1, x2, y2, color, width, dash, withTicks, textPrefix, extendOut) {
+/* 距離標註延伸線（可單獨拉長縮短的那一段）預設長度：跟箭頭大小成比例，拖曳控制點隨時可再調整 */
+function distStubDefaultLen(width) { return arrowHeadLen(width) * 1.4; }
+/* 距離標註的幾何本體（主線＋頭尾箭頭＋刻度＋左右延伸線），不含文字——供「建立時」與「事後拖曳延伸線
+   控制點調整長度時」共用同一份畫法（鐵律4，避免兩處各自維護一套規則而走鐘）。
+   dir：'out'＝箭頭指向外側（CAD 標準樣式，預設）／'in'＝箭頭指向內側（空間不夠時的畫法，箭頭仍在
+   使用者拖曳出的那兩個端點上，只是方向反過來；向內時主線不必在端點內縮，因為箭頭整個畫在端點外側）。
+   extLeft/extRight：該端延伸線長度，沿「遠離對端」方向延伸，與箭頭指向哪一側無關；0＝目前看不到，
+   但延伸線物件仍會建立（長度 0 的線不可見），之後選取標註仍可把它拖出來。
+   延伸線／刻度／主線都標上 __dimMain / __dimTick / __dimStubSide，供拖曳控制點時在既有群組內精準找到
+   對應的那一條（不用整支重建，才不會把使用者已經打好的量測文字洗掉）。 */
+function makeDimDistanceGeometry(x1, y1, x2, y2, color, width, dash, withTicks, dir, extLeft, extRight) {
     const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
     const headLen = arrowHeadLen(width);
     const rad0 = angle * Math.PI / 180, ux = Math.cos(rad0), uy = Math.sin(rad0);
-    // 線只畫到「箭頭底部」不畫到尖端，粗線才不會從箭頭尖旁邊露出來
+    const inward = (dir === 'in');
     const len = Math.hypot(x2 - x1, y2 - y1);
-    const s = (len > headLen * 2 + 4) ? headLen : 0;
+    // 向外：箭頭夾在線的兩端中間，線縮短避免穿出箭頭尖端；向內：箭頭整個在端點外側，線不必縮短
+    const s = inward ? 0 : ((len > headLen * 2 + 4) ? headLen : 0);
+    const mainLine = new fabric.Line([x1 + ux * s, y1 + uy * s, x2 - ux * s, y2 - uy * s],
+        { stroke: color, strokeWidth: width, strokeUniform: true, strokeDashArray: dash || null });
+    mainLine.__dimMain = true;
     const items = [
-        new fabric.Line([x1 + ux * s, y1 + uy * s, x2 - ux * s, y2 - uy * s], { stroke: color, strokeWidth: width, strokeUniform: true, strokeDashArray: dash || null }),
-        arrowHeadTri(x2, y2, angle, headLen, color),
-        arrowHeadTri(x1, y1, angle + 180, headLen, color)
+        mainLine,
+        arrowHeadTri(x2, y2, inward ? (angle + 180) : angle, headLen, color),
+        arrowHeadTri(x1, y1, inward ? angle : (angle + 180), headLen, color)
     ];
     if (withTicks) {
         const nx = -Math.sin(angle * Math.PI / 180), ny = Math.cos(angle * Math.PI / 180);
         const tick = 8 + width;
-        items.push(new fabric.Line([x1 - nx * tick, y1 - ny * tick, x1 + nx * tick, y1 + ny * tick], { stroke: color, strokeWidth: Math.max(1, width * 0.6) }));
-        items.push(new fabric.Line([x2 - nx * tick, y2 - ny * tick, x2 + nx * tick, y2 + ny * tick], { stroke: color, strokeWidth: Math.max(1, width * 0.6) }));
+        const t1 = new fabric.Line([x1 - nx * tick, y1 - ny * tick, x1 + nx * tick, y1 + ny * tick], { stroke: color, strokeWidth: Math.max(1, width * 0.6) });
+        const t2 = new fabric.Line([x2 - nx * tick, y2 - ny * tick, x2 + nx * tick, y2 + ny * tick], { stroke: color, strokeWidth: Math.max(1, width * 0.6) });
+        t1.__dimTick = true; t2.__dimTick = true;
+        items.push(t1, t2);
     }
+    const stubL = new fabric.Line([x1, y1, x1 - ux * (extLeft || 0), y1 - uy * (extLeft || 0)],
+        { stroke: color, strokeWidth: width, strokeUniform: true, strokeDashArray: dash || null });
+    const stubR = new fabric.Line([x2, y2, x2 + ux * (extRight || 0), y2 + uy * (extRight || 0)],
+        { stroke: color, strokeWidth: width, strokeUniform: true, strokeDashArray: dash || null });
+    stubL.__dimStubSide = 'L'; stubR.__dimStubSide = 'R';
+    items.push(stubL, stubR);
+    return items;
+}
+/* withTicks：距離標註兩端有垂直小刻度線（CAD 尺寸界線收尾），直徑標註不要（會看起來像多出兩條線）。
+   distOpts={dir,extLeft,extRight}：只有「距離」工具會帶（見呼叫端），直徑的「延伸式」維持原本獨立邏輯
+  （兩者是不同需求：直徑的延伸是為了把文字挪到標註線外側，距離的延伸是量測基準的延伸界線）。 */
+function makeDimDistanceShape(x1, y1, x2, y2, color, width, dash, withTicks, textPrefix, extendOut, distOpts) {
+    const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+    const headLen = arrowHeadLen(width);
+    const rad0 = angle * Math.PI / 180, ux = Math.cos(rad0), uy = Math.sin(rad0);
+    const items = distOpts
+        ? makeDimDistanceGeometry(x1, y1, x2, y2, color, width, dash, withTicks, distOpts.dir, distOpts.extLeft, distOpts.extRight)
+        : (() => {
+            // 線只畫到「箭頭底部」不畫到尖端，粗線才不會從箭頭尖旁邊露出來
+            const len = Math.hypot(x2 - x1, y2 - y1);
+            const s = (len > headLen * 2 + 4) ? headLen : 0;
+            const arr = [
+                new fabric.Line([x1 + ux * s, y1 + uy * s, x2 - ux * s, y2 - uy * s], { stroke: color, strokeWidth: width, strokeUniform: true, strokeDashArray: dash || null }),
+                arrowHeadTri(x2, y2, angle, headLen, color),
+                arrowHeadTri(x1, y1, angle + 180, headLen, color)
+            ];
+            if (withTicks) {
+                const nx = -Math.sin(angle * Math.PI / 180), ny = Math.cos(angle * Math.PI / 180);
+                const tick = 8 + width;
+                arr.push(new fabric.Line([x1 - nx * tick, y1 - ny * tick, x1 + nx * tick, y1 + ny * tick], { stroke: color, strokeWidth: Math.max(1, width * 0.6) }));
+                arr.push(new fabric.Line([x2 - nx * tick, y2 - ny * tick, x2 + nx * tick, y2 + ny * tick], { stroke: color, strokeWidth: Math.max(1, width * 0.6) }));
+            }
+            return arr;
+        })();
     if (extendOut) {
         // 延伸式（直徑標註第二種樣式）：線越過第二點往外延伸，文字沿斜線放在延伸段上方（拖曳結束端＝文字端）
         const fs = parseInt(document.getElementById('p-fontsize').value, 10) || 28;
@@ -3779,6 +3940,11 @@ function makeDimDistanceShape(x1, y1, x2, y2, color, width, dash, withTicks, tex
     const g = new fabric.Group(items, {});
     g.labelSpec = { kind: 'fabric' };   // 讓雙擊走「群組內文字編輯」而不是拆群組
     g.dimKind = 'distance';
+    if (distOpts) {
+        g.distDir = distOpts.dir === 'in' ? 'in' : 'out';
+        g.distExtLeft = distOpts.extLeft || 0;
+        g.distExtRight = distOpts.extRight || 0;
+    }
     return g;
 }
 /* 角度標註：點一下產生「角度標示」（雙箭頭弧線＋度數）＋兩條各自獨立的虛擬輔助線。
@@ -5313,7 +5479,8 @@ function enterGroup(g) {
     // 重組時要還原的自訂屬性：漏掉會讓標註/箭頭/快速標籤在「進入群組→重組」一趟之後失去識別，
     // 連動刪除、角度重算、雙擊改字、外框貼字等行為全部失效
     const props = { labelSpec: g.labelSpec, labelKind: g.labelKind, dimKind: g.dimKind, dimAngleId: g.dimAngleId,
-                    isQuickLabel: g.isQuickLabel, merged: g.merged, isArrowGroup: g.isArrowGroup, isFreehandEnds: g.isFreehandEnds };
+                    isQuickLabel: g.isQuickLabel, merged: g.merged, isArrowGroup: g.isArrowGroup, isFreehandEnds: g.isFreehandEnds,
+                    distDir: g.distDir, distExtLeft: g.distExtLeft, distExtRight: g.distExtRight };
     g.toActiveSelection();
     const sel = canvas.getActiveObject();
     if (sel) sel._regroupProps = props;   // Ctrl+G 重組時還原標籤屬性
@@ -7114,6 +7281,23 @@ canvas.on('object:modified', (e) => {
         refreshPropbar(); pushState();
         return;
     }
+    if (t && t.type === 'activeSelection' && t.getObjects) {
+        // 多選一起縮放時，裡面的箭頭群組一樣會被拉成非等比例（三角箭頭跟著歪斜，使用者回報 2026-10-08）；
+        // 上面那段單選的修法是直接改群組本身的 left/top（絕對座標），但這裡箭頭還在 activeSelection 底下，
+        // 它的座標是相對選取框算的，所以要先把「真實端點」換算成選取框自己的座標系再重建（不離開選取、
+        // 不動其他物件；trueArrowEndpoints 本來就會疊乘父層矩陣，拿到的已經是絕對座標）
+        const invSelM = fabric.util.invertTransform(t.calcTransformMatrix());
+        let fixedAny = false;
+        t.getObjects().forEach(child => {
+            if (child.type === 'group' && child.isArrowGroup &&
+                (Math.abs((child.scaleX || 1) - 1) > 1e-4 || Math.abs((child.scaleY || 1) - 1) > 1e-4)) {
+                const absPts = trueArrowEndpoints(child);
+                const localPts = absPts.map(p => fabric.util.transformPoint(p, invSelM));
+                if (reshapeArrowGroup(child, localPts[0], localPts[1])) fixedAny = true;
+            }
+        });
+        if (fixedAny) { t.setCoords(); canvas.requestRenderAll(); }
+    }
     if (t) {
         t.dirty = true;
         if (t.getObjects) t.getObjects().forEach(o => { o.dirty = true; });
@@ -7588,7 +7772,7 @@ function snapUnpoolify(json) {   // 池索引占位 → 原 dataURL（沒有占�
         }
     });
 }
-const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline', 'isDimGuide', 'dimAngleId', 'curved', 'cornerRadius', 'transparentBg', 'isLabelBgRect'];
+const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline', 'isDimGuide', 'dimAngleId', 'curved', 'cornerRadius', 'transparentBg', 'isLabelBgRect', 'distDir', 'distExtLeft', 'distExtRight', '__dimStubSide'];
 /* 卡頓/當機診斷：主要耗時點超過門檻就在主控台留紀錄（回報問題時請開 F12 把紅字/黃字截圖）；
    未攔截的程式例外第一次發生時跳 toast 提醒——渲染迴圈被例外打斷正是「殘影＋卡死」的典型來源 */
 let __egErrToasted = false;
@@ -7983,7 +8167,8 @@ const PREF_FIELDS = [
     ['p-balloon-size', 'balloonSize'], ['p-dc-shape', 'dcShape'], ['p-dc-size', 'dcSize'],
     ['p-stamp-size', 'stampSize'], ['p-maskcolor', 'maskColor'], ['p-crop-transparent', 'cropTransparent', true],
     ['frame-clip', 'frameClip', true],
-    ['p-connect-kind', 'connectKind'], ['p-dim-style', 'dimStyle']
+    ['p-connect-kind', 'connectKind'], ['p-dim-style', 'dimStyle'],
+    ['p-dist-dir', 'distDir'], ['p-dist-sides', 'distSides']
 ];
 function applyUserPrefs() {
     PREF_FIELDS.forEach(([id, key, isCheckbox]) => {
