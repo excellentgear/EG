@@ -907,6 +907,81 @@ var EG3DTools = (function () {
     // extraModel.GetRootObject().remove() 只移除透視模式自己建立的物件。
     var _GREATER_DEPTH = 6;   // Three.js 的 DepthModes 列舉值（NeverDepth=0...GreaterDepth=6），無全域 THREE 可借，直接用數字
 
+    // 找出兩個「鄰接三角形」（由 graph.adjacency 配對出的）之間真正共用的那條邊，回傳
+    // v1 那組裡對應的兩個原始頂點索引（與 v2 對應位置在 vertKey 容許誤差內視為同一點，
+    // 取哪一邊的原始索引都對應到同一個空間座標）。只給輪廓邊使用。
+    function _adjSharedEdge(graph, v1, v2) {
+        var k2 = [graph.vertKey(v2[0]), graph.vertKey(v2[1]), graph.vertKey(v2[2])];
+        var shared = [];
+        for (var i = 0; i < 3; i++) {
+            var ki = graph.vertKey(v1[i]);
+            if (ki === k2[0] || ki === k2[1] || ki === k2[2]) shared.push(v1[i]);
+        }
+        return shared.length === 2 ? shared : null;
+    }
+
+    // 輪廓邊（視角相關的剪影邊，2026-10-08 使用者回報圓柱左右兩側輪廓線缺漏後新增）：
+    // 跟「同一面判定」找出來的固定幾何邊（面與面交界）完全是兩種東西——圓柱側面本身
+    // 是連續曲面、整圈都在同一個 flood-fill 群組內，沒有任何內部三角化邊會被判成
+    // 「特徵邊」（這是對的，否則又會變成蜘蛛網）；但從某個角度看，圓柱左右兩側「看起來
+    // 像邊」的那條線其實是**法向量剛好垂直於視線方向**的那一圈三角形邊界，會隨著旋轉
+    // 模型即時移動、不是固定幾何，必須每次視角改變時重新算（見下方 setHiddenLineMode
+    // 掛在 navigation.callbacks.onUpdate 的重算邏輯）。
+    // 判定：每個三角形先算「是不是朝向相機」（法向量與「三角形中心→相機」方向的點積，
+    // 同方向＝朝向相機、反方向＝背向相機——全部在 MESH 本地座標算：相機世界座標先用
+    // mesh.matrixWorld 的反矩陣換算成本地座標，才能跟 graph.normals 本來就是本地座標
+    // 的三角形法向量維持同一個座標系，不需要另外處理法向量專屬的反轉置矩陣）；兩個
+    // 相鄰三角形一個朝向、一個背向，中間那條共用邊就是輪廓邊。
+    function _buildSilhouetteGeometry(mesh, eyeWorld) {
+        var graph = _buildFaceGraph(mesh);
+        if (!graph.triCount) return null;
+        mesh.updateMatrixWorld(true);
+        var invM = mesh.matrixWorld.clone().invert();
+        var Vec3Ctor = mesh.position.constructor;   // 借用既有 Vector3 實例的建構子，不靠全域 THREE
+        var eyeLocalV = new Vec3Ctor(eyeWorld[0], eyeWorld[1], eyeWorld[2]).applyMatrix4(invM);
+        var eyeLocal = [eyeLocalV.x, eyeLocalV.y, eyeLocalV.z];
+        var posArr = mesh.geometry.attributes.position.array;
+        var front = new Uint8Array(graph.triCount);
+        for (var t = 0; t < graph.triCount; t++) {
+            var v = graph.getTri(t);
+            var cx = (posArr[v[0]*3]+posArr[v[1]*3]+posArr[v[2]*3])/3;
+            var cy = (posArr[v[0]*3+1]+posArr[v[1]*3+1]+posArr[v[2]*3+1])/3;
+            var cz = (posArr[v[0]*3+2]+posArr[v[1]*3+2]+posArr[v[2]*3+2])/3;
+            var n = graph.normals[t];
+            var dot = n[0]*(eyeLocal[0]-cx) + n[1]*(eyeLocal[1]-cy) + n[2]*(eyeLocal[2]-cz);
+            front[t] = dot > 0 ? 1 : 0;
+        }
+        var m = mesh.matrixWorld.elements;
+        function toWorld(vi) {
+            var lx = posArr[vi*3], ly = posArr[vi*3+1], lz = posArr[vi*3+2];
+            return [ m[0]*lx+m[4]*ly+m[8]*lz+m[12], m[1]*lx+m[5]*ly+m[9]*lz+m[13], m[2]*lx+m[6]*ly+m[10]*lz+m[14] ];
+        }
+        var verts = [];
+        var seen = new Set();
+        for (var t2 = 0; t2 < graph.triCount; t2++) {
+            var nbs = graph.adjacency[t2];
+            for (var k = 0; k < nbs.length; k++) {
+                var nb = nbs[k];
+                if (nb <= t2) continue;   // 每條鄰接邊只處理一次（兩個方向各列舉一次，故只在 nb>t2 時處理）
+                if (front[t2] === front[nb]) continue;   // 同向，不是輪廓邊
+                var shared = _adjSharedEdge(graph, graph.getTri(t2), graph.getTri(nb));
+                if (!shared) continue;
+                var ka = graph.vertKey(shared[0]), kb = graph.vertKey(shared[1]);
+                var key = ka < kb ? (ka+'_'+kb) : (kb+'_'+ka);
+                if (seen.has(key)) continue;
+                seen.add(key);
+                var a = toWorld(shared[0]), b = toWorld(shared[1]);
+                verts.push(a[0],a[1],a[2], b[0],b[1],b[2]);
+            }
+        }
+        if (!verts.length) return null;
+        var GeoCtor = mesh.geometry.constructor;
+        var geo = new GeoCtor();
+        var PosAttrCtor = mesh.geometry.attributes.position.constructor;
+        geo.setAttribute('position', new PosAttrCtor(new Float32Array(verts), 3));
+        return geo;
+    }
+
     // 把一個 mesh 的三角形完整分割成多個「同一面」群組，合併各群組的特徵邊、去重，
     // 建成一份 WORLD 座標的 LineSegments 幾何＋每個端點各自的 lineDistance 屬性。
     function _buildCleanEdgeGeometry(mesh, angleDeg) {
@@ -975,6 +1050,7 @@ var EG3DTools = (function () {
         var baseLineMat = edgeObj.material;
 
         var frontObjs = [], backObjs = [];
+        var meshFrontMat = new Map();   // mesh → 可見邊材質，輪廓邊重用同一份材質（視覺風格要一致）
         mm.EnumerateMeshes(function (mesh) {
             // 角度門檻刻意用 20 度，比上色功能的預設 12 度更寬鬆——這裡只是要畫「視覺輪廓」
             // 不是要精準選出單一 CAD 面，兩者目的不同。已用真實模型做角度掃描實測校準：
@@ -993,6 +1069,7 @@ var EG3DTools = (function () {
             var frontMat = baseLineMat.clone();
             frontMat.color.set('#1a1a1a');
             frontMat.needsUpdate = true;
+            meshFrontMat.set(mesh, frontMat);
             var frontObj = new LineCtor(geo, frontMat);
             frontObj.renderOrder = 10;
             viewer.AddExtraObject(frontObj);
@@ -1018,8 +1095,55 @@ var EG3DTools = (function () {
                 mt.needsUpdate = true;
             });
         });
+
+        // 輪廓邊（視角相關，見 _buildSilhouetteGeometry 註解）：初始建一次，之後掛在
+        // navigation.callbacks.onUpdate（函式庫內部每次旋轉/縮放/平移都會呼叫它來觸發
+        // 重繪，借用同一個掛點不必自己另外偵測滑鼠事件）。用 requestAnimationFrame 節流
+        // ──同一畫面更新期間 onUpdate 可能被連續呼叫多次，只在下一個畫面重算一次，拖曳
+        // 旋轉時才不會因為每個 mousemove 都重新掃描全部三角形而卡頓。
+        // silhouetteObjs 陣列本體刻意只用 length=0＋push 清空重建、不整個重新指派一個新
+        // 陣列——這樣 return 出去給 clearHiddenLineMode 用的參照永遠有效，不會在下一次
+        // 旋轉重算之後變成指向舊陣列的過期快照。
+        var silhouetteObjs = [];
+        var root = viewer.extraModel.GetRootObject();
+        function rebuildSilhouette() {
+            silhouetteObjs.forEach(function (o) { root.remove(o); });
+            silhouetteObjs.length = 0;
+            var camera = viewer.navigation && viewer.navigation.GetCamera();
+            if (!camera || !camera.eye) return;
+            var eyeWorld = [camera.eye.x, camera.eye.y, camera.eye.z];
+            mm.EnumerateMeshes(function (mesh) {
+                var mat = meshFrontMat.get(mesh);
+                if (!mat) return;   // 完全沒有特徵邊的 mesh（如整顆平滑球）不處理輪廓邊
+                var geo = _buildSilhouetteGeometry(mesh, eyeWorld);
+                if (!geo) return;
+                var obj = new LineCtor(geo, mat);
+                obj.renderOrder = 10;
+                viewer.AddExtraObject(obj);
+                silhouetteObjs.push(obj);
+            });
+        }
+        var silhouettePending = false;
+        function scheduleSilhouetteRebuild() {
+            if (silhouettePending) return;
+            silhouettePending = true;
+            requestAnimationFrame(function () {
+                silhouettePending = false;
+                rebuildSilhouette();
+                viewer.Render();
+            });
+        }
+        rebuildSilhouette();
+        var origOnUpdate = viewer.navigation && viewer.navigation.callbacks && viewer.navigation.callbacks.onUpdate;
+        if (viewer.navigation && viewer.navigation.callbacks) {
+            viewer.navigation.callbacks.onUpdate = function () {
+                scheduleSilhouetteRebuild();
+                if (origOnUpdate) origOnUpdate();
+            };
+        }
+
         viewer.Render();
-        return { frontObjs: frontObjs, backObjs: backObjs, touchedMats: touchedMats };
+        return { frontObjs: frontObjs, backObjs: backObjs, touchedMats: touchedMats, silhouetteObjs: silhouetteObjs, _origOnUpdate: origOnUpdate };
     }
     function clearHiddenLineMode(embeddedViewer, state) {
         if (!embeddedViewer || !state) return;
@@ -1027,7 +1151,11 @@ var EG3DTools = (function () {
         var root = viewer.extraModel.GetRootObject();
         (state.frontObjs || []).forEach(function (o) { root.remove(o); });
         (state.backObjs || []).forEach(function (o) { root.remove(o); });
+        (state.silhouetteObjs || []).forEach(function (o) { root.remove(o); });
         (state.touchedMats || []).forEach(function (mt) { mt.colorWrite = true; mt.needsUpdate = true; });
+        if (viewer.navigation && viewer.navigation.callbacks && state._origOnUpdate) {
+            viewer.navigation.callbacks.onUpdate = state._origOnUpdate;
+        }
         viewer.Render();
     }
 
@@ -1053,6 +1181,24 @@ var EG3DTools = (function () {
     // Y 軸（包圍盒是 0~34.9，不對稱）就整個不會動——这是由 50%、extreme 值一路二分搜尋
     // 才揪出來的，純看程式碼或 shader 原始碼推不出來。正確公式是 `constant = -planePos
     // * normalSign`（normalSign 即 normal[axis] 的 ±1），兩個方向都已實測驗證正確。
+    function _buildClipPlane(bbox, axis, ratio, flip) {
+        var min = bbox.min[axis], max = bbox.max[axis];
+        var planePos = min + (max - min) * ratio;
+        var normal = { x: 0, y: 0, z: 0 };
+        var normalSign = flip ? -1 : 1;
+        normal[axis] = normalSign;
+        var constant = -planePos * normalSign;   // Three.js Plane 慣例：normal·point + constant = 0（見上方註解）
+        return { normal: normal, constant: constant };
+    }
+    // 3/4 剖面（雙軸同時剖切，2026-10-08 使用者要求）：同時啟用兩個互相垂直的剖切平面，
+    // 只切掉兩個半空間「重疊」的那個象限（1/4），外觀保留 3/4。查證確認 Three.js 原生
+    // 支援 `material.clippingPlanes` 放多個平面，且 `material.clipIntersection` 這個旗標
+    // 剛好決定了多平面的組合方式（函式庫內建 shader 邏輯，不是魔改）：預設 false＝「聯集」
+    // 語意（任一平面判定要切除就切除＝保留區是兩個保留半空間的交集，單一平面本來就等價
+    // 不受影響）；true＝「交集」語意（兩個平面都判定要切除才真正切除＝保留區是兩個保留
+    // 半空間的聯集）——3/4剖面正是要「只切掉同時落在兩個切除半空間裡的那個象限、其餘
+    // 全部保留」，所以雙軸模式一律要把 clipIntersection 設成 true；單軸只有一個平面時
+    // 這個旗標不影響結果，維持 false 即可。
     function setSectionMode(embeddedViewer, opts) {
         opts = opts || {};
         var axis = opts.axis || 'x';
@@ -1062,54 +1208,62 @@ var EG3DTools = (function () {
         var mm = viewer.mainModel;
         var bbox = mm.GetBoundingBox(function () { return true; });
         if (!bbox) return null;
-        var min = bbox.min[axis], max = bbox.max[axis];
-        var planePos = min + (max - min) * ratio;
-        var normal = { x: 0, y: 0, z: 0 };
-        var normalSign = flip ? -1 : 1;
-        normal[axis] = normalSign;
-        var constant = -planePos * normalSign;   // Three.js Plane 慣例：normal·point + constant = 0（見上方註解）
-        var plane = { normal: normal, constant: constant };
+        var plane = _buildClipPlane(bbox, axis, ratio, flip);
+        var dual = !!(opts.axis2 && opts.axis2 !== 'none' && opts.axis2 !== axis);
+        var plane2 = null;
+        var planes = [plane];
+        if (dual) {
+            plane2 = _buildClipPlane(bbox, opts.axis2, opts.ratio2 == null ? 0.5 : opts.ratio2, !!opts.flip2);
+            planes.push(plane2);
+        }
 
         viewer.renderer.localClippingEnabled = true;
         var touchedMats = [];
         mm.EnumerateMeshes(function (o) {
             var mats = Array.isArray(o.material) ? o.material : [o.material];
             mats.forEach(function (mt) {
-                mt.clippingPlanes = [plane];
+                mt.clippingPlanes = planes;
+                mt.clipIntersection = dual;
                 mt.needsUpdate = true;
                 touchedMats.push(mt);
             });
         });
         viewer.Render();
-        return { touchedMats: touchedMats, plane: plane, bbox: { min: { x: bbox.min.x, y: bbox.min.y, z: bbox.min.z }, max: { x: bbox.max.x, y: bbox.max.y, z: bbox.max.z } } };
+        return { touchedMats: touchedMats, plane: plane, plane2: plane2, dual: dual, bbox: { min: { x: bbox.min.x, y: bbox.min.y, z: bbox.min.z }, max: { x: bbox.max.x, y: bbox.max.y, z: bbox.max.z } } };
     }
-    // 調整現有剖面（換軸／拖曳位置／翻轉保留側）不必重新掃描全部 mesh，但**一定要建一個
-    // 全新的 plane 物件、重新指派整個 clippingPlanes 陣列**，不可以沿用舊物件只改屬性值——
-    // 已實測踩到這個坑：Three.js 的 WebGLClipping 內部對 clippingState 有快取機制，單純
-    // mutate 同一個 plane 物件的 normal/constant（即使材質 needsUpdate=true）在某些情況下
-    // 畫面完全不會更新（X 軸測試正常，切到 Y 軸後滑桿/切換卻看起來像沒反應，一度以為是
-    // change 事件沒綁好，查過 _bom3dSectionOpts 確認狀態其實有正確更新，問題出在渲染端
-    // 讀到的還是舊的裁切面）；改成每次都發新物件＋重新指派陣列參照後才穩定重現切面。
+    // 調整現有剖面（換軸／拖曳位置／翻轉保留側／切換雙軸）不必重新掃描全部 mesh，但**一定
+    // 要建一組全新的 plane 物件、重新指派整個 clippingPlanes 陣列**，不可以沿用舊物件只
+    // 改屬性值——已實測踩到這個坑：Three.js 的 WebGLClipping 內部對 clippingState 有快取
+    // 機制，單純 mutate 同一個 plane 物件的 normal/constant（即使材質 needsUpdate=true）
+    // 在某些情況下畫面完全不會更新（X 軸測試正常，切到 Y 軸後滑桿/切換卻看起來像沒反應，
+    // 一度以為是 change 事件沒綁好，查過 _bom3dSectionOpts 確認狀態其實有正確更新，問題
+    // 出在渲染端讀到的還是舊的裁切面）；改成每次都發新物件＋重新指派陣列參照後才穩定
+    // 重現切面。
     function updateSectionMode(embeddedViewer, state, opts) {
         if (!state || !state.bbox) return;
         opts = opts || {};
         var axis = opts.axis || 'x';
         var ratio = opts.ratio == null ? 0.5 : opts.ratio;
         var flip = !!opts.flip;
-        var min = state.bbox.min[axis], max = state.bbox.max[axis];
-        var planePos = min + (max - min) * ratio;
-        var normal = { x: 0, y: 0, z: 0 };
-        var normalSign = flip ? -1 : 1;
-        normal[axis] = normalSign;
-        var constant = -planePos * normalSign;   // 同 setSectionMode：Three.js Plane 慣例 normal·point + constant = 0
-        var plane = { normal: normal, constant: constant };
-        state.plane = plane;
-        state.touchedMats.forEach(function (mt) { mt.clippingPlanes = [plane]; mt.needsUpdate = true; });
+        var plane = _buildClipPlane(state.bbox, axis, ratio, flip);
+        var dual = !!(opts.axis2 && opts.axis2 !== 'none' && opts.axis2 !== axis);
+        var plane2 = null;
+        var planes = [plane];
+        if (dual) {
+            plane2 = _buildClipPlane(state.bbox, opts.axis2, opts.ratio2 == null ? 0.5 : opts.ratio2, !!opts.flip2);
+            planes.push(plane2);
+        }
+        state.plane = plane; state.plane2 = plane2; state.dual = dual;
+        state.touchedMats.forEach(function (mt) {
+            mt.clippingPlanes = planes;
+            mt.clipIntersection = dual;
+            mt.needsUpdate = true;
+        });
         embeddedViewer.GetViewer().Render();
     }
     function clearSectionMode(embeddedViewer, state) {
         if (!embeddedViewer || !state) return;
-        (state.touchedMats || []).forEach(function (mt) { mt.clippingPlanes = null; mt.needsUpdate = true; });
+        (state.touchedMats || []).forEach(function (mt) { mt.clippingPlanes = null; mt.clipIntersection = false; mt.needsUpdate = true; });
         embeddedViewer.GetViewer().Render();
     }
 
